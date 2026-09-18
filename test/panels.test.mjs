@@ -65,7 +65,9 @@ console.log('\nconfig.html')
 {
   const { doc, storage } = await montar('config.html')
 
-  ok('los textos se tradujeron', doc.querySelector('h1').textContent.length > 0,
+  // Mira la bajada, no un h1: config.html ya no tiene titulo propio porque el host
+  // lo pinta. Comprobar el h1 ataba la prueba a un elemento que se podia quitar.
+  ok('los textos se tradujeron', doc.querySelector('.sub').textContent.length > 0,
     'los data-t quedaron vacios: applyStrings no corrio')
 
   // Nombre del agente

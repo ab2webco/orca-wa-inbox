@@ -57,6 +57,7 @@
       .wrap { max-width: 760px; }
       h1 { font-size: 13px; font-weight: 600; margin: 0; padding: 12px 12px 0;
            letter-spacing: -0.01em; }
+      .sub:first-child { margin-top: 0; }
       .sub { color: var(--muted-foreground, var(--fb-muted-foreground));
              margin: 0; padding: 2px 12px 12px; font-size: 12px; }
       /* Los paneles propios de Orca no usan la primitiva Card por seccion: son
@@ -207,7 +208,9 @@
   </head>
   <body>
     <div class="wrap">
-      <h1 data-t="title"></h1>
+      <!-- Sin titulo propio: en Ajustes el host ya pinta "WhatsApp Inbox" arriba de la
+           pagina, asi que repetirlo lo dice dos veces. La bajada si aporta: explica que
+           hace el panel, no como se llama. -->
       <p class="sub" data-t="sub"></p>
       <div class="alert" id="alert" hidden></div>
       <div id="opcionales" hidden></div>
