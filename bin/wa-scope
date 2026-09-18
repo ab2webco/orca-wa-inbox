@@ -334,6 +334,36 @@ def decisions_read():
     return d if isinstance(d, dict) else {}
 
 
+def cmd_decisions(con, a):
+    """Lo que el humano marco en el panel, y la forma de cerrarlo.
+
+    Sin `--done` una decision de `take` quedaba para siempre: el panel solo sabe
+    escribir storage, no borrar, asi que la automatizacion se despertaba cada 2
+    minutos sobre el mismo mensaje aunque ya estuviera contestado."""
+    if a.done:
+        cerradas = 0
+        for ruta in plugin_store_targets():
+            if not os.path.exists(ruta):
+                continue
+            try:
+                with open(ruta, encoding="utf-8") as fh:
+                    data = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            d = data.get("decisions")
+            if not isinstance(d, dict) or a.done not in d:
+                continue
+            d.pop(a.done)
+            tmp = ruta + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, ensure_ascii=False, indent=2)
+            os.replace(tmp, ruta)
+            cerradas += 1
+        return [{"done": a.done, "cleared": cerradas}]
+    return [{"stanzaId": k, **v} for k, v in sorted(decisions_read().items(),
+                                                   key=lambda kv: kv[1].get("at", ""))]
+
+
 def plugin_store_write(scope, agent_name=None, activity=None, health=None,
                        routes=None, extra=None):
     """Escritura atomica: el host lee este archivo en cualquier momento."""
@@ -1611,9 +1641,9 @@ def main():
     s.set_defaults(fn=cmd_where)
 
     s = add("decisions", help="what the human marked from the panel: take / ignore")
-    s.set_defaults(fn=lambda con, a: [
-        {"stanzaId": k, **v} for k, v in sorted(decisions_read().items(),
-                                                key=lambda kv: kv[1].get("at", ""))])
+    s.add_argument("--done", metavar="STANZA",
+                   help="mark one as handled so it stops coming back")
+    s.set_defaults(fn=cmd_decisions)
 
     s = add("config", help="see or set settings (inbox_days, transcribe, lock_ttl_s, "
                            "read_local, read_web)")

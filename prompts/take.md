@@ -119,6 +119,10 @@ from this `tone`. `AGENTS.md` has them in full.
    `responder`. With no card there is no receipt: what goes out is whatever its
    `instructions` ask for, with that same permission.
 8. `"$WA/wa-scope" record --chat … --stanza … --action issue --issue <ID> --detail "<title>"`
+9. Close the mark, always, even if you skipped it above: without this the same
+   stanza comes back every run forever, because the panel can only write storage.
+
+       "$WA/wa-scope" decisions --done "<stanza_id>"
 
 ## STEP 4
 
