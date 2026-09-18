@@ -105,6 +105,38 @@ console.log('\nconfig.html')
   ok('la tabla muestra lo guardado',
     doc.getElementById('scope-wrap').textContent.includes('Soporte Acme'))
 
+  // Buscador de conversaciones. Con 200 conversaciones un select nativo no se
+  // navega, asi que el filtro es parte de que el control sirva, no un adorno.
+  storage.chats = [
+    { jid: '1@g.us', name: 'Soporte Norte', kind: 'grupo' },
+    { jid: '2@g.us', name: 'Operaciones', kind: 'grupo' },
+    { jid: '57300@s.whatsapp.net', name: 'Laura Mendez', kind: 'directo' }
+  ]
+  doc.defaultView.dispatchEvent(new doc.defaultView.Event('focus'))
+  await espera()
+  if (doc.getElementById('chat-search')) {
+    doc.getElementById('chat-search').value = 'laura'
+    doc.getElementById('chat-search').dispatchEvent(new doc.defaultView.Event('input'))
+    await espera()
+    const opciones = [...doc.getElementById('chat-pick').options].map((o) => o.textContent)
+    ok('el buscador filtra la lista',
+      opciones.some((t) => t.includes('Laura')) && !opciones.some((t) => t.includes('Operaciones')),
+      `opciones = ${JSON.stringify(opciones)}`)
+    ok('dice cuantas quedaron', /\d+\s+(de|of)\s+\d+/.test(doc.getElementById('chat-count').textContent),
+      `chat-count = ${JSON.stringify(doc.getElementById('chat-count').textContent)}`)
+    doc.getElementById('chat-search').value = 'zzzz'
+    doc.getElementById('chat-search').dispatchEvent(new doc.defaultView.Event('input'))
+    await espera()
+    ok('avisa cuando nada coincide',
+      doc.getElementById('chat-pick').options.length === 1 &&
+      doc.getElementById('chat-pick').options[0].textContent.length > 0)
+    doc.getElementById('chat-search').value = ''
+    doc.getElementById('chat-search').dispatchEvent(new doc.defaultView.Event('input'))
+    await espera()
+    ok('al limpiar el buscador vuelven todas',
+      doc.getElementById('chat-pick').options.length > 1)
+  }
+
   // Editar
   doc.querySelector('[data-edit]').click()
   await espera()

@@ -55,6 +55,10 @@
                     color: var(--primary, #7aa2f7); font-size: 11px; font-weight: 400;
                     text-decoration: underline; text-underline-offset: 2px; }
       button.link:hover { text-decoration-thickness: 2px; }
+      /* El buscador y la lista son un solo control: pegados, sin costura visible. */
+      #chat-search { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+      #chat-pick { border-top-left-radius: 0; border-top-right-radius: 0; border-top: 0; }
+      #chat-count { margin-top: 4px; }
       .row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
       .row2 { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
       .actions { display: flex; align-items: center; gap: 10px; margin-top: 14px;
@@ -150,8 +154,10 @@
 
       <section>
         <h2 data-t="mapLegend"></h2>
-        <label for="chat-pick" data-t="chatLabel"></label>
-        <select id="chat-pick"></select>
+        <label for="chat-search" data-t="chatLabel"></label>
+        <input id="chat-search" type="search" autocomplete="off" data-t-ph="chatSearchPh" />
+        <select id="chat-pick" size="1"></select>
+        <p class="hint" id="chat-count"></p>
         <p class="hint" data-t="chatHelp"></p>
         <input id="chat" data-t-ph="chatPh" hidden />
         <div class="row">
@@ -239,6 +245,8 @@
           saveQuality: "Guardar calidad",
           qualitySaved: "Calidad guardada",
           chatHelp: "Se elige de la lista. Hay grupos con el mismo nombre, asi que se guarda por identificador.",
+          chatSearchPh: "Escribi para filtrar",
+          chatCount: "{n} de {total}", chatNoMatch: "Ninguna coincide con eso",
           chatToneLabel: "Como escribe aca (opcional)",
           chatTonePh: "vacio = usa el tono global",
           pickOne: "Elegi una conversacion",
@@ -294,6 +302,8 @@
           saveQuality: "Save quality",
           qualitySaved: "Quality saved",
           chatHelp: "Pick from the list. Some groups share a name, so it is stored by identifier.",
+          chatSearchPh: "Type to filter",
+          chatCount: "{n} of {total}", chatNoMatch: "Nothing matches that",
           chatToneLabel: "How it writes here (optional)",
           chatTonePh: "empty = use the global tone",
           pickOne: "Pick a conversation",
@@ -345,6 +355,8 @@
         pickOne: 'Escolha uma conversa',
         agentLegend: 'Seu agente', agentLabel: 'Como se chama',
         saveName: 'Salvar nome', saveChange: 'Salvar alteracao', cancel: 'Cancelar',
+        chatSearchPh: 'Digite para filtrar',
+        chatCount: '{n} de {total}', chatNoMatch: 'Nada corresponde a isso',
         editName: 'Mudar o nome', mapLegend: 'Conversas', chatLabel: 'Conversa',
         providerLabel: 'Servico de tarefas', permLabel: 'Permissao',
         save: 'Salvar conversa', saveEdit: 'Salvar alteracoes', cancelEdit: 'Cancelar edicao',
@@ -533,30 +545,60 @@
         sel.value = jid || ''
       }
 
+      // La lista completa se guarda aparte: el buscador filtra sobre esto, no sobre
+      // lo que quedo pintado, si no cada tecleo iria achicando la lista sin volver.
+      var chatsTodos = []
+
       function renderChats (chats) {
+        chatsTodos = Array.isArray(chats) ? chats : []
+        chatsPorJid = {}
+        chatsTodos.forEach(function (c) { chatsPorJid[c.jid] = c })
+        pintarChats()
+      }
+
+      function etiqueta (c) {
+        return (c.kind === 'grupo' ? '\u25A3  ' : '\u25CB  ') + (c.name || c.jid)
+      }
+
+      function pintarChats () {
         var sel = el('chat-pick')
         var elegido = sel.value
-        chatsPorJid = {}
+        var termino = el('chat-search').value.trim().toLowerCase()
         sel.innerHTML = ''
-        if (!chats || !chats.length) {
+        if (!chatsTodos.length) {
           var o = document.createElement('option')
           o.value = ''; o.textContent = t('noChats')
           sel.appendChild(o)
+          el('chat-count').textContent = ''
           return
         }
+        // Se busca en el nombre y en el identificador: hay grupos que comparten
+        // nombre y el jid es lo unico que los distingue.
+        var visibles = termino
+          ? chatsTodos.filter(function (c) {
+              return String(c.name || '').toLowerCase().indexOf(termino) !== -1 ||
+                String(c.jid || '').toLowerCase().indexOf(termino) !== -1
+            })
+          : chatsTodos
         var vacio = document.createElement('option')
-        vacio.value = ''; vacio.textContent = t('pickOne')
+        vacio.value = ''
+        vacio.textContent = visibles.length ? t('pickOne') : t('chatNoMatch')
         sel.appendChild(vacio)
-        chats.forEach(function (c) {
-          chatsPorJid[c.jid] = c
+        visibles.forEach(function (c) {
           var o = document.createElement('option')
           o.value = c.jid
-          o.textContent = (c.kind === 'grupo' ? '\u25A3  ' : '\u25CB  ') + (c.name || c.jid)
+          o.textContent = etiqueta(c)
           sel.appendChild(o)
         })
+        // Contar solo cuando se esta filtrando: "214 de 214" no le dice nada a nadie.
+        el('chat-count').textContent = termino
+          ? t('chatCount').replace('{n}', visibles.length).replace('{total}', chatsTodos.length)
+          : ''
         if (editandoJid) pickChat(editandoJid, (chatsPorJid[editandoJid] || {}).name)
-        if (elegido) sel.value = elegido
+        else if (elegido) sel.value = elegido
       }
+
+      el('chat-search').addEventListener('input', pintarChats)
       el('chat-pick').addEventListener('change', function () {
         var c = chatsPorJid[el('chat-pick').value]
         el('chat').value = c ? (c.name || c.jid) : ''
@@ -711,7 +753,7 @@
             if (document.activeElement !== el('quality')) {
               el('quality').value = typeof r[6] === 'string' && r[6] ? r[6] : 'optima'
             }
-            renderChats(r[5])
+            if (document.activeElement !== el('chat-search')) renderChats(r[5])
             if (typeof r[1] === 'string' && r[1] && !agentDirty &&
                 document.activeElement !== el('agent')) {
               showAgentSaved(r[1])
