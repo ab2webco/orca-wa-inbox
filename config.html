@@ -498,7 +498,7 @@
           addRoute: 'Agregar regla', noRoutes: 'Sin reglas. Todo va al destino por defecto de cada conversacion.',
           colWhen: 'Cuando diga', colGoes: 'Va a',
           notReady: 'WhatsApp no esta conectado.',
-          notReadyHow: 'Corre <code>wa-read doctor</code> para ver que falta.',
+          notReadyHow: 'Revisa los requisitos aca abajo.',
           needsUpdate: 'Esta version de Orca no deja guardar desde aca.',
           needsUpdateHow: 'Actualiza Orca.',
           needName: 'Poné un nombre.', needChat: 'Falta la conversacion.',
@@ -601,7 +601,7 @@
           addRoute: 'Add rule', noRoutes: 'No rules. Everything goes to each conversation default.',
           colWhen: 'When it says', colGoes: 'Goes to',
           notReady: 'WhatsApp is not connected.',
-          notReadyHow: 'Run <code>wa-read doctor</code> to see what is missing.',
+          notReadyHow: 'Check the requirements below.',
           needsUpdate: 'This Orca version cannot save from here.',
           needsUpdateHow: 'Update Orca.',
           needName: 'Give it a name.', needChat: 'Pick a conversation.',
@@ -1225,7 +1225,13 @@
                 document.activeElement !== el('agent')) {
               showAgentSaved(r[1])
             }
-            if (r[2] && r[2].ok === false) showAlert(t('notReady'), t('notReadyHow'))
+            // El health ya trae QUE falla y su detalle: mostrarlo es mejor que mandar
+            // a correr un comando, que es justo lo que se saco del resto del panel.
+            if (r[2] && r[2].ok === false) {
+              var q = r[2].problem ? esc(r[2].problem) : t('notReady')
+              var c = r[2].detail ? esc(r[2].detail) : t('notReadyHow')
+              showAlert(q, c)
+            }
             else if (r[2]) el('alert').hidden = true
             renderOpcionales(r[2] && r[2].optional)
             renderRoutes(r[3])
