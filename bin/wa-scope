@@ -33,7 +33,11 @@ DB = scope_db_path()
 # que se pisan en silencio.
 # Hay un userData por build (orca, orca-dev, ...). Se toma el storage.json mas reciente,
 # que es el del Orca con el que el usuario esta trabajando de verdad.
-PLUGIN_ID = "ab2web.wa-inbox"
+# El prefijo "orca-" no es decorativo: la identidad oficial de un plugin se calcula
+# como <publisher>.<prefijo><resto>, asi que sin el no puede ser oficial en nuestro
+# marketplace. El nombre viejo se sigue leyendo para no perder lo ya guardado.
+PLUGIN_ID = "ab2web.orca-wa-inbox"
+PLUGIN_ID_ANTERIOR = "ab2web.wa-inbox"
 
 
 def user_data_roots():
@@ -51,12 +55,20 @@ def user_data_roots():
 
 PLUGIN_STORES = [os.path.join(r, "plugins-data", PLUGIN_ID, "storage.json")
                  for r in user_data_roots()]
+# Solo para leer: si el usuario ya tenia alcance y tono guardados con el nombre
+# anterior, renombrar el plugin no puede parecer que se borro todo.
+PLUGIN_STORES_ANTERIORES = [os.path.join(r, "plugins-data", PLUGIN_ID_ANTERIOR, "storage.json")
+                            for r in user_data_roots()]
 
 
 def plugin_store_path():
     existing = [p for p in PLUGIN_STORES if os.path.exists(p)]
     if existing:
         return max(existing, key=os.path.getmtime)
+    # Nada con el nombre nuevo: caer al anterior antes de devolver una ruta vacia.
+    viejos = [p for p in PLUGIN_STORES_ANTERIORES if os.path.exists(p)]
+    if viejos:
+        return max(viejos, key=os.path.getmtime)
     return PLUGIN_STORES[0]
 
 

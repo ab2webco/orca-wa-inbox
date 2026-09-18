@@ -1,9 +1,9 @@
 {
   "manifestVersion": 1,
-  "id": "wa-inbox",
+  "id": "orca-wa-inbox",
   "publisher": "ab2web",
   "name": "WhatsApp Inbox",
-  "version": "3.0.1",
+  "version": "3.1.0",
   "description": "Mapea conversaciones de WhatsApp a tus proyectos y define, por conversacion, hasta donde puede actuar tu agente.",
   "engines": {
     "orca": ">=1.4.0"
