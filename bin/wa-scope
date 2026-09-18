@@ -36,8 +36,8 @@ DB = scope_db_path()
 # El prefijo "orca-" no es decorativo: la identidad oficial de un plugin se calcula
 # como <publisher>.<prefijo><resto>, asi que sin el no puede ser oficial en nuestro
 # marketplace. El nombre viejo se sigue leyendo para no perder lo ya guardado.
-PLUGIN_ID = "ab2web.orca-wa-inbox"
-PLUGIN_ID_ANTERIOR = "ab2web.wa-inbox"
+PLUGIN_ID = "ab2web.wa-inbox"
+PLUGIN_ID_ANTERIOR = "ab2web.orca-wa-inbox"
 
 
 def user_data_roots():
