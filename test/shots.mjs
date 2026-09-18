@@ -170,9 +170,39 @@ function stub(datos) {
   })
 }
 
+// Los tres finales de la busqueda de conversaciones. Se fotografian porque son
+// exactamente lo que el segundo usuario vio — un panel que decia "Buscando…" para
+// siempre — y un estado sin salida no se detecta leyendo el codigo. Van a 1440 y 320,
+// los dos extremos: en el medio no cambia la composicion.
+const ANCHOS_ESTADO = [1440, 320]
+const HACE_DIEZ_MINUTOS = new Date(Date.now() - 10 * 60 * 1000).toISOString()
+const SIN_CHATS = Object.assign({}, DATOS, { chats: [], scope: {} })
+
 const PANELES = [
-  { nombre: 'config', archivo: 'config.html' },
-  { nombre: 'actividad', archivo: 'activity.html' }
+  { nombre: 'config', archivo: 'config.html', anchos: ANCHOS, datos: DATOS },
+  { nombre: 'actividad', archivo: 'activity.html', anchos: ANCHOS, datos: DATOS },
+  {
+    nombre: 'config-buscando', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: Object.assign({}, SIN_CHATS, {
+      syncStatus: { running: true, startedAt: new Date().toISOString(), trigger: 'activate' }
+    })
+  },
+  {
+    nombre: 'config-fallo', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: Object.assign({}, SIN_CHATS, {
+      syncStatus: {
+        ok: false, at: new Date().toISOString(), chats: 0, reason: 'sin-herramientas',
+        detail: 'spawn /Applications/Orca.app/plugins/ab2web.orca-wa-inbox/bin/wa-scope ENOENT',
+        exitCode: null, trigger: 'activate'
+      }
+    })
+  },
+  {
+    nombre: 'config-sin-respuesta', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: Object.assign({}, SIN_CHATS, {
+      syncStatus: { running: true, startedAt: HACE_DIEZ_MINUTOS, trigger: 'activate' }
+    })
+  }
 ]
 
 async function main() {
@@ -181,6 +211,7 @@ async function main() {
 
   const navegador = await chromium.launch()
   const problemas = []
+  let tomadas = 0
 
   for (const tema of TEMAS) {
     for (const ancho of ANCHOS) {
@@ -191,10 +222,11 @@ async function main() {
         deviceScaleFactor: 2
       })
       for (const panel of PANELES) {
+        if (!panel.anchos.includes(ancho)) continue
         const pagina = await contexto.newPage()
         const errores = []
         pagina.on('pageerror', (e) => errores.push(String(e)))
-        await pagina.addInitScript(`(${stub.toString()})(${JSON.stringify(DATOS)})`)
+        await pagina.addInitScript(`(${stub.toString()})(${JSON.stringify(panel.datos)})`)
         await pagina.goto('file://' + join(RAIZ, panel.archivo))
         await pagina.waitForLoadState('load')
         const declaraciones = Object.entries(TOKENS[tema])
@@ -223,6 +255,7 @@ async function main() {
 
         const nombre = `${panel.nombre}-${tema}-${ancho}.png`
         await pagina.screenshot({ path: join(SALIDA, nombre), fullPage: true })
+        tomadas += 1
         console.log(`  ${nombre}`)
         await pagina.close()
       }
@@ -231,7 +264,7 @@ async function main() {
   }
   await navegador.close()
 
-  console.log(`\n${PANELES.length * ANCHOS.length * TEMAS.length} capturas en docs/capturas/`)
+  console.log(`\n${tomadas} capturas en docs/capturas/`)
   if (problemas.length) {
     console.error('\nProblemas:')
     for (const p of problemas) console.error(`  ${p}`)

@@ -241,6 +241,136 @@ console.log('\nconfig.html')
       doc.getElementById('chat-pick').options.length > 1)
   }
 
+  // ───── el panel nunca se queda diciendo que busca ─────
+  // El defecto que costo la instalacion del segundo usuario: el sync del worker fallaba
+  // callado y el panel decia "Buscando tus conversaciones…" para siempre. Nadie puede
+  // arreglar lo que el panel no cuenta, y un panel sin salida es un panel roto.
+  const textosEstado = []
+
+  const buscando = await montar('config.html', {
+    syncStatus: { running: true, startedAt: new Date().toISOString(), trigger: 'activate' }
+  })
+  await espera()
+  ok('mientras busca de verdad, lo dice y no ofrece nada que apretar',
+    /Buscando|Looking|Procurando/.test(buscando.doc.getElementById('chat-pick').textContent) &&
+    buscando.doc.getElementById('sync-state').hidden,
+    `chat-pick = ${JSON.stringify(buscando.doc.getElementById('chat-pick').textContent)}`)
+
+  const fallo = await montar('config.html', {
+    chats: [],
+    syncStatus: {
+      ok: false, at: new Date().toISOString(), chats: 0, reason: 'sin-herramientas',
+      detail: "spawn /Applications/Orca.app/bin/wa-scope ENOENT", exitCode: null,
+      trigger: 'activate'
+    }
+  })
+  await espera()
+  textosEstado.push(fallo.doc.getElementById('sync-msg').textContent)
+  ok('cuando el sync fallo, el panel deja de decir que busca',
+    !fallo.doc.getElementById('sync-state').hidden &&
+    !/Buscando|Looking|Procurando/.test(fallo.doc.getElementById('sync-msg').textContent),
+    `sync-msg = ${JSON.stringify(fallo.doc.getElementById('sync-msg').textContent)}`)
+  // "No pude leer WhatsApp" sin la causa es el mismo callejon que el spinner.
+  ok('dice la causa en palabras', fallo.doc.getElementById('sync-msg').textContent.length > 20)
+  ok('y muestra el error de abajo, que es lo unico accionable para soporte',
+    !fallo.doc.getElementById('sync-detail').hidden &&
+    fallo.doc.getElementById('sync-detail').textContent.includes('ENOENT'))
+  ok('ofrece volver a intentar', !fallo.doc.getElementById('sync-retry').hidden)
+
+  // El panel no puede ejecutar nada: el boton escribe el pedido y el worker lo atiende.
+  fallo.doc.getElementById('sync-retry').click()
+  await espera()
+  ok('el boton escribe el pedido de sync en storage',
+    !!(fallo.storage.syncRequest && typeof fallo.storage.syncRequest.at === 'string' &&
+       !Number.isNaN(Date.parse(fallo.storage.syncRequest.at))),
+    `storage.syncRequest = ${JSON.stringify(fallo.storage.syncRequest)}`)
+  ok('y avisa que lo pidio', fallo.doc.getElementById('said-sync').textContent.length > 0)
+
+  // Un intento que arranco hace diez minutos ya no esta corriendo: seguir diciendo
+  // "buscando" seria mentir, y sin boton no habria nada que hacer.
+  const colgado = await montar('config.html', {
+    chats: [],
+    syncStatus: {
+      running: true, trigger: 'activate',
+      startedAt: new Date(Date.now() - 10 * 60 * 1000).toISOString()
+    }
+  })
+  await espera()
+  textosEstado.push(colgado.doc.getElementById('sync-msg').textContent)
+  ok('un intento que lleva demasiado deja de llamarse busqueda',
+    !colgado.doc.getElementById('sync-state').hidden &&
+    !colgado.doc.getElementById('sync-retry').hidden &&
+    colgado.doc.getElementById('sync-msg').textContent.length > 10,
+    `sync-msg = ${JSON.stringify(colgado.doc.getElementById('sync-msg').textContent)}`)
+
+  // Sin una sola noticia del worker tampoco se puede decir "buscando" para siempre:
+  // el plugin puede estar apagado. Se adelanta el reloj para recorrer esa rama.
+  const callado = await montar('config.html', {})
+  await espera()
+  ok('recien abierto y sin noticias, la espera es legitima',
+    callado.doc.getElementById('sync-state').hidden)
+  const ahora = callado.window.Date.now()
+  callado.window.Date.now = () => ahora + 60000
+  callado.window.dispatchEvent(new callado.window.Event('focus'))
+  await espera()
+  textosEstado.push(callado.doc.getElementById('sync-msg').textContent)
+  ok('pasado un rato sin noticias del worker, ofrece el boton igual',
+    !callado.doc.getElementById('sync-state').hidden &&
+    !callado.doc.getElementById('sync-retry').hidden,
+    `sync-state = ${JSON.stringify(callado.doc.getElementById('sync-state').textContent)}`)
+
+  // El sync corrio bien y aun asi no hay nada: el problema no es el plugin, y decir
+  // "no pude leer WhatsApp" seria falso.
+  const sinNada = await montar('config.html', {
+    chats: [],
+    syncStatus: { ok: true, at: new Date().toISOString(), chats: 0, reason: null,
+      detail: '', exitCode: null, trigger: 'timer' }
+  })
+  await espera()
+  textosEstado.push(sinNada.doc.getElementById('sync-msg').textContent)
+  ok('un sync bueno sin conversaciones no se cuenta como error',
+    !sinNada.doc.getElementById('sync-state').hidden &&
+    !sinNada.doc.getElementById('sync-retry').hidden &&
+    /WhatsApp Desktop/.test(sinNada.doc.getElementById('sync-msg').textContent),
+    `sync-msg = ${JSON.stringify(sinNada.doc.getElementById('sync-msg').textContent)}`)
+
+  // La razon de todo esto: si el panel manda a correr un comando, la funcion no existe.
+  // Se revisa lo que el panel redacta; el detalle de abajo es la salida cruda de la
+  // herramienta, que es evidencia, no una instruccion.
+  ok('ningun estado manda a correr un comando',
+    textosEstado.every((txt) => !/wa-scope|wa-read|npm |sudo|terminal|--json|\$ /i.test(txt)),
+    JSON.stringify(textosEstado))
+
+  // La lista tiene que llegar aunque el cursor este en el buscador — que es justo donde
+  // esta el cursor de quien mira "Buscando…" e intenta encontrar su conversacion. Una
+  // guardia de foco la dejaba vacia hasta salir y volver a la pagina.
+  const conFoco = await montar('config.html', {})
+  await espera()
+  conFoco.doc.getElementById('chat-search').focus()
+  conFoco.storage.chats = [
+    { jid: '9@g.us', name: 'Laura Mendez', kind: 'directo' },
+    { jid: '8@g.us', name: 'Operaciones', kind: 'grupo' }
+  ]
+  conFoco.window.dispatchEvent(new conFoco.window.Event('focus'))
+  await espera()
+  ok('la lista se llena con el cursor puesto en el buscador',
+    [...conFoco.doc.getElementById('chat-pick').options].some((o) => o.textContent.includes('Laura')),
+    `chat-pick = ${JSON.stringify([...conFoco.doc.getElementById('chat-pick').options].map((o) => o.textContent))}`)
+
+  // Y lo que el usuario ya habia tecleado no se pierde en la recarga.
+  conFoco.doc.getElementById('chat-search').value = 'laura'
+  conFoco.doc.getElementById('chat-search').dispatchEvent(new conFoco.window.Event('input'))
+  await espera()
+  conFoco.window.dispatchEvent(new conFoco.window.Event('focus'))
+  await espera()
+  const trasRecarga = [...conFoco.doc.getElementById('chat-pick').options].map((o) => o.textContent)
+  ok('el texto del buscador sobrevive a la recarga',
+    conFoco.doc.getElementById('chat-search').value === 'laura')
+  ok('y sigue filtrando despues de recargar',
+    trasRecarga.some((txt) => txt.includes('Laura')) &&
+    !trasRecarga.some((txt) => txt.includes('Operaciones')),
+    JSON.stringify(trasRecarga))
+
   // Editar
   doc.querySelector('[data-edit]').click()
   await espera()

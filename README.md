@@ -126,8 +126,9 @@ npm run check
 | `scripts/check-prompts` | que `prompts/*.md` no tengan voseo. El agente le escribe a clientes en Colombia. |
 | `scripts/check-clis` | que los cuatro CLIs de `bin/` arranquen de verdad. Compilar no alcanza. |
 | `scripts/check-closing` | 36 pruebas del aviso de cierre contra una base temporal: el guardia del backlog, un aviso por tarjeta, `completed` vs `cancelled`, y el permiso. Corre el CLI de verdad, con `HOME` movido para no tocar la base real. |
-| `test/panels.test.mjs` | 51 pruebas sobre los paneles con jsdom y el puente del host simulado. |
-| `npm run shots` | fotografía los dos paneles a 1440, 768, 390 y 320 px en tema claro y oscuro, y falla si algo desborda a lo ancho. |
+| `test/panels.test.mjs` | 90 pruebas sobre los paneles con jsdom y el puente del host simulado, incluidos los tres finales de la búsqueda de conversaciones y el botón de reintento. |
+| `test/worker.test.mjs` | 19 pruebas sobre `main.mjs` con el host simulado: que un sync que falla deje escrito el motivo, y que el pedido del panel se atienda una sola vez y se pare al apagar el plugin. Las herramientas son guiones falsos en un directorio temporal: no toca WhatsApp. |
+| `npm run shots` | fotografía los dos paneles a 1440, 768, 390 y 320 px en tema claro y oscuro, más los tres estados de la búsqueda a 1440 y 320, y falla si algo desborda a lo ancho. |
 
 `scripts/` es herramienta de desarrollo; `bin/` son los cuatro CLIs que el plugin
 publica. No se mezclan.

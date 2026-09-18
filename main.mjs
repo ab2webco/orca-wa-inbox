@@ -18,14 +18,21 @@ import { dirname, join } from 'node:path'
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
 const TOOLS = join(PLUGIN_DIR, 'bin')
 const SCOPE_KEY = 'scope'          // { [chatJid]: ScopeEntry }
+// Como le fue al ultimo sync. El panel no puede ejecutar nada, asi que sin esto no
+// tiene forma de distinguir "todavia buscando" de "fallo hace media hora".
+const STATUS_KEY = 'syncStatus'
+// La via de vuelta: el panel deja aca un pedido de sync y el worker lo atiende. Es el
+// mismo camino que usan Tomar/Ignorar con `decisions`.
+const REQUEST_KEY = 'syncRequest'
+const CHATS_KEY = 'chats'
 const MODES = ['off', 'observar', 'borrador', 'responder']
 
 /** El nombre del agente lo define quien usa el plugin. No viene con uno puesto. */
 const DEFAULT_SETTINGS = { agentName: '', signMessages: true, toolsDir: TOOLS }
 
 /** Corre `wa-read doctor` y avisa por notificacion si algo falta. */
-async function checkSystem(orca) {
-  const result = await run(join(TOOLS, 'wa-read'), ['doctor', '--json'],
+async function checkSystem(orca, toolsDir = TOOLS) {
+  const result = await run(join(toolsDir, 'wa-read'), ['doctor', '--json'],
     { timeoutMs: 30000 }).catch(() => null)
   let checks = []
   try {
@@ -37,7 +44,7 @@ async function checkSystem(orca) {
   if (!checks.length) {
     await orca.host.call('notifications.show', {
       title: 'No pude verificar el sistema',
-      body: `No pude correr las herramientas del plugin. Revisa que ${TOOLS} sea ejecutable.`
+      body: `No pude correr las herramientas del plugin. Revisa que ${toolsDir} sea ejecutable.`
     }).catch(() => {})
     return
   }
@@ -58,13 +65,29 @@ async function checkSystem(orca) {
   orca.log(`chequeo: faltan ${failed.map((c) => c.check).join(', ')}`)
 }
 
+/** La linea de stderr que sirve. En un traceback de Python la primera es el
+ *  encabezado y lo util es la ultima; en todo lo demas la primera es el mensaje. */
+function lineaUtil(stderr) {
+  const lineas = String(stderr ?? '').split('\n').map((l) => l.trim()).filter(Boolean)
+  if (!lineas.length) return ''
+  return /^Traceback/.test(lineas[0]) ? lineas[lineas.length - 1] : lineas[0]
+}
+
 function run(cmd, args, { timeoutMs = 20000 } = {}) {
   return new Promise((resolve, reject) => {
     execFile(cmd, args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 },
       (error, stdout, stderr) => {
         // wa-scope check sale con 3 cuando deniega: es una respuesta, no una falla.
         if (error && error.code !== 3) {
-          reject(new Error(stderr?.trim() || error.message))
+          // El motivo tiene que sobrevivir al reject: "no pude leer WhatsApp" sin la
+          // causa deja al usuario en el mismo callejon que el spinner eterno.
+          const fallo = new Error(lineaUtil(stderr) || error.message)
+          // execFile pone un string ('ENOENT') cuando ni arranco y un numero cuando
+          // arranco y salio mal. Son dos problemas distintos y se cuentan distinto.
+          fallo.spawnCode = typeof error.code === 'string' ? error.code : null
+          fallo.exitCode = typeof error.code === 'number' ? error.code : null
+          fallo.timedOut = !!error.killed
+          reject(fallo)
           return
         }
         resolve({ stdout: stdout ?? '', stderr: stderr ?? '', code: error?.code ?? 0 })
@@ -82,35 +105,126 @@ async function runJson(cmd, args) {
 }
 
 const SYNC_MS = 5 * 60 * 1000
+const SYNC_TIMEOUT_MS = 120000
+// Un pedido del panel no puede esperar al ciclo de 5 minutos: nadie aprieta un boton
+// y se queda mirando cinco minutos.
+const PETICION_MS = 3 * 1000
+// Un pedido viejo es de una sesion anterior: atenderlo seria leer WhatsApp porque
+// alguien apreto un boton ayer.
+const PETICION_TTL_MS = 10 * 60 * 1000
 
-/** Deja el panel al dia. Lo hace el worker porque el panel no puede ejecutar nada:
- *  solo sabe leer y escribir storage. Sin esto el panel abria diciendo "corre este
- *  comando", que en una interfaz no es una instruccion, es un callejon. */
-async function sync(orca) {
-  const r = await run(join(TOOLS, 'wa-scope'), ['sync', '--json'],
-    { timeoutMs: 120000 }).catch((error) => {
-    orca.log(`sync fallo: ${error.message}`)
-    return null
+/** El motivo, en codigo corto. Las frases las arma el panel: el worker no sabe en
+ *  que idioma esta el usuario, y una frase en el storage se congela en ese idioma. */
+function motivoDe(error) {
+  if (error?.spawnCode === 'ENOENT') return 'sin-herramientas'
+  if (error?.spawnCode === 'EACCES' || error?.spawnCode === 'EPERM') return 'sin-permiso'
+  if (error?.timedOut) return 'demoro'
+  return 'fallo'
+}
+
+async function leer(orca, key) {
+  const stored = await orca.host.call('storage.get', { key }).catch(() => null)
+  return stored?.value ?? null
+}
+
+function guardar(orca, key, value) {
+  return orca.host.call('storage.set', { key, value }).catch(() => {})
+}
+
+// Dos syncs a la vez leerian la misma base dos veces y se pisarian el estado.
+let sincronizando = false
+
+/** Deja el panel al dia y deja escrito como le fue. Lo hace el worker porque el panel
+ *  no puede ejecutar nada: solo sabe leer y escribir storage. Sin esto el panel abria
+ *  diciendo "corre este comando", que en una interfaz no es una instruccion, es un
+ *  callejon; y cuando el sync fallaba callado, el callejon era el spinner eterno. */
+async function sync(orca, { toolsDir = TOOLS, trigger = 'timer' } = {}) {
+  if (sincronizando) return false
+  sincronizando = true
+  // Se anota el intento ANTES de arrancar: "nadie lo intento" y "esta corriendo" son
+  // dos mensajes distintos, y el panel solo puede distinguirlos si el worker lo dice.
+  await guardar(orca, STATUS_KEY, {
+    running: true, startedAt: new Date().toISOString(), trigger
   })
-  return r !== null
+  let estado
+  try {
+    const { stdout } = await run(join(toolsDir, 'wa-scope'), ['sync', '--json'],
+      { timeoutMs: SYNC_TIMEOUT_MS })
+    let escrito = false
+    try {
+      const filas = JSON.parse(stdout || 'null')
+      escrito = !!(Array.isArray(filas) ? filas[0]?.synced : filas?.synced)
+    } catch {
+      escrito = false
+    }
+    const chats = await leer(orca, CHATS_KEY)
+    estado = {
+      ok: escrito,
+      at: new Date().toISOString(),
+      chats: Array.isArray(chats) ? chats.length : 0,
+      reason: escrito ? null : 'sin-registro',
+      detail: escrito ? '' : String(stdout ?? '').trim().slice(0, 200),
+      exitCode: null,
+      trigger
+    }
+  } catch (error) {
+    estado = {
+      ok: false,
+      at: new Date().toISOString(),
+      chats: 0,
+      reason: motivoDe(error),
+      detail: String(error?.message ?? '').slice(0, 300),
+      exitCode: error?.exitCode ?? null,
+      trigger
+    }
+    orca.log(`sync fallo (${estado.reason}, code ${estado.exitCode}): ${estado.detail}`)
+  } finally {
+    sincronizando = false
+  }
+  await guardar(orca, STATUS_KEY, estado)
+  return estado.ok
 }
 
 export default function activate(orca) {
+  const dirHerramientas = async () => (await settings()).toolsDir || TOOLS
+
+  // El sync automatico sale del mismo directorio que los comandos. Antes iba fijo a
+  // bin/: quien movia toolsDir tenia la mitad del plugin leyendo de otro lado.
+  const sincronizar = async (trigger) =>
+    sync(orca, { toolsDir: await dirHerramientas(), trigger })
+
   // Al activarse, lo primero es decir si este sistema puede leer WhatsApp. Si no puede,
   // el usuario se tiene que enterar ahora y no cuando una automatizacion lleve una
   // semana sin correr sin explicar por que.
-  checkSystem(orca).catch((error) => orca.log(`chequeo inicial fallo: ${error.message}`))
+  dirHerramientas().then((dir) => checkSystem(orca, dir))
+    .catch((error) => orca.log(`chequeo inicial fallo: ${error.message}`))
 
   // Y traer las conversaciones ya: en una instalacion nueva el panel arranca vacio y
   // el usuario no tiene de donde sacarlas.
-  sync(orca).catch(() => {})
-  const syncTimer = setInterval(() => { sync(orca).catch(() => {}) }, SYNC_MS)
+  sincronizar('activate').catch(() => {})
+  const syncTimer = setInterval(() => { sincronizar('timer').catch(() => {}) }, SYNC_MS)
   if (typeof syncTimer.unref === 'function') syncTimer.unref()
 
-  const tool = async (name) => {
-    const s = await settings()
-    return join(s.toolsDir || TOOLS, name)
+  // El boton del panel escribe un pedido; esto lo atiende. Se mira cada pocos segundos
+  // y no en el ciclo de 5 minutos porque un boton que tarda cinco minutos en hacer
+  // algo se lee como un boton roto.
+  let ultimoPedido = null
+  async function atenderPedido() {
+    const pedido = await leer(orca, REQUEST_KEY)
+    if (!pedido || typeof pedido !== 'object' || typeof pedido.at !== 'string') return
+    if (pedido.at === ultimoPedido) return
+    ultimoPedido = pedido.at
+    // Se borra antes de sincronizar: un clic tiene que causar un sync, no una cadena
+    // de syncs si la lectura tarda mas que el proximo vistazo.
+    await guardar(orca, REQUEST_KEY, null)
+    const edad = Date.now() - Date.parse(pedido.at)
+    if (!(edad >= 0) || edad > PETICION_TTL_MS) return
+    await sincronizar('peticion')
   }
+  const pedidoTimer = setInterval(() => { atenderPedido().catch(() => {}) }, PETICION_MS)
+  if (typeof pedidoTimer.unref === 'function') pedidoTimer.unref()
+
+  const tool = async (name) => join(await dirHerramientas(), name)
 
   async function settings() {
     const stored = await orca.host.call('settings.get', { key: 'config' }).catch(() => null)
@@ -220,7 +334,7 @@ export default function activate(orca) {
     orca.log(`agente ${payload.state} en ${payload.worktreeId ?? 'sin worktree'}`)
   })
 
-  // Al desactivar el plugin el timer se va con el: si no, sigue leyendo WhatsApp
+  // Al desactivar el plugin los timers se van con el: si no, siguen leyendo WhatsApp
   // despues de que el usuario dijo que no.
-  return () => { clearInterval(syncTimer) }
+  return () => { clearInterval(syncTimer); clearInterval(pedidoTimer) }
 }

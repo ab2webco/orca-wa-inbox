@@ -183,6 +183,12 @@
                font-size: 12px; padding: 10px 0; }
       .hint { color: var(--muted-foreground, var(--fb-muted-foreground));
               font-size: 11px; margin: 6px 0 0; line-height: 1.5; }
+      /* El motivo no es una pista al margen: es EL mensaje mientras no hay lista, asi
+         que va en el color del texto y no en el apagado de los consejos. */
+      #sync-msg { color: var(--foreground, var(--fb-foreground)); }
+      /* La salida cruda de la herramienta se lee como lo que es. A 320 px la ruta no
+         cabe en una linea y partirla es mejor que desbordar. */
+      #sync-detail { font-family: ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
       /* Un requisito opcional no es una alerta: no bloquea nada. Va en gris, con su
          accion al lado, y desaparece cuando se resuelve. */
       #opcionales[hidden] { display: none; }
@@ -310,7 +316,18 @@
         <input id="chat-search" type="search" autocomplete="off" data-t-ph="chatSearchPh" />
         <select id="chat-pick" size="1"></select>
         <p class="hint" id="chat-count"></p>
-        <p class="hint" data-t="chatHelp"></p>
+        <!-- Lo que paso de verdad con la busqueda. Antes el unico aviso era la opcion
+             "Buscando…" del select, que no caduca nunca: si el sync fallaba, el panel
+             seguia diciendo que buscaba y el usuario no tenia nada que apretar. -->
+        <div id="sync-state" hidden>
+          <p class="hint" id="sync-msg"></p>
+          <p class="hint" id="sync-detail" hidden></p>
+          <div class="actions">
+            <button id="sync-retry" data-t="syncRetry"></button>
+            <span class="said" id="said-sync"></span>
+          </div>
+        </div>
+        <p class="hint" id="chat-help" data-t="chatHelp"></p>
         <input id="chat" data-t-ph="chatPh" hidden />
         <div class="row">
           <div>
@@ -426,6 +443,20 @@
             "credencial, nunca enviar sin permiso de responder.",
           pickOne: "Elegi una conversacion",
           noChats: "Buscando tus conversaciones…",
+          // Ningun estado nombra un comando: si el usuario tiene que abrir una
+          // terminal para que el panel sirva, el panel no sirve.
+          noChatsFail: "Sin conversaciones",
+          syncRetry: "Buscar de nuevo", syncAsked: "Buscando de nuevo…",
+          syncNoTools: "No pude ejecutar las herramientas del plugin. Reinstalalo " +
+            "desde el marketplace y volve a intentar.",
+          syncNoPerm: "Las herramientas del plugin no tienen permiso para ejecutarse. " +
+            "Reinstalalo desde el marketplace.",
+          syncTimeout: "La lectura de WhatsApp tardo demasiado y se corto.",
+          syncNoRecord: "Las herramientas corrieron pero no dejaron nada escrito.",
+          syncFailed: "No pude leer WhatsApp.",
+          syncNoChats: "No encontre ninguna conversacion. Abri WhatsApp Desktop una " +
+            "vez, espera a que cargue tus chats, y volve a intentar.",
+          syncStalled: "Llevo un rato buscando y no llego nada.",
           sub: 'Que conversaciones ve tu agente, y hasta donde puede actuar en cada una.',
           agentLegend: 'Tu agente', agentLabel: 'Como se llama',
           agentPh: 'ej. Watson, Viernes, Asistente',
@@ -517,6 +548,18 @@
             "without reply permission.",
           pickOne: "Pick a conversation",
           noChats: "Looking for your conversations…",
+          noChatsFail: "No conversations",
+          syncRetry: "Look again", syncAsked: "Looking again…",
+          syncNoTools: "I could not run the plugin's tools. Reinstall it from the " +
+            "marketplace and try again.",
+          syncNoPerm: "The plugin's tools are not allowed to run. Reinstall it from " +
+            "the marketplace.",
+          syncTimeout: "Reading WhatsApp took too long and was cut off.",
+          syncNoRecord: "The tools ran but wrote nothing.",
+          syncFailed: "I could not read WhatsApp.",
+          syncNoChats: "I found no conversations. Open WhatsApp Desktop once, wait " +
+            "for your chats to load, and try again.",
+          syncStalled: "I have been looking for a while and nothing arrived.",
           sub: 'Which conversations your agent sees, and how far it can act in each one.',
           agentLegend: 'Your agent', agentLabel: 'What it is called',
           agentPh: 'e.g. Watson, Friday, Assistant',
@@ -602,6 +645,18 @@
         agentLegend: 'Seu agente', agentLabel: 'Como se chama',
         saveName: 'Salvar nome', saveChange: 'Salvar alteracao', cancel: 'Cancelar',
         noChats: 'Procurando suas conversas…',
+        noChatsFail: 'Sem conversas',
+        syncRetry: 'Procurar de novo', syncAsked: 'Procurando de novo…',
+        syncNoTools: 'Nao consegui executar as ferramentas do plugin. Reinstale pelo ' +
+          'marketplace e tente de novo.',
+        syncNoPerm: 'As ferramentas do plugin nao tem permissao para executar. ' +
+          'Reinstale pelo marketplace.',
+        syncTimeout: 'A leitura do WhatsApp demorou demais e foi cortada.',
+        syncNoRecord: 'As ferramentas rodaram mas nao escreveram nada.',
+        syncFailed: 'Nao consegui ler o WhatsApp.',
+        syncNoChats: 'Nao encontrei nenhuma conversa. Abra o WhatsApp Desktop uma vez, ' +
+          'espere seus chats carregarem, e tente de novo.',
+        syncStalled: 'Faz um tempo que procuro e nada chegou.',
         chatSearchPh: 'Digite para filtrar',
         chatCount: '{n} de {total}', chatNoMatch: 'Nada corresponde a isso',
         editName: 'Mudar o nome', mapLegend: 'Conversas', chatLabel: 'Conversa',
@@ -865,6 +920,77 @@
       // lo que quedo pintado, si no cada tecleo iria achicando la lista sin volver.
       var chatsTodos = []
 
+      // ---------- estado de la busqueda ----------
+      // El panel no ejecuta nada, asi que por si mismo no puede saber si el worker esta
+      // buscando, si fallo o si se quedo callado. Lo lee de syncStatus, que el worker
+      // escribe antes y despues de cada intento.
+      var estadoSync = null
+      var ABIERTO_EN = Date.now()
+      // Sin una sola noticia del worker en este tiempo, seguir diciendo "buscando" es
+      // mentir: o el plugin no esta activo, o el worker nunca arranco.
+      var ESPERA_MS = 45000
+      // Un intento que lleva mas que el timeout del propio sync ya no esta corriendo.
+      var CORRIENDO_MS = 150000
+
+      function edadMs (iso) {
+        var ms = Date.parse(iso)
+        return ms ? Date.now() - ms : Infinity
+      }
+
+      function motivoTexto (estado) {
+        var mapa = {
+          'sin-herramientas': 'syncNoTools', 'sin-permiso': 'syncNoPerm',
+          'demoro': 'syncTimeout', 'sin-registro': 'syncNoRecord'
+        }
+        return t(mapa[estado && estado.reason] || 'syncFailed')
+      }
+
+      /** Que decir con la lista vacia. Tres finales: sigue buscando, fallo con motivo,
+       *  o lleva demasiado sin llegar. Los dos ultimos ofrecen el boton, porque un
+       *  estado sin salida es el mismo callejon que el spinner eterno. */
+      function estadoVacio (estado) {
+        if (estado && estado.running && edadMs(estado.startedAt) < CORRIENDO_MS) {
+          // Sin texto aparte: la opcion del select ya dice que esta buscando, y
+          // repetirlo debajo no agrega nada que mirar.
+          return { corto: t('noChats'), largo: '', detalle: '', boton: false }
+        }
+        if (estado && estado.ok === false) {
+          return { corto: t('noChatsFail'), largo: motivoTexto(estado),
+                   detalle: estado.detail || '', boton: true }
+        }
+        // El sync corrio bien y aun asi no hay nada: el problema no es el plugin.
+        if (estado && estado.ok === true) {
+          return { corto: t('noChatsFail'), largo: t('syncNoChats'), detalle: '', boton: true }
+        }
+        if (!estado && Date.now() - ABIERTO_EN < ESPERA_MS) {
+          return { corto: t('noChats'), largo: '', detalle: '', boton: false }
+        }
+        return { corto: t('noChatsFail'), largo: t('syncStalled'), detalle: '', boton: true }
+      }
+
+      function pintarEstadoSync () {
+        var v = estadoVacio(estadoSync)
+        var mostrar = !chatsTodos.length && !!(v.largo || v.boton)
+        el('sync-state').hidden = !mostrar
+        // "Se elige de la lista" es consejo sobre una lista que no esta. Mientras el
+        // aviso ocupa ese lugar, la pista estorba mas de lo que ayuda.
+        el('chat-help').hidden = mostrar
+        if (!mostrar) return
+        el('sync-msg').textContent = v.largo
+        el('sync-detail').textContent = v.detalle
+        el('sync-detail').hidden = !v.detalle
+        el('sync-retry').hidden = !v.boton
+      }
+
+      // El panel no puede correr un sync: escribe el pedido y el worker lo atiende.
+      // Mismo camino que Tomar/Ignorar en el panel de actividad.
+      el('sync-retry').addEventListener('click', function (event) {
+        busy(event.currentTarget, write('syncRequest', { at: new Date().toISOString() })
+          .then(function (r) {
+            said('said-sync', r && r.ok ? t('syncAsked') : 'error', !(r && r.ok))
+          }))
+      })
+
       function renderChats (chats) {
         chatsTodos = Array.isArray(chats) ? chats : []
         chatsPorJid = {}
@@ -883,11 +1009,13 @@
         sel.innerHTML = ''
         if (!chatsTodos.length) {
           var o = document.createElement('option')
-          o.value = ''; o.textContent = t('noChats')
+          o.value = ''; o.textContent = estadoVacio(estadoSync).corto
           sel.appendChild(o)
           el('chat-count').textContent = ''
+          pintarEstadoSync()
           return
         }
+        pintarEstadoSync()
         // Se busca en el nombre y en el identificador: hay grupos que comparten
         // nombre y el jid es lo unico que los distingue.
         var visibles = termino
@@ -1073,7 +1201,7 @@
                             read('routes'), read('tone'), read('chats'),
                             read('transcribeQuality'), read('inboxDays'),
                             read('ownerName'), read('transcribe'),
-                            read('transcribeLang')])
+                            read('transcribeLang'), read('syncStatus')])
           .then(function (r) {
             renderScope(r[0])
             if (typeof r[4] === 'string' && document.activeElement !== el('tone')) {
@@ -1087,7 +1215,12 @@
             if (typeof r[8] === 'string' && document.activeElement !== el('owner')) {
               el('owner').value = r[8]
             }
-            if (document.activeElement !== el('chat-search')) renderChats(r[5])
+            // Sin guardia de foco: renderChats no toca el buscador — reconstruye el
+            // select y pintarChats ya conserva el texto filtrado y lo elegido. La
+            // guardia solo lograba que, con el cursor en el buscador, la lista nunca
+            // se llenara: era justo donde esta el cursor de quien mira "Buscando…".
+            estadoSync = r[11] && typeof r[11] === 'object' ? r[11] : null
+            renderChats(r[5])
             if (typeof r[1] === 'string' && r[1] && !agentDirty &&
                 document.activeElement !== el('agent')) {
               showAgentSaved(r[1])
