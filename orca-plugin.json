@@ -3,8 +3,8 @@
   "id": "orca-wa-inbox",
   "publisher": "ab2web",
   "name": "WhatsApp Inbox",
-  "version": "3.5.1",
-  "description": "Mapea conversaciones de WhatsApp a tus proyectos y define, por conversacion, hasta donde puede actuar tu agente.",
+  "version": "3.6.0",
+  "description": "Map WhatsApp conversations to your projects and decide, per conversation, how far your agent may act.",
   "engines": {
     "orca": ">=1.4.0"
   },
@@ -30,27 +30,27 @@
     "commands": [
       {
         "id": "wa-inbox.sync",
-        "title": "WhatsApp: refrescar conversaciones"
+        "title": "WhatsApp: Refresh conversations"
       },
       {
         "id": "wa-inbox.scope.list",
-        "title": "WhatsApp: ver alcance"
+        "title": "WhatsApp: View scope"
       },
       {
         "id": "wa-inbox.scope.set",
-        "title": "WhatsApp: mapear conversacion"
+        "title": "WhatsApp: Map conversation"
       },
       {
         "id": "wa-inbox.inbox",
-        "title": "WhatsApp: mensajes dirigidos a mi"
+        "title": "WhatsApp: Messages addressed to me"
       },
       {
         "id": "wa-inbox.settings",
-        "title": "WhatsApp: ajustes del agente"
+        "title": "WhatsApp: Agent settings"
       },
       {
         "id": "wa-inbox.doctor",
-        "title": "WhatsApp: verificar requisitos"
+        "title": "WhatsApp: Check requirements"
       }
     ],
     "events": [
@@ -65,16 +65,16 @@
         "provider": "claude",
         "trigger": "*/5 8-18 * * 1-5",
         "timezone": "America/Bogota",
-        "precheck": "wa-scope pending",
+        "precheck": "WA=$(python3 -c \"import json,os,sys\nb=os.path.expanduser('~/Library/Application Support') if sys.platform=='darwin' else os.environ.get('APPDATA') or os.path.expanduser('~/.config')\nc=[]\nfor d in (os.listdir(b) if os.path.isdir(b) else []):\n for k in ('ab2web.orca-wa-inbox','ab2web.wa-inbox'):\n  p=os.path.join(b,d,'plugins',k); f=os.path.join(p,'current')\n  if os.path.isfile(f):\n   x=os.path.join(p,open(f).read().strip(),'bin')\n   if os.path.isdir(x): c.append((os.path.getmtime(x),x))\n for prof in ('profiles/local-default/orca-data.json','orca-data.json'):\n  g=os.path.join(b,d,prof)\n  if os.path.isfile(g):\n   try: s=json.load(open(g)).get('settings') or {}\n   except Exception: continue\n   for r in s.get('devPluginPaths') or []:\n    x=os.path.join(r,'bin')\n    if os.path.isdir(x): c.append((os.path.getmtime(x),x))\nprint(max(c)[1] if c else '')\") && [ -x \"$WA/wa-scope\" ] || exit 1; \"$WA/wa-scope\" pending",
         "prompt": "prompts/triage.md"
       },
       {
         "id": "take",
-        "title": "WhatsApp: tomar lo marcado",
+        "title": "WhatsApp: Take what was marked",
         "provider": "claude",
         "trigger": "*/2 * * * *",
         "timezone": "America/Bogota",
-        "precheck": "wa-scope pending --only-taken",
+        "precheck": "WA=$(python3 -c \"import json,os,sys\nb=os.path.expanduser('~/Library/Application Support') if sys.platform=='darwin' else os.environ.get('APPDATA') or os.path.expanduser('~/.config')\nc=[]\nfor d in (os.listdir(b) if os.path.isdir(b) else []):\n for k in ('ab2web.orca-wa-inbox','ab2web.wa-inbox'):\n  p=os.path.join(b,d,'plugins',k); f=os.path.join(p,'current')\n  if os.path.isfile(f):\n   x=os.path.join(p,open(f).read().strip(),'bin')\n   if os.path.isdir(x): c.append((os.path.getmtime(x),x))\n for prof in ('profiles/local-default/orca-data.json','orca-data.json'):\n  g=os.path.join(b,d,prof)\n  if os.path.isfile(g):\n   try: s=json.load(open(g)).get('settings') or {}\n   except Exception: continue\n   for r in s.get('devPluginPaths') or []:\n    x=os.path.join(r,'bin')\n    if os.path.isdir(x): c.append((os.path.getmtime(x),x))\nprint(max(c)[1] if c else '')\") && [ -x \"$WA/wa-scope\" ] || exit 1; \"$WA/wa-scope\" pending --only-taken",
         "prompt": "prompts/take.md"
       }
     ]
