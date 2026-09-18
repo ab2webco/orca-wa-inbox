@@ -4,60 +4,143 @@
     <meta charset="utf-8" />
     <title>WhatsApp</title>
     <style>
-      :root { color-scheme: dark light; }
-      * { box-sizing: border-box; }
-      body {
-        margin: 0; padding: 12px;
-        font-family: system-ui, -apple-system, sans-serif; font-size: 13px;
-        color: var(--foreground, #ddd); background: var(--background, transparent);
+      /* El host inyecta una lista corta de tokens en el <style> del shell
+         (PANEL_DESIGN_TOKEN_ALLOWLIST, orca-oss src/shared/plugins/plugin-panel-shell.ts:34)
+         y pone light/dark en <html>. Nada mas llega aca: ni utilidades de Tailwind,
+         ni --radius-md, ni la tipografia de la app. */
+      :root {
+        color-scheme: light dark;
+        /* De los radios solo viene --radius; md se calcula con el mismo factor que
+           main.css:122, para no inventar un radio por elemento. */
+        --radius-md: calc(var(--radius, 0.625rem) * 0.8);
+        /* Respaldos para cuando el host no inyecta nada (host viejo, o el arnes
+           jsdom). Son los valores reales de main.css, no un gris inventado: antes
+           eran solo oscuros y el panel salia ilegible en cuanto el tema era claro. */
+        --fb-background: #fff; --fb-foreground: #0a0a0a;
+        --fb-primary: #171717;
+        --fb-secondary: #f5f5f5; --fb-secondary-foreground: #171717;
+        --fb-muted-foreground: #737373;
+        --fb-accent: #f5f5f5; --fb-accent-foreground: #171717;
+        --fb-destructive: #e40014;
+        --fb-border: #e5e5e5; --fb-ring: #a1a1a1;
       }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fb-background: #0a0a0a; --fb-foreground: #fafafa;
+          --fb-primary: #e5e5e5;
+          --fb-secondary: #262626; --fb-secondary-foreground: #fafafa;
+          --fb-muted-foreground: #a1a1a1;
+          --fb-accent: #404040; --fb-accent-foreground: #fafafa;
+          --fb-destructive: #ff6568;
+          --fb-border: rgb(255 255 255 / 0.07); --fb-ring: #737373;
+        }
+      }
+      /* Los widgets nativos siguen al tema real del host, no a la preferencia del
+         sistema. */
+      html.light { color-scheme: light; }
+      html.dark { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      /* Sin padding en el body: el iframe se monta a sangre (PluginPanel.tsx:231,
+         h-full w-full) y los paneles nativos de Orca ponen el relleno adentro de
+         cada bloque, para que los filetes lleguen a los bordes. El horizontal es
+         12 px, el px-3 de la casa (PortsPanel.tsx:335). */
+      body {
+        margin: 0; padding: 0 0 16px;
+        /* Geist es la fuente de la app, pero el iframe no ve sus @font-face: pedirla
+           solo daria un fallback distinto en cada maquina. Se queda el del sistema. */
+        font-family: system-ui, -apple-system, sans-serif;
+        font-size: 13px; letter-spacing: 0.01em;
+        color: var(--foreground, var(--fb-foreground));
+        background: var(--background, var(--fb-background));
+      }
+      /* Cabecera del panel como las nativas: px-3 py-2 y un filete abajo. */
       header { display: flex; align-items: center; justify-content: space-between;
-               gap: 8px; margin: 0 0 10px; }
+               gap: 8px; margin: 0 0 8px; padding: 8px 12px;
+               border-bottom: 1px solid var(--border, var(--fb-border)); }
       header .meta { margin-left: auto; }
       header button {
         font: inherit; font-size: 13px; line-height: 1; padding: 3px 8px; cursor: pointer;
-        border: 1px solid var(--border, #555); border-radius: 6px;
-        background: var(--secondary, #222); color: var(--muted-foreground, #999);
+        border: 1px solid var(--border, var(--fb-border));
+        border-radius: var(--radius-md);
+        background: var(--secondary, var(--fb-secondary));
+        color: var(--muted-foreground, var(--fb-muted-foreground));
+        transition: background-color 90ms ease, color 90ms ease;
       }
-      header button:hover { color: var(--foreground, #ddd); border-color: var(--ring, #777); }
+      /* Hover por --accent, que es el token de superficie de hover; el filete se
+         queda en --border porque --ring es enfasis fuerte, no decoracion. */
+      header button:hover { background: var(--accent, var(--fb-accent));
+                            color: var(--accent-foreground, var(--fb-accent-foreground)); }
       header button:active { transform: translateY(1px); }
       header button[disabled] { opacity: 0.5; cursor: default; }
       h1 { font-size: 13px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
-      .meta { font-size: 11px; color: var(--muted-foreground, #888); }
-      .dot { display: inline-block; width: 6px; height: 6px; border-radius: 999px;
-             background: #7fc98a; margin-right: 5px; vertical-align: middle; }
-      h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
-           color: var(--muted-foreground, #999); margin: 16px 0 6px; font-weight: 500; }
+      .meta { font-size: 11px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      /* Parrafos de servicio: mismo relleno horizontal que las filas. */
+      .nota { margin: 0 0 8px; padding: 0 12px; }
+      .nota:empty { display: none; }
+      /* "corriendo" ya lo dice la palabra de al lado; el punto solo tiene que pesar,
+         y --primary es el token de enfasis. La allowlist no tiene color de exito. */
+      .dot { display: inline-block; width: 6px; height: 6px; border-radius: 9999px;
+             background: var(--primary, var(--fb-primary));
+             margin-right: 5px; vertical-align: middle; }
+      /* Etiqueta meta de 11 px: el STYLEGUIDE la fija en 600 y 0.05em, igual que
+         PortsPanel.tsx:336. */
+      h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+           color: var(--muted-foreground, var(--fb-muted-foreground));
+           margin: 14px 0 6px; padding: 0 12px; font-weight: 600; }
       h2:first-of-type { margin-top: 0; }
-      .item { padding: 7px 0; border-bottom: 1px solid var(--border, #2a2a2a); }
+      .item { padding: 7px 12px; border-bottom: 1px solid var(--border, var(--fb-border)); }
       .item:last-child { border-bottom: 0; }
       .line1 { display: flex; gap: 6px; align-items: baseline; }
       .who { font-weight: 500; }
-      .chat { color: var(--muted-foreground, #999); font-size: 11px; }
-      .when { margin-left: auto; color: var(--muted-foreground, #777); font-size: 11px;
-              white-space: nowrap; }
-      .text { color: var(--muted-foreground, #bbb); margin-top: 2px; line-height: 1.4;
-              overflow-wrap: anywhere; }
-      .tag { font-size: 10px; border: 1px solid var(--border, #555); border-radius: 999px;
-             padding: 0 6px; color: var(--muted-foreground, #999); }
-      .tag.mencion { border-color: #4a7fb5; color: #7fb3e0; }
-      .tag.directo { border-color: #7a5fb5; color: #b39ae0; }
-      .tag.media { border-color: #b58a4a; color: #e0b87f; }
-      .empty { color: var(--muted-foreground, #888); padding: 8px 0; }
+      .chat { color: var(--muted-foreground, var(--fb-muted-foreground)); font-size: 11px; }
+      .when { margin-left: auto; color: var(--muted-foreground, var(--fb-muted-foreground));
+              font-size: 11px; white-space: nowrap; }
+      .text { color: var(--muted-foreground, var(--fb-muted-foreground)); margin-top: 2px;
+              line-height: 1.4; overflow-wrap: anywhere; }
+      /* Las tres clases de aviso, sin tres tonos: la allowlist no los tiene. Se
+         separan por peso y superficie — mencion en texto pleno y 600, directo como
+         superficie --accent, media con filete punteado. */
+      .tag { font-size: 10px; border: 1px solid var(--border, var(--fb-border));
+             border-radius: 9999px; padding: 0 6px;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .tag.mencion { color: var(--foreground, var(--fb-foreground)); font-weight: 600; }
+      .tag.directo { background: var(--accent, var(--fb-accent));
+                     color: var(--accent-foreground, var(--fb-accent-foreground));
+                     border-color: transparent; }
+      .tag.media { border-style: dashed; }
+      .empty { color: var(--muted-foreground, var(--fb-muted-foreground)); padding: 8px 12px; }
       .acts { display: flex; gap: 10px; margin-top: 5px; }
       .acts button {
         font: inherit; font-size: 11px; padding: 3px 10px; cursor: pointer;
-        border: 1px solid var(--border, #555); border-radius: 6px;
-        background: var(--secondary, #222); color: var(--primary, #7aa2f7);
+        border: 1px solid var(--border, var(--fb-border));
+        border-radius: var(--radius-md);
+        background: var(--secondary, var(--fb-secondary));
+        color: var(--secondary-foreground, var(--fb-secondary-foreground));
+        transition: background-color 90ms ease, color 90ms ease;
       }
-      .acts button:hover { border-color: var(--ring, #777); }
+      .acts button:hover { background: var(--accent, var(--fb-accent));
+                           color: var(--accent-foreground, var(--fb-accent-foreground));
+                           text-decoration: underline; }
       .acts button:active { transform: translateY(1px); }
       .acts button[disabled] { opacity: 0.5; cursor: default; }
-      .acts button:hover { text-decoration: underline; }
-      .acts button.mute { color: var(--muted-foreground, #888); }
-      .item.taken { border-left: 2px solid #7fc98a; padding-left: 8px; }
-      .done { font-size: 11px; color: #7fc98a; margin-top: 4px; }
-      .stale { color: #e0b87f; }
+      .acts button.mute { color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      header button:focus-visible, .acts button:focus-visible {
+        outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px;
+      }
+      /* Tomado = enfasis, no color de exito: la barra va en --primary. El relleno
+         izquierdo compensa los 2 px para que el texto no se corra. */
+      .item.taken { border-left: 2px solid var(--primary, var(--fb-primary));
+                    padding-left: 10px; }
+      .done { font-size: 11px; font-weight: 500;
+              color: var(--foreground, var(--fb-foreground)); margin-top: 4px; }
+      /* Dos grados de mala noticia, con los dos unicos tokens que hay para eso. Una
+         sincronizacion vieja no es un error: solo avisa que lo de abajo puede estar
+         desactualizado, asi que va en texto pleno y 600 dentro de una linea apagada.
+         La allowlist no tiene warning/ambar y no se fabrica uno: pintarla de rojo
+         gritaba un fallo que no existe. */
+      .vieja { color: var(--foreground, var(--fb-foreground)); font-weight: 600; }
+      /* "sin datos" y el error de una accion si son fallos: --destructive. */
+      .stale { color: var(--destructive, var(--fb-destructive)); }
       code { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
     </style>
   </head>
@@ -68,9 +151,9 @@
       <button id="refresh" data-t-title="refreshTitle">&#8635;</button>
     </header>
 
-    <p class="meta" id="note" style="margin:0 0 8px"></p>
+    <p class="meta nota" id="note"></p>
     <h2 data-t="pending">Esperando respuesta</h2>
-    <p class="meta" data-t="hint" style="margin:0 0 8px"></p>
+    <p class="meta nota" data-t="hint"></p>
     <div id="pending"><p class="empty" data-t="loading">Cargando…</p></div>
 
     <h2 data-t="recent">Lo ultimo que hizo</h2>
@@ -202,7 +285,7 @@
         var stale = (Date.now() - new Date(when.replace(' ', 'T')).getTime()) > 30 * 60000
         el('synced').innerHTML =
           (activity.running ? '<span class="dot"></span>' + t('running') + ' · ' : '') +
-          (stale ? '<span class="stale">' + esc(when) + '</span>' : esc(when))
+          (stale ? '<span class="vieja">' + esc(when) + '</span>' : esc(when))
       }
 
       // El panel no puede ejecutar nada; lo unico que puede hacer es dejar la decision

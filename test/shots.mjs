@@ -41,6 +41,8 @@ const TOKENS = {
     '--primary': '#e5e5e5', '--primary-foreground': '#171717',
     '--secondary': '#262626', '--secondary-foreground': '#fafafa',
     '--muted': '#262626', '--muted-foreground': '#a1a1a1',
+    '--accent': '#404040', '--accent-foreground': '#fafafa',
+    '--destructive': '#ff6568',
     '--border': 'rgb(255 255 255 / 0.07)', '--input': 'rgb(255 255 255 / 0.15)',
     '--ring': '#737373', '--radius': '0.625rem'
   },
@@ -49,6 +51,8 @@ const TOKENS = {
     '--primary': '#171717', '--primary-foreground': '#fafafa',
     '--secondary': '#f5f5f5', '--secondary-foreground': '#171717',
     '--muted': '#f5f5f5', '--muted-foreground': '#737373',
+    '--accent': '#f5f5f5', '--accent-foreground': '#171717',
+    '--destructive': '#e40014',
     '--border': '#e5e5e5', '--input': '#e5e5e5',
     '--ring': '#a1a1a1', '--radius': '0.625rem'
   }
