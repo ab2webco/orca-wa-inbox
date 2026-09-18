@@ -601,6 +601,59 @@ def _web_check():
     return False, detalle, WEB_SIN_CONSTRUIR
 
 
+# Sin Full Disk Access, macOS levanta "Orca solicita acceso a datos de otras apps" en
+# CADA proceso que toca el contenedor de WhatsApp. Se comprueba contra TCC.db y no
+# contra el contenedor: TCC.db solo abre con ese permiso y se deniega EN SILENCIO, asi
+# que preguntar no puede generar la misma ventana que el chequeo viene a evitar.
+FDA_SONDA = os.path.expanduser("~/Library/Application Support/com.apple.TCC/TCC.db")
+FDA_FALTA = "fulldisk-missing"
+
+
+def _fulldisk_check():
+    """Opcional: sin el permiso se lee igual, pero cada lectura pregunta."""
+    if platform.system() != "Darwin":
+        return True, "only macOS asks for this permission", None
+    try:
+        with open(FDA_SONDA, "rb") as fh:
+            fh.read(16)
+    except OSError:
+        return (False,
+                "optional \u2014 macOS asks for permission on every process that reads "
+                "WhatsApp's data. Grant it once in System Settings > Privacy & "
+                "Security > Full Disk Access > add Orca Lab",
+                FDA_FALTA)
+    return True, "granted to the process that reads", None
+
+
+def cmd_state(con, a):
+    """Cuanto cambio la fuente, SIN abrirla. Es un stat, no una lectura.
+
+    Existe para que quien sincroniza pueda saltarse una lectura completa cuando
+    WhatsApp no escribio nada desde la ultima: copiar 260 MB para descubrir que no
+    cambio nada es el costo que hacia que el panel y las automations se pelearan por
+    la misma base. El WAL entra en la firma porque los mensajes de hoy viven ahi hasta
+    que WhatsApp compacta: mirar solo el archivo base diria "sin cambios" con la
+    bandeja llena.
+
+    El -shm queda FUERA a proposito: es el indice del WAL y sqlite le mueve la fecha
+    con solo abrir la base, aunque sea en modo lectura. Meterlo hacia que cada lectura
+    invalidara su propia firma y nunca se saltara ninguna."""
+    db = SOURCE["db"]
+    partes, mtime, size = [], None, None
+    for sufijo in ("", "-wal"):
+        try:
+            st = os.stat(db + sufijo)
+        except OSError:
+            partes.append("-")
+            continue
+        partes.append(f"{int(st.st_mtime)}:{st.st_size}")
+        if not sufijo:
+            mtime, size = int(st.st_mtime), st.st_size
+    existe = partes[0] != "-"
+    return [{"account": LOCAL, "db": db, "exists": existe, "mtime": mtime,
+             "size": size, "fingerprint": "|".join(partes) if existe else "missing"}]
+
+
 def cmd_doctor(con, a):
     """Para que el usuario sepa que le falta antes de que nada dependa de esto."""
     db = SOURCE["db"]
@@ -630,6 +683,10 @@ def cmd_doctor(con, a):
          "open cards, but it cannot write in WhatsApp",
          None if orca_bin else "send-no-orca"),
         ("transcribe", "audio transcription", *_transcribe_check()),
+        # Va como opcional y no como requisito: sin el permiso se LEE igual, solo que
+        # macOS pregunta cada vez. Marcarlo como rotura pintaria de rojo un equipo que
+        # funciona; callarlo deja al usuario sin saber de donde sale la ventana.
+        ("fulldisk", "Full Disk Access", *_fulldisk_check()),
         # Va al final y no bloquea: es una via que falta, no una rotura. Ponerla arriba
         # la haria parecer un requisito y pintaria de rojo una maquina que lee perfecto.
         ("web", "WhatsApp Web as a second line", *_web_check()),
@@ -733,6 +790,8 @@ def main():
 
     add("whoami").set_defaults(fn=cmd_whoami)
     add("doctor", help="check the requirements").set_defaults(fn=cmd_doctor)
+    add("state", help="how much the source changed, without opening it"
+        ).set_defaults(fn=cmd_state)
 
     a = ap.parse_args()
     if getattr(a, "json_sub", False):   # permite --json antes o despues del subcomando
@@ -755,6 +814,13 @@ def main():
         # lee perfecto salia con 1 por una via que ni siquiera existe todavia.
         obligatorios = [r for r in rows if r.get("requerido", True)]
         sys.exit(0 if all(r["ok"] for r in obligatorios) else 1)
+    if a.cmd == "state":                # un stat: pasar por las fuentes lo convertiria
+        rows = cmd_state(None, a)       # justo en la lectura completa que viene a evitar
+        if a.json:
+            print(json.dumps(rows, ensure_ascii=False, indent=2))
+        else:
+            print(" | ".join(str(v) for v in rows[0].values() if v not in (None, "")))
+        return
     rows = read_from_sources(a)
 
     if a.json:

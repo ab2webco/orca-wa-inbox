@@ -115,7 +115,16 @@ async function runJson(cmd, args) {
   }
 }
 
+// El sync es el UNICO momento en que se abre la base de WhatsApp, asi que este
+// intervalo es tambien el peor caso para que un mensaje nuevo se vea: el precheck de
+// las automations contesta con lo que dejo el ultimo sync. Por eso no es una constante
+// escondida — se lee de `syncMinutes`, que el panel muestra y deja cambiar.
 const SYNC_MS = 5 * 60 * 1000
+// Cotas. Por debajo de un minuto el sync seria el problema que vino a arreglar: una
+// lectura de 260 MB por minuto. Por encima de una hora el precheck se queda sin datos
+// frescos de los que hablar y empieza a salir bloqueado.
+const SYNC_MIN_MS = 60 * 1000
+const SYNC_MAX_MS = 60 * 60 * 1000
 const SYNC_TIMEOUT_MS = 120000
 // Un pedido del panel no puede esperar al ciclo de 5 minutos: nadie aprieta un boton
 // y se queda mirando cinco minutos.
@@ -131,6 +140,13 @@ function motivoDe(error) {
   if (error?.spawnCode === 'EACCES' || error?.spawnCode === 'EPERM') return 'sin-permiso'
   if (error?.timedOut) return 'demoro'
   return 'fallo'
+}
+
+/** Cada cuanto releer WhatsApp, segun lo que el usuario dejo puesto. */
+export async function intervaloSync(orca) {
+  const minutos = parseInt(String((await leer(orca, 'syncMinutes')) ?? ''), 10)
+  if (!Number.isFinite(minutos) || minutos <= 0) return SYNC_MS
+  return Math.min(SYNC_MAX_MS, Math.max(SYNC_MIN_MS, minutos * 60000))
 }
 
 async function leer(orca, key) {
@@ -231,8 +247,22 @@ export default function activate(orca) {
   // Y traer las conversaciones ya: en una instalacion nueva el panel arranca vacio y
   // el usuario no tiene de donde sacarlas.
   sincronizar('activate').catch(() => {})
-  const syncTimer = setInterval(() => { sincronizar('timer').catch(() => {}) }, SYNC_MS)
-  if (typeof syncTimer.unref === 'function') syncTimer.unref()
+
+  // Se reprograma en cada vuelta en vez de fijar el intervalo una sola vez: es el
+  // ajuste que acota cuanto tarda un mensaje en llegarle al precheck, y cambiarlo en
+  // el panel tiene que valer ya, no al proximo arranque de Orca.
+  let detenido = false
+  let syncTimer = null
+  async function programarSync() {
+    if (detenido) return
+    const ms = await intervaloSync(orca).catch(() => SYNC_MS)
+    if (detenido) return
+    syncTimer = setTimeout(() => {
+      sincronizar('timer').catch(() => {}).then(() => programarSync().catch(() => {}))
+    }, ms)
+    if (typeof syncTimer.unref === 'function') syncTimer.unref()
+  }
+  programarSync().catch(() => {})
 
   // El boton del panel escribe un pedido; esto lo atiende. Se mira cada pocos segundos
   // y no en el ciclo de 5 minutos porque un boton que tarda cinco minutos en hacer
@@ -365,5 +395,9 @@ export default function activate(orca) {
 
   // Al desactivar el plugin los timers se van con el: si no, siguen leyendo WhatsApp
   // despues de que el usuario dijo que no.
-  return () => { clearInterval(syncTimer); clearInterval(pedidoTimer) }
+  return () => {
+    detenido = true
+    clearTimeout(syncTimer)
+    clearInterval(pedidoTimer)
+  }
 }

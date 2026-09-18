@@ -138,6 +138,17 @@ console.log('\nconfig.html')
   ok('confirma la ventana en pantalla',
     doc.getElementById('said-days').textContent.includes('✓'))
 
+  // Cada cuanto se relee WhatsApp. Es lo que acota cuanto tarda un mensaje en llegarle
+  // al agente: el precheck de las automations contesta con lo que dejo el ultimo sync,
+  // asi que si esto no se pudiera cambiar el retraso seria una constante escondida.
+  doc.getElementById('sync-minutes').value = '15'
+  doc.getElementById('save-sync').click()
+  await espera()
+  ok('guarda cada cuanto revisa WhatsApp', storage.syncMinutes === '15',
+    `storage.syncMinutes = ${JSON.stringify(storage.syncMinutes)}`)
+  ok('confirma la frecuencia en pantalla',
+    doc.getElementById('said-sync').textContent.includes('✓'))
+
   // De donde lee. Son DOS interruptores porque las fuentes se suman: la app de
   // escritorio lee una sola linea y cada sesion de WhatsApp Web seria otra. Un solo
   // control de tres valores obligaria a elegir una y perder la otra.
@@ -496,6 +507,12 @@ console.log('\nconfig.html')
     guardado.doc.getElementById('lang').value === 'pt',
     `lang = ${guardado.doc.getElementById('lang').value}`)
 
+  const guardadoSync = await montar('config.html', { syncMinutes: '30' })
+  await espera()
+  ok('recarga la frecuencia guardada',
+    guardadoSync.doc.getElementById('sync-minutes').value === '30',
+    `sync-minutes = ${guardadoSync.doc.getElementById('sync-minutes').value}`)
+
   const porDefecto = await montar('config.html', {})
   await espera()
   // 7 y no 1: una mencion del viernes tiene que seguir a la vista el lunes.
@@ -508,6 +525,10 @@ console.log('\nconfig.html')
     porDefecto.doc.getElementById('lang').value === 'auto')
   ok('sin nada guardado el dueno queda vacio',
     porDefecto.doc.getElementById('owner').value === '')
+  // 5 y no 1: un minuto convertiria el sync en el problema que vino a arreglar.
+  ok('sin nada guardado revisa WhatsApp cada 5 minutos',
+    porDefecto.doc.getElementById('sync-minutes').value === '5',
+    `sync-minutes = ${porDefecto.doc.getElementById('sync-minutes').value}`)
 
   // La terminal puede fijar un valor que el select no ofrece (`config inbox_days 45`).
   // Si el select lo ignora queda en blanco y el panel miente sobre lo que rige: peor
@@ -767,6 +788,26 @@ console.log('\nel codigo del CLI, dicho en el idioma del panel')
   ok('en ingles dice lo mismo que la terminal',
     en.doc.getElementById('alert').textContent.includes('WhatsApp Desktop installed'),
     en.doc.getElementById('alert').textContent)
+
+  // El permiso del disco es lo que explica el cartel que macOS levanta cuatro veces
+  // por minuto. Si llegara sin traducir, el usuario lee una instruccion en ingles
+  // justo en el momento en que esta buscando por que le preguntan tanto.
+  const fda = {
+    ok: true,
+    optional: [{ que: 'Full Disk Access', como: 'optional \u2014 macOS asks ...',
+      code: 'fulldisk', howCode: 'fulldisk-missing' }]
+  }
+  for (const [lang, titulo, accion] of [
+    ['es-419', 'Acceso total al disco', 'Acceso total al disco > agregar Orca Lab'],
+    ['en-US', 'Full Disk Access', 'Full Disk Access > add Orca Lab'],
+    ['pt-BR', 'Acesso total ao disco', 'Acesso total ao disco > adicionar Orca Lab']
+  ]) {
+    const panel = await montar('config.html', { health: fda }, lang)
+    await espera()
+    const texto = panel.doc.getElementById('opcionales').textContent
+    ok(`el permiso del disco se explica en ${lang}`,
+      texto.includes(titulo) && texto.includes(accion), texto)
+  }
 
   // Un codigo que este panel no conozca todavia no puede dejar el aviso vacio: se
   // pinta el texto del CLI, que es peor que traducido pero infinitamente mejor que nada.

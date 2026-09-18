@@ -35,7 +35,7 @@ for (const base of [join(process.env.HOME, 'Library', 'Application Support'),
 
 const PLUGIN_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
 
-const { default: activate } = await import('../main.mjs')
+const { default: activate, intervaloSync } = await import('../main.mjs')
 const { workspaceDir } = await import('../harness.mjs')
 
 let fallos = 0
@@ -321,6 +321,27 @@ console.log('\nworker: el arnes de la carpeta del plugin')
   process.env.HOME = homeAnterior
   process.env.XDG_CONFIG_HOME = xdgAnterior
   process.env.APPDATA = appAnterior
+}
+
+// El intervalo de sync es el unico momento en que se abre la base de WhatsApp, asi que
+// tambien es el peor caso para que un mensaje nuevo llegue al agente. Que el usuario lo
+// pueda mover es la mitad; la otra es que un valor absurdo no lo rompa: con 0 minutos el
+// worker leeria 260 MB en bucle, que es justo el problema que este cambio vino a sacar.
+console.log('\nworker: cada cuanto relee WhatsApp')
+{
+  const casos = [
+    [undefined, 5 * 60000, 'sin nada guardado son 5 minutos'],
+    ['15', 15 * 60000, 'respeta lo que el usuario dejo puesto'],
+    ['0', 5 * 60000, 'un 0 no deja el sync en bucle'],
+    ['-3', 5 * 60000, 'un negativo tampoco'],
+    ['no-es-un-numero', 5 * 60000, 'ni una cadena que no es numero'],
+    ['1000', 60 * 60000, 'y un valor enorme se corta en una hora']
+  ]
+  for (const [guardado, esperado, nombre] of casos) {
+    const orca = hostFalso(RAIZ, guardado === undefined ? {} : { syncMinutes: guardado })
+    const ms = await intervaloSync(orca)
+    ok(nombre, ms === esperado, `${guardado} -> ${ms} ms, se esperaban ${esperado}`)
+  }
 }
 
 rmSync(RAIZ, { recursive: true, force: true })

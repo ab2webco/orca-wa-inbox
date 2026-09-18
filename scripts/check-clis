@@ -14,6 +14,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 
 RAIZ = pathlib.Path(__file__).resolve().parent.parent
 BIN = RAIZ / "bin"
@@ -442,6 +443,159 @@ def revisa_rastro_corrida(fallos: list) -> int:
     return hechas
 
 
+# Un wa-read que no lee nada y deja constancia de que lo llamaron. Es la prueba, y no
+# una promesa, de que el precheck ya no abre la base de WhatsApp: si aparece una linea
+# en la marca, alguien fue a buscarla.
+STUB_WA_READ = '''#!/usr/bin/env python3
+import os, sys
+with open(os.environ["WA_MARCA"], "a") as fh:
+    fh.write(" ".join(sys.argv[1:]) + "\\n")
+print("[]")
+'''
+
+
+def revisa_precheck(fallos: list) -> int:
+    """El precheck de las dos automations: barato, sin tocar WhatsApp, y sus tres
+    salidas siguen significando lo mismo.
+
+    Corre cada uno o dos minutos en dos automations a la vez. Cuando empezaba
+    sincronizando, cada corrida copiaba 260 MB del contenedor de WhatsApp en tres
+    procesos distintos y macOS preguntaba por el acceso en cada uno. Que no vuelva a
+    pasar no se comprueba leyendo el codigo: se comprueba poniendo un wa-read falso y
+    mirando si alguien lo llamo.
+
+    Los tres codigos de salida son contrato con las automations —0 hay trabajo, 1 nada
+    que hacer, 2 bloqueado— y el 2 tiene que seguir siendo ruidoso: un store viejo es
+    una instalacion que no sincroniza, no una bandeja vacia.
+    """
+    hechas = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        raiz = pathlib.Path(tmp)
+        home = raiz / "home"
+        home.mkdir()
+        marca = raiz / "llamadas.txt"
+
+        # bin/ propio: el mismo wa-scope, con un wa-read que no lee.
+        binf = raiz / "bin"
+        binf.mkdir()
+        (binf / "wa-scope").write_text((BIN / "wa-scope").read_text())
+        (binf / "wa-scope").chmod(0o755)
+        (binf / "wa-read").write_text(STUB_WA_READ)
+        (binf / "wa-read").chmod(0o755)
+
+        env = dict(entorno(home), WA_MARCA=str(marca))
+
+        def scope(*args):
+            return subprocess.run([str(binf / "wa-scope"), *args], capture_output=True,
+                                  text=True, env=env, timeout=180)
+
+        # Un sync deja el store donde wa-scope lo pone de verdad; preguntarselo a el
+        # evita tener una segunda copia de esa ruta, que cambia por sistema operativo.
+        salida = json.loads(scope("sync", "--json").stdout or "[]")
+        destinos = (salida[0] if salida else {}).get("destinos") or []
+        if not destinos:
+            fallos.append("wa-scope sync no dijo donde deja el store del panel")
+            return hechas
+        store = pathlib.Path(destinos[0])
+
+        def sembrar(pendientes=0, salud_ok=True, minutos=0, decisiones=None):
+            ahora = time.time() - minutos * 60
+            sello = time.strftime("%Y-%m-%d %H:%M", time.localtime(ahora))
+            datos = {
+                "scope": {"100@g.us": {"chatName": "Soporte", "mode": "responder",
+                                       "provider": "plane", "target": "SOP"}},
+                "decisions": decisiones or {},
+                "health": ({"ok": True, "optional": []} if salud_ok else
+                           {"ok": False, "problem": "chat database present",
+                            "detail": "missing", "problemCode": "database"}),
+                "activity": {"syncedAt": sello, "recent": [], "running": False,
+                             "mapped": 1, "authorized": 1,
+                             "pending": [{"stanzaId": f"S{i}", "chatJid": "100@g.us",
+                                          "chat": "Soporte", "text": "hola"}
+                                         for i in range(pendientes)]},
+            }
+            store.write_text(json.dumps(datos))
+            marca.write_text("")
+
+        def precheck(*args):
+            p = scope("pending", *args)
+            llamadas = [l for l in marca.read_text().splitlines() if l.strip()]
+            if llamadas:
+                fallos.append(f"`wa-scope pending {' '.join(args)}` abrio WhatsApp: "
+                              f"llamo a wa-read {llamadas}")
+            return p
+
+        # 0 = hay trabajo.
+        sembrar(pendientes=2)
+        p = precheck()
+        hechas += 2
+        if p.returncode != 0:
+            fallos.append(f"con 2 pendientes el precheck salio {p.returncode} y no 0")
+
+        # 1 = no hay nada que hacer. Es el caso normal y el unico que puede ser callado.
+        sembrar(pendientes=0)
+        p = precheck()
+        hechas += 2
+        if p.returncode != 1:
+            fallos.append(f"sin pendientes el precheck salio {p.returncode} y no 1")
+
+        # 2 = bloqueado porque el sistema no puede leer.
+        sembrar(pendientes=2, salud_ok=False)
+        p = precheck()
+        hechas += 3
+        if p.returncode != 2:
+            fallos.append(f"con el sistema roto el precheck salio {p.returncode} y no 2")
+        cuerpo = json.loads(p.stdout or "{}")
+        if not cuerpo.get("bloqueado"):
+            fallos.append("el precheck bloqueado no dice por que: un salteo callado "
+                          "esconde una instalacion rota")
+
+        # 2 tambien cuando nadie sincroniza: contestar "no hay nada" sobre un store de
+        # hace una hora seria afirmar algo que no se sabe.
+        sembrar(pendientes=2, minutos=120)
+        p = precheck()
+        hechas += 2
+        if p.returncode != 2:
+            fallos.append(f"con el store viejo el precheck salio {p.returncode} y no 2")
+        if json.loads(p.stdout or "{}").get("codigo") != "sync-stale":
+            fallos.append("el store viejo no llego con su codigo estable")
+
+        # El limite sale del ajuste, no de una constante: subirlo tiene que alcanzar
+        # para que el mismo store deje de estar viejo.
+        scope("config", "sync_minutes", "60")
+        p = precheck()
+        hechas += 1
+        # 0 y no 2: el mismo store deja de estar viejo y sus 2 pendientes vuelven
+        # a ser trabajo.
+        if p.returncode != 0:
+            fallos.append(f"con sync_minutes en 60 el mismo store salio "
+                          f"{p.returncode}; el limite no sigue al ajuste")
+        scope("config", "sync_minutes", "5")
+
+        # Sin store no hay nada que responder, y eso tampoco es "no hay trabajo".
+        store.unlink()
+        marca.write_text("")
+        p = precheck()
+        hechas += 2
+        if p.returncode != 2:
+            fallos.append(f"sin store el precheck salio {p.returncode} y no 2")
+        if json.loads(p.stdout or "{}").get("codigo") != "never-synced":
+            fallos.append("un plugin que nunca sincronizo no se distingue de uno roto")
+
+        # --only-taken es la otra automation: cuenta lo que el humano marco a mano.
+        sembrar(pendientes=5)
+        p = precheck("--only-taken")
+        hechas += 2
+        if p.returncode != 1:
+            fallos.append(f"sin marcas a mano, --only-taken salio {p.returncode} y no 1")
+        sembrar(pendientes=0, decisiones={"S0": {"decision": "take"}})
+        p = precheck("--only-taken")
+        hechas += 1
+        if p.returncode != 0:
+            fallos.append(f"con una marca Tomar, --only-taken salio {p.returncode} y no 0")
+    return hechas
+
+
 def entorno(home: pathlib.Path) -> dict:
     """HOME propio: la base vive en ~/.wa-inbox/scope.db y no hay variable para moverla,
     asi que mover el HOME es lo que mantiene la base real del usuario fuera de esto."""
@@ -548,7 +702,7 @@ def main() -> int:
 
     comprobaciones = (revisa_ajustes(fallos) + revisa_wa_send(fallos)
                       + revisa_fuentes(fallos) + revisa_migracion_cuentas(fallos)
-                      + revisa_rastro_corrida(fallos))
+                      + revisa_rastro_corrida(fallos) + revisa_precheck(fallos))
     aislado.cleanup()
 
     if fallos:

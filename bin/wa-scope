@@ -34,6 +34,9 @@ def scope_db_path():
 
 
 DB = scope_db_path()
+# Las herramientas viajan juntas. Buscarlas en el PATH ya habia mandado a wa-scope a
+# un wa-read de otra instalacion.
+WA_READ = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wa-read")
 # El panel del plugin guarda aca via storage.* del host. Es la MISMA verdad que ve el
 # CLI: sin esto, editar en el panel y editar por terminal serian dos registros distintos
 # que se pisan en silencio.
@@ -264,6 +267,11 @@ PANEL_SETTINGS = {"tone": "tone", "agentName": "agent_name",
                   "transcribe": "transcribe",
                   "transcribeLang": "transcribe_lang",
                   "readLocal": "read_local",
+                  # Cada cuanto el worker relee WhatsApp. Sale al panel porque es lo
+                  # que acota cuanto puede tardar un mensaje en aparecer: el precheck
+                  # contesta sobre el ultimo sync, asi que si esto fuera una constante
+                  # escondida el retraso tambien lo seria.
+                  "syncMinutes": "sync_minutes",
                   "readWeb": "read_web"}
 
 # Lo que cada ajuste acepta. Un valor invalido no revienta al guardarse: revienta
@@ -282,7 +290,7 @@ CONFIG_OPCIONES = {
     "read_local": ("on", "off"),
     "read_web": ("on", "off"),
 }
-CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s")
+CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s", "sync_minutes")
 
 
 def valida_ajuste(key, value):
@@ -475,8 +483,22 @@ def push_to_plugin(con, with_activity=False):
                       "target": r.get("target"), "mode": r.get("mode") or "off",
                       "tone": r.get("tone"), "instructions": r.get("instructions"),
                       "updatedAt": r.get("updated_at")}
-    activity = build_activity(con, scope) if with_activity else None
-    health = build_health() if with_activity else None
+    activity = health = None
+    reusando = False
+    if with_activity:
+        firma = source_fingerprint()
+        previo = plugin_store_raw().get("activity") or {}
+        # Volver a leer WhatsApp para descubrir que no cambio nada cuesta dos copias de
+        # 260 MB, tres procesos y una ventana de permiso por proceso. Con la misma
+        # firma la bandeja tiene que dar igual, asi que se reusa la ya leida y solo se
+        # refresca lo que sale de la base propia.
+        reusando = bool(firma and previo.get("source") == firma
+                        and previo.get("pending") is not None)
+        activity = (reuse_activity(con, scope, previo, firma) if reusando
+                    else build_activity(con, scope, firma))
+        # El estado tambien se deja como estaba: None no escribe, y lo que se comprueba
+        # ahi —la base, sqlite, el permiso— no cambia entre dos lecturas identicas.
+        health = None if reusando else build_health()
     routes = [dict(r) for r in con.execute(
         "select pattern, provider, target, note from route order by pattern")]
     # TODOS los ajustes que el panel muestra viajan de vuelta, no solo el tono. Si uno
@@ -485,7 +507,10 @@ def push_to_plugin(con, with_activity=False):
     extra = None
     if with_activity:
         efectivos = merged_settings(con)
-        extra = {"chats": build_chats()}
+        # La lista de conversaciones es la TERCERA lectura de WhatsApp de este sync.
+        # Sin cambios en la fuente no puede haber chats nuevos, asi que se deja la que
+        # ya esta guardada en vez de pagarla otra vez.
+        extra = {} if reusando else {"chats": build_chats()}
         for flat, name in PANEL_SETTINGS.items():
             # agentName ya viaja en su propio parametro, mas arriba.
             if flat == "agentName":
@@ -496,14 +521,79 @@ def push_to_plugin(con, with_activity=False):
     return plugin_store_write(scope, agent_name_of(con), activity, health, routes, extra)
 
 
-def build_activity(con, scope):
+def source_fingerprint():
+    """Cuanto cambio WhatsApp desde la ultima lectura, sin abrir la base.
+
+    Se le pregunta a wa-read y no se calcula aca para no tener dos copias de donde
+    vive el contenedor: son dos verdades que se desincronizan en cuanto WhatsApp mueva
+    algo. Devuelve None si no se pudo saber, y sin firma no se saltea nada: ante la
+    duda se lee, que es el comportamiento de siempre."""
+    try:
+        out = subprocess.run([WA_READ, "state", "--json"], capture_output=True,
+                             text=True, timeout=20)
+        filas = json.loads(out.stdout or "[]")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return (filas[0].get("fingerprint") if filas else None) or None
+
+
+def activity_local(con, scope):
+    """La parte de la actividad que sale de la base propia: no cuesta abrir WhatsApp.
+
+    Se separa para poder refrescarla sola. Cuando WhatsApp no cambio, esto es lo unico
+    que pudo cambiar — que el agente actuo, que hay una corrida viva, que el alcance se
+    edito — y el panel tiene que verlo igual."""
+    recent = [{"ts": r["ts"], "chat": r["chat_name"], "action": r["action"],
+               "issue": r["plane_issue"], "detail": (r["detail"] or "")[:140]}
+              for r in con.execute("select ts, chat_name, action, plane_issue, detail "
+                                   "from agent_action order by id desc limit 20")]
+    lock = con.execute("select name, expires_at from run_lock "
+                       "where expires_at > ?", (time.time(),)).fetchone()
+    # `mapped` y `authorized` no son lo mismo y confundirlos era invisible: con todas
+    # las conversaciones en `off` el agente tiene prohibido actuar y la lista sale
+    # vacia igual que si no hubiera trabajo. Eso es configuracion, no ausencia de
+    # trabajo, y el panel no podia decirlo porque no le llegaba el dato.
+    autorizadas = sum(1 for e in scope.values() if (e.get("mode") or "off") != "off")
+    return {"recent": recent, "running": bool(lock),
+            "syncedAt": time.strftime("%Y-%m-%d %H:%M"),
+            # El rastro de la corrida viaja junto a sus resultados: sin el, "no habia
+            # nada", "no corrio" y "se murio" son la misma lista vacia en pantalla.
+            "run": build_run(con),
+            "mapped": len(scope), "authorized": autorizadas}
+
+
+def filtra_pendientes(pending, scope, decided):
+    """Lo que el humano puede ver de la bandeja: solo conversaciones autorizadas, y sin
+    lo que ya mando a ignorar. Si lo ignorado siguiera en la lista, el humano lo marca
+    otra vez cada corrida y la lista deja de significar algo."""
+    out = []
+    for m in pending:
+        entry = scope.get(m.get("chatJid"))
+        if not entry or entry.get("mode") == "off":
+            continue
+        decision = decided.get(m.get("stanzaId"), {}).get("decision")
+        if decision == "ignore":
+            continue
+        out.append(dict(m, decision=decision))
+    return out
+
+
+def reuse_activity(con, scope, previo, firma):
+    """La bandeja ya leida, vuelta a filtrar. Es el camino cuando WhatsApp no escribio
+    nada desde el ultimo sync: releerla costaria dos copias de 260 MB y una ventana de
+    permiso por proceso para llegar exactamente a la misma lista."""
+    pendientes = filtra_pendientes(previo.get("pending") or [], scope, decisions_read())
+    return dict(previo, pending=pendientes[:30], source=firma,
+                **activity_local(con, scope))
+
+
+def build_activity(con, scope, firma=None):
     """Lo que el panel de actividad muestra. Se arma aca y no en el panel porque el
     panel no puede ejecutar nada: solo sabe leer storage."""
     decided = decisions_read()
     pending = []
     try:
-        out = subprocess.run([os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                           "wa-read"), "inbox", "--json"],
+        out = subprocess.run([WA_READ, "inbox", "--json"],
                              capture_output=True, text=True, timeout=60)
         for m in json.loads(out.stdout or "[]"):
             entry = scope.get(m.get("chat_jid"))
@@ -517,28 +607,14 @@ def build_activity(con, scope):
                             "chat": m.get("chat"), "chatJid": m.get("chat_jid"),
                             "sender": m.get("sender"), "kind": m.get("kind"),
                             "text": (m.get("text") or "")[:160],
-                            "hasMedia": bool(m.get("media") or m.get("adjuntos_cerca")),
-                            "decision": decided.get(m.get("stanza_id"), {}).get("decision")})
+                            "hasMedia": bool(m.get("media") or m.get("adjuntos_cerca"))})
     except (OSError, ValueError, subprocess.SubprocessError):
         pending = []
 
-    recent = [{"ts": r["ts"], "chat": r["chat_name"], "action": r["action"],
-               "issue": r["plane_issue"], "detail": (r["detail"] or "")[:140]}
-              for r in con.execute("select ts, chat_name, action, plane_issue, detail "
-                                   "from agent_action order by id desc limit 20")]
-    lock = con.execute("select name, expires_at from run_lock "
-                       "where expires_at > ?", (time.time(),)).fetchone()
-    # `mapped` y `authorized` no son lo mismo y confundirlos era invisible: con todas
-    # las conversaciones en `off` el agente tiene prohibido actuar y la lista sale
-    # vacia igual que si no hubiera trabajo. Eso es configuracion, no ausencia de
-    # trabajo, y el panel no podia decirlo porque no le llegaba el dato.
-    autorizadas = sum(1 for e in scope.values() if (e.get("mode") or "off") != "off")
-    return {"pending": pending[:30], "recent": recent,
-            "running": bool(lock), "syncedAt": time.strftime("%Y-%m-%d %H:%M"),
-            # El rastro de la corrida viaja junto a sus resultados: sin el, "no habia
-            # nada", "no corrio" y "se murio" son la misma lista vacia en pantalla.
-            "run": build_run(con),
-            "mapped": len(scope), "authorized": autorizadas}
+    # La firma viaja con la bandeja: es lo que deja saber, en el proximo sync, si hace
+    # falta volver a leer. Sin ella no se puede saltear nada y se lee siempre.
+    return {"pending": filtra_pendientes(pending, scope, decided)[:30],
+            "source": firma, **activity_local(con, scope)}
 
 
 def build_chats():
@@ -546,8 +622,7 @@ def build_chats():
     nombre exacto escrito a mano. Hay grupos con nombres repetidos, asi que cada
     entrada lleva su jid, que es la llave real."""
     try:
-        out = subprocess.run([os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                           "wa-read"), "chats", "-n", "400", "--json"],
+        out = subprocess.run([WA_READ, "chats", "-n", "400", "--json"],
                              capture_output=True, text=True, timeout=90)
         chats = json.loads(out.stdout or "[]")
     except (OSError, ValueError, subprocess.SubprocessError):
@@ -561,8 +636,7 @@ def build_health():
     """El panel no puede ejecutar nada, asi que el estado se lo dejamos masticado:
     un booleano y, si algo falla, QUE falla. El porque va en el README, no en la UI."""
     try:
-        out = subprocess.run([os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                           "wa-read"), "doctor", "--json"],
+        out = subprocess.run([WA_READ, "doctor", "--json"],
                              capture_output=True, text=True, timeout=60)
         checks = json.loads(out.stdout or "[]")
     except (OSError, ValueError, subprocess.SubprocessError):
@@ -962,6 +1036,9 @@ DEFAULT_CONFIG = {
     # lunes y parece que no hubo nada. Se elige desde el panel; esto es el arranque.
     "inbox_days": "7",
     "lock_ttl_s": "900",      # cuanto vale el lock antes de considerarse muerto
+    # Cada cuanto el worker relee WhatsApp. Es el unico momento en que se abre esa
+    # base, asi que tambien es el peor caso para que un mensaje nuevo se vea.
+    "sync_minutes": "5",
     "owner_name": "",         # como se llama quien usa esto; el prompt lo usa
     # Como escribe el agente. Sin esto hereda el tono de quien escribio el prompt, que
     # es justo lo que no se quiere: el prompt lo escribio un dev, no la empresa.
@@ -1260,30 +1337,90 @@ def cmd_history(con, a):
         "order by id desc limit ?", (a.n,))]
 
 
+# Cuantos syncs seguidos puede perderse el worker antes de que el precheck deje de
+# creerle al store. Uno es un hipo — el equipo dormido, una lectura que demoro. Tres
+# seguidos ya no es un hipo: es que nadie esta sincronizando.
+SYNC_TOLERANCIA = 3
+
+
+def antiguedad_min(sello):
+    """Cuantos minutos hace del sello que escribe `ahora()`. None si no hay sello o no
+    se puede leer: las dos cosas significan lo mismo, que no hay sync del que hablar."""
+    try:
+        cuando = time.mktime(time.strptime(str(sello), "%Y-%m-%d %H:%M"))
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, (time.time() - cuando) / 60.0)
+
+
+def limite_frescura(con):
+    """Hasta cuando el store sigue siendo una respuesta y no una suposicion.
+
+    Sale del intervalo de sync y no de una constante: el usuario puede verlo y moverlo
+    (`wa-scope config sync_minutes`, o el panel), asi que el retraso que acepta el
+    precheck se mueve con el en vez de quedar escondido en el codigo."""
+    try:
+        minutos = int(str(merged_settings(con).get("sync_minutes", "5")).strip())
+    except (TypeError, ValueError):
+        minutos = 5
+    return max(1, minutos) * SYNC_TOLERANCIA
+
+
+def bloqueado(motivo, detalle, codigo):
+    """Sale 2 y lo dice. Saltear en silencio ocultaria una instalacion rota, que es
+    justo lo que el exit 1 —"no hay nada que hacer"— no puede significar."""
+    print(json.dumps({"hay_trabajo": False, "bloqueado": motivo, "detalle": detalle,
+                      "codigo": codigo}, ensure_ascii=False))
+    sys.exit(2)
+
+
 def cmd_pending(con, a):
-    """Sincroniza y dice si hay algo que hacer. Pensado para el precheck de la
-    automation: cuesta centavos de segundo y, si no hay nada, evita despertar al agente.
-    Efecto secundario util: el panel se refresca aunque el agente no corra."""
-    push_to_plugin(con, with_activity=True)
-    activity = plugin_store_raw().get("activity", {})
-    pending = activity.get("pending", []) or []
-    taken = [k for k, v in decisions_read().items() if v.get("decision") == "take"]
-    work = con.execute("select count(*) c from work where status='open'").fetchone()["c"]
-    health = plugin_store_raw().get("health") or {}
+    """Dice si hay algo que hacer, SIN abrir la base de WhatsApp.
+
+    Es el precheck de las dos automations: corre cada uno o dos minutos y su unico
+    trabajo es decidir barato si vale la pena despertar al agente. Empezaba
+    sincronizando, o sea copiando 260 MB del contenedor de WhatsApp en tres procesos
+    distintos, y macOS preguntaba "acceso a datos de otras apps" en cada uno. Un
+    precheck que hace primero el trabajo caro no es un precheck.
+
+    Contesta con lo que el plugin YA tiene: el store que deja el worker al sincronizar,
+    y su propia base. El precio esta dicho y acotado: contesta sobre el ultimo sync,
+    asi que un mensaje recien llegado espera al proximo sync — `sync_minutes`, que se
+    ve y se cambia desde el panel — y no al proximo precheck.
+
+    Por lo mismo, un store viejo no es "no hay nada que hacer": es que nadie esta
+    sincronizando, o sea una instalacion rota. Sale 2, como cuando el sistema no puede
+    leer, porque callarlo dejaria al agente sin correr durante dias sin decir por que."""
+    raw = plugin_store_raw()
+    activity = raw.get("activity") or {}
+    health = raw.get("health") or {}
     if health.get("ok") is False:
-        # Saltear en silencio ocultaria que el sistema no puede leer. Exit 2 lo separa
-        # de exit 1, que es el caso normal de "no hay nada que hacer".
-        print(json.dumps({"hay_trabajo": False, "bloqueado": health.get("problem"),
-                          "detalle": health.get("detail")}, ensure_ascii=False))
-        sys.exit(2)
+        bloqueado(health.get("problem"), health.get("detail"),
+                  health.get("problemCode") or "unknown")
+    edad = antiguedad_min(activity.get("syncedAt"))
+    limite = limite_frescura(con)
+    if edad is None:
+        bloqueado("the panel has never synced",
+                  "the plugin worker is what reads WhatsApp; open Orca Lab with the "
+                  "WhatsApp Inbox plugin enabled, or run `wa-scope sync`",
+                  "never-synced")
+    if edad > limite:
+        bloqueado("the panel is not being synced",
+                  f"last sync {int(edad)} min ago and the limit is {limite} min "
+                  f"({SYNC_TOLERANCIA} x sync_minutes); the plugin worker is not "
+                  "running or cannot read",
+                  "sync-stale")
+    pending = activity.get("pending") or []
     if a.only_taken:
-        hay = len(taken)
+        hay = sum(1 for v in decisions_read().values() if v.get("decision") == "take")
         detalle = f"{hay} marked as take"
     else:
+        work = con.execute("select count(*) c from work where status='open'").fetchone()["c"]
         hay = len(pending) + work
         detalle = f"{len(pending)} waiting, {work} in progress"
     print(json.dumps({"hay_trabajo": bool(hay), "detalle": detalle,
-                      "sincronizado": activity.get("syncedAt")}, ensure_ascii=False))
+                      "sincronizado": activity.get("syncedAt"),
+                      "antiguedad_min": int(edad)}, ensure_ascii=False))
     sys.exit(0 if hay else 1)
 
 
@@ -1428,7 +1565,8 @@ def main():
     s.add_argument("--chat", default=""); s.add_argument("--name", default="")
     s.add_argument("--stanza", default=""); s.set_defaults(fn=cmd_alert)
 
-    s = add("pending", help="syncs and exits 1 when there is nothing to do (for the precheck)")
+    s = add("pending", help="is there work, from the last sync; 0 = yes, 1 = nothing "
+                            "to do, 2 = blocked (for the precheck)")
     s.add_argument("--only-taken", action="store_true",
                    help="only counts what was marked by hand with Take")
     s.set_defaults(fn=cmd_pending)

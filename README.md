@@ -14,7 +14,7 @@ que está verificado — ver "De dónde lee" y "Otros sistemas" abajo.
 | App | **WhatsApp Desktop** (Mac App Store), con sesión iniciada y abierta al menos una vez. |
 | Base legible | La base local tiene que poder abrirse. Hoy WhatsApp Desktop en macOS la deja como SQLite **sin cifrar**, y `wa-read doctor` lo comprueba de verdad: lee la cabecera del archivo y cuenta los mensajes. Si algún día la cifran (como en Android, que usa SQLCipher), el archivo va a seguir ahí pero el doctor va a decir que no se puede leer. |
 | CLIs | `wa-read`, `wa-send`, `wa-scope` en `~/tools` (o donde apunte `toolsDir`). |
-| Permisos | Accesibilidad para Orca Lab, solo si querés que el agente escriba. Para leer no hace falta. |
+| Permisos | Accesibilidad para Orca Lab, solo si querés que el agente escriba. Para leer no hace falta, pero sin **Acceso total al disco** macOS te va a preguntar en cada lectura — ver abajo. |
 
 Antes de nada, corré:
 
@@ -28,6 +28,35 @@ abre la base y cuenta los mensajes.
 **FileVault no es un problema.** Cifra el disco, no el archivo para tu sesión: con la
 Mac desbloqueada la base se lee normal. Lo que sí rompería todo es que WhatsApp
 empezara a cifrar su propia base.
+
+## Cuándo lee, y por qué el Mac pregunta
+
+La base de WhatsApp vive en un Group Container y pesa unos 260 MB. **Se abre en un solo
+momento: el sync del worker**, cada 5 minutos por defecto. Lo podés cambiar en el panel
+(*Cada cuánto revisa WhatsApp*) o por terminal:
+
+```
+wa-scope config sync_minutes 10
+```
+
+Ese número es también el peor caso para que un mensaje nuevo se vea. El precheck de las
+automations —`wa-scope pending`— **no abre WhatsApp**: contesta con lo que dejó el
+último sync, porque un precheck que corre cada dos minutos y empieza copiando 260 MB no
+es un precheck. En la práctica un mensaje tarda, como mucho, `sync_minutes` más lo que
+falte para el próximo disparo de la automation.
+
+Si el sync deja de correr, el precheck **no** dice "no hay nada que hacer": sale con
+código 2 y lo explica. Callarlo dejaría al agente sin correr durante días sin decir por
+qué.
+
+Y si WhatsApp no escribió nada desde el sync anterior, no se relee: la fecha y el tamaño
+del archivo alcanzan para saberlo, y copiarlo de nuevo daría exactamente la misma lista.
+
+**El cartel de "Orca solicita acceso a datos de otras apps"** sale de ahí: macOS lo
+levanta en cada proceso que toca ese contenedor si Orca Lab no tiene Acceso total al
+disco. Se concede una sola vez en *Ajustes del Sistema → Privacidad y seguridad → Acceso
+total al disco → agregar Orca Lab*, y `wa-read doctor` lo lista como opcional con esa
+misma instrucción.
 
 ## De dónde lee: dos vías, y se suman
 

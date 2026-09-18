@@ -331,6 +331,21 @@
           <span class="said" id="said-days"></span>
         </div>
 
+        <label for="sync-minutes" data-t="syncLabel"></label>
+        <select id="sync-minutes">
+          <option value="2" data-t="sync2"></option>
+          <option value="5" data-t="sync5"></option>
+          <option value="10" data-t="sync10"></option>
+          <option value="15" data-t="sync15"></option>
+          <option value="30" data-t="sync30"></option>
+          <option value="60" data-t="sync60"></option>
+        </select>
+        <p class="hint" data-t="syncHelp"></p>
+        <div class="actions">
+          <button id="save-sync" data-t="saveSync"></button>
+          <span class="said" id="said-sync"></span>
+        </div>
+
         <label for="chat-search" data-t="chatLabel"></label>
         <input id="chat-search" type="search" autocomplete="off" data-t-ph="chatSearchPh" />
         <select id="chat-pick" size="1"></select>
@@ -494,6 +509,18 @@
           daysHelp: 'Con un dia, una mencion del viernes que nadie contesto ya no ' +
             'aparece el lunes. Se leen como maximo los 500 mensajes mas nuevos de la ventana.',
           saveDays: 'Guardar ventana', daysSaved: 'Ventana guardada',
+          syncLabel: 'Cada cuanto revisa WhatsApp',
+          sync2: 'cada 2 minutos', sync5: 'cada 5 minutos — recomendado',
+          sync10: 'cada 10 minutos', sync15: 'cada 15 minutos',
+          sync30: 'cada 30 minutos', sync60: 'cada hora',
+          syncHelp: 'Es la unica vez que se abre la base de WhatsApp, asi que tambien ' +
+            'es lo que mas puede tardar un mensaje nuevo en aparecer aca y en llegarle ' +
+            'al agente. Mas seguido cuesta mas lectura; mas espaciado, mas espera.',
+          saveSync: 'Guardar frecuencia', syncSaved: 'Frecuencia guardada',
+          hFulldisk: 'Acceso total al disco',
+          howFulldiskMissing: 'macOS pregunta permiso en CADA proceso que lee los datos ' +
+            'de WhatsApp. Se concede una sola vez en Ajustes del Sistema > Privacidad y ' +
+            'seguridad > Acceso total al disco > agregar Orca Lab.',
           sourceLegend: 'De donde lee',
           readLocalLabel: 'App de escritorio',
           readLocalOn: 'si — lee esa linea', readLocalOff: 'no — no la lee',
@@ -631,6 +658,18 @@
           daysHelp: 'With one day, a Friday mention nobody answered is gone by Monday. ' +
             'At most the 500 newest messages in the window are read.',
           saveDays: 'Save window', daysSaved: 'Window saved',
+          syncLabel: 'How often it checks WhatsApp',
+          sync2: 'every 2 minutes', sync5: 'every 5 minutes — recommended',
+          sync10: 'every 10 minutes', sync15: 'every 15 minutes',
+          sync30: 'every 30 minutes', sync60: 'every hour',
+          syncHelp: 'This is the only time WhatsApp\'s database is opened, so it is ' +
+            'also the longest a new message can take to show up here and to reach the ' +
+            'agent. More often costs more reading; less often costs more waiting.',
+          saveSync: 'Save frequency', syncSaved: 'Frequency saved',
+          hFulldisk: 'Full Disk Access',
+          howFulldiskMissing: 'macOS asks for permission on EVERY process that reads ' +
+            "WhatsApp's data. Grant it once in System Settings > Privacy & Security > " +
+            'Full Disk Access > add Orca Lab.',
           sourceLegend: 'Where it reads from',
           readLocalLabel: 'Desktop app',
           readLocalOn: 'yes — read that line', readLocalOff: 'no — do not read it',
@@ -743,6 +782,18 @@
         daysHelp: 'Com um dia, uma mencao de sexta que ninguem respondeu nao aparece mais ' +
           'na segunda. Sao lidas no maximo as 500 mensagens mais novas da janela.',
         saveDays: 'Salvar janela', daysSaved: 'Janela salva',
+        syncLabel: 'De quanto em quanto tempo verifica o WhatsApp',
+        sync2: 'a cada 2 minutos', sync5: 'a cada 5 minutos — recomendado',
+        sync10: 'a cada 10 minutos', sync15: 'a cada 15 minutos',
+        sync30: 'a cada 30 minutos', sync60: 'a cada hora',
+        syncHelp: 'E a unica vez que a base do WhatsApp e aberta, entao tambem e o ' +
+          'maximo que uma mensagem nova pode demorar para aparecer aqui e chegar ao ' +
+          'agente. Mais seguido custa mais leitura; mais espacado, mais espera.',
+        saveSync: 'Salvar frequencia', syncSaved: 'Frequencia salva',
+        hFulldisk: 'Acesso total ao disco',
+        howFulldiskMissing: 'O macOS pede permissao em CADA processo que le os dados do ' +
+          'WhatsApp. Conceda uma vez em Ajustes do Sistema > Privacidade e seguranca > ' +
+          'Acesso total ao disco > adicionar Orca Lab.',
         sourceLegend: 'De onde le',
         readLocalLabel: 'App de desktop',
         readLocalOn: 'sim — le essa linha', readLocalOff: 'nao — nao le',
@@ -885,10 +936,12 @@
       var HEALTH_KEY = {
         system: 'hSystem', whatsapp: 'hWhatsapp', database: 'hDatabase',
         readable: 'hReadable', sqlite3: 'hSqlite3', send: 'hSend',
-        transcribe: 'hTranscribe', web: 'hWeb', unknown: 'hUnknown'
+        transcribe: 'hTranscribe', web: 'hWeb', fulldisk: 'hFulldisk',
+        unknown: 'hUnknown'
       }
       var HEALTH_HOW_KEY = {
         'web-not-implemented': 'howWebNotBuilt',
+        'fulldisk-missing': 'howFulldiskMissing',
         'send-no-orca': 'howSendNoOrca',
         'transcribe-missing-tool': 'howTranscribeMissingTool',
         'transcribe-unknown': 'howTranscribeUnknown',
@@ -1039,6 +1092,14 @@
         busy(event.currentTarget, write('inboxDays', el('inbox-days').value)
           .then(function (r) {
             said('said-days', r.ok ? '\u2713 ' + t('daysSaved') : 'error', !r.ok)
+          }))
+      })
+
+      // ---------- frecuencia del sync ----------
+      el('save-sync').addEventListener('click', function (event) {
+        busy(event.currentTarget, write('syncMinutes', el('sync-minutes').value)
+          .then(function (r) {
+            said('said-sync', r.ok ? '\u2713 ' + t('syncSaved') : 'error', !r.ok)
           }))
       })
 
@@ -1371,7 +1432,8 @@
                             read('transcribeQuality'), read('inboxDays'),
                             read('ownerName'), read('transcribe'),
                             read('transcribeLang'), read('syncStatus'),
-                            read('readLocal'), read('readWeb')])
+                            read('readLocal'), read('readWeb'),
+                            read('syncMinutes')])
           .then(function (r) {
             renderScope(r[0])
             if (typeof r[4] === 'string' && document.activeElement !== el('tone')) {
@@ -1384,6 +1446,7 @@
             ponerEnSelect('lang', r[10], 'auto')
             ponerEnSelect('read-local', r[12], 'on')
             ponerEnSelect('read-web', r[13], 'off')
+            ponerEnSelect('sync-minutes', r[14], '5')
             if (typeof r[8] === 'string' && document.activeElement !== el('owner')) {
               el('owner').value = r[8]
             }
