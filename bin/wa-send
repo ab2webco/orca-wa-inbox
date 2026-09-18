@@ -188,14 +188,37 @@ def wait_no_alert(espera=4.0):
         tree = state()
 
 
+def jid_registrado(name):
+    """El JID segun el registro del plugin (~/.wa-inbox/scope.db). Sale gratis: es la base
+    propia, la misma que ya se abre para la firma, y no toca nada de WhatsApp."""
+    try:
+        import sqlite3
+        con = sqlite3.connect(SCOPE_DB)
+        filas = con.execute(
+            "select chat_jid from chat_scope where lower(trim(chat_name))=lower(trim(?))",
+            (name.replace("\u200e", ""),)).fetchall()
+        con.close()
+    except Exception:
+        return None
+    return filas[0][0] if len(filas) == 1 else None
+
+
 def chat_jid(name):
     """El JID del chat que se llama asi, o None.
 
     wa-send habla de nombres visibles porque es lo que ve quien lo llama; el esquema
-    whatsapp:// necesita un telefono. El puente es la base de WhatsApp, que wa-read ya
-    sabe leer. Si el nombre no identifica a UNO solo, se devuelve None: con nombres
-    repetidos es preferible el recorrido por la lista antes que abrir el chat equivocado.
+    whatsapp:// necesita un telefono. Si el nombre no identifica a UNO solo se devuelve
+    None: con nombres repetidos es preferible el recorrido por la lista antes que abrir
+    el chat equivocado.
+
+    Se pregunta primero al registro del plugin y solo despues a wa-read. El orden importa
+    por privacidad, no por velocidad: wa-read abre la base de WhatsApp entera —la carpeta
+    protegida del contenedor— y wa-send es la herramienta que ESCRIBE. Que para mandar un
+    mensaje haga falta leer todas las conversaciones es una puerta que no tiene por que
+    abrirse si el registro ya sabe la respuesta.
     """
+    if (jid := jid_registrado(name)):
+        return jid
     try:
         p = subprocess.run([WA_READ, "chats", "-n", "500", "--query", name, "--json"],
                            capture_output=True, text=True, timeout=90)

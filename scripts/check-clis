@@ -30,9 +30,6 @@ CASOS = [
     ("wa-scope", ["closing", "--json"]),
     ("wa-transcribe", ["--check", "--json"]),
     ("wa-send", ["--help"]),
-    # `--open url` contra algo que no es un chat directo tiene que morir ANTES de tocar
-    # WhatsApp. Por eso entra aca: recorre de verdad la eleccion de via sin abrir la app.
-    ("wa-send", ["--open", "url", "grupo-que-no-existe", "texto", "--raw"]),
 ]
 
 
@@ -154,6 +151,21 @@ def revisa_wa_send(fallos: list) -> int:
                        capture_output=True, text=True, timeout=120)
     if p.returncode == 0:
         fallos.append("wa-send acepto un --open que no existe")
+
+    # `--open url` contra algo que no es un chat directo tiene que morir ANTES de tocar
+    # WhatsApp. Corre con HOME propio a proposito: asi la busqueda del JID no llega nunca
+    # al contenedor protegido de WhatsApp, que es una carpeta que macOS pregunta antes de
+    # abrir. Un chequeo que corre a cada rato no puede ser lo que dispare ese permiso.
+    hechas += 1
+    with tempfile.TemporaryDirectory() as tmp:
+        p = subprocess.run(
+            [str(BIN / "wa-send"), "--open", "url", "grupo-que-no-existe", "texto", "--raw"],
+            capture_output=True, text=True, env=entorno(pathlib.Path(tmp)), timeout=120)
+        if p.returncode == 0 or "whatsapp://" not in (p.stderr + p.stdout):
+            fallos.append(f"wa-send --open url no fallo cerrado: rc={p.returncode} "
+                          f"{(p.stderr or p.stdout).strip()[:120]}")
+        if "Traceback (most recent call last)" in p.stderr:
+            fallos.append("wa-send --open url reventó con un traceback")
     return hechas
 
 
