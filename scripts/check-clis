@@ -6,6 +6,8 @@ los paneles y las pruebas jsdom, y ninguna de las dos ejecuta un CLI. Compilar n
 alcanza — un import que falta solo aparece al recorrer esa rama — asi que aca se
 corre cada herramienta.
 """
+import importlib.machinery
+import importlib.util
 import json
 import pathlib
 import subprocess
@@ -28,7 +30,131 @@ CASOS = [
     ("wa-scope", ["closing", "--json"]),
     ("wa-transcribe", ["--check", "--json"]),
     ("wa-send", ["--help"]),
+    # `--open url` contra algo que no es un chat directo tiene que morir ANTES de tocar
+    # WhatsApp. Por eso entra aca: recorre de verdad la eleccion de via sin abrir la app.
+    ("wa-send", ["--open", "url", "grupo-que-no-existe", "texto", "--raw"]),
 ]
+
+
+# El esquema whatsapp:// solo direcciona telefonos. Que un JID de grupo NO salga por
+# ahi no es un detalle: WhatsApp lo lee como numero, no lo encuentra y levanta una hoja
+# modal que tapa la ventana entera y deja clavada la corrida siguiente. Esta tabla es
+# la que sostiene ese "falla cerrado", asi que se recorre entera.
+# Los JID de aqui son inventados a proposito: el 555 esta reservado para ejemplos y los
+# demas son ceros. Un chequeo no puede llevar el telefono ni los grupos de quien lo
+# escribio — el plugin se instala en maquinas ajenas y esto viaja con el.
+TELEFONOS = [
+    ("15550000000@s.whatsapp.net", "15550000000"),   # directo: unico caso que sirve
+    ("100000000000000000@g.us", None),               # grupo moderno
+    ("15550000000-1000000000@g.us", None),           # grupo viejo, con guion
+    ("100000000000000@lid", None),                   # identidad enlazada
+    ("15550000001@status", None),                    # estados, no es un chat
+    ("no-es-un-numero@s.whatsapp.net", None),
+    ("15550000000", None),                           # sin dominio no se puede afirmar
+    (None, None),
+]
+
+# Arboles reales de la app, capturados con `orca computer get-app-state`. WhatsApp usa
+# la MISMA hoja modal para avisar un error y para mostrar que esta navegando; lo unico
+# que las separa es el boton. Tomar la de progreso por un error abortaba toda apertura
+# por URL, y tomar la de error por progreso deja la app clavada. Por eso se comprueban
+# las dos.
+HOJA_PROGRESO = """App=net.whatsapp.WhatsApp (pid 88122)
+Window: "\u200eWhatsApp", App: \u200eWhatsApp.
+
+0 ventana est\u00e1ndar \u200eWhatsApp
+\t1 container, Secondary Actions: cancel
+\t6 hoja aviso
+\t\t7 texto, Value: \u200eIniciando chat
+\t\t8 texto
+\t\t9 bot\u00f3n \u200eCancelar
+"""
+
+HOJA_ERROR = """App=net.whatsapp.WhatsApp (pid 88122)
+Window: "\u200eWhatsApp", App: \u200eWhatsApp.
+
+0 ventana est\u00e1ndar \u200eWhatsApp
+\t1 container, Secondary Actions: cancel
+\t6 hoja aviso
+\t\t7 texto, Value: \u200eEl n\u00famero de tel\u00e9fono +100000000000000000 no existe en WhatsApp.
+\t\t8 texto
+\t\t9 bot\u00f3n \u200eOK
+"""
+
+ARBOL_NORMAL = """App=net.whatsapp.WhatsApp (pid 88122)
+Window: "\u200eWhatsApp", App: \u200eWhatsApp.
+
+0 ventana est\u00e1ndar \u200eWhatsApp
+\t28 container Lista de chats, Secondary Actions: cancel, scroll down, scroll up
+\t\t48 texto (selected) \u200eGrupo de ejemplo, Secondary Actions: cancel
+\t61 container Mensajes en el chat con Grupo de ejemplo, Secondary Actions: cancel
+\t76 campo de texto Escribir mensaje
+"""
+
+
+def modulo_wa_send():
+    """wa-send no tiene extension .py, asi que se carga por ruta. Se importa en vez de
+    reimplementar la tabla: lo que se comprueba tiene que ser el codigo que corre."""
+    ruta = str(BIN / "wa-send")
+    # Importar deja un __pycache__ al lado del CLI. El repo no tiene por que cargar con
+    # eso solo porque un chequeo lo leyo.
+    sys.dont_write_bytecode = True
+    spec = importlib.util.spec_from_loader(
+        "wa_send", importlib.machinery.SourceFileLoader("wa_send", ruta))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def revisa_wa_send(fallos: list) -> int:
+    """Recorre la eleccion de via y la lectura de hojas modales. Devuelve cuantas corrio.
+
+    Nada de esto abre WhatsApp: son las decisiones que se toman antes de tocarlo, que es
+    justo donde un error manda el mensaje a la conversacion equivocada.
+    """
+    hechas = 0
+    try:
+        wa = modulo_wa_send()
+    except Exception as error:            # noqa: BLE001 - el motivo va en el reporte
+        fallos.append(f"wa-send: no se pudo importar — {error}")
+        return hechas
+
+    for jid, esperado in TELEFONOS:
+        hechas += 1
+        quedo = wa.phone_of(jid)
+        if quedo != esperado:
+            fallos.append(f"wa-send phone_of({jid!r}) dio {quedo!r} y tenia que dar "
+                          f"{esperado!r}")
+
+    # La hoja de error se reconoce Y se puede cerrar: hace falta el indice del boton.
+    hechas += 1
+    node, texto, ok = wa.alert(HOJA_ERROR)
+    if node is None or ok is None or "no existe en WhatsApp" not in (texto or ""):
+        fallos.append(f"wa-send alert() no leyo la hoja de error: {(node, texto, ok)!r}")
+
+    # La de progreso se ve, pero sin boton de aceptar: hay que seguir esperando, no abortar.
+    hechas += 1
+    node, texto, ok = wa.alert(HOJA_PROGRESO)
+    if node is None or ok is not None:
+        fallos.append(f"wa-send alert() confundio la hoja de progreso: {(node, texto, ok)!r}")
+
+    # Y un arbol sano no puede parecer una hoja modal, o no se abre ningun chat nunca.
+    hechas += 1
+    if wa.alert(ARBOL_NORMAL)[0] is not None:
+        fallos.append("wa-send alert() vio un aviso en un arbol normal")
+
+    # El nombre del chat sale del mismo arbol en las dos vias: es lo que compara el guard.
+    hechas += 1
+    if wa.current_chat(ARBOL_NORMAL) != "Grupo de ejemplo":
+        fallos.append(f"wa-send current_chat() dio {wa.current_chat(ARBOL_NORMAL)!r}")
+
+    # Una via que no existe se rechaza en la linea de comandos, no adentro.
+    hechas += 1
+    p = subprocess.run([str(BIN / "wa-send"), "--open", "telepatia", "x", "y"],
+                       capture_output=True, text=True, timeout=120)
+    if p.returncode == 0:
+        fallos.append("wa-send acepto un --open que no existe")
+    return hechas
 
 
 # Ajustes: lo que se acepta y lo que se rechaza. Cada caso es
@@ -47,7 +173,7 @@ AJUSTES = [
     (["config", "transcribe_quality", "minima"], True, "minima"),
     (["config", "transcribe_quality", "media"], False, "minima"),
     # owner_name es texto libre: cualquier nombre es un nombre.
-    (["config", "owner_name", "Fabiana Olivar"], True, "Fabiana Olivar"),
+    (["config", "owner_name", "Nombre De Ejemplo"], True, "Nombre De Ejemplo"),
 ]
 
 
@@ -106,7 +232,7 @@ def revisa_ajustes(fallos: list) -> int:
         hechas += 5
         for flat, esperado in (("inboxDays", "30"), ("transcribe", "off"),
                                ("transcribeLang", "pt"), ("transcribeQuality", "minima"),
-                               ("ownerName", "Fabiana Olivar")):
+                               ("ownerName", "Nombre De Ejemplo")):
             if espejo.get(flat) != esperado:
                 fallos.append(f"sync no le devolvio {flat} al panel: quedo "
                               f"{espejo.get(flat)!r} en vez de {esperado!r}")
@@ -152,7 +278,7 @@ def main() -> int:
             ultima = [l for l in p.stderr.strip().splitlines() if l.strip()][-1]
             fallos.append(f"{nombre} {' '.join(args)}: {ultima.strip()}")
 
-    comprobaciones = revisa_ajustes(fallos)
+    comprobaciones = revisa_ajustes(fallos) + revisa_wa_send(fallos)
 
     if fallos:
         print("CLI que se rompen al correr:", file=sys.stderr)

@@ -415,11 +415,13 @@ def build_health():
         return {"ok": False, "problem": "no pude verificar el estado"}
     # Lo obligatorio bloquea; lo opcional se ofrece para activar. Mezclarlos hace que
     # una funcion que falta parezca una rotura, y que una rotura pase por opcional.
+    # Lo requerido lo dice el propio chequeo, no la palabra "opcional" en su nombre:
+    # clasificar por texto hacia que "orca disponible (solo para escribir)" bloqueara.
     falla = [c for c in checks if not c.get("ok")]
-    bloqueantes = [c for c in falla if "opcional" not in c.get("check", "")]
+    bloqueantes = [c for c in falla if c.get("requerido", True)]
     opcionales = [{"que": c.get("check", "").replace(" (opcional)", ""),
                    "como": c.get("detalle", "").replace("opcional — ", "")}
-                  for c in falla if "opcional" in c.get("check", "")]
+                  for c in falla if not c.get("requerido", True)]
     out = {"ok": not bloqueantes, "optional": opcionales}
     if bloqueantes:
         out["problem"] = bloqueantes[0].get("check")

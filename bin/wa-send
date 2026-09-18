@@ -3,12 +3,21 @@
 
   wa-send "<chat>" "texto"          -> deja el texto SIN enviar
   wa-send "<chat>" "texto" --send    -> lo envia
+  wa-send "<chat>" "texto" --open ui -> fuerza la via de apertura
 
 Por defecto NO envia: deja el chat abierto con el texto escrito para que lo revises
 y presiones Enter vos. --send es opt-in explicito.
 
 Maneja la UI real de la app via accesibilidad (orca computer). No usa librerias no
 oficiales ni vincula un dispositivo nuevo a la cuenta.
+
+Para ABRIR el chat hay dos vias y la herramienta dice cual uso:
+  url  el esquema whatsapp:// lleva directo a la conversacion. Solo sirve para chats
+       directos con telefono: es lo unico que el esquema sabe direccionar.
+  ui   recorre la lista lateral. Es el camino de siempre y el unico que sirve para
+       grupos, que es donde vive casi todo el trabajo de este plugin.
+Escribir sigue siendo accesibilidad en los dos casos, y en los dos casos se verifica
+que el chat abierto sea el pedido antes de tocar el teclado.
 """
 import argparse, json, os, re, subprocess, sys, time
 
@@ -17,6 +26,10 @@ SCOPE_DB = (os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~/AppD
                          "wa-inbox", "scope.db") if sys.platform == "win32"
             else os.path.expanduser("~/.wa-inbox/scope.db"))
 SCROLL_TRIES = 25   # cuantas veces bajar la lista antes de rendirse
+URL_WAIT = 8.0      # cuanto esperar a que el esquema whatsapp:// aterrice
+WA_READ = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wa-read")
+# El esquema solo direcciona telefonos, asi que el local part tiene que ser eso y nada mas.
+PHONE = re.compile(r"^\d{7,15}$")
 
 
 def signature():
@@ -34,6 +47,9 @@ ORCA = "orca"
 # "Mensajes en el chat con <nombre>" es el ancla que confirma que estas en el chat correcto.
 IN_CHAT = re.compile(r"Mensajes en el chat con (.+?)(?:,|$)")
 LINE = re.compile(r"^\s*(\d+) (.+)$")
+# El rol llega traducido por macOS: en es-ES es "hoja aviso", en ingles "alert"/"sheet".
+ALERT_ROW = re.compile(r"^(hoja\s+)?(aviso|alerta|alert|sheet|di[\u00e1a]logo|dialog)\b", re.I)
+OK_BTN = re.compile(r"^bot[o\u00f3]n\s+(OK|Aceptar)\b", re.I)
 
 
 def orca(*args, ok_fail=False):
@@ -125,13 +141,126 @@ def clear_search(tree):
     return state()
 
 
-def open_chat(target):
-    tree = state()
-    if not tree:
-        sys.exit("no pude leer la ventana de WhatsApp (esta abierta?)")
-    if (cur := current_chat(tree)) and cur.lower() == target.lower():
-        return tree, cur
+def alert(tree):
+    """La hoja modal de WhatsApp, si la hay: (indice, texto, indice del boton OK).
 
+    Importa porque tapa la ventana entera: con ella abierta el arbol pierde la lista de
+    chats y el campo de escribir, asi que el recorrido por accesibilidad camina un arbol
+    que ya no existe y falla sin decir por que. Se mira ANTES de tocar nada.
+
+    Hay dos clases y se distinguen por el boton OK, no por el texto (que viene traducido):
+    la que lo TIENE es un error que espera que alguien lo acepte y no se va sola; la que
+    NO lo tiene es el progreso ("Iniciando chat") que WhatsApp muestra mientras navega y
+    que desaparece en un segundo. Confundirlas hacia abortar cada apertura por URL.
+    """
+    node = texto = ok = None
+    for ln in tree.splitlines():
+        m = LINE.match(ln)
+        if not m:
+            continue
+        idx, rest = int(m.group(1)), m.group(2).replace("\u200e", "")
+        if node is None:
+            if ALERT_ROW.match(rest):
+                node = idx
+            continue
+        if texto is None and rest.startswith("texto") and "Value:" in rest:
+            texto = rest.split("Value:", 1)[1].strip()
+        if ok is None and OK_BTN.match(rest):
+            ok = idx
+    return node, texto, ok
+
+
+def wait_no_alert(espera=4.0):
+    """Devuelve (arbol, texto del aviso). El texto es None si la ventana quedo despejada.
+
+    Las hojas de progreso se van solas; las de error no. Esperar un poco antes de decidir
+    evita abortar por una hoja que ya se estaba cerrando.
+    """
+    limite = time.time() + espera
+    tree = state()
+    while True:
+        node, texto, _ = alert(tree)
+        if node is None:
+            return tree, None
+        if time.time() >= limite:
+            return tree, texto or "sin texto"
+        time.sleep(0.5)
+        tree = state()
+
+
+def chat_jid(name):
+    """El JID del chat que se llama asi, o None.
+
+    wa-send habla de nombres visibles porque es lo que ve quien lo llama; el esquema
+    whatsapp:// necesita un telefono. El puente es la base de WhatsApp, que wa-read ya
+    sabe leer. Si el nombre no identifica a UNO solo, se devuelve None: con nombres
+    repetidos es preferible el recorrido por la lista antes que abrir el chat equivocado.
+    """
+    try:
+        p = subprocess.run([WA_READ, "chats", "-n", "500", "--query", name, "--json"],
+                           capture_output=True, text=True, timeout=90)
+        chats = json.loads(p.stdout or "[]")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    objetivo = name.replace("\u200e", "").strip().lower()
+    exactos = [c for c in chats
+               if (c.get("name") or "").replace("\u200e", "").strip().lower() == objetivo]
+    return exactos[0].get("jid") if len(exactos) == 1 else None
+
+
+def phone_of(jid):
+    """El telefono que el esquema whatsapp:// sabe direccionar, o None.
+
+    Falla cerrado a proposito. El esquema SOLO entiende telefonos: probado contra la app,
+    `whatsapp://send?phone=<jid de grupo>` no abre el grupo — WhatsApp lee el JID como si
+    fuera un numero, no lo encuentra y levanta una hoja modal que tapa la ventana. Por eso
+    un @g.us, un @lid o un @status nunca salen por aca, y como el trabajo de este plugin
+    vive sobre todo en grupos, la via url cubre bastante menos de lo que parece: sirve
+    para los chats directos y nada mas.
+    """
+    if not jid or not jid.endswith("@s.whatsapp.net"):
+        return None
+    local = jid.split("@", 1)[0]
+    return local if PHONE.match(local) else None
+
+
+def open_by_url(target, phone):
+    """Abre el chat por el esquema whatsapp://. Devuelve el arbol, o None para que siga
+    el recorrido. No verifica el nombre: de eso se encarga open_chat para las dos vias.
+
+    Se abre con `-g` para no robarle el foco a lo que este haciendo la persona; escribir
+    no lo necesita, y --send ya se encarga de traer la ventana al frente si hace falta.
+    """
+    subprocess.run(["open", "-g", f"whatsapp://send?phone={phone}"],
+                   capture_output=True, text=True)
+    limite = time.time() + URL_WAIT
+    while time.time() < limite:
+        time.sleep(0.4)
+        tree = state()
+        node, texto, ok = alert(tree)
+        if node is not None and ok is None:
+            continue    # hoja de progreso ("Iniciando chat"): todavia esta navegando
+        if node is not None:
+            # El numero esta en la base pero ya no en WhatsApp. Se cierra el aviso que
+            # levantamos nosotros — y solo ese, comprobando que el texto hable de ESTE
+            # numero: dejarlo abierto bloquea toda corrida posterior, y clickear OK a
+            # ciegas seria aceptar un dialogo que nadie leyo.
+            if phone in (texto or ""):
+                orca("click", "--app", APP, "--element-index", str(ok), ok_fail=True)
+                time.sleep(0.6)
+            return None
+        cur = current_chat(tree)
+        if cur and cur.strip().lower() == target.strip().lower():
+            # El nombre aparece antes de que termine de dibujarse el chat, y los indices
+            # del arbol se corren mientras tanto: sin esta pausa el campo de escribir se
+            # busca en un arbol que ya cambio y set-value falla por indice viejo.
+            time.sleep(1.0)
+            return state()
+    return None
+
+
+def walk_to_chat(tree, target):
+    """El recorrido de siempre por la lista lateral. Devuelve el arbol despues del click."""
     tree = clear_search(tree)
 
     # Primero la lista visible. Clickear la fila SI cambia de chat; escribir en el
@@ -168,12 +297,49 @@ def open_chat(target):
 
     orca("click", "--app", APP, "--element-index", str(idx))
     time.sleep(1.4)
+    return state()
 
-    tree = state()
+
+def open_chat(target, phone=None, modo="auto"):
+    """Deja abierto el chat pedido y devuelve (arbol, nombre, via).
+
+    Con `phone` prueba primero el esquema whatsapp://, que llega derecho a la
+    conversacion; si no aterriza, recorre la lista. La verificacion del final es UNA y
+    rige para las dos vias: es lo unico que separa un error de apertura de un mensaje
+    escrito en la conversacion de otro cliente.
+    """
+    tree, aviso = wait_no_alert()
+    if not tree:
+        sys.exit("no pude leer la ventana de WhatsApp (esta abierta?)")
+    # Un aviso previo —de otra corrida o de la persona— tapa la ventana entera. Se corta
+    # aca: sin esto el recorrido camina un arbol vacio y el fallo no explica nada.
+    if aviso:
+        sys.exit(f"WhatsApp tiene un aviso abierto que tapa la ventana: {aviso} "
+                 f"— cerralo en la app y reintenta")
+
+    if (cur := current_chat(tree)) and cur.lower() == target.lower():
+        return tree, cur, "ya-abierto"
+
+    via = None
+    if phone and (t := open_by_url(target, phone)) is not None:
+        tree, via = t, "url"
+    if via is None:
+        # Forzar una via y que la herramienta se pase a la otra en silencio dejaria el
+        # flag sin valor para diagnosticar: si se pidio url y url no fue, se dice.
+        if modo == "url":
+            sys.exit(f"--open url no logro abrir {target!r} — reintenta sin forzar la via")
+        tree, aviso = wait_no_alert()
+        if aviso:
+            sys.exit(f"WhatsApp tiene un aviso abierto que tapa la ventana: {aviso} "
+                     f"— cerralo en la app y reintenta")
+        tree = walk_to_chat(tree, target)
+        via = "ui"
+
     cur = current_chat(tree)
     if not cur or cur.strip().lower() != target.strip().lower():
-        sys.exit(f"abri {cur!r} pero pediste {target!r} — abortado sin escribir nada")
-    return tree, cur
+        sys.exit(f"abri {cur!r} pero pediste {target!r} — abortado sin escribir nada "
+                 f"(via {via})")
+    return tree, cur, via
 
 
 def main():
@@ -185,6 +351,10 @@ def main():
                     help="ademas de escribirlo, lo envia (por defecto solo lo deja escrito)")
     ap.add_argument("--raw", action="store_true",
                     help="no firmar: el mensaje sale tal cual, sin la firma del agente")
+    ap.add_argument("--open", dest="via", choices=("auto", "url", "ui"), default="auto",
+                    help="como abrir el chat: url (esquema whatsapp://, solo chats "
+                         "directos), ui (recorre la lista lateral, sirve para todo) o "
+                         "auto (url cuando se puede, si no ui). Por defecto auto.")
     a = ap.parse_args()
     # Todo mensaje del agente va firmado, para que nunca haya duda de si escribe la
     # persona o su agente. --raw es la excepcion, para cuando escribe ella.
@@ -196,7 +366,15 @@ def main():
         if not a.text.rstrip().endswith(sig):
             a.text = f"{a.text.rstrip()}\n{sig}"
 
-    tree, cur = open_chat(a.chat)
+    # La via se decide ANTES de tocar la app: un pedido imposible —--open url contra un
+    # grupo— tiene que fallar sin haber abierto ni movido nada en WhatsApp.
+    phone = phone_of(chat_jid(a.chat)) if a.via in ("auto", "url") else None
+    if a.via == "url" and not phone:
+        sys.exit(f"--open url no sirve para {a.chat!r}: el esquema whatsapp:// solo "
+                 f"direcciona telefonos, y esto no resolvio a un chat directo. "
+                 f"Usa --open ui (o auto).")
+
+    tree, cur, via = open_chat(a.chat, phone, a.via)
 
     idx, _ = find(tree, r"Escribir mensaje|Type a message")
     if idx is None:
@@ -205,8 +383,8 @@ def main():
     time.sleep(0.4)
 
     if not a.send:
-        print(f"BORRADOR en {cur!r}: {a.text}\n(no enviado — repeti con --send, "
-              f"o presiona Enter en la app)")
+        print(f"BORRADOR en {cur!r} (via {via}): {a.text}\n(no enviado — repeti con "
+              f"--send, o presiona Enter en la app)")
         return
 
     # Enter necesita la ventana enfocada; set-value no. Si no lo esta, la traemos al frente.
@@ -216,10 +394,10 @@ def main():
         orca("press-key", "--app", APP, "--key", "Return")
     time.sleep(0.8)
     if a.text[:40] in state():
-        print(f"ENVIADO a {cur!r}: {a.text}")
+        print(f"ENVIADO a {cur!r} (via {via}): {a.text}")
     else:
-        print(f"Enter presionado en {cur!r}, pero no vi el mensaje en el chat. "
-              f"Verifica en la app.", file=sys.stderr)
+        print(f"Enter presionado en {cur!r} (via {via}), pero no vi el mensaje en el "
+              f"chat. Verifica en la app.", file=sys.stderr)
         sys.exit(1)
 
 

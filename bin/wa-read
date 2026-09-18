@@ -413,11 +413,22 @@ def cmd_doctor(con, a):
         ("base sin cifrar y legible", ok_read, detail_read),
         ("sqlite3 disponible", shutil.which("sqlite3") is not None,
          shutil.which("sqlite3") or "no esta en el PATH"),
-        ("orca disponible (solo para escribir)", shutil.which("orca") is not None,
-         shutil.which("orca") or "no esta en el PATH"),
-        ("transcripcion de audio (opcional)", *_transcribe_check()),
     ]
-    return [{"check": n, "ok": ok, "detalle": d} for n, ok, d in checks]
+    # Lo de arriba bloquea: sin eso no se puede LEER, que es lo que hace el plugin.
+    # Lo de abajo no: sin Orca en el PATH se sigue leyendo, solo no se puede enviar,
+    # y marcarlo como rotura ponia una alerta roja de "WhatsApp no esta conectado" en
+    # una maquina donde WhatsApp funcionaba perfecto.
+    opcionales = [
+        ("enviar mensajes", shutil.which("orca") is not None,
+         shutil.which("orca") or "opcional — el CLI de Orca no esta en el PATH; "
+         "el agente puede leer y abrir tarjetas, pero no escribir en WhatsApp"),
+        ("transcripcion de audio", *_transcribe_check()),
+    ]
+    filas = [{"check": n, "ok": ok, "detalle": d, "requerido": True}
+             for n, ok, d in checks]
+    filas += [{"check": n, "ok": ok, "detalle": d, "requerido": False}
+              for n, ok, d in opcionales]
+    return filas
 
 
 def cmd_whoami(con, a):
@@ -475,7 +486,7 @@ def main():
         else:
             for r in rows:
                 print(f"{'ok ' if r['ok'] else 'FALTA'}  {r['check']}: {r['detalle']}")
-            faltan = [r for r in rows if not r["ok"] and "opcional" not in r["check"]]
+            faltan = [r for r in rows if not r["ok"] and r.get("requerido", True)]
             if faltan:
                 print("\n" + REQUISITOS)
         # Lo opcional no hace fallar el chequeo: sin transcripcion todo funciona,
