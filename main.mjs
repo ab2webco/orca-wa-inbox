@@ -53,7 +53,7 @@ async function checkSystem(orca) {
     body: unsupported
       ? 'La lectura de WhatsApp solo esta verificada en macOS con WhatsApp Desktop. ' +
         'El resto del plugin funciona; las automatizaciones no van a correr.'
-      : `${failed[0].check}: ${failed[0].detalle}. Corre ./bin/wa-read doctor para el detalle.`
+      : `${failed[0].check}: ${failed[0].detalle}. Abri los ajustes del plugin para ver el detalle.`
   }).catch(() => {})
   orca.log(`chequeo: faltan ${failed.map((c) => c.check).join(', ')}`)
 }
@@ -81,11 +81,31 @@ async function runJson(cmd, args) {
   }
 }
 
+const SYNC_MS = 5 * 60 * 1000
+
+/** Deja el panel al dia. Lo hace el worker porque el panel no puede ejecutar nada:
+ *  solo sabe leer y escribir storage. Sin esto el panel abria diciendo "corre este
+ *  comando", que en una interfaz no es una instruccion, es un callejon. */
+async function sync(orca) {
+  const r = await run(join(TOOLS, 'wa-scope'), ['sync', '--json'],
+    { timeoutMs: 120000 }).catch((error) => {
+    orca.log(`sync fallo: ${error.message}`)
+    return null
+  })
+  return r !== null
+}
+
 export default function activate(orca) {
   // Al activarse, lo primero es decir si este sistema puede leer WhatsApp. Si no puede,
   // el usuario se tiene que enterar ahora y no cuando una automatizacion lleve una
   // semana sin correr sin explicar por que.
   checkSystem(orca).catch((error) => orca.log(`chequeo inicial fallo: ${error.message}`))
+
+  // Y traer las conversaciones ya: en una instalacion nueva el panel arranca vacio y
+  // el usuario no tiene de donde sacarlas.
+  sync(orca).catch(() => {})
+  const syncTimer = setInterval(() => { sync(orca).catch(() => {}) }, SYNC_MS)
+  if (typeof syncTimer.unref === 'function') syncTimer.unref()
 
   const tool = async (name) => {
     const s = await settings()
@@ -199,4 +219,8 @@ export default function activate(orca) {
   orca.events.on('agent.status.changed', (payload) => {
     orca.log(`agente ${payload.state} en ${payload.worktreeId ?? 'sin worktree'}`)
   })
+
+  // Al desactivar el plugin el timer se va con el: si no, sigue leyendo WhatsApp
+  // despues de que el usuario dijo que no.
+  return () => { clearInterval(syncTimer) }
 }
