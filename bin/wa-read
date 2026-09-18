@@ -17,12 +17,34 @@ APPLE_EPOCH = 978307200  # Core Data usa 2001-01-01 como epoch
 # El unico pedazo de esto que es especifico del sistema es DONDE deja WhatsApp su base.
 # Aislarlo aca hace que sumar Windows sea agregar una entrada, no reescribir la
 # herramienta: todo lo de abajo trabaja contra `base` y `media_base`.
+# WhatsApp personal y WhatsApp Business son dos apps con su propio contenedor. Quien
+# usa Business no tiene nada en el de personal, y mirar solo uno dejaba el panel
+# buscando para siempre sin decir por que.
+CONTENEDORES_DARWIN = (
+    ("group.net.whatsapp.WhatsApp.shared", "WhatsApp Desktop"),
+    ("group.net.whatsapp.WhatsAppSMB.shared", "WhatsApp Business Desktop"),
+)
+
+
 def _darwin():
-    root = os.path.expanduser(
-        "~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared")
+    base = os.path.expanduser("~/Library/Group Containers")
+    candidatos = []
+    for carpeta, nombre in CONTENEDORES_DARWIN:
+        root = os.path.join(base, carpeta)
+        db = os.path.join(root, "ChatStorage.sqlite")
+        if os.path.exists(db):
+            candidatos.append((os.path.getmtime(db), root, db, nombre))
+    if candidatos:
+        # Si estan las dos, gana la que se uso mas recientemente.
+        _, root, db, nombre = max(candidatos)
+        return {"root": root, "db": db, "media": os.path.join(root, "Message"),
+                "verified": True, "app": nombre}
+    # Ninguna tiene base: se devuelve la de personal para que el doctor hable de una
+    # ruta concreta en vez de una vacia.
+    root = os.path.join(base, CONTENEDORES_DARWIN[0][0])
     return {"root": root, "db": os.path.join(root, "ChatStorage.sqlite"),
             "media": os.path.join(root, "Message"), "verified": True,
-            "app": "WhatsApp Desktop (Mac App Store)"}
+            "app": "WhatsApp Desktop o WhatsApp Business Desktop"}
 
 
 def _windows():
