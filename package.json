@@ -4,7 +4,7 @@
   "description": "Arnes de verificacion del plugin WhatsApp Inbox: paneles, prompts y CLIs.",
   "scripts": {
     "setup": "npm --prefix ../.orca-wa-inbox-deps install",
-    "check": "scripts/check-panels && scripts/check-prompts && scripts/check-harness && scripts/check-clis && scripts/check-closing && node test/panels.test.mjs && node test/worker.test.mjs && npm run shots",
+    "check": "scripts/check-panels && scripts/check-prompts && scripts/check-harness && scripts/check-clis && scripts/check-closing && node test/manifest.test.mjs && node test/panels.test.mjs && node test/worker.test.mjs && npm run shots",
     "shots": "node test/shots.mjs"
   }
 }
