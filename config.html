@@ -132,6 +132,12 @@
       .row2 { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
       .actions { display: flex; align-items: center; gap: 10px; margin-top: 14px;
                  min-height: 30px; flex-wrap: wrap; }
+      /* Una fila de acciones sin nada visible deja 44 px de aire entre dos campos
+         que van juntos. Se colapsa sola cuando no le quedan botones ni mensaje; si
+         el navegador no soporta :has() se queda como antes, sin romperse. */
+      .actions:not(:has(button:not([hidden]))):not(:has(.said:not(:empty))) {
+        display: none;
+      }
       /* La allowlist no trae color de exito, y no se inventa uno: el ✓ y el peso
          cargan la confirmacion. El fallo si tiene token, --destructive. */
       .said { font-size: 12px; font-weight: 500;
