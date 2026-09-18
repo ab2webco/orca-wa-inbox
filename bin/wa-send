@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
-"""wa-send — escribe (y opcionalmente envia) un mensaje en WhatsApp Desktop.
+"""wa-send — writes (and optionally sends) a message in WhatsApp Desktop.
 
-  wa-send "<chat>" "texto"          -> deja el texto SIN enviar
-  wa-send "<chat>" "texto" --send    -> lo envia
-  wa-send "<chat>" "texto" --open ui -> fuerza la via de apertura
+  wa-send "<chat>" "text"            -> leaves the text WITHOUT sending it
+  wa-send "<chat>" "text" --send     -> sends it
+  wa-send "<chat>" "text" --open ui  -> forces the way the chat is opened
 
-Por defecto NO envia: deja el chat abierto con el texto escrito para que lo revises
-y presiones Enter vos. --send es opt-in explicito.
+By default it does NOT send: it leaves the chat open with the text written so that you
+review it and press Enter yourself. --send is an explicit opt-in.
 
-Maneja la UI real de la app via accesibilidad (orca computer). No usa librerias no
-oficiales ni vincula un dispositivo nuevo a la cuenta.
+It drives the app's real UI through accessibility (orca computer). It uses no
+unofficial libraries and links no new device to the account.
 
-Para ABRIR el chat hay dos vias y la herramienta dice cual uso:
-  url  el esquema whatsapp:// lleva directo a la conversacion. Solo sirve para chats
-       directos con telefono: es lo unico que el esquema sabe direccionar.
-  ui   recorre la lista lateral. Es el camino de siempre y el unico que sirve para
-       grupos, que es donde vive casi todo el trabajo de este plugin.
-Escribir sigue siendo accesibilidad en los dos casos, y en los dos casos se verifica
-que el chat abierto sea el pedido antes de tocar el teclado.
+There are two ways to OPEN the chat, and the tool reports which one it used:
+  url  the whatsapp:// scheme goes straight to the conversation. It only works for
+       direct chats with a phone number: that is all the scheme can address.
+  ui   walks the sidebar list. It is the usual path and the only one that works for
+       groups, which is where almost all of this plugin's work lives.
+Writing is accessibility either way, and either way the open chat is verified to be
+the requested one before a key is pressed.
 """
 import argparse, json, os, re, subprocess, sys, time
 
@@ -58,11 +58,11 @@ def orca(*args, ok_fail=False):
     if p.returncode != 0:
         if ok_fail:
             return None
-        sys.exit(f"orca fallo: {p.stderr.strip() or p.stdout.strip()}")
+        sys.exit(f"orca failed: {p.stderr.strip() or p.stdout.strip()}")
     try:
         d = json.loads(p.stdout)
     except json.JSONDecodeError:
-        sys.exit(f"orca devolvio algo que no es JSON: {p.stdout[:300]}")
+        sys.exit(f"orca returned something that is not JSON: {p.stdout[:300]}")
     return d.get("result", d)
 
 
@@ -302,7 +302,7 @@ def walk_to_chat(tree, target):
     if idx is None:
         listing, _ = find(tree, r"Lista de chats")
         if listing is None:
-            sys.exit("no encontre la lista de chats en la UI")
+            sys.exit("could not find the chat list in the UI")
         for _ in range(SCROLL_TRIES):
             orca("scroll", "--app", APP, "--element-index", str(listing),
                  "--direction", "down")
@@ -316,7 +316,7 @@ def walk_to_chat(tree, target):
                 break
 
     if idx is None:
-        sys.exit(f"no encontre el chat {target!r}; abrilo a mano una vez y reintenta")
+        sys.exit(f"could not find the chat {target!r}; open it by hand once and retry")
 
     orca("click", "--app", APP, "--element-index", str(idx))
     time.sleep(1.4)
@@ -333,12 +333,12 @@ def open_chat(target, phone=None, modo="auto"):
     """
     tree, aviso = wait_no_alert()
     if not tree:
-        sys.exit("no pude leer la ventana de WhatsApp (esta abierta?)")
+        sys.exit("could not read the WhatsApp window (is it open?)")
     # Un aviso previo —de otra corrida o de la persona— tapa la ventana entera. Se corta
     # aca: sin esto el recorrido camina un arbol vacio y el fallo no explica nada.
     if aviso:
-        sys.exit(f"WhatsApp tiene un aviso abierto que tapa la ventana: {aviso} "
-                 f"— cerralo en la app y reintenta")
+        sys.exit(f"WhatsApp has an alert open that covers the window: {aviso} "
+                 f"— close it in the app and retry")
 
     if (cur := current_chat(tree)) and cur.lower() == target.lower():
         return tree, cur, "ya-abierto"
@@ -350,42 +350,42 @@ def open_chat(target, phone=None, modo="auto"):
         # Forzar una via y que la herramienta se pase a la otra en silencio dejaria el
         # flag sin valor para diagnosticar: si se pidio url y url no fue, se dice.
         if modo == "url":
-            sys.exit(f"--open url no logro abrir {target!r} — reintenta sin forzar la via")
+            sys.exit(f"--open url could not open {target!r} — retry without forcing the way")
         tree, aviso = wait_no_alert()
         if aviso:
-            sys.exit(f"WhatsApp tiene un aviso abierto que tapa la ventana: {aviso} "
-                     f"— cerralo en la app y reintenta")
+            sys.exit(f"WhatsApp has an alert open that covers the window: {aviso} "
+                     f"— close it in the app and retry")
         tree = walk_to_chat(tree, target)
         via = "ui"
 
     cur = current_chat(tree)
     if not cur or cur.strip().lower() != target.strip().lower():
-        sys.exit(f"abri {cur!r} pero pediste {target!r} — abortado sin escribir nada "
-                 f"(via {via})")
+        sys.exit(f"opened {cur!r} but you asked for {target!r} — aborted without writing "
+                 f"anything (via {via})")
     return tree, cur, via
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("chat", help="nombre exacto del chat o grupo")
-    ap.add_argument("text", help="el mensaje")
+    ap.add_argument("chat", help="exact name of the chat or group")
+    ap.add_argument("text", help="the message")
     ap.add_argument("--send", action="store_true",
-                    help="ademas de escribirlo, lo envia (por defecto solo lo deja escrito)")
+                    help="besides writing it, send it (by default it is only written)")
     ap.add_argument("--raw", action="store_true",
-                    help="no firmar: el mensaje sale tal cual, sin la firma del agente")
+                    help="do not sign: the message goes out as is, without the agent signature")
     ap.add_argument("--open", dest="via", choices=("auto", "url", "ui"), default="auto",
-                    help="como abrir el chat: url (esquema whatsapp://, solo chats "
-                         "directos), ui (recorre la lista lateral, sirve para todo) o "
-                         "auto (url cuando se puede, si no ui). Por defecto auto.")
+                    help="how to open the chat: url (whatsapp:// scheme, direct chats "
+                         "only), ui (walks the sidebar list, works for everything) or "
+                         "auto (url when possible, ui otherwise). Default auto.")
     a = ap.parse_args()
     # Todo mensaje del agente va firmado, para que nunca haya duda de si escribe la
     # persona o su agente. --raw es la excepcion, para cuando escribe ella.
     sig = signature()
     if not a.raw:
         if not sig:
-            sys.exit("no hay nombre de agente configurado. Fijalo con "
-                     "`wa-scope agent \"<nombre>\"`, o usa --raw para escribir sin firma.")
+            sys.exit("no agent name is configured. Set it with "
+                     "`wa-scope agent \"<name>\"`, or use --raw to write unsigned.")
         if not a.text.rstrip().endswith(sig):
             a.text = f"{a.text.rstrip()}\n{sig}"
 
@@ -393,21 +393,21 @@ def main():
     # grupo— tiene que fallar sin haber abierto ni movido nada en WhatsApp.
     phone = phone_of(chat_jid(a.chat)) if a.via in ("auto", "url") else None
     if a.via == "url" and not phone:
-        sys.exit(f"--open url no sirve para {a.chat!r}: el esquema whatsapp:// solo "
-                 f"direcciona telefonos, y esto no resolvio a un chat directo. "
-                 f"Usa --open ui (o auto).")
+        sys.exit(f"--open url does not work for {a.chat!r}: the whatsapp:// scheme only "
+                 f"addresses phone numbers, and this did not resolve to a direct chat. "
+                 f"Use --open ui (or auto).")
 
     tree, cur, via = open_chat(a.chat, phone, a.via)
 
     idx, _ = find(tree, r"Escribir mensaje|Type a message")
     if idx is None:
-        sys.exit("no encontre el campo de escribir mensaje")
+        sys.exit("could not find the message input field")
     orca("set-value", "--app", APP, "--element-index", str(idx), "--value", a.text)
     time.sleep(0.4)
 
     if not a.send:
-        print(f"BORRADOR en {cur!r} (via {via}): {a.text}\n(no enviado — repeti con "
-              f"--send, o presiona Enter en la app)")
+        print(f"DRAFT in {cur!r} (via {via}): {a.text}\n(not sent — repeat with "
+              f"--send, or press Enter in the app)")
         return
 
     # Enter necesita la ventana enfocada; set-value no. Si no lo esta, la traemos al frente.
@@ -417,10 +417,10 @@ def main():
         orca("press-key", "--app", APP, "--key", "Return")
     time.sleep(0.8)
     if a.text[:40] in state():
-        print(f"ENVIADO a {cur!r} (via {via}): {a.text}")
+        print(f"SENT to {cur!r} (via {via}): {a.text}")
     else:
-        print(f"Enter presionado en {cur!r} (via {via}), pero no vi el mensaje en el "
-              f"chat. Verifica en la app.", file=sys.stderr)
+        print(f"Enter pressed in {cur!r} (via {via}), but the message was not visible in "
+              f"the chat. Check in the app.", file=sys.stderr)
         sys.exit(1)
 
 

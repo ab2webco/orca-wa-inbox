@@ -1,10 +1,26 @@
 #!/usr/bin/env python3
-"""Los prompts no pueden tener voseo.
+"""Lo que le llega al cliente esta en espanol neutro, sin voseo.
 
-Existe porque ya se colo dos veces: se limpio triage.md y take.md quedo con
-"Sos", "Filtrá", "Acusá". El agente le escribe a clientes en Colombia, y un
-"tenes que" en el prompt se filtra al mensaje que sale.
+Antes este chequeo era "los prompts no pueden tener voseo", y alcanzaba porque los
+prompts estaban en espanol y el agente copiaba su acento. Ahora los prompts estan en
+ingles, asi que buscar voseo solo en ellos seria un chequeo que ya no protege nada.
+
+Lo que hay que proteger es lo mismo de siempre: el agente le escribe a clientes en
+Colombia, y un "tenes que" en el mensaje que sale es el defecto. Eso vive hoy en tres
+lugares, y los tres se revisan:
+
+  1. El tono por defecto (`wa-scope config tone`), que es lo que gobierna TODO lo que
+     el agente escribe. Si deja de decir "sin voseo", el guardia desaparecio.
+  2. El texto de cierre que arma la herramienta (`closing_text`), que sale al chat tal
+     cual y no lo redacta el agente.
+  3. El espanol que queda en los prompts: las plantillas de mensaje que el agente copia.
+
+Y ademas se comprueba que los prompts sigan ordenando obedecer ese tono. Un prompt en
+ingles que no lo diga deja al agente eligiendo idioma, que es como un cliente
+colombiano recibe una respuesta en ingles.
 """
+import importlib.machinery
+import importlib.util
 import pathlib
 import re
 import sys
@@ -25,25 +41,94 @@ PERMITIDAS = {"aqui", "asi", "ahi", "alli", "tambien", "quiza", "esta", "sera",
               "segun", "porque", "que", "si", "no", "mas", "solo", "ya"}
 
 
+def voseo(texto: str, origen: str) -> list:
+    """Las lineas con voseo de un texto cualquiera, ya rotuladas con su origen."""
+    fallos = []
+    for n, linea in enumerate(texto.splitlines(), 1):
+        for patron, motivo in PATRONES:
+            for m in re.finditer(patron, linea, re.IGNORECASE):
+                if m.group(0).lower().strip("áéíóú") in PERMITIDAS:
+                    continue
+                if m.group(0).lower() in PERMITIDAS:
+                    continue
+                fallos.append(f"{origen}:{n}  {m.group(0)}  ({motivo})")
+    return fallos
+
+
+def wa_scope():
+    """Se importa el CLI en vez de copiar sus textos aca: lo que se comprueba tiene
+    que ser el codigo que corre, no una copia que se desincroniza en la primera
+    edicion. Importar no abre ninguna base: DB solo arma la ruta."""
+    ruta = str(RAIZ / "bin" / "wa-scope")
+    sys.dont_write_bytecode = True
+    spec = importlib.util.spec_from_loader(
+        "wa_scope", importlib.machinery.SourceFileLoader("wa_scope", ruta))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def main() -> int:
     fallos = []
-    for ruta in sorted((RAIZ / "prompts").glob("*.md")):
-        for n, linea in enumerate(ruta.read_text(encoding="utf-8").splitlines(), 1):
-            for patron, motivo in PATRONES:
-                for m in re.finditer(patron, linea, re.IGNORECASE):
-                    if m.group(0).lower().strip("áéíóú") in PERMITIDAS:
-                        continue
-                    if m.group(0).lower() in PERMITIDAS:
-                        continue
-                    fallos.append(f"{ruta.relative_to(RAIZ)}:{n}  {m.group(0)}  ({motivo})")
+    comprobaciones = 0
+
+    # ── 1 y 2. Lo que sale al cliente lo arma el CLI, no el prompt.
+    try:
+        wa = wa_scope()
+    except Exception as error:            # noqa: BLE001 - el motivo va en el reporte
+        print(f"no se pudo importar wa-scope: {error}", file=sys.stderr)
+        return 1
+
+    tono = wa.DEFAULT_CONFIG["tone"]
+    comprobaciones += 1
+    fallos += voseo(tono, "bin/wa-scope DEFAULT_CONFIG['tone']")
+
+    # El tono por defecto es el unico guardia que viaja con el plugin: si deja de
+    # prohibir el voseo, nada mas lo prohibe.
+    comprobaciones += 1
+    if "sin voseo" not in tono.lower():
+        fallos.append("bin/wa-scope DEFAULT_CONFIG['tone']  ya no dice 'sin voseo'")
+    comprobaciones += 1
+    if "espanol" not in tono.lower() and "español" not in tono.lower():
+        fallos.append("bin/wa-scope DEFAULT_CONFIG['tone']  ya no fija el espanol como "
+                      "idioma de salida")
+
+    # El mensaje de cierre sale al chat tal cual: no lo redacta el agente y no se
+    # traduce. Se ejercitan los dos finales, que dicen cosas distintas a proposito.
+    for grupo in ("completed", "cancelled"):
+        texto = wa.closing_text(grupo, "SOP-1", title="Reporte en blanco")
+        comprobaciones += 1
+        fallos += voseo(texto, f"bin/wa-scope closing_text({grupo})")
+
+    # ── 3. El espanol que queda en los prompts: las plantillas que el agente copia.
+    prompts = sorted((RAIZ / "prompts").glob("*.md"))
+    if not prompts:
+        fallos.append("prompts/  no hay ningun prompt que revisar")
+    for ruta in prompts:
+        cuerpo = ruta.read_text(encoding="utf-8")
+        comprobaciones += 1
+        fallos += voseo(cuerpo, str(ruta.relative_to(RAIZ)))
+
+        # ── 4. El prompt tiene que seguir mandando obedecer el tono configurado. Sin
+        # esta linea, un prompt en ingles deja al agente eligiendo el idioma de salida.
+        comprobaciones += 2
+        if "wa-scope\" voice" not in cuerpo and "wa-scope voice" not in cuerpo:
+            fallos.append(f"{ruta.relative_to(RAIZ)}  ya no consulta `wa-scope voice`: "
+                          f"sin eso el agente no sabe con que tono escribir")
+        if not re.search(r"tone.{0,80}letter", cuerpo, re.S | re.I):
+            fallos.append(f"{ruta.relative_to(RAIZ)}  ya no ordena obedecer `tone` al "
+                          f"pie de la letra")
+
     if fallos:
-        print("Voseo en los prompts:", file=sys.stderr)
+        print("El agente le escribe a clientes en Colombia, y esto lo rompe:",
+              file=sys.stderr)
         for f in dict.fromkeys(fallos):
             print(f"  {f}", file=sys.stderr)
-        print("\nEl agente escribe a clientes en Colombia. Espanol neutro, sin voseo.",
-              file=sys.stderr)
+        print("\nEspanol neutro, sin voseo, y el tono configurado manda sobre el "
+              "idioma del prompt.", file=sys.stderr)
         return 1
-    print("prompts sin voseo")
+    print(f"{comprobaciones} comprobaciones: lo que sale al cliente es espanol neutro "
+          f"sin voseo, y el tono configurado manda")
     return 0
 
 

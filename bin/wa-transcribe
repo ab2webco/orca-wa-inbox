@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""wa-transcribe — pasa una nota de voz a texto, sin depender de nada de Orca.
+"""wa-transcribe — turns a voice note into text, depending on nothing from Orca.
 
-  wa-transcribe <archivo.opus>          transcribe
-  wa-transcribe --check                 dice si este equipo puede transcribir
+  wa-transcribe <file.opus>          transcribes
+  wa-transcribe --check              says whether this machine can transcribe
 
-Todo vive en el plugin: esta herramienta viaja con el, y el motor se busca en el
-equipo del usuario. **No descarga nada por su cuenta**: si falta el modelo, lo dice y
-explica como instalarlo. Un plugin que se baja pesos de internet en silencio es lo
-contrario de lo que promete su ficha de permisos.
+Everything lives in the plugin: this tool ships with it, and the engine is looked up
+on the user's machine. **It downloads nothing on its own**: when the model is missing
+it says so and explains how to install it. A plugin that silently pulls weights off
+the internet is the opposite of what its permission sheet promises.
 
-Los motores se prueban en orden. El primero que este, gana.
+Engines are tried in order. The first one present wins.
 """
 import argparse, json, os, shlex, shutil, subprocess, sys, tempfile
 
@@ -64,13 +64,13 @@ def setting(key, fallback):
 def a_wav(origen):
     """Los motores quieren PCM 16 kHz mono; WhatsApp guarda opus."""
     if not shutil.which("ffmpeg"):
-        return None, "falta ffmpeg (brew install ffmpeg)"
+        return None, "ffmpeg is missing (brew install ffmpeg)"
     destino = os.path.join(tempfile.mkdtemp(prefix="wa-tx."), "audio.wav")
     p = subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-i", origen,
                         "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", destino],
                        capture_output=True, text=True)
     if p.returncode != 0 or not os.path.exists(destino):
-        return None, f"ffmpeg fallo: {p.stderr.strip()[:200]}"
+        return None, f"ffmpeg failed: {p.stderr.strip()[:200]}"
     return destino, None
 
 
@@ -204,20 +204,23 @@ def por_orca(origen):
         # Cada codigo se arregla distinto; un mensaje generico no le sirve a nadie.
         acciones = {
             "voice_not_configured":
-                f"Ajustes -> Voz en Orca, y baja {d.get('recommendedModelId', 'el modelo recomendado')}",
+                f"Settings -> Voice in Orca, and download "
+                f"{d.get('recommendedModelId', 'the recommended model')}",
             "model_not_downloaded":
                 f"orca speech models download {d.get('modelId', '')}".strip(),
             "model_language_mismatch":
-                "el modelo elegido no cubre ese idioma: usa el multilingue en Ajustes -> Voz",
+                "the chosen model does not cover that language: use the multilingual "
+                "one in Settings -> Voice",
             "decoder_missing": "brew install ffmpeg",
-            "audio_too_long": "el audio es mas largo que el tope; escuchalo a mano",
-            "file_too_large": "el archivo excede el tope; escuchalo a mano",
-            "speech_busy": "la voz esta ocupada, reintenta en un momento",
+            "audio_too_long": "the audio is longer than the cap; listen to it by hand",
+            "file_too_large": "the file exceeds the cap; listen to it by hand",
+            "speech_busy": "speech is busy, retry in a moment",
         }
         pasos = d.get("nextSteps")
         return {"ok": False, "codigo": err["code"], "razon": err.get("message"),
                 "como": acciones.get(err["code"]) or
-                        (pasos[0] if isinstance(pasos, list) and pasos else "Ajustes -> Voz en Orca"),
+                        (pasos[0] if isinstance(pasos, list) and pasos
+                         else "Settings -> Voice in Orca"),
                 "detalle": {k: v for k, v in d.items()
                             if k in ("modelId", "recommendedModelId", "requestedLanguage")}}
     return None
@@ -244,7 +247,7 @@ def motores():
 def con_whisper_cpp(exe, wav, nombre):
     pesos = modelo_local(nombre)
     if not pesos:
-        return None, (f"falta el modelo '{nombre}'. Bajalo una vez con: "
+        return None, (f"the model '{nombre}' is missing. Download it once with: "
                       f"whisper-cpp --model {nombre} --help  (o ponelo en "
                       f"~/.cache/whisper/ggml-{nombre}.bin)")
     p = subprocess.run([exe, "-m", pesos, "-f", wav, "-l", idioma(), "-nt", "-np"],
@@ -280,7 +283,7 @@ def con_openai_whisper(exe, wav, nombre):
     txt = next((os.path.join(carpeta, f) for f in os.listdir(carpeta)
                 if f.endswith(".txt")), None)
     if not txt:
-        return None, "no genero salida"
+        return None, "produced no output"
     with open(txt, encoding="utf-8") as fh:
         return " ".join(fh.read().split()), None
 
@@ -288,17 +291,17 @@ def con_openai_whisper(exe, wav, nombre):
 def transcribir(origen):
     modo = setting("transcribe", "local")
     if modo == "off":
-        return {"ok": False, "razon": "la transcripcion esta apagada",
+        return {"ok": False, "razon": "transcription is turned off",
                 "como": "wa-scope config transcribe local"}
     if modo == "api":
-        return {"ok": False, "razon": "el modo api todavia no esta implementado",
-                "como": "usa 'local', que no manda el audio a ningun lado"}
+        return {"ok": False, "razon": "the api mode is not implemented yet",
+                "como": "use 'local', which sends the audio nowhere"}
     # El modelo local sale de la calidad elegida, salvo que se fije uno a mano.
     nombre = setting("transcribe_model", "") or calidad()["local"]
     if nombre in SOLO_INGLES:
         return {"ok": False, "codigo": "modelo_solo_ingles",
-                "razon": f"el modelo '{nombre}' solo entiende ingles y los audios "
-                         "mezclan espanol e ingles",
+                "razon": f"the model '{nombre}' only understands English and the audio "
+                         "mixes Spanish and English",
                 "como": "wa-scope config transcribe_model base"}
     # 1) Orca, si sabe. 2) lo que haya en el equipo.
     v = por_orca(origen)
@@ -307,8 +310,8 @@ def transcribir(origen):
     disponibles = motores()
     if not disponibles:
         return {"ok": False, "codigo": "sin_motor",
-                "razon": "no hay motor de transcripcion disponible",
-                "como": "Activa la voz en Ajustes -> Voz de Orca, o instala uno: "
+                "razon": "no transcription engine is available",
+                "como": "Turn voice on in Orca's Settings -> Voice, or install one: "
                         "brew install whisper-cpp"}
     wav, err = a_wav(origen)
     if err:
@@ -324,7 +327,7 @@ def transcribir(origen):
             return {"ok": True, "motor": motor, "modelo": nombre, "texto": texto,
                      "local": True}
         ultimo = err
-    return {"ok": False, "razon": f"ningun motor pudo: {ultimo}"}
+    return {"ok": False, "razon": f"no engine could do it: {ultimo}"}
 
 
 def main():
@@ -332,7 +335,7 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("audio", nargs="?")
     ap.add_argument("--check", action="store_true",
-                    help="dice si este equipo puede transcribir, sin transcribir nada")
+                    help="says whether this machine can transcribe, without transcribing")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
 
@@ -359,9 +362,9 @@ def main():
         sys.exit(0 if info["puede"] else 1)
 
     if not a.audio:
-        ap.error("falta el archivo de audio (o usa --check)")
+        ap.error("the audio file is missing (or use --check)")
     if not os.path.exists(a.audio):
-        sys.exit(f"no existe: {a.audio}")
+        sys.exit(f"does not exist: {a.audio}")
     r = transcribir(a.audio)
     if a.json:
         print(json.dumps(r, ensure_ascii=False, indent=2))

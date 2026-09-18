@@ -94,8 +94,12 @@ console.log('\nworker: el sync que falla lo dice')
     e && e.reason === 'sin-herramientas', `reason = ${e && e.reason}`)
   ok('guarda la causa real, no solo que fallo',
     e && /ENOENT/.test(e.detail || ''), `detail = ${e && e.detail}`)
+  // El log del worker es para quien depura, no para el usuario: va en ingles como el
+  // resto de lo que no se puede traducir. Lo que se comprueba es que el motivo quede
+  // escrito, no en que idioma.
   ok('deja rastro en el log del plugin',
-    orca.logs.some((l) => l.includes('sync fallo')), JSON.stringify(orca.logs))
+    orca.logs.some((l) => l.includes('sync failed') && l.includes('sin-herramientas')),
+    JSON.stringify(orca.logs))
   apagar()
 }
 

@@ -30,6 +30,17 @@ const SALIDA = join(RAIZ, 'docs', 'capturas')
 
 const ANCHOS = [1440, 768, 390, 320]
 
+// El panel saca el idioma de navigator.language, asi que el idioma de la captura es el
+// locale del contexto. Se fotografia en espanol y en ingles porque el defecto que esto
+// tiene que delatar es media pantalla en el idioma equivocado: el CLI habla ingles y
+// manda codigos, y si el panel no los traduce se ve — pero solo si alguien mira el
+// panel en el otro idioma. En ingles bastan los dos extremos: la composicion no cambia
+// con el idioma, lo que cambia es el texto.
+const IDIOMAS = [
+  { tag: 'es', locale: 'es-419', anchos: ANCHOS },
+  { tag: 'en', locale: 'en-US', anchos: [1440, 320] }
+]
+
 // El host no deja que el panel vea su documento: le inyecta esta lista corta de
 // tokens en el <style> del shell (PANEL_DESIGN_TOKEN_ALLOWLIST en orca-oss,
 // src/shared/plugins/plugin-panel-shell.ts:34). Sin inyectarlos aca se fotografian
@@ -69,7 +80,18 @@ const DATOS = {
   inboxDays: '7',
   transcribe: 'local',
   transcribeLang: 'auto',
-  health: { ok: true, optional: [] },
+  // Los requisitos opcionales que faltan: es texto que produce el CLI en ingles y que
+  // el panel dice en el idioma del usuario. Van en la captura justamente para que se
+  // vea si alguno se cuela sin traducir.
+  health: {
+    ok: true,
+    optional: [{
+      que: 'audio transcription', code: 'transcribe',
+      como: 'no engine: download the model in Settings > Voice, or install a local one ' +
+        'with brew install whisper-cpp',
+      howCode: 'transcribe-no-engine'
+    }]
+  },
   chats: [
     { jid: '120363000000000001@g.us', name: 'Soporte — Cliente Norte' },
     { jid: '120363000000000002@g.us', name: 'Operaciones internas' },
@@ -118,7 +140,7 @@ const DATOS = {
       },
       {
         stanzaId: 'AAA2', date: '2026-09-17 13:12', chat: 'Operaciones internas',
-        chatJid: '120363000000000002@g.us', sender: 'Laura Mendez', kind: 'audio',
+        chatJid: '120363000000000002@g.us', sender: 'Laura Mendez', kind: 'respuesta',
         text: 'Nota de voz (0:36) transcrita: pide el acceso al tablero de Andes.',
         hasMedia: true, decision: null
       },
@@ -133,18 +155,21 @@ const DATOS = {
       // Los tres finales del aviso de cierre: el que salio, el que no salio por
       // permiso y el que no se pudo mandar. El del permiso es el que solo se ve aca:
       // en el chat, por definicion, no queda nada.
+      // `detail` es lo que anoto quien hizo la accion: el agente en sus palabras, o
+      // nada cuando el codigo de la accion ya lo dice todo. Lo que se ve traducido es
+      // la accion, que es la etiqueta.
       { ts: '2026-09-17 13:52', chat: 'Soporte — Cliente Norte', action: 'closed',
-        issue: 'SOP-211', detail: 'cierre avisado en el chat' },
+        issue: 'SOP-211', detail: '' },
       { ts: '2026-09-17 13:44', chat: 'Proyecto Andes — QA', action: 'skipped',
-        issue: 'AND-18', detail: 'AND-18 en modo observar: no se escribe en Proyecto Andes — QA' },
+        issue: 'AND-18', detail: 'AND-18 · observar · Proyecto Andes — QA' },
       { ts: '2026-09-17 13:30', chat: 'Operaciones internas', action: 'failed',
-        issue: 'OPS-77', detail: 'no se pudo avisar el cierre: el grupo ya no existe' },
+        issue: 'OPS-77', detail: 'el grupo ya no existe' },
       { ts: '2026-09-17 13:05', chat: 'Soporte — Cliente Norte', action: 'issue',
-        issue: 'SOP-214', detail: 'Tarjeta abierta con el reporte en blanco' },
+        issue: 'SOP-214', detail: 'Reporte en blanco al exportar' },
       { ts: '2026-09-17 12:40', chat: 'Operaciones internas', action: 'draft',
-        issue: null, detail: 'Borrador dejado sin enviar, esperando revision' },
-      { ts: '2026-09-17 11:58', chat: 'Proyecto Andes — QA', action: 'skipped',
-        issue: null, detail: 'Solo observar: no se escribe en el chat' }
+        issue: null, detail: '' },
+      { ts: '2026-09-17 11:58', chat: 'Proyecto Andes — QA', action: 'denied',
+        issue: null, detail: 'responder · observar' }
     ]
   }
 }
@@ -213,12 +238,13 @@ async function main() {
   const problemas = []
   let tomadas = 0
 
-  for (const tema of TEMAS) {
-    for (const ancho of ANCHOS) {
+  for (const idioma of IDIOMAS) {
+   for (const tema of TEMAS) {
+    for (const ancho of idioma.anchos) {
       const contexto = await navegador.newContext({
         viewport: { width: ancho, height: 900 },
         colorScheme: tema,
-        locale: 'es-419',
+        locale: idioma.locale,
         deviceScaleFactor: 2
       })
       for (const panel of PANELES) {
@@ -233,10 +259,11 @@ async function main() {
           .map(([k, v]) => `${k}:${v}`).join(';')
         await pagina.addStyleTag({ content: `:root{${declaraciones};color-scheme:${tema}}` })
         // El panel pinta despues de resolver storage.get; sin esto se fotografia vacio.
+        const donde = `${panel.nombre} ${idioma.tag} ${tema} ${ancho}px`
         await pagina.waitForFunction(
           () => document.body && document.body.innerText.trim().length > 40,
           null, { timeout: 5000 }
-        ).catch(() => problemas.push(`${panel.nombre} ${tema} ${ancho}px: quedo vacio`))
+        ).catch(() => problemas.push(`${donde}: quedo vacio`))
 
         // Scroll horizontal = algo no cabe. Es exactamente el defecto que las
         // capturas tienen que delatar, asi que se mide, no se mira.
@@ -246,14 +273,14 @@ async function main() {
         }))
         if (desborde.scroll > desborde.ventana + 1) {
           problemas.push(
-            `${panel.nombre} ${tema} ${ancho}px: desborda a lo ancho ` +
+            `${donde}: desborda a lo ancho ` +
             `(${desborde.scroll} > ${desborde.ventana})`)
         }
         if (errores.length) {
-          problemas.push(`${panel.nombre} ${tema} ${ancho}px: error JS — ${errores[0]}`)
+          problemas.push(`${donde}: error JS — ${errores[0]}`)
         }
 
-        const nombre = `${panel.nombre}-${tema}-${ancho}.png`
+        const nombre = `${panel.nombre}-${idioma.tag}-${tema}-${ancho}.png`
         await pagina.screenshot({ path: join(SALIDA, nombre), fullPage: true })
         tomadas += 1
         console.log(`  ${nombre}`)
@@ -261,6 +288,7 @@ async function main() {
       }
       await contexto.close()
     }
+   }
   }
   await navegador.close()
 
