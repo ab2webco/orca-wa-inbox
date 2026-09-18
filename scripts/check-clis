@@ -17,6 +17,10 @@ BIN = RAIZ / "bin"
 CASOS = [
     ("wa-read", ["doctor", "--json"]),
     ("wa-scope", ["config", "--json"]),
+    # Con un nombre en vez de un JID, wa-scope tiene que preguntarle a wa-read.
+    # Ese camino llamaba a ~/tools/wa-read — una ruta fuera del plugin — y reventaba
+    # sin que ningun chequeo lo viera, porque los otros casos no lo recorren.
+    ("wa-scope", ["voice", "un-nombre-que-no-existe", "--json"]),
     ("wa-transcribe", ["--check", "--json"]),
     ("wa-send", ["--help"]),
 ]

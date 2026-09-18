@@ -414,7 +414,10 @@ def migrate(con):
 
 def wa_chats(query=None):
     """Pregunta a wa-read en vez de duplicar la logica de snapshot de la DB de WhatsApp."""
-    cmd = [os.path.expanduser("~/tools/wa-read"), "chats", "-n", "500", "--json"]
+    # Al lado, no en el home: la ruta vieja apuntaba a ~/tools y quedo colgando al
+    # mover el arbol. Un plugin busca sus herramientas dentro de si mismo.
+    wa_read = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wa-read")
+    cmd = [wa_read, "chats", "-n", "500", "--json"]
     if query:
         cmd += ["--query", query]
     p = subprocess.run(cmd, capture_output=True, text=True)
