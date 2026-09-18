@@ -1,0 +1,752 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <title>WhatsApp Inbox</title>
+    <style>
+      :root { color-scheme: dark light; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; padding: 16px 16px 40px;
+        font-family: system-ui, -apple-system, sans-serif; font-size: 13px;
+        color: var(--foreground, #ddd); background: var(--background, transparent);
+      }
+      .wrap { max-width: 760px; }
+      h1 { font-size: 14px; font-weight: 600; margin: 0 0 2px; letter-spacing: -0.01em; }
+      .sub { color: var(--muted-foreground, #999); margin: 0 0 16px; font-size: 12px; }
+      section { border: 1px solid var(--border, #3a3a3a); border-radius: 10px;
+                padding: 14px 16px 16px; margin: 0 0 14px; }
+      h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+           color: var(--muted-foreground, #999); margin: 0 0 10px; font-weight: 500; }
+      label { display: block; font-size: 12px; margin: 10px 0 4px;
+              color: var(--muted-foreground, #aaa); }
+      label:first-of-type { margin-top: 0; }
+      textarea {
+        font: inherit; width: 100%; padding: 7px 9px; border-radius: 7px; resize: vertical;
+        border: 1px solid var(--border, #555); background: var(--secondary, #222);
+        color: var(--foreground, #ddd);
+      }
+      textarea:focus-visible { outline: 2px solid var(--ring, #7aa2f7); outline-offset: 1px; }
+      input, select {
+        font: inherit; width: 100%; padding: 7px 9px; border-radius: 7px;
+        border: 1px solid var(--border, #555); background: var(--secondary, #222);
+        color: var(--foreground, #ddd);
+      }
+      input:disabled { opacity: 1; color: var(--foreground, #ddd);
+                       border-color: transparent; background: var(--muted, #1c1c1c); }
+      input:focus-visible, select:focus-visible {
+        outline: 2px solid var(--ring, #7aa2f7); outline-offset: 1px; border-color: transparent;
+      }
+      button {
+        font: inherit; font-weight: 500; padding: 7px 14px; border-radius: 7px; cursor: pointer;
+        border: 1px solid var(--border, #555); background: var(--secondary, #222);
+        color: var(--foreground, #ddd);
+        transition: filter 90ms ease, border-color 90ms ease, transform 60ms ease;
+      }
+      button:hover { border-color: var(--ring, #777); }
+      button:active { transform: translateY(1px); filter: brightness(0.9); }
+      button:focus-visible { outline: 2px solid var(--ring, #7aa2f7); outline-offset: 1px; }
+      button[disabled] { opacity: 0.5; cursor: default; transform: none; }
+      button.primary { background: var(--primary, #3b6ef5); color: var(--primary-foreground, #fff);
+                       border-color: transparent; }
+      /* Subrayado siempre, no solo en hover: en tema claro --primary es casi negro,
+         asi que sin subrayar Editar/Quitar no se leen como algo clickeable. */
+      button.link { border: 0; background: none; padding: 0; margin-left: 10px;
+                    color: var(--primary, #7aa2f7); font-size: 11px; font-weight: 400;
+                    text-decoration: underline; text-underline-offset: 2px; }
+      button.link:hover { text-decoration-thickness: 2px; }
+      .row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+      .row2 { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
+      .actions { display: flex; align-items: center; gap: 10px; margin-top: 14px;
+                 min-height: 30px; flex-wrap: wrap; }
+      .said { font-size: 12px; color: #7fc98a; }
+      .said.bad { color: #e08080; }
+      table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 4px; }
+      th { text-align: left; font-weight: 500; color: var(--muted-foreground, #999);
+           padding: 5px 8px 5px 0; border-bottom: 1px solid var(--border, #3a3a3a); }
+      td { padding: 7px 8px 7px 0; border-bottom: 1px solid var(--border, #2c2c2c);
+           vertical-align: top; }
+      td.acts { text-align: right; white-space: nowrap; }
+      /* A 320 px una tabla de 4 columnas no cabe, y partir palabra deja pastillas que
+         dicen "respon der". Debajo de 420 px cada fila pasa a ser un bloque: el valor
+         se describe solo, asi que la cabecera no hace falta. */
+      @media (max-width: 420px) {
+        table, tbody, tr, td { display: block; width: 100%; }
+        thead { display: none; }
+        tr { border-bottom: 1px solid var(--border, #2c2c2c); padding: 8px 0; }
+        td { border: 0; padding: 1px 0; }
+        td.acts { text-align: left; margin-top: 6px; }
+        .row { grid-template-columns: 1fr; }
+      }
+      .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px;
+              border: 1px solid var(--border, #555); }
+      .pill.off { opacity: 0.5; }
+      .pill.observar { border-color: #4a7fb5; color: #7fb3e0; }
+      .pill.borrador { border-color: #b58a4a; color: #e0b87f; }
+      .pill.responder { border-color: #b54a4a; color: #e08080; }
+      .empty { color: var(--muted-foreground, #888); font-size: 12px; padding: 10px 0; }
+      .hint { color: var(--muted-foreground, #888); font-size: 11px; margin: 6px 0 0;
+              line-height: 1.5; }
+      /* Un requisito opcional no es una alerta: no bloquea nada. Va en gris, con su
+         accion al lado, y desaparece cuando se resuelve. */
+      #opcionales[hidden] { display: none; }
+      #opcionales { margin: 0 0 14px; }
+      .opcional {
+        display: flex; gap: 8px; align-items: baseline; padding: 7px 0;
+        border-top: 1px solid var(--border, #2c2c2c); font-size: 12px;
+        color: var(--muted-foreground, #999);
+      }
+      .opcional:last-child { border-bottom: 1px solid var(--border, #2c2c2c); }
+      .opcional b { color: var(--foreground, #ddd); font-weight: 500; }
+      .opcional code { color: var(--primary, #7aa2f7); }
+      .alert[hidden] { display: none; }
+      .alert { display: flex; gap: 8px; align-items: baseline; border: 1px solid #7a4a4a;
+               border-radius: 8px; padding: 9px 11px; margin: 0 0 14px; font-size: 12px;
+               background: rgba(180, 74, 74, 0.08); }
+      code { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+      @media (max-width: 620px) { .row { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1 data-t="title"></h1>
+      <p class="sub" data-t="sub"></p>
+      <div class="alert" id="alert" hidden></div>
+      <div id="opcionales" hidden></div>
+
+      <section>
+        <h2 data-t="agentLegend"></h2>
+        <label for="agent" data-t="agentLabel"></label>
+        <div class="row2">
+          <input id="agent" data-t-ph="agentPh" />
+          <button id="edit-agent" hidden data-t-title="editName">&#9998;</button>
+        </div>
+        <p class="hint" data-t="agentHelp"></p>
+        <div class="actions">
+          <button class="primary" id="save-agent" data-t="saveName"></button>
+          <button id="cancel-agent" hidden data-t="cancel"></button>
+          <span class="said" id="said-agent"></span>
+        </div>
+
+        <label for="tone" data-t="toneLabel"></label>
+        <textarea id="tone" rows="3" data-t-ph="tonePh"></textarea>
+        <p class="hint" data-t="toneHelp"></p>
+        <div class="actions">
+          <button id="save-tone" data-t="saveTone"></button>
+          <span class="said" id="said-tone"></span>
+        </div>
+
+        <label for="quality" data-t="qualityLabel"></label>
+        <select id="quality">
+          <option value="optima" data-t="qualityOptima"></option>
+          <option value="minima" data-t="qualityMinima"></option>
+        </select>
+        <p class="hint" data-t="qualityHelp"></p>
+        <div class="actions">
+          <button id="save-quality" data-t="saveQuality"></button>
+          <span class="said" id="said-quality"></span>
+        </div>
+      </section>
+
+      <section>
+        <h2 data-t="mapLegend"></h2>
+        <label for="chat-pick" data-t="chatLabel"></label>
+        <select id="chat-pick"></select>
+        <p class="hint" data-t="chatHelp"></p>
+        <input id="chat" data-t-ph="chatPh" hidden />
+        <div class="row">
+          <div>
+            <label for="provider" data-t="providerLabel"></label>
+            <select id="provider">
+              <option value="plane">Plane</option>
+              <option value="linear">Linear</option>
+              <option value="github">GitHub Issues</option>
+            </select>
+          </div>
+          <div>
+            <label for="target" id="target-label"></label>
+            <input id="target" />
+          </div>
+          <div>
+            <label for="mode" data-t="permLabel"></label>
+            <select id="mode">
+              <option value="off" data-t="off"></option>
+              <option value="observar" data-t="observe"></option>
+              <option value="borrador" data-t="draft"></option>
+              <option value="responder" data-t="reply"></option>
+            </select>
+          </div>
+        </div>
+        <p class="hint" data-t="targetHint"></p>
+        <label for="chat-tone" data-t="chatToneLabel"></label>
+        <input id="chat-tone" data-t-ph="chatTonePh" />
+        <div class="actions">
+          <button class="primary" id="save-scope" data-t="save"></button>
+          <button id="cancel-edit" hidden data-t="cancelEdit"></button>
+          <span class="said" id="said-scope"></span>
+        </div>
+        <div id="scope-wrap"></div>
+      </section>
+
+      <section>
+        <h2 data-t="routesLegend"></h2>
+        <p class="hint" style="margin:0 0 10px" data-t="routesHelp"></p>
+        <div class="row">
+          <div>
+            <label for="r-match" data-t="routeMatch"></label>
+            <input id="r-match" data-t-ph="routeMatchPh" />
+          </div>
+          <div>
+            <label for="r-provider" data-t="providerLabel"></label>
+            <select id="r-provider">
+              <option value="plane">Plane</option>
+              <option value="linear">Linear</option>
+              <option value="github">GitHub Issues</option>
+            </select>
+          </div>
+          <div>
+            <label for="r-target" data-t="routeTarget"></label>
+            <input id="r-target" data-t-ph="routeTargetPh" />
+          </div>
+        </div>
+        <div class="actions">
+          <button id="save-route" data-t="addRoute"></button>
+          <span class="said" id="said-route"></span>
+        </div>
+        <div id="routes-wrap"></div>
+      </section>
+    </div>
+
+    <script>
+      'use strict'
+
+      // El shell del panel no inyecta el idioma: sale de navigator.language, que en el
+      // renderer de Electron refleja el del app.
+      var STRINGS = {
+        es: {
+          title: 'WhatsApp Inbox',
+          optionalTitle: "Opcional, se puede activar cuando quieras:",
+          toneLabel: "Como escribe",
+          tonePh: "ej. Espanol neutro, usted, formal. Sin modismos regionales.",
+          toneHelp: "Vale para todas las conversaciones. Cada una puede tener el suyo y pisa este.",
+          saveTone: "Guardar tono",
+          toneSaved: "Tono guardado",
+          qualityLabel: "Calidad de la transcripcion",
+          qualityOptima: "optima — recomendado",
+          qualityMinima: "minima — equipos sin computo",
+          qualityHelp: "Minima solo si el equipo no puede con el modelo grande: en " +
+            "español deforma nombres y pedidos, no decidas leyendo su texto.",
+          saveQuality: "Guardar calidad",
+          qualitySaved: "Calidad guardada",
+          chatHelp: "Se elige de la lista. Hay grupos con el mismo nombre, asi que se guarda por identificador.",
+          chatToneLabel: "Como escribe aca (opcional)",
+          chatTonePh: "vacio = usa el tono global",
+          pickOne: "Elegi una conversacion",
+          noChats: "Sin conversaciones. Corre ./bin/wa-scope sync.",
+          sub: 'Que conversaciones ve tu agente, y hasta donde puede actuar en cada una.',
+          agentLegend: 'Tu agente', agentLabel: 'Como se llama',
+          agentPh: 'ej. Alfred, Watson, Asistente',
+          agentHelp: 'Firma cada mensaje que escriba, para que nadie dude de si hablas vos o el.',
+          saveName: 'Guardar nombre', saveChange: 'Guardar cambio', cancel: 'Cancelar',
+          editName: 'Cambiar el nombre',
+          mapLegend: 'Conversaciones', chatLabel: 'Conversacion',
+          chatPh: 'nombre exacto del grupo o su JID',
+          providerLabel: 'Servicio de tareas', permLabel: 'Permiso',
+          targetPlane: 'Proyecto por defecto', targetLinear: 'Equipo por defecto',
+          targetGithub: 'Repositorio por defecto',
+          targetHint: 'El destino real lo decide el contenido del mensaje con las reglas de abajo. ' +
+            'Esto es solo el fallback cuando ninguna regla engancha. Dejalo vacio para que no ' +
+            'abra tarjeta si no reconoce el cliente.',
+          save: 'Guardar conversacion', saveEdit: 'Guardar cambios', cancelEdit: 'Cancelar edicion',
+          empty: 'Ninguna conversacion autorizada. Lo que no esta aca, tu agente no lo ve.',
+          colChat: 'Conversacion', colTarget: 'Por defecto', colPerm: 'Permiso',
+          edit: 'Editar', remove: 'Quitar',
+          routesLegend: 'A que proyecto va',
+          routesHelp: 'Un grupo de operaciones lleva trabajo de varios clientes. Cuando el mensaje ' +
+            'menciona a uno, la tarjeta va a SU proyecto, no al de la conversacion.',
+          routeMatch: 'Cuando el mensaje diga', routeMatchPh: 'ej. facturacion',
+          routeTarget: 'Va a', routeTargetPh: 'ej. FIN',
+          addRoute: 'Agregar regla', noRoutes: 'Sin reglas. Todo va al destino por defecto de cada conversacion.',
+          colWhen: 'Cuando diga', colGoes: 'Va a',
+          notReady: 'WhatsApp no esta conectado.',
+          notReadyHow: 'Corre <code>wa-read doctor</code> para ver que falta.',
+          needsUpdate: 'Esta version de Orca no deja guardar desde aca.',
+          needsUpdateHow: 'Actualiza Orca.',
+          needName: 'Poné un nombre.', needChat: 'Falta la conversacion.',
+          needMatch: 'Falta el texto y el destino.',
+          savedOk: 'Guardado', removedOk: 'Quitado', named: 'Se llama',
+          off: 'off — no la toca', observe: 'observar — abre tarjeta, no escribe',
+          draft: 'borrador — deja el texto sin enviar', reply: 'responder — envia'
+        },
+        en: {
+          title: 'WhatsApp Inbox',
+          optionalTitle: "Optional, you can turn these on whenever:",
+          toneLabel: "How it writes",
+          tonePh: "e.g. Neutral Spanish, formal. No regional slang.",
+          toneHelp: "Applies to every conversation. Each one can override it.",
+          saveTone: "Save tone",
+          toneSaved: "Tone saved",
+          qualityLabel: "Transcription quality",
+          qualityOptima: "optimal — recommended",
+          qualityMinima: "minimal — low-spec machines",
+          qualityHelp: "Minimal only if the machine cannot run the big model: it " +
+            "mangles names and requests in Spanish, so do not decide from its text.",
+          saveQuality: "Save quality",
+          qualitySaved: "Quality saved",
+          chatHelp: "Pick from the list. Some groups share a name, so it is stored by identifier.",
+          chatToneLabel: "How it writes here (optional)",
+          chatTonePh: "empty = use the global tone",
+          pickOne: "Pick a conversation",
+          noChats: "No conversations. Run ./bin/wa-scope sync.",
+          sub: 'Which conversations your agent sees, and how far it can act in each one.',
+          agentLegend: 'Your agent', agentLabel: 'What it is called',
+          agentPh: 'e.g. Alfred, Watson, Assistant',
+          agentHelp: 'Signs every message it writes, so nobody wonders if it was you or it.',
+          saveName: 'Save name', saveChange: 'Save change', cancel: 'Cancel',
+          editName: 'Change the name',
+          mapLegend: 'Conversations', chatLabel: 'Conversation',
+          chatPh: 'exact group name or its JID',
+          providerLabel: 'Task service', permLabel: 'Permission',
+          targetPlane: 'Default project', targetLinear: 'Default team',
+          targetGithub: 'Default repository',
+          targetHint: 'The real destination comes from the message content and the rules below. ' +
+            'This is only the fallback when no rule matches. Leave it empty to open no card ' +
+            'when the client is not recognized.',
+          save: 'Save conversation', saveEdit: 'Save changes', cancelEdit: 'Cancel editing',
+          empty: 'No conversation allowed yet. What is not here, your agent cannot see.',
+          colChat: 'Conversation', colTarget: 'Default', colPerm: 'Permission',
+          edit: 'Edit', remove: 'Remove',
+          routesLegend: 'Where the card goes',
+          routesHelp: 'An ops group carries work for several clients. When a message names one, ' +
+            'the card goes to THAT project, not the conversation default.',
+          routeMatch: 'When the message says', routeMatchPh: 'e.g. billing',
+          routeTarget: 'Goes to', routeTargetPh: 'e.g. FIN',
+          addRoute: 'Add rule', noRoutes: 'No rules. Everything goes to each conversation default.',
+          colWhen: 'When it says', colGoes: 'Goes to',
+          notReady: 'WhatsApp is not connected.',
+          notReadyHow: 'Run <code>wa-read doctor</code> to see what is missing.',
+          needsUpdate: 'This Orca version cannot save from here.',
+          needsUpdateHow: 'Update Orca.',
+          needName: 'Give it a name.', needChat: 'Pick a conversation.',
+          needMatch: 'Text and destination are both required.',
+          savedOk: 'Saved', removedOk: 'Removed', named: 'Called',
+          off: 'off — leaves it alone', observe: 'observe — opens cards, never writes',
+          draft: 'draft — types the reply, never sends', reply: 'reply — sends'
+        }
+      }
+      STRINGS.pt = Object.assign({}, STRINGS.en, {
+        toneLabel: 'Como escreve', saveTone: 'Salvar tom', toneSaved: 'Tom salvo',
+        qualityLabel: 'Qualidade da transcricao',
+        qualityOptima: 'otima — recomendado',
+        qualityMinima: 'minima — equipamentos sem computo',
+        qualityHelp: 'Minima so se a maquina nao aguentar o modelo grande: em ' +
+          'espanhol deforma nomes e pedidos, nao decida lendo o texto dela.',
+        saveQuality: 'Salvar qualidade', qualitySaved: 'Qualidade salva',
+        pickOne: 'Escolha uma conversa',
+        agentLegend: 'Seu agente', agentLabel: 'Como se chama',
+        saveName: 'Salvar nome', saveChange: 'Salvar alteracao', cancel: 'Cancelar',
+        editName: 'Mudar o nome', mapLegend: 'Conversas', chatLabel: 'Conversa',
+        providerLabel: 'Servico de tarefas', permLabel: 'Permissao',
+        save: 'Salvar conversa', saveEdit: 'Salvar alteracoes', cancelEdit: 'Cancelar edicao',
+        colChat: 'Conversa', colPerm: 'Permissao', edit: 'Editar', remove: 'Remover',
+        routesLegend: 'Para qual projeto vai', addRoute: 'Adicionar regra',
+        savedOk: 'Salvo', removedOk: 'Removido', named: 'Se chama',
+        off: 'off — nao toca', observe: 'observar — abre cartao, nao escreve',
+        draft: 'rascunho — escreve sem enviar', reply: 'responder — envia'
+      })
+
+      var LANG = (function () {
+        var tag = String(navigator.language || 'en').toLowerCase()
+        if (tag.indexOf('es') === 0) return 'es'
+        if (tag.indexOf('pt') === 0) return 'pt'
+        return 'en'
+      })()
+      function t(key) { return (STRINGS[LANG] && STRINGS[LANG][key]) || STRINGS.en[key] || key }
+
+      var el = function (id) { return document.getElementById(id) }
+
+      function applyStrings() {
+        var q = document.querySelectorAll.bind(document)
+        Array.prototype.forEach.call(q('[data-t]'), function (n) { n.innerHTML = t(n.dataset.t) })
+        Array.prototype.forEach.call(q('[data-t-ph]'), function (n) { n.placeholder = t(n.dataset.tPh) })
+        Array.prototype.forEach.call(q('[data-t-title]'), function (n) {
+          n.title = t(n.dataset.tTitle); n.setAttribute('aria-label', t(n.dataset.tTitle))
+        })
+        syncTargetLabel()
+      }
+
+      var seq = 0, pending = {}
+      function call(action, params) {
+        return new Promise(function (resolve) {
+          var requestId = 'req-' + ++seq
+          pending[requestId] = resolve
+          // Origen opaco: '*' es el unico targetOrigin usable; el host valida la ventana.
+          window.parent.postMessage(
+            { type: 'orca-panel-action', requestId: requestId, action: action, params: params }, '*')
+        })
+      }
+      window.addEventListener('message', function (event) {
+        var d = event.data
+        if (!d || d.type !== 'orca-panel-action-result') return
+        var resolve = pending[d.requestId]
+        if (!resolve) return
+        delete pending[d.requestId]
+        resolve(d)
+      })
+
+      // storage.get devuelve { value: <dato> } y el bridge lo envuelve otra vez.
+      function stored(result) {
+        if (!result || !result.ok || !result.value) return null
+        return result.value.value === undefined ? null : result.value.value
+      }
+      function read(key) { return call('storage.get', { key: key }).then(stored) }
+      function write(key, value) { return call('storage.set', { key: key, value: value }) }
+
+      function esc(text) {
+        return String(text == null ? '' : text)
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      }
+
+      // La confirmacion va al lado del boton que la provoco, no al pie del panel: ahi
+      // abajo no se ve y parece que no paso nada.
+      function said(id, text, bad) {
+        var node = el(id)
+        node.textContent = text
+        node.className = 'said' + (bad ? ' bad' : '')
+        if (!bad && text) {
+          clearTimeout(node._timer)
+          node._timer = setTimeout(function () { node.textContent = '' }, 4000)
+        }
+      }
+
+      function busy(button, promise) {
+        var label = button.textContent
+        button.disabled = true
+        button.textContent = '…'
+        return Promise.resolve(promise).then(function (value) {
+          button.disabled = false; button.textContent = label; return value
+        }, function (error) {
+          button.disabled = false; button.textContent = label
+          throw error
+        })
+      }
+
+      // Se muestran los requisitos que el usuario puede activar, con su accion.
+      // Separados de la alerta a proposito: una funcion que falta no es una rotura.
+      function renderOpcionales(lista) {
+        var caja = el('opcionales')
+        if (!lista || !lista.length) { caja.hidden = true; caja.innerHTML = ''; return }
+        caja.innerHTML = '<p class="hint" style="margin:0 0 4px">' + t('optionalTitle') +
+          '</p>' + lista.map(function (o) {
+            return '<div class="opcional"><span>\u25CB</span><span><b>' + esc(o.que) +
+              '</b> &mdash; <code>' + esc(o.como) + '</code></span></div>'
+          }).join('')
+        caja.hidden = false
+      }
+
+      function showAlert(what, how) {
+        el('alert').innerHTML = '<span>&#9888;</span><span><b>' + what + '</b>' +
+          (how ? ' <span>' + how + '</span>' : '') + '</span>'
+        el('alert').hidden = false
+      }
+
+      var TARGET_KEY = { plane: 'targetPlane', linear: 'targetLinear', github: 'targetGithub' }
+      var TARGET_PH = { plane: 'OPS', linear: 'ENG', github: 'mi-org/mi-repo' }
+      function syncTargetLabel() {
+        var p = el('provider').value
+        el('target-label').textContent = t(TARGET_KEY[p])
+        el('target').placeholder = TARGET_PH[p]
+      }
+      el('provider').addEventListener('change', syncTargetLabel)
+
+      // ---------- nombre del agente ----------
+      var savedAgent = null, agentDirty = false
+      el('agent').addEventListener('input', function () { agentDirty = true })
+
+      function showAgentSaved(name) {
+        savedAgent = name
+        el('agent').value = name
+        el('agent').disabled = true
+        el('edit-agent').hidden = false
+        el('save-agent').hidden = true
+        el('cancel-agent').hidden = true
+        agentDirty = false
+      }
+      function showAgentEditing() {
+        el('agent').disabled = false
+        el('edit-agent').hidden = true
+        el('save-agent').hidden = false
+        el('save-agent').textContent = savedAgent ? t('saveChange') : t('saveName')
+        el('cancel-agent').hidden = !savedAgent
+        el('agent').focus(); el('agent').select()
+      }
+      el('edit-agent').addEventListener('click', showAgentEditing)
+      el('cancel-agent').addEventListener('click', function () {
+        showAgentSaved(savedAgent); said('said-agent', '')
+      })
+      el('save-agent').addEventListener('click', function (event) {
+        var name = el('agent').value.trim()
+        if (!name) { said('said-agent', t('needName'), true); return }
+        busy(event.currentTarget, write('agentName', name).then(function (r) {
+          if (!r.ok) { said('said-agent', 'error', true); return }
+          showAgentSaved(name)
+          said('said-agent', '✓ ' + t('named') + ' ' + name)
+        }))
+      })
+
+      // ---------- tono ----------
+      el('save-tone').addEventListener('click', function (event) {
+        var tone = el('tone').value.trim()
+        busy(event.currentTarget, write('tone', tone).then(function (r) {
+          said('said-tone', r.ok ? '\u2713 ' + t('toneSaved') : 'error', !r.ok)
+        }))
+      })
+
+      // ---------- calidad de la transcripcion ----------
+      el('save-quality').addEventListener('click', function (event) {
+        busy(event.currentTarget, write('transcribeQuality', el('quality').value)
+          .then(function (r) {
+            said('said-quality', r.ok ? '\u2713 ' + t('qualitySaved') : 'error', !r.ok)
+          }))
+      })
+
+      // ---------- selector de conversaciones ----------
+      // Se elige de la lista en vez de escribir el nombre exacto. El valor es el jid,
+      // porque hay grupos que comparten nombre y el nombre no identifica nada.
+      var chatsPorJid = {}
+      // El jid que se esta editando. renderChats corre cada 8 s y reconstruye el
+      // select entero; sin recordarlo, a mitad de una edicion la conversacion
+      // desaparecia de la lista y el select quedaba en blanco.
+      var editandoJid = ''
+
+      // Deja el select mostrando este jid. Si no esta en la lista — el sync todavia
+      // no lo trajo — se le agrega una opcion, porque si no `.value` no hace nada y
+      // el select se queda callado en "Elegi una conversacion".
+      function pickChat (jid, nombre) {
+        var sel = el('chat-pick')
+        if (jid && !Array.prototype.some.call(sel.options, function (o) { return o.value === jid })) {
+          var o = document.createElement('option')
+          o.value = jid
+          o.textContent = nombre || jid
+          sel.appendChild(o)
+        }
+        sel.value = jid || ''
+      }
+
+      function renderChats (chats) {
+        var sel = el('chat-pick')
+        var elegido = sel.value
+        chatsPorJid = {}
+        sel.innerHTML = ''
+        if (!chats || !chats.length) {
+          var o = document.createElement('option')
+          o.value = ''; o.textContent = t('noChats')
+          sel.appendChild(o)
+          return
+        }
+        var vacio = document.createElement('option')
+        vacio.value = ''; vacio.textContent = t('pickOne')
+        sel.appendChild(vacio)
+        chats.forEach(function (c) {
+          chatsPorJid[c.jid] = c
+          var o = document.createElement('option')
+          o.value = c.jid
+          o.textContent = (c.kind === 'grupo' ? '\u25A3  ' : '\u25CB  ') + (c.name || c.jid)
+          sel.appendChild(o)
+        })
+        if (editandoJid) pickChat(editandoJid, (chatsPorJid[editandoJid] || {}).name)
+        if (elegido) sel.value = elegido
+      }
+      el('chat-pick').addEventListener('change', function () {
+        var c = chatsPorJid[el('chat-pick').value]
+        el('chat').value = c ? (c.name || c.jid) : ''
+      })
+
+      // ---------- conversaciones ----------
+      function renderScope(entries) {
+        var keys = entries ? Object.keys(entries) : []
+        if (!keys.length) {
+          el('scope-wrap').innerHTML = '<p class="empty">' + t('empty') + '</p>'
+          return
+        }
+        el('scope-wrap').innerHTML =
+          '<table><thead><tr><th>' + t('colChat') + '</th><th>' + t('colTarget') +
+          '</th><th>' + t('colPerm') + '</th><th></th></tr></thead><tbody>' +
+          keys.map(function (key) {
+            var e = entries[key]
+            return '<tr><td>' + esc(e.chatName || key) + '</td><td>' +
+              esc(e.provider || 'plane') + ' / ' + esc(e.target || '—') + '</td><td>' +
+              '<span class="pill ' + esc(e.mode || 'off') + '">' + esc(e.mode || 'off') +
+              '</span></td><td class="acts">' +
+              '<button class="link" data-edit="' + esc(key) + '">' + t('edit') + '</button>' +
+              '<button class="link" data-rm="' + esc(key) + '">' + t('remove') + '</button>' +
+              '</td></tr>'
+          }).join('') + '</tbody></table>'
+
+        Array.prototype.forEach.call(el('scope-wrap').querySelectorAll('[data-edit]'), function (b) {
+          b.addEventListener('click', function () { startEdit(entries[b.dataset.edit], b.dataset.edit) })
+        })
+        Array.prototype.forEach.call(el('scope-wrap').querySelectorAll('[data-rm]'), function (b) {
+          b.addEventListener('click', function () {
+            var e = entries[b.dataset.rm]
+            removeScope(b.dataset.rm, (e && e.chatName) || b.dataset.rm)
+          })
+        })
+      }
+
+      function startEdit(entry, key) {
+        if (!entry) return
+        editandoJid = key
+        pickChat(key, entry.chatName || key)
+        el('chat').value = entry.chatName || key
+        el('provider').value = entry.provider || 'plane'
+        syncTargetLabel()
+        el('target').value = entry.target || ''
+        el('chat-tone').value = entry.tone || ''
+        el('mode').value = entry.mode || 'off'
+        el('save-scope').textContent = t('saveEdit')
+        el('cancel-edit').hidden = false
+        said('said-scope', '')
+        el('chat').focus()
+      }
+      function resetScopeForm() {
+        editandoJid = ''
+        el('chat').value = ''; el('target').value = ''; el('mode').value = 'off'
+        el('chat-tone').value = ''
+        el('chat-pick').value = ''
+        el('save-scope').textContent = t('save')
+        el('cancel-edit').hidden = true
+      }
+      el('cancel-edit').addEventListener('click', function () { resetScopeForm(); said('said-scope', '') })
+
+      function removeScope(key, name) {
+        read('scope').then(function (next) {
+          next = next || {}
+          delete next[key]
+          return write('scope', next).then(function () {
+            renderScope(next)
+            said('said-scope', '✓ ' + t('removedOk') + ': ' + name)
+          })
+        })
+      }
+
+      el('save-scope').addEventListener('click', function (event) {
+        var chat = el('chat').value.trim()
+        var provider = el('provider').value
+        var target = el('target').value.trim()
+        var mode = el('mode').value
+        if (!chat) { said('said-scope', t('needChat'), true); return }
+        busy(event.currentTarget, read('scope').then(function (next) {
+          next = next || {}
+          next[chat] = { chatName: chat, provider: provider, target: target || null,
+                         mode: mode, tone: el('chat-tone').value.trim() || null,
+                         updatedAt: new Date().toISOString() }
+          return write('scope', next).then(function () {
+            renderScope(next)
+            resetScopeForm()
+            said('said-scope', '✓ ' + t('savedOk') + ': ' + chat + ' · ' + mode)
+          })
+        }))
+      })
+
+      // ---------- reglas de ruteo ----------
+      function renderRoutes(rules) {
+        rules = rules || []
+        if (!rules.length) {
+          el('routes-wrap').innerHTML = '<p class="empty">' + t('noRoutes') + '</p>'
+          return
+        }
+        el('routes-wrap').innerHTML =
+          '<table><thead><tr><th>' + t('colWhen') + '</th><th>' + t('colGoes') +
+          '</th><th></th></tr></thead><tbody>' +
+          rules.map(function (r, i) {
+            return '<tr><td>' + esc(r.pattern) + '</td><td>' +
+              esc(r.provider || 'plane') + ' / ' + esc(r.target) + '</td>' +
+              '<td class="acts"><button class="link" data-rrm="' + i + '">' +
+              t('remove') + '</button></td></tr>'
+          }).join('') + '</tbody></table>'
+
+        Array.prototype.forEach.call(el('routes-wrap').querySelectorAll('[data-rrm]'), function (b) {
+          b.addEventListener('click', function () {
+            var next = rules.slice()
+            var gone = next.splice(Number(b.dataset.rrm), 1)[0]
+            write('routes', next).then(function () {
+              renderRoutes(next)
+              said('said-route', '✓ ' + t('removedOk') + ': ' + (gone && gone.pattern))
+            })
+          })
+        })
+      }
+
+      el('save-route').addEventListener('click', function (event) {
+        var match = el('r-match').value.trim().toLowerCase()
+        var target = el('r-target').value.trim()
+        var provider = el('r-provider').value
+        if (!match || !target) { said('said-route', t('needMatch'), true); return }
+        busy(event.currentTarget, read('routes').then(function (rules) {
+          rules = (rules || []).filter(function (r) { return r.pattern !== match })
+          rules.push({ pattern: match, provider: provider, target: target })
+          rules.sort(function (a, b) { return a.pattern < b.pattern ? -1 : 1 })
+          return write('routes', rules).then(function () {
+            renderRoutes(rules)
+            el('r-match').value = ''; el('r-target').value = ''
+            said('said-route', '✓ ' + t('savedOk') + ': ' + match + ' → ' + target)
+          })
+        }))
+      })
+
+      // ---------- carga y refresco ----------
+      var liveStorage = null
+
+      function reload() {
+        if (!liveStorage) return Promise.resolve()
+        return Promise.all([read('scope'), read('agentName'), read('health'),
+                            read('routes'), read('tone'), read('chats'),
+                            read('transcribeQuality')])
+          .then(function (r) {
+            renderScope(r[0])
+            if (typeof r[4] === 'string' && document.activeElement !== el('tone')) {
+              el('tone').value = r[4]
+            }
+            if (document.activeElement !== el('quality')) {
+              el('quality').value = typeof r[6] === 'string' && r[6] ? r[6] : 'optima'
+            }
+            renderChats(r[5])
+            if (typeof r[1] === 'string' && r[1] && !agentDirty &&
+                document.activeElement !== el('agent')) {
+              showAgentSaved(r[1])
+            }
+            if (r[2] && r[2].ok === false) showAlert(t('notReady'), t('notReadyHow'))
+            else if (r[2]) el('alert').hidden = true
+            renderOpcionales(r[2] && r[2].optional)
+            renderRoutes(r[3])
+          })
+      }
+
+      var timer = null
+      document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'visible') reload()
+      })
+      window.addEventListener('focus', reload)
+
+      applyStrings()
+      resetScopeForm()
+      call('storage.get', { key: 'scope' }).then(function (r) {
+        liveStorage = !!r.ok
+        if (!liveStorage) {
+          showAlert(t('needsUpdate'), t('needsUpdateHow'))
+          Array.prototype.forEach.call(document.querySelectorAll('button'), function (b) {
+            b.disabled = true
+          })
+          return
+        }
+        reload()
+        // No hay evento de storage: un sondeo corto mientras el panel esta a la vista
+        // cuesta 1 de los 30 mensajes por 10s que el host permite.
+        timer = setInterval(function () {
+          if (document.visibilityState === 'visible') reload()
+        }, 8000)
+      })
+    </script>
+  </body>
+</html>

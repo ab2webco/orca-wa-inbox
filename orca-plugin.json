@@ -1,0 +1,99 @@
+{
+  "manifestVersion": 1,
+  "id": "wa-inbox",
+  "publisher": "ab2web",
+  "name": "WhatsApp Inbox",
+  "version": "3.0.0",
+  "description": "Mapea conversaciones de WhatsApp a tus proyectos y define, por conversacion, hasta donde puede actuar tu agente.",
+  "engines": {
+    "orca": ">=1.4.0"
+  },
+  "pluginApi": 1,
+  "main": "main.mjs",
+  "contributes": {
+    "panels": [
+      {
+        "id": "wa-inbox-activity",
+        "title": "WhatsApp",
+        "icon": "icons/whatsapp.svg",
+        "entry": "activity.html",
+        "surface": "nav"
+      },
+      {
+        "id": "wa-inbox-config",
+        "title": "WhatsApp Inbox",
+        "icon": "icons/whatsapp.svg",
+        "entry": "config.html",
+        "surface": "settings"
+      }
+    ],
+    "commands": [
+      {
+        "id": "wa-inbox.sync",
+        "title": "WhatsApp: refrescar conversaciones"
+      },
+      {
+        "id": "wa-inbox.scope.list",
+        "title": "WhatsApp: ver alcance"
+      },
+      {
+        "id": "wa-inbox.scope.set",
+        "title": "WhatsApp: mapear conversacion"
+      },
+      {
+        "id": "wa-inbox.inbox",
+        "title": "WhatsApp: mensajes dirigidos a mi"
+      },
+      {
+        "id": "wa-inbox.settings",
+        "title": "WhatsApp: ajustes del agente"
+      },
+      {
+        "id": "wa-inbox.doctor",
+        "title": "WhatsApp: verificar requisitos"
+      }
+    ],
+    "events": [
+      {
+        "on": "agent.status.changed"
+      }
+    ],
+    "automations": [
+      {
+        "id": "triage",
+        "title": "WhatsApp: triage",
+        "provider": "claude",
+        "trigger": "*/5 8-18 * * 1-5",
+        "timezone": "America/Bogota",
+        "precheck": "wa-scope pending",
+        "prompt": "prompts/triage.md"
+      },
+      {
+        "id": "take",
+        "title": "WhatsApp: tomar lo marcado",
+        "provider": "claude",
+        "trigger": "*/2 * * * *",
+        "timezone": "America/Bogota",
+        "precheck": "wa-scope pending --only-taken",
+        "prompt": "prompts/take.md"
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "workspace:read"
+    },
+    {
+      "kind": "notifications:show"
+    },
+    {
+      "kind": "storage"
+    },
+    {
+      "kind": "settings:own"
+    },
+    {
+      "kind": "events:subscribe"
+    }
+  ]
+}

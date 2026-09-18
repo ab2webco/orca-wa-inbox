@@ -1,0 +1,888 @@
+#!/usr/bin/env python3
+"""wa-scope — registro de autorizacion: donde puede actuar tu agente y con que permiso.
+
+Regla base: DENEGAR POR DEFECTO. Un chat que no este en el registro no existe para el
+agente. Con cientos de grupos, el permiso tiene que ser una lista blanca explicita.
+
+  wa-scope list                       ver el registro entero
+  wa-scope set <chat> --project CCBQA --mode borrador
+  wa-scope mode <chat> off            apagarlo sin perder la config
+  wa-scope rm <chat>
+  wa-scope check <chat> [--for responder]   la compuerta: exit 0 = autorizado
+  wa-scope log [-n 50]                que hizo el agente y donde
+
+Modos, de menos a mas permiso:
+  off        no lo toca (default de cualquier chat no registrado)
+  observar   puede leer y abrir issue en Plane. No escribe en WhatsApp.
+  borrador   ademas deja el texto escrito en el chat, sin enviar.
+  responder  ademas envia. Solo donde lo autorizaste explicitamente.
+"""
+import argparse, json, os, sqlite3, subprocess, sys, time
+
+def scope_db_path():
+    """Estado propio de la herramienta. En Windows va al APPDATA y no al home."""
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~/AppData/Roaming")
+        return os.path.join(base, "wa-inbox", "scope.db")
+    return os.path.expanduser("~/.wa-inbox/scope.db")
+
+
+DB = scope_db_path()
+# El panel del plugin guarda aca via storage.* del host. Es la MISMA verdad que ve el
+# CLI: sin esto, editar en el panel y editar por terminal serian dos registros distintos
+# que se pisan en silencio.
+# Hay un userData por build (orca, orca-dev, ...). Se toma el storage.json mas reciente,
+# que es el del Orca con el que el usuario esta trabajando de verdad.
+PLUGIN_ID = "ab2web.wa-inbox"
+
+
+def user_data_roots():
+    """Donde Electron guarda el userData, que cambia por sistema. Tenerlo fijo a la
+    ruta de macOS hacia que en Windows y Linux el panel y el CLI leyeran archivos
+    distintos y pareciera que nada se guarda."""
+    if sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    elif sys.platform == "win32":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~/AppData/Roaming")
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return [os.path.join(base, d) for d in ("orca", "orca-dev", "zzorcanametest")]
+
+
+PLUGIN_STORES = [os.path.join(r, "plugins-data", PLUGIN_ID, "storage.json")
+                 for r in user_data_roots()]
+
+
+def plugin_store_path():
+    existing = [p for p in PLUGIN_STORES if os.path.exists(p)]
+    if existing:
+        return max(existing, key=os.path.getmtime)
+    return PLUGIN_STORES[0]
+
+
+def plugin_store_targets():
+    """Escribe en TODOS los userData que existan (orca, orca-dev, ...). Si el usuario
+    trabaja en el build dev y solo escribieramos en el de produccion, el panel abriria
+    vacio y pareceria que no se guardo nada."""
+    out = []
+    for path in PLUGIN_STORES:
+        userdata = os.path.dirname(os.path.dirname(os.path.dirname(path)))
+        if os.path.isdir(userdata):
+            out.append(path)
+    return out or [PLUGIN_STORES[0]]
+MODES = ["off", "observar", "borrador", "responder"]
+# Servicios de tareas que Orca expone hoy por CLI. No todo equipo usa Plane.
+PROVIDERS = {
+    "plane":  "orca plane create --project <target> ...",
+    "linear": "orca linear save-issue --team <target> ...",
+    "github": "gh issue create --repo <target> ...",
+}
+RANK = {m: i for i, m in enumerate(MODES)}
+
+SCHEMA = """
+create table if not exists chat_scope (
+  chat_jid      text primary key,      -- llave real: sobrevive reinstalar WhatsApp
+  chat_name     text not null,         -- solo para mostrar; los nombres cambian y se repiten
+  provider      text default 'plane',  -- plane | linear | github
+  target        text,                  -- proyecto (plane), team (linear), owner/repo (github)
+  mode          text not null default 'off',
+  initial_state text,                  -- columna del board donde cae el issue nuevo
+  hours         text default 'L-V 08:00-18:00',
+  tone          text,                -- como escribe en ESTA conversacion; pisa el global
+  timezone      text default 'America/Bogota',
+  notes         text,
+  updated_at    text
+);
+create table if not exists agent_action (
+  id integer primary key autoincrement,
+  ts text, chat_jid text, chat_name text, stanza_id text,
+  action text,                         -- triage|issue|draft|sent|skipped|denied
+  plane_issue text, detail text
+);
+create index if not exists ix_action_stanza on agent_action(stanza_id);
+create table if not exists settings (key text primary key, value text);
+-- Un grupo de operaciones lleva trabajo de muchos clientes. Mapear el chat a un solo
+-- proyecto manda todo al board equivocado apenas se habla de otro cliente, asi que el
+-- contenido del mensaje puede redirigirlo.
+create table if not exists route (
+  pattern  text primary key,   -- se busca en el texto, sin distinguir mayusculas
+  provider text not null default 'plane',
+  target   text not null,
+  note     text,
+  updated_at text
+);
+-- Lo que esta en curso. Sin esto cada corrida empieza de cero y el agente repite
+-- trabajo o abandona a la mitad: un loop sin memoria.
+create table if not exists work (
+  stanza_id text primary key,
+  chat_jid text, chat_name text,
+  issue     text,              -- la tarjeta abierta, si ya existe
+  step      text,              -- que hizo la ultima vez
+  next_step text,              -- que falta, en una linea
+  status    text not null default 'open',   -- open | done | abandoned
+  opened_at text, updated_at text
+);
+create index if not exists ix_work_status on work(status);
+-- Resumenes de lo podado. La bitacora detallada no crece para siempre.
+create table if not exists digest (
+  id integer primary key autoincrement,
+  period text, summary text, actions integer, created_at text
+);
+create table if not exists run_lock (
+  name text primary key, pid integer, acquired_at real, expires_at real, note text
+);
+"""
+
+
+def plugin_store_raw():
+    try:
+        with open(plugin_store_path(), encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def plugin_store_read():
+    scope = plugin_store_raw().get("scope")
+    return scope if isinstance(scope, dict) else {}
+
+
+# El panel solo sabe escribir storage, y lo hace con claves planas. Traducirlas a
+# los nombres de settings es lo que evita que un tono guardado ahi no llegue nunca.
+PANEL_SETTINGS = {"tone": "tone", "agentName": "agent_name",
+                  "transcribeQuality": "transcribe_quality"}
+
+
+def settings_from_plugin():
+    """Los ajustes que el panel dejo en sus claves planas, con el nombre del CLI. Una
+    cadena vacia no es una eleccion: se ignora para no pisar el valor del CLI."""
+    raw = plugin_store_raw()
+    out = {}
+    for flat, name in PANEL_SETTINGS.items():
+        value = raw.get(flat)
+        if isinstance(value, str) and value.strip():
+            out[name] = value
+    return out
+
+
+def routes_from_plugin():
+    """Reglas que el usuario agrego desde el panel. Se fusionan con las del CLI."""
+    r = plugin_store_raw().get("routes")
+    return r if isinstance(r, list) else []
+
+
+def decisions_read():
+    """Lo que el humano marco desde el panel: tomar esto, ignorar aquello. Es la unica
+    via que tiene un panel para pedirle algo al agente — solo sabe escribir storage."""
+    d = plugin_store_raw().get("decisions")
+    return d if isinstance(d, dict) else {}
+
+
+def plugin_store_write(scope, agent_name=None, activity=None, health=None,
+                       routes=None, extra=None):
+    """Escritura atomica: el host lee este archivo en cualquier momento."""
+    ok = False
+    for path in plugin_store_targets():
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            data = {}
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as fh:
+                    data = json.load(fh)
+            # scope en None = no se toca. Escribir {} borraria la lista blanca entera,
+            # y quien solo viene a guardar un ajuste no tiene por que cargar con ella.
+            if scope is not None:
+                data["scope"] = scope
+            if agent_name:
+                data["agentName"] = agent_name
+            if activity is not None:
+                data["activity"] = activity
+            if health is not None:
+                data["health"] = health
+            if routes is not None:
+                data["routes"] = routes
+            if extra:
+                data.update(extra)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, ensure_ascii=False, indent=2)
+            os.replace(tmp, path)
+            ok = True
+        except (OSError, ValueError):
+            continue
+    return ok
+
+
+def mirror_to_panel(key, value):
+    """Un ajuste que el panel tambien guarda tiene que viajar en las dos direcciones:
+    si solo bajara del panel, un valor viejo del panel ganaria para siempre."""
+    flat = next((f for f, name in PANEL_SETTINGS.items() if name == key), None)
+    if not flat:
+        return False
+    return plugin_store_write(None, extra={flat: value})
+
+
+def agent_name_of(con):
+    return merged_settings(con).get("agent_name") or None
+
+
+def push_to_plugin(con, with_activity=False):
+    """Deja el panel viendo exactamente lo mismo que el CLI."""
+    scope = {}
+    for jid, r in merged_scope(con).items():
+        scope[jid] = {"chatName": r.get("chat_name") or jid,
+                      "provider": r.get("provider") or "plane",
+                      "target": r.get("target"), "mode": r.get("mode") or "off",
+                      "updatedAt": r.get("updated_at")}
+    activity = build_activity(con, scope) if with_activity else None
+    health = build_health() if with_activity else None
+    routes = [dict(r) for r in con.execute(
+        "select pattern, provider, target, note from route order by pattern")]
+    extra = {"chats": build_chats(), "tone": cmd_voice(con, type("A", (), {"chat": None})())[0]["tone"]} \
+        if with_activity else None
+    return plugin_store_write(scope, agent_name_of(con), activity, health, routes, extra)
+
+
+def build_activity(con, scope):
+    """Lo que el panel de actividad muestra. Se arma aca y no en el panel porque el
+    panel no puede ejecutar nada: solo sabe leer storage."""
+    decided = decisions_read()
+    pending = []
+    try:
+        out = subprocess.run([os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                           "wa-read"), "inbox", "--json"],
+                             capture_output=True, text=True, timeout=60)
+        for m in json.loads(out.stdout or "[]"):
+            entry = scope.get(m.get("chat_jid"))
+            if not entry or entry.get("mode") == "off":
+                continue
+            # Lo ignorado no vuelve a aparecer: si sigue en la lista, el humano lo
+            # marca otra vez cada corrida y la lista deja de significar algo.
+            if decided.get(m.get("stanza_id"), {}).get("decision") == "ignore":
+                continue
+            pending.append({"stanzaId": m.get("stanza_id"), "date": m.get("date"),
+                            "chat": m.get("chat"), "chatJid": m.get("chat_jid"),
+                            "sender": m.get("sender"), "kind": m.get("kind"),
+                            "text": (m.get("text") or "")[:160],
+                            "hasMedia": bool(m.get("media") or m.get("adjuntos_cerca")),
+                            "decision": decided.get(m.get("stanza_id"), {}).get("decision")})
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pending = []
+
+    recent = [{"ts": r["ts"], "chat": r["chat_name"], "action": r["action"],
+               "issue": r["plane_issue"], "detail": (r["detail"] or "")[:140]}
+              for r in con.execute("select ts, chat_name, action, plane_issue, detail "
+                                   "from agent_action order by id desc limit 20")]
+    lock = con.execute("select name, expires_at from run_lock "
+                       "where expires_at > ?", (time.time(),)).fetchone()
+    return {"pending": pending[:30], "recent": recent,
+            "running": bool(lock), "syncedAt": time.strftime("%Y-%m-%d %H:%M")}
+
+
+def build_chats():
+    """La lista de conversaciones, para que el panel las ofrezca en vez de pedir el
+    nombre exacto escrito a mano. Hay grupos con nombres repetidos, asi que cada
+    entrada lleva su jid, que es la llave real."""
+    try:
+        out = subprocess.run([os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                           "wa-read"), "chats", "-n", "400", "--json"],
+                             capture_output=True, text=True, timeout=90)
+        chats = json.loads(out.stdout or "[]")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return []
+    return [{"jid": c.get("jid"), "name": c.get("name"), "kind": c.get("kind"),
+             "unread": c.get("unread"), "last": c.get("last")}
+            for c in chats if c.get("jid")][:400]
+
+
+def build_health():
+    """El panel no puede ejecutar nada, asi que el estado se lo dejamos masticado:
+    un booleano y, si algo falla, QUE falla. El porque va en el README, no en la UI."""
+    try:
+        out = subprocess.run([os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                           "wa-read"), "doctor", "--json"],
+                             capture_output=True, text=True, timeout=60)
+        checks = json.loads(out.stdout or "[]")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {"ok": False, "problem": "no pude verificar el estado"}
+    # Lo obligatorio bloquea; lo opcional se ofrece para activar. Mezclarlos hace que
+    # una funcion que falta parezca una rotura, y que una rotura pase por opcional.
+    falla = [c for c in checks if not c.get("ok")]
+    bloqueantes = [c for c in falla if "opcional" not in c.get("check", "")]
+    opcionales = [{"que": c.get("check", "").replace(" (opcional)", ""),
+                   "como": c.get("detalle", "").replace("opcional — ", "")}
+                  for c in falla if "opcional" in c.get("check", "")]
+    out = {"ok": not bloqueantes, "optional": opcionales}
+    if bloqueantes:
+        out["problem"] = bloqueantes[0].get("check")
+        out["detail"] = bloqueantes[0].get("detalle")
+    return out
+
+
+def merged_scope(con):
+    """Lo del panel manda sobre lo del CLI cuando el mismo chat esta en los dos:
+    el panel es lo que el usuario acaba de tocar."""
+    rows = {r["chat_jid"]: dict(r) for r in con.execute(
+        "select chat_jid, chat_name, provider, target, mode, initial_state, hours, "
+        "timezone, notes, updated_at from chat_scope")}
+    for jid, e in plugin_store_read().items():
+        rows[jid] = {**rows.get(jid, {}), "chat_jid": jid,
+                     "chat_name": e.get("chatName") or jid,
+                     "provider": e.get("provider") or "plane",
+                     "target": e.get("target"),
+                     "mode": e.get("mode") or "off",
+                     "updated_at": e.get("updatedAt")}
+    return rows
+
+
+def merged_settings(con):
+    """Los ajustes efectivos, con la misma regla que merged_scope: lo del panel manda
+    sobre lo del CLI, porque el panel es lo que el usuario acaba de tocar."""
+    rows = dict(DEFAULT_CONFIG)
+    for r in con.execute("select key, value from settings"):
+        if r["value"]:
+            rows[r["key"]] = r["value"]
+    rows.update(settings_from_plugin())
+    return rows
+
+
+def db():
+    os.makedirs(os.path.dirname(DB), exist_ok=True)
+    con = sqlite3.connect(DB)
+    con.row_factory = sqlite3.Row
+    con.executescript(SCHEMA)
+    migrate(con)
+    return con
+
+
+def migrate(con):
+    """v1 asumia Plane. Renombra a provider/target sin perder lo ya mapeado."""
+    cols = {r["name"] for r in con.execute("pragma table_info(chat_scope)")}
+    if "provider" not in cols:
+        con.execute("alter table chat_scope add column provider text default 'plane'")
+    if "tone" not in cols:
+        con.execute("alter table chat_scope add column tone text")
+    if "target" not in cols:
+        con.execute("alter table chat_scope add column target text")
+        if "plane_project" in cols:
+            con.execute("update chat_scope set target = plane_project, "
+                        "provider = coalesce(provider,'plane') where target is null")
+    con.commit()
+
+
+def wa_chats(query=None):
+    """Pregunta a wa-read en vez de duplicar la logica de snapshot de la DB de WhatsApp."""
+    cmd = [os.path.expanduser("~/tools/wa-read"), "chats", "-n", "500", "--json"]
+    if query:
+        cmd += ["--query", query]
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    return json.loads(p.stdout) if p.returncode == 0 else []
+
+
+def jid_of(con, ref):
+    """Acepta el JID directo, el Z_PK, o parte del nombre. Devuelve (jid, nombre)."""
+    if "@" in ref:
+        row = con.execute("select chat_name from chat_scope where chat_jid=?", (ref,)).fetchone()
+        return ref, (row["chat_name"] if row else ref)
+    hits = [c for c in wa_chats() if str(c["id"]) == ref
+            or ref.lower() in (c["name"] or "").lower()]
+    exact = [c for c in hits if (c["name"] or "").lower() == ref.lower()]
+    hits = exact or hits
+    if not hits:
+        sys.exit(f"ningun chat coincide con {ref!r}")
+    if len(hits) > 1:
+        print(f"{ref!r} es ambiguo:", file=sys.stderr)
+        for c in hits[:12]:
+            print(f"  {c['jid']}\t{c['name']}", file=sys.stderr)
+        sys.exit(2)
+    return hits[0]["jid"], hits[0]["name"]
+
+
+def cmd_list(con, a):
+    rank = {"responder": 0, "borrador": 1, "observar": 2, "off": 3}
+    rows = merged_scope(con).values()
+    return sorted(rows, key=lambda r: (rank.get(r.get("mode"), 3),
+                                       (r.get("chat_name") or "").lower()))
+
+
+def cmd_set(con, a):
+    jid, name = jid_of(con, a.chat)
+    cur = con.execute("select * from chat_scope where chat_jid=?", (jid,)).fetchone()
+    cur = dict(cur) if cur else {}
+    vals = {
+        "chat_jid": jid,
+        "chat_name": name or cur.get("chat_name") or jid,
+        "provider": a.provider or cur.get("provider") or "plane",
+        "target": a.target or a.project or cur.get("target"),
+        "mode": a.mode or cur.get("mode") or "off",
+        "initial_state": a.state or cur.get("initial_state"),
+        "hours": a.hours or cur.get("hours") or "L-V 08:00-18:00",
+        "tone": a.tone if a.tone is not None else cur.get("tone"),
+        "timezone": a.timezone or cur.get("timezone") or "America/Bogota",
+        "notes": a.notes or cur.get("notes"),
+        "updated_at": time.strftime("%Y-%m-%d %H:%M"),
+    }
+    if vals["mode"] not in MODES:
+        sys.exit(f"modo invalido: {vals['mode']} (usa {'/'.join(MODES)})")
+    if vals["provider"] not in PROVIDERS:
+        sys.exit(f"proveedor invalido: {vals['provider']} (usa {'/'.join(PROVIDERS)})")
+    if vals["mode"] != "off" and not vals["target"]:
+        sys.exit(f"un chat activo necesita --target: sin destino el agente no sabe donde "
+                 f"abrir la tarea.\n  {vals['provider']}: {PROVIDERS[vals['provider']]}")
+    con.execute(f"""insert into chat_scope ({','.join(vals)}) values
+                    ({','.join('?' * len(vals))})
+                    on conflict(chat_jid) do update set
+                    {','.join(f'{k}=excluded.{k}' for k in vals if k != 'chat_jid')}""",
+                list(vals.values()))
+    con.commit()
+    push_to_plugin(con)
+    return [vals]
+
+
+def cmd_mode(con, a):
+    jid, _ = jid_of(con, a.chat)
+    if a.value not in MODES:
+        sys.exit(f"modo invalido: {a.value} (usa {'/'.join(MODES)})")
+    if not con.execute("select 1 from chat_scope where chat_jid=?", (jid,)).fetchone():
+        sys.exit(f"{jid} no esta en el registro, usa `wa-scope set` primero")
+    con.execute("update chat_scope set mode=?, updated_at=? where chat_jid=?",
+                (a.value, time.strftime("%Y-%m-%d %H:%M"), jid))
+    con.commit()
+    return cmd_list(con, a)
+
+
+def cmd_rm(con, a):
+    jid, _ = jid_of(con, a.chat)
+    con.execute("delete from chat_scope where chat_jid=?", (jid,))
+    con.commit()
+    store = plugin_store_read()
+    store.pop(jid, None)
+    plugin_store_write(store, agent_name_of(con))
+    return [{"removed": jid}]
+
+
+def cmd_check(con, a):
+    """La compuerta. Toda automation llama esto antes de tocar nada."""
+    jid, name = jid_of(con, a.chat)
+    row = merged_scope(con).get(jid)
+    mode = row["mode"] if row else "off"
+    allowed = RANK[mode] >= RANK[a.for_]  and mode != "off"
+    out = {"chat_jid": jid, "chat_name": (row["chat_name"] if row else name),
+           "mode": mode, "requested": a.for_, "allowed": allowed,
+           "provider": row["provider"] if row else None,
+           "target": row["target"] if row else None,
+           "reason": ("ok" if allowed else
+                      "no esta en el registro" if not row else
+                      f"modo {mode} no alcanza para {a.for_}")}
+    if not allowed:
+        con.execute("insert into agent_action (ts,chat_jid,chat_name,action,detail) "
+                    "values (?,?,?,?,?)",
+                    (time.strftime("%Y-%m-%d %H:%M"), jid, out["chat_name"],
+                     "denied", out["reason"]))
+        con.commit()
+    print(json.dumps(out, ensure_ascii=False, indent=2))
+    sys.exit(0 if allowed else 3)
+
+
+def cmd_lock(con, a):
+    """Una sola corrida a la vez. Si la automation dispara cada 20 min y una corrida
+    tarda mas, dos agentes leen el mismo inbox y abren la misma tarjeta dos veces.
+    El lock expira solo para que una corrida que murio no bloquee para siempre."""
+    now = time.time()
+    con.execute("delete from run_lock where expires_at < ?", (now,))
+    row = con.execute("select pid, expires_at, note from run_lock where name=?",
+                      (a.name,)).fetchone()
+    if row:
+        print(json.dumps({"acquired": False, "held_by_pid": row["pid"],
+                          "expires_in_s": round(row["expires_at"] - now),
+                          "note": row["note"]}, ensure_ascii=False))
+        sys.exit(4)
+    con.execute("insert into run_lock (name,pid,acquired_at,expires_at,note) "
+                "values (?,?,?,?,?)",
+                (a.name, os.getpid(), now, now + a.ttl, a.note))
+    con.commit()
+    print(json.dumps({"acquired": True, "name": a.name, "ttl_s": a.ttl}))
+    sys.exit(0)
+
+
+def cmd_unlock(con, a):
+    con.execute("delete from run_lock where name=?", (a.name,))
+    con.commit()
+    return [{"released": a.name}]
+
+
+NOTIFIERS = {"darwin": "osascript", "win32": "powershell", "linux": "notify-send"}
+
+
+def notify(title, body):
+    """Notificacion del sistema. Cada plataforma tiene la suya y ninguna esta garantizada,
+    asi que si falla se devuelve False y el aviso igual queda en la bitacora."""
+    text = body or title
+    try:
+        if sys.platform == "darwin":
+            script = ('display notification {b} with title {t} sound name "Ping"'
+                      .format(b=json.dumps(text), t=json.dumps(title)))
+            cmd = ["osascript", "-e", script]
+        elif sys.platform == "win32":
+            ps = ("[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications,"
+                  " ContentType=WindowsRuntime] > $null; "
+                  "$t=[Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent(0);"
+                  f"$t.GetElementsByTagName('text')[0].AppendChild($t.CreateTextNode({json.dumps(title)}))>$null;"
+                  f"$t.GetElementsByTagName('text')[1].AppendChild($t.CreateTextNode({json.dumps(text)}))>$null;"
+                  "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('wa-inbox')"
+                  ".Show([Windows.UI.Notifications.ToastNotification]::new($t))")
+            cmd = ["powershell", "-NoProfile", "-Command", ps]
+        else:
+            cmd = ["notify-send", title, text]
+        return subprocess.run(cmd, capture_output=True, timeout=20).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def cmd_alert(con, a):
+    """Para lo que NO puede resolver el agente y necesita al humano. Notificacion
+    del sistema, no un mensaje mas en el chat que se pierde entre otros 200."""
+    title = a.title or "Necesita tu respuesta"
+    body = (a.body or "")[:240]
+    con.execute("insert into agent_action (ts,chat_jid,chat_name,stanza_id,action,detail) "
+                "values (?,?,?,?,?,?)",
+                (time.strftime("%Y-%m-%d %H:%M"), a.chat or "", a.name or "",
+                 a.stanza or "", "alert", f"{title} | {body}"))
+    con.commit()
+    ok = notify(title, body)
+    return [{"alerted": ok, "title": title, "body": body,
+             "via": NOTIFIERS.get(sys.platform, "ninguno")}]
+
+
+def cmd_agent(con, a):
+    """El nombre del agente lo elige quien usa la herramienta. No viene con uno puesto:
+    firmar con un nombre ajeno es peor que no firmar."""
+    if a.name:
+        con.execute("insert into settings (key,value) values ('agent_name',?) "
+                    "on conflict(key) do update set value=excluded.value", (a.name,))
+        con.commit()
+        mirror_to_panel("agent_name", a.name)
+    push_to_plugin(con)
+    return [{"agent_name": agent_name_of(con)}]
+
+
+DEFAULT_CONFIG = {
+    "inbox_days": "1",        # ventana de lectura: cuantos dias mira el triage
+    "lock_ttl_s": "900",      # cuanto vale el lock antes de considerarse muerto
+    "owner_name": "",         # como se llama quien usa esto; el prompt lo usa
+    # Como escribe el agente. Sin esto hereda el tono de quien escribio el prompt, que
+    # es justo lo que no se quiere: el prompt lo escribio un dev, no la empresa.
+    "transcribe": "local",    # local | off | api. Local no manda el audio a ningun lado.
+    "transcribe_model": "",   # vacio = lo decide la calidad; fijarlo pisa la calidad
+    "transcribe_lang": "auto",    # los audios mezclan espanol e ingles
+    "transcribe_quality": "optima",  # optima | minima. Minima entra en cualquier equipo.
+    "tone": "Espanol neutro latinoamericano. Trata de usted. Formal pero no acartonado. "
+            "Sin modismos regionales, sin voseo, sin diminutivos. Frases cortas.",
+}
+
+
+def cmd_route(con, a):
+    if a.remove:
+        con.execute("delete from route where pattern=?", (a.remove.lower(),))
+        con.commit()
+        return [{"removed": a.remove}]
+    if a.match:
+        if not a.target:
+            sys.exit("falta --target")
+        con.execute("insert into route (pattern,provider,target,note,updated_at) "
+                    "values (?,?,?,?,?) on conflict(pattern) do update set "
+                    "provider=excluded.provider, target=excluded.target, "
+                    "note=excluded.note, updated_at=excluded.updated_at",
+                    (a.match.lower(), a.provider or "plane", a.target, a.note,
+                     time.strftime("%Y-%m-%d %H:%M")))
+        con.commit()
+    return [dict(r) for r in con.execute(
+        "select pattern, provider, target, note from route order by pattern")]
+
+
+def resolve_target(con, text, chat_jid=None):
+    """El contenido manda sobre el chat. Si el mensaje nombra a un cliente que tiene su
+    propio board, va ahi; el destino del chat es el fallback, no la regla."""
+    low = (text or "").lower()
+    rules = [dict(r) for r in con.execute(
+        "select pattern, provider, target, note from route")]
+    seen = {r["pattern"] for r in rules}
+    rules += [r for r in routes_from_plugin()
+              if r.get("pattern") and r["pattern"].lower() not in seen]
+    for r in rules:
+        pattern = (r.get("pattern") or "").lower()
+        if pattern and pattern in low:
+            return {"provider": r.get("provider") or "plane", "target": r.get("target"),
+                    "why": f"el mensaje dice {pattern!r}", "matched": pattern}
+    if chat_jid:
+        entry = merged_scope(con).get(chat_jid)
+        if entry and entry.get("target"):
+            return {"provider": entry.get("provider") or "plane",
+                    "target": entry["target"],
+                    "why": "destino por defecto del chat", "matched": None}
+    return {"provider": None, "target": None,
+            "why": "sin destino: ni una regla ni un default del chat", "matched": None}
+
+
+def cmd_where(con, a):
+    return [resolve_target(con, a.text, a.chat)]
+
+
+def cmd_work(con, a):
+    """El estado entre corridas. El agente lee esto al empezar y lo actualiza al cerrar."""
+    now = time.strftime("%Y-%m-%d %H:%M")
+    if a.done:
+        con.execute("update work set status='done', updated_at=? where stanza_id=?",
+                    (now, a.done))
+        con.commit()
+        return [{"done": a.done}]
+    if a.stanza:
+        row = con.execute("select opened_at from work where stanza_id=?",
+                          (a.stanza,)).fetchone()
+        con.execute("""insert into work
+              (stanza_id, chat_jid, chat_name, issue, step, next_step, status,
+               opened_at, updated_at)
+              values (?,?,?,?,?,?,'open',?,?)
+              on conflict(stanza_id) do update set
+                chat_jid=coalesce(excluded.chat_jid, work.chat_jid),
+                chat_name=coalesce(excluded.chat_name, work.chat_name),
+                issue=coalesce(excluded.issue, work.issue),
+                step=coalesce(excluded.step, work.step),
+                next_step=excluded.next_step,
+                updated_at=excluded.updated_at""",
+            (a.stanza, a.chat, a.name, a.issue, a.step, a.next,
+             row["opened_at"] if row else now, now))
+        con.commit()
+    # Lo que lleva demasiado sin avanzar deja de ser "en curso": es ruido que hace que
+    # el agente lo reintente para siempre.
+    con.execute("update work set status='abandoned' where status='open' "
+                "and updated_at < ?", (time.strftime(
+                    "%Y-%m-%d %H:%M", time.localtime(time.time() - 7 * 86400)),))
+    con.commit()
+    return [dict(r) for r in con.execute(
+        "select stanza_id, chat_name, issue, step, next_step, updated_at from work "
+        "where status='open' order by updated_at")]
+
+
+def cmd_rotate(con, a):
+    """La bitacora detallada se poda; lo viejo queda como resumen consultable.
+
+    La memoria util no es el detalle de hace tres meses, es saber que paso. El detalle
+    se va, el resumen queda, y la base no crece sin techo."""
+    keep = a.keep
+    total = con.execute("select count(*) c from agent_action").fetchone()["c"]
+    if total <= keep:
+        return [{"rotated": 0, "total": total, "keep": keep}]
+    old = con.execute("select id, ts, chat_name, action from agent_action "
+                      "order by id limit ?", (total - keep,)).fetchall()
+    counts = {}
+    for r in old:
+        counts[r["action"]] = counts.get(r["action"], 0) + 1
+    chats = sorted({r["chat_name"] for r in old if r["chat_name"]})
+    summary = (f"{len(old)} acciones entre {old[0]['ts']} y {old[-1]['ts']}. "
+               + ", ".join(f"{k}: {v}" for k, v in sorted(counts.items()))
+               + (". Chats: " + ", ".join(chats[:12]) if chats else ""))
+    con.execute("insert into digest (period, summary, actions, created_at) "
+                "values (?,?,?,?)",
+                (f"{old[0]['ts']} .. {old[-1]['ts']}", summary, len(old),
+                 time.strftime("%Y-%m-%d %H:%M")))
+    con.execute("delete from agent_action where id <= ?", (old[-1]["id"],))
+    con.commit()
+    return [{"rotated": len(old), "resumen": summary}]
+
+
+def cmd_history(con, a):
+    return [dict(r) for r in con.execute(
+        "select period, actions, summary, created_at from digest "
+        "order by id desc limit ?", (a.n,))]
+
+
+def cmd_pending(con, a):
+    """Sincroniza y dice si hay algo que hacer. Pensado para el precheck de la
+    automation: cuesta centavos de segundo y, si no hay nada, evita despertar al agente.
+    Efecto secundario util: el panel se refresca aunque el agente no corra."""
+    push_to_plugin(con, with_activity=True)
+    activity = plugin_store_raw().get("activity", {})
+    pending = activity.get("pending", []) or []
+    taken = [k for k, v in decisions_read().items() if v.get("decision") == "take"]
+    work = con.execute("select count(*) c from work where status='open'").fetchone()["c"]
+    health = plugin_store_raw().get("health") or {}
+    if health.get("ok") is False:
+        # Saltear en silencio ocultaria que el sistema no puede leer. Exit 2 lo separa
+        # de exit 1, que es el caso normal de "no hay nada que hacer".
+        print(json.dumps({"hay_trabajo": False, "bloqueado": health.get("problem"),
+                          "detalle": health.get("detail")}, ensure_ascii=False))
+        sys.exit(2)
+    if a.only_taken:
+        hay = len(taken)
+        detalle = f"{hay} marcados como tomar"
+    else:
+        hay = len(pending) + work
+        detalle = f"{len(pending)} esperando, {work} en curso"
+    print(json.dumps({"hay_trabajo": bool(hay), "detalle": detalle,
+                      "sincronizado": activity.get("syncedAt")}, ensure_ascii=False))
+    sys.exit(0 if hay else 1)
+
+
+def cmd_voice(con, a):
+    """El tono efectivo para una conversacion: el suyo si lo tiene, si no el global.
+
+    Se resuelve aca y no en el prompt porque el prompt lo escribio alguien con su
+    propio acento, y eso se filtra en lo que el agente manda a un cliente."""
+    global_tone = merged_settings(con).get("tone") or DEFAULT_CONFIG["tone"]
+    if not a.chat:
+        return [{"scope": "global", "tone": global_tone}]
+    jid, name = jid_of(con, a.chat)
+    own = con.execute("select tone, chat_name from chat_scope where chat_jid=?",
+                      (jid,)).fetchone()
+    if own and own["tone"]:
+        return [{"scope": "conversacion", "chat": own["chat_name"] or name,
+                 "tone": own["tone"]}]
+    return [{"scope": "global", "chat": name, "tone": global_tone}]
+
+
+def cmd_config(con, a):
+    """Lo que cambia seguido no deberia vivir en el prompt de la automation."""
+    if a.key and a.value is not None:
+        con.execute("insert into settings (key,value) values (?,?) "
+                    "on conflict(key) do update set value=excluded.value", (a.key, a.value))
+        con.commit()
+        mirror_to_panel(a.key, a.value)
+    rows = merged_settings(con)
+    if a.key:
+        return [{"key": a.key, "value": rows.get(a.key)}]
+    # El nombre del agente tiene su propio comando; en el listado solo seria ruido.
+    return [{"key": k, "value": v} for k, v in sorted(rows.items()) if k != "agent_name"]
+
+
+def cmd_log(con, a):
+    return [dict(r) for r in con.execute(
+        "select * from agent_action order by id desc limit ?", (a.n,)).fetchall()]
+
+
+def cmd_record(con, a):
+    con.execute("insert into agent_action (ts,chat_jid,chat_name,stanza_id,action,"
+                "plane_issue,detail) values (?,?,?,?,?,?,?)",
+                (time.strftime("%Y-%m-%d %H:%M"), a.chat, a.name, a.stanza,
+                 a.action, a.issue, a.detail))
+    con.commit()
+    return [{"ok": True}]
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--json", action="store_true")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    def add(name, **kw):                 # --json vale antes o despues del subcomando
+        sp = sub.add_parser(name, **kw)
+        sp.add_argument("--json", dest="json_sub", action="store_true")
+        return sp
+
+    add("list").set_defaults(fn=cmd_list)
+
+    s = add("set", help="registra o actualiza un chat")
+    s.add_argument("chat")
+    s.add_argument("--provider", choices=list(PROVIDERS),
+                   help="servicio de tareas donde abrir la tarjeta")
+    s.add_argument("--target", help="proyecto (plane), team (linear) u owner/repo (github)")
+    s.add_argument("--project", help="alias de --target, por compatibilidad")
+    s.add_argument("--mode")
+    s.add_argument("--state"); s.add_argument("--hours"); s.add_argument("--timezone")
+    s.add_argument("--notes")
+    s.add_argument("--tone", help="como escribe en esta conversacion; pisa el global")
+    s.set_defaults(fn=cmd_set)
+
+    s = add("mode", help="cambia solo el modo")
+    s.add_argument("chat"); s.add_argument("value"); s.set_defaults(fn=cmd_mode)
+
+    s = add("rm"); s.add_argument("chat"); s.set_defaults(fn=cmd_rm)
+
+    s = add("check", help="compuerta de autorizacion; exit 3 si deniega")
+    s.add_argument("chat")
+    s.add_argument("--for", dest="for_", default="observar", choices=MODES[1:])
+    s.set_defaults(fn=cmd_check)
+
+    s = add("lock", help="toma el lock de corrida; exit 4 si ya hay otra")
+    s.add_argument("--name", default="triage"); s.add_argument("--ttl", type=int, default=900)
+    s.add_argument("--note", default=""); s.set_defaults(fn=cmd_lock)
+
+    s = add("unlock"); s.add_argument("--name", default="triage")
+    s.set_defaults(fn=cmd_unlock)
+
+    s = add("alert", help="notificacion del sistema: algo necesita a un humano")
+    s.add_argument("--title"); s.add_argument("--body")
+    s.add_argument("--chat", default=""); s.add_argument("--name", default="")
+    s.add_argument("--stanza", default=""); s.set_defaults(fn=cmd_alert)
+
+    s = add("pending", help="sincroniza y sale 1 si no hay nada que hacer (para precheck)")
+    s.add_argument("--only-taken", action="store_true",
+                   help="solo cuenta lo marcado a mano con Tomar")
+    s.set_defaults(fn=cmd_pending)
+
+    s = add("work", help="que quedo en curso y que falta; el estado entre corridas")
+    s.add_argument("--stanza"); s.add_argument("--chat"); s.add_argument("--name")
+    s.add_argument("--issue"); s.add_argument("--step"); s.add_argument("--next")
+    s.add_argument("--done"); s.set_defaults(fn=cmd_work)
+
+    s = add("rotate", help="poda la bitacora vieja y la deja como resumen")
+    s.add_argument("--keep", type=int, default=500); s.set_defaults(fn=cmd_rotate)
+
+    s = add("history", help="los resumenes de lo ya podado")
+    s.add_argument("-n", type=int, default=20); s.set_defaults(fn=cmd_history)
+
+    s = add("voice", help="el tono efectivo: el de la conversacion, o el global")
+    s.add_argument("chat", nargs="?"); s.set_defaults(fn=cmd_voice)
+
+    s = add("route", help="reglas de destino por contenido; el chat es solo el fallback")
+    s.add_argument("--match", help="texto que tiene que aparecer en el mensaje")
+    s.add_argument("--provider", choices=list(PROVIDERS)); s.add_argument("--target")
+    s.add_argument("--note"); s.add_argument("--remove")
+    s.set_defaults(fn=cmd_route)
+
+    s = add("where", help="donde iria la tarjeta para este texto, y por que")
+    s.add_argument("text"); s.add_argument("--chat")
+    s.set_defaults(fn=cmd_where)
+
+    s = add("decisions", help="que marco el humano desde el panel: tomar / ignorar")
+    s.set_defaults(fn=lambda con, a: [
+        {"stanzaId": k, **v} for k, v in sorted(decisions_read().items(),
+                                                key=lambda kv: kv[1].get("at", ""))])
+
+    s = add("config", help="ver o fijar ajustes (inbox_days, lock_ttl_s)")
+    s.add_argument("key", nargs="?"); s.add_argument("value", nargs="?")
+    s.set_defaults(fn=cmd_config)
+
+    s = add("agent", help="ver o fijar el nombre de tu agente")
+    s.add_argument("name", nargs="?"); s.set_defaults(fn=cmd_agent)
+
+    s = add("sync", help="empuja registro, nombre y actividad al panel del plugin")
+    s.set_defaults(fn=lambda con, a: [{"synced": push_to_plugin(con, with_activity=True),
+                                       "destinos": plugin_store_targets()}])
+
+    s = add("log"); s.add_argument("-n", type=int, default=50)
+    s.set_defaults(fn=cmd_log)
+
+    s = add("record", help="deja rastro de una accion del agente")
+    s.add_argument("--chat", required=True); s.add_argument("--name", default="")
+    s.add_argument("--stanza", default=""); s.add_argument("--action", required=True)
+    s.add_argument("--issue", default=""); s.add_argument("--detail", default="")
+    s.set_defaults(fn=cmd_record)
+
+    a = ap.parse_args()
+    if getattr(a, "json_sub", False):
+        a.json = True
+    con = db()
+    rows = a.fn(con, a)
+    con.close()
+    if a.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2)); return
+    if not rows:
+        print("(registro vacio — ningun chat autorizado, que es el default seguro)"); return
+    for r in rows:
+        print(" | ".join(f"{v}" for v in r.values() if v not in (None, "")))
+
+
+if __name__ == "__main__":
+    main()

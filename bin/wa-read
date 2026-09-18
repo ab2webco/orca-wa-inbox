@@ -1,0 +1,458 @@
+#!/usr/bin/env python3
+"""wa-read — lectura read-only de WhatsApp Desktop (macOS) para agentes.
+
+Subcomandos:
+  inbox [--days N]              menciones a vos + respuestas a tus mensajes, en grupos
+  chats [--query TXT] [-n N]    lista chats (grupos y 1:1) con no-leidos
+  chat <id|nombre> [-n N]       ultimos mensajes de un chat
+  media <id|nombre> [-n N]      ultimas imagenes/videos/audios, con ruta local en disco
+  whoami                        tu LID y cuantos grupos
+
+Global: --json  salida JSON en vez de tabla.
+Nunca escribe en la base de WhatsApp: opera sobre una copia temporal.
+"""
+import argparse, json, os, platform, shutil, sqlite3, subprocess, sys, tempfile, time
+
+APPLE_EPOCH = 978307200  # Core Data usa 2001-01-01 como epoch
+# El unico pedazo de esto que es especifico del sistema es DONDE deja WhatsApp su base.
+# Aislarlo aca hace que sumar Windows sea agregar una entrada, no reescribir la
+# herramienta: todo lo de abajo trabaja contra `base` y `media_base`.
+def _darwin():
+    root = os.path.expanduser(
+        "~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared")
+    return {"root": root, "db": os.path.join(root, "ChatStorage.sqlite"),
+            "media": os.path.join(root, "Message"), "verified": True,
+            "app": "WhatsApp Desktop (Mac App Store)"}
+
+
+def _windows():
+    # Candidato conocido, NO verificado: no tuve una maquina Windows para comprobar
+    # si la base es SQLite legible o viene cifrada. Hasta que alguien lo confirme,
+    # el doctor lo dice en vez de fallar con un error de sqlite sin contexto.
+    local = os.environ.get("LOCALAPPDATA", "")
+    root = os.path.join(local, "Packages") if local else ""
+    return {"root": root, "db": "", "media": "", "verified": False,
+            "app": "WhatsApp Desktop (Microsoft Store)"}
+
+
+def _linux():
+    # No hay WhatsApp Desktop oficial para Linux. Los wrappers no oficiales envuelven
+    # web.whatsapp.com, y web no deja base local: los mensajes viven en el IndexedDB
+    # del navegador. No hay archivo que leer.
+    return {"root": "", "db": "", "media": "", "verified": False, "app": None}
+
+
+SOURCES = {"Darwin": _darwin, "Windows": _windows, "Linux": _linux}
+SOURCE = SOURCES.get(platform.system(), _linux)()
+GC = SOURCE["root"]
+MEDIA_BASE = SOURCE["media"]
+
+
+def _scope_db():
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~/AppData/Roaming")
+        return os.path.join(base, "wa-inbox", "scope.db")
+    return os.path.expanduser("~/.wa-inbox/scope.db")
+
+
+SCOPE_DB = _scope_db()
+
+
+def setting(key, fallback):
+    """La ventana de lectura es configurable, no una constante escondida en el prompt."""
+    try:
+        con = sqlite3.connect(f"file:{SCOPE_DB}?mode=ro", uri=True)
+        row = con.execute("select value from settings where key=?", (key,)).fetchone()
+        con.close()
+        return type(fallback)(row[0]) if row and row[0] not in (None, "") else fallback
+    except Exception:
+        return fallback
+
+
+REQUISITOS_POR_SO = {
+    "Darwin": """Requisitos en macOS (unica plataforma verificada):
+  - WhatsApp Desktop desde la Mac App Store, con sesion iniciada y abierto al
+    menos una vez para que sincronice.
+  - WhatsApp Web NO sirve: no deja base local, los mensajes viven en el IndexedDB
+    del navegador.
+  - Que la base se pueda leer. Hoy queda como SQLite sin cifrar y el doctor lo
+    comprueba leyendola. FileVault no molesta: cifra el disco, no el archivo.""",
+    "Windows": """En Windows todavia no hay soporte de LECTURA.
+  WhatsApp Desktop existe, pero no pude verificar donde deja su base ni si es
+  legible o viene cifrada. Falta que alguien con Windows lo confirme; cuando pase,
+  se resuelve agregando una entrada en SOURCES, no reescribiendo la herramienta.
+  Lo demas si funciona: el registro, el mapeo, los paneles y la automation.""",
+    "Linux": """En Linux no hay camino de lectura, y no es algo que pueda arreglar.
+  No existe WhatsApp Desktop oficial para Linux. Los wrappers no oficiales envuelven
+  web.whatsapp.com, y web no deja base local que leer.
+  Lo demas si funciona: el registro, el mapeo, los paneles y la automation.""",
+}
+REQUISITOS = REQUISITOS_POR_SO.get(platform.system(), REQUISITOS_POR_SO["Linux"])
+
+
+def preflight():
+    """Falla temprano y explicando, en vez de reventar adentro con un error de sqlite."""
+    problems = []
+    if not SOURCE["verified"]:
+        problems.append(f"todavia no hay lectura de WhatsApp en {platform.system()}")
+        return problems
+    if not os.path.isdir(GC):
+        problems.append("no encontre el Group Container de WhatsApp Desktop en "
+                        f"{GC} — instalalo desde la Mac App Store e inicia sesion")
+    elif not os.path.exists(os.path.join(GC, "ChatStorage.sqlite")):
+        problems.append("el Group Container existe pero no hay ChatStorage.sqlite — "
+                        "abri WhatsApp Desktop una vez para que sincronice")
+    return problems
+
+
+def snapshot():
+    """Copia la DB + WAL a un temp y aplica el WAL. Sin esto faltan los mensajes de hoy."""
+    problems = preflight()
+    if problems:
+        sys.exit("\n".join(f"- {p}" for p in problems) + "\n\n" + REQUISITOS)
+    tmp = tempfile.mkdtemp(prefix="wa-read.")
+    for f in ("ChatStorage.sqlite", "ChatStorage.sqlite-wal", "ChatStorage.sqlite-shm"):
+        src = os.path.join(os.path.dirname(SOURCE["db"]), f)
+        if os.path.exists(src):
+            shutil.copy2(src, tmp)
+    db = os.path.join(tmp, "ChatStorage.sqlite")
+    if not os.path.exists(db):
+        sys.exit("no pude copiar ChatStorage.sqlite")
+    con = sqlite3.connect(db)
+    con.execute("PRAGMA journal_mode=delete")  # fuerza el merge del WAL
+    con.row_factory = sqlite3.Row
+    return con, tmp
+
+
+def own_lid(con):
+    """Tu LID: el participante que aparece en mas grupos. ZWAZACCOUNT no sirve,
+    es un directorio de miles de cuentas y no marca cual es la propia."""
+    row = con.execute("""
+        select replace(ZMEMBERJID,'@lid','') lid
+        from ZWAGROUPMEMBER where ZMEMBERJID like '%@lid'
+        group by 1 order by count(distinct ZCHATSESSION) desc limit 1""").fetchone()
+    return row["lid"] if row else None
+
+
+def ts(v):
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(v + APPLE_EPOCH)) if v else ""
+
+
+def cutoff(days):
+    return time.time() - days * 86400 - APPLE_EPOCH
+
+
+def resolve_chat(con, ref):
+    """Acepta Z_PK exacto o parte del nombre. Si el nombre es ambiguo, lista y sale."""
+    if str(ref).isdigit():
+        r = con.execute("select Z_PK, ZPARTNERNAME from ZWACHATSESSION where Z_PK=?",
+                        (int(ref),)).fetchone()
+        if r:
+            return r["Z_PK"], r["ZPARTNERNAME"]
+        sys.exit(f"no existe el chat {ref}")
+    rows = con.execute("""select Z_PK, ZPARTNERNAME, ZLASTMESSAGEDATE from ZWACHATSESSION
+                          where ZPARTNERNAME like ? order by ZLASTMESSAGEDATE desc""",
+                       (f"%{ref}%",)).fetchall()
+    if not rows:
+        sys.exit(f"ningun chat coincide con {ref!r}")
+    exact = [r for r in rows if (r["ZPARTNERNAME"] or "").strip().lower() == ref.strip().lower()]
+    if len(exact) == 1:
+        return exact[0]["Z_PK"], exact[0]["ZPARTNERNAME"]
+    if len(rows) > 1:
+        print(f"{ref!r} es ambiguo, usa el id:", file=sys.stderr)
+        for r in rows[:15]:
+            print(f"  {r['Z_PK']}\t{r['ZPARTNERNAME']}\t{ts(r['ZLASTMESSAGEDATE'])}",
+                  file=sys.stderr)
+        sys.exit(2)
+    return rows[0]["Z_PK"], rows[0]["ZPARTNERNAME"]
+
+
+SENDER = """coalesce(nullif(pn.ZPUSHNAME,''), nullif(gm.ZCONTACTNAME,''),
+            replace(replace(gm.ZMEMBERJID,'@s.whatsapp.net',''),'@lid',''), '?')"""
+JOINS = """left join ZWAGROUPMEMBER gm on m.ZGROUPMEMBER = gm.Z_PK
+           left join ZWAPROFILEPUSHNAME pn on pn.ZJID = gm.ZMEMBERJID
+           left join ZWAMEDIAITEM mi on m.ZMEDIAITEM = mi.Z_PK"""
+
+
+def cmd_inbox(con, a):
+    if a.days is None:
+        a.days = setting("inbox_days", 1)
+    lid = own_lid(con)
+    if not lid:
+        sys.exit("no pude deducir tu LID")
+    rows = con.execute(f"""
+        select m.ZMESSAGEDATE d, m.ZSTANZAID stanza_id, c.ZPARTNERNAME chat,
+               c.Z_PK chat_id, c.ZCONTACTJID chat_jid,
+               case when c.ZCONTACTJID not like '%@g.us' then c.ZPARTNERNAME
+                    else {SENDER} end sender,
+               case when c.ZCONTACTJID not like '%@g.us' then 'directo'
+                    when m.ZTEXT like '%@{lid}%' then 'mencion'
+                    else 'respuesta' end kind,
+               m.ZTEXT text, mi.ZMEDIALOCALPATH path
+        from ZWAMESSAGE m
+        join ZWACHATSESSION c on m.ZCHATSESSION = c.Z_PK
+        left join ZWAMESSAGE p on m.ZPARENTMESSAGE = p.Z_PK
+        {JOINS}
+        where m.ZISFROMME = 0 and m.ZMESSAGEDATE > ?
+          and (
+            -- En grupo solo cuenta si te nombran o responden algo tuyo: lo demas
+            -- es conversacion ajena. Y deja de contar si ya escribiste despues: si
+            -- contestaste en ese chat, la mencion ya la atendiste. Sin esto una
+            -- mencion vieja se queda en la bandeja para siempre.
+            (c.ZCONTACTJID like '%@g.us'
+             and (m.ZTEXT like '%@{lid}%' or p.ZISFROMME = 1)
+             and m.ZMESSAGEDATE > coalesce((select max(r.ZMESSAGEDATE) from ZWAMESSAGE r
+                                            where r.ZCHATSESSION = c.Z_PK
+                                              and r.ZISFROMME = 1), 0))
+            or
+            -- En un chat uno a uno todo mensaje es para vos. Lo que importa es si
+            -- quedo sin contestar: mas nuevo que tu ultima respuesta ahi.
+            (c.ZCONTACTJID not like '%@g.us'
+             and m.ZMESSAGEDATE > coalesce((select max(r.ZMESSAGEDATE) from ZWAMESSAGE r
+                                            where r.ZCHATSESSION = c.Z_PK
+                                              and r.ZISFROMME = 1), 0))
+          )
+        order by m.ZMESSAGEDATE desc""", (cutoff(a.days),)).fetchall()
+    # stanza_id es la clave de idempotencia: unica por mensaje y estable entre corridas.
+    # Poniendola en el issue de Plane, una automation sabe que ya atendio ese mensaje.
+    out = []
+    for r in rows:
+        is_group = (r["chat_jid"] or "").endswith("@g.us")
+        if a.only == "grupos" and not is_group:
+            continue
+        if a.only == "directos" and is_group:
+            continue
+        item = {"date": ts(r["d"]), "stanza_id": r["stanza_id"], "chat": r["chat"],
+                "chat_id": r["chat_id"], "chat_jid": r["chat_jid"],
+                "sender": r["sender"], "kind": r["kind"],
+                "text": (r["text"] or "").replace("\n", " "),
+                "media": os.path.join(MEDIA_BASE, r["path"]) if r["path"] else None}
+        # La captura casi nunca viene en el mismo mensaje que la mencion: se manda la
+        # imagen y dos lineas despues el "@fulano mira esto". Sin esta ventana, el
+        # agente lee "mira esto" y no tiene idea de que.
+        item["adjuntos_cerca"] = nearby_media(con, r["chat_id"], r["d"], a.window)
+        # Un audio no se puede leer: se marca para que el agente lo pase por
+        # ./bin/wa-transcribe antes de decidir si es soporte.
+        item["audios"] = [m["path"] for m in item["adjuntos_cerca"]
+                          if m["type"] == "audio"]
+        out.append(item)
+    return out
+
+
+def nearby_media(con, chat_id, when, minutes):
+    """Adjuntos del mismo chat dentro de +/- N minutos del mensaje."""
+    if not minutes:
+        return []
+    rows = con.execute(f"""
+        select m.ZMESSAGEDATE d, {SENDER} sender, m.ZMESSAGETYPE mtype,
+               mi.ZMEDIALOCALPATH path, m.ZTEXT text
+        from ZWAMESSAGE m {JOINS}
+        where m.ZCHATSESSION = ? and mi.ZMEDIALOCALPATH is not null
+              and mi.ZMEDIALOCALPATH <> '' and m.ZMESSAGEDATE between ? and ?
+        order by m.ZMESSAGEDATE""",
+        (chat_id, when - minutes * 60, when + minutes * 60)).fetchall()
+    return [{"date": ts(r["d"]), "sender": r["sender"],
+             "type": {1: "imagen", 2: "video", 3: "audio", 8: "documento"}
+                     .get(r["mtype"], f"tipo{r['mtype']}"),
+             "caption": (r["text"] or "").replace("\n", " "),
+             "path": os.path.join(MEDIA_BASE, r["path"])} for r in rows]
+
+
+def cmd_chats(con, a):
+    sql = """select Z_PK id, ZCONTACTJID jid, ZPARTNERNAME name, ZUNREADCOUNT unread,
+                    ZLASTMESSAGEDATE d,
+                    case when ZCONTACTJID like '%@g.us' then 'grupo' else 'directo' end kind
+             from ZWACHATSESSION where ZPARTNERNAME is not null and ZCONTACTJID is not null"""
+    p = []
+    if a.query:
+        sql += " and ZPARTNERNAME like ?"
+        p.append(f"%{a.query}%")
+    if a.unread:
+        sql += " and ZUNREADCOUNT > 0"
+    sql += " order by ZLASTMESSAGEDATE desc limit ?"
+    p.append(a.n)
+    return [{"id": r["id"], "jid": r["jid"], "kind": r["kind"], "unread": r["unread"],
+             "last": ts(r["d"]), "name": r["name"]}
+            for r in con.execute(sql, p).fetchall()]
+
+
+def cmd_chat(con, a):
+    pk, name = resolve_chat(con, a.chat)
+    where, p = "m.ZCHATSESSION = ?", [pk]
+    if a.days is not None:
+        where += " and m.ZMESSAGEDATE > ?"
+        p.append(cutoff(a.days))
+    rows = con.execute(f"""
+        select m.ZMESSAGEDATE d, m.ZISFROMME mine, {SENDER} sender, m.ZMESSAGETYPE mtype,
+               m.ZTEXT text, mi.ZMEDIALOCALPATH path
+        from ZWAMESSAGE m {JOINS}
+        where {where} order by m.ZMESSAGEDATE desc limit ?""", p + [a.n]).fetchall()
+    out = []
+    for r in reversed(rows):
+        out.append({"date": ts(r["d"]), "chat": name, "chat_id": pk,
+                    "sender": "YO" if r["mine"] else r["sender"],
+                    "text": (r["text"] or "").replace("\n", " "),
+                    "media": os.path.join(MEDIA_BASE, r["path"]) if r["path"] else None})
+    return out
+
+
+def cmd_media(con, a):
+    pk, name = resolve_chat(con, a.chat)
+    rows = con.execute(f"""
+        select m.ZMESSAGEDATE d, {SENDER} sender, m.ZMESSAGETYPE mtype,
+               mi.ZMEDIALOCALPATH path, mi.ZFILESIZE size, m.ZTEXT text
+        from ZWAMESSAGE m {JOINS}
+        where m.ZCHATSESSION = ? and mi.ZMEDIALOCALPATH is not null
+              and mi.ZMEDIALOCALPATH <> ''
+        order by m.ZMESSAGEDATE desc limit ?""", (pk, a.n)).fetchall()
+    out = []
+    for r in rows:
+        full = os.path.join(MEDIA_BASE, r["path"])
+        out.append({"date": ts(r["d"]), "chat": name, "sender": r["sender"],
+                    "type": {1: "imagen", 2: "video", 3: "audio", 8: "documento"}
+                            .get(r["mtype"], f"tipo{r['mtype']}"),
+                    "bytes": r["size"], "caption": (r["text"] or "").replace("\n", " "),
+                    "path": full, "exists": os.path.exists(full)})
+    return out
+
+
+def readable():
+    """No alcanza con que el archivo exista: hay que poder LEERLO. Si algun dia
+    WhatsApp cifra la base (SQLCipher, como en Android), el archivo sigue estando
+    pero abre con 'file is not a database'. Mejor comprobarlo que prometerlo."""
+    db = SOURCE["db"]
+    if not db or not os.path.exists(db):
+        return False, "no existe"
+    try:
+        with open(db, "rb") as fh:
+            magic = fh.read(16)
+        if not magic.startswith(b"SQLite format 3"):
+            return False, "el archivo esta cifrado o no es SQLite"
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        n = con.execute("select count(*) from ZWAMESSAGE").fetchone()[0]
+        con.close()
+        return True, f"{n} mensajes legibles"
+    except sqlite3.DatabaseError as exc:
+        return False, f"no se puede leer: {exc}"
+    except OSError as exc:
+        return False, f"sin permiso de lectura: {exc}"
+
+
+def _transcribe_check():
+    """Opcional: sin esto todo funciona, solo que los audios quedan sin leer."""
+    exe = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wa-transcribe")
+    if not os.path.exists(exe):
+        return False, "falta bin/wa-transcribe"
+    try:
+        p = subprocess.run([exe, "--check", "--json"], capture_output=True,
+                           text=True, timeout=30)
+        info = json.loads(p.stdout or "{}")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False, "no pude verificar"
+    if info.get("puede"):
+        # Ojo: con Orca listo `motores` viene vacio, asi que indexarlo revienta el doctor.
+        if info.get("orca"):
+            return True, f"Orca con modelo {info.get('modelo_orca')}"
+        return True, f"{info['motores'][0]} con modelo {info['modelo']}"
+    if not info.get("motores"):
+        return False, ("opcional — sin motor: descarga el modelo en Ajustes > Voz, "
+                       "o instala uno local con brew install whisper-cpp")
+    return False, f"opcional — falta el modelo {info.get('modelo')}"
+
+
+def cmd_doctor(con, a):
+    """Para que el usuario sepa que le falta antes de que nada dependa de esto."""
+    db = SOURCE["db"]
+    ok_read, detail_read = readable()
+    checks = [
+        ("lectura soportada en este sistema", SOURCE["verified"], platform.system()),
+        ("WhatsApp Desktop instalado", bool(GC) and os.path.isdir(GC),
+         GC or (SOURCE["app"] or "no hay app oficial para este sistema")),
+        ("base de chats presente", os.path.exists(db),
+         f"{os.path.getsize(db) // 1048576} MB" if os.path.exists(db) else "falta"),
+        ("base sin cifrar y legible", ok_read, detail_read),
+        ("sqlite3 disponible", shutil.which("sqlite3") is not None,
+         shutil.which("sqlite3") or "no esta en el PATH"),
+        ("orca disponible (solo para escribir)", shutil.which("orca") is not None,
+         shutil.which("orca") or "no esta en el PATH"),
+        ("transcripcion de audio (opcional)", *_transcribe_check()),
+    ]
+    return [{"check": n, "ok": ok, "detalle": d} for n, ok, d in checks]
+
+
+def cmd_whoami(con, a):
+    lid = own_lid(con)
+    n = con.execute("select count(distinct ZCHATSESSION) c from ZWAGROUPMEMBER "
+                    "where ZMEMBERJID=?", (f"{lid}@lid",)).fetchone()["c"]
+    name = con.execute("select ZPUSHNAME p from ZWAPROFILEPUSHNAME where ZJID=?",
+                       (f"{lid}@lid",)).fetchone()
+    return [{"lid": lid, "name": name["p"] if name else None, "grupos": n}]
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--json", action="store_true")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    def add(name, **kw):
+        sp = sub.add_parser(name, **kw)
+        sp.add_argument("--json", dest="json_sub", action="store_true")
+        return sp
+
+    s = add("inbox", help="menciones y respuestas dirigidas a vos")
+    s.add_argument("--days", type=int, default=None,
+                   help="por defecto sale de `wa-scope config inbox_days`")
+    s.add_argument("--window", type=int, default=5,
+                   help="minutos alrededor de cada mensaje donde buscar adjuntos (0 apaga)")
+    s.add_argument("--only", choices=["todos", "grupos", "directos"], default="todos")
+    s.set_defaults(fn=cmd_inbox)
+
+    s = add("chats", help="lista chats")
+    s.add_argument("--query"); s.add_argument("--unread", action="store_true")
+    s.add_argument("-n", type=int, default=30); s.set_defaults(fn=cmd_chats)
+
+    s = add("chat", help="mensajes de un chat")
+    s.add_argument("chat"); s.add_argument("-n", type=int, default=40)
+    s.add_argument("--days", type=int); s.set_defaults(fn=cmd_chat)
+
+    s = add("media", help="adjuntos de un chat, con ruta en disco")
+    s.add_argument("chat"); s.add_argument("-n", type=int, default=15)
+    s.set_defaults(fn=cmd_media)
+
+    add("whoami").set_defaults(fn=cmd_whoami)
+    add("doctor", help="verifica los requisitos").set_defaults(fn=cmd_doctor)
+
+    a = ap.parse_args()
+    if getattr(a, "json_sub", False):   # permite --json antes o despues del subcomando
+        a.json = True
+    if a.cmd == "doctor":               # tiene que correr aunque falte todo lo demas
+        rows = cmd_doctor(None, a)
+        if a.json:
+            print(json.dumps(rows, ensure_ascii=False, indent=2))
+        else:
+            for r in rows:
+                print(f"{'ok ' if r['ok'] else 'FALTA'}  {r['check']}: {r['detalle']}")
+            faltan = [r for r in rows if not r["ok"] and "opcional" not in r["check"]]
+            if faltan:
+                print("\n" + REQUISITOS)
+        # Lo opcional no hace fallar el chequeo: sin transcripcion todo funciona,
+        # solo que los audios quedan sin leer.
+        obligatorios = [r for r in rows if "opcional" not in r["check"]]
+        sys.exit(0 if all(r["ok"] for r in obligatorios) else 1)
+    con, tmp = snapshot()
+    try:
+        rows = a.fn(con, a)
+    finally:
+        con.close(); shutil.rmtree(tmp, ignore_errors=True)
+
+    if a.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2)); return
+    if not rows:
+        print("(sin resultados)"); return
+    for r in rows:
+        print(" | ".join(str(v) for v in r.values() if v not in (None, "")))
+
+
+if __name__ == "__main__":
+    main()

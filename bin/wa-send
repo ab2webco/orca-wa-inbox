@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+"""wa-send — escribe (y opcionalmente envia) un mensaje en WhatsApp Desktop.
+
+  wa-send "<chat>" "texto"          -> deja el texto SIN enviar
+  wa-send "<chat>" "texto" --send    -> lo envia
+
+Por defecto NO envia: deja el chat abierto con el texto escrito para que lo revises
+y presiones Enter vos. --send es opt-in explicito.
+
+Maneja la UI real de la app via accesibilidad (orca computer). No usa librerias no
+oficiales ni vincula un dispositivo nuevo a la cuenta.
+"""
+import argparse, json, os, re, subprocess, sys, time
+
+APP = "net.whatsapp.WhatsApp"
+SCOPE_DB = (os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~/AppData/Roaming"),
+                         "wa-inbox", "scope.db") if sys.platform == "win32"
+            else os.path.expanduser("~/.wa-inbox/scope.db"))
+SCROLL_TRIES = 25   # cuantas veces bajar la lista antes de rendirse
+
+
+def signature():
+    """El nombre sale del registro, no del codigo: cada quien nombra a su agente.
+    Si no hay nombre configurado, no se firma nada inventado."""
+    try:
+        import sqlite3
+        con = sqlite3.connect(SCOPE_DB)
+        row = con.execute("select value from settings where key='agent_name'").fetchone()
+        con.close()
+        return f"-- {row[0]}" if row and row[0] else None
+    except Exception:
+        return None
+ORCA = "orca"
+# "Mensajes en el chat con <nombre>" es el ancla que confirma que estas en el chat correcto.
+IN_CHAT = re.compile(r"Mensajes en el chat con (.+?)(?:,|$)")
+LINE = re.compile(r"^\s*(\d+) (.+)$")
+
+
+def orca(*args, ok_fail=False):
+    p = subprocess.run([ORCA, "computer", *args, "--json", "--no-screenshot"],
+                       capture_output=True, text=True)
+    if p.returncode != 0:
+        if ok_fail:
+            return None
+        sys.exit(f"orca fallo: {p.stderr.strip() or p.stdout.strip()}")
+    try:
+        d = json.loads(p.stdout)
+    except json.JSONDecodeError:
+        sys.exit(f"orca devolvio algo que no es JSON: {p.stdout[:300]}")
+    return d.get("result", d)
+
+
+def state(restore=False):
+    """Si la ventana esta minimizada o tapada, el arbol no existe: hay que traerla."""
+    args = ["get-app-state", "--app", APP] + (["--restore-window"] if restore else [])
+    result = orca(*args, ok_fail=not restore)
+    if result is None:
+        result = orca("get-app-state", "--app", APP, "--restore-window")
+    return result.get("snapshot", {}).get("treeText", "")
+
+
+def find(tree, pattern, role=None):
+    """Devuelve (indice, linea) del primer elemento que matchea. Los indices son
+    efimeros: hay que re-leer el arbol despues de cada accion."""
+    rx = re.compile(pattern)
+    for ln in tree.splitlines():
+        m = LINE.match(ln)
+        if not m:
+            continue
+        idx, rest = int(m.group(1)), m.group(2)
+        if role and not rest.startswith(role):
+            continue
+        if rx.search(rest):
+            return idx, rest
+    return None, None
+
+
+def current_chat(tree):
+    m = IN_CHAT.search(tree)
+    return m.group(1).strip().lstrip("‎") if m else None
+
+
+def chat_row(tree, target):
+    """La fila del chat DENTRO de la lista lateral.
+
+    Ojo: los resultados del buscador se ven identicos en el arbol pero clickearlos NO
+    cambia de chat. Se distinguen por posicion: los resultados salen antes del
+    contenedor "Lista de chats" y las filas reales despues. Sin este corte, el script
+    clickea un resultado, no pasa nada, y el guard aborta sin explicar por que.
+    """
+    anchor, _ = find(tree, r"Lista de chats")
+    if anchor is None:
+        return None
+    esc = re.escape(target.strip())
+    for ln in tree.splitlines():
+        m = LINE.match(ln)
+        if not m:
+            continue
+        idx, rest = int(m.group(1)), m.group(2).replace("\u200e", "")
+        if idx <= anchor:
+            continue
+        if re.match(rf"^(bot[oó]n|texto \(selected\)) {esc}(,|$)", rest):
+            return idx
+    return None
+
+
+def scroll_to_top(tree):
+    listing, _ = find(tree, r"Lista de chats")
+    if listing is None:
+        return tree
+    for _ in range(SCROLL_TRIES):
+        orca("scroll", "--app", APP, "--element-index", str(listing),
+             "--direction", "up", ok_fail=True)
+        time.sleep(0.25)
+    return state()
+
+
+def clear_search(tree):
+    """Una busqueda vieja deja resultados arriba que confunden la deteccion."""
+    idx, _ = find(tree, r"Eliminar texto")
+    if idx is None:
+        return tree
+    orca("click", "--app", APP, "--element-index", str(idx), ok_fail=True)
+    time.sleep(0.6)
+    return state()
+
+
+def open_chat(target):
+    tree = state()
+    if not tree:
+        sys.exit("no pude leer la ventana de WhatsApp (esta abierta?)")
+    if (cur := current_chat(tree)) and cur.lower() == target.lower():
+        return tree, cur
+
+    tree = clear_search(tree)
+
+    # Primero la lista visible. Clickear la fila SI cambia de chat; escribir en el
+    # buscador no: "Buscar" es un texto, no un campo, hasta que se expande, y aun
+    # expandido clickear un resultado no navegaba. La lista es el camino que funciona.
+    idx = chat_row(tree, target)
+
+    if idx is None:
+        # No esta a la vista: recorrer la lista. El buscador no sirve — clickear un
+        # resultado de busqueda no cambia de chat, solo la fila de la lista lo hace.
+        # Se vuelve arriba primero: si una corrida anterior dejo la lista abajo, un
+        # chat reciente queda fuera de vista y parece que no existe.
+        tree = scroll_to_top(tree)
+        idx = chat_row(tree, target)
+
+    if idx is None:
+        listing, _ = find(tree, r"Lista de chats")
+        if listing is None:
+            sys.exit("no encontre la lista de chats en la UI")
+        for _ in range(SCROLL_TRIES):
+            orca("scroll", "--app", APP, "--element-index", str(listing),
+                 "--direction", "down")
+            time.sleep(0.5)
+            tree = state()
+            idx = chat_row(tree, target)
+            if idx is not None:
+                break
+            listing, _ = find(tree, r"Lista de chats")
+            if listing is None:
+                break
+
+    if idx is None:
+        sys.exit(f"no encontre el chat {target!r}; abrilo a mano una vez y reintenta")
+
+    orca("click", "--app", APP, "--element-index", str(idx))
+    time.sleep(1.4)
+
+    tree = state()
+    cur = current_chat(tree)
+    if not cur or cur.strip().lower() != target.strip().lower():
+        sys.exit(f"abri {cur!r} pero pediste {target!r} — abortado sin escribir nada")
+    return tree, cur
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("chat", help="nombre exacto del chat o grupo")
+    ap.add_argument("text", help="el mensaje")
+    ap.add_argument("--send", action="store_true",
+                    help="ademas de escribirlo, lo envia (por defecto solo lo deja escrito)")
+    ap.add_argument("--raw", action="store_true",
+                    help="no firmar: el mensaje sale tal cual, sin la firma del agente")
+    a = ap.parse_args()
+    # Todo mensaje del agente va firmado, para que nunca haya duda de si escribe la
+    # persona o su agente. --raw es la excepcion, para cuando escribe ella.
+    sig = signature()
+    if not a.raw:
+        if not sig:
+            sys.exit("no hay nombre de agente configurado. Fijalo con "
+                     "`wa-scope agent \"<nombre>\"`, o usa --raw para escribir sin firma.")
+        if not a.text.rstrip().endswith(sig):
+            a.text = f"{a.text.rstrip()}\n{sig}"
+
+    tree, cur = open_chat(a.chat)
+
+    idx, _ = find(tree, r"Escribir mensaje|Type a message")
+    if idx is None:
+        sys.exit("no encontre el campo de escribir mensaje")
+    orca("set-value", "--app", APP, "--element-index", str(idx), "--value", a.text)
+    time.sleep(0.4)
+
+    if not a.send:
+        print(f"BORRADOR en {cur!r}: {a.text}\n(no enviado — repeti con --send, "
+              f"o presiona Enter en la app)")
+        return
+
+    # Enter necesita la ventana enfocada; set-value no. Si no lo esta, la traemos al frente.
+    if orca("press-key", "--app", APP, "--key", "Return", ok_fail=True) is None:
+        orca("get-app-state", "--app", APP, "--restore-window")
+        time.sleep(0.5)
+        orca("press-key", "--app", APP, "--key", "Return")
+    time.sleep(0.8)
+    if a.text[:40] in state():
+        print(f"ENVIADO a {cur!r}: {a.text}")
+    else:
+        print(f"Enter presionado en {cur!r}, pero no vi el mensaje en el chat. "
+              f"Verifica en la app.", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

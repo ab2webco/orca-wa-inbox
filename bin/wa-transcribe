@@ -1,0 +1,317 @@
+#!/usr/bin/env python3
+"""wa-transcribe — pasa una nota de voz a texto, sin depender de nada de Orca.
+
+  wa-transcribe <archivo.opus>          transcribe
+  wa-transcribe --check                 dice si este equipo puede transcribir
+
+Todo vive en el plugin: esta herramienta viaja con el, y el motor se busca en el
+equipo del usuario. **No descarga nada por su cuenta**: si falta el modelo, lo dice y
+explica como instalarlo. Un plugin que se baja pesos de internet en silencio es lo
+contrario de lo que promete su ficha de permisos.
+
+Los motores se prueban en orden. El primero que este, gana.
+"""
+import argparse, json, os, shutil, subprocess, sys, tempfile
+
+CONFIG_KEYS = ("transcribe", "transcribe_model", "transcribe_lang")
+
+# Un modelo solo-ingles sobre audio en español devuelve basura sin avisar, que es peor
+# que un error. Estos nombres se rechazan de entrada.
+SOLO_INGLES = ("base.en", "small.en", "tiny.en", "medium.en",
+               "parakeet-tdt-0.6b-v2-int8", "zipformer-streaming-en-20m")
+
+# Dos niveles, y nada mas: uno que entre en cualquier equipo y uno para cuando hay con
+# que. El resto del catalogo es de un solo idioma o no cubre español.
+CALIDAD = {
+    "minima": {"orca": "whisper-tiny", "local": "tiny",
+               "mb": 146, "nota": "corre en cualquier equipo, pero en español destroza "
+                                  "nombres y pedidos: solo si no hay con que, y no "
+                                  "decidas nada leyendo su texto"},
+    "optima": {"orca": "parakeet-tdt-0.6b-v3-int8", "local": "small",
+               "mb": 639, "nota": "25 idiomas con puntuacion; el recomendado"},
+}
+
+
+_AJUSTES = None
+
+
+def ajustes():
+    """Los ajustes se le preguntan a wa-scope, que ya sabe que el panel manda sobre el
+    scope.db. Leer el sqlite directo se saltaba el panel: la calidad que el usuario
+    elegia ahi no llegaba nunca a la transcripcion. Se resuelve una vez por proceso."""
+    global _AJUSTES
+    if _AJUSTES is None:
+        _AJUSTES = {}
+        cli = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wa-scope")
+        try:
+            p = subprocess.run([cli, "config", "--json"], capture_output=True,
+                               text=True, timeout=30)
+            if p.returncode == 0:
+                _AJUSTES = {r["key"]: r["value"] for r in json.loads(p.stdout or "[]")
+                            if isinstance(r, dict) and r.get("key")}
+        except (OSError, ValueError, TypeError, subprocess.SubprocessError):
+            _AJUSTES = {}
+    return _AJUSTES
+
+
+def setting(key, fallback):
+    """Si wa-scope falta o falla, se transcribe con los valores de fabrica: quedarse sin
+    voz porque no se pudo leer un ajuste es peor que usar el default."""
+    value = ajustes().get(key)
+    return value if value else fallback
+
+
+def a_wav(origen):
+    """Los motores quieren PCM 16 kHz mono; WhatsApp guarda opus."""
+    if not shutil.which("ffmpeg"):
+        return None, "falta ffmpeg (brew install ffmpeg)"
+    destino = os.path.join(tempfile.mkdtemp(prefix="wa-tx."), "audio.wav")
+    p = subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-i", origen,
+                        "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", destino],
+                       capture_output=True, text=True)
+    if p.returncode != 0 or not os.path.exists(destino):
+        return None, f"ffmpeg fallo: {p.stderr.strip()[:200]}"
+    return destino, None
+
+
+def modelo_local(nombre):
+    """Busca los pesos donde los dejan whisper.cpp y Homebrew. No los descarga."""
+    candidatos = [
+        os.path.expanduser(f"~/.cache/whisper/ggml-{nombre}.bin"),
+        os.path.expanduser(f"~/Library/Caches/whisper/ggml-{nombre}.bin"),
+        f"/opt/homebrew/share/whisper-cpp/ggml-{nombre}.bin",
+        f"/usr/local/share/whisper-cpp/ggml-{nombre}.bin",
+    ]
+    return next((c for c in candidatos if os.path.exists(c)), None)
+
+
+def idioma():
+    return setting("transcribe_lang", "auto")
+
+
+def calidad():
+    """`optima` por defecto; `minima` para un equipo sin cómputo."""
+    elegida = setting("transcribe_quality", "optima")
+    return CALIDAD.get(elegida, CALIDAD["optima"])
+
+
+def orca_listo():
+    """Si Orca ya tiene descargado el modelo de la calidad elegida. Preguntar solo si
+    el binario existe no alcanza: el panel decia "sin motor: brew install whisper-cpp"
+    mientras Orca transcribia perfecto, porque `puede` solo miraba los motores locales."""
+    exe = shutil.which("orca")
+    if not exe:
+        return False
+    try:
+        p = subprocess.run([exe, "speech", "models", "list", "--json"],
+                           capture_output=True, text=True, timeout=30)
+        d = json.loads(p.stdout or "{}")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+    modelos = (d.get("result") or d).get("models") or []
+    quiero = calidad()["orca"]
+    return any(m.get("id") == quiero and m.get("status") == "ready" for m in modelos)
+
+
+def por_orca(origen):
+    """Primero Orca: ya tiene motor y modelos administrados. Si no esta lista, se
+    devuelve el codigo tal cual para que el panel sepa QUE falta, no solo que fallo."""
+    exe = shutil.which("orca")
+    if not exe:
+        return None
+    try:
+        p = subprocess.run([exe, "speech", "transcribe", origen,
+                            "--model", calidad()["orca"],
+                            "--language", idioma(), "--json"],
+                           capture_output=True, text=True, timeout=900)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    try:
+        d = json.loads(p.stdout or "{}")
+    except ValueError:
+        return None
+    # Un CLI sin el comando devuelve "Unknown command": eso no es un fallo de voz.
+    err = (d.get("error") or {}) if isinstance(d.get("error"), dict) else {}
+    # Un Orca sin el comando responde method_not_found o invalid_argument: eso no es
+    # un problema de voz, es un Orca viejo. Se cae al motor local.
+    if err.get("code") in ("method_not_found", "invalid_argument"):
+        return None
+    if d.get("ok") and (d.get("result") or {}).get("text"):
+        r = d["result"]
+        return {"ok": True, "motor": "orca", "modelo": r.get("model"),
+                "texto": " ".join(r["text"].split()), "local": True}
+    if err.get("code"):
+        d = err.get("data") or {}
+        # Cada codigo se arregla distinto; un mensaje generico no le sirve a nadie.
+        acciones = {
+            "voice_not_configured":
+                f"Ajustes -> Voz en Orca, y baja {d.get('recommendedModelId', 'el modelo recomendado')}",
+            "model_not_downloaded":
+                f"orca speech models download {d.get('modelId', '')}".strip(),
+            "model_language_mismatch":
+                "el modelo elegido no cubre ese idioma: usa el multilingue en Ajustes -> Voz",
+            "decoder_missing": "brew install ffmpeg",
+            "audio_too_long": "el audio es mas largo que el tope; escuchalo a mano",
+            "file_too_large": "el archivo excede el tope; escuchalo a mano",
+            "speech_busy": "la voz esta ocupada, reintenta en un momento",
+        }
+        pasos = d.get("nextSteps")
+        return {"ok": False, "codigo": err["code"], "razon": err.get("message"),
+                "como": acciones.get(err["code"]) or
+                        (pasos[0] if isinstance(pasos, list) and pasos else "Ajustes -> Voz en Orca"),
+                "detalle": {k: v for k, v in d.items()
+                            if k in ("modelId", "recommendedModelId", "requestedLanguage")}}
+    return None
+
+
+def motores():
+    """Que hay instalado, en orden de preferencia."""
+    out = []
+    for exe in ("whisper-cli", "whisper-cpp", "main"):
+        ruta = shutil.which(exe)
+        if ruta and exe != "main":
+            out.append(("whisper.cpp", ruta))
+            break
+    try:
+        import mlx_whisper  # noqa: F401
+        out.append(("mlx-whisper", sys.executable))
+    except ImportError:
+        pass
+    if shutil.which("whisper"):
+        out.append(("openai-whisper", shutil.which("whisper")))
+    return out
+
+
+def con_whisper_cpp(exe, wav, nombre):
+    pesos = modelo_local(nombre)
+    if not pesos:
+        return None, (f"falta el modelo '{nombre}'. Bajalo una vez con: "
+                      f"whisper-cpp --model {nombre} --help  (o ponelo en "
+                      f"~/.cache/whisper/ggml-{nombre}.bin)")
+    p = subprocess.run([exe, "-m", pesos, "-f", wav, "-l", idioma(), "-nt", "-np"],
+                       capture_output=True, text=True, timeout=600)
+    if p.returncode != 0:
+        return None, p.stderr.strip()[:200]
+    return " ".join(p.stdout.split()), None
+
+
+def con_mlx(wav, nombre):
+    mapa = {"base": "mlx-community/whisper-base-mlx",
+            "small": "mlx-community/whisper-small-mlx",
+            "turbo": "mlx-community/whisper-large-v3-turbo"}
+    code = ("import json,mlx_whisper,sys;"
+            f"print(json.dumps(mlx_whisper.transcribe(sys.argv[1], path_or_hf_repo={mapa.get(nombre, mapa['base'])!r})))")
+    p = subprocess.run([sys.executable, "-c", code, wav], capture_output=True,
+                       text=True, timeout=900)
+    if p.returncode != 0:
+        return None, p.stderr.strip()[-200:]
+    try:
+        return " ".join(json.loads(p.stdout)["text"].split()), None
+    except (ValueError, KeyError) as exc:
+        return None, str(exc)
+
+
+def con_openai_whisper(exe, wav, nombre):
+    carpeta = tempfile.mkdtemp(prefix="wa-tx-out.")
+    p = subprocess.run([exe, wav, "--model", nombre, "--output_format", "txt",
+                        "--output_dir", carpeta, "--fp16", "False"],
+                       capture_output=True, text=True, timeout=1800)
+    if p.returncode != 0:
+        return None, p.stderr.strip()[-200:]
+    txt = next((os.path.join(carpeta, f) for f in os.listdir(carpeta)
+                if f.endswith(".txt")), None)
+    if not txt:
+        return None, "no genero salida"
+    with open(txt, encoding="utf-8") as fh:
+        return " ".join(fh.read().split()), None
+
+
+def transcribir(origen):
+    modo = setting("transcribe", "local")
+    if modo == "off":
+        return {"ok": False, "razon": "la transcripcion esta apagada",
+                "como": "wa-scope config transcribe local"}
+    if modo == "api":
+        return {"ok": False, "razon": "el modo api todavia no esta implementado",
+                "como": "usa 'local', que no manda el audio a ningun lado"}
+    # El modelo local sale de la calidad elegida, salvo que se fije uno a mano.
+    nombre = setting("transcribe_model", "") or calidad()["local"]
+    if nombre in SOLO_INGLES:
+        return {"ok": False, "codigo": "modelo_solo_ingles",
+                "razon": f"el modelo '{nombre}' solo entiende ingles y los audios "
+                         "mezclan espanol e ingles",
+                "como": "wa-scope config transcribe_model base"}
+    # 1) Orca, si sabe. 2) lo que haya en el equipo.
+    v = por_orca(origen)
+    if v is not None:
+        return v
+    disponibles = motores()
+    if not disponibles:
+        return {"ok": False, "codigo": "sin_motor",
+                "razon": "no hay motor de transcripcion disponible",
+                "como": "Activa la voz en Ajustes -> Voz de Orca, o instala uno: "
+                        "brew install whisper-cpp"}
+    wav, err = a_wav(origen)
+    if err:
+        return {"ok": False, "razon": err}
+    for motor, exe in disponibles:
+        if motor == "whisper.cpp":
+            texto, err = con_whisper_cpp(exe, wav, nombre)
+        elif motor == "mlx-whisper":
+            texto, err = con_mlx(wav, nombre)
+        else:
+            texto, err = con_openai_whisper(exe, wav, nombre)
+        if texto:
+            return {"ok": True, "motor": motor, "modelo": nombre, "texto": texto,
+                     "local": True}
+        ultimo = err
+    return {"ok": False, "razon": f"ningun motor pudo: {ultimo}"}
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("audio", nargs="?")
+    ap.add_argument("--check", action="store_true",
+                    help="dice si este equipo puede transcribir, sin transcribir nada")
+    ap.add_argument("--json", action="store_true")
+    a = ap.parse_args()
+
+    if a.check:
+        info = {"modo": setting("transcribe", "local"),
+                "orca": orca_listo(),
+                "idioma": idioma(),
+                "calidad": setting("transcribe_quality", "optima"),
+                "modelo_orca": calidad()["orca"],
+                "multilingue": (setting("transcribe_model", "") or calidad()["local"])
+                               not in SOLO_INGLES,
+                "modelo": setting("transcribe_model", "") or calidad()["local"],
+                "ffmpeg": bool(shutil.which("ffmpeg")),
+                "motores": [m for m, _ in motores()],
+                "pesos": bool(modelo_local(setting("transcribe_model", "") or calidad()["local"]))}
+        # Basta con UNA de las dos vias. Orca va primero en por_orca(), asi que si su
+        # modelo esta listo no hace falta ningun motor local ni ffmpeg.
+        info["puede"] = bool(info["orca"] or (
+            info["ffmpeg"] and info["motores"]
+            and (info["pesos"] or "mlx-whisper" in info["motores"])))
+        print(json.dumps(info, ensure_ascii=False, indent=2) if a.json
+              else "\n".join(f"{k}: {v}" for k, v in info.items()))
+        sys.exit(0 if info["puede"] else 1)
+
+    if not a.audio:
+        ap.error("falta el archivo de audio (o usa --check)")
+    if not os.path.exists(a.audio):
+        sys.exit(f"no existe: {a.audio}")
+    r = transcribir(a.audio)
+    if a.json:
+        print(json.dumps(r, ensure_ascii=False, indent=2))
+    elif r["ok"]:
+        print(r["texto"])
+    else:
+        print(f"{r['razon']}" + (f"\n  {r['como']}" if r.get("como") else ""),
+              file=sys.stderr)
+    sys.exit(0 if r["ok"] else 1)
+
+
+if __name__ == "__main__":
+    main()
