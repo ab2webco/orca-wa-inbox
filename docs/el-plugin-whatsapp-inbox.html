@@ -198,8 +198,8 @@ footer{margin-top:4rem;padding-top:1.2rem;border-top:3px solid var(--tinta);
         </tr>
         <tr>
           <td><strong>Este plugin</strong><br><span class="chip ac">automatizacion</span></td>
-          <td>Opera la aplicacion de escritorio que ya esta instalada y con sesion iniciada. Ni numero nuevo, ni dispositivo vinculado, ni API, ni aprobacion.</td>
-          <td class="ahora">Ve exactamente lo que ve la persona, con sus mismos permisos. El limite es real: necesita el equipo encendido y la aplicacion abierta.</td>
+          <td>Opera la aplicacion de escritorio que ya esta instalada y con sesion iniciada: ni numero nuevo, ni API, ni aprobacion. Donde no hay aplicacion de escritorio &mdash;o cuando hace falta una segunda linea&mdash; lee en cambio una sesion de WhatsApp Web con su propio perfil, conducida por el navegador de Orca; esa si ocupa uno de los puestos de dispositivo vinculado del numero, exactamente como abrir WhatsApp Web a mano.</td>
+          <td class="ahora">Ve exactamente lo que ve la persona, con sus mismos permisos. El limite es real: necesita el equipo encendido, y la aplicacion abierta o la pestana enlazada.</td>
         </tr>
       </tbody>
     </table></div>
@@ -565,25 +565,34 @@ footer{margin-top:4rem;padding-top:1.2rem;border-top:3px solid var(--tinta);
     <div class="scroll"><table>
       <thead><tr><th>Sistema</th><th>Leer WhatsApp</th><th>El resto del plugin</th></tr></thead>
       <tbody>
-        <tr><td>macOS con WhatsApp Desktop</td><td class="ahora">verificado</td><td>funciona</td></tr>
-        <tr><td>Windows con WhatsApp Desktop</td><td>sin verificar</td><td>funciona</td></tr>
-        <tr><td>Linux</td><td class="antes">sin camino</td><td>funciona</td></tr>
+        <tr><td>macOS con WhatsApp Desktop</td><td class="ahora">base local verificada</td><td>funciona</td></tr>
+        <tr><td>Windows</td><td>base local sin verificar; sesion web si</td><td>funciona</td></tr>
+        <tr><td>Linux</td><td>sin base local; se lee por sesion web</td><td>funciona</td></tr>
       </tbody>
     </table></div>
-    <p>La lectura depende de la base local que deja WhatsApp Desktop. <strong>WhatsApp Web no sirve</strong>: no deja base local, los mensajes viven en el almacenamiento del navegador. En Linux no existe una version oficial de la aplicacion, asi que no hay archivo que leer &mdash;no es algo que se pueda programar&mdash;. En Windows la aplicacion existe pero su formato no se verifico; sumarlo es agregar una entrada en un solo lugar, no reescribir nada.</p>
-    <div class="nota"><strong>Nunca sale a internet.</strong> No declara permiso de red, y Orca lo informa en la ficha del plugin. Lee una base local, escribe en el tablero que usted ya usa, y nada mas.</div>
+    <p><strong>Hay dos vias de lectura y se suman.</strong> La primera es la base local que deja WhatsApp Desktop: es la mas completa &mdash;todo el historial, y los adjuntos como archivos en disco&mdash; y solo esta verificada en macOS. La segunda es una sesion de <strong>WhatsApp Web</strong> con su propio perfil de navegador, conducida por el navegador de Orca. No depende de que exista una aplicacion de escritorio, asi que es la via que aplica en Linux, donde no hay una version oficial; y en macOS sirve para sumar una <em>segunda</em> linea &mdash;el numero de soporte de la empresa&mdash; junto a la que ya ocupa la aplicacion.</p>
+    <p>Lo que la via web <strong>no</strong> da, dicho de frente. No trae historial viejo: solo alcanza lo que esa sesion ya tiene cargada. No entrega los archivos adjuntos, porque viven cifrados dentro del perfil del navegador y no hay archivo que abrir &mdash;el mensaje si dice que traia una imagen, un audio o un documento, pero nadie lo puede ver&mdash;. Ocupa uno de los puestos de dispositivo vinculado del numero, y la sesion se puede caer y hay que volver a escanear el QR. Y <strong>no escribe</strong>: contestar sigue siendo de la linea local o de una persona. En Windows falta confirmar donde deja su base la aplicacion de escritorio; sumarlo es agregar una entrada en un solo lugar, no reescribir nada.</p>
+    <div class="nota"><strong>No sale a internet por su cuenta.</strong> No declara permiso de red, y Orca lo informa en la ficha del plugin. Lee la base local, escribe en el tablero que usted ya usa, y &mdash;si usted enciende la via web&mdash; conduce una pestana del navegador de Orca sobre la misma pagina de WhatsApp Web que abriria a mano. Para eso si declara que puede arrancar programas, y Orca se lo dice al instalar.</div>
   </section>
 
   <section>
     <div class="rotulo"><span class="num">09</span><h2>Limites conocidos</h2></div>
     <div class="hallazgos">
       <div class="hallazgo"><div class="cuerpo">
-        <div><span class="chip">sin verificar</span><strong>Windows</strong></div>
-        <p>Falta confirmar donde deja su base WhatsApp Desktop y si es legible.</p>
+        <div><span class="chip">sin verificar</span><strong>Windows, la base local</strong></div>
+        <p>Falta confirmar donde deja su base WhatsApp Desktop y si es legible. La via web si funciona ahi.</p>
       </div></div>
       <div class="hallazgo"><div class="cuerpo">
-        <div><span class="chip">no soportado</span><strong>Varias cuentas de WhatsApp</strong></div>
-        <p>Se lee una sola base. Si la aplicacion tiene mas de una cuenta, no esta probado cual se lee.</p>
+        <div><span class="chip">no soportado</span><strong>Contestar por la linea web</strong></div>
+        <p>Por la sesion web se lee, no se escribe: responder opera la ventana real de la aplicacion de escritorio, y esa ventana es la de la otra linea. Una conversacion de una linea web se atiende desde el telefono o desde esa misma sesion.</p>
+      </div></div>
+      <div class="hallazgo"><div class="cuerpo">
+        <div><span class="chip">no soportado</span><strong>Adjuntos por la linea web</strong></div>
+        <p>El agente sabe que llego una imagen o un audio y lo dice, pero no lo puede abrir ni transcribir: el archivo vive cifrado dentro del navegador. Por la base local si los abre y los lee.</p>
+      </div></div>
+      <div class="hallazgo"><div class="cuerpo">
+        <div><span class="chip">parcial</span><strong>Varias cuentas de WhatsApp</strong></div>
+        <p>La aplicacion de escritorio lee una sola linea, la del telefono con el que se instalo. Una segunda cuenta se suma como sesion web, con sus limites de arriba. Varias cuentas dentro de la misma aplicacion de escritorio no esta probado.</p>
       </div></div>
       <div class="hallazgo"><div class="cuerpo">
         <div><span class="chip">no soportado</span><strong>Audios y adjuntos salientes</strong></div>

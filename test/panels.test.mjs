@@ -154,12 +154,18 @@ console.log('\nconfig.html')
   // control de tres valores obligaria a elegir una y perder la otra.
   doc.getElementById('read-local').value = 'off'
   doc.getElementById('read-web').value = 'on'
+  // El texto de los mensajes es una eleccion APARTE de leer la linea: la bandeja web
+  // trae quien te nombro y cuando sin abrir nada, y el cuerpo solo si se pide. Si este
+  // control no llegara al storage, el panel diria guardado y el CLI seguiria en `off`.
+  doc.getElementById('read-web-text').value = 'memoria'
   doc.getElementById('save-source').click()
   await espera()
   ok('guarda que no lea la app de escritorio', storage.readLocal === 'off',
     `storage.readLocal = ${JSON.stringify(storage.readLocal)}`)
   ok('guarda que sume WhatsApp Web', storage.readWeb === 'on',
     `storage.readWeb = ${JSON.stringify(storage.readWeb)}`)
+  ok('guarda el texto de los mensajes web', storage.readWebText === 'memoria',
+    `storage.readWebText = ${JSON.stringify(storage.readWebText)}`)
   ok('confirma las fuentes en pantalla',
     doc.getElementById('said-source').textContent.includes('✓'))
   // Los valores son los que valida `wa-scope`: si el select ofreciera otro, el panel
@@ -169,9 +175,14 @@ console.log('\nconfig.html')
     JSON.stringify(valores('read-local')) === JSON.stringify(['off', 'on']) &&
     JSON.stringify(valores('read-web')) === JSON.stringify(['off', 'on']),
     `local = ${JSON.stringify(valores('read-local'))}, web = ${JSON.stringify(valores('read-web'))}`)
-  // Y se deja como estaba: lo de abajo comprueba el panel entero, no este ajuste.
+  ok('el texto web solo ofrece off/memoria',
+    JSON.stringify(valores('read-web-text')) === JSON.stringify(['memoria', 'off']),
+    `texto = ${JSON.stringify(valores('read-web-text'))}`)
+  // Y se deja como estaba: lo de abajo comprueba el panel entero, no este ajuste. El
+  // texto vuelve a `off`, que es donde tiene que arrancar.
   doc.getElementById('read-local').value = 'on'
   doc.getElementById('read-web').value = 'off'
+  doc.getElementById('read-web-text').value = 'off'
   doc.getElementById('save-source').click()
   await espera()
 
@@ -179,7 +190,7 @@ console.log('\nconfig.html')
   // panel dice guardado y `wa-scope` lo tira. Las listas se comprueban, no se confian.
   const opciones = (id) => [...doc.getElementById(id).options].map((o) => o.value)
   ok('el modo de transcripcion solo ofrece lo que el CLI acepta',
-    JSON.stringify(opciones('transcribe')) === JSON.stringify(['local', 'off', 'api']),
+    JSON.stringify(opciones('transcribe')) === JSON.stringify(['local', 'off']),
     `opciones = ${JSON.stringify(opciones('transcribe'))}`)
   ok('el idioma solo ofrece lo que el CLI acepta',
     JSON.stringify(opciones('lang')) === JSON.stringify(['auto', 'es', 'en', 'pt']),
@@ -541,6 +552,201 @@ console.log('\nconfig.html')
 }
 
 // ───────────────────────── activity.html ─────────────────────────
+// ───────── config.html: conectar una linea de WhatsApp Web ─────────
+// Enlazar una linea eran cuatro comandos de terminal, asi que la funcion existia y no
+// la usaba nadie. Lo que se comprueba aca es lo unico que la vuelve un producto: que el
+// boton deje el pedido, que cada estado diga que hacer, y que ninguno se quede sin un
+// boton que lo resuelva — un estado sin salida es el mismo callejon que el spinner.
+console.log('\nconfig.html — lineas de WhatsApp Web')
+{
+  const linea = (extra) => ({
+    id: 'web:pending:p-1', label: 'Soporte', profile: 'p-1', pending: true,
+    linkedAt: null, authorizedChats: 0, pageId: 'page-1', ...extra
+  })
+
+  const { doc, storage } = await montar('config.html', {}, 'es-419')
+  await espera()
+
+  ok('sin ninguna linea el panel lo dice en vez de quedar vacio',
+    /ninguna linea/i.test(doc.getElementById('lines-wrap').textContent),
+    doc.getElementById('lines-wrap').textContent.trim())
+
+  // Un boton que no valida manda al worker a crear un perfil sin nombre, que despues
+  // no se puede distinguir de los otros en la lista del navegador.
+  storage.webRequest = null
+  doc.getElementById('line-label').value = '   '
+  doc.getElementById('link-line').click()
+  await espera()
+  ok('conectar sin nombre no manda nada y lo dice',
+    !storage.webRequest && doc.getElementById('said-line').textContent.length > 0,
+    `webRequest = ${JSON.stringify(storage.webRequest)}`)
+
+  doc.getElementById('line-label').value = '  Soporte  '
+  doc.getElementById('link-line').click()
+  await espera()
+  ok('conectar deja el pedido que atiende el worker',
+    storage.webRequest && storage.webRequest.action === 'link' &&
+    storage.webRequest.label === 'Soporte',
+    `webRequest = ${JSON.stringify(storage.webRequest)}`)
+  ok('y mientras tanto dice lo que esta pasando, no que ya esta conectada',
+    /perfil/i.test(doc.getElementById('said-line').textContent),
+    doc.getElementById('said-line').textContent)
+}
+
+{
+  // Esperando el escaneo: el estado que el usuario ve mas tiempo y el unico en el que
+  // la accion pasa en OTRA ventana. Sin un boton que lleve a la pestana, dos veces la
+  // pregunta fue "donde se abre".
+  const { doc, storage } = await montar('config.html', {
+    webLines: { at: new Date().toISOString(), placement: 'flotante',
+      lines: [{ id: 'web:pending:p-1', label: 'Soporte', profile: 'p-1', pending: true,
+        linkedAt: null, authorizedChats: 0, pageId: 'page-1', state: 'esperando' }] }
+  }, 'es-419')
+  await espera()
+  const wrap = doc.getElementById('lines-wrap')
+  ok('la linea esperando dice que escanear y con que telefono',
+    /escanea/i.test(wrap.textContent) && /QR/i.test(wrap.textContent),
+    wrap.textContent.trim().slice(0, 160))
+  ok('y dice donde quedo la pestana',
+    /flotante/i.test(doc.getElementById('lines-place').textContent),
+    doc.getElementById('lines-place').textContent)
+
+  const ver = wrap.querySelector('[data-lact]')
+  ok('ofrece llevar a la pestana', !!ver && /pestana/i.test(ver.textContent),
+    ver && ver.textContent)
+  ver.click()
+  await espera()
+  ok('y ese boton le pide al worker que la ponga delante',
+    storage.webRequest && storage.webRequest.action === 'show' &&
+    storage.webRequest.pageId === 'page-1',
+    `webRequest = ${JSON.stringify(storage.webRequest)}`)
+}
+
+{
+  // La pestana cerrada NO es una linea perdida: la sesion vive en el perfil. Ofrecer
+  // abrirla otra vez es la diferencia entre un estado y un callejon.
+  const { doc, storage } = await montar('config.html', {
+    webLines: { at: new Date().toISOString(),
+      lines: [{ id: 'web:57300', label: 'Soporte', profile: 'p-1', pending: false,
+        linkedAt: '2026-09-18 10:00', authorizedChats: 2, state: 'sin-pestana' }] }
+  }, 'es-419')
+  await espera()
+  const boton = doc.getElementById('lines-wrap').querySelector('[data-lact]')
+  boton.click()
+  await espera()
+  ok('una pestana cerrada se puede volver a abrir desde el panel',
+    storage.webRequest && storage.webRequest.action === 'reopen' &&
+    storage.webRequest.profile === 'p-1',
+    `webRequest = ${JSON.stringify(storage.webRequest)}`)
+  ok('y avisa que no va a pedir escanear de nuevo',
+    /escanear|scan/i.test(doc.getElementById('lines-wrap').textContent),
+    doc.getElementById('lines-wrap').textContent.trim().slice(0, 200))
+}
+
+{
+  // Desvincular borra el perfil y las autorizaciones: un clic de inercia no puede
+  // alcanzar. Se pide confirmacion Y se dice que se pierde, con el numero real.
+  const { doc, storage } = await montar('config.html', {
+    webLines: { at: new Date().toISOString(), placement: 'proyecto', project: 'alfred',
+      lines: [{ id: 'web:57300', label: 'Soporte', profile: 'p-1', pending: false,
+        linkedAt: '2026-09-18 10:00', authorizedChats: 3, pageId: 'page-1',
+        state: 'enlazada' }] }
+  }, 'es-419')
+  await espera()
+  const wrap = doc.getElementById('lines-wrap')
+  ok('la linea enlazada dice cuantas conversaciones ve',
+    /3/.test(wrap.textContent), wrap.textContent.trim().slice(0, 160))
+  ok('y el fallback dice en que proyecto quedo la pestana y que se cierra con el',
+    /alfred/.test(doc.getElementById('lines-place').textContent),
+    doc.getElementById('lines-place').textContent)
+
+  storage.webRequest = null
+  wrap.querySelector('[data-lrm]').click()
+  await espera()
+  ok('el primer clic en desvincular no borra nada', !storage.webRequest,
+    `webRequest = ${JSON.stringify(storage.webRequest)}`)
+  const aviso = doc.querySelector('.confirm')
+  ok('avisa que se pierden las 3 conversaciones y el puesto de dispositivo',
+    !!aviso && /3/.test(aviso.textContent) && /dispositivo/i.test(aviso.textContent),
+    aviso && aviso.textContent.trim().slice(0, 200))
+
+  doc.querySelector('[data-lyes]').click()
+  await espera()
+  ok('confirmar si lo pide', storage.webRequest &&
+    storage.webRequest.action === 'unlink' && storage.webRequest.id === 'web:57300',
+    `webRequest = ${JSON.stringify(storage.webRequest)}`)
+}
+
+{
+  // Ningun estado sin salida. Es la regla entera de esta seccion: si algo se rompio,
+  // el panel tiene que ofrecer el boton que lo arregla, no describir la rotura.
+  const estados = ['esperando', 'cargando', 'enlazada', 'caida', 'sin-pestana', 'sin-orca']
+  for (const state of estados) {
+    const { doc } = await montar('config.html', {
+      webLines: { at: new Date().toISOString(),
+        lines: [{ id: 'web:x', label: 'Soporte', profile: 'p-1', pending: false,
+          linkedAt: '2026-09-18 10:00', authorizedChats: 0, pageId: 'page-1', state }] }
+    })
+    await espera()
+    const wrap = doc.getElementById('lines-wrap')
+    ok(`el estado ${state} ofrece una accion y no solo un diagnostico`,
+      !!wrap.querySelector('[data-lact]') && wrap.textContent.trim().length > 20,
+      wrap.textContent.trim().slice(0, 120))
+  }
+}
+
+{
+  // Los tres idiomas. Media traduccion no se ve hasta que la ve el usuario, y aca el
+  // texto que importa es justamente el que dice que hacer.
+  for (const [locale, esperado] of [['es-419', /escanea/i], ['en-US', /scan the QR/i],
+    ['pt-BR', /escaneie/i]]) {
+    const { doc } = await montar('config.html', {
+      webLines: { at: new Date().toISOString(),
+        lines: [{ id: 'web:pending:p-1', label: 'Soporte', profile: 'p-1', pending: true,
+          linkedAt: null, authorizedChats: 0, pageId: 'page-1', state: 'esperando' }] }
+    }, locale)
+    await espera()
+    ok(`el que hacer de la linea esta traducido en ${locale}`,
+      esperado.test(doc.getElementById('lines-wrap').textContent),
+      doc.getElementById('lines-wrap').textContent.trim().slice(0, 140))
+  }
+}
+
+{
+  // Un fallo con lineas sanas en la tabla: sin este renglon, el clic que fallo no dice
+  // absolutamente nada y el usuario lo vuelve a apretar.
+  const { doc } = await montar('config.html', {
+    webLines: { at: new Date().toISOString(), error: 'sin-orca',
+      lines: [{ id: 'web:x', label: 'Soporte', profile: 'p-1', pending: false,
+        linkedAt: '2026-09-18 10:00', authorizedChats: 1, pageId: 'p', state: 'enlazada' }] }
+  }, 'es-419')
+  await espera()
+  ok('lo que fallo se cuenta aunque la tabla tenga lineas sanas',
+    !doc.getElementById('lines-error').hidden &&
+    /Orca/i.test(doc.getElementById('lines-error').textContent),
+    doc.getElementById('lines-error').textContent)
+}
+
+{
+  // Cada texto nuevo en los tres idiomas, comprobado por clave y no de memoria: una
+  // traduccion que falta cae al ingles y media pantalla queda en el idioma equivocado.
+  const { window } = await montar('config.html')
+  const S = window.STRINGS
+  const faltan = Object.keys(S.es).filter((k) => !(k in S.en))
+  ok('cada texto del panel existe en espanol y en ingles', faltan.length === 0,
+    `sin traducir = ${JSON.stringify(faltan.slice(0, 8))}`)
+  const nuevas = ['linesLegend', 'linesHelp', 'linkLine', 'noLines', 'seeTab', 'openTab',
+    'unlink', 'unlinkYes', 'stWaiting', 'stWaitingHow', 'stLinked', 'stLinkedNone',
+    'stLinkedSome', 'stDropped', 'stDroppedHow', 'stNoTab', 'stNoTabHow', 'stNoOrca',
+    'stNoOrcaHow', 'linePlacedFloating', 'linePlacedProject', 'unlinkWarn',
+    'unlinkWarn0', 'lineWorking', 'needLineLabel']
+  // pt hereda el ingles para lo que no traduce, asi que "existe" no alcanza: tiene que
+  // ser un texto PROPIO, o el portugues de esta seccion seria ingles.
+  const sinPt = nuevas.filter((k) => !S.pt[k] || S.pt[k] === S.en[k])
+  ok('y la seccion de lineas esta traducida tambien al portugues', sinPt.length === 0,
+    `sin portugues = ${JSON.stringify(sinPt)}`)
+}
+
 console.log('\nactivity.html')
 {
   const actividad = {
@@ -611,6 +817,74 @@ console.log('\nactivity.html')
 // "arranco y se murio" y "no hay nada autorizado" se veian IGUAL — una lista vacia. El
 // dueno miraba eso y concluia lo unico que se puede concluir mirando: que no funciona.
 // Se comprueba lo que se lee en pantalla, no la forma del objeto.
+console.log('\nactivity.html — un mensaje que llego sin cuerpo')
+{
+  // Por la via web el cuerpo casi nunca llega y el adjunto no deja ruta. El panel
+  // mostraba el marcador crudo — "[web:no-text reason=not-loaded media=image]" — que no
+  // es una frase, y no marcaba la fila como que traia algo, porque miraba solo `media`.
+  const AHORA = new Date().toISOString().slice(0, 16).replace('T', ' ')
+  const conMarcador = {
+    syncedAt: AHORA, running: false, mapped: 1, authorized: 1, recent: [],
+    pending: [
+      { stanzaId: 'W1', date: '2026-09-17 12:06', chat: 'Soporte Acme', sender: 'Ana',
+        kind: 'mencion', text: '', noText: 'not-loaded', mediaKind: 'image',
+        hasMedia: true },
+      { stanzaId: 'W2', date: '2026-09-17 12:07', chat: 'Soporte Acme', sender: 'Beto',
+        kind: 'mencion', text: '', noText: 'off', mediaKind: null, hasMedia: false },
+      { stanzaId: 'W3', date: '2026-09-17 12:08', chat: 'Soporte Acme', sender: 'Caro',
+        kind: 'directo', text: '', noText: 'no-body', mediaKind: 'ptt', hasMedia: true }
+    ]
+  }
+  for (const [lang, frase, tipo] of [['es-419', /no ten[ií]a ese mensaje cargado/i, /nota de voz/i],
+                                     ['en-US', /did not have that message loaded/i, /voice note/i],
+                                     ['pt-BR', /n[aã]o tinha essa mensagem carregada/i, /nota de voz/i]]) {
+    const { doc } = await montar('activity.html', { activity: conMarcador }, lang)
+    await espera()
+    const txt = doc.getElementById('pending').textContent
+    ok(`el marcador de la via web no se muestra crudo en ${lang}`,
+      !/web:no-text|reason=|media=/.test(txt), txt.slice(0, 220))
+    ok(`y se dice en palabras en ${lang}`, frase.test(txt), txt.slice(0, 220))
+    ok(`el tipo del adjunto se dice por su nombre en ${lang}`, tipo.test(txt),
+      txt.slice(0, 220))
+  }
+  const { doc } = await montar('activity.html', { activity: conMarcador }, 'es-419')
+  await espera()
+  // Las tres razones piden acciones distintas y en el JSON se ven iguales.
+  const txt = doc.getElementById('pending').textContent
+  ok('la razon `off` dice que el texto no se pidio, no que el mensaje estaba vacio',
+    /no se pidio el cuerpo/i.test(txt), txt.slice(0, 400))
+  ok('la razon `no-body` si dice que no traia texto',
+    /no tra[ií]a texto/i.test(txt), txt.slice(0, 400))
+  ok('un mensaje sin cuerpo se distingue de uno leido',
+    doc.querySelectorAll('.text.sin-texto').length === 3,
+    String(doc.querySelectorAll('.text.sin-texto').length))
+}
+
+console.log('\nconfig.html — una maquina que lee solo por la via web')
+{
+  // Los cinco chequeos de la base local fallan y ninguno bloquea: la sesion web
+  // contesta. El panel no puede decir que WhatsApp no esta conectado, y tampoco puede
+  // ofrecer "activar" un sistema operativo en cinco circulos grises.
+  const salud = {
+    ok: true,
+    optional: [{ que: 'local WhatsApp database', code: 'local',
+      como: 'Linux; no official app for this system; missing; does not exist',
+      howCode: 'local-covered-by-web' }]
+  }
+  for (const [lang, frase] of [['es-419', /sesion de WhatsApp Web esta contestando/i],
+                               ['en-US', /WhatsApp Web session is answering/i],
+                               ['pt-BR', /sess[aã]o do WhatsApp Web est[aá] respondendo/i]]) {
+    const { doc } = await montar('config.html', { health: salud }, lang)
+    await espera()
+    ok(`no dice que WhatsApp no esta conectado en ${lang}`,
+      doc.getElementById('alert').hidden, doc.getElementById('alert').textContent)
+    const opc = doc.getElementById('opcionales').textContent
+    ok(`y explica de donde se esta leyendo, en ${lang}`, frase.test(opc), opc.slice(0, 220))
+    ok(`sin colar el ingles del CLI en ${lang}`,
+      lang === 'en-US' || !/no official app for this system/.test(opc), opc.slice(0, 220))
+  }
+}
+
 console.log('\nactivity.html — la corrida dice como le fue')
 {
   const AHORA = new Date().toISOString().slice(0, 16).replace('T', ' ')
@@ -808,6 +1082,39 @@ console.log('\nel codigo del CLI, dicho en el idioma del panel')
     ok(`el permiso del disco se explica en ${lang}`,
       texto.includes(titulo) && texto.includes(accion), texto)
   }
+
+  // Los finales de la via web se cuentan APARTE porque la accion del usuario es
+  // distinta en cada uno: abrir Orca, abrir la pestana, escanear el QR, esperar. Con un
+  // solo texto para los cuatro, el que tiene que escanear el QR lee "abri Orca Lab" y
+  // no encuentra nada que abrir.
+  const WEB_FINALES = [
+    ['web-off', 'Lineas conectadas', 'Connected lines'],
+    ['web-no-orca', 'ORCA_CLI_COMMAND', 'ORCA_CLI_COMMAND'],
+    ['web-no-session', 'pestana', 'tab'],
+    ['web-logged-out', 'QR', 'QR'],
+    ['web-eval-timeout', 'no contesto a tiempo', 'did not answer in time'],
+    ['web-read-failed', 'Recarga', 'Reload']
+  ]
+  const dichos = new Set()
+  for (const [code, marcaEs, marcaEn] of WEB_FINALES) {
+    const salud = { ok: true, optional: [{ que: 'WhatsApp Web as a second line',
+      como: 'the CLI text', code: 'web', howCode: code }] }
+    const es = await montar('config.html', { health: salud }, 'es-419')
+    await espera()
+    const texto = es.doc.getElementById('opcionales').textContent
+    ok(`${code} se dice en espanol y no como lo escribio el CLI`,
+      texto.includes(marcaEs) && !texto.includes('the CLI text'), texto.slice(0, 160))
+    dichos.add(texto)
+    const en = await montar('config.html', { health: salud }, 'en-US')
+    await espera()
+    ok(`${code} tambien tiene su texto en ingles`,
+      en.doc.getElementById('opcionales').textContent.includes(marcaEn),
+      en.doc.getElementById('opcionales').textContent.slice(0, 160))
+  }
+  // Y que sean SEIS textos distintos: seis claves que resolvieran a la misma frase
+  // pasarian las comprobaciones de arriba una por una y no le dirian nada al usuario.
+  ok('los seis finales de la via web dicen cosas distintas',
+    dichos.size === WEB_FINALES.length, `textos distintos = ${dichos.size}`)
 
   // Un codigo que este panel no conozca todavia no puede dejar el aviso vacio: se
   // pinta el texto del CLI, que es peor que traducido pero infinitamente mejor que nada.

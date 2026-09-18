@@ -11,6 +11,11 @@ review it and press Enter yourself. --send is an explicit opt-in.
 It drives the app's real UI through accessibility (orca computer). It uses no
 unofficial libraries and links no new device to the account.
 
+It writes on the LOCAL line only — the one the desktop app is signed in with. A
+conversation registered against a WhatsApp Web line fails up front with
+`send-web-line`: writing over the web route is not built, and that window belongs to
+another number.
+
 There are two ways to OPEN the chat, and the tool reports which one it used:
   url  the whatsapp:// scheme goes straight to the conversation. It only works for
        direct chats with a phone number: that is all the scheme can address.
@@ -19,7 +24,7 @@ There are two ways to OPEN the chat, and the tool reports which one it used:
 Writing is accessibility either way, and either way the open chat is verified to be
 the requested one before a key is pressed.
 """
-import argparse, json, os, re, subprocess, sys, time
+import argparse, json, os, platform, re, shutil, subprocess, sys, time
 
 APP = "net.whatsapp.WhatsApp"
 SCOPE_DB = (os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~/AppData/Roaming"),
@@ -43,7 +48,29 @@ def signature():
         return f"-- {row[0]}" if row and row[0] else None
     except Exception:
         return None
-ORCA = "orca"
+# Motivos estables: los lee el worker (la primera linea de stderr termina en el panel).
+# El texto se puede reescribir; el codigo no, o el panel se desincroniza en silencio.
+SIN_ORCA = "send-no-orca"
+LINEA_WEB = "send-web-line"
+
+
+def orca_cli():
+    """El binario de la CLI de Orca, que NO se llama igual en todas partes.
+
+    Es la misma resolucion que `orca_cli()` en wa-read y esta duplicada a proposito:
+    los CLI se publican sueltos en bin/ y no se importan entre si. En Linux `orca` es el
+    lector de pantalla de GNOME — buscarlo con which() lo encuentra, y la primera corrida
+    real le pone a hablar la maquina a una persona ciega. Ahi el comando es `orca-ide`, y
+    quien empaqueta puede fijar otro con ORCA_CLI_COMMAND."""
+    declarado = os.environ.get("ORCA_CLI_COMMAND", "").strip()
+    if declarado:
+        return shutil.which(declarado.split()[0]) or declarado.split()[0]
+    if platform.system() == "Linux":
+        return shutil.which("orca-ide")
+    return shutil.which("orca")
+
+
+ORCA = orca_cli()
 # "Mensajes en el chat con <nombre>" es el ancla que confirma que estas en el chat correcto.
 IN_CHAT = re.compile(r"Mensajes en el chat con (.+?)(?:,|$)")
 LINE = re.compile(r"^\s*(\d+) (.+)$")
@@ -53,6 +80,12 @@ OK_BTN = re.compile(r"^bot[o\u00f3]n\s+(OK|Aceptar)\b", re.I)
 
 
 def orca(*args, ok_fail=False):
+    if not ORCA:
+        # Con el binario sin resolver, `subprocess.run([None, ...])` revienta con un
+        # TypeError adentro: un traceback donde hacia falta el motivo que el doctor ya
+        # sabe decir. Sale con el motivo y con lo que hay que hacer.
+        sys.exit(f"wa-send: {SIN_ORCA}\nthe Orca CLI is not in PATH, so WhatsApp cannot "
+                 "be driven; open Orca Lab, or set ORCA_CLI_COMMAND")
     p = subprocess.run([ORCA, "computer", *args, "--json", "--no-screenshot"],
                        capture_output=True, text=True)
     if p.returncode != 0:
@@ -197,6 +230,26 @@ def jid_registrado(name):
         filas = con.execute(
             "select chat_jid from chat_scope where lower(trim(chat_name))=lower(trim(?))",
             (name.replace("\u200e", ""),)).fetchall()
+        con.close()
+    except Exception:
+        return None
+    return filas[0][0] if len(filas) == 1 else None
+
+
+def cuenta_registrada(ref):
+    """De que LINEA es esta conversacion segun el registro, o None si no esta ahi.
+
+    wa-send escribe operando la ventana real de WhatsApp Desktop por accesibilidad. Una
+    conversacion que vive en una sesion de WhatsApp Web no tiene ventana que operar — y
+    peor, un grupo del mismo nombre puede existir en las dos lineas, asi que seguir
+    adelante no falla: le escribe a la conversacion equivocada."""
+    try:
+        import sqlite3
+        con = sqlite3.connect(f"file:{SCOPE_DB}?mode=ro", uri=True)
+        filas = con.execute(
+            "select distinct account from chat_scope where chat_jid=? "
+            "or lower(trim(chat_name))=lower(trim(?))",
+            (ref.replace("‎", "").strip(), ref.replace("‎", ""))).fetchall()
         con.close()
     except Exception:
         return None
@@ -388,6 +441,16 @@ def main():
                      "`wa-scope agent \"<name>\"`, or use --raw to write unsigned.")
         if not a.text.rstrip().endswith(sig):
             a.text = f"{a.text.rstrip()}\n{sig}"
+
+    # Enviar por la via web no esta construido, y fallar temprano con un motivo estable
+    # es lo unico honesto: lo otro es abrir la ventana de la linea local y escribirle al
+    # grupo equivocado. Ver docs/LECTURA-MULTIFUENTE.md.
+    cuenta = cuenta_registrada(a.chat)
+    if cuenta and cuenta != "local":
+        sys.exit(f"wa-send: {LINEA_WEB}\n{a.chat!r} belongs to the WhatsApp Web line "
+                 f"{cuenta!r}, and writing over the web route is not built: wa-send "
+                 "drives the desktop app's own window, and that window is the OTHER "
+                 "line. Reply from the phone or from that browser session.")
 
     # La via se decide ANTES de tocar la app: un pedido imposible —--open url contra un
     # grupo— tiene que fallar sin haber abierto ni movido nada en WhatsApp.

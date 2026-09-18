@@ -1,21 +1,35 @@
 #!/usr/bin/env python3
-"""wa-read — read-only access to WhatsApp Desktop (macOS) for agents.
+"""wa-read — read-only access to WhatsApp for agents.
 
-Subcommands:
+Two read routes, and they add up rather than replace each other:
+  local  the desktop app's SQLite database. Verified on macOS. Full history.
+  web    one or more WhatsApp Web sessions driven by Orca's browser, each its own
+         line. The only route on Linux, and a SECOND line on macOS. Turn it on with
+         `wa-scope config read_web on`.
+
+Subcommands, and which route answers each:
   inbox [--days N] [--limit N]  mentions of you + replies to your messages, in groups
+                                — local and web
   chats [--query TXT] [-n N]    list chats (groups and 1:1) with unread counts
-  chat <id|name> [-n N]         latest messages of a chat
-  media <id|name> [-n N]        latest images/videos/audio, with the local path on disk
-  whoami                        your LID and how many groups
+                                — local and web
+  whoami                        your LID and how many groups — local and web
+  chat <id|name> [-n N]         latest messages of a chat — LOCAL ONLY
+  media <id|name> [-n N]        latest images/videos/audio, with the local path on
+                                disk — LOCAL ONLY
+
+`chat` and `media` are local-only by design, not by omission: both promise the body of
+every message and the path of every attachment on disk, and a browser session has
+neither. Over the web route `inbox` comes back with `media` null and `adjuntos_cerca`
+empty, and a message with no readable body carries the marker
+`[web:no-text reason=off|not-loaded|no-body]`, plus `media=<type>` when it had an
+attachment.
 
 Global: --json  JSON output instead of a table.
 It never writes to the WhatsApp database: it works on a temporary copy.
 
-Where the messages come from is a choice, not a constant: the desktop app's local
-database, one or more WhatsApp Web sessions, or both at once. See `sources()` and
-docs/LECTURA-MULTIFUENTE.md.
+See `sources()` and docs/LECTURA-MULTIFUENTE.md.
 """
-import argparse, json, os, platform, shutil, sqlite3, subprocess, sys, tempfile, time
+import argparse, hashlib, json, os, platform, shutil, sqlite3, subprocess, sys, tempfile, time
 
 APPLE_EPOCH = 978307200  # Core Data usa 2001-01-01 como epoch
 # El unico pedazo de esto que es especifico del sistema es DONDE deja WhatsApp su base.
@@ -99,7 +113,17 @@ SCOPE_DB = _scope_db()
 
 
 def setting(key, fallback):
-    """La ventana de lectura es configurable, no una constante escondida en el prompt."""
+    """La ventana de lectura es configurable, no una constante escondida en el prompt.
+
+    `WA_READ_SETTING_<CLAVE>` lo fuerza para UNA corrida y solo para wa-read. Existe
+    porque el registro de ~/.wa-inbox/scope.db es el MISMO que lee el plugin instalado:
+    encender `read_web` ahi para probar se le aparece al usuario en el panel."""
+    forzado = os.environ.get(f"WA_READ_SETTING_{key.upper()}")
+    if forzado:
+        try:
+            return type(fallback)(forzado)
+        except (TypeError, ValueError):
+            pass
     try:
         con = sqlite3.connect(f"file:{SCOPE_DB}?mode=ro", uri=True)
         row = con.execute("select value from settings where key=?", (key,)).fetchone()
@@ -117,6 +141,26 @@ EXIT_SOURCE = 4
 # rompe nada; renombrar el codigo desincroniza el panel en silencio.
 SIN_FUENTE = "no-source"
 WEB_SIN_CONSTRUIR = "web-not-implemented"
+# Las dos firmas de `state` que NO son firmas, y las dos son contrato con wa-scope:
+# `missing` = no hay nada que stat-ear, `live` = esta fuente no se puede stat-ear sin
+# abrirla. Quien reusa una lectura tiene que tratar a las dos como "no puedo saltearme
+# nada"; leerlas como una firma cualquiera es lo que congelaba la bandeja.
+ESTADO_SIN_BASE = "missing"
+ESTADO_VIVO = "live"
+# Las maneras en que la via web no puede contestar. Van separadas porque la accion del
+# usuario es distinta en cada una: abrir Orca, abrir la pestana, escanear el QR, o
+# esperar. Un solo "web-failed" las mandaria a todas a mirar el mismo parrafo.
+WEB_APAGADA = "web-off"
+WEB_SIN_ORCA = "web-no-orca"
+WEB_SIN_PESTANA = "web-no-session"
+WEB_DESLOGUEADA = "web-logged-out"
+WEB_SIN_RESPUESTA = "web-eval-timeout"
+WEB_ILEGIBLE = "web-read-failed"
+# El texto se pidio y la sesion no lo puede dar: WhatsApp le cambio el nombre a los
+# modulos internos de donde sale el cuerpo en claro. Va como falla y no como degradado
+# silencioso porque quien encendio `read_web_text` lo encendio para leer: devolverle
+# todas las filas con el marcador de "sin texto" se lee como "nadie dijo nada".
+WEB_SIN_TEXTO = "web-text-unavailable"
 
 
 class SourceError(Exception):
@@ -155,24 +199,1053 @@ class LocalSource:
         return snapshot()
 
 
+# Lo que la via web sabe contestar. `chat` y `media` siguen afuera: los dos prometen el
+# CUERPO de cada mensaje y la ruta en disco de cada adjunto, y la sesion no tiene ni uno
+# ni la otra — el cuerpo viaja cifrado en IndexedDB y el adjunto vive en el blob store
+# del navegador, sin ruta que `wa-transcribe` pueda abrir. `inbox` si entra porque lo que
+# la bandeja SELECCIONA — quien te nombro, quien te contesto, cuando, y si ya contestaste
+# — esta todo en metadatos en claro.
+WEB_COMANDOS = ("chats", "whoami", "inbox")
+
+# El texto de los mensajes es una eleccion aparte y arranca APAGADA. Ver `web_sonda_inbox`
+# y docs/LECTURA-MULTIFUENTE.md: `memoria` no abre ninguna conversacion y no marca nada
+# como leido, pero solo alcanza lo que esa pestana ya tenia cargado.
+WEB_TEXTO_MODOS = ("off", "memoria")
+
+# Marcador estable de "este mensaje vino sin texto". Es contrato: un vacio ahi se lee
+# como "el mensaje estaba en blanco", que es otra cosa y manda al agente a contestar
+# sobre nada. Cuando el mensaje era un adjunto se le suma `media=<tipo>`, porque por la
+# via web no hay ruta en disco que poner en `media` y el tipo es lo unico que queda.
+#
+# Lleva `reason=` porque las tres maneras de quedarse sin texto piden acciones DISTINTAS
+# y en un JSON se ven iguales:
+#   off         no se pidio el texto. Se enciende con `wa-scope config read_web_text memoria`.
+#   not-loaded  se pidio, y la sesion no tiene ese mensaje cargado. No hay nada que
+#               tocar: la unica manera de bajarlo seria abrir la conversacion, que marca
+#               leido en el telefono del usuario. Es el caso NORMAL, ver el doc.
+#   no-body     se pidio, la sesion lo tiene, y no hay texto que leer: es un adjunto sin
+#               pie, una nota de voz o un aviso del sistema. No es una falla.
+TEXTO_SIN_LEER = "[web:no-text"
+TEXTO_MOTIVOS = ("off", "not-loaded", "no-body")
+
+# Tope de candidatos que baja la sonda. La ventana es configurable hasta "todo el
+# historial" y ahi la pagina tiene ~10k candidatos: bajarlos todos son megabytes por un
+# `eval`. 6000 esta muy por encima del tope de la bandeja (500), y cuando se recorta se
+# avisa por stderr en vez de callarlo.
+WEB_INBOX_SONDA_MAX = 6000
+
+# La CAPTURA VIVA. `memoria` sola tiene un techo casi nulo y no por un error: la
+# coleccion en memoria de la pagina es, casi entera, el PREVIEW de la lista lateral —
+# el ultimo mensaje de cada conversacion. Medido sobre la sesion viva, sin abrir
+# ninguna: 327 modelos de grupo repartidos en 201 chats, 1,63 de promedio, 175 chats
+# con exactamente uno. Una mencion deja de ser legible en cuanto alguien mas escribe en
+# ese grupo, y entre dos corridas el segundo mensaje borra el texto del primero PARA
+# SIEMPRE. Sondear mas seguido no lo arregla; lo unico que lo arregla es anotar el
+# mensaje cuando llega. `Msg` expone eventos de verdad (`on`/`off`/`trigger`), asi que
+# un oyente puede hacerlo sin abrir nada.
+#
+# Los cuatro topes son el trato entero: esto guarda el TEXTO de mensajes de otra gente,
+# y un almacen sin tope y sin caducidad es un archivo de conversaciones ajenas que
+# nadie borra. Quedarse sin cache nunca es un error: degrada a `not-loaded`, que es un
+# estado que ya existia.
+WEB_CAPTURA_PAGINA_MAX = 500    # anillo en la pagina: lo que aguanta entre dos corridas
+WEB_CAPTURA_PENDIENTES_MAX = 200  # vecinos a la espera de que llegue la mencion
+WEB_CAPTURA_VECINOS_MAX = 500   # vecinos que la sonda baja por corrida
+# Los dos topes del almacen son ajustes (`capture_max`, `capture_days`), como
+# `web_timeout_s`: son retencion de texto ajeno, no rendimiento, y bajarlos tiene que
+# poder hacerse sin tocar el codigo. Lo que se desaloja vuelve a salir `not-loaded`.
+WEB_CAPTURA_MAX = 20000         # filas que el almacen en disco conserva
+WEB_CAPTURA_TTL_DIAS = 90       # y por cuanto, contado desde que se capturo
+WEB_CAPTURA_TEXTO_MAX = 4000    # caracteres por cuerpo; lo que sigue se corta
+# Un cuerpo servido desde el almacen NO es un motivo de "sin texto": es un cuerpo. Por
+# eso no entra en TEXTO_MOTIVOS y el marcador sigue teniendo tres estados. Lo que si
+# cambia es de donde salio, y eso se cuenta aparte para que el resumen lo muestre.
+TEXTO_CAPTURADO = "capturado"
+
+
+def web_comandos_txt():
+    """`chats, whoami e inbox` — para que el mensaje de error no diga "and" tres veces."""
+    return ", ".join(WEB_COMANDOS[:-1]) + " and " + WEB_COMANDOS[-1]
+
+
 class WebSource:
-    """Una linea conectada por WhatsApp Web. Todavia no lee: el diseno de como se
-    conecta, donde vive el perfil y como se identifica la cuenta esta escrito en
-    docs/LECTURA-MULTIFUENTE.md, y este objeto es el hueco donde entra.
+    """Una linea conectada por WhatsApp Web, leida de la sesion viva del navegador.
+
+    Devuelve una conexion SQLite con la MISMA forma que la base de la app de escritorio
+    — las tres tablas que `cmd_chats` y `cmd_whoami` consultan — en vez de un lector
+    propio. Asi los comandos no se enteran de donde salieron las filas y la via de
+    macOS no puede regresar por un cambio de aca.
 
     Falla con un motivo estable en vez de devolver vacio: una bandeja vacia se lee
     como "no hay nada que atender", que es justo lo contrario de lo que pasa."""
 
     kind = WEB
 
-    def __init__(self, account=WEB, label="WhatsApp Web"):
+    def __init__(self, account=WEB, label="WhatsApp Web", profile=None, cmd=None,
+                 days=None, window=5):
         self.account = account
         self.label = label
+        self.profile = profile
+        self.cmd = cmd
+        self.days = days
+        self.window = window
 
     def open(self):
-        raise SourceError(WEB_SIN_CONSTRUIR,
-                          "the WhatsApp Web route is designed but not built yet; "
-                          "see docs/LECTURA-MULTIFUENTE.md")
+        if self.cmd not in WEB_COMANDOS:
+            raise SourceError(WEB_SIN_CONSTRUIR,
+                              f"the WhatsApp Web route answers {web_comandos_txt()} "
+                              "only; `chat` and `media` promise the message body and the "
+                              "attachment path on disk, and a browser session has "
+                              "neither, see docs/LECTURA-MULTIFUENTE.md")
+        page = web_page(self.profile)
+        if self.cmd != "inbox":
+            return web_db(web_payload(page))
+        modo = web_texto_modo()
+        # El oyente se instala ANTES de sondear, y solo con el texto pedido: grabar el
+        # cuerpo de los mensajes de otra gente es exactamente lo que `read_web_text`
+        # autoriza, y nada mas. Apagado, ademas, se vacia lo que hubiera quedado.
+        captura = None
+        if modo == "memoria":
+            captura = captura_instalar(page, self.account, self.window)
+            if captura is None:
+                print(f"warning: {self.label} ({self.kind}) could not install the live "
+                      "capture listener in that page; the only bodies this run can "
+                      "serve are the ones the session still holds in memory",
+                      file=sys.stderr)
+        else:
+            captura_vaciar()
+        # La ventana arranca en el enlace y no N dias atras, salvo que se pida `--days`:
+        # antes del enlace no habia oyente, asi que esas menciones no pueden tener cuerpo
+        # y lo unico que hacen es tapar lo que si se puede atender.
+        desde = captura_linea(self.account) if self.days is None else 0
+        datos = web_payload(page, sonda=web_sonda_inbox(self.days, modo, self.window,
+                                                        desde))
+        sobran = int(datos.get("sobran") or 0)
+        if sobran:
+            # Se avisa y no se calla: recortar en silencio es lo que hace que una
+            # mencion vieja no aparezca nunca y nadie sepa por que.
+            print(f"warning: {self.label} ({self.kind}) had {sobran} more candidates "
+                  f"than the {WEB_INBOX_SONDA_MAX} the probe brings down; narrow the "
+                  "window with --days", file=sys.stderr)
+        tapados = int(datos.get("antesDelEnlace") or 0)
+        if tapados:
+            print(f"warning: {self.label} ({self.kind}) left out {tapados} candidate(s) "
+                  f"older than the moment this line was linked ({ts(desde - APPLE_EPOCH)}); "
+                  "they predate the capture listener, so they can never carry a body. "
+                  "Pass --days to look further back anyway", file=sys.stderr)
+        if modo == "memoria":
+            servidos = captura_servir(self.account, datos.get("mensajes") or [],
+                                      datos.get("vecinos") or [])
+            if servidos:
+                motivos = datos.setdefault("motivos", {})
+                motivos["not-loaded"] = max(0, int(motivos.get("not-loaded") or 0) - servidos)
+                motivos[TEXTO_CAPTURADO] = servidos
+        self.avisa_texto(datos, captura)
+        return web_db(datos)
+
+    def avisa_texto(self, datos, captura=None):
+        """Con el texto encendido, cuanto alcanzo y DE DONDE — en una linea.
+
+        Una sesion recien enlazada tiene en memoria el PREVIEW de cada conversacion (el
+        ultimo mensaje, el que pinta la lista lateral) y nada mas. Una mencion de hace
+        tres dias no es el ultimo mensaje de su grupo, asi que sin la captura casi todo
+        sale `not-loaded`. Sin este aviso eso se ve identico a la funcion rota, y ya se
+        leyo asi una vez.
+
+        La division importa mas que el total: los que salen de la coleccion son un techo
+        que no sube, y los que salen del almacen son los que el oyente alcanzo a anotar.
+        Si ese segundo numero se queda en cero corrida tras corrida, el oyente no esta
+        funcionando aunque la bandeja siga contestando."""
+        motivos = datos.get("motivos") or {}
+        if not motivos or motivos.get("off"):
+            return                      # el texto no se pidio: no hay nada que contar
+        sin = int(motivos.get("not-loaded") or 0)
+        con = int(motivos.get("ok") or 0)
+        cap = int(motivos.get(TEXTO_CAPTURADO) or 0)
+        vacios = int(motivos.get("no-body") or 0)
+        total = sin + con + cap + vacios
+        if not total or not (sin or cap):
+            return
+        oyente = (captura or {}).get("estado") or "sin instalar"
+        anotados = int((captura or {}).get("guardados") or 0)
+        caducados = int((captura or {}).get("caducados") or 0)
+        desalojados = int((captura or {}).get("desalojados") or 0)
+        tope, dias = captura_topes()
+        # Lo desalojado se dice SOLO cuando pasa, y con el ajuste que lo gobierna al
+        # lado: enterarse de que el almacen esta desbordando despues de perder un caso
+        # es enterarse tarde, y el aviso tiene que traer que perilla mover.
+        echado = ""
+        if caducados or desalojados:
+            echado = (f" Evicted this run: {caducados} past `capture_days`={dias} and "
+                      f"{desalojados} past `capture_max`={tope} — raise them with "
+                      "`wa-scope config capture_max <n>` if a case went missing.")
+        print(f"warning: {self.label} ({self.kind}) read_web_text=memoria: {con + cap} "
+              f"of {total} candidates came back with a body — {con} from the session's "
+              f"memory and {cap} from the live capture store; {sin} are not in the "
+              f"session's memory and were never captured, and {vacios} carry no text at "
+              f"all. Live capture listener: {oyente}, {anotados} bodies drained into "
+              f"{captura_db()} this run (cap {tope}, kept {dias} days).{echado} The "
+              "session only holds each chat's latest message until a conversation is "
+              "opened, and opening one marks it read on the phone — so memory alone is a "
+              "ceiling, not a failure. The rows are all there, with reason= in their "
+              "text.", file=sys.stderr)
+
+
+def orca_json(args, timeout=30):
+    """Una llamada a la CLI de Orca que devuelve su `result`, o falla con motivo.
+
+    Que Orca no este corriendo y que no haya pestana son dos cosas distintas y se
+    arreglan distinto, asi que no pueden salir por el mismo motivo."""
+    exe = orca_cli()
+    if not exe:
+        raise SourceError(WEB_SIN_ORCA,
+                          "the Orca CLI is not in PATH, so the browser session cannot "
+                          "be driven; open Orca Lab, or set ORCA_CLI_COMMAND")
+    try:
+        p = subprocess.run([exe, *args, "--json"], capture_output=True, text=True,
+                           timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise SourceError(WEB_SIN_ORCA,
+                          f"could not run the Orca CLI ({exe}): {error}") from error
+    try:
+        data = json.loads(p.stdout or "{}")
+    except ValueError as error:
+        raise SourceError(WEB_SIN_ORCA,
+                          f"the Orca CLI answered something that is not JSON: "
+                          f"{(p.stdout or p.stderr).strip()[:200]}") from error
+    if not data.get("ok"):
+        raise SourceError(WEB_SIN_ORCA,
+                          "the Orca runtime did not answer; is Orca Lab open? "
+                          f"{(p.stderr or p.stdout).strip()[:200]}")
+    return data.get("result") or {}
+
+
+WEB_URL = "web.whatsapp.com"
+
+
+def web_page(profile=None):
+    """El id de la pestana con la sesion de ESA linea.
+
+    El perfil es lo que separa una linea de otra: dos sesiones en el mismo perfil se
+    desloguean entre si. Se acepta el id del perfil o su etiqueta porque el registro
+    guarda lo que el usuario vio al crearlo, y el id es lo unico estable de los dos."""
+    tabs = orca_json(["tab", "list"]).get("tabs") or []
+    candidatas = [t for t in tabs if WEB_URL in (t.get("url") or "")]
+    if profile:
+        candidatas = [t for t in candidatas
+                      if profile in (t.get("profileId"), t.get("profileLabel"))]
+    if not candidatas:
+        cual = f" on browser profile {profile!r}" if profile else ""
+        raise SourceError(WEB_SIN_PESTANA,
+                          f"no Orca browser tab is open on {WEB_URL}{cual}; link the "
+                          "line from the plugin panel and leave the tab open")
+    return candidatas[0]["browserPageId"]
+
+
+# La sonda corre DENTRO de la pagina y baja solo lo que las dos consultas necesitan.
+# El nombre visible sale de tres campos y no de uno: `name` es el de la agenda, y sin
+# el quedan 67 conversaciones con numero en vez de nombre. El propio nombre sale de
+# `pushname`, que es el equivalente exacto de ZWAPROFILEPUSHNAME en la base de macOS.
+# Lo que se excluye es la lista CERRADA de lo que no es una conversacion — canales y
+# difusiones — y no una lista blanca de dominios: la base de macOS ya trae jids
+# terminados en `@status` y `@lid.status` que si son conversaciones, y una lista blanca
+# los habria escondido sin decirlo el dia que WhatsApp los use tambien en la web.
+WEB_SONDA_COMUN = """
+const lid = String(JSON.parse(localStorage.getItem('WALid') || 'null') || '')
+  .split(':')[0].split('@')[0];
+if (!lid) return { linked: false, qr: !!document.querySelector('canvas[aria-label]') };
+const db = await new Promise((res, rej) => {
+  const r = indexedDB.open('model-storage');
+  r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+});
+const all = (store) => new Promise((res, rej) => {
+  const out = []; const q = db.transaction(store, 'readonly').objectStore(store).openCursor();
+  q.onsuccess = (e) => { const c = e.target.result; if (!c) return res(out); out.push(c.value); c.continue(); };
+  q.onerror = () => rej(q.error);
+});
+const contacts = await all('contact');
+const visible = new Map(), propio = new Map();
+for (const k of contacts) {
+  visible.set(k.id, k.name || k.pushname || k.displayNameLID || '');
+  propio.set(k.id, k.pushname || k.name || '');
+}
+const chats = [];
+for (const c of await all('chat')) {
+  const id = String(c.id || '');
+  if (!id.includes('@') || /@(newsletter|broadcast)$/.test(id)) continue;
+  chats.push([id, c.name || visible.get(id) || id.split('@')[0],
+              Number(c.t) || 0, Number(c.unreadCount) || 0]);
+}
+"""
+
+WEB_SONDA_CHATS = WEB_SONDA_COMUN + """
+return { linked: true, lid: lid, name: propio.get(lid + '@lid') || '', chats: chats };
+"""
+
+# La bandeja, etapa 1: el conjunto de candidatos sale SOLO de metadatos. No se abre
+# ninguna conversacion, no se navega y no se toca la pestana del usuario — abrir un chat
+# en WhatsApp Web lo marca como leido tambien en su telefono, y esta es su linea
+# personal. Lo que la bandeja selecciona esta todo en claro en el store `message`:
+#
+#   id                 `<esMio>_<jidDelChat>_<stanzaId>[_<participante>]`. El PRIMER
+#                      segmento es el "de mi" y el tercero es el stanza id, que es la
+#                      clave de idempotencia. No hay campo suelto para ninguno de los dos.
+#   mentionedJidList   objetos wid {server,user,_serialized}, NO cadenas: comparar con
+#                      `===` contra el LID no encuentra nunca nada.
+#   quotedParticipant  wid del autor del mensaje citado. Viene en `@lid` y tambien en
+#                      `@c.us`, asi que se compara contra el LID Y contra el telefono.
+#   t                  epoch unix en segundos.
+#
+# El cuerpo NO esta: viaja cifrado en `msgRowOpaqueData`. La etapa 2 — el texto — va
+# aparte y apagada por defecto; ver `web_sonda_inbox`.
+# La REGLA de seleccion, escrita aparte del resto de la sonda a proposito: adentro de
+# la pagina no hay como recorrerla, y una regla que nadie recorre es una regla que se
+# rompe sin que nada se ponga rojo. `scripts/check-clis` la corre en node con mensajes
+# de mentira, que es el unico lugar donde una mutacion de esto se puede ver.
+WEB_REGLA_JS = """
+const quien = (w) => !w ? '' : String(typeof w === 'string' ? w
+  : (w._serialized || ((w.user || '') + '@' + (w.server || ''))));
+const usuario = (w) => quien(w).split('@')[0].split(':')[0];
+const esMio = (m) => String(m.id).split('_')[0] === 'true';
+const chatDe = (m) => String(m.id).split('_')[1] || '';
+// Quien soy yo, a los efectos de "me nombraron" y "contestaron algo mio". El TELEFONO
+// cuenta ademas del LID: quotedParticipant llega en `@lid` y tambien en `@c.us`, y
+// mirar solo el LID pierde las respuestas mas viejas en silencio.
+const identidades = (lid, tel) => new Set([String(lid || '').split('@')[0].split(':')[0],
+                                           String(tel || '').split('@')[0].split(':')[0]]
+                                          .filter(Boolean));
+// El candidato, o null. Devuelve la fila tal cual viaja: el orden de los campos es
+// contrato con web_mensajes() del lado de Python. La sonda le agrega un decimo campo,
+// el motivo por el que no hay texto.
+function candidato(m, yo, corte) {
+  if (esMio(m)) return null;
+  const p = String(m.id).split('_');
+  const chat = chatDe(m);
+  // Un canal y una difusion no son conversaciones que se atiendan.
+  if (!chat.includes('@') || /@(newsletter|broadcast)$/.test(chat)) return null;
+  const t = Number(m.t) || 0;
+  if (corte && t <= corte) return null;
+  const grupo = chat.endsWith('@g.us');
+  // mentionedJidList trae OBJETOS wid {server,user,_serialized}, no cadenas: comparar
+  // con === contra el LID no encuentra nunca nada.
+  const menciona = Array.isArray(m.mentionedJidList)
+    && m.mentionedJidList.some((x) => yo.has(usuario(x)));
+  const cita = !!(m.quotedParticipant && yo.has(usuario(m.quotedParticipant)));
+  // En un grupo solo cuenta si te nombran o si contestan algo tuyo. En un directo
+  // todo mensaje ajeno es para vos.
+  if (grupo && !menciona && !cita) return null;
+  const autor = quien(m.author) || (p.length > 3 ? p[3] : '');
+  return [p[2] || '', chat, t, autor, '', menciona ? 1 : 0,
+          cita ? String(m.quotedStanzaID || '') : '', String(m.type || ''), null];
+}
+// Un candidato anterior al enlace de la linea se descarta, y no por ahorro: el oyente
+// de la captura no existia, asi que ese cuerpo no puede aparecer nunca. Con `--days`
+// explicito los dos cortes son el mismo y esto no descarta nada.
+function tapadoPorEnlace(fila, corte, corteDias) {
+  return corte > corteDias && fila[2] <= corte;
+}
+// La SELECCION entera, del store crudo a lo que viaja: quien entra a la bandeja, cual
+// fue mi ultimo mensaje en cada chat, que queda afuera por el corte del enlace y que hay
+// al lado de cada candidato. Vive aca y no dentro de la sonda por la misma razon que el
+// resto de la regla: dentro de la pagina no hay como recorrerla, y una regla que nadie
+// recorre se rompe sin que nada se ponga rojo.
+function seleccionar(mensajes, yo, o) {
+  const visible = o.visible || new Map();
+  const memoria = o.memoria || null;
+  const corte = o.corte || 0, corteDias = o.corteDias || 0;
+  const ventana = o.ventana || 0, MAX = o.max || 0, VECINOS_MAX = o.vecinosMax || 0;
+  // Mi ultimo mensaje por chat. Es la mitad de la regla "si ya contestaste, la mencion
+  // esta atendida"; la otra mitad la aplica el SQL de cmd_inbox contra esta misma fecha.
+  const mias = new Map();
+  for (const m of mensajes) {
+    if (!esMio(m)) continue;
+    const t = Number(m.t) || 0;
+    if (t > (mias.get(chatDe(m)) || 0)) mias.set(chatDe(m), t);
+  }
+  // Cuantos candidatos se quedaron sin cuerpo y por que. Va al resumen de la corrida:
+  // con casi todo en `not-loaded`, deducirlo fila por fila es lo que no paso la vez que
+  // se leyo como rotura.
+  const motivos = { off: 0, 'not-loaded': 0, 'no-body': 0, ok: 0 };
+  let antesDelEnlace = 0;
+  const cand = [];
+  for (const m of mensajes) {
+    const fila = candidato(m, yo, corteDias);
+    if (!fila) continue;
+    if (tapadoPorEnlace(fila, corte, corteDias)) { antesDelEnlace++; continue; }
+    fila[4] = visible.get(fila[3]) || '';
+    const [cuerpo, motivo] = cuerpoDe(memoria, m.id);
+    if (cuerpo !== null) fila[8] = cuerpo;
+    fila.push(motivo);
+    motivos[motivo || 'ok']++;
+    cand.push(fila);
+  }
+  cand.sort((a, b) => b[2] - a[2]);
+  const sobran = Math.max(0, cand.length - MAX);
+  const usados = cand.slice(0, MAX);
+  const chatsUsados = new Set(usados.map((c) => c[1]));
+  // Los mensajes de al lado de un candidato. `cmd_inbox` ya define esta ventana para los
+  // adjuntos; por la via web no hay adjunto que abrir, pero si hay texto, y el
+  // "@fulano mira esto" casi nunca viene en el mismo mensaje que lo que hay que mirar.
+  const anclas = new Map();
+  for (const c of usados) {
+    if (!anclas.has(c[1])) anclas.set(c[1], []);
+    anclas.get(c[1]).push(c[2]);
+  }
+  const yaCand = new Set(usados.map((c) => c[1] + '#' + c[0]));
+  const vecinos = [];
+  for (const m of mensajes) {
+    if (!ventana || vecinos.length >= VECINOS_MAX) break;
+    if (esMio(m)) continue;
+    const p = String(m.id).split('_');
+    const chat = p[1] || '';
+    const cuando = anclas.get(chat);
+    if (!cuando) continue;
+    const t = Number(m.t) || 0;
+    if (yaCand.has(chat + '#' + (p[2] || ''))) continue;
+    if (!cuando.some((x) => Math.abs(x - t) <= ventana)) continue;
+    const autor = quien(m.author) || (p.length > 3 ? p[3] : '');
+    const [cuerpo] = cuerpoDe(memoria, m.id);
+    vecinos.push([chat, p[2] || '', t, visible.get(autor) || autor.split('@')[0], cuerpo]);
+  }
+  return { mensajes: usados, sobran: sobran, motivos: motivos, vecinos: vecinos,
+           antesDelEnlace: antesDelEnlace,
+           mias: Array.from(mias).filter((e) => chatsUsados.has(e[0])) };
+}
+// El cuerpo de un candidato y, si no hay, POR QUE no hay. Devuelve [cuerpo, motivo].
+// Las tres maneras de quedarse sin texto piden acciones distintas y en el JSON se ven
+// iguales, asi que el motivo viaja con la fila.
+function cuerpoDe(memoria, id) {
+  if (!memoria) return [null, 'off'];
+  // `id` llega del registro de IndexedDB, donde ES una cadena. En un modelo EN MEMORIA
+  // `id` es un OBJETO {fromMe, remote, id, participant} y `_serialized` viene VACIO en
+  // este build: lo unico que rinde la clave es String(). Por eso la clave sale de aca y
+  // nunca del modelo — leer `_serialized` da '' y no encuentra nada, en silencio.
+  const vivo = memoria.get(String(id));
+  if (!vivo) return [null, 'not-loaded'];
+  if (typeof vivo.body === 'string' && vivo.body) return [vivo.body, ''];
+  return [null, 'no-body'];
+}
+"""
+
+WEB_SONDA_INBOX = WEB_SONDA_COMUN + WEB_REGLA_JS + """
+const corte = __CORTE__;          // epoch unix efectivo; 0 = sin limite
+const corteDias = __CORTE_DIAS__; // el de la ventana sola, para contar lo que tapa el enlace
+const ventana = __VENTANA__;      // segundos de contexto alrededor de un candidato
+const VECINOS_MAX = __VECINOS_MAX__;
+const conTexto = __CON_TEXTO__;   // solo lo que la sesion YA tiene en memoria
+const MAX = __MAX__;
+const yo = identidades(lid, JSON.parse(localStorage.getItem('last-wid-md') || 'null'));
+let memoria = null;
+if (conTexto) {
+  try { memoria = window.require('WAWebCollections').Msg; } catch (e) { memoria = null; }
+  if (!memoria || typeof memoria.get !== 'function') return { linked: true, sinTexto: true };
+}
+const sel = seleccionar(await all('message'), yo, {
+  visible: visible, memoria: memoria, corte: corte, corteDias: corteDias,
+  ventana: ventana, max: MAX, vecinosMax: VECINOS_MAX });
+return Object.assign({ linked: true, lid: lid, name: propio.get(lid + '@lid') || '',
+                       chats: chats }, sel);
+"""
+
+
+def web_texto_modo():
+    """El ajuste del texto, validado UNA vez por corrida.
+
+    Un valor que no existe no puede pasar por "apagado" sin decirlo: `wa-scope` valida
+    lo que se guarda, pero WA_READ_SETTING_READ_WEB_TEXT no pasa por ahi, y quien
+    escribio `on` esperando el texto se quedaria con la bandeja muda y sin saber por que.
+    Se resuelve aca y no adentro de la sonda porque el oyente de la captura mira el
+    mismo ajuste, y avisar dos veces del mismo valor invalido es ruido."""
+    modo = setting("read_web_text", "off")
+    if modo not in WEB_TEXTO_MODOS:
+        print(f"warning: read_web_text={modo!r} is not one of "
+              f"{', '.join(WEB_TEXTO_MODOS)}; reading the inbox without message text",
+              file=sys.stderr)
+        modo = "off"
+    return modo
+
+
+def web_sonda_inbox(days, modo="off", ventana=5, desde=0):
+    """La sonda de la bandeja, con las dos ventanas y el interruptor del texto adentro.
+
+    `days` se resuelve igual que en `cmd_inbox` — el comando no se toca, asi que la
+    ventana se calcula dos veces: aca para no bajar de la pagina lo que el SQL va a
+    tirar igual, y alla porque el SQL es el producto.
+
+    `desde` es el instante en que esta linea se enlazo, y **gana** sobre `inbox_days`
+    cuando nadie pidio `--days`. Sin eso el primer dia devuelve cientos de menciones
+    anteriores al enlace que por definicion no pueden tener cuerpo — el oyente no
+    existia — y eso no es historial, es ruido. Un `--days` explicito lo desactiva: mirar
+    para atras a mano tiene que seguir siendo posible."""
+    dias = int(setting("inbox_days", 7) or 0) if days is None else int(days)
+    corte_dias = int(time.time() - dias * 86400) if dias > 0 else 0
+    corte = max(corte_dias, int(desde or 0))
+    con_texto = modo == "memoria"
+    return (WEB_SONDA_INBOX.replace("__CORTE_DIAS__", str(corte_dias))
+            .replace("__CORTE__", str(corte))
+            .replace("__VENTANA__", str(max(0, int(ventana)) * 60))
+            .replace("__VECINOS_MAX__", str(WEB_CAPTURA_VECINOS_MAX))
+            .replace("__CON_TEXTO__", "true" if con_texto else "false")
+            .replace("__MAX__", str(WEB_INBOX_SONDA_MAX)))
+
+
+# El oyente, y el drenaje de lo que junto. Corre SINCRONICO a proposito: no toca
+# IndexedDB, asi que no hace falta el baile del global de `web_payload`, y un `eval`
+# que devuelve un valor de una vez no puede quedarse a medias entre dos corridas.
+#
+# Lo que hace, en orden:
+#  1. Si ya hay un oyente de ESTA version colgado de ESTA coleccion, no instala nada.
+#     Es la guarda contra el apilado: la corrida pasa cada `sync_minutes`, y sin esto
+#     en una hora habria doce oyentes contando el mismo mensaje doce veces. Medido en
+#     la pagina viva, `Msg` ya tiene 66 oyentes de `add` propios de WhatsApp — apilar
+#     ahi no es gratis.
+#  2. Si la version cambio, o si la coleccion es OTRO objeto (re-enlazar rearma los
+#     modulos de la pagina), desengancha el viejo y vuelve a instalar.
+#  3. Drena el anillo en un solo paso. La pagina tiene un unico hilo de JS, asi que dos
+#     corridas que se pisen no pueden llevarse la misma fila dos veces: la segunda ve
+#     el anillo vacio y sirve `not-loaded`, que es un estado estable.
+WEB_CAPTURA_JS = """
+const VER = '__VER__';
+const MAXPAG = __MAXPAG__;
+const MAXPEND = __MAXPEND__;
+const TOPE = __TOPE__;
+const VENTANA = __VENTANA__;
+let col = null;
+try { col = window.require('WAWebCollections').Msg; } catch (e) { col = null; }
+if (!col || typeof col.on !== 'function' || typeof col.off !== 'function') {
+  return JSON.stringify({ ok: false, why: 'sin-coleccion' });
+}
+let cap = window.__waInboxCaptura;
+let estado = 'ya';
+if (cap && (cap.v !== VER || cap.col !== col)) {
+  try { cap.off(); } catch (e) {}
+  cap = null; estado = 'reinstalado';
+}
+if (!cap) {
+  const buf = new Map();       // lo que se va a guardar en disco
+  const pend = new Map();      // vecinos a la espera de una mencion; NO sale de la pagina
+  const calientes = new Map(); // chat -> hasta cuando sus mensajes son contexto
+  // `conCuerpo` y `guardados` estan para poder medir la regla contra si misma: el
+  // primero es lo que una captura sin filtrar habria guardado, el segundo lo que
+  // esta guarda. La diferencia es texto ajeno que no queda en disco.
+  const cuentas = { vistos: 0, conCuerpo: 0, accionables: 0, vecinos: 0,
+                    guardados: 0, descartados: 0, fallos: 0 };
+  const guardar = (chat, stanza, cuerpo, t) => {
+    if (!chat || !stanza || !cuerpo) return;
+    const clave = chat + '#' + stanza;
+    buf.delete(clave);        // el ultimo valor gana y no ocupa dos lugares del anillo
+    buf.set(clave, [chat, stanza, cuerpo, t]);
+    cuentas.guardados++;
+    while (buf.size > MAXPAG) buf.delete(buf.keys().next().value);
+  };
+  const anota = (m) => {
+    try {
+      // La identidad se relee en cada mensaje: re-enlazar con OTRO numero no recrea
+      // este oyente, y uno que sigue midiendo contra el LID viejo captura lo ajeno.
+      const lid = String(JSON.parse(localStorage.getItem('WALid') || 'null') || '')
+        .split(':')[0].split('@')[0];
+      if (!lid) return;
+      const yo = identidades(lid, JSON.parse(localStorage.getItem('last-wid-md') || 'null'));
+      const id = String(m.id);
+      const p = id.split('_');
+      const chat = p[1] || '';
+      const stanza = p[2] || '';
+      if (!chat.includes('@') || /@(newsletter|broadcast)$/.test(chat)) return;
+      if (esMio(m)) return;
+      cuentas.vistos++;
+      const t = Number(m.t) || Math.floor(Date.now() / 1000);
+      const cuerpo = typeof m.body === 'string' ? m.body.slice(0, TOPE) : '';
+      if (cuerpo) cuentas.conCuerpo++;
+      // La MISMA regla que arma la bandeja, y no una copia: te nombra, contesta algo
+      // tuyo, o es un directo. Sin corte, porque un mensaje que llega es de ahora.
+      if (candidato(m, yo, 0)) {
+        cuentas.accionables++;
+        guardar(chat, stanza, cuerpo, t);
+        // La ventana de al lado, hacia atras: el "@fulano mira esto" casi nunca viene
+        // en el mismo mensaje que lo que hay que mirar, asi que lo de justo antes se
+        // promueve de la cola a disco. Lo de justo despues entra por `calientes`.
+        for (const [k, v] of Array.from(pend)) {
+          if (v[0] === chat && Math.abs(v[3] - t) <= VENTANA) {
+            guardar(v[0], v[1], v[2], v[3]); cuentas.vecinos++; pend.delete(k);
+          }
+        }
+        calientes.set(chat, t + VENTANA);
+        return;
+      }
+      if ((calientes.get(chat) || 0) >= t) {
+        guardar(chat, stanza, cuerpo, t); cuentas.vecinos++;
+        return;
+      }
+      // Ni accionable ni contexto de uno: NO toca el disco. Queda en una cola corta y
+      // en memoria por si en los proximos minutos llega la mencion que lo vuelve util.
+      cuentas.descartados++;
+      if (cuerpo) {
+        pend.set(chat + '#' + stanza, [chat, stanza, cuerpo, t]);
+        for (const [k, v] of Array.from(pend)) {
+          if (t - v[3] > VENTANA) pend.delete(k);
+        }
+        while (pend.size > MAXPEND) pend.delete(pend.keys().next().value);
+      }
+    } catch (e) { cuentas.fallos++; }   // un oyente que tira rompe la coleccion de la pagina
+  };
+  // `add` trae el modelo nuevo; `change:body` trae el cuerpo que aparece DESPUES, que
+  // es como viaja un mensaje cuyo texto se resuelve despues de crearse el modelo.
+  col.on('add', anota);
+  col.on('change:body', anota);
+  cap = { v: VER, col: col, buf: buf, cuentas: cuentas,
+          off: () => { try { col.off('add', anota); col.off('change:body', anota); } catch (e) {} } };
+  window.__waInboxCaptura = cap;
+  if (estado === 'ya') estado = 'nuevo';
+}
+const drenado = Array.from(cap.buf.values());
+cap.buf.clear();
+return JSON.stringify({ ok: true, estado: estado, drenado: drenado,
+                        vistos: cap.cuentas.vistos, conCuerpo: cap.cuentas.conCuerpo,
+                        accionables: cap.cuentas.accionables, vecinos: cap.cuentas.vecinos,
+                        guardados: cap.cuentas.guardados,
+                        descartados: cap.cuentas.descartados, fallos: cap.cuentas.fallos });
+"""
+
+
+def web_captura_js(ventana=5):
+    """El oyente listo para evaluar, con su version calculada del codigo mismo.
+
+    La version sale de un hash del propio JS — ventana incluida — y no de un numero a
+    mano: cambiar el oyente y olvidarse de subir el numero dejaria corriendo el viejo
+    hasta que alguien recargue la pestana, y eso se ve igual que "la captura no anda"."""
+    cuerpo = (WEB_REGLA_JS + WEB_CAPTURA_JS
+              .replace("__MAXPAG__", str(WEB_CAPTURA_PAGINA_MAX))
+              .replace("__MAXPEND__", str(WEB_CAPTURA_PENDIENTES_MAX))
+              .replace("__VENTANA__", str(max(0, int(ventana)) * 60))
+              .replace("__TOPE__", str(WEB_CAPTURA_TEXTO_MAX)))
+    ver = hashlib.sha1(cuerpo.encode("utf-8")).hexdigest()[:12]
+    return "(() => {" + cuerpo.replace("__VER__", ver) + "})()"
+
+
+# El almacen de cuerpos capturados. Vive al lado del registro de alcance y no en la
+# pagina: un global muere con la recarga, y la CLI vive unos segundos cada N minutos —
+# entre las dos cosas no quedaria nada. Guarda lo MINIMO con lo que `inbox` puede servir
+# un cuerpo: la conversacion y el stanza (que es la llave que la bandeja ya publica) y
+# el texto. Ni autor, ni tipo, ni fecha del mensaje, ni el id completo con el
+# participante adentro: todo eso la sonda ya lo saca en claro de IndexedDB con historial
+# completo, y copiarlo aca seria espejar la conversacion sin ganar nada.
+CAPTURA_ESQUEMA = """
+create table if not exists capturado (
+  account text not null, chat_jid text not null, stanza_id text not null,
+  body text not null, captured_at integer not null,
+  primary key (account, chat_jid, stanza_id));
+create index if not exists capturado_edad on capturado (captured_at);
+-- Desde cuando esta enlazada cada linea. Es lo unico que sobrevive a apagar el texto:
+-- no es contenido de nadie, y sin el la bandeja del primer dia devuelve cientos de
+-- menciones viejas que por definicion no pueden tener cuerpo.
+create table if not exists linea (account text primary key, first_seen integer not null);
+"""
+
+
+def captura_db():
+    return os.path.join(os.path.dirname(SCOPE_DB), "capture.db")
+
+
+def captura_topes():
+    """(filas, dias) del almacen, del registro. Menos de uno no es un tope, es apagarlo."""
+    return (max(1, int(setting("capture_max", WEB_CAPTURA_MAX))),
+            max(1, int(setting("capture_days", WEB_CAPTURA_TTL_DIAS))))
+
+
+def captura_abrir():
+    """La base del almacen, o None. NUNCA levanta: sin cache la fila sale `not-loaded`,
+    que es un estado que ya existia y que el usuario ya sabe leer."""
+    ruta = captura_db()
+    try:
+        os.makedirs(os.path.dirname(ruta), exist_ok=True)
+        con = sqlite3.connect(ruta, timeout=10)
+        # 0600 y no el umask: aca adentro esta el texto de mensajes de otra gente, y en
+        # un equipo compartido el umask por defecto lo deja legible para todos.
+        os.chmod(ruta, 0o600)
+        con.execute("pragma busy_timeout=5000")
+        con.executescript(CAPTURA_ESQUEMA)
+        return con
+    except (sqlite3.Error, OSError):
+        return None
+
+
+def captura_podar(con, ahora):
+    """El tope y la caducidad, en cada corrida que toca el almacen. Devuelve cuanto
+    desalojo cada uno: un desalojo callado es un caso que se pierde y se descubre
+    despues, cuando la fila ya salio `not-loaded` sin explicacion."""
+    tope, dias = captura_topes()
+    caducados = con.execute("delete from capturado where captured_at < ?",
+                            (ahora - dias * 86400,)).rowcount
+    desalojados = con.execute(
+        "delete from capturado where rowid not in (select rowid from capturado "
+        "order by captured_at desc limit ?)", (tope,)).rowcount
+    return max(0, caducados), max(0, desalojados)
+
+
+def captura_guardar(account, filas):
+    """Persiste lo drenado y poda. Devuelve (escritas, caducadas, desalojadas)."""
+    ahora = int(time.time())
+    con = captura_abrir()
+    if con is None:
+        return 0, 0, 0
+    limpias = [(account, f[0], f[1], str(f[2])[:WEB_CAPTURA_TEXTO_MAX], int(f[3] or ahora))
+               for f in filas if f and len(f) >= 4 and f[0] and f[1] and f[2]]
+    try:
+        con.executemany("insert or replace into capturado (account, chat_jid, stanza_id, "
+                        "body, captured_at) values (?,?,?,?,?)", limpias)
+        caducadas, desalojadas = captura_podar(con, ahora)
+        con.commit()
+        return len(limpias), caducadas, desalojadas
+    except sqlite3.Error:
+        return 0, 0, 0
+    finally:
+        con.close()
+
+
+def captura_cuerpos(account, llaves):
+    """{(chat, stanza): cuerpo} para las llaves pedidas. {} si el almacen no se puede leer.
+
+    La cuenta es parte de la llave: dos lineas propias pueden tener el MISMO grupo, y
+    servir el cuerpo de la otra linea es contestar sobre la conversacion ajena."""
+    llaves = [k for k in llaves if k[0] and k[1]]
+    if not llaves:
+        return {}
+    con = captura_abrir()
+    if con is None:
+        return {}
+    tengo = {}
+    try:
+        stanzas = sorted({k[1] for k in llaves})
+        for i in range(0, len(stanzas), 400):
+            lote = stanzas[i:i + 400]
+            marcas = ",".join("?" * len(lote))
+            for jid, stanza, body in con.execute(
+                    "select chat_jid, stanza_id, body from capturado where account=? "
+                    f"and stanza_id in ({marcas})", (account, *lote)):
+                tengo[(jid, stanza)] = body
+    except sqlite3.Error:
+        return {}
+    finally:
+        con.close()
+    return {k: tengo[k] for k in llaves if k in tengo}
+
+
+def captura_servir(account, mensajes, vecinos=()):
+    """Le pone el cuerpo capturado a lo que la coleccion ya no tiene.
+
+    En los candidatos solo mira los `not-loaded`, que es justo el caso que la captura
+    viene a arreglar: la mencion dejo de ser el ultimo mensaje de su grupo. En los
+    vecinos, a los que no traen cuerpo. Devuelve cuantos CANDIDATOS se sirvieron, que es
+    el numero que va al resumen."""
+    faltan = [m for m in mensajes if len(m) > 9 and m[9] == "not-loaded"]
+    huecos = [v for v in vecinos if v[4] is None]
+    tengo = captura_cuerpos(account, [(m[1], m[0]) for m in faltan]
+                            + [(v[0], v[1]) for v in huecos])
+    if not tengo:
+        return 0
+    servidos = 0
+    for m in faltan:
+        cuerpo = tengo.get((m[1], m[0]))
+        if cuerpo:
+            m[8], m[9] = cuerpo, TEXTO_CAPTURADO
+            servidos += 1
+    for v in huecos:
+        v[4] = tengo.get((v[0], v[1]))
+    return servidos
+
+
+def captura_linea(account):
+    """Desde cuando esta enlazada esta linea, anotandola si es la primera vez.
+
+    No hay mejor senal disponible: `wa_account.linked_at` existe en el registro de
+    alcance pero hoy nadie lo escribe — `wa-scope accounts add` todavia no existe — y
+    wa-read NUNCA escribe en ese registro. Asi que la senal es la primera corrida que
+    llego a leer esta sesion, y se guarda en el almacen propio. Devuelve 0 si no se
+    pudo: sin ella la bandeja vuelve a la ventana de `inbox_days`, que es lo de antes."""
+    con = captura_abrir()
+    if con is None:
+        return 0
+    try:
+        fila = con.execute("select first_seen from linea where account=?",
+                           (account,)).fetchone()
+        if fila:
+            return int(fila[0])
+        ahora = int(time.time())
+        con.execute("insert or replace into linea (account, first_seen) values (?, ?)",
+                    (account, ahora))
+        con.commit()
+        return ahora
+    except sqlite3.Error:
+        return 0
+    finally:
+        con.close()
+
+
+def captura_vaciar():
+    """Con el texto apagado no queda guardado el cuerpo de nadie. Es la otra mitad del
+    trato. Se borran los CUERPOS y no el archivo: la fecha de enlace de cada linea no es
+    contenido de nadie, y perderla haria que la bandeja del dia siguiente volviera a
+    arrastrar cientos de menciones viejas sin texto posible."""
+    if not os.path.exists(captura_db()):
+        return
+    con = captura_abrir()
+    if con is None:
+        return
+    try:
+        con.execute("delete from capturado")
+        con.commit()
+        con.execute("vacuum")
+    except sqlite3.Error:
+        pass
+    finally:
+        con.close()
+
+
+def captura_instalar(page, account, ventana=5):
+    """Deja el oyente puesto y se trae lo que junto desde la corrida anterior.
+
+    Devuelve lo que informo la pagina, o None si no se pudo instalar. No levanta: sin
+    oyente la bandeja sigue saliendo con lo que la coleccion tenga cargado, que es el
+    techo de antes y no una falla nueva."""
+    try:
+        info = json.loads(web_eval(page, web_captura_js(ventana)) or "null") or {}
+    except (SourceError, ValueError, TypeError):
+        return None
+    if not info.get("ok"):
+        return None
+    guardados, caducados, desalojados = captura_guardar(account, info.get("drenado") or [])
+    info.update(guardados=guardados, caducados=caducados, desalojados=desalojados)
+    return info
+
+
+def web_payload(page, timeout=None, sonda=None):
+    """Corre la sonda y espera el resultado.
+
+    `orca eval` NO resuelve promesas: una expresion que devuelve una Promise vuelve en
+    null. Por eso van dos pasos — una que arranca el trabajo y lo deja en un global,
+    otra que lee ese global — y no uno."""
+    timeout = int(setting("web_timeout_s", 45)) if timeout is None else timeout
+    arranque = ("window.__waRead = undefined; (async () => {%s})()"
+                ".then(v => { window.__waRead = { ok: true, v: v }; })"
+                ".catch(e => { window.__waRead = { ok: false, e: String((e && e.message) || e) }; });"
+                " 'started'" % (sonda or WEB_SONDA_CHATS))
+    web_eval(page, arranque)
+    limite = time.time() + timeout
+    while time.time() < limite:
+        crudo = web_eval(page, "JSON.stringify(window.__waRead === undefined "
+                               "? null : window.__waRead)")
+        if crudo and crudo != "null":
+            try:
+                salida = json.loads(crudo)
+            except ValueError as error:
+                raise SourceError(WEB_ILEGIBLE,
+                                  f"the session answered something unreadable: {error}") from error
+            if not salida.get("ok"):
+                raise SourceError(WEB_ILEGIBLE,
+                                  f"the session could not be read: {salida.get('e')}")
+            datos = salida.get("v") or {}
+            if not datos.get("linked"):
+                raise SourceError(WEB_DESLOGUEADA,
+                                  "that WhatsApp Web session is not linked"
+                                  + (" — the QR code is on screen, scan it with the phone "
+                                     "of THAT number" if datos.get("qr") else
+                                     "; open the tab and link it again"))
+            if datos.get("sinTexto"):
+                raise SourceError(WEB_SIN_TEXTO,
+                                  "`read_web_text` is set to memoria but this WhatsApp "
+                                  "Web build no longer exposes the in-memory message "
+                                  "collection, so no body can be read without opening "
+                                  "the conversations; set `wa-scope config "
+                                  "read_web_text off` to get the inbox without text")
+            return datos
+        time.sleep(0.4)
+    raise SourceError(WEB_SIN_RESPUESTA,
+                      f"the WhatsApp Web session did not answer in {timeout}s; the tab "
+                      "may still be loading or the phone may be offline")
+
+
+def web_eval(page, expression):
+    salida = orca_json(["eval", "--page", page, "--expression", expression])
+    return salida.get("result")
+
+
+# El esquema de macOS, recortado a las columnas que las consultas leen de verdad.
+# Inventar la base entera seria prometer un historial que la sesion no tiene; esto
+# contesta exactamente las mismas preguntas y nada mas.
+#
+# ZWAMEDIAITEM esta y se queda VACIA a proposito. `cmd_inbox` y `nearby_media` arman
+# `media`, `adjuntos_cerca` y `audios` con os.path.join(MEDIA_BASE, ZMEDIALOCALPATH), y
+# por la via web no hay ninguna ruta que poner ahi: el adjunto vive en el blob store del
+# perfil del navegador, cifrado y sin nombre de archivo. Una ruta inventada la abriria
+# `wa-transcribe` y fallaria con "no such file" lejos de aca; con la tabla vacia el join
+# deja `media` en null y las dos listas en [], que es lo que de verdad pasa. Que el
+# mensaje TRAIA un adjunto no se pierde: va en el marcador de ZTEXT como `media=<tipo>`.
+WEB_ESQUEMA = """
+create table ZWACHATSESSION (Z_PK integer primary key, ZCONTACTJID text,
+                             ZPARTNERNAME text, ZUNREADCOUNT integer,
+                             ZLASTMESSAGEDATE real);
+create table ZWAGROUPMEMBER (Z_PK integer primary key, ZCHATSESSION integer,
+                             ZMEMBERJID text, ZCONTACTNAME text);
+create table ZWAPROFILEPUSHNAME (Z_PK integer primary key, ZJID text, ZPUSHNAME text);
+create table ZWAMESSAGE (Z_PK integer primary key, ZCHATSESSION integer,
+                         ZMESSAGEDATE real, ZISFROMME integer, ZSTANZAID text,
+                         ZTEXT text, ZPARENTMESSAGE integer, ZGROUPMEMBER integer,
+                         ZMEDIAITEM integer, ZMESSAGETYPE integer);
+create table ZWAMEDIAITEM (Z_PK integer primary key, ZMEDIALOCALPATH text,
+                           ZFILESIZE integer);
+-- Los mensajes de al lado de un candidato que SI tienen cuerpo. No es una tabla de
+-- macOS a proposito: ahi `adjuntos_cerca` ya trae los adjuntos con su ruta, y esto es
+-- lo que la via web puede dar en su lugar — texto, porque adjunto no hay. Que no exista
+-- en la base de la app es lo que mantiene la salida de la via de macOS byte a byte
+-- igual: `nearby_text()` no encuentra la tabla, devuelve [] y el campo ni aparece.
+create table web_contexto (chat integer, ZMESSAGEDATE real, sender text, text text);
+"""
+
+# Los tipos de la app de escritorio, para que ZMESSAGETYPE signifique lo mismo en las
+# dos fuentes. Lo que no esta en la tabla queda en 0: es el tipo de un mensaje de texto.
+WEB_TIPOS = {"image": 1, "video": 2, "ptt": 3, "audio": 3, "document": 8}
+
+
+def web_texto(cuerpo, tipo, menciona, lid, motivo="off"):
+    """El ZTEXT de un candidato: el cuerpo si lo hay, y si no un marcador legible.
+
+    Nunca queda vacio. `cmd_inbox` hace `(text or "")`, asi que un null ahi sale como
+    cadena vacia y se lee como "el mensaje estaba en blanco" — que es otra cosa que
+    "no se leyo el texto", y manda al agente a contestar sobre nada.
+
+    El `motivo` va DENTRO del marcador porque las tres maneras de quedarse sin texto —
+    no se pidio, la sesion no lo tiene, no hay nada que leer — piden acciones distintas
+    y en el JSON se ven iguales.
+
+    El `@<lid>` va adelante cuando los metadatos dicen que te nombraron y el cuerpo no
+    lo trae. No es adorno: es lo que `cmd_inbox` mira para decir `mencion`, y es lo
+    mismo que la base de macOS guarda de verdad en ZTEXT. Medido contra la sesion viva,
+    el cuerpo en memoria de una mencion YA trae `@<lid>`; el prefijo es para cuando el
+    texto no se leyo, o cuando la mencion vino por groupMentions y no por el token."""
+    texto = (cuerpo or "").strip()
+    if not texto:
+        if motivo not in TEXTO_MOTIVOS:
+            motivo = "off"
+        texto = (f"{TEXTO_SIN_LEER} reason={motivo}"
+                 + (f" media={tipo}" if tipo and tipo != "chat" else "") + "]")
+    if menciona and f"@{lid}" not in texto:
+        texto = f"@{lid} {texto}"
+    return texto
+
+
+def web_db(datos):
+    """Arma la base temporal con las filas de la sesion. Devuelve (con, tmp) como snapshot()."""
+    tmp = tempfile.mkdtemp(prefix="wa-read.web.")
+    con = sqlite3.connect(os.path.join(tmp, "web.sqlite"))
+    con.row_factory = sqlite3.Row
+    con.executescript(WEB_ESQUEMA)
+    jid_propio = f"{datos['lid']}@lid"
+    # Sin esta fila, una linea sin grupos deja ZWAGROUPMEMBER vacia y own_lid() devuelve
+    # None: el whoami saldria sin LID justo donde el LID es la identidad de la cuenta.
+    # Con ZCHATSESSION en NULL la fila existe pero no cuenta como grupo.
+    con.execute("insert into ZWAGROUPMEMBER (ZCHATSESSION, ZMEMBERJID) values (null, ?)",
+                (jid_propio,))
+    con.execute("insert into ZWAPROFILEPUSHNAME (ZJID, ZPUSHNAME) values (?, ?)",
+                (jid_propio, datos.get("name") or None))
+    pks = {}
+    for pk, (jid, nombre, t, unread) in enumerate(datos.get("chats") or [], start=1):
+        # `t` viene en epoch unix y ts() le SUMA el epoch de Core Data: por eso se resta
+        # aca. Sin esto cada fecha saldria 31 anios adelantada.
+        con.execute("insert into ZWACHATSESSION (Z_PK, ZCONTACTJID, ZPARTNERNAME, "
+                    "ZUNREADCOUNT, ZLASTMESSAGEDATE) values (?,?,?,?,?)",
+                    (pk, jid, nombre, unread, (t - APPLE_EPOCH) if t else 0))
+        pks[jid] = pk
+        if jid.endswith("@g.us"):
+            con.execute("insert into ZWAGROUPMEMBER (ZCHATSESSION, ZMEMBERJID) "
+                        "values (?, ?)", (pk, jid_propio))
+    if datos.get("mensajes") is not None:
+        web_mensajes(con, datos, jid_propio, pks)
+    con.commit()
+    return con, tmp
+
+
+def web_mensajes(con, datos, jid_propio, pks):
+    """Las filas de ZWAMESSAGE que `cmd_inbox` necesita, y nada mas.
+
+    Tres clases de fila, y las tres hacen falta para que el SQL del comando signifique
+    lo mismo que contra la base de macOS:
+
+    1. Los CANDIDATOS (ZISFROMME=0), que son los que pueden salir en la bandeja.
+    2. MI ultimo mensaje en cada chat (ZISFROMME=1), una sola fila por chat. Es lo que
+       lee `ULTIMA_MIA`, y sin ella la regla "si ya contestaste, la mencion esta
+       atendida" no se aplicaria nunca por esta via: el join quedaria vacio, el
+       coalesce daria 0 y toda mencion vieja volveria para siempre.
+    3. El PADRE de una respuesta (ZISFROMME=1, sin fecha), para que `p.ZISFROMME = 1`
+       sea cierto y el `kind` salga `respuesta`. Va con ZMESSAGEDATE en 0 justo para
+       que no se meta en el max() de ULTIMA_MIA: la fecha del padre no se conoce."""
+    lid = jid_propio.split("@")[0]
+    siguiente = (con.execute("select coalesce(max(Z_PK), 0) from ZWACHATSESSION")
+                 .fetchone()[0])
+
+    def chat_pk(jid, cuando=0):
+        """El Z_PK del chat, creandolo si el store `chat` no lo tenia. Sin esto el join
+        de cmd_inbox descarta la fila EN SILENCIO y la mencion no aparece nunca."""
+        nonlocal siguiente
+        if jid in pks:
+            return pks[jid]
+        siguiente += 1
+        con.execute("insert into ZWACHATSESSION (Z_PK, ZCONTACTJID, ZPARTNERNAME, "
+                    "ZUNREADCOUNT, ZLASTMESSAGEDATE) values (?,?,?,0,?)",
+                    (siguiente, jid, jid.split("@")[0],
+                     (cuando - APPLE_EPOCH) if cuando else 0))
+        if jid.endswith("@g.us"):
+            con.execute("insert into ZWAGROUPMEMBER (ZCHATSESSION, ZMEMBERJID) "
+                        "values (?, ?)", (siguiente, jid_propio))
+        pks[jid] = siguiente
+        return siguiente
+
+    # Un ZWAGROUPMEMBER por autor, y SOLO para los de grupo. ZCHATSESSION va en NULL a
+    # proposito: `own_lid()` elige el jid que aparece en mas chats distintos, y un
+    # participante con chats de verdad puede empatarle o ganarle al propio — ahi la
+    # cuenta entera pasa a tener la identidad de otro. Con NULL la fila existe para el
+    # join del nombre y no cuenta como grupo. Los de un directo ni se crean: `SENDER`
+    # no se usa ahi, el remitente sale de ZPARTNERNAME.
+    miembros = {}
+
+    def miembro_pk(jid, nombre):
+        if jid not in miembros:
+            cur = con.execute("insert into ZWAGROUPMEMBER (ZCHATSESSION, ZMEMBERJID, "
+                              "ZCONTACTNAME) values (null, ?, ?)", (jid, nombre or None))
+            miembros[jid] = cur.lastrowid
+        return miembros[jid]
+
+    for jid, t in datos.get("mias") or []:
+        con.execute("insert into ZWAMESSAGE (ZCHATSESSION, ZMESSAGEDATE, ZISFROMME) "
+                    "values (?, ?, 1)", (chat_pk(jid, t), (t - APPLE_EPOCH) if t else 0))
+
+    padres = {}
+    for stanza, jid, t, autor, nombre, menciona, citado, tipo, cuerpo, motivo in \
+            datos.get("mensajes") or []:
+        pk = chat_pk(jid, t)
+        padre = None
+        if citado:
+            if (pk, citado) not in padres:
+                cur = con.execute("insert into ZWAMESSAGE (ZCHATSESSION, ZMESSAGEDATE, "
+                                  "ZISFROMME, ZSTANZAID) values (?, 0, 1, ?)",
+                                  (pk, citado))
+                padres[(pk, citado)] = cur.lastrowid
+            padre = padres[(pk, citado)]
+        gm = miembro_pk(autor, nombre) if (jid.endswith("@g.us") and autor) else None
+        con.execute("insert into ZWAMESSAGE (ZCHATSESSION, ZMESSAGEDATE, ZISFROMME, "
+                    "ZSTANZAID, ZTEXT, ZPARENTMESSAGE, ZGROUPMEMBER, ZMESSAGETYPE) "
+                    "values (?,?,0,?,?,?,?,?)",
+                    (pk, (t - APPLE_EPOCH) if t else 0, stanza,
+                     web_texto(cuerpo, tipo, bool(menciona), lid, motivo), padre, gm,
+                     WEB_TIPOS.get(tipo, 0)))
+
+    # Los vecinos SIN cuerpo no se escriben: un contexto que dice "[web:no-text]" no es
+    # contexto, es ruido al lado de la fila que si hay que atender.
+    for jid, stanza, t, nombre, cuerpo in datos.get("vecinos") or []:
+        if not cuerpo or jid not in pks:
+            continue
+        con.execute("insert into web_contexto (chat, ZMESSAGEDATE, sender, text) "
+                    "values (?,?,?,?)",
+                    (pks[jid], (t - APPLE_EPOCH) if t else 0, nombre or "?", cuerpo))
 
 
 def web_accounts():
@@ -181,15 +1254,15 @@ def web_accounts():
     wa-read nunca escribe en el registro."""
     try:
         con = sqlite3.connect(f"file:{SCOPE_DB}?mode=ro", uri=True)
-        rows = con.execute("select id, label from wa_account "
+        rows = con.execute("select id, label, profile from wa_account "
                            "where kind=? and enabled=1 order by id", (WEB,)).fetchall()
         con.close()
-        return [{"id": r[0], "label": r[1] or r[0]} for r in rows]
+        return [{"id": r[0], "label": r[1] or r[0], "profile": r[2]} for r in rows]
     except sqlite3.Error:
         return []
 
 
-def sources():
+def sources(cmd=None, days=None, window=5):
     """Las fuentes ACTIVAS, en orden. La local primero: donde existe, es la buena —
     historial completo y sin depender de una sesion que se cae."""
     out = []
@@ -199,10 +1272,11 @@ def sources():
     if setting("read_local", "on") != "off":
         out.append(LocalSource(SOURCE))
     if setting("read_web", "off") == "on":
-        # Sin cuentas registradas igual hay una fuente web: el usuario la pidio. Asi
-        # el fallo dice "falta construirlo" y no "no configuraste nada", que seria
-        # mandarlo a arreglar algo que no esta roto.
-        out += [WebSource(a["id"], a["label"]) for a in web_accounts()] or [WebSource()]
+        # Sin cuentas registradas igual hay una fuente web: el usuario la pidio. Sin
+        # perfil se toma cualquier pestana abierta en WhatsApp Web, que es lo que hay
+        # antes de enlazar la primera linea.
+        out += [WebSource(a["id"], a["label"], a["profile"], cmd, days, window)
+                for a in web_accounts()] or [WebSource(cmd=cmd, days=days, window=window)]
     return out
 
 
@@ -216,13 +1290,23 @@ COSTO_WEB = """  What the web route costs, before you turn it on:
     - the session can drop (logged out, phone offline for too long) and has to be
       linked again with the QR code.
     - a new line authorizes nothing by itself: every conversation stays denied
-      until you register it with `wa-scope set`."""
+      until you register it with `wa-scope set`.
+    - no attachment paths: the inbox always comes back with media null and
+      adjuntos_cerca empty, because a browser session keeps its files in the
+      profile's blob store and there is nothing `wa-transcribe` can open. The
+      message still says it carried one, as `media=<type>` in its text marker.
+    - no message text unless you ask for it: `read_web_text memoria` reads the
+      body of what that session already holds in memory — it opens no
+      conversation and marks nothing as read, and what it cannot reach keeps the
+      `[web:no-text]` marker."""
 # La via web no es un plan B de Linux: es una linea MAS, y eso vale igual en macOS,
 # donde la app de escritorio ya ocupo la unica linea que ese numero podia tener.
-COMO_ENCENDER_WEB = """  To enable it once it ships:
+COMO_ENCENDER_WEB = """  To enable it:
     `wa-scope config read_web on`, then link the line from the plugin panel and
-    scan the QR with the phone of THAT number. Today it is designed and not built:
-    the design is in docs/LECTURA-MULTIFUENTE.md."""
+    scan the QR with the phone of THAT number. It answers `chats`, `whoami` and
+    `inbox` from the live session. `chat` and `media` it does not: those two
+    promise the body of every message and the path of every attachment on disk,
+    and a browser session has neither. See docs/LECTURA-MULTIFUENTE.md."""
 
 REQUISITOS_POR_SO = {
     "Darwin": """There are two read routes, and they add up rather than replace each other.
@@ -240,7 +1324,8 @@ REQUISITOS_POR_SO = {
   another company account — gets read on a machine whose desktop app is already
   taken by the first one.
 """ + COSTO_WEB + "\n" + COMO_ENCENDER_WEB,
-    "Windows": """There are two read routes, and neither reads anything here yet.
+    "Windows": """There are two read routes. The local one reads nothing here yet; the
+  web one does.
 
   Local database: WhatsApp Desktop exists on Windows, but where it keeps its
   database — and whether that database is readable or encrypted — is unverified.
@@ -258,8 +1343,9 @@ REQUISITOS_POR_SO = {
 
   That does NOT mean there is no read path. WhatsApp Web is a real route — a
   browser session with its own profile, driven by Orca's browser — and on Linux
-  it is the only one. It is designed and not built yet, which is a missing
-  feature and not a dead end.
+  it is the only one. It answers `chats`, `whoami` and `inbox`, which is
+  everything the plugin's own work needs: the inbox is what the agent runs on.
+  `chat` and `media` stay out by design, not by omission.
 """ + COSTO_WEB + "\n" + COMO_ENCENDER_WEB + """
   Everything else does work: the registry, the mapping, the panels and the automation.""",
 }
@@ -274,8 +1360,8 @@ def preflight():
         # construir. Decirle a quien usa Linux que no se puede lo manda a buscar otra
         # herramienta en vez de a esperar la que falta.
         problems.append(f"there is no local WhatsApp database on {platform.system()}; "
-                        "the WhatsApp Web route is the one that applies here and it is "
-                        "not built yet")
+                        "the WhatsApp Web route is the one that applies here and it "
+                        f"reads {web_comandos_txt()} — not `chat` and not `media`")
         return problems
     if not os.path.isdir(GC):
         problems.append("the WhatsApp Desktop Group Container is not at "
@@ -431,8 +1517,32 @@ def cmd_inbox(con, a):
         # ./bin/wa-transcribe antes de decidir si es soporte.
         item["audios"] = [m["path"] for m in item["adjuntos_cerca"]
                           if m["type"] == "audio"]
+        # Y por la via web, donde no hay adjunto que abrir, lo de al lado que si se pudo
+        # leer. La clave se agrega SOLO si hay algo: la base de la app no tiene esa tabla
+        # y su salida no puede moverse un byte por un campo vacio.
+        cerca = nearby_text(con, r["chat_id"], r["d"], a.window)
+        if cerca:
+            item["contexto_cerca"] = cerca
         out.append(item)
     return out
+
+
+def nearby_text(con, chat_id, when, minutes):
+    """Los mensajes de al lado que tienen cuerpo, en la misma ventana que `nearby_media`.
+
+    Solo la via web los trae. La tabla no existe en la base de la app de escritorio, y
+    sin ella esto devuelve [] — que es lo que mantiene esa salida byte a byte igual."""
+    if not minutes:
+        return []
+    try:
+        rows = con.execute(
+            "select ZMESSAGEDATE d, sender, text from web_contexto "
+            "where chat = ? and abs(ZMESSAGEDATE - ?) <= ? "
+            "order by ZMESSAGEDATE limit 10", (chat_id, when, minutes * 60)).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    return [{"date": ts(r["d"]), "sender": r["sender"],
+             "text": (r["text"] or "").replace("\n", " ")} for r in rows]
 
 
 def nearby_media(con, chat_id, when, minutes):
@@ -582,23 +1692,56 @@ def orca_cli():
     return shutil.which("orca")
 
 
+def captura_estado_txt():
+    """Lo que el almacen tiene hoy, en la fila del doctor. Un archivo con el texto de
+    mensajes de otra gente tiene que ser encontrable desde donde el usuario ya mira, y
+    borrable sin leer el codigo."""
+    ruta = captura_db()
+    if not os.path.exists(ruta):
+        return ""
+    try:
+        con = sqlite3.connect(f"file:{ruta}?mode=ro", uri=True)
+        cuantos = con.execute("select count(*) from capturado").fetchone()[0]
+        con.close()
+    except sqlite3.Error:
+        cuantos = "?"
+    return (f". Live capture store: {cuantos} message bodies in {ruta}, max "
+            f"{WEB_CAPTURA_MAX} and {WEB_CAPTURA_TTL_DIAS} days; it is deleted when "
+            "`read_web_text` goes back to off, or delete the file yourself")
+
+
 def _web_check():
-    """La segunda via, dicha en voz alta aunque todavia no lea.
+    """La segunda via, dicha en voz alta este encendida o no.
 
     Callarla es lo que hacia que en Linux el doctor pareciera un callejon sin salida
-    cuando en realidad es una funcion que falta. Devuelve (ok, detalle, codigo)."""
-    pedida = setting("read_web", "off") == "on"
-    cuentas = len(web_accounts())
-    donde = ("the only route on this system" if not SOURCE["verified"]
-             else "a second line, on top of the desktop app")
-    detalle = (f"optional — {donde}; designed and not built yet. Cost: no deep history "
-               "(only what the session loaded), slower, one linked-device slot, and the "
-               "session can drop. Turn it on with `wa-scope config read_web on` and link "
-               "the line from the panel; see docs/LECTURA-MULTIFUENTE.md")
-    if pedida:
-        detalle = (f"selected ({cuentas} line(s) registered) but not built yet — reads "
-                   "fall back to the local database; see docs/LECTURA-MULTIFUENTE.md")
-    return False, detalle, WEB_SIN_CONSTRUIR
+    cuando en realidad es una funcion que falta. Encendida NO se afirma: se abre la
+    sesion de verdad, que es la unica manera de distinguir una pestana lista de una
+    con el QR en pantalla. Devuelve (ok, detalle, codigo)."""
+    if setting("read_web", "off") != "on":
+        donde = ("the only route on this system" if not SOURCE["verified"]
+                 else "a second line, on top of the desktop app")
+        return (False,
+                f"optional — {donde}; it reads {web_comandos_txt()} from a live "
+                "browser session. Cost: no deep history (only what the session loaded), "
+                "slower, one linked-device slot, and the session can drop. Turn it on "
+                "with `wa-scope config read_web on` and link the line from the panel; "
+                "see docs/LECTURA-MULTIFUENTE.md" + captura_estado_txt(), WEB_APAGADA)
+    total, lineas = 0, 0
+    for src in sources("chats"):
+        if src.kind != WEB:
+            continue
+        lineas += 1
+        try:
+            con, tmp = src.open()
+        except SourceError as exc:
+            return False, f"{src.label}: {exc.detail}", exc.reason
+        try:
+            total += con.execute("select count(*) from ZWACHATSESSION").fetchone()[0]
+        finally:
+            con.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+    return True, (f"{lineas} live session(s), {total} chats readable"
+                  + captura_estado_txt()), None
 
 
 # Sin Full Disk Access, macOS levanta "Orca solicita acceso a datos de otras apps" en
@@ -637,7 +1780,12 @@ def cmd_state(con, a):
 
     El -shm queda FUERA a proposito: es el indice del WAL y sqlite le mueve la fecha
     con solo abrir la base, aunque sea en modo lectura. Meterlo hacia que cada lectura
-    invalidara su propia firma y nunca se saltara ninguna."""
+    invalidara su propia firma y nunca se saltara ninguna.
+
+    Cada fuente activa trae su fila. Sin la fila de las lineas web, un equipo que lee
+    SOLO por web quedaba con la constante `missing` como firma: la segunda sync la veia
+    igual a la primera y repetia la lista vieja para siempre. En macOS pasaba lo mismo
+    en chico — lo que llegaba por web no invalidaba la firma de la base local."""
     db = SOURCE["db"]
     partes, mtime, size = [], None, None
     for sufijo in ("", "-wal"):
@@ -650,19 +1798,40 @@ def cmd_state(con, a):
         if not sufijo:
             mtime, size = int(st.st_mtime), st.st_size
     existe = partes[0] != "-"
-    return [{"account": LOCAL, "db": db, "exists": existe, "mtime": mtime,
-             "size": size, "fingerprint": "|".join(partes) if existe else "missing"}]
+    filas = [{"account": LOCAL, "db": db, "exists": existe, "mtime": mtime,
+              "size": size,
+              "fingerprint": "|".join(partes) if existe else ESTADO_SIN_BASE}]
+    if setting("read_web", "off") == "on":
+        # `live` no es una firma: es decir que esta fuente NO se puede stat-ear. La
+        # sesion vive en el navegador y preguntarle cuanto cambio seria abrirla, que es
+        # justo la lectura que este comando existe para evitar. Quien reusa tiene que
+        # leerlo como "no puedo saltearme nada", y eso es correcto: por la via web una
+        # corrida barata de mas cuesta un eval, no 260 MB.
+        for cuenta in (web_accounts() or [{"id": WEB, "label": "WhatsApp Web"}]):
+            filas.append({"account": cuenta["id"], "db": None, "exists": True,
+                          "mtime": None, "size": None, "fingerprint": ESTADO_VIVO})
+    return filas
 
 
 def cmd_doctor(con, a):
     """Para que el usuario sepa que le falta antes de que nada dependa de esto."""
     db = SOURCE["db"]
     ok_read, detail_read = readable()
+    # La via web se pregunta ANTES de clasificar, porque lo que conteste decide si lo de
+    # la base local es un requisito o un dato. Se llama una sola vez: encendida abre la
+    # sesion de verdad, y abrirla dos veces por un doctor son dos vueltas de navegador.
+    web_ok, web_detalle, web_code = _web_check()
+    # Los cinco de abajo son de la via LOCAL, y fuera de macOS fallan los cinco. Marcarlos
+    # como requisito incondicional dejaba al plugin MUERTO en Linux y en Windows con una
+    # sesion web leyendo perfecto: el doctor salia 1, build_health() daba ok:false y
+    # `wa-scope pending` salia 2, o sea las dos automatizaciones bloqueadas para siempre.
+    # Son requisito solo cuando ninguna otra fuente puede contestar.
+    local_manda = not web_ok
     # El codigo es la llave estable: el nombre y el detalle estan en ingles para quien
     # corre el CLI, y el panel traduce por codigo al idioma del usuario. Renombrar un
     # codigo desincroniza el panel en silencio; el texto se puede reescribir sin riesgo.
     checks = [
-        ("system", "WhatsApp reading supported on this system",
+        ("system", "local WhatsApp database supported on this system",
          SOURCE["verified"], platform.system()),
         ("whatsapp", "WhatsApp Desktop installed", bool(GC) and os.path.isdir(GC),
          GC or (SOURCE["app"] or "no official app for this system")),
@@ -687,14 +1856,20 @@ def cmd_doctor(con, a):
         # macOS pregunta cada vez. Marcarlo como rotura pintaria de rojo un equipo que
         # funciona; callarlo deja al usuario sin saber de donde sale la ventana.
         ("fulldisk", "Full Disk Access", *_fulldisk_check()),
-        # Va al final y no bloquea: es una via que falta, no una rotura. Ponerla arriba
-        # la haria parecer un requisito y pintaria de rojo una maquina que lee perfecto.
-        ("web", "WhatsApp Web as a second line", *_web_check()),
+        # Va al final y no bloquea: es una via que se enciende, no una rotura. Ponerla
+        # arriba la haria parecer un requisito y pintaria de rojo una maquina que lee
+        # perfecto por la base local.
+        ("web", "WhatsApp Web as a second line", web_ok, web_detalle, web_code),
     ]
-    filas = [{"check": n, "ok": ok, "detalle": d, "requerido": True, "code": code}
+    # `via` viaja para que quien clasifique no tenga que reconocer los codigos de memoria:
+    # wa-scope decide con esto si un fallo local es un problema o un dato, y una segunda
+    # copia de la lista de codigos alla se desincronizaria en silencio.
+    filas = [{"check": n, "ok": ok, "detalle": d, "requerido": local_manda,
+              "code": code, "via": LOCAL}
              for code, n, ok, d in checks]
     filas += [{"check": n, "ok": ok, "detalle": d, "requerido": False,
-               "code": code, "detailCode": dcode}
+               "code": code, "detailCode": dcode,
+               "via": WEB if code == "web" else None}
               for code, n, ok, d, dcode in opcionales]
     return filas
 
@@ -724,7 +1899,13 @@ def read_from_sources(a):
     Que ninguna pueda responder NO es una lista vacia: una bandeja vacia se lee como
     "no hay nada que atender", que es justo lo contrario. Por eso se cuenta cuantas
     contestaron, y no cuantas filas salieron."""
-    activas = sources()
+    # La via web solo contesta algunos comandos, y eso lo tiene que saber ANTES de
+    # abrir la sesion: abrirla para despues no poder contestar gasta medio minuto de
+    # navegador por nada.
+    # La ventana viaja con el comando porque la sonda de la bandeja la usa para no
+    # bajar de la pagina lo que el SQL va a descartar igual.
+    activas = sources(getattr(a, "cmd", None), getattr(a, "days", None),
+                      getattr(a, "window", 5))
     if not activas:
         morir_sin_fuente(SIN_FUENTE,
                          "no read source is enabled: `read_local` is off and `read_web` "
@@ -806,12 +1987,20 @@ def main():
             faltan = [r for r in rows if not r["ok"] and r.get("requerido", True)]
             if faltan:
                 print("\n" + REQUISITOS)
+            elif any(not r["ok"] and r.get("via") == LOCAL for r in rows):
+                # Un MISSING que no hace fallar nada tiene que decir por que, o se lee
+                # como una rotura que el codigo de salida esta escondiendo.
+                print("\n  The local-database lines above are MISSING and that is not a "
+                      "failure here: a WhatsApp Web session is answering, and it is the "
+                      f"route this machine reads with. It answers {web_comandos_txt()}; "
+                      "`chat` and `media` need the message body and the attachment path "
+                      "on disk, which a browser session does not have.")
         # Lo opcional no hace fallar el chequeo: sin transcripcion todo funciona,
         # solo que los audios quedan sin leer.
         # Lo requerido lo dice el propio chequeo, no la palabra "optional" en su nombre.
         # Clasificar por texto ya habia roto esto antes en el panel, y volvio a romperlo
         # aca: "WhatsApp Web as a second line" no lleva la palabra, asi que un Mac que
-        # lee perfecto salia con 1 por una via que ni siquiera existe todavia.
+        # lee perfecto salia con 1 por una via que si contesta.
         obligatorios = [r for r in rows if r.get("requerido", True)]
         sys.exit(0 if all(r["ok"] for r in obligatorios) else 1)
     if a.cmd == "state":                # un stat: pasar por las fuentes lo convertiria

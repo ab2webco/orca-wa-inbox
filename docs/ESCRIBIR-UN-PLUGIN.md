@@ -56,12 +56,17 @@ recargás el panel, sin reinstalar.
 
 ## 3. Capabilities: pedí lo mínimo
 
-Ocho, y el usuario las consiente al instalar: `workspace:read`, `terminal:send`,
+Las que existen y el usuario consiente al instalar: `workspace:read`, `terminal:send`,
 `notifications:show`, `storage`, `secrets`, `events:subscribe`, `settings:own`,
-`net:fetch`.
+`net:fetch`, `process:spawn`.
 
 Si no declarás `net:fetch`, Orca lo dice en la tarjeta del plugin. **Eso no es un
 error**: es la app contándole al usuario que tu plugin no sale a internet.
+
+`process:spawn` es la que más pesa en ese diálogo: dice que el plugin puede arrancar
+programas como el usuario. Este plugin la declara porque conducir el navegador de Orca
+es ejecutar su CLI, y **la descripción del plugin es el único texto de ese diálogo que
+vos controlás** — usala para decir qué arrancás, no para justificarte.
 
 **No pidas `terminal:send` para "hacer cosas".** El API no tiene noción de "la terminal
 activa": te da ids y nada más — ni el nombre, ni si es una shell o una sesión de agente

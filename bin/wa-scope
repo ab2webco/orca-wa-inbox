@@ -23,7 +23,7 @@ Modes, from least to most permission (the values are stable, they are not transl
 Task service per conversation: plane, linear, github — or `ninguno` when that
 conversation opens no cards and the agent only reads, summarizes or replies.
 """
-import argparse, json, os, sqlite3, subprocess, sys, time
+import argparse, json, os, re, sqlite3, subprocess, sys, time
 
 def scope_db_path():
     """Estado propio de la herramienta. En Windows va al APPDATA y no al home."""
@@ -147,6 +147,20 @@ CLOSING_RESULTS = {
 # la que tenia.
 CUENTA_LOCAL = "local"
 KINDS_CUENTA = ("local", "web")
+
+# Lo que `wa-read state` devuelve cuando NO hay firma que devolver: `missing` es que no
+# hay base que mirar y `live` que la fuente no se puede stat-ear sin abrirla. Son
+# contrato con wa-read; tratarlas como una firma cualquiera es lo que congelaba la
+# bandeja de un equipo que solo lee por web.
+SIN_FIRMA = ("missing", "live")
+
+# El marcador que deja wa-read cuando la via web no pudo leer el cuerpo de un mensaje.
+# Se reconoce aca y viaja al panel como CODIGO, no como texto crudo: el panel lo dice en
+# el idioma del usuario, y "[web:no-text reason=not-loaded media=image]" en pantalla no
+# es una frase, es una fuga de la herramienta a la cara de quien la usa. El `media=` es
+# ademas la unica senal de que el mensaje traia un adjunto: por la via web no hay ruta,
+# asi que mirar solo `media`/`adjuntos_cerca` nunca marcaba la fila.
+MARCA_WEB = re.compile(r"\[web:no-text reason=([a-z-]+)(?: media=([a-z0-9]+))?\]")
 
 # La tabla del alcance va aparte del resto del esquema porque la migracion a
 # (cuenta, jid) tiene que poder recrearla sola: SQLite no sabe cambiar una primary key.
@@ -272,14 +286,17 @@ PANEL_SETTINGS = {"tone": "tone", "agentName": "agent_name",
                   # contesta sobre el ultimo sync, asi que si esto fuera una constante
                   # escondida el retraso tambien lo seria.
                   "syncMinutes": "sync_minutes",
-                  "readWeb": "read_web"}
+                  "readWeb": "read_web",
+                  "readWebText": "read_web_text"}
 
 # Lo que cada ajuste acepta. Un valor invalido no revienta al guardarse: revienta
 # despues, en la corrida del agente, lejos de donde se tipeo — o peor, no revienta y
 # transcribe en el idioma equivocado sin decirlo.
 CONFIG_OPCIONES = {
-    # local no manda el audio a ningun lado; api si. off apaga la transcripcion.
-    "transcribe": ("local", "off", "api"),
+    # local no manda el audio a ningun lado. off apaga la transcripcion. `api` se
+    # ofrecia y no existe: wa-transcribe sale con "not implemented yet" en cada audio,
+    # asi que elegirlo solo podia apagar la transcripcion sin decirlo.
+    "transcribe": ("local", "off"),
     "transcribe_quality": ("optima", "minima"),
     # Solo los idiomas que el panel ofrece y con los que se probo. Un codigo sin probar
     # degrada la transcripcion en silencio, y eso se descubre tres audios despues.
@@ -289,8 +306,15 @@ CONFIG_OPCIONES = {
     # la linea de la empresa), y encender la web no apaga la del escritorio.
     "read_local": ("on", "off"),
     "read_web": ("on", "off"),
+    # El TEXTO de los mensajes que trae la via web, que es una eleccion aparte de
+    # leerla. `memoria` no abre ninguna conversacion y no marca nada como leido: lee el
+    # cuerpo de lo que esa pestana ya tenia cargado y deja el marcador `[web:no-text]`
+    # en lo demas. El modo que si abriria los chats no existe a proposito — abrir una
+    # conversacion en WhatsApp Web la marca leida tambien en el telefono del usuario.
+    "read_web_text": ("off", "memoria"),
 }
-CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s", "sync_minutes")
+CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s", "sync_minutes", "web_timeout_s",
+                    "capture_max", "capture_days")
 
 
 def valida_ajuste(key, value):
@@ -557,14 +581,28 @@ def source_fingerprint():
     Se le pregunta a wa-read y no se calcula aca para no tener dos copias de donde
     vive el contenedor: son dos verdades que se desincronizan en cuanto WhatsApp mueva
     algo. Devuelve None si no se pudo saber, y sin firma no se saltea nada: ante la
-    duda se lee, que es el comportamiento de siempre."""
+    duda se lee, que es el comportamiento de siempre.
+
+    Entran TODAS las fuentes activas, no la primera. Mirar solo la fila local dejaba a
+    un equipo que lee por web con la constante `missing` de firma: identica entre dos
+    corridas, asi que la segunda sync reusaba la lista vieja y la bandeja se congelaba
+    para siempre. Las dos firmas que no son firmas —`missing` y `live`— devuelven None,
+    que es la manera de decir "no me puedo saltear esta lectura"."""
     try:
         out = subprocess.run([WA_READ, "state", "--json"], capture_output=True,
                              text=True, timeout=20)
         filas = json.loads(out.stdout or "[]")
     except (OSError, ValueError, subprocess.SubprocessError):
         return None
-    return (filas[0].get("fingerprint") if filas else None) or None
+    if not filas:
+        return None
+    partes = []
+    for f in filas:
+        firma = f.get("fingerprint")
+        if not firma or firma in SIN_FIRMA:
+            return None
+        partes.append(f"{f.get('account') or '?'}={firma}")
+    return "|".join(partes) or None
 
 
 def activity_local(con, scope):
@@ -633,11 +671,19 @@ def build_activity(con, scope, firma=None):
             # marca otra vez cada corrida y la lista deja de significar algo.
             if decided.get(m.get("stanza_id"), {}).get("decision") == "ignore":
                 continue
+            texto = m.get("text") or ""
+            marca = MARCA_WEB.search(texto)
+            sin_texto = marca.group(1) if marca else None
+            tipo = marca.group(2) if marca else None
             pending.append({"stanzaId": m.get("stanza_id"), "date": m.get("date"),
                             "chat": m.get("chat"), "chatJid": m.get("chat_jid"),
                             "sender": m.get("sender"), "kind": m.get("kind"),
-                            "text": (m.get("text") or "")[:160],
-                            "hasMedia": bool(m.get("media") or m.get("adjuntos_cerca"))})
+                            # Con marcador el texto NO viaja: no hay cuerpo que mostrar y
+                            # lo unico que queda es el `@<lid>` que le antepone wa-read.
+                            "text": "" if sin_texto else texto[:160],
+                            "noText": sin_texto, "mediaKind": tipo,
+                            "hasMedia": bool(m.get("media") or m.get("adjuntos_cerca")
+                                             or tipo)})
     except (OSError, ValueError, subprocess.SubprocessError):
         pending = []
 
@@ -678,6 +724,13 @@ def build_health():
     # clasificar por texto hacia que "orca disponible (solo para escribir)" bloqueara.
     falla = [c for c in checks if not c.get("ok")]
     bloqueantes = [c for c in falla if c.get("requerido", True)]
+    # Los chequeos de la via LOCAL que no bloquean no bloquean por UNA razon —otra fuente
+    # esta contestando— y listarlos uno por uno pondria cuatro circulos grises diciendo
+    # que se puede "activar" un sistema operativo. Se colapsan en una fila que dice lo
+    # unico accionable: de donde se esta leyendo en realidad.
+    local_falla = [c for c in falla
+                   if c.get("via") == "local" and not c.get("requerido", True)]
+    falla = [c for c in falla if c not in local_falla]
     # `que` y `como` viajan en ingles y el panel los pinta tal cual si no reconoce el
     # codigo; con codigo los dice en el idioma del usuario. El texto es el respaldo,
     # el codigo es el contrato: renombrarlo desincronizaria el panel en silencio.
@@ -685,6 +738,11 @@ def build_health():
                    "como": c.get("detalle", "").replace("optional — ", ""),
                    "code": c.get("code"), "howCode": c.get("detailCode")}
                   for c in falla if not c.get("requerido", True)]
+    if local_falla:
+        opcionales.insert(0, {
+            "que": "local WhatsApp database",
+            "como": "; ".join(c.get("detalle") or "" for c in local_falla),
+            "code": "local", "howCode": "local-covered-by-web"})
     out = {"ok": not bloqueantes, "optional": opcionales}
     if bloqueantes:
         out["problem"] = bloqueantes[0].get("check")
@@ -1066,6 +1124,15 @@ DEFAULT_CONFIG = {
     # lunes y parece que no hubo nada. Se elige desde el panel; esto es el arranque.
     "inbox_days": "7",
     "lock_ttl_s": "900",      # cuanto vale el lock antes de considerarse muerto
+    # Cuanto se le espera a una sesion de WhatsApp Web. No sale al panel, como
+    # lock_ttl_s: es el tiempo que tarda una pagina en contestar, no una eleccion.
+    "web_timeout_s": "45",
+    # El almacen de cuerpos que la via web captura al vuelo (~/.wa-inbox/capture.db).
+    # Son topes de retencion de texto ajeno, no de rendimiento, y por eso se pueden
+    # bajar: lo que se desaloja vuelve a salir como `[web:no-text reason=not-loaded]`,
+    # que es un estado que ya existia. No salen al panel, como web_timeout_s.
+    "capture_max": "20000",
+    "capture_days": "90",
     # Cada cuanto el worker relee WhatsApp. Es el unico momento en que se abre esa
     # base, asi que tambien es el peor caso para que un mensaje nuevo se vea.
     "sync_minutes": "5",
@@ -1081,6 +1148,11 @@ DEFAULT_CONFIG = {
     # de dispositivo enlazado, y eso no se gasta sin que el usuario lo pida.
     "read_local": "on",
     "read_web": "off",
+    # El TEXTO que trae la via web, que es una eleccion aparte de leerla. Sin este
+    # arranque el ajuste existia en CONFIG_OPCIONES y en PANEL_SETTINGS pero no en los
+    # efectivos: nunca se listaba en `wa-scope config` ni se espejaba al panel, asi que
+    # el select abria vacio y el CLI no sabia decir en que estaba.
+    "read_web_text": "off",
     "tone": "Espanol neutro latinoamericano. Trata de usted. Formal pero no acartonado. "
             "Sin modismos regionales, sin voseo, sin diminutivos. Frases cortas.",
 }
@@ -1502,6 +1574,78 @@ def cmd_config(con, a):
     return [{"key": k, "value": v} for k, v in sorted(rows.items()) if k != "agent_name"]
 
 
+# Una linea web nace SIN identidad: el lid lo reporta la sesion despues del escaneo, y
+# hasta entonces lo unico estable que hay es el perfil de navegador. El id provisional
+# la deja existir — el panel tiene que poder mostrarla esperando — sin colarse en
+# `web_accounts()`, que solo devuelve las habilitadas.
+CUENTA_WEB_PENDIENTE = "web:pending:"
+
+
+def cuenta_pendiente(profile):
+    return CUENTA_WEB_PENDIENTE + str(profile)
+
+
+def fila_cuenta(con, cid):
+    r = con.execute("select id, kind, label, profile, enabled, linked_at "
+                    "from wa_account where id=?", (cid,)).fetchone()
+    return dict(r) if r else None
+
+
+def cuenta_conectar(con, profile, label):
+    """Anota la linea contra su perfil de navegador, apagada y sin identidad todavia."""
+    cid = cuenta_pendiente(profile)
+    ya = con.execute("select id from wa_account where profile=? and kind='web'",
+                     (profile,)).fetchone()
+    if ya:
+        return fila_cuenta(con, ya["id"])
+    con.execute("insert into wa_account (id, kind, label, profile, enabled, updated_at) "
+                "values (?, 'web', ?, ?, 0, ?)", (cid, label or profile, profile, ahora()))
+    con.commit()
+    return fila_cuenta(con, cid)
+
+
+def cuenta_identificar(con, cid, lid, label=None):
+    """Asciende la pendiente a su identidad real, la que reporto la sesion.
+
+    Si ya existia una fila para ese lid — el mismo numero enlazado de nuevo en otro
+    perfil — se la reapunta en vez de crear una segunda: las conversaciones
+    autorizadas cuelgan del lid, y duplicarlo las dejaria huerfanas."""
+    fila = fila_cuenta(con, cid)
+    if not fila:
+        return None
+    destino = "web:" + str(lid)
+    cuando = ahora()
+    if destino != cid and fila_cuenta(con, destino):
+        con.execute("update wa_account set profile=?, label=coalesce(?, label), "
+                    "enabled=1, linked_at=?, updated_at=? where id=?",
+                    (fila["profile"], label, cuando, cuando, destino))
+        con.execute("delete from wa_account where id=?", (cid,))
+    else:
+        con.execute("update wa_account set id=?, label=coalesce(?, label), enabled=1, "
+                    "linked_at=coalesce(linked_at, ?), updated_at=? where id=?",
+                    (destino, label, cuando, cuando, cid))
+    con.commit()
+    return fila_cuenta(con, destino)
+
+
+def cuenta_olvidar(con, cid):
+    """Saca la linea y con ella sus autorizaciones.
+
+    Se borran y no se guardan a proposito: la regla base del registro es denegar por
+    defecto, y dejarlas colgando haria que volver a enlazar el mismo numero reviviera
+    permisos que el usuario ya dijo que no. Cuantas eran se devuelve para que el panel
+    lo pueda advertir ANTES."""
+    fila = fila_cuenta(con, cid)
+    if not fila:
+        return None
+    n = con.execute("select count(*) c from chat_scope where account=?",
+                    (cid,)).fetchone()["c"]
+    con.execute("delete from chat_scope where account=?", (cid,))
+    con.execute("delete from wa_account where id=?", (cid,))
+    con.commit()
+    return {**fila, "removed_chats": n}
+
+
 def cmd_accounts(con, a):
     """Las lineas conectadas y cuantas conversaciones tiene autorizada cada una.
 
@@ -1509,6 +1653,21 @@ def cmd_accounts(con, a):
     lado es ambiguo, y el sitio donde mirar que linea es cual tiene que ser el mismo de
     siempre. El conteo va al lado a proposito — conectar una linea no autoriza nada, y
     un cero ahi lo dice mejor que un parrafo."""
+    if getattr(a, "connect", None):
+        fila = cuenta_conectar(con, a.connect, a.label)
+        return [fila] if fila else []
+    if getattr(a, "identify", None):
+        if not a.lid:
+            sys.exit("not saved: --identify needs the --lid the session reported")
+        fila = cuenta_identificar(con, a.identify, a.lid, a.label)
+        if not fila:
+            sys.exit(f"not saved: there is no line called {a.identify}")
+        return [fila]
+    if getattr(a, "forget", None):
+        fila = cuenta_olvidar(con, a.forget)
+        if not fila:
+            sys.exit(f"not removed: there is no line called {a.forget}")
+        return [fila]
     ajustes = merged_settings(con)
     encendida = {"local": ajustes.get("read_local", "on") != "off",
                  "web": ajustes.get("read_web", "off") == "on"}
@@ -1521,6 +1680,9 @@ def cmd_accounts(con, a):
                       "label": r["label"] or r["id"],
                       "profile": r["profile"],
                       "enabled": bool(r["enabled"]) and encendida.get(r["kind"], False),
+                      # Sin esto una linea recien conectada y una caida se leen igual:
+                      # las dos vienen apagadas y sin fecha de enlace.
+                      "pending": str(r["id"]).startswith(CUENTA_WEB_PENDIENTE),
                       "linked_at": r["linked_at"], "authorized_chats": n})
     return filas
 
@@ -1645,13 +1807,26 @@ def main():
                    help="mark one as handled so it stops coming back")
     s.set_defaults(fn=cmd_decisions)
 
-    s = add("config", help="see or set settings (inbox_days, transcribe, lock_ttl_s, "
-                           "read_local, read_web)")
+    # La lista sale de DEFAULT_CONFIG y no escrita a mano: es la referencia que lee el
+    # agente (harness/COMMANDS.md la genera del --help), y una copia fija se quedo sin
+    # la mitad de los ajustes sin que nada se pusiera rojo.
+    s = add("config", help="see or set settings; with no key it lists them all with "
+                           "their effective value. Today: "
+                           + ", ".join(sorted(DEFAULT_CONFIG)))
     s.add_argument("key", nargs="?"); s.add_argument("value", nargs="?")
     s.set_defaults(fn=cmd_config)
 
-    add("accounts", help="the connected lines and what each one may touch"
-        ).set_defaults(fn=cmd_accounts)
+    s = add("accounts", help="the connected lines and what each one may touch")
+    s.add_argument("--connect", metavar="PROFILE",
+                   help="register a web line on that browser profile; it stays pending, "
+                        "and unreadable, until its session reports its own identity")
+    s.add_argument("--label", help="how the line is shown; it is NOT its identity")
+    s.add_argument("--identify", metavar="ID",
+                   help="promote a pending line once its session reported a lid")
+    s.add_argument("--lid", help="the identity the session reported")
+    s.add_argument("--forget", metavar="ID",
+                   help="unregister a line AND drop the conversations authorized for it")
+    s.set_defaults(fn=cmd_accounts)
 
     s = add("agent", help="see or set your agent's name")
     s.add_argument("name", nargs="?"); s.set_defaults(fn=cmd_agent)

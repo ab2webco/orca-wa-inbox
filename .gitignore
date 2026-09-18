@@ -1,8 +1,11 @@
 .DS_Store
 node_modules/
 
-# Capturas generadas por `npm run shots`. Son 3.3 MB de salida de build para un
-# plugin de 188 KB, y el marketplace clona el repo entero en cada instalacion.
+__pycache__/
+
+# Capturas generadas por `npm run shots`. Hoy son 65 MB de salida de build para un
+# plugin que versionado pesa menos de 1 MB, y el marketplace clona el repo entero
+# en cada instalacion.
 # Se regeneran con `npm run shots`; la evidencia que se muestra va en el artifact.
 docs/capturas/
 

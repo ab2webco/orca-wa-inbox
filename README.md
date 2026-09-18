@@ -5,15 +5,17 @@ hasta dónde puede actuar tu agente.
 
 ## Requisitos
 
-**Hoy la lectura solo funciona en macOS.** No es una decisión de diseño, es lo único
-que está verificado — ver "De dónde lee" y "Otros sistemas" abajo.
+**Hay dos vías de lectura y se suman.** La base local de WhatsApp Desktop sólo está
+verificada en macOS; la sesión de WhatsApp Web funciona en los tres sistemas y es la
+única vía en Linux. Con la sesión web contestando, `wa-read doctor` no marca como
+requisito nada de la base local — ver "De dónde lee" y "Otros sistemas" abajo.
 
 | | |
 |---|---|
-| Sistema | **macOS**. Verificado en macOS 26.6. |
-| App | **WhatsApp Desktop** (Mac App Store), con sesión iniciada y abierta al menos una vez. |
+| Sistema | **macOS, Linux o Windows.** La base local está verificada sólo en macOS 26.6; la vía web no depende del sistema. |
+| App | **WhatsApp Desktop** (Mac App Store), con sesión iniciada y abierta al menos una vez — sólo para la vía local. Para la vía web alcanza con el navegador de Orca y el teléfono para escanear el QR. |
 | Base legible | La base local tiene que poder abrirse. Hoy WhatsApp Desktop en macOS la deja como SQLite **sin cifrar**, y `wa-read doctor` lo comprueba de verdad: lee la cabecera del archivo y cuenta los mensajes. Si algún día la cifran (como en Android, que usa SQLCipher), el archivo va a seguir ahí pero el doctor va a decir que no se puede leer. |
-| CLIs | `wa-read`, `wa-send`, `wa-scope` en `~/tools` (o donde apunte `toolsDir`). |
+| CLIs | `wa-read`, `wa-send`, `wa-scope`, `wa-transcribe`: viajan dentro del plugin, en su `bin/`. El prompt resuelve esa carpeta en `$WA`; no dependen del `PATH`. |
 | Permisos | Accesibilidad para Orca Lab, solo si querés que el agente escriba. Para leer no hace falta, pero sin **Acceso total al disco** macOS te va a preguntar en cada lectura — ver abajo. |
 
 Antes de nada, corré:
@@ -68,10 +70,27 @@ conducida por el navegador de Orca. No es un reemplazo de la base local — dond
 base local, la base local manda — es **otra línea**: el número de soporte de la
 empresa, una cuenta comercial aparte. Es también la única vía posible en Linux.
 
-**Todavía no está construida.** Lo que sí está es la costura, el registro de líneas y
-los dos interruptores (`wa-scope config read_local` / `read_web`). El diseño completo
-—dónde vive cada sesión, cómo se enlaza con el QR, cómo se identifica una cuenta, qué
-pasa cuando la sesión se cae— está en [`docs/LECTURA-MULTIFUENTE.md`](docs/LECTURA-MULTIFUENTE.md).
+Se conecta **desde el panel de ajustes**, en *Líneas conectadas*: el botón «Conectar
+cuenta» crea el perfil de navegador aislado, abre la pestaña en `web.whatsapp.com`,
+registra la línea y enciende la vía web. Lo único que queda para el humano es escanear
+el QR, y el panel sigue el estado real de la sesión mientras tanto — esperando el
+escaneo, enlazada, caída, sin pestaña — y ofrece la acción que resuelve cada uno.
+Antes eran cuatro comandos de terminal, que es otra forma de decir que no existía.
+
+La pestaña va al **espacio flotante** (`--worktree floating`), fuera de los proyectos,
+para que sobreviva a cerrar el proyecto en el que estabas. Ese selector es nuevo
+(orca-oss PR #410): si este Orca no lo tiene, la pestaña cae en un proyecto con nombre
+y el panel dice en cuál y que se cierra junto con él.
+
+El diseño completo —dónde vive cada sesión, cómo se enlaza con el QR, cómo se
+identifica una cuenta, qué pasa cuando la sesión se cae— está en
+[`docs/LECTURA-MULTIFUENTE.md`](docs/LECTURA-MULTIFUENTE.md).
+
+Conducir el navegador es ejecutar la CLI de Orca, así que el plugin declara
+`process:spawn`. Orca escribe esa línea del diálogo de consentimiento, no el plugin:
+dice que el plugin puede arrancar programas como vos. Lo que el plugin hace con eso es
+sólo esto — abrir y manejar la pestaña de WhatsApp Web — y lo dice su descripción, que
+es el único texto de ese diálogo que el plugin sí controla.
 
 Lo que la vía web cuesta, dicho antes de encenderla: sin historial viejo (solo lo que
 la sesión ya cargó), más lenta, gasta un puesto de dispositivo enlazado, y la sesión
@@ -87,8 +106,20 @@ Sé honesto con esto en vez de prometer lo que no probé:
   confirmar si la base es legible y sumar una entrada a `SOURCES`.
   El resto (`wa-scope`, el mapeo, el panel) es portable tal cual.
 - **Linux** — no hay WhatsApp Desktop oficial ni la va a haber. La vía que aplica ahí
-  es la sesión web, que está diseñada y sin construir: es una función que falta, no un
-  callejón sin salida. `wa-read doctor` lo dice así en cada plataforma.
+  es la sesión web, que ya contesta `chats`, `whoami` e `inbox` desde una sesión viva
+  del navegador de Orca. `chat` y `media` no: piden el cuerpo de cada mensaje y la ruta
+  de cada adjunto, y un navegador no tiene ninguno de los dos. Por esa vía la bandeja
+  sale sin texto salvo que se pida (`read_web_text`) y siempre sin rutas de adjuntos;
+  `wa-read doctor` lo dice así en cada plataforma. Con el texto pedido, cada corrida
+  deja un oyente en la página que anota el cuerpo de **lo que la bandeja puede atender**
+  — te nombran, contestan algo tuyo, o es un directo, más lo que caiga en la ventana de
+  `--window` alrededor — y lo guarda en `~/.wa-inbox/capture.db` (0600, `capture_max`
+  20.000 cuerpos, `capture_days` 90 días); apagar `read_web_text` vacía los cuerpos. La
+  conversación de grupo que no te nombra **no se guarda nunca**. Sin el oyente el texto
+  casi nunca llega: la sesión solo tiene en memoria el último mensaje de cada
+  conversación. Por esta vía la ventana arranca cuando se enlazó la línea, no
+  `inbox_days` atrás; `--days` la abre igual.
+  Ver [`docs/LECTURA-MULTIFUENTE.md`](docs/LECTURA-MULTIFUENTE.md).
 
 La parte de **escribir** depende de la accesibilidad del sistema vía `orca computer`,
 que sí es multiplataforma; pero sin lectura no hay nada que responder.
@@ -166,7 +197,8 @@ El panel emite comandos sin ruta (`wa-scope list`), asi que `wa-read`, `wa-send`
 
 ```
 mkdir -p ~/.local/bin
-for t in wa-read wa-send wa-scope; do ln -sf ~/tools/$t ~/.local/bin/$t; done
+WA=<la carpeta bin/ del plugin instalado>
+for t in wa-read wa-send wa-scope; do ln -sf "$WA/$t" ~/.local/bin/$t; done
 ```
 
 ## Elegi la terminal destino
@@ -184,10 +216,14 @@ El arnés de verificación vive en este mismo repo, junto al plugin. Antes se qu
 afuera y quien clonaba no podía correr nada.
 
 ```
-npm install
+npm run setup                     # instala en ../.orca-wa-inbox-deps, NO acá
 npx playwright install chromium   # solo la primera vez
 npm run check
 ```
+
+`npm install` **acá adentro** rompe el plugin: dejaría un `node_modules` dentro de la
+carpeta que el marketplace clona y que Orca carga. Por eso las dependencias del arnés
+viven fuera del árbol y `npm run setup` es lo que las pone donde van.
 
 `check` corre, en orden:
 
@@ -196,15 +232,16 @@ npm run check
 | `scripts/check-panels` | que el `<script>` inline de `config.html` y `activity.html` parsee. Si no parsea, el panel se renderiza vacío y sin error visible. |
 | `scripts/check-prompts` | que `prompts/*.md` y `harness/*.md` no tengan voseo. El agente le escribe a clientes en Colombia. |
 | `scripts/check-harness` | que ninguna regla dura se haya perdido al mudar doctrina del prompt al arnés: cada una tiene que seguir alcanzable por los dos caminos, el `AGENTS.md` y los dos prompts. |
-| `scripts/check-clis` | que los cuatro CLIs de `bin/` arranquen de verdad. Compilar no alcanza. |
+| `scripts/check-clis` | que los cuatro CLIs de `bin/` arranquen de verdad —8 invocaciones— más 308 comprobaciones de ajustes, fuentes, migración y vía web. Compilar no alcanza. Incluye la jaula que impide que el chequeo le toque la sesión de WhatsApp Web al usuario, y su control: sin la jaula, el caso se pone rojo. |
 | `scripts/check-closing` | 36 pruebas del aviso de cierre contra una base temporal: el guardia del backlog, un aviso por tarjeta, `completed` vs `cancelled`, y el permiso. Corre el CLI de verdad, con `HOME` movido para no tocar la base real. |
-| `test/panels.test.mjs` | 90 pruebas sobre los paneles con jsdom y el puente del host simulado, incluidos los tres finales de la búsqueda de conversaciones y el botón de reintento. |
-| `test/worker.test.mjs` | 37 pruebas sobre `main.mjs` con el host simulado: que un sync que falla deje escrito el motivo, que el pedido del panel se atienda una sola vez, y la siembra del arnés entera — que aparezcan los cuatro archivos, que la referencia salga del `--help` de verdad, y que una segunda activación respete lo que el usuario editó mientras actualiza lo que no tocó. Corre con `HOME` movido: no toca WhatsApp ni la carpeta real. |
-| `npm run shots` | fotografía los dos paneles a 1440, 768, 390 y 320 px en tema claro y oscuro, más los tres estados de la búsqueda a 1440 y 320, y falla si algo desborda a lo ancho. |
+| `node test/manifest.test.mjs` | 1 prueba de contrato sobre `orca-plugin.json`: que lo que el manifiesto declara exista en el árbol. |
+| `test/panels.test.mjs` | 232 pruebas sobre los paneles con jsdom y el puente del host simulado, incluidos los tres finales de la búsqueda de conversaciones, el botón de reintento, y el marcador `[web:no-text]` dicho en palabras en los tres idiomas. |
+| `test/worker.test.mjs` | 58 pruebas sobre `main.mjs` con el host simulado: que un sync que falla deje escrito el motivo, que el pedido del panel se atienda una sola vez, y la siembra del arnés entera — que aparezcan los cuatro archivos, que la referencia salga del `--help` de verdad, y que una segunda activación respete lo que el usuario editó mientras actualiza lo que no tocó. Corre con `HOME` movido: no toca WhatsApp ni la carpeta real. |
+| `npm run shots` | 144 capturas: los dos paneles a 1440, 768, 390 y 320 px en tema claro y oscuro, más los tres estados de la búsqueda, los cuatro de conectar una línea —antes de conectar, esperando el escaneo, enlazada, caída—, el equipo que lee sólo por la vía web y la bandeja sin texto, a 1440 y 320. Falla si algo desborda a lo ancho. |
 
 `scripts/` es herramienta de desarrollo; `bin/` son los cuatro CLIs que el plugin
 publica. No se mezclan.
 
-Las capturas salen a `docs/capturas/` y **no se versionan**: son 3.3 MB de salida de
-build para un plugin de 188 KB, y el marketplace clona el repo entero en cada
-instalación. Se regeneran con `npm run shots`.
+Las capturas salen a `docs/capturas/` y **no se versionan**: hoy son 65 MB de salida de
+build para un plugin que versionado pesa menos de 1 MB, y el marketplace clona el repo
+entero en cada instalación. Se regeneran con `npm run shots`.

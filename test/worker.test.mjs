@@ -327,6 +327,175 @@ console.log('\nworker: el arnes de la carpeta del plugin')
 // tambien es el peor caso para que un mensaje nuevo llegue al agente. Que el usuario lo
 // pueda mover es la mitad; la otra es que un valor absurdo no lo rompa: con 0 minutos el
 // worker leeria 260 MB en bucle, que es justo el problema que este cambio vino a sacar.
+// ───────── conectar una linea de WhatsApp Web ─────────
+// El flujo que el usuario aprieta desde el panel: perfil, pestana, registro, ruta
+// encendida. Se recorre entero contra una CLI de Orca falsa porque la de verdad abre
+// pestanas en la maquina de quien corra las pruebas — y porque el caso que importa,
+// que este Orca no conozca `--worktree floating`, no se puede provocar con la real.
+console.log('\nworker: conectar una linea de WhatsApp Web')
+{
+  const { conectarLinea, dondeVaLaPestana, estadoDeLineas } =
+    await import('../web-lines.mjs')
+
+  /** Una CLI de Orca falsa. `flotante` decide si conoce el selector nuevo; cada
+   *  llamada queda anotada en un archivo para poder mirar el ORDEN. */
+  function orcaFalso (nombre, { flotante = true, fallaTab = false, eval_ = null } = {}) {
+    const dir = join(RAIZ, nombre)
+    mkdirSync(dir, { recursive: true })
+    const bitacora = join(dir, 'llamadas.txt')
+    const guion = `#!/usr/bin/env node
+const fs = require('fs')
+const a = process.argv.slice(2).filter((x) => x !== '--json')
+fs.appendFileSync(${JSON.stringify(bitacora)}, a.join(' ') + '\\n')
+const ok = (result) => { console.log(JSON.stringify({ ok: true, result })); process.exit(0) }
+const no = (code) => { console.log(JSON.stringify({ ok: false, error: { code } })); process.exit(0) }
+const cmd = a.join(' ')
+if (cmd.startsWith('tab list') && a.includes('floating')) {
+  return ${flotante} ? ok({ tabs: [] }) : no('selector_not_found')
+}
+if (cmd.startsWith('tab list')) {
+  return ok({ tabs: [{ browserPageId: 'page-1', url: 'https://web.whatsapp.com/',
+    profileId: 'perfil-1', profileLabel: 'Soporte' }] })
+}
+if (cmd.startsWith('worktree list')) {
+  return ok([{ id: 'wt-9', displayName: 'alfred-soporte', lastActivityAt: 9 },
+             { id: 'wt-1', displayName: 'otro', lastActivityAt: 1 }])
+}
+if (cmd.startsWith('tab profile create')) return ok({ profile: { id: 'perfil-1' } })
+if (cmd.startsWith('tab profile delete')) return ok({ deleted: true })
+if (cmd.startsWith('tab create')) {
+  return ${fallaTab} ? no('selector_not_found') : ok({ browserPageId: 'page-1' })
+}
+if (cmd.startsWith('eval')) return ok({ result: ${JSON.stringify(eval_ ?? '{"linked":false,"qr":true}')} })
+no('unsupported')
+`
+    const exe = join(dir, 'orca')
+    writeFileSync(exe, guion, { mode: 0o755 })
+    return { exe, llamadas: () => {
+      try { return readFileSync(bitacora, 'utf8').trim().split('\n') } catch { return [] }
+    } }
+  }
+
+  // Un wa-scope falso que solo anota lo que le pidieron: lo que se comprueba aca es el
+  // orden de las llamadas, no lo que hace el registro, que tiene su propio chequeo.
+  function scopeFalso (nombre) {
+    const dir = join(RAIZ, nombre)
+    mkdirSync(dir, { recursive: true })
+    const bitacora = join(dir, 'scope.txt')
+    const exe = join(dir, 'wa-scope')
+    writeFileSync(exe, `#!/usr/bin/env node
+const fs = require('fs')
+fs.appendFileSync(${JSON.stringify(bitacora)}, process.argv.slice(2).join(' ') + '\\n')
+console.log(JSON.stringify([{ id: 'web:pending:perfil-1', label: 'Soporte',
+  profile: 'perfil-1', kind: 'web', pending: true, enabled: false, authorized_chats: 0 }]))
+`, { mode: 0o755 })
+    return { exe, llamadas: () => {
+      try { return readFileSync(bitacora, 'utf8').trim().split('\n') } catch { return [] }
+    } }
+  }
+
+  const { execFile } = await import('node:child_process')
+  const corre = (cmd, args) => new Promise((res, rej) => {
+    execFile(cmd, args, (e, stdout, stderr) =>
+      e ? rej(e) : res({ stdout: stdout ?? '', stderr: stderr ?? '' }))
+  })
+
+  {
+    const o = orcaFalso('orca-flotante', { flotante: true })
+    const destino = await dondeVaLaPestana(o.exe, null)
+    ok('con soporte, la pestana va al espacio flotante',
+      destino.ok && destino.selector === 'floating' && destino.donde === 'flotante',
+      JSON.stringify(destino))
+  }
+
+  {
+    // El caso que importa: este Orca no conoce el selector. La pestana NO puede caer
+    // en silencio en cualquier lado — tiene que caer en un proyecto con nombre, para
+    // que el panel pueda decir cual y avisar que se cierra con el.
+    const o = orcaFalso('orca-viejo', { flotante: false })
+    const solo = await dondeVaLaPestana(o.exe, null)
+    ok('sin soporte cae en el proyecto de actividad mas reciente, y lo nombra',
+      solo.ok && solo.selector === 'id:wt-9' && solo.proyecto === 'alfred-soporte',
+      JSON.stringify(solo))
+    const mirando = await dondeVaLaPestana(o.exe, { displayName: 'otro' })
+    ok('y si el host dice cual esta mirando el usuario, gana ese',
+      mirando.ok && mirando.selector === 'id:wt-1' && mirando.proyecto === 'otro',
+      JSON.stringify(mirando))
+  }
+
+  {
+    const o = orcaFalso('orca-conecta', { flotante: true })
+    const w = scopeFalso('scope-conecta')
+    const r = await conectarLinea({ exe: o.exe, waScope: w.exe, run: corre,
+      label: 'Soporte', contextoActivo: null })
+    ok('conectar devuelve el perfil y la pestana que creo',
+      r.ok && r.profileId === 'perfil-1' && r.pageId === 'page-1', JSON.stringify(r))
+    const c = o.llamadas()
+    ok('crea el perfil AISLADO: dos sesiones en el mismo perfil se desloguean',
+      c.some((l) => l.startsWith('tab profile create') && l.includes('isolated')),
+      JSON.stringify(c))
+    ok('y abre la pestana en el espacio flotante con ese perfil',
+      c.some((l) => l.startsWith('tab create') && l.includes('--worktree floating') &&
+        l.includes('perfil-1') && l.includes('web.whatsapp.com')),
+      JSON.stringify(c))
+    const s = w.llamadas()
+    ok('anota la linea contra su perfil antes de encender la ruta',
+      s[0] && s[0].startsWith('accounts --connect perfil-1'), JSON.stringify(s))
+    ok('y recien despues enciende read_web: encenderlo antes deja a sources() ' +
+       'colgado de cualquier pestana abierta',
+      s.some((l) => l.startsWith('config read_web on')) &&
+      s.findIndex((l) => l.startsWith('config read_web on')) >
+      s.findIndex((l) => l.startsWith('accounts --connect')),
+      JSON.stringify(s))
+  }
+
+  {
+    // Si la pestana no se puede abrir, el perfil recien creado no puede quedar
+    // colgado: ocuparia un nombre en la lista del navegador del usuario para siempre.
+    const o = orcaFalso('orca-sin-tab', { flotante: true, fallaTab: true })
+    const w = scopeFalso('scope-sin-tab')
+    const r = await conectarLinea({ exe: o.exe, waScope: w.exe, run: corre,
+      label: 'Soporte', contextoActivo: null })
+    ok('si la pestana falla, conectar falla con motivo', !r.ok && !!r.code,
+      JSON.stringify(r))
+    ok('y borra el perfil huerfano que acababa de crear',
+      o.llamadas().some((l) => l.startsWith('tab profile delete')),
+      JSON.stringify(o.llamadas()))
+    ok('y no registra ni enciende nada', w.llamadas().length === 0,
+      JSON.stringify(w.llamadas()))
+  }
+
+  {
+    // El estado sale de la SESION, no del registro: la fila dice que la linea existe,
+    // no que el telefono siga del otro lado.
+    const cuenta = [{ id: 'web:pending:perfil-1', label: 'Soporte', profile: 'perfil-1',
+      pending: true, linked_at: null, authorized_chats: 0 }]
+    const esperando = await estadoDeLineas(
+      orcaFalso('orca-qr', { eval_: '{"linked":false,"qr":true}' }).exe, cuenta)
+    ok('con el QR en pantalla la linea esta esperando el escaneo',
+      esperando[0].state === 'esperando', JSON.stringify(esperando))
+
+    const linked = await estadoDeLineas(
+      orcaFalso('orca-lid', { eval_: '{"linked":true,"lid":"57300"}' }).exe, cuenta)
+    ok('con lid la linea esta enlazada, y trae la identidad que reporto la sesion',
+      linked[0].state === 'enlazada' && linked[0].lid === '57300', JSON.stringify(linked))
+
+    // Una sesion que YA estuvo enlazada y ahora muestra el QR no es una que espera:
+    // es una que se cayo, y el mensaje del usuario es otro.
+    const caida = await estadoDeLineas(
+      orcaFalso('orca-caida', { eval_: '{"linked":false,"qr":true}' }).exe,
+      [{ ...cuenta[0], pending: false, linked_at: '2026-09-18 10:00' }])
+    ok('una sesion que ya estuvo enlazada y muestra el QR se cayo, no espera',
+      caida[0].state === 'caida', JSON.stringify(caida))
+
+    const sinPestana = await estadoDeLineas(
+      orcaFalso('orca-sin-pestana').exe,
+      [{ ...cuenta[0], profile: 'otro-perfil' }])
+    ok('sin pestana para ese perfil el estado lo dice, y no se inventa una sesion',
+      sinPestana[0].state === 'sin-pestana', JSON.stringify(sinPestana))
+  }
+}
+
 console.log('\nworker: cada cuanto relee WhatsApp')
 {
   const casos = [

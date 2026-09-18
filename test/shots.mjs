@@ -203,6 +203,21 @@ const ANCHOS_ESTADO = [1440, 320]
 const HACE_DIEZ_MINUTOS = new Date(Date.now() - 10 * 60 * 1000).toISOString()
 const SIN_CHATS = Object.assign({}, DATOS, { chats: [], scope: {} })
 
+// Las lineas de WhatsApp Web, en los tres estados que el usuario no puede ver mientras
+// programa. Los campos son los que escribe refrescarLineas() en main.mjs: con otros
+// nombres se fotografiaria el stub y no el panel.
+const AHORA_ISO = new Date().toISOString()
+const LINEA_ESPERANDO = {
+  id: 'web:pending:9f2c', label: 'Soporte Norte', profile: '9f2c', pending: true,
+  linkedAt: null, authorizedChats: 0, pageId: 'page-1', state: 'esperando'
+}
+const LINEA_ENLAZADA = {
+  id: 'web:573000000000', label: 'Soporte Norte', profile: '9f2c', pending: false,
+  linkedAt: '2026-09-17 09:12', authorizedChats: 2, pageId: 'page-1', state: 'enlazada'
+}
+const LINEA_CAIDA = Object.assign({}, LINEA_ENLAZADA,
+  { id: 'web:573111111111', label: 'Ventas', profile: 'a71b', state: 'caida' })
+
 // Los cinco finales de una corrida. Se fotografian porque son la razon de ser del
 // renglon: en pantalla los cuatro primeros eran la MISMA lista vacia, y el dueno
 // concluia que el plugin no funcionaba mientras funcionaba bien. Un renglon que dice
@@ -260,6 +275,43 @@ const PANELES = [
     datos: corrida({ state: 'ok', startedAt: AHORA_CORTO, endedAt: AHORA_CORTO,
       looked: 0, pending: 0, reason: null }, { authorized: 0 })
   },
+  // Los cuatro momentos de conectar una linea de WhatsApp Web. Van a la captura porque
+  // el unico que se ve al programar es el ultimo: los otros tres pasan mientras el
+  // usuario mira OTRA ventana — la del QR —, y el que se entrega roto es siempre uno de
+  // esos. A 320 ademas la fila se parte en bloques y el aviso de desvincular es el
+  // parrafo mas largo del panel.
+  {
+    // 1. Antes de conectar nada: el estado de casi todo el mundo. Lo que se mira es que
+    //    la accion primaria se vea y que el vacio no parezca una falla.
+    nombre: 'config-conectar', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: Object.assign({}, DATOS, { webLines: { at: AHORA_ISO, lines: [] } })
+  },
+  {
+    // 2. Esperando el escaneo. El mensaje tiene que decir que hacer y donde quedo la
+    //    pestana: "donde se abre" fue la pregunta real, dos veces.
+    nombre: 'config-esperando', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: Object.assign({}, DATOS, {
+      webLines: { at: AHORA_ISO, placement: 'flotante', lines: [LINEA_ESPERANDO] }
+    })
+  },
+  {
+    // 3. Enlazada, y con el fallback: este Orca no sabe abrir la pestana en el espacio
+    //    flotante, asi que quedo dentro de un proyecto y eso se dice con el nombre.
+    nombre: 'config-enlazada', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: Object.assign({}, DATOS, {
+      webLines: { at: AHORA_ISO, placement: 'proyecto', project: 'alfred-soporte',
+        lines: [LINEA_ENLAZADA] }
+    })
+  },
+  {
+    // 4. La sesion se cayo. Es el estado que el CLI ya sabia contar y el panel no: una
+    //    linea registrada que no lee nada y no dice por que.
+    nombre: 'config-caida', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: Object.assign({}, DATOS, {
+      webLines: { at: AHORA_ISO, placement: 'flotante',
+        lines: [LINEA_CAIDA, Object.assign({}, LINEA_ENLAZADA, { state: 'sin-pestana' })] }
+    })
+  },
   {
     nombre: 'config-buscando', archivo: 'config.html', anchos: ANCHOS_ESTADO,
     datos: Object.assign({}, SIN_CHATS, {
@@ -280,6 +332,66 @@ const PANELES = [
     nombre: 'config-sin-respuesta', archivo: 'config.html', anchos: ANCHOS_ESTADO,
     datos: Object.assign({}, SIN_CHATS, {
       syncStatus: { running: true, startedAt: HACE_DIEZ_MINUTOS, trigger: 'activate' }
+    })
+  },
+  {
+    // La sesion web caida es el texto opcional mas largo que produce el CLI, y el unico
+    // que trae una instruccion con mayusculas en medio de la frase. Va a la captura
+    // porque un parrafo que desborda a 320 se ve perfecto en el JSON.
+    nombre: 'config-web-caida', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: Object.assign({}, DATOS, {
+      health: {
+        ok: true,
+        optional: [{
+          que: 'WhatsApp Web as a second line', code: 'web',
+          como: 'WhatsApp Web: that WhatsApp Web session is not linked — the QR code is ' +
+            'on screen, scan it with the phone of THAT number',
+          howCode: 'web-logged-out'
+        }]
+      }
+    })
+  },
+  {
+    // La maquina de Linux o Windows que lee SOLO por la sesion web. Aca el panel decia
+    // "WhatsApp no esta conectado" en rojo con la sesion leyendo perfecto, porque los
+    // cinco chequeos de la base local salian como requisito sin condicion. Ahora no
+    // bloquean y se colapsan en una fila: por eso va a la captura, para verla una sola
+    // y no cinco circulos grises ofreciendo activar un sistema operativo.
+    nombre: 'config-solo-web', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: Object.assign({}, DATOS, {
+      readWeb: 'on', readWebText: 'memoria',
+      webLines: { at: AHORA_ISO, placement: 'flotante', lines: [LINEA_ENLAZADA] },
+      health: {
+        ok: true,
+        optional: [{
+          que: 'local WhatsApp database', code: 'local',
+          como: 'Linux; no official app for this system; missing; does not exist',
+          howCode: 'local-covered-by-web'
+        }]
+      }
+    })
+  },
+  {
+    // Lo que la bandeja ve cuando la linea es web: el cuerpo casi nunca llega y el
+    // adjunto no deja ruta. El panel mostraba el marcador crudo del CLI.
+    nombre: 'actividad-sin-texto', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
+    datos: Object.assign({}, DATOS, {
+      activity: Object.assign({}, DATOS.activity, {
+        mapped: 4, authorized: 4,
+        run: { state: 'ok', startedAt: AHORA_CORTO, endedAt: AHORA_CORTO,
+          looked: 4, pending: 3, reason: null },
+        pending: [
+          { stanzaId: 'W1', date: AHORA_CORTO, chat: 'Soporte — Cliente Norte',
+            sender: 'Ana Restrepo', kind: 'mencion', text: '',
+            noText: 'not-loaded', mediaKind: 'image', hasMedia: true },
+          { stanzaId: 'W2', date: AHORA_CORTO, chat: 'Operaciones internas',
+            sender: 'Beto Ramirez', kind: 'mencion', text: '',
+            noText: 'off', mediaKind: null, hasMedia: false },
+          { stanzaId: 'W3', date: AHORA_CORTO, chat: 'Laura Mendez',
+            sender: 'Laura Mendez', kind: 'directo', text: '',
+            noText: 'no-body', mediaKind: 'ptt', hasMedia: true }
+        ]
+      })
     })
   }
 ]

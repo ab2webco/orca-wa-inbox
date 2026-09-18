@@ -200,6 +200,13 @@ How far back it looks is chosen by the owner in the panel (`inbox_days`), and at
 the 500 newest messages of that window come back. If exactly 500 arrive, there may be
 more behind: do not treat it as emptied.
 
+Rows can come from the desktop app's database or from a WhatsApp Web session, and you
+cannot choose which. A row whose `text` is a marker like
+`[web:no-text reason=off|not-loaded|no-body]` — optionally with `media=<type>` — came
+over the web route and its body was **not read**. That is not an empty message and
+never means "do nothing": it is DOUBTFUL, you open no card and you answer nothing.
+`CLASSIFICATION.md` has the three reasons and what to say about each at the wrap-up.
+
 Discard up front every `chat_jid` that is not in the registry.
 
 ## STEP 4 — What was already decided
@@ -225,6 +232,10 @@ The paths in `adjuntos_cerca` are real unencrypted files: **open them and look a
 them**, and transcribe what an error screenshot says into the card — that is what makes
 it searchable. Audio (`.opus`) you cannot hear: say so and leave it as DOUBTFUL. Why the
 attachment almost never comes glued to the text is in `CLASSIFICATION.md`.
+
+Over the web route there are no paths at all: `media` is null and `adjuntos_cerca` is
+empty on every row, and a `media=<type>` inside the text marker is the only trace the
+attachment left. Never claim you opened one of those.
 
 ## STEP 7 — What each message is
 

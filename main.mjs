@@ -14,6 +14,10 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import { HARNESS_KEY, sembrar } from './harness.mjs'
+import {
+  conectarLinea, estadoDeLineas, identificarLinea, olvidarLinea, reabrirPestana,
+  verPestana
+} from './web-lines.mjs'
 
 // Las herramientas viajan dentro del plugin. Antes se buscaban en el PATH del usuario,
 // lo que solo funcionaba en la maquina donde alguien las habia enlazado a mano.
@@ -27,6 +31,11 @@ const STATUS_KEY = 'syncStatus'
 // mismo camino que usan Tomar/Ignorar con `decisions`.
 const REQUEST_KEY = 'syncRequest'
 const CHATS_KEY = 'chats'
+// Las lineas de WhatsApp Web: el panel deja el pedido en una clave y lee el estado en
+// la otra. Misma via que el sync — un panel no puede ejecutar nada, y enlazar una linea
+// es justamente ejecutar cuatro comandos.
+const WEB_REQUEST_KEY = 'webRequest'
+const WEB_LINES_KEY = 'webLines'
 const MODES = ['off', 'observar', 'borrador', 'responder']
 
 /** El nombre del agente lo define quien usa el plugin. No viene con uno puesto. */
@@ -55,9 +64,11 @@ async function checkSystem(orca, toolsDir = TOOLS) {
   }
   if (!failed.length) return
 
-  // El primer chequeo es si el sistema esta soportado; distinguirlo de "falta instalar
-  // WhatsApp" importa, porque uno se arregla y el otro no. Se mira el codigo y no el
-  // nombre: el nombre es texto para leer y se puede reescribir, el codigo es el contrato.
+  // El primer chequeo es si hay base local en este sistema; distinguirlo de "falta
+  // instalar WhatsApp" importa, porque uno se arregla y el otro no. Se mira el codigo y
+  // no el nombre: el nombre es texto para leer y se puede reescribir, el codigo es el
+  // contrato. Si llega aca es que la via web tampoco esta contestando — cuando contesta,
+  // los chequeos de la base local vienen con requerido en false y no se cuentan.
   const unsupported = failed.some((c) => c.code === 'system')
   await orca.host.call('notifications.show', {
     // El worker no tiene forma de saber en que idioma esta el usuario — el host no se
@@ -65,12 +76,13 @@ async function checkSystem(orca, toolsDir = TOOLS) {
     // Va en ingles, como todo lo que no puede llevar traduccion; el detalle esta a un
     // clic, en el panel, que si esta en su idioma.
     title: unsupported
-      ? 'WhatsApp Inbox cannot read on this system'
+      ? 'WhatsApp Inbox has no read source on this system'
       : 'WhatsApp Inbox needs something else',
     body: unsupported
-      ? 'Reading the desktop app is only verified on macOS. A WhatsApp Web session ' +
-        'is a second route and it is not built yet. Open the plugin settings to see ' +
-        'what applies here.'
+      ? 'There is no local WhatsApp database here — that route is only verified on ' +
+        'macOS. A WhatsApp Web session is the route that applies, and it reads the ' +
+        'chat list, the line identity and the inbox. Connect a line in the plugin ' +
+        'settings.'
       : 'Open the plugin settings to see what is missing.'
   }).catch(() => {})
   orca.log(`check: missing ${failed.map((c) => c.code || c.check).join(', ')}`)
@@ -212,6 +224,118 @@ async function sync(orca, { toolsDir = TOOLS, trigger = 'timer' } = {}) {
   return estado.ok
 }
 
+/** El binario de la CLI de Orca, que en Linux NO se llama `orca`: ahi ese nombre es el
+ *  lector de pantalla de GNOME. Misma regla que wa-read. */
+function orcaCli() {
+  const declarado = String(process.env.ORCA_CLI_COMMAND ?? '').trim()
+  if (declarado) return declarado.split(' ')[0]
+  return process.platform === 'linux' ? 'orca-ide' : 'orca'
+}
+
+/** Las lineas registradas, tal como las ve el registro. */
+async function cuentasWeb(waScope) {
+  const { stdout } = await run(waScope, ['accounts', '--json'])
+  let filas = []
+  try {
+    filas = JSON.parse(stdout || '[]')
+  } catch {
+    filas = []
+  }
+  return (Array.isArray(filas) ? filas : []).filter((c) => c.kind === 'web')
+}
+
+// Mientras una linea no este enlazada, el estado tiene que seguir a la realidad sin que
+// el usuario haga nada: escanear el QR y que el panel siga diciendo "esperando" es el
+// mismo callejon que el spinner eterno. Enlazadas, se mira de tanto en tanto.
+const WEB_SONDEO_RAPIDO_MS = 3 * 1000
+const WEB_SONDEO_LENTO_MS = 60 * 1000
+// Sin ninguna linea conectada no hay nada que sondear, y la inmensa mayoria de las
+// instalaciones estan asi: mirar cada minuto seria un proceso por minuto para nada.
+const WEB_SONDEO_OCIOSO_MS = 5 * 60 * 1000
+
+/** Deja escrito el estado real de cada linea, y asciende la que ya termino de escanear. */
+async function refrescarLineas(orca, waScope, { motivo = 'timer' } = {}) {
+  const exe = orcaCli()
+  let cuentas = []
+  try {
+    cuentas = await cuentasWeb(waScope)
+  } catch (error) {
+    await guardar(orca, WEB_LINES_KEY, { at: new Date().toISOString(), lines: [],
+      error: 'sin-registro', detail: String(error?.message ?? '').slice(0, 200) })
+    return []
+  }
+  if (!cuentas.length) {
+    await guardar(orca, WEB_LINES_KEY,
+      { at: new Date().toISOString(), lines: [], motivo })
+    return []
+  }
+  const lineas = await estadoDeLineas(exe, cuentas)
+  // La identidad la pone la SESION. Aca es el unico momento en que se conoce: la fila
+  // nacio con un id provisional sobre el perfil y recien ahora hay lid que ponerle.
+  for (const linea of lineas) {
+    if (!linea.pending || linea.state !== 'enlazada' || !linea.lid) continue
+    const fila = await identificarLinea({ waScope, run, id: linea.id, lid: linea.lid })
+    if (fila) {
+      linea.id = fila.id
+      linea.pending = false
+      linea.linkedAt = fila.linked_at || linea.linkedAt
+    }
+  }
+  await guardar(orca, WEB_LINES_KEY,
+    { at: new Date().toISOString(), lines: lineas, motivo })
+  return lineas
+}
+
+/** Atiende lo que el panel pidio sobre las lineas web. */
+async function atenderWeb(orca, waScope, pedido, contexto) {
+  const exe = orcaCli()
+  const fin = (extra) => guardar(orca, WEB_LINES_KEY, extra)
+  if (pedido.action === 'link') {
+    const label = String(pedido.label || '').trim() || 'WhatsApp Web'
+    const r = await conectarLinea({ exe, waScope, run, label, contextoActivo: contexto })
+    if (!r.ok) {
+      await fin({ at: new Date().toISOString(), lines: [], error: r.code,
+        detail: String(r.detail || '').slice(0, 200) })
+      return
+    }
+    await guardar(orca, 'readWeb', 'on')
+    await refrescarLineas(orca, waScope, { motivo: 'link' })
+    const previo = (await leer(orca, WEB_LINES_KEY)) ?? {}
+    await fin({ ...previo, placement: r.donde, project: r.proyecto || null })
+    return
+  }
+  if (pedido.action === 'show' && pedido.pageId) {
+    const r = await verPestana(exe, pedido.pageId)
+    if (!r.ok) await refrescarLineas(orca, waScope, { motivo: 'show' })
+    return
+  }
+  if (pedido.action === 'reopen' && pedido.profile) {
+    const r = await reabrirPestana({ exe, profile: pedido.profile, contextoActivo: contexto })
+    const previo = (await leer(orca, WEB_LINES_KEY)) ?? {}
+    if (!r.ok) {
+      await fin({ ...previo, error: r.code, detail: String(r.detail || '').slice(0, 200) })
+      return
+    }
+    await refrescarLineas(orca, waScope, { motivo: 'reopen' })
+    const ahora = (await leer(orca, WEB_LINES_KEY)) ?? {}
+    await fin({ ...ahora, placement: r.donde, project: r.proyecto || null })
+    return
+  }
+  if (pedido.action === 'unlink' && pedido.id) {
+    await olvidarLinea({ exe, waScope, run, id: pedido.id, profile: pedido.profile,
+      pageId: pedido.pageId })
+    const quedan = await refrescarLineas(orca, waScope, { motivo: 'unlink' })
+    // Sin ninguna linea, la ruta web no tiene de donde leer: dejarla encendida haria
+    // que `sources()` se colgara de cualquier pestana de WhatsApp Web que hubiera.
+    if (!quedan.length) {
+      await run(waScope, ['config', 'read_web', 'off']).catch(() => {})
+      await guardar(orca, 'readWeb', 'off')
+    }
+    return
+  }
+  await refrescarLineas(orca, waScope, { motivo: 'refresh' })
+}
+
 export default function activate(orca) {
   const dirHerramientas = async () => (await settings()).toolsDir || TOOLS
 
@@ -282,6 +406,48 @@ export default function activate(orca) {
   }
   const pedidoTimer = setInterval(() => { atenderPedido().catch(() => {}) }, PETICION_MS)
   if (typeof pedidoTimer.unref === 'function') pedidoTimer.unref()
+
+  // Las lineas web. El pedido del panel se atiende igual que el de sync, pero el estado
+  // ademas se resondea solo: el momento que importa — escanear el QR — pasa en otra
+  // ventana, y un estado que solo se actualiza al volver al panel llega tarde siempre.
+  let ultimoWeb = null
+  let proximaSonda = 0
+  let sondeando = false
+  async function contextoActivo() {
+    const r = await orca.host.call('workspace.readContext', {}).catch(() => null)
+    return r && typeof r === 'object' ? (r.value ?? r) : null
+  }
+  async function atenderWebLineas() {
+    const pedido = await leer(orca, WEB_REQUEST_KEY)
+    if (pedido && typeof pedido === 'object' && typeof pedido.at === 'string' &&
+        pedido.at !== ultimoWeb) {
+      ultimoWeb = pedido.at
+      await guardar(orca, WEB_REQUEST_KEY, null)
+      const edad = Date.now() - Date.parse(pedido.at)
+      if (edad >= 0 && edad <= PETICION_TTL_MS) {
+        await atenderWeb(orca, await tool('wa-scope'), pedido, await contextoActivo())
+        proximaSonda = 0
+        return
+      }
+    }
+    if (sondeando || Date.now() < proximaSonda) return
+    sondeando = true
+    try {
+      const lineas = await refrescarLineas(orca, await tool('wa-scope'))
+      // Rapido mientras algo este a medias — esperando el escaneo, cargando, sin
+      // pestana —; lento cuando todo esta enlazado y no hay nada que mirar.
+      const aMedias = lineas.some((l) => l.state !== 'enlazada')
+      proximaSonda = Date.now() + (aMedias ? WEB_SONDEO_RAPIDO_MS
+        : lineas.length ? WEB_SONDEO_LENTO_MS : WEB_SONDEO_OCIOSO_MS)
+    } catch (error) {
+      proximaSonda = Date.now() + WEB_SONDEO_LENTO_MS
+      orca.log(`web lines refresh failed: ${error.message}`)
+    } finally {
+      sondeando = false
+    }
+  }
+  const webTimer = setInterval(() => { atenderWebLineas().catch(() => {}) }, PETICION_MS)
+  if (typeof webTimer.unref === 'function') webTimer.unref()
 
   const tool = async (name) => join(await dirHerramientas(), name)
 
@@ -399,5 +565,6 @@ export default function activate(orca) {
     detenido = true
     clearTimeout(syncTimer)
     clearInterval(pedidoTimer)
+    clearInterval(webTimer)
   }
 }

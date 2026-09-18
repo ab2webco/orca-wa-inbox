@@ -9,7 +9,10 @@ corre cada herramienta.
 import importlib.machinery
 import importlib.util
 import json
+import os
 import pathlib
+import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -19,30 +22,40 @@ import time
 RAIZ = pathlib.Path(__file__).resolve().parent.parent
 BIN = RAIZ / "bin"
 
+# El HOME real del usuario tiene su registro (~/.wa-inbox/scope.db) y, si ahi dice
+# `read_web on`, tambien su sesion viva de WhatsApp Web. Un chequeo que se corre a cada
+# rato no puede tocar ninguna de las dos: `_web_check()` del doctor ABRE la sesion, asi
+# que un `npm run check` en la maquina del usuario le conduciria el navegador y la
+# cuenta de WhatsApp de verdad. Estas dos variables son la jaula, y son independientes:
+# la primera hace que el doctor no mire la via web, la segunda hace que, si la mirara,
+# no encuentre CLI de Orca con que conducir nada.
+JAULA_WEB = {"WA_READ_SETTING_READ_WEB": "off",
+             "ORCA_CLI_COMMAND": "/no/existe/este/orca"}
+
 # Solo lecturas: nada que escriba, mande un mensaje ni toque WhatsApp.
-# El tercer campo dice si el caso corre con HOME propio. `wa-scope` abre su base al
-# arrancar y la migra si hace falta, asi que correrlo con el HOME de verdad hace que
-# un chequeo — algo que se corre a cada rato y sin pensarlo — le toque el registro real
-# al usuario. Lo de `wa-read` si va contra el equipo de verdad: solo lee, y es lo unico
-# que recorre la base de WhatsApp y comprueba que se pueda abrir.
+# El tercer campo dice si el caso corre con HOME propio y el cuarto que variables se le
+# suman. `wa-scope` abre su base al arrancar y la migra si hace falta, asi que correrlo
+# con el HOME de verdad hace que un chequeo le toque el registro real al usuario. Lo de
+# `wa-read doctor` si va contra el equipo de verdad —es lo unico que recorre la base de
+# WhatsApp y comprueba que se pueda abrir— pero enjaulado: ver JAULA_WEB.
 CASOS = [
-    ("wa-read", ["doctor", "--json"], False),
-    ("wa-scope", ["config", "--json"], True),
+    ("wa-read", ["doctor", "--json"], False, JAULA_WEB),
+    ("wa-scope", ["config", "--json"], True, {}),
     # Con un nombre en vez de un JID, wa-scope tiene que preguntarle a wa-read.
     # Ese camino llamaba a ~/tools/wa-read — una ruta fuera del plugin — y reventaba
     # sin que ningun chequeo lo viera, porque los otros casos no lo recorren.
-    ("wa-scope", ["voice", "un-nombre-que-no-existe", "--json"], True),
+    ("wa-scope", ["voice", "un-nombre-que-no-existe", "--json"], True, JAULA_WEB),
     # El listado de cierres pendientes toca la migracion y la linea de corte: si esa
     # rama revienta, el agente deja de avisar cierres y nada mas lo delata.
-    ("wa-scope", ["closing", "--json"], True),
+    ("wa-scope", ["closing", "--json"], True, {}),
     # El registro de lineas toca la migracion a (cuenta, jid): si esa rama revienta,
     # el alcance entero deja de leerse.
-    ("wa-scope", ["accounts", "--json"], True),
+    ("wa-scope", ["accounts", "--json"], True, {}),
     # El rastro de la corrida sobre una base recien creada: es la rama que contesta
     # "nunca corrio", y es justo la que nadie ejecuta a mano.
-    ("wa-scope", ["run", "--json"], True),
-    ("wa-transcribe", ["--check", "--json"], False),
-    ("wa-send", ["--help"], False),
+    ("wa-scope", ["run", "--json"], True, {}),
+    ("wa-transcribe", ["--check", "--json"], False, {}),
+    ("wa-send", ["--help"], False, {}),
 ]
 
 
@@ -193,6 +206,9 @@ AJUSTES = [
     (["config", "inbox_days", "todos"], False, "30"),
     (["config", "transcribe", "off"], True, "off"),
     (["config", "transcribe", "basura"], False, "off"),
+    # `api` se ofrecia en el panel y nunca existio: tiene que morir al guardarse, no
+    # tres audios despues.
+    (["config", "transcribe", "api"], False, "off"),
     (["config", "transcribe_lang", "pt"], True, "pt"),
     (["config", "transcribe_lang", "klingon"], False, "pt"),
     (["config", "transcribe_quality", "minima"], True, "minima"),
@@ -205,21 +221,44 @@ AJUSTES = [
     (["config", "read_local", "quizas"], False, "off"),
     (["config", "read_web", "on"], True, "on"),
     (["config", "read_web", "automatico"], False, "on"),
+    # El texto de los mensajes web. `todo` es justo el modo que NO existe a proposito:
+    # abrir una conversacion en WhatsApp Web la marca leida tambien en el telefono.
+    (["config", "read_web_text", "memoria"], True, "memoria"),
+    (["config", "read_web_text", "todo"], False, "memoria"),
+    # Los tres numeros de la via web. Guardar "un rato" en un timeout no revienta al
+    # guardarse: revienta en la corrida del agente, con int() y lejos de donde se tipeo.
+    (["config", "web_timeout_s", "10"], True, "10"),
+    (["config", "web_timeout_s", "un-rato"], False, "10"),
+    # Y los dos topes del almacen de cuerpos, que son retencion de texto ajeno: bajarlos
+    # tiene que poder hacerse sin tocar el codigo, y un valor invalido no puede quedar.
+    (["config", "capture_max", "500"], True, "500"),
+    (["config", "capture_max", "muchos"], False, "500"),
+    (["config", "capture_days", "7"], True, "7"),
+    (["config", "capture_days", "siempre"], False, "7"),
 ]
 
+# Con que arranca cada ajuste de la via web en una instalacion nueva. Van aca y no en un
+# comentario porque son el trato entero del almacen — cuanto texto ajeno se guarda y por
+# cuanto tiempo — y un default que cambia sin querer no se ve en ninguna salida.
+DEFAULTS_WEB = {"read_web": "off", "read_web_text": "off", "read_local": "on",
+                "web_timeout_s": "45", "capture_max": "20000", "capture_days": "90"}
+
 # La eleccion de fuente, recorrida de verdad. Cada caso es
-# (ajustes, codigo_esperado, motivo_en_la_primera_linea).
+# (ajustes, subcomando, codigo_esperado, motivo_en_la_primera_linea).
 # Existe porque lo que decide de donde se lee no se ve compilando: solo se ve
 # corriendolo, que es exactamente como se colo aqui un NameError en su momento.
 FUENTES = [
     # Con las dos apagadas no hay de donde leer, y eso NO es una bandeja vacia: una
     # bandeja vacia se lee como "no hay nada que atender".
-    ({"read_local": "off", "read_web": "off"}, 4, "no-source"),
-    # Web elegida en un equipo que igual tendria base: se respeta la eleccion y se
-    # falla con el motivo estable, no se cae de vuelta a la local en silencio.
-    ({"read_local": "off", "read_web": "on"}, 4, "web-not-implemented"),
+    ({"read_local": "off", "read_web": "off"}, ["inbox"], 4, "no-source"),
+    # Web elegida en un equipo que igual tendria base, y un comando que la via web no
+    # sabe contestar: se respeta la eleccion y se falla con el motivo estable, no se cae
+    # de vuelta a la local en silencio. Va con `chat` y no con `inbox` porque la bandeja
+    # SI la contesta ahora; `chat` pide el cuerpo de cada mensaje y eso el navegador no
+    # lo tiene.
+    ({"read_local": "off", "read_web": "on"}, ["chat", "algo"], 4, "web-not-implemented"),
     # Y lo de siempre: sin base que leer se sale con 1 y el texto de requisitos.
-    ({"read_local": "on", "read_web": "off"}, 1, "local-unavailable"),
+    ({"read_local": "on", "read_web": "off"}, ["inbox"], 1, "local-unavailable"),
 ]
 
 
@@ -234,28 +273,30 @@ def revisa_fuentes(fallos: list) -> int:
     hechas = 0
     with tempfile.TemporaryDirectory() as tmp:
         home = pathlib.Path(tmp)
-        env = entorno(home)
+        # Ningun caso de aqui puede llegar a la sesion de WhatsApp Web del usuario: el
+        # chequeo se corre a cada rato y no tiene por que tocarle el navegador.
+        env = dict(entorno(home), ORCA_CLI_COMMAND=str(home / "no-existe-este-orca"))
 
-        for ajustes, codigo, motivo in FUENTES:
+        for ajustes, comando, codigo, motivo in FUENTES:
             for clave, valor_ in ajustes.items():
                 subprocess.run([str(BIN / "wa-scope"), "config", clave, valor_],
                                capture_output=True, text=True, env=env, timeout=120)
-            p = subprocess.run([str(BIN / "wa-read"), "inbox", "--json"],
+            p = subprocess.run([str(BIN / "wa-read"), *comando, "--json"],
                                capture_output=True, text=True, env=env, timeout=180)
             hechas += 3
             if p.returncode != codigo:
-                fallos.append(f"wa-read inbox con {ajustes}: salio {p.returncode} y "
+                fallos.append(f"wa-read {comando[0]} con {ajustes}: salio {p.returncode} y "
                               f"tenia que salir {codigo}")
             primera = (p.stderr or "").strip().splitlines()[:1]
             if primera != [f"wa-read: {motivo}"]:
-                fallos.append(f"wa-read inbox con {ajustes}: la primera linea de stderr "
+                fallos.append(f"wa-read {comando[0]} con {ajustes}: la primera linea de stderr "
                               f"es {primera!r} y tenia que ser 'wa-read: {motivo}'")
             # stdout vacio no es cosmetica: quien parsea lee `stdout or '[]'`, y un
             # objeto de error ahi lo hace reventar en vez de quedarse sin filas.
             if p.stdout.strip():
-                fallos.append(f"wa-read inbox con {ajustes}: escribio en stdout al fallar")
+                fallos.append(f"wa-read {comando[0]} con {ajustes}: escribio en stdout al fallar")
             if "Traceback (most recent call last)" in p.stderr:
-                fallos.append(f"wa-read inbox con {ajustes}: reventó con un traceback")
+                fallos.append(f"wa-read {comando[0]} con {ajustes}: reventó con un traceback")
 
         # El doctor de un equipo sin base: tiene que nombrar la segunda via, decir que
         # falta construirla, y NO bloquear por ella.
@@ -272,7 +313,7 @@ def revisa_fuentes(fallos: list) -> int:
             if web.get("requerido", True):
                 fallos.append("wa-read doctor marca la via web como requisito: una "
                               "funcion que falta no es una rotura")
-            if web.get("detailCode") != "web-not-implemented":
+            if web.get("detailCode") != "web-off":
                 fallos.append(f"la via web llego sin su codigo estable: "
                               f"{web.get('detailCode')!r}")
             # El detalle tiene que ser accionable: que cuesta y como se enciende.
@@ -290,6 +331,227 @@ def revisa_fuentes(fallos: list) -> int:
             fallos.append("el doctor sin base no nombra la via web")
         if "not supported" in p.stdout:
             fallos.append("el doctor sigue diciendo 'not supported' donde si hay via")
+    return hechas
+
+
+# Un `orca` espia: anota que se le pidio y contesta que no. Sirve para comprobar que la
+# jaula del doctor no es una promesa en un comentario — si algo intentara conducir el
+# navegador, aparece escrito en un archivo.
+# Los verbos de la CLI de Orca que tocan el navegador del usuario. `tab` y `eval` son los
+# dos que usa la via web hoy; los otros dos estan por si alguien suma un camino nuevo.
+VERBOS_NAVEGADOR = ("tab", "eval", "browser", "page")
+
+ESPIA_ORCA = r"""#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["WA_ESPIA"], "a", encoding="utf-8") as fh:
+    fh.write(" ".join(sys.argv[1:]) + "\n")
+print(json.dumps({"ok": False, "error": "espia"}))
+"""
+
+
+def revisa_jaula_web(fallos: list) -> int:
+    """`npm run check` no puede conducir la sesion de WhatsApp Web del usuario.
+
+    El doctor corre contra el HOME de VERDAD a proposito: es el unico caso que recorre
+    la base real de WhatsApp y comprueba que se pueda abrir. Desde que `_web_check()`
+    abre la sesion, ese mismo caso pasaria por el navegador y la cuenta de WhatsApp del
+    usuario en cada chequeo, y un chequeo se corre a cada rato y sin pensarlo.
+
+    Se comprueba contra un registro que dice `read_web on`, que es la maquina de la que
+    hablamos, y en las DOS direcciones: con la jaula el navegador no se toca nunca, y sin
+    ella se toca siempre. Sin el segundo caso el primero pasaria igual contra el registro
+    de un equipo con la via apagada, que es lo unico que probaria — nada.
+    """
+    hechas = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        raiz = pathlib.Path(tmp)
+        espia = raiz / "orca-espia"
+        espia.write_text(ESPIA_ORCA, encoding="utf-8")
+        espia.chmod(0o755)
+        rastro = raiz / "rastro.txt"
+        # Un registro con la via ENCENDIDA: es la unica manera de que el caso enjaulado
+        # signifique algo. Va en su propio home, no en el del usuario.
+        encendida = raiz / "home-con-web"
+        env_web = entorno(encendida)
+        subprocess.run([str(BIN / "wa-scope"), "config", "read_web", "on"],
+                       capture_output=True, text=True, env=env_web, timeout=120)
+
+        def corre(base: dict, jaula: bool):
+            rastro.unlink(missing_ok=True)
+            env = dict(base, **JAULA_WEB) if jaula else dict(base)
+            # El espia PISA la ruta inexistente de la jaula a proposito: si no lo
+            # hiciera, el caso pasaria por no encontrar un binario y no por la jaula.
+            env.update(WA_ESPIA=str(rastro), ORCA_CLI_COMMAND=str(espia))
+            subprocess.run([str(BIN / "wa-read"), "doctor", "--json"],
+                           capture_output=True, text=True, env=env, timeout=120)
+            crudo = rastro.read_text(encoding="utf-8") if rastro.exists() else ""
+            # Solo lo que CONDUCE el navegador. El doctor tambien le pregunta a Orca por
+            # los modelos de voz (`speech models list`), que no abre ninguna pestana ni
+            # toca ninguna sesion: contarlo haria fallar el caso por lo que no es.
+            return [l for l in crudo.splitlines()
+                    if l.split()[:1] and l.split()[0] in VERBOS_NAVEGADOR]
+
+        hechas += 1
+        tocado = corre(env_web, jaula=True)
+        if tocado:
+            fallos.append(f"con `read_web on` en el registro, la jaula no lo detuvo: "
+                          f"{tocado[:2]}")
+        # El control. Si esto no dispara, el caso de arriba no prueba nada: estaria
+        # pasando por un registro apagado o por un espia que no anota.
+        hechas += 1
+        if not corre(env_web, jaula=False):
+            fallos.append("el control de la jaula no disparo: sin ella, un registro con "
+                          "`read_web on` tenia que conducir el navegador y no lo hizo, "
+                          "asi que el caso enjaulado no prueba nada")
+        # Y el caso que corre de verdad la suite: el HOME real del usuario, con la misma
+        # jaula que lleva CASOS. Sea cual sea su ajuste, no puede salir nada al navegador.
+        hechas += 1
+        tocado = corre(dict(os.environ), jaula=True)
+        if tocado:
+            fallos.append(f"el doctor contra el HOME real condujo el navegador: "
+                          f"{tocado[:2]}")
+    return hechas
+
+
+# Forzar la plataforma es lo unico que hace correr aca la rama de Linux/Windows. Va por
+# sitecustomize y no por una variable que lea wa-read: una perilla de produccion para
+# mentir sobre el sistema es peor que el bug que viene a cubrir.
+SHIM_LINUX = "import platform\nplatform.system = lambda: 'Linux'\n"
+
+
+def revisa_solo_web(fallos: list) -> int:
+    """Una maquina sin base local y con la sesion web sana no puede quedar bloqueada.
+
+    Es el caso de Linux y de Windows, y estuvo MUERTO: los cinco chequeos de la base
+    local salian `requerido: True` sin condicion, asi que fuera de macOS fallaban los
+    cinco, el doctor salia 1, `build_health()` daba ok:false y `wa-scope pending` salia
+    2. Las dos automatizaciones bloqueadas para siempre, el agente sin correr nunca, con
+    una sesion web leyendo perfecto.
+
+    Y la bandeja de esa maquina se congelaba ademas por su cuenta: sin base local la
+    firma de la fuente era la constante `missing`, identica entre dos corridas, asi que
+    la segunda sync reusaba la lista vieja para siempre.
+    """
+    hechas = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        (home / "shim").mkdir()
+        (home / "shim" / "sitecustomize.py").write_text(SHIM_LINUX, encoding="utf-8")
+        falso = home / "orca-falso"
+        falso.write_text(FALSO_ORCA, encoding="utf-8")
+        falso.chmod(0o755)
+        registra_linea_web(home, "linea-uno")
+        ahora = int(time.time())
+        # La linea se enlazo ayer. Sin esto la primera corrida anota el enlace AHORA y
+        # corta el fixture entero por ser anterior — que es correcto, pero deja la
+        # bandeja vacia y no se distingue de la maquina bloqueada.
+        cap = home / ".wa-inbox" / "capture.db"
+        cap.parent.mkdir(parents=True, exist_ok=True)
+        con = sqlite3.connect(cap)
+        con.executescript("create table if not exists linea (account text primary key, "
+                          "first_seen integer not null);")
+        con.execute("insert or replace into linea values (?,?)",
+                    ("web:100000000000001", ahora - 86400))
+        con.commit()
+        con.close()
+        env = dict(entorno(home), PYTHONPATH=str(home / "shim"), WA_FALSO_ORCA="ok",
+                   WA_FALSO_PAYLOAD=json.dumps(WEB_PAYLOAD),
+                   WA_FALSO_PAYLOAD_INBOX=json.dumps(payload_inbox(ahora)),
+                   WA_FALSO_RASTRO=str(home / "rastro.txt"),
+                   ORCA_CLI_COMMAND=str(falso))
+        for clave, valor in (("read_web", "on"),):
+            subprocess.run([str(BIN / "wa-scope"), "config", clave, valor],
+                           capture_output=True, text=True, env=env, timeout=120)
+        subprocess.run([str(BIN / "wa-scope"), "set", WEB_GRUPO, "--provider", "ninguno",
+                        "--mode", "observar"], capture_output=True, text=True, env=env,
+                       timeout=120)
+
+        p = subprocess.run([str(BIN / "wa-read"), "doctor", "--json"],
+                           capture_output=True, text=True, env=env, timeout=180)
+        filas = json.loads(p.stdout or "[]")
+        porcodigo = {f.get("code"): f for f in filas}
+        hechas += 4
+        if p.returncode != 0:
+            fallos.append(f"el doctor de una maquina solo-web salio {p.returncode}: con "
+                          "la sesion contestando no falta nada que bloquee")
+        if not porcodigo.get("web", {}).get("ok"):
+            fallos.append("el doctor no vio la sesion web sana, asi que el resto del "
+                          "caso no mide lo que dice medir")
+        locales = [c for c in ("system", "whatsapp", "database", "readable", "sqlite3")
+                   if porcodigo.get(c, {}).get("requerido", True)]
+        if locales:
+            fallos.append(f"los chequeos de la base local siguen siendo requisito con la "
+                          f"via web contestando: {locales}")
+        if any(f.get("via") != "local"
+               for c, f in porcodigo.items()
+               if c in ("system", "whatsapp", "database", "readable", "sqlite3")):
+            fallos.append("un chequeo de la base local llego sin `via: local`, que es "
+                          "con lo que wa-scope decide si es un problema o un dato")
+
+        # El texto plano tambien: quien corre el CLI ve MISSING cinco veces y salida 0.
+        p = subprocess.run([str(BIN / "wa-read"), "doctor"], capture_output=True,
+                           text=True, env=env, timeout=180)
+        hechas += 1
+        if "not a failure here" not in p.stdout:
+            fallos.append("el doctor imprime MISSING sin decir por que no hace fallar "
+                          "nada: se lee como una rotura que el codigo de salida esconde")
+
+        # La firma: sin la fila de la linea web era la constante `missing`.
+        p = subprocess.run([str(BIN / "wa-read"), "state", "--json"], capture_output=True,
+                           text=True, env=env, timeout=180)
+        estado = json.loads(p.stdout or "[]")
+        hechas += 1
+        if not any(f.get("fingerprint") == "live" for f in estado):
+            fallos.append(f"`state` no trae la fila de la linea web: {estado}")
+
+        man = json.loads((RAIZ / "orca-plugin.json").read_text(encoding="utf-8"))
+        store = (home / "Library" / "Application Support" / "orca" / "plugins-data" /
+                 f"{man['publisher']}.{man['id']}" / "storage.json")
+        fuentes = []
+        for _ in range(2):
+            subprocess.run([str(BIN / "wa-scope"), "sync", "--json"], capture_output=True,
+                           text=True, env=env, timeout=300)
+            raw = json.loads(store.read_text(encoding="utf-8")) if store.exists() else {}
+            fuentes.append((raw.get("activity") or {}).get("source"))
+        hechas += 3
+        salud = raw.get("health") or {}
+        if salud.get("ok") is not True:
+            fallos.append(f"el panel de una maquina solo-web sigue diciendo que WhatsApp "
+                          f"no esta conectado: {salud.get('problemCode')!r}")
+        # Los cinco fallos locales se colapsan en UNA fila con su codigo, no en cinco
+        # circulos grises ofreciendo activar un sistema operativo.
+        codigos = [o.get("code") for o in (salud.get("optional") or [])]
+        if "local" not in codigos or any(c in codigos for c in
+                                         ("system", "whatsapp", "database", "readable")):
+            fallos.append(f"los requisitos de la base local no se colapsaron: {codigos}")
+        if any(f is not None for f in fuentes):
+            fallos.append(f"la firma de la fuente no invalida el reuso: {fuentes}")
+
+        p = subprocess.run([str(BIN / "wa-scope"), "pending"], capture_output=True,
+                           text=True, env=env, timeout=180)
+        hechas += 1
+        if p.returncode == 2:
+            fallos.append("`wa-scope pending` bloquea en una maquina solo-web: las dos "
+                          "automatizaciones no corren nunca y el agente tampoco")
+        elif p.returncode != 0:
+            fallos.append(f"`wa-scope pending` salio {p.returncode} con trabajo esperando")
+
+        # Y wa-send tiene que negarse ANTES de abrir la ventana de la linea equivocada.
+        subprocess.run([str(BIN / "wa-scope"), "agent", "Alfred"], capture_output=True,
+                       text=True, env=env, timeout=120)
+        con = sqlite3.connect(home / ".wa-inbox" / "scope.db")
+        con.execute("update chat_scope set account='web:100000000000001' where chat_jid=?",
+                    (WEB_GRUPO,))
+        con.commit()
+        con.close()
+        p = subprocess.run([str(BIN / "wa-send"), WEB_GRUPO, "hola"], capture_output=True,
+                           text=True, env=env, timeout=120)
+        hechas += 2
+        if p.returncode == 0:
+            fallos.append("wa-send acepto escribir en una conversacion de una linea web")
+        if (p.stderr or "").strip().splitlines()[:1] != ["wa-send: send-web-line"]:
+            fallos.append("wa-send no dio el motivo estable al negarse por linea web: "
+                          f"{(p.stderr or '').strip()[:120]!r}")
     return hechas
 
 
@@ -596,10 +858,1553 @@ def revisa_precheck(fallos: list) -> int:
     return hechas
 
 
+# Un Orca de mentira: contesta las DOS llamadas que la via web hace de verdad
+# (`tab list` y `eval`) y nada mas. La frontera es un subproceso y ORCA_CLI_COMMAND es
+# la perilla con la que se cambia en produccion, asi que esto recorre el parseo real de
+# la CLI en vez de saltearlo. Lo que NO se puede recorrer aca es la sonda, que es JS y
+# corre dentro de la pagina: eso solo se comprueba contra una sesion viva.
+FALSO_ORCA = r"""#!/usr/bin/env python3
+import json, os, sys
+
+MODO = os.environ.get("WA_FALSO_ORCA", "ok")
+ARGS = sys.argv[1:]
+# Rastro de TODO lo que se le pidio a la CLI de Orca. Es la prueba de que la bandeja
+# web no abre ninguna conversacion: si alguien navega, hace clic o cierra una pestana,
+# aparece aca. Una promesa en un comentario no prueba nada.
+RASTRO = os.environ.get("WA_FALSO_RASTRO")
+if RASTRO:
+    with open(RASTRO, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(ARGS) + "\n")   # una linea JSON: la sonda trae saltos
+# Cual de las dos sondas arranco. El segundo eval — el que lee el global — no lleva la
+# sonda adentro, asi que hay que acordarse de la primera.
+SENA = (RASTRO + ".sonda") if RASTRO else None
+
+
+def responde(result):
+    print(json.dumps({"ok": True, "result": result}))
+    raise SystemExit(0)
+
+
+def payload():
+    cual = "WA_FALSO_PAYLOAD"
+    if SENA and os.path.exists(SENA) and open(SENA, encoding="utf-8").read() == "inbox":
+        cual = "WA_FALSO_PAYLOAD_INBOX"
+    return json.loads(os.environ[cual])
+
+
+if ARGS[:2] == ["tab", "list"]:
+    url = "https://example.invalid/" if MODO == "sin-pestana" else "https://web.whatsapp.com/"
+    responde({"tabs": [{"browserPageId": "p1", "url": url,
+                        "profileId": "perfil-1", "profileLabel": "linea-uno"}]})
+if ARGS[:1] == ["eval"]:
+    expresion = ARGS[ARGS.index("--expression") + 1]
+    # El oyente de la captura viva. Es un eval aparte y sincronico: no pasa por el
+    # global de web_payload, asi que se contesta de una.
+    if "__waInboxCaptura" in expresion:
+        responde({"result": os.environ.get("WA_FALSO_CAPTURA") or json.dumps(
+            {"ok": True, "estado": "nuevo", "drenado": [], "vistos": 0, "fallos": 0})})
+    if "window.__waRead === undefined" not in expresion:
+        if SENA:
+            with open(SENA, "w", encoding="utf-8") as fh:
+                fh.write("inbox" if "const conTexto" in expresion else "chats")
+        responde({"result": "started"})
+    if MODO == "sin-respuesta":
+        responde({"result": "null"})
+    if MODO == "deslogueada":
+        responde({"result": json.dumps({"ok": True, "v": {"linked": False, "qr": True}})})
+    if MODO == "ilegible":
+        responde({"result": json.dumps({"ok": False, "e": "InvalidStateError"})})
+    if MODO == "sin-texto":
+        responde({"result": json.dumps({"ok": True, "v": {"linked": True, "sinTexto": True}})})
+    responde({"result": json.dumps({"ok": True, "v": payload()})})
+print(json.dumps({"ok": False, "error": "unknown command"}))
+"""
+
+# Los jid son inventados a proposito, como los de TELEFONOS: un chequeo no puede viajar
+# con las conversaciones de quien lo escribio. El ultimo trae `t` en cero y el nombre
+# igual al numero: es la conversacion sin fecha y sin nombre en la agenda, que es justo
+# la que se pierde si el mapeo no la contempla.
+WEB_PAYLOAD = {
+    "linked": True,
+    "lid": "100000000000001",
+    "name": "Linea De Ejemplo",
+    "chats": [
+        ["100000000000000000@g.us", "Grupo De Ejemplo", 1700000000, 3],
+        ["100000000000002000@g.us", "Otro Grupo", 1600000000, 0],
+        ["15550000000@c.us", "Directo De Ejemplo", 1700000100, 1],
+        ["100000000000003@lid", "100000000000003", 0, 0],
+    ],
+}
+
+# Cada final de la via web con el motivo que le toca. El motivo es contrato: el panel lo
+# traduce por codigo, y la accion del usuario es distinta en cada uno — abrir Orca,
+# abrir la pestana, escanear el QR, esperar.
+WEB_FINALES = [
+    ("sin-orca", "web-no-orca"),
+    ("sin-pestana", "web-no-session"),
+    ("perfil-que-no-esta", "web-no-session"),
+    ("deslogueada", "web-logged-out"),
+    ("ilegible", "web-read-failed"),
+    ("sin-respuesta", "web-eval-timeout"),
+]
+
+# El LID propio de la linea de ejemplo. Es lo que `cmd_inbox` busca dentro del texto
+# para decir `mencion`, asi que tiene que ser el mismo que el del payload.
+WEB_LID = WEB_PAYLOAD["lid"]
+WEB_GRUPO = "100000000000000000@g.us"
+WEB_DIRECTO = "15550000000@c.us"
+
+
+def payload_inbox(ahora):
+    """Una sesion con los cuatro casos que la bandeja tiene que separar.
+
+    Las fechas van relativas al reloj porque `cmd_inbox` corta por ventana: fijarlas
+    hacia que el chequeo empezara a fallar solo el dia que la ventana las dejaba afuera.
+    El orden de los campos es el de la sonda: [stanza, chat, t, autorJid, autorNombre,
+    menciona, stanzaCitado, tipo, cuerpo, motivo].
+    """
+    return {
+        "linked": True, "lid": WEB_LID, "name": "Linea De Ejemplo",
+        "chats": [[WEB_GRUPO, "Grupo De Ejemplo", ahora, 3],
+                  [WEB_DIRECTO, "Directo De Ejemplo", ahora, 1]],
+        # Mi ultimo mensaje en el grupo, hace una hora.
+        "mias": [[WEB_GRUPO, ahora - 3600]],
+        "sobran": 0,
+        "motivos": {"off": 5, "not-loaded": 0, "no-body": 0, "ok": 0},
+        "mensajes": [
+            ["ST-MENCION", WEB_GRUPO, ahora - 60, "200000000000002@lid", "Ana",
+             1, "", "chat", None, "off"],
+            ["ST-RESPUESTA", WEB_GRUPO, ahora - 50, "200000000000003@lid", "Beto",
+             0, "ST-PADRE", "chat", None, "off"],
+            # Anterior a mi ultimo mensaje: ya la atendi, tiene que caerse.
+            ["ST-ATENDIDA", WEB_GRUPO, ahora - 7200, "200000000000002@lid", "Ana",
+             1, "", "chat", None, "off"],
+            # En el grupo, sin nombrarme y sin citarme: conversacion ajena.
+            ["ST-AJENA", WEB_GRUPO, ahora - 40, "200000000000004@lid", "Caro",
+             0, "", "chat", None, "off"],
+            ["ST-DIRECTO", WEB_DIRECTO, ahora - 30, "", "", 0, "", "ptt", None, "off"],
+        ],
+        # Lo de al lado de la mencion: la captura casi nunca viene en el mismo mensaje
+        # que el "@fulano mira esto". Uno con cuerpo, uno sin — el segundo no se escribe.
+        "vecinos": [
+            [WEB_GRUPO, "ST-CERCA", ahora - 70, "Ana", "aca esta la captura"],
+            [WEB_GRUPO, "ST-CERCA-MUDO", ahora - 75, "Ana", None],
+            # Fuera de la ventana de 5 minutos: es conversacion de otro momento.
+            [WEB_GRUPO, "ST-CERCA-LEJOS", ahora - 7200, "Beto", "charla de hace dos horas"],
+        ],
+        "antesDelEnlace": 0,
+    }
+
+
+def payload_con_texto(ahora):
+    """La misma sesion con el texto pedido: uno con cuerpo, uno que la sesion no tiene
+    cargado y uno que no tiene texto que leer. Los tres tienen que salir distintos."""
+    datos = payload_inbox(ahora)
+    datos["motivos"] = {"off": 0, "not-loaded": 3, "no-body": 1, "ok": 1}
+    porque = {"ST-MENCION": ("hola @" + WEB_LID + " mira esto", ""),
+              "ST-RESPUESTA": (None, "not-loaded"),
+              "ST-DIRECTO": (None, "no-body")}
+    for fila in datos["mensajes"]:
+        if fila[0] in porque:
+            fila[8], fila[9] = porque[fila[0]]
+        else:
+            fila[9] = "not-loaded"
+    return datos
+
+
+def modulo_wa_read():
+    """wa-read tampoco tiene extension .py. Se importa para recorrer el mapeo contra el
+    SQL de verdad de cmd_chats: una copia del SQL aca probaria la copia, no el codigo."""
+    sys.dont_write_bytecode = True
+    spec = importlib.util.spec_from_loader(
+        "wa_read", importlib.machinery.SourceFileLoader("wa_read", str(BIN / "wa-read")))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class _Args:
+    """Lo que argparse le deja al comando. Se arma a mano para llamar a cmd_chats con
+    el mismo contrato con el que lo llama el CLI."""
+
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+def registra_linea_web(home: pathlib.Path, perfil: str) -> None:
+    """Una linea web en el registro de ESE home, atada a un perfil de navegador."""
+    db = home / ".wa-inbox" / "scope.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(db)
+    con.executescript(
+        "create table if not exists wa_account (id text primary key, kind text, "
+        "label text, profile text, enabled integer, linked_at text, updated_at text);")
+    con.execute("insert or replace into wa_account values (?,?,?,?,1,null,null)",
+                ("web:100000000000001", "web", "Linea De Ejemplo", perfil))
+    con.commit()
+    con.close()
+
+
+def revisa_web_mapeo(fallos: list) -> int:
+    """El mapeo de la sesion web a las filas que salen, contra el SQL que corre de verdad.
+
+    Lo que se rompe si esto falla no se ve en el JSON: un jid de grupo leido como directo
+    manda la respuesta al chat equivocado, y una fecha sin convertir sale 31 anios
+    adelantada. Las dos cosas pasan cualquier revision de forma.
+    """
+    hechas = 0
+    try:
+        wa = modulo_wa_read()
+    except Exception as error:            # noqa: BLE001 - el motivo va en el reporte
+        fallos.append(f"wa-read: no se pudo importar — {error}")
+        return hechas
+
+    con, tmp = wa.web_db(WEB_PAYLOAD)
+    try:
+        filas = wa.cmd_chats(con, _Args(query=None, unread=False, n=10))
+        hechas += 1
+        if len(filas) != 4:
+            fallos.append(f"web_db perdio filas: salieron {len(filas)} de 4")
+
+        # El orden es por fecha, como en la base local: arriba la mas nueva.
+        hechas += 1
+        orden = [f["jid"] for f in filas]
+        if orden != ["15550000000@c.us", "100000000000000000@g.us",
+                     "100000000000002000@g.us", "100000000000003@lid"]:
+            fallos.append(f"el orden por fecha no es el mismo: {orden}")
+
+        # grupo o directo sale del dominio del jid y de nada mas.
+        hechas += 1
+        clase = {f["jid"]: f["kind"] for f in filas}
+        esperado = {"100000000000000000@g.us": "grupo", "100000000000002000@g.us": "grupo",
+                    "15550000000@c.us": "directo", "100000000000003@lid": "directo"}
+        if clase != esperado:
+            fallos.append(f"el jid no se clasifico bien: {clase}")
+
+        # La fecha tiene que caer en la MISMA forma que la de la fuente local. Se compara
+        # contra el epoch unix calculado aparte y no contra ts(): comparar ts() con ts()
+        # pasaria igual con la conversion de epoch borrada.
+        hechas += 2
+        directo = next(f for f in filas if f["jid"] == "15550000000@c.us")
+        quiere = time.strftime("%Y-%m-%d %H:%M", time.localtime(1700000100))
+        if directo["last"] != quiere:
+            fallos.append(f"la fecha de la web llego como {directo['last']!r} y tenia que "
+                          f"llegar como {quiere!r} — revisa el epoch de Core Data")
+        sin_fecha = next(f for f in filas if f["jid"] == "100000000000003@lid")
+        if sin_fecha["last"] != "":
+            fallos.append(f"una conversacion sin fecha llego con {sin_fecha['last']!r}")
+
+        # Sin nombre en la agenda queda el numero, no un hueco: cmd_chats descarta las
+        # filas con ZPARTNERNAME en null, asi que un None ahi las borraria en silencio.
+        hechas += 1
+        if sin_fecha["name"] != "100000000000003":
+            fallos.append(f"sin nombre quedo {sin_fecha['name']!r} en vez del numero")
+
+        hechas += 2
+        if directo["unread"] != 1:
+            fallos.append(f"el sin leer llego como {directo['unread']!r} y era 1")
+        solo_unread = wa.cmd_chats(con, _Args(query=None, unread=True, n=10))
+        if len(solo_unread) != 2:
+            fallos.append(f"--unread devolvio {len(solo_unread)} filas y eran 2")
+
+        # whoami: el LID es la identidad de la cuenta, y los grupos se cuentan solos.
+        hechas += 3
+        quien = wa.cmd_whoami(con, _Args())[0]
+        if quien["lid"] != "100000000000001":
+            fallos.append(f"el whoami de la web dio el LID {quien['lid']!r}")
+        if quien["name"] != "Linea De Ejemplo":
+            fallos.append(f"el whoami de la web dio el nombre {quien['name']!r}")
+        if quien["grupos"] != 2:
+            fallos.append(f"el whoami conto {quien['grupos']} grupos y eran 2")
+    finally:
+        con.close()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # Una linea sin ningun grupo igual tiene identidad: sin la fila centinela, own_lid()
+    # devuelve None y el whoami sale sin LID justo donde el LID ES la cuenta.
+    hechas += 2
+    sin_grupos = dict(WEB_PAYLOAD, chats=[["15550000000@c.us", "Solo Un Directo", 1700000000, 0]])
+    con, tmp = wa.web_db(sin_grupos)
+    try:
+        quien = wa.cmd_whoami(con, _Args())[0]
+        if quien["lid"] != "100000000000001":
+            fallos.append(f"una linea sin grupos perdio el LID: {quien!r}")
+        if quien["grupos"] != 0:
+            fallos.append(f"una linea sin grupos conto {quien['grupos']} grupos")
+    finally:
+        con.close()
+        shutil.rmtree(tmp, ignore_errors=True)
+    return hechas
+
+
+def revisa_web_finales(fallos: list) -> int:
+    """Cada manera de no poder leer la sesion sale con SU motivo, y nunca con filas vacias.
+
+    Una bandeja vacia se lee como "no hay nada que atender", que es justo lo contrario;
+    y un solo motivo para las seis mandaria al usuario a mirar el parrafo equivocado.
+    """
+    hechas = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        falso = home / "orca-falso"
+        falso.write_text(FALSO_ORCA, encoding="utf-8")
+        falso.chmod(0o755)
+        comun = dict(WA_READ_SETTING_READ_LOCAL="off", WA_READ_SETTING_READ_WEB="on",
+                     WA_FALSO_PAYLOAD=json.dumps(WEB_PAYLOAD))
+
+        for modo, motivo in WEB_FINALES:
+            # El perfil se reescribe en CADA vuelta: dejarlo pegado del caso anterior
+            # hacia que los tres ultimos modos fallaran por el perfil y no por lo suyo,
+            # que es un verde y un rojo falsos a la vez.
+            registra_linea_web(home, "perfil-que-no-existe"
+                               if modo == "perfil-que-no-esta" else "linea-uno")
+            env = dict(entorno(home), **comun,
+                       # Sin esto el caso del reloj tarda los 45 s de verdad.
+                       WA_READ_SETTING_WEB_TIMEOUT_S="1",
+                       WA_FALSO_ORCA=modo,
+                       ORCA_CLI_COMMAND=str(home / "no-existe-este-orca")
+                       if modo == "sin-orca" else str(falso))
+            p = subprocess.run([str(BIN / "wa-read"), "chats", "-n", "3", "--json"],
+                               capture_output=True, text=True, env=env, timeout=180)
+            hechas += 3
+            if p.returncode != 4:
+                fallos.append(f"la via web en modo {modo}: salio {p.returncode} y no 4")
+            primera = (p.stderr or "").strip().splitlines()[:1]
+            if primera != [f"wa-read: {motivo}"]:
+                fallos.append(f"la via web en modo {modo}: la primera linea de stderr es "
+                              f"{primera!r} y tenia que ser 'wa-read: {motivo}'")
+            # stdout vacio no es cosmetica: quien parsea lee `stdout or '[]'`.
+            if p.stdout.strip():
+                fallos.append(f"la via web en modo {modo}: escribio en stdout al fallar")
+            if "Traceback (most recent call last)" in p.stderr:
+                fallos.append(f"la via web en modo {modo}: reventó con un traceback")
+
+        # El camino feliz, con la linea registrada apuntando al perfil que SI esta.
+        registra_linea_web(home, "linea-uno")
+        env = dict(entorno(home), **comun, WA_FALSO_ORCA="ok",
+                   ORCA_CLI_COMMAND=str(falso))
+        hechas += 2
+        p = subprocess.run([str(BIN / "wa-read"), "chats", "-n", "10", "--json"],
+                           capture_output=True, text=True, env=env, timeout=180)
+        if p.returncode != 0 or len(json.loads(p.stdout or "[]")) != 4:
+            fallos.append(f"la via web no devolvio las filas de la sesion: rc="
+                          f"{p.returncode} {(p.stderr or '').strip()[:140]}")
+        p = subprocess.run([str(BIN / "wa-read"), "whoami", "--json"],
+                           capture_output=True, text=True, env=env, timeout=180)
+        quien = json.loads(p.stdout or "[]")
+        if not quien or quien[0].get("grupos") != 2:
+            fallos.append(f"el whoami de la via web no llego: {p.stdout.strip()[:120]}")
+
+        # Y lo que la via web NO sabe contestar sigue saliendo por el motivo de siempre,
+        # en vez de reventar contra un esquema que no tiene esas tablas. `inbox` ya no
+        # esta en la lista: lo contesta, y lo recorre entero revisa_web_inbox().
+        for comando in (["chat", "algo"], ["media", "algo"]):
+            p = subprocess.run([str(BIN / "wa-read"), *comando, "--json"],
+                               capture_output=True, text=True, env=env, timeout=180)
+            hechas += 1
+            primera = (p.stderr or "").strip().splitlines()[:1]
+            if primera != ["wa-read: web-not-implemented"]:
+                fallos.append(f"wa-read {comando[0]} por la via web dijo {primera!r}")
+    return hechas
+
+
+# Mensajes crudos con la forma REAL del store `message`, medidos contra la sesion viva:
+# `id` es `<esMio>_<jidDelChat>_<stanzaId>[_<participante>]`, mentionedJidList trae
+# objetos wid y no cadenas, y quotedParticipant llega en `@lid` y tambien en `@c.us`.
+# Los numeros son inventados: un chequeo no puede viajar con los contactos de nadie.
+def wid(jid):
+    user, _, server = jid.partition("@")
+    return {"user": user, "server": server, "_serialized": jid}
+
+
+MI_LID = "100000000000001"
+MI_TEL = "15551230000"
+OTRO = "200000000000002@lid"
+G = "100000000000000000@g.us"
+D = "15550000000@c.us"
+
+CRUDOS = [
+    # (nombre, mensaje, sale_como) — sale_como es None cuando NO tiene que ser candidato.
+    ("directo ajeno", {"id": f"false_{D}_ST1", "t": 2000, "type": "chat"}, "directo"),
+    ("mio en un directo", {"id": f"true_{D}_ST2", "t": 2000, "type": "chat"}, None),
+    ("grupo, me nombra",
+     {"id": f"false_{G}_ST3_{OTRO}", "t": 2000, "type": "chat", "author": wid(OTRO),
+      "mentionedJidList": [wid("999@lid"), wid(f"{MI_LID}@lid")]}, "mencion"),
+    ("grupo, nombra a otro",
+     {"id": f"false_{G}_ST4_{OTRO}", "t": 2000, "type": "chat", "author": wid(OTRO),
+      "mentionedJidList": [wid("999@lid")]}, None),
+    ("grupo, cita algo mio por lid",
+     {"id": f"false_{G}_ST5_{OTRO}", "t": 2000, "type": "chat", "author": wid(OTRO),
+      "quotedParticipant": wid(f"{MI_LID}@lid"), "quotedStanzaID": "ST-PADRE"}, "cita"),
+    # El mismo caso pero con el telefono: quotedParticipant llega en los dos dominios y
+    # mirar solo el LID pierde las respuestas mas viejas.
+    ("grupo, cita algo mio por telefono",
+     {"id": f"false_{G}_ST6_{OTRO}", "t": 2000, "type": "chat", "author": wid(OTRO),
+      "quotedParticipant": wid(f"{MI_TEL}@c.us"), "quotedStanzaID": "ST-PADRE"}, "cita"),
+    ("grupo, cita algo de otro",
+     {"id": f"false_{G}_ST7_{OTRO}", "t": 2000, "type": "chat", "author": wid(OTRO),
+      "quotedParticipant": wid(OTRO), "quotedStanzaID": "ST-PADRE"}, None),
+    ("fuera de la ventana", {"id": f"false_{D}_ST8", "t": 500, "type": "chat"}, None),
+    ("un canal", {"id": "false_120@newsletter_ST9", "t": 2000, "type": "chat"}, None),
+    ("una difusion", {"id": "false_status@broadcast_ST10", "t": 2000, "type": "image"}, None),
+]
+
+# El driver que corre la regla en node. La sonda entera no se puede recorrer — necesita
+# IndexedDB y la pagina — pero la REGLA si, y es la que decide que llega a la bandeja.
+# Los cinco finales de la busqueda del cuerpo, con la forma real de los dos lados: en
+# IndexedDB `id` es una CADENA, en un modelo en memoria es un OBJETO cuyo `_serialized`
+# viene vacio en este build. Una busqueda que lea `_serialized` da '' y no encuentra
+# nada, en silencio — y eso se lee igual que "la sesion no tiene ese mensaje".
+CUERPOS = [
+    ("no se pidio", None, "ID-A", [None, "off"]),
+    ("cargado y con cuerpo", {"ID-A": {"body": "hola"}}, "ID-A", ["hola", ""]),
+    ("cargado, adjunto sin pie", {"ID-A": {"body": ""}}, "ID-A", [None, "no-body"]),
+    ("cargado, sin campo body", {"ID-A": {}}, "ID-A", [None, "no-body"]),
+    ("la sesion no lo tiene", {"ID-B": {"body": "hola"}}, "ID-A", [None, "not-loaded"]),
+]
+
+CUERPO_DRIVER = """
+const casos = %s;
+const salida = casos.map(([nombre, mapa, id]) => {
+  // Un modelo de verdad: `id` es un objeto y `_serialized` viene vacio. La coleccion se
+  // indexa por la cadena, que es lo que String(id) rinde de los dos lados.
+  const memoria = mapa === null ? null : { get: (k) => {
+    const m = mapa[k];
+    return m === undefined ? undefined
+      : { body: m.body, id: { fromMe: false, remote: {}, _serialized: '' } };
+  } };
+  return [nombre, cuerpoDe(memoria, id)];
+});
+console.log(JSON.stringify(salida));
+"""
+
+
+def revisa_cuerpo_web(fallos: list) -> int:
+    """Los cinco finales de la busqueda del cuerpo, corridos de verdad en node.
+
+    Existe porque el payload del resto del chequeo trae el motivo YA calculado: una
+    mutacion en esta funcion pasaba en verde. Y es justo la parte que se leyo una vez
+    como "no devuelve ningun cuerpo" buscando el fallo en el accessor, cuando lo que
+    pasaba es que la sesion no tenia esos mensajes cargados.
+    """
+    hechas = 0
+    try:
+        wa = modulo_wa_read()
+    except Exception:                     # noqa: BLE001 - ya se reporto en el mapeo
+        return hechas
+    with tempfile.TemporaryDirectory() as tmp:
+        js = pathlib.Path(tmp) / "cuerpo.mjs"
+        js.write_text(wa.WEB_REGLA_JS + CUERPO_DRIVER
+                      % json.dumps([[n, m, i] for n, m, i, _ in CUERPOS]),
+                      encoding="utf-8")
+        p = subprocess.run(["node", str(js)], capture_output=True, text=True, timeout=120)
+        hechas += 1
+        if p.returncode != 0:
+            fallos.append(f"la busqueda del cuerpo no corre en node: "
+                          f"{p.stderr.strip()[:200]}")
+            return hechas
+        salida = dict(json.loads(p.stdout))
+    for nombre, _, _, espera in CUERPOS:
+        hechas += 1
+        if salida.get(nombre) != espera:
+            fallos.append(f"cuerpoDe {nombre!r} dio {salida.get(nombre)!r} y tenia que "
+                          f"dar {espera!r}")
+    # Y los motivos que emite son EXACTAMENTE los que el marcador sabe escribir: uno que
+    # no este en la lista se escribiria como `off` y diria la accion equivocada.
+    hechas += 1
+    emitidos = {e[1] for _, _, _, e in CUERPOS if e[1]}
+    if not emitidos <= set(wa.TEXTO_MOTIVOS):
+        fallos.append(f"la sonda emite motivos que el marcador no conoce: "
+                      f"{sorted(emitidos - set(wa.TEXTO_MOTIVOS))}")
+    return hechas
+
+
+# El oyente de la captura viva, corrido de verdad en node contra una coleccion con la
+# MISMA forma que la de la pagina: `on`/`off` por referencia y modelos cuyo `id` es un
+# OBJETO con `_serialized` vacio, que es lo unico que reproduce la trampa medida. Nada
+# de esto se ve desde un payload precocinado: ahi el oyente ya corrio, o no existio.
+CAPTURA_DRIVER = """
+const FUENTE = %s;
+const MAXPAG = %d;
+globalThis.window = globalThis;
+const ls = {};
+globalThis.localStorage = { getItem: (k) => (k in ls ? ls[k] : null) };
+const LID = %s;
+const TEL = %s;
+const TOPE = %d;
+const VENTANA = %d;
+ls['WALid'] = JSON.stringify(LID + ':12@lid');
+ls['last-wid-md'] = JSON.stringify(TEL + ':3@c.us');
+
+function Coleccion() { this.ev = {}; }
+Coleccion.prototype.on = function (t, fn) { (this.ev[t] = this.ev[t] || []).push(fn); };
+Coleccion.prototype.off = function (t, fn) {
+  this.ev[t] = (this.ev[t] || []).filter((f) => f !== fn);
+};
+Coleccion.prototype.trigger = function (t, m) {
+  for (const f of (this.ev[t] || []).slice()) f(m);
+};
+Coleccion.prototype.oyentes = function () {
+  return Object.keys(this.ev).reduce((n, k) => n + this.ev[k].length, 0);
+};
+
+let col = new Coleccion();
+let hayModulo = true;
+window.require = () => { if (!hayModulo) throw new Error('no module'); return { Msg: col }; };
+const correr = new Function('return ' + FUENTE);
+
+const OTRO = '200000000000002@lid';
+const T = 1700000000;
+// Un grupo distinto por escenario: la ventana de contexto es POR CHAT, y con todos los
+// casos en el mismo grupo una mencion de un escenario promoveria los vecinos de otro.
+const g = (n) => '10000000000000000' + n + '@g.us';
+const wid = (jid) => ({ user: jid.split('@')[0], server: jid.split('@')[1], _serialized: jid });
+// `id` es un objeto y `_serialized` viene VACIO, como en el build medido: lo unico que
+// rinde la clave es String(). Un oyente que lea `_serialized` guarda con clave '' y
+// despues no encuentra nada, en silencio.
+const modelo = (stanza, body, extra) => {
+  const e = Object.assign({}, extra || {});
+  const chat = e.chat || g(0);
+  delete e.chat;
+  const crudo = 'false_' + chat + '_' + stanza + '_' + OTRO;
+  const m = Object.assign({ t: T, type: 'chat', author: wid(OTRO),
+                            mentionedJidList: [wid(LID + '@lid')], body: body }, e);
+  m.id = { fromMe: false, remote: {}, participant: {}, _serialized: '',
+           toString: () => crudo };
+  return m;
+};
+// Nadie me nombra: en un grupo esto no es accionable y no puede tocar el disco salvo
+// que caiga dentro de la ventana de una mencion.
+const ajeno = (stanza, body, extra) =>
+  modelo(stanza, body, Object.assign({ mentionedJidList: [wid('999@lid')] }, extra || {}));
+// En un directo TODO mensaje ajeno es candidato, sin mencion de por medio: es el unico
+// modelo que distingue "no hay identidad" de "la identidad no coincide".
+const directo = (stanza, body) => {
+  const m = { t: T, type: 'chat', body: body };
+  m.id = { fromMe: false, remote: {}, _serialized: '',
+           toString: () => 'false_15550000000@c.us_' + stanza };
+  return m;
+};
+
+const R = {};
+const stz = (o) => (o.drenado || []).map((f) => f[1]).sort();
+R.primera = JSON.parse(correr());
+R.oyentesTrasPrimera = col.oyentes();
+for (let i = 0; i < 4; i++) correr();
+R.oyentesTrasCinco = col.oyentes();
+col.trigger('add', modelo('ST-DUP', 'hola @' + LID, { chat: g(1) }));
+R.duplicado = stz(JSON.parse(correr()));
+
+col.trigger('add', modelo('ST-VIVO', 'mira esto @' + LID, { chat: g(2) }));
+col.trigger('add', modelo('ST-TAPA', 'otra cosa @' + LID, { chat: g(2), t: T + 1 }));
+const sobrevive = JSON.parse(correr());
+R.sobrevive = stz(sobrevive);
+R.filaVivo = (sobrevive.drenado || []).find((f) => f[1] === 'ST-VIVO');
+
+col.trigger('add', ajeno('ST-AJENO', 'charla', { chat: g(3) }));
+col.trigger('add', modelo('ST-SINCUERPO', '', { chat: g(10) }));
+R.filtrado = stz(JSON.parse(correr()));
+
+// La ventana de al lado: lo de justo antes y lo de justo despues de una mencion entran;
+// lo de mas alla no. Es el caso del "@fulano mira esto" con la captura en otro mensaje.
+const antes = JSON.parse(correr());
+R.cuentasAntes = { accionables: antes.accionables, vecinos: antes.vecinos,
+                   descartados: antes.descartados };
+const GV = g(4);
+col.trigger('add', ajeno('ST-ANTES', 'aca esta la captura', { chat: GV, t: T }));
+col.trigger('add', ajeno('ST-LEJOS', 'charla de antes', { chat: GV, t: T - VENTANA - 600 }));
+col.trigger('add', modelo('ST-ANCLA', 'mira esto @' + LID, { chat: GV, t: T + 60 }));
+col.trigger('add', ajeno('ST-DESPUES', 'era esta', { chat: GV, t: T + 120 }));
+col.trigger('add', ajeno('ST-TARDE-FUERA', 'otra cosa', { chat: GV, t: T + 60 + VENTANA + 60 }));
+const conVecinos = JSON.parse(correr());
+R.vecinos = stz(conVecinos);
+R.cuentas = { vistos: conVecinos.vistos, accionables: conVecinos.accionables,
+              vecinos: conVecinos.vecinos, descartados: conVecinos.descartados };
+
+const tardio = modelo('ST-TARDIO', '', { chat: g(5) });
+col.trigger('add', tardio);
+tardio.body = 'llegue tarde @' + LID;
+col.trigger('change:body', tardio);
+R.tardio = stz(JSON.parse(correr()));
+
+for (let i = 0; i < MAXPAG + 10; i++) {
+  col.trigger('add', modelo('ST-RING-' + i, 'n' + i + ' @' + LID, { chat: g(6), t: T + i }));
+}
+const anillo = (JSON.parse(correr()).drenado || []).map((f) => f[1]);
+R.anillo = [anillo.length, anillo[0] || null, anillo[anillo.length - 1] || null];
+
+col.trigger('add', modelo('ST-LARGO', 'x'.repeat(TOPE + 50) + ' @' + LID, { chat: g(7) }));
+const cortado = JSON.parse(correr()).drenado;
+R.largo = cortado.length ? cortado[0][2].length : -1;
+
+ls['WALid'] = 'null';
+col.trigger('add', modelo('ST-LOGOUT', 'hola @' + LID, { chat: g(8) }));
+col.trigger('add', directo('ST-LOGOUT-D', 'un directo cualquiera'));
+R.deslogueada = stz(JSON.parse(correr()));
+
+// Re-enlazar con OTRO numero no recrea el oyente: si la identidad quedo congelada en la
+// instalacion, sigue capturando lo que le nombran al numero anterior.
+const OTRO_LID = '300000000000003';
+ls['WALid'] = JSON.stringify(OTRO_LID + ':12@lid');
+col.trigger('add', modelo('ST-LID-VIEJO', 'hola @' + LID, { chat: g(9) }));
+col.trigger('add', modelo('ST-LID-NUEVO', 'hola @' + OTRO_LID,
+                          { chat: g(11), mentionedJidList: [wid(OTRO_LID + '@lid')] }));
+R.otraIdentidad = stz(JSON.parse(correr()));
+ls['WALid'] = JSON.stringify(LID + ':12@lid');
+
+let reviento = false;
+try { col.trigger('add', { get id() { throw new Error('boom'); } }); }
+catch (e) { reviento = true; }
+R.reviento = reviento;
+R.fallos = JSON.parse(correr()).fallos;
+
+const vieja = col;
+col = new Coleccion();
+R.relink = JSON.parse(correr()).estado;
+R.oyentesViejos = vieja.oyentes();
+R.oyentesNuevos = col.oyentes();
+col.trigger('add', modelo('ST-NUEVA', 'post relink @' + LID, { chat: g(2) }));
+R.trasRelink = stz(JSON.parse(correr()));
+
+hayModulo = false;
+R.sinColeccion = JSON.parse(correr());
+
+console.log(JSON.stringify(R));
+"""
+
+
+def revisa_captura_viva(fallos: list) -> int:
+    """El oyente que graba el mensaje cuando llega, corrido de verdad.
+
+    Lo que sostiene, y que ningun fixture puede ver porque ahi el oyente ya corrio:
+    que instalar cinco veces no capture cinco veces (la corrida pasa cada
+    `sync_minutes`, y `Msg` ya tiene 68 oyentes de `add` propios de WhatsApp colgados);
+    que un mensaje siga guardado despues de que otro lo tape, que es el caso entero — en
+    memoria el segundo borra al primero para siempre; que la conversacion ajena de un
+    grupo NO toque el disco; y que quedarse sin sesion, sin coleccion o con un modelo
+    que revienta no se lleve la pagina puesta.
+    """
+    hechas = 0
+    try:
+        wa = modulo_wa_read()
+    except Exception:                     # noqa: BLE001 - ya se reporto en el mapeo
+        return hechas
+    ventana = 5
+    with tempfile.TemporaryDirectory() as tmp:
+        js = pathlib.Path(tmp) / "captura.mjs"
+        js.write_text(CAPTURA_DRIVER % (json.dumps(wa.web_captura_js(ventana)),
+                                        wa.WEB_CAPTURA_PAGINA_MAX,
+                                        json.dumps(MI_LID), json.dumps(MI_TEL),
+                                        wa.WEB_CAPTURA_TEXTO_MAX, ventana * 60),
+                      encoding="utf-8")
+        p = subprocess.run(["node", str(js)], capture_output=True, text=True, timeout=120)
+        hechas += 1
+        if p.returncode != 0:
+            fallos.append(f"el oyente de la captura no corre en node: "
+                          f"{p.stderr.strip()[:300]}")
+            return hechas
+        R = json.loads(p.stdout)
+
+    # Se instala una vez y queda, con sus dos eventos: `add` y `change:body`.
+    hechas += 3
+    if R["primera"].get("estado") != "nuevo" or R["primera"].get("drenado"):
+        fallos.append(f"la primera instalacion dio {R['primera']!r}")
+    if R["oyentesTrasPrimera"] != 2:
+        fallos.append(f"el oyente no se engancho a add y change:body: "
+                      f"{R['oyentesTrasPrimera']} oyentes")
+    # Cinco corridas seguidas: un oyente por evento, y UN solo registro del mensaje.
+    if R["oyentesTrasCinco"] != 2:
+        fallos.append(f"cinco instalaciones dejaron {R['oyentesTrasCinco']} oyentes: se "
+                      "apilan, y cada mensaje se captura una vez por oyente")
+    hechas += 1
+    if R["duplicado"] != ["ST-DUP"]:
+        fallos.append(f"con cinco instalaciones el mensaje se capturo "
+                      f"{len(R['duplicado'])} veces: {R['duplicado']}")
+
+    # El caso entero: lo que llego sigue guardado despues de que otro mensaje lo tape.
+    hechas += 2
+    if R["sobrevive"] != ["ST-TAPA", "ST-VIVO"]:
+        fallos.append(f"un mensaje tapado por el siguiente se perdio: {R['sobrevive']}")
+    fila = R["filaVivo"] or [None] * 4
+    if fila[0] != "100000000000000002@g.us" or fila[2] != "mira esto @" + MI_LID:
+        fallos.append(f"la fila capturada no trae (chat, stanza, cuerpo): {fila!r}")
+
+    # Solo lo que la bandeja puede atender. Una conversacion de grupo que no te nombra ni
+    # te cita es texto de terceros: no puede quedar en claro en el disco de nadie.
+    hechas += 2
+    if R["filtrado"]:
+        fallos.append(f"se capturo lo que la bandeja no pide: {R['filtrado']}")
+    if R["tardio"] != ["ST-TARDIO"]:
+        fallos.append("un cuerpo que llega despues del modelo (change:body) no se capturo")
+
+    # La ventana de al lado, la que `cmd_inbox` ya define para los adjuntos: el
+    # "@fulano mira esto" casi nunca viene en el mismo mensaje que lo que hay que mirar.
+    hechas += 3
+    if R["vecinos"] != ["ST-ANCLA", "ST-ANTES", "ST-DESPUES"]:
+        fallos.append(f"la ventana de contexto capturo {R['vecinos']} y tenia que "
+                      "capturar la mencion con el mensaje de antes y el de despues")
+    # Los contadores son acumulados: lo que importa es lo que sumo ESTE escenario.
+    c = {k: R["cuentas"][k] - R["cuentasAntes"][k] for k in R["cuentasAntes"]}
+    if c["accionables"] != 1 or c["vecinos"] != 2:
+        fallos.append(f"las cuentas del oyente no separan accionable de contexto: {c!r}")
+    if not c["descartados"]:
+        fallos.append("el oyente no cuenta lo que descarta, que es el numero que dice "
+                      "cuanto texto ajeno NO se guardo")
+
+    # El anillo: lo viejo cede y lo nuevo queda. Al reves se pierde justo lo reciente.
+    hechas += 3
+    largo, primero, ultimo = R["anillo"]
+    if largo != wa.WEB_CAPTURA_PAGINA_MAX:
+        fallos.append(f"el anillo de la pagina guardo {largo} y el tope es "
+                      f"{wa.WEB_CAPTURA_PAGINA_MAX}")
+    if primero != "ST-RING-10":
+        fallos.append(f"el anillo desalojo al reves: el mas viejo que quedo es {primero!r}")
+    if ultimo != f"ST-RING-{wa.WEB_CAPTURA_PAGINA_MAX + 9}":
+        fallos.append(f"el anillo perdio el mas nuevo: quedo {ultimo!r}")
+
+    # Un anillo acotado en entradas y sin tope por entrada no esta acotado: un mensaje
+    # de WhatsApp llega hasta 65.536 caracteres.
+    hechas += 1
+    if R["largo"] != wa.WEB_CAPTURA_TEXTO_MAX:
+        fallos.append(f"el cuerpo capturado quedo en {R['largo']} caracteres y el tope "
+                      f"es {wa.WEB_CAPTURA_TEXTO_MAX}")
+
+    # La identidad se relee en CADA mensaje. Congelada en la instalacion, un re-enlace
+    # con otro numero deja al oyente guardando lo que le nombran a la linea anterior.
+    hechas += 1
+    if R["otraIdentidad"] != ["ST-LID-NUEVO"]:
+        fallos.append(f"tras re-enlazar con otro numero el oyente capturo "
+                      f"{R['otraIdentidad']}")
+
+    # Los finales que no pueden reventar la pagina del usuario.
+    hechas += 5
+    if R["deslogueada"]:
+        fallos.append(f"con la sesion deslogueada igual se capturo texto: "
+                      f"{R['deslogueada']}")
+    if R["reviento"]:
+        fallos.append("un modelo que tira rompio la coleccion de la pagina")
+    if not R["fallos"]:
+        fallos.append("un modelo que tira no se conto como fallo del oyente")
+    if R["relink"] != "reinstalado" or R["oyentesViejos"] != 0 or R["oyentesNuevos"] != 2:
+        fallos.append(f"al re-enlazar el oyente no se mudo de coleccion: "
+                      f"{R['relink']!r}, viejos={R['oyentesViejos']}, "
+                      f"nuevos={R['oyentesNuevos']}")
+    if R["trasRelink"] != ["ST-NUEVA"]:
+        fallos.append("despues de re-enlazar el oyente dejo de capturar")
+    hechas += 1
+    if R["sinColeccion"].get("ok") is not False \
+            or R["sinColeccion"].get("why") != "sin-coleccion":
+        fallos.append(f"sin coleccion el oyente no dijo por que: {R['sinColeccion']!r}")
+    return hechas
+
+
+def revisa_captura_almacen(fallos: list) -> int:
+    """El almacen en disco: que sirva, que pode y que no reviente cuando no se puede abrir.
+
+    El tope y la caducidad no son adorno: esto guarda el TEXTO de mensajes de otra
+    gente. Un almacen que no desaloja es un archivo de conversaciones ajenas que nadie
+    borra, y eso no se ve en ninguna salida — solo en el tamano del archivo, seis meses
+    despues.
+    """
+    hechas = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        viejo_home = os.environ.get("HOME")
+        os.environ["HOME"] = str(home)
+        try:
+            wa = modulo_wa_read()
+        except Exception as error:        # noqa: BLE001 - el motivo va en el reporte
+            fallos.append(f"wa-read: no se pudo importar — {error}")
+            return hechas
+        finally:
+            if viejo_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = viejo_home
+        cuenta = "web:100000000000001"
+        ahora = int(time.time())
+        G = "100000000000000000@g.us"
+        # Los dos topes se fuerzan por el override de ajuste, que es la unica manera de
+        # recorrer que SON ajustes: con los valores de fabrica (20000 filas, 90 dias)
+        # este chequeo tendria que escribir 20 mil filas y mentir sobre la caducidad.
+        os.environ["WA_READ_SETTING_CAPTURE_MAX"] = "50"
+        os.environ["WA_READ_SETTING_CAPTURE_DAYS"] = "3"
+        tope, dias = wa.captura_topes()
+        hechas += 1
+        if (tope, dias) != (50, 3):
+            fallos.append(f"capture_max/capture_days no son ajustes: quedo {(tope, dias)}")
+
+        # Una fila con motivo `not-loaded` es lo que la sonda devuelve cuando el mensaje
+        # ya no es el ultimo de su grupo. El orden es el de la sonda.
+        def candidato(stanza, motivo="not-loaded"):
+            return [stanza, G, ahora - 60, "200000000000002@lid", "Ana", 1, "", "chat",
+                    None, motivo]
+
+        hechas += 3
+        wa.captura_guardar(cuenta, [[G, "ST-VIVO", "mira esto", ahora]])
+        filas = [candidato("ST-VIVO"), candidato("ST-NUNCA")]
+        if wa.captura_servir(cuenta, filas) != 1:
+            fallos.append("el almacen no sirvio el cuerpo del mensaje que capturo")
+        if filas[0][8] != "mira esto" or filas[0][9] != wa.TEXTO_CAPTURADO:
+            fallos.append(f"la fila servida quedo {filas[0][8]!r}/{filas[0][9]!r}")
+        if filas[1][9] != "not-loaded":
+            fallos.append(f"un mensaje que nadie capturo dejo de decir not-loaded: "
+                          f"{filas[1][9]!r}")
+
+        # La cuenta es parte de la llave: dos lineas propias pueden tener el MISMO grupo,
+        # y servir el cuerpo de la otra linea es contestar desde la conversacion ajena.
+        hechas += 1
+        otras = [candidato("ST-VIVO")]
+        if wa.captura_servir("web:999", otras) != 0:
+            fallos.append("el almacen sirvio un cuerpo de otra cuenta")
+
+        # La caducidad. Se guarda algo viejo a mano y la poda de la corrida siguiente
+        # tiene que llevarselo.
+        hechas += 3
+        con = wa.captura_abrir()
+        con.execute("insert or replace into capturado values (?,?,?,?,?)",
+                    (cuenta, G, "ST-CADUCO", "texto viejo", ahora - (dias + 1) * 86400))
+        con.commit()
+        con.close()
+        _, caducados, _ = wa.captura_guardar(cuenta, [])
+        caducas = [candidato("ST-CADUCO")]
+        wa.captura_servir(cuenta, caducas)
+        if caducas[0][9] != "not-loaded":
+            fallos.append(f"un cuerpo mas viejo que capture_days={dias} sigue guardado")
+        if caducados != 1:
+            fallos.append(f"la poda por caducidad no dijo cuanto echo: {caducados}")
+
+        # El tope. Se escribe el tope + 10 y tienen que quedar los mas nuevos.
+        hechas += 4
+        _, _, desalojados = wa.captura_guardar(
+            cuenta, [[G, f"ST-TOPE-{i}", f"cuerpo {i}", ahora + i] for i in range(tope + 10)])
+        con = wa.captura_abrir()
+        cuantas = con.execute("select count(*) from capturado").fetchone()[0]
+        con.close()
+        if cuantas != tope:
+            fallos.append(f"el almacen quedo con {cuantas} filas y capture_max={tope}")
+        if not desalojados:
+            fallos.append("la poda por tope no dijo cuanto echo")
+        viejas = [candidato("ST-TOPE-0")]
+        wa.captura_servir(cuenta, viejas)
+        if viejas[0][9] != "not-loaded":
+            fallos.append("pasado el tope, la fila mas vieja seguia guardada")
+        nuevas = [candidato(f"ST-TOPE-{tope + 9}")]
+        wa.captura_servir(cuenta, nuevas)
+        if nuevas[0][9] != wa.TEXTO_CAPTURADO:
+            fallos.append("pasado el tope se desalojo lo nuevo en vez de lo viejo")
+
+        # La linea: cuando se enlazo. Se anota una sola vez y no se mueve, porque si se
+        # moviera la ventana de la bandeja empezaria de nuevo en cada corrida y no
+        # volveria a salir jamas una mencion de hace diez minutos.
+        hechas += 3
+        primera = wa.captura_linea(cuenta)
+        if not primera or abs(primera - ahora) > 120:
+            fallos.append(f"la primera corrida no anoto cuando se enlazo la linea: "
+                          f"{primera!r}")
+        if wa.captura_linea(cuenta) != primera:
+            fallos.append("la fecha de enlace se movio en la segunda corrida")
+        # Y una fecha YA anotada se devuelve tal cual. Comparar dos llamadas seguidas no
+        # alcanza: las dos caen en el mismo segundo y una que reescribe pasa igual.
+        con = wa.captura_abrir()
+        con.execute("insert or replace into linea values (?, ?)", ("web:otra", 1000000))
+        con.commit()
+        con.close()
+        if wa.captura_linea("web:otra") != 1000000:
+            fallos.append(f"la fecha de enlace ya anotada se reescribio: "
+                          f"{wa.captura_linea('web:otra')}")
+
+        # El cuerpo se corta: un almacen acotado en filas y sin tope por fila no esta
+        # acotado. Un mensaje de WhatsApp llega hasta 65.536 caracteres.
+        hechas += 1
+        wa.captura_guardar(cuenta, [[G, "ST-LARGO", "x" * 99999, ahora + 99999]])
+        largo = [candidato("ST-LARGO")]
+        wa.captura_servir(cuenta, largo)
+        if len(largo[0][8] or "") != wa.WEB_CAPTURA_TEXTO_MAX:
+            fallos.append(f"el cuerpo guardado quedo en {len(largo[0][8] or '')} "
+                          f"caracteres y el tope es {wa.WEB_CAPTURA_TEXTO_MAX}")
+
+        # Y los permisos: en un equipo compartido el umask deja esto legible para todos.
+        hechas += 1
+        modo = oct(os.stat(wa.captura_db()).st_mode & 0o777)
+        if modo != "0o600":
+            fallos.append(f"el almacen de cuerpos quedo en {modo} y no en 0o600")
+
+        # Apagar el texto vacia los cuerpos. Es la otra mitad del trato. La fecha de
+        # enlace sobrevive: no es contenido de nadie, y perderla haria que la bandeja
+        # volviera a arrastrar cientos de menciones viejas sin texto posible.
+        hechas += 3
+        wa.captura_vaciar()
+        quedan = [candidato(f"ST-TOPE-{tope + 9}")]
+        wa.captura_servir(cuenta, quedan)
+        if quedan[0][9] != "not-loaded":
+            fallos.append("apagar el texto no vacio los cuerpos guardados")
+        if wa.captura_linea(cuenta) != primera:
+            fallos.append("vaciar los cuerpos se llevo tambien la fecha de enlace")
+        wa.captura_vaciar()               # y vaciarlo dos veces no revienta
+
+        # Un almacen que no se puede abrir degrada a `not-loaded`, que es un estado que
+        # ya existia, y nunca a una excepcion.
+        hechas += 3
+        # Se borra primero a mano: si captura_borrar() estuviera rota, el makedirs
+        # reventaria y la excepcion se comeria el fallo que este chequeo ya detecto.
+        try:
+            os.remove(wa.captura_db())
+        except OSError:
+            pass
+        os.makedirs(wa.captura_db(), exist_ok=True)   # un directorio donde va el archivo
+        if wa.captura_abrir() is not None:
+            fallos.append("captura_abrir() devolvio algo con el almacen ilegible")
+        if wa.captura_guardar(cuenta, [[G, "ST-X", "y", ahora]]) != (0, 0, 0):
+            fallos.append("captura_guardar() dijo que guardo con el almacen ilegible")
+        if wa.captura_linea(cuenta) != 0:
+            fallos.append("captura_linea() invento una fecha con el almacen ilegible")
+        rotas = [candidato("ST-X")]
+        wa.captura_servir(cuenta, rotas)
+        if rotas[0][9] != "not-loaded":
+            fallos.append(f"con el almacen ilegible la fila no quedo en not-loaded: "
+                          f"{rotas[0][9]!r}")
+        os.environ.pop("WA_READ_SETTING_CAPTURE_MAX", None)
+        os.environ.pop("WA_READ_SETTING_CAPTURE_DAYS", None)
+    return hechas
+
+
+REGLA_DRIVER = """
+// Se construye con identidades() y no a mano: si la identidad propia se arma mal, esto
+// tiene que ponerse rojo. Al telefono se le pasa la forma cruda de localStorage.
+const yo = identidades(%s[0], %s[1]);
+const casos = %s;
+const salida = casos.map(([nombre, m]) => [nombre, candidato(m, yo, 1000)]);
+// El corte por enlace, con la fila ya armada. `fila[2]` es la fecha del mensaje.
+const ENLACE = 5000, DIAS = 1000;
+const corte = {
+  'anterior al enlace': tapadoPorEnlace(['s', 'c', 4999], ENLACE, DIAS),
+  'justo en el enlace': tapadoPorEnlace(['s', 'c', ENLACE], ENLACE, DIAS),
+  'posterior al enlace': tapadoPorEnlace(['s', 'c', 5001], ENLACE, DIAS),
+  'con --days los dos cortes son el mismo': tapadoPorEnlace(['s', 'c', 1001], DIAS, DIAS),
+};
+console.log(JSON.stringify({ casos: salida, corte: corte }));
+"""
+
+
+SELECCION_DRIVER = """
+const yo = identidades(%s[0], %s[1]);
+const G = '100000000000000000@g.us';
+const OTRO = '200000000000002@lid';
+const T = 1700000000;
+const wid = (jid) => ({ user: jid.split('@')[0], server: jid.split('@')[1], _serialized: jid });
+// Los registros del store `message`: aca `id` ES una cadena, a diferencia del modelo en
+// memoria. La memoria se simula con un Map indexado por esa misma cadena.
+const reg = (stanza, t, extra) => Object.assign({
+  id: 'false_' + G + '_' + stanza + '_' + OTRO, t: t, type: 'chat', author: wid(OTRO),
+  mentionedJidList: [wid(%s + '@lid')] }, extra || {});
+const mensajes = [
+  reg('ST-VIEJA', T - 86400),                                    // antes del enlace
+  reg('ST-NUEVA', T + 60),                                       // despues del enlace
+  reg('ST-AJENA', T + 70, { mentionedJidList: [wid('999@lid')] }),  // vecino, en ventana
+  reg('ST-LEJOS', T + 6000, { mentionedJidList: [wid('999@lid')] }), // vecino, fuera
+  { id: 'true_' + G + '_ST-MIA', t: T + 80, type: 'chat' },       // mi ultimo mensaje
+];
+const memoria = new Map([['false_' + G + '_ST-AJENA_' + OTRO, { body: 'la captura' }]]);
+const mem = { get: (k) => memoria.get(k) };
+const base = { visible: new Map(), memoria: mem, ventana: 300, max: 10, vecinosMax: 10 };
+const R = {};
+// Con el corte del enlace: lo anterior no entra y se cuenta.
+R.conEnlace = seleccionar(mensajes, yo, Object.assign({}, base,
+  { corte: T, corteDias: T - 7 * 86400 }));
+// Con --days los dos cortes son el mismo y lo viejo vuelve a entrar.
+R.conDias = seleccionar(mensajes, yo, Object.assign({}, base,
+  { corte: T - 7 * 86400, corteDias: T - 7 * 86400 }));
+// Sin ventana no hay vecinos, igual que `--window 0` apaga los adjuntos de al lado.
+R.sinVentana = seleccionar(mensajes, yo, Object.assign({}, base,
+  { corte: T, corteDias: T - 7 * 86400, ventana: 0 }));
+// Y con el tope en uno, lo que no entra se cuenta en vez de desaparecer.
+R.conTope = seleccionar(mensajes, yo, Object.assign({}, base,
+  { corte: T - 7 * 86400, corteDias: T - 7 * 86400, max: 1 }));
+const chico = (s) => ({
+  stanzas: (s.mensajes || []).map((f) => f[0]),
+  vecinos: (s.vecinos || []).map((v) => [v[1], v[4]]),
+  mias: s.mias, sobran: s.sobran, antesDelEnlace: s.antesDelEnlace, motivos: s.motivos,
+});
+console.log(JSON.stringify({ conEnlace: chico(R.conEnlace), conDias: chico(R.conDias),
+                             sinVentana: chico(R.sinVentana), conTope: chico(R.conTope) }));
+"""
+
+
+def revisa_seleccion_web(fallos: list) -> int:
+    """La seleccion entera de la bandeja web, corrida de verdad sobre registros crudos.
+
+    Existe porque la sonda no se puede recorrer — necesita IndexedDB y la pagina — y sin
+    esto lo unico comprobado seria que las funciones sueltas hacen lo suyo, no que la
+    sonda las llame. Lo que sostiene: que la ventana arranque en el enlace y que un
+    `--days` explicito la abra otra vez (sin eso, el primer dia son cientos de menciones
+    que no pueden tener cuerpo, o al reves: una mencion de hace un rato que no vuelve a
+    salir nunca), y que el contexto de al lado tenga limite.
+    """
+    hechas = 0
+    try:
+        wa = modulo_wa_read()
+    except Exception:                     # noqa: BLE001 - ya se reporto en el mapeo
+        return hechas
+    with tempfile.TemporaryDirectory() as tmp:
+        js = pathlib.Path(tmp) / "seleccion.mjs"
+        yo = json.dumps([f"{MI_LID}:12@lid", f"{MI_TEL}:3@c.us"])
+        js.write_text(wa.WEB_REGLA_JS + SELECCION_DRIVER % (yo, yo, json.dumps(MI_LID)),
+                      encoding="utf-8")
+        p = subprocess.run(["node", str(js)], capture_output=True, text=True, timeout=120)
+        hechas += 1
+        if p.returncode != 0:
+            fallos.append(f"la seleccion de la bandeja web no corre en node: "
+                          f"{p.stderr.strip()[:300]}")
+            return hechas
+        R = json.loads(p.stdout)
+
+    hechas += 3
+    if R["conEnlace"]["stanzas"] != ["ST-NUEVA"]:
+        fallos.append(f"con la ventana desde el enlace entraron "
+                      f"{R['conEnlace']['stanzas']}")
+    if R["conEnlace"]["antesDelEnlace"] != 1:
+        fallos.append(f"lo que tapo el corte del enlace no se conto: "
+                      f"{R['conEnlace']['antesDelEnlace']}")
+    if sorted(R["conDias"]["stanzas"]) != ["ST-NUEVA", "ST-VIEJA"]:
+        fallos.append(f"un --days explicito no reabrio la ventana: "
+                      f"{R['conDias']['stanzas']}")
+
+    # El contexto de al lado: el vecino dentro de la ventana con su cuerpo, el de dos
+    # horas despues no. Sin limite, la bandeja adjunta la conversacion entera del grupo.
+    hechas += 3
+    if R["conEnlace"]["vecinos"] != [["ST-AJENA", "la captura"]]:
+        fallos.append(f"el contexto de al lado salio {R['conEnlace']['vecinos']}")
+    if R["sinVentana"]["vecinos"]:
+        fallos.append(f"con la ventana en cero igual hubo contexto: "
+                      f"{R['sinVentana']['vecinos']}")
+    # Mi ultimo mensaje viaja para el chat que quedo: sin el, la regla "si ya
+    # contestaste, la mencion esta atendida" no se aplica nunca por esta via.
+    if R["conEnlace"]["mias"] != [[wa_grupo_jid(), 1700000080]]:
+        fallos.append(f"mi ultimo mensaje del chat no viajo: {R['conEnlace']['mias']}")
+
+    # El tope y el motivo del cuerpo, que es lo que separa "no se leyo" de "no hay".
+    hechas += 2
+    if R["conTope"]["sobran"] != 1:
+        fallos.append(f"lo que no entro en el tope no se conto: {R['conTope']['sobran']}")
+    if R["conEnlace"]["motivos"].get("not-loaded") != 1:
+        fallos.append(f"el motivo del cuerpo no se conto: {R['conEnlace']['motivos']}")
+    return hechas
+
+
+def wa_grupo_jid():
+    return "100000000000000000@g.us"
+
+
+def revisa_regla_web(fallos: list) -> int:
+    """La regla que arma el conjunto de candidatos, corrida de verdad contra mensajes crudos.
+
+    Lo que sostiene: mentionedJidList trae OBJETOS y no cadenas, asi que una comparacion
+    directa contra el LID no encuentra nunca nada — y eso se ve igual que "nadie te
+    nombro esta semana". Lo mismo con el telefono en quotedParticipant. Ninguna de las
+    dos se ve desde el payload que arma el resto del chequeo, porque ahi la regla ya
+    corrio.
+    """
+    hechas = 0
+    try:
+        wa = modulo_wa_read()
+    except Exception as error:            # noqa: BLE001 - el motivo va en el reporte
+        fallos.append(f"wa-read: no se pudo importar — {error}")
+        return hechas
+    with tempfile.TemporaryDirectory() as tmp:
+        js = pathlib.Path(tmp) / "regla.mjs"
+        yo = json.dumps([f"{MI_LID}:12@lid", f"{MI_TEL}:3@c.us"])
+        js.write_text(wa.WEB_REGLA_JS + REGLA_DRIVER
+                      % (yo, yo, json.dumps([[n, m] for n, m, _ in CRUDOS])),
+                      encoding="utf-8")
+        p = subprocess.run(["node", str(js)], capture_output=True, text=True, timeout=120)
+        hechas += 1
+        if p.returncode != 0:
+            fallos.append(f"la regla de la bandeja web no corre en node: "
+                          f"{p.stderr.strip()[:200]}")
+            return hechas
+        crudo = json.loads(p.stdout)
+        salida = dict(crudo["casos"])
+    # La ventana arranca en el enlace, no N dias atras: antes del enlace no habia oyente,
+    # asi que esas menciones no pueden traer cuerpo y solo tapan lo que si se atiende.
+    # Un `--days` explicito iguala los dos cortes y esto deja de descartar.
+    hechas += 4
+    espera_corte = {"anterior al enlace": True, "justo en el enlace": True,
+                    "posterior al enlace": False,
+                    "con --days los dos cortes son el mismo": False}
+    for nombre, quiere in espera_corte.items():
+        if crudo["corte"].get(nombre) is not quiere:
+            fallos.append(f"el corte por enlace, {nombre}: dio "
+                          f"{crudo['corte'].get(nombre)!r} y tenia que dar {quiere!r}")
+    for nombre, mensaje, espera in CRUDOS:
+        hechas += 1
+        fila = salida.get(nombre)
+        if espera is None:
+            if fila is not None:
+                fallos.append(f"la regla dejo pasar {nombre!r}, que no es candidato")
+            continue
+        if fila is None:
+            fallos.append(f"la regla descarto {nombre!r}, que si es candidato")
+            continue
+        # fila = [stanza, chat, t, autor, nombre, menciona, stanzaCitado, tipo, cuerpo]
+        stanza, chat, _, autor, _, menciona, citado, _, _ = fila
+        if stanza != mensaje["id"].split("_")[2]:
+            fallos.append(f"{nombre!r}: el stanza_id salio {stanza!r} y no del id crudo")
+        if chat != mensaje["id"].split("_")[1]:
+            fallos.append(f"{nombre!r}: el chat salio {chat!r} y no del id crudo")
+        if espera == "mencion" and not menciona:
+            fallos.append(f"{nombre!r}: la regla no lo marco como mencion — "
+                          "mentionedJidList trae objetos wid, no cadenas")
+        if espera == "cita" and not citado:
+            fallos.append(f"{nombre!r}: la regla no guardo el stanza del mensaje citado")
+        if espera == "cita" and menciona:
+            fallos.append(f"{nombre!r}: una cita salio marcada como mencion")
+        if espera == "directo" and (menciona or citado):
+            fallos.append(f"{nombre!r}: un directo salio con marcas de grupo")
+        if chat.endswith("@g.us") and not autor:
+            fallos.append(f"{nombre!r}: un mensaje de grupo salio sin autor")
+    return hechas
+
+
+def revisa_web_inbox(fallos: list) -> int:
+    """La bandeja por la via web, recorrida entera contra el SQL que corre de verdad.
+
+    Lo que esto sostiene no se ve en el JSON: una mencion leida como respuesta manda al
+    agente a contestar la conversacion equivocada, una mencion ya contestada que vuelve
+    abre un ticket por segunda vez, y un stanza_id que cambia entre corridas abre uno
+    nuevo para siempre. Las tres pasan cualquier revision de forma.
+    """
+    hechas = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        falso = home / "orca-falso"
+        falso.write_text(FALSO_ORCA, encoding="utf-8")
+        falso.chmod(0o755)
+        rastro = home / "rastro.txt"
+        registra_linea_web(home, "linea-uno")
+        ahora = int(time.time())
+        base = dict(entorno(home), WA_READ_SETTING_READ_LOCAL="off",
+                    WA_READ_SETTING_READ_WEB="on", WA_FALSO_ORCA="ok",
+                    WA_FALSO_PAYLOAD=json.dumps(WEB_PAYLOAD),
+                    WA_FALSO_PAYLOAD_INBOX=json.dumps(payload_inbox(ahora)),
+                    WA_FALSO_RASTRO=str(rastro),
+                    ORCA_CLI_COMMAND=str(falso))
+
+        def bandeja(*extra, env=None):
+            p = subprocess.run([str(BIN / "wa-read"), "inbox", "--days", "1",
+                                "--limit", "0", *extra, "--json"],
+                               capture_output=True, text=True, env=env or base,
+                               timeout=180)
+            return p, json.loads(p.stdout or "[]")
+
+        p, filas = bandeja()
+        hechas += 1
+        if p.returncode != 0:
+            fallos.append(f"la bandeja web salio {p.returncode}: "
+                          f"{(p.stderr or '').strip()[:160]}")
+
+        # Los tres kind, cada uno por su regla. Si el `@<lid>` no llega al ZTEXT la
+        # mencion sale como `respuesta` y el JSON sigue pareciendo correcto.
+        hechas += 1
+        clase = {f["stanza_id"]: f["kind"] for f in filas}
+        esperado = {"ST-MENCION": "mencion", "ST-RESPUESTA": "respuesta",
+                    "ST-DIRECTO": "directo"}
+        if clase != esperado:
+            fallos.append(f"la bandeja web clasifico {clase} y tenia que dar {esperado}")
+
+        # Si ya contestaste, la mencion esta atendida. Se rompe si falta la fila de "mi
+        # ultimo mensaje": ULTIMA_MIA queda vacia, el coalesce da 0 y vuelve para siempre.
+        hechas += 1
+        if "ST-ATENDIDA" in clase:
+            fallos.append("una mencion anterior a mi ultima respuesta volvio a la bandeja")
+
+        # Conversacion ajena en un grupo: ni te nombra ni te cita. Se rompe si el padre
+        # se sintetiza para cualquier mensaje en vez de solo para los que te citan.
+        hechas += 1
+        if "ST-AJENA" in clase:
+            fallos.append("un mensaje de grupo que no te nombra ni te cita entro a la bandeja")
+
+        # El stanza_id es la clave de idempotencia: una automation lo escribe en el issue
+        # de Plane para saber que ya atendio ese mensaje. Si sale del rowid del temporal
+        # cambia en cada corrida y abre un ticket nuevo cada vez, para siempre.
+        hechas += 2
+        _, otra = bandeja()
+        if [f["stanza_id"] for f in filas] != [f["stanza_id"] for f in otra]:
+            fallos.append("el stanza_id de la bandeja web cambio entre dos corridas")
+        if len({f["stanza_id"] for f in filas}) != len(filas):
+            fallos.append("la bandeja web repitio un stanza_id")
+
+        hechas += 2
+        _, solo_grupos = bandeja("--only", "grupos")
+        if sorted(f["stanza_id"] for f in solo_grupos) != ["ST-MENCION", "ST-RESPUESTA"]:
+            fallos.append(f"--only grupos dio {[f['stanza_id'] for f in solo_grupos]}")
+        _, solo_directos = bandeja("--only", "directos")
+        if [f["stanza_id"] for f in solo_directos] != ["ST-DIRECTO"]:
+            fallos.append(f"--only directos dio {[f['stanza_id'] for f in solo_directos]}")
+
+        # Sin el texto: marcador, NUNCA vacio. Un "" ahi se lee como "el mensaje estaba
+        # en blanco" y el agente contesta sobre nada.
+        hechas += 2
+        vacios = [f["stanza_id"] for f in filas if not f["text"].strip()]
+        if vacios:
+            fallos.append(f"con el texto apagado, estas filas salieron en blanco: {vacios}")
+        sin_marcador = [f["stanza_id"] for f in filas
+                        if "[web:no-text reason=off" not in f["text"]]
+        if sin_marcador:
+            fallos.append(f"con el texto apagado, estas filas no traen el marcador con "
+                          f"reason=off: {sin_marcador}")
+
+        # Y el adjunto se dice aunque no haya ruta: por la via web no la hay, y callarlo
+        # dejaria una nota de voz indistinguible de un mensaje vacio.
+        hechas += 1
+        directo = next(f for f in filas if f["stanza_id"] == "ST-DIRECTO")
+        if "media=ptt" not in directo["text"]:
+            fallos.append(f"un audio por la via web no dijo que lo era: {directo['text']!r}")
+
+        # Rutas inventadas: ninguna. `wa-transcribe` abriria una y fallaria lejos de aca.
+        hechas += 1
+        inventadas = [f["stanza_id"] for f in filas
+                      if f["media"] or f["adjuntos_cerca"] or f["audios"]]
+        if inventadas:
+            fallos.append(f"la via web devolvio rutas de adjuntos: {inventadas}")
+
+        # Ninguna conversacion abierta. Es el punto entero de la etapa 1: abrir un chat
+        # en WhatsApp Web lo marca leido tambien en el telefono del usuario.
+        hechas += 2
+        llamadas = [json.loads(l) for l in rastro.read_text(encoding="utf-8").splitlines()
+                    if l.strip()]
+        comandos = {" ".join(c[:2]) for c in llamadas}
+        if comandos - {"tab list", "eval --page"}:
+            fallos.append(f"la bandeja web le pidio a Orca algo mas que tab list / eval: "
+                          f"{sorted(comandos)}")
+        sospechosas = [" ".join(c[:2]) for c in llamadas
+                       if any(x in " ".join(c) for x in (".click(", "sendSeen",
+                                                         "dispatchEvent", "location.",
+                                                         ".trigger(", "loadRecentMsgs"))]
+        if sospechosas:
+            fallos.append(f"la bandeja web toco la pestana del usuario: {sospechosas}")
+
+        # El texto es opt-in: con el ajuste apagado la sonda va con conTexto en false.
+        hechas += 1
+        arranques = [" ".join(c) for c in llamadas if "const conTexto" in " ".join(c)]
+        if not arranques or not all("const conTexto = false" in l for l in arranques):
+            fallos.append("con read_web_text apagado la sonda igual pidio el texto")
+
+        # Y encendido, cuando la sesion ya no expone el cuerpo, se falla con SU motivo
+        # en vez de devolver todo con el marcador: quien lo encendio lo encendio para leer.
+        hechas += 3
+        p = subprocess.run([str(BIN / "wa-read"), "inbox", "--days", "1", "--json"],
+                           capture_output=True, text=True, timeout=180,
+                           env=dict(base, WA_FALSO_ORCA="sin-texto",
+                                    WA_READ_SETTING_READ_WEB_TEXT="memoria"))
+        if p.returncode != 4:
+            fallos.append(f"sin cuerpo en la sesion, la bandeja salio {p.returncode} y no 4")
+        primera = (p.stderr or "").strip().splitlines()[:1]
+        if primera != ["wa-read: web-text-unavailable"]:
+            fallos.append(f"sin cuerpo en la sesion, stderr dijo {primera!r}")
+        if p.stdout.strip():
+            fallos.append("sin cuerpo en la sesion, la bandeja escribio en stdout")
+
+        # Con el texto encendido, las TRES maneras de quedarse sin cuerpo tienen que
+        # salir distintas. Que se vean iguales es como se leyo una vez "no devuelve
+        # ningun cuerpo" y se busco el fallo en el accessor, cuando lo que pasaba es que
+        # la sesion no tenia esos mensajes cargados.
+        hechas += 5
+        p, filas_texto = bandeja(
+            env=dict(base, WA_READ_SETTING_READ_WEB_TEXT="memoria",
+                     WA_FALSO_PAYLOAD_INBOX=json.dumps(payload_con_texto(ahora))))
+        texto = {f["stanza_id"]: f["text"] for f in filas_texto}
+        if texto.get("ST-MENCION") != "hola @" + WEB_LID + " mira esto":
+            fallos.append(f"con el texto encendido el cuerpo no llego: "
+                          f"{texto.get('ST-MENCION')!r}")
+        if "reason=not-loaded" not in (texto.get("ST-RESPUESTA") or ""):
+            fallos.append(f"un mensaje que la sesion no tiene cargado no dice por que: "
+                          f"{texto.get('ST-RESPUESTA')!r}")
+        if "reason=no-body" not in (texto.get("ST-DIRECTO") or ""):
+            fallos.append(f"un mensaje sin texto que leer no se distingue de uno que no "
+                          f"se cargo: {texto.get('ST-DIRECTO')!r}")
+        # Y el tipo del adjunto sigue viajando al lado del motivo.
+        if "media=ptt" not in (texto.get("ST-DIRECTO") or ""):
+            fallos.append(f"el motivo se comio el tipo del adjunto: "
+                          f"{texto.get('ST-DIRECTO')!r}")
+        mencion = next((f for f in filas_texto if f["stanza_id"] == "ST-MENCION"), None)
+        if mencion and mencion["kind"] != "mencion":
+            fallos.append(f"con el cuerpo de verdad la mencion salio como "
+                          f"{mencion['kind']!r}")
+
+        # Y la corrida lo dice de una linea: con casi todo en `not-loaded`, deducirlo
+        # fila por fila es exactamente lo que no paso la vez que se leyo como rotura.
+        hechas += 1
+        if "read_web_text=memoria" not in (p.stderr or "") \
+                or "not in the session's memory" not in (p.stderr or ""):
+            fallos.append(f"la corrida no avisa cuanto alcanzo el texto: "
+                          f"{(p.stderr or '').strip()[:160]!r}")
+
+        # LA CAPTURA VIVA, de punta a punta. El mensaje llego mientras el oyente estaba
+        # puesto; para cuando la bandeja lo mira ya no es el ultimo de su grupo y la
+        # coleccion devuelve `not-loaded`. Sin el almacen ese cuerpo esta perdido para
+        # siempre: el segundo mensaje del grupo borro el texto del primero.
+        almacen = home / ".wa-inbox" / "capture.db"
+        drenado = json.dumps({"ok": True, "estado": "nuevo", "vistos": 1, "fallos": 0,
+                              "drenado": [[WEB_GRUPO, "ST-RESPUESTA", "te contesto aca",
+                                           ahora]]})
+        con_texto = dict(base, WA_READ_SETTING_READ_WEB_TEXT="memoria",
+                         WA_FALSO_PAYLOAD_INBOX=json.dumps(payload_con_texto(ahora)))
+        hechas += 4
+        p, filas_cap = bandeja(env=dict(con_texto, WA_FALSO_CAPTURA=drenado))
+        texto = {f["stanza_id"]: f["text"] for f in filas_cap}
+        if texto.get("ST-RESPUESTA") != "te contesto aca":
+            fallos.append(f"el cuerpo capturado al llegar no llego a la bandeja: "
+                          f"{texto.get('ST-RESPUESTA')!r}")
+        # La division es el punto del resumen: si lo que sale del almacen se queda en
+        # cero corrida tras corrida, el oyente no esta funcionando aunque haya filas.
+        if "1 from the live capture store" not in (p.stderr or ""):
+            fallos.append(f"la corrida no separo el cuerpo capturado del que estaba en "
+                          f"memoria: {(p.stderr or '').strip()[:200]!r}")
+        if not almacen.exists():
+            fallos.append("la captura no dejo el almacen en ~/.wa-inbox/capture.db")
+        elif oct(almacen.stat().st_mode & 0o777) != "0o600":
+            fallos.append(f"el almacen de cuerpos quedo en "
+                          f"{oct(almacen.stat().st_mode & 0o777)} y no en 0o600")
+
+        # Y en la corrida SIGUIENTE, sin nada que drenar, el cuerpo sigue ahi. Es la
+        # razon entera por la que esto no vive en un global de la pagina.
+        hechas += 1
+        _, despues = bandeja(env=con_texto)
+        if {f["stanza_id"]: f["text"] for f in despues}.get("ST-RESPUESTA") \
+                != "te contesto aca":
+            fallos.append("el cuerpo capturado no sobrevivio a la corrida siguiente")
+
+        # Si el oyente no se puede instalar, la bandeja sale igual con el techo de
+        # antes: se avisa y no se aborta.
+        hechas += 3
+        p, sin_oyente = bandeja(env=dict(con_texto, WA_FALSO_CAPTURA=json.dumps(
+            {"ok": False, "why": "sin-coleccion"})))
+        if p.returncode != 0:
+            fallos.append(f"sin oyente la bandeja aborto con {p.returncode}")
+        if "could not install the live capture listener" not in (p.stderr or ""):
+            fallos.append(f"sin oyente la corrida no lo dijo: "
+                          f"{(p.stderr or '').strip()[:200]!r}")
+        if len(sin_oyente) != len(filas_cap):
+            fallos.append("sin oyente la bandeja se llevo filas puestas")
+
+        # Con el texto apagado no se instala nada y lo guardado se borra: el almacen
+        # existe mientras la funcion que lo llena esta encendida.
+        hechas += 3
+        rastro_off = home / "rastro-off.txt"
+        bandeja(env=dict(base, WA_FALSO_RASTRO=str(rastro_off)))
+        pedidos = rastro_off.read_text(encoding="utf-8")
+        if "__waInboxCaptura" in pedidos:
+            fallos.append("con el texto apagado igual se instalo el oyente de la captura")
+        con = sqlite3.connect(str(almacen))
+        cuerpos = con.execute("select count(*) from capturado").fetchone()[0]
+        con.close()
+        if cuerpos:
+            fallos.append(f"con el texto apagado quedaron {cuerpos} cuerpos guardados")
+
+        # Lo que el almacen desaloja se DICE, y con el ajuste que lo gobierna al lado:
+        # enterarse de que estaba desbordando despues de perder un caso es tarde.
+        hechas += 2
+        tres = json.dumps({"ok": True, "estado": "nuevo", "vistos": 3, "fallos": 0,
+                           "drenado": [[WEB_GRUPO, f"ST-LLENA-{i}", f"cuerpo {i}",
+                                        ahora - i] for i in range(3)]})
+        p = subprocess.run([str(BIN / "wa-read"), "inbox", "--days", "1", "--json"],
+                           capture_output=True, text=True, timeout=180,
+                           env=dict(con_texto, WA_FALSO_CAPTURA=tres,
+                                    WA_READ_SETTING_CAPTURE_MAX="1"))
+        if "past `capture_max`=1" not in (p.stderr or ""):
+            fallos.append(f"el almacen desalojo sin decirlo: "
+                          f"{(p.stderr or '').strip()[:240]!r}")
+        # La caducidad se cuenta desde que se CAPTURO, asi que la prueba necesita algo
+        # capturado hace de verdad mas de un dia, no un mensaje viejo.
+        viejas = json.dumps({"ok": True, "estado": "ya", "vistos": 2, "fallos": 0,
+                             "drenado": [[WEB_GRUPO, f"ST-RANCIA-{i}", f"cuerpo {i}",
+                                          ahora - 200000] for i in range(2)]})
+        p = subprocess.run([str(BIN / "wa-read"), "inbox", "--days", "1", "--json"],
+                           capture_output=True, text=True, timeout=180,
+                           env=dict(con_texto, WA_FALSO_CAPTURA=viejas,
+                                    WA_READ_SETTING_CAPTURE_DAYS="1"))
+        if "past `capture_days`=1" not in (p.stderr or ""):
+            fallos.append(f"la caducidad del almacen no se dijo: "
+                          f"{(p.stderr or '').strip()[:240]!r}")
+
+        # LA VENTANA ARRANCA EN EL ENLACE. Sin --days los dos cortes que viajan a la
+        # sonda son distintos y el de arriba es el instante del enlace; con --days son
+        # el mismo, porque mirar para atras a mano tiene que seguir siendo posible.
+        hechas += 4
+        rastro_corte = home / "rastro-corte.txt"
+        subprocess.run([str(BIN / "wa-read"), "inbox", "--json"], capture_output=True,
+                       text=True, timeout=180,
+                       env=dict(base, WA_FALSO_RASTRO=str(rastro_corte)))
+        sondas = [" ".join(json.loads(l)) for l in
+                  rastro_corte.read_text(encoding="utf-8").splitlines() if l.strip()]
+        sonda = next((x for x in sondas if "const corteDias" in x), "")
+        cortes = re.findall(r"const corte = (\d+);", sonda)
+        dias = re.findall(r"const corteDias = (\d+);", sonda)
+        if not cortes or not dias:
+            fallos.append("la sonda no llevo los dos cortes")
+        elif not int(cortes[0]) > int(dias[0]):
+            fallos.append(f"sin --days la ventana no arranco en el enlace: corte="
+                          f"{cortes[0]} corteDias={dias[0]}")
+        elif abs(int(cortes[0]) - ahora) > 300:
+            fallos.append(f"el corte del enlace no es el instante del enlace: {cortes[0]}")
+        rastro_dias = home / "rastro-dias.txt"
+        subprocess.run([str(BIN / "wa-read"), "inbox", "--days", "1", "--json"],
+                       capture_output=True, text=True, timeout=180,
+                       env=dict(base, WA_FALSO_RASTRO=str(rastro_dias)))
+        sondas = [" ".join(json.loads(l)) for l in
+                  rastro_dias.read_text(encoding="utf-8").splitlines() if l.strip()]
+        sonda = next((x for x in sondas if "const corteDias" in x), "")
+        cortes = re.findall(r"const corte = (\d+);", sonda)
+        dias = re.findall(r"const corteDias = (\d+);", sonda)
+        if not cortes or cortes[0] != dias[0]:
+            fallos.append(f"un --days explicito no le gano al corte del enlace: "
+                          f"{cortes} vs {dias}")
+
+        # Y la fecha de enlace sobrevive a apagar el texto: sin ella la bandeja del dia
+        # siguiente volveria a arrastrar todas las menciones anteriores al enlace.
+        hechas += 2
+        con = sqlite3.connect(str(almacen))
+        enlaces = con.execute("select count(*) from linea").fetchone()[0]
+        con.close()
+        if enlaces != 1:
+            fallos.append(f"la corrida no anoto cuando se enlazo la linea: {enlaces}")
+        bandeja(env=base)                 # texto apagado: vacia los cuerpos
+        con = sqlite3.connect(str(almacen))
+        quedan = con.execute("select count(*) from linea").fetchone()[0]
+        con.close()
+        if quedan != enlaces:
+            fallos.append("vaciar los cuerpos se llevo tambien la fecha de enlace")
+
+        # Y cuando el corte tapa candidatos, la corrida lo dice: una bandeja vacia el
+        # primer dia se lee como la funcion rota, y ya se leyo asi una vez.
+        hechas += 1
+        tapados = payload_inbox(ahora)
+        tapados["antesDelEnlace"] = 198
+        p = subprocess.run([str(BIN / "wa-read"), "inbox", "--json"], capture_output=True,
+                           text=True, timeout=180,
+                           env=dict(base, WA_FALSO_PAYLOAD_INBOX=json.dumps(tapados)))
+        if "198 candidate(s) older than the moment this line was linked" not in (p.stderr or ""):
+            fallos.append(f"la corrida no dijo cuantos tapo el corte del enlace: "
+                          f"{(p.stderr or '').strip()[:200]!r}")
+
+        # El contexto de al lado. Por la via web no hay adjunto que abrir, y esto es lo
+        # que se puede dar en su lugar. El vecino SIN cuerpo no se escribe: un contexto
+        # que dice "[web:no-text]" es ruido al lado de la fila que hay que atender.
+        hechas += 3
+        _, con_ctx = bandeja()
+        mencion_ctx = next((f for f in con_ctx if f["stanza_id"] == "ST-MENCION"), {})
+        cerca = mencion_ctx.get("contexto_cerca") or []
+        if [c["text"] for c in cerca] != ["aca esta la captura"]:
+            fallos.append(f"el contexto de al lado de la mencion salio {cerca!r}")
+        if cerca and cerca[0].get("sender") != "Ana":
+            fallos.append(f"el contexto no dice quien lo dijo: {cerca[0]!r}")
+        # Y con la ventana en cero no hay contexto, igual que no hay adjuntos_cerca.
+        _, sin_ctx = bandeja("--window", "0")
+        if any("contexto_cerca" in f for f in sin_ctx):
+            fallos.append("con --window 0 igual salio contexto de al lado")
+
+        # Un valor que no existe no pasa por "apagado" en silencio: `wa-scope` valida lo
+        # que se guarda, pero la variable de entorno no pasa por ahi.
+        hechas += 2
+        p, filas_raro = bandeja(env=dict(base, WA_READ_SETTING_READ_WEB_TEXT="on"))
+        if "read_web_text" not in (p.stderr or ""):
+            fallos.append("un read_web_text invalido se leyo como apagado sin decirlo")
+        if len(filas_raro) != len(filas):
+            fallos.append("un read_web_text invalido se llevo filas de la bandeja")
+
+        # Lo que la via web sigue sin contestar, con el motivo de siempre.
+        hechas += 2
+        for comando in (["chat", "algo"], ["media", "algo"]):
+            p = subprocess.run([str(BIN / "wa-read"), *comando, "--json"],
+                               capture_output=True, text=True, env=base, timeout=180)
+            primera = (p.stderr or "").strip().splitlines()[:1]
+            if primera != ["wa-read: web-not-implemented"]:
+                fallos.append(f"wa-read {comando[0]} por la via web dijo {primera!r}")
+    return hechas
+
+
+def revisa_web_convive(fallos: list) -> int:
+    """Con la local contestando, una web caida es un aviso y no un apagon.
+
+    Perder la bandeja entera porque una segunda linea esta caida seria cambiar un hueco
+    por un apagon. Corre contra el equipo de verdad porque la fuente local no se puede
+    fabricar: si aca no hay base de WhatsApp este caso no se recorre, y se dice.
+    """
+    hechas = 0
+    try:
+        wa = modulo_wa_read()
+    except Exception:                     # noqa: BLE001 - ya se reporto en el mapeo
+        return hechas
+    if wa.preflight():
+        print("  (sin base local en este equipo: no se recorrio la convivencia "
+              "local + web caida)")
+        return hechas
+    env = dict(os.environ, WA_READ_SETTING_READ_WEB="on",
+               ORCA_CLI_COMMAND="/no/existe/este/orca")
+    p = subprocess.run([str(BIN / "wa-read"), "chats", "-n", "3", "--json"],
+                       capture_output=True, text=True, env=env, timeout=180)
+    hechas += 3
+    if p.returncode != 0:
+        fallos.append(f"con la local contestando, una web caida aborto con {p.returncode}")
+    if len(json.loads(p.stdout or "[]")) != 3:
+        fallos.append("con la local contestando, una web caida se llevo las filas locales")
+    if "warning:" not in p.stderr or "web-no-orca" not in p.stderr:
+        fallos.append(f"la web caida no salio como aviso: {p.stderr.strip()[:160]!r}")
+    return hechas
+
+
+def revisa_override_ajuste(fallos: list) -> int:
+    """WA_READ_SETTING_<CLAVE> le gana al registro, y sin la variable el registro manda.
+
+    Existe porque ~/.wa-inbox/scope.db es el MISMO registro que lee el plugin instalado:
+    encender `read_web` ahi para probar se le aparece al usuario en su panel. Una
+    perilla que nadie recorre es una perilla que no funciona el dia que hace falta.
+    """
+    hechas = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        falso = home / "orca-falso"
+        falso.write_text(FALSO_ORCA, encoding="utf-8")
+        falso.chmod(0o755)
+        base = dict(entorno(home), WA_FALSO_ORCA="ok",
+                    WA_FALSO_PAYLOAD=json.dumps(WEB_PAYLOAD),
+                    ORCA_CLI_COMMAND=str(falso))
+        subprocess.run([str(BIN / "wa-scope"), "config", "read_web", "off"],
+                       capture_output=True, text=True, env=base, timeout=120)
+
+        # Con la variable la via web corre, aunque el registro diga off.
+        hechas += 1
+        p = subprocess.run([str(BIN / "wa-read"), "chats", "-n", "10", "--json"],
+                           capture_output=True, text=True, timeout=180,
+                           env=dict(base, WA_READ_SETTING_READ_WEB="on",
+                                    WA_READ_SETTING_READ_LOCAL="off"))
+        if len(json.loads(p.stdout or "[]")) != 4:
+            fallos.append(f"WA_READ_SETTING_READ_WEB no le gano al registro: rc="
+                          f"{p.returncode} {(p.stderr or '').strip()[:120]}")
+
+        # Sin la variable manda el registro: ese home no tiene WhatsApp, asi que sale 1
+        # por la base local que falta y la via web ni se intenta.
+        hechas += 2
+        p = subprocess.run([str(BIN / "wa-read"), "chats", "-n", "10", "--json"],
+                           capture_output=True, text=True, env=base, timeout=180)
+        if "warning:" in (p.stderr or "") or "wa-read: web-" in (p.stderr or ""):
+            fallos.append(f"sin la variable igual se intento la via web: "
+                          f"{p.stderr.strip()[:120]!r}")
+        if p.returncode != 1:
+            fallos.append(f"sin la variable el registro no mando: salio {p.returncode} "
+                          "y tenia que salir 1 por la base local que falta")
+
+        # Y lo que la prueba escribio quedo en el home temporal, que es el punto entero.
+        hechas += 1
+        if not (home / ".wa-inbox" / "scope.db").exists():
+            fallos.append("el registro de la prueba no quedo en el home temporal")
+    return hechas
+
+
 def entorno(home: pathlib.Path) -> dict:
     """HOME propio: la base vive en ~/.wa-inbox/scope.db y no hay variable para moverla,
     asi que mover el HOME es lo que mantiene la base real del usuario fuera de esto."""
-    import os
     return dict(os.environ, HOME=str(home),
                 XDG_CONFIG_HOME=str(home / ".config"),
                 APPDATA=str(home / "AppData" / "Roaming"))
@@ -618,6 +2423,13 @@ def revisa_ajustes(fallos: list) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         home = pathlib.Path(tmp)
         env = entorno(home)
+        # Los arranques, ANTES de tocar nada: despues del bucle ya no son defaults.
+        for clave, esperado in sorted(DEFAULTS_WEB.items()):
+            hechas += 1
+            quedo = valor(env, clave)
+            if quedo != esperado:
+                fallos.append(f"una instalacion nueva arranca con {clave} en {quedo!r} "
+                              f"y tenia que arrancar en {esperado!r}")
         for args, acepta, esperado in AJUSTES:
             clave = args[1]
             p = subprocess.run([str(BIN / "wa-scope"), *args], capture_output=True,
@@ -683,14 +2495,15 @@ def main() -> int:
     fallos = []
     aislado = tempfile.TemporaryDirectory()
     env_aislado = entorno(pathlib.Path(aislado.name))
-    for nombre, args, propio in CASOS:
+    for nombre, args, propio, extra in CASOS:
         ruta = BIN / nombre
         if not ruta.exists():
             fallos.append(f"{nombre}: no existe")
             continue
         try:
             p = subprocess.run([str(ruta), *args], capture_output=True, text=True,
-                               env=env_aislado if propio else None, timeout=120)
+                               env=dict(env_aislado if propio else os.environ, **extra),
+                               timeout=120)
         except (OSError, subprocess.SubprocessError) as error:
             fallos.append(f"{nombre}: no arranco — {error}")
             continue
@@ -702,7 +2515,16 @@ def main() -> int:
 
     comprobaciones = (revisa_ajustes(fallos) + revisa_wa_send(fallos)
                       + revisa_fuentes(fallos) + revisa_migracion_cuentas(fallos)
-                      + revisa_rastro_corrida(fallos) + revisa_precheck(fallos))
+                      + revisa_rastro_corrida(fallos) + revisa_precheck(fallos)
+                      + revisa_web_mapeo(fallos) + revisa_web_finales(fallos)
+                      + revisa_regla_web(fallos) + revisa_cuerpo_web(fallos)
+                      + revisa_captura_viva(fallos) + revisa_captura_almacen(fallos)
+                      + revisa_seleccion_web(fallos)
+                      + revisa_web_inbox(fallos)
+                      + revisa_web_convive(fallos)
+                      + revisa_jaula_web(fallos)
+                      + revisa_solo_web(fallos)
+                      + revisa_override_ajuste(fallos))
     aislado.cleanup()
 
     if fallos:
