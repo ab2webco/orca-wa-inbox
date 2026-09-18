@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""wa-read — lectura read-only de WhatsApp Desktop (macOS) para agentes.
+"""wa-read — read-only access to WhatsApp Desktop (macOS) for agents.
 
-Subcomandos:
-  inbox [--days N] [--limit N]  menciones a vos + respuestas a tus mensajes, en grupos
-  chats [--query TXT] [-n N]    lista chats (grupos y 1:1) con no-leidos
-  chat <id|nombre> [-n N]       ultimos mensajes de un chat
-  media <id|nombre> [-n N]      ultimas imagenes/videos/audios, con ruta local en disco
-  whoami                        tu LID y cuantos grupos
+Subcommands:
+  inbox [--days N] [--limit N]  mentions of you + replies to your messages, in groups
+  chats [--query TXT] [-n N]    list chats (groups and 1:1) with unread counts
+  chat <id|name> [-n N]         latest messages of a chat
+  media <id|name> [-n N]        latest images/videos/audio, with the local path on disk
+  whoami                        your LID and how many groups
 
-Global: --json  salida JSON en vez de tabla.
-Nunca escribe en la base de WhatsApp: opera sobre una copia temporal.
+Global: --json  JSON output instead of a table.
+It never writes to the WhatsApp database: it works on a temporary copy.
+
+Where the messages come from is a choice, not a constant: the desktop app's local
+database, one or more WhatsApp Web sessions, or both at once. See `sources()` and
+docs/LECTURA-MULTIFUENTE.md.
 """
 import argparse, json, os, platform, shutil, sqlite3, subprocess, sys, tempfile, time
 
@@ -65,6 +69,20 @@ def _linux():
 
 
 SOURCES = {"Darwin": _darwin, "Windows": _windows, "Linux": _linux}
+
+# Hay dos maneras distintas de LEER, y no son alternativas: son sumables.
+#   local — la base SQLite de la app de escritorio. Una sola por equipo, la del
+#           telefono con el que se instalo. Historial completo, instantanea.
+#   web   — una sesion de WhatsApp Web conducida por el navegador de Orca, con su
+#           propio perfil. Cada sesion es OTRA linea: el numero de soporte, la cuenta
+#           de la empresa. Sirve en Linux, donde no hay app, pero tambien en macOS,
+#           donde la app ya ocupa la unica linea que puede tener.
+# Separarlas por nombre y no por plataforma es lo que deja sumar la segunda sin tocar
+# nada de lo de abajo: inbox, chat y media trabajan contra una conexion, no contra
+# una plataforma.
+LOCAL = "local"
+WEB = "web"
+
 SOURCE = SOURCES.get(platform.system(), _linux)()
 GC = SOURCE["root"]
 MEDIA_BASE = SOURCE["media"]
@@ -91,23 +109,159 @@ def setting(key, fallback):
         return fallback
 
 
+# Salir con 1 ya significa "te falta un requisito" y con 2 "esa referencia es ambigua".
+# Que no haya de donde leer es otra cosa, y quien automatiza necesita distinguirla sin
+# leer prosa: por eso tiene su propio codigo y un motivo estable en la salida.
+EXIT_SOURCE = 4
+# Estos motivos son contrato: el panel los traduce por codigo. Cambiar el texto no
+# rompe nada; renombrar el codigo desincroniza el panel en silencio.
+SIN_FUENTE = "no-source"
+WEB_SIN_CONSTRUIR = "web-not-implemented"
+
+
+class SourceError(Exception):
+    """Una fuente que no puede responder, con el motivo en codigo y en prosa.
+
+    El codigo de salida viaja con el error porque no todas las faltas valen lo mismo:
+    que no este instalado WhatsApp ya salia con 1 y con su texto de requisitos, y
+    cambiarlo romperia a quien lo este mirando."""
+
+    def __init__(self, reason, detail, code=EXIT_SOURCE):
+        super().__init__(detail)
+        self.reason = reason
+        self.detail = detail
+        self.code = code
+
+
+class LocalSource:
+    """La base de la app de escritorio. Es la fuente que existe hoy."""
+
+    kind = LOCAL
+    account = LOCAL
+
+    def __init__(self, info):
+        self.info = info
+
+    @property
+    def label(self):
+        return self.info.get("app") or "WhatsApp Desktop"
+
+    def open(self):
+        problems = preflight()
+        if problems:
+            raise SourceError("local-unavailable",
+                              "\n".join(f"- {p}" for p in problems) + "\n\n" + REQUISITOS,
+                              code=1)
+        return snapshot()
+
+
+class WebSource:
+    """Una linea conectada por WhatsApp Web. Todavia no lee: el diseno de como se
+    conecta, donde vive el perfil y como se identifica la cuenta esta escrito en
+    docs/LECTURA-MULTIFUENTE.md, y este objeto es el hueco donde entra.
+
+    Falla con un motivo estable en vez de devolver vacio: una bandeja vacia se lee
+    como "no hay nada que atender", que es justo lo contrario de lo que pasa."""
+
+    kind = WEB
+
+    def __init__(self, account=WEB, label="WhatsApp Web"):
+        self.account = account
+        self.label = label
+
+    def open(self):
+        raise SourceError(WEB_SIN_CONSTRUIR,
+                          "the WhatsApp Web route is designed but not built yet; "
+                          "see docs/LECTURA-MULTIFUENTE.md")
+
+
+def web_accounts():
+    """Las lineas web registradas. Viven en el registro de wa-scope y no aca porque
+    una cuenta es una autorizacion, no un detalle de lectura. Se lee en solo lectura:
+    wa-read nunca escribe en el registro."""
+    try:
+        con = sqlite3.connect(f"file:{SCOPE_DB}?mode=ro", uri=True)
+        rows = con.execute("select id, label from wa_account "
+                           "where kind=? and enabled=1 order by id", (WEB,)).fetchall()
+        con.close()
+        return [{"id": r[0], "label": r[1] or r[0]} for r in rows]
+    except sqlite3.Error:
+        return []
+
+
+def sources():
+    """Las fuentes ACTIVAS, en orden. La local primero: donde existe, es la buena —
+    historial completo y sin depender de una sesion que se cae."""
+    out = []
+    # Se agrega aunque este plataforma no tenga base: es open() quien explica por que
+    # no hay, y esa explicacion es la que el usuario necesita leer. Filtrarla aca la
+    # convertiria en un "no hay fuentes" mudo.
+    if setting("read_local", "on") != "off":
+        out.append(LocalSource(SOURCE))
+    if setting("read_web", "off") == "on":
+        # Sin cuentas registradas igual hay una fuente web: el usuario la pidio. Asi
+        # el fallo dice "falta construirlo" y no "no configuraste nada", que seria
+        # mandarlo a arreglar algo que no esta roto.
+        out += [WebSource(a["id"], a["label"]) for a in web_accounts()] or [WebSource()]
+    return out
+
+
+# Lo que la via web cuesta, dicho una sola vez y en todas las plataformas. Se dice
+# ANTES de que alguien la encienda, no despues: quien la enciende esperando el mismo
+# historial que la app va a creer que el agente perdio mensajes.
+COSTO_WEB = """  What the web route costs, before you turn it on:
+    - no deep history: only what that session has already loaded in the browser.
+    - slower: every read walks the page instead of a local file.
+    - it takes one of the linked-device slots WhatsApp gives each number.
+    - the session can drop (logged out, phone offline for too long) and has to be
+      linked again with the QR code.
+    - a new line authorizes nothing by itself: every conversation stays denied
+      until you register it with `wa-scope set`."""
+# La via web no es un plan B de Linux: es una linea MAS, y eso vale igual en macOS,
+# donde la app de escritorio ya ocupo la unica linea que ese numero podia tener.
+COMO_ENCENDER_WEB = """  To enable it once it ships:
+    `wa-scope config read_web on`, then link the line from the plugin panel and
+    scan the QR with the phone of THAT number. Today it is designed and not built:
+    the design is in docs/LECTURA-MULTIFUENTE.md."""
+
 REQUISITOS_POR_SO = {
-    "Darwin": """Requisitos en macOS (unica plataforma verificada):
-  - WhatsApp Desktop desde la Mac App Store, con sesion iniciada y abierto al
-    menos una vez para que sincronice.
-  - WhatsApp Web NO sirve: no deja base local, los mensajes viven en el IndexedDB
-    del navegador.
-  - Que la base se pueda leer. Hoy queda como SQLite sin cifrar y el doctor lo
-    comprueba leyendola. FileVault no molesta: cifra el disco, no el archivo.""",
-    "Windows": """En Windows todavia no hay soporte de LECTURA.
-  WhatsApp Desktop existe, pero no pude verificar donde deja su base ni si es
-  legible o viene cifrada. Falta que alguien con Windows lo confirme; cuando pase,
-  se resuelve agregando una entrada en SOURCES, no reescribiendo la herramienta.
-  Lo demas si funciona: el registro, el mapeo, los paneles y la automation.""",
-    "Linux": """En Linux no hay camino de lectura, y no es algo que pueda arreglar.
-  No existe WhatsApp Desktop oficial para Linux. Los wrappers no oficiales envuelven
-  web.whatsapp.com, y web no deja base local que leer.
-  Lo demas si funciona: el registro, el mapeo, los paneles y la automation.""",
+    "Darwin": """There are two read routes, and they add up rather than replace each other.
+
+  Local database (the verified one, and the one in use here):
+  - WhatsApp Desktop from the Mac App Store, signed in and opened at least once
+    so that it syncs.
+  - The database has to be readable. Today it is left as unencrypted SQLite and
+    doctor checks it by reading it. FileVault is fine: it encrypts the disk, not
+    the file.
+  - It is bound to ONE phone number: the one the app is signed in with.
+
+  WhatsApp Web (a second line, not a replacement): a browser session with its own
+  profile, driven by Orca's browser. It is how a second number — a support line,
+  another company account — gets read on a machine whose desktop app is already
+  taken by the first one.
+""" + COSTO_WEB + "\n" + COMO_ENCENDER_WEB,
+    "Windows": """There are two read routes, and neither reads anything here yet.
+
+  Local database: WhatsApp Desktop exists on Windows, but where it keeps its
+  database — and whether that database is readable or encrypted — is unverified.
+  Someone on Windows has to confirm it; once they do, it is one more entry in
+  SOURCES, not a rewrite.
+
+  WhatsApp Web (a second line, not a replacement): a browser session with its own
+  profile, driven by Orca's browser. It does not depend on the desktop app, so it
+  is also the route that would work here first.
+""" + COSTO_WEB + "\n" + COMO_ENCENDER_WEB + """
+  Everything else does work: the registry, the mapping, the panels and the automation.""",
+    "Linux": """There is no local database on Linux, and there never will be: there is no
+  official WhatsApp Desktop for Linux, and the unofficial wrappers only wrap
+  web.whatsapp.com.
+
+  That does NOT mean there is no read path. WhatsApp Web is a real route — a
+  browser session with its own profile, driven by Orca's browser — and on Linux
+  it is the only one. It is designed and not built yet, which is a missing
+  feature and not a dead end.
+""" + COSTO_WEB + "\n" + COMO_ENCENDER_WEB + """
+  Everything else does work: the registry, the mapping, the panels and the automation.""",
 }
 REQUISITOS = REQUISITOS_POR_SO.get(platform.system(), REQUISITOS_POR_SO["Linux"])
 
@@ -116,14 +270,19 @@ def preflight():
     """Falla temprano y explicando, en vez de reventar adentro con un error de sqlite."""
     problems = []
     if not SOURCE["verified"]:
-        problems.append(f"todavia no hay lectura de WhatsApp en {platform.system()}")
+        # "not supported" era mentira y de la que importa: hay via, la web, y esta sin
+        # construir. Decirle a quien usa Linux que no se puede lo manda a buscar otra
+        # herramienta en vez de a esperar la que falta.
+        problems.append(f"there is no local WhatsApp database on {platform.system()}; "
+                        "the WhatsApp Web route is the one that applies here and it is "
+                        "not built yet")
         return problems
     if not os.path.isdir(GC):
-        problems.append("no encontre el Group Container de WhatsApp Desktop en "
-                        f"{GC} — instalalo desde la Mac App Store e inicia sesion")
+        problems.append("the WhatsApp Desktop Group Container is not at "
+                        f"{GC} — install it from the Mac App Store and sign in")
     elif not os.path.exists(os.path.join(GC, "ChatStorage.sqlite")):
-        problems.append("el Group Container existe pero no hay ChatStorage.sqlite — "
-                        "abri WhatsApp Desktop una vez para que sincronice")
+        problems.append("the Group Container exists but there is no ChatStorage.sqlite — "
+                        "open WhatsApp Desktop once so that it syncs")
     return problems
 
 
@@ -139,7 +298,7 @@ def snapshot():
             shutil.copy2(src, tmp)
     db = os.path.join(tmp, "ChatStorage.sqlite")
     if not os.path.exists(db):
-        sys.exit("no pude copiar ChatStorage.sqlite")
+        sys.exit("could not copy ChatStorage.sqlite")
     con = sqlite3.connect(db)
     con.execute("PRAGMA journal_mode=delete")  # fuerza el merge del WAL
     con.row_factory = sqlite3.Row
@@ -175,17 +334,17 @@ def resolve_chat(con, ref):
                         (int(ref),)).fetchone()
         if r:
             return r["Z_PK"], r["ZPARTNERNAME"]
-        sys.exit(f"no existe el chat {ref}")
+        sys.exit(f"there is no chat {ref}")
     rows = con.execute("""select Z_PK, ZPARTNERNAME, ZLASTMESSAGEDATE from ZWACHATSESSION
                           where ZPARTNERNAME like ? order by ZLASTMESSAGEDATE desc""",
                        (f"%{ref}%",)).fetchall()
     if not rows:
-        sys.exit(f"ningun chat coincide con {ref!r}")
+        sys.exit(f"no chat matches {ref!r}")
     exact = [r for r in rows if (r["ZPARTNERNAME"] or "").strip().lower() == ref.strip().lower()]
     if len(exact) == 1:
         return exact[0]["Z_PK"], exact[0]["ZPARTNERNAME"]
     if len(rows) > 1:
-        print(f"{ref!r} es ambiguo, usa el id:", file=sys.stderr)
+        print(f"{ref!r} is ambiguous, use the id:", file=sys.stderr)
         for r in rows[:15]:
             print(f"  {r['Z_PK']}\t{r['ZPARTNERNAME']}\t{ts(r['ZLASTMESSAGEDATE'])}",
                   file=sys.stderr)
@@ -224,7 +383,7 @@ def cmd_inbox(con, a):
         tope = -1
     lid = own_lid(con)
     if not lid:
-        sys.exit("no pude deducir tu LID")
+        sys.exit("could not work out your LID")
     rows = con.execute(f"""
         select m.ZMESSAGEDATE d, m.ZSTANZAID stanza_id, c.ZPARTNERNAME chat,
                c.Z_PK chat_id, c.ZCONTACTJID chat_jid,
@@ -359,75 +518,127 @@ def readable():
     pero abre con 'file is not a database'. Mejor comprobarlo que prometerlo."""
     db = SOURCE["db"]
     if not db or not os.path.exists(db):
-        return False, "no existe"
+        return False, "does not exist"
     try:
         with open(db, "rb") as fh:
             magic = fh.read(16)
         if not magic.startswith(b"SQLite format 3"):
-            return False, "el archivo esta cifrado o no es SQLite"
+            return False, "the file is encrypted or is not SQLite"
         con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
         n = con.execute("select count(*) from ZWAMESSAGE").fetchone()[0]
         con.close()
-        return True, f"{n} mensajes legibles"
+        return True, f"{n} readable messages"
     except sqlite3.DatabaseError as exc:
-        return False, f"no se puede leer: {exc}"
+        return False, f"cannot be read: {exc}"
     except OSError as exc:
-        return False, f"sin permiso de lectura: {exc}"
+        return False, f"no read permission: {exc}"
 
 
 def _transcribe_check():
-    """Opcional: sin esto todo funciona, solo que los audios quedan sin leer."""
+    """Opcional: sin esto todo funciona, solo que los audios quedan sin leer.
+
+    Devuelve (ok, detalle, codigo). El detalle lo lee quien corre el CLI y va en
+    ingles como todo lo demas; el codigo es lo que el panel traduce al idioma del
+    usuario, porque una frase guardada en el storage se congela en su idioma."""
     exe = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wa-transcribe")
     if not os.path.exists(exe):
-        return False, "falta bin/wa-transcribe"
+        return False, "bin/wa-transcribe is missing", "transcribe-missing-tool"
     try:
         p = subprocess.run([exe, "--check", "--json"], capture_output=True,
                            text=True, timeout=30)
         info = json.loads(p.stdout or "{}")
     except (OSError, ValueError, subprocess.SubprocessError):
-        return False, "no pude verificar"
+        return False, "could not check", "transcribe-unknown"
     if info.get("puede"):
         # Ojo: con Orca listo `motores` viene vacio, asi que indexarlo revienta el doctor.
         if info.get("orca"):
-            return True, f"Orca con modelo {info.get('modelo_orca')}"
-        return True, f"{info['motores'][0]} con modelo {info['modelo']}"
+            return True, f"Orca with model {info.get('modelo_orca')}", "transcribe-orca"
+        return True, f"{info['motores'][0]} with model {info['modelo']}", "transcribe-engine"
     if info.get("orca_sin_comando"):
-        return False, ("opcional — este Orca no trae transcripcion de audio todavia; "
-                       "actualizalo, o instala un motor local con brew install whisper-cpp")
+        return (False,
+                "optional — this Orca does not ship audio transcription yet; update it, "
+                "or install a local engine with brew install whisper-cpp",
+                "transcribe-orca-outdated")
     if not info.get("motores"):
-        return False, ("opcional — sin motor: descarga el modelo en Ajustes > Voz, "
-                       "o instala uno local con brew install whisper-cpp")
-    return False, f"opcional — falta el modelo {info.get('modelo')}"
+        return (False,
+                "optional — no engine: download the model in Settings > Voice, or "
+                "install a local one with brew install whisper-cpp",
+                "transcribe-no-engine")
+    return False, f"optional — the model {info.get('modelo')} is missing", "transcribe-no-model"
+
+
+def orca_cli():
+    """El binario de la CLI de Orca, que NO se llama igual en todas partes.
+
+    En Linux `orca` es el lector de pantalla de GNOME: buscarlo con `which("orca")`
+    lo encuentra, el doctor dice que se puede enviar, y la primera corrida real le
+    pone a hablar la maquina a una persona ciega. Ahi el comando es `orca-ide`, y
+    quien empaqueta puede fijar otro con ORCA_CLI_COMMAND."""
+    declarado = os.environ.get("ORCA_CLI_COMMAND", "").strip()
+    if declarado:
+        return shutil.which(declarado.split()[0]) or declarado.split()[0]
+    if platform.system() == "Linux":
+        return shutil.which("orca-ide")
+    return shutil.which("orca")
+
+
+def _web_check():
+    """La segunda via, dicha en voz alta aunque todavia no lea.
+
+    Callarla es lo que hacia que en Linux el doctor pareciera un callejon sin salida
+    cuando en realidad es una funcion que falta. Devuelve (ok, detalle, codigo)."""
+    pedida = setting("read_web", "off") == "on"
+    cuentas = len(web_accounts())
+    donde = ("the only route on this system" if not SOURCE["verified"]
+             else "a second line, on top of the desktop app")
+    detalle = (f"optional — {donde}; designed and not built yet. Cost: no deep history "
+               "(only what the session loaded), slower, one linked-device slot, and the "
+               "session can drop. Turn it on with `wa-scope config read_web on` and link "
+               "the line from the panel; see docs/LECTURA-MULTIFUENTE.md")
+    if pedida:
+        detalle = (f"selected ({cuentas} line(s) registered) but not built yet — reads "
+                   "fall back to the local database; see docs/LECTURA-MULTIFUENTE.md")
+    return False, detalle, WEB_SIN_CONSTRUIR
 
 
 def cmd_doctor(con, a):
     """Para que el usuario sepa que le falta antes de que nada dependa de esto."""
     db = SOURCE["db"]
     ok_read, detail_read = readable()
+    # El codigo es la llave estable: el nombre y el detalle estan en ingles para quien
+    # corre el CLI, y el panel traduce por codigo al idioma del usuario. Renombrar un
+    # codigo desincroniza el panel en silencio; el texto se puede reescribir sin riesgo.
     checks = [
-        ("lectura soportada en este sistema", SOURCE["verified"], platform.system()),
-        ("WhatsApp Desktop instalado", bool(GC) and os.path.isdir(GC),
-         GC or (SOURCE["app"] or "no hay app oficial para este sistema")),
-        ("base de chats presente", os.path.exists(db),
-         f"{os.path.getsize(db) // 1048576} MB" if os.path.exists(db) else "falta"),
-        ("base sin cifrar y legible", ok_read, detail_read),
-        ("sqlite3 disponible", shutil.which("sqlite3") is not None,
-         shutil.which("sqlite3") or "no esta en el PATH"),
+        ("system", "WhatsApp reading supported on this system",
+         SOURCE["verified"], platform.system()),
+        ("whatsapp", "WhatsApp Desktop installed", bool(GC) and os.path.isdir(GC),
+         GC or (SOURCE["app"] or "no official app for this system")),
+        ("database", "chat database present", os.path.exists(db),
+         f"{os.path.getsize(db) // 1048576} MB" if os.path.exists(db) else "missing"),
+        ("readable", "database unencrypted and readable", ok_read, detail_read),
+        ("sqlite3", "sqlite3 available", shutil.which("sqlite3") is not None,
+         shutil.which("sqlite3") or "not in PATH"),
     ]
     # Lo de arriba bloquea: sin eso no se puede LEER, que es lo que hace el plugin.
     # Lo de abajo no: sin Orca en el PATH se sigue leyendo, solo no se puede enviar,
     # y marcarlo como rotura ponia una alerta roja de "WhatsApp no esta conectado" en
     # una maquina donde WhatsApp funcionaba perfecto.
+    orca_bin = orca_cli()
     opcionales = [
-        ("enviar mensajes", shutil.which("orca") is not None,
-         shutil.which("orca") or "opcional — el CLI de Orca no esta en el PATH; "
-         "el agente puede leer y abrir tarjetas, pero no escribir en WhatsApp"),
-        ("transcripcion de audio", *_transcribe_check()),
+        ("send", "send messages", orca_bin is not None,
+         orca_bin or "optional — the Orca CLI is not in PATH; the agent can read and "
+         "open cards, but it cannot write in WhatsApp",
+         None if orca_bin else "send-no-orca"),
+        ("transcribe", "audio transcription", *_transcribe_check()),
+        # Va al final y no bloquea: es una via que falta, no una rotura. Ponerla arriba
+        # la haria parecer un requisito y pintaria de rojo una maquina que lee perfecto.
+        ("web", "WhatsApp Web as a second line", *_web_check()),
     ]
-    filas = [{"check": n, "ok": ok, "detalle": d, "requerido": True}
-             for n, ok, d in checks]
-    filas += [{"check": n, "ok": ok, "detalle": d, "requerido": False}
-              for n, ok, d in opcionales]
+    filas = [{"check": n, "ok": ok, "detalle": d, "requerido": True, "code": code}
+             for code, n, ok, d in checks]
+    filas += [{"check": n, "ok": ok, "detalle": d, "requerido": False,
+               "code": code, "detailCode": dcode}
+              for code, n, ok, d, dcode in opcionales]
     return filas
 
 
@@ -438,6 +649,53 @@ def cmd_whoami(con, a):
     name = con.execute("select ZPUSHNAME p from ZWAPROFILEPUSHNAME where ZJID=?",
                        (f"{lid}@lid",)).fetchone()
     return [{"lid": lid, "name": name["p"] if name else None, "grupos": n}]
+
+
+def morir_sin_fuente(reason, detail, code=EXIT_SOURCE):
+    """Sale con el motivo en la PRIMERA linea de stderr y sin escribir nada en stdout.
+
+    Las dos cosas son contrato. La primera linea la lee el worker (lineaUtil) y termina
+    en el panel; stdout vacio es lo que hace que quien parsea JSON lea una lista vacia
+    en vez de reventar con un objeto que no esperaba."""
+    sys.stderr.write(f"wa-read: {reason}\n{detail}\n")
+    sys.exit(code)
+
+
+def read_from_sources(a):
+    """Corre el comando contra cada fuente activa y junta lo que devuelvan.
+
+    Que ninguna pueda responder NO es una lista vacia: una bandeja vacia se lee como
+    "no hay nada que atender", que es justo lo contrario. Por eso se cuenta cuantas
+    contestaron, y no cuantas filas salieron."""
+    activas = sources()
+    if not activas:
+        morir_sin_fuente(SIN_FUENTE,
+                         "no read source is enabled: `read_local` is off and `read_web` "
+                         "is off. Turn one on with `wa-scope config read_local on`.")
+    filas, fallos, contestaron = [], [], 0
+    for src in activas:
+        try:
+            con, tmp = src.open()
+        except SourceError as exc:
+            fallos.append((src, exc))
+            continue
+        contestaron += 1
+        try:
+            filas += a.fn(con, a)
+        finally:
+            con.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+    if not contestaron:
+        # La primera falla manda: con una sola fuente es la unica, y con varias es la
+        # que el usuario puso primero.
+        src, exc = fallos[0]
+        morir_sin_fuente(exc.reason, exc.detail, exc.code)
+    # Alguna contesto: lo que falto se avisa y no se aborta. Perder la bandeja entera
+    # porque una segunda linea esta caida seria cambiar un hueco por un apagon.
+    for src, exc in fallos:
+        print(f"warning: {src.label} ({src.kind}) did not answer: {exc.reason}",
+              file=sys.stderr)
+    return filas
 
 
 def main():
@@ -451,30 +709,30 @@ def main():
         sp.add_argument("--json", dest="json_sub", action="store_true")
         return sp
 
-    s = add("inbox", help="menciones y respuestas dirigidas a vos")
+    s = add("inbox", help="mentions and replies addressed to you")
     s.add_argument("--days", type=int, default=None,
-                   help="por defecto sale de `wa-scope config inbox_days`")
+                   help="defaults to `wa-scope config inbox_days`")
     s.add_argument("--limit", type=int, default=None,
-                   help=f"tope de mensajes (por defecto {INBOX_MAX}, 0 = sin tope)")
+                   help=f"message cap (default {INBOX_MAX}, 0 = no cap)")
     s.add_argument("--window", type=int, default=5,
-                   help="minutos alrededor de cada mensaje donde buscar adjuntos (0 apaga)")
+                   help="minutes around each message to look for attachments (0 turns it off)")
     s.add_argument("--only", choices=["todos", "grupos", "directos"], default="todos")
     s.set_defaults(fn=cmd_inbox)
 
-    s = add("chats", help="lista chats")
+    s = add("chats", help="list chats")
     s.add_argument("--query"); s.add_argument("--unread", action="store_true")
     s.add_argument("-n", type=int, default=30); s.set_defaults(fn=cmd_chats)
 
-    s = add("chat", help="mensajes de un chat")
+    s = add("chat", help="messages of a chat")
     s.add_argument("chat"); s.add_argument("-n", type=int, default=40)
     s.add_argument("--days", type=int); s.set_defaults(fn=cmd_chat)
 
-    s = add("media", help="adjuntos de un chat, con ruta en disco")
+    s = add("media", help="attachments of a chat, with the path on disk")
     s.add_argument("chat"); s.add_argument("-n", type=int, default=15)
     s.set_defaults(fn=cmd_media)
 
     add("whoami").set_defaults(fn=cmd_whoami)
-    add("doctor", help="verifica los requisitos").set_defaults(fn=cmd_doctor)
+    add("doctor", help="check the requirements").set_defaults(fn=cmd_doctor)
 
     a = ap.parse_args()
     if getattr(a, "json_sub", False):   # permite --json antes o despues del subcomando
@@ -485,24 +743,24 @@ def main():
             print(json.dumps(rows, ensure_ascii=False, indent=2))
         else:
             for r in rows:
-                print(f"{'ok ' if r['ok'] else 'FALTA'}  {r['check']}: {r['detalle']}")
+                print(f"{'ok ' if r['ok'] else 'MISSING'}  {r['check']}: {r['detalle']}")
             faltan = [r for r in rows if not r["ok"] and r.get("requerido", True)]
             if faltan:
                 print("\n" + REQUISITOS)
         # Lo opcional no hace fallar el chequeo: sin transcripcion todo funciona,
         # solo que los audios quedan sin leer.
-        obligatorios = [r for r in rows if "opcional" not in r["check"]]
+        # Lo requerido lo dice el propio chequeo, no la palabra "optional" en su nombre.
+        # Clasificar por texto ya habia roto esto antes en el panel, y volvio a romperlo
+        # aca: "WhatsApp Web as a second line" no lleva la palabra, asi que un Mac que
+        # lee perfecto salia con 1 por una via que ni siquiera existe todavia.
+        obligatorios = [r for r in rows if r.get("requerido", True)]
         sys.exit(0 if all(r["ok"] for r in obligatorios) else 1)
-    con, tmp = snapshot()
-    try:
-        rows = a.fn(con, a)
-    finally:
-        con.close(); shutil.rmtree(tmp, ignore_errors=True)
+    rows = read_from_sources(a)
 
     if a.json:
         print(json.dumps(rows, ensure_ascii=False, indent=2)); return
     if not rows:
-        print("(sin resultados)"); return
+        print("(no results)"); return
     for r in rows:
         print(" | ".join(str(v) for v in r.values() if v not in (None, "")))
 

@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
-"""wa-scope — registro de autorizacion: donde puede actuar tu agente y con que permiso.
+"""wa-scope — the authorization registry: where your agent may act, and with what permission.
 
-Regla base: DENEGAR POR DEFECTO. Un chat que no este en el registro no existe para el
-agente. Con cientos de grupos, el permiso tiene que ser una lista blanca explicita.
+Base rule: DENY BY DEFAULT. A chat that is not in the registry does not exist for the
+agent. With hundreds of groups, permission has to be an explicit allowlist.
 
-  wa-scope list                       ver el registro entero
+  wa-scope list                       see the whole registry
   wa-scope set <chat> --project CCBQA --mode borrador
-  wa-scope mode <chat> off            apagarlo sin perder la config
+  wa-scope mode <chat> off            turn it off without losing the config
   wa-scope rm <chat>
-  wa-scope check <chat> [--for responder]   la compuerta: exit 0 = autorizado
-  wa-scope voice <chat>               tono, instrucciones, proveedor y permiso de ahi
-  wa-scope closing                    tarjetas cerradas que su conversacion no sabe
-  wa-scope log [-n 50]                que hizo el agente y donde
+  wa-scope check <chat> [--for responder]   the gate: exit 0 = authorized
+  wa-scope voice <chat>               tone, instructions, provider and permission there
+  wa-scope closing                    closed cards its conversation does not know about
+  wa-scope log [-n 50]                what the agent did, and where
 
-Modos, de menos a mas permiso:
-  off        no lo toca (default de cualquier chat no registrado)
-  observar   puede leer y abrir issue en Plane. No escribe en WhatsApp.
-  borrador   ademas deja el texto escrito en el chat, sin enviar.
-  responder  ademas envia. Solo donde lo autorizaste explicitamente.
+Modes, from least to most permission (the values are stable, they are not translated):
+  off        does not touch it (default for any unregistered chat)
+  observar   may read and open an issue in Plane. It does not write in WhatsApp.
+  borrador   also leaves the text written in the chat, unsent.
+  responder  also sends. Only where you authorized it explicitly.
 
-Servicio de tareas por conversacion: plane, linear, github — o `ninguno` cuando esa
-conversacion no abre tarjetas y el agente solo lee, resume o contesta.
+Task service per conversation: plane, linear, github — or `ninguno` when that
+conversation opens no cards and the agent only reads, summarizes or replies.
 """
 import argparse, json, os, sqlite3, subprocess, sys, time
 
@@ -105,7 +105,7 @@ PROVIDERS = {
 # conteste, y nada mas. Dejar el destino en blanco se lee como configuracion a medias,
 # asi que "no abre tarjeta" se dice en voz alta y es una eleccion como cualquier otra.
 SIN_TARJETA = "ninguno"
-PROVIDERS_CHAT = dict(PROVIDERS, **{SIN_TARJETA: "no abre tarjeta en esta conversacion"})
+PROVIDERS_CHAT = dict(PROVIDERS, **{SIN_TARJETA: "opens no card in this conversation"})
 RANK = {m: i for i, m in enumerate(MODES)}
 
 # Plane agrupa los estados en estos cinco grupos y cada proyecto renombra las columnas
@@ -125,17 +125,31 @@ CLOSING_READERS = {"plane": "orca plane issue <ID> --json --comments"}
 # el cliente. Sin marca, ningun comentario sale: la discusion interna del equipo no
 # tiene por que aparecer en el grupo de un cliente.
 CLIENT_MARK = "[cliente]"
-# Como termina un aviso, y con que queda en la bitacora que ve el panel.
+# Como termina un aviso, y con que accion queda en la bitacora que ve el panel. La
+# accion es un codigo: el panel la dice en el idioma del usuario. Antes esta tabla traia
+# ademas una frase fija que se guardaba en `detail` y repetia lo mismo — en el idioma
+# del CLI, debajo de una etiqueta ya traducida. La frase se fue: `detail` es para lo que
+# el codigo no dice, y cuando no hay nada mas que decir queda vacio.
 CLOSING_RESULTS = {
-    "avisado":     ("closed",  "cierre avisado en el chat"),
-    "borrador":    ("draft",   "cierre dejado en borrador, sin enviar"),
-    "sin-permiso": ("skipped", "cierre no avisado: el permiso de esa conversacion no escribe"),
-    "fallo":       ("failed",  "no se pudo avisar el cierre"),
+    "avisado":     "closed",
+    "borrador":    "draft",
+    "sin-permiso": "skipped",
+    "fallo":       "failed",
 }
 
-SCHEMA = """
+# De donde se leen los mensajes. No son alternativas: la app de escritorio lee UNA
+# linea — la del telefono con el que se instalo — y cada sesion de WhatsApp Web es
+# OTRA. Quien conecta el numero de soporte de la empresa suma una cuenta, no cambia
+# la que tenia.
+CUENTA_LOCAL = "local"
+KINDS_CUENTA = ("local", "web")
+
+# La tabla del alcance va aparte del resto del esquema porque la migracion a
+# (cuenta, jid) tiene que poder recrearla sola: SQLite no sabe cambiar una primary key.
+CHAT_SCOPE_DDL = """
 create table if not exists chat_scope (
-  chat_jid      text primary key,      -- llave real: sobrevive reinstalar WhatsApp
+  account       text not null default 'local',  -- DE QUE LINEA es esta conversacion
+  chat_jid      text not null,         -- llave real: sobrevive reinstalar WhatsApp
   chat_name     text not null,         -- solo para mostrar; los nombres cambian y se repiten
   provider      text default 'plane',  -- plane | linear | github | ninguno
   target        text,                  -- proyecto (plane), team (linear), owner/repo (github)
@@ -146,7 +160,29 @@ create table if not exists chat_scope (
   instructions  text,                -- que hace en ESTA conversacion; el tono es el como
   timezone      text default 'America/Bogota',
   notes         text,
-  updated_at    text
+  updated_at    text,
+  -- La llave es (cuenta, jid) y no el jid solo. Dos lineas tuyas pueden tener la
+  -- MISMA conversacion: el directo con la misma persona visto desde dos numeros
+  -- propios es el mismo ...@s.whatsapp.net. Con el jid solo, esas dos filas se
+  -- colapsan en una y el agente contesta desde la linea equivocada — el mismo error
+  -- de clase que la tarjeta que se fue al tablero ajeno.
+  primary key (account, chat_jid)
+);
+"""
+
+SCHEMA = CHAT_SCOPE_DDL + """
+-- Las fuentes de lectura conectadas. La identidad la pone la SESION (el LID que
+-- reporta WhatsApp), no una etiqueta que el usuario escriba: dos numeros con el mismo
+-- apodo se confundirian en silencio despues de volver a enlazar, y una respuesta
+-- mandada desde la linea equivocada no se puede deshacer.
+create table if not exists wa_account (
+  id      text primary key,                  -- 'local', o 'web:<lid>' cuando enlaza
+  kind    text not null default 'local',     -- local | web
+  label   text,                              -- para mostrar; NO es la identidad
+  profile text,                              -- perfil de navegador de una sesion web
+  enabled integer not null default 1,
+  linked_at  text,
+  updated_at text
 );
 create table if not exists agent_action (
   id integer primary key autoincrement,
@@ -213,7 +249,9 @@ PANEL_SETTINGS = {"tone": "tone", "agentName": "agent_name",
                   "inboxDays": "inbox_days",
                   "ownerName": "owner_name",
                   "transcribe": "transcribe",
-                  "transcribeLang": "transcribe_lang"}
+                  "transcribeLang": "transcribe_lang",
+                  "readLocal": "read_local",
+                  "readWeb": "read_web"}
 
 # Lo que cada ajuste acepta. Un valor invalido no revienta al guardarse: revienta
 # despues, en la corrida del agente, lejos de donde se tipeo — o peor, no revienta y
@@ -225,6 +263,11 @@ CONFIG_OPCIONES = {
     # Solo los idiomas que el panel ofrece y con los que se probo. Un codigo sin probar
     # degrada la transcripcion en silencio, y eso se descubre tres audios despues.
     "transcribe_lang": ("auto", "es", "en", "pt"),
+    # De donde lee. Son dos interruptores y no una lista de tres porque las fuentes se
+    # SUMAN: apagar la local en un equipo que la tiene es una eleccion real (leer solo
+    # la linea de la empresa), y encender la web no apaga la del escritorio.
+    "read_local": ("on", "off"),
+    "read_web": ("on", "off"),
 }
 CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s")
 
@@ -232,12 +275,12 @@ CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s")
 def valida_ajuste(key, value):
     """Devuelve el motivo del rechazo, o None si el valor sirve."""
     if key in CONFIG_OPCIONES and value not in CONFIG_OPCIONES[key]:
-        return f"{key} solo acepta: {', '.join(CONFIG_OPCIONES[key])}"
+        return f"{key} only accepts: {', '.join(CONFIG_OPCIONES[key])}"
     if key in CONFIG_NUMERICOS:
         try:
             int(str(value).strip())
         except (TypeError, ValueError):
-            return f"{key} tiene que ser un numero entero, no {value!r}"
+            return f"{key} has to be a whole number, not {value!r}"
     return None
 
 
@@ -412,20 +455,26 @@ def build_health():
                              capture_output=True, text=True, timeout=60)
         checks = json.loads(out.stdout or "[]")
     except (OSError, ValueError, subprocess.SubprocessError):
-        return {"ok": False, "problem": "no pude verificar el estado"}
+        return {"ok": False, "problem": "could not check the status",
+                "problemCode": "unknown"}
     # Lo obligatorio bloquea; lo opcional se ofrece para activar. Mezclarlos hace que
     # una funcion que falta parezca una rotura, y que una rotura pase por opcional.
     # Lo requerido lo dice el propio chequeo, no la palabra "opcional" en su nombre:
     # clasificar por texto hacia que "orca disponible (solo para escribir)" bloqueara.
     falla = [c for c in checks if not c.get("ok")]
     bloqueantes = [c for c in falla if c.get("requerido", True)]
-    opcionales = [{"que": c.get("check", "").replace(" (opcional)", ""),
-                   "como": c.get("detalle", "").replace("opcional — ", "")}
+    # `que` y `como` viajan en ingles y el panel los pinta tal cual si no reconoce el
+    # codigo; con codigo los dice en el idioma del usuario. El texto es el respaldo,
+    # el codigo es el contrato: renombrarlo desincronizaria el panel en silencio.
+    opcionales = [{"que": c.get("check", "").replace(" (optional)", ""),
+                   "como": c.get("detalle", "").replace("optional — ", ""),
+                   "code": c.get("code"), "howCode": c.get("detailCode")}
                   for c in falla if not c.get("requerido", True)]
     out = {"ok": not bloqueantes, "optional": opcionales}
     if bloqueantes:
         out["problem"] = bloqueantes[0].get("check")
         out["detail"] = bloqueantes[0].get("detalle")
+        out["problemCode"] = bloqueantes[0].get("code")
     return out
 
 
@@ -433,10 +482,13 @@ def merged_scope(con):
     """Lo del panel manda sobre lo del CLI cuando el mismo chat esta en los dos:
     el panel es lo que el usuario acaba de tocar."""
     rows = {r["chat_jid"]: dict(r) for r in con.execute(
-        "select chat_jid, chat_name, provider, target, mode, initial_state, hours, "
-        "tone, instructions, timezone, notes, updated_at from chat_scope")}
+        "select account, chat_jid, chat_name, provider, target, mode, initial_state, "
+        "hours, tone, instructions, timezone, notes, updated_at from chat_scope")}
     for jid, e in plugin_store_read().items():
-        row = {**rows.get(jid, {}), "chat_jid": jid,
+        # El panel guarda por jid a secas. Mientras la unica linea sea la local eso es
+        # exacto; cuando haya web, la clave del store lleva la cuenta adelante y esta
+        # rama se queda con las de siempre. Ver docs/LECTURA-MULTIFUENTE.md.
+        row = {**rows.get(jid, {}), "account": CUENTA_LOCAL, "chat_jid": jid,
                "chat_name": e.get("chatName") or jid,
                "provider": e.get("provider") or "plane",
                "target": e.get("target"),
@@ -497,7 +549,44 @@ def migrate(con):
     if "notified_at" not in work_cols:
         con.execute("alter table work add column notified_at text")
     con.commit()
+    # Con las columnas RECIEN leidas, no con las de arriba: los alter de esta misma
+    # funcion acaban de crear target y de llenarlo desde plane_project, y copiar con
+    # la lista vieja tiraria justo ese mapeo recuperado.
+    migrate_cuentas(con, {r["name"] for r in con.execute("pragma table_info(chat_scope)")})
     closing_baseline(con)
+
+
+# Las columnas que se copian al reconstruir chat_scope. Se nombran y no se hace
+# `select *`: con * el orden lo decide la tabla vieja y una version futura insertaria
+# el tono en la columna de las notas sin que nada avise.
+CHAT_SCOPE_COLS = ("chat_jid", "chat_name", "provider", "target", "mode",
+                   "initial_state", "hours", "tone", "instructions", "timezone",
+                   "notes", "updated_at")
+
+
+def migrate_cuentas(con, cols):
+    """Le da a cada conversacion la linea de la que vino, sin perder ninguna.
+
+    SQLite no sabe cambiar una primary key, asi que la tabla se reconstruye una sola
+    vez. Se copia fila por fila y por nombre de columna: el registro de alcance ES la
+    lista blanca, y perderla no se arregla reinstalando — hay que volver a autorizar
+    cada conversacion a mano.
+
+    Todo lo que ya estaba es de la cuenta local: hasta hoy no habia otra."""
+    ahora = time.strftime("%Y-%m-%d %H:%M")
+    con.execute("insert or ignore into wa_account (id, kind, label, enabled, "
+                "linked_at, updated_at) values (?,?,?,1,?,?)",
+                (CUENTA_LOCAL, "local", "WhatsApp Desktop", ahora, ahora))
+    if "account" in cols or not cols:
+        con.commit()
+        return
+    copiar = [c for c in CHAT_SCOPE_COLS if c in cols]
+    con.execute("alter table chat_scope rename to chat_scope_v1")
+    con.executescript(CHAT_SCOPE_DDL)
+    con.execute(f"insert into chat_scope (account, {','.join(copiar)}) "
+                f"select ?, {','.join(copiar)} from chat_scope_v1", (CUENTA_LOCAL,))
+    con.execute("drop table chat_scope_v1")
+    con.commit()
 
 
 def closing_baseline(con):
@@ -543,9 +632,9 @@ def jid_of(con, ref):
     exact = [c for c in hits if (c["name"] or "").lower() == ref.lower()]
     hits = exact or hits
     if not hits:
-        sys.exit(f"ningun chat coincide con {ref!r}")
+        sys.exit(f"no chat matches {ref!r}")
     if len(hits) > 1:
-        print(f"{ref!r} es ambiguo:", file=sys.stderr)
+        print(f"{ref!r} is ambiguous:", file=sys.stderr)
         for c in hits[:12]:
             print(f"  {c['jid']}\t{c['name']}", file=sys.stderr)
         sys.exit(2)
@@ -564,6 +653,10 @@ def cmd_set(con, a):
     cur = con.execute("select * from chat_scope where chat_jid=?", (jid,)).fetchone()
     cur = dict(cur) if cur else {}
     vals = {
+        # Hoy la unica linea que produce conversaciones es la local. Cuando el lector
+        # web exista, la cuenta llega con el, no antes: una bandera que solo acepta un
+        # valor es un control que no controla nada.
+        "account": cur.get("account") or CUENTA_LOCAL,
         "chat_jid": jid,
         "chat_name": name or cur.get("chat_name") or jid,
         "provider": a.provider or cur.get("provider") or "plane",
@@ -579,18 +672,20 @@ def cmd_set(con, a):
         "updated_at": time.strftime("%Y-%m-%d %H:%M"),
     }
     if vals["mode"] not in MODES:
-        sys.exit(f"modo invalido: {vals['mode']} (usa {'/'.join(MODES)})")
+        sys.exit(f"invalid mode: {vals['mode']} (use {'/'.join(MODES)})")
     if vals["provider"] not in PROVIDERS_CHAT:
-        sys.exit(f"proveedor invalido: {vals['provider']} (usa {'/'.join(PROVIDERS_CHAT)})")
+        sys.exit(f"invalid provider: {vals['provider']} (use {'/'.join(PROVIDERS_CHAT)})")
     # Con "ninguno" el destino no aplica: exigirlo dejaria sin poder activar justo la
     # conversacion que se marco para que no abra tarjetas.
     if vals["mode"] != "off" and vals["provider"] != SIN_TARJETA and not vals["target"]:
-        sys.exit(f"un chat activo necesita --target: sin destino el agente no sabe donde "
-                 f"abrir la tarea.\n  {vals['provider']}: {PROVIDERS[vals['provider']]}")
+        sys.exit(f"an active chat needs --target: with no destination the agent does not "
+                 f"know where to open the task.\n  {vals['provider']}: "
+                 f"{PROVIDERS[vals['provider']]}")
+    llave = ("account", "chat_jid")
     con.execute(f"""insert into chat_scope ({','.join(vals)}) values
                     ({','.join('?' * len(vals))})
-                    on conflict(chat_jid) do update set
-                    {','.join(f'{k}=excluded.{k}' for k in vals if k != 'chat_jid')}""",
+                    on conflict({','.join(llave)}) do update set
+                    {','.join(f'{k}=excluded.{k}' for k in vals if k not in llave)}""",
                 list(vals.values()))
     con.commit()
     push_to_plugin(con)
@@ -600,9 +695,9 @@ def cmd_set(con, a):
 def cmd_mode(con, a):
     jid, _ = jid_of(con, a.chat)
     if a.value not in MODES:
-        sys.exit(f"modo invalido: {a.value} (usa {'/'.join(MODES)})")
+        sys.exit(f"invalid mode: {a.value} (use {'/'.join(MODES)})")
     if not con.execute("select 1 from chat_scope where chat_jid=?", (jid,)).fetchone():
-        sys.exit(f"{jid} no esta en el registro, usa `wa-scope set` primero")
+        sys.exit(f"{jid} is not in the registry, use `wa-scope set` first")
     con.execute("update chat_scope set mode=?, updated_at=? where chat_jid=?",
                 (a.value, time.strftime("%Y-%m-%d %H:%M"), jid))
     con.commit()
@@ -630,13 +725,13 @@ def cmd_check(con, a):
            "provider": row["provider"] if row else None,
            "target": row["target"] if row else None,
            "reason": ("ok" if allowed else
-                      "no esta en el registro" if not row else
-                      f"modo {mode} no alcanza para {a.for_}")}
+                      "not in the registry" if not row else
+                      f"mode {mode} is not enough for {a.for_}")}
     if not allowed:
         con.execute("insert into agent_action (ts,chat_jid,chat_name,action,detail) "
                     "values (?,?,?,?,?)",
                     (time.strftime("%Y-%m-%d %H:%M"), jid, out["chat_name"],
-                     "denied", out["reason"]))
+                     "denied", f"{a.for_} · {mode}"))
         con.commit()
     print(json.dumps(out, ensure_ascii=False, indent=2))
     sys.exit(0 if allowed else 3)
@@ -700,7 +795,7 @@ def notify(title, body):
 def cmd_alert(con, a):
     """Para lo que NO puede resolver el agente y necesita al humano. Notificacion
     del sistema, no un mensaje mas en el chat que se pierde entre otros 200."""
-    title = a.title or "Necesita tu respuesta"
+    title = a.title or "Needs your answer"
     body = (a.body or "")[:240]
     con.execute("insert into agent_action (ts,chat_jid,chat_name,stanza_id,action,detail) "
                 "values (?,?,?,?,?,?)",
@@ -736,6 +831,11 @@ DEFAULT_CONFIG = {
     "transcribe_model": "",   # vacio = lo decide la calidad; fijarlo pisa la calidad
     "transcribe_lang": "auto",    # los audios mezclan espanol e ingles
     "transcribe_quality": "optima",  # optima | minima. Minima entra en cualquier equipo.
+    # La base de la app de escritorio manda donde existe: historial completo y no
+    # depende de una sesion que se cae. La web arranca apagada porque cuesta un puesto
+    # de dispositivo enlazado, y eso no se gasta sin que el usuario lo pida.
+    "read_local": "on",
+    "read_web": "off",
     "tone": "Espanol neutro latinoamericano. Trata de usted. Formal pero no acartonado. "
             "Sin modismos regionales, sin voseo, sin diminutivos. Frases cortas.",
 }
@@ -748,7 +848,7 @@ def cmd_route(con, a):
         return [{"removed": a.remove}]
     if a.match:
         if not a.target:
-            sys.exit("falta --target")
+            sys.exit("--target is missing")
         con.execute("insert into route (pattern,provider,target,note,updated_at) "
                     "values (?,?,?,?,?) on conflict(pattern) do update set "
                     "provider=excluded.provider, target=excluded.target, "
@@ -769,7 +869,7 @@ def resolve_target(con, text, chat_jid=None):
     entry = merged_scope(con).get(chat_jid) if chat_jid else None
     if entry and (entry.get("provider") or "plane") == SIN_TARJETA:
         return {"provider": SIN_TARJETA, "target": None,
-                "why": "la conversacion esta en 'ninguno': no abre tarjetas",
+                "why": "the conversation is set to 'ninguno': it opens no cards",
                 "matched": None}
     low = (text or "").lower()
     rules = [dict(r) for r in con.execute(
@@ -781,13 +881,13 @@ def resolve_target(con, text, chat_jid=None):
         pattern = (r.get("pattern") or "").lower()
         if pattern and pattern in low:
             return {"provider": r.get("provider") or "plane", "target": r.get("target"),
-                    "why": f"el mensaje dice {pattern!r}", "matched": pattern}
+                    "why": f"the message says {pattern!r}", "matched": pattern}
     if entry and entry.get("target"):
         return {"provider": entry.get("provider") or "plane",
                 "target": entry["target"],
-                "why": "destino por defecto del chat", "matched": None}
+                "why": "the chat's default destination", "matched": None}
     return {"provider": None, "target": None,
-            "why": "sin destino: ni una regla ni un default del chat", "matched": None}
+            "why": "no destination: neither a rule nor a chat default", "matched": None}
 
 
 def cmd_where(con, a):
@@ -916,7 +1016,7 @@ def closing_mark(con, issue, chat_jid, result, detail=""):
     tablero caido, token vencido — no pasa por aca: de esa tarjeta no se sabe nada
     todavia, asi que se vuelve a intentar en la proxima corrida.
     """
-    action, texto = CLOSING_RESULTS[result]
+    action = CLOSING_RESULTS[result]
     now = time.strftime("%Y-%m-%d %H:%M")
     row = con.execute("select chat_name from work where issue=? and chat_jid=? limit 1",
                       (issue, chat_jid)).fetchone()
@@ -932,7 +1032,7 @@ def closing_mark(con, issue, chat_jid, result, detail=""):
     con.execute("insert into agent_action (ts,chat_jid,chat_name,action,plane_issue,detail) "
                 "values (?,?,?,?,?,?)",
                 (now, chat_jid, (row["chat_name"] if row else "") or "", action, issue,
-                 (detail or "").strip() or texto))
+                 (detail or "").strip()))
     con.commit()
     return {"issue": issue, "chat_jid": chat_jid, "result": result,
             "marcadas": cur.rowcount, "accion": action, "ya_estaba": False}
@@ -948,38 +1048,40 @@ def cmd_closing(con, a):
     lo que el plugin vende."""
     if a.result:
         if not (a.issue and a.chat):
-            sys.exit("falta --issue y --chat: el aviso se registra por tarjeta y conversacion")
+            sys.exit("--issue and --chat are missing: the notice is recorded per card "
+                     "and conversation")
         return [closing_mark(con, a.issue, a.chat, a.result, a.detail)]
     if a.group:
         if not (a.issue and a.chat):
-            sys.exit("falta --issue y --chat: el aviso se decide por tarjeta y conversacion")
+            sys.exit("--issue and --chat are missing: the notice is decided per card "
+                     "and conversation")
         if a.group not in GRUPOS_DE_CIERRE:
             return [{"issue": a.issue, "chat_jid": a.chat, "group": a.group,
                      "action": "nada", "text": None,
-                     "why": f"el grupo {a.group} no es un cierre: la tarjeta sigue abierta"}]
+                     "why": f"group {a.group} is not a closing: the card is still open"}]
         row = next((r for r in closing_rows(con)
                     if r["issue"] == a.issue and r["chat_jid"] == a.chat), None)
         if not row:
             return [{"issue": a.issue, "chat_jid": a.chat, "group": a.group,
                      "action": "nada", "text": None,
-                     "why": "esa tarjeta no espera aviso: ya se aviso, o no es trabajo "
-                            "abierto de esta conversacion"}]
+                     "why": "that card is not waiting to be announced: it already was, "
+                            "or it is not open work of this conversation"}]
         action = closing_action(row["mode"])
         if action == "no-escribe":
             # Se registra aca mismo y no en un paso aparte del prompt: el permiso no va
             # a cambiar solo, y dejarlo suelto significa que el panel nunca lo ve y que
             # la misma tarjeta se revisa cada cinco minutos para siempre.
             closing_mark(con, a.issue, a.chat, "sin-permiso",
-                         f"{a.issue} en modo {row['mode']}: no se escribe en {row['chat']}")
+                         f"{a.issue} · {row['mode']} · {row['chat']}")
             return [{**row, "group": a.group, "action": action, "text": None,
-                     "why": f"el permiso de esa conversacion es {row['mode']}: no escribe",
+                     "why": f"that conversation's permission is {row['mode']}: it does not write",
                      "send_flag": None}]
         if not row["agent"]:
             # Todo mensaje va firmado; wa-send ni lo intenta sin nombre. No se registra
             # nada: en cuanto haya nombre configurado, este cierre se avisa igual.
             return [{**row, "group": a.group, "action": "nada", "text": None,
-                     "why": "sin nombre de agente no se firma nada: "
-                            "fijelo con `wa-scope agent \"<nombre>\"`",
+                     "why": "nothing is signed without an agent name: "
+                            "set it with `wa-scope agent \"<name>\"`",
                      "send_flag": None}]
         return [{**row, "group": a.group, "action": action,
                  "text": closing_text(a.group, a.issue, a.title, a.client_comment),
@@ -1002,7 +1104,7 @@ def cmd_rotate(con, a):
     for r in old:
         counts[r["action"]] = counts.get(r["action"], 0) + 1
     chats = sorted({r["chat_name"] for r in old if r["chat_name"]})
-    summary = (f"{len(old)} acciones entre {old[0]['ts']} y {old[-1]['ts']}. "
+    summary = (f"{len(old)} actions between {old[0]['ts']} and {old[-1]['ts']}. "
                + ", ".join(f"{k}: {v}" for k, v in sorted(counts.items()))
                + (". Chats: " + ", ".join(chats[:12]) if chats else ""))
     con.execute("insert into digest (period, summary, actions, created_at) "
@@ -1038,10 +1140,10 @@ def cmd_pending(con, a):
         sys.exit(2)
     if a.only_taken:
         hay = len(taken)
-        detalle = f"{hay} marcados como tomar"
+        detalle = f"{hay} marked as take"
     else:
         hay = len(pending) + work
-        detalle = f"{len(pending)} esperando, {work} en curso"
+        detalle = f"{len(pending)} waiting, {work} in progress"
     print(json.dumps({"hay_trabajo": bool(hay), "detalle": detalle,
                       "sincronizado": activity.get("syncedAt")}, ensure_ascii=False))
     sys.exit(0 if hay else 1)
@@ -1083,7 +1185,7 @@ def cmd_config(con, a):
     if a.key and a.value is not None:
         motivo = valida_ajuste(a.key, a.value)
         if motivo:
-            sys.exit(f"no lo guardo: {motivo}")
+            sys.exit(f"not saved: {motivo}")
         con.execute("insert into settings (key,value) values (?,?) "
                     "on conflict(key) do update set value=excluded.value", (a.key, a.value))
         con.commit()
@@ -1093,6 +1195,29 @@ def cmd_config(con, a):
         return [{"key": a.key, "value": rows.get(a.key)}]
     # El nombre del agente tiene su propio comando; en el listado solo seria ruido.
     return [{"key": k, "value": v} for k, v in sorted(rows.items()) if k != "agent_name"]
+
+
+def cmd_accounts(con, a):
+    """Las lineas conectadas y cuantas conversaciones tiene autorizada cada una.
+
+    Se lista aunque hoy solo haya una: cuando haya dos, "Laura Mendez" sin la linea al
+    lado es ambiguo, y el sitio donde mirar que linea es cual tiene que ser el mismo de
+    siempre. El conteo va al lado a proposito — conectar una linea no autoriza nada, y
+    un cero ahi lo dice mejor que un parrafo."""
+    ajustes = merged_settings(con)
+    encendida = {"local": ajustes.get("read_local", "on") != "off",
+                 "web": ajustes.get("read_web", "off") == "on"}
+    filas = []
+    for r in con.execute("select id, kind, label, profile, enabled, linked_at "
+                         "from wa_account order by kind desc, id"):
+        n = con.execute("select count(*) c from chat_scope where account=? and mode<>'off'",
+                        (r["id"],)).fetchone()["c"]
+        filas.append({"id": r["id"], "kind": r["kind"],
+                      "label": r["label"] or r["id"],
+                      "profile": r["profile"],
+                      "enabled": bool(r["enabled"]) and encendida.get(r["kind"], False),
+                      "linked_at": r["linked_at"], "authorized_chats": n})
+    return filas
 
 
 def cmd_log(con, a):
@@ -1122,107 +1247,111 @@ def main():
 
     add("list").set_defaults(fn=cmd_list)
 
-    s = add("set", help="registra o actualiza un chat")
+    s = add("set", help="register or update a chat")
     s.add_argument("chat")
     s.add_argument("--provider", choices=list(PROVIDERS_CHAT),
-                   help=f"servicio de tareas donde abrir la tarjeta; "
-                        f"{SIN_TARJETA} = no abre ninguna")
-    s.add_argument("--target", help="proyecto (plane), team (linear) u owner/repo (github)")
-    s.add_argument("--project", help="alias de --target, por compatibilidad")
+                   help=f"task service where the card is opened; "
+                        f"{SIN_TARJETA} = opens none")
+    s.add_argument("--target", help="project (plane), team (linear) or owner/repo (github)")
+    s.add_argument("--project", help="alias of --target, kept for compatibility")
     s.add_argument("--mode")
     s.add_argument("--state"); s.add_argument("--hours"); s.add_argument("--timezone")
     s.add_argument("--notes")
-    s.add_argument("--tone", help="como escribe en esta conversacion; pisa el global")
+    s.add_argument("--tone", help="how it writes in this conversation; overrides the global one")
     s.add_argument("--instructions",
-                   help="que hace en esta conversacion; el tono es solo el como")
+                   help="what it does in this conversation; the tone is only the how")
     s.set_defaults(fn=cmd_set)
 
-    s = add("mode", help="cambia solo el modo")
+    s = add("mode", help="change only the mode")
     s.add_argument("chat"); s.add_argument("value"); s.set_defaults(fn=cmd_mode)
 
     s = add("rm"); s.add_argument("chat"); s.set_defaults(fn=cmd_rm)
 
-    s = add("check", help="compuerta de autorizacion; exit 3 si deniega")
+    s = add("check", help="authorization gate; exit 3 when it denies")
     s.add_argument("chat")
     s.add_argument("--for", dest="for_", default="observar", choices=MODES[1:])
     s.set_defaults(fn=cmd_check)
 
-    s = add("lock", help="toma el lock de corrida; exit 4 si ya hay otra")
+    s = add("lock", help="take the run lock; exit 4 when another run holds it")
     s.add_argument("--name", default="triage"); s.add_argument("--ttl", type=int, default=900)
     s.add_argument("--note", default=""); s.set_defaults(fn=cmd_lock)
 
     s = add("unlock"); s.add_argument("--name", default="triage")
     s.set_defaults(fn=cmd_unlock)
 
-    s = add("alert", help="notificacion del sistema: algo necesita a un humano")
+    s = add("alert", help="system notification: something needs a human")
     s.add_argument("--title"); s.add_argument("--body")
     s.add_argument("--chat", default=""); s.add_argument("--name", default="")
     s.add_argument("--stanza", default=""); s.set_defaults(fn=cmd_alert)
 
-    s = add("pending", help="sincroniza y sale 1 si no hay nada que hacer (para precheck)")
+    s = add("pending", help="syncs and exits 1 when there is nothing to do (for the precheck)")
     s.add_argument("--only-taken", action="store_true",
-                   help="solo cuenta lo marcado a mano con Tomar")
+                   help="only counts what was marked by hand with Take")
     s.set_defaults(fn=cmd_pending)
 
-    s = add("work", help="que quedo en curso y que falta; el estado entre corridas")
+    s = add("work", help="what is in progress and what is left; the state between runs")
     s.add_argument("--stanza"); s.add_argument("--chat"); s.add_argument("--name")
     s.add_argument("--issue"); s.add_argument("--step"); s.add_argument("--next")
     s.add_argument("--done"); s.set_defaults(fn=cmd_work)
 
-    s = add("closing", help="tarjetas cerradas que su conversacion todavia no sabe")
-    s.add_argument("--issue", help="la tarjeta; sin esto lista lo que hay que revisar")
-    s.add_argument("--chat", help="el chat_jid de la conversacion de esa tarjeta")
+    s = add("closing", help="closed cards their conversation does not know about yet")
+    s.add_argument("--issue", help="the card; without it, lists what has to be reviewed")
+    s.add_argument("--chat", help="the chat_jid of that card's conversation")
     s.add_argument("--group", choices=STATE_GROUPS,
-                   help="el GRUPO de estado de la tarjeta en el tablero (state.group), "
-                        "nunca el nombre de la columna")
-    s.add_argument("--title", help="el titulo de la tarjeta, para que el mensaje diga de que habla")
+                   help="the card's state GROUP on the board (state.group), "
+                        "never the column name")
+    s.add_argument("--title", help="the card title, so the message says what it is about")
     s.add_argument("--client-comment", dest="client_comment",
-                   help=f"el comentario del tablero marcado {CLIENT_MARK}: sale tal cual "
-                        f"y solo, sin el resto del hilo")
+                   help=f"the board comment marked {CLIENT_MARK}: it goes out as is and "
+                        f"alone, without the rest of the thread")
     s.add_argument("--result", choices=list(CLOSING_RESULTS),
-                   help="como termino el aviso; cierra el tema y no se reintenta")
-    s.add_argument("--detail", default="", help="que paso, para la bitacora del panel")
+                   help="how the notice ended; closes the matter and is not retried")
+    s.add_argument("--detail", default="", help="what happened, for the panel's log")
     s.set_defaults(fn=cmd_closing)
 
-    s = add("rotate", help="poda la bitacora vieja y la deja como resumen")
+    s = add("rotate", help="prunes the old log and leaves it as a summary")
     s.add_argument("--keep", type=int, default=500); s.set_defaults(fn=cmd_rotate)
 
-    s = add("history", help="los resumenes de lo ya podado")
+    s = add("history", help="the summaries of what was already pruned")
     s.add_argument("-n", type=int, default=20); s.set_defaults(fn=cmd_history)
 
-    s = add("voice", help="tono, instrucciones, proveedor y permiso de una conversacion")
+    s = add("voice", help="tone, instructions, provider and permission of a conversation")
     s.add_argument("chat", nargs="?"); s.set_defaults(fn=cmd_voice)
 
-    s = add("route", help="reglas de destino por contenido; el chat es solo el fallback")
-    s.add_argument("--match", help="texto que tiene que aparecer en el mensaje")
+    s = add("route", help="destination rules by content; the chat is only the fallback")
+    s.add_argument("--match", help="text that has to appear in the message")
     s.add_argument("--provider", choices=list(PROVIDERS)); s.add_argument("--target")
     s.add_argument("--note"); s.add_argument("--remove")
     s.set_defaults(fn=cmd_route)
 
-    s = add("where", help="donde iria la tarjeta para este texto, y por que")
+    s = add("where", help="where the card would go for this text, and why")
     s.add_argument("text"); s.add_argument("--chat")
     s.set_defaults(fn=cmd_where)
 
-    s = add("decisions", help="que marco el humano desde el panel: tomar / ignorar")
+    s = add("decisions", help="what the human marked from the panel: take / ignore")
     s.set_defaults(fn=lambda con, a: [
         {"stanzaId": k, **v} for k, v in sorted(decisions_read().items(),
                                                 key=lambda kv: kv[1].get("at", ""))])
 
-    s = add("config", help="ver o fijar ajustes (inbox_days, transcribe, lock_ttl_s)")
+    s = add("config", help="see or set settings (inbox_days, transcribe, lock_ttl_s, "
+                           "read_local, read_web)")
     s.add_argument("key", nargs="?"); s.add_argument("value", nargs="?")
     s.set_defaults(fn=cmd_config)
 
-    s = add("agent", help="ver o fijar el nombre de tu agente")
+    add("accounts", help="the connected lines and what each one may touch"
+        ).set_defaults(fn=cmd_accounts)
+
+    s = add("agent", help="see or set your agent's name")
     s.add_argument("name", nargs="?"); s.set_defaults(fn=cmd_agent)
 
-    s = add("sync", help="empuja registro, nombre y actividad al panel del plugin")
+    s = add("sync", help="pushes registry, name and activity to the plugin panel")
     s.set_defaults(fn=lambda con, a: [{"synced": push_to_plugin(con, with_activity=True),
                                        "destinos": plugin_store_targets()}])
 
     s = add("log"); s.add_argument("-n", type=int, default=50)
     s.set_defaults(fn=cmd_log)
 
-    s = add("record", help="deja rastro de una accion del agente")
+    s = add("record", help="leaves a trace of an agent action")
     s.add_argument("--chat", required=True); s.add_argument("--name", default="")
     s.add_argument("--stanza", default=""); s.add_argument("--action", required=True)
     s.add_argument("--issue", default=""); s.add_argument("--detail", default="")
@@ -1237,7 +1366,7 @@ def main():
     if a.json:
         print(json.dumps(rows, ensure_ascii=False, indent=2)); return
     if not rows:
-        print("(registro vacio — ningun chat autorizado, que es el default seguro)"); return
+        print("(empty registry — no chat authorized, which is the safe default)"); return
     for r in rows:
         print(" | ".join(f"{v}" for v in r.values() if v not in (None, "")))
 

@@ -40,29 +40,38 @@ async function checkSystem(orca, toolsDir = TOOLS) {
   } catch {
     checks = []
   }
-  const failed = checks.filter((c) => !c.ok)
+  // Solo lo REQUERIDO avisa. Lo opcional siempre tiene algo apagado — la segunda
+  // linea, por ejemplo — y avisarlo pondria una notificacion en cada arranque de una
+  // maquina que lee perfecto, que es la manera mas rapida de que dejen de leerse.
+  const failed = checks.filter((c) => !c.ok && c.requerido !== false)
   if (!checks.length) {
     await orca.host.call('notifications.show', {
-      title: 'No pude verificar el sistema',
-      body: `No pude correr las herramientas del plugin. Revisa que ${toolsDir} sea ejecutable.`
+      title: 'Could not check the system',
+      body: `Could not run the plugin tools. Check that ${toolsDir} is executable.`
     }).catch(() => {})
     return
   }
   if (!failed.length) return
 
   // El primer chequeo es si el sistema esta soportado; distinguirlo de "falta instalar
-  // WhatsApp" importa, porque uno se arregla y el otro no.
-  const unsupported = failed.some((c) => /sistema|system/i.test(c.check))
+  // WhatsApp" importa, porque uno se arregla y el otro no. Se mira el codigo y no el
+  // nombre: el nombre es texto para leer y se puede reescribir, el codigo es el contrato.
+  const unsupported = failed.some((c) => c.code === 'system')
   await orca.host.call('notifications.show', {
+    // El worker no tiene forma de saber en que idioma esta el usuario — el host no se
+    // lo dice y no hay navigator aca — asi que una notificacion no se puede traducir.
+    // Va en ingles, como todo lo que no puede llevar traduccion; el detalle esta a un
+    // clic, en el panel, que si esta en su idioma.
     title: unsupported
-      ? 'WhatsApp Inbox no puede leer en este sistema'
-      : 'WhatsApp Inbox necesita algo mas',
+      ? 'WhatsApp Inbox cannot read on this system'
+      : 'WhatsApp Inbox needs something else',
     body: unsupported
-      ? 'La lectura de WhatsApp solo esta verificada en macOS con WhatsApp Desktop. ' +
-        'El resto del plugin funciona; las automatizaciones no van a correr.'
-      : `${failed[0].check}: ${failed[0].detalle}. Abri los ajustes del plugin para ver el detalle.`
+      ? 'Reading the desktop app is only verified on macOS. A WhatsApp Web session ' +
+        'is a second route and it is not built yet. Open the plugin settings to see ' +
+        'what applies here.'
+      : 'Open the plugin settings to see what is missing.'
   }).catch(() => {})
-  orca.log(`chequeo: faltan ${failed.map((c) => c.check).join(', ')}`)
+  orca.log(`check: missing ${failed.map((c) => c.code || c.check).join(', ')}`)
 }
 
 /** La linea de stderr que sirve. En un traceback de Python la primera es el
@@ -100,7 +109,7 @@ async function runJson(cmd, args) {
   try {
     return { code, data: JSON.parse(stdout || 'null') }
   } catch {
-    throw new Error(`${cmd} no devolvio JSON: ${stdout.slice(0, 200)}`)
+    throw new Error(`${cmd} returned no JSON: ${stdout.slice(0, 200)}`)
   }
 }
 
@@ -177,7 +186,7 @@ async function sync(orca, { toolsDir = TOOLS, trigger = 'timer' } = {}) {
       exitCode: error?.exitCode ?? null,
       trigger
     }
-    orca.log(`sync fallo (${estado.reason}, code ${estado.exitCode}): ${estado.detail}`)
+    orca.log(`sync failed (${estado.reason}, code ${estado.exitCode}): ${estado.detail}`)
   } finally {
     sincronizando = false
   }
@@ -197,7 +206,7 @@ export default function activate(orca) {
   // el usuario se tiene que enterar ahora y no cuando una automatizacion lleve una
   // semana sin correr sin explicar por que.
   dirHerramientas().then((dir) => checkSystem(orca, dir))
-    .catch((error) => orca.log(`chequeo inicial fallo: ${error.message}`))
+    .catch((error) => orca.log(`initial check failed: ${error.message}`))
 
   // Y traer las conversaciones ya: en una instalacion nueva el panel arranca vacio y
   // el usuario no tiene de donde sacarlas.
@@ -263,10 +272,10 @@ export default function activate(orca) {
    */
   orca.commands.register('wa-inbox.scope.set', async (args) => {
     const { chatJid, chatName, planeProject, mode = 'off', initialState, hours } = args ?? {}
-    if (!chatJid) throw new Error('falta chatJid')
-    if (!MODES.includes(mode)) throw new Error(`modo invalido: ${mode}`)
+    if (!chatJid) throw new Error('chatJid is missing')
+    if (!MODES.includes(mode)) throw new Error(`invalid mode: ${mode}`)
     if (mode !== 'off' && !planeProject) {
-      throw new Error('un chat activo necesita planeProject')
+      throw new Error('an active chat needs planeProject')
     }
     const next = await scope()
     if (mode === 'off' && !planeProject) {
@@ -286,7 +295,7 @@ export default function activate(orca) {
     if (next[chatJid]) {
       await run(await tool('wa-scope'), ['set', chatJid,
         '--project', String(next[chatJid].planeProject ?? ''),
-        '--mode', mode]).catch((error) => orca.log(`wa-scope set fallo: ${error.message}`))
+        '--mode', mode]).catch((error) => orca.log(`wa-scope set failed: ${error.message}`))
     }
     return next[chatJid] ?? { chatJid, mode: 'off' }
   })
@@ -300,8 +309,9 @@ export default function activate(orca) {
     if (rows.length && args?.notify !== false) {
       const s = await settings()
       await orca.host.call('notifications.show', {
-        title: s.agentName ? `${s.agentName}: ${rows.length} pendientes`
-                           : `${rows.length} mensajes te mencionan`,
+        // Igual que el resto del worker: sin idioma del host, la notificacion va en ingles.
+        title: s.agentName ? `${s.agentName}: ${rows.length} pending`
+                           : `${rows.length} messages mention you`,
         body: rows.slice(0, 3).map((r) => `${r.chat}: ${r.text}`.slice(0, 90)).join('\n')
       }).catch(() => {})
     }
@@ -309,18 +319,17 @@ export default function activate(orca) {
   })
 
   /** Preflight: que el usuario sepa que le falta antes de depender de esto. */
+  // Se le pregunta al CLI en TODAS las plataformas. Antes se cortaba aca fuera de
+  // macOS con una nota fija: eso escondia la unica respuesta util en Linux, que es que
+  // si hay una via — la sesion web — y lo que falta es construirla. Una nota escrita
+  // aca ademas se desincroniza del doctor de verdad en cuanto una de las dos cambia.
   orca.commands.register('wa-inbox.doctor', async () => {
-    if (process.platform !== 'darwin') {
-      return {
-        ok: false,
-        checks: [{ check: 'sistema operativo', ok: false, detalle: process.platform }],
-        nota: 'Solo macOS. WhatsApp Web no deja base local y en Windows la base esta ' +
-              'en otro formato, sin verificar.'
-      }
-    }
     const { data } = await runJson(await tool('wa-read'), ['doctor', '--json'])
       .catch(() => ({ data: null }))
-    return { ok: !!data && data.every((c) => c.ok), checks: data ?? [] }
+    // Lo opcional no hace fallar: sin la segunda linea se lee igual, y pintar de rojo
+    // una funcion que falta es lo que hacia parecer rota una maquina que anda bien.
+    const required = (data ?? []).filter((c) => c.requerido !== false)
+    return { ok: !!data && required.every((c) => c.ok), checks: data ?? [] }
   })
 
   orca.commands.register('wa-inbox.settings', async (args) => {
@@ -331,7 +340,7 @@ export default function activate(orca) {
   })
 
   orca.events.on('agent.status.changed', (payload) => {
-    orca.log(`agente ${payload.state} en ${payload.worktreeId ?? 'sin worktree'}`)
+    orca.log(`agent ${payload.state} in ${payload.worktreeId ?? 'no worktree'}`)
   })
 
   // Al desactivar el plugin los timers se van con el: si no, siguen leyendo WhatsApp

@@ -17,7 +17,9 @@ const DEPS = process.env.WA_INBOX_DEPS ??
   new URL('../../.orca-wa-inbox-deps/package.json', import.meta.url).pathname
 const req = createRequire(DEPS)
 const { JSDOM } = req('jsdom')
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync, mkdirSync, mkdtempSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -32,11 +34,20 @@ function ok (nombre, condicion, detalle = '') {
   console.log(`  FALLA ${nombre}${detalle ? ` — ${detalle}` : ''}`)
 }
 
-/** Monta un panel con el puente del host simulado. */
-async function montar (archivo, storage = {}) {
+/** Monta un panel con el puente del host simulado.
+ *
+ *  `idioma` fija navigator.language antes de que corra el script del panel, que es de
+ *  donde el panel saca el idioma. Sin poder fijarlo solo se podria comprobar que el
+ *  diccionario existe, no que el panel lo usa — y lo segundo es lo que se rompe. */
+async function montar (archivo, storage = {}, idioma = null) {
   const html = readFileSync(join(root, archivo), 'utf8')
   const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true,
-    url: 'https://panel.invalid/' })
+    url: 'https://panel.invalid/',
+    beforeParse (window) {
+      if (!idioma) return
+      Object.defineProperty(window.navigator, 'language',
+        { value: idioma, configurable: true })
+    } })
   const { window } = dom
   const enviados = []
 
@@ -126,6 +137,32 @@ console.log('\nconfig.html')
     `storage.inboxDays = ${JSON.stringify(storage.inboxDays)}`)
   ok('confirma la ventana en pantalla',
     doc.getElementById('said-days').textContent.includes('✓'))
+
+  // De donde lee. Son DOS interruptores porque las fuentes se suman: la app de
+  // escritorio lee una sola linea y cada sesion de WhatsApp Web seria otra. Un solo
+  // control de tres valores obligaria a elegir una y perder la otra.
+  doc.getElementById('read-local').value = 'off'
+  doc.getElementById('read-web').value = 'on'
+  doc.getElementById('save-source').click()
+  await espera()
+  ok('guarda que no lea la app de escritorio', storage.readLocal === 'off',
+    `storage.readLocal = ${JSON.stringify(storage.readLocal)}`)
+  ok('guarda que sume WhatsApp Web', storage.readWeb === 'on',
+    `storage.readWeb = ${JSON.stringify(storage.readWeb)}`)
+  ok('confirma las fuentes en pantalla',
+    doc.getElementById('said-source').textContent.includes('✓'))
+  // Los valores son los que valida `wa-scope`: si el select ofreciera otro, el panel
+  // diria guardado y el CLI lo tiraria sin que nadie se entere.
+  const valores = (id) => [...doc.getElementById(id).options].map((o) => o.value).sort()
+  ok('las fuentes solo ofrecen on/off',
+    JSON.stringify(valores('read-local')) === JSON.stringify(['off', 'on']) &&
+    JSON.stringify(valores('read-web')) === JSON.stringify(['off', 'on']),
+    `local = ${JSON.stringify(valores('read-local'))}, web = ${JSON.stringify(valores('read-web'))}`)
+  // Y se deja como estaba: lo de abajo comprueba el panel entero, no este ajuste.
+  doc.getElementById('read-local').value = 'on'
+  doc.getElementById('read-web').value = 'off'
+  doc.getElementById('save-source').click()
+  await espera()
 
   // Un select no puede ofrecer un valor que el CLI vaya a rechazar: si lo ofrece, el
   // panel dice guardado y `wa-scope` lo tira. Las listas se comprueban, no se confian.
@@ -500,7 +537,7 @@ console.log('\nactivity.html')
     // es el UNICO lugar donde el dueno se entera de que la tarjeta se cerro y su
     // cliente no lo supo. Si el panel no lo pinta, la decision es invisible.
     { ts: '2026-09-17 11:40', chat: 'Andes QA', action: 'skipped',
-      issue: 'AND-7', detail: 'AND-7 en modo observar: no se escribe en Andes QA' }]
+      issue: 'AND-7', detail: 'AND-7 · observar · Andes QA' }]
   }
   const { doc, storage } = await montar('activity.html', { activity: actividad })
 
@@ -546,6 +583,221 @@ console.log('\nactivity.html')
   await espera()
   ok('avisa cuando nunca se sincronizo',
     sinDatos.doc.getElementById('synced').textContent.length > 0)
+}
+
+// ───────── el idioma: lo que el CLI manda en codigo, el panel lo dice ─────────
+// El CLI habla ingles porque lo lee quien corre una terminal. El panel lo lee quien
+// usa Orca, en su idioma. Lo unico que une los dos es un codigo estable, asi que se
+// comprueba que el panel lo traduzca de verdad y que no se cuele ni una palabra en
+// ingles en un panel en espanol.
+console.log('\nel codigo del CLI, dicho en el idioma del panel')
+{
+  const salud = {
+    ok: false,
+    problem: 'WhatsApp Desktop installed',
+    problemCode: 'whatsapp',
+    detail: '/Users/quien-sea/Library/Group Containers/group.net.whatsapp.WhatsApp.shared',
+    optional: [{
+      que: 'audio transcription', code: 'transcribe',
+      como: 'no engine: download the model in Settings > Voice, or install a local one ' +
+        'with brew install whisper-cpp',
+      howCode: 'transcribe-no-engine'
+    }]
+  }
+
+  const es = await montar('config.html', { health: salud }, 'es-419')
+  await espera()
+  const alertaEs = es.doc.getElementById('alert').textContent
+  const opcionalEs = es.doc.getElementById('opcionales').textContent
+  ok('el problema de salud se dice en espanol, no como lo escribio el CLI',
+    alertaEs.includes('WhatsApp Desktop instalado'), alertaEs)
+  ok('el requisito opcional tambien',
+    opcionalEs.includes('Transcripcion de audio') && opcionalEs.includes('Ajustes > Voz'),
+    opcionalEs)
+  // Lo que motiva todo esto: media traduccion es peor que ninguna, porque no se ve.
+  ok('no se cuela el ingles del CLI en el panel en espanol',
+    !/\btranscription\b|\bdownload\b|\binstalled\b/i.test(alertaEs + ' ' + opcionalEs),
+    alertaEs + ' | ' + opcionalEs)
+  // El detalle SI es el dato crudo de la herramienta —una ruta, un tamano, un error de
+  // sqlite—, no una frase: se muestra tal cual, igual que el detalle del sync fallido.
+  ok('el detalle tecnico se muestra tal cual', alertaEs.includes('Group Containers'),
+    alertaEs)
+
+  const pt = await montar('config.html', { health: salud }, 'pt-BR')
+  await espera()
+  ok('y en portugues tambien',
+    pt.doc.getElementById('alert').textContent.includes('WhatsApp Desktop instalado') &&
+    pt.doc.getElementById('opcionales').textContent.includes('Transcricao de audio'),
+    pt.doc.getElementById('opcionales').textContent)
+
+  const en = await montar('config.html', { health: salud }, 'en-US')
+  await espera()
+  ok('en ingles dice lo mismo que la terminal',
+    en.doc.getElementById('alert').textContent.includes('WhatsApp Desktop installed'),
+    en.doc.getElementById('alert').textContent)
+
+  // Un codigo que este panel no conozca todavia no puede dejar el aviso vacio: se
+  // pinta el texto del CLI, que es peor que traducido pero infinitamente mejor que nada.
+  const raro = await montar('config.html', {
+    health: { ok: false, problem: 'something new broke', problemCode: 'todavia-no-existe',
+      optional: [{ que: 'a new thing', como: 'do the new thing', code: 'nuevo' }] }
+  }, 'es-419')
+  await espera()
+  ok('un codigo desconocido cae al texto del CLI y no desaparece',
+    raro.doc.getElementById('alert').textContent.includes('something new broke') &&
+    raro.doc.getElementById('opcionales').textContent.includes('a new thing'),
+    raro.doc.getElementById('alert').textContent)
+
+  const actividad = {
+    syncedAt: '2026-09-17 14:02', running: false,
+    pending: [{ stanzaId: 'K1', date: '2026-09-17 13:58', chat: 'Soporte', sender: 'Ana',
+      kind: 'mencion', text: 'el reporte', hasMedia: false }],
+    recent: [{ ts: '2026-09-17 13:52', chat: 'Soporte', action: 'closed',
+      issue: 'SOP-1', detail: '' }]
+  }
+  const actEs = await montar('activity.html', { activity: actividad }, 'es-419')
+  await espera()
+  ok('el tipo de mensaje se dice en espanol',
+    actEs.doc.getElementById('pending').textContent.includes('mencion'),
+    actEs.doc.getElementById('pending').textContent)
+  ok('y la accion de la bitacora tambien',
+    actEs.doc.getElementById('recent').textContent.includes('cierre avisado'),
+    actEs.doc.getElementById('recent').textContent)
+
+  const actEn = await montar('activity.html', { activity: actividad }, 'en-US')
+  await espera()
+  ok('en ingles, mention y closing announced',
+    actEn.doc.getElementById('pending').textContent.includes('mention') &&
+    actEn.doc.getElementById('recent').textContent.includes('closing announced'),
+    actEn.doc.getElementById('recent').textContent)
+
+  const actPt = await montar('activity.html', { activity: actividad }, 'pt-BR')
+  await espera()
+  ok('en portugues, mencao y fecho avisado',
+    actPt.doc.getElementById('pending').textContent.includes('mencao') &&
+    actPt.doc.getElementById('recent').textContent.includes('fecho avisado'),
+    actPt.doc.getElementById('recent').textContent)
+
+  const actRaro = await montar('activity.html', {
+    activity: { syncedAt: '2026-09-17 14:02', running: false,
+      pending: [{ stanzaId: 'K2', date: '2026-09-17 13:00', chat: 'Soporte',
+        sender: 'Ana', kind: 'todavia-no-existe', text: 'x', hasMedia: false }],
+      recent: [{ ts: '2026-09-17 13:00', chat: 'Soporte', action: 'tampoco-existe',
+        issue: null, detail: '' }] }
+  }, 'es-419')
+  await espera()
+  ok('un kind o un action nuevos se pintan tal cual y no desaparecen',
+    actRaro.doc.getElementById('pending').textContent.includes('todavia-no-existe') &&
+    actRaro.doc.getElementById('recent').textContent.includes('tampoco-existe'))
+}
+
+// ───────── el contrato entre el CLI y los paneles ─────────
+// Los paneles leen exactamente las claves que escribe `wa-scope sync`. Nada lo
+// garantizaba: los tests montaban los paneles contra un storage escrito a mano, que es
+// una copia del contrato y no el contrato. Aca se corre el CLI de verdad contra un HOME
+// temporal y se montan los paneles contra LO QUE ESCRIBIO, que es lo unico que prueba
+// que siguen hablando el mismo idioma — y que una traduccion no renombro una clave.
+console.log('\nel contrato CLI -> panel')
+{
+  const home = mkdtempSync(join(tmpdir(), 'wa-inbox-contrato-'))
+  // HOME propio: la base vive en ~/.wa-inbox/scope.db y no hay variable para moverla,
+  // asi que mover el HOME es lo que mantiene la base real del usuario fuera de esto.
+  const env = { ...process.env, HOME: home,
+    XDG_CONFIG_HOME: join(home, '.config'),
+    APPDATA: join(home, 'AppData', 'Roaming') }
+  // El CLI solo escribe donde ya hay un userData de Orca: sin crearlo, sync no deja nada.
+  const userData = process.platform === 'darwin'
+    ? join(home, 'Library', 'Application Support', 'orca')
+    : join(home, '.config', 'orca')
+  mkdirSync(userData, { recursive: true })
+
+  const wa = (...args) => spawnSync(join(root, 'bin', 'wa-scope'), args,
+    { env, encoding: 'utf8', timeout: 180000 })
+
+  const JID = '120363000000000009@g.us'
+  wa('agent', 'Watson')
+  wa('set', JID, '--provider', 'plane', '--target', 'SOP', '--mode', 'responder',
+    '--tone', 'Espanol neutro, de usted.', '--instructions', 'Resume y avisa.')
+  wa('config', 'inbox_days', '30')
+  wa('config', 'transcribe', 'off')
+  wa('config', 'transcribe_lang', 'pt')
+  wa('config', 'owner_name', 'Fabiana Olivar')
+  wa('route', '--match', 'acme', '--target', 'ACM')
+  const sincronizado = wa('sync', '--json')
+
+  const almacen = join(userData, 'plugins-data', 'ab2web.orca-wa-inbox', 'storage.json')
+  ok('wa-scope sync escribe el storage que lee el panel', existsSync(almacen),
+    `${almacen} — rc=${sincronizado.status} ${(sincronizado.stderr || '').slice(0, 200)}`)
+  const escrito = existsSync(almacen) ? JSON.parse(readFileSync(almacen, 'utf8')) : {}
+
+  // Las claves de arriba: renombrar una deja el panel leyendo undefined y pintando
+  // vacio, sin un solo error a la vista.
+  for (const clave of ['scope', 'activity', 'health', 'routes', 'chats', 'agentName',
+    'inboxDays', 'transcribe', 'transcribeLang', 'transcribeQuality', 'ownerName',
+    'tone']) {
+    ok(`sync escribe la clave ${clave}`, clave in escrito,
+      `claves = ${JSON.stringify(Object.keys(escrito))}`)
+  }
+
+  const entrada = (escrito.scope || {})[JID]
+  for (const campo of ['chatName', 'provider', 'target', 'mode', 'tone', 'instructions',
+    'updatedAt']) {
+    ok(`la conversacion viaja con ${campo}`, !!entrada && campo in entrada,
+      `scope[${JID}] = ${JSON.stringify(entrada)}`)
+  }
+  ok('y viaja con los valores que se guardaron, sin traducir',
+    entrada && entrada.provider === 'plane' && entrada.target === 'SOP' &&
+    entrada.mode === 'responder',
+    JSON.stringify(entrada))
+
+  for (const campo of ['pending', 'recent', 'running', 'syncedAt']) {
+    ok(`la actividad viaja con ${campo}`, campo in (escrito.activity || {}),
+      `activity = ${JSON.stringify(Object.keys(escrito.activity || {}))}`)
+  }
+  ok('la salud viaja con ok y optional',
+    'ok' in (escrito.health || {}) && Array.isArray((escrito.health || {}).optional),
+    `health = ${JSON.stringify(escrito.health)}`)
+  // Cada cosa opcional trae su codigo: es lo que el panel traduce. Sin el, el panel
+  // pinta el ingles del CLI y media pantalla queda en otro idioma.
+  ok('cada requisito opcional trae el codigo que el panel traduce',
+    (escrito.health.optional || []).every((o) => 'code' in o && 'que' in o && 'como' in o),
+    JSON.stringify(escrito.health.optional))
+  ok('y si algo bloquea, viene con su codigo',
+    escrito.health.ok === true ||
+    (typeof escrito.health.problemCode === 'string' && !!escrito.health.problemCode),
+    JSON.stringify(escrito.health))
+  ok('la regla de ruteo viaja con pattern, provider y target',
+    (escrito.routes || []).some((r) => r.pattern === 'acme' && r.target === 'ACM' &&
+      r.provider === 'plane'),
+    JSON.stringify(escrito.routes))
+
+  // Y ahora lo que importa: los paneles montados contra ESE storage, no contra uno
+  // escrito a mano.
+  const panel = await montar('config.html', escrito, 'es-419')
+  await espera()
+  ok('el panel pinta la conversacion que escribio el CLI',
+    panel.doc.getElementById('scope-wrap').textContent.includes('SOP'),
+    panel.doc.getElementById('scope-wrap').textContent.slice(0, 200))
+  ok('el panel recarga los ajustes que escribio el CLI',
+    panel.doc.getElementById('inbox-days').value === '30' &&
+    panel.doc.getElementById('transcribe').value === 'off' &&
+    panel.doc.getElementById('lang').value === 'pt' &&
+    panel.doc.getElementById('owner').value === 'Fabiana Olivar',
+    `${panel.doc.getElementById('inbox-days').value} / ` +
+    `${panel.doc.getElementById('transcribe').value} / ` +
+    `${panel.doc.getElementById('lang').value}`)
+  ok('el panel pinta la regla de ruteo que escribio el CLI',
+    panel.doc.getElementById('routes-wrap').textContent.includes('ACM'))
+  ok('la salud que escribio el CLI llega a la pantalla',
+    escrito.health.ok === true
+      ? panel.doc.getElementById('alert').hidden
+      : !panel.doc.getElementById('alert').hidden,
+    JSON.stringify(escrito.health))
+
+  const actividadReal = await montar('activity.html', escrito, 'es-419')
+  await espera()
+  ok('el panel de actividad monta contra el storage real sin romperse',
+    actividadReal.doc.getElementById('synced').textContent.length > 0)
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

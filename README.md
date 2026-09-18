@@ -5,8 +5,8 @@ hasta dónde puede actuar tu agente.
 
 ## Requisitos
 
-**Hoy esto solo funciona en macOS.** No es una decisión de diseño, es lo único que
-está verificado — ver "Otros sistemas" abajo.
+**Hoy la lectura solo funciona en macOS.** No es una decisión de diseño, es lo único
+que está verificado — ver "De dónde lee" y "Otros sistemas" abajo.
 
 | | |
 |---|---|
@@ -29,14 +29,25 @@ abre la base y cuenta los mensajes.
 Mac desbloqueada la base se lee normal. Lo que sí rompería todo es que WhatsApp
 empezara a cifrar su propia base.
 
-## WhatsApp Web no sirve
+## De dónde lee: dos vías, y se suman
 
-El plugin lee la base local `ChatStorage.sqlite` que deja WhatsApp Desktop.
-**WhatsApp Web no deja base local**: los mensajes viven en el IndexedDB del navegador,
-atados al origen `web.whatsapp.com` y a su propio cifrado. No hay archivo que leer.
+El plugin lee la base local `ChatStorage.sqlite` que deja WhatsApp Desktop. Esa base
+es **una sola línea**: la del teléfono con el que se instaló la app.
 
-Si solo usás WhatsApp Web, no hay camino de lectura. Instalá WhatsApp Desktop —
-comparte la misma cuenta y no consume un dispositivo vinculado extra.
+La segunda vía es una **sesión de WhatsApp Web** con su propio perfil de navegador,
+conducida por el navegador de Orca. No es un reemplazo de la base local — donde hay
+base local, la base local manda — es **otra línea**: el número de soporte de la
+empresa, una cuenta comercial aparte. Es también la única vía posible en Linux.
+
+**Todavía no está construida.** Lo que sí está es la costura, el registro de líneas y
+los dos interruptores (`wa-scope config read_local` / `read_web`). El diseño completo
+—dónde vive cada sesión, cómo se enlaza con el QR, cómo se identifica una cuenta, qué
+pasa cuando la sesión se cae— está en [`docs/LECTURA-MULTIFUENTE.md`](docs/LECTURA-MULTIFUENTE.md).
+
+Lo que la vía web cuesta, dicho antes de encenderla: sin historial viejo (solo lo que
+la sesión ya cargó), más lenta, gasta un puesto de dispositivo enlazado, y la sesión
+se puede caer. Y conectar una línea **no autoriza nada**: sigue rigiendo negar por
+defecto, conversación por conversación.
 
 ## Otros sistemas operativos
 
@@ -44,14 +55,14 @@ Sé honesto con esto en vez de prometer lo que no probé:
 
 - **Windows** — WhatsApp Desktop existe, pero guarda sus datos en otro formato y otra
   ruta (`%LOCALAPPDATA%\Packages\...`). **No verificado.** Para soportarlo habría que
-  confirmar si la base es legible y reescribir la capa de lectura de `wa-read`.
+  confirmar si la base es legible y sumar una entrada a `SOURCES`.
   El resto (`wa-scope`, el mapeo, el panel) es portable tal cual.
-- **Linux** — no hay WhatsApp Desktop oficial. Solo web, y ya vimos que web no deja
-  base local. Sin camino hoy.
+- **Linux** — no hay WhatsApp Desktop oficial ni la va a haber. La vía que aplica ahí
+  es la sesión web, que está diseñada y sin construir: es una función que falta, no un
+  callejón sin salida. `wa-read doctor` lo dice así en cada plataforma.
 
 La parte de **escribir** depende de la accesibilidad del sistema vía `orca computer`,
-que sí es multiplataforma; pero sin lectura no hay nada que responder, así que el
-cuello de botella es la base local.
+que sí es multiplataforma; pero sin lectura no hay nada que responder.
 
 ## Cuando la tarjeta se cierra
 

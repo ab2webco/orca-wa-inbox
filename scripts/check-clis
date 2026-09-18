@@ -10,6 +10,7 @@ import importlib.machinery
 import importlib.util
 import json
 import pathlib
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -18,18 +19,26 @@ RAIZ = pathlib.Path(__file__).resolve().parent.parent
 BIN = RAIZ / "bin"
 
 # Solo lecturas: nada que escriba, mande un mensaje ni toque WhatsApp.
+# El tercer campo dice si el caso corre con HOME propio. `wa-scope` abre su base al
+# arrancar y la migra si hace falta, asi que correrlo con el HOME de verdad hace que
+# un chequeo — algo que se corre a cada rato y sin pensarlo — le toque el registro real
+# al usuario. Lo de `wa-read` si va contra el equipo de verdad: solo lee, y es lo unico
+# que recorre la base de WhatsApp y comprueba que se pueda abrir.
 CASOS = [
-    ("wa-read", ["doctor", "--json"]),
-    ("wa-scope", ["config", "--json"]),
+    ("wa-read", ["doctor", "--json"], False),
+    ("wa-scope", ["config", "--json"], True),
     # Con un nombre en vez de un JID, wa-scope tiene que preguntarle a wa-read.
     # Ese camino llamaba a ~/tools/wa-read — una ruta fuera del plugin — y reventaba
     # sin que ningun chequeo lo viera, porque los otros casos no lo recorren.
-    ("wa-scope", ["voice", "un-nombre-que-no-existe", "--json"]),
+    ("wa-scope", ["voice", "un-nombre-que-no-existe", "--json"], True),
     # El listado de cierres pendientes toca la migracion y la linea de corte: si esa
     # rama revienta, el agente deja de avisar cierres y nada mas lo delata.
-    ("wa-scope", ["closing", "--json"]),
-    ("wa-transcribe", ["--check", "--json"]),
-    ("wa-send", ["--help"]),
+    ("wa-scope", ["closing", "--json"], True),
+    # El registro de lineas toca la migracion a (cuenta, jid): si esa rama revienta,
+    # el alcance entero deja de leerse.
+    ("wa-scope", ["accounts", "--json"], True),
+    ("wa-transcribe", ["--check", "--json"], False),
+    ("wa-send", ["--help"], False),
 ]
 
 
@@ -186,7 +195,165 @@ AJUSTES = [
     (["config", "transcribe_quality", "media"], False, "minima"),
     # owner_name es texto libre: cualquier nombre es un nombre.
     (["config", "owner_name", "Nombre De Ejemplo"], True, "Nombre De Ejemplo"),
+    # De donde lee. Un valor que no sea on/off tiene que morir al guardarse: guardado
+    # se descubre en la corrida del agente, que es donde ya no se puede preguntar.
+    (["config", "read_local", "off"], True, "off"),
+    (["config", "read_local", "quizas"], False, "off"),
+    (["config", "read_web", "on"], True, "on"),
+    (["config", "read_web", "automatico"], False, "on"),
 ]
+
+# La eleccion de fuente, recorrida de verdad. Cada caso es
+# (ajustes, codigo_esperado, motivo_en_la_primera_linea).
+# Existe porque lo que decide de donde se lee no se ve compilando: solo se ve
+# corriendolo, que es exactamente como se colo aqui un NameError en su momento.
+FUENTES = [
+    # Con las dos apagadas no hay de donde leer, y eso NO es una bandeja vacia: una
+    # bandeja vacia se lee como "no hay nada que atender".
+    ({"read_local": "off", "read_web": "off"}, 4, "no-source"),
+    # Web elegida en un equipo que igual tendria base: se respeta la eleccion y se
+    # falla con el motivo estable, no se cae de vuelta a la local en silencio.
+    ({"read_local": "off", "read_web": "on"}, 4, "web-not-implemented"),
+    # Y lo de siempre: sin base que leer se sale con 1 y el texto de requisitos.
+    ({"read_local": "on", "read_web": "off"}, 1, "local-unavailable"),
+]
+
+
+def revisa_fuentes(fallos: list) -> int:
+    """Recorre la eleccion de fuente y el doctor en un equipo SIN base local.
+
+    El HOME temporal no tiene contenedor de WhatsApp, asi que es la misma situacion
+    que una maquina Linux: ninguna base que leer. Ahi el doctor tiene que seguir
+    diciendo la verdad — que hay una segunda via y que falta construirla — en vez de
+    parecer un callejon sin salida.
+    """
+    hechas = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+
+        for ajustes, codigo, motivo in FUENTES:
+            for clave, valor_ in ajustes.items():
+                subprocess.run([str(BIN / "wa-scope"), "config", clave, valor_],
+                               capture_output=True, text=True, env=env, timeout=120)
+            p = subprocess.run([str(BIN / "wa-read"), "inbox", "--json"],
+                               capture_output=True, text=True, env=env, timeout=180)
+            hechas += 3
+            if p.returncode != codigo:
+                fallos.append(f"wa-read inbox con {ajustes}: salio {p.returncode} y "
+                              f"tenia que salir {codigo}")
+            primera = (p.stderr or "").strip().splitlines()[:1]
+            if primera != [f"wa-read: {motivo}"]:
+                fallos.append(f"wa-read inbox con {ajustes}: la primera linea de stderr "
+                              f"es {primera!r} y tenia que ser 'wa-read: {motivo}'")
+            # stdout vacio no es cosmetica: quien parsea lee `stdout or '[]'`, y un
+            # objeto de error ahi lo hace reventar en vez de quedarse sin filas.
+            if p.stdout.strip():
+                fallos.append(f"wa-read inbox con {ajustes}: escribio en stdout al fallar")
+            if "Traceback (most recent call last)" in p.stderr:
+                fallos.append(f"wa-read inbox con {ajustes}: reventó con un traceback")
+
+        # El doctor de un equipo sin base: tiene que nombrar la segunda via, decir que
+        # falta construirla, y NO bloquear por ella.
+        subprocess.run([str(BIN / "wa-scope"), "config", "read_web", "off"],
+                       capture_output=True, text=True, env=env, timeout=120)
+        p = subprocess.run([str(BIN / "wa-read"), "doctor", "--json"],
+                           capture_output=True, text=True, env=env, timeout=120)
+        filas = json.loads(p.stdout or "[]")
+        web = next((f for f in filas if f.get("code") == "web"), None)
+        hechas += 4
+        if not web:
+            fallos.append("wa-read doctor no dice nada de la via web")
+        else:
+            if web.get("requerido", True):
+                fallos.append("wa-read doctor marca la via web como requisito: una "
+                              "funcion que falta no es una rotura")
+            if web.get("detailCode") != "web-not-implemented":
+                fallos.append(f"la via web llego sin su codigo estable: "
+                              f"{web.get('detailCode')!r}")
+            # El detalle tiene que ser accionable: que cuesta y como se enciende.
+            detalle = (web.get("detalle") or "").lower()
+            if not ("linked-device" in detalle and "read_web" in detalle):
+                fallos.append("el detalle de la via web no dice ni lo que cuesta ni "
+                              f"como se enciende: {web.get('detalle')!r}")
+
+        # Y el texto de requisitos, que es lo que ve quien no tiene base, no puede
+        # seguir diciendo que no hay camino.
+        p = subprocess.run([str(BIN / "wa-read"), "doctor"], capture_output=True,
+                           text=True, env=env, timeout=120)
+        hechas += 2
+        if "WhatsApp Web" not in p.stdout:
+            fallos.append("el doctor sin base no nombra la via web")
+        if "not supported" in p.stdout:
+            fallos.append("el doctor sigue diciendo 'not supported' donde si hay via")
+    return hechas
+
+
+def revisa_migracion_cuentas(fallos: list) -> int:
+    """Una base vieja, con chat_jid como unica llave, no puede perder ni una fila.
+
+    El registro de alcance ES la lista blanca: perderlo no se arregla reinstalando,
+    hay que volver a autorizar cada conversacion a mano.
+    """
+    hechas = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+        db = home / ".wa-inbox" / "scope.db"
+        db.parent.mkdir(parents=True, exist_ok=True)
+        con = sqlite3.connect(db)
+        # El esquema v1 tal cual era: sin provider/target, con plane_project.
+        con.executescript("""
+            create table chat_scope (
+              chat_jid text primary key, chat_name text not null, plane_project text,
+              mode text not null default 'off', initial_state text,
+              hours text, timezone text, notes text, updated_at text);
+            insert into chat_scope values
+              ('100@g.us','Grupo Viejo','CCBQA','responder','Backlog','L-V',
+               'America/Bogota','una nota','2025-01-01 10:00'),
+              ('200@s.whatsapp.net','Directo Viejo','OPS','observar',null,'L-V',
+               'America/Bogota',null,'2025-01-02 10:00');""")
+        con.commit()
+        con.close()
+
+        p = subprocess.run([str(BIN / "wa-scope"), "list", "--json"],
+                           capture_output=True, text=True, env=env, timeout=120)
+        filas = {f["chat_jid"]: f for f in json.loads(p.stdout or "[]")}
+        hechas += 5
+        if len(filas) != 2:
+            fallos.append(f"la migracion a (cuenta, jid) perdio filas: quedaron "
+                          f"{sorted(filas)}")
+        grupo = filas.get("100@g.us", {})
+        if grupo.get("account") != "local":
+            fallos.append(f"lo que ya estaba no quedo en la cuenta local: "
+                          f"{grupo.get('account')!r}")
+        if grupo.get("target") != "CCBQA" or grupo.get("mode") != "responder":
+            fallos.append(f"la migracion perdio el mapeo de la fila: {grupo!r}")
+        if grupo.get("notes") != "una nota":
+            fallos.append(f"la migracion copio las columnas corridas: {grupo!r}")
+
+        # Y la llave nueva es (cuenta, jid): sin eso dos lineas con el mismo directo
+        # se colapsan en una y el agente contesta desde el numero equivocado.
+        con = sqlite3.connect(db)
+        llave = [r[1] for r in con.execute("pragma table_info(chat_scope)") if r[5]]
+        con.close()
+        if llave != ["account", "chat_jid"]:
+            fallos.append(f"la llave de chat_scope quedo en {llave!r}")
+
+        # La linea local tiene que existir en el registro de cuentas y contar lo que
+        # tiene autorizado: un cero ahi dice mejor que un parrafo que conectar no
+        # autoriza nada.
+        p = subprocess.run([str(BIN / "wa-scope"), "accounts", "--json"],
+                           capture_output=True, text=True, env=env, timeout=120)
+        cuentas = json.loads(p.stdout or "[]")
+        hechas += 2
+        local = next((c for c in cuentas if c.get("id") == "local"), None)
+        if not local or local.get("kind") != "local":
+            fallos.append(f"wa-scope accounts no lista la linea local: {cuentas!r}")
+        elif local.get("authorized_chats") != 2:
+            fallos.append(f"wa-scope accounts conto {local.get('authorized_chats')} "
+                          "conversaciones autorizadas y eran 2")
+    return hechas
 
 
 def entorno(home: pathlib.Path) -> dict:
@@ -274,13 +441,16 @@ def revisa_ajustes(fallos: list) -> int:
 
 def main() -> int:
     fallos = []
-    for nombre, args in CASOS:
+    aislado = tempfile.TemporaryDirectory()
+    env_aislado = entorno(pathlib.Path(aislado.name))
+    for nombre, args, propio in CASOS:
         ruta = BIN / nombre
         if not ruta.exists():
             fallos.append(f"{nombre}: no existe")
             continue
         try:
-            p = subprocess.run([str(ruta), *args], capture_output=True, text=True, timeout=120)
+            p = subprocess.run([str(ruta), *args], capture_output=True, text=True,
+                               env=env_aislado if propio else None, timeout=120)
         except (OSError, subprocess.SubprocessError) as error:
             fallos.append(f"{nombre}: no arranco — {error}")
             continue
@@ -290,7 +460,9 @@ def main() -> int:
             ultima = [l for l in p.stderr.strip().splitlines() if l.strip()][-1]
             fallos.append(f"{nombre} {' '.join(args)}: {ultima.strip()}")
 
-    comprobaciones = revisa_ajustes(fallos) + revisa_wa_send(fallos)
+    comprobaciones = (revisa_ajustes(fallos) + revisa_wa_send(fallos)
+                      + revisa_fuentes(fallos) + revisa_migracion_cuentas(fallos))
+    aislado.cleanup()
 
     if fallos:
         print("CLI que se rompen al correr:", file=sys.stderr)

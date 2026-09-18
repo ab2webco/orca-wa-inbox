@@ -295,6 +295,25 @@
       </section>
 
       <section>
+        <h2 data-t="sourceLegend"></h2>
+        <label for="read-local" data-t="readLocalLabel"></label>
+        <select id="read-local">
+          <option value="on" data-t="readLocalOn"></option>
+          <option value="off" data-t="readLocalOff"></option>
+        </select>
+        <label for="read-web" data-t="readWebLabel"></label>
+        <select id="read-web">
+          <option value="off" data-t="readWebOff"></option>
+          <option value="on" data-t="readWebOn"></option>
+        </select>
+        <p class="hint" data-t="sourceHelp"></p>
+        <div class="actions">
+          <button id="save-source" data-t="saveSource"></button>
+          <span class="said" id="said-source"></span>
+        </div>
+      </section>
+
+      <section>
         <h2 data-t="mapLegend"></h2>
         <label for="inbox-days" data-t="daysLabel"></label>
         <select id="inbox-days">
@@ -475,6 +494,19 @@
           daysHelp: 'Con un dia, una mencion del viernes que nadie contesto ya no ' +
             'aparece el lunes. Se leen como maximo los 500 mensajes mas nuevos de la ventana.',
           saveDays: 'Guardar ventana', daysSaved: 'Ventana guardada',
+          sourceLegend: 'De donde lee',
+          readLocalLabel: 'App de escritorio',
+          readLocalOn: 'si — lee esa linea', readLocalOff: 'no — no la lee',
+          readWebLabel: 'WhatsApp Web (otra linea)',
+          readWebOff: 'no', readWebOn: 'si — todavia no esta construido',
+          sourceHelp: 'Se suman: la app lee UNA linea, la del telefono con el que se ' +
+            'instalo. WhatsApp Web seria otra — el numero de soporte, otra cuenta — con ' +
+            'su propia sesion. Todavia no lee: conectar una linea no autoriza ninguna ' +
+            'conversacion por si solo.',
+          saveSource: 'Guardar fuentes', sourceSaved: 'Fuentes guardadas',
+          hWeb: 'WhatsApp Web como segunda linea',
+          howWebNotBuilt: 'Disenado y todavia sin construir. Cuesta: sin historial ' +
+            'viejo, mas lento, un puesto de dispositivo enlazado, y la sesion se puede caer.',
           mapLegend: 'Conversaciones', chatLabel: 'Conversacion',
           chatPh: 'nombre exacto del grupo o su JID',
           providerLabel: 'Servicio de tareas', permLabel: 'Permiso',
@@ -499,6 +531,27 @@
           colWhen: 'Cuando diga', colGoes: 'Va a',
           notReady: 'WhatsApp no esta conectado.',
           notReadyHow: 'Revisa los requisitos aca abajo.',
+          hSystem: 'Leer WhatsApp no esta soportado en este sistema',
+          hWhatsapp: 'WhatsApp Desktop instalado',
+          hDatabase: 'Base de chats presente',
+          hReadable: 'Base sin cifrar y legible',
+          hSqlite3: 'sqlite3 disponible',
+          hSend: 'Enviar mensajes',
+          hTranscribe: 'Transcripcion de audio',
+          hUnknown: 'No se pudo verificar el estado',
+          howSendNoOrca: 'El CLI de Orca no esta en el PATH; el agente puede leer y ' +
+            'abrir tarjetas, pero no escribir en WhatsApp',
+          howTranscribeMissingTool: 'Falta bin/wa-transcribe dentro del plugin',
+          howTranscribeUnknown: 'No se pudo verificar la transcripcion',
+          howTranscribeOrcaOutdated: 'Este Orca todavia no trae transcripcion de audio; ' +
+            'actualizalo, o instala un motor local con brew install whisper-cpp',
+          howTranscribeNoEngine: 'Sin motor: baja el modelo en Ajustes > Voz, o instala ' +
+            'uno local con brew install whisper-cpp',
+          howTranscribeNoModel: 'Falta el modelo: bajalo en Ajustes > Voz',
+          modeOff: 'off', modeObserve: 'observar', modeDraft: 'borrador',
+          modeReply: 'responder',
+          provNone: 'ninguno', provPlane: 'plane', provLinear: 'linear',
+          provGithub: 'github',
           needsUpdate: 'Esta version de Orca no deja guardar desde aca.',
           needsUpdateHow: 'Actualiza Orca.',
           needName: 'Poné un nombre.', needChat: 'Falta la conversacion.',
@@ -578,6 +631,19 @@
           daysHelp: 'With one day, a Friday mention nobody answered is gone by Monday. ' +
             'At most the 500 newest messages in the window are read.',
           saveDays: 'Save window', daysSaved: 'Window saved',
+          sourceLegend: 'Where it reads from',
+          readLocalLabel: 'Desktop app',
+          readLocalOn: 'yes — read that line', readLocalOff: 'no — do not read it',
+          readWebLabel: 'WhatsApp Web (another line)',
+          readWebOff: 'no', readWebOn: 'yes — not built yet',
+          sourceHelp: 'They add up: the app reads ONE line, the phone it was installed ' +
+            'with. WhatsApp Web would be another — a support number, a second account — ' +
+            'with its own session. It does not read yet: connecting a line authorizes no ' +
+            'conversation on its own.',
+          saveSource: 'Save sources', sourceSaved: 'Sources saved',
+          hWeb: 'WhatsApp Web as a second line',
+          howWebNotBuilt: 'Designed and not built yet. It costs: no deep history, ' +
+            'slower, one linked-device slot, and the session can drop.',
           mapLegend: 'Conversations', chatLabel: 'Conversation',
           chatPh: 'exact group name or its JID',
           providerLabel: 'Task service', permLabel: 'Permission',
@@ -602,6 +668,27 @@
           colWhen: 'When it says', colGoes: 'Goes to',
           notReady: 'WhatsApp is not connected.',
           notReadyHow: 'Check the requirements below.',
+          hSystem: 'WhatsApp reading supported on this system',
+          hWhatsapp: 'WhatsApp Desktop installed',
+          hDatabase: 'Chat database present',
+          hReadable: 'Database unencrypted and readable',
+          hSqlite3: 'sqlite3 available',
+          hSend: 'Send messages',
+          hTranscribe: 'Audio transcription',
+          hUnknown: 'Could not check the status',
+          howSendNoOrca: 'The Orca CLI is not in PATH; the agent can read and open ' +
+            'cards, but it cannot write in WhatsApp',
+          howTranscribeMissingTool: 'bin/wa-transcribe is missing from the plugin',
+          howTranscribeUnknown: 'Could not check transcription',
+          howTranscribeOrcaOutdated: 'This Orca does not ship audio transcription yet; ' +
+            'update it, or install a local engine with brew install whisper-cpp',
+          howTranscribeNoEngine: 'No engine: download the model in Settings > Voice, or ' +
+            'install a local one with brew install whisper-cpp',
+          howTranscribeNoModel: 'The model is missing: download it in Settings > Voice',
+          modeOff: 'off', modeObserve: 'observe', modeDraft: 'draft',
+          modeReply: 'reply',
+          provNone: 'none', provPlane: 'plane', provLinear: 'linear',
+          provGithub: 'github',
           needsUpdate: 'This Orca version cannot save from here.',
           needsUpdateHow: 'Update Orca.',
           needName: 'Give it a name.', needChat: 'Pick a conversation.',
@@ -612,6 +699,27 @@
         }
       }
       STRINGS.pt = Object.assign({}, STRINGS.en, {
+        hSystem: 'Ler o WhatsApp nao e suportado neste sistema',
+        hWhatsapp: 'WhatsApp Desktop instalado',
+        hDatabase: 'Base de conversas presente',
+        hReadable: 'Base sem criptografia e legivel',
+        hSqlite3: 'sqlite3 disponivel',
+        hSend: 'Enviar mensagens',
+        hTranscribe: 'Transcricao de audio',
+        hUnknown: 'Nao foi possivel verificar o estado',
+        howSendNoOrca: 'O CLI do Orca nao esta no PATH; o agente le e abre cartoes, ' +
+          'mas nao escreve no WhatsApp',
+        howTranscribeMissingTool: 'Falta bin/wa-transcribe dentro do plugin',
+        howTranscribeUnknown: 'Nao foi possivel verificar a transcricao',
+        howTranscribeOrcaOutdated: 'Este Orca ainda nao traz transcricao de audio; ' +
+          'atualize, ou instale um motor local com brew install whisper-cpp',
+        howTranscribeNoEngine: 'Sem motor: baixe o modelo em Ajustes > Voz, ou instale ' +
+          'um local com brew install whisper-cpp',
+        howTranscribeNoModel: 'Falta o modelo: baixe em Ajustes > Voz',
+        modeOff: 'off', modeObserve: 'observar', modeDraft: 'rascunho',
+        modeReply: 'responder',
+        provNone: 'nenhum', provPlane: 'plane', provLinear: 'linear',
+        provGithub: 'github',
         toneLabel: 'Como escreve', saveTone: 'Salvar tom', toneSaved: 'Tom salvo',
         transcribeLabel: 'Notas de voz',
         trLocal: 'local — o audio nao sai deste equipamento',
@@ -635,6 +743,19 @@
         daysHelp: 'Com um dia, uma mencao de sexta que ninguem respondeu nao aparece mais ' +
           'na segunda. Sao lidas no maximo as 500 mensagens mais novas da janela.',
         saveDays: 'Salvar janela', daysSaved: 'Janela salva',
+        sourceLegend: 'De onde le',
+        readLocalLabel: 'App de desktop',
+        readLocalOn: 'sim — le essa linha', readLocalOff: 'nao — nao le',
+        readWebLabel: 'WhatsApp Web (outra linha)',
+        readWebOff: 'nao', readWebOn: 'sim — ainda nao esta construido',
+        sourceHelp: 'Elas somam: o app le UMA linha, a do telefone com que foi ' +
+          'instalado. O WhatsApp Web seria outra — o numero de suporte, outra conta — ' +
+          'com sua propria sessao. Ainda nao le: conectar uma linha nao autoriza ' +
+          'nenhuma conversa sozinha.',
+        saveSource: 'Salvar fontes', sourceSaved: 'Fontes salvas',
+        hWeb: 'WhatsApp Web como segunda linha',
+        howWebNotBuilt: 'Desenhado e ainda nao construido. Custa: sem historico antigo, ' +
+          'mais lento, uma vaga de dispositivo vinculado, e a sessao pode cair.',
         qualityLabel: 'Qualidade da transcricao',
         qualityOptima: 'otima — recomendado',
         qualityMinima: 'minima — equipamentos sem computo',
@@ -757,6 +878,38 @@
         })
       }
 
+      // El CLI habla ingles y no sabe en que idioma esta el usuario, asi que ademas del
+      // texto manda un codigo estable. La frase la arma el panel, que si lo sabe; el
+      // texto del CLI queda de respaldo para un codigo que este panel no conozca todavia.
+      // Mismo trato que los motivos del worker en motivoTexto().
+      var HEALTH_KEY = {
+        system: 'hSystem', whatsapp: 'hWhatsapp', database: 'hDatabase',
+        readable: 'hReadable', sqlite3: 'hSqlite3', send: 'hSend',
+        transcribe: 'hTranscribe', web: 'hWeb', unknown: 'hUnknown'
+      }
+      var HEALTH_HOW_KEY = {
+        'web-not-implemented': 'howWebNotBuilt',
+        'send-no-orca': 'howSendNoOrca',
+        'transcribe-missing-tool': 'howTranscribeMissingTool',
+        'transcribe-unknown': 'howTranscribeUnknown',
+        'transcribe-orca-outdated': 'howTranscribeOrcaOutdated',
+        'transcribe-no-engine': 'howTranscribeNoEngine',
+        'transcribe-no-model': 'howTranscribeNoModel'
+      }
+      function porCodigo(mapa, code, respaldo) {
+        var key = mapa[code]
+        return key ? t(key) : (respaldo || '')
+      }
+
+      // El permiso y el servicio se guardan con estos valores y no se traducen nunca en
+      // el storage; lo que se traduce es como se leen. La tabla decia el valor crudo
+      // mientras el select de al lado ya lo decia en el idioma del usuario: dos formas
+      // de nombrar lo mismo en la misma pantalla.
+      var MODE_KEY = { off: 'modeOff', observar: 'modeObserve', borrador: 'modeDraft',
+                       responder: 'modeReply' }
+      var PROV_KEY = { ninguno: 'provNone', plane: 'provPlane', linear: 'provLinear',
+                       github: 'provGithub' }
+
       // Se muestran los requisitos que el usuario puede activar, con su accion.
       // Separados de la alerta a proposito: una funcion que falta no es una rotura.
       function renderOpcionales(lista) {
@@ -764,8 +917,9 @@
         if (!lista || !lista.length) { caja.hidden = true; caja.innerHTML = ''; return }
         caja.innerHTML = '<p class="hint" style="margin:0 0 4px">' + t('optionalTitle') +
           '</p>' + lista.map(function (o) {
-            return '<div class="opcional"><span>\u25CB</span><span><b>' + esc(o.que) +
-              '</b> &mdash; <code>' + esc(o.como) + '</code></span></div>'
+            return '<div class="opcional"><span>\u25CB</span><span><b>' +
+              esc(porCodigo(HEALTH_KEY, o.code, o.que)) + '</b> &mdash; <code>' +
+              esc(porCodigo(HEALTH_HOW_KEY, o.howCode, o.como)) + '</code></span></div>'
           }).join('')
         caja.hidden = false
       }
@@ -865,6 +1019,18 @@
         busy(event.currentTarget, write('transcribeQuality', el('quality').value)
           .then(function (r) {
             said('said-quality', r.ok ? '\u2713 ' + t('qualitySaved') : 'error', !r.ok)
+          }))
+      })
+
+      // ---------- de donde lee ----------
+      // Dos interruptores y no una lista de tres: las fuentes se SUMAN. La app de
+      // escritorio lee una sola linea — la del telefono con el que se instalo — y cada
+      // sesion de WhatsApp Web es otra. Encender la web no apaga la del escritorio.
+      el('save-source').addEventListener('click', function (event) {
+        busy(event.currentTarget, write('readLocal', el('read-local').value)
+          .then(function () { return write('readWeb', el('read-web').value) })
+          .then(function (r) {
+            said('said-source', r.ok ? '✓ ' + t('sourceSaved') : 'error', !r.ok)
           }))
       })
 
@@ -1061,8 +1227,10 @@
           keys.map(function (key) {
             var e = entries[key]
             return '<tr><td>' + esc(e.chatName || key) + '</td><td>' +
-              esc(e.provider || 'plane') + ' / ' + esc(e.target || '—') + '</td><td>' +
-              '<span class="pill ' + esc(e.mode || 'off') + '">' + esc(e.mode || 'off') +
+              esc(porCodigo(PROV_KEY, e.provider || 'plane', e.provider)) + ' / ' +
+              esc(e.target || '—') + '</td><td>' +
+              '<span class="pill ' + esc(e.mode || 'off') + '">' +
+              esc(porCodigo(MODE_KEY, e.mode || 'off', e.mode)) +
               '</span></td><td class="acts">' +
               '<button class="link" data-edit="' + esc(key) + '">' + t('edit') + '</button>' +
               '<button class="link" data-rm="' + esc(key) + '">' + t('remove') + '</button>' +
@@ -1158,7 +1326,8 @@
           '</th><th></th></tr></thead><tbody>' +
           rules.map(function (r, i) {
             return '<tr><td>' + esc(r.pattern) + '</td><td>' +
-              esc(r.provider || 'plane') + ' / ' + esc(r.target) + '</td>' +
+              esc(porCodigo(PROV_KEY, r.provider || 'plane', r.provider)) + ' / ' +
+              esc(r.target) + '</td>' +
               '<td class="acts"><button class="link" data-rrm="' + i + '">' +
               t('remove') + '</button></td></tr>'
           }).join('') + '</tbody></table>'
@@ -1201,7 +1370,8 @@
                             read('routes'), read('tone'), read('chats'),
                             read('transcribeQuality'), read('inboxDays'),
                             read('ownerName'), read('transcribe'),
-                            read('transcribeLang'), read('syncStatus')])
+                            read('transcribeLang'), read('syncStatus'),
+                            read('readLocal'), read('readWeb')])
           .then(function (r) {
             renderScope(r[0])
             if (typeof r[4] === 'string' && document.activeElement !== el('tone')) {
@@ -1212,6 +1382,8 @@
             ponerEnSelect('inbox-days', r[7], '7')
             ponerEnSelect('transcribe', r[9], 'local')
             ponerEnSelect('lang', r[10], 'auto')
+            ponerEnSelect('read-local', r[12], 'on')
+            ponerEnSelect('read-web', r[13], 'off')
             if (typeof r[8] === 'string' && document.activeElement !== el('owner')) {
               el('owner').value = r[8]
             }
@@ -1228,7 +1400,12 @@
             // El health ya trae QUE falla y su detalle: mostrarlo es mejor que mandar
             // a correr un comando, que es justo lo que se saco del resto del panel.
             if (r[2] && r[2].ok === false) {
-              var q = r[2].problem ? esc(r[2].problem) : t('notReady')
+              var q = r[2].problem
+                ? esc(porCodigo(HEALTH_KEY, r[2].problemCode, r[2].problem))
+                : t('notReady')
+              // El detalle es el dato crudo de la herramienta —una ruta, un tamano, un
+              // error de sqlite— no una frase: se muestra tal cual, como el detalle del
+              // sync fallido de mas arriba.
               var c = r[2].detail ? esc(r[2].detail) : t('notReadyHow')
               showAlert(q, c)
             }
