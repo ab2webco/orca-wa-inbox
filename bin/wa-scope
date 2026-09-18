@@ -41,8 +41,8 @@ DB = scope_db_path()
 # El prefijo "orca-" no es decorativo: la identidad oficial de un plugin se calcula
 # como <publisher>.<prefijo><resto>, asi que sin el no puede ser oficial en nuestro
 # marketplace. El nombre viejo se sigue leyendo para no perder lo ya guardado.
-PLUGIN_ID = "ab2web.wa-inbox"
-PLUGIN_ID_ANTERIOR = "ab2web.orca-wa-inbox"
+PLUGIN_ID = "ab2web.orca-wa-inbox"
+PLUGIN_ID_ANTERIOR = "ab2web.wa-inbox"
 
 
 def user_data_roots():
@@ -67,10 +67,12 @@ PLUGIN_STORES_ANTERIORES = [os.path.join(r, "plugins-data", PLUGIN_ID_ANTERIOR, 
 
 
 def plugin_store_path():
+    """De donde se LEE. El nombre nuevo manda siempre: mezclar por fecha dejaba el
+    CLI escribiendo en la ruta nueva y leyendo de la vieja, asi que un ajuste
+    guardado no se veia nunca. El anterior solo entra si el nuevo no existe."""
     existing = [p for p in PLUGIN_STORES if os.path.exists(p)]
     if existing:
         return max(existing, key=os.path.getmtime)
-    # Nada con el nombre nuevo: caer al anterior antes de devolver una ruta vacia.
     viejos = [p for p in PLUGIN_STORES_ANTERIORES if os.path.exists(p)]
     if viejos:
         return max(viejos, key=os.path.getmtime)
@@ -85,6 +87,11 @@ def plugin_store_targets():
     for path in PLUGIN_STORES:
         userdata = os.path.dirname(os.path.dirname(os.path.dirname(path)))
         if os.path.isdir(userdata):
+            out.append(path)
+    # Y tambien donde ya habia datos con el nombre anterior: si el usuario todavia
+    # corre un Orca que carga el plugin viejo, su panel tiene que seguir al dia.
+    for path in PLUGIN_STORES_ANTERIORES:
+        if os.path.exists(path):
             out.append(path)
     return out or [PLUGIN_STORES[0]]
 MODES = ["off", "observar", "borrador", "responder"]

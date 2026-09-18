@@ -87,8 +87,12 @@ def revisa_ajustes(fallos: list) -> int:
             if quedo != esperado:
                 fallos.append(f"{clave} quedo en {quedo!r} y tenia que quedar en {esperado!r}")
 
+        # La llave sale del manifiesto, no escrita a mano: cuando el plugin se
+        # renombro, la copia fija aqui hizo fallar el chequeo culpando al codigo.
+        man = json.loads((RAIZ / "orca-plugin.json").read_text(encoding="utf-8"))
+        llave = f"{man['publisher']}.{man['id']}"
         store = (home / "Library" / "Application Support" / "orca" / "plugins-data" /
-                 "ab2web.wa-inbox" / "storage.json")
+                 llave / "storage.json")
         store.parent.mkdir(parents=True, exist_ok=True)
 
         # `sync` tiene que devolverle al panel TODOS los ajustes, no solo el tono: uno
