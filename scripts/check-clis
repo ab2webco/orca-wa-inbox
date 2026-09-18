@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""Los cuatro CLI arrancan de verdad.
+
+Existe porque `npm run check` dejo pasar un NameError en wa-transcribe: probaba
+los paneles y las pruebas jsdom, y ninguna de las dos ejecuta un CLI. Compilar no
+alcanza — un import que falta solo aparece al recorrer esa rama — asi que aca se
+corre cada herramienta.
+"""
+import pathlib
+import subprocess
+import sys
+
+RAIZ = pathlib.Path(__file__).resolve().parent.parent
+BIN = RAIZ / "bin"
+
+# Solo lecturas: nada que escriba, mande un mensaje ni toque WhatsApp.
+CASOS = [
+    ("wa-read", ["doctor", "--json"]),
+    ("wa-scope", ["config", "--json"]),
+    ("wa-transcribe", ["--check", "--json"]),
+    ("wa-send", ["--help"]),
+]
+
+
+def main() -> int:
+    fallos = []
+    for nombre, args in CASOS:
+        ruta = BIN / nombre
+        if not ruta.exists():
+            fallos.append(f"{nombre}: no existe")
+            continue
+        try:
+            p = subprocess.run([str(ruta), *args], capture_output=True, text=True, timeout=120)
+        except (OSError, subprocess.SubprocessError) as error:
+            fallos.append(f"{nombre}: no arranco — {error}")
+            continue
+        # Un doctor puede terminar en != 0 porque al equipo le falta algo; eso no
+        # es un error del codigo. Lo que nunca es aceptable es un traceback.
+        if "Traceback (most recent call last)" in p.stderr:
+            ultima = [l for l in p.stderr.strip().splitlines() if l.strip()][-1]
+            fallos.append(f"{nombre} {' '.join(args)}: {ultima.strip()}")
+
+    if fallos:
+        print("CLI que se rompen al correr:", file=sys.stderr)
+        for f in fallos:
+            print(f"  {f}", file=sys.stderr)
+        return 1
+    print(f"{len(CASOS)} CLI arrancan")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

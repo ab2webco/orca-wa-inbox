@@ -1,0 +1,605 @@
+<title>WhatsApp Inbox — El plugin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Karla:ital,wght@0,400;0,500;0,700;1,400&family=IBM+Plex+Mono:wght@400;600&display=swap">
+
+<style>
+/* Ab2Web — sistema de documento. Claro siempre. Un solo acento. */
+:root{
+  --naranja:#FF8300;
+  --naranja-10:#FFF3E6;
+  --tinta:#040404;
+  --tinta-70:#3D3B39;
+  --gris:#6B6B6B;
+  --gris-40:#9A9793;
+  --fondo:#FAF9F7;
+  --papel:#FFFFFF;
+  --hairline:#E7E4E0;
+  --hairline-fuerte:#CFCAC4;
+  --rojo:#B3271B;
+  --rojo-10:#FCEDEB;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  background:var(--fondo); color:var(--tinta);
+  font-family:Karla,"Helvetica Neue",Arial,sans-serif;
+  font-size:17px; line-height:1.6; margin:0;
+  -webkit-font-smoothing:antialiased; font-feature-settings:"kern","liga";
+}
+.hoja{max-width:64rem;margin:0 auto;background:var(--papel);
+  border-left:1px solid var(--hairline);border-right:1px solid var(--hairline);
+  padding:0 clamp(1.25rem,5vw,4.5rem) 6rem}
+
+h1,h2,h3,h4{font-family:"Bricolage Grotesque",Karla,sans-serif;margin:0;
+  text-wrap:balance;line-height:1.08;letter-spacing:-.02em}
+h1{font-size:clamp(2.4rem,6vw,4.1rem);font-weight:800;letter-spacing:-.035em}
+h2{font-size:clamp(1.5rem,3vw,2rem);font-weight:700;letter-spacing:-.025em}
+h3{font-size:1.08rem;font-weight:700;letter-spacing:-.01em}
+h4{font-size:.94rem;font-weight:700}
+p{margin:0;max-width:64ch}
+strong{font-weight:700}
+em{font-style:italic;color:var(--tinta-70)}
+ul{margin:0;padding-left:1.1rem;display:flex;flex-direction:column;gap:.35rem;max-width:64ch;color:var(--tinta-70)}
+a{color:var(--naranja);text-underline-offset:3px}
+a:focus-visible{outline:2px solid var(--naranja);outline-offset:3px}
+
+.mono,code,td.n,.dato{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  font-variant-numeric:tabular-nums}
+code{font-size:.85em;background:var(--fondo);border:1px solid var(--hairline);
+  border-radius:2px;padding:.06em .34em}
+
+/* cabecera */
+.masthead{display:flex;align-items:flex-end;justify-content:space-between;gap:2rem;
+  flex-wrap:wrap;padding:2.6rem 0 1.1rem;border-bottom:3px solid var(--tinta)}
+.masthead img{height:34px;width:auto;display:block}
+.masthead .meta{font-family:"IBM Plex Mono",monospace;font-size:.72rem;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--gris);text-align:right}
+
+.portada{padding:3.2rem 0 2.6rem;border-bottom:1px solid var(--hairline);
+  display:flex;flex-direction:column;gap:1.1rem}
+.portada .bajada{font-size:1.16rem;color:var(--tinta-70);max-width:56ch;line-height:1.5}
+
+/* secciones numeradas: la regla y el numero son la estructura */
+section{padding:3rem 0 0;display:flex;flex-direction:column;gap:1.3rem}
+.rotulo{display:flex;align-items:baseline;gap:1rem;border-bottom:1px solid var(--tinta);
+  padding-bottom:.6rem}
+.rotulo .num{font-family:"IBM Plex Mono",monospace;font-size:.78rem;font-weight:600;
+  color:var(--naranja);letter-spacing:.08em}
+.rotulo h2{flex:1}
+
+/* cifras: grandes, en mono, el acento solo donde importa */
+.cifras{display:grid;grid-template-columns:repeat(auto-fit,minmax(8.5rem,1fr));
+  gap:0;border-top:1px solid var(--hairline);border-bottom:1px solid var(--hairline)}
+.cifra{padding:1.3rem 1.2rem 1.3rem 0;border-right:1px solid var(--hairline)}
+.cifra:last-child{border-right:0}
+.cifra b{display:block;font-family:"IBM Plex Mono",monospace;font-size:2.1rem;
+  font-weight:600;line-height:1;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.cifra.ac b{color:var(--naranja)}
+.cifra span{display:block;margin-top:.45rem;font-size:.8rem;color:var(--gris);line-height:1.35;max-width:16ch}
+
+/* tablas: hairlines, sin relleno */
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.9rem;min-width:32rem}
+th,td{text-align:left;padding:.68rem 1rem .68rem 0;border-bottom:1px solid var(--hairline);vertical-align:top}
+thead th{font-family:"IBM Plex Mono",monospace;font-size:.68rem;text-transform:uppercase;
+  letter-spacing:.11em;color:var(--gris);font-weight:600;border-bottom:1px solid var(--tinta);
+  padding-bottom:.5rem}
+tbody tr:last-child td{border-bottom:1px solid var(--hairline)}
+td.n{text-align:right;padding-right:1.4rem}
+.antes{color:var(--gris-40);text-decoration:line-through;text-decoration-thickness:1px}
+.ahora{color:var(--tinta);font-weight:700}
+
+/* nota al margen */
+.nota{border-left:3px solid var(--naranja);padding:.2rem 0 .2rem 1.15rem;
+  color:var(--tinta-70);font-size:.96rem;max-width:62ch}
+.nota strong{color:var(--tinta)}
+.nota.alerta{border-left-color:var(--rojo)}
+
+/* lista de hallazgos: numerada, sin cajas */
+.hallazgos{display:flex;flex-direction:column;counter-reset:h}
+.hallazgo{display:grid;grid-template-columns:2.6rem 1fr;gap:0 1rem;
+  padding:1.15rem 0;border-bottom:1px solid var(--hairline)}
+.hallazgo:first-child{border-top:1px solid var(--hairline)}
+.hallazgo::before{counter-increment:h;content:counter(h,decimal-leading-zero);
+  font-family:"IBM Plex Mono",monospace;font-size:.78rem;color:var(--gris-40);padding-top:.3rem}
+.hallazgo .cuerpo{display:flex;flex-direction:column;gap:.4rem}
+.hallazgo p{font-size:.95rem;color:var(--tinta-70);max-width:68ch}
+.chip{display:inline-block;font-family:"IBM Plex Mono",monospace;font-size:.64rem;
+  font-weight:600;text-transform:uppercase;letter-spacing:.1em;padding:.16rem .5rem;
+  border:1px solid var(--hairline-fuerte);color:var(--gris);border-radius:2px;margin-right:.5rem}
+.chip.critico{border-color:var(--rojo);color:var(--rojo);background:var(--rojo-10)}
+.chip.ac{border-color:var(--naranja);color:var(--naranja);background:var(--naranja-10)}
+
+figure{margin:0;display:flex;flex-direction:column;gap:.7rem}
+figcaption{font-size:.8rem;color:var(--gris);font-family:"IBM Plex Mono",monospace}
+svg{display:block;max-width:100%;height:auto}
+
+footer{margin-top:4rem;padding-top:1.2rem;border-top:3px solid var(--tinta);
+  font-family:"IBM Plex Mono",monospace;font-size:.72rem;color:var(--gris);
+  display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* El diagrama lo compuso Archify; la geometria es la suya, validada.
+   Las clases semanticas se remapean al sistema Ab2Web: blanco, tinta, un solo acento. */
+.diagrama svg{width:100%;height:auto}
+.diagrama .c-grid{display:none}
+.diagrama .c-lane{fill:none;stroke:var(--hairline);stroke-width:1;stroke-dasharray:3 4}
+.diagrama .c-security-group{fill:none;stroke:var(--rojo);stroke-width:1;stroke-dasharray:3 4}
+.diagrama .c-frontend,.diagrama .c-backend,.diagrama .c-database,
+.diagrama .c-cloud,.diagrama .c-external{fill:#fff;stroke:var(--tinta);stroke-width:1.5}
+.diagrama .c-security{fill:var(--naranja-10);stroke:var(--naranja);stroke-width:1.5}
+.diagrama .c-mask{fill:var(--papel)}
+.diagrama .m-default,.diagrama .m-dashed{fill:#CFCAC4;stroke:#CFCAC4}
+.diagrama .a-default{fill:none;stroke:#CFCAC4;stroke-width:1.4}
+.diagrama .a-security{fill:none;stroke:var(--rojo);stroke-width:1.4;stroke-dasharray:4 3}
+.diagrama text{font-family:"IBM Plex Mono",monospace;fill:var(--tinta)}
+.diagrama .t-primary,.diagrama .t-frontend,.diagrama .t-backend{fill:var(--tinta);font-weight:600}
+.diagrama .t-security{fill:var(--naranja);font-weight:600}
+.diagrama .t-muted,.diagrama .t-dim{fill:var(--gris)}
+
+</style>
+
+
+
+<div class="hoja">
+
+  <div class="masthead">
+    <img src="data:image/png;base64,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" alt="Ab2Web">
+    <div class="meta">AB2WEB · PLUGIN PARA ORCA LAB<br>SEPTIEMBRE 2026</div>
+  </div>
+
+  <div class="portada">
+    <h1>WhatsApp Inbox</h1>
+    <p class="bajada">Los pedidos de soporte que llegan por WhatsApp no llegan a ningun tablero: se atienden de memoria y se pierden. Este plugin los convierte en tarjetas y contesta donde se lo autorice, sin decidir nada que no le corresponda.</p>
+  </div>
+
+  <div class="cifras">
+    <div class="cifra ac"><b>5 min</b><span>de un mensaje a una tarjeta abierta</span></div>
+    <div class="cifra"><b>4</b><span>niveles de permiso, por conversacion</span></div>
+    <div class="cifra"><b>0</b><span>salidas a internet: todo es local</span></div>
+    <div class="cifra"><b>156</b><span>KB, con sus herramientas incluidas</span></div>
+  </div>
+
+  <section>
+    <div class="rotulo"><span class="num">01</span><h2>Que resuelve</h2></div>
+    <p>Un canal de soporte por WhatsApp tiene tres problemas que ninguna integracion de mensajeria resuelve sola:</p>
+    <div class="hallazgos">
+      <div class="hallazgo"><div class="cuerpo">
+        <div><strong>La mitad de lo que te mencionan no es trabajo</strong></div>
+        <p>Saludos, coordinacion, menciones en masa. Sin filtro, un tablero alimentado por WhatsApp se llena de basura en una semana y nadie vuelve a mirarlo.</p>
+      </div></div>
+      <div class="hallazgo"><div class="cuerpo">
+        <div><strong>Un canal de operaciones lleva varios clientes</strong></div>
+        <p>El mismo grupo mezcla trabajo de tres proyectos distintos. Mandar todo a un tablero unico pone la mitad en el lugar equivocado.</p>
+      </div></div>
+      <div class="hallazgo"><div class="cuerpo">
+        <div><strong>Lo que se atiende, se pierde</strong></div>
+        <p>Un pedido contestado en el chat no deja rastro: no hay tarjeta, no hay historial, y a la semana nadie recuerda si se hizo.</p>
+      </div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="rotulo"><span class="num">02</span><h2>Por que no se resuelve con la API oficial</h2></div>
+    <p>La pregunta razonable es por que no usar la API de negocios de WhatsApp, o una de las librerias que se conectan a la cuenta. Las tres opciones no son equivalentes, y la diferencia no es tecnica: es donde ocurre el soporte.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Camino</th><th>Que implica</th><th>Por que no alcanza</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>API oficial de negocios</strong><br><span class="chip">WABA</span></td>
+          <td>Un numero nuevo y dedicado, cuenta de Meta Business, aprobacion propia o de un proveedor, plantillas aprobadas para escribir fuera de la ventana de 24 horas, y costo por conversacion.</td>
+          <td><strong>No cubre conversaciones de grupo.</strong> Y el soporte de un equipo pasa en grupos: el del cliente, el de operaciones, el del proyecto. Un numero nuevo tampoco ve el historial ni los grupos donde la empresa ya esta.</td>
+        </tr>
+        <tr>
+          <td><strong>Librerias no oficiales</strong><br><span class="chip">cliente propio</span></td>
+          <td>Vinculan un dispositivo adicional a la cuenta real, como lo hace un navegador. Funcionan, ven los grupos y no piden aprobacion de nadie.</td>
+          <td class="antes">Son un cliente no autorizado: van contra los terminos del servicio, y lo que se arriesga es el <strong>baneo del numero</strong> &mdash;el mismo con el que la empresa le habla a sus clientes&mdash;. Un numero baneado no se recupera.</td>
+        </tr>
+        <tr>
+          <td><strong>Este plugin</strong><br><span class="chip ac">automatizacion</span></td>
+          <td>Opera la aplicacion de escritorio que ya esta instalada y con sesion iniciada. Ni numero nuevo, ni dispositivo vinculado, ni API, ni aprobacion.</td>
+          <td class="ahora">Ve exactamente lo que ve la persona, con sus mismos permisos. El limite es real: necesita el equipo encendido y la aplicacion abierta.</td>
+        </tr>
+      </tbody>
+    </table></div>
+    <div class="nota"><strong>Esto no es una integracion de mensajeria.</strong> Es la automatizacion de un proceso manual: alguien abre WhatsApp, lee lo que le escribieron, decide si es soporte, abre la tarjeta y contesta. El plugin hace esos mismos pasos, en el mismo lugar, con los mismos permisos &mdash;y con un registro de lo que hizo&mdash;. No agrega un canal nuevo ni un numero nuevo, y por eso no hay nada que aprobar ni nada que arriesgar.</div>
+  </section>
+
+  <section>
+    <div class="rotulo"><span class="num">03</span><h2>El recorrido de un mensaje</h2></div>
+    <figure>
+      <div class="diagrama"><svg viewBox="0 0 1184 786" role="img" lang="es" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase">
+        
+        <desc id="archify-diagram-description">Recorrido de un mensaje: se lee, se autoriza, se clasifica, se rutea y se contesta.</desc>
+        <!-- Definitions -->
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-default" />
+          </marker>
+          <marker id="arrowhead-emphasis" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-emphasis" />
+          </marker>
+          <marker id="arrowhead-security" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-security" />
+          </marker>
+          <marker id="arrowhead-dashed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-dashed" />
+          </marker>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" class="c-grid" stroke-width="0.5"/>
+          </pattern>
+        </defs>
+
+        <!-- Background Grid -->
+        <rect width="100%" height="100%" fill="url(#grid)" />
+
+        <!-- Swimlanes -->
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-0" x="40" y="52" width="1120" height="106" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="74" class="t-dim" font-size="10" font-weight="600">01 / WhatsApp</text>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-1" x="40" y="178" width="1120" height="106" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="200" class="t-dim" font-size="10" font-weight="600">02 / Plugin</text>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-2" x="40" y="304" width="1120" height="106" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="326" class="t-dim" font-size="10" font-weight="600">03 / Agente</text>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-3" x="40" y="430" width="1120" height="106" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="452" class="t-dim" font-size="10" font-weight="600">04 / Tablero</text>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="lane-4" x="40" y="556" width="1120" height="106" rx="10" class="c-lane" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="exception-lane" data-composition-frame-id="lane-4-exception" x="46" y="562" width="1108" height="94" rx="8" class="c-security-group" stroke-width="1"/>
+        <text x="54" y="578" class="t-security" font-size="10" font-weight="600">EX / Se detiene</text>
+
+        <!-- Phase headers -->
+        <line x1="90" y1="35" x2="302" y2="35" class="a-default" stroke-width="1.1"/>
+        <rect x="90" y="27" width="212" height="16" rx="4" class="c-mask"/>
+        <text x="196" y="39" class="t-muted" font-size="8" font-weight="600" text-anchor="middle">Leer</text>
+        <line x1="414" y1="35" x2="506" y2="35" class="a-security" stroke-width="1.1"/>
+        <rect x="414" y="27" width="92" height="16" rx="4" class="c-mask"/>
+        <text x="460" y="39" class="t-security" font-size="8" font-weight="600" text-anchor="middle">Autorizar</text>
+        <line x1="656" y1="35" x2="990" y2="35" class="a-default" stroke-width="1.1"/>
+        <rect x="656" y="27" width="334" height="16" rx="4" class="c-mask"/>
+        <text x="823" y="39" class="t-muted" font-size="8" font-weight="600" text-anchor="middle">Decidir</text>
+        <line x1="1018" y1="35" x2="1110" y2="35" class="a-default" stroke-width="1.1"/>
+        <rect x="1018" y="27" width="92" height="16" rx="4" class="c-mask"/>
+        <text x="1064" y="39" class="t-muted" font-size="8" font-weight="600" text-anchor="middle">Actuar</text>
+
+        <!-- Workflow groups -->
+
+
+        <!-- Edge paths -->
+        <path data-edge-from="mensaje" data-edge-to="lectura" data-edge-key="0" data-edge-id="e1" data-composition-points="136,146;136,246;168,246" d="M 136 146 L 136 246 L 168 246" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="tarjeta" data-edge-to="estado" data-edge-key="1" data-edge-id="e10" data-composition-points="1152,498;1168,498;1168,246;1152,246" d="M 1152 498 L 1168 498 L 1168 246 L 1152 246" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="tarjeta" data-edge-to="respuesta" data-edge-key="2" data-edge-id="e11" data-composition-points="1152,498;1168,498;1168,120;1152,120" d="M 1152 498 L 1168 498 L 1168 120 L 1152 120" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="estado" data-edge-to="yavisto" data-edge-label="la proxima corrida ya lo sabe" data-edge-key="3" data-edge-id="e12" data-composition-points="976,246;790,246" d="M 976 246 L 790 246" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="dudoso" data-edge-to="clasifica" data-edge-label="tomar o ignorar" data-edge-key="4" data-edge-id="e13" data-composition-points="790,624;806,624;806,483;702,483;702,398" d="M 790 624 L 806 624 L 806 483 L 702 483 L 702 398" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="lectura" data-edge-to="compuerta" data-edge-key="5" data-edge-id="e2" data-composition-points="344,246;372,246" d="M 344 246 L 372 246" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="compuerta" data-edge-to="denegado" data-edge-label="fuera del registro" data-edge-key="6" data-edge-id="e3" data-composition-points="548,246;564,246;564,420;460,420;460,598" d="M 548 246 L 564 246 L 564 420 L 460 420 L 460 598" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="compuerta" data-edge-to="yavisto" data-edge-label="autorizada" data-edge-key="7" data-edge-id="e4" data-composition-points="460,212;460,162;702,162;702,220" d="M 460 212 L 460 162 L 702 162 L 702 220" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="yavisto" data-edge-to="clasifica" data-edge-label="es nuevo" data-edge-key="8" data-edge-id="e5" data-composition-points="702,272;702,294;806,294;806,372;790,372" d="M 702 272 L 702 294 L 806 294 L 806 372 L 790 372" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="clasifica" data-edge-to="humano" data-edge-label="no le corresponde" data-edge-key="9" data-edge-id="e6" data-composition-points="790,372;806,372;806,483;944,483;944,598" d="M 790 372 L 806 372 L 806 483 L 944 483 L 944 598" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="clasifica" data-edge-to="dudoso" data-edge-label="sin certeza" data-edge-key="10" data-edge-id="e7" data-composition-points="702,398;702,483;598,483;598,624;614,624" d="M 702 398 L 702 483 L 598 483 L 598 624 L 614 624" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="clasifica" data-edge-to="ruteo" data-edge-label="es soporte" data-edge-key="11" data-edge-id="e8" data-composition-points="790,372;806,372;806,426;944,426;944,398" d="M 790 372 L 806 372 L 806 426 L 944 426 L 944 398" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="ruteo" data-edge-to="tarjeta" data-edge-key="12" data-edge-id="e9" data-composition-points="1032,372;1064,372;1064,472" d="M 1032 372 L 1064 372 L 1064 472" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)"/>
+
+        <!-- Nodes -->
+        <g id="node-mensaje" data-node-id="mensaje" data-node-label="Mensaje nuevo" tabindex="0" role="button" aria-label="Focus Mensaje nuevo, mencion o chat directo, WhatsApp › Leer" aria-pressed="false" data-node-kind="external" data-node-sublabel="mencion o chat directo" data-node-context="WhatsApp › Leer">
+          <title>Mensaje nuevo · mencion o chat directo · WhatsApp › Leer</title>
+          <rect x="48" y="94" width="176" height="52" rx="6" class="c-mask"/>
+          <rect x="48" y="94" width="176" height="52" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(54 100) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="136" y="115" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Mensaje nuevo</text>
+          <text data-detail="context" x="136" y="132" class="t-muted" font-size="8" text-anchor="middle">mencion o chat directo</text>
+        </g>
+
+        <g id="node-respuesta" data-node-id="respuesta" data-node-label="Contesta en el chat" tabindex="0" role="button" aria-label="Focus Contesta en el chat, borrador o enviado, WhatsApp › Actuar" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="borrador o enviado" data-node-tag="wa-send" data-node-context="WhatsApp › Actuar">
+          <title>Contesta en el chat · borrador o enviado · WhatsApp › Actuar · wa-send</title>
+          <rect x="976" y="86" width="176" height="68" rx="6" class="c-mask"/>
+          <rect x="976" y="86" width="176" height="68" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(982 92) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2"/>
+            <path d="M2 6.5h12"/>
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1064" y="107" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Contesta en el chat</text>
+          <text data-detail="context" x="1064" y="124" class="t-muted" font-size="8" text-anchor="middle">borrador o enviado</text>
+        <text data-detail="fine" x="1064" y="142" class="t-frontend" font-size="7" text-anchor="middle">wa-send</text>
+        </g>
+
+        <g id="node-lectura" data-node-id="lectura" data-node-label="Lee la base local" tabindex="0" role="button" aria-label="Focus Lee la base local, sobre una copia, Plugin › Leer" aria-pressed="false" data-node-kind="backend" data-node-sublabel="sobre una copia" data-node-tag="wa-read" data-node-context="Plugin › Leer">
+          <title>Lee la base local · sobre una copia · Plugin › Leer · wa-read</title>
+          <rect x="168" y="212" width="176" height="68" rx="6" class="c-mask"/>
+          <rect x="168" y="212" width="176" height="68" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(174 218) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="256" y="233" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Lee la base local</text>
+          <text data-detail="context" x="256" y="250" class="t-muted" font-size="8" text-anchor="middle">sobre una copia</text>
+        <text data-detail="fine" x="256" y="268" class="t-backend" font-size="7" text-anchor="middle">wa-read</text>
+        </g>
+
+        <g id="node-compuerta" data-node-id="compuerta" data-node-label="Esta autorizada?" tabindex="0" role="button" aria-label="Focus Esta autorizada?, denegar por defecto, Plugin › Autorizar" aria-pressed="false" data-node-kind="security" data-node-sublabel="denegar por defecto" data-node-tag="wa-scope" data-node-context="Plugin › Autorizar">
+          <title>Esta autorizada? · denegar por defecto · Plugin › Autorizar · wa-scope</title>
+          <rect x="372" y="212" width="176" height="68" rx="6" class="c-mask"/>
+          <rect x="372" y="212" width="176" height="68" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(378 218) scale(0.6875)">
+            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
+            <path d="m5.8 8 1.5 1.5 3-3"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="460" y="233" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Esta autorizada?</text>
+          <text data-detail="context" x="460" y="250" class="t-muted" font-size="8" text-anchor="middle">denegar por defecto</text>
+        <text data-detail="fine" x="460" y="268" class="t-security" font-size="7" text-anchor="middle">wa-scope</text>
+        </g>
+
+        <g id="node-yavisto" data-node-id="yavisto" data-node-label="Ya se atendio?" tabindex="0" role="button" aria-label="Focus Ya se atendio?, busca su identificador, Plugin › Decidir" aria-pressed="false" data-node-kind="database" data-node-sublabel="busca su identificador" data-node-context="Plugin › Decidir">
+          <title>Ya se atendio? · busca su identificador · Plugin › Decidir</title>
+          <rect x="614" y="220" width="176" height="52" rx="6" class="c-mask"/>
+          <rect x="614" y="220" width="176" height="52" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(620 226) scale(0.6875)">
+            <ellipse cx="8" cy="4" rx="5" ry="2"/>
+            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="702" y="241" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Ya se atendio?</text>
+          <text data-detail="context" x="702" y="258" class="t-muted" font-size="8" text-anchor="middle">busca su identificador</text>
+        </g>
+
+        <g id="node-estado" data-node-id="estado" data-node-label="Guarda que falta" tabindex="0" role="button" aria-label="Focus Guarda que falta, para la proxima corrida, Plugin › Actuar" aria-pressed="false" data-node-kind="database" data-node-sublabel="para la proxima corrida" data-node-context="Plugin › Actuar">
+          <title>Guarda que falta · para la proxima corrida · Plugin › Actuar</title>
+          <rect x="976" y="220" width="176" height="52" rx="6" class="c-mask"/>
+          <rect x="976" y="220" width="176" height="52" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(982 226) scale(0.6875)">
+            <ellipse cx="8" cy="4" rx="5" ry="2"/>
+            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1064" y="241" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Guarda que falta</text>
+          <text data-detail="context" x="1064" y="258" class="t-muted" font-size="8" text-anchor="middle">para la proxima corrida</text>
+        </g>
+
+        <g id="node-clasifica" data-node-id="clasifica" data-node-label="Que pide" tabindex="0" role="button" aria-label="Focus Que pide, soporte o conversacion, Agente › Decidir" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="soporte o conversacion" data-node-context="Agente › Decidir">
+          <title>Que pide · soporte o conversacion · Agente › Decidir</title>
+          <rect x="614" y="346" width="176" height="52" rx="6" class="c-mask"/>
+          <rect x="614" y="346" width="176" height="52" rx="6" class="c-cloud" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(620 352) scale(0.6875)">
+            <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="702" y="367" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Que pide</text>
+          <text data-detail="context" x="702" y="384" class="t-muted" font-size="8" text-anchor="middle">soporte o conversacion</text>
+        </g>
+
+        <g id="node-ruteo" data-node-id="ruteo" data-node-label="A que proyecto va" tabindex="0" role="button" aria-label="Focus A que proyecto va, lo decide el contenido, Agente › Decidir" aria-pressed="false" data-node-kind="backend" data-node-sublabel="lo decide el contenido" data-node-context="Agente › Decidir">
+          <title>A que proyecto va · lo decide el contenido · Agente › Decidir</title>
+          <rect x="856" y="346" width="176" height="52" rx="6" class="c-mask"/>
+          <rect x="856" y="346" width="176" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(862 352) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="944" y="367" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">A que proyecto va</text>
+          <text data-detail="context" x="944" y="384" class="t-muted" font-size="8" text-anchor="middle">lo decide el contenido</text>
+        </g>
+
+        <g id="node-tarjeta" data-node-id="tarjeta" data-node-label="Abre la tarjeta" tabindex="0" role="button" aria-label="Focus Abre la tarjeta, Plane, Linear, GitHub, Tablero › Actuar" aria-pressed="false" data-node-kind="database" data-node-sublabel="Plane, Linear, GitHub" data-node-context="Tablero › Actuar">
+          <title>Abre la tarjeta · Plane, Linear, GitHub · Tablero › Actuar</title>
+          <rect x="976" y="472" width="176" height="52" rx="6" class="c-mask"/>
+          <rect x="976" y="472" width="176" height="52" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(982 478) scale(0.6875)">
+            <ellipse cx="8" cy="4" rx="5" ry="2"/>
+            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1064" y="493" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Abre la tarjeta</text>
+          <text data-detail="context" x="1064" y="510" class="t-muted" font-size="8" text-anchor="middle">Plane, Linear, GitHub</text>
+        </g>
+
+        <g id="node-denegado" data-node-id="denegado" data-node-label="No la toca" tabindex="0" role="button" aria-label="Focus No la toca, queda registrado, Se detiene › Autorizar" aria-pressed="false" data-node-kind="external" data-node-sublabel="queda registrado" data-node-context="Se detiene › Autorizar">
+          <title>No la toca · queda registrado · Se detiene › Autorizar</title>
+          <rect x="372" y="598" width="176" height="52" rx="6" class="c-mask"/>
+          <rect x="372" y="598" width="176" height="52" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(378 604) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="460" y="619" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">No la toca</text>
+          <text data-detail="context" x="460" y="636" class="t-muted" font-size="8" text-anchor="middle">queda registrado</text>
+        </g>
+
+        <g id="node-dudoso" data-node-id="dudoso" data-node-label="Queda pendiente" tabindex="0" role="button" aria-label="Focus Queda pendiente, lo marca el humano, Se detiene › Decidir" aria-pressed="false" data-node-kind="external" data-node-sublabel="lo marca el humano" data-node-context="Se detiene › Decidir">
+          <title>Queda pendiente · lo marca el humano · Se detiene › Decidir</title>
+          <rect x="614" y="598" width="176" height="52" rx="6" class="c-mask"/>
+          <rect x="614" y="598" width="176" height="52" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(620 604) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="702" y="619" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Queda pendiente</text>
+          <text data-detail="context" x="702" y="636" class="t-muted" font-size="8" text-anchor="middle">lo marca el humano</text>
+        </g>
+
+        <g id="node-humano" data-node-id="humano" data-node-label="Decide una persona" tabindex="0" role="button" aria-label="Focus Decide una persona, claves, plata, deploys, Se detiene › Decidir" aria-pressed="false" data-node-kind="security" data-node-sublabel="claves, plata, deploys" data-node-context="Se detiene › Decidir">
+          <title>Decide una persona · claves, plata, deploys · Se detiene › Decidir</title>
+          <rect x="856" y="598" width="176" height="52" rx="6" class="c-mask"/>
+          <rect x="856" y="598" width="176" height="52" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(862 604) scale(0.6875)">
+            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
+            <path d="m5.8 8 1.5 1.5 3-3"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="944" y="619" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Decide una persona</text>
+          <text data-detail="context" x="944" y="636" class="t-muted" font-size="8" text-anchor="middle">claves, plata, deploys</text>
+        </g>
+
+        <!-- Edge labels -->
+
+
+
+        <g data-detail="context" data-edge-from="estado" data-edge-to="yavisto" data-edge-label="la proxima corrida ya lo sabe" data-edge-key="3" data-edge-id="e12">
+          <rect x="808.4" y="226" width="149.2" height="14" rx="3" class="c-mask"/>
+          <text x="883" y="236" class="t-muted" font-size="8" text-anchor="middle">la proxima corrida ya lo sabe</text>
+        </g>
+        <g data-detail="context" data-edge-from="dudoso" data-edge-to="clasifica" data-edge-label="tomar o ignorar" data-edge-key="4" data-edge-id="e13">
+          <rect x="713" y="463" width="82" height="14" rx="3" class="c-mask"/>
+          <text x="754" y="473" class="t-muted" font-size="8" text-anchor="middle">tomar o ignorar</text>
+        </g>
+
+        <g data-detail="context" data-edge-from="compuerta" data-edge-to="denegado" data-edge-label="fuera del registro" data-edge-key="6" data-edge-id="e3">
+          <rect x="463.8" y="400" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
+          <text x="512" y="410" class="t-muted" font-size="8" text-anchor="middle">fuera del registro</text>
+        </g>
+        <g data-detail="context" data-edge-from="compuerta" data-edge-to="yavisto" data-edge-label="autorizada" data-edge-key="7" data-edge-id="e4">
+          <rect x="552" y="142" width="58" height="14" rx="3" class="c-mask"/>
+          <text x="581" y="152" class="t-muted" font-size="8" text-anchor="middle">autorizada</text>
+        </g>
+        <g data-detail="context" data-edge-from="yavisto" data-edge-to="clasifica" data-edge-label="es nuevo" data-edge-key="8" data-edge-id="e5">
+          <rect x="729.8" y="274" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="754" y="284" class="t-muted" font-size="8" text-anchor="middle">es nuevo</text>
+        </g>
+        <g data-detail="context" data-edge-from="clasifica" data-edge-to="humano" data-edge-label="no le corresponde" data-edge-key="9" data-edge-id="e6">
+          <rect x="829.2" y="463" width="91.6" height="14" rx="3" class="c-mask"/>
+          <text x="875" y="473" class="t-muted" font-size="8" text-anchor="middle">no le corresponde</text>
+        </g>
+        <g data-detail="context" data-edge-from="clasifica" data-edge-to="dudoso" data-edge-label="sin certeza" data-edge-key="10" data-edge-id="e7">
+          <rect x="618.6" y="463" width="62.8" height="14" rx="3" class="c-mask"/>
+          <text x="650" y="473" class="t-muted" font-size="8" text-anchor="middle">sin certeza</text>
+        </g>
+        <g data-detail="context" data-edge-from="clasifica" data-edge-to="ruteo" data-edge-label="es soporte" data-edge-key="11" data-edge-id="e8">
+          <rect x="846" y="406" width="58" height="14" rx="3" class="c-mask"/>
+          <text x="875" y="416" class="t-muted" font-size="8" text-anchor="middle">es soporte</text>
+        </g>
+
+
+        <!-- Legend -->
+        <g data-legend="" data-legend-bridge="">
+          <text x="20" y="686" class="t-primary" font-size="12" font-weight="650">Legend</text>
+          <g data-legend-semantic-kind="frontend" data-legend-kind="frontend" data-legend-label="User UI" data-legend-x="20" data-legend-baseline="706" data-legend-width="74">
+            <rect x="20" y="698" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
+            <text x="42" y="706" class="t-muted" font-size="7.5" font-weight="500">User UI</text>
+          </g>
+          <g data-legend-semantic-kind="backend" data-legend-kind="backend" data-legend-label="Agent logic" data-legend-x="101" data-legend-baseline="706" data-legend-width="91">
+            <rect x="101" y="698" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
+            <text x="123" y="706" class="t-muted" font-size="7.5" font-weight="500">Agent logic</text>
+          </g>
+          <g data-legend-semantic-kind="security" data-legend-kind="security" data-legend-label="Policy" data-legend-x="199" data-legend-baseline="706" data-legend-width="70">
+            <rect x="199" y="698" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
+            <text x="221" y="706" class="t-muted" font-size="7.5" font-weight="500">Policy</text>
+          </g>
+          <g data-legend-semantic-kind="database" data-legend-kind="database" data-legend-label="Context / trace" data-legend-x="276" data-legend-baseline="706" data-legend-width="109">
+            <rect x="276" y="698" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
+            <text x="298" y="706" class="t-muted" font-size="7.5" font-weight="500">Context / trace</text>
+          </g>
+          <g data-legend-semantic-kind="cloud" data-legend-kind="cloud" data-legend-label="Cloud service" data-legend-x="392" data-legend-baseline="706" data-legend-width="100">
+            <rect x="392" y="698" width="14" height="9" rx="2" class="c-cloud" stroke-width="1"/>
+            <text x="414" y="706" class="t-muted" font-size="7.5" font-weight="500">Cloud service</text>
+          </g>
+          <g data-legend-semantic-kind="external" data-legend-kind="external" data-legend-label="External system" data-legend-x="499" data-legend-baseline="706" data-legend-width="109">
+            <rect x="499" y="698" width="14" height="9" rx="2" class="c-external" stroke-width="1"/>
+            <text x="521" y="706" class="t-muted" font-size="7.5" font-weight="500">External system</text>
+          </g>
+        </g>
+      </svg></div>
+      <figcaption>De izquierda a derecha: leer, autorizar, decidir, actuar. El carril inferior es todo lo que se detiene.</figcaption>
+    </figure>
+    <p>Cinco carriles y cuatro fases. Lo que importa del dibujo es el carril de abajo: <strong>la mayoria de los mensajes terminan ahi</strong>, y eso es lo correcto. Solo lo que pasa las tres puertas &mdash;permiso, novedad y clasificacion&mdash; llega a abrir una tarjeta.</p>
+  </section>
+
+  <section>
+    <div class="rotulo"><span class="num">04</span><h2>Los cuatro permisos</h2></div>
+    <p>Se configuran <strong>por conversacion</strong>, no globalmente. Una conversacion que no esta en el registro no existe para el plugin: el default es denegar.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Permiso</th><th>Lee</th><th>Abre tarjeta</th><th>Escribe</th><th>Envia</th><th>Para que sirve</th></tr></thead>
+      <tbody>
+        <tr><td><code>off</code></td><td>no</td><td>no</td><td>no</td><td>no</td><td>El default. Ni se asoma.</td></tr>
+        <tr><td><code>observar</code></td><td>si</td><td>si</td><td>no</td><td>no</td><td>Un canal de cliente: queda el registro, nadie le escribe.</td></tr>
+        <tr><td><code>borrador</code></td><td>si</td><td>si</td><td>si</td><td>no</td><td>Deja la respuesta escrita; usted aprieta enviar.</td></tr>
+        <tr><td><code>responder</code></td><td>si</td><td>si</td><td>si</td><td>si</td><td>Un canal interno donde la demora cuesta mas que un error.</td></tr>
+      </tbody>
+    </table></div>
+    <div class="nota"><strong>Cuatro cosas no las decide nunca, sea cual sea el permiso.</strong> Credenciales &mdash;no las copia a la tarjeta ni las repite en el chat&mdash;, precios, publicaciones a produccion y aprobaciones. En esos casos avisa y se detiene.</div>
+  </section>
+
+  <section>
+    <div class="rotulo"><span class="num">05</span><h2>Como se instala</h2></div>
+    <p>El plugin trae todo lo que necesita. No hay que instalar dependencias ni configurar rutas.</p>
+    <div class="hallazgos">
+      <div class="hallazgo"><div class="cuerpo">
+        <div><strong>Instalar</strong></div>
+        <p>En Orca Lab: <code>Ajustes &rarr; Plugins &rarr; Instalar plugin</code>, y se apunta a la carpeta o a su repositorio. Se revisan los cinco permisos que pide y se activa.</p>
+      </div></div>
+      <div class="hallazgo"><div class="cuerpo">
+        <div><strong>Al activarse, se acomoda solo</strong></div>
+        <p>Aparece su entrada en la barra lateral, su pagina en Ajustes, y crea sus dos automatizaciones <strong>apagadas</strong>. Un plugin no enciende trabajo automatico por su cuenta. Tambien corre un chequeo del sistema y avisa si algo falta, en lugar de dejar cosas rotas en silencio.</p>
+      </div></div>
+      <div class="hallazgo"><div class="cuerpo">
+        <div><strong>Configurar, en su pagina de Ajustes</strong></div>
+        <p>Como se llama el agente y como escribe &mdash;el tono se define una vez y cada conversacion puede tener el suyo&mdash;. Despues, las conversaciones: se eligen de una lista, se les asigna tablero y permiso.</p>
+      </div></div>
+      <div class="hallazgo"><div class="cuerpo">
+        <div><strong>Encender cuando este listo</strong></div>
+        <p>Se prenden las automatizaciones desde donde ya viven las demas. Conviene empezar con una sola conversacion en <code>borrador</code> y leer lo que escribe antes de darle mas.</p>
+      </div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="rotulo"><span class="num">06</span><h2>Que se ve, y donde</h2></div>
+    <div class="scroll"><table>
+      <thead><tr><th>Superficie</th><th>Donde aparece</th><th>Para que</th></tr></thead>
+      <tbody>
+        <tr><td>Bandeja</td><td>Barra lateral izquierda, con contador</td><td>Que espera respuesta y que hizo el agente. Cada pendiente se puede tomar o ignorar.</td></tr>
+        <tr><td>Configuracion</td><td>Su propia pagina en Ajustes</td><td>El agente, su tono, las conversaciones y las reglas de tablero.</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>Tomar e Ignorar</strong> son la unica forma de ensenarle sin tocar su configuracion. Lo que el agente no supo clasificar queda pendiente; al marcarlo, en la proxima corrida le llega decidido, y esa decision le gana a su criterio.</p>
+  </section>
+
+  <section>
+    <div class="rotulo"><span class="num">07</span><h2>Por que no se repite ni se pierde</h2></div>
+    <p>Cada mensaje trae un identificador estable que viaja en el cuerpo de la tarjeta. Antes de abrir cualquier cosa, el agente lo busca en el tablero: si esta, no hace nada. Sin eso, una corrida cada cinco minutos abriria la misma tarjeta para siempre.</p>
+    <p>Y lo que queda a medias se guarda con su proximo paso en una linea. El agente arranca cada corrida leyendo eso, asi continua en vez de empezar de cero. Lo que lleva una semana sin avanzar se cierra solo.</p>
+    <div class="nota"><strong>Una corrida que no hace nada cuesta casi nada.</strong> Antes de despertar al agente corre una verificacion barata que sale sin hacer nada cuando no hay trabajo. Por eso puede mirar cada dos minutos sin gastar.</div>
+  </section>
+
+  <section>
+    <div class="rotulo"><span class="num">08</span><h2>Requisitos</h2></div>
+    <div class="scroll"><table>
+      <thead><tr><th>Sistema</th><th>Leer WhatsApp</th><th>El resto del plugin</th></tr></thead>
+      <tbody>
+        <tr><td>macOS con WhatsApp Desktop</td><td class="ahora">verificado</td><td>funciona</td></tr>
+        <tr><td>Windows con WhatsApp Desktop</td><td>sin verificar</td><td>funciona</td></tr>
+        <tr><td>Linux</td><td class="antes">sin camino</td><td>funciona</td></tr>
+      </tbody>
+    </table></div>
+    <p>La lectura depende de la base local que deja WhatsApp Desktop. <strong>WhatsApp Web no sirve</strong>: no deja base local, los mensajes viven en el almacenamiento del navegador. En Linux no existe una version oficial de la aplicacion, asi que no hay archivo que leer &mdash;no es algo que se pueda programar&mdash;. En Windows la aplicacion existe pero su formato no se verifico; sumarlo es agregar una entrada en un solo lugar, no reescribir nada.</p>
+    <div class="nota"><strong>Nunca sale a internet.</strong> No declara permiso de red, y Orca lo informa en la ficha del plugin. Lee una base local, escribe en el tablero que usted ya usa, y nada mas.</div>
+  </section>
+
+  <section>
+    <div class="rotulo"><span class="num">09</span><h2>Limites conocidos</h2></div>
+    <div class="hallazgos">
+      <div class="hallazgo"><div class="cuerpo">
+        <div><span class="chip">sin verificar</span><strong>Windows</strong></div>
+        <p>Falta confirmar donde deja su base WhatsApp Desktop y si es legible.</p>
+      </div></div>
+      <div class="hallazgo"><div class="cuerpo">
+        <div><span class="chip">no soportado</span><strong>Varias cuentas de WhatsApp</strong></div>
+        <p>Se lee una sola base. Si la aplicacion tiene mas de una cuenta, no esta probado cual se lee.</p>
+      </div></div>
+      <div class="hallazgo"><div class="cuerpo">
+        <div><span class="chip">no soportado</span><strong>Audios y adjuntos salientes</strong></div>
+        <p>Las imagenes que llegan se leen y se transcriben a la tarjeta. Los audios no se pueden oir: quedan marcados para que los escuche una persona. Y el plugin no puede adjuntar archivos ni al tablero ni al chat.</p>
+      </div></div>
+      <div class="hallazgo"><div class="cuerpo">
+        <div><span class="chip">depende del equipo</span><strong>Necesita la maquina despierta</strong></div>
+        <p>Opera la aplicacion real, asi que el equipo tiene que estar encendido y WhatsApp abierto. Por eso conviene limitar el horario en lugar de dejarlo todo el dia.</p>
+      </div></div>
+    </div>
+  </section>
+
+  <footer>
+    <span>AB2WEB · WHATSAPP INBOX PARA ORCA LAB</span>
+    <span>DIAGRAMA COMPUESTO CON ARCHIFY</span>
+    <span>SEPTIEMBRE 2026</span>
+  </footer>
+
+</div>

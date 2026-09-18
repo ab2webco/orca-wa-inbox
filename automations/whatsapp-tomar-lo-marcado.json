@@ -1,0 +1,10 @@
+{
+  "name": "WhatsApp: tomar lo marcado",
+  "provider": "claude",
+  "trigger": null,
+  "timezone": "America/Bogota",
+  "precheck": "wa-scope pending --only-taken",
+  "workspaceMode": "existing",
+  "reuseSession": false,
+  "promptFile": "prompts/take.md"
+}

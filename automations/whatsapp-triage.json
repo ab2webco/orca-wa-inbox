@@ -1,0 +1,10 @@
+{
+  "name": "WhatsApp: triage",
+  "provider": "claude",
+  "trigger": null,
+  "timezone": "America/Bogota",
+  "precheck": "wa-scope pending",
+  "workspaceMode": "existing",
+  "reuseSession": false,
+  "promptFile": "prompts/triage.md"
+}

@@ -78,3 +78,31 @@ lo elegis vos en "Terminal destino" y queda recordado.
 
 Si apunta a una sesion de agente, el agente va a leer los comandos como si le hablaras
 en vez de ejecutarlos.
+
+## Desarrollo
+
+El arnés de verificación vive en este mismo repo, junto al plugin. Antes se quedaba
+afuera y quien clonaba no podía correr nada.
+
+```
+npm install
+npx playwright install chromium   # solo la primera vez
+npm run check
+```
+
+`check` corre, en orden:
+
+| | qué comprueba |
+|---|---|
+| `scripts/check-panels` | que el `<script>` inline de `config.html` y `activity.html` parsee. Si no parsea, el panel se renderiza vacío y sin error visible. |
+| `scripts/check-prompts` | que `prompts/*.md` no tengan voseo. El agente le escribe a clientes en Colombia. |
+| `scripts/check-clis` | que los cuatro CLIs de `bin/` arranquen de verdad. Compilar no alcanza. |
+| `test/panels.test.mjs` | 36 pruebas sobre los paneles con jsdom y el puente del host simulado. |
+| `npm run shots` | fotografía los dos paneles a 1440, 768, 390 y 320 px en tema claro y oscuro, y falla si algo desborda a lo ancho. |
+
+`scripts/` es herramienta de desarrollo; `bin/` son los cuatro CLIs que el plugin
+publica. No se mezclan.
+
+Las capturas salen a `docs/capturas/` y **no se versionan**: son 3.3 MB de salida de
+build para un plugin de 188 KB, y el marketplace clona el repo entero en cada
+instalación. Se regeneran con `npm run shots`.

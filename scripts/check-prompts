@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""Los prompts no pueden tener voseo.
+
+Existe porque ya se colo dos veces: se limpio triage.md y take.md quedo con
+"Sos", "Filtrá", "Acusá". El agente le escribe a clientes en Colombia, y un
+"tenes que" en el prompt se filtra al mensaje que sale.
+"""
+import pathlib
+import re
+import sys
+
+RAIZ = pathlib.Path(__file__).resolve().parent.parent
+
+# Pronombres y presentes de voseo, mas el imperativo: en voseo lleva tilde en la
+# ultima vocal (mirá, dejá, abrí), que en la forma de tuteo no existe.
+PATRONES = [
+    (r"\b(sos|vos|tenes|podes|queres|sabes vos|venis|decis|hacelo|tomalo)\b", "pronombre o presente de voseo"),
+    (r"\b[a-zA-Záéíóúñ]{2,}(á|é|í)\b(?<!\baqui\b)", "imperativo de voseo (tilde final)"),
+    (r"\b(decilo|mirala|mirialas|abrilas|fijate|sugerí|reportá)\b", "imperativo de voseo"),
+]
+
+# Palabras legitimas que terminan en vocal con tilde y no son imperativos.
+PERMITIDAS = {"aqui", "asi", "ahi", "alli", "tambien", "quiza", "esta", "sera",
+              "hara", "podra", "debera", "tendra", "ingles", "ademas", "despues",
+              "segun", "porque", "que", "si", "no", "mas", "solo", "ya"}
+
+
+def main() -> int:
+    fallos = []
+    for ruta in sorted((RAIZ / "prompts").glob("*.md")):
+        for n, linea in enumerate(ruta.read_text(encoding="utf-8").splitlines(), 1):
+            for patron, motivo in PATRONES:
+                for m in re.finditer(patron, linea, re.IGNORECASE):
+                    if m.group(0).lower().strip("áéíóú") in PERMITIDAS:
+                        continue
+                    if m.group(0).lower() in PERMITIDAS:
+                        continue
+                    fallos.append(f"{ruta.relative_to(RAIZ)}:{n}  {m.group(0)}  ({motivo})")
+    if fallos:
+        print("Voseo en los prompts:", file=sys.stderr)
+        for f in dict.fromkeys(fallos):
+            print(f"  {f}", file=sys.stderr)
+        print("\nEl agente escribe a clientes en Colombia. Espanol neutro, sin voseo.",
+              file=sys.stderr)
+        return 1
+    print("prompts sin voseo")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

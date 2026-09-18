@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+"""Valida los paneles del plugin antes de que el usuario los vea rotos.
+
+Un panel es HTML con el script inline: si el script no parsea, el panel se
+renderiza vacio y sin ningun error visible. Perdi dos rondas de ida y vuelta por
+eso, asi que ahora se chequea.
+"""
+import re, subprocess, sys, tempfile, pathlib
+
+# El plugin es la raiz del repo: los dos paneles se nombran, no se adivinan con un
+# glob que en la raiz tambien barreria cualquier .html futuro.
+RAIZ = pathlib.Path(__file__).resolve().parent.parent
+PANELES = ["config.html", "activity.html"]
+fail = False
+for html in [RAIZ / nombre for nombre in PANELES]:
+    body = html.read_text(encoding="utf-8")
+    match = re.search(r"<script>(.*)</script>", body, re.S)
+    if not match:
+        print(f"{html.name}: sin <script>")
+        continue
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
+                                     encoding="utf-8") as tmp:
+        tmp.write(match.group(1))
+        path = tmp.name
+    result = subprocess.run(["node", "--check", path], capture_output=True, text=True)
+    if result.returncode == 0:
+        print(f"ok   {html.name}")
+    else:
+        fail = True
+        print(f"ROTO {html.name}\n{result.stderr.strip()[:400]}")
+sys.exit(1 if fail else 0)

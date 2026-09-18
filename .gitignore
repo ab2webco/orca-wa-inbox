@@ -1,1 +1,16 @@
 .DS_Store
+node_modules/
+
+# Capturas generadas por `npm run shots`. Son 3.3 MB de salida de build para un
+# plugin de 188 KB, y el marketplace clona el repo entero en cada instalacion.
+# Se regeneran con `npm run shots`; la evidencia que se muestra va en el artifact.
+docs/capturas/
+
+# Capturas de la app real: muestran la lista de proyectos, nombres de grupos de
+# clientes y contenido de terminales. Nunca van a un repo publico.
+docs/capturas-dev/
+
+# Evidencia visual: embebe una captura de la app real con el nombre del agente del
+# propietario a la vista. Vive en el repo de trabajo hasta que se decida si se
+# republica sin esa imagen.
+docs/evidencia-visual-panel.html

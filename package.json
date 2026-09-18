@@ -1,0 +1,13 @@
+{
+  "name": "orca-wa-inbox",
+  "private": true,
+  "description": "Arnes de verificacion del plugin WhatsApp Inbox: paneles, prompts y CLIs.",
+  "scripts": {
+    "check": "scripts/check-panels && scripts/check-prompts && scripts/check-clis && node test/panels.test.mjs && npm run shots",
+    "shots": "node test/shots.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "^26.0.0",
+    "playwright": "^1.59.1"
+  }
+}
