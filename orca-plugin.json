@@ -3,7 +3,7 @@
   "id": "orca-wa-inbox",
   "publisher": "ab2web",
   "name": "WhatsApp Inbox",
-  "version": "3.6.1",
+  "version": "3.7.0",
   "description": "Map WhatsApp conversations to your projects and decide, per conversation, how far your agent may act.",
   "engines": {
     "orca": ">=1.4.0"
