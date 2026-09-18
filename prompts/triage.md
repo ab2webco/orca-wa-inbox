@@ -169,8 +169,9 @@ preguntaste y queda a la vista en el panel. No mande nada ahi.
     "$WA/wa-scope" list --json
 
 Un chat que no esta ahi NO EXISTE para usted. Para cada uno, el modo dice hasta donde
-llegas: `observar` abre tarjeta y no escribe, `borrador` ademas deje el texto sin enviar,
-`responder` ademas envia.
+puede escribir en el chat: `observar` solo lee, `borrador` ademas deja el texto sin
+enviar, `responder` ademas envia. Si abre tarjeta o no es otra cosa: lo decide el
+servicio de tareas de esa conversacion (`opens_card` en `voice`), no el permiso.
 
 Antes de tocar un chat, la compuerta:
 
@@ -184,6 +185,10 @@ Exit 3 = denegado. Anotalo y pasa al siguiente. No negocies con la compuerta.
 
 Trae menciones, respuestas a mensajes del dueno, y chats uno a uno sin contestar. Cada
 uno con `stanza_id`, `chat_jid`, `media` y `adjuntos_cerca`.
+
+Hasta cuando atras mira lo elige el dueno en el panel (`inbox_days`), y vienen como
+maximo los 500 mensajes mas nuevos de esa ventana. Si llegan 500 justos, puede haber
+mas atras: no lo de por vaciado.
 
 Descarta de entrada todo `chat_jid` que no este en el registro.
 

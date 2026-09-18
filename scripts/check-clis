@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Los cuatro CLI arrancan de verdad.
+"""Los cuatro CLI arrancan de verdad, y los ajustes validan lo que guardan.
 
 Existe porque `npm run check` dejo pasar un NameError en wa-transcribe: probaba
 los paneles y las pruebas jsdom, y ninguna de las dos ejecuta un CLI. Compilar no
 alcanza — un import que falta solo aparece al recorrer esa rama — asi que aca se
 corre cada herramienta.
 """
+import json
 import pathlib
 import subprocess
 import sys
+import tempfile
 
 RAIZ = pathlib.Path(__file__).resolve().parent.parent
 BIN = RAIZ / "bin"
@@ -29,6 +31,105 @@ CASOS = [
 ]
 
 
+# Ajustes: lo que se acepta y lo que se rechaza. Cada caso es
+# (args, se_guarda, que_tiene_que_quedar).
+# Un ajuste invalido no falla al escribirse: falla despues, en la corrida del agente y
+# lejos de donde se tipeo — o peor, transcribe en el idioma equivocado sin decir nada.
+# La validacion solo se ve recorriendola, asi que se recorre.
+AJUSTES = [
+    (["config", "inbox_days", "30"], True, "30"),
+    (["config", "inbox_days", "abc"], False, "30"),
+    (["config", "inbox_days", "todos"], False, "30"),
+    (["config", "transcribe", "off"], True, "off"),
+    (["config", "transcribe", "basura"], False, "off"),
+    (["config", "transcribe_lang", "pt"], True, "pt"),
+    (["config", "transcribe_lang", "klingon"], False, "pt"),
+    (["config", "transcribe_quality", "minima"], True, "minima"),
+    (["config", "transcribe_quality", "media"], False, "minima"),
+    # owner_name es texto libre: cualquier nombre es un nombre.
+    (["config", "owner_name", "Fabiana Olivar"], True, "Fabiana Olivar"),
+]
+
+
+def entorno(home: pathlib.Path) -> dict:
+    """HOME propio: la base vive en ~/.wa-inbox/scope.db y no hay variable para moverla,
+    asi que mover el HOME es lo que mantiene la base real del usuario fuera de esto."""
+    import os
+    return dict(os.environ, HOME=str(home),
+                XDG_CONFIG_HOME=str(home / ".config"),
+                APPDATA=str(home / "AppData" / "Roaming"))
+
+
+def valor(env: dict, clave: str):
+    p = subprocess.run([str(BIN / "wa-scope"), "config", clave, "--json"],
+                       capture_output=True, text=True, env=env, timeout=120)
+    filas = json.loads(p.stdout or "[]")
+    return filas[0]["value"] if filas else None
+
+
+def revisa_ajustes(fallos: list) -> int:
+    """Devuelve cuantas comprobaciones corrio."""
+    hechas = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+        for args, acepta, esperado in AJUSTES:
+            clave = args[1]
+            p = subprocess.run([str(BIN / "wa-scope"), *args], capture_output=True,
+                               text=True, env=env, timeout=120)
+            hechas += 2
+            if acepta and p.returncode != 0:
+                fallos.append(f"wa-scope {' '.join(args)}: rechazo un valor valido — "
+                              f"{(p.stderr or p.stdout).strip()[:120]}")
+            if not acepta and p.returncode == 0:
+                fallos.append(f"wa-scope {' '.join(args)}: acepto un valor invalido")
+            quedo = valor(env, clave)
+            if quedo != esperado:
+                fallos.append(f"{clave} quedo en {quedo!r} y tenia que quedar en {esperado!r}")
+
+        store = (home / "Library" / "Application Support" / "orca" / "plugins-data" /
+                 "ab2web.wa-inbox" / "storage.json")
+        store.parent.mkdir(parents=True, exist_ok=True)
+
+        # `sync` tiene que devolverle al panel TODOS los ajustes, no solo el tono: uno
+        # que viva nada mas en la base deja el control vacio y el panel miente sobre lo
+        # que rige. Se borra el store primero para que lo que quede venga de sync y no
+        # del espejo que ya hace cada escritura.
+        store.unlink(missing_ok=True)
+        subprocess.run([str(BIN / "wa-scope"), "sync", "--json"], capture_output=True,
+                       text=True, env=env, timeout=180)
+        espejo = json.loads(store.read_text(encoding="utf-8")) if store.exists() else {}
+        hechas += 5
+        for flat, esperado in (("inboxDays", "30"), ("transcribe", "off"),
+                               ("transcribeLang", "pt"), ("transcribeQuality", "minima"),
+                               ("ownerName", "Fabiana Olivar")):
+            if espejo.get(flat) != esperado:
+                fallos.append(f"sync no le devolvio {flat} al panel: quedo "
+                              f"{espejo.get(flat)!r} en vez de {esperado!r}")
+
+        # El panel escribe en el store del host sin pasar por el CLI, asi que un valor
+        # sucio de ahi es lo unico que la validacion de escritura no puede atajar.
+        store.write_text(json.dumps({"inboxDays": "nunca", "transcribe": "magia",
+                                     "transcribeLang": "klingon"}), encoding="utf-8")
+        hechas += 3
+        for clave, esperado in (("inbox_days", "30"), ("transcribe", "off"),
+                                ("transcribe_lang", "pt")):
+            quedo = valor(env, clave)
+            if quedo != esperado:
+                fallos.append(f"basura del panel en {clave}: llego {quedo!r} en vez de "
+                              f"{esperado!r}, el valor del CLI")
+
+        # Y lo valido del panel SI tiene que ganarle al CLI, como el tono.
+        store.write_text(json.dumps({"inboxDays": "0", "transcribe": "local"}),
+                         encoding="utf-8")
+        hechas += 2
+        for clave, esperado in (("inbox_days", "0"), ("transcribe", "local")):
+            quedo = valor(env, clave)
+            if quedo != esperado:
+                fallos.append(f"el panel no le gano al CLI en {clave}: quedo {quedo!r}")
+    return hechas
+
+
 def main() -> int:
     fallos = []
     for nombre, args in CASOS:
@@ -47,12 +148,14 @@ def main() -> int:
             ultima = [l for l in p.stderr.strip().splitlines() if l.strip()][-1]
             fallos.append(f"{nombre} {' '.join(args)}: {ultima.strip()}")
 
+    comprobaciones = revisa_ajustes(fallos)
+
     if fallos:
         print("CLI que se rompen al correr:", file=sys.stderr)
         for f in fallos:
             print(f"  {f}", file=sys.stderr)
         return 1
-    print(f"{len(CASOS)} CLI arrancan")
+    print(f"{len(CASOS)} CLI arrancan, {comprobaciones} comprobaciones de ajustes")
     return 0
 
 

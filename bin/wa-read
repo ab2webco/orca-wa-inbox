@@ -2,7 +2,7 @@
 """wa-read — lectura read-only de WhatsApp Desktop (macOS) para agentes.
 
 Subcomandos:
-  inbox [--days N]              menciones a vos + respuestas a tus mensajes, en grupos
+  inbox [--days N] [--limit N]  menciones a vos + respuestas a tus mensajes, en grupos
   chats [--query TXT] [-n N]    lista chats (grupos y 1:1) con no-leidos
   chat <id|nombre> [-n N]       ultimos mensajes de un chat
   media <id|nombre> [-n N]      ultimas imagenes/videos/audios, con ruta local en disco
@@ -139,7 +139,11 @@ def ts(v):
 
 
 def cutoff(days):
-    return time.time() - days * 86400 - APPLE_EPOCH
+    """0 = sin limite. Una ventana fija de un dia esconde una mencion del viernes
+    a la que nadie contesto: el lunes ya no aparece y parece que no hubo nada."""
+    if not days or int(days) <= 0:
+        return -APPLE_EPOCH
+    return time.time() - int(days) * 86400 - APPLE_EPOCH
 
 
 def resolve_chat(con, ref):
@@ -172,11 +176,30 @@ SENDER = """coalesce(nullif(pn.ZPUSHNAME,''), nullif(gm.ZCONTACTNAME,''),
 JOINS = """left join ZWAGROUPMEMBER gm on m.ZGROUPMEMBER = gm.Z_PK
            left join ZWAPROFILEPUSHNAME pn on pn.ZJID = gm.ZMEMBERJID
            left join ZWAMEDIAITEM mi on m.ZMEDIAITEM = mi.Z_PK"""
+# Mi ultima respuesta en cada chat, calculada UNA vez y agrupada. Antes era una
+# subconsulta correlacionada que corria por cada fila candidata: con la ventana en un
+# dia se notaba poco, pero sin limite inferior tardaba minutos y el panel quedaba
+# inservible. Agrupada usa el indice por ZCHATSESSION y la de fuera queda libre de
+# recorrer el indice por fecha al reves y cortar en el tope.
+ULTIMA_MIA = """left join (select ZCHATSESSION cs, max(ZMESSAGEDATE) mine
+                           from ZWAMESSAGE where ZISFROMME = 1
+                           group by ZCHATSESSION) lm on lm.cs = c.Z_PK"""
+
+# Tope de filas de la bandeja. Existe porque la ventana es configurable hasta "todo el
+# historial", y sin tope una ventana ancha devuelve miles de menciones viejas: el agente
+# no las puede atender y el panel se cuelga leyendolas. 500 es muy por encima de lo que
+# se tria en una corrida, asi que no esconde trabajo real; lo que recorta es cola muerta.
+INBOX_MAX = 500
 
 
 def cmd_inbox(con, a):
     if a.days is None:
-        a.days = setting("inbox_days", 1)
+        a.days = int(setting("inbox_days", 7) or 0)
+    # 0 o negativo = sin tope, para una revision a mano desde la terminal. La bandeja
+    # que lee el panel siempre pide uno: ahi un recorrido sin fin no es una opcion.
+    tope = INBOX_MAX if getattr(a, "limit", None) is None else int(a.limit)
+    if tope <= 0:
+        tope = -1
     lid = own_lid(con)
     if not lid:
         sys.exit("no pude deducir tu LID")
@@ -193,26 +216,18 @@ def cmd_inbox(con, a):
         join ZWACHATSESSION c on m.ZCHATSESSION = c.Z_PK
         left join ZWAMESSAGE p on m.ZPARENTMESSAGE = p.Z_PK
         {JOINS}
+        {ULTIMA_MIA}
         where m.ZISFROMME = 0 and m.ZMESSAGEDATE > ?
-          and (
-            -- En grupo solo cuenta si te nombran o responden algo tuyo: lo demas
-            -- es conversacion ajena. Y deja de contar si ya escribiste despues: si
-            -- contestaste en ese chat, la mencion ya la atendiste. Sin esto una
-            -- mencion vieja se queda en la bandeja para siempre.
-            (c.ZCONTACTJID like '%@g.us'
-             and (m.ZTEXT like '%@{lid}%' or p.ZISFROMME = 1)
-             and m.ZMESSAGEDATE > coalesce((select max(r.ZMESSAGEDATE) from ZWAMESSAGE r
-                                            where r.ZCHATSESSION = c.Z_PK
-                                              and r.ZISFROMME = 1), 0))
-            or
-            -- En un chat uno a uno todo mensaje es para vos. Lo que importa es si
-            -- quedo sin contestar: mas nuevo que tu ultima respuesta ahi.
-            (c.ZCONTACTJID not like '%@g.us'
-             and m.ZMESSAGEDATE > coalesce((select max(r.ZMESSAGEDATE) from ZWAMESSAGE r
-                                            where r.ZCHATSESSION = c.Z_PK
-                                              and r.ZISFROMME = 1), 0))
-          )
-        order by m.ZMESSAGEDATE desc""", (cutoff(a.days),)).fetchall()
+          -- Deja de contar si ya escribiste despues: si contestaste en ese chat, la
+          -- mencion ya la atendiste. Sin esto una mencion vieja se queda para siempre.
+          -- Vale igual para grupo y para uno a uno, asi que va una sola vez.
+          and m.ZMESSAGEDATE > coalesce(lm.mine, 0)
+          -- En un chat uno a uno todo mensaje es para vos. En grupo solo cuenta si te
+          -- nombran o responden algo tuyo: lo demas es conversacion ajena.
+          and (c.ZCONTACTJID not like '%@g.us'
+               or m.ZTEXT like '%@{lid}%' or p.ZISFROMME = 1)
+        order by m.ZMESSAGEDATE desc
+        limit ?""", (cutoff(a.days), tope)).fetchall()
     # stanza_id es la clave de idempotencia: unica por mensaje y estable entre corridas.
     # Poniendola en el issue de Plane, una automation sabe que ya atendio ese mensaje.
     out = []
@@ -406,6 +421,8 @@ def main():
     s = add("inbox", help="menciones y respuestas dirigidas a vos")
     s.add_argument("--days", type=int, default=None,
                    help="por defecto sale de `wa-scope config inbox_days`")
+    s.add_argument("--limit", type=int, default=None,
+                   help=f"tope de mensajes (por defecto {INBOX_MAX}, 0 = sin tope)")
     s.add_argument("--window", type=int, default=5,
                    help="minutos alrededor de cada mensaje donde buscar adjuntos (0 apaga)")
     s.add_argument("--only", choices=["todos", "grupos", "directos"], default="todos")

@@ -199,17 +199,53 @@ def plugin_store_read():
 # El panel solo sabe escribir storage, y lo hace con claves planas. Traducirlas a
 # los nombres de settings es lo que evita que un tono guardado ahi no llegue nunca.
 PANEL_SETTINGS = {"tone": "tone", "agentName": "agent_name",
-                  "transcribeQuality": "transcribe_quality"}
+                  "transcribeQuality": "transcribe_quality",
+                  # La ventana de lectura vivia solo en la terminal: desde el panel era
+                  # un tope escondido, y una mencion del viernes desaparecia el lunes
+                  # sin que nada lo dijera. Un limite invisible es peor que uno visible.
+                  "inboxDays": "inbox_days",
+                  "ownerName": "owner_name",
+                  "transcribe": "transcribe",
+                  "transcribeLang": "transcribe_lang"}
+
+# Lo que cada ajuste acepta. Un valor invalido no revienta al guardarse: revienta
+# despues, en la corrida del agente, lejos de donde se tipeo — o peor, no revienta y
+# transcribe en el idioma equivocado sin decirlo.
+CONFIG_OPCIONES = {
+    # local no manda el audio a ningun lado; api si. off apaga la transcripcion.
+    "transcribe": ("local", "off", "api"),
+    "transcribe_quality": ("optima", "minima"),
+    # Solo los idiomas que el panel ofrece y con los que se probo. Un codigo sin probar
+    # degrada la transcripcion en silencio, y eso se descubre tres audios despues.
+    "transcribe_lang": ("auto", "es", "en", "pt"),
+}
+CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s")
+
+
+def valida_ajuste(key, value):
+    """Devuelve el motivo del rechazo, o None si el valor sirve."""
+    if key in CONFIG_OPCIONES and value not in CONFIG_OPCIONES[key]:
+        return f"{key} solo acepta: {', '.join(CONFIG_OPCIONES[key])}"
+    if key in CONFIG_NUMERICOS:
+        try:
+            int(str(value).strip())
+        except (TypeError, ValueError):
+            return f"{key} tiene que ser un numero entero, no {value!r}"
+    return None
 
 
 def settings_from_plugin():
     """Los ajustes que el panel dejo en sus claves planas, con el nombre del CLI. Una
-    cadena vacia no es una eleccion: se ignora para no pisar el valor del CLI."""
+    cadena vacia no es una eleccion: se ignora para no pisar el valor del CLI.
+
+    Lo invalido tambien se ignora: el panel escribe en el store del host sin pasar por
+    aca, asi que este es el unico lugar donde un valor sucio puede dejar de llegarle al
+    agente. Ignorarlo lo deja con el valor del CLI, que es una eleccion real."""
     raw = plugin_store_raw()
     out = {}
     for flat, name in PANEL_SETTINGS.items():
         value = raw.get(flat)
-        if isinstance(value, str) and value.strip():
+        if isinstance(value, str) and value.strip() and not valida_ajuste(name, value):
             out[name] = value
     return out
 
@@ -291,8 +327,20 @@ def push_to_plugin(con, with_activity=False):
     health = build_health() if with_activity else None
     routes = [dict(r) for r in con.execute(
         "select pattern, provider, target, note from route order by pattern")]
-    extra = {"chats": build_chats(), "tone": cmd_voice(con, type("A", (), {"chat": None})())[0]["tone"]} \
-        if with_activity else None
+    # TODOS los ajustes que el panel muestra viajan de vuelta, no solo el tono. Si uno
+    # vive nada mas en la base, el panel abre con el campo vacio y miente sobre lo que
+    # rige: el dueno ve "sin nombre" teniendo owner_name puesto por terminal.
+    extra = None
+    if with_activity:
+        efectivos = merged_settings(con)
+        extra = {"chats": build_chats()}
+        for flat, name in PANEL_SETTINGS.items():
+            # agentName ya viaja en su propio parametro, mas arriba.
+            if flat == "agentName":
+                continue
+            valor = efectivos.get(name)
+            if valor is not None:
+                extra[flat] = str(valor)
     return plugin_store_write(scope, agent_name_of(con), activity, health, routes, extra)
 
 
@@ -668,7 +716,9 @@ def cmd_agent(con, a):
 
 
 DEFAULT_CONFIG = {
-    "inbox_days": "1",        # ventana de lectura: cuantos dias mira el triage
+    # 7 y no 1: con un dia, una mencion del viernes que nadie contesto ya no aparece el
+    # lunes y parece que no hubo nada. Se elige desde el panel; esto es el arranque.
+    "inbox_days": "7",
     "lock_ttl_s": "900",      # cuanto vale el lock antes de considerarse muerto
     "owner_name": "",         # como se llama quien usa esto; el prompt lo usa
     # Como escribe el agente. Sin esto hereda el tono de quien escribio el prompt, que
@@ -1022,6 +1072,9 @@ def cmd_voice(con, a):
 def cmd_config(con, a):
     """Lo que cambia seguido no deberia vivir en el prompt de la automation."""
     if a.key and a.value is not None:
+        motivo = valida_ajuste(a.key, a.value)
+        if motivo:
+            sys.exit(f"no lo guardo: {motivo}")
         con.execute("insert into settings (key,value) values (?,?) "
                     "on conflict(key) do update set value=excluded.value", (a.key, a.value))
         con.commit()
@@ -1146,7 +1199,7 @@ def main():
         {"stanzaId": k, **v} for k, v in sorted(decisions_read().items(),
                                                 key=lambda kv: kv[1].get("at", ""))])
 
-    s = add("config", help="ver o fijar ajustes (inbox_days, lock_ttl_s)")
+    s = add("config", help="ver o fijar ajustes (inbox_days, transcribe, lock_ttl_s)")
     s.add_argument("key", nargs="?"); s.add_argument("value", nargs="?")
     s.set_defaults(fn=cmd_config)
 

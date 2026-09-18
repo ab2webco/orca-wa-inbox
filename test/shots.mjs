@@ -65,6 +65,10 @@ const DATOS = {
   agentName: 'Watson',
   tone: 'Espanol neutro. Trata de usted. Frases cortas, sin modismos.',
   transcribeQuality: 'optima',
+  ownerName: 'Fabiana Olivar',
+  inboxDays: '7',
+  transcribe: 'local',
+  transcribeLang: 'auto',
   health: { ok: true, optional: [] },
   chats: [
     { jid: '120363000000000001@g.us', name: 'Soporte — Cliente Norte' },
@@ -140,7 +144,7 @@ const DATOS = {
       { ts: '2026-09-17 12:40', chat: 'Operaciones internas', action: 'draft',
         issue: null, detail: 'Borrador dejado sin enviar, esperando revision' },
       { ts: '2026-09-17 11:58', chat: 'Proyecto Andes — QA', action: 'skipped',
-        issue: null, detail: 'Solo observar: no abre tarjeta ni contesta' }
+        issue: null, detail: 'Solo observar: no se escribe en el chat' }
     ]
   }
 }

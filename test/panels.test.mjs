@@ -90,6 +90,66 @@ console.log('\nconfig.html')
   ok('confirma la calidad en pantalla',
     doc.getElementById('said-quality').textContent.includes('✓'))
 
+  // Para quien trabaja. No es el nombre del agente: es el del dueno, y el prompt lo
+  // lee para saber a quien le reporta.
+  doc.getElementById('owner').value = '  Fabiana Olivar  '
+  doc.getElementById('save-owner').click()
+  await espera()
+  ok('guarda para quien trabaja', storage.ownerName === 'Fabiana Olivar',
+    `storage.ownerName = ${JSON.stringify(storage.ownerName)}`)
+  ok('confirma el dueno en pantalla',
+    doc.getElementById('said-owner').textContent.includes('✓'))
+
+  // Modo de transcripcion. Poder apagarla entera sin abrir una terminal es el punto.
+  doc.getElementById('transcribe').value = 'off'
+  doc.getElementById('save-transcribe').click()
+  await espera()
+  ok('guarda el modo de transcripcion', storage.transcribe === 'off',
+    `storage.transcribe = ${JSON.stringify(storage.transcribe)}`)
+  ok('confirma el modo en pantalla',
+    doc.getElementById('said-transcribe').textContent.includes('✓'))
+
+  doc.getElementById('lang').value = 'pt'
+  doc.getElementById('save-lang').click()
+  await espera()
+  ok('guarda el idioma de los audios', storage.transcribeLang === 'pt',
+    `storage.transcribeLang = ${JSON.stringify(storage.transcribeLang)}`)
+  ok('confirma el idioma en pantalla',
+    doc.getElementById('said-lang').textContent.includes('✓'))
+
+  // La ventana de lectura. Era un tope escondido: solo se movia por terminal, asi que
+  // desde el panel una mencion del viernes desaparecia el lunes sin explicacion.
+  doc.getElementById('inbox-days').value = '30'
+  doc.getElementById('save-days').click()
+  await espera()
+  ok('guarda la ventana de lectura', storage.inboxDays === '30',
+    `storage.inboxDays = ${JSON.stringify(storage.inboxDays)}`)
+  ok('confirma la ventana en pantalla',
+    doc.getElementById('said-days').textContent.includes('✓'))
+
+  // Un select no puede ofrecer un valor que el CLI vaya a rechazar: si lo ofrece, el
+  // panel dice guardado y `wa-scope` lo tira. Las listas se comprueban, no se confian.
+  const opciones = (id) => [...doc.getElementById(id).options].map((o) => o.value)
+  ok('el modo de transcripcion solo ofrece lo que el CLI acepta',
+    JSON.stringify(opciones('transcribe')) === JSON.stringify(['local', 'off', 'api']),
+    `opciones = ${JSON.stringify(opciones('transcribe'))}`)
+  ok('el idioma solo ofrece lo que el CLI acepta',
+    JSON.stringify(opciones('lang')) === JSON.stringify(['auto', 'es', 'en', 'pt']),
+    `opciones = ${JSON.stringify(opciones('lang'))}`)
+  ok('la ventana solo ofrece numeros enteros',
+    opciones('inbox-days').every((v) => String(parseInt(v, 10)) === v),
+    `opciones = ${JSON.stringify(opciones('inbox-days'))}`)
+
+  // Permiso y servicio de tareas son dos ejes. Mientras el permiso dijo "abre tarjeta",
+  // el panel prometia a la vez que no abria ninguna (proveedor ninguno) y que abria una.
+  const permisos = [...doc.getElementById('mode').options].map((o) => o.textContent)
+  ok('ningun permiso habla de tarjetas',
+    permisos.every((txt) => !/tarjeta|cartao|card/i.test(txt)),
+    `permisos = ${JSON.stringify(permisos)}`)
+  ok('observar dice que solo lee',
+    /solo lee|reads only|so le/i.test(permisos.find((txt) => /observ/i.test(txt)) || ''),
+    `permisos = ${JSON.stringify(permisos)}`)
+
   // Mapear conversacion. Se elige de la lista, que es el unico camino real: el
   // registro se guarda por jid, no por el nombre visible.
   storage.chats = [
@@ -150,6 +210,11 @@ console.log('\nconfig.html')
   ok('ninguno vacia el destino', destino.value === '', `target = ${JSON.stringify(destino.value)}`)
   ok('ninguno cambia la pista del destino',
     pista.textContent.length > 0 && pista.textContent !== pistaConTablero)
+  // Un hecho en un solo lugar: la pista del proveedor habla de tarjetas, el permiso
+  // habla de escribir. Cuando la pista contaba los dos, los dos se contradecian.
+  ok('la pista del proveedor no describe el permiso',
+    !/permiso|permission|permissao/i.test(pista.textContent),
+    `pista = ${JSON.stringify(pista.textContent)}`)
 
   // Buscador de conversaciones. Con 200 conversaciones un select nativo no se
   // navega, asi que el filtro es parte de que el control sirva, no un adorno.
@@ -245,6 +310,46 @@ console.log('\nconfig.html')
   await espera()
   ok('sin nada guardado la calidad queda en optima',
     sinCalidad.doc.getElementById('quality').value === 'optima')
+
+  // Guardar sin recargar es media funcion: el panel abre mintiendo sobre lo que rige.
+  const guardado = await montar('config.html', {
+    inboxDays: '90', ownerName: 'Fabiana Olivar', transcribe: 'off', transcribeLang: 'pt'
+  })
+  await espera()
+  ok('recarga la ventana guardada',
+    guardado.doc.getElementById('inbox-days').value === '90',
+    `inbox-days = ${guardado.doc.getElementById('inbox-days').value}`)
+  ok('recarga para quien trabaja',
+    guardado.doc.getElementById('owner').value === 'Fabiana Olivar',
+    `owner = ${JSON.stringify(guardado.doc.getElementById('owner').value)}`)
+  ok('recarga el modo de transcripcion',
+    guardado.doc.getElementById('transcribe').value === 'off',
+    `transcribe = ${guardado.doc.getElementById('transcribe').value}`)
+  ok('recarga el idioma de los audios',
+    guardado.doc.getElementById('lang').value === 'pt',
+    `lang = ${guardado.doc.getElementById('lang').value}`)
+
+  const porDefecto = await montar('config.html', {})
+  await espera()
+  // 7 y no 1: una mencion del viernes tiene que seguir a la vista el lunes.
+  ok('sin nada guardado la ventana queda en 7 dias',
+    porDefecto.doc.getElementById('inbox-days').value === '7',
+    `inbox-days = ${porDefecto.doc.getElementById('inbox-days').value}`)
+  ok('sin nada guardado transcribe en local',
+    porDefecto.doc.getElementById('transcribe').value === 'local')
+  ok('sin nada guardado el idioma se detecta',
+    porDefecto.doc.getElementById('lang').value === 'auto')
+  ok('sin nada guardado el dueno queda vacio',
+    porDefecto.doc.getElementById('owner').value === '')
+
+  // La terminal puede fijar un valor que el select no ofrece (`config inbox_days 45`).
+  // Si el select lo ignora queda en blanco y el panel miente sobre lo que rige: peor
+  // que mostrar un valor raro es mostrar ninguno.
+  const aMano = await montar('config.html', { inboxDays: '45' })
+  await espera()
+  ok('un valor puesto por terminal se ve en vez de dejar el select en blanco',
+    aMano.doc.getElementById('inbox-days').value === '45',
+    `inbox-days = ${JSON.stringify(aMano.doc.getElementById('inbox-days').value)}`)
 }
 
 // ───────────────────────── activity.html ─────────────────────────
@@ -279,6 +384,11 @@ console.log('\nactivity.html')
     doc.getElementById('recent').textContent.includes('observar'),
     doc.getElementById('recent').textContent.slice(0, 200))
   ok('muestra el sello de sincronizacion', doc.getElementById('synced').textContent.length > 0)
+  // Tomar no abre tarjeta por si mismo: eso lo decide el servicio de tareas de esa
+  // conversacion. Prometerla aca era la misma contradiccion que en los permisos.
+  ok('la pista de actividad no promete una tarjeta',
+    !/tarjeta|cartao|card/i.test(doc.querySelector('[data-t="hint"]').textContent),
+    doc.querySelector('[data-t="hint"]').textContent)
 
   doc.querySelector('[data-take]').click()
   await espera()

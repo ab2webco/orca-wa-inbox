@@ -164,9 +164,9 @@
       // El shell del panel no inyecta el idioma, asi que sale de navigator.language,
       // que en el renderer de Electron refleja el idioma del app.
       var STRINGS = {
-        es: {"title": "WhatsApp", "pending": "Esperando respuesta", "recent": "Lo ultimo que hizo", "loading": "Cargando…", "nothingYet": "Nada todavia.", "nothingPending": "Nada pendiente en las conversaciones que autorizaste.", "noData": "sin datos — corre <code>wa-scope sync</code>", "running": "corriendo", "image": "imagen", "take": "Tomar", "ignore": "Ignorar", "taken": "lo toma tu agente", "hint": "Marca lo que si es soporte. Tu agente abre la tarjeta y contesta en la proxima corrida; lo ignorado no vuelve a aparecer.", "refreshTitle": "Releer lo guardado"},
-        en: {"title": "WhatsApp", "pending": "Waiting on you", "recent": "Latest actions", "loading": "Loading…", "nothingYet": "Nothing yet.", "nothingPending": "Nothing pending in the conversations you allowed.", "noData": "no data — run <code>wa-scope sync</code>", "running": "running", "image": "image", "take": "Take", "ignore": "Ignore", "taken": "your agent takes it", "hint": "Mark what is actually support. Your agent opens the card and replies on its next run; ignored items never come back.", "refreshTitle": "Re-read what is stored"},
-        pt: {"title": "WhatsApp", "pending": "Aguardando voce", "recent": "Ultimas acoes", "loading": "Carregando…", "nothingYet": "Nada ainda.", "nothingPending": "Nada pendente nas conversas que voce autorizou.", "noData": "sem dados — rode <code>wa-scope sync</code>", "running": "rodando", "image": "imagem", "take": "Assumir", "ignore": "Ignorar", "taken": "seu agente assume", "hint": "Marque o que e suporte de verdade. Seu agente abre o cartao e responde na proxima rodada; o ignorado nao volta.", "refreshTitle": "Reler o que esta salvo"}
+        es: {"title": "WhatsApp", "pending": "Esperando respuesta", "recent": "Lo ultimo que hizo", "loading": "Cargando…", "nothingYet": "Nada todavia.", "nothingPending": "Nada pendiente en las conversaciones que autorizaste.", "noData": "sin datos — corre <code>wa-scope sync</code>", "running": "corriendo", "image": "imagen", "take": "Tomar", "ignore": "Ignorar", "taken": "lo toma tu agente", "hint": "Marca lo que si es soporte. Tu agente lo atiende en la proxima corrida, hasta donde le permita esa conversacion; lo ignorado no vuelve a aparecer.", "refreshTitle": "Releer lo guardado"},
+        en: {"title": "WhatsApp", "pending": "Waiting on you", "recent": "Latest actions", "loading": "Loading…", "nothingYet": "Nothing yet.", "nothingPending": "Nothing pending in the conversations you allowed.", "noData": "no data — run <code>wa-scope sync</code>", "running": "running", "image": "image", "take": "Take", "ignore": "Ignore", "taken": "your agent takes it", "hint": "Mark what is actually support. Your agent handles it on its next run, as far as that conversation allows; ignored items never come back.", "refreshTitle": "Re-read what is stored"},
+        pt: {"title": "WhatsApp", "pending": "Aguardando voce", "recent": "Ultimas acoes", "loading": "Carregando…", "nothingYet": "Nada ainda.", "nothingPending": "Nada pendente nas conversas que voce autorizou.", "noData": "sem dados — rode <code>wa-scope sync</code>", "running": "rodando", "image": "imagem", "take": "Assumir", "ignore": "Ignorar", "taken": "seu agente assume", "hint": "Marque o que e suporte de verdade. Seu agente cuida disso na proxima rodada, ate onde a conversa permitir; o ignorado nao volta.", "refreshTitle": "Reler o que esta salvo"}
       }
       var LANG = (function () {
         var tag = String(navigator.language || 'en').toLowerCase()
@@ -290,7 +290,8 @@
 
       // El panel no puede ejecutar nada; lo unico que puede hacer es dejar la decision
       // escrita en storage. `wa-scope` la lee y el agente la respeta en su proxima
-      // corrida: tomar = abre tarjeta y contesta, ignorar = no vuelve a aparecer.
+      // corrida: tomar = lo atiende hasta donde le permita esa conversacion, ignorar = no
+      // vuelve a aparecer.
       function decide(stanzaId, decision, button) {
         if (!stanzaId) { note('sin id de mensaje', true); return }
         if (button) { button.disabled = true; button.textContent = '…' }

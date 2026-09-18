@@ -229,12 +229,45 @@
           <span class="said" id="said-agent"></span>
         </div>
 
+        <label for="owner" data-t="ownerLabel"></label>
+        <input id="owner" data-t-ph="ownerPh" />
+        <p class="hint" data-t="ownerHelp"></p>
+        <div class="actions">
+          <button id="save-owner" data-t="saveOwner"></button>
+          <span class="said" id="said-owner"></span>
+        </div>
+
         <label for="tone" data-t="toneLabel"></label>
         <textarea id="tone" rows="3" data-t-ph="tonePh"></textarea>
         <p class="hint" data-t="toneHelp"></p>
         <div class="actions">
           <button id="save-tone" data-t="saveTone"></button>
           <span class="said" id="said-tone"></span>
+        </div>
+
+        <label for="transcribe" data-t="transcribeLabel"></label>
+        <select id="transcribe">
+          <option value="local" data-t="trLocal"></option>
+          <option value="off" data-t="trOff"></option>
+          <option value="api" data-t="trApi"></option>
+        </select>
+        <p class="hint" data-t="transcribeHelp"></p>
+        <div class="actions">
+          <button id="save-transcribe" data-t="saveTranscribe"></button>
+          <span class="said" id="said-transcribe"></span>
+        </div>
+
+        <label for="lang" data-t="langLabel"></label>
+        <select id="lang">
+          <option value="auto" data-t="langAuto"></option>
+          <option value="es" data-t="langEs"></option>
+          <option value="en" data-t="langEn"></option>
+          <option value="pt" data-t="langPt"></option>
+        </select>
+        <p class="hint" data-t="langHelp"></p>
+        <div class="actions">
+          <button id="save-lang" data-t="saveLang"></button>
+          <span class="said" id="said-lang"></span>
         </div>
 
         <label for="quality" data-t="qualityLabel"></label>
@@ -251,6 +284,22 @@
 
       <section>
         <h2 data-t="mapLegend"></h2>
+        <label for="inbox-days" data-t="daysLabel"></label>
+        <select id="inbox-days">
+          <option value="1" data-t="days1"></option>
+          <option value="3" data-t="days3"></option>
+          <option value="7" data-t="days7"></option>
+          <option value="14" data-t="days14"></option>
+          <option value="30" data-t="days30"></option>
+          <option value="90" data-t="days90"></option>
+          <option value="0" data-t="days0"></option>
+        </select>
+        <p class="hint" data-t="daysHelp"></p>
+        <div class="actions">
+          <button id="save-days" data-t="saveDays"></button>
+          <span class="said" id="said-days"></span>
+        </div>
+
         <label for="chat-search" data-t="chatLabel"></label>
         <input id="chat-search" type="search" autocomplete="off" data-t-ph="chatSearchPh" />
         <select id="chat-pick" size="1"></select>
@@ -338,6 +387,19 @@
           toneHelp: "Vale para todas las conversaciones. Cada una puede tener el suyo y pisa este.",
           saveTone: "Guardar tono",
           toneSaved: "Tono guardado",
+          transcribeLabel: "Notas de voz",
+          trLocal: "local — el audio no sale de este equipo",
+          trOff: "off — no las transcribe",
+          trApi: "api — las manda a un servicio externo",
+          transcribeHelp: "Con off el agente no sabe que dice un audio y te lo deja " +
+            "marcado para escucharlo. api sube el audio a un tercero.",
+          saveTranscribe: "Guardar notas de voz",
+          transcribeSaved: "Notas de voz guardadas",
+          langLabel: "Idioma de los audios",
+          langAuto: "detectar automaticamente",
+          langEs: "espanol", langEn: "ingles", langPt: "portugues",
+          langHelp: "Fijarlo acierta mas que detectarlo cuando los audios mezclan dos idiomas.",
+          saveLang: "Guardar idioma", langSaved: "Idioma guardado",
           qualityLabel: "Calidad de la transcripcion",
           qualityOptima: "optima — recomendado",
           qualityMinima: "minima — equipos sin computo",
@@ -364,14 +426,26 @@
           agentHelp: 'Firma cada mensaje que escriba, para que nadie dude de si hablas vos o el.',
           saveName: 'Guardar nombre', saveChange: 'Guardar cambio', cancel: 'Cancelar',
           editName: 'Cambiar el nombre',
+          ownerLabel: 'Para quien trabaja',
+          ownerPh: 'ej. Fabiana Olivar',
+          ownerHelp: 'Tu nombre. El agente lo usa para saber de quien es el trabajo que ' +
+            'atiende y a quien le reporta.',
+          saveOwner: 'Guardar', ownerSaved: 'Guardado',
+          daysLabel: 'Hasta cuando atras mira',
+          days1: '1 dia — solo lo de hoy', days3: '3 dias',
+          days7: '7 dias — recomendado', days14: '14 dias', days30: '30 dias',
+          days90: '90 dias', days0: 'todo el historial',
+          daysHelp: 'Con un dia, una mencion del viernes que nadie contesto ya no ' +
+            'aparece el lunes. Se leen como maximo los 500 mensajes mas nuevos de la ventana.',
+          saveDays: 'Guardar ventana', daysSaved: 'Ventana guardada',
           mapLegend: 'Conversaciones', chatLabel: 'Conversacion',
           chatPh: 'nombre exacto del grupo o su JID',
           providerLabel: 'Servicio de tareas', permLabel: 'Permiso',
           providerNone: 'ninguno — no abre tarjetas',
           targetPlane: 'Proyecto por defecto', targetLinear: 'Equipo por defecto',
           targetGithub: 'Repositorio por defecto', targetNone: 'Sin destino',
-          targetHintNone: 'Esta conversacion no abre tarjetas: lee, resume o contesta segun ' +
-            'el permiso y lo que le pidas abajo. Ninguna regla de contenido la manda a un board.',
+          targetHintNone: 'Esta conversacion no abre tarjetas: ninguna regla de contenido ' +
+            'la manda a un board.',
           targetHint: 'El destino real lo decide el contenido del mensaje con las reglas de abajo. ' +
             'Esto es solo el fallback cuando ninguna regla engancha. Dejalo vacio para que no ' +
             'abra tarjeta si no reconoce el cliente.',
@@ -393,7 +467,7 @@
           needName: 'Poné un nombre.', needChat: 'Falta la conversacion.',
           needMatch: 'Falta el texto y el destino.',
           savedOk: 'Guardado', removedOk: 'Quitado', named: 'Se llama',
-          off: 'off — no la toca', observe: 'observar — abre tarjeta, no escribe',
+          off: 'off — no la toca', observe: 'observar — solo lee, no escribe',
           draft: 'borrador — deja el texto sin enviar', reply: 'responder — envia'
         },
         en: {
@@ -404,6 +478,19 @@
           toneHelp: "Applies to every conversation. Each one can override it.",
           saveTone: "Save tone",
           toneSaved: "Tone saved",
+          transcribeLabel: "Voice notes",
+          trLocal: "local — the audio never leaves this machine",
+          trOff: "off — does not transcribe them",
+          trApi: "api — sends them to an outside service",
+          transcribeHelp: "With off the agent cannot know what an audio says and flags it " +
+            "for you to listen to. api uploads the audio to a third party.",
+          saveTranscribe: "Save voice notes",
+          transcribeSaved: "Voice notes saved",
+          langLabel: "Language of the audios",
+          langAuto: "detect automatically",
+          langEs: "Spanish", langEn: "English", langPt: "Portuguese",
+          langHelp: "Pinning it beats detection when the audios mix two languages.",
+          saveLang: "Save language", langSaved: "Language saved",
           qualityLabel: "Transcription quality",
           qualityOptima: "optimal — recommended",
           qualityMinima: "minimal — low-spec machines",
@@ -430,14 +517,26 @@
           agentHelp: 'Signs every message it writes, so nobody wonders if it was you or it.',
           saveName: 'Save name', saveChange: 'Save change', cancel: 'Cancel',
           editName: 'Change the name',
+          ownerLabel: 'Who it works for',
+          ownerPh: 'e.g. Fabiana Olivar',
+          ownerHelp: 'Your name. The agent uses it to know whose work it is handling and ' +
+            'who it reports to.',
+          saveOwner: 'Save', ownerSaved: 'Saved',
+          daysLabel: 'How far back it looks',
+          days1: '1 day — today only', days3: '3 days',
+          days7: '7 days — recommended', days14: '14 days', days30: '30 days',
+          days90: '90 days', days0: 'the whole history',
+          daysHelp: 'With one day, a Friday mention nobody answered is gone by Monday. ' +
+            'At most the 500 newest messages in the window are read.',
+          saveDays: 'Save window', daysSaved: 'Window saved',
           mapLegend: 'Conversations', chatLabel: 'Conversation',
           chatPh: 'exact group name or its JID',
           providerLabel: 'Task service', permLabel: 'Permission',
           providerNone: 'none — never opens cards',
           targetPlane: 'Default project', targetLinear: 'Default team',
           targetGithub: 'Default repository', targetNone: 'No destination',
-          targetHintNone: 'This conversation never opens cards: it reads, summarises or ' +
-            'answers, per the permission and what you ask below. No content rule sends it to a board.',
+          targetHintNone: 'This conversation never opens cards: no content rule sends it ' +
+            'to a board.',
           targetHint: 'The real destination comes from the message content and the rules below. ' +
             'This is only the fallback when no rule matches. Leave it empty to open no card ' +
             'when the client is not recognized.',
@@ -459,12 +558,34 @@
           needName: 'Give it a name.', needChat: 'Pick a conversation.',
           needMatch: 'Text and destination are both required.',
           savedOk: 'Saved', removedOk: 'Removed', named: 'Called',
-          off: 'off — leaves it alone', observe: 'observe — opens cards, never writes',
+          off: 'off — leaves it alone', observe: 'observe — reads only, never writes',
           draft: 'draft — types the reply, never sends', reply: 'reply — sends'
         }
       }
       STRINGS.pt = Object.assign({}, STRINGS.en, {
         toneLabel: 'Como escreve', saveTone: 'Salvar tom', toneSaved: 'Tom salvo',
+        transcribeLabel: 'Notas de voz',
+        trLocal: 'local — o audio nao sai deste equipamento',
+        trOff: 'off — nao transcreve',
+        trApi: 'api — manda para um servico externo',
+        transcribeHelp: 'Com off o agente nao sabe o que um audio diz e marca para voce ' +
+          'ouvir. api envia o audio para um terceiro.',
+        saveTranscribe: 'Salvar notas de voz', transcribeSaved: 'Notas de voz salvas',
+        langLabel: 'Idioma dos audios', langAuto: 'detectar automaticamente',
+        langEs: 'espanhol', langEn: 'ingles', langPt: 'portugues',
+        langHelp: 'Fixar acerta mais que detectar quando os audios misturam dois idiomas.',
+        saveLang: 'Salvar idioma', langSaved: 'Idioma salvo',
+        ownerLabel: 'Para quem trabalha', ownerPh: 'ex. Fabiana Olivar',
+        ownerHelp: 'Seu nome. O agente usa para saber de quem e o trabalho que atende e a ' +
+          'quem se reporta.',
+        saveOwner: 'Salvar', ownerSaved: 'Salvo',
+        daysLabel: 'Ate quando atras olha',
+        days1: '1 dia — so o de hoje', days3: '3 dias',
+        days7: '7 dias — recomendado', days14: '14 dias', days30: '30 dias',
+        days90: '90 dias', days0: 'todo o historico',
+        daysHelp: 'Com um dia, uma mencao de sexta que ninguem respondeu nao aparece mais ' +
+          'na segunda. Sao lidas no maximo as 500 mensagens mais novas da janela.',
+        saveDays: 'Salvar janela', daysSaved: 'Janela salva',
         qualityLabel: 'Qualidade da transcricao',
         qualityOptima: 'otima — recomendado',
         qualityMinima: 'minima — equipamentos sem computo',
@@ -480,8 +601,8 @@
         providerLabel: 'Servico de tarefas', permLabel: 'Permissao',
         providerNone: 'nenhum — nao abre cartoes',
         targetNone: 'Sem destino',
-        targetHintNone: 'Esta conversa nao abre cartoes: le, resume ou responde, conforme a ' +
-          'permissao e o que voce pedir abaixo. Nenhuma regra de conteudo a manda para um board.',
+        targetHintNone: 'Esta conversa nao abre cartoes: nenhuma regra de conteudo a manda ' +
+          'para um board.',
         chatToneLabel: 'Como escreve aqui (opcional)',
         chatTonePh: 'vazio = usa o tom global',
         chatInstrLabel: 'O que faz aqui (opcional)',
@@ -494,7 +615,7 @@
         colChat: 'Conversa', colPerm: 'Permissao', edit: 'Editar', remove: 'Remover',
         routesLegend: 'Para qual projeto vai', addRoute: 'Adicionar regra',
         savedOk: 'Salvo', removedOk: 'Removido', named: 'Se chama',
-        off: 'off — nao toca', observe: 'observar — abre cartao, nao escreve',
+        off: 'off — nao toca', observe: 'observar — so le, nao escreve',
         draft: 'rascunho — escreve sem enviar', reply: 'responder — envia'
       })
 
@@ -653,13 +774,62 @@
         }))
       })
 
-      // ---------- calidad de la transcripcion ----------
+      // ---------- para quien trabaja ----------
+      // No es el nombre del agente: es el del dueno. El prompt lo lee para saber a
+      // quien le reporta, y sin el se dirige al cliente como si trabajara solo.
+      el('save-owner').addEventListener('click', function (event) {
+        busy(event.currentTarget, write('ownerName', el('owner').value.trim())
+          .then(function (r) {
+            said('said-owner', r.ok ? '\u2713 ' + t('ownerSaved') : 'error', !r.ok)
+          }))
+      })
+
+      // ---------- transcripcion: modo, idioma y calidad ----------
+      el('save-transcribe').addEventListener('click', function (event) {
+        busy(event.currentTarget, write('transcribe', el('transcribe').value)
+          .then(function (r) {
+            said('said-transcribe', r.ok ? '\u2713 ' + t('transcribeSaved') : 'error', !r.ok)
+          }))
+      })
+
+      el('save-lang').addEventListener('click', function (event) {
+        busy(event.currentTarget, write('transcribeLang', el('lang').value)
+          .then(function (r) {
+            said('said-lang', r.ok ? '\u2713 ' + t('langSaved') : 'error', !r.ok)
+          }))
+      })
+
       el('save-quality').addEventListener('click', function (event) {
         busy(event.currentTarget, write('transcribeQuality', el('quality').value)
           .then(function (r) {
             said('said-quality', r.ok ? '\u2713 ' + t('qualitySaved') : 'error', !r.ok)
           }))
       })
+
+      // ---------- ventana de lectura ----------
+      el('save-days').addEventListener('click', function (event) {
+        busy(event.currentTarget, write('inboxDays', el('inbox-days').value)
+          .then(function (r) {
+            said('said-days', r.ok ? '\u2713 ' + t('daysSaved') : 'error', !r.ok)
+          }))
+      })
+
+      // Deja el select mostrando lo que rige de verdad. La terminal puede fijar un valor
+      // que el select no ofrece (`wa-scope config inbox_days 45`): sin agregarlo, .value
+      // no engancha, el control queda en blanco y el panel miente sobre lo que rige.
+      function ponerEnSelect (id, valor, porDefecto) {
+        var sel = el(id)
+        if (document.activeElement === sel) return
+        var v = valor === null || valor === undefined || valor === '' ? porDefecto : String(valor)
+        var hay = Array.prototype.some.call(sel.options, function (o) { return o.value === v })
+        if (!hay) {
+          var o = document.createElement('option')
+          o.value = v
+          o.textContent = v
+          sel.appendChild(o)
+        }
+        sel.value = v
+      }
 
       // ---------- selector de conversaciones ----------
       // Se elige de la lista en vez de escribir el nombre exacto. El valor es el jid,
@@ -894,14 +1064,21 @@
         if (!liveStorage) return Promise.resolve()
         return Promise.all([read('scope'), read('agentName'), read('health'),
                             read('routes'), read('tone'), read('chats'),
-                            read('transcribeQuality')])
+                            read('transcribeQuality'), read('inboxDays'),
+                            read('ownerName'), read('transcribe'),
+                            read('transcribeLang')])
           .then(function (r) {
             renderScope(r[0])
             if (typeof r[4] === 'string' && document.activeElement !== el('tone')) {
               el('tone').value = r[4]
             }
-            if (document.activeElement !== el('quality')) {
-              el('quality').value = typeof r[6] === 'string' && r[6] ? r[6] : 'optima'
+            ponerEnSelect('quality', r[6], 'optima')
+            // 7 dias y no 1: una mencion del viernes tiene que seguir a la vista el lunes.
+            ponerEnSelect('inbox-days', r[7], '7')
+            ponerEnSelect('transcribe', r[9], 'local')
+            ponerEnSelect('lang', r[10], 'auto')
+            if (typeof r[8] === 'string' && document.activeElement !== el('owner')) {
+              el('owner').value = r[8]
             }
             if (document.activeElement !== el('chat-search')) renderChats(r[5])
             if (typeof r[1] === 'string' && r[1] && !agentDirty &&
