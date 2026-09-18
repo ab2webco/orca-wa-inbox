@@ -7,7 +7,16 @@
  * de guardar, otra porque el resultado de storage.get venia envuelto dos veces. Los dos
  * casos se ven identicos a la vista — un panel que no responde y no dice por que.
  */
-import { JSDOM } from 'jsdom'
+// Las dependencias del arnes viven FUERA de la raiz del plugin: Orca hashea todo
+// lo que hay bajo ella y rechaza symlinks, y node_modules/.bin son symlinks — con
+// node_modules aca el plugin queda "No valido". NODE_PATH no sirve para ESM, asi
+// que se resuelve con createRequire contra el directorio hermano.
+import { createRequire } from 'node:module'
+
+const DEPS = process.env.WA_INBOX_DEPS ??
+  new URL('../../.orca-wa-inbox-deps/package.json', import.meta.url).pathname
+const req = createRequire(DEPS)
+const { JSDOM } = req('jsdom')
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'

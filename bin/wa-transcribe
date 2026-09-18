@@ -11,7 +11,7 @@ contrario de lo que promete su ficha de permisos.
 
 Los motores se prueban en orden. El primero que este, gana.
 """
-import argparse, json, os, shutil, subprocess, sys, tempfile
+import argparse, json, os, shlex, shutil, subprocess, sys, tempfile
 
 CONFIG_KEYS = ("transcribe", "transcribe_model", "transcribe_lang")
 
@@ -95,35 +95,94 @@ def calidad():
     return CALIDAD.get(elegida, CALIDAD["optima"])
 
 
-def orca_listo():
-    """Si Orca ya tiene descargado el modelo de la calidad elegida. Preguntar solo si
-    el binario existe no alcanza: el panel decia "sin motor: brew install whisper-cpp"
-    mientras Orca transcribia perfecto, porque `puede` solo miraba los motores locales."""
+# Hay un userData por build de Orca, y cada uno tiene SUS modelos descargados.
+# Preguntarle al equivocado devuelve "sin motor" teniendo los modelos.
+USER_DATA_DIRS = ("orca", "orca-dev", "zzorcanametest")
+PLUGIN_DATA = "plugins-data"
+
+
+def user_data_roots():
+    """Todos los userData de Orca que existen en este equipo."""
+    if sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    elif os.name == "nt":
+        base = os.environ.get("APPDATA", os.path.expanduser("~"))
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+    declarado = os.environ.get("ORCA_USER_DATA_PATH", "").strip()
+    if declarado:
+        return [declarado]
+    return [os.path.join(base, d) for d in USER_DATA_DIRS
+            if os.path.isdir(os.path.join(base, d))]
+
+
+# Lo pone orca_con_modelo(): el Orca que hay no conoce el comando de voz.
+_ORCA_SIN_COMANDO = False
+
+
+def orca_cmd():
+    """Solo el binario. Con que userData llamarlo lo decide quien pregunta."""
+    declarado = os.environ.get("ORCA_CLI_COMMAND", "").strip()
+    if declarado:
+        return shlex.split(declarado)
     exe = shutil.which("orca")
-    if not exe:
-        return False
-    try:
-        p = subprocess.run([exe, "speech", "models", "list", "--json"],
-                           capture_output=True, text=True, timeout=30)
-        d = json.loads(p.stdout or "{}")
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return False
-    modelos = (d.get("result") or d).get("models") or []
+    return [exe] if exe else None
+
+
+def orca_con_modelo():
+    """El userData de Orca que YA tiene bajado el modelo de la calidad elegida.
+
+    Hay un userData por build y cada uno tiene sus modelos. No se puede saber por
+    entorno en cual corre el plugin: el worker recibe una allowlist estricta
+    (plugin-worker-env.ts) sin ORCA_CLI_COMMAND ni ORCA_USER_DATA_PATH. Y
+    adivinarlo por fecha de modificacion elegia el build equivocado. Asi que se
+    preguntan todos y gana el que tenga el modelo: si alguno puede transcribir,
+    este equipo puede transcribir.
+    """
+    cmd = orca_cmd()
+    if not cmd:
+        return None
     quiero = calidad()["orca"]
-    return any(m.get("id") == quiero and m.get("status") == "ready" for m in modelos)
+    global _ORCA_SIN_COMANDO
+    _ORCA_SIN_COMANDO = False
+    for raiz in user_data_roots():
+        env = dict(os.environ, ORCA_USER_DATA_PATH=raiz)
+        try:
+            p = subprocess.run(cmd + ["speech", "models", "list", "--json"],
+                               capture_output=True, text=True, timeout=30, env=env)
+            d = json.loads(p.stdout or "{}")
+        except (OSError, ValueError, subprocess.SubprocessError):
+            continue
+        # Un Orca anterior al comando de voz responde "Unknown command". Eso no es
+        # falta de modelo, es falta de version: decir "instala whisper-cpp" ahi
+        # manda al usuario a resolver un problema que no tiene.
+        err = d.get("error") or {}
+        if isinstance(err, dict) and "Unknown command" in str(err.get("message", "")):
+            _ORCA_SIN_COMANDO = True
+            continue
+        modelos = (d.get("result") or d).get("models") or []
+        if any(m.get("id") == quiero and m.get("status") == "ready" for m in modelos):
+            return env
+    return None
+
+
+def orca_listo():
+    """Si algun Orca de este equipo puede transcribir con la calidad elegida."""
+    return orca_con_modelo() is not None
 
 
 def por_orca(origen):
     """Primero Orca: ya tiene motor y modelos administrados. Si no esta lista, se
     devuelve el codigo tal cual para que el panel sepa QUE falta, no solo que fallo."""
-    exe = shutil.which("orca")
-    if not exe:
+    env = orca_con_modelo()
+    if env is None:
         return None
+    cmd = orca_cmd()
     try:
-        p = subprocess.run([exe, "speech", "transcribe", origen,
+        p = subprocess.run(cmd + ["speech", "transcribe", origen,
                             "--model", calidad()["orca"],
                             "--language", idioma(), "--json"],
-                           capture_output=True, text=True, timeout=900)
+                           capture_output=True, text=True, timeout=900, env=env)
     except (OSError, subprocess.SubprocessError):
         return None
     try:
@@ -280,6 +339,7 @@ def main():
     if a.check:
         info = {"modo": setting("transcribe", "local"),
                 "orca": orca_listo(),
+                "orca_sin_comando": _ORCA_SIN_COMANDO,
                 "idioma": idioma(),
                 "calidad": setting("transcribe_quality", "optima"),
                 "modelo_orca": calidad()["orca"],

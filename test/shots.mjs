@@ -11,7 +11,16 @@
 // ejemplo a proposito: estas capturas se muestran, y los nombres de los grupos
 // reales son de clientes.
 
-import { chromium } from 'playwright'
+// Las dependencias del arnes viven FUERA de la raiz del plugin: Orca hashea todo
+// lo que hay bajo ella y rechaza symlinks, y node_modules/.bin son symlinks — con
+// node_modules aca el plugin queda "No valido". NODE_PATH no sirve para ESM, asi
+// que se resuelve con createRequire contra el directorio hermano.
+import { createRequire } from 'node:module'
+
+const DEPS = process.env.WA_INBOX_DEPS ??
+  new URL('../../.orca-wa-inbox-deps/package.json', import.meta.url).pathname
+const req = createRequire(DEPS)
+const { chromium } = req('playwright')
 import { mkdir, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'

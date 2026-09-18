@@ -354,6 +354,9 @@ def _transcribe_check():
         if info.get("orca"):
             return True, f"Orca con modelo {info.get('modelo_orca')}"
         return True, f"{info['motores'][0]} con modelo {info['modelo']}"
+    if info.get("orca_sin_comando"):
+        return False, ("opcional — este Orca no trae transcripcion de audio todavia; "
+                       "actualizalo, o instala un motor local con brew install whisper-cpp")
     if not info.get("motores"):
         return False, ("opcional — sin motor: descarga el modelo en Ajustes > Voz, "
                        "o instala uno local con brew install whisper-cpp")
