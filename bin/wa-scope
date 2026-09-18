@@ -10,6 +10,7 @@ agente. Con cientos de grupos, el permiso tiene que ser una lista blanca explici
   wa-scope rm <chat>
   wa-scope check <chat> [--for responder]   la compuerta: exit 0 = autorizado
   wa-scope voice <chat>               tono, instrucciones, proveedor y permiso de ahi
+  wa-scope closing                    tarjetas cerradas que su conversacion no sabe
   wa-scope log [-n 50]                que hizo el agente y donde
 
 Modos, de menos a mas permiso:
@@ -100,6 +101,31 @@ SIN_TARJETA = "ninguno"
 PROVIDERS_CHAT = dict(PROVIDERS, **{SIN_TARJETA: "no abre tarjeta en esta conversacion"})
 RANK = {m: i for i, m in enumerate(MODES)}
 
+# Plane agrupa los estados en estos cinco grupos y cada proyecto renombra las columnas
+# a gusto ("Listo", "Entregado", "QA aprobado"). El cierre se decide por el GRUPO y
+# nunca por el nombre: comparar nombres se rompe con el primer tablero que lo escriba
+# distinto, y ahi el cliente deja de enterarse o se entera de algo que no paso.
+STATE_GROUPS = ["backlog", "unstarted", "started", "completed", "cancelled"]
+# Cerrado no es una sola cosa. "completed" es trabajo hecho; "cancelled" es trabajo que
+# no va a pasar. Decirle "listo" a un cliente sobre algo cancelado es afirmar algo falso,
+# asi que el texto sale de aca y no del criterio del agente en cada corrida.
+GRUPOS_DE_CIERRE = ("completed", "cancelled")
+# Un lector por proveedor. Hoy solo Plane tiene forma de consultar el estado por CLI;
+# linear y github todavia no, asi que sus conversaciones no se listan y no pasa nada.
+# Es una funcion que falta, no un error: avisar de eso en cada corrida seria ruido.
+CLOSING_READERS = {"plane": "orca plane issue <ID> --json --comments"}
+# La marca que un humano pone en un comentario del tablero cuando ese texto SI es para
+# el cliente. Sin marca, ningun comentario sale: la discusion interna del equipo no
+# tiene por que aparecer en el grupo de un cliente.
+CLIENT_MARK = "[cliente]"
+# Como termina un aviso, y con que queda en la bitacora que ve el panel.
+CLOSING_RESULTS = {
+    "avisado":     ("closed",  "cierre avisado en el chat"),
+    "borrador":    ("draft",   "cierre dejado en borrador, sin enviar"),
+    "sin-permiso": ("skipped", "cierre no avisado: el permiso de esa conversacion no escribe"),
+    "fallo":       ("failed",  "no se pudo avisar el cierre"),
+}
+
 SCHEMA = """
 create table if not exists chat_scope (
   chat_jid      text primary key,      -- llave real: sobrevive reinstalar WhatsApp
@@ -142,7 +168,8 @@ create table if not exists work (
   step      text,              -- que hizo la ultima vez
   next_step text,              -- que falta, en una linea
   status    text not null default 'open',   -- open | done | abandoned
-  opened_at text, updated_at text
+  opened_at text, updated_at text,
+  notified_at text             -- cuando la conversacion supo del cierre; null = todavia no
 );
 create index if not exists ix_work_status on work(status);
 -- Resumenes de lo podado. La bitacora detallada no crece para siempre.
@@ -409,7 +436,32 @@ def migrate(con):
         if "plane_project" in cols:
             con.execute("update chat_scope set target = plane_project, "
                         "provider = coalesce(provider,'plane') where target is null")
+    work_cols = {r["name"] for r in con.execute("pragma table_info(work)")}
+    if "notified_at" not in work_cols:
+        con.execute("alter table work add column notified_at text")
     con.commit()
+    closing_baseline(con)
+
+
+def closing_baseline(con):
+    """La linea a partir de la cual se avisan cierres, fijada la primera vez que este
+    codigo toca la base.
+
+    Sin esto, estrenar la funcion mandaria una rafaga de mensajes a grupos de clientes
+    por cada tarjeta cerrada en meses — y eso no se puede deshacer. Asi que todo lo que
+    ya estaba abierto queda marcado como avisado, en silencio: solo se avisa el trabajo
+    que se abra desde ahora. El guardia vive aca y no en el prompt justamente porque un
+    prompt se puede olvidar de un paso; una columna no.
+    """
+    row = con.execute("select value from settings where key='closing_since'").fetchone()
+    if row and row["value"]:
+        return row["value"]
+    now = time.strftime("%Y-%m-%d %H:%M")
+    con.execute("update work set notified_at=? where notified_at is null", (now,))
+    con.execute("insert into settings (key,value) values ('closing_since',?) "
+                "on conflict(key) do update set value=excluded.value", (now,))
+    con.commit()
+    return now
 
 
 def wa_chats(query=None):
@@ -719,6 +771,163 @@ def cmd_work(con, a):
         "where status='open' order by updated_at")]
 
 
+def closing_rows(con):
+    """Las tarjetas cerradas de las que su conversacion todavia no sabe.
+
+    UNA fila por tarjeta y conversacion, no por mensaje: `work` tiene una fila por
+    `stanza_id` y cinco mensajes sobre lo mismo comparten un `issue`. Agrupar por
+    mensaje seria mandar cinco avisos del mismo cierre al mismo grupo.
+
+    Se agrupa tambien por `chat_jid` y no solo por la tarjeta: si dos conversaciones
+    apuntan a la misma tarjeta, agrupar solo por `issue` avisaria a una y marcaria la
+    otra como avisada — un mensaje perdido en silencio, que es el peor final posible.
+
+    Viene con la conversacion, el proveedor, el permiso y la firma ya resueltos para
+    que el prompt no tenga que volver a deducir nada.
+    """
+    since = closing_baseline(con)
+    scope = merged_scope(con)
+    agent = agent_name_of(con)
+    out = []
+    for r in con.execute(
+            "select issue, chat_jid, chat_name, count(*) as mensajes, "
+            "       group_concat(stanza_id) as stanzas, min(opened_at) as opened_at "
+            "from work "
+            "where status='open' and notified_at is null "
+            "  and issue is not null and trim(issue) <> '' "
+            "  and opened_at >= ? "
+            "group by issue, chat_jid order by min(opened_at)", (since,)):
+        entry = scope.get(r["chat_jid"]) or {}
+        provider = entry.get("provider") or "plane"
+        # En `ninguno` no hay tarjeta: no hay cierre que avisar.
+        # Sin lector para ese proveedor tampoco hay nada que consultar: no listarla ES
+        # el salto en silencio que se pidio, y no depende de que el prompt lo recuerde.
+        if provider == SIN_TARJETA or provider not in CLOSING_READERS:
+            continue
+        # El nombre visible, no el jid: `wa-send` busca la conversacion en la UI por
+        # nombre y con un jid no encuentra nada. Cuando el registro no tiene nombre
+        # propio guarda el jid como nombre, asi que ahi vale mas el que anoto `work`.
+        registrado = entry.get("chat_name")
+        out.append({"issue": r["issue"], "chat_jid": r["chat_jid"],
+                    "chat": (registrado if registrado and registrado != r["chat_jid"]
+                             else r["chat_name"] or r["chat_jid"]),
+                    "provider": provider, "target": entry.get("target"),
+                    "mode": entry.get("mode") or "off", "agent": agent,
+                    "mensajes": r["mensajes"], "stanzas": r["stanzas"] or "",
+                    "opened_at": r["opened_at"], "reader": CLOSING_READERS[provider]})
+    return out
+
+
+def closing_text(group, issue, title=None, client_comment=None):
+    """El texto que sale al chat. Lo arma la herramienta y no el prompt porque la
+    diferencia entre "resuelto" y "cancelado" es una afirmacion sobre algo real, y no
+    puede depender de que el agente se acuerde en la corrida numero doscientos."""
+    if client_comment and client_comment.strip():
+        # Un comentario marcado para el cliente sale tal cual y solo, sin el hilo. La
+        # marca se quita aca: es una senal para el tablero, no algo que el cliente lea.
+        texto = client_comment.strip()
+        if texto.lower().startswith(CLIENT_MARK):
+            texto = texto[len(CLIENT_MARK):].strip()
+        return texto
+    que = (title or "").strip()
+    if group == "completed":
+        return ((f"Ya quedo resuelto: {que} ({issue})." if que
+                 else f"Ya quedo resuelta la solicitud {issue}.")
+                + " Si algo sigue pendiente, nos escribe por aca.")
+    return ((f"{que} ({issue}) quedo cancelado y no continua." if que
+             else f"La solicitud {issue} quedo cancelada y no continua.")
+            + " Si todavia la necesita, nos escribe por aca y la volvemos a abrir.")
+
+
+def closing_action(mode):
+    """Hasta donde llega el aviso con el permiso de esa conversacion."""
+    if mode == "responder":
+        return "enviar"
+    if mode == "borrador":
+        return "borrador"
+    return "no-escribe"
+
+
+def closing_mark(con, issue, chat_jid, result, detail=""):
+    """Cierra el tema: la tarjeta ya no vuelve a listarse y queda rastro en la bitacora,
+    que es lo que muestra el panel.
+
+    El fallo tambien marca, a proposito: reintentar cada cinco minutos un envio que no
+    funciona es como se manda el mismo mensaje veinte veces. Lo que no se registra —
+    tablero caido, token vencido — no pasa por aca: de esa tarjeta no se sabe nada
+    todavia, asi que se vuelve a intentar en la proxima corrida.
+    """
+    action, texto = CLOSING_RESULTS[result]
+    now = time.strftime("%Y-%m-%d %H:%M")
+    row = con.execute("select chat_name from work where issue=? and chat_jid=? limit 1",
+                      (issue, chat_jid)).fetchone()
+    cur = con.execute("update work set notified_at=?, status='done' "
+                      "where issue=? and chat_jid=? and notified_at is null",
+                      (now, issue, chat_jid))
+    if not cur.rowcount:
+        # Ya estaba registrado. Anotarlo de nuevo duplicaria la linea en el panel y
+        # haria ver dos avisos donde hubo uno.
+        con.commit()
+        return {"issue": issue, "chat_jid": chat_jid, "result": result,
+                "marcadas": 0, "ya_estaba": True}
+    con.execute("insert into agent_action (ts,chat_jid,chat_name,action,plane_issue,detail) "
+                "values (?,?,?,?,?,?)",
+                (now, chat_jid, (row["chat_name"] if row else "") or "", action, issue,
+                 (detail or "").strip() or texto))
+    con.commit()
+    return {"issue": issue, "chat_jid": chat_jid, "result": result,
+            "marcadas": cur.rowcount, "accion": action, "ya_estaba": False}
+
+
+def cmd_closing(con, a):
+    """El otro sentido del flujo: cuando la tarjeta se cierra, la conversacion se
+    entera. Y nada mas del tablero sale de ahi.
+
+    Sin flags lista lo que hay que revisar. Con `--group` dice que decir y hasta donde
+    llega el permiso. Con `--result` registra como termino. Quien consulta el tablero es
+    el agente desde su terminal: este CLI no sale a la red, y esa promesa es parte de
+    lo que el plugin vende."""
+    if a.result:
+        if not (a.issue and a.chat):
+            sys.exit("falta --issue y --chat: el aviso se registra por tarjeta y conversacion")
+        return [closing_mark(con, a.issue, a.chat, a.result, a.detail)]
+    if a.group:
+        if not (a.issue and a.chat):
+            sys.exit("falta --issue y --chat: el aviso se decide por tarjeta y conversacion")
+        if a.group not in GRUPOS_DE_CIERRE:
+            return [{"issue": a.issue, "chat_jid": a.chat, "group": a.group,
+                     "action": "nada", "text": None,
+                     "why": f"el grupo {a.group} no es un cierre: la tarjeta sigue abierta"}]
+        row = next((r for r in closing_rows(con)
+                    if r["issue"] == a.issue and r["chat_jid"] == a.chat), None)
+        if not row:
+            return [{"issue": a.issue, "chat_jid": a.chat, "group": a.group,
+                     "action": "nada", "text": None,
+                     "why": "esa tarjeta no espera aviso: ya se aviso, o no es trabajo "
+                            "abierto de esta conversacion"}]
+        action = closing_action(row["mode"])
+        if action == "no-escribe":
+            # Se registra aca mismo y no en un paso aparte del prompt: el permiso no va
+            # a cambiar solo, y dejarlo suelto significa que el panel nunca lo ve y que
+            # la misma tarjeta se revisa cada cinco minutos para siempre.
+            closing_mark(con, a.issue, a.chat, "sin-permiso",
+                         f"{a.issue} en modo {row['mode']}: no se escribe en {row['chat']}")
+            return [{**row, "group": a.group, "action": action, "text": None,
+                     "why": f"el permiso de esa conversacion es {row['mode']}: no escribe",
+                     "send_flag": None}]
+        if not row["agent"]:
+            # Todo mensaje va firmado; wa-send ni lo intenta sin nombre. No se registra
+            # nada: en cuanto haya nombre configurado, este cierre se avisa igual.
+            return [{**row, "group": a.group, "action": "nada", "text": None,
+                     "why": "sin nombre de agente no se firma nada: "
+                            "fijelo con `wa-scope agent \"<nombre>\"`",
+                     "send_flag": None}]
+        return [{**row, "group": a.group, "action": action,
+                 "text": closing_text(a.group, a.issue, a.title, a.client_comment),
+                 "send_flag": "--send" if action == "enviar" else None}]
+    return closing_rows(con)
+
+
 def cmd_rotate(con, a):
     """La bitacora detallada se poda; lo viejo queda como resumen consultable.
 
@@ -897,6 +1106,21 @@ def main():
     s.add_argument("--stanza"); s.add_argument("--chat"); s.add_argument("--name")
     s.add_argument("--issue"); s.add_argument("--step"); s.add_argument("--next")
     s.add_argument("--done"); s.set_defaults(fn=cmd_work)
+
+    s = add("closing", help="tarjetas cerradas que su conversacion todavia no sabe")
+    s.add_argument("--issue", help="la tarjeta; sin esto lista lo que hay que revisar")
+    s.add_argument("--chat", help="el chat_jid de la conversacion de esa tarjeta")
+    s.add_argument("--group", choices=STATE_GROUPS,
+                   help="el GRUPO de estado de la tarjeta en el tablero (state.group), "
+                        "nunca el nombre de la columna")
+    s.add_argument("--title", help="el titulo de la tarjeta, para que el mensaje diga de que habla")
+    s.add_argument("--client-comment", dest="client_comment",
+                   help=f"el comentario del tablero marcado {CLIENT_MARK}: sale tal cual "
+                        f"y solo, sin el resto del hilo")
+    s.add_argument("--result", choices=list(CLOSING_RESULTS),
+                   help="como termino el aviso; cierra el tema y no se reintenta")
+    s.add_argument("--detail", default="", help="que paso, para la bitacora del panel")
+    s.set_defaults(fn=cmd_closing)
 
     s = add("rotate", help="poda la bitacora vieja y la deja como resumen")
     s.add_argument("--keep", type=int, default=500); s.set_defaults(fn=cmd_rotate)

@@ -53,6 +53,30 @@ La parte de **escribir** depende de la accesibilidad del sistema vía `orca comp
 que sí es multiplataforma; pero sin lectura no hay nada que responder, así que el
 cuello de botella es la base local.
 
+## Cuando la tarjeta se cierra
+
+El flujo también vuelve: cuando una tarjeta llega a un estado final, la conversación que
+la originó se entera. **Y eso es lo único del tablero que sale de ahí** — los
+comentarios internos del equipo no se espejan nunca en un grupo de un cliente.
+
+- **Un aviso por tarjeta**, no por mensaje. Cinco mensajes sobre lo mismo comparten
+  tarjeta y comparten aviso.
+- **Cerrado no es una sola cosa.** Una tarjeta `completed` se avisa como resuelta; una
+  `cancelled` se avisa como cancelada. Decirle "listo" a un cliente sobre algo que se
+  canceló es afirmar algo falso, así que el texto lo arma `wa-scope` y no el agente.
+- Se decide por el **grupo** del estado (`backlog / unstarted / started / completed /
+  cancelled`), nunca por el nombre de la columna: cada proyecto la bautiza distinto.
+- Con permiso `borrador` el aviso queda escrito sin enviar. Con `observar` u `off` no se
+  escribe nada, y esa decisión queda anotada en el panel de actividad — es el único
+  lugar donde se ve, porque en el chat, por definición, no queda nada.
+- **Un comentario del tablero que empiece con `[cliente]`** es la excepción: ese texto
+  sale tal cual, solo, en lugar del mensaje armado y sin el resto del hilo. Sin esa
+  marca, ningún comentario se copia al chat.
+- Lo que se cerró **antes** de que esto existiera no avisa nada. La primera vez que
+  corre, `wa-scope` guarda una línea de corte (`closing_since`) y marca como avisado
+  todo lo que ya estaba abierto: estrenar la función no puede mandar una ráfaga de
+  mensajes a grupos de clientes.
+
 ## Lo que el plugin NO hace
 
 - No sale a internet: no declara `net:fetch`. Todo es local.
@@ -61,6 +85,10 @@ cuello de botella es la base local.
 - No trae nombre de agente puesto. Lo elegís vos, y firma cada mensaje con él.
 
 ## Los CLIs tienen que estar en el PATH
+
+Esto es solo para los comandos que el panel te ofrece copiar: **las automations ya no
+dependen del PATH** — resuelven el `bin/` del plugin instalado al arrancar, porque el
+agente corre en un worktree del workspace y ahi no existe ningun `./bin/`.
 
 El panel emite comandos sin ruta (`wa-scope list`), asi que `wa-read`, `wa-send` y
 `wa-scope` tienen que resolverse desde tu shell:
@@ -97,7 +125,8 @@ npm run check
 | `scripts/check-panels` | que el `<script>` inline de `config.html` y `activity.html` parsee. Si no parsea, el panel se renderiza vacío y sin error visible. |
 | `scripts/check-prompts` | que `prompts/*.md` no tengan voseo. El agente le escribe a clientes en Colombia. |
 | `scripts/check-clis` | que los cuatro CLIs de `bin/` arranquen de verdad. Compilar no alcanza. |
-| `test/panels.test.mjs` | 36 pruebas sobre los paneles con jsdom y el puente del host simulado. |
+| `scripts/check-closing` | 36 pruebas del aviso de cierre contra una base temporal: el guardia del backlog, un aviso por tarjeta, `completed` vs `cancelled`, y el permiso. Corre el CLI de verdad, con `HOME` movido para no tocar la base real. |
+| `test/panels.test.mjs` | 51 pruebas sobre los paneles con jsdom y el puente del host simulado. |
 | `npm run shots` | fotografía los dos paneles a 1440, 768, 390 y 320 px en tema claro y oscuro, y falla si algo desborda a lo ancho. |
 
 `scripts/` es herramienta de desarrollo; `bin/` son los cuatro CLIs que el plugin

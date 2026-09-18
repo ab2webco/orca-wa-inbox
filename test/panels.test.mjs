@@ -258,7 +258,12 @@ console.log('\nactivity.html')
         kind: 'directo', text: 'hola', hasMedia: false }
     ],
     recent: [{ ts: '2026-09-17 11:30', chat: 'Soporte Acme', action: 'issue',
-      issue: 'ACM-1', detail: 'reporte mensual' }]
+      issue: 'ACM-1', detail: 'reporte mensual' },
+    // El cierre que no se avisa por permiso no deja rastro en el chat: este renglon
+    // es el UNICO lugar donde el dueno se entera de que la tarjeta se cerro y su
+    // cliente no lo supo. Si el panel no lo pinta, la decision es invisible.
+    { ts: '2026-09-17 11:40', chat: 'Andes QA', action: 'skipped',
+      issue: 'AND-7', detail: 'AND-7 en modo observar: no se escribe en Andes QA' }]
   }
   const { doc, storage } = await montar('activity.html', { activity: actividad })
 
@@ -267,6 +272,10 @@ console.log('\nactivity.html')
   ok('marca los que traen imagen', doc.getElementById('pending').textContent.toLowerCase().includes('imagen') ||
     doc.getElementById('pending').textContent.toLowerCase().includes('image'))
   ok('muestra lo ultimo que hizo', doc.getElementById('recent').textContent.includes('ACM-1'))
+  ok('muestra el cierre que no se aviso por permiso',
+    doc.getElementById('recent').textContent.includes('AND-7') &&
+    doc.getElementById('recent').textContent.includes('observar'),
+    doc.getElementById('recent').textContent.slice(0, 200))
   ok('muestra el sello de sincronizacion', doc.getElementById('synced').textContent.length > 0)
 
   doc.querySelector('[data-take]').click()

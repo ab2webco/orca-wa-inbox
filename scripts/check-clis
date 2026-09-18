@@ -21,6 +21,9 @@ CASOS = [
     # Ese camino llamaba a ~/tools/wa-read — una ruta fuera del plugin — y reventaba
     # sin que ningun chequeo lo viera, porque los otros casos no lo recorren.
     ("wa-scope", ["voice", "un-nombre-que-no-existe", "--json"]),
+    # El listado de cierres pendientes toca la migracion y la linea de corte: si esa
+    # rama revienta, el agente deja de avisar cierres y nada mas lo delata.
+    ("wa-scope", ["closing", "--json"]),
     ("wa-transcribe", ["--check", "--json"]),
     ("wa-send", ["--help"]),
 ]

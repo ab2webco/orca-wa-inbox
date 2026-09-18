@@ -1,0 +1,276 @@
+#!/usr/bin/env python3
+"""El aviso de cierre, ejercitado de verdad contra una base temporal.
+
+Existe porque los dos defectos que costarian caro no se ven leyendo el codigo: una
+rafaga de mensajes a grupos de clientes al estrenar la funcion, y un "ya quedo
+resuelto" sobre una tarjeta que en realidad se cancelo. Los dos son irreversibles
+—el mensaje ya salio— asi que se prueban corriendo el CLI, no razonando sobre el.
+
+Cada caso corre en su propio HOME temporal: la base vive en ~/.wa-inbox/scope.db y no
+hay variable para moverla, asi que mover el HOME es lo que mantiene la base real del
+usuario fuera de esto.
+"""
+import json
+import os
+import pathlib
+import sqlite3
+import subprocess
+import sys
+import tempfile
+
+RAIZ = pathlib.Path(__file__).resolve().parent.parent
+WA_SCOPE = RAIZ / "bin" / "wa-scope"
+CHAT = "120363000000000001@g.us"
+
+fallos = []
+pruebas = 0
+
+
+def ok(nombre, condicion, detalle=""):
+    global pruebas
+    pruebas += 1
+    if condicion:
+        print(f"  ok    {nombre}")
+        return True
+    fallos.append(f"{nombre}{f' — {detalle}' if detalle else ''}")
+    print(f"  FALLA {nombre}{f' — {detalle}' if detalle else ''}")
+    return False
+
+
+def corre(home, *args):
+    env = dict(os.environ, HOME=str(home),
+               XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+               APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"))
+    return subprocess.run([str(WA_SCOPE), *args, "--json"], capture_output=True,
+                          text=True, env=env, timeout=120)
+
+
+def js(home, *args):
+    p = corre(home, *args)
+    if p.returncode != 0:
+        raise AssertionError(f"wa-scope {' '.join(args)} salio {p.returncode}: "
+                             f"{p.stderr.strip() or p.stdout.strip()}")
+    return json.loads(p.stdout or "[]")
+
+
+def conversacion(home, mode, firma="Watson"):
+    """Una conversacion registrada con tablero y permiso, como la deja el panel."""
+    if firma:
+        js(home, "agent", firma)
+    js(home, "set", CHAT, "--provider", "plane", "--target", "SOP", "--mode", mode)
+
+
+def trabajo(home, stanza, issue):
+    js(home, "work", "--stanza", stanza, "--chat", CHAT, "--name", "Soporte Norte",
+       "--issue", issue, "--step", "tarjeta abierta", "--next", "seguir el estado")
+
+
+def db_de(home):
+    return sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "scope.db")
+
+
+# ── 1. El backlog no puede convertirse en una rafaga ────────────────────────────
+# Una base como la que ya tiene el usuario: sin la columna nueva y con trabajo abierto
+# de hace meses. Estrenar la funcion no puede avisar de nada de eso.
+print("\nel backlog no avisa")
+with tempfile.TemporaryDirectory() as home:
+    (pathlib.Path(home) / ".wa-inbox").mkdir(parents=True)
+    vieja = db_de(home)
+    vieja.executescript("""
+      create table work (
+        stanza_id text primary key, chat_jid text, chat_name text, issue text,
+        step text, next_step text, status text not null default 'open',
+        opened_at text, updated_at text);
+      insert into work values ('VIEJO1','%s','Soporte Norte','SOP-1','tarjeta abierta',
+        'seguir', 'open', '2026-01-04 09:00', '2026-01-04 09:00');
+      insert into work values ('VIEJO2','%s','Soporte Norte','SOP-2','tarjeta abierta',
+        'seguir', 'open', '2026-02-11 10:30', '2026-02-11 10:30');
+    """ % (CHAT, CHAT))
+    vieja.commit()
+    vieja.close()
+
+    conversacion(home, "responder")
+    pendientes = js(home, "closing")
+    ok("el trabajo que ya estaba abierto no aparece para avisar", pendientes == [],
+       f"listo {pendientes}")
+
+    con = db_de(home)
+    cols = {r[1] for r in con.execute("pragma table_info(work)")}
+    ok("la migracion agrega notified_at", "notified_at" in cols, f"columnas {sorted(cols)}")
+    sin_marcar = con.execute("select count(*) from work where notified_at is null").fetchone()[0]
+    ok("marca en silencio todo lo que ya estaba abierto", sin_marcar == 0,
+       f"{sin_marcar} filas sin marcar")
+    desde = con.execute("select value from settings where key='closing_since'").fetchone()
+    con.close()
+    ok("deja la linea de corte guardada", bool(desde and desde[0]), f"closing_since={desde}")
+
+    # Y lo que se abre DESPUES de la linea si se avisa: el guardia silencia el pasado,
+    # no la funcion.
+    trabajo(home, "NUEVO1", "SOP-9")
+    nuevos = js(home, "closing")
+    ok("lo que se abre despues de la linea si se avisa",
+       [r["issue"] for r in nuevos] == ["SOP-9"], f"listo {nuevos}")
+
+
+# ── 2. Un aviso por tarjeta, no por mensaje ────────────────────────────────────
+print("\nun aviso por tarjeta")
+with tempfile.TemporaryDirectory() as home:
+    conversacion(home, "responder")
+    trabajo(home, "MSG1", "SOP-20")
+    trabajo(home, "MSG2", "SOP-20")
+    trabajo(home, "MSG3", "SOP-21")
+    filas = js(home, "closing")
+    ok("dos mensajes sobre la misma tarjeta son una sola fila",
+       len([r for r in filas if r["issue"] == "SOP-20"]) == 1,
+       f"listo {[r['issue'] for r in filas]}")
+    veinte = next(r for r in filas if r["issue"] == "SOP-20")
+    ok("dice cuantos mensajes agrupo", veinte["mensajes"] == 2, f"mensajes={veinte['mensajes']}")
+    ok("trae la conversacion, el permiso y la firma ya resueltos",
+       veinte["chat"] == "Soporte Norte" and veinte["mode"] == "responder"
+       and veinte["agent"] == "Watson" and veinte["provider"] == "plane",
+       json.dumps(veinte, ensure_ascii=False))
+    ok("las tarjetas distintas siguen siendo filas distintas", len(filas) == 2,
+       f"listo {[r['issue'] for r in filas]}")
+
+    # Avisar una tarjeta marca sus DOS mensajes: si quedara uno sin marcar, la proxima
+    # corrida avisaria el mismo cierre otra vez.
+    marca = js(home, "closing", "--issue", "SOP-20", "--chat", CHAT, "--result", "avisado")
+    ok("registrar el aviso marca los dos mensajes de la tarjeta",
+       marca[0]["marcadas"] == 2, json.dumps(marca, ensure_ascii=False))
+    ok("una tarjeta avisada no vuelve a listarse",
+       [r["issue"] for r in js(home, "closing")] == ["SOP-21"])
+    otra_vez = js(home, "closing", "--issue", "SOP-20", "--chat", CHAT, "--result", "avisado")
+    ok("registrar dos veces no duplica el aviso", otra_vez[0]["ya_estaba"] is True,
+       json.dumps(otra_vez, ensure_ascii=False))
+    avisos = [r for r in js(home, "log") if r["action"] == "closed"]
+    ok("el aviso queda una sola vez en la bitacora del panel", len(avisos) == 1,
+       f"{len(avisos)} lineas")
+
+
+# ── 3. Hecho y cancelado no se dicen igual ─────────────────────────────────────
+print("\ncerrado no es una sola cosa")
+with tempfile.TemporaryDirectory() as home:
+    conversacion(home, "responder")
+    trabajo(home, "MSG10", "SOP-30")
+    trabajo(home, "MSG11", "SOP-31")
+    hecho = js(home, "closing", "--issue", "SOP-30", "--chat", CHAT,
+               "--group", "completed", "--title", "Reporte en blanco")[0]
+    cancelado = js(home, "closing", "--issue", "SOP-31", "--chat", CHAT,
+                   "--group", "cancelled", "--title", "Reporte en blanco")[0]
+    ok("completed y cancelled no dicen lo mismo", hecho["text"] != cancelado["text"],
+       f"{hecho['text']!r}")
+    ok("completed dice que quedo resuelto", "resuelt" in hecho["text"].lower(),
+       f"{hecho['text']!r}")
+    ok("cancelled dice que se cancelo", "cancelad" in cancelado["text"].lower(),
+       f"{cancelado['text']!r}")
+    ok("cancelled NUNCA dice que quedo resuelto ni listo",
+       "resuelt" not in cancelado["text"].lower() and "listo" not in cancelado["text"].lower(),
+       f"{cancelado['text']!r}")
+    ok("el texto nombra la tarjeta y el titulo",
+       "SOP-30" in hecho["text"] and "Reporte en blanco" in hecho["text"],
+       f"{hecho['text']!r}")
+    ok("con permiso responder el aviso se envia",
+       hecho["action"] == "enviar" and hecho["send_flag"] == "--send",
+       json.dumps(hecho, ensure_ascii=False))
+
+    # El grupo manda, no el nombre de la columna: los grupos abiertos no avisan nada.
+    for grupo in ("backlog", "unstarted", "started"):
+        abierto = js(home, "closing", "--issue", "SOP-30", "--chat", CHAT,
+                     "--group", grupo)[0]
+        ok(f"el grupo {grupo} no es un cierre",
+           abierto["action"] == "nada" and abierto["text"] is None,
+           json.dumps(abierto, ensure_ascii=False))
+    ok("preguntar por un grupo abierto no consume la tarjeta",
+       "SOP-30" in [r["issue"] for r in js(home, "closing")])
+
+    # Un comentario marcado para el cliente sale tal cual, sin la marca y sin el hilo.
+    marcado = js(home, "closing", "--issue", "SOP-30", "--chat", CHAT,
+                 "--group", "completed", "--title", "Reporte en blanco",
+                 "--client-comment", "[cliente] Ya subimos el ajuste, pruebe de nuevo.")[0]
+    ok("el comentario marcado para el cliente sale tal cual y sin la marca",
+       marcado["text"] == "Ya subimos el ajuste, pruebe de nuevo.", f"{marcado['text']!r}")
+
+
+# ── 4. El permiso decide si sale algo ──────────────────────────────────────────
+print("\nel permiso de la conversacion")
+with tempfile.TemporaryDirectory() as home:
+    conversacion(home, "borrador")
+    trabajo(home, "MSG20", "SOP-40")
+    borrador = js(home, "closing", "--issue", "SOP-40", "--chat", CHAT,
+                  "--group", "completed", "--title", "Exportar a Excel")[0]
+    ok("en borrador el aviso se escribe pero no se envia",
+       borrador["action"] == "borrador" and borrador["send_flag"] is None,
+       json.dumps(borrador, ensure_ascii=False))
+    ok("en borrador igual trae el texto que hay que dejar escrito",
+       bool(borrador["text"]) and "SOP-40" in borrador["text"], f"{borrador['text']!r}")
+
+with tempfile.TemporaryDirectory() as home:
+    conversacion(home, "observar")
+    trabajo(home, "MSG30", "SOP-50")
+    callado = js(home, "closing", "--issue", "SOP-50", "--chat", CHAT,
+                 "--group", "completed", "--title", "Exportar a Excel")[0]
+    ok("en observar no se escribe nada",
+       callado["action"] == "no-escribe" and callado["text"] is None,
+       json.dumps(callado, ensure_ascii=False))
+    saltados = [r for r in js(home, "log") if r["action"] == "skipped"]
+    ok("el salto por permiso queda en la bitacora que ve el panel",
+       len(saltados) == 1 and saltados[0]["plane_issue"] == "SOP-50",
+       json.dumps(saltados, ensure_ascii=False))
+    ok("y no se vuelve a revisar cada corrida", js(home, "closing") == [])
+
+
+# ── 5. Lo que no se puede firmar no se manda, y no se pierde ───────────────────
+print("\nsin firma no se manda")
+with tempfile.TemporaryDirectory() as home:
+    conversacion(home, "responder", firma=None)
+    trabajo(home, "MSG40", "SOP-60")
+    sin_firma = js(home, "closing", "--issue", "SOP-60", "--chat", CHAT,
+                   "--group", "completed", "--title", "Exportar a Excel")[0]
+    ok("sin nombre de agente no se arma ningun mensaje",
+       sin_firma["action"] == "nada" and sin_firma["text"] is None,
+       json.dumps(sin_firma, ensure_ascii=False))
+    ok("y la tarjeta queda para cuando haya nombre",
+       [r["issue"] for r in js(home, "closing")] == ["SOP-60"])
+
+
+# ── 6. Lo que no tiene tarjeta, y lo que no tiene lector ───────────────────────
+# Un HOME por proveedor: cambiarle el proveedor a una conversacion ya registrada no
+# funciona por el CLI (el panel manda en merged_scope y se reescribe encima), y eso es
+# un defecto anterior a esto. Aca se prueba el filtro, no ese camino.
+print("\nlo que no se revisa")
+for proveedor, destino, esperado in (("ninguno", None, []),
+                                     ("github", "acme/andes", []),
+                                     ("plane", "SOP", ["SOP-70"])):
+    with tempfile.TemporaryDirectory() as home:
+        js(home, "agent", "Watson")
+        args = ["set", CHAT, "--provider", proveedor, "--mode", "responder"]
+        if destino:
+            args += ["--target", destino]
+        js(home, *args)
+        trabajo(home, "MSG50", "SOP-70")
+        motivo = {"ninguno": "una conversacion en ninguno no tiene cierre que avisar",
+                  "github": "un proveedor sin lector se salta en silencio",
+                  "plane": "un proveedor con lector si se revisa"}[proveedor]
+        ok(motivo, [r["issue"] for r in js(home, "closing")] == esperado)
+
+
+# ── 7. El envio que falla se registra y no se reintenta ────────────────────────
+print("\nel envio que falla")
+with tempfile.TemporaryDirectory() as home:
+    conversacion(home, "responder")
+    trabajo(home, "MSG60", "SOP-80")
+    js(home, "closing", "--issue", "SOP-80", "--chat", CHAT, "--result", "fallo",
+       "--detail", "el grupo ya no existe")
+    ok("un envio fallido no se reintenta para siempre", js(home, "closing") == [])
+    fallados = [r for r in js(home, "log") if r["action"] == "failed"]
+    ok("y queda dicho por que fallo",
+       len(fallados) == 1 and "ya no existe" in (fallados[0]["detail"] or ""),
+       json.dumps(fallados, ensure_ascii=False))
+
+
+print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
+if fallos:
+    print("\nEl aviso de cierre esta roto:", file=sys.stderr)
+    for f in fallos:
+        print(f"  {f}", file=sys.stderr)
+sys.exit(1 if fallos else 0)

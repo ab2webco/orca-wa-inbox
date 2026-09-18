@@ -122,6 +122,15 @@ const DATOS = {
       }
     ],
     recent: [
+      // Los tres finales del aviso de cierre: el que salio, el que no salio por
+      // permiso y el que no se pudo mandar. El del permiso es el que solo se ve aca:
+      // en el chat, por definicion, no queda nada.
+      { ts: '2026-09-17 13:52', chat: 'Soporte — Cliente Norte', action: 'closed',
+        issue: 'SOP-211', detail: 'cierre avisado en el chat' },
+      { ts: '2026-09-17 13:44', chat: 'Proyecto Andes — QA', action: 'skipped',
+        issue: 'AND-18', detail: 'AND-18 en modo observar: no se escribe en Proyecto Andes — QA' },
+      { ts: '2026-09-17 13:30', chat: 'Operaciones internas', action: 'failed',
+        issue: 'OPS-77', detail: 'no se pudo avisar el cierre: el grupo ya no existe' },
       { ts: '2026-09-17 13:05', chat: 'Soporte — Cliente Norte', action: 'issue',
         issue: 'SOP-214', detail: 'Tarjeta abierta con el reporte en blanco' },
       { ts: '2026-09-17 12:40', chat: 'Operaciones internas', action: 'draft',
