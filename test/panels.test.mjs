@@ -88,25 +88,8 @@ console.log('\nconfig.html')
   ok('confirma la calidad en pantalla',
     doc.getElementById('said-quality').textContent.includes('✓'))
 
-  // Mapear conversacion
-  doc.getElementById('chat').value = 'Soporte Acme'
-  doc.getElementById('provider').value = 'linear'
-  doc.getElementById('target').value = 'ENG'
-  doc.getElementById('mode').value = 'borrador'
-  doc.getElementById('save-scope').click()
-  await espera()
-  const entrada = (storage.scope || {})['Soporte Acme']
-  ok('guarda la conversacion', !!entrada, `storage.scope = ${JSON.stringify(storage.scope)}`)
-  ok('guarda proveedor, destino y permiso',
-    entrada && entrada.provider === 'linear' && entrada.target === 'ENG' && entrada.mode === 'borrador')
-  ok('confirma y limpia el formulario',
-    doc.getElementById('said-scope').textContent.includes('Soporte Acme') &&
-    doc.getElementById('chat').value === '')
-  ok('la tabla muestra lo guardado',
-    doc.getElementById('scope-wrap').textContent.includes('Soporte Acme'))
-
-  // Buscador de conversaciones. Con 200 conversaciones un select nativo no se
-  // navega, asi que el filtro es parte de que el control sirva, no un adorno.
+  // Mapear conversacion. Se elige de la lista, que es el unico camino real: el
+  // registro se guarda por jid, no por el nombre visible.
   storage.chats = [
     { jid: '1@g.us', name: 'Soporte Norte', kind: 'grupo' },
     { jid: '2@g.us', name: 'Operaciones', kind: 'grupo' },
@@ -114,6 +97,60 @@ console.log('\nconfig.html')
   ]
   doc.defaultView.dispatchEvent(new doc.defaultView.Event('focus'))
   await espera()
+  doc.getElementById('chat-pick').value = '1@g.us'
+  doc.getElementById('chat-pick').dispatchEvent(new doc.defaultView.Event('change'))
+  await espera()
+  ok('elegir de la lista llena el nombre de la conversacion',
+    doc.getElementById('chat').value === 'Soporte Norte',
+    `chat = ${JSON.stringify(doc.getElementById('chat').value)}`)
+  ok('una conversacion nueva arranca sin servicio de tareas',
+    doc.getElementById('provider').value === 'ninguno',
+    `provider = ${doc.getElementById('provider').value}`)
+  doc.getElementById('provider').value = 'linear'
+  doc.getElementById('target').value = 'ENG'
+  doc.getElementById('mode').value = 'borrador'
+  doc.getElementById('chat-instructions').value = 'Resume lo que manden y avisame.'
+  doc.getElementById('save-scope').click()
+  await espera()
+  const entrada = (storage.scope || {})['1@g.us']
+  // Por jid y no por nombre: es la llave que lee `wa-scope`, y hay grupos homonimos.
+  ok('guarda la conversacion con el jid como llave', !!entrada,
+    `storage.scope = ${JSON.stringify(storage.scope)}`)
+  ok('guarda el nombre visible junto al jid', entrada && entrada.chatName === 'Soporte Norte')
+  ok('guarda proveedor, destino y permiso',
+    entrada && entrada.provider === 'linear' && entrada.target === 'ENG' && entrada.mode === 'borrador')
+  // Las instrucciones son el QUE hace en esa conversacion. Si no se guardan con ella,
+  // el campo esta de adorno y el agente nunca las lee.
+  ok('guarda las instrucciones de la conversacion',
+    entrada && entrada.instructions === 'Resume lo que manden y avisame.',
+    `instructions = ${JSON.stringify(entrada && entrada.instructions)}`)
+  ok('confirma y limpia el formulario',
+    doc.getElementById('said-scope').textContent.includes('Soporte Norte') &&
+    doc.getElementById('chat').value === '' &&
+    doc.getElementById('chat-instructions').value === '')
+  ok('la tabla muestra lo guardado',
+    doc.getElementById('scope-wrap').textContent.includes('Soporte Norte'))
+
+  // "ninguno" tiene que dejar el destino inservible A LA VISTA. Un campo que sigue
+  // pareciendo editable pero que nadie mira es el mismo defecto que un boton muerto.
+  const destino = doc.getElementById('target')
+  const pista = doc.getElementById('target-hint')
+  doc.getElementById('provider').value = 'plane'
+  doc.getElementById('provider').dispatchEvent(new doc.defaultView.Event('change'))
+  await espera()
+  const pistaConTablero = pista.textContent
+  destino.value = 'OPS'
+  ok('con un servicio de tareas el destino se puede escribir', !destino.disabled)
+  doc.getElementById('provider').value = 'ninguno'
+  doc.getElementById('provider').dispatchEvent(new doc.defaultView.Event('change'))
+  await espera()
+  ok('ninguno apaga el destino', destino.disabled)
+  ok('ninguno vacia el destino', destino.value === '', `target = ${JSON.stringify(destino.value)}`)
+  ok('ninguno cambia la pista del destino',
+    pista.textContent.length > 0 && pista.textContent !== pistaConTablero)
+
+  // Buscador de conversaciones. Con 200 conversaciones un select nativo no se
+  // navega, asi que el filtro es parte de que el control sirva, no un adorno.
   if (doc.getElementById('chat-search')) {
     doc.getElementById('chat-search').value = 'laura'
     doc.getElementById('chat-search').dispatchEvent(new doc.defaultView.Event('input'))
@@ -140,18 +177,26 @@ console.log('\nconfig.html')
   // Editar
   doc.querySelector('[data-edit]').click()
   await espera()
-  ok('Editar carga la fila en el formulario', doc.getElementById('chat').value === 'Soporte Acme')
+  ok('Editar carga la fila en el formulario', doc.getElementById('chat').value === 'Soporte Norte')
+  ok('Editar recarga las instrucciones',
+    doc.getElementById('chat-instructions').value === 'Resume lo que manden y avisame.',
+    `chat-instructions = ${JSON.stringify(doc.getElementById('chat-instructions').value)}`)
+  ok('Editar devuelve el destino a editable cuando hay servicio de tareas',
+    !doc.getElementById('target').disabled && doc.getElementById('target').value === 'ENG')
   // El input #chat esta oculto: comprobarlo solo dejaba pasar el caso real, en el que
   // el select visible se quedaba en "Elegi una conversacion".
   ok('Editar deja el select visible en esa conversacion',
-    doc.getElementById('chat-pick').value === 'Soporte Acme',
+    doc.getElementById('chat-pick').value === '1@g.us',
     `chat-pick = ${JSON.stringify(doc.getElementById('chat-pick').value)}`)
   ok('Editar cambia el boton a guardar cambios',
     doc.getElementById('save-scope').textContent.toLowerCase().includes('cambio') ||
     doc.getElementById('save-scope').textContent.toLowerCase().includes('change'))
   doc.getElementById('cancel-edit').click()
   await espera()
-  ok('Cancelar edicion limpia', doc.getElementById('chat').value === '')
+  ok('Cancelar edicion limpia',
+    doc.getElementById('chat').value === '' &&
+    doc.getElementById('chat-instructions').value === '' &&
+    doc.getElementById('provider').value === 'ninguno')
 
   // Reglas de ruteo
   doc.getElementById('r-match').value = 'ACME'

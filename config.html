@@ -34,6 +34,11 @@
       }
       input:disabled { opacity: 1; color: var(--foreground, #ddd);
                        border-color: transparent; background: var(--muted, #1c1c1c); }
+      /* El destino con "ninguno" no es un campo vacio: es un campo que no aplica. Sin
+         marca propia, en tema claro se veia igual que uno editable — el defecto de
+         siempre: parece que se puede escribir y nadie lo mira. */
+      #target:disabled { background: transparent; color: var(--muted-foreground, #888);
+                         border: 1px dashed var(--border, #555); }
       input:focus-visible, select:focus-visible {
         outline: 2px solid var(--ring, #7aa2f7); outline-offset: 1px; border-color: transparent;
       }
@@ -164,6 +169,7 @@
           <div>
             <label for="provider" data-t="providerLabel"></label>
             <select id="provider">
+              <option value="ninguno" data-t="providerNone"></option>
               <option value="plane">Plane</option>
               <option value="linear">Linear</option>
               <option value="github">GitHub Issues</option>
@@ -183,9 +189,12 @@
             </select>
           </div>
         </div>
-        <p class="hint" data-t="targetHint"></p>
+        <p class="hint" id="target-hint" data-t="targetHint"></p>
         <label for="chat-tone" data-t="chatToneLabel"></label>
         <input id="chat-tone" data-t-ph="chatTonePh" />
+        <label for="chat-instructions" data-t="chatInstrLabel"></label>
+        <textarea id="chat-instructions" rows="3" data-t-ph="chatInstrPh"></textarea>
+        <p class="hint" data-t="chatInstrHelp"></p>
         <div class="actions">
           <button class="primary" id="save-scope" data-t="save"></button>
           <button id="cancel-edit" hidden data-t="cancelEdit"></button>
@@ -249,6 +258,12 @@
           chatCount: "{n} de {total}", chatNoMatch: "Ninguna coincide con eso",
           chatToneLabel: "Como escribe aca (opcional)",
           chatTonePh: "vacio = usa el tono global",
+          chatInstrLabel: "Que hace aca (opcional)",
+          chatInstrPh: "ej. Lee lo que manden y hazme un resumen. Contesta si te preguntan " +
+            "algo que ya sabes. No abras tarjetas.",
+          chatInstrHelp: "El tono es COMO escribe; esto es QUE hace. Manda sobre el " +
+            "comportamiento por defecto, menos en las reglas de seguridad: nunca una " +
+            "credencial, nunca enviar sin permiso de responder.",
           pickOne: "Elegi una conversacion",
           noChats: "Sin conversaciones. Corre ./bin/wa-scope sync.",
           sub: 'Que conversaciones ve tu agente, y hasta donde puede actuar en cada una.',
@@ -260,8 +275,11 @@
           mapLegend: 'Conversaciones', chatLabel: 'Conversacion',
           chatPh: 'nombre exacto del grupo o su JID',
           providerLabel: 'Servicio de tareas', permLabel: 'Permiso',
+          providerNone: 'ninguno — no abre tarjetas',
           targetPlane: 'Proyecto por defecto', targetLinear: 'Equipo por defecto',
-          targetGithub: 'Repositorio por defecto',
+          targetGithub: 'Repositorio por defecto', targetNone: 'Sin destino',
+          targetHintNone: 'Esta conversacion no abre tarjetas: lee, resume o contesta segun ' +
+            'el permiso y lo que le pidas abajo. Ninguna regla de contenido la manda a un board.',
           targetHint: 'El destino real lo decide el contenido del mensaje con las reglas de abajo. ' +
             'Esto es solo el fallback cuando ninguna regla engancha. Dejalo vacio para que no ' +
             'abra tarjeta si no reconoce el cliente.',
@@ -306,6 +324,12 @@
           chatCount: "{n} of {total}", chatNoMatch: "Nothing matches that",
           chatToneLabel: "How it writes here (optional)",
           chatTonePh: "empty = use the global tone",
+          chatInstrLabel: "What it does here (optional)",
+          chatInstrPh: "e.g. Read what they send and summarise it for me. Answer what you " +
+            "already know. Never open cards.",
+          chatInstrHelp: "The tone is HOW it writes; this is WHAT it does. It overrides the " +
+            "default behaviour, except the safety rules: never a credential, never send " +
+            "without reply permission.",
           pickOne: "Pick a conversation",
           noChats: "No conversations. Run ./bin/wa-scope sync.",
           sub: 'Which conversations your agent sees, and how far it can act in each one.',
@@ -317,8 +341,11 @@
           mapLegend: 'Conversations', chatLabel: 'Conversation',
           chatPh: 'exact group name or its JID',
           providerLabel: 'Task service', permLabel: 'Permission',
+          providerNone: 'none — never opens cards',
           targetPlane: 'Default project', targetLinear: 'Default team',
-          targetGithub: 'Default repository',
+          targetGithub: 'Default repository', targetNone: 'No destination',
+          targetHintNone: 'This conversation never opens cards: it reads, summarises or ' +
+            'answers, per the permission and what you ask below. No content rule sends it to a board.',
           targetHint: 'The real destination comes from the message content and the rules below. ' +
             'This is only the fallback when no rule matches. Leave it empty to open no card ' +
             'when the client is not recognized.',
@@ -359,6 +386,18 @@
         chatCount: '{n} de {total}', chatNoMatch: 'Nada corresponde a isso',
         editName: 'Mudar o nome', mapLegend: 'Conversas', chatLabel: 'Conversa',
         providerLabel: 'Servico de tarefas', permLabel: 'Permissao',
+        providerNone: 'nenhum — nao abre cartoes',
+        targetNone: 'Sem destino',
+        targetHintNone: 'Esta conversa nao abre cartoes: le, resume ou responde, conforme a ' +
+          'permissao e o que voce pedir abaixo. Nenhuma regra de conteudo a manda para um board.',
+        chatToneLabel: 'Como escreve aqui (opcional)',
+        chatTonePh: 'vazio = usa o tom global',
+        chatInstrLabel: 'O que faz aqui (opcional)',
+        chatInstrPh: 'ex. Leia o que mandarem e me faca um resumo. Responda o que voce ja ' +
+          'sabe. Nao abra cartoes.',
+        chatInstrHelp: 'O tom e COMO escreve; isto e O QUE faz. Manda sobre o comportamento ' +
+          'padrao, menos nas regras de seguranca: nunca uma credencial, nunca enviar sem ' +
+          'permissao de responder.',
         save: 'Salvar conversa', saveEdit: 'Salvar alteracoes', cancelEdit: 'Cancelar edicao',
         colChat: 'Conversa', colPerm: 'Permissao', edit: 'Editar', remove: 'Remover',
         routesLegend: 'Para qual projeto vai', addRoute: 'Adicionar regra',
@@ -462,12 +501,20 @@
         el('alert').hidden = false
       }
 
-      var TARGET_KEY = { plane: 'targetPlane', linear: 'targetLinear', github: 'targetGithub' }
-      var TARGET_PH = { plane: 'OPS', linear: 'ENG', github: 'mi-org/mi-repo' }
+      var TARGET_KEY = { ninguno: 'targetNone', plane: 'targetPlane',
+                        linear: 'targetLinear', github: 'targetGithub' }
+      var TARGET_PH = { ninguno: '', plane: 'OPS', linear: 'ENG', github: 'mi-org/mi-repo' }
+      // Un campo que sigue viendose editable pero que nadie mira es el mismo defecto que
+      // un boton que no hace nada: con "ninguno" el destino se apaga, se vacia y la pista
+      // dice por que.
       function syncTargetLabel() {
         var p = el('provider').value
+        var sinTarjeta = p === 'ninguno'
         el('target-label').textContent = t(TARGET_KEY[p])
         el('target').placeholder = TARGET_PH[p]
+        el('target').disabled = sinTarjeta
+        if (sinTarjeta) el('target').value = ''
+        el('target-hint').textContent = t(sinTarjeta ? 'targetHintNone' : 'targetHint')
       }
       el('provider').addEventListener('change', syncTargetLabel)
 
@@ -645,6 +692,7 @@
         syncTargetLabel()
         el('target').value = entry.target || ''
         el('chat-tone').value = entry.tone || ''
+        el('chat-instructions').value = entry.instructions || ''
         el('mode').value = entry.mode || 'off'
         el('save-scope').textContent = t('saveEdit')
         el('cancel-edit').hidden = false
@@ -655,6 +703,11 @@
         editandoJid = ''
         el('chat').value = ''; el('target').value = ''; el('mode').value = 'off'
         el('chat-tone').value = ''
+        el('chat-instructions').value = ''
+        // Una conversacion nueva arranca sin servicio de tareas: la mayoria de los DM
+        // no necesitan tablero, y dejar Plane puesto hacia que se eligiera por inercia.
+        el('provider').value = 'ninguno'
+        syncTargetLabel()
         el('chat-pick').value = ''
         el('save-scope').textContent = t('save')
         el('cancel-edit').hidden = true
@@ -673,16 +726,21 @@
       }
 
       el('save-scope').addEventListener('click', function (event) {
-        var chat = el('chat').value.trim()
+        // La llave es el jid, como la del registro del CLI. Guardando por nombre, lo
+        // escrito aca quedaba en una entrada aparte que `wa-scope` no encontraba nunca:
+        // el panel decia guardado y el agente seguia con el valor viejo.
+        var jid = editandoJid || el('chat-pick').value
+        var chat = el('chat').value.trim() || jid
         var provider = el('provider').value
         var target = el('target').value.trim()
         var mode = el('mode').value
-        if (!chat) { said('said-scope', t('needChat'), true); return }
+        if (!jid) { said('said-scope', t('needChat'), true); return }
         busy(event.currentTarget, read('scope').then(function (next) {
           next = next || {}
-          next[chat] = { chatName: chat, provider: provider, target: target || null,
-                         mode: mode, tone: el('chat-tone').value.trim() || null,
-                         updatedAt: new Date().toISOString() }
+          next[jid] = { chatName: chat, provider: provider, target: target || null,
+                        mode: mode, tone: el('chat-tone').value.trim() || null,
+                        instructions: el('chat-instructions').value.trim() || null,
+                        updatedAt: new Date().toISOString() }
           return write('scope', next).then(function () {
             renderScope(next)
             resetScopeForm()

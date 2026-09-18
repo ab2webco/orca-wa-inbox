@@ -9,6 +9,7 @@ agente. Con cientos de grupos, el permiso tiene que ser una lista blanca explici
   wa-scope mode <chat> off            apagarlo sin perder la config
   wa-scope rm <chat>
   wa-scope check <chat> [--for responder]   la compuerta: exit 0 = autorizado
+  wa-scope voice <chat>               tono, instrucciones, proveedor y permiso de ahi
   wa-scope log [-n 50]                que hizo el agente y donde
 
 Modos, de menos a mas permiso:
@@ -16,6 +17,9 @@ Modos, de menos a mas permiso:
   observar   puede leer y abrir issue en Plane. No escribe en WhatsApp.
   borrador   ademas deja el texto escrito en el chat, sin enviar.
   responder  ademas envia. Solo donde lo autorizaste explicitamente.
+
+Servicio de tareas por conversacion: plane, linear, github — o `ninguno` cuando esa
+conversacion no abre tarjetas y el agente solo lee, resume o contesta.
 """
 import argparse, json, os, sqlite3, subprocess, sys, time
 
@@ -89,18 +93,24 @@ PROVIDERS = {
     "linear": "orca linear save-issue --team <target> ...",
     "github": "gh issue create --repo <target> ...",
 }
+# Una conversacion 1:1 casi nunca es soporte: pide que el agente lea, resuma o
+# conteste, y nada mas. Dejar el destino en blanco se lee como configuracion a medias,
+# asi que "no abre tarjeta" se dice en voz alta y es una eleccion como cualquier otra.
+SIN_TARJETA = "ninguno"
+PROVIDERS_CHAT = dict(PROVIDERS, **{SIN_TARJETA: "no abre tarjeta en esta conversacion"})
 RANK = {m: i for i, m in enumerate(MODES)}
 
 SCHEMA = """
 create table if not exists chat_scope (
   chat_jid      text primary key,      -- llave real: sobrevive reinstalar WhatsApp
   chat_name     text not null,         -- solo para mostrar; los nombres cambian y se repiten
-  provider      text default 'plane',  -- plane | linear | github
+  provider      text default 'plane',  -- plane | linear | github | ninguno
   target        text,                  -- proyecto (plane), team (linear), owner/repo (github)
   mode          text not null default 'off',
   initial_state text,                  -- columna del board donde cae el issue nuevo
   hours         text default 'L-V 08:00-18:00',
   tone          text,                -- como escribe en ESTA conversacion; pisa el global
+  instructions  text,                -- que hace en ESTA conversacion; el tono es el como
   timezone      text default 'America/Bogota',
   notes         text,
   updated_at    text
@@ -242,9 +252,13 @@ def push_to_plugin(con, with_activity=False):
     """Deja el panel viendo exactamente lo mismo que el CLI."""
     scope = {}
     for jid, r in merged_scope(con).items():
+        # tone e instructions viajan de vuelta al panel. Sin ellos, cada sync
+        # reescribia scope sin esas claves y borraba lo que el usuario acababa de
+        # escribir ahi: el panel guardaba y la siguiente corrida lo perdia.
         scope[jid] = {"chatName": r.get("chat_name") or jid,
                       "provider": r.get("provider") or "plane",
                       "target": r.get("target"), "mode": r.get("mode") or "off",
+                      "tone": r.get("tone"), "instructions": r.get("instructions"),
                       "updatedAt": r.get("updated_at")}
     activity = build_activity(con, scope) if with_activity else None
     health = build_health() if with_activity else None
@@ -336,14 +350,28 @@ def merged_scope(con):
     el panel es lo que el usuario acaba de tocar."""
     rows = {r["chat_jid"]: dict(r) for r in con.execute(
         "select chat_jid, chat_name, provider, target, mode, initial_state, hours, "
-        "timezone, notes, updated_at from chat_scope")}
+        "tone, instructions, timezone, notes, updated_at from chat_scope")}
     for jid, e in plugin_store_read().items():
-        rows[jid] = {**rows.get(jid, {}), "chat_jid": jid,
-                     "chat_name": e.get("chatName") or jid,
-                     "provider": e.get("provider") or "plane",
-                     "target": e.get("target"),
-                     "mode": e.get("mode") or "off",
-                     "updated_at": e.get("updatedAt")}
+        row = {**rows.get(jid, {}), "chat_jid": jid,
+               "chat_name": e.get("chatName") or jid,
+               "provider": e.get("provider") or "plane",
+               "target": e.get("target"),
+               "mode": e.get("mode") or "off",
+               "updated_at": e.get("updatedAt")}
+        # Misma regla que settings_from_plugin: una cadena vacia no es una eleccion.
+        # Guardar la conversacion en el panel sin tocar el tono no puede borrar el que
+        # se puso por terminal.
+        for campo in ("tone", "instructions"):
+            valor = e.get(campo)
+            if isinstance(valor, str) and valor.strip():
+                row[campo] = valor
+        rows[jid] = row
+    # En "ninguno" el destino no existe, aunque haya quedado uno guardado de antes.
+    # Se apaga aca y no en cada comando para que ninguno — check, where, voice, el
+    # listado, lo que se empuja al panel — pueda ofrecer un destino que no aplica.
+    for row in rows.values():
+        if (row.get("provider") or "plane") == SIN_TARJETA:
+            row["target"] = None
     return rows
 
 
@@ -374,6 +402,8 @@ def migrate(con):
         con.execute("alter table chat_scope add column provider text default 'plane'")
     if "tone" not in cols:
         con.execute("alter table chat_scope add column tone text")
+    if "instructions" not in cols:
+        con.execute("alter table chat_scope add column instructions text")
     if "target" not in cols:
         con.execute("alter table chat_scope add column target text")
         if "plane_project" in cols:
@@ -430,15 +460,19 @@ def cmd_set(con, a):
         "initial_state": a.state or cur.get("initial_state"),
         "hours": a.hours or cur.get("hours") or "L-V 08:00-18:00",
         "tone": a.tone if a.tone is not None else cur.get("tone"),
+        "instructions": (a.instructions if a.instructions is not None
+                         else cur.get("instructions")),
         "timezone": a.timezone or cur.get("timezone") or "America/Bogota",
         "notes": a.notes or cur.get("notes"),
         "updated_at": time.strftime("%Y-%m-%d %H:%M"),
     }
     if vals["mode"] not in MODES:
         sys.exit(f"modo invalido: {vals['mode']} (usa {'/'.join(MODES)})")
-    if vals["provider"] not in PROVIDERS:
-        sys.exit(f"proveedor invalido: {vals['provider']} (usa {'/'.join(PROVIDERS)})")
-    if vals["mode"] != "off" and not vals["target"]:
+    if vals["provider"] not in PROVIDERS_CHAT:
+        sys.exit(f"proveedor invalido: {vals['provider']} (usa {'/'.join(PROVIDERS_CHAT)})")
+    # Con "ninguno" el destino no aplica: exigirlo dejaria sin poder activar justo la
+    # conversacion que se marco para que no abra tarjetas.
+    if vals["mode"] != "off" and vals["provider"] != SIN_TARJETA and not vals["target"]:
         sys.exit(f"un chat activo necesita --target: sin destino el agente no sabe donde "
                  f"abrir la tarea.\n  {vals['provider']}: {PROVIDERS[vals['provider']]}")
     con.execute(f"""insert into chat_scope ({','.join(vals)}) values
@@ -614,7 +648,15 @@ def cmd_route(con, a):
 
 def resolve_target(con, text, chat_jid=None):
     """El contenido manda sobre el chat. Si el mensaje nombra a un cliente que tiene su
-    propio board, va ahi; el destino del chat es el fallback, no la regla."""
+    propio board, va ahi; el destino del chat es el fallback, no la regla.
+
+    Con una excepcion que gana sobre todo: una conversacion en "ninguno" no abre
+    tarjetas. Si una regla de contenido pudiera pisarla, marcarla no serviria de nada."""
+    entry = merged_scope(con).get(chat_jid) if chat_jid else None
+    if entry and (entry.get("provider") or "plane") == SIN_TARJETA:
+        return {"provider": SIN_TARJETA, "target": None,
+                "why": "la conversacion esta en 'ninguno': no abre tarjetas",
+                "matched": None}
     low = (text or "").lower()
     rules = [dict(r) for r in con.execute(
         "select pattern, provider, target, note from route")]
@@ -626,12 +668,10 @@ def resolve_target(con, text, chat_jid=None):
         if pattern and pattern in low:
             return {"provider": r.get("provider") or "plane", "target": r.get("target"),
                     "why": f"el mensaje dice {pattern!r}", "matched": pattern}
-    if chat_jid:
-        entry = merged_scope(con).get(chat_jid)
-        if entry and entry.get("target"):
-            return {"provider": entry.get("provider") or "plane",
-                    "target": entry["target"],
-                    "why": "destino por defecto del chat", "matched": None}
+    if entry and entry.get("target"):
+        return {"provider": entry.get("provider") or "plane",
+                "target": entry["target"],
+                "why": "destino por defecto del chat", "matched": None}
     return {"provider": None, "target": None,
             "why": "sin destino: ni una regla ni un default del chat", "matched": None}
 
@@ -737,20 +777,34 @@ def cmd_pending(con, a):
 
 
 def cmd_voice(con, a):
-    """El tono efectivo para una conversacion: el suyo si lo tiene, si no el global.
+    """Todo lo que el agente necesita de una conversacion en UNA lectura: con que tono
+    escribe, que se le pidio hacer ahi, si abre tarjeta y hasta donde puede actuar.
 
-    Se resuelve aca y no en el prompt porque el prompt lo escribio alguien con su
-    propio acento, y eso se filtra en lo que el agente manda a un cliente."""
+    El tono se resuelve aca y no en el prompt porque el prompt lo escribio alguien con
+    su propio acento, y eso se filtra en lo que el agente manda a un cliente. Las
+    instrucciones van en la misma respuesta porque se necesitan juntas: en dos comandos
+    separados el agente lee una y se olvida de la otra.
+
+    Sale de merged_scope y no de la tabla: lo que el usuario acaba de escribir en el
+    panel tiene que ganar, igual que en el resto del registro."""
     global_tone = merged_settings(con).get("tone") or DEFAULT_CONFIG["tone"]
     if not a.chat:
         return [{"scope": "global", "tone": global_tone}]
     jid, name = jid_of(con, a.chat)
-    own = con.execute("select tone, chat_name from chat_scope where chat_jid=?",
-                      (jid,)).fetchone()
-    if own and own["tone"]:
-        return [{"scope": "conversacion", "chat": own["chat_name"] or name,
-                 "tone": own["tone"]}]
-    return [{"scope": "global", "chat": name, "tone": global_tone}]
+    row = merged_scope(con).get(jid) or {}
+    own = (row.get("tone") or "").strip()
+    provider = row.get("provider") or "plane"
+    return [{"scope": "conversacion" if own else "global",
+             "chat": row.get("chat_name") or name,
+             "chat_jid": jid,
+             "tone": own or global_tone,
+             "instructions": (row.get("instructions") or "").strip() or None,
+             "provider": provider,
+             # El prompt no tiene por que razonar sobre el nombre del proveedor: lo que
+             # necesita decidir es si abre tarjeta o no.
+             "opens_card": provider != SIN_TARJETA,
+             "target": row.get("target") or None,
+             "mode": row.get("mode") or "off"}]
 
 
 def cmd_config(con, a):
@@ -796,14 +850,17 @@ def main():
 
     s = add("set", help="registra o actualiza un chat")
     s.add_argument("chat")
-    s.add_argument("--provider", choices=list(PROVIDERS),
-                   help="servicio de tareas donde abrir la tarjeta")
+    s.add_argument("--provider", choices=list(PROVIDERS_CHAT),
+                   help=f"servicio de tareas donde abrir la tarjeta; "
+                        f"{SIN_TARJETA} = no abre ninguna")
     s.add_argument("--target", help="proyecto (plane), team (linear) u owner/repo (github)")
     s.add_argument("--project", help="alias de --target, por compatibilidad")
     s.add_argument("--mode")
     s.add_argument("--state"); s.add_argument("--hours"); s.add_argument("--timezone")
     s.add_argument("--notes")
     s.add_argument("--tone", help="como escribe en esta conversacion; pisa el global")
+    s.add_argument("--instructions",
+                   help="que hace en esta conversacion; el tono es solo el como")
     s.set_defaults(fn=cmd_set)
 
     s = add("mode", help="cambia solo el modo")
@@ -844,7 +901,7 @@ def main():
     s = add("history", help="los resumenes de lo ya podado")
     s.add_argument("-n", type=int, default=20); s.set_defaults(fn=cmd_history)
 
-    s = add("voice", help="el tono efectivo: el de la conversacion, o el global")
+    s = add("voice", help="tono, instrucciones, proveedor y permiso de una conversacion")
     s.add_argument("chat", nargs="?"); s.set_defaults(fn=cmd_voice)
 
     s = add("route", help="reglas de destino por contenido; el chat es solo el fallback")

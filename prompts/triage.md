@@ -23,12 +23,30 @@ dos veces y contestan dos veces en el grupo. Eso se ve.
 
 Al terminar, pase lo que pase: `./bin/wa-scope unlock`.
 
-## PASO 0.5 — Como escribe
+## PASO 0.5 — Como escribe y que hace en esa conversacion
 
-    ./bin/wa-scope voice "<chat_name>"
+    ./bin/wa-scope voice "<chat_name>" --json
 
-Devuelve el tono para esa conversacion: el suyo si lo tiene, o el global. **Respetelo al
-pie de la letra** en todo lo que escriba en WhatsApp.
+Una sola lectura con todo lo de esa conversacion:
+
+| Campo | Que dice |
+|---|---|
+| `tone` | el tono: el de la conversacion si lo tiene, o el global |
+| `instructions` | que le pidieron hacer ahi. `null` = nada en particular |
+| `provider` | donde abre tarjeta. `ninguno` = no abre ninguna |
+| `opens_card` | `false` = en esa conversacion NO se abren tarjetas |
+| `mode` | hasta donde puede actuar ahi |
+
+**Respete el tono al pie de la letra** en todo lo que escriba en WhatsApp.
+
+Y lea `instructions` ANTES de clasificar nada: es lo que el dueno quiere que pase en ESA
+conversacion, y **le gana al comportamiento por defecto de estos pasos**. Si dice que
+solo resuma, resuma y no abra tarjeta. Si dice que conteste lo que ya sabe, contestelo.
+Muchas conversaciones uno a uno no son soporte y no quieren tarjetas: quieren que lea,
+resuma o conteste.
+
+Tres reglas le ganan a las instrucciones, siempre: una credencial nunca pasa por el
+agente; ante la duda no abre tarjeta; sin permiso `responder` no se envia nada.
 
 Importante: no imite el tono de estas instrucciones. Quien las escribio no es quien
 firma los mensajes, y un cliente no tiene por que leer el acento de un desarrollador.
@@ -127,18 +145,30 @@ Dos reglas que ganan sobre cualquier duda:
 
 ## PASO 8 — A que proyecto va
 
+Si el PASO 0.5 devolvio `opens_card: false` (o sea `provider: ninguno`), **salte este
+paso y el 9**: esa conversacion no abre tarjetas. No la abre una regla de contenido, no
+la abre el destino por defecto del chat, no la abre "por las dudas". Lo que hace ahi es
+el PASO 10 y el 11: contestar, resumir o avisar, segun el permiso y sus `instructions`.
+
     ./bin/wa-scope where "<el texto del mensaje>" --chat "<chat_jid>" --json
 
 **El contenido decide, no el chat.** Un grupo de operaciones lleva trabajo de varios
 clientes; mandar todo al destino del chat pone la mitad en el board equivocado.
 
-Si `target` vuelve null, NO abras tarjeta: falta una regla. Dilo al cierre y sugiere cual:
+`where` tambien respeta lo anterior: en una conversacion en `ninguno` devuelve
+`provider: ninguno` y `target: null` aunque el texto enganche con una regla.
+
+Si `target` vuelve null y el `provider` no es `ninguno`, NO abras tarjeta: falta una
+regla. Dilo al cierre y sugiere cual:
 
     ./bin/wa-scope route --match "<lo que lo identifica>" --target "<destino>"
 
+Con `ninguno` no falta ninguna regla: asi se configuro esa conversacion. No sugiera una.
+
 ## PASO 9 — Abrir la tarjeta
 
-Segun el `provider` que devolvio `where`:
+Nunca en una conversacion con `opens_card: false`. Segun el `provider` que devolvio
+`where`:
 
     orca plane create --project <target> --title "<que hay que hacer>" --body "<contexto>
 
@@ -166,13 +196,17 @@ Y deje el estado, que es lo que te deje continuar la proxima vez:
 
 ## PASO 10 — Contestar
 
-Solo si la compuerta dio `borrador` o `responder`. El modo dice hasta donde llegas; que
-decir es esto:
+Solo si la compuerta dio `borrador` o `responder`. El modo dice hasta donde llegas; las
+`instructions` de la conversacion dicen que hacer ahi; y si no dicen nada, que decir es
+esto:
 
   - **Tomaste el soporte**: "Tomo esto: <titulo>. Queda en <ID-123>."
   - **Te falta informacion**: pregunte UNA cosa, la que te bloquea. No un cuestionario.
   - **Preguntan por algo en curso**: digalo con el estado real de la tarjeta. Si no lo
     sabe, no lo inventes: no contestes.
+  - **La conversacion no abre tarjetas** (`opens_card: false`): haga lo que digan sus
+    `instructions` — el resumen de lo que llego, la respuesta a lo que ya sabe — y nada
+    mas. Sin tarjeta y sin inventarse una.
 
 Nunca prometas fecha.
 
@@ -203,7 +237,8 @@ notificacion que no era urgente le ensena a ignorarlas todas.
     ./bin/wa-scope unlock
 
 Reporte en no mas de 10 lineas: cuantos mensajes miraste y cuantos chats quedaron fuera
-por el registro; las tarjetas que abriste con su ID; los DUDOSOS textuales; lo que fallo.
+por el registro; las tarjetas que abriste con su ID; lo que resumio o contesto en las
+conversaciones sin tarjeta; los DUDOSOS textuales; lo que fallo.
 
 Si no habia nada que hacer, digalo en una linea. No inventes trabajo para justificar la
 corrida — se ejecuta cada 5 minutos, la mayoria de las veces no hay nada y eso esta bien.

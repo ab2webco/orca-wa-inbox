@@ -23,18 +23,28 @@ Exit 4 = ya hay otra corrida tuya andando: para. Al terminar `./bin/wa-scope unl
 Ojo: el lock del triage se llama distinto, asi que las dos pueden convivir. Si el mismo
 `stanza_id` ya figura en `./bin/wa-scope work`, no lo toques: lo esta trabajando el otro.
 
-## PASO 2.5 — Como escribe
+## PASO 2.5 — Como escribe y que hace en esa conversacion
 
-    ./bin/wa-scope voice "<chat_name>"
+    ./bin/wa-scope voice "<chat_name>" --json
 
-Respete ese tono al pie de la letra, y no imite el de estas instrucciones.
+Respete `tone` al pie de la letra, y no imite el de estas instrucciones.
+
+Lea `instructions`: es lo que el dueno pidio para ESA conversacion y **le gana al
+comportamiento por defecto de este prompt**. Y mire `opens_card`: en `false` esa
+conversacion no abre tarjetas, asi que los puntos 1, 3, 5 y 6 del paso siguiente no
+aplican: resuma o conteste segun el permiso y deje rastro en el 8 con `--action draft` o
+`--action sent`, sin `--issue`.
+
+Nada de eso mueve tres reglas: una credencial nunca pasa por el agente; ante la duda no
+abre tarjeta; sin permiso `responder` no se envia nada.
 
 ## PASO 3 — Por cada marcado
 
 1. Ya existe la tarjeta? `orca plane search --query "<stanza_id>" --json`. Si si, saltelo.
 2. Permiso: `./bin/wa-scope check "<chat_jid>" --for borrador`. Exit 3 = no lo toques.
-3. Destino: `./bin/wa-scope where "<texto>" --chat "<chat_jid>" --json`. Si vuelve null, dejelo
-   para el triage y digalo.
+3. Destino: `./bin/wa-scope where "<texto>" --chat "<chat_jid>" --json`. Si vuelve null,
+   dejelo para el triage y digalo — salvo con `provider: ninguno`, donde no hay destino
+   porque asi se configuro: ahi no se abre tarjeta ni se deja nada al triage.
 4. Contexto: `./bin/wa-read chat "<chat_name>" -n 15` y mire los adjuntos si los hay. El humano
    ya decidio que es soporte; usted tiene que entender **que** piden.
 5. Abra la tarjeta con el `stanza_id` en el cuerpo.
@@ -44,7 +54,9 @@ Respete ese tono al pie de la letra, y no imite el de estas instrucciones.
          --issue "<ID>" --step "tomado a mano" --next "<que falta>"
 
 7. Acusa recibo si el modo lo permite: `./bin/wa-send "<chat_name>" "Tomo esto: <titulo>.
-   Queda en <ID>."` — con `--send` solo si el registro dice `responder`.
+   Queda en <ID>."` — con `--send` solo si el registro dice `responder`. En una
+   conversacion sin tarjeta no hay recibo que acusar: lo que se manda ahi es lo que
+   pidan sus `instructions` — la respuesta o el resumen — con ese mismo permiso.
 8. `./bin/wa-scope record --chat … --stanza … --action issue --issue <ID> --detail "<titulo>"`
 
 ## PASO 4
