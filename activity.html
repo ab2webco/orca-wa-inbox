@@ -133,6 +133,11 @@
                     padding-left: 10px; }
       .done { font-size: 11px; font-weight: 500;
               color: var(--foreground, var(--fb-foreground)); margin-top: 4px; }
+      /* El renglon de la corrida contesta "por que no hace nada": tiene que leerse
+         ANTES que la pista de abajo, que es texto de servicio. Sin color propio —la
+         allowlist no tiene uno de exito—, la jerarquia la dan el texto pleno y el 500,
+         que es lo mismo que hace `.done`. */
+      .run { color: var(--foreground, var(--fb-foreground)); font-weight: 500; }
       /* Dos grados de mala noticia, con los dos unicos tokens que hay para eso. Una
          sincronizacion vieja no es un error: solo avisa que lo de abajo puede estar
          desactualizado, asi que va en texto pleno y 600 dentro de una linea apagada.
@@ -153,6 +158,10 @@
 
     <p class="meta nota" id="note"></p>
     <h2 data-t="pending">Esperando respuesta</h2>
+    <!-- Una sola linea, arriba de la lista: sobre cuantas conversaciones reviso el
+         agente y que encontro — o por que no reviso. Sin ella, "no hay nada que
+         hacer", "nunca corrio" y "se murio a medias" se ven exactamente iguales. -->
+    <p class="meta nota" id="runline"></p>
     <p class="meta nota" data-t="hint"></p>
     <div id="pending"><p class="empty" data-t="loading">Cargando…</p></div>
 
@@ -164,21 +173,21 @@
       // El shell del panel no inyecta el idioma, asi que sale de navigator.language,
       // que en el renderer de Electron refleja el idioma del app.
       var STRINGS = {
-        es: {"title": "WhatsApp", "pending": "Esperando respuesta", "recent": "Lo ultimo que hizo", "loading": "Cargando…", "nothingYet": "Nada todavia.", "nothingPending": "Nada pendiente en las conversaciones que autorizaste.", "noData": "sin datos — corre <code>wa-scope sync</code>", "running": "corriendo", "image": "imagen", "take": "Tomar", "ignore": "Ignorar", "taken": "lo toma tu agente", "hint": "Marca lo que si es soporte. Tu agente lo atiende en la proxima corrida, hasta donde le permita esa conversacion; lo ignorado no vuelve a aparecer.", "refreshTitle": "Releer lo guardado",
+        es: {"title": "WhatsApp", "pending": "Esperando respuesta", "recent": "Lo ultimo que hizo", "loading": "Cargando…", "nothingYet": "Nada todavia.", "nothingPending": "Nada pendiente en las conversaciones que autorizaste.", "nothingAuthorized1": "Tienes 1 conversacion configurada y esta en off.", "nothingAuthorized": "Tienes {n} conversaciones configuradas y todas en off.", "nothingMapped": "Todavia no autorizaste ninguna conversacion.", "runNever": "Tu agente todavia no ha revisado.", "runNow": "Revisando ahora…", "runCut": "La revision arranco y no volvio", "runFailed": "La ultima revision fallo", "runChecked1": "Reviso 1 conversacion", "runChecked": "Reviso {n} conversaciones", "runNone": "nada pendiente", "runWaiting1": "1 esperando", "runWaiting": "{n} esperando", "noData": "sin datos — corre <code>wa-scope sync</code>", "running": "corriendo", "image": "imagen", "take": "Tomar", "ignore": "Ignorar", "taken": "lo toma tu agente", "hint": "Marca lo que si es soporte. Tu agente lo atiende en la proxima corrida, hasta donde le permita esa conversacion; lo ignorado no vuelve a aparecer.", "refreshTitle": "Releer lo guardado",
               "kindDirecto": "directo", "kindMencion": "mencion", "kindRespuesta": "respuesta",
               "actTriage": "triage", "actIssue": "tarjeta abierta", "actDraft": "borrador",
               "actSent": "enviado", "actSkipped": "saltado", "actDenied": "denegado",
               "actClosed": "cierre avisado", "actFailed": "fallo", "actAlert": "aviso",
               "errNoId": "sin id de mensaje", "errRead": "no pude leer",
               "errSave": "no pude guardar"},
-        en: {"title": "WhatsApp", "pending": "Waiting on you", "recent": "Latest actions", "loading": "Loading…", "nothingYet": "Nothing yet.", "nothingPending": "Nothing pending in the conversations you allowed.", "noData": "no data — run <code>wa-scope sync</code>", "running": "running", "image": "image", "take": "Take", "ignore": "Ignore", "taken": "your agent takes it", "hint": "Mark what is actually support. Your agent handles it on its next run, as far as that conversation allows; ignored items never come back.", "refreshTitle": "Re-read what is stored",
+        en: {"title": "WhatsApp", "pending": "Waiting on you", "recent": "Latest actions", "loading": "Loading…", "nothingYet": "Nothing yet.", "nothingPending": "Nothing pending in the conversations you allowed.", "nothingAuthorized1": "You have 1 conversation set up and it is off.", "nothingAuthorized": "You have {n} conversations set up and all of them are off.", "nothingMapped": "No conversation is authorized yet.", "runNever": "Your agent has not checked yet.", "runNow": "Checking now…", "runCut": "The run started and never came back", "runFailed": "Last run failed", "runChecked1": "Checked 1 conversation", "runChecked": "Checked {n} conversations", "runNone": "nothing pending", "runWaiting1": "1 waiting", "runWaiting": "{n} waiting", "noData": "no data — run <code>wa-scope sync</code>", "running": "running", "image": "image", "take": "Take", "ignore": "Ignore", "taken": "your agent takes it", "hint": "Mark what is actually support. Your agent handles it on its next run, as far as that conversation allows; ignored items never come back.", "refreshTitle": "Re-read what is stored",
               "kindDirecto": "direct", "kindMencion": "mention", "kindRespuesta": "reply",
               "actTriage": "triage", "actIssue": "card opened", "actDraft": "draft",
               "actSent": "sent", "actSkipped": "skipped", "actDenied": "denied",
               "actClosed": "closing announced", "actFailed": "failed", "actAlert": "alert",
               "errNoId": "no message id", "errRead": "could not read",
               "errSave": "could not save"},
-        pt: {"title": "WhatsApp", "pending": "Aguardando voce", "recent": "Ultimas acoes", "loading": "Carregando…", "nothingYet": "Nada ainda.", "nothingPending": "Nada pendente nas conversas que voce autorizou.", "noData": "sem dados — rode <code>wa-scope sync</code>", "running": "rodando", "image": "imagem", "take": "Assumir", "ignore": "Ignorar", "taken": "seu agente assume", "hint": "Marque o que e suporte de verdade. Seu agente cuida disso na proxima rodada, ate onde a conversa permitir; o ignorado nao volta.", "refreshTitle": "Reler o que esta salvo",
+        pt: {"title": "WhatsApp", "pending": "Aguardando voce", "recent": "Ultimas acoes", "loading": "Carregando…", "nothingYet": "Nada ainda.", "nothingPending": "Nada pendente nas conversas que voce autorizou.", "nothingAuthorized1": "Voce tem 1 conversa configurada e ela esta em off.", "nothingAuthorized": "Voce tem {n} conversas configuradas e todas em off.", "nothingMapped": "Nenhuma conversa autorizada ainda.", "runNever": "Seu agente ainda nao revisou.", "runNow": "Revisando agora…", "runCut": "A revisao comecou e nao voltou", "runFailed": "A ultima revisao falhou", "runChecked1": "Revisou 1 conversa", "runChecked": "Revisou {n} conversas", "runNone": "nada pendente", "runWaiting1": "1 aguardando", "runWaiting": "{n} aguardando", "noData": "sem dados — rode <code>wa-scope sync</code>", "running": "rodando", "image": "imagem", "take": "Assumir", "ignore": "Ignorar", "taken": "seu agente assume", "hint": "Marque o que e suporte de verdade. Seu agente cuida disso na proxima rodada, ate onde a conversa permitir; o ignorado nao volta.", "refreshTitle": "Reler o que esta salvo",
               "kindDirecto": "direto", "kindMencion": "mencao", "kindRespuesta": "resposta",
               "actTriage": "triagem", "actIssue": "cartao aberto", "actDraft": "rascunho",
               "actSent": "enviado", "actSkipped": "pulado", "actDenied": "negado",
@@ -258,9 +267,29 @@
         return m ? m[0] : esc(stamp)
       }
 
-      function renderPending(items) {
+      // Los textos con {n} se arman aca y no concatenando: en portugues y en ingles el
+      // numero no cae en el mismo lugar de la frase.
+      function fmt(key, n) { return t(key).replace('{n}', String(n)) }
+
+      /** Que decir con la lista vacia. Tres finales distintos y hasta hoy uno solo:
+       *  no hay nada pendiente, todo quedo en `off` — que es configuracion y no
+       *  ausencia de trabajo — o todavia no se autorizo ni una conversacion. */
+      function vacioTexto(activity) {
+        var mapped = activity && activity.mapped
+        var authorized = activity && activity.authorized
+        if (typeof mapped === 'number' && typeof authorized === 'number') {
+          if (!mapped) return t('nothingMapped')
+          if (!authorized) {
+            return mapped === 1 ? t('nothingAuthorized1')
+              : fmt('nothingAuthorized', mapped)
+          }
+        }
+        return t('nothingPending')
+      }
+
+      function renderPending(items, activity) {
         if (!items || !items.length) {
-          el('pending').innerHTML = '<p class="empty">' + t('nothingPending') + '</p>'
+          el('pending').innerHTML = '<p class="empty">' + vacioTexto(activity) + '</p>'
           return
         }
         el('pending').innerHTML = items.map(function (m) {
@@ -311,16 +340,76 @@
       // La actividad la arma `wa-scope sync`, no el panel: un panel no puede ejecutar
       // nada, solo leer storage. Si el sello de tiempo esta viejo, decirlo es mas
       // honesto que mostrar una lista que parece viva y no lo esta.
+      function viejo(stamp) {
+        var ms = Date.parse(String(stamp || '').replace(' ', 'T'))
+        return !ms || (Date.now() - ms) > 30 * 60000
+      }
+
+      // Pasada media hora la hora sola ya no ubica: "09:33" de anteayer se lee como de
+      // hace un rato, asi que ahi se muestra la marca entera.
+      function cuando(stamp) {
+        var s = String(stamp == null ? '' : stamp)
+        if (viejo(s)) return s
+        var m = /\d{2}:\d{2}/.exec(s)
+        return m ? m[0] : s
+      }
+
       function renderSynced(activity) {
         var when = activity && activity.syncedAt
         if (!when) {
           el('synced').innerHTML = '<span class="stale">' + t('noData') + '</span>'
           return
         }
-        var stale = (Date.now() - new Date(when.replace(' ', 'T')).getTime()) > 30 * 60000
         el('synced').innerHTML =
           (activity.running ? '<span class="dot"></span>' + t('running') + ' · ' : '') +
-          (stale ? '<span class="vieja">' + esc(when) + '</span>' : esc(when))
+          (viejo(when) ? '<span class="vieja">' + esc(when) + '</span>' : esc(when))
+      }
+
+      /** La linea honesta, arriba de la lista. Cinco finales y ninguno se parece a
+       *  otro: reviso y no habia nada, reviso y hay tanto, nunca reviso, arranco y no
+       *  volvio, o fallo por algo. Sin ella los cinco eran una lista vacia, y el dueno
+       *  concluia lo unico que se puede concluir mirando eso: que no funciona.
+       *
+       *  Sin color propio: la allowlist del host no trae ni exito ni advertencia. El
+       *  peso lo dan las dos clases que ya existen — `vieja` para lo que pide atencion
+       *  y `stale` (--destructive) para lo que si es un fallo. */
+      function renderRun(activity) {
+        var nodo = el('runline')
+        var r = activity && activity.run
+        var clase = 'meta nota run'
+        var texto = ''
+        if (!r) {
+          // Un CLI viejo no manda `run`. Callarse es lo honesto: afirmar que nunca
+          // corrio seria decir algo que ese CLI no cuenta.
+          nodo.textContent = ''
+          nodo.className = 'meta nota'
+          return
+        }
+        if (r.state === 'running') {
+          texto = t('runNow')
+        } else if (r.state === 'never') {
+          texto = t('runNever')
+          clase += ' vieja'
+        } else if (r.state === 'interrupted') {
+          texto = t('runCut') + (r.startedAt ? ' · ' + cuando(r.startedAt) : '')
+          clase += ' vieja'
+        } else if (r.state === 'failed') {
+          // El motivo va tal cual: lo escribio quien fallo y es el unico dato que
+          // dice que paso de verdad. Traducirlo seria inventarlo.
+          texto = t('runFailed') + (r.reason ? ': ' + r.reason : '') +
+            (r.endedAt ? ' · ' + cuando(r.endedAt) : '')
+          clase += ' stale'
+        } else {
+          var n = r.looked == null ? 0 : r.looked
+          var p = r.pending == null ? 0 : r.pending
+          texto = (n === 1 ? t('runChecked1') : fmt('runChecked', n)) + ' · ' +
+            (p === 0 ? t('runNone')
+              : p === 1 ? t('runWaiting1') : fmt('runWaiting', p)) +
+            (r.endedAt ? ' · ' + cuando(r.endedAt) : '')
+          if (viejo(r.endedAt)) clase += ' vieja'
+        }
+        nodo.textContent = texto
+        nodo.className = clase
       }
 
       // El panel no puede ejecutar nada; lo unico que puede hacer es dejar la decision
@@ -360,13 +449,14 @@
           var a = stored(results[0]) || {}
           var decided = stored(results[1]) || {}
           renderSynced(a)
+          renderRun(a)
           // Lo marcado se ve al instante, sin esperar al proximo `wa-scope sync`.
           renderPending((a.pending || [])
             .map(function (m) {
               var d = decided[m.stanzaId]
               return d ? Object.assign({}, m, { decision: d.decision }) : m
             })
-            .filter(function (m) { return m.decision !== 'ignore' }))
+            .filter(function (m) { return m.decision !== 'ignore' }), a)
           renderRecent(a.recent)
         })
       }

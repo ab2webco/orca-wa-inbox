@@ -585,6 +585,138 @@ console.log('\nactivity.html')
     sinDatos.doc.getElementById('synced').textContent.length > 0)
 }
 
+// ───────── los cinco finales de una corrida ─────────
+// El defecto que esto existe para tapar: "no habia nada que hacer", "nunca corrio",
+// "arranco y se murio" y "no hay nada autorizado" se veian IGUAL — una lista vacia. El
+// dueno miraba eso y concluia lo unico que se puede concluir mirando: que no funciona.
+// Se comprueba lo que se lee en pantalla, no la forma del objeto.
+console.log('\nactivity.html — la corrida dice como le fue')
+{
+  const AHORA = new Date().toISOString().slice(0, 16).replace('T', ' ')
+  const base = { syncedAt: AHORA, running: false, pending: [], recent: [],
+    mapped: 3, authorized: 3 }
+  const linea = (d) => d.getElementById('runline').textContent.trim()
+
+  // 1. Sano: reviso, no habia nada. Es el caso comun y hoy no se distingue de un fallo.
+  const sano = await montar('activity.html', {
+    activity: { ...base, run: { state: 'ok', startedAt: AHORA, endedAt: AHORA,
+      looked: 3, pending: 0, reason: null } }
+  }, 'es-419')
+  await espera()
+  ok('lo sano dice sobre cuantas reviso y que no habia nada',
+    /3 conversaciones/.test(linea(sano.doc)) && /nada pendiente/.test(linea(sano.doc)),
+    linea(sano.doc))
+
+  // Y con trabajo, el mismo renglon dice cuanto.
+  const conTrabajo = await montar('activity.html', {
+    activity: { ...base, run: { state: 'ok', startedAt: AHORA, endedAt: AHORA,
+      looked: 3, pending: 2, reason: null } }
+  }, 'es-419')
+  await espera()
+  ok('con trabajo dice cuantas quedaron esperando',
+    /2 esperando/.test(linea(conTrabajo.doc)), linea(conTrabajo.doc))
+
+  // 2. Nunca corrio: el precheck salio 127, la automation no tiene proyecto, o esta
+  //    pausada. Nada de eso llega hasta aca; lo unico que se sabe es que no hubo corrida.
+  const nunca = await montar('activity.html', {
+    activity: { ...base, run: { state: 'never', startedAt: null, endedAt: null,
+      looked: null, pending: null, reason: null } }
+  }, 'es-419')
+  await espera()
+  ok('dice que todavia no reviso, y no finge que reviso',
+    /todavia no ha revisado/i.test(linea(nunca.doc)) &&
+    !/nada pendiente/.test(linea(nunca.doc)), linea(nunca.doc))
+
+  // 3a. Arranco y se murio sin cerrar: el lock vencio y nadie llamo a unlock.
+  const cortada = await montar('activity.html', {
+    activity: { ...base, run: { state: 'interrupted', startedAt: '2026-09-17 09:12',
+      endedAt: null, looked: null, pending: null, reason: null } }
+  }, 'es-419')
+  await espera()
+  ok('dice que la corrida arranco y no volvio, con la hora en que arranco',
+    /no volvio/i.test(linea(cortada.doc)) && linea(cortada.doc).includes('2026-09-17 09:12'),
+    linea(cortada.doc))
+
+  // 3b. Murio con motivo. El motivo es el unico dato que dice que paso de verdad, y va
+  //     tal cual: lo escribio quien fallo, traducirlo seria inventarlo.
+  const fallo = await montar('activity.html', {
+    activity: { ...base, run: { state: 'failed', startedAt: AHORA, endedAt: AHORA,
+      looked: 3, pending: 0,
+      reason: 'This Claude account is in use by an assigned worktree' } }
+  }, 'es-419')
+  await espera()
+  ok('dice que fallo y por que, con el motivo sin tocar',
+    /fallo/i.test(linea(fallo.doc)) &&
+    linea(fallo.doc).includes('This Claude account is in use by an assigned worktree'),
+    linea(fallo.doc))
+  ok('y el fallo se pinta como fallo, no como una linea mas',
+    fallo.doc.getElementById('runline').className.includes('stale'),
+    fallo.doc.getElementById('runline').className)
+
+  // 4. Nada autorizado: conversaciones mapeadas y todas en off. Es configuracion, no
+  //    ausencia de trabajo, y era invisible.
+  const todoOff = await montar('activity.html', {
+    activity: { ...base, mapped: 3, authorized: 0,
+      run: { state: 'ok', startedAt: AHORA, endedAt: AHORA, looked: 0, pending: 0,
+        reason: null } }
+  }, 'es-419')
+  await espera()
+  ok('con todo en off la lista vacia lo dice',
+    /3 conversaciones/.test(todoOff.doc.getElementById('pending').textContent) &&
+    /off/.test(todoOff.doc.getElementById('pending').textContent),
+    todoOff.doc.getElementById('pending').textContent.trim())
+
+  // Y ninguna registrada tampoco es lo mismo que "nada pendiente".
+  const sinRegistro = await montar('activity.html', {
+    activity: { ...base, mapped: 0, authorized: 0,
+      run: { state: 'never', startedAt: null, endedAt: null, looked: null,
+        pending: null, reason: null } }
+  }, 'es-419')
+  await espera()
+  ok('sin ninguna conversacion registrada lo dice distinto',
+    /no autorizaste/i.test(sinRegistro.doc.getElementById('pending').textContent),
+    sinRegistro.doc.getElementById('pending').textContent.trim())
+
+  // 5. Corriendo ahora.
+  const corriendo = await montar('activity.html', {
+    activity: { ...base, running: true,
+      run: { state: 'running', startedAt: AHORA, endedAt: null, looked: null,
+        pending: null, reason: null } }
+  }, 'es-419')
+  await espera()
+  ok('mientras corre lo dice, en vez de la foto anterior',
+    /revisando/i.test(linea(corriendo.doc)), linea(corriendo.doc))
+
+  // Un storage escrito por un CLI viejo no trae `run`. Afirmar "nunca reviso" seria
+  // decir algo que ese CLI no cuenta: el renglon se calla.
+  const viejo = await montar('activity.html', {
+    activity: { syncedAt: AHORA, running: false, pending: [], recent: [] }
+  }, 'es-419')
+  await espera()
+  ok('sin el dato el renglon se calla en vez de inventar un estado',
+    linea(viejo.doc) === '', linea(viejo.doc))
+
+  // Los tres idiomas, porque media traduccion no se ve hasta que la ve el usuario.
+  for (const [locale, esperado] of [['en-US', /Checked 3 conversations/],
+    ['pt-BR', /Revisou 3 conversas/]]) {
+    const m = await montar('activity.html', {
+      activity: { ...base, run: { state: 'ok', startedAt: AHORA, endedAt: AHORA,
+        looked: 3, pending: 0, reason: null } }
+    }, locale)
+    await espera()
+    ok(`el renglon de la corrida esta traducido en ${locale}`,
+      esperado.test(linea(m.doc)), linea(m.doc))
+  }
+  const offEn = await montar('activity.html', {
+    activity: { ...base, authorized: 0, run: { state: 'ok', startedAt: AHORA,
+      endedAt: AHORA, looked: 0, pending: 0, reason: null } }
+  }, 'en-US')
+  await espera()
+  ok('y el aviso de todo en off tambien',
+    /all of them are off/i.test(offEn.doc.getElementById('pending').textContent),
+    offEn.doc.getElementById('pending').textContent.trim())
+}
+
 // ───────── el idioma: lo que el CLI manda en codigo, el panel lo dice ─────────
 // El CLI habla ingles porque lo lee quien corre una terminal. El panel lo lee quien
 // usa Orca, en su idioma. Lo unico que une los dos es un codigo estable, asi que se
@@ -750,10 +882,15 @@ console.log('\nel contrato CLI -> panel')
     entrada.mode === 'responder',
     JSON.stringify(entrada))
 
-  for (const campo of ['pending', 'recent', 'running', 'syncedAt']) {
+  for (const campo of ['pending', 'recent', 'running', 'syncedAt', 'run', 'mapped',
+    'authorized']) {
     ok(`la actividad viaja con ${campo}`, campo in (escrito.activity || {}),
       `activity = ${JSON.stringify(Object.keys(escrito.activity || {}))}`)
   }
+  ok('y el rastro de la corrida trae las claves que el panel lee',
+    ['state', 'startedAt', 'endedAt', 'looked', 'pending', 'reason']
+      .every((k) => k in (escrito.activity.run || {})),
+    JSON.stringify(escrito.activity.run))
   ok('la salud viaja con ok y optional',
     'ok' in (escrito.health || {}) && Array.isArray((escrito.health || {}).optional),
     `health = ${JSON.stringify(escrito.health)}`)
@@ -798,6 +935,53 @@ console.log('\nel contrato CLI -> panel')
   await espera()
   ok('el panel de actividad monta contra el storage real sin romperse',
     actividadReal.doc.getElementById('synced').textContent.length > 0)
+  // Sin corridas todavia, el CLI de verdad tiene que decir "nunca reviso" — no la
+  // lista vacia que hoy significa cuatro cosas distintas.
+  ok('sin corridas, el panel montado contra el CLI real dice que nunca reviso',
+    /todavia no ha revisado/i.test(actividadReal.doc.getElementById('runline').textContent),
+    actividadReal.doc.getElementById('runline').textContent.trim())
+
+  // ── y ahora la corrida de verdad: lock, unlock, sync, y el panel contra ESO ──
+  // Se prueba corriendo el CLI, no escribiendo el storage a mano: lo segundo prueba
+  // que el panel sabe pintar un objeto inventado, no que el CLI escribe ese objeto.
+  wa('lock', '--note', 'triage')
+  const corriendo = await montar('activity.html',
+    JSON.parse(readFileSync(almacen, 'utf8')), 'es-419')
+  await espera()
+  ok('con el lock puesto, el panel dice que esta revisando ahora',
+    /revisando/i.test(corriendo.doc.getElementById('runline').textContent),
+    corriendo.doc.getElementById('runline').textContent.trim())
+
+  wa('unlock')
+  wa('sync')
+  const cerrada = await montar('activity.html',
+    JSON.parse(readFileSync(almacen, 'utf8')), 'es-419')
+  await espera()
+  const lineaOk = cerrada.doc.getElementById('runline').textContent
+  ok('al soltar el lock, el panel dice sobre cuantas reviso y que encontro',
+    /1 conversacion/.test(lineaOk) && /nada pendiente|esperando/.test(lineaOk),
+    lineaOk.trim())
+
+  // Y una corrida que fallo cambia el renglon, con el motivo tal cual lo dio el CLI.
+  const MOTIVO = 'This Claude account is in use by an assigned worktree'
+  wa('lock', '--note', 'triage')
+  wa('unlock', '--failed', MOTIVO)
+  const fallida = await montar('activity.html',
+    JSON.parse(readFileSync(almacen, 'utf8')), 'es-419')
+  await espera()
+  const lineaFallo = fallida.doc.getElementById('runline').textContent
+  ok('una corrida fallida cambia el renglon y trae el motivo del CLI',
+    /fallo/i.test(lineaFallo) && lineaFallo.includes(MOTIVO), lineaFallo.trim())
+
+  // Con la unica conversacion en off, la lista vacia deja de decir "nada pendiente".
+  wa('mode', JID, 'off')
+  wa('sync')
+  const apagada = await montar('activity.html',
+    JSON.parse(readFileSync(almacen, 'utf8')), 'es-419')
+  await espera()
+  ok('con todo en off, el panel contra el CLI real lo dice',
+    /off/.test(apagada.doc.getElementById('pending').textContent),
+    apagada.doc.getElementById('pending').textContent.trim())
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

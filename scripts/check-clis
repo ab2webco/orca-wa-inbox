@@ -37,6 +37,9 @@ CASOS = [
     # El registro de lineas toca la migracion a (cuenta, jid): si esa rama revienta,
     # el alcance entero deja de leerse.
     ("wa-scope", ["accounts", "--json"], True),
+    # El rastro de la corrida sobre una base recien creada: es la rama que contesta
+    # "nunca corrio", y es justo la que nadie ejecuta a mano.
+    ("wa-scope", ["run", "--json"], True),
     ("wa-transcribe", ["--check", "--json"], False),
     ("wa-send", ["--help"], False),
 ]
@@ -356,6 +359,89 @@ def revisa_migracion_cuentas(fallos: list) -> int:
     return hechas
 
 
+def revisa_rastro_corrida(fallos: list) -> int:
+    """Los cinco finales de una corrida, recorridos de verdad.
+
+    Existe por lo mismo que el resto de este archivo: una rama que ningun chequeo
+    ejecuta es una rama que se rompe en la maquina del usuario. Y aca el precio es
+    peor que un traceback — si el rastro miente, el panel afirma que el agente hizo
+    algo que no hizo, que es exactamente lo que este trabajo vino a arreglar.
+    """
+    hechas = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+
+        def scope(*args):
+            return subprocess.run([str(BIN / "wa-scope"), *args], capture_output=True,
+                                  text=True, env=env, timeout=180)
+
+        def estado():
+            p = scope("run", "--json")
+            filas = json.loads(p.stdout or "[]")
+            return filas[0] if filas else {}
+
+        hechas += 1
+        if estado().get("state") != "never":
+            fallos.append(f"sin corridas, wa-scope run dice {estado().get('state')!r} "
+                          "en vez de never")
+
+        scope("set", "100@g.us", "--target", "SOP", "--mode", "responder")
+        scope("lock", "--note", "triage")
+        hechas += 1
+        if estado().get("state") != "running":
+            fallos.append(f"con el lock puesto, wa-scope run dice "
+                          f"{estado().get('state')!r} en vez de running")
+
+        scope("unlock")
+        cerrada = estado()
+        hechas += 2
+        if cerrada.get("state") != "ok":
+            fallos.append(f"al soltar el lock quedo en {cerrada.get('state')!r} "
+                          "en vez de ok")
+        if cerrada.get("looked") != 1:
+            fallos.append(f"la corrida dice que miro {cerrada.get('looked')!r} "
+                          "conversaciones autorizadas y era 1")
+
+        motivo = "This Claude account is in use by an assigned worktree"
+        scope("lock")
+        scope("unlock", "--failed", motivo)
+        fallida = estado()
+        hechas += 2
+        if fallida.get("state") != "failed":
+            fallos.append(f"unlock --failed dejo el estado en "
+                          f"{fallida.get('state')!r} en vez de failed")
+        if fallida.get("reason") != motivo:
+            fallos.append(f"el motivo del fallo llego como {fallida.get('reason')!r}")
+
+        # La corrida que se murio: el lock vence y nadie llama a unlock. No se guarda
+        # como estado, se deduce — asi que si la deduccion se rompe nada mas lo delata.
+        scope("lock", "--ttl", "0")
+        hechas += 1
+        if estado().get("state") != "interrupted":
+            fallos.append(f"una corrida que no volvio quedo en "
+                          f"{estado().get('state')!r} en vez de interrupted")
+
+        # Y lo que separa "no hay trabajo" de "no hay permiso". Apagar por terminal
+        # tiene que APAGAR: la copia del panel le ganaba al CLI y `mode off` volvia a
+        # salir como `responder`, con lo que este estado era inalcanzable desde ahi.
+        scope("unlock")
+        scope("mode", "100@g.us", "off")
+        hechas += 1
+        modos = [f["mode"] for f in json.loads(scope("list", "--json").stdout or "[]")]
+        if modos != ["off"]:
+            fallos.append(f"despues de `mode off` el registro quedo en {modos!r}")
+        apagada = estado()
+        hechas += 2
+        if apagada.get("mapped") != 1:
+            fallos.append(f"con una conversacion registrada, mapped llego "
+                          f"{apagada.get('mapped')!r}")
+        if apagada.get("authorized") != 0:
+            fallos.append(f"con todo en off, authorized llego "
+                          f"{apagada.get('authorized')!r} en vez de 0")
+    return hechas
+
+
 def entorno(home: pathlib.Path) -> dict:
     """HOME propio: la base vive en ~/.wa-inbox/scope.db y no hay variable para moverla,
     asi que mover el HOME es lo que mantiene la base real del usuario fuera de esto."""
@@ -461,7 +547,8 @@ def main() -> int:
             fallos.append(f"{nombre} {' '.join(args)}: {ultima.strip()}")
 
     comprobaciones = (revisa_ajustes(fallos) + revisa_wa_send(fallos)
-                      + revisa_fuentes(fallos) + revisa_migracion_cuentas(fallos))
+                      + revisa_fuentes(fallos) + revisa_migracion_cuentas(fallos)
+                      + revisa_rastro_corrida(fallos))
     aislado.cleanup()
 
     if fallos:

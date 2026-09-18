@@ -203,9 +203,63 @@ const ANCHOS_ESTADO = [1440, 320]
 const HACE_DIEZ_MINUTOS = new Date(Date.now() - 10 * 60 * 1000).toISOString()
 const SIN_CHATS = Object.assign({}, DATOS, { chats: [], scope: {} })
 
+// Los cinco finales de una corrida. Se fotografian porque son la razon de ser del
+// renglon: en pantalla los cuatro primeros eran la MISMA lista vacia, y el dueno
+// concluia que el plugin no funcionaba mientras funcionaba bien. Un renglon que dice
+// algo distinto en cada caso solo se puede comprobar mirandolo.
+const AHORA_CORTO = new Date().toISOString().slice(0, 16).replace('T', ' ')
+const SIN_PENDIENTES = Object.assign({}, DATOS.activity,
+  { syncedAt: AHORA_CORTO, pending: [], mapped: 4, authorized: 4 })
+const corrida = (run, extra) => Object.assign({}, DATOS,
+  { decisions: {}, activity: Object.assign({}, SIN_PENDIENTES, extra, { run }) })
+
 const PANELES = [
   { nombre: 'config', archivo: 'config.html', anchos: ANCHOS, datos: DATOS },
-  { nombre: 'actividad', archivo: 'activity.html', anchos: ANCHOS, datos: DATOS },
+  {
+    nombre: 'actividad',
+    archivo: 'activity.html',
+    anchos: ANCHOS,
+    datos: Object.assign({}, DATOS, {
+      activity: Object.assign({}, DATOS.activity, {
+        mapped: 4,
+        authorized: 4,
+        run: { state: 'ok', startedAt: '2026-09-17 14:01', endedAt: '2026-09-17 14:02',
+          looked: 4, pending: 3, reason: null }
+      })
+    })
+  },
+  // 1. Reviso y no habia nada: el caso comun y sano.
+  {
+    nombre: 'actividad-sin-nada', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
+    datos: corrida({ state: 'ok', startedAt: AHORA_CORTO, endedAt: AHORA_CORTO,
+      looked: 4, pending: 0, reason: null })
+  },
+  // 2. Nunca corrio: el precheck salio 127, la automation no tiene proyecto, o esta
+  //    pausada. Ninguna de esas tres llega hasta aca; lo unico cierto es que no corrio.
+  {
+    nombre: 'actividad-sin-corrida', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
+    datos: corrida({ state: 'never', startedAt: null, endedAt: null, looked: null,
+      pending: null, reason: null })
+  },
+  // 3a. Arranco y no volvio: el lock vencio y nadie llamo a unlock.
+  {
+    nombre: 'actividad-cortada', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
+    datos: corrida({ state: 'interrupted', startedAt: '2026-09-17 09:12', endedAt: null,
+      looked: null, pending: null, reason: null })
+  },
+  // 3b. Murio con motivo. El texto es real, de una corrida que se cayo asi.
+  {
+    nombre: 'actividad-fallo', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
+    datos: corrida({ state: 'failed', startedAt: AHORA_CORTO, endedAt: AHORA_CORTO,
+      looked: 4, pending: 0,
+      reason: 'This Claude account is in use by an assigned worktree' })
+  },
+  // 4. Nada autorizado: mapeadas y todas en off. Es configuracion, no falta de trabajo.
+  {
+    nombre: 'actividad-todo-off', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
+    datos: corrida({ state: 'ok', startedAt: AHORA_CORTO, endedAt: AHORA_CORTO,
+      looked: 0, pending: 0, reason: null }, { authorized: 0 })
+  },
   {
     nombre: 'config-buscando', archivo: 'config.html', anchos: ANCHOS_ESTADO,
     datos: Object.assign({}, SIN_CHATS, {

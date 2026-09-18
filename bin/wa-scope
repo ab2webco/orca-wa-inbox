@@ -11,6 +11,7 @@ agent. With hundreds of groups, permission has to be an explicit allowlist.
   wa-scope check <chat> [--for responder]   the gate: exit 0 = authorized
   wa-scope voice <chat>               tone, instructions, provider and permission there
   wa-scope closing                    closed cards its conversation does not know about
+  wa-scope run                        how the last run went, and over how many chats
   wa-scope log [-n 50]                what the agent did, and where
 
 Modes, from least to most permission (the values are stable, they are not translated):
@@ -223,6 +224,18 @@ create table if not exists digest (
 create table if not exists run_lock (
   name text primary key, pid integer, acquired_at real, expires_at real, note text
 );
+-- El rastro de la CORRIDA, no de sus resultados. Sin esto, "no habia nada que hacer",
+-- "nunca corrio" y "arranco y se murio" llegan al panel como la misma lista vacia, y
+-- el dueno concluye lo unico que puede concluir mirando: que no funciona.
+create table if not exists run_trace (
+  name       text primary key,   -- la misma llave que el lock: 'triage'
+  started_at text,
+  ended_at   text,
+  state      text,               -- running | ok | failed
+  reason     text,               -- por que fallo, en las palabras de quien fallo
+  looked     integer,            -- conversaciones autorizadas que miro
+  pending    integer             -- cuantas quedaron esperando al terminar
+);
 """
 
 
@@ -348,6 +361,95 @@ def plugin_store_write(scope, agent_name=None, activity=None, health=None,
     return ok
 
 
+RUN_NAME = "triage"
+
+
+def ahora():
+    """El mismo formato que syncedAt. El panel ya sabe leerlo y comparar antiguedad;
+    dos formatos en la misma pantalla obligarian a un segundo parser."""
+    return time.strftime("%Y-%m-%d %H:%M")
+
+
+def run_start(con, name=RUN_NAME):
+    """Deja constancia de que ARRANCO. Lo que no se anota al arrancar no se puede
+    distinguir despues de lo que nunca arranco."""
+    con.execute("insert into run_trace (name, started_at, ended_at, state, reason, "
+                "looked, pending) values (?,?,NULL,'running',NULL,NULL,NULL) "
+                "on conflict(name) do update set started_at=excluded.started_at, "
+                "ended_at=NULL, state='running', reason=NULL, looked=NULL, pending=NULL",
+                (name, ahora()))
+    con.commit()
+
+
+def run_end(con, name=RUN_NAME, reason=None):
+    """Como termino, y sobre cuanto. Los numeros se congelan aca y no se recalculan al
+    pintar: el panel tiene que poder decir sobre cuantas conversaciones corrio ESA
+    corrida, no cuantas hay autorizadas ahora."""
+    autorizadas = sum(1 for r in merged_scope(con).values()
+                      if (r.get("mode") or "off") != "off")
+    pendientes = len(plugin_store_raw().get("activity", {}).get("pending") or [])
+    con.execute("insert into run_trace (name, started_at, ended_at, state, reason, "
+                "looked, pending) values (?,NULL,?,?,?,?,?) "
+                "on conflict(name) do update set ended_at=excluded.ended_at, "
+                "state=excluded.state, reason=excluded.reason, "
+                "looked=excluded.looked, pending=excluded.pending",
+                (name, ahora(), "failed" if reason else "ok", reason or None,
+                 autorizadas, pendientes))
+    con.commit()
+
+
+def build_run(con, name=RUN_NAME):
+    """Como le fue a la ultima corrida, en la forma que lee el panel.
+
+    `state` es un codigo estable, no una frase: el panel lo dice en el idioma del
+    usuario. `interrupted` no se guarda nunca — se deduce de que el lock ya no esta y
+    la corrida nunca se cerro, que es exactamente el caso de la corrida que se murio."""
+    row = con.execute("select started_at, ended_at, state, reason, looked, pending "
+                      "from run_trace where name=?", (name,)).fetchone()
+    corriendo = bool(con.execute("select 1 from run_lock where name=? and expires_at > ?",
+                                 (name, time.time())).fetchone())
+    if not row:
+        # Sin fila y con el lock puesto igual se dice "corriendo": una base recien
+        # migrada no puede hacer parecer que el agente nunca existio.
+        return {"state": "running" if corriendo else "never", "startedAt": None,
+                "endedAt": None, "looked": None, "pending": None, "reason": None}
+    state = row["state"] or "never"
+    if corriendo:
+        state = "running"
+    elif state == "running":
+        state = "interrupted"
+    return {"state": state, "startedAt": row["started_at"], "endedAt": row["ended_at"],
+            "looked": row["looked"], "pending": row["pending"], "reason": row["reason"]}
+
+
+def plugin_store_patch_run(trace):
+    """Deja el rastro en el panel sin rearmar la actividad entera. Rearmarla cuesta una
+    lectura completa de WhatsApp; al abrir y al cerrar una corrida lo unico que cambio
+    es como va, y cobrar ese precio ahi dejaria el panel diciendo "corriendo" hasta el
+    siguiente sync — justo el minuto en que el dueno va a mirar."""
+    ok = False
+    for path in plugin_store_targets():
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            data = {}
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as fh:
+                    data = json.load(fh)
+            if not isinstance(data, dict):
+                data = {}
+            actividad = data.get("activity")
+            data["activity"] = dict(actividad if isinstance(actividad, dict) else {},
+                                    run=trace)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, ensure_ascii=False, indent=2)
+            os.replace(tmp, path)
+            ok = True
+        except (OSError, ValueError):
+            continue
+    return ok
+
+
 def mirror_to_panel(key, value):
     """Un ajuste que el panel tambien guarda tiene que viajar en las dos direcciones:
     si solo bajara del panel, un valor viejo del panel ganaria para siempre."""
@@ -426,8 +528,17 @@ def build_activity(con, scope):
                                    "from agent_action order by id desc limit 20")]
     lock = con.execute("select name, expires_at from run_lock "
                        "where expires_at > ?", (time.time(),)).fetchone()
+    # `mapped` y `authorized` no son lo mismo y confundirlos era invisible: con todas
+    # las conversaciones en `off` el agente tiene prohibido actuar y la lista sale
+    # vacia igual que si no hubiera trabajo. Eso es configuracion, no ausencia de
+    # trabajo, y el panel no podia decirlo porque no le llegaba el dato.
+    autorizadas = sum(1 for e in scope.values() if (e.get("mode") or "off") != "off")
     return {"pending": pending[:30], "recent": recent,
-            "running": bool(lock), "syncedAt": time.strftime("%Y-%m-%d %H:%M")}
+            "running": bool(lock), "syncedAt": time.strftime("%Y-%m-%d %H:%M"),
+            # El rastro de la corrida viaja junto a sus resultados: sin el, "no habia
+            # nada", "no corrio" y "se murio" son la misma lista vacia en pantalla.
+            "run": build_run(con),
+            "mapped": len(scope), "authorized": autorizadas}
 
 
 def build_chats():
@@ -701,6 +812,15 @@ def cmd_mode(con, a):
     con.execute("update chat_scope set mode=?, updated_at=? where chat_jid=?",
                 (a.value, time.strftime("%Y-%m-%d %H:%M"), jid))
     con.commit()
+    # La copia del panel se corrige aca, en la entrada, y no con un push: merged_scope
+    # le da la razon al panel siempre, asi que empujar lo que ya esta fusionado
+    # reescribiria el modo viejo. Sin esto, apagar por terminal no apagaba nada — hasta
+    # `list` devolvia `responder` justo despues de un `mode off`. `rm` ya lo hacia asi.
+    store = plugin_store_read()
+    if jid in store:
+        store[jid] = dict(store[jid], mode=a.value,
+                          updatedAt=time.strftime("%Y-%m-%d %H:%M"))
+        plugin_store_write(store, agent_name_of(con))
     return cmd_list(con, a)
 
 
@@ -754,6 +874,11 @@ def cmd_lock(con, a):
                 "values (?,?,?,?,?)",
                 (a.name, os.getpid(), now, now + a.ttl, a.note))
     con.commit()
+    # El rastro se toma aca y no en un paso aparte del prompt: un paso que hay que
+    # acordarse de hacer es un paso que un dia no se hace, y justo ese dia es cuando
+    # el panel tendria que poder decir que la corrida arranco y no volvio.
+    run_start(con, a.name)
+    plugin_store_patch_run(build_run(con, a.name))
     print(json.dumps({"acquired": True, "name": a.name, "ttl_s": a.ttl}))
     sys.exit(0)
 
@@ -761,7 +886,20 @@ def cmd_lock(con, a):
 def cmd_unlock(con, a):
     con.execute("delete from run_lock where name=?", (a.name,))
     con.commit()
-    return [{"released": a.name}]
+    run_end(con, a.name, (a.failed or "").strip() or None)
+    trace = build_run(con, a.name)
+    plugin_store_patch_run(trace)
+    return [{"released": a.name, "state": trace["state"], "looked": trace["looked"],
+             "pending": trace["pending"], "reason": trace["reason"]}]
+
+
+def cmd_run(con, a):
+    """Como le fue a la ultima corrida, lo mismo que lee el panel. Existe para que la
+    respuesta a "por que no hace nada" sea un comando y no un rato leyendo JSON."""
+    scope = merged_scope(con)
+    return [dict(build_run(con), mapped=len(scope),
+                 authorized=sum(1 for r in scope.values()
+                                if (r.get("mode") or "off") != "off"))]
 
 
 NOTIFIERS = {"darwin": "osascript", "win32": "powershell", "linux": "notify-send"}
@@ -1277,7 +1415,13 @@ def main():
     s.add_argument("--note", default=""); s.set_defaults(fn=cmd_lock)
 
     s = add("unlock"); s.add_argument("--name", default="triage")
+    s.add_argument("--failed", default="",
+                   help="release it saying the run FAILED, and why; the panel shows "
+                        "that reason instead of a clean result")
     s.set_defaults(fn=cmd_unlock)
+
+    add("run", help="how the last run went: when, over how many chats, how it ended"
+        ).set_defaults(fn=cmd_run)
 
     s = add("alert", help="system notification: something needs a human")
     s.add_argument("--title"); s.add_argument("--body")
