@@ -13,6 +13,8 @@ import { execFile } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
+import { HARNESS_KEY, sembrar } from './harness.mjs'
+
 // Las herramientas viajan dentro del plugin. Antes se buscaban en el PATH del usuario,
 // lo que solo funcionaba en la maquina donde alguien las habia enlazado a mano.
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
@@ -207,6 +209,24 @@ export default function activate(orca) {
   // semana sin correr sin explicar por que.
   dirHerramientas().then((dir) => checkSystem(orca, dir))
     .catch((error) => orca.log(`initial check failed: ${error.message}`))
+
+  // El arnes del agente. Todo lo que sabe hoy vive en el prompt, que se lee una vez
+  // por corrida: un modelo mas chico improvisa. En la carpeta de trabajo del plugin
+  // esos archivos son contexto persistente que se lee siempre, y Orca ademas le mete
+  // el AGENTS.md de la carpeta al contexto sin que haya que pedirselo.
+  //
+  // La carpeta la crea una version de Orca que no todos tienen todavia, asi que esto
+  // falla callado y deja el motivo escrito, como el sync. Sin ella el plugin anda
+  // exactamente igual que antes.
+  dirHerramientas()
+    .then((dir) => sembrar(PLUGIN_DIR, dir))
+    .then(async (estado) => {
+      await guardar(orca, HARNESS_KEY, estado)
+      orca.log(estado.ok
+        ? `harness: ${estado.files.map((f) => `${f.name} ${f.action}`).join(', ')} in ${estado.dir}`
+        : `harness not seeded (${estado.reason}): ${estado.detail}`)
+    })
+    .catch((error) => orca.log(`harness failed: ${error.message}`))
 
   // Y traer las conversaciones ya: en una instalacion nueva el panel arranca vacio y
   // el usuario no tiene de donde sacarlas.

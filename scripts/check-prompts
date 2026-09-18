@@ -15,9 +15,12 @@ lugares, y los tres se revisan:
      cual y no lo redacta el agente.
   3. El espanol que queda en los prompts: las plantillas de mensaje que el agente copia.
 
-Y ademas se comprueba que los prompts sigan ordenando obedecer ese tono. Un prompt en
-ingles que no lo diga deja al agente eligiendo idioma, que es como un cliente
-colombiano recibe una respuesta en ingles.
+  4. El arnes que el plugin siembra en su carpeta de trabajo (`harness/`): desde que
+     parte de la doctrina vive ahi, ahi tambien viven plantillas de mensaje.
+
+Y ademas se comprueba que los prompts y el AGENTS.md del arnes sigan ordenando obedecer
+ese tono. Un texto en ingles que no lo diga deja al agente eligiendo idioma, que es como
+un cliente colombiano recibe una respuesta en ingles.
 """
 import importlib.machinery
 import importlib.util
@@ -118,6 +121,26 @@ def main() -> int:
         if not re.search(r"tone.{0,80}letter", cuerpo, re.S | re.I):
             fallos.append(f"{ruta.relative_to(RAIZ)}  ya no ordena obedecer `tone` al "
                           f"pie de la letra")
+
+    # ── 5. El arnes viaja a la carpeta de trabajo y el agente lo lee en cada corrida:
+    # una plantilla en espanol de ahi sale al cliente igual que una del prompt.
+    arnes = sorted((RAIZ / "harness").glob("*.md"))
+    if not arnes:
+        fallos.append("harness/  no hay ningun archivo del arnes que revisar")
+    for ruta in arnes:
+        comprobaciones += 1
+        fallos += voseo(ruta.read_text(encoding="utf-8"), str(ruta.relative_to(RAIZ)))
+
+    # El AGENTS.md es lo unico que Orca le mete al contexto solo: si deja de mandar
+    # obedecer el tono configurado, el guardia del idioma se queda solo en el prompt.
+    agents = RAIZ / "harness" / "AGENTS.md"
+    cuerpo = agents.read_text(encoding="utf-8") if agents.exists() else ""
+    comprobaciones += 2
+    if "wa-scope voice" not in cuerpo:
+        fallos.append("harness/AGENTS.md  ya no nombra `wa-scope voice`: sin eso el "
+                      "agente no sabe de donde sale el tono")
+    if not re.search(r"tone.{0,80}letter", cuerpo, re.S | re.I):
+        fallos.append("harness/AGENTS.md  ya no ordena obedecer `tone` al pie de la letra")
 
     if fallos:
         print("El agente le escribe a clientes en Colombia, y esto lo rompe:",

@@ -9,14 +9,34 @@
  * si existe, asi que aca se recorre: se le apunta el directorio de herramientas a algo
  * que no puede correr y se comprueba que el motivo llegue al storage que lee el panel.
  *
+ * Y el arnes: los archivos que el worker siembra en la carpeta de trabajo del plugin.
+ * Esa rama escribe en disco, asi que se recorre entera con un HOME temporal — la
+ * siembra, la segunda activacion, y que una edicion del usuario sobreviva.
+ *
  * Nada de esto toca WhatsApp ni la base del usuario: las herramientas son guiones
  * falsos en un directorio temporal y el host es un objeto en memoria.
  */
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-import activate from '../main.mjs'
+const RAIZ = mkdtempSync(join(tmpdir(), 'wa-inbox-worker-'))
+
+// ANTES de activar nada: al activarse el worker siembra el arnes en el userData de
+// Orca, y con el HOME de verdad una prueba le escribiria en la carpeta al usuario.
+process.env.HOME = join(RAIZ, 'home')
+process.env.XDG_CONFIG_HOME = join(RAIZ, 'home', '.config')
+process.env.APPDATA = join(RAIZ, 'home', 'AppData', 'Roaming')
+for (const base of [join(process.env.HOME, 'Library', 'Application Support'),
+  process.env.XDG_CONFIG_HOME, process.env.APPDATA]) {
+  mkdirSync(join(base, 'orca'), { recursive: true })
+}
+
+const PLUGIN_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
+
+const { default: activate } = await import('../main.mjs')
+const { workspaceDir } = await import('../harness.mjs')
 
 let fallos = 0
 let pruebas = 0
@@ -27,8 +47,6 @@ function ok (nombre, condicion, detalle = '') {
   fallos += 1
   console.log(`  FALLA ${nombre}${detalle ? ` — ${detalle}` : ''}`)
 }
-
-const RAIZ = mkdtempSync(join(tmpdir(), 'wa-inbox-worker-'))
 
 /** Un directorio de herramientas con el wa-scope que pida cada caso. */
 function herramientas (nombre, guion, modo = 0o755) {
@@ -193,6 +211,116 @@ console.log('\nworker: el boton del panel')
   await dormir(5000)
   ok('apagar el plugin detiene al vigia del pedido',
     orca.store.syncRequest !== null, JSON.stringify(orca.store.syncRequest))
+}
+
+// ───────── el arnes de la carpeta del plugin ─────────
+// Es la rama que escribe en disco, y la que no recorre ningun otro chequeo. Un
+// NameError ya se colo una vez por exactamente eso.
+console.log('\nworker: el arnes de la carpeta del plugin')
+{
+  // Herramientas falsas que contestan `--help` con una version que la prueba cambia.
+  // Asi la segunda activacion tiene contenido nuevo que ofrecer, que es lo unico que
+  // permite comprobar que lo que el usuario NO toco si se actualiza.
+  const dir = join(RAIZ, 'arnes-bin')
+  mkdirSync(dir, { recursive: true })
+  const guion = '#!/bin/sh\n' +
+    'case "$1" in\n' +
+    '  sync) echo \'[{"synced": true}]\' ;;\n' +
+    '  doctor) echo \'[]\' ;;\n' +
+    '  *) echo "AYUDA $(cat "$(dirname "$0")/version.txt") de $(basename "$0") $*" ;;\n' +
+    'esac\n'
+  for (const tool of ['wa-scope', 'wa-read', 'wa-send', 'wa-transcribe']) {
+    writeFileSync(join(dir, tool), guion, { mode: 0o755 })
+  }
+  writeFileSync(join(dir, 'version.txt'), 'V1\n')
+
+  const orca = hostFalso(dir, { chats: [] })
+  const { apagar } = await arranca(orca)
+  await hasta(() => orca.store.harnessStatus)
+  const e = orca.store.harnessStatus
+  apagar()
+
+  ok('la siembra deja escrito como le fue', !!e && e.ok === true, JSON.stringify(e))
+  const carpeta = workspaceDir(PLUGIN_DIR)
+  ok('siembra en la carpeta de trabajo del plugin', e && e.dir === carpeta,
+    `${e && e.dir} != ${carpeta}`)
+  const puestos = (e?.files ?? []).map((f) => f.name).sort()
+  ok('deja los cuatro archivos del arnes',
+    puestos.join(',') === 'AGENTS.md,CLASSIFICATION.md,COMMANDS.md,EXAMPLES.md',
+    puestos.join(','))
+
+  const lee = (n) => readFileSync(join(carpeta, n), 'utf8')
+  // Las cinco reglas duras tienen que llegar al archivo que Orca le mete al contexto.
+  const agentes = lee('AGENTS.md')
+  for (const [nombre, frase] of [
+    ['la credencial', 'credential never passes through the agent'],
+    ['el permiso responder', 'Without the `responder` permission nothing is sent'],
+    ['la duda', 'When in doubt, no card is opened'],
+    ['ninguno', '`ninguno` conversation never opens a card'],
+    ['el tono', 'come from `wa-scope voice`']
+  ]) {
+    ok(`el AGENTS.md sembrado lleva la regla de ${nombre}`, agentes.includes(frase))
+  }
+  // Y la referencia sale del `--help` de verdad, no de una transcripcion a mano.
+  ok('la referencia se genera con el --help de las herramientas',
+    lee('COMMANDS.md').includes('AYUDA V1 de wa-scope --help'))
+  ok('y tambien el de los subcomandos que usa el prompt',
+    lee('COMMANDS.md').includes('AYUDA V1 de wa-scope voice --help'))
+
+  // ── segunda activacion: el usuario edito una seccion y agrego otra suya.
+  const antes = lee('COMMANDS.md')
+  writeFileSync(join(carpeta, 'COMMANDS.md'),
+    `${antes.replace('## Where the tools are', '## Where the tools are\n\nESTO LO ESCRIBI YO')}\n## Mia\n\nmis notas\n`)
+  writeFileSync(join(dir, 'version.txt'), 'V2\n')
+
+  const orca2 = hostFalso(dir, { chats: [] })
+  const { apagar: apagar2 } = await arranca(orca2)
+  await hasta(() => orca2.store.harnessStatus)
+  const e2 = orca2.store.harnessStatus
+  apagar2()
+
+  const comandos = (e2?.files ?? []).find((f) => f.name === 'COMMANDS.md')
+  const final = lee('COMMANDS.md')
+  ok('lo que el usuario edito queda como suyo',
+    !!comandos && comandos.yours.includes('Where the tools are'), JSON.stringify(comandos))
+  ok('y no se lo pisa la actualizacion', final.includes('ESTO LO ESCRIBI YO'))
+  ok('la seccion que agrego el usuario sobrevive', final.includes('mis notas'))
+  ok('y lo que no toco si se actualiza', final.includes('AYUDA V2 de wa-scope --help'),
+    JSON.stringify(comandos))
+  ok('la referencia vieja ya no esta', !final.includes('AYUDA V1 de wa-scope --help'))
+  // Un archivo que nadie toco y que no cambio no se reescribe: sin esto cada arranque
+  // dejaria la carpeta con cuatro archivos "modificados" que no cambiaron en nada.
+  const agentes2 = (e2?.files ?? []).find((f) => f.name === 'AGENTS.md')
+  ok('lo que no cambio no se reescribe', !!agentes2 && agentes2.action === 'igual',
+    JSON.stringify(agentes2))
+}
+
+// ───────── sin carpeta donde sembrar ─────────
+{
+  // Una maquina donde Orca todavia no le da carpeta al plugin. El arnes no se siembra
+  // y NADA MAS cambia: el plugin tiene que andar exactamente igual que antes.
+  const homeAnterior = process.env.HOME
+  const xdgAnterior = process.env.XDG_CONFIG_HOME
+  const appAnterior = process.env.APPDATA
+  const vacio = join(RAIZ, 'sin-userdata')
+  mkdirSync(vacio, { recursive: true })
+  process.env.HOME = vacio
+  process.env.XDG_CONFIG_HOME = join(vacio, '.config')
+  process.env.APPDATA = join(vacio, 'AppData')
+
+  const orca = hostFalso(herramientas('bueno-2', BUENO), { chats: [] })
+  const { apagar, listo } = await arranca(orca)
+  await hasta(() => orca.store.harnessStatus)
+  const e = orca.store.harnessStatus
+  apagar()
+  ok('sin carpeta el arnes falla callado y dice por que',
+    !!e && e.ok === false && e.reason === 'sin-userdata', JSON.stringify(e))
+  ok('y el sync sigue andando igual que siempre',
+    listo && orca.store.syncStatus.ok === true, JSON.stringify(orca.store.syncStatus))
+
+  process.env.HOME = homeAnterior
+  process.env.XDG_CONFIG_HOME = xdgAnterior
+  process.env.APPDATA = appAnterior
 }
 
 rmSync(RAIZ, { recursive: true, force: true })

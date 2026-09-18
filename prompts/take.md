@@ -4,18 +4,19 @@ almost always there is nothing to do: that is normal and that is fine.
 Your only task is to handle what the human marked by hand with **Take** in the panel.
 Nothing else. The full sweep is done by the other run.
 
-**These instructions are in English. What you write in WhatsApp is not.** The language
-and the register of every outgoing message come from `wa-scope voice` (STEP 2.5), which
-the owner configures per conversation and which is neutral Latin American Spanish by
-default. Obey that tone to the letter.
+## FIRST — Your folder
+
+The plugin keeps its harness in the folder this automation runs in: `AGENTS.md` (the
+rules, and **they beat this prompt**), `COMMANDS.md` (every flag, from the tools' own
+`--help`) and `EXAMPLES.md`. If they are not there, this Orca does not give the plugin a
+folder yet and the steps below stand on their own.
+
+    cat AGENTS.md COMMANDS.md EXAMPLES.md 2>/dev/null
 
 ## BEFORE ANY STEP — Where the tools are
 
-The tools ship inside the plugin, but **you are not standing in the plugin folder**:
-Orca runs this automation in a workspace worktree, where no `./bin/` exists. That is why
-the path is resolved, not assumed — and the PATH is not trusted either: on someone
-else's machine the tools are not there, and a PATH hit may be an old copy from another
-tree.
+The tools ship inside the plugin and you are not standing in the plugin folder, so the
+path is resolved and never taken from `PATH` (`COMMANDS.md`, "Where the tools are"):
 
 ```sh
 # Resolve the bin of the installed plugin, without relying on PATH or the current dir.
@@ -35,8 +36,11 @@ for d in (os.listdir(base) if os.path.isdir(base) else []):
         cur = os.path.join(p, "current")
         if os.path.isfile(cur):
             b = os.path.join(p, open(cur).read().strip(), "bin")
-            if os.path.isdir(b): cands.append((os.path.getmtime(b), b))
-    # En desarrollo: la ruta que el usuario registro en los ajustes.
+            if os.path.isdir(b): cands.append((0, os.path.getmtime(b), b))
+    # En desarrollo: la ruta que el usuario registro en los ajustes. Va SEGUNDA a
+    # proposito: ordenar solo por fecha hacia que el checkout del autor, siempre mas
+    # nuevo, le ganara al plugin instalado, y el agente terminaba diagnosticando la
+    # maquina de otro con las herramientas de este.
     for prof in ("profiles/local-default/orca-data.json", "orca-data.json"):
         f = os.path.join(raiz, prof)
         if not os.path.isfile(f): continue
@@ -44,16 +48,14 @@ for d in (os.listdir(base) if os.path.isdir(base) else []):
         except Exception: continue
         for ruta in s.get("devPluginPaths") or []:
             b = os.path.join(ruta, "bin")
-            if os.path.isdir(b): cands.append((os.path.getmtime(b), b))
-print(max(cands)[1] if cands else "")
+            if os.path.isdir(b): cands.append((1, os.path.getmtime(b), b))
+print(min(cands)[2] if cands else "")
 PY
 )
 ```
 
 If `WA` comes back empty, or if `"$WA/wa-scope"` is not executable, **stop and say so in
-one line**. Do not fall back to a bare `wa-scope` from PATH: on a fresh install it is
-not there, and if it shows up it may be an old copy reading another database. Better a
-run that did nothing and said so than one that worked on another tree's data.
+one line**. Never fall back to a bare `wa-scope` from PATH.
 
 From here on, every command comes from `"$WA/"`.
 
@@ -71,29 +73,27 @@ read the inbox, do not open anything, do not spend tokens looking around. It run
 
     "$WA/wa-scope" lock --name take --ttl 240
 
-Exit 4 = another run of yours is already going: stop. When you finish,
-`"$WA/wa-scope" unlock --name take`.
-
-Note: the triage lock has a different name, so the two can coexist. If the same
-`stanza_id` already appears in `"$WA/wa-scope" work`, do not touch it: the other one is
-working on it.
+Exit 4 = another run of yours is already going: stop (`AGENTS.md`, "One run at a time").
+When you finish, `"$WA/wa-scope" unlock --name take`. The triage lock has a different
+name, so the two coexist; but if the same `stanza_id` already appears in
+`"$WA/wa-scope" work`, do not touch it: the other one is working on it.
 
 ## STEP 2.5 — How it writes and what it does in that conversation
 
     "$WA/wa-scope" voice "<chat_name>" --json
 
-Obey `tone` to the letter, and do not imitate the tone of these instructions. The tone
-also decides the language: the default is neutral Latin American Spanish, so a client
-keeps receiving Spanish no matter what language this prompt is written in.
+Obey `tone` to the letter, and do not imitate the tone of these instructions
+(`AGENTS.md`, rule 5).
 
 Read `instructions`: it is what the owner asked for THAT conversation and **it beats the
-default behavior of this prompt**. And look at `opens_card`: on `false` that conversation
-opens no cards, so points 1, 3, 5 and 6 of the next step do not apply: summarize or
-reply according to the permission and leave a trace in point 8 with `--action draft` or
-`--action sent`, without `--issue`.
+default behavior of this prompt**. On `opens_card: false`, points 1, 3, 5 and 6 of the
+next step do not apply: summarize or reply according to the permission and leave the
+trace in point 8 with `--action draft` or `--action sent`, without `--issue`.
 
-None of that moves three rules: a credential never passes through the agent; when in
-doubt no card is opened; without the `responder` permission nothing is sent.
+None of that moves the five hard rules: a credential never passes through the agent;
+when in doubt no card is opened; without the `responder` permission nothing is sent; a
+`ninguno` conversation never opens a card; and the outgoing language and register come
+from this `tone`. `AGENTS.md` has them in full.
 
 ## STEP 3 — For each marked item
 
@@ -115,10 +115,9 @@ doubt no card is opened; without the `responder` permission nothing is sent.
          --issue "<ID>" --step "tomado a mano" --next "<what is left>"
 
 7. Acknowledge if the mode allows it: `"$WA/wa-send" "<chat_name>" "Tomo esto: <titulo>.
-   Queda en <ID>."` — written in the configured tone, and with `--send` only if the
-   registry says `responder`. In a conversation with no cards there is no receipt to
-   acknowledge: what is sent there is whatever its `instructions` ask for — the answer or
-   the summary — with that same permission.
+   Queda en <ID>."` — in the configured tone, with `--send` only if the registry says
+   `responder`. With no card there is no receipt: what goes out is whatever its
+   `instructions` ask for, with that same permission.
 8. `"$WA/wa-scope" record --chat … --stanza … --action issue --issue <ID> --detail "<title>"`
 
 ## STEP 4

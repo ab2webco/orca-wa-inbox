@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""Ninguna regla dura se perdio al mudarse al arnes.
+
+Parte de la doctrina que vivia en los prompts vive ahora en `harness/`, que el worker
+siembra en la carpeta de trabajo del plugin. Mudar texto es exactamente la operacion en
+la que una regla se cae sin que nadie lo note: el diff se lee entero, se aprueba, y seis
+semanas despues el agente manda una clave por WhatsApp.
+
+Asi que no se lee el diff: se comprueba que cada regla dura siga ALCANZABLE por el
+agente, y por los dos caminos que tiene. El arnes es el que se lee siempre, pero solo
+existe donde Orca le da carpeta al plugin; el prompt es el que llega siempre. Una regla
+que este en uno solo se pierde en la mitad de las maquinas, asi que se exige en ambos.
+
+Ademas se comprueba que lo que el prompt manda leer exista de verdad: un `cat` a un
+archivo que nadie siembra es una instruccion que el agente obedece sin obtener nada.
+"""
+import pathlib
+import re
+import sys
+
+RAIZ = pathlib.Path(__file__).resolve().parent.parent
+ARNES = RAIZ / "harness"
+PROMPTS = RAIZ / "prompts"
+
+# Las cinco reglas duras, tal como las dicen los textos. El patron es la frase, no una
+# palabra suelta: "credential" aparece en la tabla de clasificacion sin ser la regla.
+REGLAS = [
+    ("la credencial no pasa por el agente",
+     r"credential never passes through the agent"),
+    ("sin permiso `responder` no se envia",
+     r"without the .?responder.? permission nothing is sent"),
+    ("en la duda no se abre tarjeta",
+     r"when in doubt,? no card is opened"),
+    ("una conversacion `ninguno` no abre tarjeta",
+     r".?ninguno.? conversation never opens a card"),
+    ("el idioma y el registro salen del tono configurado",
+     r"language and (the )?register come from"),
+]
+
+# Donde tiene que estar cada regla. El AGENTS.md es lo que Orca le mete al contexto al
+# agente sin que nadie lo pida; los prompts son lo que llega aunque no haya carpeta.
+OBLIGATORIOS = ["harness/AGENTS.md", "prompts/triage.md", "prompts/take.md"]
+
+
+def plano(texto: str) -> str:
+    """Un solo espacio entre palabras: las frases del prompt van partidas en dos
+    lineas y buscarlas literalmente solo encontraria la mitad."""
+    return re.sub(r"\s+", " ", texto)
+
+
+def main() -> int:
+    fallos = []
+    comprobaciones = 0
+
+    cuerpos = {}
+    for rel in OBLIGATORIOS:
+        ruta = RAIZ / rel
+        if not ruta.exists():
+            fallos.append(f"{rel}  no existe")
+            cuerpos[rel] = ""
+            continue
+        cuerpos[rel] = plano(ruta.read_text(encoding="utf-8"))
+
+    for nombre, patron in REGLAS:
+        for rel in OBLIGATORIOS:
+            comprobaciones += 1
+            if not re.search(patron, cuerpos[rel], re.I):
+                fallos.append(f"{rel}  ya no dice que {nombre}")
+
+    # La tabla de clasificacion salio de 266 menciones reales. Si se muda otra vez y se
+    # pierde el numero, se pierde lo unico que hace creible "la mitad no es trabajo".
+    tabla = ARNES / "CLASSIFICATION.md"
+    comprobaciones += 3
+    if not tabla.exists():
+        fallos.append("harness/CLASSIFICATION.md  no existe")
+    else:
+        cuerpo = tabla.read_text(encoding="utf-8")
+        if "266" not in cuerpo:
+            fallos.append("harness/CLASSIFICATION.md  perdio de donde salio la tabla "
+                          "(las 266 menciones reales)")
+        filas = [l for l in cuerpo.splitlines() if l.startswith("| **")]
+        if len(filas) < 13:
+            fallos.append(f"harness/CLASSIFICATION.md  la tabla quedo en {len(filas)} "
+                          f"filas y tenia 13")
+
+    # Los ejemplos son lo que mas corrige a un modelo chico: uno bien y uno mal.
+    ejemplos = ARNES / "EXAMPLES.md"
+    comprobaciones += 1
+    if not ejemplos.exists() or "## One handled well" not in ejemplos.read_text(encoding="utf-8"):
+        fallos.append("harness/EXAMPLES.md  ya no trae el mensaje atendido bien")
+
+    # Lo que el prompt manda leer tiene que existir en el arnes, o el `cat` no trae nada.
+    sembrados = {p.name for p in ARNES.glob("*.md")}
+    for rel in ("prompts/triage.md", "prompts/take.md"):
+        cuerpo = (RAIZ / rel).read_text(encoding="utf-8")
+        nombrados = set(re.findall(r"\b([A-Z][A-Z]+\.md)\b", cuerpo))
+        comprobaciones += 1
+        if not nombrados:
+            fallos.append(f"{rel}  ya no manda leer el arnes")
+        for archivo in sorted(nombrados - sembrados):
+            fallos.append(f"{rel}  manda leer {archivo}, que el plugin no siembra")
+
+    # Y cada archivo del arnes tiene que decir en el propio archivo que pasa con una
+    # edicion a mano: saberlo no puede exigir leer el codigo del plugin.
+    for ruta in sorted(ARNES.glob("*.md")):
+        comprobaciones += 1
+        cabecera = ruta.read_text(encoding="utf-8")[:1200]
+        if "you edited is yours" not in cabecera:
+            fallos.append(f"harness/{ruta.name}  no dice en el propio archivo que pasa "
+                          f"con una edicion a mano en la proxima actualizacion")
+
+    if fallos:
+        print("Se perdio una regla al mudar la doctrina al arnes:", file=sys.stderr)
+        for f in dict.fromkeys(fallos):
+            print(f"  {f}", file=sys.stderr)
+        return 1
+    print(f"{comprobaciones} comprobaciones: las {len(REGLAS)} reglas duras siguen "
+          f"alcanzables por el arnes y por los dos prompts")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

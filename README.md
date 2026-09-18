@@ -88,6 +88,37 @@ comentarios internos del equipo no se espejan nunca en un grupo de un cliente.
   todo lo que ya estaba abierto: estrenar la función no puede mandar una ráfaga de
   mensajes a grupos de clientes.
 
+## El arnés del agente: `AGENTS.md` y compañía
+
+Todo lo que el agente sabía vivía en el prompt, que se lee una vez por corrida: un
+modelo más chico improvisa. Ahora el plugin siembra cuatro archivos en su propia
+carpeta de trabajo (`<userData>/plugin-workspaces/ab2web.orca-wa-inbox`) cada vez que
+arranca, y ahí son contexto permanente — Orca además le mete el `AGENTS.md` de la
+carpeta al agente sin que nadie se lo pida.
+
+| archivo | qué lleva |
+|---|---|
+| `AGENTS.md` | las cinco reglas duras: la credencial no pasa por el agente, sin `responder` no se envía, en la duda no se abre tarjeta, una conversación `ninguno` nunca abre una, y el idioma sale de `wa-scope voice` |
+| `COMMANDS.md` | cada comando con sus banderas reales, generado del `--help` de las propias herramientas: no puede envejecer en silencio |
+| `CLASSIFICATION.md` | qué es soporte y qué no, de las 266 menciones reales que armaron la tabla |
+| `EXAMPLES.md` | un mensaje atendido bien y uno atendido mal, paso a paso |
+
+**Son tuyos para editar.** La regla está escrita en la cabecera de cada archivo, así
+que no hace falta leer el código para saberla:
+
+- Una sección `##` que **no tocaste** se reemplaza con la versión nueva del plugin.
+- Una sección `##` que **editaste** es tuya desde ese momento: el plugin conserva tu
+  texto y no vuelve a reescribir esa sección. Las demás siguen actualizándose.
+- Una sección `##` que **agregaste** se conserva, al final del archivo.
+- Si borrás el archivo, el plugin lo vuelve a escribir entero.
+
+El plugin distingue las dos cosas con un sha256 de lo último que él escribió, que
+guarda en `.harness.json` al lado. Es la misma regla que usa Orca para los campos de
+una automatización de un plugin.
+
+Si esta versión de Orca todavía no le da carpeta al plugin, no se siembra nada, el
+motivo queda en el estado que lee el panel y **todo lo demás funciona igual**.
+
 ## Lo que el plugin NO hace
 
 - No sale a internet: no declara `net:fetch`. Todo es local.
@@ -134,11 +165,12 @@ npm run check
 | | qué comprueba |
 |---|---|
 | `scripts/check-panels` | que el `<script>` inline de `config.html` y `activity.html` parsee. Si no parsea, el panel se renderiza vacío y sin error visible. |
-| `scripts/check-prompts` | que `prompts/*.md` no tengan voseo. El agente le escribe a clientes en Colombia. |
+| `scripts/check-prompts` | que `prompts/*.md` y `harness/*.md` no tengan voseo. El agente le escribe a clientes en Colombia. |
+| `scripts/check-harness` | que ninguna regla dura se haya perdido al mudar doctrina del prompt al arnés: cada una tiene que seguir alcanzable por los dos caminos, el `AGENTS.md` y los dos prompts. |
 | `scripts/check-clis` | que los cuatro CLIs de `bin/` arranquen de verdad. Compilar no alcanza. |
 | `scripts/check-closing` | 36 pruebas del aviso de cierre contra una base temporal: el guardia del backlog, un aviso por tarjeta, `completed` vs `cancelled`, y el permiso. Corre el CLI de verdad, con `HOME` movido para no tocar la base real. |
 | `test/panels.test.mjs` | 90 pruebas sobre los paneles con jsdom y el puente del host simulado, incluidos los tres finales de la búsqueda de conversaciones y el botón de reintento. |
-| `test/worker.test.mjs` | 19 pruebas sobre `main.mjs` con el host simulado: que un sync que falla deje escrito el motivo, y que el pedido del panel se atienda una sola vez y se pare al apagar el plugin. Las herramientas son guiones falsos en un directorio temporal: no toca WhatsApp. |
+| `test/worker.test.mjs` | 37 pruebas sobre `main.mjs` con el host simulado: que un sync que falla deje escrito el motivo, que el pedido del panel se atienda una sola vez, y la siembra del arnés entera — que aparezcan los cuatro archivos, que la referencia salga del `--help` de verdad, y que una segunda activación respete lo que el usuario editó mientras actualiza lo que no tocó. Corre con `HOME` movido: no toca WhatsApp ni la carpeta real. |
 | `npm run shots` | fotografía los dos paneles a 1440, 768, 390 y 320 px en tema claro y oscuro, más los tres estados de la búsqueda a 1440 y 320, y falla si algo desborda a lo ancho. |
 
 `scripts/` es herramienta de desarrollo; `bin/` son los cuatro CLIs que el plugin
