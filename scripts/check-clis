@@ -748,6 +748,27 @@ def revisa_migracion_cuentas(fallos: list) -> int:
         elif local.get("authorized_chats") != 2:
             fallos.append(f"wa-scope accounts conto {local.get('authorized_chats')} "
                           "conversaciones autorizadas y eran 2")
+
+        # Una linea web recien conectada nace APAGADA —todavia no hay identidad— y el
+        # listado la tiene que seguir mostrando igual. Es el defecto reportado: la fila
+        # aparecia "esperando el escaneo" y desaparecia, porque quien la pintaba la leia
+        # de una fuente que solo devuelve las habilitadas. `pending` es lo que separa
+        # una recien conectada de una caida: las dos vienen apagadas y sin fecha.
+        subprocess.run([str(BIN / "wa-scope"), "accounts", "--connect", "perfil-qr",
+                        "--label", "NoVa", "--json"],
+                       capture_output=True, text=True, env=env, timeout=120)
+        p = subprocess.run([str(BIN / "wa-scope"), "accounts", "--json"],
+                           capture_output=True, text=True, env=env, timeout=120)
+        cuentas = json.loads(p.stdout or "[]")
+        hechas += 3
+        web = next((c for c in cuentas if c.get("kind") == "web"), None)
+        if not web:
+            fallos.append(f"una linea web a medio enlazar no se lista: {cuentas!r}")
+        else:
+            if web.get("enabled") is not False:
+                fallos.append(f"la linea pendiente se lista habilitada: {web!r}")
+            if web.get("pending") is not True:
+                fallos.append(f"la linea pendiente no se distingue de una caida: {web!r}")
     return hechas
 
 

@@ -278,16 +278,31 @@ const WEB_SONDEO_LENTO_MS = 60 * 1000
 // instalaciones estan asi: mirar cada minuto seria un proceso por minuto para nada.
 const WEB_SONDEO_OCIOSO_MS = 5 * 60 * 1000
 
-/** Deja escrito el estado real de cada linea, y asciende la que ya termino de escanear. */
+/** Deja escrito el estado real de cada linea, y asciende la que ya termino de escanear.
+ *
+ *  Devuelve las lineas, o `null` cuando el registro no se pudo leer. Son dos respuestas
+ *  distintas y antes eran la misma —lista vacia—: el que desvincula apagaba la ruta web
+ *  porque "no quedan lineas", cuando lo unico que habia pasado es que wa-scope no
+ *  contesto. Una lectura fallida no puede deshacer lo que el usuario acaba de conectar. */
 async function refrescarLineas(orca, waScope, { motivo = 'timer' } = {}) {
   const exe = orcaCli()
+  const previo = (await leer(orca, WEB_LINES_KEY)) ?? {}
+  // Donde quedo la pestana lo sabe SOLO quien la abrio, y el sondeo pisa esta clave
+  // cada tres segundos: sin arrastrarlo, la frase que dice donde buscar el QR vivia
+  // esos tres segundos y desaparecia justo cuando el usuario la iba a leer.
+  const lugar = previo.placement
+    ? { placement: previo.placement, project: previo.project ?? null }
+    : {}
   let cuentas = []
   try {
     cuentas = await cuentasWeb(waScope)
   } catch (error) {
-    await guardar(orca, WEB_LINES_KEY, { at: new Date().toISOString(), lines: [],
+    // Las filas de antes se quedan: publicar una lista vacia por una lectura que fallo
+    // le dice al usuario que no tiene ninguna linea, que es exactamente lo contrario.
+    await guardar(orca, WEB_LINES_KEY, { ...lugar, at: new Date().toISOString(),
+      lines: Array.isArray(previo.lines) ? previo.lines : [],
       error: 'sin-registro', detail: String(error?.message ?? '').slice(0, 200) })
-    return []
+    return null
   }
   if (!cuentas.length) {
     await guardar(orca, WEB_LINES_KEY,
@@ -315,7 +330,7 @@ async function refrescarLineas(orca, waScope, { motivo = 'timer' } = {}) {
     }
   }
   await guardar(orca, WEB_LINES_KEY, {
-    at: new Date().toISOString(), lines: lineas, motivo,
+    ...lugar, at: new Date().toISOString(), lines: lineas, motivo,
     ...(sinIdentidad ? { error: 'sin-identidad', detail: sinIdentidad } : {})
   })
   return lineas
@@ -385,8 +400,10 @@ async function atenderWeb(orca, waScope, pedido, contexto) {
     const quedan = await refrescarLineas(orca, waScope, { motivo: 'unlink' })
     // Sin ninguna linea, la ruta web no tiene de donde leer: dejarla encendida haria
     // que `sources()` se colgara de cualquier pestana de WhatsApp Web que hubiera.
+    // `null` es "no pude leer el registro", y ahi NO se apaga nada: apagar por una
+    // lectura fallida deshacia una linea sana que el usuario nunca toco.
     let apagado = null
-    if (!quedan.length) {
+    if (quedan && !quedan.length) {
       // Se dice si no se pudo apagar. Tragarselo dejaba al plugin leyendo por una via
       // sin linea — cualquier pestana de WhatsApp Web abierta — despues de que el
       // usuario dijo justo que no.
@@ -396,6 +413,10 @@ async function atenderWeb(orca, waScope, pedido, contexto) {
     }
     const sobras = [...(borrado.sobras ?? [])]
     if (apagado) sobras.push({ que: 'read_web', detail: apagado.message })
+    if (!quedan) {
+      sobras.push({ que: 'read_web',
+        detail: 'the registry did not answer, so the web route was left as it was' })
+    }
     await veredicto(orca, pedido, sobras.length
       ? { ok: false,
           code: 'a-medias',
@@ -523,6 +544,12 @@ export default function activate(orca) {
   let ultimoWeb = null
   let proximaSonda = 0
   let sondeando = false
+  // Enlazar una linea son dos llamadas a la CLI de Orca con 30 s de tope cada una, y
+  // el sondeo sigue latiendo cada tres segundos mientras tanto: sin esta bandera, la
+  // vuelta de en medio leia un registro donde la linea TODAVIA no estaba y publicaba
+  // "no conectaste ninguna linea" encima del enlace en curso. Eso es el "aparece y
+  // desaparece" que se reporto.
+  let atendiendo = false
   async function contextoActivo() {
     const r = await orca.host.call('workspace.readContext', {}).catch(() => null)
     return r && typeof r === 'object' ? (r.value ?? r) : null
@@ -538,12 +565,15 @@ export default function activate(orca) {
         // Lo que reviente aca tiene que llegar al panel. Sin esto una excepcion a mitad
         // del enlace —un `run` que rechaza, el CLI de Orca que no esta— se la comia el
         // catch del setInterval y el clic no dejaba rastro ninguno.
+        atendiendo = true
         try {
           await atenderWeb(orca, await tool('wa-scope'), pedido, await contextoActivo())
         } catch (error) {
           orca.log(`web request ${pedido.action} failed: ${error.message}`)
           await veredicto(orca, pedido, { ok: false, code: motivoDe(error),
             detail: String(error?.message ?? error).slice(0, 300) })
+        } finally {
+          atendiendo = false
         }
         proximaSonda = 0
         return
@@ -552,13 +582,14 @@ export default function activate(orca) {
       // esperando una respuesta que no va a llegar.
       await veredicto(orca, pedido, { ok: false, code: 'vencido', detail: '' })
     }
-    if (sondeando || Date.now() < proximaSonda) return
+    if (atendiendo || sondeando || Date.now() < proximaSonda) return
     sondeando = true
     try {
       const lineas = await refrescarLineas(orca, await tool('wa-scope'))
       // Rapido mientras algo este a medias — esperando el escaneo, cargando, sin
-      // pestana —; lento cuando todo esta enlazado y no hay nada que mirar.
-      const aMedias = lineas.some((l) => l.state !== 'enlazada')
+      // pestana —; lento cuando todo esta enlazado y no hay nada que mirar. Un registro
+      // que no contesto (null) tampoco es un estado en reposo: se vuelve a mirar ya.
+      const aMedias = !lineas || lineas.some((l) => l.state !== 'enlazada')
       proximaSonda = Date.now() + (aMedias ? WEB_SONDEO_RAPIDO_MS
         : lineas.length ? WEB_SONDEO_LENTO_MS : WEB_SONDEO_OCIOSO_MS)
     } catch (error) {

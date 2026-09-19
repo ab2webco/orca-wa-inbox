@@ -603,6 +603,195 @@ console.log('[]')
   else process.env.ORCA_CLI_COMMAND = previo
 }
 
+// ───────── una linea conectada no se puede borrar sola ─────────
+// El defecto reportado: la fila aparecia "esperando el escaneo" y desaparecia sola, y
+// la ruta web volvia a "no" sin que el usuario tocara nada. Tres caminos distintos
+// publicaban "no hay ninguna linea" sin que eso fuera cierto — el sondeo corriendo en
+// medio de un enlace, una lectura del registro que fallo, y el desvincular que apagaba
+// la ruta por esa misma lista vacia.
+console.log('\nworker: una linea conectada no se puede borrar sola')
+{
+  /** Un wa-scope con registro de verdad en un archivo: conecta, lista, olvida. */
+  function scopeConRegistro (nombre, { fallaListado = 0, inicial = [] } = {}) {
+    const dir = join(RAIZ, nombre)
+    mkdirSync(dir, { recursive: true })
+    const estado = join(dir, 'registro.json')
+    const bitacora = join(dir, 'llamadas.txt')
+    writeFileSync(estado, JSON.stringify({ cuentas: inicial, listados: 0 }))
+    writeFileSync(join(dir, 'wa-scope'), `#!/usr/bin/env node
+const fs = require('fs')
+const EST = ${JSON.stringify(estado)}
+const a = process.argv.slice(2)
+fs.appendFileSync(${JSON.stringify(bitacora)}, a.join(' ') + '\\n')
+const s = JSON.parse(fs.readFileSync(EST, 'utf8'))
+const guardar = () => fs.writeFileSync(EST, JSON.stringify(s))
+const arg = (n) => { const i = a.indexOf(n); return i >= 0 ? a[i + 1] : null }
+if (a[0] === 'accounts' && arg('--connect')) {
+  const p = arg('--connect')
+  // Igual que cuenta_conectar: nace apagada y con id provisional sobre el perfil.
+  const fila = { id: 'web:pending:' + p, kind: 'web', label: arg('--label') || p,
+    profile: p, enabled: false, pending: true, linked_at: null, authorized_chats: 0 }
+  s.cuentas.push(fila); guardar()
+  console.log(JSON.stringify([fila])); process.exit(0)
+}
+if (a[0] === 'accounts' && arg('--forget')) {
+  const id = arg('--forget')
+  const fila = s.cuentas.find((c) => c.id === id) || null
+  s.cuentas = s.cuentas.filter((c) => c.id !== id); guardar()
+  console.log(JSON.stringify(fila ? [fila] : [])); process.exit(0)
+}
+if (a[0] === 'accounts') {
+  s.listados += 1; guardar()
+  // El listado numero N revienta: es la lectura que falla a mitad de una sesion sana.
+  if (${fallaListado} && s.listados === ${fallaListado}) {
+    process.stderr.write('sqlite3.OperationalError: database is locked\\n')
+    process.exit(1)
+  }
+  console.log(JSON.stringify(s.cuentas)); process.exit(0)
+}
+if (a[0] === 'sync') { console.log(JSON.stringify([{ synced: true }])); process.exit(0) }
+console.log('[]')
+`, { mode: 0o755 })
+    writeFileSync(join(dir, 'wa-read'), '#!/usr/bin/env node\nconsole.log("[]")\n',
+      { mode: 0o755 })
+    return { dir, llamadas: () => {
+      try { return readFileSync(bitacora, 'utf8').trim().split('\n') } catch { return [] }
+    } }
+  }
+
+  /** La CLI de Orca: pestana y perfil en memoria, y `tab create` todo lo lenta que haga falta. */
+  function orcaWeb (nombre, { lentoMs = 0 } = {}) {
+    const dir = join(RAIZ, nombre)
+    mkdirSync(dir, { recursive: true })
+    const estado = join(dir, 'tabs.json')
+    writeFileSync(estado, JSON.stringify({ tabs: [] }))
+    const exe = join(dir, 'orca')
+    writeFileSync(exe, `#!/usr/bin/env node
+const fs = require('fs')
+const EST = ${JSON.stringify(estado)}
+const a = process.argv.slice(2)
+const s = JSON.parse(fs.readFileSync(EST, 'utf8'))
+const ok = (result) => { console.log(JSON.stringify({ ok: true, result })); process.exit(0) }
+const arg = (n) => { const i = a.indexOf(n); return i >= 0 ? a[i + 1] : null }
+const cmd = a.join(' ')
+if (cmd.startsWith('tab list')) return ok({ tabs: s.tabs })
+if (cmd.startsWith('tab profile create')) return ok({ profile: { id: 'perfil-1' } })
+if (cmd.startsWith('tab create')) {
+  if (${lentoMs}) require('child_process').execSync('sleep ' + (${lentoMs} / 1000))
+  const id = 'page-' + (s.tabs.length + 1)
+  s.tabs.push({ browserPageId: id, url: arg('--url'), profileId: arg('--profile') })
+  fs.writeFileSync(EST, JSON.stringify(s))
+  return ok({ browserPageId: id })
+}
+if (cmd.startsWith('tab close')) {
+  s.tabs = s.tabs.filter((t) => t.browserPageId !== arg('--page'))
+  fs.writeFileSync(EST, JSON.stringify(s)); return ok({ closed: true })
+}
+if (cmd.startsWith('tab switch')) return ok({ switched: 1, browserPageId: arg('--page') })
+if (cmd.startsWith('tab profile delete')) return ok({ deleted: true })
+if (cmd.startsWith('eval')) return ok({ result: '{"linked":false,"qr":true}' })
+console.log(JSON.stringify({ ok: false, error: { code: 'unsupported' } }))
+`, { mode: 0o755 })
+    return exe
+  }
+
+  async function pedir (orca, pedido, limiteMs = 30000) {
+    const at = new Date().toISOString()
+    orca.store.webRequest = { at, ...pedido }
+    await hasta(() => orca.store.webStatus && orca.store.webStatus.requestAt === at,
+      limiteMs)
+    return orca.store.webStatus
+  }
+
+  const previo = process.env.ORCA_CLI_COMMAND
+
+  {
+    // Lo que se reporto: se aprieta Conectar, el enlace tarda —dos llamadas a la CLI de
+    // Orca con 30 s de tope cada una— y el sondeo, que late cada 3 s, lee un registro
+    // donde la linea todavia no esta y publica "no conectaste ninguna linea". El panel
+    // lo pinta encima del enlace en curso. Control: si el sondeo vuelve a poder
+    // publicar durante un pedido, aca aparece una lista vacia.
+    process.env.ORCA_CLI_COMMAND = orcaWeb('orca-lento', { lentoMs: 9000 })
+    const reg = scopeConRegistro('reg-lento')
+    const orca = hostFalso(reg.dir, { chats: [] })
+    const apagar = activate(orca)
+    const vacios = []
+    const mirando = setInterval(() => {
+      const wl = orca.store.webLines
+      if (wl && Array.isArray(wl.lines) && !wl.lines.length && !wl.error) vacios.push(wl)
+    }, 200)
+    const st = await pedir(orca, { action: 'link', label: 'NoVa' }, 60000)
+    clearInterval(mirando)
+    ok('el enlace lento termina bien', st && st.ok === true, JSON.stringify(st))
+    ok('y el sondeo NO publica "no hay ninguna linea" mientras el enlace corre',
+      vacios.length === 0, `${vacios.length} vueltas con la lista vacia`)
+    ok('la fila pendiente queda publicada',
+      orca.store.webLines && orca.store.webLines.lines.length === 1 &&
+      orca.store.webLines.lines[0].state === 'esperando',
+      JSON.stringify(orca.store.webLines))
+    // Donde se abrio la pestana: lo sabe solo quien la abrio, y el sondeo pisa esa
+    // clave cada 3 s. Duraba tres segundos y desaparecia justo cuando el usuario
+    // buscaba el QR. Control: sin arrastrarlo, aca queda sin placement.
+    ok('y dice donde quedo la pestana apenas termina',
+      orca.store.webLines.placement === 'flotante',
+      JSON.stringify(orca.store.webLines))
+    await new Promise((r) => setTimeout(r, 7000))
+    ok('y lo sigue diciendo dos vueltas del sondeo despues, con la linea esperando',
+      orca.store.webLines.placement === 'flotante' &&
+      orca.store.webLines.lines[0].state === 'esperando',
+      JSON.stringify(orca.store.webLines))
+    apagar()
+  }
+
+  {
+    // Una lectura del registro que falla NO es "no hay lineas". Publicarla vacia le
+    // dice al usuario que perdio la linea que acaba de conectar.
+    process.env.ORCA_CLI_COMMAND = orcaWeb('orca-lectura')
+    const reg = scopeConRegistro('reg-lectura', { fallaListado: 3 })
+    const orca = hostFalso(reg.dir, { chats: [] })
+    const apagar = activate(orca)
+    await pedir(orca, { action: 'link', label: 'NoVa' })
+    const conFila = JSON.parse(JSON.stringify(orca.store.webLines))
+    await hasta(() => orca.store.webLines && orca.store.webLines.error === 'sin-registro',
+      20000)
+    const roto = orca.store.webLines
+    ok('una lectura fallida del registro se anuncia como tal',
+      roto && roto.error === 'sin-registro', JSON.stringify(roto))
+    ok('y NO borra la fila que ya estaba: no hay lectura que desconecte una linea',
+      roto && Array.isArray(roto.lines) && roto.lines.length === 1 &&
+      roto.lines[0].label === 'NoVa',
+      `${JSON.stringify(roto)} — antes ${JSON.stringify(conFila.lines)}`)
+    apagar()
+  }
+
+  {
+    // Desvincular una de dos lineas con el registro mudo: "no quedan lineas" era una
+    // lista vacia que en realidad queria decir "no pude leer". Apagaba read_web y
+    // dejaba sin fuente a la linea sana que nadie toco.
+    process.env.ORCA_CLI_COMMAND = orcaWeb('orca-desv')
+    const reg = scopeConRegistro('reg-desv', {
+      // La PRIMERA lectura tras el olvido es la que decide si se apaga la ruta.
+      fallaListado: 1,
+      inicial: [{ id: 'web:1', kind: 'web', label: 'NoVa', profile: 'p1', enabled: true,
+        pending: false, linked_at: '2026-09-18 10:00', authorized_chats: 2 },
+      { id: 'web:2', kind: 'web', label: 'Otra', profile: 'p2', enabled: true,
+        pending: false, linked_at: '2026-09-18 10:00', authorized_chats: 0 }]
+    })
+    const orca = hostFalso(reg.dir, { chats: [], readWeb: 'on' })
+    const apagar = activate(orca)
+    await pedir(orca, { action: 'unlink', id: 'web:2', profile: 'p2' })
+    ok('con el registro mudo, desvincular NO apaga la ruta web',
+      !reg.llamadas().some((l) => l.startsWith('config read_web off')),
+      JSON.stringify(reg.llamadas()))
+    ok('y el panel sigue viendo la ruta encendida', orca.store.readWeb === 'on',
+      `readWeb = ${orca.store.readWeb}`)
+    apagar()
+  }
+
+  if (previo === undefined) delete process.env.ORCA_CLI_COMMAND
+  else process.env.ORCA_CLI_COMMAND = previo
+}
+
 // ───────── el arnes no se siembra desde dentro de la valla ─────────
 // El worker corre con `--permission` y sin ningun permiso de escritura: ahi dentro
 // `existsSync` no devuelve false, LANZA, y el motivo que quedaba escrito era falso
