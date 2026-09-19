@@ -17,6 +17,7 @@ import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 // El estado del arnes va por el mismo canal que el del sync: el panel no puede
 // ejecutar nada, asi que sin esto no hay forma de saber si la carpeta se sembro.
@@ -42,12 +43,28 @@ function userDataRoots() {
   return ['orca', 'orca-dev', 'zzorcanametest'].map((d) => join(base, d))
 }
 
+/** El modelo de permisos de Node no contesta `false` a lo que no puede ver: LANZA
+ *  ERR_ACCESS_DENIED. Tratar las dos cosas igual era el defecto: el worker decia que
+ *  esta maquina no tiene userData teniendolo, y "no existe" y "no lo puedo ver" tienen
+ *  arreglos opuestos. El acceso denegado sube; lo que no esta devuelve false. */
 function esDirectorio(ruta) {
   try {
     return existsSync(ruta) && readdirSync(ruta) !== null
-  } catch {
+  } catch (error) {
+    if (error?.code === 'ERR_ACCESS_DENIED') throw error
     return false
   }
+}
+
+/** Si este proceso corre tras la valla de permisos de Node. El worker del plugin arranca
+ *  con `--permission --allow-fs-read=<carpeta del plugin>` y SIN ningun `--allow-fs-write`:
+ *  ahi dentro no hay decision de ruta ni escritura posible, y preguntarselo al disco solo
+ *  da un motivo falso. Los subprocesos NO heredan la valla — por eso la siembra corre en
+ *  uno, y por eso el doctor, que es un subproceso, siempre dio ok. */
+export function vallado() {
+  const p = process.permission
+  if (!p || typeof p.has !== 'function') return false
+  return !p.has('fs.write')
 }
 
 /** El manifiesto del plugin, que es de donde salen la llave y la version. Copiarlas
@@ -179,13 +196,15 @@ export async function referencia(toolsDir) {
   return bloques.join('\n\n')
 }
 
+/** Las huellas anotadas. Sin archivo son {} — es la primera siembra —, pero un archivo
+ *  que EXISTE y no se puede leer no puede leerse como {}: sin huellas toda seccion
+ *  parece del plugin y las ediciones del usuario se reescriben en silencio, que es
+ *  justo lo contrario de lo que el manifiesto existe para impedir. */
 function leerManifiesto(dir) {
-  try {
-    const dato = JSON.parse(readFileSync(join(dir, MANIFIESTO), 'utf8'))
-    return dato && typeof dato === 'object' && dato.files ? dato.files : {}
-  } catch {
-    return {}
-  }
+  const ruta = join(dir, MANIFIESTO)
+  if (!existsSync(ruta)) return {}
+  const dato = JSON.parse(readFileSync(ruta, 'utf8'))
+  return dato && typeof dato === 'object' && dato.files ? dato.files : {}
 }
 
 /**
@@ -198,6 +217,13 @@ export async function sembrar(pluginDir, toolsDir) {
   const at = new Date().toISOString()
   let dir = null
   let version = '0.0.0'
+  // Nada de esto puede correr dentro del worker, y decirlo aca es lo que impide volver
+  // a inventar un motivo mirando el disco. Quien llama lo corre en un subproceso.
+  if (vallado()) {
+    return { ok: false, at, reason: 'vallado',
+      detail: 'this process runs behind Node\'s permission fence and cannot write: ' +
+              'the seeding has to run in a subprocess' }
+  }
   try {
     version = manifiesto(pluginDir).version
     dir = workspaceDir(pluginDir)
@@ -207,6 +233,10 @@ export async function sembrar(pluginDir, toolsDir) {
     }
     mkdirSync(dir, { recursive: true })
   } catch (error) {
+    if (error?.code === 'ERR_ACCESS_DENIED') {
+      return { ok: false, at, dir, reason: 'sin-acceso',
+        detail: String(error?.message ?? error).slice(0, 300) }
+    }
     return { ok: false, at, dir, reason: 'sin-carpeta',
       detail: String(error?.message ?? error).slice(0, 300) }
   }
@@ -221,11 +251,11 @@ export async function sembrar(pluginDir, toolsDir) {
     motivoAyuda = String(error?.message ?? error).slice(0, 200)
   }
 
-  const marcas = leerManifiesto(dir)
   const archivos = []
   const nuevoManifiesto = {}
   const fuente = join(pluginDir, 'harness')
   try {
+    const marcas = leerManifiesto(dir)
     sembrarArchivos({ fuente, dir, ayuda, motivoAyuda, marcas, archivos, nuevoManifiesto })
     writeFileSync(join(dir, MANIFIESTO),
       `${JSON.stringify({ plugin: manifiesto(pluginDir).key, version, at, files: nuevoManifiesto }, null, 2)}\n`,
@@ -275,4 +305,19 @@ function sembrarArchivos({ fuente, dir, ayuda, motivoAyuda, marcas, archivos, nu
       refreshed: junto.refrescadas
     })
   }
+}
+
+
+// Y como subproceso: `node harness.mjs <pluginDir> <toolsDir>` imprime el mismo estado
+// que devuelve sembrar(). Es la unica forma de que el worker siembre — dentro de la
+// valla no hay permiso de escritura ninguno — y deja una sola implementacion en vez de
+// una copia en Python que se desincronizaria.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const [pluginDir, toolsDir] = process.argv.slice(2)
+  sembrar(pluginDir, toolsDir || join(pluginDir, 'bin'))
+    .then((estado) => process.stdout.write(JSON.stringify(estado)))
+    .catch((error) => process.stdout.write(JSON.stringify({
+      ok: false, at: new Date().toISOString(), reason: 'fallo',
+      detail: String(error?.message ?? error).slice(0, 300)
+    })))
 }

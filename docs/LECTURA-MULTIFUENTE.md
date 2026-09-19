@@ -84,8 +84,50 @@ Dos, no una lista de tres, porque las fuentes se suman:
   abajo. En `off` la bandeja sale igual: quien te nombro, en que conversacion, cuando y
   con que `stanza_id`; el cuerpo sale como `[web:no-text]`.
 
-Se validan como el resto de los enums (`CONFIG_OPCIONES` en `bin/wa-scope`), se
+Se validan como el resto de los enums (`CONFIG_OPCIONES` en `bin/wa_settings.py`), se
 guardan en `settings` y viajan al panel por `PANEL_SETTINGS`.
+
+### De donde sale el valor efectivo
+
+Tres fuentes, en este orden, y las dos herramientas usan la MISMA regla porque leen el
+mismo modulo (`bin/wa_settings.py`):
+
+1. `WA_READ_SETTING_<CLAVE>` en el entorno — solo para `wa-read`, solo esa corrida.
+2. Lo que el panel guardo en el storage del plugin (claves planas: `readLocal`,
+   `readWeb`, `readWebText`). **Manda sobre la base**: es lo que el usuario acaba de
+   tocar, y `wa-scope config` lo espeja de vuelta en cada escritura.
+3. La tabla `settings` de `~/.wa-inbox/scope.db`.
+
+Tenerlo en un solo lado era el defecto: `wa-scope` mezclaba las dos y `wa-read` leia
+solo la base, asi que cambiar de donde lee en el panel dejaba a `wa-scope config`
+diciendo `read_web on` y a la lectura de verdad apagada, sin que nada lo dijera.
+
+### Cuando una via es requisito
+
+`local_manda = read_local encendida y no (read_web encendida y la sesion contesta)`, y
+lo simetrico para la web. Una via apagada no es requisito nunca: con `read_local off` el
+doctor dejo de pedir la app de escritorio, que es justo lo que el usuario apago. Con las
+dos apagadas sale la fila `no-source`, que bloquea — no hay de donde leer.
+
+## Las dos vias a la vez, y el mismo mensaje dos veces
+
+Las fuentes se suman de verdad: la app de escritorio leyendo el numero personal y una
+sesion web leyendo el del bot, en el mismo equipo, una sola bandeja.
+
+Dos lineas que comparten un grupo — o la MISMA linea vista por las dos vias, que es lo
+que pasa mientras el bot todavia no tiene numero propio — ven cada mensaje una vez cada
+una. `read_from_sources()` funde por `stanza_id`, que es la clave de idempotencia que la
+automation escribe en el issue: sin fundir, un mensaje son dos tarjetas.
+
+Quien gana: la PRIMERA fuente, que es la local — trae la ruta del adjunto en disco y el
+historial completo, y la web ninguna de las dos. De la segunda se toma solo lo que a la
+primera le falta (un cuerpo capturado donde la local no tiene texto, el
+`contexto_cerca`), porque quedarse con un lado entero tiraria eso sin decirlo. Las
+conversaciones se funden igual por `jid`; lo que no trae ninguna de las dos claves no se
+funde — `whoami` devuelve una fila POR LINEA y fundirlas seria borrar la segunda.
+
+Con dos fuentes la bandeja ademas se reordena por fecha y se le vuelve a aplicar el
+tope: cada fuente respeto el suyo, y sumarlas devolvia el doble de lo pedido.
 
 ## La identidad de una cuenta
 

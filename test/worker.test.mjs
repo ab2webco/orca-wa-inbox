@@ -20,6 +20,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'nod
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { execFile as execFileNode } from 'node:child_process'
 
 const RAIZ = mkdtempSync(join(tmpdir(), 'wa-inbox-worker-'))
 
@@ -511,6 +512,143 @@ console.log('\nworker: cada cuanto relee WhatsApp')
     const ms = await intervaloSync(orca)
     ok(nombre, ms === esperado, `${guardado} -> ${ms} ms, se esperaban ${esperado}`)
   }
+}
+
+// ───────── un pedido del panel que falla DEJA MOTIVO ─────────
+// Es el defecto que se reporto: se apretaba "Conectar cuenta", no aparecia ninguna
+// fila, no salia ningun error, y el nombre tipeado se perdia. Tres caminos distintos
+// se comian el motivo — el `catch` del setInterval, el `show` que solo resondeaba, y
+// el sondeo que tres segundos despues pisaba `webLines` con el estado limpio.
+console.log('\nworker: un pedido del panel que falla deja motivo')
+{
+  /** Un wa-scope que contesta el listado vacio, y lo que se le pida romper. */
+  function scopeWeb (nombre, { conectaFalla = false } = {}) {
+    const dir = join(RAIZ, nombre)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'wa-scope'), `#!/usr/bin/env node
+const a = process.argv.slice(2)
+if (a.includes('--connect') && ${conectaFalla}) {
+  process.stderr.write('sqlite3.OperationalError: database is locked\\n')
+  process.exit(1)
+}
+console.log('[]')
+`, { mode: 0o755 })
+    // wa-read tiene que existir: al activarse el worker corre el doctor.
+    writeFileSync(join(dir, 'wa-read'), '#!/usr/bin/env node\nconsole.log("[]")\n',
+      { mode: 0o755 })
+    return dir
+  }
+
+  /** Deja el pedido en el storage como lo deja el panel, y espera el veredicto. */
+  async function pedir (orca, pedido, limiteMs = 20000) {
+    const at = new Date().toISOString()
+    orca.store.webRequest = { at, ...pedido }
+    await hasta(() => orca.store.webStatus && orca.store.webStatus.requestAt === at,
+      limiteMs)
+    return orca.store.webStatus
+  }
+
+  const previo = process.env.ORCA_CLI_COMMAND
+
+  {
+    // Sin CLI de Orca no hay con que abrir la pestana. Antes esto escribia el motivo en
+    // `webLines` y el sondeo lo borraba en la vuelta siguiente.
+    process.env.ORCA_CLI_COMMAND = join(RAIZ, 'no-existe-este-orca')
+    const orca = hostFalso(scopeWeb('web-sin-orca'), { chats: [] })
+    const apagar = activate(orca)
+    const st = await pedir(orca, { action: 'link', label: 'Linea del bot' })
+    ok('conectar sin CLI de Orca deja veredicto', !!st, JSON.stringify(orca.store.webStatus))
+    ok('y el veredicto dice que fallo', st && st.ok === false, JSON.stringify(st))
+    ok('con el motivo en codigo, que el panel traduce',
+      st && st.code === 'sin-orca', `code = ${st && st.code}`)
+    ok('y dice a que pedido contesta', st && st.action === 'link',
+      JSON.stringify(st))
+    // Lo que se perdia: el sondeo corre cada 3 s y reescribia `webLines` sin error.
+    const antes = JSON.stringify(orca.store.webStatus)
+    await new Promise((r) => setTimeout(r, 7000))
+    ok('y el motivo sobrevive a dos vueltas del sondeo',
+      JSON.stringify(orca.store.webStatus) === antes,
+      `quedo ${JSON.stringify(orca.store.webStatus)}`)
+    apagar()
+  }
+
+  {
+    // El camino que se comia el `catch` del setInterval: `run()` rechaza a mitad del
+    // enlace y la excepcion salia del worker sin dejar una sola linea escrita.
+    process.env.ORCA_CLI_COMMAND = join(RAIZ, 'orca-conecta', 'orca')
+    const orca = hostFalso(scopeWeb('web-registro-roto', { conectaFalla: true }),
+      { chats: [] })
+    const apagar = activate(orca)
+    const st = await pedir(orca, { action: 'link', label: 'Linea del bot' })
+    ok('un registro que revienta a mitad del enlace deja veredicto', !!st,
+      JSON.stringify(orca.store.webStatus))
+    ok('y no se lo come el catch del timer', st && st.ok === false, JSON.stringify(st))
+    ok('y guarda la causa real, no solo que fallo',
+      st && /database is locked/.test(st.detail || ''), `detail = ${st && st.detail}`)
+    apagar()
+  }
+
+  {
+    // Ver una pestana que ya no esta: fallaba y solo resondeaba.
+    process.env.ORCA_CLI_COMMAND = join(RAIZ, 'no-existe-este-orca')
+    const orca = hostFalso(scopeWeb('web-sin-pestana'), { chats: [] })
+    const apagar = activate(orca)
+    const st = await pedir(orca, { action: 'show', pageId: 'page-que-no-esta' })
+    ok('ver una pestana que no se puede abrir deja veredicto',
+      st && st.ok === false && st.action === 'show', JSON.stringify(st))
+    apagar()
+  }
+
+  if (previo === undefined) delete process.env.ORCA_CLI_COMMAND
+  else process.env.ORCA_CLI_COMMAND = previo
+}
+
+// ───────── el arnes no se siembra desde dentro de la valla ─────────
+// El worker corre con `--permission` y sin ningun permiso de escritura: ahi dentro
+// `existsSync` no devuelve false, LANZA, y el motivo que quedaba escrito era falso
+// ("esta maquina no tiene userData") sobre una maquina que lo tiene.
+console.log('\nworker: el arnes se siembra fuera de la valla')
+{
+  const { vallado, sembrar } = await import('../harness.mjs')
+  ok('sin valla, este proceso puede escribir', vallado() === false,
+    `vallado() = ${vallado()}`)
+
+  const salida = await new Promise((resolve) => {
+    execFileNode(process.execPath,
+      ['--permission', `--allow-fs-read=${PLUGIN_DIR}`, '--input-type=module', '-e',
+        `const h = await import(${JSON.stringify(join(PLUGIN_DIR, 'harness.mjs'))})\n` +
+        `process.stdout.write(JSON.stringify({ vallado: h.vallado(),\n` +
+        `  estado: await h.sembrar(${JSON.stringify(PLUGIN_DIR)}, ${JSON.stringify(join(PLUGIN_DIR, 'bin'))}) }))`],
+      { timeout: 60000 }, (error, stdout) => resolve({ error, stdout }))
+  })
+  let leido = null
+  try { leido = JSON.parse(salida.stdout || 'null') } catch { leido = null }
+  ok('dentro de la valla el proceso se reconoce vallado',
+    leido && leido.vallado === true, JSON.stringify(salida).slice(0, 200))
+  ok('y no inventa un motivo mirando el disco',
+    leido && leido.estado && leido.estado.reason === 'vallado',
+    JSON.stringify(leido && leido.estado))
+
+  // Y la siembra de verdad, en un subproceso sin valla: es el camino que usa el worker.
+  const casa = join(RAIZ, 'siembra-fuera')
+  mkdirSync(join(casa, 'Library', 'Application Support', 'orca'), { recursive: true })
+  const hijo = await new Promise((resolve) => {
+    execFileNode(process.execPath, [join(PLUGIN_DIR, 'harness.mjs'), PLUGIN_DIR,
+      join(PLUGIN_DIR, 'bin')],
+    { timeout: 120000, env: { ...process.env, HOME: casa } }, (error, stdout) =>
+      resolve({ error, stdout }))
+  })
+  let estado = null
+  try { estado = JSON.parse(hijo.stdout || 'null') } catch { estado = null }
+  ok('el subproceso siembra y devuelve el estado por stdout',
+    estado && estado.ok === true, JSON.stringify(hijo).slice(0, 300))
+  ok('y la carpeta que eligio es la del userData de esa maquina',
+    estado && String(estado.dir || '').startsWith(casa),
+    `dir = ${estado && estado.dir}`)
+  // sembrar() en proceso, sin valla, sigue funcionando: es lo que corren estas pruebas.
+  const directo = await sembrar(PLUGIN_DIR, join(PLUGIN_DIR, 'bin'))
+  ok('y sembrar() sigue andando sin valla', directo.ok === true,
+    JSON.stringify(directo).slice(0, 200))
 }
 
 rmSync(RAIZ, { recursive: true, force: true })

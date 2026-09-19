@@ -219,7 +219,11 @@ export async function reabrirPestana({ exe, profile, contextoActivo }) {
            proyecto: destino.proyecto || null }
 }
 
-/** Saca la linea del registro, cierra su pestana y borra su perfil. */
+/** Saca la linea del registro, cierra su pestana y borra su perfil.
+ *
+ *  Lo que no se pudo borrar se devuelve en `sobras`. Callarlo dejaba la sesion enlazada
+ *  en disco despues de que el usuario dijo que la queria fuera, y el panel diciendo que
+ *  la linea ya no estaba. */
 export async function olvidarLinea({ exe, waScope, run, id, profile, pageId }) {
   const salida = await run(waScope, ['accounts', '--forget', id, '--json'])
   let quitada = null
@@ -228,14 +232,25 @@ export async function olvidarLinea({ exe, waScope, run, id, profile, pageId }) {
   } catch {
     quitada = null
   }
-  if (pageId) await orcaJson(exe, ['tab', 'close', '--page', pageId])
+  const sobras = []
+  if (pageId) {
+    const r = await orcaJson(exe, ['tab', 'close', '--page', pageId])
+    if (!r.ok) sobras.push({ que: 'pestana', code: r.code, detail: r.message })
+  }
   // El perfil se borra con la linea: dejarlo deja la sesion enlazada en disco, que es
   // justo lo que el usuario acaba de decir que no quiere.
-  if (profile) await orcaJson(exe, ['tab', 'profile', 'delete', '--profile', profile])
-  return { ok: true, quitada }
+  if (profile) {
+    const r = await orcaJson(exe, ['tab', 'profile', 'delete', '--profile', profile])
+    if (!r.ok) sobras.push({ que: 'perfil', code: r.code, detail: r.message })
+  }
+  return { ok: !sobras.length, quitada, sobras }
 }
 
-/** Promueve a su identidad real la linea que acaba de terminar de escanear. */
+/** Promueve a su identidad real la linea que acaba de terminar de escanear.
+ *
+ *  Lanza si el registro no contesta algo legible. Devolver null la dejaba `pending`
+ *  para siempre: el usuario escaneaba el QR, la sesion quedaba enlazada de verdad, y el
+ *  panel seguia diciendo "esperando el escaneo" sin motivo ninguno. */
 export async function identificarLinea({ waScope, run, id, lid, label }) {
   const args = ['accounts', '--identify', id, '--lid', lid, '--json']
   if (label) args.splice(args.length - 1, 0, '--label', label)
@@ -243,6 +258,7 @@ export async function identificarLinea({ waScope, run, id, lid, label }) {
   try {
     return JSON.parse(salida.stdout || 'null')?.[0] || null
   } catch {
-    return null
+    throw new Error('wa-scope accounts --identify returned no JSON: ' +
+      String(salida.stdout).slice(0, 200))
   }
 }

@@ -25,6 +25,19 @@ conversation opens no cards and the agent only reads, summarizes or replies.
 """
 import argparse, json, os, re, sqlite3, subprocess, sys, time
 
+# El modulo vive al lado, y esto se carga tanto como script como importado
+# por ruta desde los chequeos: sin esto el segundo caso no lo encuentra.
+# Sin esto Python deja un __pycache__ DENTRO de bin/, y el directorio del plugin
+# instalado esta direccionado por hash: un archivo que aparece despues de la
+# instalacion es justo lo que deja el plugin en "No valido".
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from wa_settings import (  # noqa: E402
+    CONFIG_NUMERICOS, CONFIG_OPCIONES, PANEL_SETTINGS, PLUGIN_ID,
+    PLUGIN_ID_ANTERIOR, plugin_store_path, plugin_store_raw,
+    plugin_store_targets, settings_from_plugin, user_data_roots,
+    valida_ajuste)
+
 def scope_db_path():
     """Estado propio de la herramienta. En Windows va al APPDATA y no al home."""
     if sys.platform == "win32":
@@ -38,66 +51,10 @@ DB = scope_db_path()
 # un wa-read de otra instalacion.
 WA_READ = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wa-read")
 # El panel del plugin guarda aca via storage.* del host. Es la MISMA verdad que ve el
-# CLI: sin esto, editar en el panel y editar por terminal serian dos registros distintos
-# que se pisan en silencio.
-# Hay un userData por build (orca, orca-dev, ...). Se toma el storage.json mas reciente,
-# que es el del Orca con el que el usuario esta trabajando de verdad.
-# El prefijo "orca-" no es decorativo: la identidad oficial de un plugin se calcula
-# como <publisher>.<prefijo><resto>, asi que sin el no puede ser oficial en nuestro
-# marketplace. El nombre viejo se sigue leyendo para no perder lo ya guardado.
-PLUGIN_ID = "ab2web.orca-wa-inbox"
-PLUGIN_ID_ANTERIOR = "ab2web.wa-inbox"
+# CLI, y vive en wa_settings.py porque wa-read tiene que leerla igual: tenerla solo
+# aca hacia que el panel y el lector de WhatsApp contestaran distinto.
 
 
-def user_data_roots():
-    """Donde Electron guarda el userData, que cambia por sistema. Tenerlo fijo a la
-    ruta de macOS hacia que en Windows y Linux el panel y el CLI leyeran archivos
-    distintos y pareciera que nada se guarda."""
-    if sys.platform == "darwin":
-        base = os.path.expanduser("~/Library/Application Support")
-    elif sys.platform == "win32":
-        base = os.environ.get("APPDATA") or os.path.expanduser("~/AppData/Roaming")
-    else:
-        base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    return [os.path.join(base, d) for d in ("orca", "orca-dev", "zzorcanametest")]
-
-
-PLUGIN_STORES = [os.path.join(r, "plugins-data", PLUGIN_ID, "storage.json")
-                 for r in user_data_roots()]
-# Solo para leer: si el usuario ya tenia alcance y tono guardados con el nombre
-# anterior, renombrar el plugin no puede parecer que se borro todo.
-PLUGIN_STORES_ANTERIORES = [os.path.join(r, "plugins-data", PLUGIN_ID_ANTERIOR, "storage.json")
-                            for r in user_data_roots()]
-
-
-def plugin_store_path():
-    """De donde se LEE. El nombre nuevo manda siempre: mezclar por fecha dejaba el
-    CLI escribiendo en la ruta nueva y leyendo de la vieja, asi que un ajuste
-    guardado no se veia nunca. El anterior solo entra si el nuevo no existe."""
-    existing = [p for p in PLUGIN_STORES if os.path.exists(p)]
-    if existing:
-        return max(existing, key=os.path.getmtime)
-    viejos = [p for p in PLUGIN_STORES_ANTERIORES if os.path.exists(p)]
-    if viejos:
-        return max(viejos, key=os.path.getmtime)
-    return PLUGIN_STORES[0]
-
-
-def plugin_store_targets():
-    """Escribe en TODOS los userData que existan (orca, orca-dev, ...). Si el usuario
-    trabaja en el build dev y solo escribieramos en el de produccion, el panel abriria
-    vacio y pareceria que no se guardo nada."""
-    out = []
-    for path in PLUGIN_STORES:
-        userdata = os.path.dirname(os.path.dirname(os.path.dirname(path)))
-        if os.path.isdir(userdata):
-            out.append(path)
-    # Y tambien donde ya habia datos con el nombre anterior: si el usuario todavia
-    # corre un Orca que carga el plugin viejo, su panel tiene que seguir al dia.
-    for path in PLUGIN_STORES_ANTERIORES:
-        if os.path.exists(path):
-            out.append(path)
-    return out or [PLUGIN_STORES[0]]
 MODES = ["off", "observar", "borrador", "responder"]
 # Servicios de tareas que Orca expone hoy por CLI. No todo equipo usa Plane.
 PROVIDERS = {
@@ -256,93 +213,9 @@ create table if not exists run_trace (
 """
 
 
-def plugin_store_raw():
-    try:
-        with open(plugin_store_path(), encoding="utf-8") as fh:
-            return json.load(fh)
-    except (OSError, ValueError):
-        return {}
-
-
 def plugin_store_read():
     scope = plugin_store_raw().get("scope")
     return scope if isinstance(scope, dict) else {}
-
-
-# El panel solo sabe escribir storage, y lo hace con claves planas. Traducirlas a
-# los nombres de settings es lo que evita que un tono guardado ahi no llegue nunca.
-PANEL_SETTINGS = {"tone": "tone", "agentName": "agent_name",
-                  "transcribeQuality": "transcribe_quality",
-                  # La ventana de lectura vivia solo en la terminal: desde el panel era
-                  # un tope escondido, y una mencion del viernes desaparecia el lunes
-                  # sin que nada lo dijera. Un limite invisible es peor que uno visible.
-                  "inboxDays": "inbox_days",
-                  "ownerName": "owner_name",
-                  "transcribe": "transcribe",
-                  "transcribeLang": "transcribe_lang",
-                  "readLocal": "read_local",
-                  # Cada cuanto el worker relee WhatsApp. Sale al panel porque es lo
-                  # que acota cuanto puede tardar un mensaje en aparecer: el precheck
-                  # contesta sobre el ultimo sync, asi que si esto fuera una constante
-                  # escondida el retraso tambien lo seria.
-                  "syncMinutes": "sync_minutes",
-                  "readWeb": "read_web",
-                  "readWebText": "read_web_text"}
-
-# Lo que cada ajuste acepta. Un valor invalido no revienta al guardarse: revienta
-# despues, en la corrida del agente, lejos de donde se tipeo — o peor, no revienta y
-# transcribe en el idioma equivocado sin decirlo.
-CONFIG_OPCIONES = {
-    # local no manda el audio a ningun lado. off apaga la transcripcion. `api` se
-    # ofrecia y no existe: wa-transcribe sale con "not implemented yet" en cada audio,
-    # asi que elegirlo solo podia apagar la transcripcion sin decirlo.
-    "transcribe": ("local", "off"),
-    "transcribe_quality": ("optima", "minima"),
-    # Solo los idiomas que el panel ofrece y con los que se probo. Un codigo sin probar
-    # degrada la transcripcion en silencio, y eso se descubre tres audios despues.
-    "transcribe_lang": ("auto", "es", "en", "pt"),
-    # De donde lee. Son dos interruptores y no una lista de tres porque las fuentes se
-    # SUMAN: apagar la local en un equipo que la tiene es una eleccion real (leer solo
-    # la linea de la empresa), y encender la web no apaga la del escritorio.
-    "read_local": ("on", "off"),
-    "read_web": ("on", "off"),
-    # El TEXTO de los mensajes que trae la via web, que es una eleccion aparte de
-    # leerla. `memoria` no abre ninguna conversacion y no marca nada como leido: lee el
-    # cuerpo de lo que esa pestana ya tenia cargado y deja el marcador `[web:no-text]`
-    # en lo demas. El modo que si abriria los chats no existe a proposito — abrir una
-    # conversacion en WhatsApp Web la marca leida tambien en el telefono del usuario.
-    "read_web_text": ("off", "memoria"),
-}
-CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s", "sync_minutes", "web_timeout_s",
-                    "capture_max", "capture_days")
-
-
-def valida_ajuste(key, value):
-    """Devuelve el motivo del rechazo, o None si el valor sirve."""
-    if key in CONFIG_OPCIONES and value not in CONFIG_OPCIONES[key]:
-        return f"{key} only accepts: {', '.join(CONFIG_OPCIONES[key])}"
-    if key in CONFIG_NUMERICOS:
-        try:
-            int(str(value).strip())
-        except (TypeError, ValueError):
-            return f"{key} has to be a whole number, not {value!r}"
-    return None
-
-
-def settings_from_plugin():
-    """Los ajustes que el panel dejo en sus claves planas, con el nombre del CLI. Una
-    cadena vacia no es una eleccion: se ignora para no pisar el valor del CLI.
-
-    Lo invalido tambien se ignora: el panel escribe en el store del host sin pasar por
-    aca, asi que este es el unico lugar donde un valor sucio puede dejar de llegarle al
-    agente. Ignorarlo lo deja con el valor del CLI, que es una eleccion real."""
-    raw = plugin_store_raw()
-    out = {}
-    for flat, name in PANEL_SETTINGS.items():
-        value = raw.get(flat)
-        if isinstance(value, str) and value.strip() and not valida_ajuste(name, value):
-            out[name] = value
-    return out
 
 
 def routes_from_plugin():

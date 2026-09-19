@@ -677,6 +677,19 @@
             'esta version todavia no sabe abrirla en el espacio flotante. Abri un ' +
             'proyecto en Orca y reintenta.',
           lineFailed: 'No pude conectar la linea.',
+          lineKept: 'El nombre quedo puesto: corregi lo de arriba y volve a intentar.',
+          lineNoAnswer: 'El plugin no contesto. Fijate si Orca sigue abierto y volve a ' +
+            'intentar; el nombre quedo puesto.',
+          lineDone: 'Linea conectada.',
+          hNoSource: 'No hay de donde leer',
+          srcPartial: 'No se pudo guardar {k}.',
+          errSinHerramientas: 'No pude ejecutar las herramientas del plugin.',
+          errSinPermiso: 'Las herramientas del plugin no tienen permiso de ejecucion.',
+          errDemoro: 'La operacion tardo demasiado y la corte.',
+          errVencido: 'El pedido quedo viejo y no se atendio. Volve a intentar.',
+          errAMedias: 'La linea salio del registro, pero quedo algo sin borrar.',
+          errSinIdentidad: 'La sesion esta enlazada y el registro no la pudo anotar. '
+            + 'Reintenta; si sigue, revisa que el registro se pueda escribir.',
           unlinkWarn: 'Desvincular {l}: se libera el puesto de dispositivo vinculado, se ' +
             'borra su perfil de navegador y se quitan las {n} conversaciones que le ' +
             'autorizaste. Vas a tener que escanear el QR de nuevo. El texto ya capturado ' +
@@ -916,6 +929,19 @@
           lineNoPlace: 'No Orca project is open to hold the tab, and this build cannot ' +
             'open it in the floating workspace yet. Open a project in Orca and try again.',
           lineFailed: 'I could not connect the line.',
+          lineKept: 'The name is still there: fix what is above and try again.',
+          lineNoAnswer: 'The plugin did not answer. Check that Orca is still open and ' +
+            'try again; the name is still there.',
+          lineDone: 'Line connected.',
+          hNoSource: 'There is nothing to read from',
+          srcPartial: 'Could not save {k}.',
+          errSinHerramientas: 'I could not run the plugin tools.',
+          errSinPermiso: 'The plugin tools are not executable.',
+          errDemoro: 'It took too long and I stopped it.',
+          errVencido: 'The request went stale and was not attended. Try again.',
+          errAMedias: 'The line left the registry, but something could not be deleted.',
+          errSinIdentidad: 'The session is linked and the registry could not record '
+            + 'it. Try again; if it persists, check that the registry is writable.',
           unlinkWarn: 'Unlinking {l}: it frees the linked-device slot, deletes its browser ' +
             'profile and drops the {n} conversations you authorized for it. You will ' +
             'have to scan the QR code again. Text already captured is deleted when you ' +
@@ -1131,6 +1157,19 @@
           'versao ainda nao sabe abri-la no espaco flutuante. Abra um projeto no Orca e ' +
           'tente de novo.',
         lineFailed: 'Nao consegui conectar a linha.',
+        lineKept: 'O nome continua ai: corrija o que esta acima e tente de novo.',
+        lineNoAnswer: 'O plugin nao respondeu. Veja se o Orca continua aberto e tente ' +
+          'de novo; o nome continua ai.',
+        lineDone: 'Linha conectada.',
+        hNoSource: 'Nao ha de onde ler',
+        srcPartial: 'Nao consegui salvar {k}.',
+        errSinHerramientas: 'Nao consegui executar as ferramentas do plugin.',
+        errSinPermiso: 'As ferramentas do plugin nao tem permissao de execucao.',
+        errDemoro: 'Demorou demais e eu interrompi.',
+        errVencido: 'O pedido ficou velho e nao foi atendido. Tente de novo.',
+        errAMedias: 'A linha saiu do registro, mas algo nao pode ser apagado.',
+        errSinIdentidad: 'A sessao esta vinculada e o registro nao conseguiu anota-la. '
+          + 'Tente de novo; se continuar, veja se o registro pode ser escrito.',
         unlinkWarn: 'Desvincular {l}: libera a vaga de aparelho conectado, apaga seu perfil ' +
           'de navegador e tira as {n} conversas que voce autorizou. Voce vai ter que ' +
           'escanear o QR de novo. O texto ja capturado e apagado quando voce colocar o ' +
@@ -1273,6 +1312,7 @@
       var HEALTH_KEY = {
         system: 'hSystem', whatsapp: 'hWhatsapp', database: 'hDatabase',
         readable: 'hReadable', sqlite3: 'hSqlite3', send: 'hSend',
+        'no-source': 'hNoSource',
         transcribe: 'hTranscribe', web: 'hWeb', fulldisk: 'hFulldisk',
         local: 'hLocal',
         unknown: 'hUnknown'
@@ -1425,15 +1465,37 @@
       // Dos interruptores y no una lista de tres: las fuentes se SUMAN. La app de
       // escritorio lee una sola linea — la del telefono con el que se instalo — y cada
       // sesion de WhatsApp Web es otra. Encender la web no apaga la del escritorio.
+      // Se comprueban las TRES, no la ultima. Encadenadas, el `r` que llegaba al final
+      // era el de `readWebText`: las otras dos podian fallar y el panel decia guardado
+      // igual, que es como cambiar de fuente no hacia nada y no lo decia nadie.
+      // El texto es una eleccion aparte de leer la linea: la bandeja web trae quien te
+      // nombro y cuando sin abrir nada, y el cuerpo solo si se pide.
+      var SRC_LABEL = { readLocal: 'readLocalLabel', readWeb: 'readWebLabel',
+                        readWebText: 'readWebTextLabel' }
       el('save-source').addEventListener('click', function (event) {
-        busy(event.currentTarget, write('readLocal', el('read-local').value)
-          .then(function () { return write('readWeb', el('read-web').value) })
-          // El texto es una eleccion aparte de leer la linea: la bandeja web trae
-          // quien te nombro y cuando sin abrir nada, y el cuerpo solo si se pide.
-          .then(function () { return write('readWebText', el('read-web-text').value) })
-          .then(function (r) {
-            said('said-source', r.ok ? '✓ ' + t('sourceSaved') : 'error', !r.ok)
-          }))
+        var claves = [['readLocal', el('read-local').value],
+                      ['readWeb', el('read-web').value],
+                      ['readWebText', el('read-web-text').value]]
+        busy(event.currentTarget, Promise.all(claves.map(function (par) {
+          return write(par[0], par[1]).then(function (r) {
+            return { key: par[0], ok: !!(r && r.ok) }
+          })
+        })).then(function (rs) {
+          var mal = rs.filter(function (r) { return !r.ok })
+          if (mal.length) {
+            // Se nombra el control como lo ve el usuario. `readWeb` es la clave del
+            // storage: quien lee el panel no la vio nunca.
+            said('said-source', fmt('srcPartial', {
+              k: mal.map(function (r) { return t(SRC_LABEL[r.key]) }).join(', ')
+            }), true)
+            return
+          }
+          said('said-source', '✓ ' + t('sourceSaved'))
+          // Y se le pide una relectura al worker: el aviso rojo de arriba sale del
+          // ultimo doctor, asi que apagar la app de escritorio dejaba en pantalla el
+          // reclamo por lo que el usuario acababa de apagar hasta el proximo sync.
+          write('syncRequest', { at: new Date().toISOString() })
+        }))
       })
 
       // ---------- ventana de lectura ----------
@@ -1783,10 +1845,42 @@
         })
       }
 
+      // Devuelve el `at` del pedido: sin el, el panel no puede distinguir el veredicto
+      // de SU clic del que quedo del clic anterior.
       function pedirWeb (action, extra) {
         var pedido = { at: new Date().toISOString(), action: action }
         for (var k in (extra || {})) pedido[k] = extra[k]
-        return write('webRequest', pedido)
+        return write('webRequest', pedido).then(function (r) {
+          return { ok: !!(r && r.ok), at: pedido.at }
+        })
+      }
+
+      // El worker escribe el veredicto en `webStatus`, que el sondeo no toca. Antes el
+      // motivo iba dentro de `webLines` y la siguiente vuelta del sondeo — tres
+      // segundos — lo borraba: el usuario no llegaba a verlo nunca.
+      var WEB_ERR_KEY = {
+        'sin-orca': 'stNoOrcaHow', 'sin-proyecto': 'lineNoPlace',
+        'sin-herramientas': 'errSinHerramientas', 'sin-permiso': 'errSinPermiso',
+        demoro: 'errDemoro', vencido: 'errVencido', 'a-medias': 'errAMedias',
+        'sin-identidad': 'errSinIdentidad', 'sin-respuesta': 'lineNoAnswer'
+      }
+      function motivoWeb (code, detail) {
+        return WEB_ERR_KEY[code] ? t(WEB_ERR_KEY[code]) : (detail || code || '')
+      }
+
+      /** Espera el veredicto de ESE pedido. Enlazar una linea son dos llamadas a la CLI
+       *  de Orca con 30 s de tope cada una, asi que la espera tiene que darles lugar. */
+      function esperarWeb (requestAt, limiteMs) {
+        var fin = Date.now() + (limiteMs || 90000)
+        return new Promise(function (resolve) {
+          ;(function vuelta () {
+            read('webStatus').then(function (st) {
+              if (st && st.requestAt === requestAt) { resolve(st); return }
+              if (Date.now() > fin) { resolve(null); return }
+              setTimeout(vuelta, 1000)
+            })
+          })()
+        })
       }
 
       // Estado -> como se llama, que hacer, y que boton lo arregla. Ninguno se queda
@@ -1802,6 +1896,7 @@
       var ACT_KEY = { show: 'seeTab', reopen: 'openTab', retry: 'retryLine' }
 
       var lineasUlt = null
+      var webStatusUlt = null
       var confirmando = null
 
       function lineHow (l) {
@@ -1817,13 +1912,19 @@
         var lineas = (lineasUlt && lineasUlt.lines) || []
         var wrap = el('lines-wrap')
         // Lo que fallo se cuenta haya lineas o no: reabrir una pestana puede fallar con
-        // tres lineas sanas en la tabla, y sin esto ese clic no dice nada.
-        var err = lineasUlt && lineasUlt.error
+        // tres lineas sanas en la tabla, y sin esto ese clic no dice nada. El veredicto
+        // manda sobre el estado del sondeo: es lo que el usuario acaba de pedir.
+        var err = null
+        var detalle = ''
+        if (webStatusUlt && webStatusUlt.ok === false) {
+          err = webStatusUlt.code || 'fallo'
+          detalle = webStatusUlt.detail || ''
+        } else if (lineasUlt && lineasUlt.error) {
+          err = lineasUlt.error
+          detalle = lineasUlt.detail || ''
+        }
         el('lines-error').textContent = err
-          ? t('lineFailed') + ' ' + (err === 'sin-orca' ? t('stNoOrcaHow')
-              : err === 'sin-proyecto' ? t('lineNoPlace')
-              : (lineasUlt.detail || ''))
-          : ''
+          ? t('lineFailed') + ' ' + motivoWeb(err, detalle) : ''
         el('lines-error').hidden = !err
         if (!lineas.length) {
           wrap.innerHTML = '<p class="empty">' + esc(t('noLines')) + '</p>'
@@ -1859,8 +1960,19 @@
           b.addEventListener('click', function () {
             var l = lineas[Number(b.dataset.lact)]
             var accion = (LINE_STATE[l.state] || {}).act
+            // Se espera el veredicto en vez de soltar el clic: "Ver la pestana" sobre
+            // una pestana que ya no esta fallaba y el boton no decia nada hasta el
+            // refresco siguiente, ocho segundos despues.
             busy(b, pedirWeb(accion === 'retry' ? 'refresh' : accion,
-              { id: l.id, profile: l.profile, pageId: l.pageId || null }))
+              { id: l.id, profile: l.profile, pageId: l.pageId || null })
+              .then(function (p) {
+                if (!p.ok) return
+                return esperarWeb(p.at, 45000).then(function (st) {
+                  webStatusUlt = st ||
+                    { ok: false, code: 'sin-respuesta', detail: '' }
+                  renderLineas(lineasUlt)
+                })
+              }))
           })
         })
         Array.prototype.forEach.call(wrap.querySelectorAll('[data-lrm]'), function (b) {
@@ -1903,21 +2015,45 @@
         if (timerLineas) { clearInterval(timerLineas); timerLineas = null }
         if (!transitorio) return
         timerLineas = setInterval(function () {
-          if (document.visibilityState === 'visible') read('webLines').then(renderLineas)
+          if (document.visibilityState !== 'visible') return
+          Promise.all([read('webLines'), read('webStatus')]).then(function (r) {
+            webStatusUlt = r[1] && typeof r[1] === 'object' ? r[1] : null
+            renderLineas(r[0])
+          })
         }, 2000)
       }
 
+      // El campo NO se vacia al mandar el pedido. Se vaciaba ahi, o sea antes de saber
+      // si la linea existia: cuando fallaba, el usuario perdia lo que habia escrito y no
+      // se enteraba de nada. Se vacia recien con el veredicto en la mano.
       el('link-line').addEventListener('click', function (event) {
         var label = el('line-label').value.trim()
         if (!label) { said('said-line', t('needLineLabel'), true); return }
-        busy(event.currentTarget, pedirWeb('link', { label: label }).then(function () {
-          el('line-label').value = ''
-          // No dice "conectada": todavia no lo esta. Lo que pasa de verdad es que el
-          // worker esta creando el perfil y abriendo la pestana, y la tabla lo cuenta.
-          said('said-line', t('lineWorking'))
-          // Sin esto la primera vista del estado llegaria recien al proximo refresco,
-          // que es justo el segundo en que el usuario pregunta donde se abrio.
-          vigilarLineas(true)
+        // No dice "conectada": todavia no lo esta. Lo que pasa de verdad es que el
+        // worker esta creando el perfil y abriendo la pestana, y la tabla lo cuenta.
+        said('said-line', t('lineWorking'))
+        // Sin esto la primera vista del estado llegaria recien al proximo refresco,
+        // que es justo el segundo en que el usuario pregunta donde se abrio.
+        vigilarLineas(true)
+        busy(event.currentTarget, pedirWeb('link', { label: label }).then(function (p) {
+          if (!p.ok) {
+            said('said-line', t('lineFailed') + ' ' + t('lineKept'), true)
+            return
+          }
+          return esperarWeb(p.at).then(function (st) {
+            if (!st) { said('said-line', t('lineNoAnswer'), true); return }
+            if (!st.ok) {
+              // El motivo va UNA vez, en el renglon de la seccion. Repetirlo al lado
+              // del boton llenaba media pantalla de rojo con el mismo parrafo.
+              webStatusUlt = st
+              renderLineas(lineasUlt)
+              said('said-line', t('lineKept'), true)
+              return
+            }
+            el('line-label').value = ''
+            said('said-line', '\u2713 ' + t('lineDone'))
+            vigilarLineas(true)
+          })
         }))
       })
 
@@ -1933,7 +2069,7 @@
                             read('transcribeLang'), read('syncStatus'),
                             read('readLocal'), read('readWeb'),
                             read('syncMinutes'), read('readWebText'),
-                            read('webLines')])
+                            read('webLines'), read('webStatus')])
           .then(function (r) {
             renderScope(r[0])
             if (typeof r[4] === 'string' && document.activeElement !== el('tone')) {
@@ -1976,6 +2112,7 @@
             else if (r[2]) el('alert').hidden = true
             renderOpcionales(r[2] && r[2].optional)
             renderRoutes(r[3])
+            webStatusUlt = r[17] && typeof r[17] === 'object' ? r[17] : null
             renderLineas(r[16])
           })
       }

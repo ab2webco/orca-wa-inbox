@@ -419,6 +419,135 @@ def revisa_jaula_web(fallos: list) -> int:
 SHIM_LINUX = "import platform\nplatform.system = lambda: 'Linux'\n"
 
 
+def revisa_sin_bytecode(fallos: list) -> int:
+    """Correr los CLI no puede dejar archivos nuevos dentro del plugin.
+
+    El directorio del plugin instalado esta direccionado por hash; un `__pycache__` que
+    aparece DESPUES de instalar es exactamente lo que dejaba el plugin en "No valido".
+    Aparecio en cuanto wa-scope y wa-read pasaron a importar un modulo hermano, asi que
+    la guarda va aca y no en un comentario.
+    """
+    cache = BIN / "__pycache__"
+    shutil.rmtree(cache, ignore_errors=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        env = dict(entorno(pathlib.Path(tmp)), **JAULA_WEB)
+        subprocess.run([str(BIN / "wa-scope"), "config", "--json"],
+                       capture_output=True, text=True, env=env, timeout=120)
+        subprocess.run([str(BIN / "wa-read"), "doctor", "--json"],
+                       capture_output=True, text=True, env=env, timeout=180)
+    if cache.exists():
+        fallos.append(f"correr los CLI dejo {cache} dentro del plugin: en la instalacion "
+                      "direccionada por hash eso lo invalida")
+        shutil.rmtree(cache, ignore_errors=True)
+    return 1
+
+
+def revisa_escritorio_apagado(fallos: list) -> int:
+    """Apagar la app de escritorio y leer solo por la web tiene que ANDAR, no romperse.
+
+    Es una eleccion real: en un Mac la app ocupa la unica linea del numero con el que se
+    instalo, y si esa no es la linea que se quiere leer, se apaga. Antes eso dejaba tres
+    rojos pidiendo instalar justo lo que el usuario acababa de apagar — `local_manda` era
+    `not web_ok` y no miraba `read_local` — y con el doctor en rojo `wa-scope pending`
+    salia 2 y las dos automatizaciones quedaban bloqueadas.
+    """
+    hechas = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        falso = home / "orca-falso"
+        falso.write_text(FALSO_ORCA, encoding="utf-8")
+        falso.chmod(0o755)
+        registra_linea_web(home, "linea-uno")
+        ahora = int(time.time())
+        env = dict(entorno(home), WA_FALSO_ORCA="ok",
+                   WA_FALSO_PAYLOAD=json.dumps(WEB_PAYLOAD),
+                   WA_FALSO_PAYLOAD_INBOX=json.dumps(payload_inbox(ahora)),
+                   WA_FALSO_RASTRO=str(home / "rastro.txt"),
+                   ORCA_CLI_COMMAND=str(falso))
+        for clave, valor in (("read_web", "on"), ("read_local", "off")):
+            subprocess.run([str(BIN / "wa-scope"), "config", clave, valor],
+                           capture_output=True, text=True, env=env, timeout=120)
+        subprocess.run([str(BIN / "wa-scope"), "set", WEB_GRUPO, "--provider", "ninguno",
+                        "--mode", "observar"], capture_output=True, text=True, env=env,
+                       timeout=120)
+
+        p = subprocess.run([str(BIN / "wa-read"), "doctor", "--json"],
+                           capture_output=True, text=True, env=env, timeout=180)
+        filas = json.loads(p.stdout or "[]")
+        porcodigo = {f.get("code"): f for f in filas}
+        hechas += 4
+        if p.returncode != 0:
+            fallos.append(f"con el escritorio apagado y la web sana el doctor salio "
+                          f"{p.returncode}: {(p.stderr or '').strip()[:160]}")
+        if not porcodigo.get("web", {}).get("ok"):
+            fallos.append("el doctor no vio la sesion web sana, asi que el resto del "
+                          "caso no mide lo que dice medir")
+        locales = [c for c in ("system", "whatsapp", "database", "readable", "sqlite3")
+                   if porcodigo.get(c, {}).get("requerido", True)]
+        if locales:
+            fallos.append(f"con `read_local off` la app de escritorio sigue siendo "
+                          f"requisito: {locales}")
+        # Y el aviso de que no hay de donde leer NO sale: hay una via encendida.
+        if "no-source" in porcodigo:
+            fallos.append("dijo que no hay de donde leer teniendo la via web encendida")
+
+        # Lo que de verdad importaba: las automatizaciones no quedan bloqueadas. El sync
+        # va antes porque sin una corrida `pending` bloquea por otra razon —nadie leyo
+        # todavia— y eso taparia justo lo que se quiere medir.
+        subprocess.run([str(BIN / "wa-scope"), "sync", "--json"],
+                       capture_output=True, text=True, env=env, timeout=300)
+        p = subprocess.run([str(BIN / "wa-scope"), "pending", "--json"],
+                           capture_output=True, text=True, env=env, timeout=300)
+        hechas += 1
+        if p.returncode == 2:
+            fallos.append(f"`wa-scope pending` bloqueo con el escritorio apagado: "
+                          f"{(p.stdout or p.stderr).strip()[:200]}")
+
+        # Y la bandeja llega por la via que queda.
+        p = subprocess.run([str(BIN / "wa-read"), "inbox", "--days", "1", "--limit", "0",
+                            "--json"], capture_output=True, text=True, env=env, timeout=180)
+        hechas += 1
+        if not json.loads(p.stdout or "[]"):
+            fallos.append(f"con el escritorio apagado la bandeja web quedo vacia: "
+                          f"rc={p.returncode} {(p.stderr or '').strip()[:160]}")
+
+        # Y con la sesion web CAIDA: es donde se veia el defecto. La unica via encendida
+        # es la web, asi que lo que falta es la sesion — no la app que el usuario apago.
+        # Con `local_manda = not web_ok` esto pedia instalar WhatsApp Desktop.
+        caido = dict(env, ORCA_CLI_COMMAND=str(home / "no-existe-este-orca"))
+        p = subprocess.run([str(BIN / "wa-read"), "doctor", "--json"],
+                           capture_output=True, text=True, env=caido, timeout=180)
+        codigos = {f.get("code"): f for f in json.loads(p.stdout or "[]")}
+        hechas += 3
+        if codigos.get("web", {}).get("ok"):
+            fallos.append("la sesion web contesto con la CLI de Orca apuntando a la nada: "
+                          "el caso no mide lo que dice medir")
+        pide_local = [c for c in ("whatsapp", "database", "readable")
+                      if codigos.get(c, {}).get("requerido", True)]
+        if pide_local:
+            fallos.append(f"con la sesion caida y el escritorio apagado el doctor pide "
+                          f"la app que el usuario apago: {pide_local}")
+        if not codigos.get("web", {}).get("requerido"):
+            fallos.append("con la unica via encendida caida, el doctor no la marco como "
+                          "requisito: nada bloquea y no hay de donde leer")
+
+        # Con las DOS apagadas no hay nada que leer, y eso si tiene que decirse: antes
+        # todo quedaba en opcional y el panel se veia verde sin poder contestar nada.
+        subprocess.run([str(BIN / "wa-scope"), "config", "read_web", "off"],
+                       capture_output=True, text=True, env=env, timeout=120)
+        p = subprocess.run([str(BIN / "wa-read"), "doctor", "--json"],
+                           capture_output=True, text=True, env=env, timeout=180)
+        hechas += 2
+        codigos = {f.get("code"): f for f in json.loads(p.stdout or "[]")}
+        if "no-source" not in codigos:
+            fallos.append("con las dos vias apagadas el doctor no dijo que no hay de "
+                          "donde leer")
+        if p.returncode == 0:
+            fallos.append("con las dos vias apagadas el doctor salio 0: se lee como que "
+                          "no falta nada")
+    return hechas
+
+
 def revisa_solo_web(fallos: list) -> int:
     """Una maquina sin base local y con la sesion web sana no puede quedar bloqueada.
 
@@ -742,6 +871,9 @@ def revisa_precheck(fallos: list) -> int:
         binf.mkdir()
         (binf / "wa-scope").write_text((BIN / "wa-scope").read_text())
         (binf / "wa-scope").chmod(0o755)
+        # Los ajustes efectivos viven en un modulo al lado: wa-scope y wa-read tienen
+        # que contestar lo MISMO sobre `read_web`, y tenerlo dos veces era el defecto.
+        (binf / "wa_settings.py").write_text((BIN / "wa_settings.py").read_text())
         (binf / "wa-read").write_text(STUB_WA_READ)
         (binf / "wa-read").chmod(0o755)
 
@@ -885,19 +1017,27 @@ def responde(result):
     raise SystemExit(0)
 
 
-def payload():
+def payload(pagina="p1"):
     cual = "WA_FALSO_PAYLOAD"
     if SENA and os.path.exists(SENA) and open(SENA, encoding="utf-8").read() == "inbox":
         cual = "WA_FALSO_PAYLOAD_INBOX"
-    return json.loads(os.environ[cual])
+    # Por pestana si se declaro: dos lineas que devuelven lo mismo no probarian que
+    # cada una leyo la suya.
+    propio = f"{cual}_{pagina.upper()}"
+    return json.loads(os.environ.get(propio) or os.environ[cual])
 
 
+# Con dos lineas enlazadas hay dos pestanas, y cada una contesta lo suyo. Por defecto
+# es una sola: los casos de una linea no se enteran.
+PERFILES = (os.environ.get("WA_FALSO_PERFILES") or "linea-uno").split(",")
 if ARGS[:2] == ["tab", "list"]:
     url = "https://example.invalid/" if MODO == "sin-pestana" else "https://web.whatsapp.com/"
-    responde({"tabs": [{"browserPageId": "p1", "url": url,
-                        "profileId": "perfil-1", "profileLabel": "linea-uno"}]})
+    responde({"tabs": [{"browserPageId": f"p{i}", "url": url,
+                        "profileId": f"perfil-{i}", "profileLabel": etiqueta}
+                       for i, etiqueta in enumerate(PERFILES, start=1)]})
 if ARGS[:1] == ["eval"]:
     expresion = ARGS[ARGS.index("--expression") + 1]
+    PAGINA = ARGS[ARGS.index("--page") + 1] if "--page" in ARGS else "p1"
     # El oyente de la captura viva. Es un eval aparte y sincronico: no pasa por el
     # global de web_payload, asi que se contesta de una.
     if "__waInboxCaptura" in expresion:
@@ -916,7 +1056,7 @@ if ARGS[:1] == ["eval"]:
         responde({"result": json.dumps({"ok": False, "e": "InvalidStateError"})})
     if MODO == "sin-texto":
         responde({"result": json.dumps({"ok": True, "v": {"linked": True, "sinTexto": True}})})
-    responde({"result": json.dumps({"ok": True, "v": payload()})})
+    responde({"result": json.dumps({"ok": True, "v": payload(PAGINA)})})
 print(json.dumps({"ok": False, "error": "unknown command"}))
 """
 
@@ -1031,7 +1171,8 @@ class _Args:
         self.__dict__.update(kw)
 
 
-def registra_linea_web(home: pathlib.Path, perfil: str) -> None:
+def registra_linea_web(home: pathlib.Path, perfil: str, cid: str = None,
+                       label: str = "Linea De Ejemplo") -> None:
     """Una linea web en el registro de ESE home, atada a un perfil de navegador."""
     db = home / ".wa-inbox" / "scope.db"
     db.parent.mkdir(parents=True, exist_ok=True)
@@ -1040,9 +1181,104 @@ def registra_linea_web(home: pathlib.Path, perfil: str) -> None:
         "create table if not exists wa_account (id text primary key, kind text, "
         "label text, profile text, enabled integer, linked_at text, updated_at text);")
     con.execute("insert or replace into wa_account values (?,?,?,?,1,null,null)",
-                ("web:100000000000001", "web", "Linea De Ejemplo", perfil))
+                (cid or "web:100000000000001", "web", label, perfil))
     con.commit()
     con.close()
+
+
+def revisa_dos_lineas(fallos: list) -> int:
+    """Dos fuentes que ven el MISMO mensaje devuelven una fila, no dos.
+
+    Pasa hoy en el equipo del dueno: la sesion web esta enlazada con el mismo numero que
+    lee la app de escritorio, asi que cada mencion llega dos veces. `stanza_id` es la
+    clave de idempotencia que una automation escribe en el issue de Plane — dos filas
+    con el mismo stanza_id son dos tarjetas por el mismo mensaje.
+
+    Las dos fuentes contestan de verdad: dos perfiles, dos pestanas, dos sesiones
+    leidas por separado. Un fixture que entregara la lista ya fundida no probaria nada.
+    """
+    hechas = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        falso = home / "orca-falso"
+        falso.write_text(FALSO_ORCA, encoding="utf-8")
+        falso.chmod(0o755)
+        registra_linea_web(home, "perfil-1", "web:100000000000001", "Linea Uno")
+        registra_linea_web(home, "perfil-2", "web:100000000000002", "Linea Dos")
+        ahora = int(time.time())
+
+        # La misma linea vista dos veces: mismo lid, mismos stanza_id. Es la unica forma
+        # de que las dos fuentes contesten por el mismo mensaje, y es el caso real.
+        uno = payload_con_texto(ahora)
+        dos = payload_con_texto(ahora)
+        # Lo que solo tiene la SEGUNDA: la primera no trae vecinos, asi que su fila sale
+        # sin `contexto_cerca`. Si la fusion eligiera un lado entero, esto se perderia.
+        uno["vecinos"] = []
+        # Y un cuerpo distinto para el mismo mensaje: tiene que ganar el de la primera.
+        for fila in dos["mensajes"]:
+            if fila[0] == "ST-MENCION":
+                fila[8] = "cuerpo de la segunda linea"
+        # Un mensaje que SOLO tiene la segunda: fundir no puede significar quedarse con
+        # una de las dos lineas. Las fuentes se suman, esa es la premisa entera.
+        dos["mensajes"].append(["ST-SOLO-DOS", WEB_DIRECTO, ahora - 20, "", "", 0, "",
+                                "chat", "esto lo vio solo la segunda linea", ""])
+
+        base = dict(entorno(home), WA_READ_SETTING_READ_LOCAL="off",
+                    WA_READ_SETTING_READ_WEB="on",
+                    WA_READ_SETTING_READ_WEB_TEXT="memoria",
+                    WA_FALSO_RASTRO=str(home / "rastro.txt"),
+                    WA_FALSO_ORCA="ok", WA_FALSO_PERFILES="linea-uno,linea-dos",
+                    WA_FALSO_PAYLOAD=json.dumps(WEB_PAYLOAD),
+                    WA_FALSO_PAYLOAD_INBOX_P1=json.dumps(uno),
+                    WA_FALSO_PAYLOAD_INBOX_P2=json.dumps(dos),
+                    WA_FALSO_PAYLOAD_INBOX=json.dumps(uno),
+                    ORCA_CLI_COMMAND=str(falso))
+        p = subprocess.run([str(BIN / "wa-read"), "inbox", "--days", "1", "--limit", "0",
+                            "--json"], capture_output=True, text=True, env=base,
+                           timeout=180)
+        filas = json.loads(p.stdout or "[]")
+
+        hechas += 1
+        if p.returncode != 0:
+            fallos.append(f"con dos lineas la bandeja salio {p.returncode}: "
+                          f"{(p.stderr or '').strip()[:200]}")
+            return hechas
+
+        # Las dos contestaron de verdad: sin esto el caso podria estar probando una sola
+        # fuente y dando verde por no tener con que duplicar.
+        hechas += 1
+        if "web:100000000000002" not in (p.stderr or "") and len(filas) == 0:
+            fallos.append("con dos lineas no salio ninguna fila")
+
+        hechas += 1
+        ids = [f["stanza_id"] for f in filas]
+        if "ST-SOLO-DOS" not in ids:
+            fallos.append(f"lo que solo vio la segunda linea no llego a la bandeja: {ids}")
+        hechas += 1
+        if len(ids) != len(set(ids)):
+            repes = sorted({i for i in ids if ids.count(i) > 1})
+            fallos.append(f"el mismo mensaje salio dos veces con dos lineas: {repes}")
+
+        por_id = {f["stanza_id"]: f for f in filas}
+        hechas += 1
+        mencion = por_id.get("ST-MENCION")
+        if not mencion:
+            fallos.append(f"con dos lineas se perdio la mencion: {sorted(por_id)}")
+            return hechas
+
+        # Gana la primera fuente donde las dos tienen algo.
+        hechas += 1
+        if "cuerpo de la segunda linea" in (mencion.get("text") or ""):
+            fallos.append(f"la segunda linea le piso el cuerpo a la primera: "
+                          f"{mencion.get('text')!r}")
+
+        # Y se toma de la segunda lo que a la primera le falta.
+        hechas += 1
+        cerca = mencion.get("contexto_cerca") or []
+        if not cerca:
+            fallos.append("lo que solo tenia la segunda linea se perdio al fundir: "
+                          "la fila salio sin contexto_cerca")
+    return hechas
 
 
 def revisa_web_mapeo(fallos: list) -> int:
@@ -2522,8 +2758,11 @@ def main() -> int:
                       + revisa_seleccion_web(fallos)
                       + revisa_web_inbox(fallos)
                       + revisa_web_convive(fallos)
+                      + revisa_dos_lineas(fallos)
                       + revisa_jaula_web(fallos)
                       + revisa_solo_web(fallos)
+                      + revisa_escritorio_apagado(fallos)
+                      + revisa_sin_bytecode(fallos)
                       + revisa_override_ajuste(fallos))
     aislado.cleanup()
 

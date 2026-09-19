@@ -31,6 +31,15 @@ See `sources()` and docs/LECTURA-MULTIFUENTE.md.
 """
 import argparse, hashlib, json, os, platform, shutil, sqlite3, subprocess, sys, tempfile, time
 
+# El modulo vive al lado, y esto se carga tanto como script como importado por ruta
+# desde los chequeos: sin esto el segundo caso no lo encuentra.
+# Sin esto Python deja un __pycache__ DENTRO de bin/, y el directorio del plugin
+# instalado esta direccionado por hash: un archivo que aparece despues de la
+# instalacion es justo lo que deja el plugin en "No valido".
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from wa_settings import settings_from_plugin  # noqa: E402
+
 APPLE_EPOCH = 978307200  # Core Data usa 2001-01-01 como epoch
 # El unico pedazo de esto que es especifico del sistema es DONDE deja WhatsApp su base.
 # Aislarlo aca hace que sumar Windows sea agregar una entrada, no reescribir la
@@ -115,6 +124,12 @@ SCOPE_DB = _scope_db()
 def setting(key, fallback):
     """La ventana de lectura es configurable, no una constante escondida en el prompt.
 
+    Tres fuentes, en este orden: el entorno, lo que el panel guardo, y la base del CLI.
+    El panel va antes que la base por la misma regla que usa `wa-scope`: es lo que el
+    usuario acaba de tocar. Leer solo la base es lo que hacia que cambiar de donde lee
+    en el panel no cambiara nada — `wa-scope config` decia `read_web on` y aca seguia
+    apagado, sin que nada lo dijera.
+
     `WA_READ_SETTING_<CLAVE>` lo fuerza para UNA corrida y solo para wa-read. Existe
     porque el registro de ~/.wa-inbox/scope.db es el MISMO que lee el plugin instalado:
     encender `read_web` ahi para probar se le aparece al usuario en el panel."""
@@ -122,6 +137,15 @@ def setting(key, fallback):
     if forzado:
         try:
             return type(fallback)(forzado)
+        except (TypeError, ValueError):
+            pass
+    try:
+        del_panel = settings_from_plugin().get(key)
+    except Exception:
+        del_panel = None
+    if del_panel not in (None, ""):
+        try:
+            return type(fallback)(del_panel)
         except (TypeError, ValueError):
             pass
     try:
@@ -1821,12 +1845,10 @@ def cmd_doctor(con, a):
     # la base local es un requisito o un dato. Se llama una sola vez: encendida abre la
     # sesion de verdad, y abrirla dos veces por un doctor son dos vueltas de navegador.
     web_ok, web_detalle, web_code = _web_check()
-    # Los cinco de abajo son de la via LOCAL, y fuera de macOS fallan los cinco. Marcarlos
-    # como requisito incondicional dejaba al plugin MUERTO en Linux y en Windows con una
-    # sesion web leyendo perfecto: el doctor salia 1, build_health() daba ok:false y
-    # `wa-scope pending` salia 2, o sea las dos automatizaciones bloqueadas para siempre.
-    # Son requisito solo cuando ninguna otra fuente puede contestar.
-    local_manda = not web_ok
+    # Que vias pidio el usuario. Se suman: la app de escritorio lee la linea del
+    # telefono con el que se instalo, y cada sesion web es otra linea.
+    local_on = setting("read_local", "on") != "off"
+    web_on = setting("read_web", "off") == "on"
     # El codigo es la llave estable: el nombre y el detalle estan en ingles para quien
     # corre el CLI, y el panel traduce por codigo al idioma del usuario. Renombrar un
     # codigo desincroniza el panel en silencio; el texto se puede reescribir sin riesgo.
@@ -1861,16 +1883,35 @@ def cmd_doctor(con, a):
         # perfecto por la base local.
         ("web", "WhatsApp Web as a second line", web_ok, web_detalle, web_code),
     ]
+    # Los cinco de la via LOCAL fuera de macOS fallan los cinco. Marcarlos como
+    # requisito incondicional dejaba al plugin MUERTO en Linux y en Windows con una
+    # sesion web leyendo perfecto: el doctor salia 1, build_health() daba ok:false y
+    # `wa-scope pending` salia 2, o sea las dos automatizaciones bloqueadas para siempre.
+    # Una via es requisito cuando esta encendida y NINGUNA otra encendida puede leer:
+    # sin la segunda mitad, apagar la app de escritorio dejaba tres rojos pidiendo
+    # instalar justo lo que el usuario acababa de decir que no queria.
+    local_ok = all(ok for _, _, ok, _ in checks)
+    local_manda = local_on and not (web_on and web_ok)
+    web_manda = web_on and not (local_on and local_ok)
     # `via` viaja para que quien clasifique no tenga que reconocer los codigos de memoria:
     # wa-scope decide con esto si un fallo local es un problema o un dato, y una segunda
     # copia de la lista de codigos alla se desincronizaria en silencio.
     filas = [{"check": n, "ok": ok, "detalle": d, "requerido": local_manda,
               "code": code, "via": LOCAL}
              for code, n, ok, d in checks]
-    filas += [{"check": n, "ok": ok, "detalle": d, "requerido": False,
+    filas += [{"check": n, "ok": ok, "detalle": d,
+               "requerido": web_manda if code == "web" else False,
                "code": code, "detailCode": dcode,
                "via": WEB if code == "web" else None}
               for code, n, ok, d, dcode in opcionales]
+    # Con las dos apagadas no hay nada que leer y ningun renglon lo diria: los de la
+    # app quedan en opcional y el de la web tambien, o sea todo verde sobre un plugin
+    # que no puede contestar una bandeja.
+    if not local_on and not web_on:
+        filas.insert(0, {"check": "a read source is enabled", "ok": False,
+                         "detalle": "both routes are off: turn the desktop app or "
+                                    "WhatsApp Web back on in the plugin settings",
+                         "requerido": True, "code": "no-source", "via": None})
     return filas
 
 
@@ -1933,7 +1974,65 @@ def read_from_sources(a):
     for src, exc in fallos:
         print(f"warning: {src.label} ({src.kind}) did not answer: {exc.reason}",
               file=sys.stderr)
+    if contestaron < 2:
+        return filas
+    filas = fundir(filas)
+    # Con dos fuentes cada una viene ordenada por su cuenta, asi que concatenarlas deja
+    # la bandeja saltando de una fecha a otra. El orden es estable: con una sola fuente
+    # esto no mueve nada, que es por lo que solo corre cuando contestaron dos.
+    if getattr(a, "cmd", None) == "inbox":
+        filas.sort(key=lambda f: f.get("date") or "", reverse=True)
+        # Y el tope vuelve a aplicarse: cada fuente respeto el suyo, y sumarlas
+        # devolvia el doble de lo que quien llamo pidio.
+        tope = INBOX_MAX if getattr(a, "limit", None) is None else int(a.limit)
+        if tope > 0:
+            filas = filas[:tope]
     return filas
+
+
+def clave_de_fila(fila):
+    """La identidad de una fila ENTRE fuentes, o None si no la tiene.
+
+    `stanza_id` es la clave de idempotencia de un mensaje — la misma que una automation
+    escribe en el issue de Plane — y es identica visto desde la app y desde la web. `jid`
+    lo es de una conversacion. Lo que no trae ninguna de las dos no se funde: `whoami`
+    devuelve una fila POR LINEA y fundirlas seria borrar la segunda."""
+    for campo in ("stanza_id", "jid"):
+        if fila.get(campo):
+            return (campo, fila[campo])
+    return None
+
+
+def vacio(valor):
+    return valor is None or valor == "" or valor == [] or valor == {}
+
+
+def fundir(filas):
+    """Una fila por mensaje, aunque dos lineas vean el mismo.
+
+    Pasa de verdad y no en teoria: dos lineas en el mismo grupo ven cada mensaje una
+    vez cada una, y sin esto el agente abre dos tarjetas por el mismo mensaje.
+
+    Gana la PRIMERA fuente, que es la local: trae la ruta del adjunto en disco y el
+    historial completo, y la web ninguna de las dos. De la segunda solo se toma lo que
+    a la primera le falta — un cuerpo capturado donde la local no tiene texto, el
+    contexto de al lado — porque elegir un lado entero tiraria eso sin decirlo."""
+    orden = []
+    por_clave = {}
+    for fila in filas:
+        clave = clave_de_fila(fila)
+        if clave is None:
+            orden.append(fila)
+            continue
+        previa = por_clave.get(clave)
+        if previa is None:
+            por_clave[clave] = fila
+            orden.append(fila)
+            continue
+        for k, v in fila.items():
+            if vacio(previa.get(k)) and not vacio(v):
+                previa[k] = v
+    return orden
 
 
 def main():

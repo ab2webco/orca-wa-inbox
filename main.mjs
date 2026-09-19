@@ -13,7 +13,7 @@ import { execFile } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
-import { HARNESS_KEY, sembrar } from './harness.mjs'
+import { HARNESS_KEY } from './harness.mjs'
 import {
   conectarLinea, estadoDeLineas, identificarLinea, olvidarLinea, reabrirPestana,
   verPestana
@@ -36,6 +36,11 @@ const CHATS_KEY = 'chats'
 // es justamente ejecutar cuatro comandos.
 const WEB_REQUEST_KEY = 'webRequest'
 const WEB_LINES_KEY = 'webLines'
+// Como le fue a lo ULTIMO que pidio el panel, en su propia clave. Vivia dentro de
+// `webLines`, que el sondeo reescribe cada pocos segundos: el motivo de un fallo
+// duraba lo que tardaba la siguiente vuelta y el usuario no llegaba a verlo nunca.
+// Aca no lo pisa nadie hasta el proximo pedido.
+const WEB_STATUS_KEY = 'webStatus'
 const MODES = ['off', 'observar', 'borrador', 'responder']
 
 /** El nombre del agente lo define quien usa el plugin. No viene con uno puesto. */
@@ -43,12 +48,19 @@ const DEFAULT_SETTINGS = { agentName: '', signMessages: true, toolsDir: TOOLS }
 
 /** Corre `wa-read doctor` y avisa por notificacion si algo falta. */
 async function checkSystem(orca, toolsDir = TOOLS) {
+  // El motivo se conserva: "no pude comprobar el sistema" sin la causa deja al usuario
+  // en el mismo callejon que el spinner eterno.
+  let porque = ''
   const result = await run(join(toolsDir, 'wa-read'), ['doctor', '--json'],
-    { timeoutMs: 30000 }).catch(() => null)
+    { timeoutMs: 30000 }).catch((error) => {
+      porque = String(error?.message ?? error).slice(0, 200)
+      return null
+    })
   let checks = []
   try {
     checks = JSON.parse(result?.stdout || '[]')
-  } catch {
+  } catch (error) {
+    porque = porque || `doctor returned no JSON: ${String(result?.stdout).slice(0, 120)}`
     checks = []
   }
   // Solo lo REQUERIDO avisa. Lo opcional siempre tiene algo apagado — la segunda
@@ -58,8 +70,10 @@ async function checkSystem(orca, toolsDir = TOOLS) {
   if (!checks.length) {
     await orca.host.call('notifications.show', {
       title: 'Could not check the system',
-      body: `Could not run the plugin tools. Check that ${toolsDir} is executable.`
-    }).catch(() => {})
+      body: `Could not run the plugin tools. Check that ${toolsDir} is executable.` +
+        (porque ? ` ${porque}` : '')
+    }).catch((error) => orca.log(`notification failed: ${error.message}`))
+    orca.log(`check: the tools did not answer${porque ? ` — ${porque}` : ''}`)
     return
   }
   if (!failed.length) return
@@ -84,7 +98,7 @@ async function checkSystem(orca, toolsDir = TOOLS) {
         'chat list, the line identity and the inbox. Connect a line in the plugin ' +
         'settings.'
       : 'Open the plugin settings to see what is missing.'
-  }).catch(() => {})
+  }).catch((error) => orca.log(`notification failed: ${error.message}`))
   orca.log(`check: missing ${failed.map((c) => c.code || c.check).join(', ')}`)
 }
 
@@ -161,13 +175,21 @@ export async function intervaloSync(orca) {
   return Math.min(SYNC_MAX_MS, Math.max(SYNC_MIN_MS, minutos * 60000))
 }
 
+// El storage es el UNICO canal con el panel. Tragarse un fallo aca deja al panel
+// mostrando lo de hace media hora sin nada que lo delate, asi que el motivo va al log
+// del plugin aunque la funcion siga devolviendo un valor utilizable.
 async function leer(orca, key) {
-  const stored = await orca.host.call('storage.get', { key }).catch(() => null)
+  const stored = await orca.host.call('storage.get', { key })
+    .catch((error) => {
+      orca.log(`storage.get ${key} failed: ${error.message}`)
+      return null
+    })
   return stored?.value ?? null
 }
 
 function guardar(orca, key, value) {
-  return orca.host.call('storage.set', { key, value }).catch(() => {})
+  return orca.host.call('storage.set', { key, value })
+    .catch((error) => orca.log(`storage.set ${key} failed: ${error.message}`))
 }
 
 // Dos syncs a la vez leerian la misma base dos veces y se pisarian el estado.
@@ -235,11 +257,14 @@ function orcaCli() {
 /** Las lineas registradas, tal como las ve el registro. */
 async function cuentasWeb(waScope) {
   const { stdout } = await run(waScope, ['accounts', '--json'])
-  let filas = []
+  let filas
   try {
     filas = JSON.parse(stdout || '[]')
   } catch {
-    filas = []
+    // Leerlo como "no hay lineas" es peor que fallar: con cero lineas el camino de
+    // desconectar apaga la via web, o sea que un registro ilegible terminaba apagando
+    // la lectura del usuario sin decir nada.
+    throw new Error(`wa-scope accounts returned no JSON: ${String(stdout).slice(0, 200)}`)
   }
   return (Array.isArray(filas) ? filas : []).filter((c) => c.kind === 'web')
 }
@@ -272,21 +297,44 @@ async function refrescarLineas(orca, waScope, { motivo = 'timer' } = {}) {
   const lineas = await estadoDeLineas(exe, cuentas)
   // La identidad la pone la SESION. Aca es el unico momento en que se conoce: la fila
   // nacio con un id provisional sobre el perfil y recien ahora hay lid que ponerle.
+  let sinIdentidad = null
   for (const linea of lineas) {
     if (!linea.pending || linea.state !== 'enlazada' || !linea.lid) continue
-    const fila = await identificarLinea({ waScope, run, id: linea.id, lid: linea.lid })
-    if (fila) {
-      linea.id = fila.id
-      linea.pending = false
-      linea.linkedAt = fila.linked_at || linea.linkedAt
+    try {
+      const fila = await identificarLinea({ waScope, run, id: linea.id, lid: linea.lid })
+      if (fila) {
+        linea.id = fila.id
+        linea.pending = false
+        linea.linkedAt = fila.linked_at || linea.linkedAt
+      }
+    } catch (error) {
+      // La sesion esta enlazada de verdad y el registro no la pudo ascender. Sin esto
+      // la fila se quedaba en "esperando el escaneo" para siempre y sin motivo.
+      sinIdentidad = String(error?.message ?? error).slice(0, 200)
+      orca.log(`web line identify failed: ${sinIdentidad}`)
     }
   }
-  await guardar(orca, WEB_LINES_KEY,
-    { at: new Date().toISOString(), lines: lineas, motivo })
+  await guardar(orca, WEB_LINES_KEY, {
+    at: new Date().toISOString(), lines: lineas, motivo,
+    ...(sinIdentidad ? { error: 'sin-identidad', detail: sinIdentidad } : {})
+  })
   return lineas
 }
 
-/** Atiende lo que el panel pidio sobre las lineas web. */
+/** Como le fue al pedido, en la clave que el sondeo no toca. El panel lo empareja por
+ *  `requestAt`: sin eso no podria distinguir la respuesta a SU clic de la anterior. */
+function veredicto(orca, pedido, extra) {
+  return guardar(orca, WEB_STATUS_KEY, {
+    at: new Date().toISOString(), requestAt: pedido?.at ?? null,
+    action: pedido?.action ?? null, ...extra
+  })
+}
+
+/** Atiende lo que el panel pidio sobre las lineas web.
+ *
+ *  Todas las salidas dejan veredicto. Antes varias no dejaban ninguna — ver una pestana
+ *  que no existe, o un `run` que rechazaba a mitad del enlace — y el usuario se quedaba
+ *  con el campo vacio, sin fila y sin motivo. */
 async function atenderWeb(orca, waScope, pedido, contexto) {
   const exe = orcaCli()
   const fin = (extra) => guardar(orca, WEB_LINES_KEY, extra)
@@ -294,6 +342,7 @@ async function atenderWeb(orca, waScope, pedido, contexto) {
     const label = String(pedido.label || '').trim() || 'WhatsApp Web'
     const r = await conectarLinea({ exe, waScope, run, label, contextoActivo: contexto })
     if (!r.ok) {
+      await veredicto(orca, pedido, { ok: false, code: r.code, detail: String(r.detail || '').slice(0, 300) })
       await fin({ at: new Date().toISOString(), lines: [], error: r.code,
         detail: String(r.detail || '').slice(0, 200) })
       return
@@ -302,10 +351,16 @@ async function atenderWeb(orca, waScope, pedido, contexto) {
     await refrescarLineas(orca, waScope, { motivo: 'link' })
     const previo = (await leer(orca, WEB_LINES_KEY)) ?? {}
     await fin({ ...previo, placement: r.donde, project: r.proyecto || null })
+    await veredicto(orca, pedido, { ok: true, placement: r.donde,
+      project: r.proyecto || null })
     return
   }
   if (pedido.action === 'show' && pedido.pageId) {
     const r = await verPestana(exe, pedido.pageId)
+    // Fallaba callado: se resondeaba y nada mas. Un boton que no hace nada y no dice
+    // por que es el mismo callejon que el spinner eterno.
+    await veredicto(orca, pedido, r.ok ? { ok: true }
+      : { ok: false, code: r.code, detail: String(r.detail || '').slice(0, 300) })
     if (!r.ok) await refrescarLineas(orca, waScope, { motivo: 'show' })
     return
   }
@@ -313,27 +368,77 @@ async function atenderWeb(orca, waScope, pedido, contexto) {
     const r = await reabrirPestana({ exe, profile: pedido.profile, contextoActivo: contexto })
     const previo = (await leer(orca, WEB_LINES_KEY)) ?? {}
     if (!r.ok) {
+      await veredicto(orca, pedido, { ok: false, code: r.code, detail: String(r.detail || '').slice(0, 300) })
       await fin({ ...previo, error: r.code, detail: String(r.detail || '').slice(0, 200) })
       return
     }
     await refrescarLineas(orca, waScope, { motivo: 'reopen' })
     const ahora = (await leer(orca, WEB_LINES_KEY)) ?? {}
     await fin({ ...ahora, placement: r.donde, project: r.proyecto || null })
+    await veredicto(orca, pedido, { ok: true, placement: r.donde,
+      project: r.proyecto || null })
     return
   }
   if (pedido.action === 'unlink' && pedido.id) {
-    await olvidarLinea({ exe, waScope, run, id: pedido.id, profile: pedido.profile,
-      pageId: pedido.pageId })
+    const borrado = await olvidarLinea({ exe, waScope, run, id: pedido.id,
+      profile: pedido.profile, pageId: pedido.pageId })
     const quedan = await refrescarLineas(orca, waScope, { motivo: 'unlink' })
     // Sin ninguna linea, la ruta web no tiene de donde leer: dejarla encendida haria
     // que `sources()` se colgara de cualquier pestana de WhatsApp Web que hubiera.
+    let apagado = null
     if (!quedan.length) {
-      await run(waScope, ['config', 'read_web', 'off']).catch(() => {})
+      // Se dice si no se pudo apagar. Tragarselo dejaba al plugin leyendo por una via
+      // sin linea — cualquier pestana de WhatsApp Web abierta — despues de que el
+      // usuario dijo justo que no.
+      apagado = await run(waScope, ['config', 'read_web', 'off'])
+        .then(() => null).catch((error) => error)
       await guardar(orca, 'readWeb', 'off')
     }
+    const sobras = [...(borrado.sobras ?? [])]
+    if (apagado) sobras.push({ que: 'read_web', detail: apagado.message })
+    await veredicto(orca, pedido, sobras.length
+      ? { ok: false,
+          code: 'a-medias',
+          detail: sobras.map((x) => `${x.que}: ${x.detail}`).join('; ').slice(0, 300) }
+      : { ok: true })
     return
   }
   await refrescarLineas(orca, waScope, { motivo: 'refresh' })
+  await veredicto(orca, pedido, { ok: true })
+}
+
+/** La siembra del arnes, en un SUBPROCESO.
+ *
+ *  El worker corre tras la valla de permisos de Node: `--permission` con lectura solo de
+ *  la carpeta del plugin y NINGUN permiso de escritura. Ahi dentro `existsSync` no
+ *  devuelve false sino que lanza, asi que preguntarle al disco donde esta el userData
+ *  daba un motivo falso ("esta maquina no tiene userData") sobre una maquina que lo
+ *  tiene — y aunque lo hubiera encontrado, no habria podido escribir una sola linea.
+ *
+ *  Los subprocesos NO heredan la valla — es lo mismo que hace que `wa-read doctor` si
+ *  conteste — asi que la decision de ruta y la escritura se hacen del otro lado. Es el
+ *  mismo modulo corriendo como script: una sola implementacion. */
+function sembrarFuera(toolsDir) {
+  const guion = join(PLUGIN_DIR, 'harness.mjs')
+  return new Promise((resolve) => {
+    execFile(process.execPath, [guion, PLUGIN_DIR, toolsDir],
+      // El worker es el helper de Electron: sin esto arrancaria una ventana en vez de
+      // un Node. Con node pelado —los chequeos— la variable sobra y no molesta.
+      { timeout: 120000, maxBuffer: 8 * 1024 * 1024,
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } },
+      (error, stdout) => {
+        const at = new Date().toISOString()
+        try {
+          const estado = JSON.parse(stdout || 'null')
+          if (estado && typeof estado === 'object') { resolve(estado); return }
+        } catch {
+          // Cae al motivo de abajo: un stdout que no es JSON es tan fallo como un exit
+          // distinto de cero, y el detalle tiene que decir cual de los dos fue.
+        }
+        resolve({ ok: false, at, reason: error ? motivoDe(error) : 'fallo',
+          detail: String(error?.message ?? stdout ?? '').slice(0, 300) })
+      })
+  })
 }
 
 export default function activate(orca) {
@@ -359,7 +464,7 @@ export default function activate(orca) {
   // falla callado y deja el motivo escrito, como el sync. Sin ella el plugin anda
   // exactamente igual que antes.
   dirHerramientas()
-    .then((dir) => sembrar(PLUGIN_DIR, dir))
+    .then((dir) => sembrarFuera(dir))
     .then(async (estado) => {
       await guardar(orca, HARNESS_KEY, estado)
       orca.log(estado.ok
@@ -370,7 +475,7 @@ export default function activate(orca) {
 
   // Y traer las conversaciones ya: en una instalacion nueva el panel arranca vacio y
   // el usuario no tiene de donde sacarlas.
-  sincronizar('activate').catch(() => {})
+  sincronizar('activate').catch((error) => orca.log(`first sync failed: ${error.message}`))
 
   // Se reprograma en cada vuelta en vez de fijar el intervalo una sola vez: es el
   // ajuste que acota cuanto tarda un mensaje en llegarle al precheck, y cambiarlo en
@@ -382,11 +487,14 @@ export default function activate(orca) {
     const ms = await intervaloSync(orca).catch(() => SYNC_MS)
     if (detenido) return
     syncTimer = setTimeout(() => {
-      sincronizar('timer').catch(() => {}).then(() => programarSync().catch(() => {}))
+      sincronizar('timer')
+        .catch((error) => orca.log(`sync failed: ${error.message}`))
+        .then(() => programarSync()
+          .catch((error) => orca.log(`sync scheduling failed: ${error.message}`)))
     }, ms)
     if (typeof syncTimer.unref === 'function') syncTimer.unref()
   }
-  programarSync().catch(() => {})
+  programarSync().catch((error) => orca.log(`sync scheduling failed: ${error.message}`))
 
   // El boton del panel escribe un pedido; esto lo atiende. Se mira cada pocos segundos
   // y no en el ciclo de 5 minutos porque un boton que tarda cinco minutos en hacer
@@ -404,7 +512,9 @@ export default function activate(orca) {
     if (!(edad >= 0) || edad > PETICION_TTL_MS) return
     await sincronizar('peticion')
   }
-  const pedidoTimer = setInterval(() => { atenderPedido().catch(() => {}) }, PETICION_MS)
+  const pedidoTimer = setInterval(() => {
+    atenderPedido().catch((error) => orca.log(`sync request failed: ${error.message}`))
+  }, PETICION_MS)
   if (typeof pedidoTimer.unref === 'function') pedidoTimer.unref()
 
   // Las lineas web. El pedido del panel se atiende igual que el de sync, pero el estado
@@ -425,10 +535,22 @@ export default function activate(orca) {
       await guardar(orca, WEB_REQUEST_KEY, null)
       const edad = Date.now() - Date.parse(pedido.at)
       if (edad >= 0 && edad <= PETICION_TTL_MS) {
-        await atenderWeb(orca, await tool('wa-scope'), pedido, await contextoActivo())
+        // Lo que reviente aca tiene que llegar al panel. Sin esto una excepcion a mitad
+        // del enlace —un `run` que rechaza, el CLI de Orca que no esta— se la comia el
+        // catch del setInterval y el clic no dejaba rastro ninguno.
+        try {
+          await atenderWeb(orca, await tool('wa-scope'), pedido, await contextoActivo())
+        } catch (error) {
+          orca.log(`web request ${pedido.action} failed: ${error.message}`)
+          await veredicto(orca, pedido, { ok: false, code: motivoDe(error),
+            detail: String(error?.message ?? error).slice(0, 300) })
+        }
         proximaSonda = 0
         return
       }
+      // Un pedido viejo es de otra sesion y no se atiende, pero callarlo deja al panel
+      // esperando una respuesta que no va a llegar.
+      await veredicto(orca, pedido, { ok: false, code: 'vencido', detail: '' })
     }
     if (sondeando || Date.now() < proximaSonda) return
     sondeando = true
@@ -446,18 +568,24 @@ export default function activate(orca) {
       sondeando = false
     }
   }
-  const webTimer = setInterval(() => { atenderWebLineas().catch(() => {}) }, PETICION_MS)
+  const webTimer = setInterval(() => {
+    atenderWebLineas().catch((error) => orca.log(`web lines loop failed: ${error.message}`))
+  }, PETICION_MS)
   if (typeof webTimer.unref === 'function') webTimer.unref()
 
   const tool = async (name) => join(await dirHerramientas(), name)
 
   async function settings() {
-    const stored = await orca.host.call('settings.get', { key: 'config' }).catch(() => null)
+    const stored = await orca.host.call('settings.get', { key: 'config' })
+      .catch((error) => { orca.log(`settings.get failed: ${error.message}`); return null })
     return { ...DEFAULT_SETTINGS, ...(stored?.value ?? {}) }
   }
 
+  // Un alcance que no se pudo leer se ve igual que uno vacio, y vacio significa que
+  // ninguna conversacion esta autorizada: el plugin entero se apaga en silencio.
   async function scope() {
-    const stored = await orca.host.call('storage.get', { key: SCOPE_KEY }).catch(() => null)
+    const stored = await orca.host.call('storage.get', { key: SCOPE_KEY })
+      .catch((error) => { orca.log(`storage.get scope failed: ${error.message}`); return null })
     return stored?.value && typeof stored.value === 'object' ? stored.value : {}
   }
 
@@ -529,7 +657,7 @@ export default function activate(orca) {
         title: s.agentName ? `${s.agentName}: ${rows.length} pending`
                            : `${rows.length} messages mention you`,
         body: rows.slice(0, 3).map((r) => `${r.chat}: ${r.text}`.slice(0, 90)).join('\n')
-      }).catch(() => {})
+      }).catch((error) => orca.log(`notification failed: ${error.message}`))
     }
     return rows
   })
@@ -540,12 +668,18 @@ export default function activate(orca) {
   // si hay una via — la sesion web — y lo que falta es construirla. Una nota escrita
   // aca ademas se desincroniza del doctor de verdad en cuanto una de las dos cambia.
   orca.commands.register('wa-inbox.doctor', async () => {
+    // El motivo viaja: devolver ok:false con la lista vacia y sin causa es lo que hacia
+    // que el panel dijera "algo falta" sin poder decir que.
+    let error = null
     const { data } = await runJson(await tool('wa-read'), ['doctor', '--json'])
-      .catch(() => ({ data: null }))
+      .catch((e) => {
+        error = { reason: motivoDe(e), detail: String(e?.message ?? e).slice(0, 300) }
+        return { data: null }
+      })
     // Lo opcional no hace fallar: sin la segunda linea se lee igual, y pintar de rojo
     // una funcion que falta es lo que hacia parecer rota una maquina que anda bien.
     const required = (data ?? []).filter((c) => c.requerido !== false)
-    return { ok: !!data && required.every((c) => c.ok), checks: data ?? [] }
+    return { ok: !!data && required.every((c) => c.ok), checks: data ?? [], error }
   })
 
   orca.commands.register('wa-inbox.settings', async (args) => {

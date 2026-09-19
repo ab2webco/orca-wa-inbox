@@ -176,7 +176,9 @@ const DATOS = {
 
 // El stub corre dentro de la pagina. Contesta el mismo protocolo que el host:
 // orca-panel-action -> orca-panel-action-result, y storage.get envuelve en value.
-function stub(datos) {
+function stub(datos, opciones) {
+  const falla = (opciones && opciones.falla) || []
+  const veredicto = opciones && opciones.veredicto
   window.addEventListener('message', function (event) {
     const d = event.data
     if (!d || d.type !== 'orca-panel-action') return
@@ -185,8 +187,18 @@ function stub(datos) {
       const v = datos[d.params && d.params.key]
       respuesta = { ok: true, value: v === undefined ? null : { value: v } }
     } else if (d.action === 'storage.set') {
-      datos[d.params.key] = d.params.value
-      respuesta = { ok: true }
+      // El host que rechaza una escritura: es el caso que el panel decia guardado igual.
+      if (falla.indexOf(d.params.key) >= 0) {
+        respuesta = { ok: false, error: 'denied' }
+      } else {
+        datos[d.params.key] = d.params.value
+        // Y el worker contestando el pedido, que es lo que decide si el campo se vacia.
+        if (veredicto && d.params.key === 'webRequest' && d.params.value) {
+          datos.webStatus = Object.assign({ at: new Date().toISOString(),
+            requestAt: d.params.value.at, action: d.params.value.action }, veredicto)
+        }
+        respuesta = { ok: true }
+      }
     } else if (d.action === 'notifications.show') {
       respuesta = { ok: true }
     }
@@ -371,6 +383,65 @@ const PANELES = [
       }
     })
   },
+  // Los cuatro de abajo van a los CUATRO anchos y no a los dos extremos: son los
+  // estados que se entregaron rotos, y el mensaje de error es texto largo que se
+  // reacomoda distinto en cada ancho.
+  {
+    // Lo que el usuario vio y no pudo ver: guardar de donde lee fallando. El panel
+    // decia "Fuentes guardadas" con la escritura rechazada, porque de las tres
+    // encadenadas solo se miraba el resultado de la ultima.
+    nombre: 'config-fuente-fallo', archivo: 'config.html', anchos: ANCHOS,
+    datos: Object.assign({}, DATOS, { readLocal: 'on', readWeb: 'off' }),
+    stub: { falla: ['readWeb'] },
+    espera: 900,
+    guion: () => {
+      document.getElementById('read-local').value = 'off'
+      document.getElementById('read-web').value = 'on'
+      document.getElementById('save-source').click()
+      document.getElementById('said-source').scrollIntoView({ block: 'center' })
+    }
+  },
+  {
+    // Y conectar una linea que falla: el nombre tipeado TIENE que seguir ahi. Se
+    // perdia, junto con el motivo, y el usuario se quedaba mirando un formulario vacio.
+    nombre: 'config-linea-fallo', archivo: 'config.html', anchos: ANCHOS,
+    datos: Object.assign({}, DATOS, { webLines: { at: AHORA_ISO, lines: [] } }),
+    stub: { veredicto: { ok: false, code: 'sin-orca', detail: 'spawn orca ENOENT' } },
+    espera: 2500,
+    guion: () => {
+      document.getElementById('line-label').value = 'Linea del bot'
+      document.getElementById('link-line').click()
+      document.getElementById('said-line').scrollIntoView({ block: 'center' })
+    }
+  },
+  {
+    // La configuracion que el dueno queria: la app de escritorio apagada y la lectura
+    // por la sesion web. Lo que se mira es que los dos selectores digan eso y que el
+    // panel NO este pintado de rojo pidiendo la app que acaba de apagar.
+    nombre: 'config-escritorio-off', archivo: 'config.html', anchos: ANCHOS,
+    datos: Object.assign({}, DATOS, {
+      readLocal: 'off', readWeb: 'on', readWebText: 'memoria',
+      webLines: { at: AHORA_ISO, placement: 'flotante', lines: [LINEA_ENLAZADA] },
+      health: {
+        ok: true,
+        optional: [{
+          que: 'local WhatsApp database', code: 'local',
+          como: 'Darwin; the desktop app is turned off for reading',
+          howCode: 'local-covered-by-web'
+        }]
+      }
+    })
+  },
+  {
+    // Y la que pidio de verdad: las DOS encendidas en el mismo Mac — la app leyendo su
+    // numero personal y una sesion web leyendo la del bot. Dos lineas, una bandeja.
+    nombre: 'config-dos-lineas', archivo: 'config.html', anchos: ANCHOS,
+    datos: Object.assign({}, DATOS, {
+      readLocal: 'on', readWeb: 'on', readWebText: 'memoria',
+      webLines: { at: AHORA_ISO, placement: 'flotante',
+        lines: [Object.assign({}, LINEA_ENLAZADA, { label: 'Linea del bot' })] }
+    })
+  },
   {
     // Lo que la bandeja ve cuando la linea es web: el cuerpo casi nunca llega y el
     // adjunto no deja ruta. El panel mostraba el marcador crudo del CLI.
@@ -418,7 +489,8 @@ async function main() {
         const pagina = await contexto.newPage()
         const errores = []
         pagina.on('pageerror', (e) => errores.push(String(e)))
-        await pagina.addInitScript(`(${stub.toString()})(${JSON.stringify(panel.datos)})`)
+        await pagina.addInitScript(`(${stub.toString()})(${JSON.stringify(panel.datos)}, ` +
+          `${JSON.stringify(panel.stub || {})})`)
         await pagina.goto('file://' + join(RAIZ, panel.archivo))
         await pagina.waitForLoadState('load')
         const declaraciones = Object.entries(TOKENS[tema])
@@ -430,6 +502,13 @@ async function main() {
           () => document.body && document.body.innerText.trim().length > 40,
           null, { timeout: 5000 }
         ).catch(() => problemas.push(`${donde}: quedo vacio`))
+
+        // Los estados que solo existen despues de un clic. Fotografiar el panel recien
+        // cargado nunca los muestra, y son justo los dos que se entregaron rotos.
+        if (panel.guion) {
+          await pagina.evaluate(panel.guion)
+          await pagina.waitForTimeout(panel.espera || 1500)
+        }
 
         // Scroll horizontal = algo no cabe. Es exactamente el defecto que las
         // capturas tienen que delatar, asi que se mide, no se mira.

@@ -39,7 +39,7 @@ function ok (nombre, condicion, detalle = '') {
  *  `idioma` fija navigator.language antes de que corra el script del panel, que es de
  *  donde el panel saca el idioma. Sin poder fijarlo solo se podria comprobar que el
  *  diccionario existe, no que el panel lo usa — y lo segundo es lo que se rompe. */
-async function montar (archivo, storage = {}, idioma = null) {
+async function montar (archivo, storage = {}, idioma = null, gancho = null) {
   const html = readFileSync(join(root, archivo), 'utf8')
   const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true,
     url: 'https://panel.invalid/',
@@ -57,6 +57,16 @@ async function montar (archivo, storage = {}, idioma = null) {
     if (!d || d.type !== 'orca-panel-action') return
     enviados.push(d)
     let value
+    // El gancho deja simular lo que el host hace de verdad y el stub no: una escritura
+    // que el host rechaza, y un worker que contesta el pedido. Sin poder provocarlos
+    // solo se probaria el camino feliz, que es el que nunca se rompio. Lo que devuelve
+    // es el SOBRE entero, que es donde el host dice que no: `{ ok: false }`.
+    const forzado = gancho ? gancho(d, storage) : undefined
+    if (forzado !== undefined) {
+      window.postMessage({ type: 'orca-panel-action-result', requestId: d.requestId,
+        ...forzado }, '*')
+      return
+    }
     if (d.action === 'storage.get') value = { value: storage[d.params.key] }
     else if (d.action === 'storage.set') { storage[d.params.key] = d.params.value; value = { ok: true } }
     else if (d.action === 'notifications.show') value = { delivered: true }
@@ -1330,6 +1340,130 @@ console.log('\nel contrato CLI -> panel')
   ok('con todo en off, el panel contra el CLI real lo dice',
     /off/.test(apagada.doc.getElementById('pending').textContent),
     apagada.doc.getElementById('pending').textContent.trim())
+}
+
+// ───────── lo que falla se DICE, y no se lleva puesto lo tipeado ─────────
+// Los dos defectos que se reportaron: guardar de donde lee decia guardado pase lo que
+// pase, y "Conectar cuenta" vaciaba el nombre antes de saber si la linea existia.
+console.log('\nconfig.html — un guardado que falla no dice guardado')
+{
+  // El host rechaza UNA de las tres escrituras. Encadenadas como estaban, el resultado
+  // que llegaba al final era el de la tercera y el panel decia guardado igual.
+  const { doc, storage } = await montar('config.html', {}, 'es-419', (d) => {
+    if (d.action === 'storage.set' && d.params.key === 'readWeb') return { ok: false }
+    return undefined
+  })
+  doc.getElementById('read-local').value = 'off'
+  doc.getElementById('read-web').value = 'on'
+  doc.getElementById('save-source').click()
+  await espera()
+  await espera()
+  const dijo = doc.getElementById('said-source').textContent
+  ok('una fuente que no se pudo guardar no dice guardado',
+    !dijo.includes('\u2713'), `dijo ${JSON.stringify(dijo)}`)
+  // Nombrado como el usuario lo ve, no como se llama la clave del storage.
+  ok('y nombra el control que fallo, con su etiqueta',
+    dijo.includes('WhatsApp Web') && !dijo.includes('readWeb'),
+    `dijo ${JSON.stringify(dijo)}`)
+  ok('el error queda marcado en rojo',
+    doc.getElementById('said-source').className.includes('bad'))
+  ok('lo que si se pudo guardar quedo guardado', storage.readLocal === 'off',
+    `readLocal = ${JSON.stringify(storage.readLocal)}`)
+}
+
+{
+  // Y el camino feliz: las tres guardadas, y ademas se le pide al worker que relea, si
+  // no el aviso rojo sigue reclamando la app que el usuario acaba de apagar.
+  const { doc, storage } = await montar('config.html', {}, 'es-419')
+  doc.getElementById('read-local').value = 'off'
+  doc.getElementById('read-web').value = 'on'
+  doc.getElementById('read-web-text').value = 'memoria'
+  doc.getElementById('save-source').click()
+  await espera()
+  await espera()
+  ok('las tres fuentes se guardan',
+    storage.readLocal === 'off' && storage.readWeb === 'on' &&
+    storage.readWebText === 'memoria', JSON.stringify(storage))
+  ok('y lo confirma en pantalla',
+    doc.getElementById('said-source').textContent.includes('\u2713'))
+  ok('y pide una relectura para que la alerta deje de reclamar lo apagado',
+    !!storage.syncRequest, JSON.stringify(storage.syncRequest))
+}
+
+console.log('\nconfig.html — conectar una linea que falla conserva lo tipeado')
+{
+  // El worker contesta que no pudo. Antes el campo ya estaba vacio para cuando llegaba
+  // la respuesta — se vaciaba al mandar el pedido — y nada mostraba el motivo.
+  const { doc, storage } = await montar('config.html', {}, 'es-419', (d, store) => {
+    if (d.action === 'storage.set' && d.params.key === 'webRequest' && d.params.value) {
+      store.webStatus = { at: new Date().toISOString(), requestAt: d.params.value.at,
+        action: d.params.value.action, ok: false, code: 'sin-orca', detail: 'ENOENT' }
+    }
+    return undefined
+  })
+  doc.getElementById('line-label').value = 'Linea del bot'
+  doc.getElementById('link-line').click()
+  await new Promise((r) => setTimeout(r, 1500))
+  ok('el pedido se mando', !!storage.webRequest || !!storage.webStatus)
+  ok('el nombre tipeado sobrevive al fallo',
+    doc.getElementById('line-label').value === 'Linea del bot',
+    `quedo ${JSON.stringify(doc.getElementById('line-label').value)}`)
+  const dijo = doc.getElementById('said-line').textContent
+  ok('y dice que lo tipeado sigue ahi', /quedo puesto/.test(dijo),
+    `dijo ${JSON.stringify(dijo)}`)
+  ok('marcado como error', doc.getElementById('said-line').className.includes('bad'))
+  const arriba = doc.getElementById('lines-error')
+  ok('y el motivo se dice UNA vez, en el renglon de la seccion',
+    !arriba.hidden && /CLI de Orca/.test(arriba.textContent) &&
+    !/CLI de Orca/.test(dijo), arriba.textContent)
+  ok('el boton vuelve a quedar usable',
+    doc.getElementById('link-line').disabled === false)
+}
+
+{
+  // Y cuando si se conecta, el campo se vacia: es la senal de que la linea existe.
+  const { doc } = await montar('config.html', {}, 'es-419', (d, store) => {
+    if (d.action === 'storage.set' && d.params.key === 'webRequest' && d.params.value) {
+      store.webStatus = { at: new Date().toISOString(), requestAt: d.params.value.at,
+        action: d.params.value.action, ok: true, placement: 'flotante' }
+    }
+    return undefined
+  })
+  doc.getElementById('line-label').value = 'Linea del bot'
+  doc.getElementById('link-line').click()
+  await new Promise((r) => setTimeout(r, 1500))
+  ok('con la linea conectada el campo se vacia',
+    doc.getElementById('line-label').value === '',
+    `quedo ${JSON.stringify(doc.getElementById('line-label').value)}`)
+  ok('y lo confirma', doc.getElementById('said-line').textContent.includes('\u2713'),
+    doc.getElementById('said-line').textContent)
+}
+
+{
+  // "Ver la pestana" sobre una pestana que ya no esta: fallaba y el boton no decia
+  // nada. Es el mismo defecto que conectar, en el otro boton de la seccion.
+  const LINEA = {
+    id: 'web:573000000000', label: 'Linea del bot', profile: '9f2c', pending: false,
+    linkedAt: '2026-09-17 09:12', authorizedChats: 2, pageId: 'page-1', state: 'enlazada'
+  }
+  const { doc } = await montar('config.html',
+    { webLines: { at: new Date().toISOString(), lines: [LINEA] } }, 'es-419',
+    (d, store) => {
+      if (d.action === 'storage.set' && d.params.key === 'webRequest' && d.params.value) {
+        store.webStatus = { at: new Date().toISOString(), requestAt: d.params.value.at,
+          action: d.params.value.action, ok: false, code: 'sin-orca', detail: 'ENOENT' }
+      }
+      return undefined
+    })
+  await espera()
+  const ver = doc.querySelector('[data-lact]')
+  ok('la linea enlazada ofrece ver su pestana', !!ver,
+    doc.getElementById('lines-wrap').textContent.slice(0, 80))
+  ver.click()
+  await new Promise((r) => setTimeout(r, 1500))
+  const err = doc.getElementById('lines-error')
+  ok('una pestana que no se puede abrir lo dice en el acto',
+    !err.hidden && /CLI de Orca/.test(err.textContent), err.textContent)
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
