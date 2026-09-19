@@ -745,6 +745,28 @@ async function main() {
           problemas.push(`${donde}: error JS — ${errores[0]}`)
         }
 
+        // La lista desplegada de un select, en Linux, la pinta el motor de render con
+        // el color del control: un fondo transparente ahi es blanco sobre blanco y no
+        // se ve en ninguna captura, porque la captura fotografia el control cerrado.
+        // Por eso se mide en vez de mirarse, y en los dos temas.
+        for (const malo of await pagina.evaluate(() => {
+          const opaco = (c) => {
+            const m = /rgba?\(([^)]+)\)/.exec(c || '')
+            return m ? Number((m[1].split(',')[3] ?? '1').trim()) > 0.99 : false
+          }
+          const salida = []
+          for (const el of document.querySelectorAll('select, select option')) {
+            const e = getComputedStyle(el)
+            const que = el.tagName.toLowerCase() + (el.id ? '#' + el.id : '')
+            if (!opaco(e.backgroundColor)) salida.push(`${que} sin fondo propio (${e.backgroundColor})`)
+            else if (e.backgroundColor === e.color) salida.push(`${que} con el texto del color del fondo`)
+            if (!opaco(e.color)) salida.push(`${que} con el texto transparente (${e.color})`)
+          }
+          return salida
+        })) {
+          problemas.push(`${donde}: ${malo}`)
+        }
+
         const nombre = `${panel.nombre}-${idioma.tag}-${tema}-${ancho}.png`
         await pagina.screenshot({ path: join(SALIDA, nombre), fullPage: true })
         tomadas += 1
@@ -763,7 +785,7 @@ async function main() {
     for (const p of problemas) console.error(`  ${p}`)
     process.exit(1)
   }
-  console.log('sin desbordes ni errores de JS')
+  console.log('sin desbordes, sin errores de JS y con los select legibles')
 }
 
 main().catch((error) => {

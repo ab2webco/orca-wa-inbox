@@ -84,6 +84,17 @@
         color: var(--foreground, var(--fb-foreground));
       }
       textarea { resize: vertical; }
+      /* En Linux la lista desplegada del select la dibuja el mismo motor de render y
+         hereda el color del control: con el fondo transparente salia blanca, y en
+         tema oscuro con el texto en --foreground eso es blanco sobre blanco. En macOS
+         es un menu del sistema y este CSS no la toca. Se fijan las dos propiedades en
+         el control Y en las opciones porque el hueco entre ellas lo pinta el fondo
+         del control, no el de la opcion. El cerrado no cambia: el token es el mismo
+         fondo que ya tiene detras. */
+      select { background-color: var(--background, var(--fb-background));
+               color: var(--foreground, var(--fb-foreground)); }
+      select option { background-color: var(--background, var(--fb-background));
+                      color: var(--foreground, var(--fb-foreground)); }
       input:disabled { opacity: 1; color: var(--foreground, var(--fb-foreground));
                        border-color: transparent; background: var(--muted, var(--fb-muted)); }
       /* El destino con "ninguno" no es un campo vacio: es un campo que no aplica. Sin
