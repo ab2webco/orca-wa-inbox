@@ -16,6 +16,29 @@ const WA_URL = 'https://web.whatsapp.com'
 // wa-read para lo mismo.
 const ORCA_TIMEOUT_MS = 30000
 
+// El env con que se ejecuta la CLI, y donde se busco el runtime. No se hereda: Orca
+// arranca el worker con una lista blanca de variables que no incluye
+// ORCA_USER_DATA_PATH, y sin ella la CLI busca su runtime en la carpeta por defecto
+// —en Linux, `~/.config/orca`, que puede tener el runtime.json de una instalacion
+// vieja mientras el Orca vivo escribe en otra—. Lo resuelve `wa-scope runtime-home`,
+// que corre como subproceso y por eso si ve el disco.
+let ENTORNO = null
+let CASAS_INTENTADAS = []
+export function usarEntornoOrca(env, intentadas) {
+  ENTORNO = env || null
+  CASAS_INTENTADAS = Array.isArray(intentadas) ? intentadas : []
+}
+
+/** Un fallo de la CLI que en realidad es "no encontre el Orca vivo". Se separa del
+ *  resto porque el arreglo es otro y porque su mensaje no dice donde miro. */
+function esSinRuntime(code, mensaje) {
+  if (code === 'runtime_unavailable' || code === 'runtime_access_denied') return true
+  return /runtime transport|runtime metadata/i.test(String(mensaje || ''))
+}
+function detalleSinRuntime() {
+  return CASAS_INTENTADAS.length ? CASAS_INTENTADAS.join(', ') : ''
+}
+
 /** Una llamada a la CLI de Orca. Devuelve el `result`, o el motivo en `error`.
  *
  *  No lanza cuando la CLI contesta mal a proposito: `selector_not_found` es la
@@ -23,11 +46,15 @@ const ORCA_TIMEOUT_MS = 30000
  *  excepcion la convertiria en una falla en vez de en un dato. */
 function orcaJson(exe, args, { timeoutMs = ORCA_TIMEOUT_MS } = {}) {
   return new Promise((resolve) => {
-    execFile(exe, [...args, '--json'], { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 },
+    execFile(exe, [...args, '--json'],
+      { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, env: ENTORNO || process.env },
       (error, stdout, stderr) => {
         if (error && !stdout) {
-          resolve({ ok: false, code: error.code === 'ENOENT' ? 'sin-orca' : 'fallo',
-                    message: String(stderr || error.message).trim().slice(0, 300) })
+          const mensaje = String(stderr || error.message).trim().slice(0, 300)
+          let code = error.code === 'ENOENT' ? 'sin-orca' : 'fallo'
+          if (code !== 'sin-orca' && esSinRuntime(null, mensaje)) code = 'sin-runtime'
+          resolve({ ok: false, code: code,
+                    message: code === 'sin-runtime' ? detalleSinRuntime() : mensaje })
           return
         }
         let data = null
@@ -39,8 +66,13 @@ function orcaJson(exe, args, { timeoutMs = ORCA_TIMEOUT_MS } = {}) {
           return
         }
         if (!data || data.ok !== true) {
-          resolve({ ok: false, code: data?.error?.code || 'fallo',
-                    message: String(data?.error?.message || '').slice(0, 300) })
+          const code = data?.error?.code || 'fallo'
+          const mensaje = String(data?.error?.message || '').slice(0, 300)
+          if (esSinRuntime(code, mensaje)) {
+            resolve({ ok: false, code: 'sin-runtime', message: detalleSinRuntime() })
+            return
+          }
+          resolve({ ok: false, code: code, message: mensaje })
           return
         }
         // El runtime que contesto viaja con cada respuesta: es la identidad del HOST

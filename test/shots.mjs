@@ -116,7 +116,7 @@ const DATOS = {
     '573000000000@s.whatsapp.net': {
       chatName: 'Laura Mendez', provider: 'ninguno', target: null,
       mode: 'responder', tone: 'Cercano pero de usted. Frases cortas.',
-      instructions: 'Lee lo que manda y dejame un resumen. Si pregunta por algo que ya ' +
+      instructions: 'Lea lo que manda y dejeme un resumen. Si pregunta por algo que ya ' +
         'esta en el board, contestale con el estado. No abras tarjetas aca.',
       updatedAt: '2026-09-17T13:30:00Z'
     }

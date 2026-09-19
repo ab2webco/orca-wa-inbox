@@ -38,7 +38,7 @@ import argparse, hashlib, json, os, platform, shutil, sqlite3, subprocess, sys, 
 # instalacion es justo lo que deja el plugin en "No valido".
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from wa_settings import settings_from_plugin  # noqa: E402
+from wa_settings import orca_cli_path, orca_env, settings_from_plugin  # noqa: E402
 
 APPLE_EPOCH = 978307200  # Core Data usa 2001-01-01 como epoch
 # El unico pedazo de esto que es especifico del sistema es DONDE deja WhatsApp su base.
@@ -437,8 +437,12 @@ def orca_json(args, timeout=30):
                           "the Orca CLI is not in PATH, so the browser session cannot "
                           "be driven; open Orca Lab, or set ORCA_CLI_COMMAND")
     try:
+        # El env se arma, no se hereda: el worker del plugin corre con una lista
+        # blanca que no incluye ORCA_USER_DATA_PATH, y sin esa variable la CLI busca
+        # su runtime en la carpeta por defecto —en Linux, una que puede tener un
+        # runtime.json viejo de otra instalacion.
         p = subprocess.run([exe, *args, "--json"], capture_output=True, text=True,
-                           timeout=timeout)
+                           timeout=timeout, env=orca_env())
     except (OSError, subprocess.SubprocessError) as error:
         raise SourceError(WEB_SIN_ORCA,
                           f"could not run the Orca CLI ({exe}): {error}") from error
@@ -616,8 +620,8 @@ function candidato(m, yo, corte) {
   const menciona = Array.isArray(m.mentionedJidList)
     && m.mentionedJidList.some((x) => yo.has(usuario(x)));
   const cita = !!(m.quotedParticipant && yo.has(usuario(m.quotedParticipant)));
-  // En un grupo solo cuenta si te nombran o si contestan algo tuyo. En un directo
-  // todo mensaje ajeno es para vos.
+  // En un grupo solo cuenta si lo nombran o si contestan algo suyo. En un directo
+  // todo mensaje ajeno es para usted.
   if (grupo && !menciona && !cita) return null;
   const autor = quien(m.author) || (p.length > 3 ? p[3] : '');
   return [p[2] || '', chat, t, autor, '', menciona ? 1 : 0,
@@ -1631,8 +1635,8 @@ def cmd_inbox(con, a):
           -- mencion ya la atendiste. Sin esto una mencion vieja se queda para siempre.
           -- Vale igual para grupo y para uno a uno, asi que va una sola vez.
           and m.ZMESSAGEDATE > coalesce(lm.mine, 0)
-          -- En un chat uno a uno todo mensaje es para vos. En grupo solo cuenta si te
-          -- nombran o responden algo tuyo: lo demas es conversacion ajena.
+          -- En un chat uno a uno todo mensaje es para usted. En grupo solo cuenta si lo
+          -- nombran o responden algo suyo: lo demas es conversacion ajena.
           and (c.ZCONTACTJID not like '%@g.us'
                or m.ZTEXT like '%@{lid}%' or p.ZISFROMME = 1)
         order by m.ZMESSAGEDATE desc
@@ -1820,18 +1824,9 @@ def _transcribe_check():
 
 
 def orca_cli():
-    """El binario de la CLI de Orca, que NO se llama igual en todas partes.
-
-    En Linux `orca` es el lector de pantalla de GNOME: buscarlo con `which("orca")`
-    lo encuentra, el doctor dice que se puede enviar, y la primera corrida real le
-    pone a hablar la maquina a una persona ciega. Ahi el comando es `orca-ide`, y
-    quien empaqueta puede fijar otro con ORCA_CLI_COMMAND."""
-    declarado = os.environ.get("ORCA_CLI_COMMAND", "").strip()
-    if declarado:
-        return shutil.which(declarado.split()[0]) or declarado.split()[0]
-    if platform.system() == "Linux":
-        return shutil.which("orca-ide")
-    return shutil.which("orca")
+    """El binario de la CLI de Orca. La resolucion vive en wa_settings porque el
+    worker la necesita igual y tres copias eran tres verdades."""
+    return orca_cli_path()
 
 
 def captura_estado_txt():

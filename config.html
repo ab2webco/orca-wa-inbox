@@ -264,6 +264,9 @@
                color: var(--foreground, var(--fb-foreground));
                background: color-mix(in srgb,
                  var(--destructive, var(--fb-destructive)) 8%, transparent); }
+      /* El porque va apagado y en su renglon: la instruccion es lo que hay que leer. */
+      .alert-why { display: block; margin-top: 4px; font-size: 11px;
+                   color: var(--muted-foreground, var(--fb-muted-foreground)); }
       code { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
       @media (max-width: 620px) { .row { grid-template-columns: 1fr; } }
     </style>
@@ -527,7 +530,7 @@
           transcribeLabel: "Notas de voz",
           trLocal: "local — el audio no sale de este equipo",
           trOff: "off — no las transcribe",
-          transcribeHelp: "Con off el agente no sabe que dice un audio y te lo deja " +
+          transcribeHelp: "Con off el agente no sabe que dice un audio y se lo deja " +
             "marcado para escucharlo. api sube el audio a un tercero.",
           saveTranscribe: "Guardar notas de voz",
           transcribeSaved: "Notas de voz guardadas",
@@ -540,45 +543,45 @@
           qualityOptima: "optima — recomendado",
           qualityMinima: "minima — equipos sin computo",
           qualityHelp: "Minima solo si el equipo no puede con el modelo grande: en " +
-            "español deforma nombres y pedidos, no decidas leyendo su texto.",
+            "español deforma nombres y pedidos, no decida leyendo su texto.",
           saveQuality: "Guardar calidad",
           qualitySaved: "Calidad guardada",
           chatHelp: "Se elige de la lista. Hay grupos con el mismo nombre, asi que se guarda por identificador.",
-          chatSearchPh: "Escribi para filtrar",
+          chatSearchPh: "Escriba para filtrar",
           chatCount: "{n} de {total}", chatNoMatch: "Ninguna coincide con eso",
           chatToneLabel: "Como escribe aca (opcional)",
           chatTonePh: "vacio = usa el tono global",
           chatInstrLabel: "Que hace aca (opcional)",
-          chatInstrPh: "ej. Lee lo que manden y hazme un resumen. Contesta si te preguntan " +
-            "algo que ya sabes. No abras tarjetas.",
+          chatInstrPh: "ej. Lea lo que manden y hagame un resumen. Conteste si preguntan " +
+            "algo que ya sabe. No abra tarjetas.",
           chatInstrHelp: "El tono es COMO escribe; esto es QUE hace. Manda sobre el " +
             "comportamiento por defecto, menos en las reglas de seguridad: nunca una " +
             "credencial, nunca enviar sin permiso de responder.",
-          pickOne: "Elegi una conversacion",
-          noChats: "Buscando tus conversaciones…",
+          pickOne: "Elija una conversacion",
+          noChats: "Buscando sus conversaciones…",
           // Ningun estado nombra un comando: si el usuario tiene que abrir una
           // terminal para que el panel sirva, el panel no sirve.
           noChatsFail: "Sin conversaciones",
           syncRetry: "Buscar de nuevo", syncAsked: "Buscando de nuevo…",
-          syncNoTools: "No pude ejecutar las herramientas del plugin. Reinstalalo " +
-            "desde el marketplace y volve a intentar.",
+          syncNoTools: "No pude ejecutar las herramientas del plugin. Reinstalelo " +
+            "desde el marketplace y vuelva a intentar.",
           syncNoPerm: "Las herramientas del plugin no tienen permiso para ejecutarse. " +
-            "Reinstalalo desde el marketplace.",
+            "Reinstalelo desde el marketplace.",
           syncTimeout: "La lectura de WhatsApp tardo demasiado y se corto.",
           syncNoRecord: "Las herramientas corrieron pero no dejaron nada escrito.",
           syncFailed: "No pude leer WhatsApp.",
-          syncNoChats: "No encontre ninguna conversacion. Abri WhatsApp Desktop una " +
-            "vez, espera a que cargue tus chats, y volve a intentar.",
+          syncNoChats: "No encontre ninguna conversacion. Abra WhatsApp Desktop una " +
+            "vez, espere a que cargue sus chats, y vuelva a intentar.",
           syncStalled: "Llevo un rato buscando y no llego nada.",
-          sub: 'Que conversaciones ve tu agente, y hasta donde puede actuar en cada una.',
-          agentLegend: 'Tu agente', agentLabel: 'Como se llama',
+          sub: 'Que conversaciones ve su agente, y hasta donde puede actuar en cada una.',
+          agentLegend: 'Su agente', agentLabel: 'Como se llama',
           agentPh: 'ej. Watson, Viernes, Asistente',
-          agentHelp: 'Firma cada mensaje que escriba, para que nadie dude de si hablas vos o el.',
+          agentHelp: 'Firma cada mensaje que escriba, para que nadie dude de si habla usted o el.',
           saveName: 'Guardar nombre', saveChange: 'Guardar cambio', cancel: 'Cancelar',
           editName: 'Cambiar el nombre',
           ownerLabel: 'Para quien trabaja',
           ownerPh: 'ej. Ana Restrepo',
-          ownerHelp: 'Tu nombre. El agente lo usa para saber de quien es el trabajo que ' +
+          ownerHelp: 'Su nombre. El agente lo usa para saber de quien es el trabajo que ' +
             'atiende y a quien le reporta.',
           saveOwner: 'Guardar', ownerSaved: 'Guardado',
           daysLabel: 'Hasta cuando atras mira',
@@ -606,7 +609,7 @@
           readWebLabel: 'WhatsApp Web (otra linea)',
           readWebOff: 'no', readWebOn: 'si — lee la lista, la bandeja y la identidad',
           readWebTextLabel: 'Texto de los mensajes de WhatsApp Web',
-          readWebTextOff: 'no — solo quien te nombro y cuando',
+          readWebTextOff: 'no — solo quien lo nombro y cuando',
           readWebTextMemoria: 'si — graba el cuerpo de lo que llegue y lee lo cargado',
           sourceHelp: 'Se suman: la app lee UNA linea, la del telefono con el que se ' +
             'instalo. WhatsApp Web es otra — el numero de soporte, otra cuenta — con ' +
@@ -615,10 +618,10 @@
             'solo el cuerpo que esa sesion ya tiene cargado, sin abrir ninguna ' +
             'conversacion y sin marcar nada como leido. Como la sesion solo tiene en ' +
             'memoria el ultimo mensaje de cada conversacion, ademas deja un oyente en la ' +
-            'pagina que anota el cuerpo de lo que si se puede atender — te nombran, ' +
-            'contestan algo tuyo, o es un directo — mientras la sesion este abierta: ' +
+            'pagina que anota el cuerpo de lo que si se puede atender — lo nombran, ' +
+            'contestan algo suyo, o es un directo — mientras la sesion este abierta: ' +
             'queda en ~/.wa-inbox/capture.db, en este equipo y solo para quien lo usa, ' +
-            'hasta 20000 cuerpos y 90 dias. La charla de grupo que no te nombra no se ' +
+            'hasta 20000 cuerpos y 90 dias. La charla de grupo que no lo nombra no se ' +
             'guarda nunca, y apagarlo vacia lo guardado. Por esta via la bandeja empieza ' +
             'a contar cuando se conecto la linea, no dias atras. Por ' +
             'la via web no hay rutas de adjuntos. Conectar una linea no autoriza ninguna ' +
@@ -639,29 +642,29 @@
             'puesto de dispositivo enlazado, y la sesion se puede caer. Se enciende sola ' +
             'al conectar una linea en "Lineas conectadas", mas arriba.',
           howWebNoOrca: 'La CLI de Orca no esta en el PATH y sin ella no se puede ' +
-            'conducir el navegador. Abri Orca Lab, o fija ORCA_CLI_COMMAND.',
+            'conducir el navegador. Abra Orca Lab, o fije ORCA_CLI_COMMAND.',
           howWebNoSession: 'No hay ninguna pestana del navegador de Orca abierta en ' +
-            'web.whatsapp.com para esa linea. Enlazala desde el panel y deja la pestana abierta.',
-          howWebLoggedOut: 'Esa sesion no esta enlazada. Abri la pestana y escanea el QR ' +
+            'web.whatsapp.com para esa linea. Enlacela desde el panel y deje la pestana abierta.',
+          howWebLoggedOut: 'Esa sesion no esta enlazada. Abra la pestana y escanee el QR ' +
             'con el telefono de ESE numero.',
           howWebLinePending: 'La linea que conectaste todavia no escaneo el QR, asi ' +
-            'que no hay sesion suya que leer. Terminala en "Lineas conectadas", mas ' +
+            'que no hay sesion suya que leer. Terminela en "Lineas conectadas", mas ' +
             'arriba. Mientras tanto no se lee NADA por esta via: cualquier otra pestana ' +
             'de WhatsApp Web que este abierta es de otro numero.',
           howWebNoLine: 'La via web esta encendida y no hay ninguna linea enlazada. ' +
-            'Conecta una en "Lineas conectadas", mas arriba, y escanea el QR con el ' +
+            'Conecte una en "Lineas conectadas", mas arriba, y escanee el QR con el ' +
             'telefono de ESE numero. No lee la pestana de WhatsApp Web que haya abierta: ' +
             'esa sesion es la linea de otro.',
           howWebProfileAmbiguous: 'Hay dos perfiles del navegador con el mismo nombre, ' +
-            'asi que no se puede saber cual es la sesion de esta linea. Cambiale el ' +
-            'nombre a uno en Orca, o desvincula la linea y volve a conectarla.',
+            'asi que no se puede saber cual es la sesion de esta linea. Cambiele el ' +
+            'nombre a uno en Orca, o desvincule la linea y vuelva a conectarla.',
           howWebTimeout: 'La sesion no contesto a tiempo: la pestana puede estar cargando ' +
             'todavia, o el telefono estar sin conexion.',
-          howWebReadFailed: 'La sesion contesto con un error al leer sus datos. Recarga ' +
-            'la pestana y volve a probar.',
-          howWebNoText: 'Pediste el texto de los mensajes y esta version de WhatsApp Web ' +
-            'ya no lo deja leer sin abrir cada conversacion. Poné el texto en "no" para ' +
-            'tener la bandeja igual, con quien te nombro y cuando.',
+          howWebReadFailed: 'La sesion contesto con un error al leer sus datos. Recargue ' +
+            'la pestana y vuelva a probar.',
+          howWebNoText: 'Pidio el texto de los mensajes y esta version de WhatsApp Web ' +
+            'ya no lo deja leer sin abrir cada conversacion. Ponga el texto en "no" para ' +
+            'tener la bandeja igual, con quien lo nombro y cuando.',
           linesLegend: 'Lineas conectadas',
           linesHelp: 'La app de escritorio ya lee la linea del telefono con el que se ' +
             'instalo. Esto suma otra — el numero de soporte, otra cuenta — como sesion ' +
@@ -671,99 +674,103 @@
           lineLabelLabel: 'Como se llama esta linea',
           lineLabelPh: 'ej. Soporte, Ventas, Mi otro numero',
           linkLine: 'Conectar cuenta',
-          noLines: 'Todavia no conectaste ninguna linea de WhatsApp Web.',
+          noLines: 'Todavia no ha conectado ninguna linea de WhatsApp Web.',
           // --- el worker, su casa y su host ---
-          workerGone: 'El plugin no esta corriendo',
-          workerGoneHow: 'Orca no arranco el worker de este plugin, asi que nada de lo ' +
-            'que aprietes aca va a contestar. Casi siempre es que falta aprobarlo: ' +
-            'abri Ajustes > Plugins y mira si WhatsApp Inbox pide tu aprobacion. Cada ' +
-            'actualizacion la vuelve a pedir, porque cambia lo que el plugin le dice a ' +
-            'tu agente que ejecute.',
+          workerGone: 'Apruebe el plugin en Ajustes',
+          workerGoneHow: 'Abra Ajustes > Plugins y apruebe WhatsApp Inbox. Hasta que lo ' +
+            'apruebe, Orca no lo arranca y ningun boton de aca responde.',
+          workerGoneWhy: 'Cada actualizacion la vuelve a pedir, porque cambia lo que el ' +
+            'plugin le dice a su agente que ejecute.',
           workerStale: 'El plugin dejo de responder',
-          workerStaleHow: 'El worker latia y dejo de hacerlo hace {s} s. Si no vuelve, ' +
-            'reinicia Orca.',
+          workerStaleHow: 'Espere unos segundos y, si no vuelve, reinicie Orca. Dejo de ' +
+            'dar senales hace {s} s.',
           homeFloating: 'espacio flotante',
           homeMoved: 'Se movio de lugar',
           homeMovedHow: 'Esta linea vive en {c}, pero su pestana esta ahora en {d}. ' +
-            'Decidi vos: llevala de vuelta, o dejala donde esta y que esa sea su casa.',
+            'Usted decide: llevela de vuelta, o dejela donde esta y que esa sea su casa.',
           homeBack: 'Volver a su lugar',
           homeAdopt: 'Dejarla aca',
           homeGone: 'Su lugar ya no existe',
           homeGoneHow: 'Esta linea vivia en el proyecto "{p}", que ya no esta abierto ' +
-            'en Orca. Abri ese proyecto y reintenta, o mudala a otro lugar.',
+            'en Orca. Abra ese proyecto y reintente, o mudela a otro lugar.',
           homeOtherHost: 'Vive en otro Orca',
           homeOtherHostHow: 'Esta linea se conecto en otro Orca y su sesion vive alla: ' +
-            'el perfil del navegador no existe en este. Abri la linea desde aquel, o ' +
-            'conecta una nueva aca.',
+            'el perfil del navegador no existe en este. Abra la linea desde aquel, o ' +
+            'conecte una nueva aca.',
           moveToFloating: 'Mover al espacio flotante',
           moveToProject: 'Mover al proyecto',
           moveFailed: 'No pude mover la pestana.',
           errCasaAusente: 'El proyecto donde vivia esa pestana ya no esta abierto en ' +
-            'Orca. Abrilo y reintenta, o mueve la linea a otro lugar.',
+            'Orca. Abralo y reintente, o mueva la linea a otro lugar.',
           errOtroHost: 'Esa linea se conecto en otro Orca y su sesion vive alla.',
           errSinCasa: 'Esa linea no tiene un lugar anotado todavia.',
-          lineHostHere: 'Las lineas viven en el Orca donde las conectas. Esta es esta ' +
-            'maquina: si te conectas a un servidor remoto, sus pestanas y sus perfiles ' +
+          errSaturado: 'Orca freno los pedidos de este panel por un momento. Espere ' +
+            'unos segundos y vuelva a intentar: no hace falta apretar dos veces.',
+          errSinRuntime: 'Cierre Orca Lab y vuelva a abrirlo: el plugin no encontro ' +
+            'ningun Orca contestando. Busco en {p}. Si esas carpetas tienen un ' +
+            'orca-runtime.json de una instalacion vieja, borrelo.',
+          lineHostHere: 'Las lineas viven en el Orca donde las conecta. Esta es esta ' +
+            'maquina: si se conecta a un servidor remoto, sus pestanas y sus perfiles ' +
             'son otros y esta linea no va a estar ahi.',
           colLine: 'Linea', colLineState: 'Estado',
           seeTab: 'Ver la pestana', openTab: 'Abrir la pestana', retryLine: 'Reintentar',
           unlink: 'Desvincular', unlinkYes: 'Si, desvincular', unlinkNo: 'Dejarla',
           stWaiting: 'Esperando el escaneo',
-          stWaitingHow: 'Apreta "Ver la pestana" y escanea el codigo QR con el telefono ' +
-            'de ESE numero. En cuanto lo hagas, esto cambia solo.',
+          stWaitingHow: 'Presione "Ver la pestana" y escanee el codigo QR con el ' +
+            'telefono de ESE numero. En cuanto lo haga, esto cambia solo.',
           stLoading: 'Abriendo la pestana',
-          stLoadingHow: 'La sesion todavia esta cargando. Dale unos segundos.',
+          stLoadingHow: 'Deje pasar unos segundos: la sesion todavia esta cargando.',
           stLinked: 'Enlazada',
           stLinkedNone: 'Lista para leer, y todavia no ve ninguna conversacion. ' +
-            'Autorizalas abajo, una por una.',
+            'Autoricelas abajo, una por una.',
           stLinkedOne: 'Lista para leer. Tiene 1 conversacion autorizada.',
           stLinkedSome: 'Lista para leer. Tiene {n} conversaciones autorizadas.',
           stDropped: 'Se desvinculo',
-          stDroppedHow: 'Esa sesion se cayo: el telefono estuvo mucho rato sin conexion, ' +
-            'o la sacaste desde Dispositivos vinculados. Apreta "Ver la pestana" y ' +
-            'escanea el QR otra vez.',
+          stDroppedHow: 'Presione "Ver la pestana" y escanee el QR otra vez. Esa sesion ' +
+            'se cayo: el telefono estuvo mucho rato sin conexion, o usted la saco desde ' +
+            'Dispositivos vinculados.',
           stNoTab: 'Sin pestana',
           stNoTabHow: 'La pestana se cerro: las pestanas no sobreviven a reiniciar ni a ' +
             'actualizar Orca. La sesion sigue guardada en su perfil, asi que abrirla de ' +
-            'nuevo no te va a pedir escanear.',
+            'nuevo no le va a pedir escanear.',
           stNoTabScan: 'La pestana se cerro: las pestanas no sobreviven a reiniciar ni a ' +
             'actualizar Orca. Esta linea todavia no termino de enlazarse, asi que al ' +
-            'abrirla vas a ver el codigo QR: escanealo con el telefono de ESE numero.',
+            'abrirla va a ver el codigo QR: escanee ese codigo con el telefono de ESE numero.',
           stUnknown: 'Estado que no conozco',
-          stUnknownHow: 'El plugin informo "{s}", que este panel no sabe leer. Reintenta; ' +
-            'si sigue igual, actualiza el plugin.',
+          stUnknownHow: 'El plugin informo "{s}", que este panel no sabe leer. Reintente; ' +
+            'si sigue igual, actualice el plugin.',
           stNoOrca: 'Orca no contesta',
           stNoOrcaHow: 'No pude ejecutar la CLI de Orca, que es con lo que se conduce el ' +
-            'navegador. Con Orca Lab abierto, reintenta.',
+            'navegador. Con Orca Lab abierto, reintente.',
           linePlacedFloating: 'La pestana vive en el espacio flotante. Ese panel no se ' +
-            'abre desde aca: abrilo vos con {k}, o con el boton del espacio flotante en ' +
+            'abre desde aca: abralo usted con {k}, o con el boton del espacio flotante en ' +
             'la barra de estado de Orca.',
-          linePlacedProject: 'La pestana vive en el proyecto "{p}". Para verla, entra a ' +
+          linePlacedProject: 'La pestana vive en el proyecto "{p}". Para verla, entre a ' +
             'ese proyecto en la barra lateral. Ojo: se cierra junto con el.',
           lineNoPlace: 'No hay ningun proyecto abierto en Orca donde poner la pestana. ' +
-            'Abri un proyecto en Orca y reintenta.',
+            'Abra un proyecto en Orca y reintente.',
           lineWhereLabel: 'Donde abrir la pestana',
-          lineWhereProject: 'En el proyecto que estas mirando',
+          lineWhereProject: 'En el proyecto que esta mirando',
           lineWhereFloating: 'En el espacio flotante',
-          lineWhereHelp: 'En el proyecto la ves entrando a el, y se cierra con el. El ' +
-            'espacio flotante sobrevive a cerrar el proyecto, y su panel lo abris con ' +
+          lineWhereHelp: 'En el proyecto la ve entrando a el, y se cierra con el. El ' +
+            'espacio flotante sobrevive a cerrar el proyecto, y su panel lo abre con ' +
             '{k}: ningun boton de aca lo hace.',
           errSinFlotante: 'Esta version de Orca no sabe abrir una pestana en el espacio ' +
-            'flotante. Elegi "En el proyecto que estas mirando".',
+            'flotante. Elija "En el proyecto que esta mirando".',
           errFlotanteSinVia: 'Esa pestana esta en el espacio flotante y ningun comando ' +
-            'puede abrir ese panel. Abrilo vos y la vas a encontrar ahi.',
-          lineShownIn: 'Te lleve a "{p}" y puse la pestana adelante.',
-          lineStagedIn: 'La pestana esta en el proyecto "{p}". No pude traerte hasta ahi: ' +
-            'entra a ese proyecto en la barra lateral y vas a verla.',
+            'puede abrir ese panel. Abralo usted y la va a encontrar ahi.',
+          lineShownIn: 'Lo lleve a "{p}" y puse la pestana adelante.',
+          lineStagedIn: 'La pestana esta en el proyecto "{p}". No pude llevarlo hasta ahi: ' +
+            'entre a ese proyecto en la barra lateral y va a verla.',
           lineFailed: 'No pude conectar la linea.',
           unlinkFailed: 'No pude desvincular la linea.',
           showFailed: 'No pude abrir la pestana.',
           actionFailed: 'No pude hacer eso.',
           lineRemoved: 'Linea desvinculada',
-          errDesactualizado: 'Esa linea cambio de estado mientras la mirabas, asi que ' +
-            'no toque nada. Mira como quedo arriba y volve a intentar.',
-          lineKept: 'El nombre quedo puesto: corregi lo de arriba y volve a intentar.',
-          lineNoAnswer: 'El plugin no contesto. Fijate si Orca sigue abierto y volve a ' +
+          errDesactualizado: 'Esa linea cambio de estado mientras la miraba, asi que ' +
+            'no toque nada. Mire como quedo arriba y vuelva a intentar.',
+          lineKept: 'El nombre quedo puesto: corrija lo de arriba y vuelva a intentar.',
+          lineNoAnswer: 'El plugin no contesto. Fijese si Orca sigue abierto y vuelva a ' +
             'intentar; el nombre quedo puesto.',
           lineDone: 'Linea conectada.',
           hNoSource: 'No hay de donde leer',
@@ -771,25 +778,25 @@
           errSinHerramientas: 'No pude ejecutar las herramientas del plugin.',
           errSinPermiso: 'Las herramientas del plugin no tienen permiso de ejecucion.',
           errDemoro: 'La operacion tardo demasiado y la corte.',
-          errVencido: 'El pedido quedo viejo y no se atendio. Volve a intentar.',
+          errVencido: 'El pedido quedo viejo y no se atendio. Vuelva a intentar.',
           errAMedias: 'La linea salio del registro, pero quedo algo sin borrar.',
           errSinIdentidad: 'La sesion esta enlazada y el registro no la pudo anotar. '
-            + 'Reintenta; si sigue, revisa que el registro se pueda escribir.',
-          errSinPestana: 'Esa pestana ya no existe: se cerro al reiniciar Orca. Abrila de ' +
+            + 'Reintente; si sigue, revise que el registro se pueda escribir.',
+          errSinPestana: 'Esa pestana ya no existe: se cerro al reiniciar Orca. Abrala de ' +
             'nuevo con "Abrir la pestana".',
           unlinkWarn: 'Desvincular {l}: se libera el puesto de dispositivo vinculado, se ' +
-            'borra su perfil de navegador y se quitan las {n} conversaciones que le ' +
-            'autorizaste. Vas a tener que escanear el QR de nuevo. El texto ya capturado ' +
-            'se borra cuando pongas el texto de los mensajes en "no".',
+            'borra su perfil de navegador y se quitan las {n} conversaciones que ' +
+            'tenia autorizadas. Va a tener que escanear el QR de nuevo. El texto ya ' +
+            'capturado se borra cuando ponga el texto de los mensajes en "no".',
           unlinkWarn1: 'Desvincular {l}: se libera el puesto de dispositivo vinculado, se ' +
-            'borra su perfil de navegador y se quita la conversacion que le autorizaste. ' +
-            'Vas a tener que escanear el QR de nuevo. El texto ya capturado se borra ' +
-            'cuando pongas el texto de los mensajes en "no".',
+            'borra su perfil de navegador y se quita la conversacion que tenia ' +
+            'autorizada. Va a tener que escanear el QR de nuevo. El texto ya capturado ' +
+            'se borra cuando ponga el texto de los mensajes en "no".',
           unlinkWarn0: 'Desvincular {l}: se libera el puesto de dispositivo vinculado y se ' +
-            'borra su perfil de navegador. Vas a tener que escanear el QR de nuevo.',
+            'borra su perfil de navegador. Va a tener que escanear el QR de nuevo.',
           lineWorking: 'Creando el perfil y abriendo la pestana\u2026',
           lineRemoving: 'Desvinculando\u2026',
-          needLineLabel: 'Ponele un nombre a la linea primero.',
+          needLineLabel: 'Pongale un nombre a la linea primero.',
           mapLegend: 'Conversaciones', chatLabel: 'Conversacion',
           chatPh: 'nombre exacto del grupo o su JID',
           providerLabel: 'Servicio de tareas', permLabel: 'Permiso',
@@ -799,10 +806,10 @@
           targetHintNone: 'Esta conversacion no abre tarjetas: ninguna regla de contenido ' +
             'la manda a un board.',
           targetHint: 'El destino real lo decide el contenido del mensaje con las reglas de abajo. ' +
-            'Esto es solo el fallback cuando ninguna regla engancha. Dejalo vacio para que no ' +
+            'Esto es solo el fallback cuando ninguna regla engancha. Dejelo vacio para que no ' +
             'abra tarjeta si no reconoce el cliente.',
           save: 'Guardar conversacion', saveEdit: 'Guardar cambios', cancelEdit: 'Cancelar edicion',
-          empty: 'Ninguna conversacion autorizada. Lo que no esta aca, tu agente no lo ve.',
+          empty: 'Ninguna conversacion autorizada. Lo que no esta aca, su agente no lo ve.',
           colChat: 'Conversacion', colTarget: 'Por defecto', colPerm: 'Permiso',
           edit: 'Editar', remove: 'Quitar',
           routesLegend: 'A que proyecto va',
@@ -813,7 +820,7 @@
           addRoute: 'Agregar regla', noRoutes: 'Sin reglas. Todo va al destino por defecto de cada conversacion.',
           colWhen: 'Cuando diga', colGoes: 'Va a',
           notReady: 'WhatsApp no esta conectado.',
-          notReadyHow: 'Revisa los requisitos aca abajo.',
+          notReadyHow: 'Revise los requisitos aca abajo.',
           hSystem: 'Base local de WhatsApp soportada en este sistema',
           hWhatsapp: 'WhatsApp Desktop instalado',
           hDatabase: 'Base de chats presente',
@@ -827,17 +834,17 @@
           howTranscribeMissingTool: 'Falta bin/wa-transcribe dentro del plugin',
           howTranscribeUnknown: 'No se pudo verificar la transcripcion',
           howTranscribeOrcaOutdated: 'Este Orca todavia no trae transcripcion de audio; ' +
-            'actualizalo, o instala un motor local con brew install whisper-cpp',
-          howTranscribeNoEngine: 'Sin motor: baja el modelo en Ajustes > Voz, o instala ' +
+            'actualicelo, o instale un motor local con brew install whisper-cpp',
+          howTranscribeNoEngine: 'Sin motor: baje el modelo en Ajustes > Voz, o instale ' +
             'uno local con brew install whisper-cpp',
-          howTranscribeNoModel: 'Falta el modelo: bajalo en Ajustes > Voz',
+          howTranscribeNoModel: 'Falta el modelo: bajelo en Ajustes > Voz',
           modeOff: 'off', modeObserve: 'observar', modeDraft: 'borrador',
           modeReply: 'responder',
           provNone: 'ninguno', provPlane: 'plane', provLinear: 'linear',
           provGithub: 'github',
           needsUpdate: 'Esta version de Orca no deja guardar desde aca.',
-          needsUpdateHow: 'Actualiza Orca.',
-          needName: 'Poné un nombre.', needChat: 'Falta la conversacion.',
+          needsUpdateHow: 'Actualice Orca.',
+          needName: 'Ponga un nombre.', needChat: 'Falta la conversacion.',
           needMatch: 'Falta el texto y el destino.',
           savedOk: 'Guardado', removedOk: 'Quitado', named: 'Se llama',
           off: 'off — no la toca', observe: 'observar — solo lee, no escribe',
@@ -998,15 +1005,14 @@
           linkLine: 'Connect an account',
           noLines: 'No WhatsApp Web line connected yet.',
           // --- el worker, su casa y su host ---
-          workerGone: 'The plugin is not running',
-          workerGoneHow: 'Orca did not start this plugin\u2019s worker, so nothing you ' +
-            'press here will answer. Almost always it is waiting for your approval: ' +
-            'open Settings > Plugins and check whether WhatsApp Inbox is asking for ' +
-            'it. Every update asks again, because it changes what the plugin tells ' +
-            'your agent to run.',
+          workerGone: 'Approve the plugin in Settings',
+          workerGoneHow: 'Open Settings > Plugins and approve WhatsApp Inbox. Until you ' +
+            'do, Orca does not start it and no button here answers.',
+          workerGoneWhy: 'Every update asks again, because it changes what the plugin ' +
+            'tells your agent to run.',
           workerStale: 'The plugin stopped responding',
-          workerStaleHow: 'The worker was alive and stopped {s} s ago. If it does not ' +
-            'come back, restart Orca.',
+          workerStaleHow: 'Wait a few seconds and, if it does not come back, restart ' +
+            'Orca. It stopped signalling {s} s ago.',
           homeFloating: 'the floating workspace',
           homeMoved: 'It moved',
           homeMovedHow: 'This line lives in {c}, but its tab is now in {d}. You decide: ' +
@@ -1028,6 +1034,11 @@
           errOtroHost: 'That line was connected in another Orca and its session lives ' +
             'there.',
           errSinCasa: 'That line has no recorded place yet.',
+          errSaturado: 'Orca throttled this panel for a moment. Wait a few seconds and ' +
+            'try again — pressing twice does not help.',
+          errSinRuntime: 'Quit Orca Lab and open it again: the plugin found no Orca ' +
+            'answering. It looked in {p}. If those folders hold an orca-runtime.json ' +
+            'from an old install, delete it.',
           lineHostHere: 'Lines live in the Orca you connect them from. That is this ' +
             'machine: if you connect to a remote server, its tabs and profiles are ' +
             'different ones and this line will not be there.',
@@ -1298,15 +1309,14 @@
         linkLine: 'Conectar conta',
         noLines: 'Ainda nao ha nenhuma linha do WhatsApp Web conectada.',
         // --- el worker, su casa y su host ---
-        workerGone: 'O plugin nao esta rodando',
-        workerGoneHow: 'O Orca nao iniciou o worker deste plugin, entao nada do que ' +
-          'voce apertar aqui vai responder. Quase sempre e que falta aprovar: abra ' +
-          'Ajustes > Plugins e veja se o WhatsApp Inbox esta pedindo sua aprovacao. ' +
-          'Cada atualizacao pede de novo, porque muda o que o plugin manda o seu ' +
-          'agente executar.',
+        workerGone: 'Aprove o plugin em Ajustes',
+        workerGoneHow: 'Abra Ajustes > Plugins e aprove o WhatsApp Inbox. Ate voce ' +
+          'aprovar, o Orca nao o inicia e nenhum botao daqui responde.',
+        workerGoneWhy: 'Cada atualizacao pede de novo, porque muda o que o plugin manda ' +
+          'o seu agente executar.',
         workerStale: 'O plugin parou de responder',
-        workerStaleHow: 'O worker estava vivo e parou ha {s} s. Se nao voltar, ' +
-          'reinicie o Orca.',
+        workerStaleHow: 'Espere alguns segundos e, se nao voltar, reinicie o Orca. ' +
+          'Parou de dar sinal ha {s} s.',
         homeFloating: 'o espaco flutuante',
         homeMoved: 'Ela mudou de lugar',
         homeMovedHow: 'Esta linha mora em {c}, mas a aba dela esta agora em {d}. Voce ' +
@@ -1327,6 +1337,11 @@
           'Abra ele e tente de novo, ou mova a linha para outro lugar.',
         errOtroHost: 'Essa linha foi conectada em outro Orca e a sessao dela mora la.',
         errSinCasa: 'Essa linha ainda nao tem um lugar anotado.',
+        errSaturado: 'O Orca freou os pedidos deste painel por um momento. Espere ' +
+          'alguns segundos e tente de novo: nao precisa apertar duas vezes.',
+        errSinRuntime: 'Feche o Orca Lab e abra de novo: o plugin nao achou nenhum ' +
+          'Orca respondendo. Procurou em {p}. Se essas pastas tiverem um ' +
+          'orca-runtime.json de uma instalacao antiga, apague.',
         lineHostHere: 'As linhas moram no Orca de onde voce as conecta. Este e esta ' +
           'maquina: se voce se conectar a um servidor remoto, as abas e os perfis dele ' +
           'sao outros e esta linha nao vai estar la.',
@@ -1485,13 +1500,90 @@
       }
 
       var seq = 0, pending = {}
-      function call(action, params) {
+
+      // El host admite 30 mensajes por 10 s y contesta `rate_limited` al resto
+      // (PANEL_MESSAGE_RATE_LIMIT). Una vuelta del sondeo gasta 19 y tomar foco dispara
+      // otra: medido, arranque 21 + foco 19 = 40 en la misma ventana, y el
+      // `storage.set` del clic llegaba en el puesto 31. El panel lo contaba como "el
+      // plugin no contesto" y el usuario apretaba de nuevo — el segundo clic entraba
+      // porque la ventana ya se habia vaciado. Por eso la ventana se lleva tambien de
+      // este lado: lo que nace de un clic tiene cupo reservado y prioridad, y lo que no
+      // entra espera su turno en vez de perderse.
+      var CUPO = { max: 30, ventanaMs: 10000, reserva: 4 }
+      var gastados = [], cola = [], colaTimer = null, frenoHasta = 0
+      var RECHAZADO = { ok: false, errorCode: 'rate_limited' }
+
+      // Solo el sondeo se auto-frena. Lo del usuario sale ya: si el host lo rechaza no
+      // se pierde nada —un rechazo no gasta cupo— y el reintento lo pone igual. Frenar
+      // un clic para no molestar al host seria cambiar un defecto por otro mas lento.
+      function hayLugarDeSondeo() {
+        var corte = Date.now() - CUPO.ventanaMs
+        while (gastados.length && gastados[0] <= corte) gastados.shift()
+        return gastados.length < CUPO.max - CUPO.reserva
+      }
+      function proximoHueco() {
+        var ahora = Date.now()
+        // Lo del usuario espera SU reintento y nada mas: hacerlo esperar a que se
+        // vacie la ventana del sondeo lo dejaba diez segundos quieto, que es el mismo
+        // "no paso nada" que esto viene a sacar.
+        if (cola[0] && cola[0].usuario) return Math.max(60, (cola[0].desde || 0) - ahora)
+        var falta = frenoHasta - ahora
+        if (gastados.length) falta = Math.max(falta, gastados[0] + CUPO.ventanaMs - ahora)
+        return Math.max(60, Math.min(falta, CUPO.ventanaMs))
+      }
+      function despachar(it) {
+        var requestId = 'req-' + ++seq
+        pending[requestId] = function (d) {
+          if (!(d && d.errorCode === 'rate_limited')) return it.resolve(d)
+          // El espejo local no ve lo que el host cobra por su cuenta —los pongs del
+          // watchdog, el alto del panel—, asi que un rechazo sigue siendo posible.
+          frenoHasta = Date.now() + 1000
+          // Solo reintenta lo del usuario. Una lectura del sondeo ya tiene su memoria
+          // y la vuelta siguiente la vuelve a pedir; reintentarlas en manada era lo
+          // que dejaba el clic esperando detras de catorce lecturas.
+          if (!it.usuario || Date.now() >= it.vence) return it.resolve(d)
+          it.espera = Math.min((it.espera || 300) * 2, 2500)
+          it.desde = Date.now() + it.espera
+          encolar(it)
+        }
+        // Origen opaco: '*' es el unico targetOrigin usable; el host valida la ventana.
+        window.parent.postMessage(
+          { type: 'orca-panel-action', requestId: requestId, action: it.action,
+            params: it.params }, '*')
+      }
+      function drenar() {
+        if (colaTimer) { clearTimeout(colaTimer); colaTimer = null }
+        var ahora = Date.now()
+        while (cola.length) {
+          var it = cola[0]
+          if (it.vence <= ahora) { cola.shift(); it.resolve(RECHAZADO); continue }
+          if (it.usuario ? (it.desde || 0) > ahora
+                         : (ahora < frenoHasta || !hayLugarDeSondeo())) break
+          cola.shift()
+          // Se cuenta el sondeo y no el clic: el espejo esta para que las lecturas de
+          // fondo no se coman la ventana, no para adivinar la cuenta exacta del host
+          // —que cobra ademas sus pongs y el alto del panel, invisibles desde aca—. Un
+          // clic que igual sea rechazado se reintenta; uno frenado aca no se reintenta
+          // nunca, porque nadie lo mando.
+          if (!it.usuario) gastados.push(ahora)
+          despachar(it)
+        }
+        if (cola.length) colaTimer = setTimeout(drenar, proximoHueco())
+      }
+      function encolar(it) {
+        // El clic va antes que el sondeo: una vuelta de lecturas no puede dejar
+        // esperando lo que el usuario acaba de apretar.
+        var i = cola.length
+        if (it.usuario) { i = 0; while (i < cola.length && cola[i].usuario) i++ }
+        cola.splice(i, 0, it)
+        drenar()
+      }
+      function call(action, params, usuario) {
         return new Promise(function (resolve) {
-          var requestId = 'req-' + ++seq
-          pending[requestId] = resolve
-          // Origen opaco: '*' es el unico targetOrigin usable; el host valida la ventana.
-          window.parent.postMessage(
-            { type: 'orca-panel-action', requestId: requestId, action: action, params: params }, '*')
+          // Lo del usuario espera hasta 30 s a que haya lugar; una lectura del sondeo
+          // se deja caer a los 12 y la vuelta siguiente la vuelve a pedir.
+          encolar({ action: action, params: params, usuario: !!usuario,
+                    vence: Date.now() + (usuario ? 30000 : 12000), resolve: resolve })
         })
       }
       window.addEventListener('message', function (event) {
@@ -1504,9 +1596,8 @@
       })
 
       // Una lectura que el host RECHAZO no es una clave vacia. Aplastar las dos en
-      // `null` es lo que hacia parpadear el panel: el host admite 30 mensajes por 10 s
-      // (PANEL_MESSAGE_RATE_LIMIT), esta vuelta pide 18, y dos vueltas caen en la misma
-      // ventana — la COLA del lote volvia `rate_limited`, y con `webLines` y
+      // `null` es lo que hacia parpadear el panel: con la vuelta costando 19 de los 30
+      // mensajes por 10 s, la COLA del lote volvia `rate_limited`, y con `webLines` y
       // `syncMinutes` ahi adentro la tabla se vaciaba y el select volvia a su defecto.
       var SIN_RESPUESTA = { sinRespuesta: true }
       function hayRespuesta(v) { return v !== SIN_RESPUESTA }
@@ -1520,14 +1611,18 @@
       // Lo ultimo que el host CONTESTO por cada clave. Un rechazo repinta eso y no el
       // defecto: sin respuesta el panel no sabe nada nuevo, y no saber no es "vacio".
       var ultimaLectura = {}
-      function read(key) {
-        return call('storage.get', { key: key }).then(function (r) {
+      function read(key, usuario) {
+        return call('storage.get', { key: key }, usuario).then(function (r) {
           var v = stored(r)
           if (hayRespuesta(v)) { ultimaLectura[key] = v; return v }
           return key in ultimaLectura ? ultimaLectura[key] : SIN_RESPUESTA
         })
       }
-      function write(key, value) { return call('storage.set', { key: key, value: value }) }
+      // Toda escritura nace de un clic —el sondeo solo lee—, asi que va por el carril
+      // del usuario: con cupo reservado, prioridad en la cola y reintento.
+      function write(key, value) {
+        return call('storage.set', { key: key, value: value }, true)
+      }
 
       function esc(text) {
         return String(text == null ? '' : text)
@@ -1655,7 +1750,8 @@
       function pintarLatido(beat) {
         if (!hayRespuesta(beat)) return false
         if (!beat || typeof beat !== 'object' || !beat.at) {
-          showAlert(esc(t('workerGone')), esc(t('workerGoneHow')))
+          showAlert(esc(t('workerGone')), esc(t('workerGoneHow')),
+            esc(t('workerGoneWhy')))
           return true
         }
         var edad = Date.now() - Date.parse(beat.at)
@@ -1665,9 +1761,10 @@
         return true
       }
 
-      function showAlert(what, how) {
+      function showAlert(what, how, why) {
         el('alert').innerHTML = '<span>&#9888;</span><span><b>' + what + '</b>' +
-          (how ? ' <span>' + how + '</span>' : '') + '</span>'
+          (how ? ' <span>' + how + '</span>' : '') +
+          (why ? '<span class="alert-why">' + why + '</span>' : '') + '</span>'
         el('alert').hidden = false
       }
 
@@ -1889,7 +1986,7 @@
         })).then(function (rs) {
           var buenas = rs.filter(function (r) { return r.ok })
           return Promise.all(buenas.map(function (r) {
-            return read(r.key).then(function (v) { return [r.key, v] })
+            return read(r.key, true).then(function (v) { return [r.key, v] })
           })).then(function (leidos) {
             if (s === guardadoSeq) {
               leidos.forEach(function (x) { pintarClave(x[0], x[1]) })
@@ -1926,7 +2023,7 @@
 
       // Deja el select mostrando este jid. Si no esta en la lista — el sync todavia
       // no lo trajo — se le agrega una opcion, porque si no `.value` no hace nada y
-      // el select se queda callado en "Elegi una conversacion".
+      // el select se queda callado en "Elija una conversacion".
       function pickChat (jid, nombre) {
         var sel = el('chat-pick')
         if (jid && !Array.prototype.some.call(sel.options, function (o) { return o.value === jid })) {
@@ -2254,7 +2351,10 @@
         return write('webRequest', pedido).then(function (r) {
           // El pedido que ni siquiera se pudo dejar no espera veredicto de nadie.
           if (!(r && r.ok) && enVuelo === pedido.at) enVuelo = null
-          return { ok: !!(r && r.ok), at: pedido.at }
+          // Un freno del host no es un plugin caido, y decirle lo segundo al usuario es
+          // lo que lo hacia apretar de nuevo buscando que "esta vez si".
+          return { ok: !!(r && r.ok), at: pedido.at,
+                   code: r && r.errorCode === 'rate_limited' ? 'saturado' : 'sin-respuesta' }
         })
       }
 
@@ -2280,10 +2380,15 @@
         'sin-identidad': 'errSinIdentidad', 'sin-respuesta': 'lineNoAnswer',
         'sin-pestana': 'errSinPestana', 'sin-flotante': 'errSinFlotante',
         'flotante-sin-via': 'errFlotanteSinVia', 'casa-ausente': 'errCasaAusente',
-        'otro-host': 'errOtroHost', 'sin-casa': 'errSinCasa'
+        'otro-host': 'errOtroHost', 'sin-casa': 'errSinCasa',
+        saturado: 'errSaturado', 'sin-runtime': 'errSinRuntime'
       }
       function motivoWeb (code, detail) {
-        return WEB_ERR_KEY[code] ? t(WEB_ERR_KEY[code]) : (detail || code || '')
+        // Un motivo que nombra una ruta la toma del detalle: la ruta la sabe el worker
+        // y el panel no tiene forma de averiguarla. "No me pude conectar" sin decir
+        // donde busco no le deja al usuario nada que hacer.
+        if (!WEB_ERR_KEY[code]) return detail || code || ''
+        return fmt(WEB_ERR_KEY[code], { p: detail || '' })
       }
 
       // El encabezado sale de la accion que fallo. Era fijo en "No pude conectar la
@@ -2407,7 +2512,7 @@
       // dejaba en pantalla un estado que el worker ya habia recalculado — la fila decia
       // "Esperando el escaneo" con la pestana muerta, y el boton que ofrecia era el de
       // ese estado viejo. Si la lectura no trae nada se deja lo que habia: vaciar la
-      // tabla por una lectura fallida dice "no tenes lineas", que es lo contrario.
+      // tabla por una lectura fallida dice "no tiene lineas", que es lo contrario.
       function repintarLineas () {
         return read('webLines').then(function (nuevo) {
           renderLineas(nuevo && typeof nuevo === 'object' ? nuevo : lineasUlt)
@@ -2415,7 +2520,7 @@
       }
 
       function renderLineas (estado) {
-        // Un rechazo deja la tabla como estaba: vaciarla dice "no tenes lineas", que es
+        // Un rechazo deja la tabla como estaba: vaciarla dice "no tiene lineas", que es
         // lo contrario de lo que paso. Aca y no en cada llamador — el sondeo, el
         // repintado tras un veredicto y el vigia de 2 s pasan todos por esta puerta.
         if (!hayRespuesta(estado)) estado = lineasUlt
@@ -2497,7 +2602,12 @@
                 desde: (lineasUlt && lineasUlt.at) || null,
                 visto: { state: l.state, pageId: l.pageId || null } })
               .then(function (p) {
-                if (!p.ok) return
+                // Antes era `return` a secas: el pedido que no salia dejaba el boton
+                // como si nada hubiera pasado. Eso es el "el primer clic no hace nada".
+                if (!p.ok) {
+                  webStatusUlt = { ok: false, code: p.code, detail: '', action: accion }
+                  return renderLineas(lineasUlt)
+                }
                 return esperarWeb(p.at, 45000).then(function (st) {
                   webStatusUlt = st ||
                     { ok: false, code: 'sin-respuesta', detail: '' }
@@ -2528,7 +2638,11 @@
                     desde: (lineasUlt && lineasUlt.at) || null,
                     visto: { state: l.state, pageId: l.pageId || null } })
                   .then(function (p) {
-                    if (!p.ok) return
+                    if (!p.ok) {
+                      webStatusUlt = { ok: false, code: p.code, detail: '',
+                        action: accion }
+                      return renderLineas(lineasUlt)
+                    }
                     return esperarWeb(p.at, 45000).then(function (st) {
                       webStatusUlt = st ||
                         { ok: false, code: 'sin-respuesta', detail: '' }
@@ -2561,7 +2675,7 @@
                 visto: { state: l.state, pageId: l.pageId || null } })
               .then(function (p) {
                 if (!p.ok) {
-                  webStatusUlt = { ok: false, code: 'sin-respuesta', detail: '',
+                  webStatusUlt = { ok: false, code: p.code, detail: '',
                     action: 'unlink' }
                   said('said-line', '')
                   return renderLineas(lineasUlt)
@@ -2626,7 +2740,10 @@
             if (st) webStatusUlt = st
             renderLineas(r[0])
           })
-        }, 2000)
+          // 3 s y no 2: el worker atiende su cola cada 3 s (PETICION_MS), asi que
+          // preguntar mas seguido no adelanta ninguna respuesta y le come cupo de
+          // mensajes al clic que viene.
+        }, 3000)
       }
 
       // El campo NO se vacia al mandar el pedido. Se vaciaba ahi, o sea antes de saber
@@ -2644,7 +2761,8 @@
         busy(event.currentTarget, pedirWeb('link',
           { label: label, donde: el('line-where').value }).then(function (p) {
           if (!p.ok) {
-            said('said-line', t('lineFailed') + ' ' + t('lineKept'), true)
+            said('said-line', t(p.code === 'saturado' ? 'errSaturado' : 'lineFailed') +
+              ' ' + t('lineKept'), true)
             return
           }
           return esperarWeb(p.at).then(function (st) {
@@ -2666,65 +2784,82 @@
       // ---------- carga y refresco ----------
       var liveStorage = null
 
-      function reload() {
+      // Las 19 claves que pinta el panel, y las 5 que cambian solas. El sondeo pide
+      // solo las vivas: las otras 14 las mueve el usuario desde este mismo panel, y
+      // pedirlas cada 12 s gastaba 19 de los 30 mensajes que el host admite por 10 s
+      // — justo el cupo que le faltaba al clic.
+      var CLAVES = ['scope', 'agentName', 'health', 'routes', 'tone', 'chats',
+                    'transcribeQuality', 'inboxDays', 'ownerName', 'transcribe',
+                    'transcribeLang', 'syncStatus', 'readLocal', 'readWeb',
+                    'syncMinutes', 'readWebText', 'webLines', 'webStatus', 'workerBeat']
+      var CLAVES_VIVAS = ['chats', 'health', 'syncStatus', 'webLines', 'webStatus',
+                          'workerBeat']
+
+      function reload(soloVivas) {
         if (!liveStorage) return Promise.resolve()
         // El sello se toma ANTES de pedir nada: lo que llegue es de este momento, y un
         // guardado posterior lo invalida. Sin esto el sondeo pintaba el valor de antes
         // encima del que el usuario acababa de guardar.
         var sello = guardadoSeq
-        return Promise.all([read('scope'), read('agentName'), read('health'),
-                            read('routes'), read('tone'), read('chats'),
-                            read('transcribeQuality'), read('inboxDays'),
-                            read('ownerName'), read('transcribe'),
-                            read('transcribeLang'), read('syncStatus'),
-                            read('readLocal'), read('readWeb'),
-                            read('syncMinutes'), read('readWebText'),
-                            read('webLines'), read('webStatus'),
-                            read('workerBeat')])
-          .then(function (r) {
-            if (hayRespuesta(r[0])) renderScope(r[0])
-            pintarClave('tone', r[4], sello)
-            pintarClave('transcribeQuality', r[6], sello)
-            pintarClave('inboxDays', r[7], sello)
-            pintarClave('ownerName', r[8], sello)
-            pintarClave('transcribe', r[9], sello)
-            pintarClave('transcribeLang', r[10], sello)
-            pintarClave('readLocal', r[12], sello)
-            pintarClave('readWeb', r[13], sello)
-            pintarClave('syncMinutes', r[14], sello)
-            pintarClave('readWebText', r[15], sello)
+        var claves = soloVivas ? CLAVES_VIVAS : CLAVES
+        // La vuelta entera solo la dispara el usuario —abrir el panel, volver a el,
+        // guardar algo—, asi que no se auto-frena: se manda y, si el host la rechaza,
+        // se reintenta. Lo que si se frena es el sondeo, que no lo pidio nadie.
+        return Promise.all(claves.map(function (k) { return read(k, !soloVivas) }))
+          .then(function (rs) {
+            var leido = {}
+            claves.forEach(function (k, i) { leido[k] = rs[i] })
+            // Lo que esta vuelta no pidio se pinta con lo ultimo que el host CONTESTO,
+            // que es lo que `read` memoriza. Nunca con un defecto: no saber no es vacio.
+            function v(k) {
+              if (k in leido) return leido[k]
+              return k in ultimaLectura ? ultimaLectura[k] : SIN_RESPUESTA
+            }
+            if (hayRespuesta(v('scope'))) renderScope(v('scope'))
+            pintarClave('tone', v('tone'), sello)
+            pintarClave('transcribeQuality', v('transcribeQuality'), sello)
+            pintarClave('inboxDays', v('inboxDays'), sello)
+            pintarClave('ownerName', v('ownerName'), sello)
+            pintarClave('transcribe', v('transcribe'), sello)
+            pintarClave('transcribeLang', v('transcribeLang'), sello)
+            pintarClave('readLocal', v('readLocal'), sello)
+            pintarClave('readWeb', v('readWeb'), sello)
+            pintarClave('syncMinutes', v('syncMinutes'), sello)
+            pintarClave('readWebText', v('readWebText'), sello)
             // Sin guardia de foco: renderChats no toca el buscador — reconstruye el
             // select y pintarChats ya conserva el texto filtrado y lo elegido. La
             // guardia solo lograba que, con el cursor en el buscador, la lista nunca
             // se llenara: era justo donde esta el cursor de quien mira "Buscando…".
-            if (hayRespuesta(r[11])) {
-              estadoSync = r[11] && typeof r[11] === 'object' ? r[11] : null
+            if (hayRespuesta(v('syncStatus'))) {
+              estadoSync = v('syncStatus') && typeof v('syncStatus') === 'object'
+                ? v('syncStatus') : null
             }
-            if (hayRespuesta(r[5])) renderChats(r[5])
-            pintarClave('agentName', r[1], sello)
+            if (hayRespuesta(v('chats'))) renderChats(v('chats'))
+            pintarClave('agentName', v('agentName'), sello)
             // El latido manda sobre todo lo demas: si nadie esta corriendo, el health
             // que haya es de otra sesion y "todo bien" seria mentira. Un rechazo del
             // host NO cuenta como worker ausente — no saber no es saber que no esta.
-            var sinWorker = pintarLatido(r[18])
+            var sinWorker = pintarLatido(v('workerBeat'))
+            var salud = v('health')
             if (sinWorker) { /* el aviso ya quedo puesto */ }
             // El health ya trae QUE falla y su detalle: mostrarlo es mejor que mandar
             // a correr un comando, que es justo lo que se saco del resto del panel.
-            else if (hayRespuesta(r[2]) && r[2] && r[2].ok === false) {
-              var q = r[2].problem
-                ? esc(porCodigo(HEALTH_KEY, r[2].problemCode, r[2].problem))
+            else if (hayRespuesta(salud) && salud && salud.ok === false) {
+              var q = salud.problem
+                ? esc(porCodigo(HEALTH_KEY, salud.problemCode, salud.problem))
                 : t('notReady')
               // El detalle es el dato crudo de la herramienta —una ruta, un tamano, un
               // error de sqlite— no una frase: se muestra tal cual, como el detalle del
               // sync fallido de mas arriba.
-              var c = r[2].detail ? esc(r[2].detail) : t('notReadyHow')
+              var c = salud.detail ? esc(salud.detail) : t('notReadyHow')
               showAlert(q, c)
             }
-            else if (hayRespuesta(r[2]) && r[2]) el('alert').hidden = true
-            if (hayRespuesta(r[2])) renderOpcionales(r[2] && r[2].optional)
-            if (hayRespuesta(r[3])) renderRoutes(r[3])
-            var stWeb = veredictoPropio(r[17])
+            else if (hayRespuesta(salud) && salud) el('alert').hidden = true
+            if (hayRespuesta(salud)) renderOpcionales(salud && salud.optional)
+            if (hayRespuesta(v('routes'))) renderRoutes(v('routes'))
+            var stWeb = veredictoPropio(v('webStatus'))
             if (stWeb) webStatusUlt = stWeb
-            renderLineas(r[16])
+            renderLineas(v('webLines'))
             // Despues de renderLineas: reconstruye la tabla entera y con ella sus
             // botones, asi que apagarlos antes no dejaria rastro.
             apagarLoQueNecesitaWorker(sinWorker)
@@ -2732,10 +2867,21 @@
       }
 
       var timer = null
+      // Volver al panel es el momento de pedirlo todo: puede haber cambiado algo por
+      // terminal mientras el usuario no estaba. El sondeo de cada 12 s, en cambio,
+      // pide solo lo que cambia solo — con las 19 en cada vuelta, entrar al panel
+      // (foco) justo despues de una ponia 38 mensajes en la misma ventana de 10 s y el
+      // clic que venia atras llegaba al rechazo.
+      var ultimaCompleta = 0
+      function reloadDeUsuario() {
+        var completa = Date.now() - ultimaCompleta >= 10000
+        if (completa) ultimaCompleta = Date.now()
+        return reload(!completa)
+      }
       document.addEventListener('visibilitychange', function () {
-        if (document.visibilityState === 'visible') reload()
+        if (document.visibilityState === 'visible') reloadDeUsuario()
       })
-      window.addEventListener('focus', reload)
+      window.addEventListener('focus', reloadDeUsuario)
 
       applyStrings()
       resetScopeForm()
@@ -2751,17 +2897,16 @@
           })
           return
         }
+        ultimaCompleta = Date.now()
         reload()
         // El worker sondea lento cuando no hay nada a medias; abrir el panel es la
         // senal de que alguien esta mirando, asi que se le pide una comprobacion ya.
         pedirWeb('refresh', null, true)
         // No hay evento de storage, asi que se sondea mientras el panel esta a la vista.
-        // 12 s y no 8: la vuelta cuesta 18 de los 30 mensajes por 10 s que el host
-        // permite, y con 8 s dos vueltas caian en la misma ventana — 36 — asi que la
-        // cola del lote volvia rechazada una vuelta si y otra no. Con 12 s nunca hay
-        // dos vueltas en la misma ventana.
+        // 12 s y 6 claves: la vuelta entera son 19 de los 30 mensajes por 10 s que el
+        // host admite, y asi no queda cupo para el clic del usuario.
         timer = setInterval(function () {
-          if (document.visibilityState === 'visible') reload()
+          if (document.visibilityState === 'visible') reload(true)
         }, 12000)
       })
     </script>

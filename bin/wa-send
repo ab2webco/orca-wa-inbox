@@ -26,6 +26,12 @@ the requested one before a key is pressed.
 """
 import argparse, json, os, platform, re, shutil, subprocess, sys, time
 
+# Sin esto Python deja un __pycache__ DENTRO de bin/, y el directorio del plugin
+# instalado esta direccionado por hash.
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from wa_settings import orca_cli_path, orca_env  # noqa: E402
+
 APP = "net.whatsapp.WhatsApp"
 SCOPE_DB = (os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~/AppData/Roaming"),
                          "wa-inbox", "scope.db") if sys.platform == "win32"
@@ -55,19 +61,8 @@ LINEA_WEB = "send-web-line"
 
 
 def orca_cli():
-    """El binario de la CLI de Orca, que NO se llama igual en todas partes.
-
-    Es la misma resolucion que `orca_cli()` en wa-read y esta duplicada a proposito:
-    los CLI se publican sueltos en bin/ y no se importan entre si. En Linux `orca` es el
-    lector de pantalla de GNOME — buscarlo con which() lo encuentra, y la primera corrida
-    real le pone a hablar la maquina a una persona ciega. Ahi el comando es `orca-ide`, y
-    quien empaqueta puede fijar otro con ORCA_CLI_COMMAND."""
-    declarado = os.environ.get("ORCA_CLI_COMMAND", "").strip()
-    if declarado:
-        return shutil.which(declarado.split()[0]) or declarado.split()[0]
-    if platform.system() == "Linux":
-        return shutil.which("orca-ide")
-    return shutil.which("orca")
+    """El binario de la CLI de Orca. Una sola resolucion, en wa_settings."""
+    return orca_cli_path()
 
 
 ORCA = orca_cli()
@@ -86,8 +81,10 @@ def orca(*args, ok_fail=False):
         # sabe decir. Sale con el motivo y con lo que hay que hacer.
         sys.exit(f"wa-send: {SIN_ORCA}\nthe Orca CLI is not in PATH, so WhatsApp cannot "
                  "be driven; open Orca Lab, or set ORCA_CLI_COMMAND")
+    # Con el env armado: ver wa_settings.orca_env(). Heredarlo a secas deja a la CLI
+    # buscando el runtime en la carpeta por defecto, que en Linux puede ser la vieja.
     p = subprocess.run([ORCA, "computer", *args, "--json", "--no-screenshot"],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, env=orca_env())
     if p.returncode != 0:
         if ok_fail:
             return None

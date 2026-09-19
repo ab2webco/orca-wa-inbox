@@ -32,6 +32,6 @@ Detalles que cuestan una vuelta si no se saben:
   abierto por una persona, y el filtro es por tipo de agente, no por dueño.
 - `--workspace` y `--repo` son excluyentes. Con `workspaceMode: existing` va `--workspace`.
 - Crearlas **`--disabled`** y encenderlas después de una corrida manual mirada.
-- El CLI de `orca` habla con el runtime que encuentre corriendo. Si tenés el instalado y
+- El CLI de `orca` habla con el runtime que encuentre corriendo. Si tiene el instalado y
   un build dev abiertos a la vez, **gana el instalado**: no hay forma de apuntarlo al dev.
-  Para probar en dev, cerrá el instalado o creá las automations desde su UI.
+  Para probar en dev, cierre el instalado o cree las automations desde su UI.

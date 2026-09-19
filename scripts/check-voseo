@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+"""Ni un voseo en el espanol que el usuario lee, en ningun archivo del plugin.
+
+Existe porque el chequeo que ya habia solo miraba prompts/ y harness/ —lo que el
+AGENTE le escribe al cliente— y el usuario se quejo de lo que lee EL: los paneles.
+"abri Ajustes", "nada de lo que aprietes aca", "Enlazala desde el panel". Todo eso
+paso por `npm run check` en verde.
+
+Lo que se revisa es todo el espanol del repo: los dos paneles (solo su bloque `es`,
+para no acusar al "Abri-la" del portugues), los CLI, el worker, las pruebas, los
+scripts y la documentacion. El lexico vive en scripts/voseo.py.
+"""
+import pathlib
+import re
+import sys
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from voseo import FORMAS                                             # noqa: E402
+
+RAIZ = pathlib.Path(__file__).resolve().parent.parent
+
+# Los paneles traen los tres idiomas en el mismo archivo. Se les recorta el bloque que
+# no es espanol: sin esto, el "Abri-la para baixar" del portugues seria un falso
+# positivo permanente y el chequeo terminaria apagado.
+PANELES = {"config.html": ("        en: {", "      var LANG ="),
+           "activity.html": ("        en: {", "      var LANG =")}
+
+# El espanol tambien vive fuera de los paneles: mensajes de los CLI, comentarios del
+# worker, textos esperados por las pruebas y documentacion.
+OTROS = ["main.mjs", "web-lines.mjs", "harness.mjs", "README.md",
+         "bin/wa-read", "bin/wa-scope", "bin/wa-send", "bin/wa-transcribe",
+         "bin/wa_settings.py",
+         "automations/README.md", "docs/ESCRIBIR-UN-PLUGIN.md",
+         "docs/LECTURA-MULTIFUENTE.md", "docs/el-plugin-whatsapp-inbox.html",
+         "test/manifest.test.mjs", "test/panels.test.mjs", "test/worker.test.mjs",
+         "test/shots.mjs", "scripts/check-clis", "scripts/check-closing",
+         "scripts/check-harness", "scripts/check-panels", "scripts/check-prompts"]
+
+# scripts/voseo.py y este mismo archivo nombran las formas prohibidas a proposito:
+# revisarse a si mismo seria una falla permanente.
+
+PALABRA = re.compile(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+")
+
+
+def sin_otros_idiomas(nombre: str, texto: str) -> str:
+    """El archivo con el bloque en/pt tapado, para que las lineas no se corran."""
+    desde, hasta = PANELES[nombre]
+    i, j = texto.find(desde), texto.find(hasta)
+    if i < 0 or j < 0 or j <= i:
+        raise SystemExit(f"{nombre}: no encontre el bloque de idiomas "
+                         f"({desde!r} … {hasta!r}); el chequeo estaria mirando nada")
+    return texto[:i] + re.sub(r"[^\n]", " ", texto[i:j]) + texto[j:]
+
+
+def hallazgos(nombre: str, texto: str) -> list:
+    out = []
+    for n, linea in enumerate(texto.splitlines(), 1):
+        for m in PALABRA.finditer(linea):
+            if m.group(0).lower() in FORMAS:
+                out.append((nombre, n, m.group(0), linea.strip()[:110]))
+    return out
+
+
+def main() -> int:
+    fallos, revisados = [], 0
+    for nombre in list(PANELES) + OTROS:
+        ruta = RAIZ / nombre
+        if not ruta.exists():
+            fallos.append((nombre, 0, "(falta)", "el archivo no existe"))
+            continue
+        texto = ruta.read_text(encoding="utf-8")
+        if nombre in PANELES:
+            texto = sin_otros_idiomas(nombre, texto)
+        revisados += 1
+        fallos += hallazgos(nombre, texto)
+
+    if fallos:
+        print("El usuario es colombiano y el tono del plugin dice «sin voseo». Esto lo "
+              "rompe:", file=sys.stderr)
+        for nombre, n, palabra, linea in fallos:
+            print(f"  {nombre}:{n}  {palabra}  —  {linea}", file=sys.stderr)
+        print("\nEspanol neutro, de usted: abri→abra, mira→mire, apreta→presione, "
+              "enlazala→enlacela, volve→vuelva, tenes→tiene, vos→usted.",
+              file=sys.stderr)
+        return 1
+    print(f"{revisados} archivos sin voseo ({len(FORMAS)} formas vigiladas)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

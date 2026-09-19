@@ -15,8 +15,8 @@ mi-plugin/
 ```
 
 Se instala desde Ajustes → Plugins → Instalar plugin → **Carpeta local**, apuntando a
-la carpeta. Como **plugin de desarrollo** se carga desde el disco: editás el archivo y
-recargás el panel, sin reinstalar.
+la carpeta. Como **plugin de desarrollo** se carga desde el disco: edita el archivo y
+recarga el panel, sin reinstalar.
 
 ## 2. El manifest
 
@@ -41,20 +41,20 @@ recargás el panel, sin reinstalar.
 
 **Trampas que cuestan tiempo:**
 
-- `icon` sale de un **set curado**, no de todo lucide. Si ponés uno que no está
+- `icon` sale de un **set curado**, no de todo lucide. Si pone uno que no está
   (`message-square`, por ejemplo) **no falla**: cae en silencio a un enchufe.
   La lista vive en `plugin-panel-activity-items.ts`.
 - `engines.orca` solo acepta `">=x.y.z"`. Cualquier otro rango no valida.
 - Los ids de comando aceptan puntos (`mi-plugin.hacer-algo`); los ids de plugin y de
   panel **no**: kebab-case y nada más.
-- Validá el manifest contra el esquema real antes de instalar, en vez de adivinar:
+- Valide el manifest contra el esquema real antes de instalar, en vez de adivinar:
 
   ```ts
   import { pluginManifestSchema } from './src/shared/plugins/plugin-manifest'
   pluginManifestSchema.safeParse(JSON.parse(readFileSync('orca-plugin.json','utf8')))
   ```
 
-## 3. Capabilities: pedí lo mínimo
+## 3. Capabilities: pida lo mínimo
 
 Las que existen y el usuario consiente al instalar: `workspace:read`, `terminal:send`,
 `notifications:show`, `storage`, `secrets`, `events:subscribe`, `settings:own`,
@@ -66,11 +66,11 @@ error**: es la app contándole al usuario que tu plugin no sale a internet.
 `process:spawn` es la que más pesa en ese diálogo: dice que el plugin puede arrancar
 programas como el usuario. Este plugin la declara porque conducir el navegador de Orca
 es ejecutar su CLI, y **la descripción del plugin es el único texto de ese diálogo que
-vos controlás** — usala para decir qué arrancás, no para justificarte.
+usted controla** — úsela para decir qué arranca, no para justificarse.
 
-**No pidas `terminal:send` para "hacer cosas".** El API no tiene noción de "la terminal
-activa": te da ids y nada más — ni el nombre, ni si es una shell o una sesión de agente
-trabajando. Si elegís la primera, le vas a escribir comandos encima al agente de alguien.
+**No pida `terminal:send` para "hacer cosas".** El API no tiene noción de "la terminal
+activa": da ids y nada más — ni el nombre, ni si es una shell o una sesión de agente
+trabajando. Si elige la primera, le va a escribir comandos encima al agente de alguien.
 Nosotros la pedimos, nos pasó exactamente eso, y terminamos sacándola.
 
 ## 4. El panel: lo que NO puede hacer
@@ -87,7 +87,7 @@ El panel es un iframe con `sandbox="allow-scripts"` y **sin** `allow-same-origin
 
 ### El resultado viene envuelto dos veces
 
-Esta se lleva media hora si no la sabés:
+Esta se lleva media hora si no la sabe:
 
 ```js
 // storage.get devuelve { value: <dato> }, y el bridge lo envuelve OTRA VEZ.
@@ -125,12 +125,12 @@ window.addEventListener('message', function (e) {
 ### Presupuesto
 
 30 mensajes cada 10 segundos por plugin, y 64 KB por mensaje. Un sondeo cada 8s cuesta
-1. No hay evento de `storage`, así que si querés que el panel se entere de cambios de
-afuera, sondeá — pero solo con `document.visibilityState === 'visible'`.
+1. No hay evento de `storage`, así que si quiere que el panel se entere de cambios de
+afuera, sondee — pero solo con `document.visibilityState === 'visible'`.
 
 ### Tema e idioma
 
-El host inyecta sus tokens de diseño como variables CSS: usá `var(--foreground)`,
+El host inyecta sus tokens de diseño como variables CSS: use `var(--foreground)`,
 `var(--background)`, `var(--border)`, `var(--primary)`, `var(--muted-foreground)` y el
 panel combina con la app sin saber nada de ella.
 
@@ -159,7 +159,7 @@ o invocar binarios; el panel se limita a mostrar lo que el worker dejó en `stor
 
 ## 6. Lo que un plugin NO puede hacer
 
-Antes de diseñar, descartá esto:
+Antes de diseñar, descarte esto:
 
 | | |
 |---|---|
@@ -186,8 +186,8 @@ Si tu feature necesita algo de esa lista, el camino es un **módulo dentro del a
   sin ningún error visible**. Perdimos dos rondas por eso. Ahora corre `bin/check-panels`
   antes de cada commit.
 - **Editar el repo del app mientras corría `pnpm dev` desde ahí.** Vite recargó archivos
-  a medio escribir y el renderer se cayó. Si vas a tocar orca-oss mientras lo usás,
-  hacelo en otro worktree.
+  a medio escribir y el renderer se cayó. Si va a tocar orca-oss mientras lo usa,
+  hágalo en otro worktree.
 
 ## 8. Cómo publicarlo
 

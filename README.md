@@ -16,9 +16,9 @@ requisito nada de la base local — ver "De dónde lee" y "Otros sistemas" abajo
 | App | **WhatsApp Desktop** (Mac App Store), con sesión iniciada y abierta al menos una vez — sólo para la vía local. Para la vía web alcanza con el navegador de Orca y el teléfono para escanear el QR. |
 | Base legible | La base local tiene que poder abrirse. Hoy WhatsApp Desktop en macOS la deja como SQLite **sin cifrar**, y `wa-read doctor` lo comprueba de verdad: lee la cabecera del archivo y cuenta los mensajes. Si algún día la cifran (como en Android, que usa SQLCipher), el archivo va a seguir ahí pero el doctor va a decir que no se puede leer. |
 | CLIs | `wa-read`, `wa-send`, `wa-scope`, `wa-transcribe`: viajan dentro del plugin, en su `bin/`. El prompt resuelve esa carpeta en `$WA`; no dependen del `PATH`. |
-| Permisos | Accesibilidad para Orca Lab, solo si querés que el agente escriba. Para leer no hace falta, pero sin **Acceso total al disco** macOS te va a preguntar en cada lectura — ver abajo. |
+| Permisos | Accesibilidad para Orca Lab, solo si quiere que el agente escriba. Para leer no hace falta, pero sin **Acceso total al disco** macOS le va a preguntar en cada lectura — ver abajo. |
 
-Antes de nada, corré:
+Antes de nada, ejecute:
 
 ```
 wa-read doctor
@@ -34,7 +34,7 @@ empezara a cifrar su propia base.
 ## Cuándo lee, y por qué el Mac pregunta
 
 La base de WhatsApp vive en un Group Container y pesa unos 260 MB. **Se abre en un solo
-momento: el sync del worker**, cada 5 minutos por defecto. Lo podés cambiar en el panel
+momento: el sync del worker**, cada 5 minutos por defecto. Lo puede cambiar en el panel
 (*Cada cuánto revisa WhatsApp*) o por terminal:
 
 ```
@@ -88,7 +88,7 @@ identifica una cuenta, qué pasa cuando la sesión se cae— está en
 
 Conducir el navegador es ejecutar la CLI de Orca, así que el plugin declara
 `process:spawn`. Orca escribe esa línea del diálogo de consentimiento, no el plugin:
-dice que el plugin puede arrancar programas como vos. Lo que el plugin hace con eso es
+dice que el plugin puede arrancar programas como usted. Lo que el plugin hace con eso es
 sólo esto — abrir y manejar la pestaña de WhatsApp Web — y lo dice su descripción, que
 es el único texto de ese diálogo que el plugin sí controla.
 
@@ -170,7 +170,7 @@ que no hace falta leer el código para saberla:
 - Una sección `##` que **editaste** es tuya desde ese momento: el plugin conserva tu
   texto y no vuelve a reescribir esa sección. Las demás siguen actualizándose.
 - Una sección `##` que **agregaste** se conserva, al final del archivo.
-- Si borrás el archivo, el plugin lo vuelve a escribir entero.
+- Si borra el archivo, el plugin lo vuelve a escribir entero.
 
 El plugin distingue las dos cosas con un sha256 de lo último que él escribió, que
 guarda en `.harness.json` al lado. Es la misma regla que usa Orca para los campos de
@@ -194,7 +194,7 @@ nacer sin proyecto a toda automatización aportada por un plugin, justamente par
 adivinar en qué repo tuyo trabajar.
 
 Lo que **no** cambia: siguen naciendo **pausadas**. Encender trabajo automático es
-decisión tuya y Orca nunca la toma por vos, ni al instalar ni al actualizar. Se
+decisión suya y Orca nunca la toma por usted, ni al instalar ni al actualizar. Se
 encienden una por una desde la lista de Automations, o con:
 
 ```
@@ -203,15 +203,15 @@ orca automations edit <id> --enabled
 
 Al actualizar el plugin, Orca vuelve a conciliar las filas que ya existían **en su
 lugar** —las empareja por el `id` del manifiesto, no crea duplicados— y les pone el
-destino nuevo. Lo único que respeta intacto es lo que hayas tocado vos: si vos le
-pusiste un proyecto a mano, ese se queda.
+destino nuevo. Lo único que respeta intacto es lo que haya tocado usted: si usted le
+puso un proyecto a mano, ese se queda.
 
 ## Lo que el plugin NO hace
 
 - No sale a internet: no declara `net:fetch`. Todo es local.
 - No envía nada por su cuenta. Sin supervisión deja **borradores**.
 - No toca chats que no estén en el registro. Lo que no autorizaste, no existe para él.
-- No trae nombre de agente puesto. Lo elegís vos, y firma cada mensaje con él.
+- No trae nombre de agente puesto. Lo elige usted, y firma cada mensaje con él.
 
 ## Los CLIs tienen que estar en el PATH
 
@@ -228,11 +228,11 @@ WA=<la carpeta bin/ del plugin instalado>
 for t in wa-read wa-send wa-scope; do ln -sf "$WA/$t" ~/.local/bin/$t; done
 ```
 
-## Elegi la terminal destino
+## Elija la terminal destino
 
 `workspace.readContext` devuelve los terminales del worktree **solo por id** — no dice
 si cada uno es una shell o una sesion de agente. El panel no puede adivinarlo, asi que
-lo elegis vos en "Terminal destino" y queda recordado.
+lo elige usted en "Terminal destino" y queda recordado.
 
 Si apunta a una sesion de agente, el agente va a leer los comandos como si le hablaras
 en vez de ejecutarlos.

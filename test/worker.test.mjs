@@ -271,7 +271,7 @@ console.log('\nworker: el arnes de la carpeta del plugin')
   // ── segunda activacion: el usuario edito una seccion y agrego otra suya.
   const antes = lee('COMMANDS.md')
   writeFileSync(join(carpeta, 'COMMANDS.md'),
-    `${antes.replace('## Where the tools are', '## Where the tools are\n\nESTO LO ESCRIBI YO')}\n## Mia\n\nmis notas\n`)
+    `${antes.replace('## Where the tools are', '## Where the tools are\n\nESTO LO ESCRIBO YO')}\n## Mia\n\nmis notas\n`)
   writeFileSync(join(dir, 'version.txt'), 'V2\n')
 
   const orca2 = hostFalso(dir, { chats: [] })
@@ -284,7 +284,7 @@ console.log('\nworker: el arnes de la carpeta del plugin')
   const final = lee('COMMANDS.md')
   ok('lo que el usuario edito queda como suyo',
     !!comandos && comandos.yours.includes('Where the tools are'), JSON.stringify(comandos))
-  ok('y no se lo pisa la actualizacion', final.includes('ESTO LO ESCRIBI YO'))
+  ok('y no se lo pisa la actualizacion', final.includes('ESTO LO ESCRIBO YO'))
   ok('la seccion que agrego el usuario sobrevive', final.includes('mis notas'))
   ok('y lo que no toco si se actualiza', final.includes('AYUDA V2 de wa-scope --help'),
     JSON.stringify(comandos))

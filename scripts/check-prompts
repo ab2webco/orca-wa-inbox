@@ -6,7 +6,7 @@ prompts estaban en espanol y el agente copiaba su acento. Ahora los prompts esta
 ingles, asi que buscar voseo solo en ellos seria un chequeo que ya no protege nada.
 
 Lo que hay que proteger es lo mismo de siempre: el agente le escribe a clientes en
-Colombia, y un "tenes que" en el mensaje que sale es el defecto. Eso vive hoy en tres
+Colombia, y un voseo en el mensaje que sale es el defecto. Eso vive hoy en tres
 lugares, y los tres se revisan:
 
   1. El tono por defecto (`wa-scope config tone`), que es lo que gobierna TODO lo que
@@ -30,31 +30,23 @@ import sys
 
 RAIZ = pathlib.Path(__file__).resolve().parent.parent
 
-# Pronombres y presentes de voseo, mas el imperativo: en voseo lleva tilde en la
-# ultima vocal (mirá, dejá, abrí), que en la forma de tuteo no existe.
-PATRONES = [
-    (r"\b(sos|vos|tenes|podes|queres|sabes vos|venis|decis|hacelo|tomalo)\b", "pronombre o presente de voseo"),
-    (r"\b[a-zA-Záéíóúñ]{2,}(á|é|í)\b(?<!\baqui\b)", "imperativo de voseo (tilde final)"),
-    (r"\b(decilo|mirala|mirialas|abrilas|fijate|sugerí|reportá)\b", "imperativo de voseo"),
-]
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from voseo import FORMAS                                             # noqa: E402
 
-# Palabras legitimas que terminan en vocal con tilde y no son imperativos.
-PERMITIDAS = {"aqui", "asi", "ahi", "alli", "tambien", "quiza", "esta", "sera",
-              "hara", "podra", "debera", "tendra", "ingles", "ademas", "despues",
-              "segun", "porque", "que", "si", "no", "mas", "solo", "ya"}
+# El lexico es uno solo, en scripts/voseo.py: aca vivia una copia mas floja que
+# dependia de la tilde final, y el mismo voseo que rechazaba en un prompt pasaba en
+# un panel escrito sin tildes.
+PALABRA = re.compile(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+")
 
 
 def voseo(texto: str, origen: str) -> list:
     """Las lineas con voseo de un texto cualquiera, ya rotuladas con su origen."""
     fallos = []
     for n, linea in enumerate(texto.splitlines(), 1):
-        for patron, motivo in PATRONES:
-            for m in re.finditer(patron, linea, re.IGNORECASE):
-                if m.group(0).lower().strip("áéíóú") in PERMITIDAS:
-                    continue
-                if m.group(0).lower() in PERMITIDAS:
-                    continue
-                fallos.append(f"{origen}:{n}  {m.group(0)}  ({motivo})")
+        for m in PALABRA.finditer(linea):
+            if m.group(0).lower() in FORMAS:
+                fallos.append(f"{origen}:{n}  {m.group(0)}  (voseo)")
     return fallos
 
 

@@ -248,7 +248,7 @@ def con_whisper_cpp(exe, wav, nombre):
     pesos = modelo_local(nombre)
     if not pesos:
         return None, (f"the model '{nombre}' is missing. Download it once with: "
-                      f"whisper-cpp --model {nombre} --help  (o ponelo en "
+                      f"whisper-cpp --model {nombre} --help  (o pongalo en "
                       f"~/.cache/whisper/ggml-{nombre}.bin)")
     p = subprocess.run([exe, "-m", pesos, "-f", wav, "-l", idioma(), "-nt", "-np"],
                        capture_output=True, text=True, timeout=600)

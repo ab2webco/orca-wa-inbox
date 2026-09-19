@@ -249,7 +249,7 @@ console.log('\nconfig.html')
   doc.getElementById('provider').value = 'linear'
   doc.getElementById('target').value = 'ENG'
   doc.getElementById('mode').value = 'borrador'
-  doc.getElementById('chat-instructions').value = 'Resume lo que manden y avisame.'
+  doc.getElementById('chat-instructions').value = 'Resuma lo que manden y aviseme.'
   doc.getElementById('save-scope').click()
   await espera()
   const entrada = (storage.scope || {})['1@g.us']
@@ -262,7 +262,7 @@ console.log('\nconfig.html')
   // Las instrucciones son el QUE hace en esa conversacion. Si no se guardan con ella,
   // el campo esta de adorno y el agente nunca las lee.
   ok('guarda las instrucciones de la conversacion',
-    entrada && entrada.instructions === 'Resume lo que manden y avisame.',
+    entrada && entrada.instructions === 'Resuma lo que manden y aviseme.',
     `instructions = ${JSON.stringify(entrada && entrada.instructions)}`)
   ok('confirma y limpia el formulario',
     doc.getElementById('said-scope').textContent.includes('Soporte Norte') &&
@@ -454,12 +454,12 @@ console.log('\nconfig.html')
   await espera()
   ok('Editar carga la fila en el formulario', doc.getElementById('chat').value === 'Soporte Norte')
   ok('Editar recarga las instrucciones',
-    doc.getElementById('chat-instructions').value === 'Resume lo que manden y avisame.',
+    doc.getElementById('chat-instructions').value === 'Resuma lo que manden y aviseme.',
     `chat-instructions = ${JSON.stringify(doc.getElementById('chat-instructions').value)}`)
   ok('Editar devuelve el destino a editable cuando hay servicio de tareas',
     !doc.getElementById('target').disabled && doc.getElementById('target').value === 'ENG')
   // El input #chat esta oculto: comprobarlo solo dejaba pasar el caso real, en el que
-  // el select visible se quedaba en "Elegi una conversacion".
+  // el select visible se quedaba en "Elija una conversacion".
   ok('Editar deja el select visible en esa conversacion',
     doc.getElementById('chat-pick').value === '1@g.us',
     `chat-pick = ${JSON.stringify(doc.getElementById('chat-pick').value)}`)
@@ -628,7 +628,7 @@ console.log('\nconfig.html — lineas de WhatsApp Web')
   await espera()
   const wrap = doc.getElementById('lines-wrap')
   ok('la linea esperando dice que escanear y con que telefono',
-    /escanea/i.test(wrap.textContent) && /QR/i.test(wrap.textContent),
+    /escanee/i.test(wrap.textContent) && /QR/i.test(wrap.textContent),
     wrap.textContent.trim().slice(0, 160))
   ok('y dice donde esta la pestana, tomandolo de la fila',
     /flotante/i.test(doc.getElementById('lines-place').textContent),
@@ -789,11 +789,11 @@ console.log('\nconfig.html — lineas de WhatsApp Web')
   // que no le van a pedir el QR es el que lo dejo dando vueltas.
   const nueva = await pintar('sin-pestana', { pageId: null, pending: true, linkedAt: null })
   ok('una linea a medias sin pestana avisa que va a tener que escanear',
-    /escanealo|escanear/.test(nueva.como) && /QR/.test(nueva.como),
+    /escanee|escanear/.test(nueva.como) && /QR/.test(nueva.como),
     nueva.como.slice(0, 160))
   const vieja = await pintar('sin-pestana', { pageId: null })
   ok('y una que si estuvo enlazada avisa lo contrario: que no se lo van a pedir',
-    /no te va a pedir escanear/.test(vieja.como), vieja.como.slice(0, 160))
+    /no le va a pedir escanear/.test(vieja.como), vieja.como.slice(0, 160))
   ok('las dos son frases distintas', nueva.como !== vieja.como, nueva.como.slice(0, 60))
   // Las pestanas mueren en cada actualizacion de Orca: si el texto no lo dice, el
   // usuario lee "la pestana esta cerrada" y cree que la cerro el.
@@ -805,7 +805,7 @@ console.log('\nconfig.html — lineas de WhatsApp Web')
 {
   // Los tres idiomas. Media traduccion no se ve hasta que la ve el usuario, y aca el
   // texto que importa es justamente el que dice que hacer.
-  for (const [locale, esperado] of [['es-419', /escanea/i], ['en-US', /scan the QR/i],
+  for (const [locale, esperado] of [['es-419', /escanee/i], ['en-US', /scan the QR/i],
     ['pt-BR', /escaneie/i]]) {
     const { doc } = await montar('config.html', {
       webLines: { at: new Date().toISOString(),
@@ -1145,7 +1145,7 @@ console.log('\nactivity.html — la corrida dice como le fue')
   }, 'es-419')
   await espera()
   ok('sin ninguna conversacion registrada lo dice distinto',
-    /no autorizaste/i.test(sinRegistro.doc.getElementById('pending').textContent),
+    /no ha autorizado/i.test(sinRegistro.doc.getElementById('pending').textContent),
     sinRegistro.doc.getElementById('pending').textContent.trim())
 
   // 5. Corriendo ahora.
@@ -1261,7 +1261,7 @@ console.log('\nel codigo del CLI, dicho en el idioma del panel')
 
   // Los finales de la via web se cuentan APARTE porque la accion del usuario es
   // distinta en cada uno: abrir Orca, abrir la pestana, escanear el QR, esperar. Con un
-  // solo texto para los cuatro, el que tiene que escanear el QR lee "abri Orca Lab" y
+  // solo texto para los cuatro, el que tiene que escanear el QR lee "Abra Orca Lab" y
   // no encuentra nada que abrir.
   const WEB_FINALES = [
     ['web-off', 'Lineas conectadas', 'Connected lines'],
@@ -1269,8 +1269,8 @@ console.log('\nel codigo del CLI, dicho en el idioma del panel')
     ['web-no-session', 'pestana', 'tab'],
     ['web-logged-out', 'QR', 'QR'],
     ['web-eval-timeout', 'no contesto a tiempo', 'did not answer in time'],
-    ['web-read-failed', 'Recarga', 'Reload'],
-    // Los tres de abajo son la diferencia entre "termina de enlazar NoVa", "no tenes
+    ['web-read-failed', 'Recargue', 'Reload'],
+    // Los tres de abajo son la diferencia entre "termina de enlazar NoVa", "no tiene
     // ninguna linea" y "hay dos perfiles con el mismo nombre". Con un solo texto para
     // los tres, quien tiene la linea a medias no se entera de que le falta escanear.
     ['web-line-pending', 'todavia no escaneo el QR', 'has not scanned its QR code yet'],
@@ -1807,7 +1807,7 @@ console.log('\nconfig.html: un host que rechaza todo')
     return n && !n.hidden ? n.textContent : ''
   }
   const afirmaciones = [
-    ['no tenes lineas', visible('#lines-wrap'), /Todavia no conectaste ninguna linea/],
+    ['no tiene lineas', visible('#lines-wrap'), /Todavia no ha conectado ninguna linea/],
     ['el plugin no esta', visible('#alert'), /El plugin no esta corriendo/],
     ['no hay de donde leer', visible('#alert'), /No hay de donde leer/],
     ['un fallo de lectura', visible('#lines-error'), /./]
@@ -1840,9 +1840,9 @@ console.log('\nconfig.html: el latido del worker')
 {
   const VIEJO = new Date(Date.now() - 120000).toISOString()
   const casos = [
-    ['es-419', /El plugin no esta corriendo/, /El plugin dejo de responder/],
-    ['en-US', /The plugin is not running/, /The plugin stopped responding/],
-    ['pt-BR', /O plugin nao esta rodando/, /O plugin parou de responder/]
+    ['es-419', /Apruebe el plugin en Ajustes/, /El plugin dejo de responder/],
+    ['en-US', /Approve the plugin in Settings/, /The plugin stopped responding/],
+    ['pt-BR', /Aprove o plugin em Ajustes/, /O plugin parou de responder/]
   ]
   for (const [lang, ido, parado] of casos) {
     const sin = await montar('config.html', { workerBeat: null, health: { ok: true } },
@@ -1949,6 +1949,86 @@ console.log('\nconfig.html: la linea de otro host')
   ok('y explica por que',
     /otro Orca/.test(doc.querySelector('#lines-wrap tbody').textContent),
     doc.querySelector('#lines-wrap tbody').textContent.slice(0, 200))
+}
+
+// ───────── el cupo del host no se puede comer el primer clic ─────────
+// El defecto que reporto el usuario: "el primer click no hace nada, el segundo si".
+// Medido: el host admite 30 mensajes por 10 s, el arranque gasta 21 y entrar al panel
+// dispara `focus` -> otra vuelta de 19 = 40 en la misma ventana. El `storage.set` del
+// clic caia en el puesto 31, volvia `rate_limited`, y el panel lo pintaba como "El
+// plugin no contesto. Fijese si Orca sigue abierto".
+console.log('\nconfig.html: el clic contra el cupo del host')
+{
+  // La misma ventana deslizante de plugin-panel-message-budget.ts, no una idea de ella.
+  const cupo = () => {
+    const marcas = []
+    return () => {
+      const now = Date.now()
+      while (marcas.length && marcas[0] <= now - 10000) marcas.shift()
+      if (marcas.length >= 30) {
+        return { ok: false, errorCode: 'rate_limited', error: 'Too many requests.' }
+      }
+      marcas.push(now)
+      return undefined
+    }
+  }
+  const admite = cupo()
+  const AHORA = new Date().toISOString()
+  const { window, doc, storage } = await montar('config.html', {
+    readWeb: 'on',
+    webLines: { at: AHORA, lines: [{ id: 'l1', label: 'Soporte', profile: 'p1',
+      state: 'enlazada', pageId: 'pg1', host: null, casa: null, homeState: 'en-casa',
+      authorizedChats: 0 }] }
+  }, 'es-419', () => admite())
+  await espera()
+  // Entrar al panel desde otra parte de Orca: la ventana toma foco.
+  window.dispatchEvent(new window.Event('focus'))
+  await espera()
+  doc.querySelector('[data-lrm]').click()
+  await espera()
+  doc.querySelector('[data-lyes]').click()
+  await new Promise((r) => setTimeout(r, 400))
+  ok('el primer clic deja el pedido escrito, no rechazado',
+    !!storage.webRequest && storage.webRequest.action === 'unlink',
+    JSON.stringify(storage.webRequest))
+  ok('y no le dice al usuario que Orca se cerro',
+    !/no contesto|No pude desvincular/.test(doc.getElementById('lines-error').textContent),
+    doc.getElementById('lines-error').textContent.slice(0, 140))
+}
+
+// Y si el host frena igual —cobra por su cuenta los pongs del watchdog y el alto del
+// panel, que el espejo del panel no ve—, el pedido se reintenta. Un rechazo del
+// transporte no es una respuesta, y contarselo al usuario es lo que lo hace apretar
+// dos veces.
+console.log('\nconfig.html: un rechazo del host se reintenta, no se reporta')
+{
+  const AHORA = new Date().toISOString()
+  let rechazadas = 0
+  const { doc, storage } = await montar('config.html', {
+    readWeb: 'on',
+    webLines: { at: AHORA, lines: [{ id: 'l1', label: 'Soporte', profile: 'p1',
+      state: 'enlazada', pageId: 'pg1', host: null, casa: null, homeState: 'en-casa',
+      authorizedChats: 0 }] }
+  }, 'es-419', (d) => {
+    if (d.action === 'storage.set' && d.params.key === 'webRequest' &&
+        d.params.value.action === 'unlink' && rechazadas < 1) {
+      rechazadas += 1
+      return { ok: false, errorCode: 'rate_limited', error: 'Too many requests.' }
+    }
+    return undefined
+  })
+  await espera()
+  doc.querySelector('[data-lrm]').click()
+  await espera()
+  doc.querySelector('[data-lyes]').click()
+  await new Promise((r) => setTimeout(r, 300))
+  ok('el primer rechazo no se pinta como una falla',
+    !/no contesto|No pude desvincular/.test(doc.getElementById('lines-error').textContent),
+    doc.getElementById('lines-error').textContent.slice(0, 140))
+  await new Promise((r) => setTimeout(r, 1600))
+  ok('y el pedido sale solo, sin que el usuario apriete de nuevo',
+    rechazadas === 1 && !!storage.webRequest && storage.webRequest.action === 'unlink',
+    `rechazadas=${rechazadas} ${JSON.stringify(storage.webRequest)}`)
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

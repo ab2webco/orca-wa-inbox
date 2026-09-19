@@ -16,7 +16,7 @@ import { dirname, join } from 'node:path'
 import { HARNESS_KEY } from './harness.mjs'
 import {
   cerrarPestana, conectarLinea, estadoDeLineas, identificarLinea, mudarPestana,
-  olvidarLinea, reabrirPestana, verPestana
+  olvidarLinea, reabrirPestana, usarEntornoOrca, verPestana
 } from './web-lines.mjs'
 
 // Las herramientas viajan dentro del plugin. Antes se buscaban en el PATH del usuario,
@@ -151,9 +151,16 @@ function lineaUtil(stderr) {
   return /^Traceback/.test(lineas[0]) ? lineas[lineas.length - 1] : lineas[0]
 }
 
+// El env con que corren las herramientas. Se completa al resolver la casa de Orca:
+// wa-read y wa-send terminan ejecutando la CLI de Orca, y con la variable puesta no
+// tienen que volver a buscarla cada uno por su lado.
+let ENV_HERRAMIENTAS = null
+
 function run(cmd, args, { timeoutMs = 20000 } = {}) {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 },
+    execFile(cmd, args,
+      { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024,
+        env: ENV_HERRAMIENTAS || process.env },
       (error, stdout, stderr) => {
         // wa-scope check sale con 3 cuando deniega: es una respuesta, no una falla.
         if (error && error.code !== 3) {
@@ -290,9 +297,44 @@ async function sync(orca, { toolsDir = TOOLS, trigger = 'timer' } = {}) {
   return estado.ok
 }
 
+/** Donde vive el Orca que esta contestando, preguntado a un subproceso.
+ *
+ *  El worker no lo puede resolver el mismo: corre tras la valla de permisos de Node y
+ *  no ve ~/.config. Y no lo puede heredar: Orca arranca el worker con una lista blanca
+ *  de variables que no incluye ORCA_USER_DATA_PATH —medido en la maquina del usuario,
+ *  su /proc/<pid>/environ traia PATH, HOME y nada mas—, asi que la CLI de Orca caia en
+ *  la carpeta por defecto. En Linux esa carpeta es `~/.config/orca` y la app publicada
+ *  escribe en `~/.config/orca-ide`: la CLI leia un runtime.json de dos meses atras y
+ *  se quedaba pegada contra un socket muerto.
+ *
+ *  `wa-scope runtime-home` no adivina el nombre de la carpeta: prueba cual CONTESTA. */
+async function resolverCasaOrca(waScope) {
+  try {
+    const { stdout } = await run(waScope, ['runtime-home', '--json'], { timeoutMs: 8000 })
+    const casa = JSON.parse(stdout || 'null')?.[0] || null
+    if (!casa) return null
+    const env = casa.path
+      ? { ...process.env, ORCA_USER_DATA_PATH: casa.path }
+      : { ...process.env }
+    usarEntornoOrca(env, casa.tried || [])
+    ENV_HERRAMIENTAS = env
+    // El binario tambien lo resuelve el subproceso: el PATH del worker viene
+    // recortado y en Linux el instalador deja `orca-ide` en ~/.local/bin, que el
+    // worker no puede ni mirar.
+    if (casa.cli) CLI_ORCA = casa.cli
+    return casa
+  } catch (error) {
+    // Que no se pueda resolver no apaga nada: la CLI sigue con su carpeta por
+    // defecto, que es lo que hacia hasta hoy.
+    return { path: null, tried: [], error: error.message }
+  }
+}
+
 /** El binario de la CLI de Orca, que en Linux NO se llama `orca`: ahi ese nombre es el
  *  lector de pantalla de GNOME. Misma regla que wa-read. */
+let CLI_ORCA = null
 function orcaCli() {
+  if (CLI_ORCA) return CLI_ORCA
   const declarado = String(process.env.ORCA_CLI_COMMAND ?? '').trim()
   if (declarado) return declarado.split(' ')[0]
   return process.platform === 'linux' ? 'orca-ide' : 'orca'
@@ -690,6 +732,15 @@ export default function activate(orca) {
   // bin/: quien movia toolsDir tenia la mitad del plugin leyendo de otro lado.
   const sincronizar = async (trigger) =>
     sync(orca, { toolsDir: await dirHerramientas(), trigger })
+
+  // Antes que nada lo que necesita todo lo demas: donde esta el Orca vivo. Se vuelve a
+  // resolver en cada arranque porque el runtime cambia de socket en cada arranque.
+  dirHerramientas()
+    .then((dir) => resolverCasaOrca(join(dir, 'wa-scope')))
+    .then((casa) => orca.log(casa && casa.path
+      ? `orca runtime home: ${casa.path} (${casa.source || 'probe'})`
+      : `orca runtime home not resolved; tried: ${(casa && casa.tried || []).join(', ') || 'nothing'}`))
+    .catch((error) => orca.log(`orca runtime home failed: ${error.message}`))
 
   // Al activarse, lo primero es decir si este sistema puede leer WhatsApp. Si no puede,
   // el usuario se tiene que enterar ahora y no cuando una automatizacion lleve una

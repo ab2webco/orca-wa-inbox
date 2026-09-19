@@ -34,9 +34,9 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from wa_settings import (  # noqa: E402
     CONFIG_NUMERICOS, CONFIG_OPCIONES, PANEL_SETTINGS, PLUGIN_ID,
-    PLUGIN_ID_ANTERIOR, plugin_store_path, plugin_store_raw,
-    plugin_store_targets, settings_from_plugin, user_data_roots,
-    valida_ajuste)
+    PLUGIN_ID_ANTERIOR, orca_cli_path, orca_runtime_home, plugin_store_path,
+    plugin_store_raw,
+    plugin_store_targets, settings_from_plugin, user_data_roots, valida_ajuste)
 
 def scope_db_path():
     """Estado propio de la herramienta. En Windows va al APPDATA y no al home."""
@@ -1080,6 +1080,18 @@ def resolve_target(con, text, chat_jid=None):
             "why": "no destination: neither a rule nor a chat default", "matched": None}
 
 
+def cmd_runtime_home(con, a):
+    """Donde vive el Orca que esta contestando, para que el worker se lo pase a la CLI.
+
+    El worker no puede resolverlo el mismo: corre tras la valla de permisos de Node y
+    no ve ~/.config. Un subproceso si, y este es el que ya se ejecuta para todo lo
+    demas."""
+    casa = orca_runtime_home()
+    return [{"path": casa["path"], "tried": casa["tried"],
+             "reachable": casa["reachable"], "source": casa["source"],
+             "cli": orca_cli_path()}]
+
+
 def cmd_where(con, a):
     return [resolve_target(con, a.text, a.chat)]
 
@@ -1586,6 +1598,8 @@ def main():
         return sp
 
     add("list").set_defaults(fn=cmd_list)
+    add("runtime-home",
+        help="where the Orca runtime that answers lives").set_defaults(fn=cmd_runtime_home)
 
     s = add("set", help="register or update a chat")
     s.add_argument("chat")

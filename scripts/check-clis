@@ -2743,7 +2743,12 @@ def revisa_web_convive(fallos: list) -> int:
         print("  (sin base local en este equipo: no se recorrio la convivencia "
               "local + web caida)")
         return hechas
+    # La local se fuerza encendida: el caso es "la local contesta y la web no", y sin
+    # fijarla el chequeo heredaba el ajuste REAL del usuario — con `read_local off` la
+    # unica fuente activa era la web, la corrida abortaba con razon, y el chequeo
+    # reportaba un defecto del producto que era su propia precondicion.
     env = dict(os.environ, WA_READ_SETTING_READ_WEB="on",
+               WA_READ_SETTING_READ_LOCAL="on",
                ORCA_CLI_COMMAND="/no/existe/este/orca")
     p = subprocess.run([str(BIN / "wa-read"), "chats", "-n", "3", "--json"],
                        capture_output=True, text=True, env=env, timeout=180)
@@ -2902,6 +2907,173 @@ def revisa_ajustes(fallos: list) -> int:
     return hechas
 
 
+def wa_settings():
+    """El modulo compartido de los CLI, importado y no copiado: lo que se comprueba
+    tiene que ser el codigo que corre."""
+    ruta = str(BIN / "wa_settings.py")
+    sys.dont_write_bytecode = True
+    spec = importlib.util.spec_from_file_location("wa_settings_check", ruta)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def revisa_casa_del_runtime(fallos: list) -> int:
+    """Como se elige el Orca vivo, sobre las formas que puede tener una maquina.
+
+    El defecto que lo trajo es de Linux: la app publicada guarda su userData en
+    `~/.config/orca-ide` y la CLI de Orca busca su runtime en `~/.config/orca`, asi que
+    con las dos carpetas presentes —una vieja, otra viva— la CLI leia la muerta y
+    contestaba "Could not connect to the Orca Lab runtime transport from this shell".
+    Ninguno de los dos que escribimos esto tiene una maquina Linux, asi que la unica
+    prueba posible es esta: las formas, no la maquina de nadie. La medicion del usuario
+    —vieja en `orca`, viva en `orca-ide`, sin variable— es UNA fila de la tabla.
+
+    Se prueba con sockets de verdad, no con mocks: lo que decide es si el transporte
+    CONTESTA, y un archivo de hoy puede apuntar a un socket muerto."""
+    import socket as sock
+
+    hechas = 0
+
+    def escenario(tmp, carpetas):
+        """Arma un userData por cada (nombre, vivo, antiguedad_s) y devuelve el env."""
+        base = pathlib.Path(tmp) / ".config"
+        base.mkdir(parents=True, exist_ok=True)
+        abiertos = []
+        for nombre, vivo, antiguedad in carpetas:
+            d = base / nombre
+            d.mkdir(parents=True, exist_ok=True)
+            # El socket va en el tmp y no en la carpeta: una ruta de socket unix no
+            # puede pasar de ~104 bytes y la de un TemporaryDirectory ya es larga.
+            endpoint = str(pathlib.Path(tmp) / f"s-{nombre}.sock")
+            if vivo:
+                s = sock.socket(sock.AF_UNIX, sock.SOCK_STREAM)
+                s.bind(endpoint)
+                s.listen(1)
+                abiertos.append(s)
+            meta = {"runtimeId": nombre, "pid": 1, "authToken": None, "startedAt": 0,
+                    "transports": [{"kind": "unix", "endpoint": endpoint}]}
+            (d / "orca-runtime.json").write_text(json.dumps(meta), encoding="utf-8")
+            if antiguedad:
+                cuando = time.time() - antiguedad
+                os.utime(d / "orca-runtime.json", (cuando, cuando))
+        return {"HOME": tmp, "XDG_CONFIG_HOME": str(base), "PATH": os.environ["PATH"]}, abiertos
+
+    def resuelve(env):
+        return wa_settings().orca_runtime_home(env, "linux")
+
+    casos = [
+        # (nombre del caso, carpetas, cual tiene que ganar)
+        ("una sola carpeta, viva", [("orca", True, 0)], "orca"),
+        ("una sola carpeta, muerta", [("orca", False, 0)], None),
+        ("vieja en orca y viva en orca-ide (lo medido en su maquina)",
+         [("orca", False, 60 * 24 * 3600), ("orca-ide", True, 0)], "orca-ide"),
+        ("viva en orca y vieja en orca-ide (el espejo del caso de arriba)",
+         [("orca", True, 60 * 24 * 3600), ("orca-ide", False, 0)], "orca"),
+        ("dos vivas: desempata la mas nueva",
+         [("orca", True, 3600), ("orca-ide", True, 0)], "orca-ide"),
+        ("un nombre que nadie conoce, pero contesta",
+         [("orca-lab-nightly", True, 0)], "orca-lab-nightly"),
+        ("ninguna carpeta", [], None),
+    ]
+    for nombre, carpetas, gana in casos:
+        with tempfile.TemporaryDirectory() as tmp:
+            env, abiertos = escenario(tmp, carpetas)
+            casa = resuelve(env)
+            hechas += 1
+            esperado = str(pathlib.Path(env["XDG_CONFIG_HOME"]) / gana) if gana else None
+            if casa["path"] != esperado:
+                fallos.append(f"casa del runtime — {nombre}: eligio {casa['path']!r} y "
+                              f"tenia que elegir {esperado!r}")
+            for s in abiertos:
+                s.close()
+
+    # Lo que el usuario puede hacer cuando no hay ninguna viva: saber donde se busco.
+    with tempfile.TemporaryDirectory() as tmp:
+        env, abiertos = escenario(tmp, [("orca", False, 0), ("orca-ide", False, 0)])
+        casa = resuelve(env)
+        hechas += 1
+        if len(casa["tried"]) != 2:
+            fallos.append(f"casa del runtime: sin ninguna viva tiene que decir las dos "
+                          f"que miro, y dijo {casa['tried']}")
+        for s in abiertos:
+            s.close()
+
+    # La variable explicita manda y no se sale a probar nada: si el que empaqueta la
+    # fija, adivinar por encima es desobedecerlo.
+    with tempfile.TemporaryDirectory() as tmp:
+        env, abiertos = escenario(tmp, [("orca-ide", True, 0)])
+        env["ORCA_USER_DATA_PATH"] = "/ruta/que/el/empaquetador/fijo"
+        casa = resuelve(env)
+        hechas += 2
+        if casa["path"] != "/ruta/que/el/empaquetador/fijo" or casa["source"] != "env":
+            fallos.append(f"casa del runtime: ORCA_USER_DATA_PATH tiene que mandar, y "
+                          f"quedo {casa['path']!r} ({casa['source']})")
+        # Y el env del hijo la lleva SIEMPRE: el worker corre con una lista blanca que
+        # no la incluye, asi que heredarla no es una opcion.
+        hijo = wa_settings().orca_env(env, "linux")
+        if hijo.get("ORCA_USER_DATA_PATH") != "/ruta/que/el/empaquetador/fijo":
+            fallos.append("el env del hijo no lleva ORCA_USER_DATA_PATH")
+        for s in abiertos:
+            s.close()
+
+    # Sin ninguna viva NO se inventa una carpeta: apuntar a la muerta es el defecto.
+    with tempfile.TemporaryDirectory() as tmp:
+        env, abiertos = escenario(tmp, [("orca", False, 0)])
+        hechas += 1
+        if "ORCA_USER_DATA_PATH" in wa_settings().orca_env(env, "linux"):
+            fallos.append("sin runtime vivo el env del hijo no puede fijar una carpeta")
+        for s in abiertos:
+            s.close()
+
+    # El archivo de un Orca viejo trae `transport` en singular. Dejar de entenderlo
+    # seria mandar a ese usuario a la carpeta equivocada.
+    with tempfile.TemporaryDirectory() as tmp:
+        base = pathlib.Path(tmp) / ".config" / "orca"
+        base.mkdir(parents=True)
+        endpoint = str(pathlib.Path(tmp) / "viejo.sock")
+        s = sock.socket(sock.AF_UNIX, sock.SOCK_STREAM)
+        s.bind(endpoint)
+        s.listen(1)
+        (base / "orca-runtime.json").write_text(
+            json.dumps({"transport": {"kind": "unix", "endpoint": endpoint}}),
+            encoding="utf-8")
+        env = {"HOME": tmp, "XDG_CONFIG_HOME": str(base.parent),
+               "PATH": os.environ["PATH"]}
+        hechas += 1
+        if wa_settings().orca_runtime_home(env, "linux")["path"] != str(base):
+            fallos.append("casa del runtime: no entendio el `transport` singular de un "
+                          "Orca viejo")
+        s.close()
+
+    # El binario: una maquina puede tener uno, el otro, o ninguno en el PATH.
+    with tempfile.TemporaryDirectory() as tmp:
+        d = pathlib.Path(tmp) / "bin"
+        d.mkdir()
+        env = {"PATH": str(d), "HOME": tmp}
+        hechas += 3
+        if wa_settings().orca_cli_path(env, "linux") is not None:
+            fallos.append("el binario: sin nada en el PATH tiene que contestar None, "
+                          "no un nombre que no existe")
+        (d / "orca").write_text("#!/bin/sh\n")
+        (d / "orca").chmod(0o755)
+        if wa_settings().orca_cli_path(env, "linux") is not None:
+            fallos.append("el binario: en Linux `orca` es el lector de pantalla de "
+                          "GNOME y no se puede tomar por la CLI de Orca")
+        if wa_settings().orca_cli_path(env, "darwin") != str(d / "orca"):
+            fallos.append("el binario: fuera de Linux `orca` SI es la CLI")
+        (d / "orca-ide").write_text("#!/bin/sh\n")
+        (d / "orca-ide").chmod(0o755)
+        hechas += 2
+        if wa_settings().orca_cli_path(env, "linux") != str(d / "orca-ide"):
+            fallos.append("el binario: en Linux la CLI es `orca-ide`")
+        env["ORCA_CLI_COMMAND"] = str(d / "orca")
+        if wa_settings().orca_cli_path(env, "linux") != str(d / "orca"):
+            fallos.append("el binario: ORCA_CLI_COMMAND tiene que mandar sobre todo")
+
+    return hechas
+
+
 def main() -> int:
     fallos = []
     aislado = tempfile.TemporaryDirectory()
@@ -2939,7 +3111,8 @@ def main() -> int:
                       + revisa_solo_web(fallos)
                       + revisa_escritorio_apagado(fallos)
                       + revisa_sin_bytecode(fallos)
-                      + revisa_override_ajuste(fallos))
+                      + revisa_override_ajuste(fallos)
+                      + revisa_casa_del_runtime(fallos))
     aislado.cleanup()
 
     if fallos:

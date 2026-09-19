@@ -422,7 +422,7 @@ medicion mal tomada:
   eran 600 mensajes **propios**. Para recorrer por recencia hay que usar el indice
   `rowId`.
 - *"`mentionedJidList` tiene 1 fila no vacia de 63"*. Con la muestra bien tomada son
-  **1870** mensajes con menciones, **295** de los cuales te nombran a vos.
+  **1870** mensajes con menciones, **295** de los cuales lo nombran a usted.
 
 ### Las tres clases de fila que se sintetizan
 
@@ -699,7 +699,7 @@ cero:
 
 - te nombran (`mentionedJidList`, objetos wid),
 - contestan algo tuyo (`quotedParticipant`, en `@lid` **y** en `@c.us`),
-- o es un directo, donde todo mensaje ajeno es para vos.
+- o es un directo, donde todo mensaje ajeno es para usted.
 
 Que sea la misma funcion y no una copia es lo que impide que las dos deriven; una copia
 se romperia el dia que la regla cambie y nada se pondria rojo.
