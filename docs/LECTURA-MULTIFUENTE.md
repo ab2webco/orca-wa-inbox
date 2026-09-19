@@ -310,17 +310,57 @@ defecto. Una conversacion de una cuenta nueva no existe para el agente hasta que
 alguien la registre con `wa-scope set`, con su permiso. `wa-scope accounts` muestra el
 conteo de conversaciones autorizadas por linea justo para que un cero se vea.
 
-## Enviar tiene que elegir la linea
+## Enviar elige la linea, y cada linea tiene su via
 
-`bin/wa-send` conduce la app de escritorio, que **es** la cuenta `local`. Una
-conversacion de una cuenta web no se puede contestar por ahi: escribiria desde el
-numero equivocado a un cliente.
+`bin/wa-send` resuelve la cuenta de la conversacion **antes de tocar nada** y despacha
+por ella: la app de escritorio para `local` — que **es** esa cuenta — y la pestana del
+navegador para `web:<lid>`. Contestar un grupo de una linea web por la ventana de la
+app seria escribir desde el numero equivocado a un cliente.
 
-La costura: antes de tocar nada, resolver la cuenta de la conversacion y despachar por
-ella — app de escritorio para `local`, pestana del navegador para `web:<lid>`. Si la
-cuenta no coincide con la via, **fallar cerrado** con un motivo estable
-(`wrong-account`), nunca caer a la via por defecto. Es el mismo criterio de
-`--open url`, que ya muere antes de tocar WhatsApp cuando el JID no es un directo.
+El mismo grupo puede existir en dos lineas. Ahi no se adivina: se sale con
+`send-ambiguous-line` y el usuario elige con `--line <id>`. Tomar la primera es la
+misma clase de error que la tarjeta que se fue al tablero ajeno.
+
+### La via web escribe por el DOM, y en segundo plano
+
+Dos restricciones, y las dos son del usuario:
+
+**Que Meta vea un WhatsApp Web de toda la vida.** Se navega y se escribe por el DOM
+como lo haria una persona — la fila de la lista lateral, el composer, el boton de
+enviar. Ninguna coleccion ni funcion interna de WhatsApp se usa para escribir. Leerlas
+es lo que hace la sonda de lectura y es otra cosa; escribir por ahi convierte una
+sesion normal en un cliente no oficial.
+
+**Sin enfocar nada.** Ni la ventana de Orca, ni la pestana: el unico foco es el del
+composer *dentro* del documento. La persona puede estar escribiendo en otra cosa
+cuando el agente contesta un grupo, y moverle el escritorio abajo de las manos es peor
+que no contestar. En la practica eso significa un solo verbo de la CLI de Orca —
+`eval` contra la pestana de esa linea, el mismo canal que la lectura (`web_async()` en
+`bin/wa-read`, con su propio global para no pisarla).
+
+Tres cosas que el navegador impone y que el codigo tiene que respetar:
+
+1. **El composer es un editor controlado (Lexical).** Asignarle texto no le avisa a
+   nadie: el boton de enviar queda apagado y lo escrito se pierde en el proximo
+   render. Van los tres caminos que SI son entrada de usuario — `insertText`, un
+   evento `paste` con su `DataTransfer`, y `beforeinput`/`input` — y se comprueba cual
+   dejo el texto antes de seguir.
+2. **La lista lateral es virtual.** La fila de un grupo del que no se habla hace dias
+   no existe en el DOM hasta que se baja hasta ella.
+3. **Una pestana en segundo plano puede tener el render frenado.** Que la caja quede
+   vacia no prueba que el mensaje salio. La confirmacion es el mensaje propio NUEVO en
+   la conversacion; sin el se devuelve `send-web-unconfirmed`, nunca un exito
+   inventado.
+
+Los finales llevan motivo estable, igual que la lectura: `send-web-no-chat`,
+`send-web-wrong-chat`, `send-web-no-composer`, `send-web-not-written`,
+`send-web-unconfirmed`, `send-web-logged-out`, `send-web-line-pending`,
+`send-web-no-line`, y los de la sesion que ya tenia la lectura (`web-no-orca`,
+`web-no-session`, `web-profile-ambiguous`).
+
+`scripts/check-clis` corre esa escritura contra una pagina de mentira en jsdom — lista
+virtual, composer que solo acepta entrada de usuario, boton de enviar — porque contra
+una sesion viva probarla es mandar mensajes de verdad.
 
 ## Como lee la sesion — **medido**
 
@@ -837,7 +877,8 @@ Lista cerrada, para que el seguimiento sea mecanico:
 5. `bin/wa-scope:merged_scope()` — la clave del store del panel pasa a llevar la
    cuenta adelante para lo que no sea `local`; las de `local` se quedan como estan
    para no perder lo ya guardado.
-6. `bin/wa-send` — despacho por cuenta y fallo cerrado, arriba.
+6. ~~`bin/wa-send` — despacho por cuenta y fallo cerrado, arriba.~~ **Hecho**,
+   con la via web escribiendo por el DOM y sin enfocar nada.
 7. `config.html` / `activity.html` — la etiqueta de la linea al lado del nombre de la
    conversacion en el selector, en la tabla del registro y en la lista de actividad.
    Sin eso, con dos lineas conectadas una fila que dice solo "Laura Mendez" es ambigua.

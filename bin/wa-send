@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""wa-send — writes (and optionally sends) a message in WhatsApp Desktop.
+"""wa-send — writes (and optionally sends) a message in WhatsApp.
 
   wa-send "<chat>" "text"            -> leaves the text WITHOUT sending it
   wa-send "<chat>" "text" --send     -> sends it
@@ -8,15 +8,18 @@
 By default it does NOT send: it leaves the chat open with the text written so that you
 review it and press Enter yourself. --send is an explicit opt-in.
 
-It drives the app's real UI through accessibility (orca computer). It uses no
-unofficial libraries and links no new device to the account.
+It drives the real UI either way — the app's window by accessibility, the web session
+by the DOM. It uses no unofficial libraries, calls no internal WhatsApp API, and links
+no new device to the account.
 
-It writes on the LOCAL line only — the one the desktop app is signed in with. A
-conversation registered against a WhatsApp Web line fails up front with
-`send-web-line`: writing over the web route is not built, and that window belongs to
-another number.
+The line comes from the registry, and each one has its own route. The LOCAL line is
+the desktop app, driven by accessibility. A WhatsApp Web line is written through the
+Orca browser tab that already holds that session — the same tab wa-read reads from —
+by the DOM, in the background: no window is focused, no tab is switched, and the only
+focus is the message box inside the page. That is the route groups live on.
 
-There are two ways to OPEN the chat, and the tool reports which one it used:
+Below, the local route. There are two ways to OPEN the chat, and the tool reports
+which one it used:
   url  the whatsapp:// scheme goes straight to the conversation. It only works for
        direct chats with a phone number: that is all the scheme can address.
   ui   walks the sidebar list. It is the usual path and the only one that works for
@@ -24,18 +27,17 @@ There are two ways to OPEN the chat, and the tool reports which one it used:
 Writing is accessibility either way, and either way the open chat is verified to be
 the requested one before a key is pressed.
 """
-import argparse, json, os, platform, re, shutil, subprocess, sys, time
+import argparse, importlib.machinery, importlib.util, json, os, platform, re
+import shutil, sqlite3, subprocess, sys, time
 
 # Sin esto Python deja un __pycache__ DENTRO de bin/, y el directorio del plugin
 # instalado esta direccionado por hash.
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from wa_settings import orca_cli_path, orca_env  # noqa: E402
+from wa_settings import ajuste, orca_cli_path, orca_env, scope_db  # noqa: E402
 
 APP = "net.whatsapp.WhatsApp"
-SCOPE_DB = (os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~/AppData/Roaming"),
-                         "wa-inbox", "scope.db") if sys.platform == "win32"
-            else os.path.expanduser("~/.wa-inbox/scope.db"))
+SCOPE_DB = scope_db()
 SCROLL_TRIES = 25   # cuantas veces bajar la lista antes de rendirse
 URL_WAIT = 8.0      # cuanto esperar a que el esquema whatsapp:// aterrice
 WA_READ = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wa-read")
@@ -45,19 +47,16 @@ PHONE = re.compile(r"^\d{7,15}$")
 
 def signature():
     """El nombre sale del registro, no del codigo: cada quien nombra a su agente.
-    Si no hay nombre configurado, no se firma nada inventado."""
-    try:
-        import sqlite3
-        con = sqlite3.connect(SCOPE_DB)
-        row = con.execute("select value from settings where key='agent_name'").fetchone()
-        con.close()
-        return f"-- {row[0]}" if row and row[0] else None
-    except Exception:
-        return None
+
+    Por la cadena compartida y no por la base a secas: el nombre puesto DESDE EL PANEL
+    vive en el almacen del plugin, y leyendo solo el sqlite `wa-scope agent` lo veia y
+    quien escribe salia con "no agent name is configured"."""
+    nombre = ajuste("agent_name")
+    return f"-- {nombre}" if nombre else None
 # Motivos estables: los lee el worker (la primera linea de stderr termina en el panel).
 # El texto se puede reescribir; el codigo no, o el panel se desincroniza en silencio.
 SIN_ORCA = "send-no-orca"
-LINEA_WEB = "send-web-line"
+LINEA_EQUIVOCADA = "send-wrong-line"
 
 
 def orca_cli():
@@ -222,7 +221,6 @@ def jid_registrado(name):
     """El JID segun el registro del plugin (~/.wa-inbox/scope.db). Sale gratis: es la base
     propia, la misma que ya se abre para la firma, y no toca nada de WhatsApp."""
     try:
-        import sqlite3
         con = sqlite3.connect(SCOPE_DB)
         filas = con.execute(
             "select chat_jid from chat_scope where lower(trim(chat_name))=lower(trim(?))",
@@ -233,15 +231,13 @@ def jid_registrado(name):
     return filas[0][0] if len(filas) == 1 else None
 
 
-def cuenta_registrada(ref):
-    """De que LINEA es esta conversacion segun el registro, o None si no esta ahi.
+def cuentas_registradas(ref):
+    """De que LINEA(S) es esta conversacion segun el registro.
 
-    wa-send escribe operando la ventana real de WhatsApp Desktop por accesibilidad. Una
-    conversacion que vive en una sesion de WhatsApp Web no tiene ventana que operar — y
-    peor, un grupo del mismo nombre puede existir en las dos lineas, asi que seguir
-    adelante no falla: le escribe a la conversacion equivocada."""
+    Devuelve la lista y no una sola porque un grupo del mismo nombre puede existir en
+    dos lineas: elegir "la primera" ahi es escribirle a la conversacion equivocada, y
+    eso no se deshace. Con mas de una, quien llama tiene que decir cual."""
     try:
-        import sqlite3
         con = sqlite3.connect(f"file:{SCOPE_DB}?mode=ro", uri=True)
         filas = con.execute(
             "select distinct account from chat_scope where chat_jid=? "
@@ -249,8 +245,8 @@ def cuenta_registrada(ref):
             (ref.replace("‎", "").strip(), ref.replace("‎", ""))).fetchall()
         con.close()
     except Exception:
-        return None
-    return filas[0][0] if len(filas) == 1 else None
+        return []
+    return sorted(f[0] for f in filas if f[0])
 
 
 def chat_jid(name):
@@ -415,6 +411,235 @@ def open_chat(target, phone=None, modo="auto"):
     return tree, cur, via
 
 
+# La via web, que es la de los grupos: WABA no los tiene, y en Linux no hay ventana de
+# escritorio que conducir. Se escribe por la MISMA pestana por la que wa-read ya lee.
+CUENTA_LOCAL = "local"
+ESPERA_ENVIO = 25            # x200ms esperando que el mensaje propio aparezca
+LINEA_AMBIGUA = "send-ambiguous-line"
+WEB_SIN_REGISTRO = "send-web-no-line"
+WEB_A_MEDIAS = "send-web-line-pending"
+# Los finales de la escritura por el DOM. Van separados porque la accion del usuario es
+# distinta en cada uno, y porque "no pude" tiene que poder distinguirse de "no mande".
+WEB_FINALES = {
+    "sin-sesion": "send-web-logged-out",
+    "sin-chat": "send-web-no-chat",
+    "chat-equivocado": "send-web-wrong-chat",
+    "sin-caja": "send-web-no-composer",
+    "sin-escribir": "send-web-not-written",
+    "sin-confirmar": "send-web-unconfirmed",
+}
+
+# La escritura corre DENTRO de la pagina y por el DOM, como lo haria una persona:
+# enfocar el composer, meter texto con eventos de entrada de verdad, mandar. Ninguna
+# coleccion ni funcion interna de WhatsApp se usa para escribir — leerlas es otra cosa;
+# escribir por ahi convierte una sesion normal en un cliente no oficial.
+# Nada de esto enfoca la ventana ni cambia de pestana: el unico foco es el del composer
+# dentro del documento, que es lo que cualquier editor necesita para recibir entrada.
+WEB_ENVIO_JS = r"""
+const P = %s;
+const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
+const limpio = (s) => String(s == null ? '' : s).replace(/\u200e/g, '')
+  .replace(/\u00a0/g, ' ').trim();
+const plano = (s) => limpio(s).replace(/\s+/g, ' ');
+const quiere = plano(P.texto);
+const objetivo = limpio(P.chat).toLowerCase();
+
+// La misma senal de sesion viva que usa la lectura.
+const lid = String(JSON.parse(localStorage.getItem('WALid') || 'null') || '');
+if (!lid) return { estado: 'sin-sesion', qr: !!document.querySelector('canvas[aria-label]') };
+
+const golpea = (el) => {
+  const o = { bubbles: true, cancelable: true, composed: true, view: window };
+  const Puntero = window.PointerEvent || window.MouseEvent;
+  for (const par of [[Puntero, 'pointerdown'], [MouseEvent, 'mousedown'],
+                     [Puntero, 'pointerup'], [MouseEvent, 'mouseup'],
+                     [MouseEvent, 'click']]) {
+    el.dispatchEvent(new par[0](par[1], o));
+  }
+};
+
+const panel = document.querySelector('#pane-side');
+const filas = () => Array.from(document.querySelectorAll(
+  '#pane-side [role="listitem"], #pane-side [role="row"]'));
+const titulo = (f) => {
+  const s = f.querySelector('span[title]');
+  return s ? limpio(s.getAttribute('title')) : '';
+};
+const busca = () => filas().find((f) => titulo(f).toLowerCase() === objetivo) || null;
+
+// La lista lateral es virtual: la fila de un grupo que no se hablo en dias no existe
+// en el DOM hasta que se baja hasta ella.
+let fila = busca();
+if (!fila && panel) {
+  panel.scrollTop = 0;
+  await dormir(300);
+  for (let i = 0; i < 40 && !(fila = busca()); i++) {
+    const antes = panel.scrollTop;
+    panel.scrollTop = antes + Math.max(200, panel.clientHeight * 0.85);
+    await dormir(200);
+    if (panel.scrollTop === antes) break;
+  }
+}
+if (!fila) return { estado: 'sin-chat' };
+
+const cabecera = () => {
+  const h = document.querySelector('#main header span[title]');
+  return h ? limpio(h.getAttribute('title')) : '';
+};
+if (cabecera().toLowerCase() !== objetivo) {
+  golpea(fila.querySelector('[role="gridcell"]') || fila);
+  for (let i = 0; i < 40 && cabecera().toLowerCase() !== objetivo; i++) await dormir(150);
+}
+// El guard, igual que en la via local: escribir en la conversacion que quedo abierta es
+// mandarle el mensaje a alguien que no lo pidio, y eso no se deshace.
+if (cabecera().toLowerCase() !== objetivo) {
+  return { estado: 'chat-equivocado', abierto: cabecera() };
+}
+
+const caja = document.querySelector('#main footer div[contenteditable="true"]')
+  || document.querySelector('#main div[contenteditable="true"][data-tab]');
+if (!caja) return { estado: 'sin-caja' };
+caja.focus();
+const puesto = () => plano(caja.innerText || caja.textContent);
+
+// El composer es un editor controlado: asignarle texto no le avisa a nadie, el boton de
+// enviar queda apagado y lo escrito se pierde en el proximo render. Van los tres
+// caminos que SI son entrada de usuario, y se comprueba cual dejo el texto.
+const VIAS = ['insertText', 'pegar', 'beforeinput'];
+const escribe = (via) => {
+  if (via === 'insertText') return document.execCommand('insertText', false, P.texto);
+  if (via === 'pegar') {
+    const dt = new DataTransfer();
+    dt.setData('text/plain', P.texto);
+    return caja.dispatchEvent(new ClipboardEvent('paste',
+      { bubbles: true, cancelable: true, clipboardData: dt }));
+  }
+  const o = { bubbles: true, cancelable: true, inputType: 'insertText', data: P.texto };
+  caja.dispatchEvent(new InputEvent('beforeinput', o));
+  return caja.dispatchEvent(new InputEvent('input', o));
+};
+let via = null;
+const fallos = [];
+for (const nombre of VIAS) {
+  try { escribe(nombre); } catch (e) {
+    fallos.push(nombre + ': ' + String((e && e.message) || e));
+    continue;
+  }
+  await dormir(200);
+  if (puesto() === quiere) { via = nombre; break; }
+}
+if (!via) return { estado: 'sin-escribir', caja: puesto().slice(0, 120), fallos: fallos };
+if (!P.enviar) return { estado: 'borrador', chat: cabecera(), via: via };
+
+const mios = () => Array.from(document.querySelectorAll('#main [data-id]'))
+  .filter((e) => String(e.getAttribute('data-id')).indexOf('true_') === 0);
+const ultimo = () => { const n = mios(); return n.length ? plano(n[n.length - 1].innerText
+  || n[n.length - 1].textContent) : ''; };
+const habia = mios().length;
+const icono = document.querySelector('#main footer [data-icon="send"]')
+  || document.querySelector('#main footer [data-icon="wds-ic-send-filled"]');
+const boton = icono ? (icono.closest('button') || icono.closest('[role="button"]')) : null;
+if (boton) golpea(boton);
+else {
+  const o = { bubbles: true, cancelable: true, key: 'Enter', code: 'Enter', keyCode: 13,
+              which: 13 };
+  caja.dispatchEvent(new KeyboardEvent('keydown', o));
+  caja.dispatchEvent(new KeyboardEvent('keyup', o));
+}
+// Una pestana en segundo plano puede quedar con el render frenado, asi que la caja
+// vacia no prueba nada: lo que prueba es el mensaje propio NUEVO en la conversacion.
+const salio = () => mios().length > habia && ultimo().indexOf(quiere) >= 0;
+for (let i = 0; i < P.esperaEnvio && !salio(); i++) await dormir(200);
+if (!salio()) {
+  return { estado: 'sin-confirmar', caja: puesto().slice(0, 120),
+           ultimo: ultimo().slice(0, 120) };
+}
+return { estado: 'enviado', chat: cabecera(), via: via, boton: !!boton };
+"""
+
+_WA_READ = None
+
+
+def wa_read_mod():
+    """wa-read, importado por ruta. Es el dueno del canal al navegador —que pestana es
+    la de esta linea y como se corre JS en ella— y una segunda copia de esa resolucion
+    aca es exactamente como nacio el defecto de los ajustes."""
+    global _WA_READ
+    if _WA_READ is None:
+        spec = importlib.util.spec_from_loader(
+            "wa_read", importlib.machinery.SourceFileLoader("wa_read", WA_READ))
+        _WA_READ = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_WA_READ)
+    return _WA_READ
+
+
+def linea_web(cuenta):
+    """(etiqueta, perfil, habilitada) de esa linea, o None si no esta en el registro."""
+    try:
+        con = sqlite3.connect(f"file:{SCOPE_DB}?mode=ro", uri=True)
+        fila = con.execute("select label, profile, enabled from wa_account where id=?",
+                           (cuenta,)).fetchone()
+        con.close()
+    except Exception:
+        return None
+    return tuple(fila) if fila else None
+
+
+def envia_por_web(cuenta, chat, texto, enviar):
+    """Escribe por la pestana de esa linea, en segundo plano y sin enfocar nada.
+
+    Ni la ventana de Orca, ni la pestana: la persona puede estar escribiendo en otra
+    cosa mientras el agente contesta un grupo, y moverle el escritorio abajo de las
+    manos es peor que no contestar."""
+    fila = linea_web(cuenta)
+    if not fila:
+        sys.exit(f"wa-send: {WEB_SIN_REGISTRO}\n{chat!r} is registered on the line "
+                 f"{cuenta!r}, which is not in the plugin's registry any more; link it "
+                 "again from the plugin panel, or re-register the conversation.")
+    etiqueta, perfil, habilitada = fila[0] or cuenta, fila[1], fila[2]
+    if not habilitada or not perfil:
+        sys.exit(f"wa-send: {WEB_A_MEDIAS}\nthe line {etiqueta!r} never finished "
+                 "linking: the QR code was not scanned, so there is no session of that "
+                 "number to write from. Finish it from the plugin panel.")
+    wa = wa_read_mod()
+    parametros = json.dumps({"chat": chat, "texto": texto, "enviar": bool(enviar),
+                             "esperaEnvio": ESPERA_ENVIO})
+    try:
+        page = wa.web_page(perfil)
+        datos = wa.web_async(page, WEB_ENVIO_JS % parametros,
+                             int(ajuste("web_timeout_s", 45)), global_js="__waEnvio")
+    except wa.SourceError as error:
+        sys.exit(f"wa-send: {error.reason}\n{error.detail}")
+
+    estado = datos.get("estado")
+    if estado == "enviado":
+        print(f"SENT to {chat!r} (via web line {etiqueta}): {texto}")
+        return
+    if estado == "borrador":
+        print(f"DRAFT in {chat!r} (via web line {etiqueta}): {texto}\n(not sent — "
+              "repeat with --send, or press Enter in that tab)")
+        return
+    detalle = {
+        "sin-sesion": ("that session is not linked any more"
+                       + (" — the QR code is on screen, scan it with the phone of THAT "
+                          "number" if datos.get("qr") else "; open the tab and link it "
+                          "again")),
+        "sin-chat": f"{chat!r} is not in that line's chat list; the name has to be the "
+                    "one the sidebar shows, and the conversation has to exist on THIS "
+                    "line",
+        "chat-equivocado": f"the tab ended up on {datos.get('abierto')!r} and you asked "
+                           f"for {chat!r} — nothing was written",
+        "sin-caja": "that conversation has no message box: it may be a read-only group "
+                    "(admins only) or a channel",
+        "sin-escribir": f"the message box would not take the text ({datos.get('fallos')}); "
+                        f"it holds {datos.get('caja')!r}. Nothing was sent",
+        "sin-confirmar": "the send was triggered but the message never showed up in the "
+                         f"conversation (last own message: {datos.get('ultimo')!r}). "
+                         "Check that tab before retrying: it may have gone out anyway",
+    }.get(estado, f"the page answered {datos!r}")
+    sys.exit(f"wa-send: {WEB_FINALES.get(estado, 'send-web-failed')}\n{detalle}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -424,6 +649,8 @@ def main():
                     help="besides writing it, send it (by default it is only written)")
     ap.add_argument("--raw", action="store_true",
                     help="do not sign: the message goes out as is, without the agent signature")
+    ap.add_argument("--line", help="the line to write from, when the conversation "
+                                   "exists on more than one (see `wa-scope accounts`)")
     ap.add_argument("--open", dest="via", choices=("auto", "url", "ui"), default="auto",
                     help="how to open the chat: url (whatsapp:// scheme, direct chats "
                          "only), ui (walks the sidebar list, works for everything) or "
@@ -439,15 +666,24 @@ def main():
         if not a.text.rstrip().endswith(sig):
             a.text = f"{a.text.rstrip()}\n{sig}"
 
-    # Enviar por la via web no esta construido, y fallar temprano con un motivo estable
-    # es lo unico honesto: lo otro es abrir la ventana de la linea local y escribirle al
-    # grupo equivocado. Ver docs/LECTURA-MULTIFUENTE.md.
-    cuenta = cuenta_registrada(a.chat)
-    if cuenta and cuenta != "local":
-        sys.exit(f"wa-send: {LINEA_WEB}\n{a.chat!r} belongs to the WhatsApp Web line "
-                 f"{cuenta!r}, and writing over the web route is not built: wa-send "
-                 "drives the desktop app's own window, and that window is the OTHER "
-                 "line. Reply from the phone or from that browser session.")
+    # La linea se decide ANTES de tocar nada. El mismo grupo puede existir en dos
+    # lineas, y elegir "la primera" ahi le escribe a la conversacion equivocada.
+    cuentas = cuentas_registradas(a.chat)
+    if a.line:
+        if cuentas and a.line not in cuentas:
+            sys.exit(f"wa-send: {LINEA_EQUIVOCADA}\n{a.chat!r} is not registered on the line "
+                     f"{a.line!r}; it is on {', '.join(cuentas)}.")
+        cuenta = a.line
+    elif len(cuentas) > 1:
+        sys.exit(f"wa-send: {LINEA_AMBIGUA}\n{a.chat!r} exists on {len(cuentas)} lines "
+                 f"({', '.join(cuentas)}), so there is no way to tell which one you "
+                 "mean; pick it with --line <id>.")
+    else:
+        cuenta = cuentas[0] if cuentas else CUENTA_LOCAL
+
+    if cuenta != CUENTA_LOCAL:
+        envia_por_web(cuenta, a.chat, a.text, a.send)
+        return
 
     # La via se decide ANTES de tocar la app: un pedido imposible —--open url contra un
     # grupo— tiene que fallar sin haber abierto ni movido nada en WhatsApp.

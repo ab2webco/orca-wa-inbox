@@ -669,22 +669,206 @@ def revisa_solo_web(fallos: list) -> int:
         elif p.returncode != 0:
             fallos.append(f"`wa-scope pending` salio {p.returncode} con trabajo esperando")
 
-        # Y wa-send tiene que negarse ANTES de abrir la ventana de la linea equivocada.
+    return hechas
+
+
+# La linea web de las pruebas y su grupo, con el nombre que el payload le da.
+LINEA_WEB_ID = "web:100000000000001"
+GRUPO_WEB_NOMBRE = "Grupo De Ejemplo"
+
+# Lo que la CLI de Orca puede hacer y enfoca algo: activa la ventana, cambia de pestana
+# o conduce el escritorio. La via web no puede pedir NINGUNO — el usuario puede estar
+# escribiendo en otra cosa cuando el agente contesta un grupo.
+ORCA_QUE_ENFOCA = ("computer", "tab switch", "tab create", "tab close", "goto",
+                   "click", "type", "keypress", "focus", "hover", "screenshot")
+
+
+def rastro_de(ruta: pathlib.Path) -> list:
+    if not ruta.exists():
+        return []
+    return [json.loads(l) for l in ruta.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+
+def casa_con_linea_web(home: pathlib.Path, falso: pathlib.Path) -> dict:
+    """Un HOME con la linea web enlazada, su grupo autorizado y la CLI de Orca falsa."""
+    falso.write_text(FALSO_ORCA, encoding="utf-8")
+    falso.chmod(0o755)
+    registra_linea_web(home, "linea-uno", cid=LINEA_WEB_ID)
+    env = dict(entorno(home), WA_FALSO_ORCA="ok",
+               WA_FALSO_PAYLOAD=json.dumps(WEB_PAYLOAD),
+               ORCA_CLI_COMMAND=str(falso))
+    subprocess.run([str(BIN / "wa-scope"), "config", "read_web", "on"],
+                   capture_output=True, text=True, env=env, timeout=120)
+    con = sqlite3.connect(home / ".wa-inbox" / "scope.db")
+    con.executescript(
+        "create table if not exists chat_scope (account text not null default 'local', "
+        "chat_jid text not null, chat_name text not null, provider text, target text, "
+        "mode text not null default 'off', initial_state text, hours text, tone text, "
+        "instructions text, timezone text, notes text, updated_at text, "
+        "primary key (account, chat_jid));")
+    con.execute("insert or replace into chat_scope (account, chat_jid, chat_name, mode) "
+                "values (?,?,?,'observar')", (LINEA_WEB_ID, WEB_GRUPO, GRUPO_WEB_NOMBRE))
+    con.commit()
+    con.close()
+    return env
+
+
+def revisa_envio_web(fallos: list) -> int:
+    """Contestar un grupo de una linea web, que es la razon de ser del plugin.
+
+    WABA no tiene grupos y en Linux no hay app de escritorio, asi que sin esta via el
+    agente lee el grupo y no lo puede contestar. Lo que se recorre aca es el despacho:
+    que la linea salga del registro y no de "la primera", que el texto y el chat que
+    viajan a la pagina sean los pedidos, y que la CLI de Orca no reciba NADA que
+    enfoque una ventana o cambie de pestana.
+    """
+    hechas = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        rastro = home / "rastro.txt"
+        env = dict(casa_con_linea_web(home, home / "orca-falso"),
+                   WA_FALSO_RASTRO=str(rastro))
         subprocess.run([str(BIN / "wa-scope"), "agent", "Alfred"], capture_output=True,
                        text=True, env=env, timeout=120)
+
+        enviado = json.dumps({"estado": "enviado", "chat": GRUPO_WEB_NOMBRE,
+                              "via": "pegar", "boton": True})
+        p = subprocess.run([str(BIN / "wa-send"), GRUPO_WEB_NOMBRE, "hola", "--send"],
+                           capture_output=True, text=True, timeout=180,
+                           env=dict(env, WA_FALSO_ENVIO=enviado))
+        hechas += 3
+        if p.returncode != 0:
+            fallos.append(f"wa-send no pudo contestar por la linea web: rc={p.returncode} "
+                          f"{(p.stderr or '').strip()[:200]}")
+        if "SENT to" not in p.stdout:
+            fallos.append(f"wa-send no reporto el envio por la via web: {p.stdout[:120]!r}")
+        # La firma va igual que por la via local: quien lee el grupo tiene que poder
+        # distinguir a la persona de su agente.
+        if "-- Alfred" not in p.stdout:
+            fallos.append(f"el mensaje por la via web salio sin firmar: {p.stdout[:120]!r}")
+
+        # El rastro: que se le pidio de verdad a la CLI de Orca.
+        pedidos = rastro_de(rastro)
+        evals = [a for a in pedidos if a[:1] == ["eval"]]
+        hechas += 4
+        if not evals:
+            fallos.append("la via web no corrio nada en la pagina")
+        for args in pedidos:
+            linea = " ".join(args)
+            for prohibido in ORCA_QUE_ENFOCA:
+                if linea == prohibido or linea.startswith(prohibido + " "):
+                    fallos.append(f"el envio por la via web enfoco algo: `orca {linea[:60]}`")
+        if any("--page" not in a for a in evals):
+            fallos.append("un eval del envio no fue contra la pestana de la linea")
+        sonda = " ".join(evals[0]) if evals else ""
+        if GRUPO_WEB_NOMBRE not in sonda or "hola" not in sonda:
+            fallos.append("el chat y el texto pedidos no viajaron a la pagina")
+        if "__waEnvio" not in sonda:
+            fallos.append("el envio uso el global de la lectura y puede pisarla")
+
+        # El borrador deja el texto en la caja y no manda: es el default, igual que en
+        # la via local, y un envio que se escapa sin --send no se deshace.
+        p = subprocess.run([str(BIN / "wa-send"), GRUPO_WEB_NOMBRE, "hola"],
+                           capture_output=True, text=True, timeout=180,
+                           env=dict(env, WA_FALSO_ENVIO=json.dumps(
+                               {"estado": "borrador", "chat": GRUPO_WEB_NOMBRE,
+                                "via": "pegar"})))
+        hechas += 2
+        if p.returncode != 0 or "DRAFT in" not in p.stdout:
+            fallos.append(f"el borrador por la via web no quedo escrito: rc={p.returncode} "
+                          f"{(p.stdout or p.stderr).strip()[:120]!r}")
+        if "no-envio" in p.stdout:
+            fallos.append("el borrador por la via web se mando igual")
+
+        # Cada final con su motivo estable: el panel los traduce por codigo, y lo que
+        # el usuario tiene que hacer es distinto en cada uno.
+        for estado, motivo in (("sin-chat", "send-web-no-chat"),
+                               ("chat-equivocado", "send-web-wrong-chat"),
+                               ("sin-caja", "send-web-no-composer"),
+                               ("sin-escribir", "send-web-not-written"),
+                               ("sin-confirmar", "send-web-unconfirmed"),
+                               ("sin-sesion", "send-web-logged-out")):
+            hechas += 1
+            p = subprocess.run([str(BIN / "wa-send"), GRUPO_WEB_NOMBRE, "hola", "--send"],
+                               capture_output=True, text=True, timeout=180,
+                               env=dict(env, WA_FALSO_ENVIO=json.dumps({"estado": estado})))
+            primera = (p.stderr or "").strip().splitlines()[:1]
+            if p.returncode == 0 or primera != [f"wa-send: {motivo}"]:
+                fallos.append(f"el final {estado!r} de la via web no dio {motivo!r}: "
+                              f"rc={p.returncode} {primera}")
+
+        # Una linea a medio enlazar no tiene sesion de ese numero: no se escribe por
+        # cualquier pestana que haya abierta, que es la de otro.
         con = sqlite3.connect(home / ".wa-inbox" / "scope.db")
-        con.execute("update chat_scope set account='web:100000000000001' where chat_jid=?",
-                    (WEB_GRUPO,))
+        con.execute("update wa_account set enabled=0 where id=?", (LINEA_WEB_ID,))
         con.commit()
         con.close()
-        p = subprocess.run([str(BIN / "wa-send"), WEB_GRUPO, "hola"], capture_output=True,
-                           text=True, env=env, timeout=120)
-        hechas += 2
-        if p.returncode == 0:
-            fallos.append("wa-send acepto escribir en una conversacion de una linea web")
-        if (p.stderr or "").strip().splitlines()[:1] != ["wa-send: send-web-line"]:
-            fallos.append("wa-send no dio el motivo estable al negarse por linea web: "
+        hechas += 1
+        p = subprocess.run([str(BIN / "wa-send"), GRUPO_WEB_NOMBRE, "hola", "--send"],
+                           capture_output=True, text=True, timeout=180,
+                           env=dict(env, WA_FALSO_ENVIO=enviado))
+        if (p.stderr or "").strip().splitlines()[:1] != ["wa-send: send-web-line-pending"]:
+            fallos.append(f"una linea a medio enlazar acepto escribir: rc={p.returncode} "
                           f"{(p.stderr or '').strip()[:120]!r}")
+
+        # Con la conversacion en dos lineas no se adivina: elegir "la primera" le
+        # escribe a la conversacion equivocada, y eso no se deshace.
+        con = sqlite3.connect(home / ".wa-inbox" / "scope.db")
+        con.execute("update wa_account set enabled=1 where id=?", (LINEA_WEB_ID,))
+        con.execute("insert or replace into chat_scope (account, chat_jid, chat_name, "
+                    "mode) values ('local',?,?,'observar')", (WEB_GRUPO, GRUPO_WEB_NOMBRE))
+        con.commit()
+        con.close()
+        hechas += 2
+        p = subprocess.run([str(BIN / "wa-send"), GRUPO_WEB_NOMBRE, "hola", "--send"],
+                           capture_output=True, text=True, timeout=180,
+                           env=dict(env, WA_FALSO_ENVIO=enviado))
+        if (p.stderr or "").strip().splitlines()[:1] != ["wa-send: send-ambiguous-line"]:
+            fallos.append(f"con el grupo en dos lineas wa-send eligio una: rc="
+                          f"{p.returncode} {(p.stderr or '').strip()[:120]!r}")
+        p = subprocess.run([str(BIN / "wa-send"), GRUPO_WEB_NOMBRE, "hola", "--send",
+                            "--line", LINEA_WEB_ID], capture_output=True, text=True,
+                           timeout=180, env=dict(env, WA_FALSO_ENVIO=enviado))
+        if p.returncode != 0 or "SENT to" not in p.stdout:
+            fallos.append(f"--line no desempato: rc={p.returncode} "
+                          f"{(p.stderr or '').strip()[:120]!r}")
+    return hechas
+
+
+def revisa_firma_del_panel(fallos: list) -> int:
+    """El nombre puesto DESDE EL PANEL tambien firma.
+
+    Es el caso que bloqueo a un agente de verdad: `wa-scope agent` devolvia `Jarvis` y
+    `wa-send` salia con "no agent name is configured", porque leia el sqlite directo y
+    el panel guarda en el almacen del plugin. Por eso el nombre se escribe SOLO ahi.
+    """
+    hechas = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = casa_con_linea_web(home, home / "orca-falso")
+        man = json.loads((RAIZ / "orca-plugin.json").read_text(encoding="utf-8"))
+        store = (home / "Library" / "Application Support" / "orca" / "plugins-data" /
+                 f"{man['publisher']}.{man['id']}" / "storage.json")
+        store.parent.mkdir(parents=True, exist_ok=True)
+        store.write_text(json.dumps({"agentName": "Jarvis"}), encoding="utf-8")
+
+        con = sqlite3.connect(home / ".wa-inbox" / "scope.db")
+        quedo = con.execute("select value from settings where key='agent_name'").fetchone()
+        con.close()
+        hechas += 1
+        if quedo:
+            fallos.append("el caso no mide lo que dice: el nombre tambien esta en la base")
+
+        hechas += 2
+        p = subprocess.run([str(BIN / "wa-send"), GRUPO_WEB_NOMBRE, "hola", "--send"],
+                           capture_output=True, text=True, timeout=180,
+                           env=dict(env, WA_FALSO_ENVIO=json.dumps(
+                               {"estado": "enviado", "chat": GRUPO_WEB_NOMBRE})))
+        if "no agent name is configured" in (p.stderr or ""):
+            fallos.append("wa-send no ve el nombre del agente puesto desde el panel")
+        if "-- Jarvis" not in p.stdout:
+            fallos.append(f"el mensaje no salio firmado con el nombre del panel: "
+                          f"rc={p.returncode} {(p.stdout or p.stderr).strip()[:160]!r}")
     return hechas
 
 
@@ -1032,9 +1216,10 @@ RASTRO = os.environ.get("WA_FALSO_RASTRO")
 if RASTRO:
     with open(RASTRO, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(ARGS) + "\n")   # una linea JSON: la sonda trae saltos
-# Cual de las dos sondas arranco. El segundo eval — el que lee el global — no lleva la
-# sonda adentro, asi que hay que acordarse de la primera.
-SENA = (RASTRO + ".sonda") if RASTRO else None
+# Cual sonda arranco. El segundo eval — el que lee el global — no la lleva adentro, asi
+# que hay que acordarse de la primera. Va al lado del falso y no del rastro: atarla al
+# rastro dejaba a un caso sin rastro contestando con el payload de otra sonda.
+SENA = sys.argv[0] + ".sonda"
 
 
 def responde(result):
@@ -1044,8 +1229,11 @@ def responde(result):
 
 def payload(pagina="p1"):
     cual = "WA_FALSO_PAYLOAD"
-    if SENA and os.path.exists(SENA) and open(SENA, encoding="utf-8").read() == "inbox":
+    marca = open(SENA, encoding="utf-8").read() if os.path.exists(SENA) else ""
+    if marca == "inbox":
         cual = "WA_FALSO_PAYLOAD_INBOX"
+    if marca == "envio":
+        cual = "WA_FALSO_ENVIO"
     # Por pestana si se declaro: dos lineas que devuelven lo mismo no probarian que
     # cada una leyo la suya.
     propio = f"{cual}_{pagina.upper()}"
@@ -1068,10 +1256,13 @@ if ARGS[:1] == ["eval"]:
     if "__waInboxCaptura" in expresion:
         responde({"result": os.environ.get("WA_FALSO_CAPTURA") or json.dumps(
             {"ok": True, "estado": "nuevo", "drenado": [], "vistos": 0, "fallos": 0})})
-    if "window.__waRead === undefined" not in expresion:
-        if SENA:
-            with open(SENA, "w", encoding="utf-8") as fh:
-                fh.write("inbox" if "const conTexto" in expresion else "chats")
+    # Quien escribe usa su propio global: el arranque de una sonda y la lectura del
+    # resultado se distinguen igual, y asi el rastro dice cual de las dos corrio.
+    GLOBAL = "__waEnvio" if "__waEnvio" in expresion else "__waRead"
+    if f"window.{GLOBAL} === undefined" not in expresion:
+        with open(SENA, "w", encoding="utf-8") as fh:
+            fh.write("envio" if GLOBAL == "__waEnvio"
+                     else ("inbox" if "const conTexto" in expresion else "chats"))
         responde({"result": "started"})
     if MODO == "sin-respuesta":
         responde({"result": "null"})
@@ -2818,6 +3009,194 @@ def revisa_override_ajuste(fallos: list) -> int:
     return hechas
 
 
+# La pagina de mentira sobre la que corre la escritura. Es lo minimo que WhatsApp Web
+# tiene y el codigo usa: la lista lateral virtual, la cabecera que dice en que
+# conversacion estas, un composer que SOLO acepta entrada de usuario, y el boton de
+# enviar. Sin esto lo unico comprobado seria que el JS es sintacticamente valido.
+ENVIO_DRIVER = r"""
+import { createRequire } from 'node:module'
+const req = createRequire(process.env.WA_INBOX_DEPS)
+const { JSDOM } = req('jsdom')
+
+const CASOS = __CASOS__
+
+const arma = (caso) => {
+  const dom = new JSDOM('<!doctype html><html><body><div id="pane-side"></div>' +
+    '<div id="main"></div></body></html>', { url: 'https://web.whatsapp.com/' })
+  const { window } = dom
+  const d = window.document
+  if (caso.enlazada !== false) window.localStorage.setItem('WALid', '"100000000000001@lid"')
+  const panel = d.querySelector('#pane-side')
+  // La lista es virtual: las filas de `tarde` no existen hasta que se baja.
+  let bajado = 0
+  Object.defineProperty(panel, 'scrollTop', {
+    get: () => bajado,
+    set: (v) => { bajado = v; if (v > 0) pinta(caso.tarde || []) },
+  })
+  const pinta = (nombres) => {
+    for (const n of nombres) {
+      if (Array.from(panel.querySelectorAll('span[title]')).some((s) => s.title === n)) continue
+      const fila = d.createElement('div')
+      fila.setAttribute('role', 'listitem')
+      fila.innerHTML = '<div role="gridcell"><span title="' + n + '"></span></div>'
+      fila.querySelector('[role="gridcell"]').addEventListener('click', () => abre(n))
+      panel.appendChild(fila)
+    }
+  }
+  const abre = (nombre) => {
+    const cual = caso.abreOtro || nombre
+    d.querySelector('#main').innerHTML =
+      '<header><span title="' + cual + '"></span></header>' +
+      '<div class="hilo"></div>' +
+      (caso.sinCaja ? '<footer></footer>'
+        : '<footer><div contenteditable="true" data-tab="10"></div>' +
+          '<button><span data-icon="send"></span></button></footer>')
+    const caja = d.querySelector('#main footer div[contenteditable="true"]')
+    if (!caja) return
+    // El composer de verdad es un editor controlado: solo se llena con entrada de
+    // usuario, y `sordo` es el caso en que ningun camino le entra.
+    if (!caso.sordo) {
+      caja.addEventListener('beforeinput', (e) => { caja.textContent += e.data || '' })
+    }
+    d.querySelector('#main footer button').addEventListener('click', () => {
+      if (caso.noConfirma) { caja.textContent = ''; return }
+      const m = d.createElement('div')
+      m.setAttribute('data-id', 'true_100000000000000000@g.us_ABC')
+      m.textContent = caja.textContent + ' 10:05'
+      d.querySelector('#main .hilo').appendChild(m)
+      caja.textContent = ''
+    })
+  }
+  pinta(caso.pronto || [])
+  return dom
+}
+
+const salida = {}
+for (const caso of CASOS) {
+  const dom = arma(caso)
+  const g = dom.window
+  for (const k of ['document', 'localStorage', 'MouseEvent', 'KeyboardEvent',
+                   'InputEvent', 'ClipboardEvent', 'DataTransfer', 'PointerEvent']) {
+    globalThis[k] = g[k]
+  }
+  globalThis.window = g
+  const PARAMS = caso.P
+  salida[caso.nombre] = {
+    r: await (async () => { __CUERPO__ })(),
+    caja: (g.document.querySelector('#main footer div[contenteditable="true"]') || {}).textContent,
+    hilo: Array.from(g.document.querySelectorAll('#main [data-id]')).map((n) => n.textContent),
+  }
+}
+console.log(JSON.stringify(salida))
+"""
+
+# Los casos, con lo que cada uno tiene que dar. `tarde` es la fila que la lista virtual
+# no trae hasta que se baja, que es el caso del grupo del que no se habla hace dias.
+GRUPO = "Grupo De Ejemplo"
+ENVIO_CASOS = [
+    {"nombre": "grupo", "pronto": [GRUPO], "P": {"enviar": True}},
+    {"nombre": "directo", "pronto": ["Laura Mendez"],
+     "P": {"chat": "Laura Mendez", "enviar": True}},
+    {"nombre": "borrador", "pronto": [GRUPO], "P": {"enviar": False}},
+    {"nombre": "lista virtual", "pronto": ["Otro Grupo"], "tarde": [GRUPO],
+     "P": {"enviar": True}},
+    {"nombre": "sin la conversacion", "pronto": ["Otro Grupo"], "P": {"enviar": True}},
+    {"nombre": "sin sesion", "pronto": [GRUPO], "enlazada": False, "P": {"enviar": True}},
+    {"nombre": "abre otra", "pronto": [GRUPO], "abreOtro": "Otro Grupo",
+     "P": {"enviar": True}},
+    {"nombre": "sin caja", "pronto": [GRUPO], "sinCaja": True, "P": {"enviar": True}},
+    {"nombre": "caja sorda", "pronto": [GRUPO], "sordo": True, "P": {"enviar": True}},
+    {"nombre": "no confirma", "pronto": [GRUPO], "noConfirma": True, "P": {"enviar": True}},
+]
+ENVIO_ESPERA = {
+    "grupo": "enviado", "directo": "enviado", "borrador": "borrador",
+    "lista virtual": "enviado", "sin la conversacion": "sin-chat",
+    "sin sesion": "sin-sesion", "abre otra": "chat-equivocado", "sin caja": "sin-caja",
+    "caja sorda": "sin-escribir", "no confirma": "sin-confirmar",
+}
+TEXTO_ENVIO = "listo, lo reviso hoy\n-- Alfred"
+
+
+def revisa_dom_web(fallos: list) -> int:
+    """La escritura por el DOM, corrida de verdad sobre una pagina de mentira.
+
+    Lo que sostiene y no se ve de otra forma: que el composer se llene con entrada de
+    usuario y no asignandole texto (un editor controlado descarta lo segundo y el
+    mensaje se pierde en el proximo render), que el envio se confirme mirando el
+    mensaje propio en la conversacion y no la caja vacia — una pestana en segundo plano
+    puede tener el render frenado — y que abrir la conversacion equivocada aborte antes
+    de escribir. Contra una sesion viva esto solo se puede probar mandando mensajes.
+    """
+    hechas = 0
+    try:
+        wa = modulo_wa_send()
+    except Exception as error:            # noqa: BLE001 - el motivo va en el reporte
+        fallos.append(f"wa-send: no se pudo importar — {error}")
+        return hechas
+
+    # Escribir no puede enfocar nada: ni la ventana, ni la pestana. El usuario puede
+    # estar tecleando en otra cosa cuando el agente contesta un grupo.
+    hechas += 1
+    enfoques = [t for t in ("window.focus", "window.open", "document.hasFocus",
+                            "requestFullscreen") if t in wa.WEB_ENVIO_JS]
+    if enfoques:
+        fallos.append(f"la escritura por el DOM enfoca la ventana: {enfoques}")
+
+    # Y no puede escribir por el API interno de WhatsApp: el usuario pidio que Meta vea
+    # un WhatsApp Web de toda la vida.
+    hechas += 1
+    internos = [t for t in ("WAWebSendMsg", "Store.", "sendMessage", "webpackChunk",
+                            "__debug", "moduleRaid") if t in wa.WEB_ENVIO_JS]
+    if internos:
+        fallos.append(f"la escritura no va por el DOM sino por el API interno: {internos}")
+
+    casos = []
+    for caso in ENVIO_CASOS:
+        uno = dict(caso)
+        uno["P"] = dict({"chat": GRUPO, "texto": TEXTO_ENVIO, "esperaEnvio": 3},
+                        **caso["P"])
+        casos.append(uno)
+    with tempfile.TemporaryDirectory() as tmp:
+        js = pathlib.Path(tmp) / "envio.mjs"
+        js.write_text(ENVIO_DRIVER.replace("__CASOS__", json.dumps(casos))
+                      .replace("__CUERPO__", wa.WEB_ENVIO_JS % "PARAMS"), encoding="utf-8")
+        entorno_js = dict(os.environ, WA_INBOX_DEPS=os.environ.get("WA_INBOX_DEPS") or
+                          str(RAIZ.parent / ".orca-wa-inbox-deps" / "package.json"))
+        p = subprocess.run(["node", str(js)], capture_output=True, text=True,
+                           timeout=180, env=entorno_js)
+        hechas += 1
+        if p.returncode != 0:
+            fallos.append(f"la escritura por el DOM no corre: {p.stderr.strip()[:300]}")
+            return hechas
+        R = json.loads(p.stdout)
+
+    for nombre, espera in ENVIO_ESPERA.items():
+        hechas += 1
+        quedo = (R.get(nombre) or {}).get("r") or {}
+        if quedo.get("estado") != espera:
+            fallos.append(f"el caso {nombre!r} dio {quedo.get('estado')!r} y tenia que "
+                          f"dar {espera!r}: {quedo}")
+
+    plano = " ".join(TEXTO_ENVIO.split())
+    # El mensaje SALE: el texto tiene que estar en la conversacion, no solo en la caja.
+    hechas += 2
+    if not any(plano in " ".join(m.split()) for m in R["grupo"]["hilo"]):
+        fallos.append(f"el grupo no recibio el mensaje: {R['grupo']['hilo']}")
+    if R["grupo"]["caja"]:
+        fallos.append(f"despues de mandar quedo texto en la caja: {R['grupo']['caja']!r}")
+    # El borrador es lo contrario: en la caja y no en la conversacion.
+    hechas += 2
+    if " ".join((R["borrador"]["caja"] or "").split()) != plano:
+        fallos.append(f"el borrador no quedo escrito: {R['borrador']['caja']!r}")
+    if R["borrador"]["hilo"]:
+        fallos.append(f"el borrador se mando igual: {R['borrador']['hilo']}")
+    # Y la conversacion equivocada se aborta ANTES de escribir.
+    hechas += 1
+    if R["abre otra"]["caja"]:
+        fallos.append(f"se escribio en la conversacion equivocada: {R['abre otra']['caja']!r}")
+    return hechas
+
+
 def entorno(home: pathlib.Path) -> dict:
     """HOME propio: la base vive en ~/.wa-inbox/scope.db y no hay variable para moverla,
     asi que mover el HOME es lo que mantiene la base real del usuario fuera de esto."""
@@ -3112,6 +3491,9 @@ def main() -> int:
                       + revisa_escritorio_apagado(fallos)
                       + revisa_sin_bytecode(fallos)
                       + revisa_override_ajuste(fallos)
+                      + revisa_envio_web(fallos)
+                      + revisa_firma_del_panel(fallos)
+                      + revisa_dom_web(fallos)
                       + revisa_casa_del_runtime(fallos))
     aislado.cleanup()
 

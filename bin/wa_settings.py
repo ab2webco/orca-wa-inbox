@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import socket
+import sqlite3
 import sys
 
 # El prefijo "orca-" no es decorativo: la identidad oficial de un plugin se calcula
@@ -327,3 +328,51 @@ def settings_from_plugin():
         if isinstance(value, str) and value.strip() and not valida_ajuste(name, value):
             out[name] = value
     return out
+
+
+def scope_db():
+    """El registro del plugin. Estaba escrito en cada CLI por separado."""
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~/AppData/Roaming")
+        return os.path.join(base, "wa-inbox", "scope.db")
+    return os.path.expanduser("~/.wa-inbox/scope.db")
+
+
+def ajuste(key, fallback=None, env_prefix=None):
+    """El valor efectivo de un ajuste: entorno, panel y base del CLI, en ese orden.
+
+    El panel manda sobre la base porque es lo que el usuario acaba de tocar. Vive aca
+    porque tenerlo copiado es como nacio el defecto: `wa-send` se habia quedado con su
+    lector privado de la base, asi que el nombre del agente puesto desde el panel lo
+    veia `wa-scope` y no lo veia quien escribe.
+
+    Sin `fallback` el valor sale tal cual; con uno, convertido a su tipo — un valor que
+    no se puede convertir se ignora y se pasa a la fuente siguiente.
+    """
+    def convertido(valor):
+        if fallback is None:
+            return valor
+        try:
+            return type(fallback)(valor)
+        except (TypeError, ValueError):
+            return None
+
+    if env_prefix:
+        forzado = os.environ.get(f"{env_prefix}{key.upper()}")
+        if forzado and (v := convertido(forzado)) is not None:
+            return v
+    try:
+        del_panel = settings_from_plugin().get(key)
+    except Exception:                     # noqa: BLE001 - un store ilegible no manda
+        del_panel = None
+    if del_panel not in (None, "") and (v := convertido(del_panel)) is not None:
+        return v
+    try:
+        con = sqlite3.connect(f"file:{scope_db()}?mode=ro", uri=True)
+        row = con.execute("select value from settings where key=?", (key,)).fetchone()
+        con.close()
+        if row and row[0] not in (None, "") and (v := convertido(row[0])) is not None:
+            return v
+    except Exception:                     # noqa: BLE001 - sin registro manda el default
+        pass
+    return fallback

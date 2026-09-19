@@ -38,7 +38,7 @@ import argparse, hashlib, json, os, platform, shutil, sqlite3, subprocess, sys, 
 # instalacion es justo lo que deja el plugin en "No valido".
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from wa_settings import orca_cli_path, orca_env, settings_from_plugin  # noqa: E402
+from wa_settings import ajuste, orca_cli_path, orca_env, scope_db  # noqa: E402
 
 APPLE_EPOCH = 978307200  # Core Data usa 2001-01-01 como epoch
 # El unico pedazo de esto que es especifico del sistema es DONDE deja WhatsApp su base.
@@ -111,50 +111,16 @@ GC = SOURCE["root"]
 MEDIA_BASE = SOURCE["media"]
 
 
-def _scope_db():
-    if sys.platform == "win32":
-        base = os.environ.get("APPDATA") or os.path.expanduser("~/AppData/Roaming")
-        return os.path.join(base, "wa-inbox", "scope.db")
-    return os.path.expanduser("~/.wa-inbox/scope.db")
-
-
-SCOPE_DB = _scope_db()
+SCOPE_DB = scope_db()
 
 
 def setting(key, fallback):
     """La ventana de lectura es configurable, no una constante escondida en el prompt.
 
-    Tres fuentes, en este orden: el entorno, lo que el panel guardo, y la base del CLI.
-    El panel va antes que la base por la misma regla que usa `wa-scope`: es lo que el
-    usuario acaba de tocar. Leer solo la base es lo que hacia que cambiar de donde lee
-    en el panel no cambiara nada — `wa-scope config` decia `read_web on` y aca seguia
-    apagado, sin que nada lo dijera.
-
     `WA_READ_SETTING_<CLAVE>` lo fuerza para UNA corrida y solo para wa-read. Existe
     porque el registro de ~/.wa-inbox/scope.db es el MISMO que lee el plugin instalado:
     encender `read_web` ahi para probar se le aparece al usuario en el panel."""
-    forzado = os.environ.get(f"WA_READ_SETTING_{key.upper()}")
-    if forzado:
-        try:
-            return type(fallback)(forzado)
-        except (TypeError, ValueError):
-            pass
-    try:
-        del_panel = settings_from_plugin().get(key)
-    except Exception:
-        del_panel = None
-    if del_panel not in (None, ""):
-        try:
-            return type(fallback)(del_panel)
-        except (TypeError, ValueError):
-            pass
-    try:
-        con = sqlite3.connect(f"file:{SCOPE_DB}?mode=ro", uri=True)
-        row = con.execute("select value from settings where key=?", (key,)).fetchone()
-        con.close()
-        return type(fallback)(row[0]) if row and row[0] not in (None, "") else fallback
-    except Exception:
-        return fallback
+    return ajuste(key, fallback, env_prefix="WA_READ_SETTING_")
 
 
 # Salir con 1 ya significa "te falta un requisito" y con 2 "esa referencia es ambigua".
@@ -1107,22 +1073,22 @@ def captura_instalar(page, account, ventana=5):
     return info
 
 
-def web_payload(page, timeout=None, sonda=None):
-    """Corre la sonda y espera el resultado.
+def web_async(page, js, timeout, global_js="__waRead"):
+    """Corre `js` async DENTRO de la pagina y devuelve lo que resolvio.
 
     `orca eval` NO resuelve promesas: una expresion que devuelve una Promise vuelve en
     null. Por eso van dos pasos — una que arranca el trabajo y lo deja en un global,
-    otra que lee ese global — y no uno."""
-    timeout = int(setting("web_timeout_s", 45)) if timeout is None else timeout
-    arranque = ("window.__waRead = undefined; (async () => {%s})()"
-                ".then(v => { window.__waRead = { ok: true, v: v }; })"
-                ".catch(e => { window.__waRead = { ok: false, e: String((e && e.message) || e) }; });"
-                " 'started'" % (sonda or WEB_SONDA_CHATS))
+    otra que lee ese global — y no uno. Es el canal, y lo comparte quien escribe: ver
+    `bin/wa-send`."""
+    arranque = ("window.%s = undefined; (async () => {%s})()"
+                ".then(v => { window.%s = { ok: true, v: v }; })"
+                ".catch(e => { window.%s = { ok: false, e: String((e && e.message) || e) }; });"
+                " 'started'" % (global_js, js, global_js, global_js))
     web_eval(page, arranque)
     limite = time.time() + timeout
     while time.time() < limite:
-        crudo = web_eval(page, "JSON.stringify(window.__waRead === undefined "
-                               "? null : window.__waRead)")
+        crudo = web_eval(page, "JSON.stringify(window.%s === undefined "
+                               "? null : window.%s)" % (global_js, global_js))
         if crudo and crudo != "null":
             try:
                 salida = json.loads(crudo)
@@ -1132,25 +1098,32 @@ def web_payload(page, timeout=None, sonda=None):
             if not salida.get("ok"):
                 raise SourceError(WEB_ILEGIBLE,
                                   f"the session could not be read: {salida.get('e')}")
-            datos = salida.get("v") or {}
-            if not datos.get("linked"):
-                raise SourceError(WEB_DESLOGUEADA,
-                                  "that WhatsApp Web session is not linked"
-                                  + (" — the QR code is on screen, scan it with the phone "
-                                     "of THAT number" if datos.get("qr") else
-                                     "; open the tab and link it again"))
-            if datos.get("sinTexto"):
-                raise SourceError(WEB_SIN_TEXTO,
-                                  "`read_web_text` is set to memoria but this WhatsApp "
-                                  "Web build no longer exposes the in-memory message "
-                                  "collection, so no body can be read without opening "
-                                  "the conversations; set `wa-scope config "
-                                  "read_web_text off` to get the inbox without text")
-            return datos
+            return salida.get("v") or {}
         time.sleep(0.4)
     raise SourceError(WEB_SIN_RESPUESTA,
                       f"the WhatsApp Web session did not answer in {timeout}s; the tab "
                       "may still be loading or the phone may be offline")
+
+
+def web_payload(page, timeout=None, sonda=None):
+    """La sonda de lectura, ya interpretada: lo que no es una sesion viva sale por
+    su motivo y no como datos vacios."""
+    timeout = int(setting("web_timeout_s", 45)) if timeout is None else timeout
+    datos = web_async(page, sonda or WEB_SONDA_CHATS, timeout)
+    if not datos.get("linked"):
+        raise SourceError(WEB_DESLOGUEADA,
+                          "that WhatsApp Web session is not linked"
+                          + (" — the QR code is on screen, scan it with the phone "
+                             "of THAT number" if datos.get("qr") else
+                             "; open the tab and link it again"))
+    if datos.get("sinTexto"):
+        raise SourceError(WEB_SIN_TEXTO,
+                          "`read_web_text` is set to memoria but this WhatsApp "
+                          "Web build no longer exposes the in-memory message "
+                          "collection, so no body can be read without opening "
+                          "the conversations; set `wa-scope config "
+                          "read_web_text off` to get the inbox without text")
+    return datos
 
 
 def web_eval(page, expression):

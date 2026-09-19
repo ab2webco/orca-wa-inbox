@@ -121,8 +121,12 @@ Sé honesto con esto en vez de prometer lo que no probé:
   `inbox_days` atrás; `--days` la abre igual.
   Ver [`docs/LECTURA-MULTIFUENTE.md`](docs/LECTURA-MULTIFUENTE.md).
 
-La parte de **escribir** depende de la accesibilidad del sistema vía `orca computer`,
-que sí es multiplataforma; pero sin lectura no hay nada que responder.
+**Escribir** sigue a la línea de la conversación, no al revés. En la línea local es la
+ventana de WhatsApp Desktop por accesibilidad (`orca computer`). En una línea web es la
+pestaña que ya tiene esa sesión, por el DOM y **en segundo plano**: no se enfoca la
+ventana ni se cambia de pestaña, así que el agente puede contestar un grupo mientras
+usted escribe en otra cosa. Es la vía de los grupos —WABA no los tiene— y la única en
+Linux. El mismo grupo en dos líneas no se adivina: se elige con `--line`.
 
 ## Cuando la tarjeta se cierra
 
@@ -259,7 +263,7 @@ viven fuera del árbol y `npm run setup` es lo que las pone donde van.
 | `scripts/check-panels` | que el `<script>` inline de `config.html` y `activity.html` parsee. Si no parsea, el panel se renderiza vacío y sin error visible. |
 | `scripts/check-prompts` | que `prompts/*.md` y `harness/*.md` no tengan voseo. El agente le escribe a clientes en Colombia. |
 | `scripts/check-harness` | que ninguna regla dura se haya perdido al mudar doctrina del prompt al arnés: cada una tiene que seguir alcanzable por los dos caminos, el `AGENTS.md` y los dos prompts. |
-| `scripts/check-clis` | que los cuatro CLIs de `bin/` arranquen de verdad —8 invocaciones— más 308 comprobaciones de ajustes, fuentes, migración y vía web. Compilar no alcanza. Incluye la jaula que impide que el chequeo le toque la sesión de WhatsApp Web al usuario, y su control: sin la jaula, el caso se pone rojo. |
+| `scripts/check-clis` | que los cuatro CLIs de `bin/` arranquen de verdad —8 invocaciones— más 402 comprobaciones de ajustes, fuentes, migración, vía web y escritura por el DOM. Compilar no alcanza. Incluye la jaula que impide que el chequeo le toque la sesión de WhatsApp Web al usuario, y su control: sin la jaula, el caso se pone rojo. |
 | `scripts/check-closing` | 36 pruebas del aviso de cierre contra una base temporal: el guardia del backlog, un aviso por tarjeta, `completed` vs `cancelled`, y el permiso. Corre el CLI de verdad, con `HOME` movido para no tocar la base real. |
 | `node test/manifest.test.mjs` | 1 prueba de contrato sobre `orca-plugin.json`: que lo que el manifiesto declara exista en el árbol. |
 | `test/panels.test.mjs` | 232 pruebas sobre los paneles con jsdom y el puente del host simulado, incluidos los tres finales de la búsqueda de conversaciones, el botón de reintento, y el marcador `[web:no-text]` dicho en palabras en los tres idiomas. |
