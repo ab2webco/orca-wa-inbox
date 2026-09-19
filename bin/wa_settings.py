@@ -30,7 +30,23 @@ def user_data_roots():
         base = os.environ.get("APPDATA") or os.path.expanduser("~/AppData/Roaming")
     else:
         base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    return [os.path.join(base, d) for d in ("orca", "orca-dev", "zzorcanametest")]
+    # `orca-ide` es el userData de la build de escritorio que se distribuye hoy, y
+    # faltaba: el panel guardaba ahi sus 400 conversaciones y el CLI escribia en
+    # `orca`, que esa build no lee. Es exactamente lo que esta funcion existe para
+    # evitar, con un nombre de carpeta que no estaba contemplado.
+    #
+    # `orca` SIGUE siendo el primero y eso no es cosmetico: `plugin_stores()[0]` es a
+    # donde se ESCRIBE cuando todavia no existe ningun store, asi que moverlo cambiaria
+    # donde nace el archivo en Windows y en macOS, que hoy funcionan. Entre los que ya
+    # existen el orden da igual: `plugin_store_path()` elige por fecha de modificacion,
+    # que es lo que hace que gane el de la app que de verdad se esta usando.
+    #
+    # ORCA_USER_DATA_DIR gana sobre la lista: una build con OTRO nombre no tiene por
+    # que esperar a que se agregue aca para que el panel y el CLI se vean.
+    nombres = ("orca", "orca-ide", "orca-dev", "zzorcanametest")
+    propio = os.environ.get("ORCA_USER_DATA_DIR")
+    raices = [propio] if propio else []
+    return raices + [os.path.join(base, d) for d in nombres]
 
 
 def plugin_stores():

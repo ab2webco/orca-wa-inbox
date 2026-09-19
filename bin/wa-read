@@ -2276,10 +2276,14 @@ def cmd_doctor(con, a):
     checks = [
         ("system", "local WhatsApp database supported on this system",
          SOURCE["verified"], platform.system()),
-        # El nombre lleva el de la app de ESTA plataforma: decirle "WhatsApp Desktop
+        # Solo una fuente PROYECTADA renombra este chequeo: decirle "WhatsApp Desktop
         # installed" a quien tiene WhatsAppGo lo manda a buscar una app que en Linux no
-        # existe. El codigo `whatsapp` no cambia — es la llave con la que traduce el panel.
-        ("whatsapp", f"{SOURCE['app'] or 'WhatsApp Desktop'} installed",
+        # existe. En macOS y Windows el texto queda como estaba — ahi la app SI es
+        # WhatsApp Desktop y cambiarlo seria mover algo que ya funciona. El codigo
+        # `whatsapp` no cambia en ningun caso: es la llave con la que traduce el panel.
+        ("whatsapp",
+         f"{SOURCE['app']} installed" if SOURCE.get("projected")
+         else "WhatsApp Desktop installed",
          bool(GC) and os.path.isdir(GC),
          GC or (SOURCE["app"] or "no official app for this system")),
         ("database", "chat database present", os.path.exists(db),
