@@ -325,6 +325,34 @@ const PANELES = [
     })
   },
   {
+    // TODOS los estados de una linea, juntos y en una sola tabla. Van juntos a
+    // proposito: lo que hay que mirar no es cada fila sino que ninguna se parezca a
+    // otra — el defecto reportado fue una fila que decia "Esperando el escaneo" y
+    // ofrecia "Ver la pestana" sin ninguna pestana detras, y eso solo se ve al lado
+    // de la fila que SI tiene pestana. Las dos ultimas son las que no se pueden
+    // escribir a mano en el worker: una linea a medias cuya pestana murio con el
+    // reinicio de Orca, y un estado que este panel todavia no conoce.
+    nombre: 'config-lineas-todos-los-estados', archivo: 'config.html',
+    anchos: ANCHOS_ESTADO,
+    datos: Object.assign({}, DATOS, {
+      readWeb: 'on',
+      webLines: { at: AHORA_ISO, placement: 'flotante', lines: [
+        Object.assign({}, LINEA_ESPERANDO, { label: 'Esperando' }),
+        Object.assign({}, LINEA_ESPERANDO, { label: 'Abriendo', state: 'cargando' }),
+        Object.assign({}, LINEA_ENLAZADA, { label: 'Enlazada' }),
+        Object.assign({}, LINEA_CAIDA, { label: 'Caida' }),
+        Object.assign({}, LINEA_ENLAZADA, { label: 'Sin pestana', pageId: null,
+          state: 'sin-pestana' }),
+        Object.assign({}, LINEA_ESPERANDO, { label: 'Sin escanear y sin pestana',
+          pageId: null, state: 'sin-pestana' }),
+        Object.assign({}, LINEA_ENLAZADA, { label: 'Sin Orca', pageId: null,
+          state: 'sin-orca' }),
+        Object.assign({}, LINEA_ENLAZADA, { label: 'Estado nuevo', pageId: null,
+          state: 'algo-que-este-panel-no-conoce' })
+      ] }
+    })
+  },
+  {
     nombre: 'config-buscando', archivo: 'config.html', anchos: ANCHOS_ESTADO,
     datos: Object.assign({}, SIN_CHATS, {
       syncStatus: { running: true, startedAt: new Date().toISOString(), trigger: 'activate' }

@@ -599,6 +599,21 @@ console.log('[]')
     apagar()
   }
 
+  {
+    // Y un `show` SIN pageId: caia al refresco del final y contestaba ok. El usuario
+    // apretaba "Ver la pestana", no se abria nada, y el panel decia que habia salido
+    // bien — el callejon que reporto.
+    process.env.ORCA_CLI_COMMAND = join(RAIZ, 'no-existe-este-orca')
+    const orca = hostFalso(scopeWeb('web-show-sin-page'), { chats: [] })
+    const apagar = activate(orca)
+    const st = await pedir(orca, { action: 'show', pageId: null })
+    ok('un show sin pestana NO contesta ok',
+      st && st.ok === false && st.action === 'show', JSON.stringify(st))
+    ok('y dice que el motivo es que no hay pestana, para que el panel lo traduzca',
+      st && st.code === 'sin-pestana', `code = ${st && st.code}`)
+    apagar()
+  }
+
   if (previo === undefined) delete process.env.ORCA_CLI_COMMAND
   else process.env.ORCA_CLI_COMMAND = previo
 }

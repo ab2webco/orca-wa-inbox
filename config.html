@@ -671,11 +671,18 @@
           stLinkedSome: 'Lista para leer. Tiene {n} conversaciones autorizadas.',
           stDropped: 'Se desvinculo',
           stDroppedHow: 'Esa sesion se cayo: el telefono estuvo mucho rato sin conexion, ' +
-            'o la sacaste desde Dispositivos vinculados. Abri la pestana y escanea el QR ' +
-            'otra vez.',
+            'o la sacaste desde Dispositivos vinculados. Apreta "Ver la pestana" y ' +
+            'escanea el QR otra vez.',
           stNoTab: 'Sin pestana',
-          stNoTabHow: 'La pestana esta cerrada. La sesion sigue guardada en su perfil, ' +
-            'asi que abrirla de nuevo no te va a pedir escanear.',
+          stNoTabHow: 'La pestana se cerro: las pestanas no sobreviven a reiniciar ni a ' +
+            'actualizar Orca. La sesion sigue guardada en su perfil, asi que abrirla de ' +
+            'nuevo no te va a pedir escanear.',
+          stNoTabScan: 'La pestana se cerro: las pestanas no sobreviven a reiniciar ni a ' +
+            'actualizar Orca. Esta linea todavia no termino de enlazarse, asi que al ' +
+            'abrirla vas a ver el codigo QR: escanealo con el telefono de ESE numero.',
+          stUnknown: 'Estado que no conozco',
+          stUnknownHow: 'El plugin informo "{s}", que este panel no sabe leer. Reintenta; ' +
+            'si sigue igual, actualiza el plugin.',
           stNoOrca: 'Orca no contesta',
           stNoOrcaHow: 'No pude ejecutar la CLI de Orca, que es con lo que se conduce el ' +
             'navegador. Con Orca Lab abierto, reintenta.',
@@ -701,6 +708,8 @@
           errAMedias: 'La linea salio del registro, pero quedo algo sin borrar.',
           errSinIdentidad: 'La sesion esta enlazada y el registro no la pudo anotar. '
             + 'Reintenta; si sigue, revisa que el registro se pueda escribir.',
+          errSinPestana: 'Esa pestana ya no existe: se cerro al reiniciar Orca. Abrila de ' +
+            'nuevo con "Abrir la pestana".',
           unlinkWarn: 'Desvincular {l}: se libera el puesto de dispositivo vinculado, se ' +
             'borra su perfil de navegador y se quitan las {n} conversaciones que le ' +
             'autorizaste. Vas a tener que escanear el QR de nuevo. El texto ya capturado ' +
@@ -936,10 +945,17 @@
           stLinkedSome: 'Ready to read. It has {n} authorized conversations.',
           stDropped: 'It was unlinked',
           stDroppedHow: 'That session dropped: the phone was offline for too long, or you ' +
-            'removed it from Linked devices. Open the tab and scan the QR code again.',
+            'removed it from Linked devices. Press "Show the tab" and scan the QR code again.',
           stNoTab: 'No tab',
-          stNoTabHow: 'The tab is closed. The session is still stored in its profile, so ' +
-            'opening it again will not ask you to scan.',
+          stNoTabHow: 'The tab closed: tabs do not survive restarting or updating Orca. ' +
+            'The session is still stored in its profile, so opening it again will not ' +
+            'ask you to scan.',
+          stNoTabScan: 'The tab closed: tabs do not survive restarting or updating Orca. ' +
+            'This line never finished linking, so opening it shows the QR code: scan it ' +
+            'with the phone of THAT number.',
+          stUnknown: 'A state I do not know',
+          stUnknownHow: 'The plugin reported "{s}", which this panel cannot read. Try ' +
+            'again; if it stays, update the plugin.',
           stNoOrca: 'Orca does not answer',
           stNoOrcaHow: 'I could not run the Orca CLI, which is what drives the browser. ' +
             'With Orca Lab open, try again.',
@@ -964,6 +980,8 @@
           errAMedias: 'The line left the registry, but something could not be deleted.',
           errSinIdentidad: 'The session is linked and the registry could not record '
             + 'it. Try again; if it persists, check that the registry is writable.',
+          errSinPestana: 'That tab no longer exists: it closed when Orca restarted. Open ' +
+            'it again with "Open the tab".',
           unlinkWarn: 'Unlinking {l}: it frees the linked-device slot, deletes its browser ' +
             'profile and drops the {n} conversations you authorized for it. You will ' +
             'have to scan the QR code again. Text already captured is deleted when you ' +
@@ -1174,10 +1192,17 @@
         stLinkedSome: 'Pronta para ler. Tem {n} conversas autorizadas.',
         stDropped: 'Foi desvinculada',
         stDroppedHow: 'Essa sessao caiu: o telefone ficou muito tempo sem conexao, ou voce ' +
-          'a removeu em Aparelhos conectados. Abra a aba e escaneie o QR de novo.',
+          'a removeu em Aparelhos conectados. Aperte "Ver a aba" e escaneie o QR de novo.',
         stNoTab: 'Sem aba',
-        stNoTabHow: 'A aba esta fechada. A sessao continua guardada no seu perfil, entao ' +
-          'abrir de novo nao vai pedir para escanear.',
+        stNoTabHow: 'A aba fechou: as abas nao sobrevivem a reiniciar nem a atualizar o ' +
+          'Orca. A sessao continua guardada no seu perfil, entao abrir de novo nao vai ' +
+          'pedir para escanear.',
+        stNoTabScan: 'A aba fechou: as abas nao sobrevivem a reiniciar nem a atualizar o ' +
+          'Orca. Esta linha ainda nao terminou de vincular, entao ao abrir voce vai ver o ' +
+          'codigo QR: escaneie com o telefone DESSE numero.',
+        stUnknown: 'Um estado que eu nao conheco',
+        stUnknownHow: 'O plugin informou "{s}", que este painel nao sabe ler. Tente de ' +
+          'novo; se continuar, atualize o plugin.',
         stNoOrca: 'O Orca nao responde',
         stNoOrcaHow: 'Nao consegui executar a CLI do Orca, que e o que conduz o navegador. ' +
           'Com o Orca Lab aberto, tente de novo.',
@@ -1203,6 +1228,8 @@
         errAMedias: 'A linha saiu do registro, mas algo nao pode ser apagado.',
         errSinIdentidad: 'A sessao esta vinculada e o registro nao conseguiu anota-la. '
           + 'Tente de novo; se continuar, veja se o registro pode ser escrito.',
+        errSinPestana: 'Essa aba nao existe mais: fechou quando o Orca reiniciou. Abra de ' +
+          'novo com "Abrir a aba".',
         unlinkWarn: 'Desvincular {l}: libera a vaga de aparelho conectado, apaga seu perfil ' +
           'de navegador e tira as {n} conversas que voce autorizou. Voce vai ter que ' +
           'escanear o QR de novo. O texto ja capturado e apagado quando voce colocar o ' +
@@ -1898,7 +1925,8 @@
         'sin-orca': 'stNoOrcaHow', 'sin-proyecto': 'lineNoPlace',
         'sin-herramientas': 'errSinHerramientas', 'sin-permiso': 'errSinPermiso',
         demoro: 'errDemoro', vencido: 'errVencido', 'a-medias': 'errAMedias',
-        'sin-identidad': 'errSinIdentidad', 'sin-respuesta': 'lineNoAnswer'
+        'sin-identidad': 'errSinIdentidad', 'sin-respuesta': 'lineNoAnswer',
+        'sin-pestana': 'errSinPestana'
       }
       function motivoWeb (code, detail) {
         return WEB_ERR_KEY[code] ? t(WEB_ERR_KEY[code]) : (detail || code || '')
@@ -1927,7 +1955,11 @@
         enlazada: { pill: 'stLinked', how: null, cls: 'lista', act: 'show' },
         caida: { pill: 'stDropped', how: 'stDroppedHow', cls: 'roto', act: 'show' },
         'sin-pestana': { pill: 'stNoTab', how: 'stNoTabHow', cls: 'roto', act: 'reopen' },
-        'sin-orca': { pill: 'stNoOrca', how: 'stNoOrcaHow', cls: 'roto', act: 'retry' }
+        'sin-orca': { pill: 'stNoOrca', how: 'stNoOrcaHow', cls: 'roto', act: 'retry' },
+        // Un estado que este panel no conozca se dice, no se disfraza. Antes el default
+        // era el de "Orca no contesta" y `lineHow` explotaba antes de llegar: la tabla
+        // entera quedaba vacia y el panel mostraba un estado que el worker no calculo.
+        desconocido: { pill: 'stUnknown', how: 'stUnknownHow', cls: 'roto', act: 'retry' }
       }
       var ACT_KEY = { show: 'seeTab', reopen: 'openTab', retry: 'retryLine' }
 
@@ -1935,12 +1967,46 @@
       var webStatusUlt = null
       var confirmando = null
 
+      function defLinea (l) {
+        return LINE_STATE[l && l.state] || LINE_STATE.desconocido
+      }
+
+      // La accion sale del estado Y de si hay pestana. Ofrecer "Ver la pestana" sin
+      // pageId mandaba un `show` vacio que el worker contestaba ok: el boton no abria
+      // nada y decia que si.
+      function actoLinea (l) {
+        var act = defLinea(l).act
+        return act === 'show' && !l.pageId ? 'reopen' : act
+      }
+
       function lineHow (l) {
-        if (l.state !== 'enlazada') return t(LINE_STATE[l.state].how)
-        if (!l.authorizedChats) return t('stLinkedNone')
-        return l.authorizedChats === 1
-          ? t('stLinkedOne')
-          : fmt('stLinkedSome', { n: l.authorizedChats })
+        if (!LINE_STATE[l.state]) return fmt('stUnknownHow', { s: String(l.state) })
+        // Sin pestana el que hacer es reabrirla, diga lo que diga el estado: el texto de
+        // "Esperando el escaneo" manda a apretar "Ver la pestana", y ese boton ya no
+        // esta. Una linea que nunca termino de escanear ademas no tiene sesion que
+        // reanudar — prometerle que no le van a pedir el QR es lo que lo dejaba dando
+        // vueltas entre un boton que no abria nada y una pestana que no existia.
+        if (actoLinea(l) === 'reopen') {
+          return l.linkedAt ? t('stNoTabHow') : t('stNoTabScan')
+        }
+        if (l.state === 'enlazada') {
+          if (!l.authorizedChats) return t('stLinkedNone')
+          return l.authorizedChats === 1
+            ? t('stLinkedOne')
+            : fmt('stLinkedSome', { n: l.authorizedChats })
+        }
+        return t(LINE_STATE[l.state].how)
+      }
+
+      // Despues de un veredicto el estado se RELEE. Repintar el que estaba en memoria
+      // dejaba en pantalla un estado que el worker ya habia recalculado — la fila decia
+      // "Esperando el escaneo" con la pestana muerta, y el boton que ofrecia era el de
+      // ese estado viejo. Si la lectura no trae nada se deja lo que habia: vaciar la
+      // tabla por una lectura fallida dice "no tenes lineas", que es lo contrario.
+      function repintarLineas () {
+        return read('webLines').then(function (nuevo) {
+          renderLineas(nuevo && typeof nuevo === 'object' ? nuevo : lineasUlt)
+        })
       }
 
       function renderLineas (estado) {
@@ -1972,14 +2038,14 @@
           '<table><thead><tr><th>' + t('colLine') + '</th><th>' + t('colLineState') +
           '</th><th></th></tr></thead><tbody>' +
           lineas.map(function (l, i) {
-            var def = LINE_STATE[l.state] || LINE_STATE['sin-orca']
+            var def = defLinea(l)
             var fila = '<tr' + (confirmando === l.id ? ' class="confirmando"' : '') +
               '><td>' + esc(l.label) + '</td>' +
               '<td><span class="pill ' + def.cls + '">' + esc(t(def.pill)) + '</span>' +
               '<span class="how">' + esc(lineHow(l)) + '</span></td>' +
               '<td class="acts"><button class="' +
               (l.state === 'enlazada' ? 'link' : '') + '" data-lact="' + i + '">' +
-              t(ACT_KEY[def.act]) + '</button>' +
+              t(ACT_KEY[actoLinea(l)]) + '</button>' +
               '<button class="link" data-lrm="' + i + '">' + t('unlink') + '</button>' +
               '</td></tr>'
             if (confirmando !== l.id) return fila
@@ -1995,7 +2061,7 @@
         Array.prototype.forEach.call(wrap.querySelectorAll('[data-lact]'), function (b) {
           b.addEventListener('click', function () {
             var l = lineas[Number(b.dataset.lact)]
-            var accion = (LINE_STATE[l.state] || {}).act
+            var accion = actoLinea(l)
             // Se espera el veredicto en vez de soltar el clic: "Ver la pestana" sobre
             // una pestana que ya no esta fallaba y el boton no decia nada hasta el
             // refresco siguiente, ocho segundos despues.
@@ -2006,7 +2072,7 @@
                 return esperarWeb(p.at, 45000).then(function (st) {
                   webStatusUlt = st ||
                     { ok: false, code: 'sin-respuesta', detail: '' }
-                  renderLineas(lineasUlt)
+                  return repintarLineas()
                 })
               }))
           })
@@ -2082,9 +2148,8 @@
               // El motivo va UNA vez, en el renglon de la seccion. Repetirlo al lado
               // del boton llenaba media pantalla de rojo con el mismo parrafo.
               webStatusUlt = st
-              renderLineas(lineasUlt)
               said('said-line', t('lineKept'), true)
-              return
+              return repintarLineas()
             }
             el('line-label').value = ''
             said('said-line', '\u2713 ' + t('lineDone'))

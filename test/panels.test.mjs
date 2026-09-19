@@ -688,21 +688,92 @@ console.log('\nconfig.html — lineas de WhatsApp Web')
 }
 
 {
-  // Ningun estado sin salida. Es la regla entera de esta seccion: si algo se rompio,
-  // el panel tiene que ofrecer el boton que lo arregla, no describir la rotura.
-  const estados = ['esperando', 'cargando', 'enlazada', 'caida', 'sin-pestana', 'sin-orca']
-  for (const state of estados) {
+  // Ningun estado sin salida, y ninguno vestido con la ropa de otro. Es la regla entera
+  // de esta seccion: el panel tiene que pintar EL estado que el worker calculo — el
+  // defecto reportado fue una fila que decia "Esperando el escaneo" y ofrecia "Ver la
+  // pestana" sin ninguna pestana detras.
+  //
+  // La lista no se escribe a mano: se saca de web-lines.mjs, que es el unico lado que
+  // emite estados. Un estado nuevo en el worker rompe esta prueba hasta que el panel
+  // lo sepa decir, que es justo lo que no paso la primera vez.
+  const fuente = readFileSync(join(root, 'web-lines.mjs'), 'utf8')
+  const estados = [...new Set(fuente.split('\n')
+    .filter((l) => /\bstate:/.test(l))
+    .flatMap((l) => [...l.slice(l.indexOf('state:')).matchAll(/'([a-z-]+)'/g)]
+      .map((m) => m[1])))]
+  ok('la lista de estados sale del worker y no de esta prueba',
+    estados.length === 6 && estados.includes('sin-pestana') &&
+    estados.includes('esperando'), estados.join(', '))
+
+  /** Como se ve una linea en ese estado: pastilla, que hacer, y botones. */
+  async function pintar (state, extra = {}) {
     const { doc } = await montar('config.html', {
       webLines: { at: new Date().toISOString(),
         lines: [{ id: 'web:x', label: 'Soporte', profile: 'p-1', pending: false,
-          linkedAt: '2026-09-18 10:00', authorizedChats: 0, pageId: 'page-1', state }] }
-    })
+          linkedAt: '2026-09-18 10:00', authorizedChats: 0, pageId: 'page-1',
+          state, ...extra }] }
+    }, 'es-419')
     await espera()
     const wrap = doc.getElementById('lines-wrap')
-    ok(`el estado ${state} ofrece una accion y no solo un diagnostico`,
-      !!wrap.querySelector('[data-lact]') && wrap.textContent.trim().length > 20,
-      wrap.textContent.trim().slice(0, 120))
+    return {
+      pastilla: (wrap.querySelector('.pill') || {}).textContent || '',
+      como: (wrap.querySelector('.how') || {}).textContent || '',
+      accion: (wrap.querySelector('[data-lact]') || {}).textContent || '',
+      texto: wrap.textContent.trim()
+    }
   }
+
+  const vistos = []
+  for (const state of estados) {
+    const v = await pintar(state)
+    ok(`el estado ${state} ofrece una accion y no solo un diagnostico`,
+      !!v.accion && v.texto.length > 20, v.texto.slice(0, 120))
+    vistos.push(v)
+  }
+  // El control que se pone rojo si un estado cae en la copia de otro: con el default
+  // silencioso de antes, dos estados compartian pastilla y texto y cada uno pasaba
+  // su comprobacion por separado.
+  ok('cada estado tiene su propia pastilla',
+    new Set(vistos.map((v) => v.pastilla)).size === estados.length,
+    vistos.map((v) => v.pastilla).join(' | '))
+  ok('cada estado dice algo distinto sobre que hacer',
+    new Set(vistos.map((v) => v.como)).size === estados.length,
+    vistos.map((v) => v.como.slice(0, 40)).join(' | '))
+
+  // Un estado que este panel no conoce: antes `lineHow` reventaba antes de pintar y la
+  // tabla entera quedaba VACIA, y el default se ponia la ropa de "Orca no contesta".
+  const raro = await pintar('un-estado-que-no-existe')
+  ok('un estado desconocido se pinta, no vacia la tabla', raro.texto.length > 20,
+    raro.texto.slice(0, 120))
+  ok('y se ve desconocido: dice cual es y no se disfraza de otro estado',
+    /un-estado-que-no-existe/.test(raro.texto) &&
+    !vistos.some((v) => v.pastilla === raro.pastilla),
+    `${raro.pastilla} — ${raro.como.slice(0, 80)}`)
+
+  // Y el callejon del reporte: sin pestana, "Ver la pestana" no se puede ofrecer.
+  for (const state of estados) {
+    const v = await pintar(state, { pageId: null })
+    ok(`${state} sin pestana no ofrece llevar a una pestana que no existe`,
+      v.accion !== 'Ver la pestana', `${state} -> ${v.accion}`)
+    ok(`${state} sin pestana tampoco manda a apretar ese boton`,
+      !/Ver la pestana/.test(v.como), `${state} -> ${v.como.slice(0, 80)}`)
+  }
+
+  // Una linea que nunca escaneo no tiene sesion que reanudar: el texto que le promete
+  // que no le van a pedir el QR es el que lo dejo dando vueltas.
+  const nueva = await pintar('sin-pestana', { pageId: null, pending: true, linkedAt: null })
+  ok('una linea a medias sin pestana avisa que va a tener que escanear',
+    /escanealo|escanear/.test(nueva.como) && /QR/.test(nueva.como),
+    nueva.como.slice(0, 160))
+  const vieja = await pintar('sin-pestana', { pageId: null })
+  ok('y una que si estuvo enlazada avisa lo contrario: que no se lo van a pedir',
+    /no te va a pedir escanear/.test(vieja.como), vieja.como.slice(0, 160))
+  ok('las dos son frases distintas', nueva.como !== vieja.como, nueva.como.slice(0, 60))
+  // Las pestanas mueren en cada actualizacion de Orca: si el texto no lo dice, el
+  // usuario lee "la pestana esta cerrada" y cree que la cerro el.
+  ok('y las dos dicen por que se cerro la pestana',
+    /reiniciar|actualizar/.test(nueva.como) && /reiniciar|actualizar/.test(vieja.como),
+    `${nueva.como.slice(0, 60)} | ${vieja.como.slice(0, 60)}`)
 }
 
 {
@@ -1472,6 +1543,45 @@ console.log('\nconfig.html — conectar una linea que falla conserva lo tipeado'
   const err = doc.getElementById('lines-error')
   ok('una pestana que no se puede abrir lo dice en el acto',
     !err.hidden && /CLI de Orca/.test(err.textContent), err.textContent)
+}
+
+{
+  // Y con el veredicto en la mano el estado se RELEE. El worker recalcula las lineas
+  // antes de contestar, y el panel repintaba las que tenia en memoria: la fila seguia
+  // diciendo "Esperando el escaneo" y ofreciendo "Ver la pestana" sobre una pestana
+  // que el worker ya sabia muerta. Es el estado que el usuario reporto.
+  const VIVA = {
+    id: 'web:pending:9f2c', label: 'NoVa', profile: '9f2c', pending: true,
+    linkedAt: null, authorizedChats: 0, pageId: 'page-1', state: 'esperando'
+  }
+  const MUERTA = { ...VIVA, pageId: null, state: 'sin-pestana' }
+  const { doc } = await montar('config.html',
+    { webLines: { at: new Date().toISOString(), lines: [VIVA] } }, 'es-419',
+    (d, store) => {
+      if (d.action === 'storage.set' && d.params.key === 'webRequest' && d.params.value) {
+        // Lo que hace el worker de verdad: recalcula y recien despues contesta.
+        store.webLines = { at: new Date().toISOString(), lines: [MUERTA] }
+        store.webStatus = { at: new Date().toISOString(), requestAt: d.params.value.at,
+          action: d.params.value.action, ok: false, code: 'sin-pestana', detail: '' }
+      }
+      return undefined
+    })
+  await espera()
+  const wrap = doc.getElementById('lines-wrap')
+  ok('antes del clic la fila dice lo que el worker sabia: esperando el escaneo',
+    /Esperando el escaneo/.test(wrap.textContent) &&
+    /Ver la pestana/.test(wrap.querySelector('[data-lact]').textContent),
+    wrap.textContent.trim().slice(0, 120))
+  wrap.querySelector('[data-lact]').click()
+  await new Promise((r) => setTimeout(r, 1500))
+  const ahora = doc.getElementById('lines-wrap')
+  ok('con el veredicto el panel pinta el estado nuevo, no el que tenia guardado',
+    /Sin pestana/.test(ahora.textContent) &&
+    /Abrir la pestana/.test(ahora.querySelector('[data-lact]').textContent),
+    ahora.textContent.trim().slice(0, 160))
+  ok('y el motivo del fallo se dice traducido',
+    /pestana ya no existe/.test(doc.getElementById('lines-error').textContent),
+    doc.getElementById('lines-error').textContent)
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

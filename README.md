@@ -179,6 +179,33 @@ una automatización de un plugin.
 Si esta versión de Orca todavía no le da carpeta al plugin, no se siembra nada, el
 motivo queda en el estado que lee el panel y **todo lo demás funciona igual**.
 
+### Las dos automatizaciones corren en esa misma carpeta
+
+Las dos automatizaciones que aporta el plugin —*triage* y *Take what was marked*—
+declaran `workspace: "plugin-owned"`, así que Orca las apunta a
+`<userData>/plugin-workspaces/ab2web.orca-wa-inbox`: **una carpeta que Orca crea para
+el plugin, no un repo tuyo**. No es "un proyecto interno" en el sentido de uno de tus
+checkouts: nace vacía, la registra Orca a nombre del plugin, y es la misma en la que
+ya vivían `AGENTS.md` y compañía. El plugin nunca nombra una ruta ni elige un repo
+tuyo — pide "mi carpeta" y Orca decide cuál es.
+
+Antes no lo declaraban, y por eso aparecían como **"Todavía sin proyecto"**: Orca hace
+nacer sin proyecto a toda automatización aportada por un plugin, justamente para no
+adivinar en qué repo tuyo trabajar.
+
+Lo que **no** cambia: siguen naciendo **pausadas**. Encender trabajo automático es
+decisión tuya y Orca nunca la toma por vos, ni al instalar ni al actualizar. Se
+encienden una por una desde la lista de Automations, o con:
+
+```
+orca automations edit <id> --enabled
+```
+
+Al actualizar el plugin, Orca vuelve a conciliar las filas que ya existían **en su
+lugar** —las empareja por el `id` del manifiesto, no crea duplicados— y les pone el
+destino nuevo. Lo único que respeta intacto es lo que hayas tocado vos: si vos le
+pusiste un proyecto a mano, ese se queda.
+
 ## Lo que el plugin NO hace
 
 - No sale a internet: no declara `net:fetch`. Todo es local.

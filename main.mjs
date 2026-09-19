@@ -370,6 +370,13 @@ async function atenderWeb(orca, waScope, pedido, contexto) {
       project: r.proyecto || null })
     return
   }
+  // Sin pageId no hay pestana que poner delante. Caia al refresco del final y contestaba
+  // ok: el usuario apretaba "Ver la pestana", no se abria nada y el panel decia que si.
+  if (pedido.action === 'show' && !pedido.pageId) {
+    await refrescarLineas(orca, waScope, { motivo: 'show' })
+    await veredicto(orca, pedido, { ok: false, code: 'sin-pestana', detail: '' })
+    return
+  }
   if (pedido.action === 'show' && pedido.pageId) {
     const r = await verPestana(exe, pedido.pageId)
     // Fallaba callado: se resondeaba y nada mas. Un boton que no hace nada y no dice
