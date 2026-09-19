@@ -84,11 +84,30 @@ def _windows():
             "app": "WhatsApp Desktop (Microsoft Store)"}
 
 
+# En Linux no hay WhatsApp Desktop oficial, y los WRAPPERS siguen sin servir: envuelven
+# web.whatsapp.com y los mensajes quedan en el IndexedDB del navegador, ofuscados y con
+# lock exclusivo de Chromium. Lo que si sirve es otra categoria — un cliente de PROTOCOLO
+# sobre whatsmeow, sin navegador adentro, que se enlaza como dispositivo companion y deja
+# su propia base SQLite en claro. WhatsAppGo es el primero de esos que esta empaquetado.
+#
+# Medido contra una instalacion viva: 84.342 mensajes en 2.221 chats, de 2018-12-11 a
+# 2026-09-19. WhatsApp SI le manda history sync al dispositivo companion, asi que el
+# historial no arranca en la vinculacion — llega lo que el telefono tenia.
+WAGO_APP = "WhatsAppGo"
+
+
+def _xdg(var, fallback):
+    return os.environ.get(var) or os.path.expanduser(fallback)
+
+
 def _linux():
-    # No hay WhatsApp Desktop oficial para Linux. Los wrappers no oficiales envuelven
-    # web.whatsapp.com, y web no deja base local: los mensajes viven en el IndexedDB
-    # del navegador. No hay archivo que leer.
-    return {"root": "", "db": "", "media": "", "verified": False, "app": None}
+    root = os.path.join(_xdg("XDG_DATA_HOME", "~/.local/share"), "whatsappgo")
+    db = os.path.join(root, "messages.db")
+    # `media` va vacio a proposito y no por falta de dato: WhatsAppGo guarda en
+    # `media_path` la ruta ABSOLUTA del adjunto, y `os.path.join("", absoluta)` devuelve
+    # la absoluta. Poner un prefijo aca romperia justo lo que ya funciona.
+    return {"root": root, "db": db, "media": "", "verified": os.path.exists(db),
+            "app": WAGO_APP, "projected": True}
 
 
 SOURCES = {"Darwin": _darwin, "Windows": _windows, "Linux": _linux}
@@ -1479,24 +1498,296 @@ REQUISITOS_POR_SO = {
   is also the route that would work here first.
 """ + COSTO_WEB + "\n" + COMO_ENCENDER_WEB + """
   Everything else does work: the registry, the mapping, the panels and the automation.""",
-    "Linux": """There is no local database on Linux, and there never will be: there is no
-  official WhatsApp Desktop for Linux, and the unofficial wrappers only wrap
-  web.whatsapp.com.
+    "Linux": """There are two read routes on Linux too, and they add up rather than
+  replace each other.
 
-  That does NOT mean there is no read path. WhatsApp Web is a real route — a
-  browser session with its own profile, driven by Orca's browser — and on Linux
-  it is the only one. It answers `chats`, `whoami` and `inbox`, which is
-  everything the plugin's own work needs: the inbox is what the agent runs on.
-  `chat` and `media` stay out by design, not by omission.
+  Local database (the route in use here):
+  - There is still no official WhatsApp Desktop for Linux, and the unofficial
+    WRAPPERS are still useless for reading: they wrap web.whatsapp.com and leave
+    the messages in the browser's IndexedDB, obfuscated and locked by Chromium.
+  - What works is a different category: a PROTOCOL client on whatsmeow, with no
+    browser inside, that links as a companion device and keeps its own plain
+    SQLite. Install WhatsAppGo (https://github.com/shukiv/whatsappgo), open it
+    once and scan the QR with the phone of that number.
+  - It answers all five commands, `chat` and `media` included: the bodies are in
+    the database and the attachments are on disk with a path `wa-transcribe` can
+    open. Attachments download lazily, so `media` fills in as the client fetches
+    them — a message whose file is not down yet comes back with media null.
+  - History is whatever the phone sent on linking. WhatsApp does history-sync a
+    companion device, so this is not "from the link onwards": measured on a live
+    install, 84,342 messages going back to 2018.
+  - It takes one of the linked-device slots WhatsApp gives each number.
+
+  Web route (the second line, same as everywhere else):
 """ + COSTO_WEB + "\n" + COMO_ENCENDER_WEB + """
   Everything else does work: the registry, the mapping, the panels and the automation.""",
 }
 REQUISITOS = REQUISITOS_POR_SO.get(platform.system(), REQUISITOS_POR_SO["Linux"])
 
 
+# El esquema de macOS otra vez, y a proposito el MISMO que arma la via web: proyectar
+# hacia el esquema de la app es el patron que ya existe en esta herramienta, y seguirlo
+# es lo que deja `inbox`, `chats`, `whoami`, `chat` y `media` funcionando SIN tocar una
+# sola consulta. Lo que cambia respecto de la via web son dos cosas, y las dos a favor:
+#
+#   ZWAMEDIAITEM se llena de verdad. La via web la deja vacia porque el adjunto vive en
+#   el blob store del navegador sin ruta que abrir; WhatsAppGo lo baja al disco y guarda
+#   la ruta absoluta, asi que `media`, `adjuntos_cerca` y `wa-transcribe` funcionan.
+#
+#   ZTEXT lleva el cuerpo real, siempre. La via web depende de lo que la pagina tenga en
+#   memoria y por eso inventa el marcador `[web:no-text]`; aca el cuerpo esta en la base.
+#
+# `web_contexto` NO va: esa tabla existe para que `nearby_text()` supla los adjuntos que
+# la via web no puede dar. Aca los adjuntos SI estan, y su ausencia hace que
+# `nearby_text()` devuelva [] y el campo ni aparezca — igual que en macOS.
+WAGO_ESQUEMA = """
+create table ZWACHATSESSION (Z_PK integer primary key, ZCONTACTJID text,
+                             ZPARTNERNAME text, ZUNREADCOUNT integer,
+                             ZLASTMESSAGEDATE real);
+create table ZWAGROUPMEMBER (Z_PK integer primary key, ZCHATSESSION integer,
+                             ZMEMBERJID text, ZCONTACTNAME text);
+create table ZWAPROFILEPUSHNAME (Z_PK integer primary key, ZJID text, ZPUSHNAME text);
+create table ZWAMESSAGE (Z_PK integer primary key, ZCHATSESSION integer,
+                         ZMESSAGEDATE real, ZISFROMME integer, ZSTANZAID text,
+                         ZTEXT text, ZPARENTMESSAGE integer, ZGROUPMEMBER integer,
+                         ZMEDIAITEM integer, ZMESSAGETYPE integer);
+create table ZWAMEDIAITEM (Z_PK integer primary key, ZMEDIALOCALPATH text,
+                           ZFILESIZE integer);
+"""
+
+# Los indices que las consultas de verdad usan. Sin ellos `ULTIMA_MIA` agrupa 84k filas
+# a mano en cada corrida y el panel se arrastra; con ellos la bandeja vuelve instantanea.
+WAGO_INDICES = """
+create index ix_msg_chat  on ZWAMESSAGE (ZCHATSESSION, ZMESSAGEDATE);
+create index ix_msg_mine  on ZWAMESSAGE (ZISFROMME, ZCHATSESSION);
+create index ix_msg_fecha on ZWAMESSAGE (ZMESSAGEDATE);
+create index ix_gm_jid    on ZWAGROUPMEMBER (ZMEMBERJID);
+create index ix_pn_jid    on ZWAPROFILEPUSHNAME (ZJID);
+"""
+
+# `kind` de WhatsAppGo -> ZMESSAGETYPE de la app. Es la misma tabla que usa la via web,
+# mas los tipos que solo un cliente de protocolo llega a ver. Lo que no este queda en 0,
+# que es el tipo de un mensaje de texto.
+WAGO_TIPOS = dict(WEB_TIPOS, sticker=1, ptt=3, view_once=1, contact=0, location=5,
+                  poll=0)
+
+# Los ficheros de WhatsAppGo, en el orden en que SQLite los quiere para aplicar el WAL.
+WAGO_FICHEROS = ("messages.db", "messages.db-wal", "messages.db-shm")
+
+
+def wago_identidad():
+    """Tu LID y tu pushname, leidos de donde el cliente los tiene de verdad.
+
+    `device.db` es la base de whatsmeow y guarda la identidad del dispositivo enlazado.
+    Se abre en SOLO LECTURA y se leen DOS columnas: ahi dentro tambien estan las claves
+    privadas de la sesion, y esto no las toca ni las copia.
+
+    Sacar el LID de aca y no de los mensajes importa: por mensajes solo aparece si
+    escribiste, y una cuenta recien enlazada que todavia no escribio nada se quedaba sin
+    identidad y `inbox` moria con "could not work out your LID".
+
+    Devuelve (None, None) si la base no esta o no se deja leer: el llamador cae al
+    heuristico de siempre, que es peor pero no es nada.
+    """
+    db = os.path.join(os.path.dirname(SOURCE["db"]), "device.db")
+    if not os.path.exists(db):
+        return None, None
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        row = con.execute("select lid, push_name from whatsmeow_device "
+                          "where lid is not null and lid <> '' limit 1").fetchone()
+        con.close()
+    except sqlite3.Error:
+        return None, None
+    if not row or not row[0]:
+        return None, None
+    # whatsmeow escribe el JID con el numero de dispositivo: `56002514821196:87@lid`.
+    # Lo que el resto de la herramienta compara es el JID sin dispositivo.
+    lid = row[0].split(":", 1)[0]
+    if "@" not in lid:
+        lid = f"{lid}@lid"
+    return lid, (row[1] or None)
+
+
+def wago_tipo_sql():
+    """El `case` que traduce `kind` a ZMESSAGETYPE, armado de la tabla y no a mano."""
+    ramas = " ".join(f"when {k!r} then {v}" for k, v in sorted(WAGO_TIPOS.items()))
+    return f"case src.kind {ramas} else 0 end"
+
+
+def wago_snapshot():
+    """Copia la base de WhatsAppGo y la PROYECTA al esquema de la app de escritorio.
+
+    La copia es por lo mismo que en macOS: leer el fichero vivo sin el WAL pierde los
+    mensajes de hoy, y abrirlo en el sitio pelea con el daemon, que es escritor unico.
+    Se copian los tres ficheros y se fuerza el merge antes de leer nada.
+    """
+    problems = preflight()
+    if problems:
+        sys.exit("\n".join(f"- {p}" for p in problems) + "\n\n" + REQUISITOS)
+    tmp = tempfile.mkdtemp(prefix="wa-read.")
+    for f in WAGO_FICHEROS:
+        src = os.path.join(os.path.dirname(SOURCE["db"]), f)
+        if os.path.exists(src):
+            shutil.copy2(src, tmp)
+    crudo = os.path.join(tmp, "messages.db")
+    if not os.path.exists(crudo):
+        sys.exit(f"could not copy messages.db from {os.path.dirname(SOURCE['db'])}")
+    origen = sqlite3.connect(crudo)
+    origen.execute("PRAGMA journal_mode=delete")  # fuerza el merge del WAL
+    origen.close()
+
+    con = sqlite3.connect(os.path.join(tmp, "proyectada.sqlite"))
+    con.executescript(WAGO_ESQUEMA)
+    con.execute("attach database ? as src", (crudo,))
+    try:
+        wago_proyectar(con)
+    except sqlite3.DatabaseError as exc:
+        shutil.rmtree(tmp, ignore_errors=True)
+        sys.exit(f"could not read the {WAGO_APP} database: {exc}")
+    con.execute("detach database src")
+    con.executescript(WAGO_INDICES)
+    con.row_factory = sqlite3.Row
+    return con, tmp
+
+
+def wago_proyectar(con):
+    """El mapeo entero, en INSERT..SELECT: 84k mensajes no pasan fila por fila en Python.
+
+    Las claves son los `rowid` de la base de origen. Son estables mientras la base no se
+    reconstruya, y eso alcanza: la proyeccion se arma y se tira dentro de una corrida.
+    """
+    # Las fechas: WhatsAppGo guarda milisegundos desde 1970 y Core Data segundos desde
+    # 2001. Toda la herramienta — `ts()`, `cutoff()` — cuenta en lo segundo.
+    fecha = f"(src.{{0}} / 1000.0) - {APPLE_EPOCH}"
+
+    con.execute(f"""
+        insert into ZWACHATSESSION (Z_PK, ZCONTACTJID, ZPARTNERNAME, ZUNREADCOUNT,
+                                    ZLASTMESSAGEDATE)
+        select src.rowid,
+               src.jid,
+               coalesce(nullif(src.local_title,''), nullif(src.title,''), src.jid),
+               coalesce(src.unread_count, 0),
+               case when src.last_message_at is null then null
+                    else {fecha.format('last_message_at')} end
+        from src.chats src""")
+
+    # Un ZWAGROUPMEMBER por (chat, autor) y SOLO en grupos, que es lo que hace la base de
+    # la app: en un uno a uno el autor es el chat y `SENDER` ya lo resuelve por otro lado.
+    con.execute("""
+        insert into ZWAGROUPMEMBER (ZCHATSESSION, ZMEMBERJID, ZCONTACTNAME)
+        select c.rowid, m.sender_jid,
+               (select nullif(m2.sender_name,'') from src.messages m2
+                 where m2.sender_jid = m.sender_jid and m2.sender_name is not null
+                   and m2.sender_name <> '' limit 1)
+        from src.messages m
+        join src.chats c on c.jid = m.chat_jid
+        where c.is_group = 1 and m.sender_jid is not null and m.sender_jid <> ''
+        group by c.rowid, m.sender_jid""")
+
+    # La propia pertenencia NO se puede sacar de quien escribio. La base de la app tiene
+    # una fila por MIEMBRO de cada grupo, escriba o no, y `whoami` cuenta justo eso:
+    # en cuantos grupos estas. Derivarla de los mensajes contaba solo los grupos donde
+    # habias hablado — medido contra la via web sobre la misma cuenta, 48 de 224. Si el
+    # chat de grupo esta en tu lista, sos miembro; eso es lo que se proyecta.
+    propio, pushname = wago_identidad()
+    if not propio:
+        fila = con.execute("""
+            select m.sender_jid j from src.messages m
+            where m.from_me = 1 and m.sender_jid like '%@lid'
+            group by 1 order by count(*) desc limit 1""").fetchone()
+        propio = fila[0] if fila else None
+    if propio:
+        con.execute("""
+            insert into ZWAGROUPMEMBER (ZCHATSESSION, ZMEMBERJID)
+            select c.rowid, ? from src.chats c
+            where c.is_group = 1
+              and not exists (select 1 from ZWAGROUPMEMBER g
+                               where g.ZCHATSESSION = c.rowid and g.ZMEMBERJID = ?)""",
+                    (propio, propio))
+        # Una cuenta sin un solo grupo dejaria la tabla vacia y `inbox` saldria con
+        # "could not work out your LID". La fila de respaldo la cubre, y va con
+        # ZCHATSESSION en null para no inventar una pertenencia que no existe.
+        if not con.execute("select 1 from ZWAGROUPMEMBER where ZMEMBERJID = ? limit 1",
+                           (propio,)).fetchone():
+            con.execute("insert into ZWAGROUPMEMBER (ZCHATSESSION, ZMEMBERJID) values "
+                        "(null, ?)", (propio,))
+
+    # El pushname sale de dos sitios y en este orden: el nombre que el autor manda en sus
+    # mensajes, y si nunca mando ninguno, el titulo del chat uno a uno con esa persona.
+    # El segundo es el que llena la agenda entera: en un DM `sender_name` suele venir
+    # vacio y el nombre esta en `chats.title`.
+    con.execute("""
+        insert into ZWAPROFILEPUSHNAME (ZJID, ZPUSHNAME)
+        select jid, nombre from (
+            select m.sender_jid jid, min(nullif(m.sender_name,'')) nombre
+              from src.messages m
+             where m.sender_jid is not null and m.sender_jid <> ''
+             group by 1
+            union
+            select c.jid, nullif(coalesce(nullif(c.local_title,''), c.title),'')
+              from src.chats c where c.is_group = 0)
+        where nombre is not null
+        group by jid""")
+
+    # El propio nombre no sale de ninguno de los dos: nadie te manda tu pushname y no
+    # hay un chat uno a uno contigo mismo. Sin esta fila `whoami` contesta con el LID y
+    # `name` en null, mientras la via web sobre la misma cuenta contesta con el nombre.
+    if propio and pushname:
+        con.execute("delete from ZWAPROFILEPUSHNAME where ZJID = ?", (propio,))
+        con.execute("insert into ZWAPROFILEPUSHNAME (ZJID, ZPUSHNAME) values (?, ?)",
+                    (propio, pushname))
+
+    # El adjunto solo entra si tiene RUTA. Un registro de adjunto sin fichero en disco
+    # daria un `media` que `wa-transcribe` abre y no encuentra, que es peor que un null:
+    # el fallo aparece lejos de aca y sin explicacion. WhatsAppGo baja los ficheros de
+    # forma perezosa, asi que esto crece solo a medida que el cliente los descarga.
+    con.execute("""
+        insert into ZWAMEDIAITEM (Z_PK, ZMEDIALOCALPATH, ZFILESIZE)
+        select src.rowid, src.media_path, src.media_size
+        from src.messages src
+        where src.media_path is not null and src.media_path <> ''""")
+
+    con.execute(f"""
+        insert into ZWAMESSAGE (Z_PK, ZCHATSESSION, ZMESSAGEDATE, ZISFROMME, ZSTANZAID,
+                                ZTEXT, ZPARENTMESSAGE, ZGROUPMEMBER, ZMEDIAITEM,
+                                ZMESSAGETYPE)
+        select src.rowid,
+               c.rowid,
+               {fecha.format('timestamp')},
+               coalesce(src.from_me, 0),
+               src.id,
+               src.body,
+               p.rowid,
+               gm.Z_PK,
+               mi.Z_PK,
+               {wago_tipo_sql()}
+        from src.messages src
+        join src.chats c on c.jid = src.chat_jid
+        left join src.messages p on p.id = src.reply_to and p.chat_jid = src.chat_jid
+        left join ZWAGROUPMEMBER gm on gm.ZCHATSESSION = c.rowid
+                                   and gm.ZMEMBERJID = src.sender_jid
+        left join ZWAMEDIAITEM mi on mi.Z_PK = src.rowid
+        where src.revoked is null or src.revoked = 0""")
+    con.commit()
+
+
 def preflight():
     """Falla temprano y explicando, en vez de reventar adentro con un error de sqlite."""
     problems = []
+    # Una fuente proyectada se valida entera aca y SALE: lo de abajo son los chequeos del
+    # contenedor de macOS, y correrlos contra la carpeta de otro cliente devuelve un
+    # "falta ChatStorage.sqlite" que manda a instalar una app que en este sistema no
+    # existe.
+    if SOURCE.get("projected"):
+        if not SOURCE["verified"]:
+            problems.append(
+                f"there is no {WAGO_APP} database at {SOURCE['db']} — install "
+                f"{WAGO_APP} (https://github.com/shukiv/whatsappgo), open it once and "
+                "link the line by scanning the QR code. It takes one of the "
+                "linked-device slots WhatsApp gives each number. The WhatsApp Web "
+                "route also works here and costs another slot")
+        return problems
     if not SOURCE["verified"]:
         # "not supported" era mentira y de la que importa: hay via, la web, y esta sin
         # construir. Decirle a quien usa Linux que no se puede lo manda a buscar otra
@@ -1516,6 +1807,10 @@ def preflight():
 
 def snapshot():
     """Copia la DB + WAL a un temp y aplica el WAL. Sin esto faltan los mensajes de hoy."""
+    # Donde la base no es la de la app sino la de un cliente de protocolo, hay que
+    # proyectarla antes: de ahi para abajo todo lee el esquema de la app y nada mas.
+    if SOURCE.get("projected"):
+        return wago_snapshot()
     problems = preflight()
     if problems:
         sys.exit("\n".join(f"- {p}" for p in problems) + "\n\n" + REQUISITOS)
