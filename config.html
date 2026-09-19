@@ -1397,12 +1397,30 @@
         resolve(d)
       })
 
+      // Una lectura que el host RECHAZO no es una clave vacia. Aplastar las dos en
+      // `null` es lo que hacia parpadear el panel: el host admite 30 mensajes por 10 s
+      // (PANEL_MESSAGE_RATE_LIMIT), esta vuelta pide 18, y dos vueltas caen en la misma
+      // ventana — la COLA del lote volvia `rate_limited`, y con `webLines` y
+      // `syncMinutes` ahi adentro la tabla se vaciaba y el select volvia a su defecto.
+      var SIN_RESPUESTA = { sinRespuesta: true }
+      function hayRespuesta(v) { return v !== SIN_RESPUESTA }
+
       // storage.get devuelve { value: <dato> } y el bridge lo envuelve otra vez.
       function stored(result) {
-        if (!result || !result.ok || !result.value) return null
+        if (!result || !result.ok) return SIN_RESPUESTA
+        if (!result.value) return null
         return result.value.value === undefined ? null : result.value.value
       }
-      function read(key) { return call('storage.get', { key: key }).then(stored) }
+      // Lo ultimo que el host CONTESTO por cada clave. Un rechazo repinta eso y no el
+      // defecto: sin respuesta el panel no sabe nada nuevo, y no saber no es "vacio".
+      var ultimaLectura = {}
+      function read(key) {
+        return call('storage.get', { key: key }).then(function (r) {
+          var v = stored(r)
+          if (hayRespuesta(v)) { ultimaLectura[key] = v; return v }
+          return key in ultimaLectura ? ultimaLectura[key] : SIN_RESPUESTA
+        })
+      }
       function write(key, value) { return call('storage.set', { key: key, value: value }) }
 
       function esc(text) {
@@ -1688,7 +1706,7 @@
 
       function pintarClave (key, valor, s) {
         var c = CONTROLES[key]
-        if (!c || !vigente(s) || sucios[c[0]]) return
+        if (!c || !hayRespuesta(valor) || !vigente(s) || sucios[c[0]]) return
         var n = el(c[0])
         if (document.activeElement === n) return
         if (key === 'agentName') {
@@ -2092,7 +2110,7 @@
        *  clic anterior y mostrarlo es decirle al usuario que fallo lo que esta saliendo
        *  bien. Sin nada en vuelo vale el ultimo que haya. */
       function veredictoPropio (st) {
-        if (!st || typeof st !== 'object') return null
+        if (!st || !hayRespuesta(st) || typeof st !== 'object') return null
         if (!enVuelo) return st
         if (st.requestAt !== enVuelo) return null
         enVuelo = null
@@ -2223,6 +2241,10 @@
       }
 
       function renderLineas (estado) {
+        // Un rechazo deja la tabla como estaba: vaciarla dice "no tenes lineas", que es
+        // lo contrario de lo que paso. Aca y no en cada llamador — el sondeo, el
+        // repintado tras un veredicto y el vigia de 2 s pasan todos por esta puerta.
+        if (!hayRespuesta(estado)) estado = lineasUlt
         lineasUlt = estado && typeof estado === 'object' ? estado : null
         var lineas = (lineasUlt && lineasUlt.lines) || []
         var wrap = el('lines-wrap')
@@ -2444,7 +2466,7 @@
                             read('syncMinutes'), read('readWebText'),
                             read('webLines'), read('webStatus')])
           .then(function (r) {
-            renderScope(r[0])
+            if (hayRespuesta(r[0])) renderScope(r[0])
             pintarClave('tone', r[4], sello)
             pintarClave('transcribeQuality', r[6], sello)
             pintarClave('inboxDays', r[7], sello)
@@ -2459,12 +2481,14 @@
             // select y pintarChats ya conserva el texto filtrado y lo elegido. La
             // guardia solo lograba que, con el cursor en el buscador, la lista nunca
             // se llenara: era justo donde esta el cursor de quien mira "Buscando…".
-            estadoSync = r[11] && typeof r[11] === 'object' ? r[11] : null
-            renderChats(r[5])
+            if (hayRespuesta(r[11])) {
+              estadoSync = r[11] && typeof r[11] === 'object' ? r[11] : null
+            }
+            if (hayRespuesta(r[5])) renderChats(r[5])
             pintarClave('agentName', r[1], sello)
             // El health ya trae QUE falla y su detalle: mostrarlo es mejor que mandar
             // a correr un comando, que es justo lo que se saco del resto del panel.
-            if (r[2] && r[2].ok === false) {
+            if (hayRespuesta(r[2]) && r[2] && r[2].ok === false) {
               var q = r[2].problem
                 ? esc(porCodigo(HEALTH_KEY, r[2].problemCode, r[2].problem))
                 : t('notReady')
@@ -2474,9 +2498,9 @@
               var c = r[2].detail ? esc(r[2].detail) : t('notReadyHow')
               showAlert(q, c)
             }
-            else if (r[2]) el('alert').hidden = true
-            renderOpcionales(r[2] && r[2].optional)
-            renderRoutes(r[3])
+            else if (hayRespuesta(r[2]) && r[2]) el('alert').hidden = true
+            if (hayRespuesta(r[2])) renderOpcionales(r[2] && r[2].optional)
+            if (hayRespuesta(r[3])) renderRoutes(r[3])
             var stWeb = veredictoPropio(r[17])
             if (stWeb) webStatusUlt = stWeb
             renderLineas(r[16])
@@ -2492,7 +2516,10 @@
       applyStrings()
       resetScopeForm()
       call('storage.get', { key: 'scope' }).then(function (r) {
-        liveStorage = !!r.ok
+        // Un `rate_limited` es prueba de que el puente CONTESTO: es el host poniendo
+        // limite, no un Orca sin storage. Tomarlo por lo segundo apagaba TODOS los
+        // botones y mandaba a actualizar Orca por una sola lectura rechazada.
+        liveStorage = !!r.ok || r.errorCode === 'rate_limited'
         if (!liveStorage) {
           showAlert(t('needsUpdate'), t('needsUpdateHow'))
           Array.prototype.forEach.call(document.querySelectorAll('button'), function (b) {
@@ -2504,11 +2531,14 @@
         // El worker sondea lento cuando no hay nada a medias; abrir el panel es la
         // senal de que alguien esta mirando, asi que se le pide una comprobacion ya.
         pedirWeb('refresh', null, true)
-        // No hay evento de storage: un sondeo corto mientras el panel esta a la vista
-        // cuesta 1 de los 30 mensajes por 10s que el host permite.
+        // No hay evento de storage, asi que se sondea mientras el panel esta a la vista.
+        // 12 s y no 8: la vuelta cuesta 18 de los 30 mensajes por 10 s que el host
+        // permite, y con 8 s dos vueltas caian en la misma ventana — 36 — asi que la
+        // cola del lote volvia rechazada una vuelta si y otra no. Con 12 s nunca hay
+        // dos vueltas en la misma ventana.
         timer = setInterval(function () {
           if (document.visibilityState === 'visible') reload()
-        }, 8000)
+        }, 12000)
       })
     </script>
   </body>

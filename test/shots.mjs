@@ -178,6 +178,13 @@ const DATOS = {
 // orca-panel-action -> orca-panel-action-result, y storage.get envuelve en value.
 function stub(datos, opciones) {
   const falla = (opciones && opciones.falla) || []
+  // El host RECHAZANDO una lectura, que es distinto de contestar vacio: admite 30
+  // mensajes por 10 s y el sondeo pide 18. `window.__rechazar` deja que el guion lo
+  // encienda DESPUES del primer pintado, que es la unica forma de fotografiar el
+  // parpadeo: lo que hay que ver es la seccion entera, no el estado inicial.
+  const rechazado = (key) =>
+    ((opciones && opciones.rechazaGet) || []).indexOf(key) >= 0 ||
+    ((window.__rechazar || []).indexOf(key) >= 0)
   const veredicto = opciones && opciones.veredicto
   // Cuanto tarda el host en contestar. Sin poder hacerlo tardar no se puede fotografiar
   // un guardado EN VUELO, que es justo el momento en que el panel mentia.
@@ -187,8 +194,12 @@ function stub(datos, opciones) {
     if (!d || d.type !== 'orca-panel-action') return
     let respuesta = { ok: false, error: 'unsupported' }
     if (d.action === 'storage.get') {
-      const v = datos[d.params && d.params.key]
-      respuesta = { ok: true, value: v === undefined ? null : { value: v } }
+      const key = d.params && d.params.key
+      if (rechazado(key)) respuesta = { ok: false, errorCode: 'rate_limited' }
+      else {
+        const v = datos[key]
+        respuesta = { ok: true, value: v === undefined ? null : { value: v } }
+      }
     } else if (d.action === 'storage.set') {
       // El host que rechaza una escritura: es el caso que el panel decia guardado igual.
       if (falla.indexOf(d.params.key) >= 0) {
@@ -377,6 +388,33 @@ const PANELES = [
           state: 'algo-que-este-panel-no-conoce' })
       ] }
     })
+  },
+  {
+    // El parpadeo que el dueno reporto tres versiones seguidas: entraba, veia la linea
+    // "Enlazada", y unos segundos despues la seccion entera decia "Todavia no
+    // conectaste ninguna linea" y volvia. No era lo que el worker publica —eso se
+    // midio estable— sino el sondeo: 18 lecturas por vuelta contra las 30 por 10 s que
+    // el host admite, asi que la COLA del lote volvia rechazada y el panel la pintaba
+    // como "no hay nada". La foto es DESPUES de encender los rechazos: la tabla tiene
+    // que seguir entera y el select seguir en "cada 2 minutos" — si vuelve a "cada 5
+    // minutos — recomendado" es el mismo defecto, y es el detalle que lo delata.
+    nombre: 'config-lectura-rechazada', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: Object.assign({}, DATOS, {
+      readWeb: 'on', syncMinutes: '2',
+      webLines: { at: AHORA_ISO, lines: [
+        Object.assign({}, LINEA_ENLAZADA, { label: 'Soporte', placement: 'flotante',
+          project: null, worktreeId: null }),
+        Object.assign({}, LINEA_ENLAZADA, { id: 'web:573111111111', label: 'Ventas',
+          placement: 'flotante', project: null, worktreeId: null })
+      ] }
+    }),
+    espera: 900,
+    guion: () => {
+      window.__rechazar = ['webLines', 'webStatus', 'syncMinutes', 'readWebText',
+        'chats', 'health', 'routes', 'scope']
+      window.dispatchEvent(new Event('focus'))
+      document.getElementById('lines-wrap').scrollIntoView({ block: 'center' })
+    }
   },
   {
     nombre: 'config-buscando', archivo: 'config.html', anchos: ANCHOS_ESTADO,

@@ -831,6 +831,53 @@ console.log('\nconfig.html — lineas de WhatsApp Web')
 }
 
 {
+  // Una lectura que el host RECHAZA no puede vaciar la seccion. Es el parpadeo que el
+  // dueno reporto tres versiones seguidas: la tabla decia "Enlazada", unos segundos
+  // despues decia "Todavia no conectaste ninguna linea" y volvia. La causa no estaba en
+  // lo que el worker publica —eso se midio estable— sino en el lote de 18 lecturas del
+  // sondeo: el host admite 30 mensajes por 10 s, dos vueltas de 8 s caian en la misma
+  // ventana, y la COLA del lote —`webLines` y `syncMinutes` entre ellas— volvia
+  // `rate_limited`. Las dos se aplastaban en `null` y el panel pintaba el defecto: la
+  // tabla vacia y el select en "cada 5 minutos — recomendado", que es el segundo
+  // sintoma de sus capturas y lo que delata que el rechazo es del LOTE y no de la linea.
+  const RECHAZADAS = ['webLines', 'webStatus', 'syncMinutes', 'readWebText']
+  let rechazando = false
+  const linea = (id, label) => ({ id, label, profile: 'p-1', pending: false,
+    linkedAt: '2026-09-18 10:00', authorizedChats: 2, pageId: 'page-1',
+    state: 'enlazada', placement: 'flotante' })
+  const { window, doc } = await montar('config.html', {
+    syncMinutes: '2',
+    webLines: { at: new Date().toISOString(),
+      lines: [linea('web:1', 'Soporte'), linea('web:2', 'Ventas')] }
+  }, 'es-419', (d) => (rechazando && d.action === 'storage.get' &&
+    RECHAZADAS.indexOf(d.params.key) >= 0
+    ? { ok: false, errorCode: 'rate_limited', error: 'Too many requests.' }
+    : undefined))
+  await espera()
+  const filas = () => doc.querySelectorAll('#lines-wrap tbody tr').length
+  ok('parte con las dos lineas en la tabla', filas() === 2, `filas = ${filas()}`)
+  ok('parte con el valor guardado del sondeo',
+    doc.getElementById('sync-minutes').value === '2',
+    doc.getElementById('sync-minutes').value)
+
+  rechazando = true
+  window.dispatchEvent(new window.Event('focus'))
+  await espera()
+  await espera()
+  ok('un storage.get rechazado NO vacia las lineas conectadas', filas() === 2,
+    `la tabla quedo en ${filas()} filas: ${doc.getElementById('lines-wrap').textContent.trim().slice(0, 90)}`)
+  ok('un storage.get rechazado NO devuelve el select a su defecto',
+    doc.getElementById('sync-minutes').value === '2',
+    `el select volvio a ${doc.getElementById('sync-minutes').value}`)
+
+  rechazando = false
+  window.dispatchEvent(new window.Event('focus'))
+  await espera()
+  ok('y cuando el host vuelve a contestar la tabla sigue entera', filas() === 2,
+    `filas = ${filas()}`)
+}
+
+{
   // Cada texto nuevo en los tres idiomas, comprobado por clave y no de memoria: una
   // traduccion que falta cae al ingles y media pantalla queda en el idioma equivocado.
   const { window } = await montar('config.html')
