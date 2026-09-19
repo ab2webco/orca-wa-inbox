@@ -40,6 +40,10 @@ function ok (nombre, condicion, detalle = '') {
  *  donde el panel saca el idioma. Sin poder fijarlo solo se podria comprobar que el
  *  diccionario existe, no que el panel lo usa — y lo segundo es lo que se rompe. */
 async function montar (archivo, storage = {}, idioma = null, gancho = null) {
+  // Un worker VIVO por defecto. Sin latido el panel avisa —con razon— que el plugin no
+  // esta corriendo, y ese aviso tapa el que cada caso viene a comprobar. Los casos que
+  // prueban el worker ausente pasan su propio `workerBeat`.
+  if (!('workerBeat' in storage)) storage.workerBeat = { at: new Date().toISOString() }
   const html = readFileSync(join(root, archivo), 'utf8')
   const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true,
     url: 'https://panel.invalid/',
@@ -1783,6 +1787,168 @@ console.log('\nconfig.html: el veredicto que se muestra es el del clic que se hi
   ok('y con SU veredicto la linea ya no esta y no quedo ningun aviso de fallo',
     !doc.querySelector('[data-lrm]') && (aviso.hidden || !aviso.textContent.trim()),
     `${aviso.textContent} | filas = ${doc.querySelectorAll('[data-lrm]').length}`)
+}
+
+
+// ───────── un host que rechaza TODO no pinta ningun defecto ─────────
+// La propiedad de v3.12.3, comprobada sobre el panel entero y no sobre una funcion:
+// `read()` memoriza lo ultimo que el host CONTESTO, asi que un rechazo repinta eso y
+// nunca un valor por defecto. Se prueba con el host negandose a todo desde el arranque,
+// que es el unico momento en que no hay nada memorizado.
+console.log('\nconfig.html: un host que rechaza todo')
+{
+  const { doc } = await montar('config.html', {}, 'es-419',
+    (d) => d.action === 'storage.get'
+      ? { ok: false, error: { code: 'rate_limited' } } : undefined)
+  // Solo lo que el panel PINTO: el textContent del documento entero incluye plantilla
+  // oculta, y medirlo ahi haria pasar la prueba por el motivo equivocado.
+  const visible = (sel) => {
+    const n = doc.querySelector(sel)
+    return n && !n.hidden ? n.textContent : ''
+  }
+  const afirmaciones = [
+    ['no tenes lineas', visible('#lines-wrap'), /Todavia no conectaste ninguna linea/],
+    ['el plugin no esta', visible('#alert'), /El plugin no esta corriendo/],
+    ['no hay de donde leer', visible('#alert'), /No hay de donde leer/],
+    ['un fallo de lectura', visible('#lines-error'), /./]
+  ]
+  for (const [nombre, texto, re] of afirmaciones) {
+    ok(`un rechazo no afirma "${nombre}"`, !re.test(texto),
+      String(texto).replace(/\s+/g, ' ').slice(0, 160))
+  }
+}
+
+// ───────── el panel y el worker tienen que estar de acuerdo sobre el latido ─────────
+// Son dos constantes en dos archivos: el panel corre en el navegador y no puede
+// importar del worker. Si se separan, el panel marca muerto a un worker vivo (o al
+// reves) y nadie se entera hasta que pasa en la maquina de alguien.
+{
+  const { LATIDO_VENCE_MS } = await import('../main.mjs')
+  const html = readFileSync(join(root, 'config.html'), 'utf8')
+  const enPanel = /var LATIDO_VENCE_MS = (\d+)/.exec(html)
+  ok('el panel y el worker usan el mismo vencimiento de latido',
+    !!enPanel && Number(enPanel[1]) === LATIDO_VENCE_MS,
+    `panel = ${enPanel && enPanel[1]}, worker = ${LATIDO_VENCE_MS}`)
+}
+
+// ───────── el panel dice si hay alguien corriendo ─────────
+// El defecto: en una maquina donde Orca no arranco el worker —porque el plugin espera
+// aprobacion, que es lo que pasa en CADA actualizacion— el panel se veia igual que uno
+// sano, aceptaba clics y contestaba con 45 s de silencio. "Lento" y "no esta" eran la
+// misma pantalla.
+console.log('\nconfig.html: el latido del worker')
+{
+  const VIEJO = new Date(Date.now() - 120000).toISOString()
+  const casos = [
+    ['es-419', /El plugin no esta corriendo/, /El plugin dejo de responder/],
+    ['en-US', /The plugin is not running/, /The plugin stopped responding/],
+    ['pt-BR', /O plugin nao esta rodando/, /O plugin parou de responder/]
+  ]
+  for (const [lang, ido, parado] of casos) {
+    const sin = await montar('config.html', { workerBeat: null, health: { ok: true } },
+      lang)
+    const a1 = sin.doc.getElementById('alert')
+    ok(`sin latido el panel dice que el plugin no esta, en ${lang}`,
+      !a1.hidden && ido.test(a1.textContent), a1.textContent.slice(0, 120))
+    ok(`y dice donde se aprueba, en ${lang}`,
+      /Plugins/.test(a1.textContent), a1.textContent.slice(0, 200))
+
+    // Y lo que el aviso solo no arregla: sin nadie del otro lado, el boton que deja
+    // un pedido esperando respuesta es el silencio de 45 s otra vez.
+    ok(`sin worker el boton de conectar esta apagado, en ${lang}`,
+      sin.doc.getElementById('link-line').disabled === true)
+
+    const viejo = await montar('config.html',
+      { workerBeat: { at: VIEJO }, health: { ok: true } }, lang)
+    const a2 = viejo.doc.getElementById('alert')
+    ok(`un latido vencido se distingue de uno que nunca existio, en ${lang}`,
+      !a2.hidden && parado.test(a2.textContent), a2.textContent.slice(0, 120))
+  }
+
+  // Y sobrevive al repintado: la tabla la vuelven a dibujar el vigia de 2 s y el
+  // veredicto de un clic, no solo reload().
+  {
+    const { doc, window } = await montar('config.html', {
+      workerBeat: null,
+      webLines: { at: new Date().toISOString(), lines: [{
+        id: 'web:1', label: 'Soporte', profile: 'p1', state: 'esperando',
+        pageId: 'pg1', placement: 'proyecto', project: 'x', authorizedChats: 0 }] }
+    }, 'es-419')
+    ok('sin worker los botones de la tabla nacen apagados',
+      [...doc.querySelectorAll('#lines-wrap button')].every((b) => b.disabled),
+      doc.querySelector('#lines-wrap').innerHTML.slice(0, 160))
+    // 2,4 s: una vuelta entera del vigia de 2 s, que repinta la tabla entera.
+    await new Promise((r) => setTimeout(r, 2400))
+    ok('y siguen apagados despues de que el vigia la repinta',
+      [...doc.querySelectorAll('#lines-wrap button')].every((b) => b.disabled),
+      doc.querySelector('#lines-wrap').innerHTML.slice(0, 160))
+    window.close()
+  }
+
+  // Con worker vivo los botones siguen vivos: apagar lo que SI se puede hacer es el
+  // mismo defecto del otro lado.
+  const vivo = await montar('config.html',
+    { workerBeat: { at: new Date().toISOString() }, health: { ok: true } }, 'es-419')
+  ok('con worker vivo el boton de conectar sigue encendido',
+    vivo.doc.getElementById('link-line').disabled === false)
+
+  // Y el caso que hace que esto valga: un host que RECHAZA la lectura no es un worker
+  // ausente. No saber no es saber que no esta.
+  const rechazo = await montar('config.html', { health: { ok: true } }, 'es-419',
+    (d) => d.action === 'storage.get' && d.params.key === 'workerBeat'
+      ? { ok: false, error: { code: 'rate_limited' } } : undefined)
+  const a3 = rechazo.doc.getElementById('alert')
+  ok('una lectura RECHAZADA no se pinta como plugin ausente',
+    a3.hidden || !/no esta corriendo/.test(a3.textContent), a3.textContent.slice(0, 120))
+}
+
+// ───────── una pestana que aparecio en otro lado es una decision, no un arreglo ─────────
+console.log('\nconfig.html: la linea que se movio de lugar')
+{
+  const FILA = {
+    id: 'web:1', label: 'Soporte', profile: 'perfil-1', state: 'enlazada',
+    pageId: 'pg1', placement: 'proyecto', project: 'donde-aparecio',
+    worktreeId: 'wt-otro', host: 'runtime-A', authorizedChats: 2,
+    homeState: 'mudada',
+    casa: { host: 'runtime-A', donde: 'proyecto', worktreeId: 'wt-casa',
+      proyecto: 'su-casa' }
+  }
+  const { doc } = await montar('config.html',
+    { webLines: { at: new Date().toISOString(), lines: [FILA] } }, 'es-419')
+  const fila = doc.querySelector('#lines-wrap tbody').textContent
+  ok('la fila nombra los DOS lugares, el suyo y donde esta',
+    /su-casa/.test(fila) && /donde-aparecio/.test(fila), fila.slice(0, 220))
+  ok('y ofrece volverla a su lugar', !!doc.querySelector('[data-lhome]'))
+  ok('y ofrece dejarla donde esta', !!doc.querySelector('[data-ladopt]'))
+
+  // Una linea en su casa no ofrece ninguna de las dos: un boton que no corresponde es
+  // tan malo como uno que falta.
+  const sana = await montar('config.html',
+    { webLines: { at: new Date().toISOString(),
+      lines: [Object.assign({}, FILA, { homeState: 'en-casa', casa: null })] } }, 'es-419')
+  ok('una linea en su casa no ofrece mudarse',
+    !sana.doc.querySelector('[data-lhome]') && !sana.doc.querySelector('[data-ladopt]'))
+}
+
+// ───────── una linea de otro Orca no ofrece abrir nada ─────────
+// Su perfil de navegador vive en la otra maquina: escanear un QR aca quemaria un
+// dispositivo vinculado sobre una sesion que este Orca no va a poder leer nunca.
+console.log('\nconfig.html: la linea de otro host')
+{
+  const { doc } = await montar('config.html', {
+    webLines: { at: new Date().toISOString(), lines: [{
+      id: 'web:1', label: 'Soporte', profile: 'perfil-1', state: 'sin-pestana',
+      pageId: null, host: 'runtime-A', authorizedChats: 0, homeState: 'otro-host',
+      casa: { host: 'runtime-B', donde: 'flotante', worktreeId: null, proyecto: null }
+    }] }
+  }, 'es-419')
+  ok('no ofrece abrir ni reabrir una pestana que no puede existir aca',
+    !doc.querySelector('[data-lact]'),
+    doc.querySelector('#lines-wrap tbody').innerHTML.slice(0, 200))
+  ok('pero si deja sacarla', !!doc.querySelector('[data-lrm]'))
+  ok('y explica por que',
+    /otro Orca/.test(doc.querySelector('#lines-wrap tbody').textContent),
+    doc.querySelector('#lines-wrap tbody').textContent.slice(0, 200))
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

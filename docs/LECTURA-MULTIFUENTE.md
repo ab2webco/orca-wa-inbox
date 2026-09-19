@@ -841,3 +841,139 @@ Lista cerrada, para que el seguimiento sea mecanico:
 7. `config.html` / `activity.html` — la etiqueta de la linea al lado del nombre de la
    conversacion en el selector, en la tabla del registro y en la lista de actividad.
    Sin eso, con dos lineas conectadas una fila que dice solo "Laura Mendez" es ambigua.
+
+---
+
+# La casa de una linea — un solo dueno por cada pedazo de su verdad
+
+Escrito despues de que el dueno dijera "esto no es consistente, como voy a lanzar esto
+a produccion con esos problemas". Tenia razon, y el motivo no era ninguno de los
+defectos sueltos que se venian parcheando: era que **una linea no tenia un dueno de su
+verdad**. Cada pedazo se decidia en varios lados y ganaba el que llegaba ultimo.
+
+## El diagnostico, con numeros
+
+Donde vive la pestana de una linea se decidia en tres lugares:
+
+1. el select global "Donde abrir la pestana", leido **en cada accion**,
+2. lo que hubiera quedado en la fila,
+3. lo que encontrara la CLI al buscar.
+
+Medido contra la CLI real el 2026-09-19: la pestana de la linea `Soporte` vivia en
+`8e9e530d-…::/Users/fabolivar/Projects/orca-oss`, y `dondeVaLaPestana(…, 'proyecto')`
+— que es lo que llamaba **reabrir** — resolvia a
+`2606156a-…::/Users/fabolivar/Projects/attia-bots`, el arbol de actividad mas reciente.
+Reabrir su pestana la mandaba a otro proyecto. No a otra superficie: a otro proyecto,
+elegido por un criterio que nada tenia que ver con esa linea.
+
+## El modelo
+
+Una linea tiene **una casa**, y la casa es un dato con dueno:
+
+| pedazo | quien lo escribe | donde vive |
+| --- | --- | --- |
+| identidad (etiqueta, lid, perfil) | el registro | `~/.wa-inbox/scope.db` |
+| **la casa** (host + superficie + arbol) | **solo** conectar, mudar y adoptar | storage `webHomes[perfil]` |
+| donde esta la pestana AHORA | la realidad, leida de `orca tab list` | derivado por vuelta |
+| si estan de acuerdo | derivado | `homeState` |
+| el estado de la sesion | la realidad, leida de la pagina | derivado por vuelta |
+| si hay alguien corriendo | el worker | storage `workerBeat` |
+
+### Por que la casa se guarda por PERFIL y no por id de linea
+
+El id de la linea **cambia**: nace provisional sobre el perfil (`web:pending:<perfil>`) y
+el registro la asciende a `web:<lid>` cuando termina de escanear. Una casa guardada
+contra el id se perderia justo en el momento en que la linea empieza a servir. El perfil
+de navegador se crea una vez, no se toca mas, y ademas es lo que ata la sesion a una
+maquina.
+
+### Por que la casa guarda el arbol CONCRETO y no solo "proyecto"
+
+Porque "proyecto" no es un lugar. Guardar la superficie y volver a elegir el arbol es
+exactamente el defecto medido arriba. La casa guarda el id compuesto
+`<repoId>::<path>`, que es lo que `orca tab create --worktree id:…` acepta —
+verificado creando y cerrando una pestana de prueba contra la CLI real.
+
+### Por que el sondeo NO escribe la casa
+
+Es la decision que mas cuesta y la que sostiene todo lo demas. Es tentador que cada
+vuelta anote donde vio la pestana: la casa nunca queda vieja. El precio es que **la casa
+y la realidad no pueden discrepar nunca**, y entonces "esta pestana se movio" deja de
+ser un estado que se pueda ver, decir o accionar. Se convierte en un silencio.
+
+Asi que la observacion se compara y no se guarda. Cuando difieren hay un estado con
+nombre y dos salidas, las dos del usuario:
+
+- `en-casa` — coinciden.
+- `mudada` — la pestana esta, en otro lado. La fila nombra **los dos** lugares y ofrece
+  *Volver a su lugar* y *Dejarla aca*. El plugin no elige.
+- `casa-ausente` — el proyecto donde vivia ya no esta abierto. No se reabre en otro
+  lado: se dice, y se ofrece abrir ese proyecto o mudarla.
+- `otro-host` — abajo.
+- `sin-casa` — una linea de antes de esta version. No se le inventa una.
+
+## El host es parte de la casa — **medido**
+
+Una linea no vive "en el espacio flotante": vive en el espacio flotante **de un Orca**.
+
+Medido el 2026-09-19 contra el runtime local `cd30c0d7` y el remoto `orca-contabo`
+(`79f8e5c9`):
+
+- `orca` a secas **siempre** habla con el runtime local. Lo resuelve por
+  `orca-runtime.json` del userData de esta maquina; solo `--environment` lo manda a otro.
+- El worker del plugin **no puede** apuntar a un remoto aunque quiera: Orca le pasa una
+  allowlist de variables de entorno que no incluye `ORCA_ENVIRONMENT`
+  (orca-oss, `plugin-worker-env.ts`).
+- `orca tab create --worktree floating` cayo en el `global-floating-terminal` **local**;
+  desde contabo esa pestana no se ve. Cada runtime tiene el suyo, con el mismo id.
+- Los perfiles de navegador son por runtime: contabo solo tiene `default`. El perfil de
+  `Soporte` existe unicamente en el local. **Una sesion escaneada en el host A no existe
+  en el host B.**
+- Los catalogos de arboles son disjuntos: 45 rutas locales contra 2 `/home/fabolivar/…`.
+
+### La decision: las lineas son locales, y se dice
+
+Se evaluo dejar que una linea viviera en un host remoto. Se descarto, y el motivo no es
+esfuerzo: **la mitad lectora es local y no negociable hoy**. `wa-read` y `wa-send`
+evaluan con `orca eval --page` sin `--environment`, y el registro es un SQLite en
+`~/.wa-inbox/`. Una linea en un remoto se conectaria, se escanearia — **quemando un
+dispositivo vinculado de WhatsApp** — y despues no se podria leer.
+
+Por eso `otro-host` no ofrece abrir ni reabrir nada: solo sacarla. Ofrecer el boton
+seria ofrecer que escanee un QR contra una sesion que este Orca nunca va a poder leer.
+
+## El latido: "no contesto" y "no esta" son dos cosas
+
+En la segunda maquina del dueno el panel contesto *"El plugin no contesto"* despues de
+45 segundos. El mensaje era correcto y era inutil: nadie podia contestar porque **Orca
+no habia arrancado el worker**. Y eso no es raro ni es un caso de instalacion nueva.
+
+El consentimiento de un plugin esta atado al hash de su contenido instruccional cuando
+declara automatizaciones (orca-oss, `plugin-consent-fingerprint.ts`), y este plugin
+declara dos. Asi que **cada version cambia la huella y deja al plugin en `pending`**
+hasta que el usuario lo vuelva a aprobar. Eso es la frontera funcionando —esos bytes son
+prompts que despues ejecuta un agente con la autoridad del usuario— pero mientras tanto
+no habia worker, y el panel no lo decia.
+
+El worker late en `workerBeat` cada 5 s, **antes que cualquier otra cosa y sin depender
+de nada**. Para el panel:
+
+- sin latido → *el plugin no esta corriendo*, y donde se aprueba.
+- latido vencido (>30 s) → *dejo de responder*, y reiniciar Orca.
+- una lectura **rechazada** por el host no es ninguna de las dos: no saber no es saber
+  que no esta.
+
+El tope es 30 s y no menos porque una llamada a la CLI de Orca tiene 30 s de tope: por
+debajo se marcaria muerto a un worker que solo estaba trabajando.
+
+## `health` no lo escribia nadie
+
+El panel lee `health` desde siempre, hay pruebas que lo cubren con fixtures, y **ninguna
+linea del plugin lo escribia**. Una maquina sin WhatsApp instalado se veia identica a
+una sana.
+
+Ademas `wa-read doctor` sale con **1** cuando falta algo requerido — que es justo lo que
+se le esta preguntando — y `run()` rechazaba por el codigo de salida, tirando su
+respuesta entera. El diagnostico correcto se reportaba como *"las herramientas no
+contestaron"*. Ahora el stdout sobrevive al rechazo y `checkSystem` publica siempre:
+`ok`, lo que falta con su codigo, y lo opcional aparte.

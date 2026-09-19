@@ -162,7 +162,12 @@
         tr { border-bottom: 1px solid var(--border, var(--fb-border)); padding: 8px 0; }
         tr:last-child { border-bottom: 0; }
         td { border: 0; padding: 1px 0; }
-        td.acts { text-align: left; margin-top: 6px; }
+        /* Con casa discrepante una fila lleva cuatro acciones, y en espanol el
+           `nowrap` de arriba las empujaba a 333 px dentro de una ventana de 320.
+           Abajo de 420 se envuelven; el `nowrap` sigue valiendo en pantalla ancha,
+           donde parte una etiqueta a la mitad. */
+        td.acts { text-align: left; margin-top: 6px; white-space: normal; }
+        td.acts button { margin-bottom: 4px; }
         .row { grid-template-columns: 1fr; }
       }
       /* Los cuatro permisos. La allowlist no tiene verde ni ambar y no se fabrican:
@@ -219,6 +224,7 @@
          en "esperando el escaneo" es LO que hay que hacer, y el escaneo pasa en otra
          ventana. Desvincular se queda como enlace — no se ofrece, se busca. */
       td.acts button + button { margin-left: 10px; }
+      @media (max-width: 420px) { td.acts button + button { margin-left: 8px; } }
       .empty { color: var(--muted-foreground, var(--fb-muted-foreground));
                font-size: 12px; padding: 10px 0; }
       .hint { color: var(--muted-foreground, var(--fb-muted-foreground));
@@ -666,6 +672,39 @@
           lineLabelPh: 'ej. Soporte, Ventas, Mi otro numero',
           linkLine: 'Conectar cuenta',
           noLines: 'Todavia no conectaste ninguna linea de WhatsApp Web.',
+          // --- el worker, su casa y su host ---
+          workerGone: 'El plugin no esta corriendo',
+          workerGoneHow: 'Orca no arranco el worker de este plugin, asi que nada de lo ' +
+            'que aprietes aca va a contestar. Casi siempre es que falta aprobarlo: ' +
+            'abri Ajustes > Plugins y mira si WhatsApp Inbox pide tu aprobacion. Cada ' +
+            'actualizacion la vuelve a pedir, porque cambia lo que el plugin le dice a ' +
+            'tu agente que ejecute.',
+          workerStale: 'El plugin dejo de responder',
+          workerStaleHow: 'El worker latia y dejo de hacerlo hace {s} s. Si no vuelve, ' +
+            'reinicia Orca.',
+          homeFloating: 'espacio flotante',
+          homeMoved: 'Se movio de lugar',
+          homeMovedHow: 'Esta linea vive en {c}, pero su pestana esta ahora en {d}. ' +
+            'Decidi vos: llevala de vuelta, o dejala donde esta y que esa sea su casa.',
+          homeBack: 'Volver a su lugar',
+          homeAdopt: 'Dejarla aca',
+          homeGone: 'Su lugar ya no existe',
+          homeGoneHow: 'Esta linea vivia en el proyecto "{p}", que ya no esta abierto ' +
+            'en Orca. Abri ese proyecto y reintenta, o mudala a otro lugar.',
+          homeOtherHost: 'Vive en otro Orca',
+          homeOtherHostHow: 'Esta linea se conecto en otro Orca y su sesion vive alla: ' +
+            'el perfil del navegador no existe en este. Abri la linea desde aquel, o ' +
+            'conecta una nueva aca.',
+          moveToFloating: 'Mover al espacio flotante',
+          moveToProject: 'Mover al proyecto',
+          moveFailed: 'No pude mover la pestana.',
+          errCasaAusente: 'El proyecto donde vivia esa pestana ya no esta abierto en ' +
+            'Orca. Abrilo y reintenta, o mueve la linea a otro lugar.',
+          errOtroHost: 'Esa linea se conecto en otro Orca y su sesion vive alla.',
+          errSinCasa: 'Esa linea no tiene un lugar anotado todavia.',
+          lineHostHere: 'Las lineas viven en el Orca donde las conectas. Esta es esta ' +
+            'maquina: si te conectas a un servidor remoto, sus pestanas y sus perfiles ' +
+            'son otros y esta linea no va a estar ahi.',
           colLine: 'Linea', colLineState: 'Estado',
           seeTab: 'Ver la pestana', openTab: 'Abrir la pestana', retryLine: 'Reintentar',
           unlink: 'Desvincular', unlinkYes: 'Si, desvincular', unlinkNo: 'Dejarla',
@@ -958,6 +997,40 @@
           lineLabelPh: 'e.g. Support, Sales, My other number',
           linkLine: 'Connect an account',
           noLines: 'No WhatsApp Web line connected yet.',
+          // --- el worker, su casa y su host ---
+          workerGone: 'The plugin is not running',
+          workerGoneHow: 'Orca did not start this plugin\u2019s worker, so nothing you ' +
+            'press here will answer. Almost always it is waiting for your approval: ' +
+            'open Settings > Plugins and check whether WhatsApp Inbox is asking for ' +
+            'it. Every update asks again, because it changes what the plugin tells ' +
+            'your agent to run.',
+          workerStale: 'The plugin stopped responding',
+          workerStaleHow: 'The worker was alive and stopped {s} s ago. If it does not ' +
+            'come back, restart Orca.',
+          homeFloating: 'the floating workspace',
+          homeMoved: 'It moved',
+          homeMovedHow: 'This line lives in {c}, but its tab is now in {d}. You decide: ' +
+            'take it back, or leave it here and make this its home.',
+          homeBack: 'Take it back',
+          homeAdopt: 'Leave it here',
+          homeGone: 'Its place is gone',
+          homeGoneHow: 'This line lived in project "{p}", which is no longer open in ' +
+            'Orca. Open that project and retry, or move the line somewhere else.',
+          homeOtherHost: 'It lives in another Orca',
+          homeOtherHostHow: 'This line was connected in another Orca and its session ' +
+            'lives there: the browser profile does not exist in this one. Open the ' +
+            'line from that Orca, or connect a new one here.',
+          moveToFloating: 'Move to the floating workspace',
+          moveToProject: 'Move to the project',
+          moveFailed: 'I could not move the tab.',
+          errCasaAusente: 'The project that tab lived in is no longer open in Orca. ' +
+            'Open it and retry, or move the line somewhere else.',
+          errOtroHost: 'That line was connected in another Orca and its session lives ' +
+            'there.',
+          errSinCasa: 'That line has no recorded place yet.',
+          lineHostHere: 'Lines live in the Orca you connect them from. That is this ' +
+            'machine: if you connect to a remote server, its tabs and profiles are ' +
+            'different ones and this line will not be there.',
           colLine: 'Line', colLineState: 'State',
           seeTab: 'Show the tab', openTab: 'Open the tab', retryLine: 'Try again',
           unlink: 'Unlink', unlinkYes: 'Yes, unlink', unlinkNo: 'Keep it',
@@ -1224,6 +1297,39 @@
         lineLabelPh: 'ex. Suporte, Vendas, Meu outro numero',
         linkLine: 'Conectar conta',
         noLines: 'Ainda nao ha nenhuma linha do WhatsApp Web conectada.',
+        // --- el worker, su casa y su host ---
+        workerGone: 'O plugin nao esta rodando',
+        workerGoneHow: 'O Orca nao iniciou o worker deste plugin, entao nada do que ' +
+          'voce apertar aqui vai responder. Quase sempre e que falta aprovar: abra ' +
+          'Ajustes > Plugins e veja se o WhatsApp Inbox esta pedindo sua aprovacao. ' +
+          'Cada atualizacao pede de novo, porque muda o que o plugin manda o seu ' +
+          'agente executar.',
+        workerStale: 'O plugin parou de responder',
+        workerStaleHow: 'O worker estava vivo e parou ha {s} s. Se nao voltar, ' +
+          'reinicie o Orca.',
+        homeFloating: 'o espaco flutuante',
+        homeMoved: 'Ela mudou de lugar',
+        homeMovedHow: 'Esta linha mora em {c}, mas a aba dela esta agora em {d}. Voce ' +
+          'decide: leve de volta, ou deixe aqui e que este seja o lugar dela.',
+        homeBack: 'Levar de volta',
+        homeAdopt: 'Deixar aqui',
+        homeGone: 'O lugar dela nao existe mais',
+        homeGoneHow: 'Esta linha morava no projeto "{p}", que nao esta mais aberto no ' +
+          'Orca. Abra esse projeto e tente de novo, ou mova a linha para outro lugar.',
+        homeOtherHost: 'Ela mora em outro Orca',
+        homeOtherHostHow: 'Esta linha foi conectada em outro Orca e a sessao dela mora ' +
+          'la: o perfil do navegador nao existe neste. Abra a linha de la, ou conecte ' +
+          'uma nova aqui.',
+        moveToFloating: 'Mover para o espaco flutuante',
+        moveToProject: 'Mover para o projeto',
+        moveFailed: 'Nao consegui mover a aba.',
+        errCasaAusente: 'O projeto onde essa aba morava nao esta mais aberto no Orca. ' +
+          'Abra ele e tente de novo, ou mova a linha para outro lugar.',
+        errOtroHost: 'Essa linha foi conectada em outro Orca e a sessao dela mora la.',
+        errSinCasa: 'Essa linha ainda nao tem um lugar anotado.',
+        lineHostHere: 'As linhas moram no Orca de onde voce as conecta. Este e esta ' +
+          'maquina: se voce se conectar a um servidor remoto, as abas e os perfis dele ' +
+          'sao outros e esta linha nao vai estar la.',
         colLine: 'Linha', colLineState: 'Estado',
         seeTab: 'Ver a aba', openTab: 'Abrir a aba', retryLine: 'Tentar de novo',
         unlink: 'Desvincular', unlinkYes: 'Sim, desvincular', unlinkNo: 'Deixar',
@@ -1511,6 +1617,52 @@
               esc(porCodigo(HEALTH_HOW_KEY, o.howCode, o.como)) + '</code></span></div>'
           }).join('')
         caja.hidden = false
+      }
+
+      // Cuanto puede tardar un latido antes de darlo por ido. El worker late cada 5 s
+      // y una llamada a la CLI de Orca lo puede tener ocupado 30: por debajo de eso se
+      // marcaria muerto a un worker que solo estaba trabajando.
+      var LATIDO_VENCE_MS = 30000
+
+      /** Si no hay nadie corriendo, y decirlo. Devuelve true cuando tomo el aviso.
+       *
+       *  `null` es "el worker nunca escribio": o no arranco nunca, o Orca no lo arranco
+       *  porque el plugin espera aprobacion. Es el caso que se veia como un silencio de
+       *  45 s indistinguible de una maquina lenta. SIN_RESPUESTA es otra cosa —el host
+       *  no contesto— y ahi no se afirma nada. */
+      /** Apaga lo que NECESITA al worker. Guardar no: el valor queda escrito y se
+       *  aplica cuando el worker arranque. Lo que se apaga es lo que deja un pedido
+       *  esperando respuesta — apretarlo sin nadie del otro lado es el silencio de 45 s
+       *  que este aviso viene justamente a reemplazar. */
+      var sinWorkerUlt = false
+      function apagarLoQueNecesitaWorker(sinWorker) {
+        sinWorkerUlt = !!sinWorker
+        var dependen = ['link-line', 'sync-retry']
+        dependen.forEach(function (id) {
+          var b = el(id)
+          if (b) b.disabled = !!sinWorker
+        })
+        apagarBotonesDeLineas()
+      }
+
+      function apagarBotonesDeLineas() {
+        Array.prototype.forEach.call(
+          document.querySelectorAll('#lines-wrap button'), function (b) {
+            b.disabled = sinWorkerUlt
+          })
+      }
+
+      function pintarLatido(beat) {
+        if (!hayRespuesta(beat)) return false
+        if (!beat || typeof beat !== 'object' || !beat.at) {
+          showAlert(esc(t('workerGone')), esc(t('workerGoneHow')))
+          return true
+        }
+        var edad = Date.now() - Date.parse(beat.at)
+        if (!(edad >= 0) || edad <= LATIDO_VENCE_MS) return false
+        showAlert(esc(t('workerStale')),
+          esc(fmt('workerStaleHow', { s: Math.round(edad / 1000) })))
+        return true
       }
 
       function showAlert(what, how) {
@@ -2127,7 +2279,8 @@
         desactualizado: 'errDesactualizado',
         'sin-identidad': 'errSinIdentidad', 'sin-respuesta': 'lineNoAnswer',
         'sin-pestana': 'errSinPestana', 'sin-flotante': 'errSinFlotante',
-        'flotante-sin-via': 'errFlotanteSinVia'
+        'flotante-sin-via': 'errFlotanteSinVia', 'casa-ausente': 'errCasaAusente',
+        'otro-host': 'errOtroHost', 'sin-casa': 'errSinCasa'
       }
       function motivoWeb (code, detail) {
         return WEB_ERR_KEY[code] ? t(WEB_ERR_KEY[code]) : (detail || code || '')
@@ -2137,7 +2290,8 @@
       // linea" y se pintaba igual sobre un desvincular y sobre un "Ver la pestana":
       // el usuario leia que fallo algo que ni siquiera habia pedido.
       var FAIL_KEY = { link: 'lineFailed', unlink: 'unlinkFailed', show: 'showFailed',
-                       reopen: 'showFailed' }
+                       reopen: 'showFailed', move: 'moveFailed', home: 'moveFailed',
+                       adopt: 'moveFailed' }
 
       /** Espera el veredicto de ESE pedido. Enlazar una linea son dos llamadas a la CLI
        *  de Orca con 30 s de tope cada una, asi que la espera tiene que darles lugar. */
@@ -2185,8 +2339,19 @@
       // pageId mandaba un `show` vacio que el worker contestaba ok: el boton no abria
       // nada y decia que si.
       function actoLinea (l) {
+        // Una linea de otro Orca no tiene sesion aca: su perfil de navegador vive en
+        // aquella maquina. Ofrecer abrir o reabrir su pestana seria ofrecer algo que
+        // no se puede hacer — y escanear un QR aca quemaria un dispositivo vinculado
+        // en una sesion que igual no se va a poder leer.
+        if (l && l.homeState === 'otro-host') return null
         var act = defLinea(l).act
         return act === 'show' && !l.pageId ? 'reopen' : act
+      }
+
+      /** El nombre legible del lugar donde vive o esta una linea. */
+      function nombreLugar (donde, proyecto) {
+        if (donde === 'flotante') return t('homeFloating')
+        return proyecto ? '"' + proyecto + '"' : t('lineWhereProject')
       }
 
       // El atajo que ABRE el panel es floatingTerminal.toggle, Mod+Alt+A, y existe en
@@ -2211,6 +2376,15 @@
       }
 
       function lineHow (l) {
+        // Lo que se dice primero es lo que hay que decidir. Una pestana que aparecio en
+        // otro lado es una pregunta para el usuario, no un detalle del estado.
+        if (l.homeState === 'otro-host') return t('homeOtherHostHow')
+        if (l.homeState === 'mudada') {
+          return fmt('homeMovedHow', {
+            c: nombreLugar(l.casa && l.casa.donde, l.casa && l.casa.proyecto),
+            d: nombreLugar(l.placement, l.project)
+          })
+        }
         if (!LINE_STATE[l.state]) return fmt('stUnknownHow', { s: String(l.state) })
         // Sin pestana el que hacer es reabrirla, diga lo que diga el estado: el texto de
         // "Esperando el escaneo" manda a apretar "Ver la pestana", y ese boton ya no
@@ -2280,9 +2454,18 @@
               '><td>' + esc(l.label) + '</td>' +
               '<td><span class="pill ' + def.cls + '">' + esc(t(def.pill)) + '</span>' +
               '<span class="how">' + esc(lineHow(l)) + '</span></td>' +
-              '<td class="acts"><button class="' +
-              (l.state === 'enlazada' ? 'link' : '') + '" data-lact="' + i + '">' +
-              t(ACT_KEY[actoLinea(l)]) + '</button>' +
+              '<td class="acts">' +
+              (actoLinea(l)
+                ? '<button class="' + (l.state === 'enlazada' ? 'link' : '') +
+                  '" data-lact="' + i + '">' + t(ACT_KEY[actoLinea(l)]) + '</button>'
+                : '') +
+              // Las dos mitades de una discrepancia, y solo cuando la hay: volverla a
+              // su casa o adoptar la nueva. El plugin no elige ninguna por su cuenta.
+              (l.homeState === 'mudada'
+                ? '<button class="link" data-lhome="' + i + '">' + t('homeBack') +
+                  '</button><button class="link" data-ladopt="' + i + '">' +
+                  t('homeAdopt') + '</button>'
+                : '') +
               '<button class="link" data-lrm="' + i + '">' + t('unlink') + '</button>' +
               '</td></tr>'
             if (confirmando !== l.id) return fila
@@ -2330,6 +2513,34 @@
               }))
           })
         })
+        // Las dos salidas de una discrepancia. Van juntas porque son la misma decision
+        // vista de los dos lados, y las dos mandan `visto`: si la fila cambio entre que
+        // se pinto y el clic, el worker rechaza en vez de actuar sobre otra cosa.
+        function decidirCasa (attr, accion) {
+          Array.prototype.forEach.call(wrap.querySelectorAll('[' + attr + ']'),
+            function (b) {
+              b.addEventListener('click', function () {
+                var l = lineas[Number(b.getAttribute(attr))]
+                busy(b, pedirWeb(accion,
+                  { id: l.id, profile: l.profile, pageId: l.pageId || null,
+                    placement: l.placement || null, project: l.project || null,
+                    worktreeId: l.worktreeId || null, host: l.host || null,
+                    desde: (lineasUlt && lineasUlt.at) || null,
+                    visto: { state: l.state, pageId: l.pageId || null } })
+                  .then(function (p) {
+                    if (!p.ok) return
+                    return esperarWeb(p.at, 45000).then(function (st) {
+                      webStatusUlt = st ||
+                        { ok: false, code: 'sin-respuesta', detail: '' }
+                      return repintarLineas()
+                    })
+                  }))
+              })
+            })
+        }
+        decidirCasa('data-lhome', 'home')
+        decidirCasa('data-ladopt', 'adopt')
+
         Array.prototype.forEach.call(wrap.querySelectorAll('[data-lrm]'), function (b) {
           b.addEventListener('click', function () {
             confirmando = lineas[Number(b.dataset.lrm)].id
@@ -2394,6 +2605,10 @@
         }
         place.hidden = !place.textContent
 
+        // Aca y no solo en reload(): esta tabla tambien la repintan el vigia de 2 s y
+        // el veredicto de un clic, y por esos dos caminos los botones volvian a estar
+        // vivos con el worker todavia ausente.
+        apagarBotonesDeLineas()
         vigilarLineas(lineas.some(function (l) { return l.state !== 'enlazada' }))
       }
 
@@ -2464,7 +2679,8 @@
                             read('transcribeLang'), read('syncStatus'),
                             read('readLocal'), read('readWeb'),
                             read('syncMinutes'), read('readWebText'),
-                            read('webLines'), read('webStatus')])
+                            read('webLines'), read('webStatus'),
+                            read('workerBeat')])
           .then(function (r) {
             if (hayRespuesta(r[0])) renderScope(r[0])
             pintarClave('tone', r[4], sello)
@@ -2486,9 +2702,14 @@
             }
             if (hayRespuesta(r[5])) renderChats(r[5])
             pintarClave('agentName', r[1], sello)
+            // El latido manda sobre todo lo demas: si nadie esta corriendo, el health
+            // que haya es de otra sesion y "todo bien" seria mentira. Un rechazo del
+            // host NO cuenta como worker ausente — no saber no es saber que no esta.
+            var sinWorker = pintarLatido(r[18])
+            if (sinWorker) { /* el aviso ya quedo puesto */ }
             // El health ya trae QUE falla y su detalle: mostrarlo es mejor que mandar
             // a correr un comando, que es justo lo que se saco del resto del panel.
-            if (hayRespuesta(r[2]) && r[2] && r[2].ok === false) {
+            else if (hayRespuesta(r[2]) && r[2] && r[2].ok === false) {
               var q = r[2].problem
                 ? esc(porCodigo(HEALTH_KEY, r[2].problemCode, r[2].problem))
                 : t('notReady')
@@ -2504,6 +2725,9 @@
             var stWeb = veredictoPropio(r[17])
             if (stWeb) webStatusUlt = stWeb
             renderLineas(r[16])
+            // Despues de renderLineas: reconstruye la tabla entera y con ella sus
+            // botones, asi que apagarlos antes no dejaria rastro.
+            apagarLoQueNecesitaWorker(sinWorker)
           })
       }
 

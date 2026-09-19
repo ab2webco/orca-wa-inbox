@@ -43,9 +43,26 @@ function orcaJson(exe, args, { timeoutMs = ORCA_TIMEOUT_MS } = {}) {
                     message: String(data?.error?.message || '').slice(0, 300) })
           return
         }
-        resolve({ ok: true, result: data.result || {} })
+        // El runtime que contesto viaja con cada respuesta: es la identidad del HOST
+        // y es lo unico que distingue el espacio flotante de esta maquina del de otra.
+        resolve({ ok: true, result: data.result || {},
+                  runtimeId: data._meta?.runtimeId || null })
       })
   })
+}
+
+/**
+ * Que runtime contesta a esta CLI. Es la identidad del host de una linea.
+ *
+ * La CLI a secas SIEMPRE habla con el runtime local de esta maquina: solo `--environment`
+ * la manda a uno remoto, y el worker del plugin no recibe esa variable (orca-oss,
+ * plugin-worker-env.ts: la lista de env es una allowlist sin ORCA_ENVIRONMENT). Asi que
+ * una linea vive donde corre Orca, y esto lo deja ESCRITO en vez de supuesto.
+ */
+export async function hostActual(exe) {
+  const r = await orcaJson(exe, ['tab', 'list', '--worktree', 'all'])
+  if (!r.ok) return { ok: false, code: r.code, message: r.message }
+  return { ok: true, runtimeId: r.runtimeId }
 }
 
 /**
@@ -92,7 +109,8 @@ export async function dondeVaLaPestana(exe, contextoActivo, preferencia = 'proye
       return { ok: false, code: 'sin-flotante',
                message: 'this Orca cannot open a tab in the floating workspace' }
     }
-    return { ok: true, donde: 'flotante', selector: 'floating' }
+    return { ok: true, donde: 'flotante', selector: 'floating',
+             worktreeId: FLOTANTE_WORKTREE_ID }
   }
 
   const lista = await arbolesDe(exe)
@@ -107,8 +125,45 @@ export async function dondeVaLaPestana(exe, contextoActivo, preferencia = 'proye
   const elegido = lista.arboles.find((w) => w.displayName === visible) ||
     lista.arboles.slice()
       .sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0))[0]
+  // El id concreto viaja con el destino. Devolver solo "proyecto" es lo que hacia que
+  // reabrir cayera en el arbol de actividad mas reciente y no en el de ESA linea.
   return { ok: true, donde: 'proyecto', selector: `id:${elegido.id}`,
-           proyecto: elegido.displayName || elegido.path }
+           worktreeId: elegido.id, proyecto: elegido.displayName || elegido.path }
+}
+
+/**
+ * El destino de una linea que YA tiene casa. No elige: resuelve la que esta anotada.
+ *
+ * Es la diferencia entre "donde va la proxima" y "donde vive esta". Mezclarlas era el
+ * defecto: reabrir leia el selector global y una linea creada en el flotante volvia en
+ * un proyecto — o en OTRO proyecto, el de actividad mas reciente.
+ *
+ * Cuando la casa ya no existe no se cae a ningun otro lado: eso es un estado con nombre
+ * (`casa-ausente`, `otro-host`) y una accion que pide el usuario, no una mudanza muda.
+ */
+export async function destinoDeCasa(exe, casa) {
+  if (!casa || !casa.donde) return { ok: false, code: 'sin-casa', message: '' }
+  const host = await hostActual(exe)
+  if (!host.ok) return { ok: false, code: host.code, message: host.message }
+  if (casa.host && host.runtimeId && casa.host !== host.runtimeId) {
+    return { ok: false, code: 'otro-host', message: casa.host }
+  }
+  if (casa.donde === 'flotante') {
+    const soporte = await soportaFlotante(exe)
+    if (!soporte.ok) return { ok: false, code: soporte.code, message: soporte.message }
+    if (!soporte.flotante) {
+      return { ok: false, code: 'sin-flotante',
+               message: 'this Orca cannot open a tab in the floating workspace' }
+    }
+    return { ok: true, donde: 'flotante', selector: 'floating',
+             worktreeId: FLOTANTE_WORKTREE_ID }
+  }
+  const lista = await arbolesDe(exe)
+  if (!lista.ok) return { ok: false, code: lista.code, message: lista.message }
+  const suyo = lista.arboles.find((w) => w.id === casa.worktreeId)
+  if (!suyo) return { ok: false, code: 'casa-ausente', message: casa.proyecto || '' }
+  return { ok: true, donde: 'proyecto', selector: `id:${suyo.id}`, worktreeId: suyo.id,
+           proyecto: suyo.displayName || suyo.path }
 }
 
 // La sonda de estado es propia y minima a proposito: la de wa-read baja la lista de
@@ -141,10 +196,12 @@ async function listarPestanas(exe) {
   const porPagina = new Map()
   let ultimo = null
   let alguna = false
+  let runtimeId = null
   for (const extra of vistas) {
     const r = await orcaJson(exe, ['tab', 'list', ...extra])
     if (!r.ok) { ultimo = r; continue }
     alguna = true
+    runtimeId = runtimeId || r.runtimeId
     for (const t of r.result.tabs || []) {
       if (t.browserPageId && !porPagina.has(t.browserPageId)) {
         porPagina.set(t.browserPageId, t)
@@ -154,13 +211,14 @@ async function listarPestanas(exe) {
   if (!alguna) {
     return { ok: false, code: ultimo?.code || 'fallo', message: ultimo?.message || '' }
   }
-  return { ok: true, tabs: [...porPagina.values()] }
+  return { ok: true, tabs: [...porPagina.values()], runtimeId }
 }
 
 /** La pestana abierta en WhatsApp Web para ese perfil, si la hay. */
 async function pestanaDe(exe, profile) {
   const r = await listarPestanas(exe)
   if (!r.ok) return { ok: false, code: r.code, message: r.message }
+  const runtimeId = r.runtimeId
   const abiertas = r.tabs.filter((t) => (t.url || '').includes('web.whatsapp.com'))
   // El id primero y la etiqueta despues, nunca mezclados: una etiqueta que coincide con
   // el id de OTRO perfil ganaba por orden de pestana, y mandaba al usuario a la sesion
@@ -170,7 +228,7 @@ async function pestanaDe(exe, profile) {
     suyas = abiertas.filter((t) => t.profileLabel === profile)
     if (new Set(suyas.map((t) => t.profileId)).size > 1) suyas = []
   }
-  return { ok: true, tab: suyas[0] || null }
+  return { ok: true, tab: suyas[0] || null, runtimeId }
 }
 
 /**
@@ -197,6 +255,9 @@ function ubicacionDe(tab, nombreDeArbol) {
  */
 export async function estadoDeLineas(exe, cuentas) {
   const salida = []
+  // El host sale del listado de pestanas que igual hay que hacer: preguntarlo aparte
+  // seria un subproceso mas por vuelta del sondeo, cada 3 s, para siempre.
+  let runtimeId = null
   // Una sola lectura de arboles para todas las lineas: el nombre del proyecto se
   // resuelve por linea y pedirlo por linea seria un subproceso por fila y por vuelta.
   const lista = await arbolesDe(exe)
@@ -206,10 +267,11 @@ export async function estadoDeLineas(exe, cuentas) {
   }
   const nombreDeArbol = (id) => nombres.get(id) || ''
   for (const cuenta of cuentas) {
+    const p = await pestanaDe(exe, cuenta.profile)
+    runtimeId = runtimeId || p.runtimeId || null
     const base = { id: cuenta.id, label: cuenta.label, profile: cuenta.profile,
                    pending: !!cuenta.pending, linkedAt: cuenta.linked_at || null,
-                   authorizedChats: cuenta.authorized_chats || 0 }
-    const p = await pestanaDe(exe, cuenta.profile)
+                   authorizedChats: cuenta.authorized_chats || 0, host: runtimeId }
     if (!p.ok) {
       salida.push({ ...base, state: p.code === 'sin-orca' ? 'sin-orca' : 'sin-pestana',
                     detail: p.message })
@@ -286,7 +348,12 @@ export async function conectarLinea({ exe, waScope, run, label, contextoActivo, 
   // a `sources()` leyendo cualquier pestana de WhatsApp Web que hubiera abierta.
   await run(waScope, ['config', 'read_web', 'on'])
   return { ok: true, profileId, pageId: pestana.result.browserPageId || null,
-           donde: destino.donde, proyecto: destino.proyecto || null, cuenta }
+           donde: destino.donde, proyecto: destino.proyecto || null, cuenta,
+           // La casa nace aca y con el host adentro: el perfil del navegador vive en UN
+           // runtime, asi que la sesion escaneada no existe en ningun otro.
+           casa: { host: pestana.runtimeId || null, donde: destino.donde,
+                   worktreeId: destino.worktreeId || null,
+                   proyecto: destino.proyecto || null } }
 }
 
 /**
@@ -323,15 +390,43 @@ export async function verPestana(exe, pageId, ubicacion = {}) {
   return { ok: true, surfaced: alFrente, project: ubicacion.project || null }
 }
 
-/** Vuelve a abrir la pestana de una linea ya registrada, en su mismo perfil. */
-export async function reabrirPestana({ exe, profile, contextoActivo, donde }) {
-  const destino = await dondeVaLaPestana(exe, contextoActivo, donde)
+/** Vuelve a abrir la pestana de una linea ya registrada, en SU casa y su mismo perfil.
+ *
+ *  `casa` manda; el selector global del panel no se mira. Mirarlo era lo que mudaba de
+ *  superficie una sesion que el usuario habia puesto en una a proposito. */
+export async function reabrirPestana({ exe, profile, casa }) {
+  const destino = await destinoDeCasa(exe, casa)
   if (!destino.ok) return { ok: false, code: destino.code, detail: destino.message }
   const r = await orcaJson(exe, ['tab', 'create', '--url', WA_URL, '--profile', profile,
                                  '--worktree', destino.selector])
   if (!r.ok) return { ok: false, code: r.code, detail: r.message }
   return { ok: true, pageId: r.result.browserPageId || null, donde: destino.donde,
-           proyecto: destino.proyecto || null }
+           worktreeId: destino.worktreeId || null, proyecto: destino.proyecto || null }
+}
+
+/** Cierra una pestana y dice si pudo. */
+export async function cerrarPestana(exe, pageId) {
+  const r = await orcaJson(exe, ['tab', 'close', '--page', pageId])
+  return r.ok ? { ok: true } : { ok: false, code: r.code, detail: r.message }
+}
+
+/** Lleva la pestana de una linea a otra casa. Es la UNICA via que la relocaliza.
+ *
+ *  Se cierra la vieja antes de abrir la nueva: dos pestanas de WhatsApp Web en el mismo
+ *  perfil se desloguean entre si, y perder la sesion enlazada es peor que quedar un
+ *  momento sin pestana — `sin-pestana` ya ofrece volver a abrirla. */
+export async function mudarPestana({ exe, profile, contextoActivo, donde, pageId }) {
+  const destino = await dondeVaLaPestana(exe, contextoActivo, donde)
+  if (!destino.ok) return { ok: false, code: destino.code, detail: destino.message }
+  if (pageId) await orcaJson(exe, ['tab', 'close', '--page', pageId])
+  const r = await orcaJson(exe, ['tab', 'create', '--url', WA_URL, '--profile', profile,
+                                 '--worktree', destino.selector])
+  if (!r.ok) return { ok: false, code: r.code, detail: r.message }
+  return { ok: true, pageId: r.result.browserPageId || null, donde: destino.donde,
+           worktreeId: destino.worktreeId || null, proyecto: destino.proyecto || null,
+           casa: { host: r.runtimeId || null, donde: destino.donde,
+                   worktreeId: destino.worktreeId || null,
+                   proyecto: destino.proyecto || null } }
 }
 
 /** Saca la linea del registro, cierra su pestana y borra su perfil.

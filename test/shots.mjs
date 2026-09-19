@@ -617,6 +617,67 @@ const PANELES = [
         ]
       })
     })
+  },
+  {
+    // El plugin que Orca NO arranco. En una maquina nueva, y en CADA actualizacion
+    // mientras el usuario no vuelva a aprobarlo, esto es lo que hay: nadie corriendo.
+    // Antes se veia igual que un panel sano y contestaba con 45 s de silencio.
+    nombre: 'config-sin-worker', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: Object.assign({}, DATOS, { workerBeat: null, health: null, chats: [] })
+  },
+  {
+    // El worker que latia y dejo de hacerlo. Es otro estado y otra accion: aca no hay
+    // nada que aprobar, hay que reiniciar Orca.
+    nombre: 'config-worker-parado', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: Object.assign({}, DATOS,
+      { workerBeat: { at: new Date(Date.now() - 180000).toISOString() } })
+  },
+  {
+    // El sistema que no puede leer, DICHO. `health` lo lee el panel y no lo escribia
+    // nadie: una maquina sin WhatsApp instalado se veia igual que una sana.
+    nombre: 'config-sin-whatsapp', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: Object.assign({}, DATOS, {
+      readWeb: 'off',
+      // La forma EXACTA que publica checkSystem cuando todo lo que falta es de la via
+      // local: `no-source`, no el nombre del primer chequeo. Con el nombre el aviso se
+      // leia "WhatsApp Desktop instalado", que es una afirmacion, no un problema.
+      health: { ok: false, problem: 'no read source on this system',
+        problemCode: 'no-source',
+        detail: 'whatsapp: missing; database: missing; readable: does not exist',
+        optional: [{ que: 'WhatsApp Web as a second line', code: 'web',
+          como: 'optional — a second line, on top of the desktop app',
+          howCode: 'web-off' }] }
+    })
+  },
+  {
+    // La pestana que aparecio en otro lado. Los dos lugares con nombre y las dos
+    // salidas; el plugin no elige ninguna por su cuenta.
+    nombre: 'config-linea-mudada', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: Object.assign({}, DATOS, {
+      readWeb: 'on',
+      webLines: { at: AHORA_ISO, lines: [
+        Object.assign({}, LINEA_ENLAZADA, { host: 'runtime-A',
+          placement: 'proyecto', project: 'orca-oss', worktreeId: 'wt-otro',
+          homeState: 'mudada',
+          casa: { host: 'runtime-A', donde: 'proyecto', worktreeId: 'wt-9',
+            proyecto: 'alfred-soporte' } })
+      ] }
+    })
+  },
+  {
+    // La linea que se conecto en OTRO Orca. Su perfil de navegador vive alla, asi que
+    // aca no se puede abrir ni escanear nada: solo sacarla.
+    nombre: 'config-linea-otro-host', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: Object.assign({}, DATOS, {
+      readWeb: 'on',
+      webLines: { at: AHORA_ISO, lines: [
+        Object.assign({}, LINEA_ENLAZADA, { host: 'runtime-A', state: 'sin-pestana',
+          pageId: null, placement: null, project: null, worktreeId: null,
+          homeState: 'otro-host',
+          casa: { host: 'runtime-B', donde: 'flotante', worktreeId: null,
+            proyecto: null } })
+      ] }
+    })
   }
 ]
 
@@ -642,7 +703,13 @@ async function main() {
         const pagina = await contexto.newPage()
         const errores = []
         pagina.on('pageerror', (e) => errores.push(String(e)))
-        await pagina.addInitScript(`(${stub.toString()})(${JSON.stringify(panel.datos)}, ` +
+        // El latido se sella AQUI y no en DATOS: una corrida entera dura mas que los
+        // 30 s de vencimiento, y las capturas del final salian con el aviso de "el
+        // plugin no esta corriendo" encima del estado que venian a mostrar.
+        const datos = 'workerBeat' in panel.datos
+          ? panel.datos
+          : Object.assign({}, panel.datos, { workerBeat: { at: new Date().toISOString() } })
+        await pagina.addInitScript(`(${stub.toString()})(${JSON.stringify(datos)}, ` +
           `${JSON.stringify(panel.stub || {})})`)
         await pagina.goto('file://' + join(RAIZ, panel.archivo))
         await pagina.waitForLoadState('load')

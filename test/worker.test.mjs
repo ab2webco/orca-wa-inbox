@@ -972,6 +972,200 @@ console.log(JSON.stringify({ ok: false, error: { code: 'unsupported' } }))
   else process.env.ORCA_CLI_COMMAND = previo
 }
 
+
+// ───────── la casa de una linea: quien la escribe y quien solo la lee ─────────
+// El defecto que motiva esto: reabrir leia el selector GLOBAL del panel ("donde abrir
+// la pestana"), asi que una linea creada en el flotante volvia en un proyecto — y no
+// en cualquiera, en el de actividad mas reciente. Medido contra la CLI de verdad: la
+// pestana de Soporte vive en `...::/Users/fabolivar/Projects/orca-oss` y reabrir la
+// mandaba a `...::/Users/fabolivar/Projects/attia-bots`.
+console.log('\nworker: la casa de una linea')
+{
+  const { destinoDeCasa, dondeVaLaPestana, reabrirPestana } =
+    await import('../web-lines.mjs')
+
+  /** CLI falsa con DOS proyectos y actividad distinta, que es lo que hace visible el
+   *  defecto: el mas reciente no es el de la linea. */
+  function orcaDosProyectos (nombre, { pestanaEn = 'wt-viejo', sinViejo = false } = {}) {
+    const dir = join(RAIZ, nombre)
+    mkdirSync(dir, { recursive: true })
+    const bitacora = join(dir, 'llamadas.txt')
+    const guion = `#!/usr/bin/env node
+const fs = require('fs')
+const a = process.argv.slice(2).filter((x) => x !== '--json')
+fs.appendFileSync(${JSON.stringify(bitacora)}, a.join(' ') + '\\n')
+const ok = (result) => { console.log(JSON.stringify({ ok: true, result, _meta: { runtimeId: 'runtime-A' } })); process.exit(0) }
+const no = (code) => { console.log(JSON.stringify({ ok: false, error: { code } })); process.exit(0) }
+const cmd = a.join(' ')
+const PESTANA = { browserPageId: 'page-1', url: 'https://web.whatsapp.com/',
+  profileId: 'perfil-1', profileLabel: 'Soporte', worktreeId: ${JSON.stringify(pestanaEn)} }
+if (cmd.startsWith('tab list')) return ok({ tabs: [PESTANA] })
+if (cmd.startsWith('worktree list')) {
+  const todos = [{ id: 'wt-nuevo', displayName: 'lo-mas-reciente', lastActivityAt: 99 },
+                 { id: 'wt-viejo', displayName: 'la-casa-de-la-linea', lastActivityAt: 1 }]
+  return ok(${sinViejo} ? todos.filter((w) => w.id !== 'wt-viejo') : todos)
+}
+if (cmd.startsWith('tab create')) return ok({ browserPageId: 'page-2' })
+if (cmd.startsWith('eval')) return ok({ result: '{"linked":true,"lid":"57300"}' })
+no('unsupported')
+`
+    const exe = join(dir, 'orca')
+    writeFileSync(exe, guion, { mode: 0o755 })
+    return { exe, llamadas: () => {
+      try { return readFileSync(bitacora, 'utf8').trim().split('\n') } catch { return [] }
+    } }
+  }
+
+  {
+    const o = orcaDosProyectos('casa-reabrir')
+    const CASA = { host: 'runtime-A', donde: 'proyecto', worktreeId: 'wt-viejo',
+      proyecto: 'la-casa-de-la-linea' }
+
+    // El control: elegir "donde va la PROXIMA" sí cae en el de actividad mas reciente.
+    // Es correcto para una linea nueva y era el defecto para una que ya existia.
+    const proxima = await dondeVaLaPestana(o.exe, null, 'proyecto')
+    ok('elegir destino para una linea NUEVA toma el arbol mas reciente',
+      proxima.ok && proxima.worktreeId === 'wt-nuevo',
+      JSON.stringify(proxima))
+
+    const suyo = await destinoDeCasa(o.exe, CASA)
+    ok('pero resolver la casa de una linea EXISTENTE da SU arbol, no el mas reciente',
+      suyo.ok && suyo.worktreeId === 'wt-viejo', JSON.stringify(suyo))
+
+    const r = await reabrirPestana({ exe: o.exe, profile: 'perfil-1', casa: CASA })
+    ok('y reabrir crea la pestana en el arbol de la linea', r.ok &&
+      o.llamadas().some((l) => l.startsWith('tab create') && l.includes('id:wt-viejo')),
+      JSON.stringify(o.llamadas()))
+    ok('y NO en el de actividad mas reciente',
+      !o.llamadas().some((l) => l.startsWith('tab create') && l.includes('wt-nuevo')),
+      JSON.stringify(o.llamadas()))
+  }
+
+  {
+    // La casa que ya no existe NO cae a otro lado: es un estado con nombre.
+    const o = orcaDosProyectos('casa-ausente', { sinViejo: true })
+    const r = await reabrirPestana({ exe: o.exe, profile: 'perfil-1',
+      casa: { host: 'runtime-A', donde: 'proyecto', worktreeId: 'wt-viejo',
+        proyecto: 'la-casa-de-la-linea' } })
+    ok('una casa que ya no existe se dice, no se reemplaza',
+      !r.ok && r.code === 'casa-ausente', JSON.stringify(r))
+    ok('y no se abrio ninguna pestana en su lugar',
+      !o.llamadas().some((l) => l.startsWith('tab create')),
+      JSON.stringify(o.llamadas()))
+  }
+
+  {
+    // Una linea de OTRO Orca: su perfil de navegador no existe en este. Abrirla aca
+    // escanearia un QR contra una sesion que despues nadie va a poder leer.
+    const o = orcaDosProyectos('casa-otro-host')
+    const r = await destinoDeCasa(o.exe, { host: 'runtime-B', donde: 'flotante' })
+    ok('una casa de otro host se rechaza con su nombre',
+      !r.ok && r.code === 'otro-host', JSON.stringify(r))
+  }
+}
+
+// ───────── la discrepancia es un estado, no una mudanza muda ─────────
+console.log('\nworker: la pestana que aparecio en otro lado')
+{
+  const previoCli = process.env.ORCA_CLI_COMMAND
+  const dir = join(RAIZ, 'casa-mudada')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'orca'), `#!/usr/bin/env node
+const a = process.argv.slice(2).filter((x) => x !== '--json')
+const ok = (result) => { console.log(JSON.stringify({ ok: true, result, _meta: { runtimeId: 'runtime-A' } })); process.exit(0) }
+const cmd = a.join(' ')
+if (cmd.startsWith('tab list')) return ok({ tabs: [{ browserPageId: 'page-1',
+  url: 'https://web.whatsapp.com/', profileId: 'perfil-1', profileLabel: 'Soporte',
+  worktreeId: 'wt-otro' }] })
+if (cmd.startsWith('worktree list')) return ok([
+  { id: 'wt-otro', displayName: 'donde-aparecio', lastActivityAt: 9 },
+  { id: 'wt-casa', displayName: 'su-casa', lastActivityAt: 1 }])
+if (cmd.startsWith('eval')) return ok({ result: '{"linked":true,"lid":"57300"}' })
+ok({})
+`, { mode: 0o755 })
+  writeFileSync(join(dir, 'wa-scope'), `#!/usr/bin/env node
+console.log(JSON.stringify([{ id: 'web:57300', label: 'Soporte', profile: 'perfil-1',
+  kind: 'web', pending: false, enabled: true, authorized_chats: 2,
+  linked_at: '2026-01-01 00:00' }]))
+`, { mode: 0o755 })
+  writeFileSync(join(dir, 'wa-read'), '#!/usr/bin/env node\nconsole.log("[]")\n',
+    { mode: 0o755 })
+  process.env.ORCA_CLI_COMMAND = join(dir, 'orca')
+
+  const CASA = { 'perfil-1': { host: 'runtime-A', donde: 'proyecto',
+    worktreeId: 'wt-casa', proyecto: 'su-casa' } }
+  const orca = hostFalso(dir, { chats: [], webHomes: JSON.parse(JSON.stringify(CASA)) })
+  const apagar = activate(orca)
+  await hasta(() => orca.store.webLines && (orca.store.webLines.lines || []).length, 20000)
+  const fila = (orca.store.webLines.lines || [])[0]
+  ok('la fila dice donde ESTA la pestana', fila && fila.worktreeId === 'wt-otro',
+    JSON.stringify(fila))
+  ok('y que eso no es su casa, con nombre propio', fila && fila.homeState === 'mudada',
+    `homeState = ${fila && fila.homeState}`)
+  ok('y sigue diciendo cual ES su casa', fila && fila.casa &&
+    fila.casa.worktreeId === 'wt-casa', JSON.stringify(fila && fila.casa))
+  // Lo que se perdia: el sondeo pisaba la casa con lo observado, y entonces nunca
+  // podian discrepar — "se movio" dejaba de ser un estado que se pudiera ver.
+  await new Promise((r) => setTimeout(r, 7000))
+  ok('y dos vueltas del sondeo despues la casa SIGUE siendo la anotada',
+    JSON.stringify(orca.store.webHomes) === JSON.stringify(CASA),
+    JSON.stringify(orca.store.webHomes))
+  apagar()
+  if (previoCli === undefined) delete process.env.ORCA_CLI_COMMAND
+  else process.env.ORCA_CLI_COMMAND = previoCli
+}
+
+// ───────── el estado del sistema se PUBLICA, tambien cuando es malo ─────────
+// `wa-read doctor` sale con 1 cuando falta algo requerido — que es justo lo que se le
+// pregunta. Rechazar por el codigo de salida tiraba su respuesta entera, y `health` no
+// lo escribia NADIE: una maquina sin WhatsApp instalado se veia igual que una sana.
+console.log('\nworker: el diagnostico llega al panel')
+{
+  const DOCTOR_MALO = '#!/usr/bin/env node\n' +
+    'console.log(JSON.stringify([' +
+    '{ check: "WhatsApp Desktop installed", ok: false, detalle: "missing",' +
+    ' requerido: true, code: "whatsapp" },' +
+    '{ check: "audio transcription", ok: false, detalle: "no engine",' +
+    ' requerido: false, code: "transcribe", detailCode: "transcribe-no-engine" }' +
+    ']))\nprocess.exit(1)\n'
+  const dir = herramientas('doctor-malo', '#!/bin/sh\necho \'[]\'\n')
+  writeFileSync(join(dir, 'wa-read'), DOCTOR_MALO, { mode: 0o755 })
+  const orca = hostFalso(dir, { chats: [] })
+  const apagar = activate(orca)
+  await hasta(() => orca.store.health, 20000)
+  const h = orca.store.health
+  ok('un doctor que sale con 1 igual publica su diagnostico', !!h, JSON.stringify(h))
+  ok('y dice que este sistema NO puede leer', h && h.ok === false, JSON.stringify(h))
+  ok('con el codigo del chequeo que falta, para que el panel lo traduzca',
+    h && h.problemCode === 'whatsapp', `problemCode = ${h && h.problemCode}`)
+  ok('y no confunde "falta WhatsApp" con "las herramientas no contestaron"',
+    h && h.problemCode !== 'sin-herramientas', JSON.stringify(h))
+  ok('y lo opcional viaja aparte, sin avisar', h && Array.isArray(h.optional) &&
+    h.optional.length === 1 && h.optional[0].code === 'transcribe',
+    JSON.stringify(h && h.optional))
+  apagar()
+}
+
+// ───────── el latido: "no contesto" y "no esta" son dos cosas ─────────
+console.log('\nworker: el latido')
+{
+  const orca = hostFalso(herramientas('latido', '#!/bin/sh\necho \'[]\'\n'), { chats: [] })
+  ok('antes de activar no hay latido', orca.store.workerBeat === undefined,
+    JSON.stringify(orca.store.workerBeat))
+  const apagar = activate(orca)
+  await hasta(() => orca.store.workerBeat, 10000)
+  ok('activar deja latido en el acto', !!(orca.store.workerBeat || {}).at,
+    JSON.stringify(orca.store.workerBeat))
+  // Lo que importa: late aunque TODO lo demas falle. Este host no tiene herramientas
+  // que corran, y aun asi el panel tiene que poder distinguirlo de un plugin ausente.
+  const primero = orca.store.workerBeat.at
+  await new Promise((r) => setTimeout(r, 6000))
+  ok('y sigue latiendo con las herramientas rotas',
+    orca.store.workerBeat.at !== primero,
+    `${primero} -> ${orca.store.workerBeat.at}`)
+  apagar()
+}
+
 // ───────── el arnes no se siembra desde dentro de la valla ─────────
 // El worker corre con `--permission` y sin ningun permiso de escritura: ahi dentro
 // `existsSync` no devuelve false, LANZA, y el motivo que quedaba escrito era falso
