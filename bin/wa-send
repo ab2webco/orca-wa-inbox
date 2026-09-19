@@ -8,8 +8,16 @@
 By default it does NOT send: it leaves the chat open with the text written so that you
 review it and press Enter yourself. --send is an explicit opt-in.
 
-It drives the app's real UI through accessibility (orca computer). It uses no
-unofficial libraries and links no new device to the account.
+On macOS and Windows it drives the app's real UI through accessibility (orca
+computer). It uses no unofficial libraries and links no new device to the account.
+
+On Linux there is no WhatsApp Desktop to drive, so it writes through WhatsAppGo's
+CLI — the same protocol client the local read source reads from, so no extra device
+slot is spent. One thing does NOT carry over: a protocol client has no draft.
+Without --send nothing is written anywhere and the run fails with
+`send-draft-unsupported`, because the alternative would be turning a text meant for
+review into a message that already reached someone. A chat in `borrador` mode
+cannot be honoured on Linux; move it to `observar` or review and resend yourself.
 
 It writes on the LOCAL line only — the one the desktop app is signed in with. A
 conversation registered against a WhatsApp Web line fails up front with
@@ -35,6 +43,8 @@ URL_WAIT = 8.0      # cuanto esperar a que el esquema whatsapp:// aterrice
 WA_READ = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wa-read")
 # El esquema solo direcciona telefonos, asi que el local part tiene que ser eso y nada mas.
 PHONE = re.compile(r"^\d{7,15}$")
+# Un JID de WhatsApp escrito tal cual. Los cuatro dominios que este plugin ve.
+JID = re.compile(r"^[\w.\-]+@(s\.whatsapp\.net|g\.us|lid|newsletter)$")
 
 
 def signature():
@@ -52,6 +62,15 @@ def signature():
 # El texto se puede reescribir; el codigo no, o el panel se desincroniza en silencio.
 SIN_ORCA = "send-no-orca"
 LINEA_WEB = "send-web-line"
+# Linux no tiene app de escritorio que conducir, asi que escribe por el cliente de
+# protocolo. Son motivos aparte y no un `send-no-orca` reciclado porque la accion del
+# usuario es otra: aca no falta Orca ni AT-SPI, falta el cliente o falta el `--send`.
+SIN_CLIENTE = "send-no-client"
+BORRADOR_IMPOSIBLE = "send-draft-unsupported"
+# `whatsappctl` es el CLI de WhatsAppGo. Quien empaqueta puede fijar otro binario.
+CLIENTE_CMD = os.environ.get("WHATSAPPGO_CTL", "").strip() or "whatsappctl"
+CLIENTE_APP = "WhatsAppGo"
+CLIENTE_TIMEOUT = 60
 
 
 def orca_cli():
@@ -418,6 +437,73 @@ def open_chat(target, phone=None, modo="auto"):
     return tree, cur, via
 
 
+def cliente_cli():
+    """El binario de WhatsAppGo, o None. Igual que `orca_cli()`, resuelto una vez."""
+    return shutil.which(CLIENTE_CMD) or (CLIENTE_CMD if os.path.isabs(CLIENTE_CMD)
+                                         and os.access(CLIENTE_CMD, os.X_OK) else None)
+
+
+def enviar_por_cliente(a):
+    """Escribir en Linux, donde no hay ventana de WhatsApp Desktop que conducir.
+
+    La via de macOS es accesibilidad sobre la app: se escribe el texto en el campo y se
+    deja SIN mandar para que la persona revise y le de Enter. Aca no hay campo — un
+    cliente de protocolo no tiene borrador, mandar es mandar.
+
+    Por eso el borrador FALLA en vez de degradar a envio. Degradarlo seria convertir en
+    silencio un texto escrito para que alguien lo revisara en un mensaje que ya le llego
+    a otra persona, y eso no se puede deshacer. El unico camino que escribe es `--send`,
+    que es el que el modo `responder` del registro ya pide explicitamente.
+    """
+    if not a.send:
+        sys.exit(
+            f"wa-send: {BORRADOR_IMPOSIBLE}\n"
+            f"on {platform.system()} there is no WhatsApp Desktop window to leave the "
+            f"text in: {CLIENTE_APP} is a protocol client and it only sends. A draft "
+            "here would have to be sent to exist, which is the opposite of a draft, so "
+            "nothing was written and nothing went out.\n"
+            "Repeat with --send if the message is meant to go out. If this came from a "
+            "chat in `borrador` mode, that mode cannot be honoured on this system: "
+            "either review the text yourself and resend with --send, or move the chat "
+            "to `observar` so the agent stops drafting replies it cannot leave "
+            "anywhere.")
+
+    ctl = cliente_cli()
+    if not ctl:
+        sys.exit(f"wa-send: {SIN_CLIENTE}\nthere is no {CLIENTE_APP} CLI "
+                 f"({CLIENTE_CMD}) in PATH, so there is nothing to write with on "
+                 f"{platform.system()}. Install {CLIENTE_APP} "
+                 "(https://github.com/shukiv/whatsappgo) and link the line, or set "
+                 "WHATSAPPGO_CTL to its path.")
+
+    # El JID y no el nombre: `--to` con un nombre no direcciona nada, y mandarle el
+    # nombre al cliente seria dejar que ADIVINE a quien le escribe.
+    #
+    # Un JID escrito tal cual se respeta sin consultar nada. Es mas exacto que cualquier
+    # busqueda por nombre —direcciona a uno y solo uno— y es lo que el error de mas
+    # abajo ofrece como salida cuando el nombre queda ambiguo.
+    jid = a.chat if JID.match(a.chat) else chat_jid(a.chat)
+    if not jid:
+        sys.exit(f"wa-send: {a.chat!r} did not resolve to a single chat, so nothing was "
+                 "sent. Register it with `wa-scope set`, or pass the JID.")
+
+    p = subprocess.run([ctl, "send", "--to", jid, a.text],
+                       capture_output=True, text=True, timeout=CLIENTE_TIMEOUT)
+    salida = (p.stdout or "").strip()
+    if p.returncode != 0:
+        sys.exit(f"wa-send: {CLIENTE_APP} did not send it: "
+                 f"{(p.stderr or salida).strip()[:300]}")
+    # El cliente contesta JSON y un `error` con codigo 0 ya paso una vez en otras CLIs:
+    # revisarlo cuesta nada y la alternativa es cantar un envio que no ocurrio.
+    try:
+        d = json.loads(salida) if salida else {}
+    except json.JSONDecodeError:
+        d = {}
+    if isinstance(d, dict) and d.get("error"):
+        sys.exit(f"wa-send: {CLIENTE_APP} did not send it: {d['error']}")
+    print(f"SENT to {a.chat!r} ({jid}) via {CLIENTE_APP}: {a.text}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -454,11 +540,24 @@ def main():
 
     # La via se decide ANTES de tocar la app: un pedido imposible —--open url contra un
     # grupo— tiene que fallar sin haber abierto ni movido nada en WhatsApp.
+    #
+    # Va antes de la rama de Linux a proposito: un pedido imposible tiene que fallar
+    # POR IMPOSIBLE en las tres plataformas. Taparlo con el motivo de la via de Linux
+    # le contestaria "aca no hay borradores" a quien pidio algo que no existe en
+    # ninguna parte, y lo mandaria a arreglar lo que no estaba roto.
     phone = phone_of(chat_jid(a.chat)) if a.via in ("auto", "url") else None
     if a.via == "url" and not phone:
         sys.exit(f"--open url does not work for {a.chat!r}: the whatsapp:// scheme only "
                  f"addresses phone numbers, and this did not resolve to a direct chat. "
                  f"Use --open ui (or auto).")
+
+    # En Linux no hay app de escritorio: se escribe por el cliente de protocolo. Va
+    # DESPUES de la firma y del porton de cuenta —las dos reglas valen igual por
+    # cualquier via— y despues de validar `--open`, por lo de arriba. macOS y Windows
+    # siguen por el camino de siempre, intacto.
+    if platform.system() == "Linux":
+        enviar_por_cliente(a)
+        return
 
     tree, cur, via = open_chat(a.chat, phone, a.via)
 
