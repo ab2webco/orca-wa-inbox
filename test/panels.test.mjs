@@ -62,17 +62,22 @@ async function montar (archivo, storage = {}, idioma = null, gancho = null) {
     // solo se probaria el camino feliz, que es el que nunca se rompio. Lo que devuelve
     // es el SOBRE entero, que es donde el host dice que no: `{ ok: false }`.
     const forzado = gancho ? gancho(d, storage) : undefined
-    if (forzado !== undefined) {
+    if (forzado !== undefined && !forzado.__demora) {
       window.postMessage({ type: 'orca-panel-action-result', requestId: d.requestId,
         ...forzado }, '*')
       return
     }
+    // El valor se toma AHORA, como hace el host: lee el archivo al recibir el mensaje.
+    // Lo que el gancho puede alargar es cuanto tarda en llegar la respuesta, y en ese
+    // hueco es donde vive la carrera — el sondeo pinta con lo que leyo antes.
     if (d.action === 'storage.get') value = { value: storage[d.params.key] }
     else if (d.action === 'storage.set') { storage[d.params.key] = d.params.value; value = { ok: true } }
     else if (d.action === 'notifications.show') value = { delivered: true }
     else if (d.action === 'workspace.readContext') value = null
-    window.postMessage({ type: 'orca-panel-action-result', requestId: d.requestId,
-      ok: true, value }, '*')
+    const entregar = () => window.postMessage(
+      { type: 'orca-panel-action-result', requestId: d.requestId, ok: true, value }, '*')
+    if (forzado && forzado.__demora) setTimeout(entregar, forzado.__demora)
+    else entregar()
   })
 
   await new Promise((r) => setTimeout(r, 60))
@@ -1620,6 +1625,117 @@ console.log('\nconfig.html — conectar una linea que falla conserva lo tipeado'
   ok('y el motivo del fallo se dice traducido',
     /pestana ya no existe/.test(doc.getElementById('lines-error').textContent),
     doc.getElementById('lines-error').textContent)
+}
+
+// ───────── el sondeo contra lo que el usuario acaba de hacer ─────────
+// Lo reportado: "al guardar, algunos select cambian de valor y vuelve".
+//
+// El sondeo LEE y PINTA en dos momentos distintos: sus 18 lecturas se contestan con lo
+// que hay, y recien pinta cuando llega la ultima — `chats` son 52 KB en el Mac del
+// dueno y siempre llega ultima. Un guardado que aterriza en ese hueco queda pisado por
+// el valor de ANTES. La guardia que habia —"no pintes el control que tiene el foco"—
+// no cubre nada: Chromium enfoca el boton al hacer clic, asi que el select ya lo perdio.
+console.log('\nconfig.html: el sondeo no pisa lo que el usuario acaba de hacer')
+{
+  let demora = 0
+  const storage = { readLocal: 'on', readWeb: 'off', readWebText: 'off' }
+  const { window, doc } = await montar('config.html', storage, 'es-419', (d) =>
+    (demora && d.action === 'storage.get' && d.params.key === 'chats'
+      ? { __demora: demora } : undefined))
+
+  demora = 400
+  window.dispatchEvent(new window.Event('focus'))   // el sondeo pide sus 18 claves
+  await espera()                                     // ya salieron, con readWeb = off
+  doc.getElementById('read-web').value = 'on'
+  doc.getElementById('read-web').dispatchEvent(new window.Event('change'))
+  demora = 0
+  doc.getElementById('save-source').focus()          // lo que hace el clic en Chromium
+  doc.getElementById('save-source').click()
+  await new Promise((r) => setTimeout(r, 700))       // aterriza la pintura del sondeo
+  ok('un sondeo que leyo antes del guardado no repinta el valor viejo encima',
+    storage.readWeb === 'on' && doc.getElementById('read-web').value === 'on',
+    `guardado = ${storage.readWeb}, select = ${doc.getElementById('read-web').value}`)
+}
+
+{
+  // Y la otra mitad: el repintado que llega ANTES del clic. Ahi no hay guardado que
+  // proteger todavia, y el boton termina mandando el valor que el usuario ya no ve.
+  const storage = { readLocal: 'on', readWeb: 'off', readWebText: 'off' }
+  const { window, doc } = await montar('config.html', storage, 'es-419')
+  doc.getElementById('read-web').value = 'on'
+  doc.getElementById('read-web').dispatchEvent(new window.Event('change'))
+  doc.getElementById('read-web').blur()              // mira otra cosa antes de guardar
+  window.dispatchEvent(new window.Event('focus'))
+  await espera(); await espera()
+  ok('un select cambiado y sin guardar no lo repinta el sondeo',
+    doc.getElementById('read-web').value === 'on',
+    doc.getElementById('read-web').value)
+  doc.getElementById('save-source').click()
+  await espera(); await espera()
+  ok('y la accion manda el valor que el usuario eligio, no el que habia guardado',
+    storage.readWeb === 'on', String(storage.readWeb))
+}
+
+// ───────── desvincular no hereda el veredicto del clic anterior ─────────
+// Lo reportado: "cuando trate de borrar la anterior dijo que no podia, le doy de nuevo
+// y la borra". Medido en su Mac: 1,49 s entre el pedido y su veredicto. En ese hueco el
+// sondeo de 2 s tomaba CUALQUIER `webStatus` y lo pintaba como respuesta a este clic —
+// y el que habia era el de "Ver la pestana" sobre una linea flotante, que siempre falla.
+console.log('\nconfig.html: el veredicto que se muestra es el del clic que se hizo')
+{
+  const AHORA = new Date().toISOString()
+  // Con la linea a medias el sondeo de 2 s ya esta latiendo antes del clic: es la
+  // situacion en la que el veredicto ajeno alcanzaba a pintarse.
+  const LINEA = { id: 'web:57300', label: 'Soporte', profile: 'p1', pending: true,
+    linkedAt: null, authorizedChats: 0, pageId: 'pg1',
+    state: 'esperando', placement: 'flotante', project: null }
+  let pedidoUnlink = null
+  const storage = {
+    webLines: { at: AHORA, lines: [LINEA] },
+    webStatus: { at: AHORA, requestAt: '2026-01-01T00:00:00.000Z', action: 'show',
+      ok: false, code: 'flotante-sin-via', detail: '', placement: 'flotante' }
+  }
+  const { doc } = await montar('config.html', storage, 'es-419', (d, store) => {
+    if (d.action === 'storage.set' && d.params.key === 'webRequest' &&
+        d.params.value && d.params.value.action === 'unlink') {
+      pedidoUnlink = d.params.value
+      // 3 s: el worker recoge el pedido en su vuelta de 3 s y recien despues trabaja.
+      // Medido en el Mac del dueno, entre clic y veredicto propio pasaron 1,49 s con
+      // el pedido escrito justo antes de una vuelta; el tope de recogida es 3 s mas.
+      setTimeout(() => {
+        store.webLines = { at: new Date().toISOString(), lines: [], motivo: 'unlink' }
+        store.webStatus = { at: new Date().toISOString(), requestAt: d.params.value.at,
+          action: 'unlink', ok: true }
+      }, 3000)
+    }
+    return undefined
+  })
+  await espera()
+  doc.querySelector('[data-lrm]').click()
+  await espera()
+  const aviso0 = doc.getElementById('lines-error')
+  ok('antes del clic el panel muestra el veredicto del clic anterior, que es de el',
+    !aviso0.hidden && /No pude abrir la pestana/.test(aviso0.textContent),
+    aviso0.textContent)
+  doc.querySelector('[data-lyes]').click()
+  await espera()
+  ok('y al apretar desvincular ese aviso se baja en el acto',
+    aviso0.hidden || !aviso0.textContent.trim(), aviso0.textContent)
+  // 2,2 s: una vuelta entera del sondeo de 2 s con el veredicto propio todavia sin
+  // llegar. Menos que eso y la prueba pasa sin haber dejado latir al sondeo, que es
+  // justo lo que hay que comprobar.
+  await new Promise((r) => setTimeout(r, 2200))
+  const aviso = doc.getElementById('lines-error')
+  ok('mientras el desvincular corre no se muestra el veredicto del clic anterior',
+    aviso.hidden || !aviso.textContent.trim(), aviso.textContent)
+  ok('y el pedido lleva la fila TAL CUAL la vio el usuario',
+    !!pedidoUnlink && pedidoUnlink.desde === AHORA &&
+    pedidoUnlink.visto && pedidoUnlink.visto.state === 'esperando' &&
+    pedidoUnlink.visto.pageId === 'pg1', JSON.stringify(pedidoUnlink))
+  await new Promise((r) => setTimeout(r, 3000))
+  ok('y con SU veredicto la linea ya no esta y no quedo ningun aviso de fallo',
+    !doc.querySelector('[data-lrm]') && (aviso.hidden || !aviso.textContent.trim()),
+    `${aviso.textContent} | filas = ${doc.querySelectorAll('[data-lrm]').length}`)
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

@@ -718,6 +718,12 @@
           lineStagedIn: 'La pestana esta en el proyecto "{p}". No pude traerte hasta ahi: ' +
             'entra a ese proyecto en la barra lateral y vas a verla.',
           lineFailed: 'No pude conectar la linea.',
+          unlinkFailed: 'No pude desvincular la linea.',
+          showFailed: 'No pude abrir la pestana.',
+          actionFailed: 'No pude hacer eso.',
+          lineRemoved: 'Linea desvinculada',
+          errDesactualizado: 'Esa linea cambio de estado mientras la mirabas, asi que ' +
+            'no toque nada. Mira como quedo arriba y volve a intentar.',
           lineKept: 'El nombre quedo puesto: corregi lo de arriba y volve a intentar.',
           lineNoAnswer: 'El plugin no contesto. Fijate si Orca sigue abierto y volve a ' +
             'intentar; el nombre quedo puesto.',
@@ -1004,6 +1010,12 @@
           lineStagedIn: 'The tab is in project "{p}". I could not take you there: open ' +
             'that project in the sidebar and you will see it.',
           lineFailed: 'I could not connect the line.',
+          unlinkFailed: 'I could not unlink the line.',
+          showFailed: 'I could not open the tab.',
+          actionFailed: 'I could not do that.',
+          lineRemoved: 'Line unlinked',
+          errDesactualizado: 'That line changed state while you were looking at it, so ' +
+            'nothing was touched. Check how it stands above and try again.',
           lineKept: 'The name is still there: fix what is above and try again.',
           lineNoAnswer: 'The plugin did not answer. Check that Orca is still open and ' +
             'try again; the name is still there.',
@@ -1265,6 +1277,12 @@
         lineStagedIn: 'A aba esta no projeto "{p}". Nao consegui levar voce ate la: entre ' +
           'nesse projeto na barra lateral e vai ve-la.',
         lineFailed: 'Nao consegui conectar a linha.',
+        unlinkFailed: 'Nao consegui desvincular a linha.',
+        showFailed: 'Nao consegui abrir a aba.',
+        actionFailed: 'Nao consegui fazer isso.',
+        lineRemoved: 'Linha desvinculada',
+        errDesactualizado: 'Essa linha mudou de estado enquanto voce olhava, entao nada ' +
+          'foi tocado. Veja como ficou acima e tente de novo.',
         lineKept: 'O nome continua ai: corrija o que esta acima e tente de novo.',
         lineNoAnswer: 'O plugin nao respondeu. Veja se o Orca continua aberto e tente ' +
           'de novo; o nome continua ai.',
@@ -1515,6 +1533,7 @@
         el('save-agent').hidden = true
         el('cancel-agent').hidden = true
         agentDirty = false
+        delete sucios.agent
       }
       function showAgentEditing() {
         el('agent').disabled = false
@@ -1531,18 +1550,20 @@
       el('save-agent').addEventListener('click', function (event) {
         var name = el('agent').value.trim()
         if (!name) { said('said-agent', t('needName'), true); return }
-        busy(event.currentTarget, write('agentName', name).then(function (r) {
-          if (!r.ok) { said('said-agent', 'error', true); return }
-          showAgentSaved(name)
-          said('said-agent', '✓ ' + t('named') + ' ' + name)
+        // agentDirty se apaga antes de escribir: `guardar` relee y repinta, y con la
+        // bandera puesta pintarClave se saltearia su propio repintado.
+        agentDirty = false
+        busy(event.currentTarget, guardar([['agentName', name]]).then(function (mal) {
+          if (mal.length) { agentDirty = true; said('said-agent', 'error', true); return }
+          said('said-agent', '✓ ' + t('named') + ' ' + savedAgent)
         }))
       })
 
       // ---------- tono ----------
       el('save-tone').addEventListener('click', function (event) {
         var tone = el('tone').value.trim()
-        busy(event.currentTarget, write('tone', tone).then(function (r) {
-          said('said-tone', r.ok ? '\u2713 ' + t('toneSaved') : 'error', !r.ok)
+        busy(event.currentTarget, guardar([['tone', tone]]).then(function (mal) {
+          said('said-tone', mal.length ? 'error' : '\u2713 ' + t('toneSaved'), !!mal.length)
         }))
       })
 
@@ -1550,31 +1571,32 @@
       // No es el nombre del agente: es el del dueno. El prompt lo lee para saber a
       // quien le reporta, y sin el se dirige al cliente como si trabajara solo.
       el('save-owner').addEventListener('click', function (event) {
-        busy(event.currentTarget, write('ownerName', el('owner').value.trim())
-          .then(function (r) {
-            said('said-owner', r.ok ? '\u2713 ' + t('ownerSaved') : 'error', !r.ok)
+        busy(event.currentTarget, guardar([['ownerName', el('owner').value.trim()]])
+          .then(function (mal) {
+            said('said-owner', mal.length ? 'error' : '\u2713 ' + t('ownerSaved'), !!mal.length)
           }))
       })
 
       // ---------- transcripcion: modo, idioma y calidad ----------
       el('save-transcribe').addEventListener('click', function (event) {
-        busy(event.currentTarget, write('transcribe', el('transcribe').value)
-          .then(function (r) {
-            said('said-transcribe', r.ok ? '\u2713 ' + t('transcribeSaved') : 'error', !r.ok)
+        busy(event.currentTarget, guardar([['transcribe', el('transcribe').value]])
+          .then(function (mal) {
+            said('said-transcribe',
+              mal.length ? 'error' : '\u2713 ' + t('transcribeSaved'), !!mal.length)
           }))
       })
 
       el('save-lang').addEventListener('click', function (event) {
-        busy(event.currentTarget, write('transcribeLang', el('lang').value)
-          .then(function (r) {
-            said('said-lang', r.ok ? '\u2713 ' + t('langSaved') : 'error', !r.ok)
+        busy(event.currentTarget, guardar([['transcribeLang', el('lang').value]])
+          .then(function (mal) {
+            said('said-lang', mal.length ? 'error' : '\u2713 ' + t('langSaved'), !!mal.length)
           }))
       })
 
       el('save-quality').addEventListener('click', function (event) {
-        busy(event.currentTarget, write('transcribeQuality', el('quality').value)
-          .then(function (r) {
-            said('said-quality', r.ok ? '\u2713 ' + t('qualitySaved') : 'error', !r.ok)
+        busy(event.currentTarget, guardar([['transcribeQuality', el('quality').value]])
+          .then(function (mal) {
+            said('said-quality', mal.length ? 'error' : '\u2713 ' + t('qualitySaved'), !!mal.length)
           }))
       })
 
@@ -1593,17 +1615,12 @@
         var claves = [['readLocal', el('read-local').value],
                       ['readWeb', el('read-web').value],
                       ['readWebText', el('read-web-text').value]]
-        busy(event.currentTarget, Promise.all(claves.map(function (par) {
-          return write(par[0], par[1]).then(function (r) {
-            return { key: par[0], ok: !!(r && r.ok) }
-          })
-        })).then(function (rs) {
-          var mal = rs.filter(function (r) { return !r.ok })
+        busy(event.currentTarget, guardar(claves).then(function (mal) {
           if (mal.length) {
             // Se nombra el control como lo ve el usuario. `readWeb` es la clave del
             // storage: quien lee el panel no la vio nunca.
             said('said-source', fmt('srcPartial', {
-              k: mal.map(function (r) { return t(SRC_LABEL[r.key]) }).join(', ')
+              k: mal.map(function (key) { return t(SRC_LABEL[key]) }).join(', ')
             }), true)
             return
           }
@@ -1617,26 +1634,109 @@
 
       // ---------- ventana de lectura ----------
       el('save-days').addEventListener('click', function (event) {
-        busy(event.currentTarget, write('inboxDays', el('inbox-days').value)
-          .then(function (r) {
-            said('said-days', r.ok ? '\u2713 ' + t('daysSaved') : 'error', !r.ok)
+        busy(event.currentTarget, guardar([['inboxDays', el('inbox-days').value]])
+          .then(function (mal) {
+            said('said-days', mal.length ? 'error' : '\u2713 ' + t('daysSaved'), !!mal.length)
           }))
       })
 
       // ---------- frecuencia del sync ----------
       el('save-sync').addEventListener('click', function (event) {
-        busy(event.currentTarget, write('syncMinutes', el('sync-minutes').value)
-          .then(function (r) {
-            said('said-sync', r.ok ? '\u2713 ' + t('syncSaved') : 'error', !r.ok)
+        busy(event.currentTarget, guardar([['syncMinutes', el('sync-minutes').value]])
+          .then(function (mal) {
+            said('said-sync', mal.length ? 'error' : '\u2713 ' + t('syncSaved'), !!mal.length)
           }))
       })
+
+      // ---------- que puede pisar el sondeo, y que no ----------
+      // El sondeo LEE y PINTA en dos momentos distintos: sus 18 lecturas se contestan
+      // con lo que hay, y recien pinta cuando llega la ultima — `chats` son 52 KB y es
+      // siempre la ultima. Un guardado que aterriza en ese hueco queda pisado por el
+      // valor de ANTES, y el usuario ve su eleccion deshacerse sola. Medido: guardado
+      // readWeb=on, select en off 700 ms despues.
+      //
+      // Dos guardias, porque son dos carreras distintas:
+      //  - `sucios`: lo que el usuario cambio y todavia no guardo. Sin esto el repintado
+      //    le deshace la eleccion ANTES del clic, y el boton manda el valor viejo: una
+      //    accion con un valor que el usuario no vio.
+      //  - `guardadoSeq`: el sello de la lectura. Una pintura cuyo sello quedo atras
+      //    nacio de una lectura anterior al guardado y no puede pisarlo.
+      var sucios = {}
+      var guardadoSeq = 0
+      function vigente (s) { return s === undefined || s === guardadoSeq }
+      function ensuciar (id) {
+        var marcar = function () { sucios[id] = true }
+        el(id).addEventListener('input', marcar)
+        el(id).addEventListener('change', marcar)
+      }
+
+      // Que control pinta cada clave y con que valor cuando no hay nada guardado. Una
+      // sola tabla para el sondeo y para la relectura del guardado: dos listas se
+      // desincronizan y una de las dos termina pintando otra cosa.
+      var CONTROLES = {
+        agentName: ['agent', ''],
+        tone: ['tone', ''],
+        ownerName: ['owner', ''],
+        transcribe: ['transcribe', 'local'],
+        transcribeLang: ['lang', 'auto'],
+        transcribeQuality: ['quality', 'optima'],
+        readLocal: ['read-local', 'on'],
+        readWeb: ['read-web', 'off'],
+        readWebText: ['read-web-text', 'off'],
+        // 7 dias y no 1: una mencion del viernes tiene que seguir a la vista el lunes.
+        inboxDays: ['inbox-days', '7'],
+        syncMinutes: ['sync-minutes', '5']
+      }
+      Object.keys(CONTROLES).forEach(function (k) { ensuciar(CONTROLES[k][0]) })
+
+      function pintarClave (key, valor, s) {
+        var c = CONTROLES[key]
+        if (!c || !vigente(s) || sucios[c[0]]) return
+        var n = el(c[0])
+        if (document.activeElement === n) return
+        if (key === 'agentName') {
+          if (typeof valor === 'string' && valor && !agentDirty) showAgentSaved(valor)
+          return
+        }
+        if (n.tagName === 'SELECT') ponerEnSelect(c[0], valor, c[1])
+        else n.value = typeof valor === 'string' ? valor : c[1]
+      }
+
+      /** Guarda y deja el control mostrando lo que quedo GUARDADO.
+       *
+       *  `pares` es [[clave, valor]]. Devuelve las claves que el host rechazo.
+       *
+       *  Se RELEE en vez de dar por bueno lo que se mando: afirmar el valor optimista
+       *  hace que un host que guarde otra cosa no se note nunca. Y el sello se toma
+       *  antes de escribir, asi que el sondeo que ya estaba en vuelo no puede pintar
+       *  encima el valor de antes. */
+      function guardar (pares) {
+        var s = ++guardadoSeq
+        return Promise.all(pares.map(function (p) {
+          return write(p[0], p[1]).then(function (r) {
+            var bien = !!(r && r.ok)
+            var c = CONTROLES[p[0]]
+            if (bien && c) delete sucios[c[0]]
+            return { key: p[0], ok: bien }
+          })
+        })).then(function (rs) {
+          var buenas = rs.filter(function (r) { return r.ok })
+          return Promise.all(buenas.map(function (r) {
+            return read(r.key).then(function (v) { return [r.key, v] })
+          })).then(function (leidos) {
+            if (s === guardadoSeq) {
+              leidos.forEach(function (x) { pintarClave(x[0], x[1]) })
+            }
+            return rs.filter(function (r) { return !r.ok }).map(function (r) { return r.key })
+          })
+        })
+      }
 
       // Deja el select mostrando lo que rige de verdad. La terminal puede fijar un valor
       // que el select no ofrece (`wa-scope config inbox_days 45`): sin agregarlo, .value
       // no engancha, el control queda en blanco y el panel miente sobre lo que rige.
       function ponerEnSelect (id, valor, porDefecto) {
         var sel = el(id)
-        if (document.activeElement === sel) return
         var v = valor === null || valor === undefined || valor === '' ? porDefecto : String(valor)
         var hay = Array.prototype.some.call(sel.options, function (o) { return o.value === v })
         if (!hay) {
@@ -1964,12 +2064,42 @@
 
       // Devuelve el `at` del pedido: sin el, el panel no puede distinguir el veredicto
       // de SU clic del que quedo del clic anterior.
-      function pedirWeb (action, extra) {
+      //
+      // `enVuelo` es el `at` del pedido que se esta esperando. Sin el, el sondeo de 2 s
+      // tomaba CUALQUIER `webStatus` y lo pintaba como respuesta al clic actual: medido
+      // en su Mac, 1,49 s entre el clic y el veredicto propio, y en ese hueco el panel
+      // mostro el "no se pudo" del clic ANTERIOR sobre un desvincular que salio bien.
+      var enVuelo = null
+      function pedirWeb (action, extra, silencioso) {
         var pedido = { at: new Date().toISOString(), action: action }
         for (var k in (extra || {})) pedido[k] = extra[k]
+        // `silencioso` es el pedido que no nace de un clic — el de abrir el panel. No
+        // pone nada en vuelo: nadie lo espera, y si el worker no contesta dejaria al
+        // panel descartando para siempre cualquier veredicto posterior.
+        if (!silencioso) {
+          enVuelo = pedido.at
+          webStatusUlt = null
+          // El aviso de la seccion es la respuesta al clic ANTERIOR. Se baja al arrancar
+          // uno nuevo: dejarlo puesto es lo que se leia como "no pude desvincular".
+          el('lines-error').textContent = ''
+          el('lines-error').hidden = true
+        }
         return write('webRequest', pedido).then(function (r) {
+          // El pedido que ni siquiera se pudo dejar no espera veredicto de nadie.
+          if (!(r && r.ok) && enVuelo === pedido.at) enVuelo = null
           return { ok: !!(r && r.ok), at: pedido.at }
         })
+      }
+
+      /** El veredicto de ESTE pedido, o null. Con uno en vuelo, cualquier otro es del
+       *  clic anterior y mostrarlo es decirle al usuario que fallo lo que esta saliendo
+       *  bien. Sin nada en vuelo vale el ultimo que haya. */
+      function veredictoPropio (st) {
+        if (!st || typeof st !== 'object') return null
+        if (!enVuelo) return st
+        if (st.requestAt !== enVuelo) return null
+        enVuelo = null
+        return st
       }
 
       // El worker escribe el veredicto en `webStatus`, que el sondeo no toca. Antes el
@@ -1979,6 +2109,7 @@
         'sin-orca': 'stNoOrcaHow', 'sin-proyecto': 'lineNoPlace',
         'sin-herramientas': 'errSinHerramientas', 'sin-permiso': 'errSinPermiso',
         demoro: 'errDemoro', vencido: 'errVencido', 'a-medias': 'errAMedias',
+        desactualizado: 'errDesactualizado',
         'sin-identidad': 'errSinIdentidad', 'sin-respuesta': 'lineNoAnswer',
         'sin-pestana': 'errSinPestana', 'sin-flotante': 'errSinFlotante',
         'flotante-sin-via': 'errFlotanteSinVia'
@@ -1987,15 +2118,24 @@
         return WEB_ERR_KEY[code] ? t(WEB_ERR_KEY[code]) : (detail || code || '')
       }
 
+      // El encabezado sale de la accion que fallo. Era fijo en "No pude conectar la
+      // linea" y se pintaba igual sobre un desvincular y sobre un "Ver la pestana":
+      // el usuario leia que fallo algo que ni siquiera habia pedido.
+      var FAIL_KEY = { link: 'lineFailed', unlink: 'unlinkFailed', show: 'showFailed',
+                       reopen: 'showFailed' }
+
       /** Espera el veredicto de ESE pedido. Enlazar una linea son dos llamadas a la CLI
        *  de Orca con 30 s de tope cada una, asi que la espera tiene que darles lugar. */
       function esperarWeb (requestAt, limiteMs) {
         var fin = Date.now() + (limiteMs || 90000)
+        // Quien espera aca es el dueno del pedido: al terminar lo saca de vuelo, o el
+        // sondeo se quedaria descartando todo veredicto posterior por no ser este.
+        var soltar = function () { if (enVuelo === requestAt) enVuelo = null }
         return new Promise(function (resolve) {
           ;(function vuelta () {
             read('webStatus').then(function (st) {
-              if (st && st.requestAt === requestAt) { resolve(st); return }
-              if (Date.now() > fin) { resolve(null); return }
+              if (st && st.requestAt === requestAt) { soltar(); resolve(st); return }
+              if (Date.now() > fin) { soltar(); resolve(null); return }
               setTimeout(vuelta, 1000)
             })
           })()
@@ -2101,8 +2241,10 @@
           err = lineasUlt.error
           detalle = lineasUlt.detail || ''
         }
+        var accionMala = webStatusUlt && webStatusUlt.ok === false
+          ? webStatusUlt.action : null
         el('lines-error').textContent = err
-          ? t('lineFailed') + ' ' + motivoWeb(err, detalle) : ''
+          ? t(FAIL_KEY[accionMala] || 'actionFailed') + ' ' + motivoWeb(err, detalle) : ''
         el('lines-error').hidden = !err
         if (!lineas.length) {
           wrap.innerHTML = '<p class="empty">' + esc(t('noLines')) + '</p>'
@@ -2143,10 +2285,15 @@
             // refresco siguiente, ocho segundos despues.
             // La ubicacion viaja con el pedido: sin ella el worker no puede saber que
             // esa pestana esta en un panel que no se puede abrir, y contestaba ok.
+            // `visto` y `desde` son la fila TAL CUAL la vio el usuario. El worker las
+            // compara con lo que ve el: si esa linea cambio entre la pintura y el clic,
+            // no actua sobre otra cosa en silencio — lo dice.
             busy(b, pedirWeb(accion === 'retry' ? 'refresh' : accion,
               { id: l.id, profile: l.profile, pageId: l.pageId || null,
                 placement: l.placement || null, project: l.project || null,
-                worktreeId: l.worktreeId || null, donde: el('line-where').value })
+                worktreeId: l.worktreeId || null, donde: el('line-where').value,
+                desde: (lineasUlt && lineasUlt.at) || null,
+                visto: { state: l.state, pageId: l.pageId || null } })
               .then(function (p) {
                 if (!p.ok) return
                 return esperarWeb(p.at, 45000).then(function (st) {
@@ -2177,9 +2324,32 @@
           b.addEventListener('click', function () {
             var l = lineas[Number(b.dataset.lyes)]
             confirmando = null
+            said('said-line', t('lineRemoving'))
             busy(b, pedirWeb('unlink',
-              { id: l.id, profile: l.profile, pageId: l.pageId || null })
-              .then(function () { said('said-line', t('lineRemoving')); vigilarLineas(true) }))
+              { id: l.id, profile: l.profile, pageId: l.pageId || null,
+                desde: (lineasUlt && lineasUlt.at) || null,
+                visto: { state: l.state, pageId: l.pageId || null } })
+              .then(function (p) {
+                if (!p.ok) {
+                  webStatusUlt = { ok: false, code: 'sin-respuesta', detail: '',
+                    action: 'unlink' }
+                  said('said-line', '')
+                  return renderLineas(lineasUlt)
+                }
+                vigilarLineas(true)
+                // Se espera SU veredicto, como el resto de los botones. Soltar el clic
+                // dejaba que el sondeo pintara el veredicto del clic ANTERIOR como si
+                // fuera la respuesta a este: medido, 1,49 s diciendo "no se pudo" sobre
+                // un desvincular que estaba saliendo bien. Ese es el "le doy de nuevo y
+                // la borra": el segundo clic no arreglo nada, solo llego mas tarde.
+                return esperarWeb(p.at, 45000).then(function (st) {
+                  webStatusUlt = st ||
+                    { ok: false, code: 'sin-respuesta', detail: '', action: 'unlink' }
+                  said('said-line', st && st.ok ? '\u2713 ' + t('lineRemoved') : '',
+                    !(st && st.ok))
+                  return repintarLineas()
+                })
+              }))
           })
         })
 
@@ -2218,7 +2388,8 @@
         timerLineas = setInterval(function () {
           if (document.visibilityState !== 'visible') return
           Promise.all([read('webLines'), read('webStatus')]).then(function (r) {
-            webStatusUlt = r[1] && typeof r[1] === 'object' ? r[1] : null
+            var st = veredictoPropio(r[1])
+            if (st) webStatusUlt = st
             renderLineas(r[0])
           })
         }, 2000)
@@ -2263,6 +2434,10 @@
 
       function reload() {
         if (!liveStorage) return Promise.resolve()
+        // El sello se toma ANTES de pedir nada: lo que llegue es de este momento, y un
+        // guardado posterior lo invalida. Sin esto el sondeo pintaba el valor de antes
+        // encima del que el usuario acababa de guardar.
+        var sello = guardadoSeq
         return Promise.all([read('scope'), read('agentName'), read('health'),
                             read('routes'), read('tone'), read('chats'),
                             read('transcribeQuality'), read('inboxDays'),
@@ -2273,31 +2448,23 @@
                             read('webLines'), read('webStatus')])
           .then(function (r) {
             renderScope(r[0])
-            if (typeof r[4] === 'string' && document.activeElement !== el('tone')) {
-              el('tone').value = r[4]
-            }
-            ponerEnSelect('quality', r[6], 'optima')
-            // 7 dias y no 1: una mencion del viernes tiene que seguir a la vista el lunes.
-            ponerEnSelect('inbox-days', r[7], '7')
-            ponerEnSelect('transcribe', r[9], 'local')
-            ponerEnSelect('lang', r[10], 'auto')
-            ponerEnSelect('read-local', r[12], 'on')
-            ponerEnSelect('read-web', r[13], 'off')
-            ponerEnSelect('sync-minutes', r[14], '5')
-            ponerEnSelect('read-web-text', r[15], 'off')
-            if (typeof r[8] === 'string' && document.activeElement !== el('owner')) {
-              el('owner').value = r[8]
-            }
+            pintarClave('tone', r[4], sello)
+            pintarClave('transcribeQuality', r[6], sello)
+            pintarClave('inboxDays', r[7], sello)
+            pintarClave('ownerName', r[8], sello)
+            pintarClave('transcribe', r[9], sello)
+            pintarClave('transcribeLang', r[10], sello)
+            pintarClave('readLocal', r[12], sello)
+            pintarClave('readWeb', r[13], sello)
+            pintarClave('syncMinutes', r[14], sello)
+            pintarClave('readWebText', r[15], sello)
             // Sin guardia de foco: renderChats no toca el buscador — reconstruye el
             // select y pintarChats ya conserva el texto filtrado y lo elegido. La
             // guardia solo lograba que, con el cursor en el buscador, la lista nunca
             // se llenara: era justo donde esta el cursor de quien mira "Buscando…".
             estadoSync = r[11] && typeof r[11] === 'object' ? r[11] : null
             renderChats(r[5])
-            if (typeof r[1] === 'string' && r[1] && !agentDirty &&
-                document.activeElement !== el('agent')) {
-              showAgentSaved(r[1])
-            }
+            pintarClave('agentName', r[1], sello)
             // El health ya trae QUE falla y su detalle: mostrarlo es mejor que mandar
             // a correr un comando, que es justo lo que se saco del resto del panel.
             if (r[2] && r[2].ok === false) {
@@ -2313,7 +2480,8 @@
             else if (r[2]) el('alert').hidden = true
             renderOpcionales(r[2] && r[2].optional)
             renderRoutes(r[3])
-            webStatusUlt = r[17] && typeof r[17] === 'object' ? r[17] : null
+            var stWeb = veredictoPropio(r[17])
+            if (stWeb) webStatusUlt = stWeb
             renderLineas(r[16])
           })
       }
@@ -2338,7 +2506,7 @@
         reload()
         // El worker sondea lento cuando no hay nada a medias; abrir el panel es la
         // senal de que alguien esta mirando, asi que se le pide una comprobacion ya.
-        pedirWeb('refresh')
+        pedirWeb('refresh', null, true)
         // No hay evento de storage: un sondeo corto mientras el panel esta a la vista
         // cuesta 1 de los 30 mensajes por 10s que el host permite.
         timer = setInterval(function () {

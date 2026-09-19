@@ -922,6 +922,52 @@ console.log(JSON.stringify({ ok: false, error: { code: 'unsupported' } }))
     apagar()
   }
 
+  {
+    // Requisito 3: una accion tiene que llevar el valor que el usuario VIO. El panel
+    // pinta desde `webLines` y el clic llega despues; si entre medio esa fila cambio,
+    // actuar igual seria cerrar una pestana que ya no es esa. Se dice, no se hace.
+    process.env.ORCA_CLI_COMMAND = orcaWeb('orca-viejo')
+    const reg = scopeConRegistro('reg-viejo', {
+      inicial: [{ id: 'web:9', kind: 'web', label: 'Vieja', profile: 'p9', enabled: true,
+        pending: false, linked_at: '2026-09-18 10:00', authorized_chats: 1 }]
+    })
+    const orca = hostFalso(reg.dir, { chats: [], readWeb: 'on' })
+    const apagar = activate(orca)
+    // Hay que esperar a que el worker publique una vuelta: la guarda compara contra lo
+    // que el panel pudo haber pintado, y sin nada publicado no hay con que comparar.
+    await hasta(() => orca.store.webLines && orca.store.webLines.at, 20000)
+    // La pestana que el usuario vio no es ninguna de las que el worker puede publicar.
+    const st = await pedir(orca, { action: 'unlink', id: 'web:9', profile: 'p9',
+      pageId: 'pg-que-el-usuario-vio',
+      desde: '2026-09-19T15:30:00.000Z',
+      visto: { state: 'enlazada', pageId: 'pg-que-el-usuario-vio' } })
+    ok('una accion sobre una fila que ya cambio se rechaza, no se ejecuta a ciegas',
+      st && st.ok === false && st.code === 'desactualizado', JSON.stringify(st))
+    ok('y la linea sigue en el registro: no se desvinculo nada',
+      !reg.llamadas().some((l) => l.startsWith('accounts --forget')),
+      JSON.stringify(reg.llamadas()))
+    apagar()
+  }
+
+  {
+    // Y el reverso: un pedido sin `visto` —un panel viejo, o el refresco de abrir el
+    // panel— no queda frenado por la guarda. Un guarda que frena todo no es un guarda.
+    process.env.ORCA_CLI_COMMAND = orcaWeb('orca-sinvisto')
+    const reg = scopeConRegistro('reg-sinvisto', {
+      inicial: [{ id: 'web:9', kind: 'web', label: 'Vieja', profile: 'p9', enabled: true,
+        pending: false, linked_at: '2026-09-18 10:00', authorized_chats: 1 }]
+    })
+    const orca = hostFalso(reg.dir, { chats: [], readWeb: 'on' })
+    const apagar = activate(orca)
+    const st = await pedir(orca, { action: 'unlink', id: 'web:9', profile: 'p9' })
+    ok('un pedido sin la fila vista no queda frenado por la guarda',
+      st && st.code !== 'desactualizado', JSON.stringify(st))
+    ok('y esa linea si sale del registro',
+      reg.llamadas().some((l) => l.startsWith('accounts --forget')),
+      JSON.stringify(reg.llamadas()))
+    apagar()
+  }
+
   if (previo === undefined) delete process.env.ORCA_CLI_COMMAND
   else process.env.ORCA_CLI_COMMAND = previo
 }

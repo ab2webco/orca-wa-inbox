@@ -179,6 +179,9 @@ const DATOS = {
 function stub(datos, opciones) {
   const falla = (opciones && opciones.falla) || []
   const veredicto = opciones && opciones.veredicto
+  // Cuanto tarda el host en contestar. Sin poder hacerlo tardar no se puede fotografiar
+  // un guardado EN VUELO, que es justo el momento en que el panel mentia.
+  const demoraSet = (opciones && opciones.demoraSet) || 0
   window.addEventListener('message', function (event) {
     const d = event.data
     if (!d || d.type !== 'orca-panel-action') return
@@ -202,8 +205,10 @@ function stub(datos, opciones) {
     } else if (d.action === 'notifications.show') {
       respuesta = { ok: true }
     }
-    window.postMessage(
+    const entregar = () => window.postMessage(
       Object.assign({ type: 'orca-panel-action-result', requestId: d.requestId }, respuesta), '*')
+    if (demoraSet && d.action === 'storage.set') setTimeout(entregar, demoraSet)
+    else entregar()
   })
 }
 
@@ -513,6 +518,44 @@ const PANELES = [
       webLines: { at: AHORA_ISO,
         lines: [Object.assign({}, LINEA_ENLAZADA, { label: 'Linea del bot' })] }
     })
+  },
+  {
+    // Un guardado EN VUELO. Se fotografia porque es el instante que el dueno reporto:
+    // "algunos select cambian de valor y vuelve". El sondeo late cada 8 s mientras la
+    // escritura viaja, y lo que hay que ver es que el select sigue diciendo lo que el
+    // usuario eligio y que el boton dice que esta trabajando.
+    nombre: 'config-guardado-en-vuelo', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: Object.assign({}, DATOS, { readLocal: 'on', readWeb: 'off', readWebText: 'off' }),
+    stub: { demoraSet: 6000 },
+    espera: 1800,
+    guion: () => {
+      document.getElementById('read-web').value = 'on'
+      document.getElementById('read-web').dispatchEvent(new Event('change'))
+      document.getElementById('save-source').focus()
+      document.getElementById('save-source').click()
+      document.getElementById('save-source').scrollIntoView({ block: 'center' })
+    }
+  },
+  {
+    // Y una accion EN VUELO sobre una linea, con el veredicto del clic anterior todavia
+    // en `webStatus`. Lo que hay que ver es que NO dice que fallo nada: el aviso rojo
+    // que habia era la respuesta a "Ver la pestana", y se leia como "no pude
+    // desvincular". Pasa una vuelta entera del sondeo antes de la foto.
+    nombre: 'config-desvincular-en-vuelo', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: Object.assign({}, DATOS, {
+      readWeb: 'on',
+      webLines: { at: AHORA_ISO, lines: [LINEA_ESPERANDO] },
+      webStatus: { at: AHORA_ISO, requestAt: '2026-01-01T00:00:00.000Z', action: 'show',
+        ok: false, code: 'flotante-sin-via', detail: '', placement: 'flotante' }
+    }),
+    espera: 2600,
+    guion: () => {
+      document.querySelector('[data-lrm]').click()
+      setTimeout(() => {
+        document.querySelector('[data-lyes]').click()
+        document.getElementById('said-line').scrollIntoView({ block: 'center' })
+      }, 60)
+    }
   },
   {
     // Lo que la bandeja ve cuando la linea es web: el cuerpo casi nunca llega y el

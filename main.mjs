@@ -354,9 +354,36 @@ function destinoPedido(pedido) {
   return pedido?.donde === 'flotante' ? 'flotante' : 'proyecto'
 }
 
+// Que acciones son sobre UNA fila, o sea las que pueden apuntar a otra cosa si esa fila
+// cambio entre que el panel la pinto y el usuario apreto.
+const SOBRE_UNA_FILA = new Set(['show', 'reopen', 'unlink'])
+
+/**
+ * Si la fila que el usuario apreto sigue siendo la que el worker ve.
+ *
+ * El panel pinta desde `webLines` y el clic llega despues; entre medio el sondeo pudo
+ * publicar otra cosa. Actuar igual seria cerrar una pestana que ya no es esa, o
+ * desvincular una linea que el usuario vio en otro estado. Se compara contra los HECHOS
+ * y no contra el `at`: el sondeo republica la misma fila con sello nuevo todo el tiempo.
+ */
+async function filaVigente(orca, pedido) {
+  if (!pedido?.visto || !pedido?.id) return true
+  const actual = (await leer(orca, WEB_LINES_KEY)) ?? {}
+  if (!actual.at || actual.at === pedido.desde) return true
+  const fila = (actual.lines || []).find((l) => l.id === pedido.id)
+  if (!fila) return false
+  return fila.state === pedido.visto.state &&
+    (fila.pageId || null) === (pedido.visto.pageId || null)
+}
+
 async function atenderWeb(orca, waScope, pedido, contexto) {
   const exe = orcaCli()
   const fin = (extra) => guardar(orca, WEB_LINES_KEY, extra)
+  if (SOBRE_UNA_FILA.has(pedido.action) && !(await filaVigente(orca, pedido))) {
+    await refrescarLineas(orca, waScope, { motivo: pedido.action })
+    await veredicto(orca, pedido, { ok: false, code: 'desactualizado', detail: '' })
+    return
+  }
   if (pedido.action === 'link') {
     const label = String(pedido.label || '').trim() || 'WhatsApp Web'
     const r = await conectarLinea({ exe, waScope, run, label, contextoActivo: contexto,
