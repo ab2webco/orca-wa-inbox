@@ -3,7 +3,7 @@
   "id": "orca-wa-inbox",
   "publisher": "ab2web",
   "name": "WhatsApp Inbox",
-  "version": "3.11.0",
+  "version": "3.12.0",
   "description": "Map WhatsApp conversations to your projects and decide, per conversation, how far your agent may act. Connects extra WhatsApp Web lines by launching the Orca CLI to open and manage their browser tab.",
   "engines": {
     "orca": ">=1.4.0"
