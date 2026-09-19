@@ -178,6 +178,15 @@ WEB_APAGADA = "web-off"
 WEB_SIN_ORCA = "web-no-orca"
 WEB_SIN_PESTANA = "web-no-session"
 WEB_DESLOGUEADA = "web-logged-out"
+# Encendida y sin ninguna linea que leer. Son DOS y no uno porque lo que el usuario
+# tiene que hacer es distinto: terminar de escanear la que ya empezo, o enlazar la
+# primera. Y ninguno es `web-logged-out`: ahi hay una sesion que se cayo, aca no hay
+# sesion autorizada ninguna.
+WEB_SIN_LINEA = "web-no-line"
+WEB_LINEA_A_MEDIAS = "web-line-pending"
+# Dos perfiles distintos contestan al mismo nombre. Se niega en vez de elegir uno:
+# leer la sesion equivocada es leer el WhatsApp de otro numero.
+WEB_PERFIL_AMBIGUO = "web-profile-ambiguous"
 WEB_SIN_RESPUESTA = "web-eval-timeout"
 WEB_ILEGIBLE = "web-read-failed"
 # El texto se pidio y la sesion no lo puede dar: WhatsApp le cambio el nombre a los
@@ -305,8 +314,10 @@ class WebSource:
 
     kind = WEB
 
-    def __init__(self, account=WEB, label="WhatsApp Web", profile=None, cmd=None,
-                 days=None, window=5):
+    def __init__(self, account, label, profile, cmd=None, days=None, window=5):
+        # El perfil es obligatorio y no tiene default: sin el, `web_page` tomaba la
+        # primera pestana de WhatsApp Web que encontrara — la sesion personal de quien
+        # la tuviera abierta, no una linea que alguien autorizo.
         self.account = account
         self.label = label
         self.profile = profile
@@ -447,22 +458,42 @@ def orca_json(args, timeout=30):
 WEB_URL = "web.whatsapp.com"
 
 
-def web_page(profile=None):
-    """El id de la pestana con la sesion de ESA linea.
+def web_page(profile):
+    """El id de la pestana con la sesion de ESA linea, atada por identidad de perfil.
 
     El perfil es lo que separa una linea de otra: dos sesiones en el mismo perfil se
     desloguean entre si. Se acepta el id del perfil o su etiqueta porque el registro
-    guarda lo que el usuario vio al crearlo, y el id es lo unico estable de los dos."""
+    guarda lo que el usuario vio al crearlo, y el id es lo unico estable de los dos.
+
+    Nunca devuelve "la primera pestana que haya": sin perfil, o con un perfil que no
+    tiene pestana, falla. Una sesion de WhatsApp Web que nadie registro como linea es
+    el numero de otro — la personal de quien tenga el navegador abierto."""
+    if not profile:
+        # Una linea habilitada sin perfil es un registro roto, no una invitacion a
+        # elegir. Vale como cinturon: `sources()` ya no construye fuentes sin perfil.
+        raise SourceError(WEB_SIN_LINEA,
+                          "that line has no browser profile recorded, so there is no "
+                          "session that belongs to it; unlink it from the plugin panel "
+                          "and link it again")
     tabs = orca_json(["tab", "list"]).get("tabs") or []
-    candidatas = [t for t in tabs if WEB_URL in (t.get("url") or "")]
-    if profile:
-        candidatas = [t for t in candidatas
-                      if profile in (t.get("profileId"), t.get("profileLabel"))]
+    abiertas = [t for t in tabs if WEB_URL in (t.get("url") or "")]
+    # El id primero y la etiqueta despues, nunca mezclados: una etiqueta que coincide
+    # con el id de OTRO perfil ganaba por orden de pestana.
+    candidatas = [t for t in abiertas if t.get("profileId") == profile]
     if not candidatas:
-        cual = f" on browser profile {profile!r}" if profile else ""
+        candidatas = [t for t in abiertas if t.get("profileLabel") == profile]
+        perfiles = {t.get("profileId") for t in candidatas}
+        if len(perfiles) > 1:
+            raise SourceError(WEB_PERFIL_AMBIGUO,
+                              f"{len(perfiles)} browser profiles answer to the label "
+                              f"{profile!r}, so there is no way to tell which session "
+                              "belongs to this line; rename them in Orca, or unlink the "
+                              "line and link it again so it records the profile id")
+    if not candidatas:
         raise SourceError(WEB_SIN_PESTANA,
-                          f"no Orca browser tab is open on {WEB_URL}{cual}; link the "
-                          "line from the plugin panel and leave the tab open")
+                          f"no Orca browser tab is open on {WEB_URL} on browser profile "
+                          f"{profile!r}; link the line from the plugin panel and leave "
+                          "the tab open")
     return candidatas[0]["browserPageId"]
 
 
@@ -1272,18 +1303,74 @@ def web_mensajes(con, datos, jid_propio, pks):
                     (pks[jid], (t - APPLE_EPOCH) if t else 0, nombre or "?", cuerpo))
 
 
-def web_accounts():
+def web_accounts(enabled=True):
     """Las lineas web registradas. Viven en el registro de wa-scope y no aca porque
     una cuenta es una autorizacion, no un detalle de lectura. Se lee en solo lectura:
-    wa-read nunca escribe en el registro."""
+    wa-read nunca escribe en el registro.
+
+    Con `enabled=False` devuelve las que quedaron a medias: la fila existe, el QR
+    todavia no se escaneo, y por eso NO se leen. Se necesitan para poder decir "termina
+    de enlazar NoVa" en vez de "no hay lineas", que son dos acciones distintas."""
     try:
         con = sqlite3.connect(f"file:{SCOPE_DB}?mode=ro", uri=True)
         rows = con.execute("select id, label, profile from wa_account "
-                           "where kind=? and enabled=1 order by id", (WEB,)).fetchall()
+                           "where kind=? and enabled=? order by id",
+                           (WEB, 1 if enabled else 0)).fetchall()
         con.close()
         return [{"id": r[0], "label": r[1] or r[0], "profile": r[2]} for r in rows]
     except sqlite3.Error:
         return []
+
+
+class WebSinLinea:
+    """La via web encendida sin ninguna linea habilitada: no lee, y dice por que.
+
+    Antes esto caia en un WebSource sin perfil, que tomaba la primera pestana abierta
+    en WhatsApp Web. El razonamiento era que quien pidio la via web tenia que leer "no
+    esta construida" y no "no configuraste nada" — pero la via ya esta construida, y lo
+    que quedo es peor que un mensaje confuso: en la maquina del dueno, con la linea
+    nueva a medio enlazar, el plugin estaba leyendo su WhatsApp PERSONAL por una sesion
+    que nunca registro como linea.
+
+    Es una fuente y no un `return []` porque una lista vacia se lee como "no hay nada
+    que atender" y porque el doctor mira las fuentes: sin esta fila, la via web salia
+    verde sin poder leer nada."""
+
+    kind = WEB
+    account = WEB
+
+    def __init__(self, pendientes=(), cmd=None):
+        self.pendientes = list(pendientes)
+        self.cmd = cmd
+        # La etiqueta es EL nombre de lo que falta terminar: el doctor y el aviso de
+        # stderr la anteponen al detalle, y "WhatsApp Web" no le dice a nadie cual.
+        self.label = (self.pendientes[0]["label"] if len(self.pendientes) == 1
+                      else "WhatsApp Web")
+
+    def open(self):
+        # Lo que la via web no sabe contestar se dice igual, y primero: no depende de
+        # cuantas lineas haya, y cambiarlo mandaria a enlazar una para pedir un `chat`
+        # que ninguna linea web puede dar.
+        if self.cmd not in WEB_COMANDOS:
+            raise SourceError(WEB_SIN_CONSTRUIR,
+                              f"the WhatsApp Web route answers {web_comandos_txt()} "
+                              "only; `chat` and `media` promise the message body and the "
+                              "attachment path on disk, and a browser session has "
+                              "neither, see docs/LECTURA-MULTIFUENTE.md")
+        if self.pendientes:
+            cuales = ", ".join(repr(c["label"]) for c in self.pendientes)
+            raise SourceError(WEB_LINEA_A_MEDIAS,
+                              f"the web route is on, but the only line(s) registered — "
+                              f"{cuales} — never finished linking: the QR code was not "
+                              "scanned, so there is no session of that number to read. "
+                              "Finish it from the plugin panel. Nothing is read in the "
+                              "meantime, on purpose: any other WhatsApp Web tab that "
+                              "happens to be open belongs to a different number")
+        raise SourceError(WEB_SIN_LINEA,
+                          "the web route is on and no line is linked: connect one from "
+                          "the plugin panel and scan the QR with the phone of THAT "
+                          "number. It does not fall back to whatever WhatsApp Web tab "
+                          "is open — that session is somebody else's line")
 
 
 def sources(cmd=None, days=None, window=5):
@@ -1296,11 +1383,12 @@ def sources(cmd=None, days=None, window=5):
     if setting("read_local", "on") != "off":
         out.append(LocalSource(SOURCE))
     if setting("read_web", "off") == "on":
-        # Sin cuentas registradas igual hay una fuente web: el usuario la pidio. Sin
-        # perfil se toma cualquier pestana abierta en WhatsApp Web, que es lo que hay
-        # antes de enlazar la primera linea.
-        out += [WebSource(a["id"], a["label"], a["profile"], cmd, days, window)
-                for a in web_accounts()] or [WebSource(cmd=cmd, days=days, window=window)]
+        # Sin ninguna linea HABILITADA igual hay una fuente web — el usuario la pidio —
+        # pero es una que se niega con motivo. Tomar cualquier pestana de WhatsApp Web
+        # era leer el numero de otro: la linea a medio enlazar no protegia nada, solo
+        # mandaba al lector a una sesion peor.
+        out += ([WebSource(a["id"], a["label"], a["profile"], cmd, days, window)
+                 for a in web_accounts()] or [WebSinLinea(web_accounts(enabled=False), cmd)])
     return out
 
 
@@ -1831,7 +1919,10 @@ def cmd_state(con, a):
         # justo la lectura que este comando existe para evitar. Quien reusa tiene que
         # leerlo como "no puedo saltearme nada", y eso es correcto: por la via web una
         # corrida barata de mas cuesta un eval, no 260 MB.
-        for cuenta in (web_accounts() or [{"id": WEB, "label": "WhatsApp Web"}]):
+        # Solo las habilitadas: una fila `live` por una linea que no se puede leer
+        # es la misma cuenta fantasma que tomaba la pestana ajena, y le prometia a
+        # quien sincroniza que habia algo nuevo de donde no hay nada.
+        for cuenta in web_accounts():
             filas.append({"account": cuenta["id"], "db": None, "exists": True,
                           "mtime": None, "size": None, "fingerprint": ESTADO_VIVO})
     return filas

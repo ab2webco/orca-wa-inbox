@@ -628,6 +628,17 @@
             'web.whatsapp.com para esa linea. Enlazala desde el panel y deja la pestana abierta.',
           howWebLoggedOut: 'Esa sesion no esta enlazada. Abri la pestana y escanea el QR ' +
             'con el telefono de ESE numero.',
+          howWebLinePending: 'La linea que conectaste todavia no escaneo el QR, asi ' +
+            'que no hay sesion suya que leer. Terminala en "Lineas conectadas", mas ' +
+            'arriba. Mientras tanto no se lee NADA por esta via: cualquier otra pestana ' +
+            'de WhatsApp Web que este abierta es de otro numero.',
+          howWebNoLine: 'La via web esta encendida y no hay ninguna linea enlazada. ' +
+            'Conecta una en "Lineas conectadas", mas arriba, y escanea el QR con el ' +
+            'telefono de ESE numero. No lee la pestana de WhatsApp Web que haya abierta: ' +
+            'esa sesion es la linea de otro.',
+          howWebProfileAmbiguous: 'Hay dos perfiles del navegador con el mismo nombre, ' +
+            'asi que no se puede saber cual es la sesion de esta linea. Cambiale el ' +
+            'nombre a uno en Orca, o desvincula la linea y volve a conectarla.',
           howWebTimeout: 'La sesion no contesto a tiempo: la pestana puede estar cargando ' +
             'todavia, o el telefono estar sin conexion.',
           howWebReadFailed: 'La sesion contesto con un error al leer sus datos. Recarga ' +
@@ -882,6 +893,17 @@
             'line. Link it from the panel and leave the tab open.',
           howWebLoggedOut: 'That session is not linked. Open the tab and scan the QR code ' +
             'with the phone of THAT number.',
+          howWebLinePending: 'The line you connected has not scanned its QR code yet, ' +
+            'so there is no session of its own to read. Finish it under "Connected ' +
+            'lines", above. Until then NOTHING is read on this route: any other ' +
+            'WhatsApp Web tab that is open belongs to a different number.',
+          howWebNoLine: 'The web route is on and no line is linked. Connect one under ' +
+            '"Connected lines", above, and scan the QR code with the phone of THAT ' +
+            'number. It does not read whatever WhatsApp Web tab happens to be open: ' +
+            'that session is somebody else\'s line.',
+          howWebProfileAmbiguous: 'Two browser profiles share the same name, so there is ' +
+            'no way to tell which session belongs to this line. Rename one of them in ' +
+            'Orca, or unlink the line and connect it again.',
           howWebTimeout: 'The session did not answer in time: the tab may still be ' +
             'loading, or the phone may be offline.',
           howWebReadFailed: 'The session answered with an error while reading its data. ' +
@@ -1109,6 +1131,17 @@
           'web.whatsapp.com para essa linha. Vincule pelo painel e deixe a aba aberta.',
         howWebLoggedOut: 'Essa sessao nao esta vinculada. Abra a aba e escaneie o QR com ' +
           'o telefone DESSE numero.',
+        howWebLinePending: 'A linha que voce conectou ainda nao escaneou o QR, entao ' +
+          'nao ha sessao dela para ler. Termine em "Linhas conectadas", acima. Ate la ' +
+          'NADA e lido por essa via: qualquer outra aba do WhatsApp Web aberta e de ' +
+          'outro numero.',
+        howWebNoLine: 'A via web esta ligada e nenhuma linha esta vinculada. Conecte uma ' +
+          'em "Linhas conectadas", acima, e escaneie o QR com o telefone DESSE numero. ' +
+          'Ela nao le a aba do WhatsApp Web que estiver aberta: essa sessao e a linha ' +
+          'de outra pessoa.',
+        howWebProfileAmbiguous: 'Dois perfis do navegador tem o mesmo nome, entao nao da ' +
+          'para saber qual sessao e desta linha. Renomeie um deles no Orca, ou desvincule ' +
+          'a linha e conecte de novo.',
         howWebTimeout: 'A sessao nao respondeu a tempo: a aba pode estar carregando ' +
           'ainda, ou o telefone pode estar sem conexao.',
         howWebReadFailed: 'A sessao respondeu com um erro ao ler seus dados. Recarregue ' +
@@ -1324,6 +1357,9 @@
         'web-no-orca': 'howWebNoOrca',
         'web-no-session': 'howWebNoSession',
         'web-logged-out': 'howWebLoggedOut',
+        'web-line-pending': 'howWebLinePending',
+        'web-no-line': 'howWebNoLine',
+        'web-profile-ambiguous': 'howWebProfileAmbiguous',
         'web-eval-timeout': 'howWebTimeout',
         'web-read-failed': 'howWebReadFailed',
         'web-text-unavailable': 'howWebNoText',

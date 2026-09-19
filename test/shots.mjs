@@ -364,6 +364,29 @@ const PANELES = [
     })
   },
   {
+    // La linea A MEDIAS, que es el estado en el que estaba el dueno: `read_web on`, la
+    // linea registrada y sin escanear, y el plugin leyendo su WhatsApp PERSONAL por la
+    // primera pestana que encontro. Ahora no lee nada y lo dice. Va a la captura porque
+    // son DOS mensajes que tienen que leerse juntos y no repetirse: la fila de la tabla
+    // ("Esperando el escaneo") y el renglon opcional que explica que, hasta terminarla,
+    // la via web no lee nada.
+    nombre: 'config-linea-a-medias', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: Object.assign({}, DATOS, {
+      readWeb: 'on',
+      webLines: { at: AHORA_ISO, placement: 'flotante', lines: [LINEA_ESPERANDO] },
+      health: {
+        ok: true,
+        optional: [{
+          que: 'WhatsApp Web as a second line', code: 'web',
+          como: "NoVa: the web route is on, but the only line(s) registered — 'NoVa' — " +
+            'never finished linking: the QR code was not scanned, so there is no ' +
+            'session of that number to read',
+          howCode: 'web-line-pending'
+        }]
+      }
+    })
+  },
+  {
     // La maquina de Linux o Windows que lee SOLO por la sesion web. Aca el panel decia
     // "WhatsApp no esta conectado" en rojo con la sesion leyendo perfecto, porque los
     // cinco chequeos de la base local salian como requisito sin condicion. Ahora no

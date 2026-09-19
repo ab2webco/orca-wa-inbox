@@ -107,9 +107,16 @@ async function pestanaDe(exe, profile) {
   const r = await orcaJson(exe, ['tab', 'list', '--worktree', 'all'])
   if (!r.ok) return { ok: false, code: r.code, message: r.message }
   const tabs = r.result.tabs || []
-  const suya = tabs.find((t) => (t.url || '').includes('web.whatsapp.com') &&
-    (t.profileId === profile || t.profileLabel === profile))
-  return { ok: true, tab: suya || null }
+  const abiertas = tabs.filter((t) => (t.url || '').includes('web.whatsapp.com'))
+  // El id primero y la etiqueta despues, nunca mezclados: una etiqueta que coincide con
+  // el id de OTRO perfil ganaba por orden de pestana, y mandaba al usuario a la sesion
+  // de otro numero. Lo mismo hace web_page() en wa-read.
+  let suyas = abiertas.filter((t) => t.profileId === profile)
+  if (!suyas.length) {
+    suyas = abiertas.filter((t) => t.profileLabel === profile)
+    if (new Set(suyas.map((t) => t.profileId)).size > 1) suyas = []
+  }
+  return { ok: true, tab: suyas[0] || null }
 }
 
 /**

@@ -58,18 +58,40 @@ Motivos estables (son contrato; el panel los traduce por codigo):
 | `web-no-orca` | la CLI de Orca no esta, o el runtime no contesta | 4 |
 | `web-no-session` | no hay pestana en `web.whatsapp.com` para ese perfil | 4 |
 | `web-logged-out` | la pestana esta, pero la sesion no esta enlazada (QR) | 4 |
+| `web-line-pending` | la unica linea registrada quedo a medias (`enabled=0`) | 4 |
+| `web-no-line` | `read_web on` y ninguna linea registrada | 4 |
+| `web-profile-ambiguous` | dos perfiles del navegador contestan a la misma etiqueta | 4 |
 | `web-eval-timeout` | la pagina no contesto dentro de `web_timeout_s` | 4 |
 | `web-read-failed` | la sonda reviento adentro de la pagina | 4 |
 | `web-text-unavailable` | se pidio el texto y la sesion ya no lo expone | 4 |
 
-Son siete motivos web y no uno porque la accion del usuario es distinta en cada uno:
-abrir Orca, abrir la pestana, escanear el QR, esperar, recargar, o apagar el texto. `web-session-dropped`, que este
+Son diez motivos web y no uno porque la accion del usuario es distinta en cada uno:
+abrir Orca, abrir la pestana, escanear el QR, terminar de enlazar la linea, enlazar la
+primera, desambiguar dos perfiles, esperar, recargar, o apagar el texto. `web-session-dropped`, que este
 documento nombraba antes, **no existe**: la caida de una sesion se ve de dos maneras
 distintas — la pestana cerrada y la pestana sin enlazar — y mandarlas al mismo motivo
 le diria a quien tiene el QR en pantalla que abra una pestana que ya esta abierta.
 
 El doctor tiene ademas `web-off`, que no es un fallo: es la via apagada diciendo lo que
 cuesta y como se enciende.
+
+### La pestana se elige por identidad de perfil, nunca por ser la primera
+
+`web_page()` solo devuelve una pestana cuyo perfil es el de una linea REGISTRADA Y
+HABILITADA, comparando primero contra `profileId` y despues contra `profileLabel`, y
+negandose (`web-profile-ambiguous`) si dos perfiles distintos contestan a la misma
+etiqueta. Con `read_web on` y ninguna linea habilitada no se lee nada: sale
+`web-line-pending` si la que hay quedo a medio enlazar, y `web-no-line` si no hay
+ninguna.
+
+Antes, sin linea habilitada, se construia una fuente web SIN perfil y se tomaba la
+primera pestana abierta en `web.whatsapp.com`. El razonamiento — "pidio la via web, que
+lea 'no esta construida' y no 'no configuraste nada'" — dejo de valer cuando la via se
+construyo, y lo que quedo fue peor que un mensaje confuso: en la maquina del dueno, con
+`read_web on` y la linea nueva a medio enlazar, el plugin estaba leyendo su WhatsApp
+PERSONAL por una sesion que nunca registro como linea. El `enabled=0` que wa-scope
+escribe para que una linea a medias no se lea no lo protegia: redirigia al lector a algo
+peor. Lo recorre `revisa_linea_sin_enlazar()` en `scripts/check-clis`.
 
 ## Los interruptores
 
@@ -177,10 +199,12 @@ su `id`.
 `wa_account.profile` guarda el **`id` del perfil de Orca** — el uuid, que es lo unico
 estable de los dos. `web_page()` lista las pestanas, se queda con las que estan en
 `web.whatsapp.com`, y de esas con la que coincida en `profileId` **o** en
-`profileLabel`: la etiqueta se acepta porque es lo que el usuario vio al crear el
-perfil y lo que va a escribir si alguna vez edita el registro a mano, pero dos perfiles
-pueden llamarse igual y el uuid no. Sin perfil registrado — el caso de antes de enlazar
-la primera linea — sirve cualquier pestana abierta en WhatsApp Web.
+`profileLabel` — el uuid **primero**, y la etiqueta solo si ninguna pestana coincide
+por uuid: la etiqueta se acepta porque es lo que el usuario vio al crear el perfil y lo
+que va a escribir si alguna vez edita el registro a mano, pero dos perfiles pueden
+llamarse igual y el uuid no. Si dos perfiles distintos contestan a la misma etiqueta,
+se niega con `web-profile-ambiguous` en vez de elegir uno. Sin perfil registrado no
+sirve ninguna pestana: ver arriba.
 
 ## El enlace por QR
 
@@ -201,8 +225,9 @@ El flujo:
    con un id provisional `web:pending:<perfil>` y `enabled=0`. Todavia no hay identidad
    — la pone la sesion — y `web_accounts()` solo devuelve las habilitadas, asi que una
    linea a medio enlazar no se puede leer por accidente. Recien ahi se enciende
-   `read_web`: encenderlo antes deja a `sources()` colgado de cualquier pestana de
-   WhatsApp Web que hubiera abierta.
+   `read_web`. El orden ya no es lo que protege — `sources()` se niega con
+   `web-line-pending` mientras no haya una linea habilitada — pero se mantiene: es lo
+   que hace que el panel no ofrezca una via que va a fallar en cada lectura.
 4. El usuario ve el QR **en esa pestana** y lo escanea con el telefono de ESE numero.
 5. El worker sondea la sesion cada 3 s con `orca eval` — `localStorage.WALid`, y el
    `canvas[aria-label]` del QR como respaldo — hasta que aparece el LID. No se usa

@@ -749,7 +749,8 @@ console.log('\nconfig.html — lineas de WhatsApp Web')
     'unlink', 'unlinkYes', 'stWaiting', 'stWaitingHow', 'stLinked', 'stLinkedNone',
     'stLinkedSome', 'stDropped', 'stDroppedHow', 'stNoTab', 'stNoTabHow', 'stNoOrca',
     'stNoOrcaHow', 'linePlacedFloating', 'linePlacedProject', 'unlinkWarn',
-    'unlinkWarn0', 'lineWorking', 'needLineLabel']
+    'unlinkWarn0', 'lineWorking', 'needLineLabel',
+    'howWebLinePending', 'howWebNoLine', 'howWebProfileAmbiguous']
   // pt hereda el ingles para lo que no traduce, asi que "existe" no alcanza: tiene que
   // ser un texto PROPIO, o el portugues de esta seccion seria ingles.
   const sinPt = nuevas.filter((k) => !S.pt[k] || S.pt[k] === S.en[k])
@@ -1103,7 +1104,14 @@ console.log('\nel codigo del CLI, dicho en el idioma del panel')
     ['web-no-session', 'pestana', 'tab'],
     ['web-logged-out', 'QR', 'QR'],
     ['web-eval-timeout', 'no contesto a tiempo', 'did not answer in time'],
-    ['web-read-failed', 'Recarga', 'Reload']
+    ['web-read-failed', 'Recarga', 'Reload'],
+    // Los tres de abajo son la diferencia entre "termina de enlazar NoVa", "no tenes
+    // ninguna linea" y "hay dos perfiles con el mismo nombre". Con un solo texto para
+    // los tres, quien tiene la linea a medias no se entera de que le falta escanear.
+    ['web-line-pending', 'todavia no escaneo el QR', 'has not scanned its QR code yet'],
+    ['web-no-line', 'no hay ninguna linea enlazada', 'no line is linked'],
+    ['web-profile-ambiguous', 'dos perfiles del navegador con el mismo nombre',
+      'Two browser profiles share the same name']
   ]
   const dichos = new Set()
   for (const [code, marcaEs, marcaEn] of WEB_FINALES) {
@@ -1121,9 +1129,9 @@ console.log('\nel codigo del CLI, dicho en el idioma del panel')
       en.doc.getElementById('opcionales').textContent.includes(marcaEn),
       en.doc.getElementById('opcionales').textContent.slice(0, 160))
   }
-  // Y que sean SEIS textos distintos: seis claves que resolvieran a la misma frase
+  // Y que sean TODOS textos distintos: dos claves que resolvieran a la misma frase
   // pasarian las comprobaciones de arriba una por una y no le dirian nada al usuario.
-  ok('los seis finales de la via web dicen cosas distintas',
+  ok('cada final de la via web dice algo distinto',
     dichos.size === WEB_FINALES.length, `textos distintos = ${dichos.size}`)
 
   // Un codigo que este panel no conozca todavia no puede dejar el aviso vacio: se

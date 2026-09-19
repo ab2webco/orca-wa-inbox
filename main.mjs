@@ -398,15 +398,14 @@ async function atenderWeb(orca, waScope, pedido, contexto) {
     const borrado = await olvidarLinea({ exe, waScope, run, id: pedido.id,
       profile: pedido.profile, pageId: pedido.pageId })
     const quedan = await refrescarLineas(orca, waScope, { motivo: 'unlink' })
-    // Sin ninguna linea, la ruta web no tiene de donde leer: dejarla encendida haria
-    // que `sources()` se colgara de cualquier pestana de WhatsApp Web que hubiera.
-    // `null` es "no pude leer el registro", y ahi NO se apaga nada: apagar por una
-    // lectura fallida deshacia una linea sana que el usuario nunca toco.
+    // Sin ninguna linea, la ruta web no tiene de donde leer: dejarla encendida deja al
+    // panel ofreciendo una via que se niega en cada lectura. `null` es "no pude leer el
+    // registro", y ahi NO se apaga nada: apagar por una lectura fallida deshacia una
+    // linea sana que el usuario nunca toco.
     let apagado = null
     if (quedan && !quedan.length) {
-      // Se dice si no se pudo apagar. Tragarselo dejaba al plugin leyendo por una via
-      // sin linea — cualquier pestana de WhatsApp Web abierta — despues de que el
-      // usuario dijo justo que no.
+      // Se dice si no se pudo apagar. Tragarselo dejaba la via encendida y fallando
+      // en cada lectura despues de que el usuario dijo justo que no la queria.
       apagado = await run(waScope, ['config', 'read_web', 'off'])
         .then(() => null).catch((error) => error)
       await guardar(orca, 'readWeb', 'off')

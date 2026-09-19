@@ -8,6 +8,7 @@ corre cada herramienta.
 """
 import importlib.machinery
 import importlib.util
+import inspect
 import json
 import os
 import pathlib
@@ -375,6 +376,9 @@ def revisa_jaula_web(fallos: list) -> int:
         env_web = entorno(encendida)
         subprocess.run([str(BIN / "wa-scope"), "config", "read_web", "on"],
                        capture_output=True, text=True, env=env_web, timeout=120)
+        # Y con una linea HABILITADA: sin ninguna, la via web se niega antes de tocar el
+        # navegador — que es correcto — y el control de abajo no podria disparar nunca.
+        registra_linea_web(encendida, "linea-uno")
 
         def corre(base: dict, jaula: bool):
             rastro.unlink(missing_ok=True)
@@ -1193,16 +1197,31 @@ class _Args:
 
 
 def registra_linea_web(home: pathlib.Path, perfil: str, cid: str = None,
-                       label: str = "Linea De Ejemplo") -> None:
-    """Una linea web en el registro de ESE home, atada a un perfil de navegador."""
+                       label: str = "Linea De Ejemplo", enabled: int = 1) -> None:
+    """Una linea web en el registro de ESE home, atada a un perfil de navegador.
+
+    `enabled=0` es la linea a medio enlazar: la fila existe, el QR no se escaneo, y
+    wa-scope la deja asi a proposito para que no se lea."""
     db = home / ".wa-inbox" / "scope.db"
     db.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(db)
     con.executescript(
         "create table if not exists wa_account (id text primary key, kind text, "
         "label text, profile text, enabled integer, linked_at text, updated_at text);")
-    con.execute("insert or replace into wa_account values (?,?,?,?,1,null,null)",
-                (cid or "web:100000000000001", "web", label, perfil))
+    con.execute("insert or replace into wa_account values (?,?,?,?,?,null,null)",
+                (cid or "web:100000000000001", "web", label, perfil, enabled))
+    con.commit()
+    con.close()
+
+
+def olvida_lineas_web(home: pathlib.Path) -> None:
+    db = home / ".wa-inbox" / "scope.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(db)
+    con.executescript(
+        "create table if not exists wa_account (id text primary key, kind text, "
+        "label text, profile text, enabled integer, linked_at text, updated_at text);")
+    con.execute("delete from wa_account where kind='web'")
     con.commit()
     con.close()
 
@@ -2581,6 +2600,133 @@ def revisa_web_inbox(fallos: list) -> int:
     return hechas
 
 
+def revisa_linea_sin_enlazar(fallos: list) -> int:
+    """`read_web on` sin ninguna linea HABILITADA no lee nada, y dice cual de los dos es.
+
+    Es el defecto que estaba vivo en la maquina del dueno: `read_web on`, la linea nueva
+    registrada y sin escanear (enabled=0), y una sola pestana de WhatsApp Web abierta —
+    la de su linea PERSONAL, que nunca registro como linea. La via web caia en un
+    WebSource sin perfil, que tomaba la primera pestana que encontrara, y el plugin
+    estaba leyendo su WhatsApp personal. El `enabled=0` que wa-scope escribe para que
+    una linea a medias no se lea no lo protegia: redirigia al lector a algo peor.
+
+    Los dos motivos van separados porque la accion es distinta: terminar de escanear la
+    que ya empezo, o enlazar la primera. Y la ambiguidad tambien: dos perfiles con el
+    mismo nombre no son "no hay pestana", son "no se puede saber cual es tuya".
+
+    Lo que hace de CONTROL de mutacion es la comprobacion de que los nombres de los
+    chats de la pestana ajena NO salen: si alguien devuelve el fallback sin perfil, esto
+    se pone rojo con la fuga a la vista en vez de con un codigo de salida distinto.
+    """
+    hechas = 0
+    ajena = json.loads(json.dumps(WEB_PAYLOAD))
+    ajena["name"] = "Linea Personal"
+    ajena["chats"] = [["120363000000000009@g.us", "FUGA-PERSONAL-GRUPO", 1700000000, 2],
+                      ["15550000009@c.us", "FUGA-PERSONAL-DIRECTO", 1700000100, 1]]
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        falso = home / "orca-falso"
+        falso.write_text(FALSO_ORCA, encoding="utf-8")
+        falso.chmod(0o755)
+        comun = dict(entorno(home), WA_READ_SETTING_READ_LOCAL="off",
+                     WA_READ_SETTING_READ_WEB="on", WA_FALSO_ORCA="ok",
+                     WA_FALSO_PAYLOAD=json.dumps(ajena),
+                     ORCA_CLI_COMMAND=str(falso))
+
+        # La pestana abierta es de OTRO perfil: es la sesion personal del dueno, no la
+        # linea que registro. Ese es el estado real que destapo esto.
+        AJENO = "tony-bot"
+        casos = [
+            # (que hay en el registro, perfiles con pestana, motivo, que tiene que decir)
+            ("a-medias", [("perfil-de-nova", "NoVa", 0)], AJENO, "web-line-pending",
+             "NoVa"),
+            ("sin-lineas", [], AJENO, "web-no-line", None),
+        ]
+        for nombre, filas, perfiles, motivo, dice in casos:
+            olvida_lineas_web(home)
+            for perfil, etiqueta, enabled in filas:
+                registra_linea_web(home, perfil, f"web:pending:{perfil}", etiqueta,
+                                   enabled)
+            env = dict(comun, WA_FALSO_PERFILES=perfiles)
+            p = subprocess.run([str(BIN / "wa-read"), "chats", "-n", "10", "--json"],
+                               capture_output=True, text=True, env=env, timeout=180)
+            hechas += 4
+            if p.returncode != 4:
+                fallos.append(f"con la via web {nombre} la lectura salio {p.returncode} "
+                              f"y no 4: {(p.stderr or '').strip()[:160]}")
+            primera = (p.stderr or "").strip().splitlines()[:1]
+            if primera != [f"wa-read: {motivo}"]:
+                fallos.append(f"con la via web {nombre} el motivo fue {primera!r} y "
+                              f"tenia que ser 'wa-read: {motivo}'")
+            # EL control: nada de la pestana ajena puede haber salido.
+            if "FUGA-PERSONAL" in (p.stdout or "") or p.stdout.strip():
+                fallos.append(f"con la via web {nombre} se leyo la pestana de otra "
+                              f"linea: {(p.stdout or '').strip()[:200]}")
+            if dice and dice not in (p.stderr or ""):
+                fallos.append(f"con la via web {nombre} el mensaje no nombra la linea "
+                              f"que falta terminar ({dice}): {(p.stderr or '')[:200]}")
+
+            # Y el doctor lo dice con el mismo codigo: es lo que el panel traduce.
+            p = subprocess.run([str(BIN / "wa-read"), "doctor", "--json"],
+                               capture_output=True, text=True, env=env, timeout=180)
+            fila = {f.get("code"): f for f in json.loads(p.stdout or "[]")}.get("web", {})
+            hechas += 2
+            if fila.get("ok"):
+                fallos.append(f"con la via web {nombre} el doctor salio verde leyendo "
+                              "una sesion que nadie registro")
+            if fila.get("detailCode") != motivo:
+                fallos.append(f"con la via web {nombre} el doctor dio detailCode "
+                              f"{fila.get('detailCode')!r} y no {motivo!r}")
+
+            # Y `state` no puede prometer una fuente viva que no existe: una firma
+            # `live` por una linea que no se lee le dice a quien sincroniza que hay
+            # algo nuevo donde no hay nada.
+            p = subprocess.run([str(BIN / "wa-read"), "state", "--json"],
+                               capture_output=True, text=True, env=env, timeout=180)
+            hechas += 1
+            if any(f.get("fingerprint") == "live"
+                   for f in json.loads(p.stdout or "[]")):
+                fallos.append(f"con la via web {nombre} `state` trajo una fuente viva")
+
+        # Dos perfiles del navegador con la MISMA etiqueta y la linea registrada por
+        # etiqueta: elegir el primero es elegir el WhatsApp de otro numero.
+        olvida_lineas_web(home)
+        registra_linea_web(home, "repetida", "web:100000000000001", "Linea De Ejemplo")
+        p = subprocess.run([str(BIN / "wa-read"), "chats", "-n", "10", "--json"],
+                           capture_output=True, text=True, timeout=180,
+                           env=dict(comun, WA_FALSO_PERFILES="repetida,repetida"))
+        hechas += 2
+        primera = (p.stderr or "").strip().splitlines()[:1]
+        if primera != ["wa-read: web-profile-ambiguous"]:
+            fallos.append(f"con dos perfiles con el mismo nombre se eligio uno: "
+                          f"{primera!r} rc={p.returncode}")
+        if p.stdout.strip():
+            fallos.append("con dos perfiles con el mismo nombre igual se leyo algo")
+
+        # Y la etiqueta sigue sirviendo cuando NO es ambigua: el registro guarda lo que
+        # el usuario vio al crear la linea, y romper eso apagaria lineas que andan.
+        p = subprocess.run([str(BIN / "wa-read"), "chats", "-n", "10", "--json"],
+                           capture_output=True, text=True, timeout=180,
+                           env=dict(comun, WA_FALSO_PERFILES="repetida,otra"))
+        hechas += 1
+        if p.returncode != 0 or not json.loads(p.stdout or "[]"):
+            fallos.append(f"una linea registrada por etiqueta dejo de leer: "
+                          f"rc={p.returncode} {(p.stderr or '').strip()[:160]}")
+
+    # El otro control: `profile` no puede volver a tener default. El fallback vivia en
+    # ese default, y una firma es lo unico que se pone rojo antes de que alguien lo use.
+    try:
+        wa = modulo_wa_read()
+    except Exception:                     # noqa: BLE001 - ya se reporto en el mapeo
+        return hechas
+    hechas += 1
+    perfil = inspect.signature(wa.WebSource.__init__).parameters.get("profile")
+    if perfil is None or perfil.default is not inspect.Parameter.empty:
+        fallos.append("WebSource volvio a aceptar construirse sin perfil: ahi vivia la "
+                      "lectura de la pestana ajena")
+    return hechas
+
+
 def revisa_web_convive(fallos: list) -> int:
     """Con la local contestando, una web caida es un aviso y no un apagon.
 
@@ -2606,7 +2752,12 @@ def revisa_web_convive(fallos: list) -> int:
         fallos.append(f"con la local contestando, una web caida aborto con {p.returncode}")
     if len(json.loads(p.stdout or "[]")) != 3:
         fallos.append("con la local contestando, una web caida se llevo las filas locales")
-    if "warning:" not in p.stderr or "web-no-orca" not in p.stderr:
+    # El motivo exacto depende del registro de ESTE equipo — sin ninguna linea
+    # habilitada la via se niega antes de buscar la CLI de Orca — asi que se comprueba
+    # que sea un motivo de la familia web y no uno fijo: fijarlo aca pondria rojo un
+    # equipo sano segun como tenga el usuario sus lineas. `web-no-orca` en concreto lo
+    # recorre revisa_web_finales() con su propio HOME.
+    if "warning:" not in p.stderr or not re.search(r"\bweb-[a-z-]+", p.stderr):
         fallos.append(f"la web caida no salio como aviso: {p.stderr.strip()[:160]!r}")
     return hechas
 
@@ -2629,6 +2780,9 @@ def revisa_override_ajuste(fallos: list) -> int:
                     ORCA_CLI_COMMAND=str(falso))
         subprocess.run([str(BIN / "wa-scope"), "config", "read_web", "off"],
                        capture_output=True, text=True, env=base, timeout=120)
+        # La linea va registrada: sin ninguna habilitada la via web se niega con motivo,
+        # y entonces lo que mediria este caso es esa negativa y no la perilla.
+        registra_linea_web(home, "linea-uno")
 
         # Con la variable la via web corre, aunque el registro diga off.
         hechas += 1
@@ -2779,6 +2933,7 @@ def main() -> int:
                       + revisa_seleccion_web(fallos)
                       + revisa_web_inbox(fallos)
                       + revisa_web_convive(fallos)
+                      + revisa_linea_sin_enlazar(fallos)
                       + revisa_dos_lineas(fallos)
                       + revisa_jaula_web(fallos)
                       + revisa_solo_web(fallos)
