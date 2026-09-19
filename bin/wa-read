@@ -106,8 +106,9 @@ def _linux():
     # `media` va vacio a proposito y no por falta de dato: WhatsAppGo guarda en
     # `media_path` la ruta ABSOLUTA del adjunto, y `os.path.join("", absoluta)` devuelve
     # la absoluta. Poner un prefijo aca romperia justo lo que ya funciona.
+    # `tabla` es la de la base CRUDA, la que el doctor cuenta antes de proyectar nada.
     return {"root": root, "db": db, "media": "", "verified": os.path.exists(db),
-            "app": WAGO_APP, "projected": True}
+            "app": WAGO_APP, "projected": True, "tabla": "messages"}
 
 
 SOURCES = {"Darwin": _darwin, "Windows": _windows, "Linux": _linux}
@@ -2072,7 +2073,11 @@ def readable():
         if not magic.startswith(b"SQLite format 3"):
             return False, "the file is encrypted or is not SQLite"
         con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-        n = con.execute("select count(*) from ZWAMESSAGE").fetchone()[0]
+        # La tabla se pregunta a la FUENTE. Esto lee el fichero CRUDO, no la proyeccion,
+        # asi que en una fuente proyectada `ZWAMESSAGE` no existe todavia y el doctor
+        # salia con "no such table" sobre una base que se lee perfectamente.
+        n = con.execute(f"select count(*) from {SOURCE.get('tabla') or 'ZWAMESSAGE'}"
+                        ).fetchone()[0]
         con.close()
         return True, f"{n} readable messages"
     except sqlite3.DatabaseError as exc:
@@ -2271,7 +2276,11 @@ def cmd_doctor(con, a):
     checks = [
         ("system", "local WhatsApp database supported on this system",
          SOURCE["verified"], platform.system()),
-        ("whatsapp", "WhatsApp Desktop installed", bool(GC) and os.path.isdir(GC),
+        # El nombre lleva el de la app de ESTA plataforma: decirle "WhatsApp Desktop
+        # installed" a quien tiene WhatsAppGo lo manda a buscar una app que en Linux no
+        # existe. El codigo `whatsapp` no cambia — es la llave con la que traduce el panel.
+        ("whatsapp", f"{SOURCE['app'] or 'WhatsApp Desktop'} installed",
+         bool(GC) and os.path.isdir(GC),
          GC or (SOURCE["app"] or "no official app for this system")),
         ("database", "chat database present", os.path.exists(db),
          f"{os.path.getsize(db) // 1048576} MB" if os.path.exists(db) else "missing"),
