@@ -335,12 +335,20 @@ console.log('\nworker: el arnes de la carpeta del plugin')
 // que este Orca no conozca `--worktree floating`, no se puede provocar con la real.
 console.log('\nworker: conectar una linea de WhatsApp Web')
 {
-  const { conectarLinea, dondeVaLaPestana, estadoDeLineas } =
+  const { conectarLinea, dondeVaLaPestana, estadoDeLineas, verPestana } =
     await import('../web-lines.mjs')
 
-  /** Una CLI de Orca falsa. `flotante` decide si conoce el selector nuevo; cada
-   *  llamada queda anotada en un archivo para poder mirar el ORDEN. */
-  function orcaFalso (nombre, { flotante = true, fallaTab = false, eval_ = null } = {}) {
+  /** Una CLI de Orca falsa que ACOTA los listados igual que la de verdad.
+   *
+   *  `tab list` pelado devuelve solo lo del worktree que contiene el cwd, `--worktree
+   *  all` devuelve todo y `--worktree floating` solo el flotante. Sin esa asimetria el
+   *  falso no puede delatar el defecto que costo la sesion: un listado que no ve la
+   *  pestana del flotante y se lee como "esta linea no tiene pestana".
+   *
+   *  `flotante` decide si conoce el selector nuevo; cada llamada queda anotada en un
+   *  archivo para poder mirar el ORDEN. */
+  function orcaFalso (nombre, { flotante = true, fallaTab = false, eval_ = null,
+    pestanaEn = 'wt-9', cwdWorktree = 'wt-9', conTerminal = true } = {}) {
     const dir = join(RAIZ, nombre)
     mkdirSync(dir, { recursive: true })
     const bitacora = join(dir, 'llamadas.txt')
@@ -351,17 +359,30 @@ fs.appendFileSync(${JSON.stringify(bitacora)}, a.join(' ') + '\\n')
 const ok = (result) => { console.log(JSON.stringify({ ok: true, result })); process.exit(0) }
 const no = (code) => { console.log(JSON.stringify({ ok: false, error: { code } })); process.exit(0) }
 const cmd = a.join(' ')
-if (cmd.startsWith('tab list') && a.includes('floating')) {
-  return ${flotante} ? ok({ tabs: [] }) : no('selector_not_found')
-}
+const PESTANA = { browserPageId: 'page-1', url: 'https://web.whatsapp.com/',
+  profileId: 'perfil-1', profileLabel: 'Soporte', worktreeId: ${JSON.stringify(pestanaEn)} }
+const FLOT = 'global-floating-terminal'
 if (cmd.startsWith('tab list')) {
-  return ok({ tabs: [{ browserPageId: 'page-1', url: 'https://web.whatsapp.com/',
-    profileId: 'perfil-1', profileLabel: 'Soporte' }] })
+  const sel = a[a.indexOf('--worktree') + 1]
+  if (a.includes('--worktree') && (sel === 'floating' || sel === FLOT)) {
+    if (!${flotante}) return no('selector_not_found')
+    return ok({ tabs: PESTANA.worktreeId === FLOT ? [PESTANA] : [] })
+  }
+  // El listado pelado se acota al worktree del cwd, igual que la CLI de verdad.
+  const alcance = a.includes('--worktree') && sel !== 'all'
+    ? String(sel).replace(/^id:/, '') : (a.includes('--worktree') ? null : ${JSON.stringify(cwdWorktree)})
+  if (alcance === null) return ok({ tabs: [PESTANA] })
+  return ok({ tabs: PESTANA.worktreeId === alcance ? [PESTANA] : [] })
 }
 if (cmd.startsWith('worktree list')) {
   return ok([{ id: 'wt-9', displayName: 'alfred-soporte', lastActivityAt: 9 },
              { id: 'wt-1', displayName: 'otro', lastActivityAt: 1 }])
 }
+if (cmd.startsWith('terminal list')) {
+  return ok({ terminals: ${conTerminal} ? [{ handle: 'term_x' }] : [] })
+}
+if (cmd.startsWith('terminal switch')) return ok({ focus: { handle: 'term_x' } })
+if (cmd.startsWith('tab switch')) return ok({ switched: 0, browserPageId: 'page-1' })
 if (cmd.startsWith('tab profile create')) return ok({ profile: { id: 'perfil-1' } })
 if (cmd.startsWith('tab profile delete')) return ok({ deleted: true })
 if (cmd.startsWith('tab create')) {
@@ -395,27 +416,36 @@ console.log(JSON.stringify([{ id: 'web:pending:perfil-1', label: 'Soporte',
     } }
   }
 
-  const { execFile } = await import('node:child_process')
+  const { execFile, execFileSync } = await import('node:child_process')
   const corre = (cmd, args) => new Promise((res, rej) => {
     execFile(cmd, args, (e, stdout, stderr) =>
       e ? rej(e) : res({ stdout: stdout ?? '', stderr: stderr ?? '' }))
   })
 
   {
+    // El default cambio: aunque este Orca sepa abrir en el flotante, ese panel no lo
+    // abre ningun comando y fuera de macOS ni siquiera trae atajo. La pestana cae en
+    // un proyecto CON NOMBRE, que es un sitio al que el usuario puede entrar.
     const o = orcaFalso('orca-flotante', { flotante: true })
     const destino = await dondeVaLaPestana(o.exe, null)
-    ok('con soporte, la pestana va al espacio flotante',
-      destino.ok && destino.selector === 'floating' && destino.donde === 'flotante',
-      JSON.stringify(destino))
+    ok('por defecto la pestana va a un proyecto, no al espacio flotante',
+      destino.ok && destino.donde === 'proyecto' && destino.selector === 'id:wt-9' &&
+      destino.proyecto === 'alfred-soporte', JSON.stringify(destino))
+    const pedido = await dondeVaLaPestana(o.exe, null, 'flotante')
+    ok('y el flotante sigue disponible, pero solo si lo piden',
+      pedido.ok && pedido.donde === 'flotante' && pedido.selector === 'floating',
+      JSON.stringify(pedido))
   }
 
   {
-    // El caso que importa: este Orca no conoce el selector. La pestana NO puede caer
-    // en silencio en cualquier lado — tiene que caer en un proyecto con nombre, para
-    // que el panel pueda decir cual y avisar que se cierra con el.
+    // Pedir el flotante en un Orca que no lo conoce se DICE. Caer callado en un
+    // proyecto seria contestar otra cosa de la que el usuario eligio.
     const o = orcaFalso('orca-viejo', { flotante: false })
+    const pedido = await dondeVaLaPestana(o.exe, null, 'flotante')
+    ok('sin soporte, pedir el flotante falla con motivo',
+      !pedido.ok && pedido.code === 'sin-flotante', JSON.stringify(pedido))
     const solo = await dondeVaLaPestana(o.exe, null)
-    ok('sin soporte cae en el proyecto de actividad mas reciente, y lo nombra',
+    ok('y el default cae en el proyecto de actividad mas reciente, y lo nombra',
       solo.ok && solo.selector === 'id:wt-9' && solo.proyecto === 'alfred-soporte',
       JSON.stringify(solo))
     const mirando = await dondeVaLaPestana(o.exe, { displayName: 'otro' })
@@ -435,8 +465,8 @@ console.log(JSON.stringify([{ id: 'web:pending:perfil-1', label: 'Soporte',
     ok('crea el perfil AISLADO: dos sesiones en el mismo perfil se desloguean',
       c.some((l) => l.startsWith('tab profile create') && l.includes('isolated')),
       JSON.stringify(c))
-    ok('y abre la pestana en el espacio flotante con ese perfil',
-      c.some((l) => l.startsWith('tab create') && l.includes('--worktree floating') &&
+    ok('y abre la pestana en el proyecto con ese perfil',
+      c.some((l) => l.startsWith('tab create') && l.includes('--worktree id:wt-9') &&
         l.includes('perfil-1') && l.includes('web.whatsapp.com')),
       JSON.stringify(c))
     const s = w.llamadas()
@@ -464,6 +494,87 @@ console.log(JSON.stringify([{ id: 'web:pending:perfil-1', label: 'Soporte',
       JSON.stringify(o.llamadas()))
     ok('y no registra ni enciende nada', w.llamadas().length === 0,
       JSON.stringify(w.llamadas()))
+  }
+
+  {
+    // El defecto que costo la sesion: la pestana estaba en el espacio flotante, viva y
+    // con el QR en pantalla, y el listado por defecto no la devolvia. Ese cero llegaba
+    // al panel como "sin pestana" sobre una linea cuya pestana existia.
+    const cuenta = [{ id: 'web:pending:perfil-1', label: 'Soporte', profile: 'perfil-1',
+      pending: true, linked_at: null, authorized_chats: 0 }]
+    const o = orcaFalso('orca-flot-oculta',
+      { pestanaEn: 'global-floating-terminal', cwdWorktree: 'wt-9' })
+    const filas = await estadoDeLineas(o.exe, cuenta)
+    ok('una pestana en el espacio flotante SE ENCUENTRA aunque el listado por ' +
+       'defecto no la devuelva',
+      filas[0].state === 'esperando' && filas[0].pageId === 'page-1',
+      JSON.stringify(filas))
+    // Control de la mutacion: el listado pelado, solo, no la ve. Si `listarPestanas`
+    // volviera a una sola vista, esto es lo que volveria a pasar.
+    const pelado = JSON.parse(execFileSync(o.exe, ['tab', 'list', '--json'],
+      { encoding: 'utf8' })).result.tabs
+    ok('y el control: ese listado pelado devuelve cero', pelado.length === 0,
+      JSON.stringify(pelado))
+    ok('y la union la encuentra porque pregunta por mas de una vista',
+      o.llamadas().some((l) => l.includes('--worktree all')) &&
+      o.llamadas().some((l) => l.includes('--worktree floating')),
+      JSON.stringify(o.llamadas().slice(0, 6)))
+  }
+
+  {
+    // El `placement` se DERIVA de la pestana en cada vuelta. Guardado, decia "flotante"
+    // con la pestana ya en un proyecto, y el usuario abrio un panel vacio por leerlo.
+    const cuenta = [{ id: 'web:57300', label: 'Soporte', profile: 'perfil-1',
+      pending: false, linked_at: '2026-09-18 10:00', authorized_chats: 2 }]
+    const enProyecto = await estadoDeLineas(
+      orcaFalso('orca-lugar-proj', { pestanaEn: 'wt-9' }).exe, cuenta)
+    ok('la fila dice que la pestana esta en el proyecto, y como se llama',
+      enProyecto[0].placement === 'proyecto' &&
+      enProyecto[0].project === 'alfred-soporte' &&
+      enProyecto[0].worktreeId === 'wt-9', JSON.stringify(enProyecto))
+    const enFlotante = await estadoDeLineas(
+      orcaFalso('orca-lugar-flot',
+        { pestanaEn: 'global-floating-terminal' }).exe, cuenta)
+    ok('y con la MISMA linea movida al flotante, la fila cambia sola',
+      enFlotante[0].placement === 'flotante' && !enFlotante[0].project,
+      JSON.stringify(enFlotante))
+    // Control: un placement cacheado no se moveria. Las dos corridas son la misma
+    // cuenta y el mismo perfil; lo unico que cambio es donde esta la pestana.
+    ok('control: el valor no es el mismo en las dos, o seria un valor guardado',
+      enProyecto[0].placement !== enFlotante[0].placement,
+      `${enProyecto[0].placement} vs ${enFlotante[0].placement}`)
+  }
+
+  {
+    // "Ver la pestana" no puede contestar ok sobre algo que el usuario no va a ver.
+    const o = orcaFalso('orca-ver-flot')
+    const flot = await verPestana(o.exe, 'page-1', { placement: 'flotante' })
+    ok('ver una pestana del espacio flotante NO dice que si: no hay como abrir ese panel',
+      !flot.ok && flot.code === 'flotante-sin-via', JSON.stringify(flot))
+    ok('y ni siquiera intenta el switch, que devolveria ok sin mostrar nada',
+      !o.llamadas().some((l) => l.startsWith('tab switch')),
+      JSON.stringify(o.llamadas()))
+
+    const p = orcaFalso('orca-ver-proj')
+    const enProy = await verPestana(p.exe, 'page-1',
+      { placement: 'proyecto', project: 'alfred-soporte', worktreeId: 'wt-9' })
+    ok('en un proyecto si la trae al frente, y antes hace activo ese worktree',
+      enProy.ok && enProy.surfaced === true && enProy.project === 'alfred-soporte',
+      JSON.stringify(enProy))
+    const c = p.llamadas()
+    ok('control del orden: el switch de terminal va ANTES del foco, porque el foco ' +
+       'solo se ve si el usuario ya esta parado en ese worktree',
+      c.findIndex((l) => l.startsWith('terminal switch')) >= 0 &&
+      c.findIndex((l) => l.startsWith('terminal switch')) <
+      c.findIndex((l) => l.startsWith('tab switch')), JSON.stringify(c))
+
+    const sinTerm = orcaFalso('orca-ver-sin-term', { conTerminal: false })
+    const parcial = await verPestana(sinTerm.exe, 'page-1',
+      { placement: 'proyecto', project: 'alfred-soporte', worktreeId: 'wt-9' })
+    ok('sin terminal ahi no se puede llevar al usuario, y eso se DICE en vez de ' +
+       'contestar un ok que no se ve',
+      parcial.ok && parcial.surfaced === false && parcial.project === 'alfred-soporte',
+      JSON.stringify(parcial))
   }
 
   {
@@ -690,11 +801,17 @@ const ok = (result) => { console.log(JSON.stringify({ ok: true, result })); proc
 const arg = (n) => { const i = a.indexOf(n); return i >= 0 ? a[i + 1] : null }
 const cmd = a.join(' ')
 if (cmd.startsWith('tab list')) return ok({ tabs: s.tabs })
+if (cmd.startsWith('worktree list')) {
+  return ok([{ id: 'wt-9', displayName: 'alfred-soporte', lastActivityAt: 9 }])
+}
+if (cmd.startsWith('terminal list')) return ok({ terminals: [{ handle: 'term_x' }] })
+if (cmd.startsWith('terminal switch')) return ok({ focus: { handle: 'term_x' } })
 if (cmd.startsWith('tab profile create')) return ok({ profile: { id: 'perfil-1' } })
 if (cmd.startsWith('tab create')) {
   if (${lentoMs}) require('child_process').execSync('sleep ' + (${lentoMs} / 1000))
   const id = 'page-' + (s.tabs.length + 1)
-  s.tabs.push({ browserPageId: id, url: arg('--url'), profileId: arg('--profile') })
+  s.tabs.push({ browserPageId: id, url: arg('--url'), profileId: arg('--profile'),
+    worktreeId: String(arg('--worktree') || '').replace(/^id:/, '') })
   fs.writeFileSync(EST, JSON.stringify(s))
   return ok({ browserPageId: id })
 }
@@ -744,15 +861,17 @@ console.log(JSON.stringify({ ok: false, error: { code: 'unsupported' } }))
       orca.store.webLines && orca.store.webLines.lines.length === 1 &&
       orca.store.webLines.lines[0].state === 'esperando',
       JSON.stringify(orca.store.webLines))
-    // Donde se abrio la pestana: lo sabe solo quien la abrio, y el sondeo pisa esa
-    // clave cada 3 s. Duraba tres segundos y desaparecia justo cuando el usuario
-    // buscaba el QR. Control: sin arrastrarlo, aca queda sin placement.
-    ok('y dice donde quedo la pestana apenas termina',
-      orca.store.webLines.placement === 'flotante',
+    // Donde esta la pestana viaja en la FILA y se recalcula en cada vuelta. El valor
+    // que se guardaba arriba sobrevivia al sondeo y por eso podia quedar viejo.
+    ok('y dice donde esta la pestana apenas termina, en la fila',
+      orca.store.webLines.lines[0].placement === 'proyecto' &&
+      orca.store.webLines.lines[0].project === 'alfred-soporte',
       JSON.stringify(orca.store.webLines))
+    ok('y NO deja un lugar guardado arriba, que es el que podia quedar viejo',
+      !orca.store.webLines.placement, JSON.stringify(orca.store.webLines))
     await new Promise((r) => setTimeout(r, 7000))
     ok('y lo sigue diciendo dos vueltas del sondeo despues, con la linea esperando',
-      orca.store.webLines.placement === 'flotante' &&
+      orca.store.webLines.lines[0].placement === 'proyecto' &&
       orca.store.webLines.lines[0].state === 'esperando',
       JSON.stringify(orca.store.webLines))
     apagar()

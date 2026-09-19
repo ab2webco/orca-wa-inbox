@@ -287,19 +287,17 @@ const WEB_SONDEO_OCIOSO_MS = 5 * 60 * 1000
 async function refrescarLineas(orca, waScope, { motivo = 'timer' } = {}) {
   const exe = orcaCli()
   const previo = (await leer(orca, WEB_LINES_KEY)) ?? {}
-  // Donde quedo la pestana lo sabe SOLO quien la abrio, y el sondeo pisa esta clave
-  // cada tres segundos: sin arrastrarlo, la frase que dice donde buscar el QR vivia
-  // esos tres segundos y desaparecia justo cuando el usuario la iba a leer.
-  const lugar = previo.placement
-    ? { placement: previo.placement, project: previo.project ?? null }
-    : {}
+  // El `placement` NO se arrastra. Se arrastraba para que la frase de donde buscar el
+  // QR sobreviviera al sondeo, y el precio fue que mentia: la clave decia "flotante"
+  // con la pestana ya movida al proyecto, y el usuario abrio un panel vacio por leerla.
+  // Ahora cada fila trae el suyo, calculado del worktree de SU pestana en esta vuelta.
   let cuentas = []
   try {
     cuentas = await cuentasWeb(waScope)
   } catch (error) {
     // Las filas de antes se quedan: publicar una lista vacia por una lectura que fallo
     // le dice al usuario que no tiene ninguna linea, que es exactamente lo contrario.
-    await guardar(orca, WEB_LINES_KEY, { ...lugar, at: new Date().toISOString(),
+    await guardar(orca, WEB_LINES_KEY, { at: new Date().toISOString(),
       lines: Array.isArray(previo.lines) ? previo.lines : [],
       error: 'sin-registro', detail: String(error?.message ?? '').slice(0, 200) })
     return null
@@ -330,7 +328,7 @@ async function refrescarLineas(orca, waScope, { motivo = 'timer' } = {}) {
     }
   }
   await guardar(orca, WEB_LINES_KEY, {
-    ...lugar, at: new Date().toISOString(), lines: lineas, motivo,
+    at: new Date().toISOString(), lines: lineas, motivo,
     ...(sinIdentidad ? { error: 'sin-identidad', detail: sinIdentidad } : {})
   })
   return lineas
@@ -350,12 +348,19 @@ function veredicto(orca, pedido, extra) {
  *  Todas las salidas dejan veredicto. Antes varias no dejaban ninguna — ver una pestana
  *  que no existe, o un `run` que rechazaba a mitad del enlace — y el usuario se quedaba
  *  con el campo vacio, sin fila y sin motivo. */
+/** Donde quiere el usuario que viva la pestana. El proyecto es el default porque el
+ *  espacio flotante no tiene atajo fuera de macOS ni comando que lo abra. */
+function destinoPedido(pedido) {
+  return pedido?.donde === 'flotante' ? 'flotante' : 'proyecto'
+}
+
 async function atenderWeb(orca, waScope, pedido, contexto) {
   const exe = orcaCli()
   const fin = (extra) => guardar(orca, WEB_LINES_KEY, extra)
   if (pedido.action === 'link') {
     const label = String(pedido.label || '').trim() || 'WhatsApp Web'
-    const r = await conectarLinea({ exe, waScope, run, label, contextoActivo: contexto })
+    const r = await conectarLinea({ exe, waScope, run, label, contextoActivo: contexto,
+      donde: destinoPedido(pedido) })
     if (!r.ok) {
       await veredicto(orca, pedido, { ok: false, code: r.code, detail: String(r.detail || '').slice(0, 300) })
       await fin({ at: new Date().toISOString(), lines: [], error: r.code,
@@ -364,8 +369,8 @@ async function atenderWeb(orca, waScope, pedido, contexto) {
     }
     await guardar(orca, 'readWeb', 'on')
     await refrescarLineas(orca, waScope, { motivo: 'link' })
-    const previo = (await leer(orca, WEB_LINES_KEY)) ?? {}
-    await fin({ ...previo, placement: r.donde, project: r.proyecto || null })
+    // El veredicto dice donde quedo; la frase permanente sale de la fila, que lo
+    // recalcula. Escribirlo tambien en `webLines` es lo que dejaba el valor viejo.
     await veredicto(orca, pedido, { ok: true, placement: r.donde,
       project: r.proyecto || null })
     return
@@ -378,16 +383,25 @@ async function atenderWeb(orca, waScope, pedido, contexto) {
     return
   }
   if (pedido.action === 'show' && pedido.pageId) {
-    const r = await verPestana(exe, pedido.pageId)
+    // La ubicacion viaja en el pedido porque es la que el panel acaba de pintar, o sea
+    // la calculada contra la pestana de verdad en la ultima vuelta del sondeo.
+    const r = await verPestana(exe, pedido.pageId,
+      { placement: pedido.placement || null, project: pedido.project || null,
+        worktreeId: pedido.worktreeId || null })
     // Fallaba callado: se resondeaba y nada mas. Un boton que no hace nada y no dice
-    // por que es el mismo callejon que el spinner eterno.
-    await veredicto(orca, pedido, r.ok ? { ok: true }
-      : { ok: false, code: r.code, detail: String(r.detail || '').slice(0, 300) })
+    // por que es el mismo callejon que el spinner eterno. Y `surfaced` viaja siempre:
+    // un ok a secas sobre un foco que quedo preparado y no se ve es el mismo defecto.
+    await veredicto(orca, pedido, r.ok
+      ? { ok: true, surfaced: !!r.surfaced, project: r.project || null,
+          placement: pedido.placement || null }
+      : { ok: false, code: r.code, detail: String(r.detail || '').slice(0, 300),
+          placement: pedido.placement || null })
     if (!r.ok) await refrescarLineas(orca, waScope, { motivo: 'show' })
     return
   }
   if (pedido.action === 'reopen' && pedido.profile) {
-    const r = await reabrirPestana({ exe, profile: pedido.profile, contextoActivo: contexto })
+    const r = await reabrirPestana({ exe, profile: pedido.profile,
+      contextoActivo: contexto, donde: destinoPedido(pedido) })
     const previo = (await leer(orca, WEB_LINES_KEY)) ?? {}
     if (!r.ok) {
       await veredicto(orca, pedido, { ok: false, code: r.code, detail: String(r.detail || '').slice(0, 300) })
@@ -395,8 +409,6 @@ async function atenderWeb(orca, waScope, pedido, contexto) {
       return
     }
     await refrescarLineas(orca, waScope, { motivo: 'reopen' })
-    const ahora = (await leer(orca, WEB_LINES_KEY)) ?? {}
-    await fin({ ...ahora, placement: r.donde, project: r.proyecto || null })
     await veredicto(orca, pedido, { ok: true, placement: r.donde,
       project: r.proyecto || null })
     return

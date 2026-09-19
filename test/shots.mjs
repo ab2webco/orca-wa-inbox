@@ -219,13 +219,18 @@ const SIN_CHATS = Object.assign({}, DATOS, { chats: [], scope: {} })
 // programa. Los campos son los que escribe refrescarLineas() en main.mjs: con otros
 // nombres se fotografiaria el stub y no el panel.
 const AHORA_ISO = new Date().toISOString()
+// El lugar viaja en la FILA: es lo que el worker calcula contra la pestana de verdad
+// en cada vuelta, y por eso es lo que la captura tiene que ejercitar.
 const LINEA_ESPERANDO = {
   id: 'web:pending:9f2c', label: 'Soporte Norte', profile: '9f2c', pending: true,
-  linkedAt: null, authorizedChats: 0, pageId: 'page-1', state: 'esperando'
+  linkedAt: null, authorizedChats: 0, pageId: 'page-1', state: 'esperando',
+  placement: 'proyecto', project: 'alfred-soporte', worktreeId: 'wt-9'
 }
 const LINEA_ENLAZADA = {
   id: 'web:573000000000', label: 'Soporte Norte', profile: '9f2c', pending: false,
-  linkedAt: '2026-09-17 09:12', authorizedChats: 2, pageId: 'page-1', state: 'enlazada'
+  linkedAt: '2026-09-17 09:12', authorizedChats: 2, pageId: 'page-1',
+  state: 'enlazada', placement: 'proyecto', project: 'alfred-soporte',
+  worktreeId: 'wt-9'
 }
 const LINEA_CAIDA = Object.assign({}, LINEA_ENLAZADA,
   { id: 'web:573111111111', label: 'Ventas', profile: 'a71b', state: 'caida' })
@@ -303,7 +308,7 @@ const PANELES = [
     //    pestana: "donde se abre" fue la pregunta real, dos veces.
     nombre: 'config-esperando', archivo: 'config.html', anchos: ANCHOS_ESTADO,
     datos: Object.assign({}, DATOS, {
-      webLines: { at: AHORA_ISO, placement: 'flotante', lines: [LINEA_ESPERANDO] }
+      webLines: { at: AHORA_ISO, lines: [LINEA_ESPERANDO] }
     })
   },
   {
@@ -311,8 +316,24 @@ const PANELES = [
     //    flotante, asi que quedo dentro de un proyecto y eso se dice con el nombre.
     nombre: 'config-enlazada', archivo: 'config.html', anchos: ANCHOS_ESTADO,
     datos: Object.assign({}, DATOS, {
-      webLines: { at: AHORA_ISO, placement: 'proyecto', project: 'alfred-soporte',
-        lines: [LINEA_ENLAZADA] }
+      webLines: { at: AHORA_ISO, lines: [LINEA_ENLAZADA] }
+    })
+  },
+  {
+    // 3b. La MISMA linea enlazada pero con la pestana en el espacio flotante. Va a la
+    //     captura porque es la frase que mando al usuario a un panel vacio: tiene que
+    //     decir que ese panel no se abre desde aca y como lo abre el. Y la fila de
+    //     abajo esta en un proyecto: las dos frases conviven, que es lo que pasa en
+    //     cuanto hay dos lineas.
+    nombre: 'config-linea-flotante', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: Object.assign({}, DATOS, {
+      readWeb: 'on',
+      webLines: { at: AHORA_ISO, lines: [
+        Object.assign({}, LINEA_ENLAZADA, { label: 'Soporte Norte',
+          placement: 'flotante', project: null, worktreeId: null }),
+        Object.assign({}, LINEA_ESPERANDO, { id: 'web:pending:a71b', label: 'Ventas',
+          profile: 'a71b', pageId: 'page-2' })
+      ] }
     })
   },
   {
@@ -320,7 +341,7 @@ const PANELES = [
     //    linea registrada que no lee nada y no dice por que.
     nombre: 'config-caida', archivo: 'config.html', anchos: ANCHOS_ESTADO,
     datos: Object.assign({}, DATOS, {
-      webLines: { at: AHORA_ISO, placement: 'flotante',
+      webLines: { at: AHORA_ISO,
         lines: [LINEA_CAIDA, Object.assign({}, LINEA_ENLAZADA, { state: 'sin-pestana' })] }
     })
   },
@@ -336,7 +357,7 @@ const PANELES = [
     anchos: ANCHOS_ESTADO,
     datos: Object.assign({}, DATOS, {
       readWeb: 'on',
-      webLines: { at: AHORA_ISO, placement: 'flotante', lines: [
+      webLines: { at: AHORA_ISO, lines: [
         Object.assign({}, LINEA_ESPERANDO, { label: 'Esperando' }),
         Object.assign({}, LINEA_ESPERANDO, { label: 'Abriendo', state: 'cargando' }),
         Object.assign({}, LINEA_ENLAZADA, { label: 'Enlazada' }),
@@ -401,7 +422,7 @@ const PANELES = [
     nombre: 'config-linea-a-medias', archivo: 'config.html', anchos: ANCHOS_ESTADO,
     datos: Object.assign({}, DATOS, {
       readWeb: 'on',
-      webLines: { at: AHORA_ISO, placement: 'flotante', lines: [LINEA_ESPERANDO] },
+      webLines: { at: AHORA_ISO, lines: [LINEA_ESPERANDO] },
       health: {
         ok: true,
         optional: [{
@@ -423,7 +444,7 @@ const PANELES = [
     nombre: 'config-solo-web', archivo: 'config.html', anchos: ANCHOS_ESTADO,
     datos: Object.assign({}, DATOS, {
       readWeb: 'on', readWebText: 'memoria',
-      webLines: { at: AHORA_ISO, placement: 'flotante', lines: [LINEA_ENLAZADA] },
+      webLines: { at: AHORA_ISO, lines: [LINEA_ENLAZADA] },
       health: {
         ok: true,
         optional: [{
@@ -472,7 +493,7 @@ const PANELES = [
     nombre: 'config-escritorio-off', archivo: 'config.html', anchos: ANCHOS,
     datos: Object.assign({}, DATOS, {
       readLocal: 'off', readWeb: 'on', readWebText: 'memoria',
-      webLines: { at: AHORA_ISO, placement: 'flotante', lines: [LINEA_ENLAZADA] },
+      webLines: { at: AHORA_ISO, lines: [LINEA_ENLAZADA] },
       health: {
         ok: true,
         optional: [{
@@ -489,7 +510,7 @@ const PANELES = [
     nombre: 'config-dos-lineas', archivo: 'config.html', anchos: ANCHOS,
     datos: Object.assign({}, DATOS, {
       readLocal: 'on', readWeb: 'on', readWebText: 'memoria',
-      webLines: { at: AHORA_ISO, placement: 'flotante',
+      webLines: { at: AHORA_ISO,
         lines: [Object.assign({}, LINEA_ENLAZADA, { label: 'Linea del bot' })] }
     })
   },

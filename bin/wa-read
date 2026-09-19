@@ -458,6 +458,37 @@ def orca_json(args, timeout=30):
 WEB_URL = "web.whatsapp.com"
 
 
+def web_tabs():
+    """Todas las pestanas abiertas, vivan donde vivan.
+
+    `orca tab list` a secas se acota al worktree que CONTIENE el cwd: corriendo desde
+    un proyecto no devuelve nada del espacio flotante, y ese cero llegaba aca como
+    "no hay pestana" sobre una linea cuya pestana estaba abierta y cargada. Medido:
+    parado en un worktree, el listado pelado devuelve 2 pestanas y `--worktree all`
+    devuelve 4, con la de WhatsApp entre las dos que faltaban.
+
+    Se unen tres vistas porque cada una tiene su punto ciego y porque un selector que
+    esta version de Orca no conozca no puede borrar lo que las otras ya encontraron.
+    """
+    por_pagina = {}
+    ultimo = None
+    alguna = False
+    for extra in ([], ["--worktree", "all"], ["--worktree", "floating"]):
+        try:
+            tabs = orca_json(["tab", "list", *extra]).get("tabs") or []
+        except SourceError as error:
+            ultimo = error
+            continue
+        alguna = True
+        for t in tabs:
+            pid = t.get("browserPageId")
+            if pid and pid not in por_pagina:
+                por_pagina[pid] = t
+    if not alguna and ultimo is not None:
+        raise ultimo
+    return list(por_pagina.values())
+
+
 def web_page(profile):
     """El id de la pestana con la sesion de ESA linea, atada por identidad de perfil.
 
@@ -475,8 +506,7 @@ def web_page(profile):
                           "that line has no browser profile recorded, so there is no "
                           "session that belongs to it; unlink it from the plugin panel "
                           "and link it again")
-    tabs = orca_json(["tab", "list"]).get("tabs") or []
-    abiertas = [t for t in tabs if WEB_URL in (t.get("url") or "")]
+    abiertas = [t for t in web_tabs() if WEB_URL in (t.get("url") or "")]
     # El id primero y la etiqueta despues, nunca mezclados: una etiqueta que coincide
     # con el id de OTRO perfil ganaba por orden de pestana.
     candidatas = [t for t in abiertas if t.get("profileId") == profile]

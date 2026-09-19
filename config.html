@@ -242,6 +242,10 @@
       .opcional b { color: var(--foreground, var(--fb-foreground)); font-weight: 500; }
       .opcional code { color: var(--primary, var(--fb-primary)); }
       .alert[hidden] { display: none; }
+      /* Un lugar por renglon: dos frases seguidas se leian como una sola. */
+      #lines-place .place-line { display: block; }
+      #lines-place .place-line + .place-line { margin-top: .35rem; }
+
       /* El unico bloque con caja: en Orca las cajas redondeadas quedan reservadas
          para avisos, no para estructura (listing/conflict-status-cards.tsx:49 usa
          rounded-md + filete + tinte). Radio md, filete y texto en --destructive; el
@@ -371,6 +375,12 @@
         <label for="line-label" data-t="lineLabelLabel"></label>
         <input id="line-label" data-t-ph="lineLabelPh" />
         <p class="hint" data-t="linesHelp"></p>
+        <label for="line-where" data-t="lineWhereLabel"></label>
+        <select id="line-where">
+          <option value="proyecto" data-t="lineWhereProject"></option>
+          <option value="flotante" data-t="lineWhereFloating"></option>
+        </select>
+        <p class="hint" data-t="lineWhereHelp"></p>
         <div class="actions">
           <button class="primary" id="link-line" data-t="linkLine"></button>
           <span class="said" id="said-line"></span>
@@ -686,14 +696,27 @@
           stNoOrca: 'Orca no contesta',
           stNoOrcaHow: 'No pude ejecutar la CLI de Orca, que es con lo que se conduce el ' +
             'navegador. Con Orca Lab abierto, reintenta.',
-          linePlacedFloating: 'La pestana vive en el espacio flotante, fuera de los ' +
-            'proyectos: sigue ahi aunque cierres el proyecto en el que estabas.',
-          linePlacedProject: 'La pestana quedo en el proyecto "{p}": esta version de Orca ' +
-            'todavia no sabe abrirla en el espacio flotante, asi que se cierra junto con ' +
-            'ese proyecto. Actualiza Orca para que la linea viva aparte.',
-          lineNoPlace: 'No hay ningun proyecto abierto en Orca donde poner la pestana, y ' +
-            'esta version todavia no sabe abrirla en el espacio flotante. Abri un ' +
-            'proyecto en Orca y reintenta.',
+          linePlacedFloating: 'La pestana vive en el espacio flotante. Ese panel no se ' +
+            'abre desde aca: abrilo vos con {k}, o con el boton del espacio flotante en ' +
+            'la barra de estado de Orca.',
+          linePlacedProject: 'La pestana vive en el proyecto "{p}". Para verla, entra a ' +
+            'ese proyecto en la barra lateral. Ojo: se cierra junto con el.',
+          lineNoPlace: 'No hay ningun proyecto abierto en Orca donde poner la pestana. ' +
+            'Abri un proyecto en Orca y reintenta.',
+          lineWhereLabel: 'Donde abrir la pestana',
+          lineWhereProject: 'En el proyecto que estas mirando',
+          lineWhereFloating: 'En el espacio flotante',
+          lineWhereHelp: 'En el proyecto la ves entrando a el, y se cierra con el. El ' +
+            'espacio flotante sobrevive a cerrar el proyecto, pero su panel no lo abre ' +
+            'ningun boton de aca: lo abris vos con {k}. Si no lo abris, el codigo QR ' +
+            'queda donde no lo podes mirar.',
+          errSinFlotante: 'Esta version de Orca no sabe abrir una pestana en el espacio ' +
+            'flotante. Elegi "En el proyecto que estas mirando".',
+          errFlotanteSinVia: 'Esa pestana esta en el espacio flotante y ningun comando ' +
+            'puede abrir ese panel. Abrilo vos y la vas a encontrar ahi.',
+          lineShownIn: 'Te lleve a "{p}" y puse la pestana adelante.',
+          lineStagedIn: 'La pestana esta en el proyecto "{p}". No pude traerte hasta ahi: ' +
+            'entra a ese proyecto en la barra lateral y vas a verla.',
           lineFailed: 'No pude conectar la linea.',
           lineKept: 'El nombre quedo puesto: corregi lo de arriba y volve a intentar.',
           lineNoAnswer: 'El plugin no contesto. Fijate si Orca sigue abierto y volve a ' +
@@ -959,13 +982,27 @@
           stNoOrca: 'Orca does not answer',
           stNoOrcaHow: 'I could not run the Orca CLI, which is what drives the browser. ' +
             'With Orca Lab open, try again.',
-          linePlacedFloating: 'The tab lives in the floating workspace, outside your ' +
-            'projects: it stays there even if you close the project you were in.',
-          linePlacedProject: 'The tab ended up in the project "{p}": this build of Orca ' +
-            'cannot open it in the floating workspace yet, so it closes together with ' +
-            'that project. Update Orca to keep the line on its own.',
-          lineNoPlace: 'No Orca project is open to hold the tab, and this build cannot ' +
-            'open it in the floating workspace yet. Open a project in Orca and try again.',
+          linePlacedFloating: 'The tab lives in the floating workspace. Nothing here can ' +
+            'open that panel: open it yourself with {k}, or with the floating-workspace ' +
+            'button in Orca\'s status bar.',
+          linePlacedProject: 'The tab lives in project "{p}". To see it, open that ' +
+            'project in the sidebar. Note it closes together with that project.',
+          lineNoPlace: 'No Orca project is open to hold the tab. Open a project in Orca ' +
+            'and try again.',
+          lineWhereLabel: 'Where to open the tab',
+          lineWhereProject: 'In the project you are looking at',
+          lineWhereFloating: 'In the floating workspace',
+          lineWhereHelp: 'In the project you reach it by opening that project, and it ' +
+            'closes with it. The floating workspace survives closing the project, but no ' +
+            'button here opens that panel: you open it with {k}. If you do not open it, ' +
+            'the QR code sits where you cannot look at it.',
+          errSinFlotante: 'This build of Orca cannot open a tab in the floating ' +
+            'workspace. Pick "In the project you are looking at".',
+          errFlotanteSinVia: 'That tab is in the floating workspace, and no command can ' +
+            'open that panel. Open it yourself and you will find the tab there.',
+          lineShownIn: 'Took you to "{p}" and brought the tab to the front.',
+          lineStagedIn: 'The tab is in project "{p}". I could not take you there: open ' +
+            'that project in the sidebar and you will see it.',
           lineFailed: 'I could not connect the line.',
           lineKept: 'The name is still there: fix what is above and try again.',
           lineNoAnswer: 'The plugin did not answer. Check that Orca is still open and ' +
@@ -1206,14 +1243,27 @@
         stNoOrca: 'O Orca nao responde',
         stNoOrcaHow: 'Nao consegui executar a CLI do Orca, que e o que conduz o navegador. ' +
           'Com o Orca Lab aberto, tente de novo.',
-        linePlacedFloating: 'A aba vive no espaco flutuante, fora dos projetos: continua ' +
-          'la mesmo que voce feche o projeto em que estava.',
-        linePlacedProject: 'A aba ficou no projeto "{p}": esta versao do Orca ainda nao ' +
-          'sabe abri-la no espaco flutuante, entao ela fecha junto com esse projeto. ' +
-          'Atualize o Orca para a linha viver a parte.',
-        lineNoPlace: 'Nao ha nenhum projeto aberto no Orca para receber a aba, e esta ' +
-          'versao ainda nao sabe abri-la no espaco flutuante. Abra um projeto no Orca e ' +
-          'tente de novo.',
+        linePlacedFloating: 'A aba vive no espaco flutuante. Esse painel nao abre daqui: ' +
+          'abra voce mesmo com {k}, ou com o botao do espaco flutuante na barra de ' +
+          'status do Orca.',
+        linePlacedProject: 'A aba vive no projeto "{p}". Para ve-la, entre nesse projeto ' +
+          'na barra lateral. Atencao: ela fecha junto com ele.',
+        lineNoPlace: 'Nao ha nenhum projeto aberto no Orca para receber a aba. Abra um ' +
+          'projeto no Orca e tente de novo.',
+        lineWhereLabel: 'Onde abrir a aba',
+        lineWhereProject: 'No projeto que voce esta olhando',
+        lineWhereFloating: 'No espaco flutuante',
+        lineWhereHelp: 'No projeto voce chega entrando nele, e ela fecha com ele. O ' +
+          'espaco flutuante sobrevive a fechar o projeto, mas nenhum botao daqui abre ' +
+          'esse painel: voce abre com {k}. Se voce nao abrir, o codigo QR fica onde voce ' +
+          'nao pode olhar.',
+        errSinFlotante: 'Esta versao do Orca nao sabe abrir uma aba no espaco flutuante. ' +
+          'Escolha "No projeto que voce esta olhando".',
+        errFlotanteSinVia: 'Essa aba esta no espaco flutuante e nenhum comando abre esse ' +
+          'painel. Abra voce mesmo e vai encontrar a aba la.',
+        lineShownIn: 'Levei voce para "{p}" e trouxe a aba para a frente.',
+        lineStagedIn: 'A aba esta no projeto "{p}". Nao consegui levar voce ate la: entre ' +
+          'nesse projeto na barra lateral e vai ve-la.',
         lineFailed: 'Nao consegui conectar a linha.',
         lineKept: 'O nome continua ai: corrija o que esta acima e tente de novo.',
         lineNoAnswer: 'O plugin nao respondeu. Veja se o Orca continua aberto e tente ' +
@@ -1301,7 +1351,11 @@
 
       function applyStrings() {
         var q = document.querySelectorAll.bind(document)
-        Array.prototype.forEach.call(q('[data-t]'), function (n) { n.innerHTML = t(n.dataset.t) })
+        // `{k}` es el atajo del espacio flotante, que cambia con la plataforma: un
+        // texto fijo le diria Cmd a quien esta en Linux.
+        Array.prototype.forEach.call(q('[data-t]'), function (n) {
+          n.innerHTML = fmt(n.dataset.t, { k: atajoFlotante() })
+        })
         Array.prototype.forEach.call(q('[data-t-ph]'), function (n) { n.placeholder = t(n.dataset.tPh) })
         Array.prototype.forEach.call(q('[data-t-title]'), function (n) {
           n.title = t(n.dataset.tTitle); n.setAttribute('aria-label', t(n.dataset.tTitle))
@@ -1926,7 +1980,8 @@
         'sin-herramientas': 'errSinHerramientas', 'sin-permiso': 'errSinPermiso',
         demoro: 'errDemoro', vencido: 'errVencido', 'a-medias': 'errAMedias',
         'sin-identidad': 'errSinIdentidad', 'sin-respuesta': 'lineNoAnswer',
-        'sin-pestana': 'errSinPestana'
+        'sin-pestana': 'errSinPestana', 'sin-flotante': 'errSinFlotante',
+        'flotante-sin-via': 'errFlotanteSinVia'
       }
       function motivoWeb (code, detail) {
         return WEB_ERR_KEY[code] ? t(WEB_ERR_KEY[code]) : (detail || code || '')
@@ -1977,6 +2032,27 @@
       function actoLinea (l) {
         var act = defLinea(l).act
         return act === 'show' && !l.pageId ? 'reopen' : act
+      }
+
+      // El atajo que ABRE el panel es floatingTerminal.toggle, Mod+Alt+A, y existe en
+      // las tres plataformas; `Mod` es Cmd en macOS y Ctrl en el resto. El que solo
+      // esta en macOS es floatingWorkspace.maximize, que maximiza uno ya abierto: no
+      // sirve para llegar al QR y por eso no se nombra.
+      function atajoFlotante () {
+        return /Mac|iPhone|iPad/.test(String(navigator.userAgent || ''))
+          ? 'Cmd+Alt+A' : 'Ctrl+Alt+A'
+      }
+
+      /** Donde vive la pestana de ESA linea, dicho de modo que pueda ir a mirarla. */
+      function fraseLugar (l) {
+        if (!l || !l.placement) return ''
+        if (l.placement === 'flotante') {
+          return fmt('linePlacedFloating', { k: atajoFlotante() })
+        }
+        if (l.placement === 'proyecto') {
+          return fmt('linePlacedProject', { p: l.project || '' })
+        }
+        return ''
       }
 
       function lineHow (l) {
@@ -2065,13 +2141,24 @@
             // Se espera el veredicto en vez de soltar el clic: "Ver la pestana" sobre
             // una pestana que ya no esta fallaba y el boton no decia nada hasta el
             // refresco siguiente, ocho segundos despues.
+            // La ubicacion viaja con el pedido: sin ella el worker no puede saber que
+            // esa pestana esta en un panel que no se puede abrir, y contestaba ok.
             busy(b, pedirWeb(accion === 'retry' ? 'refresh' : accion,
-              { id: l.id, profile: l.profile, pageId: l.pageId || null })
+              { id: l.id, profile: l.profile, pageId: l.pageId || null,
+                placement: l.placement || null, project: l.project || null,
+                worktreeId: l.worktreeId || null, donde: el('line-where').value })
               .then(function (p) {
                 if (!p.ok) return
                 return esperarWeb(p.at, 45000).then(function (st) {
                   webStatusUlt = st ||
                     { ok: false, code: 'sin-respuesta', detail: '' }
+                  // Un foco que quedo preparado y no se ve no es un exito: se dice
+                  // adonde tiene que ir a mirar. Antes esto contestaba ok y nada mas.
+                  if (st && st.ok && st.action === 'show') {
+                    said('said-line', st.surfaced
+                      ? '\u2713 ' + fmt('lineShownIn', { p: st.project || '' })
+                      : fmt('lineStagedIn', { p: st.project || '' }), !st.surfaced)
+                  }
                   return repintarLineas()
                 })
               }))
@@ -2096,14 +2183,26 @@
           })
         })
 
-        // Donde quedo la pestana. Se dice siempre que se sepa, no solo cuando falla:
-        // "no encuentro la pestana" fue la pregunta de las dos primeras veces.
+        // Donde esta la pestana. Sale de las filas y no de un valor guardado: el que se
+        // guardaba decia "flotante" con la pestana ya en un proyecto, y el usuario abrio
+        // un panel vacio por leerlo. Cada frase distinta se dice una vez.
         var place = el('lines-place')
-        var donde = lineasUlt && lineasUlt.placement
-        if (donde === 'flotante') place.textContent = t('linePlacedFloating')
-        else if (donde === 'proyecto') {
-          place.textContent = fmt('linePlacedProject', { p: lineasUlt.project || '' })
-        } else place.textContent = ''
+        var frases = []
+        lineas.forEach(function (l) {
+          var f = fraseLugar(l)
+          if (f && frases.indexOf(f) === -1) frases.push(f)
+        })
+        // Con dos lugares distintos hay que decir CUAL es de cual: las dos frases
+        // seguidas se leian como una sola, contradiciendose. Con uno solo el nombre
+        // sobra — la tabla de arriba ya lo dice.
+        if (frases.length < 2) place.textContent = frases[0] || ''
+        else {
+          place.innerHTML = lineas.filter(function (l) { return fraseLugar(l) })
+            .map(function (l) {
+              return '<span class="place-line">' + esc(l.label) + ': ' +
+                esc(fraseLugar(l)) + '</span>'
+            }).join('')
+        }
         place.hidden = !place.textContent
 
         vigilarLineas(lineas.some(function (l) { return l.state !== 'enlazada' }))
@@ -2137,7 +2236,8 @@
         // Sin esto la primera vista del estado llegaria recien al proximo refresco,
         // que es justo el segundo en que el usuario pregunta donde se abrio.
         vigilarLineas(true)
-        busy(event.currentTarget, pedirWeb('link', { label: label }).then(function (p) {
+        busy(event.currentTarget, pedirWeb('link',
+          { label: label, donde: el('line-where').value }).then(function (p) {
           if (!p.ok) {
             said('said-line', t('lineFailed') + ' ' + t('lineKept'), true)
             return

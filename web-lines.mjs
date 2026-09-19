@@ -62,30 +62,51 @@ export async function soportaFlotante(exe) {
   return { ok: false, code: r.code, message: r.message }
 }
 
+/** El worktree del espacio flotante. Es una constante del runtime, no un id que
+ *  cambie por instalacion (orca-oss, src/shared/floating-workspace-selector.ts). */
+export const FLOTANTE_WORKTREE_ID = 'global-floating-terminal'
+
+/** Los arboles que Orca conoce ahora mismo, tal cual los lista. */
+async function arbolesDe(exe) {
+  const lista = await orcaJson(exe, ['worktree', 'list'])
+  if (!lista.ok) return { ok: false, code: lista.code, message: lista.message }
+  const arboles = Array.isArray(lista.result) ? lista.result
+    : (lista.result?.worktrees || [])
+  return { ok: true, arboles }
+}
+
 /**
  * Donde va a vivir la pestana, y como se llama ese lugar para decirselo al usuario.
  *
- * El flotante es el unico sitio que sobrevive a cerrar un proyecto, que es justo lo que
- * esta sesion necesita. Sin el, la pestana cae en un proyecto de verdad y eso se dice:
- * dejarla caer en "el que estuviera activo" sin nombrarlo es como se pierde una pestana.
+ * El flotante ya NO es el destino por defecto. Sobrevive a cerrar un proyecto, si, pero
+ * su panel no se puede abrir desde ningun comando y su atajo solo existe en macOS
+ * (`defaultBindings` de floatingWorkspace.maximize: darwin si, linux y win32 vacios):
+ * en la segunda maquina no habia NINGUNA forma de llegar al QR. Una pestana prolija que
+ * el usuario no puede mirar vale menos que una que se cierra con el proyecto.
  */
-export async function dondeVaLaPestana(exe, contextoActivo) {
-  const soporte = await soportaFlotante(exe)
-  if (!soporte.ok) return { ok: false, code: soporte.code, message: soporte.message }
-  if (soporte.flotante) return { ok: true, donde: 'flotante', selector: 'floating' }
+export async function dondeVaLaPestana(exe, contextoActivo, preferencia = 'proyecto') {
+  if (preferencia === 'flotante') {
+    const soporte = await soportaFlotante(exe)
+    if (!soporte.ok) return { ok: false, code: soporte.code, message: soporte.message }
+    if (!soporte.flotante) {
+      return { ok: false, code: 'sin-flotante',
+               message: 'this Orca cannot open a tab in the floating workspace' }
+    }
+    return { ok: true, donde: 'flotante', selector: 'floating' }
+  }
 
-  const lista = await orcaJson(exe, ['worktree', 'list'])
-  const arboles = Array.isArray(lista.result) ? lista.result
-    : (lista.result?.worktrees || [])
-  if (!arboles.length) {
+  const lista = await arbolesDe(exe)
+  if (!lista.ok) return { ok: false, code: lista.code, message: lista.message }
+  if (!lista.arboles.length) {
     return { ok: false, code: 'sin-proyecto',
              message: 'no Orca worktree is open to hold the tab' }
   }
   // El que el usuario esta mirando, por nombre; si el host no lo dice, el de actividad
   // mas reciente. Se resuelve a id y no a `name:` porque dos ramas pueden llamarse igual.
   const visible = contextoActivo?.displayName
-  const elegido = arboles.find((w) => w.displayName === visible) ||
-    arboles.slice().sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0))[0]
+  const elegido = lista.arboles.find((w) => w.displayName === visible) ||
+    lista.arboles.slice()
+      .sort((a, b) => (b.lastActivityAt || 0) - (a.lastActivityAt || 0))[0]
   return { ok: true, donde: 'proyecto', selector: `id:${elegido.id}`,
            proyecto: elegido.displayName || elegido.path }
 }
@@ -102,12 +123,45 @@ const SONDA_ESTADO = `(() => {
   } catch (e) { return { linked: false, qr: false, error: String(e) }; }
 })()`
 
+/**
+ * Todas las pestanas abiertas, vivan donde vivan.
+ *
+ * Es una union y no una sola llamada porque cada listado tiene su punto ciego. El
+ * listado pelado —el que corria wa-read— se acota al worktree que CONTIENE el cwd
+ * (orca-oss, src/cli/selectors.ts): parado en un proyecto no devuelve nada del espacio
+ * flotante, y ese cero se leia como "no hay pestana" sobre una linea cuya pestana
+ * estaba abierta y cargada. `all` cubre el resto, y `floating` queda de cinturon para
+ * la version donde `all` no lo incluya.
+ *
+ * Falla solo si fallan TODOS: que un selector no exista en este Orca no puede borrar lo
+ * que los otros ya encontraron.
+ */
+async function listarPestanas(exe) {
+  const vistas = [[], ['--worktree', 'all'], ['--worktree', 'floating']]
+  const porPagina = new Map()
+  let ultimo = null
+  let alguna = false
+  for (const extra of vistas) {
+    const r = await orcaJson(exe, ['tab', 'list', ...extra])
+    if (!r.ok) { ultimo = r; continue }
+    alguna = true
+    for (const t of r.result.tabs || []) {
+      if (t.browserPageId && !porPagina.has(t.browserPageId)) {
+        porPagina.set(t.browserPageId, t)
+      }
+    }
+  }
+  if (!alguna) {
+    return { ok: false, code: ultimo?.code || 'fallo', message: ultimo?.message || '' }
+  }
+  return { ok: true, tabs: [...porPagina.values()] }
+}
+
 /** La pestana abierta en WhatsApp Web para ese perfil, si la hay. */
 async function pestanaDe(exe, profile) {
-  const r = await orcaJson(exe, ['tab', 'list', '--worktree', 'all'])
+  const r = await listarPestanas(exe)
   if (!r.ok) return { ok: false, code: r.code, message: r.message }
-  const tabs = r.result.tabs || []
-  const abiertas = tabs.filter((t) => (t.url || '').includes('web.whatsapp.com'))
+  const abiertas = r.tabs.filter((t) => (t.url || '').includes('web.whatsapp.com'))
   // El id primero y la etiqueta despues, nunca mezclados: una etiqueta que coincide con
   // el id de OTRO perfil ganaba por orden de pestana, y mandaba al usuario a la sesion
   // de otro numero. Lo mismo hace web_page() en wa-read.
@@ -120,6 +174,21 @@ async function pestanaDe(exe, profile) {
 }
 
 /**
+ * Donde esta esa pestana AHORA, leido de la pestana misma.
+ *
+ * El `placement` era un valor guardado: lo escribia el que abria la pestana y despues
+ * se arrastraba de refresco en refresco. Con la pestana movida a un proyecto, el panel
+ * seguia diciendo "vive en el espacio flotante" y mandaba al usuario a un panel vacio.
+ * El worktree de la pestana es el unico dato que no puede quedar viejo.
+ */
+function ubicacionDe(tab, nombreDeArbol) {
+  const wt = String(tab?.worktreeId || '')
+  if (!wt) return { placement: null, project: null }
+  if (wt === FLOTANTE_WORKTREE_ID) return { placement: 'flotante', project: null }
+  return { placement: 'proyecto', project: nombreDeArbol(wt), worktreeId: wt }
+}
+
+/**
  * En que estado esta cada linea registrada, preguntandoselo a la sesion de verdad.
  *
  * Afirmar el estado desde el registro es lo que hacia que el panel dijera "enlazada"
@@ -128,6 +197,14 @@ async function pestanaDe(exe, profile) {
  */
 export async function estadoDeLineas(exe, cuentas) {
   const salida = []
+  // Una sola lectura de arboles para todas las lineas: el nombre del proyecto se
+  // resuelve por linea y pedirlo por linea seria un subproceso por fila y por vuelta.
+  const lista = await arbolesDe(exe)
+  const nombres = new Map()
+  for (const w of (lista.ok ? lista.arboles : [])) {
+    nombres.set(w.id, w.displayName || w.path || '')
+  }
+  const nombreDeArbol = (id) => nombres.get(id) || ''
   for (const cuenta of cuentas) {
     const base = { id: cuenta.id, label: cuenta.label, profile: cuenta.profile,
                    pending: !!cuenta.pending, linkedAt: cuenta.linked_at || null,
@@ -143,6 +220,9 @@ export async function estadoDeLineas(exe, cuentas) {
       continue
     }
     const pageId = p.tab.browserPageId
+    // Se calcula por fila y en cada vuelta: es la respuesta a "donde miro el QR", y una
+    // respuesta vieja manda al usuario a un panel vacio.
+    Object.assign(base, ubicacionDe(p.tab, nombreDeArbol))
     const ev = await orcaJson(exe, ['eval', '--page', pageId, '--expression', SONDA_ESTADO])
     if (!ev.ok) {
       // La pestana esta y no contesta: casi siempre sigue cargando. Es un estado
@@ -171,8 +251,8 @@ export async function estadoDeLineas(exe, cuentas) {
 }
 
 /** Crea el perfil aislado y la pestana, y anota la linea en el registro. */
-export async function conectarLinea({ exe, waScope, run, label, contextoActivo }) {
-  const destino = await dondeVaLaPestana(exe, contextoActivo)
+export async function conectarLinea({ exe, waScope, run, label, contextoActivo, donde }) {
+  const destino = await dondeVaLaPestana(exe, contextoActivo, donde)
   if (!destino.ok) return { ok: false, code: destino.code, detail: destino.message }
 
   // Aislado y no importado: dos sesiones de WhatsApp Web en el mismo perfil se
@@ -209,15 +289,43 @@ export async function conectarLinea({ exe, waScope, run, label, contextoActivo }
            donde: destino.donde, proyecto: destino.proyecto || null, cuenta }
 }
 
-/** Pone esa pestana delante del usuario. Es la respuesta a "donde se abre". */
-export async function verPestana(exe, pageId) {
+/**
+ * Pone esa pestana delante del usuario, y dice la verdad sobre si lo logro.
+ *
+ * `tab switch --focus` no revela nada por si solo: el renderer lo aplica SOLO si el
+ * usuario ya esta parado en el worktree de la pestana, y si no lo deja preparado en
+ * silencio (orca-oss, useIpcEvents: "--focus must NOT call setActiveWorktree"). Medido:
+ * parado en otro proyecto devuelve ok y no se ve nada — el "presiono y no abre nada".
+ * Por eso primero se hace activo ese worktree con la unica via que existe, un
+ * `terminal switch` sobre una terminal suya, y recien despues se enfoca la pestana.
+ *
+ * En el espacio flotante no hay ninguna via: su panel es estado del renderer, sin RPC
+ * ni comando. Ahi se devuelve `flotante-sin-via` en vez de un ok mentiroso.
+ */
+export async function verPestana(exe, pageId, ubicacion = {}) {
+  if (ubicacion.placement === 'flotante') {
+    return { ok: false, code: 'flotante-sin-via', detail: '' }
+  }
+  let alFrente = false
+  if (ubicacion.worktreeId) {
+    const t = await orcaJson(exe, ['terminal', 'list', '--worktree',
+                                   `id:${ubicacion.worktreeId}`, '--limit', '1'])
+    const mango = t.ok ? (t.result.terminals || [])[0]?.handle : null
+    if (mango) {
+      const s = await orcaJson(exe, ['terminal', 'switch', '--terminal', mango])
+      alFrente = s.ok
+    }
+  }
   const r = await orcaJson(exe, ['tab', 'switch', '--page', pageId, '--focus'])
-  return r.ok ? { ok: true } : { ok: false, code: r.code, detail: r.message }
+  if (!r.ok) return { ok: false, code: r.code, detail: r.message }
+  // Sin haber podido traer el worktree al frente, el foco pudo quedar preparado y
+  // nada mas. Se dice cual de las dos cosas paso: un ok a secas es el defecto.
+  return { ok: true, surfaced: alFrente, project: ubicacion.project || null }
 }
 
 /** Vuelve a abrir la pestana de una linea ya registrada, en su mismo perfil. */
-export async function reabrirPestana({ exe, profile, contextoActivo }) {
-  const destino = await dondeVaLaPestana(exe, contextoActivo)
+export async function reabrirPestana({ exe, profile, contextoActivo, donde }) {
+  const destino = await dondeVaLaPestana(exe, contextoActivo, donde)
   if (!destino.ok) return { ok: false, code: destino.code, detail: destino.message }
   const r = await orcaJson(exe, ['tab', 'create', '--url', WA_URL, '--profile', profile,
                                  '--worktree', destino.selector])

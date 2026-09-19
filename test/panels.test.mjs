@@ -608,17 +608,32 @@ console.log('\nconfig.html — lineas de WhatsApp Web')
   // la accion pasa en OTRA ventana. Sin un boton que lleve a la pestana, dos veces la
   // pregunta fue "donde se abre".
   const { doc, storage } = await montar('config.html', {
-    webLines: { at: new Date().toISOString(), placement: 'flotante',
+    // `placement` arriba es el valor viejo que el worker ya no escribe; la fila trae el
+    // suyo. El panel tiene que pintar el de la fila: al reves es como el usuario abrio
+    // el espacio flotante vacio con la pestana en un proyecto.
+    webLines: { at: new Date().toISOString(), placement: 'proyecto', project: 'viejo',
       lines: [{ id: 'web:pending:p-1', label: 'Soporte', profile: 'p-1', pending: true,
-        linkedAt: null, authorizedChats: 0, pageId: 'page-1', state: 'esperando' }] }
+        linkedAt: null, authorizedChats: 0, pageId: 'page-1', state: 'esperando',
+        placement: 'flotante' }] }
   }, 'es-419')
   await espera()
   const wrap = doc.getElementById('lines-wrap')
   ok('la linea esperando dice que escanear y con que telefono',
     /escanea/i.test(wrap.textContent) && /QR/i.test(wrap.textContent),
     wrap.textContent.trim().slice(0, 160))
-  ok('y dice donde quedo la pestana',
+  ok('y dice donde esta la pestana, tomandolo de la fila',
     /flotante/i.test(doc.getElementById('lines-place').textContent),
+    doc.getElementById('lines-place').textContent)
+  ok('sin repetir el lugar viejo que quedo guardado arriba',
+    !/viejo/.test(doc.getElementById('lines-place').textContent),
+    doc.getElementById('lines-place').textContent)
+  // El atajo se dice con la tecla de ESTA plataforma: Cmd en macOS, Ctrl en el resto.
+  // Un texto fijo le diria Cmd a quien esta en Linux, que es mandarlo a la nada.
+  ok('y dice con que atajo abrir ese panel, con la tecla de esta plataforma',
+    /(Cmd|Ctrl)\+Alt\+A/.test(doc.getElementById('lines-place').textContent),
+    doc.getElementById('lines-place').textContent)
+  ok('y no ofrece el atajo que solo existe en macOS y solo maximiza',
+    !/Shift/.test(doc.getElementById('lines-place').textContent),
     doc.getElementById('lines-place').textContent)
 
   const ver = wrap.querySelector('[data-lact]')
@@ -657,17 +672,19 @@ console.log('\nconfig.html — lineas de WhatsApp Web')
   // Desvincular borra el perfil y las autorizaciones: un clic de inercia no puede
   // alcanzar. Se pide confirmacion Y se dice que se pierde, con el numero real.
   const { doc, storage } = await montar('config.html', {
-    webLines: { at: new Date().toISOString(), placement: 'proyecto', project: 'alfred',
+    webLines: { at: new Date().toISOString(), placement: 'flotante',
       lines: [{ id: 'web:57300', label: 'Soporte', profile: 'p-1', pending: false,
         linkedAt: '2026-09-18 10:00', authorizedChats: 3, pageId: 'page-1',
-        state: 'enlazada' }] }
+        state: 'enlazada', placement: 'proyecto', project: 'alfred',
+        worktreeId: 'wt-1' }] }
   }, 'es-419')
   await espera()
   const wrap = doc.getElementById('lines-wrap')
   ok('la linea enlazada dice cuantas conversaciones ve',
     /3/.test(wrap.textContent), wrap.textContent.trim().slice(0, 160))
-  ok('y el fallback dice en que proyecto quedo la pestana y que se cierra con el',
-    /alfred/.test(doc.getElementById('lines-place').textContent),
+  ok('dice en que proyecto esta la pestana y como llegar, no el lugar guardado',
+    /alfred/.test(doc.getElementById('lines-place').textContent) &&
+    !/flotante/i.test(doc.getElementById('lines-place').textContent),
     doc.getElementById('lines-place').textContent)
 
   storage.webRequest = null
@@ -821,12 +838,33 @@ console.log('\nconfig.html — lineas de WhatsApp Web')
     'stLinkedSome', 'stDropped', 'stDroppedHow', 'stNoTab', 'stNoTabHow', 'stNoOrca',
     'stNoOrcaHow', 'linePlacedFloating', 'linePlacedProject', 'unlinkWarn',
     'unlinkWarn0', 'lineWorking', 'needLineLabel',
+    'lineWhereLabel', 'lineWhereProject', 'lineWhereFloating', 'lineWhereHelp',
+    'errFlotanteSinVia', 'errSinFlotante', 'lineShownIn', 'lineStagedIn',
     'howWebLinePending', 'howWebNoLine', 'howWebProfileAmbiguous']
   // pt hereda el ingles para lo que no traduce, asi que "existe" no alcanza: tiene que
   // ser un texto PROPIO, o el portugues de esta seccion seria ingles.
   const sinPt = nuevas.filter((k) => !S.pt[k] || S.pt[k] === S.en[k])
   ok('y la seccion de lineas esta traducida tambien al portugues', sinPt.length === 0,
     `sin portugues = ${JSON.stringify(sinPt)}`)
+
+  // Los textos de `data-t` se pintan con fmt(), que BORRA todo `{x}` que no reciba
+  // valor. Hoy el unico hueco es `{k}`, el atajo del espacio flotante. Un texto nuevo
+  // con otro hueco no fallaria: se quedaria sin esa palabra, callado.
+  const HUECOS = ['k']
+  const marcados = new Set()
+  const html = readFileSync(join(root, 'config.html'), 'utf8')
+  for (const m of html.matchAll(/data-t(?:-ph|-title)?="([^"]+)"/g)) marcados.add(m[1])
+  const rotos = []
+  for (const idioma of ['es', 'en', 'pt']) {
+    for (const k of marcados) {
+      const texto = String(S[idioma] && S[idioma][k] || '')
+      for (const h of texto.match(/\{(\w+)\}/g) || []) {
+        if (!HUECOS.includes(h.slice(1, -1))) rotos.push(`${idioma}.${k} ${h}`)
+      }
+    }
+  }
+  ok('ningun texto de data-t trae un hueco que nadie llena', rotos.length === 0,
+    JSON.stringify(rotos))
 }
 
 console.log('\nactivity.html')
