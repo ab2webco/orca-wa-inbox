@@ -2140,5 +2140,38 @@ console.log('\nconfig.html — el sondeo de 2 s del QR se detiene al emparejar')
     lecturasPareado < lecturasVivo, `vivo=${lecturasVivo} pareado=${lecturasPareado}`)
 }
 
+// ───────── cada motivo de arranque tiene su propia explicacion ─────────
+// El panel traduce POR CODIGO, asi que dos codigos que caen en la misma frase son, para
+// quien lee, un solo motivo. Y ahi estaba el defecto: "no hay userData en este equipo" y
+// "no me dejaron lanzar el resolvedor" se leian igual, y mandaban a buscar una carpeta
+// cuando lo que faltaba era aprobar el plugin.
+console.log('\nconfig.html — cada motivo de arranque del sidecar dice algo distinto')
+{
+  const codigos = ['sidecar-sin-authdir', 'sidecar-sin-permiso', 'sidecar-authdir-fallo',
+    'sidecar-no-arranco', 'sidecar-cayo']
+  const dicho = new Map()
+  for (const code of codigos) {
+    const { doc } = await montar('config.html', { sidecar: {
+      connection: null, qr: null, exited: true, motivo: code,
+      error: { code, detail: 'DETALLE-CRUDO-DEL-WORKER' }
+    } }, 'es-419')
+    await espera()
+    const detalle = doc.getElementById('pairing-detail').textContent.trim()
+    ok(`${code}: el panel lo explica en el idioma del usuario, no con el detalle crudo`,
+      detalle.length > 0 && detalle !== 'DETALLE-CRUDO-DEL-WORKER', detalle)
+    dicho.set(code, detalle)
+  }
+  ok('y ningun motivo comparte frase con otro: el codigo existe para que la accion que ' +
+    'se le pide al usuario sea la que lo saca del pozo',
+    new Set(dicho.values()).size === codigos.length,
+    JSON.stringify([...dicho.values()]))
+  ok('sin permiso, lo que se pide es revisar y activar el plugin',
+    /revis/i.test(dicho.get('sidecar-sin-permiso') || ''),
+    dicho.get('sidecar-sin-permiso'))
+  ok('y sin userData se sigue hablando de la carpeta de datos, que es otro arreglo',
+    /datos/i.test(dicho.get('sidecar-sin-authdir') || ''),
+    dicho.get('sidecar-sin-authdir'))
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)

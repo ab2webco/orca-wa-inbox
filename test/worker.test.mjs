@@ -22,7 +22,9 @@
  * principio que el sync: un camino de falla que ninguna prueba recorre es un camino
  * que nadie sabe si existe.
  */
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
+import {
+  mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, rmSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -1371,6 +1373,103 @@ console.log('\nworker: sin userData de Orca, el resolvedor de auth dice por que'
   try { leido = JSON.parse(salida.stdout || 'null') } catch { leido = null }
   ok('sin ningun userData, dice por que en vez de adivinar una ruta',
     leido && leido.ok === false && leido.reason === 'sin-userdata', JSON.stringify(salida))
+}
+
+// ───────── "no hay userData" y "no pude preguntar" no son el mismo problema ─────────
+// El defecto que esto recorre se vio en el producto: el plugin estaba en "Requiere
+// revision" -sin `process:spawn` concedido, asi que el worker arranca SIN
+// `--allow-child-process`- y el panel decia que no habia userData en este equipo,
+// cuando el resolvedor corrido a mano contestaba la ruta perfecta. Dos fallas
+// distintas con un solo codigo le pedian al usuario justo lo que no lo iba a sacar
+// del pozo.
+console.log('\nworker: el resolvedor que contesta y el que no llega a correr se distinguen')
+{
+  // Cada caso necesita un ARRANQUE distinto -un HOME sin userData, la valla de
+  // permisos de Node, un `node` que no levanta-, y eso no se puede cambiar dentro de
+  // la corrida que ya esta andando: por eso `activate()` corre en un hijo.
+  const stub = join(RAIZ, 'sidecar-no-deberia-correr.cjs')
+  writeFileSync(stub, '#!/usr/bin/env node\nprocess.exit(0)\n', { mode: 0o755 })
+  const ayudante = join(RAIZ, 'activar-y-mirar.mjs')
+  writeFileSync(ayudante,
+    "import { pathToFileURL } from 'node:url'\n" +
+    'const store = {}\n' +
+    // Sin esto, una cadena rechazada -las hay a monton cuando nada puede lanzar
+    // subprocesos- mataria al hijo antes de que alcance a contar lo que quedo escrito.
+    'process.on("unhandledRejection", () => {})\n' +
+    'const orca = {\n' +
+    '  log: () => {},\n' +
+    '  host: { call: async (a, p) => {\n' +
+    '    if (a === "storage.get") return { value: store[p.key] }\n' +
+    '    if (a === "storage.set") { store[p.key] = p.value; return { ok: true } }\n' +
+    '    if (a === "settings.get") return { value: { toolsDir: process.argv[3], sidecarPath: process.argv[4] } }\n' +
+    '    return { ok: true }\n' +
+    '  } },\n' +
+    '  commands: { register () {} },\n' +
+    '  events: { on () {} }\n' +
+    '}\n' +
+    // "roto" es un `node` hijo que ni levanta: sale con 9 y no escribe nada en stdout.
+    // Es el resolvedor que CORRIO y no contesto, que no es ni "no hay userData" ni
+    // "no me dejaron lanzarlo".
+    'if (process.argv[5] === "roto") process.env.NODE_OPTIONS = "--esto-no-es-una-bandera"\n' +
+    'const { default: activate } = await import(pathToFileURL(process.argv[2]).href)\n' +
+    'activate(orca)\n' +
+    'const fin = Date.now() + 20000\n' +
+    'const mirar = setInterval(() => {\n' +
+    '  if (!store.sidecar && Date.now() < fin) return\n' +
+    '  clearInterval(mirar)\n' +
+    '  process.stdout.write(JSON.stringify(store.sidecar ?? null))\n' +
+    '  process.exit(0)\n' +
+    '}, 50)\n')
+
+  const MAIN = join(PLUGIN_DIR, 'main.mjs')
+  const correr = (previos, env, guion = ayudante, modo = 'normal') => new Promise((resolve) => {
+    execFileNode(process.execPath,
+      [...previos, guion, MAIN, join(RAIZ, 'sin-herramientas'), stub, modo],
+      { timeout: 60000, env },
+      (error, stdout) => {
+        let leido = null
+        try { leido = JSON.parse(stdout || 'null') } catch { leido = null }
+        resolve({ error, stdout, leido })
+      })
+  })
+
+  const sinUserData = join(RAIZ, 'home-pelado')
+  mkdirSync(sinUserData, { recursive: true })
+  const a = await correr([], { ...process.env, HOME: sinUserData,
+    XDG_CONFIG_HOME: join(sinUserData, '.config'),
+    APPDATA: join(sinUserData, 'AppData', 'Roaming') })
+  ok('sin userData de Orca, el motivo sigue siendo SIN_AUTHDIR',
+    a.leido && a.leido.error && a.leido.error.code === 'sidecar-sin-authdir',
+    JSON.stringify(a.leido) || String(a.stdout))
+
+  // La valla de verdad: `--permission` sin `--allow-child-process` es exactamente como
+  // Orca arranca un plugin al que todavia no se le concedio `process:spawn`
+  // (docs/ENCARGO-TRANSPORTE-UNICO.md §1). Ahi `execFile` no falla por callback: LANZA
+  // en el acto, y el motivo ni llegaba al storage.
+  //
+  // El realpath no es adorno: la valla resuelve los enlaces simbolicos antes de
+  // comparar y en macOS el directorio temporal ES uno (/var/folders ->
+  // /private/var/folders), asi que hay que darle la ruta real Y ENTRAR por ella, o el
+  // hijo no puede leer ni su propio guion.
+  const raizReal = realpathSync(RAIZ)
+  const b = await correr(['--permission', `--allow-fs-read=${PLUGIN_DIR}`,
+    `--allow-fs-read=${raizReal}`], process.env, join(raizReal, 'activar-y-mirar.mjs'))
+  ok('sin permiso para lanzar el resolvedor, el motivo llega al storage igual',
+    b.leido && b.leido.exited === true, JSON.stringify(b.leido) || String(b.stdout))
+  ok('y con su propio codigo, que manda a revisar el plugin y no a buscar una carpeta',
+    b.leido && b.leido.error && b.leido.error.code === 'sidecar-sin-permiso',
+    JSON.stringify(b.leido) || String(b.stdout))
+
+  const c = await correr([], process.env, ayudante, 'roto')
+  ok('un resolvedor que corrio y no contesto tampoco es "no hay userData"',
+    c.leido && c.leido.error && c.leido.error.code === 'sidecar-authdir-fallo',
+    JSON.stringify(c.leido) || String(c.stdout))
+
+  const codigos = [a, b, c].map((r) => r.leido && r.leido.error && r.leido.error.code)
+  ok('los tres llegan con codigos DISTINTOS: el panel los traduce por codigo y una ' +
+    'sola etiqueta para tres arreglos distintos es la que mando a mirar la carpeta ' +
+    'equivocada (docs/LECTURA-MULTIFUENTE.md: "la accion del usuario es distinta en cada uno")',
+    new Set(codigos).size === 3 && codigos.every(Boolean), JSON.stringify(codigos))
 }
 
 rmSync(RAIZ, { recursive: true, force: true })

@@ -574,6 +574,12 @@
           pairingDown: 'La sesion esta caida',
           pairingHowNoAuthDir: 'No se encontro donde Orca guarda los datos del ' +
             'plugin en este equipo, asi que el sidecar no llego a arrancar.',
+          pairingHowNoPermission: 'Orca todavia no deja que el plugin lance su ' +
+            'ayudante de WhatsApp. Abra la lista de plugins, apriete "Revisar y ' +
+            'activar" en la tarjeta de este plugin y enciendalo.',
+          pairingHowAuthDirFailed: 'El plugin no pudo averiguar donde guardar la ' +
+            'sesion de WhatsApp: la consulta no contesto. Reinicie Orca para ' +
+            'intentarlo de nuevo.',
           pairingHowNoStart: 'El sidecar no llego a arrancar.',
           pairingHowCrashed: 'El sidecar se detuvo. Reinicie Orca para intentarlo de nuevo.',
           pairingHowLoggedOut: 'La sesion se cerro desde el telefono. Esta pantalla ' +
@@ -925,6 +931,11 @@
           pairingDown: 'The session is down',
           pairingHowNoAuthDir: 'Could not find where Orca keeps this plugin\u2019s data ' +
             'on this machine, so the sidecar never started.',
+          pairingHowNoPermission: 'Orca has not let the plugin start its WhatsApp ' +
+            'helper yet. Open the plugin list, press "Review & enable" on this ' +
+            'plugin\u2019s card and turn it on.',
+          pairingHowAuthDirFailed: 'The plugin could not work out where to keep the ' +
+            'WhatsApp session: the lookup never answered. Restart Orca to try again.',
           pairingHowNoStart: 'The sidecar never started.',
           pairingHowCrashed: 'The sidecar stopped. Restart Orca to try again.',
           pairingHowLoggedOut: 'The session was closed from the phone. This screen will ' +
@@ -1273,6 +1284,12 @@
         pairingDown: 'A sessao esta fora do ar',
         pairingHowNoAuthDir: 'Nao foi encontrado onde o Orca guarda os dados deste ' +
           'plugin nesta maquina, entao o sidecar nao chegou a iniciar.',
+        pairingHowNoPermission: 'O Orca ainda nao deixa o plugin iniciar o seu ' +
+          'ajudante do WhatsApp. Abra a lista de plugins, aperte "Revisar e ativar" ' +
+          'no cartao deste plugin e ligue-o.',
+        pairingHowAuthDirFailed: 'O plugin nao conseguiu descobrir onde guardar a ' +
+          'sessao do WhatsApp: a consulta nao respondeu. Reinicie o Orca para tentar ' +
+          'de novo.',
         pairingHowNoStart: 'O sidecar nao chegou a iniciar.',
         pairingHowCrashed: 'O sidecar parou. Reinicie o Orca para tentar de novo.',
         pairingHowLoggedOut: 'A sessao foi encerrada pelo telefone. Esta tela vai ' +
@@ -1796,6 +1813,12 @@
       // para los dos, igual que HEALTH_KEY hace con el CLI.
       var SIDECAR_HOW_KEY = {
         'sidecar-sin-authdir': 'pairingHowNoAuthDir',
+        // Tres codigos y no uno porque el arreglo es distinto en cada uno: aprobar el
+        // plugin, mirar donde guarda Orca sus datos, o leer el log. Mandarlos todos a
+        // `pairingHowNoAuthDir` le decia a quien tenia el plugin sin aprobar que
+        // buscara una carpeta que estaba perfecta.
+        'sidecar-sin-permiso': 'pairingHowNoPermission',
+        'sidecar-authdir-fallo': 'pairingHowAuthDirFailed',
         'sidecar-no-arranco': 'pairingHowNoStart',
         'sidecar-cayo': 'pairingHowCrashed',
         'sesion-cerrada': 'pairingHowLoggedOut',

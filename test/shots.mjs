@@ -718,6 +718,19 @@ const PANELES = [
       connection: null, qr: null, exited: true,
       error: { code: 'sidecar-cayo', detail: 'sidecar exited (code 1, signal null)' }
     } })
+  },
+  // El plugin sin `process:spawn` concedido: la pantalla que de verdad vio el usuario
+  // cuando la tarjeta decia "Requiere revision". Se fotografia aparte de "caido"
+  // porque el texto es lo unico que cambia, y un texto que manda a la accion
+  // equivocada no lo delata ninguna prueba de codigo — solo mirarlo.
+  {
+    nombre: 'config-sidecar-sin-permiso', archivo: 'config.html', anchos: ANCHOS,
+    datos: Object.assign({}, DATOS, { sidecar: {
+      connection: null, qr: null, exited: true, motivo: 'sidecar-sin-permiso',
+      error: { code: 'sidecar-sin-permiso',
+        detail: 'Access to this API has been restricted. Use --allow-child-process ' +
+          'to manage permissions.' }
+    } })
   }
 ]
 

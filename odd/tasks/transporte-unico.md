@@ -66,7 +66,7 @@ funcionando mientras el nuevo no esté probado.
       sigue bajo 50 MB y 2.000 archivos sin symlinks
       (`test/sidecar-build.test.mjs`, 5/5 en verde)
 - [x] Ruta: **delegada** (toca 2+ archivos no triviales)
-- Commit: pendiente de review — sin commitear (instrucción explícita del pedido)
+- Commit: `fe99c53`
 
 ### T2 — Sidecar: emparejamiento, auth state y reconexión
 
@@ -84,7 +84,7 @@ funcionando mientras el nuevo no esté probado.
       (`test/sidecar-pairing.test.mjs`, 25/25 en verde; lógica extraída a
       `decidirTrasCierre`, pura, sin socket)
 - [x] Ruta: **delegada**
-- Commit: pendiente de review — sin commitear (instrucción explícita del pedido)
+- Commit: `fe99c53`
 
 ### T3 — Worker: lanzar y supervisar el sidecar
 
@@ -98,13 +98,14 @@ funcionando mientras el nuevo no esté probado.
       `dataDir`, reusando la misma tabla de raices de userData que `workspaceDir`)
       y `sidecar/resolve-auth-dir.mjs` (nuevo, subprocess que resuelve el auth dir
       fuera de la valla de permisos)
-- Commit: pendiente de review — sin commitear (instrucción explícita del pedido)
+- Commit: `a8aeac9`
 
 **Diseño:** el directorio de auth (`<userData>/plugins-data/<publisher>.<id>/wa-auth/`)
 se resuelve en un subproceso (`sidecar/resolve-auth-dir.mjs`, mismo patrón que
 `sembrarFuera`) porque el worker no puede leer el userData de Orca. `lanzarSidecar()`
 (exportada de `main.mjs`) hace `spawn()` del sidecar, parsea su protocolo JSON-lines
 y lo espeja a `storage.sidecar`, con códigos estables propios (`sidecar-sin-authdir`,
+`sidecar-sin-permiso`, `sidecar-authdir-fallo` —los tres del resolvedor, ver T7—,
 `sidecar-no-arranco`, `sidecar-cayo`) distintos del `MOTIVO` del sidecar. `sidecarPath`
 es un override interno en settings (como `toolsDir`) para que las pruebas apunten a
 un guión de mentira en vez del bundle real.
@@ -140,7 +141,7 @@ userData el resolvedor dice `sin-userdata` en vez de adivinar).
       pintado) y que el sondeo dedicado se detenga al emparejar
 - [x] **Capturas con `npm run shots`** a 1440/768/390/320 en ambos temas — **miradas**
 - [x] Ruta: **delegada**, toco `config.html` y `test/panels.test.mjs`
-- Commit: —
+- Commit: `a8aeac9`
 
 **Evidencia (TDD real):** con `git stash` sobre `config.html`, `node test/panels.test.mjs`
 corta con `TypeError: Cannot read properties of null (reading 'textContent')` en la
@@ -176,6 +177,93 @@ es el plugin.
 - [ ] Verificar: suspender y despertar la máquina reconecta solo
 - [ ] Ruta: **manual**, requiere teléfono
 - Commit: —
+
+### T6 — Quitar los transportes viejos
+
+Decisión del usuario (2026-09-22), pedida tres veces: el panel debe quedar **sólo
+con la vinculación por QR**. Nada de app de escritorio, nada de WhatsApp Web,
+nada de líneas conectadas.
+
+El costo que se advirtió —que el plugin deja de leer hasta que exista el almacén
+de mensajes— **ya estaba pagado**: el usuario tenía las dos rutas en `no` y el
+panel mostraba "No hay de donde leer". No se pierde nada que estuviera vivo.
+
+- [ ] `config.html`: quitar la sección "DE DONDE LEE" (`readLocal`, `readWeb`,
+      `readWebText`), la sección "LINEAS CONECTADAS" entera, y el requisito
+      opcional "WhatsApp Web como segunda linea"
+- [ ] `main.mjs`: quitar el despachador de pestañas (`atenderWeb`, `filaVigente`,
+      `veredicto`, `destinoPedido`) y todo lo que importe `web-lines.mjs`
+- [ ] Borrar `web-lines.mjs` completo (506 líneas, 100% transporte)
+- [ ] `bin/wa-scope`, `bin/wa_settings.py`: quitar las tres claves `read_*` y
+      `web_timeout_s`
+- [ ] `orca-plugin.json:7`: la descripción menciona "WhatsApp Web lines"
+- [ ] Tests: quitar o reescribir lo que cubría los transportes; **no dejar nada
+      desactivado**
+- [ ] Archivar `docs/LECTURA-MULTIFUENTE.md` — su contenido ya está en el §11 del
+      encargo
+- [ ] Ruta: **delegada**
+- Commit: —
+
+**Defecto a arreglar de paso:** el panel muestra en español un texto en inglés
+del CLI —"both routes are off: turn the desktop app or WhatsApp Web back on"—
+porque no lo traduce por código. Es justo el fallo que las capturas en dos
+idiomas existen para delatar (`test/shots.mjs:39-44`). Se va con la sección, pero
+conviene comprobar que no quede ningún otro código sin traducir.
+
+### T7 — Defecto: el resolvedor del auth dir tenía un solo código para tres fallas
+
+Visto en el producto: la tarjeta del plugin decía **"Requiere revisión"** con el
+interruptor apagado, y el panel decía que no se encontró dónde Orca guarda los datos
+del plugin en este equipo — pero `node sidecar/resolve-auth-dir.mjs <plugin>` corrido a
+mano contestaba `{"ok":true,"dir":".../wa-auth"}`. El mensaje era falso y mandaba a
+mirar una carpeta que estaba perfecta.
+
+Causa: `main.mjs` escribía `SIDECAR_MOTIVO.SIN_AUTHDIR` para **cualquier** `{ok:false}`
+del resolvedor, sin mirar si el resolvedor había contestado o si ni siquiera había
+podido correr. Y peor: sin `process:spawn` concedido, el worker arranca sin
+`--allow-child-process` y `execFile` **lanza en el acto** en vez de fallar por callback
+—medido: `Error: Access to this API has been restricted. Use --allow-child-process`—,
+así que la promesa se rechazaba, el motivo moría en un `orca.log` y al panel no llegaba
+**nada**. Aparte, `motivoDe()` espera la forma que arma `run()` (`spawnCode`,
+`timedOut`) y recibía el error crudo de `execFile`: devolvía `'fallo'` siempre.
+
+- [x] `SIDECAR_MOTIVO`: `SIN_AUTHDIR` queda para "el resolvedor contestó que esta
+      máquina no tiene userData" (su `reason: 'sin-userdata'`), y se suman
+      `SIN_PERMISO` (`sidecar-sin-permiso`) y `AUTHDIR_FALLO`
+      (`sidecar-authdir-fallo`), decididos por `motivoAuthDir()`
+- [x] `resolverAuthDir()`: `try/catch` alrededor de `execFile` —la valla lanza, no
+      rechaza— y `motivoDeCrudo()` traduce el error crudo a la forma que `motivoDe()`
+      entiende; `motivoDe()` suma `ERR_ACCESS_DENIED` a `sin-permiso`, que es como
+      deniega la valla de Node
+- [x] `config.html`: `pairingHowNoPermission` y `pairingHowAuthDirFailed` en `es`/`en`/
+      `pt`, y las dos entradas nuevas en `SIDECAR_HOW_KEY`. El español del caso sin
+      permiso manda a **"Revisar y activar"** el plugin, que es la acción que lo arregla
+- [x] `test/shots.mjs`: caso `config-sidecar-sin-permiso`, a los cuatro anchos y en los
+      dos temas — el texto es lo único que cambia y un texto que manda a la acción
+      equivocada no lo delata ninguna prueba de código, solo mirarlo
+- [x] Ruta: **delegada** (5 archivos: `main.mjs`, `config.html`, `test/worker.test.mjs`,
+      `test/panels.test.mjs`, `test/shots.mjs` — disparó el trigger de escritura)
+- Commit: — (instrucción explícita de no commitear)
+
+**Por qué tres códigos y no cuatro:** un timeout (`demoro`) y un reventón (`fallo`) le
+piden lo mismo a quien lee el panel, así que van juntos en `AUTHDIR_FALLO`. Un permiso
+denegado pide algo completamente distinto —aprobar el plugin— y por eso sí se separa
+(`docs/LECTURA-MULTIFUENTE.md`: *"la accion del usuario es distinta en cada uno"*).
+
+**Evidencia (TDD, RED observado antes de implementar):**
+`node test/worker.test.mjs` con las pruebas nuevas y sin la implementación dio
+**135/139**, con los tres códigos observados en
+`["sidecar-sin-authdir", null, "sidecar-sin-authdir"]`: el caso tras la valla no llegaba
+al storage (`null`) y el resolvedor reventado llegaba como `sidecar-sin-authdir` —
+exactamente el defecto. `node test/panels.test.mjs` dio
+`DETALLE-CRUDO-DEL-WORKER` para los dos códigos nuevos (el panel no los conocía).
+
+Las pruebas del worker corren `activate()` en un **hijo** porque cada caso necesita un
+arranque distinto: un `HOME` sin userData, `--permission` sin `--allow-child-process`
+(la valla de verdad, igual que la usa Orca), y un `NODE_OPTIONS` inválido que hace que
+el `node` hijo no levante. En macOS el directorio temporal es un enlace simbólico
+(`/var/folders` → `/private/var/folders`) y la valla compara rutas resueltas: hay que
+darle el `realpath` **y entrar por él**, o el hijo no puede leer ni su propio guión.
 
 ---
 

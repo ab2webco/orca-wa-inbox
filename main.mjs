@@ -223,9 +223,28 @@ const PETICION_TTL_MS = 10 * 60 * 1000
  *  que idioma esta el usuario, y una frase en el storage se congela en ese idioma. */
 function motivoDe(error) {
   if (error?.spawnCode === 'ENOENT') return 'sin-herramientas'
-  if (error?.spawnCode === 'EACCES' || error?.spawnCode === 'EPERM') return 'sin-permiso'
+  // ERR_ACCESS_DENIED es como DENIEGA la valla de permisos de Node, y es el permiso
+  // denegado que el worker se encuentra de verdad: EACCES/EPERM vienen del sistema de
+  // archivos, la valla tiene su propio codigo. Sin esta linea, un plugin sin
+  // `process:spawn` concedido se contaba como 'fallo' generico.
+  if (error?.spawnCode === 'ERR_ACCESS_DENIED' ||
+      error?.spawnCode === 'EACCES' || error?.spawnCode === 'EPERM') return 'sin-permiso'
   if (error?.timedOut) return 'demoro'
   return 'fallo'
+}
+
+/** El mismo motivo, pero para un error de `execFile` en crudo.
+ *
+ *  `motivoDe` espera la forma que arma `run()` -`spawnCode` y `timedOut` separados-, y
+ *  `execFile` no la da: mete el codigo de spawn y el de salida en el mismo `code`, y
+ *  marca el timeout como `killed`. Pasarle el error tal cual devolvia 'fallo' SIEMPRE,
+ *  asi que un permiso denegado y un guion que reviento eran el mismo motivo. */
+function motivoDeCrudo(error) {
+  if (!error) return 'fallo'
+  return motivoDe({
+    spawnCode: typeof error.code === 'string' ? error.code : null,
+    timedOut: !!(error.timedOut || error.killed)
+  })
 }
 
 /** Cada cuanto releer WhatsApp, segun lo que el usuario dejo puesto. */
@@ -725,9 +744,33 @@ function sembrarFuera(toolsDir) {
  *  exporta `sidecar/src/index.js`, que es del socket de WhatsApp y no del proceso. */
 const SIDECAR_MOTIVO = Object.freeze({
   SIN_AUTHDIR: 'sidecar-sin-authdir',
+  SIN_PERMISO: 'sidecar-sin-permiso',
+  AUTHDIR_FALLO: 'sidecar-authdir-fallo',
   NO_ARRANCO: 'sidecar-no-arranco',
   CAYO: 'sidecar-cayo'
 })
+
+/** Del motivo que devolvio el resolvedor al codigo estable que lee el panel.
+ *
+ *  Los tres eran uno solo -SIN_AUTHDIR- y el panel le decia a todo el mundo que en
+ *  este equipo no se encontro la carpeta de datos de Orca. Visto en el producto: el
+ *  plugin estaba en "Requiere revision", el worker arranca ahi SIN
+ *  `--allow-child-process` y el resolvedor ni se puede lanzar, pero corrido a mano
+ *  contestaba la ruta perfecta. El mensaje era falso y mandaba a mirar una carpeta que
+ *  estaba bien. Son tres arreglos distintos -aprobar el plugin, ver donde guarda Orca
+ *  sus datos, leer el log- y por eso son tres codigos (docs/LECTURA-MULTIFUENTE.md:
+ *  "la accion del usuario es distinta en cada uno").
+ *
+ *  Un timeout no se separa de un reventon: `demoro` y `fallo` le piden lo MISMO a quien
+ *  lee el panel, y un codigo que nadie puede distinguir en pantalla es un codigo que
+ *  solo agrega ruido al contrato. */
+function motivoAuthDir(resuelto) {
+  // 'sin-userdata' lo escribe el propio `resolve-auth-dir.mjs`: es el unico motivo que
+  // significa que el resolvedor CONTESTO.
+  if (resuelto?.reason === 'sin-userdata') return SIDECAR_MOTIVO.SIN_AUTHDIR
+  if (resuelto?.reason === 'sin-permiso') return SIDECAR_MOTIVO.SIN_PERMISO
+  return SIDECAR_MOTIVO.AUTHDIR_FALLO
+}
 
 /** Donde vive el auth state del sidecar, preguntado a un subproceso.
  *
@@ -739,20 +782,31 @@ const SIDECAR_MOTIVO = Object.freeze({
 function resolverAuthDir(pluginDir) {
   const guion = join(pluginDir, 'sidecar', 'resolve-auth-dir.mjs')
   return new Promise((resolve) => {
-    execFile(process.execPath, [guion, pluginDir],
-      { timeout: 15000, maxBuffer: 1024 * 1024,
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } },
-      (error, stdout) => {
-        try {
-          const estado = JSON.parse(stdout || 'null')
-          if (estado && typeof estado === 'object') { resolve(estado); return }
-        } catch {
-          // Cae al motivo de abajo: un stdout que no es JSON es tan fallo como un
-          // exit distinto de cero.
-        }
-        resolve({ ok: false, dir: null, reason: error ? motivoDe(error) : 'fallo',
-          detail: String(error?.message ?? stdout ?? '').slice(0, 300) })
-      })
+    const noContesto = (error) => resolve({ ok: false, dir: null,
+      reason: motivoDeCrudo(error),
+      detail: String(error?.message ?? '').slice(0, 300) })
+    try {
+      execFile(process.execPath, [guion, pluginDir],
+        { timeout: 15000, maxBuffer: 1024 * 1024,
+          env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } },
+        (error, stdout) => {
+          try {
+            const estado = JSON.parse(stdout || 'null')
+            if (estado && typeof estado === 'object') { resolve(estado); return }
+          } catch {
+            // Cae al motivo de abajo: un stdout que no es JSON es tan fallo como un
+            // exit distinto de cero.
+          }
+          noContesto(error ?? new Error(String(stdout ?? '').slice(0, 300)))
+        })
+    } catch (error) {
+      // La valla de permisos de Node no contesta por callback: `execFile` LANZA en el
+      // acto cuando falta `--allow-child-process`, que es como arranca el worker de un
+      // plugin al que todavia no se le concedio `process:spawn`. Sin este catch la
+      // promesa se rechazaba, el motivo moria en un `orca.log` y el panel se quedaba
+      // esperando un QR que no iba a llegar nunca.
+      noContesto(error)
+    }
   })
 }
 
@@ -936,14 +990,15 @@ export default function activate(orca) {
       const resuelto = await resolverAuthDir(PLUGIN_DIR)
       if (detenido) return
       if (!resuelto.ok || !resuelto.dir) {
+        const motivo = motivoAuthDir(resuelto)
         await guardar(orca, SIDECAR_KEY, {
           at: new Date().toISOString(), connection: null, qr: null,
-          motivo: SIDECAR_MOTIVO.SIN_AUTHDIR, statusCode: null,
-          error: { code: SIDECAR_MOTIVO.SIN_AUTHDIR,
+          motivo, statusCode: null,
+          error: { code: motivo,
             detail: resuelto.detail || 'could not resolve the auth directory' },
           exited: true, startedAt: new Date().toISOString()
         })
-        orca.log(`sidecar not started (${SIDECAR_MOTIVO.SIN_AUTHDIR}): ${resuelto.detail || ''}`)
+        orca.log(`sidecar not started (${motivo}): ${resuelto.detail || ''}`)
         return
       }
       apagarSidecar = lanzarSidecar({ orca, scriptPath: s.sidecarPath, authDir: resuelto.dir })
