@@ -348,7 +348,7 @@ function sembrarFuera(toolsDir) {
       // El worker es el helper de Electron: sin esto arrancaria una ventana en vez de
       // un Node. Con node pelado —los chequeos— la variable sobra y no molesta.
       { timeout: 120000, maxBuffer: 8 * 1024 * 1024,
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } },
+        env: { ...envSinValla(), ELECTRON_RUN_AS_NODE: '1' } },
       (error, stdout) => {
         const at = new Date().toISOString()
         try {
@@ -400,6 +400,34 @@ function motivoAuthDir(resuelto) {
   return SIDECAR_MOTIVO.AUTHDIR_FALLO
 }
 
+/**
+ * El entorno de un hijo que tiene que correr FUERA de la valla de permisos.
+ *
+ * Node propaga la valla a los hijos por `NODE_OPTIONS`, asi que `{ ...process.env }`
+ * se la copia intacta: el hijo arranca vallado, avisa con un SecurityWarning sobre
+ * `--allow-child-process`, y muere en el primer `existsSync` con "Access to this API
+ * has been restricted". El worker solo ve "Command failed" — cierto, y a la vez
+ * inutil para saber que pasó.
+ *
+ * Lanzar el hijo es justamente la forma de salir de la valla (docs/ENCARGO-TRANSPORTE-
+ * UNICO.md §2: el hijo no la hereda), asi que heredarla anula el motivo de lanzarlo.
+ * Se quitan los flags de permisos y se conserva el resto de NODE_OPTIONS, que puede
+ * traer cosas que no tienen nada que ver y que cambiarian como corre el hijo.
+ */
+export function envSinValla (env = process.env) {
+  const salida = { ...env }
+  const opciones = String(salida.NODE_OPTIONS ?? '')
+  if (!opciones) return salida
+  const limpias = opciones
+    .split(/\s+/)
+    .filter((t) => t && !/^--(permission|allow-fs-read|allow-fs-write|allow-child-process|allow-worker|allow-addons)(=|$)/.test(t))
+    .join(' ')
+  if (limpias) salida.NODE_OPTIONS = limpias
+  else delete salida.NODE_OPTIONS
+  return salida
+}
+
+
 /** Donde vive el auth state del sidecar, preguntado a un subproceso.
  *
  *  El worker no lo puede resolver el mismo: su valla de permisos solo declara
@@ -416,7 +444,7 @@ function resolverAuthDir(pluginDir) {
     try {
       execFile(process.execPath, [guion, pluginDir],
         { timeout: 15000, maxBuffer: 1024 * 1024,
-          env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } },
+          env: { ...envSinValla(), ELECTRON_RUN_AS_NODE: '1' } },
         (error, stdout) => {
           try {
             const estado = JSON.parse(stdout || 'null')
@@ -467,7 +495,7 @@ export function lanzarSidecar({ orca, scriptPath, authDir, spawnFn = spawn, env 
       // esto arrancaria una ventana en vez de un Node piano. El sidecar NO adivina el
       // directorio de auth (sidecar/src/index.js): llega por env, nunca por argv, para
       // que el contrato viva en un solo lugar.
-      env: { ...env, ELECTRON_RUN_AS_NODE: '1', WA_SIDECAR_AUTH_DIR: authDir },
+      env: { ...envSinValla(env), ELECTRON_RUN_AS_NODE: '1', WA_SIDECAR_AUTH_DIR: authDir },
       stdio: ['ignore', 'pipe', 'pipe']
     })
   } catch (error) {

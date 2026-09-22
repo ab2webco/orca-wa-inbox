@@ -22,6 +22,7 @@
  * principio que el sync: un camino de falla que ninguna prueba recorre es un camino
  * que nadie sabe si existe.
  */
+import { envSinValla } from '../main.mjs'
 import {
   mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, rmSync
 } from 'node:fs'
@@ -728,6 +729,39 @@ console.log('\nworker: el resolvedor que contesta y el que no llega a correr se 
     'equivocada (docs/ENCARGO-TRANSPORTE-UNICO.md §11 E2: "la accion del usuario es ' +
     'distinta en cada uno")',
     new Set(codigos).size === 3 && codigos.every(Boolean), JSON.stringify(codigos))
+}
+
+// El hijo que resuelve el auth dir y el sidecar mismo tienen que correr SIN la valla
+// de permisos: ese es el motivo entero de lanzarlos fuera del worker. Pero Node pasa
+// la valla a los hijos por NODE_OPTIONS, y `{ ...process.env }` la copia tal cual. El
+// sintoma no se parece a la causa: el hijo arranca, avisa con un SecurityWarning sobre
+// --allow-child-process, y muere en el primer existsSync con "Access to this API has
+// been restricted". El worker solo ve "Command failed" y lo reporta como fallo del
+// resolvedor, que es cierto y no sirve para nada.
+{
+  const conValla = {
+    PATH: '/usr/bin',
+    NODE_OPTIONS: '--permission --allow-fs-read=/algo --allow-child-process --max-old-space-size=512'
+  }
+  const limpio = envSinValla(conValla)
+  ok('quita --permission del NODE_OPTIONS heredado',
+    !/--permission/.test(limpio.NODE_OPTIONS || ''), JSON.stringify(limpio.NODE_OPTIONS))
+  ok('quita --allow-fs-read del NODE_OPTIONS heredado',
+    !/--allow-fs-read/.test(limpio.NODE_OPTIONS || ''), JSON.stringify(limpio.NODE_OPTIONS))
+  ok('quita --allow-child-process del NODE_OPTIONS heredado',
+    !/--allow-child-process/.test(limpio.NODE_OPTIONS || ''), JSON.stringify(limpio.NODE_OPTIONS))
+  ok('CONSERVA las opciones que no son la valla: borrar NODE_OPTIONS entero cambiaria ' +
+    'como corre el hijo por razones que no tienen nada que ver con los permisos',
+    /--max-old-space-size=512/.test(limpio.NODE_OPTIONS || ''), JSON.stringify(limpio.NODE_OPTIONS))
+  ok('no toca el resto del entorno', limpio.PATH === '/usr/bin', JSON.stringify(limpio.PATH))
+
+  const soloValla = envSinValla({ PATH: '/usr/bin', NODE_OPTIONS: '--permission' })
+  ok('si no queda nada, borra NODE_OPTIONS en vez de dejarlo vacio: una cadena vacia ' +
+    'no es lo mismo que ausente para quien la lea despues',
+    !('NODE_OPTIONS' in soloValla), JSON.stringify(soloValla))
+
+  const sinNada = envSinValla({ PATH: '/usr/bin' })
+  ok('sin NODE_OPTIONS lo deja igual', !('NODE_OPTIONS' in sinNada) && sinNada.PATH === '/usr/bin')
 }
 
 rmSync(RAIZ, { recursive: true, force: true })
