@@ -191,7 +191,6 @@ function stub(datos, opciones) {
   const rechazado = (key) =>
     ((opciones && opciones.rechazaGet) || []).indexOf(key) >= 0 ||
     ((window.__rechazar || []).indexOf(key) >= 0)
-  const veredicto = opciones && opciones.veredicto
   // Cuanto tarda el host en contestar. Sin poder hacerlo tardar no se puede fotografiar
   // un guardado EN VUELO, que es justo el momento en que el panel mentia.
   const demoraSet = (opciones && opciones.demoraSet) || 0
@@ -212,11 +211,6 @@ function stub(datos, opciones) {
         respuesta = { ok: false, error: 'denied' }
       } else {
         datos[d.params.key] = d.params.value
-        // Y el worker contestando el pedido, que es lo que decide si el campo se vacia.
-        if (veredicto && d.params.key === 'webRequest' && d.params.value) {
-          datos.webStatus = Object.assign({ at: new Date().toISOString(),
-            requestAt: d.params.value.at, action: d.params.value.action }, veredicto)
-        }
         respuesta = { ok: true }
       }
     } else if (d.action === 'notifications.show') {
@@ -237,26 +231,7 @@ const ANCHOS_ESTADO = [1440, 320]
 const HACE_DIEZ_MINUTOS = new Date(Date.now() - 10 * 60 * 1000).toISOString()
 const SIN_CHATS = Object.assign({}, DATOS, { chats: [], scope: {} })
 
-// Las lineas de WhatsApp Web, en los tres estados que el usuario no puede ver mientras
-// programa. Los campos son los que escribe refrescarLineas() en main.mjs: con otros
-// nombres se fotografiaria el stub y no el panel.
-const AHORA_ISO = new Date().toISOString()
 const AHORA_MS = Date.now()
-// El lugar viaja en la FILA: es lo que el worker calcula contra la pestana de verdad
-// en cada vuelta, y por eso es lo que la captura tiene que ejercitar.
-const LINEA_ESPERANDO = {
-  id: 'web:pending:9f2c', label: 'Soporte Norte', profile: '9f2c', pending: true,
-  linkedAt: null, authorizedChats: 0, pageId: 'page-1', state: 'esperando',
-  placement: 'proyecto', project: 'alfred-soporte', worktreeId: 'wt-9'
-}
-const LINEA_ENLAZADA = {
-  id: 'web:573000000000', label: 'Soporte Norte', profile: '9f2c', pending: false,
-  linkedAt: '2026-09-17 09:12', authorizedChats: 2, pageId: 'page-1',
-  state: 'enlazada', placement: 'proyecto', project: 'alfred-soporte',
-  worktreeId: 'wt-9'
-}
-const LINEA_CAIDA = Object.assign({}, LINEA_ENLAZADA,
-  { id: 'web:573111111111', label: 'Ventas', profile: 'a71b', state: 'caida' })
 
 // Los cinco finales de una corrida. Se fotografian porque son la razon de ser del
 // renglon: en pantalla los cuatro primeros eran la MISMA lista vacia, y el dueno
@@ -321,109 +296,6 @@ const PANELES = [
   // esos. A 320 ademas la fila se parte en bloques y el aviso de desvincular es el
   // parrafo mas largo del panel.
   {
-    // 1. Antes de conectar nada: el estado de casi todo el mundo. Lo que se mira es que
-    //    la accion primaria se vea y que el vacio no parezca una falla.
-    nombre: 'config-conectar', archivo: 'config.html', anchos: ANCHOS_ESTADO,
-    datos: Object.assign({}, DATOS, { webLines: { at: AHORA_ISO, lines: [] } })
-  },
-  {
-    // 2. Esperando el escaneo. El mensaje tiene que decir que hacer y donde quedo la
-    //    pestana: "donde se abre" fue la pregunta real, dos veces.
-    nombre: 'config-esperando', archivo: 'config.html', anchos: ANCHOS_ESTADO,
-    datos: Object.assign({}, DATOS, {
-      webLines: { at: AHORA_ISO, lines: [LINEA_ESPERANDO] }
-    })
-  },
-  {
-    // 3. Enlazada, y con el fallback: este Orca no sabe abrir la pestana en el espacio
-    //    flotante, asi que quedo dentro de un proyecto y eso se dice con el nombre.
-    nombre: 'config-enlazada', archivo: 'config.html', anchos: ANCHOS_ESTADO,
-    datos: Object.assign({}, DATOS, {
-      webLines: { at: AHORA_ISO, lines: [LINEA_ENLAZADA] }
-    })
-  },
-  {
-    // 3b. La MISMA linea enlazada pero con la pestana en el espacio flotante. Va a la
-    //     captura porque es la frase que mando al usuario a un panel vacio: tiene que
-    //     decir que ese panel no se abre desde aca y como lo abre el. Y la fila de
-    //     abajo esta en un proyecto: las dos frases conviven, que es lo que pasa en
-    //     cuanto hay dos lineas.
-    nombre: 'config-linea-flotante', archivo: 'config.html', anchos: ANCHOS_ESTADO,
-    datos: Object.assign({}, DATOS, {
-      readWeb: 'on',
-      webLines: { at: AHORA_ISO, lines: [
-        Object.assign({}, LINEA_ENLAZADA, { label: 'Soporte Norte',
-          placement: 'flotante', project: null, worktreeId: null }),
-        Object.assign({}, LINEA_ESPERANDO, { id: 'web:pending:a71b', label: 'Ventas',
-          profile: 'a71b', pageId: 'page-2' })
-      ] }
-    })
-  },
-  {
-    // 4. La sesion se cayo. Es el estado que el CLI ya sabia contar y el panel no: una
-    //    linea registrada que no lee nada y no dice por que.
-    nombre: 'config-caida', archivo: 'config.html', anchos: ANCHOS_ESTADO,
-    datos: Object.assign({}, DATOS, {
-      webLines: { at: AHORA_ISO,
-        lines: [LINEA_CAIDA, Object.assign({}, LINEA_ENLAZADA, { state: 'sin-pestana' })] }
-    })
-  },
-  {
-    // TODOS los estados de una linea, juntos y en una sola tabla. Van juntos a
-    // proposito: lo que hay que mirar no es cada fila sino que ninguna se parezca a
-    // otra — el defecto reportado fue una fila que decia "Esperando el escaneo" y
-    // ofrecia "Ver la pestana" sin ninguna pestana detras, y eso solo se ve al lado
-    // de la fila que SI tiene pestana. Las dos ultimas son las que no se pueden
-    // escribir a mano en el worker: una linea a medias cuya pestana murio con el
-    // reinicio de Orca, y un estado que este panel todavia no conoce.
-    nombre: 'config-lineas-todos-los-estados', archivo: 'config.html',
-    anchos: ANCHOS_ESTADO,
-    datos: Object.assign({}, DATOS, {
-      readWeb: 'on',
-      webLines: { at: AHORA_ISO, lines: [
-        Object.assign({}, LINEA_ESPERANDO, { label: 'Esperando' }),
-        Object.assign({}, LINEA_ESPERANDO, { label: 'Abriendo', state: 'cargando' }),
-        Object.assign({}, LINEA_ENLAZADA, { label: 'Enlazada' }),
-        Object.assign({}, LINEA_CAIDA, { label: 'Caida' }),
-        Object.assign({}, LINEA_ENLAZADA, { label: 'Sin pestana', pageId: null,
-          state: 'sin-pestana' }),
-        Object.assign({}, LINEA_ESPERANDO, { label: 'Sin escanear y sin pestana',
-          pageId: null, state: 'sin-pestana' }),
-        Object.assign({}, LINEA_ENLAZADA, { label: 'Sin Orca', pageId: null,
-          state: 'sin-orca' }),
-        Object.assign({}, LINEA_ENLAZADA, { label: 'Estado nuevo', pageId: null,
-          state: 'algo-que-este-panel-no-conoce' })
-      ] }
-    })
-  },
-  {
-    // El parpadeo que el dueno reporto tres versiones seguidas: entraba, veia la linea
-    // "Enlazada", y unos segundos despues la seccion entera decia "Todavia no
-    // conectaste ninguna linea" y volvia. No era lo que el worker publica —eso se
-    // midio estable— sino el sondeo: 18 lecturas por vuelta contra las 30 por 10 s que
-    // el host admite, asi que la COLA del lote volvia rechazada y el panel la pintaba
-    // como "no hay nada". La foto es DESPUES de encender los rechazos: la tabla tiene
-    // que seguir entera y el select seguir en "cada 2 minutos" — si vuelve a "cada 5
-    // minutos — recomendado" es el mismo defecto, y es el detalle que lo delata.
-    nombre: 'config-lectura-rechazada', archivo: 'config.html', anchos: ANCHOS_ESTADO,
-    datos: Object.assign({}, DATOS, {
-      readWeb: 'on', syncMinutes: '2',
-      webLines: { at: AHORA_ISO, lines: [
-        Object.assign({}, LINEA_ENLAZADA, { label: 'Soporte', placement: 'flotante',
-          project: null, worktreeId: null }),
-        Object.assign({}, LINEA_ENLAZADA, { id: 'web:573111111111', label: 'Ventas',
-          placement: 'flotante', project: null, worktreeId: null })
-      ] }
-    }),
-    espera: 900,
-    guion: () => {
-      window.__rechazar = ['webLines', 'webStatus', 'syncMinutes', 'readWebText',
-        'chats', 'health', 'routes', 'scope']
-      window.dispatchEvent(new Event('focus'))
-      document.getElementById('lines-wrap').scrollIntoView({ block: 'center' })
-    }
-  },
-  {
     nombre: 'config-buscando', archivo: 'config.html', anchos: ANCHOS_ESTADO,
     datos: Object.assign({}, SIN_CHATS, {
       syncStatus: { running: true, startedAt: new Date().toISOString(), trigger: 'activate' }
@@ -445,186 +317,9 @@ const PANELES = [
       syncStatus: { running: true, startedAt: HACE_DIEZ_MINUTOS, trigger: 'activate' }
     })
   },
-  {
-    // La sesion web caida es el texto opcional mas largo que produce el CLI, y el unico
-    // que trae una instruccion con mayusculas en medio de la frase. Va a la captura
-    // porque un parrafo que desborda a 320 se ve perfecto en el JSON.
-    nombre: 'config-web-caida', archivo: 'config.html', anchos: ANCHOS_ESTADO,
-    datos: Object.assign({}, DATOS, {
-      health: {
-        ok: true,
-        optional: [{
-          que: 'WhatsApp Web as a second line', code: 'web',
-          como: 'WhatsApp Web: that WhatsApp Web session is not linked — the QR code is ' +
-            'on screen, scan it with the phone of THAT number',
-          howCode: 'web-logged-out'
-        }]
-      }
-    })
-  },
-  {
-    // La linea A MEDIAS, que es el estado en el que estaba el dueno: `read_web on`, la
-    // linea registrada y sin escanear, y el plugin leyendo su WhatsApp PERSONAL por la
-    // primera pestana que encontro. Ahora no lee nada y lo dice. Va a la captura porque
-    // son DOS mensajes que tienen que leerse juntos y no repetirse: la fila de la tabla
-    // ("Esperando el escaneo") y el renglon opcional que explica que, hasta terminarla,
-    // la via web no lee nada.
-    nombre: 'config-linea-a-medias', archivo: 'config.html', anchos: ANCHOS_ESTADO,
-    datos: Object.assign({}, DATOS, {
-      readWeb: 'on',
-      webLines: { at: AHORA_ISO, lines: [LINEA_ESPERANDO] },
-      health: {
-        ok: true,
-        optional: [{
-          que: 'WhatsApp Web as a second line', code: 'web',
-          como: "NoVa: the web route is on, but the only line(s) registered — 'NoVa' — " +
-            'never finished linking: the QR code was not scanned, so there is no ' +
-            'session of that number to read',
-          howCode: 'web-line-pending'
-        }]
-      }
-    })
-  },
-  {
-    // La maquina de Linux o Windows que lee SOLO por la sesion web. Aca el panel decia
-    // "WhatsApp no esta conectado" en rojo con la sesion leyendo perfecto, porque los
-    // cinco chequeos de la base local salian como requisito sin condicion. Ahora no
-    // bloquean y se colapsan en una fila: por eso va a la captura, para verla una sola
-    // y no cinco circulos grises ofreciendo activar un sistema operativo.
-    nombre: 'config-solo-web', archivo: 'config.html', anchos: ANCHOS_ESTADO,
-    datos: Object.assign({}, DATOS, {
-      readWeb: 'on', readWebText: 'memoria',
-      webLines: { at: AHORA_ISO, lines: [LINEA_ENLAZADA] },
-      health: {
-        ok: true,
-        optional: [{
-          que: 'local WhatsApp database', code: 'local',
-          como: 'Linux; no official app for this system; missing; does not exist',
-          howCode: 'local-covered-by-web'
-        }]
-      }
-    })
-  },
   // Los cuatro de abajo van a los CUATRO anchos y no a los dos extremos: son los
   // estados que se entregaron rotos, y el mensaje de error es texto largo que se
   // reacomoda distinto en cada ancho.
-  {
-    // Lo que el usuario vio y no pudo ver: guardar de donde lee fallando. El panel
-    // decia "Fuentes guardadas" con la escritura rechazada, porque de las tres
-    // encadenadas solo se miraba el resultado de la ultima.
-    nombre: 'config-fuente-fallo', archivo: 'config.html', anchos: ANCHOS,
-    datos: Object.assign({}, DATOS, { readLocal: 'on', readWeb: 'off' }),
-    stub: { falla: ['readWeb'] },
-    espera: 900,
-    guion: () => {
-      document.getElementById('read-local').value = 'off'
-      document.getElementById('read-web').value = 'on'
-      document.getElementById('save-source').click()
-      document.getElementById('said-source').scrollIntoView({ block: 'center' })
-    }
-  },
-  {
-    // Y conectar una linea que falla: el nombre tipeado TIENE que seguir ahi. Se
-    // perdia, junto con el motivo, y el usuario se quedaba mirando un formulario vacio.
-    nombre: 'config-linea-fallo', archivo: 'config.html', anchos: ANCHOS,
-    datos: Object.assign({}, DATOS, { webLines: { at: AHORA_ISO, lines: [] } }),
-    stub: { veredicto: { ok: false, code: 'sin-orca', detail: 'spawn orca ENOENT' } },
-    espera: 2500,
-    guion: () => {
-      document.getElementById('line-label').value = 'Linea del bot'
-      document.getElementById('link-line').click()
-      document.getElementById('said-line').scrollIntoView({ block: 'center' })
-    }
-  },
-  {
-    // La configuracion que el dueno queria: la app de escritorio apagada y la lectura
-    // por la sesion web. Lo que se mira es que los dos selectores digan eso y que el
-    // panel NO este pintado de rojo pidiendo la app que acaba de apagar.
-    nombre: 'config-escritorio-off', archivo: 'config.html', anchos: ANCHOS,
-    datos: Object.assign({}, DATOS, {
-      readLocal: 'off', readWeb: 'on', readWebText: 'memoria',
-      webLines: { at: AHORA_ISO, lines: [LINEA_ENLAZADA] },
-      health: {
-        ok: true,
-        optional: [{
-          que: 'local WhatsApp database', code: 'local',
-          como: 'Darwin; the desktop app is turned off for reading',
-          howCode: 'local-covered-by-web'
-        }]
-      }
-    })
-  },
-  {
-    // Y la que pidio de verdad: las DOS encendidas en el mismo Mac — la app leyendo su
-    // numero personal y una sesion web leyendo la del bot. Dos lineas, una bandeja.
-    nombre: 'config-dos-lineas', archivo: 'config.html', anchos: ANCHOS,
-    datos: Object.assign({}, DATOS, {
-      readLocal: 'on', readWeb: 'on', readWebText: 'memoria',
-      webLines: { at: AHORA_ISO,
-        lines: [Object.assign({}, LINEA_ENLAZADA, { label: 'Linea del bot' })] }
-    })
-  },
-  {
-    // Un guardado EN VUELO. Se fotografia porque es el instante que el dueno reporto:
-    // "algunos select cambian de valor y vuelve". El sondeo late cada 8 s mientras la
-    // escritura viaja, y lo que hay que ver es que el select sigue diciendo lo que el
-    // usuario eligio y que el boton dice que esta trabajando.
-    nombre: 'config-guardado-en-vuelo', archivo: 'config.html', anchos: ANCHOS_ESTADO,
-    datos: Object.assign({}, DATOS, { readLocal: 'on', readWeb: 'off', readWebText: 'off' }),
-    stub: { demoraSet: 6000 },
-    espera: 1800,
-    guion: () => {
-      document.getElementById('read-web').value = 'on'
-      document.getElementById('read-web').dispatchEvent(new Event('change'))
-      document.getElementById('save-source').focus()
-      document.getElementById('save-source').click()
-      document.getElementById('save-source').scrollIntoView({ block: 'center' })
-    }
-  },
-  {
-    // Y una accion EN VUELO sobre una linea, con el veredicto del clic anterior todavia
-    // en `webStatus`. Lo que hay que ver es que NO dice que fallo nada: el aviso rojo
-    // que habia era la respuesta a "Ver la pestana", y se leia como "no pude
-    // desvincular". Pasa una vuelta entera del sondeo antes de la foto.
-    nombre: 'config-desvincular-en-vuelo', archivo: 'config.html', anchos: ANCHOS_ESTADO,
-    datos: Object.assign({}, DATOS, {
-      readWeb: 'on',
-      webLines: { at: AHORA_ISO, lines: [LINEA_ESPERANDO] },
-      webStatus: { at: AHORA_ISO, requestAt: '2026-01-01T00:00:00.000Z', action: 'show',
-        ok: false, code: 'flotante-sin-via', detail: '', placement: 'flotante' }
-    }),
-    espera: 2600,
-    guion: () => {
-      document.querySelector('[data-lrm]').click()
-      setTimeout(() => {
-        document.querySelector('[data-lyes]').click()
-        document.getElementById('said-line').scrollIntoView({ block: 'center' })
-      }, 60)
-    }
-  },
-  {
-    // Lo que la bandeja ve cuando la linea es web: el cuerpo casi nunca llega y el
-    // adjunto no deja ruta. El panel mostraba el marcador crudo del CLI.
-    nombre: 'actividad-sin-texto', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
-    datos: Object.assign({}, DATOS, {
-      activity: Object.assign({}, DATOS.activity, {
-        mapped: 4, authorized: 4,
-        run: { state: 'ok', startedAt: AHORA_CORTO, endedAt: AHORA_CORTO,
-          looked: 4, pending: 3, reason: null },
-        pending: [
-          { stanzaId: 'W1', date: AHORA_CORTO, chat: 'Soporte — Cliente Norte',
-            sender: 'Ana Restrepo', kind: 'mencion', text: '',
-            noText: 'not-loaded', mediaKind: 'image', hasMedia: true },
-          { stanzaId: 'W2', date: AHORA_CORTO, chat: 'Operaciones internas',
-            sender: 'Beto Ramirez', kind: 'mencion', text: '',
-            noText: 'off', mediaKind: null, hasMedia: false },
-          { stanzaId: 'W3', date: AHORA_CORTO, chat: 'Laura Mendez',
-            sender: 'Laura Mendez', kind: 'directo', text: '',
-            noText: 'no-body', mediaKind: 'ptt', hasMedia: true }
-        ]
-      })
-    })
-  },
   {
     // El plugin que Orca NO arranco. En una maquina nueva, y en CADA actualizacion
     // mientras el usuario no vuelva a aprobarlo, esto es lo que hay: nadie corriendo.
@@ -640,51 +335,42 @@ const PANELES = [
       { workerBeat: { at: new Date(Date.now() - 180000).toISOString() } })
   },
   {
-    // El sistema que no puede leer, DICHO. `health` lo lee el panel y no lo escribia
-    // nadie: una maquina sin WhatsApp instalado se veia igual que una sana.
-    nombre: 'config-sin-whatsapp', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    // El sistema que no puede leer, DICHO. Es lo que hoy ve TODO el mundo: los dos
+    // transportes viejos se fueron y el sidecar todavia solo empareja. Va a los cuatro
+    // anchos y en los dos idiomas porque el detalle del CLI es una FRASE en ingles, y
+    // esta captura es lo unico que delata si se cuela sin traducir — el defecto que ya
+    // se vio con "both routes are off: turn the desktop app or WhatsApp Web back on".
+    nombre: 'config-sin-transporte', archivo: 'config.html', anchos: ANCHOS,
     datos: Object.assign({}, DATOS, {
-      readWeb: 'off',
-      // La forma EXACTA que publica checkSystem cuando todo lo que falta es de la via
-      // local: `no-source`, no el nombre del primer chequeo. Con el nombre el aviso se
-      // leia "WhatsApp Desktop instalado", que es una afirmacion, no un problema.
-      health: { ok: false, problem: 'no read source on this system',
-        problemCode: 'no-source',
-        detail: 'whatsapp: missing; database: missing; readable: does not exist',
-        optional: [{ que: 'WhatsApp Web as a second line', code: 'web',
-          como: 'optional — a second line, on top of the desktop app',
-          howCode: 'web-off' }] }
+      // La forma EXACTA que publica checkSystem con el doctor de hoy.
+      health: { ok: false, problem: 'a message transport',
+        problemCode: 'no-transport',
+        detail: 'no-transport: there is no message transport yet. The two old read ' +
+          'routes were removed and the sidecar that replaces them pairs the line but ' +
+          'does not read messages yet.',
+        optional: [{ que: 'audio transcription', code: 'transcribe',
+          como: 'no engine: download the model in Settings > Voice',
+          howCode: 'transcribe-no-engine' }] }
     })
   },
   {
-    // La pestana que aparecio en otro lado. Los dos lugares con nombre y las dos
-    // salidas; el plugin no elige ninguna por su cuenta.
-    nombre: 'config-linea-mudada', archivo: 'config.html', anchos: ANCHOS_ESTADO,
-    datos: Object.assign({}, DATOS, {
-      readWeb: 'on',
-      webLines: { at: AHORA_ISO, lines: [
-        Object.assign({}, LINEA_ENLAZADA, { host: 'runtime-A',
-          placement: 'proyecto', project: 'orca-oss', worktreeId: 'wt-otro',
-          homeState: 'mudada',
-          casa: { host: 'runtime-A', donde: 'proyecto', worktreeId: 'wt-9',
-            proyecto: 'alfred-soporte' } })
-      ] }
-    })
+    // Un guardado que el host RECHAZO. Se fotografia porque el defecto que motivo esto
+    // era visual: el panel decia "guardado" con un tilde verde sobre una escritura que
+    // no ocurrio, y eso no lo delata ninguna prueba de codigo, solo mirarlo.
+    nombre: 'config-guardado-fallo', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: DATOS, stub: { falla: ['inboxDays'] },
+    guion: `document.getElementById('inbox-days').value = '30';
+            document.getElementById('save-days').click()`
   },
   {
-    // La linea que se conecto en OTRO Orca. Su perfil de navegador vive alla, asi que
-    // aca no se puede abrir ni escanear nada: solo sacarla.
-    nombre: 'config-linea-otro-host', archivo: 'config.html', anchos: ANCHOS_ESTADO,
-    datos: Object.assign({}, DATOS, {
-      readWeb: 'on',
-      webLines: { at: AHORA_ISO, lines: [
-        Object.assign({}, LINEA_ENLAZADA, { host: 'runtime-A', state: 'sin-pestana',
-          pageId: null, placement: null, project: null, worktreeId: null,
-          homeState: 'otro-host',
-          casa: { host: 'runtime-B', donde: 'flotante', worktreeId: null,
-            proyecto: null } })
-      ] }
-    })
+    // Y el guardado EN VUELO: el boton ocupado mientras el host todavia no contesta.
+    // Sin poder verlo, un boton que se queda muerto y uno que esta trabajando son la
+    // misma imagen.
+    nombre: 'config-guardado-en-vuelo', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: DATOS, stub: { demoraSet: 4000 },
+    guion: `document.getElementById('inbox-days').value = '30';
+            document.getElementById('save-days').click()`,
+    espera: 600
   },
 
   // La vinculacion de WhatsApp (T3/T4, docs/ENCARGO-TRANSPORTE-UNICO.md §6 y §12): los

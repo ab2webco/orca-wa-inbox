@@ -94,36 +94,6 @@ asked for access — and nothing else.
 Wrong. No more than 10 lines, and a run with nothing to do says so in one line. It
 runs every 5 minutes; most of the time there is nothing, and that is fine.
 
-## One that arrived over the web route
-
-The same run also brought this row back. Nothing is missing from it: this is what a
-message looks like when the line is a WhatsApp Web session instead of the desktop app.
-
-```json
-{ "stanza_id": "3EB0C7", "chat_jid": "100000000000000001@g.us",
-  "chat": "Acme — Operaciones", "de": "Laura", "kind": "mencion",
-  "text": "@100000000000001 [web:no-text reason=not-loaded media=image]",
-  "media": null, "adjuntos_cerca": [] }
-```
-
-What was done, and what was **not**:
-
-1. It was **not** dropped. `text` is not empty — it is a marker saying the body was not
-   read. Dropping it is how every web-sourced mention disappears in silence.
-2. No card. No reply. The content is unknown, and a card whose body is "someone
-   mentioned you and we do not know what they said" is junk on the board.
-3. No attachment was opened. `media=image` says one arrived; `adjuntos_cerca` is empty
-   and always will be on this route, because the file lives in the browser profile's
-   blob store. Saying "I looked at the screenshot" here would be a lie.
-4. It went to the wrap-up as DOUBTFUL, in one line, with the reason named:
-   *"1 mención en Acme — Operaciones sin texto (la sesión web no tenía ese mensaje
-   cargado), con una imagen. Tomar o Ignorar para decidirla."*
-   The human resolves it with Take or Ignore, and on the next run it arrives decided.
-
-Had the marker said `reason=off`, the wrap-up line would add that the owner can turn
-the text on with `wa-scope config read_web_text memoria`. That is the only one of the
-three reasons with an action behind it.
-
 ## What separates the two
 
 Nothing in the good run needed cleverness. It needed reading `voice` before

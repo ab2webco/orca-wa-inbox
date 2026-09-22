@@ -2,9 +2,10 @@
 
 Existe porque estaban en dos: `wa-scope` mezclaba lo que el panel guarda con lo que
 tiene su base, y `wa-read` leia solo la base. Las dos contestaban distinto sobre el
-MISMO ajuste — el panel decia `read_web on`, `wa-scope config` lo confirmaba, y
-`wa-read`, que es quien de verdad lee WhatsApp, seguia con la via web apagada. Cambiar
-de donde lee en el panel no cambiaba nada y no lo decia nadie.
+MISMO ajuste — el panel guardaba un valor, `wa-scope config` lo confirmaba, y la
+herramienta que de verdad lo usaba seguia con el valor viejo. Cambiarlo en el panel no
+cambiaba nada y no lo decia nadie. Por eso un ajuste se agrega en UN lugar: el que se
+suma a la mitad de las tres tablas de abajo es el mismo defecto otra vez.
 
 El panel manda sobre la base: es lo que el usuario acaba de tocar. La base es la via de
 la terminal, y `wa-scope config` la mantiene espejada hacia el panel en cada escritura.
@@ -263,14 +264,11 @@ PANEL_SETTINGS = {"tone": "tone", "agentName": "agent_name",
                   "ownerName": "owner_name",
                   "transcribe": "transcribe",
                   "transcribeLang": "transcribe_lang",
-                  "readLocal": "read_local",
                   # Cada cuanto el worker relee WhatsApp. Sale al panel porque es lo
                   # que acota cuanto puede tardar un mensaje en aparecer: el precheck
                   # contesta sobre el ultimo sync, asi que si esto fuera una constante
                   # escondida el retraso tambien lo seria.
-                  "syncMinutes": "sync_minutes",
-                  "readWeb": "read_web",
-                  "readWebText": "read_web_text"}
+                  "syncMinutes": "sync_minutes"}
 
 # Lo que cada ajuste acepta. Un valor invalido no revienta al guardarse: revienta
 # despues, en la corrida del agente, lejos de donde se tipeo — o peor, no revienta y
@@ -284,21 +282,8 @@ CONFIG_OPCIONES = {
     # Solo los idiomas que el panel ofrece y con los que se probo. Un codigo sin probar
     # degrada la transcripcion en silencio, y eso se descubre tres audios despues.
     "transcribe_lang": ("auto", "es", "en", "pt"),
-    # De donde lee. Son dos interruptores y no una lista de tres porque las fuentes se
-    # SUMAN: apagar la local en un equipo que la tiene es una eleccion real (leer solo
-    # la linea de la empresa), y encender la web no apaga la del escritorio. Las dos
-    # encendidas es el caso normal de un Mac con la app en el numero personal y una
-    # sesion web en el del bot.
-    "read_local": ("on", "off"),
-    "read_web": ("on", "off"),
-    # El TEXTO de los mensajes que trae la via web, que es una eleccion aparte de
-    # leerla. `memoria` no abre ninguna conversacion y no marca nada como leido: lee el
-    # cuerpo de lo que esa pestana ya tenia cargado y deja el marcador `[web:no-text]`
-    # en lo demas. El modo que si abriria los chats no existe a proposito — abrir una
-    # conversacion en WhatsApp Web la marca leida tambien en el telefono del usuario.
-    "read_web_text": ("off", "memoria"),
 }
-CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s", "sync_minutes", "web_timeout_s",
+CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s", "sync_minutes",
                     "capture_max", "capture_days")
 
 
@@ -338,8 +323,8 @@ def scope_db():
     return os.path.expanduser("~/.wa-inbox/scope.db")
 
 
-def ajuste(key, fallback=None, env_prefix=None):
-    """El valor efectivo de un ajuste: entorno, panel y base del CLI, en ese orden.
+def ajuste(key, fallback=None):
+    """El valor efectivo de un ajuste: el panel y la base del CLI, en ese orden.
 
     El panel manda sobre la base porque es lo que el usuario acaba de tocar. Vive aca
     porque tenerlo copiado es como nacio el defecto: `wa-send` se habia quedado con su
@@ -357,10 +342,6 @@ def ajuste(key, fallback=None, env_prefix=None):
         except (TypeError, ValueError):
             return None
 
-    if env_prefix:
-        forzado = os.environ.get(f"{env_prefix}{key.upper()}")
-        if forzado and (v := convertido(forzado)) is not None:
-            return v
     try:
         del_panel = settings_from_plugin().get(key)
     except Exception:                     # noqa: BLE001 - un store ilegible no manda

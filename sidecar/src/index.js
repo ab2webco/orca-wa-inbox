@@ -26,7 +26,7 @@ process.umask(0o077)
 // "Cambiar el texto no rompe nada; renombrar el codigo desincroniza el panel en
 // silencio." QR pendiente, sesion cerrada, sin sesion y socket caido son CUATRO
 // acciones distintas que el usuario tiene que tomar, no un fallo generico
-// (docs/LECTURA-MULTIFUENTE.md:51-73).
+// (docs/ENCARGO-TRANSPORTE-UNICO.md §11 E2).
 export const MOTIVO = Object.freeze({
   QR_PENDIENTE: 'qr-pendiente',
   SESION_CERRADA: 'sesion-cerrada',

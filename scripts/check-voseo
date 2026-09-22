@@ -28,11 +28,11 @@ PANELES = {"config.html": ("        en: {", "      var LANG ="),
 
 # El espanol tambien vive fuera de los paneles: mensajes de los CLI, comentarios del
 # worker, textos esperados por las pruebas y documentacion.
-OTROS = ["main.mjs", "web-lines.mjs", "harness.mjs", "README.md",
+OTROS = ["main.mjs", "harness.mjs", "README.md",
          "bin/wa-read", "bin/wa-scope", "bin/wa-send", "bin/wa-transcribe",
          "bin/wa_settings.py",
          "automations/README.md", "docs/ESCRIBIR-UN-PLUGIN.md",
-         "docs/LECTURA-MULTIFUENTE.md", "docs/el-plugin-whatsapp-inbox.html",
+         "docs/el-plugin-whatsapp-inbox.html",
          "test/manifest.test.mjs", "test/panels.test.mjs", "test/worker.test.mjs",
          "test/shots.mjs", "test/sidecar-build.test.mjs", "test/sidecar-pairing.test.mjs",
          "sidecar/src/index.js", "sidecar/build.mjs", "sidecar/resolve-auth-dir.mjs",

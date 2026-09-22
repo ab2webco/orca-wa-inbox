@@ -6,18 +6,18 @@
  * la base de WhatsApp o persistir el registro.
  *
  * No reimplementa la lectura de WhatsApp: delega en los CLIs (`wa-read`, `wa-scope`,
- * `wa-send`), que ya resuelven el WAL, el epoch de Core Data y la resolucion de LIDs.
- * Duplicar esa logica aca seria tener dos verdades que se desincronizan.
+ * `wa-send`). Duplicar esa logica aca seria tener dos verdades que se desincronizan.
+ *
+ * Hoy el unico transporte es el sidecar de Baileys, y todavia solo empareja: los CLIs
+ * contestan `no-transport` a todo lo que pida mensajes. Los dos transportes viejos —la
+ * app de escritorio y una sesion de WhatsApp Web conducida por el navegador— se
+ * quitaron enteros, y con ellos el despachador de pestanas que vivia en este archivo.
  */
 import { execFile, spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import { HARNESS_KEY } from './harness.mjs'
-import {
-  cerrarPestana, conectarLinea, estadoDeLineas, identificarLinea, mudarPestana,
-  olvidarLinea, reabrirPestana, usarEntornoOrca, verPestana
-} from './web-lines.mjs'
 
 // Las herramientas viajan dentro del plugin. Antes se buscaban en el PATH del usuario,
 // lo que solo funcionaba en la maquina donde alguien las habia enlazado a mano.
@@ -30,10 +30,6 @@ const STATUS_KEY = 'syncStatus'
 // Que puede leer este sistema. El panel lo lee y hasta ahora no lo escribia NADIE: una
 // maquina sin WhatsApp instalado se veia igual que una sana.
 const HEALTH_KEY = 'health'
-// Donde vive la pestana de cada linea, por PERFIL. La clave es el perfil y no el id de
-// la linea porque el id cambia cuando el registro la asciende de `pending` a su
-// identidad real; el perfil se crea una vez y es lo que ata la sesion a un host.
-const WEB_HOMES_KEY = 'webHomes'
 // La senal de vida del worker. Sin ella "el plugin no contesto" y "el plugin no esta"
 // son el mismo silencio de 45 s, y el usuario no puede distinguirlos.
 const BEAT_KEY = 'workerBeat'
@@ -45,16 +41,6 @@ const CHATS_KEY = 'chats'
 // motivo cuando algo no llega a hablar. El panel dibuja el QR desde aca
 // (docs/ENCARGO-TRANSPORTE-UNICO.md §6-7); es el UNICO canal, igual que el resto.
 const SIDECAR_KEY = 'sidecar'
-// Las lineas de WhatsApp Web: el panel deja el pedido en una clave y lee el estado en
-// la otra. Misma via que el sync — un panel no puede ejecutar nada, y enlazar una linea
-// es justamente ejecutar cuatro comandos.
-const WEB_REQUEST_KEY = 'webRequest'
-const WEB_LINES_KEY = 'webLines'
-// Como le fue a lo ULTIMO que pidio el panel, en su propia clave. Vivia dentro de
-// `webLines`, que el sondeo reescribe cada pocos segundos: el motivo de un fallo
-// duraba lo que tardaba la siguiente vuelta y el usuario no llegaba a verlo nunca.
-// Aca no lo pisa nadie hasta el proximo pedido.
-const WEB_STATUS_KEY = 'webStatus'
 const MODES = ['off', 'observar', 'borrador', 'responder']
 
 /** El nombre del agente lo define quien usa el plugin. No viene con uno puesto.
@@ -96,17 +82,12 @@ async function checkSystem(orca, toolsDir = TOOLS) {
   // linea, por ejemplo — y avisarlo pondria una notificacion en cada arranque de una
   // maquina que lee perfecto, que es la manera mas rapida de que dejen de leerse.
   const failed = checks.filter((c) => !c.ok && c.requerido !== false)
-  // El primer chequeo es si hay base local en este sistema; distinguirlo de "falta
-  // instalar WhatsApp" importa, porque uno se arregla y el otro no. Se mira el codigo y
-  // no el nombre: el nombre es texto para leer y se puede reescribir, el codigo es el
-  // contrato. Si llega aca es que la via web tampoco esta contestando — cuando contesta,
-  // los chequeos de la base local vienen con requerido en false y no se cuentan.
-  const unsupported = failed.some((c) => c.code === 'system')
-  // Que TODO lo que falta sea de la via local no es "falta algo": es que en esta
-  // maquina la via que aplica es la web. Un Mac sin WhatsApp de escritorio es el caso
-  // para el que existe la via web, no una instalacion rota — y la diferencia es que
-  // una tiene una accion que el usuario puede hacer desde el panel.
-  const soloLocal = failed.length > 0 && failed.every((c) => c.via === 'local')
+  // Que no haya transporte de mensajes bloquea —el plugin no puede leer— pero no es
+  // algo que el usuario pueda arreglar: lo arregla la rebanada que falta construir. Una
+  // notificacion es para lo que tiene accion, asi que este motivo viaja a `health`, que
+  // el panel pinta, y NO a una notificacion que saldria en cada arranque de cada
+  // maquina y terminaria de enseniar a ignorarlas.
+  const accionables = failed.filter((c) => c.code !== 'no-transport')
 
   // El estado se PUBLICA siempre. El panel lo lee en `health` y no lo escribia nadie:
   // una maquina que no puede leer WhatsApp se veia exactamente igual que una sana.
@@ -115,8 +96,8 @@ async function checkSystem(orca, toolsDir = TOOLS) {
         problemCode: 'sin-herramientas', detail: porque, optional: [] }
     : failed.length
       ? { ok: false,
-          problem: soloLocal ? 'no read source on this system' : failed[0].check,
-          problemCode: soloLocal ? 'no-source' : (failed[0].code || null),
+          problem: failed[0].check,
+          problemCode: failed[0].code || null,
           detail: failed.map((c) => `${c.code || c.check}: ${c.detalle}`).join('; ')
             .slice(0, 300),
           optional: opcional }
@@ -132,24 +113,19 @@ async function checkSystem(orca, toolsDir = TOOLS) {
     orca.log(`check: the tools did not answer${porque ? ` — ${porque}` : ''}`)
     return
   }
-  if (!failed.length) return
+  // El log si lo dice siempre: es donde se mira cuando algo no anda, y callarlo ahi
+  // seria esconder justo lo que explica una bandeja vacia.
+  if (failed.length) orca.log(`check: missing ${failed.map((c) => c.code || c.check).join(', ')}`)
+  if (!accionables.length) return
 
   await orca.host.call('notifications.show', {
     // El worker no tiene forma de saber en que idioma esta el usuario — el host no se
     // lo dice y no hay navigator aca — asi que una notificacion no se puede traducir.
     // Va en ingles, como todo lo que no puede llevar traduccion; el detalle esta a un
     // clic, en el panel, que si esta en su idioma.
-    title: unsupported || soloLocal
-      ? 'WhatsApp Inbox has no read source on this system'
-      : 'WhatsApp Inbox needs something else',
-    body: unsupported || soloLocal
-      ? 'There is no local WhatsApp database here — that route is only verified on ' +
-        'macOS. A WhatsApp Web session is the route that applies, and it reads the ' +
-        'chat list, the line identity and the inbox. Connect a line in the plugin ' +
-        'settings.'
-      : 'Open the plugin settings to see what is missing.'
+    title: 'WhatsApp Inbox needs something else',
+    body: 'Open the plugin settings to see what is missing.'
   }).catch((error) => orca.log(`notification failed: ${error.message}`))
-  orca.log(`check: missing ${failed.map((c) => c.code || c.check).join(', ')}`)
 }
 
 /** La linea de stderr que sirve. En un traceback de Python la primera es el
@@ -344,12 +320,7 @@ async function resolverCasaOrca(waScope) {
     const env = casa.path
       ? { ...process.env, ORCA_USER_DATA_PATH: casa.path }
       : { ...process.env }
-    usarEntornoOrca(env, casa.tried || [])
     ENV_HERRAMIENTAS = env
-    // El binario tambien lo resuelve el subproceso: el PATH del worker viene
-    // recortado y en Linux el instalador deja `orca-ide` en ~/.local/bin, que el
-    // worker no puede ni mirar.
-    if (casa.cli) CLI_ORCA = casa.cli
     return casa
   } catch (error) {
     // Que no se pueda resolver no apaga nada: la CLI sigue con su carpeta por
@@ -358,350 +329,6 @@ async function resolverCasaOrca(waScope) {
   }
 }
 
-/** El binario de la CLI de Orca, que en Linux NO se llama `orca`: ahi ese nombre es el
- *  lector de pantalla de GNOME. Misma regla que wa-read. */
-let CLI_ORCA = null
-function orcaCli() {
-  if (CLI_ORCA) return CLI_ORCA
-  const declarado = String(process.env.ORCA_CLI_COMMAND ?? '').trim()
-  if (declarado) return declarado.split(' ')[0]
-  return process.platform === 'linux' ? 'orca-ide' : 'orca'
-}
-
-/** Las lineas registradas, tal como las ve el registro. */
-async function cuentasWeb(waScope) {
-  const { stdout } = await run(waScope, ['accounts', '--json'])
-  let filas
-  try {
-    filas = JSON.parse(stdout || '[]')
-  } catch {
-    // Leerlo como "no hay lineas" es peor que fallar: con cero lineas el camino de
-    // desconectar apaga la via web, o sea que un registro ilegible terminaba apagando
-    // la lectura del usuario sin decir nada.
-    throw new Error(`wa-scope accounts returned no JSON: ${String(stdout).slice(0, 200)}`)
-  }
-  return (Array.isArray(filas) ? filas : []).filter((c) => c.kind === 'web')
-}
-
-// Mientras una linea no este enlazada, el estado tiene que seguir a la realidad sin que
-// el usuario haga nada: escanear el QR y que el panel siga diciendo "esperando" es el
-// mismo callejon que el spinner eterno. Enlazadas, se mira de tanto en tanto.
-const WEB_SONDEO_RAPIDO_MS = 3 * 1000
-const WEB_SONDEO_LENTO_MS = 60 * 1000
-// Sin ninguna linea conectada no hay nada que sondear, y la inmensa mayoria de las
-// instalaciones estan asi: mirar cada minuto seria un proceso por minuto para nada.
-const WEB_SONDEO_OCIOSO_MS = 5 * 60 * 1000
-
-/** La casa anotada de cada linea, por perfil. */
-async function hogares(orca) {
-  const guardado = await leer(orca, WEB_HOMES_KEY)
-  return guardado && typeof guardado === 'object' && !Array.isArray(guardado)
-    ? { ...guardado } : {}
-}
-
-/** Anota donde vive esa linea. Lo escribe SOLO el que la crea o el que la muda: el
- *  sondeo no toca esto. Que la observacion pisara la casa era volver a no tener casa —
- *  si el lugar anotado siempre es el observado, nunca pueden discrepar y "se movio"
- *  deja de ser un estado que se pueda ver. */
-async function fijarCasa(orca, profile, casa) {
-  if (!profile || !casa || (casa.donde !== 'flotante' && casa.donde !== 'proyecto')) return
-  const casas = await hogares(orca)
-  casas[profile] = { host: casa.host || null, donde: casa.donde,
-                     worktreeId: casa.worktreeId || null, proyecto: casa.proyecto || null,
-                     at: new Date().toISOString() }
-  await guardar(orca, WEB_HOMES_KEY, casas)
-}
-
-/** La casa se va con la linea: dejarla anotada le fijaria destino a una linea futura
- *  que reusara ese id de perfil sin que nadie lo haya elegido. */
-async function olvidarCasa(orca, profile) {
-  if (!profile) return
-  const casas = await hogares(orca)
-  if (!(profile in casas)) return
-  delete casas[profile]
-  await guardar(orca, WEB_HOMES_KEY, casas)
-}
-
-/**
- * Como se lleva lo OBSERVADO con lo ANOTADO. Es un dato derivado y nada mas: no
- * reescribe la casa ni mueve la pestana.
- *
- * `mudada` es el caso que antes no existia: la pestana esta, pero no donde la linea
- * dice que vive. Se le pone nombre para que tenga una accion — volver a su casa, o
- * adoptar la nueva — en vez de que el plugin elija por su cuenta y calle.
- */
-function estadoDeCasa(linea, casa) {
-  if (!casa) return 'sin-casa'
-  if (casa.host && linea.host && casa.host !== linea.host) return 'otro-host'
-  if (!linea.placement) return 'en-casa'
-  if (linea.placement !== casa.donde) return 'mudada'
-  if (casa.donde === 'proyecto' && casa.worktreeId &&
-      linea.worktreeId && linea.worktreeId !== casa.worktreeId) return 'mudada'
-  return 'en-casa'
-}
-
-/** Deja escrito el estado real de cada linea, y asciende la que ya termino de escanear.
- *
- *  Devuelve las lineas, o `null` cuando el registro no se pudo leer. Son dos respuestas
- *  distintas y antes eran la misma —lista vacia—: el que desvincula apagaba la ruta web
- *  porque "no quedan lineas", cuando lo unico que habia pasado es que wa-scope no
- *  contesto. Una lectura fallida no puede deshacer lo que el usuario acaba de conectar. */
-async function refrescarLineas(orca, waScope, { motivo = 'timer' } = {}) {
-  const exe = orcaCli()
-  const previo = (await leer(orca, WEB_LINES_KEY)) ?? {}
-  // El `placement` NO se arrastra. Se arrastraba para que la frase de donde buscar el
-  // QR sobreviviera al sondeo, y el precio fue que mentia: la clave decia "flotante"
-  // con la pestana ya movida al proyecto, y el usuario abrio un panel vacio por leerla.
-  // Ahora cada fila trae el suyo, calculado del worktree de SU pestana en esta vuelta.
-  let cuentas = []
-  try {
-    cuentas = await cuentasWeb(waScope)
-  } catch (error) {
-    // Las filas de antes se quedan: publicar una lista vacia por una lectura que fallo
-    // le dice al usuario que no tiene ninguna linea, que es exactamente lo contrario.
-    await guardar(orca, WEB_LINES_KEY, { at: new Date().toISOString(),
-      lines: Array.isArray(previo.lines) ? previo.lines : [],
-      error: 'sin-registro', detail: String(error?.message ?? '').slice(0, 200) })
-    return null
-  }
-  if (!cuentas.length) {
-    await guardar(orca, WEB_LINES_KEY,
-      { at: new Date().toISOString(), lines: [], motivo })
-    return []
-  }
-  const lineas = await estadoDeLineas(exe, cuentas)
-  // La identidad la pone la SESION. Aca es el unico momento en que se conoce: la fila
-  // nacio con un id provisional sobre el perfil y recien ahora hay lid que ponerle.
-  let sinIdentidad = null
-  for (const linea of lineas) {
-    if (!linea.pending || linea.state !== 'enlazada' || !linea.lid) continue
-    try {
-      const fila = await identificarLinea({ waScope, run, id: linea.id, lid: linea.lid })
-      if (fila) {
-        linea.id = fila.id
-        linea.pending = false
-        linea.linkedAt = fila.linked_at || linea.linkedAt
-      }
-    } catch (error) {
-      // La sesion esta enlazada de verdad y el registro no la pudo ascender. Sin esto
-      // la fila se quedaba en "esperando el escaneo" para siempre y sin motivo.
-      sinIdentidad = String(error?.message ?? error).slice(0, 200)
-      orca.log(`web line identify failed: ${sinIdentidad}`)
-    }
-  }
-  // La casa se LEE y se compara; no se escribe. Ver `fijarCasa`.
-  const casas = await hogares(orca)
-  for (const linea of lineas) {
-    const casa = casas[linea.profile] || null
-    linea.casa = casa
-    linea.homeState = estadoDeCasa(linea, casa)
-  }
-  await guardar(orca, WEB_LINES_KEY, {
-    at: new Date().toISOString(), lines: lineas, motivo,
-    ...(sinIdentidad ? { error: 'sin-identidad', detail: sinIdentidad } : {})
-  })
-  return lineas
-}
-
-/** Como le fue al pedido, en la clave que el sondeo no toca. El panel lo empareja por
- *  `requestAt`: sin eso no podria distinguir la respuesta a SU clic de la anterior. */
-function veredicto(orca, pedido, extra) {
-  return guardar(orca, WEB_STATUS_KEY, {
-    at: new Date().toISOString(), requestAt: pedido?.at ?? null,
-    action: pedido?.action ?? null, ...extra
-  })
-}
-
-/** Atiende lo que el panel pidio sobre las lineas web.
- *
- *  Todas las salidas dejan veredicto. Antes varias no dejaban ninguna — ver una pestana
- *  que no existe, o un `run` que rechazaba a mitad del enlace — y el usuario se quedaba
- *  con el campo vacio, sin fila y sin motivo. */
-/** Donde quiere el usuario que viva la pestana. El proyecto es el default porque el
- *  espacio flotante no tiene atajo fuera de macOS ni comando que lo abra. */
-function destinoPedido(pedido) {
-  return pedido?.donde === 'flotante' ? 'flotante' : 'proyecto'
-}
-
-// Que acciones son sobre UNA fila, o sea las que pueden apuntar a otra cosa si esa fila
-// cambio entre que el panel la pinto y el usuario apreto.
-const SOBRE_UNA_FILA = new Set(['show', 'reopen', 'unlink', 'move', 'home', 'adopt'])
-
-/**
- * Si la fila que el usuario apreto sigue siendo la que el worker ve.
- *
- * El panel pinta desde `webLines` y el clic llega despues; entre medio el sondeo pudo
- * publicar otra cosa. Actuar igual seria cerrar una pestana que ya no es esa, o
- * desvincular una linea que el usuario vio en otro estado. Se compara contra los HECHOS
- * y no contra el `at`: el sondeo republica la misma fila con sello nuevo todo el tiempo.
- */
-async function filaVigente(orca, pedido) {
-  if (!pedido?.visto || !pedido?.id) return true
-  const actual = (await leer(orca, WEB_LINES_KEY)) ?? {}
-  if (!actual.at || actual.at === pedido.desde) return true
-  const fila = (actual.lines || []).find((l) => l.id === pedido.id)
-  if (!fila) return false
-  return fila.state === pedido.visto.state &&
-    (fila.pageId || null) === (pedido.visto.pageId || null)
-}
-
-async function atenderWeb(orca, waScope, pedido, contexto) {
-  const exe = orcaCli()
-  const fin = (extra) => guardar(orca, WEB_LINES_KEY, extra)
-  if (SOBRE_UNA_FILA.has(pedido.action) && !(await filaVigente(orca, pedido))) {
-    await refrescarLineas(orca, waScope, { motivo: pedido.action })
-    await veredicto(orca, pedido, { ok: false, code: 'desactualizado', detail: '' })
-    return
-  }
-  if (pedido.action === 'link') {
-    const label = String(pedido.label || '').trim() || 'WhatsApp Web'
-    const r = await conectarLinea({ exe, waScope, run, label, contextoActivo: contexto,
-      donde: destinoPedido(pedido) })
-    if (!r.ok) {
-      await veredicto(orca, pedido, { ok: false, code: r.code, detail: String(r.detail || '').slice(0, 300) })
-      await fin({ at: new Date().toISOString(), lines: [], error: r.code,
-        detail: String(r.detail || '').slice(0, 200) })
-      return
-    }
-    await guardar(orca, 'readWeb', 'on')
-    // La casa se anota ANTES del refresco, para que la primera vuelta ya la vea.
-    await fijarCasa(orca, r.profileId, r.casa)
-    await refrescarLineas(orca, waScope, { motivo: 'link' })
-    // El veredicto dice donde quedo; la frase permanente sale de la fila, que lo
-    // recalcula. Escribirlo tambien en `webLines` es lo que dejaba el valor viejo.
-    await veredicto(orca, pedido, { ok: true, placement: r.donde,
-      project: r.proyecto || null })
-    return
-  }
-  // Sin pageId no hay pestana que poner delante. Caia al refresco del final y contestaba
-  // ok: el usuario apretaba "Ver la pestana", no se abria nada y el panel decia que si.
-  if (pedido.action === 'show' && !pedido.pageId) {
-    await refrescarLineas(orca, waScope, { motivo: 'show' })
-    await veredicto(orca, pedido, { ok: false, code: 'sin-pestana', detail: '' })
-    return
-  }
-  if (pedido.action === 'show' && pedido.pageId) {
-    // La ubicacion viaja en el pedido porque es la que el panel acaba de pintar, o sea
-    // la calculada contra la pestana de verdad en la ultima vuelta del sondeo.
-    const r = await verPestana(exe, pedido.pageId,
-      { placement: pedido.placement || null, project: pedido.project || null,
-        worktreeId: pedido.worktreeId || null })
-    // Fallaba callado: se resondeaba y nada mas. Un boton que no hace nada y no dice
-    // por que es el mismo callejon que el spinner eterno. Y `surfaced` viaja siempre:
-    // un ok a secas sobre un foco que quedo preparado y no se ve es el mismo defecto.
-    await veredicto(orca, pedido, r.ok
-      ? { ok: true, surfaced: !!r.surfaced, project: r.project || null,
-          placement: pedido.placement || null }
-      : { ok: false, code: r.code, detail: String(r.detail || '').slice(0, 300),
-          placement: pedido.placement || null })
-    if (!r.ok) await refrescarLineas(orca, waScope, { motivo: 'show' })
-    return
-  }
-  if (pedido.action === 'reopen' && pedido.profile) {
-    // La casa de ESA linea manda. El selector del panel dice donde va la PROXIMA que se
-    // conecte: leerlo aca reabria en otra superficie —o en otro proyecto, el de
-    // actividad mas reciente— una sesion que el usuario habia puesto donde queria.
-    const casa = (await hogares(orca))[pedido.profile] || null
-    const r = await reabrirPestana({ exe, profile: pedido.profile, casa })
-    const previo = (await leer(orca, WEB_LINES_KEY)) ?? {}
-    if (!r.ok) {
-      // No se relocaliza en silencio: si su casa ya no esta se dice cual es el motivo y
-      // no se abre nada. Mudarla es otra accion, y la pide el usuario.
-      await veredicto(orca, pedido, { ok: false, code: r.code,
-        detail: String(r.detail || '').slice(0, 300) })
-      await fin({ ...previo, error: r.code, detail: String(r.detail || '').slice(0, 200) })
-      return
-    }
-    await refrescarLineas(orca, waScope, { motivo: 'reopen' })
-    await veredicto(orca, pedido, { ok: true, placement: r.donde,
-      project: r.proyecto || null })
-    return
-  }
-  // Adoptar: la pestana se quedo donde esta y esa pasa a ser su casa. No mueve nada —
-  // es el usuario diciendo que el lugar nuevo es el bueno.
-  if (pedido.action === 'adopt' && pedido.profile) {
-    if (!pedido.placement) {
-      await veredicto(orca, pedido, { ok: false, code: 'sin-pestana', detail: '' })
-      return
-    }
-    await fijarCasa(orca, pedido.profile,
-      { host: pedido.host || null, donde: pedido.placement,
-        worktreeId: pedido.worktreeId || null, proyecto: pedido.project || null })
-    await refrescarLineas(orca, waScope, { motivo: 'adopt' })
-    await veredicto(orca, pedido, { ok: true, placement: pedido.placement,
-      project: pedido.project || null })
-    return
-  }
-  // Volver a su casa: se cierra donde esta y se reabre donde la linea dice que vive.
-  // La casa NO cambia — es la otra mitad de `adopt`, y las dos las elige el usuario.
-  if (pedido.action === 'home' && pedido.profile) {
-    const casa = (await hogares(orca))[pedido.profile] || null
-    const r = await reabrirPestana({ exe, profile: pedido.profile, casa })
-    if (!r.ok) {
-      await refrescarLineas(orca, waScope, { motivo: 'home' })
-      await veredicto(orca, pedido, { ok: false, code: r.code,
-        detail: String(r.detail || '').slice(0, 300) })
-      return
-    }
-    // La vieja se cierra DESPUES: dos pestanas del mismo perfil en WhatsApp Web se
-    // desloguean entre si, pero quedarse sin ninguna pierde la sesion del todo.
-    if (pedido.pageId && pedido.pageId !== r.pageId) {
-      await cerrarPestana(exe, pedido.pageId)
-    }
-    await refrescarLineas(orca, waScope, { motivo: 'home' })
-    await veredicto(orca, pedido, { ok: true, placement: r.donde,
-      project: r.proyecto || null })
-    return
-  }
-  // Mudar es la UNICA accion que cambia la casa, y la pide el usuario con su boton.
-  if (pedido.action === 'move' && pedido.profile) {
-    const r = await mudarPestana({ exe, profile: pedido.profile, contextoActivo: contexto,
-      donde: destinoPedido(pedido), pageId: pedido.pageId || null })
-    if (!r.ok) {
-      await refrescarLineas(orca, waScope, { motivo: 'move' })
-      await veredicto(orca, pedido, { ok: false, code: r.code,
-        detail: String(r.detail || '').slice(0, 300) })
-      return
-    }
-    await fijarCasa(orca, pedido.profile, r.casa)
-    await refrescarLineas(orca, waScope, { motivo: 'move' })
-    await veredicto(orca, pedido, { ok: true, placement: r.donde,
-      project: r.proyecto || null })
-    return
-  }
-  if (pedido.action === 'unlink' && pedido.id) {
-    const borrado = await olvidarLinea({ exe, waScope, run, id: pedido.id,
-      profile: pedido.profile, pageId: pedido.pageId })
-    await olvidarCasa(orca, pedido.profile)
-    const quedan = await refrescarLineas(orca, waScope, { motivo: 'unlink' })
-    // Sin ninguna linea, la ruta web no tiene de donde leer: dejarla encendida deja al
-    // panel ofreciendo una via que se niega en cada lectura. `null` es "no pude leer el
-    // registro", y ahi NO se apaga nada: apagar por una lectura fallida deshacia una
-    // linea sana que el usuario nunca toco.
-    let apagado = null
-    if (quedan && !quedan.length) {
-      // Se dice si no se pudo apagar. Tragarselo dejaba la via encendida y fallando
-      // en cada lectura despues de que el usuario dijo justo que no la queria.
-      apagado = await run(waScope, ['config', 'read_web', 'off'])
-        .then(() => null).catch((error) => error)
-      await guardar(orca, 'readWeb', 'off')
-    }
-    const sobras = [...(borrado.sobras ?? [])]
-    if (apagado) sobras.push({ que: 'read_web', detail: apagado.message })
-    if (!quedan) {
-      sobras.push({ que: 'read_web',
-        detail: 'the registry did not answer, so the web route was left as it was' })
-    }
-    await veredicto(orca, pedido, sobras.length
-      ? { ok: false,
-          code: 'a-medias',
-          detail: sobras.map((x) => `${x.que}: ${x.detail}`).join('; ').slice(0, 300) }
-      : { ok: true })
-    return
-  }
-  await refrescarLineas(orca, waScope, { motivo: 'refresh' })
-  await veredicto(orca, pedido, { ok: true })
-}
 
 /** La siembra del arnes, en un SUBPROCESO.
  *
@@ -758,8 +385,9 @@ const SIDECAR_MOTIVO = Object.freeze({
  *  `--allow-child-process` y el resolvedor ni se puede lanzar, pero corrido a mano
  *  contestaba la ruta perfecta. El mensaje era falso y mandaba a mirar una carpeta que
  *  estaba bien. Son tres arreglos distintos -aprobar el plugin, ver donde guarda Orca
- *  sus datos, leer el log- y por eso son tres codigos (docs/LECTURA-MULTIFUENTE.md:
- *  "la accion del usuario es distinta en cada uno").
+ *  sus datos, leer el log- y por eso son tres codigos
+ *  (docs/ENCARGO-TRANSPORTE-UNICO.md §11 E2: "la accion del usuario es distinta en
+ *  cada uno").
  *
  *  Un timeout no se separa de un reventon: `demoro` y `fallo` le piden lo MISMO a quien
  *  lee el panel, y un codigo que nadie puede distinguir en pantalla es un codigo que
@@ -1048,72 +676,6 @@ export default function activate(orca) {
   }, PETICION_MS)
   if (typeof pedidoTimer.unref === 'function') pedidoTimer.unref()
 
-  // Las lineas web. El pedido del panel se atiende igual que el de sync, pero el estado
-  // ademas se resondea solo: el momento que importa — escanear el QR — pasa en otra
-  // ventana, y un estado que solo se actualiza al volver al panel llega tarde siempre.
-  let ultimoWeb = null
-  let proximaSonda = 0
-  let sondeando = false
-  // Enlazar una linea son dos llamadas a la CLI de Orca con 30 s de tope cada una, y
-  // el sondeo sigue latiendo cada tres segundos mientras tanto: sin esta bandera, la
-  // vuelta de en medio leia un registro donde la linea TODAVIA no estaba y publicaba
-  // "no conectaste ninguna linea" encima del enlace en curso. Eso es el "aparece y
-  // desaparece" que se reporto.
-  let atendiendo = false
-  async function contextoActivo() {
-    const r = await orca.host.call('workspace.readContext', {}).catch(() => null)
-    return r && typeof r === 'object' ? (r.value ?? r) : null
-  }
-  async function atenderWebLineas() {
-    const pedido = await leer(orca, WEB_REQUEST_KEY)
-    if (pedido && typeof pedido === 'object' && typeof pedido.at === 'string' &&
-        pedido.at !== ultimoWeb) {
-      ultimoWeb = pedido.at
-      await guardar(orca, WEB_REQUEST_KEY, null)
-      const edad = Date.now() - Date.parse(pedido.at)
-      if (edad >= 0 && edad <= PETICION_TTL_MS) {
-        // Lo que reviente aca tiene que llegar al panel. Sin esto una excepcion a mitad
-        // del enlace —un `run` que rechaza, el CLI de Orca que no esta— se la comia el
-        // catch del setInterval y el clic no dejaba rastro ninguno.
-        atendiendo = true
-        try {
-          await atenderWeb(orca, await tool('wa-scope'), pedido, await contextoActivo())
-        } catch (error) {
-          orca.log(`web request ${pedido.action} failed: ${error.message}`)
-          await veredicto(orca, pedido, { ok: false, code: motivoDe(error),
-            detail: String(error?.message ?? error).slice(0, 300) })
-        } finally {
-          atendiendo = false
-        }
-        proximaSonda = 0
-        return
-      }
-      // Un pedido viejo es de otra sesion y no se atiende, pero callarlo deja al panel
-      // esperando una respuesta que no va a llegar.
-      await veredicto(orca, pedido, { ok: false, code: 'vencido', detail: '' })
-    }
-    if (atendiendo || sondeando || Date.now() < proximaSonda) return
-    sondeando = true
-    try {
-      const lineas = await refrescarLineas(orca, await tool('wa-scope'))
-      // Rapido mientras algo este a medias — esperando el escaneo, cargando, sin
-      // pestana —; lento cuando todo esta enlazado y no hay nada que mirar. Un registro
-      // que no contesto (null) tampoco es un estado en reposo: se vuelve a mirar ya.
-      const aMedias = !lineas || lineas.some((l) => l.state !== 'enlazada')
-      proximaSonda = Date.now() + (aMedias ? WEB_SONDEO_RAPIDO_MS
-        : lineas.length ? WEB_SONDEO_LENTO_MS : WEB_SONDEO_OCIOSO_MS)
-    } catch (error) {
-      proximaSonda = Date.now() + WEB_SONDEO_LENTO_MS
-      orca.log(`web lines refresh failed: ${error.message}`)
-    } finally {
-      sondeando = false
-    }
-  }
-  const webTimer = setInterval(() => {
-    atenderWebLineas().catch((error) => orca.log(`web lines loop failed: ${error.message}`))
-  }, PETICION_MS)
-  if (typeof webTimer.unref === 'function') webTimer.unref()
-
   const tool = async (name) => join(await dirHerramientas(), name)
 
   async function settings() {
@@ -1242,7 +804,6 @@ export default function activate(orca) {
     detenido = true
     clearTimeout(syncTimer)
     clearInterval(pedidoTimer)
-    clearInterval(webTimer)
     clearInterval(latidoTimer)
     apagarSidecar()
   }

@@ -3,46 +3,35 @@
 
   wa-send "<chat>" "text"            -> leaves the text WITHOUT sending it
   wa-send "<chat>" "text" --send     -> sends it
-  wa-send "<chat>" "text" --open ui  -> forces the way the chat is opened
 
-By default it does NOT send: it leaves the chat open with the text written so that you
-review it and press Enter yourself. --send is an explicit opt-in.
+Right now it sends nothing: the two routes it used to write through —the desktop
+app's window by accessibility, and a WhatsApp Web tab by the DOM— were removed, and
+the sidecar that replaces them pairs the line but does not carry messages yet. Every
+call ends in `send-no-transport`, exit 1, with the reason on the first line of stderr.
 
-It drives the real UI either way — the app's window by accessibility, the web session
-by the DOM. It uses no unofficial libraries, calls no internal WhatsApp API, and links
-no new device to the account.
+What still runs, and runs FIRST, because none of it depends on the transport:
 
-The line comes from the registry, and each one has its own route. The LOCAL line is
-the desktop app, driven by accessibility. A WhatsApp Web line is written through the
-Orca browser tab that already holds that session — the same tab wa-read reads from —
-by the DOM, in the background: no window is focused, no tab is switched, and the only
-focus is the message box inside the page. That is the route groups live on.
+  the signature   every message the agent writes goes signed, so that there is never
+                  any doubt about whether the person or her agent wrote it. Without an
+                  agent name configured, this refuses before anything else. --raw is
+                  the exception, for when she writes herself.
+  the line        the same group can exist on two lines. Picking "the first one"
+                  writes to the wrong conversation, and that cannot be undone, so an
+                  ambiguous reference is REFUSED (`send-ambiguous-line`) instead of
+                  resolved in silence. --line says which one.
 
-Below, the local route. There are two ways to OPEN the chat, and the tool reports
-which one it used:
-  url  the whatsapp:// scheme goes straight to the conversation. It only works for
-       direct chats with a phone number: that is all the scheme can address.
-  ui   walks the sidebar list. It is the usual path and the only one that works for
-       groups, which is where almost all of this plugin's work lives.
-Writing is accessibility either way, and either way the open chat is verified to be
-the requested one before a key is pressed.
+Refusing in that order is the point: the caller gets told the first thing that is
+wrong with what it asked, not a generic failure at the end.
 """
-import argparse, importlib.machinery, importlib.util, json, os, platform, re
-import shutil, sqlite3, subprocess, sys, time
+import argparse, os, sqlite3, sys
 
 # Sin esto Python deja un __pycache__ DENTRO de bin/, y el directorio del plugin
 # instalado esta direccionado por hash.
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from wa_settings import ajuste, orca_cli_path, orca_env, scope_db  # noqa: E402
+from wa_settings import ajuste, scope_db  # noqa: E402
 
-APP = "net.whatsapp.WhatsApp"
 SCOPE_DB = scope_db()
-SCROLL_TRIES = 25   # cuantas veces bajar la lista antes de rendirse
-URL_WAIT = 8.0      # cuanto esperar a que el esquema whatsapp:// aterrice
-WA_READ = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wa-read")
-# El esquema solo direcciona telefonos, asi que el local part tiene que ser eso y nada mas.
-PHONE = re.compile(r"^\d{7,15}$")
 
 
 def signature():
@@ -53,182 +42,25 @@ def signature():
     quien escribe salia con "no agent name is configured"."""
     nombre = ajuste("agent_name")
     return f"-- {nombre}" if nombre else None
+
+
 # Motivos estables: los lee el worker (la primera linea de stderr termina en el panel).
 # El texto se puede reescribir; el codigo no, o el panel se desincroniza en silencio.
-SIN_ORCA = "send-no-orca"
 LINEA_EQUIVOCADA = "send-wrong-line"
-
-
-def orca_cli():
-    """El binario de la CLI de Orca. Una sola resolucion, en wa_settings."""
-    return orca_cli_path()
-
-
-ORCA = orca_cli()
-# "Mensajes en el chat con <nombre>" es el ancla que confirma que estas en el chat correcto.
-IN_CHAT = re.compile(r"Mensajes en el chat con (.+?)(?:,|$)")
-LINE = re.compile(r"^\s*(\d+) (.+)$")
-# El rol llega traducido por macOS: en es-ES es "hoja aviso", en ingles "alert"/"sheet".
-ALERT_ROW = re.compile(r"^(hoja\s+)?(aviso|alerta|alert|sheet|di[\u00e1a]logo|dialog)\b", re.I)
-OK_BTN = re.compile(r"^bot[o\u00f3]n\s+(OK|Aceptar)\b", re.I)
-
-
-def orca(*args, ok_fail=False):
-    if not ORCA:
-        # Con el binario sin resolver, `subprocess.run([None, ...])` revienta con un
-        # TypeError adentro: un traceback donde hacia falta el motivo que el doctor ya
-        # sabe decir. Sale con el motivo y con lo que hay que hacer.
-        sys.exit(f"wa-send: {SIN_ORCA}\nthe Orca CLI is not in PATH, so WhatsApp cannot "
-                 "be driven; open Orca Lab, or set ORCA_CLI_COMMAND")
-    # Con el env armado: ver wa_settings.orca_env(). Heredarlo a secas deja a la CLI
-    # buscando el runtime en la carpeta por defecto, que en Linux puede ser la vieja.
-    p = subprocess.run([ORCA, "computer", *args, "--json", "--no-screenshot"],
-                       capture_output=True, text=True, env=orca_env())
-    if p.returncode != 0:
-        if ok_fail:
-            return None
-        sys.exit(f"orca failed: {p.stderr.strip() or p.stdout.strip()}")
-    try:
-        d = json.loads(p.stdout)
-    except json.JSONDecodeError:
-        sys.exit(f"orca returned something that is not JSON: {p.stdout[:300]}")
-    return d.get("result", d)
-
-
-def state(restore=False):
-    """Si la ventana esta minimizada o tapada, el arbol no existe: hay que traerla."""
-    args = ["get-app-state", "--app", APP] + (["--restore-window"] if restore else [])
-    result = orca(*args, ok_fail=not restore)
-    if result is None:
-        result = orca("get-app-state", "--app", APP, "--restore-window")
-    return result.get("snapshot", {}).get("treeText", "")
-
-
-def find(tree, pattern, role=None):
-    """Devuelve (indice, linea) del primer elemento que matchea. Los indices son
-    efimeros: hay que re-leer el arbol despues de cada accion."""
-    rx = re.compile(pattern)
-    for ln in tree.splitlines():
-        m = LINE.match(ln)
-        if not m:
-            continue
-        idx, rest = int(m.group(1)), m.group(2)
-        if role and not rest.startswith(role):
-            continue
-        if rx.search(rest):
-            return idx, rest
-    return None, None
-
-
-def current_chat(tree):
-    m = IN_CHAT.search(tree)
-    return m.group(1).strip().lstrip("‎") if m else None
-
-
-def chat_row(tree, target):
-    """La fila del chat DENTRO de la lista lateral.
-
-    Ojo: los resultados del buscador se ven identicos en el arbol pero clickearlos NO
-    cambia de chat. Se distinguen por posicion: los resultados salen antes del
-    contenedor "Lista de chats" y las filas reales despues. Sin este corte, el script
-    clickea un resultado, no pasa nada, y el guard aborta sin explicar por que.
-    """
-    anchor, _ = find(tree, r"Lista de chats")
-    if anchor is None:
-        return None
-    esc = re.escape(target.strip())
-    for ln in tree.splitlines():
-        m = LINE.match(ln)
-        if not m:
-            continue
-        idx, rest = int(m.group(1)), m.group(2).replace("\u200e", "")
-        if idx <= anchor:
-            continue
-        if re.match(rf"^(bot[oó]n|texto \(selected\)) {esc}(,|$)", rest):
-            return idx
-    return None
-
-
-def scroll_to_top(tree):
-    listing, _ = find(tree, r"Lista de chats")
-    if listing is None:
-        return tree
-    for _ in range(SCROLL_TRIES):
-        orca("scroll", "--app", APP, "--element-index", str(listing),
-             "--direction", "up", ok_fail=True)
-        time.sleep(0.25)
-    return state()
-
-
-def clear_search(tree):
-    """Una busqueda vieja deja resultados arriba que confunden la deteccion."""
-    idx, _ = find(tree, r"Eliminar texto")
-    if idx is None:
-        return tree
-    orca("click", "--app", APP, "--element-index", str(idx), ok_fail=True)
-    time.sleep(0.6)
-    return state()
-
-
-def alert(tree):
-    """La hoja modal de WhatsApp, si la hay: (indice, texto, indice del boton OK).
-
-    Importa porque tapa la ventana entera: con ella abierta el arbol pierde la lista de
-    chats y el campo de escribir, asi que el recorrido por accesibilidad camina un arbol
-    que ya no existe y falla sin decir por que. Se mira ANTES de tocar nada.
-
-    Hay dos clases y se distinguen por el boton OK, no por el texto (que viene traducido):
-    la que lo TIENE es un error que espera que alguien lo acepte y no se va sola; la que
-    NO lo tiene es el progreso ("Iniciando chat") que WhatsApp muestra mientras navega y
-    que desaparece en un segundo. Confundirlas hacia abortar cada apertura por URL.
-    """
-    node = texto = ok = None
-    for ln in tree.splitlines():
-        m = LINE.match(ln)
-        if not m:
-            continue
-        idx, rest = int(m.group(1)), m.group(2).replace("\u200e", "")
-        if node is None:
-            if ALERT_ROW.match(rest):
-                node = idx
-            continue
-        if texto is None and rest.startswith("texto") and "Value:" in rest:
-            texto = rest.split("Value:", 1)[1].strip()
-        if ok is None and OK_BTN.match(rest):
-            ok = idx
-    return node, texto, ok
-
-
-def wait_no_alert(espera=4.0):
-    """Devuelve (arbol, texto del aviso). El texto es None si la ventana quedo despejada.
-
-    Las hojas de progreso se van solas; las de error no. Esperar un poco antes de decidir
-    evita abortar por una hoja que ya se estaba cerrando.
-    """
-    limite = time.time() + espera
-    tree = state()
-    while True:
-        node, texto, _ = alert(tree)
-        if node is None:
-            return tree, None
-        if time.time() >= limite:
-            return tree, texto or "sin texto"
-        time.sleep(0.5)
-        tree = state()
-
-
-def jid_registrado(name):
-    """El JID segun el registro del plugin (~/.wa-inbox/scope.db). Sale gratis: es la base
-    propia, la misma que ya se abre para la firma, y no toca nada de WhatsApp."""
-    try:
-        con = sqlite3.connect(SCOPE_DB)
-        filas = con.execute(
-            "select chat_jid from chat_scope where lower(trim(chat_name))=lower(trim(?))",
-            (name.replace("\u200e", ""),)).fetchall()
-        con.close()
-    except Exception:
-        return None
-    return filas[0][0] if len(filas) == 1 else None
+# La ambiguedad se rechaza, nunca se resuelve en silencio: dos lineas tuyas pueden
+# tener la MISMA conversacion, y escribirle a la equivocada no se deshace.
+LINEA_AMBIGUA = "send-ambiguous-line"
+# No hay por donde mandar nada todavia. Es un motivo propio y no un fallo generico
+# porque lo que el usuario tiene que hacer es distinto: no es reintentar ni revisar la
+# conversacion, es esperar al almacen de mensajes.
+SIN_TRANSPORTE = "send-no-transport"
+SIN_TRANSPORTE_DETALLE = (
+    "there is no message transport yet: the two old write routes were removed and the "
+    "sidecar that replaces them pairs the line but does not carry messages yet. "
+    "Nothing was written and nothing was opened.")
+# La conversacion que no esta en ninguna linea registrada. Sigue siendo el caso por
+# defecto del registro y no un transporte: quien no registro la linea igual tiene una.
+CUENTA_LOCAL = "local"
 
 
 def cuentas_registradas(ref):
@@ -249,397 +81,6 @@ def cuentas_registradas(ref):
     return sorted(f[0] for f in filas if f[0])
 
 
-def chat_jid(name):
-    """El JID del chat que se llama asi, o None.
-
-    wa-send habla de nombres visibles porque es lo que ve quien lo llama; el esquema
-    whatsapp:// necesita un telefono. Si el nombre no identifica a UNO solo se devuelve
-    None: con nombres repetidos es preferible el recorrido por la lista antes que abrir
-    el chat equivocado.
-
-    Se pregunta primero al registro del plugin y solo despues a wa-read. El orden importa
-    por privacidad, no por velocidad: wa-read abre la base de WhatsApp entera —la carpeta
-    protegida del contenedor— y wa-send es la herramienta que ESCRIBE. Que para mandar un
-    mensaje haga falta leer todas las conversaciones es una puerta que no tiene por que
-    abrirse si el registro ya sabe la respuesta.
-    """
-    if (jid := jid_registrado(name)):
-        return jid
-    try:
-        p = subprocess.run([WA_READ, "chats", "-n", "500", "--query", name, "--json"],
-                           capture_output=True, text=True, timeout=90)
-        chats = json.loads(p.stdout or "[]")
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return None
-    objetivo = name.replace("\u200e", "").strip().lower()
-    exactos = [c for c in chats
-               if (c.get("name") or "").replace("\u200e", "").strip().lower() == objetivo]
-    return exactos[0].get("jid") if len(exactos) == 1 else None
-
-
-def phone_of(jid):
-    """El telefono que el esquema whatsapp:// sabe direccionar, o None.
-
-    Falla cerrado a proposito. El esquema SOLO entiende telefonos: probado contra la app,
-    `whatsapp://send?phone=<jid de grupo>` no abre el grupo — WhatsApp lee el JID como si
-    fuera un numero, no lo encuentra y levanta una hoja modal que tapa la ventana. Por eso
-    un @g.us, un @lid o un @status nunca salen por aca, y como el trabajo de este plugin
-    vive sobre todo en grupos, la via url cubre bastante menos de lo que parece: sirve
-    para los chats directos y nada mas.
-    """
-    if not jid or not jid.endswith("@s.whatsapp.net"):
-        return None
-    local = jid.split("@", 1)[0]
-    return local if PHONE.match(local) else None
-
-
-def open_by_url(target, phone):
-    """Abre el chat por el esquema whatsapp://. Devuelve el arbol, o None para que siga
-    el recorrido. No verifica el nombre: de eso se encarga open_chat para las dos vias.
-
-    Se abre con `-g` para no robarle el foco a lo que este haciendo la persona; escribir
-    no lo necesita, y --send ya se encarga de traer la ventana al frente si hace falta.
-    """
-    subprocess.run(["open", "-g", f"whatsapp://send?phone={phone}"],
-                   capture_output=True, text=True)
-    limite = time.time() + URL_WAIT
-    while time.time() < limite:
-        time.sleep(0.4)
-        tree = state()
-        node, texto, ok = alert(tree)
-        if node is not None and ok is None:
-            continue    # hoja de progreso ("Iniciando chat"): todavia esta navegando
-        if node is not None:
-            # El numero esta en la base pero ya no en WhatsApp. Se cierra el aviso que
-            # levantamos nosotros — y solo ese, comprobando que el texto hable de ESTE
-            # numero: dejarlo abierto bloquea toda corrida posterior, y clickear OK a
-            # ciegas seria aceptar un dialogo que nadie leyo.
-            if phone in (texto or ""):
-                orca("click", "--app", APP, "--element-index", str(ok), ok_fail=True)
-                time.sleep(0.6)
-            return None
-        cur = current_chat(tree)
-        if cur and cur.strip().lower() == target.strip().lower():
-            # El nombre aparece antes de que termine de dibujarse el chat, y los indices
-            # del arbol se corren mientras tanto: sin esta pausa el campo de escribir se
-            # busca en un arbol que ya cambio y set-value falla por indice viejo.
-            time.sleep(1.0)
-            return state()
-    return None
-
-
-def walk_to_chat(tree, target):
-    """El recorrido de siempre por la lista lateral. Devuelve el arbol despues del click."""
-    tree = clear_search(tree)
-
-    # Primero la lista visible. Clickear la fila SI cambia de chat; escribir en el
-    # buscador no: "Buscar" es un texto, no un campo, hasta que se expande, y aun
-    # expandido clickear un resultado no navegaba. La lista es el camino que funciona.
-    idx = chat_row(tree, target)
-
-    if idx is None:
-        # No esta a la vista: recorrer la lista. El buscador no sirve — clickear un
-        # resultado de busqueda no cambia de chat, solo la fila de la lista lo hace.
-        # Se vuelve arriba primero: si una corrida anterior dejo la lista abajo, un
-        # chat reciente queda fuera de vista y parece que no existe.
-        tree = scroll_to_top(tree)
-        idx = chat_row(tree, target)
-
-    if idx is None:
-        listing, _ = find(tree, r"Lista de chats")
-        if listing is None:
-            sys.exit("could not find the chat list in the UI")
-        for _ in range(SCROLL_TRIES):
-            orca("scroll", "--app", APP, "--element-index", str(listing),
-                 "--direction", "down")
-            time.sleep(0.5)
-            tree = state()
-            idx = chat_row(tree, target)
-            if idx is not None:
-                break
-            listing, _ = find(tree, r"Lista de chats")
-            if listing is None:
-                break
-
-    if idx is None:
-        sys.exit(f"could not find the chat {target!r}; open it by hand once and retry")
-
-    orca("click", "--app", APP, "--element-index", str(idx))
-    time.sleep(1.4)
-    return state()
-
-
-def open_chat(target, phone=None, modo="auto"):
-    """Deja abierto el chat pedido y devuelve (arbol, nombre, via).
-
-    Con `phone` prueba primero el esquema whatsapp://, que llega derecho a la
-    conversacion; si no aterriza, recorre la lista. La verificacion del final es UNA y
-    rige para las dos vias: es lo unico que separa un error de apertura de un mensaje
-    escrito en la conversacion de otro cliente.
-    """
-    tree, aviso = wait_no_alert()
-    if not tree:
-        sys.exit("could not read the WhatsApp window (is it open?)")
-    # Un aviso previo —de otra corrida o de la persona— tapa la ventana entera. Se corta
-    # aca: sin esto el recorrido camina un arbol vacio y el fallo no explica nada.
-    if aviso:
-        sys.exit(f"WhatsApp has an alert open that covers the window: {aviso} "
-                 f"— close it in the app and retry")
-
-    if (cur := current_chat(tree)) and cur.lower() == target.lower():
-        return tree, cur, "ya-abierto"
-
-    via = None
-    if phone and (t := open_by_url(target, phone)) is not None:
-        tree, via = t, "url"
-    if via is None:
-        # Forzar una via y que la herramienta se pase a la otra en silencio dejaria el
-        # flag sin valor para diagnosticar: si se pidio url y url no fue, se dice.
-        if modo == "url":
-            sys.exit(f"--open url could not open {target!r} — retry without forcing the way")
-        tree, aviso = wait_no_alert()
-        if aviso:
-            sys.exit(f"WhatsApp has an alert open that covers the window: {aviso} "
-                     f"— close it in the app and retry")
-        tree = walk_to_chat(tree, target)
-        via = "ui"
-
-    cur = current_chat(tree)
-    if not cur or cur.strip().lower() != target.strip().lower():
-        sys.exit(f"opened {cur!r} but you asked for {target!r} — aborted without writing "
-                 f"anything (via {via})")
-    return tree, cur, via
-
-
-# La via web, que es la de los grupos: WABA no los tiene, y en Linux no hay ventana de
-# escritorio que conducir. Se escribe por la MISMA pestana por la que wa-read ya lee.
-CUENTA_LOCAL = "local"
-ESPERA_ENVIO = 25            # x200ms esperando que el mensaje propio aparezca
-LINEA_AMBIGUA = "send-ambiguous-line"
-WEB_SIN_REGISTRO = "send-web-no-line"
-WEB_A_MEDIAS = "send-web-line-pending"
-# Los finales de la escritura por el DOM. Van separados porque la accion del usuario es
-# distinta en cada uno, y porque "no pude" tiene que poder distinguirse de "no mande".
-WEB_FINALES = {
-    "sin-sesion": "send-web-logged-out",
-    "sin-chat": "send-web-no-chat",
-    "chat-equivocado": "send-web-wrong-chat",
-    "sin-caja": "send-web-no-composer",
-    "sin-escribir": "send-web-not-written",
-    "sin-confirmar": "send-web-unconfirmed",
-}
-
-# La escritura corre DENTRO de la pagina y por el DOM, como lo haria una persona:
-# enfocar el composer, meter texto con eventos de entrada de verdad, mandar. Ninguna
-# coleccion ni funcion interna de WhatsApp se usa para escribir — leerlas es otra cosa;
-# escribir por ahi convierte una sesion normal en un cliente no oficial.
-# Nada de esto enfoca la ventana ni cambia de pestana: el unico foco es el del composer
-# dentro del documento, que es lo que cualquier editor necesita para recibir entrada.
-WEB_ENVIO_JS = r"""
-const P = %s;
-const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
-const limpio = (s) => String(s == null ? '' : s).replace(/\u200e/g, '')
-  .replace(/\u00a0/g, ' ').trim();
-const plano = (s) => limpio(s).replace(/\s+/g, ' ');
-const quiere = plano(P.texto);
-const objetivo = limpio(P.chat).toLowerCase();
-
-// La misma senal de sesion viva que usa la lectura.
-const lid = String(JSON.parse(localStorage.getItem('WALid') || 'null') || '');
-if (!lid) return { estado: 'sin-sesion', qr: !!document.querySelector('canvas[aria-label]') };
-
-const golpea = (el) => {
-  const o = { bubbles: true, cancelable: true, composed: true, view: window };
-  const Puntero = window.PointerEvent || window.MouseEvent;
-  for (const par of [[Puntero, 'pointerdown'], [MouseEvent, 'mousedown'],
-                     [Puntero, 'pointerup'], [MouseEvent, 'mouseup'],
-                     [MouseEvent, 'click']]) {
-    el.dispatchEvent(new par[0](par[1], o));
-  }
-};
-
-const panel = document.querySelector('#pane-side');
-const filas = () => Array.from(document.querySelectorAll(
-  '#pane-side [role="listitem"], #pane-side [role="row"]'));
-const titulo = (f) => {
-  const s = f.querySelector('span[title]');
-  return s ? limpio(s.getAttribute('title')) : '';
-};
-const busca = () => filas().find((f) => titulo(f).toLowerCase() === objetivo) || null;
-
-// La lista lateral es virtual: la fila de un grupo que no se hablo en dias no existe
-// en el DOM hasta que se baja hasta ella.
-let fila = busca();
-if (!fila && panel) {
-  panel.scrollTop = 0;
-  await dormir(300);
-  for (let i = 0; i < 40 && !(fila = busca()); i++) {
-    const antes = panel.scrollTop;
-    panel.scrollTop = antes + Math.max(200, panel.clientHeight * 0.85);
-    await dormir(200);
-    if (panel.scrollTop === antes) break;
-  }
-}
-if (!fila) return { estado: 'sin-chat' };
-
-const cabecera = () => {
-  const h = document.querySelector('#main header span[title]');
-  return h ? limpio(h.getAttribute('title')) : '';
-};
-if (cabecera().toLowerCase() !== objetivo) {
-  golpea(fila.querySelector('[role="gridcell"]') || fila);
-  for (let i = 0; i < 40 && cabecera().toLowerCase() !== objetivo; i++) await dormir(150);
-}
-// El guard, igual que en la via local: escribir en la conversacion que quedo abierta es
-// mandarle el mensaje a alguien que no lo pidio, y eso no se deshace.
-if (cabecera().toLowerCase() !== objetivo) {
-  return { estado: 'chat-equivocado', abierto: cabecera() };
-}
-
-const caja = document.querySelector('#main footer div[contenteditable="true"]')
-  || document.querySelector('#main div[contenteditable="true"][data-tab]');
-if (!caja) return { estado: 'sin-caja' };
-caja.focus();
-const puesto = () => plano(caja.innerText || caja.textContent);
-
-// El composer es un editor controlado: asignarle texto no le avisa a nadie, el boton de
-// enviar queda apagado y lo escrito se pierde en el proximo render. Van los tres
-// caminos que SI son entrada de usuario, y se comprueba cual dejo el texto.
-const VIAS = ['insertText', 'pegar', 'beforeinput'];
-const escribe = (via) => {
-  if (via === 'insertText') return document.execCommand('insertText', false, P.texto);
-  if (via === 'pegar') {
-    const dt = new DataTransfer();
-    dt.setData('text/plain', P.texto);
-    return caja.dispatchEvent(new ClipboardEvent('paste',
-      { bubbles: true, cancelable: true, clipboardData: dt }));
-  }
-  const o = { bubbles: true, cancelable: true, inputType: 'insertText', data: P.texto };
-  caja.dispatchEvent(new InputEvent('beforeinput', o));
-  return caja.dispatchEvent(new InputEvent('input', o));
-};
-let via = null;
-const fallos = [];
-for (const nombre of VIAS) {
-  try { escribe(nombre); } catch (e) {
-    fallos.push(nombre + ': ' + String((e && e.message) || e));
-    continue;
-  }
-  await dormir(200);
-  if (puesto() === quiere) { via = nombre; break; }
-}
-if (!via) return { estado: 'sin-escribir', caja: puesto().slice(0, 120), fallos: fallos };
-if (!P.enviar) return { estado: 'borrador', chat: cabecera(), via: via };
-
-const mios = () => Array.from(document.querySelectorAll('#main [data-id]'))
-  .filter((e) => String(e.getAttribute('data-id')).indexOf('true_') === 0);
-const ultimo = () => { const n = mios(); return n.length ? plano(n[n.length - 1].innerText
-  || n[n.length - 1].textContent) : ''; };
-const habia = mios().length;
-const icono = document.querySelector('#main footer [data-icon="send"]')
-  || document.querySelector('#main footer [data-icon="wds-ic-send-filled"]');
-const boton = icono ? (icono.closest('button') || icono.closest('[role="button"]')) : null;
-if (boton) golpea(boton);
-else {
-  const o = { bubbles: true, cancelable: true, key: 'Enter', code: 'Enter', keyCode: 13,
-              which: 13 };
-  caja.dispatchEvent(new KeyboardEvent('keydown', o));
-  caja.dispatchEvent(new KeyboardEvent('keyup', o));
-}
-// Una pestana en segundo plano puede quedar con el render frenado, asi que la caja
-// vacia no prueba nada: lo que prueba es el mensaje propio NUEVO en la conversacion.
-const salio = () => mios().length > habia && ultimo().indexOf(quiere) >= 0;
-for (let i = 0; i < P.esperaEnvio && !salio(); i++) await dormir(200);
-if (!salio()) {
-  return { estado: 'sin-confirmar', caja: puesto().slice(0, 120),
-           ultimo: ultimo().slice(0, 120) };
-}
-return { estado: 'enviado', chat: cabecera(), via: via, boton: !!boton };
-"""
-
-_WA_READ = None
-
-
-def wa_read_mod():
-    """wa-read, importado por ruta. Es el dueno del canal al navegador —que pestana es
-    la de esta linea y como se corre JS en ella— y una segunda copia de esa resolucion
-    aca es exactamente como nacio el defecto de los ajustes."""
-    global _WA_READ
-    if _WA_READ is None:
-        spec = importlib.util.spec_from_loader(
-            "wa_read", importlib.machinery.SourceFileLoader("wa_read", WA_READ))
-        _WA_READ = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(_WA_READ)
-    return _WA_READ
-
-
-def linea_web(cuenta):
-    """(etiqueta, perfil, habilitada) de esa linea, o None si no esta en el registro."""
-    try:
-        con = sqlite3.connect(f"file:{SCOPE_DB}?mode=ro", uri=True)
-        fila = con.execute("select label, profile, enabled from wa_account where id=?",
-                           (cuenta,)).fetchone()
-        con.close()
-    except Exception:
-        return None
-    return tuple(fila) if fila else None
-
-
-def envia_por_web(cuenta, chat, texto, enviar):
-    """Escribe por la pestana de esa linea, en segundo plano y sin enfocar nada.
-
-    Ni la ventana de Orca, ni la pestana: la persona puede estar escribiendo en otra
-    cosa mientras el agente contesta un grupo, y moverle el escritorio abajo de las
-    manos es peor que no contestar."""
-    fila = linea_web(cuenta)
-    if not fila:
-        sys.exit(f"wa-send: {WEB_SIN_REGISTRO}\n{chat!r} is registered on the line "
-                 f"{cuenta!r}, which is not in the plugin's registry any more; link it "
-                 "again from the plugin panel, or re-register the conversation.")
-    etiqueta, perfil, habilitada = fila[0] or cuenta, fila[1], fila[2]
-    if not habilitada or not perfil:
-        sys.exit(f"wa-send: {WEB_A_MEDIAS}\nthe line {etiqueta!r} never finished "
-                 "linking: the QR code was not scanned, so there is no session of that "
-                 "number to write from. Finish it from the plugin panel.")
-    wa = wa_read_mod()
-    parametros = json.dumps({"chat": chat, "texto": texto, "enviar": bool(enviar),
-                             "esperaEnvio": ESPERA_ENVIO})
-    try:
-        page = wa.web_page(perfil)
-        datos = wa.web_async(page, WEB_ENVIO_JS % parametros,
-                             int(ajuste("web_timeout_s", 45)), global_js="__waEnvio")
-    except wa.SourceError as error:
-        sys.exit(f"wa-send: {error.reason}\n{error.detail}")
-
-    estado = datos.get("estado")
-    if estado == "enviado":
-        print(f"SENT to {chat!r} (via web line {etiqueta}): {texto}")
-        return
-    if estado == "borrador":
-        print(f"DRAFT in {chat!r} (via web line {etiqueta}): {texto}\n(not sent — "
-              "repeat with --send, or press Enter in that tab)")
-        return
-    detalle = {
-        "sin-sesion": ("that session is not linked any more"
-                       + (" — the QR code is on screen, scan it with the phone of THAT "
-                          "number" if datos.get("qr") else "; open the tab and link it "
-                          "again")),
-        "sin-chat": f"{chat!r} is not in that line's chat list; the name has to be the "
-                    "one the sidebar shows, and the conversation has to exist on THIS "
-                    "line",
-        "chat-equivocado": f"the tab ended up on {datos.get('abierto')!r} and you asked "
-                           f"for {chat!r} — nothing was written",
-        "sin-caja": "that conversation has no message box: it may be a read-only group "
-                    "(admins only) or a channel",
-        "sin-escribir": f"the message box would not take the text ({datos.get('fallos')}); "
-                        f"it holds {datos.get('caja')!r}. Nothing was sent",
-        "sin-confirmar": "the send was triggered but the message never showed up in the "
-                         f"conversation (last own message: {datos.get('ultimo')!r}). "
-                         "Check that tab before retrying: it may have gone out anyway",
-    }.get(estado, f"the page answered {datos!r}")
-    sys.exit(f"wa-send: {WEB_FINALES.get(estado, 'send-web-failed')}\n{detalle}")
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -651,10 +92,6 @@ def main():
                     help="do not sign: the message goes out as is, without the agent signature")
     ap.add_argument("--line", help="the line to write from, when the conversation "
                                    "exists on more than one (see `wa-scope accounts`)")
-    ap.add_argument("--open", dest="via", choices=("auto", "url", "ui"), default="auto",
-                    help="how to open the chat: url (whatsapp:// scheme, direct chats "
-                         "only), ui (walks the sidebar list, works for everything) or "
-                         "auto (url when possible, ui otherwise). Default auto.")
     a = ap.parse_args()
     # Todo mensaje del agente va firmado, para que nunca haya duda de si escribe la
     # persona o su agente. --raw es la excepcion, para cuando escribe ella.
@@ -673,51 +110,15 @@ def main():
         if cuentas and a.line not in cuentas:
             sys.exit(f"wa-send: {LINEA_EQUIVOCADA}\n{a.chat!r} is not registered on the line "
                      f"{a.line!r}; it is on {', '.join(cuentas)}.")
-        cuenta = a.line
     elif len(cuentas) > 1:
         sys.exit(f"wa-send: {LINEA_AMBIGUA}\n{a.chat!r} exists on {len(cuentas)} lines "
                  f"({', '.join(cuentas)}), so there is no way to tell which one you "
                  "mean; pick it with --line <id>.")
-    else:
-        cuenta = cuentas[0] if cuentas else CUENTA_LOCAL
 
-    if cuenta != CUENTA_LOCAL:
-        envia_por_web(cuenta, a.chat, a.text, a.send)
-        return
-
-    # La via se decide ANTES de tocar la app: un pedido imposible —--open url contra un
-    # grupo— tiene que fallar sin haber abierto ni movido nada en WhatsApp.
-    phone = phone_of(chat_jid(a.chat)) if a.via in ("auto", "url") else None
-    if a.via == "url" and not phone:
-        sys.exit(f"--open url does not work for {a.chat!r}: the whatsapp:// scheme only "
-                 f"addresses phone numbers, and this did not resolve to a direct chat. "
-                 f"Use --open ui (or auto).")
-
-    tree, cur, via = open_chat(a.chat, phone, a.via)
-
-    idx, _ = find(tree, r"Escribir mensaje|Type a message")
-    if idx is None:
-        sys.exit("could not find the message input field")
-    orca("set-value", "--app", APP, "--element-index", str(idx), "--value", a.text)
-    time.sleep(0.4)
-
-    if not a.send:
-        print(f"DRAFT in {cur!r} (via {via}): {a.text}\n(not sent — repeat with "
-              f"--send, or press Enter in the app)")
-        return
-
-    # Enter necesita la ventana enfocada; set-value no. Si no lo esta, la traemos al frente.
-    if orca("press-key", "--app", APP, "--key", "Return", ok_fail=True) is None:
-        orca("get-app-state", "--app", APP, "--restore-window")
-        time.sleep(0.5)
-        orca("press-key", "--app", APP, "--key", "Return")
-    time.sleep(0.8)
-    if a.text[:40] in state():
-        print(f"SENT to {cur!r} (via {via}): {a.text}")
-    else:
-        print(f"Enter pressed in {cur!r} (via {via}), but the message was not visible in "
-              f"the chat. Check in the app.", file=sys.stderr)
-        sys.exit(1)
+    # Y recien aca se dice que no hay por donde. Va al final a proposito: quien llama
+    # necesita saber lo PRIMERO que esta mal con lo que pidio —que no firmo, que la
+    # conversacion esta en dos lineas—, no un fallo generico que tape todo lo demas.
+    sys.exit(f"wa-send: {SIN_TRANSPORTE}\n{SIN_TRANSPORTE_DETALLE}")
 
 
 if __name__ == "__main__":

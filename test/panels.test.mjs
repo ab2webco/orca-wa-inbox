@@ -168,43 +168,6 @@ console.log('\nconfig.html')
   ok('confirma la frecuencia en pantalla',
     doc.getElementById('said-sync').textContent.includes('✓'))
 
-  // De donde lee. Son DOS interruptores porque las fuentes se suman: la app de
-  // escritorio lee una sola linea y cada sesion de WhatsApp Web seria otra. Un solo
-  // control de tres valores obligaria a elegir una y perder la otra.
-  doc.getElementById('read-local').value = 'off'
-  doc.getElementById('read-web').value = 'on'
-  // El texto de los mensajes es una eleccion APARTE de leer la linea: la bandeja web
-  // trae quien te nombro y cuando sin abrir nada, y el cuerpo solo si se pide. Si este
-  // control no llegara al storage, el panel diria guardado y el CLI seguiria en `off`.
-  doc.getElementById('read-web-text').value = 'memoria'
-  doc.getElementById('save-source').click()
-  await espera()
-  ok('guarda que no lea la app de escritorio', storage.readLocal === 'off',
-    `storage.readLocal = ${JSON.stringify(storage.readLocal)}`)
-  ok('guarda que sume WhatsApp Web', storage.readWeb === 'on',
-    `storage.readWeb = ${JSON.stringify(storage.readWeb)}`)
-  ok('guarda el texto de los mensajes web', storage.readWebText === 'memoria',
-    `storage.readWebText = ${JSON.stringify(storage.readWebText)}`)
-  ok('confirma las fuentes en pantalla',
-    doc.getElementById('said-source').textContent.includes('✓'))
-  // Los valores son los que valida `wa-scope`: si el select ofreciera otro, el panel
-  // diria guardado y el CLI lo tiraria sin que nadie se entere.
-  const valores = (id) => [...doc.getElementById(id).options].map((o) => o.value).sort()
-  ok('las fuentes solo ofrecen on/off',
-    JSON.stringify(valores('read-local')) === JSON.stringify(['off', 'on']) &&
-    JSON.stringify(valores('read-web')) === JSON.stringify(['off', 'on']),
-    `local = ${JSON.stringify(valores('read-local'))}, web = ${JSON.stringify(valores('read-web'))}`)
-  ok('el texto web solo ofrece off/memoria',
-    JSON.stringify(valores('read-web-text')) === JSON.stringify(['memoria', 'off']),
-    `texto = ${JSON.stringify(valores('read-web-text'))}`)
-  // Y se deja como estaba: lo de abajo comprueba el panel entero, no este ajuste. El
-  // texto vuelve a `off`, que es donde tiene que arrancar.
-  doc.getElementById('read-local').value = 'on'
-  doc.getElementById('read-web').value = 'off'
-  doc.getElementById('read-web-text').value = 'off'
-  doc.getElementById('save-source').click()
-  await espera()
-
   // Un select no puede ofrecer un valor que el CLI vaya a rechazar: si lo ofrece, el
   // panel dice guardado y `wa-scope` lo tira. Las listas se comprueban, no se confian.
   const opciones = (id) => [...doc.getElementById(id).options].map((o) => o.value)
@@ -576,311 +539,7 @@ console.log('\nconfig.html')
 // la usaba nadie. Lo que se comprueba aca es lo unico que la vuelve un producto: que el
 // boton deje el pedido, que cada estado diga que hacer, y que ninguno se quede sin un
 // boton que lo resuelva — un estado sin salida es el mismo callejon que el spinner.
-console.log('\nconfig.html — lineas de WhatsApp Web')
-{
-  const linea = (extra) => ({
-    id: 'web:pending:p-1', label: 'Soporte', profile: 'p-1', pending: true,
-    linkedAt: null, authorizedChats: 0, pageId: 'page-1', ...extra
-  })
-
-  const { doc, storage } = await montar('config.html', {}, 'es-419')
-  await espera()
-
-  ok('sin ninguna linea el panel lo dice en vez de quedar vacio',
-    /ninguna linea/i.test(doc.getElementById('lines-wrap').textContent),
-    doc.getElementById('lines-wrap').textContent.trim())
-
-  // Un boton que no valida manda al worker a crear un perfil sin nombre, que despues
-  // no se puede distinguir de los otros en la lista del navegador.
-  storage.webRequest = null
-  doc.getElementById('line-label').value = '   '
-  doc.getElementById('link-line').click()
-  await espera()
-  ok('conectar sin nombre no manda nada y lo dice',
-    !storage.webRequest && doc.getElementById('said-line').textContent.length > 0,
-    `webRequest = ${JSON.stringify(storage.webRequest)}`)
-
-  doc.getElementById('line-label').value = '  Soporte  '
-  doc.getElementById('link-line').click()
-  await espera()
-  ok('conectar deja el pedido que atiende el worker',
-    storage.webRequest && storage.webRequest.action === 'link' &&
-    storage.webRequest.label === 'Soporte',
-    `webRequest = ${JSON.stringify(storage.webRequest)}`)
-  ok('y mientras tanto dice lo que esta pasando, no que ya esta conectada',
-    /perfil/i.test(doc.getElementById('said-line').textContent),
-    doc.getElementById('said-line').textContent)
-}
-
-{
-  // Esperando el escaneo: el estado que el usuario ve mas tiempo y el unico en el que
-  // la accion pasa en OTRA ventana. Sin un boton que lleve a la pestana, dos veces la
-  // pregunta fue "donde se abre".
-  const { doc, storage } = await montar('config.html', {
-    // `placement` arriba es el valor viejo que el worker ya no escribe; la fila trae el
-    // suyo. El panel tiene que pintar el de la fila: al reves es como el usuario abrio
-    // el espacio flotante vacio con la pestana en un proyecto.
-    webLines: { at: new Date().toISOString(), placement: 'proyecto', project: 'viejo',
-      lines: [{ id: 'web:pending:p-1', label: 'Soporte', profile: 'p-1', pending: true,
-        linkedAt: null, authorizedChats: 0, pageId: 'page-1', state: 'esperando',
-        placement: 'flotante' }] }
-  }, 'es-419')
-  await espera()
-  const wrap = doc.getElementById('lines-wrap')
-  ok('la linea esperando dice que escanear y con que telefono',
-    /escanee/i.test(wrap.textContent) && /QR/i.test(wrap.textContent),
-    wrap.textContent.trim().slice(0, 160))
-  ok('y dice donde esta la pestana, tomandolo de la fila',
-    /flotante/i.test(doc.getElementById('lines-place').textContent),
-    doc.getElementById('lines-place').textContent)
-  ok('sin repetir el lugar viejo que quedo guardado arriba',
-    !/viejo/.test(doc.getElementById('lines-place').textContent),
-    doc.getElementById('lines-place').textContent)
-  // El atajo se dice con la tecla de ESTA plataforma: Cmd en macOS, Ctrl en el resto.
-  // Un texto fijo le diria Cmd a quien esta en Linux, que es mandarlo a la nada.
-  ok('y dice con que atajo abrir ese panel, con la tecla de esta plataforma',
-    /(Cmd|Ctrl)\+Alt\+A/.test(doc.getElementById('lines-place').textContent),
-    doc.getElementById('lines-place').textContent)
-  ok('y no ofrece el atajo que solo existe en macOS y solo maximiza',
-    !/Shift/.test(doc.getElementById('lines-place').textContent),
-    doc.getElementById('lines-place').textContent)
-
-  const ver = wrap.querySelector('[data-lact]')
-  ok('ofrece llevar a la pestana', !!ver && /pestana/i.test(ver.textContent),
-    ver && ver.textContent)
-  ver.click()
-  await espera()
-  ok('y ese boton le pide al worker que la ponga delante',
-    storage.webRequest && storage.webRequest.action === 'show' &&
-    storage.webRequest.pageId === 'page-1',
-    `webRequest = ${JSON.stringify(storage.webRequest)}`)
-}
-
-{
-  // La pestana cerrada NO es una linea perdida: la sesion vive en el perfil. Ofrecer
-  // abrirla otra vez es la diferencia entre un estado y un callejon.
-  const { doc, storage } = await montar('config.html', {
-    webLines: { at: new Date().toISOString(),
-      lines: [{ id: 'web:57300', label: 'Soporte', profile: 'p-1', pending: false,
-        linkedAt: '2026-09-18 10:00', authorizedChats: 2, state: 'sin-pestana' }] }
-  }, 'es-419')
-  await espera()
-  const boton = doc.getElementById('lines-wrap').querySelector('[data-lact]')
-  boton.click()
-  await espera()
-  ok('una pestana cerrada se puede volver a abrir desde el panel',
-    storage.webRequest && storage.webRequest.action === 'reopen' &&
-    storage.webRequest.profile === 'p-1',
-    `webRequest = ${JSON.stringify(storage.webRequest)}`)
-  ok('y avisa que no va a pedir escanear de nuevo',
-    /escanear|scan/i.test(doc.getElementById('lines-wrap').textContent),
-    doc.getElementById('lines-wrap').textContent.trim().slice(0, 200))
-}
-
-{
-  // Desvincular borra el perfil y las autorizaciones: un clic de inercia no puede
-  // alcanzar. Se pide confirmacion Y se dice que se pierde, con el numero real.
-  const { doc, storage } = await montar('config.html', {
-    webLines: { at: new Date().toISOString(), placement: 'flotante',
-      lines: [{ id: 'web:57300', label: 'Soporte', profile: 'p-1', pending: false,
-        linkedAt: '2026-09-18 10:00', authorizedChats: 3, pageId: 'page-1',
-        state: 'enlazada', placement: 'proyecto', project: 'alfred',
-        worktreeId: 'wt-1' }] }
-  }, 'es-419')
-  await espera()
-  const wrap = doc.getElementById('lines-wrap')
-  ok('la linea enlazada dice cuantas conversaciones ve',
-    /3/.test(wrap.textContent), wrap.textContent.trim().slice(0, 160))
-  ok('dice en que proyecto esta la pestana y como llegar, no el lugar guardado',
-    /alfred/.test(doc.getElementById('lines-place').textContent) &&
-    !/flotante/i.test(doc.getElementById('lines-place').textContent),
-    doc.getElementById('lines-place').textContent)
-
-  storage.webRequest = null
-  wrap.querySelector('[data-lrm]').click()
-  await espera()
-  ok('el primer clic en desvincular no borra nada', !storage.webRequest,
-    `webRequest = ${JSON.stringify(storage.webRequest)}`)
-  const aviso = doc.querySelector('.confirm')
-  ok('avisa que se pierden las 3 conversaciones y el puesto de dispositivo',
-    !!aviso && /3/.test(aviso.textContent) && /dispositivo/i.test(aviso.textContent),
-    aviso && aviso.textContent.trim().slice(0, 200))
-
-  doc.querySelector('[data-lyes]').click()
-  await espera()
-  ok('confirmar si lo pide', storage.webRequest &&
-    storage.webRequest.action === 'unlink' && storage.webRequest.id === 'web:57300',
-    `webRequest = ${JSON.stringify(storage.webRequest)}`)
-}
-
-{
-  // Ningun estado sin salida, y ninguno vestido con la ropa de otro. Es la regla entera
-  // de esta seccion: el panel tiene que pintar EL estado que el worker calculo — el
-  // defecto reportado fue una fila que decia "Esperando el escaneo" y ofrecia "Ver la
-  // pestana" sin ninguna pestana detras.
-  //
-  // La lista no se escribe a mano: se saca de web-lines.mjs, que es el unico lado que
-  // emite estados. Un estado nuevo en el worker rompe esta prueba hasta que el panel
-  // lo sepa decir, que es justo lo que no paso la primera vez.
-  const fuente = readFileSync(join(root, 'web-lines.mjs'), 'utf8')
-  const estados = [...new Set(fuente.split('\n')
-    .filter((l) => /\bstate:/.test(l))
-    .flatMap((l) => [...l.slice(l.indexOf('state:')).matchAll(/'([a-z-]+)'/g)]
-      .map((m) => m[1])))]
-  ok('la lista de estados sale del worker y no de esta prueba',
-    estados.length === 6 && estados.includes('sin-pestana') &&
-    estados.includes('esperando'), estados.join(', '))
-
-  /** Como se ve una linea en ese estado: pastilla, que hacer, y botones. */
-  async function pintar (state, extra = {}) {
-    const { doc } = await montar('config.html', {
-      webLines: { at: new Date().toISOString(),
-        lines: [{ id: 'web:x', label: 'Soporte', profile: 'p-1', pending: false,
-          linkedAt: '2026-09-18 10:00', authorizedChats: 0, pageId: 'page-1',
-          state, ...extra }] }
-    }, 'es-419')
-    await espera()
-    const wrap = doc.getElementById('lines-wrap')
-    return {
-      pastilla: (wrap.querySelector('.pill') || {}).textContent || '',
-      como: (wrap.querySelector('.how') || {}).textContent || '',
-      accion: (wrap.querySelector('[data-lact]') || {}).textContent || '',
-      texto: wrap.textContent.trim()
-    }
-  }
-
-  const vistos = []
-  for (const state of estados) {
-    const v = await pintar(state)
-    ok(`el estado ${state} ofrece una accion y no solo un diagnostico`,
-      !!v.accion && v.texto.length > 20, v.texto.slice(0, 120))
-    vistos.push(v)
-  }
-  // El control que se pone rojo si un estado cae en la copia de otro: con el default
-  // silencioso de antes, dos estados compartian pastilla y texto y cada uno pasaba
-  // su comprobacion por separado.
-  ok('cada estado tiene su propia pastilla',
-    new Set(vistos.map((v) => v.pastilla)).size === estados.length,
-    vistos.map((v) => v.pastilla).join(' | '))
-  ok('cada estado dice algo distinto sobre que hacer',
-    new Set(vistos.map((v) => v.como)).size === estados.length,
-    vistos.map((v) => v.como.slice(0, 40)).join(' | '))
-
-  // Un estado que este panel no conoce: antes `lineHow` reventaba antes de pintar y la
-  // tabla entera quedaba VACIA, y el default se ponia la ropa de "Orca no contesta".
-  const raro = await pintar('un-estado-que-no-existe')
-  ok('un estado desconocido se pinta, no vacia la tabla', raro.texto.length > 20,
-    raro.texto.slice(0, 120))
-  ok('y se ve desconocido: dice cual es y no se disfraza de otro estado',
-    /un-estado-que-no-existe/.test(raro.texto) &&
-    !vistos.some((v) => v.pastilla === raro.pastilla),
-    `${raro.pastilla} — ${raro.como.slice(0, 80)}`)
-
-  // Y el callejon del reporte: sin pestana, "Ver la pestana" no se puede ofrecer.
-  for (const state of estados) {
-    const v = await pintar(state, { pageId: null })
-    ok(`${state} sin pestana no ofrece llevar a una pestana que no existe`,
-      v.accion !== 'Ver la pestana', `${state} -> ${v.accion}`)
-    ok(`${state} sin pestana tampoco manda a apretar ese boton`,
-      !/Ver la pestana/.test(v.como), `${state} -> ${v.como.slice(0, 80)}`)
-  }
-
-  // Una linea que nunca escaneo no tiene sesion que reanudar: el texto que le promete
-  // que no le van a pedir el QR es el que lo dejo dando vueltas.
-  const nueva = await pintar('sin-pestana', { pageId: null, pending: true, linkedAt: null })
-  ok('una linea a medias sin pestana avisa que va a tener que escanear',
-    /escanee|escanear/.test(nueva.como) && /QR/.test(nueva.como),
-    nueva.como.slice(0, 160))
-  const vieja = await pintar('sin-pestana', { pageId: null })
-  ok('y una que si estuvo enlazada avisa lo contrario: que no se lo van a pedir',
-    /no le va a pedir escanear/.test(vieja.como), vieja.como.slice(0, 160))
-  ok('las dos son frases distintas', nueva.como !== vieja.como, nueva.como.slice(0, 60))
-  // Las pestanas mueren en cada actualizacion de Orca: si el texto no lo dice, el
-  // usuario lee "la pestana esta cerrada" y cree que la cerro el.
-  ok('y las dos dicen por que se cerro la pestana',
-    /reiniciar|actualizar/.test(nueva.como) && /reiniciar|actualizar/.test(vieja.como),
-    `${nueva.como.slice(0, 60)} | ${vieja.como.slice(0, 60)}`)
-}
-
-{
-  // Los tres idiomas. Media traduccion no se ve hasta que la ve el usuario, y aca el
-  // texto que importa es justamente el que dice que hacer.
-  for (const [locale, esperado] of [['es-419', /escanee/i], ['en-US', /scan the QR/i],
-    ['pt-BR', /escaneie/i]]) {
-    const { doc } = await montar('config.html', {
-      webLines: { at: new Date().toISOString(),
-        lines: [{ id: 'web:pending:p-1', label: 'Soporte', profile: 'p-1', pending: true,
-          linkedAt: null, authorizedChats: 0, pageId: 'page-1', state: 'esperando' }] }
-    }, locale)
-    await espera()
-    ok(`el que hacer de la linea esta traducido en ${locale}`,
-      esperado.test(doc.getElementById('lines-wrap').textContent),
-      doc.getElementById('lines-wrap').textContent.trim().slice(0, 140))
-  }
-}
-
-{
-  // Un fallo con lineas sanas en la tabla: sin este renglon, el clic que fallo no dice
-  // absolutamente nada y el usuario lo vuelve a apretar.
-  const { doc } = await montar('config.html', {
-    webLines: { at: new Date().toISOString(), error: 'sin-orca',
-      lines: [{ id: 'web:x', label: 'Soporte', profile: 'p-1', pending: false,
-        linkedAt: '2026-09-18 10:00', authorizedChats: 1, pageId: 'p', state: 'enlazada' }] }
-  }, 'es-419')
-  await espera()
-  ok('lo que fallo se cuenta aunque la tabla tenga lineas sanas',
-    !doc.getElementById('lines-error').hidden &&
-    /Orca/i.test(doc.getElementById('lines-error').textContent),
-    doc.getElementById('lines-error').textContent)
-}
-
-{
-  // Una lectura que el host RECHAZA no puede vaciar la seccion. Es el parpadeo que el
-  // dueno reporto tres versiones seguidas: la tabla decia "Enlazada", unos segundos
-  // despues decia "Todavia no conectaste ninguna linea" y volvia. La causa no estaba en
-  // lo que el worker publica —eso se midio estable— sino en el lote de 18 lecturas del
-  // sondeo: el host admite 30 mensajes por 10 s, dos vueltas de 8 s caian en la misma
-  // ventana, y la COLA del lote —`webLines` y `syncMinutes` entre ellas— volvia
-  // `rate_limited`. Las dos se aplastaban en `null` y el panel pintaba el defecto: la
-  // tabla vacia y el select en "cada 5 minutos — recomendado", que es el segundo
-  // sintoma de sus capturas y lo que delata que el rechazo es del LOTE y no de la linea.
-  const RECHAZADAS = ['webLines', 'webStatus', 'syncMinutes', 'readWebText']
-  let rechazando = false
-  const linea = (id, label) => ({ id, label, profile: 'p-1', pending: false,
-    linkedAt: '2026-09-18 10:00', authorizedChats: 2, pageId: 'page-1',
-    state: 'enlazada', placement: 'flotante' })
-  const { window, doc } = await montar('config.html', {
-    syncMinutes: '2',
-    webLines: { at: new Date().toISOString(),
-      lines: [linea('web:1', 'Soporte'), linea('web:2', 'Ventas')] }
-  }, 'es-419', (d) => (rechazando && d.action === 'storage.get' &&
-    RECHAZADAS.indexOf(d.params.key) >= 0
-    ? { ok: false, errorCode: 'rate_limited', error: 'Too many requests.' }
-    : undefined))
-  await espera()
-  const filas = () => doc.querySelectorAll('#lines-wrap tbody tr').length
-  ok('parte con las dos lineas en la tabla', filas() === 2, `filas = ${filas()}`)
-  ok('parte con el valor guardado del sondeo',
-    doc.getElementById('sync-minutes').value === '2',
-    doc.getElementById('sync-minutes').value)
-
-  rechazando = true
-  window.dispatchEvent(new window.Event('focus'))
-  await espera()
-  await espera()
-  ok('un storage.get rechazado NO vacia las lineas conectadas', filas() === 2,
-    `la tabla quedo en ${filas()} filas: ${doc.getElementById('lines-wrap').textContent.trim().slice(0, 90)}`)
-  ok('un storage.get rechazado NO devuelve el select a su defecto',
-    doc.getElementById('sync-minutes').value === '2',
-    `el select volvio a ${doc.getElementById('sync-minutes').value}`)
-
-  rechazando = false
-  window.dispatchEvent(new window.Event('focus'))
-  await espera()
-  ok('y cuando el host vuelve a contestar la tabla sigue entera', filas() === 2,
-    `filas = ${filas()}`)
-}
-
+console.log('\nconfig.html — las traducciones estan completas')
 {
   // Cada texto nuevo en los tres idiomas, comprobado por clave y no de memoria: una
   // traduccion que falta cae al ingles y media pantalla queda en el idioma equivocado.
@@ -889,24 +548,21 @@ console.log('\nconfig.html — lineas de WhatsApp Web')
   const faltan = Object.keys(S.es).filter((k) => !(k in S.en))
   ok('cada texto del panel existe en espanol y en ingles', faltan.length === 0,
     `sin traducir = ${JSON.stringify(faltan.slice(0, 8))}`)
-  const nuevas = ['linesLegend', 'linesHelp', 'linkLine', 'noLines', 'seeTab', 'openTab',
-    'unlink', 'unlinkYes', 'stWaiting', 'stWaitingHow', 'stLinked', 'stLinkedNone',
-    'stLinkedSome', 'stDropped', 'stDroppedHow', 'stNoTab', 'stNoTabHow', 'stNoOrca',
-    'stNoOrcaHow', 'linePlacedFloating', 'linePlacedProject', 'unlinkWarn',
-    'unlinkWarn0', 'lineWorking', 'needLineLabel',
-    'lineWhereLabel', 'lineWhereProject', 'lineWhereFloating', 'lineWhereHelp',
-    'errFlotanteSinVia', 'errSinFlotante', 'lineShownIn', 'lineStagedIn',
-    'howWebLinePending', 'howWebNoLine', 'howWebProfileAmbiguous']
+  // Lo que esta rebanada dejo en pantalla: la vinculacion por QR y el unico requisito
+  // que hoy bloquea. Se nombran por clave y no de memoria.
+  const nuevas = ['pairingLegend', 'pairingWaiting', 'pairingLive', 'pairingConnected',
+    'pairingDown', 'pairingExpired', 'hNoTransport', 'hNoTransportHow', 'hNoTools']
   // pt hereda el ingles para lo que no traduce, asi que "existe" no alcanza: tiene que
   // ser un texto PROPIO, o el portugues de esta seccion seria ingles.
   const sinPt = nuevas.filter((k) => !S.pt[k] || S.pt[k] === S.en[k])
-  ok('y la seccion de lineas esta traducida tambien al portugues', sinPt.length === 0,
+  ok('y lo que esta rebanada dejo en pantalla esta traducido tambien al portugues',
+    sinPt.length === 0,
     `sin portugues = ${JSON.stringify(sinPt)}`)
 
-  // Los textos de `data-t` se pintan con fmt(), que BORRA todo `{x}` que no reciba
-  // valor. Hoy el unico hueco es `{k}`, el atajo del espacio flotante. Un texto nuevo
-  // con otro hueco no fallaria: se quedaria sin esa palabra, callado.
-  const HUECOS = ['k']
+  // Los textos de `data-t` se pintan con `t()` tal cual: ya no queda ninguno con
+  // huecos, y el que trajera uno lo mostraria LITERAL, con las llaves en pantalla.
+  // Cuando pasaban por fmt() el hueco sin valor se borraba y el texto salia mutilado
+  // en silencio; ahora se ve, pero verlo no es suficiente si nadie mira ese estado.
   const marcados = new Set()
   const html = readFileSync(join(root, 'config.html'), 'utf8')
   for (const m of html.matchAll(/data-t(?:-ph|-title)?="([^"]+)"/g)) marcados.add(m[1])
@@ -914,12 +570,11 @@ console.log('\nconfig.html — lineas de WhatsApp Web')
   for (const idioma of ['es', 'en', 'pt']) {
     for (const k of marcados) {
       const texto = String(S[idioma] && S[idioma][k] || '')
-      for (const h of texto.match(/\{(\w+)\}/g) || []) {
-        if (!HUECOS.includes(h.slice(1, -1))) rotos.push(`${idioma}.${k} ${h}`)
-      }
+      for (const h of texto.match(/\{(\w+)\}/g) || []) rotos.push(`${idioma}.${k} ${h}`)
     }
   }
-  ok('ningun texto de data-t trae un hueco que nadie llena', rotos.length === 0,
+  ok('ningun texto de data-t trae un hueco: se pintaria con las llaves puestas',
+    rotos.length === 0,
     JSON.stringify(rotos))
 }
 
@@ -986,79 +641,6 @@ console.log('\nactivity.html')
   await espera()
   ok('avisa cuando nunca se sincronizo',
     sinDatos.doc.getElementById('synced').textContent.length > 0)
-}
-
-// ───────── los cinco finales de una corrida ─────────
-// El defecto que esto existe para tapar: "no habia nada que hacer", "nunca corrio",
-// "arranco y se murio" y "no hay nada autorizado" se veian IGUAL — una lista vacia. El
-// dueno miraba eso y concluia lo unico que se puede concluir mirando: que no funciona.
-// Se comprueba lo que se lee en pantalla, no la forma del objeto.
-console.log('\nactivity.html — un mensaje que llego sin cuerpo')
-{
-  // Por la via web el cuerpo casi nunca llega y el adjunto no deja ruta. El panel
-  // mostraba el marcador crudo — "[web:no-text reason=not-loaded media=image]" — que no
-  // es una frase, y no marcaba la fila como que traia algo, porque miraba solo `media`.
-  const AHORA = new Date().toISOString().slice(0, 16).replace('T', ' ')
-  const conMarcador = {
-    syncedAt: AHORA, running: false, mapped: 1, authorized: 1, recent: [],
-    pending: [
-      { stanzaId: 'W1', date: '2026-09-17 12:06', chat: 'Soporte Acme', sender: 'Ana',
-        kind: 'mencion', text: '', noText: 'not-loaded', mediaKind: 'image',
-        hasMedia: true },
-      { stanzaId: 'W2', date: '2026-09-17 12:07', chat: 'Soporte Acme', sender: 'Beto',
-        kind: 'mencion', text: '', noText: 'off', mediaKind: null, hasMedia: false },
-      { stanzaId: 'W3', date: '2026-09-17 12:08', chat: 'Soporte Acme', sender: 'Caro',
-        kind: 'directo', text: '', noText: 'no-body', mediaKind: 'ptt', hasMedia: true }
-    ]
-  }
-  for (const [lang, frase, tipo] of [['es-419', /no ten[ií]a ese mensaje cargado/i, /nota de voz/i],
-                                     ['en-US', /did not have that message loaded/i, /voice note/i],
-                                     ['pt-BR', /n[aã]o tinha essa mensagem carregada/i, /nota de voz/i]]) {
-    const { doc } = await montar('activity.html', { activity: conMarcador }, lang)
-    await espera()
-    const txt = doc.getElementById('pending').textContent
-    ok(`el marcador de la via web no se muestra crudo en ${lang}`,
-      !/web:no-text|reason=|media=/.test(txt), txt.slice(0, 220))
-    ok(`y se dice en palabras en ${lang}`, frase.test(txt), txt.slice(0, 220))
-    ok(`el tipo del adjunto se dice por su nombre en ${lang}`, tipo.test(txt),
-      txt.slice(0, 220))
-  }
-  const { doc } = await montar('activity.html', { activity: conMarcador }, 'es-419')
-  await espera()
-  // Las tres razones piden acciones distintas y en el JSON se ven iguales.
-  const txt = doc.getElementById('pending').textContent
-  ok('la razon `off` dice que el texto no se pidio, no que el mensaje estaba vacio',
-    /no se pidio el cuerpo/i.test(txt), txt.slice(0, 400))
-  ok('la razon `no-body` si dice que no traia texto',
-    /no tra[ií]a texto/i.test(txt), txt.slice(0, 400))
-  ok('un mensaje sin cuerpo se distingue de uno leido',
-    doc.querySelectorAll('.text.sin-texto').length === 3,
-    String(doc.querySelectorAll('.text.sin-texto').length))
-}
-
-console.log('\nconfig.html — una maquina que lee solo por la via web')
-{
-  // Los cinco chequeos de la base local fallan y ninguno bloquea: la sesion web
-  // contesta. El panel no puede decir que WhatsApp no esta conectado, y tampoco puede
-  // ofrecer "activar" un sistema operativo en cinco circulos grises.
-  const salud = {
-    ok: true,
-    optional: [{ que: 'local WhatsApp database', code: 'local',
-      como: 'Linux; no official app for this system; missing; does not exist',
-      howCode: 'local-covered-by-web' }]
-  }
-  for (const [lang, frase] of [['es-419', /sesion de WhatsApp Web esta contestando/i],
-                               ['en-US', /WhatsApp Web session is answering/i],
-                               ['pt-BR', /sess[aã]o do WhatsApp Web est[aá] respondendo/i]]) {
-    const { doc } = await montar('config.html', { health: salud }, lang)
-    await espera()
-    ok(`no dice que WhatsApp no esta conectado en ${lang}`,
-      doc.getElementById('alert').hidden, doc.getElementById('alert').textContent)
-    const opc = doc.getElementById('opcionales').textContent
-    ok(`y explica de donde se esta leyendo, en ${lang}`, frase.test(opc), opc.slice(0, 220))
-    ok(`sin colar el ingles del CLI en ${lang}`,
-      lang === 'en-US' || !/no official app for this system/.test(opc), opc.slice(0, 220))
-  }
 }
 
 console.log('\nactivity.html — la corrida dice como le fue')
@@ -1197,9 +779,11 @@ console.log('\nel codigo del CLI, dicho en el idioma del panel')
 {
   const salud = {
     ok: false,
-    problem: 'WhatsApp Desktop installed',
-    problemCode: 'whatsapp',
-    detail: '/Users/quien-sea/Library/Group Containers/group.net.whatsapp.WhatsApp.shared',
+    problem: 'a message transport',
+    problemCode: 'no-transport',
+    detail: 'no-transport: there is no message transport yet. The two old read routes ' +
+      'were removed and the sidecar that replaces them pairs the line but does not ' +
+      'read messages yet.',
     optional: [{
       que: 'audio transcription', code: 'transcribe',
       como: 'no engine: download the model in Settings > Voice, or install a local one ' +
@@ -1213,91 +797,48 @@ console.log('\nel codigo del CLI, dicho en el idioma del panel')
   const alertaEs = es.doc.getElementById('alert').textContent
   const opcionalEs = es.doc.getElementById('opcionales').textContent
   ok('el problema de salud se dice en espanol, no como lo escribio el CLI',
-    alertaEs.includes('WhatsApp Desktop instalado'), alertaEs)
+    alertaEs.includes('Todavia no hay de donde leer mensajes'), alertaEs)
   ok('el requisito opcional tambien',
     opcionalEs.includes('Transcripcion de audio') && opcionalEs.includes('Ajustes > Voz'),
     opcionalEs)
   // Lo que motiva todo esto: media traduccion es peor que ninguna, porque no se ve.
   ok('no se cuela el ingles del CLI en el panel en espanol',
-    !/\btranscription\b|\bdownload\b|\binstalled\b/i.test(alertaEs + ' ' + opcionalEs),
+    !/\btranscription\b|\bdownload\b|\bmessage transport\b/i.test(alertaEs + ' ' + opcionalEs),
     alertaEs + ' | ' + opcionalEs)
-  // El detalle SI es el dato crudo de la herramienta —una ruta, un tamano, un error de
-  // sqlite—, no una frase: se muestra tal cual, igual que el detalle del sync fallido.
-  ok('el detalle tecnico se muestra tal cual', alertaEs.includes('Group Containers'),
-    alertaEs)
+  // Este detalle es una FRASE, no un dato crudo, asi que se traduce por codigo. Es el
+  // defecto que se arreglo de paso: el panel pintaba "both routes are off: turn the
+  // desktop app or WhatsApp Web back on" en ingles, en un panel en espanol.
+  ok('y el detalle, cuando es una frase, tambien se dice en espanol',
+    alertaEs.includes('Enlace su linea con el codigo QR') &&
+    !/sidecar that replaces them/.test(alertaEs), alertaEs)
+
+  // Y el detalle que SI es dato crudo —una ruta, un tamano, un error de proceso— se
+  // sigue mostrando tal cual: traducirlo seria perderlo.
+  const crudo = await montar('config.html', {
+    health: { ok: false, problem: 'the plugin tools did not answer',
+      problemCode: 'sin-herramientas',
+      detail: 'ENOENT: /ruta/que/no/existe/wa-read', optional: [] }
+  }, 'es-419')
+  await espera()
+  const alertaCrudo = crudo.doc.getElementById('alert').textContent
+  ok('el motivo del worker tambien se dice en espanol',
+    alertaCrudo.includes('Las herramientas del plugin no contestaron'), alertaCrudo)
+  ok('y su detalle tecnico se muestra tal cual',
+    alertaCrudo.includes('/ruta/que/no/existe/wa-read'), alertaCrudo)
 
   const pt = await montar('config.html', { health: salud }, 'pt-BR')
   await espera()
   ok('y en portugues tambien',
-    pt.doc.getElementById('alert').textContent.includes('WhatsApp Desktop instalado') &&
+    pt.doc.getElementById('alert').textContent.includes('Ainda nao ha de onde ler') &&
     pt.doc.getElementById('opcionales').textContent.includes('Transcricao de audio'),
     pt.doc.getElementById('opcionales').textContent)
 
   const en = await montar('config.html', { health: salud }, 'en-US')
   await espera()
   ok('en ingles dice lo mismo que la terminal',
-    en.doc.getElementById('alert').textContent.includes('WhatsApp Desktop installed'),
+    en.doc.getElementById('alert').textContent
+      .includes('There is nothing to read messages from yet'),
     en.doc.getElementById('alert').textContent)
-
-  // El permiso del disco es lo que explica el cartel que macOS levanta cuatro veces
-  // por minuto. Si llegara sin traducir, el usuario lee una instruccion en ingles
-  // justo en el momento en que esta buscando por que le preguntan tanto.
-  const fda = {
-    ok: true,
-    optional: [{ que: 'Full Disk Access', como: 'optional \u2014 macOS asks ...',
-      code: 'fulldisk', howCode: 'fulldisk-missing' }]
-  }
-  for (const [lang, titulo, accion] of [
-    ['es-419', 'Acceso total al disco', 'Acceso total al disco > agregar Orca Lab'],
-    ['en-US', 'Full Disk Access', 'Full Disk Access > add Orca Lab'],
-    ['pt-BR', 'Acesso total ao disco', 'Acesso total ao disco > adicionar Orca Lab']
-  ]) {
-    const panel = await montar('config.html', { health: fda }, lang)
-    await espera()
-    const texto = panel.doc.getElementById('opcionales').textContent
-    ok(`el permiso del disco se explica en ${lang}`,
-      texto.includes(titulo) && texto.includes(accion), texto)
-  }
-
-  // Los finales de la via web se cuentan APARTE porque la accion del usuario es
-  // distinta en cada uno: abrir Orca, abrir la pestana, escanear el QR, esperar. Con un
-  // solo texto para los cuatro, el que tiene que escanear el QR lee "Abra Orca Lab" y
-  // no encuentra nada que abrir.
-  const WEB_FINALES = [
-    ['web-off', 'Lineas conectadas', 'Connected lines'],
-    ['web-no-orca', 'ORCA_CLI_COMMAND', 'ORCA_CLI_COMMAND'],
-    ['web-no-session', 'pestana', 'tab'],
-    ['web-logged-out', 'QR', 'QR'],
-    ['web-eval-timeout', 'no contesto a tiempo', 'did not answer in time'],
-    ['web-read-failed', 'Recargue', 'Reload'],
-    // Los tres de abajo son la diferencia entre "termina de enlazar NoVa", "no tiene
-    // ninguna linea" y "hay dos perfiles con el mismo nombre". Con un solo texto para
-    // los tres, quien tiene la linea a medias no se entera de que le falta escanear.
-    ['web-line-pending', 'todavia no escaneo el QR', 'has not scanned its QR code yet'],
-    ['web-no-line', 'no hay ninguna linea enlazada', 'no line is linked'],
-    ['web-profile-ambiguous', 'dos perfiles del navegador con el mismo nombre',
-      'Two browser profiles share the same name']
-  ]
-  const dichos = new Set()
-  for (const [code, marcaEs, marcaEn] of WEB_FINALES) {
-    const salud = { ok: true, optional: [{ que: 'WhatsApp Web as a second line',
-      como: 'the CLI text', code: 'web', howCode: code }] }
-    const es = await montar('config.html', { health: salud }, 'es-419')
-    await espera()
-    const texto = es.doc.getElementById('opcionales').textContent
-    ok(`${code} se dice en espanol y no como lo escribio el CLI`,
-      texto.includes(marcaEs) && !texto.includes('the CLI text'), texto.slice(0, 160))
-    dichos.add(texto)
-    const en = await montar('config.html', { health: salud }, 'en-US')
-    await espera()
-    ok(`${code} tambien tiene su texto en ingles`,
-      en.doc.getElementById('opcionales').textContent.includes(marcaEn),
-      en.doc.getElementById('opcionales').textContent.slice(0, 160))
-  }
-  // Y que sean TODOS textos distintos: dos claves que resolvieran a la misma frase
-  // pasarian las comprobaciones de arriba una por una y no le dirian nada al usuario.
-  ok('cada final de la via web dice algo distinto',
-    dichos.size === WEB_FINALES.length, `textos distintos = ${dichos.size}`)
 
   // Un codigo que este panel no conozca todavia no puede dejar el aviso vacio: se
   // pinta el texto del CLI, que es peor que traducido pero infinitamente mejor que nada.
@@ -1515,286 +1056,71 @@ console.log('\nel contrato CLI -> panel')
     apagada.doc.getElementById('pending').textContent.trim())
 }
 
-// ───────── lo que falla se DICE, y no se lleva puesto lo tipeado ─────────
-// Los dos defectos que se reportaron: guardar de donde lee decia guardado pase lo que
-// pase, y "Conectar cuenta" vaciaba el nombre antes de saber si la linea existia.
+// ───────── lo que falla se DICE ─────────
+// El defecto que se reporto: guardar decia guardado pasara lo que pasara. Ya no queda
+// ningun control que escriba varias claves a la vez —el de "de donde lee" se fue con
+// los transportes— pero la mitad que sigue viva es la que importa: un guardado que el
+// host rechazo no puede decir que si.
 console.log('\nconfig.html — un guardado que falla no dice guardado')
 {
-  // El host rechaza UNA de las tres escrituras. Encadenadas como estaban, el resultado
-  // que llegaba al final era el de la tercera y el panel decia guardado igual.
   const { doc, storage } = await montar('config.html', {}, 'es-419', (d) => {
-    if (d.action === 'storage.set' && d.params.key === 'readWeb') return { ok: false }
+    if (d.action === 'storage.set' && d.params.key === 'inboxDays') return { ok: false }
     return undefined
   })
-  doc.getElementById('read-local').value = 'off'
-  doc.getElementById('read-web').value = 'on'
-  doc.getElementById('save-source').click()
+  doc.getElementById('inbox-days').value = '30'
+  doc.getElementById('save-days').click()
   await espera()
   await espera()
-  const dijo = doc.getElementById('said-source').textContent
-  ok('una fuente que no se pudo guardar no dice guardado',
+  const dijo = doc.getElementById('said-days').textContent
+  ok('un ajuste que no se pudo guardar no dice guardado',
     !dijo.includes('\u2713'), `dijo ${JSON.stringify(dijo)}`)
-  // Nombrado como el usuario lo ve, no como se llama la clave del storage.
-  ok('y nombra el control que fallo, con su etiqueta',
-    dijo.includes('WhatsApp Web') && !dijo.includes('readWeb'),
-    `dijo ${JSON.stringify(dijo)}`)
   ok('el error queda marcado en rojo',
-    doc.getElementById('said-source').className.includes('bad'))
-  ok('lo que si se pudo guardar quedo guardado', storage.readLocal === 'off',
-    `readLocal = ${JSON.stringify(storage.readLocal)}`)
+    doc.getElementById('said-days').className.includes('bad'))
+  ok('y no queda nada escrito en el storage', storage.inboxDays === undefined,
+    `inboxDays = ${JSON.stringify(storage.inboxDays)}`)
 }
 
-{
-  // Y el camino feliz: las tres guardadas, y ademas se le pide al worker que relea, si
-  // no el aviso rojo sigue reclamando la app que el usuario acaba de apagar.
-  const { doc, storage } = await montar('config.html', {}, 'es-419')
-  doc.getElementById('read-local').value = 'off'
-  doc.getElementById('read-web').value = 'on'
-  doc.getElementById('read-web-text').value = 'memoria'
-  doc.getElementById('save-source').click()
-  await espera()
-  await espera()
-  ok('las tres fuentes se guardan',
-    storage.readLocal === 'off' && storage.readWeb === 'on' &&
-    storage.readWebText === 'memoria', JSON.stringify(storage))
-  ok('y lo confirma en pantalla',
-    doc.getElementById('said-source').textContent.includes('\u2713'))
-  ok('y pide una relectura para que la alerta deje de reclamar lo apagado',
-    !!storage.syncRequest, JSON.stringify(storage.syncRequest))
-}
-
-console.log('\nconfig.html — conectar una linea que falla conserva lo tipeado')
-{
-  // El worker contesta que no pudo. Antes el campo ya estaba vacio para cuando llegaba
-  // la respuesta — se vaciaba al mandar el pedido — y nada mostraba el motivo.
-  const { doc, storage } = await montar('config.html', {}, 'es-419', (d, store) => {
-    if (d.action === 'storage.set' && d.params.key === 'webRequest' && d.params.value) {
-      store.webStatus = { at: new Date().toISOString(), requestAt: d.params.value.at,
-        action: d.params.value.action, ok: false, code: 'sin-orca', detail: 'ENOENT' }
-    }
-    return undefined
-  })
-  doc.getElementById('line-label').value = 'Linea del bot'
-  doc.getElementById('link-line').click()
-  await new Promise((r) => setTimeout(r, 1500))
-  ok('el pedido se mando', !!storage.webRequest || !!storage.webStatus)
-  ok('el nombre tipeado sobrevive al fallo',
-    doc.getElementById('line-label').value === 'Linea del bot',
-    `quedo ${JSON.stringify(doc.getElementById('line-label').value)}`)
-  const dijo = doc.getElementById('said-line').textContent
-  ok('y dice que lo tipeado sigue ahi', /quedo puesto/.test(dijo),
-    `dijo ${JSON.stringify(dijo)}`)
-  ok('marcado como error', doc.getElementById('said-line').className.includes('bad'))
-  const arriba = doc.getElementById('lines-error')
-  ok('y el motivo se dice UNA vez, en el renglon de la seccion',
-    !arriba.hidden && /CLI de Orca/.test(arriba.textContent) &&
-    !/CLI de Orca/.test(dijo), arriba.textContent)
-  ok('el boton vuelve a quedar usable',
-    doc.getElementById('link-line').disabled === false)
-}
-
-{
-  // Y cuando si se conecta, el campo se vacia: es la senal de que la linea existe.
-  const { doc } = await montar('config.html', {}, 'es-419', (d, store) => {
-    if (d.action === 'storage.set' && d.params.key === 'webRequest' && d.params.value) {
-      store.webStatus = { at: new Date().toISOString(), requestAt: d.params.value.at,
-        action: d.params.value.action, ok: true, placement: 'flotante' }
-    }
-    return undefined
-  })
-  doc.getElementById('line-label').value = 'Linea del bot'
-  doc.getElementById('link-line').click()
-  await new Promise((r) => setTimeout(r, 1500))
-  ok('con la linea conectada el campo se vacia',
-    doc.getElementById('line-label').value === '',
-    `quedo ${JSON.stringify(doc.getElementById('line-label').value)}`)
-  ok('y lo confirma', doc.getElementById('said-line').textContent.includes('\u2713'),
-    doc.getElementById('said-line').textContent)
-}
-
-{
-  // "Ver la pestana" sobre una pestana que ya no esta: fallaba y el boton no decia
-  // nada. Es el mismo defecto que conectar, en el otro boton de la seccion.
-  const LINEA = {
-    id: 'web:573000000000', label: 'Linea del bot', profile: '9f2c', pending: false,
-    linkedAt: '2026-09-17 09:12', authorizedChats: 2, pageId: 'page-1', state: 'enlazada'
-  }
-  const { doc } = await montar('config.html',
-    { webLines: { at: new Date().toISOString(), lines: [LINEA] } }, 'es-419',
-    (d, store) => {
-      if (d.action === 'storage.set' && d.params.key === 'webRequest' && d.params.value) {
-        store.webStatus = { at: new Date().toISOString(), requestAt: d.params.value.at,
-          action: d.params.value.action, ok: false, code: 'sin-orca', detail: 'ENOENT' }
-      }
-      return undefined
-    })
-  await espera()
-  const ver = doc.querySelector('[data-lact]')
-  ok('la linea enlazada ofrece ver su pestana', !!ver,
-    doc.getElementById('lines-wrap').textContent.slice(0, 80))
-  ver.click()
-  await new Promise((r) => setTimeout(r, 1500))
-  const err = doc.getElementById('lines-error')
-  ok('una pestana que no se puede abrir lo dice en el acto',
-    !err.hidden && /CLI de Orca/.test(err.textContent), err.textContent)
-}
-
-{
-  // Y con el veredicto en la mano el estado se RELEE. El worker recalcula las lineas
-  // antes de contestar, y el panel repintaba las que tenia en memoria: la fila seguia
-  // diciendo "Esperando el escaneo" y ofreciendo "Ver la pestana" sobre una pestana
-  // que el worker ya sabia muerta. Es el estado que el usuario reporto.
-  const VIVA = {
-    id: 'web:pending:9f2c', label: 'NoVa', profile: '9f2c', pending: true,
-    linkedAt: null, authorizedChats: 0, pageId: 'page-1', state: 'esperando'
-  }
-  const MUERTA = { ...VIVA, pageId: null, state: 'sin-pestana' }
-  const { doc } = await montar('config.html',
-    { webLines: { at: new Date().toISOString(), lines: [VIVA] } }, 'es-419',
-    (d, store) => {
-      if (d.action === 'storage.set' && d.params.key === 'webRequest' && d.params.value) {
-        // Lo que hace el worker de verdad: recalcula y recien despues contesta.
-        store.webLines = { at: new Date().toISOString(), lines: [MUERTA] }
-        store.webStatus = { at: new Date().toISOString(), requestAt: d.params.value.at,
-          action: d.params.value.action, ok: false, code: 'sin-pestana', detail: '' }
-      }
-      return undefined
-    })
-  await espera()
-  const wrap = doc.getElementById('lines-wrap')
-  ok('antes del clic la fila dice lo que el worker sabia: esperando el escaneo',
-    /Esperando el escaneo/.test(wrap.textContent) &&
-    /Ver la pestana/.test(wrap.querySelector('[data-lact]').textContent),
-    wrap.textContent.trim().slice(0, 120))
-  wrap.querySelector('[data-lact]').click()
-  await new Promise((r) => setTimeout(r, 1500))
-  const ahora = doc.getElementById('lines-wrap')
-  ok('con el veredicto el panel pinta el estado nuevo, no el que tenia guardado',
-    /Sin pestana/.test(ahora.textContent) &&
-    /Abrir la pestana/.test(ahora.querySelector('[data-lact]').textContent),
-    ahora.textContent.trim().slice(0, 160))
-  ok('y el motivo del fallo se dice traducido',
-    /pestana ya no existe/.test(doc.getElementById('lines-error').textContent),
-    doc.getElementById('lines-error').textContent)
-}
-
-// ───────── el sondeo contra lo que el usuario acaba de hacer ─────────
-// Lo reportado: "al guardar, algunos select cambian de valor y vuelve".
-//
-// El sondeo LEE y PINTA en dos momentos distintos: sus 18 lecturas se contestan con lo
-// que hay, y recien pinta cuando llega la ultima — `chats` son 52 KB en el Mac del
-// dueno y siempre llega ultima. Un guardado que aterriza en ese hueco queda pisado por
-// el valor de ANTES. La guardia que habia —"no pintes el control que tiene el foco"—
-// no cubre nada: Chromium enfoca el boton al hacer clic, asi que el select ya lo perdio.
 console.log('\nconfig.html: el sondeo no pisa lo que el usuario acaba de hacer')
 {
   let demora = 0
-  const storage = { readLocal: 'on', readWeb: 'off', readWebText: 'off' }
+  const storage = { inboxDays: '7' }
   const { window, doc } = await montar('config.html', storage, 'es-419', (d) =>
     (demora && d.action === 'storage.get' && d.params.key === 'chats'
       ? { __demora: demora } : undefined))
 
   demora = 400
-  window.dispatchEvent(new window.Event('focus'))   // el sondeo pide sus 18 claves
-  await espera()                                     // ya salieron, con readWeb = off
-  doc.getElementById('read-web').value = 'on'
-  doc.getElementById('read-web').dispatchEvent(new window.Event('change'))
+  window.dispatchEvent(new window.Event('focus'))   // el sondeo pide sus claves
+  await espera()                                     // ya salieron, con inboxDays = 7
+  doc.getElementById('inbox-days').value = '30'
+  doc.getElementById('inbox-days').dispatchEvent(new window.Event('change'))
   demora = 0
-  doc.getElementById('save-source').focus()          // lo que hace el clic en Chromium
-  doc.getElementById('save-source').click()
+  doc.getElementById('save-days').focus()            // lo que hace el clic en Chromium
+  doc.getElementById('save-days').click()
   await new Promise((r) => setTimeout(r, 700))       // aterriza la pintura del sondeo
   ok('un sondeo que leyo antes del guardado no repinta el valor viejo encima',
-    storage.readWeb === 'on' && doc.getElementById('read-web').value === 'on',
-    `guardado = ${storage.readWeb}, select = ${doc.getElementById('read-web').value}`)
+    storage.inboxDays === '30' && doc.getElementById('inbox-days').value === '30',
+    `guardado = ${storage.inboxDays}, select = ${doc.getElementById('inbox-days').value}`)
 }
 
 {
   // Y la otra mitad: el repintado que llega ANTES del clic. Ahi no hay guardado que
   // proteger todavia, y el boton termina mandando el valor que el usuario ya no ve.
-  const storage = { readLocal: 'on', readWeb: 'off', readWebText: 'off' }
+  const storage = { inboxDays: '7' }
   const { window, doc } = await montar('config.html', storage, 'es-419')
-  doc.getElementById('read-web').value = 'on'
-  doc.getElementById('read-web').dispatchEvent(new window.Event('change'))
-  doc.getElementById('read-web').blur()              // mira otra cosa antes de guardar
+  doc.getElementById('inbox-days').value = '30'
+  doc.getElementById('inbox-days').dispatchEvent(new window.Event('change'))
+  doc.getElementById('inbox-days').blur()            // mira otra cosa antes de guardar
   window.dispatchEvent(new window.Event('focus'))
   await espera(); await espera()
   ok('un select cambiado y sin guardar no lo repinta el sondeo',
-    doc.getElementById('read-web').value === 'on',
-    doc.getElementById('read-web').value)
-  doc.getElementById('save-source').click()
+    doc.getElementById('inbox-days').value === '30',
+    doc.getElementById('inbox-days').value)
+  doc.getElementById('save-days').click()
   await espera(); await espera()
   ok('y la accion manda el valor que el usuario eligio, no el que habia guardado',
-    storage.readWeb === 'on', String(storage.readWeb))
+    storage.inboxDays === '30', String(storage.inboxDays))
 }
 
-// ───────── desvincular no hereda el veredicto del clic anterior ─────────
-// Lo reportado: "cuando trate de borrar la anterior dijo que no podia, le doy de nuevo
-// y la borra". Medido en su Mac: 1,49 s entre el pedido y su veredicto. En ese hueco el
-// sondeo de 2 s tomaba CUALQUIER `webStatus` y lo pintaba como respuesta a este clic —
-// y el que habia era el de "Ver la pestana" sobre una linea flotante, que siempre falla.
-console.log('\nconfig.html: el veredicto que se muestra es el del clic que se hizo')
-{
-  const AHORA = new Date().toISOString()
-  // Con la linea a medias el sondeo de 2 s ya esta latiendo antes del clic: es la
-  // situacion en la que el veredicto ajeno alcanzaba a pintarse.
-  const LINEA = { id: 'web:57300', label: 'Soporte', profile: 'p1', pending: true,
-    linkedAt: null, authorizedChats: 0, pageId: 'pg1',
-    state: 'esperando', placement: 'flotante', project: null }
-  let pedidoUnlink = null
-  const storage = {
-    webLines: { at: AHORA, lines: [LINEA] },
-    webStatus: { at: AHORA, requestAt: '2026-01-01T00:00:00.000Z', action: 'show',
-      ok: false, code: 'flotante-sin-via', detail: '', placement: 'flotante' }
-  }
-  const { doc } = await montar('config.html', storage, 'es-419', (d, store) => {
-    if (d.action === 'storage.set' && d.params.key === 'webRequest' &&
-        d.params.value && d.params.value.action === 'unlink') {
-      pedidoUnlink = d.params.value
-      // 3 s: el worker recoge el pedido en su vuelta de 3 s y recien despues trabaja.
-      // Medido en el Mac del dueno, entre clic y veredicto propio pasaron 1,49 s con
-      // el pedido escrito justo antes de una vuelta; el tope de recogida es 3 s mas.
-      setTimeout(() => {
-        store.webLines = { at: new Date().toISOString(), lines: [], motivo: 'unlink' }
-        store.webStatus = { at: new Date().toISOString(), requestAt: d.params.value.at,
-          action: 'unlink', ok: true }
-      }, 3000)
-    }
-    return undefined
-  })
-  await espera()
-  doc.querySelector('[data-lrm]').click()
-  await espera()
-  const aviso0 = doc.getElementById('lines-error')
-  ok('antes del clic el panel muestra el veredicto del clic anterior, que es de el',
-    !aviso0.hidden && /No pude abrir la pestana/.test(aviso0.textContent),
-    aviso0.textContent)
-  doc.querySelector('[data-lyes]').click()
-  await espera()
-  ok('y al apretar desvincular ese aviso se baja en el acto',
-    aviso0.hidden || !aviso0.textContent.trim(), aviso0.textContent)
-  // 2,2 s: una vuelta entera del sondeo de 2 s con el veredicto propio todavia sin
-  // llegar. Menos que eso y la prueba pasa sin haber dejado latir al sondeo, que es
-  // justo lo que hay que comprobar.
-  await new Promise((r) => setTimeout(r, 2200))
-  const aviso = doc.getElementById('lines-error')
-  ok('mientras el desvincular corre no se muestra el veredicto del clic anterior',
-    aviso.hidden || !aviso.textContent.trim(), aviso.textContent)
-  ok('y el pedido lleva la fila TAL CUAL la vio el usuario',
-    !!pedidoUnlink && pedidoUnlink.desde === AHORA &&
-    pedidoUnlink.visto && pedidoUnlink.visto.state === 'esperando' &&
-    pedidoUnlink.visto.pageId === 'pg1', JSON.stringify(pedidoUnlink))
-  await new Promise((r) => setTimeout(r, 3000))
-  ok('y con SU veredicto la linea ya no esta y no quedo ningun aviso de fallo',
-    !doc.querySelector('[data-lrm]') && (aviso.hidden || !aviso.textContent.trim()),
-    `${aviso.textContent} | filas = ${doc.querySelectorAll('[data-lrm]').length}`)
-}
-
-
-// ───────── un host que rechaza TODO no pinta ningun defecto ─────────
-// La propiedad de v3.12.3, comprobada sobre el panel entero y no sobre una funcion:
-// `read()` memoriza lo ultimo que el host CONTESTO, asi que un rechazo repinta eso y
-// nunca un valor por defecto. Se prueba con el host negandose a todo desde el arranque,
-// que es el unico momento en que no hay nada memorizado.
 console.log('\nconfig.html: un host que rechaza todo')
 {
   const { doc } = await montar('config.html', {}, 'es-419',
@@ -1807,10 +1133,9 @@ console.log('\nconfig.html: un host que rechaza todo')
     return n && !n.hidden ? n.textContent : ''
   }
   const afirmaciones = [
-    ['no tiene lineas', visible('#lines-wrap'), /Todavia no ha conectado ninguna linea/],
     ['el plugin no esta', visible('#alert'), /El plugin no esta corriendo/],
-    ['no hay de donde leer', visible('#alert'), /No hay de donde leer/],
-    ['un fallo de lectura', visible('#lines-error'), /./]
+    ['no hay de donde leer', visible('#alert'), /Todavia no hay de donde leer/],
+    ['no hay conversaciones', visible('#scope-wrap'), /Sin conversaciones/]
   ]
   for (const [nombre, texto, re] of afirmaciones) {
     ok(`un rechazo no afirma "${nombre}"`, !re.test(texto),
@@ -1855,8 +1180,8 @@ console.log('\nconfig.html: el latido del worker')
 
     // Y lo que el aviso solo no arregla: sin nadie del otro lado, el boton que deja
     // un pedido esperando respuesta es el silencio de 45 s otra vez.
-    ok(`sin worker el boton de conectar esta apagado, en ${lang}`,
-      sin.doc.getElementById('link-line').disabled === true)
+    ok(`sin worker el boton de reintentar el sync esta apagado, en ${lang}`,
+      sin.doc.getElementById('sync-retry').disabled === true)
 
     const viejo = await montar('config.html',
       { workerBeat: { at: VIEJO }, health: { ok: true } }, lang)
@@ -1865,32 +1190,12 @@ console.log('\nconfig.html: el latido del worker')
       !a2.hidden && parado.test(a2.textContent), a2.textContent.slice(0, 120))
   }
 
-  // Y sobrevive al repintado: la tabla la vuelven a dibujar el vigia de 2 s y el
-  // veredicto de un clic, no solo reload().
-  {
-    const { doc, window } = await montar('config.html', {
-      workerBeat: null,
-      webLines: { at: new Date().toISOString(), lines: [{
-        id: 'web:1', label: 'Soporte', profile: 'p1', state: 'esperando',
-        pageId: 'pg1', placement: 'proyecto', project: 'x', authorizedChats: 0 }] }
-    }, 'es-419')
-    ok('sin worker los botones de la tabla nacen apagados',
-      [...doc.querySelectorAll('#lines-wrap button')].every((b) => b.disabled),
-      doc.querySelector('#lines-wrap').innerHTML.slice(0, 160))
-    // 2,4 s: una vuelta entera del vigia de 2 s, que repinta la tabla entera.
-    await new Promise((r) => setTimeout(r, 2400))
-    ok('y siguen apagados despues de que el vigia la repinta',
-      [...doc.querySelectorAll('#lines-wrap button')].every((b) => b.disabled),
-      doc.querySelector('#lines-wrap').innerHTML.slice(0, 160))
-    window.close()
-  }
-
   // Con worker vivo los botones siguen vivos: apagar lo que SI se puede hacer es el
   // mismo defecto del otro lado.
   const vivo = await montar('config.html',
     { workerBeat: { at: new Date().toISOString() }, health: { ok: true } }, 'es-419')
-  ok('con worker vivo el boton de conectar sigue encendido',
-    vivo.doc.getElementById('link-line').disabled === false)
+  ok('con worker vivo el boton de reintentar el sync sigue encendido',
+    vivo.doc.getElementById('sync-retry').disabled === false)
 
   // Y el caso que hace que esto valga: un host que RECHAZA la lectura no es un worker
   // ausente. No saber no es saber que no esta.
@@ -1902,61 +1207,6 @@ console.log('\nconfig.html: el latido del worker')
     a3.hidden || !/no esta corriendo/.test(a3.textContent), a3.textContent.slice(0, 120))
 }
 
-// ───────── una pestana que aparecio en otro lado es una decision, no un arreglo ─────────
-console.log('\nconfig.html: la linea que se movio de lugar')
-{
-  const FILA = {
-    id: 'web:1', label: 'Soporte', profile: 'perfil-1', state: 'enlazada',
-    pageId: 'pg1', placement: 'proyecto', project: 'donde-aparecio',
-    worktreeId: 'wt-otro', host: 'runtime-A', authorizedChats: 2,
-    homeState: 'mudada',
-    casa: { host: 'runtime-A', donde: 'proyecto', worktreeId: 'wt-casa',
-      proyecto: 'su-casa' }
-  }
-  const { doc } = await montar('config.html',
-    { webLines: { at: new Date().toISOString(), lines: [FILA] } }, 'es-419')
-  const fila = doc.querySelector('#lines-wrap tbody').textContent
-  ok('la fila nombra los DOS lugares, el suyo y donde esta',
-    /su-casa/.test(fila) && /donde-aparecio/.test(fila), fila.slice(0, 220))
-  ok('y ofrece volverla a su lugar', !!doc.querySelector('[data-lhome]'))
-  ok('y ofrece dejarla donde esta', !!doc.querySelector('[data-ladopt]'))
-
-  // Una linea en su casa no ofrece ninguna de las dos: un boton que no corresponde es
-  // tan malo como uno que falta.
-  const sana = await montar('config.html',
-    { webLines: { at: new Date().toISOString(),
-      lines: [Object.assign({}, FILA, { homeState: 'en-casa', casa: null })] } }, 'es-419')
-  ok('una linea en su casa no ofrece mudarse',
-    !sana.doc.querySelector('[data-lhome]') && !sana.doc.querySelector('[data-ladopt]'))
-}
-
-// ───────── una linea de otro Orca no ofrece abrir nada ─────────
-// Su perfil de navegador vive en la otra maquina: escanear un QR aca quemaria un
-// dispositivo vinculado sobre una sesion que este Orca no va a poder leer nunca.
-console.log('\nconfig.html: la linea de otro host')
-{
-  const { doc } = await montar('config.html', {
-    webLines: { at: new Date().toISOString(), lines: [{
-      id: 'web:1', label: 'Soporte', profile: 'perfil-1', state: 'sin-pestana',
-      pageId: null, host: 'runtime-A', authorizedChats: 0, homeState: 'otro-host',
-      casa: { host: 'runtime-B', donde: 'flotante', worktreeId: null, proyecto: null }
-    }] }
-  }, 'es-419')
-  ok('no ofrece abrir ni reabrir una pestana que no puede existir aca',
-    !doc.querySelector('[data-lact]'),
-    doc.querySelector('#lines-wrap tbody').innerHTML.slice(0, 200))
-  ok('pero si deja sacarla', !!doc.querySelector('[data-lrm]'))
-  ok('y explica por que',
-    /otro Orca/.test(doc.querySelector('#lines-wrap tbody').textContent),
-    doc.querySelector('#lines-wrap tbody').textContent.slice(0, 200))
-}
-
-// ───────── el cupo del host no se puede comer el primer clic ─────────
-// El defecto que reporto el usuario: "el primer click no hace nada, el segundo si".
-// Medido: el host admite 30 mensajes por 10 s, el arranque gasta 21 y entrar al panel
-// dispara `focus` -> otra vuelta de 19 = 40 en la misma ventana. El `storage.set` del
-// clic caia en el puesto 31, volvia `rate_limited`, y el panel lo pintaba como "El
-// plugin no contesto. Fijese si Orca sigue abierto".
 console.log('\nconfig.html: el clic contra el cupo del host')
 {
   // La misma ventana deslizante de plugin-panel-message-budget.ts, no una idea de ella.
@@ -1973,27 +1223,20 @@ console.log('\nconfig.html: el clic contra el cupo del host')
     }
   }
   const admite = cupo()
-  const AHORA = new Date().toISOString()
   const { window, doc, storage } = await montar('config.html', {
-    readWeb: 'on',
-    webLines: { at: AHORA, lines: [{ id: 'l1', label: 'Soporte', profile: 'p1',
-      state: 'enlazada', pageId: 'pg1', host: null, casa: null, homeState: 'en-casa',
-      authorizedChats: 0 }] }
+    syncStatus: { ok: false, at: new Date().toISOString(), reason: 'fallo', detail: 'x' }
   }, 'es-419', () => admite())
   await espera()
-  // Entrar al panel desde otra parte de Orca: la ventana toma foco.
+  // Entrar al panel desde otra parte de Orca: la ventana toma foco y gasta cupo.
   window.dispatchEvent(new window.Event('focus'))
   await espera()
-  doc.querySelector('[data-lrm]').click()
-  await espera()
-  doc.querySelector('[data-lyes]').click()
+  doc.getElementById('sync-retry').click()
   await new Promise((r) => setTimeout(r, 400))
   ok('el primer clic deja el pedido escrito, no rechazado',
-    !!storage.webRequest && storage.webRequest.action === 'unlink',
-    JSON.stringify(storage.webRequest))
+    !!storage.syncRequest, JSON.stringify(storage.syncRequest))
   ok('y no le dice al usuario que Orca se cerro',
-    !/no contesto|No pude desvincular/.test(doc.getElementById('lines-error').textContent),
-    doc.getElementById('lines-error').textContent.slice(0, 140))
+    !/error/.test(doc.getElementById('said-sync').textContent),
+    doc.getElementById('said-sync').textContent.slice(0, 140))
 }
 
 // Y si el host frena igual —cobra por su cuenta los pongs del watchdog y el alto del
@@ -2002,33 +1245,25 @@ console.log('\nconfig.html: el clic contra el cupo del host')
 // dos veces.
 console.log('\nconfig.html: un rechazo del host se reintenta, no se reporta')
 {
-  const AHORA = new Date().toISOString()
   let rechazadas = 0
   const { doc, storage } = await montar('config.html', {
-    readWeb: 'on',
-    webLines: { at: AHORA, lines: [{ id: 'l1', label: 'Soporte', profile: 'p1',
-      state: 'enlazada', pageId: 'pg1', host: null, casa: null, homeState: 'en-casa',
-      authorizedChats: 0 }] }
+    syncStatus: { ok: false, at: new Date().toISOString(), reason: 'fallo', detail: 'x' }
   }, 'es-419', (d) => {
-    if (d.action === 'storage.set' && d.params.key === 'webRequest' &&
-        d.params.value.action === 'unlink' && rechazadas < 1) {
+    if (d.action === 'storage.set' && d.params.key === 'syncRequest' && rechazadas < 1) {
       rechazadas += 1
       return { ok: false, errorCode: 'rate_limited', error: 'Too many requests.' }
     }
     return undefined
   })
   await espera()
-  doc.querySelector('[data-lrm]').click()
-  await espera()
-  doc.querySelector('[data-lyes]').click()
+  doc.getElementById('sync-retry').click()
   await new Promise((r) => setTimeout(r, 300))
   ok('el primer rechazo no se pinta como una falla',
-    !/no contesto|No pude desvincular/.test(doc.getElementById('lines-error').textContent),
-    doc.getElementById('lines-error').textContent.slice(0, 140))
+    !/error/.test(doc.getElementById('said-sync').textContent),
+    doc.getElementById('said-sync').textContent.slice(0, 140))
   await new Promise((r) => setTimeout(r, 1600))
   ok('y el pedido sale solo, sin que el usuario apriete de nuevo',
-    rechazadas === 1 && !!storage.webRequest && storage.webRequest.action === 'unlink',
-    `rechazadas=${rechazadas} ${JSON.stringify(storage.webRequest)}`)
+    rechazadas === 1 && !!storage.syncRequest, `rechazadas=${rechazadas} ${JSON.stringify(storage.syncRequest)}`)
 }
 
 // ───────── vinculacion de WhatsApp: el QR (T4) ─────────

@@ -111,14 +111,6 @@ KINDS_CUENTA = ("local", "web")
 # bandeja de un equipo que solo lee por web.
 SIN_FIRMA = ("missing", "live")
 
-# El marcador que deja wa-read cuando la via web no pudo leer el cuerpo de un mensaje.
-# Se reconoce aca y viaja al panel como CODIGO, no como texto crudo: el panel lo dice en
-# el idioma del usuario, y "[web:no-text reason=not-loaded media=image]" en pantalla no
-# es una frase, es una fuga de la herramienta a la cara de quien la usa. El `media=` es
-# ademas la unica senal de que el mensaje traia un adjunto: por la via web no hay ruta,
-# asi que mirar solo `media`/`adjuntos_cerca` nunca marcaba la fila.
-MARCA_WEB = re.compile(r"\[web:no-text reason=([a-z-]+)(?: media=([a-z0-9]+))?\]")
-
 # La tabla del alcance va aparte del resto del esquema porque la migracion a
 # (cuenta, jid) tiene que poder recrearla sola: SQLite no sabe cambiar una primary key.
 CHAT_SCOPE_DDL = """
@@ -545,18 +537,12 @@ def build_activity(con, scope, firma=None):
             if decided.get(m.get("stanza_id"), {}).get("decision") == "ignore":
                 continue
             texto = m.get("text") or ""
-            marca = MARCA_WEB.search(texto)
-            sin_texto = marca.group(1) if marca else None
-            tipo = marca.group(2) if marca else None
             pending.append({"stanzaId": m.get("stanza_id"), "date": m.get("date"),
                             "chat": m.get("chat"), "chatJid": m.get("chat_jid"),
                             "sender": m.get("sender"), "kind": m.get("kind"),
-                            # Con marcador el texto NO viaja: no hay cuerpo que mostrar y
-                            # lo unico que queda es el `@<lid>` que le antepone wa-read.
-                            "text": "" if sin_texto else texto[:160],
-                            "noText": sin_texto, "mediaKind": tipo,
-                            "hasMedia": bool(m.get("media") or m.get("adjuntos_cerca")
-                                             or tipo)})
+                            "text": texto[:160], "mediaKind": m.get("media"),
+                            "hasMedia": bool(m.get("media")
+                                             or m.get("adjuntos_cerca"))})
     except (OSError, ValueError, subprocess.SubprocessError):
         pending = []
 
@@ -631,9 +617,10 @@ def merged_scope(con):
         "select account, chat_jid, chat_name, provider, target, mode, initial_state, "
         "hours, tone, instructions, timezone, notes, updated_at from chat_scope")}
     for jid, e in plugin_store_read().items():
-        # El panel guarda por jid a secas. Mientras la unica linea sea la local eso es
-        # exacto; cuando haya web, la clave del store lleva la cuenta adelante y esta
-        # rama se queda con las de siempre. Ver docs/LECTURA-MULTIFUENTE.md.
+        # El panel guarda por jid a secas. Mientras haya una sola linea eso es exacto;
+        # con varias, la clave del store lleva la cuenta adelante y esta rama se queda
+        # con las de siempre. La llave real es (cuenta, jid) y no el jid solo
+        # (docs/ENCARGO-TRANSPORTE-UNICO.md §11 A1).
         row = {**rows.get(jid, {}), "account": CUENTA_LOCAL, "chat_jid": jid,
                "chat_name": e.get("chatName") or jid,
                "provider": e.get("provider") or "plane",
@@ -997,13 +984,9 @@ DEFAULT_CONFIG = {
     # lunes y parece que no hubo nada. Se elige desde el panel; esto es el arranque.
     "inbox_days": "7",
     "lock_ttl_s": "900",      # cuanto vale el lock antes de considerarse muerto
-    # Cuanto se le espera a una sesion de WhatsApp Web. No sale al panel, como
-    # lock_ttl_s: es el tiempo que tarda una pagina en contestar, no una eleccion.
-    "web_timeout_s": "45",
-    # El almacen de cuerpos que la via web captura al vuelo (~/.wa-inbox/capture.db).
-    # Son topes de retencion de texto ajeno, no de rendimiento, y por eso se pueden
-    # bajar: lo que se desaloja vuelve a salir como `[web:no-text reason=not-loaded]`,
-    # que es un estado que ya existia. No salen al panel, como web_timeout_s.
+    # El almacen de cuerpos de mensajes (~/.wa-inbox/capture.db). Son topes de
+    # retencion de texto ajeno, no de rendimiento, y por eso se pueden bajar sin tocar
+    # el codigo. No salen al panel, como lock_ttl_s.
     "capture_max": "20000",
     "capture_days": "90",
     # Cada cuanto el worker relee WhatsApp. Es el unico momento en que se abre esa
@@ -1016,16 +999,6 @@ DEFAULT_CONFIG = {
     "transcribe_model": "",   # vacio = lo decide la calidad; fijarlo pisa la calidad
     "transcribe_lang": "auto",    # los audios mezclan espanol e ingles
     "transcribe_quality": "optima",  # optima | minima. Minima entra en cualquier equipo.
-    # La base de la app de escritorio manda donde existe: historial completo y no
-    # depende de una sesion que se cae. La web arranca apagada porque cuesta un puesto
-    # de dispositivo enlazado, y eso no se gasta sin que el usuario lo pida.
-    "read_local": "on",
-    "read_web": "off",
-    # El TEXTO que trae la via web, que es una eleccion aparte de leerla. Sin este
-    # arranque el ajuste existia en CONFIG_OPCIONES y en PANEL_SETTINGS pero no en los
-    # efectivos: nunca se listaba en `wa-scope config` ni se espejaba al panel, asi que
-    # el select abria vacio y el CLI no sabia decir en que estaba.
-    "read_web_text": "off",
     "tone": "Espanol neutro latinoamericano. Trata de usted. Formal pero no acartonado. "
             "Sin modismos regionales, sin voseo, sin diminutivos. Frases cortas.",
 }
@@ -1553,9 +1526,6 @@ def cmd_accounts(con, a):
         if not fila:
             sys.exit(f"not removed: there is no line called {a.forget}")
         return [fila]
-    ajustes = merged_settings(con)
-    encendida = {"local": ajustes.get("read_local", "on") != "off",
-                 "web": ajustes.get("read_web", "off") == "on"}
     filas = []
     for r in con.execute("select id, kind, label, profile, enabled, linked_at "
                          "from wa_account order by kind desc, id"):
@@ -1564,7 +1534,11 @@ def cmd_accounts(con, a):
         filas.append({"id": r["id"], "kind": r["kind"],
                       "label": r["label"] or r["id"],
                       "profile": r["profile"],
-                      "enabled": bool(r["enabled"]) and encendida.get(r["kind"], False),
+                      # La linea manda sola. Antes se cruzaba con un interruptor de
+                      # "de donde lee" por tipo de linea; ese interruptor se fue con los
+                      # transportes viejos y dejarlo cruzado seria apagar filas contra
+                      # un ajuste que ya no existe, o sea contra su valor por defecto.
+                      "enabled": bool(r["enabled"]),
                       # Sin esto una linea recien conectada y una caida se leen igual:
                       # las dos vienen apagadas y sin fecha de enlace.
                       "pending": str(r["id"]).startswith(CUENTA_WEB_PENDIENTE),

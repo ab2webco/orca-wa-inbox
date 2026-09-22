@@ -7,7 +7,7 @@
  *
  * La razon de separar esta logica en funciones puras (`decidirTrasCierre`,
  * `mensajeQr`, `qrVencido`): son las cuatro acciones distintas del usuario que
- * describe docs/LECTURA-MULTIFUENTE.md:51-73 -QR pendiente, sesion cerrada, sin
+ * describe docs/ENCARGO-TRANSPORTE-UNICO.md §11 E2 -QR pendiente, sesion cerrada, sin
  * sesion y socket caido son motivos DISTINTOS, no un fallo generico- y un motivo
  * estable es contrato con el panel (bin/wa-read:126-131): cambiar el codigo lo
  * desincroniza en silencio.

@@ -188,27 +188,111 @@ El costo que se advirtió —que el plugin deja de leer hasta que exista el alma
 de mensajes— **ya estaba pagado**: el usuario tenía las dos rutas en `no` y el
 panel mostraba "No hay de donde leer". No se pierde nada que estuviera vivo.
 
-- [ ] `config.html`: quitar la sección "DE DONDE LEE" (`readLocal`, `readWeb`,
-      `readWebText`), la sección "LINEAS CONECTADAS" entera, y el requisito
-      opcional "WhatsApp Web como segunda linea"
-- [ ] `main.mjs`: quitar el despachador de pestañas (`atenderWeb`, `filaVigente`,
-      `veredicto`, `destinoPedido`) y todo lo que importe `web-lines.mjs`
-- [ ] Borrar `web-lines.mjs` completo (506 líneas, 100% transporte)
-- [ ] `bin/wa-scope`, `bin/wa_settings.py`: quitar las tres claves `read_*` y
-      `web_timeout_s`
-- [ ] `orca-plugin.json:7`: la descripción menciona "WhatsApp Web lines"
-- [ ] Tests: quitar o reescribir lo que cubría los transportes; **no dejar nada
-      desactivado**
-- [ ] Archivar `docs/LECTURA-MULTIFUENTE.md` — su contenido ya está en el §11 del
-      encargo
-- [ ] Ruta: **delegada**
-- Commit: —
+- [x] `config.html`: quitadas la sección "DE DONDE LEE" (`readLocal`, `readWeb`,
+      `readWebText`), la sección "LINEAS CONECTADAS" entera con su máquina de
+      estados, y el requisito opcional "WhatsApp Web como segunda linea" (se va
+      solo: el doctor ya no emite el código `web`). 3.201 → 2.014 líneas
+- [x] `main.mjs`: quitado el despachador de pestañas (`atenderWeb`, `filaVigente`,
+      `veredicto`, `destinoPedido`, `refrescarLineas`, las casas, `cuentasWeb`,
+      `orcaCli`) y el sondeo `webLines`/`webRequest`/`webStatus`/`webHomes`.
+      Intactos el latido, `run()`/`runJson()`, `sembrarFuera`, el sidecar de T3 y
+      `resolverCasaOrca` (sigue resolviendo `ORCA_USER_DATA_PATH` para los CLIs).
+      1.249 → 807 líneas
+- [x] `web-lines.mjs` borrado entero (506 líneas)
+- [x] `bin/wa-scope`, `bin/wa_settings.py`: las tres claves `read_*` y
+      `web_timeout_s` fuera de **las cinco** sitios a la vez —`PANEL_SETTINGS`,
+      `CONFIG_OPCIONES`, `CONFIG_NUMERICOS`, `DEFAULT_CONFIG` y la combinación de
+      `cmd_accounts`— que es la cicatriz que documenta `wa_settings.py:5`
+- [x] `bin/wa-read`: borradas `LocalSource` (Core Data) y `WebSource` (eval del
+      navegador) y, con ellas, la capa SQL que sólo esas dos poblaban. Los seis
+      comandos de lectura se **niegan** con código 4 y el motivo estable
+      `no-transport`; `doctor` sigue contestando porque es el único que puede
+      explicar por qué. 2.212 → 197 líneas
+- [x] `bin/wa-send`: borradas la vía de accesibilidad y la vía DOM/Lexical.
+      Sobreviven la firma obligatoria, el rechazo de la ambigüedad
+      (`send-ambiguous-line`), `send-wrong-line` y el despacho por línea; después
+      de todo eso se niega con `send-no-transport`. 724 → 122 líneas
+- [x] `orca-plugin.json:7`: descripción reescrita (enlaza la línea con un QR);
+      `capabilities` sin tocar
+- [x] Tests y chequeos: `scripts/check-clis` 3.510 → 876 líneas,
+      `test/worker.test.mjs` 1.477 → 761, `test/panels.test.mjs` 2.177 → 1.451,
+      `test/shots.mjs` 856 → 546. **Nada desactivado ni comentado**
+- [x] `docs/LECTURA-MULTIFUENTE.md` borrado; las citas que quedaban en código vivo
+      (`sidecar/src/index.js`, `main.mjs`, `bin/wa-scope`, dos pruebas) apuntan
+      ahora a `docs/ENCARGO-TRANSPORTE-UNICO.md §11`
+- [x] Ruta: **delegada** para la exploración (4 mapeos en paralelo), escritura
+      inline con verificación por etapa
+- Commit: — (instrucción explícita de no commitear)
 
-**Defecto a arreglar de paso:** el panel muestra en español un texto en inglés
-del CLI —"both routes are off: turn the desktop app or WhatsApp Web back on"—
-porque no lo traduce por código. Es justo el fallo que las capturas en dos
-idiomas existen para delatar (`test/shots.mjs:39-44`). Se va con la sección, pero
-conviene comprobar que no quede ningún otro código sin traducir.
+**El contrato nuevo, que es lo único que se agregó:** `no-transport` (wa-read,
+salida 4) y `send-no-transport` (wa-send). Un motivo propio y no un fallo genérico
+porque la acción del usuario es distinta: no es reintentar ni revisar la
+conversación, es esperar al almacén de mensajes (§11 E2). Negarse es el punto —
+una lista vacía se lee como "no hay nada que atender", que es lo contrario de "no
+puedo leer nada" (`bin/wa-read`, E5).
+
+**Defecto arreglado, y dos más que apareció barriendo.** El pedido era el texto en
+inglés *"both routes are off: turn the desktop app or WhatsApp Web back on"* en un
+panel en español. Se fue con su sección, pero el barrido de códigos encontró que la
+causa seguía viva:
+
+1. El panel pintaba `salud.detail` **crudo** siempre. Sirve cuando el detalle es un
+   dato —una ruta, un tamaño, un error de proceso— y miente cuando es una frase.
+   Ahora el código manda si el panel lo conoce (`HEALTH_HOW_KEY`) y el crudo queda
+   de respaldo. `hNoTransportHow` en `es`/`en`/`pt`.
+2. **`sin-herramientas` no estaba en `HEALTH_KEY`.** Lo escribe el worker, no el
+   CLI, y por eso nadie lo había mirado: cuando las herramientas no contestaban, el
+   panel en español mostraba *"the plugin tools did not answer"*. Agregado
+   `hNoTools` en los tres idiomas.
+3. Códigos muertos que el CLI ya no emite y que el panel seguía sabiendo traducir
+   (`system`, `whatsapp`, `database`, `readable`, `sqlite3`, `send`, `fulldisk`,
+   los doce `web-*` y `local-covered-by-web`): fuera de las tablas, con sus 117
+   cadenas huérfanas en los tres idiomas.
+
+**Decisión de producto tomada en el camino:** `no-transport` **bloquea**
+(`health.ok:false`, y `wa-scope pending` sale con 2) pero **no saca notificación**.
+Bloquear es honesto —una bandeja siempre vacía se lee como una semana tranquila—
+pero una notificación es para lo que tiene acción, y esto no la tiene: lo arregla
+la rebanada que falta. Una notificación en cada arranque de cada máquina por algo
+que nadie puede arreglar es como se enseña a ignorarlas. El motivo sí va al log
+siempre. Cubierto por dos pruebas, una de cada lado.
+
+**Evidencia (TDD real, RED observado antes de implementar):**
+
+- **CLIs.** Se escribió primero `revisa_sin_transporte` en `scripts/check-clis`
+  (36 comprobaciones). Contra el código viejo: **19 fallas** —
+  `wa-read inbox` salía 1 con `local-unavailable` en vez de 4 con `no-transport`,
+  `state` salía 0 y escribía en stdout, el doctor no traía el renglón y seguía
+  nombrando `whatsapp web`/`read_web`/`read_local`/`desktop app`, y `wa-send`
+  reventaba con un traceback. Con la implementación: **36/36**.
+- **Manifiesto.** La prueba nueva falló con
+  `the description still promises "WhatsApp Web", which the plugin no longer does`
+  antes de reescribir la descripción. Después: **2/2**.
+- **Worker.** La prueba de la notificación se corrió con el filtro
+  (`accionables`) revertido a mano: **76/77**, con
+  `FALLA y no saca una notificacion por algo que el usuario no puede arreglar —
+  [{"title":"WhatsApp Inbox needs something else",...}]`. Restaurado: **77/77**.
+
+**Verificación (orden canónico, todo en verde):**
+`check-panels` · `check-voseo` (27 archivos) · `check-prompts` (17) ·
+`check-harness` (25) · `check-closing` (36/36) · `check-clis` (8 CLI, 134
+comprobaciones) · `manifest` 2/2 · `worker` 77/77 · `panels` 221/221 ·
+`sidecar-build` 5/5 · `sidecar-pairing` 25/25 · `npm run shots` **192 capturas,
+sin desbordes, sin errores de JS y con los select legibles**.
+
+**Evidencia visual (regla del proyecto), miradas:** `config` en es/en, claro y
+oscuro, a **1440, 768, 390 y 320** — el panel queda con requisitos, vinculación por
+QR, agente, tono, transcripción, conversaciones y reglas, **sin encabezados vacíos
+ni huecos** donde estaban las dos secciones. `config-sin-transporte` (nuevo, a los
+cuatro anchos y en los dos idiomas) muestra la alerta entera en el idioma del
+panel: en es-419 *"Todavia no hay de donde leer mensajes — Las dos vias viejas…
+Enlace su linea con el codigo QR de aca arriba"*, en en-US el equivalente, **sin
+una palabra del CLI sin traducir**. `config-sidecar-qr` sigue legible con fondo
+blanco y zona de quietud en tema oscuro.
+
+**Fuera de alcance, y queda pendiente:** `docs/el-plugin-whatsapp-inbox.html`
+(documento de presentación) sigue describiendo las dos vías viejas. No es código,
+no lo lee el plugin y ningún chequeo lo valida más allá del voseo.
 
 ### T7 — Defecto: el resolvedor del auth dir tenía un solo código para tres fallas
 
@@ -284,11 +368,22 @@ deja el panel vacío y mudo) · `scripts/check-voseo` sobre toda cadena nueva
 
 ## Progreso
 
-**Estado:** T1, T2, T3 y T4 cerradas con pruebas en verde y evidencia visual mirada.
-Sin commitear (working tree para review, según instrucción explícita — T3/T4 tampoco
-se commitearon, instrucción explícita de este pedido).
+**Estado:** T1, T2, T3, T4, T6 y T7 cerradas con pruebas en verde y evidencia visual
+mirada. T5 sigue pendiente: requiere un teléfono real y el panel de ajustes. Sin
+commitear (working tree para review, según instrucción explícita).
 
-**Evidencia de esta rebanada:**
+**Lo que quedó de T6, en números:** `web-lines.mjs` y `docs/LECTURA-MULTIFUENTE.md`
+borrados; `bin/wa-read` 2.212 → 197, `bin/wa-send` 724 → 122, `main.mjs` 1.249 → 807,
+`config.html` 3.201 → 2.014, `scripts/check-clis` 3.510 → 876, `test/worker.test.mjs`
+1.477 → 761, `test/panels.test.mjs` 2.177 → 1.451, `test/shots.mjs` 856 → 546.
+
+**Advertencia honesta:** hasta que exista el almacén de mensajes, el plugin **no lee**.
+`health.ok` es `false` con `no-transport`, `wa-scope pending` bloquea las dos
+automatizaciones con ese mismo código, y la lista de conversaciones del panel queda
+vacía porque `wa-scope` no tiene a quién preguntarle. Eso es lo acordado y está dicho
+en voz alta en los tres idiomas; no es una regresión silenciosa.
+
+**Evidencia de T1/T2:**
 
 - `../.orca-wa-inbox-deps/package-lock.json`: `libsignal@6.0.0` con `integrity`
   (`sha512-d/5V3YFtDljbFMufz4ncyUYGYhJl+...`), `@whiskeysockets/baileys@6.7.24`
@@ -338,4 +433,6 @@ se commitearon, instrucción explícita de este pedido).
 usuario de no validar por terminal — ver T5 arriba): persistencia de sesión tras
 reinicio de Orca, y reconexión tras suspender/despertar la máquina.
 
-**Siguiente paso:** T5 — emparejar de verdad, desde el panel, con un teléfono real.
+**Siguiente paso:** T5 — emparejar de verdad, desde el panel, con un teléfono
+real. Después, el almacén de mensajes: es lo único que separa al plugin de volver a
+leer.
