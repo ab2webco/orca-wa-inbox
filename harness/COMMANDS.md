@@ -67,9 +67,17 @@ prompt resolves the path instead of assuming it — and why `PATH` is not truste
 on someone else's machine the tools are not there, and a `PATH` hit may be an old copy
 from another tree, reading another database.
 
+When several copies are installed, the one that wins is the highest **version** in
+`orca-plugin.json` — never the one installed most recently, which is not the same thing:
+a 3.0.1 downloaded today is still older than a 3.13.0 from last week. A registered dev
+path with a usable `bin/` wins over every installed copy, which is the point of dev mode.
+The pre-rename identity `ab2web.wa-inbox` is not resolved at all: that build sends
+WhatsApp by driving the desktop app, a path this plugin removed, so running it is not
+running an old version, it is running another product.
+
 If the resolution comes back empty, or `"$WA/wa-scope"` is not executable, **stop and
 say so in one line**. Better a run that did nothing and said so than one that worked on
-another tree's data.
+another tree's data — or one that sent a real message through code that was deleted.
 
 ## Reference
 

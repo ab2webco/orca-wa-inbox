@@ -34,12 +34,14 @@ OTROS = ["main.mjs", "harness.mjs", "README.md",
          "automations/README.md", "docs/ESCRIBIR-UN-PLUGIN.md",
          "docs/el-plugin-whatsapp-inbox.html",
          "test/manifest.test.mjs", "test/panels.test.mjs", "test/worker.test.mjs",
+         "test/resolver.test.mjs",
          "test/shots.mjs", "test/sidecar-build.test.mjs", "test/sidecar-pairing.test.mjs",
          "test/sidecar-mensajes.test.mjs", "test/almacen.test.mjs",
          "sidecar/src/index.js", "sidecar/src/mensajes.js", "sidecar/src/almacen.js",
          "sidecar/src/ingesta.js", "sidecar/src/alcance.js",
          "sidecar/build.mjs", "sidecar/resolve-auth-dir.mjs",
-         "scripts/check-clis", "scripts/check-closing",
+         "scripts/check-clis", "scripts/check-closing", "scripts/check-resolver",
+         "scripts/resolver.py",
          "scripts/check-harness", "scripts/check-panels", "scripts/check-prompts"]
 
 # scripts/voseo.py y este mismo archivo nombran las formas prohibidas a proposito:
