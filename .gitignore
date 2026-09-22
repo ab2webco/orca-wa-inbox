@@ -17,3 +17,6 @@ docs/capturas-dev/
 # propietario a la vista. Vive en el repo de trabajo hasta que se decida si se
 # republica sin esa imagen.
 docs/evidencia-visual-panel.html
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
