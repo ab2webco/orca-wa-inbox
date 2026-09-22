@@ -438,14 +438,19 @@ export function envSinValla (env = process.env) {
 function resolverAuthDir(pluginDir) {
   const guion = join(pluginDir, 'sidecar', 'resolve-auth-dir.mjs')
   return new Promise((resolve) => {
-    const noContesto = (error) => resolve({ ok: false, dir: null,
+    // El detalle se corta largo y a proposito. Con 300 caracteres el mensaje util
+    // quedaba fuera: los primeros doscientos los gasta el SecurityWarning que Node
+    // imprime sobre `--allow-child-process`, y lo que de verdad fallo venia despues.
+    // Un detalle que se trunca antes del error no es un detalle, es ruido.
+    const noContesto = (error, stderr = '') => resolve({ ok: false, dir: null,
       reason: motivoDeCrudo(error),
-      detail: String(error?.message ?? '').slice(0, 300) })
+      detail: [String(error?.message ?? ''), String(stderr ?? '')]
+        .filter(Boolean).join(' | ').slice(0, 1200) })
     try {
       execFile(process.execPath, [guion, pluginDir],
         { timeout: 15000, maxBuffer: 1024 * 1024,
           env: { ...envSinValla(), ELECTRON_RUN_AS_NODE: '1' } },
-        (error, stdout) => {
+        (error, stdout, stderr) => {
           try {
             const estado = JSON.parse(stdout || 'null')
             if (estado && typeof estado === 'object') { resolve(estado); return }
@@ -453,7 +458,7 @@ function resolverAuthDir(pluginDir) {
             // Cae al motivo de abajo: un stdout que no es JSON es tan fallo como un
             // exit distinto de cero.
           }
-          noContesto(error ?? new Error(String(stdout ?? '').slice(0, 300)))
+          noContesto(error ?? new Error('el resolvedor no contesto JSON'), stderr)
         })
     } catch (error) {
       // La valla de permisos de Node no contesta por callback: `execFile` LANZA en el
