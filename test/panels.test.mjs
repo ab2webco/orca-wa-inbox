@@ -797,7 +797,7 @@ console.log('\nel codigo del CLI, dicho en el idioma del panel')
   const alertaEs = es.doc.getElementById('alert').textContent
   const opcionalEs = es.doc.getElementById('opcionales').textContent
   ok('el problema de salud se dice en espanol, no como lo escribio el CLI',
-    alertaEs.includes('Todavia no hay de donde leer mensajes'), alertaEs)
+    alertaEs.includes('Enlace su linea de WhatsApp'), alertaEs)
   ok('el requisito opcional tambien',
     opcionalEs.includes('Transcripcion de audio') && opcionalEs.includes('Ajustes > Voz'),
     opcionalEs)
@@ -808,9 +808,14 @@ console.log('\nel codigo del CLI, dicho en el idioma del panel')
   // Este detalle es una FRASE, no un dato crudo, asi que se traduce por codigo. Es el
   // defecto que se arreglo de paso: el panel pintaba "both routes are off: turn the
   // desktop app or WhatsApp Web back on" en ingles, en un panel en espanol.
+  // El texto le habla a quien instala el plugin hoy: no menciona las vias viejas ni
+  // nuestro calendario de entregas. Quien lo lee nunca conocio ninguna de las dos, y
+  // "llega con la proxima entrega" es informacion nuestra, no suya.
   ok('y el detalle, cuando es una frase, tambien se dice en espanol',
-    alertaEs.includes('Enlace su linea con el codigo QR') &&
-    !/sidecar that replaces them/.test(alertaEs), alertaEs)
+    alertaEs.includes('Escanee el codigo de aca arriba') &&
+    !/sidecar/i.test(alertaEs), alertaEs)
+  ok('el aviso no le cuenta al usuario nuestro historial ni nuestro calendario',
+    !/vias viejas|proxima entrega|sidecar/i.test(alertaEs), alertaEs)
 
   // Y el detalle que SI es dato crudo —una ruta, un tamano, un error de proceso— se
   // sigue mostrando tal cual: traducirlo seria perderlo.
@@ -829,7 +834,7 @@ console.log('\nel codigo del CLI, dicho en el idioma del panel')
   const pt = await montar('config.html', { health: salud }, 'pt-BR')
   await espera()
   ok('y en portugues tambien',
-    pt.doc.getElementById('alert').textContent.includes('Ainda nao ha de onde ler') &&
+    pt.doc.getElementById('alert').textContent.includes('Vincule a sua linha') &&
     pt.doc.getElementById('opcionales').textContent.includes('Transcricao de audio'),
     pt.doc.getElementById('opcionales').textContent)
 
@@ -837,7 +842,7 @@ console.log('\nel codigo del CLI, dicho en el idioma del panel')
   await espera()
   ok('en ingles dice lo mismo que la terminal',
     en.doc.getElementById('alert').textContent
-      .includes('There is nothing to read messages from yet'),
+      .includes('Link your WhatsApp line'),
     en.doc.getElementById('alert').textContent)
 
   // Un codigo que este panel no conozca todavia no puede dejar el aviso vacio: se
