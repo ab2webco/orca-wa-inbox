@@ -544,8 +544,8 @@
           syncTimeout: "La lectura de WhatsApp tardo demasiado y se corto.",
           syncNoRecord: "Las herramientas corrieron pero no dejaron nada escrito.",
           syncFailed: "No pude leer WhatsApp.",
-          syncNoChats: "No encontre ninguna conversacion. Abra WhatsApp Desktop una " +
-            "vez, espere a que cargue sus chats, y vuelva a intentar.",
+          syncNoChats: "No encontre ninguna conversacion. Enlace su linea de " +
+            "WhatsApp aca arriba y vuelva a intentar.",
           syncStalled: "Llevo un rato buscando y no llego nada.",
           sub: 'Que conversaciones ve su agente, y hasta donde puede actuar en cada una.',
           agentLegend: 'Su agente', agentLabel: 'Como se llama',
@@ -610,6 +610,9 @@
           hNoTransportHow: 'Escanee el codigo de aca arriba con el telefono de la ' +
             'linea que quiere usar. Hasta que lo haga, su agente no ve ninguna ' +
             'conversacion.',
+          hNoTransportLinked: 'Su linea esta enlazada',
+          hNoTransportLinkedHow: 'Leer las conversaciones todavia no esta disponible. ' +
+            'No hace falta que haga nada mas.',
           hTranscribe: 'Transcripcion de audio',
           hUnknown: 'No se pudo verificar el estado',
           howTranscribeMissingTool: 'Falta bin/wa-transcribe dentro del plugin',
@@ -705,8 +708,8 @@
           syncTimeout: "Reading WhatsApp took too long and was cut off.",
           syncNoRecord: "The tools ran but wrote nothing.",
           syncFailed: "I could not read WhatsApp.",
-          syncNoChats: "I found no conversations. Open WhatsApp Desktop once, wait " +
-            "for your chats to load, and try again.",
+          syncNoChats: "I found no conversations. Link your WhatsApp line above " +
+            "and try again.",
           syncStalled: "I have been looking for a while and nothing arrived.",
           sub: 'Which conversations your agent sees, and how far it can act in each one.',
           agentLegend: 'Your agent', agentLabel: 'What it is called',
@@ -770,6 +773,9 @@
           hNoTransport: 'Link your WhatsApp line',
           hNoTransportHow: 'Scan the code above with the phone of the line you want ' +
             'to use. Until you do, your agent sees no conversations.',
+          hNoTransportLinked: 'Your line is linked',
+          hNoTransportLinkedHow: 'Reading conversations is not available yet. ' +
+            'There is nothing else for you to do.',
           hTranscribe: 'Audio transcription',
           hUnknown: 'Could not check the status',
           howTranscribeMissingTool: 'bin/wa-transcribe is missing from the plugin',
@@ -822,6 +828,9 @@
         hNoTransport: 'Vincule a sua linha do WhatsApp',
         hNoTransportHow: 'Escaneie o codigo acima com o telefone da linha que voce ' +
           'quer usar. Ate fazer isso, o seu agente nao ve nenhuma conversa.',
+        hNoTransportLinked: 'A sua linha esta vinculada',
+        hNoTransportLinkedHow: 'Ler as conversas ainda nao esta disponivel. Voce nao ' +
+          'precisa fazer mais nada.',
         hTranscribe: 'Transcricao de audio',
         hUnknown: 'Nao foi possivel verificar o estado',
         howTranscribeMissingTool: 'Falta bin/wa-transcribe dentro do plugin',
@@ -893,8 +902,8 @@
         syncTimeout: 'A leitura do WhatsApp demorou demais e foi cortada.',
         syncNoRecord: 'As ferramentas rodaram mas nao escreveram nada.',
         syncFailed: 'Nao consegui ler o WhatsApp.',
-        syncNoChats: 'Nao encontrei nenhuma conversa. Abra o WhatsApp Desktop uma vez, ' +
-          'espere seus chats carregarem, e tente de novo.',
+        syncNoChats: 'Nao encontrei nenhuma conversa. Vincule a sua linha do ' +
+          'WhatsApp acima e tente de novo.',
         syncStalled: 'Faz um tempo que procuro e nada chegou.',
         chatSearchPh: 'Digite para filtrar',
         chatCount: '{n} de {total}', chatNoMatch: 'Nada corresponde a isso',
@@ -1957,6 +1966,17 @@
               // respaldo para uno que este panel todavia no sepa decir.
               var c = porCodigo(HEALTH_HOW_KEY, salud.problemCode,
                 salud.detail ? esc(salud.detail) : t('notReadyHow'))
+              // `no-transport` es cierto en dos situaciones que le piden al usuario
+              // cosas opuestas: sin linea enlazada tiene algo que hacer -escanear-, y
+              // con la linea ya enlazada no tiene nada que hacer. Pedirle que enlace
+              // una linea que YA enlazo, justo encima de un "WhatsApp esta conectado",
+              // es un panel discutiendo consigo mismo.
+              var sc = v('sidecar')
+              if (salud.problemCode === 'no-transport' &&
+                  hayRespuesta(sc) && sc && sc.connection === 'open') {
+                q = esc(t('hNoTransportLinked'))
+                c = esc(t('hNoTransportLinkedHow'))
+              }
               showAlert(q, c)
             }
             else if (hayRespuesta(salud) && salud) el('alert').hidden = true

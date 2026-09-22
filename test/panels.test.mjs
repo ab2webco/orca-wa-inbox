@@ -372,7 +372,10 @@ console.log('\nconfig.html')
   ok('un sync bueno sin conversaciones no se cuenta como error',
     !sinNada.doc.getElementById('sync-state').hidden &&
     !sinNada.doc.getElementById('sync-retry').hidden &&
-    /WhatsApp Desktop/.test(sinNada.doc.getElementById('sync-msg').textContent),
+    // Ya no manda a abrir la app de escritorio, que no existe en este plugin: manda
+    // a lo unico que el usuario puede hacer, que es enlazar su linea.
+    /Link your WhatsApp line|Enlace su linea/.test(
+      sinNada.doc.getElementById('sync-msg').textContent),
     `sync-msg = ${JSON.stringify(sinNada.doc.getElementById('sync-msg').textContent)}`)
 
   // La razon de todo esto: si el panel manda a correr un comando, la funcion no existe.
