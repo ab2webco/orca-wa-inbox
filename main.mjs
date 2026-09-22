@@ -9,7 +9,7 @@
  * `wa-send`), que ya resuelven el WAL, el epoch de Core Data y la resolucion de LIDs.
  * Duplicar esa logica aca seria tener dos verdades que se desincronizan.
  */
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -41,6 +41,10 @@ const BEAT_KEY = 'workerBeat'
 // mismo camino que usan Tomar/Ignorar con `decisions`.
 const REQUEST_KEY = 'syncRequest'
 const CHATS_KEY = 'chats'
+// El estado del sidecar de Baileys (T3): conexion, ultimo QR con su `ts`, y el
+// motivo cuando algo no llega a hablar. El panel dibuja el QR desde aca
+// (docs/ENCARGO-TRANSPORTE-UNICO.md §6-7); es el UNICO canal, igual que el resto.
+const SIDECAR_KEY = 'sidecar'
 // Las lineas de WhatsApp Web: el panel deja el pedido en una clave y lee el estado en
 // la otra. Misma via que el sync — un panel no puede ejecutar nada, y enlazar una linea
 // es justamente ejecutar cuatro comandos.
@@ -53,8 +57,13 @@ const WEB_LINES_KEY = 'webLines'
 const WEB_STATUS_KEY = 'webStatus'
 const MODES = ['off', 'observar', 'borrador', 'responder']
 
-/** El nombre del agente lo define quien usa el plugin. No viene con uno puesto. */
-const DEFAULT_SETTINGS = { agentName: '', signMessages: true, toolsDir: TOOLS }
+/** El nombre del agente lo define quien usa el plugin. No viene con uno puesto.
+ *
+ *  `sidecarPath` es interno, como `toolsDir`: no lo pisa el usuario, existe para que
+ *  las pruebas puedan apuntar el lanzamiento del sidecar a un guion de mentira en vez
+ *  del bundle real de Baileys. */
+const DEFAULT_SETTINGS = { agentName: '', signMessages: true, toolsDir: TOOLS,
+  sidecarPath: join(PLUGIN_DIR, 'sidecar', 'sidecar.cjs') }
 
 /** Corre `wa-read doctor` y avisa por notificacion si algo falta. */
 async function checkSystem(orca, toolsDir = TOOLS) {
@@ -709,6 +718,149 @@ function sembrarFuera(toolsDir) {
   })
 }
 
+/** Motivos ESTABLES para cuando el sidecar no llega a hablar: el panel los traduce
+ *  por codigo, nunca por texto (docs/ENCARGO...§11-E1: "cambiar el texto no rompe
+ *  nada; renombrar el codigo desincroniza el panel en silencio"). Son del WORKER -que
+ *  el sidecar no arranco, o que se cayo estando vivo- y se distinguen del `MOTIVO` que
+ *  exporta `sidecar/src/index.js`, que es del socket de WhatsApp y no del proceso. */
+const SIDECAR_MOTIVO = Object.freeze({
+  SIN_AUTHDIR: 'sidecar-sin-authdir',
+  NO_ARRANCO: 'sidecar-no-arranco',
+  CAYO: 'sidecar-cayo'
+})
+
+/** Donde vive el auth state del sidecar, preguntado a un subproceso.
+ *
+ *  El worker no lo puede resolver el mismo: su valla de permisos solo declara
+ *  `--allow-fs-read` sobre la raiz del plugin y la carpeta del host
+ *  (docs/ENCARGO...§1), nunca sobre el userData de Orca, asi que `existsSync` ahi
+ *  adentro lanza en vez de contestar. Mismo patron que `resolverCasaOrca` y
+ *  `sembrarFuera`: la decision se hace del otro lado, sin la valla. */
+function resolverAuthDir(pluginDir) {
+  const guion = join(pluginDir, 'sidecar', 'resolve-auth-dir.mjs')
+  return new Promise((resolve) => {
+    execFile(process.execPath, [guion, pluginDir],
+      { timeout: 15000, maxBuffer: 1024 * 1024,
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } },
+      (error, stdout) => {
+        try {
+          const estado = JSON.parse(stdout || 'null')
+          if (estado && typeof estado === 'object') { resolve(estado); return }
+        } catch {
+          // Cae al motivo de abajo: un stdout que no es JSON es tan fallo como un
+          // exit distinto de cero.
+        }
+        resolve({ ok: false, dir: null, reason: error ? motivoDe(error) : 'fallo',
+          detail: String(error?.message ?? stdout ?? '').slice(0, 300) })
+      })
+  })
+}
+
+/**
+ * Lanza el sidecar de Baileys y espeja su protocolo JSON-lines a storage, que es el
+ * UNICO canal con el panel (docs/ENCARGO...§6). Consume el contrato que define
+ * `sidecar/src/index.js` -`type: 'qr'|'connection'|'error'`, siempre con `ts` en el
+ * QR- tal cual llega: no lo redefine.
+ *
+ * Devuelve una funcion para apagarlo a proposito. Si el proceso muere solo -crash, o
+ * nunca llega a arrancar- el motivo llega a storage con un CODIGO ESTABLE y no solo
+ * texto libre: un camino de falla que ninguna prueba recorre es un camino que nadie
+ * sabe si existe (mismo principio que `sync`, arriba, aplicado a un proceso que corre
+ * indefinidamente en vez de una corrida puntual).
+ */
+export function lanzarSidecar({ orca, scriptPath, authDir, spawnFn = spawn, env = process.env }) {
+  let estado = { at: new Date().toISOString(), connection: null, qr: null,
+    motivo: null, statusCode: null, error: null, exited: false,
+    startedAt: new Date().toISOString() }
+  const escribir = (parcial) => {
+    estado = { ...estado, ...parcial, at: new Date().toISOString() }
+    return guardar(orca, SIDECAR_KEY, estado)
+  }
+
+  let detenidoPorWorker = false
+  let proceso
+  try {
+    proceso = spawnFn(process.execPath, [scriptPath], {
+      // Mismo patron que `sembrarFuera`: el worker es el helper de Electron, y sin
+      // esto arrancaria una ventana en vez de un Node piano. El sidecar NO adivina el
+      // directorio de auth (sidecar/src/index.js): llega por env, nunca por argv, para
+      // que el contrato viva en un solo lugar.
+      env: { ...env, ELECTRON_RUN_AS_NODE: '1', WA_SIDECAR_AUTH_DIR: authDir },
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+  } catch (error) {
+    escribir({ exited: true, motivo: SIDECAR_MOTIVO.NO_ARRANCO,
+      error: { code: SIDECAR_MOTIVO.NO_ARRANCO,
+        detail: String(error?.message ?? error).slice(0, 300) } })
+    return () => {}
+  }
+
+  escribir({ connection: 'connecting' })
+
+  // El protocolo es un objeto JSON por linea (sidecar/src/index.js:7-8): un chunk de
+  // stdout no respeta los saltos de linea, asi que lo que no cierra en `\n` se guarda
+  // para la proxima vuelta en vez de intentar parsearlo a medias.
+  let restante = ''
+  proceso.stdout.on('data', (chunk) => {
+    restante += chunk.toString('utf8')
+    const lineas = restante.split('\n')
+    restante = lineas.pop() ?? ''
+    for (const linea of lineas) {
+      if (!linea.trim()) continue
+      let mensaje
+      try {
+        mensaje = JSON.parse(linea)
+      } catch {
+        // El sidecar solo emite JSON por stdout: una linea que no lo es no es parte
+        // del protocolo. Se deja rastro y se sigue — cortarlo por una linea rara
+        // perderia la sesion por algo que no era del socket.
+        orca.log(`sidecar stdout no es JSON: ${linea.slice(0, 200)}`)
+        continue
+      }
+      if (mensaje?.type === 'qr') {
+        escribir({ qr: { qr: mensaje.qr, ts: mensaje.ts, rotation: mensaje.rotation } })
+      } else if (mensaje?.type === 'connection') {
+        escribir({
+          connection: mensaje.state ?? null,
+          motivo: mensaje.motivo ?? null,
+          statusCode: mensaje.statusCode ?? null,
+          // Al abrir se descarta el QR: uno vencido no tiene por que seguir pintado
+          // detras de una sesion ya conectada (docs/ENCARGO...§6).
+          ...(mensaje.state === 'open' ? { qr: null } : {})
+        })
+      } else if (mensaje?.type === 'error') {
+        escribir({ error: { code: mensaje.code ?? null,
+          detail: String(mensaje.detail ?? '').slice(0, 300) } })
+      }
+    }
+  })
+
+  proceso.stderr.on('data', (chunk) => {
+    orca.log(`sidecar stderr: ${chunk.toString('utf8').trim().slice(0, 300)}`)
+  })
+
+  proceso.on('error', (error) => {
+    escribir({ exited: true, motivo: SIDECAR_MOTIVO.NO_ARRANCO,
+      error: { code: SIDECAR_MOTIVO.NO_ARRANCO,
+        detail: String(error?.message ?? error).slice(0, 300) } })
+  })
+
+  proceso.on('exit', (code, signal) => {
+    // Que el worker lo haya apagado a proposito no es una caida: `apagar()` marca esta
+    // bandera ANTES de matarlo. Sin la distincion, un apagado normal del plugin se
+    // veia igual que un crash del sidecar en el panel.
+    if (detenidoPorWorker) return
+    escribir({ exited: true, motivo: SIDECAR_MOTIVO.CAYO,
+      error: { code: SIDECAR_MOTIVO.CAYO,
+        detail: `sidecar exited (code ${code ?? 'null'}, signal ${signal ?? 'null'})` } })
+  })
+
+  return () => {
+    detenidoPorWorker = true
+    if (proceso && !proceso.killed) proceso.kill()
+  }
+}
+
 // Cada cuanto late el worker, y a partir de cuando el panel lo da por ido. El panel
 // relee cada 8 s, asi que 5 s de latido y 30 s de tolerancia no marcan muerto a un
 // worker que solo estaba ocupado en una llamada de 30 s a la CLI de Orca.
@@ -725,6 +877,13 @@ export default function activate(orca) {
   latir()
   const latidoTimer = setInterval(latir, LATIDO_MS)
   if (typeof latidoTimer.unref === 'function') latidoTimer.unref()
+
+  // Declarado ACA arriba, y no mas abajo junto a `syncTimer`: lo necesitan tambien las
+  // cadenas asincronas de mas arriba -el sidecar entre ellas-, y sin la bandera un
+  // `apagar()` que llega antes de que una de esas termine dejaria un proceso lanzado
+  // DESPUES de que el plugin ya dijo que se apagaba.
+  let detenido = false
+  let apagarSidecar = () => {}
 
   const dirHerramientas = async () => (await settings()).toolsDir || TOOLS
 
@@ -766,6 +925,31 @@ export default function activate(orca) {
     })
     .catch((error) => orca.log(`harness failed: ${error.message}`))
 
+  // El sidecar de Baileys (T3): el UNICO transporte de esta rebanada. El directorio de
+  // auth se resuelve en un subproceso -mismo motivo que el arnes, arriba: el worker no
+  // puede leer el userData- y recien con eso se lanza. `sidecarPath` sale de settings
+  // para que las pruebas lo apunten a un guion de mentira; en producción nunca se pisa
+  // y cae al bundle real (`DEFAULT_SETTINGS.sidecarPath`).
+  settings()
+    .then(async (s) => {
+      if (detenido) return
+      const resuelto = await resolverAuthDir(PLUGIN_DIR)
+      if (detenido) return
+      if (!resuelto.ok || !resuelto.dir) {
+        await guardar(orca, SIDECAR_KEY, {
+          at: new Date().toISOString(), connection: null, qr: null,
+          motivo: SIDECAR_MOTIVO.SIN_AUTHDIR, statusCode: null,
+          error: { code: SIDECAR_MOTIVO.SIN_AUTHDIR,
+            detail: resuelto.detail || 'could not resolve the auth directory' },
+          exited: true, startedAt: new Date().toISOString()
+        })
+        orca.log(`sidecar not started (${SIDECAR_MOTIVO.SIN_AUTHDIR}): ${resuelto.detail || ''}`)
+        return
+      }
+      apagarSidecar = lanzarSidecar({ orca, scriptPath: s.sidecarPath, authDir: resuelto.dir })
+    })
+    .catch((error) => orca.log(`sidecar launch failed: ${error.message}`))
+
   // Y traer las conversaciones ya: en una instalacion nueva el panel arranca vacio y
   // el usuario no tiene de donde sacarlas.
   sincronizar('activate').catch((error) => orca.log(`first sync failed: ${error.message}`))
@@ -773,7 +957,6 @@ export default function activate(orca) {
   // Se reprograma en cada vuelta en vez de fijar el intervalo una sola vez: es el
   // ajuste que acota cuanto tarda un mensaje en llegarle al precheck, y cambiarlo en
   // el panel tiene que valer ya, no al proximo arranque de Orca.
-  let detenido = false
   let syncTimer = null
   async function programarSync() {
     if (detenido) return
@@ -997,12 +1180,15 @@ export default function activate(orca) {
   })
 
   // Al desactivar el plugin los timers se van con el: si no, siguen leyendo WhatsApp
-  // despues de que el usuario dijo que no.
+  // despues de que el usuario dijo que no. El sidecar tambien: el grupo de procesos ya
+  // lo mata Orca si el WORKER muere entero (docs/ENCARGO...§2), pero un apagado
+  // normal del plugin no mata al worker, asi que aca se lo pide explicito.
   return () => {
     detenido = true
     clearTimeout(syncTimer)
     clearInterval(pedidoTimer)
     clearInterval(webTimer)
     clearInterval(latidoTimer)
+    apagarSidecar()
   }
 }

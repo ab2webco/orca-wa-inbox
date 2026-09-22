@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Fotografia los dos paneles y deja los PNG en docs/capturas/.
+// Fotografia los dos paneles y deja los PNG en ../.orca-wa-inbox-capturas/.
 //
 // Existe porque un panel puede pasar los 35 tests y verse roto: el que se entrego
 // con 12 px de ancho los pasaba. Los tests dicen que los handlers responden; esto
@@ -26,7 +26,13 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..')
-const SALIDA = join(RAIZ, 'docs', 'capturas')
+// Las capturas viven FUERA de la raiz del plugin, igual que las dependencias del
+// arnes y por la misma razon: Orca hashea todo lo que hay bajo la raiz y rechaza
+// el arbol entero si pasa de 50 MB, sin decir cual archivo sobra. Con las
+// capturas adentro, correr este mismo arnes dejaba el plugin en "No valido" —
+// 328 PNG son 207 MB — y el sintoma aparecia en Orca, lejos de la causa. La
+// verificacion no puede romper lo que verifica.
+const SALIDA = join(RAIZ, '..', '.orca-wa-inbox-capturas')
 
 const ANCHOS = [1440, 768, 390, 320]
 
@@ -235,6 +241,7 @@ const SIN_CHATS = Object.assign({}, DATOS, { chats: [], scope: {} })
 // programa. Los campos son los que escribe refrescarLineas() en main.mjs: con otros
 // nombres se fotografiaria el stub y no el panel.
 const AHORA_ISO = new Date().toISOString()
+const AHORA_MS = Date.now()
 // El lugar viaja en la FILA: es lo que el worker calcula contra la pestana de verdad
 // en cada vuelta, y por eso es lo que la captura tiene que ejercitar.
 const LINEA_ESPERANDO = {
@@ -678,6 +685,39 @@ const PANELES = [
             proyecto: null } })
       ] }
     })
+  },
+
+  // La vinculacion de WhatsApp (T3/T4, docs/ENCARGO-TRANSPORTE-UNICO.md §6 y §12): los
+  // cuatro estados que el criterio de aceptacion pide ver, a los cuatro anchos y en los
+  // dos temas — no solo a 1440/320 como el resto de los estados de mas arriba, porque
+  // esta seccion es la primera del panel y es la que decide si el plugin sirve de algo.
+  {
+    nombre: 'config-sidecar-esperando', archivo: 'config.html', anchos: ANCHOS,
+    datos: Object.assign({}, DATOS,
+      { sidecar: { connection: 'connecting', qr: null, exited: false } })
+  },
+  {
+    nombre: 'config-sidecar-qr', archivo: 'config.html', anchos: ANCHOS,
+    datos: Object.assign({}, DATOS, { sidecar: {
+      connection: 'connecting',
+      // Contenido real de un QR multi-dispositivo (docs/ENCARGO...§3: "QR emitido
+      // contra WhatsApp real, si, 237 caracteres"): un texto corto fotografiaria un
+      // QR mas simple que el que realmente hay que escanear.
+      qr: { qr: '2@' + 'A'.repeat(180) + ',B'.repeat(28) + '==', ts: AHORA_MS, rotation: 3 },
+      exited: false
+    } })
+  },
+  {
+    nombre: 'config-sidecar-conectado', archivo: 'config.html', anchos: ANCHOS,
+    datos: Object.assign({}, DATOS,
+      { sidecar: { connection: 'open', qr: null, exited: false } })
+  },
+  {
+    nombre: 'config-sidecar-caido', archivo: 'config.html', anchos: ANCHOS,
+    datos: Object.assign({}, DATOS, { sidecar: {
+      connection: null, qr: null, exited: true,
+      error: { code: 'sidecar-cayo', detail: 'sidecar exited (code 1, signal null)' }
+    } })
   }
 ]
 
@@ -706,9 +746,18 @@ async function main() {
         // El latido se sella AQUI y no en DATOS: una corrida entera dura mas que los
         // 30 s de vencimiento, y las capturas del final salian con el aviso de "el
         // plugin no esta corriendo" encima del estado que venian a mostrar.
-        const datos = 'workerBeat' in panel.datos
+        let datos = 'workerBeat' in panel.datos
           ? panel.datos
           : Object.assign({}, panel.datos, { workerBeat: { at: new Date().toISOString() } })
+        // Mismo defecto, mas apretado: el QR vive solo ~20 s (QR_VIGENCIA_MS en
+        // config.html) y `AHORA_MS` se calculo UNA vez al arrancar este guion. Sin
+        // esto, "config-sidecar-qr" salia pintando "el codigo vencio" en vez del QR —
+        // se vio recien mirando la captura, que es justo la razon de que exista esta
+        // regla del proyecto.
+        if (datos.sidecar && datos.sidecar.qr) {
+          datos = Object.assign({}, datos, { sidecar: Object.assign({}, datos.sidecar,
+            { qr: Object.assign({}, datos.sidecar.qr, { ts: Date.now() }) }) })
+        }
         await pagina.addInitScript(`(${stub.toString()})(${JSON.stringify(datos)}, ` +
           `${JSON.stringify(panel.stub || {})})`)
         await pagina.goto('file://' + join(RAIZ, panel.archivo))
@@ -779,7 +828,7 @@ async function main() {
   }
   await navegador.close()
 
-  console.log(`\n${tomadas} capturas en docs/capturas/`)
+  console.log(`\n${tomadas} capturas en ${SALIDA}`)
   if (problemas.length) {
     console.error('\nProblemas:')
     for (const p of problemas) console.error(`  ${p}`)

@@ -15,12 +15,19 @@
  *
  * Nada de esto toca WhatsApp ni la base del usuario: las herramientas son guiones
  * falsos en un directorio temporal y el host es un objeto en memoria.
+ *
+ * Y el sidecar (T3): que `activate()` lo lance con un guion de mentira, que su
+ * protocolo JSON-lines llegue a storage con el `ts` del QR, y que una caida — o un
+ * arranque que nunca llega a hablar — deje un CODIGO ESTABLE y no texto libre. Mismo
+ * principio que el sync: un camino de falla que ninguna prueba recorre es un camino
+ * que nadie sabe si existe.
  */
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execFile as execFileNode } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 
 const RAIZ = mkdtempSync(join(tmpdir(), 'wa-inbox-worker-'))
 
@@ -36,8 +43,16 @@ for (const base of [join(process.env.HOME, 'Library', 'Application Support'),
 
 const PLUGIN_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
 
-const { default: activate, intervaloSync } = await import('../main.mjs')
-const { workspaceDir } = await import('../harness.mjs')
+const { default: activate, intervaloSync, lanzarSidecar } = await import('../main.mjs')
+const { workspaceDir, dataDir } = await import('../harness.mjs')
+
+// Un sidecar de mentira para TODO el resto de las pruebas de este archivo: sin esto
+// `activate()` lanzaria el bundle real de Baileys -3,4 MB, un socket de verdad- en
+// cada una de las pruebas que no tienen nada que ver con el sidecar. Sale con 0 y no
+// dice nada: exactamente el "nunca llego a hablar" que una de las pruebas de abajo
+// comprueba que se reporte con un codigo estable.
+const SIDECAR_STUB = join(RAIZ, 'sidecar-stub.cjs')
+writeFileSync(SIDECAR_STUB, '#!/usr/bin/env node\nprocess.exit(0)\n', { mode: 0o755 })
 
 let fallos = 0
 let pruebas = 0
@@ -57,8 +72,11 @@ function herramientas (nombre, guion, modo = 0o755) {
   return dir
 }
 
-/** El host, en memoria: responde storage y settings como Orca. */
-function hostFalso (toolsDir, store = {}) {
+/** El host, en memoria: responde storage y settings como Orca.
+ *
+ *  `sidecarPath` por defecto es el guion de mentira de arriba: las pruebas que
+ *  quieren un sidecar de verdad -las de esta rebanada- pasan el suyo. */
+function hostFalso (toolsDir, store = {}, sidecarPath = SIDECAR_STUB) {
   const logs = []
   const avisos = []
   return {
@@ -70,7 +88,7 @@ function hostFalso (toolsDir, store = {}) {
       call: async (action, params) => {
         if (action === 'storage.get') return { value: store[params.key] }
         if (action === 'storage.set') { store[params.key] = params.value; return { ok: true } }
-        if (action === 'settings.get') return { value: { toolsDir } }
+        if (action === 'settings.get') return { value: { toolsDir, sidecarPath } }
         if (action === 'settings.set') return { ok: true }
         if (action === 'notifications.show') { avisos.push(params); return { ok: true } }
         throw new Error(`accion no soportada: ${action}`)
@@ -1212,6 +1230,147 @@ console.log('\nworker: el arnes se siembra fuera de la valla')
   const directo = await sembrar(PLUGIN_DIR, join(PLUGIN_DIR, 'bin'))
   ok('y sembrar() sigue andando sin valla', directo.ok === true,
     JSON.stringify(directo).slice(0, 200))
+}
+
+// ───────── el sidecar habla: el QR y la conexion llegan a storage ─────────
+console.log('\nworker: el sidecar habla, el panel se entera')
+{
+  const guion = join(RAIZ, 'sidecar-charla.cjs')
+  writeFileSync(guion,
+    '#!/usr/bin/env node\n' +
+    'function emit (m) { process.stdout.write(JSON.stringify(m) + "\\n") }\n' +
+    'emit({ type: "connection", state: "connecting" })\n' +
+    'setTimeout(() => emit({ type: "qr", qr: "QR-DE-PRUEBA", ts: Date.now(), rotation: 1 }), 50)\n' +
+    'setTimeout(() => emit({ type: "connection", state: "open" }), 250)\n' +
+    'setInterval(() => {}, 1000)\n', // se queda vivo hasta que el worker lo mate
+    { mode: 0o755 })
+
+  const orca = hostFalso(herramientas('sidecar-charla', '#!/bin/sh\necho \'[]\'\n'), {}, guion)
+  const { apagar } = await arranca(orca)
+
+  await hasta(() => orca.store.sidecar && orca.store.sidecar.qr, 10000)
+  const conQr = orca.store.sidecar
+  ok('el QR llega a storage', conQr && conQr.qr && conQr.qr.qr === 'QR-DE-PRUEBA',
+    JSON.stringify(conQr))
+  ok('con su numero de rotacion', conQr && conQr.qr && conQr.qr.rotation === 1,
+    JSON.stringify(conQr && conQr.qr))
+  ok('y su marca de tiempo, para que el panel descarte lo vencido',
+    conQr && conQr.qr && typeof conQr.qr.ts === 'number', JSON.stringify(conQr && conQr.qr))
+
+  await hasta(() => orca.store.sidecar && orca.store.sidecar.connection === 'open', 10000)
+  const conectado = orca.store.sidecar
+  ok('la conexion abierta llega a storage', conectado && conectado.connection === 'open',
+    JSON.stringify(conectado))
+  ok('y el QR se descarta: uno vencido no tiene por que seguir pintado detras de una ' +
+    'sesion ya conectada (docs/ENCARGO...§6)',
+    conectado && conectado.qr === null, JSON.stringify(conectado))
+  apagar()
+}
+
+// ───────── si el sidecar se cae, el motivo llega con un codigo estable ─────────
+console.log('\nworker: si el sidecar se cae, el motivo llega a storage con codigo estable')
+{
+  const guion = join(RAIZ, 'sidecar-cae.cjs')
+  writeFileSync(guion, '#!/usr/bin/env node\nprocess.stderr.write("boom\\n")\nprocess.exit(1)\n',
+    { mode: 0o755 })
+
+  const orca = hostFalso(herramientas('sidecar-cae', '#!/bin/sh\necho \'[]\'\n'), {}, guion)
+  const { apagar } = await arranca(orca)
+  await hasta(() => orca.store.sidecar && orca.store.sidecar.exited, 10000)
+  const e = orca.store.sidecar
+  ok('la caida queda escrita', e && e.exited === true, JSON.stringify(e))
+  ok('con un codigo ESTABLE, no texto libre: el panel lo traduce por codigo, igual ' +
+    'que el resto del contrato (docs/ENCARGO...§11-E1)',
+    e && e.error && e.error.code === 'sidecar-cayo', JSON.stringify(e))
+  apagar()
+}
+
+// ───────── si el sidecar nunca llega a arrancar, tambien queda escrito ─────────
+console.log('\nworker: si el sidecar nunca llega a arrancar, tambien queda escrito')
+{
+  const orca = hostFalso(herramientas('spawn-fake', null), {}, SIDECAR_STUB)
+  function spawnFalso () {
+    const p = new EventEmitter()
+    p.stdout = new EventEmitter()
+    p.stderr = new EventEmitter()
+    p.kill = () => { p.killed = true }
+    setTimeout(() => p.emit('error',
+      Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' })), 10)
+    return p
+  }
+  const detener = lanzarSidecar({ orca, scriptPath: '/no/existe.cjs',
+    authDir: join(RAIZ, 'auth-fake'), spawnFn: spawnFalso })
+  await hasta(() => orca.store.sidecar && orca.store.sidecar.exited, 2000)
+  const e = orca.store.sidecar
+  ok('el fallo de arranque queda escrito', e && e.exited === true, JSON.stringify(e))
+  ok('con su propio codigo estable, distinto del de una caida en marcha',
+    e && e.error && e.error.code === 'sidecar-no-arranco', JSON.stringify(e))
+  detener()
+}
+
+// ───────── apagarlo a proposito no se reporta como una caida ─────────
+console.log('\nworker: apagar el sidecar a proposito no se reporta como una caida')
+{
+  const guion = join(RAIZ, 'sidecar-vivo.cjs')
+  writeFileSync(guion,
+    '#!/usr/bin/env node\n' +
+    'process.stdout.write(JSON.stringify({ type: "connection", state: "connecting" }) + "\\n")\n' +
+    'setInterval(() => {}, 1000)\n',
+    { mode: 0o755 })
+  const orca = hostFalso(herramientas('sidecar-vivo', null), {}, guion)
+  const detener = lanzarSidecar({ orca, scriptPath: guion, authDir: join(RAIZ, 'auth-vivo') })
+  await hasta(() => orca.store.sidecar && orca.store.sidecar.connection === 'connecting', 5000)
+  detener()
+  await new Promise((r) => setTimeout(r, 300))
+  ok('apagarlo a proposito no lo marca como caido',
+    !(orca.store.sidecar && orca.store.sidecar.exited === true),
+    JSON.stringify(orca.store.sidecar))
+}
+
+// ───────── el auth dir se resuelve fuera de la valla, igual que el arnes ─────────
+console.log('\nworker: el directorio de auth del sidecar se resuelve fuera de la valla')
+{
+  // Con el HOME de mentira de todo este archivo ya hay un userData de Orca: el mismo
+  // que usa la siembra del arnes, arriba.
+  const esperado = dataDir(PLUGIN_DIR, 'wa-auth')
+  ok('dataDir() encuentra un userData en esta maquina de mentira', !!esperado, `${esperado}`)
+
+  const marcador = join(RAIZ, 'authdir-visto.txt')
+  const guion = join(RAIZ, 'sidecar-mira-authdir.cjs')
+  writeFileSync(guion,
+    '#!/usr/bin/env node\n' +
+    `require('node:fs').writeFileSync(${JSON.stringify(marcador)}, process.env.WA_SIDECAR_AUTH_DIR || '')\n` +
+    'process.stdout.write(JSON.stringify({ type: "connection", state: "connecting" }) + "\\n")\n' +
+    'setInterval(() => {}, 1000)\n',
+    { mode: 0o755 })
+
+  const orca = hostFalso(herramientas('mira-authdir', '#!/bin/sh\necho \'[]\'\n'), {}, guion)
+  const { apagar } = await arranca(orca)
+  await hasta(() => existsSync(marcador), 10000)
+  const visto = readFileSync(marcador, 'utf8')
+  apagar()
+  ok('WA_SIDECAR_AUTH_DIR le llega absoluto y FUERA del arbol del plugin, bajo ' +
+    'plugins-data/<publisher>.<id>/wa-auth (docs/ENCARGO...§7)',
+    visto.length > 0 && isAbsolute(visto) && visto === esperado, `${visto} != ${esperado}`)
+}
+
+// ───────── sin userData de Orca, el sidecar no arranca a ciegas ─────────
+console.log('\nworker: sin userData de Orca, el resolvedor de auth dice por que')
+{
+  const vacio = join(RAIZ, 'sin-userdata')
+  mkdirSync(vacio, { recursive: true })
+  const salida = await new Promise((resolve) => {
+    execFileNode(process.execPath,
+      [join(PLUGIN_DIR, 'sidecar', 'resolve-auth-dir.mjs'), PLUGIN_DIR],
+      { timeout: 15000,
+        env: { ...process.env, HOME: vacio, XDG_CONFIG_HOME: join(vacio, '.config'),
+          APPDATA: join(vacio, 'AppData', 'Roaming') } },
+      (error, stdout) => resolve({ error, stdout }))
+  })
+  let leido = null
+  try { leido = JSON.parse(salida.stdout || 'null') } catch { leido = null }
+  ok('sin ningun userData, dice por que en vez de adivinar una ruta',
+    leido && leido.ok === false && leido.reason === 'sin-userdata', JSON.stringify(salida))
 }
 
 rmSync(RAIZ, { recursive: true, force: true })

@@ -74,18 +74,40 @@ export function manifiesto(pluginDir) {
   return { key: `${man.publisher}.${man.id}`, version: String(man.version ?? '0.0.0') }
 }
 
+/** La raiz de userData elegida para ESTE plugin, y su llave. La comparten
+ *  `workspaceDir` (el arnes) y `dataDir` (el auth state del sidecar, T3): dos
+ *  carpetas del mismo plugin en raices de userData distintas -con el instalado y un
+ *  build dev abiertos a la vez- serian la misma clase de bug de identidad que
+ *  `bin/wa-scope` ya evito con `(cuenta, jid)`. Null si esta maquina no tiene ningun
+ *  userData de Orca. */
+function raizDelPlugin(pluginDir) {
+  const { key } = manifiesto(pluginDir)
+  const raices = userDataRoots().filter(esDirectorio)
+  if (!raices.length) return null
+  const yaSembrada = raices.find((r) => esDirectorio(join(r, 'plugin-workspaces', key)))
+  const conDatos = raices.find((r) => esDirectorio(join(r, 'plugins-data', key)))
+  return { raiz: yaSembrada ?? conDatos ?? raices[0], key }
+}
+
 /**
  * La carpeta de trabajo del plugin, o null si en esta maquina no se puede decir cual
  * es. Se elige el userData donde el plugin YA vive: con el instalado y un build dev
  * abiertos, sembrar en el otro deja el arnes donde nadie lo lee.
  */
 export function workspaceDir(pluginDir) {
-  const { key } = manifiesto(pluginDir)
-  const raices = userDataRoots().filter(esDirectorio)
-  if (!raices.length) return null
-  const yaSembrada = raices.find((r) => esDirectorio(join(r, 'plugin-workspaces', key)))
-  const conDatos = raices.find((r) => esDirectorio(join(r, 'plugins-data', key)))
-  return join(yaSembrada ?? conDatos ?? raices[0], 'plugin-workspaces', key)
+  const elegida = raizDelPlugin(pluginDir)
+  return elegida ? join(elegida.raiz, 'plugin-workspaces', elegida.key) : null
+}
+
+/** `<userData>/plugins-data/<publisher>.<id>/`, la misma carpeta donde Orca ya
+ *  guarda `storage.json`, y donde desde T3 vive tambien el auth state del sidecar de
+ *  Baileys: FUERA del arbol del plugin, que esta verificado por content-hash
+ *  (docs/ENCARGO-TRANSPORTE-UNICO.md §7 — escribir adentro cambia el hash). `...sub`
+ *  se une detras para pedir una subcarpeta -`wa-auth`- sin que quien llama arme la
+ *  ruta a mano. Null en la misma condicion que `workspaceDir`. */
+export function dataDir(pluginDir, ...sub) {
+  const elegida = raizDelPlugin(pluginDir)
+  return elegida ? join(elegida.raiz, 'plugins-data', elegida.key, ...sub) : null
 }
 
 /** sha256 en hex, sobre los bytes que de verdad quedan en el archivo. Es la misma

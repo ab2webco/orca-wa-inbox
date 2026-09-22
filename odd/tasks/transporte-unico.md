@@ -88,28 +88,78 @@ funcionando mientras el nuevo no esté probado.
 
 ### T3 — Worker: lanzar y supervisar el sidecar
 
-- [ ] `activate()` lanza el sidecar con `process.execPath` +
+- [x] `activate()` lanza el sidecar con `process.execPath` +
       `ELECTRON_RUN_AS_NODE=1`, como ya hace `sembrarFuera` (`main.mjs:688-694`)
-- [ ] Espejar estado y QR a `storage.set` con su `ts`
-- [ ] El latido existente (`main.mjs:712-727`) no se toca
-- [ ] Prueba: si el sidecar muere, el motivo llega al storage que lee el panel —
+- [x] Espejar estado y QR a `storage.set` con su `ts`
+- [x] El latido existente (`main.mjs:712-727`) no se toca
+- [x] Prueba: si el sidecar muere, el motivo llega al storage que lee el panel —
       el mismo camino de falla que `test/worker.test.mjs` ya cubre para el sync
-- [ ] Ruta: **inline** si toca sólo `main.mjs`
-- Commit: —
+- [x] Ruta: **inline**, toco `main.mjs`, `harness.mjs` (refactor minimo: exporta
+      `dataDir`, reusando la misma tabla de raices de userData que `workspaceDir`)
+      y `sidecar/resolve-auth-dir.mjs` (nuevo, subprocess que resuelve el auth dir
+      fuera de la valla de permisos)
+- Commit: pendiente de review — sin commitear (instrucción explícita del pedido)
+
+**Diseño:** el directorio de auth (`<userData>/plugins-data/<publisher>.<id>/wa-auth/`)
+se resuelve en un subproceso (`sidecar/resolve-auth-dir.mjs`, mismo patrón que
+`sembrarFuera`) porque el worker no puede leer el userData de Orca. `lanzarSidecar()`
+(exportada de `main.mjs`) hace `spawn()` del sidecar, parsea su protocolo JSON-lines
+y lo espeja a `storage.sidecar`, con códigos estables propios (`sidecar-sin-authdir`,
+`sidecar-no-arranco`, `sidecar-cayo`) distintos del `MOTIVO` del sidecar. `sidecarPath`
+es un override interno en settings (como `toolsDir`) para que las pruebas apunten a
+un guión de mentira en vez del bundle real.
+
+**Evidencia (TDD real, RED confirmado por `git stash` antes de implementar):**
+sin la implementación, `lanzarSidecar` no existe y `node test/worker.test.mjs` corta
+con `TypeError: lanzarSidecar is not a function` tras fallar las aserciones de QR/
+conexión. Con la implementación: `node test/worker.test.mjs` → **134/134 en verde**
+(12 pruebas nuevas: QR con `ts`/`rotation` a storage, conexión abierta descarta el QR,
+caída del proceso con código estable `sidecar-cayo`, arranque fallido con
+`sidecar-no-arranco`, apagado a propósito no se reporta como caída, `WA_SIDECAR_AUTH_DIR`
+resuelto fuera de la valla y bajo `plugins-data/ab2web.orca-wa-inbox/wa-auth`, y sin
+userData el resolvedor dice `sin-userdata` en vez de adivinar).
 
 ### T4 — Panel: dibujar el QR
 
-- [ ] Incrustar el codificador (`qrcode-generator`, MIT, ~20 KB minificado)
-      inline en `config.html` — la CSP prohíbe `<script src>`
-- [ ] Dibujar en `<canvas>`, no `data:` URI: auditable módulo a módulo
-- [ ] Escalar con el ancho: 260 px hasta 480, 300 hasta 1024, 360 por encima
-- [ ] Estado vencido explícito: **no dibujar** un QR muerto
-- [ ] Sondeo de 2 s mientras el QR vive, detenido al emparejar, respetando `CUPO`
-- [ ] Prueba: `test/panels.test.mjs` cubre el descarte por vencimiento
-- [ ] **Capturas con `npm run shots`** a 1440/768/390/320 en ambos temas, y
-      mirarlas
-- [ ] Ruta: **delegada**
+- [x] Incrustar el codificador (`qrcode-generator` 2.0.4, Kazuhiko Arase, MIT,
+      minificado con esbuild a ~21 KB) inline en `config.html` — la CSP prohíbe
+      `<script src>`; se conserva la nota de licencia sin minificar
+- [x] Dibujar en `<canvas>`, no `data:` URI: módulo a módulo con `ctx.fillRect`,
+      con zona de quietud de 4 módulos y fondo `#fff` fijo (no un token) para que
+      el QR siga siendo legible en tema oscuro
+- [x] Escalar con el ancho: 260 px hasta 480, 300 hasta 1024, 360 por encima
+- [x] Estado vencido explícito: **no dibujar** un QR muerto — mensaje
+      "El código venció" y detalle "esperando uno nuevo"
+- [x] Sondeo de 2 s mientras el QR vive (`vigilarSidecar`, timer dedicado como
+      `vigilarLineas`), detenido al emparejar, respetando `CUPO` y
+      `document.visibilityState`
+- [x] `sidecar` entra a `CLAVES`/`CLAVES_VIVAS`: presupuesto medido, ~11 de 26
+      mensajes por 10 s del sondeo (6-7 de la base de 12 s + ~5 del dedicado de 2 s)
+- [x] Prueba: `test/panels.test.mjs` cubre los cinco estados, el descarte por
+      vencimiento, el escalado por ancho, `SIN_RESPUESTA` (no apaga el QR ya
+      pintado) y que el sondeo dedicado se detenga al emparejar
+- [x] **Capturas con `npm run shots`** a 1440/768/390/320 en ambos temas — **miradas**
+- [x] Ruta: **delegada**, toco `config.html` y `test/panels.test.mjs`
 - Commit: —
+
+**Evidencia (TDD real):** con `git stash` sobre `config.html`, `node test/panels.test.mjs`
+corta con `TypeError: Cannot read properties of null (reading 'textContent')` en la
+primera aserción del bloque nuevo — la sección de vinculación no existe todavía. Con
+la implementación: **346/346 en verde** (20 pruebas nuevas).
+
+**Evidencia visual (regla del proyecto):** `npm run shots` generó 328 capturas. Se
+encontró y corrigió un defecto real mirándolas: la primera corrida de "QR en pantalla"
+en tema claro a 1440px mostraba **"El código venció"** en vez del QR, porque
+`test/shots.mjs` calculaba el `ts` del QR de prueba UNA vez al arrancar el guión —
+minutos antes de que le tocara el turno a esa captura, superando los 20 s de vigencia.
+Corregido refrescando `ts: Date.now()` por captura (mismo patrón que ya usaba
+`workerBeat` en ese archivo para el mismo problema). Se miraron, tras la corrección:
+`config-sidecar-{esperando,qr,conectado,caido}` en es-419 y en-US, en **1440, 768, 390
+y 320 px**, en **claro y oscuro**. Los cuatro estados se ven correctos: QR legible con
+fondo blanco y zona de quietud incluso en tema oscuro, mensaje de "conectado" en texto
+normal, mensaje de "sesión caída" en `--destructive` con el detalle traducido por
+código (`sidecar-cayo` → "El sidecar se detuvo. Reinicie Orca..."), sin desbordes en
+ningún ancho.
 
 ### T5 — Emparejar de verdad, desde el panel
 
@@ -146,8 +196,9 @@ deja el panel vacío y mudo) · `scripts/check-voseo` sobre toda cadena nueva
 
 ## Progreso
 
-**Estado:** T1 y T2 cerradas con pruebas en verde. Sin commitear (working tree
-para review, según instrucción explícita).
+**Estado:** T1, T2, T3 y T4 cerradas con pruebas en verde y evidencia visual mirada.
+Sin commitear (working tree para review, según instrucción explícita — T3/T4 tampoco
+se commitearon, instrucción explícita de este pedido).
 
 **Evidencia de esta rebanada:**
 
@@ -169,9 +220,34 @@ para review, según instrucción explícita).
 - `scripts/check-voseo`: 28 archivos revisados (se sumaron los 4 archivos nuevos
   a `OTROS`), en verde
 
-**Pendiente de verificar** (sin cambios, sigue igual que antes de esta
-rebanada): persistencia de sesión tras reinicio y reconexión tras suspender —
-requiere T3 (lanzar el sidecar desde el worker), T4 (dibujar el QR) y T5
-(emparejar con un teléfono real).
+**Evidencia de T3/T4:**
 
-**Siguiente paso:** T3 — worker: lanzar y supervisar el sidecar.
+- `harness.mjs`: refactor mínimo — `raizDelPlugin()` privada compartida por
+  `workspaceDir()` (sin cambio de comportamiento) y el nuevo `dataDir()`
+- `sidecar/resolve-auth-dir.mjs` (nuevo): resuelve
+  `<userData>/plugins-data/ab2web.orca-wa-inbox/wa-auth/` en subproceso
+- `main.mjs`: `resolverAuthDir()`, `lanzarSidecar()` (exportada), wireado en
+  `activate()` con `sidecarPath` como override interno de settings (como
+  `toolsDir`) para pruebas; `apagarSidecar()` en el cleanup de `activate()`
+- `config.html`: sección "Vinculación de WhatsApp" (primera sección del panel),
+  `qrcode-generator` 2.0.4 inline (~21 KB minificado, licencia MIT conservada),
+  `dibujarQr`/`qrVencido`/`tamanoQrPx`/`renderPairing`/`vigilarSidecar`; cadenas
+  nuevas en `es`/`en`/`pt`
+- `node test/worker.test.mjs`: **134/134 en verde** (12 pruebas nuevas de T3)
+- `node test/panels.test.mjs`: **346/346 en verde** (20 pruebas nuevas de T4)
+- `node test/sidecar-build.test.mjs`: **5/5 en verde** — árbol tras el build:
+  **71 archivos, 5,78 MB, 0 symlinks** (subió de 66/5,63 MB por
+  `resolve-auth-dir.mjs`, sigue muy por debajo del tope)
+- `scripts/check-panels`, `scripts/check-voseo` (29 archivos, se sumó
+  `sidecar/resolve-auth-dir.mjs` a `OTROS`): en verde
+- `npm run shots`: 328 capturas, **miradas** a 1440/768/390/320 px en claro y
+  oscuro para los cuatro estados de vinculación — ver detalle en T4 arriba,
+  incluido el defecto real encontrado y corregido (QR "vencido" por un `ts`
+  estático en el guión de capturas, no en el panel)
+- `npm run check` completo (orden canónico): todas las etapas en verde
+
+**Pendiente de verificar** (requiere T5, teléfono real, decisión explícita del
+usuario de no validar por terminal — ver T5 arriba): persistencia de sesión tras
+reinicio de Orca, y reconexión tras suspender/despertar la máquina.
+
+**Siguiente paso:** T5 — emparejar de verdad, desde el panel, con un teléfono real.

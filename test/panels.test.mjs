@@ -2031,5 +2031,114 @@ console.log('\nconfig.html: un rechazo del host se reintenta, no se reporta')
     `rechazadas=${rechazadas} ${JSON.stringify(storage.webRequest)}`)
 }
 
+// ───────── vinculacion de WhatsApp: el QR (T4) ─────────
+// El panel nunca habia dibujado un QR (docs/ENCARGO-TRANSPORTE-UNICO.md §6). Lo que
+// mas importa de esta pieza es lo que NO tiene que pintar: un QR vencido hace que el
+// usuario escanee, falle, y no entienda por que.
+console.log('\nconfig.html — vinculacion de WhatsApp: los cinco estados')
+{
+  const AHORA_MS = Date.now()
+  const casos = [
+    { nombre: 'esperando el QR', sidecar: { connection: 'connecting', qr: null, exited: false },
+      msg: /esperando/i, qrVisible: false },
+    { nombre: 'QR en pantalla', sidecar: { connection: 'connecting',
+      qr: { qr: 'DATA-QR-DE-PRUEBA', ts: AHORA_MS, rotation: 1 }, exited: false },
+      msg: /escanee/i, qrVisible: true },
+    { nombre: 'QR vencido', sidecar: { connection: 'connecting',
+      qr: { qr: 'DATA-QR-DE-PRUEBA', ts: AHORA_MS - 30000, rotation: 1 }, exited: false },
+      msg: /vencio/i, qrVisible: false },
+    { nombre: 'conectado', sidecar: { connection: 'open', qr: null, exited: false },
+      msg: /conectado/i, qrVisible: false },
+    { nombre: 'sesion caida', sidecar: { connection: null, qr: null, exited: true,
+      error: { code: 'sidecar-cayo', detail: 'sidecar exited (code 1, signal null)' } },
+      msg: /caida/i, qrVisible: false }
+  ]
+  for (const c of casos) {
+    const { doc } = await montar('config.html', { sidecar: c.sidecar }, 'es-419')
+    await espera()
+    const msg = doc.getElementById('pairing-msg').textContent
+    ok(`${c.nombre}: el mensaje es el correcto`, c.msg.test(msg), msg)
+    const wrap = doc.getElementById('qr-wrap')
+    ok(`${c.nombre}: el QR ${c.qrVisible ? 'se muestra' : 'no se muestra'}`,
+      !wrap.hidden === c.qrVisible, `hidden=${wrap.hidden}`)
+  }
+  // El vencido tiene que decir POR QUE no hay nada que escanear: un QR que
+  // simplemente desaparece se lee igual que un panel roto.
+  const { doc: vencido } = await montar('config.html', { sidecar: {
+    connection: 'connecting',
+    qr: { qr: 'DATA-QR-DE-PRUEBA', ts: AHORA_MS - 30000, rotation: 1 }, exited: false
+  } }, 'es-419')
+  await espera()
+  ok('el vencido explica que ya viene uno nuevo, no solo que desaparecio',
+    /nuevo/i.test(vencido.getElementById('pairing-detail').textContent),
+    vencido.getElementById('pairing-detail').textContent)
+}
+
+console.log('\nconfig.html — el QR escala con el ancho de la ventana')
+{
+  for (const [ancho, esperado] of [[320, 260], [768, 300], [1440, 360]]) {
+    const { window, doc } = await montar('config.html', { sidecar: {
+      connection: 'connecting', qr: { qr: 'DATA-QR-DE-PRUEBA', ts: Date.now(), rotation: 1 }
+    } }, 'es-419')
+    Object.defineProperty(window, 'innerWidth', { value: ancho, configurable: true })
+    // El primer pintado ya corrio con el ancho por defecto de jsdom: se fuerza un
+    // repintado con el foco, que es lo que dispara un reload completo de verdad.
+    window.dispatchEvent(new window.Event('focus'))
+    await espera()
+    const canvas = doc.getElementById('qr-canvas')
+    ok(`a ${ancho}px de ancho el canvas mide ${esperado}`, canvas.width === esperado,
+      `width=${canvas.width}`)
+  }
+}
+
+console.log('\nconfig.html — una lectura rechazada no apaga el QR que ya estaba en pantalla')
+{
+  // Centinela SIN_RESPUESTA: un `storage.get` que el host rechaza no es una clave
+  // vacia. Se rechaza la SEGUNDA lectura -la primera es la del montaje, que tiene que
+  // llegar bien para que haya algo bueno que conservar.
+  let vistos = 0
+  const { doc } = await montar('config.html', { sidecar: {
+    connection: 'connecting',
+    qr: { qr: 'DATA-QR-DE-PRUEBA', ts: Date.now(), rotation: 1 }
+  } }, 'es-419', (d) => {
+    if (d.action === 'storage.get' && d.params.key === 'sidecar') {
+      vistos += 1
+      if (vistos === 2) return { ok: false, errorCode: 'rate_limited' }
+    }
+    return undefined
+  })
+  await espera()
+  ok('primero pinta el QR de verdad', /escanee/i.test(doc.getElementById('pairing-msg').textContent),
+    doc.getElementById('pairing-msg').textContent)
+  // El sondeo dedicado de 2 s entra justo en la lectura rechazada.
+  await new Promise((r) => setTimeout(r, 2500))
+  ok('con la lectura rechazada, el QR sigue en pantalla: no se apaga solo',
+    /escanee/i.test(doc.getElementById('pairing-msg').textContent) &&
+    !doc.getElementById('qr-wrap').hidden,
+    doc.getElementById('pairing-msg').textContent)
+}
+
+console.log('\nconfig.html — el sondeo de 2 s del QR se detiene al emparejar')
+{
+  const { enviados: enviadosVivo } = await montar('config.html', { sidecar: {
+    connection: 'connecting',
+    qr: { qr: 'DATA-QR-DE-PRUEBA', ts: Date.now(), rotation: 1 }
+  } }, 'es-419')
+  await new Promise((r) => setTimeout(r, 4500))
+  const lecturasVivo = enviadosVivo
+    .filter((d) => d.action === 'storage.get' && d.params.key === 'sidecar').length
+
+  const { enviados: enviadosPareado } = await montar('config.html',
+    { sidecar: { connection: 'open', qr: null } }, 'es-419')
+  await new Promise((r) => setTimeout(r, 4500))
+  const lecturasPareado = enviadosPareado
+    .filter((d) => d.action === 'storage.get' && d.params.key === 'sidecar').length
+
+  ok('mientras el QR esta vivo, el sondeo dedicado pide la clave varias veces en 4,5 s',
+    lecturasVivo >= 2, `lecturasVivo=${lecturasVivo}`)
+  ok('una vez emparejado, se pide muchas menos veces: el sondeo dedicado se detuvo',
+    lecturasPareado < lecturasVivo, `vivo=${lecturasVivo} pareado=${lecturasPareado}`)
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)
