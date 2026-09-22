@@ -12,8 +12,8 @@
  * estable es contrato con el panel (bin/wa-read:126-131): cambiar el codigo lo
  * desincroniza en silencio.
  */
-import { decidirTrasCierre, calcularEsperaMs, mensajeQr, qrVencido, MOTIVO, QR_VIGENCIA_MS }
-  from '../sidecar/src/index.js'
+import { decidirTrasCierre, calcularEsperaMs, mensajeQr, qrVencido, tocaEmitirAlmacen,
+  MOTIVO, QR_VIGENCIA_MS, ALMACEN_LATIDO_MS } from '../sidecar/src/index.js'
 
 let fallos = 0
 let pruebas = 0
@@ -127,6 +127,27 @@ console.log('\nsidecar: el panel distingue un QR vencido de uno fresco')
   const ts = ahora - QR_VIGENCIA_MS + 5000
   ok('control: el mismo ts vence mas tarde', qrVencido(ts, ahora) === false)
   ok('y ya esta vencido diez segundos despues', qrVencido(ts, ahora + 10000) === true)
+}
+
+console.log('\nsidecar: los conteos del almacen salen CON FRENO')
+{
+  // Cada mensaje `store` que sale por stdout termina en un `storage.set` del worker, y
+  // Orca mata al worker a los 64 eventos sin confirmar. Es el mismo mecanismo que ya se
+  // llevo puesto al worker una vez por lo hablador que es Baileys en stderr — y ahi el
+  // sintoma no se parecia en nada a la causa: el panel se quedaba con un QR vencido
+  // para siempre. Una cuenta ocupada emite varios `messages.upsert` por segundo durante
+  // la sincronizacion inicial.
+  ok('recien arrancado, el primer conteo sale',
+    tocaEmitirAlmacen(0, ALMACEN_LATIDO_MS + 1) === true)
+  ok('el siguiente, un segundo despues, NO sale',
+    tocaEmitirAlmacen(100000, 101000) === false)
+  ok('pero pasado el latido, si', tocaEmitirAlmacen(100000, 100000 + ALMACEN_LATIDO_MS) === true)
+  // Un desalojo es lo unico que no se puede perder: si se pierde, el usuario se entera
+  // cuando una fila sale sin cuerpo y sin explicacion (§11-F2).
+  ok('y un desalojo sale SIEMPRE, aunque el freno este puesto',
+    tocaEmitirAlmacen(100000, 101000, true) === true)
+  ok('el freno es de decenas de segundos, no de milisegundos',
+    ALMACEN_LATIDO_MS >= 10000, String(ALMACEN_LATIDO_MS))
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

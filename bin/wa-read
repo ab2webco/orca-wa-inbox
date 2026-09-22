@@ -1,30 +1,27 @@
 #!/usr/bin/env python3
 """wa-read — read-only access to WhatsApp for agents.
 
-Right now there is no message transport. The two routes this tool used to have —the
-desktop app's SQLite database and a WhatsApp Web session driven by the browser— were
-removed, and the sidecar that replaces them pairs the line but does not read messages
-yet. The message store is the next slice, not this one.
-
-So every command that needs messages refuses out loud, with a stable reason:
+The plugin links one WhatsApp line with a QR code, and a sidecar keeps that line open
+and writes what it receives into a message store. This tool is the query layer over
+that store — it never writes to it, and it never talks to WhatsApp.
 
   inbox [--days N] [--limit N]  mentions of you + replies to your messages, in groups
   chats [--query TXT] [-n N]    list chats (groups and 1:1) with unread counts
   whoami                        your LID and how many groups
   chat <id|name> [-n N]         latest messages of a chat
   media <id|name> [-n N]        latest images/videos/audio, with the path on disk
-  state                         how much the source changed, without opening it
-
-All six exit 4 with `no-transport` on the first line of stderr and nothing on stdout.
-Refusing is the whole point: an empty list reads as "there is nothing to attend to",
-which is the opposite of "I cannot read anything", and everything that parses this
-tool reads `stdout or '[]'`. The flags stay because the callers still pass them: an
-argparse error would answer with the wrong exit code and no reason at all.
-
+  state                         how much the store changed, without reading it
   doctor                        check the requirements
 
-`doctor` is the one command that still answers, because it is the only one that can
-explain why there is no transport.
+Every read command takes `--line ACCOUNT` to answer for one linked line only. The same
+1:1 conversation seen from two of your own lines is the same JID, so the key is
+(account, jid) and never the JID alone.
+
+Exit codes are domain answers, not failure levels: 1 = a requirement is missing,
+2 = that chat reference is ambiguous, 4 = there is nothing to read from. Reason on the
+first line of stderr, stdout empty or parseable. Refusing is the point: an empty list
+reads as "there is nothing to attend to", which is the opposite of "I cannot read
+anything".
 
 Global: --json  JSON output instead of a table.
 """
@@ -35,16 +32,18 @@ import argparse, json, os, subprocess, sys
 # instalacion es justo lo que deja el plugin en "No valido".
 sys.dont_write_bytecode = True
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import wa_store  # noqa: E402
+from wa_store import SinFuente  # noqa: E402
+
 # Salir con 1 ya significa "te falta un requisito" y con 2 "esa referencia es ambigua".
 # Que no haya de donde leer es otra cosa, y quien automatiza necesita distinguirla sin
 # leer prosa: por eso tiene su propio codigo y un motivo estable en la salida.
 EXIT_SOURCE = 4
-# Este motivo es contrato: el panel lo traduce por codigo. Cambiar el texto no rompe
+# Estos motivos son contrato: el panel los traduce por codigo. Cambiar el texto no rompe
 # nada; renombrar el codigo desincroniza el panel en silencio.
-SIN_TRANSPORTE = "no-transport"
-SIN_TRANSPORTE_DETALLE = (
-    "no linked WhatsApp line can be read yet. Link a line from the plugin settings, "
-    "with the QR code. Reading conversations is not available in this version.")
+SIN_TRANSPORTE = wa_store.SIN_TRANSPORTE
+SIN_TRANSPORTE_DETALLE = wa_store.SIN_TRANSPORTE_DETALLE
 
 
 def morir_sin_fuente(reason, detail, code=EXIT_SOURCE):
@@ -92,10 +91,9 @@ def _transcribe_check():
 
 REQUISITOS = """The plugin cannot read messages yet.
 
-  The two routes it used to read with are gone: the desktop app's local database and
-  a browser session. Both are replaced by a sidecar that talks the multi-device
-  protocol, and that sidecar pairs the line — the QR code lives in the plugin
-  settings — but it does not read messages yet.
+  No WhatsApp line is linked. Open the plugin settings and scan the QR code with the
+  phone whose conversations the agent should read. Once the line is linked, the
+  sidecar starts filling the message store and every command here answers.
 
   Everything else does work: the registry, the mapping, the panels and the
   automations, which stay blocked on purpose while there is nothing to read. Blocking
@@ -103,19 +101,75 @@ REQUISITOS = """The plugin cannot read messages yet.
 """
 
 
-def cmd_doctor(con, a):
+def cmd_doctor(a):
     """Para que el usuario sepa que le falta antes de que nada dependa de esto.
 
     El codigo es la llave estable: el nombre y el detalle estan en ingles para quien
     corre el CLI, y el panel traduce por codigo al idioma del usuario. Renombrar un
     codigo desincroniza el panel en silencio; el texto se puede reescribir sin riesgo."""
-    # Bloquea, y tiene que bloquear. Un plugin que no puede leer no es un plugin al que
-    # le falta algo opcional: con esto en verde, `wa-scope pending` dejaria correr al
-    # agente sobre una bandeja que siempre esta vacia, y eso se lee como que no hubo
-    # trabajo. Se va cuando exista el almacen de mensajes, no antes.
-    filas = [{"check": "a message transport", "ok": False,
-              "detalle": SIN_TRANSPORTE_DETALLE, "requerido": True,
-              "code": SIN_TRANSPORTE, "via": None}]
+    # Bloquea, y tiene que bloquear cuando no hay linea. Un plugin que no puede leer no
+    # es un plugin al que le falta algo opcional: con esto en verde, `wa-scope pending`
+    # dejaria correr al agente sobre una bandeja que siempre esta vacia, y eso se lee
+    # como que no hubo trabajo.
+    try:
+        con = wa_store.abrir()
+    except SinFuente as exc:
+        filas = [{"check": "a message transport", "ok": False, "detalle": exc.detail,
+                  "requerido": True, "code": exc.reason, "via": None}]
+    else:
+        lineas = wa_store.whoami(con)
+        cuantas = len(lineas)
+        etiquetas = ", ".join(x.get("account") or "?" for x in lineas)
+        filas = [{"check": "a message transport", "ok": True,
+                  "detalle": (f"{cuantas} linked line"
+                              f"{'' if cuantas == 1 else 's'} ({etiquetas})"),
+                  "requerido": True, "code": SIN_TRANSPORTE,
+                  "via": lineas[0].get("account") if lineas else None}]
+        # El desalojo va al doctor porque es lo unico del almacen que el usuario puede
+        # cambiar: subir `capture_max` o `capture_days` desde el panel. Un tope que
+        # muerde en silencio deja filas sin cuerpo sin que nadie sepa por que (§11-F2).
+        desalojo = wa_store.ultimo_desalojo(con)
+        if desalojo and (desalojo["caducados"] or desalojo["desalojados"]):
+            total = desalojo["caducados"] + desalojo["desalojados"]
+            # `ok: False` a proposito, y no es un fallo: `checkSystem` arma la lista
+            # de opcionales del panel con `requerido === false && !ok` (main.mjs), asi
+            # que un renglon en verde no llega NUNCA a la pantalla. Un desalojo que
+            # solo se ve corriendo el CLI a mano no esta visible, esta escondido detras
+            # de una terminal — y "visible" es justo lo que pide §11-F2. No bloquea
+            # porque `requerido` es False: el doctor sigue saliendo 0.
+            filas.append({
+                "check": "message retention", "ok": False,
+                "detalle": (f"optional — {total} message bodies were evicted on "
+                            f"{wa_store.ts(desalojo['at'])} ({desalojo['caducados']} "
+                            f"expired, {desalojo['desalojados']} over the cap). Raise "
+                            f"capture_max or capture_days to keep more."),
+                "requerido": False, "code": "retention",
+                "detailCode": "retention-evicted", "via": None})
+        con.close()
+    # La migracion del almacen va FUERA del try/except de arriba a proposito: se
+    # reporta igual cuando `abrir()` se nego. En una maquina que venia de la via de
+    # WhatsApp Web, la subida se lleva las lineas de esa via —ya no existe quien las
+    # escriba— y el almacen queda sin linea enlazada hasta que el sidecar conecte. Ese
+    # es justo el momento en que el usuario necesita leer que paso con lo viejo; si
+    # este renglon colgara del almacen abierto, no se veria nunca.
+    migracion = wa_store.ultima_migracion()
+    if migracion and (migracion["cuerpos"] or migracion["lineas"]):
+        # `ok: False` a proposito, por lo mismo que el renglon de retencion de aca
+        # arriba: `checkSystem` arma la lista de opcionales del panel con
+        # `requerido === false && !ok` (main.mjs), asi que un renglon en verde no llega
+        # NUNCA a la pantalla. Y no bloquea, porque no hay nada roto que arreglar: el
+        # almacen quedo al dia. Lo que hay es algo que se fue y hay que decirlo.
+        filas.append({
+            "check": "message store upgrade", "ok": False,
+            "detalle": (f"optional — the message store was upgraded from version "
+                        f"{migracion['desde']} to {migracion['hasta']} on "
+                        f"{wa_store.ts(migracion['at'])}. The removed WhatsApp Web "
+                        f"route left {migracion['cuerpos']} cached message bodies and "
+                        f"{migracion['lineas']} of its own lines behind, in a schema "
+                        f"this version cannot read: they were dropped. Nothing else "
+                        f"was touched, and the linked line fills the store again."),
+            "requerido": False, "code": "store-migrated",
+            "detailCode": "store-migrated-dropped", "via": None})
     # Lo opcional no bloquea: sin transcripcion todo funciona, solo que los audios
     # quedan sin leer. Marcarlo como rotura pintaria de rojo un equipo sano.
     ok, detalle, dcode = _transcribe_check()
@@ -125,46 +179,80 @@ def cmd_doctor(con, a):
     return filas
 
 
+def cmd_inbox(con, a):
+    ajustes = wa_store.ajustes()
+    dias = a.days if a.days else wa_store.entero(ajustes, "inbox_days")
+    # 500 y no un numero mas chico: es el tope que el arnes ya documenta
+    # (harness, "al menos los 500 mas nuevos"), y bajarlo en silencio haria que el
+    # agente diera por vista una ventana que no vio entera.
+    return wa_store.inbox(con, dias, a.limit or 500, a.window, a.only, a.line)
+
+
+def cmd_chats(con, a):
+    return wa_store.chats(con, a.n, a.query, a.unread, a.line)
+
+
+def cmd_chat(con, a):
+    return wa_store.chat(con, wa_store.resolver_chat(con, a.chat, a.line), a.n, a.days)
+
+
+def cmd_media(con, a):
+    return wa_store.media(con, wa_store.resolver_chat(con, a.chat, a.line), a.n)
+
+
+def cmd_whoami(con, a):
+    return wa_store.whoami(con, a.line)
+
+
+def cmd_state(con, a):
+    return wa_store.state(con, a.line)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--json", action="store_true")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    def add(name, **kw):
+    def add(name, fn=None, **kw):
         sp = sub.add_parser(name, **kw)
         sp.add_argument("--json", dest="json_sub", action="store_true")
+        # La MISMA conversacion puede existir en dos lineas propias. Sin poder decir
+        # cual, pedirla es ambiguo, y resolver la ambiguedad en silencio es contestar
+        # sobre la conversacion ajena (§11-A1/D4).
+        sp.add_argument("--line", default=None,
+                        help="answer for one linked line only (its account id)")
+        if fn:
+            sp.set_defaults(fn=fn)
         return sp
 
-    # Las opciones se conservan aunque hoy no se lean: wa-scope sigue llamando
-    # `chats -n 400 --json`, y un argparse que no las conoce sale con 2 y sin motivo.
-    # Ese 2 ya significa "referencia ambigua", asi que seria mentir dos veces.
-    s = add("inbox", help="mentions and replies addressed to you")
+    s = add("inbox", cmd_inbox, help="mentions and replies addressed to you")
     s.add_argument("--days", type=int, default=None)
     s.add_argument("--limit", type=int, default=None)
     s.add_argument("--window", type=int, default=5)
     s.add_argument("--only", choices=["todos", "grupos", "directos"], default="todos")
 
-    s = add("chats", help="list chats")
+    s = add("chats", cmd_chats, help="list chats")
     s.add_argument("--query"); s.add_argument("--unread", action="store_true")
     s.add_argument("-n", type=int, default=30)
 
-    s = add("chat", help="messages of a chat")
+    s = add("chat", cmd_chat, help="messages of a chat")
     s.add_argument("chat"); s.add_argument("-n", type=int, default=40)
     s.add_argument("--days", type=int)
 
-    s = add("media", help="attachments of a chat, with the path on disk")
+    s = add("media", cmd_media, help="attachments of a chat, with the path on disk")
     s.add_argument("chat"); s.add_argument("-n", type=int, default=15)
 
-    add("whoami")
+    add("whoami", cmd_whoami)
     add("doctor", help="check the requirements")
-    add("state", help="how much the source changed, without opening it")
+    add("state", cmd_state, help="how much the store changed, without reading it")
 
     a = ap.parse_args()
     if getattr(a, "json_sub", False):   # permite --json antes o despues del subcomando
         a.json = True
+
     if a.cmd == "doctor":               # tiene que correr aunque falte todo lo demas
-        rows = cmd_doctor(None, a)
+        rows = cmd_doctor(a)
         if a.json:
             print(json.dumps(rows, ensure_ascii=False, indent=2))
         else:
@@ -176,7 +264,23 @@ def main():
         # Clasificar por texto ya habia roto esto antes, en el panel y aca.
         obligatorios = [r for r in rows if r.get("requerido", True)]
         sys.exit(0 if all(r["ok"] for r in obligatorios) else 1)
-    morir_sin_fuente(SIN_TRANSPORTE, SIN_TRANSPORTE_DETALLE)
+
+    try:
+        con = wa_store.abrir()
+    except SinFuente as exc:
+        morir_sin_fuente(exc.reason, exc.detail, exc.code)
+    try:
+        rows = a.fn(con, a)
+    finally:
+        con.close()
+
+    if a.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+    elif not rows:
+        print("(no results)")
+    else:
+        for r in rows:
+            print(" | ".join(str(v) for v in r.values() if v not in (None, "")))
 
 
 if __name__ == "__main__":

@@ -527,6 +527,57 @@ console.log('\nworker: el sidecar habla, el panel se entera')
   apagar()
 }
 
+// ───────── el almacen: conteos al panel, y donde estan las herramientas ─────────
+console.log('\nworker: lo que el sidecar guardo y desalojo llega al panel, en numeros')
+{
+  const marcador = join(RAIZ, 'toolsdir-visto.txt')
+  const guion = join(RAIZ, 'sidecar-almacen.cjs')
+  writeFileSync(guion,
+    '#!/usr/bin/env node\n' +
+    `require('node:fs').writeFileSync(${JSON.stringify(marcador)}, process.env.WA_SIDECAR_TOOLS_DIR || '')\n` +
+    'function emit (m) { process.stdout.write(JSON.stringify(m) + "\\n") }\n' +
+    'emit({ type: "connection", state: "open" })\n' +
+    'setTimeout(() => emit({ type: "store", at: 1758500000000, llegaron: 40, guardados: 12,\n' +
+    '  sinAutorizar: 28, actualizados: 2, autorizadas: 3, desalojados: 7, caducados: 1,\n' +
+    '  migradoCuerpos: 12, migradoLineas: 2 }), 50)\n' +
+    'setInterval(() => {}, 1000)\n',
+    { mode: 0o755 })
+
+  const toolsDir = herramientas('almacen', '#!/bin/sh\necho \'[]\'\n')
+  const orca = hostFalso(toolsDir, {}, guion)
+  const { apagar } = await arranca(orca)
+  await hasta(() => orca.store.sidecar && orca.store.sidecar.store, 10000)
+  const est = orca.store.sidecar.store
+  apagar()
+
+  // Sin esto el sidecar no sabe a quien preguntarle que conversaciones estan
+  // autorizadas, y con el alcance vacio no guarda NADA: una bandeja vacia para
+  // siempre y sin un solo error (docs/ENCARGO...§11-E4).
+  const visto = existsSync(marcador) ? readFileSync(marcador, 'utf8') : ''
+  ok('WA_SIDECAR_TOOLS_DIR le llega al sidecar, y apunta al bin de ESTA instalacion',
+    visto === toolsDir, `${visto} != ${toolsDir}`)
+
+  ok('los conteos del almacen llegan a storage', !!est, JSON.stringify(orca.store.sidecar))
+  ok('con lo que llego y lo que se guardo, que es lo que distingue "no hay nada ' +
+    'autorizado" de "esto no funciona"',
+    est && est.llegaron === 40 && est.guardados === 12 && est.sinAutorizar === 28,
+    JSON.stringify(est))
+  ok('y con el desalojo, que callado es un caso que se pierde sin explicacion (§11-F2)',
+    est && est.desalojados === 7 && est.caducados === 1, JSON.stringify(est))
+  // Y con lo que se llevo la subida de esquema del almacen. El renglon del `doctor` lo
+  // ve quien entra al panel; esto lo ve quien mire el log o el storage el dia que
+  // pregunte adonde fueron a parar los mensajes de antes. Es el mismo trato que el
+  // desalojo, por el mismo motivo: callarlo es perder el caso sin explicacion.
+  ok('y con lo que se llevo la migracion del almacen',
+    est && est.migradoCuerpos === 12 && est.migradoLineas === 2, JSON.stringify(est))
+  // Esto es una cuenta real con conversaciones de clientes reales. Lo que llega al
+  // storage tiene que ser CONTABILIDAD y nada mas.
+  const texto = JSON.stringify(est)
+  ok('y NADA de contenido: ni cuerpos, ni telefonos, ni jids de remitente',
+    Object.values(est).every((v) => typeof v === 'number' || v === null) &&
+    !/@|\+?\d{7,}/.test(texto.replace(/\d{13}/g, '')), texto)
+}
+
 // ───────── si el sidecar se cae, el motivo llega con un codigo estable ─────────
 console.log('\nworker: si el sidecar se cae, el motivo llega a storage con codigo estable')
 {

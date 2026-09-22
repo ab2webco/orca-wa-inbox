@@ -848,6 +848,69 @@ console.log('\nel codigo del CLI, dicho en el idioma del panel')
       .includes('Link your WhatsApp line'),
     en.doc.getElementById('alert').textContent)
 
+  // El tope del almacen mordio. No bloquea —lo que se fue es viejo— pero tiene que
+  // VERSE: "un almacen sin tope y sin caducidad es un archivo de conversaciones ajenas
+  // que nadie borra", y un desalojo callado es un caso que se pierde y se descubre
+  // despues, cuando la fila ya salio sin cuerpo y sin explicacion (§11-F2).
+  const podado = {
+    ok: true,
+    optional: [{
+      que: 'message retention', code: 'retention',
+      como: '12 message bodies were evicted on 2026-09-22 (1 expired, 11 over the cap)',
+      howCode: 'retention-evicted'
+    }]
+  }
+  for (const [idioma, etiqueta, accion] of [
+    ['es-419', 'Retencion de mensajes', 'Suba capture_max'],
+    ['en-US', 'Message retention', 'Raise capture_max'],
+    ['pt-BR', 'Retencao de mensagens', 'Aumente capture_max']
+  ]) {
+    const v = await montar('config.html', { health: podado }, idioma)
+    await espera()
+    const texto = v.doc.getElementById('opcionales').textContent
+    ok(`el desalojo del almacen se ve, y en ${idioma}`, texto.includes(etiqueta), texto)
+    ok(`y dice que hacer para conservar mas (${idioma})`, texto.includes(accion), texto)
+  }
+  // La subida del almacen que dejo la via de WhatsApp Web. Se lleva la cache de
+  // cuerpos de esa via y sus lineas —un esquema que este codigo no sabe leer— y eso
+  // tiene que VERSE, por la misma razon que el desalojo: una migracion que borra en
+  // silencio la cache de mensajes de clientes reales es peor que una que lo dice.
+  const migrado = {
+    ok: false, problem: 'a message transport', problemCode: 'no-transport',
+    optional: [{
+      que: 'message store upgrade', code: 'store-migrated',
+      como: 'the message store was upgraded from version 0 to 1: the removed ' +
+        'WhatsApp Web route left 12 cached message bodies and 2 of its own lines ' +
+        'behind, and they were dropped',
+      howCode: 'store-migrated-dropped'
+    }]
+  }
+  for (const [idioma, etiqueta, explicacion] of [
+    ['es-419', 'Almacen de mensajes actualizado', 'WhatsApp Web'],
+    ['en-US', 'Message store upgraded', 'WhatsApp Web'],
+    ['pt-BR', 'Armazem de mensagens atualizado', 'WhatsApp Web']
+  ]) {
+    const v = await montar('config.html', { health: migrado }, idioma)
+    await espera()
+    const texto = v.doc.getElementById('opcionales').textContent
+    ok(`la migracion del almacen se ve, y en ${idioma}`, texto.includes(etiqueta), texto)
+    ok(`y dice de donde venia lo que se borro (${idioma})`, texto.includes(explicacion),
+      texto)
+  }
+  const migradoEs = await montar('config.html', { health: migrado }, 'es-419')
+  await espera()
+  ok('y no se cuela el ingles del CLI al decirlo',
+    !/\bdropped\b|\bmessage bodies\b|\bupgraded\b/.test(
+      migradoEs.doc.getElementById('opcionales').textContent),
+    migradoEs.doc.getElementById('opcionales').textContent)
+
+  const podadoEs = await montar('config.html', { health: podado }, 'es-419')
+  await espera()
+  ok('y no se cuela el ingles del CLI al decirlo',
+    !/\bevicted\b|\bmessage bodies\b|\bRaise\b/.test(
+      podadoEs.doc.getElementById('opcionales').textContent),
+    podadoEs.doc.getElementById('opcionales').textContent)
+
   // Un codigo que este panel no conozca todavia no puede dejar el aviso vacio: se
   // pinta el texto del CLI, que es peor que traducido pero infinitamente mejor que nada.
   const raro = await montar('config.html', {

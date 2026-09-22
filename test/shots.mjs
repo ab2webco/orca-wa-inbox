@@ -354,6 +354,52 @@ const PANELES = [
     })
   },
   {
+    // El plugin LEYENDO, que es lo que este trabajo vino a conseguir: linea enlazada,
+    // salud en verde, y el tope del almacen avisando que mordio. Va a los cuatro anchos
+    // y en los dos idiomas porque el renglon del desalojo es texto nuevo, y un texto
+    // nuevo en ingles dentro de un panel en espanol no lo delata ninguna prueba de
+    // codigo: solo mirarlo. Es el mismo defecto de "both routes are off".
+    nombre: 'config-leyendo', archivo: 'config.html', anchos: ANCHOS,
+    datos: Object.assign({}, DATOS, {
+      sidecar: { connection: 'open', qr: null, exited: false },
+      // La forma EXACTA que publica checkSystem con el doctor del almacen.
+      health: { ok: true, optional: [
+        { que: 'message retention', code: 'retention',
+          como: '12 message bodies were evicted on 2026-09-22 (1 expired, 11 over the cap)',
+          howCode: 'retention-evicted' },
+        { que: 'audio transcription', code: 'transcribe',
+          como: 'no engine: download the model in Settings > Voice',
+          howCode: 'transcribe-no-engine' }] }
+    })
+  },
+  {
+    // La maquina que viene de la via de WhatsApp Web, el primer arranque despues de
+    // actualizar: el almacen acaba de subir de esquema y la linea de hoy todavia no
+    // conecto. Es el estado EXACTO medido en la maquina del dueno, y va a los cuatro
+    // anchos y en los dos idiomas porque el renglon de la migracion es texto nuevo:
+    // un texto nuevo en ingles dentro de un panel en espanol no lo delata ninguna
+    // prueba de codigo, solo mirarlo.
+    nombre: 'config-almacen-migrado', archivo: 'config.html', anchos: ANCHOS,
+    datos: Object.assign({}, DATOS, {
+      sidecar: { connection: 'connecting', qr: null, exited: false },
+      // La forma EXACTA que publica checkSystem con el doctor de una maquina recien
+      // migrada (medido: `bin/wa-read doctor --json` sobre ~/.wa-inbox/capture.db).
+      health: { ok: false, problem: 'a message transport',
+        problemCode: 'no-transport',
+        detail: 'no linked WhatsApp line can be read yet. Link a line from the plugin ' +
+          'settings, with the QR code.',
+        optional: [
+          { que: 'message store upgrade', code: 'store-migrated',
+            como: 'the message store was upgraded from version 0 to 1: the removed ' +
+              'WhatsApp Web route left 0 cached message bodies and 2 of its own lines ' +
+              'behind, and they were dropped',
+            howCode: 'store-migrated-dropped' },
+          { que: 'audio transcription', code: 'transcribe',
+            como: 'no engine: download the model in Settings > Voice',
+            howCode: 'transcribe-no-engine' }] }
+    })
+  },
+  {
     // Un guardado que el host RECHAZO. Se fotografia porque el defecto que motivo esto
     // era visual: el panel decia "guardado" con un tilde verde sobre una escritura que
     // no ocurrio, y eso no lo delata ninguna prueba de codigo, solo mirarlo.

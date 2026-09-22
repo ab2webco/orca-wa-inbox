@@ -20,10 +20,21 @@ What `wa-read inbox --json` brought back:
 
 ```json
 { "stanza_id": "3EB0A1", "chat_jid": "100000000000000001@g.us",
-  "chat": "Acme — Operaciones", "de": "Laura",
+  "chat": "Acme — Operaciones", "account": "local", "sender": "Laura",
+  "kind": "mencion", "date": "2026-09-22 09:14", "media": null,
   "text": "@agente el reporte de cierre sale en blanco desde ayer, el cliente ya preguntó dos veces",
-  "adjuntos_cerca": ["/Users/…/Media/3EB0A0.jpg"] }
+  "adjuntos_cerca": [ { "date": "2026-09-22 09:12", "sender": "Laura",
+                        "type": "imagen", "caption": "",
+                        "path": "/Users/…/.wa-inbox/media/local/3EB0A0.jpg" } ],
+  "audios": [] }
 ```
+
+Two field shapes worth reading twice, because getting them wrong fails quietly rather
+than loudly. The author is `sender`, never `de`. And `adjuntos_cerca` holds **objects**,
+not paths: the path is `adjuntos_cerca[0].path`. Indexing it as if it were a list of
+strings gives you `undefined` and an agent that reports "no attachment" about a message
+that had one. `audios` is the flat list of paths of the audio ones, ready to hand to
+`wa-transcribe` as is.
 
 What was done, in order, and why each step is there:
 

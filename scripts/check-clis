@@ -576,15 +576,23 @@ def revisa_ajustes(fallos: list) -> int:
     return hechas
 
 
+def cargar_modulo(nombre, ruta):
+    """Un archivo de bin/, importado y no copiado: lo que se comprueba tiene que ser el
+    codigo que corre. `wa-scope` no termina en `.py`, asi que se carga con el loader de
+    fuente en vez de por nombre."""
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, str(BIN))
+    cargador = importlib.machinery.SourceFileLoader(nombre, str(ruta))
+    spec = importlib.util.spec_from_loader(nombre, cargador)
+    mod = importlib.util.module_from_spec(spec)
+    cargador.exec_module(mod)
+    return mod
+
+
 def wa_settings():
     """El modulo compartido de los CLI, importado y no copiado: lo que se comprueba
     tiene que ser el codigo que corre."""
-    ruta = str(BIN / "wa_settings.py")
-    sys.dont_write_bytecode = True
-    spec = importlib.util.spec_from_file_location("wa_settings_check", ruta)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    return cargar_modulo("wa_settings_check", BIN / "wa_settings.py")
 
 
 def revisa_casa_del_runtime(fallos: list) -> int:
@@ -743,24 +751,102 @@ def revisa_casa_del_runtime(fallos: list) -> int:
     return hechas
 
 
-# Los comandos que necesitan mensajes. Mientras no exista transporte los seis se niegan
-# con el MISMO motivo estable, y eso es lo que se recorre: el fallo que importa no es que
+# Los comandos que necesitan mensajes. SIN una linea enlazada los seis se niegan con el
+# MISMO motivo estable, y eso es lo que se recorre: el fallo que importa no es que
 # fallen, es que uno solo de ellos conteste una lista vacia. Una bandeja vacia se lee como
-# "no hay nada que atender", que es justo lo contrario de "no puedo leer nada"
-# (bin/wa-read: "cuantas contestaron, y no cuantas filas salieron").
+# "no hay nada que atender", que es justo lo contrario de "no puedo leer nada".
+#
+# El otro lado —con el almacen lleno los seis contestan, y una lista vacia quiere decir
+# que de verdad no hubo nada— se recorre en test/almacen.test.mjs, que ingiere mensajes
+# fabricados con el codigo del sidecar y despues le pregunta a este mismo ejecutable.
 SIN_TRANSPORTE_COMANDOS = [["inbox"], ["chats"], ["whoami"], ["state"],
                            ["chat", "algo"], ["media", "algo"]]
 SIN_TRANSPORTE = "no-transport"
 SIN_TRANSPORTE_ENVIO = "send-no-transport"
 
 
-def revisa_sin_transporte(fallos: list) -> int:
-    """Sin transporte, leer y escribir se NIEGAN con motivo, no contestan vacio.
+def revisa_rutas_del_almacen(fallos: list) -> int:
+    """La ruta del almacen la resuelven DOS implementaciones. No pueden discrepar.
 
-    Los dos transportes viejos —la app de escritorio y la sesion de WhatsApp Web— se
-    quitaron, y el sidecar que los reemplaza todavia empareja la linea pero no lee
-    mensajes. Ese hueco tiene que tener nombre: el panel traduce por codigo, y un codigo
-    estable es la diferencia entre "no hay trabajo" y "esto no puede leer".
+    El sidecar la escribe desde JavaScript (`rutaInbox()` en sidecar/src/almacen.js) y
+    `wa-read` la lee desde Python (`inbox_dir()` en bin/wa_store.py). Discrepar sobre
+    esta ruta no da un error: da un almacen que se llena y otro que se lee vacio, o sea
+    una bandeja siempre tranquila sobre una cuenta que no para de escribir. Por eso las
+    dos se corren contra el MISMO entorno y se comparan.
+
+    Los topes de retencion van igual: viven en `DEFAULT_CONFIG` de wa-scope —que es
+    quien los guarda— y en `DEFAULTS` de wa_store —que es quien los aplica cuando no hay
+    registro que leer—. Un arranque distinto en cada lado es texto ajeno conservado por
+    mas tiempo del que el panel dice.
+    """
+    hechas = 0
+    nodo = shutil.which("node")
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+
+        py = subprocess.run(
+            [sys.executable, "-c",
+             "import sys; sys.dont_write_bytecode = True; sys.path.insert(0, %r); "
+             "import wa_store; print(wa_store.inbox_dir())" % str(BIN)],
+            capture_output=True, text=True, env=env, timeout=120)
+        ruta_py = (py.stdout or "").strip()
+        hechas += 1
+        if not ruta_py:
+            fallos.append("wa_store.inbox_dir() no contesto una ruta: "
+                          f"{(py.stderr or '').strip()[:200]!r}")
+        elif ruta_py != str(home / ".wa-inbox"):
+            fallos.append(f"wa_store.inbox_dir() dio {ruta_py!r} con HOME propio y tenia "
+                          f"que dar {str(home / '.wa-inbox')!r}")
+
+        # Sin node no se puede comparar con el lado que ESCRIBE. Se dice, y no se
+        # inventa un verde: un chequeo que no corrio no es un chequeo que paso.
+        if not nodo:
+            print("  aviso: sin node, no se comparo la ruta del almacen con el sidecar",
+                  file=sys.stderr)
+            return hechas
+        js = subprocess.run(
+            [nodo, "--input-type=module", "-e",
+             "import { rutaInbox, rutaAlmacen } from %r;"
+             "process.stdout.write(rutaInbox(process.env) + '\\n' + rutaAlmacen(process.env))"
+             % (RAIZ / "sidecar" / "src" / "almacen.js").as_uri()],
+            capture_output=True, text=True, env=env, timeout=120)
+        partes = (js.stdout or "").strip().splitlines()
+        hechas += 2
+        if len(partes) != 2:
+            fallos.append("sidecar/src/almacen.js no contesto la ruta del almacen: "
+                          f"{(js.stderr or '').strip()[:200]!r}")
+        else:
+            if partes[0] != ruta_py:
+                fallos.append(f"el sidecar escribe en {partes[0]!r} y wa-read lee "
+                              f"{ruta_py!r}: el almacen se llenaria de un lado y se "
+                              "leeria vacio del otro")
+            esperado = str(home / ".wa-inbox" / "capture.db")
+            if partes[1] != esperado:
+                fallos.append(f"el almacen quedo en {partes[1]!r} y tenia que quedar en "
+                              f"{esperado!r}, al lado del registro de alcance")
+
+    # Y los dos arranques de retencion, que son el trato entero sobre texto ajeno.
+    wa_scope = cargar_modulo("wa_scope_mod", BIN / "wa-scope")
+    wa_store = cargar_modulo("wa_store_mod", BIN / "wa_store.py")
+    for clave in ("capture_max", "capture_days", "inbox_days"):
+        hechas += 1
+        a = wa_scope.DEFAULT_CONFIG.get(clave)
+        b = wa_store.DEFAULTS.get(clave)
+        if a != b:
+            fallos.append(f"{clave} arranca en {a!r} para wa-scope y en {b!r} para "
+                          "wa_store: el tope que el panel muestra no seria el que se "
+                          "aplica")
+    return hechas
+
+
+def revisa_sin_transporte(fallos: list) -> int:
+    """Sin una linea enlazada, leer y escribir se NIEGAN con motivo, no contestan vacio.
+
+    Este HOME de mentira no tiene almacen de mensajes, que es exactamente la maquina de
+    quien todavia no escaneo el QR. Ese hueco tiene que tener nombre: el panel traduce
+    por codigo, y un codigo estable es la diferencia entre "no hay trabajo" y "esto no
+    puede leer".
     """
     hechas = 0
     with tempfile.TemporaryDirectory() as tmp:
@@ -898,6 +984,7 @@ def main() -> int:
             fallos.append(f"{nombre} {' '.join(args)}: {ultima.strip()}")
 
     comprobaciones = (revisa_ajustes(fallos) + revisa_sin_transporte(fallos)
+                      + revisa_rutas_del_almacen(fallos)
                       + revisa_migracion_cuentas(fallos)
                       + revisa_rastro_corrida(fallos) + revisa_precheck(fallos)
                       + revisa_sin_bytecode(fallos)

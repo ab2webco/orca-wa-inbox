@@ -92,11 +92,11 @@ async function checkSystem(orca, toolsDir = TOOLS) {
   // linea, por ejemplo — y avisarlo pondria una notificacion en cada arranque de una
   // maquina que lee perfecto, que es la manera mas rapida de que dejen de leerse.
   const failed = checks.filter((c) => !c.ok && c.requerido !== false)
-  // Que no haya transporte de mensajes bloquea —el plugin no puede leer— pero no es
-  // algo que el usuario pueda arreglar: lo arregla la rebanada que falta construir. Una
-  // notificacion es para lo que tiene accion, asi que este motivo viaja a `health`, que
-  // el panel pinta, y NO a una notificacion que saldria en cada arranque de cada
-  // maquina y terminaria de enseniar a ignorarlas.
+  // Que no haya linea enlazada bloquea —el plugin no puede leer— pero la accion esta a
+  // dos centimetros: el codigo QR vive en el mismo panel donde se pinta este aviso. Una
+  // notificacion del sistema ademas de eso saldria en cada arranque de una maquina
+  // recien instalada, que es la manera mas rapida de enseniar a ignorarlas. El motivo
+  // viaja a `health`, que el panel pinta al lado del QR, y no a una notificacion.
   const accionables = failed.filter((c) => c.code !== 'no-transport')
 
   // El estado se PUBLICA siempre. El panel lo lee en `health` y no lo escribia nadie:
@@ -522,9 +522,16 @@ function resolverAuthDir(pluginDir, guion = join(pluginDir, 'sidecar', 'resolve-
  * sabe si existe (mismo principio que `sync`, arriba, aplicado a un proceso que corre
  * indefinidamente en vez de una corrida puntual).
  */
-export function lanzarSidecar({ orca, scriptPath, authDir, spawnFn = spawn, env = process.env }) {
+export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
+  spawnFn = spawn, env = process.env }) {
   let estado = { at: new Date().toISOString(), connection: null, qr: null,
     motivo: null, statusCode: null, error: null, exited: false,
+    // Lo que el sidecar guardo y lo que desalojo, en CONTEOS. Un tope de retencion que
+    // muerde en silencio deja mensajes sin cuerpo sin que nadie sepa por que
+    // (docs/ENCARGO-TRANSPORTE-UNICO.md §11-F2), y "llegaron 40 y se guardaron 0" es
+    // lo unico que distingue "no hay ninguna conversacion autorizada" de "esto no
+    // funciona". Nunca lleva contenido: ni un cuerpo, ni un numero, ni un remitente.
+    store: null,
     startedAt: new Date().toISOString() }
   const escribir = (parcial) => {
     estado = { ...estado, ...parcial, at: new Date().toISOString() }
@@ -542,7 +549,12 @@ export function lanzarSidecar({ orca, scriptPath, authDir, spawnFn = spawn, env 
     // env, nunca por argv, para que el contrato viva en un solo lugar.
     const mando = mandoSinValla(process.execPath, [scriptPath])
     proceso = spawnFn(mando.cmd, mando.args, {
-      env: { ...env, ELECTRON_RUN_AS_NODE: '1', WA_SIDECAR_AUTH_DIR: authDir },
+      // `WA_SIDECAR_TOOLS_DIR` es donde vive `wa-scope`, que es quien sabe que
+      // conversaciones estan autorizadas. El sidecar NO adivina esa ruta ni la busca
+      // en el PATH: las herramientas viajan juntas, y buscarlas afuera ya habia
+      // mandado a una a la instalacion equivocada (§11-E4).
+      env: { ...env, ELECTRON_RUN_AS_NODE: '1', WA_SIDECAR_AUTH_DIR: authDir,
+        WA_SIDECAR_TOOLS_DIR: toolsDir },
       stdio: ['ignore', 'pipe', 'pipe']
     })
   } catch (error) {
@@ -588,6 +600,25 @@ export function lanzarSidecar({ orca, scriptPath, authDir, spawnFn = spawn, env 
           // detras de una sesion ya conectada (docs/ENCARGO...§6).
           ...(mensaje.state === 'open' ? { qr: null } : {})
         })
+      } else if (mensaje?.type === 'store') {
+        // Solo numeros. El protocolo del almacen no trae texto de nadie, y esto
+        // termina en `storage`, que lee el panel.
+        escribir({ store: {
+          at: mensaje.at ?? null,
+          llegaron: Number(mensaje.llegaron) || 0,
+          guardados: Number(mensaje.guardados) || 0,
+          sinAutorizar: Number(mensaje.sinAutorizar) || 0,
+          actualizados: Number(mensaje.actualizados) || 0,
+          autorizadas: Number(mensaje.autorizadas) || 0,
+          desalojados: Number(mensaje.desalojados) || 0,
+          caducados: Number(mensaje.caducados) || 0,
+          // Lo que se llevo la subida de esquema del almacen, el arranque en que
+          // ocurre. El renglon del `doctor` lo ve quien entra al panel; esto lo ve
+          // quien mire el storage o el log el dia que pregunte adonde fueron a parar
+          // los mensajes de la via vieja. Son numeros, como todo lo de aca.
+          migradoCuerpos: Number(mensaje.migradoCuerpos) || 0,
+          migradoLineas: Number(mensaje.migradoLineas) || 0
+        } })
       } else if (mensaje?.type === 'error') {
         escribir({ error: { code: mensaje.code ?? null,
           detail: String(mensaje.detail ?? '').slice(0, 300) } })
@@ -747,7 +778,11 @@ export default function activate(orca) {
     // final no se reporte como una caida. Dos sidecars vivos sobre el mismo auth state
     // se pisarian las credenciales.
     apagarSidecar()
-    apagarSidecar = lanzarSidecar({ orca, scriptPath: s.sidecarPath, authDir: resuelto.dir })
+    // `s.toolsDir` y no `TOOLS`: quien mueve el directorio de herramientas tiene que
+    // moverlo entero, o el sidecar le pregunta por el alcance a una instalacion
+    // distinta de la que lee el resto del plugin (§11-E4).
+    apagarSidecar = lanzarSidecar({ orca, scriptPath: s.sidecarPath, authDir: resuelto.dir,
+      toolsDir: s.toolsDir || TOOLS })
     return { ok: true, dir: resuelto.dir }
   }
 

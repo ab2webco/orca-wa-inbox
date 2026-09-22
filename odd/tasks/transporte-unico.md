@@ -488,19 +488,252 @@ ya atiende: soporte por WhatsApp, helpdesk, sitios de cliente):
 5. Una mención que el propietario **ya contestó** no vuelve a aparecer (§11-D1).
 6. Un grupo en `off` no produce absolutamente nada, ni un registro de contenido.
 
-- [ ] Esquema nuevo, con `(cuenta, chat_jid, stanza_id)` como llave — el
-      aislamiento entre líneas va en la llave, no en la intención (§11-F4)
-- [ ] El sidecar escribe lo que recibe; `messages.update` cubre borrados y
-      editados, que **hoy no se manejan en ningún lado** (§11-B4)
-- [ ] `wa-read` pasa a ser capa de consulta sobre ese almacén, **conservando su
-      contrato JSON**: es de lo que dependen `wa-scope`, los prompts y el panel
-- [ ] Permisos `0600` y tope de retención con desalojo visible (§11-F1, §11-F2)
-- [ ] `quotedParticipant` se mira en sus **dos** formas, o se pierde el 2% de las
-      respuestas sin un solo error (§11-B1)
-- [ ] La lista de menciones trae objetos, no strings: comparar con `===` da cero
-      silencioso (§11-B2)
-- [ ] Ruta: **delegada**
-- Commit: —
+- [x] Esquema nuevo, con `(account, chat_jid, stanza_id)` como llave — el
+      aislamiento entre líneas va en la llave, no en la intención (§11-F4).
+      `sidecar/src/almacen.js`, tablas `linea` / `chat` / `mensaje` / `desalojo`
+- [x] El sidecar escribe lo que recibe; `messages.update` cubre borrados y
+      editados (§11-B4). `sidecar/src/mensajes.js` + `sidecar/src/ingesta.js`
+- [x] `wa-read` pasa a ser capa de consulta sobre ese almacén, **conservando su
+      contrato JSON** (`bin/wa_store.py` + `bin/wa-read`, 183 → 232 líneas)
+- [x] Permisos `0600` —base, `-wal`, `-shm` y cada archivo de media— y tope de
+      retención con desalojo visible en el panel, en `wa-read doctor` y en
+      `wa-read state` (§11-F1, §11-F2)
+- [x] `quotedParticipant` se mira en sus **tres** formas (`participant`,
+      `participantPn`, `participantLid`) y comparando identidad CON su tipo, no
+      sólo el número (§11-B1)
+- [x] La lista de menciones se normaliza: cadenas y objetos, con el sufijo de
+      dispositivo quitado (§11-B2)
+- [x] Ruta: **delegada** para los dos mapeos (contrato JSON viejo, consumidores),
+      escritura inline por etapas con verificación entre cada una
+- Commit: — (instrucción explícita de no commitear)
+
+**Dónde vive el almacén, y por qué.** `~/.wa-inbox/capture.db`, al lado de `scope.db`.
+Tres razones, en orden de peso:
+
+1. **No puede ir dentro del árbol del plugin**, que está verificado por content-hash
+   (§7): un archivo que aparece después de instalar lo deja en «No válido».
+2. **No va en `<userData>/plugins-data/<publisher>.<id>/`**, que es donde sí vive el
+   auth state. Esa ruta sólo se resuelve preguntándole a Orca, en un subproceso, y
+   puede no existir (`sin-userdata`). El auth state es una credencial *de Orca* y ahí
+   pertenece; el almacén lo tienen que poder abrir `wa-read` y `wa-scope` corridos a
+   mano, desde una terminal, con Orca cerrado.
+3. **La autorización vive en `~/.wa-inbox/scope.db`** con la llave `(account, chat_jid)`.
+   El almacén con `(account, chat_jid, stanza_id)` es esa misma llave más el mensaje.
+   Que las dos bases estén en el mismo directorio y se respalden juntas no es comodidad:
+   una sin la otra no significa nada.
+
+Y el nombre no es nuevo: `bin/wa-scope:987` ya declaraba sus dos topes de retención
+diciendo *«El almacén de cuerpos de mensajes (~/.wa-inbox/capture.db)»*, con
+`capture_max`/`capture_days` ya validados por el panel. Esto ocupa el lugar que el
+registro ya había reservado.
+
+**Quién escribe, y quién no.** Sólo el sidecar, con `node:sqlite` —verificado en el
+Node que trae Orca: `ELECTRON_RUN_AS_NODE=1 Orca -e ...` contesta **Electron 43.1.0,
+Node 24.18.0**, y `require('node:sqlite')` resuelve—. El worker NO puede escribir ahí y
+no lo intenta: su valla declara `--allow-fs-read` sobre la raíz del plugin y
+`--allow-fs-write` no existe en todo orca-oss (§1). `wa-read` es Python, no hereda la
+valla, y abre la base en `mode=ro` explícito.
+
+**El corte de autorización ocurre ANTES de escribir**, no en la consulta. Un chat en
+`off` no deja un cuerpo «que después no se muestra»: no deja cuerpo, y eso se ve
+abriendo el archivo con un visor de sqlite. Lo que sí queda es que la conversación
+existe —jid, nombre visible, hora— porque sin eso una conversación que nadie registró
+no se puede ni ofrecer para autorizarla y la lista del panel nace vacía para siempre.
+Es exactamente §11-F3: contenido y contabilidad se purgan distinto.
+
+**El alcance no se reimplementa.** `sidecar/src/alcance.js` le pregunta a
+`wa-scope list --json` —que es `merged_scope`, o sea la tabla del CLI cruzada con lo que
+el usuario acaba de tocar en el panel— y cachea 30 s. Copiar ese cruce en JavaScript
+habría sido tener dos verdades sobre quién está autorizado. Deniega por defecto y
+también **mientras no haya podido cargar nunca**: un fallo de lectura no puede abrir
+permisos, y una respuesta que no se pudo parsear no reemplaza el mapa anterior.
+
+**La cuenta se llama `local`, y es a propósito.** `wa-scope set` escribe
+`account='local'` cuando el usuario autoriza desde el panel (`bin/wa-scope:792`) y
+`merged_scope` fuerza esa misma cuenta para las filas del panel (`:624`). Estrenar un
+nombre nuevo habría dejado cada autorización existente apuntando a una línea que no
+existe, y el síntoma sería una bandeja vacía sin un solo error. El env
+`WA_SIDECAR_CUENTA` queda para el día que haya una segunda línea.
+
+**Lo que se agregó al contrato JSON, todo aditivo:** `account` en las filas de `inbox` y
+`chats`; `evicted`/`evictedAt`/`evictedFiles` en `state`; `--line` en los cinco comandos
+de lectura; y el renglón `retention` en `doctor`. Nada se renombró ni se quitó.
+
+**Evidencia (TDD real, RED observado ANTES de implementar, en tres vueltas):**
+
+1. **Las rarezas de WhatsApp, como funciones puras.** `node test/sidecar-mensajes.test.mjs`
+   sin `sidecar/src/mensajes.js` corta con
+   `ERR_MODULE_NOT_FOUND: .../sidecar/src/mensajes.js`. Con la implementación:
+   **72/72**. Cubre las dos formas de `mentionedJid` (cadenas y objetos wid), las tres
+   de `participant` (`@lid`, `@c.us`, `@s.whatsapp.net`), el sufijo de dispositivo, la
+   lista de exclusión cerrada con `@status`/`@lid.status` adentro, `messageTimestamp`
+   como `Long`, y las dos formas de `messages.update`.
+2. **Los seis casos de uso, contra el CLI de verdad.** `node test/almacen.test.mjs` sin
+   `sidecar/src/almacen.js` corta con `ERR_MODULE_NOT_FOUND`; con el almacén pero con el
+   `wa-read` viejo da **32/82**, con las 50 fallas todas del mismo lado —cada consulta
+   contestaba `no-transport`— mientras las invariantes de almacenamiento (0600, el chat
+   en `off` sin cuerpos, el aislamiento entre líneas, los conteos de desalojo) ya
+   pasaban. Con la capa de consulta: **88/88**.
+3. **El freno de los conteos.** `node test/sidecar-pairing.test.mjs` sin
+   `tocaEmitirAlmacen` corta con
+   `SyntaxError: The requested module '../sidecar/src/index.js' does not provide an
+   export named 'ALMACEN_LATIDO_MS'`. Con la implementación: **31/31**.
+4. **El worker.** Las dos pruebas nuevas, con `git stash push -- main.mjs`: **4 fallas**
+   —`WA_SIDECAR_TOOLS_DIR` llegaba vacío y la clave `store` no existía en storage—.
+   Con la implementación: **103/103**.
+
+**Un cuarto defecto, visto releyendo el cableado y no por una prueba que fallara:** cada
+mensaje `store` que sale por stdout termina en un `storage.set` del worker, y Orca mata
+al worker a los 64 eventos sin confirmar en vuelo. Es el MISMO mecanismo que ya se llevo
+puesto al worker una vez por lo hablador que es Baileys en stderr —y ahi el sintoma no
+se parecia en nada a la causa: el panel se quedaba con un QR vencido para siempre porque
+nadie llegaba a ver el final—. Una cuenta ocupada emite varios `messages.upsert` por
+segundo durante la sincronizacion inicial. Los conteos salen ahora con freno de 30 s
+(`tocaEmitirAlmacen`, pura y probada en `test/sidecar-pairing.test.mjs`, 26 → 31), y el
+desalojo lo **fuerza**: es lo unico que no se puede perder.
+
+**Tres defectos reales que encontraron las pruebas, no la lectura:**
+
+- `lanzarSidecar` pasaba `TOOLS` (el `bin/` del plugin) en vez de `s.toolsDir`. Quien
+  mueve el directorio de herramientas lo mueve entero, y con esto el sidecar le habría
+  preguntado por el alcance a **otra instalación** (§11-E4). Lo delató la aserción de
+  que el valor recibido fuera el mismo directorio que usa el resto del worker.
+- El renglón de retención salía con `ok: True`, y `checkSystem` arma la lista de
+  opcionales del panel con `requerido === false && !ok` (`main.mjs:88`): **un desalojo
+  en verde no llega nunca a la pantalla**. «Visible» habría sido visible sólo corriendo
+  el CLI a mano. Va con `ok: False` y `requerido: False`: se ve y no bloquea.
+- `harness/EXAMPLES.md` documentaba el campo del autor como `"de"` cuando siempre fue
+  `sender`, y pintaba `adjuntos_cerca` como una lista de rutas cuando es una lista de
+  objetos. Un modelo siguiendo ese ejemplo habría leído `undefined` y reportado «sin
+  adjunto» sobre un mensaje que traía uno. Corregido, con las dos formas dichas en voz
+  alta.
+
+**Dos chequeos nuevos que impiden que esto se rompa en silencio**
+(`revisa_rutas_del_almacen` en `scripts/check-clis`, 134 → 140 comprobaciones):
+
+- La ruta del almacén la resuelven DOS implementaciones —`rutaInbox()` en JavaScript y
+  `inbox_dir()` en Python—. Discrepar no da un error: da un almacén que se llena y otro
+  que se lee vacío, o sea una bandeja siempre tranquila sobre una cuenta que no para de
+  escribir. Las dos se corren contra el MISMO entorno y se comparan. **Verificado no
+  vacío**: cambiando `.wa-inbox` por `.wa-inbox-otro` en el lado JS, el chequeo falla
+  nombrando las dos rutas.
+- Los topes de retención arrancan en `DEFAULT_CONFIG` (wa-scope, que los guarda) y en
+  `DEFAULTS` (wa_store, que los aplica sin registro). **Verificado no vacío**: bajando
+  `capture_days` a 30 en un solo lado, el chequeo falla diciendo cuál es cuál.
+
+**Evidencia visual (regla del proyecto), mirada:** captura nueva `config-leyendo` —línea
+conectada, salud en verde y el aviso de desalojo— a **1440, 768, 390 y 320** en claro y
+oscuro en español, y a 1440/320 en inglés. El renglón dice *«Retencion de mensajes — Se
+borraron mensajes viejos para respetar el tope. Suba capture_max o capture_days si
+necesita conservar mas»* en el panel en español y su equivalente en inglés, **sin una
+palabra del CLI sin traducir**, sin desbordes a ningún ancho. Miradas también
+`actividad` a 1440 claro y 390 oscuro con conversaciones presentes: mención, respuesta y
+directo, cada uno con su remitente, su conversación, su hora y su insignia de adjunto.
+
+**La cadena entera, recorrida a mano y con el HOME de mentira** (evidencia que no da
+ninguna prueba unitaria, porque cruza cuatro procesos): con un mensaje fabricado en el
+almacén y la conversación autorizada con `wa-scope set --mode observar`,
+`wa-scope sync --json` contesta `{"synced": true}` y deja en el `storage.json` del
+plugin —que es lo que lee el panel— `chats: [{jid, name: "Soporte Cliente Norte",
+kind: "grupo", unread: 2, last}]` y `pending: [{stanzaId: "A1", chat, chatJid, sender:
+"Laura", kind: "mencion", text, hasMedia, decision}]`, con `mapped: 1, authorized: 1`.
+Y `wa-scope pending` sale **0** con `{"hay_trabajo": true, "detalle": "1 waiting, 0 in
+progress"}`: las dos automatizaciones quedan desbloqueadas. Es el circuito completo
+—almacén → `wa-read inbox` → `wa-scope sync` → panel → precheck— que estaba cortado.
+
+**El chat en `off` no deja nada, verificado sobre el disco y no sobre una consulta:**
+ingiriendo un mensaje con pie *«CONTRASENA-SUPER-SECRETA»*, una imagen y un remitente,
+con el alcance en `off` para todo, `grep -r` sobre `~/.wa-inbox/` entero no encuentra ni
+el cuerpo, ni los bytes del adjunto, ni el número del remitente. Quedan cero filas en
+`mensaje`, ningún directorio de media, y **una** fila en `chat` con el jid y el nombre
+visible — que es lo que hace falta para poder ofrecerla en el panel y autorizarla.
+
+**Un modo de falla que se probó porque asustaba:** `wa-read` abre la base con
+`mode=ro`, y una base en WAL cuyo escritor murió necesita recuperación, que escribe.
+Medido en macOS: matando el escritor con `SIGKILL` con el WAL vivo, y otra vez
+borrándole además el `-shm` (como tras reiniciar el equipo), `wa-read chats --json`
+contesta correcto y sale 0 en los dos casos.
+
+**Lo que NO está verificado, y hay que decirlo:** el cableado de los eventos de Baileys
+—`messages.upsert`, `messages.update`, `chats.upsert`, `groupFetchAllParticipating`, y
+la descarga de media con `downloadMediaMessage`— **no se ejercitó contra una cuenta
+real**. Lo que se probó es el mapeo de un `WAMessage` a una fila y todo lo que sigue;
+que el evento llegue con esa forma sale de la librería y de `process-message.js:195-251`,
+no de una corrida. Esto necesita T5 (teléfono real), igual que la persistencia de sesión.
+
+**Fuera de alcance, y queda pendiente:** registrar la línea en `wa_account` de
+`scope.db` con `kind='baileys'` (§5 lo menciona; hoy `wa-scope accounts` no lista la
+línea enlazada, y el almacén lleva su propia tabla `linea`). `wa-send` sigue negándose
+con `send-no-transport`: enviar es otra rebanada.
+
+### T12 — Defecto de actualización: el almacén de la vía vieja bloqueaba todo
+
+Encontrado en la máquina del dueño, no en una prueba. En cualquier equipo que alguna
+vez usó la vía de WhatsApp Web, `~/.wa-inbox/capture.db` **ya existe** con el esquema
+de esa vía: `capturado` (su caché de cuerpos, tope 20000 / 90 días) y una `linea` de
+dos columnas, sin `store_meta`. Medido ahí: `pragma user_version` = 0, `capturado` 0
+filas, `linea` 2 filas (`web`, `web:262444127674377`, del 2026-09-19). El lector se
+negaba con `store-schema` a **todo**: el plugin se instalaba, emparejaba y después no
+contestaba nada.
+
+Negarse estaba bien —contestar filas a medias es peor (§11-E5)—; lo que faltaba era
+la salida. Y había un segundo defecto, más grave, que la prueba nueva destapó: al
+abrir ese archivo, `abrirAlmacen` sellaba `schema_version = 1` mientras
+`create table if not exists linea` dejaba intacta la tabla de dos columnas. El almacén
+quedaba diciendo que estaba al día con la forma de ayer adentro, y `registrarLinea`
+reventaba con `table linea has no column named lid`.
+
+- [x] Detección de versión en el **escritor** (`sidecar/src/almacen.js`), no en
+      `wa-read`, que abre en `mode=ro`
+- [x] **Los cuerpos viejos se borran.** No es política nueva: §11-F3 ya dice que
+      apagar la captura borra los cuerpos y conserva la contabilidad. Un cuerpo de
+      `capturado` es texto de un cliente real en un esquema que este código no sabe
+      leer; conservarlo sin poder servirlo es "un archivo de conversaciones ajenas que
+      nadie borra" (§11-F2)
+- [x] **Las líneas viejas también se van**, y eso sí es una decisión. `wa_store.abrir()`
+      cuenta las filas de `linea` para decidir si hay línea enlazada: conservar dos
+      cuentas `web*` —que nadie escribe ya y que ninguna autorización referencia
+      (`chat_scope.account` es `local`)— dejaría el doctor en verde con "2 líneas
+      enlazadas", el panel dejaría de pedir el QR y `wa-scope pending` soltaría al
+      agente sobre una bandeja vacía para siempre. Una bandeja rota que se lee como una
+      tranquila es lo único que §11-E5 prohíbe. Una fila de `linea` que **no** sea de la
+      vía muerta sí se conserva con su `first_seen`
+- [x] **Se dice en voz alta**, por el camino que ya usa la retención: tabla `migracion`
+      en el almacén → `wa_store.ultima_migracion()` → renglón `store-migrated` del
+      `doctor` con `ok: false, requerido: false` (el defecto conocido: `checkSystem`
+      arma los opcionales con `requerido === false && !ok`, así que un renglón en verde
+      no llega nunca a la pantalla) → `config.html` en es/en/pt. Y por `store` y stderr
+      del sidecar, nunca por `error`: el panel lee `sidecar.error` como la causa de una
+      sesión caída
+- [x] **Atómica.** Migración + esquema + sello van en **una** transacción. Un corte a
+      mitad deja el archivo como estaba y el lector negándose con `store-schema`
+      (cerrado), nunca contestando datos incompletos. El sello va en `store_meta` **y**
+      en `pragma user_version`, que es lo que contesta un `sqlite3` a mano — que es
+      justo como se diagnosticó esto
+- [x] Ruta: **inline** (escritor + lector + panel + pruebas; disparador de escritor por
+      2+ archivos no triviales, atendido en un solo hilo por ser un cambio único)
+- Commit: — (sin commitear, según instrucción explícita)
+
+**Evidencia:**
+
+- `node test/almacen.test.mjs`: **127/127** (eran 88; +39 de la migración)
+- `node test/panels.test.mjs`: **267/267** (eran 260; +7)
+- `node test/worker.test.mjs`: **104/104** (eran 103; +1)
+- `node test/sidecar-mensajes.test.mjs` 72/72 · `sidecar-pairing` 31/31 ·
+  `sidecar-build` 5/5 · `manifest` 2/2
+- `scripts/check-clis` 8 CLI / 140 comprobaciones · `scripts/check-voseo` 34 archivos ·
+  `scripts/check-panels` ok · `check-prompts` · `check-harness` · `check-closing` 36/36
+- `npm run check` completo: **exit 0**
+- `npm run shots`: 264 capturas; `config-almacen-migrado` **mirada** a 1440/768/390/320
+  en claro y oscuro, es y en — sin desbordes, sin inglés colado en el panel en español
+- **Sobre el archivo real del dueño:** migró a v1, `pragma user_version` 1, `capturado`
+  ya no está, 2 líneas `web*` retiradas y anotadas en `migracion`. Los tres comandos
+  pasaron de `store-schema` (callejón sin salida) a `no-transport` (escanee el QR), que
+  es la negativa correcta hasta que el sidecar de T8 conecte y registre `local`. Sobre
+  una **copia** de ese mismo archivo con la línea ya registrada: `chats` y `inbox`
+  contestan `[]` con salida 0
+
+---
 
 ### T9 — Que cualquier modelo de Orca pueda usar el CLI
 
@@ -534,20 +767,23 @@ deja el panel vacío y mudo) · `scripts/check-voseo` sobre toda cadena nueva
 
 ## Progreso
 
-**Estado:** T1, T2, T3, T4, T6 y T7 cerradas con pruebas en verde y evidencia visual
-mirada. T5 sigue pendiente: requiere un teléfono real y el panel de ajustes. Sin
-commitear (working tree para review, según instrucción explícita).
+**Estado:** T1, T2, T3, T4, T6, T7, T8, T10, T11 y T12 cerradas con pruebas en verde y
+evidencia visual mirada. T5 sigue pendiente: requiere un teléfono real y el panel de
+ajustes, y ahora además valida la ingesta real de T8. T9 sin empezar. Sin commitear
+(working tree para review, según instrucción explícita).
 
 **Lo que quedó de T6, en números:** `web-lines.mjs` y `docs/LECTURA-MULTIFUENTE.md`
 borrados; `bin/wa-read` 2.212 → 197, `bin/wa-send` 724 → 122, `main.mjs` 1.249 → 807,
 `config.html` 3.201 → 2.014, `scripts/check-clis` 3.510 → 876, `test/worker.test.mjs`
 1.477 → 761, `test/panels.test.mjs` 2.177 → 1.451, `test/shots.mjs` 856 → 546.
 
-**Advertencia honesta:** hasta que exista el almacén de mensajes, el plugin **no lee**.
-`health.ok` es `false` con `no-transport`, `wa-scope pending` bloquea las dos
-automatizaciones con ese mismo código, y la lista de conversaciones del panel queda
-vacía porque `wa-scope` no tiene a quién preguntarle. Eso es lo acordado y está dicho
-en voz alta en los tres idiomas; no es una regresión silenciosa.
+**Advertencia honesta, actualizada por T8:** el plugin ya lee, pero **sólo con una línea
+enlazada**. Sin ella, `health.ok` es `false` con `no-transport`, `wa-scope pending`
+bloquea las dos automatizaciones con ese mismo código y la lista de conversaciones del
+panel queda vacía. Con la línea enlazada, los seis comandos contestan con código 0 y una
+lista vacía significa que de verdad no hubo nada. Las dos respuestas son distintas a
+propósito (§11-E5) y las dos están cubiertas: la negativa en `scripts/check-clis`, la
+afirmativa en `test/almacen.test.mjs`.
 
 **Evidencia de T1/T2:**
 
@@ -599,6 +835,6 @@ en voz alta en los tres idiomas; no es una regresión silenciosa.
 usuario de no validar por terminal — ver T5 arriba): persistencia de sesión tras
 reinicio de Orca, y reconexión tras suspender/despertar la máquina.
 
-**Siguiente paso:** T5 — emparejar de verdad, desde el panel, con un teléfono
-real. Después, el almacén de mensajes: es lo único que separa al plugin de volver a
-leer.
+**Siguiente paso:** T5 — emparejar de verdad, desde el panel, con un teléfono real, que
+ahora vale por dos: verifica la persistencia de la sesión **y** la ingesta real de T8,
+que es lo único de esta rebanada que no se puede probar sin una cuenta. Después, T9.

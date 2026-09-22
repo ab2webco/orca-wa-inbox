@@ -5,15 +5,15 @@ hasta dónde puede actuar tu agente.
 
 ## Requisitos
 
-**Hoy el plugin no lee mensajes.** Las dos vías que tenía —la base local de WhatsApp
-Desktop y una sesión de WhatsApp Web conducida por el navegador— se quitaron, y el
-sidecar que las reemplaza ya enlaza la línea con un código QR pero todavía no trae los
-mensajes. Eso no está escondido: `wa-read` se niega con el motivo estable
-`no-transport` y `wa-scope pending` bloquea las automatizaciones, que es lo honesto —
-una bandeja siempre vacía se lee como una semana tranquila.
+**El plugin lee cuando hay una línea enlazada, y no antes.** Se enlaza desde el panel
+de ajustes escaneando un código QR; a partir de ahí un proceso hijo mantiene la línea
+abierta y guarda lo que llega. Sin línea enlazada, `wa-read` se niega con el motivo
+estable `no-transport` y `wa-scope pending` bloquea las automatizaciones, que es lo
+honesto — una bandeja siempre vacía se lee como una semana tranquila.
 
-Lo que sí funciona: el registro, el mapeo de conversaciones a proyectos, los permisos
-por conversación, los dos paneles y el emparejamiento de la línea.
+Enlazada la línea, los mismos comandos contestan con código 0, y una lista vacía
+significa que de verdad no hubo nada. Las dos respuestas son distintas a propósito:
+confundirlas es leer «no puedo leer nada» como «no hay nada que atender».
 
 | | |
 |---|---|
@@ -47,11 +47,11 @@ cara no es un precheck.
 
 Si el sync deja de correr, el precheck **no** dice "no hay nada que hacer": sale con
 código 2 y lo explica. Callarlo dejaría al agente sin correr durante días sin decir por
-qué. Mientras no haya transporte, el precheck bloquea con el código `no-transport` por
-esa misma razón.
+qué. Mientras no haya una línea enlazada, el precheck bloquea con el código
+`no-transport` por esa misma razón.
 
 
-## De dónde lee: todavía de ningún lado
+## De dónde lee
 
 Los dos transportes viejos se quitaron enteros. En su lugar hay un **sidecar** que
 habla el protocolo multi-dispositivo de WhatsApp: corre como proceso hijo del worker
@@ -65,10 +65,29 @@ esperar. La sesión queda guardada fuera del árbol del plugin, en
 `<userData>/plugins-data/<publisher>.<id>/wa-auth/`, porque ese árbol está verificado
 por content-hash y un archivo nuevo ahí lo deja en «No válido».
 
-**Leer los mensajes llega después.** Hasta entonces `wa-read inbox|chats|chat|media|
-whoami|state` salen con código 4 y el motivo `no-transport` en la primera línea de
-stderr, y `wa-send` con `send-no-transport`. Negarse es el punto: una lista vacía se
-lee como «no hay nada que atender», que es lo contrario de «no puedo leer nada».
+Lo que ese proceso recibe va a un **almacén de mensajes** propio, en
+`~/.wa-inbox/capture.db`, al lado del registro de alcance y fuera del árbol del plugin
+por la misma razón que la sesión. `wa-read` es la capa de consulta sobre ese almacén y
+nunca escribe en él.
+
+Tres cosas que no son detalles de implementación:
+
+- **Una conversación en `off` no deja ningún cuerpo en disco.** El corte ocurre antes
+  de escribir, no al consultar. Lo que sí queda es que la conversación existe —su
+  identificador, su nombre visible y su hora— porque sin eso no se la podría ofrecer
+  nunca para autorizarla, y eso no es el texto de nadie.
+- **El almacén tiene tope y caducidad** (`capture_max`, `capture_days`, editables), con
+  permisos `0600`. Un almacén sin tope es un archivo de conversaciones ajenas que nadie
+  borra. Cuando el tope muerde, se dice: el panel lo muestra y `wa-read state` trae
+  cuánto se desalojó y cuándo.
+- **La llave es `(línea, conversación, mensaje)`.** La misma conversación vista desde
+  dos líneas suyas es el mismo identificador de WhatsApp, y servir el cuerpo de una al
+  preguntar por la otra sería contestar sobre una conversación ajena.
+
+Sin línea enlazada, `wa-read inbox|chats|chat|media|whoami|state` salen con código 4 y
+el motivo `no-transport` en la primera línea de stderr, y `wa-send` con
+`send-no-transport`. Negarse es el punto: una lista vacía se lee como «no hay nada que
+atender», que es lo contrario de «no puedo leer nada».
 
 Lo que `wa-send` sí sigue haciendo antes de negarse, porque no depende del transporte:
 exigir la firma del agente (sin nombre configurado no escribe nada) y **rechazar la
@@ -78,12 +97,13 @@ primera» le escribe a la equivocada, que no se deshace.
 ## Otros sistemas operativos
 
 El sidecar no depende del sistema: habla el protocolo multi-dispositivo por WebSocket,
-igual en macOS, Linux y Windows. Lo que falta para que el plugin lea en cualquiera de
-los tres es el almacén de mensajes, no soporte de plataforma.
+igual en macOS, Linux y Windows, y el almacén de mensajes va al mismo lugar que el
+registro de alcance en los tres.
 
 **Escribir** sigue a la línea de la conversación, no al revés, y el mismo grupo en dos
-líneas no se adivina: se elige con `--line`. Hoy, elegida la línea, `wa-send` se niega
-con `send-no-transport` porque no hay por dónde mandar nada.
+líneas no se adivina: se elige con `--line`. Leer también acepta `--line`, y cada fila
+de la bandeja viaja con su línea. Hoy, elegida la línea, `wa-send` se niega con
+`send-no-transport`: enviar es la rebanada que sigue.
 
 ## Cuando la tarjeta se cierra
 

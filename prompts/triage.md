@@ -194,7 +194,9 @@ Exit 3 = denied. Note it and move to the next one.
     "$WA/wa-read" inbox --json
 
 Brings mentions, replies to the owner's messages, and one-to-one chats with no answer.
-Each one with `stanza_id`, `chat_jid`, `media` and `adjuntos_cerca`.
+Each one with `stanza_id`, `chat_jid`, `account`, `media` and `adjuntos_cerca`.
+`adjuntos_cerca` holds objects, so the path is `adjuntos_cerca[0].path`, and
+`audios` is the flat list of audio paths ready for `wa-transcribe`.
 
 How far back it looks is chosen by the owner in the panel (`inbox_days`), and at most
 the 500 newest messages of that window come back. If exactly 500 arrive, there may be

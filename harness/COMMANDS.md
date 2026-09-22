@@ -34,14 +34,26 @@ Some exit codes are answers, not failures, and all of them are load-bearing:
 | `3` | `wa-scope check` | denied. Note it and move on. Do not negotiate with the gate. |
 | `4` | `wa-scope lock` | another run is already going. Stop there, read nothing, open nothing. |
 | `4` | `wa-read` (any read) | `no-transport` on the first stderr line: no WhatsApp line is linked yet, so there is nothing to read. This is a normal state, not a broken tool. |
+| `2` | `wa-read chat` / `media` | that chat reference matches more than one conversation. The candidates are on stderr. Pick one with its JID, or add `--line`. |
 
 `no-transport` is the one worth knowing by name. It means the owner has not linked a
-line from the plugin settings yet, or reading is not available in this version. There
-is nothing for you to fix and nothing to retry: **stop the run and say so in one
-line.** Do not open cards, do not guess at conversations, and do not report it as a
-failure of the tools — they answered correctly. `wa-scope pending` already returns
-`hay_trabajo: false` with this code, so a run that starts anyway has ignored its own
-precheck.
+line from the plugin settings yet — the QR code lives there. There is nothing for you
+to fix and nothing to retry: **stop the run and say so in one line.** Do not open
+cards, do not guess at conversations, and do not report it as a failure of the tools —
+they answered correctly. `wa-scope pending` already returns `hay_trabajo: false` with
+this code, so a run that starts anyway has ignored its own precheck.
+
+An **empty list is not this**. Once a line is linked, every read answers with exit 0,
+and `[]` means the inbox really is quiet. The two are different answers on purpose:
+treating an empty list as a broken tool, or a refusal as a quiet week, are the two
+mistakes this contract exists to prevent.
+
+The owner can have more than one line linked at once — a personal number and a support
+one. Every read takes `--line <account>` to answer for one of them, and every inbox row
+carries its `account`. The same one-to-one conversation seen from two of the owner's
+own lines is the *same* JID, so a chat is identified by `(account, jid)` and never by
+the JID alone. When you are about to write, that distinction is the difference between
+answering the client and answering from the wrong number.
 
 Cards are opened with the task service's own CLI, which `wa-scope where` names in
 `provider`: `orca plane create`, `orca linear save-issue` or `gh issue create`. With

@@ -16,6 +16,11 @@
 import { mkdirSync, chmodSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 
+import { abrirAlmacen, rutaAlmacen, rutaMedia } from './almacen.js'
+import { crearAlcance } from './alcance.js'
+import { INGESTA, ingerirActualizacion, ingerirMensaje } from './ingesta.js'
+import { identidadesPropias } from './mensajes.js'
+
 // El auth state es una credencial viva (docs/ENCARGO...§11-F1): en un equipo
 // compartido el umask por defecto lo deja legible para cualquiera. Esto tiene que
 // correr ANTES de que se cree un solo archivo.
@@ -122,6 +127,49 @@ function emitirError (code, detail) {
   emitir({ type: 'error', code, detail: String(detail ?? '').slice(0, 300) })
 }
 
+/** Lo que paso con el almacen, en CONTEOS y nunca en contenido.
+ *
+ *  Nada de lo que sale por aca puede nombrar a nadie: ni un cuerpo, ni un telefono, ni
+ *  un jid de remitente. Esto es una cuenta real con conversaciones de clientes reales,
+ *  y stdout del sidecar termina en el `orca.log`.
+ *
+ *  Pero los numeros SI tienen que salir. "Llegaron 40 y se guardaron 0" es la unica
+ *  manera de distinguir "no hay ninguna conversacion autorizada" de "el almacen esta
+ *  roto", y un desalojo callado es un caso que se pierde sin explicacion (§11-F2). */
+function emitirAlmacen (conteos) {
+  emitir({ type: 'store', at: Date.now(), ...conteos })
+}
+
+// Cada mensaje `store` que sale por aca termina en un `storage.set` del worker, y Orca
+// mata al worker a los 64 eventos sin confirmar en vuelo (plugin-host-process.ts). Es
+// el MISMO mecanismo que ya se llevo puesto al worker una vez por lo hablador que es
+// Baileys en stderr, y el sintoma no se parecia en nada a la causa: el panel se quedaba
+// con un QR vencido para siempre porque nadie llego a ver el final. Una cuenta ocupada
+// emite varios `messages.upsert` por segundo durante la sincronizacion inicial, asi que
+// los conteos salen con freno.
+export const ALMACEN_LATIDO_MS = 30000
+
+/** Si toca sacar los conteos. Un desalojo fuerza la salida: es lo unico que no se puede
+ *  perder, porque perderlo significa que el usuario se entera cuando una fila sale sin
+ *  cuerpo y sin explicacion (docs/ENCARGO-TRANSPORTE-UNICO.md §11-F2). */
+export function tocaEmitirAlmacen (ultimoMs, ahoraMs, forzar = false) {
+  return forzar || ahoraMs - ultimoMs >= ALMACEN_LATIDO_MS
+}
+
+// La cuenta de esta linea. Es `local` por defecto y eso NO es un descuido heredado del
+// transporte viejo: `wa-scope set` escribe `account='local'` cuando el usuario autoriza
+// una conversacion desde el panel (bin/wa-scope:792), y `merged_scope` fuerza esa misma
+// cuenta para las filas que vienen del panel (bin/wa-scope:624). Estrenar otro nombre
+// aca dejaria cada autorizacion existente apuntando a una linea que no existe, y el
+// sintoma seria una bandeja vacia sin un solo error. El env esta para el dia que haya
+// una segunda linea, que es lo que la llave `(cuenta, jid)` ya soporta (§11-I1).
+const CUENTA_POR_DEFECTO = 'local'
+
+// Tope por adjunto. Un video de 60 MB en `~/.wa-inbox` no lo pidio nadie: la fila se
+// guarda igual, con su tipo, y sin ruta — que es exactamente el marcador tipado que
+// §11-C4 manda dejar en vez de una ruta que no se puede respaldar.
+const MEDIA_MAX_BYTES = 25 * 1024 * 1024
+
 /** El arranque real: abre el socket, guarda credenciales, reconecta segun
  *  `decidirTrasCierre`. Async de punta a punta, SIN `await` de nivel superior -el
  *  `--format=cjs` de esbuild no lo soporta- por eso todo cuelga de esta funcion,
@@ -144,10 +192,78 @@ async function iniciar () {
   chmodSync(authDir, 0o700)
 
   const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers,
-    fetchLatestBaileysVersion } = await import('@whiskeysockets/baileys')
+    downloadMediaMessage, fetchLatestBaileysVersion } =
+    await import('@whiskeysockets/baileys')
 
   const { state, saveCreds } = await useMultiFileAuthState(authDir)
   const { version } = await fetchLatestBaileysVersion()
+
+  // ── El almacen y el alcance ──────────────────────────────────────────────────────
+  // El almacen vive en `~/.wa-inbox/capture.db`, al lado del registro de alcance y
+  // FUERA del arbol del plugin, que esta verificado por content-hash (§7). El porque
+  // entero esta en sidecar/src/almacen.js.
+  const cuenta = process.env.WA_SIDECAR_CUENTA || CUENTA_POR_DEFECTO
+  const almacen = abrirAlmacen(rutaAlmacen(process.env))
+  const mediaDir = rutaMedia(process.env)
+  // Las herramientas las pasa el worker: buscarlas en el PATH ya habia mandado a una
+  // a la instalacion equivocada (§11-E4).
+  const alcance = crearAlcance({ toolsDir: process.env.WA_SIDECAR_TOOLS_DIR })
+  alcance.refrescar(true)
+
+  let identidades = identidadesPropias(null, null)
+  const nombresDeChat = new Map()
+  const conteos = { llegaron: 0, guardados: 0, sinAutorizar: 0, actualizados: 0 }
+  let ultimoAlmacenMs = 0
+
+  // Un fallo de ingesta rara vez es de UN mensaje: el disco lleno, la base ilegible o
+  // un permiso perdido fallan para todos. Sin tope, un error por mensaje es la misma
+  // avalancha de llamadas al host que el freno de los conteos evita, por el mismo
+  // camino. Se dicen los primeros —que es donde esta la causa— y despues se callan.
+  let fallosDichos = 0
+  const AVISOS_MAX = 10
+  function avisarFallo (code, error) {
+    fallosDichos += 1
+    if (fallosDichos > AVISOS_MAX) return
+    const cola = fallosDichos === AVISOS_MAX ? ' (no se avisan mas)' : ''
+    emitirError(code, `${error?.message || error}${cola}`)
+  }
+
+  function reportarAlmacen (extra = {}, forzar = false) {
+    const ahora = Date.now()
+    if (!tocaEmitirAlmacen(ultimoAlmacenMs, ahora, forzar)) return
+    ultimoAlmacenMs = ahora
+    emitirAlmacen({ ...conteos, autorizadas: alcance.autorizadas(), ...extra })
+  }
+
+  // La subida de esquema se dice EN CUANTO ocurre, sin esperar al latido de 30 s y sin
+  // esperar a que conecte el socket: en una maquina que venia de la via de WhatsApp
+  // Web, este arranque es el que se llevo su cache de cuerpos, y eso no se puede perder
+  // porque el socket tardara en abrir o nunca abra. Mismo trato que el desalojo, por el
+  // mismo motivo (§11-F2): callarlo es perder el caso sin explicacion. Solo numeros, y
+  // la frase entera con el que y el por que la publica `wa-read doctor`, que es lo que
+  // llega al panel.
+  //
+  // Va por `store` y por stderr, NUNCA por `error`: el panel lee `sidecar.error` como
+  // la causa de una sesion caida, y una subida de esquema que salio bien se leeria ahi
+  // como el motivo de una falla que no ocurrio.
+  if (almacen.migracion) {
+    process.stderr.write(
+      `almacen: subido de la version ${almacen.migracion.desde} a la ` +
+      `${almacen.migracion.hasta}; se fueron ${almacen.migracion.cuerpos} cuerpos y ` +
+      `${almacen.migracion.lineas} lineas de la via vieja\n`)
+    reportarAlmacen({ migradoCuerpos: almacen.migracion.cuerpos,
+      migradoLineas: almacen.migracion.lineas }, true)
+  }
+
+  /** Los bytes de un adjunto, ya descifrados por Baileys. Devuelve `null` cuando no se
+   *  pueden bajar o son demasiados: la fila se guarda igual, SIN ruta, porque una ruta
+   *  que no se puede respaldar falla con "no such file" lejos de aca (§11-C4). */
+  async function bajar (sock, wa) {
+    const bytes = await downloadMediaMessage(wa, 'buffer', {},
+      { reuploadRequest: sock.updateMediaMessage })
+    if (!bytes || bytes.length > MEDIA_MAX_BYTES) return null
+    return bytes
+  }
 
   let intento = 0
   let rotacion = 0
@@ -181,6 +297,24 @@ async function iniciar () {
       if (connection === 'open') {
         intento = 0
         emitirConexion('open')
+        // Quien soy yo, a los efectos de "me nombraron" y "contestaron algo mio". El
+        // LID y el TELEFONO son numeros DISTINTOS y llegan cada uno por su lado: mirar
+        // uno solo pierde las respuestas viejas sin un solo error (§11-B1/B2).
+        identidades = identidadesPropias(sock.user?.lid, sock.user?.id)
+        almacen.registrarLinea({ cuenta, lid: sock.user?.lid || null,
+          pn: sock.user?.id || null, nombre: sock.user?.name || null })
+        // Los asuntos de los grupos: sin esto cada conversacion se llamaria como la
+        // primera persona que escribio en ella.
+        sock.groupFetchAllParticipating()
+          .then((grupos) => {
+            for (const [jid, meta] of Object.entries(grupos || {})) {
+              if (meta?.subject) nombresDeChat.set(jid, meta.subject)
+              almacen.anotarChat({ cuenta, chatJid: jid, nombre: meta?.subject || '',
+                esGrupo: 1 })
+            }
+            almacen.registrarLinea({ cuenta, grupos: Object.keys(grupos || {}).length })
+          })
+          .catch((error) => emitirError('grupos-sin-leer', error?.message || error))
         return
       }
       if (connection === 'connecting') {
@@ -201,7 +335,98 @@ async function iniciar () {
         setTimeout(conectar, decision.esperaMs)
       }
     })
+
+    // ── Los mensajes ───────────────────────────────────────────────────────────────
+    sock.ev.on('messages.upsert', async ({ messages }) => {
+      for (const wa of messages || []) {
+        conteos.llegaron += 1
+        try {
+          // El alcance se refresca con su propio TTL: el usuario autoriza un chat en
+          // el panel y espera que el proximo mensaje ya entre.
+          alcance.refrescar()
+          const { motivo } = await ingerirMensaje({
+            almacen,
+            alcance: alcance.modo,
+            cuenta,
+            identidades,
+            wa,
+            mediaDir,
+            descargarMedia: (mensaje) => bajar(sock, mensaje),
+            nombreDeChat: (jid) => nombresDeChat.get(jid) || null
+          })
+          if (motivo === INGESTA.GUARDADO) conteos.guardados += 1
+          else if (motivo === INGESTA.SIN_AUTORIZAR) conteos.sinAutorizar += 1
+        } catch (error) {
+          // Un mensaje raro no puede llevarse la linea entera: se cuenta el fallo y se
+          // sigue. El detalle NO lleva contenido, solo el mensaje del error.
+          avisarFallo('mensaje-sin-guardar', error)
+        }
+      }
+      reportarAlmacen()
+    })
+
+    // Borrados y editados: el hueco que el lector viejo no llenaba en ningun lado
+    // (§11-B4). Un mensaje borrado se quedaba en la bandeja para siempre, y uno
+    // editado se atendia por lo que decia antes.
+    sock.ev.on('messages.update', (eventos) => {
+      for (const evento of eventos || []) {
+        try {
+          const { motivo } = ingerirActualizacion({
+            almacen, alcance: alcance.modo, cuenta, evento
+          })
+          if (motivo === INGESTA.GUARDADO) conteos.actualizados += 1
+        } catch (error) {
+          avisarFallo('cambio-sin-aplicar', error)
+        }
+      }
+    })
+
+    // Las conversaciones que existen, con su nombre y sus no leidos. Es CONTABILIDAD:
+    // sin esto, una conversacion en la que todavia nadie escribio no se puede ni
+    // ofrecer para autorizarla, y la lista del panel nace vacia (§11-F3).
+    const anotarChats = (chats) => {
+      for (const chat of chats || []) {
+        if (!chat?.id) continue
+        if (chat.name) nombresDeChat.set(chat.id, chat.name)
+        try {
+          almacen.anotarChat({
+            cuenta,
+            chatJid: chat.id,
+            nombre: chat.name || nombresDeChat.get(chat.id) || '',
+            esGrupo: String(chat.id).endsWith('@g.us') ? 1 : 0,
+            unread: typeof chat.unreadCount === 'number' ? chat.unreadCount : null,
+            ts: typeof chat.conversationTimestamp === 'number'
+              ? chat.conversationTimestamp
+              : null
+          })
+        } catch (error) {
+          avisarFallo('chat-sin-anotar', error)
+        }
+      }
+    }
+    sock.ev.on('chats.upsert', anotarChats)
+    sock.ev.on('chats.update', anotarChats)
+    sock.ev.on('groups.update', (grupos) => {
+      for (const g of grupos || []) {
+        if (g?.id && g?.subject) nombresDeChat.set(g.id, g.subject)
+      }
+    })
   }
+
+  // La poda corre sola y REPORTA. "Un almacen sin tope y sin caducidad es un archivo de
+  // conversaciones ajenas que nadie borra" (§11-F2), y lo que se desaloja se dice: el
+  // conteo viaja al worker, al panel y al `doctor`.
+  const podaTimer = setInterval(() => {
+    try {
+      const { max, dias } = alcance.topes()
+      const podado = almacen.podar({ max, dias })
+      // El desalojo se fuerza: el freno de arriba no puede tragarselo.
+      if (podado.caducados || podado.desalojados) reportarAlmacen(podado, true)
+    } catch (error) {
+      emitirError('poda-fallida', error?.message || error)
+    }
+  }, 60 * 60 * 1000)
+  if (typeof podaTimer.unref === 'function') podaTimer.unref()
 
   conectar()
 }

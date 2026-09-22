@@ -658,6 +658,22 @@
           howTranscribeNoEngine: 'Sin motor: baje el modelo en Ajustes > Voz, o instale ' +
             'uno local con brew install whisper-cpp',
           howTranscribeNoModel: 'Falta el modelo: bajelo en Ajustes > Voz',
+          // El almacen de mensajes tiene tope y caducidad a proposito: sin
+          // ellos seria un archivo de conversaciones ajenas que nadie borra.
+          // Que muerda se dice en voz alta; cuanto desalojo lo dicen el CLI
+          // (`wa-read doctor`) y `wa-read state`, que son datos y no una frase.
+          hRetention: 'Retencion de mensajes',
+          howRetentionEvicted: 'Se borraron mensajes viejos para respetar el ' +
+            'tope. Suba capture_max o capture_days si necesita conservar mas',
+          // La subida de esquema del almacen. Se dice una sola vez, el arranque
+          // en que ocurre, y se dice porque se llevo algo: la cache de cuerpos
+          // que habia dejado la via de WhatsApp Web. Callarla seria borrar
+          // mensajes de clientes reales sin que nadie se entere.
+          hStoreMigrated: 'Almacen de mensajes actualizado',
+          howStoreMigratedDropped: 'El almacen quedo en la version de hoy. Lo ' +
+            'que habia guardado la via de WhatsApp Web, que ya no existe, ' +
+            'estaba en un formato que esta version no sabe leer y se borro. ' +
+            'La linea enlazada lo vuelve a llenar',
           modeOff: 'off', modeObserve: 'observar', modeDraft: 'borrador',
           modeReply: 'responder',
           provNone: 'ninguno', provPlane: 'plane', provLinear: 'linear',
@@ -836,6 +852,14 @@
           howTranscribeNoEngine: 'No engine: download the model in Settings > Voice, or ' +
             'install a local one with brew install whisper-cpp',
           howTranscribeNoModel: 'The model is missing: download it in Settings > Voice',
+          hRetention: 'Message retention',
+          howRetentionEvicted: 'Old message bodies were removed to stay under ' +
+            'the cap. Raise capture_max or capture_days to keep more',
+          hStoreMigrated: 'Message store upgraded',
+          howStoreMigratedDropped: 'The store is now on the current version. ' +
+            'What the removed WhatsApp Web route had cached was in a format ' +
+            'this version cannot read, so it was dropped. The linked line ' +
+            'fills the store again',
           modeOff: 'off', modeObserve: 'observe', modeDraft: 'draft',
           modeReply: 'reply',
           provNone: 'none', provPlane: 'plane', provLinear: 'linear',
@@ -905,6 +929,14 @@
         howTranscribeNoEngine: 'Sem motor: baixe o modelo em Ajustes > Voz, ou instale ' +
           'um local com brew install whisper-cpp',
         howTranscribeNoModel: 'Falta o modelo: baixe em Ajustes > Voz',
+        hRetention: 'Retencao de mensagens',
+        howRetentionEvicted: 'Mensagens antigas foram apagadas para respeitar o ' +
+          'limite. Aumente capture_max ou capture_days para guardar mais',
+        hStoreMigrated: 'Armazem de mensagens atualizado',
+        howStoreMigratedDropped: 'O armazem ficou na versao de hoje. O que a via ' +
+          'de WhatsApp Web, que ja nao existe, tinha guardado estava num formato ' +
+          'que esta versao nao sabe ler e foi apagado. A linha vinculada enche o ' +
+          'armazem de novo',
         modeOff: 'off', modeObserve: 'observar', modeDraft: 'rascunho',
         modeReply: 'responder',
         provNone: 'nenhum', provPlane: 'plane', provLinear: 'linear',
@@ -1183,6 +1215,14 @@
         // desktop app or WhatsApp Web back on", que se fue con su seccion.
         'sin-herramientas': 'hNoTools',
         transcribe: 'hTranscribe',
+        // El tope del almacen mordio. No bloquea —lo desalojado es viejo— pero tiene
+        // que verse: un desalojo callado es un caso que se pierde y se descubre
+        // despues, cuando la fila ya salio sin cuerpo y sin explicacion.
+        retention: 'hRetention',
+        // El almacen subio de version y algo se quedo en el camino. No bloquea
+        // —el almacen quedo al dia— pero se dice: lo que se borro eran cuerpos de
+        // mensajes de clientes reales que habia dejado la via de WhatsApp Web.
+        'store-migrated': 'hStoreMigrated',
         unknown: 'hUnknown'
       }
       // Aca solo entran codigos cuyo detalle es una FRASE. Un detalle que es dato crudo
@@ -1193,7 +1233,9 @@
         'transcribe-unknown': 'howTranscribeUnknown',
         'transcribe-orca-outdated': 'howTranscribeOrcaOutdated',
         'transcribe-no-engine': 'howTranscribeNoEngine',
-        'transcribe-no-model': 'howTranscribeNoModel'
+        'transcribe-no-model': 'howTranscribeNoModel',
+        'retention-evicted': 'howRetentionEvicted',
+        'store-migrated-dropped': 'howStoreMigratedDropped'
       }
       function porCodigo(mapa, code, respaldo) {
         var key = mapa[code]
