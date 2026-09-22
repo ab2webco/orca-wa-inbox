@@ -372,6 +372,10 @@ function sembrarFuera(toolsDir) {
  *  nada; renombrar el codigo desincroniza el panel en silencio"). Son del WORKER -que
  *  el sidecar no arranco, o que se cayo estando vivo- y se distinguen del `MOTIVO` que
  *  exporta `sidecar/src/index.js`, que es del socket de WhatsApp y no del proceso. */
+// Tope de lineas de stderr que se registran por vida del sidecar. Cada registro es
+// una llamada al host, y el host mata al worker si se le acumulan sin confirmar.
+const STDERR_MAX_LINEAS = 20
+
 const SIDECAR_MOTIVO = Object.freeze({
   SIN_AUTHDIR: 'sidecar-sin-authdir',
   SIN_PERMISO: 'sidecar-sin-permiso',
@@ -556,9 +560,29 @@ export function lanzarSidecar({ orca, scriptPath, authDir, spawnFn = spawn, env 
     }
   })
 
+  // El stderr del sidecar se registra CON FRENO. Baileys es hablador, y cada
+  // `orca.log` es una llamada al host: Orca mata al worker a los 64 eventos sin
+  // confirmar en vuelo (plugin-host-process.ts). Un sidecar charlatan se llevaba
+  // puesto al worker, y con el worker moria el grupo de procesos entero — incluido
+  // el propio sidecar. El sintoma no se parecia en nada a la causa: el panel se
+  // quedaba con un QR vencido para siempre y `exited` decia false, porque nadie
+  // llego a ver el final.
+  let stderrRegistradas = 0
   proceso.stderr.on('data', (chunk) => {
-    orca.log(`sidecar stderr: ${chunk.toString('utf8').trim().slice(0, 300)}`)
+    stderrRegistradas += 1
+    if (stderrRegistradas > STDERR_MAX_LINEAS) return
+    const cola = stderrRegistradas === STDERR_MAX_LINEAS ? ' (no se registran mas)' : ''
+    orca.log(`sidecar stderr: ${chunk.toString('utf8').trim().slice(0, 300)}${cola}`)
   })
+
+  // Un EPIPE en una tuberia del hijo llega como evento `error` del stream, no del
+  // proceso. Sin oyente, Node lo convierte en excepcion no atrapada y se lleva al
+  // worker: la muerte del sidecar mataba a quien tenia que reportarla.
+  for (const flujo of [proceso.stdout, proceso.stderr]) {
+    flujo.on('error', (error) => {
+      orca.log(`sidecar stream error: ${String(error?.message ?? error).slice(0, 200)}`)
+    })
+  }
 
   proceso.on('error', (error) => {
     escribir({ exited: true, motivo: SIDECAR_MOTIVO.NO_ARRANCO,
