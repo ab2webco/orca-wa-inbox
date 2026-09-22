@@ -4,7 +4,7 @@
   "publisher": "ab2web",
   "name": "WA Inbox",
   "version": "4.0.0",
-  "description": "Map WhatsApp conversations to your projects and decide, per conversation, how far your agent may act. Links your line by scanning a QR code from the plugin settings.",
+  "description": "The official Ab2Web plugin for WhatsApp: turn client conversations into tracked work, and decide per conversation how far your agent may act.",
   "engines": {
     "orca": ">=1.4.0"
   },
