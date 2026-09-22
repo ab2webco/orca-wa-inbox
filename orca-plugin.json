@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "id": "orca-wa-inbox",
   "publisher": "ab2web",
-  "name": "WhatsApp Inbox (sidecar)",
+  "name": "WA Inbox",
   "version": "4.0.0",
   "description": "Map WhatsApp conversations to your projects and decide, per conversation, how far your agent may act. Links your line by scanning a QR code from the plugin settings.",
   "engines": {

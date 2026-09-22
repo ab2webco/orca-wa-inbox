@@ -349,6 +349,123 @@ el `node` hijo no levante. En macOS el directorio temporal es un enlace simbóli
 (`/var/folders` → `/private/var/folders`) y la valla compara rutas resueltas: hay que
 darle el `realpath` **y entrar por él**, o el hijo no puede leer ni su propio guión.
 
+### T10 — Desvincular la linea, y reintentar sin reiniciar Orca
+
+El encargo §8.1 pide, con nombre: «estado de la conexion, QR cuando toca emparejar,
+**boton de desvincular**». Los dos primeros estaban; el tercero no. Quien escaneaba
+con el telefono equivocado quedaba atrapado: la unica salida era borrar un directorio
+a mano. Y el auth state es una **credencial viva** (§11-F1) —quien la tenga lee y
+escribe como esa cuenta sin el telefono—, asi que poder revocarla desde la pantalla no
+es una comodidad, es el minimo.
+
+- [x] **Canal panel → worker**, reconstruido con la forma que el repo ya tenia
+      (`atenderPedido`/`veredicto` del transporte web que se quito en T6): el panel
+      escribe `sidecarRequest` con `id` propio y `at`; el worker lo mira en el vigia de
+      3 s que ya existia —sin timer nuevo— y contesta en `sidecarResult`, emparejado
+      por `requestId`
+- [x] **Ejecucion exactamente una vez**: memoria en RAM (`ultimoPedidoSidecar`) MAS el
+      veredicto ya escrito, que es el que sobrevive a un reinicio del worker. El pedido
+      se borra antes de actuar, y uno de otra sesion (TTL de 10 min) deja veredicto
+      `vencido` en vez de callarse
+- [x] **Desvincular**: apaga el sidecar por el camino de siempre (`detenidoPorWorker`,
+      asi no se reporta como caida), limpia la clave `sidecar` ANTES de nada, borra el
+      auth state en un hijo sin valla (`mandoSinValla`), y relanza
+- [x] **Confirmacion en dos pasos** en el boton mismo —el panel no puede abrir un modal
+      (`surface` es un enum cerrado y `window.open` esta anulado, §6)— con el aviso en
+      `--destructive` diciendo que la sesion se termina y que hay que escanear de nuevo,
+      y un «Cancelar» al lado
+- [x] **Reintentar** para las fallas que un relanzamiento arregla
+      (`sidecar-no-arranco`, `sidecar-authdir-fallo`, `sidecar-cayo`,
+      `desvincular-fallo`). Un solo clic: no destruye nada
+- [x] **Capturas con `npm run shots`** de los tres estados nuevos a 1440/768/390/320 en
+      ambos temas — **miradas**
+- [x] Ruta: **delegada** (6 archivos: `main.mjs`, `config.html`,
+      `sidecar/resolve-auth-dir.mjs`, `test/worker.test.mjs`, `test/panels.test.mjs`,
+      `test/shots.mjs` — disparo el trigger de escritura)
+- Commit: — (instruccion explicita de no commitear)
+
+**Decision 1 — el borrado vive en `resolve-auth-dir.mjs`, no en un guion hermano.** El
+worker no puede borrar ahi: su valla declara `--allow-fs-read` sobre la raiz del plugin
+y `--allow-fs-write` **no existe en todo orca-oss** (§1), asi que el borrado tiene que
+ocurrir en un hijo sin valla. Se extendio el resolvedor con `--borrar` en vez de sumar
+un hermano porque el hermano tendria que **duplicar la tabla de raices de userData** de
+`harness.mjs`, y dos copias pueden discrepar. Discrepar sobre ESTA ruta significa borrar
+la carpeta equivocada, o dejar viva la que el usuario creyo revocada — una credencial
+viva que alguien cree muerta es peor que una que se sabe viva. Una sola implementacion,
+una sola verdad sobre la ruta. Ademas `rmSync(..., { force: true })`: desvincular lo que
+no estaba vinculado no es un error, es el resultado que el usuario pidio, ya cierto.
+
+**Decision 2 — tras desvincular se RELANZA, no se queda apagado.** Desvincular existe
+para volver a vincular: quien escaneo con el telefono equivocado quiere escanear con el
+otro. Dejarlo apagado obliga a un segundo boton, y un estado que exige explicarle al
+usuario que hacer a continuacion es un estado a medias. Relanzando, la pantalla vuelve
+sola al unico estado que ya sabia dibujar: «Esperando el codigo QR», y despues el codigo.
+
+**Decision 3 — si el borrado falla, NO se relanza.** Con las credenciales intactas el
+sidecar volveria a conectar la MISMA sesion que el usuario acaba de pedir cortar, y el
+panel diria «WhatsApp esta conectado» como si nada hubiera pasado. Por eso
+`desvincular-fallo` es un codigo propio y no `sidecar-authdir-fallo`: lo que hay del
+otro lado es distinto —la sesion **sigue viva**— y decirle al usuario cualquier otra
+cosa lo deja creyendo que revoco algo que no revoco.
+
+**Presupuesto del panel, la aritmetica.** `CUPO = {max: 30, ventanaMs: 10000,
+reserva: 4}` deja 26 por 10 s para el sondeo. Lo que habia: ~4 de la base de 12 s
+(5 claves) y ~5 del vigia dedicado del QR (1 clave cada 2 s). Lo que se suma: el sondeo
+del veredicto, **1 clave cada 2 s = ~5 por 10 s**, y SOLO mientras hay un pedido en
+vuelo (tope 30 s). Peor caso, que es reintentar desde una falla —ahi el vigia del QR
+tambien corre—: 4 + 5 + 5 = **~14 de 26**. Desvincular es mas barato: se pide desde
+`connected`, donde el vigia del QR esta apagado. El clic mismo va por `write()`, o sea
+por el carril del usuario, con los 4 mensajes reservados y prioridad en la cola.
+
+**Evidencia (TDD real, RED observado antes de implementar):**
+
+- **Worker.** Con las pruebas nuevas y sin implementacion: **85/98**, con 13 fallas
+  concretas — el veredicto nunca llegaba, el pedido quedaba sin borrar, las credenciales
+  seguian en disco, el reintento no relanzaba (`antes=1 despues=1`), el pedido viejo no
+  dejaba motivo, y el resolvedor contestaba `{"ok":true,"dir":...}` **sin `borrado`**
+  ante `--borrar`. Con la implementacion: **98/98**.
+- **Panel.** Sin implementacion corta en la primera asercion del bloque nuevo con
+  `TypeError: Cannot read properties of null (reading 'click')` — el boton de
+  desvincular no existia. Con la implementacion: **250/250** (29 pruebas nuevas).
+
+**Tres defectos de las propias pruebas, encontrados mirando los FALLA.** El resolvedor
+de mentira creaba el directorio en la llamada sin `--borrar`, con lo cual «se borro» era
+inobservable despues del relanzamiento. El sidecar de mentira volvia a decir `open` al
+instante, con lo cual «la conexion vieja no sigue en pie» no distinguia «se limpio y
+reconecto» de «nunca se limpio». Y el tercero era **intermitente** —fallaba 2 de cada 3
+corridas— porque leia la marca del hijo relanzado en el acto: el veredicto se escribe
+cuando el worker ya hizo `spawn`, pero un Node recien nacido tarda un momento mas en
+llegar a su primera linea, asi que medía la carrera y no el relanzamiento. Se espera al
+hecho observable con `hasta()`, como el resto del archivo. Los tres eran dobles mal
+hechos, no fallas del codigo.
+
+### T11 — La palabra «sidecar» se le estaba mostrando al usuario
+
+`sidecar` es como llamamos al proceso ayudante **entre nosotros**. Quien instala el
+plugin no sabe que es, y estas eran justo las frases que lee cuando algo salio mal.
+
+- [x] `pairingWaitingHow`, `pairingHowNoAuthDir`, `pairingHowNoStart` y
+      `pairingHowCrashed` reescritas en **es/en/pt** para hablar de la conexion con
+      WhatsApp y no de nuestra arquitectura de procesos
+- [x] Los **codigos estables** (`sidecar-cayo`, `sidecar-no-arranco`,
+      `sidecar-sin-permiso`, `sidecar-authdir-fallo`, `sidecar-sin-authdir`) quedaron
+      intactos: son el contrato que el panel traduce, y renombrar uno desincroniza el
+      panel en silencio (§11-E1). Solo cambio el texto
+- [x] `sidecar` sigue —y debe seguir— en comentarios e identificadores, que es donde
+      pertenece
+- [x] Prueba que lo impide de nuevo: **ninguna cadena de `STRINGS.es/en/pt` nombra al
+      sidecar**, barriendo las tres tablas enteras y no una lista a mano
+- Commit: — (instruccion explicita de no commitear)
+
+**Y de paso, «Reinicie Orca» se fue.** `pairingHowCrashed` y `pairingHowAuthDirFailed`
+mandaban a reiniciar la aplicacion entera por un proceso hijo que el propio plugin sabe
+relanzar. Ahora mandan al boton. `pairingHowLoggedOut` manda a desvincular, que es lo
+que de verdad lo arregla: `sesion-cerrada` no reconecta nunca sola (`decidirTrasCierre`),
+asi que las credenciales en disco estan muertas y hay que borrarlas. Los unicos que
+siguen sin boton son `sidecar-sin-permiso` —lo arregla aprobar el plugin, no un
+reintento— y `sidecar-sin-authdir`, que no lo arregla nadie desde el panel: un boton que
+no puede funcionar promete una salida y devuelve al mismo lugar.
+
 ### T8 — El almacén de mensajes: que el plugin sirva para algo
 
 Hoy el plugin **conecta y se detiene**. Emparejar no es utilidad: la bandeja está

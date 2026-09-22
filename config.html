@@ -256,6 +256,17 @@
                  border-radius: var(--radius-md); margin: 4px 0 8px;
                  border: 1px solid var(--border, var(--fb-border)); line-height: 0; }
       #qr-canvas { display: block; }
+      #pairing-actions[hidden], #pairing-warn[hidden] { display: none; }
+      /* El aviso de lo que se pierde va en --destructive y no apagado como las demas
+         pistas: es lo unico de esta seccion que el usuario tiene que leer ANTES de
+         apretar, no despues. */
+      .pairing-warn { color: var(--destructive, var(--fb-destructive));
+                      margin: 0 0 8px; max-width: 52ch; }
+      /* El boton que confirma el borrado se ve distinto del que lo ofrece: son dos
+         clics del mismo boton y sin la diferencia visual el segundo se da sin mirar. */
+      #pairing-unlink.confirmar {
+        border-color: var(--destructive, var(--fb-destructive));
+        color: var(--destructive, var(--fb-destructive)); }
     </style>
   </head>
   <body>
@@ -275,6 +286,17 @@
         <p class="hint" id="pairing-detail" hidden></p>
         <div id="qr-wrap" hidden>
           <canvas id="qr-canvas"></canvas>
+        </div>
+        <!-- Desvincular es irreversible desde aca y no hay modal donde preguntar
+             (`surface` es un enum cerrado y `window.open` esta anulado, §6), asi que
+             la confirmacion vive en el boton mismo: el aviso aparece, el boton cambia
+             de texto, y hay por donde volver atras. -->
+        <p class="hint pairing-warn" id="pairing-warn" hidden></p>
+        <div class="actions" id="pairing-actions" hidden>
+          <button id="pairing-retry" hidden data-t="pairingRetry"></button>
+          <button id="pairing-unlink" hidden data-t="pairingUnlink"></button>
+          <button id="pairing-cancel" hidden data-t="pairingUnlinkCancel"></button>
+          <span class="said" id="said-pairing"></span>
         </div>
       </section>
 
@@ -472,7 +494,7 @@
           // --- vinculacion (T3/T4) ---
           pairingLegend: 'Vinculacion de WhatsApp',
           pairingWaiting: 'Esperando el codigo QR',
-          pairingWaitingHow: 'El sidecar se esta conectando. Deje este panel abierto ' +
+          pairingWaitingHow: 'Conectando con WhatsApp. Deje este panel abierto ' +
             'unos segundos.',
           pairingLive: 'Escanee este codigo con WhatsApp',
           pairingExpired: 'El codigo vencio',
@@ -481,17 +503,31 @@
           pairingConnected: 'WhatsApp esta conectado',
           pairingDown: 'La sesion esta caida',
           pairingHowNoAuthDir: 'No se encontro donde Orca guarda los datos del ' +
-            'plugin en este equipo, asi que el sidecar no llego a arrancar.',
+            'plugin en este equipo, asi que no se pudo iniciar la conexion con WhatsApp.',
           pairingHowNoPermission: 'Orca todavia no deja que el plugin lance su ' +
             'ayudante de WhatsApp. Abra la lista de plugins, apriete "Revisar y ' +
             'activar" en la tarjeta de este plugin y enciendalo.',
           pairingHowAuthDirFailed: 'El plugin no pudo averiguar donde guardar la ' +
-            'sesion de WhatsApp: la consulta no contesto. Reinicie Orca para ' +
-            'intentarlo de nuevo.',
-          pairingHowNoStart: 'El sidecar no llego a arrancar.',
-          pairingHowCrashed: 'El sidecar se detuvo. Reinicie Orca para intentarlo de nuevo.',
-          pairingHowLoggedOut: 'La sesion se cerro desde el telefono. Esta pantalla ' +
-            'va a mostrar un codigo QR nuevo para volver a vincularla.',
+            'sesion de WhatsApp: la consulta no contesto. Reintente aca abajo.',
+          pairingHowNoStart: 'No se pudo iniciar la conexion con WhatsApp. Reintente ' +
+            'aca abajo.',
+          pairingHowCrashed: 'La conexion con WhatsApp se detuvo. Reintente aca abajo.',
+          pairingHowLoggedOut: 'La sesion se cerro desde el telefono. Desvincule la ' +
+            'linea aca abajo para escanear un codigo QR nuevo.',
+          pairingHowUnlinkFailed: 'No se pudieron borrar las credenciales guardadas, ' +
+            'asi que la sesion sigue en pie. Reintente aca abajo; si vuelve a fallar, ' +
+            'revise el registro del plugin.',
+          // --- desvincular y reintentar (§8.1) ---
+          pairingUnlink: 'Desvincular esta linea',
+          pairingUnlinkConfirm: 'Si, desvincular',
+          pairingUnlinkCancel: 'Cancelar',
+          pairingUnlinkWarn: 'Se termina la sesion de WhatsApp en este equipo y se ' +
+            'borran las credenciales guardadas. Para volver a usarla hay que escanear ' +
+            'un codigo QR nuevo con el telefono.',
+          pairingUnlinked: 'La linea quedo desvinculada. Espere el codigo nuevo.',
+          pairingRetry: 'Reintentar',
+          pairingRetried: 'Reintentando la conexion…',
+          pairingNoAnswer: 'El plugin no contesto. Intente de nuevo.',
           pairingHowSocketDown: 'Se cayo la conexion; reintentando sola.',
           pairingHowRestart: 'Reiniciando la conexion.',
           pairingHowUnknown: 'Motivo desconocido.',
@@ -639,7 +675,7 @@
           // --- pairing (T3/T4) ---
           pairingLegend: 'WhatsApp pairing',
           pairingWaiting: 'Waiting for the QR code',
-          pairingWaitingHow: 'The sidecar is connecting. Keep this panel open for a ' +
+          pairingWaitingHow: 'Connecting to WhatsApp. Keep this panel open for a ' +
             'few seconds.',
           pairingLive: 'Scan this code with WhatsApp',
           pairingExpired: 'The code expired',
@@ -648,16 +684,31 @@
           pairingConnected: 'WhatsApp is connected',
           pairingDown: 'The session is down',
           pairingHowNoAuthDir: 'Could not find where Orca keeps this plugin\u2019s data ' +
-            'on this machine, so the sidecar never started.',
+            'on this machine, so the WhatsApp connection could not be started.',
           pairingHowNoPermission: 'Orca has not let the plugin start its WhatsApp ' +
             'helper yet. Open the plugin list, press "Review & enable" on this ' +
             'plugin\u2019s card and turn it on.',
           pairingHowAuthDirFailed: 'The plugin could not work out where to keep the ' +
-            'WhatsApp session: the lookup never answered. Restart Orca to try again.',
-          pairingHowNoStart: 'The sidecar never started.',
-          pairingHowCrashed: 'The sidecar stopped. Restart Orca to try again.',
-          pairingHowLoggedOut: 'The session was closed from the phone. This screen will ' +
-            'show a new QR code to pair again.',
+            'WhatsApp session: the lookup never answered. Try again below.',
+          pairingHowNoStart: 'The WhatsApp connection could not be started. Try again ' +
+            'below.',
+          pairingHowCrashed: 'The WhatsApp connection stopped. Try again below.',
+          pairingHowLoggedOut: 'The session was closed from the phone. Unlink the line ' +
+            'below to scan a new QR code.',
+          pairingHowUnlinkFailed: 'The stored credentials could not be deleted, so the ' +
+            'session is still live. Try again below; if it fails again, check the ' +
+            'plugin log.',
+          // --- unlink and retry (§8.1) ---
+          pairingUnlink: 'Unlink this line',
+          pairingUnlinkConfirm: 'Yes, unlink',
+          pairingUnlinkCancel: 'Cancel',
+          pairingUnlinkWarn: 'This ends the WhatsApp session on this machine and ' +
+            'deletes the stored credentials. To use it again you have to scan a new ' +
+            'QR code with the phone.',
+          pairingUnlinked: 'The line is unlinked. Wait for the new code.',
+          pairingRetry: 'Try again',
+          pairingRetried: 'Retrying the connection…',
+          pairingNoAnswer: 'The plugin did not answer. Try again.',
           pairingHowSocketDown: 'The connection dropped; retrying on its own.',
           pairingHowRestart: 'Restarting the connection.',
           pairingHowUnknown: 'Unknown reason.',
@@ -801,7 +852,7 @@
       STRINGS.pt = Object.assign({}, STRINGS.en, {
         pairingLegend: 'Vinculacao do WhatsApp',
         pairingWaiting: 'Aguardando o codigo QR',
-        pairingWaitingHow: 'O sidecar esta se conectando. Deixe este painel aberto ' +
+        pairingWaitingHow: 'Conectando ao WhatsApp. Deixe este painel aberto ' +
           'por alguns segundos.',
         pairingLive: 'Escaneie este codigo com o WhatsApp',
         pairingExpired: 'O codigo venceu',
@@ -810,17 +861,31 @@
         pairingConnected: 'O WhatsApp esta conectado',
         pairingDown: 'A sessao esta fora do ar',
         pairingHowNoAuthDir: 'Nao foi encontrado onde o Orca guarda os dados deste ' +
-          'plugin nesta maquina, entao o sidecar nao chegou a iniciar.',
+          'plugin nesta maquina, entao a conexao com o WhatsApp nao pode ser iniciada.',
         pairingHowNoPermission: 'O Orca ainda nao deixa o plugin iniciar o seu ' +
           'ajudante do WhatsApp. Abra a lista de plugins, aperte "Revisar e ativar" ' +
           'no cartao deste plugin e ligue-o.',
         pairingHowAuthDirFailed: 'O plugin nao conseguiu descobrir onde guardar a ' +
-          'sessao do WhatsApp: a consulta nao respondeu. Reinicie o Orca para tentar ' +
-          'de novo.',
-        pairingHowNoStart: 'O sidecar nao chegou a iniciar.',
-        pairingHowCrashed: 'O sidecar parou. Reinicie o Orca para tentar de novo.',
-        pairingHowLoggedOut: 'A sessao foi encerrada pelo telefone. Esta tela vai ' +
-          'mostrar um codigo QR novo para vincular de novo.',
+          'sessao do WhatsApp: a consulta nao respondeu. Tente de novo aqui embaixo.',
+        pairingHowNoStart: 'A conexao com o WhatsApp nao pode ser iniciada. Tente de ' +
+          'novo aqui embaixo.',
+        pairingHowCrashed: 'A conexao com o WhatsApp parou. Tente de novo aqui embaixo.',
+        pairingHowLoggedOut: 'A sessao foi encerrada pelo telefone. Desvincule a linha ' +
+          'aqui embaixo para escanear um codigo QR novo.',
+        pairingHowUnlinkFailed: 'Nao foi possivel apagar as credenciais guardadas, ' +
+          'entao a sessao continua de pe. Tente de novo aqui embaixo; se falhar outra ' +
+          'vez, veja o registro do plugin.',
+        // --- desvincular e tentar de novo (§8.1) ---
+        pairingUnlink: 'Desvincular esta linha',
+        pairingUnlinkConfirm: 'Sim, desvincular',
+        pairingUnlinkCancel: 'Cancelar',
+        pairingUnlinkWarn: 'A sessao do WhatsApp nesta maquina termina e as ' +
+          'credenciais guardadas sao apagadas. Para usar de novo e preciso escanear ' +
+          'um codigo QR novo com o telefone.',
+        pairingUnlinked: 'A linha foi desvinculada. Aguarde o codigo novo.',
+        pairingRetry: 'Tentar de novo',
+        pairingRetried: 'Tentando conectar de novo…',
+        pairingNoAnswer: 'O plugin nao respondeu. Tente de novo.',
         pairingHowSocketDown: 'A conexao caiu; tentando de novo sozinha.',
         pairingHowRestart: 'Reiniciando a conexao.',
         pairingHowUnknown: 'Motivo desconhecido.',
@@ -1195,7 +1260,9 @@
        *  esperando respuesta — apretarlo sin nadie del otro lado es el silencio de 45 s
        *  que este aviso viene justamente a reemplazar. */
       function apagarLoQueNecesitaWorker(sinWorker) {
-        var dependen = ['sync-retry']
+        // Desvincular y reintentar dejan un pedido que solo el worker puede atender: sin
+        // nadie del otro lado son el mismo silencio de 45 s que este aviso reemplaza.
+        var dependen = ['sync-retry', 'pairing-unlink', 'pairing-retry']
         dependen.forEach(function (id) {
           var b = el(id)
           if (b) b.disabled = !!sinWorker
@@ -1872,11 +1939,146 @@
           wrap.hidden = true
           qrPintado = null
         }
+        pintarAccionesPairing(estado, d)
         // Sondeo dedicado de 2 s SOLO mientras no este conectado, y solo el mientras:
         // una vez emparejado no hay QR que rotar y el sondeo de 12 s (CLAVES_VIVAS) ya
         // alcanza para notar una caida.
         vigilarSidecar(estado !== 'connected')
       }
+
+      // ---------- desvincular y reintentar (§8.1) ----------
+      // El auth state es una CREDENCIAL VIVA: quien lo tenga lee y escribe como esa
+      // cuenta sin el telefono. Hasta aca el panel sabia vincular y no sabia soltar, y
+      // quien escaneaba con el telefono equivocado solo salia borrando un directorio a
+      // mano. Poder revocarlo desde la pantalla no es una comodidad, es el minimo.
+
+      // Que fallas arregla un relanzamiento, y cuales no. `sidecar-sin-permiso` y
+      // `sidecar-sin-authdir` no: el primero lo arregla aprobar el plugin y el segundo
+      // no lo arregla nadie desde aca. Un boton que no puede funcionar es peor que
+      // ningun boton — promete una salida y devuelve al mismo lugar.
+      var REINTENTABLE = {
+        'sidecar-no-arranco': true,
+        'sidecar-authdir-fallo': true,
+        'sidecar-cayo': true,
+        'desvincular-fallo': true
+      }
+
+      function codigoSidecar (d) {
+        return (d && d.error && d.error.code) || (d && d.motivo) || null
+      }
+
+      var confirmando = false
+      function salirDeConfirmar () {
+        confirmando = false
+        el('pairing-warn').hidden = true
+        el('pairing-cancel').hidden = true
+        el('pairing-unlink').className = ''
+        el('pairing-unlink').textContent = t('pairingUnlink')
+      }
+
+      /** Que botones ofrece cada estado. Ninguno de los dos aparece donde no tiene nada
+       *  que hacer: ofrecer "desvincular" sin sesion, o "reintentar" sobre un permiso
+       *  denegado, es mandar al usuario a apretar algo que no lo saca de donde esta. */
+      function pintarAccionesPairing (estado, d) {
+        var code = codigoSidecar(d)
+        // Se ofrece soltar cuando hay algo que soltar: una sesion abierta, o una
+        // cerrada desde el telefono — que deja las credenciales muertas en el disco y
+        // no reconecta nunca sola (sidecar/src/index.js, `decidirTrasCierre`).
+        var puedeDesvincular = estado === 'connected' || code === 'sesion-cerrada'
+        var puedeReintentar = estado === 'down' && REINTENTABLE[code] === true
+        if (!puedeDesvincular && confirmando) salirDeConfirmar()
+        el('pairing-unlink').hidden = !puedeDesvincular
+        el('pairing-retry').hidden = !puedeReintentar
+        el('pairing-cancel').hidden = !(puedeDesvincular && confirmando)
+        el('pairing-warn').hidden = !(puedeDesvincular && confirmando)
+        if (puedeDesvincular && confirmando) el('pairing-warn').textContent = t('pairingUnlinkWarn')
+        el('pairing-actions').hidden = !puedeDesvincular && !puedeReintentar
+      }
+
+      // Cuanto se espera el veredicto del worker. Desvincular son dos viajes a un
+      // subproceso -borrar y relanzar-, y el vigia del worker mira cada 3 s.
+      var VEREDICTO_ESPERA_MS = 30000
+      var VEREDICTO_SONDEO_MS = 2000
+
+      /** Espera el veredicto de ESE pedido, por id. Sin el id, el panel pintaria la
+       *  respuesta que quedo del clic anterior como si fuera la de este.
+       *
+       *  Va por `read()`, o sea por el carril del SONDEO: se auto-frena con CUPO igual
+       *  que el vigia del QR. Son 1 mensaje cada 2 s mientras dura, ~5 de los 26 que el
+       *  sondeo tiene de presupuesto, y solo mientras hay un pedido en vuelo. */
+      function esperarVeredicto (id) {
+        var fin = Date.now() + VEREDICTO_ESPERA_MS
+        return new Promise(function (resolve) {
+          ;(function vuelta () {
+            read('sidecarResult').then(function (v) {
+              if (hayRespuesta(v) && v && v.requestId === id) { resolve(v); return }
+              if (Date.now() > fin) { resolve(null); return }
+              setTimeout(vuelta, VEREDICTO_SONDEO_MS)
+            })
+          })()
+        })
+      }
+
+      /** Deja el pedido donde el worker lo mira y espera SU respuesta. El id se arma
+       *  aca porque es el panel el que tiene que poder reconocer la vuelta. */
+      function pedirSidecar (accion) {
+        var pedido = { id: 'wa-' + Date.now().toString(36) + '-' +
+            Math.random().toString(36).slice(2, 8),
+          action: accion, at: new Date().toISOString() }
+        return write('sidecarRequest', pedido).then(function (r) {
+          // El host rechazo la escritura: no hay pedido, asi que no hay nada que
+          // esperar. Decirlo es la diferencia entre un boton que fallo y uno que no hace
+          // nada.
+          if (!(r && r.ok)) return null
+          return esperarVeredicto(pedido.id)
+        })
+      }
+
+      function contarVeredicto (v, accion) {
+        if (!v) { said('said-pairing', t('pairingNoAnswer'), true); return }
+        if (v.ok) {
+          said('said-pairing',
+            t(accion === 'desvincular' ? 'pairingUnlinked' : 'pairingRetried'))
+          return
+        }
+        // El veredicto trae CODIGO, no frase: el worker no sabe en que idioma esta el
+        // usuario. Misma tabla que el resto de la seccion, con el detalle crudo de
+        // respaldo para un codigo que este panel todavia no sepa decir.
+        said('said-pairing', porCodigo(SIDECAR_HOW_KEY, v.code, v.detail || v.code || ''), true)
+      }
+
+      // El primer clic no desvincula: pide confirmacion. Es irreversible desde el panel
+      // y no hay modal donde preguntar (§6), asi que la pregunta vive en el boton.
+      el('pairing-unlink').addEventListener('click', function (event) {
+        var boton = event.currentTarget
+        if (!confirmando) {
+          confirmando = true
+          el('pairing-warn').textContent = t('pairingUnlinkWarn')
+          el('pairing-warn').hidden = false
+          el('pairing-cancel').hidden = false
+          boton.className = 'confirmar'
+          boton.textContent = t('pairingUnlinkConfirm')
+          return
+        }
+        busy(boton, pedirSidecar('desvincular').then(function (v) {
+          contarVeredicto(v, 'desvincular')
+          // Se repinta con lo que haya quedado: el estado nuevo manda sobre el de antes,
+          // y sin esto la pantalla seguiria diciendo "conectado" hasta la proxima vuelta
+          // del sondeo.
+          return reload(true)
+        })).then(salirDeConfirmar, salirDeConfirmar)
+      })
+
+      el('pairing-cancel').addEventListener('click', salirDeConfirmar)
+
+      // Reintentar no destruye nada: sale de un solo clic. Pedir confirmacion para algo
+      // que no se pierde es ruido, y el ruido es lo que enseña a confirmar sin leer.
+      el('pairing-retry').addEventListener('click', function (event) {
+        busy(event.currentTarget, pedirSidecar('reintentar').then(function (v) {
+          contarVeredicto(v, 'reintentar')
+          return reload(true)
+        }))
+      })
 
       var timerSidecar = null
       function vigilarSidecar (activo) {

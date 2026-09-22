@@ -417,6 +417,47 @@ const PANELES = [
         detail: 'Access to this API has been restricted. Use --allow-child-process ' +
           'to manage permissions.' }
     } })
+  },
+  // Desvincular (§8.1). Los tres estados que solo existen por este boton, a los cuatro
+  // anchos y en los dos temas: son los que deciden si alguien que escaneo con el
+  // telefono equivocado sale del pozo o se queda mirando una sesion que no es la suya.
+  {
+    nombre: 'config-sidecar-desvincular', archivo: 'config.html', anchos: ANCHOS,
+    datos: Object.assign({}, DATOS,
+      { sidecar: { connection: 'open', qr: null, exited: false } }),
+    // La confirmacion NO existe al cargar: es el segundo estado del boton, y
+    // fotografiar el panel recien abierto nunca la muestra. Es justo lo que hay que
+    // mirar — un aviso que no cabe, o que se lee flojo, no lo delata ninguna prueba.
+    guion: "document.getElementById('pairing-unlink').click()",
+    espera: 400
+  },
+  {
+    nombre: 'config-sidecar-desvinculado', archivo: 'config.html', anchos: ANCHOS,
+    // Lo que queda despues: sin sesion y esperando el codigo nuevo. El veredicto va
+    // puesto para que la confirmacion quede tambien en pantalla.
+    datos: Object.assign({}, DATOS, {
+      sidecar: { connection: null, qr: null, exited: false },
+      sidecarResult: { at: new Date().toISOString(), requestId: 'wa-de-ejemplo',
+        action: 'desvincular', ok: true, code: 'desvinculado' }
+    })
+  },
+  {
+    // La sesion cerrada desde el telefono: el texto manda a desvincular «aca abajo», y
+    // que el boton este de verdad ahi no lo delata ninguna prueba de composicion — se
+    // mira. Es el estado que deja credenciales muertas en disco.
+    nombre: 'config-sidecar-sesion-cerrada', archivo: 'config.html', anchos: ANCHOS,
+    datos: Object.assign({}, DATOS, { sidecar: {
+      connection: 'close', qr: null, exited: false, motivo: 'sesion-cerrada',
+      error: { code: 'sesion-cerrada',
+        detail: 'la sesion se cerro; hace falta escanear un QR nuevo' }
+    } })
+  },
+  {
+    nombre: 'config-sidecar-reintentar', archivo: 'config.html', anchos: ANCHOS,
+    datos: Object.assign({}, DATOS, { sidecar: {
+      connection: null, qr: null, exited: true, motivo: 'sidecar-no-arranco',
+      error: { code: 'sidecar-no-arranco', detail: 'spawn /bin/false ENOENT' }
+    } })
   }
 ]
 

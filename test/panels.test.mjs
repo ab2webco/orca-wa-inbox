@@ -1421,5 +1421,228 @@ console.log('\nconfig.html — cada motivo de arranque del sidecar dice algo dis
     dicho.get('sidecar-sin-authdir'))
 }
 
+// ───────── desvincular la linea: el boton que faltaba (§8.1) ─────────
+// El auth state es una credencial viva: quien lo tenga lee y escribe como esa cuenta
+// sin el telefono. Hasta aca el panel sabia enlazar y no sabia soltar — quien escaneaba
+// con el telefono equivocado solo salia borrando un directorio a mano.
+console.log('\nconfig.html — desvincular: confirmacion antes de cortar la sesion')
+{
+  const { doc, storage } = await montar('config.html',
+    { sidecar: { connection: 'open', qr: null, exited: false } }, 'es-419')
+  await espera()
+  const boton = doc.getElementById('pairing-unlink')
+  ok('con la linea conectada, el panel ofrece desvincularla', boton && !boton.hidden,
+    boton ? `hidden=${boton.hidden}` : 'el boton no existe')
+
+  // Un clic NO puede desvincular: es irreversible desde el panel y no hay modal donde
+  // preguntar (`surface` es un enum cerrado y `window.open` esta anulado, §6).
+  boton.click()
+  await espera()
+  ok('el primer clic no manda nada: pide confirmacion',
+    !storage.sidecarRequest, JSON.stringify(storage.sidecarRequest))
+  const aviso = doc.getElementById('pairing-warn')
+  ok('y dice en voz alta que se pierde', aviso && !aviso.hidden &&
+    /escane|qr|codigo/i.test(aviso.textContent), aviso ? aviso.textContent : 'sin aviso')
+  ok('el aviso nombra que la sesion se termina, no solo que "se desvincula"',
+    aviso && /sesion|credencial/i.test(aviso.textContent),
+    aviso ? aviso.textContent : 'sin aviso')
+
+  // Y se puede volver atras: una confirmacion sin salida es una trampa.
+  const cancelar = doc.getElementById('pairing-cancel')
+  ok('se puede cancelar la confirmacion', cancelar && !cancelar.hidden)
+  cancelar.click()
+  await espera()
+  ok('cancelar no manda nada y esconde el aviso',
+    !storage.sidecarRequest && doc.getElementById('pairing-warn').hidden,
+    JSON.stringify(storage.sidecarRequest))
+}
+
+console.log('\nconfig.html — el segundo clic si manda el pedido, por el canal del worker')
+{
+  const { doc, storage } = await montar('config.html',
+    { sidecar: { connection: 'open', qr: null, exited: false } }, 'es-419')
+  await espera()
+  doc.getElementById('pairing-unlink').click()
+  await espera()
+  doc.getElementById('pairing-unlink').click()
+  await espera()
+  const pedido = storage.sidecarRequest
+  ok('la confirmacion manda el pedido a la clave que mira el worker',
+    !!pedido && pedido.action === 'desvincular', JSON.stringify(pedido))
+  ok('con un identificador propio: sin el, el panel no distingue el veredicto de SU ' +
+    'clic del que quedo del anterior',
+    !!pedido && typeof pedido.id === 'string' && pedido.id.length > 0,
+    JSON.stringify(pedido))
+  ok('y con su marca de tiempo, para que el worker descarte lo de otra sesion',
+    !!pedido && typeof pedido.at === 'string' && !isNaN(Date.parse(pedido.at)),
+    JSON.stringify(pedido))
+}
+
+console.log('\nconfig.html — tras desvincular, la pantalla no sigue diciendo "conectado"')
+{
+  // El worker contesta el veredicto y deja la clave `sidecar` limpia, que es lo que
+  // hace de verdad cuando relanza: sin sesion y esperando un codigo nuevo.
+  const storage = { sidecar: { connection: 'open', qr: null, exited: false } }
+  const { doc } = await montar('config.html', storage, 'es-419', (d, st) => {
+    if (d.action === 'storage.set' && d.params.key === 'sidecarRequest' && d.params.value) {
+      st.sidecarRequest = d.params.value
+      st.sidecarResult = { at: new Date().toISOString(), requestId: d.params.value.id,
+        action: d.params.value.action, ok: true, code: 'desvinculado' }
+      st.sidecar = { connection: null, qr: null, exited: false }
+      return { ok: true }
+    }
+    return undefined
+  })
+  await espera()
+  ok('antes de desvincular la pantalla dice que esta conectado',
+    /conectado/i.test(doc.getElementById('pairing-msg').textContent),
+    doc.getElementById('pairing-msg').textContent)
+
+  doc.getElementById('pairing-unlink').click()
+  await espera()
+  doc.getElementById('pairing-unlink').click()
+  // El veredicto se sondea: hay que darle una vuelta del sondeo dedicado.
+  await new Promise((r) => setTimeout(r, 3000))
+
+  const msg = doc.getElementById('pairing-msg').textContent
+  ok('despues de desvincular ya no dice que WhatsApp esta conectado',
+    !/conectado/i.test(msg), msg)
+  ok('y dice lo que de verdad pasa ahora: esta esperando un codigo nuevo',
+    /esperando|codigo/i.test(msg), msg)
+  ok('el boton de desvincular ya no se ofrece: no hay sesion que cortar',
+    doc.getElementById('pairing-unlink').hidden,
+    `hidden=${doc.getElementById('pairing-unlink').hidden}`)
+  ok('y la confirmacion queda dicha en pantalla, no solo en el estado',
+    doc.getElementById('said-pairing').textContent.length > 0,
+    doc.getElementById('said-pairing').textContent)
+}
+
+console.log('\nconfig.html — la sesion cerrada desde el telefono ofrece desvincular')
+{
+  // `sesion-cerrada` no reconecta nunca sola (sidecar/src/index.js, `decidirTrasCierre`):
+  // las credenciales que quedaron en disco estan muertas y hay que borrarlas. El texto
+  // manda a desvincular «aca abajo», asi que el boton TIENE que estar ahi — un texto que
+  // manda a un boton que no existe es peor que no decir nada.
+  const { doc } = await montar('config.html', { sidecar: {
+    connection: 'close', qr: null, exited: false, motivo: 'sesion-cerrada',
+    error: { code: 'sesion-cerrada', detail: 'la sesion se cerro' }
+  } }, 'es-419')
+  await espera()
+  const detalle = doc.getElementById('pairing-detail').textContent
+  ok('el panel explica que la sesion se cerro desde el telefono',
+    /telefono/i.test(detalle), detalle)
+  ok('y ofrece de verdad el boton al que manda el texto',
+    !doc.getElementById('pairing-unlink').hidden,
+    `hidden=${doc.getElementById('pairing-unlink').hidden}`)
+  ok('no ofrece reintentar: reconectar volveria a cerrar la misma sesion',
+    doc.getElementById('pairing-retry').hidden,
+    `hidden=${doc.getElementById('pairing-retry').hidden}`)
+}
+
+console.log('\nconfig.html — los estados de falla ofrecen reintentar, no reiniciar Orca')
+{
+  for (const code of ['sidecar-no-arranco', 'sidecar-authdir-fallo', 'sidecar-cayo']) {
+    const storage = { sidecar: { connection: null, qr: null, exited: true, motivo: code,
+      error: { code, detail: 'DETALLE-CRUDO-DEL-WORKER' } } }
+    const { doc } = await montar('config.html', storage, 'es-419')
+    await espera()
+    const boton = doc.getElementById('pairing-retry')
+    ok(`${code}: ofrece un boton para reintentar`, boton && !boton.hidden,
+      boton ? `hidden=${boton.hidden}` : 'el boton no existe')
+    const detalle = doc.getElementById('pairing-detail').textContent
+    ok(`${code}: y ya no manda a reiniciar la aplicacion entera`,
+      !/reinici\w* orca/i.test(detalle), detalle)
+  }
+
+  // Un permiso denegado NO lo arregla un reintento: lo arregla aprobar el plugin. Un
+  // boton que no puede funcionar es peor que ningun boton.
+  const { doc: sinPermiso } = await montar('config.html', { sidecar: {
+    connection: null, qr: null, exited: true, motivo: 'sidecar-sin-permiso',
+    error: { code: 'sidecar-sin-permiso', detail: 'Access to this API has been restricted' }
+  } }, 'es-419')
+  await espera()
+  ok('sin permiso no se ofrece reintentar: lo que falta es aprobar el plugin',
+    sinPermiso.getElementById('pairing-retry').hidden,
+    `hidden=${sinPermiso.getElementById('pairing-retry').hidden}`)
+}
+
+console.log('\nconfig.html — el reintento llega al worker por el mismo canal')
+{
+  const storage = { sidecar: { connection: null, qr: null, exited: true,
+    motivo: 'sidecar-no-arranco',
+    error: { code: 'sidecar-no-arranco', detail: 'spawn ENOENT' } } }
+  const { doc } = await montar('config.html', storage, 'es-419', (d, st) => {
+    if (d.action === 'storage.set' && d.params.key === 'sidecarRequest' && d.params.value) {
+      st.sidecarRequest = d.params.value
+      st.sidecarResult = { at: new Date().toISOString(), requestId: d.params.value.id,
+        action: d.params.value.action, ok: true, code: 'reintentado' }
+      st.sidecar = { connection: 'connecting', qr: null, exited: false }
+      return { ok: true }
+    }
+    return undefined
+  })
+  await espera()
+  // Reintentar no es destructivo: sale con un solo clic, sin confirmacion.
+  doc.getElementById('pairing-retry').click()
+  await espera()
+  ok('el reintento sale de un solo clic: no destruye nada que haya que confirmar',
+    !!storage.sidecarRequest && storage.sidecarRequest.action === 'reintentar',
+    JSON.stringify(storage.sidecarRequest))
+  await new Promise((r) => setTimeout(r, 3000))
+  ok('y el veredicto del worker se ve en pantalla',
+    doc.getElementById('said-pairing').textContent.length > 0,
+    doc.getElementById('said-pairing').textContent)
+  ok('la pantalla ya no muestra la falla vieja',
+    !doc.getElementById('pairing-msg').textContent.match(/caida/i),
+    doc.getElementById('pairing-msg').textContent)
+}
+
+console.log('\nconfig.html — un pedido sin respuesta se dice, no se traga')
+{
+  // El worker no contesta nunca: el panel no puede quedarse con el boton en "…" para
+  // siempre, que es el spinner eterno que este panel viene arreglando desde el principio.
+  const { doc } = await montar('config.html', { sidecar: {
+    connection: null, qr: null, exited: true, motivo: 'sidecar-cayo',
+    error: { code: 'sidecar-cayo', detail: 'x' } } }, 'es-419')
+  await espera()
+  const boton = doc.getElementById('pairing-retry')
+  boton.click()
+  await espera()
+  ok('mientras espera, el boton queda ocupado y no admite otro clic', boton.disabled,
+    `disabled=${boton.disabled}`)
+}
+
+console.log('\nconfig.html — la palabra "sidecar" no se le muestra a nadie')
+{
+  // `sidecar` es como llamamos al proceso ayudante entre nosotros. Quien instala el
+  // plugin no sabe que es, y estas son justo las frases que lee cuando algo salio mal.
+  // Los CODIGOS estables (`sidecar-cayo` y los demas) no se tocan: son el contrato.
+  const { window } = await montar('config.html')
+  const S = window.STRINGS
+  const sucias = []
+  for (const idioma of ['es', 'en', 'pt']) {
+    for (const k of Object.keys(S[idioma])) {
+      if (/sidecar/i.test(String(S[idioma][k]))) sucias.push(`${idioma}.${k}`)
+    }
+  }
+  ok('ninguna cadena que el usuario lee nombra al "sidecar"', sucias.length === 0,
+    JSON.stringify(sucias))
+}
+
+console.log('\nconfig.html — las traducciones de desvincular estan en los tres idiomas')
+{
+  const { window } = await montar('config.html')
+  const S = window.STRINGS
+  const nuevas = ['pairingUnlink', 'pairingUnlinkConfirm', 'pairingUnlinkCancel',
+    'pairingUnlinkWarn', 'pairingUnlinked', 'pairingRetry', 'pairingRetried',
+    'pairingNoAnswer', 'pairingHowUnlinkFailed']
+  const faltan = nuevas.filter((k) => !S.es[k] || !S.en[k])
+  ok('cada texto nuevo existe en espanol y en ingles', faltan.length === 0,
+    `faltan = ${JSON.stringify(faltan)}`)
+  const sinPt = nuevas.filter((k) => !S.pt[k] || S.pt[k] === S.en[k])
+  ok('y en portugues propio, no heredado del ingles', sinPt.length === 0,
+    `sin portugues = ${JSON.stringify(sinPt)}`)
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)

@@ -41,6 +41,14 @@ const CHATS_KEY = 'chats'
 // motivo cuando algo no llega a hablar. El panel dibuja el QR desde aca
 // (docs/ENCARGO-TRANSPORTE-UNICO.md §6-7); es el UNICO canal, igual que el resto.
 const SIDECAR_KEY = 'sidecar'
+// La via de vuelta para la vinculacion: el panel deja aca lo que quiere que pase con
+// la sesion -desvincularla, o reintentar el arranque- y el worker lo atiende. Es el
+// mismo camino que `syncRequest`, porque es el unico que hay: el panel solo llama
+// `storage.get`/`storage.set` y no existe evento de cambio de storage
+// (docs/ENCARGO-TRANSPORTE-UNICO.md §6). Dos claves y no una: el veredicto no puede
+// vivir dentro del pedido, porque el pedido se borra al atenderlo.
+const SIDECAR_REQUEST_KEY = 'sidecarRequest'
+const SIDECAR_RESULT_KEY = 'sidecarResult'
 const MODES = ['off', 'observar', 'borrador', 'responder']
 
 /** El nombre del agente lo define quien usa el plugin. No viene con uno puesto.
@@ -381,7 +389,33 @@ const SIDECAR_MOTIVO = Object.freeze({
   SIN_PERMISO: 'sidecar-sin-permiso',
   AUTHDIR_FALLO: 'sidecar-authdir-fallo',
   NO_ARRANCO: 'sidecar-no-arranco',
-  CAYO: 'sidecar-cayo'
+  CAYO: 'sidecar-cayo',
+  // El borrado de las credenciales no ocurrio. Codigo propio y no `AUTHDIR_FALLO`
+  // porque lo que hay del otro lado es distinto: aca la sesion SIGUE VIVA, y decirle
+  // al usuario cualquier otra cosa es dejarlo creyendo que revoco algo que no revoco.
+  DESVINCULAR_FALLO: 'desvincular-fallo'
+})
+
+/** Lo que el panel puede pedirle al worker sobre la sesion, y como se contesta.
+ *
+ *  `desvincular` es irreversible: borra una CREDENCIAL VIVA
+ *  (docs/ENCARGO-TRANSPORTE-UNICO.md §11-F1). `reintentar` no destruye nada, solo
+ *  vuelve a lanzar lo que no arranco. Se nombran en el mismo idioma que el resto de
+ *  los codigos estables del contrato, y no en el del panel, porque el panel los
+ *  traduce por codigo (§11-E1). */
+const SIDECAR_ACCION = Object.freeze({
+  DESVINCULAR: 'desvincular',
+  REINTENTAR: 'reintentar'
+})
+
+/** Codigos del veredicto que el worker deja para el panel. `vencido` no es un fallo
+ *  del worker: es un pedido de otra sesion, que no se atiende pero tampoco se calla —
+ *  callarlo deja al panel esperando una respuesta que no va a llegar. */
+const SIDECAR_VEREDICTO = Object.freeze({
+  DESVINCULADO: 'desvinculado',
+  REINTENTADO: 'reintentado',
+  VENCIDO: 'vencido',
+  ACCION_DESCONOCIDA: 'accion-desconocida'
 })
 
 /** Del motivo que devolvio el resolvedor al codigo estable que lee el panel.
@@ -439,7 +473,8 @@ export function mandoSinValla (ejecutable, args) {
  *  (docs/ENCARGO...§1), nunca sobre el userData de Orca, asi que `existsSync` ahi
  *  adentro lanza en vez de contestar. Mismo patron que `resolverCasaOrca` y
  *  `sembrarFuera`: la decision se hace del otro lado, sin la valla. */
-function resolverAuthDir(pluginDir, guion = join(pluginDir, 'sidecar', 'resolve-auth-dir.mjs')) {
+function resolverAuthDir(pluginDir, guion = join(pluginDir, 'sidecar', 'resolve-auth-dir.mjs'),
+  extra = []) {
   return new Promise((resolve) => {
     // El detalle se corta largo y a proposito. Con 300 caracteres el mensaje util
     // quedaba fuera: los primeros doscientos los gasta el SecurityWarning que Node
@@ -450,7 +485,7 @@ function resolverAuthDir(pluginDir, guion = join(pluginDir, 'sidecar', 'resolve-
       detail: [String(error?.message ?? ''), String(stderr ?? '')]
         .filter(Boolean).join(' | ').slice(0, 1200) })
     try {
-      const m = mandoSinValla(process.execPath, [guion, pluginDir])
+      const m = mandoSinValla(process.execPath, [guion, pluginDir, ...extra])
       execFile(m.cmd, m.args,
         { timeout: 15000, maxBuffer: 1024 * 1024,
           env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } },
@@ -675,26 +710,48 @@ export default function activate(orca) {
   // puede leer el userData- y recien con eso se lanza. `sidecarPath` sale de settings
   // para que las pruebas lo apunten a un guion de mentira; en producción nunca se pisa
   // y cae al bundle real (`DEFAULT_SETTINGS.sidecarPath`).
-  settings()
-    .then(async (s) => {
-      if (detenido) return
-      const resuelto = await resolverAuthDir(PLUGIN_DIR, s.authDirResolverPath)
-      if (detenido) return
-      if (!resuelto.ok || !resuelto.dir) {
-        const motivo = motivoAuthDir(resuelto)
-        await guardar(orca, SIDECAR_KEY, {
-          at: new Date().toISOString(), connection: null, qr: null,
-          motivo, statusCode: null,
-          error: { code: motivo,
-            detail: resuelto.detail || 'could not resolve the auth directory' },
-          exited: true, startedAt: new Date().toISOString()
-        })
-        orca.log(`sidecar not started (${motivo}): ${resuelto.detail || ''}`)
-        return
-      }
-      apagarSidecar = lanzarSidecar({ orca, scriptPath: s.sidecarPath, authDir: resuelto.dir })
-    })
-    .catch((error) => orca.log(`sidecar launch failed: ${error.message}`))
+  /** El estado limpio de la clave que lee el panel: sin sesion, sin QR y sin falla.
+   *
+   *  Se escribe ANTES de cualquier relanzamiento, y no se deja para que lo pise el
+   *  `lanzarSidecar` de despues: entre apagar el sidecar viejo y tener el nuevo hay un
+   *  viaje a un subproceso, y en ese hueco el panel sondea. Sin esto, desvincular
+   *  dejaba la pantalla diciendo "WhatsApp esta conectado" durante ese hueco, que es
+   *  justo lo que el usuario acababa de pedir que dejara de ser cierto. */
+  const limpiarEstadoSidecar = () => guardar(orca, SIDECAR_KEY, {
+    at: new Date().toISOString(), connection: null, qr: null, motivo: null,
+    statusCode: null, error: null, exited: false, startedAt: null
+  })
+
+  /** Resuelve el auth dir y lanza el sidecar. Una sola implementacion para el arranque
+   *  del plugin y para lo que pida el panel: si el reintento tomara otro camino, seria
+   *  otro arranque, con otros motivos, y el panel los traduciria distinto. */
+  async function arrancarSidecar () {
+    if (detenido) return { ok: false, code: SIDECAR_MOTIVO.NO_ARRANCO, detail: 'plugin detenido' }
+    const s = await settings()
+    if (detenido) return { ok: false, code: SIDECAR_MOTIVO.NO_ARRANCO, detail: 'plugin detenido' }
+    const resuelto = await resolverAuthDir(PLUGIN_DIR, s.authDirResolverPath)
+    if (detenido) return { ok: false, code: SIDECAR_MOTIVO.NO_ARRANCO, detail: 'plugin detenido' }
+    if (!resuelto.ok || !resuelto.dir) {
+      const motivo = motivoAuthDir(resuelto)
+      await guardar(orca, SIDECAR_KEY, {
+        at: new Date().toISOString(), connection: null, qr: null,
+        motivo, statusCode: null,
+        error: { code: motivo,
+          detail: resuelto.detail || 'could not resolve the auth directory' },
+        exited: true, startedAt: new Date().toISOString()
+      })
+      orca.log(`sidecar not started (${motivo}): ${resuelto.detail || ''}`)
+      return { ok: false, code: motivo, detail: resuelto.detail || '' }
+    }
+    // El de antes se apaga a proposito: `lanzarSidecar` marca la bandera para que ese
+    // final no se reporte como una caida. Dos sidecars vivos sobre el mismo auth state
+    // se pisarian las credenciales.
+    apagarSidecar()
+    apagarSidecar = lanzarSidecar({ orca, scriptPath: s.sidecarPath, authDir: resuelto.dir })
+    return { ok: true, dir: resuelto.dir }
+  }
+
+  arrancarSidecar().catch((error) => orca.log(`sidecar launch failed: ${error.message}`))
 
   // Y traer las conversaciones ya: en una instalacion nueva el panel arranca vacio y
   // el usuario no tiene de donde sacarlas.
@@ -734,8 +791,122 @@ export default function activate(orca) {
     if (!(edad >= 0) || edad > PETICION_TTL_MS) return
     await sincronizar('peticion')
   }
+  /** Como le fue al pedido, en una clave propia que el pedido no pisa. Va emparejado
+   *  al `id` del pedido: sin eso el panel no podria distinguir la respuesta a SU clic
+   *  de la que quedo del clic anterior, y un "listo" viejo se leeria como el de ahora. */
+  function veredictoSidecar (pedido, extra) {
+    return guardar(orca, SIDECAR_RESULT_KEY, {
+      at: new Date().toISOString(), requestId: pedido?.id ?? null,
+      action: pedido?.action ?? null, ...extra
+    })
+  }
+
+  /** Desvincular: apagar, borrar la credencial, y recien entonces volver a empezar.
+   *
+   *  Se relanza en vez de quedarse apagado porque desvincular existe para volver a
+   *  vincular —quien escaneo con el telefono equivocado quiere escanear con el otro—,
+   *  y un estado que exige un segundo boton para seguir es un estado donde hay que
+   *  explicarle al usuario que hacer. Relanzando, la pantalla vuelve exactamente al
+   *  estado que ya sabe dibujar: esperando el codigo, y despues el codigo. */
+  async function desvincularSidecar () {
+    apagarSidecar()
+    apagarSidecar = () => {}
+    await limpiarEstadoSidecar()
+    const s = await settings()
+    const borrado = await resolverAuthDir(PLUGIN_DIR, s.authDirResolverPath, ['--borrar'])
+    if (!borrado.ok) {
+      // NO se relanza: con las credenciales intactas, el sidecar volveria a conectar la
+      // MISMA sesion que el usuario acaba de pedir cortar, y el panel diria "conectado"
+      // como si nada hubiera pasado. Es la peor mentira que este panel podria contar.
+      const motivo = borrado.reason === 'borrado-fallo'
+        ? SIDECAR_MOTIVO.DESVINCULAR_FALLO
+        : motivoAuthDir(borrado)
+      await guardar(orca, SIDECAR_KEY, {
+        at: new Date().toISOString(), connection: null, qr: null, motivo,
+        statusCode: null,
+        error: { code: motivo, detail: borrado.detail || 'could not delete the auth state' },
+        exited: true, startedAt: new Date().toISOString()
+      })
+      orca.log(`sidecar not unlinked (${motivo}): ${borrado.detail || ''}`)
+      return { ok: false, code: motivo, detail: borrado.detail || '' }
+    }
+    orca.log(`sidecar unlinked: auth state removed from ${borrado.dir}`)
+    const arranque = await arrancarSidecar()
+    // El borrado SI ocurrio: la sesion quedo revocada aunque el relanzamiento falle.
+    // Se contesta que si, y el motivo del arranque fallido ya viaja en la clave
+    // `sidecar` con su propio codigo, que es donde el panel lo sabe leer.
+    return arranque.ok
+      ? { ok: true, code: SIDECAR_VEREDICTO.DESVINCULADO }
+      : { ok: true, code: SIDECAR_VEREDICTO.DESVINCULADO, arranque: arranque.code }
+  }
+
+  async function reintentarSidecar () {
+    const arranque = await arrancarSidecar()
+    return arranque.ok
+      ? { ok: true, code: SIDECAR_VEREDICTO.REINTENTADO }
+      : { ok: false, code: arranque.code, detail: arranque.detail || '' }
+  }
+
+  // Lo ultimo que se atendio, para que el mismo pedido no se ejecute dos veces en la
+  // misma sesion del worker. Sola no alcanza: vive en RAM y un worker que se reinicio
+  // la perdio, asi que el veredicto ya escrito manda sobre ella.
+  let ultimoPedidoSidecar = null
+  let atendiendoSidecar = false
+
+  /** Lo que el panel pidio sobre la sesion. Desvincular DOS veces no es desvincular:
+   *  la segunda se lleva puesta la sesion nueva que el usuario acaba de escanear, asi
+   *  que "una sola vez" es una condicion de correccion y no una optimizacion. */
+  async function atenderPedidoSidecar () {
+    if (atendiendoSidecar) return
+    const pedido = await leer(orca, SIDECAR_REQUEST_KEY)
+    if (!pedido || typeof pedido !== 'object') return
+    if (typeof pedido.id !== 'string' || typeof pedido.at !== 'string') return
+    if (pedido.id === ultimoPedidoSidecar) return
+    // La memoria de verdad es el veredicto, no la variable: un worker que se reinicio
+    // con el pedido todavia escrito lo volveria a ejecutar, y eso es exactamente el
+    // borrado de mas que no se puede permitir.
+    const previo = await leer(orca, SIDECAR_RESULT_KEY)
+    if (previo && typeof previo === 'object' && previo.requestId === pedido.id) {
+      ultimoPedidoSidecar = pedido.id
+      await guardar(orca, SIDECAR_REQUEST_KEY, null)
+      return
+    }
+    ultimoPedidoSidecar = pedido.id
+    // Se borra ANTES de actuar, igual que el pedido de sync: desvincular tarda un viaje
+    // a un subproceso, y en ese rato el vigia vuelve a mirar.
+    await guardar(orca, SIDECAR_REQUEST_KEY, null)
+
+    const edad = Date.now() - Date.parse(pedido.at)
+    if (!(edad >= 0) || edad > PETICION_TTL_MS) {
+      await veredictoSidecar(pedido, { ok: false, code: SIDECAR_VEREDICTO.VENCIDO,
+        detail: '' })
+      return
+    }
+
+    atendiendoSidecar = true
+    try {
+      let r
+      if (pedido.action === SIDECAR_ACCION.DESVINCULAR) r = await desvincularSidecar()
+      else if (pedido.action === SIDECAR_ACCION.REINTENTAR) r = await reintentarSidecar()
+      else r = { ok: false, code: SIDECAR_VEREDICTO.ACCION_DESCONOCIDA,
+        detail: String(pedido.action ?? '').slice(0, 60) }
+      await veredictoSidecar(pedido, r)
+    } catch (error) {
+      // Lo que reviente aca tiene que llegar al panel. Sin esto una excepcion a mitad
+      // del desvinculado se la come el catch del setInterval, y el clic no deja rastro:
+      // el usuario queda mirando un boton que ya volvio de "…" sin decir nada.
+      orca.log(`sidecar request ${pedido.action} failed: ${error.message}`)
+      await veredictoSidecar(pedido, { ok: false, code: motivoDe(error),
+        detail: String(error?.message ?? error).slice(0, 300) })
+    } finally {
+      atendiendoSidecar = false
+    }
+  }
+
   const pedidoTimer = setInterval(() => {
     atenderPedido().catch((error) => orca.log(`sync request failed: ${error.message}`))
+    atenderPedidoSidecar()
+      .catch((error) => orca.log(`sidecar request failed: ${error.message}`))
   }, PETICION_MS)
   if (typeof pedidoTimer.unref === 'function') pedidoTimer.unref()
 

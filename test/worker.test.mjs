@@ -736,6 +736,261 @@ console.log('\nworker: el resolvedor que contesta y el que no llega a correr se 
     new Set(codigos).size === 3 && codigos.every(Boolean), JSON.stringify(codigos))
 }
 
+// ───────── el panel pide desvincular: el canal de vuelta y la accion ─────────
+// El auth state es una CREDENCIAL VIVA (docs/ENCARGO-TRANSPORTE-UNICO.md §11-F1): quien
+// lo tenga lee y escribe como esa cuenta sin el telefono. Poder revocarlo desde el panel
+// no es una comodidad — sin esto, quien escaneo con el telefono equivocado solo sale
+// borrando un directorio a mano. §8.1 lo pide con nombre: "boton de desvincular".
+//
+// El panel no tiene canal con el worker: deja el pedido en storage y el worker lo mira
+// cada pocos segundos, igual que `syncRequest`. Lo que se recorre aca es lo que hace
+// peligroso ese canal: que un pedido no se ejecute DOS veces.
+console.log('\nworker: el panel pide desvincular y el worker lo atiende una sola vez')
+{
+  // El resolvedor de mentira lleva la cuenta de los borrados en un archivo: asi la
+  // prueba puede afirmar "una sola vez" sobre un hecho observado y no sobre un log.
+  const authFalso = join(RAIZ, 'auth-desvincular')
+  const borrados = join(RAIZ, 'borrados.txt')
+  const resolvedor = join(RAIZ, 'resolve-desvincular.mjs')
+  // No crea el directorio: el resolvedor de verdad tampoco lo crea -lo crea el sidecar
+  // al guardar-, y creandolo aca "se borro" seria inobservable despues del relanzamiento.
+  writeFileSync(resolvedor,
+    'import { appendFileSync, rmSync } from "node:fs"\n' +
+    'const dir = ' + JSON.stringify(authFalso) + '\n' +
+    'if (process.argv.includes("--borrar")) {\n' +
+    '  appendFileSync(' + JSON.stringify(borrados) + ', "x\\n")\n' +
+    '  rmSync(dir, { recursive: true, force: true })\n' +
+    '}\n' +
+    'process.stdout.write(JSON.stringify({ ok: true, dir }))\n')
+  mkdirSync(authFalso, { recursive: true })
+  writeFileSync(join(authFalso, 'creds.json'), '{"credencial":"viva"}')
+
+  const guion = join(RAIZ, 'sidecar-conectado.cjs')
+  writeFileSync(guion,
+    '#!/usr/bin/env node\n' +
+    'process.stdout.write(JSON.stringify({ type: "connection", state: "open" }) + "\\n")\n' +
+    'setInterval(() => {}, 1000)\n', { mode: 0o755 })
+
+  const orca = hostFalso(herramientas('desvincular', '#!/bin/sh\necho \'[]\'\n'), {}, guion)
+  orca.host.call = (function (original) {
+    return async (action, params) => {
+      if (action === 'settings.get') {
+        return { value: { toolsDir: join(RAIZ, 'desvincular'), sidecarPath: guion,
+          authDirResolverPath: resolvedor } }
+      }
+      return original(action, params)
+    }
+  })(orca.host.call)
+
+  const { apagar } = await arranca(orca)
+  await hasta(() => orca.store.sidecar && orca.store.sidecar.connection === 'open', 10000)
+  ok('antes de desvincular la sesion se ve conectada',
+    orca.store.sidecar && orca.store.sidecar.connection === 'open',
+    JSON.stringify(orca.store.sidecar))
+
+  const pedido = { id: 'pedido-1', action: 'desvincular', at: new Date().toISOString() }
+  orca.store.sidecarRequest = pedido
+  const contestado = await hasta(() => orca.store.sidecarResult &&
+    orca.store.sidecarResult.requestId === 'pedido-1', 15000)
+  ok('el worker contesta el pedido del panel con un veredicto', contestado,
+    JSON.stringify(orca.store.sidecarResult))
+  ok('y el veredicto trae un codigo ESTABLE, no texto libre',
+    orca.store.sidecarResult && orca.store.sidecarResult.ok === true &&
+    orca.store.sidecarResult.code === 'desvinculado',
+    JSON.stringify(orca.store.sidecarResult))
+  ok('el pedido se borra: quien lo atendio no lo deja para la proxima vuelta',
+    orca.store.sidecarRequest === null, JSON.stringify(orca.store.sidecarRequest))
+  ok('las credenciales guardadas se borraron',
+    !existsSync(authFalso), authFalso)
+
+  // Dos veces el MISMO pedido: el panel lo puede reescribir -su escritura se reintenta
+  // cuando el host la rechaza- y el worker lo puede releer si el borrado no llego.
+  // Desvincular dos veces no es dos veces lo mismo: la segunda se lleva puesta la
+  // sesion nueva que el usuario acaba de escanear.
+  orca.store.sidecarRequest = pedido
+  await dormir(6000)
+  const veces = existsSync(borrados)
+    ? readFileSync(borrados, 'utf8').trim().split('\n').filter(Boolean).length : 0
+  ok('el mismo pedido escrito dos veces se ejecuta UNA sola vez', veces === 1,
+    `borrados=${veces}`)
+
+  apagar()
+}
+
+// ───────── desvincular deja la pantalla en el estado nuevo, no en el viejo ─────────
+// Un panel que sigue diciendo "WhatsApp esta conectado" despues de desvincular es peor
+// que uno que no ofrece desvincular: afirma en voz alta algo que acaba de dejar de ser
+// cierto.
+console.log('\nworker: tras desvincular, el estado que lee el panel ya no es el de antes')
+{
+  const authFalso = join(RAIZ, 'auth-estado')
+  const resolvedor = join(RAIZ, 'resolve-estado.mjs')
+  writeFileSync(resolvedor,
+    'import { mkdirSync, rmSync } from "node:fs"\n' +
+    'const dir = ' + JSON.stringify(authFalso) + '\n' +
+    'if (process.argv.includes("--borrar")) rmSync(dir, { recursive: true, force: true })\n' +
+    'else mkdirSync(dir, { recursive: true })\n' +
+    'process.stdout.write(JSON.stringify({ ok: true, dir }))\n')
+
+  // Este sidecar de mentira dice "open" UNA vez y se queda callado: tras desvincular,
+  // el que se lance de nuevo vuelve a decir "open" solo si alguien lo relanzo. Lo que
+  // importa aca es que la clave NO siga diciendo lo de antes.
+  const vidas = join(RAIZ, 'vidas-silencioso.txt')
+  const guion = join(RAIZ, 'sidecar-silencioso.cjs')
+  writeFileSync(guion,
+    '#!/usr/bin/env node\n' +
+    'const fs = require("node:fs")\n' +
+    'fs.appendFileSync(' + JSON.stringify(vidas) + ', "x\\n")\n' +
+    'const primera = fs.readFileSync(' + JSON.stringify(vidas) + ', "utf8")\n' +
+    '  .trim().split("\\n").filter(Boolean).length === 1\n' +
+    'if (primera) {\n' +
+    '  process.stdout.write(JSON.stringify({ type: "connection", state: "open" }) + "\\n")\n' +
+    '}\n' +
+    'setInterval(() => {}, 1000)\n', { mode: 0o755 })
+
+  const orca = hostFalso(herramientas('estado', '#!/bin/sh\necho \'[]\'\n'), {}, guion)
+  orca.host.call = (function (original) {
+    return async (action, params) => {
+      if (action === 'settings.get') {
+        return { value: { toolsDir: join(RAIZ, 'estado'), sidecarPath: guion,
+          authDirResolverPath: resolvedor } }
+      }
+      return original(action, params)
+    }
+  })(orca.host.call)
+
+  const { apagar } = await arranca(orca)
+  await hasta(() => orca.store.sidecar && orca.store.sidecar.connection === 'open', 10000)
+
+  orca.store.sidecarRequest = { id: 'pedido-estado', action: 'desvincular',
+    at: new Date().toISOString() }
+  await hasta(() => orca.store.sidecarResult &&
+    orca.store.sidecarResult.requestId === 'pedido-estado', 15000)
+  const d = orca.store.sidecar
+  ok('la conexion vieja no sigue en pie en la clave que lee el panel',
+    !!d && d.connection !== 'open', JSON.stringify(d))
+  ok('y el QR viejo tampoco: escanear uno de la sesion anterior falla sin explicacion',
+    !!d && !d.qr, JSON.stringify(d))
+  apagar()
+}
+
+// ───────── el reintento: el panel ya no manda a reiniciar Orca ─────────
+// "Reinicie Orca" es lo mas debil que puede decir un panel: manda a apagar la aplicacion
+// entera por un proceso hijo que el propio plugin sabe relanzar.
+console.log('\nworker: el reintento del panel relanza el sidecar sin reiniciar Orca')
+{
+  const authFalso = join(RAIZ, 'auth-reintento')
+  const arranques = join(RAIZ, 'arranques.txt')
+  const resolvedor = join(RAIZ, 'resolve-reintento.mjs')
+  writeFileSync(resolvedor,
+    'import { mkdirSync } from "node:fs"\n' +
+    'const dir = ' + JSON.stringify(authFalso) + '\n' +
+    'mkdirSync(dir, { recursive: true })\n' +
+    'process.stdout.write(JSON.stringify({ ok: true, dir }))\n')
+
+  const guion = join(RAIZ, 'sidecar-cuenta-arranques.cjs')
+  writeFileSync(guion,
+    '#!/usr/bin/env node\n' +
+    'require("node:fs").appendFileSync(' + JSON.stringify(arranques) + ', "x\\n")\n' +
+    'setInterval(() => {}, 1000)\n', { mode: 0o755 })
+
+  const orca = hostFalso(herramientas('reintento', '#!/bin/sh\necho \'[]\'\n'), {}, guion)
+  orca.host.call = (function (original) {
+    return async (action, params) => {
+      if (action === 'settings.get') {
+        return { value: { toolsDir: join(RAIZ, 'reintento'), sidecarPath: guion,
+          authDirResolverPath: resolvedor } }
+      }
+      return original(action, params)
+    }
+  })(orca.host.call)
+
+  const { apagar } = await arranca(orca)
+  await hasta(() => existsSync(arranques), 10000)
+  const cuenta = () => existsSync(arranques)
+    ? readFileSync(arranques, 'utf8').trim().split('\n').filter(Boolean).length : 0
+  const antes = cuenta()
+
+  orca.store.sidecarRequest = { id: 'pedido-reintento', action: 'reintentar',
+    at: new Date().toISOString() }
+  const contestado = await hasta(() => orca.store.sidecarResult &&
+    orca.store.sidecarResult.requestId === 'pedido-reintento', 15000)
+  ok('el reintento tambien llega al worker por el mismo canal', contestado,
+    JSON.stringify(orca.store.sidecarResult))
+  ok('y contesta con su propio codigo estable',
+    orca.store.sidecarResult && orca.store.sidecarResult.ok === true &&
+    orca.store.sidecarResult.code === 'reintentado',
+    JSON.stringify(orca.store.sidecarResult))
+  // Se ESPERA a que el hijo deje su marca en vez de leerla en el acto: el veredicto se
+  // escribe cuando el worker ya hizo `spawn`, y un Node recien nacido tarda un momento
+  // mas en llegar a su primera linea. Leer ahi mismo medía la carrera, no el relanzamiento.
+  const relanzo = await hasta(() => cuenta() > antes, 10000)
+  const despues = cuenta()
+  ok('el sidecar se lanzo de nuevo de verdad, no solo se dijo que si',
+    relanzo && despues > antes, `antes=${antes} despues=${despues}`)
+  apagar()
+}
+
+// ───────── un pedido viejo no se atiende, pero tampoco se calla ─────────
+console.log('\nworker: un pedido viejo del panel se descarta con motivo')
+{
+  const orca = hostFalso(herramientas('viejo', '#!/bin/sh\necho \'[]\'\n'), {})
+  const { apagar } = await arranca(orca)
+  orca.store.sidecarRequest = { id: 'pedido-viejo', action: 'desvincular',
+    at: new Date(Date.now() - 30 * 60 * 1000).toISOString() }
+  const contestado = await hasta(() => orca.store.sidecarResult &&
+    orca.store.sidecarResult.requestId === 'pedido-viejo', 10000)
+  ok('el pedido de otra sesion igual deja veredicto: callarlo deja al panel esperando ' +
+    'una respuesta que no va a llegar', contestado,
+    JSON.stringify(orca.store.sidecarResult))
+  ok('y el veredicto dice que vencio, no que salio bien',
+    orca.store.sidecarResult && orca.store.sidecarResult.ok === false &&
+    orca.store.sidecarResult.code === 'vencido',
+    JSON.stringify(orca.store.sidecarResult))
+  apagar()
+}
+
+// ───────── el resolvedor sabe borrar, y borra lo que dijo que borraria ─────────
+// El worker NO puede borrar el auth state: su valla declara `--allow-fs-read` sobre la
+// raiz del plugin y nada de escritura (docs/ENCARGO...§1). El borrado ocurre en el
+// MISMO guion que resuelve la ruta, y no en un hermano, porque dos copias de la tabla
+// de raices de userData pueden discrepar — y discrepar aca significa borrar la carpeta
+// equivocada o dejar viva la que se pidio borrar.
+console.log('\nworker: el resolvedor de auth borra el directorio cuando se lo piden')
+{
+  const casa = join(RAIZ, 'home-borrado')
+  const soporte = join(casa, 'Library', 'Application Support')
+  mkdirSync(join(soporte, 'orca'), { recursive: true })
+  mkdirSync(join(casa, '.config', 'orca'), { recursive: true })
+  mkdirSync(join(casa, 'AppData', 'Roaming', 'orca'), { recursive: true })
+  const entorno = { ...process.env, HOME: casa,
+    XDG_CONFIG_HOME: join(casa, '.config'), APPDATA: join(casa, 'AppData', 'Roaming') }
+  const guion = join(PLUGIN_DIR, 'sidecar', 'resolve-auth-dir.mjs')
+
+  const correr = (args) => new Promise((resolve) => {
+    execFileNode(process.execPath, [guion, PLUGIN_DIR, ...args], { env: entorno },
+      (error, stdout) => resolve({ error, salida: JSON.parse(stdout || 'null') }))
+  })
+
+  const a = await correr([])
+  ok('sin --borrar sigue contestando la ruta y no toca nada',
+    a.salida && a.salida.ok === true && isAbsolute(String(a.salida.dir || '')),
+    JSON.stringify(a.salida))
+  mkdirSync(a.salida.dir, { recursive: true })
+  writeFileSync(join(a.salida.dir, 'creds.json'), '{"credencial":"viva"}')
+
+  const b = await correr(['--borrar'])
+  ok('con --borrar contesta que borro', b.salida && b.salida.ok === true &&
+    b.salida.borrado === true, JSON.stringify(b.salida))
+  ok('y la credencial viva ya no esta en el disco',
+    !existsSync(join(a.salida.dir, 'creds.json')), a.salida.dir)
+
+  // Desvincular sin nada vinculado no es un error: es lo que el usuario pidio, ya hecho.
+  const c = await correr(['--borrar'])
+  ok('borrar lo que ya no esta no falla: el resultado que el usuario pidio ya es cierto',
+    c.salida && c.salida.ok === true, JSON.stringify(c.salida))
+}
+
 // El hijo que resuelve el auth dir y el sidecar mismo tienen que correr SIN la valla
 // de permisos: ese es el motivo entero de lanzarlos fuera del worker. Pero Node no
 // deja escapar por el entorno — cuando el proceso vallado lanza otro le inyecta el
