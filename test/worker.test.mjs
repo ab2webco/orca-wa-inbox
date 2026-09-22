@@ -22,7 +22,7 @@
  * principio que el sync: un camino de falla que ninguna prueba recorre es un camino
  * que nadie sabe si existe.
  */
-import { envSinValla } from '../main.mjs'
+import { mandoSinValla } from '../main.mjs'
 import {
   mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, rmSync
 } from 'node:fs'
@@ -659,16 +659,21 @@ console.log('\nworker: el resolvedor que contesta y el que no llega a correr se 
     '  host: { call: async (a, p) => {\n' +
     '    if (a === "storage.get") return { value: store[p.key] }\n' +
     '    if (a === "storage.set") { store[p.key] = p.value; return { ok: true } }\n' +
-    '    if (a === "settings.get") return { value: { toolsDir: process.argv[3], sidecarPath: process.argv[4] } }\n' +
+    '    if (a === "settings.get") return { value: { toolsDir: process.argv[3], sidecarPath: process.argv[4],\n' +
+    '      authDirResolverPath: process.argv[5] === "roto" ? "/no/existe/resolvedor.mjs" : undefined } }\n' +
     '    return { ok: true }\n' +
     '  } },\n' +
     '  commands: { register () {} },\n' +
     '  events: { on () {} }\n' +
     '}\n' +
-    // "roto" es un `node` hijo que ni levanta: sale con 9 y no escribe nada en stdout.
-    // Es el resolvedor que CORRIO y no contesto, que no es ni "no hay userData" ni
-    // "no me dejaron lanzarlo".
-    'if (process.argv[5] === "roto") process.env.NODE_OPTIONS = "--esto-no-es-una-bandera"\n' +
+    // "roto" apunta el resolvedor a un guion que no existe: el hijo arranca, no
+    // encuentra que cargar y muere sin escribir JSON. Es el resolvedor que CORRIO y
+    // no contesto, que no es ni "no hay userData" ni "no me dejaron lanzarlo".
+    //
+    // Antes se ensuciaba NODE_OPTIONS para romperlo, y dejo de servir el dia que los
+    // hijos pasaron a lanzarse por `/usr/bin/env -u NODE_OPTIONS`: la prueba se
+    // curaba sola con el arreglo que debia vigilar. Un fallo inducido por el mismo
+    // mecanismo que el codigo limpia no prueba nada.
     'const { default: activate } = await import(pathToFileURL(process.argv[2]).href)\n' +
     'activate(orca)\n' +
     'const fin = Date.now() + 20000\n' +
@@ -732,36 +737,32 @@ console.log('\nworker: el resolvedor que contesta y el que no llega a correr se 
 }
 
 // El hijo que resuelve el auth dir y el sidecar mismo tienen que correr SIN la valla
-// de permisos: ese es el motivo entero de lanzarlos fuera del worker. Pero Node pasa
-// la valla a los hijos por NODE_OPTIONS, y `{ ...process.env }` la copia tal cual. El
-// sintoma no se parece a la causa: el hijo arranca, avisa con un SecurityWarning sobre
-// --allow-child-process, y muere en el primer existsSync con "Access to this API has
-// been restricted". El worker solo ve "Command failed" y lo reporta como fallo del
-// resolvedor, que es cierto y no sirve para nada.
+// de permisos: ese es el motivo entero de lanzarlos fuera del worker. Pero Node no
+// deja escapar por el entorno — cuando el proceso vallado lanza otro le inyecta el
+// mismo --permission en el NODE_OPTIONS del hijo, y lo hace aunque uno borre la
+// variable o pase un entorno minimo. Medido: con el entorno tal cual, borrado, vacio
+// o reducido a PATH y HOME, el hijo nace vallado en los cuatro casos.
+//
+// La salida es no ser Node en el medio: `/usr/bin/env -u NODE_OPTIONS` no es un
+// proceso de Node, asi que Node no le inyecta nada, y `env` borra la variable antes
+// de ejecutar el binario. Sin esto el sidecar hereda lectura sobre la raiz del plugin
+// y CERO escritura, con lo cual no puede guardar el auth state — y guardarlo es el
+// motivo por el que existe como proceso aparte.
 {
-  const conValla = {
-    PATH: '/usr/bin',
-    NODE_OPTIONS: '--permission --allow-fs-read=/algo --allow-child-process --max-old-space-size=512'
+  const m = mandoSinValla('/ruta/al/node', ['guion.mjs', 'argumento'])
+  if (process.platform === 'win32') {
+    ok('en Windows no hay /usr/bin/env: se lanza directo y se asume la limitacion',
+      m.cmd === '/ruta/al/node' && m.args[0] === 'guion.mjs', JSON.stringify(m))
+  } else {
+    ok('no lanza el binario directo: Node le inyectaria la valla al hijo',
+      m.cmd !== '/ruta/al/node', JSON.stringify(m.cmd))
+    ok('lanza por un intermediario que NO es Node', m.cmd === '/usr/bin/env', m.cmd)
+    ok('le quita NODE_OPTIONS, que es por donde viaja la valla',
+      m.args[0] === '-u' && m.args[1] === 'NODE_OPTIONS', JSON.stringify(m.args.slice(0, 2)))
+    ok('el binario y sus argumentos quedan intactos detras',
+      m.args[2] === '/ruta/al/node' && m.args[3] === 'guion.mjs' && m.args[4] === 'argumento',
+      JSON.stringify(m.args.slice(2)))
   }
-  const limpio = envSinValla(conValla)
-  ok('quita --permission del NODE_OPTIONS heredado',
-    !/--permission/.test(limpio.NODE_OPTIONS || ''), JSON.stringify(limpio.NODE_OPTIONS))
-  ok('quita --allow-fs-read del NODE_OPTIONS heredado',
-    !/--allow-fs-read/.test(limpio.NODE_OPTIONS || ''), JSON.stringify(limpio.NODE_OPTIONS))
-  ok('quita --allow-child-process del NODE_OPTIONS heredado',
-    !/--allow-child-process/.test(limpio.NODE_OPTIONS || ''), JSON.stringify(limpio.NODE_OPTIONS))
-  ok('CONSERVA las opciones que no son la valla: borrar NODE_OPTIONS entero cambiaria ' +
-    'como corre el hijo por razones que no tienen nada que ver con los permisos',
-    /--max-old-space-size=512/.test(limpio.NODE_OPTIONS || ''), JSON.stringify(limpio.NODE_OPTIONS))
-  ok('no toca el resto del entorno', limpio.PATH === '/usr/bin', JSON.stringify(limpio.PATH))
-
-  const soloValla = envSinValla({ PATH: '/usr/bin', NODE_OPTIONS: '--permission' })
-  ok('si no queda nada, borra NODE_OPTIONS en vez de dejarlo vacio: una cadena vacia ' +
-    'no es lo mismo que ausente para quien la lea despues',
-    !('NODE_OPTIONS' in soloValla), JSON.stringify(soloValla))
-
-  const sinNada = envSinValla({ PATH: '/usr/bin' })
-  ok('sin NODE_OPTIONS lo deja igual', !('NODE_OPTIONS' in sinNada) && sinNada.PATH === '/usr/bin')
 }
 
 rmSync(RAIZ, { recursive: true, force: true })

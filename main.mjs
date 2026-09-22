@@ -45,11 +45,13 @@ const MODES = ['off', 'observar', 'borrador', 'responder']
 
 /** El nombre del agente lo define quien usa el plugin. No viene con uno puesto.
  *
- *  `sidecarPath` es interno, como `toolsDir`: no lo pisa el usuario, existe para que
- *  las pruebas puedan apuntar el lanzamiento del sidecar a un guion de mentira en vez
- *  del bundle real de Baileys. */
+ *  `sidecarPath` y `authDirResolverPath` son internos, como `toolsDir`: no los pisa el
+ *  usuario, existen para que las pruebas puedan apuntar el lanzamiento a un guion de
+ *  mentira en vez del bundle real de Baileys o del resolvedor real. Hace falta uno por
+ *  cada hijo porque fallan por motivos distintos y el panel los traduce distinto. */
 const DEFAULT_SETTINGS = { agentName: '', signMessages: true, toolsDir: TOOLS,
-  sidecarPath: join(PLUGIN_DIR, 'sidecar', 'sidecar.cjs') }
+  sidecarPath: join(PLUGIN_DIR, 'sidecar', 'sidecar.cjs'),
+  authDirResolverPath: join(PLUGIN_DIR, 'sidecar', 'resolve-auth-dir.mjs') }
 
 /** Corre `wa-read doctor` y avisa por notificacion si algo falta. */
 async function checkSystem(orca, toolsDir = TOOLS) {
@@ -344,11 +346,12 @@ async function resolverCasaOrca(waScope) {
 function sembrarFuera(toolsDir) {
   const guion = join(PLUGIN_DIR, 'harness.mjs')
   return new Promise((resolve) => {
-    execFile(process.execPath, [guion, PLUGIN_DIR, toolsDir],
+    const mSiembra = mandoSinValla(process.execPath, [guion, PLUGIN_DIR, toolsDir])
+    execFile(mSiembra.cmd, mSiembra.args,
       // El worker es el helper de Electron: sin esto arrancaria una ventana en vez de
       // un Node. Con node pelado —los chequeos— la variable sobra y no molesta.
       { timeout: 120000, maxBuffer: 8 * 1024 * 1024,
-        env: { ...envSinValla(), ELECTRON_RUN_AS_NODE: '1' } },
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } },
       (error, stdout) => {
         const at = new Date().toISOString()
         try {
@@ -401,30 +404,27 @@ function motivoAuthDir(resuelto) {
 }
 
 /**
- * El entorno de un hijo que tiene que correr FUERA de la valla de permisos.
+ * Como lanzar un hijo que tiene que correr FUERA de la valla de permisos.
  *
- * Node propaga la valla a los hijos por `NODE_OPTIONS`, asi que `{ ...process.env }`
- * se la copia intacta: el hijo arranca vallado, avisa con un SecurityWarning sobre
- * `--allow-child-process`, y muere en el primer `existsSync` con "Access to this API
- * has been restricted". El worker solo ve "Command failed" — cierto, y a la vez
- * inutil para saber que pasó.
+ * Node NO deja escapar por el entorno: cuando el proceso vallado lanza otro, le
+ * inyecta el mismo `--permission` y la misma allowlist en el `NODE_OPTIONS` del hijo,
+ * y lo hace aunque uno borre la variable o pase un entorno minimo. Es a proposito —
+ * si bastara con spawnear, la valla no valdria nada. Medido: con el entorno tal cual,
+ * borrado, vacio o reducido a PATH y HOME, el hijo nace con `process.permission`
+ * activo en los cuatro casos.
  *
- * Lanzar el hijo es justamente la forma de salir de la valla (docs/ENCARGO-TRANSPORTE-
- * UNICO.md §2: el hijo no la hereda), asi que heredarla anula el motivo de lanzarlo.
- * Se quitan los flags de permisos y se conserva el resto de NODE_OPTIONS, que puede
- * traer cosas que no tienen nada que ver y que cambiarian como corre el hijo.
+ * La salida es no ser Node en el medio. `/usr/bin/env -u NODE_OPTIONS` no es un
+ * proceso de Node, asi que Node no le inyecta nada; `env` borra la variable y ejecuta
+ * el binario ya limpio. Sin esto, el hijo hereda `--allow-fs-read` sobre la raiz del
+ * plugin y NINGUN permiso de escritura, con lo cual el sidecar no podria ni guardar
+ * el auth state ni averiguar donde guardarlo (docs/ENCARGO-TRANSPORTE-UNICO.md §2).
+ *
+ * En Windows no hay `/usr/bin/env`; alli se lanza directo y el hijo queda vallado,
+ * que es una limitacion conocida y no un descuido.
  */
-export function envSinValla (env = process.env) {
-  const salida = { ...env }
-  const opciones = String(salida.NODE_OPTIONS ?? '')
-  if (!opciones) return salida
-  const limpias = opciones
-    .split(/\s+/)
-    .filter((t) => t && !/^--(permission|allow-fs-read|allow-fs-write|allow-child-process|allow-worker|allow-addons)(=|$)/.test(t))
-    .join(' ')
-  if (limpias) salida.NODE_OPTIONS = limpias
-  else delete salida.NODE_OPTIONS
-  return salida
+export function mandoSinValla (ejecutable, args) {
+  if (process.platform === 'win32') return { cmd: ejecutable, args }
+  return { cmd: '/usr/bin/env', args: ['-u', 'NODE_OPTIONS', ejecutable, ...args] }
 }
 
 
@@ -435,8 +435,7 @@ export function envSinValla (env = process.env) {
  *  (docs/ENCARGO...§1), nunca sobre el userData de Orca, asi que `existsSync` ahi
  *  adentro lanza en vez de contestar. Mismo patron que `resolverCasaOrca` y
  *  `sembrarFuera`: la decision se hace del otro lado, sin la valla. */
-function resolverAuthDir(pluginDir) {
-  const guion = join(pluginDir, 'sidecar', 'resolve-auth-dir.mjs')
+function resolverAuthDir(pluginDir, guion = join(pluginDir, 'sidecar', 'resolve-auth-dir.mjs')) {
   return new Promise((resolve) => {
     // El detalle se corta largo y a proposito. Con 300 caracteres el mensaje util
     // quedaba fuera: los primeros doscientos los gasta el SecurityWarning que Node
@@ -447,9 +446,10 @@ function resolverAuthDir(pluginDir) {
       detail: [String(error?.message ?? ''), String(stderr ?? '')]
         .filter(Boolean).join(' | ').slice(0, 1200) })
     try {
-      execFile(process.execPath, [guion, pluginDir],
+      const m = mandoSinValla(process.execPath, [guion, pluginDir])
+      execFile(m.cmd, m.args,
         { timeout: 15000, maxBuffer: 1024 * 1024,
-          env: { ...envSinValla(), ELECTRON_RUN_AS_NODE: '1' } },
+          env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } },
         (error, stdout, stderr) => {
           try {
             const estado = JSON.parse(stdout || 'null')
@@ -495,12 +495,15 @@ export function lanzarSidecar({ orca, scriptPath, authDir, spawnFn = spawn, env 
   let detenidoPorWorker = false
   let proceso
   try {
-    proceso = spawnFn(process.execPath, [scriptPath], {
-      // Mismo patron que `sembrarFuera`: el worker es el helper de Electron, y sin
-      // esto arrancaria una ventana en vez de un Node piano. El sidecar NO adivina el
-      // directorio de auth (sidecar/src/index.js): llega por env, nunca por argv, para
-      // que el contrato viva en un solo lugar.
-      env: { ...envSinValla(env), ELECTRON_RUN_AS_NODE: '1', WA_SIDECAR_AUTH_DIR: authDir },
+    // Mismo patron que `sembrarFuera`: el worker es el helper de Electron, y sin
+    // ELECTRON_RUN_AS_NODE arrancaria una ventana en vez de un Node pelado. Y va por
+    // `mandoSinValla` porque el sidecar tiene que ESCRIBIR el auth state: heredando la
+    // valla no podria, y ese es el motivo entero de que sea un proceso aparte.
+    // El sidecar NO adivina el directorio de auth (sidecar/src/index.js): llega por
+    // env, nunca por argv, para que el contrato viva en un solo lugar.
+    const mando = mandoSinValla(process.execPath, [scriptPath])
+    proceso = spawnFn(mando.cmd, mando.args, {
+      env: { ...env, ELECTRON_RUN_AS_NODE: '1', WA_SIDECAR_AUTH_DIR: authDir },
       stdio: ['ignore', 'pipe', 'pipe']
     })
   } catch (error) {
@@ -648,7 +651,7 @@ export default function activate(orca) {
   settings()
     .then(async (s) => {
       if (detenido) return
-      const resuelto = await resolverAuthDir(PLUGIN_DIR)
+      const resuelto = await resolverAuthDir(PLUGIN_DIR, s.authDirResolverPath)
       if (detenido) return
       if (!resuelto.ok || !resuelto.dir) {
         const motivo = motivoAuthDir(resuelto)
