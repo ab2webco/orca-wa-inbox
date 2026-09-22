@@ -43,9 +43,8 @@ EXIT_SOURCE = 4
 # nada; renombrar el codigo desincroniza el panel en silencio.
 SIN_TRANSPORTE = "no-transport"
 SIN_TRANSPORTE_DETALLE = (
-    "there is no message transport yet. The two old read routes were removed and the "
-    "sidecar that replaces them pairs the line but does not read messages yet. Pair "
-    "your line from the plugin settings; reading arrives with the message store.")
+    "no linked WhatsApp line can be read yet. Link a line from the plugin settings, "
+    "with the QR code. Reading conversations is not available in this version.")
 
 
 def morir_sin_fuente(reason, detail, code=EXIT_SOURCE):

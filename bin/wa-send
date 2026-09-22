@@ -55,9 +55,8 @@ LINEA_AMBIGUA = "send-ambiguous-line"
 # conversacion, es esperar al almacen de mensajes.
 SIN_TRANSPORTE = "send-no-transport"
 SIN_TRANSPORTE_DETALLE = (
-    "there is no message transport yet: the two old write routes were removed and the "
-    "sidecar that replaces them pairs the line but does not carry messages yet. "
-    "Nothing was written and nothing was opened.")
+    "sending is not available in this version. Nothing was written and nothing was "
+    "opened.")
 # La conversacion que no esta en ninguna linea registrada. Sigue siendo el caso por
 # defecto del registro y no un transporte: quien no registro la linea igual tiene una.
 CUENTA_LOCAL = "local"

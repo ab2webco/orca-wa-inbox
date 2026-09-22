@@ -27,12 +27,21 @@ if a name does resolve it may be an old copy reading another database.
 | `wa-send` | writes a message in the chat, and sends it only with `--send` |
 | `wa-transcribe` | turns a voice note into text, when this machine can |
 
-Two exit codes are answers, not failures, and both are load-bearing:
+Some exit codes are answers, not failures, and all of them are load-bearing:
 
 | Code | Where | What it means |
 |---|---|---|
 | `3` | `wa-scope check` | denied. Note it and move on. Do not negotiate with the gate. |
 | `4` | `wa-scope lock` | another run is already going. Stop there, read nothing, open nothing. |
+| `4` | `wa-read` (any read) | `no-transport` on the first stderr line: no WhatsApp line is linked yet, so there is nothing to read. This is a normal state, not a broken tool. |
+
+`no-transport` is the one worth knowing by name. It means the owner has not linked a
+line from the plugin settings yet, or reading is not available in this version. There
+is nothing for you to fix and nothing to retry: **stop the run and say so in one
+line.** Do not open cards, do not guess at conversations, and do not report it as a
+failure of the tools — they answered correctly. `wa-scope pending` already returns
+`hay_trabajo: false` with this code, so a run that starts anyway has ignored its own
+precheck.
 
 Cards are opened with the task service's own CLI, which `wa-scope where` names in
 `provider`: `orca plane create`, `orca linear save-issue` or `gh issue create`. With
