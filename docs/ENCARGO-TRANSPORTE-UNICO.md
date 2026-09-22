@@ -65,10 +65,33 @@ permisos de Node. El usuario no instala ni administra nada aparte.
   `PLUGIN_HOST_API_V0` (`plugin-host-api.ts:122-263`), ninguno lo declara. Sólo
   relaja el modelo de permisos agregando `--allow-child-process`
   (`plugin-worker-sandbox-args.ts:20-22`).
-- El hijo **no hereda el sandbox**: los flags `--permission` no se propagan.
-  Tiene `net`, `tls` y `ws` reales. El texto de consentimiento lo dice explícito
-  (`plugin-capabilities.ts:100-101`): *"Programs it starts are not constrained
-  by this plugin worker's file or network permissions"*.
+- **El hijo SÍ hereda la valla de permisos, y hay que sacarlo de ella a mano.**
+  El texto de consentimiento de Orca dice lo contrario
+  (`plugin-capabilities.ts:100-101`: *"Programs it starts are not constrained by
+  this plugin worker's file or network permissions"*), y la primera versión de
+  este encargo lo dio por bueno. **Es falso, medido.**
+
+  Node inyecta `--permission` y la allowlist entera en el `NODE_OPTIONS` del
+  hijo cuando un proceso vallado lo lanza. Se probó con el entorno tal cual, con
+  `NODE_OPTIONS` borrado, con `NODE_OPTIONS` vacío y con un entorno reducido a
+  `PATH` y `HOME`: **el hijo nace vallado en los cuatro casos**. Es deliberado —
+  si bastara con spawnear, la valla no valdría nada.
+
+  La salida es no ser Node en el medio: `/usr/bin/env -u NODE_OPTIONS <binario>`.
+  `env` no es un proceso de Node, así que Node no le inyecta nada; borra la
+  variable y ejecuta el binario ya limpio. Medido: `permission=false`.
+
+  Sin esto el sidecar hereda lectura sobre la raíz del plugin y **cero permiso de
+  escritura**, con lo cual no puede guardar el auth state — que es el motivo
+  entero de que sea un proceso aparte. El síntoma no se parece a la causa: el
+  resolvedor moría en su primer `existsSync` y el panel decía que no encontraba
+  la carpeta de datos del plugin.
+
+  En Windows no existe `/usr/bin/env`: allí el hijo queda vallado. Limitación
+  conocida, no descuido.
+- La red **no** está en el modelo de permisos de Node: el bloqueo de `net`/`tls`
+  del worker lo hace el preload de Orca, que el hijo no carga. Por eso el sidecar
+  sí puede abrir sockets aunque herede la valla de archivos.
 - Con `process:spawn`, el fork del worker es `detached: true` en POSIX y se
   vuelve líder de su grupo de procesos
   (`plugin-worker-process-tree.ts:11-13`). Las rutas de muerte hacen
@@ -878,7 +901,14 @@ cumplido.
 - Capturas a 1440, 768, 390 y 320 px, en los dos temas, de: sin emparejar, QR en
   pantalla, conectado, y sesión caída.
 
-**Sólo verificables con una cuenta real emparejada — HOY NO VERIFICADO:**
+**Verificado sobre una cuenta real (2026-09-22):**
+
+- El QR se dibuja en el panel, se escanea desde la pantalla y la sesión abre: el
+  panel pasa a *"WhatsApp está conectado"*.
+- El QR se renueva solo: rotación 1 → 2 a los ~60 s, con su `ttlMs` viajando
+  desde el sidecar.
+
+**Sigue SIN VERIFICAR — necesita una sesión emparejada y tiempo:**
 
 - Orca reiniciado recupera la sesión **sin volver a pedir QR**.
 - Tras suspender y despertar la máquina, el sidecar reconecta solo, y se conoce

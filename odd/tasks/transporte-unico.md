@@ -349,6 +349,55 @@ el `node` hijo no levante. En macOS el directorio temporal es un enlace simbóli
 (`/var/folders` → `/private/var/folders`) y la valla compara rutas resueltas: hay que
 darle el `realpath` **y entrar por él**, o el hijo no puede leer ni su propio guión.
 
+### T8 — El almacén de mensajes: que el plugin sirva para algo
+
+Hoy el plugin **conecta y se detiene**. Emparejar no es utilidad: la bandeja está
+vacía, la lista de conversaciones está vacía, el triage no tiene qué triar, y
+cualquier modelo que use el CLI recibe `no-transport`. **Una sola pieza tumba
+todas las partes**, y es esta.
+
+**Casos de uso reales que tiene que soportar** (de los destinos que el propietario
+ya atiende: soporte por WhatsApp, helpdesk, sitios de cliente):
+
+1. Un cliente escribe en su grupo *"el reporte de ayer salió en blanco"*. Debe
+   aparecer en la bandeja, con su conversación, su remitente y su hora.
+2. Ese mismo cliente manda después una captura. El adjunto tiene que quedar
+   asociado al problema, no como un mensaje suelto sin contexto (§11-C5: el pie
+   casi nunca llega en el mismo mensaje).
+3. Alguien manda una nota de voz. Se transcribe con lo que ya existe
+   (`bin/wa-transcribe`, que sólo necesita una ruta de archivo).
+4. El agente abre **una** tarjeta, no cinco, aunque el problema venga contado en
+   cinco mensajes (§11-B3).
+5. Una mención que el propietario **ya contestó** no vuelve a aparecer (§11-D1).
+6. Un grupo en `off` no produce absolutamente nada, ni un registro de contenido.
+
+- [ ] Esquema nuevo, con `(cuenta, chat_jid, stanza_id)` como llave — el
+      aislamiento entre líneas va en la llave, no en la intención (§11-F4)
+- [ ] El sidecar escribe lo que recibe; `messages.update` cubre borrados y
+      editados, que **hoy no se manejan en ningún lado** (§11-B4)
+- [ ] `wa-read` pasa a ser capa de consulta sobre ese almacén, **conservando su
+      contrato JSON**: es de lo que dependen `wa-scope`, los prompts y el panel
+- [ ] Permisos `0600` y tope de retención con desalojo visible (§11-F1, §11-F2)
+- [ ] `quotedParticipant` se mira en sus **dos** formas, o se pierde el 2% de las
+      respuestas sin un solo error (§11-B1)
+- [ ] La lista de menciones trae objetos, no strings: comparar con `===` da cero
+      silencioso (§11-B2)
+- [ ] Ruta: **delegada**
+- Commit: —
+
+### T9 — Que cualquier modelo de Orca pueda usar el CLI
+
+El contrato ya está bien —motivo estable en la primera línea de stderr, salida 4,
+stdout vacío o parseable— y el arnés lo documenta. Falta que sea **descubrible**
+para un agente que no sea el de los prompts incluidos.
+
+- [ ] `--help` de cada herramienta se basta solo: qué hace, qué devuelve, qué
+      significan sus códigos de salida
+- [ ] El arnés se siembra para cualquier agente de Orca, no sólo para los dos
+      prompts propios
+- [ ] Ruta: **delegada**
+- Commit: —
+
 ---
 
 ## Criterios de aceptación
