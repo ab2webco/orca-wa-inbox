@@ -83,16 +83,20 @@ export function decidirTrasCierre (statusCode, intento = 1) {
   return { reconectar: true, esperaMs: calcularEsperaMs(intento), motivo: MOTIVO.DESCONOCIDO }
 }
 
-// El QR de WhatsApp rota cada ~20 s (docs/ENCARGO...§6). Entre que el sidecar lo
-// genera y el panel lo pinta hay tres saltos y un sondeo, asi que cada QR viaja con
-// su marca de tiempo y el panel decide si lo pinta: "pintar un QR muerto hace que el
-// usuario escanee, falle y no entienda por que."
-const QR_VIGENCIA_MS = 20000
+// Cuanto vale un QR. NO son los ~20 s que tarda el cliente web en redibujarlo: eso
+// es cosmetico. Quien manda es `qrTimeout` de Baileys, que es cada cuanto genera uno
+// nuevo — y con el valor de fabrica, 60 s, un panel que los vencia a los 20 mostraba
+// "el codigo vencio" durante 40 de cada 60 segundos. Sonaba a fallo y era la regla
+// mal copiada.
+//
+// Se fija aca y viaja CON cada QR (`ttlMs`), en vez de repetirse a mano en el panel:
+// dos constantes que nadie obliga a coincidir terminan no coincidiendo.
+export const QR_VIGENCIA_MS = 60000
 
 /** El mensaje de QR que se emite por stdout: siempre con `ts` y el numero de
  *  rotacion, nunca un QR "pelado". */
-export function mensajeQr (qr, rotacion, ts = Date.now()) {
-  return { type: 'qr', qr, ts, rotation: rotacion }
+export function mensajeQr (qr, rotacion, ts = Date.now(), ttlMs = QR_VIGENCIA_MS) {
+  return { type: 'qr', qr, ts, rotation: rotacion, ttlMs }
 }
 
 /** La misma regla que usara el panel para descartar un QR vencido, escrita una sola
@@ -154,6 +158,9 @@ async function iniciar () {
       auth: state,
       browser: Browsers.appropriate('Chrome'),
       printQRInTerminal: false,
+      // Explicito: de el sale el `ttlMs` que viaja con cada QR y con el que el panel
+      // decide si lo pinta. Dejarlo implicito ata la UI a un valor de fabricante.
+      qrTimeout: QR_VIGENCIA_MS,
       syncFullHistory: false
     })
 

@@ -536,7 +536,10 @@ export function lanzarSidecar({ orca, scriptPath, authDir, spawnFn = spawn, env 
         continue
       }
       if (mensaje?.type === 'qr') {
-        escribir({ qr: { qr: mensaje.qr, ts: mensaje.ts, rotation: mensaje.rotation } })
+        escribir({ qr: { qr: mensaje.qr, ts: mensaje.ts, rotation: mensaje.rotation,
+          // El TTL viaja con el QR: el panel no puede saberlo solo y adivinarlo fue
+          // lo que lo dejaba diciendo "vencido" dos tercios del tiempo.
+          ttlMs: mensaje.ttlMs } })
       } else if (mensaje?.type === 'connection') {
         escribir({
           connection: mensaje.state ?? null,

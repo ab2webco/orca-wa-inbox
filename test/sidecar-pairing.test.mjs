@@ -12,7 +12,7 @@
  * estable es contrato con el panel (bin/wa-read:126-131): cambiar el codigo lo
  * desincroniza en silencio.
  */
-import { decidirTrasCierre, calcularEsperaMs, mensajeQr, qrVencido, MOTIVO }
+import { decidirTrasCierre, calcularEsperaMs, mensajeQr, qrVencido, MOTIVO, QR_VIGENCIA_MS }
   from '../sidecar/src/index.js'
 
 let fallos = 0
@@ -110,13 +110,21 @@ console.log('\nsidecar: el mensaje de QR')
 console.log('\nsidecar: el panel distingue un QR vencido de uno fresco')
 {
   const ahora = Date.now()
+  // Las edades se miden contra QR_VIGENCIA_MS y no contra un numero escrito aca: el
+  // dia que el TTL cambie, la prueba tiene que seguir probando la regla y no el valor
+  // viejo. Ese fue justamente el defecto — el panel vencia a los 20 s mientras Baileys
+  // generaba uno nuevo cada 60, y mostraba "el codigo vencio" dos tercios del tiempo.
   ok('un QR recien emitido no esta vencido', qrVencido(ahora, ahora) === false)
-  ok('un QR de hace 5 s tampoco (el QR real vive ~20 s)',
-    qrVencido(ahora - 5000, ahora) === false)
-  ok('un QR de hace 25 s ya esta vencido', qrVencido(ahora - 25000, ahora) === true)
+  ok('uno de media vigencia tampoco',
+    qrVencido(ahora - QR_VIGENCIA_MS / 2, ahora) === false)
+  ok('uno mas viejo que la vigencia si',
+    qrVencido(ahora - QR_VIGENCIA_MS - 1000, ahora) === true)
+  ok('el TTL viaja con el mensaje, para que el panel no tenga que adivinarlo',
+    mensajeQr('X', 1, ahora).ttlMs === QR_VIGENCIA_MS,
+    JSON.stringify(mensajeQr('X', 1, ahora)))
   // Control: el mismo `ts`, evaluado en dos momentos, cambia de veredicto. Si esto
   // fuera constante, el helper estaria mirando otra cosa que no es el tiempo.
-  const ts = ahora - 15000
+  const ts = ahora - QR_VIGENCIA_MS + 5000
   ok('control: el mismo ts vence mas tarde', qrVencido(ts, ahora) === false)
   ok('y ya esta vencido diez segundos despues', qrVencido(ts, ahora + 10000) === true)
 }

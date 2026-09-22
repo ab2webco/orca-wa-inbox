@@ -1279,8 +1279,12 @@ console.log('\nconfig.html — vinculacion de WhatsApp: los cinco estados')
     { nombre: 'QR en pantalla', sidecar: { connection: 'connecting',
       qr: { qr: 'DATA-QR-DE-PRUEBA', ts: AHORA_MS, rotation: 1 }, exited: false },
       msg: /escanee/i, qrVisible: true },
+    // El QR trae su propio `ttlMs`: el panel ya no adivina cuanto vive. Se manda uno
+    // corto y una edad mayor, en vez de un numero copiado del panel — asi la prueba
+    // sigue probando la regla si el TTL real cambia.
     { nombre: 'QR vencido', sidecar: { connection: 'connecting',
-      qr: { qr: 'DATA-QR-DE-PRUEBA', ts: AHORA_MS - 30000, rotation: 1 }, exited: false },
+      qr: { qr: 'DATA-QR-DE-PRUEBA', ts: AHORA_MS - 30000, rotation: 1, ttlMs: 20000 },
+      exited: false },
       msg: /vencio/i, qrVisible: false },
     { nombre: 'conectado', sidecar: { connection: 'open', qr: null, exited: false },
       msg: /conectado/i, qrVisible: false },
@@ -1301,7 +1305,8 @@ console.log('\nconfig.html — vinculacion de WhatsApp: los cinco estados')
   // simplemente desaparece se lee igual que un panel roto.
   const { doc: vencido } = await montar('config.html', { sidecar: {
     connection: 'connecting',
-    qr: { qr: 'DATA-QR-DE-PRUEBA', ts: AHORA_MS - 30000, rotation: 1 }, exited: false
+    qr: { qr: 'DATA-QR-DE-PRUEBA', ts: AHORA_MS - 30000, rotation: 1, ttlMs: 20000 },
+    exited: false
   } }, 'es-419')
   await espera()
   ok('el vencido explica que ya viene uno nuevo, no solo que desaparecio',
