@@ -439,6 +439,28 @@ class Almacen {
     return r.changes || 0
   }
 
+  /**
+   * Le pone nombre a una conversacion que ya existe, si todavia no tiene uno de verdad.
+   *
+   * Devuelve `true` solo si de verdad cambio algo, para poder CONTAR cuantas se
+   * nombraron — "llego la libreta" y "la libreta sirvio de algo" son dos cosas
+   * distintas, y confundirlas es lo que deja un defecto en silencio.
+   *
+   * Un chat cuyo nombre es su propio jid NO esta nombrado: es el marcador de que nadie
+   * supo como se llamaba. Por eso cuenta como vacio y la libreta puede pisarlo; un
+   * nombre de verdad, en cambio, no se degrada nunca.
+   */
+  nombrarChat ({ cuenta, chatJid, nombre }) {
+    const limpio = typeof nombre === 'string' ? nombre.trim() : ''
+    if (!limpio || limpio === chatJid) return false
+    const r = this.con.prepare(
+      `update chat set chat_name = ?
+       where account = ? and chat_jid = ?
+         and (chat_name is null or chat_name = '' or chat_name = chat_jid)`)
+      .run(limpio, cuenta, chatJid)
+    return (r.changes || 0) > 0
+  }
+
   /** Que esta conversacion existe. Contabilidad, no contenido: se anota aunque el chat
    *  este en `off`. */
   anotarChat ({ cuenta, chatJid, nombre = '', esGrupo = 0, ts = null, unread = null,

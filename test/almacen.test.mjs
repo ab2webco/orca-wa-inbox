@@ -34,9 +34,10 @@ import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 
-import { identidadesPropias } from '../sidecar/src/mensajes.js'
+import { identidadesPropias, identidadPropia } from '../sidecar/src/mensajes.js'
 import { abrirAlmacen, ESQUEMA_VERSION, rutaAlmacen, rutaMedia } from '../sidecar/src/almacen.js'
-import { ingerirActualizacion, ingerirChats, ingerirMensaje } from '../sidecar/src/ingesta.js'
+import { ingerirActualizacion, ingerirChats, ingerirContactos, ingerirMensaje,
+  nombreDeContacto } from '../sidecar/src/ingesta.js'
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..')
 const WA_READ = join(RAIZ, 'bin', 'wa-read')
@@ -895,6 +896,93 @@ console.log('\nalmacen: reparar las menciones que se guardaron antes de saber el
   ok('registrar el conteo NO borra la identidad',
     linea2.lid === MI_LID && linea2.name === 'Mi Linea' && linea2.groups_n === 300,
     JSON.stringify(linea2))
+  alm.cerrar()
+}
+
+// ── Las conversaciones DIRECTAS ────────────────────────────────────────────────────
+// La queja medida: "no puedo meter conversaciones directas". No estaban bloqueadas —
+// `config.html` no filtra por `@g.us` en ningun lado— sino que no llegaban a la lista,
+// y las que llegaban venian sin nombre. En la cuenta del dueno: 296 grupos, 3 directas,
+// y de esas tres una era el PROPIO dueno y otra se llamaba como su numero.
+console.log('\ningesta: la libreta de nombres y los directos')
+{
+  const casa = nueva()
+  const alm = abrirAlmacen(rutaAlmacen({ HOME: casa }))
+  const YO_MISMO = identidadesPropias(MI_LID, MI_TEL)
+  const esPropio = (jid) => YO_MISMO.has(identidadPropia(jid))
+  const memoria = new Map()
+  const recordarNombre = (jid, nombre) => memoria.set(jid, nombre)
+
+  ok('el nombre verificado va primero',
+    nombreDeContacto({ verifiedName: 'Ferreteria SAS', name: 'ferre', notify: 'x' }) ===
+    'Ferreteria SAS')
+  ok('despues la agenda del telefono',
+    nombreDeContacto({ name: 'Laura Mendez', notify: 'lau' }) === 'Laura Mendez')
+  ok('y de ultimo como se presenta quien escribe',
+    nombreDeContacto({ notify: 'Jhon' }) === 'Jhon')
+  ok('sin nada, cadena vacia — no se inventa un nombre',
+    nombreDeContacto({}) === '' && nombreDeContacto(null) === '')
+
+  // Llegan los chats ANTES que la libreta, que es el orden real de los eventos.
+  const DIRECTO = '573172561455@s.whatsapp.net'
+  ingerirChats({
+    almacen: alm,
+    cuenta: CUENTA,
+    chats: [
+      { id: DIRECTO, conversationTimestamp: 1700000000 },
+      { id: MI_LID, conversationTimestamp: 1700000001 },
+      { id: '120363000000000009@g.us', name: 'Grupo Real', conversationTimestamp: 1700000002 }
+    ],
+    esPropio,
+    recordarNombre
+  })
+
+  const propias = alm.con.prepare('select count(*) n from chat where chat_jid = ?')
+    .get(MI_LID).n
+  ok('la conversacion del dueno consigo mismo NO entra en la lista', propias === 0,
+    String(propias))
+
+  const sinNombre = alm.con.prepare('select chat_name from chat where chat_jid = ?')
+    .get(DIRECTO)
+  ok('un directo sin libreta nace sin nombre de verdad',
+    !sinNombre.chat_name || sinNombre.chat_name === DIRECTO,
+    JSON.stringify(sinNombre))
+
+  // Y ahora si llega la libreta.
+  const { nombrados } = ingerirContactos({
+    almacen: alm,
+    cuenta: CUENTA,
+    contactos: [
+      { id: DIRECTO, name: 'Laura Mendez' },
+      { id: MI_LID, name: 'Yo Mismo' },
+      { id: '573009999999@s.whatsapp.net', name: 'Nunca Escribio' }
+    ],
+    esPropio,
+    recordarNombre
+  })
+  ok('la libreta nombra el directo que ya existia', nombrados === 1, String(nombrados))
+  ok('y queda guardado',
+    alm.con.prepare('select chat_name from chat where chat_jid=?').get(DIRECTO)
+      .chat_name === 'Laura Mendez')
+  ok('el propio dueno tampoco se nombra: no esta ni tiene por que estar',
+    alm.con.prepare('select count(*) n from chat where chat_jid=?').get(MI_LID).n === 0)
+  ok('un contacto que nunca escribio no CREA una conversacion',
+    alm.con.prepare('select count(*) n from chat where chat_jid=?')
+      .get('573009999999@s.whatsapp.net').n === 0)
+  ok('pero su nombre queda en memoria para cuando escriba',
+    memoria.get('573009999999@s.whatsapp.net') === 'Nunca Escribio')
+
+  // Un nombre de verdad no se degrada: la libreta llega en lotes y a destiempo.
+  ingerirContactos({ almacen: alm, cuenta: CUENTA, esPropio, recordarNombre,
+    contactos: [{ id: DIRECTO, notify: '+57 317 256 1455' }] })
+  ok('un lote posterior NO pisa un nombre que ya era bueno',
+    alm.con.prepare('select chat_name from chat where chat_jid=?').get(DIRECTO)
+      .chat_name === 'Laura Mendez')
+
+  ok('nombrarChat avisa cuando no cambio nada',
+    alm.nombrarChat({ cuenta: CUENTA, chatJid: DIRECTO, nombre: 'Otro' }) === false)
+  ok('y un nombre igual al jid no cuenta como nombre',
+    alm.nombrarChat({ cuenta: CUENTA, chatJid: DIRECTO, nombre: DIRECTO }) === false)
   alm.cerrar()
 }
 
