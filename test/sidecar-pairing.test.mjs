@@ -12,8 +12,9 @@
  * estable es contrato con el panel (bin/wa-read:126-131): cambiar el codigo lo
  * desincroniza en silencio.
  */
-import { decidirTrasCierre, calcularEsperaMs, mensajeQr, qrVencido, tocaEmitirAlmacen,
-  opcionesDeSocket, MOTIVO, QR_ROTACION_MS, QR_VIGENCIA_MS, ALMACEN_LATIDO_MS
+import { decidirTrasCierre, calcularEsperaMs, intentoTrasEvento, mensajeQr, qrVencido,
+  tocaEmitirAlmacen, opcionesDeSocket, MOTIVO, QR_ROTACION_MS, QR_VIGENCIA_MS,
+  ALMACEN_LATIDO_MS
 } from '../sidecar/src/index.js'
 
 let fallos = 0
@@ -219,6 +220,43 @@ console.log('\nsidecar: la lista de conversaciones tiene que poder LLEGAR')
     o.qrTimeout === QR_ROTACION_MS, String(o.qrTimeout))
   ok('y la vigencia que viaja con cada QR es mayor que esa rotacion',
     QR_VIGENCIA_MS > QR_ROTACION_MS, `vigencia=${QR_VIGENCIA_MS} rotacion=${QR_ROTACION_MS}`)
+}
+
+console.log('\nsidecar: el contador de intentos y el backoff al emparejar')
+{
+  ok('un cierre suma un intento', intentoTrasEvento(3, 'close') === 4)
+  ok('conectar lo reinicia', intentoTrasEvento(7, 'open') === 0)
+  // El caso que faltaba. Emparejando NO hay 'open' -es el estado al que todavia no se
+  // llego- asi que si solo 'open' reinicia, el contador unicamente sube.
+  ok('y un QR nuevo TAMBIEN lo reinicia', intentoTrasEvento(7, 'qr') === 0)
+  ok('un evento cualquiera no lo toca', intentoTrasEvento(2, 'connecting') === 2)
+
+  // Regresion del defecto medido en una instalacion viva (rotaciones 8..14, tres
+  // cierres en cinco minutos). El ciclo real del emparejamiento es: se agota el lote
+  // de refs que mando WhatsApp -> close -> reconecta -> llega un QR nuevo. Ese cierre
+  // es el ciclo normal, no una caida.
+  //
+  // Sin el reset en 'qr', `intento` recorre 1,2,3,4,5,6... y `calcularEsperaMs` trepa
+  // 1s, 2s, 4s, 8s, 16s, 30s: a partir del quinto ciclo la espera pasa el margen y el
+  // QR se ve vencido el resto de CADA ciclo, empeorando cuanto mas tiempo lleva el
+  // panel abierto. Que es exactamente "ahora sale siempre expirado".
+  const MARGEN_MS = QR_VIGENCIA_MS - QR_ROTACION_MS
+  let intento = 0
+  let peorEspera = 0
+  for (let ciclo = 0; ciclo < 12; ciclo += 1) {
+    intento = intentoTrasEvento(intento, 'close')
+    peorEspera = Math.max(peorEspera, calcularEsperaMs(intento))
+    intento = intentoTrasEvento(intento, 'qr')
+  }
+  ok('doce ciclos de emparejamiento no agotan el margen de entrega',
+    peorEspera < MARGEN_MS, `peor espera=${peorEspera}ms margen=${MARGEN_MS}ms`)
+
+  // Y lo que el reset NO puede romper: una caida de verdad -cierres seguidos sin que
+  // llegue ningun QR- tiene que seguir espaciando los reintentos.
+  let caido = 0
+  for (let i = 0; i < 6; i += 1) caido = intentoTrasEvento(caido, 'close')
+  ok('pero una caida real sigue con backoff creciente hasta el tope',
+    calcularEsperaMs(caido) === 30000, `intento=${caido} espera=${calcularEsperaMs(caido)}`)
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
