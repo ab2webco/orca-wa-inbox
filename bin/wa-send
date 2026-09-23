@@ -1,15 +1,29 @@
 #!/usr/bin/env python3
-"""wa-send — writes (and optionally sends) a message in WhatsApp.
+"""wa-send — writes a message in WhatsApp, and sends it when it is allowed to.
 
-  wa-send "<chat>" "text"            -> leaves the text WITHOUT sending it
-  wa-send "<chat>" "text" --send     -> sends it
+  wa-send "<chat>" "text"            -> leaves it as a DRAFT, waiting for approval
+  wa-send "<chat>" "text" --send     -> sends it, where the registry says `responder`
+  wa-send --drafts                   -> the drafts waiting for you, oldest first
+  wa-send --approve <id>             -> sends one of those drafts
 
-Right now it sends nothing: the two routes it used to write through —the desktop
-app's window by accessibility, and a WhatsApp Web tab by the DOM— were removed, and
-the sidecar that replaces them pairs the line but does not carry messages yet. Every
-call ends in `send-no-transport`, exit 1, with the reason on the first line of stderr.
+HOW IT SENDS. The line is a Baileys socket, and the socket belongs to the sidecar —a
+separate process, because the worker of the plugin has no sockets at all. This tool is
+Python and cannot call into that process, so it leaves the request in the message store
+(`~/.wa-inbox/capture.db`, table `envio`), which both sides already open, and waits
+there for the verdict. The whole reasoning is in `sidecar/src/envio.js`.
 
-What still runs, and runs FIRST, because none of it depends on the transport:
+Three things this path guarantees, and they are the point:
+
+  once          the request is keyed by its `--id`. Sending the SAME id twice delivers
+                once: the second call reads the verdict of the first. A duplicate
+                message to a client's group cannot be taken back.
+  an answer     it is a short-lived command, so it always ends: a verdict, or a plazo
+                that expired with its own reason code. It never hangs.
+  the reason    "the sidecar is not running" and "WhatsApp rejected it" are DIFFERENT
+                codes, because what the owner has to do about each is different.
+
+What runs FIRST, and in this order, because the caller has to learn the first thing
+wrong with what it asked and not a generic failure at the end:
 
   the signature   every message the agent writes goes signed, so that there is never
                   any doubt about whether the person or her agent wrote it. Without an
@@ -19,17 +33,26 @@ What still runs, and runs FIRST, because none of it depends on the transport:
                   writes to the wrong conversation, and that cannot be undone, so an
                   ambiguous reference is REFUSED (`send-ambiguous-line`) instead of
                   resolved in silence. --line says which one.
+  the permission  deny by default: a chat that is not in the registry does not exist
+                  for the agent. `responder` sends; `borrador` only drafts; `observar`
+                  and `off` do not write at all (`send-denied`).
+  the transport   and only then, whether there is anything to send through.
 
-Refusing in that order is the point: the caller gets told the first thing that is
-wrong with what it asked, not a generic failure at the end.
+ABOUT `borrador`. It used to mean "leaves the text typed in the chat, unsent", and that
+was only possible while the agent drove a screen: it typed into the WhatsApp window and
+a human pressed Enter. WhatsApp's protocol has NO server-side draft, so over Baileys
+that rung cannot do what its old description promised. It is not quietly downgraded to
+`observar` either: the reply is written, stored and listed as a draft, and
+`wa-send --approve <id>` —an explicit act of the owner— is what puts it on the wire.
 """
-import argparse, os, sqlite3, sys
+import argparse, os, sqlite3, sys, time, uuid
 
 # Sin esto Python deja un __pycache__ DENTRO de bin/, y el directorio del plugin
 # instalado esta direccionado por hash.
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from wa_settings import ajuste, scope_db  # noqa: E402
+import wa_store  # noqa: E402
+from wa_settings import ajuste, scope_db, scope_from_plugin  # noqa: E402
 
 SCOPE_DB = scope_db()
 
@@ -50,48 +73,380 @@ LINEA_EQUIVOCADA = "send-wrong-line"
 # La ambiguedad se rechaza, nunca se resuelve en silencio: dos lineas tuyas pueden
 # tener la MISMA conversacion, y escribirle a la equivocada no se deshace.
 LINEA_AMBIGUA = "send-ambiguous-line"
-# No hay por donde mandar nada todavia. Es un motivo propio y no un fallo generico
-# porque lo que el usuario tiene que hacer es distinto: no es reintentar ni revisar la
-# conversacion, es esperar al almacen de mensajes.
+# La escalera de permisos dijo que no. Es un motivo propio y no un fallo generico
+# porque no hay nada que reintentar: lo que cambia esto es el dueno, en el panel.
+SIN_PERMISO = "send-denied"
+# `borrador`: el texto quedo escrito y esperando el visto del dueno. NO es "denegado" a
+# secas —hay algo hecho, y hay algo que hacer con ello— y no es un envio.
+NECESITA_VISTO = "send-needs-approval"
+# No hay por donde mandar: el sidecar no esta corriendo, o nunca escribio su latido.
+# Es un motivo propio y no un rechazo porque lo que el dueno tiene que hacer es
+# distinto: abrir Orca para que la linea vuelva, no revisar la conversacion.
 SIN_TRANSPORTE = "send-no-transport"
 SIN_TRANSPORTE_DETALLE = (
-    "sending is not available in this version. Nothing was written and nothing was "
-    "opened.")
+    "the WhatsApp line is not running: nothing was queued and nothing was sent. The "
+    "line lives in the plugin; open Orca and check the panel.")
+# WhatsApp vio el mensaje y lo rechazo. El intento SALIO, asi que no se reintenta solo.
+RECHAZADO = "send-rejected"
+# El sidecar late pero no contesto a tiempo. La peticion queda en pie: se vuelve a
+# preguntar con el MISMO --id, que es lo que impide mandar dos veces.
+SIN_VEREDICTO = "send-timeout"
+# Un --approve sobre algo que no esta.
+SIN_BORRADOR = "send-no-draft"
+# El mismo --id con otro texto o para otra conversacion. No se manda ninguno de los
+# dos: entregar el viejo es mandar lo que nadie pidio, y pisarlo es entregar dos veces.
+ID_EN_USO = "send-id-conflict"
+
+# Salidas. `3` es la misma que la compuerta `wa-scope check`: denegado, se anota y se
+# sigue. `4` es la misma que `wa-read` sin linea enlazada: no hay de donde, y no hay
+# nada que reintentar. El resto sale 1.
+SALIDA = {SIN_PERMISO: 3, NECESITA_VISTO: 3, SIN_TRANSPORTE: 4}
+
 # La conversacion que no esta en ninguna linea registrada. Sigue siendo el caso por
 # defecto del registro y no un transporte: quien no registro la linea igual tiene una.
 CUENTA_LOCAL = "local"
 
+# Los estados de la bandeja de salida. Son los MISMOS de `sidecar/src/envio.js`: esa
+# tabla la escriben los dos lados.
+BORRADOR, PENDIENTE, ENVIADO, RECHAZADO_ = (
+    "borrador", "pendiente", "enviado", "rechazado")
+# `enviando` es el quinto estado y no se nombra aca a proposito: lo escribe SOLO el
+# sidecar al tomar la fila, y esta CLI no decide nada con el. Lo que espera es un final.
+FINALES = (ENVIADO, RECHAZADO_)
 
-def cuentas_registradas(ref):
-    """De que LINEA(S) es esta conversacion segun el registro.
+# Cuanto vale el latido del sidecar. El MISMO numero que `LATIDO_VENCE_MS` en
+# `sidecar/src/envio.js`, y `scripts/check-clis` compara los dos: dos constantes que
+# nadie obliga a coincidir terminan no coincidiendo, y aca el sintoma seria decirle al
+# dueno que arranque algo que ya esta corriendo.
+LATIDO_VENCE_S = 15
+# Cuanto espera esta CLI un veredicto, y cada cuanto pregunta. Es un proceso corto que
+# alguien mira: tiene que terminar aunque del otro lado no conteste nadie.
+PLAZO_S = 30
+SONDEO_S = 0.2
 
-    Devuelve la lista y no una sola porque un grupo del mismo nombre puede existir en
+# Solo se autoriza el modo mas alto; los demas no escriben en WhatsApp.
+RESPONDER, MODO_BORRADOR = "responder", "borrador"
+
+
+def niega(codigo, detalle):
+    """El contrato de dos lineas: el codigo primero, el detalle despues.
+
+    Quien llama lee la PRIMERA linea de stderr y traduce por codigo (el panel y el
+    worker hacen eso mismo). El detalle es para el humano y se puede reescribir."""
+    print(f"wa-send: {codigo}", file=sys.stderr)
+    print(detalle, file=sys.stderr)
+    sys.exit(SALIDA.get(codigo, 1))
+
+
+# ── El registro: de que linea es esta conversacion, y con que permiso ────────────────
+def conversaciones_registradas(ref):
+    """Las conversaciones del registro que esta referencia puede nombrar.
+
+    Devuelve una lista y no una sola porque un grupo del mismo nombre puede existir en
     dos lineas: elegir "la primera" ahi es escribirle a la conversacion equivocada, y
-    eso no se deshace. Con mas de una, quien llama tiene que decir cual."""
+    eso no se deshace. Con mas de una, quien llama tiene que decir cual.
+
+    Se cruzan los DOS origenes, igual que `merged_scope` de wa-scope: la tabla del CLI y
+    lo que el usuario acaba de tocar en el panel, que vive en el almacen del plugin. Es
+    el mismo defecto del nombre del agente: mirar solo el sqlite dejaria al agente
+    negandose sobre una conversacion que la pantalla muestra en `responder`."""
+    objetivo = ref.replace("‎", "").strip()
+    plano = objetivo.lower()
+    filas = {}
     try:
         con = sqlite3.connect(f"file:{SCOPE_DB}?mode=ro", uri=True)
-        filas = con.execute(
-            "select distinct account from chat_scope where chat_jid=? "
-            "or lower(trim(chat_name))=lower(trim(?))",
-            (ref.replace("‎", "").strip(), ref.replace("‎", ""))).fetchall()
+        for cuenta, jid, nombre, modo in con.execute(
+                "select account, chat_jid, chat_name, mode from chat_scope "
+                "where chat_jid=? or lower(trim(chat_name))=lower(trim(?))",
+                (objetivo, objetivo.replace("‎", ""))):
+            filas[(cuenta or CUENTA_LOCAL, jid)] = {
+                "account": cuenta or CUENTA_LOCAL, "chat_jid": jid,
+                "chat_name": nombre or jid, "mode": modo or "off"}
         con.close()
-    except Exception:
-        return []
-    return sorted(f[0] for f in filas if f[0])
+    except Exception:                     # noqa: BLE001 - sin registro no hay permiso
+        pass
+
+    # El panel guarda por jid a secas y manda sobre la base, porque es lo que el usuario
+    # acaba de tocar (la misma regla que `merged_scope`).
+    try:
+        del_panel = scope_from_plugin()
+    except Exception:                     # noqa: BLE001 - un store ilegible no manda
+        del_panel = {}
+    for jid, entrada in del_panel.items():
+        if not isinstance(entrada, dict):
+            continue
+        llave = (CUENTA_LOCAL, jid)
+        nombre = (entrada.get("chatName") or "").replace("‎", "").strip()
+        if jid != objetivo and nombre.lower() != plano and llave not in filas:
+            continue
+        # El MODO del panel manda siempre; el NOMBRE solo si es un nombre. El panel
+        # guarda el jid como `chatName` cuando la conversacion se registro sin lista de
+        # chats que consultar, y dejar que eso pise "Cliente Alfa" es la misma regla que
+        # `anotarChat` ya escribe: un nombre vacio no es una eleccion y no puede borrar
+        # el que ya se sabia. La llave, que es lo que decide a donde va el mensaje, no
+        # depende de esto.
+        anterior = filas.get(llave, {}).get("chat_name")
+        util = nombre if nombre and nombre != jid else None
+        filas[llave] = {
+            "account": CUENTA_LOCAL, "chat_jid": jid,
+            "chat_name": util or anterior or nombre or jid,
+            "mode": entrada.get("mode") or "off"}
+    return sorted(filas.values(), key=lambda f: (f["account"], f["chat_jid"]))
+
+
+def resolver_conversacion(ref, linea):
+    """La UNA conversacion a la que se va a escribir, o una negativa con su motivo."""
+    filas = conversaciones_registradas(ref)
+    cuentas = sorted({f["account"] for f in filas})
+    if linea:
+        if cuentas and linea not in cuentas:
+            niega(LINEA_EQUIVOCADA,
+                  f"{ref!r} is not registered on the line {linea!r}; it is on "
+                  f"{', '.join(cuentas)}.")
+        filas = [f for f in filas if f["account"] == linea]
+    elif len(cuentas) > 1:
+        niega(LINEA_AMBIGUA,
+              f"{ref!r} exists on {len(cuentas)} lines ({', '.join(cuentas)}), so there "
+              "is no way to tell which one you mean; pick it with --line <id>.")
+    if len(filas) > 1:
+        # Dos conversaciones DISTINTAS con el mismo nombre en la misma linea. Es el
+        # mismo error de clase y tampoco se resuelve en silencio: se pide el jid.
+        jids = ", ".join(f["chat_jid"] for f in filas)
+        niega(LINEA_AMBIGUA,
+              f"{ref!r} names {len(filas)} conversations on that line ({jids}); pass the "
+              "JID instead of the name.")
+    return filas[0] if filas else None
+
+
+# ── La bandeja de salida ────────────────────────────────────────────────────────────
+def almacen():
+    """El almacen, ABIERTO PARA ESCRIBIR, o `None` cuando no hay ninguno.
+
+    No se crea: un archivo vacio creado aca se veria como una linea lista y dejaria la
+    peticion esperando a un sidecar que nunca la va a mirar. Sin almacen —o con uno de
+    antes de la bandeja de salida— la respuesta correcta es `send-no-transport`."""
+    ruta = wa_store.store_db_path()
+    if not os.path.exists(ruta):
+        return None
+    try:
+        con = sqlite3.connect(f"file:{ruta}?mode=rw", uri=True, timeout=10)
+        con.row_factory = sqlite3.Row
+        con.execute("pragma busy_timeout=10000")
+        # La tabla la crea el sidecar al abrir. Que falte es exactamente "todavia no
+        # corrio nunca", y eso es lo mismo que no tener transporte.
+        con.execute("select 1 from envio limit 1").fetchone()
+        return con
+    except sqlite3.Error:
+        return None
+
+
+def sidecar_vivo(con):
+    """Si hay alguien del otro lado. Sin esto, un sidecar apagado y uno ocupado se ven
+    igual —una fila que no avanza— y las dos cosas contestarian "se vencio el plazo",
+    que manda al dueno a mirar lo que no esta roto."""
+    try:
+        fila = con.execute(
+            "select value from store_meta where key='sidecar_beat'").fetchone()
+        return bool(fila) and (time.time() - int(fila[0])) <= LATIDO_VENCE_S
+    except (sqlite3.Error, TypeError, ValueError):
+        return False
+
+
+def con_transporte():
+    """El almacen con el sidecar vivo del otro lado, o la negativa."""
+    con = almacen()
+    if con is None or not sidecar_vivo(con):
+        niega(SIN_TRANSPORTE, SIN_TRANSPORTE_DETALLE)
+    return con
+
+
+def encolar(con, fila, texto, req_id, estado):
+    """Deja la peticion, o devuelve la que ya estaba con ese id.
+
+    `do nothing` y no `do update`: el mismo `req_id` es el MISMO pedido. Esto es lo que
+    hace que un reintento —o dos corridas del agente sobre la misma tarjeta— entreguen
+    una sola vez."""
+    con.execute(
+        "insert into envio (req_id, account, chat_jid, chat_name, body, estado, "
+        "created_at) values (?,?,?,?,?,?,?) on conflict(req_id) do nothing",
+        (req_id, fila["account"], fila["chat_jid"], fila["chat_name"], texto, estado,
+         int(time.time())))
+    con.commit()
+    previa = con.execute("select * from envio where req_id=?", (req_id,)).fetchone()
+    if previa["body"] != texto or previa["chat_jid"] != fila["chat_jid"]:
+        niega(ID_EN_USO,
+              f"the id {req_id!r} already names another request, for a different "
+              "conversation or with a different text. Nothing was sent: pick a new id.")
+    return previa
+
+
+def esperar(con, req_id, plazo_s):
+    """El veredicto, o `None` cuando se vencio el plazo. Nunca se queda colgado."""
+    limite = time.time() + plazo_s
+    while True:
+        fila = con.execute("select * from envio where req_id=?", (req_id,)).fetchone()
+        if fila is not None and fila["estado"] in FINALES:
+            return fila
+        if time.time() >= limite:
+            return None
+        time.sleep(SONDEO_S)
+
+
+def veredicto(con, req_id, plazo_s, salida_json):
+    """Espera, y traduce lo que haya pasado a la salida de esta CLI."""
+    fila = esperar(con, req_id, plazo_s)
+    if fila is None:
+        # El plazo se vencio. Cual de las dos cosas fue lo dice el latido, y son
+        # acciones distintas del dueno.
+        if not sidecar_vivo(con):
+            niega(SIN_TRANSPORTE, SIN_TRANSPORTE_DETALLE)
+        niega(SIN_VEREDICTO,
+              f"no verdict in {plazo_s:g}s. The request is still queued: ask again with "
+              f"--id {req_id} and it will NOT be sent twice.")
+    if fila["estado"] == RECHAZADO_:
+        niega(RECHAZADO, f"WhatsApp refused it: {fila['motivo'] or 'no reason given'}. "
+                         "Nothing was delivered.")
+    informa(salida_json, {"req_id": req_id, "estado": ENVIADO,
+                          "chat": fila["chat_name"], "stanza_id": fila["stanza_id"]},
+            f"sent · {fila['chat_name']} · {req_id}")
+    sys.exit(0)
+
+
+def informa(salida_json, dato, linea):
+    """Lo que sale por stdout. Nunca lleva el cuerpo del mensaje: quien lo escribio ya
+    lo tiene, y esto puede terminar en un log."""
+    if salida_json:
+        import json
+        print(json.dumps(dato, ensure_ascii=False))
+    else:
+        print(linea)
+
+
+def anotar_borrador(fila, req_id):
+    """El borrador, anotado donde el dueno mira: la bitacora que el panel ya muestra.
+
+    Va el ID y NO el texto. El panel publica `detail` recortado en su lista de actividad
+    y eso termina en el almacen del plugin: el cuerpo de un mensaje a un cliente no
+    tiene por que estar ahi. Lo que el dueno necesita ver es que hay algo esperandolo y
+    con que comando aprobarlo; el texto lo lee con `wa-send --drafts`, en su terminal.
+
+    Si falla, no se pierde nada: el borrador ya esta en la bandeja de salida y
+    `--drafts` lo lista igual. Por eso no tumba la corrida."""
+    try:
+        con = sqlite3.connect(SCOPE_DB, timeout=10)
+        con.execute(
+            "insert into agent_action (ts, chat_jid, chat_name, action, detail) "
+            "values (?,?,?,?,?)",
+            (time.strftime("%Y-%m-%d %H:%M"), fila["chat_jid"], fila["chat_name"],
+             "draft", f"{req_id} · approve with `wa-send --approve {req_id}`"))
+        con.commit()
+        con.close()
+    except sqlite3.Error:
+        pass
+
+
+def deja_borrador(con, fila, texto, req_id, salida_json, pedia_envio):
+    """Escribe el borrador y dice como se aprueba. No manda nada."""
+    encolar(con, fila, texto, req_id, BORRADOR)
+    anotar_borrador(fila, req_id)
+    if pedia_envio:
+        # `--send` sobre una conversacion en `borrador`. No se calla y no se degrada a
+        # "no hice nada": hay algo escrito y hay algo que hacer con ello.
+        niega(NECESITA_VISTO,
+              f"{fila['chat_name']!r} is on `borrador`: the reply was written and is "
+              f"waiting for you, not sent. WhatsApp has no draft of its own, so nothing "
+              f"was typed into the chat. Approve it with `wa-send --approve {req_id}`.")
+    informa(salida_json,
+            {"req_id": req_id, "estado": BORRADOR, "chat": fila["chat_name"]},
+            f"draft · {fila['chat_name']} · approve with `wa-send --approve {req_id}`")
+    sys.exit(0)
+
+
+def listar_borradores(salida_json):
+    """Los borradores que esperan. Aca SI va el texto: es la terminal del dueno, que es
+    quien lo tiene que leer antes de aprobarlo, y sin verlo la aprobacion seria a
+    ciegas."""
+    con = almacen()
+    if con is None:
+        niega(SIN_TRANSPORTE, SIN_TRANSPORTE_DETALLE)
+    filas = con.execute(
+        "select req_id, chat_name, body, created_at from envio where estado=? "
+        "order by created_at, rowid", (BORRADOR,)).fetchall()
+    if salida_json:
+        import json
+        print(json.dumps([{"req_id": f["req_id"], "chat": f["chat_name"],
+                           "text": f["body"], "created_at": f["created_at"]}
+                          for f in filas], ensure_ascii=False, indent=2))
+        sys.exit(0)
+    if not filas:
+        print("no drafts waiting")
+        sys.exit(0)
+    for f in filas:
+        cuando = time.strftime("%Y-%m-%d %H:%M", time.localtime(f["created_at"]))
+        print(f"{f['req_id']}  {cuando}  {f['chat_name']}")
+        for renglon in (f["body"] or "").splitlines():
+            print(f"    {renglon}")
+        print(f"    -> wa-send --approve {f['req_id']}")
+    sys.exit(0)
+
+
+def aprobar(req_id, plazo_s, salida_json):
+    """El visto del dueno: lo unico que pone un borrador en la linea.
+
+    Aprobar dos veces no entrega dos veces: el estado solo pasa de `borrador` a
+    `pendiente` si todavia era borrador, y lo que ya tiene veredicto contesta ese
+    veredicto."""
+    con = con_transporte()
+    fila = con.execute("select * from envio where req_id=?", (req_id,)).fetchone()
+    if fila is None:
+        niega(SIN_BORRADOR, f"there is no request with the id {req_id!r}. "
+                            "`wa-send --drafts` lists what is waiting.")
+    if fila["estado"] == ENVIADO:
+        informa(salida_json, {"req_id": req_id, "estado": ENVIADO,
+                              "chat": fila["chat_name"], "stanza_id": fila["stanza_id"]},
+                f"already sent · {fila['chat_name']} · {req_id}")
+        sys.exit(0)
+    if fila["estado"] == RECHAZADO_:
+        niega(RECHAZADO, f"WhatsApp refused it: {fila['motivo'] or 'no reason given'}. "
+                         "Nothing was delivered.")
+    con.execute("update envio set estado=? where req_id=? and estado=?",
+                (PENDIENTE, req_id, BORRADOR))
+    con.commit()
+    veredicto(con, req_id, plazo_s, salida_json)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("chat", help="exact name of the chat or group")
-    ap.add_argument("text", help="the message")
+    ap.add_argument("chat", nargs="?", help="exact name of the chat or group")
+    ap.add_argument("text", nargs="?", help="the message")
     ap.add_argument("--send", action="store_true",
-                    help="besides writing it, send it (by default it is only written)")
+                    help="besides writing it, send it (by default it is only drafted)")
     ap.add_argument("--raw", action="store_true",
                     help="do not sign: the message goes out as is, without the agent signature")
     ap.add_argument("--line", help="the line to write from, when the conversation "
                                    "exists on more than one (see `wa-scope accounts`)")
+    ap.add_argument("--id", dest="req_id",
+                    help="the id of this request. The SAME id delivers once: use it to "
+                         "retry without ever sending twice")
+    ap.add_argument("--timeout", type=float, default=PLAZO_S, metavar="S",
+                    help=f"how long to wait for the verdict, in seconds "
+                         f"(default {PLAZO_S:g})")
+    ap.add_argument("--drafts", action="store_true",
+                    help="list the drafts waiting for approval, and exit")
+    ap.add_argument("--approve", metavar="ID",
+                    help="send a draft that was waiting: the explicit approval that "
+                         "`borrador` needs")
+    ap.add_argument("--json", action="store_true", help="machine-readable output")
     a = ap.parse_args()
+
+    if a.drafts:
+        listar_borradores(a.json)
+    if a.approve:
+        aprobar(a.approve, a.timeout, a.json)
+    if not a.chat or a.text is None:
+        ap.error("the chat and the text are required (or use --drafts / --approve)")
+
     # Todo mensaje del agente va firmado, para que nunca haya duda de si escribe la
     # persona o su agente. --raw es la excepcion, para cuando escribe ella.
     sig = signature()
@@ -104,20 +459,32 @@ def main():
 
     # La linea se decide ANTES de tocar nada. El mismo grupo puede existir en dos
     # lineas, y elegir "la primera" ahi le escribe a la conversacion equivocada.
-    cuentas = cuentas_registradas(a.chat)
-    if a.line:
-        if cuentas and a.line not in cuentas:
-            sys.exit(f"wa-send: {LINEA_EQUIVOCADA}\n{a.chat!r} is not registered on the line "
-                     f"{a.line!r}; it is on {', '.join(cuentas)}.")
-    elif len(cuentas) > 1:
-        sys.exit(f"wa-send: {LINEA_AMBIGUA}\n{a.chat!r} exists on {len(cuentas)} lines "
-                 f"({', '.join(cuentas)}), so there is no way to tell which one you "
-                 "mean; pick it with --line <id>.")
+    fila = resolver_conversacion(a.chat, a.line)
 
-    # Y recien aca se dice que no hay por donde. Va al final a proposito: quien llama
+    # Y despues el permiso, que tambien es sobre lo que se pidio. Denegar por defecto:
+    # una conversacion que no esta en el registro no existe para el agente.
+    modo = (fila or {}).get("mode") or "off"
+    if modo not in (RESPONDER, MODO_BORRADOR):
+        niega(SIN_PERMISO,
+              f"{a.chat!r} is on `{modo}`" + ("" if fila else " (it is not in the registry)")
+              + ": it does not write in WhatsApp. Authorize it with "
+                "`wa-scope mode \"<chat>\" borrador` or `... responder`.")
+
+    # Recien aca se mira si hay por donde. Va al final a proposito: quien llama
     # necesita saber lo PRIMERO que esta mal con lo que pidio —que no firmo, que la
-    # conversacion esta en dos lineas—, no un fallo generico que tape todo lo demas.
-    sys.exit(f"wa-send: {SIN_TRANSPORTE}\n{SIN_TRANSPORTE_DETALLE}")
+    # conversacion esta en dos lineas, que no la autorizo—, no un fallo del entorno
+    # que tape todo lo demas.
+    con = con_transporte()
+    req_id = a.req_id or uuid.uuid4().hex
+
+    # Sin `--send` no se manda, sea cual sea el permiso: eso ya era asi y es lo correcto
+    # sin nadie mirando. Con `--send` en `borrador`, tampoco — pero se dice distinto.
+    if modo == MODO_BORRADOR or not a.send:
+        deja_borrador(con, fila, a.text, req_id, a.json,
+                      pedia_envio=a.send and modo == MODO_BORRADOR)
+
+    encolar(con, fila, a.text, req_id, PENDIENTE)
+    veredicto(con, req_id, a.timeout, a.json)
 
 
 if __name__ == "__main__":

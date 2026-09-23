@@ -182,7 +182,9 @@ from this `tone`. `AGENTS.md` has them in full.
 
 7. Acknowledge if the mode allows it: `"$WA/wa-send" "<chat_name>" "Tomo esto: <titulo>.
    Queda en <ID>."` — in the configured tone, with `--send` only if the registry says
-   `responder`. With no card there is no receipt: what goes out is whatever its
+   `responder`. On a `borrador` conversation the tool answers `send-needs-approval`
+   with an id and sends nothing: the reply waits for the owner, it is NOT written into
+   the chat, and it must not be reported as if it were. With no card there is no receipt: what goes out is whatever its
    `instructions` ask for, with that same permission.
 8. `"$WA/wa-scope" record --chat … --stanza … --action issue --issue <ID> --detail "<title>"`
 9. Close the mark, always, even if you skipped it above: without this the same

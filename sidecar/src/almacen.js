@@ -21,9 +21,17 @@
 // (~/.wa-inbox/capture.db)". Esto no elige un lugar nuevo: ocupa el que el registro ya
 // reservo, con los topes que el panel ya sabe guardar.
 //
-// QUIEN ESCRIBE. Solo el sidecar. El worker corre tras la valla de permisos de Node y
-// NO tiene `--allow-fs-write` (no existe en todo orca-oss, §1): no puede escribir aca
-// ni debe intentarlo. `wa-read`, que es Python y por eso no hereda la valla, solo lee.
+// QUIEN ESCRIBE. El sidecar, y solo el, en todo lo que es CONTENIDO RECIBIDO: `linea`,
+// `chat`, `mensaje`, `desalojo`, `migracion`. El worker corre tras la valla de permisos
+// de Node y NO tiene `--allow-fs-write` (no existe en todo orca-oss, §1): no puede
+// escribir aca ni debe intentarlo. `wa-read`, que es Python y por eso no hereda la
+// valla, solo lee.
+//
+// La UNICA excepcion es `envio`, la bandeja de salida, donde `bin/wa-send` inserta su
+// peticion y el sidecar escribe el veredicto. Son dos escritores sobre una tabla, que
+// es justo por lo que esa tabla es una tabla y no un archivo: la llave `req_id` y el
+// `update ... where estado='pendiente'` hacen que dos escritores no puedan entregar el
+// mismo mensaje dos veces. El detalle entero esta en el comentario de `envio`.
 import { DatabaseSync } from 'node:sqlite'
 import { chmodSync, existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
@@ -117,6 +125,44 @@ create table if not exists desalojo (
   desalojados integer not null,
   archivos    integer not null
 );
+
+-- LA BANDEJA DE SALIDA. Lo que bin/wa-send quiere mandar, y como le fue.
+--
+-- POR QUE VIVE ACA, y no en el canal sidecarRequest/sidecarResult que el panel ya
+-- usa para desvincular y reintentar. Ese canal es el storage del plugin, y al
+-- storage solo llega el worker, a traves del host de Orca. wa-send no es el worker:
+-- es un proceso de Python que el agente corre en una terminal, y que tiene que
+-- funcionar con Orca cerrado — la misma razon por la que este almacen no vive en
+-- <userData>/plugins-data/ (ver la cabecera de este archivo). Pasar por el worker
+-- serian tres saltos —CLI, host, worker, sidecar— y cada uno puede no estar; aca los
+-- dos extremos ya abren el mismo archivo.
+--
+-- Y sobre todo: SQLite da gratis lo unico que este canal no puede fallar. La llave es
+-- el req_id de quien pide, asi que un reintento no puede duplicar la fila; la toma es
+-- un update ... where estado='pendiente', asi que dos drenados no pueden mandar lo
+-- mismo dos veces. Un mensaje repetido a un grupo de un cliente NO se retira.
+--
+-- El cuerpo es texto que va a salir a una conversacion: se poda con los mismos topes
+-- que mensaje, y el archivo entero es 0600.
+create table if not exists envio (
+  req_id     text primary key,   -- lo elige quien pide; el mismo id entrega UNA vez
+  account    text not null,
+  chat_jid   text not null,
+  chat_name  text not null default '',
+  body       text not null,
+  -- borrador  espera aprobacion del dueno y el sidecar NO lo toca
+  -- pendiente espera al sidecar
+  -- enviando  tomado por el sidecar (se queda asi si el sidecar muere a mitad: no se
+  --           reintenta solo, porque reintentar a ciegas es el duplicado)
+  -- enviado / rechazado son finales
+  estado     text not null default 'pendiente',
+  motivo     text,               -- por que lo rechazo WhatsApp, sin contenido
+  stanza_id  text,               -- el id que contesto WhatsApp, para cruzarlo con mensaje
+  created_at integer not null,
+  claimed_at integer,
+  settled_at integer
+);
+create index if not exists ix_envio_estado on envio (estado, created_at);
 
 -- La subida desde el almacen de la via vieja, escrita para que se pueda MIRAR. Misma
 -- regla que la tabla desalojo, por el mismo motivo: §11-F2 pide que un desalojo se
@@ -429,6 +475,74 @@ class Almacen {
     return { archivos: rutas.length }
   }
 
+  /** La senal de vida del sidecar, para quien no puede verlo correr.
+   *
+   *  `bin/wa-send` es un proceso corto y ajeno: sin esto, un sidecar apagado y un
+   *  sidecar ocupado se ven igual —una fila que no avanza— y la CLI solo podria
+   *  contestar "se vencio el plazo" a las dos cosas. Son acciones DISTINTAS del dueno
+   *  (arrancar Orca, o mirar por que WhatsApp rechazo), asi que son codigos distintos
+   *  (§11-E2), y esto es lo que los separa. Un solo `update`, sin contenido. */
+  latir (ahora = Date.now()) {
+    this.con.prepare('insert into store_meta (key,value) values (?,?) ' +
+      'on conflict(key) do update set value=excluded.value')
+      .run('sidecar_beat', String(Math.floor(ahora / 1000)))
+  }
+
+  /** Una peticion de envio. La usa el sidecar solo en pruebas —quien encola de verdad
+   *  es `bin/wa-send`— pero vive aca, junto al esquema, para que la forma de la fila
+   *  tenga una sola definicion. `do nothing` y no `do update`: el mismo `req_id` es el
+   *  MISMO pedido, y pisarlo con otro cuerpo seria entregar algo que nadie pidio. */
+  encolarEnvio ({ reqId, cuenta, chatJid, chatNombre = '', cuerpo, estado = 'pendiente',
+    ahora = Date.now() }) {
+    this.con.prepare(`insert into envio
+      (req_id, account, chat_jid, chat_name, body, estado, created_at)
+      values (?,?,?,?,?,?,?) on conflict(req_id) do nothing`)
+      .run(reqId, cuenta, chatJid, chatNombre || '', cuerpo, estado,
+        Math.floor(ahora / 1000))
+    return this.verEnvio(reqId)
+  }
+
+  verEnvio (reqId) {
+    return this.con.prepare('select * from envio where req_id=?').get(reqId) || null
+  }
+
+  /**
+   * Toma la proxima peticion pendiente, o `null`.
+   *
+   * La toma y el cambio de estado son UN paso, no dos: `update ... where
+   * estado='pendiente'` solo cambia filas si nadie se adelanto, y `changes()` dice si
+   * esta es nuestra. Leer primero y marcar despues es exactamente la carrera que
+   * entrega el mismo mensaje dos veces — y un mensaje repetido a un grupo de un cliente
+   * no se retira.
+   *
+   * Los `borrador` NO entran: esperan la aprobacion del dueno, no un turno.
+   */
+  tomarEnvio (ahora = Date.now()) {
+    const segundos = Math.floor(ahora / 1000)
+    for (;;) {
+      const fila = this.con.prepare(
+        "select * from envio where estado='pendiente' order by created_at, rowid limit 1")
+        .get()
+      if (!fila) return null
+      const r = this.con.prepare(
+        "update envio set estado='enviando', claimed_at=? " +
+        "where req_id=? and estado='pendiente'").run(segundos, fila.req_id)
+      if (Number(r.changes) === 1) return { ...fila, estado: 'enviando' }
+      // Otro se la llevo entre el select y el update: se mira la siguiente. No se
+      // reintenta la misma, que es como se vuelve a mandar lo ya mandado.
+    }
+  }
+
+  /** El veredicto, que es lo que la CLI esta esperando. Solo cierra lo que esta en
+   *  vuelo: una fila ya cerrada no se reabre, porque su dueno ya se fue con la
+   *  respuesta. */
+  resolverEnvio (reqId, { estado, motivo = null, stanzaId = null, ahora = Date.now() }) {
+    this.con.prepare(`update envio set estado=?, motivo=?, stanza_id=?, settled_at=?
+      where req_id=? and estado in ('pendiente','enviando')`)
+      .run(estado, motivo, stanzaId, Math.floor(ahora / 1000), reqId)
+    return this.verEnvio(reqId)
+  }
+
   /**
    * El tope y la caducidad, con el desalojo anotado para que se pueda mirar.
    *
@@ -458,7 +572,15 @@ class Almacen {
     for (const fila of [...viejos, ...sobrantes]) {
       if (fila.media_path && borrarArchivo(fila.media_path)) archivos += 1
     }
-    const resultado = { caducados: viejos.length, desalojados: sobrantes.length, archivos }
+    // La bandeja de salida guarda texto que iba a salir a una conversacion: es
+    // contenido y caduca con la MISMA regla, no con una propia. Lo que sigue esperando
+    // —borrador sin aprobar, pendiente sin sidecar— no se toca: borrarlo seria perder
+    // en silencio algo que su dueno todavia no vio.
+    const envios = this.con.prepare(
+      "delete from envio where settled_at is not null and settled_at < ?").run(corte)
+
+    const resultado = { caducados: viejos.length, desalojados: sobrantes.length, archivos,
+      enviosPodados: Number(envios.changes) || 0 }
     if (resultado.caducados || resultado.desalojados) {
       this.con.prepare(
         'insert into desalojo (at, caducados, desalojados, archivos) values (?,?,?,?)')

@@ -86,13 +86,39 @@ Tres cosas que no son detalles de implementación:
 
 Sin línea enlazada, `wa-read inbox|chats|chat|media|whoami|state` salen con código 4 y
 el motivo `no-transport` en la primera línea de stderr, y `wa-send` con
-`send-no-transport`. Negarse es el punto: una lista vacía se lee como «no hay nada que
-atender», que es lo contrario de «no puedo leer nada».
+`send-no-transport`, también con código 4. Negarse es el punto: una lista vacía se lee
+como «no hay nada que atender», que es lo contrario de «no puedo leer nada».
 
-Lo que `wa-send` sí sigue haciendo antes de negarse, porque no depende del transporte:
-exigir la firma del agente (sin nombre configurado no escribe nada) y **rechazar la
-ambigüedad** — la misma conversación puede existir en dos líneas suyas, y elegir «la
-primera» le escribe a la equivocada, que no se deshace.
+## Escribir
+
+La línea envía por el mismo sidecar que escucha: él tiene el socket. `wa-send` es
+Python y no puede llamarlo, así que deja la petición en la bandeja de salida del almacén
+—la tabla `envio` de `capture.db`, que los dos extremos ya abren— y espera ahí el
+veredicto. El porqué de ese camino, y no el canal del panel, está en
+`sidecar/src/envio.js`.
+
+Tres cosas que ese camino garantiza:
+
+- **Se entrega una sola vez.** Cada petición lleva su `--id`, y el mismo `--id` entrega
+  una vez: si el veredicto tarda y se vuelve a preguntar, no sale dos veces. Un mensaje
+  repetido en el grupo de un cliente no se retira.
+- **Siempre hay respuesta.** Es un comando corto: termina con un veredicto o con un
+  plazo vencido, nunca colgado.
+- **Los motivos son distintos.** `send-no-transport` (la línea no está corriendo) y
+  `send-rejected` (la línea está y WhatsApp lo rechazó) son códigos separados, porque lo
+  que el dueño tiene que hacer con cada uno es distinto.
+
+Y lo que `wa-send` comprueba ANTES de mirar si hay por dónde, en este orden: la **firma**
+del agente (sin nombre configurado no escribe nada), la **línea** —la misma conversación
+puede existir en dos líneas suyas, y elegir «la primera» le escribe a la equivocada, que
+no se deshace—, y el **permiso** del registro. Quien llama se entera de lo primero que
+está mal con lo que pidió, no de un fallo genérico al final.
+
+**`borrador` ya no deja el texto escrito en el chat**, y no puede: el protocolo de
+WhatsApp no tiene borradores del lado del servidor. Esa escalera solo existía mientras
+el agente conducía una pantalla. Hoy el texto se guarda y espera: `wa-send --drafts`
+lista lo que hay y `wa-send --approve <id>` —un acto explícito del dueño— es lo único
+que lo pone en la línea.
 
 ## Otros sistemas operativos
 
@@ -102,8 +128,7 @@ registro de alcance en los tres.
 
 **Escribir** sigue a la línea de la conversación, no al revés, y el mismo grupo en dos
 líneas no se adivina: se elige con `--line`. Leer también acepta `--line`, y cada fila
-de la bandeja viaja con su línea. Hoy, elegida la línea, `wa-send` se niega con
-`send-no-transport`: enviar es la rebanada que sigue.
+de la bandeja viaja con su línea.
 
 ## Cuando la tarjeta se cierra
 

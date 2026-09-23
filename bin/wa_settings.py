@@ -315,6 +315,20 @@ def settings_from_plugin():
     return out
 
 
+def scope_from_plugin():
+    """El alcance que el panel dejo en su almacen: `{jid: {chatName, mode, ...}}`.
+
+    Vive aca por la misma razon que `ajuste()`: el panel es lo que el usuario acaba de
+    tocar y manda sobre la base, y tener ese cruce copiado en cada CLI es como nacio el
+    defecto del nombre del agente — `wa-scope` veia lo del panel y quien escribe no.
+    `merged_scope` de wa-scope lee este mismo archivo.
+
+    Un store ilegible o con otra forma devuelve `{}`: no saber que dice el panel no
+    puede ABRIR permisos, solo dejarlos como los tenga la base."""
+    alcance = plugin_store_raw().get("scope")
+    return alcance if isinstance(alcance, dict) else {}
+
+
 def scope_db():
     """El registro del plugin. Estaba escrito en cada CLI por separado."""
     if sys.platform == "win32":

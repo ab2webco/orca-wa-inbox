@@ -205,7 +205,9 @@ let the tool decide:
 
   - `action: nada` — the card is still open, or it was already announced, or the agent
     name is missing. Send nothing and record nothing.
-  - `action: borrador` — leave the text written, unsent.
+  - `action: borrador` — write the reply and leave it waiting for the owner's
+    approval. It does NOT reach the chat: WhatsApp has no draft of its own, so never
+    report it as "left written in the chat". Give the id `wa-send` printed.
   - `action: enviar` — send it.
 
 **Send `text` exactly as it comes.** Do not rewrite it and do not translate it: it is
@@ -215,6 +217,10 @@ something is done when it was cancelled is lying to them.
 
     "$WA/wa-send" "<chat_name>" "<text>"            # action: borrador
     "$WA/wa-send" "<chat_name>" "<text>" --send     # action: enviar
+
+A `borrador` answers `send-needs-approval` with the id on stderr and sends nothing;
+that is not a failure and it is not `fallo`. The owner sends it with
+`"$WA/wa-send" --approve <id>`.
 
 If among the card's comments there is one starting with `[cliente]`, THAT text is the
 only thing that goes out, instead of the assembled message, and without the rest of the
@@ -384,6 +390,10 @@ Never promise a date.
 The signature is added by the tool with the configured name. Do not write it yourself,
 do not use `--raw`. Without `--send` it leaves the draft, which is the right thing
 unattended. Add `--send` only if the registry says `responder`.
+
+A draft is stored and waits for the owner: it is NOT typed into the chat, because
+WhatsApp has no draft of its own. Report it as waiting for approval, with the id the
+tool printed, and never as "left written in the chat".
 
 ## STEP 11 — What needs the human and not you
 

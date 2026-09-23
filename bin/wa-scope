@@ -17,8 +17,17 @@ agent. With hundreds of groups, permission has to be an explicit allowlist.
 Modes, from least to most permission (the values are stable, they are not translated):
   off        does not touch it (default for any unregistered chat)
   observar   may read and open an issue in Plane. It does not write in WhatsApp.
-  borrador   also leaves the text written in the chat, unsent.
-  responder  also sends. Only where you authorized it explicitly.
+  borrador   also writes the reply, and NOTHING reaches WhatsApp until you say so.
+             WhatsApp has no draft of its own, so nothing is typed into the chat: the
+             text is stored and waits. `wa-send --drafts` lists what is waiting and
+             `wa-send --approve <id>` is what sends it.
+  responder  also sends, by itself. Only where you authorized it explicitly.
+
+This description used to say that `borrador` "leaves the text written in the chat,
+unsent". That was true while the agent drove a screen —it typed into the WhatsApp
+window and a human pressed Enter— and it stopped being true when that transport was
+removed. A description that promises the old behaviour is how an agent reports "I left
+it written in the chat" about a message that is not there.
 
 Task service per conversation: plane, linear, github — or `ninguno` when that
 conversation opens no cards and the agent only reads, summarizes or replies.

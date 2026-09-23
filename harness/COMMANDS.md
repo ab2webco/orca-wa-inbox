@@ -24,8 +24,31 @@ if a name does resolve it may be an old copy reading another database.
 |---|---|
 | `wa-scope` | the authorization registry, the state between runs, and everything the agent records |
 | `wa-read` | read-only access to WhatsApp: inbox, chats, messages, attachments |
-| `wa-send` | writes a message in the chat, and sends it only with `--send` |
+| `wa-send` | writes the reply, and sends it only with `--send` and only where the registry says `responder` |
 | `wa-transcribe` | turns a voice note into text, when this machine can |
+
+## The permission ladder, and what `borrador` really does
+
+| Mode | It may |
+|---|---|
+| `off` | nothing. This is the default for any chat nobody registered. |
+| `observar` | read, and open a card. It never writes in WhatsApp. |
+| `borrador` | write the reply. **Nothing reaches WhatsApp until the owner approves it.** |
+| `responder` | send by itself. |
+
+`borrador` used to mean "the text is left typed in the chat, unsent". It is not that
+any more and it cannot be: **WhatsApp has no draft of its own**, so nothing can be
+left sitting in someone's chat window. That rung was only possible while the agent
+drove a screen, and that transport is gone.
+
+What it does now: `wa-send "<chat>" "<text>" --send` on a `borrador` conversation
+stores the reply, answers `send-needs-approval` on the first stderr line with the id,
+and sends nothing. The owner lists what is waiting with `wa-send --drafts` and sends
+one with `wa-send --approve <id>`.
+
+**So never report a draft as "left written in the chat".** It is not there. Say the
+reply is waiting for approval, and give the id. Reporting the old behaviour about a
+message the client cannot see is the exact failure this wording exists to prevent.
 
 Some exit codes are answers, not failures, and all of them are load-bearing:
 
@@ -35,6 +58,20 @@ Some exit codes are answers, not failures, and all of them are load-bearing:
 | `4` | `wa-scope lock` | another run is already going. Stop there, read nothing, open nothing. |
 | `4` | `wa-read` (any read) | `no-transport` on the first stderr line: no WhatsApp line is linked yet, so there is nothing to read. This is a normal state, not a broken tool. |
 | `2` | `wa-read chat` / `media` | that chat reference matches more than one conversation. The candidates are on stderr. Pick one with its JID, or add `--line`. |
+| `3` | `wa-send` | `send-denied`: that conversation's permission does not write. Same answer as the gate — note it and move on. |
+| `3` | `wa-send` | `send-needs-approval`: the conversation is on `borrador`. The reply was written and is waiting for the owner. Nothing was sent. |
+| `4` | `wa-send` | `send-no-transport`: the line is not running, so there is nothing to send through. Nothing was queued. |
+
+`wa-send` answers with the same two-line shape as the reads: the stable code on the
+first line of stderr, the human detail on the second. The codes that matter are
+`send-denied`, `send-needs-approval`, `send-no-transport` (the line is down) and
+`send-rejected` (the line is up and WhatsApp refused the message) — those last two are
+different on purpose, because what the owner has to do about each is different.
+
+**Retrying a send.** Every request carries an id (`--id`). The same id delivers **once**:
+if a verdict is slow and you ask again with the same id, it is not sent twice. Retry
+with the same id, never with a new one — a duplicate message in a client's group cannot
+be taken back.
 
 `no-transport` is the one worth knowing by name. It means the owner has not linked a
 line from the plugin settings yet — the QR code lives there. There is nothing for you

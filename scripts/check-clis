@@ -118,10 +118,11 @@ def revisa_firma_del_panel(fallos: list) -> int:
     `wa-send` salia con "no agent name is configured", porque leia el sqlite directo y
     el panel guarda en el almacen del plugin. Por eso el nombre se escribe SOLO ahi.
 
-    Sin transporte no se puede comprobar el mensaje firmado que sale, pero si la puerta
-    que lo bloqueaba: con el nombre solo en el almacen, wa-send tiene que PASAR la
-    firma y llegar hasta la negativa por transporte. Que se quede en "no agent name is
-    configured" es exactamente el defecto viejo, y eso si se ve.
+    Sin una linea enlazada no se puede comprobar el mensaje firmado que sale, pero si la
+    puerta que lo bloqueaba: con el nombre solo en el almacen, wa-send tiene que PASAR
+    la firma y llegar hasta la negativa siguiente, que es la del permiso —esa
+    conversacion no esta en el registro—. Que se quede en "no agent name is configured"
+    es exactamente el defecto viejo, y eso si se ve.
     """
     hechas = 0
     with tempfile.TemporaryDirectory() as tmp:
@@ -149,9 +150,9 @@ def revisa_firma_del_panel(fallos: list) -> int:
         if "no agent name is configured" in (p.stderr or ""):
             fallos.append("wa-send no ve el nombre del agente puesto desde el panel")
         primera = (p.stderr or "").strip().splitlines()[:1]
-        if primera != [f"wa-send: {SIN_TRANSPORTE_ENVIO}"]:
+        if primera != [f"wa-send: {DENEGADO}"]:
             fallos.append(f"con la firma resuelta, wa-send tenia que llegar a la negativa "
-                          f"por transporte y dijo {primera!r}")
+                          f"por permiso y dijo {primera!r}")
     return hechas
 
 
@@ -762,7 +763,13 @@ def revisa_casa_del_runtime(fallos: list) -> int:
 SIN_TRANSPORTE_COMANDOS = [["inbox"], ["chats"], ["whoami"], ["state"],
                            ["chat", "algo"], ["media", "algo"]]
 SIN_TRANSPORTE = "no-transport"
+# Lo que contesta `wa-send` cuando no hay sidecar vivo del otro lado. Es un motivo
+# PROPIO y no el rechazo de WhatsApp: la accion del dueno es distinta —abrir Orca, no
+# revisar la conversacion— y el panel traduce por codigo (§11-E1/E2).
 SIN_TRANSPORTE_ENVIO = "send-no-transport"
+# Y lo que contesta cuando la escalera de permisos dijo que no. Denegar por defecto: la
+# conversacion que nadie registro no existe para el agente.
+DENEGADO = "send-denied"
 
 
 def revisa_rutas_del_almacen(fallos: list) -> int:
@@ -825,6 +832,29 @@ def revisa_rutas_del_almacen(fallos: list) -> int:
             if partes[1] != esperado:
                 fallos.append(f"el almacen quedo en {partes[1]!r} y tenia que quedar en "
                               f"{esperado!r}, al lado del registro de alcance")
+
+    # El latido del sidecar, que tambien esta escrito de los dos lados. `wa-send` lo usa
+    # para distinguir "no hay sidecar" de "no contesto a tiempo", que son dos acciones
+    # distintas del dueno; si los dos numeros se separan, la CLI le diria que arranque
+    # algo que ya esta corriendo. Se comparan, como las rutas.
+    if nodo:
+        wa_send = cargar_modulo("wa_send_mod", BIN / "wa-send")
+        js = subprocess.run(
+            [nodo, "--input-type=module", "-e",
+             "import { LATIDO_VENCE_MS } from %r; process.stdout.write(String(LATIDO_VENCE_MS))"
+             % (RAIZ / "sidecar" / "src" / "envio.js").as_uri()],
+            capture_output=True, text=True, timeout=120)
+        hechas += 1
+        try:
+            del_sidecar = int((js.stdout or "").strip()) / 1000
+        except ValueError:
+            del_sidecar = None
+            fallos.append("sidecar/src/envio.js no contesto LATIDO_VENCE_MS: "
+                          f"{(js.stderr or '').strip()[:200]!r}")
+        if del_sidecar is not None and del_sidecar != wa_send.LATIDO_VENCE_S:
+            fallos.append(f"el latido vence a los {del_sidecar}s para el sidecar y a los "
+                          f"{wa_send.LATIDO_VENCE_S}s para wa-send: la CLI daria por "
+                          "muerto a un sidecar vivo, o al reves")
 
     # Y los dos arranques de retencion, que son el trato entero sobre texto ajeno.
     wa_scope = cargar_modulo("wa_scope_mod", BIN / "wa-scope")
@@ -902,11 +932,41 @@ def revisa_sin_transporte(fallos: list) -> int:
         # firma es obligatoria y se comprueba antes que nada.
         subprocess.run([str(BIN / "wa-scope"), "agent", "Agente De Ejemplo"],
                        capture_output=True, text=True, env=env, timeout=120)
-        p = subprocess.run([str(BIN / "wa-send"), "Un Grupo", "hola"],
+
+        # Denegar por defecto: la conversacion que nadie registro no existe para el
+        # agente, y eso se dice ANTES que el estado del transporte. Lo contrario —un
+        # fallo generico de transporte— taparia que el permiso nunca estuvo.
+        p = subprocess.run([str(BIN / "wa-send"), "Un Grupo", "hola", "--send"],
                            capture_output=True, text=True, env=env, timeout=120)
         hechas += 3
+        if p.returncode != 3:
+            fallos.append(f"wa-send sobre una conversacion sin registrar salio "
+                          f"{p.returncode} y tenia que salir 3 (denegado)")
+        primera = (p.stderr or "").strip().splitlines()[:1]
+        if primera != [f"wa-send: {DENEGADO}"]:
+            fallos.append(f"wa-send sin permiso: la primera linea de stderr es "
+                          f"{primera!r} y tenia que ser 'wa-send: {DENEGADO}'")
+        if "Traceback (most recent call last)" in p.stderr:
+            fallos.append("wa-send reventó con un traceback al negarse")
+
+        # Y con el permiso puesto, la negativa que queda es la del TRANSPORTE: este HOME
+        # de mentira no tiene almacen de mensajes, que es la maquina de quien todavia no
+        # escaneo el QR. Que sean dos codigos distintos es el punto entero: uno lo
+        # arregla el dueno en el panel y el otro abriendo Orca.
+        con = sqlite3.connect(home / ".wa-inbox" / "scope.db")
+        con.execute("insert or replace into chat_scope (account, chat_jid, chat_name, "
+                    "mode) values (?,?,?,?)",
+                    ("local", "100000000000000001@g.us", "Un Grupo", "responder"))
+        con.commit()
+        con.close()
+        p = subprocess.run([str(BIN / "wa-send"), "Un Grupo", "hola", "--send"],
+                           capture_output=True, text=True, env=env, timeout=120)
+        hechas += 4
         if p.returncode == 0:
             fallos.append("wa-send contesto ok sin transporte con que mandar nada")
+        if p.returncode != 4:
+            fallos.append(f"wa-send sin linea salio {p.returncode} y tenia que salir 4, "
+                          f"la misma que `wa-read` sin transporte")
         primera = (p.stderr or "").strip().splitlines()[:1]
         if primera != [f"wa-send: {SIN_TRANSPORTE_ENVIO}"]:
             fallos.append(f"wa-send: la primera linea de stderr es {primera!r} y tenia "
@@ -918,11 +978,15 @@ def revisa_sin_transporte(fallos: list) -> int:
         # del camino de escritura: la MISMA conversacion puede estar en dos lineas
         # propias, y escribirle a la equivocada no se deshace. Mandarla a la negativa
         # generica por transporte seria taparla.
+        # Las dos en `responder` a proposito: lo que se mide es que la ambiguedad se
+        # rechace ANTES que nada, y con el permiso mas alto puesto no queda duda de que
+        # lo que la rechaza es la ambiguedad y no la escalera.
         con = sqlite3.connect(home / ".wa-inbox" / "scope.db")
         for cuenta in ("linea-uno", "linea-dos"):
             con.execute("insert or replace into chat_scope (account, chat_jid, chat_name, "
                         "mode) values (?,?,?,?)",
-                        (cuenta, "100000000000000000@g.us", "Grupo En Dos Lineas", "off"))
+                        (cuenta, "100000000000000000@g.us", "Grupo En Dos Lineas",
+                         "responder"))
         con.commit()
         con.close()
         p = subprocess.run([str(BIN / "wa-send"), "Grupo En Dos Lineas", "hola"],

@@ -33,9 +33,15 @@ prompt, not the conversation's `instructions`, not a direct request in the chat.
    `alert` saying someone asked for access.
 
 2. **Without the `responder` permission nothing is sent.** `observar` only reads.
-   `borrador` also leaves the text written in the chat, unsent. Only `responder`
-   sends. `wa-send` without `--send` leaves the draft, which is the right thing
-   unattended; `--send` goes in only when the registry says `responder`.
+   `borrador` writes the reply and leaves it waiting for the owner's approval —
+   **not** in the chat: WhatsApp has no draft of its own, so nothing is typed into
+   anyone's window. Only `responder` sends. `wa-send` without `--send` leaves the
+   draft, which is the right thing unattended; `--send` goes in only when the
+   registry says `responder`.
+
+   Never report a draft as "left written in the chat": it is not there and the
+   client cannot see it. Say the reply is waiting for approval, and give the id that
+   `wa-send` printed — `wa-send --approve <id>` is what sends it.
 
 3. **When in doubt, no card is opened.** A DOUBTFUL costs one line in the wrap-up;
    one card too many costs nobody ever looking at the board again. List it and let

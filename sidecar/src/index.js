@@ -18,6 +18,7 @@ import { isAbsolute } from 'node:path'
 
 import { abrirAlmacen, rutaAlmacen, rutaMedia } from './almacen.js'
 import { crearAlcance } from './alcance.js'
+import { atenderSalida, ENVIO_LATIDO_MS } from './envio.js'
 import { INGESTA, ingerirActualizacion, ingerirMensaje } from './ingesta.js'
 import { identidadesPropias } from './mensajes.js'
 
@@ -267,6 +268,12 @@ async function iniciar () {
 
   let intento = 0
   let rotacion = 0
+  // El socket vivo y si esta abierto. Los guarda el arranque y los mira el drenado de
+  // la bandeja de salida, que corre en su propio reloj y no dentro de `conectar()`: una
+  // peticion que llega con el socket caido tiene que ESPERAR, no fallar. Decirle al
+  // dueno que WhatsApp rechazo un mensaje que nunca lo vio es peor que tardar.
+  let socket = null
+  let conectado = false
 
   function conectar () {
     const sock = makeWASocket({
@@ -279,6 +286,8 @@ async function iniciar () {
       qrTimeout: QR_VIGENCIA_MS,
       syncFullHistory: false
     })
+    socket = sock
+    conectado = false
 
     // `useMultiFileAuthState` escribe las claves en archivos: `saveCreds` los
     // regenera. Sin `chmodSync` en cada uno, un umask distinto en otra maquina los
@@ -296,6 +305,7 @@ async function iniciar () {
       }
       if (connection === 'open') {
         intento = 0
+        conectado = true
         emitirConexion('open')
         // Quien soy yo, a los efectos de "me nombraron" y "contestaron algo mio". El
         // LID y el TELEFONO son numeros DISTINTOS y llegan cada uno por su lado: mirar
@@ -322,6 +332,7 @@ async function iniciar () {
         return
       }
       if (connection === 'close') {
+        conectado = false
         const statusCode = lastDisconnect?.error?.output?.statusCode
         intento += 1
         const decision = decidirTrasCierre(statusCode, intento)
@@ -412,6 +423,35 @@ async function iniciar () {
       }
     })
   }
+
+  // ── La bandeja de salida ─────────────────────────────────────────────────────────
+  // Lo que `bin/wa-send` dejo encolado, y el latido que le dice que hay alguien de este
+  // lado. Los dos en el mismo reloj a proposito: un latido que sigue saliendo mientras
+  // el drenado esta trabado seria una senal de vida que miente.
+  //
+  // El drenado no se solapa consigo mismo (`drenando`): `sendMessage` es asincrono y
+  // dos vueltas encimadas sobre la misma fila son justo la carrera que `tomarEnvio`
+  // existe para cerrar. Aca se cierra tambien del lado del reloj, que es mas barato.
+  //
+  // Esto NO emite nada por stdout. Un `store` por envio seria un `storage.set` del
+  // worker por mensaje enviado, y Orca mata al worker a los 64 eventos sin confirmar en
+  // vuelo — el mismo mecanismo que ya se llevo puesto al worker una vez. El veredicto
+  // lo lee quien pidio, en la fila, que es donde lo espera.
+  let drenando = false
+  const salidaTimer = setInterval(() => {
+    try {
+      almacen.latir()
+    } catch (error) {
+      avisarFallo('latido-sin-escribir', error)
+      return
+    }
+    if (drenando) return
+    drenando = true
+    atenderSalida({ almacen, conectado, enviar: (jid, contenido) => socket.sendMessage(jid, contenido) })
+      .catch((error) => avisarFallo('salida-sin-atender', error))
+      .finally(() => { drenando = false })
+  }, ENVIO_LATIDO_MS)
+  if (typeof salidaTimer.unref === 'function') salidaTimer.unref()
 
   // La poda corre sola y REPORTA. "Un almacen sin tope y sin caducidad es un archivo de
   // conversaciones ajenas que nadie borra" (§11-F2), y lo que se desaloja se dice: el
