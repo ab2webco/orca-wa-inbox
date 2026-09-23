@@ -1248,5 +1248,72 @@ console.log('\nworker: el resolvedor de auth borra el directorio cuando se lo pi
 }
 
 rmSync(RAIZ, { recursive: true, force: true })
+// ───────── desvincular espera a que el viejo MUERA antes de borrarle debajo ─────────
+// Reportado en produccion: "desvinculo y ya no conecta otro, sale error y error".
+// `apagarSidecar()` mandaba la senal y volvia al instante. Baileys escribe su auth
+// state al cerrar, asi que el moribundo recreaba archivos DENTRO de `wa-auth` despues
+// del borrado; el sidecar nuevo arrancaba sobre esa credencial a medias, no autenticaba
+// y se caia, y reintentar caia igual porque la mezcla seguia ahi.
+console.log('\nworker: desvincular espera a que el sidecar viejo muera antes de borrar')
+{
+  // Este bloque corre al final, cuando alguna limpieza anterior ya pudo llevarse RAIZ.
+  mkdirSync(RAIZ, { recursive: true })
+  const authFalso = join(RAIZ, 'auth-carrera')
+  const resolvedor = join(RAIZ, 'resolve-carrera.mjs')
+  writeFileSync(resolvedor,
+    'import { rmSync } from "node:fs"\n' +
+    'const dir = ' + JSON.stringify(authFalso) + '\n' +
+    'if (process.argv.includes("--borrar")) rmSync(dir, { recursive: true, force: true })\n' +
+    'process.stdout.write(JSON.stringify({ ok: true, dir }))\n')
+  mkdirSync(authFalso, { recursive: true })
+  writeFileSync(join(authFalso, 'creds.json'), '{"credencial":"viva"}')
+
+  // El sidecar de mentira hace lo mismo que Baileys: al recibir SIGTERM guarda su
+  // estado y RECIEN entonces se va. Si el worker borra sin esperarlo, ese archivo
+  // aparece despues del borrado y queda una credencial a medias.
+  const guion = join(RAIZ, 'sidecar-escribe-al-morir.cjs')
+  writeFileSync(guion,
+    '#!/usr/bin/env node\n' +
+    'const { writeFileSync, mkdirSync } = require("node:fs")\n' +
+    'const { join } = require("node:path")\n' +
+    'const dir = ' + JSON.stringify(authFalso) + '\n' +
+    'process.on("SIGTERM", () => {\n' +
+    '  setTimeout(() => {\n' +
+    '    try { mkdirSync(dir, { recursive: true }) } catch (e) {}\n' +
+    '    try { writeFileSync(join(dir, "escrito-al-morir.json"), "{}") } catch (e) {}\n' +
+    '    process.exit(0)\n' +
+    '  }, 2500)\n' +
+    '})\n' +
+    'process.stdout.write(JSON.stringify({ type: "connection", state: "open" }) + "\\n")\n' +
+    'setInterval(() => {}, 1000)\n', { mode: 0o755 })
+
+  const orca = hostFalso(herramientas('carrera', '#!/bin/sh\necho \'[]\'\n'), {}, guion)
+  orca.host.call = (function (original) {
+    return async (action, params) => {
+      if (action === 'settings.get') {
+        return { value: { toolsDir: join(RAIZ, 'carrera'), sidecarPath: guion,
+          authDirResolverPath: resolvedor } }
+      }
+      return original(action, params)
+    }
+  })(orca.host.call)
+
+  const { apagar } = await arranca(orca)
+  await hasta(() => orca.store.sidecar && orca.store.sidecar.connection === 'open', 10000)
+
+  orca.store.sidecarRequest = { id: 'carrera-1', action: 'desvincular',
+    at: new Date().toISOString() }
+  await hasta(() => orca.store.sidecarResult &&
+    orca.store.sidecarResult.requestId === 'carrera-1', 15000)
+
+  // Margen de sobra para que un moribundo no esperado hubiera escrito ya.
+  await dormir(4000)
+  const resucitado = existsSync(join(authFalso, 'escrito-al-morir.json'))
+  ok('el sidecar viejo no resucita la credencial despues del borrado', !resucitado,
+    `escrito-al-morir.json presente=${resucitado}`)
+
+  apagar()
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)
