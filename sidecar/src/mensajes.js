@@ -88,6 +88,34 @@ export function identidadesPropias (lid, telefono) {
   return new Set([identidadPropia(lid), identidadPropia(telefono)].filter(Boolean))
 }
 
+/** La identidad de la sesion, leida de donde de verdad esta.
+ *
+ *  `sock.user` NO la tiene entera cuando dispara `connection: 'open'`: trae `id` y
+ *  todavia no `lid` ni `name`, que Baileys completa despues por `creds.update`. Medido
+ *  en una instalacion viva, la tabla `linea` quedaba asi:
+ *
+ *      lid=NULL  pn=573008236130:7@s.whatsapp.net  name=NULL
+ *
+ *  mientras `creds.json` ya decia `me.lid = 262444127674377:7@lid`. Con el LID vacio,
+ *  `identidadesPropias` solo conoce el telefono, `mencionaA` no puede acertar nunca
+ *  -las menciones de WhatsApp viajan en `@lid`- y `menciona_me` queda en 0 sobre
+ *  mensajes que nombran al dueno con todas las letras. Aguas abajo eso es la bandeja
+ *  vacia, `activity.pending` vacio, `wa-scope pending` contestando `hay_trabajo: false`
+ *  y la automatizacion saltandose todo sin decir por que.
+ *
+ *  Por eso se mira PRIMERO `creds.me`, que es el registro persistente, y `sock.user`
+ *  queda de respaldo. Y por eso quien llama tiene que volver a preguntar en cada
+ *  `creds.update`: en el `open` la respuesta todavia esta incompleta. */
+export function identidadDeSesion (creds, user) {
+  const guardada = creds?.me || {}
+  const viva = user || {}
+  return {
+    lid: guardada.lid || viva.lid || null,
+    pn: guardada.id || viva.id || null,
+    nombre: guardada.name || viva.name || null
+  }
+}
+
 /** Lista de exclusion cerrada (§11-A2). */
 export function esConversacion (jid) {
   const texto = typeof jid === 'string' ? jid : jidDe(jid)

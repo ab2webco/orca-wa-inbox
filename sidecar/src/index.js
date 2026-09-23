@@ -20,7 +20,7 @@ import { abrirAlmacen, rutaAlmacen, rutaMedia } from './almacen.js'
 import { crearAlcance } from './alcance.js'
 import { atenderSalida, ENVIO_LATIDO_MS } from './envio.js'
 import { INGESTA, ingerirActualizacion, ingerirChats, ingerirMensaje } from './ingesta.js'
-import { identidadesPropias } from './mensajes.js'
+import { identidadDeSesion, identidadesPropias } from './mensajes.js'
 
 // El auth state es una credencial viva (docs/ENCARGO...§11-F1): en un equipo
 // compartido el umask por defecto lo deja legible para cualquiera. Esto tiene que
@@ -364,11 +364,40 @@ async function iniciar () {
     socket = sock
     conectado = false
 
+    // Quien soy yo, a los efectos de "me nombraron" y "contestaron algo mio". Se
+    // pregunta en CADA `creds.update` y no una sola vez en el `open`, porque ahi la
+    // respuesta todavia esta incompleta: ver `identidadDeSesion` en mensajes.js.
+    //
+    // Se compara contra lo ultimo escrito para no tocar la base en cada `creds.update`
+    // -que llegan de a muchos- y, cuando el LID aparece por primera vez, se repara lo
+    // que ya estaba guardado sin el: los mensajes que nombran al dueno se ingirieron
+    // con `menciona_me = 0` porque en ese momento nadie sabia que ese numero era el
+    // suyo. Sin la reparacion esos mensajes no salen en la bandeja NUNCA, y son justo
+    // los primeros que llegan tras vincular la linea.
+    let identidadUlt = null
+    const refrescarIdentidad = () => {
+      const yo = identidadDeSesion(sock.authState?.creds, sock.user)
+      const huella = `${yo.lid}|${yo.pn}|${yo.nombre}`
+      if (huella === identidadUlt) return
+      const teniaLid = identidadUlt !== null && identidades.size > 1
+      identidadUlt = huella
+      identidades = identidadesPropias(yo.lid, yo.pn)
+      almacen.registrarLinea({ cuenta, lid: yo.lid, pn: yo.pn, nombre: yo.nombre })
+      if (yo.lid && !teniaLid) {
+        const reparados = almacen.repararMenciones({ cuenta, lid: yo.lid })
+        if (reparados) emitir({ type: 'identidad', reparados, ts: Date.now() })
+      }
+    }
+
     // `useMultiFileAuthState` escribe las claves en archivos: `saveCreds` los
     // regenera. Sin `chmodSync` en cada uno, un umask distinto en otra maquina los
     // dejaria legibles de nuevo tras la primera escritura.
     sock.ev.on('creds.update', async () => {
       await saveCreds()
+      // `creds.update` es JUSTO donde aparece el LID: en el `open` todavia no esta.
+      // Sin este refresco la identidad se quedaba con el telefono y nada mas, y las
+      // menciones -que viajan en @lid- no se reconocian NUNCA (ver `identidadDeSesion`).
+      refrescarIdentidad()
     })
 
     sock.ev.on('connection.update', (actualizacion) => {
@@ -388,9 +417,7 @@ async function iniciar () {
         // Quien soy yo, a los efectos de "me nombraron" y "contestaron algo mio". El
         // LID y el TELEFONO son numeros DISTINTOS y llegan cada uno por su lado: mirar
         // uno solo pierde las respuestas viejas sin un solo error (§11-B1/B2).
-        identidades = identidadesPropias(sock.user?.lid, sock.user?.id)
-        almacen.registrarLinea({ cuenta, lid: sock.user?.lid || null,
-          pn: sock.user?.id || null, nombre: sock.user?.name || null })
+        refrescarIdentidad()
         // Los asuntos de los grupos: sin esto cada conversacion se llamaria como la
         // primera persona que escribio en ella.
         sock.groupFetchAllParticipating()

@@ -830,6 +830,74 @@ console.log('\nHistorial: la sincronizacion inicial deja las conversaciones, sin
 almacen.cerrar()
 for (const casa of casas) rmSync(casa, { recursive: true, force: true })
 
+// ── La ventana entre vincular la linea y saber el LID ───────────────────────────────
+// Regresion de un defecto medido en una instalacion viva. `sock.user` no trae el LID
+// cuando dispara `connection: 'open'`, asi que los mensajes que llegan en esos primeros
+// segundos se ingieren con `menciona_me = 0` aunque nombren al dueno con todas las
+// letras. Como no vuelven a pasar por la ingesta y `wa-read inbox` cruza contra esa
+// columna, no salian NUNCA: bandeja vacia, `activity.pending` vacio, `wa-scope pending`
+// contestando `hay_trabajo: false` y la automatizacion saltandose todo.
+console.log('\nalmacen: reparar las menciones que se guardaron antes de saber el LID')
+{
+  const casa = nueva()
+  const alm = abrirAlmacen(rutaAlmacen({ HOME: casa }))
+  const usuario = MI_LID.split('@')[0]
+  const grupo = '120363000000000001@g.us'
+  const fila = (stanzaId, body, extra = {}) => ({
+    cuenta: CUENTA, chatJid: grupo, stanzaId, ts: 1700000000, fromMe: 0,
+    senderJid: '573009998877@s.whatsapp.net', senderName: 'Jhon', body,
+    mediaTipo: null, mediaBytes: null, mencionaMe: 0, citaMe: 0, ...extra
+  })
+
+  // Lo que de verdad paso: se vincula, llega la mencion, y el LID todavia no se sabe.
+  alm.registrarLinea({ cuenta: CUENTA, pn: MI_TEL, grupos: 296 })
+  alm.guardarMensaje(fila('A1', `@${usuario} Como vas?`))
+  alm.guardarMensaje(fila('A2', `@${usuario} ya hiciste las tareas`))
+  // Ruido que NO se puede marcar: otra persona, y un LID que empieza igual.
+  alm.guardarMensaje(fila('B1', '@573001234567 nada que ver'))
+  alm.guardarMensaje(fila('B2', `@${usuario}99 ese es otro`))
+  alm.guardarMensaje(fila('B3', 'sin mencion ninguna'))
+
+  const antes = alm.con.prepare('select count(*) n from mensaje where menciona_me=1')
+    .get().n
+  ok('antes de saber el LID no hay ni una mencion reconocida', antes === 0, String(antes))
+
+  const reparados = alm.repararMenciones({ cuenta: CUENTA, lid: MI_LID })
+  ok('se reparan las dos que nombran al dueno, y solo esas', reparados === 2,
+    String(reparados))
+  const marcados = alm.con.prepare(
+    'select stanza_id from mensaje where menciona_me=1 order by stanza_id')
+    .all().map((f) => f.stanza_id).join(',')
+  ok('y son las dos correctas', marcados === 'A1,A2', marcados)
+
+  // Un LID que es PREFIJO de otro no puede arrastrar mensajes ajenos: sin el limite a
+  // la derecha, `@199887766554433` marcaria tambien `@19988776655443399`.
+  const b2 = alm.con.prepare("select menciona_me m from mensaje where stanza_id='B2'")
+    .get().m
+  ok('un LID mas largo que empieza igual NO se marca', b2 === 0, String(b2))
+
+  ok('volver a repararlas no cambia nada',
+    alm.repararMenciones({ cuenta: CUENTA, lid: MI_LID }) === 0)
+  ok('un LID que no es un numero no toca nada',
+    alm.repararMenciones({ cuenta: CUENTA, lid: null }) === 0)
+
+  // `registrarLinea` la llaman dos sitios con mitades distintas: la identidad por un
+  // lado y el conteo de grupos por otro. El que no trae un dato no puede borrarlo.
+  alm.registrarLinea({ cuenta: CUENTA, lid: MI_LID, pn: MI_TEL, nombre: 'Mi Linea' })
+  const linea = alm.con.prepare('select lid, pn, name, groups_n from linea where account=?')
+    .get(CUENTA)
+  ok('registrar la identidad NO borra el conteo de grupos', linea.groups_n === 296,
+    JSON.stringify(linea))
+  ok('y el LID queda guardado', linea.lid === MI_LID, JSON.stringify(linea))
+  alm.registrarLinea({ cuenta: CUENTA, grupos: 300 })
+  const linea2 = alm.con.prepare('select lid, name, groups_n from linea where account=?')
+    .get(CUENTA)
+  ok('registrar el conteo NO borra la identidad',
+    linea2.lid === MI_LID && linea2.name === 'Mi Linea' && linea2.groups_n === 300,
+    JSON.stringify(linea2))
+  alm.cerrar()
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 if (fallos) {
   console.error(`\n${fallos} fallas`)
