@@ -273,6 +273,9 @@ function guardar(orca, key, value) {
     .catch((error) => orca.log(`storage.set ${key} failed: ${error.message}`))
 }
 
+/** Cuanto se espera a que el sidecar muera por las buenas antes de forzarlo. */
+const APAGADO_PLAZO_MS = 3000
+
 // Dos syncs a la vez leerian la misma base dos veces y se pisarian el estado.
 let sincronizando = false
 
@@ -718,9 +721,33 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
         detail: `sidecar exited (code ${code ?? 'null'}, signal ${signal ?? 'null'})` } })
   })
 
+  // Devuelve una PROMESA que resuelve cuando el proceso murio de verdad, no cuando se
+  // mando la senal. Baileys escribe su auth state al cerrar: si el worker borra
+  // `wa-auth` mientras el viejo agoniza, el moribundo recrea archivos dentro de la
+  // carpeta recien borrada y el siguiente arranca sobre una credencial a medias, no
+  // autentica, y se cae. Reintentar cae igual, porque la mezcla sigue ahi. Ese era el
+  // "desvinculo y ya no conecta" reportado en produccion.
   return () => {
     detenidoPorWorker = true
-    if (proceso && !proceso.killed) proceso.kill()
+    if (!proceso || proceso.exitCode !== null || proceso.signalCode !== null) {
+      return Promise.resolve()
+    }
+    const murio = new Promise((resolve) => { proceso.once('exit', () => resolve()) })
+    proceso.kill()
+    // Un sidecar que ignora SIGTERM no puede dejar el desvincular colgado para siempre:
+    // pasado el plazo se fuerza, y aun asi se espera a `exit` para no seguir con un
+    // proceso vivo sobre el mismo auth state.
+    const forzado = new Promise((resolve) => {
+      const t = setTimeout(() => {
+        if (proceso && proceso.exitCode === null && proceso.signalCode === null) {
+          proceso.kill('SIGKILL')
+        }
+        resolve(murio)
+      }, APAGADO_PLAZO_MS)
+      if (typeof t.unref === 'function') t.unref()
+      murio.then(() => { clearTimeout(t); resolve() })
+    })
+    return forzado
   }
 }
 
@@ -848,7 +875,7 @@ export default function activate(orca) {
     // El de antes se apaga a proposito: `lanzarSidecar` marca la bandera para que ese
     // final no se reporte como una caida. Dos sidecars vivos sobre el mismo auth state
     // se pisarian las credenciales.
-    apagarSidecar()
+    await apagarSidecar()
     // `s.toolsDir` y no `TOOLS`: quien mueve el directorio de herramientas tiene que
     // moverlo entero, o el sidecar le pregunta por el alcance a una instalacion
     // distinta de la que lee el resto del plugin (§11-E4).
@@ -905,7 +932,7 @@ export default function activate(orca) {
    *  explicarle al usuario que hacer. Relanzando, la pantalla vuelve exactamente al
    *  estado que ya sabe dibujar: esperando el codigo, y despues el codigo. */
   async function desvincularSidecar () {
-    apagarSidecar()
+    await apagarSidecar()
     apagarSidecar = () => {}
     await limpiarEstadoSidecar()
     const s = await settings()
