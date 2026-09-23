@@ -391,18 +391,52 @@ class Almacen {
   /** Una linea enlazada. Es la contabilidad que distingue "todavia no hay de donde
    *  leer" de "no hubo mensajes": sin una fila aca, `wa-read` se NIEGA con
    *  `no-transport`, y con ella contesta una lista vacia (§11-E5). */
-  registrarLinea ({ cuenta, lid = null, pn = null, nombre = null, grupos = 0,
+  registrarLinea ({ cuenta, lid = null, pn = null, nombre = null, grupos = null,
     ahora = Date.now() }) {
     const segundos = Math.floor(ahora / 1000)
+    // TODOS los campos con `coalesce`, `groups_n` incluido. Esta funcion la llaman dos
+    // sitios con mitades distintas -la identidad por un lado, el conteo de grupos por
+    // otro- asi que el que no trae un dato NO puede borrar el que ya estaba. `groups_n`
+    // era el unico que se pisaba a secas: funcionaba de casualidad porque el conteo
+    // llegaba siempre de ultimo, y con la identidad refrescandose en cada
+    // `creds.update` habria dejado el conteo en 0 a la primera.
     this.con.prepare(`insert into linea (account, first_seen, lid, pn, name, groups_n, updated_at)
-      values (?,?,?,?,?,?,?)
+      values (?,?,?,?,?,coalesce(?,0),?)
       on conflict(account) do update set
         lid=coalesce(excluded.lid, linea.lid),
         pn=coalesce(excluded.pn, linea.pn),
         name=coalesce(excluded.name, linea.name),
-        groups_n=excluded.groups_n,
+        groups_n=coalesce(?, linea.groups_n),
         updated_at=excluded.updated_at`)
-      .run(cuenta, segundos, lid, pn, nombre, grupos, segundos)
+      .run(cuenta, segundos, lid, pn, nombre, grupos, segundos, grupos)
+  }
+
+  /**
+   * Marca como mencion los mensajes guardados que nombran al dueno, ahora que se sabe
+   * cual es su LID.
+   *
+   * Existe por una ventana real y no hipotetica: entre que se vincula la linea y que
+   * Baileys entrega el LID por `creds.update` pasan segundos, y los mensajes que
+   * llegan en medio se ingieren con `menciona_me = 0` porque en ese momento nadie sabe
+   * que ese numero es el del dueno. Esos mensajes no vuelven a pasar por la ingesta, y
+   * `wa-read inbox` cruza contra esa columna: sin reparar, no salen NUNCA. Medido en
+   * una instalacion viva, fueron los dos primeros mensajes tras escanear el QR.
+   *
+   * Se mira el CUERPO y no `contextInfo`, que no se guarda: WhatsApp escribe la mencion
+   * en el texto como `@<usuario del lid>`, que es exactamente lo que se busca. Por eso
+   * el patron lleva el numero completo y un limite a la derecha — sin el, un LID que
+   * sea prefijo de otro marcaria mensajes que nombran a otra persona.
+   */
+  repararMenciones ({ cuenta, lid }) {
+    const usuario = String(lid || '').split('@')[0].split(':')[0]
+    if (!/^\d+$/.test(usuario)) return 0
+    const r = this.con.prepare(
+      `update mensaje set menciona_me = 1
+       where account = ? and menciona_me = 0 and from_me = 0
+         and body like ?
+         and substr(body, instr(body, ?) + ?, 1) not glob '[0-9]'`)
+      .run(cuenta, `%@${usuario}%`, `@${usuario}`, usuario.length + 1)
+    return r.changes || 0
   }
 
   /** Que esta conversacion existe. Contabilidad, no contenido: se anota aunque el chat

@@ -21,6 +21,7 @@
  */
 import {
   esConversacion, esGrupo, usuarioDe, identidadPropia, identidadesPropias,
+  identidadDeSesion,
   mencionaA, citaA, textoDe, mediaDe, filaDeMensaje, filaDeActualizacion,
   TIPO_MEDIA
 } from '../sidecar/src/mensajes.js'
@@ -254,6 +255,54 @@ console.log('\nB4: borrados y editados — el hueco que el codigo viejo no llena
   ok('un recibo de lectura no produce cambio', recibo === null, JSON.stringify(recibo))
   ok('una actualizacion sin id no produce cambio',
     filaDeActualizacion({ key: { remoteJid: 'x@g.us' }, update: { message: null } }) === null)
+}
+
+console.log('\nmensajes: la identidad de la sesion se lee de donde de verdad esta')
+{
+  // El caso medido: en `connection: open`, `sock.user` trae el telefono y NO el LID.
+  // Mirar solo ahi dejaba `identidades` sin el LID, y como las menciones de WhatsApp
+  // viajan en @lid, `menciona_me` quedaba en 0 sobre mensajes que nombraban al dueno.
+  const enOpen = identidadDeSesion(
+    { me: { id: '573001112233:7@s.whatsapp.net' } },
+    { id: '573001112233:7@s.whatsapp.net' })
+  ok('en el open todavia no hay LID, y eso no se inventa', enOpen.lid === null,
+    JSON.stringify(enOpen))
+  ok('pero el telefono si se conoce', enOpen.pn === '573001112233:7@s.whatsapp.net',
+    JSON.stringify(enOpen))
+
+  // Y por `creds.update` aparece. Por eso hay que volver a preguntar.
+  const tras = identidadDeSesion(
+    { me: { id: '573001112233:7@s.whatsapp.net', lid: '199887766554433:7@lid',
+      name: 'Fabian' } }, null)
+  ok('tras creds.update el LID ya esta', tras.lid === '199887766554433:7@lid',
+    JSON.stringify(tras))
+  ok('y el nombre tambien', tras.nombre === 'Fabian', JSON.stringify(tras))
+
+  // `creds.me` manda sobre `sock.user`: es el registro persistente, y es el que tenia
+  // el LID cuando la tabla `linea` lo tenia en NULL.
+  const preferencia = identidadDeSesion(
+    { me: { id: 'guardado@s.whatsapp.net', lid: 'guardado@lid' } },
+    { id: 'vivo@s.whatsapp.net', lid: 'vivo@lid' })
+  ok('creds manda sobre sock.user',
+    preferencia.lid === 'guardado@lid' && preferencia.pn === 'guardado@s.whatsapp.net',
+    JSON.stringify(preferencia))
+
+  // Pero si creds no lo tiene y el socket si, se usa el del socket: no saber por un
+  // lado no puede tapar lo que el otro si sabe.
+  const respaldo = identidadDeSesion({ me: {} }, { id: 'vivo@s.whatsapp.net', lid: 'vivo@lid' })
+  ok('y sock.user queda de respaldo', respaldo.lid === 'vivo@lid', JSON.stringify(respaldo))
+
+  ok('sin nada, no se inventa nada',
+    JSON.stringify(identidadDeSesion(null, null)) ===
+    JSON.stringify({ lid: null, pn: null, nombre: null }))
+
+  // Lo que todo esto habilita: con el LID, la mencion se reconoce; sin el, no.
+  const conLid = identidadesPropias('199887766554433:7@lid', '573001112233:7@s.whatsapp.net')
+  const sinLid = identidadesPropias(null, '573001112233:7@s.whatsapp.net')
+  const mencion = { mentionedJid: ['199887766554433@lid'] }
+  ok('con el LID la mencion se reconoce', mencionaA(mencion, conLid) === true)
+  ok('sin el LID no se reconoce NUNCA — el defecto entero en una linea',
+    mencionaA(mencion, sinLid) === false)
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
