@@ -560,6 +560,8 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
   spawnFn = spawn, env = process.env }) {
   let estado = { at: new Date().toISOString(), connection: null, qr: null,
     motivo: null, statusCode: null, error: null, exited: false,
+    // El numero de la linea vinculada, cuando el sidecar lo sabe.
+    me: null,
     // Lo que el sidecar guardo y lo que desalojo, en CONTEOS. Un tope de retencion que
     // muerde en silencio deja mensajes sin cuerpo sin que nadie sepa por que
     // (docs/ENCARGO-TRANSPORTE-UNICO.md §11-F2), y "llegaron 40 y se guardaron 0" es
@@ -648,6 +650,12 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
           // detras de una sesion ya conectada (docs/ENCARGO...§6).
           ...(mensaje.state === 'open' ? { qr: null } : {})
         })
+      } else if (mensaje?.type === 'identidad') {
+        // Quien quedo vinculado. El panel de actividad lo pinta al lado de
+        // "conectado": tras escanear un QR, saber CUAL linea quedo es la unica forma
+        // de notar que se escaneo con el telefono equivocado. Solo el numero visible;
+        // el sidecar no manda ni el LID ni nada mas.
+        escribir({ me: typeof mensaje.me === 'string' ? mensaje.me : null })
       } else if (mensaje?.type === 'store') {
         // Solo numeros y banderas, nunca una cadena. El protocolo del almacen no trae
         // texto de nadie, y esto termina en `storage`, que lee el panel.

@@ -158,6 +158,13 @@
     </header>
 
     <p class="meta nota" id="note"></p>
+
+    <!-- Lo primero que hay que poder contestar de un vistazo: esta viva la linea, y
+         sobre cuanto puede actuar el agente. Sin esto, "no hay nada pendiente" y "no
+         estoy conectado" se leen igual. -->
+    <p class="meta nota" id="linea"></p>
+    <p class="meta nota" id="cobertura"></p>
+
     <h2 data-t="pending">Esperando respuesta</h2>
     <!-- Una sola linea, arriba de la lista: sobre cuantas conversaciones reviso el
          agente y que encontro — o por que no reviso. Sin ella, "no hay nada que
@@ -174,27 +181,27 @@
       // El shell del panel no inyecta el idioma, asi que sale de navigator.language,
       // que en el renderer de Electron refleja el idioma del app.
       var STRINGS = {
-        es: {"title": "WhatsApp", "pending": "Esperando respuesta", "recent": "Lo ultimo que hizo", "loading": "Cargando…", "nothingYet": "Nada todavia.", "nothingPending": "Nada pendiente en las conversaciones que tiene autorizadas.", "nothingAuthorized1": "Tiene 1 conversacion configurada y esta en off.", "nothingAuthorized": "Tiene {n} conversaciones configuradas y todas en off.", "nothingMapped": "Todavia no ha autorizado ninguna conversacion.", "runNever": "Su agente todavia no ha revisado.", "runNow": "Revisando ahora…", "runCut": "La revision arranco y no volvio", "runFailed": "La ultima revision fallo", "runChecked1": "Reviso 1 conversacion", "runChecked": "Reviso {n} conversaciones", "runNone": "nada pendiente", "runWaiting1": "1 esperando", "runWaiting": "{n} esperando", "noData": "sin datos — corra <code>wa-scope sync</code>", "running": "corriendo", "image": "imagen", "mediaImage": "imagen", "mediaVideo": "video", "mediaPtt": "nota de voz", "mediaAudio": "audio", "mediaDocument": "documento", "mediaOther": "adjunto", "take": "Tomar", "ignore": "Ignorar", "taken": "lo toma tu agente", "hint": "Marque lo que si es soporte. Su agente lo atiende en la proxima corrida, hasta donde le permita esa conversacion; lo ignorado no vuelve a aparecer.", "refreshTitle": "Releer lo guardado",
+        es: {"title": "WhatsApp", "pending": "Esperando respuesta", "recent": "Lo ultimo que hizo", "loading": "Cargando…", "nothingYet": "Nada todavia.", "nothingPending": "Nada pendiente en las conversaciones que tiene autorizadas.", "nothingAuthorized1": "Tiene 1 conversacion configurada y esta en off.", "nothingAuthorized": "Tiene {n} conversaciones configuradas y todas en off.", "nothingMapped": "Todavia no ha autorizado ninguna conversacion.", "runNever": "Su agente todavia no ha revisado.", "runNow": "Revisando ahora…", "runCut": "La revision arranco y no volvio", "runFailed": "La ultima revision fallo", "runChecked1": "Reviso 1 conversacion", "runChecked": "Reviso {n} conversaciones", "runNone": "nada pendiente", "runWaiting1": "1 esperando", "runWaiting": "{n} esperando", "noData": "sin datos — corra <code>wa-scope sync</code>", "running": "corriendo", "image": "imagen", "mediaImage": "imagen", "mediaVideo": "video", "mediaPtt": "nota de voz", "mediaAudio": "audio", "mediaDocument": "documento", "mediaOther": "adjunto", "take": "Tomar", "ignore": "Ignorar", "taken": "lo toma tu agente", "hint": "Su agente atiende esto solo en su proxima corrida, hasta donde le permita cada conversacion. Marque solo para adelantarlo o para que no lo toque.", "refreshTitle": "Releer lo guardado",
               "kindDirecto": "directo", "kindMencion": "mencion", "kindRespuesta": "respuesta",
               "actTriage": "triage", "actIssue": "tarjeta abierta", "actDraft": "borrador",
               "actSent": "enviado", "actSkipped": "saltado", "actDenied": "denegado",
               "actClosed": "cierre avisado", "actFailed": "fallo", "actAlert": "aviso",
               "errNoId": "sin id de mensaje", "errRead": "no pude leer",
-              "errSave": "no pude guardar"},
-        en: {"title": "WhatsApp", "pending": "Waiting on you", "recent": "Latest actions", "loading": "Loading…", "nothingYet": "Nothing yet.", "nothingPending": "Nothing pending in the conversations you allowed.", "nothingAuthorized1": "You have 1 conversation set up and it is off.", "nothingAuthorized": "You have {n} conversations set up and all of them are off.", "nothingMapped": "No conversation is authorized yet.", "runNever": "Your agent has not checked yet.", "runNow": "Checking now…", "runCut": "The run started and never came back", "runFailed": "Last run failed", "runChecked1": "Checked 1 conversation", "runChecked": "Checked {n} conversations", "runNone": "nothing pending", "runWaiting1": "1 waiting", "runWaiting": "{n} waiting", "noData": "no data — run <code>wa-scope sync</code>", "running": "running", "image": "image", "mediaImage": "image", "mediaVideo": "video", "mediaPtt": "voice note", "mediaAudio": "audio", "mediaDocument": "document", "mediaOther": "attachment", "take": "Take", "ignore": "Ignore", "taken": "your agent takes it", "hint": "Mark what is actually support. Your agent handles it on its next run, as far as that conversation allows; ignored items never come back.", "refreshTitle": "Re-read what is stored",
+              "errSave": "no pude guardar", "lineaConectada": "Linea conectada", "lineaConectando": "Conectando la linea\u2026", "lineaSinVincular": "Falta escanear el codigo QR en Ajustes", "lineaCaida": "La linea esta caida", "cobertura": "El agente actua sobre {n} de {total} conversaciones", "coberturaSinTotal": "El agente actua sobre {n} conversaciones"},
+        en: {"title": "WhatsApp", "pending": "Waiting on you", "recent": "Latest actions", "loading": "Loading…", "nothingYet": "Nothing yet.", "nothingPending": "Nothing pending in the conversations you allowed.", "nothingAuthorized1": "You have 1 conversation set up and it is off.", "nothingAuthorized": "You have {n} conversations set up and all of them are off.", "nothingMapped": "No conversation is authorized yet.", "runNever": "Your agent has not checked yet.", "runNow": "Checking now…", "runCut": "The run started and never came back", "runFailed": "Last run failed", "runChecked1": "Checked 1 conversation", "runChecked": "Checked {n} conversations", "runNone": "nothing pending", "runWaiting1": "1 waiting", "runWaiting": "{n} waiting", "noData": "no data — run <code>wa-scope sync</code>", "running": "running", "image": "image", "mediaImage": "image", "mediaVideo": "video", "mediaPtt": "voice note", "mediaAudio": "audio", "mediaDocument": "document", "mediaOther": "attachment", "take": "Take", "ignore": "Ignore", "taken": "your agent takes it", "hint": "Your agent handles this on its own on its next run, as far as each conversation allows. Mark only to move it up or to keep it away.", "refreshTitle": "Re-read what is stored",
               "kindDirecto": "direct", "kindMencion": "mention", "kindRespuesta": "reply",
               "actTriage": "triage", "actIssue": "card opened", "actDraft": "draft",
               "actSent": "sent", "actSkipped": "skipped", "actDenied": "denied",
               "actClosed": "closing announced", "actFailed": "failed", "actAlert": "alert",
               "errNoId": "no message id", "errRead": "could not read",
-              "errSave": "could not save"},
-        pt: {"title": "WhatsApp", "pending": "Aguardando voce", "recent": "Ultimas acoes", "loading": "Carregando…", "nothingYet": "Nada ainda.", "nothingPending": "Nada pendente nas conversas que voce autorizou.", "nothingAuthorized1": "Voce tem 1 conversa configurada e ela esta em off.", "nothingAuthorized": "Voce tem {n} conversas configuradas e todas em off.", "nothingMapped": "Nenhuma conversa autorizada ainda.", "runNever": "Seu agente ainda nao revisou.", "runNow": "Revisando agora…", "runCut": "A revisao comecou e nao voltou", "runFailed": "A ultima revisao falhou", "runChecked1": "Revisou 1 conversa", "runChecked": "Revisou {n} conversas", "runNone": "nada pendente", "runWaiting1": "1 aguardando", "runWaiting": "{n} aguardando", "noData": "sem dados — rode <code>wa-scope sync</code>", "running": "rodando", "image": "imagem", "mediaImage": "imagem", "mediaVideo": "video", "mediaPtt": "nota de voz", "mediaAudio": "audio", "mediaDocument": "documento", "mediaOther": "anexo", "take": "Assumir", "ignore": "Ignorar", "taken": "seu agente assume", "hint": "Marque o que e suporte de verdade. Seu agente cuida disso na proxima rodada, ate onde a conversa permitir; o ignorado nao volta.", "refreshTitle": "Reler o que esta salvo",
+              "errSave": "could not save", "lineaConectada": "Line connected", "lineaConectando": "Connecting the line\u2026", "lineaSinVincular": "The QR code still has to be scanned in Settings", "lineaCaida": "The line is down", "cobertura": "Your agent acts on {n} of {total} conversations", "coberturaSinTotal": "Your agent acts on {n} conversations"},
+        pt: {"title": "WhatsApp", "pending": "Aguardando voce", "recent": "Ultimas acoes", "loading": "Carregando…", "nothingYet": "Nada ainda.", "nothingPending": "Nada pendente nas conversas que voce autorizou.", "nothingAuthorized1": "Voce tem 1 conversa configurada e ela esta em off.", "nothingAuthorized": "Voce tem {n} conversas configuradas e todas em off.", "nothingMapped": "Nenhuma conversa autorizada ainda.", "runNever": "Seu agente ainda nao revisou.", "runNow": "Revisando agora…", "runCut": "A revisao comecou e nao voltou", "runFailed": "A ultima revisao falhou", "runChecked1": "Revisou 1 conversa", "runChecked": "Revisou {n} conversas", "runNone": "nada pendente", "runWaiting1": "1 aguardando", "runWaiting": "{n} aguardando", "noData": "sem dados — rode <code>wa-scope sync</code>", "running": "rodando", "image": "imagem", "mediaImage": "imagem", "mediaVideo": "video", "mediaPtt": "nota de voz", "mediaAudio": "audio", "mediaDocument": "documento", "mediaOther": "anexo", "take": "Assumir", "ignore": "Ignorar", "taken": "seu agente assume", "hint": "Seu agente cuida disso sozinho na proxima rodada, ate onde cada conversa permitir. Marque apenas para adiantar ou para que nao toque.", "refreshTitle": "Reler o que esta salvo",
               "kindDirecto": "direto", "kindMencion": "mencao", "kindRespuesta": "resposta",
               "actTriage": "triagem", "actIssue": "cartao aberto", "actDraft": "rascunho",
               "actSent": "enviado", "actSkipped": "pulado", "actDenied": "negado",
               "actClosed": "fecho avisado", "actFailed": "falhou", "actAlert": "alerta",
               "errNoId": "sem id da mensagem", "errRead": "nao consegui ler",
-              "errSave": "nao consegui salvar"}
+              "errSave": "nao consegui salvar", "lineaConectada": "Linha conectada", "lineaConectando": "Conectando a linha\u2026", "lineaSinVincular": "Falta escanear o codigo QR em Ajustes", "lineaCaida": "A linha esta fora do ar", "cobertura": "Seu agente atua em {n} de {total} conversas", "coberturaSinTotal": "Seu agente atua em {n} conversas"}
       }
       var LANG = (function () {
         var tag = String(navigator.language || 'en').toLowerCase()
@@ -278,7 +285,20 @@
 
       // Los textos con {n} se arman aca y no concatenando: en portugues y en ingles el
       // numero no cae en el mismo lugar de la frase.
-      function fmt(key, n) { return t(key).replace('{n}', String(n)) }
+      // Acepta un numero suelto -el caso de siempre- o un objeto con varios huecos.
+      // Un texto con dos cifras ("1 de 298") no se puede armar con un solo {n}.
+      function fmt(key, n) {
+        var texto = t(key)
+        if (n !== null && typeof n === 'object') {
+          for (var k in n) {
+            if (Object.prototype.hasOwnProperty.call(n, k)) {
+              texto = texto.split('{' + k + '}').join(String(n[k]))
+            }
+          }
+          return texto
+        }
+        return texto.replace('{n}', String(n))
+      }
 
       /** Que decir con la lista vacia. Tres finales distintos y hasta hoy uno solo:
        *  no hay nada pendiente, todo quedo en `off` — que es configuracion y no
@@ -378,6 +398,50 @@
           (viejo(when) ? '<span class="vieja">' + esc(when) + '</span>' : esc(when))
       }
 
+      /** Si la linea esta viva, y cual. "No hay nada pendiente" y "no estoy conectado"
+       *  se leian exactamente igual: una lista vacia. Son lo contrario, y cual de las
+       *  dos es decide si el dueno tiene que hacer algo o no.
+       *
+       *  El numero va porque el dueno puede tener mas de una linea y porque, tras
+       *  escanear un QR, saber CUAL quedo vinculada es la unica forma de notar que se
+       *  escaneo con el telefono equivocado. */
+      function renderLinea (sc) {
+        var nodo = el('linea')
+        if (!sc || typeof sc !== 'object') { nodo.textContent = ''; return }
+        var clase = 'meta nota'
+        var texto
+        if (sc.connection === 'open') {
+          texto = t('lineaConectada')
+          var yo = sc.me || null
+          if (yo) texto += ' · ' + esc(yo)
+        } else if (sc.exited || sc.motivo === 'sesion-cerrada') {
+          texto = t('lineaCaida')
+          clase += ' stale'
+        } else if (sc.qr) {
+          texto = t('lineaSinVincular')
+          clase += ' vieja'
+        } else {
+          texto = t('lineaConectando')
+          clase += ' vieja'
+        }
+        nodo.textContent = texto
+        nodo.className = clase
+      }
+
+      /** Sobre cuanto puede actuar el agente. Un "revise 1 conversacion" sin decir de
+       *  cuantas no informa nada: 1 de 1 es cobertura completa y 1 de 298 es un agente
+       *  que casi no ve. Es el mismo numero y significan lo contrario. */
+      function renderCobertura (a, chats) {
+        var nodo = el('cobertura')
+        var total = Array.isArray(chats) ? chats.length : null
+        var vivas = a && a.authorized != null ? a.authorized : null
+        if (vivas == null) { nodo.textContent = ''; return }
+        nodo.className = 'meta nota' + (vivas === 0 ? ' vieja' : '')
+        nodo.textContent = total == null
+          ? fmt('coberturaSinTotal', vivas)
+          : fmt('cobertura', { n: vivas, total: total })
+      }
+
       /** La linea honesta, arriba de la lista. Cinco finales y ninguno se parece a
        *  otro: reviso y no habia nada, reviso y hay tanto, nunca reviso, arranco y no
        *  volvio, o fallo por algo. Sin ella los cinco eran una lista vacia, y el dueno
@@ -386,7 +450,7 @@
        *  Sin color propio: la allowlist del host no trae ni exito ni advertencia. El
        *  peso lo dan las dos clases que ya existen — `vieja` para lo que pide atencion
        *  y `stale` (--destructive) para lo que si es un fallo. */
-      function renderRun(activity) {
+      function renderRun(activity, pendientesAhora) {
         var nodo = el('runline')
         var r = activity && activity.run
         var clase = 'meta nota run'
@@ -414,7 +478,14 @@
           clase += ' stale'
         } else {
           var n = r.looked == null ? 0 : r.looked
-          var p = r.pending == null ? 0 : r.pending
+          // El pendiente de AHORA, no el que dejo anotado la corrida. Se contradecian
+          // en pantalla: la cabecera decia "nada pendiente" con dos mensajes listados
+          // justo debajo, porque `r.pending` es de la ultima corrida y la lista se
+          // pinta con `activity.pending`, que se actualiza en cada sync. Un panel que
+          // se contradice consigo mismo no se cree ni cuando acierta.
+          var p = pendientesAhora == null
+            ? (r.pending == null ? 0 : r.pending)
+            : pendientesAhora
           texto = (n === 1 ? t('runChecked1') : fmt('runChecked', n)) + ' · ' +
             (p === 0 ? t('runNone')
               : p === 1 ? t('runWaiting1') : fmt('runWaiting', p)) +
@@ -457,19 +528,25 @@
       function reload() {
         return Promise.all([
           call('storage.get', { key: 'activity' }),
-          call('storage.get', { key: 'decisions' })
+          call('storage.get', { key: 'decisions' }),
+          call('storage.get', { key: 'sidecar' }),
+          call('storage.get', { key: 'chats' })
         ]).then(function (results) {
           var a = stored(results[0]) || {}
           var decided = stored(results[1]) || {}
+          var vivos = (a.pending || []).filter(function (m) {
+            var d = decided[m.stanzaId]
+            return !d || d.decision !== 'ignore'
+          })
           renderSynced(a)
-          renderRun(a)
+          renderLinea(stored(results[2]))
+          renderCobertura(a, stored(results[3]))
+          renderRun(a, vivos.length)
           // Lo marcado se ve al instante, sin esperar al proximo `wa-scope sync`.
-          renderPending((a.pending || [])
-            .map(function (m) {
-              var d = decided[m.stanzaId]
-              return d ? Object.assign({}, m, { decision: d.decision }) : m
-            })
-            .filter(function (m) { return m.decision !== 'ignore' }), a)
+          renderPending(vivos.map(function (m) {
+            var d = decided[m.stanzaId]
+            return d ? Object.assign({}, m, { decision: d.decision }) : m
+          }), a)
           renderRecent(a.recent)
         })
       }

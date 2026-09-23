@@ -374,6 +374,13 @@ async function iniciar () {
     // con `menciona_me = 0` porque en ese momento nadie sabia que ese numero era el
     // suyo. Sin la reparacion esos mensajes no salen en la bandeja NUNCA, y son justo
     // los primeros que llegan tras vincular la linea.
+    // El numero como lo reconoce una persona: `573008236130:7@s.whatsapp.net` no le
+    // dice nada a nadie. Se corta el sufijo de dispositivo y el servidor.
+    const numeroVisible = (pn) => {
+      const usuario = String(pn || '').split('@')[0].split(':')[0]
+      return /^\d{6,}$/.test(usuario) ? `+${usuario}` : null
+    }
+
     let identidadUlt = null
     const refrescarIdentidad = () => {
       const yo = identidadDeSesion(sock.authState?.creds, sock.user)
@@ -383,10 +390,14 @@ async function iniciar () {
       identidadUlt = huella
       identidades = identidadesPropias(yo.lid, yo.pn)
       almacen.registrarLinea({ cuenta, lid: yo.lid, pn: yo.pn, nombre: yo.nombre })
-      if (yo.lid && !teniaLid) {
-        const reparados = almacen.repararMenciones({ cuenta, lid: yo.lid })
-        if (reparados) emitir({ type: 'identidad', reparados, ts: Date.now() })
-      }
+      // Quien quedo vinculado viaja al panel. Sin esto, tras escanear un QR no hay
+      // forma de notar que se escaneo con el telefono equivocado: el panel dice
+      // "conectado" y no con cual. Va el numero visible y NADA mas — ni el LID, que no
+      // le dice nada a nadie, ni claves.
+      const reparados = yo.lid && !teniaLid
+        ? almacen.repararMenciones({ cuenta, lid: yo.lid })
+        : 0
+      emitir({ type: 'identidad', me: numeroVisible(yo.pn), reparados, ts: Date.now() })
     }
 
     // `useMultiFileAuthState` escribe las claves en archivos: `saveCreds` los
