@@ -19,7 +19,7 @@ import { isAbsolute } from 'node:path'
 import { abrirAlmacen, rutaAlmacen, rutaMedia } from './almacen.js'
 import { crearAlcance } from './alcance.js'
 import { atenderSalida, ENVIO_LATIDO_MS } from './envio.js'
-import { INGESTA, ingerirActualizacion, ingerirMensaje } from './ingesta.js'
+import { INGESTA, ingerirActualizacion, ingerirChats, ingerirMensaje } from './ingesta.js'
 import { identidadesPropias } from './mensajes.js'
 
 // El auth state es una credencial viva (docs/ENCARGO...§11-F1): en un equipo
@@ -109,6 +109,43 @@ export function mensajeQr (qr, rotacion, ts = Date.now(), ttlMs = QR_VIGENCIA_MS
  *  vez para que las dos puntas -sidecar y panel- decidan igual. */
 export function qrVencido (ts, ahoraMs = Date.now(), vigenciaMs = QR_VIGENCIA_MS) {
   return ahoraMs - ts > vigenciaMs
+}
+
+// Las opciones con que se abre el socket. Vive aparte y es PURA para poder probarse
+// sin resolver Baileys ni abrir nada: las dos banderas de abajo deciden si la lista de
+// conversaciones llega o no, y eso no se puede verificar mirando el codigo.
+//
+// `shouldSyncHistoryMessage` es la que arregla el defecto medido en la cuenta viva:
+// 296 grupos en el almacen y CERO uno a uno. La lista inicial de conversaciones NO
+// viene por `chats.upsert` -eso es una conversacion NUEVA- sino por
+// `messaging-history.set`, y Baileys 6.7.24 solo emite ese evento cuando esta funcion
+// contesta que si (lib/Socket/chats.js:778-780 -> lib/Utils/process-message.js:150,168).
+// Sin ponerla, `makeWASocket` la deriva de `syncFullHistory`
+// (lib/Socket/index.js:11-12): con `false`, el socket ni siquiera espera la
+// notificacion (chats.js:869-877) y el evento no se emite NUNCA. Poner el escuchador
+// sin esto no arregla nada — se ve exactamente igual que un telefono que no mando la
+// lista.
+//
+// Y `syncFullHistory` se queda en `false`, que es OTRA cosa: viaja como
+// `requireFullSync` dentro del nodo de registro que Baileys manda al vincular
+// (`generateRegistrationNode`) y le pide al telefono que vuelque el archivo entero.
+// El intercambio es real: mas historia es un primer arranque mas lento y muchisimo mas texto ajeno cruzando el proceso, y
+// §11-F2 dice que "un almacen sin tope y sin caducidad es un archivo de conversaciones
+// ajenas que nadie borra". Con `false` el telefono manda igual su lote reciente —que
+// es de donde sale la lista— y no se pide el archivo. Los mensajes que vengan en ese
+// lote no se miran: el escuchador de abajo solo lee `chats`.
+export function opcionesDeSocket ({ version, auth, browser }) {
+  return {
+    version,
+    auth,
+    browser,
+    printQRInTerminal: false,
+    // Explicito: de el sale el `ttlMs` que viaja con cada QR y con el que el panel
+    // decide si lo pinta. Dejarlo implicito ata la UI a un valor de fabricante.
+    qrTimeout: QR_VIGENCIA_MS,
+    syncFullHistory: false,
+    shouldSyncHistoryMessage: () => true
+  }
 }
 
 // ── Protocolo por stdout ─────────────────────────────────────────────────────────
@@ -215,6 +252,10 @@ async function iniciar () {
   const nombresDeChat = new Map()
   const conteos = { llegaron: 0, guardados: 0, sinAutorizar: 0, actualizados: 0 }
   let ultimoAlmacenMs = 0
+  // Cuantas conversaciones dejo la sincronizacion inicial, acumuladas: el telefono
+  // manda su lista en VARIOS lotes, no en uno.
+  let historialChats = 0
+  let historialDicho = false
 
   // Un fallo de ingesta rara vez es de UN mensaje: el disco lleno, la base ilegible o
   // un permiso perdido fallan para todos. Sin tope, un error por mensaje es la misma
@@ -233,7 +274,8 @@ async function iniciar () {
     const ahora = Date.now()
     if (!tocaEmitirAlmacen(ultimoAlmacenMs, ahora, forzar)) return
     ultimoAlmacenMs = ahora
-    emitirAlmacen({ ...conteos, autorizadas: alcance.autorizadas(), ...extra })
+    emitirAlmacen({ ...conteos, autorizadas: alcance.autorizadas(),
+      chatsHistorial: historialChats, ...extra })
   }
 
   // La subida de esquema se dice EN CUANTO ocurre, sin esperar al latido de 30 s y sin
@@ -276,16 +318,9 @@ async function iniciar () {
   let conectado = false
 
   function conectar () {
-    const sock = makeWASocket({
-      version,
-      auth: state,
-      browser: Browsers.appropriate('Chrome'),
-      printQRInTerminal: false,
-      // Explicito: de el sale el `ttlMs` que viaja con cada QR y con el que el panel
-      // decide si lo pinta. Dejarlo implicito ata la UI a un valor de fabricante.
-      qrTimeout: QR_VIGENCIA_MS,
-      syncFullHistory: false
-    })
+    const sock = makeWASocket(opcionesDeSocket({
+      version, auth: state, browser: Browsers.appropriate('Chrome')
+    }))
     socket = sock
     conectado = false
 
@@ -317,11 +352,11 @@ async function iniciar () {
         // primera persona que escribio en ella.
         sock.groupFetchAllParticipating()
           .then((grupos) => {
-            for (const [jid, meta] of Object.entries(grupos || {})) {
-              if (meta?.subject) nombresDeChat.set(jid, meta.subject)
-              almacen.anotarChat({ cuenta, chatJid: jid, nombre: meta?.subject || '',
-                esGrupo: 1 })
-            }
+            // Por el mismo camino que todo lo demas: `groupFetchAllParticipating`
+            // devuelve un mapa jid -> metadata, asi que se le pone el `id` adentro y ya
+            // es la misma forma que leen los otros tres eventos.
+            anotarChats(Object.entries(grupos || {})
+              .map(([jid, meta]) => ({ ...meta, id: jid })))
             almacen.registrarLinea({ cuenta, grupos: Object.keys(grupos || {}).length })
           })
           .catch((error) => emitirError('grupos-sin-leer', error?.message || error))
@@ -395,28 +430,58 @@ async function iniciar () {
     // Las conversaciones que existen, con su nombre y sus no leidos. Es CONTABILIDAD:
     // sin esto, una conversacion en la que todavia nadie escribio no se puede ni
     // ofrecer para autorizarla, y la lista del panel nace vacia (§11-F3).
+    //
+    // La normalizacion entera -que nombre usar, como sacar un `Long`, que jid NO es una
+    // conversacion- vive en `filaDeChat` y no aca: los tres eventos de abajo traen la
+    // misma cosa en tres formas distintas, y tres copias de la regla son tres reglas
+    // que se desincronizan. Lo que estaba escrito aca leia solo `chat.name` y solo
+    // `typeof === 'number'`, que es exactamente lo que un uno a uno del historial NO
+    // trae.
     const anotarChats = (chats) => {
-      for (const chat of chats || []) {
-        if (!chat?.id) continue
-        if (chat.name) nombresDeChat.set(chat.id, chat.name)
-        try {
-          almacen.anotarChat({
-            cuenta,
-            chatJid: chat.id,
-            nombre: chat.name || nombresDeChat.get(chat.id) || '',
-            esGrupo: String(chat.id).endsWith('@g.us') ? 1 : 0,
-            unread: typeof chat.unreadCount === 'number' ? chat.unreadCount : null,
-            ts: typeof chat.conversationTimestamp === 'number'
-              ? chat.conversationTimestamp
-              : null
-          })
-        } catch (error) {
-          avisarFallo('chat-sin-anotar', error)
-        }
+      try {
+        return ingerirChats({
+          almacen,
+          cuenta,
+          chats,
+          nombreDeChat: (jid) => nombresDeChat.get(jid) || null,
+          recordarNombre: (jid, nombre) => nombresDeChat.set(jid, nombre)
+        })
+      } catch (error) {
+        avisarFallo('chat-sin-anotar', error)
+        return { anotados: 0, omitidos: 0 }
       }
     }
     sock.ev.on('chats.upsert', anotarChats)
     sock.ev.on('chats.update', anotarChats)
+
+    // La lista INICIAL de conversaciones. Es el unico evento que la trae: `chats.upsert`
+    // avisa de una conversacion NUEVA y `groupFetchAllParticipating` devuelve grupos por
+    // definicion, asi que sin esto un uno a uno solo aparece si alguien escribe mientras
+    // el plugin corre — medido en la cuenta del dueno: 296 grupos y CERO directos, y un
+    // directo que no esta en la lista no se puede autorizar.
+    //
+    // Del lote se leen `chats` y NADA MAS. Trae tambien `messages` y `contacts`, y no se
+    // miran a proposito: listar una conversacion no puede guardar una palabra de nadie.
+    // El unico camino que escribe un cuerpo sigue siendo `ingerirMensaje`, que le
+    // pregunta al alcance antes (§5).
+    sock.ev.on('messaging-history.set', ({ chats, isLatest }) => {
+      const { anotados } = anotarChats(chats)
+      historialChats += anotados
+      // El PRIMER lote se fuerza y los demas no. Forzarlo una vez es lo que distingue
+      // "el telefono no mando la lista" de "la mando y el almacen la rechazo" — las dos
+      // se ven igual, y ese silencio es el que costo este arreglo —, y llega justo
+      // cuando el freno de 30 s esta recien puesto por la avalancha de
+      // `messages.upsert` de la sincronizacion.
+      //
+      // Pero solo una vez: el telefono manda su lista en VARIOS lotes, y un `store`
+      // por lote es un `storage.set` del worker por lote. Orca mata al worker a los 64
+      // eventos sin confirmar en vuelo, y ese mecanismo YA se llevo puesto a este
+      // worker una vez por lo hablador que es Baileys. El resto de los lotes suma al
+      // conteo y sale con el latido normal.
+      reportarAlmacen({ chatsHistorial: historialChats,
+        historialCompleto: isLatest === true }, !historialDicho)
+      historialDicho = true
+    })
     sock.ev.on('groups.update', (grupos) => {
       for (const g of grupos || []) {
         if (g?.id && g?.subject) nombresDeChat.set(g.id, g.subject)

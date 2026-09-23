@@ -50,6 +50,21 @@ const SIDECAR_KEY = 'sidecar'
 // vivir dentro del pedido, porque el pedido se borra al atenderlo.
 const SIDECAR_REQUEST_KEY = 'sidecarRequest'
 const SIDECAR_RESULT_KEY = 'sidecarResult'
+// La MISMA via, para lo que el panel pide sobre el alcance. Dos claves propias y no las
+// del sidecar: son dos vidas distintas -una sesion de WhatsApp y una autorizacion- y
+// meterlas en la misma clave haria que el veredicto de una pisara el de la otra, que es
+// justo lo que el `requestId` existe para evitar.
+//
+// Existe porque el panel NO puede borrar una autorizacion el solo. El registro vive en
+// dos lados -`scope.db` del CLI y el `storage.json` del plugin- y los CLIs leen la
+// MEZCLA (`merged_scope`, bin/wa-scope:622-653). Con la mezcla, agregar y editar desde
+// el panel funcionan porque lo del panel MANDA sobre lo del CLI; borrar no, porque
+// quitar la fila del panel solo descubre la del CLI que sigue abajo. Medido en la
+// maquina del dueno: el panel decia "✓ quitada" y la conversacion volvia a aparecer,
+// autorizada. Solo `wa-scope rm` borra en los dos (bin/wa-scope:858-865), y solo el
+// worker puede ejecutarlo.
+const SCOPE_REQUEST_KEY = 'scopeRequest'
+const SCOPE_RESULT_KEY = 'scopeResult'
 const MODES = ['off', 'observar', 'borrador', 'responder']
 
 /** El nombre del agente lo define quien usa el plugin. No viene con uno puesto.
@@ -419,6 +434,21 @@ const SIDECAR_VEREDICTO = Object.freeze({
   ACCION_DESCONOCIDA: 'accion-desconocida'
 })
 
+/** Lo que el panel puede pedirle al worker sobre el alcance, y como se contesta. Mismos
+ *  codigos estables que el resto del contrato: el panel los traduce por codigo y nunca
+ *  por el texto (§11-E1). */
+const SCOPE_ACCION = Object.freeze({ QUITAR: 'quitar' })
+
+const SCOPE_VEREDICTO = Object.freeze({
+  QUITADO: 'quitado',
+  VENCIDO: 'vencido',
+  ACCION_DESCONOCIDA: 'accion-desconocida',
+  // `wa-scope rm` acepta tambien un trozo de NOMBRE y ahi resuelve por parecido. El
+  // nombre visible no es identidad -cambia y se repite (§11-A1)-, asi que lo que no sea
+  // un jid se rechaza en vez de adivinar cual conversacion se queria quitar.
+  JID_INVALIDO: 'jid-invalido'
+})
+
 /** Del motivo que devolvio el resolvedor al codigo estable que lee el panel.
  *
  *  Los tres eran uno solo -SIN_AUTHDIR- y el panel le decia a todo el mundo que en
@@ -602,8 +632,8 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
           ...(mensaje.state === 'open' ? { qr: null } : {})
         })
       } else if (mensaje?.type === 'store') {
-        // Solo numeros. El protocolo del almacen no trae texto de nadie, y esto
-        // termina en `storage`, que lee el panel.
+        // Solo numeros y banderas, nunca una cadena. El protocolo del almacen no trae
+        // texto de nadie, y esto termina en `storage`, que lee el panel.
         escribir({ store: {
           at: mensaje.at ?? null,
           llegaron: Number(mensaje.llegaron) || 0,
@@ -618,7 +648,14 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
           // quien mire el storage o el log el dia que pregunte adonde fueron a parar
           // los mensajes de la via vieja. Son numeros, como todo lo de aca.
           migradoCuerpos: Number(mensaje.migradoCuerpos) || 0,
-          migradoLineas: Number(mensaje.migradoLineas) || 0
+          migradoLineas: Number(mensaje.migradoLineas) || 0,
+          // Cuantas conversaciones dejo la sincronizacion inicial, y si el telefono ya
+          // mando todo lo que tenia. Es la UNICA manera de distinguir "el telefono no
+          // mando la lista" de "la mando y no quedo nada": las dos se ven igual — una
+          // lista con solo grupos —, y esa confusion es la que costo este arreglo. Son
+          // numeros, como todo lo de aca.
+          chatsHistorial: Number(mensaje.chatsHistorial) || 0,
+          historialCompleto: mensaje.historialCompleto === true
         } })
       } else if (mensaje?.type === 'error') {
         escribir({ error: { code: mensaje.code ?? null,
@@ -846,16 +883,6 @@ export default function activate(orca) {
     if (!(edad >= 0) || edad > PETICION_TTL_MS) return
     await sincronizar('peticion')
   }
-  /** Como le fue al pedido, en una clave propia que el pedido no pisa. Va emparejado
-   *  al `id` del pedido: sin eso el panel no podria distinguir la respuesta a SU clic
-   *  de la que quedo del clic anterior, y un "listo" viejo se leeria como el de ahora. */
-  function veredictoSidecar (pedido, extra) {
-    return guardar(orca, SIDECAR_RESULT_KEY, {
-      at: new Date().toISOString(), requestId: pedido?.id ?? null,
-      action: pedido?.action ?? null, ...extra
-    })
-  }
-
   /** Desvincular: apagar, borrar la credencial, y recien entonces volver a empezar.
    *
    *  Se relanza en vez de quedarse apagado porque desvincular existe para volver a
@@ -902,66 +929,141 @@ export default function activate(orca) {
       : { ok: false, code: arranque.code, detail: arranque.detail || '' }
   }
 
-  // Lo ultimo que se atendio, para que el mismo pedido no se ejecute dos veces en la
-  // misma sesion del worker. Sola no alcanza: vive en RAM y un worker que se reinicio
-  // la perdio, asi que el veredicto ya escrito manda sobre ella.
-  let ultimoPedidoSidecar = null
-  let atendiendoSidecar = false
+  /** El vigia de un canal panel -> worker, con su disciplina de exactamente una vez.
+   *
+   *  Se escribio UNA vez y la usan los dos canales -la sesion y el alcance- porque las
+   *  dos acciones que viajan por aca son irreversibles desde el panel: desvincular
+   *  borra una credencial viva, y quitar una autorizacion borra una fila que el CLI no
+   *  puede reponer. Una segunda copia de esta disciplina es una segunda copia que se
+   *  desincroniza, y el sintoma seria un borrado de mas.
+   *
+   *  `nombre` solo va al log del plugin. `acciones` es {accion -> funcion}; lo que no
+   *  este ahi se contesta con `accion-desconocida`, nunca se calla: callarlo deja al
+   *  panel esperando una respuesta que no va a llegar. */
+  function crearVigia ({ nombre, requestKey, resultKey, vencido, desconocida, acciones }) {
+    // Lo ultimo que se atendio, para que el mismo pedido no se ejecute dos veces en la
+    // misma sesion del worker. Sola no alcanza: vive en RAM y un worker que se reinicio
+    // la perdio, asi que el veredicto ya escrito manda sobre ella.
+    let ultimoPedido = null
+    let atendiendo = false
+
+    /** Como le fue al pedido, en una clave propia que el pedido no pisa. Va emparejado
+     *  al `id` del pedido: sin eso el panel no podria distinguir la respuesta a SU clic
+     *  de la que quedo del clic anterior, y un "listo" viejo se leeria como el de ahora. */
+    const veredicto = (pedido, extra) => guardar(orca, resultKey, {
+      at: new Date().toISOString(), requestId: pedido?.id ?? null,
+      action: pedido?.action ?? null, ...extra
+    })
+
+    return async function atender () {
+      if (atendiendo) return
+      const pedido = await leer(orca, requestKey)
+      if (!pedido || typeof pedido !== 'object') return
+      if (typeof pedido.id !== 'string' || typeof pedido.at !== 'string') return
+      if (pedido.id === ultimoPedido) return
+      // La memoria de verdad es el veredicto, no la variable: un worker que se reinicio
+      // con el pedido todavia escrito lo volveria a ejecutar, y eso es exactamente el
+      // borrado de mas que no se puede permitir.
+      const previo = await leer(orca, resultKey)
+      if (previo && typeof previo === 'object' && previo.requestId === pedido.id) {
+        ultimoPedido = pedido.id
+        await guardar(orca, requestKey, null)
+        return
+      }
+      ultimoPedido = pedido.id
+      // Se borra ANTES de actuar, igual que el pedido de sync: la accion tarda un viaje
+      // a un subproceso, y en ese rato el vigia vuelve a mirar.
+      await guardar(orca, requestKey, null)
+
+      const edad = Date.now() - Date.parse(pedido.at)
+      if (!(edad >= 0) || edad > PETICION_TTL_MS) {
+        await veredicto(pedido, { ok: false, code: vencido, detail: '' })
+        return
+      }
+
+      atendiendo = true
+      try {
+        const accion = acciones[pedido.action]
+        const r = accion
+          ? await accion(pedido)
+          : { ok: false, code: desconocida, detail: String(pedido.action ?? '').slice(0, 60) }
+        await veredicto(pedido, r)
+      } catch (error) {
+        // Lo que reviente aca tiene que llegar al panel. Sin esto una excepcion a mitad
+        // de la accion se la come el catch del setInterval, y el clic no deja rastro:
+        // el usuario queda mirando un boton que ya volvio de "…" sin decir nada.
+        orca.log(`${nombre} request ${pedido.action} failed: ${error.message}`)
+        await veredicto(pedido, { ok: false, code: motivoDe(error),
+          detail: String(error?.message ?? error).slice(0, 300) })
+      } finally {
+        atendiendo = false
+      }
+    }
+  }
 
   /** Lo que el panel pidio sobre la sesion. Desvincular DOS veces no es desvincular:
    *  la segunda se lleva puesta la sesion nueva que el usuario acaba de escanear, asi
    *  que "una sola vez" es una condicion de correccion y no una optimizacion. */
-  async function atenderPedidoSidecar () {
-    if (atendiendoSidecar) return
-    const pedido = await leer(orca, SIDECAR_REQUEST_KEY)
-    if (!pedido || typeof pedido !== 'object') return
-    if (typeof pedido.id !== 'string' || typeof pedido.at !== 'string') return
-    if (pedido.id === ultimoPedidoSidecar) return
-    // La memoria de verdad es el veredicto, no la variable: un worker que se reinicio
-    // con el pedido todavia escrito lo volveria a ejecutar, y eso es exactamente el
-    // borrado de mas que no se puede permitir.
-    const previo = await leer(orca, SIDECAR_RESULT_KEY)
-    if (previo && typeof previo === 'object' && previo.requestId === pedido.id) {
-      ultimoPedidoSidecar = pedido.id
-      await guardar(orca, SIDECAR_REQUEST_KEY, null)
-      return
+  const atenderPedidoSidecar = crearVigia({
+    nombre: 'sidecar',
+    requestKey: SIDECAR_REQUEST_KEY,
+    resultKey: SIDECAR_RESULT_KEY,
+    vencido: SIDECAR_VEREDICTO.VENCIDO,
+    desconocida: SIDECAR_VEREDICTO.ACCION_DESCONOCIDA,
+    acciones: {
+      [SIDECAR_ACCION.DESVINCULAR]: () => desvincularSidecar(),
+      [SIDECAR_ACCION.REINTENTAR]: () => reintentarSidecar()
     }
-    ultimoPedidoSidecar = pedido.id
-    // Se borra ANTES de actuar, igual que el pedido de sync: desvincular tarda un viaje
-    // a un subproceso, y en ese rato el vigia vuelve a mirar.
-    await guardar(orca, SIDECAR_REQUEST_KEY, null)
+  })
 
-    const edad = Date.now() - Date.parse(pedido.at)
-    if (!(edad >= 0) || edad > PETICION_TTL_MS) {
-      await veredictoSidecar(pedido, { ok: false, code: SIDECAR_VEREDICTO.VENCIDO,
-        detail: '' })
-      return
+  /** Quitar una autorizacion, de verdad y en los dos registros.
+   *
+   *  El panel no puede: solo ve su `storage.json`, y borrar ahi descubre la fila de
+   *  `scope.db` que sigue abajo — la conversacion reaparece autorizada mientras el panel
+   *  dice que la quito. `wa-scope rm` borra en los dos (bin/wa-scope:858-865).
+   *
+   *  El CLI corre PRIMERO y el storage se reconcilia despues: al reves, un CLI que falla
+   *  dejaria el panel sin la fila y el alcance con ella, que es la misma mentira con
+   *  otra cara. */
+  async function quitarAlcance (pedido) {
+    const jid = pedido?.jid
+    // El nombre visible no es identidad: cambia y se repite (§11-A1), y `wa-scope rm`
+    // resuelve un nombre por parecido. Adivinar aca seria quitarle el permiso a la
+    // conversacion equivocada sin decirlo.
+    if (typeof jid !== 'string' || !jid.includes('@') || jid.length > 160) {
+      return { ok: false, code: SCOPE_VEREDICTO.JID_INVALIDO,
+        detail: String(jid ?? '').slice(0, 60) }
     }
-
-    atendiendoSidecar = true
-    try {
-      let r
-      if (pedido.action === SIDECAR_ACCION.DESVINCULAR) r = await desvincularSidecar()
-      else if (pedido.action === SIDECAR_ACCION.REINTENTAR) r = await reintentarSidecar()
-      else r = { ok: false, code: SIDECAR_VEREDICTO.ACCION_DESCONOCIDA,
-        detail: String(pedido.action ?? '').slice(0, 60) }
-      await veredictoSidecar(pedido, r)
-    } catch (error) {
-      // Lo que reviente aca tiene que llegar al panel. Sin esto una excepcion a mitad
-      // del desvinculado se la come el catch del setInterval, y el clic no deja rastro:
-      // el usuario queda mirando un boton que ya volvio de "…" sin decir nada.
-      orca.log(`sidecar request ${pedido.action} failed: ${error.message}`)
-      await veredictoSidecar(pedido, { ok: false, code: motivoDe(error),
-        detail: String(error?.message ?? error).slice(0, 300) })
-    } finally {
-      atendiendoSidecar = false
+    const s = await settings()
+    // Quitar lo que ya no esta no es un error: `wa-scope rm` con un jid que no esta en
+    // el registro borra cero filas y sale con 0. El usuario pidio que no estuviera.
+    await run(join(s.toolsDir || TOOLS, 'wa-scope'), ['rm', jid])
+    const actual = await scope()
+    // SOLO si la llave esta. Una lectura que el host rechazo devuelve `{}`, y guardar
+    // eso borraria TODAS las autorizaciones por culpa de una lectura fallida.
+    if (jid in actual) {
+      delete actual[jid]
+      await saveScope(actual)
     }
+    orca.log(`scope removed for one chat (${Object.keys(actual).length} left)`)
+    return { ok: true, code: SCOPE_VEREDICTO.QUITADO }
   }
+
+  const atenderPedidoScope = crearVigia({
+    nombre: 'scope',
+    requestKey: SCOPE_REQUEST_KEY,
+    resultKey: SCOPE_RESULT_KEY,
+    vencido: SCOPE_VEREDICTO.VENCIDO,
+    desconocida: SCOPE_VEREDICTO.ACCION_DESCONOCIDA,
+    acciones: { [SCOPE_ACCION.QUITAR]: (pedido) => quitarAlcance(pedido) }
+  })
 
   const pedidoTimer = setInterval(() => {
     atenderPedido().catch((error) => orca.log(`sync request failed: ${error.message}`))
     atenderPedidoSidecar()
       .catch((error) => orca.log(`sidecar request failed: ${error.message}`))
+    atenderPedidoScope()
+      .catch((error) => orca.log(`scope request failed: ${error.message}`))
   }, PETICION_MS)
   if (typeof pedidoTimer.unref === 'function') pedidoTimer.unref()
 

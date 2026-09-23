@@ -455,9 +455,18 @@ console.log('\nconfig.html')
   doc.querySelector('[data-rrm]').click()
   await espera()
   ok('Quitar borra la regla', (storage.routes || []).length === 0)
+  // Quitar una conversacion ya NO lo hace el panel: el registro vive tambien en
+  // `scope.db` y borrar solo del storage descubre la fila del CLI que sigue abajo — la
+  // autorizacion seguia en pie mientras el panel decia que la habia quitado. Lo que se
+  // comprueba aca es que el clic salga por el canal del worker; el resto —el veredicto
+  // que confirma y el que falla— tiene su propia rebanada mas abajo.
   doc.querySelector('[data-rm]').click()
   await espera()
-  ok('Quitar borra la conversacion', Object.keys(storage.scope || {}).length === 0)
+  ok('Quitar manda el pedido al worker en vez de borrar de su propio storage',
+    !!storage.scopeRequest && storage.scopeRequest.action === 'quitar' &&
+    storage.scopeRequest.jid === '1@g.us', JSON.stringify(storage.scopeRequest))
+  ok('y no toca el alcance por su cuenta: eso lo hace `wa-scope rm`, en los dos lados',
+    !!(storage.scope || {})['1@g.us'], JSON.stringify(storage.scope))
 
   // Validaciones
   doc.getElementById('save-scope').click()
@@ -1692,13 +1701,200 @@ console.log('\nconfig.html — la palabra "sidecar" no se le muestra a nadie')
     JSON.stringify(sucias))
 }
 
+// ───────── el buscador de conversaciones, con los nombres que existen de verdad ─────
+// Los tres nombres de abajo estan copiados del almacen de la cuenta viva. Con 296
+// conversaciones, encontrar una es LA interaccion diaria del panel, y lo que habia
+// comparaba `indexOf` sobre el texto crudo: entre "Lab" y "#2" hay un emoji, y
+// "PMO - Ab2Web -  NetSat" trae dos espacios seguidos. Nadie escribe eso.
+const CHATS_REALES = [
+  { jid: '120363000000000001@g.us', name: 'Lista de espera | IA Builder Lab \u{1F680} #2', kind: 'grupo' },
+  { jid: '120363000000000002@g.us', name: 'PMO - Ab2Web -  NetSat', kind: 'grupo' },
+  { jid: '120363000000000003@g.us', name: 'Operaciones internas', kind: 'grupo' },
+  { jid: '573000000001@s.whatsapp.net', name: 'Laura Méndez', kind: 'directo' },
+  { jid: '573000000002@s.whatsapp.net', name: 'Camila Restrepo', kind: 'directo' }
+]
+
+console.log('\nconfig.html — buscar una conversacion como la gente la escribe de verdad')
+{
+  const { doc } = await montar('config.html', {
+    chats: CHATS_REALES,
+    scope: {
+      '120363000000000002@g.us': { chatName: 'PMO - Ab2Web -  NetSat', provider: 'plane',
+        target: 'PMO', mode: 'responder' }
+    }
+  }, 'es-419')
+  await espera()
+  const buscar = (texto) => {
+    doc.getElementById('chat-search').value = texto
+    doc.getElementById('chat-search').dispatchEvent(new doc.defaultView.Event('input'))
+    return [...doc.getElementById('chat-pick').options].map((o) => o.textContent)
+  }
+
+  // Tildes: el dueno escribe "mendez" sin tilde y el grupo se llama "Méndez".
+  ok('sin tilde encuentra lo que si la tiene',
+    buscar('mendez').some((t) => t.includes('Méndez')), JSON.stringify(buscar('mendez')))
+  // Emoji y puntuacion en el medio: "ia builder lab 2" tiene que llegar a
+  // "IA Builder Lab 🚀 #2".
+  ok('el emoji y la almohadilla no cortan la busqueda',
+    buscar('ia builder lab 2').some((t) => t.includes('Builder')),
+    JSON.stringify(buscar('ia builder lab 2')))
+  // Doble espacio y guiones: nadie los reproduce al escribir.
+  ok('los guiones y el espacio de mas no hacen falta',
+    buscar('pmo ab2web netsat').some((t) => t.includes('Ab2Web')),
+    JSON.stringify(buscar('pmo ab2web netsat')))
+  // Y sin recordar el orden, que es como se busca un grupo del que uno recuerda dos
+  // palabras sueltas.
+  ok('las palabras sueltas valen en cualquier orden',
+    buscar('netsat pmo').some((t) => t.includes('Ab2Web')),
+    JSON.stringify(buscar('netsat pmo')))
+  // Lo que NO puede pasar: traer lo que nadie escribio. El fallo caro con 296 filas no
+  // es no encontrar la conversacion, es autorizar la equivocada.
+  const sueltas = buscar('ia builder lab 2')
+  ok('y no arrastra las que no tienen nada que ver',
+    !sueltas.some((t) => t.includes('Operaciones')), JSON.stringify(sueltas))
+  ok('sigue diciendo cuantas quedaron',
+    /\d+\s+de\s+\d+/.test(doc.getElementById('chat-count').textContent),
+    doc.getElementById('chat-count').textContent)
+}
+
+console.log('\nconfig.html — las tres que importan no se pierden entre las 296')
+{
+  const { doc } = await montar('config.html', {
+    chats: CHATS_REALES,
+    scope: {
+      '120363000000000002@g.us': { chatName: 'PMO - Ab2Web -  NetSat', provider: 'plane',
+        target: 'PMO', mode: 'responder' },
+      '573000000001@s.whatsapp.net': { chatName: 'Laura Méndez', provider: 'ninguno',
+        target: null, mode: 'observar' }
+    }
+  }, 'es-419')
+  await espera()
+  const sel = doc.getElementById('chat-pick')
+  const grupos = [...sel.querySelectorAll('optgroup')]
+  ok('la lista separa lo autorizado de lo que no', grupos.length === 2,
+    JSON.stringify(grupos.map((g) => g.label)))
+  ok('y lo autorizado va primero: son las que el dueno vuelve a tocar',
+    grupos.length === 2 && grupos[0].children.length === 2 &&
+    [...grupos[0].children].every((o) => /Ab2Web|Méndez/.test(o.textContent)),
+    JSON.stringify(grupos.map((g) => [...g.children].map((o) => o.textContent))))
+  ok('cada una dice con que permiso quedo, no solo que esta autorizada',
+    grupos.length === 2 &&
+    [...grupos[0].children].some((o) => /responder/i.test(o.textContent)) &&
+    [...grupos[0].children].some((o) => /observ/i.test(o.textContent)),
+    JSON.stringify(grupos.length ? [...grupos[0].children].map((o) => o.textContent) : []))
+  ok('las etiquetas de los dos grupos estan en espanol, no en ingles',
+    grupos.length === 2 && !/authori/i.test(grupos.map((g) => g.label).join(' ')),
+    JSON.stringify(grupos.map((g) => g.label)))
+
+  // §11-A1: el nombre visible NO es identidad. Antes de autorizar hay que poder ver
+  // cual conversacion es, y la unica respuesta es la llave.
+  sel.value = '573000000001@s.whatsapp.net'
+  sel.dispatchEvent(new doc.defaultView.Event('change'))
+  await espera()
+  const identidad = doc.getElementById('chat-id')
+  ok('al elegir una, el panel muestra su identificador y no solo el nombre',
+    identidad && identidad.textContent.includes('573000000001@s.whatsapp.net'),
+    identidad ? identidad.textContent : 'no existe #chat-id')
+  ok('y avisa que esa ya estaba autorizada, antes de volver a guardarla',
+    identidad && /observ/i.test(identidad.textContent),
+    identidad ? identidad.textContent : '')
+}
+
+console.log('\nconfig.html — quitar una autorizacion pasa por el worker y no miente')
+{
+  // El defecto medido: el panel borraba de SU storage, decia "✓ quitada", y la fila
+  // seguia en `scope.db`. Los CLIs leen la mezcla de los dos, asi que la conversacion
+  // seguia autorizada. Una autorizacion que el dueno cree revocada y sigue en pie le da
+  // permiso a un agente para actuar en la conversacion de un cliente.
+  const storage = {
+    chats: CHATS_REALES,
+    scope: {
+      '120363000000000002@g.us': { chatName: 'PMO - Ab2Web -  NetSat', provider: 'plane',
+        target: 'PMO', mode: 'responder' }
+    }
+  }
+  let pedido = null
+  const { doc } = await montar('config.html', storage, 'es-419', (d, st) => {
+    if (d.action === 'storage.set' && d.params.key === 'scopeRequest' && d.params.value) {
+      pedido = d.params.value
+      st.scopeRequest = d.params.value
+      // El worker de verdad corre `wa-scope rm`, que borra en los DOS registros, y
+      // recien despues deja el veredicto.
+      st.scope = {}
+      st.scopeResult = { at: new Date().toISOString(), requestId: d.params.value.id,
+        action: d.params.value.action, ok: true, code: 'quitado' }
+      return { ok: true }
+    }
+    return undefined
+  })
+  await espera()
+  const quitar = doc.getElementById('scope-wrap').querySelector('[data-rm]')
+  ok('la tabla ofrece quitar la conversacion', !!quitar,
+    doc.getElementById('scope-wrap').textContent)
+  quitar.click()
+  await espera()
+  ok('el clic manda el pedido a la clave que mira el worker, no borra por su cuenta',
+    !!pedido && pedido.action === 'quitar' &&
+    pedido.jid === '120363000000000002@g.us', JSON.stringify(pedido))
+  ok('con su identificador y su marca de tiempo, como el resto del canal',
+    !!pedido && typeof pedido.id === 'string' && pedido.id.length > 0 &&
+    !isNaN(Date.parse(pedido.at)), JSON.stringify(pedido))
+  // El veredicto se sondea cada 2 s.
+  await new Promise((r) => setTimeout(r, 3000))
+  ok('cuando el worker confirma, el panel lo dice',
+    /✓/.test(doc.getElementById('said-scope').textContent),
+    doc.getElementById('said-scope').textContent)
+  ok('y la fila desaparece de la tabla',
+    !doc.getElementById('scope-wrap').querySelector('[data-rm]'),
+    doc.getElementById('scope-wrap').textContent)
+}
+
+console.log('\nconfig.html — un quitado que el worker NO pudo hacer no se anuncia como hecho')
+{
+  const storage = {
+    chats: CHATS_REALES,
+    scope: {
+      '120363000000000002@g.us': { chatName: 'PMO - Ab2Web -  NetSat', provider: 'plane',
+        target: 'PMO', mode: 'responder' }
+    }
+  }
+  const { doc } = await montar('config.html', storage, 'es-419', (d, st) => {
+    if (d.action === 'storage.set' && d.params.key === 'scopeRequest' && d.params.value) {
+      st.scopeRequest = d.params.value
+      // El CLI no estaba. La autorizacion sigue EN PIE, y eso es lo que hay que decir.
+      st.scopeResult = { at: new Date().toISOString(), requestId: d.params.value.id,
+        action: d.params.value.action, ok: false, code: 'sin-herramientas',
+        detail: 'spawn wa-scope ENOENT' }
+      return { ok: true }
+    }
+    return undefined
+  })
+  await espera()
+  doc.getElementById('scope-wrap').querySelector('[data-rm]').click()
+  await new Promise((r) => setTimeout(r, 3000))
+  const dicho = doc.getElementById('said-scope')
+  ok('no dice que la quito', !/✓/.test(dicho.textContent), dicho.textContent)
+  ok('lo dice como un fallo', /bad/.test(dicho.className), dicho.className)
+  ok('y en espanol, no con el texto crudo del CLI',
+    !/spawn|ENOENT/.test(dicho.textContent) && dicho.textContent.length > 0,
+    dicho.textContent)
+  ok('la fila sigue en la tabla: la autorizacion sigue en pie',
+    !!doc.getElementById('scope-wrap').querySelector('[data-rm]'),
+    doc.getElementById('scope-wrap').textContent)
+  ok('y el alcance no se toco', !!storage.scope['120363000000000002@g.us'],
+    JSON.stringify(storage.scope))
+}
+
 console.log('\nconfig.html — las traducciones de desvincular estan en los tres idiomas')
 {
   const { window } = await montar('config.html')
   const S = window.STRINGS
   const nuevas = ['pairingUnlink', 'pairingUnlinkConfirm', 'pairingUnlinkCancel',
     'pairingUnlinkWarn', 'pairingUnlinked', 'pairingRetry', 'pairingRetried',
-    'pairingNoAnswer', 'pairingHowUnlinkFailed']
+    'pairingNoAnswer', 'pairingHowUnlinkFailed',
+    // Lo nuevo de esta vuelta: los dos grupos del selector, el aviso de "ya estaba
+    // autorizada" y el fallo de quitar.
+    'chatGroupOn', 'chatGroupOff', 'chatAlready', 'scopeRmFail']
   const faltan = nuevas.filter((k) => !S.es[k] || !S.en[k])
   ok('cada texto nuevo existe en espanol y en ingles', faltan.length === 0,
     `faltan = ${JSON.stringify(faltan)}`)

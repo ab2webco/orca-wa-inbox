@@ -235,6 +235,117 @@ console.log('\nworker: el boton del panel')
     orca.store.syncRequest !== null, JSON.stringify(orca.store.syncRequest))
 }
 
+// ───────── quitar una autorizacion: el panel pide, el worker borra en LOS DOS lados ──
+// El defecto que motivo esto, medido en la maquina del dueno: el panel borraba la
+// conversacion de su propio `storage.json` y nada mas. La fila seguia en `scope.db`, y
+// como todos los CLIs leen el alcance MEZCLADO (`merged_scope` en bin/wa-scope:622),
+// la conversacion seguia autorizada y volvia a aparecer. El panel decia "✓ quitada"
+// encima de una autorizacion que seguia en pie: es la misma clase de defecto que una
+// credencial que alguien cree muerta, y esta le da permiso a un agente para actuar en
+// la conversacion de un cliente.
+console.log('\nworker: quitar una conversacion la saca de los DOS registros')
+{
+  // Un `wa-scope` que deja rastro de como lo llamaron: lo que hay que comprobar es que
+  // el worker corra `rm` de verdad, no que el storage quede bonito.
+  const dir = herramientas('rm-bueno', [
+    '#!/bin/sh',
+    'if [ "$1" = "rm" ]; then',
+    '  echo "$@" >> "$0.llamadas"',
+    '  echo \'[{"removed": true}]\'',
+    '  exit 0',
+    'fi',
+    'echo \'[{"synced": true, "destinos": []}]\'',
+    ''
+  ].join('\n'))
+  const orca = hostFalso(dir, {
+    chats: [],
+    scope: {
+      '1@g.us': { chatName: 'Soporte', provider: 'plane', target: 'SOP', mode: 'responder' },
+      '2@g.us': { chatName: 'Ops', provider: 'plane', target: 'OPS', mode: 'observar' }
+    }
+  })
+  const { apagar } = await arranca(orca)
+
+  orca.store.scopeRequest = { id: 'quita-1', action: 'quitar', jid: '1@g.us',
+    at: new Date().toISOString() }
+  const contestado = await hasta(() => orca.store.scopeResult &&
+    orca.store.scopeResult.requestId === 'quita-1', 15000)
+  ok('el worker contesta el pedido de quitar', contestado,
+    JSON.stringify(orca.store.scopeResult))
+  ok('y contesta que si', orca.store.scopeResult && orca.store.scopeResult.ok === true,
+    JSON.stringify(orca.store.scopeResult))
+  // Esto es el arreglo: el CLI es el unico que sabe borrar en sqlite Y en el store del
+  // panel a la vez (bin/wa-scope:858-865). El panel solo, no puede.
+  const llamadas = existsSync(join(dir, 'wa-scope.llamadas'))
+    ? readFileSync(join(dir, 'wa-scope.llamadas'), 'utf8')
+    : ''
+  ok('corrio `wa-scope rm` con el jid, que borra en sqlite y en el store',
+    /^rm 1@g\.us/m.test(llamadas), JSON.stringify(llamadas))
+  ok('y la conversacion ya no esta en el alcance que lee el panel',
+    orca.store.scope && !('1@g.us' in orca.store.scope), JSON.stringify(orca.store.scope))
+  ok('sin llevarse por delante las demas',
+    orca.store.scope && '2@g.us' in orca.store.scope, JSON.stringify(orca.store.scope))
+  ok('borra el pedido: un clic quita una vez',
+    orca.store.scopeRequest === null, JSON.stringify(orca.store.scopeRequest))
+
+  // Quitar lo que ya no esta no es un error: el usuario pidio que no estuviera y no
+  // esta. Un fallo aca mandaria a reintentar algo que ya se hizo.
+  orca.store.scopeRequest = { id: 'quita-2', action: 'quitar', jid: '1@g.us',
+    at: new Date().toISOString() }
+  await hasta(() => orca.store.scopeResult &&
+    orca.store.scopeResult.requestId === 'quita-2', 15000)
+  ok('quitar dos veces no es un error', orca.store.scopeResult &&
+    orca.store.scopeResult.ok === true, JSON.stringify(orca.store.scopeResult))
+  apagar()
+}
+
+{
+  // El CLI que no esta. El worker tiene que DECIRLO: quitar sin poder correr `rm` deja
+  // la autorizacion viva, y callarlo es exactamente el defecto de partida.
+  const orca = hostFalso(herramientas('rm-sin-nada', null), {
+    chats: [], scope: { '1@g.us': { chatName: 'Soporte', mode: 'responder' } }
+  })
+  const { apagar } = await arranca(orca)
+  orca.store.scopeRequest = { id: 'quita-mal', action: 'quitar', jid: '1@g.us',
+    at: new Date().toISOString() }
+  await hasta(() => orca.store.scopeResult &&
+    orca.store.scopeResult.requestId === 'quita-mal', 15000)
+  const v = orca.store.scopeResult
+  ok('si no puede correr el CLI, lo dice', v && v.ok === false, JSON.stringify(v))
+  ok('con el mismo codigo estable que el resto del worker',
+    v && v.code === 'sin-herramientas', JSON.stringify(v))
+  // Y NO la saca del storage: decir que se quito cuando sigue autorizada es la mentira
+  // que esto viene a matar.
+  ok('y la autorizacion sigue donde estaba, sin fingir que se fue',
+    orca.store.scope && '1@g.us' in orca.store.scope, JSON.stringify(orca.store.scope))
+  apagar()
+}
+
+{
+  // Una accion que este worker no conoce, y un jid que no es un jid. `wa-scope rm`
+  // acepta tambien un trozo de NOMBRE y ahi resuelve por parecido: pasarle lo que
+  // venga podria borrar la conversacion equivocada (§11-A1: el nombre no es identidad).
+  const orca = hostFalso(herramientas('rm-raro', BUENO), { chats: [], scope: {} })
+  const { apagar } = await arranca(orca)
+  orca.store.scopeRequest = { id: 'raro-1', action: 'quitar', jid: 'Soporte',
+    at: new Date().toISOString() }
+  await hasta(() => orca.store.scopeResult &&
+    orca.store.scopeResult.requestId === 'raro-1', 15000)
+  ok('un jid que no es un jid se rechaza, no se resuelve por parecido',
+    orca.store.scopeResult && orca.store.scopeResult.ok === false &&
+    orca.store.scopeResult.code === 'jid-invalido',
+    JSON.stringify(orca.store.scopeResult))
+  orca.store.scopeRequest = { id: 'raro-2', action: 'incendiar', jid: '1@g.us',
+    at: new Date().toISOString() }
+  await hasta(() => orca.store.scopeResult &&
+    orca.store.scopeResult.requestId === 'raro-2', 15000)
+  ok('una accion desconocida se contesta, no se calla',
+    orca.store.scopeResult && orca.store.scopeResult.ok === false &&
+    orca.store.scopeResult.code === 'accion-desconocida',
+    JSON.stringify(orca.store.scopeResult))
+  apagar()
+}
+
 // ───────── el arnes de la carpeta del plugin ─────────
 // Es la rama que escribe en disco, y la que no recorre ningun otro chequeo. Un
 // NameError ya se colo una vez por exactamente eso.
@@ -539,7 +650,8 @@ console.log('\nworker: lo que el sidecar guardo y desalojo llega al panel, en nu
     'emit({ type: "connection", state: "open" })\n' +
     'setTimeout(() => emit({ type: "store", at: 1758500000000, llegaron: 40, guardados: 12,\n' +
     '  sinAutorizar: 28, actualizados: 2, autorizadas: 3, desalojados: 7, caducados: 1,\n' +
-    '  migradoCuerpos: 12, migradoLineas: 2 }), 50)\n' +
+    '  migradoCuerpos: 12, migradoLineas: 2, chatsHistorial: 314,\n' +
+    '  historialCompleto: true }), 50)\n' +
     'setInterval(() => {}, 1000)\n',
     { mode: 0o755 })
 
@@ -570,11 +682,21 @@ console.log('\nworker: lo que el sidecar guardo y desalojo llega al panel, en nu
   // desalojo, por el mismo motivo: callarlo es perder el caso sin explicacion.
   ok('y con lo que se llevo la migracion del almacen',
     est && est.migradoCuerpos === 12 && est.migradoLineas === 2, JSON.stringify(est))
+  // Y con cuantas conversaciones dejo la sincronizacion inicial. Es lo unico que
+  // distingue "el telefono no mando la lista" de "la mando y no quedo nada": las dos
+  // se ven igual desde afuera —una lista con solo grupos— y esa confusion es la que
+  // costo el arreglo de los uno a uno.
+  ok('y con cuantas conversaciones trajo la sincronizacion inicial',
+    est && est.chatsHistorial === 314 && est.historialCompleto === true,
+    JSON.stringify(est))
   // Esto es una cuenta real con conversaciones de clientes reales. Lo que llega al
   // storage tiene que ser CONTABILIDAD y nada mas.
   const texto = JSON.stringify(est)
+  // Numeros y banderas, nada mas. Un booleano no puede llevar el texto de nadie; una
+  // CADENA si, y por eso sigue sin haber ni una.
   ok('y NADA de contenido: ni cuerpos, ni telefonos, ni jids de remitente',
-    Object.values(est).every((v) => typeof v === 'number' || v === null) &&
+    Object.values(est).every((v) => typeof v === 'number' || typeof v === 'boolean' ||
+      v === null) &&
     !/@|\+?\d{7,}/.test(texto.replace(/\d{13}/g, '')), texto)
 }
 

@@ -14,7 +14,8 @@ import { chmodSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { asegurarDirectorio } from './almacen.js'
-import { esGrupo, filaDeActualizacion, filaDeMensaje } from './mensajes.js'
+import { aNumero, esConversacion, esGrupo, filaDeActualizacion, filaDeMensaje,
+  jidDe } from './mensajes.js'
 
 /** Lo que se contesta de cada mensaje. Son motivos, no booleanos: el sidecar los cuenta
  *  por separado para poder decir "llegaron 40, se guardaron 12" sin nombrar a nadie. */
@@ -68,6 +69,82 @@ export async function ingerirMensaje ({ almacen, alcance, cuenta, identidades, w
   }
   almacen.guardarMensaje(fila, { mediaPath, ahora })
   return { motivo: INGESTA.GUARDADO, mediaPath }
+}
+
+/** De una conversacion de Baileys a la fila de CONTABILIDAD del almacen, o `null` si
+ *  eso no es una conversacion que nadie pueda autorizar.
+ *
+ *  Acepta las tres formas que llegan por tres eventos distintos y NO son iguales:
+ *   - `messaging-history.set` trae `proto.IConversation`: el nombre de un uno a uno
+ *     vive en `displayName` (la agenda del telefono) y no en `name`, y los enteros de
+ *     64 bits llegan como `Long`, no como number. Leer solo `name` deja al directo
+ *     llamandose como su jid, y meter un `Long` en SQLite lo guarda como texto de
+ *     objeto: la fecha sale en 1970 y el JSON se ve perfecto igual (§11-B5).
+ *   - `chats.upsert` / `chats.update` traen `Chat`, con `name` y `conversationTimestamp`
+ *     ya en number.
+ *
+ *  `esGrupo` decide `is_group` por `@g.us` y NADA MAS (§11-A3: `@s.whatsapp.net` es
+ *  directo, `@g.us` grupo, `@lid`/`@status` otros). Lo que se excluye se excluye con la
+ *  lista CERRADA de `esConversacion` (§11-A2) y nunca con una whitelist de sufijos:
+ *  `@status` y `@lid.status` SON conversaciones reales y una whitelist las esconderia
+ *  sin avisar. */
+export function filaDeChat (chat) {
+  const jid = jidDe(chat?.id)
+  if (!jid || !esConversacion(jid)) return null
+  const nombre = [chat?.name, chat?.displayName, chat?.subject]
+    .find((n) => typeof n === 'string' && n.trim()) || ''
+  const unread = aNumero(chat?.unreadCount)
+  const ts = aNumero(chat?.conversationTimestamp) ??
+    aNumero(chat?.lastMessageRecvTimestamp) ?? aNumero(chat?.lastMsgTimestamp)
+  return {
+    chatJid: jid,
+    nombre: nombre.trim(),
+    esGrupo: esGrupo(jid) ? 1 : 0,
+    // Distinto de 0: `anotarChat` conserva el valor anterior cuando llega `null`, y una
+    // actualizacion que no habla de no leidos no puede ponerlos en cero.
+    unread: typeof unread === 'number' ? unread : null,
+    ts: typeof ts === 'number' && ts > 0 ? ts : null
+  }
+}
+
+/**
+ * Un lote de conversaciones: la lista inicial de `messaging-history.set`, una
+ * conversacion nueva de `chats.upsert`, o un cambio de `chats.update`.
+ *
+ * Esto anota CONTABILIDAD y NUNCA cuerpos. El lote del historial trae tambien los
+ * mensajes recientes de cada conversacion y aca no se miran: listar un uno a uno tiene
+ * que poder hacerse sin guardar una sola palabra de nadie. Guardar un cuerpo sigue
+ * siendo trabajo de `ingerirMensaje`, que pregunta por el alcance antes de escribir
+ * (§5: denegar por defecto es estructural).
+ *
+ * Sin esta contabilidad, una conversacion en la que nadie escribio desde que arranco el
+ * plugin no se puede ni ofrecer para autorizarla, y la lista del panel nace con lo que
+ * haya llegado por casualidad (§11-F3). Medido en la cuenta del dueno: 296 grupos y
+ * CERO directos, porque `groupFetchAllParticipating` devuelve grupos por definicion.
+ */
+export function ingerirChats ({ almacen, cuenta, chats, nombreDeChat = () => null,
+  recordarNombre = () => {}, ahora = Date.now() }) {
+  let anotados = 0
+  let omitidos = 0
+  for (const chat of Array.isArray(chats) ? chats : []) {
+    const fila = filaDeChat(chat)
+    if (!fila) { omitidos += 1; continue }
+    if (fila.nombre) recordarNombre(fila.chatJid, fila.nombre)
+    almacen.anotarChat({
+      cuenta,
+      chatJid: fila.chatJid,
+      // Un nombre vacio no borra el que ya se sabia — eso lo garantiza `anotarChat` —,
+      // pero preguntar por el que este proceso ya vio evita una fila que nace sin
+      // nombre solo porque este evento no lo traia.
+      nombre: fila.nombre || nombreDeChat(fila.chatJid) || '',
+      esGrupo: fila.esGrupo,
+      unread: fila.unread,
+      ts: fila.ts,
+      ahora
+    })
+    anotados += 1
+  }
+  return { anotados, omitidos }
 }
 
 /**

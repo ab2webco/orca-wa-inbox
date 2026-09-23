@@ -139,6 +139,10 @@
       #chat-search { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
       #chat-pick { border-top-left-radius: 0; border-top-right-radius: 0; border-top: 0; }
       #chat-count { margin-top: 4px; }
+      /* Un jid no tiene espacios donde partir, y a 320 px se sale del panel. Se parte
+         donde haga falta: un identificador cortado se sigue leyendo, un panel con
+         scroll horizontal no. */
+      #chat-id { margin-top: 4px; overflow-wrap: anywhere; }
       .row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
       .row2 { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
       .actions { display: flex; align-items: center; gap: 10px; margin-top: 14px;
@@ -402,6 +406,10 @@
         <label for="chat-search" data-t="chatLabel"></label>
         <input id="chat-search" type="search" autocomplete="off" data-t-ph="chatSearchPh" />
         <select id="chat-pick" size="1"></select>
+        <!-- Que conversacion quedo elegida, por su LLAVE. El nombre visible no es
+             identidad: cambia y se repite (§11-A1), y con 296 filas el fallo caro de
+             esta pantalla no es no encontrar una, es autorizar la de al lado. -->
+        <p class="hint" id="chat-id"></p>
         <p class="hint" id="chat-count"></p>
         <!-- Lo que paso de verdad con la busqueda. Antes el unico aviso era la opcion
              "Buscando…" del select, que no caduca nunca: si el sync fallaba, el panel
@@ -559,6 +567,10 @@
           chatHelp: "Se elige de la lista. Hay grupos con el mismo nombre, asi que se guarda por identificador.",
           chatSearchPh: "Escriba para filtrar",
           chatCount: "{n} de {total}", chatNoMatch: "Ninguna coincide con eso",
+          chatGroupOn: "Ya autorizadas", chatGroupOff: "Sin autorizar",
+          chatAlready: "ya autorizada: {m}",
+          scopeRmFail: "No se pudo quitar la autorizacion, asi que sigue en pie. " +
+            "Intente de nuevo.",
           chatToneLabel: "Como escribe aca (opcional)",
           chatTonePh: "vacio = usa el tono global",
           chatInstrLabel: "Que hace aca (opcional)",
@@ -756,6 +768,10 @@
           chatHelp: "Pick from the list. Some groups share a name, so it is stored by identifier.",
           chatSearchPh: "Type to filter",
           chatCount: "{n} of {total}", chatNoMatch: "Nothing matches that",
+          chatGroupOn: "Already authorised", chatGroupOff: "Not authorised",
+          chatAlready: "already authorised: {m}",
+          scopeRmFail: "The authorisation could not be removed, so it is still in " +
+            "force. Try again.",
           chatToneLabel: "How it writes here (optional)",
           chatTonePh: "empty = use the global tone",
           chatInstrLabel: "What it does here (optional)",
@@ -1004,6 +1020,10 @@
         syncStalled: 'Faz um tempo que procuro e nada chegou.',
         chatSearchPh: 'Digite para filtrar',
         chatCount: '{n} de {total}', chatNoMatch: 'Nada corresponde a isso',
+        chatGroupOn: 'Ja autorizadas', chatGroupOff: 'Sem autorizacao',
+        chatAlready: 'ja autorizada: {m}',
+        scopeRmFail: 'Nao foi possivel remover a autorizacao, entao ela continua ' +
+          'valendo. Tente de novo.',
         editName: 'Mudar o nome', mapLegend: 'Conversas', chatLabel: 'Conversa',
         providerLabel: 'Servico de tarefas', permLabel: 'Permissao',
         providerNone: 'nenhum — nao abre cartoes',
@@ -1640,65 +1660,195 @@
           }))
       })
 
+      // Como se busca una conversacion. Con 296 de ellas —lo que hay en la cuenta del
+      // dueno— encontrar una es LA interaccion diaria de esta pantalla.
+      //
+      // Lo que habia comparaba `indexOf` sobre el texto crudo, y eso falla con lo que
+      // la gente escribe de verdad. Dos nombres reales de ese almacen:
+      // `Lista de espera | IA Builder Lab \u{1F680} #2` y `PMO - Ab2Web -  NetSat`, este
+      // ultimo con dos espacios seguidos. Nadie reproduce el emoji, ni la almohadilla,
+      // ni el espacio de mas, ni la tilde de un apellido.
+      //
+      // La regla: se comparan textos APLANADOS —sin tildes, en minusculas y con todo lo
+      // que no sea letra o numero convertido en un solo espacio— y cada palabra de lo
+      // buscado tiene que aparecer en alguna parte. Palabras sueltas, en cualquier
+      // orden, porque de un grupo uno recuerda dos palabras y no el titulo.
+      //
+      // `\p{L}\p{N}` y no `a-z0-9`: un nombre en cirilico o en chino aplanado con la
+      // segunda forma queda VACIO, y una conversacion que no se puede buscar por su
+      // nombre se ve igual que una que no existe.
+      //
+      // Lo que NO se hizo, a proposito: coincidencia aproximada (Levenshtein y
+      // compania). Con 296 filas el fallo caro no es no encontrar la conversacion, es
+      // AUTORIZAR LA EQUIVOCADA, y una busqueda que devuelve lo que el usuario no
+      // escribio empuja exactamente hacia ahi. Tampoco una lista propia con teclado:
+      // cambiaria un control nativo y accesible por codigo, para resolver algo que el
+      // filtro ya resuelve.
+      function aplanar (texto) {
+        return String(texto == null ? '' : texto)
+          .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase()
+          .replace(/[^\p{L}\p{N}]+/gu, ' ')
+          .trim()
+      }
+
+      // El texto sobre el que busca cada conversacion, calculado UNA vez por lista: son
+      // 296 nombres y el filtro corre en cada tecla.
+      var buscaPorJid = {}
+
+      // Lo ultimo que se supo del alcance. Vive aca —y no se vuelve a pedir— porque el
+      // panel YA lee `scope` en cada vuelta completa: marcar lo autorizado en el
+      // selector no cuesta un solo mensaje mas del cupo del host.
+      var alcancePorJid = {}
+
+      /** El permiso vigente de una conversacion, o '' si no tiene ninguno. */
+      function modoDe (jid) {
+        var e = alcancePorJid[jid]
+        var m = e && e.mode
+        return m && m !== 'off' ? m : ''
+      }
+
+      /** El final de la llave, para desempatar dos nombres iguales. No el jid entero:
+       *  eso es un renglon aparte —`#chat-id`— y aca solo hace falta lo que los
+       *  distingue. */
+      function colaDeJid (jid) {
+        var usuario = String(jid || '').split('@')[0]
+        return usuario.length > 5 ? '\u2026' + usuario.slice(-5) : usuario
+      }
+
+      function etiqueta (c, repetido) {
+        var txt = (c.kind === 'grupo' ? '\u25A3  ' : '\u25CB  ') + (c.name || c.jid)
+        var modo = modoDe(c.jid)
+        // El permiso va EN la etiqueta y no solo en la tabla de abajo: quien busca una
+        // conversacion para cambiarla necesita saber como quedo sin cambiar de seccion.
+        if (modo) txt += ' \u00b7 ' + porCodigo(MODE_KEY, modo, modo)
+        // Y el desempate aparece SOLO cuando hay dos que se llaman igual. Ponerlo
+        // siempre ensuciaria 296 renglones para resolver un choque que casi nunca hay.
+        if (repetido) txt += ' \u00b7 ' + colaDeJid(c.jid)
+        return txt
+      }
+
       function renderChats (chats) {
         chatsTodos = Array.isArray(chats) ? chats : []
         chatsPorJid = {}
-        chatsTodos.forEach(function (c) { chatsPorJid[c.jid] = c })
+        buscaPorJid = {}
+        chatsTodos.forEach(function (c) {
+          chatsPorJid[c.jid] = c
+          // El jid entra al indice: hay grupos que comparten nombre y la llave es lo
+          // unico que los distingue.
+          buscaPorJid[c.jid] = aplanar(c.name) + ' ' + aplanar(c.jid)
+        })
         pintarChats()
       }
 
-      function etiqueta (c) {
-        return (c.kind === 'grupo' ? '\u25A3  ' : '\u25CB  ') + (c.name || c.jid)
+      /** Mete un lote de conversaciones en el select, bajo su titulo. */
+      function agregarGrupo (sel, lista, titulo, repetidos) {
+        if (!lista.length) return
+        var destino = sel
+        if (titulo) {
+          destino = document.createElement('optgroup')
+          destino.label = titulo
+          sel.appendChild(destino)
+        }
+        lista.forEach(function (c) {
+          var o = document.createElement('option')
+          o.value = c.jid
+          o.textContent = etiqueta(c, repetidos[aplanar(c.name || c.jid)] > 1)
+          destino.appendChild(o)
+        })
       }
 
       function pintarChats () {
         var sel = el('chat-pick')
         var elegido = sel.value
-        var termino = el('chat-search').value.trim().toLowerCase()
+        var terminos = aplanar(el('chat-search').value).split(' ').filter(Boolean)
         sel.innerHTML = ''
         if (!chatsTodos.length) {
           var o = document.createElement('option')
           o.value = ''; o.textContent = estadoVacio(estadoSync).corto
           sel.appendChild(o)
           el('chat-count').textContent = ''
+          el('chat-id').textContent = ''
           pintarEstadoSync()
           return
         }
         pintarEstadoSync()
-        // Se busca en el nombre y en el identificador: hay grupos que comparten
-        // nombre y el jid es lo unico que los distingue.
-        var visibles = termino
+        var visibles = terminos.length
           ? chatsTodos.filter(function (c) {
-              return String(c.name || '').toLowerCase().indexOf(termino) !== -1 ||
-                String(c.jid || '').toLowerCase().indexOf(termino) !== -1
+              var texto = buscaPorJid[c.jid] || ''
+              return terminos.every(function (t) { return texto.indexOf(t) !== -1 })
             })
           : chatsTodos
         var vacio = document.createElement('option')
         vacio.value = ''
         vacio.textContent = visibles.length ? t('pickOne') : t('chatNoMatch')
         sel.appendChild(vacio)
+
+        // Nombres repetidos ENTRE LAS QUE SE VEN: dos homonimos que el filtro no puso
+        // juntos no se confunden con nada.
+        var repetidos = {}
         visibles.forEach(function (c) {
-          var o = document.createElement('option')
-          o.value = c.jid
-          o.textContent = etiqueta(c)
-          sel.appendChild(o)
+          var k = aplanar(c.name || c.jid)
+          repetidos[k] = (repetidos[k] || 0) + 1
         })
+
+        // Lo autorizado, arriba y aparte. Con 296 filas las tres que importan son
+        // invisibles, y son justo las que el dueno vuelve a abrir: para cambiarles el
+        // permiso, el destino o las instrucciones.
+        var conPermiso = visibles.filter(function (c) { return !!modoDe(c.jid) })
+        if (conPermiso.length) {
+          var sinPermiso = visibles.filter(function (c) { return !modoDe(c.jid) })
+          agregarGrupo(sel, conPermiso, t('chatGroupOn'), repetidos)
+          agregarGrupo(sel, sinPermiso, t('chatGroupOff'), repetidos)
+        } else {
+          // Sin ninguna autorizada, un unico titulo "Sin autorizar" encima de la lista
+          // entera no dice nada: es ruido sobre el caso del primer dia.
+          agregarGrupo(sel, visibles, '', repetidos)
+        }
+
         // Contar solo cuando se esta filtrando: "214 de 214" no le dice nada a nadie.
-        el('chat-count').textContent = termino
+        el('chat-count').textContent = terminos.length
           ? t('chatCount').replace('{n}', visibles.length).replace('{total}', chatsTodos.length)
           : ''
         if (editandoJid) pickChat(editandoJid, (chatsPorJid[editandoJid] || {}).name)
         else if (elegido) sel.value = elegido
+        pintarIdentidad()
+      }
+
+      /** La identidad de lo que quedo elegido, debajo del selector.
+       *
+       *  §11-A1: la llave es `(cuenta, jid)` y el nombre visible NO es identidad —
+       *  cambia y se repite. Antes de darle permiso a un agente sobre la conversacion
+       *  de un cliente, lo que hay que poder mirar es la llave, no la etiqueta. Y si ya
+       *  tenia permiso, tambien: guardar encima de una autorizacion sin saberlo es la
+       *  otra mitad del mismo error. */
+      function pintarIdentidad () {
+        var jid = el('chat-pick').value
+        var n = el('chat-id')
+        if (!jid) { n.textContent = ''; return }
+        var c = chatsPorJid[jid]
+        var partes = [jid]
+        if (c && c.last) partes.push(c.last)
+        var modo = modoDe(jid)
+        if (modo) partes.push(fmt('chatAlready', { m: porCodigo(MODE_KEY, modo, modo) }))
+        n.textContent = partes.join(' \u00b7 ')
       }
 
       el('chat-search').addEventListener('input', pintarChats)
       el('chat-pick').addEventListener('change', function () {
         var c = chatsPorJid[el('chat-pick').value]
         el('chat').value = c ? (c.name || c.jid) : ''
+        pintarIdentidad()
       })
 
       // ---------- conversaciones ----------
       function renderScope(entries) {
+        // El selector marca lo que ya esta autorizado, asi que esto es tambien su
+        // fuente. Se guarda y se repinta aca en vez de pedir `scope` otra vez: el panel
+        // ya lo lee en cada vuelta completa, y una lectura de mas sale del mismo cupo
+        // de 30 mensajes por 10 s que el clic del usuario.
+        alcancePorJid = entries && typeof entries === 'object' ? entries : {}
+        pintarChats()
         var keys = entries ? Object.keys(entries) : []
         if (!keys.length) {
           el('scope-wrap').innerHTML = '<p class="empty">' + t('empty') + '</p>'
@@ -1726,7 +1876,7 @@
         Array.prototype.forEach.call(el('scope-wrap').querySelectorAll('[data-rm]'), function (b) {
           b.addEventListener('click', function () {
             var e = entries[b.dataset.rm]
-            removeScope(b.dataset.rm, (e && e.chatName) || b.dataset.rm)
+            removeScope(b.dataset.rm, (e && e.chatName) || b.dataset.rm, b)
           })
         })
       }
@@ -1757,20 +1907,57 @@
         el('provider').value = 'ninguno'
         syncTargetLabel()
         el('chat-pick').value = ''
+        pintarIdentidad()
         el('save-scope').textContent = t('save')
         el('cancel-edit').hidden = true
       }
       el('cancel-edit').addEventListener('click', function () { resetScopeForm(); said('said-scope', '') })
 
-      function removeScope(key, name) {
-        read('scope').then(function (next) {
-          next = next || {}
-          delete next[key]
-          return write('scope', next).then(function () {
-            renderScope(next)
-            said('said-scope', '✓ ' + t('removedOk') + ': ' + name)
+      // De que se queja el panel cuando el worker no pudo quitar la autorizacion. Mismo
+      // trato que el resto: el veredicto trae CODIGO y la frase la arma el panel, que
+      // es el unico que sabe en que idioma esta el usuario.
+      var SCOPE_HOW_KEY = {
+        'sin-herramientas': 'syncNoTools',
+        'sin-permiso': 'syncNoPerm'
+      }
+
+      /** Quitar una autorizacion. NO la borra el panel: se la pide al worker.
+       *
+       *  El registro vive en DOS lados —`scope.db` del CLI y el `storage.json` del
+       *  plugin— y todo lo que pregunta por el alcance lee la MEZCLA de los dos
+       *  (`merged_scope`, bin/wa-scope:622-653). Con la mezcla, agregar y editar desde
+       *  el panel funcionan porque lo del panel MANDA sobre lo del CLI; quitar no,
+       *  porque sacar la fila del panel solo destapa la del CLI que sigue abajo.
+       *
+       *  Medido en la maquina del dueno: el panel borraba de su storage, decia
+       *  "✓ Quitado", y la conversacion volvia a aparecer autorizada. Una
+       *  autorizacion que alguien cree revocada y sigue en pie es de la misma familia
+       *  que una credencial que alguien cree muerta — y esta le da permiso a un agente
+       *  para actuar en la conversacion de un cliente.
+       *
+       *  Y no se dice nada hasta que el worker contesta. El "✓" inmediato es
+       *  exactamente lo que mantuvo el defecto invisible: un veredicto que llega antes
+       *  que el trabajo no es un veredicto. */
+      function removeScope(key, name, boton) {
+        var pedir = pedirAlWorker('scopeRequest', 'scopeResult',
+          { action: 'quitar', jid: key }).then(function (v) {
+          if (!v) { said('said-scope', t('pairingNoAnswer'), true); return }
+          if (!v.ok) {
+            // El detalle crudo del worker es ingles de un subproceso ('spawn ... ENOENT')
+            // y no se muestra: el codigo manda cuando el panel lo conoce, y si no, la
+            // frase generica, que al menos dice lo que importa — sigue autorizada.
+            said('said-scope', porCodigo(SCOPE_HOW_KEY, v.code, '') || t('scopeRmFail'), true)
+            return
+          }
+          said('said-scope', '✓ ' + t('removedOk') + ': ' + name)
+          // El alcance NO esta entre las claves que el sondeo refresca, asi que se relee
+          // esta sola: repintar con la copia de antes dejaria la fila en pantalla sobre
+          // una autorizacion que ya no existe. Un mensaje, por el carril del usuario.
+          return read('scope', true).then(function (v2) {
+            if (hayRespuesta(v2)) renderScope(v2 || {})
           })
         })
+        return boton ? busy(boton, pedir) : pedir
       }
 
       el('save-scope').addEventListener('click', function (event) {
@@ -2042,17 +2229,20 @@
       var VEREDICTO_ESPERA_MS = 30000
       var VEREDICTO_SONDEO_MS = 2000
 
-      /** Espera el veredicto de ESE pedido, por id. Sin el id, el panel pintaria la
-       *  respuesta que quedo del clic anterior como si fuera la de este.
+      /** Espera el veredicto de ESE pedido, por id y en SU clave. Sin el id, el panel
+       *  pintaria la respuesta que quedo del clic anterior como si fuera la de este; y
+       *  sin la clave, el veredicto de la sesion y el del alcance se pisarian.
        *
        *  Va por `read()`, o sea por el carril del SONDEO: se auto-frena con CUPO igual
        *  que el vigia del QR. Son 1 mensaje cada 2 s mientras dura, ~5 de los 26 que el
-       *  sondeo tiene de presupuesto, y solo mientras hay un pedido en vuelo. */
-      function esperarVeredicto (id) {
+       *  sondeo tiene de presupuesto, y solo mientras hay un pedido en vuelo. Dos
+       *  pedidos a la vez no existen: los dos botones que lo usan quedan en "…" hasta
+       *  que vuelve el suyo. */
+      function esperarVeredicto (clave, id) {
         var fin = Date.now() + VEREDICTO_ESPERA_MS
         return new Promise(function (resolve) {
           ;(function vuelta () {
-            read('sidecarResult').then(function (v) {
+            read(clave).then(function (v) {
               if (hayRespuesta(v) && v && v.requestId === id) { resolve(v); return }
               if (Date.now() > fin) { resolve(null); return }
               setTimeout(vuelta, VEREDICTO_SONDEO_MS)
@@ -2062,18 +2252,26 @@
       }
 
       /** Deja el pedido donde el worker lo mira y espera SU respuesta. El id se arma
-       *  aca porque es el panel el que tiene que poder reconocer la vuelta. */
-      function pedirSidecar (accion) {
-        var pedido = { id: 'wa-' + Date.now().toString(36) + '-' +
-            Math.random().toString(36).slice(2, 8),
-          action: accion, at: new Date().toISOString() }
-        return write('sidecarRequest', pedido).then(function (r) {
+       *  aca porque es el panel el que tiene que poder reconocer la vuelta.
+       *
+       *  Lo usan los dos canales —la sesion de WhatsApp y el alcance— porque las dos
+       *  cosas que viajan por aca las tiene que hacer un subproceso, y el panel no
+       *  ejecuta nada. */
+      function pedirAlWorker (claveP, claveR, pedido) {
+        pedido.id = 'wa-' + Date.now().toString(36) + '-' +
+          Math.random().toString(36).slice(2, 8)
+        pedido.at = new Date().toISOString()
+        return write(claveP, pedido).then(function (r) {
           // El host rechazo la escritura: no hay pedido, asi que no hay nada que
           // esperar. Decirlo es la diferencia entre un boton que fallo y uno que no hace
           // nada.
           if (!(r && r.ok)) return null
-          return esperarVeredicto(pedido.id)
+          return esperarVeredicto(claveR, pedido.id)
         })
+      }
+
+      function pedirSidecar (accion) {
+        return pedirAlWorker('sidecarRequest', 'sidecarResult', { action: accion })
       }
 
       function contarVeredicto (v, accion) {

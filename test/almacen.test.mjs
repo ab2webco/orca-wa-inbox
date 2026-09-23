@@ -36,7 +36,7 @@ import { fileURLToPath } from 'node:url'
 
 import { identidadesPropias } from '../sidecar/src/mensajes.js'
 import { abrirAlmacen, ESQUEMA_VERSION, rutaAlmacen, rutaMedia } from '../sidecar/src/almacen.js'
-import { ingerirActualizacion, ingerirMensaje } from '../sidecar/src/ingesta.js'
+import { ingerirActualizacion, ingerirChats, ingerirMensaje } from '../sidecar/src/ingesta.js'
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..')
 const WA_READ = join(RAIZ, 'bin', 'wa-read')
@@ -738,6 +738,93 @@ console.log('\nMigracion: a medias no queda NUNCA — o migra entera, o no migra
   ok('el arranque siguiente migra igual', alm.migracion?.cuerpos === 4,
     JSON.stringify(alm.migracion))
   alm.cerrar()
+}
+
+// ── F3/A2/A3: la lista de conversaciones que llega con la sincronizacion inicial ────
+// El defecto medido en la cuenta viva: 296 filas en `chat` y NI UNA de
+// `@s.whatsapp.net`. Sin una fila de contabilidad, un uno a uno no se puede ni ofrecer
+// para autorizarlo — el dueno no puede elegir lo que el panel no lista (§11-F3).
+console.log('\nHistorial: la sincronizacion inicial deja las conversaciones, sin un solo cuerpo')
+{
+  const home = nueva()
+  const alm = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  alm.registrarLinea({ cuenta: CUENTA, lid: MI_LID, pn: MI_TEL, nombre: 'Mi Linea' })
+
+  const GRUPO_H = '120363555444333222@g.us'
+  const DIRECTO_H = '573007776655@s.whatsapp.net'
+  const BOLETIN = '120363000000000999@newsletter'
+
+  // El payload de `messaging-history.set` tal como lo arma Baileys 6.7.24
+  // (lib/Utils/history.js:processHistoryMessage): `chats` son `proto.IConversation`, y
+  // sus enteros de 64 bits llegan como Long -{low,high,unsigned}-, NO como number. Esa
+  // es la forma real; un stub con numeros sueltos probaria el stub.
+  const largo = (n) => ({ low: n, high: 0, unsigned: false })
+  const historial = {
+    isLatest: true,
+    syncType: 3,
+    contacts: [],
+    // Mensajes DE VERDAD en el lote: es lo que el telefono manda junto con la lista, y
+    // la prueba entera existe para comprobar que NO tocan el disco.
+    messages: [
+      { key: { remoteJid: DIRECTO_H, fromMe: false, id: 'H1' },
+        messageTimestamp: largo(T0), message: { conversation: 'hola, quedamos asi' } },
+      { key: { remoteJid: GRUPO_H, fromMe: false, id: 'H2', participant: OTRA_PERSONA },
+        messageTimestamp: largo(T0 + 5), message: { conversation: 'listo el envio' } }
+    ],
+    chats: [
+      { id: GRUPO_H, name: 'Proveedores Andes', unreadCount: 2,
+        conversationTimestamp: largo(T0 + 5),
+        messages: [{ message: { key: { id: 'H2' }, message: { conversation: 'listo el envio' } } }] },
+      // El uno a uno: en el historial viene SIN `name` — el nombre visible esta en
+      // `displayName`, que es lo que el telefono guarda de la agenda. Leer solo `name`
+      // deja la fila con el jid por nombre y el buscador del panel sin nada que buscar.
+      { id: DIRECTO_H, displayName: 'Camila Restrepo', unreadCount: 0,
+        conversationTimestamp: largo(T0) },
+      // §11-A2: lista de exclusion CERRADA. Un boletin no es una conversacion que
+      // alguien pueda autorizar, y ofrecerlo es ruido en una lista de 296.
+      { id: BOLETIN, name: 'Noticias', conversationTimestamp: largo(T0) }
+    ]
+  }
+
+  const vistos = new Map()
+  const r = ingerirChats({
+    almacen: alm, cuenta: CUENTA, chats: historial.chats,
+    recordarNombre: (jid, nombre) => vistos.set(jid, nombre)
+  })
+  ok('anota las conversaciones del historial', r.anotados === 2, JSON.stringify(r))
+  ok('y descarta lo que no es una conversacion', r.omitidos === 1, JSON.stringify(r))
+  alm.cerrar()
+
+  const con = abrirLectura(home)
+  const filas = con.prepare('select chat_jid, chat_name, is_group, unread, last_ts from chat order by chat_jid').all()
+  const porJid = Object.fromEntries(filas.map((f) => [f.chat_jid, f]))
+
+  ok('el grupo queda anotado', !!porJid[GRUPO_H], JSON.stringify(filas))
+  // A3: `@g.us` = grupo. Lo demas NO lo es, y `is_group` mal puesto manda al agente a
+  // tratar un uno a uno como un grupo (kind, menciones, §11-A4).
+  ok('el grupo queda marcado como grupo', porJid[GRUPO_H]?.is_group === 1,
+    JSON.stringify(porJid[GRUPO_H]))
+  ok('el uno a uno TAMBIEN queda anotado — que es el defecto que esto arregla',
+    !!porJid[DIRECTO_H], JSON.stringify(filas))
+  ok('y NO queda marcado como grupo', porJid[DIRECTO_H]?.is_group === 0,
+    JSON.stringify(porJid[DIRECTO_H]))
+  ok('el uno a uno se anota con su nombre visible, no con el jid',
+    porJid[DIRECTO_H]?.chat_name === 'Camila Restrepo', JSON.stringify(porJid[DIRECTO_H]))
+  ok('el boletin no entra', !porJid[BOLETIN], JSON.stringify(filas))
+  // El Long se convierte: sin eso `last_ts` queda en null y la lista del panel pierde
+  // el orden por actividad, que es como se encuentra una conversacion.
+  ok('la hora del ultimo mensaje sobrevive al entero de 64 bits',
+    porJid[GRUPO_H]?.last_ts === T0 + 5, JSON.stringify(porJid[GRUPO_H]))
+  ok('los no leidos tambien', porJid[GRUPO_H]?.unread === 2, JSON.stringify(porJid[GRUPO_H]))
+  ok('el nombre queda tambien en la memoria del proceso',
+    vistos.get(DIRECTO_H) === 'Camila Restrepo', JSON.stringify([...vistos]))
+
+  // LO MAS IMPORTANTE: listar no es autorizar. Ninguna de las dos conversaciones esta
+  // en el registro de alcance, asi que el lote trae cuerpos y NO puede quedar ni uno.
+  const cuerpos = con.prepare('select count(*) c from mensaje').get()
+  ok('ni un solo cuerpo guardado: listar una conversacion no la autoriza',
+    cuerpos.c === 0, JSON.stringify(cuerpos))
+  con.close()
 }
 
 almacen.cerrar()

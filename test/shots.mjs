@@ -98,11 +98,29 @@ const DATOS = {
       howCode: 'transcribe-no-engine'
     }]
   },
+  // Con `kind` y `last`, que es lo que publica `wa-read chats`: sin `kind` el selector
+  // pintaba TODAS con el circulo de "directo", y sin `last` el renglon de identidad
+  // sale a medias. Las dos ultimas no estan autorizadas a proposito — sin ninguna sin
+  // permiso, la captura no muestra que la lista se parte en dos.
+  //
+  // Los nombres llevan tilde, emoji, barras y un espacio doble porque asi son los
+  // reales: es lo que el buscador tiene que tolerar, y una captura con nombres limpios
+  // fotografia un caso que no existe. Los de verdad son de clientes y no van aca.
   chats: [
-    { jid: '120363000000000001@g.us', name: 'Soporte — Cliente Norte' },
-    { jid: '120363000000000002@g.us', name: 'Operaciones internas' },
-    { jid: '120363000000000003@g.us', name: 'Proyecto Andes — QA' },
-    { jid: '573000000000@s.whatsapp.net', name: 'Laura Mendez' }
+    { jid: '120363000000000001@g.us', name: 'Soporte — Cliente Norte', kind: 'grupo',
+      last: '2026-09-17 14:02', unread: 3 },
+    { jid: '120363000000000002@g.us', name: 'Operaciones internas', kind: 'grupo',
+      last: '2026-09-17 13:12', unread: 0 },
+    { jid: '120363000000000003@g.us', name: 'Proyecto Andes — QA', kind: 'grupo',
+      last: '2026-09-16 18:20', unread: 1 },
+    { jid: '573000000000@s.whatsapp.net', name: 'Laura M\u00e9ndez', kind: 'directo',
+      last: '2026-09-17 13:30', unread: 0 },
+    { jid: '120363000000000004@g.us', name: 'Lista de espera | IA Builder Lab \u{1F680} #2',
+      kind: 'grupo', last: '2026-09-15 09:04', unread: 12 },
+    { jid: '120363000000000005@g.us', name: 'PMO - Ab2Web -  NetSat', kind: 'grupo',
+      last: '2026-09-14 16:48', unread: 0 },
+    { jid: '573000000001@s.whatsapp.net', name: 'Camila Restrepo', kind: 'directo',
+      last: '2026-09-13 11:22', unread: 2 }
   ],
   // Una de las conversaciones va en "ninguno": es el caso que motivo la opcion — un
   // uno a uno que solo quiere lectura y respuesta, sin tablero.
@@ -120,7 +138,7 @@ const DATOS = {
       target: 'acme/andes', mode: 'observar', updatedAt: '2026-09-16T18:20:00Z'
     },
     '573000000000@s.whatsapp.net': {
-      chatName: 'Laura Mendez', provider: 'ninguno', target: null,
+      chatName: 'Laura M\u00e9ndez', provider: 'ninguno', target: null,
       mode: 'responder', tone: 'Cercano pero de usted. Frases cortas.',
       instructions: 'Lea lo que manda y dejeme un resumen. Si pregunta por algo que ya ' +
         'esta en el board, contestale con el estado. No abras tarjetas aca.',
@@ -497,6 +515,45 @@ const PANELES = [
       error: { code: 'sesion-cerrada',
         detail: 'la sesion se cerro; hace falta escanear un QR nuevo' }
     } })
+  },
+  // El selector de conversaciones, que es la interaccion diaria del panel. Va a los
+  // cuatro anchos y en los dos temas porque de esta seccion solo se ve, con el select
+  // cerrado, lo que la captura tiene que delatar: la etiqueta de lo elegido con su
+  // permiso, el conteo del filtro, y el renglon de identidad —un jid no tiene espacios
+  // donde partir y a 320 px es lo primero que se sale del panel.
+  //
+  // El estado se arma con un guion porque NINGUNA de esas tres cosas existe al cargar:
+  // hay que escribir en el buscador y elegir de la lista, que es exactamente lo que el
+  // dueno hace todos los dias y lo que nadie fotografia.
+  {
+    // Un uno a uno YA autorizado, buscado SIN la tilde que el nombre si tiene: se ve
+    // de una sola vez que la busqueda la tolera, que la etiqueta dice con que permiso
+    // quedo, y que debajo esta la llave. Una lista desplegada no se puede fotografiar
+    // —la pinta el sistema— asi que lo que se mira es lo que si queda en la pagina.
+    nombre: 'config-elegir-autorizada', archivo: 'config.html', anchos: ANCHOS,
+    datos: DATOS,
+    guion: `const b = document.getElementById('chat-search');
+            b.value = 'laura mendez';
+            b.dispatchEvent(new Event('input'));
+            const s = document.getElementById('chat-pick');
+            s.value = '573000000000@s.whatsapp.net';
+            s.dispatchEvent(new Event('change'));`,
+    espera: 400
+  },
+  {
+    // Y el contraste: un uno a uno SIN autorizar. Es el caso que hasta ahora no podia
+    // existir —no habia un solo directo en la lista— y el que el dueno vino a pedir.
+    // Sin permiso no hay insignia ni aviso, y el renglon de identidad es lo unico que
+    // dice cual conversacion es antes de darle permiso a un agente sobre ella.
+    nombre: 'config-elegir-sin-autorizar', archivo: 'config.html', anchos: ANCHOS,
+    datos: DATOS,
+    guion: `const b = document.getElementById('chat-search');
+            b.value = 'ia builder lab 2';
+            b.dispatchEvent(new Event('input'));
+            const s = document.getElementById('chat-pick');
+            s.value = '120363000000000004@g.us';
+            s.dispatchEvent(new Event('change'));`,
+    espera: 400
   },
   {
     nombre: 'config-sidecar-reintentar', archivo: 'config.html', anchos: ANCHOS,

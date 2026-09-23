@@ -13,7 +13,7 @@
  * desincroniza en silencio.
  */
 import { decidirTrasCierre, calcularEsperaMs, mensajeQr, qrVencido, tocaEmitirAlmacen,
-  MOTIVO, QR_VIGENCIA_MS, ALMACEN_LATIDO_MS } from '../sidecar/src/index.js'
+  opcionesDeSocket, MOTIVO, QR_VIGENCIA_MS, ALMACEN_LATIDO_MS } from '../sidecar/src/index.js'
 
 let fallos = 0
 let pruebas = 0
@@ -148,6 +148,32 @@ console.log('\nsidecar: los conteos del almacen salen CON FRENO')
     tocaEmitirAlmacen(100000, 101000, true) === true)
   ok('el freno es de decenas de segundos, no de milisegundos',
     ALMACEN_LATIDO_MS >= 10000, String(ALMACEN_LATIDO_MS))
+}
+
+
+console.log('\nsidecar: la lista de conversaciones tiene que poder LLEGAR')
+{
+  // El defecto medido en la cuenta viva: 296 grupos en el almacen y CERO directos. La
+  // lista inicial de conversaciones no viene por `chats.upsert` -eso es una
+  // conversacion NUEVA- sino por `messaging-history.set`, y Baileys 6.7.24 solo lo
+  // emite cuando `shouldSyncHistoryMessage` contesta que si
+  // (lib/Socket/chats.js:778-780 -> lib/Utils/process-message.js:150,168). Con la
+  // opcion sin poner, `makeWASocket` la deriva de `syncFullHistory`
+  // (lib/Socket/index.js:11-12), que vale false: el evento NUNCA se emite y poner el
+  // escuchador no arregla nada.
+  const o = opcionesDeSocket({ version: [2, 3000, 1], auth: {}, browser: ['Chrome', 'Chrome', ''] })
+  ok('pide procesar el historial que el telefono manda',
+    typeof o.shouldSyncHistoryMessage === 'function' &&
+    o.shouldSyncHistoryMessage({ syncType: 3 }) === true,
+    JSON.stringify(Object.keys(o)))
+  // Y NO pide el archivo completo: `syncFullHistory` es otra cosa — viaja como
+  // `requireFullSync` en el nodo de registro que Baileys manda al vincular
+  // (`generateRegistrationNode`) y le pide al telefono que vuelque todo. Mas historia es un primer arranque mas lento y
+  // mas texto ajeno en disco, que es justo lo que §11-F2 manda no acumular.
+  ok('sin pedir el archivo completo de conversaciones ajenas',
+    o.syncFullHistory === false, JSON.stringify(o.syncFullHistory))
+  ok('el QR sigue viniendo con su vigencia explicita',
+    o.qrTimeout === QR_VIGENCIA_MS, String(o.qrTimeout))
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
