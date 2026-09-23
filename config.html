@@ -429,6 +429,14 @@
              esta pantalla no es no encontrar una, es autorizar la de al lado. -->
         <p class="hint" id="chat-id"></p>
         <p class="hint" id="chat-count"></p>
+        <!-- Traer la libreta a mano. Las personas llegan por `resyncAppState`, que
+             Baileys corre UNA sola vez y solo si la ventana de la sincronizacion
+             inicial se completo; si no, la lista sale con los grupos y ninguna persona,
+             y no hay forma de volver a pedirla. Medido: 296 grupos y cero directos. -->
+        <div class="actions">
+          <button id="chat-fetch" data-t="chatFetch"></button>
+          <span class="said" id="said-chat-fetch"></span>
+        </div>
         <!-- Lo que paso de verdad con la busqueda. Antes el unico aviso era la opcion
              "Buscando…" del select, que no caduca nunca: si el sync fallaba, el panel
              seguia diciendo que buscaba y el usuario no tenia nada que apretar. -->
@@ -609,6 +617,8 @@
           qualitySaved: "Calidad guardada",
           chatHelp: "Se elige de la lista. Hay grupos con el mismo nombre, asi que se guarda por identificador.",
           chatSearchPh: "Escriba para filtrar",
+          chatFetch: "Traer conversaciones",
+          chatFetchDone: "Pidiendo la lista. Puede tardar unos segundos.",
           chatCount: "{n} de {total}", chatNoMatch: "Ninguna coincide con eso",
           chatGroupOn: "Ya autorizadas", chatGroupOff: "Sin autorizar",
           chatAlready: "ya autorizada: {m}",
@@ -827,6 +837,8 @@
           qualitySaved: "Quality saved",
           chatHelp: "Pick from the list. Some groups share a name, so it is stored by identifier.",
           chatSearchPh: "Type to filter",
+          chatFetch: "Fetch conversations",
+          chatFetchDone: "Asking for the list. It can take a few seconds.",
           chatCount: "{n} of {total}", chatNoMatch: "Nothing matches that",
           chatGroupOn: "Already authorised", chatGroupOff: "Not authorised",
           chatAlready: "already authorised: {m}",
@@ -1099,6 +1111,8 @@
           'WhatsApp acima e tente de novo.',
         syncStalled: 'Faz um tempo que procuro e nada chegou.',
         chatSearchPh: 'Digite para filtrar',
+        chatFetch: 'Buscar conversas',
+        chatFetchDone: 'Pedindo a lista. Pode demorar alguns segundos.',
         chatCount: '{n} de {total}', chatNoMatch: 'Nada corresponde a isso',
         chatGroupOn: 'Ja autorizadas', chatGroupOff: 'Sem autorizacao',
         chatAlready: 'ja autorizada: {m}',
@@ -1868,6 +1882,16 @@
         })
       }
 
+      // Cuantas filas muestra el selector cuando hay busqueda. Un `select` con `size`
+      // de 1 se pinta COLAPSADO: el filtro corria bien y el usuario no veia nada,
+      // porque para ver el resultado habia que abrir el desplegable a mano. Escribir y
+      // que no pase nada visible se lee como un buscador roto, y era la queja.
+      //
+      // Con `size` mayor el MISMO control nativo se pinta como lista y los resultados
+      // aparecen tecleando. No se cambia el control por codigo propio —eso costaria la
+      // accesibilidad y el teclado que ya trae— solo se deja de pedirle que se esconda.
+      var FILAS_BUSCANDO = 8
+
       function pintarChats () {
         var sel = el('chat-pick')
         var elegido = sel.value
@@ -1905,6 +1929,14 @@
         // Lo autorizado, arriba y aparte. Con 296 filas las tres que importan son
         // invisibles, y son justo las que el dueno vuelve a abrir: para cambiarles el
         // permiso, el destino o las instrucciones.
+        // Colapsado mientras no se busca —una lista de 296 filas abierta no es una
+        // pantalla, es un muro— y desplegado en cuanto hay terminos, que es cuando hay
+        // algo que mirar. Nunca mas alto que lo que hay: un hueco vacio debajo del
+        // ultimo resultado se ve como que faltan filas por cargar.
+        sel.size = terminos.length
+          ? Math.max(2, Math.min(FILAS_BUSCANDO, visibles.length + 1))
+          : 1
+
         var conPermiso = visibles.filter(function (c) { return !!modoDe(c.jid) })
         if (conPermiso.length) {
           var sinPermiso = visibles.filter(function (c) { return !modoDe(c.jid) })
@@ -2494,6 +2526,21 @@
           return esperarVeredicto(claveR, pedido.id)
         })
       }
+
+      // Traer la libreta: relanza la sesion, que al conectar pide `resyncAppState`.
+      // Va por el canal del worker porque el panel no ejecuta nada, y tarda: el
+      // veredicto se espera igual que el de desvincular.
+      el('chat-fetch').addEventListener('click', function (event) {
+        busy(event.currentTarget, pedirSidecar('libreta').then(function (v) {
+          if (!v) { said('said-chat-fetch', t('pairingNoAnswer'), true); return }
+          if (!v.ok) {
+            said('said-chat-fetch', porCodigo(SIDECAR_HOW_KEY, v.code, v.detail || ''), true)
+            return
+          }
+          said('said-chat-fetch', t('chatFetchDone'))
+          return reload(true)
+        }))
+      })
 
       function pedirSidecar (accion) {
         return pedirAlWorker('sidecarRequest', 'sidecarResult', { action: accion })

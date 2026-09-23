@@ -424,7 +424,14 @@ const SIDECAR_MOTIVO = Object.freeze({
  *  traduce por codigo (§11-E1). */
 const SIDECAR_ACCION = Object.freeze({
   DESVINCULAR: 'desvincular',
-  REINTENTAR: 'reintentar'
+  REINTENTAR: 'reintentar',
+  // Traer la libreta: los contactos y las conversaciones uno a uno. Reusa el
+  // relanzamiento porque el sidecar pide `resyncAppState` al conectar y su stdin esta
+  // cerrado -no hay por donde mandarle una orden a uno ya corriendo-. Es una ACCION
+  // PROPIA y no el mismo `reintentar` porque lo que el usuario pide es distinto y el
+  // panel tiene que poder decirselo con sus palabras: reintentar es para una sesion
+  // caida, esto es para una lista a la que le faltan personas.
+  LIBRETA: 'libreta'
 })
 
 /** Codigos del veredicto que el worker deja para el panel. `vencido` no es un fallo
@@ -562,6 +569,8 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
     motivo: null, statusCode: null, error: null, exited: false,
     // El numero de la linea vinculada, cuando el sidecar lo sabe.
     me: null,
+    // Si la lista de personas -la libreta- llego a sincronizarse.
+    libreta: null,
     // Lo que el sidecar guardo y lo que desalojo, en CONTEOS. Un tope de retencion que
     // muerde en silencio deja mensajes sin cuerpo sin que nadie sepa por que
     // (docs/ENCARGO-TRANSPORTE-UNICO.md §11-F2), y "llegaron 40 y se guardaron 0" es
@@ -656,6 +665,12 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
         // de notar que se escaneo con el telefono equivocado. Solo el numero visible;
         // el sidecar no manda ni el LID ni nada mas.
         escribir({ me: typeof mensaje.me === 'string' ? mensaje.me : null })
+      } else if (mensaje?.type === 'libreta') {
+        // Si la lista de personas llego. Hasta aca, una libreta que nunca se
+        // sincronizo se veia EXACTAMENTE igual que "no tiene conversaciones
+        // directas": 296 grupos y ningun nombre, sin una sola senal de que faltaba
+        // media lista.
+        escribir({ libreta: { ok: mensaje.ok === true, at: new Date().toISOString() } })
       } else if (mensaje?.type === 'store') {
         // Solo numeros y banderas, nunca una cadena. El protocolo del almacen no trae
         // texto de nadie, y esto termina en `storage`, que lee el panel.
@@ -1061,7 +1076,8 @@ export default function activate(orca) {
     desconocida: SIDECAR_VEREDICTO.ACCION_DESCONOCIDA,
     acciones: {
       [SIDECAR_ACCION.DESVINCULAR]: () => desvincularSidecar(),
-      [SIDECAR_ACCION.REINTENTAR]: () => reintentarSidecar()
+      [SIDECAR_ACCION.REINTENTAR]: () => reintentarSidecar(),
+      [SIDECAR_ACCION.LIBRETA]: () => reintentarSidecar()
     }
   })
 

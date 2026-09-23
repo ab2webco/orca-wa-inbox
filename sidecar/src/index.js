@@ -114,6 +114,14 @@ export function decidirTrasCierre (statusCode, intento = 1) {
 // en redibujarlo -eso es cosmetico-, es `qrTimeout`: con el valor de fabrica, 60 s,
 // un panel que los vencia a los 20 mostraba "el codigo vencio" durante 40 de cada 60
 // segundos. Sonaba a fallo y era la regla mal copiada.
+// Las colecciones de app state que traen la LIBRETA: los contactos y la lista de
+// conversaciones uno a uno. Es `ALL_WA_PATCH_NAMES` de Baileys, replicado aca por lo
+// mismo que los `statusCode` de `CIERRE`: para que el modulo se pueda importar por sus
+// funciones puras sin resolver la libreria.
+export const PARCHES_DE_LIBRETA = Object.freeze([
+  'critical_block', 'critical_unblock_low', 'regular_high', 'regular_low', 'regular'
+])
+
 export const QR_ROTACION_MS = 60000
 
 // Cuanto vale un QR para el panel, su `ttlMs`. Tiene que ser MAYOR que
@@ -448,6 +456,32 @@ async function iniciar () {
             almacen.registrarLinea({ cuenta, grupos: Object.keys(grupos || {}).length })
           })
           .catch((error) => emitirError('grupos-sin-leer', error?.message || error))
+
+        // Y LAS PERSONAS, por la misma via explicita que los grupos.
+        //
+        // Sin esto la lista sale con 296 grupos y CERO directos, que es la queja
+        // medida. La causa esta en Baileys y no en el telefono: la libreta y la lista
+        // de uno a uno llegan por `resyncAppState` —las colecciones
+        // `critical_unblock_low` y `regular*`— y eso corre en UN SOLO sitio,
+        // `doAppStateSync`, que se auto-anula si no esta en `SyncState.Syncing`
+        // (lib/Socket/chats.js). A ese estado solo se entra si en la ventana de la
+        // sincronizacion inicial llega un mensaje de historial procesable; si no llega,
+        // pasa a `Online` y la libreta NO se pide nunca mas en esa sesion.
+        //
+        // Medido en la cuenta del dueno: 378 `app-state-sync-key-*` en disco -o sea, el
+        // telefono SI mando las llaves- y CERO `app-state-sync-version-*`, con
+        // `accountSyncCounter` en 0. Las llaves llegaron y el estado no se sincronizo
+        // jamas. Ese es todo el defecto, y explica por que la misma cuenta si muestra
+        // personas en otra maquina: ahi la ventana se completo.
+        //
+        // Pedirlo a mano no necesita desvincular ni volver a escanear. Es exactamente
+        // lo que ya se hace con los grupos, que tampoco se esperan: se piden.
+        sock.resyncAppState(PARCHES_DE_LIBRETA, true)
+          .then(() => emitir({ type: 'libreta', ok: true, ts: Date.now() }))
+          // Que falle no tumba la sesion: los grupos y los mensajes siguen entrando.
+          // Pero se dice, porque una libreta que no llego es una lista sin personas, y
+          // eso hasta hoy se veia igual que "no tienes conversaciones directas".
+          .catch((error) => emitirError('libreta-sin-leer', error?.message || error))
         return
       }
       if (connection === 'connecting') {
