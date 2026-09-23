@@ -28,19 +28,76 @@ export const HARNESS_KEY = 'harnessStatus'
 const MANIFIESTO = '.harness.json'
 const MARCA_HELP = '<!-- HARNESS:HELP -->'
 
-/** Donde Electron guarda el userData. Es la misma tabla que `user_data_roots()` de
- *  bin/wa-scope: dos esquemas distintos serian dos verdades que se desincronizan. */
-function userDataRoots() {
+/** El archivo que Orca deja en SU userData para decir por donde contesta. Aca solo se
+ *  usa como senal de "esta carpeta es un userData de Orca": es el mismo marcador que
+ *  mira `user_data_roots()` de bin/wa_settings.py. */
+const RUNTIME_FILE = 'orca-runtime.json'
+
+/** Nombres con los que Orca ha guardado su userData, del mas probable al menos. NO son
+ *  la regla: son por donde se mira primero. El nombre lo decide como se empaqueto —la
+ *  app publicada de Linux usa `orca-ide`, la de macOS `orca`— y por eso ademas se
+ *  descubre (ver `userDataRoots`).
+ *
+ *  `orca` sigue PRIMERO y eso no es cosmetico: cuando no existe ninguna de estas
+ *  carpetas, `raizDelPlugin` cae en `raices[0]`, que es donde nacerian el arnes y el
+ *  auth state. Mover el primero cambiaria esa carpeta en macOS y en Windows, que hoy
+ *  funcionan. */
+const NOMBRES_USER_DATA = ['orca', 'orca-ide', 'orca-dev', 'zzorcanametest']
+
+/** La carpeta donde Electron pone los userData de esta maquina.
+ *
+ *  `env` y `plataforma` entran por argumento —igual que en `user_data_base()` de
+ *  bin/wa_settings.py— para poder probar las tres formas desde una sola maquina: el
+ *  defecto que esto arregla es de Linux y quien lo escribio no tiene una macOS donde
+ *  correr la prueba contraria. */
+export function userDataBase(env = process.env, plataforma = process.platform) {
   const home = homedir()
-  let base
-  if (process.platform === 'darwin') {
-    base = join(home, 'Library', 'Application Support')
-  } else if (process.platform === 'win32') {
-    base = process.env.APPDATA || join(home, 'AppData', 'Roaming')
-  } else {
-    base = process.env.XDG_CONFIG_HOME || join(home, '.config')
+  if (plataforma === 'darwin') return join(home, 'Library', 'Application Support')
+  if (plataforma === 'win32') return env.APPDATA || join(home, 'AppData', 'Roaming')
+  return env.XDG_CONFIG_HOME || join(home, '.config')
+}
+
+/**
+ * Los userData que esta maquina podria tener, del mas probable al menos. Es la misma
+ * tabla que `user_data_roots()` de bin/wa_settings.py: dos esquemas distintos serian
+ * dos verdades que se desincronizan — y lo estuvieron.
+ *
+ * Tenerlo fijo a una LISTA DE NOMBRES ya habia fallado en Linux, donde la app
+ * publicada guarda en `orca-ide`: en una Fedora recien instalada NINGUNO de los tres
+ * nombres viejos existe, `raizDelPlugin` devuelve null, `dataDir` devuelve null, y
+ * `arrancarSidecar` (main.mjs) corta con SIN_AUTHDIR ANTES de lanzar el sidecar. El
+ * sintoma es que el QR no aparece nunca, sobre una maquina que esta perfecta. Por eso,
+ * ademas de los nombres conocidos, se descubre cualquier carpeta de `base` que tenga
+ * adentro un runtime de Orca o datos de plugins.
+ *
+ * ORCA_USER_DATA_PATH NO entra aca, a proposito y por la misma razon que en el lado
+ * Python (bin/wa_settings.py): apunta al Orca que esta corriendo y la exporta cada
+ * terminal de Orca, asi que meterla en la busqueda haria que una prueba con HOME de
+ * mentira escribiera en la carpeta real del usuario.
+ */
+export function userDataRoots(env = process.env, plataforma = process.platform) {
+  const base = userDataBase(env, plataforma)
+  const salida = NOMBRES_USER_DATA.map((d) => join(base, d))
+  let nombres
+  try {
+    nombres = readdirSync(base).sort()
+  } catch (error) {
+    // Un acceso denegado SUBE, igual que en `esDirectorio`: "no existe" y "no lo puedo
+    // ver" tienen arreglos opuestos, y tratarlos igual es el defecto que esa funcion
+    // documenta. Que la carpeta base no exista si es un no-hay, y ahi quedan los
+    // nombres conocidos como unica respuesta.
+    if (error?.code === 'ERR_ACCESS_DENIED') throw error
+    return salida
   }
-  return ['orca', 'orca-dev', 'zzorcanametest'].map((d) => join(base, d))
+  for (const nombre of nombres) {
+    const ruta = join(base, nombre)
+    if (salida.includes(ruta)) continue
+    if (!esDirectorio(ruta)) continue
+    if (existsSync(join(ruta, RUNTIME_FILE)) || esDirectorio(join(ruta, 'plugins-data'))) {
+      salida.push(ruta)
+    }
+  }
+  return salida
 }
 
 /** El modelo de permisos de Node no contesta `false` a lo que no puede ver: LANZA
@@ -84,6 +141,12 @@ function raizDelPlugin(pluginDir) {
   const { key } = manifiesto(pluginDir)
   const raices = userDataRoots().filter(esDirectorio)
   if (!raices.length) return null
+  // El orden de precedencia NO se toca: ya sembrada, si no con datos, si no la primera
+  // de la lista. Desempatar por fecha de modificacion elegiria mejor cuando hay dos
+  // builds vivos, pero MUEVE la carpeta de una instalacion que hoy funciona -medido: en
+  // un macOS con release y dev, el auth state se va de `orca` a `orca-dev`- y mover un
+  // auth state ya vinculado es pedirle al usuario un QR nuevo sin avisarle. Es un
+  // cambio aparte, con su propia migracion; este arreglo es el nombre que faltaba.
   const yaSembrada = raices.find((r) => esDirectorio(join(r, 'plugin-workspaces', key)))
   const conDatos = raices.find((r) => esDirectorio(join(r, 'plugins-data', key)))
   return { raiz: yaSembrada ?? conDatos ?? raices[0], key }

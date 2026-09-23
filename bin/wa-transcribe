@@ -13,6 +13,14 @@ Engines are tried in order. The first one present wins.
 """
 import argparse, json, os, shlex, shutil, subprocess, sys, tempfile
 
+# La tabla de userData y el nombre del binario de Orca viven en UN solo lugar
+# (bin/wa_settings.py). Tenerlos copiados aca ya se desincronizo: esta copia no conocia
+# `orca-ide` —el userData y el binario de la app publicada de Linux— y ademas buscaba el
+# nombre corto `orca`, que en Linux es el lector de pantalla de GNOME.
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from wa_settings import orca_cli_path, user_data_roots  # noqa: E402
+
 CONFIG_KEYS = ("transcribe", "transcribe_model", "transcribe_lang")
 
 # Un modelo solo-ingles sobre audio en español devuelve basura sin avisar, que es peor
@@ -97,23 +105,24 @@ def calidad():
 
 # Hay un userData por build de Orca, y cada uno tiene SUS modelos descargados.
 # Preguntarle al equivocado devuelve "sin motor" teniendo los modelos.
-USER_DATA_DIRS = ("orca", "orca-dev", "zzorcanametest")
 PLUGIN_DATA = "plugins-data"
 
 
-def user_data_roots():
-    """Todos los userData de Orca que existen en este equipo."""
-    if sys.platform == "darwin":
-        base = os.path.expanduser("~/Library/Application Support")
-    elif os.name == "nt":
-        base = os.environ.get("APPDATA", os.path.expanduser("~"))
-    else:
-        base = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+def userdatas():
+    """Todos los userData de Orca que EXISTEN en este equipo.
+
+    La lista sale de `wa_settings.user_data_roots()`, que es la misma que usan el panel,
+    wa-scope y el arnes: la copia que vivia aca no conocia `orca-ide` y en Linux dejaba
+    los modelos del Orca publicado fuera de la busqueda —"sin motor" teniendo el modelo
+    bajado—. Aca se filtra por existencia porque esto PREGUNTA a cada uno, y preguntarle
+    a una carpeta que no esta es un subproceso tirado a la basura por vuelta.
+
+    ORCA_USER_DATA_PATH sigue mandando sola si esta: apunta al Orca que de verdad
+    contesta, y si el empaquetador la fijo no hay nada que descubrir."""
     declarado = os.environ.get("ORCA_USER_DATA_PATH", "").strip()
     if declarado:
         return [declarado]
-    return [os.path.join(base, d) for d in USER_DATA_DIRS
-            if os.path.isdir(os.path.join(base, d))]
+    return [r for r in user_data_roots() if os.path.isdir(r)]
 
 
 # Lo pone orca_con_modelo(): el Orca que hay no conoce el comando de voz.
@@ -121,11 +130,17 @@ _ORCA_SIN_COMANDO = False
 
 
 def orca_cmd():
-    """Solo el binario. Con que userData llamarlo lo decide quien pregunta."""
+    """Solo el binario. Con que userData llamarlo lo decide quien pregunta.
+
+    Resolverlo con `shutil.which("orca")` era un defecto serio en Linux: ahi `orca` es
+    el lector de pantalla de GNOME. Encontrarlo daba por buena una CLI que no existe y
+    la primera corrida real le ponia a hablar la maquina a alguien que no lo pidio.
+    `orca_cli_path()` (bin/wa_settings.py) ya sabe que en Linux el binario es
+    `orca-ide` y que ahi NO hay respaldo al nombre corto."""
     declarado = os.environ.get("ORCA_CLI_COMMAND", "").strip()
     if declarado:
         return shlex.split(declarado)
-    exe = shutil.which("orca")
+    exe = orca_cli_path()
     return [exe] if exe else None
 
 
@@ -145,7 +160,7 @@ def orca_con_modelo():
     quiero = calidad()["orca"]
     global _ORCA_SIN_COMANDO
     _ORCA_SIN_COMANDO = False
-    for raiz in user_data_roots():
+    for raiz in userdatas():
         env = dict(os.environ, ORCA_USER_DATA_PATH=raiz)
         try:
             p = subprocess.run(cmd + ["speech", "models", "list", "--json"],

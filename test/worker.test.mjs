@@ -583,11 +583,32 @@ console.log('\nworker: el arnes se siembra fuera de la valla')
 
   // Y la siembra de verdad, en un subproceso sin valla: es el camino que usa el worker.
   const casa = join(RAIZ, 'siembra-fuera')
-  mkdirSync(join(casa, 'Library', 'Application Support', 'orca'), { recursive: true })
+  // El userData va donde lo pondria ESTA plataforma, y el env del hijo se arma entero.
+  // Antes se creaba siempre el layout de macOS y solo se pasaba HOME: en Linux el hijo
+  // heredaba el XDG_CONFIG_HOME de arriba, sembraba en el HOME comun de este archivo y
+  // la comprobacion quedaba roja para siempre sin que dijera nada util. Una prueba que
+  // solo corre de verdad en la maquina de quien la escribio es como no tenerla — es
+  // justo la que tenia que haber visto que `orca-ide` faltaba en la tabla.
+  const envHijo = { ...process.env, HOME: casa }
+  let baseCasa
+  if (process.platform === 'darwin') {
+    baseCasa = join(casa, 'Library', 'Application Support')
+    delete envHijo.XDG_CONFIG_HOME
+    delete envHijo.APPDATA
+  } else if (process.platform === 'win32') {
+    baseCasa = join(casa, 'AppData', 'Roaming')
+    envHijo.APPDATA = baseCasa
+    delete envHijo.XDG_CONFIG_HOME
+  } else {
+    baseCasa = join(casa, '.config')
+    envHijo.XDG_CONFIG_HOME = baseCasa
+    delete envHijo.APPDATA
+  }
+  mkdirSync(join(baseCasa, 'orca'), { recursive: true })
   const hijo = await new Promise((resolve) => {
     execFileNode(process.execPath, [join(PLUGIN_DIR, 'harness.mjs'), PLUGIN_DIR,
       join(PLUGIN_DIR, 'bin')],
-    { timeout: 120000, env: { ...process.env, HOME: casa } }, (error, stdout) =>
+    { timeout: 120000, env: envHijo }, (error, stdout) =>
       resolve({ error, stdout }))
   })
   let estado = null
