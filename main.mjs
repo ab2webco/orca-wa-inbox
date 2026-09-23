@@ -32,6 +32,7 @@ const STATUS_KEY = 'syncStatus'
 const HEALTH_KEY = 'health'
 // La senal de vida del worker. Sin ella "el plugin no contesto" y "el plugin no esta"
 // son el mismo silencio de 45 s, y el usuario no puede distinguirlos.
+const AUTOPSIA_KEY = 'workerAutopsia'
 const BEAT_KEY = 'workerBeat'
 // La via de vuelta: el panel deja aca un pedido de sync y el worker lo atiende. Es el
 // mismo camino que usan Tomar/Ignorar con `decisions`.
@@ -679,6 +680,25 @@ const LATIDO_MS = 5 * 1000
 export const LATIDO_VENCE_MS = 30 * 1000
 
 export default function activate(orca) {
+  // ANTES QUE NADA: la autopsia. Un worker que muere de una excepcion no atrapada se
+  // lleva consigo el motivo — Orca lo manda a su propio registro, que desde aca no se
+  // puede leer, y lo unico que queda visible es un latido congelado y un plugin que se
+  // desactiva solo. Sin esto el diagnostico es adivinar; con esto el motivo sobrevive
+  // al proceso que lo produjo, en la unica superficie que el worker puede escribir.
+  //
+  // Se registra al entrar y no al final: un fallo durante la propia activacion es
+  // justamente el que hoy no deja rastro.
+  const autopsia = (clase) => (error) => {
+    const detalle = String(error?.stack ?? error?.message ?? error).slice(0, 1500)
+    try { orca.log(`worker ${clase}: ${detalle}`) } catch { /* el log tambien puede irse */ }
+    // Sin await: el proceso se esta muriendo y esperar no es una opcion. `storage.set`
+    // sale por IPC y en la practica alcanza a salir antes del cierre.
+    guardar(orca, AUTOPSIA_KEY, { at: new Date().toISOString(), clase, detalle })
+      .catch(() => {})
+  }
+  process.on('uncaughtException', autopsia('uncaughtException'))
+  process.on('unhandledRejection', autopsia('unhandledRejection'))
+
   // LO PRIMERO, y sin depender de nada: si el worker no arranca no hay quien escriba
   // ninguna otra clave, y "el plugin no contesto" se veia igual que "el plugin no esta
   // aprobado y no existe". El latido es lo que separa esas dos cosas.
