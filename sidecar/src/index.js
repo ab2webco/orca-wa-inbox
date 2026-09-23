@@ -66,6 +66,26 @@ export function calcularEsperaMs (intento) {
   return Math.min(BACKOFF_BASE_MS * 2 ** (paso - 1), BACKOFF_MAX_MS)
 }
 
+/** Como queda el contador de intentos tras un evento del socket. Es una funcion pura y
+ *  no tres asignaciones sueltas dentro del escuchador porque la regla tiene un caso que
+ *  no es obvio y que ya se equivoco una vez: un **QR tambien lo reinicia**.
+ *
+ *  Emparejando no hay ningun 'open' -ese es justo el estado al que todavia no se
+ *  llego-, asi que si solo 'open' baja el contador, `intento` unicamente sube mientras
+ *  el usuario mira el QR. WhatsApp entrega refs de emparejamiento en lotes finitos:
+ *  agotado el lote Baileys CIERRA y hay que reconectar para pedir otro. Ese cierre es
+ *  el ciclo normal del emparejamiento, no una caida, pero contaba como intento fallido
+ *  y empujaba la espera por 1s, 2s, 4s, 8s, 16s hasta el tope de 30s. Medido en una
+ *  instalacion viva: pasado el margen (QR_VIGENCIA_MS - QR_ROTACION_MS) el QR se veia
+ *  vencido el resto de cada ciclo, y empeoraba cuanto mas tiempo llevaba el panel
+ *  abierto. Que llegue un QR prueba que el socket llego hasta donde WhatsApp entrega
+ *  refs: lo anterior funciono. */
+export function intentoTrasEvento (intento, evento) {
+  if (evento === 'qr' || evento === 'open') return 0
+  if (evento === 'close') return intento + 1
+  return intento
+}
+
 /** La decision pura tras un cierre de socket: reconectar o no, con que espera y por
  *  que motivo. No toca la red ni el disco -eso lo hace quien la llama- para que se
  *  pueda probar sin un socket vivo. */
@@ -354,12 +374,15 @@ async function iniciar () {
     sock.ev.on('connection.update', (actualizacion) => {
       const { connection, lastDisconnect, qr } = actualizacion
       if (qr) {
+        // Un QR nuevo reinicia el contador: ver `intentoTrasEvento`. El backoff
+        // exponencial esta para una caida de red, no para la rotacion esperada del QR.
+        intento = intentoTrasEvento(intento, 'qr')
         rotacion += 1
         emitirQr(qr, rotacion)
         return
       }
       if (connection === 'open') {
-        intento = 0
+        intento = intentoTrasEvento(intento, 'open')
         conectado = true
         emitirConexion('open')
         // Quien soy yo, a los efectos de "me nombraron" y "contestaron algo mio". El
@@ -389,7 +412,7 @@ async function iniciar () {
       if (connection === 'close') {
         conectado = false
         const statusCode = lastDisconnect?.error?.output?.statusCode
-        intento += 1
+        intento = intentoTrasEvento(intento, 'close')
         const decision = decidirTrasCierre(statusCode, intento)
         emitirConexion('close', { motivo: decision.motivo, statusCode: statusCode ?? null })
         if (!decision.reconectar) {

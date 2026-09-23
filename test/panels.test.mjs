@@ -1415,6 +1415,84 @@ console.log('\nconfig.html — vinculacion de WhatsApp: los cinco estados')
     vencido.getElementById('pairing-detail').textContent)
 }
 
+// Regresion de "el QR sale SIEMPRE vencido". Medido en una instalacion viva: el
+// sidecar rotaba bien (rotaciones 8..14 sin saltos, ttlMs 75 s, edad maxima 60 s, cero
+// vencidos en storage) y aun asi el panel decia "El codigo vencio" y no salia de ahi.
+//
+// El culpable era `read`: cuando el host RECHAZA una lectura devuelve lo memorizado, y
+// llegaba indistinguible de una lectura fresca -es un objeto normal, `hayRespuesta` da
+// true igual-. `estadoSidecar` comparaba entonces un `qr.ts` congelado contra un
+// `Date.now()` que si avanza, asi que a partir del primer rechazo el estado caia en
+// 'expired' y NO VOLVIA: el reloj corre, el dato memorizado no, y nada lo invalida.
+//
+// Con datos rancios lo unico cierto es que el panel no esta leyendo, y eso ahora tiene
+// estado propio ('stale'). No reusa 'waiting' porque 'waiting' esconde el recuadro, y
+// esconderlo seria volver al recuadro vacio que se arreglo en 4.1.0.
+console.log('\nconfig.html — un rechazo del host no puede dar por vencido el QR')
+{
+  const casos = [
+    ['es-419', /escanee/i, /no se puede confirmar/i],
+    ['en-US', /scan this code/i, /cannot be confirmed/i],
+    ['pt-BR', /escaneie/i, /nao da para confirmar/i]
+  ]
+  for (const [lang, vivoRe, rancioRe] of casos) {
+    let rechazar = false
+    const m = await montar('config.html', {
+      sidecar: { connection: 'connecting', exited: false,
+        qr: { qr: 'DATA-QR-DE-PRUEBA', ts: Date.now(), rotation: 1, ttlMs: 75000 } }
+    }, lang, (d) => {
+      if (rechazar && d.action === 'storage.get' && d.params.key === 'sidecar') {
+        // El sobre con el que el host dice que no. No es una clave vacia: `stored` lo
+        // vuelve SIN_RESPUESTA y `read` contesta con lo memorizado.
+        //
+        // A proposito NO es `rate_limited`: ese codigo, en el carril del usuario, se
+        // reintenta con backoff hasta `vence` (30 s) en vez de resolver, y la prueba
+        // estaria esperando al reintento en vez de mirar lo que se pinta. El defecto
+        // que se prueba aca no depende de POR QUE el host dijo que no.
+        return { ok: false, errorCode: 'denied' }
+      }
+      return undefined
+    })
+    await espera()
+    ok(`${lang}: con lectura fresca el QR se ofrece para escanear`,
+      vivoRe.test(m.doc.getElementById('pairing-msg').textContent),
+      m.doc.getElementById('pairing-msg').textContent)
+
+    // El host deja de contestar por `sidecar` y pasan dos minutos: el QR memorizado ya
+    // supera su propio ttlMs (75 s), que es justo lo que antes lo mandaba a 'expired'.
+    const ahora = m.window.Date.now()
+    rechazar = true
+    m.storage.workerBeat = { at: new Date(ahora + 120000).toISOString() }
+    m.window.Date.now = () => ahora + 120000
+    m.window.dispatchEvent(new m.window.Event('focus'))
+    await espera()
+
+    ok(`${lang}: con el host rechazando, NO se afirma que vencio`,
+      rancioRe.test(m.doc.getElementById('pairing-msg').textContent),
+      m.doc.getElementById('pairing-msg').textContent)
+    // Y lo que no puede pasar: que el recuadro se vacie. Ese fue el defecto anterior.
+    const wrap = m.doc.getElementById('qr-wrap')
+    ok(`${lang}: el ultimo QR sigue a la vista, no un recuadro vacio`,
+      wrap.hidden === false, `hidden=${wrap.hidden}`)
+    ok(`${lang}: pero apagado, porque no se puede prometer que sirva`,
+      wrap.classList.contains('vencido'), `class=${wrap.className}`)
+    ok(`${lang}: y dice que el problema es la lectura, no el codigo`,
+      !m.doc.getElementById('pairing-diag').hidden,
+      m.doc.getElementById('pairing-diag').textContent)
+
+    // Se restablece la lectura: el panel tiene que volver solo, sin que nadie recargue.
+    // Antes no volvia nunca — ese "no vuelve" es el bug entero.
+    rechazar = false
+    m.storage.sidecar = { connection: 'connecting', exited: false,
+      qr: { qr: 'DATA-QR-NUEVA', ts: ahora + 120000, rotation: 2, ttlMs: 75000 } }
+    m.window.dispatchEvent(new m.window.Event('focus'))
+    await espera()
+    ok(`${lang}: y en cuanto el host vuelve a contestar, se recupera solo`,
+      vivoRe.test(m.doc.getElementById('pairing-msg').textContent),
+      m.doc.getElementById('pairing-msg').textContent)
+  }
+}
+
 // El defecto real: el panel se quedo 26 minutos diciendo "unos segundos" mientras el
 // worker seguia vivo y el QR rotaba en storage. La escalada usa el tiempo REAL desde
 // que el panel entro en 'waiting', asi que se avanza el reloj del panel y se le pide
