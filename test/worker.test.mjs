@@ -760,6 +760,60 @@ console.log('\nworker: apagar el sidecar a proposito no se reporta como una caid
     JSON.stringify(orca.store.sidecar))
 }
 
+// ───────── dos escrituras seguidas no se pisan aunque el host las resuelva al reves ─────────
+console.log('\nworker: dos storage.set de sidecar seguidos quedan en el orden en que se pidieron')
+{
+  // Regresion de un defecto medido en una instalacion viva: una rotacion entera de
+  // QR (la numero 4) desaparecio de storage sin dejar rastro. La causa no era el
+  // sidecar -el en memoria (`estado` en `lanzarSidecar`) siempre quedaba bien-, era
+  // que dos `storage.set` en vuelo a la vez podian resolver AL REVES del orden en
+  // que se pidieron -la cola de CUPO del host reordena bajo carga
+  // (docs/ENCARGO...§H2-H3)-, y el que resuelve DESPUES pisa en storage al que le
+  // sigue. Se simula aca con un host de mentira que demora mas la escritura MAS
+  // VIEJA: sin encadenar las escrituras, la mas nueva se pierde.
+  const orca = { store: {}, log: () => {},
+    host: {
+      call: (accion, params) => {
+        if (accion !== 'storage.set') return Promise.resolve({ ok: true })
+        // La del QR de la rotacion 1 tarda mas que la de la rotacion 2: si algo no
+        // las serializa, la 2 resuelve primero y la 1 la pisa al llegar despues.
+        const demora = params.value && params.value.qr && params.value.qr.rotation === 1
+          ? 60 : 5
+        return new Promise((resolve) => setTimeout(() => {
+          orca.store[params.key] = params.value
+          resolve({ ok: true })
+        }, demora))
+      }
+    } }
+  let proceso
+  const detener = lanzarSidecar({ orca, scriptPath: '/no/existe.cjs',
+    authDir: join(RAIZ, 'auth-orden'),
+    spawnFn: () => {
+      proceso = new EventEmitter()
+      proceso.stdout = new EventEmitter()
+      proceso.stderr = new EventEmitter()
+      proceso.kill = () => { proceso.killed = true }
+      return proceso
+    } })
+  // Dos rotaciones de QR, una atras de la otra, como las dispara un socket que rota
+  // justo cuando algo mas pasa (docs/ENCARGO...§6). Las dos lineas llegan en el
+  // MISMO chunk de stdout, que es el caso mas apretado: main.mjs las procesa una por
+  // una, sin esperar a que la escritura de la primera termine antes de arrancar la
+  // segunda.
+  proceso.stdout.emit('data',
+    JSON.stringify({ type: 'qr', qr: 'Q1', ts: Date.now(), rotation: 1, ttlMs: 75000 }) +
+    '\n' +
+    JSON.stringify({ type: 'qr', qr: 'Q2', ts: Date.now(), rotation: 2, ttlMs: 75000 }) +
+    '\n')
+  await hasta(() => orca.store.sidecar && orca.store.sidecar.qr &&
+    orca.store.sidecar.qr.rotation === 2, 2000)
+  detener()
+  ok('la rotacion mas nueva no se pierde aunque su escritura resuelva antes',
+    !!(orca.store.sidecar && orca.store.sidecar.qr && orca.store.sidecar.qr.qr === 'Q2' &&
+       orca.store.sidecar.qr.rotation === 2),
+    JSON.stringify(orca.store.sidecar))
+}
+
 // ───────── el auth dir se resuelve fuera de la valla, igual que el arnes ─────────
 console.log('\nworker: el directorio de auth del sidecar se resuelve fuera de la valla')
 {

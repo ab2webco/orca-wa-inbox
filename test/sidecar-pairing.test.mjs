@@ -13,7 +13,8 @@
  * desincroniza en silencio.
  */
 import { decidirTrasCierre, calcularEsperaMs, mensajeQr, qrVencido, tocaEmitirAlmacen,
-  opcionesDeSocket, MOTIVO, QR_VIGENCIA_MS, ALMACEN_LATIDO_MS } from '../sidecar/src/index.js'
+  opcionesDeSocket, MOTIVO, QR_ROTACION_MS, QR_VIGENCIA_MS, ALMACEN_LATIDO_MS
+} from '../sidecar/src/index.js'
 
 let fallos = 0
 let pruebas = 0
@@ -129,6 +130,45 @@ console.log('\nsidecar: el panel distingue un QR vencido de uno fresco')
   ok('y ya esta vencido diez segundos despues', qrVencido(ts, ahora + 10000) === true)
 }
 
+console.log('\nsidecar: con el sidecar emitiendo cada rotacion, el panel nunca lo ve vencido')
+{
+  // Regresion del defecto medido en una instalacion viva: con QR_VIGENCIA_MS igual a
+  // QR_ROTACION_MS (los dos en 60 s, el arreglo anterior de esta constante), el QR
+  // aparecia vencido ~40 de cada ~92 s y una rotacion entera (la numero 4) ni
+  // siquiera llego a storage. La causa: el QR anterior cumple su rotacion completa
+  // justo cuando nace el siguiente, y CUALQUIER demora de entrega -el salto por
+  // stdout, el storage.set, el sondeo de la vinculacion- lo empuja a "vencido"
+  // antes de que el nuevo este disponible para pintarse.
+  //
+  // Simula al sidecar emitiendo un QR por rotacion con una demora de entrega tipica
+  // (200 ms) y comprueba que, en el peor instante de cada ciclo -justo cuando nace
+  // la rotacion siguiente, mas la demora-, el panel TODAVIA no encuentra vencido el
+  // QR anterior. Con la vigencia vieja (== rotacion) esta prueba falla.
+  const DEMORA_ENTREGA_MS = 200
+  const ROTACIONES = 5
+  var vencidoAlgunaVez = false
+  for (let r = 1; r < ROTACIONES; r++) {
+    const anterior = mensajeQr('QR-' + (r - 1), r, (r - 1) * QR_ROTACION_MS)
+    const peorInstante = r * QR_ROTACION_MS + DEMORA_ENTREGA_MS
+    if (qrVencido(anterior.ts, peorInstante, anterior.ttlMs)) vencidoAlgunaVez = true
+  }
+  ok('el QR de la rotacion anterior sigue vivo hasta que llega el siguiente',
+    !vencidoAlgunaVez, `vencidoAlgunaVez=${vencidoAlgunaVez}`)
+
+  // Y dentro de una misma rotacion, en cualquier instante que se lo mire: nunca
+  // vencido mientras el sidecar sigue con vida y emitiendo a tiempo.
+  var vencidoDentroDeCiclo = false
+  for (let r = 0; r < ROTACIONES; r++) {
+    const emitido = mensajeQr('QR-' + r, r + 1, r * QR_ROTACION_MS)
+    for (let leidoEn = emitido.ts + DEMORA_ENTREGA_MS;
+         leidoEn < emitido.ts + QR_ROTACION_MS; leidoEn += 2000) {
+      if (qrVencido(emitido.ts, leidoEn, emitido.ttlMs)) vencidoDentroDeCiclo = true
+    }
+  }
+  ok('y en ningun punto de su propia rotacion tampoco',
+    !vencidoDentroDeCiclo, `vencidoDentroDeCiclo=${vencidoDentroDeCiclo}`)
+}
+
 console.log('\nsidecar: los conteos del almacen salen CON FRENO')
 {
   // Cada mensaje `store` que sale por stdout termina en un `storage.set` del worker, y
@@ -172,8 +212,13 @@ console.log('\nsidecar: la lista de conversaciones tiene que poder LLEGAR')
   // mas texto ajeno en disco, que es justo lo que §11-F2 manda no acumular.
   ok('sin pedir el archivo completo de conversaciones ajenas',
     o.syncFullHistory === false, JSON.stringify(o.syncFullHistory))
-  ok('el QR sigue viniendo con su vigencia explicita',
-    o.qrTimeout === QR_VIGENCIA_MS, String(o.qrTimeout))
+  // `qrTimeout` es la ROTACION, no la vigencia que lee el panel: son dos numeros
+  // distintos a proposito (QR_VIGENCIA_MS > QR_ROTACION_MS, ver su comentario) y
+  // esta prueba es justo la que hubiera atrapado el defecto de igualarlos nunca.
+  ok('el QR rota con el periodo de Baileys, no con la vigencia que lee el panel',
+    o.qrTimeout === QR_ROTACION_MS, String(o.qrTimeout))
+  ok('y la vigencia que viaja con cada QR es mayor que esa rotacion',
+    QR_VIGENCIA_MS > QR_ROTACION_MS, `vigencia=${QR_VIGENCIA_MS} rotacion=${QR_ROTACION_MS}`)
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

@@ -89,15 +89,34 @@ export function decidirTrasCierre (statusCode, intento = 1) {
   return { reconectar: true, esperaMs: calcularEsperaMs(intento), motivo: MOTIVO.DESCONOCIDO }
 }
 
-// Cuanto vale un QR. NO son los ~20 s que tarda el cliente web en redibujarlo: eso
-// es cosmetico. Quien manda es `qrTimeout` de Baileys, que es cada cuanto genera uno
-// nuevo — y con el valor de fabrica, 60 s, un panel que los vencia a los 20 mostraba
-// "el codigo vencio" durante 40 de cada 60 segundos. Sonaba a fallo y era la regla
-// mal copiada.
+// Cada cuanto Baileys genera un QR nuevo. NO son los ~20 s que tarda el cliente web
+// en redibujarlo -eso es cosmetico-, es `qrTimeout`: con el valor de fabrica, 60 s,
+// un panel que los vencia a los 20 mostraba "el codigo vencio" durante 40 de cada 60
+// segundos. Sonaba a fallo y era la regla mal copiada.
+export const QR_ROTACION_MS = 60000
+
+// Cuanto vale un QR para el panel, su `ttlMs`. Tiene que ser MAYOR que
+// QR_ROTACION_MS y no el MISMO numero: igualarlos -el arreglo anterior de esta
+// constante- hace que un QR venza en el instante exacto en que nace el siguiente, y
+// cualquier demora de entrega cae justo ahi. Medido en una instalacion viva con las
+// dos iguales a 60 s: el QR aparecia vencido ~40 de cada ~92 s, y una rotacion
+// entera (la numero 4) ni siquiera llego a storage — el hueco no era cosmetico, era
+// el mismo panel en blanco que motivo este arreglo.
+//
+// El margen (15 s) tiene que cubrir la demora mas larga entre que Baileys genera el
+// QR y que el panel lo lee: el salto por stdout a `escribir()` (main.mjs, un solo
+// `await` de storage), el sondeo dedicado de la vinculacion cada 2 s
+// (`VEREDICTO_SONDEO_MS`/`vigilarSidecar` en config.html) y, detras de esos dos, la
+// cola de CUPO del host cuando el sondeo general ya gasto su presupuesto de 10 s
+// (docs/ENCARGO...§H2-H3). Ninguna de esas demoras suma quince segundos por si
+// sola; juntas, con la maquina mas lenta que la de la medicion, es el margen que no
+// se vio agotar en la instalacion viva.
 //
 // Se fija aca y viaja CON cada QR (`ttlMs`), en vez de repetirse a mano en el panel:
-// dos constantes que nadie obliga a coincidir terminan no coincidiendo.
-export const QR_VIGENCIA_MS = 60000
+// dos constantes que nadie obliga a coincidir terminan no coincidiendo. Si el dia de
+// manana se vuelven a igualar sin querer, el sintoma es EXACTAMENTE este: un QR que
+// se ve vencido justo cuando debia rotar.
+export const QR_VIGENCIA_MS = QR_ROTACION_MS + 15000
 
 /** El mensaje de QR que se emite por stdout: siempre con `ts` y el numero de
  *  rotacion, nunca un QR "pelado". */
@@ -140,9 +159,10 @@ export function opcionesDeSocket ({ version, auth, browser }) {
     auth,
     browser,
     printQRInTerminal: false,
-    // Explicito: de el sale el `ttlMs` que viaja con cada QR y con el que el panel
-    // decide si lo pinta. Dejarlo implicito ata la UI a un valor de fabricante.
-    qrTimeout: QR_VIGENCIA_MS,
+    // La ROTACION, no la vigencia: son dos numeros distintos a proposito (ver el
+    // comentario de QR_VIGENCIA_MS). Dejarlo implicito ata la UI a un valor de
+    // fabricante.
+    qrTimeout: QR_ROTACION_MS,
     syncFullHistory: false,
     shouldSyncHistoryMessage: () => true
   }

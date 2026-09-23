@@ -446,6 +446,20 @@ const PANELES = [
     datos: Object.assign({}, DATOS,
       { sidecar: { connection: 'connecting', qr: null, exited: false } })
   },
+  // El defecto real: 26 minutos diciendo "unos segundos" mientras el worker seguia
+  // vivo y el QR rotaba en storage. Se adelanta el reloj del panel bien pasado el
+  // segundo umbral (UMBRAL_ESPERA_LARGA_MS, config.html) y se lo hace volver a mirar
+  // (foco), para fotografiar lo que de verdad ve alguien que vuelve a la pestana
+  // despues de un rato largo: cuanto lleva, y lo unico que el panel puede afirmar
+  // del plugin y de la conexion.
+  {
+    nombre: 'config-sidecar-esperando-largo', archivo: 'config.html', anchos: ANCHOS,
+    datos: Object.assign({}, DATOS,
+      { sidecar: { connection: 'connecting', qr: null, exited: false } }),
+    guion: 'window.__ahora = Date.now(); window.Date.now = () => window.__ahora + 185000; ' +
+      "window.dispatchEvent(new Event('focus'))",
+    espera: 400
+  },
   {
     nombre: 'config-sidecar-qr', archivo: 'config.html', anchos: ANCHOS,
     datos: Object.assign({}, DATOS, { sidecar: {
@@ -456,6 +470,23 @@ const PANELES = [
       qr: { qr: '2@' + 'A'.repeat(180) + ',B'.repeat(28) + '==', ts: AHORA_MS, rotation: 3 },
       exited: false
     } })
+  },
+  // El QR vencido ya no se esconde (config.html, `estado === 'expired'`): sigue
+  // siendo una imagen valida -WhatsApp la rechaza, no el navegador- y un recuadro
+  // vacio se lee como un plugin roto. Se fotografia APAGADO (`.vencido`, opacity
+  // .4) y no ausente. El `ttlMs` es el real que manda el sidecar (QR_VIGENCIA_MS,
+  // sidecar/src/index.js) y el reloj se adelanta mas alla de el, igual que arriba.
+  {
+    nombre: 'config-sidecar-qr-vencido', archivo: 'config.html', anchos: ANCHOS,
+    datos: Object.assign({}, DATOS, { sidecar: {
+      connection: 'connecting',
+      qr: { qr: '2@' + 'A'.repeat(180) + ',B'.repeat(28) + '==', ts: AHORA_MS, rotation: 3,
+        ttlMs: 75000 },
+      exited: false
+    } }),
+    guion: 'window.__ahora = Date.now(); window.Date.now = () => window.__ahora + 80000; ' +
+      "window.dispatchEvent(new Event('focus'))",
+    espera: 400
   },
   {
     nombre: 'config-sidecar-conectado', archivo: 'config.html', anchos: ANCHOS,
@@ -592,11 +623,12 @@ async function main() {
         let datos = 'workerBeat' in panel.datos
           ? panel.datos
           : Object.assign({}, panel.datos, { workerBeat: { at: new Date().toISOString() } })
-        // Mismo defecto, mas apretado: el QR vive solo ~20 s (QR_VIGENCIA_MS en
-        // config.html) y `AHORA_MS` se calculo UNA vez al arrancar este guion. Sin
-        // esto, "config-sidecar-qr" salia pintando "el codigo vencio" en vez del QR —
-        // se vio recien mirando la captura, que es justo la razon de que exista esta
-        // regla del proyecto.
+        // Mismo defecto, mas apretado: el QR vive QR_VIGENCIA_MS (sidecar/src/index.js)
+        // y `AHORA_MS` se calculo UNA vez al arrancar este guion. Sin esto,
+        // "config-sidecar-qr" salia pintando "el codigo vencio" en vez del QR — se vio
+        // recien mirando la captura, que es justo la razon de que exista esta regla
+        // del proyecto. (El vencido de proposito, "config-sidecar-qr-vencido", pisa
+        // este `ts` de nuevo el mismo, y lo envejece de verdad con su propio `guion`.)
         if (datos.sidecar && datos.sidecar.qr) {
           datos = Object.assign({}, datos, { sidecar: Object.assign({}, datos.sidecar,
             { qr: Object.assign({}, datos.sidecar.qr, { ts: Date.now() }) }) })

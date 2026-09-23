@@ -564,9 +564,23 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
     // funciona". Nunca lleva contenido: ni un cuerpo, ni un numero, ni un remitente.
     store: null,
     startedAt: new Date().toISOString() }
+  // Las escrituras se ENCADENAN sobre una sola promesa. `guardar` es async y nada
+  // garantiza que dos `storage.set` en vuelo resuelvan en el orden en que se
+  // pidieron -la cola de CUPO del host reordena bajo carga
+  // (docs/ENCARGO...§H2-H3)-. Sin esto, dos lineas de stdout seguidas (tipico de un
+  // QR que rota justo cuando cae la conexion) disparan dos `escribir()` sin esperar
+  // el uno al otro; si la SEGUNDA resuelve antes que la PRIMERA, la primera llega
+  // despues y PISA a la segunda en storage — el estado en memoria (`estado`, arriba)
+  // queda bien, pero lo que el panel lee no. Asi desaparecio una rotacion entera de
+  // QR en una instalacion viva. Encadenar fuerza a cada `storage.set` a esperar a
+  // que el anterior haya terminado -exito o fallo, `guardar` nunca rechaza- antes de
+  // arrancar, asi que quedan en storage en el mismo orden en que se pidieron.
+  let cadenaEscritura = Promise.resolve()
   const escribir = (parcial) => {
     estado = { ...estado, ...parcial, at: new Date().toISOString() }
-    return guardar(orca, SIDECAR_KEY, estado)
+    const propio = estado
+    cadenaEscritura = cadenaEscritura.then(() => guardar(orca, SIDECAR_KEY, propio))
+    return cadenaEscritura
   }
 
   let detenidoPorWorker = false

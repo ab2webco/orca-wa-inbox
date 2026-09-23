@@ -1245,9 +1245,9 @@ console.log('\nconfig.html: el latido del worker')
 {
   const VIEJO = new Date(Date.now() - 120000).toISOString()
   const casos = [
-    ['es-419', /Apruebe el plugin en Ajustes/, /El plugin dejo de responder/],
-    ['en-US', /Approve the plugin in Settings/, /The plugin stopped responding/],
-    ['pt-BR', /Aprove o plugin em Ajustes/, /O plugin parou de responder/]
+    ['es-419', /El plugin no responde/, /El plugin dejo de responder/],
+    ['en-US', /The plugin is not responding/, /The plugin stopped responding/],
+    ['pt-BR', /O plugin nao responde/, /O plugin parou de responder/]
   ]
   for (const [lang, ido, parado] of casos) {
     const sin = await montar('config.html', { workerBeat: null, health: { ok: true } },
@@ -1348,8 +1348,10 @@ console.log('\nconfig.html: un rechazo del host se reintenta, no se reporta')
 
 // ───────── vinculacion de WhatsApp: el QR (T4) ─────────
 // El panel nunca habia dibujado un QR (docs/ENCARGO-TRANSPORTE-UNICO.md §6). Lo que
-// mas importa de esta pieza es lo que NO tiene que pintar: un QR vencido hace que el
-// usuario escanee, falle, y no entienda por que.
+// mas importa de esta pieza es que un QR que ya no sirve para escanear no
+// desaparezca del todo: un recuadro vacio se lee como un plugin roto, no como uno
+// que esta a punto de mostrar el siguiente. Por eso el vencido queda VISIBLE y
+// APAGADO (`.vencido`, opacity .4), no escondido.
 console.log('\nconfig.html — vinculacion de WhatsApp: los cinco estados')
 {
   const AHORA_MS = Date.now()
@@ -1358,14 +1360,16 @@ console.log('\nconfig.html — vinculacion de WhatsApp: los cinco estados')
       msg: /esperando/i, qrVisible: false },
     { nombre: 'QR en pantalla', sidecar: { connection: 'connecting',
       qr: { qr: 'DATA-QR-DE-PRUEBA', ts: AHORA_MS, rotation: 1 }, exited: false },
-      msg: /escanee/i, qrVisible: true },
+      msg: /escanee/i, qrVisible: true, qrVencido: false },
     // El QR trae su propio `ttlMs`: el panel ya no adivina cuanto vive. Se manda uno
     // corto y una edad mayor, en vez de un numero copiado del panel — asi la prueba
     // sigue probando la regla si el TTL real cambia.
     { nombre: 'QR vencido', sidecar: { connection: 'connecting',
       qr: { qr: 'DATA-QR-DE-PRUEBA', ts: AHORA_MS - 30000, rotation: 1, ttlMs: 20000 },
       exited: false },
-      msg: /vencio/i, qrVisible: false },
+      // Sigue siendo una imagen valida -WhatsApp la rechaza, no el navegador-, asi
+      // que queda visible y apagada, no escondida detras de un recuadro en blanco.
+      msg: /vencio/i, qrVisible: true, qrVencido: true },
     { nombre: 'conectado', sidecar: { connection: 'open', qr: null, exited: false },
       msg: /conectado/i, qrVisible: false },
     { nombre: 'sesion caida', sidecar: { connection: null, qr: null, exited: true,
@@ -1380,9 +1384,26 @@ console.log('\nconfig.html — vinculacion de WhatsApp: los cinco estados')
     const wrap = doc.getElementById('qr-wrap')
     ok(`${c.nombre}: el QR ${c.qrVisible ? 'se muestra' : 'no se muestra'}`,
       !wrap.hidden === c.qrVisible, `hidden=${wrap.hidden}`)
+    if (c.qrVisible) {
+      ok(`${c.nombre}: se ve ${c.qrVencido ? 'apagado' : 'con su brillo normal'}`,
+        wrap.classList.contains('vencido') === !!c.qrVencido, `class=${wrap.className}`)
+    }
   }
-  // El vencido tiene que decir POR QUE no hay nada que escanear: un QR que
-  // simplemente desaparece se lee igual que un panel roto.
+  // Con `exited: true` el estado queda pisado y no reemplazado (main.mjs, `escribir`
+  // mezcla): un `d.qr` de una rotacion vieja puede seguir viajando aun con la sesion
+  // caida. Ahi si tiene que esconderse — no hay nada que escanear, la sesion misma
+  // esta caida y decir lo contrario mostrando un QR seria mentir dos veces.
+  const { doc: caidaConQrViejo } = await montar('config.html', { sidecar: {
+    connection: null, exited: true,
+    qr: { qr: 'DATA-QR-VIEJA', ts: AHORA_MS, rotation: 1, ttlMs: 75000 },
+    error: { code: 'sidecar-cayo', detail: 'x' }
+  } }, 'es-419')
+  await espera()
+  ok('con la sesion caida no se muestra un QR viejo que quedo pisado en el estado',
+    caidaConQrViejo.getElementById('qr-wrap').hidden === true,
+    `hidden=${caidaConQrViejo.getElementById('qr-wrap').hidden}`)
+  // El vencido tiene que decir POR QUE, ademas de mostrarse apagado: ver el mismo
+  // QR sin explicacion no dice si sigue sirviendo o no.
   const { doc: vencido } = await montar('config.html', { sidecar: {
     connection: 'connecting',
     qr: { qr: 'DATA-QR-DE-PRUEBA', ts: AHORA_MS - 30000, rotation: 1, ttlMs: 20000 },
@@ -1392,6 +1413,138 @@ console.log('\nconfig.html — vinculacion de WhatsApp: los cinco estados')
   ok('el vencido explica que ya viene uno nuevo, no solo que desaparecio',
     /nuevo/i.test(vencido.getElementById('pairing-detail').textContent),
     vencido.getElementById('pairing-detail').textContent)
+}
+
+// El defecto real: el panel se quedo 26 minutos diciendo "unos segundos" mientras el
+// worker seguia vivo y el QR rotaba en storage. La escalada usa el tiempo REAL desde
+// que el panel entro en 'waiting', asi que se avanza el reloj del panel y se le pide
+// que vuelva a mirar (foco), tal como lo hace quien vuelve a la pestana.
+console.log('\nconfig.html — la espera del QR deja de prometer "unos segundos"')
+{
+  const casos = [
+    ['es-419', /esperando|unos segundos/i, /ya lleva/i, /tarda mas de lo esperado/i],
+    ['en-US', /few seconds/i, /it has been waiting/i, /taking longer than expected/i],
+    ['pt-BR', /alguns segundos/i, /ja esta esperando/i, /demorando mais/i]
+  ]
+  for (const [lang, corta, media, larga] of casos) {
+    const m = await montar('config.html', {}, lang)
+    await espera()
+    ok(`recien abierto, en ${lang}, la espera todavia es la corta`,
+      corta.test(m.doc.getElementById('pairing-detail').textContent),
+      m.doc.getElementById('pairing-detail').textContent)
+    ok(`y el diagnostico todavia no aparece, en ${lang}`,
+      m.doc.getElementById('pairing-diag').hidden,
+      m.doc.getElementById('pairing-diag').textContent)
+
+    const ahora = m.window.Date.now()
+    m.window.Date.now = () => ahora + 65000
+    m.window.dispatchEvent(new m.window.Event('focus'))
+    await espera()
+    ok(`pasado un minuto sin QR, en ${lang}, dice cuanto lleva de verdad`,
+      media.test(m.doc.getElementById('pairing-detail').textContent),
+      m.doc.getElementById('pairing-detail').textContent)
+    ok(`y ahora si aparece el diagnostico, en ${lang}`,
+      !m.doc.getElementById('pairing-diag').hidden)
+
+    m.window.Date.now = () => ahora + 185000
+    m.window.dispatchEvent(new m.window.Event('focus'))
+    await espera()
+    ok(`pasados tres minutos sin QR, en ${lang}, dice que ya es raro y da el siguiente paso`,
+      larga.test(m.doc.getElementById('pairing-detail').textContent),
+      m.doc.getElementById('pairing-detail').textContent)
+  }
+}
+
+// Lo que el panel puede AFIRMAR, no lo que adivina: si el plugin contesta, y que dice
+// la conexion de WhatsApp. El heartbeat se adelanta junto con el reloj para que siga
+// "vivo" a los ojos de `pintarLatido` — sin eso, la sola demora del reloj lo haria ver
+// caido y se estaria probando otra cosa.
+console.log('\nconfig.html — la espera larga dice lo que de verdad sabe, nunca una causa inventada')
+{
+  const casos = [
+    ['es-419', /esta respondiendo/i, /todavia no dijo nada/i,
+      /no esta respondiendo/i, /sigue intentando/i],
+    ['en-US', /is responding/i, /has not said anything/i,
+      /is not responding/i, /still trying/i],
+    ['pt-BR', /esta respondendo/i, /ainda nao disse nada/i,
+      /nao esta respondendo/i, /ainda esta tentando/i]
+  ]
+  for (const [lang, workerUp, connSilent, workerDown, connConnecting] of casos) {
+    const vivo = await montar('config.html', {}, lang)
+    await espera()
+    const ahora1 = vivo.window.Date.now()
+    vivo.storage.workerBeat = { at: new Date(ahora1 + 65000).toISOString() }
+    vivo.window.Date.now = () => ahora1 + 65000
+    vivo.window.dispatchEvent(new vivo.window.Event('focus'))
+    await espera()
+    const diag1 = vivo.doc.getElementById('pairing-diag').textContent
+    ok(`con el plugin respondiendo, en ${lang}, el diagnostico lo dice`,
+      workerUp.test(diag1), diag1)
+    ok(`y que la conexion todavia no informo nada, en ${lang}`,
+      connSilent.test(diag1), diag1)
+
+    const ausente = await montar('config.html', { workerBeat: null,
+      sidecar: { connection: 'connecting', qr: null, exited: false } }, lang)
+    await espera()
+    const ahora2 = ausente.window.Date.now()
+    ausente.window.Date.now = () => ahora2 + 65000
+    ausente.window.dispatchEvent(new ausente.window.Event('focus'))
+    await espera()
+    const diag2 = ausente.doc.getElementById('pairing-diag').textContent
+    ok(`con el plugin sin responder, en ${lang}, el diagnostico lo dice`,
+      workerDown.test(diag2), diag2)
+    ok(`y que la conexion sigue intentando, en ${lang}`,
+      connConnecting.test(diag2), diag2)
+  }
+}
+
+// Las dos claves existian sin que nada las disparara: `estadoSidecar` deja un cierre
+// transitorio como 'waiting' a proposito -se cura solo, tratarlo como 'down' seria
+// alarmar por algo que ya se esta arreglando-, pero eso no es motivo para callar lo
+// que el sidecar ya conto.
+console.log('\nconfig.html — un cierre transitorio que se cura solo ahora se explica, no se calla')
+{
+  const casos = [
+    ['socket-caido', /reintentando sola/i],
+    ['reinicio-requerido', /reiniciando la conexion/i]
+  ]
+  for (const [motivo, texto] of casos) {
+    const { doc } = await montar('config.html', { sidecar: {
+      connection: 'close', motivo, qr: null, exited: false
+    } }, 'es-419')
+    await espera()
+    ok(`${motivo}: el estado sigue siendo "esperando", no "caida" — se cura solo`,
+      /esperando/i.test(doc.getElementById('pairing-msg').textContent),
+      doc.getElementById('pairing-msg').textContent)
+    ok(`${motivo}: pero ahora dice lo que de verdad esta pasando, no el generico`,
+      texto.test(doc.getElementById('pairing-detail').textContent),
+      doc.getElementById('pairing-detail').textContent)
+  }
+}
+
+// "Me toca refrescar?" tiene que tener una respuesta en la pantalla. Va por el
+// carril de usuario (`read(key, true)`, codigo fuente), no por el del sondeo.
+console.log('\nconfig.html — "Comprobar ahora" hace una lectura de verdad y se apaga en vuelo')
+{
+  const { doc, enviados } = await montar('config.html', {
+    sidecar: { connection: 'connecting', qr: null, exited: false }
+  }, 'es-419')
+  await espera()
+  const antes = enviados.length
+  const boton = doc.getElementById('pairing-refresh')
+  boton.click()
+  ok('el boton queda ocupado mientras espera la respuesta', boton.disabled === true,
+    `disabled=${boton.disabled}`)
+  await espera()
+  ok('y se reactiva cuando vuelve', boton.disabled === false, `disabled=${boton.disabled}`)
+  const pedidos = enviados.slice(antes).filter((d) => d.action === 'storage.get')
+    .map((d) => d.params.key)
+  ok('pide de nuevo el sidecar y el latido del worker, no otra cosa',
+    pedidos.includes('sidecar') && pedidos.includes('workerBeat'),
+    JSON.stringify(pedidos))
+  ok('y confirma en pantalla que ya comprobo',
+    doc.getElementById('said-pairing-refresh').textContent.length > 0,
+    doc.getElementById('said-pairing-refresh').textContent)
 }
 
 console.log('\nconfig.html — el QR escala con el ancho de la ventana')
@@ -1895,6 +2048,22 @@ console.log('\nconfig.html — las traducciones de desvincular estan en los tres
     // Lo nuevo de esta vuelta: los dos grupos del selector, el aviso de "ya estaba
     // autorizada" y el fallo de quitar.
     'chatGroupOn', 'chatGroupOff', 'chatAlready', 'scopeRmFail']
+  const faltan = nuevas.filter((k) => !S.es[k] || !S.en[k])
+  ok('cada texto nuevo existe en espanol y en ingles', faltan.length === 0,
+    `faltan = ${JSON.stringify(faltan)}`)
+  const sinPt = nuevas.filter((k) => !S.pt[k] || S.pt[k] === S.en[k])
+  ok('y en portugues propio, no heredado del ingles', sinPt.length === 0,
+    `sin portugues = ${JSON.stringify(sinPt)}`)
+}
+
+console.log('\nconfig.html — las traducciones de la espera larga y "Comprobar ahora" ' +
+  'estan en los tres idiomas')
+{
+  const { window } = await montar('config.html')
+  const S = window.STRINGS
+  const nuevas = ['pairingWaitingElapsed', 'pairingWaitingLong', 'pairingKnownWorkerUp',
+    'pairingKnownWorkerDown', 'pairingKnownConnConnecting', 'pairingKnownConnSilent',
+    'pairingRefresh', 'pairingChecked']
   const faltan = nuevas.filter((k) => !S.es[k] || !S.en[k])
   ok('cada texto nuevo existe en espanol y en ingles', faltan.length === 0,
     `faltan = ${JSON.stringify(faltan)}`)

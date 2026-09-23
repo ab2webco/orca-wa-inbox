@@ -258,8 +258,14 @@
          #fff y no un token -es la unica superficie del panel que no seria del tema. */
       #qr-wrap { display: inline-block; background: #fff; padding: 14px;
                  border-radius: var(--radius-md); margin: 4px 0 8px;
-                 border: 1px solid var(--border, var(--fb-border)); line-height: 0; }
+                 border: 1px solid var(--border, var(--fb-border)); line-height: 0;
+                 transition: opacity .15s; }
       #qr-canvas { display: block; }
+      /* Un QR vencido en pantalla es inofensivo -WhatsApp lo rechaza y el telefono
+         dice que el codigo no vale-. Un RECUADRO VACIO es peor: se ve como un plugin
+         roto, no como uno que esta a punto de mostrar el siguiente. Se apaga, no se
+         esconde. */
+      #qr-wrap.vencido { opacity: .4; }
       #pairing-actions[hidden], #pairing-warn[hidden] { display: none; }
       /* El aviso de lo que se pierde va en --destructive y no apagado como las demas
          pistas: es lo unico de esta seccion que el usuario tiene que leer ANTES de
@@ -288,8 +294,20 @@
         <h2 data-t="pairingLegend"></h2>
         <p class="pairing-msg" id="pairing-msg"></p>
         <p class="hint" id="pairing-detail" hidden></p>
+        <!-- Lo que el panel de verdad leyo del worker y del sidecar, en frase y no en
+             nombre de campo. Solo aparece cuando la espera ya deja de ser normal
+             (`pairingDiagnostico`): antes de eso no hay nada raro que contar. -->
+        <p class="hint" id="pairing-diag" hidden></p>
         <div id="qr-wrap" hidden>
           <canvas id="qr-canvas"></canvas>
+        </div>
+        <!-- "Me toca refrescar?" tenia que tener una respuesta en la pantalla: sin
+             esto, la unica forma de forzar una lectura nueva era salir del panel y
+             volver. Va por el carril de USUARIO (`call(..., true)`), no por el del
+             sondeo, para no gastarle su cupo. -->
+        <div class="actions">
+          <button id="pairing-refresh" data-t="pairingRefresh"></button>
+          <span class="said" id="said-pairing-refresh"></span>
         </div>
         <!-- Desvincular es irreversible desde aca y no hay modal donde preguntar
              (`surface` es un enum cerrado y `window.open` esta anulado, §6), asi que
@@ -504,10 +522,28 @@
           pairingWaiting: 'Esperando el codigo QR',
           pairingWaitingHow: 'Conectando con WhatsApp. Deje este panel abierto ' +
             'unos segundos.',
+          // Pasado UMBRAL_ESPERA_REPORTA_MS "unos segundos" ya no es cierto: se
+          // cambia por el tiempo real. Pasado UMBRAL_ESPERA_LARGA_MS ya no es
+          // variacion normal, y se nombra el siguiente paso en vez de seguir
+          // prometiendo que ya casi.
+          pairingWaitingElapsed: 'Ya lleva {s} s esperando el codigo. Puede tardar ' +
+            'un poco mas al empezar.',
+          pairingWaitingLong: 'Esto ya tarda mas de lo esperado. Apriete ' +
+            '"Comprobar ahora" aca abajo para ver si hay novedades.',
+          // Lo que el panel puede AFIRMAR sobre el worker y la conexion, para la
+          // espera larga: dos hechos sueltos, nunca una causa que no leyo.
+          pairingKnownWorkerUp: 'El plugin esta respondiendo.',
+          pairingKnownWorkerDown: 'El plugin no esta respondiendo.',
+          pairingKnownConnConnecting: 'La conexion con WhatsApp dice que sigue ' +
+            'intentando.',
+          pairingKnownConnSilent: 'La conexion con WhatsApp todavia no dijo nada.',
+          pairingRefresh: 'Comprobar ahora',
+          pairingChecked: 'Comprobado.',
           pairingLive: 'Escanee este codigo con WhatsApp',
           pairingExpired: 'El codigo vencio',
           pairingExpiredHow: 'Esperando uno nuevo: el codigo de WhatsApp rota cada ' +
-            '20 segundos, aproximadamente.',
+            '60 segundos, aproximadamente. Si tarda, apriete "Comprobar ahora" aca ' +
+            'abajo.',
           pairingConnected: 'WhatsApp esta conectado',
           pairingDown: 'La sesion esta caida',
           pairingHowNoAuthDir: 'No se encontro donde Orca guarda los datos del ' +
@@ -621,11 +657,13 @@
             'es lo que mas puede tardar un mensaje nuevo en aparecer aca y en llegarle ' +
             'al agente. Mas seguido cuesta mas lectura; mas espaciado, mas espera.',
           saveSync: 'Guardar frecuencia', syncSaved: 'Frecuencia guardada',
-          workerGone: 'Apruebe el plugin en Ajustes',
-          workerGoneHow: 'Abra Ajustes > Plugins y apruebe WhatsApp Inbox. Hasta que lo ' +
-            'apruebe, Orca no lo arranca y ningun boton de aca responde.',
+          workerGone: 'El plugin no responde',
+          workerGoneHow: 'Lo mas probable es que falte aprobarlo: abra Ajustes > Plugins y ' +
+            'pulse "Review & enable" en WhatsApp Inbox. Hasta que lo apruebe, Orca no lo ' +
+            'arranca y ningun boton de aca responde.',
           workerGoneWhy: 'Cada actualizacion la vuelve a pedir, porque cambia lo que el ' +
-            'plugin le dice a su agente que ejecute.',
+            'plugin le dice a su agente que ejecute. Si ya lo aprobo, este panel puede ' +
+            'tardar unos segundos: consulta cada 12 s, y solo mientras esta a la vista.',
           workerStale: 'El plugin dejo de responder',
           workerStaleHow: 'Espere unos segundos y, si no vuelve, reinicie Orca. Dejo de ' +
             'dar senales hace {s} s.',
@@ -705,10 +743,21 @@
           pairingWaiting: 'Waiting for the QR code',
           pairingWaitingHow: 'Connecting to WhatsApp. Keep this panel open for a ' +
             'few seconds.',
+          pairingWaitingElapsed: 'It has been waiting {s} s for the code. It can ' +
+            'take a little longer at the start.',
+          pairingWaitingLong: 'This is taking longer than expected. Press ' +
+            '"Check now" below to see if anything changed.',
+          pairingKnownWorkerUp: 'The plugin is responding.',
+          pairingKnownWorkerDown: 'The plugin is not responding.',
+          pairingKnownConnConnecting: 'The WhatsApp connection says it is still ' +
+            'trying.',
+          pairingKnownConnSilent: 'The WhatsApp connection has not said anything yet.',
+          pairingRefresh: 'Check now',
+          pairingChecked: 'Checked.',
           pairingLive: 'Scan this code with WhatsApp',
           pairingExpired: 'The code expired',
           pairingExpiredHow: 'Waiting for a new one: the WhatsApp code rotates roughly ' +
-            'every 20 seconds.',
+            'every 60 seconds. If it takes a while, press "Check now" below.',
           pairingConnected: 'WhatsApp is connected',
           pairingDown: 'The session is down',
           pairingHowNoAuthDir: 'Could not find where Orca keeps this plugin\u2019s data ' +
@@ -820,11 +869,13 @@
             'also the longest a new message can take to show up here and to reach the ' +
             'agent. More often costs more reading; less often costs more waiting.',
           saveSync: 'Save frequency', syncSaved: 'Frequency saved',
-          workerGone: 'Approve the plugin in Settings',
-          workerGoneHow: 'Open Settings > Plugins and approve WhatsApp Inbox. Until you ' +
-            'do, Orca does not start it and no button here answers.',
+          workerGone: 'The plugin is not responding',
+          workerGoneHow: 'Most likely it still needs approving: open Settings > Plugins ' +
+            'and press "Review & enable" on WhatsApp Inbox. Until you do, Orca does not ' +
+            'start it and no button here answers.',
           workerGoneWhy: 'Every update asks again, because it changes what the plugin ' +
-            'tells your agent to run.',
+            'tells your agent to run. If you already approved it, this panel can take a ' +
+            'few seconds to catch up: it checks every 12 s, and only while it is on screen.',
           workerStale: 'The plugin stopped responding',
           workerStaleHow: 'Wait a few seconds and, if it does not come back, restart ' +
             'Orca. It stopped signalling {s} s ago.',
@@ -894,10 +945,22 @@
         pairingWaiting: 'Aguardando o codigo QR',
         pairingWaitingHow: 'Conectando ao WhatsApp. Deixe este painel aberto ' +
           'por alguns segundos.',
+        pairingWaitingElapsed: 'Ja esta esperando o codigo ha {s} s. Pode demorar ' +
+          'um pouco mais no comeco.',
+        pairingWaitingLong: 'Isto ja esta demorando mais do que o esperado. ' +
+          'Aperte "Verificar agora" abaixo para ver se ha alguma novidade.',
+        pairingKnownWorkerUp: 'O plugin esta respondendo.',
+        pairingKnownWorkerDown: 'O plugin nao esta respondendo.',
+        pairingKnownConnConnecting: 'A conexao com o WhatsApp diz que ainda esta ' +
+          'tentando.',
+        pairingKnownConnSilent: 'A conexao com o WhatsApp ainda nao disse nada.',
+        pairingRefresh: 'Verificar agora',
+        pairingChecked: 'Verificado.',
         pairingLive: 'Escaneie este codigo com o WhatsApp',
         pairingExpired: 'O codigo venceu',
         pairingExpiredHow: 'Aguardando um novo: o codigo do WhatsApp gira a cada ' +
-          '20 segundos, aproximadamente.',
+          '60 segundos, aproximadamente. Se demorar, aperte "Verificar agora" ' +
+          'abaixo.',
         pairingConnected: 'O WhatsApp esta conectado',
         pairingDown: 'A sessao esta fora do ar',
         pairingHowNoAuthDir: 'Nao foi encontrado onde o Orca guarda os dados deste ' +
@@ -988,11 +1051,13 @@
           'agente. Mais seguido custa mais leitura; mais espacado, mais espera.',
         saveSync: 'Salvar frequencia', syncSaved: 'Frequencia salva',
         optionalTitle: 'Opcional \u2014 nada disso bloqueia o agente:',
-        workerGone: 'Aprove o plugin em Ajustes',
-        workerGoneHow: 'Abra Ajustes > Plugins e aprove o WhatsApp Inbox. Ate voce ' +
-          'aprovar, o Orca nao o inicia e nenhum botao daqui responde.',
+        workerGone: 'O plugin nao responde',
+        workerGoneHow: 'O mais provavel e que falte aprova-lo: abra Ajustes > Plugins e ' +
+          'clique em "Review & enable" no WhatsApp Inbox. Ate voce aprovar, o Orca nao o ' +
+          'inicia e nenhum botao daqui responde.',
         workerGoneWhy: 'Cada atualizacao pede de novo, porque muda o que o plugin manda ' +
-          'o seu agente executar.',
+          'o seu agente executar. Se voce ja aprovou, este painel pode demorar alguns ' +
+          'segundos: consulta a cada 12 s, e so enquanto esta a vista.',
         workerStale: 'O plugin parou de responder',
         workerStaleHow: 'Espere alguns segundos e, se nao voltar, reinicie o Orca. ' +
           'Parou de dar sinal ha {s} s.',
@@ -1331,15 +1396,25 @@
         })
       }
 
+      // Lo unico que se sabe con certeza del worker: si el ultimo latido lo dice VIVO
+      // o AUSENTE. `null` es "todavia no se sabe" (antes del primer `pintarLatido`) y
+      // no se afirma nada en ese caso — no saber no es lo mismo que saber que no esta.
+      // Lo usa `pairingDiagnostico` para decir, en la vinculacion, si el plugin
+      // contesta o no — sin repetir el aviso grande de `workerGone`, que ya esta en
+      // pantalla, y sin inventar una causa que este latido no prueba.
+      var workerAusente = null
+
       function pintarLatido(beat) {
         if (!hayRespuesta(beat)) return false
         if (!beat || typeof beat !== 'object' || !beat.at) {
+          workerAusente = true
           showAlert(esc(t('workerGone')), esc(t('workerGoneHow')),
             esc(t('workerGoneWhy')))
           return true
         }
         var edad = Date.now() - Date.parse(beat.at)
-        if (!(edad >= 0) || edad <= LATIDO_VENCE_MS) return false
+        if (!(edad >= 0) || edad <= LATIDO_VENCE_MS) { workerAusente = false; return false }
+        workerAusente = true
         showAlert(esc(t('workerStale')),
           esc(fmt('workerStaleHow', { s: Math.round(edad / 1000) })))
         return true
@@ -2136,29 +2211,94 @@
       // ya estaba en pantalla.
       var sidecarUlt = null
       var qrPintado = null // { ts, tam }: para no volver a dibujar el mismo QR cada 2 s
+
+      // Desde cuando el panel esta en 'waiting' SIN CORTE: se pone en el primer render
+      // que lo ve y se borra en cuanto el estado cambia a otra cosa. Sin esto no hay
+      // forma de saber si "esperando el QR" lleva dos segundos o veintiseis minutos —
+      // que es exactamente lo que le paso al dueno: el panel prometia "unos segundos"
+      // sin importar cuanto llevara.
+      var esperandoDesde = null
+
+      // Cuando dejar de prometer "unos segundos" y cuando decir que esto ya es raro.
+      // El sidecar rota el QR cada QR_VIGENCIA_MS (60 s, sidecar/src/index.js): un
+      // primer arranque normal deja de estar en 'waiting' bastante antes de que se
+      // cumpla UNA rotacion entera, asi que a partir de ahi "unos segundos" ya seria
+      // falso y se cambia por el tiempo real. A las TRES rotaciones (180 s) sin QR ni
+      // conexion ya no es variacion normal — es el mismo cuadro que dejo el panel 26
+      // minutos diciendo lo mismo — y ahi se nombra el siguiente paso en vez de seguir
+      // esperando en silencio. Las dos quedan comodas arriba del sondeo dedicado de la
+      // vinculacion (2 s, `VEREDICTO_SONDEO_MS`/`vigilarSidecar`), que sigue siendo lo
+      // bastante fino para notar el cambio de estado sin que estos umbrales titilen.
+      var UMBRAL_ESPERA_REPORTA_MS = QR_VIGENCIA_MS
+      var UMBRAL_ESPERA_LARGA_MS = QR_VIGENCIA_MS * 3
+
+      /** Que sidecar y worker contestaron de verdad, en una frase sin nombres de campo.
+       *  Reemplaza la adivinanza del dueno ("se esta generando? me toca refrescar?")
+       *  por lo unico que el panel puede afirmar: si el plugin responde, y que dice el
+       *  sidecar de su conexion. Nunca inventa una causa que no leyo. */
+      function pairingDiagnostico (d) {
+        var partes = []
+        if (workerAusente === true) partes.push(t('pairingKnownWorkerDown'))
+        else if (workerAusente === false) partes.push(t('pairingKnownWorkerUp'))
+        var conexion = d && typeof d === 'object' ? d.connection : null
+        partes.push(conexion === 'connecting'
+          ? t('pairingKnownConnConnecting') : t('pairingKnownConnSilent'))
+        return partes.join(' ')
+      }
+
       function renderPairing (d) {
         if (hayRespuesta(d)) sidecarUlt = d
         else d = sidecarUlt
         var estado = estadoSidecar(d)
         var msg = el('pairing-msg')
         var detalle = el('pairing-detail')
+        var diag = el('pairing-diag')
         var wrap = el('qr-wrap')
         msg.className = 'pairing-msg' +
           (estado === 'connected' ? ' ok' : estado === 'down' ? ' bad' : '')
         msg.textContent = t('pairing' + estado.charAt(0).toUpperCase() + estado.slice(1))
+        esperandoDesde = estado === 'waiting' ? (esperandoDesde || Date.now()) : null
         var como = ''
+        var comoDiag = ''
         if (estado === 'down') {
           como = porCodigo(SIDECAR_HOW_KEY, (d && d.error && d.error.code) || (d && d.motivo),
             (d && d.error && d.error.detail) || '')
         } else if (estado === 'waiting') {
-          como = t('pairingWaitingHow')
+          // Un cierre transitorio con backoff (`socket-caido`/`reinicio-requerido`) no
+          // es 'down' -se cura solo, `estadoSidecar` lo deja aca a proposito- pero es
+          // una CAUSA REAL que el sidecar ya conto: contarla es mejor que taparla con
+          // el generico "conectando", y las dos claves ya existian sin que nada las
+          // disparara.
+          var codigoCierre = d && d.connection === 'close' ? codigoSidecar(d) : null
+          var causaConocida = codigoCierre === 'socket-caido' || codigoCierre === 'reinicio-requerido'
+          var esperaMs = Date.now() - esperandoDesde
+          if (causaConocida) {
+            como = porCodigo(SIDECAR_HOW_KEY, codigoCierre, '')
+          } else if (esperaMs >= UMBRAL_ESPERA_LARGA_MS) {
+            como = t('pairingWaitingLong')
+            comoDiag = pairingDiagnostico(d)
+          } else if (esperaMs >= UMBRAL_ESPERA_REPORTA_MS) {
+            como = fmt('pairingWaitingElapsed', { s: Math.round(esperaMs / 1000) })
+            comoDiag = pairingDiagnostico(d)
+          } else {
+            como = t('pairingWaitingHow')
+          }
         } else if (estado === 'expired') {
           como = t('pairingExpiredHow')
         }
         detalle.textContent = como
         detalle.hidden = !como
-        if (estado === 'live' && d && d.qr) {
+        diag.textContent = comoDiag
+        diag.hidden = !comoDiag
+        // Un QR vencido sigue siendo una IMAGEN valida -la rechaza WhatsApp, no el
+        // navegador-, y esconderla deja un recuadro vacio que se ve como un plugin
+        // roto. Solo se esconde de verdad en los estados que NO tienen QR para
+        // mostrar; `d.qr` puede quedar pisado en 'down' -`escribir()` en main.mjs
+        // mezcla el estado, no lo reemplaza- y por eso la condicion mira el ESTADO,
+        // no solo si `d.qr` existe.
+        if ((estado === 'live' || estado === 'expired') && d && d.qr) {
           wrap.hidden = false
+          wrap.classList.toggle('vencido', estado === 'expired')
           var tam = tamanoQrPx()
           if (!qrPintado || qrPintado.ts !== d.qr.ts || qrPintado.tam !== tam) {
             dibujarQr(d.qr.qr, tam)
@@ -2166,6 +2306,7 @@
           }
         } else {
           wrap.hidden = true
+          wrap.classList.remove('vencido')
           qrPintado = null
         }
         pintarAccionesPairing(estado, d)
@@ -2310,6 +2451,23 @@
       })
 
       el('pairing-cancel').addEventListener('click', salirDeConfirmar)
+
+      // "Comprobar ahora": una lectura de ESTE momento, no la que traiga la proxima
+      // vuelta del sondeo (12 s, o 2 s mientras empareja). Va por `read(key, true)` —
+      // el carril de USUARIO, el mismo que abrir el panel — para no gastar el cupo del
+      // sondeo (docs/ENCARGO...§H2-H3) ni quedar atras de el en la cola. `busy()` lo
+      // apaga mientras esta en vuelo, igual que cualquier otro boton de esta pantalla.
+      el('pairing-refresh').addEventListener('click', function (event) {
+        busy(event.currentTarget, Promise.all([
+          read('sidecar', true),
+          read('workerBeat', true)
+        ]).then(function (rs) {
+          var sinWorker = pintarLatido(rs[1])
+          apagarLoQueNecesitaWorker(sinWorker)
+          renderPairing(rs[0])
+          said('said-pairing-refresh', t('pairingChecked'))
+        }))
+      })
 
       // Reintentar no destruye nada: sale de un solo clic. Pedir confirmacion para algo
       // que no se pierde es ruido, y el ruido es lo que enseña a confirmar sin leer.
