@@ -249,10 +249,17 @@ El arnés de verificación vive en este mismo repo, junto al plugin. Antes se qu
 afuera y quien clonaba no podía correr nada.
 
 ```
-npm run setup                     # instala en ../.orca-wa-inbox-deps, NO acá
-npx playwright install chromium   # solo la primera vez
+npm run setup    # instala en ../.orca-wa-inbox-deps, NO acá
 npm run check
 ```
+
+`setup` crea el directorio hermano, escribe su `package.json` desde
+`scripts/deps.package.json` —la única lista de dependencias del arnés— e instala ahí,
+incluido el navegador que usan las capturas. Basta con eso: no hace falta un
+`playwright install` aparte.
+
+Necesita **Node** y **Python ≥ 3.10** (varios `scripts/check-*` usan sintaxis de 3.10;
+el `python3` de macOS es 3.9 y no sirve).
 
 `npm install` **acá adentro** rompe el plugin: dejaría un `node_modules` dentro de la
 carpeta que el marketplace clona y que Orca carga. Por eso las dependencias del arnés

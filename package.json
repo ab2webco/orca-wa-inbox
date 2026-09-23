@@ -3,7 +3,7 @@
   "private": true,
   "description": "Arnes de verificacion del plugin WhatsApp Inbox: paneles, prompts y CLIs.",
   "scripts": {
-    "setup": "npm --prefix ../.orca-wa-inbox-deps install && ../.orca-wa-inbox-deps/node_modules/.bin/playwright install chromium-headless-shell",
+    "setup": "node scripts/setup.mjs",
     "build:sidecar": "node sidecar/build.mjs",
     "check": "scripts/check-panels && scripts/check-voseo && scripts/check-prompts && scripts/check-resolver && scripts/check-harness && scripts/check-clis && scripts/check-closing && node test/manifest.test.mjs && node test/resolver.test.mjs && npm run build:sidecar && node test/sidecar-build.test.mjs && node test/sidecar-pairing.test.mjs && node test/sidecar-mensajes.test.mjs && node test/almacen.test.mjs && node test/envio.test.mjs && node test/panels.test.mjs && node test/worker.test.mjs && npm run shots",
     "shots": "node test/shots.mjs"
