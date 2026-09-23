@@ -123,12 +123,18 @@ export function filaDeChat (chat) {
  * CERO directos, porque `groupFetchAllParticipating` devuelve grupos por definicion.
  */
 export function ingerirChats ({ almacen, cuenta, chats, nombreDeChat = () => null,
-  recordarNombre = () => {}, ahora = Date.now() }) {
+  recordarNombre = () => {}, esPropio = () => false, ahora = Date.now() }) {
   let anotados = 0
   let omitidos = 0
   for (const chat of Array.isArray(chats) ? chats : []) {
     const fila = filaDeChat(chat)
     if (!fila) { omitidos += 1; continue }
+    // La conversacion del dueno CONSIGO MISMO no es una conversacion que se pueda
+    // autorizar: no hay nadie al otro lado a quien contestarle. WhatsApp la manda como
+    // un directo mas -medido: `262444127674377@lid`, el propio LID del dueno, entre las
+    // tres unicas directas de la cuenta- y en una lista donde escasean las directas,
+    // una de cada tres siendo uno mismo es ruido caro.
+    if (esPropio(fila.chatJid)) { omitidos += 1; continue }
     if (fila.nombre) recordarNombre(fila.chatJid, fila.nombre)
     almacen.anotarChat({
       cuenta,
@@ -145,6 +151,48 @@ export function ingerirChats ({ almacen, cuenta, chats, nombreDeChat = () => nul
     anotados += 1
   }
   return { anotados, omitidos }
+}
+
+/**
+ * La LIBRETA DE NOMBRES, de `contacts.upsert`/`contacts.set` y del lote de historial.
+ *
+ * Los grupos traen su asunto en su propio evento; las conversaciones directas no. Su
+ * nombre vive en la libreta del telefono y llega por su propio canal, que hasta aca no
+ * se escuchaba. Sin el, un directo se llama como su numero -medido en la cuenta del
+ * dueno: `573172561455@s.whatsapp.net` y `262444127674377@lid` de tres directas en
+ * total- y un directo que se llama como su numero es inelegible en la practica aunque
+ * este en la lista.
+ *
+ * Esto NO afloja la regla de §5. Un nombre visible es exactamente lo que ya se guarda
+ * de cada grupo: contabilidad, no contenido. De `contacts` se lee el nombre Y NADA MAS
+ * -ni un estado, ni una foto, ni un mensaje- y el unico camino que escribe un cuerpo
+ * sigue siendo `ingerirMensaje`, que le pregunta al alcance antes.
+ *
+ * `verifiedName` es el nombre que WhatsApp verifico para una cuenta de empresa y va
+ * primero: es el que el dueno reconoce. Despues `name` (la agenda del telefono) y por
+ * ultimo `notify` (como se presenta quien escribe), que es el menos confiable porque
+ * lo elige el remitente.
+ */
+export function nombreDeContacto (contacto) {
+  const texto = (v) => (typeof v === 'string' ? v.trim() : '')
+  return texto(contacto?.verifiedName) || texto(contacto?.name) ||
+    texto(contacto?.notify) || ''
+}
+
+export function ingerirContactos ({ almacen, cuenta, contactos, recordarNombre = () => {},
+  esPropio = () => false }) {
+  let nombrados = 0
+  for (const contacto of Array.isArray(contactos) ? contactos : []) {
+    const jid = jidDe(contacto?.id) || jidDe(contacto)
+    if (!jid || !esConversacion(jid) || esPropio(jid)) continue
+    const nombre = nombreDeContacto(contacto)
+    if (!nombre) continue
+    recordarNombre(jid, nombre)
+    // Solo pone nombre donde no lo hay. La libreta llega en lotes y a destiempo: si ya
+    // se sabia como se llama esa conversacion, un lote viejo no puede degradarlo.
+    if (almacen.nombrarChat({ cuenta, chatJid: jid, nombre })) nombrados += 1
+  }
+  return { nombrados }
 }
 
 /**

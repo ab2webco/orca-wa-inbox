@@ -19,8 +19,9 @@ import { isAbsolute } from 'node:path'
 import { abrirAlmacen, rutaAlmacen, rutaMedia } from './almacen.js'
 import { crearAlcance } from './alcance.js'
 import { atenderSalida, ENVIO_LATIDO_MS } from './envio.js'
-import { INGESTA, ingerirActualizacion, ingerirChats, ingerirMensaje } from './ingesta.js'
-import { identidadDeSesion, identidadesPropias } from './mensajes.js'
+import { INGESTA, ingerirActualizacion, ingerirChats, ingerirContactos,
+  ingerirMensaje } from './ingesta.js'
+import { identidadDeSesion, identidadesPropias, identidadPropia } from './mensajes.js'
 
 // El auth state es una credencial viva (docs/ENCARGO...§11-F1): en un equipo
 // compartido el umask por defecto lo deja legible para cualquiera. Esto tiene que
@@ -364,6 +365,19 @@ async function iniciar () {
     socket = sock
     conectado = false
 
+    // El numero como lo reconoce una persona: `573008236130:7@s.whatsapp.net` no le
+    // dice nada a nadie. Se corta el sufijo de dispositivo y el servidor.
+    const numeroVisible = (pn) => {
+      const usuario = String(pn || '').split('@')[0].split(':')[0]
+      return /^\d{6,}$/.test(usuario) ? `+${usuario}` : null
+    }
+
+    // Si este jid es el dueno. Se calcula contra `identidades`, que es la MISMA fuente
+    // con la que se decide "me nombraron": una segunda lista de jids propios se
+    // desincroniza de la primera y entonces el panel y la bandeja discrepan sobre quien
+    // es uno.
+    const esPropio = (jid) => identidades.has(identidadPropia(jid))
+
     // Quien soy yo, a los efectos de "me nombraron" y "contestaron algo mio". Se
     // pregunta en CADA `creds.update` y no una sola vez en el `open`, porque ahi la
     // respuesta todavia esta incompleta: ver `identidadDeSesion` en mensajes.js.
@@ -374,13 +388,6 @@ async function iniciar () {
     // con `menciona_me = 0` porque en ese momento nadie sabia que ese numero era el
     // suyo. Sin la reparacion esos mensajes no salen en la bandeja NUNCA, y son justo
     // los primeros que llegan tras vincular la linea.
-    // El numero como lo reconoce una persona: `573008236130:7@s.whatsapp.net` no le
-    // dice nada a nadie. Se corta el sufijo de dispositivo y el servidor.
-    const numeroVisible = (pn) => {
-      const usuario = String(pn || '').split('@')[0].split(':')[0]
-      return /^\d{6,}$/.test(usuario) ? `+${usuario}` : null
-    }
-
     let identidadUlt = null
     const refrescarIdentidad = () => {
       const yo = identidadDeSesion(sock.authState?.creds, sock.user)
@@ -525,7 +532,8 @@ async function iniciar () {
           cuenta,
           chats,
           nombreDeChat: (jid) => nombresDeChat.get(jid) || null,
-          recordarNombre: (jid, nombre) => nombresDeChat.set(jid, nombre)
+          recordarNombre: (jid, nombre) => nombresDeChat.set(jid, nombre),
+          esPropio
         })
       } catch (error) {
         avisarFallo('chat-sin-anotar', error)
@@ -534,6 +542,31 @@ async function iniciar () {
     }
     sock.ev.on('chats.upsert', anotarChats)
     sock.ev.on('chats.update', anotarChats)
+
+    // La LIBRETA DE NOMBRES. Los grupos traen su asunto por su propio evento; las
+    // conversaciones directas NO -su nombre vive en la agenda del telefono- y este
+    // canal no se escuchaba. Medido en la cuenta del dueno: de tres directas, dos se
+    // llamaban como su numero. Un directo que se llama como su numero es inelegible en
+    // la practica aunque este en la lista, que era la queja.
+    //
+    // Se lee el nombre Y NADA MAS: es la misma contabilidad que ya se guarda de cada
+    // grupo, no contenido de nadie (§5).
+    const anotarContactos = (contactos) => {
+      try {
+        return ingerirContactos({
+          almacen,
+          cuenta,
+          contactos,
+          recordarNombre: (jid, nombre) => nombresDeChat.set(jid, nombre),
+          esPropio
+        })
+      } catch (error) {
+        avisarFallo('contacto-sin-anotar', error)
+        return { nombrados: 0 }
+      }
+    }
+    sock.ev.on('contacts.upsert', anotarContactos)
+    sock.ev.on('contacts.set', ({ contacts }) => anotarContactos(contacts))
 
     // La lista INICIAL de conversaciones. Es el unico evento que la trae: `chats.upsert`
     // avisa de una conversacion NUEVA y `groupFetchAllParticipating` devuelve grupos por
@@ -545,7 +578,11 @@ async function iniciar () {
     // miran a proposito: listar una conversacion no puede guardar una palabra de nadie.
     // El unico camino que escribe un cuerpo sigue siendo `ingerirMensaje`, que le
     // pregunta al alcance antes (§5).
-    sock.ev.on('messaging-history.set', ({ chats, isLatest }) => {
+    sock.ev.on('messaging-history.set', ({ chats, contacts, isLatest }) => {
+      // Los contactos ANTES que los chats: asi las filas que nacen en este mismo lote
+      // ya encuentran su nombre en `nombresDeChat` en vez de nacer llamandose como su
+      // jid y depender de que otro lote las repare despues.
+      anotarContactos(contacts)
       const { anotados } = anotarChats(chats)
       historialChats += anotados
       // El PRIMER lote se fuerza y los demas no. Forzarlo una vez es lo que distingue
