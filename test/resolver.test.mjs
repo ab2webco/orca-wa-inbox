@@ -141,21 +141,38 @@ escenario('sin candidatos contesta vacio', () => {
 let hechas = 0
 const fallos = []
 
-// Las cinco copias tienen que ser el MISMO resolvedor: una correccion aplicada a
-// cuatro se ve bien y falla en la quinta. Se comparan sin comentarios porque el
-// precheck viaja sin ellos —la cadena de shell del JSON ya es larga de por si— y el
-// prompt si los lleva, que es a quien los comentarios le sirven. Que cada copia
-// derive del canonico caracter por caracter lo exige scripts/check-resolver.
-const codigo = (texto) => texto.split('\n')
-  .filter((l) => l.trim() && !l.trimStart().startsWith('#')).join('\n')
-const textos = [...COPIAS.entries()]
-const [nombreBase, textoBase] = textos[0]
-for (const [nombre, texto] of textos.slice(1)) {
+// Las cinco copias tienen que salir del MISMO canonico: una correccion aplicada a
+// cuatro se ve bien en el diff y falla en la quinta, que es la que corre en la maquina
+// del usuario. Salen en dos formas, y las emite scripts/resolver_formas.py:
+//
+//   - los prompts llevan el texto tal cual, comentarios incluidos: un prompt es texto
+//     que lee un modelo y ahi la brevedad solo cuesta comprension;
+//   - los precheck llevan el mismo programa minificado, porque el esquema de Orca corta
+//     el precheck en 1024 caracteres y pasarse invalida el manifiesto entero.
+//
+// Se comparan contra lo que emite el generador —no una copia contra otra— para que un
+// minificador que cambie de resultado se vea aca y no en una corrida programada.
+const GENERADOR = join(RAIZ, 'scripts', 'resolver_formas.py')
+const emite = (forma) => execFileSync('python3', [GENERADOR, forma],
+  { encoding: 'utf8', timeout: 60000 })
+const FORMA_ESPERADA = new Map(
+  ['legible', 'compacto'].map((forma) => [forma, emite(forma)]))
+
+for (const [nombre, texto] of COPIAS) {
+  // El prompt lleva la forma legible; todo lo demas —manifiesto y automations/— lleva
+  // la compacta.
+  const forma = nombre.startsWith('prompts/') ? 'legible' : 'compacto'
   hechas += 1
-  if (codigo(texto) !== codigo(textoBase)) {
-    fallos.push(`${nombre} no es el mismo resolvedor que ${nombreBase}`)
+  if (texto !== FORMA_ESPERADA.get(forma)) {
+    fallos.push(`${nombre} no es la forma "${forma}" que emite `
+      + 'scripts/resolver_formas.py')
   }
 }
+
+// Sin comentarios: la forma compacta ya viene sin ellos y la legible los lleva, asi que
+// mirar solo el codigo es lo que hace comparable a las dos.
+const codigo = (texto) => texto.split('\n')
+  .filter((l) => l.trim() && !l.trimStart().startsWith('#')).join('\n')
 
 for (const [nombre, texto] of COPIAS) {
   // Sobre el CODIGO, no sobre los comentarios: los comentarios nombran la identidad
@@ -163,7 +180,8 @@ for (const [nombre, texto] of COPIAS) {
   // que evita que alguien la vuelva a agregar creyendo que solo falta compatibilidad.
   hechas += 1
   if (codigo(texto).includes('ab2web.wa-inbox')) {
-    fallos.push(`${nombre} todavia busca ab2web.wa-inbox, que es el producto que conduce la pantalla`)
+    fallos.push(`${nombre} todavia busca ab2web.wa-inbox, que es el producto que `
+      + 'conduce la pantalla')
   }
   for (const { nombre: caso, home, esperado, porque } of ESCENARIOS) {
     hechas += 1

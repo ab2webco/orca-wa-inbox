@@ -13,25 +13,36 @@ usuario. Peor todavia: las copias ya habian divergido solas —los prompts orden
 forma y los precheck de otra— y nadie lo vio, porque nada las comparaba.
 
 La copia editable es `scripts/resolver.py`, y ademas corre sola: `python3
-scripts/resolver.py` imprime el bin que elegiria en esta maquina. De ahi se derivan las
-dos formas publicadas:
+scripts/resolver.py` imprime el bin que elegiria en esta maquina. Las dos formas
+publicadas las emite `scripts/resolver_formas.py`, que es el unico lugar donde vive la
+derivacion:
 
   - prompts: el texto tal cual, con comentarios. El agente los lee y le sirven.
-  - precheck: el mismo texto sin comentarios ni lineas en blanco. La cadena de shell del
-    JSON ya es incomoda de por si, y ahi los comentarios no los lee nadie.
+  - precheck: el mismo programa minificado. No es estetica: el esquema de Orca corta el
+    precheck en 1024 caracteres (orca-oss/src/shared/plugins/
+    plugin-automation-contribution.ts:57) y pasarse no degrada nada — Orca no puede leer
+    el manifiesto y el plugin entero queda como `invalid-development-plugin`. Ya paso.
 """
 import json
 import pathlib
 import re
 import sys
 
-RAIZ = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from resolver_formas import RAIZ, compacto, legible, precheck as precheck_esperado
+
 CANONICO = RAIZ / "scripts" / "resolver.py"
 
 # El precheck mete el resolvedor entero dentro de un `python3 -c "..."` en una linea de
 # shell. Cualquiera de estos cuatro caracteres lo partiria ahi, y el sintoma no seria un
 # error claro sino un WA vacio en una corrida automatica que nadie mira.
 PROHIBIDOS = ('"', "$", "`", "\\")
+
+# orca-oss/src/shared/plugins/plugin-automation-contribution.ts:57 —
+# `precheck: z.string().min(1).max(1024).optional()`. Se comprueba aca ademas de en
+# test/manifest.test.mjs porque este es el chequeo que corre cuando alguien edita el
+# resolvedor, que es exactamente cuando el precheck crece.
+PRECHECK_MAX = 1024
 
 # Lo que cada automation corre DESPUES de resolver. Es lo unico que las distingue: si
 # alguna vez dos prechecks se diferencian en algo mas, es que el resolvedor divergio.
@@ -47,21 +58,11 @@ ARCHIVO_POR_AUTOMATION = {
 HEREDOC = re.compile(r"WA=\$\(python3 - <<'PY'\n([\s\S]*?)\nPY\n\)")
 
 
-def sin_comentarios(texto: str) -> str:
-    """El resolvedor como lo lleva el precheck: solo codigo."""
-    return "\n".join(l for l in texto.splitlines()
-                     if l.strip() and not l.lstrip().startswith("#"))
-
-
-def precheck_esperado(compacto: str, cola: str) -> str:
-    return f'WA=$(python3 -c "{compacto}") && [ -x "$WA/wa-scope" ] || exit 1; {cola}'
-
-
 def main() -> int:
     fallos = []
     comprobaciones = 0
 
-    canonico = CANONICO.read_text(encoding="utf-8").rstrip("\n")
+    canonico = legible()
 
     # ── 1. El canonico es Python de verdad. Un error de sintaxis aca se publica a las
     # cinco copias de un golpe y solo aparece en la primera corrida automatica.
@@ -76,24 +77,34 @@ def main() -> int:
             print(f"  {f}", file=sys.stderr)
         return 1
 
-    # ── 2. Los cuatro caracteres que no sobreviven al viaje por el precheck.
+    # ── 2. Lo minificado tambien es Python de verdad. El canonico compila y su version
+    # compacta no: eso es exactamente lo que un minificador roto produce, y solo se veria
+    # en la primera corrida programada.
+    comprobaciones += 1
+    try:
+        compile(compacto(canonico), "<precheck>", "exec")
+    except SyntaxError as error:
+        fallos.append(f"el resolvedor minificado no compila: linea {error.lineno}: "
+                      f"{error.msg}")
+
+    # ── 3. Los cuatro caracteres que no sobreviven al viaje por el precheck.
     comprobaciones += 1
     presentes = [c for c in PROHIBIDOS if c in canonico]
     if presentes:
         fallos.append(f"scripts/resolver.py usa {presentes}, que parten el "
                       f"`python3 -c` del precheck")
 
-    # ── 3. La identidad anterior no vuelve por la puerta de atras. En los comentarios
+    # ── 4. La identidad anterior no vuelve por la puerta de atras. En los comentarios
     # si se nombra —ahi es la explicacion de por que no se resuelve— pero en el codigo
     # significaria volver a resolver hacia la build 3.0.1, que manda WhatsApp
     # conduciendo la app de escritorio por un camino que este plugin borro.
-    compacto = sin_comentarios(canonico)
+    minificado = compacto(canonico)
     comprobaciones += 1
-    if "ab2web.wa-inbox" in compacto:
+    if "ab2web.wa-inbox" in minificado:
         fallos.append("scripts/resolver.py vuelve a buscar ab2web.wa-inbox: esa no es "
                       "una version vieja, es otro producto")
 
-    # ── 4. Los dos precheck del manifiesto, que es lo que corre en la instalacion.
+    # ── 5. Los dos precheck del manifiesto, que es lo que corre en la instalacion.
     manifiesto = json.loads((RAIZ / "orca-plugin.json").read_text(encoding="utf-8"))
     automations = manifiesto["contributes"]["automations"]
     comprobaciones += 1
@@ -103,12 +114,18 @@ def main() -> int:
         automations = []
     for auto in automations:
         comprobaciones += 1
-        esperado = precheck_esperado(compacto, COLAS[auto["id"]])
+        esperado = precheck_esperado(COLAS[auto["id"]], canonico)
+        # El techo de Orca. Un precheck que se pasa no falla la automation: invalida el
+        # manifiesto, y el plugin no carga.
+        comprobaciones += 1
+        if len(esperado) > PRECHECK_MAX:
+            fallos.append(f"el precheck de {auto['id']} mide {len(esperado)} caracteres "
+                          f"y Orca acepta {PRECHECK_MAX}: el manifiesto quedaria invalido")
         if auto["precheck"] != esperado:
             fallos.append(f"orca-plugin.json ({auto['id']}): el precheck no es el "
                           f"resolvedor de scripts/resolver.py")
 
-        # ── 5. La copia versionada en automations/, que es de donde se crean.
+        # ── 6. La copia versionada en automations/, que es de donde se crean.
         f = RAIZ / "automations" / ARCHIVO_POR_AUTOMATION[auto["id"]]
         comprobaciones += 1
         try:
@@ -120,7 +137,7 @@ def main() -> int:
             fallos.append(f"automations/{f.name}: el precheck no es el resolvedor de "
                           f"scripts/resolver.py")
 
-    # ── 6. Los dos prompts, que llevan el texto completo con sus comentarios.
+    # ── 7. Los dos prompts, que llevan el texto completo con sus comentarios.
     prompts = sorted((RAIZ / "prompts").glob("*.md"))
     comprobaciones += 1
     if not prompts:
