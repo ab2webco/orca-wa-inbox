@@ -244,6 +244,127 @@ def revisa_migracion_cuentas(fallos: list) -> int:
     return hechas
 
 
+def revisa_juicio(fallos: list) -> int:
+    """La tabla `juicio` se agrega sola sobre una base vieja, y el veredicto se guarda
+    una vez por llave (odd/tasks/juicio-cacheado.md, T1/T2).
+
+    Sin esto el agente reclasifica los mismos 40 mensajes en cada corrida: medido en
+    5.280 clasificaciones por dia contra 40 reales, ver el documento de la tarea.
+    """
+    hechas = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+        db = home / ".wa-inbox" / "scope.db"
+        db.parent.mkdir(parents=True, exist_ok=True)
+
+        # Una base YA existente, de antes de esta tarea: sin la tabla juicio. Agregarla
+        # no puede perder ni pisar lo que ya estaba autorizado.
+        con = sqlite3.connect(db)
+        con.executescript("""
+            create table chat_scope (
+              account text not null default 'local', chat_jid text not null,
+              chat_name text not null, provider text default 'plane', target text,
+              mode text not null default 'off', initial_state text,
+              hours text, tone text, instructions text, timezone text, notes text,
+              updated_at text, primary key (account, chat_jid));
+            insert into chat_scope (account, chat_jid, chat_name, mode)
+              values ('local', '100@g.us', 'Grupo Viejo', 'observar');""")
+        con.commit()
+        con.close()
+
+        p = subprocess.run([str(BIN / "wa-scope"), "list", "--json"],
+                           capture_output=True, text=True, env=env, timeout=120)
+        hechas += 1
+        if p.returncode != 0:
+            fallos.append("wa-scope list se rompio migrando una base sin la tabla "
+                          f"juicio: {(p.stderr or '').strip()[:200]}")
+
+        con = sqlite3.connect(db)
+        con.row_factory = sqlite3.Row
+        hechas += 2
+        if not con.execute("pragma table_info(juicio)").fetchall():
+            fallos.append("agregar la tabla juicio a una base existente no la creo")
+        vieja = con.execute("select mode from chat_scope where chat_jid=?",
+                            ("100@g.us",)).fetchone()
+        if not vieja or vieja["mode"] != "observar":
+            fallos.append("crear la tabla juicio perdio o piso lo que ya estaba en "
+                          "chat_scope")
+        con.close()
+
+        # T2: el veredicto se guarda con el CLI y queda leible en la tabla.
+        p = subprocess.run(
+            [str(BIN / "wa-scope"), "juicio", "--account", "local", "--chat", "100@g.us",
+             "--stanza", "S1", "--clase", "card", "--origen", "agente", "--json"],
+            capture_output=True, text=True, env=env, timeout=120)
+        hechas += 2
+        if p.returncode != 0:
+            fallos.append("wa-scope juicio rechazo un veredicto valido: "
+                          f"{(p.stderr or p.stdout).strip()[:200]}")
+        else:
+            filas = json.loads(p.stdout or "[]")
+            if not filas or filas[0].get("clase") != "card":
+                fallos.append(f"wa-scope juicio no devolvio el veredicto guardado: "
+                              f"{p.stdout!r}")
+
+        con = sqlite3.connect(db)
+        con.row_factory = sqlite3.Row
+        guardado = con.execute(
+            "select clase, origen from juicio where account=? and chat_jid=? "
+            "and stanza_id=?", ("local", "100@g.us", "S1")).fetchone()
+        con.close()
+        hechas += 1
+        if not guardado or guardado["clase"] != "card" or guardado["origen"] != "agente":
+            fallos.append("el veredicto no quedo guardado en la tabla juicio: "
+                          f"{dict(guardado) if guardado else None}")
+
+        # La misma llave (account, chat_jid, stanza_id) actualiza, no duplica.
+        subprocess.run(
+            [str(BIN / "wa-scope"), "juicio", "--account", "local", "--chat", "100@g.us",
+             "--stanza", "S1", "--clase", "nothing"],
+            capture_output=True, text=True, env=env, timeout=120)
+        con = sqlite3.connect(db)
+        repetidas = con.execute(
+            "select clase from juicio where account=? and chat_jid=? and stanza_id=?",
+            ("local", "100@g.us", "S1")).fetchall()
+        con.close()
+        hechas += 2
+        if len(repetidas) != 1:
+            fallos.append(f"la misma llave dejo {len(repetidas)} filas en vez de "
+                          "actualizar la unica que existe")
+        elif repetidas[0][0] != "nothing":
+            fallos.append(f"reescribir el veredicto no lo actualizo: quedo "
+                          f"{repetidas[0][0]!r}")
+
+        # Un valor fuera del vocabulario cerrado de STEP 7 se rechaza, no se guarda.
+        p = subprocess.run(
+            [str(BIN / "wa-scope"), "juicio", "--account", "local", "--chat", "100@g.us",
+             "--stanza", "S2", "--clase", "basura"],
+            capture_output=True, text=True, env=env, timeout=120)
+        hechas += 2
+        if p.returncode == 0:
+            fallos.append("wa-scope juicio acepto una clase fuera del vocabulario "
+                          "cerrado")
+        con = sqlite3.connect(db)
+        huerfano = con.execute("select 1 from juicio where stanza_id=?",
+                               ("S2",)).fetchone()
+        con.close()
+        if huerfano:
+            fallos.append("una clase invalida igual quedo guardada en la tabla")
+
+        # El mismo vocabulario cerrado tiene que valer en wa_store: si discrepa, lo que
+        # wa-scope acepta y lo que `inbox` reconoce como veredicto no son la misma cosa.
+        wa_scope = cargar_modulo("wa_scope_juicio", BIN / "wa-scope")
+        wa_store = cargar_modulo("wa_store_juicio", BIN / "wa_store.py")
+        hechas += 1
+        propio = getattr(wa_scope, "CLASES_JUICIO", None)
+        ajeno = getattr(wa_store, "CLASES_JUICIO", None)
+        if propio is None or ajeno is None or tuple(propio) != tuple(ajeno):
+            fallos.append(f"CLASES_JUICIO discrepa: wa-scope tiene {propio!r} y "
+                          f"wa_store tiene {ajeno!r}")
+    return hechas
+
+
 def revisa_insignia_nav(fallos: list) -> int:
     """La insignia del nav cuenta avisos, y solo avisos.
 
@@ -1120,7 +1241,8 @@ def main() -> int:
                       + revisa_insignia_nav(fallos)
                       + revisa_sin_bytecode(fallos)
                       + revisa_firma_del_panel(fallos)
-                      + revisa_casa_del_runtime(fallos))
+                      + revisa_casa_del_runtime(fallos)
+                      + revisa_juicio(fallos))
     aislado.cleanup()
 
     if fallos:

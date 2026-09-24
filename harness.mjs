@@ -264,8 +264,8 @@ function corre(cmd, args, timeoutMs = 20000) {
 // y lo que trae cada uno sale de argparse, no de una transcripcion: una bandera que
 // cambie se ve en la proxima siembra en vez de envejecer en silencio.
 const SUBCOMANDOS = ['voice', 'check', 'lock', 'unlock', 'work', 'closing', 'where',
-  'route', 'decisions', 'record', 'alert', 'config', 'agent', 'list', 'set', 'accounts',
-  'pending', 'run', 'sync', 'rotate']
+  'route', 'decisions', 'record', 'juicio', 'alert', 'config', 'agent', 'list', 'set',
+  'accounts', 'pending', 'run', 'sync', 'rotate']
 
 /** La referencia de comandos, sacada del `--help` de las propias herramientas. */
 export async function referencia(toolsDir) {
