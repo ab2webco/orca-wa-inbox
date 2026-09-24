@@ -672,10 +672,19 @@ console.log('\nactivity.html — la corrida dice como le fue')
     /3 conversaciones/.test(linea(sano.doc)) && /nada pendiente/.test(linea(sano.doc)),
     linea(sano.doc))
 
-  // Y con trabajo, el mismo renglon dice cuanto.
+  // Y con trabajo, el mismo renglon dice cuanto. El pendiente va tambien en la LISTA:
+  // el renglon cuenta lo que se ve abajo, no lo que dejo anotado la corrida — que es
+  // justo lo que hacia que la cabecera dijera "nada pendiente" con mensajes listados.
   const conTrabajo = await montar('activity.html', {
-    activity: { ...base, run: { state: 'ok', startedAt: AHORA, endedAt: AHORA,
-      looked: 3, pending: 2, reason: null } }
+    activity: { ...base,
+      pending: [
+        { stanzaId: 'T1', date: AHORA, chat: 'Uno', chatJid: 'a@g.us',
+          sender: 'Ana', kind: 'mencion', text: 'uno' },
+        { stanzaId: 'T2', date: AHORA, chat: 'Uno', chatJid: 'a@g.us',
+          sender: 'Ana', kind: 'mencion', text: 'dos' }
+      ],
+      run: { state: 'ok', startedAt: AHORA, endedAt: AHORA,
+        looked: 3, pending: 2, reason: null } }
   }, 'es-419')
   await espera()
   ok('con trabajo dice cuantas quedaron esperando',
@@ -2148,6 +2157,119 @@ console.log('\nconfig.html — las traducciones de la espera larga y "Comprobar 
   const sinPt = nuevas.filter((k) => !S.pt[k] || S.pt[k] === S.en[k])
   ok('y en portugues propio, no heredado del ingles', sinPt.length === 0,
     `sin portugues = ${JSON.stringify(sinPt)}`)
+}
+
+// ── El panel de actividad deja de contradecirse y dice lo que pasa ─────────────────
+// Lo que el dueno veia en pantalla, con dos menciones suyas listadas JUSTO DEBAJO:
+//
+//     WAITING ON YOU
+//     Checked 1 conversation · nothing pending · 2026-09-23 17:36
+//
+// `r.pending` es de la ULTIMA CORRIDA y la lista se pinta con `activity.pending`, que
+// se actualiza en cada sync. Un panel que se contradice consigo mismo no se cree ni
+// cuando acierta.
+console.log('\nactivity.html — la cabecera no puede contradecir a la lista')
+{
+  const pendientes = [
+    { stanzaId: 'M1', date: '2026-09-23 17:35', chat: 'Ab2Web Operaciones',
+      chatJid: '120363000000000001@g.us', sender: 'Jhon Tamayo', kind: 'mencion',
+      text: '@yo Como vas?' },
+    { stanzaId: 'M2', date: '2026-09-23 17:35', chat: 'Ab2Web Operaciones',
+      chatJid: '120363000000000001@g.us', sender: 'Jhon Tamayo', kind: 'mencion',
+      text: '@yo ya hiciste las tareas?' }
+  ]
+  const actividad = {
+    pending: pendientes, recent: [], running: false, syncedAt: '2026-09-23 17:41',
+    mapped: 1, authorized: 1,
+    // La corrida vieja: miro 1 conversacion y ENTONCES no habia nada.
+    run: { state: 'ok', startedAt: '2026-09-23 17:34', endedAt: '2026-09-23 17:36',
+      looked: 1, pending: 0, reason: null }
+  }
+  const { doc } = await montar('activity.html', { activity: actividad }, 'es-419')
+  await espera()
+  const linea = doc.getElementById('runline').textContent
+  ok('con dos pendientes a la vista, la cabecera NO dice "nada pendiente"',
+    !/nada pendiente/i.test(linea), linea)
+  ok('y dice cuantos hay de verdad', /2 esperando/i.test(linea), linea)
+
+  // Lo marcado como ignorar sale de la lista Y de la cuenta: si no, la cabecera
+  // seguiria contando algo que el dueno ya saco de en medio.
+  const conIgnorado = await montar('activity.html',
+    { activity: actividad, decisions: { M2: { decision: 'ignore' } } }, 'es-419')
+  await espera()
+  const linea2 = conIgnorado.doc.getElementById('runline').textContent
+  ok('lo ignorado tampoco se cuenta arriba', /1 esperando/i.test(linea2), linea2)
+
+  // Y cuando de verdad no hay nada, se sigue diciendo.
+  const vacio = await montar('activity.html',
+    { activity: Object.assign({}, actividad, { pending: [] }) }, 'es-419')
+  await espera()
+  ok('sin pendientes si dice que no hay nada',
+    /nada pendiente/i.test(vacio.doc.getElementById('runline').textContent),
+    vacio.doc.getElementById('runline').textContent)
+}
+
+console.log('\nactivity.html — dice si la linea esta viva y sobre cuanto actua')
+{
+  const base = { pending: [], recent: [], running: false, syncedAt: '2026-09-23 17:41',
+    mapped: 1, authorized: 1,
+    run: { state: 'ok', endedAt: '2026-09-23 17:36', looked: 1, pending: 0 } }
+  const chats = new Array(298).fill(0).map((_, i) => ({ jid: `c${i}`, name: `c${i}` }))
+
+  const viva = await montar('activity.html',
+    { activity: base, chats, sidecar: { connection: 'open', me: '+573008236130' } },
+    'es-419')
+  await espera()
+  ok('dice que la linea esta conectada',
+    /conectada/i.test(viva.doc.getElementById('linea').textContent),
+    viva.doc.getElementById('linea').textContent)
+  // Tras escanear un QR, saber CUAL quedo es la unica forma de notar que se escaneo
+  // con el telefono equivocado.
+  ok('y con que numero', viva.doc.getElementById('linea').textContent.includes('+573008236130'),
+    viva.doc.getElementById('linea').textContent)
+  // "Reviso 1 conversacion" sin decir de cuantas no informa nada: 1 de 1 es cobertura
+  // completa y 1 de 298 es un agente que casi no ve.
+  const cob = viva.doc.getElementById('cobertura').textContent
+  ok('y sobre cuantas conversaciones puede actuar, del total',
+    cob.includes('1') && cob.includes('298'), cob)
+
+  const sinQr = await montar('activity.html',
+    { activity: base, chats, sidecar: { connection: 'connecting', qr: { qr: 'X', ts: Date.now(), ttlMs: 75000 } } },
+    'es-419')
+  await espera()
+  ok('sin vincular, manda a escanear el QR y no dice "conectada"',
+    /QR/i.test(sinQr.doc.getElementById('linea').textContent) &&
+    !/conectada/i.test(sinQr.doc.getElementById('linea').textContent),
+    sinQr.doc.getElementById('linea').textContent)
+
+  const caida = await montar('activity.html',
+    { activity: base, chats, sidecar: { connection: 'close', exited: true } }, 'es-419')
+  await espera()
+  ok('caida se dice caida', /caida/i.test(caida.doc.getElementById('linea').textContent),
+    caida.doc.getElementById('linea').textContent)
+
+  // Sin ninguna autorizada el agente no puede actuar en ningun lado, y eso pide
+  // atencion aunque no haya nada pendiente.
+  const cero = await montar('activity.html',
+    { activity: Object.assign({}, base, { authorized: 0 }), chats,
+      sidecar: { connection: 'open' } }, 'es-419')
+  await espera()
+  ok('con cero autorizadas se avisa',
+    cero.doc.getElementById('cobertura').className.includes('vieja'),
+    cero.doc.getElementById('cobertura').className)
+}
+
+console.log('\nactivity.html — el texto ya no ensena que hay que marcar para que actue')
+{
+  for (const [lang, re] of [['es-419', /solo en su proxima corrida|atiende esto solo/i],
+    ['en-US', /on its own/i], ['pt-BR', /sozinho/i]]) {
+    const m = await montar('activity.html', { activity: { pending: [], recent: [] } }, lang)
+    await espera()
+    const hint = Array.prototype.map.call(m.doc.querySelectorAll('.nota'),
+      (n) => n.textContent).join(' ')
+    ok(`${lang}: dice que el agente actua solo, no que hay que marcarle`,
+      re.test(hint), hint.slice(0, 160))
+  }
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

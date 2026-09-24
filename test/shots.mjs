@@ -261,6 +261,13 @@ const SIN_PENDIENTES = Object.assign({}, DATOS.activity,
 const corrida = (run, extra) => Object.assign({}, DATOS,
   { decisions: {}, activity: Object.assign({}, SIN_PENDIENTES, extra, { run }) })
 
+// Lo mismo para el renglon de la linea: una corrida sana y limpia, y lo unico que
+// cambia entre captura y captura es el estado del sidecar.
+const conLinea = (sidecar) => Object.assign({},
+  corrida({ state: 'ok', startedAt: AHORA_CORTO, endedAt: AHORA_CORTO,
+    looked: 4, pending: 0, reason: null }),
+  { sidecar })
+
 const PANELES = [
   { nombre: 'config', archivo: 'config.html', anchos: ANCHOS, datos: DATOS },
   {
@@ -307,6 +314,33 @@ const PANELES = [
     nombre: 'actividad-todo-off', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
     datos: corrida({ state: 'ok', startedAt: AHORA_CORTO, endedAt: AHORA_CORTO,
       looked: 0, pending: 0, reason: null }, { authorized: 0 })
+  },
+  // 5. Los tres finales del renglon de la linea. Van a la captura por la misma razon
+  //    que los cuatro de arriba: en pantalla "no hay nada pendiente" y "no estoy
+  //    conectado" se leian IGUAL -una lista vacia- y son lo contrario. Cual de las dos
+  //    sea decide si el dueno tiene algo que hacer.
+  //
+  //    El numero es inventado a proposito, igual que los nombres de los chats: una
+  //    captura no lleva la linea real de nadie.
+  //
+  // 5a. Vinculada: dice que si, y CUAL. Tras escanear un QR es la unica forma de notar
+  //     que se escaneo con el telefono equivocado.
+  {
+    nombre: 'actividad-linea-viva', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
+    datos: conLinea({ connection: 'open', qr: null, exited: false, me: '+573001112233' })
+  },
+  // 5b. Sin vincular: la lista esta vacia porque no hay linea, no porque no haya
+  //     trabajo. Manda a Ajustes, que es donde vive el QR.
+  {
+    nombre: 'actividad-sin-vincular', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
+    datos: conLinea({ connection: 'connecting', qr: 'x'.repeat(120), qrAt: Date.now(),
+      ttlMs: 75000, exited: false, me: null })
+  },
+  // 5c. Caida: es un fallo y se pinta como fallo, no como "todavia no".
+  {
+    nombre: 'actividad-linea-caida', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
+    datos: conLinea({ connection: 'close', qr: null, exited: true, me: null,
+      motivo: 'sesion-cerrada' })
   },
   // Los cuatro momentos de conectar una linea de WhatsApp Web. Van a la captura porque
   // el unico que se ve al programar es el ultimo: los otros tres pasan mientras el
