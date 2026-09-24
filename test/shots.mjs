@@ -182,6 +182,19 @@ const DATOS = {
       // `detail` es lo que anoto quien hizo la accion: el agente en sus palabras, o
       // nada cuando el codigo de la accion ya lo dice todo. Lo que se ve traducido es
       // la accion, que es la etiqueta.
+      // Dos avisos, que son lo UNICO de esta lista que espera algo del dueno: el
+      // agente los levanta porque no le toca decidirlos. Van al fixture porque la
+      // seccion que los muestra abre el panel, y sin una sola alerta esa seccion sale
+      // vacia en TODAS las capturas — que es justo la unica forma en que no se puede
+      // comprobar. `detail` va en el formato real que escribe `wa-scope alert`,
+      // "titulo | cuerpo", para que la captura pruebe que se parte y no sale la barra
+      // cruda en pantalla.
+      { ts: '2026-09-17 14:01', chat: 'Soporte — Cliente Norte', action: 'alert',
+        issue: '', detail: 'Piden descuento del 30% | Dice que otro proveedor se lo ' +
+          'deja en 1.400 y quiere respuesta hoy. El precio no lo decido yo.' },
+      { ts: '2026-09-17 13:58', chat: 'Operaciones internas', action: 'alert',
+        issue: '', detail: 'Piden acceso al tablero de Andes | Es una persona que no ' +
+          'esta en el equipo. No doy accesos sin que usted lo diga.' },
       { ts: '2026-09-17 13:52', chat: 'Soporte — Cliente Norte', action: 'closed',
         issue: 'SOP-211', detail: '' },
       { ts: '2026-09-17 13:44', chat: 'Proyecto Andes — QA', action: 'skipped',
