@@ -78,6 +78,16 @@ SIN_TARJETA = "ninguno"
 PROVIDERS_CHAT = dict(PROVIDERS, **{SIN_TARJETA: "opens no card in this conversation"})
 RANK = {m: i for i, m in enumerate(MODES)}
 
+# El vocabulario cerrado de STEP 7 (harness/CLASSIFICATION.md, prompts/triage.md): lo
+# unico que un veredicto cacheado puede decir. Guardar cualquier otra cosa inventaria
+# una clase que el triage no reconoce, y la fila del inbox la mostraria como si fuera
+# una mas (odd/tasks/juicio-cacheado.md).
+CLASES_JUICIO = ("card", "alert", "nothing", "doubtful")
+# Quien produjo el veredicto. Hoy solo "agente"; "jev" es del Advisor (T3/T4), que
+# todavia no existe. Se deja el valor aca para que esa tarea no tenga que tocar ni el
+# esquema ni la validacion, solo empezar a escribirlo.
+ORIGENES_JUICIO = ("agente", "jev")
+
 # Plane agrupa los estados en estos cinco grupos y cada proyecto renombra las columnas
 # a gusto ("Listo", "Entregado", "QA aprobado"). El cierre se decide por el GRUPO y
 # nunca por el nombre: comparar nombres se rompe con el primer tablero que lo escriba
@@ -210,6 +220,21 @@ create table if not exists run_trace (
   reason     text,               -- por que fallo, en las palabras de quien fallo
   looked     integer,            -- conversaciones autorizadas que miro
   pending    integer             -- cuantas quedaron esperando al terminar
+);
+-- El veredicto de un mensaje, calculado UNA vez y reutilizado en cada corrida
+-- (odd/tasks/juicio-cacheado.md). Va en scope.db y no en capture.db: ese lo abre
+-- bin/wa_store.py siempre en mode=ro -"escribir no escribe, como todo este modulo"- y
+-- su esquema es del sidecar, detras de su propia valla de permisos. La llave es la
+-- MISMA que identifica un mensaje, (account, chat_jid, stanza_id): no hace falta una
+-- llave nueva para algo que ya tiene una.
+create table if not exists juicio (
+  account   text not null default 'local',
+  chat_jid  text not null,
+  stanza_id text not null,
+  clase     text not null,              -- card | alert | nothing | doubtful (STEP 7)
+  origen    text not null default 'agente',  -- agente | jev (T3/T4, cuando exista)
+  at        text not null,
+  primary key (account, chat_jid, stanza_id)
 );
 """
 
@@ -1574,6 +1599,23 @@ def cmd_log(con, a):
         "select * from agent_action order by id desc limit ?", (a.n,)).fetchall()]
 
 
+def cmd_juicio(con, a):
+    """Guarda el veredicto de un mensaje, una vez por llave. Reescribir la MISMA llave
+    actualiza en vez de duplicar: el punto entero es que la corrida siguiente lo
+    encuentre y no vuelva a razonar sobre el mismo mensaje
+    (odd/tasks/juicio-cacheado.md). `--clase` y `--origen` ya vienen validados por
+    `choices` en el parser: lo que llega aca es siempre del vocabulario cerrado."""
+    ahora = time.strftime("%Y-%m-%d %H:%M")
+    con.execute(
+        "insert into juicio (account, chat_jid, stanza_id, clase, origen, at) "
+        "values (?,?,?,?,?,?) on conflict(account, chat_jid, stanza_id) do update set "
+        "clase=excluded.clase, origen=excluded.origen, at=excluded.at",
+        (a.account, a.chat, a.stanza, a.clase, a.origen, ahora))
+    con.commit()
+    return [{"account": a.account, "chat_jid": a.chat, "stanza_id": a.stanza,
+             "clase": a.clase, "origen": a.origen, "at": ahora}]
+
+
 def cmd_record(con, a):
     con.execute("insert into agent_action (ts,chat_jid,chat_name,stanza_id,action,"
                 "plane_issue,detail) values (?,?,?,?,?,?,?)",
@@ -1727,6 +1769,14 @@ def main():
     s.add_argument("--stanza", default=""); s.add_argument("--action", required=True)
     s.add_argument("--issue", default=""); s.add_argument("--detail", default="")
     s.set_defaults(fn=cmd_record)
+
+    s = add("juicio", help="caches a message's verdict, keyed by "
+                           "(account, chat_jid, stanza_id); bin/wa_store.py reads it")
+    s.add_argument("--account", default=CUENTA_LOCAL)
+    s.add_argument("--chat", required=True); s.add_argument("--stanza", required=True)
+    s.add_argument("--clase", required=True, choices=list(CLASES_JUICIO))
+    s.add_argument("--origen", default="agente", choices=list(ORIGENES_JUICIO))
+    s.set_defaults(fn=cmd_juicio)
 
     a = ap.parse_args()
     if getattr(a, "json_sub", False):

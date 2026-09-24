@@ -1062,6 +1062,89 @@ console.log('\ninbox: lo que llega a un chat autorizado se ve, con @ o sin @')
     d1.escribio_despues === false, JSON.stringify(d1.escribio_despues))
 }
 
+console.log('\nJuicio cacheado: T2/T5/T6 — el veredicto viaja en la fila, o no viaja')
+{
+  const casa = nueva()
+  const GRUPO = '120363000000000099@g.us'
+  const alm = abrirAlmacen(rutaAlmacen({ HOME: casa }))
+  alm.registrarLinea({ cuenta: CUENTA, lid: MI_LID, pn: MI_TEL, nombre: 'Yo' })
+  autorizar(casa, { jid: GRUPO, nombre: 'Grupo Juicio', modo: 'observar' })
+  const T = 1710000000
+  alm.anotarChat({ cuenta: CUENTA, chatJid: GRUPO, nombre: 'Grupo Juicio', esGrupo: 1, ts: T })
+  const fila = (id, ts, body) => ({
+    cuenta: CUENTA, chatJid: GRUPO, stanzaId: id, ts, fromMe: 0,
+    senderJid: '573009998877@s.whatsapp.net', senderName: 'Jhon', body,
+    mediaTipo: null, mediaBytes: null, mencionaMe: 0, citaMe: 0
+  })
+  alm.guardarMensaje(fila('J1', T, 'ya lo clasificaron antes'))
+  alm.guardarMensaje(fila('J2', T + 60, 'este todavia no tiene veredicto'))
+  alm.guardarMensaje(fila('J3', T + 120, 'este tiene un valor corrupto'))
+  alm.cerrar()
+
+  // T2: se guarda un veredicto con el CLI de verdad, no escribiendo el sqlite a mano.
+  execFileSync(WA_SCOPE, ['juicio', '--account', CUENTA, '--chat', GRUPO,
+    '--stanza', 'J1', '--clase', 'card', '--origen', 'agente'],
+    { env: { ...process.env, HOME: casa }, encoding: 'utf8' })
+
+  // Un valor corrupto, escrito a mano y sin pasar por la validacion del CLI: lo que
+  // puede llegar de una base vieja o de una escritura a medias.
+  const scopeDb = new DatabaseSync(join(casa, '.wa-inbox', 'scope.db'))
+  scopeDb.prepare(`insert into juicio (account, chat_jid, stanza_id, clase, origen, at)
+    values (?,?,?,?,?,?)`).run(CUENTA, GRUPO, 'J3', 'basura', 'agente', '2025-01-01 00:00')
+  scopeDb.close()
+
+  const filas = leerJson(casa, ['inbox', '--days', '36500'])
+  const porId = {}
+  ;(filas.filas || []).forEach((f) => { porId[f.stanza_id] = f })
+
+  ok('T5: con veredicto guardado, la fila trae `juicio.clase`',
+    porId.J1 && porId.J1.juicio && porId.J1.juicio.clase === 'card',
+    JSON.stringify(porId.J1 && porId.J1.juicio))
+  ok('y trae quien lo produjo, en `juicio.origen`',
+    porId.J1 && porId.J1.juicio && porId.J1.juicio.origen === 'agente',
+    JSON.stringify(porId.J1 && porId.J1.juicio))
+  ok('T6: sin veredicto guardado, la fila no trae `juicio`',
+    porId.J2 && !('juicio' in porId.J2), JSON.stringify(porId.J2))
+  ok('T6: una clase fuera del vocabulario cerrado no llega como veredicto',
+    porId.J3 && !('juicio' in porId.J3), JSON.stringify(porId.J3))
+}
+
+console.log('\nJuicio cacheado: T6 — sin scope.db, y sin la tabla, la bandeja no se rompe')
+{
+  // Sin scope.db: nunca se corrio wa-scope en este HOME. wa_store.py sigue siendo
+  // mode=ro y no puede ser quien lo cree.
+  const casa = nueva()
+  const GRUPO = '120363000000000098@g.us'
+  const alm = abrirAlmacen(rutaAlmacen({ HOME: casa }))
+  alm.registrarLinea({ cuenta: CUENTA, lid: MI_LID, pn: MI_TEL, nombre: 'Yo' })
+  alm.anotarChat({ cuenta: CUENTA, chatJid: GRUPO, nombre: 'Sin Alcance', esGrupo: 1, ts: 1710000000 })
+  alm.guardarMensaje({
+    cuenta: CUENTA, chatJid: GRUPO, stanzaId: 'N1', ts: 1710000000, fromMe: 0,
+    senderJid: '573009998877@s.whatsapp.net', senderName: 'Jhon', body: 'hola',
+    mediaTipo: null, mediaBytes: null, mencionaMe: 0, citaMe: 0
+  })
+  alm.cerrar()
+  ok('sin scope.db en el HOME', !existsSync(join(casa, '.wa-inbox', 'scope.db')))
+  const sinBase = leerJson(casa, ['inbox', '--days', '36500'])
+  ok('sin scope.db, `inbox` igual contesta 0', sinBase.code === 0, sinBase.stderr)
+  const n1 = (sinBase.filas || []).find((f) => f.stanza_id === 'N1')
+  ok('y la fila se ve, sin el campo `juicio`', n1 && !('juicio' in n1), JSON.stringify(n1))
+
+  // scope.db existe, pero de antes de esta tarea: sin la tabla juicio.
+  const scopeDb = new DatabaseSync(join(casa, '.wa-inbox', 'scope.db'))
+  scopeDb.exec(`create table chat_scope (
+    account text not null default 'local', chat_jid text not null,
+    chat_name text not null, mode text not null default 'off',
+    primary key (account, chat_jid))`)
+  scopeDb.close()
+  const sinTabla = leerJson(casa, ['inbox', '--days', '36500'])
+  ok('scope.db sin la tabla juicio: `inbox` igual contesta 0',
+    sinTabla.code === 0, sinTabla.stderr)
+  const n1b = (sinTabla.filas || []).find((f) => f.stanza_id === 'N1')
+  ok('y la fila sigue sin `juicio`, sin romperse', n1b && !('juicio' in n1b),
+    JSON.stringify(n1b))
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 if (fallos) {
   console.error(`\n${fallos} fallas`)

@@ -87,12 +87,34 @@ ningún tercero.
 
 ## Tareas
 
-- [ ] T1 — Tabla `juicio` + migración, con su prueba.
-- [ ] T2 — Caché: el veredicto se lee del almacén y solo se calcula si falta.
+- [x] T1 — Tabla `juicio` en `scope.db`, llave `(account, chat_jid, stanza_id)`,
+      `create table if not exists`, probada sobre una `scope.db` preexistente.
+- [x] T2 — `wa-scope juicio` escribe el veredicto; `--clase` y `--origen` se
+      validan contra el conjunto cerrado y rechazan lo que no está en él.
 - [ ] T3 — Detección del Advisor y de la llave, sin leer su valor al log.
 - [ ] T4 — Cliente de TypeSafe + las preguntas de NUESTRO dominio.
-- [ ] T5 — El juicio viaja en la fila del inbox; `prompts/triage.md` lo usa.
-- [ ] T6 — Degradación: sin llave / timeout / API caída = como hoy.
+- [x] T5 — El juicio viaja en la fila del inbox junto a `kind`; `triage.md` lo
+      usa para saltar el reanálisis y graba el suyo cuando falta.
+- [x] T6 — Degradación probada en tres formas: sin `scope.db`, con una vieja sin
+      la tabla, y con el archivo corrupto. Las tres devuelven las 40 filas sin
+      campo de juicio y sin romperse.
+
+## Evidencia
+
+Cada prueba nueva corrida contra el código SIN el cambio, y falla:
+
+    almacen    -> wa-scope: error: argument cmd: invalid choice: 'juicio'
+    check-clis -> sqlite3.OperationalError: no such table: juicio
+
+Ida y vuelta contra el almacén real del dueño: veredicto grabado y leído en la
+fila del inbox (`{'clase': 'nothing', 'origen': 'agente'}`). La fila de prueba
+se borró después.
+
+`npm run check` en exit 0. `check-clis` 160 comprobaciones (eran 149),
+`almacen` 181/181 (eran 172), paneles 376/376, worker 119/119.
+
+`wa_store.py` sigue sin abrir una sola conexión de escritura: las cuatro son
+`mode=ro`, verificado.
 
 ## Verificación
 

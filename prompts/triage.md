@@ -287,6 +287,14 @@ it is not is invisible.
 hint, not a verdict: writing is not answering, and three unrelated messages of his used
 to wipe two unanswered mentions. Read what he wrote before concluding it is handled.
 
+`juicio`, when present, is what THIS EXACT message was classified as in a previous run:
+`{"clase": "card"|"alert"|"nothing"|"doubtful", "origen": "agente"|"jev"}` — the same
+four values STEP 7 decides between. Its absence is normal and means "not yet judged",
+never "judged as nothing": most runs see the same 40 unrelated lines from a group over
+and over, and without this field the agent reasoned about all 40 every 5 minutes to
+find the 2 that mattered. It is a hint like `kind`, not a rule: it informs, it does not
+decide, and STEP 4's `take`/`ignore` still beats it. STEP 7 says what to do with it.
+
 Each one with `stanza_id`, `chat_jid`, `account`, `media` and `adjuntos_cerca`.
 `adjuntos_cerca` holds objects, so the path is `adjuntos_cerca[0].path`, and
 `audios` is the flat list of audio paths ready for `wa-transcribe`.
@@ -331,8 +339,24 @@ attachment almost never comes glued to the text is in `CLASSIFICATION.md`.
 **The table is in `CLASSIFICATION.md`**, with its counts and its edge cases. It came out
 of classifying 266 real mentions over 90 days and half of them are not work, so read it
 before deciding. In short: a concrete request for help or a report of something broken
-is a card; money, a decision, a deploy or a request for access is an `alert` and never a
-card on its own; a greeting, a meeting or a bare mention is nothing.
+is a `card`; money, a decision, a deploy or a request for access is an `alert` and never
+a card on its own; a greeting, a meeting or a bare mention is `nothing`.
+
+If the row already carries `juicio`, this exact message was classified in a previous
+run: use `juicio.clase` as that decision and skip re-reasoning about what it is — go
+straight to STEP 8 with that class. This is the actual speedup, not a formality: the
+same 40 unrelated lines used to get reclassified up to 132 times a day. Only reopen the
+question if something makes the cached verdict plainly wrong for THIS run (STEP 4's
+`take`/`ignore` still beats everything, cached or not).
+
+If the row carries no `juicio`, decide as below, and once you are done, record it so
+the NEXT run does not have to decide again:
+
+    "$WA/wa-scope" juicio --account "<account>" --chat "<chat_jid>" --stanza "<stanza_id>" \
+      --clase <card|alert|nothing|doubtful> --origen agente
+
+Record the class you actually landed on, including `doubtful` — a DOUBTFUL you do not
+cache gets re-argued from scratch next run.
 
 If the same request comes in five messages, it is ONE card.
 

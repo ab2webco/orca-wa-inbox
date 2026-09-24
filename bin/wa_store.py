@@ -54,6 +54,15 @@ DEFAULTS = {
     "capture_days": "90",
 }
 
+# El mismo vocabulario cerrado que valida `wa-scope juicio` (CLASES_JUICIO y
+# ORIGENES_JUICIO en bin/wa-scope). Repetido aca y no importado por la misma razon que
+# DEFAULTS diez lineas arriba: `wa-scope` es un ejecutable sin extension, y
+# scripts/check-clis compara las dos listas para que no puedan discrepar en silencio.
+# Una clase o un origen que no esten aca no son un veredicto: son ruido que esta fila
+# no muestra (T6, odd/tasks/juicio-cacheado.md).
+CLASES_JUICIO = ("card", "alert", "nothing", "doubtful")
+ORIGENES_JUICIO = ("agente", "jev")
+
 
 class SinFuente(Exception):
     """No hay de donde leer, con el motivo que el panel traduce."""
@@ -114,6 +123,36 @@ def entero(valores, clave, minimo=1):
         return max(minimo, int(str(valores.get(clave, DEFAULTS.get(clave, "0"))).strip()))
     except (TypeError, ValueError):
         return max(minimo, int(DEFAULTS.get(clave, "1")))
+
+
+def veredictos_cacheados():
+    """El juicio que `wa-scope juicio` ya guardo, si scope.db y su tabla existen.
+
+    Misma regla que `ajustes()`: se abre en solo lectura y cualquier tropiezo se lee
+    como "no hay veredicto todavia", nunca como un error que bloquea la bandeja. Sin
+    archivo, sin tabla, sin fila para esa llave o con una clase u origen que no estan
+    en el vocabulario cerrado, la respuesta es que ese mensaje no tiene veredicto — y
+    el agente clasifica como si esto no existiera (T6, odd/tasks/juicio-cacheado.md)."""
+    ruta = scope_db_path()
+    veredictos = {}
+    if not os.path.exists(ruta):
+        return veredictos
+    try:
+        con = sqlite3.connect(f"file:{ruta}?mode=ro", uri=True, timeout=5)
+        con.row_factory = sqlite3.Row
+        filas = con.execute(
+            "select account, chat_jid, stanza_id, clase, origen from juicio").fetchall()
+        con.close()
+    except sqlite3.Error:
+        # Sin la tabla (una base de antes de esta tarea), base corrupta o candado: como
+        # si no hubiera ningun veredicto guardado.
+        return veredictos
+    for r in filas:
+        if r["clase"] not in CLASES_JUICIO or r["origen"] not in ORIGENES_JUICIO:
+            continue
+        veredictos[(r["account"], r["chat_jid"], r["stanza_id"])] = {
+            "clase": r["clase"], "origen": r["origen"]}
+    return veredictos
 
 
 def abrir():
@@ -270,6 +309,11 @@ def inbox(con, dias, limite, ventana, solo="todos", linea=None):
         limit ?"""
     filas = con.execute(sql, [corte] + args + [limite]).fetchall()
 
+    # Una sola lectura de scope.db para toda la bandeja, no una por fila: la tabla
+    # `juicio` es chica frente al limite de la bandeja y abrir un archivo aparte por
+    # mensaje seria el mismo costo que el cache existe para evitar.
+    veredictos = veredictos_cacheados()
+
     salida = []
     for r in filas:
         item = {
@@ -290,6 +334,13 @@ def inbox(con, dias, limite, ventana, solo="todos", linea=None):
             "text": (r["body"] or "").replace("\n", " "),
             "media": r["media_path"] or None,
         }
+        # El veredicto cacheado, la misma llave que identifica el mensaje. Es una
+        # PISTA mas, junto a `kind` y `escribio_despues`: informa, no decide, y su
+        # ausencia es normal — significa "todavia no juzgado", nunca "juzgado como
+        # nada" (T5/T6, odd/tasks/juicio-cacheado.md).
+        juicio = veredictos.get((r["account"], r["chat_jid"], r["stanza_id"]))
+        if juicio:
+            item["juicio"] = juicio
         item["adjuntos_cerca"] = adjuntos_cerca(con, r["account"], r["chat_jid"],
                                                 r["ts"], ventana)
         item["audios"] = [a["path"] for a in item["adjuntos_cerca"] if a["type"] == "audio"]
