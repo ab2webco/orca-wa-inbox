@@ -321,7 +321,7 @@ console.log('\nCaso 4: cinco mensajes sobre un problema son UNA conversacion')
     ctx && ['date', 'sender', 'text'].every((k) => k in ctx), JSON.stringify(ctx))
 }
 
-console.log('\nCaso 5 (§11-D1): una mencion ya contestada no vuelve')
+console.log('\nCaso 5 (§11-D1): haber escrito NO es haber atendido')
 {
   const antes = leerJson(home, ['inbox', '--days', '36500'])
   ok('antes de contestar, la mencion esta',
@@ -333,8 +333,19 @@ console.log('\nCaso 5 (§11-D1): una mencion ya contestada no vuelve')
 
   const despues = leerJson(home, ['inbox', '--days', '36500'])
   const quedan = (despues.filas || []).filter((f) => f.chat_jid === ALFA)
-  ok('despues de contestar, no queda nada pendiente de ese chat', quedan.length === 0,
+  // ANTES esto afirmaba que la bandeja del chat quedaba en cero. Se quito a proposito:
+  // haber escrito no es haber atendido. Medido en la cuenta del dueno, tres mensajes
+  // suyos que no contestaban nada borraron dos menciones directas sin responder, y la
+  // automatizacion informo cero pendientes con la pregunta ahi delante.
+  //
+  // Lo que se sabia no se perdio: se ACOMPANA la fila en vez de esconderla, y el
+  // agente decide. Informar en vez de esconder es la misma regla que el resto del
+  // plugin: una lista vacia tiene que significar que no hay nada, no que no se miro.
+  ok('lo anterior sigue en la bandeja: escribir no es atender', quedan.length > 0,
     JSON.stringify(quedan.map((f) => f.stanza_id)))
+  ok('pero cada fila dice que el dueno escribio despues',
+    quedan.every((f) => f.escribio_despues === true),
+    JSON.stringify(quedan.map((f) => [f.stanza_id, f.escribio_despues])))
   ok('y la conversacion que SI sigue pendiente no se toco',
     (despues.filas || []).some((f) => f.chat_jid === LAURA),
     JSON.stringify(despues.filas))
@@ -984,6 +995,71 @@ console.log('\ningesta: la libreta de nombres y los directos')
   ok('y un nombre igual al jid no cuenta como nombre',
     alm.nombrarChat({ cuenta: CUENTA, chatJid: DIRECTO, nombre: DIRECTO }) === false)
   alm.cerrar()
+}
+
+// ── El caso medido en la cuenta del dueno ──────────────────────────────────────────
+// "Esa automatizacion no ve nunca nada, todo skipped, asi me escriban". Tenia razon:
+// dos filtros del SQL escondian trabajo real de chats que EL MISMO habia autorizado.
+console.log('\ninbox: lo que llega a un chat autorizado se ve, con @ o sin @')
+{
+  const casa = nueva()
+  const alm = abrirAlmacen(rutaAlmacen({ HOME: casa }))
+  const GRUPO = '120363000000000077@g.us'
+  const DIRECTO = '573009998877@s.whatsapp.net'
+  alm.registrarLinea({ cuenta: CUENTA, lid: MI_LID, pn: MI_TEL, nombre: 'Yo' })
+  autorizar(casa, { jid: GRUPO, nombre: 'Operaciones', modo: 'responder' })
+  autorizar(casa, { jid: DIRECTO, nombre: 'Jhon', modo: 'responder' })
+
+  const T = 1700000000
+  // Las filas de `chat` tienen que existir: `inbox` hace join contra ellas.
+  alm.anotarChat({ cuenta: CUENTA, chatJid: GRUPO, nombre: 'Operaciones', esGrupo: 1, ts: T })
+  alm.anotarChat({ cuenta: CUENTA, chatJid: DIRECTO, nombre: 'Jhon', esGrupo: 0, ts: T })
+  const fila = (chat, id, ts, body, extra = {}) => ({
+    cuenta: CUENTA, chatJid: chat, stanzaId: id, ts, fromMe: 0,
+    senderJid: '573009998877@s.whatsapp.net', senderName: 'Jhon', body,
+    mediaTipo: null, mediaBytes: null, mencionaMe: 0, citaMe: 0, ...extra
+  })
+
+  // Una mencion, y despues una linea del grupo SIN @ — la que el dueno no veia.
+  alm.guardarMensaje(fila(GRUPO, 'G1', T, '@yo como va el proyecto', { mencionaMe: 1 }))
+  alm.guardarMensaje(fila(GRUPO, 'G2', T + 60, 'pilas tu. o quieres que te suba a cliente?'))
+  // Y un privado.
+  alm.guardarMensaje(fila(DIRECTO, 'D1', T + 120, 'hola, me confirmas?'))
+  alm.cerrar()
+
+  const antes = leerJson(casa, ['inbox', '--days', '36500'])
+  const ids = (antes.filas || []).map((f) => f.stanza_id)
+  ok('la mencion del grupo se ve', ids.includes('G1'), JSON.stringify(ids))
+  ok('y el mensaje del grupo SIN mencion tambien — este era el que se perdia',
+    ids.includes('G2'), JSON.stringify(ids))
+  ok('y el privado', ids.includes('D1'), JSON.stringify(ids))
+
+  // Lo que se sabia NO se perdio: `kind` sigue distinguiendo, para que el agente
+  // priorice. Una mencion pide respuesta; una linea suelta del grupo puede no pedir
+  // nada, y esa decision es del agente, no del SQL.
+  const porId = {}
+  ;(antes.filas || []).forEach((f) => { porId[f.stanza_id] = f })
+  ok('la mencion se sigue llamando mencion', porId.G1.kind === 'mencion', porId.G1.kind)
+  ok('la linea del grupo se llama grupo, no se aplana con la mencion',
+    porId.G2.kind === 'grupo', porId.G2.kind)
+  ok('y el privado se llama directo', porId.D1.kind === 'directo', porId.D1.kind)
+
+  // Y el segundo filtro: el dueno escribe algo que NO contesta nada.
+  const alm2 = abrirAlmacen(rutaAlmacen({ HOME: casa }))
+  alm2.guardarMensaje(fila(GRUPO, 'MIO', T + 300, 'Deja tu gracia ponte pilas con el informe',
+    { fromMe: 1, senderJid: MI_TEL, senderName: 'Yo' }))
+  alm2.cerrar()
+
+  const despues = leerJson(casa, ['inbox', '--days', '36500'])
+  const tras = (despues.filas || []).map((f) => f.stanza_id)
+  ok('escribir en el chat NO borra lo que quedo sin responder',
+    tras.includes('G1') && tras.includes('G2'), JSON.stringify(tras))
+  const g1 = (despues.filas || []).find((f) => f.stanza_id === 'G1')
+  ok('pero la fila avisa que el dueno escribio despues',
+    g1.escribio_despues === true, JSON.stringify(g1.escribio_despues))
+  const d1 = (despues.filas || []).find((f) => f.stanza_id === 'D1')
+  ok('y en el chat donde NO escribio, la bandera no se enciende',
+    d1.escribio_despues === false, JSON.stringify(d1.escribio_despues))
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
