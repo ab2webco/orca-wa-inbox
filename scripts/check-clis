@@ -244,6 +244,72 @@ def revisa_migracion_cuentas(fallos: list) -> int:
     return hechas
 
 
+def revisa_insignia_nav(fallos: list) -> int:
+    """La insignia del nav cuenta avisos, y solo avisos.
+
+    Orca la lee de una clave reservada del storage del propio plugin -`navBadge`,
+    plugin-nav-badge.ts- y nunca la escribe. Su contrato: un entero POSITIVO pinta
+    insignia y cualquier otra cosa -cero, un texto, la clave ausente- no pinta
+    ninguna, para que no quede un "0" colgado en la barra.
+
+    Se prueba corriendo el CLI de verdad y no leyendo la funcion, por lo mismo que el
+    resto de este archivo. Y se prueba que NO cuente la cola: una insignia que suba
+    con cada linea de un grupo autorizado deja de mirarse a la semana, y entonces el
+    aviso que si importa se pierde entre el ruido.
+    """
+    hechas = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+
+        def scope(*args):
+            return subprocess.run([str(BIN / "wa-scope"), *args], capture_output=True,
+                                  text=True, env=env, timeout=180)
+
+        man = json.loads((RAIZ / "orca-plugin.json").read_text(encoding="utf-8"))
+        store = (home / "Library" / "Application Support" / "orca" / "plugins-data" /
+                 f"{man['publisher']}.{man['id']}" / "storage.json")
+
+        def insignia():
+            if not store.exists():
+                return None
+            return json.loads(store.read_text(encoding="utf-8")).get("navBadge")
+
+        scope("set", "100@g.us", "--target", "SOP", "--mode", "responder")
+        scope("sync")
+
+        hechas += 1
+        if (insignia() or {}).get("count") != 0:
+            fallos.append(f"sin un solo aviso la insignia dice {insignia()!r}, "
+                          "y con cero Orca no pinta nada — tiene que ser 0")
+
+        scope("record", "--chat", "100@g.us", "--name", "G", "--stanza", "A1",
+              "--action", "alert", "--detail", "Piden descuento | el precio no es mio")
+        scope("sync")
+        hechas += 1
+        if (insignia() or {}).get("count") != 1:
+            fallos.append(f"con UN aviso la insignia dice {insignia()!r} en vez de 1")
+
+        # Lo que el agente hace solo no es una decision del dueno y no puede sumar.
+        for accion in ("issue", "sent", "draft", "closed", "skipped", "failed"):
+            scope("record", "--chat", "100@g.us", "--name", "G", "--stanza",
+                  f"B-{accion}", "--action", accion, "--detail", "")
+        scope("sync")
+        hechas += 1
+        if (insignia() or {}).get("count") != 1:
+            fallos.append(f"seis acciones que el agente hizo SOLO movieron la insignia "
+                          f"a {insignia()!r}: solo los avisos cuentan")
+
+        scope("record", "--chat", "100@g.us", "--name", "G", "--stanza", "A2",
+              "--action", "alert", "--detail", "Piden acceso | no doy accesos")
+        scope("sync")
+        hechas += 1
+        if (insignia() or {}).get("count") != 2:
+            fallos.append(f"con dos avisos la insignia dice {insignia()!r} en vez de 2")
+
+    return hechas
+
+
 def revisa_rastro_corrida(fallos: list) -> int:
     """Los cinco finales de una corrida, recorridos de verdad.
 
@@ -1051,6 +1117,7 @@ def main() -> int:
                       + revisa_rutas_del_almacen(fallos)
                       + revisa_migracion_cuentas(fallos)
                       + revisa_rastro_corrida(fallos) + revisa_precheck(fallos)
+                      + revisa_insignia_nav(fallos)
                       + revisa_sin_bytecode(fallos)
                       + revisa_firma_del_panel(fallos)
                       + revisa_casa_del_runtime(fallos))
