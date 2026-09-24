@@ -623,9 +623,12 @@ console.log('\nactivity.html')
   ok('muestra el sello de sincronizacion', doc.getElementById('synced').textContent.length > 0)
   // Tomar no abre tarjeta por si mismo: eso lo decide el servicio de tareas de esa
   // conversacion. Prometerla aca era la misma contradiccion que en los permisos.
+  // La pista dejo de ser un parrafo bajo el titulo y vive en su `title`: es una frase
+  // que se lee UNA vez y despues estorba en cada visita de una barra lateral angosta.
+  const pista = doc.querySelector('[data-t-title="hint"]').getAttribute('title')
   ok('la pista de actividad no promete una tarjeta',
-    !/tarjeta|cartao|card/i.test(doc.querySelector('[data-t="hint"]').textContent),
-    doc.querySelector('[data-t="hint"]').textContent)
+    !/tarjeta|cartao|card/i.test(pista || ''), pista)
+  ok('y sigue existiendo, en el title del titulo', !!pista, String(pista))
 
   doc.querySelector('[data-take]').click()
   await espera()
@@ -2220,33 +2223,38 @@ console.log('\nactivity.html — dice si la linea esta viva y sobre cuanto actua
     { activity: base, chats, sidecar: { connection: 'open', me: '+573008236130' } },
     'es-419')
   await espera()
-  ok('dice que la linea esta conectada',
-    /conectada/i.test(viva.doc.getElementById('linea').textContent),
-    viva.doc.getElementById('linea').textContent)
+  // Conectada se dice con el punto y el NUMERO, no con la palabra: en un renglon de
+  // once pixeles la palabra "conectada" ocupa el sitio del unico dato que desempata
+  // cual linea quedo vinculada.
+  ok('conectada se muestra con el numero de la linea',
+    viva.doc.getElementById('estado').textContent.includes('+573008236130'),
+    viva.doc.getElementById('estado').textContent)
   // Tras escanear un QR, saber CUAL quedo es la unica forma de notar que se escaneo
   // con el telefono equivocado.
-  ok('y con que numero', viva.doc.getElementById('linea').textContent.includes('+573008236130'),
-    viva.doc.getElementById('linea').textContent)
+  ok('y el punto de estado esta',
+    !!viva.doc.querySelector('#estado .dot'),
+    viva.doc.getElementById('estado').innerHTML.slice(0, 120))
   // "Reviso 1 conversacion" sin decir de cuantas no informa nada: 1 de 1 es cobertura
   // completa y 1 de 298 es un agente que casi no ve.
-  const cob = viva.doc.getElementById('cobertura').textContent
-  ok('y sobre cuantas conversaciones puede actuar, del total',
-    cob.includes('1') && cob.includes('298'), cob)
+  // La cobertura va como `1/298` y no como frase: el par de numeros es justo lo que
+  // se compara de un vistazo, y sin el total un "1" no significa nada.
+  const cob = viva.doc.getElementById('estado').textContent
+  ok('y la cobertura va como n/total, no como frase', /1\s*\/\s*298/.test(cob), cob)
 
   const sinQr = await montar('activity.html',
     { activity: base, chats, sidecar: { connection: 'connecting', qr: { qr: 'X', ts: Date.now(), ttlMs: 75000 } } },
     'es-419')
   await espera()
   ok('sin vincular, manda a escanear el QR y no dice "conectada"',
-    /QR/i.test(sinQr.doc.getElementById('linea').textContent) &&
-    !/conectada/i.test(sinQr.doc.getElementById('linea').textContent),
-    sinQr.doc.getElementById('linea').textContent)
+    /QR/i.test(sinQr.doc.getElementById('estado').textContent) &&
+    !/conectada/i.test(sinQr.doc.getElementById('estado').textContent),
+    sinQr.doc.getElementById('estado').textContent)
 
   const caida = await montar('activity.html',
     { activity: base, chats, sidecar: { connection: 'close', exited: true } }, 'es-419')
   await espera()
-  ok('caida se dice caida', /caida/i.test(caida.doc.getElementById('linea').textContent),
-    caida.doc.getElementById('linea').textContent)
+  ok('caida se dice caida', /caida/i.test(caida.doc.getElementById('estado').textContent),
+    caida.doc.getElementById('estado').textContent)
 
   // Sin ninguna autorizada el agente no puede actuar en ningun lado, y eso pide
   // atencion aunque no haya nada pendiente.
@@ -2255,18 +2263,19 @@ console.log('\nactivity.html — dice si la linea esta viva y sobre cuanto actua
       sidecar: { connection: 'open' } }, 'es-419')
   await espera()
   ok('con cero autorizadas se avisa',
-    cero.doc.getElementById('cobertura').className.includes('vieja'),
-    cero.doc.getElementById('cobertura').className)
+    cero.doc.getElementById('estado').className.includes('vieja'),
+    cero.doc.getElementById('estado').className)
 }
 
 console.log('\nactivity.html — el texto ya no ensena que hay que marcar para que actue')
 {
-  for (const [lang, re] of [['es-419', /solo en su proxima corrida|atiende esto solo/i],
+  // La pista vive en el `title` del titulo "En cola": es una frase que se lee UNA vez
+  // y despues estorba en cada visita de una barra lateral angosta.
+  for (const [lang, re] of [['es-419', /las atiende solo/i],
     ['en-US', /on its own/i], ['pt-BR', /sozinho/i]]) {
     const m = await montar('activity.html', { activity: { pending: [], recent: [] } }, lang)
     await espera()
-    const hint = Array.prototype.map.call(m.doc.querySelectorAll('.nota'),
-      (n) => n.textContent).join(' ')
+    const hint = m.doc.querySelector('[data-t-title="hint"]').getAttribute('title') || ''
     ok(`${lang}: dice que el agente actua solo, no que hay que marcarle`,
       re.test(hint), hint.slice(0, 160))
   }
@@ -2329,16 +2338,18 @@ console.log('\nactivity.html — sin alertas lo dice, no deja un hueco')
   const alerts = doc.getElementById('alerts').textContent
   // Casi siempre va a estar vacia, y esa es la idea: una seccion que se llena todos
   // los dias no la mira nadie. Pero vacia tiene que DECIR que no hay nada.
-  ok('dice que no necesita nada del dueno', /no necesita nada/i.test(alerts), alerts)
+  ok('dice que no hay nada que decidir', /nada que decidir/i.test(alerts), alerts)
   ok('y lo que hizo sigue estando', /Acuse enviado/.test(doc.getElementById('recent').textContent))
 }
 
 console.log('\nactivity.html — los titulos nuevos estan en los tres idiomas')
 {
+  // Titulos cortos a proposito: en una barra lateral un encabezado de cinco palabras
+  // empuja el contenido fuera de la primera pantalla.
   for (const [lang, decision, cola] of [
-    ['es-419', /necesita su decision/i, /en cola/i],
-    ['en-US', /needs your decision/i, /queued/i],
-    ['pt-BR', /precisa da sua decisao/i, /na fila/i]
+    ['es-419', /su decision/i, /en cola/i],
+    ['en-US', /your call/i, /queued/i],
+    ['pt-BR', /sua decisao/i, /na fila/i]
   ]) {
     const m = await montar('activity.html', { activity: { pending: [], recent: [] } }, lang)
     await espera()

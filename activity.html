@@ -77,6 +77,9 @@
       /* Parrafos de servicio: mismo relleno horizontal que las filas. */
       .nota { margin: 0 0 8px; padding: 0 12px; }
       .nota:empty { display: none; }
+      /* El estado entero en un renglon, y que no parta el numero. */
+      .estado { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+      .estado .sep { opacity: 0.45; }
       /* "corriendo" ya lo dice la palabra de al lado; el punto solo tiene que pesar,
          y --primary es el token de enfasis. La allowlist no tiene color de exito. */
       .dot { display: inline-block; width: 6px; height: 6px; border-radius: 9999px;
@@ -159,11 +162,11 @@
 
     <p class="meta nota" id="note"></p>
 
-    <!-- Lo primero que hay que poder contestar de un vistazo: esta viva la linea, y
-         sobre cuanto puede actuar el agente. Sin esto, "no hay nada pendiente" y "no
-         estoy conectado" se leen igual. -->
-    <p class="meta nota" id="linea"></p>
-    <p class="meta nota" id="cobertura"></p>
+    <!-- Lo primero que hay que poder contestar de un vistazo, en UN renglon: esta
+         viva la linea, cual es, y sobre cuanto puede actuar el agente. Iban en dos
+         parrafos y en una barra lateral angosta dos renglones de once pixeles uno
+         encima de otro se leen como relleno, no como estado. -->
+    <p class="meta nota estado" id="estado"></p>
 
     <!-- EL ORDEN ES EL MENSAJE. Antes la pantalla abria con "Esperando respuesta" y
          un boton Tomar en cada fila: se leia como que sin el dueno no pasa nada, y no
@@ -186,8 +189,9 @@
     <p class="meta nota" id="runline"></p>
     <div id="recent"><p class="empty" data-t="nothingYet">Nada todavia.</p></div>
 
-    <h2 data-t="queue">En cola para la proxima corrida</h2>
-    <p class="meta nota" data-t="hint"></p>
+    <!-- La explicacion va en el `title` del titulo, no en un parrafo debajo. Es una
+         frase que se lee UNA vez y despues estorba en cada visita. -->
+    <h2 data-t="queue" data-t-title="hint">En cola</h2>
     <div id="pending"><p class="empty" data-t="loading">Cargando…</p></div>
 
     <script>
@@ -195,27 +199,27 @@
       // El shell del panel no inyecta el idioma, asi que sale de navigator.language,
       // que en el renderer de Electron refleja el idioma del app.
       var STRINGS = {
-        es: {"title": "WhatsApp", "pending": "Esperando respuesta", "recent": "Lo que hizo el agente", "loading": "Cargando…", "nothingYet": "Nada todavia.", "nothingPending": "Nada pendiente en las conversaciones que tiene autorizadas.", "nothingAuthorized1": "Tiene 1 conversacion configurada y esta en off.", "nothingAuthorized": "Tiene {n} conversaciones configuradas y todas en off.", "nothingMapped": "Todavia no ha autorizado ninguna conversacion.", "runNever": "Su agente todavia no ha revisado.", "runNow": "Revisando ahora…", "runCut": "La revision arranco y no volvio", "runFailed": "La ultima revision fallo", "runChecked1": "Reviso 1 conversacion", "runChecked": "Reviso {n} conversaciones", "runNone": "nada pendiente", "runWaiting1": "1 esperando", "runWaiting": "{n} esperando", "noData": "sin datos — corra <code>wa-scope sync</code>", "running": "corriendo", "image": "imagen", "mediaImage": "imagen", "mediaVideo": "video", "mediaPtt": "nota de voz", "mediaAudio": "audio", "mediaDocument": "documento", "mediaOther": "adjunto", "take": "Tomar", "ignore": "Ignorar", "taken": "lo toma tu agente", "hint": "Su agente atiende esto solo, hasta donde le permita cada conversacion. Marque solo para adelantarlo o para que no lo toque.", "refreshTitle": "Releer lo guardado",
+        es: {"title": "WhatsApp", "pending": "Esperando respuesta", "recent": "Lo que hizo", "loading": "Cargando…", "nothingYet": "Sin actividad.", "nothingPending": "Nada pendiente en las conversaciones que tiene autorizadas.", "nothingAuthorized1": "Tiene 1 conversacion configurada y esta en off.", "nothingAuthorized": "Tiene {n} conversaciones configuradas y todas en off.", "nothingMapped": "Todavia no ha autorizado ninguna conversacion.", "runNever": "Su agente todavia no ha revisado.", "runNow": "Revisando ahora…", "runCut": "La revision arranco y no volvio", "runFailed": "La ultima revision fallo", "runChecked1": "Reviso 1 conversacion", "runChecked": "Reviso {n} conversaciones", "runNone": "nada pendiente", "runWaiting1": "1 esperando", "runWaiting": "{n} esperando", "noData": "sin datos — corra <code>wa-scope sync</code>", "running": "corriendo", "image": "imagen", "mediaImage": "imagen", "mediaVideo": "video", "mediaPtt": "nota de voz", "mediaAudio": "audio", "mediaDocument": "documento", "mediaOther": "adjunto", "take": "Tomar", "ignore": "Ignorar", "taken": "lo toma tu agente", "hint": "El agente las atiende solo. Marque para adelantar una o para que no la toque.", "refreshTitle": "Releer lo guardado",
               "kindDirecto": "directo", "kindMencion": "mencion", "kindRespuesta": "respuesta",
               "actTriage": "triage", "actIssue": "tarjeta abierta", "actDraft": "borrador",
               "actSent": "enviado", "actSkipped": "saltado", "actDenied": "denegado",
               "actClosed": "cierre avisado", "actFailed": "fallo", "actAlert": "aviso",
               "errNoId": "sin id de mensaje", "errRead": "no pude leer",
-              "errSave": "no pude guardar", "lineaConectada": "Linea conectada", "lineaConectando": "Conectando la linea\u2026", "lineaSinVincular": "Falta escanear el codigo QR en Ajustes", "lineaCaida": "La linea esta caida", "cobertura": "El agente actua sobre {n} de {total} conversaciones", "coberturaSinTotal": "El agente actua sobre {n} conversaciones", "needsYou": "Necesita su decision", "queue": "En cola para la proxima corrida", "nothingNeeded": "Nada que decidir. El agente no necesita nada de usted."},
-        en: {"title": "WhatsApp", "pending": "Waiting on you", "recent": "What your agent did", "loading": "Loading…", "nothingYet": "Nothing yet.", "nothingPending": "Nothing pending in the conversations you allowed.", "nothingAuthorized1": "You have 1 conversation set up and it is off.", "nothingAuthorized": "You have {n} conversations set up and all of them are off.", "nothingMapped": "No conversation is authorized yet.", "runNever": "Your agent has not checked yet.", "runNow": "Checking now…", "runCut": "The run started and never came back", "runFailed": "Last run failed", "runChecked1": "Checked 1 conversation", "runChecked": "Checked {n} conversations", "runNone": "nothing pending", "runWaiting1": "1 waiting", "runWaiting": "{n} waiting", "noData": "no data — run <code>wa-scope sync</code>", "running": "running", "image": "image", "mediaImage": "image", "mediaVideo": "video", "mediaPtt": "voice note", "mediaAudio": "audio", "mediaDocument": "document", "mediaOther": "attachment", "take": "Take", "ignore": "Ignore", "taken": "your agent takes it", "hint": "Your agent handles this on its own, as far as each conversation allows. Mark only to move it up or to keep it away.", "refreshTitle": "Re-read what is stored",
+              "errSave": "no pude guardar", "lineaConectada": "Conectada", "lineaConectando": "Conectando...", "lineaSinVincular": "Escanee el QR en Ajustes", "lineaCaida": "Linea caida", "cobertura": "El agente actua sobre {n} de {total} conversaciones", "coberturaSinTotal": "El agente actua sobre {n} conversaciones", "needsYou": "Su decision", "queue": "En cola", "nothingNeeded": "Nada que decidir.", "coberturaTitulo": "Conversaciones autorizadas del total"},
+        en: {"title": "WhatsApp", "pending": "Waiting on you", "recent": "What it did", "loading": "Loading…", "nothingYet": "No activity.", "nothingPending": "Nothing pending in the conversations you allowed.", "nothingAuthorized1": "You have 1 conversation set up and it is off.", "nothingAuthorized": "You have {n} conversations set up and all of them are off.", "nothingMapped": "No conversation is authorized yet.", "runNever": "Your agent has not checked yet.", "runNow": "Checking now…", "runCut": "The run started and never came back", "runFailed": "Last run failed", "runChecked1": "Checked 1 conversation", "runChecked": "Checked {n} conversations", "runNone": "nothing pending", "runWaiting1": "1 waiting", "runWaiting": "{n} waiting", "noData": "no data — run <code>wa-scope sync</code>", "running": "running", "image": "image", "mediaImage": "image", "mediaVideo": "video", "mediaPtt": "voice note", "mediaAudio": "audio", "mediaDocument": "document", "mediaOther": "attachment", "take": "Take", "ignore": "Ignore", "taken": "your agent takes it", "hint": "Your agent handles these on its own. Mark one to move it up or to keep it away.", "refreshTitle": "Re-read what is stored",
               "kindDirecto": "direct", "kindMencion": "mention", "kindRespuesta": "reply",
               "actTriage": "triage", "actIssue": "card opened", "actDraft": "draft",
               "actSent": "sent", "actSkipped": "skipped", "actDenied": "denied",
               "actClosed": "closing announced", "actFailed": "failed", "actAlert": "alert",
               "errNoId": "no message id", "errRead": "could not read",
-              "errSave": "could not save", "lineaConectada": "Line connected", "lineaConectando": "Connecting the line\u2026", "lineaSinVincular": "The QR code still has to be scanned in Settings", "lineaCaida": "The line is down", "cobertura": "Your agent acts on {n} of {total} conversations", "coberturaSinTotal": "Your agent acts on {n} conversations", "needsYou": "Needs your decision", "queue": "Queued for the next run", "nothingNeeded": "Nothing to decide. Your agent does not need anything from you."},
-        pt: {"title": "WhatsApp", "pending": "Aguardando voce", "recent": "O que o agente fez", "loading": "Carregando…", "nothingYet": "Nada ainda.", "nothingPending": "Nada pendente nas conversas que voce autorizou.", "nothingAuthorized1": "Voce tem 1 conversa configurada e ela esta em off.", "nothingAuthorized": "Voce tem {n} conversas configuradas e todas em off.", "nothingMapped": "Nenhuma conversa autorizada ainda.", "runNever": "Seu agente ainda nao revisou.", "runNow": "Revisando agora…", "runCut": "A revisao comecou e nao voltou", "runFailed": "A ultima revisao falhou", "runChecked1": "Revisou 1 conversa", "runChecked": "Revisou {n} conversas", "runNone": "nada pendente", "runWaiting1": "1 aguardando", "runWaiting": "{n} aguardando", "noData": "sem dados — rode <code>wa-scope sync</code>", "running": "rodando", "image": "imagem", "mediaImage": "imagem", "mediaVideo": "video", "mediaPtt": "nota de voz", "mediaAudio": "audio", "mediaDocument": "documento", "mediaOther": "anexo", "take": "Assumir", "ignore": "Ignorar", "taken": "seu agente assume", "hint": "Seu agente cuida disso sozinho, ate onde cada conversa permitir. Marque apenas para adiantar ou para que nao toque.", "refreshTitle": "Reler o que esta salvo",
+              "errSave": "could not save", "lineaConectada": "Connected", "lineaConectando": "Connecting...", "lineaSinVincular": "Scan the QR in Settings", "lineaCaida": "Line down", "cobertura": "Your agent acts on {n} of {total} conversations", "coberturaSinTotal": "Your agent acts on {n} conversations", "needsYou": "Your call", "queue": "Queued", "nothingNeeded": "Nothing to decide.", "coberturaTitulo": "Authorized conversations out of the total"},
+        pt: {"title": "WhatsApp", "pending": "Aguardando voce", "recent": "O que fez", "loading": "Carregando…", "nothingYet": "Sem atividade.", "nothingPending": "Nada pendente nas conversas que voce autorizou.", "nothingAuthorized1": "Voce tem 1 conversa configurada e ela esta em off.", "nothingAuthorized": "Voce tem {n} conversas configuradas e todas em off.", "nothingMapped": "Nenhuma conversa autorizada ainda.", "runNever": "Seu agente ainda nao revisou.", "runNow": "Revisando agora…", "runCut": "A revisao comecou e nao voltou", "runFailed": "A ultima revisao falhou", "runChecked1": "Revisou 1 conversa", "runChecked": "Revisou {n} conversas", "runNone": "nada pendente", "runWaiting1": "1 aguardando", "runWaiting": "{n} aguardando", "noData": "sem dados — rode <code>wa-scope sync</code>", "running": "rodando", "image": "imagem", "mediaImage": "imagem", "mediaVideo": "video", "mediaPtt": "nota de voz", "mediaAudio": "audio", "mediaDocument": "documento", "mediaOther": "anexo", "take": "Assumir", "ignore": "Ignorar", "taken": "seu agente assume", "hint": "O agente cuida delas sozinho. Marque para adiantar uma ou para que nao toque.", "refreshTitle": "Reler o que esta salvo",
               "kindDirecto": "direto", "kindMencion": "mencao", "kindRespuesta": "resposta",
               "actTriage": "triagem", "actIssue": "cartao aberto", "actDraft": "rascunho",
               "actSent": "enviado", "actSkipped": "pulado", "actDenied": "negado",
               "actClosed": "fecho avisado", "actFailed": "falhou", "actAlert": "alerta",
               "errNoId": "sem id da mensagem", "errRead": "nao consegui ler",
-              "errSave": "nao consegui salvar", "lineaConectada": "Linha conectada", "lineaConectando": "Conectando a linha\u2026", "lineaSinVincular": "Falta escanear o codigo QR em Ajustes", "lineaCaida": "A linha esta fora do ar", "cobertura": "Seu agente atua em {n} de {total} conversas", "coberturaSinTotal": "Seu agente atua em {n} conversas", "needsYou": "Precisa da sua decisao", "queue": "Na fila para a proxima rodada", "nothingNeeded": "Nada a decidir. Seu agente nao precisa de nada de voce."}
+              "errSave": "nao consegui salvar", "lineaConectada": "Conectada", "lineaConectando": "Conectando...", "lineaSinVincular": "Escaneie o QR em Ajustes", "lineaCaida": "Linha fora do ar", "cobertura": "Seu agente atua em {n} de {total} conversas", "coberturaSinTotal": "Seu agente atua em {n} conversas", "needsYou": "Sua decisao", "queue": "Na fila", "nothingNeeded": "Nada a decidir.", "coberturaTitulo": "Conversas autorizadas do total"}
       }
       var LANG = (function () {
         var tag = String(navigator.language || 'en').toLowerCase()
@@ -445,48 +449,49 @@
           (viejo(when) ? '<span class="vieja">' + esc(when) + '</span>' : esc(when))
       }
 
-      /** Si la linea esta viva, y cual. "No hay nada pendiente" y "no estoy conectado"
-       *  se leian exactamente igual: una lista vacia. Son lo contrario, y cual de las
-       *  dos es decide si el dueno tiene que hacer algo o no.
+      /** El estado, entero, en UN renglon: si la linea esta viva, cual es, y sobre
+       *  cuantas conversaciones puede actuar el agente.
        *
-       *  El numero va porque el dueno puede tener mas de una linea y porque, tras
-       *  escanear un QR, saber CUAL quedo vinculada es la unica forma de notar que se
-       *  escaneo con el telefono equivocado. */
-      function renderLinea (sc) {
-        var nodo = el('linea')
-        if (!sc || typeof sc !== 'object') { nodo.textContent = ''; return }
-        var clase = 'meta nota'
-        var texto
-        if (sc.connection === 'open') {
-          texto = t('lineaConectada')
-          var yo = sc.me || null
-          if (yo) texto += ' · ' + esc(yo)
-        } else if (sc.exited || sc.motivo === 'sesion-cerrada') {
-          texto = t('lineaCaida')
-          clase += ' stale'
-        } else if (sc.qr) {
-          texto = t('lineaSinVincular')
-          clase += ' vieja'
-        } else {
-          texto = t('lineaConectando')
-          clase += ' vieja'
-        }
-        nodo.textContent = texto
-        nodo.className = clase
-      }
+       *  Iban en dos parrafos. En una barra lateral angosta, dos renglones de once
+       *  pixeles uno encima de otro se leen como relleno y no como estado — el panel
+       *  se veia como un muro de texto gris antes de llegar a lo que importa.
+       *
+       *  El numero de la linea va porque, tras escanear un QR, saber CUAL quedo
+       *  vinculada es la unica forma de notar que se escaneo con el telefono
+       *  equivocado. La cobertura va como `1/298` y no como frase: "el agente actua
+       *  sobre 1 de 298 conversaciones" dice lo mismo en nueve palabras mas, y el par
+       *  de numeros es justo lo que se compara de un vistazo. Sin el total, un "1" no
+       *  significa nada: 1 de 1 es cobertura completa y 1 de 298 es un agente ciego. */
+      function renderEstado (sc, a, chats) {
+        var nodo = el('estado')
+        var partes = []
+        var clase = 'meta nota estado'
 
-      /** Sobre cuanto puede actuar el agente. Un "revise 1 conversacion" sin decir de
-       *  cuantas no informa nada: 1 de 1 es cobertura completa y 1 de 298 es un agente
-       *  que casi no ve. Es el mismo numero y significan lo contrario. */
-      function renderCobertura (a, chats) {
-        var nodo = el('cobertura')
-        var total = Array.isArray(chats) ? chats.length : null
+        if (sc && typeof sc === 'object') {
+          if (sc.connection === 'open') {
+            partes.push('<span class="dot"></span>' + esc(sc.me || t('lineaConectada')))
+          } else if (sc.exited || sc.motivo === 'sesion-cerrada') {
+            partes.push(esc(t('lineaCaida')))
+            clase += ' stale'
+          } else if (sc.qr) {
+            partes.push(esc(t('lineaSinVincular')))
+            clase += ' vieja'
+          } else {
+            partes.push(esc(t('lineaConectando')))
+            clase += ' vieja'
+          }
+        }
+
         var vivas = a && a.authorized != null ? a.authorized : null
-        if (vivas == null) { nodo.textContent = ''; return }
-        nodo.className = 'meta nota' + (vivas === 0 ? ' vieja' : '')
-        nodo.textContent = total == null
-          ? fmt('coberturaSinTotal', vivas)
-          : fmt('cobertura', { n: vivas, total: total })
+        if (vivas != null) {
+          var total = Array.isArray(chats) ? chats.length : null
+          partes.push('<span title="' + esc(t('coberturaTitulo')) + '">' +
+            esc(total == null ? String(vivas) : vivas + '/' + total) + '</span>')
+          if (vivas === 0 && clase.indexOf('stale') === -1) clase += ' vieja'
+        }
+
+        nodo.innerHTML = partes.join('<span class="sep">\u00b7</span>')
+        nodo.className = clase
       }
 
       /** La linea honesta, arriba de la lista. Cinco finales y ninguno se parece a
@@ -586,8 +591,7 @@
             return !d || d.decision !== 'ignore'
           })
           renderSynced(a)
-          renderLinea(stored(results[2]))
-          renderCobertura(a, stored(results[3]))
+          renderEstado(stored(results[2]), a, stored(results[3]))
           renderRun(a, vivos.length)
           // Lo marcado se ve al instante, sin esperar al proximo `wa-scope sync`.
           renderPending(vivos.map(function (m) {
