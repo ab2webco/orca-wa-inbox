@@ -2272,5 +2272,82 @@ console.log('\nactivity.html — el texto ya no ensena que hay que marcar para q
   }
 }
 
+// ── El panel como bandeja PARA AGENTES ─────────────────────────────────────────────
+// La pantalla abria con "Esperando respuesta" y un boton Tomar en cada fila: se leia
+// como que sin el dueno no pasa nada. No es asi — el agente clasifica, abre tarjeta,
+// responde y alerta por su cuenta (prompts/triage.md, pasos 7 a 11), y lo demostro en
+// la cuenta del dueno contestando dos mensajes solo.
+//
+// Lo unico que de verdad lo espera a el son las alertas: lo que el agente levanto
+// porque NO le corresponde decidirlo. `wa-scope alert` ya las guardaba como una accion
+// mas, asi que quedaban al fondo, mezcladas con las respuestas y con el mismo peso.
+console.log('\nactivity.html — lo que pide decision va primero y solo')
+{
+  const recent = [
+    { ts: '2026-09-23 18:40', chat: 'Ab2Web Operaciones', action: 'alert',
+      issue: null, detail: 'Piden precio | Jhon pregunta cuanto vale el modulo nuevo' },
+    { ts: '2026-09-23 18:08', chat: 'Ab2Web Operaciones', action: 'reply',
+      issue: null, detail: 'Acuse enviado al cliente' },
+    { ts: '2026-09-23 18:05', chat: 'Ab2Web Operaciones', action: 'issue',
+      issue: 'ACM-9', detail: 'Revisar el proyecto de camara' }
+  ]
+  const { doc } = await montar('activity.html',
+    { activity: { pending: [], recent, running: false, syncedAt: '2026-09-23 18:41',
+      mapped: 1, authorized: 1,
+      run: { state: 'ok', endedAt: '2026-09-23 18:41', looked: 1, pending: 0 } } },
+    'es-419')
+  await espera()
+
+  const alerts = doc.getElementById('alerts').textContent
+  const hechas = doc.getElementById('recent').textContent
+
+  ok('la alerta esta en su propia seccion', /Piden precio/.test(alerts), alerts)
+  // `alert` guarda "titulo | cuerpo": partirlos deja la pregunta legible sin abrir nada.
+  ok('y se parte en titulo y porque, sin la barra cruda',
+    /cuanto vale el modulo/.test(alerts) && !/\|/.test(alerts), alerts)
+  // Repetirla abajo haria que lo que pide una decision se lea como cosa ya hecha.
+  ok('la alerta NO se repite entre lo que ya hizo', !/Piden precio/.test(hechas), hechas)
+  ok('lo que hizo si esta: la respuesta', /Acuse enviado/.test(hechas), hechas)
+  ok('y la tarjeta que abrio', /ACM-9/.test(hechas), hechas)
+
+  // El orden es el mensaje: lo que espera al dueno va antes que lo que ya se hizo.
+  const cuerpo = doc.body.innerHTML
+  ok('lo que pide decision va ANTES que el feed del agente',
+    cuerpo.indexOf('id="alerts"') < cuerpo.indexOf('id="recent"'))
+  ok('y la cola va de ultima: eso lo atiende solo',
+    cuerpo.indexOf('id="recent"') < cuerpo.indexOf('id="pending"'))
+}
+
+console.log('\nactivity.html — sin alertas lo dice, no deja un hueco')
+{
+  const { doc } = await montar('activity.html',
+    { activity: { pending: [], recent: [
+      { ts: '2026-09-23 18:08', chat: 'Ops', action: 'reply', issue: null,
+        detail: 'Acuse enviado' }
+    ], mapped: 1, authorized: 1 } }, 'es-419')
+  await espera()
+  const alerts = doc.getElementById('alerts').textContent
+  // Casi siempre va a estar vacia, y esa es la idea: una seccion que se llena todos
+  // los dias no la mira nadie. Pero vacia tiene que DECIR que no hay nada.
+  ok('dice que no necesita nada del dueno', /no necesita nada/i.test(alerts), alerts)
+  ok('y lo que hizo sigue estando', /Acuse enviado/.test(doc.getElementById('recent').textContent))
+}
+
+console.log('\nactivity.html — los titulos nuevos estan en los tres idiomas')
+{
+  for (const [lang, decision, cola] of [
+    ['es-419', /necesita su decision/i, /en cola/i],
+    ['en-US', /needs your decision/i, /queued/i],
+    ['pt-BR', /precisa da sua decisao/i, /na fila/i]
+  ]) {
+    const m = await montar('activity.html', { activity: { pending: [], recent: [] } }, lang)
+    await espera()
+    const h = Array.prototype.map.call(m.doc.querySelectorAll('h2'),
+      (n) => n.textContent).join(' | ')
+    ok(`${lang}: "necesita su decision" esta traducido`, decision.test(h), h)
+    ok(`${lang}: y "en cola" tambien`, cola.test(h), h)
+  }
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)
