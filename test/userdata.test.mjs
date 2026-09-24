@@ -20,8 +20,9 @@
 //   2. macOS y Windows resuelven exactamente donde resolvian antes (no hay regresion);
 //   3. `orca` sigue PRIMERO en la lista, que es donde NACE la carpeta en una
 //      instalacion limpia — moverlo cambiaria eso en macOS y en Windows;
-//   4. con dos userData presentes gana el que el HOST toco mas recientemente, no el
-//      primero de la lista;
+//   4. con dos userData presentes la precedencia NO se mueve -ya sembrada, si no con
+//      datos, si no la primera-, aunque la otra sea la que esta corriendo: desempatar
+//      por fecha MUEVE un auth state ya vinculado, que es un QR nuevo sin avisar;
 //   5. una build con un nombre que nadie contemplo se DESCUBRE por su runtime;
 //   6. sin ningun userData se sigue contestando null, para que el motivo SIN_AUTHDIR
 //      siga siendo cierto cuando de verdad no hay donde escribir.
