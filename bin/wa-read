@@ -5,7 +5,7 @@ The plugin links one WhatsApp line with a QR code, and a sidecar keeps that line
 and writes what it receives into a message store. This tool is the query layer over
 that store — it never writes to it, and it never talks to WhatsApp.
 
-  inbox [--days N] [--limit N]  mentions of you + replies to your messages, in groups
+  inbox [--days N] [--limit N]  what arrived in the conversations you authorized
   chats [--query TXT] [-n N]    list chats (groups and 1:1) with unread counts
   whoami                        your LID and how many groups
   chat <id|name> [-n N]         latest messages of a chat
@@ -226,7 +226,7 @@ def main():
             sp.set_defaults(fn=fn)
         return sp
 
-    s = add("inbox", cmd_inbox, help="mentions and replies addressed to you")
+    s = add("inbox", cmd_inbox, help="what arrived in the conversations you authorized")
     s.add_argument("--days", type=int, default=None)
     s.add_argument("--limit", type=int, default=None)
     s.add_argument("--window", type=int, default=5)

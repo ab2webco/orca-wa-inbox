@@ -265,7 +265,28 @@ Exit 3 = denied. Note it and move to the next one.
 
     "$WA/wa-read" inbox --json
 
-Brings mentions, replies to the owner's messages, and one-to-one chats with no answer.
+Brings what arrived in the conversations the owner AUTHORIZED — every incoming
+message, not only the ones that name him. The store only ever holds authorized chats,
+so the permission is already the consent; filtering again here was hiding work the
+owner had asked for. Measured on his account: "pilas tu. o quieres que te suba a
+cliente?" in an authorized chat, and the inbox came back empty.
+
+`kind` says what each one is, and **that is what you prioritize with**:
+
+| `kind` | What it is |
+|---|---|
+| `directo` | a one-to-one message. All of it is for the owner. |
+| `mencion` | they named him in a group. The most direct thing there is. |
+| `respuesta` | they replied to something of his in a group. |
+| `grupo` | a line in an authorized group that does not name him. |
+
+A `grupo` row may be asking for nothing — that is a judgement call and it is YOURS. What
+it is not is invisible.
+
+`escribio_despues: true` means the owner wrote in that chat after this message. It is a
+hint, not a verdict: writing is not answering, and three unrelated messages of his used
+to wipe two unanswered mentions. Read what he wrote before concluding it is handled.
+
 Each one with `stanza_id`, `chat_jid`, `account`, `media` and `adjuntos_cerca`.
 `adjuntos_cerca` holds objects, so the path is `adjuntos_cerca[0].path`, and
 `audios` is the flat list of audio paths ready for `wa-transcribe`.

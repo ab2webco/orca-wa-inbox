@@ -188,12 +188,23 @@ def quien(fila):
 
 
 def clase_de(fila):
-    """`directo` | `mencion` | `respuesta`. La misma regla que publicaba el lector
-    viejo: en un uno a uno todo mensaje ajeno es para usted; en un grupo cuenta si lo
-    nombran o si contestan algo suyo, y lo demas es conversacion ajena (§11-A4)."""
+    """`directo` | `mencion` | `respuesta` | `grupo`.
+
+    En un uno a uno todo mensaje ajeno es para usted. En un grupo, que lo nombren o que
+    contesten algo suyo sigue siendo lo mas directo que hay y por eso se distingue —
+    pero ya no es lo UNICO que llega: un mensaje de un grupo autorizado que no hace ni
+    lo uno ni lo otro sale como `grupo`, en vez de no salir.
+
+    Se distingue y no se aplana en una sola clase porque el agente prioriza con esto:
+    una mencion pide respuesta y una linea suelta del grupo puede no pedir nada. Esa
+    decision es suya; antes se la tomaba el SQL escondiendole la fila."""
     if not fila["is_group"]:
         return "directo"
-    return "mencion" if fila["menciona_me"] else "respuesta"
+    if fila["menciona_me"]:
+        return "mencion"
+    if fila["cita_me"]:
+        return "respuesta"
+    return "grupo"
 
 
 def filtro_linea(linea, prefijo="m"):
@@ -228,17 +239,32 @@ def inbox(con, dias, limite, ventana, solo="todos", linea=None):
     sql = f"""
         select m.account, m.chat_jid, m.stanza_id, m.ts, m.from_me, m.sender_jid,
                m.sender_name, m.body, m.media_type, m.media_path, m.menciona_me,
-               m.cita_me, c.rowid chat_id, c.chat_name, c.is_group
+               m.cita_me, c.rowid chat_id, c.chat_name, c.is_group, lm.mine
         from mensaje m
         join chat c on c.account = m.account and c.chat_jid = m.chat_jid
         {ULTIMA_MIA}
         where m.from_me = 0 and m.revocado = 0 and m.ts > ?
-          -- Deja de contar si ya escribio despues: si contesto en ese chat, la mencion
-          -- ya la atendio. Sin esto una mencion vieja se queda para siempre (§11-D1).
-          and m.ts > coalesce(lm.mine, 0)
-          -- En un chat uno a uno todo mensaje es para usted. En grupo solo cuenta si lo
-          -- nombran o responden algo suyo.
-          and (c.is_group = 0 or m.menciona_me = 1 or m.cita_me = 1)
+          -- Aca ANTES habia dos filtros que escondian trabajo real, y los dos se
+          -- quitaron por lo mismo: el almacen SOLO guarda mensajes de chats que el
+          -- dueno autorizo (`ingerirMensaje` le pregunta al alcance antes de escribir
+          -- una sola palabra). El permiso ya es el consentimiento; volver a filtrar
+          -- aca era decidir por el dueno sobre algo que el ya decidio.
+          --
+          -- 1) "en grupo solo si lo nombran o citan algo suyo". Medido en la cuenta
+          --    del dueno: le escriben "pilas tu. o quieres que te suba a cliente?" en
+          --    un grupo AUTORIZADO, sin @, y la bandeja salia vacia. El agente no leia
+          --    la pregunta que tenia delante.
+          --
+          -- 2) "deja de contar si ya escribio despues". Cualquier cosa que el dueno
+          --    escribiera limpiaba la bandeja entera del chat. Medido: tres mensajes
+          --    suyos a las 18:55 que no contestaban nada borraron dos menciones
+          --    directas de las 17:35. haber escrito no es haber atendido.
+          --
+          -- Lo que se sabia NO se perdio: `kind` sigue diciendo si es mencion, cita o
+          -- conversacion del chat, y `escribio_despues` dice si el dueno hablo
+          -- despues. El agente decide con eso; antes ni se enteraba. Informar en vez
+          -- de esconder es la misma regla que el resto del plugin: una lista vacia
+          -- tiene que significar que no hay nada, no que no se miro.
           {donde}
         order by m.ts desc
         limit ?"""
@@ -257,6 +283,10 @@ def inbox(con, dias, limite, ventana, solo="todos", linea=None):
             "account": r["account"],
             "sender": quien(r),
             "kind": clase_de(r),
+            # Si el dueno escribio en ese chat DESPUES de este mensaje. Antes esto
+            # borraba la fila; ahora la acompana, que es lo que deja al agente decidir
+            # si ya quedo atendida o si escribio de otra cosa.
+            "escribio_despues": bool(r["mine"] and r["ts"] <= r["mine"]),
             "text": (r["body"] or "").replace("\n", " "),
             "media": r["media_path"] or None,
         }
