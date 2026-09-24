@@ -13,7 +13,8 @@
  * desincroniza en silencio.
  */
 import { decidirTrasCierre, calcularEsperaMs, intentoTrasEvento, mensajeQr, qrVencido,
-  tocaEmitirAlmacen, opcionesDeSocket, MOTIVO, QR_ROTACION_MS, QR_VIGENCIA_MS,
+  tocaEmitirAlmacen, opcionesDeSocket, MOTIVO, PARCHES_DE_LIBRETA, QR_ROTACION_MS,
+  QR_VIGENCIA_MS,
   ALMACEN_LATIDO_MS
 } from '../sidecar/src/index.js'
 
@@ -257,6 +258,27 @@ console.log('\nsidecar: el contador de intentos y el backoff al emparejar')
   for (let i = 0; i < 6; i += 1) caido = intentoTrasEvento(caido, 'close')
   ok('pero una caida real sigue con backoff creciente hasta el tope',
     calcularEsperaMs(caido) === 30000, `intento=${caido} espera=${calcularEsperaMs(caido)}`)
+}
+
+console.log('\nsidecar: la libreta se PIDE, no se espera')
+{
+  // Las personas llegan por `resyncAppState` sobre estas colecciones. Corre en un solo
+  // sitio de Baileys (`doAppStateSync`) que se auto-anula si no esta en
+  // `SyncState.Syncing`, y a ese estado solo se entra dentro de la ventana de la
+  // sincronizacion inicial. Si esa ventana no se completa, la libreta no se pide nunca
+  // mas en esa sesion — y la lista sale con los grupos y CERO personas.
+  //
+  // Medido en la cuenta del dueno: 378 `app-state-sync-key-*` en disco y CERO
+  // `app-state-sync-version-*`, con `accountSyncCounter` en 0.
+  ok('estan las cinco colecciones de app state', PARCHES_DE_LIBRETA.length === 5,
+    JSON.stringify(PARCHES_DE_LIBRETA))
+  ok('incluye la libreta de contactos',
+    PARCHES_DE_LIBRETA.includes('critical_unblock_low'), JSON.stringify(PARCHES_DE_LIBRETA))
+  ok('y la lista de conversaciones',
+    PARCHES_DE_LIBRETA.includes('regular_high') && PARCHES_DE_LIBRETA.includes('regular_low'),
+    JSON.stringify(PARCHES_DE_LIBRETA))
+  ok('la lista es inmutable: es un contrato con Baileys, no una preferencia',
+    Object.isFrozen(PARCHES_DE_LIBRETA))
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

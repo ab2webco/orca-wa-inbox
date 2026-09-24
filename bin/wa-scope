@@ -281,6 +281,20 @@ def plugin_store_write(scope, agent_name=None, activity=None, health=None,
                 data["agentName"] = agent_name
             if activity is not None:
                 data["activity"] = activity
+                # La insignia del nav, que Orca lee de esta MISMA clave reservada
+                # (`navBadge`, plugin-nav-badge.ts): no hay API nueva, el host la lee
+                # y nunca la escribe.
+                #
+                # Cuenta lo que espera una decision del dueno -los avisos- y NADA mas.
+                # No la cola: eso el agente lo atiende solo, y una insignia que suba
+                # con cada linea de un grupo autorizado deja de mirarse a la semana.
+                #
+                # Sale del MISMO `recent` que pinta la seccion "Necesita su decision",
+                # a proposito: dos fuentes para el mismo numero es como el panel
+                # termino diciendo "nada pendiente" con dos mensajes en pantalla.
+                data["navBadge"] = {"count": sum(
+                    1 for r in (activity.get("recent") or [])
+                    if r.get("action") == "alert")}
             if health is not None:
                 data["health"] = health
             if routes is not None:
