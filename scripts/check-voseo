@@ -30,7 +30,7 @@ PANELES = {"config.html": ("        en: {", "      var LANG ="),
 # worker, textos esperados por las pruebas y documentacion.
 OTROS = ["main.mjs", "jev-espejo.mjs", "acciones.mjs", "harness.mjs", "README.md",
          "bin/wa-read", "bin/wa-scope", "bin/wa-send", "bin/wa-transcribe",
-         "bin/wa_settings.py", "bin/wa_store.py",
+         "bin/wa_settings.py", "bin/wa_store.py", "bin/wa_jev.py", "bin/wa_reglas.py",
          "automations/README.md", "docs/ESCRIBIR-UN-PLUGIN.md",
          "docs/el-plugin-whatsapp-inbox.html",
          "test/manifest.test.mjs", "test/panels.test.mjs", "test/worker.test.mjs",

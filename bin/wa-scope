@@ -49,6 +49,7 @@ from wa_settings import (  # noqa: E402
     plugin_store_targets, settings_from_plugin, user_data_roots, valida_ajuste)
 import wa_store  # noqa: E402  (solo lectura: de capture.db se lee la linea activa)
 import wa_jev  # noqa: E402  (el cliente de Jev: falla cerrado, nunca habilita)
+import wa_reglas  # noqa: E402  (el piso fijo de excepciones: corre siempre, con o sin Jev)
 
 def scope_db_path():
     """Estado propio de la herramienta. En Windows va al APPDATA y no al home."""
@@ -2474,6 +2475,12 @@ def cmd_caso_propuesta(con, a):
         caso_valida(caso, "decision")
         caso_mover(con, caso, "decision", a.actor, detalle, propuesta=texto,
                    propuesta_version=version, propuesta_aprobada=None)
+    # Lo que saldria al chat pasa por el piso fijo: con dinero, credencial o compromiso,
+    # la regla del dueno ya no lo puede aprobar sola (E_EXCEPTION). Solo la respuesta:
+    # las instrucciones de un trabajo no salen a WhatsApp.
+    if propuesta.get("respuesta"):
+        caso_marca_regla(con, a.id, wa_reglas.excepciones(propuesta["respuesta"],
+                                                           wa_reglas.SALIDA))
     con.commit()
     return [caso_fila(con, caso_de(con, a.id))]
 
@@ -2543,6 +2550,8 @@ def cmd_caso_resultado(con, a):
     caso_valida(caso, "listo")
     caso_mover(con, caso, "listo", a.actor, f"responder {version}", propuesta=texto,
                propuesta_version=version, propuesta_aprobada=None, resumen=resumen)
+    # La respuesta del trabajador tambien saldria al chat: el mismo piso que una propuesta.
+    caso_marca_regla(con, a.id, wa_reglas.excepciones(respuesta, wa_reglas.SALIDA))
     con.commit()
     return [caso_fila(con, caso_de(con, a.id))]
 
@@ -2894,6 +2903,24 @@ def caso_marca_jev(con, case_id, juicio):
         con.execute("update caso set jev=? where case_id=?", (resumen, case_id))
 
 
+def caso_marca_regla(con, case_id, excepciones):
+    """El piso fijo (T19), en el caso: las excepciones que dio `wa_reglas` se suman a las
+    que ya tenia (las de Jev o las de antes) y nunca se borran, igual que en
+    `caso_marca_jev`. Deja evento de la regla fija solo cuando cambia algo, y el evento
+    lleva los NOMBRES de las excepciones, nunca el texto que las disparo. Sin commit."""
+    if not excepciones:
+        return False
+    caso = caso_de(con, case_id)
+    previas = json.loads(caso["excepciones"]) if caso.get("excepciones") else []
+    unidas = [e for e in wa_jev.ORDEN_EXCEPCIONES if e in set(previas) | set(excepciones)]
+    if unidas == previas:
+        return False
+    nuevas = [e for e in unidas if e not in previas]
+    caso_tocar(con, caso, "regla", "regla fija: excepciones " + ", ".join(nuevas),
+               excepciones=json.dumps(unidas))
+    return True
+
+
 def ingest_mensaje(con, m, veredicto, horas):
     """Un mensaje nuevo, en SU transaccion: o queda todo (caso, ruta, clasificacion,
     eventos) o nada, y la fila de `caso_mensaje` es lo que hace que un reintento no lo
@@ -2901,6 +2928,9 @@ def ingest_mensaje(con, m, veredicto, horas):
     hecho = dict.fromkeys(CONTEOS_INGEST, 0)
     stanza, chat = m["stanza_id"], m["chat_jid"]
     suelto = m.get("kind") == "grupo"
+    # El piso fijo sobre lo que entro: dinero y credenciales (un compromiso es de lo que
+    # sale, no de lo que pide el cliente). Se calcula antes de tomar la base.
+    piso = wa_reglas.excepciones(m.get("text") or "", wa_reglas.ENTRADA)
     caso_toma(con)
     try:
         # Con la base ya tomada: otro `ingest` pudo llegar a este mensaje entre la
@@ -2920,6 +2950,7 @@ def ingest_mensaje(con, m, veredicto, horas):
             caso_mover(con, caso, "cerrado", veredicto["actor"], veredicto["motivo"])
             if veredicto.get("jev"):
                 caso_marca_jev(con, case_id, veredicto["jev"])
+            caso_marca_regla(con, case_id, piso)
             hecho.update(nuevos=1, casos_creados=1, cerrados=1,
                          ignorados=1 if veredicto.get("dueno") else 0)
         elif accion == "cerrar":
@@ -2939,6 +2970,7 @@ def ingest_mensaje(con, m, veredicto, horas):
             caso_suma_mensaje(con, caso, stanza, "automatizacion", reabre=False)
             hecho.update(nuevos=1, unidos=1)
             case_id = caso["case_id"]
+            caso_marca_regla(con, case_id, piso)
         else:
             case_id, que = caso_asigna(con, stanza, chat, "automatizacion")
             hecho.update(nuevos=1, casos_creados=int(que == "nuevo"),
@@ -2948,6 +2980,7 @@ def ingest_mensaje(con, m, veredicto, horas):
                 hecho["dudosos"] = int(veredicto["clase"] == "doubtful")
             if veredicto and veredicto.get("jev"):
                 caso_marca_jev(con, case_id, veredicto["jev"])
+            caso_marca_regla(con, case_id, piso)
         con.commit()
     except BaseException:
         con.rollback()

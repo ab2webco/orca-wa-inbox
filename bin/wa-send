@@ -37,11 +37,12 @@ wrong with what it asked and not a generic failure at the end:
                   for the agent. `responder` sends; `borrador` only drafts; `observar`
                   and `off` do not write at all (`send-denied`).
   the transport   and only then, whether there is anything to send through.
-  the review      with the Jev key set, a reply that is about to go out on `responder`
-                  is reviewed first: a promised date, a status nobody verified or a
-                  credential keeps it as a DRAFT for the owner, and so does Jev not
-                  answering. Jev can only hold a reply back, never send one. Without
-                  the key the mode decides, as always.
+  the review      a reply that is about to go out on `responder` goes through the
+                  fixed floor first, with or without Jev: money, a credential or a
+                  promised date or delivery keeps it as a DRAFT for the owner. With the
+                  Jev key set, Jev reviews it too and can only ADD reasons: a status
+                  nobody verified, or Jev not answering, also keeps it. Neither can
+                  ever send a reply; the owner's `--approve` always can.
 
 ABOUT `borrador`. It used to mean "leaves the text typed in the chat, unsent", and that
 was only possible while the agent drove a screen: it typed into the WhatsApp window and
@@ -58,6 +59,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import wa_store  # noqa: E402
 import wa_jev  # noqa: E402
+import wa_reglas  # noqa: E402
 from wa_settings import ajuste, scope_db, scope_from_plugin  # noqa: E402
 
 SCOPE_DB = scope_db()
@@ -368,6 +370,19 @@ def revision_jev(texto):
     return list(revision["flags"])
 
 
+def revision_piso(texto):
+    """Lo que frena el envio segun el piso fijo (`wa_reglas`): siempre corre, haya o no
+    llave de Jev. Solo los NOMBRES de las excepciones, nunca el texto que las disparo."""
+    return wa_reglas.excepciones(texto, wa_reglas.SALIDA)
+
+
+def motivos_de(piso, jev):
+    """Los motivos para el dueno, cada uno con quien lo dijo: `rule` es el piso fijo,
+    `jev` es Jev. Una lista vacia es que nada lo freno."""
+    return ([f"rule: {', '.join(piso)}"] if piso else []) + \
+        ([f"jev: {', '.join(jev)}"] if jev else [])
+
+
 def anotar_borrador(fila, req_id, frenado=None):
     """El borrador, anotado donde el dueno mira: la bitacora que el panel ya muestra.
 
@@ -384,7 +399,7 @@ def anotar_borrador(fila, req_id, frenado=None):
             "insert into agent_action (ts, chat_jid, chat_name, action, detail) "
             "values (?,?,?,?,?)",
             (time.strftime("%Y-%m-%d %H:%M"), fila["chat_jid"], fila["chat_name"],
-             "draft", (f"held by jev: {', '.join(frenado)} · " if frenado else "")
+             "draft", (f"held by {'; '.join(frenado)} · " if frenado else "")
              + f"{req_id} · approve with `wa-send --approve {req_id}`"))
         con.commit()
         con.close()
@@ -397,10 +412,11 @@ def deja_borrador(con, fila, texto, req_id, salida_json, pedia_envio, frenado=No
     encolar(con, fila, texto, req_id, BORRADOR)
     anotar_borrador(fila, req_id, frenado)
     if frenado:
-        # `responder` y `--send`, pero Jev lo freno o no contesto. El mismo codigo que el
-        # borrador —hay algo escrito esperando al dueno— y el motivo en el detalle.
+        # `responder` y `--send`, pero el piso fijo o Jev lo frenaron (o Jev no
+        # contesto). El mismo codigo que el borrador —hay algo escrito esperando al
+        # dueno— y el motivo en el detalle.
         niega(NECESITA_VISTO,
-              f"Jev held this reply to {fila['chat_name']!r} ({', '.join(frenado)}): it "
+              f"Held this reply to {fila['chat_name']!r} ({'; '.join(frenado)}): it "
               f"was written and is waiting for you, not sent. Approve it with "
               f"`wa-send --approve {req_id}`.")
     if pedia_envio:
@@ -501,9 +517,14 @@ def main():
     if not a.chat or a.text is None:
         ap.error("the chat and the text are required (or use --drafts / --approve)")
 
+    # El piso fijo mira la respuesta, no la firma: el nombre del agente lo eligio el dueno
+    # y no es algo que la respuesta prometa.
+    sin_firma = a.text
     # Todo mensaje del agente va firmado, para que nunca haya duda de si escribe la
     # persona o su agente. --raw es la excepcion, para cuando escribe ella.
     sig = signature()
+    if sig and sin_firma.rstrip().endswith(sig):
+        sin_firma = sin_firma.rstrip()[:-len(sig)]
     if not a.raw:
         if not sig:
             sys.exit("no agent name is configured. Set it with "
@@ -537,9 +558,10 @@ def main():
         deja_borrador(con, fila, a.text, req_id, a.json,
                       pedia_envio=a.send and modo == MODO_BORRADOR)
 
-    # La revision de Jev, solo sobre lo que de verdad va a salir. Lo frena o no contesta:
-    # queda borrador. Nunca al reves: un borrador no llega aca.
-    frenado = revision_jev(a.text)
+    # La revision, solo sobre lo que de verdad va a salir: el piso fijo siempre, y Jev
+    # con la llave. Cualquiera de los dos que lo frene (o Jev sin contestar) lo deja
+    # borrador; ninguno lo manda. Nunca al reves: un borrador no llega aca.
+    frenado = motivos_de(revision_piso(sin_firma), revision_jev(a.text))
     if frenado:
         deja_borrador(con, fila, a.text, req_id, a.json, pedia_envio=True,
                       frenado=frenado)

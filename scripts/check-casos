@@ -315,13 +315,13 @@ print("\nla propuesta")
 with tempfile.TemporaryDirectory() as home:
     cid = caso_clasificado(home)
     p = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
-           "Ya lo revisamos, queda para hoy.", "--actor", "agente")[0]
+           "Ya lo revisamos, queda en curso.", "--actor", "agente")[0]
     v1 = p["propuesta_version"]
     ok("proponer mueve clasificado -> decision y devuelve la version",
        p["etapa"] == "decision" and bool(v1) and len(v1) == 64, f"quedo {p}")
     ok("la propuesta queda guardada, con su tipo y su texto",
        p["propuesta"] == {"tipo": "responder",
-                          "respuesta": "Ya lo revisamos, queda para hoy."},
+                          "respuesta": "Ya lo revisamos, queda en curso."},
        f"propuesta {p['propuesta']}")
     esperada = hashlib.sha256(json.dumps(
         p["propuesta"], sort_keys=True, separators=(",", ":"),
@@ -335,7 +335,7 @@ with tempfile.TemporaryDirectory() as home:
 
     antes = cuenta(home, "select count(*) from caso_evento")
     otra = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
-              "Ya lo revisamos, queda para hoy.", "--actor", "agente")[0]
+              "Ya lo revisamos, queda en curso.", "--actor", "agente")[0]
     ok("proponer lo mismo da la misma version", otra["propuesta_version"] == v1)
     ok("y no escribe un evento por cada repaso de triage",
        cuenta(home, "select count(*) from caso_evento") == antes)
@@ -2015,6 +2015,197 @@ if NODE:
             ingiere(home)
             ok("con llave, Jev solo ve lo de la ventana", len(falso.pedidos) == 1,
                f"{len(falso.pedidos)} pedidos")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
+# ── 16. El piso fijo de excepciones (T19) ────────────────────────────────────────
+# Sin la llave de Jev nada marcaba dinero, credenciales ni compromisos, y la aprobacion
+# por regla dejaba salir una respuesta con un precio sin el dueno. El piso es codigo
+# determinista: siempre corre, y Jev solo puede sumar.
+def carga_reglas():
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, str(WA_SCOPE.parent))
+    import wa_reglas  # noqa: E402
+    return wa_reglas
+
+
+print("\nel piso fijo: el modulo")
+reglas = carga_reglas()
+ok("usa los nombres de excepcion de Jev",
+   set(reglas.EXCEPCIONES_PISO) <= set(carga_jev().ORDEN_EXCEPCIONES)
+   and set(reglas.EXCEPCIONES_PISO) == {"money", "credential", "commitment"})
+for texto, direccion, esperado in (
+        # dinero, en las dos direcciones y en los tres idiomas
+        ("cuanto vale el plan?", "entrada", ["money"]),
+        ("¿Cuánto cuesta la instalación?", "entrada", ["money"]),
+        ("el precio es $1.400", "salida", ["money"]),
+        ("son 250.000 COP", "salida", ["money"]),
+        ("le envio la factura", "entrada", ["money"]),
+        ("ya hice la transferencia", "entrada", ["money"]),
+        ("me hacen un descuento?", "entrada", ["money"]),
+        ("necesito la cotización", "entrada", ["money"]),
+        ("ya pagué", "entrada", ["money"]),
+        ("hay que pagar hoy", "entrada", ["money"]),
+        ("queda un saldo de 1,250.50", "entrada", ["money"]),
+        ("cuanto me cobran por eso", "entrada", ["money"]),
+        ("send me the invoice please", "entrada", ["money"]),
+        ("what's the price?", "entrada", ["money"]),
+        ("the fee is 30 USD", "salida", ["money"]),
+        ("can I get a refund", "entrada", ["money"]),
+        ("€ 40 per month", "salida", ["money"]),
+        ("qual é o preço?", "entrada", ["money"]),
+        ("mando o boleto ou pix?", "entrada", ["money"]),
+        ("custa R$ 99", "salida", ["money"]),
+        ("o pagamento caiu", "entrada", ["money"]),
+        # credencial, en las dos direcciones
+        ("la contraseña es Hunter2xx", "entrada", ["credential"]),
+        ("me pasas usuario y clave?", "entrada", ["credential"]),
+        ("cual es el password del wifi", "entrada", ["credential"]),
+        ("qual é a senha?", "entrada", ["credential"]),
+        ("el código de verificación es 482913", "entrada", ["credential"]),
+        ("ahi va el token ghp_abcdefghijklmnop1234", "salida", ["credential"]),
+        ("mi PIN es 4455", "entrada", ["credential"]),
+        ("entra a https://x.example.com/?access_token=abc123def", "entrada",
+         ["credential"]),
+        # compromiso: solo en lo que sale
+        ("Queda listo el viernes", "salida", ["commitment"]),
+        ("Mañana te confirmo", "salida", ["commitment"]),
+        ("lo revisamos hoy", "salida", ["commitment"]),
+        ("pasado mañana lo tienes", "salida", ["commitment"]),
+        ("el lunes lo vemos", "salida", ["commitment"]),
+        ("a más tardar el 15/10", "salida", ["commitment"]),
+        ("en 2 horas te lo envío", "salida", ["commitment"]),
+        ("le confirmo que sale", "salida", ["commitment"]),
+        ("tomorrow it will be ready", "salida", ["commitment"]),
+        ("we'll fix it by Friday", "salida", ["commitment"]),
+        ("fica pronto amanhã", "salida", ["commitment"]),
+        ("hoje eu te envio", "salida", ["commitment"]),
+        # varias a la vez, en el orden del contrato
+        ("Mañana te paso la factura y la clave: Abc12345", "salida",
+         ["money", "credential", "commitment"]),
+        # lo limpio
+        ("hola, ya lo revisamos", "salida", []),
+        ("Tomo esto.", "salida", []),
+        ("gracias!", "entrada", []),
+        ("el sitio carga lento", "entrada", []),
+        ("revisa la pagina de inicio", "entrada", []),
+        ("Thanks, we are looking into it", "salida", []),
+        ("Obrigado, estamos olhando", "salida", []),
+        ("", "salida", []),
+        (None, "entrada", []),
+        # lo de entrada nunca es compromiso, aunque nombre una fecha
+        ("lo necesito para mañana el viernes", "entrada", []),
+        ("can you have it by Friday?", "entrada", [])):
+    salio = reglas.excepciones(texto, direccion)
+    ok(f"{direccion}: {texto!r} -> {esperado}", salio == esperado, f"salio {salio}")
+
+
+def _da_error(f):
+    try:
+        f()
+    except ValueError:
+        return True
+    return False
+
+
+ok("una direccion desconocida levanta ValueError",
+   _da_error(lambda: reglas.excepciones("x", "otra")))
+
+
+def fila_caso(home, cid):
+    return dict(db_de(home).execute("select * from caso where case_id=?",
+                                    (int(cid),)).fetchone())
+
+
+def excepciones_de(home, cid):
+    valor = fila_caso(home, cid)["excepciones"]
+    return json.loads(valor) if valor else []
+
+
+print("\nel piso fijo: entrada, propuesta y aprobacion por regla, sin Jev")
+if not NODE:
+    print("  aviso: sin node, no se armo el almacen de mensajes", file=sys.stderr)
+else:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(PERSONA, "G1", "cuanto vale el plan? la clave es Zx9secreta",
+                             10)])
+        autoriza(home)
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        ingiere(home)
+        c = caso_de_stanza(home, "G1")
+        ok("ingest marca dinero y credencial desde el mensaje que entra",
+           c and excepciones_de(home, c["case_id"]) == ["money", "credential"],
+           f"{c and fila_caso(home, c['case_id'])}")
+        ev = [e for e in (c or {}).get("eventos", []) if e["actor"] == "regla"]
+        ok("con un evento de la regla fija",
+           len(ev) == 1 and "money" in ev[0]["detalle"]
+           and "credential" in ev[0]["detalle"], f"{c and c['eventos']}")
+        ok("y el secreto no queda en ningun evento",
+           cuenta(home, "select count(*) from caso_evento where detalle like '%Zx9secreta%'")
+           == 0)
+        cid = str(c["case_id"])
+        js(home, "caso", "clasificar", cid, "--clase", "alert", "--prioridad", "none",
+           "--actor", "agente")
+        v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+               "Hola, ya lo revisamos.", "--actor", "agente")[0]["propuesta_version"]
+        ok("una propuesta limpia no borra lo que entro: la regla sigue sin aprobar",
+           excepciones_de(home, cid) == ["money", "credential"]
+           and error_de(corre(home, "caso", "aprobar", cid, "--version", v, "--actor",
+                              "regla")) == "E_EXCEPTION")
+
+    with tempfile.TemporaryDirectory() as home:
+        js(home, "set", CHAT, "--provider", "ninguno", "--mode", "responder")
+        cid = caso_clasificado(home, "G2")
+        v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+               "Queda listo el viernes", "--actor", "agente")[0]["propuesta_version"]
+        ok("una propuesta que promete fecha marca commitment",
+           excepciones_de(home, cid) == ["commitment"], f"{fila_caso(home, cid)}")
+        ok("y la regla no la aprueba: E_EXCEPTION",
+           error_de(corre(home, "caso", "aprobar", cid, "--version", v, "--actor", "regla"))
+           == "E_EXCEPTION")
+        ok("el dueno si", js(home, "caso", "aprobar", cid, "--version", v, "--actor",
+                             "dueno")[0]["aprobada"])
+        evs = js(home, "caso", "ver", cid)[0]["eventos"]
+        ok("el evento de la propuesta dice que fue la regla fija, sin el texto",
+           any(e["actor"] == "regla" and "commitment" in e["detalle"]
+               and "viernes" not in e["detalle"] for e in evs), f"{evs}")
+
+        cid = caso_clasificado(home, "G3")
+        v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+               "Hola, con gusto lo revisamos.", "--actor", "agente")[0]["propuesta_version"]
+        ok("un saludo sin compromisos no deja excepcion", excepciones_de(home, cid) == [])
+        ok("ni evento de la regla fija",
+           not any(e["actor"] == "regla" for e in js(home, "caso", "ver", cid)[0]["eventos"]))
+        ok("y la regla lo aprueba",
+           js(home, "caso", "aprobar", cid, "--version", v, "--actor", "regla")[0]["aprobada"])
+
+        cid = caso_clasificado(home, "G4")
+        js(home, "caso", "propuesta", cid, "--tipo", "trabajar", "--instrucciones",
+           "revisar el cobro duplicado de manana", "--actor", "agente")
+        ok("las instrucciones de un trabajo no salen al chat: no marcan",
+           excepciones_de(home, cid) == [], f"{fila_caso(home, cid)}")
+
+    print("\nel piso fijo: con Jev, la union")
+    falso = JevFalso(lambda cuerpo: (200, respuestas(cuerpo["questions"],
+                                                     choice="support_request",
+                                                     asks_owner_to_act=0.8)))
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "U1", "cuanto vale el plan?", 10)])
+            autoriza(home)
+            ingiere(home)
+            c = caso_de_stanza(home, "U1")
+            ok("Jev dijo que no hay excepcion y se pregunto",
+               len(falso.pedidos) == 1, f"{len(falso.pedidos)} pedidos")
+            ok("pero la del piso queda: Jev solo suma",
+               c and excepciones_de(home, c["case_id"]) == ["money"],
+               f"{c and fila_caso(home, c['case_id'])}")
     finally:
         falso.cerrar()
         os.environ.clear()

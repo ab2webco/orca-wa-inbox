@@ -1090,6 +1090,8 @@ def revisa_precheck(fallos: list) -> int:
         (binf / "wa_store.py").write_text((BIN / "wa_store.py").read_text())
         # Y el cliente de Jev, que wa-scope importa al arrancar (T3).
         (binf / "wa_jev.py").write_text((BIN / "wa_jev.py").read_text())
+        # Y el piso fijo de excepciones, que wa-scope tambien importa al arrancar (T19).
+        (binf / "wa_reglas.py").write_text((BIN / "wa_reglas.py").read_text())
         (binf / "wa-read").write_text(STUB_WA_READ)
         (binf / "wa-read").chmod(0o755)
 
