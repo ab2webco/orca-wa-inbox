@@ -91,9 +91,16 @@ async function montar (archivo, storage = {}, idioma = null, gancho = null) {
 const espera = () => new Promise((r) => setTimeout(r, 60))
 
 // ───────────────────────── config.html ─────────────────────────
+// Los proyectos que el dueno acepto (T12): los que ofrece el selector de cada conversacion
+// y de cada regla. Datos de ejemplo.
+const PROYECTOS_PRUEBA = [
+  { id: 'alfa-demo', name: 'Alfa Demo', path: '/srv/ejemplo/alfa-demo', note: 'Tienda en linea' },
+  { id: 'beta-demo', name: 'Beta Demo', path: '/srv/ejemplo/beta-demo', note: '' }
+]
+
 console.log('\nconfig.html')
 {
-  const { doc, storage } = await montar('config.html')
+  const { doc, storage } = await montar('config.html', { projects: PROYECTOS_PRUEBA })
 
   // Mira la bajada, no un h1: config.html ya no tiene titulo propio porque el host
   // lo pinta. Comprobar el h1 ataba la prueba a un elemento que se podia quitar.
@@ -187,9 +194,20 @@ console.log('\nconfig.html')
   ok('ningun permiso habla de tarjetas',
     permisos.every((txt) => !/tarjeta|cartao|card/i.test(txt)),
     `permisos = ${JSON.stringify(permisos)}`)
-  ok('observar dice que solo lee',
-    /solo lee|reads only|so le/i.test(permisos.find((txt) => /observ/i.test(txt)) || ''),
-    `permisos = ${JSON.stringify(permisos)}`)
+  // Los modos tienen nombre de dueno (T13): el valor guardado no cambia, el rotulo si.
+  ok('los valores guardados de los modos no cambian',
+    JSON.stringify([...doc.getElementById('mode').options].map((o) => o.value)) ===
+    JSON.stringify(['off', 'observar', 'borrador', 'responder']))
+  const esMod = await montar('config.html', {}, 'es-419')
+  await espera()
+  const modo = (valor) => [...esMod.doc.getElementById('mode').options]
+    .find((o) => o.value === valor)?.textContent || ''
+  ok('off se llama Apagado', /^Apagado/.test(modo('off')), modo('off'))
+  ok('observar se llama Solo leer', /^Solo leer/.test(modo('observar')), modo('observar'))
+  ok('borrador se llama Le pregunto antes', /^Le pregunto antes/.test(modo('borrador')),
+    modo('borrador'))
+  ok('responder se llama Automatico', /^Automatico/.test(modo('responder')),
+    modo('responder'))
 
   // Mapear conversacion. Se elige de la lista, que es el unico camino real: el
   // registro se guarda por jid, no por el nombre visible.
@@ -206,11 +224,21 @@ console.log('\nconfig.html')
   ok('elegir de la lista llena el nombre de la conversacion',
     doc.getElementById('chat').value === 'Soporte Norte',
     `chat = ${JSON.stringify(doc.getElementById('chat').value)}`)
-  ok('una conversacion nueva arranca sin servicio de tareas',
-    doc.getElementById('provider').value === 'ninguno',
-    `provider = ${doc.getElementById('provider').value}`)
-  doc.getElementById('provider').value = 'linear'
-  doc.getElementById('target').value = 'ENG'
+  // El dueno ya no elige servicio de tareas ni destino: elige el PROYECTO, de los que
+  // acepto arriba. Los dos campos viejos salieron del panel (T13).
+  ok('el servicio de tareas y el destino ya no estan en el formulario',
+    !doc.getElementById('provider') && !doc.getElementById('target') &&
+    !doc.getElementById('target-hint'))
+  const proyecto = doc.getElementById('workspace')
+  const ofrecidos = [...proyecto.options].map((o) => o.value)
+  ok('el selector de proyecto ofrece Sin proyecto y los aceptados',
+    JSON.stringify(ofrecidos) === JSON.stringify(['', 'alfa-demo', 'beta-demo']),
+    JSON.stringify(ofrecidos))
+  ok('y los nombra por su nombre, no por su id',
+    [...proyecto.options].some((o) => o.textContent === 'Alfa Demo'))
+  ok('una conversacion nueva arranca sin proyecto', proyecto.value === '',
+    `workspace = ${JSON.stringify(proyecto.value)}`)
+  proyecto.value = 'alfa-demo'
   doc.getElementById('mode').value = 'borrador'
   doc.getElementById('chat-instructions').value = 'Resuma lo que manden y aviseme.'
   doc.getElementById('save-scope').click()
@@ -220,8 +248,14 @@ console.log('\nconfig.html')
   ok('guarda la conversacion con el jid como llave', !!entrada,
     `storage.scope = ${JSON.stringify(storage.scope)}`)
   ok('guarda el nombre visible junto al jid', entrada && entrada.chatName === 'Soporte Norte')
-  ok('guarda proveedor, destino y permiso',
-    entrada && entrada.provider === 'linear' && entrada.target === 'ENG' && entrada.mode === 'borrador')
+  ok('guarda el proyecto y el permiso',
+    entrada && entrada.workspace === 'alfa-demo' && entrada.mode === 'borrador',
+    JSON.stringify(entrada))
+  // Una conversacion nueva no abre tarjetas: es lo que el dueno espera sin Plane. Las
+  // columnas viejas quedan, sin uso.
+  ok('una conversacion nueva queda sin servicio de tareas ni destino',
+    entrada && entrada.provider === 'ninguno' && entrada.target === null,
+    JSON.stringify(entrada))
   // Las instrucciones son el QUE hace en esa conversacion. Si no se guardan con ella,
   // el campo esta de adorno y el agente nunca las lee.
   ok('guarda las instrucciones de la conversacion',
@@ -231,31 +265,11 @@ console.log('\nconfig.html')
     doc.getElementById('said-scope').textContent.includes('Soporte Norte') &&
     doc.getElementById('chat').value === '' &&
     doc.getElementById('chat-instructions').value === '')
-  ok('la tabla muestra lo guardado',
-    doc.getElementById('scope-wrap').textContent.includes('Soporte Norte'))
-
-  // "ninguno" tiene que dejar el destino inservible A LA VISTA. Un campo que sigue
-  // pareciendo editable pero que nadie mira es el mismo defecto que un boton muerto.
-  const destino = doc.getElementById('target')
-  const pista = doc.getElementById('target-hint')
-  doc.getElementById('provider').value = 'plane'
-  doc.getElementById('provider').dispatchEvent(new doc.defaultView.Event('change'))
-  await espera()
-  const pistaConTablero = pista.textContent
-  destino.value = 'OPS'
-  ok('con un servicio de tareas el destino se puede escribir', !destino.disabled)
-  doc.getElementById('provider').value = 'ninguno'
-  doc.getElementById('provider').dispatchEvent(new doc.defaultView.Event('change'))
-  await espera()
-  ok('ninguno apaga el destino', destino.disabled)
-  ok('ninguno vacia el destino', destino.value === '', `target = ${JSON.stringify(destino.value)}`)
-  ok('ninguno cambia la pista del destino',
-    pista.textContent.length > 0 && pista.textContent !== pistaConTablero)
-  // Un hecho en un solo lugar: la pista del proveedor habla de tarjetas, el permiso
-  // habla de escribir. Cuando la pista contaba los dos, los dos se contradecian.
-  ok('la pista del proveedor no describe el permiso',
-    !/permiso|permission|permissao/i.test(pista.textContent),
-    `pista = ${JSON.stringify(pista.textContent)}`)
+  ok('la tabla muestra lo guardado, con el nombre del proyecto y el modo del dueno',
+    doc.getElementById('scope-wrap').textContent.includes('Soporte Norte') &&
+    doc.getElementById('scope-wrap').textContent.includes('Alfa Demo') &&
+    /Le pregunto antes|Ask me first/.test(doc.getElementById('scope-wrap').textContent),
+    doc.getElementById('scope-wrap').textContent)
 
   // Buscador de conversaciones. Con 200 conversaciones un select nativo no se
   // navega, asi que el filtro es parte de que el control sirva, no un adorno.
@@ -422,8 +436,9 @@ console.log('\nconfig.html')
   ok('Editar recarga las instrucciones',
     doc.getElementById('chat-instructions').value === 'Resuma lo que manden y aviseme.',
     `chat-instructions = ${JSON.stringify(doc.getElementById('chat-instructions').value)}`)
-  ok('Editar devuelve el destino a editable cuando hay servicio de tareas',
-    !doc.getElementById('target').disabled && doc.getElementById('target').value === 'ENG')
+  ok('Editar carga el proyecto de la conversacion',
+    doc.getElementById('workspace').value === 'alfa-demo',
+    `workspace = ${doc.getElementById('workspace').value}`)
   // El input #chat esta oculto: comprobarlo solo dejaba pasar el caso real, en el que
   // el select visible se quedaba en "Elija una conversacion".
   ok('Editar deja el select visible en esa conversacion',
@@ -437,19 +452,23 @@ console.log('\nconfig.html')
   ok('Cancelar edicion limpia',
     doc.getElementById('chat').value === '' &&
     doc.getElementById('chat-instructions').value === '' &&
-    doc.getElementById('provider').value === 'ninguno')
+    doc.getElementById('workspace').value === '')
 
-  // Reglas de ruteo
+  // Reglas de ruteo: el texto manda el caso a un PROYECTO, no a un destino que se escribe.
+  ok('la regla ya no pide servicio de tareas ni destino',
+    !doc.getElementById('r-provider') && !doc.getElementById('r-target'))
   doc.getElementById('r-match').value = 'ACME'
-  doc.getElementById('r-target').value = 'ACM'
+  doc.getElementById('r-workspace').value = 'beta-demo'
   doc.getElementById('save-route').click()
   await espera()
-  ok('guarda una regla de ruteo', (storage.routes || []).some((r) => r.pattern === 'acme'),
+  ok('guarda una regla de ruteo con su proyecto',
+    (storage.routes || []).some((r) => r.pattern === 'acme' && r.workspace === 'beta-demo'),
     `storage.routes = ${JSON.stringify(storage.routes)}`)
   ok('normaliza el patron a minusculas',
     (storage.routes || []).every((r) => r.pattern === r.pattern.toLowerCase()))
-  ok('la regla aparece en la tabla',
-    doc.getElementById('routes-wrap').textContent.includes('ACM'))
+  ok('la regla aparece en la tabla con el nombre del proyecto',
+    doc.getElementById('routes-wrap').textContent.includes('Beta Demo'),
+    doc.getElementById('routes-wrap').textContent)
 
   // Quitar
   doc.querySelector('[data-rrm]').click()
@@ -1109,7 +1128,7 @@ console.log('\nel contrato CLI -> panel')
   const panel = await montar('config.html', escrito, 'es-419')
   await espera()
   ok('el panel pinta la conversacion que escribio el CLI',
-    panel.doc.getElementById('scope-wrap').textContent.includes('SOP'),
+    panel.doc.getElementById('scope-wrap').textContent.includes(entrada.chatName),
     panel.doc.getElementById('scope-wrap').textContent.slice(0, 200))
   ok('el panel recarga los ajustes que escribio el CLI',
     panel.doc.getElementById('inbox-days').value === '30' &&
@@ -2262,8 +2281,8 @@ console.log('\nconfig.html — las tres que importan no se pierden entre las 296
     JSON.stringify(grupos.map((g) => [...g.children].map((o) => o.textContent))))
   ok('cada una dice con que permiso quedo, no solo que esta autorizada',
     grupos.length === 2 &&
-    [...grupos[0].children].some((o) => /responder/i.test(o.textContent)) &&
-    [...grupos[0].children].some((o) => /observ/i.test(o.textContent)),
+    [...grupos[0].children].some((o) => /Automatico/.test(o.textContent)) &&
+    [...grupos[0].children].some((o) => /Solo leer/.test(o.textContent)),
     JSON.stringify(grupos.length ? [...grupos[0].children].map((o) => o.textContent) : []))
   ok('las etiquetas de los dos grupos estan en espanol, no en ingles',
     grupos.length === 2 && !/authori/i.test(grupos.map((g) => g.label).join(' ')),
@@ -2279,7 +2298,7 @@ console.log('\nconfig.html — las tres que importan no se pierden entre las 296
     identidad && identidad.textContent.includes('573000000001@s.whatsapp.net'),
     identidad ? identidad.textContent : 'no existe #chat-id')
   ok('y avisa que esa ya estaba autorizada, antes de volver a guardarla',
-    identidad && /observ/i.test(identidad.textContent),
+    identidad && /Solo leer/.test(identidad.textContent),
     identidad ? identidad.textContent : '')
 }
 
@@ -2366,6 +2385,236 @@ console.log('\nconfig.html — un quitado que el worker NO pudo hacer no se anun
     doc.getElementById('scope-wrap').textContent)
   ok('y el alcance no se toco', !!storage.scope['120363000000000002@g.us'],
     JSON.stringify(storage.scope))
+}
+
+console.log('\nconfig.html — T12: el catalogo de proyectos se busca, se acepta y se quita')
+{
+  const PROPUESTAS = [{ id: 'gama-demo', name: 'Gama Demo', path: '/srv/ejemplo/gama-demo' }]
+  const pedidos = []
+  const storage = {
+    projects: [PROYECTOS_PRUEBA[0]],
+    projectsStatus: { at: new Date().toISOString(), ok: true, proposals: PROPUESTAS,
+      reason: null, detail: null }
+  }
+  const { doc } = await montar('config.html', storage, 'es-419', (d, st) => {
+    if (!(d.action === 'storage.set' && d.params.key === 'scopeRequest' && d.params.value)) {
+      return undefined
+    }
+    const p = d.params.value
+    pedidos.push(p)
+    st.scopeRequest = p
+    // El worker de verdad pregunta a Orca, guarda y recien despues deja el veredicto.
+    let r = { ok: true, code: 'refrescado' }
+    if (p.action === 'proyectos-aceptar') {
+      st.projects = [...st.projects, { ...PROPUESTAS[0], note: '' }]
+      st.projectsStatus = { ...st.projectsStatus, proposals: [] }
+      r = { ok: true, code: 'aceptado', added: 1 }
+    } else if (p.action === 'proyectos-quitar') {
+      st.projects = st.projects.filter((x) => x.id !== p.project)
+      r = { ok: true, code: 'quitado' }
+    } else if (p.action === 'proyectos-nota') {
+      st.projects = st.projects.map((x) => (x.id === p.project ? { ...x, note: p.note } : x))
+      r = { ok: true, code: 'nota-guardada' }
+    }
+    st.scopeResult = { at: new Date().toISOString(), requestId: p.id, action: p.action, ...r }
+    return { ok: true }
+  })
+  await espera()
+  const lista = doc.getElementById('projects-wrap')
+  ok('la lista muestra los proyectos aceptados con su nombre y su ruta',
+    lista.textContent.includes('Alfa Demo') && lista.textContent.includes('/srv/ejemplo/alfa-demo'),
+    lista.textContent)
+  ok('cada proyecto trae su nota, editable',
+    doc.querySelector('[data-pnote="alfa-demo"]')?.value === 'Tienda en linea')
+  ok('las propuestas de Orca se listan aparte, con su boton',
+    doc.getElementById('proposals-wrap').textContent.includes('Gama Demo') &&
+    !!doc.querySelector('[data-padd="gama-demo"]'), doc.getElementById('proposals-wrap').textContent)
+  ok('lo que Orca propone NO esta aceptado hasta que el dueno lo pide',
+    !lista.textContent.includes('Gama Demo'))
+
+  doc.getElementById('projects-refresh').click()
+  await espera()
+  ok('Buscar manda el pedido por el canal del worker',
+    pedidos.length === 1 && pedidos[0].action === 'proyectos-refrescar' &&
+    typeof pedidos[0].id === 'string' && !isNaN(Date.parse(pedidos[0].at)),
+    JSON.stringify(pedidos))
+  await new Promise((r) => setTimeout(r, 3000))
+
+  doc.querySelector('[data-padd="gama-demo"]').click()
+  await espera()
+  ok('Agregar manda solo el id: el nombre y la ruta los pone el worker, desde Orca',
+    pedidos.length === 2 && pedidos[1].action === 'proyectos-aceptar' &&
+    JSON.stringify(pedidos[1].ids) === JSON.stringify(['gama-demo']) &&
+    !('path' in pedidos[1]) && !('name' in pedidos[1]), JSON.stringify(pedidos[1]))
+  await new Promise((r) => setTimeout(r, 3000))
+  ok('cuando el worker confirma, el proyecto pasa a la lista aceptada',
+    doc.getElementById('projects-wrap').textContent.includes('Gama Demo') &&
+    !doc.getElementById('proposals-wrap').textContent.includes('Gama Demo'),
+    doc.getElementById('projects-wrap').textContent)
+  ok('y se puede elegir en el selector de proyecto de las conversaciones',
+    [...doc.getElementById('workspace').options].some((o) => o.value === 'gama-demo'))
+  ok('y en el de las reglas',
+    [...doc.getElementById('r-workspace').options].some((o) => o.value === 'gama-demo'))
+  ok('el panel lo dice con una marca de exito',
+    /✓/.test(doc.getElementById('said-projects').textContent),
+    doc.getElementById('said-projects').textContent)
+
+  const nota = doc.querySelector('[data-pnote="alfa-demo"]')
+  nota.value = 'Cobros y envios'
+  doc.querySelector('[data-psave="alfa-demo"]').click()
+  await espera()
+  ok('Guardar nota manda el id y el texto',
+    pedidos[2]?.action === 'proyectos-nota' && pedidos[2].project === 'alfa-demo' &&
+    pedidos[2].note === 'Cobros y envios', JSON.stringify(pedidos[2]))
+  await new Promise((r) => setTimeout(r, 3000))
+  ok('y la nota queda en lo aceptado',
+    storage.projects.find((x) => x.id === 'alfa-demo').note === 'Cobros y envios')
+
+  doc.querySelector('[data-prm="alfa-demo"]').click()
+  await espera()
+  ok('Quitar manda el id al worker',
+    pedidos[3]?.action === 'proyectos-quitar' && pedidos[3].project === 'alfa-demo',
+    JSON.stringify(pedidos[3]))
+  await new Promise((r) => setTimeout(r, 3000))
+  ok('cuando el worker confirma, el proyecto sale de la lista y del selector',
+    !doc.getElementById('projects-wrap').textContent.includes('Alfa Demo') &&
+    ![...doc.getElementById('workspace').options].some((o) => o.value === 'alfa-demo'),
+    doc.getElementById('projects-wrap').textContent)
+}
+
+console.log('\nconfig.html — T12: un fallo al buscar se dice, y sin proyectos el selector lo explica')
+{
+  const { doc } = await montar('config.html', {
+    projectsStatus: { at: new Date().toISOString(), ok: false, proposals: [],
+      reason: 'sin-cli-orca', detail: 'spawn orca ENOENT' }
+  }, 'es-419')
+  await espera()
+  const caja = doc.getElementById('proposals-wrap').textContent + doc.getElementById('projects-status').textContent
+  ok('sin la CLI de Orca lo dice en espanol y no con el texto crudo',
+    /CLI de Orca/.test(caja) && !/ENOENT|spawn/.test(caja), caja)
+  ok('no finge una lista vacia de propuestas',
+    !/no hay proyectos nuevos/i.test(caja), caja)
+  ok('sin proyectos aceptados la lista lo dice',
+    /todavia no/i.test(doc.getElementById('projects-wrap').textContent),
+    doc.getElementById('projects-wrap').textContent)
+  const ofrecidos = [...doc.getElementById('workspace').options].map((o) => o.value)
+  ok('y el selector de proyecto solo ofrece Sin proyecto',
+    JSON.stringify(ofrecidos) === JSON.stringify(['']), JSON.stringify(ofrecidos))
+  ok('con una pista que manda a agregar uno',
+    /Proyectos|proyecto/.test(doc.getElementById('workspace-hint').textContent) &&
+    /todavia no|agregue/i.test(doc.getElementById('workspace-hint').textContent),
+    doc.getElementById('workspace-hint').textContent)
+  ok('las reglas no se pueden crear sin un proyecto al que mandar',
+    doc.getElementById('r-workspace').disabled)
+
+  const sinBuscar = await montar('config.html', {}, 'es-419')
+  await espera()
+  ok('antes de la primera busqueda invita a buscar',
+    /Buscar proyectos/.test(sinBuscar.doc.getElementById('proposals-wrap').textContent +
+      sinBuscar.doc.getElementById('projects-status').textContent),
+    sinBuscar.doc.getElementById('proposals-wrap').textContent)
+
+  const sinNuevos = await montar('config.html', {
+    projectsStatus: { at: new Date().toISOString(), ok: true, proposals: [], reason: null,
+      detail: null }
+  }, 'es-419')
+  await espera()
+  ok('una busqueda sin nada nuevo lo dice',
+    /no hay proyectos nuevos/i.test(sinNuevos.doc.getElementById('proposals-wrap').textContent +
+      sinNuevos.doc.getElementById('projects-status').textContent))
+}
+
+console.log('\nconfig.html — T13: lo de antes se conserva y un proyecto quitado no se pierde al editar')
+{
+  const storage = {
+    projects: [PROYECTOS_PRUEBA[0]],
+    scope: {
+      '10@g.us': { chatName: 'Legado', provider: 'plane', target: 'SOP', mode: 'responder' },
+      '20@g.us': { chatName: 'Huerfana', provider: 'ninguno', target: null,
+        workspace: 'viejo-demo', mode: 'observar' }
+    },
+    routes: [{ pattern: 'cobros', provider: 'plane', target: 'FIN' }]
+  }
+  const { doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  const filas = [...doc.getElementById('scope-wrap').querySelectorAll('tbody tr')]
+  const fila = (txt) => filas.find((f) => f.textContent.includes(txt))
+  ok('una conversacion de antes no muestra servicio ni destino: solo falta el proyecto',
+    fila('Legado') && !/plane|SOP/i.test(fila('Legado').textContent) &&
+    /—/.test(fila('Legado').textContent), fila('Legado')?.textContent)
+  ok('un proyecto que ya no esta se ve como tal, con su id',
+    fila('Huerfana') && /viejo-demo/.test(fila('Huerfana').textContent) &&
+    /ya no esta/i.test(fila('Huerfana').textContent), fila('Huerfana')?.textContent)
+  ok('una regla de antes se sigue viendo, para poder quitarla',
+    /FIN/.test(doc.getElementById('routes-wrap').textContent),
+    doc.getElementById('routes-wrap').textContent)
+
+  fila('Legado').querySelector('[data-edit]').click()
+  await espera()
+  doc.getElementById('workspace').value = 'alfa-demo'
+  doc.getElementById('save-scope').click()
+  await espera()
+  ok('editar una conversacion de antes le pone proyecto y NO borra lo viejo',
+    storage.scope['10@g.us'].workspace === 'alfa-demo' &&
+    storage.scope['10@g.us'].provider === 'plane' && storage.scope['10@g.us'].target === 'SOP',
+    JSON.stringify(storage.scope['10@g.us']))
+
+  const f2 = [...doc.getElementById('scope-wrap').querySelectorAll('tbody tr')]
+    .find((f) => f.textContent.includes('Huerfana'))
+  f2.querySelector('[data-edit]').click()
+  await espera()
+  ok('editar una con un proyecto que ya no esta lo deja elegido',
+    doc.getElementById('workspace').value === 'viejo-demo',
+    `workspace = ${doc.getElementById('workspace').value}`)
+  doc.getElementById('save-scope').click()
+  await espera()
+  ok('y guardar sin tocarlo no lo borra: el proyecto puede volver',
+    storage.scope['20@g.us'].workspace === 'viejo-demo',
+    JSON.stringify(storage.scope['20@g.us']))
+  doc.querySelector('[data-edit]').click()
+  await espera()
+  doc.getElementById('workspace').value = ''
+  doc.getElementById('save-scope').click()
+  await espera()
+  ok('Sin proyecto lo quita de verdad, con null y no con un texto vacio',
+    Object.values(storage.scope).some((e) => 'workspace' in e && e.workspace === null),
+    JSON.stringify(storage.scope))
+}
+
+console.log('\nconfig.html — T13: los modos se llaman distinto en cada idioma')
+{
+  const nombres = async (idioma) => {
+    const { doc } = await montar('config.html', {}, idioma)
+    await espera()
+    return Object.fromEntries([...doc.getElementById('mode').options]
+      .map((o) => [o.value, o.textContent]))
+  }
+  const en = await nombres('en-US')
+  ok('en ingles', /^Off/.test(en.off) && /^Read only/.test(en.observar) &&
+    /^Ask me first/.test(en.borrador) && /^Automatic/.test(en.responder), JSON.stringify(en))
+  const pt = await nombres('pt-BR')
+  ok('en portugues', /^Desligado/.test(pt.off) && /^So ler/.test(pt.observar) &&
+    /^Pergunto antes/.test(pt.borrador) && /^Automatico/.test(pt.responder), JSON.stringify(pt))
+}
+
+console.log('\nconfig.html — T12/T13: los textos nuevos existen en los tres idiomas')
+{
+  const { window } = await montar('config.html')
+  const S = window.STRINGS
+  const nuevas = ['projectsLegend', 'projectsHelp', 'projectsEmpty', 'projectsRefresh',
+    'projectsAdd', 'projectsNotePh', 'projectsSaveNote', 'projectsProposed',
+    'projectsNoNew', 'projectsNotAsked', 'projectsChecked', 'projectAdded',
+    'projectRemoved', 'projectNoteSaved', 'projNoCli', 'projNoPerm', 'projSlow',
+    'projFail', 'projNoJson', 'projNoChange', 'projGone', 'projFull', 'workspaceLabel',
+    'workspaceNone', 'workspaceMissing', 'workspaceHint', 'workspaceHintNoProjects',
+    'colProject', 'routesNeedProject', 'modeOff', 'modeObserve', 'modeDraft', 'modeReply',
+    'off', 'observe', 'draft', 'reply']
+  const faltan = nuevas.filter((k) => !S.es[k] || !S.en[k])
+  ok('cada texto nuevo existe en espanol y en ingles', faltan.length === 0,
+    `faltan = ${JSON.stringify(faltan)}`)
+  const sinPt = nuevas.filter((k) => !S.pt[k] || S.pt[k] === S.en[k])
+  ok('y en portugues propio, no heredado del ingles', sinPt.length === 0,
+    `sin portugues = ${JSON.stringify(sinPt)}`)
 }
 
 console.log('\nconfig.html — las traducciones de desvincular estan en los tres idiomas')

@@ -316,26 +316,28 @@ export function crearCatalogo ({ orca, leer, guardar, correr, motivoDe, resembra
     return { ok: true, code: PROYECTOS_VEREDICTO.ACEPTADO, added: nuevos.length }
   }
 
+  // El proyecto va en `project` y no en `id`: `id` es el del PEDIDO (el panel lo pone para
+  // reconocer su veredicto), y un campo con el mismo nombre pisaria uno con el otro.
   async function quitar (pedido) {
-    if (!esTexto(pedido.id)) return { ok: false, code: PROYECTOS_VEREDICTO.ARGUMENTOS_INVALIDOS }
+    if (!esTexto(pedido.project)) return { ok: false, code: PROYECTOS_VEREDICTO.ARGUMENTOS_INVALIDOS }
     const actual = await catalogo()
-    if (!actual.some((p) => p.id === pedido.id)) {
+    if (!actual.some((p) => p.id === pedido.project)) {
       return { ok: false, code: PROYECTOS_VEREDICTO.NO_EXISTE }
     }
-    await cambiar(actual.filter((p) => p.id !== pedido.id))
+    await cambiar(actual.filter((p) => p.id !== pedido.project))
     return { ok: true, code: PROYECTOS_VEREDICTO.QUITADO }
   }
 
   async function nota (pedido) {
-    if (!esTexto(pedido.id) || typeof pedido.note !== 'string') {
+    if (!esTexto(pedido.project) || typeof pedido.note !== 'string') {
       return { ok: false, code: PROYECTOS_VEREDICTO.ARGUMENTOS_INVALIDOS }
     }
     const actual = await catalogo()
-    if (!actual.some((p) => p.id === pedido.id)) {
+    if (!actual.some((p) => p.id === pedido.project)) {
       return { ok: false, code: PROYECTOS_VEREDICTO.NO_EXISTE }
     }
     const texto = limpiarLinea(pedido.note, NOTE_MAX)
-    await cambiar(actual.map((p) => (p.id === pedido.id ? { ...p, note: texto } : p)))
+    await cambiar(actual.map((p) => (p.id === pedido.project ? { ...p, note: texto } : p)))
     return { ok: true, code: PROYECTOS_VEREDICTO.NOTA_GUARDADA }
   }
 

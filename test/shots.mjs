@@ -130,16 +130,33 @@ const DATOS = {
     { jid: '573000000001@s.whatsapp.net', name: 'Camila Restrepo', kind: 'directo',
       last: '2026-09-13 11:22', unread: 2 }
   ],
-  // Una de las conversaciones va en "ninguno": es el caso que motivo la opcion — un
-  // uno a uno que solo quiere lectura y respuesta, sin tablero.
+  // Los proyectos que el dueno acepto (T12) y lo que Orca propone todavia (T12). Rutas y
+  // nombres de ejemplo: ninguno existe en ninguna maquina.
+  projects: [
+    { id: 'alfa-demo', name: 'Alfa Demo', path: '/srv/ejemplo/alfa-demo',
+      note: 'Tienda en linea: cobros, envios y facturas' },
+    { id: 'beta-demo', name: 'Beta Demo', path: '/srv/ejemplo/beta-demo', note: '' }
+  ],
+  projectsStatus: {
+    at: new Date().toISOString(), ok: true, reason: null, detail: null,
+    proposals: [
+      { id: 'gama-demo', name: 'Gama Demo', path: '/srv/ejemplo/gama-demo' },
+      { id: 'delta-servicio-con-un-nombre-largo',
+        name: 'Delta Servicio Con Un Nombre Largo De Verdad',
+        path: '/srv/ejemplo/clientes/region-andina/delta-servicio-con-un-nombre-largo' }
+    ]
+  },
+  // Dos conversaciones ya con proyecto; una de antes de T13, que sigue con su servicio y
+  // destino viejos y se ve sin proyecto; y una en "ninguno": el caso que motivo la opcion —
+  // un uno a uno que solo quiere lectura y respuesta, sin tablero.
   scope: {
     '120363000000000001@g.us': {
-      chatName: 'Soporte — Cliente Norte', provider: 'plane',
-      target: 'SOP', mode: 'responder', updatedAt: '2026-09-17T14:02:00Z'
+      chatName: 'Soporte — Cliente Norte', provider: 'ninguno', target: null,
+      workspace: 'alfa-demo', mode: 'responder', updatedAt: '2026-09-17T14:02:00Z'
     },
     '120363000000000002@g.us': {
-      chatName: 'Operaciones internas', provider: 'plane',
-      target: 'OPS', mode: 'borrador', updatedAt: '2026-09-17T09:41:00Z'
+      chatName: 'Operaciones internas', provider: 'ninguno', target: null,
+      workspace: 'beta-demo', mode: 'borrador', updatedAt: '2026-09-17T09:41:00Z'
     },
     '120363000000000003@g.us': {
       chatName: 'Proyecto Andes — QA', provider: 'github',
@@ -154,8 +171,10 @@ const DATOS = {
     }
   },
   routes: [
-    { pattern: 'andes', provider: 'github', target: 'acme/andes' },
-    { pattern: 'facturacion', provider: 'plane', target: 'FIN' }
+    { pattern: 'andes', workspace: 'beta-demo' },
+    { pattern: 'facturacion', workspace: 'alfa-demo' },
+    // Una regla de antes de T13: sigue mostrando su destino viejo para poder quitarla.
+    { pattern: 'cobros', provider: 'plane', target: 'FIN' }
   ],
   decisions: {},
   // Las claves salen de build_activity() en wa-scope, no de lo que parezca razonable:
@@ -394,8 +413,24 @@ const TABLERO_LARGO = tableroDe([
     ticket: 'FIN-1234567890-ejemplo-de-ticket-con-nombre-largo' })
 ])
 
+// Los proyectos (T12/T13), que solo se ven recien con estos datos: sin proyectos aceptados,
+// con la busqueda de Orca fallida, y con una conversacion en edicion.
+const SIN_PROYECTOS = Object.assign({}, DATOS, { projects: [], projectsStatus: null })
+const BUSQUEDA_FALLIDA = Object.assign({}, SIN_PROYECTOS, {
+  projectsStatus: { at: new Date().toISOString(), ok: false, proposals: [],
+    reason: 'sin-cli-orca', detail: 'spawn orca ENOENT' }
+})
+// Editar la primera conversacion: el formulario por chat con su proyecto elegido.
+const EDITAR_CONVERSACION = "document.querySelector('[data-edit]').click()"
+
 const PANELES = [
   { nombre: 'config', archivo: 'config.html', anchos: ANCHOS, datos: DATOS },
+  { nombre: 'config-proyectos-vacio', archivo: 'config.html', anchos: ANCHOS,
+    datos: SIN_PROYECTOS },
+  { nombre: 'config-proyectos-fallo', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: BUSQUEDA_FALLIDA },
+  { nombre: 'config-conversacion-editar', archivo: 'config.html', anchos: ANCHOS,
+    guion: EDITAR_CONVERSACION, espera: 400, datos: DATOS },
   {
     nombre: 'actividad',
     archivo: 'activity.html',

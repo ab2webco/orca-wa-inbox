@@ -2066,7 +2066,7 @@ console.log('\nworker: el catalogo de proyectos se refresca, se acepta y llega a
   const orca = hostFalso(herramientas('catalogo', BUENO), { chats: [] })
   const { apagar } = await arranca(orca)
   const pide = async (id, extra) => {
-    orca.store.scopeRequest = { id, at: new Date().toISOString(), ...extra }
+    orca.store.scopeRequest = { ...extra, id, at: new Date().toISOString() }
     await hasta(() => orca.store.scopeResult && orca.store.scopeResult.requestId === id, 15000)
     return orca.store.scopeResult
   }
@@ -2109,7 +2109,7 @@ console.log('\nworker: el catalogo de proyectos se refresca, se acepta y llega a
     await hasta(() => md().includes('alfa-demo') && md().includes('/srv/ejemplo/alfa-demo'), 20000),
     md())
 
-  const r3 = await pide('cat-3', { action: 'proyectos-nota', id: 'alfa-demo',
+  const r3 = await pide('cat-3', { action: 'proyectos-nota', project: 'alfa-demo',
     note: 'Tienda\nen linea.  Cobros y envios' })
   ok('la nota se guarda en una sola linea', r3 && r3.ok === true &&
     orca.store.projects[0].note === 'Tienda en linea. Cobros y envios',
@@ -2123,11 +2123,11 @@ console.log('\nworker: el catalogo de proyectos se refresca, se acepta y llega a
   const r5 = await pide('cat-5', { action: 'proyectos-aceptar', ids: 'alfa-demo' })
   ok('un pedido mal formado se rechaza con codigo',
     r5 && r5.ok === false && r5.code === 'argumentos-invalidos', JSON.stringify(r5))
-  const r6 = await pide('cat-6', { action: 'proyectos-nota', id: 'fantasma', note: 'x' })
+  const r6 = await pide('cat-6', { action: 'proyectos-nota', project: 'fantasma', note: 'x' })
   ok('una nota para un proyecto que no esta se rechaza',
     r6 && r6.ok === false && r6.code === 'proyecto-no-existe', JSON.stringify(r6))
 
-  const r7 = await pide('cat-7', { action: 'proyectos-quitar', id: 'alfa-demo' })
+  const r7 = await pide('cat-7', { action: 'proyectos-quitar', project: 'alfa-demo' })
   ok('quitar lo saca del catalogo', r7 && r7.ok === true &&
     JSON.stringify(orca.store.projects) === '[]', JSON.stringify([r7, orca.store.projects]))
   ok('y del arnes, que vuelve a decir que no hay proyectos',

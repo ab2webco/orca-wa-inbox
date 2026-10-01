@@ -97,12 +97,6 @@
                       color: var(--foreground, var(--fb-foreground)); }
       input:disabled { opacity: 1; color: var(--foreground, var(--fb-foreground));
                        border-color: transparent; background: var(--muted, var(--fb-muted)); }
-      /* El destino con "ninguno" no es un campo vacio: es un campo que no aplica. Sin
-         marca propia, en tema claro se veia igual que uno editable — el defecto de
-         siempre: parece que se puede escribir y nadie lo mira. */
-      #target:disabled { background: transparent;
-                         color: var(--muted-foreground, var(--fb-muted-foreground));
-                         border: 1px dashed var(--border, var(--fb-border)); }
       input:focus-visible, select:focus-visible, textarea:focus-visible {
         outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px;
         border-color: transparent;
@@ -144,6 +138,8 @@
          scroll horizontal no. */
       #chat-id { margin-top: 4px; overflow-wrap: anywhere; }
       .row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+      /* Proyecto y permiso: dos campos, no tres. */
+      .row.dos { grid-template-columns: 1fr 1fr; margin-top: 10px; }
       .row2 { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
       .actions { display: flex; align-items: center; gap: 10px; margin-top: 14px;
                  min-height: 30px; flex-wrap: wrap; }
@@ -183,7 +179,7 @@
            donde parte una etiqueta a la mitad. */
         td.acts { text-align: left; margin-top: 6px; white-space: normal; }
         td.acts button { margin-bottom: 4px; }
-        .row { grid-template-columns: 1fr; }
+        .row, .row.dos { grid-template-columns: 1fr; }
       }
       /* Los cuatro permisos. La allowlist no tiene verde ni ambar y no se fabrican:
          se separan por peso y superficie, no por tono. "off" se queda en el estado
@@ -205,6 +201,9 @@
                font-size: 12px; padding: 10px 0; }
       .hint { color: var(--muted-foreground, var(--fb-muted-foreground));
               font-size: 11px; margin: 6px 0 0; line-height: 1.5; }
+      /* Un fallo al buscar proyectos: va en el color del texto y con el token de fallo, no
+         en el gris apagado de los consejos, porque es EL mensaje mientras no hay lista. */
+      .hint.mal { color: var(--destructive, var(--fb-destructive)); }
       /* El motivo no es una pista al margen: es EL mensaje mientras no hay lista, asi
          que va en el color del texto y no en el apagado de los consejos. */
       #sync-msg { color: var(--foreground, var(--fb-foreground)); }
@@ -241,7 +240,25 @@
       .alert-why { display: block; margin-top: 4px; font-size: 11px;
                    color: var(--muted-foreground, var(--fb-muted-foreground)); }
       code { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
-      @media (max-width: 620px) { .row { grid-template-columns: 1fr; } }
+      @media (max-width: 620px) { .row, .row.dos { grid-template-columns: 1fr; } }
+      /* El catalogo: una fila por proyecto, no una tabla, porque cada uno lleva su nota
+         editable y a 320 px una tabla de cuatro columnas no cabe. Mismo filete que las
+         filas de las tablas. */
+      .proj { padding: 9px 0; border-top: 1px solid var(--border, var(--fb-border)); }
+      .proj:first-child { border-top: 0; }
+      .proj-head { display: flex; align-items: baseline; justify-content: space-between;
+                   gap: 10px; flex-wrap: wrap; }
+      .proj-head b { font-weight: 600; overflow-wrap: anywhere; }
+      /* La ruta no tiene espacios donde partir: se parte donde haga falta antes que
+         desbordar a 320 px. */
+      .proj-path { display: block; margin-top: 2px; overflow-wrap: anywhere;
+                   color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .proj-head button.link { margin-left: 0; }
+      .proj-note { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+      .proj-note input { flex: 1; min-width: 0; }
+      .proj-note button.link { margin-left: 0; white-space: nowrap; }
+      #projects-status { margin: 8px 0 4px; }
+      #proposals-wrap { margin-top: 4px; }
 
       /* Vinculacion de WhatsApp (T4). Sin verde/ambar en la allowlist -mismo criterio
          que .pill-: conectado usa el texto pleno, caido usa --destructive. */
@@ -398,6 +415,21 @@
         </div>
       </section>
 
+      <!-- Los proyectos: las carpetas donde se hace el trabajo de cada conversacion. Orca
+           PROPONE los que conoce (`orca worktree ps`) y solo lo que el dueno agrega aca le
+           llega al agente que atiende los casos. Nada se agrega solo. -->
+      <section>
+        <h2 data-t="projectsLegend"></h2>
+        <p class="hint" style="margin:0 0 10px" data-t="projectsHelp"></p>
+        <div id="projects-wrap"></div>
+        <div class="actions">
+          <button id="projects-refresh" data-t="projectsRefresh"></button>
+          <span class="said" id="said-projects"></span>
+        </div>
+        <p class="hint" id="projects-status"></p>
+        <div id="proposals-wrap"></div>
+      </section>
+
       <section>
         <h2 data-t="mapLegend"></h2>
         <label for="inbox-days" data-t="daysLabel"></label>
@@ -460,19 +492,10 @@
         </div>
         <p class="hint" id="chat-help" data-t="chatHelp"></p>
         <input id="chat" data-t-ph="chatPh" hidden />
-        <div class="row">
+        <div class="row dos">
           <div>
-            <label for="provider" data-t="providerLabel"></label>
-            <select id="provider">
-              <option value="ninguno" data-t="providerNone"></option>
-              <option value="plane">Plane</option>
-              <option value="linear">Linear</option>
-              <option value="github">GitHub Issues</option>
-            </select>
-          </div>
-          <div>
-            <label for="target" id="target-label"></label>
-            <input id="target" />
+            <label for="workspace" data-t="workspaceLabel"></label>
+            <select id="workspace"></select>
           </div>
           <div>
             <label for="mode" data-t="permLabel"></label>
@@ -484,7 +507,7 @@
             </select>
           </div>
         </div>
-        <p class="hint" id="target-hint" data-t="targetHint"></p>
+        <p class="hint" id="workspace-hint"></p>
         <label for="chat-tone" data-t="chatToneLabel"></label>
         <input id="chat-tone" data-t-ph="chatTonePh" />
         <label for="chat-instructions" data-t="chatInstrLabel"></label>
@@ -501,24 +524,17 @@
       <section>
         <h2 data-t="routesLegend"></h2>
         <p class="hint" style="margin:0 0 10px" data-t="routesHelp"></p>
-        <div class="row">
+        <div class="row dos">
           <div>
             <label for="r-match" data-t="routeMatch"></label>
             <input id="r-match" data-t-ph="routeMatchPh" />
           </div>
           <div>
-            <label for="r-provider" data-t="providerLabel"></label>
-            <select id="r-provider">
-              <option value="plane">Plane</option>
-              <option value="linear">Linear</option>
-              <option value="github">GitHub Issues</option>
-            </select>
-          </div>
-          <div>
-            <label for="r-target" data-t="routeTarget"></label>
-            <input id="r-target" data-t-ph="routeTargetPh" />
+            <label for="r-workspace" data-t="routeTarget"></label>
+            <select id="r-workspace"></select>
           </div>
         </div>
+        <p class="hint" id="route-hint"></p>
         <div class="actions">
           <button id="save-route" data-t="addRoute"></button>
           <span class="said" id="said-route"></span>
@@ -738,18 +754,48 @@
             'dar senales hace {s} s.',
           mapLegend: 'Conversaciones', chatLabel: 'Conversacion',
           chatPh: 'nombre exacto del grupo o su JID',
-          providerLabel: 'Servicio de tareas', permLabel: 'Permiso',
-          providerNone: 'ninguno — no abre tarjetas',
-          targetPlane: 'Proyecto por defecto', targetLinear: 'Equipo por defecto',
-          targetGithub: 'Repositorio por defecto', targetNone: 'Sin destino',
-          targetHintNone: 'Esta conversacion no abre tarjetas: ninguna regla de contenido ' +
-            'la manda a un board.',
-          targetHint: 'El destino real lo decide el contenido del mensaje con las reglas de abajo. ' +
-            'Esto es solo el fallback cuando ninguna regla engancha. Dejelo vacio para que no ' +
-            'abra tarjeta si no reconoce el cliente.',
+          permLabel: 'Permiso',
+          workspaceLabel: 'Proyecto',
+          workspaceNone: 'Sin proyecto',
+          workspaceMissing: '{id} (ya no esta en la lista)',
+          workspaceHint: 'Es donde se hace el trabajo de esta conversacion. Sin proyecto, el ' +
+            'agente solo responde y lo que pida trabajo se lo deja a usted.',
+          workspaceHintNoProjects: 'Todavia no hay proyectos: agregue uno en la seccion Proyectos.',
+          // --- Proyectos: el catalogo que reparte el agente que atiende los casos ---
+          projectsLegend: 'Proyectos',
+          projectsHelp: 'Son las carpetas donde se hace el trabajo de cada conversacion. Orca ' +
+            'propone los que conoce y usted decide cuales quedan: solo esos le llegan al ' +
+            'agente que atiende los casos.',
+          projectsEmpty: 'Todavia no agrego ningun proyecto. Sin proyectos, el agente solo ' +
+            'responde y lo que pida trabajo se lo deja a usted.',
+          projectsRefresh: 'Buscar proyectos',
+          projectsAdd: 'Agregar',
+          projectsNotePh: 'Para que sirve (opcional)',
+          projectsSaveNote: 'Guardar nota',
+          projectsProposed: 'Orca conoce estos proyectos',
+          projectsNoNew: 'No hay proyectos nuevos que proponer.',
+          projectsNotAsked: 'Pulse "Buscar proyectos" para ver los que Orca conoce.',
+          projectsChecked: 'Ultima busqueda: {h}',
+          projectAdded: 'Proyecto agregado',
+          projectRemoved: 'Proyecto quitado',
+          projectNoteSaved: 'Nota guardada',
+          projNoCli: 'No se encontro la CLI de Orca en este equipo, asi que no se pueden ' +
+            'buscar proyectos.',
+          projNoPerm: 'El plugin no tiene permiso para ejecutar la CLI de Orca. Revise los ' +
+            'permisos del plugin en Ajustes > Plugins.',
+          projSlow: 'Orca tardo demasiado en responder. Intente de nuevo.',
+          projFail: 'No se pudo completar. Intente de nuevo; si sigue igual, revise el ' +
+            'registro del plugin.',
+          projNoJson: 'Orca contesto algo que el plugin no entendio. Actualice Orca e ' +
+            'intente de nuevo.',
+          projNoChange: 'Ese proyecto ya no esta entre los que Orca propone. Busque de nuevo.',
+          projGone: 'Ese proyecto ya no esta en su lista.',
+          projFull: 'La lista llego a su tope de proyectos. Quite alguno antes de agregar otro.',
+          colProject: 'Proyecto',
+          routesNeedProject: 'Agregue un proyecto arriba para poder crear reglas.',
           save: 'Guardar conversacion', saveEdit: 'Guardar cambios', cancelEdit: 'Cancelar edicion',
           empty: 'Ninguna conversacion autorizada. Lo que no esta aca, su agente no lo ve.',
-          colChat: 'Conversacion', colTarget: 'Por defecto', colPerm: 'Permiso',
+          colChat: 'Conversacion', colPerm: 'Permiso',
           edit: 'Editar', remove: 'Quitar',
           // --- Jev (opcional): lo unico que manda texto de clientes fuera del equipo ---
           jevLegend: 'Jev (opcional)',
@@ -779,10 +825,10 @@
           jevErrGeneric: 'No se pudo completar. Intente de nuevo.',
           routesLegend: 'A que proyecto va',
           routesHelp: 'Un grupo de operaciones lleva trabajo de varios clientes. Cuando el mensaje ' +
-            'menciona a uno, la tarjeta va a SU proyecto, no al de la conversacion.',
+            'menciona a uno, el caso va a SU proyecto, no al de la conversacion.',
           routeMatch: 'Cuando el mensaje diga', routeMatchPh: 'ej. facturacion',
-          routeTarget: 'Va a', routeTargetPh: 'ej. FIN',
-          addRoute: 'Agregar regla', noRoutes: 'Sin reglas. Todo va al destino por defecto de cada conversacion.',
+          routeTarget: 'Va al proyecto',
+          addRoute: 'Agregar regla', noRoutes: 'Sin reglas. Todo va al proyecto de cada conversacion.',
           colWhen: 'Cuando diga', colGoes: 'Va a',
           notReady: 'WhatsApp no esta conectado.',
           notReadyHow: 'Revise los requisitos aca abajo.',
@@ -834,17 +880,18 @@
           hStoreRekeyed: 'Conversaciones atribuidas a su numero',
           howStoreRekeyedLine: 'Lo que estaba guardado de antes de que cada numero ' +
             'tuviera su propia linea quedo con el numero de donde vino. No se borro nada',
-          modeOff: 'off', modeObserve: 'observar', modeDraft: 'borrador',
-          modeReply: 'responder',
+          modeOff: 'Apagado', modeObserve: 'Solo leer', modeDraft: 'Le pregunto antes',
+          modeReply: 'Automatico',
           provNone: 'ninguno', provPlane: 'plane', provLinear: 'linear',
           provGithub: 'github',
           needsUpdate: 'Esta version de Orca no deja guardar desde aca.',
           needsUpdateHow: 'Actualice Orca.',
           needName: 'Ponga un nombre.', needChat: 'Falta la conversacion.',
-          needMatch: 'Falta el texto y el destino.',
+          needMatch: 'Falta el texto y el proyecto.',
           savedOk: 'Guardado', removedOk: 'Quitado', named: 'Se llama',
-          off: 'off — no la toca', observe: 'observar — solo lee, no escribe',
-          draft: 'borrador — escribe y espera', reply: 'responder — envia'
+          off: 'Apagado — no la toca', observe: 'Solo leer — no escribe',
+          draft: 'Le pregunto antes — escribe y espera su aprobacion',
+          reply: 'Automatico — responde y envia solo'
         },
         en: {
           title: 'WhatsApp Inbox',
@@ -1008,18 +1055,47 @@
             'Orca. It stopped signalling {s} s ago.',
           mapLegend: 'Conversations', chatLabel: 'Conversation',
           chatPh: 'exact group name or its JID',
-          providerLabel: 'Task service', permLabel: 'Permission',
-          providerNone: 'none — never opens cards',
-          targetPlane: 'Default project', targetLinear: 'Default team',
-          targetGithub: 'Default repository', targetNone: 'No destination',
-          targetHintNone: 'This conversation never opens cards: no content rule sends it ' +
-            'to a board.',
-          targetHint: 'The real destination comes from the message content and the rules below. ' +
-            'This is only the fallback when no rule matches. Leave it empty to open no card ' +
-            'when the client is not recognized.',
+          permLabel: 'Permission',
+          workspaceLabel: 'Project',
+          workspaceNone: 'No project',
+          workspaceMissing: '{id} (no longer in the list)',
+          workspaceHint: 'This is where the work of this conversation happens. With no ' +
+            'project, the agent only replies and leaves anything that needs work to you.',
+          workspaceHintNoProjects: 'There are no projects yet: add one in the Projects section.',
+          // --- Projects: the catalog the case agent hands work out from ---
+          projectsLegend: 'Projects',
+          projectsHelp: 'These are the folders where the work of each conversation happens. ' +
+            'Orca proposes the ones it knows and you decide which stay: only those reach the ' +
+            'agent that handles cases.',
+          projectsEmpty: 'You have not added a project yet. With no projects, the agent only ' +
+            'replies and leaves anything that needs work to you.',
+          projectsRefresh: 'Find projects',
+          projectsAdd: 'Add',
+          projectsNotePh: 'What it is for (optional)',
+          projectsSaveNote: 'Save note',
+          projectsProposed: 'Orca knows these projects',
+          projectsNoNew: 'There are no new projects to propose.',
+          projectsNotAsked: 'Press "Find projects" to see the ones Orca knows.',
+          projectsChecked: 'Last search: {h}',
+          projectAdded: 'Project added',
+          projectRemoved: 'Project removed',
+          projectNoteSaved: 'Note saved',
+          projNoCli: 'The Orca CLI was not found on this machine, so projects cannot be found.',
+          projNoPerm: 'The plugin is not allowed to run the Orca CLI. Check the plugin ' +
+            'permissions in Settings > Plugins.',
+          projSlow: 'Orca took too long to answer. Try again.',
+          projFail: 'It could not be completed. Try again; if it keeps failing, check the ' +
+            'plugin log.',
+          projNoJson: 'Orca answered something the plugin did not understand. Update Orca ' +
+            'and try again.',
+          projNoChange: 'That project is no longer among the ones Orca proposes. Search again.',
+          projGone: 'That project is no longer in your list.',
+          projFull: 'The list reached its project limit. Remove one before adding another.',
+          colProject: 'Project',
+          routesNeedProject: 'Add a project above to be able to create rules.',
           save: 'Save conversation', saveEdit: 'Save changes', cancelEdit: 'Cancel editing',
           empty: 'No conversation allowed yet. What is not here, your agent cannot see.',
-          colChat: 'Conversation', colTarget: 'Default', colPerm: 'Permission',
+          colChat: 'Conversation', colPerm: 'Permission',
           edit: 'Edit', remove: 'Remove',
           // --- Jev (opcional): lo unico que manda texto de clientes fuera del equipo ---
           jevLegend: 'Jev (optional)',
@@ -1047,12 +1123,12 @@
           jevErrInvalid: 'The key is not valid: it must be a single word, no spaces, up to 512 characters.',
           jevErrVault: 'Orca would not store the key. Check that the plugin may store secrets and try again.',
           jevErrGeneric: 'It could not be completed. Try again.',
-          routesLegend: 'Where the card goes',
+          routesLegend: 'Which project it goes to',
           routesHelp: 'An ops group carries work for several clients. When a message names one, ' +
-            'the card goes to THAT project, not the conversation default.',
+            'the case goes to THAT project, not the conversation one.',
           routeMatch: 'When the message says', routeMatchPh: 'e.g. billing',
-          routeTarget: 'Goes to', routeTargetPh: 'e.g. FIN',
-          addRoute: 'Add rule', noRoutes: 'No rules. Everything goes to each conversation default.',
+          routeTarget: 'Goes to project',
+          addRoute: 'Add rule', noRoutes: 'No rules. Everything goes to each conversation project.',
           colWhen: 'When it says', colGoes: 'Goes to',
           notReady: 'WhatsApp is not connected.',
           notReadyHow: 'Check the requirements below.',
@@ -1095,17 +1171,18 @@
           hStoreRekeyed: 'Conversations assigned to their number',
           howStoreRekeyedLine: 'What was stored before each number had its own line ' +
             'now belongs to the number it came from. Nothing was deleted',
-          modeOff: 'off', modeObserve: 'observe', modeDraft: 'draft',
-          modeReply: 'reply',
+          modeOff: 'Off', modeObserve: 'Read only', modeDraft: 'Ask me first',
+          modeReply: 'Automatic',
           provNone: 'none', provPlane: 'plane', provLinear: 'linear',
           provGithub: 'github',
           needsUpdate: 'This Orca version cannot save from here.',
           needsUpdateHow: 'Update Orca.',
           needName: 'Give it a name.', needChat: 'Pick a conversation.',
-          needMatch: 'Text and destination are both required.',
+          needMatch: 'Text and project are both required.',
           savedOk: 'Saved', removedOk: 'Removed', named: 'Called',
-          off: 'off — leaves it alone', observe: 'observe — reads only, never writes',
-          draft: 'draft — writes, waits for you', reply: 'reply — sends'
+          off: 'Off — leaves it alone', observe: 'Read only — never writes',
+          draft: 'Ask me first — writes and waits for your approval',
+          reply: 'Automatic — replies and sends on its own'
         }
       }
       STRINGS.pt = Object.assign({}, STRINGS.en, {
@@ -1212,8 +1289,8 @@
         hStoreRekeyed: 'Conversas atribuidas ao seu numero',
         howStoreRekeyedLine: 'O que estava guardado de antes de cada numero ter a sua ' +
           'propria linha ficou com o numero de onde veio. Nada foi apagado',
-        modeOff: 'off', modeObserve: 'observar', modeDraft: 'rascunho',
-        modeReply: 'responder',
+        modeOff: 'Desligado', modeObserve: 'So ler', modeDraft: 'Pergunto antes',
+        modeReply: 'Automatico',
         provNone: 'nenhum', provPlane: 'plane', provLinear: 'linear',
         provGithub: 'github',
         toneLabel: 'Como escreve', saveTone: 'Salvar tom', toneSaved: 'Tom salvo',
@@ -1289,11 +1366,45 @@
         scopeRmFail: 'Nao foi possivel remover a autorizacao, entao ela continua ' +
           'valendo. Tente de novo.',
         editName: 'Mudar o nome', mapLegend: 'Conversas', chatLabel: 'Conversa',
-        providerLabel: 'Servico de tarefas', permLabel: 'Permissao',
-        providerNone: 'nenhum — nao abre cartoes',
-        targetNone: 'Sem destino',
-        targetHintNone: 'Esta conversa nao abre cartoes: nenhuma regra de conteudo a manda ' +
-          'para um board.',
+        permLabel: 'Permissao',
+        workspaceLabel: 'Projeto',
+        workspaceNone: 'Sem projeto',
+        workspaceMissing: '{id} (nao esta mais na lista)',
+        workspaceHint: 'E onde se faz o trabalho desta conversa. Sem projeto, o agente so ' +
+          'responde e deixa para voce o que pedir trabalho.',
+        workspaceHintNoProjects: 'Ainda nao ha projetos: adicione um na secao Projetos.',
+        // --- Projetos: o catalogo que o agente dos casos distribui ---
+        projectsLegend: 'Projetos',
+        projectsHelp: 'Sao as pastas onde se faz o trabalho de cada conversa. O Orca propoe ' +
+          'os que conhece e voce decide quais ficam: so esses chegam ao agente que atende ' +
+          'os casos.',
+        projectsEmpty: 'Voce ainda nao adicionou nenhum projeto. Sem projetos, o agente so ' +
+          'responde e deixa para voce o que pedir trabalho.',
+        projectsRefresh: 'Buscar projetos',
+        projectsAdd: 'Adicionar',
+        projectsNotePh: 'Para que serve (opcional)',
+        projectsSaveNote: 'Salvar nota',
+        projectsProposed: 'O Orca conhece estes projetos',
+        projectsNoNew: 'Nao ha projetos novos para propor.',
+        projectsNotAsked: 'Toque em "Buscar projetos" para ver os que o Orca conhece.',
+        projectsChecked: 'Ultima busca: {h}',
+        projectAdded: 'Projeto adicionado',
+        projectRemoved: 'Projeto removido',
+        projectNoteSaved: 'Nota salva',
+        projNoCli: 'A CLI do Orca nao foi encontrada neste computador, entao nao da para ' +
+          'buscar projetos.',
+        projNoPerm: 'O plugin nao pode executar a CLI do Orca. Confira as permissoes do ' +
+          'plugin em Ajustes > Plugins.',
+        projSlow: 'O Orca demorou demais para responder. Tente de novo.',
+        projFail: 'Nao foi possivel concluir. Tente de novo; se continuar, veja o registro ' +
+          'do plugin.',
+        projNoJson: 'O Orca respondeu algo que o plugin nao entendeu. Atualize o Orca e ' +
+          'tente de novo.',
+        projNoChange: 'Esse projeto nao esta mais entre os que o Orca propoe. Busque de novo.',
+        projGone: 'Esse projeto nao esta mais na sua lista.',
+        projFull: 'A lista chegou ao limite de projetos. Remova algum antes de adicionar outro.',
+        colProject: 'Projeto',
+        routesNeedProject: 'Adicione um projeto acima para poder criar regras.',
         chatToneLabel: 'Como escreve aqui (opcional)',
         chatTonePh: 'vazio = usa o tom global',
         chatInstrLabel: 'O que faz aqui (opcional)',
@@ -1331,9 +1442,14 @@
         jevErrVault: 'O Orca nao deixou guardar a chave. Confira se o plugin pode guardar segredos e tente de novo.',
         jevErrGeneric: 'Nao foi possivel concluir. Tente de novo.',
         routesLegend: 'Para qual projeto vai', addRoute: 'Adicionar regra',
+        routeTarget: 'Vai para o projeto',
+        noRoutes: 'Sem regras. Tudo vai para o projeto de cada conversa.',
+        routesHelp: 'Um grupo de operacoes leva trabalho de varios clientes. Quando a mensagem ' +
+          'cita um, o caso vai para o projeto DELE, nao para o da conversa.',
         savedOk: 'Salvo', removedOk: 'Removido', named: 'Se chama',
-        off: 'off — nao toca', observe: 'observar — so le, nao escreve',
-        draft: 'rascunho — escreve e espera', reply: 'responder — envia'
+        off: 'Desligado — nao toca', observe: 'So ler — nao escreve',
+        draft: 'Pergunto antes — escreve e espera a sua aprovacao',
+        reply: 'Automatico — responde e envia sozinho'
       })
 
       var LANG = (function () {
@@ -1355,7 +1471,7 @@
         Array.prototype.forEach.call(q('[data-t-title]'), function (n) {
           n.title = t(n.dataset.tTitle); n.setAttribute('aria-label', t(n.dataset.tTitle))
         })
-        syncTargetLabel()
+        repintarProyectos()
       }
 
       var seq = 0, pending = {}
@@ -1689,23 +1805,6 @@
           (why ? '<span class="alert-why">' + why + '</span>' : '') + '</span>'
         el('alert').hidden = false
       }
-
-      var TARGET_KEY = { ninguno: 'targetNone', plane: 'targetPlane',
-                        linear: 'targetLinear', github: 'targetGithub' }
-      var TARGET_PH = { ninguno: '', plane: 'OPS', linear: 'ENG', github: 'mi-org/mi-repo' }
-      // Un campo que sigue viendose editable pero que nadie mira es el mismo defecto que
-      // un boton que no hace nada: con "ninguno" el destino se apaga, se vacia y la pista
-      // dice por que.
-      function syncTargetLabel() {
-        var p = el('provider').value
-        var sinTarjeta = p === 'ninguno'
-        el('target-label').textContent = t(TARGET_KEY[p])
-        el('target').placeholder = TARGET_PH[p]
-        el('target').disabled = sinTarjeta
-        if (sinTarjeta) el('target').value = ''
-        el('target-hint').textContent = t(sinTarjeta ? 'targetHintNone' : 'targetHint')
-      }
-      el('provider').addEventListener('change', syncTargetLabel)
 
       // ---------- nombre del agente ----------
       var savedAgent = null, agentDirty = false
@@ -2224,12 +2323,202 @@
         pintarIdentidad()
       })
 
+      // ---------- proyectos (T12) ----------
+      // El catalogo vive en storage (`projects`, lo escribe el worker) y las propuestas en
+      // `projectsStatus`. El panel NO sabe de Orca: pide por el canal del worker -el mismo
+      // del alcance, para no sumar un sondeo- y pinta lo que el worker deja.
+      var proyectos = []
+      var catalogoLeido = false, propuestasLeidas = false
+      var estadoPropuestas = null
+      var proyectosJson = null
+      // Lo ultimo que se pinto de cada tabla que NOMBRA un proyecto: cuando el catalogo
+      // cambia se repintan, o seguirian mostrando el id donde ya hay un nombre.
+      var scopeCrudo = null, reglasCrudas = null
+
+      // Los motivos que puede traer un pedido de proyectos, por CODIGO: el worker no sabe
+      // en que idioma esta el usuario. Lo que el panel no conozca cae en el generico.
+      var PROY_HOW_KEY = {
+        'sin-cli-orca': 'projNoCli', 'sin-herramientas': 'projNoCli',
+        'sin-permiso': 'projNoPerm', 'demoro': 'projSlow', 'fallo': 'projFail',
+        'sin-json': 'projNoJson', 'sin-cambios': 'projNoChange',
+        'proyecto-no-existe': 'projGone', 'catalogo-lleno': 'projFull',
+        'argumentos-invalidos': 'projFail', 'vencido': 'projFail',
+        'accion-desconocida': 'projFail'
+      }
+
+      function escAttr(text) { return esc(text).replace(/"/g, '&quot;') }
+
+      /** El nombre de un proyecto para una tabla, escapado. Uno que el dueno quito se
+       *  sigue diciendo por su id y se marca: la conversacion lo conserva, puede volver. */
+      function nombreDeProyecto(id) {
+        if (!id) return '—'
+        var p = proyectos.filter(function (x) { return x.id === id })[0]
+        return p ? esc(p.name || p.id) : esc(fmt('workspaceMissing', { id: id }))
+      }
+
+      function opcionDeProyecto(p) {
+        return '<option value="' + escAttr(p.id) + '">' + esc(p.name || p.id) + '</option>'
+      }
+
+      /** Los dos selectores que ofrecen proyectos: el de cada conversacion y el de cada
+       *  regla. `valor` es lo que debe quedar elegido en el de la conversacion; sin el se
+       *  conserva lo que habia. */
+      function pintarSelectoresDeProyecto(valor) {
+        var ws = el('workspace')
+        var actual = valor === undefined ? ws.value : valor
+        var html = '<option value="">' + esc(t('workspaceNone')) + '</option>' +
+          proyectos.map(opcionDeProyecto).join('')
+        if (actual && !proyectos.some(function (p) { return p.id === actual })) {
+          html += '<option value="' + escAttr(actual) + '">' +
+            esc(fmt('workspaceMissing', { id: actual })) + '</option>'
+        }
+        ws.innerHTML = html
+        ws.value = actual || ''
+        el('workspace-hint').textContent = t(proyectos.length ? 'workspaceHint'
+          : 'workspaceHintNoProjects')
+        var rs = el('r-workspace')
+        var elegido = rs.value
+        rs.innerHTML = proyectos.map(opcionDeProyecto).join('')
+        if (elegido && proyectos.some(function (p) { return p.id === elegido })) {
+          rs.value = elegido
+        }
+        rs.disabled = !proyectos.length
+        el('route-hint').textContent = proyectos.length ? '' : t('routesNeedProject')
+      }
+
+      function renderProjects(lista, forzar) {
+        var nuevo = Array.isArray(lista) ? lista.filter(function (p) {
+          return p && typeof p === 'object' && typeof p.id === 'string'
+        }) : []
+        var firma = JSON.stringify(nuevo)
+        // Sin cambios no se toca el DOM: una nota a medio escribir no se pierde porque
+        // el sondeo volvio a leer lo mismo.
+        if (!forzar && catalogoLeido && firma === proyectosJson) return
+        var cambio = proyectosJson !== null && firma !== proyectosJson
+        proyectos = nuevo
+        proyectosJson = firma
+        catalogoLeido = true
+        var caja = el('projects-wrap')
+        if (!proyectos.length) {
+          caja.innerHTML = '<p class="empty">' + t('projectsEmpty') + '</p>'
+        } else {
+          caja.innerHTML = proyectos.map(function (p) {
+            return '<div class="proj"><div class="proj-head"><b>' + esc(p.name || p.id) +
+              '</b><button class="link" data-prm="' + escAttr(p.id) + '">' + t('remove') +
+              '</button></div><code class="proj-path">' + esc(p.path || '') + '</code>' +
+              '<div class="proj-note"><input data-pnote="' + escAttr(p.id) +
+              '" maxlength="300" value="' + escAttr(p.note || '') + '" placeholder="' +
+              escAttr(t('projectsNotePh')) + '" aria-label="' + escAttr(t('projectsNotePh')) +
+              '" /><button class="link" data-psave="' + escAttr(p.id) + '">' +
+              t('projectsSaveNote') + '</button></div></div>'
+          }).join('')
+          Array.prototype.forEach.call(caja.querySelectorAll('[data-prm]'), function (b) {
+            b.addEventListener('click', function () {
+              pedirProyectos('proyectos-quitar', { project: b.dataset.prm }, b, 'projectRemoved')
+            })
+          })
+          Array.prototype.forEach.call(caja.querySelectorAll('[data-psave]'), function (b) {
+            b.addEventListener('click', function () {
+              var campo = caja.querySelector('[data-pnote="' + b.dataset.psave + '"]')
+              pedirProyectos('proyectos-nota',
+                { project: b.dataset.psave, note: campo ? campo.value : '' }, b, 'projectNoteSaved')
+            })
+          })
+        }
+        pintarSelectoresDeProyecto()
+        if (cambio || forzar) {
+          if (scopeCrudo) renderScope(scopeCrudo)
+          if (reglasCrudas) renderRoutes(reglasCrudas)
+        }
+      }
+
+      function horaDe(iso) {
+        var d = new Date(iso)
+        if (isNaN(d.getTime())) return ''
+        try { return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) } catch (e) { return '' }
+      }
+
+      /** Lo que Orca propone, o por que no se pudo preguntar. Un fallo NO se pinta como
+       *  "no hay propuestas": son dos cosas opuestas y la segunda mandaria al dueno a dar
+       *  por revisado un catalogo que nadie reviso. */
+      function renderProposals(st) {
+        estadoPropuestas = st
+        propuestasLeidas = true
+        var caja = el('proposals-wrap')
+        var linea = el('projects-status')
+        linea.className = 'hint'
+        if (!st || typeof st !== 'object') {
+          linea.textContent = t('projectsNotAsked'); caja.innerHTML = ''; return
+        }
+        if (st.ok === false) {
+          linea.className = 'hint mal'
+          linea.textContent = porCodigo(PROY_HOW_KEY, st.reason, '') || t('projFail')
+          caja.innerHTML = ''
+          return
+        }
+        var lista = Array.isArray(st.proposals) ? st.proposals.filter(function (p) {
+          return p && typeof p.id === 'string'
+        }) : []
+        var cuando = st.at ? fmt('projectsChecked', { h: horaDe(st.at) }) : ''
+        linea.textContent = (lista.length ? t('projectsProposed') : t('projectsNoNew')) +
+          (cuando ? ' · ' + cuando : '')
+        caja.innerHTML = lista.map(function (p) {
+          return '<div class="proj"><div class="proj-head"><b>' + esc(p.name || p.id) +
+            '</b><button class="link" data-padd="' + escAttr(p.id) + '">' + t('projectsAdd') +
+            '</button></div><code class="proj-path">' + esc(p.path || '') + '</code></div>'
+        }).join('')
+        Array.prototype.forEach.call(caja.querySelectorAll('[data-padd]'), function (b) {
+          b.addEventListener('click', function () {
+            pedirProyectos('proyectos-aceptar', { ids: [b.dataset.padd] }, b, 'projectAdded')
+          })
+        })
+      }
+
+      /** Lo que depende del idioma, otra vez: cambiar de idioma no recarga los datos. */
+      function repintarProyectos() {
+        if (catalogoLeido) renderProjects(proyectos, true)
+        else pintarSelectoresDeProyecto()
+        if (propuestasLeidas) renderProposals(estadoPropuestas)
+      }
+
+      function recargarProyectos() {
+        return Promise.all([read('projects', true), read('projectsStatus', true)])
+          .then(function (rs) {
+            if (hayRespuesta(rs[0])) renderProjects(rs[0])
+            if (hayRespuesta(rs[1])) renderProposals(rs[1])
+          })
+      }
+
+      /** Un pedido al worker sobre los proyectos y SU veredicto. Nada se anuncia hasta
+       *  que el worker contesta: agregar, quitar y anotar los hace el, y un "✓"
+       *  inmediato diria hecho algo que todavia no paso. */
+      function pedirProyectos(accion, extra, boton, hecho) {
+        var pedir = pedirAlWorker('scopeRequest', 'scopeResult',
+          Object.assign({ action: accion }, extra || {})).then(function (v) {
+          if (!v) { said('said-projects', t('pairingNoAnswer'), true); return }
+          if (!v.ok) {
+            said('said-projects', porCodigo(PROY_HOW_KEY, v.code, '') || t('projFail'), true)
+          } else {
+            said('said-projects', hecho ? '✓ ' + t(hecho) : '')
+          }
+          // Con exito o sin el se relee: un "ya no es propuesta" es justo la senal de que
+          // la lista en pantalla quedo vieja.
+          return recargarProyectos()
+        })
+        return boton ? busy(boton, pedir) : pedir
+      }
+
+      el('projects-refresh').addEventListener('click', function (event) {
+        pedirProyectos('proyectos-refrescar', null, event.currentTarget, null)
+      })
+
       // ---------- conversaciones ----------
       function renderScope(entries) {
         // El selector marca lo que ya esta autorizado, asi que esto es tambien su
         // fuente. Se guarda y se repinta aca en vez de pedir `scope` otra vez: el panel
         // ya lo lee en cada vuelta completa, y una lectura de mas sale del mismo cupo
         // de 30 mensajes por 10 s que el clic del usuario.
+        scopeCrudo = entries
         var todas = entries && typeof entries === 'object' ? entries : {}
         // Solo las de la linea vinculada (T9); las de otro numero siguen en storage.
         entries = {}
@@ -2244,13 +2533,12 @@
           return
         }
         el('scope-wrap').innerHTML =
-          '<table><thead><tr><th>' + t('colChat') + '</th><th>' + t('colTarget') +
+          '<table><thead><tr><th>' + t('colChat') + '</th><th>' + t('colProject') +
           '</th><th>' + t('colPerm') + '</th><th></th></tr></thead><tbody>' +
           keys.map(function (key) {
             var e = entries[key]
             return '<tr><td>' + esc(e.chatName || key) + '</td><td>' +
-              esc(porCodigo(PROV_KEY, e.provider || 'plane', e.provider)) + ' / ' +
-              esc(e.target || '—') + '</td><td>' +
+              nombreDeProyecto(e.workspace) + '</td><td>' +
               '<span class="pill ' + esc(e.mode || 'off') + '">' +
               esc(porCodigo(MODE_KEY, e.mode || 'off', e.mode)) +
               '</span></td><td class="acts">' +
@@ -2275,9 +2563,9 @@
         editandoJid = key
         pickChat(key, entry.chatName || key)
         el('chat').value = entry.chatName || key
-        el('provider').value = entry.provider || 'plane'
-        syncTargetLabel()
-        el('target').value = entry.target || ''
+        // El proyecto de la conversacion, aunque ya no este en la lista: se ofrece como
+        // opcion propia para que guardar sin tocarlo no lo borre, que puede volver.
+        pintarSelectoresDeProyecto(entry.workspace || '')
         el('chat-tone').value = entry.tone || ''
         el('chat-instructions').value = entry.instructions || ''
         el('mode').value = entry.mode || 'off'
@@ -2288,13 +2576,13 @@
       }
       function resetScopeForm() {
         editandoJid = ''
-        el('chat').value = ''; el('target').value = ''; el('mode').value = 'off'
+        el('chat').value = ''; el('mode').value = 'off'
         el('chat-tone').value = ''
         el('chat-instructions').value = ''
-        // Una conversacion nueva arranca sin servicio de tareas: la mayoria de los DM
-        // no necesitan tablero, y dejar Plane puesto hacia que se eligiera por inercia.
-        el('provider').value = 'ninguno'
-        syncTargetLabel()
+        // Una conversacion nueva arranca sin proyecto: la mayoria de los 1 a 1 solo piden
+        // que el agente lea y conteste, y elegir uno por inercia mandaria su trabajo a un
+        // repo que nada tiene que ver.
+        pintarSelectoresDeProyecto('')
         el('chat-pick').value = ''
         pintarIdentidad()
         el('save-scope').textContent = t('save')
@@ -2355,23 +2643,28 @@
         // el panel decia guardado y el agente seguia con el valor viejo.
         var jid = editandoJid || el('chat-pick').value
         var chat = el('chat').value.trim() || jid
-        var provider = el('provider').value
-        var target = el('target').value.trim()
+        var workspace = el('workspace').value || null
         var mode = el('mode').value
         if (!jid) { said('said-scope', t('needChat'), true); return }
         busy(event.currentTarget, read('scope').then(function (next) {
           next = next || {}
-          next[jid] = { chatName: chat, provider: provider, target: target || null,
-                        mode: mode, tone: el('chat-tone').value.trim() || null,
-                        instructions: el('chat-instructions').value.trim() || null,
-                        updatedAt: new Date().toISOString() }
+          // Lo de antes se conserva: provider y target ya no se eligen aca, pero la fila
+          // los trae de antes de este cambio y borrarlos seria perder lo que el dueno
+          // configuro. Una conversacion nueva no abre tarjetas.
+          var previa = next[jid] && typeof next[jid] === 'object' ? next[jid] : null
+          next[jid] = Object.assign({ provider: 'ninguno', target: null }, previa, {
+            chatName: chat, workspace: workspace,
+            mode: mode, tone: el('chat-tone').value.trim() || null,
+            instructions: el('chat-instructions').value.trim() || null,
+            updatedAt: new Date().toISOString() })
           // Autorizar es autorizar para ESTE numero (T9): el mismo grupo visto desde
           // otro numero propio es otra autorizacion.
           if (cuentaVinculada) next[jid].account = cuentaVinculada
           return write('scope', next).then(function () {
             renderScope(next)
             resetScopeForm()
-            said('said-scope', '✓ ' + t('savedOk') + ': ' + chat + ' · ' + mode)
+            said('said-scope', '✓ ' + t('savedOk') + ': ' + chat + ' · ' +
+              porCodigo(MODE_KEY, mode, mode))
           })
         }))
       })
@@ -2379,6 +2672,7 @@
       // ---------- reglas de ruteo ----------
       function renderRoutes(rules) {
         rules = rules || []
+        reglasCrudas = rules
         if (!rules.length) {
           el('routes-wrap').innerHTML = '<p class="empty">' + t('noRoutes') + '</p>'
           return
@@ -2387,9 +2681,12 @@
           '<table><thead><tr><th>' + t('colWhen') + '</th><th>' + t('colGoes') +
           '</th><th></th></tr></thead><tbody>' +
           rules.map(function (r, i) {
+            // Una regla de antes (sin proyecto) se sigue viendo con su destino viejo:
+            // sin eso la fila quedaria vacia y el dueno no sabria que quitar.
             return '<tr><td>' + esc(r.pattern) + '</td><td>' +
-              esc(porCodigo(PROV_KEY, r.provider || 'plane', r.provider)) + ' / ' +
-              esc(r.target) + '</td>' +
+              (r.workspace ? nombreDeProyecto(r.workspace)
+                : esc(porCodigo(PROV_KEY, r.provider || 'plane', r.provider)) + ' / ' +
+                  esc(r.target || '—')) + '</td>' +
               '<td class="acts"><button class="link" data-rrm="' + i + '">' +
               t('remove') + '</button></td></tr>'
           }).join('') + '</tbody></table>'
@@ -2408,17 +2705,17 @@
 
       el('save-route').addEventListener('click', function (event) {
         var match = el('r-match').value.trim().toLowerCase()
-        var target = el('r-target').value.trim()
-        var provider = el('r-provider').value
-        if (!match || !target) { said('said-route', t('needMatch'), true); return }
+        var workspace = el('r-workspace').value
+        if (!match || !workspace) { said('said-route', t('needMatch'), true); return }
         busy(event.currentTarget, read('routes').then(function (rules) {
           rules = (rules || []).filter(function (r) { return r.pattern !== match })
-          rules.push({ pattern: match, provider: provider, target: target })
+          rules.push({ pattern: match, workspace: workspace })
           rules.sort(function (a, b) { return a.pattern < b.pattern ? -1 : 1 })
           return write('routes', rules).then(function () {
             renderRoutes(rules)
-            el('r-match').value = ''; el('r-target').value = ''
-            said('said-route', '✓ ' + t('savedOk') + ': ' + match + ' → ' + target)
+            el('r-match').value = ''
+            said('said-route', '✓ ' + t('savedOk') + ': ' + match + ' → ' +
+              (proyectos.filter(function (p) { return p.id === workspace })[0] || { name: workspace }).name)
           })
         }))
       })
@@ -3029,7 +3326,7 @@
       var CLAVES = ['scope', 'agentName', 'health', 'routes', 'tone', 'chats',
                     'chatsAccount', 'transcribeQuality', 'inboxDays', 'ownerName',
                     'transcribe', 'transcribeLang', 'syncStatus', 'syncMinutes',
-                    'workerBeat', 'sidecar', 'jevStatus']
+                    'workerBeat', 'sidecar', 'jevStatus', 'projects', 'projectsStatus']
       var CLAVES_VIVAS = ['chats', 'chatsAccount', 'health', 'syncStatus', 'workerBeat',
                           'sidecar']
 
@@ -3060,6 +3357,11 @@
               cuentaVinculada = sc0.cuenta
             }
             if (hayRespuesta(v('chatsAccount'))) chatsCuenta = v('chatsAccount')
+            // Los proyectos ANTES del alcance y de las reglas: sus tablas y selectores
+            // nombran el proyecto, y pintarlos con el catalogo de antes mostraria un id
+            // pelado donde el dueno ya agrego el proyecto.
+            if (hayRespuesta(v('projects'))) renderProjects(v('projects'))
+            if (hayRespuesta(v('projectsStatus'))) renderProposals(v('projectsStatus'))
             if (hayRespuesta(v('scope'))) renderScope(v('scope'))
             pintarClave('tone', v('tone'), sello)
             pintarClave('transcribeQuality', v('transcribeQuality'), sello)
