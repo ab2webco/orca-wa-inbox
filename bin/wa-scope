@@ -48,6 +48,7 @@ from wa_settings import (  # noqa: E402
     plugin_store_raw,
     plugin_store_targets, settings_from_plugin, user_data_roots, valida_ajuste)
 import wa_store  # noqa: E402  (solo lectura: de capture.db se lee la linea activa)
+import wa_jev  # noqa: E402  (el cliente de Jev: falla cerrado, nunca habilita)
 
 def scope_db_path():
     """Estado propio de la herramienta. En Windows va al APPDATA y no al home."""
@@ -312,8 +313,11 @@ create table if not exists juicio (
   chat_jid  text not null,
   stanza_id text not null,
   clase     text not null,              -- card | alert | nothing | doubtful (STEP 7)
-  origen    text not null default 'agente',  -- agente | jev (T3/T4, cuando exista)
+  origen    text not null default 'agente',  -- agente | jev
   at        text not null,
+  -- El veredicto entero de Jev (el dict de `jev_juzga`), cuando lo dio Jev. Es lo que
+  -- hace que un mensaje se pregunte UNA vez: la proxima corrida lo lee de aca.
+  jev       text,
   primary key (account, chat_jid, stanza_id)
 );
 -- El caso del tablero (odd/tasks/kanban-casos.md): cinco mensajes del mismo pedido son
@@ -340,6 +344,13 @@ create table if not exists caso (
   -- una). `ninguno` y "sin destino" quedan dichos tal cual, con target null; null en la
   -- columna es "todavia no se enruto".
   ruta text,
+  -- Lo que este caso le tiene que preguntar al dueno (JSON, lista): money, credential,
+  -- commitment, jev. Una vez dicho no se borra: un caso con una excepcion no sale solo.
+  excepciones text,
+  -- El resumen del ultimo veredicto de Jev que toco el caso, como lo muestra la tarjeta.
+  jev text,
+  -- 1 cuando Jev o una regla dicen que esto necesita al agente (lenguaje).
+  necesita_agente integer not null default 0,
   created_at text not null,
   updated_at text not null
 );
@@ -944,6 +955,16 @@ def migrate(con):
         con.execute("alter table caso add column propuesta_aprobada text")
     if "ruta" not in caso_cols:
         con.execute("alter table caso add column ruta text")
+    if "excepciones" not in caso_cols:
+        con.execute("alter table caso add column excepciones text")
+    if "jev" not in caso_cols:
+        con.execute("alter table caso add column jev text")
+    if "necesita_agente" not in caso_cols:
+        con.execute("alter table caso add column necesita_agente integer not null "
+                    "default 0")
+    # T3: el veredicto entero de Jev, cacheado junto a su clase.
+    if "jev" not in {r["name"] for r in con.execute("pragma table_info(juicio)")}:
+        con.execute("alter table juicio add column jev text")
     work_cols = {r["name"] for r in con.execute("pragma table_info(work)")}
     if "notified_at" not in work_cols:
         con.execute("alter table work add column notified_at text")
@@ -2466,19 +2487,80 @@ CONTEOS_INGEST = ("vistos", "nuevos", "casos_creados", "unidos", "cerrados", "du
 PRIORIDAD_INGEST = "none"
 
 
-def jev_juzga(mensaje):
+def jev_cacheado(con, m):
+    """El veredicto de Jev que ya se guardo para este mensaje, o None."""
+    if con is None:
+        return None
+    fila = con.execute("select jev from juicio where account=? and chat_jid=? and "
+                       "stanza_id=? and origen='jev' and jev is not null",
+                       (m.get("account") or cuenta_activa(), m.get("chat_jid"),
+                        m.get("stanza_id"))).fetchone()
+    if not fila:
+        return None
+    try:
+        dato = json.loads(fila["jev"])
+    except (TypeError, ValueError):
+        return None
+    return dato if isinstance(dato, dict) else None
+
+
+def clase_de_jev(juicio):
+    """La clase de STEP 7 que sale de un veredicto de Jev: la que se cachea en `juicio`
+    y la que lleva el caso. Lo que pide al dueno es alert; lo que necesita lenguaje, card;
+    lo que salta, nothing; la zona gris, doubtful."""
+    if juicio["exceptions"]:
+        return "alert"
+    if juicio["needs_agent"]:
+        return "card"
+    return "nothing" if juicio["skip"] else "doubtful"
+
+
+def jev_juzga(mensaje, con=None):
     """El enchufe de Jev (T3): un veredicto por mensaje, que ingest pide SOLO cuando ni el
-    dueno, ni el cache, ni una regla determinista lo resolvieron. T3 la llena: una
-    llamada, el resultado cacheado en `juicio` (`wa-scope juicio --origen jev`) y devuelto
-    con la forma de `veredicto_de` (`accion`, `clase`, `actor`, `detalle`).
+    dueno, ni el cache, ni una regla determinista lo resolvieron. Devuelve el dict del
+    contrato (kanban-casos, "Contratos") o None.
 
-    En T2 no opina: devuelve None, que es "sin veredicto" — el caso queda en `recibido` y
-    lo clasifica el agente, como siempre. Jev puede frenar y escalar, nunca habilitar: por
-    eso un None —sin llave, con error o con timeout— nunca es una razon para cerrar."""
-    return None
+    Una llamada por mensaje y nunca otra: el resultado queda en `juicio` (origen `jev`,
+    el JSON entero en la columna `jev`) y la proxima corrida lo lee de ahi. Jev puede
+    frenar y escalar, nunca habilitar: un None —sin llave, con error o con timeout— no
+    se cachea y nunca es una razon para cerrar; el caso queda en `recibido`, como hoy."""
+    ya = jev_cacheado(con, mensaje)
+    if ya is not None:
+        return ya
+    clave = wa_jev.llave()
+    if not clave:
+        return None
+    juicio = wa_jev.juzga_mensaje(mensaje, clave)
+    if juicio is None or con is None:
+        return juicio
+    con.execute(
+        "insert into juicio (account, chat_jid, stanza_id, clase, origen, at, jev) "
+        "values (?,?,?,?,'jev',?,?) on conflict(account, chat_jid, stanza_id) do update "
+        "set clase=excluded.clase, origen=excluded.origen, at=excluded.at, "
+        "jev=excluded.jev",
+        (mensaje.get("account") or cuenta_activa(), mensaje.get("chat_jid"),
+         mensaje.get("stanza_id"), clase_de_jev(juicio), time.strftime("%Y-%m-%d %H:%M"),
+         json.dumps(juicio, ensure_ascii=False, sort_keys=True)))
+    con.commit()
+    return juicio
 
 
-def veredicto_de(m, decision):
+def veredicto_de_jev(m, juicio):
+    """Lo que ingest hace con un veredicto de Jev. Lo que salta se cierra como nada; el
+    resto se clasifica con la clase que dio Jev y lleva el veredicto para marcar el caso.
+    Una linea suelta de un grupo solo abre caso si Jev la escala (excepcion o agente): la
+    zona gris de la charla de un grupo sigue el camino de hoy."""
+    if juicio["skip"]:
+        return {"accion": "cerrar", "actor": "jev", "motivo": "nada que atender (jev)",
+                "jev": juicio}
+    clase = clase_de_jev(juicio)
+    if m.get("kind") == "grupo" and clase == "doubtful":
+        return None
+    return {"accion": "clasificar", "clase": clase, "actor": "jev",
+            "detalle": f"jev {juicio.get('attention_class') or '-'}", "jev": juicio}
+
+
+def veredicto_de(m, decision, con=None):
     """Que hacer con un mensaje antes de agruparlo, o None si nada lo resuelve.
 
     El orden es la autoridad de quien lo dijo: el dueno manda; despues un juicio que ya
@@ -2492,6 +2574,11 @@ def veredicto_de(m, decision):
         return {"accion": "clasificar", "clase": "card", "actor": "dueno",
                 "detalle": "tomado por el dueno"}
     juicio = m.get("juicio")
+    # Un veredicto de Jev cacheado entero se aplica entero: con sus excepciones y su
+    # marca de agente, no solo con la clase.
+    del_cache = jev_cacheado(con, m) if juicio and juicio.get("origen") == "jev" else None
+    if del_cache is not None:
+        return veredicto_de_jev(m, del_cache)
     if juicio:
         if juicio["clase"] == "nothing":
             return {"accion": "cerrar", "actor": juicio["origen"],
@@ -2503,7 +2590,8 @@ def veredicto_de(m, decision):
         audio = ruta.endswith(EXTENSIONES_AUDIO)
         return {"accion": "clasificar", "clase": "doubtful", "actor": "automatizacion",
                 "detalle": "sin texto: audio" if audio else "sin texto"}
-    return jev_juzga(m)
+    juicio_jev = jev_juzga(m, con)
+    return veredicto_de_jev(m, juicio_jev) if juicio_jev is not None else None
 
 
 def ingest_lee():
@@ -2561,6 +2649,29 @@ def caso_clasifica(con, case_id, veredicto):
     return False
 
 
+def caso_marca_jev(con, case_id, juicio):
+    """Lo que Jev dijo, en el caso: las excepciones se suman (nunca se borran: un caso que
+    tuvo una no sale solo), la marca de agente solo se prende, y el resumen para la
+    tarjeta es el del ultimo veredicto. Deja evento de jev cuando cambia lo que decide
+    algo —una excepcion o el agente—; el resumen solo es lo que se muestra. Sin commit."""
+    caso = caso_de(con, case_id)
+    previas = json.loads(caso["excepciones"]) if caso.get("excepciones") else []
+    excepciones = [e for e in wa_jev.ORDEN_EXCEPCIONES
+                   if e in set(previas) | set(juicio["exceptions"])]
+    agente = int(bool(caso.get("necesita_agente")) or bool(juicio["needs_agent"]))
+    resumen = json.dumps({"attention_class": juicio.get("attention_class"),
+                          "flags": juicio["flags"], "skip": juicio["skip"]},
+                         ensure_ascii=False, sort_keys=True)
+    campos = {"excepciones": json.dumps(excepciones) if excepciones else None,
+              "necesita_agente": agente, "jev": resumen}
+    if excepciones != previas or agente != int(bool(caso.get("necesita_agente"))):
+        partes = ([f"excepciones {', '.join(excepciones)}"] if excepciones else []) + \
+            (["necesita agente"] if agente else [])
+        caso_tocar(con, caso, "jev", "jev: " + "; ".join(partes), **campos)
+    else:
+        con.execute("update caso set jev=? where case_id=?", (resumen, case_id))
+
+
 def ingest_mensaje(con, m, veredicto, horas):
     """Un mensaje nuevo, en SU transaccion: o queda todo (caso, ruta, clasificacion,
     eventos) o nada, y la fila de `caso_mensaje` es lo que hace que un reintento no lo
@@ -2585,6 +2696,8 @@ def ingest_mensaje(con, m, veredicto, horas):
             caso = caso_de(con, case_id)
             caso_valida(caso, "cerrado", veredicto["motivo"])
             caso_mover(con, caso, "cerrado", veredicto["actor"], veredicto["motivo"])
+            if veredicto.get("jev"):
+                caso_marca_jev(con, case_id, veredicto["jev"])
             hecho.update(nuevos=1, casos_creados=1, cerrados=1,
                          ignorados=1 if veredicto.get("dueno") else 0)
         elif accion == "cerrar":
@@ -2611,6 +2724,8 @@ def ingest_mensaje(con, m, veredicto, horas):
             caso_enruta(con, case_id, m.get("text") or "", chat)
             if accion == "clasificar" and caso_clasifica(con, case_id, veredicto):
                 hecho["dudosos"] = int(veredicto["clase"] == "doubtful")
+            if veredicto and veredicto.get("jev"):
+                caso_marca_jev(con, case_id, veredicto["jev"])
         con.commit()
     except BaseException:
         con.rollback()
@@ -2653,7 +2768,8 @@ def cmd_ingest(con, a):
         total["vistos"] += 1
         if caso_de_mensaje(con, m["stanza_id"]):
             continue
-        veredicto = veredicto_de(m, (decisiones.get(m["stanza_id"]) or {}).get("decision"))
+        veredicto = veredicto_de(m, (decisiones.get(m["stanza_id"]) or {}).get("decision"),
+                                 con)
         if m.get("kind") == "grupo" and veredicto is None:
             sueltos.append((m, veredicto))
         else:

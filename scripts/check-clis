@@ -846,6 +846,8 @@ def revisa_precheck(fallos: list) -> int:
         (binf / "wa_settings.py").write_text((BIN / "wa_settings.py").read_text())
         # Y la linea activa sale de capture.db por wa_store, en solo lectura (T9).
         (binf / "wa_store.py").write_text((BIN / "wa_store.py").read_text())
+        # Y el cliente de Jev, que wa-scope importa al arrancar (T3).
+        (binf / "wa_jev.py").write_text((BIN / "wa_jev.py").read_text())
         (binf / "wa-read").write_text(STUB_WA_READ)
         (binf / "wa-read").chmod(0o755)
 
