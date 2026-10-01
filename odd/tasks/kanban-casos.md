@@ -312,6 +312,10 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
       Jev ya lo documento y uso grupos de botones), conversaciones y proyectos con
       autocompletar propio, Jev con interruptor, reglas viejas de Plane marcadas.
       Prueba que impide volver a meter un `<select>`.
+- [ ] T19 — Piso fijo de excepciones sin Jev: reglas en código (dinero,
+      credencial, compromiso de fecha) sobre el mensaje que entra y sobre la
+      respuesta propuesta o enviada; se suman a las de Jev (Jev solo agrega). Así
+      "Su aprobacion" dice la verdad con Jev apagado. Prefiere preguntar de más.
 - [ ] T18 — Huecos de CLI vistos en T6: editar la propuesta en `listo`,
       reclasificar desde `clasificado`, `wa-send` aprobado por el dueño sin dejar
       fila de borrador.
