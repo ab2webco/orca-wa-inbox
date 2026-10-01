@@ -20,11 +20,12 @@
  * socket vivo.
  */
 import {
-  esConversacion, esGrupo, usuarioDe, identidadPropia, identidadesPropias,
+  esConversacion, esGrupo, jidDeChat, usuarioDe, identidadPropia, identidadesPropias,
   identidadDeSesion, cuentaDeIdentidad,
   mencionaA, citaA, textoDe, mediaDe, filaDeMensaje, filaDeActualizacion,
   TIPO_MEDIA
 } from '../sidecar/src/mensajes.js'
+import { filaDeChat } from '../sidecar/src/ingesta.js'
 
 let fallos = 0
 let pruebas = 0
@@ -326,6 +327,56 @@ console.log('\nT9: cada numero, su linea — la cuenta sale de la identidad')
   ok('nada no da cuenta', cuentaDeIdentidad(null) === null &&
     cuentaDeIdentidad('') === null && cuentaDeIdentidad('hola') === null)
   ok('nunca es la cuenta fija de antes', cuentaDeIdentidad('573000000012@s.whatsapp.net') !== 'local')
+}
+
+console.log('\nT16b: un chat directo nunca lleva el dispositivo (`:N`) en su jid')
+{
+  // Visto en vivo (2026-10-01): en una linea enlazada la lista mostraba a la misma
+  // persona dos veces, `<lid>@lid` con su nombre y `<lid>:90@lid` sin nombre. El
+  // dispositivo identifica de DONDE escribio, no CON QUIEN es la conversacion.
+  const LID = '100000000000001@lid'
+  const LID_DISP = '100000000000001:90@lid'
+  const TEL = '573000000012@s.whatsapp.net'
+  const TEL_DISP = '573000000012:12@s.whatsapp.net'
+  const GRUPO = '120363000000000099@g.us'
+  const msg = (remoteJid, extra = {}) => ({
+    key: { remoteJid, id: 'X1', fromMe: false, ...extra },
+    messageTimestamp: 1758500100, pushName: 'Persona Uno',
+    message: { conversation: 'hola' }
+  })
+
+  ok('jidDeChat quita el dispositivo de un directo @lid y @s.whatsapp.net',
+    jidDeChat(LID_DISP) === LID && jidDeChat(TEL_DISP) === TEL)
+  ok('quita tambien el agente viejo (`_1`)',
+    jidDeChat('573000000012_1:12@s.whatsapp.net') === TEL)
+  ok('deja pasar un grupo, un @status y lo que no es cadena',
+    jidDeChat(GRUPO) === GRUPO && jidDeChat('573000000012:3@status') === '573000000012:3@status' &&
+    jidDeChat(null) === '' && jidDeChat({ user: '573000000012', server: 's.whatsapp.net' }) === TEL)
+
+  const lid = filaDeMensaje(msg(LID_DISP), { cuenta: 'pn:1', identidades: YO })
+  ok('messages.upsert: el directo @lid sale sin dispositivo', lid?.chatJid === LID,
+    String(lid?.chatJid))
+  ok('y su remitente (la conversacion misma) tambien', lid?.senderJid === LID,
+    String(lid?.senderJid))
+  const tel = filaDeMensaje(msg(TEL_DISP), { cuenta: 'pn:1', identidades: YO })
+  ok('el directo @s.whatsapp.net tambien', tel?.chatJid === TEL, String(tel?.chatJid))
+  const limpio = filaDeMensaje(msg(LID), { cuenta: 'pn:1', identidades: YO })
+  ok('un jid que ya esta limpio no cambia', limpio?.chatJid === LID)
+  const grupo = filaDeMensaje(msg(GRUPO, { participant: '100000000000002:5@lid' }),
+    { cuenta: 'pn:1', identidades: YO })
+  ok('un grupo no se toca', grupo?.chatJid === GRUPO, String(grupo?.chatJid))
+  ok('ni el participante de un grupo, que sigue siendo quien escribio',
+    grupo?.senderJid === '100000000000002:5@lid', String(grupo?.senderJid))
+
+  const cambio = filaDeActualizacion({ key: { remoteJid: LID_DISP, id: 'X1' },
+    update: { message: null } })
+  ok('messages.update: el borrado apunta al chat sin dispositivo',
+    cambio?.chatJid === LID, String(cambio?.chatJid))
+
+  const chat = filaDeChat({ id: LID_DISP, name: 'Persona Uno' })
+  ok('chats.upsert / chats.update: la fila de chat sin dispositivo',
+    chat?.chatJid === LID, String(chat?.chatJid))
+  ok('un grupo en chats.upsert no se toca', filaDeChat({ id: GRUPO, name: 'G' })?.chatJid === GRUPO)
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

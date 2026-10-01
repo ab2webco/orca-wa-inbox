@@ -45,6 +45,15 @@ LINEA_MUDA = "transport-silent"
 # en sidecar/src/almacen.js). El MISMO numero que `LATIDO_VENCE_MS` de
 # sidecar/src/envio.js, y `scripts/check-clis` compara los dos (via `bin/wa-send`).
 LATIDO_VENCE_S = 15
+# Cuanto sin latir antes de que el DOCTOR diga que la linea esta muda. Es otra pregunta
+# que la de `LATIDO_VENCE_S`: `wa-send` espera un veredicto y necesita saber ya si hay
+# alguien; el doctor diagnostica, y un diagnostico falso manda al dueno a relanzar lo
+# que ya esta arrancando. Un sidecar que reinicia (el boton "Traer conversaciones", una
+# caida con su espera de hasta 60 s) deja de latir lo que tarda en cargar Baileys,
+# preguntar la version y abrir el almacen: visto en vivo, el sync de 5 minutos cayo en
+# esa ventana y dijo "ninguna senal de vida" sobre una linea que estaba recibiendo.
+# NO es la constante que `scripts/check-clis` compara con el sidecar: esa es la de arriba.
+LATIDO_MUDO_S = 120
 ESQUEMA_AJENO = "store-schema"
 
 # Lo que `state` devuelve cuando NO hay firma que devolver. Son contrato con wa-scope
@@ -254,6 +263,14 @@ def sidecar_vivo(con):
     del `doctor`, escrita una sola vez."""
     latido = ultimo_latido(con)
     return latido is not None and (time.time() - latido) <= LATIDO_VENCE_S
+
+
+def sidecar_mudo(con):
+    """Si el sidecar lleva tanto sin latir que ya no es un reinicio: es la regla del
+    doctor (`LATIDO_MUDO_S`). Nunca haber latido tambien es mudo: nadie leyo esta linea
+    desde que se enlazo."""
+    latido = ultimo_latido(con)
+    return latido is None or (time.time() - latido) > LATIDO_MUDO_S
 
 
 SIN_TRANSPORTE_DETALLE = (

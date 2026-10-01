@@ -136,7 +136,9 @@ def cmd_doctor(a):
         cuantas = len(lineas)
         etiquetas = ", ".join(x.get("account") or "?" for x in lineas)
         via = lineas[0].get("account") if lineas else None
-        if wa_store.sidecar_vivo(con):
+        # `sidecar_mudo` y no `sidecar_vivo`: el doctor da un margen que cubre un reinicio
+        # del sidecar (T16c), y `wa-send` conserva su plazo corto.
+        if not wa_store.sidecar_mudo(con):
             filas = [{"check": "a message transport", "ok": True,
                       "detalle": (f"{cuantas} linked line"
                                   f"{'' if cuantas == 1 else 's'} ({etiquetas})"),

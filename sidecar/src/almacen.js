@@ -36,7 +36,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { chmodSync, existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { cuentaDeIdentidad } from './mensajes.js'
+import { cuentaDeIdentidad, jidDeChat } from './mensajes.js'
 
 // El esquema lo crea el escritor y lo LEE `bin/wa_store.py`. Si algun dia divergen, el
 // lector tiene que decirlo en voz alta en vez de contestar filas incompletas: por eso
@@ -330,6 +330,62 @@ function migrar (con) {
   return { desde, hasta: ESQUEMA_VERSION, cuerpos, lineas }
 }
 
+/**
+ * Junta los directos guardados CON dispositivo (`X:90@lid`) en el mismo chat sin el
+ * (`X@lid`). Devuelve `{ chats, mensajes }` lo que movio, o `null` si no habia nada.
+ *
+ * POR QUE EXISTE. Hasta T16b el sidecar guardaba el jid tal como llegaba, y WhatsApp
+ * manda el mismo directo con y sin sufijo de dispositivo segun el evento: en una linea
+ * enlazada la lista traia a la misma persona dos veces, la de siempre con su nombre y
+ * la `:90` sin nombre. Arreglar la ingesta (`jidDeChat`) evita filas nuevas, pero las
+ * que ya estaban se quedarian duplicando para siempre.
+ *
+ * QUE CONSERVA. La fila SIN dispositivo manda —es la que tiene el nombre, y la que el
+ * dueno ya autorizo—: se queda con su no leido, y de la otra solo toma el nombre si ella
+ * no tenia, la ultima actividad mas reciente y la primera vez que se la vio mas vieja.
+ * Un chat que solo existia con dispositivo se RENOMBRA, no se pierde. Los mensajes
+ * pasan al jid limpio; si la llave `(cuenta, chat_jid, stanza_id)` ya existe ahi gana el
+ * que ya estaba, y el repetido NO se borra: queda bajo el jid viejo, que sin fila de
+ * `chat` ya no sale en ninguna lista. Lo unico que se borra es la fila de chat duplicada.
+ * Los grupos (`@g.us`) no se tocan, y cada cuenta se junta en la suya.
+ *
+ * IDEMPOTENTE: se guia por las filas de `chat` con dispositivo, y despues de correr no
+ * queda ninguna. Corre dentro de la misma transaccion que el sello de esquema.
+ */
+function unirDispositivos (con) {
+  const filas = con.prepare(
+    "select account, chat_jid from chat where chat_jid like '%:%@%'").all()
+  let chats = 0
+  let mensajes = 0
+  for (const { account, chat_jid: jid } of filas) {
+    const limpio = jidDeChat(jid)
+    if (limpio === jid) continue
+    const existe = con.prepare('select 1 from chat where account=? and chat_jid=?')
+      .get(account, limpio)
+    if (existe) {
+      con.prepare(`update chat set
+          chat_name = case when chat_name = '' or chat_name = chat_jid
+            then (select chat_name from chat where account=? and chat_jid=?)
+            else chat_name end,
+          last_ts = nullif(max(coalesce(last_ts, 0), coalesce(
+            (select last_ts from chat where account=? and chat_jid=?), 0)), 0),
+          first_seen = min(first_seen,
+            (select first_seen from chat where account=? and chat_jid=?))
+        where account=? and chat_jid=?`)
+        .run(account, jid, account, jid, account, jid, account, limpio)
+      con.prepare('delete from chat where account=? and chat_jid=?').run(account, jid)
+    } else {
+      con.prepare('update chat set chat_jid=? where account=? and chat_jid=?')
+        .run(limpio, account, jid)
+    }
+    mensajes += Number(con.prepare(
+      'update or ignore mensaje set chat_jid=? where account=? and chat_jid=?')
+      .run(limpio, account, jid).changes) || 0
+    chats += 1
+  }
+  return chats ? { chats, mensajes } : null
+}
+
 /** El directorio de estado de las herramientas. La MISMA tabla que `scope_db_path()` en
  *  `bin/wa-scope:42-46` y `bin/wa_settings.py:320-323`. Que sean dos implementaciones es
  *  un riesgo real —discrepar sobre esta ruta es escribir en una base que nadie lee— y
@@ -383,10 +439,21 @@ export function abrirAlmacen (ruta = rutaAlmacen()) {
   // estaba —y el lector negandose con `store-schema`, cerrado— y no contestando datos
   // incompletos (§11-E5).
   let migracion = null
+  let dispositivosUnidos = null
   con.exec('begin immediate')
   try {
     migracion = migrar(con)
     con.exec(ESQUEMA)
+    dispositivosUnidos = unirDispositivos(con)
+    if (dispositivosUnidos) {
+      // Aparte de `migracion`, a proposito: esa tabla es la de la subida de esquema y
+      // `wa-read doctor` arma su renglon con la ULTIMA fila, que hablaria de cuerpos y
+      // lineas de una via que esto no toca. Solo numeros, como `reclave_pendiente`.
+      con.prepare('insert into store_meta (key,value) values (?,?) ' +
+        'on conflict(key) do update set value=excluded.value')
+        .run('jid_dispositivo_unido', JSON.stringify({ at: Math.floor(Date.now() / 1000),
+          chats: dispositivosUnidos.chats, mensajes: dispositivosUnidos.mensajes }))
+    }
     if (migracion && (migracion.cuerpos || migracion.lineas)) {
       // Se anota solo cuando de verdad se llevo algo, la misma regla que `desalojo`:
       // §11-F2 pide reportar el desalojo cuando desaloja, no anunciar cada arranque.
@@ -418,11 +485,11 @@ export function abrirAlmacen (ruta = rutaAlmacen()) {
       if (existsSync(ruta + sufijo)) chmodSync(ruta + sufijo, 0o600)
     } catch { /* ver asegurarDirectorio */ }
   }
-  return new Almacen(con, ruta, migracion)
+  return new Almacen(con, ruta, migracion, dispositivosUnidos)
 }
 
 class Almacen {
-  constructor (con, ruta, migracion = null) {
+  constructor (con, ruta, migracion = null, dispositivosUnidos = null) {
     this.con = con
     this.ruta = ruta
     /** Que se llevo la subida de esquema al abrir, o `null` si no hubo ninguna. Lo
@@ -430,6 +497,9 @@ class Almacen {
      *  entre al panel, y esto lo ve quien mire el log el dia que pregunte adonde se
      *  fueron los mensajes viejos. */
     this.migracion = migracion
+    /** Cuantos directos con dispositivo (`:N`) junto al abrir y cuantos mensajes movio,
+     *  o `null` si no habia ninguno (T16b). */
+    this.dispositivosUnidos = dispositivosUnidos
   }
 
   /** Una linea enlazada. Es la contabilidad que distingue "todavia no hay de donde
