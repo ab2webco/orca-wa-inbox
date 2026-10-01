@@ -80,13 +80,14 @@ Exit 3 = denied. Note it and move to the next one. Do not negotiate with the gat
 Two runs over the same inbox open the same card twice and reply twice in the group.
 That shows. Take the lock before reading anything, and release it whatever happened:
 
-    "$WA/wa-scope" lock --note <triage|take>     # exit 4 = another run is going: stop
+    "$WA/wa-scope" lock --note triage            # exit 4 = another run is going: stop
     "$WA/wa-scope" unlock
 
 ## Do not invent work
 
-The triage runs every 5 minutes and the take every 2. Most of the time there is
-nothing to do, and that is fine: say it in one line and finish. A run that
+You only wake when `wa-scope pending --needs-agent` says a case needs language; the
+plugin's own minute (`wa-scope tick`) does the rest without you. When there is
+nothing left to do, that is fine: say it in one line and finish. A run that
 manufactures work to justify itself is worse than a run that did nothing.
 
 ## The orchestrator: reply, or dispatch

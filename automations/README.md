@@ -4,14 +4,15 @@ Las definiciones viven acá versionadas porque Orca las guarda en el `orca-data.
 cada instalación, y ese archivo es por build: lo que crees en el dev no existe en el
 instalado y viceversa.
 
-| archivo | cada | precheck |
+| archivo | cada | corre |
 |---|---|---|
-| `whatsapp-triage.json` | 5 min, L-V 8-18 | `wa-scope pending` |
-| `whatsapp-tomar-lo-marcado.json` | 2 min | `wa-scope pending --only-taken` |
+| `whatsapp-tick.json` | 1 min | `wa-scope tick` (solo comando, sin agente) |
+| `whatsapp-triage.json` | 5 min, L-V 8-18 | agente, con precheck `wa-scope pending --needs-agent` |
 
-El precheck hace dos cosas: sincroniza el panel (barato, sin agente) y **sale con 1 cuando
-no hay nada**, con lo que Orca marca la corrida `skipped_precheck` y no despierta al
-agente. Por eso la de "tomar" puede correr cada 2 minutos sin costar nada.
+`tick` no despierta a ningún agente: es un comando (`orca automations create --command`
+en un Orca 1.4.160-lab.84 o más nuevo). El precheck de `triage` **sale con 1 cuando
+ningún caso necesita lenguaje**, con lo que Orca marca la corrida `skipped_precheck` y
+no despierta al agente.
 
 ## Crearlas
 

@@ -2,8 +2,8 @@
 """Las cinco copias del resolvedor siguen siendo la misma, y salen de un solo texto.
 
 El resolvedor —el que decide DE CUAL instalacion salen wa-scope, wa-read y wa-send— vive
-inlineado en cinco lugares: los dos `precheck` de `orca-plugin.json`, los dos de
-`automations/` y el bloque de cada prompt. No es pereza: un precheck es una cadena de
+inlineado en cinco lugares: la linea de cada automation de `orca-plugin.json`
+(el `precheck` de triage, el `command` de tick), las dos de `automations/` y el bloque del prompt. No es pereza: un precheck es una cadena de
 shell dentro de un JSON y un prompt es texto que lee un modelo; ninguno de los dos puede
 importar un archivo. Lo que no se puede evitar se comprueba.
 
@@ -45,15 +45,23 @@ PROHIBIDOS = ('"', "$", "`", "\\")
 PRECHECK_MAX = 1024
 
 # Lo que cada automation corre DESPUES de resolver. Es lo unico que las distingue: si
-# alguna vez dos prechecks se diferencian en algo mas, es que el resolvedor divergio.
+# alguna vez dos lineas se diferencian en algo mas, es que el resolvedor divergio.
+# `triage` lo lleva en el precheck (el agente despierta solo si algo necesita lenguaje);
+# `tick` es solo-comando (T7) y lo lleva en `command`, con el mismo techo de 1024
+# (orca-oss/src/shared/plugins/plugin-automation-contribution.ts:43).
 COLAS = {
-    "triage": '"$WA/wa-scope" pending',
-    "take": '"$WA/wa-scope" pending --only-taken',
+    "triage": '"$WA/wa-scope" pending --needs-agent',
+    "tick": '"$WA/wa-scope" tick --json',
 }
 ARCHIVO_POR_AUTOMATION = {
     "triage": "whatsapp-triage.json",
-    "take": "whatsapp-tomar-lo-marcado.json",
+    "tick": "whatsapp-tick.json",
 }
+
+
+def campo(auto: dict) -> str:
+    """Donde vive la linea de shell: `command` en una solo-comando, si no `precheck`."""
+    return "command" if "command" in auto else "precheck"
 
 HEREDOC = re.compile(r"WA=\$\(python3 - <<'PY'\n([\s\S]*?)\nPY\n\)")
 
@@ -119,17 +127,18 @@ def main() -> int:
         # manifiesto, y el plugin no carga.
         comprobaciones += 1
         if len(esperado) > PRECHECK_MAX:
-            fallos.append(f"el precheck de {auto['id']} mide {len(esperado)} caracteres "
-                          f"y Orca acepta {PRECHECK_MAX}: el manifiesto quedaria invalido")
-        if auto["precheck"] != esperado:
-            fallos.append(f"orca-plugin.json ({auto['id']}): el precheck no es el "
+            fallos.append(f"el {campo(auto)} de {auto['id']} mide {len(esperado)} "
+                          f"caracteres y Orca acepta {PRECHECK_MAX}: el manifiesto "
+                          f"quedaria invalido")
+        if auto.get(campo(auto)) != esperado:
+            fallos.append(f"orca-plugin.json ({auto['id']}): el {campo(auto)} no es el "
                           f"resolvedor de scripts/resolver.py")
 
         # ── 6. La copia versionada en automations/, que es de donde se crean.
         f = RAIZ / "automations" / ARCHIVO_POR_AUTOMATION[auto["id"]]
         comprobaciones += 1
         try:
-            copia = json.loads(f.read_text(encoding="utf-8"))["precheck"]
+            copia = json.loads(f.read_text(encoding="utf-8"))[campo(auto)]
         except (OSError, ValueError, KeyError) as error:
             fallos.append(f"automations/{f.name}: no se pudo leer el precheck ({error})")
             continue
