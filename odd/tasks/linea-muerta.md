@@ -88,6 +88,32 @@ Baileys intenta login y nunca pide registro.
       `enTodosLosAnchos` (los estados marcados van también en inglés a los cuatro
       anchos) y `LATIDO_FRESCO` (el latido se sella al fotografiar).
 
+- [ ] T9 — Cada número, su línea (decisión del dueño, 2026-10-01). Visto en vivo:
+      tras vincular OTRO número, la línea nueva heredó los 305 chats y las 3
+      autorizaciones en `responder` del número viejo, porque todo cuelga de la cuenta
+      fija `local` y la fila de `linea` se pisó. Es una fuga de permisos entre líneas.
+      Los datos y las autorizaciones quedan atados a la identidad del teléfono; un
+      número nuevo empieza limpio; nada se borra y lo viejo reaparece si ese número
+      se vuelve a vincular.
+  - [x] T9a — Sidecar: la cuenta sale de la identidad (`pn:<dígitos>` de
+        `creds.me.id`); al abrir, si difiere de `store_meta.linea_activa`, cambia la
+        línea activa. Nunca copia filas ni pisa la `linea` de otra identidad.
+  - [ ] T9b — `wa_store`/`wa-read` (solo lectura): `linea_activa()`; `inbox`,
+        `chats`, `whoami`, `state` y `doctor` miran la línea activa por defecto.
+  - [ ] T9c — `wa-scope`: `chat_scope`, `juicio`, `agent_action`, `work`, `digest`
+        y `run_trace` por cuenta, filtrados por la línea activa; `scope`, `chats`,
+        `activity`, `navBadge` y `decisions` del storage se rearman por línea; lo que
+        el panel autorizó se persiste en `chat_scope` para no perderse al cambiar.
+  - [ ] T9d — `wa-send` se niega a mandar por una autorización de otra identidad.
+  - [ ] T9e — Worker y paneles: la cuenta viaja a `sidecar.cuenta`; el panel etiqueta
+        autorizaciones y decisiones con ella; datos de otra línea se muestran como
+        vacíos honestos; el worker sincroniza al cambiar de línea.
+  - [ ] T9f — Migración `local` → cuenta de la identidad en `capture.db` (sidecar) y
+        `scope.db` (`wa-scope`), atómica y visible en `wa-read doctor`. Escrita y
+        probada, SIN conectar al arranque hasta que el lead repare los datos vivos.
+  - [ ] T9g — Capturas: selector de conversaciones y panel de actividad tras cambiar
+        de número (listas limpias), ES/EN, 1440/768/390/320, revisadas a ojo.
+
 ## Criterios de aceptación
 
 - Con credenciales muertas (401), el panel muestra un QR nuevo sin intervención.
@@ -178,3 +204,17 @@ Baileys intenta login y nunca pide registro.
   aca arriba" con el botón DEBAJO. Corregido en es/en/pt ("aca abajo"/"below"/"aqui
   embaixo") y vuelto a fotografiar.
 
+
+### T9a — la cuenta sale de la identidad (sidecar)
+
+- RED `node test/sidecar-mensajes.test.mjs`:
+  `SyntaxError: The requested module '../sidecar/src/mensajes.js' does not provide an export named 'cuentaDeIdentidad'`
+- RED `node test/almacen.test.mjs`: `TypeError: alm.lineaActiva is not a function`
+- RED `node test/envio.test.mjs`:
+  `FALLA sale solo lo de la linea del socket — [{"jid":"120363111222333444@g.us","texto":"de la vieja"},{"jid":"573009998877@s.whatsapp.net","texto":"de la nueva"}]`
+  (lo encolado para el número viejo salía desde el socket del nuevo).
+- GREEN: `sidecar-mensajes` 87/87, `almacen` 194/194, `envio` 49/49,
+  `sidecar-pairing` 84/84, `sidecar-build` 5/5 (bundle reconstruido).
+- Cuenta `pn:<dígitos>`: el teléfono está en `creds.me.id` desde el emparejamiento; el
+  LID llega después por `creds.update`. Sin identidad (emparejando) no se escribe ni se
+  manda nada. Se quitó `WA_SIDECAR_CUENTA`: forzar una cuenta fija es justo la fuga.

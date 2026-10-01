@@ -411,6 +411,27 @@ class Almacen {
       .run(cuenta, segundos, lid, pn, nombre, grupos, segundos, grupos)
   }
 
+  /** La linea que esta vinculada AHORA (`store_meta.linea_activa`), o `null` si este
+   *  almacen nunca vio una. Los lectores (`bin/wa_store.py`) miran solo esta: las demas
+   *  lineas siguen guardadas, intactas, para el dia que ese numero se vuelva a
+   *  vincular. */
+  lineaActiva () {
+    const fila = this.con.prepare(
+      "select value from store_meta where key='linea_activa'").get()
+    return fila ? fila.value : null
+  }
+
+  /** Deja `cuenta` como linea activa. NO copia nada ni toca las filas de otra cuenta:
+   *  cambiar de numero es cambiar de cajon, no mudar el contenido. Devuelve si hubo
+   *  cambio y cual era la anterior, para que el sidecar lo pueda decir. */
+  activarLinea (cuenta) {
+    const antes = this.lineaActiva()
+    if (antes === cuenta) return { cambio: false, antes }
+    this.con.prepare('insert into store_meta (key,value) values (?,?) ' +
+      'on conflict(key) do update set value=excluded.value').run('linea_activa', cuenta)
+    return { cambio: true, antes }
+  }
+
   /**
    * Marca como mencion los mensajes guardados que nombran al dueno, ahora que se sabe
    * cual es su LID.
@@ -573,12 +594,16 @@ class Almacen {
    *
    * Los `borrador` NO entran: esperan la aprobacion del dueno, no un turno.
    */
-  tomarEnvio (ahora = Date.now()) {
+  tomarEnvio (ahora = Date.now(), cuenta) {
     const segundos = Math.floor(ahora / 1000)
     for (;;) {
-      const fila = this.con.prepare(
-        "select * from envio where estado='pendiente' order by created_at, rowid limit 1")
-        .get()
+      // Con `cuenta`, solo lo de esa linea (ver `atenderSalida`).
+      const fila = cuenta === undefined
+        ? this.con.prepare(
+          "select * from envio where estado='pendiente' order by created_at, rowid limit 1")
+          .get()
+        : this.con.prepare("select * from envio where estado='pendiente' and account=? " +
+          'order by created_at, rowid limit 1').get(cuenta)
       if (!fila) return null
       const r = this.con.prepare(
         "update envio set estado='enviando', claimed_at=? " +

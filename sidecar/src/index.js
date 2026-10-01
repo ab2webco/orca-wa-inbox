@@ -21,7 +21,8 @@ import { crearAlcance } from './alcance.js'
 import { atenderSalida, ENVIO_LATIDO_MS } from './envio.js'
 import { INGESTA, ingerirActualizacion, ingerirChats, ingerirContactos,
   ingerirMensaje } from './ingesta.js'
-import { identidadDeSesion, identidadesPropias, identidadPropia } from './mensajes.js'
+import { cuentaDeIdentidad, identidadDeSesion, identidadesPropias,
+  identidadPropia } from './mensajes.js'
 
 // El auth state es una credencial viva (docs/ENCARGO...§11-F1): en un equipo
 // compartido el umask por defecto lo deja legible para cualquiera. Esto tiene que
@@ -335,15 +336,6 @@ export function tocaEmitirAlmacen (ultimoMs, ahoraMs, forzar = false) {
   return forzar || ahoraMs - ultimoMs >= ALMACEN_LATIDO_MS
 }
 
-// La cuenta de esta linea. Es `local` por defecto y eso NO es un descuido heredado del
-// transporte viejo: `wa-scope set` escribe `account='local'` cuando el usuario autoriza
-// una conversacion desde el panel (bin/wa-scope:792), y `merged_scope` fuerza esa misma
-// cuenta para las filas que vienen del panel (bin/wa-scope:624). Estrenar otro nombre
-// aca dejaria cada autorizacion existente apuntando a una linea que no existe, y el
-// sintoma seria una bandeja vacia sin un solo error. El env esta para el dia que haya
-// una segunda linea, que es lo que la llave `(cuenta, jid)` ya soporta (§11-I1).
-const CUENTA_POR_DEFECTO = 'local'
-
 // Tope por adjunto. Un video de 60 MB en `~/.wa-inbox` no lo pidio nadie: la fila se
 // guarda igual, con su tipo, y sin ruta — que es exactamente el marcador tipado que
 // §11-C4 manda dejar en vez de una ruta que no se puede respaldar.
@@ -381,8 +373,24 @@ async function iniciar () {
   // El almacen vive en `~/.wa-inbox/capture.db`, al lado del registro de alcance y
   // FUERA del arbol del plugin, que esta verificado por content-hash (§7). El porque
   // entero esta en sidecar/src/almacen.js.
-  const cuenta = process.env.WA_SIDECAR_CUENTA || CUENTA_POR_DEFECTO
   const almacen = abrirAlmacen(rutaAlmacen(process.env))
+  // La cuenta de esta linea es el TELEFONO vinculado (`cuentaDeIdentidad`), no la `local`
+  // fija de antes: con la fija, vincular otro numero le daba al nuevo las conversaciones
+  // y las autorizaciones del viejo. Con credenciales ya guardadas se sabe desde el
+  // arranque; emparejando es `null` hasta que WhatsApp diga quien es, y en ese rato no
+  // se guarda ni se manda nada a nombre de nadie.
+  let cuenta = null
+  const fijarCuenta = (pn) => {
+    const nueva = cuentaDeIdentidad(pn)
+    if (!nueva || nueva === cuenta) return
+    cuenta = nueva
+    // Cambiar de numero cambia de cajon: no se copia ni se pisa nada de la otra linea.
+    const { cambio, antes } = almacen.activarLinea(cuenta)
+    // Sin numero ni contenido: solo que la linea activa cambio, para el log del worker.
+    if (cambio && antes) process.stderr.write('linea: cambio la linea activa\n')
+    emitir({ type: 'linea', cuenta, cambio, ts: Date.now() })
+  }
+  fijarCuenta(state.creds?.me?.id)
   const mediaDir = rutaMedia(process.env)
   // Las herramientas las pasa el worker: buscarlas en el PATH ya habia mandado a una
   // a la instalacion equivocada (§11-E4).
@@ -494,6 +502,10 @@ async function iniciar () {
     let identidadUlt = null
     const refrescarIdentidad = () => {
       const yo = identidadDeSesion(sock.authState?.creds, sock.user)
+      // La identidad decide la cuenta ANTES de escribir nada: la fila de `linea` es de
+      // ESTE telefono, y nunca pisa la de otro numero.
+      fijarCuenta(yo.pn)
+      if (!cuenta) return
       const huella = `${yo.lid}|${yo.pn}|${yo.nombre}`
       if (huella === identidadUlt) return
       const teniaLid = identidadUlt !== null && identidades.size > 1
@@ -507,7 +519,8 @@ async function iniciar () {
       const reparados = yo.lid && !teniaLid
         ? almacen.repararMenciones({ cuenta, lid: yo.lid })
         : 0
-      emitir({ type: 'identidad', me: numeroVisible(yo.pn), reparados, ts: Date.now() })
+      emitir({ type: 'identidad', me: numeroVisible(yo.pn), cuenta, reparados,
+        ts: Date.now() })
     }
 
     // `useMultiFileAuthState` escribe las claves en archivos: `saveCreds` los
@@ -548,7 +561,7 @@ async function iniciar () {
             // es la misma forma que leen los otros tres eventos.
             anotarChats(Object.entries(grupos || {})
               .map(([jid, meta]) => ({ ...meta, id: jid })))
-            almacen.registrarLinea({ cuenta, grupos: Object.keys(grupos || {}).length })
+            if (cuenta) almacen.registrarLinea({ cuenta, grupos: Object.keys(grupos || {}).length })
           })
           .catch((error) => emitirError('grupos-sin-leer', error?.message || error))
 
@@ -609,6 +622,8 @@ async function iniciar () {
     sock.ev.on('messages.upsert', async ({ messages }) => {
       for (const wa of messages || []) {
         conteos.llegaron += 1
+        // Sin identidad no hay cajon donde guardarlo: nada se escribe a nombre de nadie.
+        if (!cuenta) continue
         try {
           // El alcance se refresca con su propio TTL: el usuario autoriza un chat en
           // el panel y espera que el proximo mensaje ya entre.
@@ -638,6 +653,7 @@ async function iniciar () {
     // (§11-B4). Un mensaje borrado se quedaba en la bandeja para siempre, y uno
     // editado se atendia por lo que decia antes.
     sock.ev.on('messages.update', (eventos) => {
+      if (!cuenta) return
       for (const evento of eventos || []) {
         try {
           const { motivo } = ingerirActualizacion({
@@ -661,6 +677,7 @@ async function iniciar () {
     // `typeof === 'number'`, que es exactamente lo que un uno a uno del historial NO
     // trae.
     const anotarChats = (chats) => {
+      if (!cuenta) return { anotados: 0, omitidos: 0 }
       try {
         return ingerirChats({
           almacen,
@@ -687,6 +704,7 @@ async function iniciar () {
     // Se lee el nombre Y NADA MAS: es la misma contabilidad que ya se guarda de cada
     // grupo, no contenido de nadie (§5).
     const anotarContactos = (contactos) => {
+      if (!cuenta) return { nombrados: 0 }
       try {
         return ingerirContactos({
           almacen,
@@ -765,7 +783,9 @@ async function iniciar () {
     }
     if (drenando) return
     drenando = true
-    atenderSalida({ almacen, conectado, enviar: (jid, contenido) => socket.sendMessage(jid, contenido) })
+    // Solo lo encolado para ESTE numero (`cuenta`): lo de otra linea espera a su numero.
+    atenderSalida({ almacen, conectado, cuenta,
+      enviar: (jid, contenido) => socket.sendMessage(jid, contenido) })
       .catch((error) => avisarFallo('salida-sin-atender', error))
       .finally(() => { drenando = false })
   }, ENVIO_LATIDO_MS)

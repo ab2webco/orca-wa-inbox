@@ -195,6 +195,30 @@ console.log('\nsidecar: un borrador NO se envia, y un socket caido no consume la
   almacen.cerrar()
 }
 
+console.log('\nT9: el socket de un numero no manda lo encolado para otro')
+{
+  // Cada numero, su linea. Un envio encolado mientras estaba vinculado el numero viejo
+  // NO puede salir desde el nuevo: el cliente recibiria un mensaje de un numero que no
+  // conoce, firmado como si fuera el de siempre.
+  const home = nueva()
+  const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  almacen.encolarEnvio({ reqId: 'R-VIEJA', cuenta: 'pn:573001112233', chatJid: ALFA,
+    chatNombre: 'Cliente Alfa', cuerpo: 'de la vieja', estado: ENVIO.PENDIENTE })
+  almacen.encolarEnvio({ reqId: 'R-NUEVA', cuenta: 'pn:573000000012', chatJid: LAURA,
+    chatNombre: 'Laura Mendez', cuerpo: 'de la nueva', estado: ENVIO.PENDIENTE })
+  const socket = socketFalso()
+  await atenderSalida({ almacen, enviar: socket.enviar, cuenta: 'pn:573000000012' })
+  ok('sale solo lo de la linea del socket', socket.enviados.length === 1 &&
+    socket.enviados[0].jid === LAURA, JSON.stringify(socket.enviados))
+  ok('y lo de la otra linea sigue pendiente, esperando a su numero',
+    filasEnvio(home).find((f) => f.req_id === 'R-VIEJA').estado === ENVIO.PENDIENTE)
+  // Sin cuenta conocida (emparejando, todavia sin identidad) no se manda nada.
+  await atenderSalida({ almacen, enviar: socket.enviar, cuenta: null })
+  ok('sin identidad todavia no se manda nada', socket.enviados.length === 1,
+    JSON.stringify(socket.enviados))
+  almacen.cerrar()
+}
+
 console.log('\nsidecar: lo que WhatsApp rechaza queda rechazado, no enviado')
 {
   const home = nueva()

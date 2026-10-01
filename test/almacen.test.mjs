@@ -166,6 +166,50 @@ console.log('\nF1: el almacen es texto ajeno — 0600, no el umask')
   ok('capture.db queda en 0600', modo === 0o600, '0' + modo.toString(8))
 }
 
+console.log('\nT9: cada numero, su linea — la linea activa no pisa a la otra')
+{
+  const home = nueva()
+  const alm = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  ok('un almacen nuevo no tiene linea activa', alm.lineaActiva() === null,
+    String(alm.lineaActiva()))
+  const VIEJA = 'pn:573001112233'
+  const NUEVA = 'pn:573000000012'
+  const primera = alm.activarLinea(VIEJA)
+  ok('activar la primera linea la deja activa', alm.lineaActiva() === VIEJA &&
+    primera.cambio === true && primera.antes === null, JSON.stringify(primera))
+  alm.registrarLinea({ cuenta: VIEJA, lid: '100000000000001@lid',
+    pn: '573001112233:7@s.whatsapp.net', nombre: 'Vieja' })
+  alm.anotarChat({ cuenta: VIEJA, chatJid: ALFA, nombre: 'Cliente Alfa', esGrupo: 1 })
+  ok('activar la MISMA linea otra vez no es un cambio',
+    alm.activarLinea(VIEJA).cambio === false)
+
+  // Se vincula OTRO numero.
+  const cambio = alm.activarLinea(NUEVA)
+  ok('activar otra identidad cambia la linea activa', alm.lineaActiva() === NUEVA &&
+    cambio.cambio === true && cambio.antes === VIEJA, JSON.stringify(cambio))
+  alm.registrarLinea({ cuenta: NUEVA, lid: '100000000000002:1@lid',
+    pn: '573000000012:7@s.whatsapp.net', nombre: 'Nueva' })
+  alm.cerrar()
+
+  const con = new DatabaseSync(rutaAlmacen({ HOME: home }))
+  const lineas = con.prepare('select account, lid, name from linea order by account').all()
+  ok('la fila de la linea vieja NO se piso: hay dos lineas', lineas.length === 2 &&
+    lineas.some((l) => l.account === VIEJA && l.name === 'Vieja' &&
+      l.lid === '100000000000001@lid'), JSON.stringify(lineas))
+  const chatsNueva = con.prepare('select count(*) c from chat where account=?').get(NUEVA).c
+  const chatsVieja = con.prepare('select count(*) c from chat where account=?').get(VIEJA).c
+  ok('la linea nueva no hereda ninguna conversacion', chatsNueva === 0, String(chatsNueva))
+  ok('y las de la vieja siguen ahi, sin borrar', chatsVieja === 1, String(chatsVieja))
+  con.close()
+
+  // Vuelve el numero viejo: reaparece tal cual.
+  const alm2 = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  const vuelta = alm2.activarLinea(VIEJA)
+  ok('volver a vincular el numero viejo lo reactiva', vuelta.cambio === true &&
+    alm2.lineaActiva() === VIEJA, JSON.stringify(vuelta))
+  alm2.cerrar()
+}
+
 // ── El escenario completo, que es donde viven los seis casos de uso ─────────────────
 const home = nueva()
 const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))
