@@ -436,6 +436,18 @@ with tempfile.TemporaryDirectory() as home:
     ok("reabrir un caso respondido tambien borra la firma",
        reabierto["propuesta_aprobada"] is None, f"quedo {reabierto}")
 
+    # Un trabajo que llego a listo sin resultado del trabajador (movido a mano) conserva
+    # la propuesta `trabajar`: firmarla ahi no es lanzar otro trabajo.
+    con = db_de(home)
+    con.execute("update caso set etapa='listo', propuesta=?, propuesta_version='vt', "
+                "propuesta_aprobada=null where case_id=?",
+                ('{"tipo":"trabajar","instrucciones":"x"}', int(cid)))
+    con.commit()
+    con.close()
+    p = js(home, "caso", "aprobar", cid, "--version", "vt", "--actor", "dueno")[0]
+    ok("aprobar en listo solo deja la marca, aunque la propuesta sea trabajar",
+       p["etapa"] == "listo" and p["aprobada"] is True, f"quedo {p}")
+
     # Un caso que no esta esperando decision no se aprueba.
     crudo = str(js(home, "caso", "crear", "--chat", CHAT, "--stanza", "S7",
                    "--actor", "agente")[0]["case_id"])

@@ -2196,7 +2196,8 @@ def cmd_caso_aprobar(con, a):
                  f"{' or '.join(ETAPAS_APROBABLES)} can be approved")
     detalle = f"aprobada {a.version}"
     campos = {"propuesta_aprobada": a.version}
-    if json.loads(caso["propuesta"])["tipo"] == "trabajar":
+    # Solo desde decision: en listo el trabajo ya corrio, y firmar ahi no lanza otro.
+    if caso["etapa"] == "decision" and json.loads(caso["propuesta"])["tipo"] == "trabajar":
         # Se valida con la firma que se esta poniendo: es justo la que la exige.
         caso_valida(dict(caso, **campos), "trabajo")
         caso_mover(con, caso, "trabajo", a.actor, detalle, **campos)
