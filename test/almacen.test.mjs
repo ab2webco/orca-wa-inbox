@@ -749,6 +749,52 @@ console.log('\nel doctor: el transporte exige latido fresco')
     filaViva && filaViva.ok === true && vivo.code === 0, JSON.stringify(filaViva))
 }
 
+// ── T16c: la alarma de "linea muda" no salta durante un reinicio normal ────────────
+// Visto en vivo (2026-10-01): el sync de 5 minutos corrio mientras el boton "Traer
+// conversaciones" reiniciaba el sidecar y el doctor dijo "ninguna senal de vida desde
+// las 12:20" sobre una linea que estaba recibiendo. Un sidecar que reinicia deja de
+// latir lo que tarda en arrancar —cargar Baileys, preguntar la version, abrir el
+// almacen—, y 15 s (el plazo de `wa-send`, que es un proceso que espera un veredicto) es
+// demasiado corto para eso. El DIAGNOSTICO del doctor tiene su propio plazo.
+console.log('\nT16c: el doctor no da la linea por muda durante un reinicio')
+{
+  const ahora = Date.now()
+  const transporte = () => (leerJson(home, ['doctor']).filas || [])
+    .find((f) => f.check === 'a message transport')
+
+  almacen.latir(ahora - 45 * 1000)
+  const reiniciando = transporte()
+  ok('con 45 s sin latir (un reinicio) el transporte sigue en verde',
+    reiniciando && reiniciando.ok === true, JSON.stringify(reiniciando))
+
+  const limiteMs = ahora - 100 * 1000
+  almacen.latir(limiteMs)
+  const lento = transporte()
+  ok('y con 100 s todavia, un arranque lento', lento && lento.ok === true,
+    JSON.stringify(lento))
+
+  const muerto = ahora - 4 * 60 * 1000
+  almacen.latir(muerto)
+  const mudo = transporte()
+  ok('con 4 minutos sin latir si es una linea muda', mudo && mudo.ok === false &&
+    mudo.code === 'transport-silent', JSON.stringify(mudo))
+  const horaReal = new Date(muerto).toTimeString().slice(0, 5)
+  ok('y el "desde" es el ultimo latido de verdad', (mudo?.detalle || '').includes(
+    `since ${new Date(muerto).getFullYear()}-`) && (mudo?.detalle || '').includes(horaReal),
+    String(mudo?.detalle))
+
+  // `wa-send` NO cambia: un envio que espera un veredicto no puede esperar dos minutos
+  // a saber que no hay nadie. El plazo del doctor y el de wa-send son dos preguntas.
+  almacen.latir(ahora - 45 * 1000)
+  const r = spawnSync('python3', ['-c',
+    'import sys; sys.path.insert(0, sys.argv[1]); import wa_store; ' +
+    'con = wa_store.abrir(); print(wa_store.sidecar_vivo(con))', join(RAIZ, 'bin')],
+  { env: { ...process.env, HOME: home, PYTHONDONTWRITEBYTECODE: '1' }, encoding: 'utf8' })
+  ok('con 45 s sin latir, `sidecar_vivo` (la regla de wa-send) sigue diciendo que no',
+    r.stdout.trim() === 'False', `${r.stdout} ${r.stderr}`)
+  almacen.latir()
+}
+
 console.log('\nF2: tope de retencion, con desalojo VISIBLE')
 {
   const podado = almacen.podar({ max: 3, dias: 36500, ahora: (T0 + 3000) * 1000 })
