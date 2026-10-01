@@ -2303,5 +2303,66 @@ const verbo = (llamada) => llamada[1]
   apagar()
 }
 
+// ───────── T16: "Traer conversaciones" refresca la lista, sin esperar al reloj ─────────
+console.log('\nworker: traer la libreta deja la lista al dia en segundos')
+{
+  // El boton relanza la sesion y las conversaciones llegan DESPUES, cuando el sidecar
+  // conecta y pide el estado de la libreta. La lista que lee el panel solo se rearmaba en
+  // el sync de 5 minutos: una conversacion nueva no aparecia hasta entonces.
+  const guion = join(RAIZ, 'sidecar-libreta.cjs')
+  writeFileSync(guion,
+    '#!/usr/bin/env node\n' +
+    'function emit (m) { process.stdout.write(JSON.stringify(m) + "\\n") }\n' +
+    'emit({ type: "connection", state: "connecting" })\n' +
+    // Conecta y late sin parar, igual que el de verdad; la libreta llega mas tarde.
+    'setTimeout(() => emit({ type: "connection", state: "open" }), 100)\n' +
+    'setInterval(() => emit({ type: "latido", ts: Date.now(), conectado: true }), 300)\n' +
+    'setTimeout(() => emit({ type: "libreta", ok: true }), 1200)\n' +
+    'setInterval(() => {}, 1000)\n', { mode: 0o755 })
+  const syncs = join(RAIZ, 'syncs-libreta.txt')
+  const wascope = '#!/bin/sh\n' +
+    `[ "$1" = "sync" ] && echo "$@" >> ${JSON.stringify(syncs)}\n` +
+    'echo \'[{"synced": true, "destinos": []}]\'\n'
+  const cuenta = () => existsSync(syncs) ? readFileSync(syncs, 'utf8').trim().split('\n').length : 0
+  // Un resolvedor de mentira: este bloque corre despues de que otro borro el userData del
+  // HOME de prueba, y el de verdad contestaria que no encuentra el de Orca.
+  const resolvedor = join(RAIZ, 'resolve-libreta.mjs')
+  writeFileSync(resolvedor,
+    'import { mkdirSync } from "node:fs"\n' +
+    'const dir = ' + JSON.stringify(join(RAIZ, 'auth-libreta')) + '\n' +
+    'mkdirSync(dir, { recursive: true })\n' +
+    'process.stdout.write(JSON.stringify({ ok: true, dir }))\n')
+  const toolsLibreta = herramientas('libreta', wascope)
+  const orca = hostFalso(toolsLibreta, { chats: [] }, guion)
+  orca.host.call = (function (original) {
+    return async (action, params) => {
+      if (action === 'settings.get') {
+        return { value: { toolsDir: toolsLibreta, sidecarPath: guion, authDirResolverPath: resolvedor } }
+      }
+      return original(action, params)
+    }
+  })(orca.host.call)
+  const { apagar } = await arranca(orca)
+  // Al arrancar: la libreta que llega NO pedida no dispara nada propio.
+  await dormir(2500)
+  const base = cuenta()
+  await dormir(1500)
+  ok('sin que nadie la pida, los latidos y la libreta no disparan un sync', cuenta() === base,
+    `${base} -> ${cuenta()}`)
+
+  orca.store.sidecarRequest = { id: 'libreta-1', action: 'libreta', at: new Date().toISOString() }
+  await hasta(() => orca.store.sidecarResult && orca.store.sidecarResult.requestId === 'libreta-1', 15000)
+  ok('el boton contesta que si', orca.store.sidecarResult && orca.store.sidecarResult.ok === true,
+    JSON.stringify(orca.store.sidecarResult))
+  const alConectar = await hasta(() => cuenta() >= base + 1, 8000)
+  ok('al conectar la linea corre un sync, sin esperar los 5 minutos', alConectar, `${base} -> ${cuenta()}`)
+  const alLlegar = await hasta(() => cuenta() >= base + 2, 8000)
+  ok('y otro cuando la libreta llega, que es cuando estan las conversaciones nuevas', alLlegar,
+    `${base} -> ${cuenta()}`)
+  await dormir(2500)
+  ok('y ahi paran: no es un sync por cada latido', cuenta() === base + 2, `${base} -> ${cuenta()}`)
+  apagar()
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)
