@@ -185,6 +185,19 @@ def cmd_doctor(a):
                         f"was touched, and the linked line fills the store again."),
             "requerido": False, "code": "store-migrated",
             "detailCode": "store-migrated-dropped", "via": None})
+    # La re-clave de `local` al numero de su linea (T9), por lo mismo que la migracion
+    # de arriba: `ok: False` para que llegue al panel, y no bloquea, porque no hay nada
+    # roto. Se dice adonde fueron las conversaciones de antes.
+    for r in wa_store.reclaves()[-1:]:
+        numero = str(r["hacia"]).replace("pn:", "+", 1)
+        filas.append({
+            "check": "line re-keyed", "ok": False,
+            "detalle": (f"optional — on {wa_store.ts(r['at'])} the {r['chats']} "
+                        f"conversations and {r['mensajes']} messages that were stored "
+                        f"before each number became its own line were assigned to "
+                        f"{numero}, the number they came from. Nothing was deleted."),
+            "requerido": False, "code": "store-rekeyed",
+            "detailCode": "store-rekeyed-line", "via": None})
     # Lo opcional no bloquea: sin transcripcion todo funciona, solo que los audios
     # quedan sin leer. Marcarlo como rotura pintaria de rojo un equipo sano.
     ok, detalle, dcode = _transcribe_check()

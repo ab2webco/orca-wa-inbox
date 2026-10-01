@@ -597,6 +597,25 @@ def ultima_migracion():
             "cuerpos": r["cuerpos"], "lineas": r["lineas"]}
 
 
+def reclaves():
+    """Las re-claves de `local` al numero de su linea (T9), de la mas vieja a la mas
+    nueva, o []. Las anota el sidecar en capture.db (`reclavarLocal`); `wa-scope` las
+    lee de aca para mover lo suyo al MISMO numero, y el doctor las muestra. Solo
+    lectura, y sin `abrir()` por lo mismo que `ultima_migracion`."""
+    ruta = store_db_path()
+    if not os.path.exists(ruta):
+        return []
+    try:
+        con = sqlite3.connect(f"file:{ruta}?mode=ro", uri=True, timeout=5)
+        con.row_factory = sqlite3.Row
+        filas = con.execute("select at, desde, hacia, chats, mensajes from reclave "
+                            "order by at, rowid").fetchall()
+        con.close()
+    except sqlite3.Error:
+        return []
+    return [dict(r) for r in filas]
+
+
 def ultimo_desalojo(con):
     """Cuanto se desalojo la ultima vez. §11-F2: "un desalojo callado es un caso que se
     pierde y se descubre despues, cuando la fila ya salio sin explicacion"."""

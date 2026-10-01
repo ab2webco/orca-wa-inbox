@@ -1719,6 +1719,73 @@ def cmd_accounts(con, a):
     return filas
 
 
+def cmd_reclave(con, a):
+    """Pasa lo que colgaba de `local` al numero de su linea (T9), en scope.db y en el
+    storage del panel.
+
+    El numero NO se deduce aca: es el que anoto el sidecar en capture.db al re-clavar
+    lo suyo (`reclavarLocal`, tabla `reclave`), para que las dos bases terminen en el
+    MISMO numero. Sin esa anotacion no se mueve nada.
+
+    EXPLICITO, a proposito: ningun comando de todos los dias lo corre. En una maquina
+    donde la fila `local` se piso con OTRO numero, re-clavar le daria al nuevo las
+    autorizaciones del viejo, que es la fuga que T9 cierra.
+
+    Todo o nada en scope.db (una transaccion). Si el numero ya tenia su propia fila
+    (lo autorizo despues de vincular), la suya manda y la copia `local` se descarta. Se
+    puede correr dos veces: la segunda no encuentra nada que mover."""
+    destino = next((r["hacia"] for r in reversed(wa_store.reclaves())
+                    if r.get("desde") == CUENTA_LOCAL), None)
+    if not destino:
+        return [{"hacia": None, "movidas": 0,
+                 "motivo": "capture.db has no re-key from local; nothing was moved"}]
+    movidas = {}
+    try:
+        con.execute("begin immediate")
+        for tabla in ("chat_scope", "juicio"):
+            movidas[tabla] = con.execute(
+                f"select count(*) c from {tabla} where account=?", (CUENTA_LOCAL,)
+            ).fetchone()["c"]
+            con.execute(f"update or ignore {tabla} set account=? where account=?",
+                        (destino, CUENTA_LOCAL))
+            con.execute(f"delete from {tabla} where account=?", (CUENTA_LOCAL,))
+        for tabla in ("agent_action", "work", "digest"):
+            movidas[tabla] = con.execute(
+                f"update {tabla} set account=? where account=?",
+                (destino, CUENTA_LOCAL)).rowcount
+        # El rastro de la corrida: la llave de `local` es el nombre a secas.
+        viejos = [r["name"] for r in con.execute(
+            "select name from run_trace where name not like '%@%'")]
+        for nombre in viejos:
+            con.execute("update or ignore run_trace set name=? where name=?",
+                        (f"{nombre}@{destino}", nombre))
+            con.execute("delete from run_trace where name=?", (nombre,))
+        movidas["run_trace"] = len(viejos)
+        con.execute("insert or ignore into wa_account (id, kind, label, enabled, "
+                    "linked_at, updated_at) values (?, 'pn', NULL, 1, ?, ?)",
+                    (destino, ahora(), ahora()))
+        con.commit()
+    except sqlite3.Error:
+        con.rollback()
+        raise
+    # El storage del panel: lo que no dice de que linea es, es de `local`, y pasa al
+    # mismo numero. Lo que ya dice otra linea no se toca.
+    raw = plugin_store_raw()
+    scope = raw.get("scope") if isinstance(raw.get("scope"), dict) else {}
+    decisiones = raw.get("decisions") if isinstance(raw.get("decisions"), dict) else {}
+    etiquetadas = 0
+    for coleccion in (scope, decisiones):
+        for entrada in coleccion.values():
+            if isinstance(entrada, dict) and cuenta_de_entrada(entrada) == CUENTA_LOCAL:
+                entrada["account"] = destino
+                etiquetadas += 1
+    if etiquetadas:
+        plugin_store_write(scope, extra={"decisions": decisiones})
+    movidas["panel"] = etiquetadas
+    return [{"desde": CUENTA_LOCAL, "hacia": destino,
+             "movidas": sum(movidas.values()), "detalle": movidas}]
+
+
 def cmd_log(con, a):
     return [dict(r) for r in con.execute(
         "select * from agent_action where account=? order by id desc limit ?",
@@ -1898,6 +1965,10 @@ def main():
     s.add_argument("--stanza", default=""); s.add_argument("--action", required=True)
     s.add_argument("--issue", default=""); s.add_argument("--detail", default="")
     s.set_defaults(fn=cmd_record)
+
+    add("reclave", help="assign what was stored under 'local' to the phone number the "
+                        "sidecar recorded in capture.db (explicit; nothing runs it "
+                        "on its own)").set_defaults(fn=cmd_reclave)
 
     s = add("juicio", help="caches a message's verdict, keyed by "
                            "(account, chat_jid, stanza_id); bin/wa_store.py reads it")

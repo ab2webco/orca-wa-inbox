@@ -573,6 +573,101 @@ def revisa_linea_por_numero(fallos: list) -> int:
     return hechas
 
 
+def revisa_reclave_local(fallos: list) -> int:
+    """T9f: lo que colgaba de `local` en scope.db pasa al numero de su linea, al MISMO
+    numero que anoto el sidecar en capture.db. Explicito: ningun comando de todos los
+    dias lo hace solo, porque en una maquina con la fila `local` pisada por otro numero
+    le daria al nuevo lo del viejo."""
+    hechas = 0
+    if not shutil.which("node"):
+        print("  aviso: sin node, no se armo el almacen de la re-clave", file=sys.stderr)
+        return hechas
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+
+        def scope(*args):
+            return subprocess.run([str(BIN / "wa-scope"), *args], capture_output=True,
+                                  text=True, env=env, timeout=180)
+
+        # Una maquina de antes de T9: todo en `local`, en las dos bases y en el panel.
+        scope("set", "100@g.us", "--target", "SOP", "--mode", "responder")
+        scope("record", "--chat", "100@g.us", "--name", "G", "--stanza", "A1",
+              "--action", "alert", "--detail", "aviso | de antes")
+        scope("work", "--stanza", "W1", "--chat", "100@g.us", "--name", "G", "--next", "x")
+        scope("juicio", "--chat", "100@g.us", "--stanza", "A1", "--clase", "alert")
+        scope("lock")
+        scope("unlock")
+        man = json.loads((RAIZ / "orca-plugin.json").read_text(encoding="utf-8"))
+        store = (home / ("Library/Application Support" if sys.platform == "darwin"
+                         else ".config") / "orca" / "plugins-data" /
+                 f"{man['publisher']}.{man['id']}" / "storage.json")
+        datos = json.loads(store.read_text(encoding="utf-8")) if store.exists() else {}
+        datos.setdefault("scope", {})["400@g.us"] = {"chatName": "Del panel",
+                                                     "mode": "observar"}
+        datos["decisions"] = {"A1": {"decision": "take", "at": "2026-09-24T08:00:00Z"}}
+        store.parent.mkdir(parents=True, exist_ok=True)
+        store.write_text(json.dumps(datos), encoding="utf-8")
+
+        # El sidecar re-clava capture.db (su esquema) y vincula ese mismo numero.
+        js = ("import { abrirAlmacen, rutaAlmacen } from %r;"
+              "const a = abrirAlmacen(rutaAlmacen({ HOME: process.env.HOME }));"
+              "a.registrarLinea({ cuenta: 'local', pn: '573001112233:7@s.whatsapp.net' });"
+              "a.anotarChat({ cuenta: 'local', chatJid: '100@g.us', nombre: 'G', esGrupo: 1 });"
+              "a.reclavarLocal(); a.activarLinea(%r); a.latir(); a.cerrar();"
+              % ((RAIZ / "sidecar" / "src" / "almacen.js").as_uri(), VIEJA))
+        subprocess.run([shutil.which("node"), "--input-type=module", "-e", js], env=env,
+                       check=True, capture_output=True, timeout=120)
+
+        # Sin el comando explicito, los comandos de todos los dias NO re-clavan nada.
+        scope("sync")
+        con = sqlite3.connect(home / ".wa-inbox" / "scope.db")
+        locales = con.execute("select count(*) from chat_scope where account='local'").fetchone()[0]
+        con.close()
+        hechas += 1
+        if not locales:
+            fallos.append("un `wa-scope sync` re-clavo `local` por su cuenta: la migracion "
+                          "tiene que ser explicita hasta reparar los datos vivos")
+
+        p = scope("reclave", "--json")
+        r = (json.loads(p.stdout or "[]") or [{}])[0]
+        hechas += 1
+        if r.get("hacia") != VIEJA:
+            fallos.append(f"`wa-scope reclave` no fue al numero que anoto el sidecar: {r!r} "
+                          f"{(p.stderr or '').strip()[:200]}")
+        con = sqlite3.connect(home / ".wa-inbox" / "scope.db")
+        quedan = {t: con.execute(f"select count(*) from {t} where account='local'").fetchone()[0]
+                  for t in ("chat_scope", "agent_action", "work", "juicio")}
+        rastro_viejo = con.execute(
+            "select count(*) from run_trace where name='triage'").fetchone()[0]
+        con.close()
+        hechas += 2
+        if any(quedan.values()):
+            fallos.append(f"despues de la re-clave quedan filas `local`: {quedan!r}")
+        if rastro_viejo:
+            fallos.append("el rastro de la corrida de antes no paso al numero")
+
+        lista = {f.get("chat_jid"): f.get("mode")
+                 for f in json.loads(scope("list", "--json").stdout or "[]")}
+        corrida = json.loads(scope("run", "--json").stdout or "[{}]")[0]
+        hechas += 2
+        if lista.get("100@g.us") != "responder" or lista.get("400@g.us") != "observar":
+            fallos.append(f"con el numero re-clavado vinculado, sus autorizaciones no "
+                          f"aparecen: {lista!r}")
+        if corrida.get("state") != "ok":
+            fallos.append(f"con el numero re-clavado, su corrida no aparece: {corrida!r}")
+        datos = json.loads(store.read_text(encoding="utf-8"))
+        hechas += 1
+        if (datos.get("decisions", {}).get("A1") or {}).get("account") != VIEJA:
+            fallos.append(f"la decision de antes no quedo con su numero: "
+                          f"{datos.get('decisions')!r}")
+        segunda = (json.loads(scope("reclave", "--json").stdout or "[]") or [{}])[0]
+        hechas += 1
+        if segunda.get("movidas"):
+            fallos.append(f"correr la re-clave dos veces volvio a mover algo: {segunda!r}")
+    return hechas
+
+
 def revisa_rastro_corrida(fallos: list) -> int:
     """Los cinco finales de una corrida, recorridos de verdad.
 
@@ -1387,7 +1482,8 @@ def main() -> int:
                       + revisa_firma_del_panel(fallos)
                       + revisa_casa_del_runtime(fallos)
                       + revisa_juicio(fallos)
-                      + revisa_linea_por_numero(fallos))
+                      + revisa_linea_por_numero(fallos)
+                      + revisa_reclave_local(fallos))
     aislado.cleanup()
 
     if fallos:

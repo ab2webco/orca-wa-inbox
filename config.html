@@ -756,6 +756,9 @@
             'que habia guardado la via de WhatsApp Web, que ya no existe, ' +
             'estaba en un formato que esta version no sabe leer y se borro. ' +
             'La linea enlazada lo vuelve a llenar',
+          hStoreRekeyed: 'Conversaciones atribuidas a su numero',
+          howStoreRekeyedLine: 'Lo que estaba guardado de antes de que cada numero ' +
+            'tuviera su propia linea quedo con el numero de donde vino. No se borro nada',
           modeOff: 'off', modeObserve: 'observar', modeDraft: 'borrador',
           modeReply: 'responder',
           provNone: 'ninguno', provPlane: 'plane', provLinear: 'linear',
@@ -978,6 +981,9 @@
             'What the removed WhatsApp Web route had cached was in a format ' +
             'this version cannot read, so it was dropped. The linked line ' +
             'fills the store again',
+          hStoreRekeyed: 'Conversations assigned to their number',
+          howStoreRekeyedLine: 'What was stored before each number had its own line ' +
+            'now belongs to the number it came from. Nothing was deleted',
           modeOff: 'off', modeObserve: 'observe', modeDraft: 'draft',
           modeReply: 'reply',
           provNone: 'none', provPlane: 'plane', provLinear: 'linear',
@@ -1084,6 +1090,9 @@
           'de WhatsApp Web, que ja nao existe, tinha guardado estava num formato ' +
           'que esta versao nao sabe ler e foi apagado. A linha vinculada enche o ' +
           'armazem de novo',
+        hStoreRekeyed: 'Conversas atribuidas ao seu numero',
+        howStoreRekeyedLine: 'O que estava guardado de antes de cada numero ter a sua ' +
+          'propria linha ficou com o numero de onde veio. Nada foi apagado',
         modeOff: 'off', modeObserve: 'observar', modeDraft: 'rascunho',
         modeReply: 'responder',
         provNone: 'nenhum', provPlane: 'plane', provLinear: 'linear',
@@ -1401,6 +1410,8 @@
         // —el almacen quedo al dia— pero se dice: lo que se borro eran cuerpos de
         // mensajes de clientes reales que habia dejado la via de WhatsApp Web.
         'store-migrated': 'hStoreMigrated',
+        // Lo de antes de T9 paso al numero de su linea (bin/wa-read, `cmd_doctor`).
+        'store-rekeyed': 'hStoreRekeyed',
         unknown: 'hUnknown'
       }
       // Aca solo entran codigos cuyo detalle es una FRASE. Un detalle que es dato crudo
@@ -1414,7 +1425,8 @@
         'transcribe-no-engine': 'howTranscribeNoEngine',
         'transcribe-no-model': 'howTranscribeNoModel',
         'retention-evicted': 'howRetentionEvicted',
-        'store-migrated-dropped': 'howStoreMigratedDropped'
+        'store-migrated-dropped': 'howStoreMigratedDropped',
+        'store-rekeyed-line': 'howStoreRekeyedLine'
       }
       function porCodigo(mapa, code, respaldo) {
         var key = mapa[code]

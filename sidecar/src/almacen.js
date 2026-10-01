@@ -36,6 +36,8 @@ import { DatabaseSync } from 'node:sqlite'
 import { chmodSync, existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
+import { cuentaDeIdentidad } from './mensajes.js'
+
 // El esquema lo crea el escritor y lo LEE `bin/wa_store.py`. Si algun dia divergen, el
 // lector tiene que decirlo en voz alta en vez de contestar filas incompletas: por eso
 // la version viaja en una tabla y no en un comentario (§11-E5, y E1: un codigo estable
@@ -175,6 +177,18 @@ create table if not exists migracion (
   hasta   integer not null,
   cuerpos integer not null,
   lineas  integer not null
+);
+
+-- Cada numero, su linea (T9): lo que colgaba de la cuenta fija 'local' paso al numero
+-- de su linea. Se anota para que se pueda MIRAR (la lee "wa-read doctor"), y es la
+-- fuente de la que 'wa-scope' saca a que numero mover lo suyo en scope.db.
+create table if not exists reclave (
+  at       integer not null,
+  desde    text not null,
+  hacia    text not null,
+  chats    integer not null,
+  mensajes integer not null,
+  envios   integer not null default 0
 );
 `
 
@@ -419,6 +433,65 @@ class Almacen {
     const fila = this.con.prepare(
       "select value from store_meta where key='linea_activa'").get()
     return fila ? fila.value : null
+  }
+
+  /**
+   * Pasa lo que colgaba de la cuenta fija `local` al numero de SU linea (T9).
+   *
+   * Antes de T9 todo se guardaba bajo `local`, fuera cual fuera el telefono. La fila
+   * `local` de `linea` dice cual era (`pn`), y ese es el unico dato que permite
+   * atribuirlo: sin telefono no se inventa un numero y no se toca nada.
+   *
+   * EXPLICITA y no automatica: no la llama `abrirAlmacen`. En una maquina donde la fila
+   * `local` ya se piso con OTRO numero (el caso visto en vivo el 2026-10-01), correrla
+   * le daria al numero nuevo las conversaciones del viejo, que es exactamente la fuga
+   * que T9 cierra. Se conecta al arranque cuando no quede ninguna maquina asi.
+   *
+   * Atomica: todo o nada, en una transaccion. Si el numero ya tenia filas propias (el
+   * sidecar nuevo ya anoto el mismo grupo), la suya manda y la copia `local` se
+   * descarta: es la misma conversacion o el mismo mensaje, no contenido distinto.
+   * Devuelve que movio, o `null` si no habia nada que mover.
+   */
+  reclavarLocal (ahora = Date.now()) {
+    const fila = this.con.prepare("select pn from linea where account='local'").get()
+    const hacia = cuentaDeIdentidad(fila?.pn)
+    if (!hacia) return null
+    const contar = (tabla) => Number(this.con.prepare(
+      `select count(*) c from ${tabla} where account='local'`).get().c) || 0
+    this.con.exec('begin immediate')
+    try {
+      const chats = contar('chat')
+      const mensajes = contar('mensaje')
+      const envios = contar('envio')
+      for (const tabla of ['chat', 'mensaje']) {
+        this.con.prepare(`update or ignore ${tabla} set account=? where account='local'`)
+          .run(hacia)
+        // Lo que no se pudo mover ya existia en el numero: es un duplicado.
+        this.con.exec(`delete from ${tabla} where account='local'`)
+      }
+      this.con.prepare("update envio set account=? where account='local'").run(hacia)
+      const yaEstaba = this.con.prepare('select 1 from linea where account=?').get(hacia)
+      if (yaEstaba) {
+        // El numero ya tenia su fila: se queda con lo que ella no sabia, y con el
+        // `first_seen` mas viejo, que es desde cuando esta enlazada de verdad.
+        this.con.prepare(`update linea set
+            first_seen=min(first_seen, (select first_seen from linea where account='local')),
+            lid=coalesce(lid, (select lid from linea where account='local')),
+            name=coalesce(name, (select name from linea where account='local'))
+          where account=?`).run(hacia)
+        this.con.exec("delete from linea where account='local'")
+      } else {
+        this.con.prepare("update linea set account=? where account='local'").run(hacia)
+      }
+      this.con.prepare('insert into reclave (at, desde, hacia, chats, mensajes, envios) ' +
+        "values (?, 'local', ?, ?, ?, ?)")
+        .run(Math.floor(ahora / 1000), hacia, chats, mensajes, envios)
+      this.con.exec('commit')
+      return { desde: 'local', hacia, chats, mensajes, envios }
+    } catch (error) {
+      try { this.con.exec('rollback') } catch { /* nada abierto */ }
+      throw error
+    }
   }
 
   /** Deja `cuenta` como linea activa. NO copia nada ni toca las filas de otra cuenta:

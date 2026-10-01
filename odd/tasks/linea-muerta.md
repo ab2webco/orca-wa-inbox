@@ -108,7 +108,7 @@ Baileys intenta login y nunca pide registro.
   - [x] T9e — Worker y paneles: la cuenta viaja a `sidecar.cuenta`; el panel etiqueta
         autorizaciones y decisiones con ella; datos de otra línea se muestran como
         vacíos honestos; el worker sincroniza al cambiar de línea.
-  - [ ] T9f — Migración `local` → cuenta de la identidad en `capture.db` (sidecar) y
+  - [~] T9f — Migración `local` → cuenta de la identidad en `capture.db` (sidecar) y
         `scope.db` (`wa-scope`), atómica y visible en `wa-read doctor`. Escrita y
         probada, SIN conectar al arranque hasta que el lead repare los datos vivos.
   - [ ] T9g — Capturas: selector de conversaciones y panel de actividad tras cambiar
@@ -275,3 +275,25 @@ Baileys intenta login y nunca pide registro.
   `account` de cada autorización y decisión: lo de otro número no se pinta (vacíos
   honestos) y lo nuevo se etiqueta con el número vinculado. La insignia la reescribe el
   sync que dispara el cambio de línea (probado en `check-clis`).
+
+### T9f — migración `local` → número (escrita y probada, SIN conectar al arranque)
+
+- RED `node test/almacen.test.mjs`: `TypeError: alm2.reclavarLocal is not a function`;
+  luego `FALLA el doctor la cuenta en su propio renglon`.
+- RED `node test/panels.test.mjs`:
+  `FALLA la re-clave de la linea se dice en espanol — ... line re-keyed — on 2026-10-01 ...`
+- RED `scripts/check-clis` (`revisa_reclave_local`): `wa-scope reclave` no existía
+  (`usage: wa-scope ...`), y quedaban filas `local` en `chat_scope`, `agent_action`,
+  `work` y `juicio`.
+- GREEN: `almacen` 211/211, `panels` 424/424, `check-clis` 180 comprobaciones,
+  `npm run check` exit 0.
+- Cómo: `Almacen.reclavarLocal()` (capture.db, del sidecar) toma el número de la fila
+  `local` de `linea` (`cuentaDeIdentidad(pn)`; sin teléfono no hace nada), mueve
+  `chat`, `mensaje`, `envio` y `linea` en una transacción (si el número ya tenía la
+  misma fila, la suya manda) y lo anota en la tabla `reclave`. `wa-scope reclave` lee
+  ESE número (por `wa_store`, solo lectura) y mueve `chat_scope`, `juicio`,
+  `agent_action`, `work`, `digest`, el rastro de corrida y las entradas del panel sin
+  cuenta. `wa-read doctor` lo muestra (`store-rekeyed`), traducido en es/en/pt.
+- Compuerta: hay una prueba que abre el almacén y comprueba que NO re-clava, y otra
+  que corre `wa-scope sync` y comprueba lo mismo. Conectarla al arranque es un commit
+  aparte, después de que el lead repare los datos vivos.

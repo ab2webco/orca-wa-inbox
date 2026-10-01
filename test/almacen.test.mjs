@@ -235,6 +235,74 @@ console.log('\nT9: cada numero, su linea — la linea activa no pisa a la otra')
     deVuelta.filas[0].jid === ALFA, JSON.stringify(deVuelta.filas))
 }
 
+console.log('\nT9f: lo de `local` pasa al numero de su linea — explicito, atomico y visible')
+{
+  const home = nueva()
+  const alm = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  // Una maquina de antes de T9: todo cuelga de `local`, y la fila de `linea` dice que
+  // telefono era.
+  alm.registrarLinea({ cuenta: 'local', lid: '100000000000001@lid',
+    pn: '573001112233:7@s.whatsapp.net', nombre: 'Vieja' })
+  alm.anotarChat({ cuenta: 'local', chatJid: ALFA, nombre: 'Cliente Alfa', esGrupo: 1 })
+  alm.anotarChat({ cuenta: 'local', chatJid: CALLADO, nombre: 'Grupo Callado', esGrupo: 1 })
+  alm.guardarMensaje({ cuenta: 'local', chatJid: ALFA, stanzaId: 'L1', ts: T0, fromMe: 0,
+    senderJid: OTRA_PERSONA, senderName: 'Otra', body: 'hola de antes', mediaTipo: null,
+    mediaBytes: null, mencionaMe: 0, citaMe: 0 })
+  // Lo que ya escribio el sidecar nuevo para ese mismo numero: el grupo Alfa repetido.
+  alm.anotarChat({ cuenta: 'pn:573001112233', chatJid: ALFA, nombre: 'Cliente Alfa', esGrupo: 1 })
+  alm.cerrar()
+
+  // Abrir el almacen NO re-clava nada: la migracion no corre sola al arrancar hasta que
+  // se reparen los datos vivos (ver T9f en odd/tasks/linea-muerta.md).
+  const abierto = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  abierto.cerrar()
+  const antes = new DatabaseSync(rutaAlmacen({ HOME: home }))
+  const quedanLocal = antes.prepare("select count(*) c from chat where account='local'").get().c
+  antes.close()
+  ok('abrir el almacen no mueve nada de `local`', quedanLocal === 2, String(quedanLocal))
+
+  const alm2 = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  const r = alm2.reclavarLocal()
+  ok('la re-clave dice adonde fue: al numero de la fila `local` de `linea`',
+    r && r.desde === 'local' && r.hacia === 'pn:573001112233', JSON.stringify(r))
+  ok('y cuanto movio', r && r.chats === 2 && r.mensajes === 1, JSON.stringify(r))
+  ok('correrla de nuevo no hace nada: ya no hay `local`', alm2.reclavarLocal() === null)
+  alm2.cerrar()
+
+  const con = new DatabaseSync(rutaAlmacen({ HOME: home }))
+  const local = con.prepare("select (select count(*) from chat where account='local') + " +
+    "(select count(*) from mensaje where account='local') + " +
+    "(select count(*) from linea where account='local') c").get().c
+  ok('no queda ninguna fila `local`', local === 0, String(local))
+  const chats = con.prepare("select count(*) c from chat where account='pn:573001112233'").get().c
+  ok('las dos conversaciones son del numero, sin duplicar la que ya estaba', chats === 2,
+    String(chats))
+  const msj = con.prepare("select body from mensaje where account='pn:573001112233' and stanza_id='L1'").get()
+  ok('el mensaje viejo sigue entero, ahora en su numero', msj && msj.body === 'hola de antes',
+    JSON.stringify(msj))
+  const linea = con.prepare("select account, lid, name from linea").all()
+  ok('la fila de linea paso al numero y conserva quien era', linea.length === 1 &&
+    linea[0].account === 'pn:573001112233' && linea[0].name === 'Vieja', JSON.stringify(linea))
+  const anotada = con.prepare('select desde, hacia, chats, mensajes from reclave').all()
+  ok('y quedo escrita, para que se pueda mirar', anotada.length === 1 &&
+    anotada[0].hacia === 'pn:573001112233', JSON.stringify(anotada))
+  con.close()
+
+  const doc = leerJson(home, ['doctor'])
+  const fila = (doc.filas || []).find((f) => f.code === 'store-rekeyed')
+  ok('el doctor la cuenta en su propio renglon', fila && fila.requerido === false &&
+    fila.ok === false && fila.detailCode === 'store-rekeyed-line' &&
+    fila.detalle.includes('573001112233'), JSON.stringify(doc.filas))
+
+  // Sin telefono en la fila `local` no hay a quien atribuirle nada: se deja como esta.
+  const home2 = nueva()
+  const alm3 = abrirAlmacen(rutaAlmacen({ HOME: home2 }))
+  alm3.registrarLinea({ cuenta: 'local', lid: '1@lid' })
+  alm3.anotarChat({ cuenta: 'local', chatJid: ALFA, nombre: 'Cliente Alfa', esGrupo: 1 })
+  ok('sin telefono conocido no se inventa un numero', alm3.reclavarLocal() === null)
+  alm3.cerrar()
+}
+
 // ── El escenario completo, que es donde viven los seis casos de uso ─────────────────
 const home = nueva()
 const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))

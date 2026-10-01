@@ -863,6 +863,17 @@ console.log('\nel codigo del CLI, dicho en el idioma del panel')
   ok('la linea sin senal se dice en espanol', /senal/i.test(alertaMuda) &&
     !/sign of life/i.test(alertaMuda), alertaMuda)
 
+  // T9f: el renglon de la re-clave de `local` al numero de su linea.
+  const reclave = await montar('config.html', { health: { ok: true, optional: [{
+    que: 'line re-keyed', code: 'store-rekeyed', howCode: 'store-rekeyed-line',
+    como: 'on 2026-10-01 10:00 the 305 conversations and 12 messages that were stored ' +
+      'before each number became its own line were assigned to +573001112233' }] } },
+  'es-419')
+  await espera()
+  const opcReclave = reclave.doc.getElementById('opcionales').textContent
+  ok('la re-clave de la linea se dice en espanol', /numero/i.test(opcReclave) &&
+    !/were assigned|re-keyed/.test(opcReclave), opcReclave)
+
   const pt = await montar('config.html', { health: salud }, 'pt-BR')
   await espera()
   ok('y en portugues tambien',
