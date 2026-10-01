@@ -13,7 +13,8 @@
  * desincroniza en silencio.
  */
 import { decidirTrasCierre, calcularEsperaMs, intentoTrasEvento, mensajeQr, qrVencido,
-  tocaEmitirAlmacen, opcionesDeSocket, salidaTrasCierre, MOTIVO, PARCHES_DE_LIBRETA,
+  tocaEmitirAlmacen, opcionesDeSocket, salidaTrasCierre, repetidosTrasCierre, MOTIVO,
+  PARCHES_DE_LIBRETA, CIERRES_REPETIDOS_TOPE, CIERRES_VENTANA_MS,
   QR_ROTACION_MS, QR_VIGENCIA_MS, SALIDA,
   ALMACEN_LATIDO_MS
 } from '../sidecar/src/index.js'
@@ -113,6 +114,63 @@ console.log('\nsidecar: las credenciales muertas se tiran, no se reusan')
     salidaTrasCierre(cerrada) === SALIDA.CREDENCIALES_MUERTAS, String(salidaTrasCierre(cerrada)))
   ok('tras un cierre que reconecta no sale', salidaTrasCierre(decidirTrasCierre(408, 1)) === null,
     String(salidaTrasCierre(decidirTrasCierre(408, 1))))
+}
+
+console.log('\nsidecar: 403, 411 y 440 dejan de reintentar para siempre')
+{
+  // Antes caian en el "cualquier otro codigo reconecta" y reconectaban para siempre.
+  // 440 (connectionReplaced) es otro cliente usando la misma sesion: reconectar le
+  // quita la sesion al otro, el otro se la quita a este, y asi sin fin. 403 (forbidden)
+  // y 411 (multideviceMismatch) no se curan reintentando. Cada uno con su motivo,
+  // porque lo que el dueno tiene que hacer es distinto en cada uno.
+  const casos = [
+    [440, MOTIVO.SESION_REEMPLAZADA, 'sesion-reemplazada'],
+    [403, MOTIVO.ACCESO_DENEGADO, 'acceso-denegado'],
+    [411, MOTIVO.MULTIDISPOSITIVO, 'multidispositivo']
+  ]
+  for (const [codigo, motivo, texto] of casos) {
+    ok(`${codigo}: tiene motivo propio (${texto})`, motivo === texto, String(motivo))
+    const primero = decidirTrasCierre(codigo, 1, 1)
+    ok(`${codigo}: la primera vez reintenta, con espera`,
+      primero.reconectar === true && primero.esperaMs > 0 && primero.motivo === texto &&
+      primero.borrarCredenciales === false, JSON.stringify(primero))
+    const ultimo = decidirTrasCierre(codigo, 1, CIERRES_REPETIDOS_TOPE)
+    ok(`${codigo}: hasta el tope sigue reintentando`, ultimo.reconectar === true,
+      JSON.stringify(ultimo))
+    const pasado = decidirTrasCierre(codigo, 1, CIERRES_REPETIDOS_TOPE + 1)
+    ok(`${codigo}: pasado el tope se rinde, con su motivo`,
+      pasado.reconectar === false && pasado.motivo === texto &&
+      pasado.borrarCredenciales === false, JSON.stringify(pasado))
+    ok(`${codigo}: y sale con el codigo de "me rendi", no con el de credenciales muertas`,
+      salidaTrasCierre(pasado) === SALIDA.RENDIDO, String(salidaTrasCierre(pasado)))
+  }
+
+  // La cuenta NO la reinicia un 'open'. Un 440 es justo eso: conecta, el otro cliente
+  // la reclama, cierra, reconecta, conecta... Si `open` la bajara -como baja `intento`-
+  // el tope no se alcanzaria nunca.
+  let previo = null
+  let rendido = false
+  for (let vuelta = 0; vuelta < 10 && !rendido; vuelta += 1) {
+    previo = repetidosTrasCierre(previo, 440, 1000 * vuelta)
+    rendido = decidirTrasCierre(440, 1, previo.veces).reconectar === false
+  }
+  ok('un 440 que vuelve tras cada conexion termina rindiendose', rendido,
+    JSON.stringify(previo))
+
+  // Y lo que no es repeticion no suma: otro codigo empieza de cero, y un 440 aislado
+  // horas despues de otro no hereda la cuenta vieja.
+  const a = repetidosTrasCierre({ codigo: 440, veces: 3, ts: 0 }, 408, 1000)
+  ok('un codigo distinto empieza la cuenta de cero', a.veces === 1 && a.codigo === 408,
+    JSON.stringify(a))
+  const b = repetidosTrasCierre({ codigo: 440, veces: 3, ts: 0 }, 440,
+    CIERRES_VENTANA_MS + 1)
+  ok('el mismo codigo fuera de la ventana tambien', b.veces === 1, JSON.stringify(b))
+  const c = repetidosTrasCierre({ codigo: 440, veces: 2, ts: 0 }, 440, 1000)
+  ok('dentro de la ventana suma', c.veces === 3, JSON.stringify(c))
+
+  // Control: lo que ya reconectaba sigue reconectando aunque se repita, porque se cura
+  // solo (una red que se cae diez veces sigue siendo una red).
+  ok('un 408 repetido no se rinde', decidirTrasCierre(408, 1, 50).reconectar === true)
 }
 
 console.log('\nsidecar: el backoff crece y tiene tope')

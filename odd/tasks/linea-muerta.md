@@ -56,7 +56,10 @@ Baileys intenta login y nunca pide registro.
       `SALIDA.CREDENCIALES_MUERTAS` (3) y el worker reusa `desvincularSidecar`, que
       ya espera a que el proceso muera antes de borrar (la carrera del "desvinculo y
       ya no conecta"). Un solo camino de borrado, el del botón Desvincular.
-- [ ] T2 — Sidecar: 403/411/440 con tope de intentos y motivo propio.
+- [x] T2 — Sidecar: 403/411/440 con tope de intentos y motivo propio.
+      Motivos `sesion-reemplazada` (440), `acceso-denegado` (403) y
+      `multidispositivo` (411); tope de 3 cierres seguidos en 10 min (un `open` no
+      reinicia la cuenta), y salida `SALIDA.RENDIDO` (4) que el worker no relanza.
 - [ ] T3 — Sidecar: latido periódico por stdout (≥60 s, respeta el tope de 64
       llamadas sin confirmar del host).
 - [ ] T4 — Worker: el `exit` no sobrescribe `sesion-cerrada`; reinicio
@@ -87,4 +90,12 @@ Baileys intenta login y nunca pide registro.
   `FALLA el QR nuevo llega a storage sin ningun pedido del panel — {... "motivo":"sidecar-cayo","statusCode":401,"error":{"code":"sidecar-cayo","detail":"sidecar exited (code 3, signal null)"} ...}`
   (es la causa 2 tal cual: el `exit` pisa `sesion-cerrada`).
 - GREEN: `sidecar-pairing` 58/58, `worker` 125/125, `sidecar-build` 5/5.
+
+### T2 — 403/411/440 con tope
+
+- RED `node test/sidecar-pairing.test.mjs`:
+  `SyntaxError: The requested module '../sidecar/src/index.js' does not provide an export named 'CIERRES_REPETIDOS_TOPE'`
+- RED `node test/worker.test.mjs`:
+  `FALLA la salida se clasifica como rendida — {"tipo":"caida","motivo":"sidecar-cayo",...}`
+- GREEN: `sidecar-pairing` 78/78, `worker` 128/128, `sidecar-build` 5/5.
 

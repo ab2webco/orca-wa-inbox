@@ -40,6 +40,13 @@ export const MOTIVO = Object.freeze({
   SIN_SESION: 'sin-sesion',
   SOCKET_CAIDO: 'socket-caido',
   REINICIO_REQUERIDO: 'reinicio-requerido',
+  // Tres cierres que reintentar no cura, cada uno con su accion: 440 es otro cliente
+  // usando esta misma sesion (cerrarlo, o desvincular), 403 es WhatsApp negando el
+  // acceso a la cuenta, y 411 es un desacuerdo de multidispositivo que solo arregla
+  // vincular de nuevo.
+  SESION_REEMPLAZADA: 'sesion-reemplazada',
+  ACCESO_DENEGADO: 'acceso-denegado',
+  MULTIDISPOSITIVO: 'multidispositivo',
   DESCONOCIDO: 'desconocido'
 })
 
@@ -56,8 +63,36 @@ const CIERRE = Object.freeze({
   // Baileys. Inventar cual de los dos fue seria mentirle al motivo que el panel
   // traduce; se lo llama por lo que es, un socket caido.
   SOCKET_CAIDO_408: 408,
-  RESTART_REQUIRED: 515
+  RESTART_REQUIRED: 515,
+  FORBIDDEN: 403,
+  MULTIDEVICE_MISMATCH: 411,
+  CONNECTION_REPLACED: 440
 })
+
+// Los cierres que se reintentan un poco y despues no: con su motivo propio.
+const CIERRE_CON_TOPE = Object.freeze({
+  [CIERRE.CONNECTION_REPLACED]: 'sesion-reemplazada',
+  [CIERRE.FORBIDDEN]: 'acceso-denegado',
+  [CIERRE.MULTIDEVICE_MISMATCH]: 'multidispositivo'
+})
+
+/** Cuantas veces seguidas puede repetirse uno de esos cierres antes de rendirse. Tres
+ *  alcanza para que un tropiezo aislado se cure solo y no tanto como para que un 440
+ *  le arrebate la sesion al otro cliente durante horas. */
+export const CIERRES_REPETIDOS_TOPE = 3
+
+/** Que tan juntos tienen que estar para contar como "seguidos". Un 440 hoy y otro
+ *  manana son dos eventos, no un bucle. */
+export const CIERRES_VENTANA_MS = 10 * 60 * 1000
+
+/** La cuenta de cierres repetidos tras un cierre nuevo. NO la reinicia un `open`, y
+ *  eso es a proposito: un 440 conecta, el otro cliente reclama, cierra y vuelve a
+ *  conectar. Si `open` la bajara -como baja `intento`-, el tope no llegaria nunca. */
+export function repetidosTrasCierre (previo, statusCode, ahoraMs = Date.now()) {
+  const mismo = previo && previo.codigo === statusCode &&
+    ahoraMs - previo.ts <= CIERRES_VENTANA_MS
+  return { codigo: statusCode, veces: mismo ? previo.veces + 1 : 1, ts: ahoraMs }
+}
 
 /** Como termina el sidecar cuando decide no seguir. Es CONTRATO con el worker
  *  (`SIDECAR_SALIDA` en main.mjs, y la prueba del worker compara los dos): el codigo
@@ -70,7 +105,11 @@ export const SALIDA = Object.freeze({
   // La sesion guardada esta muerta (401/500). El worker borra `wa-auth` por el mismo
   // camino que el boton Desvincular y relanza: el sidecar nuevo arranca sin `me`,
   // Baileys registra en vez de hacer login, y el QR aparece solo.
-  CREDENCIALES_MUERTAS: 3
+  CREDENCIALES_MUERTAS: 3,
+  // Un cierre que reintentar no cura (403/411/440) se repitio hasta el tope. El motivo
+  // ya salio por stdout; el worker lo deja escrito y NO relanza, porque relanzar es
+  // exactamente el reintento que se acaba de agotar.
+  RENDIDO: 4
 })
 
 /** El codigo con que sale el sidecar tras un cierre, o `null` si sigue vivo. Pura,
@@ -78,7 +117,7 @@ export const SALIDA = Object.freeze({
 export function salidaTrasCierre (decision) {
   if (decision.reconectar) return null
   if (decision.borrarCredenciales) return SALIDA.CREDENCIALES_MUERTAS
-  return null
+  return SALIDA.RENDIDO
 }
 
 const BACKOFF_BASE_MS = 1000
@@ -115,7 +154,7 @@ export function intentoTrasEvento (intento, evento) {
 /** La decision pura tras un cierre de socket: reconectar o no, con que espera y por
  *  que motivo. No toca la red ni el disco -eso lo hace quien la llama- para que se
  *  pueda probar sin un socket vivo. */
-export function decidirTrasCierre (statusCode, intento = 1) {
+export function decidirTrasCierre (statusCode, intento = 1, repetidos = 1) {
   if (statusCode === CIERRE.LOGGED_OUT || statusCode === CIERRE.BAD_SESSION) {
     // Reconectar con ESTAS credenciales reproduciria el mismo cierre en bucle, y
     // conservarlas es peor: con `creds.me` puesto Baileys hace login y nunca registro
@@ -129,6 +168,15 @@ export function decidirTrasCierre (statusCode, intento = 1) {
     // emparejamiento sin ganar nada.
     return { reconectar: true, borrarCredenciales: false, esperaMs: 0,
       motivo: MOTIVO.REINICIO_REQUERIDO }
+  }
+  const conTope = CIERRE_CON_TOPE[statusCode]
+  if (conTope) {
+    // Antes caian en el "cualquier otro codigo" de abajo y reconectaban para siempre.
+    if (repetidos > CIERRES_REPETIDOS_TOPE) {
+      return { reconectar: false, borrarCredenciales: false, esperaMs: 0, motivo: conTope }
+    }
+    return { reconectar: true, borrarCredenciales: false,
+      esperaMs: calcularEsperaMs(intento), motivo: conTope }
   }
   if (statusCode === CIERRE.SOCKET_CAIDO_408) {
     return { reconectar: true, borrarCredenciales: false,
@@ -388,6 +436,9 @@ async function iniciar () {
   }
 
   let intento = 0
+  // Los cierres repetidos del mismo codigo (`repetidosTrasCierre`). Vive fuera de
+  // `conectar()` porque tiene que sobrevivir a la reconexion: es lo que la cuenta mide.
+  let cierres = null
   let rotacion = 0
   // El socket vivo y si esta abierto. Los guarda el arranque y los mira el drenado de
   // la bandeja de salida, que corre en su propio reloj y no dentro de `conectar()`: una
@@ -522,7 +573,8 @@ async function iniciar () {
         conectado = false
         const statusCode = lastDisconnect?.error?.output?.statusCode
         intento = intentoTrasEvento(intento, 'close')
-        const decision = decidirTrasCierre(statusCode, intento)
+        cierres = repetidosTrasCierre(cierres, statusCode)
+        const decision = decidirTrasCierre(statusCode, intento, cierres.veces)
         emitirConexion('close', { motivo: decision.motivo, statusCode: statusCode ?? null })
         if (!decision.reconectar) {
           emitirError(decision.motivo, decision.borrarCredenciales

@@ -425,7 +425,8 @@ const MOTIVO_SESION_CERRADA = 'sesion-cerrada'
  *  sidecar/src/index.js, y la prueba del worker compara las dos: dos constantes que
  *  nadie obliga a coincidir terminan no coincidiendo. */
 export const SIDECAR_SALIDA = Object.freeze({
-  CREDENCIALES_MUERTAS: 3
+  CREDENCIALES_MUERTAS: 3,
+  RENDIDO: 4
 })
 
 /** Que significa que el sidecar haya terminado, y que queda escrito para el panel.
@@ -441,6 +442,11 @@ export function clasificarSalida ({ code, signal, estado }) {
     const propio = estado?.error?.code === MOTIVO_SESION_CERRADA ? estado.error : null
     return { tipo: 'credenciales-muertas', motivo: MOTIVO_SESION_CERRADA,
       error: propio || { code: MOTIVO_SESION_CERRADA, detail: detalle } }
+  }
+  // Se rindio a proposito (403/411/440 repetidos): su motivo ya llego por stdout y es
+  // el que el panel tiene que traducir. Sin ese motivo escrito no se inventa uno.
+  if (code === SIDECAR_SALIDA.RENDIDO && estado?.error?.code) {
+    return { tipo: 'rendido', motivo: estado.motivo ?? estado.error.code, error: estado.error }
   }
   return { tipo: 'caida', motivo: SIDECAR_MOTIVO.CAYO,
     error: { code: SIDECAR_MOTIVO.CAYO, detail: detalle } }

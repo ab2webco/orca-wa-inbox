@@ -1205,6 +1205,26 @@ console.log('\nworker: con credenciales muertas el QR nuevo aparece sin que nadi
     `sidecar=${JSON.stringify(SALIDA)} worker=${JSON.stringify(SIDECAR_SALIDA)}`)
 }
 
+// ───────── un sidecar que se rinde deja SU motivo, no "se cayo" ─────────
+console.log('\nworker: un sidecar que se rindio deja escrito por que')
+{
+  const { clasificarSalida, SIDECAR_SALIDA } = await import('../main.mjs')
+  // 440 repetido hasta el tope: el sidecar ya mando el motivo por stdout y sale con
+  // RENDIDO. Taparlo con `sidecar-cayo` le ofreceria Reintentar al dueno, que es justo
+  // el reintento que se acaba de agotar.
+  const estado = { motivo: 'sesion-reemplazada',
+    error: { code: 'sesion-reemplazada', detail: 'el socket no va a reintentar mas' } }
+  const r = clasificarSalida({ code: SIDECAR_SALIDA.RENDIDO, signal: null, estado })
+  ok('la salida se clasifica como rendida', r.tipo === 'rendido', JSON.stringify(r))
+  ok('y conserva el motivo que mando el sidecar',
+    r.motivo === 'sesion-reemplazada' && r.error.code === 'sesion-reemplazada',
+    JSON.stringify(r))
+  // Si por lo que sea la linea no llego, no se inventa un motivo: queda la caida.
+  const sinLinea = clasificarSalida({ code: SIDECAR_SALIDA.RENDIDO, signal: null, estado: {} })
+  ok('sin motivo escrito no se inventa uno', sinLinea.error.code === 'sidecar-cayo',
+    JSON.stringify(sinLinea))
+}
+
 // ───────── el reintento: el panel ya no manda a reiniciar Orca ─────────
 // "Reinicie Orca" es lo mas debil que puede decir un panel: manda a apagar la aplicacion
 // entera por un proceso hijo que el propio plugin sabe relanzar.
