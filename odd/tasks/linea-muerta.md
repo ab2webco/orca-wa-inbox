@@ -64,9 +64,11 @@ Baileys intenta login y nunca pide registro.
       llamadas sin confirmar del host). `{type:'latido', ts, conectado}` cada
       `LATIDO_LINEA_MS` (60 s) y uno al arrancar; el worker lo guarda en
       `sidecar.latido` con la hora del sidecar.
-- [ ] T4 — Worker: el `exit` no sobrescribe `sesion-cerrada`; reinicio
+- [x] T4 — Worker: el `exit` no sobrescribe `sesion-cerrada`; reinicio
       supervisado con backoff y tope para las demás salidas. Prueba en
-      `worker.test.mjs`.
+      `worker.test.mjs`. `clasificarSalida` decide (credenciales muertas / rendido /
+      caída) después de drenar stdout; `decidirReinicio`: 2 s, 4 s, 8 s… hasta 60 s,
+      tope 5; un clic del panel o una vida de más de 2 min reinician la cuenta.
 - [ ] T5 — Panel de config: "conectado" exige latido fresco; con 401 ofrece
       Desvincular y no Reintentar. Prueba en `panels.test.mjs`.
 - [ ] T6 — Panel de actividad: mismo criterio de vida para "Línea conectada".
@@ -111,4 +113,13 @@ Baileys intenta login y nunca pide registro.
 - Nota: en una corrida falló "el QR llega a storage" de la prueba previa "el sidecar
   habla" (ventana de 200 ms entre QR y `open` en el guion falso); dos corridas
   siguientes en verde. Inestabilidad previa, no de este cambio.
+
+### T4 — supervisor del worker
+
+- RED `node test/worker.test.mjs`: la suite se cortó en
+  `worker: una caida del sidecar se reinicia sola, con backoff y tope` y salió con
+  **exit 0** (`typeof decidirReinicio = undefined`; la autopsia de `activate()` se
+  tragaba el `TypeError`). Arreglado de paso: la suite arranca con
+  `process.exitCode = 1` y un corte a mitad ahora sale con 1 (observado: `exit=1`).
+- GREEN: `worker` 140/140, exit 0.
 

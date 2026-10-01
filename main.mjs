@@ -857,6 +857,23 @@ export const LATIDO_VENCE_MS = 30 * 1000
 const SIDECAR_VIDA_ESTABLE_MS = 2 * 60 * 1000
 const SIDECAR_RENOVACIONES_TOPE = 2
 
+// El reinicio de una caida: espera creciente y tope. Sin tope, un sidecar que revienta
+// al nacer (una dependencia que falta, un permiso) se relanzaria cada minuto para
+// siempre, y cada vida es un proceso de Node y varias escrituras al host.
+const REINICIO_BASE_MS = 2000
+const REINICIO_MAX_MS = 60000
+const REINICIO_TOPE = 5
+
+/** Si se reinicia el sidecar tras su caida numero `intento` (1-based), y cuanto se
+ *  espera. Pura, como `decidirTrasCierre` en el sidecar, para probar la regla sin
+ *  esperar los minutos que tarda en cumplirse. */
+export function decidirReinicio (intento) {
+  if (intento > REINICIO_TOPE) return { reiniciar: false, esperaMs: 0 }
+  const paso = Math.max(1, intento)
+  return { reiniciar: true,
+    esperaMs: Math.min(REINICIO_BASE_MS * 2 ** (paso - 1), REINICIO_MAX_MS) }
+}
+
 export default function activate(orca) {
   // ANTES QUE NADA: la autopsia. Un worker que muere de una excepcion no atrapada se
   // lleva consigo el motivo — Orca lo manda a su propio registro, que desde aca no se
@@ -955,6 +972,10 @@ export default function activate(orca) {
    *  del plugin y para lo que pida el panel: si el reintento tomara otro camino, seria
    *  otro arranque, con otros motivos, y el panel los traduciria distinto. */
   async function arrancarSidecar () {
+    // Cualquier arranque -el automatico, un clic, un desvincular- deja sin efecto el
+    // reinicio que estuviera esperando: cumplido despues, apagaria al recien lanzado.
+    clearTimeout(reinicioTimer)
+    reinicioTimer = null
     if (detenido) return { ok: false, code: SIDECAR_MOTIVO.NO_ARRANCO, detail: 'plugin detenido' }
     const s = await settings()
     if (detenido) return { ok: false, code: SIDECAR_MOTIVO.NO_ARRANCO, detail: 'plugin detenido' }
@@ -999,12 +1020,15 @@ export default function activate(orca) {
   // Baileys registra, no hace login-, asi que si pasa de nuevo hay otra cosa rota y
   // seguir borrando no la arregla: se para y el panel ofrece Desvincular.
   let renovaciones = 0
+  // Las caidas seguidas (`decidirReinicio`) y el reinicio que esta esperando su turno.
+  let reinicios = 0
+  let reinicioTimer = null
 
   /** Que hacer cuando el sidecar termino solo. Lo llama `lanzarSidecar` cuando lo que
    *  el panel tiene que leer ya quedo escrito. */
   function alSalirSidecar (salida) {
     if (detenido) return
-    if (salida.vidaMs >= SIDECAR_VIDA_ESTABLE_MS) renovaciones = 0
+    if (salida.vidaMs >= SIDECAR_VIDA_ESTABLE_MS) { renovaciones = 0; reinicios = 0 }
     if (salida.tipo === 'credenciales-muertas') {
       if (renovaciones >= SIDECAR_RENOVACIONES_TOPE) {
         orca.log('sidecar: WhatsApp closed the session again right after relinking; ' +
@@ -1016,8 +1040,34 @@ export default function activate(orca) {
       enFila(() => detenido ? null : desvincularSidecar())
         .then((r) => { if (r && !r.ok) orca.log(`sidecar relink failed (${r.code})`) })
         .catch((error) => orca.log(`sidecar relink failed: ${error.message}`))
+      return
     }
+    // Se rindio a proposito (403/411/440): relanzar es el reintento que se acaba de
+    // agotar. Queda el motivo escrito y lo decide el dueno desde el panel.
+    if (salida.tipo !== 'caida') return
+    reinicios += 1
+    const decision = decidirReinicio(reinicios)
+    if (!decision.reiniciar) {
+      orca.log(`sidecar: crashed ${reinicios - 1} times in a row; not restarting it again`)
+      return
+    }
+    orca.log(`sidecar: exited unexpectedly (${salida.error.detail}); restart ${reinicios} ` +
+      `in ${Math.round(decision.esperaMs / 1000)}s`)
+    reinicioTimer = setTimeout(() => {
+      reinicioTimer = null
+      enFila(() => detenido ? null : arrancarSidecar())
+        .catch((error) => orca.log(`sidecar restart failed: ${error.message}`))
+    }, decision.esperaMs)
+    if (typeof reinicioTimer.unref === 'function') reinicioTimer.unref()
   }
+
+  /** Lo que pide el dueno empieza de cero: un clic en Reintentar no hereda las caidas
+   *  de antes, ni deja vivo un reinicio automatico que lo pisaria al cumplirse. */
+  const pedidoDelPanel = (accion) => () => enFila(() => {
+    reinicios = 0
+    renovaciones = 0
+    return accion()
+  })
 
   arrancarSidecar().catch((error) => orca.log(`sidecar launch failed: ${error.message}`))
 
@@ -1187,9 +1237,9 @@ export default function activate(orca) {
     vencido: SIDECAR_VEREDICTO.VENCIDO,
     desconocida: SIDECAR_VEREDICTO.ACCION_DESCONOCIDA,
     acciones: {
-      [SIDECAR_ACCION.DESVINCULAR]: () => enFila(() => desvincularSidecar()),
-      [SIDECAR_ACCION.REINTENTAR]: () => enFila(() => reintentarSidecar()),
-      [SIDECAR_ACCION.LIBRETA]: () => enFila(() => reintentarSidecar())
+      [SIDECAR_ACCION.DESVINCULAR]: pedidoDelPanel(() => desvincularSidecar()),
+      [SIDECAR_ACCION.REINTENTAR]: pedidoDelPanel(() => reintentarSidecar()),
+      [SIDECAR_ACCION.LIBRETA]: pedidoDelPanel(() => reintentarSidecar())
     }
   })
 
@@ -1373,6 +1423,7 @@ export default function activate(orca) {
     clearTimeout(syncTimer)
     clearInterval(pedidoTimer)
     clearInterval(latidoTimer)
+    clearTimeout(reinicioTimer)
     apagarSidecar()
   }
 }

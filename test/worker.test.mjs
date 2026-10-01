@@ -32,6 +32,13 @@ import { fileURLToPath } from 'node:url'
 import { execFile as execFileNode } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 
+// Falla hasta que se demuestre lo contrario. `activate()` instala sus propios
+// `uncaughtException`/`unhandledRejection` (la autopsia del worker), asi que una
+// excepcion a mitad de esta prueba no la tumba: se la traga, el proceso se vacia y salia
+// con 0 sin haber corrido la mitad de los casos. Solo la ultima linea, que cuenta los
+// fallos de verdad, decide el codigo de salida.
+process.exitCode = 1
+
 const RAIZ = mkdtempSync(join(tmpdir(), 'wa-inbox-worker-'))
 
 // ANTES de activar nada: al activarse el worker siembra el arnes en el userData de
@@ -1245,6 +1252,66 @@ console.log('\nworker: un sidecar que se rindio deja escrito por que')
   const sinLinea = clasificarSalida({ code: SIDECAR_SALIDA.RENDIDO, signal: null, estado: {} })
   ok('sin motivo escrito no se inventa uno', sinLinea.error.code === 'sidecar-cayo',
     JSON.stringify(sinLinea))
+}
+
+// ───────── la salida nunca tapa la sesion cerrada ─────────
+console.log('\nworker: la salida del sidecar no tapa "sesion cerrada"')
+{
+  const { clasificarSalida } = await import('../main.mjs')
+  // El caso medido en la maquina del dueno: el sidecar dijo `sesion-cerrada` y salio
+  // con 0. El `exit` escribia `sidecar-cayo` encima, el panel escondia Desvincular y
+  // ofrecia Reintentar, que repetia el mismo 401.
+  const r = clasificarSalida({ code: 0, signal: null, estado: { motivo: 'sesion-cerrada',
+    error: { code: 'sesion-cerrada', detail: 'la sesion se cerro' } } })
+  ok('un exit 0 tras "sesion cerrada" sigue diciendo sesion cerrada',
+    r.motivo === 'sesion-cerrada' && r.error.code === 'sesion-cerrada', JSON.stringify(r))
+  ok('y se trata como credenciales muertas, no como una caida',
+    r.tipo === 'credenciales-muertas', JSON.stringify(r))
+}
+
+// ───────── una caida se reinicia sola, con espera creciente y tope ─────────
+console.log('\nworker: una caida del sidecar se reinicia sola, con backoff y tope')
+{
+  const { decidirReinicio } = await import('../main.mjs')
+  const pasos = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => decidirReinicio(n))
+  ok('los primeros reinicios se hacen', pasos[0].reiniciar === true && pasos[1].reiniciar === true,
+    JSON.stringify(pasos.slice(0, 2)))
+  ok('con espera desde el primero: un proceso que revienta al nacer no se relanza en rafaga',
+    pasos[0].esperaMs >= 1000, JSON.stringify(pasos[0]))
+  const esperas = pasos.filter((p) => p.reiniciar).map((p) => p.esperaMs)
+  ok('cada espera es igual o mayor que la anterior',
+    esperas.every((ms, i) => i === 0 || ms >= esperas[i - 1]), JSON.stringify(esperas))
+  ok('y hay tope: pasado cierto numero se deja de reiniciar',
+    pasos.some((p) => p.reiniciar === false) && pasos[pasos.length - 1].reiniciar === false,
+    JSON.stringify(pasos.map((p) => p.reiniciar)))
+
+  // De punta a punta: un sidecar que revienta dos veces y a la tercera conecta. Sin
+  // supervisor se quedaba en la primera caida hasta que alguien apretara Reintentar.
+  const vidas = join(RAIZ, 'vidas-cae-dos.txt')
+  const guion = join(RAIZ, 'sidecar-cae-dos.cjs')
+  writeFileSync(guion,
+    '#!/usr/bin/env node\n' +
+    'const fs = require("node:fs")\n' +
+    'fs.appendFileSync(' + JSON.stringify(vidas) + ', "x\\n")\n' +
+    'const n = fs.readFileSync(' + JSON.stringify(vidas) + ', "utf8").trim().split("\\n").length\n' +
+    'if (n <= 2) process.exit(1)\n' +
+    'process.stdout.write(JSON.stringify({ type: "connection", state: "open" }) + "\\n")\n' +
+    'setInterval(() => {}, 1000)\n', { mode: 0o755 })
+  const orca = hostFalso(herramientas('cae-dos', '#!/bin/sh\necho \'[]\'\n'), {}, guion)
+  const { apagar } = await arranca(orca)
+  const volvio = await hasta(() => orca.store.sidecar && orca.store.sidecar.connection === 'open',
+    20000)
+  const cuantas = existsSync(vidas)
+    ? readFileSync(vidas, 'utf8').trim().split('\n').filter(Boolean).length : 0
+  ok('tras dos caidas el sidecar vuelve solo', volvio, JSON.stringify(orca.store.sidecar))
+  ok('relanzandolo de verdad, no solo diciendolo', cuantas === 3, `vidas=${cuantas}`)
+  apagar()
+  // Apagado el plugin no queda ningun reinicio en el aire.
+  await dormir(2500)
+  const despues = existsSync(vidas)
+    ? readFileSync(vidas, 'utf8').trim().split('\n').filter(Boolean).length : 0
+  ok('apagar el plugin no deja un reinicio pendiente', despues === cuantas,
+    `antes=${cuantas} despues=${despues}`)
 }
 
 // ───────── el reintento: el panel ya no manda a reiniciar Orca ─────────
