@@ -694,6 +694,33 @@ const PANELES = [
     datos: conLinea({ connection: 'open', qr: null, exited: false, me: '+573001112233',
       latido: LATIDO_VIEJO })
   },
+  // T9: cada numero, su linea. Lo que se vio en vivo tras vincular +573000000012: el
+  // panel seguia ofreciendo las conversaciones y mostrando las autorizaciones y la
+  // actividad del numero anterior. El storage TODAVIA trae lo del numero viejo (el sync
+  // del nuevo no paso), y el panel no lo pinta como si fuera del vinculado.
+  {
+    nombre: 'config-numero-nuevo', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true,
+    datos: Object.assign({}, DATOS, {
+      sidecar: { connection: 'open', qr: null, exited: false, me: '+573000000012',
+        cuenta: 'pn:573000000012', latido: LATIDO_FRESCO },
+      chatsAccount: 'pn:573001112233',
+      scope: Object.fromEntries(Object.entries(DATOS.scope).map(([jid, e]) =>
+        [jid, Object.assign({}, e, { account: 'pn:573001112233' })]))
+    })
+  },
+  {
+    nombre: 'actividad-numero-nuevo', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true,
+    datos: Object.assign({}, DATOS, {
+      sidecar: { connection: 'open', qr: null, exited: false, me: '+573000000012',
+        cuenta: 'pn:573000000012', latido: LATIDO_FRESCO },
+      chatsAccount: 'pn:573001112233',
+      activity: Object.assign({}, DATOS.activity, { account: 'pn:573001112233',
+        mapped: 306, authorized: 3,
+        run: { state: 'interrupted', startedAt: '2026-09-24 08:46', endedAt: null } })
+    })
+  },
   {
     nombre: 'config-sidecar-reintentar', archivo: 'config.html', anchos: ANCHOS,
     datos: Object.assign({}, DATOS, { sidecar: {

@@ -111,7 +111,7 @@ Baileys intenta login y nunca pide registro.
   - [~] T9f — Migración `local` → cuenta de la identidad en `capture.db` (sidecar) y
         `scope.db` (`wa-scope`), atómica y visible en `wa-read doctor`. Escrita y
         probada, SIN conectar al arranque hasta que el lead repare los datos vivos.
-  - [ ] T9g — Capturas: selector de conversaciones y panel de actividad tras cambiar
+  - [x] T9g — Capturas: selector de conversaciones y panel de actividad tras cambiar
         de número (listas limpias), ES/EN, 1440/768/390/320, revisadas a ojo.
 
 ## Criterios de aceptación
@@ -297,3 +297,19 @@ Baileys intenta login y nunca pide registro.
 - Compuerta: hay una prueba que abre el almacén y comprueba que NO re-clava, y otra
   que corre `wa-scope sync` y comprueba lo mismo. Conectarla al arranque es un commit
   aparte, después de que el lead repare los datos vivos.
+
+### T9g — capturas tras cambiar de número
+
+- `npm run shots`: 440 capturas, sin desbordes ni errores de JS. Estados nuevos
+  `config-numero-nuevo` y `actividad-numero-nuevo` (storage todavía con lo del número
+  viejo, `sidecar.cuenta` del nuevo), en ES y EN, oscuro y claro, a 1440/768/390/320.
+- Revisadas a ojo, 32 capturas: en config, el selector no ofrece las conversaciones
+  viejas y la tabla dice "Ninguna conversacion autorizada"; en actividad, "Linea
+  conectada · +573000000012", "actua sobre 0 conversaciones", sin avisos, sin lo último
+  hecho, sin la corrida del 09-24 y sin cola.
+- Lo que delató mirar: la cabecera de actividad decía en rojo "sin datos — corra
+  wa-scope sync" (manda a una terminal, y es falso: el worker ya pidió el sync). RED
+  `FALLA la cabecera no manda a una terminal ... — sin datos — corra wa-scope sync`;
+  ahora dice "esperando el primer sync de esta linea…" (es/en/pt). Vuelto a
+  fotografiar y revisado en los 16.
+- `npm run check` exit 0.

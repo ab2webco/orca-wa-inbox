@@ -2519,6 +2519,11 @@ console.log('\nactivity.html — T9: tras cambiar de numero, la actividad del an
     doc.getElementById('runline').textContent)
   ok('ni su cola', !/pendiente viejo/.test(doc.getElementById('pending').textContent),
     doc.getElementById('pending').textContent)
+  // El sync de la linea nueva lo pide el worker solo (T9e): mandar a correr un comando
+  // en una terminal seria falso, y es justo el callejon que el panel dejo de ofrecer.
+  const sello = doc.getElementById('synced').textContent
+  ok('la cabecera no manda a una terminal: dice que espera el sync de esta linea',
+    !/wa-scope|corra/i.test(sello) && /linea/i.test(sello), sello)
   ok('y no se queda en blanco: dice que no hay nada de esta linea todavia',
     doc.getElementById('alerts').textContent.trim().length > 0 &&
     doc.getElementById('recent').textContent.trim().length > 0, todo.slice(0, 300))
