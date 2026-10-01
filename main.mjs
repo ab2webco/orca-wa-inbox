@@ -458,10 +458,11 @@ async function leerLlaveJev(orca, estado) {
 /** Deja el espejo como dicen los ajustes y publica el estado para el panel.
  *
  *  Con Jev encendido y llave, el espejo existe; en cualquier otro caso no. `forzar` solo
- *  lo pide un guardado de la llave desde el panel: es lo unico que puede pisar un archivo
- *  que no escribio el plugin. Todo lo demas lo respeta y lo dice en el estado (`ajeno`),
- *  porque el lector de Python lo trata como "sin llave" y el usuario tiene que saber por
- *  que. */
+ *  lo piden los gestos explicitos del dueno en el panel —guardar la llave y encender el
+ *  interruptor—: son lo unico que puede pisar un archivo que no escribio el plugin. Lo
+ *  que corre por su cuenta (arranque, revision de salud) lo respeta y lo dice en el
+ *  estado (`ajeno`), porque el lector de Python lo trata como "sin llave" y el usuario
+ *  tiene que saber por que. */
 async function aplicarJev(orca, habilitado, llave, { forzar = false } = {}) {
   const activo = habilitado && llave !== null
   const r = activo
@@ -1699,7 +1700,12 @@ export default function activate(orca) {
       return { ok: false, code: JEV_VEREDICTO.ARGUMENTOS_INVALIDOS }
     }
     await guardar(orca, JEV_ENABLED_KEY, pedido.enabled)
-    const st = await aplicarJev(orca, pedido.enabled, await leerLlaveJev(orca, estadoJev))
+    // Encender es un gesto explicito del dueno, igual que guardar la llave: con la llave
+    // ya en la boveda reemplaza un `jev.env` escrito a mano antes de que el plugin lo
+    // administrara. Sin esto el dueno guardaba la llave con Jev apagado, lo encendia, y
+    // se quedaba en `ajeno` sin nada que escribir en el campo.
+    const st = await aplicarJev(orca, pedido.enabled, await leerLlaveJev(orca, estadoJev),
+      { forzar: pedido.enabled })
     const code = pedido.enabled ? JEV_VEREDICTO.ACTIVADO : JEV_VEREDICTO.DESACTIVADO
     return st.mirror === 'fallo'
       ? { ok: false, code: JEV_VEREDICTO.ESPEJO_FALLO, mirror: st.mirror }

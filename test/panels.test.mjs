@@ -4235,9 +4235,14 @@ console.log('\nconfig.html — Jev: lo que falla se dice, y un archivo ajeno se 
   const { doc } = await montar('config.html', storage, 'es-419',
     trabajadorJev(() => ({ ok: false, code: 'llave-invalida' })))
   const nota = doc.getElementById('jev-mirror-note')
-  ok('con un archivo de llave que no es del plugin lo explica y manda a escribir la llave',
-    !nota.hidden && /jev\.env/.test(nota.textContent) && /escriba la llave/i.test(nota.textContent),
+  ok('con un archivo ajeno y una llave ya guardada lo explica SIN pedir que la reescriba',
+    !nota.hidden && /jev\.env/.test(nota.textContent) &&
+    !/escriba la llave/i.test(nota.textContent) && /guardada/i.test(nota.textContent),
     `hidden=${nota.hidden} ${nota.textContent}`)
+  const usar = doc.getElementById('jev-use-saved')
+  ok('y ofrece usar la llave guardada con un boton visible',
+    !!usar && !usar.hidden && /usar la llave guardada/i.test(usar.textContent),
+    usar ? `${usar.hidden} ${usar.textContent}` : 'no existe #jev-use-saved')
   doc.getElementById('jev-key').value = 'dos palabras'
   doc.getElementById('jev-save-key').click()
   await new Promise((r) => setTimeout(r, 3500))
@@ -4247,6 +4252,55 @@ console.log('\nconfig.html — Jev: lo que falla se dice, y un archivo ajeno se 
     !/llave-invalida/.test(dicho.textContent), dicho.textContent)
   ok('y la llave tecleada se queda para corregirla',
     doc.getElementById('jev-key').value === 'dos palabras')
+}
+
+console.log('\nconfig.html — Jev: "Usar la llave guardada" reemplaza el archivo ajeno sin mostrar la llave')
+{
+  const storage = { jevStatus: { at: new Date().toISOString(), enabled: true, keySet: true,
+    mirror: 'ajeno' } }
+  const { doc } = await montar('config.html', storage, 'es-419',
+    trabajadorJev((pedido, st) => {
+      st.jevStatus = { at: new Date().toISOString(), enabled: true, keySet: true,
+        mirror: 'activo' }
+      return { ok: true, code: 'activado', mirror: 'activo', pedido: pedido.action }
+    }))
+  doc.getElementById('jev-use-saved').click()
+  await new Promise((r) => setTimeout(r, 3500))
+  const pedido = storage.jevRequestVisto
+  ok('el boton manda activar con enabled verdadero: lo mismo que encender el interruptor',
+    !!pedido && pedido.action === 'activar' && pedido.enabled === true &&
+    typeof pedido.id === 'string' && !isNaN(Date.parse(pedido.at)), JSON.stringify(pedido))
+  ok('el pedido no lleva ninguna llave', !!pedido && !('value' in pedido), JSON.stringify(pedido))
+  ok('al confirmarse el worker, la nota y el boton desaparecen',
+    doc.getElementById('jev-mirror-note').hidden && doc.getElementById('jev-use-saved').hidden,
+    `${doc.getElementById('jev-mirror-note').hidden} ${doc.getElementById('jev-use-saved').hidden}`)
+  ok('y lo dice con un veredicto, no en silencio',
+    doc.getElementById('said-jev-key').textContent.includes('✓'),
+    doc.getElementById('said-jev-key').textContent)
+}
+
+console.log('\nconfig.html — Jev: archivo ajeno SIN llave guardada pide la llave, y no ofrece el boton')
+{
+  const storage = { jevStatus: { at: new Date().toISOString(), enabled: true, keySet: false,
+    mirror: 'ajeno' } }
+  const { doc } = await montar('config.html', storage, 'es-419', trabajadorJev(() => ({ ok: true })))
+  ok('la nota manda a escribir la llave',
+    /escriba la llave/i.test(doc.getElementById('jev-mirror-note').textContent),
+    doc.getElementById('jev-mirror-note').textContent)
+  ok('y el boton de usar la guardada no se ofrece: no hay guardada',
+    doc.getElementById('jev-use-saved').hidden)
+}
+
+for (const [loc, nota, boton] of [['en', /already a saved key/i, /use the saved key/i],
+  ['pt-BR', /ja ha uma chave salva/i, /usar a chave salva/i]]) {
+  console.log(`\nconfig.html — Jev: archivo ajeno con llave guardada, en ${loc}`)
+  const storage = { jevStatus: { at: new Date().toISOString(), enabled: true, keySet: true,
+    mirror: 'ajeno' } }
+  const { doc } = await montar('config.html', storage, loc, trabajadorJev(() => ({ ok: true })))
+  ok(`la nota esta traducida (${loc})`, nota.test(doc.getElementById('jev-mirror-note').textContent),
+    doc.getElementById('jev-mirror-note').textContent)
+  ok(`y el boton tambien (${loc})`, boton.test(doc.getElementById('jev-use-saved').textContent),
+    doc.getElementById('jev-use-saved').textContent)
 }
 
 console.log('\nconfig.html — Jev: si el worker no contesta, la llave no queda esperando en storage')

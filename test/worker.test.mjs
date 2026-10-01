@@ -1883,24 +1883,42 @@ console.log('\nworker: la llave de Jev, su espejo 0600 y el aviso de que no es o
     orca.store.jevStatus.mirror === 'sin-llave', JSON.stringify(orca.store.jevStatus))
 
   // Un archivo sin la cabecera NO es nuestro —alguien lo copio a mano—: el lector de
-  // Python lo trata como "sin llave", y el worker no lo borra ni lo pisa por su cuenta.
+  // Python lo trata como "sin llave". Lo que el worker hace por su cuenta (apagar, quitar
+  // la llave) no lo borra ni lo pisa; lo que el dueno pide con un gesto explicito
+  // (encender el interruptor, guardar la llave) SI lo reemplaza con el espejo.
   const AJENO = 'TYPESAFE_API_KEY=copiada-a-mano\n'
+  const ESPEJO = `${CABECERA}\nTYPESAFE_API_KEY=${LLAVE}\n`
   writeFileSync(espejo, AJENO, { mode: 0o600 })
   orca.secrets.jevKey = LLAVE
-  v = await pedir('jev-ajeno-1', { action: 'activar', enabled: true })
-  ok('con un archivo ajeno, encender no lo pisa y el estado lo dice',
-    contenido() === AJENO && orca.store.jevStatus.mirror === 'ajeno',
-    JSON.stringify([contenido(), orca.store.jevStatus]))
   v = await pedir('jev-ajeno-2', { action: 'activar', enabled: false })
-  ok('apagar tampoco borra el archivo ajeno', contenido() === AJENO, JSON.stringify(contenido()))
-  await pedir('jev-ajeno-3', { action: 'activar', enabled: true })
+  ok('apagar no borra el archivo ajeno', contenido() === AJENO, JSON.stringify(contenido()))
   v = await pedir('jev-ajeno-4', { action: 'quitar-llave' })
   ok('quitar la llave tampoco borra el archivo ajeno', contenido() === AJENO,
     JSON.stringify(contenido()))
+  orca.secrets.jevKey = LLAVE
+  // El caso del dueno: guardo la llave con Jev apagado (no se escribio espejo) y despues
+  // encendio el interruptor. Encender es un gesto explicito: reemplaza el archivo ajeno.
+  v = await pedir('jev-ajeno-1', { action: 'activar', enabled: true })
+  ok('encender el interruptor con llave en la boveda reemplaza el archivo ajeno',
+    v && v.ok === true && contenido() === ESPEJO && orca.store.jevStatus.mirror === 'activo',
+    JSON.stringify([v, contenido(), orca.store.jevStatus]))
+  ok('y el archivo nuevo empieza por la cabecera del plugin',
+    (contenido() || '').split('\n')[0] === CABECERA, JSON.stringify(contenido()))
+  ok('sin que la llave aparezca en el veredicto ni en el estado',
+    !JSON.stringify([v, orca.store.jevStatus]).includes(LLAVE))
+  // Apagar y encender otra vez con el espejo ya propio: nada que reemplazar, mismo estado.
+  await pedir('jev-ajeno-off', { action: 'activar', enabled: false })
+  v = await pedir('jev-ajeno-on', { action: 'activar', enabled: true })
+  ok('encender de nuevo con el espejo propio sigue en activo',
+    v && v.ok === true && contenido() === ESPEJO && orca.store.jevStatus.mirror === 'activo',
+    JSON.stringify([v, contenido()]))
+  // Con Jev encendido, un archivo ajeno que aparezca despues lo reemplaza tambien el
+  // guardado de la llave desde el panel.
+  writeFileSync(espejo, AJENO, { mode: 0o600 })
   v = await pedir('jev-ajeno-5', { action: 'guardar-llave', value: LLAVE })
-  ok('escribir la llave en el panel SI lo reemplaza, con la cabecera',
-    v && v.ok === true && contenido() === `${CABECERA}\nTYPESAFE_API_KEY=${LLAVE}\n` &&
-    orca.store.jevStatus.mirror === 'activo', JSON.stringify([v, contenido()]))
+  ok('escribir la llave en el panel tambien lo reemplaza, con la cabecera',
+    v && v.ok === true && contenido() === ESPEJO && orca.store.jevStatus.mirror === 'activo',
+    JSON.stringify([v, contenido()]))
 
   v = await pedir('jev-raro-1', { action: 'inventada' })
   ok('una accion que no existe se contesta, no se calla',
@@ -1946,6 +1964,28 @@ console.log('\nworker: la llave de Jev, su espejo 0600 y el aviso de que no es o
   ok('al arrancar con Jev apagado, el espejo viejo se borra', !existsSync(espejo),
     JSON.stringify(orca2.store.jevStatus))
   apagar2()
+}
+
+{
+  // Lo que corre por su cuenta (arranque, revision de salud) NO pisa un archivo ajeno:
+  // lo dice (`ajeno`) y lo deja intacto. Solo un gesto del dueno lo reemplaza.
+  const LLAVE = 'tsk-FALSA-2222222222222222'
+  const AJENO = 'TYPESAFE_API_KEY=copiada-a-mano\n'
+  const espejo = join(process.env.HOME, '.wa-inbox', 'jev.env')
+  rmSync(join(process.env.HOME, '.wa-inbox'), { recursive: true, force: true })
+  mkdirSync(join(process.env.HOME, '.wa-inbox'), { recursive: true })
+  writeFileSync(espejo, AJENO, { mode: 0o600 })
+
+  const orca = hostFalso(herramientas('jev-arranque-ajeno', '#!/bin/sh\necho \'[]\'\n'),
+    { chats: [], jevEnabled: true })
+  orca.secrets.jevKey = LLAVE
+  const { apagar } = await arranca(orca)
+  await hasta(() => orca.store.jevStatus && orca.store.jevStatus.mirror === 'ajeno')
+  ok('al arrancar con un archivo ajeno, el estado dice ajeno y el archivo no se toca',
+    orca.store.jevStatus && orca.store.jevStatus.mirror === 'ajeno' &&
+    orca.store.jevStatus.keySet === true && readFileSync(espejo, 'utf8') === AJENO,
+    JSON.stringify([orca.store.jevStatus, readFileSync(espejo, 'utf8')]))
+  apagar()
 }
 
 // ───────── T6: las acciones del dueno sobre una tarjeta del tablero ─────────

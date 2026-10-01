@@ -639,6 +639,7 @@
           <div class="actions">
             <button id="jev-save-key" data-t="jevSaveKey"></button>
             <button id="jev-remove-key" hidden data-t="jevRemoveKey"></button>
+            <button id="jev-use-saved" hidden data-t="jevUseSaved"></button>
             <span class="said" id="said-jev-key"></span>
           </div>
           <p class="hint jev-nota" id="jev-mirror-note" hidden></p>
@@ -991,6 +992,8 @@
           jevStOnYes: 'Encendido · llave guardada',
           jevMirrorForeign: 'Hay un archivo de llave en <code>~/.wa-inbox/jev.env</code> que no escribio el plugin, y por eso las herramientas no lo usan. Escriba la llave aqui arriba y guardela para reemplazarlo.',
           jevMirrorFail: 'No se pudo escribir el archivo de llave. Intente de nuevo; si sigue igual, revise el registro del plugin.',
+          jevMirrorForeignSaved: 'Hay un archivo de llave en <code>~/.wa-inbox/jev.env</code> que no escribio el plugin, y por eso las herramientas no lo usan. Ya hay una llave guardada: use el boton para reemplazar el archivo con ella.',
+          jevUseSaved: 'Usar la llave guardada',
           jevKeyEmpty: 'Escriba la llave primero.',
           jevKeySaved: 'Llave guardada',
           jevKeyRemoved: 'Llave quitada',
@@ -1317,6 +1320,8 @@
           jevStOnYes: 'On · key saved',
           jevMirrorForeign: 'There is a key file at <code>~/.wa-inbox/jev.env</code> that the plugin did not write, so the tools ignore it. Enter the key above and save it to replace the file.',
           jevMirrorFail: 'The key file could not be written. Try again; if it keeps failing, check the plugin log.',
+          jevMirrorForeignSaved: 'There is a key file at <code>~/.wa-inbox/jev.env</code> that the plugin did not write, so the tools ignore it. There is already a saved key: use the button to replace the file with it.',
+          jevUseSaved: 'Use the saved key',
           jevKeyEmpty: 'Enter the key first.',
           jevKeySaved: 'Key saved',
           jevKeyRemoved: 'Key removed',
@@ -1668,6 +1673,8 @@
         jevStOnYes: 'Ligado · chave salva',
         jevMirrorForeign: 'Ha um arquivo de chave em <code>~/.wa-inbox/jev.env</code> que o plugin nao escreveu, por isso as ferramentas o ignoram. Digite a chave acima e salve para substituir o arquivo.',
         jevMirrorFail: 'Nao foi possivel escrever o arquivo de chave. Tente de novo; se continuar, veja o registro do plugin.',
+        jevMirrorForeignSaved: 'Ha um arquivo de chave em <code>~/.wa-inbox/jev.env</code> que o plugin nao escreveu, por isso as ferramentas o ignoram. Ja ha uma chave salva: use o botao para substituir o arquivo por ela.',
+        jevUseSaved: 'Usar a chave salva',
         jevKeyEmpty: 'Digite a chave primeiro.',
         jevKeySaved: 'Chave salva',
         jevKeyRemoved: 'Chave removida',
@@ -2024,7 +2031,7 @@
         // Desvincular y reintentar dejan un pedido que solo el worker puede atender: sin
         // nadie del otro lado son el mismo silencio de 45 s que este aviso reemplaza.
         var dependen = ['sync-retry', 'pairing-unlink', 'pairing-retry', 'jev-save-key',
-          'jev-remove-key', 'jev-enabled', 'chat-fetch']
+          'jev-remove-key', 'jev-use-saved', 'jev-enabled', 'chat-fetch']
         dependen.forEach(function (id) {
           var b = el(id)
           if (b) b.disabled = !!sinWorker
@@ -3662,10 +3669,14 @@
         // Un archivo de llave que no escribio el plugin no se toca solo: el lector lo trata
         // como "sin llave", y el usuario tiene que saber por que no anda.
         var nota = el('jev-mirror-note')
-        var clave = s.mirror === 'ajeno' ? 'jevMirrorForeign'
+        // Con la llave ya guardada no hay nada que reescribir: se ofrece usarla, que es lo
+        // mismo que encender el interruptor (el worker reemplaza el archivo ajeno).
+        var ajeno = s.mirror === 'ajeno'
+        var clave = ajeno ? (keySet ? 'jevMirrorForeignSaved' : 'jevMirrorForeign')
           : s.mirror === 'fallo' ? 'jevMirrorFail' : ''
         nota.hidden = !clave
         nota.innerHTML = clave ? t(clave) : ''
+        el('jev-use-saved').hidden = !(ajeno && keySet)
         pintarChecklist()
       }
 
@@ -3700,6 +3711,15 @@
           // El campo se vacia solo si se guardo: ante un fallo la llave se queda para
           // corregirla, que es lo que el usuario necesita.
           if (jevDecir('said-jev-key', v, 'jevKeySaved')) el('jev-key').value = ''
+          return jevRefrescar()
+        }))
+      })
+
+      // Encender con la llave en la boveda es el gesto que reemplaza un archivo ajeno: el
+      // boton manda exactamente ese pedido, sin llave (el panel nunca la tiene).
+      el('jev-use-saved').addEventListener('click', function (event) {
+        busy(event.currentTarget, pedirJev({ action: 'activar', enabled: true }).then(function (v) {
+          jevDecir('said-jev-key', v, 'jevSaved')
           return jevRefrescar()
         }))
       })
