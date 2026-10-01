@@ -104,7 +104,7 @@ Baileys intenta login y nunca pide registro.
         y `run_trace` por cuenta, filtrados por la línea activa; `scope`, `chats`,
         `activity`, `navBadge` y `decisions` del storage se rearman por línea; lo que
         el panel autorizó se persiste en `chat_scope` para no perderse al cambiar.
-  - [ ] T9d — `wa-send` se niega a mandar por una autorización de otra identidad.
+  - [x] T9d — `wa-send` se niega a mandar por una autorización de otra identidad.
   - [ ] T9e — Worker y paneles: la cuenta viaja a `sidecar.cuenta`; el panel etiqueta
         autorizaciones y decisiones con ella; datos de otra línea se muestran como
         vacíos honestos; el worker sincroniza al cambiar de línea.
@@ -247,3 +247,12 @@ Baileys intenta login y nunca pide registro.
   la línea activa (`scope` con `account`, `activity.account`, `chatsAccount`) y las
   decisiones se filtran por línea; lo que el panel autorizó se guarda en `chat_scope`
   con su línea antes de reescribir el storage, para que nada se pierda al cambiar.
+
+### T9d — `wa-send` no manda por otra identidad
+
+- RED `node test/envio.test.mjs` (5 fallas):
+  `FALLA la autorizacion del numero viejo no manda desde el nuevo`,
+  `FALLA y lo dice con su propio codigo`, `FALLA la del panel de antes (sin cuenta) tampoco`,
+  `FALLA ni nombrando la linea vieja a proposito` (el mensaje salía).
+- GREEN: `envio` 54/54, `check-clis`, `check-harness` y `check-prompts` ok. Código nuevo
+  `send-line-not-linked` (sale 3, como el permiso), documentado en harness/COMMANDS.md.

@@ -60,6 +60,7 @@ Some exit codes are answers, not failures, and all of them are load-bearing:
 | `2` | `wa-read chat` / `media` | that chat reference matches more than one conversation. The candidates are on stderr. Pick one with its JID, or add `--line`. |
 | `3` | `wa-send` | `send-denied`: that conversation's permission does not write. Same answer as the gate — note it and move on. |
 | `3` | `wa-send` | `send-needs-approval`: the conversation is on `borrador`. The reply was written and is waiting for the owner. Nothing was sent. |
+| `3` | `wa-send` | `send-line-not-linked`: that conversation is authorized for another phone number, not for the one linked now. Each number is its own line. Nothing was sent. Note it and move on. |
 | `4` | `wa-send` | `send-no-transport`: the line is not running, so there is nothing to send through. Nothing was queued. |
 
 `wa-send` answers with the same two-line shape as the reads: the stable code on the

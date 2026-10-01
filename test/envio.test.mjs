@@ -276,6 +276,52 @@ console.log('\nwa-send: la escalera de permisos')
   almacen.cerrar()
 }
 
+console.log('\nT9: wa-send no manda por una autorizacion de otro numero')
+{
+  // Visto en vivo: tras vincular OTRO numero, las autorizaciones en `responder` del
+  // viejo seguian valiendo. Mandar con ellas es escribirle a un cliente desde un numero
+  // que nunca autorizo esa conversacion.
+  const VIEJA = 'pn:573001112233'
+  const NUEVA = 'pn:573000000012'
+  const home = nueva()
+  firmar(home, 'Agente De Ejemplo')
+  const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  almacen.registrarLinea({ cuenta: NUEVA, pn: '573000000012:7@s.whatsapp.net' })
+  almacen.activarLinea(NUEVA)
+  // El viejo autorizo a Cliente Alfa en la base; el panel de antes dejo a Laura sin
+  // cuenta (o sea `local`). Ninguna de las dos es del numero vinculado.
+  const scopeDb = new DatabaseSync(join(home, '.wa-inbox', 'scope.db'))
+  scopeDb.prepare("insert into chat_scope (account, chat_jid, chat_name, mode, provider) " +
+    "values (?,?,?,'responder','ninguno')").run(VIEJA, ALFA, 'Cliente Alfa')
+  scopeDb.close()
+  escribirPanel(home, { agentName: 'Agente De Ejemplo',
+    scope: { [LAURA]: { chatName: 'Laura Mendez', mode: 'responder', provider: 'ninguno' } } })
+
+  const socket = socketFalso()
+  const vieja = await correrEnvio(home, ['Cliente Alfa', 'hola', '--send'], { almacen, socket })
+  ok('la autorizacion del numero viejo no manda desde el nuevo',
+    socket.enviados.length === 0 && vieja.code !== 0, vieja.stderr)
+  ok('y lo dice con su propio codigo', vieja.primera === 'wa-send: send-line-not-linked',
+    vieja.stderr)
+  const legado = await correrEnvio(home, ['Laura Mendez', 'hola', '--send'], { almacen, socket })
+  ok('la del panel de antes (sin cuenta) tampoco', socket.enviados.length === 0 &&
+    legado.primera === 'wa-send: send-line-not-linked', legado.stderr)
+  const pedida = await correrEnvio(home, ['Cliente Alfa', 'hola', '--send', '--line', VIEJA],
+    { almacen, socket })
+  ok('ni nombrando la linea vieja a proposito', socket.enviados.length === 0 &&
+    pedida.primera === 'wa-send: send-line-not-linked', pedida.stderr)
+
+  // Control: autorizada para el numero vinculado, sale.
+  const scopeDb2 = new DatabaseSync(join(home, '.wa-inbox', 'scope.db'))
+  scopeDb2.prepare("insert into chat_scope (account, chat_jid, chat_name, mode, provider) " +
+    "values (?,?,?,'responder','ninguno')").run(NUEVA, CALLADO, 'Grupo Nuevo')
+  scopeDb2.close()
+  const propia = await correrEnvio(home, ['Grupo Nuevo', 'hola', '--send'], { almacen, socket })
+  ok('control: la del numero vinculado si sale', propia.code === 0 &&
+    socket.enviados.length === 1 && socket.enviados[0].jid === CALLADO, propia.stderr)
+  almacen.cerrar()
+}
+
 console.log('\nwa-send: borrador deja un borrador y NO envia, y se aprueba a mano')
 {
   const home = nueva()
