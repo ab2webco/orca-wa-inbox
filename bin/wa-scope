@@ -89,6 +89,31 @@ CLASES_JUICIO = ("card", "alert", "nothing", "doubtful")
 # esquema ni la validacion, solo empezar a escribirlo.
 ORIGENES_JUICIO = ("agente", "jev")
 
+# Las columnas del tablero de casos (odd/tasks/kanban-casos.md). Los valores son
+# estables y no se traducen, como los modos: el panel los nombra en el idioma de quien
+# mira.
+ETAPAS_CASO = ("recibido", "clasificado", "decision", "trabajo", "listo",
+               "respondido", "cerrado", "bloqueado")
+# Hacia donde puede ir un caso desde cada etapa. Lo que no esta aca se rechaza sin
+# escribir nada: una tarjeta que salta de Recibido a En trabajo es trabajo que nadie
+# aprobo, y eso es justo lo que el tablero existe para impedir.
+TRANSICIONES_CASO = {
+    "recibido":    ("clasificado", "bloqueado", "cerrado"),
+    "clasificado": ("decision", "bloqueado", "cerrado"),
+    "decision":    ("trabajo", "respondido", "clasificado", "bloqueado", "cerrado"),
+    "trabajo":     ("listo", "bloqueado", "cerrado"),
+    "listo":       ("respondido", "trabajo", "bloqueado", "cerrado"),
+    "respondido":  ("cerrado", "recibido"),
+    "cerrado":     ("recibido",),
+    "bloqueado":   ("recibido", "clasificado", "decision", "cerrado"),
+}
+# Cerrar o bloquear sin decir por que deja una tarjeta muda en la columna que mas se
+# mira despues.
+ETAPAS_CON_MOTIVO = ("cerrado", "bloqueado")
+# Quien hizo cada cosa. Es la dimension de "decisiones tomadas por actor" en las
+# estadisticas, asi que es un vocabulario cerrado y no texto libre.
+ACTORES_CASO = ("agente", "jev", "dueno", "automatizacion", "trabajador")
+
 # Plane agrupa los estados en estos cinco grupos y cada proyecto renombra las columnas
 # a gusto ("Listo", "Entregado", "QA aprobado"). El cierre se decide por el GRUPO y
 # nunca por el nombre: comparar nombres se rompe con el primer tablero que lo escriba
@@ -229,7 +254,8 @@ create table if not exists work (
   next_step text,              -- que falta, en una linea
   status    text not null default 'open',   -- open | done | abandoned
   opened_at text, updated_at text,
-  notified_at text             -- cuando la conversacion supo del cierre; null = todavia no
+  notified_at text,            -- cuando la conversacion supo del cierre; null = todavia no
+  case_id integer              -- el caso del tablero del que cuelga (kanban-casos, T1)
 );
 create index if not exists ix_work_status on work(status);
 -- Resumenes de lo podado. La bitacora detallada no crece para siempre.
@@ -268,6 +294,48 @@ create table if not exists juicio (
   at        text not null,
   primary key (account, chat_jid, stanza_id)
 );
+-- El caso del tablero (odd/tasks/kanban-casos.md): cinco mensajes del mismo pedido son
+-- UN caso, con su etapa, la propuesta que espera al dueno y la tarjeta de Plane si
+-- hizo falta una. Va en scope.db por lo mismo que `juicio`: capture.db es del sidecar.
+create table if not exists caso (
+  case_id    integer primary key autoincrement,
+  account    text not null default 'local',   -- DE QUE LINEA (T9)
+  chat_jid   text not null,
+  etapa      text not null default 'recibido',
+  clase      text,
+  prioridad  text,               -- la de Plane: urgent | high | medium | low | none
+  titulo     text,
+  resumen    text,
+  propuesta  text,               -- JSON: tipo, respuesta, instrucciones, repo
+  propuesta_version text,        -- sha256 del JSON canonico; lo que aprueba el dueno
+  plane_issue text,
+  created_at text not null,
+  updated_at text not null
+);
+create index if not exists ix_caso_chat on caso(account, chat_jid, etapa);
+-- Un mensaje es de UN caso como mucho. La llave lleva la cuenta: el mismo mensaje de
+-- un grupo visto desde dos lineas propias es el mismo stanza_id, y cada linea tiene
+-- su propio tablero.
+create table if not exists caso_mensaje (
+  account   text not null default 'local',
+  stanza_id text not null,
+  case_id   integer not null,
+  at        text not null,
+  primary key (account, stanza_id)
+);
+create index if not exists ix_caso_mensaje_caso on caso_mensaje(case_id);
+-- Cada cosa que le pasa a un caso, con quien la hizo. Es la fuente de toda estadistica:
+-- un cambio que no deja evento es un cambio que el tablero no puede explicar.
+create table if not exists caso_evento (
+  id      integer primary key autoincrement,
+  case_id integer not null,
+  de      text,                  -- la etapa de antes; null al crearse
+  a       text not null,         -- la etapa de despues (igual a `de` si no se movio)
+  actor   text not null,         -- agente | jev | dueno | automatizacion | trabajador
+  detalle text,
+  at      text not null
+);
+create index if not exists ix_caso_evento_caso on caso_evento(case_id);
 """
 
 
@@ -842,6 +910,8 @@ def migrate(con):
     work_cols = {r["name"] for r in con.execute("pragma table_info(work)")}
     if "notified_at" not in work_cols:
         con.execute("alter table work add column notified_at text")
+    if "case_id" not in work_cols:
+        con.execute("alter table work add column case_id integer")
     # La cuenta, en las tres tablas que no la tenian (T9). Es solo una columna NUEVA
     # con `local` por defecto: lo que ya estaba es de la linea de siempre, y atribuirlo
     # a un numero es la migracion explicita (`reclave_local`), no esto.
@@ -856,6 +926,7 @@ def migrate(con):
     # la lista vieja tiraria justo ese mapeo recuperado.
     migrate_cuentas(con, {r["name"] for r in con.execute("pragma table_info(chat_scope)")})
     closing_baseline(con)
+    casos_backfill(con)
 
 
 # Las columnas que se copian al reconstruir chat_scope. Se nombran y no se hace
@@ -910,6 +981,61 @@ def closing_baseline(con):
                 "on conflict(key) do update set value=excluded.value", (now,))
     con.commit()
     return now
+
+
+def casos_backfill(con):
+    """El trabajo que ya estaba abierto pasa al tablero, UNA vez: un caso en `trabajo`
+    por tarjeta y conversacion, con su tarjeta de Plane (kanban-casos, T1).
+
+    Se agrupa como agrupa `closing_rows`: cinco mensajes sobre la misma tarjeta son el
+    mismo pedido, y cinco tarjetas iguales en el tablero serian ruido. Un trabajo sin
+    tarjeta es su propio caso: no hay nada que diga que va con otro.
+
+    Corre una sola vez, marcada en `settings` como `closing_since`. Si corriera siempre,
+    cada `wa-scope work` que el agente escribe todavia a la vieja usanza se volveria un
+    caso en `trabajo` a escondidas, sin que nadie lo hubiera clasificado. La marca va en
+    la misma transaccion que los casos: si algo falla a mitad, no queda ni la marca ni
+    medio backfill."""
+    if con.execute("select 1 from settings where key='casos_desde' and value <> ''"
+                   ).fetchone():
+        return
+    momento = ahora_caso()
+    try:
+        con.execute("begin immediate")
+        grupos = {}
+        for r in con.execute(
+                "select stanza_id, account, chat_jid, chat_name, issue, next_step, "
+                "opened_at, updated_at from work "
+                "where status='open' and case_id is null order by opened_at, stanza_id"):
+            issue = (r["issue"] or "").strip()
+            llave = ((r["account"], r["chat_jid"], issue) if issue
+                     else (r["account"], r["chat_jid"], None, r["stanza_id"]))
+            grupos.setdefault(llave, []).append(r)
+        for filas in grupos.values():
+            primera, ultima = filas[0], filas[-1]
+            issue = (primera["issue"] or "").strip() or None
+            cur = con.execute(
+                "insert into caso (account, chat_jid, etapa, titulo, resumen, "
+                "plane_issue, created_at, updated_at) values (?,?,?,?,?,?,?,?)",
+                (primera["account"], primera["chat_jid"] or "", "trabajo",
+                 issue or primera["chat_name"], ultima["next_step"], issue,
+                 sello_caso(primera["opened_at"]) or momento,
+                 sello_caso(ultima["updated_at"]) or momento))
+            case_id = cur.lastrowid
+            for f in filas:
+                con.execute("insert or ignore into caso_mensaje (account, stanza_id, "
+                            "case_id, at) values (?,?,?,?)",
+                            (f["account"], f["stanza_id"], case_id, momento))
+                con.execute("update work set case_id=? where stanza_id=?",
+                            (case_id, f["stanza_id"]))
+            caso_evento(con, case_id, None, "trabajo", "automatizacion", "backfill",
+                        momento)
+        con.execute("insert into settings (key,value) values ('casos_desde',?) "
+                    "on conflict(key) do update set value=excluded.value", (momento,))
+        con.commit()
+    except sqlite3.Error:
+        con.rollback()
+        raise
 
 
 def wa_chats(query=None):
@@ -1842,6 +1968,69 @@ def cmd_juicio(con, a):
              "clase": a.clase, "origen": a.origen, "at": ahora}]
 
 
+def ahora_caso():
+    """Con segundos, a diferencia de `ahora()`: de `caso_evento` salen las medianas de
+    "tiempo a clasificar" y "a responder", y al minuto dos pasos de la misma corrida
+    miden cero."""
+    return time.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def sello_caso(sello):
+    """Un sello de `work` (al minuto) llevado al formato de los casos, para que
+    ordenar y comparar texto siga siendo ordenar y comparar tiempo."""
+    sello = (sello or "").strip()
+    return f"{sello}:00" if len(sello) == 16 else (sello or None)
+
+
+def caso_evento(con, case_id, de, a, actor, detalle="", at=None):
+    con.execute("insert into caso_evento (case_id, de, a, actor, detalle, at) "
+                "values (?,?,?,?,?,?)", (case_id, de, a, actor, detalle or "",
+                                         at or ahora_caso()))
+
+
+def caso_de(con, case_id):
+    """El caso de la linea activa, o la salida con error. Un id de otra linea no
+    existe para esta: es la misma regla que el alcance (T9)."""
+    row = con.execute("select * from caso where case_id=? and account=?",
+                      (case_id, cuenta_activa())).fetchone()
+    if not row:
+        sys.exit(f"no case #{case_id} on this line")
+    return dict(row)
+
+
+def caso_fila(con, row):
+    """Un caso como lo ve quien lo lista: la propuesta ya parseada y cuantos mensajes
+    agrupa."""
+    caso = dict(row)
+    caso["propuesta"] = json.loads(caso["propuesta"]) if caso.get("propuesta") else None
+    caso["mensajes"] = con.execute("select count(*) from caso_mensaje where case_id=?",
+                                   (caso["case_id"],)).fetchone()[0]
+    return caso
+
+
+def cmd_caso_listar(con, a):
+    sql, params = "select * from caso where account=?", [cuenta_activa()]
+    if a.etapa:
+        sql += " and etapa=?"
+        params.append(a.etapa)
+    if a.chat:
+        sql += " and chat_jid=?"
+        params.append(a.chat)
+    return [caso_fila(con, r) for r in con.execute(
+        sql + " order by updated_at desc, case_id desc", params).fetchall()]
+
+
+def cmd_caso_ver(con, a):
+    caso = caso_fila(con, caso_de(con, a.id))
+    caso["mensajes"] = [dict(r) for r in con.execute(
+        "select stanza_id, at from caso_mensaje where case_id=? order by at, stanza_id",
+        (a.id,))]
+    caso["eventos"] = [dict(r) for r in con.execute(
+        "select id, de, a, actor, detalle, at from caso_evento where case_id=? "
+        "order by id", (a.id,))]
+    return [caso]
+
+
 def cmd_record(con, a):
     con.execute("insert into agent_action (ts,chat_jid,chat_name,stanza_id,action,"
                 "plane_issue,detail,account) values (?,?,?,?,?,?,?,?)",
@@ -2011,6 +2200,24 @@ def main():
     s.add_argument("--clase", required=True, choices=list(CLASES_JUICIO))
     s.add_argument("--origen", default="agente", choices=list(ORIGENES_JUICIO))
     s.set_defaults(fn=cmd_juicio)
+
+    s = add("caso", help="the case board: a case groups the messages of one request, "
+                         "and every change leaves an event (odd/tasks/kanban-casos.md)")
+    casos = s.add_subparsers(dest="caso_cmd", required=True)
+
+    def caso(name, **kw):
+        # SUPPRESS: sin el flag, el subcomando no pisa un --json dicho antes.
+        sp = casos.add_parser(name, **kw)
+        sp.add_argument("--json", dest="json_sub", action="store_true",
+                        default=argparse.SUPPRESS)
+        return sp
+
+    c = caso("listar", help="the cases of the active line, newest first")
+    c.add_argument("--etapa", choices=list(ETAPAS_CASO)); c.add_argument("--chat")
+    c.set_defaults(fn=cmd_caso_listar)
+
+    c = caso("ver", help="one case with its messages and its events")
+    c.add_argument("id", type=int); c.set_defaults(fn=cmd_caso_ver)
 
     a = ap.parse_args()
     if getattr(a, "json_sub", False):

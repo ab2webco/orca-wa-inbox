@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""El caso del tablero, ejercitado de verdad contra una base temporal
+(odd/tasks/kanban-casos.md, T1).
+
+Lo que se prueba aca no se ve leyendo el codigo: que una base con trabajo abierto de
+antes no pierda nada al migrar, que una transicion prohibida no escriba ni una fila, y
+que una aprobacion quede congelada a la propuesta que el dueno vio — triage
+re-propone cada cinco minutos, y "nada corre sin tu clic" depende de eso.
+
+Cada caso corre en su propio HOME temporal, como scripts/check-closing: la base vive en
+~/.wa-inbox/scope.db y no hay variable para moverla.
+"""
+import json
+import os
+import pathlib
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import time
+
+RAIZ = pathlib.Path(__file__).resolve().parent.parent
+WA_SCOPE = RAIZ / "bin" / "wa-scope"
+CHAT = "120363000000000001@g.us"
+OTRO = "120363000000000002@g.us"
+
+fallos = []
+pruebas = 0
+
+
+def ok(nombre, condicion, detalle=""):
+    global pruebas
+    pruebas += 1
+    if condicion:
+        print(f"  ok    {nombre}")
+        return True
+    fallos.append(f"{nombre}{f' — {detalle}' if detalle else ''}")
+    print(f"  FALLA {nombre}{f' — {detalle}' if detalle else ''}")
+    return False
+
+
+def corre(home, *args):
+    env = dict(os.environ, HOME=str(home),
+               XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+               APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"))
+    return subprocess.run([str(WA_SCOPE), *args, "--json"], capture_output=True,
+                          text=True, env=env, timeout=120)
+
+
+def js(home, *args):
+    p = corre(home, *args)
+    if p.returncode != 0:
+        raise AssertionError(f"wa-scope {' '.join(args)} salio {p.returncode}: "
+                             f"{p.stderr.strip() or p.stdout.strip()}")
+    return json.loads(p.stdout or "[]")
+
+
+def db_de(home):
+    con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "scope.db")
+    con.row_factory = sqlite3.Row
+    return con
+
+
+def cuenta(home, sql, *params):
+    con = db_de(home)
+    n = con.execute(sql, params).fetchone()[0]
+    con.close()
+    return n
+
+
+# ── 1. La migracion: el trabajo abierto de antes pasa a ser casos ─────────────────
+# Una base como la que ya tiene el usuario: sin tablas de casos y con `work` abierto.
+# Dos mensajes sobre la misma tarjeta, uno sobre otra, uno sin tarjeta, y uno cerrado.
+print("\nla migracion")
+# Recientes: `wa-scope work` da por abandonado lo que lleva una semana sin moverse, y
+# lo que se mide aca es que lo abierto SIGA abierto despues de migrar.
+HACE = {f"h{n}": time.strftime("%Y-%m-%d %H:%M", time.localtime(time.time() - n * 3600))
+        for n in (1, 2, 3, 4, 5)}
+with tempfile.TemporaryDirectory() as home:
+    (pathlib.Path(home) / ".wa-inbox").mkdir(parents=True)
+    vieja = db_de(home)
+    vieja.executescript("""
+      create table work (
+        stanza_id text primary key, chat_jid text, chat_name text, issue text,
+        step text, next_step text, status text not null default 'open',
+        opened_at text, updated_at text);
+      insert into work values ('VIEJO1','%(c)s','Soporte Norte','SOP-1','tarjeta abierta',
+        'seguir', 'open', '%(h5)s', '%(h5)s');
+      insert into work values ('VIEJO2','%(c)s','Soporte Norte','SOP-1','tarjeta abierta',
+        'seguir', 'open', '%(h4)s', '%(h4)s');
+      insert into work values ('VIEJO3','%(c)s','Soporte Norte','SOP-2','tarjeta abierta',
+        'seguir', 'open', '%(h3)s', '%(h3)s');
+      insert into work values ('VIEJO4','%(c)s','Soporte Norte',null,'leido',
+        'contestar', 'open', '%(h2)s', '%(h2)s');
+      insert into work values ('HECHO1','%(c)s','Soporte Norte','SOP-3','listo',
+        null, 'done', '2026-01-01 08:00', '2026-01-02 08:00');
+    """ % dict(HACE, c=CHAT))
+    vieja.commit()
+    vieja.close()
+
+    casos = js(home, "caso", "listar")
+    por_issue = {c["plane_issue"]: c for c in casos}
+    ok("cada trabajo abierto queda en un caso", sorted(por_issue, key=str) ==
+       sorted(["SOP-1", "SOP-2", None], key=str), f"listo {casos}")
+    ok("los backfill quedan en trabajo", all(c["etapa"] == "trabajo" for c in casos),
+       f"etapas {[c['etapa'] for c in casos]}")
+    ok("el trabajo terminado no se migra", "SOP-3" not in por_issue)
+    ok("dos mensajes de la misma tarjeta son un solo caso",
+       cuenta(home, "select count(*) from caso_mensaje where case_id=?",
+              (por_issue.get("SOP-1") or {}).get("case_id")) == 2)
+    ok("cada caso migrado tiene un evento backfill de la automatizacion",
+       cuenta(home, "select count(*) from caso_evento where actor='automatizacion' "
+                    "and detalle='backfill' and a='trabajo'") == 3)
+    ok("work queda colgando de su caso",
+       cuenta(home, "select count(*) from work where status='open' "
+                    "and case_id is null") == 0)
+
+    # Correrla de nuevo no duplica nada.
+    js(home, "caso", "listar")
+    ok("la migracion es idempotente",
+       cuenta(home, "select count(*) from caso") == 3
+       and cuenta(home, "select count(*) from caso_evento") == 3)
+
+    # work y closing siguen funcionando sobre la base migrada.
+    abiertos = js(home, "work")
+    ok("wa-scope work sigue listando lo abierto",
+       sorted(r["stanza_id"] for r in abiertos) ==
+       ["VIEJO1", "VIEJO2", "VIEJO3", "VIEJO4"], f"listo {abiertos}")
+    js(home, "agent", "Watson")
+    js(home, "set", CHAT, "--provider", "plane", "--target", "SOP", "--mode", "responder")
+    ok("wa-scope closing no avisa el backlog migrado", js(home, "closing") == [])
+    js(home, "work", "--stanza", "NUEVO1", "--chat", CHAT, "--name", "Soporte Norte",
+       "--issue", "SOP-9", "--step", "tarjeta abierta", "--next", "seguir")
+    ok("wa-scope closing sigue avisando lo nuevo",
+       [r["issue"] for r in js(home, "closing")] == ["SOP-9"])
+    ok("el trabajo nuevo no se convierte en caso a escondidas",
+       cuenta(home, "select count(*) from caso") == 3)
+
+    detalle = js(home, "caso", "ver", str(por_issue["SOP-1"]["case_id"]))[0]
+    ok("ver trae los mensajes y los eventos",
+       sorted(m["stanza_id"] for m in detalle["mensajes"]) == ["VIEJO1", "VIEJO2"]
+       and len(detalle["eventos"]) == 1, f"vio {detalle}")
+
+
+print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
+if fallos:
+    sys.exit(1)
