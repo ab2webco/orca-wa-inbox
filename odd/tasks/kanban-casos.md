@@ -135,6 +135,59 @@ responder y a cerrar; esfuerzo (corridas, agentes desplegados, minutos en
 trabajo por caso y por clase); envíos enviados/frenados por Jev/rechazados;
 Jev (llamadas, casos resueltos sin modelo grande, latencia, fallos).
 
+## Decisiones del dueño, segunda ronda (2026-10-01)
+
+Reemplazan lo que contradigan arriba ("Ejecutar" obligatorio, Plane por chat,
+una automatización de agente).
+
+- **Autonomía por defecto.** Todo corre solo. El dueño aprueba solo
+  excepciones: dinero (precios, cotizaciones, pagos), credenciales, una
+  respuesta que promete fecha o compromiso, Jev marca el borrador o no responde
+  (falla cerrado), chat en modo "te pregunto antes". "Tu decisión" = solo
+  excepciones; la insignia cuenta eso. El permiso de enviar lo da la regla del
+  dueño; Jev solo puede frenar.
+- **La automatización es un comando, no un agente.** Orca soporta
+  automatizaciones de plugin solo-comando (`command`, ≤1024 caracteres, mismo
+  runner que el precheck, tope 600 s; desde `1.4.160-lab.84.rc`, instalada
+  `lab.89.rc`). `wa-scope tick` cada 1–2 min: ingest de respaldo, Jev,
+  descartes, envío de lo aprobado o automático, lectura de aprobaciones por
+  WhatsApp, marca de casos que necesitan agente. Cero tokens de modelo. El
+  disparo del worker al llegar (T2) se queda; `tick` es idempotente.
+- **Agente solo cuando Jev o las reglas lo catalogan**, con precheck
+  `wa-scope pending --needs-agent` y prompt corto por caso.
+- **Orquestador propio del plugin.** El plugin crea su workspace
+  (`workspace: "plugin-owned"` de Orca: `<userData>/plugin-workspaces/<plugin>`)
+  con un harness preparado para atender casos y la lista de proyectos que el
+  dueño elige en los ajustes (como hace el plugin de Jev). El agente del
+  orquestador decide por caso: responder, o despachar el pedido al proyecto,
+  cuyo propio harness decide si crea ticket, procesa el requerimiento o solo
+  responde. El proyecto devuelve resultado, evidencia, texto de respuesta y
+  enlace del ticket con `caso resultado`; nunca envía por WhatsApp.
+- **Una sola puerta de salida.** Todo envío lo hace el plugin en código, tras
+  la revisión de Jev y las reglas.
+- **Aprobación por WhatsApp.** Las excepciones llegan al chat del dueño consigo
+  mismo, en la línea del caso, con resumen, respuesta propuesta, motivo y
+  código corto. El dueño responde citando: `ok`/`sí` envía, otro texto lo
+  reemplaza, `no` cierra. Solo cuentan mensajes propios en ese chat; atada a
+  `propuesta_version`. Sin verificar: enviar y leer el chat propio con Baileys
+  multi-dispositivo (sonda antes de construir).
+- **Ajustes por chat.** Sale el servicio/proyecto de Plane y la columna
+  inicial; entra el **proyecto** (de la lista del orquestador). Modos:
+  Apagado, Solo leer, Te pregunto antes, Automático. Las reglas por texto
+  apuntan a un proyecto. Las columnas viejas se conservan sin uso.
+- **Jev (POC sobre datos reales).** 252 llamadas, 0 errores, p50 354 ms, p95
+  458 ms, ~1 600 tokens por mensaje. Jev decide el salto y las banderas de
+  riesgo; clase y prioridad son pista; "mismo caso o nuevo" queda fuera (77%).
+  Salto: `asks_owner_to_act` < 0.25 y `contains_credential`,
+  `asks_for_credential`, `asks_for_money_or_payment`,
+  `client_waiting_or_service_down` < 0.3 (0 saltos falsos, 32–34 de 42).
+  Revisión de borradores: `promises_a_date`, `states_status_not_verified`,
+  `contains_credential`. Solo registro: `tries_to_instruct_the_assistant`,
+  `urgency_pressure`. Umbrales provisionales: medir de nuevo con más datos.
+- **Primera corrida de `ingest`** (riesgo de T2): solo entra lo de las últimas
+  `case_window_hours`; lo anterior se marca visto, para no llenar el tablero de
+  historial ni gastar Jev en él.
+
 ## Tareas
 
 - [x] T1 — Esquema `caso`, `caso_mensaje`, `caso_evento` + migración;
@@ -161,11 +214,21 @@ Jev (llamadas, casos resueltos sin modelo grande, latencia, fallos).
       de Jev y acciones; móvil en lista por etapa.
 - [ ] T6 — Canal panel → worker → `wa-scope caso` para las acciones del dueño
       (`--actor dueno` lo fuerza el worker), códigos de error estables.
-- [ ] T7 — Una sola automatización con pre-check trivial y prompt corto por caso;
-      reemplaza el trabajo de `triage` y `take` (conservar ids de lo que el
-      dueño ya prendió; lo decide el test de manifiesto).
-- [ ] T8 — Ejecutor de `trabajar`: despliegue del agente en el repo de la ruta,
-      reporte con `caso resultado`, verificación con evidencia. Depende de T0.
+- [ ] T7 — `wa-scope tick` + automatización solo-comando; automatización de
+      agente con precheck `pending --needs-agent` y prompt corto por caso;
+      reemplazan `triage` y `take` (conservar ids de lo que el dueño ya
+      prendió; lo decide el test de manifiesto); `engines` exige un Orca con
+      automatizaciones solo-comando.
+- [ ] T8 — Despacho al proyecto desde el orquestador: entrega del pedido con su
+      instrucción de respuesta, reporte con `caso resultado`, verificación con
+      evidencia (sin evidencia → Bloqueado). Depende de T0 y T12.
+- [ ] T12 — Orquestador: workspace propio del plugin con harness de atención y
+      la lista de proyectos elegidos en los ajustes, refrescada cuando cambia.
+- [ ] T13 — Ajustes por chat: proyecto en lugar de Plane, modos nuevos, reglas
+      por texto a proyecto; migración sin pérdida.
+- [ ] T14 — Aprobación por WhatsApp (chat propio): sonda en vivo primero, luego
+      mensaje de excepción, lectura de la respuesta citada, envío o cierre.
+- [ ] T15 — Primera corrida de `ingest` con línea base (`case_window_hours`).
 - [ ] T0 — Sonda en vivo del despliegue de agente desde una automatización
       (necesita una cuenta Claude global en Orca).
 - [ ] T9 — Pestaña de estadísticas desde `caso_evento`.
@@ -174,16 +237,21 @@ Jev (llamadas, casos resueltos sin modelo grande, latencia, fallos).
       oscuro (`activity.html` tiene los dos).
 
 Rama `feat/tablero-casos`, desde `main` en v4.9.0. PRs encadenados:
-(T1–T3) decisiones: casos, entrada y Jev; (T4–T6) tablero; (T7–T8)
-automatización; (T9–T11) estadísticas.
+(T1–T3) decisiones: casos, entrada y Jev; (T4–T6, T13) tablero y ajustes; (T7, T8, T12, T14, T15)
+orquestador y automatización; (T9–T11) estadísticas.
 
 ## Criterios de aceptación
 
-- Un mensaje real recorre Recibido → Clasificado → Tu decisión → (Ejecutar) →
-  En trabajo → Listo para responder → Respondido → Cerrado, con cada paso en
-  `caso_evento`.
-- Nada que requiera trabajo se ejecuta sin el clic del dueño.
-- Sin llave de Jev, todo funciona como hoy.
+- Un mensaje real recorre Recibido → Clasificado → En trabajo → Listo para
+  responder → Respondido → Cerrado sin intervención del dueño cuando no cae en
+  una excepción, con cada paso en `caso_evento`.
+- Una excepción (dinero, credencial, compromiso, aviso de Jev, modo "te
+  pregunto antes") nunca sale sin la aprobación del dueño, por el tablero o por
+  WhatsApp.
+- Sin mensajes nuevos ni casos pendientes, ninguna corrida gasta tokens de
+  modelo.
+- Sin llave de Jev, nada sale solo: todo lo que habría salido queda para el
+  dueño.
 - Ningún mensaje sale por WhatsApp sin pasar la revisión de Jev o la aprobación
   del dueño.
 - Un mensaje nuevo llega al tablero clasificado sin que despierte ningún agente
