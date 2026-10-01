@@ -2540,7 +2540,7 @@ def cmd_caso_ver(con, a):
 EXTENSIONES_AUDIO = (".opus", ".ogg", ".oga", ".mp3", ".m4a", ".aac", ".wav", ".amr")
 # Lo que ingest reporta, en este orden. `casos` va aparte: son los ids tocados.
 CONTEOS_INGEST = ("vistos", "nuevos", "casos_creados", "unidos", "cerrados", "dudosos",
-                  "sin_caso", "ignorados")
+                  "sin_caso", "ignorados", "anteriores")
 # La prioridad de un caso que ingest clasifica. No la inventa: ni el dueno ni un veredicto
 # cacheado dicen cuan urgente es, y `none` es la unica que no afirma nada.
 PRIORIDAD_INGEST = "none"
@@ -2792,13 +2792,46 @@ def ingest_mensaje(con, m, veredicto, horas):
     return hecho, case_id
 
 
+def linea_base_ingest(con, horas):
+    """Desde cuando ingest toma mensajes en esta linea (T15), en segundos de epoch.
+
+    La primera corrida la fija en "ahora menos `case_window_hours`" y la guarda: lo de
+    antes queda visto para siempre. Sin esto, estrenar ingest sobre una semana de
+    historial llenaria el tablero de casos viejos y le preguntaria a Jev por cada uno.
+    Lo que el telefono sincroniza tarde con fecha de antes tampoco entra."""
+    llave = rastro("ingest_desde")
+    fila = con.execute("select value from settings where key=?", (llave,)).fetchone()
+    if fila and fila["value"]:
+        try:
+            return time.mktime(time.strptime(fila["value"], "%Y-%m-%d %H:%M:%S"))
+        except ValueError:
+            pass
+    desde = time.time() - horas * 3600
+    con.execute("insert into settings (key,value) values (?,?) on conflict(key) do "
+                "update set value=excluded.value",
+                (llave, time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(desde))))
+    con.commit()
+    return desde
+
+
+def anterior_a(m, desde):
+    """Si el mensaje es de antes de la linea base. Una fecha que no se lee entra: ante
+    la duda, el camino de siempre."""
+    try:
+        return time.mktime(time.strptime(str(m.get("date")), "%Y-%m-%d %H:%M")) < desde
+    except ValueError:
+        return False
+
+
 def cmd_ingest(con, a):
     """Los mensajes nuevos de las conversaciones autorizadas pasan a casos.
 
     Lee lo mismo que el agente (`wa-read inbox`) y lo que no esta en `caso_mensaje` lo
     resuelve en este orden: lo que el dueno marco en el panel, el juicio que el agente ya
-    cacheo, las reglas deterministas (cuerpo vacio o solo audio: dudoso), y Jev (T3, hoy
-    no opina). Lo que nada resuelve queda en `recibido` para el agente.
+    cacheo, las reglas deterministas (cuerpo vacio o solo audio: dudoso), y Jev (con la
+    llave puesta). Lo que nada resuelve queda en `recibido` para el agente. La primera
+    corrida en una linea solo toma lo de las ultimas `case_window_hours` (T15): lo de
+    antes queda visto y se cuenta en `anteriores`.
 
     Cada mensaje es una transaccion: repetirlo no cambia nada y no escribe eventos.
     Deny by default: una conversacion que no esta en el alcance, o esta en `off`, no
@@ -2817,6 +2850,7 @@ def cmd_ingest(con, a):
     scope = merged_scope(con)
     decisiones = decisions_read()
     horas = ventana_casos(con)
+    desde = linea_base_ingest(con, horas)
     abren, sueltos = [], []
     # Del mas viejo al mas nuevo: el inbox viene al reves, y el primero de un pedido es
     # el que abre el caso.
@@ -2826,6 +2860,9 @@ def cmd_ingest(con, a):
             continue
         total["vistos"] += 1
         if caso_de_mensaje(con, m["stanza_id"]):
+            continue
+        if anterior_a(m, desde):
+            total["anteriores"] += 1
             continue
         veredicto = veredicto_de(m, (decisiones.get(m["stanza_id"]) or {}).get("decision"),
                                  con)

@@ -1966,6 +1966,61 @@ if NODE:
         ok("y sin la credencial", t and "Hunter2xx" not in t["title"], f"{t and t['title']}")
 
 
+# ── 15. La primera corrida de ingest (T15) ───────────────────────────────────────
+# La primera vez solo entra lo de las ultimas `case_window_hours`; lo de antes queda
+# visto: ni llena el tablero de historial ni gasta Jev en el.
+print("\nla primera corrida de ingest")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "P1", "@duenio esto es de antier", 30 * 60, mencion=True),
+                         msg(PERSONA, "P2", "y esto de anoche", 13 * 60),
+                         msg(SOPORTE, "P3", "@duenio esto es de hoy", 60, mencion=True)])
+        autoriza(home)
+        r = ingiere(home)
+        ok("solo entra lo de la ventana", caso_de_stanza(home, "P3") is not None
+           and caso_de_stanza(home, "P1") is None and caso_de_stanza(home, "P2") is None,
+           f"salio {r}")
+        ok("y el reporte cuenta lo que quedo visto de antes",
+           r.get("anteriores") == 2 and r["nuevos"] == 1, f"salio {r}")
+        r = ingiere(home)
+        ok("lo de antes no entra en la segunda corrida",
+           caso_de_stanza(home, "P1") is None and caso_de_stanza(home, "P2") is None
+           and r["nuevos"] == 0, f"salio {r}")
+        # Lo que llega despues con fecha de antes de la linea base (historial que el
+        # telefono sincroniza tarde) tampoco.
+        llegan(home, A, [msg(PERSONA, "P4", "historial tardio", 20 * 60),
+                         msg(PERSONA, "P5", "esto llego ahora", 5)])
+        r = ingiere(home)
+        ok("lo que llega tarde con fecha de antes queda visto, lo nuevo entra",
+           caso_de_stanza(home, "P4") is None and caso_de_stanza(home, "P5") is not None,
+           f"salio {r}")
+
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(PERSONA, "W1", "y esto de anoche", 13 * 60)])
+        autoriza(home)
+        js(home, "config", "case_window_hours", "24")
+        ingiere(home)
+        ok("la ventana es la de case_window_hours", caso_de_stanza(home, "W1") is not None)
+
+    falso = JevFalso(jev_segun_texto)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(SOPORTE, "Q1", "@duenio cuanto cuesta", 30 * 60, mencion=True),
+                             msg(SOPORTE, "Q2", "@duenio cuanto cuesta hoy", 30,
+                                 mencion=True)])
+            autoriza(home)
+            ingiere(home)
+            ok("con llave, Jev solo ve lo de la ventana", len(falso.pedidos) == 1,
+               f"{len(falso.pedidos)} pedidos")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
