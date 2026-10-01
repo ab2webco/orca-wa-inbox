@@ -32,7 +32,15 @@ const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..')
 // capturas adentro, correr este mismo arnes dejaba el plugin en "No valido" —
 // 328 PNG son 207 MB — y el sintoma aparecia en Orca, lejos de la causa. La
 // verificacion no puede romper lo que verifica.
-const SALIDA = join(RAIZ, '..', '.orca-wa-inbox-capturas')
+//
+// WA_INBOX_CAPTURAS cambia la carpeta: dos copias del repo (un worktree por rama) que
+// comparten la de arriba se borran las capturas una a la otra, porque cada corrida la
+// vacia antes de empezar.
+const SALIDA = process.env.WA_INBOX_CAPTURAS ??
+  join(RAIZ, '..', '.orca-wa-inbox-capturas')
+// WA_INBOX_SOLO="tablero,config-sidecar" fotografia solo los paneles cuyo nombre empieza
+// asi: para mirar un estado sin esperar las cientos de capturas de los demas.
+const SOLO = (process.env.WA_INBOX_SOLO ?? '').split(',').map((x) => x.trim()).filter(Boolean)
 
 const ANCHOS = [1440, 768, 390, 320]
 
@@ -291,6 +299,101 @@ const conLinea = (sidecar) => Object.assign({},
     looked: 4, pending: 0, reason: null }),
   { sidecar })
 
+// El tablero de casos (T5). La clave `board` la escribe `wa-scope` (odd/tasks/kanban-casos.md,
+// "Contratos"): estas tarjetas tienen esa forma exacta y datos INVENTADOS. Los nombres
+// de los chats y los textos de las propuestas son de ejemplo, igual que arriba.
+const minutos = (n) => new Date(AHORA_MS - n * 60000).toISOString()
+const CUENTAS_VACIAS = { recibido: 0, clasificado: 0, decision: 0, trabajo: 0, listo: 0,
+  respondido: 0, cerrado: 0, bloqueado: 0 }
+const ACCIONES = ['enviar', 'editar', 'ejecutar', 'reclasificar', 'cerrar', 'reabrir']
+const caso = (id, etapa, extra) => Object.assign({
+  case_id: id, account: 'local', chat_jid: `1203630000000000${10 + id}@g.us`,
+  chat_name: 'Soporte — Cliente Norte', stage: etapa, title: 'Caso de ejemplo',
+  summary: '', clase: 'card', prioridad: 'none', jev: null, proposal: null,
+  exceptions: [], blocked_reason: null, ticket: null, updated_at: minutos(5),
+  actions: ACCIONES
+}, extra)
+const TABLERO_CASOS = [
+  caso(1, 'decision', {
+    title: 'Piden descuento del 30% en la renovación', prioridad: 'high',
+    chat_name: 'Soporte — Cliente Norte', updated_at: minutos(3),
+    summary: 'Dice que otro proveedor se lo deja en 1.400 y quiere respuesta hoy.',
+    jev: { attention_class: 'card', skip: false,
+      flags: ['asks_for_money_or_payment', 'client_waiting_or_service_down'] },
+    proposal: { tipo: 'responder', version: 'v1f3a',
+      texto: 'Hola, gracias por avisar. El precio de renovación es el vigente; ' +
+        'si quieres, lo revisamos en una llamada esta semana.' },
+    exceptions: ['money'] }),
+  caso(2, 'decision', {
+    title: 'Pide el acceso al tablero de Andes', clase: 'alert', prioridad: 'urgent',
+    chat_name: 'Operaciones internas', updated_at: minutos(22),
+    summary: 'Es una persona que no está en el equipo.',
+    jev: { attention_class: 'alert', skip: false, flags: ['asks_for_credential'] },
+    proposal: { tipo: 'escalar', version: 'v2b71', texto: 'Escalar al responsable de accesos.' },
+    exceptions: ['credential', 'jev'] }),
+  caso(3, 'decision', {
+    title: 'Promete entrega el viernes', prioridad: 'medium', chat_name: 'Laura Méndez',
+    updated_at: minutos(48),
+    proposal: { tipo: 'responder', version: 'v3c09',
+      texto: 'Te confirmo que lo tendrás el viernes a primera hora.' },
+    jev: { attention_class: 'card', skip: false, flags: ['promises_a_date'] },
+    exceptions: ['commitment'] }),
+  caso(4, 'recibido', { title: 'Nota de voz sin transcribir', clase: 'doubtful',
+    chat_name: 'Proyecto Andes — QA', updated_at: minutos(1) }),
+  caso(5, 'clasificado', { title: 'El reporte de ayer salió en blanco', prioridad: 'high',
+    chat_name: 'Soporte — Cliente Norte', updated_at: minutos(9),
+    summary: 'Lo necesitan hoy.',
+    jev: { attention_class: 'card', skip: false, flags: ['urgency_pressure'] } }),
+  caso(6, 'clasificado', { title: 'Saludo de buenos días', clase: 'nothing',
+    chat_name: 'Comite - Cliente -  Sur', updated_at: minutos(14),
+    jev: { attention_class: 'nothing', skip: true, flags: [] } }),
+  caso(7, 'trabajo', { title: 'Reporte en blanco al exportar', prioridad: 'high',
+    chat_name: 'Soporte — Cliente Norte', updated_at: minutos(35), ticket: 'SOP-214',
+    proposal: { tipo: 'trabajar', version: 'v7d20',
+      texto: 'Reproducir el error de exportación y corregirlo en el repositorio del reporte.' } }),
+  caso(8, 'listo', { title: 'Estado de la exportación', prioridad: 'low',
+    chat_name: 'Soporte — Cliente Norte', updated_at: minutos(70), ticket: 'SOP-211',
+    proposal: { tipo: 'responder', version: 'v8e11',
+      texto: 'Ya quedó corregido; la exportación funciona de nuevo.' } }),
+  caso(9, 'respondido', { title: 'Consulta por el horario', chat_name: 'Laura Méndez',
+    updated_at: minutos(130) }),
+  caso(10, 'cerrado', { title: 'Cotización aprobada', chat_name: 'Operaciones internas',
+    updated_at: minutos(60 * 26), ticket: 'OPS-77' }),
+  caso(11, 'bloqueado', { title: 'No se pudo enviar la respuesta', prioridad: 'medium',
+    chat_name: 'Lista de espera | Taller Demo \u{1F680} #2', updated_at: minutos(41),
+    blocked_reason: 'El envío fue rechazado: el grupo ya no existe.',
+    proposal: { tipo: 'responder', version: 'v9f42', texto: 'Gracias, ya quedó listo.' } })
+]
+const tableroDe = (cards, extra) => Object.assign({ v: 1, updated_at: minutos(1),
+  truncated: false,
+  counts: cards.reduce((acc, c) => Object.assign(acc, { [c.stage]: acc[c.stage] + 1 }),
+    Object.assign({}, CUENTAS_VACIAS)),
+  cards }, extra)
+const conTablero = (board) => Object.assign({}, DATOS, { board })
+// El tablero queda en su pestana: sin el clic se fotografia la bandeja de siempre.
+const ABRIR_TABLERO = "document.getElementById('tab-board').click()"
+
+// Textos de la longitud y la forma de los de verdad: un nombre sin espacios donde partir,
+// un parrafo largo y una URL. Es lo que desborda una columna de 160 px.
+const LARGO = 'Necesitamos que revisen la integración completa del módulo de ' +
+  'facturación antes del cierre de mes, porque los totales no coinciden con lo que ' +
+  'reporta el banco y el cliente ya preguntó dos veces por la diferencia. '
+const TABLERO_LARGO = tableroDe([
+  caso(21, 'decision', {
+    title: 'Revisión_de_la_integración_de_facturación_con_el_banco_antes_del_cierre_de_mes',
+    chat_name: 'Grupo_de_operaciones_y_finanzas_de_la_región_andina_con_nombre_larguisimo',
+    summary: LARGO.repeat(2), prioridad: 'urgent', updated_at: minutos(12),
+    proposal: { tipo: 'responder', version: 'vL1', texto: LARGO.repeat(3) +
+      'https://ejemplo.invalid/reportes/facturacion/2026/09/conciliacion-completa-del-banco' },
+    jev: { attention_class: 'card', skip: false,
+      flags: ['asks_for_money_or_payment', 'promises_a_date', 'states_status_not_verified',
+        'una_bandera_que_el_panel_no_conoce'] },
+    exceptions: ['money', 'commitment', 'jev'] }),
+  caso(22, 'bloqueado', { title: 'Cierre del mes', updated_at: minutos(50),
+    blocked_reason: LARGO + 'ENVIO_RECHAZADO_CODIGO_0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+    ticket: 'FIN-1234567890-ejemplo-de-ticket-con-nombre-largo' })
+])
+
 const PANELES = [
   { nombre: 'config', archivo: 'config.html', anchos: ANCHOS, datos: DATOS },
   {
@@ -305,6 +408,45 @@ const PANELES = [
           looked: 4, pending: 3, reason: null }
       })
     })
+  },
+  // El tablero de casos (T5), de SOLO LECTURA. Los cuatro anchos, en los dos idiomas y los
+  // dos temas: a 1440 son columnas, y desde 768 hacia abajo una lista por etapa, que es
+  // donde se rompe. La bandeja de siempre queda detras de la otra pestana.
+  {
+    nombre: 'tablero-poblado', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
+    datos: conTablero(tableroDe(TABLERO_CASOS, {
+      // Hay mas casos de los que caben: lo dice el aviso y "+n mas sin mostrar".
+      truncated: true,
+      counts: Object.assign({}, CUENTAS_VACIAS, { recibido: 1, clasificado: 2, decision: 3,
+        trabajo: 1, listo: 1, respondido: 1, cerrado: 12, bloqueado: 1 })
+    }))
+  },
+  {
+    nombre: 'tablero-vacio', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
+    guion: ABRIR_TABLERO, espera: 400, datos: conTablero(tableroDe([]))
+  },
+  {
+    // Una tarjeta en cada etapa menos "Tu decision": la columna que dice que no hay nada
+    // que decidir es el estado sano y el mas comun.
+    nombre: 'tablero-sin-decisiones', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
+    guion: ABRIR_TABLERO, espera: 400,
+    datos: conTablero(tableroDe(TABLERO_CASOS.filter((c) => c.stage !== 'decision')))
+  },
+  {
+    // Antes de que `wa-scope` escriba nada: no hay clave `board`.
+    nombre: 'tablero-sin-datos', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
+    guion: ABRIR_TABLERO, espera: 400, datos: DATOS
+  },
+  {
+    nombre: 'tablero-textos-largos', archivo: 'activity.html', anchos: ANCHOS,
+    guion: ABRIR_TABLERO, espera: 400, datos: conTablero(TABLERO_LARGO)
+  },
+  {
+    // "Ver todo" abierto: el unico control del tablero.
+    nombre: 'tablero-ver-todo', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
+    guion: ABRIR_TABLERO + "; document.querySelector('.card-more').click()", espera: 400,
+    datos: conTablero(TABLERO_LARGO)
   },
   // 1. Reviso y no habia nada: el caso comun y sano.
   {
@@ -786,6 +928,7 @@ async function main() {
         deviceScaleFactor: 2
       })
       for (const panel of PANELES) {
+        if (SOLO.length && !SOLO.some((p) => panel.nombre.startsWith(p))) continue
         if (!panel.anchos.includes(ancho)) continue
         // En ingles, por defecto, solo los extremos; los estados marcados van a todos.
         if (!panel.enTodosLosAnchos && !idioma.anchos.includes(ancho)) continue
