@@ -69,8 +69,11 @@ Baileys intenta login y nunca pide registro.
       `worker.test.mjs`. `clasificarSalida` decide (credenciales muertas / rendido /
       caída) después de drenar stdout; `decidirReinicio`: 2 s, 4 s, 8 s… hasta 60 s,
       tope 5; un clic del panel o una vida de más de 2 min reinician la cuenta.
-- [ ] T5 — Panel de config: "conectado" exige latido fresco; con 401 ofrece
-      Desvincular y no Reintentar. Prueba en `panels.test.mjs`.
+- [x] T5 — Panel de config: "conectado" exige latido fresco; con 401 ofrece
+      Desvincular y no Reintentar. Prueba en `panels.test.mjs`. Estado nuevo
+      `silent` ("La linea no da senal desde las HH:MM", con Reintentar y
+      Desvincular); `LATIDO_LINEA_VENCE_MS` = 150 s; `statusCode` 401/500 manda sobre
+      el `sidecar-cayo` viejo; textos de 440/403/411 en es, en y pt.
 - [ ] T6 — Panel de actividad: mismo criterio de vida para "Línea conectada".
 - [ ] T7 — `wa-read doctor`: el transporte exige `sidecar_beat` fresco
       (misma regla que `sidecar_vivo` en `bin/wa-send`); `checkSystem`
@@ -122,4 +125,15 @@ Baileys intenta login y nunca pide registro.
   tragaba el `TypeError`). Arreglado de paso: la suite arranca con
   `process.exitCode = 1` y un corte a mitad ahora sale con 1 (observado: `exit=1`).
 - GREEN: `worker` 140/140, exit 0.
+
+### T5 — panel de config
+
+- RED `node test/panels.test.mjs` (22 fallas), entre ellas:
+  `FALLA con el latido viejo NO dice conectado — WhatsApp esta conectado`,
+  `FALLA 401: ofrece desvincular — hidden=true`,
+  `FALLA 401: no ofrece reintentar — hidden=false`,
+  `FALLA sesion-reemplazada: se explica en el idioma del panel, no con el detalle crudo — DETALLE-CRUDO-DEL-SIDECAR`.
+- Fixtures "conectado" existentes del panel de config: ahora traen `latido` fresco
+  (cambió la regla, no la intención de esas pruebas).
+- GREEN: `panels` 401/401; `check-panels` ok; `check-voseo` ok.
 

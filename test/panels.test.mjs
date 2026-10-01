@@ -1379,7 +1379,8 @@ console.log('\nconfig.html — vinculacion de WhatsApp: los cinco estados')
       // Sigue siendo una imagen valida -WhatsApp la rechaza, no el navegador-, asi
       // que queda visible y apagada, no escondida detras de un recuadro en blanco.
       msg: /vencio/i, qrVisible: true, qrVencido: true },
-    { nombre: 'conectado', sidecar: { connection: 'open', qr: null, exited: false },
+    { nombre: 'conectado', sidecar: { connection: 'open', qr: null, exited: false,
+      latido: { ts: AHORA_MS, conectado: true } },
       msg: /conectado/i, qrVisible: false },
     { nombre: 'sesion caida', sidecar: { connection: null, qr: null, exited: true,
       error: { code: 'sidecar-cayo', detail: 'sidecar exited (code 1, signal null)' } },
@@ -1689,7 +1690,8 @@ console.log('\nconfig.html — el sondeo de 2 s del QR se detiene al emparejar')
     .filter((d) => d.action === 'storage.get' && d.params.key === 'sidecar').length
 
   const { enviados: enviadosPareado } = await montar('config.html',
-    { sidecar: { connection: 'open', qr: null } }, 'es-419')
+    { sidecar: { connection: 'open', qr: null,
+      latido: { ts: Date.now(), conectado: true } } }, 'es-419')
   await new Promise((r) => setTimeout(r, 4500))
   const lecturasPareado = enviadosPareado
     .filter((d) => d.action === 'storage.get' && d.params.key === 'sidecar').length
@@ -1740,7 +1742,8 @@ console.log('\nconfig.html — cada motivo de arranque del sidecar dice algo dis
 console.log('\nconfig.html — desvincular: confirmacion antes de cortar la sesion')
 {
   const { doc, storage } = await montar('config.html',
-    { sidecar: { connection: 'open', qr: null, exited: false } }, 'es-419')
+    { sidecar: { connection: 'open', qr: null, exited: false,
+      latido: { ts: Date.now(), conectado: true } } }, 'es-419')
   await espera()
   const boton = doc.getElementById('pairing-unlink')
   ok('con la linea conectada, el panel ofrece desvincularla', boton && !boton.hidden,
@@ -1772,7 +1775,8 @@ console.log('\nconfig.html — desvincular: confirmacion antes de cortar la sesi
 console.log('\nconfig.html — el segundo clic si manda el pedido, por el canal del worker')
 {
   const { doc, storage } = await montar('config.html',
-    { sidecar: { connection: 'open', qr: null, exited: false } }, 'es-419')
+    { sidecar: { connection: 'open', qr: null, exited: false,
+      latido: { ts: Date.now(), conectado: true } } }, 'es-419')
   await espera()
   doc.getElementById('pairing-unlink').click()
   await espera()
@@ -1794,7 +1798,8 @@ console.log('\nconfig.html — tras desvincular, la pantalla no sigue diciendo "
 {
   // El worker contesta el veredicto y deja la clave `sidecar` limpia, que es lo que
   // hace de verdad cuando relanza: sin sesion y esperando un codigo nuevo.
-  const storage = { sidecar: { connection: 'open', qr: null, exited: false } }
+  const storage = { sidecar: { connection: 'open', qr: null, exited: false,
+    latido: { ts: Date.now(), conectado: true } } }
   const { doc } = await montar('config.html', storage, 'es-419', (d, st) => {
     if (d.action === 'storage.set' && d.params.key === 'sidecarRequest' && d.params.value) {
       st.sidecarRequest = d.params.value
@@ -1849,6 +1854,105 @@ console.log('\nconfig.html — la sesion cerrada desde el telefono ofrece desvin
   ok('no ofrece reintentar: reconectar volveria a cerrar la misma sesion',
     doc.getElementById('pairing-retry').hidden,
     `hidden=${doc.getElementById('pairing-retry').hidden}`)
+}
+
+// ───────── "conectado" exige que la linea de senales de vida ─────────
+// Medido en la maquina del dueno (2026-10-01): ultimo mensaje el 23, ultimo latido del
+// sidecar el 30, y el panel diciendo "WhatsApp esta conectado". El "conectado" salia de
+// la ultima foto guardada en storage, que no caduca nunca.
+console.log('\nconfig.html — "conectado" solo con latido fresco de la linea')
+{
+  const viejoMs = Date.now() - 10 * 60 * 1000
+  const hora = new Date(viejoMs).toTimeString().slice(0, 5)
+  const sinSenal = await montar('config.html', { sidecar: { connection: 'open', qr: null,
+    exited: false, latido: { ts: viejoMs, conectado: true } } }, 'es-419')
+  await espera()
+  const msg = sinSenal.doc.getElementById('pairing-msg').textContent
+  ok('con el latido viejo NO dice conectado', !/conectado/i.test(msg), msg)
+  ok('dice que la linea no da senal', /senal/i.test(msg), msg)
+  ok('y desde cuando, con la hora del ultimo latido', msg.includes(hora), `${msg} / ${hora}`)
+  ok('y no se pinta en verde', !sinSenal.doc.getElementById('pairing-msg').className.includes('ok'),
+    sinSenal.doc.getElementById('pairing-msg').className)
+  ok('ofrece reintentar: relanzar es lo que revive una linea muda',
+    !sinSenal.doc.getElementById('pairing-retry').hidden,
+    `hidden=${sinSenal.doc.getElementById('pairing-retry').hidden}`)
+
+  const nunca = await montar('config.html', { sidecar: { connection: 'open', qr: null,
+    exited: false } }, 'es-419')
+  await espera()
+  ok('sin ningun latido tampoco dice conectado',
+    !/conectado/i.test(nunca.doc.getElementById('pairing-msg').textContent),
+    nunca.doc.getElementById('pairing-msg').textContent)
+
+  // Control: con latido fresco sigue diciendo conectado. Sin esto, la regla de arriba
+  // se cumpliria con un panel que no dice "conectado" nunca.
+  const vivo = await montar('config.html', { sidecar: { connection: 'open', qr: null,
+    exited: false, latido: { ts: Date.now() - 30000, conectado: true } } }, 'es-419')
+  await espera()
+  ok('control: con latido de hace 30 s dice conectado',
+    /conectado/i.test(vivo.doc.getElementById('pairing-msg').textContent),
+    vivo.doc.getElementById('pairing-msg').textContent)
+}
+
+// ───────── un 401 ofrece Desvincular aunque el codigo diga otra cosa ─────────
+// El storage que quedo en la maquina del dueno: `statusCode: 401` y, encima, el
+// `sidecar-cayo` que escribia el `exit`. El panel preferia `error.code` y ofrecia
+// Reintentar, que repetia el 401. El 401 manda: la accion es desvincular.
+console.log('\nconfig.html — con 401 se ofrece desvincular, no reintentar')
+{
+  for (const statusCode of [401, 500]) {
+    const { doc } = await montar('config.html', { sidecar: { connection: 'close', qr: null,
+      exited: true, motivo: 'sidecar-cayo', statusCode,
+      error: { code: 'sidecar-cayo', detail: 'sidecar exited (code 0, signal null)' } } },
+    'es-419')
+    await espera()
+    ok(`${statusCode}: ofrece desvincular`, !doc.getElementById('pairing-unlink').hidden,
+      `hidden=${doc.getElementById('pairing-unlink').hidden}`)
+    ok(`${statusCode}: no ofrece reintentar`, doc.getElementById('pairing-retry').hidden,
+      `hidden=${doc.getElementById('pairing-retry').hidden}`)
+    ok(`${statusCode}: y explica que la sesion se cerro desde el telefono`,
+      /telefono/i.test(doc.getElementById('pairing-detail').textContent),
+      doc.getElementById('pairing-detail').textContent)
+  }
+}
+
+// ───────── los cierres que el sidecar ya no reintenta para siempre ─────────
+console.log('\nconfig.html — 440, 403 y 411 se explican, cada uno con su salida')
+{
+  const casos = [
+    // Otro cliente usa la misma sesion: cerrarlo y reintentar, o desvincular.
+    { code: 'sesion-reemplazada', retry: true, unlink: true },
+    { code: 'acceso-denegado', retry: false, unlink: true },
+    { code: 'multidispositivo', retry: false, unlink: true }
+  ]
+  const dicho = new Set()
+  for (const c of casos) {
+    const { doc } = await montar('config.html', { sidecar: { connection: 'close', qr: null,
+      exited: true, motivo: c.code,
+      error: { code: c.code, detail: 'DETALLE-CRUDO-DEL-SIDECAR' } } }, 'es-419')
+    await espera()
+    const detalle = doc.getElementById('pairing-detail').textContent.trim()
+    ok(`${c.code}: se explica en el idioma del panel, no con el detalle crudo`,
+      detalle.length > 0 && detalle !== 'DETALLE-CRUDO-DEL-SIDECAR', detalle)
+    dicho.add(detalle)
+    ok(`${c.code}: ${c.retry ? 'ofrece' : 'no ofrece'} reintentar`,
+      doc.getElementById('pairing-retry').hidden === !c.retry,
+      `hidden=${doc.getElementById('pairing-retry').hidden}`)
+    ok(`${c.code}: ofrece desvincular`, doc.getElementById('pairing-unlink').hidden === !c.unlink,
+      `hidden=${doc.getElementById('pairing-unlink').hidden}`)
+  }
+  ok('y cada uno dice algo distinto', dicho.size === casos.length, JSON.stringify([...dicho]))
+
+  const { window } = await montar('config.html')
+  const S = window.STRINGS
+  const nuevas = ['pairingSilent', 'pairingSilentHow', 'pairingHowReplaced',
+    'pairingHowForbidden', 'pairingHowMultidevice']
+  const faltan = nuevas.filter((k) => !S.es[k] || !S.en[k])
+  ok('los textos nuevos existen en espanol y en ingles', faltan.length === 0,
+    `faltan = ${JSON.stringify(faltan)}`)
+  const sinPt = nuevas.filter((k) => !S.pt[k] || S.pt[k] === S.en[k])
+  ok('y en portugues propio, no heredado del ingles', sinPt.length === 0,
+    `sin portugues = ${JSON.stringify(sinPt)}`)
 }
 
 console.log('\nconfig.html — los estados de falla ofrecen reintentar, no reiniciar Orca')
