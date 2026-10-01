@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { leerCatalogo, limpiarLinea } from './catalogo.mjs'
 
 // El estado del arnes va por el mismo canal que el del sync: el panel no puede
 // ejecutar nada, asi que sin esto no hay forma de saber si la carpeta se sembro.
@@ -27,6 +28,11 @@ export const HARNESS_KEY = 'harnessStatus'
 // diferencia que decide si un archivo se reescribe o se respeta.
 const MANIFIESTO = '.harness.json'
 const MARCA_HELP = '<!-- HARNESS:HELP -->'
+/** El archivo que NO sale de `harness/`: lo genera el plugin con los proyectos que el
+ *  dueno acepto. Es el unico del arnes que se reescribe entero en cada cambio de la
+ *  lista, sin respetar ediciones: lo que contiene no lo escribe nadie a mano, es una
+ *  copia de los ajustes. */
+export const ARCHIVO_PROYECTOS = 'PROJECTS.md'
 
 /** El archivo que Orca deja en SU userData para decir por donde contesta. Aca solo se
  *  usa como senal de "esta carpeta es un userData de Orca": es el mismo marcador que
@@ -250,6 +256,42 @@ export function juntar(declaradas, enDisco, marcas) {
   return { texto: partes.join('\n'), marcas: nuevasMarcas, tuyas, refrescadas }
 }
 
+/** El texto de PROJECTS.md. Cada proyecto es una carpeta donde se hace el trabajo de
+ *  una conversacion; el agente lo lee para saber a donde despachar. Todo lo que viene de
+ *  fuera (nombre, ruta, nota) entra en UNA linea: un salto de linea ahi dentro es una
+ *  instruccion nueva para quien lo lee. */
+export function renderProyectos(proyectos) {
+  const cabecera = [
+    '<!-- Written by the WhatsApp Inbox plugin (ab2web.orca-wa-inbox) from the project',
+    '     list the owner accepted in the plugin settings.',
+    '',
+    '     This file is generated: whatever you edit here is overwritten the next time the',
+    '     list changes. Change the list in the settings, not in this file. -->',
+    '',
+    '# Projects',
+    '',
+    'A project is a folder where the work of a conversation happens. `wa-scope where`',
+    'prints the `workspace` of a chat, which is one of the ids below.',
+    ''
+  ]
+  const lista = leerCatalogo(proyectos)
+  if (!lista.length) {
+    return [...cabecera,
+      'No projects accepted yet. A chat has no project until the owner accepts one in the',
+      'settings: reply if a reply is enough, and leave the work to the owner.',
+      ''].join('\n')
+  }
+  const cuerpo = lista.flatMap((p) => [
+    `## ${p.id}`,
+    '',
+    `- name: ${limpiarLinea(p.name, 120)}`,
+    `- path: \`${p.path.replace(/`/g, "'")}\``,
+    ...(p.note ? [`- for: ${p.note}`] : []),
+    ''
+  ])
+  return [...cabecera, ...cuerpo].join('\n')
+}
+
 function corre(cmd, args, timeoutMs = 20000) {
   return new Promise((resolve, reject) => {
     execFile(cmd, args, { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 },
@@ -298,7 +340,7 @@ function leerManifiesto(dir) {
  * No lanza nunca: devuelve por que no pudo. Una maquina donde la carpeta no existe
  * tiene que seguir usando el plugin exactamente igual que hoy.
  */
-export async function sembrar(pluginDir, toolsDir) {
+export async function sembrar(pluginDir, toolsDir, proyectos = null) {
   const at = new Date().toISOString()
   let dir = null
   let version = '0.0.0'
@@ -342,6 +384,7 @@ export async function sembrar(pluginDir, toolsDir) {
   try {
     const marcas = leerManifiesto(dir)
     sembrarArchivos({ fuente, dir, ayuda, motivoAyuda, marcas, archivos, nuevoManifiesto })
+    sembrarGenerado({ dir, proyectos, marcas, archivos, nuevoManifiesto })
     writeFileSync(join(dir, MANIFIESTO),
       `${JSON.stringify({ plugin: manifiesto(pluginDir).key, version, at, files: nuevoManifiesto }, null, 2)}\n`,
       'utf8')
@@ -392,14 +435,47 @@ function sembrarArchivos({ fuente, dir, ayuda, motivoAyuda, marcas, archivos, nu
   }
 }
 
+/** PROJECTS.md, el unico archivo que no sale de `harness/`. Con la lista en la mano se
+ *  reescribe entero si cambio; sin ella (`proyectos` es null: quien siembra no la
+ *  conoce) se respeta lo que hay y solo se crea el archivo vacio si falta, porque el
+ *  AGENTS.md lo nombra y un archivo nombrado que no existe no le dice nada al agente. */
+function sembrarGenerado({ dir, proyectos, marcas, archivos, nuevoManifiesto }) {
+  const nombre = ARCHIVO_PROYECTOS
+  const destino = join(dir, nombre)
+  const previo = existsSync(destino) ? readFileSync(destino, 'utf8') : null
+  if (proyectos === null && previo !== null) {
+    if (marcas[nombre]) nuevoManifiesto[nombre] = marcas[nombre]
+    archivos.push({ name: nombre, bytes: Buffer.byteLength(previo, 'utf8'), action: 'igual',
+      yours: [], refreshed: [] })
+    return
+  }
+  const texto = renderProyectos(proyectos ?? [])
+  let action = 'igual'
+  if (previo === null) action = 'creado'
+  else if (previo !== texto) action = 'actualizado'
+  if (action !== 'igual') writeFileSync(destino, texto, 'utf8')
+  nuevoManifiesto[nombre] = { generated: true, hash: huella(texto) }
+  archivos.push({ name: nombre, bytes: Buffer.byteLength(texto, 'utf8'), action,
+    yours: [], refreshed: [] })
+}
+
 
 // Y como subproceso: `node harness.mjs <pluginDir> <toolsDir>` imprime el mismo estado
 // que devuelve sembrar(). Es la unica forma de que el worker siembre — dentro de la
 // valla no hay permiso de escritura ninguno — y deja una sola implementacion en vez de
 // una copia en Python que se desincronizaria.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const [pluginDir, toolsDir] = process.argv.slice(2)
-  sembrar(pluginDir, toolsDir || join(pluginDir, 'bin'))
+  const [pluginDir, toolsDir, proyectosJson] = process.argv.slice(2)
+  // La lista de proyectos viaja por argv, como JSON: no es un secreto (rutas y notas del
+  // dueno) y asi no hay un archivo intermedio que el worker, que no escribe, no podria
+  // dejar. Un argumento que no es JSON valido equivale a "no se la lista".
+  let proyectos = null
+  try {
+    proyectos = proyectosJson ? JSON.parse(proyectosJson) : null
+  } catch {
+    proyectos = null
+  }
+  sembrar(pluginDir, toolsDir || join(pluginDir, 'bin'), proyectos)
     .then((estado) => process.stdout.write(JSON.stringify(estado)))
     .catch((error) => process.stdout.write(JSON.stringify({
       ok: false, at: new Date().toISOString(), reason: 'fallo',
