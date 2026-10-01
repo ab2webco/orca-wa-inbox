@@ -36,6 +36,7 @@ import { fileURLToPath } from 'node:url'
 
 import { identidadesPropias, identidadPropia } from '../sidecar/src/mensajes.js'
 import { abrirAlmacen, ESQUEMA_VERSION, rutaAlmacen, rutaMedia } from '../sidecar/src/almacen.js'
+import { reclaveDecididaDe } from '../sidecar/src/alcance.js'
 import { ingerirActualizacion, ingerirChats, ingerirContactos, ingerirMensaje,
   nombreDeContacto } from '../sidecar/src/ingesta.js'
 
@@ -164,6 +165,244 @@ console.log('\nF1: el almacen es texto ajeno — 0600, no el umask')
   alm.cerrar()
   const modo = statSync(rutaAlmacen({ HOME: home })).mode & 0o777
   ok('capture.db queda en 0600', modo === 0o600, '0' + modo.toString(8))
+}
+
+console.log('\nT9: cada numero, su linea — la linea activa no pisa a la otra')
+{
+  const home = nueva()
+  const alm = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  ok('un almacen nuevo no tiene linea activa', alm.lineaActiva() === null,
+    String(alm.lineaActiva()))
+  const VIEJA = 'pn:573001112233'
+  const NUEVA = 'pn:573000000012'
+  const primera = alm.activarLinea(VIEJA)
+  ok('activar la primera linea la deja activa', alm.lineaActiva() === VIEJA &&
+    primera.cambio === true && primera.antes === null, JSON.stringify(primera))
+  alm.registrarLinea({ cuenta: VIEJA, lid: '100000000000001@lid',
+    pn: '573001112233:7@s.whatsapp.net', nombre: 'Vieja' })
+  alm.anotarChat({ cuenta: VIEJA, chatJid: ALFA, nombre: 'Cliente Alfa', esGrupo: 1 })
+  ok('activar la MISMA linea otra vez no es un cambio',
+    alm.activarLinea(VIEJA).cambio === false)
+
+  // Se vincula OTRO numero.
+  const cambio = alm.activarLinea(NUEVA)
+  ok('activar otra identidad cambia la linea activa', alm.lineaActiva() === NUEVA &&
+    cambio.cambio === true && cambio.antes === VIEJA, JSON.stringify(cambio))
+  alm.registrarLinea({ cuenta: NUEVA, lid: '100000000000002:1@lid',
+    pn: '573000000012:7@s.whatsapp.net', nombre: 'Nueva' })
+  alm.cerrar()
+
+  const con = new DatabaseSync(rutaAlmacen({ HOME: home }))
+  const lineas = con.prepare('select account, lid, name from linea order by account').all()
+  ok('la fila de la linea vieja NO se piso: hay dos lineas', lineas.length === 2 &&
+    lineas.some((l) => l.account === VIEJA && l.name === 'Vieja' &&
+      l.lid === '100000000000001@lid'), JSON.stringify(lineas))
+  const chatsNueva = con.prepare('select count(*) c from chat where account=?').get(NUEVA).c
+  const chatsVieja = con.prepare('select count(*) c from chat where account=?').get(VIEJA).c
+  ok('la linea nueva no hereda ninguna conversacion', chatsNueva === 0, String(chatsNueva))
+  ok('y las de la vieja siguen ahi, sin borrar', chatsVieja === 1, String(chatsVieja))
+  con.close()
+
+  // T9b: los lectores miran SOLO la linea activa.
+  const chatsActiva = leerJson(home, ['chats'])
+  ok('con el numero nuevo vinculado, `wa-read chats` no muestra las del viejo',
+    chatsActiva.code === 0 && Array.isArray(chatsActiva.filas) &&
+    chatsActiva.filas.length === 0, chatsActiva.stdout + chatsActiva.stderr)
+  const quien = leerJson(home, ['whoami'])
+  ok('y `whoami` dice el numero nuevo, uno solo',
+    (quien.filas || []).length === 1 && quien.filas[0].account === NUEVA,
+    JSON.stringify(quien.filas))
+  const estado = leerJson(home, ['state'])
+  ok('y `state` mide la linea activa', (estado.filas || []).length === 1 &&
+    estado.filas[0].account === NUEVA, JSON.stringify(estado.filas))
+  const doc = leerJson(home, ['doctor'])
+  const transporte = (doc.filas || []).find((f) => f.check === 'a message transport')
+  ok('y el doctor habla de la linea activa, no de las dos',
+    transporte && transporte.via === NUEVA && !/Vieja|573001112233/.test(transporte.detalle),
+    JSON.stringify(transporte))
+  // `--line` sigue pudiendo pedir otra a proposito: se nombra, no se hereda.
+  const explicita = leerJson(home, ['chats', '--line', VIEJA])
+  ok('pidiendo la vieja por nombre, sus conversaciones siguen ahi',
+    (explicita.filas || []).length === 1, JSON.stringify(explicita.filas))
+
+  // Vuelve el numero viejo: reaparece tal cual.
+  const alm2 = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  const vuelta = alm2.activarLinea(VIEJA)
+  ok('volver a vincular el numero viejo lo reactiva', vuelta.cambio === true &&
+    alm2.lineaActiva() === VIEJA, JSON.stringify(vuelta))
+  alm2.cerrar()
+  const deVuelta = leerJson(home, ['chats'])
+  ok('y sus conversaciones reaparecen tal cual', (deVuelta.filas || []).length === 1 &&
+    deVuelta.filas[0].jid === ALFA, JSON.stringify(deVuelta.filas))
+}
+
+console.log('\nT9f: lo de `local` pasa al numero de su linea — explicito, atomico y visible')
+{
+  const home = nueva()
+  const alm = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  // Una maquina de antes de T9: todo cuelga de `local`, y la fila de `linea` dice que
+  // telefono era.
+  alm.registrarLinea({ cuenta: 'local', lid: '100000000000001@lid',
+    pn: '573001112233:7@s.whatsapp.net', nombre: 'Vieja' })
+  alm.anotarChat({ cuenta: 'local', chatJid: ALFA, nombre: 'Cliente Alfa', esGrupo: 1 })
+  alm.anotarChat({ cuenta: 'local', chatJid: CALLADO, nombre: 'Grupo Callado', esGrupo: 1 })
+  alm.guardarMensaje({ cuenta: 'local', chatJid: ALFA, stanzaId: 'L1', ts: T0, fromMe: 0,
+    senderJid: OTRA_PERSONA, senderName: 'Otra', body: 'hola de antes', mediaTipo: null,
+    mediaBytes: null, mencionaMe: 0, citaMe: 0 })
+  // Lo que ya escribio el sidecar nuevo para ese mismo numero: el grupo Alfa repetido.
+  alm.anotarChat({ cuenta: 'pn:573001112233', chatJid: ALFA, nombre: 'Cliente Alfa', esGrupo: 1 })
+  alm.cerrar()
+
+  // Abrir el almacen NO re-clava nada: la migracion no corre sola al arrancar hasta que
+  // se reparen los datos vivos (ver T9f en odd/tasks/linea-muerta.md).
+  const abierto = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  abierto.cerrar()
+  const antes = new DatabaseSync(rutaAlmacen({ HOME: home }))
+  const quedanLocal = antes.prepare("select count(*) c from chat where account='local'").get().c
+  antes.close()
+  ok('abrir el almacen no mueve nada de `local`', quedanLocal === 2, String(quedanLocal))
+
+  const alm2 = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  const r = alm2.reclavarLocal()
+  ok('la re-clave dice adonde fue: al numero de la fila `local` de `linea`',
+    r && r.desde === 'local' && r.hacia === 'pn:573001112233', JSON.stringify(r))
+  ok('y cuanto movio', r && r.chats === 2 && r.mensajes === 1, JSON.stringify(r))
+  ok('correrla de nuevo no hace nada: ya no hay `local`', alm2.reclavarLocal() === null)
+  alm2.cerrar()
+
+  const con = new DatabaseSync(rutaAlmacen({ HOME: home }))
+  const local = con.prepare("select (select count(*) from chat where account='local') + " +
+    "(select count(*) from mensaje where account='local') + " +
+    "(select count(*) from linea where account='local') c").get().c
+  ok('no queda ninguna fila `local`', local === 0, String(local))
+  const chats = con.prepare("select count(*) c from chat where account='pn:573001112233'").get().c
+  ok('las dos conversaciones son del numero, sin duplicar la que ya estaba', chats === 2,
+    String(chats))
+  const msj = con.prepare("select body from mensaje where account='pn:573001112233' and stanza_id='L1'").get()
+  ok('el mensaje viejo sigue entero, ahora en su numero', msj && msj.body === 'hola de antes',
+    JSON.stringify(msj))
+  const linea = con.prepare("select account, lid, name from linea").all()
+  ok('la fila de linea paso al numero y conserva quien era', linea.length === 1 &&
+    linea[0].account === 'pn:573001112233' && linea[0].name === 'Vieja', JSON.stringify(linea))
+  const anotada = con.prepare('select desde, hacia, chats, mensajes from reclave').all()
+  ok('y quedo escrita, para que se pueda mirar', anotada.length === 1 &&
+    anotada[0].hacia === 'pn:573001112233', JSON.stringify(anotada))
+  con.close()
+
+  const doc = leerJson(home, ['doctor'])
+  const fila = (doc.filas || []).find((f) => f.code === 'store-rekeyed')
+  ok('el doctor la cuenta en su propio renglon', fila && fila.requerido === false &&
+    fila.ok === false && fila.detailCode === 'store-rekeyed-line' &&
+    fila.detalle.includes('573001112233'), JSON.stringify(doc.filas))
+
+  // Sin telefono en la fila `local` no hay a quien atribuirle nada: se deja como esta.
+  const home2 = nueva()
+  const alm3 = abrirAlmacen(rutaAlmacen({ HOME: home2 }))
+  alm3.registrarLinea({ cuenta: 'local', lid: '1@lid' })
+  alm3.anotarChat({ cuenta: 'local', chatJid: ALFA, nombre: 'Cliente Alfa', esGrupo: 1 })
+  ok('sin telefono conocido no se inventa un numero', alm3.reclavarLocal() === null)
+  alm3.cerrar()
+}
+
+console.log('\nT9f: la decision del dueno llega al sidecar por `wa-scope config`')
+{
+  // `wa-scope reclave --numero` la anota en los ajustes; el sidecar la lee con los topes.
+  ok('lee la cuenta decidida', reclaveDecididaDe([{ key: 'capture_max', value: '5' },
+    { key: 'reclave_local_a', value: 'pn:573000000011' }]) === 'pn:573000000011')
+  ok('sin decision no hay cuenta', reclaveDecididaDe([{ key: 'capture_max', value: '5' }]) === null)
+  ok('y algo que no es una cuenta de telefono se ignora',
+    reclaveDecididaDe([{ key: 'reclave_local_a', value: 'local' }]) === null &&
+    reclaveDecididaDe('basura') === null)
+}
+
+console.log('\nT9f: la re-clave al arrancar solo con evidencia — si no, no mueve nada y pregunta')
+{
+  // Otros usuarios pueden estar como el dueno estuvo: la fila `local` de `linea` pisada
+  // por OTRO numero. Re-clavar ahi le daria al numero nuevo lo del viejo. Se mueve solo
+  // cuando hay evidencia de que la identidad de `local` es la que produjo los datos.
+  const VIEJO_PN = '573000000011:7@s.whatsapp.net'
+  const VIEJO_LID = '100000000000001:3@lid'
+  const NUEVO_PN = '573000000012:7@s.whatsapp.net'
+  const NUEVO_LID = '100000000000002:1@lid'
+  const legado = (home, linea, remitente) => {
+    const a = abrirAlmacen(rutaAlmacen({ HOME: home }))
+    a.registrarLinea({ cuenta: 'local', ...linea, nombre: 'De antes' })
+    a.anotarChat({ cuenta: 'local', chatJid: ALFA, nombre: 'Cliente Alfa', esGrupo: 1 })
+    a.guardarMensaje({ cuenta: 'local', chatJid: ALFA, stanzaId: 'P1', ts: T0, fromMe: 1,
+      senderJid: remitente, senderName: null, body: 'lo mande yo', mediaTipo: null,
+      mediaBytes: null, mencionaMe: 0, citaMe: 0 })
+    // Un directo propio: su remitente es null y no prueba nada en ningun sentido.
+    a.guardarMensaje({ cuenta: 'local', chatJid: LAURA, stanzaId: 'P2', ts: T0, fromMe: 1,
+      senderJid: null, senderName: null, body: 'directo', mediaTipo: null,
+      mediaBytes: null, mencionaMe: 0, citaMe: 0 })
+    return a
+  }
+  const locales = (home) => {
+    const c = new DatabaseSync(rutaAlmacen({ HOME: home }))
+    const n = c.prepare("select (select count(*) from chat where account='local') + " +
+      "(select count(*) from mensaje where account='local') c").get().c
+    c.close()
+    return n
+  }
+
+  // 1. Actualizacion limpia: la fila `local` es del numero emparejado y lo que mando
+  //    desde los grupos lo firmo esa misma identidad.
+  const limpia = nueva()
+  const a1 = legado(limpia, { lid: VIEJO_LID, pn: VIEJO_PN }, '100000000000001@lid')
+  const r1 = a1.resolverLocal({ emparejada: 'pn:573000000011' })
+  a1.cerrar()
+  ok('actualizacion limpia: se re-clava sola', r1.accion === 'movida' &&
+    r1.hacia === 'pn:573000000011', JSON.stringify(r1))
+  ok('y no queda nada en `local`', locales(limpia) === 0, String(locales(limpia)))
+
+  // 2. Cambio de numero: la fila `local` dice el numero nuevo (se piso), pero lo que se
+  //    mando desde los grupos lo firmo OTRA identidad. No se toca nada.
+  const cambiada = nueva()
+  const a2 = legado(cambiada, { lid: NUEVO_LID, pn: NUEVO_PN }, '100000000000001@lid')
+  const r2 = a2.resolverLocal({ emparejada: 'pn:573000000012' })
+  a2.cerrar()
+  ok('numero cambiado: no se re-clava', r2.accion === 'bloqueada', JSON.stringify(r2))
+  ok('y todo sigue en `local`, sin borrar', locales(cambiada) === 3, String(locales(cambiada)))
+  const doc = leerJson(cambiada, ['doctor'])
+  const pendiente = (doc.filas || []).find((f) => f.code === 'store-rekey-pending')
+  ok('el doctor pide la decision, con el comando exacto', pendiente &&
+    pendiente.requerido === false && pendiente.ok === false &&
+    pendiente.detailCode === 'store-rekey-decide' &&
+    /wa-scope reclave --numero/.test(pendiente.detalle), JSON.stringify(doc.filas))
+  ok('y no anuncia una re-clave que no paso',
+    !(doc.filas || []).some((f) => f.code === 'store-rekeyed'), JSON.stringify(doc.filas))
+
+  // Tambien bloquea si la fila `local` es de un numero que no es el emparejado.
+  const otro = nueva()
+  const a3 = legado(otro, { lid: VIEJO_LID, pn: VIEJO_PN }, '100000000000001@lid')
+  const r3 = a3.resolverLocal({ emparejada: 'pn:573000000012' })
+  a3.cerrar()
+  ok('si el emparejado es otro numero, tampoco', r3.accion === 'bloqueada', JSON.stringify(r3))
+
+  // La decision del dueno destraba: dice de que numero son, y ahi si se mueven.
+  const a4 = abrirAlmacen(rutaAlmacen({ HOME: cambiada }))
+  const r4 = a4.resolverLocal({ emparejada: 'pn:573000000012', decidida: 'pn:573000000011' })
+  a4.cerrar()
+  ok('con la decision del dueno se mueven al numero que el dijo',
+    r4.accion === 'movida' && r4.hacia === 'pn:573000000011' && locales(cambiada) === 0,
+    JSON.stringify(r4))
+  const doc2 = leerJson(cambiada, ['doctor'])
+  ok('y el pedido de decision desaparece del doctor',
+    !(doc2.filas || []).some((f) => f.code === 'store-rekey-pending'), JSON.stringify(doc2.filas))
+
+  // 3. Ya re-clavado (o nunca hubo `local`): no hace nada.
+  const a5 = abrirAlmacen(rutaAlmacen({ HOME: limpia }))
+  const r5 = a5.resolverLocal({ emparejada: 'pn:573000000011' })
+  a5.cerrar()
+  ok('sin nada en `local`, no hace nada', r5.accion === 'nada', JSON.stringify(r5))
+
+  // Emparejando (todavia sin numero), espera: no decide a ciegas.
+  const espera = nueva()
+  const a6 = legado(espera, { lid: VIEJO_LID, pn: VIEJO_PN }, '100000000000001@lid')
+  const r6 = a6.resolverLocal({ emparejada: null })
+  a6.cerrar()
+  ok('sin numero emparejado todavia, espera', r6.accion === 'esperar' &&
+    locales(espera) === 3, JSON.stringify(r6))
 }
 
 // ── El escenario completo, que es donde viven los seis casos de uso ─────────────────
@@ -480,6 +719,36 @@ console.log('\nF4/A1: la llave aisla dos lineas propias')
   con.close()
 }
 
+// ── El doctor exige que la linea este VIVA, no solo que exista ──────────────────────
+// Medido en la maquina del dueno (2026-10-01): el doctor daba el transporte por bueno
+// porque habia una fila en `linea`, con el sidecar muerto desde el dia anterior. Una
+// fila en `linea` dice que alguna vez hubo una linea; el latido dice que hay alguien
+// del otro lado AHORA. Es la misma regla que ya usaba `wa-send` (`sidecar_vivo`).
+console.log('\nel doctor: el transporte exige latido fresco')
+{
+  const viejoMs = Date.now() - 10 * 60 * 1000
+  almacen.latir(viejoMs)
+  const doctor = leerJson(home, ['doctor'])
+  const fila = (doctor.filas || []).find((f) => f.check === 'a message transport')
+  ok('con el latido viejo, el transporte NO esta en verde', fila && fila.ok === false,
+    JSON.stringify(fila))
+  ok('con un codigo propio, que el panel traduce', fila && fila.code === 'transport-silent',
+    JSON.stringify(fila))
+  ok('y bloquea, como cualquier transporte que no lee', fila && fila.requerido === true &&
+    doctor.code === 1, `salio ${doctor.code} ${JSON.stringify(fila)}`)
+  const hora = new Date(viejoMs).toTimeString().slice(0, 5)
+  ok('el detalle dice desde cuando', (fila?.detalle || '').includes(hora),
+    `${fila?.detalle} / ${hora}`)
+
+  // Control: el mismo almacen con latido de ahora vuelve a verde. Sin esto, la regla de
+  // arriba se cumpliria con un doctor que no da el transporte por bueno nunca.
+  almacen.latir()
+  const vivo = leerJson(home, ['doctor'])
+  const filaViva = (vivo.filas || []).find((f) => f.check === 'a message transport')
+  ok('control: con latido de ahora el transporte vuelve a verde',
+    filaViva && filaViva.ok === true && vivo.code === 0, JSON.stringify(filaViva))
+}
+
 console.log('\nF2: tope de retencion, con desalojo VISIBLE')
 {
   const podado = almacen.podar({ max: 3, dias: 36500, ahora: (T0 + 3000) * 1000 })
@@ -499,6 +768,9 @@ console.log('\nF2: tope de retencion, con desalojo VISIBLE')
 
 console.log('\nF2: y el desalojo se puede VER desde el doctor, que es lo que pinta el panel')
 {
+  // El sidecar late en el almacen cada segundo mientras vive (`latir`). Este es el caso
+  // de una linea viva: latido de ahora.
+  almacen.latir()
   const doctor = leerJson(home, ['doctor'])
   const transporte = (doctor.filas || []).find((f) => f.code === 'no-transport')
   ok('con la linea enlazada, el renglon del transporte esta en verde',
@@ -551,7 +823,7 @@ console.log('\nF3: apagar la captura borra los CUERPOS, no la contabilidad')
  *  `store_meta`, `pragma user_version` en 0, `capturado` con su indice por edad y una
  *  `linea` de dos columnas con las cuentas `web` y `web:<lid>`. */
 function almacenViejo (home, { cuerpos = 0,
-  lineas = ['web', 'web:262444127674377'] } = {}) {
+  lineas = ['web', 'web:100000000000001'] } = {}) {
   const ruta = rutaAlmacen({ HOME: home })
   const con = new DatabaseSync(ruta)
   con.exec(`
@@ -674,6 +946,58 @@ console.log('\nMigracion: lo que se llevo se DICE, y por el camino que ve el pan
   // El doctor sigue saliendo 1 por el transporte que falta, no por la migracion.
   ok('la migracion no bloquea el doctor por si sola', doctor.code === 1,
     `salio ${doctor.code}`)
+}
+
+console.log('\nT10: el aviso de la migracion dura una semana y no dice que borro lo que no borro')
+{
+  // Visto en vivo: "Almacen de mensajes actualizado — ... se borro" una semana despues,
+  // con `cuerpos=0`. No se habia borrado ningun mensaje.
+  const home = nueva()
+  almacenViejo(home, { cuerpos: 0 })
+  abrirAlmacen(rutaAlmacen({ HOME: home })).cerrar()
+  const doctor = leerJson(home, ['doctor'])
+  const fila = (doctor.filas || []).find((f) => f.code === 'store-migrated')
+  ok('sin cuerpos borrados, el renglon no habla de borrar mensajes',
+    fila && fila.detailCode === 'store-migrated-clean' && !/dropped/i.test(fila.detalle),
+    JSON.stringify(fila))
+
+  // La misma migracion, ocho dias despues: ya no se avisa.
+  const con = new DatabaseSync(rutaAlmacen({ HOME: home }))
+  con.prepare('update migracion set at = ?').run(Math.floor(Date.now() / 1000) - 8 * 86400)
+  con.close()
+  const despues = leerJson(home, ['doctor'])
+  ok('pasada una semana el aviso ya no sale',
+    !(despues.filas || []).some((f) => f.code === 'store-migrated'),
+    JSON.stringify(despues.filas))
+}
+
+console.log('\nT10: el chat propio de la linea se reconoce, no se muestra como un jid')
+{
+  // El "mensaje a uno mismo" de la linea aparece en la lista con el jid pelado
+  // (`<lid>@lid`). Su jid es el LID o el telefono de la linea, sin el dispositivo.
+  const home = nueva()
+  const alm = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  const CUENTA_T10 = 'pn:573000000012'
+  alm.activarLinea(CUENTA_T10)
+  alm.registrarLinea({ cuenta: CUENTA_T10, lid: '100000000000002:1@lid',
+    pn: '573000000012:7@s.whatsapp.net', nombre: 'Nueva' })
+  alm.anotarChat({ cuenta: CUENTA_T10, chatJid: '100000000000002@lid',
+    nombre: '100000000000002@lid', esGrupo: 0, ts: Math.floor(Date.now() / 1000) - 1 })
+  alm.anotarChat({ cuenta: CUENTA_T10, chatJid: '573000000012@s.whatsapp.net', nombre: '',
+    esGrupo: 0, ts: Math.floor(Date.now() / 1000) - 2 })
+  alm.anotarChat({ cuenta: CUENTA_T10, chatJid: LAURA, nombre: 'Laura Mendez', esGrupo: 0,
+    ts: Math.floor(Date.now() / 1000) })
+  alm.cerrar()
+  const r = leerJson(home, ['chats'])
+  const porJid = Object.fromEntries((r.filas || []).map((c) => [c.jid, c]))
+  ok('el chat propio por LID se marca como propio',
+    porJid['100000000000002@lid']?.own === true, JSON.stringify(porJid['100000000000002@lid']))
+  ok('y por telefono tambien', porJid['573000000012@s.whatsapp.net']?.own === true,
+    JSON.stringify(porJid['573000000012@s.whatsapp.net']))
+  ok('y se llama como la linea, no como su jid',
+    porJid['100000000000002@lid']?.name === 'Nueva', JSON.stringify(porJid['100000000000002@lid']))
+  ok('un chat ajeno no se marca', porJid[LAURA] && !porJid[LAURA].own,
+    JSON.stringify(porJid[LAURA]))
 }
 
 console.log('\nMigracion: un almacen ya al dia se deja quieto')
@@ -857,7 +1181,7 @@ console.log('\nalmacen: reparar las menciones que se guardaron antes de saber el
   const grupo = '120363000000000001@g.us'
   const fila = (stanzaId, body, extra = {}) => ({
     cuenta: CUENTA, chatJid: grupo, stanzaId, ts: 1700000000, fromMe: 0,
-    senderJid: '573009998877@s.whatsapp.net', senderName: 'Jhon', body,
+    senderJid: '573009998877@s.whatsapp.net', senderName: 'Pedro', body,
     mediaTipo: null, mediaBytes: null, mencionaMe: 0, citaMe: 0, ...extra
   })
 
@@ -930,12 +1254,12 @@ console.log('\ningesta: la libreta de nombres y los directos')
   ok('despues la agenda del telefono',
     nombreDeContacto({ name: 'Laura Mendez', notify: 'lau' }) === 'Laura Mendez')
   ok('y de ultimo como se presenta quien escribe',
-    nombreDeContacto({ notify: 'Jhon' }) === 'Jhon')
+    nombreDeContacto({ notify: 'Pedro' }) === 'Pedro')
   ok('sin nada, cadena vacia — no se inventa un nombre',
     nombreDeContacto({}) === '' && nombreDeContacto(null) === '')
 
   // Llegan los chats ANTES que la libreta, que es el orden real de los eventos.
-  const DIRECTO = '573172561455@s.whatsapp.net'
+  const DIRECTO = '573000000013@s.whatsapp.net'
   ingerirChats({
     almacen: alm,
     cuenta: CUENTA,
@@ -1008,15 +1332,15 @@ console.log('\ninbox: lo que llega a un chat autorizado se ve, con @ o sin @')
   const DIRECTO = '573009998877@s.whatsapp.net'
   alm.registrarLinea({ cuenta: CUENTA, lid: MI_LID, pn: MI_TEL, nombre: 'Yo' })
   autorizar(casa, { jid: GRUPO, nombre: 'Operaciones', modo: 'responder' })
-  autorizar(casa, { jid: DIRECTO, nombre: 'Jhon', modo: 'responder' })
+  autorizar(casa, { jid: DIRECTO, nombre: 'Pedro', modo: 'responder' })
 
   const T = 1700000000
   // Las filas de `chat` tienen que existir: `inbox` hace join contra ellas.
   alm.anotarChat({ cuenta: CUENTA, chatJid: GRUPO, nombre: 'Operaciones', esGrupo: 1, ts: T })
-  alm.anotarChat({ cuenta: CUENTA, chatJid: DIRECTO, nombre: 'Jhon', esGrupo: 0, ts: T })
+  alm.anotarChat({ cuenta: CUENTA, chatJid: DIRECTO, nombre: 'Pedro', esGrupo: 0, ts: T })
   const fila = (chat, id, ts, body, extra = {}) => ({
     cuenta: CUENTA, chatJid: chat, stanzaId: id, ts, fromMe: 0,
-    senderJid: '573009998877@s.whatsapp.net', senderName: 'Jhon', body,
+    senderJid: '573009998877@s.whatsapp.net', senderName: 'Pedro', body,
     mediaTipo: null, mediaBytes: null, mencionaMe: 0, citaMe: 0, ...extra
   })
 
@@ -1073,7 +1397,7 @@ console.log('\nJuicio cacheado: T2/T5/T6 — el veredicto viaja en la fila, o no
   alm.anotarChat({ cuenta: CUENTA, chatJid: GRUPO, nombre: 'Grupo Juicio', esGrupo: 1, ts: T })
   const fila = (id, ts, body) => ({
     cuenta: CUENTA, chatJid: GRUPO, stanzaId: id, ts, fromMe: 0,
-    senderJid: '573009998877@s.whatsapp.net', senderName: 'Jhon', body,
+    senderJid: '573009998877@s.whatsapp.net', senderName: 'Pedro', body,
     mediaTipo: null, mediaBytes: null, mencionaMe: 0, citaMe: 0
   })
   alm.guardarMensaje(fila('J1', T, 'ya lo clasificaron antes'))
@@ -1120,7 +1444,7 @@ console.log('\nJuicio cacheado: T6 — sin scope.db, y sin la tabla, la bandeja 
   alm.anotarChat({ cuenta: CUENTA, chatJid: GRUPO, nombre: 'Sin Alcance', esGrupo: 1, ts: 1710000000 })
   alm.guardarMensaje({
     cuenta: CUENTA, chatJid: GRUPO, stanzaId: 'N1', ts: 1710000000, fromMe: 0,
-    senderJid: '573009998877@s.whatsapp.net', senderName: 'Jhon', body: 'hola',
+    senderJid: '573009998877@s.whatsapp.net', senderName: 'Pedro', body: 'hola',
     mediaTipo: null, mediaBytes: null, mencionaMe: 0, citaMe: 0
   })
   alm.cerrar()

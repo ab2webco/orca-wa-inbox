@@ -94,9 +94,9 @@ export function identidadesPropias (lid, telefono) {
  *  todavia no `lid` ni `name`, que Baileys completa despues por `creds.update`. Medido
  *  en una instalacion viva, la tabla `linea` quedaba asi:
  *
- *      lid=NULL  pn=573008236130:7@s.whatsapp.net  name=NULL
+ *      lid=NULL  pn=573000000011:7@s.whatsapp.net  name=NULL
  *
- *  mientras `creds.json` ya decia `me.lid = 262444127674377:7@lid`. Con el LID vacio,
+ *  mientras `creds.json` ya decia `me.lid = 100000000000001:7@lid`. Con el LID vacio,
  *  `identidadesPropias` solo conoce el telefono, `mencionaA` no puede acertar nunca
  *  -las menciones de WhatsApp viajan en `@lid`- y `menciona_me` queda en 0 sobre
  *  mensajes que nombran al dueno con todas las letras. Aguas abajo eso es la bandeja
@@ -114,6 +114,30 @@ export function identidadDeSesion (creds, user) {
     pn: guardada.id || viva.id || null,
     nombre: guardada.name || viva.name || null
   }
+}
+
+/** La cuenta de una linea: el TELEFONO vinculado, `pn:<digitos>`.
+ *
+ *  Antes era la cuenta fija `local`, y eso hizo que vincular OTRO numero le diera al
+ *  nuevo las conversaciones y las autorizaciones del viejo (visto en vivo,
+ *  2026-10-01): una fuga de permisos entre lineas. La regla del dueno es "cada numero,
+ *  su linea".
+ *
+ *  Por que el telefono y no el LID: el telefono esta en `creds.me.id` desde el
+ *  emparejamiento —asi que la cuenta se sabe al abrir, y antes de abrir si ya hay
+ *  credenciales—, mientras que el LID llega despues, por `creds.update` (ver
+ *  `identidadDeSesion`). Con el LID, los primeros mensajes no tendrian cuenta. Y el
+ *  telefono es lo que una persona reconoce. El prefijo sigue la forma `web:<lid>` que
+ *  ya usa `wa_account` y no puede chocar nunca con la `local` de antes.
+ *
+ *  Un LID o cualquier otra cosa que no sea un telefono devuelve `null`: inventar una
+ *  cuenta con eso abriria una linea fantasma. */
+export function cuentaDeIdentidad (pn) {
+  const texto = typeof pn === 'string' ? pn : ''
+  const [usuario, servidor = ''] = texto.split('@')
+  if (servidor && servidor !== 's.whatsapp.net' && servidor !== 'c.us') return null
+  const digitos = (usuario || '').split(':')[0]
+  return /^\d{6,}$/.test(digitos) ? `pn:${digitos}` : null
 }
 
 /** Lista de exclusion cerrada (§11-A2). */

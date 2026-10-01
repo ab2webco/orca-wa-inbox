@@ -21,7 +21,7 @@
  */
 import {
   esConversacion, esGrupo, usuarioDe, identidadPropia, identidadesPropias,
-  identidadDeSesion,
+  identidadDeSesion, cuentaDeIdentidad,
   mencionaA, citaA, textoDe, mediaDe, filaDeMensaje, filaDeActualizacion,
   TIPO_MEDIA
 } from '../sidecar/src/mensajes.js'
@@ -273,10 +273,10 @@ console.log('\nmensajes: la identidad de la sesion se lee de donde de verdad est
   // Y por `creds.update` aparece. Por eso hay que volver a preguntar.
   const tras = identidadDeSesion(
     { me: { id: '573001112233:7@s.whatsapp.net', lid: '199887766554433:7@lid',
-      name: 'Fabian' } }, null)
+      name: 'Dueno' } }, null)
   ok('tras creds.update el LID ya esta', tras.lid === '199887766554433:7@lid',
     JSON.stringify(tras))
-  ok('y el nombre tambien', tras.nombre === 'Fabian', JSON.stringify(tras))
+  ok('y el nombre tambien', tras.nombre === 'Dueno', JSON.stringify(tras))
 
   // `creds.me` manda sobre `sock.user`: es el registro persistente, y es el que tenia
   // el LID cuando la tabla `linea` lo tenia en NULL.
@@ -303,6 +303,29 @@ console.log('\nmensajes: la identidad de la sesion se lee de donde de verdad est
   ok('con el LID la mencion se reconoce', mencionaA(mencion, conLid) === true)
   ok('sin el LID no se reconoce NUNCA — el defecto entero en una linea',
     mencionaA(mencion, sinLid) === false)
+}
+
+console.log('\nT9: cada numero, su linea — la cuenta sale de la identidad')
+{
+  // Visto en vivo (2026-10-01): con la cuenta fija `local`, vincular OTRO numero le
+  // dio al numero nuevo las conversaciones y las autorizaciones del viejo. La cuenta
+  // tiene que salir del telefono vinculado.
+  ok('el telefono de creds.me da la cuenta, sin dispositivo ni servidor',
+    cuentaDeIdentidad('573000000012:7@s.whatsapp.net') === 'pn:573000000012',
+    String(cuentaDeIdentidad('573000000012:7@s.whatsapp.net')))
+  ok('el mismo numero en otro dispositivo es la MISMA linea',
+    cuentaDeIdentidad('573000000012:12@s.whatsapp.net') ===
+    cuentaDeIdentidad('573000000012@s.whatsapp.net'))
+  ok('dos numeros distintos son dos lineas',
+    cuentaDeIdentidad('573000000012:7@s.whatsapp.net') !==
+    cuentaDeIdentidad('573001112233:7@s.whatsapp.net'))
+  // Un LID no es un telefono: si llegara por error en lugar del pn, inventar una
+  // cuenta con el seria abrir una linea fantasma. Sin telefono no hay cuenta.
+  ok('un LID no da cuenta', cuentaDeIdentidad('100000000000002:1@lid') === null,
+    String(cuentaDeIdentidad('100000000000002:1@lid')))
+  ok('nada no da cuenta', cuentaDeIdentidad(null) === null &&
+    cuentaDeIdentidad('') === null && cuentaDeIdentidad('hola') === null)
+  ok('nunca es la cuenta fija de antes', cuentaDeIdentidad('573000000012@s.whatsapp.net') !== 'local')
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

@@ -32,6 +32,13 @@ import { fileURLToPath } from 'node:url'
 import { execFile as execFileNode } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 
+// Falla hasta que se demuestre lo contrario. `activate()` instala sus propios
+// `uncaughtException`/`unhandledRejection` (la autopsia del worker), asi que una
+// excepcion a mitad de esta prueba no la tumba: se la traga, el proceso se vacia y salia
+// con 0 sin haber corrido la mitad de los casos. Solo la ultima linea, que cuenta los
+// fallos de verdad, decide el codigo de salida.
+process.exitCode = 1
+
 const RAIZ = mkdtempSync(join(tmpdir(), 'wa-inbox-worker-'))
 
 // ANTES de activar nada: al activarse el worker siembra el arnes en el userData de
@@ -535,6 +542,64 @@ console.log('\nworker: un requisito accionable sigue avisando')
   apagar()
 }
 
+// ───────── la salud se vuelve a mirar, sin repetir el mismo aviso ─────────
+// `checkSystem` corria UNA vez, al activar: un sidecar que moria despues dejaba el
+// diagnostico en verde para siempre. Ahora se repite; y repetirlo no puede repetir la
+// notificacion, o cada cinco minutos saldria el mismo aviso hasta que dejen de leerlos.
+console.log('\nworker: la salud se revisa sola, y el mismo aviso no se repite')
+{
+  const { programarSalud, checkSystem, SALUD_MS } = await import('../main.mjs')
+  ok('se revisa cada pocos minutos, no cada segundo', SALUD_MS >= 60000 && SALUD_MS <= 15 * 60000,
+    String(SALUD_MS))
+  let vueltas = 0
+  const parar = programarSalud(async () => { vueltas += 1 }, 100)
+  await dormir(450)
+  parar()
+  const alParar = vueltas
+  await dormir(300)
+  ok('la revision se repite', alParar >= 3, `vueltas=${alParar}`)
+  ok('y se detiene cuando se apaga el plugin', vueltas === alParar,
+    `al parar=${alParar} despues=${vueltas}`)
+  // Una revision lenta (el doctor tarda) no se encima con la siguiente.
+  let enVuelo = 0
+  let maximo = 0
+  const pararLenta = programarSalud(async () => {
+    enVuelo += 1; maximo = Math.max(maximo, enVuelo)
+    await dormir(250)
+    enVuelo -= 1
+  }, 50)
+  await dormir(600)
+  pararLenta()
+  ok('dos revisiones no corren a la vez', maximo === 1, `maximo=${maximo}`)
+
+  const DOCTOR_ACCIONABLE = '#!/usr/bin/env node\n' +
+    'console.log(JSON.stringify([{ check: "sqlite3 available", ok: false,' +
+    ' detalle: "not in PATH", requerido: true, code: "sqlite3" }]))\nprocess.exit(1)\n'
+  const dir = herramientas('doctor-repetido', '#!/bin/sh\necho \'[]\'\n')
+  writeFileSync(join(dir, 'wa-read'), DOCTOR_ACCIONABLE, { mode: 0o755 })
+  const orca = hostFalso(dir, { chats: [] })
+  const memoria = {}
+  await checkSystem(orca, dir, memoria)
+  await checkSystem(orca, dir, memoria)
+  ok('el mismo requisito, dos revisiones: UN aviso', orca.avisos.length === 1,
+    JSON.stringify(orca.avisos))
+
+  // La linea muda bloquea y se pinta en el panel, al lado del QR: igual que "sin
+  // transporte", no saca notificacion.
+  const DOCTOR_MUDO = '#!/usr/bin/env node\n' +
+    'console.log(JSON.stringify([{ check: "a message transport", ok: false,' +
+    ' detalle: "no sign of life", requerido: true, code: "transport-silent" }]))\n' +
+    'process.exit(1)\n'
+  const dirMudo = herramientas('doctor-mudo', '#!/bin/sh\necho \'[]\'\n')
+  writeFileSync(join(dirMudo, 'wa-read'), DOCTOR_MUDO, { mode: 0o755 })
+  const orcaMudo = hostFalso(dirMudo, { chats: [] })
+  await checkSystem(orcaMudo, dirMudo, {})
+  ok('la linea muda llega al panel', orcaMudo.store.health &&
+    orcaMudo.store.health.problemCode === 'transport-silent', JSON.stringify(orcaMudo.store.health))
+  ok('y no saca notificacion: el panel ya lo dice', orcaMudo.avisos.length === 0,
+    JSON.stringify(orcaMudo.avisos))
+}
+
 // ───────── el latido: "no contesto" y "no esta" son dos cosas ─────────
 console.log('\nworker: el latido')
 {
@@ -656,6 +721,60 @@ console.log('\nworker: el sidecar habla, el panel se entera')
   ok('y el QR se descarta: uno vencido no tiene por que seguir pintado detras de una ' +
     'sesion ya conectada (docs/ENCARGO...§6)',
     conectado && conectado.qr === null, JSON.stringify(conectado))
+  apagar()
+}
+
+// ───────── el latido de la linea llega a storage ─────────
+console.log('\nworker: el latido del sidecar llega al panel')
+{
+  const guion = join(RAIZ, 'sidecar-late.cjs')
+  writeFileSync(guion,
+    '#!/usr/bin/env node\n' +
+    'function emit (m) { process.stdout.write(JSON.stringify(m) + "\\n") }\n' +
+    'emit({ type: "connection", state: "open" })\n' +
+    'setTimeout(() => emit({ type: "latido", ts: 1758500000000, conectado: true }), 50)\n' +
+    'setInterval(() => {}, 1000)\n',
+    { mode: 0o755 })
+  const orca = hostFalso(herramientas('sidecar-late', '#!/bin/sh\necho \'[]\'\n'), {}, guion)
+  const { apagar } = await arranca(orca)
+  await hasta(() => orca.store.sidecar && orca.store.sidecar.latido, 10000)
+  const l = orca.store.sidecar && orca.store.sidecar.latido
+  ok('el latido queda en la clave que leen los paneles', !!l, JSON.stringify(orca.store.sidecar))
+  ok('con la hora del sidecar, no la de la escritura', l && l.ts === 1758500000000,
+    JSON.stringify(l))
+  ok('y si el socket estaba abierto', l && l.conectado === true, JSON.stringify(l))
+  apagar()
+}
+
+// ───────── T9: de que numero es la linea, y que pasa cuando cambia ─────────
+console.log('\nworker: la linea vinculada llega al panel y un numero nuevo dispara un sync')
+{
+  // Cada numero, su linea. El panel necesita saber CUAL esta vinculada para no pintar
+  // lo del numero anterior como si fuera del nuevo, y lo que muestra (conversaciones,
+  // actividad, insignia) tiene que rearmarse para el numero nuevo sin esperar 5 min.
+  const guion = join(RAIZ, 'sidecar-otra-linea.cjs')
+  writeFileSync(guion,
+    '#!/usr/bin/env node\n' +
+    'function emit (m) { process.stdout.write(JSON.stringify(m) + "\\n") }\n' +
+    'emit({ type: "connection", state: "open" })\n' +
+    'setTimeout(() => emit({ type: "linea", cuenta: "pn:573000000012", cambio: true, ts: Date.now() }), 50)\n' +
+    'setTimeout(() => emit({ type: "identidad", me: "+573000000012", cuenta: "pn:573000000012", reparados: 0, ts: Date.now() }), 100)\n' +
+    'setInterval(() => {}, 1000)\n', { mode: 0o755 })
+  const syncs = join(RAIZ, 'syncs-linea.txt')
+  const wascope = '#!/bin/sh\n' +
+    `[ "$1" = "sync" ] && echo "$@" >> ${JSON.stringify(syncs)}\n` +
+    'echo \'[{"synced": true, "destinos": []}]\'\n'
+  const orca = hostFalso(herramientas('otra-linea', wascope), {}, guion)
+  const { apagar } = await arranca(orca)
+  const antes = existsSync(syncs) ? readFileSync(syncs, 'utf8').trim().split('\n').length : 0
+  await hasta(() => orca.store.sidecar && orca.store.sidecar.cuenta, 10000)
+  ok('la cuenta de la linea vinculada queda en la clave que leen los paneles',
+    orca.store.sidecar && orca.store.sidecar.cuenta === 'pn:573000000012',
+    JSON.stringify(orca.store.sidecar))
+  const sincronizo = await hasta(() => existsSync(syncs) &&
+    readFileSync(syncs, 'utf8').trim().split('\n').length > antes, 10000)
+  ok('y el cambio de linea dispara un sync, sin esperar al reloj', sincronizo,
+    existsSync(syncs) ? readFileSync(syncs, 'utf8') : '(sin syncs)')
   apagar()
 }
 
@@ -1120,6 +1239,169 @@ console.log('\nworker: tras desvincular, el estado que lee el panel ya no es el 
   ok('y el QR viejo tampoco: escanear uno de la sesion anterior falla sin explicacion',
     !!d && !d.qr, JSON.stringify(d))
   apagar()
+}
+
+// ───────── credenciales muertas: el QR nuevo aparece solo ─────────
+// Medido en la maquina del dueno (2026-10-01): WhatsApp cerro la sesion desde el
+// telefono (401), `creds.json` se quedo con `me` puesto y Baileys, con `me`, hace login
+// y no registro: ningun reinicio podia producir un QR. El panel ofrecia "Reintentar",
+// que repetia el mismo 401. Ahora el sidecar sale con su codigo de credenciales muertas
+// y el worker hace solo lo que hace el boton Desvincular: borra y relanza.
+console.log('\nworker: con credenciales muertas el QR nuevo aparece sin que nadie apriete nada')
+{
+  const authFalso = join(RAIZ, 'auth-muerta')
+  const borrados = join(RAIZ, 'borrados-muerta.txt')
+  const resolvedor = join(RAIZ, 'resolve-muerta.mjs')
+  writeFileSync(resolvedor,
+    'import { appendFileSync, rmSync } from "node:fs"\n' +
+    'const dir = ' + JSON.stringify(authFalso) + '\n' +
+    'if (process.argv.includes("--borrar")) {\n' +
+    '  appendFileSync(' + JSON.stringify(borrados) + ', "x\\n")\n' +
+    '  rmSync(dir, { recursive: true, force: true })\n' +
+    '}\n' +
+    'process.stdout.write(JSON.stringify({ ok: true, dir }))\n')
+  mkdirSync(authFalso, { recursive: true })
+  writeFileSync(join(authFalso, 'creds.json'), '{"me":{"id":"573000000000:7@s.whatsapp.net"}}')
+  // El almacen de mensajes vive en OTRO lado (`~/.wa-inbox/capture.db`) y no se toca:
+  // tirar una credencial no puede llevarse las conversaciones guardadas.
+  const almacenFalso = join(RAIZ, 'capture-muerta.db')
+  writeFileSync(almacenFalso, 'mensajes')
+
+  // El sidecar de mentira se porta como el de verdad: con `creds.json` (credencial
+  // muerta) cierra con 401 y sale con 3; sin ella, registra y emite un QR.
+  const guion = join(RAIZ, 'sidecar-credencial-muerta.cjs')
+  writeFileSync(guion,
+    '#!/usr/bin/env node\n' +
+    'const fs = require("node:fs")\n' +
+    'const path = require("node:path")\n' +
+    'const dir = process.env.WA_SIDECAR_AUTH_DIR\n' +
+    'function emit (m) { process.stdout.write(JSON.stringify(m) + "\\n") }\n' +
+    'if (fs.existsSync(path.join(dir, "creds.json"))) {\n' +
+    '  emit({ type: "connection", state: "close", motivo: "sesion-cerrada", statusCode: 401 })\n' +
+    '  emit({ type: "error", code: "sesion-cerrada", detail: "la sesion se cerro" })\n' +
+    '  process.stdout.write("", () => process.exit(3))\n' +
+    '} else {\n' +
+    '  fs.mkdirSync(dir, { recursive: true })\n' +
+    '  emit({ type: "qr", qr: "QR-NUEVO", ts: Date.now(), rotation: 1, ttlMs: 75000 })\n' +
+    '  setInterval(() => {}, 1000)\n' +
+    '}\n', { mode: 0o755 })
+
+  const orca = hostFalso(herramientas('muerta', '#!/bin/sh\necho \'[]\'\n'), {}, guion)
+  orca.host.call = (function (original) {
+    return async (action, params) => {
+      if (action === 'settings.get') {
+        return { value: { toolsDir: join(RAIZ, 'muerta'), sidecarPath: guion,
+          authDirResolverPath: resolvedor } }
+      }
+      return original(action, params)
+    }
+  })(orca.host.call)
+
+  const { apagar } = await arranca(orca)
+  const conQr = await hasta(() => orca.store.sidecar && orca.store.sidecar.qr &&
+    orca.store.sidecar.qr.qr === 'QR-NUEVO', 15000)
+  ok('el QR nuevo llega a storage sin ningun pedido del panel', conQr,
+    JSON.stringify(orca.store.sidecar))
+  ok('porque la credencial muerta se borro', !existsSync(join(authFalso, 'creds.json')),
+    authFalso)
+  ok('el pedido del panel no tuvo nada que ver', !orca.store.sidecarRequest,
+    JSON.stringify(orca.store.sidecarRequest))
+  await dormir(1500)
+  const veces = existsSync(borrados)
+    ? readFileSync(borrados, 'utf8').trim().split('\n').filter(Boolean).length : 0
+  ok('se borro UNA vez: el sidecar nuevo, ya sin credencial, no vuelve a disparar el borrado',
+    veces === 1, `borrados=${veces}`)
+  ok('y el almacen de mensajes sigue en su lugar', existsSync(almacenFalso), almacenFalso)
+  apagar()
+
+  // El codigo de salida es el contrato entre las dos puntas. Vive en dos archivos
+  // porque el worker no importa el sidecar (arrastraria Baileys y el almacen dentro de
+  // la valla), y por eso se comparan aca: si uno cambia solo, el QR deja de aparecer.
+  const { SALIDA } = await import('../sidecar/src/index.js')
+  const { SIDECAR_SALIDA } = await import('../main.mjs')
+  ok('el worker y el sidecar usan los mismos codigos de salida',
+    JSON.stringify(SALIDA) === JSON.stringify(SIDECAR_SALIDA),
+    `sidecar=${JSON.stringify(SALIDA)} worker=${JSON.stringify(SIDECAR_SALIDA)}`)
+}
+
+// ───────── un sidecar que se rinde deja SU motivo, no "se cayo" ─────────
+console.log('\nworker: un sidecar que se rindio deja escrito por que')
+{
+  const { clasificarSalida, SIDECAR_SALIDA } = await import('../main.mjs')
+  // 440 repetido hasta el tope: el sidecar ya mando el motivo por stdout y sale con
+  // RENDIDO. Taparlo con `sidecar-cayo` le ofreceria Reintentar al dueno, que es justo
+  // el reintento que se acaba de agotar.
+  const estado = { motivo: 'sesion-reemplazada',
+    error: { code: 'sesion-reemplazada', detail: 'el socket no va a reintentar mas' } }
+  const r = clasificarSalida({ code: SIDECAR_SALIDA.RENDIDO, signal: null, estado })
+  ok('la salida se clasifica como rendida', r.tipo === 'rendido', JSON.stringify(r))
+  ok('y conserva el motivo que mando el sidecar',
+    r.motivo === 'sesion-reemplazada' && r.error.code === 'sesion-reemplazada',
+    JSON.stringify(r))
+  // Si por lo que sea la linea no llego, no se inventa un motivo: queda la caida.
+  const sinLinea = clasificarSalida({ code: SIDECAR_SALIDA.RENDIDO, signal: null, estado: {} })
+  ok('sin motivo escrito no se inventa uno', sinLinea.error.code === 'sidecar-cayo',
+    JSON.stringify(sinLinea))
+}
+
+// ───────── la salida nunca tapa la sesion cerrada ─────────
+console.log('\nworker: la salida del sidecar no tapa "sesion cerrada"')
+{
+  const { clasificarSalida } = await import('../main.mjs')
+  // El caso medido en la maquina del dueno: el sidecar dijo `sesion-cerrada` y salio
+  // con 0. El `exit` escribia `sidecar-cayo` encima, el panel escondia Desvincular y
+  // ofrecia Reintentar, que repetia el mismo 401.
+  const r = clasificarSalida({ code: 0, signal: null, estado: { motivo: 'sesion-cerrada',
+    error: { code: 'sesion-cerrada', detail: 'la sesion se cerro' } } })
+  ok('un exit 0 tras "sesion cerrada" sigue diciendo sesion cerrada',
+    r.motivo === 'sesion-cerrada' && r.error.code === 'sesion-cerrada', JSON.stringify(r))
+  ok('y se trata como credenciales muertas, no como una caida',
+    r.tipo === 'credenciales-muertas', JSON.stringify(r))
+}
+
+// ───────── una caida se reinicia sola, con espera creciente y tope ─────────
+console.log('\nworker: una caida del sidecar se reinicia sola, con backoff y tope')
+{
+  const { decidirReinicio } = await import('../main.mjs')
+  const pasos = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => decidirReinicio(n))
+  ok('los primeros reinicios se hacen', pasos[0].reiniciar === true && pasos[1].reiniciar === true,
+    JSON.stringify(pasos.slice(0, 2)))
+  ok('con espera desde el primero: un proceso que revienta al nacer no se relanza en rafaga',
+    pasos[0].esperaMs >= 1000, JSON.stringify(pasos[0]))
+  const esperas = pasos.filter((p) => p.reiniciar).map((p) => p.esperaMs)
+  ok('cada espera es igual o mayor que la anterior',
+    esperas.every((ms, i) => i === 0 || ms >= esperas[i - 1]), JSON.stringify(esperas))
+  ok('y hay tope: pasado cierto numero se deja de reiniciar',
+    pasos.some((p) => p.reiniciar === false) && pasos[pasos.length - 1].reiniciar === false,
+    JSON.stringify(pasos.map((p) => p.reiniciar)))
+
+  // De punta a punta: un sidecar que revienta dos veces y a la tercera conecta. Sin
+  // supervisor se quedaba en la primera caida hasta que alguien apretara Reintentar.
+  const vidas = join(RAIZ, 'vidas-cae-dos.txt')
+  const guion = join(RAIZ, 'sidecar-cae-dos.cjs')
+  writeFileSync(guion,
+    '#!/usr/bin/env node\n' +
+    'const fs = require("node:fs")\n' +
+    'fs.appendFileSync(' + JSON.stringify(vidas) + ', "x\\n")\n' +
+    'const n = fs.readFileSync(' + JSON.stringify(vidas) + ', "utf8").trim().split("\\n").length\n' +
+    'if (n <= 2) process.exit(1)\n' +
+    'process.stdout.write(JSON.stringify({ type: "connection", state: "open" }) + "\\n")\n' +
+    'setInterval(() => {}, 1000)\n', { mode: 0o755 })
+  const orca = hostFalso(herramientas('cae-dos', '#!/bin/sh\necho \'[]\'\n'), {}, guion)
+  const { apagar } = await arranca(orca)
+  const volvio = await hasta(() => orca.store.sidecar && orca.store.sidecar.connection === 'open',
+    20000)
+  const cuantas = existsSync(vidas)
+    ? readFileSync(vidas, 'utf8').trim().split('\n').filter(Boolean).length : 0
+  ok('tras dos caidas el sidecar vuelve solo', volvio, JSON.stringify(orca.store.sidecar))
+  ok('relanzandolo de verdad, no solo diciendolo', cuantas === 3, `vidas=${cuantas}`)
+  apagar()
+  // Apagado el plugin no queda ningun reinicio en el aire.
+  await dormir(2500)
+  const despues = existsSync(vidas)
+    ? readFileSync(vidas, 'utf8').trim().split('\n').filter(Boolean).length : 0
+  ok('apagar el plugin no deja un reinicio pendiente', despues === cuantas,
+    `antes=${cuantas} despues=${despues}`)
 }
 
 // ───────── el reintento: el panel ya no manda a reiniciar Orca ─────────

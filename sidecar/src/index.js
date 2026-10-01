@@ -21,7 +21,8 @@ import { crearAlcance } from './alcance.js'
 import { atenderSalida, ENVIO_LATIDO_MS } from './envio.js'
 import { INGESTA, ingerirActualizacion, ingerirChats, ingerirContactos,
   ingerirMensaje } from './ingesta.js'
-import { identidadDeSesion, identidadesPropias, identidadPropia } from './mensajes.js'
+import { cuentaDeIdentidad, identidadDeSesion, identidadesPropias,
+  identidadPropia } from './mensajes.js'
 
 // El auth state es una credencial viva (docs/ENCARGO...§11-F1): en un equipo
 // compartido el umask por defecto lo deja legible para cualquiera. Esto tiene que
@@ -40,6 +41,13 @@ export const MOTIVO = Object.freeze({
   SIN_SESION: 'sin-sesion',
   SOCKET_CAIDO: 'socket-caido',
   REINICIO_REQUERIDO: 'reinicio-requerido',
+  // Tres cierres que reintentar no cura, cada uno con su accion: 440 es otro cliente
+  // usando esta misma sesion (cerrarlo, o desvincular), 403 es WhatsApp negando el
+  // acceso a la cuenta, y 411 es un desacuerdo de multidispositivo que solo arregla
+  // vincular de nuevo.
+  SESION_REEMPLAZADA: 'sesion-reemplazada',
+  ACCESO_DENEGADO: 'acceso-denegado',
+  MULTIDISPOSITIVO: 'multidispositivo',
   DESCONOCIDO: 'desconocido'
 })
 
@@ -49,12 +57,69 @@ export const MOTIVO = Object.freeze({
 // resolver Baileys.
 const CIERRE = Object.freeze({
   LOGGED_OUT: 401,
+  // `badSession`: WhatsApp ya no reconoce la sesion guardada. Para el dueno es lo
+  // mismo que un 401 -hay que volver a vincular- y por eso se trata igual.
+  BAD_SESSION: 500,
   // connectionLost Y timedOut comparten ESTE MISMO codigo en esta version de
   // Baileys. Inventar cual de los dos fue seria mentirle al motivo que el panel
   // traduce; se lo llama por lo que es, un socket caido.
   SOCKET_CAIDO_408: 408,
-  RESTART_REQUIRED: 515
+  RESTART_REQUIRED: 515,
+  FORBIDDEN: 403,
+  MULTIDEVICE_MISMATCH: 411,
+  CONNECTION_REPLACED: 440
 })
+
+// Los cierres que se reintentan un poco y despues no: con su motivo propio.
+const CIERRE_CON_TOPE = Object.freeze({
+  [CIERRE.CONNECTION_REPLACED]: 'sesion-reemplazada',
+  [CIERRE.FORBIDDEN]: 'acceso-denegado',
+  [CIERRE.MULTIDEVICE_MISMATCH]: 'multidispositivo'
+})
+
+/** Cuantas veces seguidas puede repetirse uno de esos cierres antes de rendirse. Tres
+ *  alcanza para que un tropiezo aislado se cure solo y no tanto como para que un 440
+ *  le arrebate la sesion al otro cliente durante horas. */
+export const CIERRES_REPETIDOS_TOPE = 3
+
+/** Que tan juntos tienen que estar para contar como "seguidos". Un 440 hoy y otro
+ *  manana son dos eventos, no un bucle. */
+export const CIERRES_VENTANA_MS = 10 * 60 * 1000
+
+/** La cuenta de cierres repetidos tras un cierre nuevo. NO la reinicia un `open`, y
+ *  eso es a proposito: un 440 conecta, el otro cliente reclama, cierra y vuelve a
+ *  conectar. Si `open` la bajara -como baja `intento`-, el tope no llegaria nunca. */
+export function repetidosTrasCierre (previo, statusCode, ahoraMs = Date.now()) {
+  const mismo = previo && previo.codigo === statusCode &&
+    ahoraMs - previo.ts <= CIERRES_VENTANA_MS
+  return { codigo: statusCode, veces: mismo ? previo.veces + 1 : 1, ts: ahoraMs }
+}
+
+/** Como termina el sidecar cuando decide no seguir. Es CONTRATO con el worker
+ *  (`SIDECAR_SALIDA` en main.mjs, y la prueba del worker compara los dos): el codigo
+ *  de salida llega siempre, y la ultima linea de stdout puede llegar despues del evento
+ *  de salida o no llegar.
+ *
+ *  Ninguno es 0 ni 1: 0 es "termino sin decir por que" y 1 es un reventon, y los dos
+ *  siguen siendo caidas que el worker reinicia. */
+export const SALIDA = Object.freeze({
+  // La sesion guardada esta muerta (401/500). El worker borra `wa-auth` por el mismo
+  // camino que el boton Desvincular y relanza: el sidecar nuevo arranca sin `me`,
+  // Baileys registra en vez de hacer login, y el QR aparece solo.
+  CREDENCIALES_MUERTAS: 3,
+  // Un cierre que reintentar no cura (403/411/440) se repitio hasta el tope. El motivo
+  // ya salio por stdout; el worker lo deja escrito y NO relanza, porque relanzar es
+  // exactamente el reintento que se acaba de agotar.
+  RENDIDO: 4
+})
+
+/** El codigo con que sale el sidecar tras un cierre, o `null` si sigue vivo. Pura,
+ *  como `decidirTrasCierre`, para que el contrato con el worker se pruebe sin socket. */
+export function salidaTrasCierre (decision) {
+  if (decision.reconectar) return null
+  if (decision.borrarCredenciales) return SALIDA.CREDENCIALES_MUERTAS
+  return SALIDA.RENDIDO
+}
 
 const BACKOFF_BASE_MS = 1000
 const BACKOFF_MAX_MS = 30000
@@ -90,24 +155,38 @@ export function intentoTrasEvento (intento, evento) {
 /** La decision pura tras un cierre de socket: reconectar o no, con que espera y por
  *  que motivo. No toca la red ni el disco -eso lo hace quien la llama- para que se
  *  pueda probar sin un socket vivo. */
-export function decidirTrasCierre (statusCode, intento = 1) {
-  if (statusCode === CIERRE.LOGGED_OUT) {
-    // Reconectar aca reproduciria el mismo cierre en bucle: el usuario tiene que
-    // escanear un QR nuevo, no esperar a que el sidecar lo resuelva solo.
-    return { reconectar: false, esperaMs: 0, motivo: MOTIVO.SESION_CERRADA }
+export function decidirTrasCierre (statusCode, intento = 1, repetidos = 1) {
+  if (statusCode === CIERRE.LOGGED_OUT || statusCode === CIERRE.BAD_SESSION) {
+    // Reconectar con ESTAS credenciales reproduciria el mismo cierre en bucle, y
+    // conservarlas es peor: con `creds.me` puesto Baileys hace login y nunca registro
+    // (lib/Socket/socket.js:157-162), asi que ningun reinicio produce un QR. Hay que
+    // tirarlas; lo hace el worker cuando este proceso ya murio (ver `SALIDA`).
+    return { reconectar: false, borrarCredenciales: true, esperaMs: 0,
+      motivo: MOTIVO.SESION_CERRADA }
   }
   if (statusCode === CIERRE.RESTART_REQUIRED) {
     // Baileys lo pide tras el primer QR escaneado. Esperar aca solo demora el
     // emparejamiento sin ganar nada.
-    return { reconectar: true, esperaMs: 0, motivo: MOTIVO.REINICIO_REQUERIDO }
+    return { reconectar: true, borrarCredenciales: false, esperaMs: 0,
+      motivo: MOTIVO.REINICIO_REQUERIDO }
+  }
+  const conTope = CIERRE_CON_TOPE[statusCode]
+  if (conTope) {
+    // Antes caian en el "cualquier otro codigo" de abajo y reconectaban para siempre.
+    if (repetidos > CIERRES_REPETIDOS_TOPE) {
+      return { reconectar: false, borrarCredenciales: false, esperaMs: 0, motivo: conTope }
+    }
+    return { reconectar: true, borrarCredenciales: false,
+      esperaMs: calcularEsperaMs(intento), motivo: conTope }
   }
   if (statusCode === CIERRE.SOCKET_CAIDO_408) {
-    return { reconectar: true, esperaMs: calcularEsperaMs(intento), motivo: MOTIVO.SOCKET_CAIDO }
+    return { reconectar: true, borrarCredenciales: false,
+      esperaMs: calcularEsperaMs(intento), motivo: MOTIVO.SOCKET_CAIDO }
   }
   // Cualquier otro codigo -o ninguno- reconecta igual, con el mismo backoff: negar
-  // la reconexion por defecto dejaria colgada una caida que nadie prevfunciono a
-  // mano.
-  return { reconectar: true, esperaMs: calcularEsperaMs(intento), motivo: MOTIVO.DESCONOCIDO }
+  // la reconexion por defecto dejaria colgada una caida que nadie previo a mano.
+  return { reconectar: true, borrarCredenciales: false,
+    esperaMs: calcularEsperaMs(intento), motivo: MOTIVO.DESCONOCIDO }
 }
 
 // Cada cuanto Baileys genera un QR nuevo. NO son los ~20 s que tarda el cliente web
@@ -236,21 +315,26 @@ function emitirAlmacen (conteos) {
 // los conteos salen con freno.
 export const ALMACEN_LATIDO_MS = 30000
 
+// Cada cuanto el sidecar dice "sigo aca" por stdout. Es lo que deja caducar el
+// "conectado" del panel: sin latido, la ultima foto guardada en storage no vencia nunca,
+// y con el worker o este proceso muertos el panel seguia diciendo "conectado" una semana
+// despues. Un minuto y no un segundo: cada linea es un `storage.set` del worker, y el
+// host lo mata a los 64 sin confirmar en vuelo (ver ALMACEN_LATIDO_MS). El latido de
+// cada segundo que lee `bin/wa-send` es OTRO, va al almacen y no cruza el host.
+export const LATIDO_LINEA_MS = 60000
+
+/** El latido que sale por stdout: la hora y si el socket esta abierto. Nada mas — esto
+ *  termina en storage, que lee el panel. */
+export function mensajeLatido (conectado, ts = Date.now()) {
+  return { type: 'latido', ts, conectado: conectado === true }
+}
+
 /** Si toca sacar los conteos. Un desalojo fuerza la salida: es lo unico que no se puede
  *  perder, porque perderlo significa que el usuario se entera cuando una fila sale sin
  *  cuerpo y sin explicacion (docs/ENCARGO-TRANSPORTE-UNICO.md §11-F2). */
 export function tocaEmitirAlmacen (ultimoMs, ahoraMs, forzar = false) {
   return forzar || ahoraMs - ultimoMs >= ALMACEN_LATIDO_MS
 }
-
-// La cuenta de esta linea. Es `local` por defecto y eso NO es un descuido heredado del
-// transporte viejo: `wa-scope set` escribe `account='local'` cuando el usuario autoriza
-// una conversacion desde el panel (bin/wa-scope:792), y `merged_scope` fuerza esa misma
-// cuenta para las filas que vienen del panel (bin/wa-scope:624). Estrenar otro nombre
-// aca dejaria cada autorizacion existente apuntando a una linea que no existe, y el
-// sintoma seria una bandeja vacia sin un solo error. El env esta para el dia que haya
-// una segunda linea, que es lo que la llave `(cuenta, jid)` ya soporta (§11-I1).
-const CUENTA_POR_DEFECTO = 'local'
 
 // Tope por adjunto. Un video de 60 MB en `~/.wa-inbox` no lo pidio nadie: la fila se
 // guarda igual, con su tipo, y sin ruta — que es exactamente el marcador tipado que
@@ -278,7 +362,7 @@ async function iniciar () {
   // se fuerza aparte para que una carpeta vieja no quede mas abierta de lo debido.
   chmodSync(authDir, 0o700)
 
-  const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers,
+  const { default: makeWASocket, useMultiFileAuthState, Browsers,
     downloadMediaMessage, fetchLatestBaileysVersion } =
     await import('@whiskeysockets/baileys')
 
@@ -289,13 +373,48 @@ async function iniciar () {
   // El almacen vive en `~/.wa-inbox/capture.db`, al lado del registro de alcance y
   // FUERA del arbol del plugin, que esta verificado por content-hash (§7). El porque
   // entero esta en sidecar/src/almacen.js.
-  const cuenta = process.env.WA_SIDECAR_CUENTA || CUENTA_POR_DEFECTO
   const almacen = abrirAlmacen(rutaAlmacen(process.env))
+  // La cuenta de esta linea es el TELEFONO vinculado (`cuentaDeIdentidad`), no la `local`
+  // fija de antes: con la fija, vincular otro numero le daba al nuevo las conversaciones
+  // y las autorizaciones del viejo. Con credenciales ya guardadas se sabe desde el
+  // arranque; emparejando es `null` hasta que WhatsApp diga quien es, y en ese rato no
+  // se guarda ni se manda nada a nombre de nadie.
   const mediaDir = rutaMedia(process.env)
   // Las herramientas las pasa el worker: buscarlas en el PATH ya habia mandado a una
   // a la instalacion equivocada (§11-E4).
   const alcance = crearAlcance({ toolsDir: process.env.WA_SIDECAR_TOOLS_DIR })
   alcance.refrescar(true)
+
+  /** Lo que quedo de antes de T9 bajo la cuenta fija `local`. Se pasa a su numero solo
+   *  con evidencia, o por decision del dueno (`wa-scope reclave --numero`, que llega por
+   *  el alcance); si no, queda guardado y oculto y `wa-read doctor` pide la decision
+   *  (falla cerrada: `resolverLocal` en almacen.js). Un fallo aca no tumba la linea. */
+  const resolverLegado = () => {
+    try {
+      const r = almacen.resolverLocal({ emparejada: cuenta, decidida: alcance.reclaveDecidida() })
+      // Solo que paso, sin numeros de nadie: va al log del worker.
+      if (r.accion === 'movida' || r.accion === 'bloqueada') {
+        process.stderr.write(`legado: ${r.accion} (${r.motivo})\n`)
+      }
+    } catch (error) {
+      emitirError('legado-sin-resolver', error?.message || error)
+    }
+  }
+
+  let cuenta = null
+  const fijarCuenta = (pn) => {
+    const nueva = cuentaDeIdentidad(pn)
+    if (!nueva || nueva === cuenta) return
+    cuenta = nueva
+    // Cambiar de numero cambia de cajon: no se copia ni se pisa nada de la otra linea.
+    const { cambio, antes } = almacen.activarLinea(cuenta)
+    // Sin numero ni contenido: solo que la linea activa cambio, para el log del worker.
+    if (cambio && antes) process.stderr.write('linea: cambio la linea activa\n')
+    emitir({ type: 'linea', cuenta, cambio, ts: Date.now() })
+    // Con el numero emparejado conocido recien se puede decidir sobre lo de antes.
+    resolverLegado()
+  }
+  fijarCuenta(state.creds?.me?.id)
 
   let identidades = identidadesPropias(null, null)
   const nombresDeChat = new Map()
@@ -358,6 +477,9 @@ async function iniciar () {
   }
 
   let intento = 0
+  // Los cierres repetidos del mismo codigo (`repetidosTrasCierre`). Vive fuera de
+  // `conectar()` porque tiene que sobrevivir a la reconexion: es lo que la cuenta mide.
+  let cierres = null
   let rotacion = 0
   // El socket vivo y si esta abierto. Los guarda el arranque y los mira el drenado de
   // la bandeja de salida, que corre en su propio reloj y no dentro de `conectar()`: una
@@ -373,7 +495,7 @@ async function iniciar () {
     socket = sock
     conectado = false
 
-    // El numero como lo reconoce una persona: `573008236130:7@s.whatsapp.net` no le
+    // El numero como lo reconoce una persona: `573000000011:7@s.whatsapp.net` no le
     // dice nada a nadie. Se corta el sufijo de dispositivo y el servidor.
     const numeroVisible = (pn) => {
       const usuario = String(pn || '').split('@')[0].split(':')[0]
@@ -399,6 +521,10 @@ async function iniciar () {
     let identidadUlt = null
     const refrescarIdentidad = () => {
       const yo = identidadDeSesion(sock.authState?.creds, sock.user)
+      // La identidad decide la cuenta ANTES de escribir nada: la fila de `linea` es de
+      // ESTE telefono, y nunca pisa la de otro numero.
+      fijarCuenta(yo.pn)
+      if (!cuenta) return
       const huella = `${yo.lid}|${yo.pn}|${yo.nombre}`
       if (huella === identidadUlt) return
       const teniaLid = identidadUlt !== null && identidades.size > 1
@@ -412,7 +538,8 @@ async function iniciar () {
       const reparados = yo.lid && !teniaLid
         ? almacen.repararMenciones({ cuenta, lid: yo.lid })
         : 0
-      emitir({ type: 'identidad', me: numeroVisible(yo.pn), reparados, ts: Date.now() })
+      emitir({ type: 'identidad', me: numeroVisible(yo.pn), cuenta, reparados,
+        ts: Date.now() })
     }
 
     // `useMultiFileAuthState` escribe las claves en archivos: `saveCreds` los
@@ -453,7 +580,7 @@ async function iniciar () {
             // es la misma forma que leen los otros tres eventos.
             anotarChats(Object.entries(grupos || {})
               .map(([jid, meta]) => ({ ...meta, id: jid })))
-            almacen.registrarLinea({ cuenta, grupos: Object.keys(grupos || {}).length })
+            if (cuenta) almacen.registrarLinea({ cuenta, grupos: Object.keys(grupos || {}).length })
           })
           .catch((error) => emitirError('grupos-sin-leer', error?.message || error))
 
@@ -492,12 +619,18 @@ async function iniciar () {
         conectado = false
         const statusCode = lastDisconnect?.error?.output?.statusCode
         intento = intentoTrasEvento(intento, 'close')
-        const decision = decidirTrasCierre(statusCode, intento)
+        cierres = repetidosTrasCierre(cierres, statusCode)
+        const decision = decidirTrasCierre(statusCode, intento, cierres.veces)
         emitirConexion('close', { motivo: decision.motivo, statusCode: statusCode ?? null })
         if (!decision.reconectar) {
-          emitirError(decision.motivo, statusCode === DisconnectReason.loggedOut
-            ? 'la sesion se cerro; hace falta escanear un QR nuevo'
+          emitirError(decision.motivo, decision.borrarCredenciales
+            ? 'la sesion se cerro; las credenciales guardadas ya no sirven'
             : 'el socket no va a reintentar mas')
+          // Salir A PROPOSITO y con codigo, en vez de quedarse sin socket esperando a
+          // que el bucle de eventos se vacie solo: asi salia con 0, y un 0 no le decia
+          // al worker que la sesion habia muerto — lo pintaba como "se cayo" y el panel
+          // ofrecia Reintentar, que repetia el mismo 401 sin un solo QR.
+          terminar(salidaTrasCierre(decision))
           return
         }
         setTimeout(conectar, decision.esperaMs)
@@ -508,6 +641,8 @@ async function iniciar () {
     sock.ev.on('messages.upsert', async ({ messages }) => {
       for (const wa of messages || []) {
         conteos.llegaron += 1
+        // Sin identidad no hay cajon donde guardarlo: nada se escribe a nombre de nadie.
+        if (!cuenta) continue
         try {
           // El alcance se refresca con su propio TTL: el usuario autoriza un chat en
           // el panel y espera que el proximo mensaje ya entre.
@@ -537,6 +672,7 @@ async function iniciar () {
     // (§11-B4). Un mensaje borrado se quedaba en la bandeja para siempre, y uno
     // editado se atendia por lo que decia antes.
     sock.ev.on('messages.update', (eventos) => {
+      if (!cuenta) return
       for (const evento of eventos || []) {
         try {
           const { motivo } = ingerirActualizacion({
@@ -560,6 +696,7 @@ async function iniciar () {
     // `typeof === 'number'`, que es exactamente lo que un uno a uno del historial NO
     // trae.
     const anotarChats = (chats) => {
+      if (!cuenta) return { anotados: 0, omitidos: 0 }
       try {
         return ingerirChats({
           almacen,
@@ -586,6 +723,7 @@ async function iniciar () {
     // Se lee el nombre Y NADA MAS: es la misma contabilidad que ya se guarda de cada
     // grupo, no contenido de nadie (§5).
     const anotarContactos = (contactos) => {
+      if (!cuenta) return { nombrados: 0 }
       try {
         return ingerirContactos({
           almacen,
@@ -664,11 +802,30 @@ async function iniciar () {
     }
     if (drenando) return
     drenando = true
-    atenderSalida({ almacen, conectado, enviar: (jid, contenido) => socket.sendMessage(jid, contenido) })
+    // Solo lo encolado para ESTE numero (`cuenta`): lo de otra linea espera a su numero.
+    atenderSalida({ almacen, conectado, cuenta,
+      enviar: (jid, contenido) => socket.sendMessage(jid, contenido) })
       .catch((error) => avisarFallo('salida-sin-atender', error))
       .finally(() => { drenando = false })
   }, ENVIO_LATIDO_MS)
   if (typeof salidaTimer.unref === 'function') salidaTimer.unref()
+
+  // El latido de la linea hacia el panel (ver LATIDO_LINEA_MS). Sale uno ya, para que el
+  // panel no tenga que esperar un minuto entero para creer lo que ve.
+  const latirLinea = () => {
+    emitir(mensajeLatido(conectado))
+    // En el mismo reloj, la decision del dueno sobre lo de antes (`wa-scope reclave
+    // --numero`): se aplica en menos de un minuto, sin reiniciar nada. Con la linea
+    // conectada el panel no ofrece Reintentar, y mandar a apretarlo seria mandar a
+    // un boton que no esta. Sin nada en `local`, `resolverLocal` no hace nada.
+    if (cuenta) {
+      alcance.refrescar()
+      resolverLegado()
+    }
+  }
+  latirLinea()
+  const lineaTimer = setInterval(latirLinea, LATIDO_LINEA_MS)
+  if (typeof lineaTimer.unref === 'function') lineaTimer.unref()
 
   // La poda corre sola y REPORTA. "Un almacen sin tope y sin caducidad es un archivo de
   // conversaciones ajenas que nadie borra" (§11-F2), y lo que se desaloja se dice: el
@@ -684,6 +841,17 @@ async function iniciar () {
     }
   }, 60 * 60 * 1000)
   if (typeof podaTimer.unref === 'function') podaTimer.unref()
+
+  /** Irse con un codigo que el worker sabe leer (`SALIDA`). Lo ultimo que se emitio
+   *  tiene que llegar antes: la escritura vacia resuelve cuando stdout ya entrego todo
+   *  lo anterior, y recien ahi se sale. */
+  function terminar (codigo) {
+    clearInterval(salidaTimer)
+    clearInterval(lineaTimer)
+    clearInterval(podaTimer)
+    almacen.cerrar()
+    process.stdout.write('', () => process.exit(codigo ?? 1))
+  }
 
   conectar()
 }

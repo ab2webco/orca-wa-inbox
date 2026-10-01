@@ -25,7 +25,7 @@ anything".
 
 Global: --json  JSON output instead of a table.
 """
-import argparse, json, os, subprocess, sys
+import argparse, json, os, subprocess, sys, time
 
 # Sin esto Python deja un __pycache__ DENTRO de bin/, y el directorio del plugin
 # instalado esta direccionado por hash: un archivo que aparece despues de la
@@ -101,6 +101,19 @@ REQUISITOS = """The plugin cannot read messages yet.
 """
 
 
+# Cuanto se sigue avisando de algo que paso una vez (una subida de esquema, una
+# re-clave). Pasado esto ya no le pide nada a nadie y solo ensucia el panel.
+AVISO_UNICO_S = 7 * 86400
+
+
+def reciente(epoch):
+    """Si un aviso de una sola vez todavia vale la pena mostrarlo."""
+    try:
+        return time.time() - int(epoch) <= AVISO_UNICO_S
+    except (TypeError, ValueError):
+        return False
+
+
 def cmd_doctor(a):
     """Para que el usuario sepa que le falta antes de que nada dependa de esto.
 
@@ -117,14 +130,29 @@ def cmd_doctor(a):
         filas = [{"check": "a message transport", "ok": False, "detalle": exc.detail,
                   "requerido": True, "code": exc.reason, "via": None}]
     else:
-        lineas = wa_store.whoami(con)
+        # La linea vinculada AHORA: las de otros numeros siguen guardadas, pero no son
+        # las que este equipo esta leyendo.
+        lineas = wa_store.whoami(con, wa_store.linea_activa(con))
         cuantas = len(lineas)
         etiquetas = ", ".join(x.get("account") or "?" for x in lineas)
-        filas = [{"check": "a message transport", "ok": True,
-                  "detalle": (f"{cuantas} linked line"
-                              f"{'' if cuantas == 1 else 's'} ({etiquetas})"),
-                  "requerido": True, "code": SIN_TRANSPORTE,
-                  "via": lineas[0].get("account") if lineas else None}]
+        via = lineas[0].get("account") if lineas else None
+        if wa_store.sidecar_vivo(con):
+            filas = [{"check": "a message transport", "ok": True,
+                      "detalle": (f"{cuantas} linked line"
+                                  f"{'' if cuantas == 1 else 's'} ({etiquetas})"),
+                      "requerido": True, "code": SIN_TRANSPORTE, "via": via}]
+        else:
+            # Una fila en `linea` dice que alguna vez hubo una linea, no que alguien la
+            # este leyendo. Medido en la maquina del dueno: el sidecar muerto desde el
+            # dia anterior y este renglon en verde, porque la fila seguia ahi.
+            latido = wa_store.ultimo_latido(con)
+            desde = (f"since {wa_store.ts(latido)}" if latido
+                     else "at all since it was linked")
+            filas = [{"check": "a message transport", "ok": False,
+                      "detalle": (f"the linked line has given no sign of life {desde}: "
+                                  "nothing is reading WhatsApp right now. Restart the "
+                                  "connection from the plugin settings."),
+                      "requerido": True, "code": wa_store.LINEA_MUDA, "via": via}]
         # El desalojo va al doctor porque es lo unico del almacen que el usuario puede
         # cambiar: subir `capture_max` o `capture_days` desde el panel. Un tope que
         # muerde en silencio deja filas sin cuerpo sin que nadie sepa por que (§11-F2).
@@ -153,7 +181,23 @@ def cmd_doctor(a):
     # es justo el momento en que el usuario necesita leer que paso con lo viejo; si
     # este renglon colgara del almacen abierto, no se veria nunca.
     migracion = wa_store.ultima_migracion()
-    if migracion and (migracion["cuerpos"] or migracion["lineas"]):
+    # Una semana, no para siempre (T10): visto en vivo, el aviso seguia en el panel
+    # semanas despues de una subida que ya no le pedia nada a nadie.
+    if migracion and not reciente(migracion["at"]):
+        migracion = None
+    if migracion and not migracion["cuerpos"] and migracion["lineas"]:
+        # Sin cuerpos no se borro ningun mensaje: solo se retiraron las lineas de la via
+        # que ya no existe. Decir "se borro" asustaba por algo que no paso.
+        filas.append({
+            "check": "message store upgrade", "ok": False,
+            "detalle": (f"optional — the message store was upgraded from version "
+                        f"{migracion['desde']} to {migracion['hasta']} on "
+                        f"{wa_store.ts(migracion['at'])} without losing any message. "
+                        f"The {migracion['lineas']} lines of the removed WhatsApp Web "
+                        f"route were retired, and the linked line fills the store."),
+            "requerido": False, "code": "store-migrated",
+            "detailCode": "store-migrated-clean", "via": None})
+    elif migracion and migracion["cuerpos"]:
         # `ok: False` a proposito, por lo mismo que el renglon de retencion de aca
         # arriba: `checkSystem` arma la lista de opcionales del panel con
         # `requerido === false && !ok` (main.mjs), asi que un renglon en verde no llega
@@ -170,6 +214,37 @@ def cmd_doctor(a):
                         f"was touched, and the linked line fills the store again."),
             "requerido": False, "code": "store-migrated",
             "detailCode": "store-migrated-dropped", "via": None})
+    # La re-clave de `local` al numero de su linea (T9), por lo mismo que la migracion
+    # de arriba: `ok: False` para que llegue al panel, y no bloquea, porque no hay nada
+    # roto. Se dice adonde fueron las conversaciones de antes.
+    # Lo de antes de T9 que no se pudo atribuir con certeza (T9f, falla cerrada): no se
+    # movio nada y hace falta que el dueno diga de que numero es. No caduca: es una
+    # decision pendiente, no un aviso de algo que ya paso.
+    pendiente = wa_store.reclave_pendiente()
+    if pendiente:
+        wa_scope = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wa-scope")
+        filas.append({
+            "check": "data from a previous number", "ok": False,
+            "detalle": (f"optional — {pendiente.get('chats', 0)} conversations and "
+                        f"{pendiente.get('mensajes', 0)} messages were stored before each "
+                        f"number had its own line, and they cannot be matched for sure to "
+                        f"the number linked now, so they stay hidden. Nothing was "
+                        f"deleted. If they came from another number of yours, run: "
+                        f"{wa_scope} reclave --numero <that number, digits only>; it "
+                        f"is applied within a minute."),
+            "requerido": False, "code": "store-rekey-pending",
+            "detailCode": "store-rekey-decide", "via": None})
+    # Con la misma semana de vida que el de la migracion: es el mismo tipo de aviso.
+    for r in [x for x in wa_store.reclaves()[-1:] if reciente(x["at"])]:
+        numero = str(r["hacia"]).replace("pn:", "+", 1)
+        filas.append({
+            "check": "line re-keyed", "ok": False,
+            "detalle": (f"optional — on {wa_store.ts(r['at'])} the {r['chats']} "
+                        f"conversations and {r['mensajes']} messages that were stored "
+                        f"before each number became its own line were assigned to "
+                        f"{numero}, the number they came from. Nothing was deleted."),
+            "requerido": False, "code": "store-rekeyed",
+            "detailCode": "store-rekeyed-line", "via": None})
     # Lo opcional no bloquea: sin transcripcion todo funciona, solo que los audios
     # quedan sin leer. Marcarlo como rotura pintaria de rojo un equipo sano.
     ok, detalle, dcode = _transcribe_check()
@@ -270,6 +345,11 @@ def main():
     except SinFuente as exc:
         morir_sin_fuente(exc.reason, exc.detail, exc.code)
     try:
+        # Sin `--line`, la linea que esta vinculada AHORA. Leer todas mezclaba las
+        # conversaciones del numero viejo con las del nuevo (visto en vivo, 2026-10-01).
+        # Otra linea se puede pedir a proposito, nombrandola.
+        if not a.line:
+            a.line = wa_store.linea_activa(con)
         rows = a.fn(con, a)
     finally:
         con.close()

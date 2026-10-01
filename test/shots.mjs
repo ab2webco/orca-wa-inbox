@@ -82,7 +82,7 @@ const DATOS = {
   agentName: 'Watson',
   tone: 'Espanol neutro. Trata de usted. Frases cortas, sin modismos.',
   transcribeQuality: 'optima',
-  ownerName: 'Fabiana Olivar',
+  ownerName: 'Persona De Ejemplo',
   inboxDays: '7',
   transcribe: 'local',
   transcribeLang: 'auto',
@@ -115,9 +115,9 @@ const DATOS = {
       last: '2026-09-16 18:20', unread: 1 },
     { jid: '573000000000@s.whatsapp.net', name: 'Laura M\u00e9ndez', kind: 'directo',
       last: '2026-09-17 13:30', unread: 0 },
-    { jid: '120363000000000004@g.us', name: 'Lista de espera | IA Builder Lab \u{1F680} #2',
+    { jid: '120363000000000004@g.us', name: 'Lista de espera | Taller Demo \u{1F680} #2',
       kind: 'grupo', last: '2026-09-15 09:04', unread: 12 },
-    { jid: '120363000000000005@g.us', name: 'PMO - Ab2Web -  NetSat', kind: 'grupo',
+    { jid: '120363000000000005@g.us', name: 'Comite - Cliente -  Sur', kind: 'grupo',
       last: '2026-09-14 16:48', unread: 0 },
     { jid: '573000000001@s.whatsapp.net', name: 'Camila Restrepo', kind: 'directo',
       last: '2026-09-13 11:22', unread: 2 }
@@ -264,6 +264,16 @@ const SIN_CHATS = Object.assign({}, DATOS, { chats: [], scope: {} })
 
 const AHORA_MS = Date.now()
 
+// El latido de la linea (`sidecar.latido`): "conectado" ya no se dice sin uno fresco.
+// `LATIDO_FRESCO` es un marcador y no una hora: la hora se sella al fotografiar, igual
+// que el `ts` del QR, porque una corrida entera dura mas que los 150 s que vale un
+// latido, y las capturas del final salian "sin senal" sobre un estado conectado.
+const LATIDO_FRESCO = { fresco: true }
+// El latido viejo, de la linea muda: 25 minutos antes de arrancar el guion. Relativo y
+// no una fecha fija, para que el panel muestre la hora sola (pasado un dia muestra la
+// fecha entera, y eso es otro estado).
+const LATIDO_VIEJO = { ts: Date.now() - 25 * 60 * 1000, conectado: true }
+
 // Los cinco finales de una corrida. Se fotografian porque son la razon de ser del
 // renglon: en pantalla los cuatro primeros eran la MISMA lista vacia, y el dueno
 // concluia que el plugin no funcionaba mientras funcionaba bien. Un renglon que dice
@@ -340,7 +350,8 @@ const PANELES = [
   //     que se escaneo con el telefono equivocado.
   {
     nombre: 'actividad-linea-viva', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
-    datos: conLinea({ connection: 'open', qr: null, exited: false, me: '+573001112233' })
+    datos: conLinea({ connection: 'open', qr: null, exited: false, me: '+573001112233',
+      latido: LATIDO_FRESCO })
   },
   // 5b. Sin vincular: la lista esta vacia porque no hay linea, no porque no haya
   //     trabajo. Manda a Ajustes, que es donde vive el QR.
@@ -426,7 +437,7 @@ const PANELES = [
     // codigo: solo mirarlo. Es el mismo defecto de "both routes are off".
     nombre: 'config-leyendo', archivo: 'config.html', anchos: ANCHOS,
     datos: Object.assign({}, DATOS, {
-      sidecar: { connection: 'open', qr: null, exited: false },
+      sidecar: { connection: 'open', qr: null, exited: false, latido: LATIDO_FRESCO },
       // La forma EXACTA que publica checkSystem con el doctor del almacen.
       health: { ok: true, optional: [
         { que: 'message retention', code: 'retention',
@@ -509,6 +520,8 @@ const PANELES = [
   },
   {
     nombre: 'config-sidecar-qr', archivo: 'config.html', anchos: ANCHOS,
+    // Es lo que aparece solo tras un 401 ahora: por eso va tambien a todo ancho en ingles.
+    enTodosLosAnchos: true,
     datos: Object.assign({}, DATOS, { sidecar: {
       connection: 'connecting',
       // Contenido real de un QR multi-dispositivo (docs/ENCARGO...§3: "QR emitido
@@ -538,7 +551,7 @@ const PANELES = [
   {
     nombre: 'config-sidecar-conectado', archivo: 'config.html', anchos: ANCHOS,
     datos: Object.assign({}, DATOS,
-      { sidecar: { connection: 'open', qr: null, exited: false } })
+      { sidecar: { connection: 'open', qr: null, exited: false, latido: LATIDO_FRESCO } })
   },
   {
     nombre: 'config-sidecar-caido', archivo: 'config.html', anchos: ANCHOS,
@@ -566,7 +579,7 @@ const PANELES = [
   {
     nombre: 'config-sidecar-desvincular', archivo: 'config.html', anchos: ANCHOS,
     datos: Object.assign({}, DATOS,
-      { sidecar: { connection: 'open', qr: null, exited: false } }),
+      { sidecar: { connection: 'open', qr: null, exited: false, latido: LATIDO_FRESCO } }),
     // La confirmacion NO existe al cargar: es el segundo estado del boton, y
     // fotografiar el panel recien abierto nunca la muestra. Es justo lo que hay que
     // mirar — un aviso que no cabe, o que se lee flojo, no lo delata ninguna prueba.
@@ -588,6 +601,7 @@ const PANELES = [
     // que el boton este de verdad ahi no lo delata ninguna prueba de composicion — se
     // mira. Es el estado que deja credenciales muertas en disco.
     nombre: 'config-sidecar-sesion-cerrada', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true,
     datos: Object.assign({}, DATOS, { sidecar: {
       connection: 'close', qr: null, exited: false, motivo: 'sesion-cerrada',
       error: { code: 'sesion-cerrada',
@@ -626,12 +640,124 @@ const PANELES = [
     nombre: 'config-elegir-sin-autorizar', archivo: 'config.html', anchos: ANCHOS,
     datos: DATOS,
     guion: `const b = document.getElementById('chat-search');
-            b.value = 'ia builder lab 2';
+            b.value = 'taller demo 2';
             b.dispatchEvent(new Event('input'));
             const s = document.getElementById('chat-pick');
             s.value = '120363000000000004@g.us';
             s.dispatchEvent(new Event('change'));`,
     espera: 400
+  },
+  // ── La linea muerta (odd/tasks/linea-muerta.md) ──────────────────────────────────
+  // Los estados nuevos van a los cuatro anchos, en los dos idiomas y en los dos temas
+  // (`enTodosLosAnchos`): son texto nuevo, y un texto nuevo que no cabe o que se cuela
+  // en el idioma equivocado no lo delata ninguna prueba de codigo.
+  //
+  // La linea que dejo de latir: el estado que el panel tapaba con "conectado". Con el
+  // renglon de salud que publica el doctor en el mismo momento (`transport-silent`).
+  {
+    nombre: 'config-sidecar-sin-senal', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true,
+    datos: Object.assign({}, DATOS, {
+      sidecar: { connection: 'open', qr: null, exited: false, me: '+573001112233',
+        latido: LATIDO_VIEJO },
+      health: { ok: false, problem: 'a message transport', problemCode: 'transport-silent',
+        detail: 'transport-silent: the linked line has given no sign of life since ' +
+          '2026-09-30 17:44: nothing is reading WhatsApp right now.',
+        optional: [] }
+    })
+  },
+  // El storage EXACTO que quedo en la maquina del dueno: 401, y encima el
+  // `sidecar-cayo` que escribia el `exit` del worker viejo. Tiene que ofrecer
+  // Desvincular y no Reintentar.
+  {
+    nombre: 'config-sidecar-401-tapado', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true,
+    datos: Object.assign({}, DATOS, { sidecar: {
+      connection: 'close', qr: null, exited: true, motivo: 'sidecar-cayo', statusCode: 401,
+      error: { code: 'sidecar-cayo', detail: 'sidecar exited (code 0, signal null)' }
+    } })
+  },
+  // Otro equipo usando la misma sesion (440), despues de que el sidecar se rindio.
+  {
+    nombre: 'config-sidecar-reemplazada', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true,
+    datos: Object.assign({}, DATOS, { sidecar: {
+      connection: 'close', qr: null, exited: true, motivo: 'sesion-reemplazada',
+      statusCode: 440,
+      error: { code: 'sesion-reemplazada', detail: 'el socket no va a reintentar mas' }
+    } })
+  },
+  // Y el panel de actividad sobre la misma linea muda.
+  {
+    nombre: 'actividad-linea-muda', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true,
+    datos: conLinea({ connection: 'open', qr: null, exited: false, me: '+573001112233',
+      latido: LATIDO_VIEJO })
+  },
+  // T9: cada numero, su linea. Lo que se vio en vivo tras vincular +573000000012: el
+  // panel seguia ofreciendo las conversaciones y mostrando las autorizaciones y la
+  // actividad del numero anterior. El storage TODAVIA trae lo del numero viejo (el sync
+  // del nuevo no paso), y el panel no lo pinta como si fuera del vinculado.
+  {
+    nombre: 'config-numero-nuevo', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true,
+    datos: Object.assign({}, DATOS, {
+      sidecar: { connection: 'open', qr: null, exited: false, me: '+573000000012',
+        cuenta: 'pn:573000000012', latido: LATIDO_FRESCO },
+      chatsAccount: 'pn:573001112233',
+      scope: Object.fromEntries(Object.entries(DATOS.scope).map(([jid, e]) =>
+        [jid, Object.assign({}, e, { account: 'pn:573001112233' })]))
+    })
+  },
+  {
+    nombre: 'actividad-numero-nuevo', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true,
+    datos: Object.assign({}, DATOS, {
+      sidecar: { connection: 'open', qr: null, exited: false, me: '+573000000012',
+        cuenta: 'pn:573000000012', latido: LATIDO_FRESCO },
+      chatsAccount: 'pn:573001112233',
+      activity: Object.assign({}, DATOS.activity, { account: 'pn:573001112233',
+        mapped: 306, authorized: 3,
+        run: { state: 'interrupted', startedAt: '2026-09-24 08:46', endedAt: null } })
+    })
+  },
+  // T10: el chat de la linea consigo misma se llamaba como su jid pelado. Ahora va
+  // primero y como en WhatsApp, "<nombre> (tu)". Se fotografia elegido, que es lo que
+  // queda a la vista (la lista desplegada la pinta el sistema).
+  {
+    nombre: 'config-chat-propio', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true,
+    datos: Object.assign({}, DATOS, {
+      chats: [{ jid: '100000000000002@lid', name: 'Nueva', kind: 'directo', own: true,
+        last: '2026-09-17 14:05', unread: 0 }].concat(DATOS.chats)
+    }),
+    guion: `const s = document.getElementById('chat-pick');
+            s.value = '100000000000002@lid';
+            s.dispatchEvent(new Event('change'));`,
+    espera: 400
+  },
+  // T10: una subida de esquema que no borro ningun mensaje no dice "se borro".
+  {
+    nombre: 'config-migracion-limpia', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true,
+    datos: Object.assign({}, DATOS, {
+      health: { ok: true, optional: [
+        { que: 'message store upgrade', code: 'store-migrated',
+          como: 'the message store was upgraded without losing any message',
+          howCode: 'store-migrated-clean' }] }
+    })
+  },
+  // T9f: lo de antes que no se pudo atribuir con certeza a un numero. No se movio nada
+  // y el panel pide la decision con el comando exacto.
+  {
+    nombre: 'config-legado-pendiente', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true,
+    datos: Object.assign({}, DATOS, {
+      health: { ok: true, optional: [
+        { que: 'data from a previous number', code: 'store-rekey-pending',
+          como: 'conversations stored before each number had its own line stay hidden',
+          howCode: 'store-rekey-decide' }] }
+    })
   },
   {
     nombre: 'config-sidecar-reintentar', archivo: 'config.html', anchos: ANCHOS,
@@ -652,7 +778,7 @@ async function main() {
 
   for (const idioma of IDIOMAS) {
    for (const tema of TEMAS) {
-    for (const ancho of idioma.anchos) {
+    for (const ancho of ANCHOS) {
       const contexto = await navegador.newContext({
         viewport: { width: ancho, height: 900 },
         colorScheme: tema,
@@ -661,6 +787,8 @@ async function main() {
       })
       for (const panel of PANELES) {
         if (!panel.anchos.includes(ancho)) continue
+        // En ingles, por defecto, solo los extremos; los estados marcados van a todos.
+        if (!panel.enTodosLosAnchos && !idioma.anchos.includes(ancho)) continue
         const pagina = await contexto.newPage()
         const errores = []
         pagina.on('pageerror', (e) => errores.push(String(e)))
@@ -679,6 +807,10 @@ async function main() {
         if (datos.sidecar && datos.sidecar.qr) {
           datos = Object.assign({}, datos, { sidecar: Object.assign({}, datos.sidecar,
             { qr: Object.assign({}, datos.sidecar.qr, { ts: Date.now() }) }) })
+        }
+        if (datos.sidecar && datos.sidecar.latido && datos.sidecar.latido.fresco) {
+          datos = Object.assign({}, datos, { sidecar: Object.assign({}, datos.sidecar,
+            { latido: { ts: Date.now() - 20000, conectado: true } }) })
         }
         await pagina.addInitScript(`(${stub.toString()})(${JSON.stringify(datos)}, ` +
           `${JSON.stringify(panel.stub || {})})`)

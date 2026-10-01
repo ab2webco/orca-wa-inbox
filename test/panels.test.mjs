@@ -122,10 +122,10 @@ console.log('\nconfig.html')
 
   // Para quien trabaja. No es el nombre del agente: es el del dueno, y el prompt lo
   // lee para saber a quien le reporta.
-  doc.getElementById('owner').value = '  Fabiana Olivar  '
+  doc.getElementById('owner').value = '  Persona De Ejemplo  '
   doc.getElementById('save-owner').click()
   await espera()
-  ok('guarda para quien trabaja', storage.ownerName === 'Fabiana Olivar',
+  ok('guarda para quien trabaja', storage.ownerName === 'Persona De Ejemplo',
     `storage.ownerName = ${JSON.stringify(storage.ownerName)}`)
   ok('confirma el dueno en pantalla',
     doc.getElementById('said-owner').textContent.includes('✓'))
@@ -496,14 +496,14 @@ console.log('\nconfig.html')
 
   // Guardar sin recargar es media funcion: el panel abre mintiendo sobre lo que rige.
   const guardado = await montar('config.html', {
-    inboxDays: '90', ownerName: 'Fabiana Olivar', transcribe: 'off', transcribeLang: 'pt'
+    inboxDays: '90', ownerName: 'Persona De Ejemplo', transcribe: 'off', transcribeLang: 'pt'
   })
   await espera()
   ok('recarga la ventana guardada',
     guardado.doc.getElementById('inbox-days').value === '90',
     `inbox-days = ${guardado.doc.getElementById('inbox-days').value}`)
   ok('recarga para quien trabaja',
-    guardado.doc.getElementById('owner').value === 'Fabiana Olivar',
+    guardado.doc.getElementById('owner').value === 'Persona De Ejemplo',
     `owner = ${JSON.stringify(guardado.doc.getElementById('owner').value)}`)
   ok('recarga el modo de transcripcion',
     guardado.doc.getElementById('transcribe').value === 'off',
@@ -852,6 +852,41 @@ console.log('\nel codigo del CLI, dicho en el idioma del panel')
   ok('y su detalle tecnico se muestra tal cual',
     alertaCrudo.includes('/ruta/que/no/existe/wa-read'), alertaCrudo)
 
+  // La linea existe pero no da senal: el doctor ya no la da por buena con una fila en
+  // `linea`. Se dice en el idioma del panel, no con la frase en ingles del CLI.
+  const muda = await montar('config.html', { health: { ok: false,
+    problem: 'a message transport', problemCode: 'transport-silent',
+    detail: 'transport-silent: the linked line has given no sign of life since ' +
+      '2026-09-30 17:44', optional: [] } }, 'es-419')
+  await espera()
+  const alertaMuda = muda.doc.getElementById('alert').textContent
+  ok('la linea sin senal se dice en espanol', /senal/i.test(alertaMuda) &&
+    !/sign of life/i.test(alertaMuda), alertaMuda)
+
+  // T9f: el renglon de la re-clave de `local` al numero de su linea.
+  const reclave = await montar('config.html', { health: { ok: true, optional: [{
+    que: 'line re-keyed', code: 'store-rekeyed', howCode: 'store-rekeyed-line',
+    como: 'on 2026-10-01 10:00 the 305 conversations and 12 messages that were stored ' +
+      'before each number became its own line were assigned to +573001112233' }] } },
+  'es-419')
+  await espera()
+  const opcReclave = reclave.doc.getElementById('opcionales').textContent
+  ok('la re-clave de la linea se dice en espanol', /numero/i.test(opcReclave) &&
+    !/were assigned|re-keyed/.test(opcReclave), opcReclave)
+
+  // T9f: lo de antes que no se pudo atribuir con certeza pide una decision, con el
+  // comando exacto, en el idioma del panel.
+  const decide = await montar('config.html', { health: { ok: true, optional: [{
+    que: 'data from a previous number', code: 'store-rekey-pending',
+    howCode: 'store-rekey-decide',
+    como: '3 conversations and 12 messages ... run: wa-scope reclave --numero <n>' }] } },
+  'es-419')
+  await espera()
+  const opcDecide = decide.doc.getElementById('opcionales').textContent
+  ok('el pedido de decision se dice en espanol, con el comando',
+    /numero anterior/i.test(opcDecide) && /wa-scope reclave --numero/.test(opcDecide) &&
+    !/cannot be matched/.test(opcDecide), opcDecide)
+
   const pt = await montar('config.html', { health: salud }, 'pt-BR')
   await espera()
   ok('y en portugues tambien',
@@ -1014,7 +1049,7 @@ console.log('\nel contrato CLI -> panel')
   wa('config', 'inbox_days', '30')
   wa('config', 'transcribe', 'off')
   wa('config', 'transcribe_lang', 'pt')
-  wa('config', 'owner_name', 'Fabiana Olivar')
+  wa('config', 'owner_name', 'Persona De Ejemplo')
   wa('route', '--match', 'acme', '--target', 'ACM')
   const sincronizado = wa('sync', '--json')
 
@@ -1080,7 +1115,7 @@ console.log('\nel contrato CLI -> panel')
     panel.doc.getElementById('inbox-days').value === '30' &&
     panel.doc.getElementById('transcribe').value === 'off' &&
     panel.doc.getElementById('lang').value === 'pt' &&
-    panel.doc.getElementById('owner').value === 'Fabiana Olivar',
+    panel.doc.getElementById('owner').value === 'Persona De Ejemplo',
     `${panel.doc.getElementById('inbox-days').value} / ` +
     `${panel.doc.getElementById('transcribe').value} / ` +
     `${panel.doc.getElementById('lang').value}`)
@@ -1379,7 +1414,8 @@ console.log('\nconfig.html — vinculacion de WhatsApp: los cinco estados')
       // Sigue siendo una imagen valida -WhatsApp la rechaza, no el navegador-, asi
       // que queda visible y apagada, no escondida detras de un recuadro en blanco.
       msg: /vencio/i, qrVisible: true, qrVencido: true },
-    { nombre: 'conectado', sidecar: { connection: 'open', qr: null, exited: false },
+    { nombre: 'conectado', sidecar: { connection: 'open', qr: null, exited: false,
+      latido: { ts: AHORA_MS, conectado: true } },
       msg: /conectado/i, qrVisible: false },
     { nombre: 'sesion caida', sidecar: { connection: null, qr: null, exited: true,
       error: { code: 'sidecar-cayo', detail: 'sidecar exited (code 1, signal null)' } },
@@ -1689,7 +1725,8 @@ console.log('\nconfig.html — el sondeo de 2 s del QR se detiene al emparejar')
     .filter((d) => d.action === 'storage.get' && d.params.key === 'sidecar').length
 
   const { enviados: enviadosPareado } = await montar('config.html',
-    { sidecar: { connection: 'open', qr: null } }, 'es-419')
+    { sidecar: { connection: 'open', qr: null,
+      latido: { ts: Date.now(), conectado: true } } }, 'es-419')
   await new Promise((r) => setTimeout(r, 4500))
   const lecturasPareado = enviadosPareado
     .filter((d) => d.action === 'storage.get' && d.params.key === 'sidecar').length
@@ -1740,7 +1777,8 @@ console.log('\nconfig.html — cada motivo de arranque del sidecar dice algo dis
 console.log('\nconfig.html — desvincular: confirmacion antes de cortar la sesion')
 {
   const { doc, storage } = await montar('config.html',
-    { sidecar: { connection: 'open', qr: null, exited: false } }, 'es-419')
+    { sidecar: { connection: 'open', qr: null, exited: false,
+      latido: { ts: Date.now(), conectado: true } } }, 'es-419')
   await espera()
   const boton = doc.getElementById('pairing-unlink')
   ok('con la linea conectada, el panel ofrece desvincularla', boton && !boton.hidden,
@@ -1772,7 +1810,8 @@ console.log('\nconfig.html — desvincular: confirmacion antes de cortar la sesi
 console.log('\nconfig.html — el segundo clic si manda el pedido, por el canal del worker')
 {
   const { doc, storage } = await montar('config.html',
-    { sidecar: { connection: 'open', qr: null, exited: false } }, 'es-419')
+    { sidecar: { connection: 'open', qr: null, exited: false,
+      latido: { ts: Date.now(), conectado: true } } }, 'es-419')
   await espera()
   doc.getElementById('pairing-unlink').click()
   await espera()
@@ -1794,7 +1833,8 @@ console.log('\nconfig.html — tras desvincular, la pantalla no sigue diciendo "
 {
   // El worker contesta el veredicto y deja la clave `sidecar` limpia, que es lo que
   // hace de verdad cuando relanza: sin sesion y esperando un codigo nuevo.
-  const storage = { sidecar: { connection: 'open', qr: null, exited: false } }
+  const storage = { sidecar: { connection: 'open', qr: null, exited: false,
+    latido: { ts: Date.now(), conectado: true } } }
   const { doc } = await montar('config.html', storage, 'es-419', (d, st) => {
     if (d.action === 'storage.set' && d.params.key === 'sidecarRequest' && d.params.value) {
       st.sidecarRequest = d.params.value
@@ -1849,6 +1889,209 @@ console.log('\nconfig.html — la sesion cerrada desde el telefono ofrece desvin
   ok('no ofrece reintentar: reconectar volveria a cerrar la misma sesion',
     doc.getElementById('pairing-retry').hidden,
     `hidden=${doc.getElementById('pairing-retry').hidden}`)
+}
+
+// ───────── "conectado" exige que la linea de senales de vida ─────────
+// Medido en la maquina del dueno (2026-10-01): ultimo mensaje el 23, ultimo latido del
+// sidecar el 30, y el panel diciendo "WhatsApp esta conectado". El "conectado" salia de
+// la ultima foto guardada en storage, que no caduca nunca.
+console.log('\nconfig.html — "conectado" solo con latido fresco de la linea')
+{
+  const viejoMs = Date.now() - 10 * 60 * 1000
+  const hora = new Date(viejoMs).toTimeString().slice(0, 5)
+  const sinSenal = await montar('config.html', { sidecar: { connection: 'open', qr: null,
+    exited: false, latido: { ts: viejoMs, conectado: true } } }, 'es-419')
+  await espera()
+  const msg = sinSenal.doc.getElementById('pairing-msg').textContent
+  ok('con el latido viejo NO dice conectado', !/conectado/i.test(msg), msg)
+  ok('dice que la linea no da senal', /senal/i.test(msg), msg)
+  ok('y desde cuando, con la hora del ultimo latido', msg.includes(hora), `${msg} / ${hora}`)
+  ok('y no se pinta en verde', !sinSenal.doc.getElementById('pairing-msg').className.includes('ok'),
+    sinSenal.doc.getElementById('pairing-msg').className)
+  ok('ofrece reintentar: relanzar es lo que revive una linea muda',
+    !sinSenal.doc.getElementById('pairing-retry').hidden,
+    `hidden=${sinSenal.doc.getElementById('pairing-retry').hidden}`)
+
+  const nunca = await montar('config.html', { sidecar: { connection: 'open', qr: null,
+    exited: false } }, 'es-419')
+  await espera()
+  ok('sin ningun latido tampoco dice conectado',
+    !/conectado/i.test(nunca.doc.getElementById('pairing-msg').textContent),
+    nunca.doc.getElementById('pairing-msg').textContent)
+
+  // Control: con latido fresco sigue diciendo conectado. Sin esto, la regla de arriba
+  // se cumpliria con un panel que no dice "conectado" nunca.
+  const vivo = await montar('config.html', { sidecar: { connection: 'open', qr: null,
+    exited: false, latido: { ts: Date.now() - 30000, conectado: true } } }, 'es-419')
+  await espera()
+  ok('control: con latido de hace 30 s dice conectado',
+    /conectado/i.test(vivo.doc.getElementById('pairing-msg').textContent),
+    vivo.doc.getElementById('pairing-msg').textContent)
+}
+
+// ───────── un 401 ofrece Desvincular aunque el codigo diga otra cosa ─────────
+// El storage que quedo en la maquina del dueno: `statusCode: 401` y, encima, el
+// `sidecar-cayo` que escribia el `exit`. El panel preferia `error.code` y ofrecia
+// Reintentar, que repetia el 401. El 401 manda: la accion es desvincular.
+console.log('\nconfig.html — con 401 se ofrece desvincular, no reintentar')
+{
+  for (const statusCode of [401, 500]) {
+    const { doc } = await montar('config.html', { sidecar: { connection: 'close', qr: null,
+      exited: true, motivo: 'sidecar-cayo', statusCode,
+      error: { code: 'sidecar-cayo', detail: 'sidecar exited (code 0, signal null)' } } },
+    'es-419')
+    await espera()
+    ok(`${statusCode}: ofrece desvincular`, !doc.getElementById('pairing-unlink').hidden,
+      `hidden=${doc.getElementById('pairing-unlink').hidden}`)
+    ok(`${statusCode}: no ofrece reintentar`, doc.getElementById('pairing-retry').hidden,
+      `hidden=${doc.getElementById('pairing-retry').hidden}`)
+    ok(`${statusCode}: y explica que la sesion se cerro desde el telefono`,
+      /telefono/i.test(doc.getElementById('pairing-detail').textContent),
+      doc.getElementById('pairing-detail').textContent)
+  }
+}
+
+// ───────── los cierres que el sidecar ya no reintenta para siempre ─────────
+console.log('\nconfig.html — 440, 403 y 411 se explican, cada uno con su salida')
+{
+  const casos = [
+    // Otro cliente usa la misma sesion: cerrarlo y reintentar, o desvincular.
+    { code: 'sesion-reemplazada', retry: true, unlink: true },
+    { code: 'acceso-denegado', retry: false, unlink: true },
+    { code: 'multidispositivo', retry: false, unlink: true }
+  ]
+  const dicho = new Set()
+  for (const c of casos) {
+    const { doc } = await montar('config.html', { sidecar: { connection: 'close', qr: null,
+      exited: true, motivo: c.code,
+      error: { code: c.code, detail: 'DETALLE-CRUDO-DEL-SIDECAR' } } }, 'es-419')
+    await espera()
+    const detalle = doc.getElementById('pairing-detail').textContent.trim()
+    ok(`${c.code}: se explica en el idioma del panel, no con el detalle crudo`,
+      detalle.length > 0 && detalle !== 'DETALLE-CRUDO-DEL-SIDECAR', detalle)
+    dicho.add(detalle)
+    ok(`${c.code}: ${c.retry ? 'ofrece' : 'no ofrece'} reintentar`,
+      doc.getElementById('pairing-retry').hidden === !c.retry,
+      `hidden=${doc.getElementById('pairing-retry').hidden}`)
+    ok(`${c.code}: ofrece desvincular`, doc.getElementById('pairing-unlink').hidden === !c.unlink,
+      `hidden=${doc.getElementById('pairing-unlink').hidden}`)
+  }
+  ok('y cada uno dice algo distinto', dicho.size === casos.length, JSON.stringify([...dicho]))
+
+  const { window } = await montar('config.html')
+  const S = window.STRINGS
+  const nuevas = ['pairingSilent', 'pairingSilentHow', 'pairingHowReplaced',
+    'pairingHowForbidden', 'pairingHowMultidevice']
+  const faltan = nuevas.filter((k) => !S.es[k] || !S.en[k])
+  ok('los textos nuevos existen en espanol y en ingles', faltan.length === 0,
+    `faltan = ${JSON.stringify(faltan)}`)
+  const sinPt = nuevas.filter((k) => !S.pt[k] || S.pt[k] === S.en[k])
+  ok('y en portugues propio, no heredado del ingles', sinPt.length === 0,
+    `sin portugues = ${JSON.stringify(sinPt)}`)
+}
+
+// ───────── T9: cada numero, su linea ─────────
+// Visto en vivo (2026-10-01): tras vincular OTRO numero el panel seguia mostrando las
+// 305 conversaciones y las autorizaciones del viejo. Lo del numero anterior queda
+// guardado, pero el panel no lo pinta como si fuera del vinculado.
+const VIEJA = 'pn:573001112233'
+const NUEVA = 'pn:573000000012'
+const SIDECAR_NUEVA = { connection: 'open', qr: null, exited: false, me: '+573000000012',
+  cuenta: NUEVA, latido: { ts: Date.now(), conectado: true } }
+console.log('\nconfig.html — T9: el selector y las autorizaciones son de la linea vinculada')
+{
+  const storage = {
+    sidecar: SIDECAR_NUEVA,
+    chats: [{ jid: '100@g.us', name: 'Grupo Viejo', kind: 'grupo' }],
+    chatsAccount: VIEJA,
+    scope: {
+      '100@g.us': { chatName: 'Grupo Viejo', mode: 'responder', provider: 'ninguno',
+        account: VIEJA },
+      // Una de antes de T9, sin cuenta: es de la linea de siempre, no del numero nuevo.
+      '300@g.us': { chatName: 'Legado', mode: 'responder', provider: 'ninguno' }
+    }
+  }
+  const { doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  const opciones = [...doc.getElementById('chat-pick').options].map((o) => o.value)
+  ok('el selector no ofrece las conversaciones del numero anterior',
+    !opciones.includes('100@g.us'), JSON.stringify(opciones))
+  const tabla = doc.getElementById('scope-wrap').textContent
+  ok('la tabla de autorizaciones no muestra las del numero anterior',
+    !/Grupo Viejo|Legado/.test(tabla), tabla)
+
+  // Llega el sync del numero nuevo: su lista si se ofrece.
+  storage.chats = [{ jid: '200@g.us', name: 'Grupo Nuevo', kind: 'grupo' }]
+  storage.chatsAccount = NUEVA
+  doc.defaultView.dispatchEvent(new doc.defaultView.Event('focus'))
+  await espera()
+  const nuevas = [...doc.getElementById('chat-pick').options].map((o) => o.value)
+  ok('control: la lista del numero vinculado si se ofrece', nuevas.includes('200@g.us'),
+    JSON.stringify(nuevas))
+
+  // Lo que se autoriza ahora queda etiquetado con el numero vinculado.
+  doc.getElementById('chat-pick').value = '200@g.us'
+  doc.getElementById('chat-pick').dispatchEvent(new doc.defaultView.Event('change'))
+  await espera()
+  doc.getElementById('mode').value = 'observar'
+  doc.getElementById('save-scope').click()
+  await espera()
+  const entrada = (storage.scope || {})['200@g.us']
+  ok('la autorizacion nueva queda atada al numero vinculado',
+    entrada && entrada.account === NUEVA, JSON.stringify(entrada))
+  ok('y las del numero anterior siguen guardadas, sin borrar',
+    storage.scope['100@g.us'] && storage.scope['100@g.us'].account === VIEJA,
+    JSON.stringify(storage.scope))
+}
+
+console.log('\nconfig.html — T10: el chat propio se nombra como en WhatsApp y va primero')
+{
+  const storage = {
+    chats: [
+      { jid: '200@g.us', name: 'Grupo Nuevo', kind: 'grupo' },
+      { jid: '100000000000002@lid', name: 'Nueva', kind: 'directo', own: true },
+      // Sin nombre de linea conocido: el nombre que llega es su jid.
+      { jid: '573000000012@s.whatsapp.net', name: '573000000012@s.whatsapp.net',
+        kind: 'directo', own: true }
+    ]
+  }
+  const { doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  const opciones = [...doc.getElementById('chat-pick').options]
+  const textos = opciones.map((o) => o.textContent)
+  ok('el chat propio va primero, con el nombre de la linea y "(tú)"',
+    /Nueva \(tú\)/.test(textos[1] || ''), JSON.stringify(textos))
+  ok('ninguna opcion muestra un jid pelado', !textos.some((t) => /@lid|@s\.whatsapp\.net/.test(t)),
+    JSON.stringify(textos))
+  doc.getElementById('chat-pick').value = '573000000012@s.whatsapp.net'
+  doc.getElementById('chat-pick').dispatchEvent(new doc.defaultView.Event('change'))
+  await espera()
+  const identidad = doc.getElementById('chat-id').textContent
+  const nombre = doc.getElementById('chat').value
+  ok('elegido, ni el renglon de identidad ni el nombre muestran el jid',
+    !/@s\.whatsapp\.net|@lid/.test(identidad + ' ' + nombre), `${identidad} / ${nombre}`)
+
+  const en = await montar('config.html', { chats: storage.chats }, 'en-US')
+  await espera()
+  const textosEn = [...en.doc.getElementById('chat-pick').options].map((o) => o.textContent)
+  ok('en ingles dice "(you)"', /Nueva \(you\)/.test(textosEn[1] || ''), JSON.stringify(textosEn))
+}
+
+console.log('\nconfig.html — T10: una migracion que no borro nada no dice que borro')
+{
+  const { doc } = await montar('config.html', { health: { ok: true, optional: [{
+    que: 'message store upgrade', code: 'store-migrated', howCode: 'store-migrated-clean',
+    como: 'the message store was upgraded without losing any message' }] } }, 'es-419')
+  await espera()
+  const texto = doc.getElementById('opcionales').textContent
+  ok('el aviso dice que no se perdio ningun mensaje, sin "se borro"',
+    /ningun mensaje/i.test(texto) && !/borr/i.test(texto) && !/without losing/.test(texto), texto)
+  const { window } = await montar('config.html')
+  const S = window.STRINGS
+  const nuevas = ['howStoreMigratedClean', 'chatOwnTag', 'chatOwnNoName']
+  ok('los textos nuevos estan en los tres idiomas, con portugues propio',
+    nuevas.every((k) => S.es[k] && S.en[k] && S.pt[k] && S.pt[k] !== S.en[k]),
+    JSON.stringify(nuevas.map((k) => [S.es[k], S.en[k], S.pt && S.pt[k]])))
 }
 
 console.log('\nconfig.html — los estados de falla ofrecen reintentar, no reiniciar Orca')
@@ -1945,10 +2188,10 @@ console.log('\nconfig.html — la palabra "sidecar" no se le muestra a nadie')
 // Los tres nombres de abajo estan copiados del almacen de la cuenta viva. Con 296
 // conversaciones, encontrar una es LA interaccion diaria del panel, y lo que habia
 // comparaba `indexOf` sobre el texto crudo: entre "Lab" y "#2" hay un emoji, y
-// "PMO - Ab2Web -  NetSat" trae dos espacios seguidos. Nadie escribe eso.
+// "Comite - Cliente -  Sur" trae dos espacios seguidos. Nadie escribe eso.
 const CHATS_REALES = [
-  { jid: '120363000000000001@g.us', name: 'Lista de espera | IA Builder Lab \u{1F680} #2', kind: 'grupo' },
-  { jid: '120363000000000002@g.us', name: 'PMO - Ab2Web -  NetSat', kind: 'grupo' },
+  { jid: '120363000000000001@g.us', name: 'Lista de espera | Taller Demo \u{1F680} #2', kind: 'grupo' },
+  { jid: '120363000000000002@g.us', name: 'Comite - Cliente -  Sur', kind: 'grupo' },
   { jid: '120363000000000003@g.us', name: 'Operaciones internas', kind: 'grupo' },
   { jid: '573000000001@s.whatsapp.net', name: 'Laura Méndez', kind: 'directo' },
   { jid: '573000000002@s.whatsapp.net', name: 'Camila Restrepo', kind: 'directo' }
@@ -1959,7 +2202,7 @@ console.log('\nconfig.html — buscar una conversacion como la gente la escribe 
   const { doc } = await montar('config.html', {
     chats: CHATS_REALES,
     scope: {
-      '120363000000000002@g.us': { chatName: 'PMO - Ab2Web -  NetSat', provider: 'plane',
+      '120363000000000002@g.us': { chatName: 'Comite - Cliente -  Sur', provider: 'plane',
         target: 'PMO', mode: 'responder' }
     }
   }, 'es-419')
@@ -1973,23 +2216,23 @@ console.log('\nconfig.html — buscar una conversacion como la gente la escribe 
   // Tildes: el dueno escribe "mendez" sin tilde y el grupo se llama "Méndez".
   ok('sin tilde encuentra lo que si la tiene',
     buscar('mendez').some((t) => t.includes('Méndez')), JSON.stringify(buscar('mendez')))
-  // Emoji y puntuacion en el medio: "ia builder lab 2" tiene que llegar a
-  // "IA Builder Lab 🚀 #2".
+  // Emoji y puntuacion en el medio: "taller demo 2" tiene que llegar a
+  // "Taller Demo 🚀 #2".
   ok('el emoji y la almohadilla no cortan la busqueda',
-    buscar('ia builder lab 2').some((t) => t.includes('Builder')),
-    JSON.stringify(buscar('ia builder lab 2')))
+    buscar('taller demo 2').some((t) => t.includes('Taller')),
+    JSON.stringify(buscar('taller demo 2')))
   // Doble espacio y guiones: nadie los reproduce al escribir.
   ok('los guiones y el espacio de mas no hacen falta',
-    buscar('pmo ab2web netsat').some((t) => t.includes('Ab2Web')),
-    JSON.stringify(buscar('pmo ab2web netsat')))
+    buscar('comite cliente sur').some((t) => t.includes('Comite')),
+    JSON.stringify(buscar('comite cliente sur')))
   // Y sin recordar el orden, que es como se busca un grupo del que uno recuerda dos
   // palabras sueltas.
   ok('las palabras sueltas valen en cualquier orden',
-    buscar('netsat pmo').some((t) => t.includes('Ab2Web')),
-    JSON.stringify(buscar('netsat pmo')))
+    buscar('sur comite').some((t) => t.includes('Comite')),
+    JSON.stringify(buscar('sur comite')))
   // Lo que NO puede pasar: traer lo que nadie escribio. El fallo caro con 296 filas no
   // es no encontrar la conversacion, es autorizar la equivocada.
-  const sueltas = buscar('ia builder lab 2')
+  const sueltas = buscar('taller demo 2')
   ok('y no arrastra las que no tienen nada que ver',
     !sueltas.some((t) => t.includes('Operaciones')), JSON.stringify(sueltas))
   ok('sigue diciendo cuantas quedaron',
@@ -2002,7 +2245,7 @@ console.log('\nconfig.html — las tres que importan no se pierden entre las 296
   const { doc } = await montar('config.html', {
     chats: CHATS_REALES,
     scope: {
-      '120363000000000002@g.us': { chatName: 'PMO - Ab2Web -  NetSat', provider: 'plane',
+      '120363000000000002@g.us': { chatName: 'Comite - Cliente -  Sur', provider: 'plane',
         target: 'PMO', mode: 'responder' },
       '573000000001@s.whatsapp.net': { chatName: 'Laura Méndez', provider: 'ninguno',
         target: null, mode: 'observar' }
@@ -2015,7 +2258,7 @@ console.log('\nconfig.html — las tres que importan no se pierden entre las 296
     JSON.stringify(grupos.map((g) => g.label)))
   ok('y lo autorizado va primero: son las que el dueno vuelve a tocar',
     grupos.length === 2 && grupos[0].children.length === 2 &&
-    [...grupos[0].children].every((o) => /Ab2Web|Méndez/.test(o.textContent)),
+    [...grupos[0].children].every((o) => /Comite|Méndez/.test(o.textContent)),
     JSON.stringify(grupos.map((g) => [...g.children].map((o) => o.textContent))))
   ok('cada una dice con que permiso quedo, no solo que esta autorizada',
     grupos.length === 2 &&
@@ -2049,7 +2292,7 @@ console.log('\nconfig.html — quitar una autorizacion pasa por el worker y no m
   const storage = {
     chats: CHATS_REALES,
     scope: {
-      '120363000000000002@g.us': { chatName: 'PMO - Ab2Web -  NetSat', provider: 'plane',
+      '120363000000000002@g.us': { chatName: 'Comite - Cliente -  Sur', provider: 'plane',
         target: 'PMO', mode: 'responder' }
     }
   }
@@ -2094,7 +2337,7 @@ console.log('\nconfig.html — un quitado que el worker NO pudo hacer no se anun
   const storage = {
     chats: CHATS_REALES,
     scope: {
-      '120363000000000002@g.us': { chatName: 'PMO - Ab2Web -  NetSat', provider: 'plane',
+      '120363000000000002@g.us': { chatName: 'Comite - Cliente -  Sur', provider: 'plane',
         target: 'PMO', mode: 'responder' }
     }
   }
@@ -2171,11 +2414,11 @@ console.log('\nconfig.html — las traducciones de la espera larga y "Comprobar 
 console.log('\nactivity.html — la cabecera no puede contradecir a la lista')
 {
   const pendientes = [
-    { stanzaId: 'M1', date: '2026-09-23 17:35', chat: 'Ab2Web Operaciones',
-      chatJid: '120363000000000001@g.us', sender: 'Jhon Tamayo', kind: 'mencion',
+    { stanzaId: 'M1', date: '2026-09-23 17:35', chat: 'Equipo Operaciones',
+      chatJid: '120363000000000001@g.us', sender: 'Pedro Gomez', kind: 'mencion',
       text: '@yo Como vas?' },
-    { stanzaId: 'M2', date: '2026-09-23 17:35', chat: 'Ab2Web Operaciones',
-      chatJid: '120363000000000001@g.us', sender: 'Jhon Tamayo', kind: 'mencion',
+    { stanzaId: 'M2', date: '2026-09-23 17:35', chat: 'Equipo Operaciones',
+      chatJid: '120363000000000001@g.us', sender: 'Pedro Gomez', kind: 'mencion',
       text: '@yo ya hiciste las tareas?' }
   ]
   const actividad = {
@@ -2217,7 +2460,8 @@ console.log('\nactivity.html — dice si la linea esta viva y sobre cuanto actua
   const chats = new Array(298).fill(0).map((_, i) => ({ jid: `c${i}`, name: `c${i}` }))
 
   const viva = await montar('activity.html',
-    { activity: base, chats, sidecar: { connection: 'open', me: '+573008236130' } },
+    { activity: base, chats, sidecar: { connection: 'open', me: '+573000000011',
+      latido: { ts: Date.now(), conectado: true } } },
     'es-419')
   await espera()
   ok('dice que la linea esta conectada',
@@ -2225,7 +2469,7 @@ console.log('\nactivity.html — dice si la linea esta viva y sobre cuanto actua
     viva.doc.getElementById('linea').textContent)
   // Tras escanear un QR, saber CUAL quedo es la unica forma de notar que se escaneo
   // con el telefono equivocado.
-  ok('y con que numero', viva.doc.getElementById('linea').textContent.includes('+573008236130'),
+  ok('y con que numero', viva.doc.getElementById('linea').textContent.includes('+573000000011'),
     viva.doc.getElementById('linea').textContent)
   // "Reviso 1 conversacion" sin decir de cuantas no informa nada: 1 de 1 es cobertura
   // completa y 1 de 298 es un agente que casi no ve.
@@ -2252,11 +2496,132 @@ console.log('\nactivity.html — dice si la linea esta viva y sobre cuanto actua
   // atencion aunque no haya nada pendiente.
   const cero = await montar('activity.html',
     { activity: Object.assign({}, base, { authorized: 0 }), chats,
-      sidecar: { connection: 'open' } }, 'es-419')
+      sidecar: { connection: 'open', latido: { ts: Date.now(), conectado: true } } }, 'es-419')
   await espera()
   ok('con cero autorizadas se avisa',
     cero.doc.getElementById('cobertura').className.includes('vieja'),
     cero.doc.getElementById('cobertura').className)
+}
+
+// ───────── "Linea conectada" con el mismo criterio de vida que el panel de config ─────────
+console.log('\nactivity.html — "linea conectada" solo con latido fresco')
+{
+  const base = { pending: [], recent: [], running: false, syncedAt: '2026-09-23 17:41',
+    mapped: 1, authorized: 1 }
+  const viejoMs = Date.now() - 10 * 60 * 1000
+  const hora = new Date(viejoMs).toTimeString().slice(0, 5)
+  const muda = await montar('activity.html', { activity: base, chats: [],
+    sidecar: { connection: 'open', me: '+573000000011',
+      latido: { ts: viejoMs, conectado: true } } }, 'es-419')
+  await espera()
+  const linea = muda.doc.getElementById('linea')
+  ok('con el latido viejo no dice conectada', !/conectada/i.test(linea.textContent),
+    linea.textContent)
+  ok('dice que no da senal, y desde cuando', /senal/i.test(linea.textContent) &&
+    linea.textContent.includes(hora), `${linea.textContent} / ${hora}`)
+  ok('y se marca como dato viejo', linea.className.includes('stale'), linea.className)
+
+  const nunca = await montar('activity.html', { activity: base, chats: [],
+    sidecar: { connection: 'open' } }, 'es-419')
+  await espera()
+  ok('sin ningun latido tampoco dice conectada',
+    !/conectada/i.test(nunca.doc.getElementById('linea').textContent),
+    nunca.doc.getElementById('linea').textContent)
+
+  // Los dos paneles deciden "conectado" con el MISMO plazo: si uno dijera conectada y
+  // el otro sin senal sobre el mismo dato, el dueno no sabria a cual creerle.
+  const plazo = (archivo) => {
+    const m = /var LATIDO_LINEA_VENCE_MS = (\d+)/.exec(readFileSync(join(root, archivo), 'utf8'))
+    return m ? Number(m[1]) : null
+  }
+  ok('config y actividad usan el mismo plazo de latido',
+    plazo('config.html') !== null && plazo('config.html') === plazo('activity.html'),
+    `config=${plazo('config.html')} actividad=${plazo('activity.html')}`)
+
+  const { window } = await montar('activity.html')
+  const S = window.STRINGS
+  ok('el texto nuevo existe en los tres idiomas, con portugues propio',
+    !!(S.es.lineaSinSenal && S.en.lineaSinSenal && S.pt.lineaSinSenal &&
+      S.pt.lineaSinSenal !== S.en.lineaSinSenal),
+    JSON.stringify([S.es.lineaSinSenal, S.en.lineaSinSenal, S.pt && S.pt.lineaSinSenal]))
+}
+
+console.log('\nactivity.html — T9: tras cambiar de numero, la actividad del anterior no se pinta')
+{
+  // Lo que se vio en vivo con +573000000012 recien vinculado: "actua sobre 3 de 306",
+  // avisos y "lo ultimo que hizo" del numero viejo, y "la revision arranco y no volvio
+  // · 2026-09-24 08:46", que era la corrida del viejo.
+  const VIEJA_A = 'pn:573001112233'
+  const NUEVA_A = 'pn:573000000012'
+  const sidecar = { connection: 'open', me: '+573000000012', cuenta: NUEVA_A,
+    latido: { ts: Date.now(), conectado: true } }
+  const vieja = {
+    account: VIEJA_A, syncedAt: '2026-09-24 09:00', running: false, mapped: 306,
+    authorized: 3,
+    pending: [{ stanzaId: 'P1', chat: 'Grupo Viejo', chatJid: '100@g.us', text: 'pendiente viejo',
+      date: '2026-09-24 08:40' }],
+    recent: [{ ts: '2026-09-24 08:45', chat: 'Grupo Viejo', action: 'alert',
+      detail: 'Piden descuento | aviso viejo' },
+    { ts: '2026-09-24 08:44', chat: 'Grupo Viejo', action: 'issue', issue: 'SOP-1',
+      detail: 'accion vieja' }],
+    run: { state: 'interrupted', startedAt: '2026-09-24 08:46', endedAt: null }
+  }
+  const chats = new Array(306).fill(0).map((_, i) => ({ jid: `c${i}`, name: `c${i}` }))
+  const storage = { activity: vieja, chats, chatsAccount: VIEJA_A, sidecar,
+    decisions: { P1: { decision: 'take', at: '2026-09-24T08:41:00Z', account: VIEJA_A } } }
+  const { doc } = await montar('activity.html', storage, 'es-419')
+  await espera()
+  const todo = doc.body.textContent
+  ok('no muestra la cobertura del numero anterior', !/3 de 306/.test(
+    doc.getElementById('cobertura').textContent), doc.getElementById('cobertura').textContent)
+  ok('ni sus avisos', !/aviso viejo|Piden descuento/.test(doc.getElementById('alerts').textContent),
+    doc.getElementById('alerts').textContent)
+  ok('ni lo ultimo que hizo', !/accion vieja|SOP-1/.test(doc.getElementById('recent').textContent),
+    doc.getElementById('recent').textContent)
+  ok('ni su corrida', !/08:46/.test(doc.getElementById('runline').textContent),
+    doc.getElementById('runline').textContent)
+  ok('ni su cola', !/pendiente viejo/.test(doc.getElementById('pending').textContent),
+    doc.getElementById('pending').textContent)
+  // El sync de la linea nueva lo pide el worker solo (T9e): mandar a correr un comando
+  // en una terminal seria falso, y es justo el callejon que el panel dejo de ofrecer.
+  const sello = doc.getElementById('synced').textContent
+  ok('la cabecera no manda a una terminal: dice que espera el sync de esta linea',
+    !/wa-scope|corra/i.test(sello) && /linea/i.test(sello), sello)
+  ok('y no se queda en blanco: dice que no hay nada de esta linea todavia',
+    doc.getElementById('alerts').textContent.trim().length > 0 &&
+    doc.getElementById('recent').textContent.trim().length > 0, todo.slice(0, 300))
+
+  // Control: con la actividad del numero vinculado, si se pinta.
+  storage.activity = Object.assign({}, vieja, { account: NUEVA_A })
+  storage.chatsAccount = NUEVA_A
+  doc.defaultView.dispatchEvent(new doc.defaultView.Event('focus'))
+  await espera()
+  ok('control: la actividad del numero vinculado si se pinta',
+    /aviso viejo|Piden descuento/.test(doc.getElementById('alerts').textContent),
+    doc.getElementById('alerts').textContent)
+  ok('control: y su cobertura', /3 de 306/.test(doc.getElementById('cobertura').textContent),
+    doc.getElementById('cobertura').textContent)
+}
+
+console.log('\nactivity.html — T9: lo que se marca queda atado al numero vinculado')
+{
+  const NUEVA_D = 'pn:573000000012'
+  const storage = {
+    sidecar: { connection: 'open', cuenta: NUEVA_D, latido: { ts: Date.now(), conectado: true } },
+    activity: { account: NUEVA_D, syncedAt: '2026-10-01 10:00', mapped: 1, authorized: 1,
+      pending: [{ stanzaId: 'N1', chat: 'Grupo Nuevo', chatJid: '200@g.us', text: 'hola',
+        date: '2026-10-01 09:59' }], recent: [] },
+    chatsAccount: NUEVA_D, chats: [{ jid: '200@g.us', name: 'Grupo Nuevo' }]
+  }
+  const { doc } = await montar('activity.html', storage, 'es-419')
+  await espera()
+  const boton = doc.querySelector('[data-decision="take"], button[data-take], #pending button')
+  ok('la cola ofrece marcar el mensaje', !!boton, doc.getElementById('pending').innerHTML.slice(0, 300))
+  if (boton) boton.click()
+  await espera()
+  const d = (storage.decisions || {}).N1
+  ok('la decision queda etiquetada con el numero vinculado', d && d.account === NUEVA_D,
+    JSON.stringify(storage.decisions))
 }
 
 console.log('\nactivity.html — el texto ya no ensena que hay que marcar para que actue')
@@ -2284,11 +2649,11 @@ console.log('\nactivity.html — el texto ya no ensena que hay que marcar para q
 console.log('\nactivity.html — lo que pide decision va primero y solo')
 {
   const recent = [
-    { ts: '2026-09-23 18:40', chat: 'Ab2Web Operaciones', action: 'alert',
-      issue: null, detail: 'Piden precio | Jhon pregunta cuanto vale el modulo nuevo' },
-    { ts: '2026-09-23 18:08', chat: 'Ab2Web Operaciones', action: 'reply',
+    { ts: '2026-09-23 18:40', chat: 'Equipo Operaciones', action: 'alert',
+      issue: null, detail: 'Piden precio | Pedro pregunta cuanto vale el modulo nuevo' },
+    { ts: '2026-09-23 18:08', chat: 'Equipo Operaciones', action: 'reply',
       issue: null, detail: 'Acuse enviado al cliente' },
-    { ts: '2026-09-23 18:05', chat: 'Ab2Web Operaciones', action: 'issue',
+    { ts: '2026-09-23 18:05', chat: 'Equipo Operaciones', action: 'issue',
       issue: 'ACM-9', detail: 'Revisar el proyecto de camara' }
   ]
   const { doc } = await montar('activity.html',

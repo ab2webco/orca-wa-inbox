@@ -672,7 +672,7 @@ Encontrado en la máquina del dueño, no en una prueba. En cualquier equipo que 
 vez usó la vía de WhatsApp Web, `~/.wa-inbox/capture.db` **ya existe** con el esquema
 de esa vía: `capturado` (su caché de cuerpos, tope 20000 / 90 días) y una `linea` de
 dos columnas, sin `store_meta`. Medido ahí: `pragma user_version` = 0, `capturado` 0
-filas, `linea` 2 filas (`web`, `web:262444127674377`, del 2026-09-19). El lector se
+filas, `linea` 2 filas (`web`, `web:100000000000001`, del 2026-09-19). El lector se
 negaba con `store-schema` a **todo**: el plugin se instalaba, emparejaba y después no
 contestaba nada.
 

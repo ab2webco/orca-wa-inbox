@@ -13,8 +13,9 @@
  * desincroniza en silencio.
  */
 import { decidirTrasCierre, calcularEsperaMs, intentoTrasEvento, mensajeQr, qrVencido,
-  tocaEmitirAlmacen, opcionesDeSocket, MOTIVO, PARCHES_DE_LIBRETA, QR_ROTACION_MS,
-  QR_VIGENCIA_MS,
+  tocaEmitirAlmacen, opcionesDeSocket, salidaTrasCierre, repetidosTrasCierre, MOTIVO,
+  PARCHES_DE_LIBRETA, CIERRES_REPETIDOS_TOPE, CIERRES_VENTANA_MS,
+  QR_ROTACION_MS, QR_VIGENCIA_MS, SALIDA, LATIDO_LINEA_MS, mensajeLatido,
   ALMACEN_LATIDO_MS
 } from '../sidecar/src/index.js'
 
@@ -74,6 +75,124 @@ console.log('\nsidecar: decidirTrasCierre por statusCode')
   const sinCodigo = decidirTrasCierre(undefined, 1)
   ok('sin statusCode tambien reconecta', sinCodigo.reconectar === true,
     JSON.stringify(sinCodigo))
+}
+
+console.log('\nsidecar: las credenciales muertas se tiran, no se reusan')
+{
+  // Medido en la maquina del dueno (2026-10-01): WhatsApp cerro la sesion con 401 y
+  // `creds.json` se quedo con `me` puesto. Con `me`, Baileys 6.7.24 hace LOGIN y no
+  // registro (lib/Socket/socket.js:157-162), asi que ningun reinicio podia producir un
+  // QR: el mismo 401, para siempre. La credencial muerta hay que tirarla.
+  const cerrada = decidirTrasCierre(401, 1)
+  ok('un 401 pide borrar las credenciales', cerrada.borrarCredenciales === true,
+    JSON.stringify(cerrada))
+  // 500 es `badSession`: la sesion guardada ya no la reconoce WhatsApp. Reconectar con
+  // ella es el mismo callejon que el 401.
+  const mala = decidirTrasCierre(500, 1)
+  ok('un 500 (badSession) tambien', mala.borrarCredenciales === true &&
+    mala.reconectar === false && mala.motivo === MOTIVO.SESION_CERRADA,
+    JSON.stringify(mala))
+  // Control: lo que se cura solo NO toca las credenciales. Borrarlas ante una caida de
+  // red le pediria al dueno escanear un QR por un wifi que se corto.
+  for (const codigo of [408, 515, 428, 503, undefined]) {
+    const d = decidirTrasCierre(codigo, 1)
+    ok(`un ${codigo ?? 'cierre sin codigo'} no borra nada`, d.borrarCredenciales === false,
+      JSON.stringify(d))
+  }
+
+  // El sidecar no borra la carpeta el mismo: sale con un codigo propio y el worker
+  // reusa el MISMO desvincular del boton del panel, que ya espera a que el proceso
+  // muera antes de borrar (una credencial a medias fue el "desvinculo y ya no conecta"
+  // de produccion). Un codigo de salida es el contrato, y no la ultima linea de stdout,
+  // porque el evento de salida del hijo puede llegar antes que su ultima linea.
+  ok('los codigos de salida son distintos entre si',
+    new Set(Object.values(SALIDA)).size === Object.values(SALIDA).length, JSON.stringify(SALIDA))
+  ok('y ninguno se confunde con un exit 0 ni con un reventon (1)',
+    Object.values(SALIDA).every((c) => Number.isInteger(c) && c > 1 && c < 126),
+    JSON.stringify(SALIDA))
+  ok('tras un 401 el sidecar sale con el codigo de credenciales muertas',
+    salidaTrasCierre(cerrada) === SALIDA.CREDENCIALES_MUERTAS, String(salidaTrasCierre(cerrada)))
+  ok('tras un cierre que reconecta no sale', salidaTrasCierre(decidirTrasCierre(408, 1)) === null,
+    String(salidaTrasCierre(decidirTrasCierre(408, 1))))
+}
+
+console.log('\nsidecar: 403, 411 y 440 dejan de reintentar para siempre')
+{
+  // Antes caian en el "cualquier otro codigo reconecta" y reconectaban para siempre.
+  // 440 (connectionReplaced) es otro cliente usando la misma sesion: reconectar le
+  // quita la sesion al otro, el otro se la quita a este, y asi sin fin. 403 (forbidden)
+  // y 411 (multideviceMismatch) no se curan reintentando. Cada uno con su motivo,
+  // porque lo que el dueno tiene que hacer es distinto en cada uno.
+  const casos = [
+    [440, MOTIVO.SESION_REEMPLAZADA, 'sesion-reemplazada'],
+    [403, MOTIVO.ACCESO_DENEGADO, 'acceso-denegado'],
+    [411, MOTIVO.MULTIDISPOSITIVO, 'multidispositivo']
+  ]
+  for (const [codigo, motivo, texto] of casos) {
+    ok(`${codigo}: tiene motivo propio (${texto})`, motivo === texto, String(motivo))
+    const primero = decidirTrasCierre(codigo, 1, 1)
+    ok(`${codigo}: la primera vez reintenta, con espera`,
+      primero.reconectar === true && primero.esperaMs > 0 && primero.motivo === texto &&
+      primero.borrarCredenciales === false, JSON.stringify(primero))
+    const ultimo = decidirTrasCierre(codigo, 1, CIERRES_REPETIDOS_TOPE)
+    ok(`${codigo}: hasta el tope sigue reintentando`, ultimo.reconectar === true,
+      JSON.stringify(ultimo))
+    const pasado = decidirTrasCierre(codigo, 1, CIERRES_REPETIDOS_TOPE + 1)
+    ok(`${codigo}: pasado el tope se rinde, con su motivo`,
+      pasado.reconectar === false && pasado.motivo === texto &&
+      pasado.borrarCredenciales === false, JSON.stringify(pasado))
+    ok(`${codigo}: y sale con el codigo de "me rendi", no con el de credenciales muertas`,
+      salidaTrasCierre(pasado) === SALIDA.RENDIDO, String(salidaTrasCierre(pasado)))
+  }
+
+  // La cuenta NO la reinicia un 'open'. Un 440 es justo eso: conecta, el otro cliente
+  // la reclama, cierra, reconecta, conecta... Si `open` la bajara -como baja `intento`-
+  // el tope no se alcanzaria nunca.
+  let previo = null
+  let rendido = false
+  for (let vuelta = 0; vuelta < 10 && !rendido; vuelta += 1) {
+    previo = repetidosTrasCierre(previo, 440, 1000 * vuelta)
+    rendido = decidirTrasCierre(440, 1, previo.veces).reconectar === false
+  }
+  ok('un 440 que vuelve tras cada conexion termina rindiendose', rendido,
+    JSON.stringify(previo))
+
+  // Y lo que no es repeticion no suma: otro codigo empieza de cero, y un 440 aislado
+  // horas despues de otro no hereda la cuenta vieja.
+  const a = repetidosTrasCierre({ codigo: 440, veces: 3, ts: 0 }, 408, 1000)
+  ok('un codigo distinto empieza la cuenta de cero', a.veces === 1 && a.codigo === 408,
+    JSON.stringify(a))
+  const b = repetidosTrasCierre({ codigo: 440, veces: 3, ts: 0 }, 440,
+    CIERRES_VENTANA_MS + 1)
+  ok('el mismo codigo fuera de la ventana tambien', b.veces === 1, JSON.stringify(b))
+  const c = repetidosTrasCierre({ codigo: 440, veces: 2, ts: 0 }, 440, 1000)
+  ok('dentro de la ventana suma', c.veces === 3, JSON.stringify(c))
+
+  // Control: lo que ya reconectaba sigue reconectando aunque se repita, porque se cura
+  // solo (una red que se cae diez veces sigue siendo una red).
+  ok('un 408 repetido no se rinde', decidirTrasCierre(408, 1, 50).reconectar === true)
+}
+
+console.log('\nsidecar: el latido que prueba que la linea sigue viva')
+{
+  // "Conectado" salia de la ultima foto guardada en storage, que no caduca nunca: con
+  // el worker o el sidecar muertos, el panel seguia diciendo "conectado" una semana
+  // despues. El latido es lo que permite caducarla.
+  //
+  // Cada linea de stdout es un `storage.set` del worker, y Orca mata al worker a los 64
+  // sin confirmar: el latido es de a minuto, no de a segundo.
+  ok('late cada minuto o mas, no cada segundo', LATIDO_LINEA_MS >= 60000,
+    String(LATIDO_LINEA_MS))
+  ok('y no mas seguido que los conteos del almacen, que ya tienen freno',
+    LATIDO_LINEA_MS >= ALMACEN_LATIDO_MS, `${LATIDO_LINEA_MS} vs ${ALMACEN_LATIDO_MS}`)
+  const m = mensajeLatido(true, 1758500000000)
+  ok('el mensaje dice que es un latido', m.type === 'latido', JSON.stringify(m))
+  ok('trae su marca de tiempo', m.ts === 1758500000000, JSON.stringify(m))
+  ok('y si el socket esta abierto en ese momento', m.conectado === true &&
+    mensajeLatido(false, 1).conectado === false, JSON.stringify(m))
+  // Un latido no lleva nada de nadie: termina en storage, que lee el panel.
+  ok('y nada mas', Object.keys(m).sort().join(',') === 'conectado,ts,type',
+    JSON.stringify(m))
 }
 
 console.log('\nsidecar: el backoff crece y tiene tope')

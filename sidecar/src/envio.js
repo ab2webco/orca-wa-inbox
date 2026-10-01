@@ -80,12 +80,17 @@ export function motivoDeFallo (error) {
  * al dueno que WhatsApp se nego a un mensaje que nunca lo vio.
  */
 export async function atenderSalida ({ almacen, enviar, conectado = true,
-  ahora = () => Date.now(), maximo = POR_VUELTA } = {}) {
+  ahora = () => Date.now(), maximo = POR_VUELTA, cuenta } = {}) {
   if (!almacen || typeof enviar !== 'function' || !conectado) return { enviados: 0, rechazados: 0 }
+  // Cada numero, su linea: el socket solo manda lo encolado para SU cuenta. Lo de otro
+  // numero queda pendiente hasta que ese numero se vuelva a vincular. `null` es "todavia
+  // no se sabe quien soy" (emparejando) y ahi no sale nada; `undefined` es el llamado de
+  // antes de que hubiera lineas, que las pruebas viejas siguen usando.
+  if (cuenta === null) return { enviados: 0, rechazados: 0 }
   let enviados = 0
   let rechazados = 0
   for (let i = 0; i < maximo; i += 1) {
-    const fila = almacen.tomarEnvio(ahora())
+    const fila = almacen.tomarEnvio(ahora(), cuenta)
     if (!fila) break
     try {
       const r = await enviar(fila.chat_jid, { text: fila.body })

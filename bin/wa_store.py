@@ -20,6 +20,7 @@ lo dice con un motivo estable en vez de devolver una lista vacia: una bandeja va
 lee como "no hay nada que atender", que es lo contrario de "no puedo leer nada"
 (§11-E5).
 """
+import json
 import os
 import sqlite3
 import sys
@@ -36,6 +37,14 @@ ESQUEMA_VERSION = 1
 # Motivos estables. El panel los traduce por codigo, nunca por el texto: cambiar el
 # texto no rompe nada, renombrar el codigo desincroniza el panel en silencio (§11-E1).
 SIN_TRANSPORTE = "no-transport"
+# Hay linea enlazada pero el sidecar no late: nadie esta leyendo WhatsApp AHORA. Codigo
+# propio y no `no-transport`, porque la accion del dueno es otra: no escanear un QR,
+# sino relanzar la conexion desde el panel.
+LINEA_MUDA = "transport-silent"
+# Cuanto vale el latido que el sidecar escribe en `store_meta` cada segundo (`latir()`
+# en sidecar/src/almacen.js). El MISMO numero que `LATIDO_VENCE_MS` de
+# sidecar/src/envio.js, y `scripts/check-clis` compara los dos (via `bin/wa-send`).
+LATIDO_VENCE_S = 15
 ESQUEMA_AJENO = "store-schema"
 
 # Lo que `state` devuelve cuando NO hay firma que devolver. Son contrato con wa-scope
@@ -193,6 +202,58 @@ def abrir():
         con.close()
         raise SinFuente(SIN_TRANSPORTE, SIN_TRANSPORTE_DETALLE)
     return con
+
+
+def linea_activa(con):
+    """La linea vinculada AHORA (`store_meta.linea_activa`, la escribe el sidecar al
+    abrir), o None en un almacen que nunca la anoto.
+
+    Cada numero es su linea: vincular otro numero NO hereda las conversaciones ni las
+    autorizaciones del anterior, y lo del anterior sigue guardado para el dia que se
+    vuelva a vincular. Los lectores miran solo esta; None —un almacen de antes de que
+    hubiera lineas por numero— lee todas, que es lo que hacia siempre."""
+    try:
+        fila = con.execute(
+            "select value from store_meta where key='linea_activa'").fetchone()
+        return fila[0] if fila and fila[0] else None
+    except sqlite3.Error:
+        return None
+
+
+def linea_activa_en_disco():
+    """`linea_activa` sin pedir un almacen valido: la usa `wa-scope`, que tiene que
+    saber de que linea es cada autorizacion aunque el almacen no exista todavia. Solo
+    lectura, como todo este modulo."""
+    ruta = store_db_path()
+    if not os.path.exists(ruta):
+        return None
+    try:
+        con = sqlite3.connect(f"file:{ruta}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error:
+        return None
+    try:
+        return linea_activa(con)
+    finally:
+        con.close()
+
+
+def ultimo_latido(con):
+    """El ultimo latido del sidecar en el almacen, en segundos de epoch, o None si
+    nunca latio (o la base no lo sabe decir)."""
+    try:
+        fila = con.execute(
+            "select value from store_meta where key='sidecar_beat'").fetchone()
+        return int(fila[0]) if fila else None
+    except (sqlite3.Error, TypeError, ValueError):
+        return None
+
+
+def sidecar_vivo(con):
+    """Si hay alguien del otro lado AHORA. Una fila en `linea` dice que alguna vez hubo
+    una linea; esto dice que el sidecar sigue corriendo. Es la regla de `wa-send` y la
+    del `doctor`, escrita una sola vez."""
+    latido = ultimo_latido(con)
+    return latido is not None and (time.time() - latido) <= LATIDO_VENCE_S
 
 
 SIN_TRANSPORTE_DETALLE = (
@@ -409,11 +470,46 @@ def chats(con, limite, query=None, solo_no_leidos=False, linea=None):
             from chat c where 1 = 1 {donde}
             order by coalesce(c.last_ts, 0) desc, c.rowid
             limit ?""", args + [limite]).fetchall()
-    return [{"id": r["id"], "jid": r["chat_jid"],
-             "kind": "grupo" if r["is_group"] else "directo",
-             "unread": r["unread"], "last": ts(r["last_ts"]),
-             "name": nombre_de(r), "account": r["account"]}
-            for r in filas]
+    propios = chats_propios(con)
+    out = []
+    for r in filas:
+        item = {"id": r["id"], "jid": r["chat_jid"],
+                "kind": "grupo" if r["is_group"] else "directo",
+                "unread": r["unread"], "last": ts(r["last_ts"]),
+                "name": nombre_de(r), "account": r["account"]}
+        # El "mensaje a uno mismo" de la linea (T10): se llamaba como su jid pelado.
+        # Se marca y se llama como la linea, que es como lo muestra WhatsApp.
+        propio = propios.get((r["account"], usuario_de(r["chat_jid"])))
+        if propio is not None:
+            item["own"] = True
+            if propio:
+                item["name"] = propio
+        out.append(item)
+    return out
+
+
+def usuario_de(jid):
+    """(usuario, servidor) de un jid, sin el dispositivo: `X:7@lid` y `X@lid` son el
+    mismo usuario. El servidor va en la llave porque un LID y un telefono son numeros
+    distintos que no se pueden confundir."""
+    texto = str(jid or "")
+    usuario, _, servidor = texto.partition("@")
+    return (usuario.split(":")[0], servidor)
+
+
+def chats_propios(con):
+    """{(cuenta, (usuario, servidor)): nombre de la linea} con el LID y el telefono de
+    cada linea: son los jids de su chat consigo misma."""
+    propios = {}
+    try:
+        filas = con.execute("select account, lid, pn, name from linea").fetchall()
+    except sqlite3.Error:
+        return propios
+    for f in filas:
+        for jid in (f["lid"], f["pn"]):
+            if jid:
+                propios[(f["account"], usuario_de(jid))] = f["name"] or ""
+    return propios
 
 
 def resolver_chat(con, ref, linea=None):
@@ -535,6 +631,45 @@ def ultima_migracion():
         return None
     return {"at": r["at"], "desde": r["desde"], "hasta": r["hasta"],
             "cuerpos": r["cuerpos"], "lineas": r["lineas"]}
+
+
+def reclaves():
+    """Las re-claves de `local` al numero de su linea (T9), de la mas vieja a la mas
+    nueva, o []. Las anota el sidecar en capture.db (`reclavarLocal`); `wa-scope` las
+    lee de aca para mover lo suyo al MISMO numero, y el doctor las muestra. Solo
+    lectura, y sin `abrir()` por lo mismo que `ultima_migracion`."""
+    ruta = store_db_path()
+    if not os.path.exists(ruta):
+        return []
+    try:
+        con = sqlite3.connect(f"file:{ruta}?mode=ro", uri=True, timeout=5)
+        con.row_factory = sqlite3.Row
+        filas = con.execute("select at, desde, hacia, chats, mensajes from reclave "
+                            "order by at, rowid").fetchall()
+        con.close()
+    except sqlite3.Error:
+        return []
+    return [dict(r) for r in filas]
+
+
+def reclave_pendiente():
+    """Lo de antes de T9 que el sidecar NO pudo atribuir con certeza a un numero, o None.
+
+    Lo anota el sidecar (`resolverLocal`) cuando la evidencia no alcanza —por ejemplo,
+    la fila `local` de `linea` pisada por otro numero—: no mueve nada y espera la
+    decision del dueno. Trae solo cuantas conversaciones y mensajes y por que."""
+    ruta = store_db_path()
+    if not os.path.exists(ruta):
+        return None
+    try:
+        con = sqlite3.connect(f"file:{ruta}?mode=ro", uri=True, timeout=5)
+        fila = con.execute(
+            "select value from store_meta where key='reclave_pendiente'").fetchone()
+        con.close()
+        datos = json.loads(fila[0]) if fila and fila[0] else None
+    except (sqlite3.Error, ValueError, TypeError):
+        return None
+    return datos if isinstance(datos, dict) else None
 
 
 def ultimo_desalojo(con):

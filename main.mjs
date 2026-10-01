@@ -77,8 +77,35 @@ const DEFAULT_SETTINGS = { agentName: '', signMessages: true, toolsDir: TOOLS,
   sidecarPath: join(PLUGIN_DIR, 'sidecar', 'sidecar.cjs'),
   authDirResolverPath: join(PLUGIN_DIR, 'sidecar', 'resolve-auth-dir.mjs') }
 
-/** Corre `wa-read doctor` y avisa por notificacion si algo falta. */
-async function checkSystem(orca, toolsDir = TOOLS) {
+// Los codigos del doctor que bloquean pero NO notifican: el panel los pinta al lado del
+// QR, que es justo donde esta la accion. Una notificacion del sistema por esto saldria
+// en cada revision de una maquina recien instalada, o con la linea caida.
+const SIN_AVISO = new Set(['no-transport', 'transport-silent'])
+
+// Cada cuanto se vuelve a correr el doctor. Antes corria UNA vez, al activar: un sidecar
+// que moria despues dejaba el diagnostico en verde para siempre. Cinco minutos: el
+// doctor es un proceso de Python y la caida que importa ya la pinta el panel por el
+// latido de la linea en menos de tres.
+export const SALUD_MS = 5 * 60 * 1000
+
+/** Repite `correr` cada `cadaMs`, sin encimar una vuelta con la siguiente (el doctor
+ *  puede tardar). Devuelve con que pararlo. */
+export function programarSalud(correr, cadaMs = SALUD_MS) {
+  let enVuelo = false
+  const timer = setInterval(() => {
+    if (enVuelo) return
+    enVuelo = true
+    Promise.resolve().then(correr).catch(() => {}).finally(() => { enVuelo = false })
+  }, cadaMs)
+  if (typeof timer.unref === 'function') timer.unref()
+  return () => clearInterval(timer)
+}
+
+/** Corre `wa-read doctor` y avisa por notificacion si algo falta.
+ *
+ *  `memoria` recuerda lo ultimo que se aviso: repetida la revision, el MISMO problema no
+ *  vuelve a sacar la misma notificacion. Avisa cuando el problema cambia. */
+export async function checkSystem(orca, toolsDir = TOOLS, memoria = {}) {
   // El motivo se conserva: "no pude comprobar el sistema" sin la causa deja al usuario
   // en el mismo callejon que el spinner eterno.
   let porque = ''
@@ -113,7 +140,7 @@ async function checkSystem(orca, toolsDir = TOOLS) {
   // notificacion del sistema ademas de eso saldria en cada arranque de una maquina
   // recien instalada, que es la manera mas rapida de enseniar a ignorarlas. El motivo
   // viaja a `health`, que el panel pinta al lado del QR, y no a una notificacion.
-  const accionables = failed.filter((c) => c.code !== 'no-transport')
+  const accionables = failed.filter((c) => !SIN_AVISO.has(c.code))
 
   // El estado se PUBLICA siempre. El panel lo lee en `health` y no lo escribia nadie:
   // una maquina que no puede leer WhatsApp se veia exactamente igual que una sana.
@@ -130,7 +157,13 @@ async function checkSystem(orca, toolsDir = TOOLS) {
       : { ok: true, optional: opcional }
   await guardar(orca, HEALTH_KEY, salud)
 
+  const clave = !legible ? 'sin-herramientas'
+    : accionables.map((c) => c.code || c.check).sort().join(',')
+  const repetido = memoria.avisado === clave
+  memoria.avisado = clave
+
   if (!legible) {
+    if (repetido) return
     await orca.host.call('notifications.show', {
       title: 'Could not check the system',
       body: `Could not run the plugin tools. Check that ${toolsDir} is executable.` +
@@ -142,7 +175,7 @@ async function checkSystem(orca, toolsDir = TOOLS) {
   // El log si lo dice siempre: es donde se mira cuando algo no anda, y callarlo ahi
   // seria esconder justo lo que explica una bandeja vacia.
   if (failed.length) orca.log(`check: missing ${failed.map((c) => c.code || c.check).join(', ')}`)
-  if (!accionables.length) return
+  if (!accionables.length || repetido) return
 
   await orca.host.call('notifications.show', {
     // El worker no tiene forma de saber en que idioma esta el usuario — el host no se
@@ -415,6 +448,49 @@ const SIDECAR_MOTIVO = Object.freeze({
   DESVINCULAR_FALLO: 'desvincular-fallo'
 })
 
+/** El motivo del SIDECAR que dice "la sesion guardada murio" (`MOTIVO.SESION_CERRADA`
+ *  en sidecar/src/index.js). Se nombra aca porque el worker NO puede taparlo: es lo
+ *  unico que separa "hay que tirar la credencial" de "el proceso se cayo", y las dos
+ *  cosas piden botones distintos en el panel. */
+const MOTIVO_SESION_CERRADA = 'sesion-cerrada'
+
+/** Los codigos con que el sidecar sale A PROPOSITO. Es la otra punta de `SALIDA` en
+ *  sidecar/src/index.js, y la prueba del worker compara las dos: dos constantes que
+ *  nadie obliga a coincidir terminan no coincidiendo. */
+export const SIDECAR_SALIDA = Object.freeze({
+  CREDENCIALES_MUERTAS: 3,
+  RENDIDO: 4
+})
+
+/** Que significa que el sidecar haya terminado, y que queda escrito para el panel.
+ *
+ *  Antes cualquier salida se escribia como `sidecar-cayo`, y eso tapaba el motivo que
+ *  el propio sidecar acababa de mandar: con la sesion cerrada desde el telefono el
+ *  panel dejaba de ofrecer Desvincular -la unica salida- y ofrecia Reintentar, que
+ *  repetia el mismo 401. Se mira el codigo de salida Y el motivo ya escrito, porque
+ *  cualquiera de los dos alcanza para saber que la credencial murio. */
+export function clasificarSalida ({ code, signal, estado }) {
+  const detalle = `sidecar exited (code ${code ?? 'null'}, signal ${signal ?? 'null'})`
+  if (code === SIDECAR_SALIDA.CREDENCIALES_MUERTAS || estado?.motivo === MOTIVO_SESION_CERRADA) {
+    const propio = estado?.error?.code === MOTIVO_SESION_CERRADA ? estado.error : null
+    return { tipo: 'credenciales-muertas', motivo: MOTIVO_SESION_CERRADA,
+      error: propio || { code: MOTIVO_SESION_CERRADA, detail: detalle } }
+  }
+  // Se rindio a proposito (403/411/440 repetidos): su motivo ya llego por stdout y es
+  // el que el panel tiene que traducir. Sin ese motivo escrito no se inventa uno.
+  if (code === SIDECAR_SALIDA.RENDIDO && estado?.error?.code) {
+    return { tipo: 'rendido', motivo: estado.motivo ?? estado.error.code, error: estado.error }
+  }
+  return { tipo: 'caida', motivo: SIDECAR_MOTIVO.CAYO,
+    error: { code: SIDECAR_MOTIVO.CAYO, detail: detalle } }
+}
+
+// Cuanto se espera, tras la salida del hijo, a que su stdout termine de entregar. El
+// evento de salida puede llegar ANTES que las ultimas lineas, y esas son justo las que
+// dicen por que se fue. Con tope: un nieto que heredo la tuberia no puede dejar la
+// salida sin reportar.
+const STDOUT_DRENAJE_MS = 1000
+
 /** Lo que el panel puede pedirle al worker sobre la sesion, y como se contesta.
  *
  *  `desvincular` es irreversible: borra una CREDENCIAL VIVA
@@ -564,7 +640,8 @@ function resolverAuthDir(pluginDir, guion = join(pluginDir, 'sidecar', 'resolve-
  * indefinidamente en vez de una corrida puntual).
  */
 export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
-  spawnFn = spawn, env = process.env }) {
+  spawnFn = spawn, env = process.env, alSalir = () => {}, alLinea = () => {} }) {
+  const nacioMs = Date.now()
   let estado = { at: new Date().toISOString(), connection: null, qr: null,
     motivo: null, statusCode: null, error: null, exited: false,
     // El numero de la linea vinculada, cuando el sidecar lo sabe.
@@ -577,6 +654,11 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
     // lo unico que distingue "no hay ninguna conversacion autorizada" de "esto no
     // funciona". Nunca lleva contenido: ni un cuerpo, ni un numero, ni un remitente.
     store: null,
+    // El ultimo "sigo aca" del sidecar (`mensajeLatido` en sidecar/src/index.js). Sin
+    // esto el "conectado" de los paneles era una foto que no caducaba nunca.
+    latido: null,
+    // De que numero es la linea (`pn:<digitos>`), cuando el sidecar lo sabe.
+    cuenta: null,
     startedAt: new Date().toISOString() }
   // Las escrituras se ENCADENAN sobre una sola promesa. `guardar` es async y nada
   // garantiza que dos `storage.set` en vuelo resuelvan en el orden en que se
@@ -664,7 +746,24 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
         // "conectado": tras escanear un QR, saber CUAL linea quedo es la unica forma
         // de notar que se escaneo con el telefono equivocado. Solo el numero visible;
         // el sidecar no manda ni el LID ni nada mas.
-        escribir({ me: typeof mensaje.me === 'string' ? mensaje.me : null })
+        escribir({ me: typeof mensaje.me === 'string' ? mensaje.me : null,
+          ...(typeof mensaje.cuenta === 'string' ? { cuenta: mensaje.cuenta } : {}) })
+      } else if (mensaje?.type === 'linea') {
+        // De que NUMERO es la linea vinculada (`pn:<digitos>`). Cada numero es su linea:
+        // el panel lo compara con lo que tiene guardado para no pintar lo del numero
+        // anterior como si fuera del nuevo, y etiqueta con esto lo que autoriza.
+        const cuenta = typeof mensaje.cuenta === 'string' ? mensaje.cuenta : null
+        escribir({ cuenta })
+        if (cuenta && mensaje.cambio === true) {
+          try { alLinea(cuenta) } catch (error) {
+            orca.log(`sidecar line change handling failed: ${error.message}`)
+          }
+        }
+      } else if (mensaje?.type === 'latido') {
+        // La hora del SIDECAR, no la de esta escritura: lo que el panel quiere saber es
+        // cuando dio senales de vida la linea, no cuando el worker las copio.
+        escribir({ latido: { ts: Number(mensaje.ts) || Date.now(),
+          conectado: mensaje.conectado === true } })
       } else if (mensaje?.type === 'libreta') {
         // Si la lista de personas llego. Hasta aca, una libreta que nunca se
         // sincronizo se veia EXACTAMENTE igual que "no tiene conversaciones
@@ -734,14 +833,33 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
         detail: String(error?.message ?? error).slice(0, 300) } })
   })
 
+  const stdoutTermino = new Promise((resolve) => {
+    proceso.stdout.once('end', resolve)
+    proceso.stdout.once('close', resolve)
+  })
+
   proceso.on('exit', (code, signal) => {
     // Que el worker lo haya apagado a proposito no es una caida: `apagar()` marca esta
     // bandera ANTES de matarlo. Sin la distincion, un apagado normal del plugin se
     // veia igual que un crash del sidecar en el panel.
     if (detenidoPorWorker) return
-    escribir({ exited: true, motivo: SIDECAR_MOTIVO.CAYO,
-      error: { code: SIDECAR_MOTIVO.CAYO,
-        detail: `sidecar exited (code ${code ?? 'null'}, signal ${signal ?? 'null'})` } })
+    const vidaMs = Date.now() - nacioMs
+    let plazo
+    const drenado = Promise.race([stdoutTermino, new Promise((resolve) => {
+      plazo = setTimeout(resolve, STDOUT_DRENAJE_MS)
+      if (typeof plazo.unref === 'function') plazo.unref()
+    })])
+    drenado.then(() => {
+      clearTimeout(plazo)
+      if (detenidoPorWorker) return
+      const salida = clasificarSalida({ code, signal, estado })
+      // `alSalir` corre DESPUES de que la escritura quedo en storage: lo que haga el
+      // worker a continuacion -relanzar, limpiar el estado- no puede quedar pisado por
+      // la ultima escritura de este proceso, que llega tarde.
+      escribir({ exited: true, motivo: salida.motivo, error: salida.error })
+        .then(() => alSalir({ ...salida, code: code ?? null, signal: signal ?? null, vidaMs }))
+        .catch((error) => orca.log(`sidecar exit handling failed: ${error.message}`))
+    })
   })
 
   // Devuelve una PROMESA que resuelve cuando el proceso murio de verdad, no cuando se
@@ -779,6 +897,29 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
 // worker que solo estaba ocupado en una llamada de 30 s a la CLI de Orca.
 const LATIDO_MS = 5 * 1000
 export const LATIDO_VENCE_MS = 30 * 1000
+
+// Cuanto tiene que vivir un sidecar para que su salida no cuente como "otra vez lo
+// mismo". Por debajo de esto, salir de nuevo es un bucle; por encima, es un evento
+// nuevo que merece el mismo trato que el primero.
+const SIDECAR_VIDA_ESTABLE_MS = 2 * 60 * 1000
+const SIDECAR_RENOVACIONES_TOPE = 2
+
+// El reinicio de una caida: espera creciente y tope. Sin tope, un sidecar que revienta
+// al nacer (una dependencia que falta, un permiso) se relanzaria cada minuto para
+// siempre, y cada vida es un proceso de Node y varias escrituras al host.
+const REINICIO_BASE_MS = 2000
+const REINICIO_MAX_MS = 60000
+const REINICIO_TOPE = 5
+
+/** Si se reinicia el sidecar tras su caida numero `intento` (1-based), y cuanto se
+ *  espera. Pura, como `decidirTrasCierre` en el sidecar, para probar la regla sin
+ *  esperar los minutos que tarda en cumplirse. */
+export function decidirReinicio (intento) {
+  if (intento > REINICIO_TOPE) return { reiniciar: false, esperaMs: 0 }
+  const paso = Math.max(1, intento)
+  return { reiniciar: true,
+    esperaMs: Math.min(REINICIO_BASE_MS * 2 ** (paso - 1), REINICIO_MAX_MS) }
+}
 
 export default function activate(orca) {
   // ANTES QUE NADA: la autopsia. Un worker que muere de una excepcion no atrapada se
@@ -836,8 +977,14 @@ export default function activate(orca) {
   // Al activarse, lo primero es decir si este sistema puede leer WhatsApp. Si no puede,
   // el usuario se tiene que enterar ahora y no cuando una automatizacion lleve una
   // semana sin correr sin explicar por que.
-  dirHerramientas().then((dir) => checkSystem(orca, dir))
+  const memoriaSalud = {}
+  dirHerramientas().then((dir) => checkSystem(orca, dir, memoriaSalud))
     .catch((error) => orca.log(`initial check failed: ${error.message}`))
+  // Y despues se repite: la salud de la linea cambia sola, y un diagnostico que solo se
+  // mira al arrancar es una foto que no caduca.
+  const pararSalud = programarSalud(() => detenido ? null
+    : dirHerramientas().then((dir) => checkSystem(orca, dir, memoriaSalud))
+      .catch((error) => orca.log(`health check failed: ${error.message}`)))
 
   // El arnes del agente. Todo lo que sabe hoy vive en el prompt, que se lee una vez
   // por corrida: un modelo mas chico improvisa. En la carpeta de trabajo del plugin
@@ -871,13 +1018,18 @@ export default function activate(orca) {
    *  justo lo que el usuario acababa de pedir que dejara de ser cierto. */
   const limpiarEstadoSidecar = () => guardar(orca, SIDECAR_KEY, {
     at: new Date().toISOString(), connection: null, qr: null, motivo: null,
-    statusCode: null, error: null, exited: false, startedAt: null
+    statusCode: null, error: null, exited: false, latido: null, cuenta: null,
+    startedAt: null
   })
 
   /** Resuelve el auth dir y lanza el sidecar. Una sola implementacion para el arranque
    *  del plugin y para lo que pida el panel: si el reintento tomara otro camino, seria
    *  otro arranque, con otros motivos, y el panel los traduciria distinto. */
   async function arrancarSidecar () {
+    // Cualquier arranque -el automatico, un clic, un desvincular- deja sin efecto el
+    // reinicio que estuviera esperando: cumplido despues, apagaria al recien lanzado.
+    clearTimeout(reinicioTimer)
+    reinicioTimer = null
     if (detenido) return { ok: false, code: SIDECAR_MOTIVO.NO_ARRANCO, detail: 'plugin detenido' }
     const s = await settings()
     if (detenido) return { ok: false, code: SIDECAR_MOTIVO.NO_ARRANCO, detail: 'plugin detenido' }
@@ -903,9 +1055,97 @@ export default function activate(orca) {
     // moverlo entero, o el sidecar le pregunta por el alcance a una instalacion
     // distinta de la que lee el resto del plugin (§11-E4).
     apagarSidecar = lanzarSidecar({ orca, scriptPath: s.sidecarPath, authDir: resuelto.dir,
-      toolsDir: s.toolsDir || TOOLS })
+      toolsDir: s.toolsDir || TOOLS, alSalir: alSalirSidecar, alLinea: alCambiarLinea })
     return { ok: true, dir: resuelto.dir }
   }
+
+  /** Se vinculo un numero distinto (o el primero): lo que muestran los paneles —
+   *  conversaciones, actividad, insignia— es del numero anterior hasta el proximo sync,
+   *  asi que se pide uno ya en vez de esperar al reloj. Si hay otro sync corriendo, se
+   *  reintenta: el que corre puede estar leyendo con la linea de antes. */
+  function alCambiarLinea () {
+    let intentos = 0
+    const intentar = () => {
+      if (detenido) return
+      intentos += 1
+      // Ocupado no es fallido: un sync que fallo ya dejo su motivo en `syncStatus` y
+      // repetirlo no lo arregla; uno que esta corriendo puede ser de la linea de antes.
+      if (sincronizando) {
+        if (intentos < 20) {
+          const t = setTimeout(intentar, 3000)
+          if (typeof t.unref === 'function') t.unref()
+        }
+        return
+      }
+      sincronizar('linea')
+        .catch((error) => orca.log(`line change sync failed: ${error.message}`))
+    }
+    intentar()
+  }
+
+  // Las acciones sobre la vida del sidecar van EN FILA: un desvincular automatico y un
+  // clic del panel al mismo tiempo lanzarian dos sidecars sobre el mismo auth state, y
+  // dos procesos escribiendo la misma credencial la dejan a medias.
+  let colaSidecar = Promise.resolve()
+  const enFila = (accion) => {
+    const turno = colaSidecar.then(accion)
+    colaSidecar = turno.catch(() => {})
+    return turno
+  }
+
+  // Cuantas veces seguidas se tiraron credenciales muertas sin que el sidecar llegara a
+  // vivir un rato. Una credencial recien borrada no puede volver a dar 401 -sin `me`
+  // Baileys registra, no hace login-, asi que si pasa de nuevo hay otra cosa rota y
+  // seguir borrando no la arregla: se para y el panel ofrece Desvincular.
+  let renovaciones = 0
+  // Las caidas seguidas (`decidirReinicio`) y el reinicio que esta esperando su turno.
+  let reinicios = 0
+  let reinicioTimer = null
+
+  /** Que hacer cuando el sidecar termino solo. Lo llama `lanzarSidecar` cuando lo que
+   *  el panel tiene que leer ya quedo escrito. */
+  function alSalirSidecar (salida) {
+    if (detenido) return
+    if (salida.vidaMs >= SIDECAR_VIDA_ESTABLE_MS) { renovaciones = 0; reinicios = 0 }
+    if (salida.tipo === 'credenciales-muertas') {
+      if (renovaciones >= SIDECAR_RENOVACIONES_TOPE) {
+        orca.log('sidecar: WhatsApp closed the session again right after relinking; ' +
+          'leaving it for the user to unlink')
+        return
+      }
+      renovaciones += 1
+      orca.log('sidecar: WhatsApp closed the session; removing the dead credentials to show a new QR')
+      enFila(() => detenido ? null : desvincularSidecar())
+        .then((r) => { if (r && !r.ok) orca.log(`sidecar relink failed (${r.code})`) })
+        .catch((error) => orca.log(`sidecar relink failed: ${error.message}`))
+      return
+    }
+    // Se rindio a proposito (403/411/440): relanzar es el reintento que se acaba de
+    // agotar. Queda el motivo escrito y lo decide el dueno desde el panel.
+    if (salida.tipo !== 'caida') return
+    reinicios += 1
+    const decision = decidirReinicio(reinicios)
+    if (!decision.reiniciar) {
+      orca.log(`sidecar: crashed ${reinicios - 1} times in a row; not restarting it again`)
+      return
+    }
+    orca.log(`sidecar: exited unexpectedly (${salida.error.detail}); restart ${reinicios} ` +
+      `in ${Math.round(decision.esperaMs / 1000)}s`)
+    reinicioTimer = setTimeout(() => {
+      reinicioTimer = null
+      enFila(() => detenido ? null : arrancarSidecar())
+        .catch((error) => orca.log(`sidecar restart failed: ${error.message}`))
+    }, decision.esperaMs)
+    if (typeof reinicioTimer.unref === 'function') reinicioTimer.unref()
+  }
+
+  /** Lo que pide el dueno empieza de cero: un clic en Reintentar no hereda las caidas
+   *  de antes, ni deja vivo un reinicio automatico que lo pisaria al cumplirse. */
+  const pedidoDelPanel = (accion) => () => enFila(() => {
+    reinicios = 0
+    renovaciones = 0
+    return accion()
+  })
 
   arrancarSidecar().catch((error) => orca.log(`sidecar launch failed: ${error.message}`))
 
@@ -1075,9 +1315,9 @@ export default function activate(orca) {
     vencido: SIDECAR_VEREDICTO.VENCIDO,
     desconocida: SIDECAR_VEREDICTO.ACCION_DESCONOCIDA,
     acciones: {
-      [SIDECAR_ACCION.DESVINCULAR]: () => desvincularSidecar(),
-      [SIDECAR_ACCION.REINTENTAR]: () => reintentarSidecar(),
-      [SIDECAR_ACCION.LIBRETA]: () => reintentarSidecar()
+      [SIDECAR_ACCION.DESVINCULAR]: pedidoDelPanel(() => desvincularSidecar()),
+      [SIDECAR_ACCION.REINTENTAR]: pedidoDelPanel(() => reintentarSidecar()),
+      [SIDECAR_ACCION.LIBRETA]: pedidoDelPanel(() => reintentarSidecar())
     }
   })
 
@@ -1261,6 +1501,8 @@ export default function activate(orca) {
     clearTimeout(syncTimer)
     clearInterval(pedidoTimer)
     clearInterval(latidoTimer)
+    clearTimeout(reinicioTimer)
+    pararSalud()
     apagarSidecar()
   }
 }

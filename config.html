@@ -560,6 +560,11 @@
             'este es el ultimo codigo que llego y puede estar vencido. Apriete ' +
             '"Comprobar ahora" aca abajo.',
           pairingConnected: 'WhatsApp esta conectado',
+          // "Conectado" exige un latido reciente de la linea. Sin latido no se sabe si
+          // sigue viva, y eso se dice con la hora del ultimo, no con "conectado".
+          pairingSilent: 'La linea no da senal desde las {hora}',
+          pairingSilentHow: 'El plugin dejo de recibir noticias de la conexion con ' +
+            'WhatsApp. Si no vuelve sola en unos minutos, reintente aca abajo.',
           pairingDown: 'La sesion esta caida',
           pairingHowNoAuthDir: 'No se encontro donde Orca guarda los datos del ' +
             'plugin en este equipo, asi que no se pudo iniciar la conexion con WhatsApp.',
@@ -571,8 +576,15 @@
           pairingHowNoStart: 'No se pudo iniciar la conexion con WhatsApp. Reintente ' +
             'aca abajo.',
           pairingHowCrashed: 'La conexion con WhatsApp se detuvo. Reintente aca abajo.',
-          pairingHowLoggedOut: 'La sesion se cerro desde el telefono. Desvincule la ' +
-            'linea aca abajo para escanear un codigo QR nuevo.',
+          pairingHowLoggedOut: 'La sesion se cerro desde el telefono. El plugin borra ' +
+            'las credenciales viejas y pide un codigo QR nuevo; si no aparece en un ' +
+            'minuto, desvincule la linea aca abajo.',
+          pairingHowReplaced: 'Otro equipo esta usando esta misma sesion de WhatsApp. ' +
+            'Cierre la otra y reintente aca abajo, o desvincule esta linea.',
+          pairingHowForbidden: 'WhatsApp nego el acceso a esta cuenta. Revise la ' +
+            'cuenta en el telefono y, si sigue igual, desvincule la linea aca abajo.',
+          pairingHowMultidevice: 'WhatsApp pide volver a vincular este equipo. ' +
+            'Desvincule la linea aca abajo y escanee un codigo QR nuevo.',
           pairingHowUnlinkFailed: 'No se pudieron borrar las credenciales guardadas, ' +
             'asi que la sesion sigue en pie. Reintente aca abajo; si vuelve a fallar, ' +
             'revise el registro del plugin.',
@@ -621,6 +633,7 @@
           chatFetchDone: "Pidiendo la lista. Puede tardar unos segundos.",
           chatCount: "{n} de {total}", chatNoMatch: "Ninguna coincide con eso",
           chatGroupOn: "Ya autorizadas", chatGroupOff: "Sin autorizar",
+          chatOwnTag: "(t\u00fa)", chatOwnNoName: "Su propio chat",
           chatAlready: "ya autorizada: {m}",
           scopeRmFail: "No se pudo quitar la autorizacion, asi que sigue en pie. " +
             "Intente de nuevo.",
@@ -716,6 +729,9 @@
           hNoTransportLinked: 'Su linea esta enlazada',
           hNoTransportLinkedHow: 'Leer las conversaciones todavia no esta disponible. ' +
             'No hace falta que haga nada mas.',
+          hTransportSilent: 'Su linea no da senal',
+          hTransportSilentHow: 'La linea esta enlazada pero nadie esta leyendo ' +
+            'WhatsApp ahora. Reintente la conexion aca abajo.',
           hTranscribe: 'Transcripcion de audio',
           hUnknown: 'No se pudo verificar el estado',
           howTranscribeMissingTool: 'Falta bin/wa-transcribe dentro del plugin',
@@ -741,6 +757,18 @@
             'que habia guardado la via de WhatsApp Web, que ya no existe, ' +
             'estaba en un formato que esta version no sabe leer y se borro. ' +
             'La linea enlazada lo vuelve a llenar',
+          howStoreMigratedClean: 'El almacen quedo en la version de hoy sin perder ' +
+            'ningun mensaje. Solo se retiraron las lineas de la via de WhatsApp Web, ' +
+            'que ya no existe',
+          hStoreRekeyPending: 'Conversaciones de un numero anterior',
+          howStoreRekeyDecide: 'Hay conversaciones guardadas de antes de que cada ' +
+            'numero tuviera su propia linea, y no se puede saber con certeza que son del ' +
+            'numero vinculado ahora: quedan ocultas y no se borro nada. Si son de otro ' +
+            'numero suyo, ejecute en la carpeta bin del plugin: wa-scope reclave ' +
+            '--numero <ese numero, solo digitos>; se aplica en menos de un minuto',
+          hStoreRekeyed: 'Conversaciones atribuidas a su numero',
+          howStoreRekeyedLine: 'Lo que estaba guardado de antes de que cada numero ' +
+            'tuviera su propia linea quedo con el numero de donde vino. No se borro nada',
           modeOff: 'off', modeObserve: 'observar', modeDraft: 'borrador',
           modeReply: 'responder',
           provNone: 'ninguno', provPlane: 'plane', provLinear: 'linear',
@@ -780,6 +808,9 @@
             'is the last code that arrived and it may have expired. Press "Check now" ' +
             'below.',
           pairingConnected: 'WhatsApp is connected',
+          pairingSilent: 'No signal from the line since {hora}',
+          pairingSilentHow: 'The plugin stopped hearing from the WhatsApp connection. ' +
+            'If it does not come back on its own in a few minutes, try again below.',
           pairingDown: 'The session is down',
           pairingHowNoAuthDir: 'Could not find where Orca keeps this plugin\u2019s data ' +
             'on this machine, so the WhatsApp connection could not be started.',
@@ -791,8 +822,15 @@
           pairingHowNoStart: 'The WhatsApp connection could not be started. Try again ' +
             'below.',
           pairingHowCrashed: 'The WhatsApp connection stopped. Try again below.',
-          pairingHowLoggedOut: 'The session was closed from the phone. Unlink the line ' +
-            'below to scan a new QR code.',
+          pairingHowLoggedOut: 'The session was closed from the phone. The plugin is ' +
+            'removing the old credentials and asking for a new QR code; if none ' +
+            'appears within a minute, unlink the line below.',
+          pairingHowReplaced: 'Another device is using this same WhatsApp session. ' +
+            'Close it and try again below, or unlink this line.',
+          pairingHowForbidden: 'WhatsApp denied access to this account. Check the ' +
+            'account on the phone and, if nothing changes, unlink the line below.',
+          pairingHowMultidevice: 'WhatsApp is asking to link this device again. ' +
+            'Unlink the line below and scan a new QR code.',
           pairingHowUnlinkFailed: 'The stored credentials could not be deleted, so the ' +
             'session is still live. Try again below; if it fails again, check the ' +
             'plugin log.',
@@ -841,6 +879,7 @@
           chatFetchDone: "Asking for the list. It can take a few seconds.",
           chatCount: "{n} of {total}", chatNoMatch: "Nothing matches that",
           chatGroupOn: "Already authorised", chatGroupOff: "Not authorised",
+          chatOwnTag: "(you)", chatOwnNoName: "Your own chat",
           chatAlready: "already authorised: {m}",
           scopeRmFail: "The authorisation could not be removed, so it is still in " +
             "force. Try again.",
@@ -933,6 +972,9 @@
           hNoTransportLinked: 'Your line is linked',
           hNoTransportLinkedHow: 'Reading conversations is not available yet. ' +
             'There is nothing else for you to do.',
+          hTransportSilent: 'Your line gives no signal',
+          hTransportSilentHow: 'The line is linked but nothing is reading WhatsApp ' +
+            'right now. Retry the connection below.',
           hTranscribe: 'Audio transcription',
           hUnknown: 'Could not check the status',
           howTranscribeMissingTool: 'bin/wa-transcribe is missing from the plugin',
@@ -950,6 +992,18 @@
             'What the removed WhatsApp Web route had cached was in a format ' +
             'this version cannot read, so it was dropped. The linked line ' +
             'fills the store again',
+          howStoreMigratedClean: 'The store is now on the current version without ' +
+            'losing any message. Only the lines of the removed WhatsApp Web route ' +
+            'were retired',
+          hStoreRekeyPending: 'Conversations from a previous number',
+          howStoreRekeyDecide: 'Some conversations were stored before each number had ' +
+            'its own line, and they cannot be matched for sure to the number linked now: ' +
+            'they stay hidden and nothing was deleted. If they came from another number ' +
+            'of yours, run in the plugin bin folder: wa-scope reclave --numero <that ' +
+            'number, digits only>; it is applied within a minute',
+          hStoreRekeyed: 'Conversations assigned to their number',
+          howStoreRekeyedLine: 'What was stored before each number had its own line ' +
+            'now belongs to the number it came from. Nothing was deleted',
           modeOff: 'off', modeObserve: 'observe', modeDraft: 'draft',
           modeReply: 'reply',
           provNone: 'none', provPlane: 'plane', provLinear: 'linear',
@@ -989,6 +1043,9 @@
           'ultimo codigo que chegou e pode estar vencido. Aperte "Verificar agora" ' +
           'abaixo.',
         pairingConnected: 'O WhatsApp esta conectado',
+        pairingSilent: 'A linha nao da sinal desde as {hora}',
+        pairingSilentHow: 'O plugin parou de receber noticias da conexao com o ' +
+          'WhatsApp. Se nao voltar sozinha em alguns minutos, tente de novo aqui embaixo.',
         pairingDown: 'A sessao esta fora do ar',
         pairingHowNoAuthDir: 'Nao foi encontrado onde o Orca guarda os dados deste ' +
           'plugin nesta maquina, entao a conexao com o WhatsApp nao pode ser iniciada.',
@@ -1000,8 +1057,15 @@
         pairingHowNoStart: 'A conexao com o WhatsApp nao pode ser iniciada. Tente de ' +
           'novo aqui embaixo.',
         pairingHowCrashed: 'A conexao com o WhatsApp parou. Tente de novo aqui embaixo.',
-        pairingHowLoggedOut: 'A sessao foi encerrada pelo telefone. Desvincule a linha ' +
-          'aqui embaixo para escanear um codigo QR novo.',
+        pairingHowLoggedOut: 'A sessao foi encerrada pelo telefone. O plugin apaga ' +
+          'as credenciais antigas e pede um codigo QR novo; se ele nao aparecer em um ' +
+          'minuto, desvincule a linha aqui embaixo.',
+        pairingHowReplaced: 'Outro aparelho esta usando esta mesma sessao do ' +
+          'WhatsApp. Feche o outro e tente de novo aqui embaixo, ou desvincule esta linha.',
+        pairingHowForbidden: 'O WhatsApp negou o acesso a esta conta. Verifique a ' +
+          'conta no telefone e, se nada mudar, desvincule a linha aqui embaixo.',
+        pairingHowMultidevice: 'O WhatsApp pede para vincular este aparelho de novo. ' +
+          'Desvincule a linha aqui embaixo e escaneie um codigo QR novo.',
         pairingHowUnlinkFailed: 'Nao foi possivel apagar as credenciais guardadas, ' +
           'entao a sessao continua de pe. Tente de novo aqui embaixo; se falhar outra ' +
           'vez, veja o registro do plugin.',
@@ -1026,6 +1090,9 @@
         hNoTransportLinked: 'A sua linha esta vinculada',
         hNoTransportLinkedHow: 'Ler as conversas ainda nao esta disponivel. Voce nao ' +
           'precisa fazer mais nada.',
+        hTransportSilent: 'A sua linha nao da sinal',
+        hTransportSilentHow: 'A linha esta vinculada mas ninguem esta lendo o ' +
+          'WhatsApp agora. Tente a conexao de novo aqui embaixo.',
         hTranscribe: 'Transcricao de audio',
         hUnknown: 'Nao foi possivel verificar o estado',
         howTranscribeMissingTool: 'Falta bin/wa-transcribe dentro do plugin',
@@ -1043,6 +1110,17 @@
           'de WhatsApp Web, que ja nao existe, tinha guardado estava num formato ' +
           'que esta versao nao sabe ler e foi apagado. A linha vinculada enche o ' +
           'armazem de novo',
+        howStoreMigratedClean: 'O armazem ficou na versao de hoje sem perder nenhuma ' +
+          'mensagem. So foram retiradas as linhas da via de WhatsApp Web, que ja nao existe',
+        hStoreRekeyPending: 'Conversas de um numero anterior',
+        howStoreRekeyDecide: 'Ha conversas guardadas de antes de cada numero ter a sua ' +
+          'propria linha, e nao da para saber com certeza que sao do numero vinculado ' +
+          'agora: ficam ocultas e nada foi apagado. Se forem de outro numero seu, ' +
+          'execute na pasta bin do plugin: wa-scope reclave --numero <esse numero, so ' +
+          'digitos>; e aplicado em menos de um minuto',
+        hStoreRekeyed: 'Conversas atribuidas ao seu numero',
+        howStoreRekeyedLine: 'O que estava guardado de antes de cada numero ter a sua ' +
+          'propria linha ficou com o numero de onde veio. Nada foi apagado',
         modeOff: 'off', modeObserve: 'observar', modeDraft: 'rascunho',
         modeReply: 'responder',
         provNone: 'nenhum', provPlane: 'plane', provLinear: 'linear',
@@ -1115,6 +1193,7 @@
         chatFetchDone: 'Pedindo a lista. Pode demorar alguns segundos.',
         chatCount: '{n} de {total}', chatNoMatch: 'Nada corresponde a isso',
         chatGroupOn: 'Ja autorizadas', chatGroupOff: 'Sem autorizacao',
+        chatOwnTag: '(voc\u00ea)', chatOwnNoName: 'Seu proprio chat',
         chatAlready: 'ja autorizada: {m}',
         scopeRmFail: 'Nao foi possivel remover a autorizacao, entao ela continua ' +
           'valendo. Tente de novo.',
@@ -1343,6 +1422,9 @@
       var HEALTH_KEY = {
         // El unico requisito que hoy bloquea: todavia no hay transporte de mensajes.
         'no-transport': 'hNoTransport',
+        // Hay linea enlazada pero el sidecar no late: el doctor ya no la da por buena
+        // con una fila en `linea` (bin/wa-read, `cmd_doctor`).
+        'transport-silent': 'hTransportSilent',
         // No lo manda el CLI sino el worker, cuando las herramientas ni contestaron.
         // Faltaba, y sin el la alerta salia con la frase en INGLES que arma el worker,
         // en un panel en espanol. Mismo defecto que "both routes are off: turn the
@@ -1357,19 +1439,28 @@
         // —el almacen quedo al dia— pero se dice: lo que se borro eran cuerpos de
         // mensajes de clientes reales que habia dejado la via de WhatsApp Web.
         'store-migrated': 'hStoreMigrated',
+        // Lo de antes de T9 paso al numero de su linea (bin/wa-read, `cmd_doctor`).
+        'store-rekeyed': 'hStoreRekeyed',
+        // Lo de antes que NO se pudo atribuir con certeza: pide una decision (T9f).
+        'store-rekey-pending': 'hStoreRekeyPending',
         unknown: 'hUnknown'
       }
       // Aca solo entran codigos cuyo detalle es una FRASE. Un detalle que es dato crudo
       // —una ruta, un tamano, el error de un proceso— no se traduce: se muestra.
       var HEALTH_HOW_KEY = {
         'no-transport': 'hNoTransportHow',
+        'transport-silent': 'hTransportSilentHow',
         'transcribe-missing-tool': 'howTranscribeMissingTool',
         'transcribe-unknown': 'howTranscribeUnknown',
         'transcribe-orca-outdated': 'howTranscribeOrcaOutdated',
         'transcribe-no-engine': 'howTranscribeNoEngine',
         'transcribe-no-model': 'howTranscribeNoModel',
         'retention-evicted': 'howRetentionEvicted',
-        'store-migrated-dropped': 'howStoreMigratedDropped'
+        'store-migrated-dropped': 'howStoreMigratedDropped',
+        // Una subida que no borro ningun mensaje (T10): decir "se borro" asustaba.
+        'store-migrated-clean': 'howStoreMigratedClean',
+        'store-rekeyed-line': 'howStoreRekeyedLine',
+        'store-rekey-decide': 'howStoreRekeyDecide'
       }
       function porCodigo(mapa, code, respaldo) {
         var key = mapa[code]
@@ -1391,6 +1482,11 @@
         'sidecar-no-arranco': 'pairingHowNoStart',
         'sidecar-cayo': 'pairingHowCrashed',
         'sesion-cerrada': 'pairingHowLoggedOut',
+        // Los tres cierres que el sidecar reintenta un poco y despues no
+        // (`decidirTrasCierre`): cada uno con lo que el dueno tiene que hacer.
+        'sesion-reemplazada': 'pairingHowReplaced',
+        'acceso-denegado': 'pairingHowForbidden',
+        multidispositivo: 'pairingHowMultidevice',
         'sin-sesion': 'pairingHowNoAuthDir',
         'socket-caido': 'pairingHowSocketDown',
         'reinicio-requerido': 'pairingHowRestart',
@@ -1789,7 +1885,7 @@
       //
       // Lo que habia comparaba `indexOf` sobre el texto crudo, y eso falla con lo que
       // la gente escribe de verdad. Dos nombres reales de ese almacen:
-      // `Lista de espera | IA Builder Lab \u{1F680} #2` y `PMO - Ab2Web -  NetSat`, este
+      // `Lista de espera | Taller Demo \u{1F680} #2` y `Comite - Cliente -  Sur`, este
       // ultimo con dos espacios seguidos. Nadie reproduce el emoji, ni la almohadilla,
       // ni el espacio de mas, ni la tilde de un apellido.
       //
@@ -1840,8 +1936,20 @@
         return usuario.length > 5 ? '\u2026' + usuario.slice(-5) : usuario
       }
 
+      /** Como se llama una conversacion en pantalla. El chat de la linea consigo misma
+       *  (`own`, T10) se nombra como en WhatsApp —"<nombre> (tu)"— y nunca con su jid
+       *  pelado: sin nombre de linea conocido es "Su propio chat". */
+      function nombreVisible (c) {
+        if (!c) return ''
+        if (c.own) {
+          var propio = c.name && String(c.name).indexOf('@') === -1 ? c.name : ''
+          return propio ? propio + ' ' + t('chatOwnTag') : t('chatOwnNoName')
+        }
+        return c.name || c.jid
+      }
+
       function etiqueta (c, repetido) {
-        var txt = (c.kind === 'grupo' ? '\u25A3  ' : '\u25CB  ') + (c.name || c.jid)
+        var txt = (c.kind === 'grupo' ? '\u25A3  ' : '\u25CB  ') + nombreVisible(c)
         var modo = modoDe(c.jid)
         // El permiso va EN la etiqueta y no solo en la tabla de abajo: quien busca una
         // conversacion para cambiarla necesita saber como quedo sin cambiar de seccion.
@@ -1852,15 +1960,29 @@
         return txt
       }
 
+      // Cada numero, su linea (T9). `cuentaVinculada` es el numero que dice el sidecar
+      // (`sidecar.cuenta`); `chatsCuenta`, de que numero es la lista guardada. Lo de otro
+      // numero queda guardado pero no se ofrece ni se lista: tras vincular un numero
+      // nuevo, el panel mostraba las 305 conversaciones y las autorizaciones del viejo.
+      // Sin numero conocido (un worker de antes) no se filtra nada.
+      var cuentaVinculada = null
+      var chatsCuenta = null
+      function deEstaLinea (cuenta) {
+        return !cuentaVinculada || (cuenta || 'local') === cuentaVinculada
+      }
+
       function renderChats (chats) {
-        chatsTodos = Array.isArray(chats) ? chats : []
+        chatsTodos = Array.isArray(chats) && deEstaLinea(chatsCuenta) ? chats.slice() : []
+        // El chat propio primero, como en WhatsApp (T10). `sort` estable: el resto
+        // conserva el orden que trae la lista.
+        chatsTodos.sort(function (a, b) { return (b.own ? 1 : 0) - (a.own ? 1 : 0) })
         chatsPorJid = {}
         buscaPorJid = {}
         chatsTodos.forEach(function (c) {
           chatsPorJid[c.jid] = c
           // El jid entra al indice: hay grupos que comparten nombre y la llave es lo
           // unico que los distingue.
-          buscaPorJid[c.jid] = aplanar(c.name) + ' ' + aplanar(c.jid)
+          buscaPorJid[c.jid] = aplanar(nombreVisible(c)) + ' ' + aplanar(c.jid)
         })
         pintarChats()
       }
@@ -1969,7 +2091,8 @@
         var n = el('chat-id')
         if (!jid) { n.textContent = ''; return }
         var c = chatsPorJid[jid]
-        var partes = [jid]
+        // El propio no muestra su jid: es el chat de la linea consigo misma (T10).
+        var partes = [c && c.own ? nombreVisible(c) : jid]
         if (c && c.last) partes.push(c.last)
         var modo = modoDe(jid)
         if (modo) partes.push(fmt('chatAlready', { m: porCodigo(MODE_KEY, modo, modo) }))
@@ -1979,7 +2102,7 @@
       el('chat-search').addEventListener('input', pintarChats)
       el('chat-pick').addEventListener('change', function () {
         var c = chatsPorJid[el('chat-pick').value]
-        el('chat').value = c ? (c.name || c.jid) : ''
+        el('chat').value = c ? nombreVisible(c) : ''
         pintarIdentidad()
       })
 
@@ -1989,9 +2112,15 @@
         // fuente. Se guarda y se repinta aca en vez de pedir `scope` otra vez: el panel
         // ya lo lee en cada vuelta completa, y una lectura de mas sale del mismo cupo
         // de 30 mensajes por 10 s que el clic del usuario.
-        alcancePorJid = entries && typeof entries === 'object' ? entries : {}
+        var todas = entries && typeof entries === 'object' ? entries : {}
+        // Solo las de la linea vinculada (T9); las de otro numero siguen en storage.
+        entries = {}
+        Object.keys(todas).forEach(function (jid) {
+          if (deEstaLinea(todas[jid] && todas[jid].account)) entries[jid] = todas[jid]
+        })
+        alcancePorJid = entries
         pintarChats()
-        var keys = entries ? Object.keys(entries) : []
+        var keys = Object.keys(entries)
         if (!keys.length) {
           el('scope-wrap').innerHTML = '<p class="empty">' + t('empty') + '</p>'
           return
@@ -2118,6 +2247,9 @@
                         mode: mode, tone: el('chat-tone').value.trim() || null,
                         instructions: el('chat-instructions').value.trim() || null,
                         updatedAt: new Date().toISOString() }
+          // Autorizar es autorizar para ESTE numero (T9): el mismo grupo visto desde
+          // otro numero propio es otra autorizacion.
+          if (cuentaVinculada) next[jid].account = cuentaVinculada
           return write('scope', next).then(function () {
             renderScope(next)
             resetScopeForm()
@@ -2283,8 +2415,11 @@
       function estadoSidecar (d, edadDato) {
         if (!d || typeof d !== 'object') return 'waiting'
         if (d.exited) return 'down'
-        if (d.connection === 'close' && d.motivo === 'sesion-cerrada') return 'down'
-        if (d.connection === 'open') return 'connected'
+        if (d.connection === 'close' && codigoSidecar(d) === 'sesion-cerrada') return 'down'
+        // "Conectado" es una afirmacion sobre AHORA y la foto guardada no caduca: con
+        // el worker o el sidecar muertos seguia diciendo "conectado" una semana despues
+        // (medido en la maquina del dueno, 2026-10-01). Sin latido fresco, 'silent'.
+        if (d.connection === 'open') return latidoFresco(d) ? 'connected' : 'silent'
         // El TTL lo manda el sidecar con cada QR; QR_VIGENCIA_MS solo cubre a uno
         // viejo que llego sin el.
         if (d.qr && !qrVencido(d.qr.ts, null, d.qr.ttlMs)) return 'live'
@@ -2307,6 +2442,37 @@
         if (d.qr && edadDato > DATO_RANCIO_MS) return 'stale'
         if (d.qr) return 'expired'
         return 'waiting'
+      }
+
+      // Cuanto vale el latido de la linea (`LATIDO_LINEA_MS` en sidecar/src/index.js,
+      // 60 s). Dos latidos y medio: uno perdido o una escritura demorada por el cupo del
+      // host no apagan el "conectado", y una linea muerta deja de decirlo en minutos y
+      // no en una semana. El MISMO numero vive en activity.html y la prueba de paneles
+      // compara los dos.
+      var LATIDO_LINEA_VENCE_MS = 150000
+
+      /** Si la linea dio senales de vida hace poco. Lee el latido que el worker copia
+       *  del sidecar (`sidecar.latido.ts`, la hora del SIDECAR). */
+      function latidoFresco (d) {
+        var ts = d && d.latido && Number(d.latido.ts)
+        if (!ts) return false
+        var edad = Date.now() - ts
+        return edad >= 0 && edad <= LATIDO_LINEA_VENCE_MS
+      }
+
+      /** La hora del ultimo latido, o de la ultima escritura si nunca hubo latido. Es
+       *  lo que se le dice al dueno: "sin senal desde las 17:44". */
+      function horaUltimaSenal (d) {
+        var ms = (d && d.latido && Number(d.latido.ts)) || Date.parse((d && d.at) || '')
+        if (!ms) return '—'
+        var f = new Date(ms)
+        var hora = ('0' + f.getHours()).slice(-2) + ':' + ('0' + f.getMinutes()).slice(-2)
+        // Pasado un dia la hora sola ya no ubica: "17:44" de anteayer se lee como de
+        // hace un rato.
+        return Date.now() - ms > 20 * 3600 * 1000
+          ? f.getFullYear() + '-' + ('0' + (f.getMonth() + 1)).slice(-2) + '-' +
+            ('0' + f.getDate()).slice(-2) + ' ' + hora
+          : hora
       }
 
       // Lo ultimo BUENO conocido: una lectura rechazada (SIN_RESPUESTA) no es una clave
@@ -2362,14 +2528,18 @@
         var diag = el('pairing-diag')
         var wrap = el('qr-wrap')
         msg.className = 'pairing-msg' +
-          (estado === 'connected' ? ' ok' : estado === 'down' ? ' bad' : '')
-        msg.textContent = t('pairing' + estado.charAt(0).toUpperCase() + estado.slice(1))
+          (estado === 'connected' ? ' ok' : estado === 'down' || estado === 'silent' ? ' bad' : '')
+        msg.textContent = estado === 'silent'
+          ? fmt('pairingSilent', { hora: horaUltimaSenal(d) })
+          : t('pairing' + estado.charAt(0).toUpperCase() + estado.slice(1))
         esperandoDesde = estado === 'waiting' ? (esperandoDesde || Date.now()) : null
         var como = ''
         var comoDiag = ''
         if (estado === 'down') {
-          como = porCodigo(SIDECAR_HOW_KEY, (d && d.error && d.error.code) || (d && d.motivo),
+          como = porCodigo(SIDECAR_HOW_KEY, codigoSidecar(d),
             (d && d.error && d.error.detail) || '')
+        } else if (estado === 'silent') {
+          como = t('pairingSilentHow')
         } else if (estado === 'waiting') {
           // Un cierre transitorio con backoff (`socket-caido`/`reinicio-requerido`) no
           // es 'down' -se cura solo, `estadoSidecar` lo deja aca a proposito- pero es
@@ -2446,10 +2616,29 @@
         'sidecar-no-arranco': true,
         'sidecar-authdir-fallo': true,
         'sidecar-cayo': true,
-        'desvincular-fallo': true
+        'desvincular-fallo': true,
+        // Otro equipo tenia la sesion: cerrado ese, reintentar SI la recupera.
+        'sesion-reemplazada': true
       }
 
+      // Los motivos donde hay una sesion que soltar. `sesion-cerrada` deja credenciales
+      // muertas en el disco; los otros tres son cierres que el sidecar ya no reintenta
+      // y donde volver a vincular es una salida real.
+      var DESVINCULABLE = {
+        'sesion-cerrada': true,
+        'sesion-reemplazada': true,
+        'acceso-denegado': true,
+        multidispositivo: true
+      }
+
+      // Los `statusCode` de WhatsApp que significan "la sesion guardada murio" (401
+      // loggedOut, 500 badSession). Mandan sobre cualquier codigo escrito encima: la
+      // version anterior del worker pisaba `sesion-cerrada` con `sidecar-cayo` al salir
+      // el proceso, y ese storage sigue en las maquinas que actualizan.
+      var STATUS_SESION_MUERTA = { 401: true, 500: true }
+
       function codigoSidecar (d) {
+        if (d && STATUS_SESION_MUERTA[d.statusCode]) return 'sesion-cerrada'
         return (d && d.error && d.error.code) || (d && d.motivo) || null
       }
 
@@ -2470,8 +2659,11 @@
         // Se ofrece soltar cuando hay algo que soltar: una sesion abierta, o una
         // cerrada desde el telefono — que deja las credenciales muertas en el disco y
         // no reconecta nunca sola (sidecar/src/index.js, `decidirTrasCierre`).
-        var puedeDesvincular = estado === 'connected' || code === 'sesion-cerrada'
-        var puedeReintentar = estado === 'down' && REINTENTABLE[code] === true
+        var puedeDesvincular = estado === 'connected' || estado === 'silent' ||
+          DESVINCULABLE[code] === true
+        // Sin senal tambien: relanzar el sidecar es justo lo que revive una linea muda.
+        var puedeReintentar = estado === 'silent' ||
+          (estado === 'down' && REINTENTABLE[code] === true)
         if (!puedeDesvincular && confirmando) salirDeConfirmar()
         el('pairing-unlink').hidden = !puedeDesvincular
         el('pairing-retry').hidden = !puedeReintentar
@@ -2634,10 +2826,11 @@
       // una caida se note aunque nadie este mirando el QR (docs/ENCARGO...§6); mientras
       // se empareja, ademas, `vigilarSidecar` la sondea aparte cada 2 s.
       var CLAVES = ['scope', 'agentName', 'health', 'routes', 'tone', 'chats',
-                    'transcribeQuality', 'inboxDays', 'ownerName', 'transcribe',
-                    'transcribeLang', 'syncStatus', 'syncMinutes', 'workerBeat',
-                    'sidecar']
-      var CLAVES_VIVAS = ['chats', 'health', 'syncStatus', 'workerBeat', 'sidecar']
+                    'chatsAccount', 'transcribeQuality', 'inboxDays', 'ownerName',
+                    'transcribe', 'transcribeLang', 'syncStatus', 'syncMinutes',
+                    'workerBeat', 'sidecar']
+      var CLAVES_VIVAS = ['chats', 'chatsAccount', 'health', 'syncStatus', 'workerBeat',
+                          'sidecar']
 
       function reload(soloVivas) {
         if (!liveStorage) return Promise.resolve()
@@ -2659,6 +2852,13 @@
               if (k in leido) return leido[k]
               return k in ultimaLectura ? ultimaLectura[k] : SIN_RESPUESTA
             }
+            // La linea vinculada, ANTES de pintar nada: decide que conversaciones y que
+            // autorizaciones son de este numero (T9).
+            var sc0 = v('sidecar')
+            if (hayRespuesta(sc0) && sc0 && typeof sc0.cuenta === 'string' && sc0.cuenta) {
+              cuentaVinculada = sc0.cuenta
+            }
+            if (hayRespuesta(v('chatsAccount'))) chatsCuenta = v('chatsAccount')
             if (hayRespuesta(v('scope'))) renderScope(v('scope'))
             pintarClave('tone', v('tone'), sello)
             pintarClave('transcribeQuality', v('transcribeQuality'), sello)
