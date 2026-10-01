@@ -219,6 +219,23 @@ def linea_activa(con):
         return None
 
 
+def linea_activa_en_disco():
+    """`linea_activa` sin pedir un almacen valido: la usa `wa-scope`, que tiene que
+    saber de que linea es cada autorizacion aunque el almacen no exista todavia. Solo
+    lectura, como todo este modulo."""
+    ruta = store_db_path()
+    if not os.path.exists(ruta):
+        return None
+    try:
+        con = sqlite3.connect(f"file:{ruta}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error:
+        return None
+    try:
+        return linea_activa(con)
+    finally:
+        con.close()
+
+
 def ultimo_latido(con):
     """El ultimo latido del sidecar en el almacen, en segundos de epoch, o None si
     nunca latio (o la base no lo sabe decir)."""

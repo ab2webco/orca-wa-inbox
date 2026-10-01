@@ -46,6 +46,7 @@ from wa_settings import (  # noqa: E402
     PLUGIN_ID_ANTERIOR, orca_cli_path, orca_runtime_home, plugin_store_path,
     plugin_store_raw,
     plugin_store_targets, settings_from_plugin, user_data_roots, valida_ajuste)
+import wa_store  # noqa: E402  (solo lectura: de capture.db se lee la linea activa)
 
 def scope_db_path():
     """Estado propio de la herramienta. En Windows va al APPDATA y no al home."""
@@ -122,7 +123,35 @@ CLOSING_RESULTS = {
 # OTRA. Quien conecta el numero de soporte de la empresa suma una cuenta, no cambia
 # la que tenia.
 CUENTA_LOCAL = "local"
-KINDS_CUENTA = ("local", "web")
+KINDS_CUENTA = ("local", "web", "pn")
+
+
+_CUENTA = []
+
+
+def cuenta_activa():
+    """La linea vinculada AHORA: `pn:<digitos>` del telefono, que el sidecar anota en
+    capture.db al abrir (`store_meta.linea_activa`).
+
+    Cada numero es su linea. Con la cuenta fija `local`, vincular OTRO numero le dio al
+    nuevo las conversaciones, las autorizaciones en `responder`, los avisos y el rastro
+    del viejo (visto en vivo, 2026-10-01): una fuga de permisos entre lineas. Todo lo que
+    este CLI lee o escribe —alcance, bitacora, trabajo, resumenes, rastro, veredictos—
+    es de esta cuenta y de ninguna otra; lo de las demas queda guardado, intacto, para
+    cuando ese numero se vuelva a vincular.
+
+    Sin linea anotada —un equipo de antes de esto, o sin almacen— es `local`, la cuenta
+    de siempre. Se calcula una vez por proceso: una corrida no cambia de linea a mitad."""
+    if not _CUENTA:
+        _CUENTA.append(wa_store.linea_activa_en_disco() or CUENTA_LOCAL)
+    return _CUENTA[0]
+
+
+def cuenta_de_entrada(e):
+    """De que linea es una entrada del storage del panel. Las de antes de T9 no traen
+    cuenta y son de la linea de siempre, `local`."""
+    cuenta = e.get("account") if isinstance(e, dict) else None
+    return cuenta if isinstance(cuenta, str) and cuenta else CUENTA_LOCAL
 
 # Lo que `wa-read state` devuelve cuando NO hay firma que devolver: `missing` es que no
 # hay base que mirar y `live` que la fuente no se puede stat-ear sin abrirla. Son
@@ -173,6 +202,7 @@ create table if not exists wa_account (
 create table if not exists agent_action (
   id integer primary key autoincrement,
   ts text, chat_jid text, chat_name text, stanza_id text,
+  account text not null default 'local',   -- DE QUE LINEA (T9: cada numero, su linea)
   action text,                         -- triage|issue|draft|sent|skipped|denied
   plane_issue text, detail text
 );
@@ -192,6 +222,7 @@ create table if not exists route (
 -- trabajo o abandona a la mitad: un loop sin memoria.
 create table if not exists work (
   stanza_id text primary key,
+  account text not null default 'local',   -- DE QUE LINEA (T9)
   chat_jid text, chat_name text,
   issue     text,              -- la tarjeta abierta, si ya existe
   step      text,              -- que hizo la ultima vez
@@ -204,7 +235,8 @@ create index if not exists ix_work_status on work(status);
 -- Resumenes de lo podado. La bitacora detallada no crece para siempre.
 create table if not exists digest (
   id integer primary key autoincrement,
-  period text, summary text, actions integer, created_at text
+  period text, summary text, actions integer, created_at text,
+  account text not null default 'local'    -- DE QUE LINEA (T9)
 );
 create table if not exists run_lock (
   name text primary key, pid integer, acquired_at real, expires_at real, note text
@@ -254,7 +286,12 @@ def decisions_read():
     """Lo que el humano marco desde el panel: tomar esto, ignorar aquello. Es la unica
     via que tiene un panel para pedirle algo al agente — solo sabe escribir storage."""
     d = plugin_store_raw().get("decisions")
-    return d if isinstance(d, dict) else {}
+    if not isinstance(d, dict):
+        return {}
+    # Solo las de la linea vinculada AHORA (T9): un "tomar esto" marcado sobre un
+    # mensaje del numero viejo no puede despertar al agente sobre el nuevo.
+    cuenta = cuenta_activa()
+    return {k: v for k, v in d.items() if cuenta_de_entrada(v) == cuenta}
 
 
 def cmd_decisions(con, a):
@@ -345,9 +382,19 @@ def ahora():
     return time.strftime("%Y-%m-%d %H:%M")
 
 
+def rastro(name):
+    """La llave del rastro de una corrida EN la linea activa. El lock sigue siendo uno
+    solo —una corrida a la vez, sea de la linea que sea— pero como le fue es de cada
+    numero: el resumen "arranco y no volvio" del numero viejo no es del nuevo (T9). La
+    linea de siempre, `local`, conserva la llave de siempre."""
+    cuenta = cuenta_activa()
+    return name if cuenta == CUENTA_LOCAL else f"{name}@{cuenta}"
+
+
 def run_start(con, name=RUN_NAME):
     """Deja constancia de que ARRANCO. Lo que no se anota al arrancar no se puede
     distinguir despues de lo que nunca arranco."""
+    name = rastro(name)
     con.execute("insert into run_trace (name, started_at, ended_at, state, reason, "
                 "looked, pending) values (?,?,NULL,'running',NULL,NULL,NULL) "
                 "on conflict(name) do update set started_at=excluded.started_at, "
@@ -363,6 +410,7 @@ def run_end(con, name=RUN_NAME, reason=None):
     autorizadas = sum(1 for r in merged_scope(con).values()
                       if (r.get("mode") or "off") != "off")
     pendientes = len(plugin_store_raw().get("activity", {}).get("pending") or [])
+    name = rastro(name)
     con.execute("insert into run_trace (name, started_at, ended_at, state, reason, "
                 "looked, pending) values (?,NULL,?,?,?,?,?) "
                 "on conflict(name) do update set ended_at=excluded.ended_at, "
@@ -380,7 +428,7 @@ def build_run(con, name=RUN_NAME):
     usuario. `interrupted` no se guarda nunca — se deduce de que el lock ya no esta y
     la corrida nunca se cerro, que es exactamente el caso de la corrida que se murio."""
     row = con.execute("select started_at, ended_at, state, reason, looked, pending "
-                      "from run_trace where name=?", (name,)).fetchone()
+                      "from run_trace where name=?", (rastro(name),)).fetchone()
     corriendo = bool(con.execute("select 1 from run_lock where name=? and expires_at > ?",
                                  (name, time.time())).fetchone())
     if not row:
@@ -438,9 +486,51 @@ def agent_name_of(con):
     return merged_settings(con).get("agent_name") or None
 
 
+def persistir_panel(con):
+    """Lo que el panel autorizo queda tambien en la base, con SU linea.
+
+    El storage del panel muestra una sola linea —la vinculada— y este sync lo reescribe
+    con ella. Sin guardar antes lo que el panel escribio, cambiar de numero perderia las
+    autorizaciones que solo vivian ahi; al volver ese numero no reaparecerian (T9: nada
+    se borra). Lo del panel manda, igual que en `merged_scope`: es lo ultimo que toco
+    el usuario. Una entrada sin cuenta es de antes de T9 y queda como `local`."""
+    cols = ("chat_name", "provider", "target", "mode", "tone", "instructions",
+            "updated_at")
+    for jid, e in plugin_store_read().items():
+        if not isinstance(e, dict) or "@" not in str(jid):
+            continue
+        fila = {"chat_name": e.get("chatName") or jid,
+                "provider": e.get("provider") or "plane", "target": e.get("target"),
+                "mode": e.get("mode") or "off",
+                "tone": e.get("tone") if isinstance(e.get("tone"), str) and
+                e.get("tone").strip() else None,
+                "instructions": e.get("instructions")
+                if isinstance(e.get("instructions"), str) and e.get("instructions").strip()
+                else None,
+                "updated_at": e.get("updatedAt")}
+        con.execute(
+            f"insert into chat_scope (account, chat_jid, {','.join(cols)}) values "
+            f"(?,?,{','.join('?' * len(cols))}) on conflict(account, chat_jid) do update "
+            # El panel guarda el jid como nombre cuando no tenia lista de chats: eso no es
+            # un nombre y no puede pisar el que la base ya sabia ("Cliente Alfa"), que es
+            # por donde `wa-send` encuentra la conversacion.
+            "set chat_name=case when excluded.chat_name = excluded.chat_jid "
+            "then chat_scope.chat_name else excluded.chat_name end, "
+            "provider=excluded.provider, "
+            "target=excluded.target, mode=excluded.mode, "
+            "tone=coalesce(excluded.tone, chat_scope.tone), "
+            "instructions=coalesce(excluded.instructions, chat_scope.instructions), "
+            "updated_at=excluded.updated_at",
+            (cuenta_de_entrada(e), jid, *(fila[c] for c in cols)))
+    con.commit()
+
+
 def push_to_plugin(con, with_activity=False):
-    """Deja el panel viendo exactamente lo mismo que el CLI."""
+    """Deja el panel viendo exactamente lo mismo que el CLI: la linea vinculada ahora,
+    y ninguna otra."""
+    persistir_panel(con)
     scope = {}
+    cuenta = cuenta_activa()
     for jid, r in merged_scope(con).items():
         # tone e instructions viajan de vuelta al panel. Sin ellos, cada sync
         # reescribia scope sin esas claves y borraba lo que el usuario acababa de
@@ -449,7 +539,7 @@ def push_to_plugin(con, with_activity=False):
                       "provider": r.get("provider") or "plane",
                       "target": r.get("target"), "mode": r.get("mode") or "off",
                       "tone": r.get("tone"), "instructions": r.get("instructions"),
-                      "updatedAt": r.get("updated_at")}
+                      "updatedAt": r.get("updated_at"), "account": cuenta}
     activity = health = None
     reusando = False
     if with_activity:
@@ -477,7 +567,9 @@ def push_to_plugin(con, with_activity=False):
         # La lista de conversaciones es la TERCERA lectura de WhatsApp de este sync.
         # Sin cambios en la fuente no puede haber chats nuevos, asi que se deja la que
         # ya esta guardada en vez de pagarla otra vez.
-        extra = {} if reusando else {"chats": build_chats()}
+        # `chatsAccount` dice de que linea es la lista: el selector del panel no ofrece
+        # las conversaciones del numero anterior como si fueran del vinculado (T9).
+        extra = {} if reusando else {"chats": build_chats(), "chatsAccount": cuenta}
         for flat, name in PANEL_SETTINGS.items():
             # agentName ya viaja en su propio parametro, mas arriba.
             if flat == "agentName":
@@ -524,10 +616,12 @@ def activity_local(con, scope):
     Se separa para poder refrescarla sola. Cuando WhatsApp no cambio, esto es lo unico
     que pudo cambiar — que el agente actuo, que hay una corrida viva, que el alcance se
     edito — y el panel tiene que verlo igual."""
+    cuenta = cuenta_activa()
     recent = [{"ts": r["ts"], "chat": r["chat_name"], "action": r["action"],
                "issue": r["plane_issue"], "detail": (r["detail"] or "")[:140]}
               for r in con.execute("select ts, chat_name, action, plane_issue, detail "
-                                   "from agent_action order by id desc limit 20")]
+                                   "from agent_action where account=? "
+                                   "order by id desc limit 20", (cuenta,))]
     lock = con.execute("select name, expires_at from run_lock "
                        "where expires_at > ?", (time.time(),)).fetchone()
     # `mapped` y `authorized` no son lo mismo y confundirlos era invisible: con todas
@@ -540,7 +634,11 @@ def activity_local(con, scope):
             # El rastro de la corrida viaja junto a sus resultados: sin el, "no habia
             # nada", "no corrio" y "se murio" son la misma lista vacia en pantalla.
             "run": build_run(con),
-            "mapped": len(scope), "authorized": autorizadas}
+            "mapped": len(scope), "authorized": autorizadas,
+            # De que linea es todo esto. El panel lo compara con la linea vinculada y,
+            # si no coinciden (se cambio de numero y el sync todavia no paso), no pinta
+            # lo del numero anterior como si fuera del nuevo.
+            "account": cuenta}
 
 
 def filtra_pendientes(pending, scope, decided):
@@ -661,15 +759,20 @@ def build_health():
 def merged_scope(con):
     """Lo del panel manda sobre lo del CLI cuando el mismo chat esta en los dos:
     el panel es lo que el usuario acaba de tocar."""
+    # SOLO la linea vinculada ahora (T9). Lo de otro numero sigue en la base, intacto,
+    # pero no autoriza nada aca: heredarlo fue la fuga de permisos que motivo esto.
+    cuenta = cuenta_activa()
     rows = {r["chat_jid"]: dict(r) for r in con.execute(
         "select account, chat_jid, chat_name, provider, target, mode, initial_state, "
-        "hours, tone, instructions, timezone, notes, updated_at from chat_scope")}
+        "hours, tone, instructions, timezone, notes, updated_at from chat_scope "
+        "where account=?", (cuenta,))}
     for jid, e in plugin_store_read().items():
-        # El panel guarda por jid a secas. Mientras haya una sola linea eso es exacto;
-        # con varias, la clave del store lleva la cuenta adelante y esta rama se queda
-        # con las de siempre. La llave real es (cuenta, jid) y no el jid solo
-        # (docs/ENCARGO-TRANSPORTE-UNICO.md §11 A1).
-        row = {**rows.get(jid, {}), "account": CUENTA_LOCAL, "chat_jid": jid,
+        # El panel guarda por jid, y cada entrada dice de que linea es (`account`; las
+        # de antes de T9 no lo dicen y son `local`). Solo entran las de esta linea: el
+        # storage puede seguir teniendo las del numero anterior hasta el proximo sync.
+        if cuenta_de_entrada(e) != cuenta:
+            continue
+        row = {**rows.get(jid, {}), "account": cuenta, "chat_jid": jid,
                "chat_name": e.get("chatName") or jid,
                "provider": e.get("provider") or "plane",
                "target": e.get("target"),
@@ -729,6 +832,14 @@ def migrate(con):
     work_cols = {r["name"] for r in con.execute("pragma table_info(work)")}
     if "notified_at" not in work_cols:
         con.execute("alter table work add column notified_at text")
+    # La cuenta, en las tres tablas que no la tenian (T9). Es solo una columna NUEVA
+    # con `local` por defecto: lo que ya estaba es de la linea de siempre, y atribuirlo
+    # a un numero es la migracion explicita (`reclave_local`), no esto.
+    for tabla in ("agent_action", "work", "digest"):
+        cols = {r["name"] for r in con.execute(f"pragma table_info({tabla})")}
+        if "account" not in cols:
+            con.execute(f"alter table {tabla} add column account text not null "
+                        "default 'local'")
     con.commit()
     # Con las columnas RECIEN leidas, no con las de arriba: los alter de esta misma
     # funcion acaban de crear target y de llenarlo desde plane_project, y copiar con
@@ -806,7 +917,8 @@ def wa_chats(query=None):
 def jid_of(con, ref):
     """Acepta el JID directo, el Z_PK, o parte del nombre. Devuelve (jid, nombre)."""
     if "@" in ref:
-        row = con.execute("select chat_name from chat_scope where chat_jid=?", (ref,)).fetchone()
+        row = con.execute("select chat_name from chat_scope where chat_jid=? and account=?",
+                          (ref, cuenta_activa())).fetchone()
         return ref, (row["chat_name"] if row else ref)
     hits = [c for c in wa_chats() if str(c["id"]) == ref
             or ref.lower() in (c["name"] or "").lower()]
@@ -831,13 +943,13 @@ def cmd_list(con, a):
 
 def cmd_set(con, a):
     jid, name = jid_of(con, a.chat)
-    cur = con.execute("select * from chat_scope where chat_jid=?", (jid,)).fetchone()
+    cur = con.execute("select * from chat_scope where chat_jid=? and account=?",
+                      (jid, cuenta_activa())).fetchone()
     cur = dict(cur) if cur else {}
     vals = {
-        # Hoy la unica linea que produce conversaciones es la local. Cuando el lector
-        # web exista, la cuenta llega con el, no antes: una bandera que solo acepta un
-        # valor es un control que no controla nada.
-        "account": cur.get("account") or CUENTA_LOCAL,
+        # La linea vinculada AHORA (T9): autorizar es autorizar para este numero, y el
+        # mismo grupo visto desde otro numero propio es otra autorizacion.
+        "account": cuenta_activa(),
         "chat_jid": jid,
         "chat_name": name or cur.get("chat_name") or jid,
         "provider": a.provider or cur.get("provider") or "plane",
@@ -877,17 +989,20 @@ def cmd_mode(con, a):
     jid, _ = jid_of(con, a.chat)
     if a.value not in MODES:
         sys.exit(f"invalid mode: {a.value} (use {'/'.join(MODES)})")
-    if not con.execute("select 1 from chat_scope where chat_jid=?", (jid,)).fetchone():
+    cuenta = cuenta_activa()
+    if not con.execute("select 1 from chat_scope where chat_jid=? and account=?",
+                       (jid, cuenta)).fetchone():
         sys.exit(f"{jid} is not in the registry, use `wa-scope set` first")
-    con.execute("update chat_scope set mode=?, updated_at=? where chat_jid=?",
-                (a.value, time.strftime("%Y-%m-%d %H:%M"), jid))
+    con.execute("update chat_scope set mode=?, updated_at=? where chat_jid=? and account=?",
+                (a.value, time.strftime("%Y-%m-%d %H:%M"), jid, cuenta))
     con.commit()
     # La copia del panel se corrige aca, en la entrada, y no con un push: merged_scope
     # le da la razon al panel siempre, asi que empujar lo que ya esta fusionado
     # reescribiria el modo viejo. Sin esto, apagar por terminal no apagaba nada — hasta
     # `list` devolvia `responder` justo despues de un `mode off`. `rm` ya lo hacia asi.
     store = plugin_store_read()
-    if jid in store:
+    # Solo la entrada de ESTA linea: la del mismo jid de otro numero no se toca (T9).
+    if jid in store and cuenta_de_entrada(store[jid]) == cuenta:
         store[jid] = dict(store[jid], mode=a.value,
                           updatedAt=time.strftime("%Y-%m-%d %H:%M"))
         plugin_store_write(store, agent_name_of(con))
@@ -896,11 +1011,13 @@ def cmd_mode(con, a):
 
 def cmd_rm(con, a):
     jid, _ = jid_of(con, a.chat)
-    con.execute("delete from chat_scope where chat_jid=?", (jid,))
+    cuenta = cuenta_activa()
+    con.execute("delete from chat_scope where chat_jid=? and account=?", (jid, cuenta))
     con.commit()
     store = plugin_store_read()
-    store.pop(jid, None)
-    plugin_store_write(store, agent_name_of(con))
+    if jid in store and cuenta_de_entrada(store[jid]) == cuenta:
+        store.pop(jid, None)
+        plugin_store_write(store, agent_name_of(con))
     return [{"removed": jid}]
 
 
@@ -918,10 +1035,10 @@ def cmd_check(con, a):
                       "not in the registry" if not row else
                       f"mode {mode} is not enough for {a.for_}")}
     if not allowed:
-        con.execute("insert into agent_action (ts,chat_jid,chat_name,action,detail) "
-                    "values (?,?,?,?,?)",
+        con.execute("insert into agent_action (ts,chat_jid,chat_name,action,detail,account) "
+                    "values (?,?,?,?,?,?)",
                     (time.strftime("%Y-%m-%d %H:%M"), jid, out["chat_name"],
-                     "denied", f"{a.for_} · {mode}"))
+                     "denied", f"{a.for_} · {mode}", cuenta_activa()))
         con.commit()
     print(json.dumps(out, ensure_ascii=False, indent=2))
     sys.exit(0 if allowed else 3)
@@ -1005,10 +1122,10 @@ def cmd_alert(con, a):
     del sistema, no un mensaje mas en el chat que se pierde entre otros 200."""
     title = a.title or "Needs your answer"
     body = (a.body or "")[:240]
-    con.execute("insert into agent_action (ts,chat_jid,chat_name,stanza_id,action,detail) "
-                "values (?,?,?,?,?,?)",
+    con.execute("insert into agent_action (ts,chat_jid,chat_name,stanza_id,action,detail,"
+                "account) values (?,?,?,?,?,?,?)",
                 (time.strftime("%Y-%m-%d %H:%M"), a.chat or "", a.name or "",
-                 a.stanza or "", "alert", f"{title} | {body}"))
+                 a.stanza or "", "alert", f"{title} | {body}", cuenta_activa()))
     con.commit()
     ok = notify(title, body)
     return [{"alerted": ok, "title": title, "body": body,
@@ -1120,18 +1237,19 @@ def cmd_where(con, a):
 def cmd_work(con, a):
     """El estado entre corridas. El agente lee esto al empezar y lo actualiza al cerrar."""
     now = time.strftime("%Y-%m-%d %H:%M")
+    cuenta = cuenta_activa()
     if a.done:
-        con.execute("update work set status='done', updated_at=? where stanza_id=?",
-                    (now, a.done))
+        con.execute("update work set status='done', updated_at=? where stanza_id=? "
+                    "and account=?", (now, a.done, cuenta))
         con.commit()
         return [{"done": a.done}]
     if a.stanza:
-        row = con.execute("select opened_at from work where stanza_id=?",
-                          (a.stanza,)).fetchone()
+        row = con.execute("select opened_at from work where stanza_id=? and account=?",
+                          (a.stanza, cuenta)).fetchone()
         con.execute("""insert into work
               (stanza_id, chat_jid, chat_name, issue, step, next_step, status,
-               opened_at, updated_at)
-              values (?,?,?,?,?,?,'open',?,?)
+               opened_at, updated_at, account)
+              values (?,?,?,?,?,?,'open',?,?,?)
               on conflict(stanza_id) do update set
                 chat_jid=coalesce(excluded.chat_jid, work.chat_jid),
                 chat_name=coalesce(excluded.chat_name, work.chat_name),
@@ -1140,7 +1258,7 @@ def cmd_work(con, a):
                 next_step=excluded.next_step,
                 updated_at=excluded.updated_at""",
             (a.stanza, a.chat, a.name, a.issue, a.step, a.next,
-             row["opened_at"] if row else now, now))
+             row["opened_at"] if row else now, now, cuenta))
         con.commit()
     # Lo que lleva demasiado sin avanzar deja de ser "en curso": es ruido que hace que
     # el agente lo reintente para siempre.
@@ -1148,9 +1266,10 @@ def cmd_work(con, a):
                 "and updated_at < ?", (time.strftime(
                     "%Y-%m-%d %H:%M", time.localtime(time.time() - 7 * 86400)),))
     con.commit()
+    # Lo en curso de ESTA linea: el trabajo del numero anterior espera a su numero (T9).
     return [dict(r) for r in con.execute(
         "select stanza_id, chat_name, issue, step, next_step, updated_at from work "
-        "where status='open' order by updated_at")]
+        "where status='open' and account=? order by updated_at", (cuenta,))]
 
 
 def closing_rows(con):
@@ -1175,10 +1294,10 @@ def closing_rows(con):
             "select issue, chat_jid, chat_name, count(*) as mensajes, "
             "       group_concat(stanza_id) as stanzas, min(opened_at) as opened_at "
             "from work "
-            "where status='open' and notified_at is null "
+            "where status='open' and notified_at is null and account=? "
             "  and issue is not null and trim(issue) <> '' "
             "  and opened_at >= ? "
-            "group by issue, chat_jid order by min(opened_at)", (since,)):
+            "group by issue, chat_jid order by min(opened_at)", (cuenta_activa(), since)):
         entry = scope.get(r["chat_jid"]) or {}
         provider = entry.get("provider") or "plane"
         # En `ninguno` no hay tarjeta: no hay cierre que avisar.
@@ -1241,21 +1360,22 @@ def closing_mark(con, issue, chat_jid, result, detail=""):
     """
     action = CLOSING_RESULTS[result]
     now = time.strftime("%Y-%m-%d %H:%M")
-    row = con.execute("select chat_name from work where issue=? and chat_jid=? limit 1",
-                      (issue, chat_jid)).fetchone()
+    cuenta = cuenta_activa()
+    row = con.execute("select chat_name from work where issue=? and chat_jid=? "
+                      "and account=? limit 1", (issue, chat_jid, cuenta)).fetchone()
     cur = con.execute("update work set notified_at=?, status='done' "
-                      "where issue=? and chat_jid=? and notified_at is null",
-                      (now, issue, chat_jid))
+                      "where issue=? and chat_jid=? and account=? and notified_at is null",
+                      (now, issue, chat_jid, cuenta))
     if not cur.rowcount:
         # Ya estaba registrado. Anotarlo de nuevo duplicaria la linea en el panel y
         # haria ver dos avisos donde hubo uno.
         con.commit()
         return {"issue": issue, "chat_jid": chat_jid, "result": result,
                 "marcadas": 0, "ya_estaba": True}
-    con.execute("insert into agent_action (ts,chat_jid,chat_name,action,plane_issue,detail) "
-                "values (?,?,?,?,?,?)",
+    con.execute("insert into agent_action (ts,chat_jid,chat_name,action,plane_issue,detail,"
+                "account) values (?,?,?,?,?,?,?)",
                 (now, chat_jid, (row["chat_name"] if row else "") or "", action, issue,
-                 (detail or "").strip()))
+                 (detail or "").strip(), cuenta))
     con.commit()
     return {"issue": issue, "chat_jid": chat_jid, "result": result,
             "marcadas": cur.rowcount, "accion": action, "ya_estaba": False}
@@ -1318,11 +1438,14 @@ def cmd_rotate(con, a):
     La memoria util no es el detalle de hace tres meses, es saber que paso. El detalle
     se va, el resumen queda, y la base no crece sin techo."""
     keep = a.keep
-    total = con.execute("select count(*) c from agent_action").fetchone()["c"]
+    # Se poda la bitacora de ESTA linea, y su resumen queda en esta linea (T9).
+    cuenta = cuenta_activa()
+    total = con.execute("select count(*) c from agent_action where account=?",
+                        (cuenta,)).fetchone()["c"]
     if total <= keep:
         return [{"rotated": 0, "total": total, "keep": keep}]
     old = con.execute("select id, ts, chat_name, action from agent_action "
-                      "order by id limit ?", (total - keep,)).fetchall()
+                      "where account=? order by id limit ?", (cuenta, total - keep)).fetchall()
     counts = {}
     for r in old:
         counts[r["action"]] = counts.get(r["action"], 0) + 1
@@ -1330,19 +1453,20 @@ def cmd_rotate(con, a):
     summary = (f"{len(old)} actions between {old[0]['ts']} and {old[-1]['ts']}. "
                + ", ".join(f"{k}: {v}" for k, v in sorted(counts.items()))
                + (". Chats: " + ", ".join(chats[:12]) if chats else ""))
-    con.execute("insert into digest (period, summary, actions, created_at) "
-                "values (?,?,?,?)",
+    con.execute("insert into digest (period, summary, actions, created_at, account) "
+                "values (?,?,?,?,?)",
                 (f"{old[0]['ts']} .. {old[-1]['ts']}", summary, len(old),
-                 time.strftime("%Y-%m-%d %H:%M")))
-    con.execute("delete from agent_action where id <= ?", (old[-1]["id"],))
+                 time.strftime("%Y-%m-%d %H:%M"), cuenta))
+    con.execute("delete from agent_action where id <= ? and account=?",
+                (old[-1]["id"], cuenta))
     con.commit()
     return [{"rotated": len(old), "resumen": summary}]
 
 
 def cmd_history(con, a):
     return [dict(r) for r in con.execute(
-        "select period, actions, summary, created_at from digest "
-        "order by id desc limit ?", (a.n,))]
+        "select period, actions, summary, created_at from digest where account=? "
+        "order by id desc limit ?", (cuenta_activa(), a.n))]
 
 
 # Cuantos syncs seguidos puede perderse el worker antes de que el precheck deje de
@@ -1423,7 +1547,8 @@ def cmd_pending(con, a):
         hay = sum(1 for v in decisions_read().values() if v.get("decision") == "take")
         detalle = f"{hay} marked as take"
     else:
-        work = con.execute("select count(*) c from work where status='open'").fetchone()["c"]
+        work = con.execute("select count(*) c from work where status='open' and account=?",
+                           (cuenta_activa(),)).fetchone()["c"]
         hay = len(pending) + work
         detalle = f"{len(pending)} waiting, {work} in progress"
     print(json.dumps({"hay_trabajo": bool(hay), "detalle": detalle,
@@ -1596,7 +1721,8 @@ def cmd_accounts(con, a):
 
 def cmd_log(con, a):
     return [dict(r) for r in con.execute(
-        "select * from agent_action order by id desc limit ?", (a.n,)).fetchall()]
+        "select * from agent_action where account=? order by id desc limit ?",
+        (cuenta_activa(), a.n)).fetchall()]
 
 
 def cmd_juicio(con, a):
@@ -1606,6 +1732,9 @@ def cmd_juicio(con, a):
     (odd/tasks/juicio-cacheado.md). `--clase` y `--origen` ya vienen validados por
     `choices` en el parser: lo que llega aca es siempre del vocabulario cerrado."""
     ahora = time.strftime("%Y-%m-%d %H:%M")
+    # Sin `--account`, la linea vinculada ahora (T9), que es de donde `wa-read inbox`
+    # saco el mensaje.
+    a.account = a.account or cuenta_activa()
     con.execute(
         "insert into juicio (account, chat_jid, stanza_id, clase, origen, at) "
         "values (?,?,?,?,?,?) on conflict(account, chat_jid, stanza_id) do update set "
@@ -1618,9 +1747,9 @@ def cmd_juicio(con, a):
 
 def cmd_record(con, a):
     con.execute("insert into agent_action (ts,chat_jid,chat_name,stanza_id,action,"
-                "plane_issue,detail) values (?,?,?,?,?,?,?)",
+                "plane_issue,detail,account) values (?,?,?,?,?,?,?,?)",
                 (time.strftime("%Y-%m-%d %H:%M"), a.chat, a.name, a.stanza,
-                 a.action, a.issue, a.detail))
+                 a.action, a.issue, a.detail, cuenta_activa()))
     con.commit()
     return [{"ok": True}]
 
@@ -1772,7 +1901,7 @@ def main():
 
     s = add("juicio", help="caches a message's verdict, keyed by "
                            "(account, chat_jid, stanza_id); bin/wa_store.py reads it")
-    s.add_argument("--account", default=CUENTA_LOCAL)
+    s.add_argument("--account", default=None)
     s.add_argument("--chat", required=True); s.add_argument("--stanza", required=True)
     s.add_argument("--clase", required=True, choices=list(CLASES_JUICIO))
     s.add_argument("--origen", default="agente", choices=list(ORIGENES_JUICIO))

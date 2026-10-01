@@ -100,7 +100,7 @@ Baileys intenta login y nunca pide registro.
         línea activa. Nunca copia filas ni pisa la `linea` de otra identidad.
   - [x] T9b — `wa_store`/`wa-read` (solo lectura): `linea_activa()`; `inbox`,
         `chats`, `whoami`, `state` y `doctor` miran la línea activa por defecto.
-  - [ ] T9c — `wa-scope`: `chat_scope`, `juicio`, `agent_action`, `work`, `digest`
+  - [x] T9c — `wa-scope`: `chat_scope`, `juicio`, `agent_action`, `work`, `digest`
         y `run_trace` por cuenta, filtrados por la línea activa; `scope`, `chats`,
         `activity`, `navBadge` y `decisions` del storage se rearman por línea; lo que
         el panel autorizó se persiste en `chat_scope` para no perderse al cambiar.
@@ -226,3 +226,24 @@ Baileys intenta login y nunca pide registro.
 - RED doctor: `FALLA y el doctor habla de la linea activa, no de las dos — {... "via":"pn:573001112233"}`
 - GREEN: `almacen` 200/200, `check-clis` ok. Un almacén sin `linea_activa` (de antes)
   sigue leyendo todas; `--line` puede pedir otra línea nombrándola.
+
+### T9c — `wa-scope` por línea
+
+- RED `scripts/check-clis` (`revisa_linea_por_numero`, escenario real con dos números,
+  HOME temporal), reproduce lo visto en vivo:
+  `con el numero nuevo vinculado, \`wa-scope list\` hereda ['100@g.us', '300@g.us', '400@g.us']`,
+  `con el numero nuevo, \`wa-scope run\` muestra la corrida del viejo: {'state': 'ok', ... 'mapped': 3, 'authorized': 3}`,
+  `'lo ultimo que hizo' del numero nuevo trae lo del viejo`,
+  `la insignia del numero nuevo cuenta avisos del viejo: {'count': 1}`,
+  `la cobertura del numero nuevo cuenta las del viejo: 3 de 3`.
+- Regresión encontrada en el camino (`envio.test`, 6 fallas `send-denied`):
+  `persistir_panel` pisaba el `chat_name` de la base con el jid provisorio del panel.
+  Arreglado con la misma regla que `anotarChat`.
+- GREEN: `check-clis` 172 comprobaciones (antes 160); `npm run check` exit 0.
+- Cómo: `cuenta_activa()` sale de `store_meta.linea_activa` (por `wa_store`, solo
+  lectura; sin ella, `local`). `agent_action`, `work` y `digest` ganan una columna
+  `account` (default `local`, aditiva: no re-clava nada). El rastro de corrida va por
+  línea (`triage@pn:...`; `local` conserva `triage`). El storage del panel se rearma con
+  la línea activa (`scope` con `account`, `activity.account`, `chatsAccount`) y las
+  decisiones se filtran por línea; lo que el panel autorizó se guarda en `chat_scope`
+  con su línea antes de reescribir el storage, para que nada se pierda al cambiar.

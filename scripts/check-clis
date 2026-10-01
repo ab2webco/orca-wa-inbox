@@ -431,6 +431,148 @@ def revisa_insignia_nav(fallos: list) -> int:
     return hechas
 
 
+VIEJA = "pn:573001112233"
+NUEVA = "pn:573000000012"
+
+
+def almacen_con_lineas(home: pathlib.Path, activa: str) -> None:
+    """Un capture.db con DOS numeros, armado por el escritor de verdad (el sidecar) y no
+    a mano: el esquema es suyo. La vieja tiene el grupo 100, la nueva el 200."""
+    js = (
+        "import { abrirAlmacen, rutaAlmacen } from %r;"
+        "const a = abrirAlmacen(rutaAlmacen({ HOME: process.env.HOME }));"
+        "a.registrarLinea({ cuenta: %r, pn: '573001112233:7@s.whatsapp.net', nombre: 'Vieja' });"
+        "a.anotarChat({ cuenta: %r, chatJid: '100@g.us', nombre: 'Grupo Viejo', esGrupo: 1 });"
+        "a.registrarLinea({ cuenta: %r, pn: '573000000012:7@s.whatsapp.net', nombre: 'Nueva' });"
+        "a.anotarChat({ cuenta: %r, chatJid: '200@g.us', nombre: 'Grupo Nuevo', esGrupo: 1 });"
+        "a.activarLinea(%r); a.latir(); a.cerrar();"
+        % ((RAIZ / "sidecar" / "src" / "almacen.js").as_uri(), VIEJA, VIEJA, NUEVA, NUEVA,
+           activa))
+    subprocess.run([shutil.which("node") or "node", "--input-type=module", "-e", js],
+                   env=entorno(home), check=True, capture_output=True, timeout=120)
+
+
+def activar(home: pathlib.Path, cuenta: str) -> None:
+    """Lo que hace el sidecar al abrir con otro numero: cambiar la linea activa."""
+    con = sqlite3.connect(home / ".wa-inbox" / "capture.db")
+    con.execute("update store_meta set value=? where key='linea_activa'", (cuenta,))
+    con.commit()
+    con.close()
+
+
+def revisa_linea_por_numero(fallos: list) -> int:
+    """Cada numero, su linea (T9). Visto en vivo el 2026-10-01: tras vincular OTRO
+    numero, la linea nueva heredo las conversaciones, las autorizaciones en `responder`,
+    los avisos, el rastro de la corrida y la insignia del numero viejo, porque todo
+    colgaba de la cuenta fija `local`. Es una fuga de permisos entre lineas.
+
+    Se recorre con el CLI de verdad sobre un HOME temporal: nunca contra ~/.wa-inbox."""
+    hechas = 0
+    if not shutil.which("node"):
+        print("  aviso: sin node, no se armo el almacen de dos lineas", file=sys.stderr)
+        return hechas
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+        almacen_con_lineas(home, VIEJA)
+
+        def scope(*args):
+            return subprocess.run([str(BIN / "wa-scope"), *args], capture_output=True,
+                                  text=True, env=env, timeout=180)
+
+        man = json.loads((RAIZ / "orca-plugin.json").read_text(encoding="utf-8"))
+        store = (home / "Library" / "Application Support" / "orca" / "plugins-data" /
+                 f"{man['publisher']}.{man['id']}" / "storage.json")
+        if sys.platform != "darwin":
+            store = (home / ".config" / "orca" / "plugins-data" /
+                     f"{man['publisher']}.{man['id']}" / "storage.json")
+
+        def storage():
+            return json.loads(store.read_text(encoding="utf-8")) if store.exists() else {}
+
+        # Con el numero viejo vinculado: autoriza, avisa y corre.
+        scope("set", "100@g.us", "--target", "SOP", "--mode", "responder")
+        scope("record", "--chat", "100@g.us", "--name", "Grupo Viejo", "--stanza", "A1",
+              "--action", "alert", "--detail", "Piden descuento | el precio no es mio")
+        scope("lock", "--note", "triage")
+        scope("unlock")
+        # Lo que dejo la version de antes: una autorizacion `local` en la base y otra
+        # sin cuenta en el storage del panel. Las dos son de la linea vieja.
+        con = sqlite3.connect(home / ".wa-inbox" / "scope.db")
+        con.execute("insert into chat_scope (account, chat_jid, chat_name, mode) "
+                    "values ('local', '300@g.us', 'Legado', 'responder')")
+        con.commit()
+        con.close()
+        datos = storage()
+        datos.setdefault("scope", {})["400@g.us"] = {"chatName": "Legado Panel",
+                                                     "mode": "responder"}
+        store.write_text(json.dumps(datos), encoding="utf-8")
+
+        # Se vincula OTRO numero.
+        activar(home, NUEVA)
+        hechas += 1
+        lista = json.loads(scope("list", "--json").stdout or "[]")
+        if lista:
+            fallos.append(f"con el numero nuevo vinculado, `wa-scope list` hereda "
+                          f"{[f.get('chat_jid') for f in lista]}: el numero nuevo empieza "
+                          "sin autorizaciones")
+        corrida = json.loads(scope("run", "--json").stdout or "[{}]")[0]
+        hechas += 1
+        if corrida.get("state") != "never" or corrida.get("mapped") or corrida.get("authorized"):
+            fallos.append(f"con el numero nuevo, `wa-scope run` muestra la corrida del "
+                          f"viejo: {corrida!r}")
+        scope("sync")
+        s = storage()
+        act = s.get("activity") or {}
+        hechas += 6
+        if s.get("scope"):
+            fallos.append(f"el storage del panel sigue con las autorizaciones del numero "
+                          f"viejo: {sorted(s['scope'])}")
+        if act.get("recent"):
+            fallos.append(f"'lo ultimo que hizo' del numero nuevo trae lo del viejo: "
+                          f"{act['recent']!r}")
+        if (s.get("navBadge") or {}).get("count") != 0:
+            fallos.append(f"la insignia del numero nuevo cuenta avisos del viejo: "
+                          f"{s.get('navBadge')!r}")
+        if act.get("authorized") or act.get("mapped"):
+            fallos.append(f"la cobertura del numero nuevo cuenta las del viejo: "
+                          f"{act.get('authorized')} de {act.get('mapped')}")
+        if act.get("account") != NUEVA:
+            fallos.append(f"la actividad no dice de que linea es: account={act.get('account')!r}")
+        if sorted(c.get("jid") for c in s.get("chats") or []) != ["200@g.us"]:
+            fallos.append(f"el selector del numero nuevo ofrece "
+                          f"{[c.get('jid') for c in s.get('chats') or []]}")
+
+        # Vuelve el numero viejo: todo reaparece, nada se borro.
+        activar(home, VIEJA)
+        lista = {f.get("chat_jid"): f.get("mode")
+                 for f in json.loads(scope("list", "--json").stdout or "[]")}
+        hechas += 1
+        if lista.get("100@g.us") != "responder":
+            fallos.append(f"al volver el numero viejo su autorizacion no reaparece: {lista!r}")
+        corrida = json.loads(scope("run", "--json").stdout or "[{}]")[0]
+        hechas += 1
+        if corrida.get("state") != "ok":
+            fallos.append(f"al volver el numero viejo su corrida no reaparece: {corrida!r}")
+        scope("sync")
+        s = storage()
+        hechas += 1
+        if (s.get("navBadge") or {}).get("count") != 1:
+            fallos.append(f"al volver el numero viejo su aviso no reaparece: "
+                          f"{s.get('navBadge')!r}")
+        # Lo de antes sin cuenta sigue guardado como `local`: no se lo apropia nadie
+        # hasta que la migracion lo atribuya.
+        con = sqlite3.connect(home / ".wa-inbox" / "scope.db")
+        legado = {r[0] for r in con.execute(
+            "select chat_jid from chat_scope where account='local'")}
+        con.close()
+        hechas += 1
+        if legado != {"300@g.us", "400@g.us"}:
+            fallos.append(f"las autorizaciones de antes no quedaron guardadas como "
+                          f"`local`: {sorted(legado)}")
+    return hechas
+
+
 def revisa_rastro_corrida(fallos: list) -> int:
     """Los cinco finales de una corrida, recorridos de verdad.
 
@@ -554,6 +696,8 @@ def revisa_precheck(fallos: list) -> int:
         # Los ajustes efectivos viven en un modulo al lado: wa-scope y wa-read tienen
         # que contestar lo MISMO sobre un mismo ajuste, y tenerlo dos veces era el defecto.
         (binf / "wa_settings.py").write_text((BIN / "wa_settings.py").read_text())
+        # Y la linea activa sale de capture.db por wa_store, en solo lectura (T9).
+        (binf / "wa_store.py").write_text((BIN / "wa_store.py").read_text())
         (binf / "wa-read").write_text(STUB_WA_READ)
         (binf / "wa-read").chmod(0o755)
 
@@ -1242,7 +1386,8 @@ def main() -> int:
                       + revisa_sin_bytecode(fallos)
                       + revisa_firma_del_panel(fallos)
                       + revisa_casa_del_runtime(fallos)
-                      + revisa_juicio(fallos))
+                      + revisa_juicio(fallos)
+                      + revisa_linea_por_numero(fallos))
     aislado.cleanup()
 
     if fallos:
