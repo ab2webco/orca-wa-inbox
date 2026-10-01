@@ -347,7 +347,7 @@ const TABLERO_CASOS = [
     title: 'Piden descuento del 30% en la renovación', prioridad: 'high',
     chat_name: 'Soporte — Cliente Norte', updated_at: minutos(3),
     summary: 'Dice que otro proveedor se lo deja en 1.400 y quiere respuesta hoy.',
-    jev: { attention_class: 'card', skip: false,
+    jev: { attention_class: 'money', skip: false,
       flags: ['asks_for_money_or_payment', 'client_waiting_or_service_down'] },
     proposal: { tipo: 'responder', version: 'v1f3a',
       texto: 'Hola, gracias por avisar. El precio de renovación es el vigente; ' +
@@ -357,7 +357,7 @@ const TABLERO_CASOS = [
     title: 'Pide el acceso al tablero de Andes', clase: 'alert', prioridad: 'urgent',
     chat_name: 'Operaciones internas', updated_at: minutos(22),
     summary: 'Es una persona que no está en el equipo.',
-    jev: { attention_class: 'alert', skip: false, flags: ['asks_for_credential'] },
+    jev: { attention_class: 'access_or_credential', skip: false, flags: ['asks_for_credential'] },
     proposal: { tipo: 'escalar', version: 'v2b71', texto: 'Escalar al responsable de accesos.' },
     exceptions: ['credential', 'jev'] }),
   caso(3, 'decision', {
@@ -365,17 +365,17 @@ const TABLERO_CASOS = [
     updated_at: minutos(48),
     proposal: { tipo: 'responder', version: 'v3c09',
       texto: 'Te confirmo que lo tendrás el viernes a primera hora.' },
-    jev: { attention_class: 'card', skip: false, flags: ['promises_a_date'] },
+    jev: { attention_class: 'needs_decision', skip: false, flags: ['promises_a_date'] },
     exceptions: ['commitment'] }),
   caso(4, 'recibido', { title: 'Nota de voz sin transcribir', clase: 'doubtful',
     chat_name: 'Proyecto Andes — QA', updated_at: minutos(1) }),
   caso(5, 'clasificado', { title: 'El reporte de ayer salió en blanco', prioridad: 'high',
     chat_name: 'Soporte — Cliente Norte', updated_at: minutos(9),
     summary: 'Lo necesitan hoy.',
-    jev: { attention_class: 'card', skip: false, flags: ['urgency_pressure'] } }),
+    jev: { attention_class: 'bug_report', skip: false, flags: ['urgency_pressure'] } }),
   caso(6, 'clasificado', { title: 'Saludo de buenos días', clase: 'nothing',
     chat_name: 'Comite - Cliente -  Sur', updated_at: minutos(14),
-    jev: { attention_class: 'nothing', skip: true, flags: [] } }),
+    jev: { attention_class: 'pleasantry', skip: true, flags: [] } }),
   caso(7, 'trabajo', { title: 'Reporte en blanco al exportar', prioridad: 'high',
     chat_name: 'Soporte — Cliente Norte', updated_at: minutos(35), ticket: 'SOP-214',
     proposal: { tipo: 'trabajar', version: 'v7d20',
@@ -414,7 +414,7 @@ const TABLERO_LARGO = tableroDe([
     summary: LARGO.repeat(2), prioridad: 'urgent', updated_at: minutos(12),
     proposal: { tipo: 'responder', version: 'vL1', texto: LARGO.repeat(3) +
       'https://ejemplo.invalid/reportes/facturacion/2026/09/conciliacion-completa-del-banco' },
-    jev: { attention_class: 'card', skip: false,
+    jev: { attention_class: 'support_request', skip: false,
       flags: ['asks_for_money_or_payment', 'promises_a_date', 'states_status_not_verified',
         'una_bandera_que_el_panel_no_conoce'] },
     exceptions: ['money', 'commitment', 'jev'] }),
@@ -500,9 +500,10 @@ const PANELES = [
       })
     })
   },
-  // El tablero de casos (T5) con las acciones del dueno (T6). Los cuatro anchos, en los dos
-  // idiomas y los dos temas: a 1440 son columnas, y desde 768 hacia abajo una lista por
-  // etapa, que es donde se rompe. La bandeja de siempre queda detras de la otra pestana.
+  // El tablero de casos (T5, con la anatomia del de Plane en Orca) y las acciones del dueno
+  // (T6). Los estados que pide el rediseno van a los cuatro anchos, en los dos idiomas y los
+  // dos temas: a lo ancho son columnas y desde 768 hacia abajo la lista por etapa, que es
+  // donde se rompe. La bandeja de siempre queda detras de la otra pestana.
   {
     nombre: 'tablero-poblado', archivo: 'activity.html', anchos: ANCHOS,
     enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
@@ -514,12 +515,46 @@ const PANELES = [
     }))
   },
   {
-    nombre: 'tablero-vacio', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
-    guion: ABRIR_TABLERO, espera: 400, datos: conTablero(tableroDe([]))
+    // Una etapa elegida en la fila de arriba: queda solo "Su decision".
+    nombre: 'tablero-filtrado', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('#board-chips button[data-etapa="decision"]').click()`
   },
   {
-    // Una tarjeta en cada etapa menos "Su decision": la columna que dice que no hay nada
-    // que decidir es el estado sano y el mas comun.
+    // Buscar por el chat, sin la tilde: los casos de "Soporte — Cliente Norte".
+    nombre: 'tablero-busqueda', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    guion: ABRIR_TABLERO + `;
+      const c = document.getElementById('board-search');
+      c.value = 'norte'; c.dispatchEvent(new Event('input', { bubbles: true }))`
+  },
+  {
+    // La lista elegida a mano, tambien a lo ancho.
+    nombre: 'tablero-lista', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('#board-view button[data-vista="list"]').click()`
+  },
+  {
+    // El detalle de un caso abierto, con su texto entero, Jev y todas las acciones.
+    nombre: 'tablero-detalle', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="1"]').click()`
+  },
+  {
+    nombre: 'tablero-vacio', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400, datos: conTablero(tableroDe([]))
+  },
+  {
+    // El estado de error: una version del tablero que este panel no entiende.
+    nombre: 'tablero-version', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
+    datos: conTablero({ v: 2, updated_at: minutos(1), cards: [], counts: {} })
+  },
+  {
+    // Una tarjeta en cada etapa menos "Su decision": el estado sano y el mas comun.
     nombre: 'tablero-sin-decisiones', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
     guion: ABRIR_TABLERO, espera: 400,
     datos: conTablero(tableroDe(TABLERO_CASOS.filter((c) => c.stage !== 'decision')))
@@ -534,19 +569,20 @@ const PANELES = [
     guion: ABRIR_TABLERO, espera: 400, datos: conTablero(TABLERO_LARGO)
   },
   {
-    // "Ver todo" abierto.
-    nombre: 'tablero-ver-todo', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
-    guion: ABRIR_TABLERO + "; document.querySelector('.card-more').click()", espera: 400,
-    datos: conTablero(TABLERO_LARGO)
+    // Lo largo se lee entero en el detalle.
+    nombre: 'tablero-detalle-largo', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
+    guion: ABRIR_TABLERO + "; document.querySelector('.card[data-case=\"21\"]').click()",
+    espera: 400, datos: conTablero(TABLERO_LARGO)
   },
-  // Las acciones del dueno (T6) en cada uno de sus estados. Las cuatro tarjetas de decision
-  // son las que mas botones tienen, asi que son las que se rompen a 320 px.
+  // Las acciones del dueno (T6) en cada uno de sus estados: desde el detalle, salvo el
+  // Enviar de la tarjeta, que es el unico boton que la tarjeta lleva a la vista.
   {
-    // Editar y enviar: el editor abierto, con lo que el dueno esta escribiendo.
+    // Editar y enviar: el editor abierto en el detalle, con lo que el dueno esta escribiendo.
     nombre: 'tablero-accion-editar', archivo: 'activity.html', anchos: ANCHOS,
     enTodosLosAnchos: true,
     guion: ABRIR_TABLERO + `;
-      document.querySelector('.card[data-case="1"] button[data-accion="editar"]').click();
+      document.querySelector('.card[data-case="1"]').click();
+      document.querySelector('#board-detail button[data-accion="editar"]').click();
       const area = document.querySelector('.card-form textarea');
       area.value = 'Hola, gracias por avisar. El precio de renovación es el vigente y no ' +
         'podemos bajarlo; si quieres, lo revisamos en una llamada esta semana.';
@@ -557,7 +593,8 @@ const PANELES = [
     // Cerrar con motivo: el segundo formulario, el de un solo renglon.
     nombre: 'tablero-accion-cerrar', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
     guion: ABRIR_TABLERO + `;
-      document.querySelector('.card[data-case="5"] button[data-accion="cerrar"]').click();
+      document.querySelector('.card[data-case="5"]').click();
+      document.querySelector('#board-detail button[data-accion="cerrar"]').click();
       const motivo = document.querySelector('.card-form input');
       motivo.value = 'Ya lo resolvimos por teléfono';
       motivo.dispatchEvent(new Event('input', { bubbles: true }))`,
@@ -567,23 +604,26 @@ const PANELES = [
     // Reclasificar: la nota opcional, vacia.
     nombre: 'tablero-accion-reclasificar', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
     guion: ABRIR_TABLERO + `;
-      document.querySelector('.card[data-case="2"] button[data-accion="reclasificar"]').click()`,
+      document.querySelector('.card[data-case="2"]').click();
+      document.querySelector('#board-detail button[data-accion="reclasificar"]').click()`,
     espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS))
   },
   {
-    // Enviando: el worker tarda y todos los botones quedan quietos.
+    // Enviando desde la tarjeta: el worker tarda y todos los botones quedan quietos.
     nombre: 'tablero-accion-enviando', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
     guion: ABRIR_TABLERO + `;
-      document.querySelector('.card[data-case="1"] button[data-accion="enviar"]').click()`,
+      document.querySelector('.card[data-case="1"] .card-acts button[data-accion="enviar"]').click()`,
     espera: 500, datos: conTablero(tableroDe(TABLERO_CASOS)),
     stub: { veredictoAccion: { ok: true, code: 'enviado' }, demoraVeredicto: 600000 }
   },
   {
-    // La propuesta cambio mientras el dueno la miraba: el error dicho en la tarjeta.
+    // La propuesta cambio mientras el dueno la miraba: el error dicho en la tarjeta y en el
+    // detalle abierto.
     nombre: 'tablero-accion-error', archivo: 'activity.html', anchos: ANCHOS,
     enTodosLosAnchos: true,
     guion: ABRIR_TABLERO + `;
-      document.querySelector('.card[data-case="1"] button[data-accion="enviar"]').click()`,
+      document.querySelector('.card[data-case="1"]').click();
+      document.querySelector('#board-detail button[data-accion="enviar"]').click()`,
     espera: 1500, datos: conTablero(tableroDe(TABLERO_CASOS)),
     stub: { veredictoAccion: { ok: false, code: 'E_VERSION' }, demoraVeredicto: 0 }
   },
@@ -591,7 +631,7 @@ const PANELES = [
     // La linea de WhatsApp no esta: otro error, de wa-send y no del CLI de casos.
     nombre: 'tablero-accion-sin-linea', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
     guion: ABRIR_TABLERO + `;
-      document.querySelector('.card[data-case="3"] button[data-accion="enviar"]').click()`,
+      document.querySelector('.card[data-case="3"] .card-acts button[data-accion="enviar"]').click()`,
     espera: 1500, datos: conTablero(tableroDe(TABLERO_CASOS)),
     stub: { veredictoAccion: { ok: false, code: 'send-no-transport' }, demoraVeredicto: 0 }
   },
@@ -599,7 +639,7 @@ const PANELES = [
     // Enviado: lo bueno tambien se dice.
     nombre: 'tablero-accion-enviado', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
     guion: ABRIR_TABLERO + `;
-      document.querySelector('.card[data-case="3"] button[data-accion="enviar"]').click()`,
+      document.querySelector('.card[data-case="3"] .card-acts button[data-accion="enviar"]').click()`,
     espera: 1500, datos: conTablero(tableroDe(TABLERO_CASOS)),
     stub: { veredictoAccion: { ok: true, code: 'enviado' }, demoraVeredicto: 0 }
   },

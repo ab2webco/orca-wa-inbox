@@ -332,7 +332,7 @@
               transition: background-color 90ms ease, border-color 90ms ease; }
       .card:hover { background: color-mix(in srgb, var(--accent, var(--fb-accent)) 60%, var(--card, var(--fb-card))); }
       .card:focus-visible { outline: 1px solid var(--ring, var(--fb-ring)); outline-offset: 0; }
-      .card.elegida { background: var(--accent, var(--fb-accent));
+      .card.elegida { background: color-mix(in srgb, var(--accent, var(--fb-accent)) 55%, var(--card, var(--fb-card)));
               border-color: color-mix(in srgb, var(--ring, var(--fb-ring)) 60%, transparent); }
       /* Arriba: el numero `font-mono text-[11px] text-muted-foreground` y la prioridad
          `ml-auto text-[11px]`. Color solo para urgente y alta. */
@@ -485,6 +485,8 @@
         #board-shown { margin-left: auto; }
         .btn { min-height: 32px; padding: 0 12px; }
         .card.fila { grid-template-columns: 40px minmax(0, 1fr) auto; gap: 4px 8px; }
+        /* Con el detalle abierto justo debajo, la fila no repite lo que el detalle dice. */
+        .card.fila.elegida .fila-main > :not(.card-title):not(.card-meta) { display: none; }
       }
     </style>
   </head>
