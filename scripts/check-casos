@@ -421,6 +421,77 @@ with tempfile.TemporaryDirectory() as home:
     ok("la base con `caso` anterior gana la columna y sigue sirviendo",
        p[0]["etapa"] == "decision" and p[0]["aprobada"] is False, f"quedo {p}")
 
+
+# ── 4. El resultado del trabajador ───────────────────────────────────────────────
+# El agente desplegado termina con `caso resultado`: su respuesta es una propuesta
+# NUEVA, y la firma que lanzo el trabajo no puede servir para enviarla.
+def caso_en_trabajo(home, stanza="S1", chat=CHAT):
+    cid = caso_clasificado(home, stanza, chat)
+    v = js(home, "caso", "propuesta", cid, "--tipo", "trabajar", "--instrucciones",
+           "Corregir el login", "--actor", "agente")[0]["propuesta_version"]
+    js(home, "caso", "aprobar", cid, "--version", v, "--actor", "dueno")
+    return cid, v
+
+
+print("\nel resultado del trabajador")
+with tempfile.TemporaryDirectory() as home:
+    cid, v_trabajo = caso_en_trabajo(home)
+    r = js(home, "caso", "resultado", cid, "--respuesta", "Ya quedo el login.",
+           "--resumen", "Se corrigio la validacion del formulario.",
+           "--actor", "trabajador")[0]
+    ok("resultado pasa trabajo -> listo",
+       r["etapa"] == "listo", f"quedo {r}")
+    ok("la respuesta es la propuesta nueva, de tipo responder",
+       r["propuesta"] == {"tipo": "responder", "respuesta": "Ya quedo el login."},
+       f"propuesta {r['propuesta']}")
+    ok("con una version nueva", r["propuesta_version"] not in (None, v_trabajo)
+       and len(r["propuesta_version"]) == 64, f"version {r['propuesta_version']}")
+    ok("y sin la firma del trabajo: lo aprobado era otra cosa",
+       r["aprobada"] is False and r["propuesta_aprobada"] is None, f"quedo {r}")
+    ok("el resumen queda en el caso",
+       r["resumen"] == "Se corrigio la validacion del formulario.")
+    ev = js(home, "caso", "ver", cid)[0]["eventos"][-1]
+    ok("resultado deja su evento del trabajador con la version",
+       ev["de"] == "trabajo" and ev["a"] == "listo" and ev["actor"] == "trabajador"
+       and r["propuesta_version"] in ev["detalle"], f"evento {ev}")
+
+    eventos = cuenta(home, "select count(*) from caso_evento")
+    p = corre(home, "caso", "aprobar", cid, "--version", v_trabajo, "--actor", "dueno")
+    ok("la version del trabajo ya no se aprueba despues del resultado",
+       p.returncode != 0 and "version" in p.stderr, p.stderr.strip())
+    ok("y no escribe nada", cuenta(home, "select count(*) from caso_evento") == eventos
+       and js(home, "caso", "ver", cid)[0]["aprobada"] is False)
+    a = js(home, "caso", "aprobar", cid, "--version", r["propuesta_version"],
+           "--actor", "dueno")[0]
+    ok("la respuesta del resultado se aprueba con su version y queda en listo",
+       a["etapa"] == "listo" and a["aprobada"] is True, f"quedo {a}")
+
+    antes = cuenta(home, "select count(*) from caso_evento")
+    otra = js(home, "caso", "resultado", cid, "--respuesta", "Ya quedo el login.",
+              "--resumen", "Se corrigio la validacion del formulario.",
+              "--actor", "trabajador")[0]
+    ok("el mismo resultado dos veces (reintento del trabajador) no escribe",
+       otra["etapa"] == "listo" and otra["aprobada"] is True
+       and cuenta(home, "select count(*) from caso_evento") == antes)
+
+    ok("resultado sin respuesta se rechaza",
+       corre(home, "caso", "resultado", cid, "--resumen", "x", "--actor",
+             "trabajador").returncode != 0)
+    ok("resultado sin resumen se rechaza",
+       corre(home, "caso", "resultado", cid, "--respuesta", "x", "--actor",
+             "trabajador").returncode != 0)
+    ok("resultado solo lo firma el trabajador",
+       corre(home, "caso", "resultado", cid, "--respuesta", "x", "--resumen", "x",
+             "--actor", "agente").returncode != 0)
+    crudo = caso_clasificado(home, "S5")
+    eventos = cuenta(home, "select count(*) from caso_evento")
+    p = corre(home, "caso", "resultado", crudo, "--respuesta", "x", "--resumen", "x",
+              "--actor", "trabajador")
+    ok("un caso que no esta en trabajo no recibe resultado, y nada se escribe",
+       p.returncode != 0 and "clasificado" in p.stderr
+       and cuenta(home, "select count(*) from caso_evento") == eventos, p.stderr.strip())
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

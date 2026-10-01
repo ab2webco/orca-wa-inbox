@@ -2184,6 +2184,29 @@ def cmd_caso_aprobar(con, a):
     return [caso_fila(con, caso_de(con, a.id))]
 
 
+def cmd_caso_resultado(con, a):
+    """Lo que devuelve el agente desplegado: trabajo -> listo, con su respuesta como la
+    propuesta NUEVA (`responder`) y su resumen en el caso.
+
+    La firma del dueno se borra: lo que aprobo eran las instrucciones del trabajo, no
+    este texto, y enviar algo que nadie vio es lo que el tablero existe para impedir.
+    El mismo resultado dos veces (el trabajador reintenta) no escribe nada."""
+    caso = caso_de(con, a.id)
+    respuesta, resumen = (a.respuesta or "").strip(), (a.resumen or "").strip()
+    if not respuesta or not resumen:
+        sys.exit("a result needs --respuesta and --resumen: the owner reads the summary "
+                 "and approves the reply")
+    texto, version = propuesta_canonica({"tipo": "responder", "respuesta": respuesta})
+    if (caso["etapa"] == "listo" and caso["propuesta_version"] == version
+            and caso["resumen"] == resumen):
+        return [caso_fila(con, caso)]
+    caso_valida(caso, "listo")
+    caso_mover(con, caso, "listo", a.actor, f"responder {version}", propuesta=texto,
+               propuesta_version=version, propuesta_aprobada=None, resumen=resumen)
+    con.commit()
+    return [caso_fila(con, caso_de(con, a.id))]
+
+
 def cmd_caso_listar(con, a):
     sql, params = "select * from caso where account=?", [cuenta_activa()]
     if a.etapa:
@@ -2427,6 +2450,17 @@ def main():
     # Solo el dueno firma: un agente que aprobara lo suyo borraria el clic.
     c.add_argument("--actor", required=True, choices=["dueno"])
     c.set_defaults(fn=cmd_caso_aprobar)
+
+    c = caso("resultado", help="the deployed worker's result: trabajo -> listo, its reply "
+                               "becomes a new responder proposal (new version, approval "
+                               "cleared)")
+    c.add_argument("id", type=int)
+    c.add_argument("--respuesta", required=True, help="the reply the owner will approve")
+    c.add_argument("--resumen", required=True, help="what was done, for the card")
+    # Solo el trabajador: es su reporte, y cualquier otro firmandolo seria un resultado
+    # de un trabajo que no hizo.
+    c.add_argument("--actor", required=True, choices=["trabajador"])
+    c.set_defaults(fn=cmd_caso_resultado)
 
     c = caso("listar", help="the cases of the active line, newest first")
     c.add_argument("--etapa", choices=list(ETAPAS_CASO)); c.add_argument("--chat")
