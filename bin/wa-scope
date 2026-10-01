@@ -223,6 +223,7 @@ create table if not exists chat_scope (
   chat_name     text not null,         -- solo para mostrar; los nombres cambian y se repiten
   provider      text default 'plane',  -- plane | linear | github | ninguno
   target        text,                  -- proyecto (plane), team (linear), owner/repo (github)
+  workspace     text,                  -- el PROYECTO del catalogo (`project.id`); null = sin proyecto
   mode          text not null default 'off',
   initial_state text,                  -- columna del board donde cae el issue nuevo
   hours         text default 'L-V 08:00-18:00',
@@ -269,8 +270,19 @@ create table if not exists settings (key text primary key, value text);
 create table if not exists route (
   pattern  text primary key,   -- se busca en el texto, sin distinguir mayusculas
   provider text not null default 'plane',
-  target   text not null,
+  target   text not null,      -- '' cuando la regla solo manda a un proyecto
+  workspace text,              -- el PROYECTO al que va el caso (`project.id`)
   note     text,
+  updated_at text
+);
+-- Los proyectos que el dueno acepto en los ajustes: la lista que reparte el orquestador.
+-- La fuente es el storage del plugin (la escribe el worker); esta tabla es su espejo, para
+-- que los CLIs la vean aunque el storage no este (`proyectos_del_dueno`).
+create table if not exists project (
+  id   text primary key,
+  name text not null,
+  path text not null,
+  note text,
   updated_at text
 );
 -- Lo que esta en curso. Sin esto cada corrida empieza de cero y el agente repite
@@ -648,6 +660,11 @@ def persistir_panel(con):
             "instructions=coalesce(excluded.instructions, chat_scope.instructions), "
             "updated_at=excluded.updated_at",
             (cuenta_de_entrada(e), jid, *(fila[c] for c in cols)))
+        # El proyecto solo se toca si el panel lo dijo: una entrada de un panel anterior
+        # no trae la clave y no puede borrar el que se puso por terminal.
+        if "workspace" in e:
+            con.execute("update chat_scope set workspace=? where account=? and chat_jid=?",
+                        (id_proyecto(e.get("workspace")), cuenta_de_entrada(e), jid))
     con.commit()
 
 
@@ -663,7 +680,8 @@ def push_to_plugin(con, with_activity=False):
         # escribir ahi: el panel guardaba y la siguiente corrida lo perdia.
         scope[jid] = {"chatName": r.get("chat_name") or jid,
                       "provider": r.get("provider") or "plane",
-                      "target": r.get("target"), "mode": r.get("mode") or "off",
+                      "target": r.get("target"), "workspace": r.get("workspace"),
+                      "mode": r.get("mode") or "off",
                       "tone": r.get("tone"), "instructions": r.get("instructions"),
                       "updatedAt": r.get("updated_at"), "account": cuenta}
     activity = health = None
@@ -682,8 +700,7 @@ def push_to_plugin(con, with_activity=False):
         # El estado tambien se deja como estaba: None no escribe, y lo que se comprueba
         # ahi —la base, sqlite, el permiso— no cambia entre dos lecturas identicas.
         health = None if reusando else build_health()
-    routes = [dict(r) for r in con.execute(
-        "select pattern, provider, target, note from route order by pattern")]
+    routes = rutas_efectivas(con)
     # TODOS los ajustes que el panel muestra viajan de vuelta, no solo el tono. Si uno
     # vive nada mas en la base, el panel abre con el campo vacio y miente sobre lo que
     # rige: el dueno ve "sin nombre" teniendo owner_name puesto por terminal.
@@ -895,8 +912,9 @@ def merged_scope(con):
     # pero no autoriza nada aca: heredarlo fue la fuga de permisos que motivo esto.
     cuenta = cuenta_activa()
     rows = {r["chat_jid"]: dict(r) for r in con.execute(
-        "select account, chat_jid, chat_name, provider, target, mode, initial_state, "
-        "hours, tone, instructions, timezone, notes, updated_at from chat_scope "
+        "select account, chat_jid, chat_name, provider, target, workspace, mode, "
+        "initial_state, hours, tone, instructions, timezone, notes, updated_at "
+        "from chat_scope "
         "where account=?", (cuenta,))}
     for jid, e in plugin_store_read().items():
         # El panel guarda por jid, y cada entrada dice de que linea es (`account`; las
@@ -908,6 +926,11 @@ def merged_scope(con):
                "chat_name": e.get("chatName") or jid,
                "provider": e.get("provider") or "plane",
                "target": e.get("target"),
+               # El proyecto del panel manda, null incluido: el dueno que lo quita ahi
+               # lo quiere sin proyecto. Una entrada que no trae la clave es de un panel
+               # anterior, y ahi vale lo que la base ya sabia.
+               "workspace": (id_proyecto(e.get("workspace")) if "workspace" in e
+                             else rows.get(jid, {}).get("workspace")),
                "mode": e.get("mode") or "off",
                "updated_at": e.get("updatedAt")}
         # Misma regla que settings_from_plugin: una cadena vacia no es una eleccion.
@@ -936,6 +959,83 @@ def merged_settings(con):
             rows[r["key"]] = r["value"]
     rows.update(settings_from_plugin())
     return rows
+
+
+ID_PROYECTO = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+def id_proyecto(valor):
+    """El id de un proyecto, o None. Lo que no tiene la forma de un id no es un proyecto:
+    el panel lo escribe en storage y nadie mas lo valida antes de que lo lea un CLI."""
+    return valor if isinstance(valor, str) and ID_PROYECTO.match(valor) else None
+
+
+def proyectos_de_storage():
+    """El catalogo que dejo el worker en el storage del plugin, validado; None si el
+    storage no trae la clave (no hay worker, o es una maquina sin Orca abierto)."""
+    crudo = plugin_store_raw().get("projects")
+    if not isinstance(crudo, list):
+        return None
+    salida, vistos = [], set()
+    for p in crudo:
+        if not isinstance(p, dict):
+            continue
+        pid, ruta = id_proyecto(p.get("id")), p.get("path")
+        if not pid or pid in vistos or not isinstance(ruta, str) or not ruta.strip():
+            continue
+        vistos.add(pid)
+        nombre, nota = p.get("name"), p.get("note")
+        salida.append({"id": pid,
+                       "name": nombre.strip() if isinstance(nombre, str) and nombre.strip()
+                       else pid,
+                       "path": ruta.strip(),
+                       "note": nota.strip() if isinstance(nota, str) else ""})
+    return sorted(salida, key=lambda p: p["id"])
+
+
+def proyectos_del_dueno(con):
+    """Los proyectos que el dueno acepto, y la unica forma en que un CLI los ve.
+
+    La fuente es el storage del plugin; `project` en scope.db es su espejo. Con el
+    storage a la vista se espeja lo que dice (una lista vacia tambien: el dueno quito
+    todo). Sin la clave se sirve el ultimo espejo: un CLI que corre sin Orca abierto no
+    puede dejar sin proyecto a todas las conversaciones. El espejo solo se escribe si
+    cambio, y un fallo al escribirlo (base ocupada) no tumba la lectura."""
+    espejado = [dict(r) for r in con.execute(
+        "select id, name, path, coalesce(note, '') as note from project order by id")]
+    vigente = proyectos_de_storage()
+    if vigente is None or vigente == espejado:
+        return espejado if vigente is None else vigente
+    try:
+        con.execute("delete from project")
+        con.executemany("insert into project (id, name, path, note, updated_at) "
+                        "values (?,?,?,?,?)",
+                        [(p["id"], p["name"], p["path"], p["note"],
+                          time.strftime("%Y-%m-%d %H:%M")) for p in vigente])
+        con.commit()
+    except sqlite3.Error:
+        con.rollback()
+    return vigente
+
+
+def rutas_efectivas(con):
+    """Las reglas de texto que rigen: las de la base y, detras, las que el panel guardo.
+
+    Con solo las de la base, el sync empujaba al panel una lista SIN las reglas que el
+    panel acababa de escribir y las borraba. Mismo orden que el que ya usaba `where`: la
+    base manda cuando el mismo patron esta en las dos."""
+    reglas = [dict(r) for r in con.execute(
+        "select pattern, provider, target, workspace, note from route order by pattern")]
+    vistas = {r["pattern"] for r in reglas}
+    for r in routes_from_plugin():
+        patron = str(r.get("pattern") or "").lower() if isinstance(r, dict) else ""
+        if not patron or patron in vistas:
+            continue
+        vistas.add(patron)
+        reglas.append({"pattern": patron, "provider": r.get("provider") or "plane",
+                       "target": r.get("target") or "",
+                       "workspace": id_proyecto(r.get("workspace")), "note": r.get("note")})
+    return reglas
 
 
 def db():
@@ -968,6 +1068,12 @@ def migrate(con):
         if "plane_project" in cols:
             con.execute("update chat_scope set target = plane_project, "
                         "provider = coalesce(provider,'plane') where target is null")
+    # El proyecto por conversacion y por regla (T13). Solo columnas NUEVAS: provider, target
+    # e initial_state siguen donde estaban, sin uso en el panel y nunca se borran.
+    if "workspace" not in {r["name"] for r in con.execute("pragma table_info(chat_scope)")}:
+        con.execute("alter table chat_scope add column workspace text")
+    if "workspace" not in {r["name"] for r in con.execute("pragma table_info(route)")}:
+        con.execute("alter table route add column workspace text")
     # Una base creada por el primer commit del tablero ya tiene `caso` sin esta columna.
     caso_cols = {r["name"] for r in con.execute("pragma table_info(caso)")}
     if "propuesta_aprobada" not in caso_cols:
@@ -1009,7 +1115,7 @@ def migrate(con):
 # Las columnas que se copian al reconstruir chat_scope. Se nombran y no se hace
 # `select *`: con * el orden lo decide la tabla vieja y una version futura insertaria
 # el tono en la columna de las notas sin que nada avise.
-CHAT_SCOPE_COLS = ("chat_jid", "chat_name", "provider", "target", "mode",
+CHAT_SCOPE_COLS = ("chat_jid", "chat_name", "provider", "target", "workspace", "mode",
                    "initial_state", "hours", "tone", "instructions", "timezone",
                    "notes", "updated_at")
 
@@ -1160,14 +1266,29 @@ def cmd_set(con, a):
     cur = con.execute("select * from chat_scope where chat_jid=? and account=?",
                       (jid, cuenta_activa())).fetchone()
     cur = dict(cur) if cur else {}
+    # El proyecto: `--workspace <id>` lo pone, `--workspace ''` lo quita. Solo vale uno de
+    # los que el dueno acepto: un id inventado deja a la conversacion apuntando a nada.
+    workspace = cur.get("workspace")
+    if a.workspace is not None:
+        workspace = a.workspace.strip() or None
+        conocidos = [p["id"] for p in proyectos_del_dueno(con)]
+        if workspace and workspace not in conocidos:
+            sys.exit(f"unknown project: {workspace} (accepted: "
+                     f"{', '.join(conocidos) or 'none'}; the owner accepts projects in the "
+                     f"plugin settings)")
     vals = {
         # La linea vinculada AHORA (T9): autorizar es autorizar para este numero, y el
         # mismo grupo visto desde otro numero propio es otra autorizacion.
         "account": cuenta_activa(),
         "chat_jid": jid,
         "chat_name": name or cur.get("chat_name") or jid,
-        "provider": a.provider or cur.get("provider") or "plane",
+        # Sin servicio de tareas: una conversacion nueva que no nombra destino no abre
+        # tarjetas, que es lo que el dueno espera ahora que el panel ya no pregunta por
+        # Plane. Un destino explicito sigue implicando Plane, como siempre.
+        "provider": a.provider or cur.get("provider")
+                    or ("plane" if (a.target or a.project) else SIN_TARJETA),
         "target": a.target or a.project or cur.get("target"),
+        "workspace": workspace,
         "mode": a.mode or cur.get("mode") or "off",
         "initial_state": a.state or cur.get("initial_state"),
         "hours": a.hours or cur.get("hours") or "L-V 08:00-18:00",
@@ -1195,6 +1316,13 @@ def cmd_set(con, a):
                     {','.join(f'{k}=excluded.{k}' for k in vals if k not in llave)}""",
                 list(vals.values()))
     con.commit()
+    # Lo que se acaba de decir por terminal tambien se corrige en la entrada del panel:
+    # `persistir_panel` le da la razon al panel, y su entrada trae el proyecto de antes.
+    if a.workspace is not None:
+        store = plugin_store_read()
+        if jid in store and cuenta_de_entrada(store[jid]) == cuenta_activa():
+            store[jid] = dict(store[jid], workspace=workspace)
+            plugin_store_write(store, agent_name_of(con))
     push_to_plugin(con)
     return [vals]
 
@@ -1245,6 +1373,7 @@ def cmd_check(con, a):
            "mode": mode, "requested": a.for_, "allowed": allowed,
            "provider": row["provider"] if row else None,
            "target": row["target"] if row else None,
+           "workspace": row.get("workspace") if row else None,
            "reason": ("ok" if allowed else
                       "not in the registry" if not row else
                       f"mode {mode} is not enough for {a.for_}")}
@@ -1393,47 +1522,72 @@ def cmd_route(con, a):
         con.commit()
         return [{"removed": a.remove}]
     if a.match:
-        if not a.target:
-            sys.exit("--target is missing")
-        con.execute("insert into route (pattern,provider,target,note,updated_at) "
-                    "values (?,?,?,?,?) on conflict(pattern) do update set "
+        if not a.target and not a.workspace:
+            sys.exit("a rule needs --workspace (the project the case goes to) or --target")
+        if a.workspace and a.workspace not in [p["id"] for p in proyectos_del_dueno(con)]:
+            sys.exit(f"unknown project: {a.workspace}")
+        con.execute("insert into route (pattern,provider,target,workspace,note,updated_at) "
+                    "values (?,?,?,?,?,?) on conflict(pattern) do update set "
                     "provider=excluded.provider, target=excluded.target, "
+                    "workspace=excluded.workspace, "
                     "note=excluded.note, updated_at=excluded.updated_at",
-                    (a.match.lower(), a.provider or "plane", a.target, a.note,
-                     time.strftime("%Y-%m-%d %H:%M")))
+                    (a.match.lower(), a.provider or "plane", a.target or "",
+                     a.workspace or None, a.note, time.strftime("%Y-%m-%d %H:%M")))
         con.commit()
-    return [dict(r) for r in con.execute(
-        "select pattern, provider, target, note from route order by pattern")]
+    return rutas_efectivas(con)
 
 
 def resolve_target(con, text, chat_jid=None):
     """El contenido manda sobre el chat. Si el mensaje nombra a un cliente que tiene su
-    propio board, va ahi; el destino del chat es el fallback, no la regla.
+    propio proyecto, va ahi; el proyecto del chat es el fallback, no la regla.
 
-    Con una excepcion que gana sobre todo: una conversacion en "ninguno" no abre
-    tarjetas. Si una regla de contenido pudiera pisarla, marcarla no serviria de nada."""
+    El proyecto (`workspace`) y el destino viejo (`provider`/`target`, de Plane) se
+    resuelven por separado: una regla puede mandar a un proyecto sin tocar el destino
+    que el chat ya tenia.
+
+    El destino viejo conserva una excepcion que gana sobre todo: una conversacion en
+    "ninguno" no abre tarjetas. Si una regla de contenido pudiera pisarla, marcarla no
+    serviria de nada."""
     entry = merged_scope(con).get(chat_jid) if chat_jid else None
-    if entry and (entry.get("provider") or "plane") == SIN_TARJETA:
-        return {"provider": SIN_TARJETA, "target": None,
-                "why": "the conversation is set to 'ninguno': it opens no cards",
-                "matched": None}
     low = (text or "").lower()
-    rules = [dict(r) for r in con.execute(
-        "select pattern, provider, target, note from route")]
-    seen = {r["pattern"] for r in rules}
-    rules += [r for r in routes_from_plugin()
-              if r.get("pattern") and r["pattern"].lower() not in seen]
-    for r in rules:
-        pattern = (r.get("pattern") or "").lower()
-        if pattern and pattern in low:
-            return {"provider": r.get("provider") or "plane", "target": r.get("target"),
-                    "why": f"the message says {pattern!r}", "matched": pattern}
+    regla = None
+    for r in rutas_efectivas(con):
+        patron = (r.get("pattern") or "").lower()
+        if patron and patron in low:
+            regla = dict(r, pattern=patron)
+            break
+    # El proyecto: el de la regla que dijo el mensaje, si no el de la conversacion. Solo
+    # cuenta si el dueno todavia lo tiene aceptado; uno que quito no resuelve, pero
+    # tampoco se borra de la conversacion (puede volver) y el motivo lo dice.
+    pedido = (regla or {}).get("workspace") or (entry or {}).get("workspace")
+    del_regla = bool((regla or {}).get("workspace"))
+    proyecto = next((p for p in proyectos_del_dueno(con) if p["id"] == pedido), None) \
+        if pedido else None
+    ws = {"workspace": proyecto["id"] if proyecto else None,
+          "workspace_name": proyecto["name"] if proyecto else None,
+          "workspace_path": proyecto["path"] if proyecto else None}
+    if pedido and not proyecto:
+        ws["workspace_why"] = f"project {pedido} is no longer in the accepted list"
+    elif proyecto:
+        ws["workspace_why"] = (f"the message says {regla['pattern']!r}" if del_regla
+                               else "the chat's project")
+    if entry and (entry.get("provider") or "plane") == SIN_TARJETA:
+        return {"provider": SIN_TARJETA, "target": None, **ws,
+                "why": "the conversation is set to 'ninguno': it opens no cards",
+                "matched": regla["pattern"] if del_regla and proyecto else None}
+    if regla and regla.get("target"):
+        return {"provider": regla.get("provider") or "plane", "target": regla["target"],
+                **ws, "why": f"the message says {regla['pattern']!r}",
+                "matched": regla["pattern"]}
     if entry and entry.get("target"):
         return {"provider": entry.get("provider") or "plane",
-                "target": entry["target"],
-                "why": "the chat's default destination", "matched": None}
-    return {"provider": None, "target": None,
-            "why": "no destination: neither a rule nor a chat default", "matched": None}
+                "target": entry["target"], **ws,
+                "why": "the chat's default destination",
+                "matched": regla["pattern"] if del_regla and proyecto else None}
+    return {"provider": None, "target": None, **ws,
+            "why": (ws.get("workspace_why") if proyecto
+                    else "no destination: neither a rule nor a chat default"),
+            "matched": regla["pattern"] if del_regla and proyecto else None}
 
 
 def cmd_runtime_home(con, a):
@@ -1446,6 +1600,12 @@ def cmd_runtime_home(con, a):
     return [{"path": casa["path"], "tried": casa["tried"],
              "reachable": casa["reachable"], "source": casa["source"],
              "cli": orca_cli_path()}]
+
+
+def cmd_projects(con, a):
+    """La lista de proyectos que reparte el orquestador. Solo lectura: el dueno acepta y
+    quita proyectos en los ajustes del plugin, no por terminal."""
+    return proyectos_del_dueno(con)
 
 
 def cmd_where(con, a):
@@ -1818,6 +1978,7 @@ def cmd_voice(con, a):
              # necesita decidir es si abre tarjeta o no.
              "opens_card": provider != SIN_TARJETA,
              "target": row.get("target") or None,
+             "workspace": row.get("workspace") or None,
              "mode": row.get("mode") or "off"}]
 
 
@@ -2676,13 +2837,15 @@ def caso_enruta(con, case_id, texto, chat):
         return False
     destino = resolve_target(con, texto, chat)
     nueva = {"provider": destino["provider"], "target": destino["target"],
+             "workspace": destino["workspace"],
              "why": destino["why"], "matched": destino["matched"]}
     actual = json.loads(caso["ruta"]) if caso["ruta"] else None
     if actual is not None and (not nueva["matched"]
                                or nueva["matched"] == actual.get("matched")):
         return False
     caso_tocar(con, caso, "automatizacion",
-               f"ruta {nueva['provider'] or 'sin destino'}:{nueva['target'] or '-'}",
+               f"ruta {nueva['provider'] or 'sin destino'}:{nueva['target'] or '-'}"
+               f"{' proyecto ' + nueva['workspace'] if nueva['workspace'] else ''}",
                ruta=json.dumps(nueva, ensure_ascii=False, sort_keys=True))
     return True
 
@@ -3080,6 +3243,9 @@ def main():
                         f"{SIN_TARJETA} = opens none")
     s.add_argument("--target", help="project (plane), team (linear) or owner/repo (github)")
     s.add_argument("--project", help="alias of --target, kept for compatibility")
+    s.add_argument("--workspace", metavar="PROJECT",
+                   help="the project the work of this chat goes to: an id from "
+                        "`wa-scope projects`; an empty value clears it")
     s.add_argument("--mode")
     s.add_argument("--state"); s.add_argument("--hours"); s.add_argument("--timezone")
     s.add_argument("--notes")
@@ -3154,10 +3320,16 @@ def main():
     s = add("route", help="destination rules by content; the chat is only the fallback")
     s.add_argument("--match", help="text that has to appear in the message")
     s.add_argument("--provider", choices=list(PROVIDERS)); s.add_argument("--target")
+    s.add_argument("--workspace", metavar="PROJECT",
+                   help="the project the case goes to: an id from `wa-scope projects`")
     s.add_argument("--note"); s.add_argument("--remove")
     s.set_defaults(fn=cmd_route)
 
-    s = add("where", help="where the card would go for this text, and why")
+    add("projects", help="the projects the owner accepted in the plugin settings: "
+                         "id, name, path and what each is for"
+        ).set_defaults(fn=cmd_projects)
+
+    s = add("where", help="the project (and the old card destination) this text goes to, and why")
     s.add_argument("text"); s.add_argument("--chat")
     s.set_defaults(fn=cmd_where)
 
