@@ -639,6 +639,7 @@
           <div class="actions">
             <button id="jev-save-key" data-t="jevSaveKey"></button>
             <button id="jev-remove-key" hidden data-t="jevRemoveKey"></button>
+            <button id="jev-use-saved" hidden data-t="jevUseSaved"></button>
             <span class="said" id="said-jev-key"></span>
           </div>
           <p class="hint jev-nota" id="jev-mirror-note" hidden></p>
@@ -859,6 +860,8 @@
           chatAlready: "ya autorizada: {m}",
           scopeRmFail: "No se pudo quitar la autorizacion, asi que sigue en pie. " +
             "Intente de nuevo.",
+          routeRmFail: "No se pudo quitar la regla, asi que sigue en pie. Intente de nuevo.",
+          routeRmBadPattern: "Esa regla no tiene un texto valido, asi que no se quito.",
           chatToneLabel: "Como escribe aca (opcional)",
           chatTonePh: "vacio = usa el tono global",
           chatInstrLabel: "Que hace aca (opcional)",
@@ -991,6 +994,8 @@
           jevStOnYes: 'Encendido · llave guardada',
           jevMirrorForeign: 'Hay un archivo de llave en <code>~/.wa-inbox/jev.env</code> que no escribio el plugin, y por eso las herramientas no lo usan. Escriba la llave aqui arriba y guardela para reemplazarlo.',
           jevMirrorFail: 'No se pudo escribir el archivo de llave. Intente de nuevo; si sigue igual, revise el registro del plugin.',
+          jevMirrorForeignSaved: 'Hay un archivo de llave en <code>~/.wa-inbox/jev.env</code> que no escribio el plugin, y por eso las herramientas no lo usan. Ya hay una llave guardada: use el boton para reemplazar el archivo con ella.',
+          jevUseSaved: 'Usar la llave guardada',
           jevKeyEmpty: 'Escriba la llave primero.',
           jevKeySaved: 'Llave guardada',
           jevKeyRemoved: 'Llave quitada',
@@ -1020,7 +1025,7 @@
             'No hace falta que haga nada mas.',
           hTransportSilent: 'Su linea no da senal',
           hTransportSilentHow: 'La linea esta enlazada pero nadie esta leyendo ' +
-            'WhatsApp ahora. Reintente la conexion aca abajo.',
+            'WhatsApp ahora. Apriete "Comprobar ahora" aca abajo para ver si ya hay senal.',
           hTranscribe: 'Transcripcion de audio',
           hUnknown: 'No se pudo verificar el estado',
           howTranscribeMissingTool: 'Falta bin/wa-transcribe dentro del plugin',
@@ -1189,6 +1194,8 @@
           chatAlready: "already authorised: {m}",
           scopeRmFail: "The authorisation could not be removed, so it is still in " +
             "force. Try again.",
+          routeRmFail: "The rule could not be removed, so it is still in force. Try again.",
+          routeRmBadPattern: "That rule has no valid text, so it was not removed.",
           chatToneLabel: "How it writes here (optional)",
           chatTonePh: "empty = use the global tone",
           chatInstrLabel: "What it does here (optional)",
@@ -1317,6 +1324,8 @@
           jevStOnYes: 'On · key saved',
           jevMirrorForeign: 'There is a key file at <code>~/.wa-inbox/jev.env</code> that the plugin did not write, so the tools ignore it. Enter the key above and save it to replace the file.',
           jevMirrorFail: 'The key file could not be written. Try again; if it keeps failing, check the plugin log.',
+          jevMirrorForeignSaved: 'There is a key file at <code>~/.wa-inbox/jev.env</code> that the plugin did not write, so the tools ignore it. There is already a saved key: use the button to replace the file with it.',
+          jevUseSaved: 'Use the saved key',
           jevKeyEmpty: 'Enter the key first.',
           jevKeySaved: 'Key saved',
           jevKeyRemoved: 'Key removed',
@@ -1345,7 +1354,7 @@
             'There is nothing else for you to do.',
           hTransportSilent: 'Your line gives no signal',
           hTransportSilentHow: 'The line is linked but nothing is reading WhatsApp ' +
-            'right now. Retry the connection below.',
+            'right now. Press "Check now" below to see whether the signal is back.',
           hTranscribe: 'Audio transcription',
           hUnknown: 'Could not check the status',
           howTranscribeMissingTool: 'bin/wa-transcribe is missing from the plugin',
@@ -1466,7 +1475,7 @@
           'precisa fazer mais nada.',
         hTransportSilent: 'A sua linha nao da sinal',
         hTransportSilentHow: 'A linha esta vinculada mas ninguem esta lendo o ' +
-          'WhatsApp agora. Tente a conexao de novo aqui embaixo.',
+          'WhatsApp agora. Aperte "Verificar agora" aqui embaixo para ver se o sinal voltou.',
         hTranscribe: 'Transcricao de audio',
         hUnknown: 'Nao foi possivel verificar o estado',
         howTranscribeMissingTool: 'Falta bin/wa-transcribe dentro do plugin',
@@ -1580,6 +1589,8 @@
         chatAlready: 'ja autorizada: {m}',
         scopeRmFail: 'Nao foi possivel remover a autorizacao, entao ela continua ' +
           'valendo. Tente de novo.',
+        routeRmFail: 'Nao foi possivel remover a regra, entao ela continua valendo. Tente de novo.',
+        routeRmBadPattern: 'Essa regra nao tem um texto valido, entao nao foi removida.',
         kindGroup: 'Grupo', kindDirect: 'Direto',
         scopeLegend: 'Conversas autorizadas',
         scopeHelp: 'O seu agente so ve as que estao aqui. Cada uma tem o seu projeto e o seu modo.',
@@ -1668,6 +1679,8 @@
         jevStOnYes: 'Ligado · chave salva',
         jevMirrorForeign: 'Ha um arquivo de chave em <code>~/.wa-inbox/jev.env</code> que o plugin nao escreveu, por isso as ferramentas o ignoram. Digite a chave acima e salve para substituir o arquivo.',
         jevMirrorFail: 'Nao foi possivel escrever o arquivo de chave. Tente de novo; se continuar, veja o registro do plugin.',
+        jevMirrorForeignSaved: 'Ha um arquivo de chave em <code>~/.wa-inbox/jev.env</code> que o plugin nao escreveu, por isso as ferramentas o ignoram. Ja ha uma chave salva: use o botao para substituir o arquivo por ela.',
+        jevUseSaved: 'Usar a chave salva',
         jevKeyEmpty: 'Digite a chave primeiro.',
         jevKeySaved: 'Chave salva',
         jevKeyRemoved: 'Chave removida',
@@ -2024,7 +2037,7 @@
         // Desvincular y reintentar dejan un pedido que solo el worker puede atender: sin
         // nadie del otro lado son el mismo silencio de 45 s que este aviso reemplaza.
         var dependen = ['sync-retry', 'pairing-unlink', 'pairing-retry', 'jev-save-key',
-          'jev-remove-key', 'jev-enabled', 'chat-fetch']
+          'jev-remove-key', 'jev-use-saved', 'jev-enabled', 'chat-fetch']
         dependen.forEach(function (id) {
           var b = el(id)
           if (b) b.disabled = !!sinWorker
@@ -3110,14 +3123,41 @@
 
         Array.prototype.forEach.call(el('routes-wrap').querySelectorAll('[data-rrm]'), function (b) {
           b.addEventListener('click', function () {
-            var next = rules.slice()
-            var gone = next.splice(Number(b.dataset.rrm), 1)[0]
-            write('routes', next).then(function () {
-              renderRoutes(next)
-              said('said-route', '✓ ' + t('removedOk') + ': ' + (gone && gone.pattern))
-            })
+            var gone = rules[Number(b.dataset.rrm)]
+            if (gone) removeRoute(gone.pattern, b)
           })
         })
+      }
+
+      var ROUTE_HOW_KEY = {
+        'sin-herramientas': 'syncNoTools',
+        'sin-permiso': 'syncNoPerm',
+        'patron-invalido': 'routeRmBadPattern'
+      }
+
+      /** Quitar una regla de texto. NO la borra el panel: se la pide al worker.
+       *
+       *  Las reglas creadas con el CLI viven en `scope.db` y cada sync las vuelve a empujar
+       *  al `routes` del panel: borrar solo de ahi las dejaba reaparecer ("plane / ATTUS
+       *  regla vieja" no se iba nunca). `wa-scope route --remove` borra la de la base y el
+       *  worker, la del storage. Y no se dice nada hasta que contesta: el veredicto que
+       *  llega antes que el trabajo no es un veredicto. */
+      function removeRoute (pattern, boton) {
+        var pedir = pedirAlWorker('scopeRequest', 'scopeResult',
+          { action: 'regla-quitar', pattern: pattern }).then(function (v) {
+          if (!v) { said('said-route', t('pairingNoAnswer'), true); return }
+          if (!v.ok) {
+            said('said-route', porCodigo(ROUTE_HOW_KEY, v.code, '') || t('routeRmFail'), true)
+            return
+          }
+          said('said-route', '✓ ' + t('removedOk') + ': ' + pattern)
+          // El worker ya dejo el storage sin la regla: se relee y se repinta con eso, no
+          // con la copia de antes, que la dejaria en pantalla.
+          return read('routes', true).then(function (v2) {
+            if (hayRespuesta(v2)) renderRoutes(v2 || [])
+          })
+        })
+        return boton ? busy(boton, pedir) : pedir
       }
 
       el('save-route').addEventListener('click', function (event) {
@@ -3662,10 +3702,14 @@
         // Un archivo de llave que no escribio el plugin no se toca solo: el lector lo trata
         // como "sin llave", y el usuario tiene que saber por que no anda.
         var nota = el('jev-mirror-note')
-        var clave = s.mirror === 'ajeno' ? 'jevMirrorForeign'
+        // Con la llave ya guardada no hay nada que reescribir: se ofrece usarla, que es lo
+        // mismo que encender el interruptor (el worker reemplaza el archivo ajeno).
+        var ajeno = s.mirror === 'ajeno'
+        var clave = ajeno ? (keySet ? 'jevMirrorForeignSaved' : 'jevMirrorForeign')
           : s.mirror === 'fallo' ? 'jevMirrorFail' : ''
         nota.hidden = !clave
         nota.innerHTML = clave ? t(clave) : ''
+        el('jev-use-saved').hidden = !(ajeno && keySet)
         pintarChecklist()
       }
 
@@ -3700,6 +3744,15 @@
           // El campo se vacia solo si se guardo: ante un fallo la llave se queda para
           // corregirla, que es lo que el usuario necesita.
           if (jevDecir('said-jev-key', v, 'jevKeySaved')) el('jev-key').value = ''
+          return jevRefrescar()
+        }))
+      })
+
+      // Encender con la llave en la boveda es el gesto que reemplaza un archivo ajeno: el
+      // boton manda exactamente ese pedido, sin llave (el panel nunca la tiene).
+      el('jev-use-saved').addEventListener('click', function (event) {
+        busy(event.currentTarget, pedirJev({ action: 'activar', enabled: true }).then(function (v) {
+          jevDecir('said-jev-key', v, 'jevSaved')
           return jevRefrescar()
         }))
       })

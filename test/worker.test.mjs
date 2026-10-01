@@ -1797,6 +1797,150 @@ console.log('\nworker: desvincular espera a que el sidecar viejo muera antes de 
 }
 
 
+// ───────── quitar una regla de texto: el panel pide, el worker borra en LOS DOS lados ──
+// Las reglas que se crean con el CLI viven en `scope.db` (tabla `route`) y el sync las
+// vuelve a empujar al panel (`rutas_efectivas`). Quitar la fila solo del storage del
+// panel dejaba la de la base debajo: la regla "vieja" reaparecia en el siguiente sync.
+console.log('\nworker: quitar una regla de texto la saca de la base y del storage')
+{
+  const dir = herramientas('regla-bueno', [
+    '#!/bin/sh',
+    'if [ "$1" = "route" ]; then',
+    '  echo "$@" >> "$0.llamadas"',
+    '  echo \'[{"removed": true}]\'',
+    '  exit 0',
+    'fi',
+    'echo \'[{"synced": true, "destinos": []}]\'',
+    ''
+  ].join('\n'))
+  const llamadas = () => existsSync(join(dir, 'wa-scope.llamadas'))
+    ? readFileSync(join(dir, 'wa-scope.llamadas'), 'utf8') : ''
+  const orca = hostFalso(dir, {
+    chats: [],
+    routes: [
+      { pattern: 'attus', provider: 'plane', target: 'ATT', note: 'regla vieja' },
+      { pattern: 'acme', workspace: 'alfa-demo' }
+    ]
+  })
+  const { apagar } = await arranca(orca)
+  const pedir = async (id, extra) => {
+    orca.store.scopeRequest = { id, at: new Date().toISOString(), ...extra }
+    await hasta(() => orca.store.scopeResult && orca.store.scopeResult.requestId === id, 15000)
+    return orca.store.scopeResult
+  }
+
+  let v = await pedir('regla-1', { action: 'regla-quitar', pattern: '  ATTUS ' })
+  ok('el worker contesta con un codigo estable',
+    v && v.ok === true && v.code === 'regla-quitada', JSON.stringify(v))
+  ok('corrio `wa-scope route --remove` con el patron limpio y en minusculas',
+    /^route --remove=attus$/m.test(llamadas()), JSON.stringify(llamadas()))
+  ok('la regla ya no esta en el storage del panel y las demas siguen',
+    Array.isArray(orca.store.routes) && orca.store.routes.length === 1 &&
+    orca.store.routes[0].pattern === 'acme', JSON.stringify(orca.store.routes))
+  ok('borra el pedido: un clic quita una vez', orca.store.scopeRequest === null)
+
+  // Una regla que solo existe en el storage (el CLI borra cero filas y sale con 0).
+  orca.store.routes = [{ pattern: 'solo-panel', workspace: 'alfa-demo' },
+    { pattern: 'acme', workspace: 'alfa-demo' }]
+  v = await pedir('regla-2', { action: 'regla-quitar', pattern: 'solo-panel' })
+  ok('una regla que solo esta en el storage tambien se quita',
+    v && v.ok === true && orca.store.routes.length === 1 &&
+    orca.store.routes[0].pattern === 'acme', JSON.stringify([v, orca.store.routes]))
+
+  // Un patron que no es un patron nunca llega a la linea de comandos.
+  const antes = llamadas()
+  for (const [id, malo] of [['regla-m1', ''], ['regla-m2', '   '], ['regla-m3', 42],
+    ['regla-m4', 'x'.repeat(300)], ['regla-m5', 'a\nb'], ['regla-m6', null]]) {
+    v = await pedir(id, { action: 'regla-quitar', pattern: malo })
+    ok(`un patron invalido se rechaza con codigo (${JSON.stringify(malo).slice(0, 12)})`,
+      v && v.ok === false && v.code === 'patron-invalido', JSON.stringify(v))
+  }
+  ok('y no corrio nada', llamadas() === antes, JSON.stringify(llamadas()))
+  ok('ni toco las reglas', orca.store.routes.length === 1, JSON.stringify(orca.store.routes))
+  apagar()
+}
+
+{
+  // Sin lista de reglas legible NO se escribe una lista vacia: borraria todas por culpa
+  // de una lectura fallida.
+  const dir = herramientas('regla-sin-lista', [
+    '#!/bin/sh', 'echo \'[{"removed": true}]\'', ''].join('\n'))
+  const orca = hostFalso(dir, { chats: [] })
+  const { apagar } = await arranca(orca)
+  orca.store.scopeRequest = { id: 'regla-sl', action: 'regla-quitar', pattern: 'attus',
+    at: new Date().toISOString() }
+  await hasta(() => orca.store.scopeResult && orca.store.scopeResult.requestId === 'regla-sl',
+    15000)
+  ok('con la base quitada y sin lista en el storage contesta que si',
+    orca.store.scopeResult && orca.store.scopeResult.ok === true,
+    JSON.stringify(orca.store.scopeResult))
+  ok('y no inventa una lista vacia', !('routes' in orca.store), JSON.stringify(orca.store.routes))
+  apagar()
+}
+
+{
+  // El CLI que no esta: decirlo, y NO quitar la regla del storage (seguiria viva en la
+  // base y el panel diria que se fue).
+  const orca = hostFalso(herramientas('regla-sin-cli', null), {
+    chats: [], routes: [{ pattern: 'attus', provider: 'plane', target: 'ATT' }]
+  })
+  const { apagar } = await arranca(orca)
+  orca.store.scopeRequest = { id: 'regla-mal', action: 'regla-quitar', pattern: 'attus',
+    at: new Date().toISOString() }
+  await hasta(() => orca.store.scopeResult && orca.store.scopeResult.requestId === 'regla-mal',
+    15000)
+  const v = orca.store.scopeResult
+  ok('si no puede correr el CLI, lo dice con el codigo estable',
+    v && v.ok === false && v.code === 'sin-herramientas', JSON.stringify(v))
+  ok('y la regla sigue en el storage, sin fingir que se fue',
+    orca.store.routes.length === 1, JSON.stringify(orca.store.routes))
+  apagar()
+}
+
+{
+  // El recorrido de verdad: la base real de `wa-scope` en un HOME temporal. Una regla
+  // creada con el CLI, quitada por el worker, NO vuelve con el siguiente `wa-scope sync`.
+  const CLI = join(PLUGIN_DIR, 'bin', 'wa-scope')
+  const dir = herramientas('regla-real', `#!/bin/sh\nexec "${CLI}" "$@"\n`)
+  const man = JSON.parse(readFileSync(join(PLUGIN_DIR, 'orca-plugin.json'), 'utf8'))
+  const base = process.platform === 'darwin'
+    ? join(process.env.HOME, 'Library', 'Application Support', 'orca')
+    : join(process.env.HOME, '.config', 'orca')
+  const almacen = join(base, 'plugins-data', `${man.publisher}.${man.id}`, 'storage.json')
+  mkdirSync(dirname(almacen), { recursive: true })
+  const cli = (...args) => new Promise((resolve, reject) => {
+    execFileNode(CLI, args, { env: process.env, timeout: 60000 }, (error, stdout) =>
+      error ? reject(error) : resolve(stdout))
+  })
+  const reglasDelAlmacen = () => (JSON.parse(readFileSync(almacen, 'utf8')).routes || [])
+    .map((r) => r.pattern)
+
+  rmSync(join(process.env.HOME, '.wa-inbox'), { recursive: true, force: true })
+  await cli('route', '--match', 'attus', '--provider', 'plane', '--target', 'ATT',
+    '--note', 'regla vieja')
+  writeFileSync(almacen, JSON.stringify({}))
+  await cli('sync')
+  ok('antes de quitar, el sync empuja la regla de la base al panel',
+    reglasDelAlmacen().includes('attus'), JSON.stringify(reglasDelAlmacen()))
+
+  const orca = hostFalso(dir, { chats: [], routes: [{ pattern: 'attus', provider: 'plane',
+    target: 'ATT', note: 'regla vieja' }] })
+  const { apagar } = await arranca(orca)
+  orca.store.scopeRequest = { id: 'regla-real', action: 'regla-quitar', pattern: 'ATTUS',
+    at: new Date().toISOString() }
+  await hasta(() => orca.store.scopeResult && orca.store.scopeResult.requestId === 'regla-real',
+    30000)
+  ok('el worker quita la regla con el CLI real',
+    orca.store.scopeResult && orca.store.scopeResult.ok === true,
+    JSON.stringify(orca.store.scopeResult))
+  apagar()
+  // Lo que Orca persistiria del storage del panel, y el sync que corre cada pocos minutos.
+  writeFileSync(almacen, JSON.stringify({ routes: orca.store.routes }))
+  await cli('sync')
+  ok('despues de un `wa-scope sync` la regla quitada sigue quitada',
+    !reglasDelAlmacen().includes('attus'), JSON.stringify(reglasDelAlmacen()))
+}
+
 // ───────── la llave de Jev es del plugin y el espejo lo escribe el worker ─────────
 console.log('\nworker: la llave de Jev, su espejo 0600 y el aviso de que no es obligatoria')
 {
@@ -1883,24 +2027,42 @@ console.log('\nworker: la llave de Jev, su espejo 0600 y el aviso de que no es o
     orca.store.jevStatus.mirror === 'sin-llave', JSON.stringify(orca.store.jevStatus))
 
   // Un archivo sin la cabecera NO es nuestro —alguien lo copio a mano—: el lector de
-  // Python lo trata como "sin llave", y el worker no lo borra ni lo pisa por su cuenta.
+  // Python lo trata como "sin llave". Lo que el worker hace por su cuenta (apagar, quitar
+  // la llave) no lo borra ni lo pisa; lo que el dueno pide con un gesto explicito
+  // (encender el interruptor, guardar la llave) SI lo reemplaza con el espejo.
   const AJENO = 'TYPESAFE_API_KEY=copiada-a-mano\n'
+  const ESPEJO = `${CABECERA}\nTYPESAFE_API_KEY=${LLAVE}\n`
   writeFileSync(espejo, AJENO, { mode: 0o600 })
   orca.secrets.jevKey = LLAVE
-  v = await pedir('jev-ajeno-1', { action: 'activar', enabled: true })
-  ok('con un archivo ajeno, encender no lo pisa y el estado lo dice',
-    contenido() === AJENO && orca.store.jevStatus.mirror === 'ajeno',
-    JSON.stringify([contenido(), orca.store.jevStatus]))
   v = await pedir('jev-ajeno-2', { action: 'activar', enabled: false })
-  ok('apagar tampoco borra el archivo ajeno', contenido() === AJENO, JSON.stringify(contenido()))
-  await pedir('jev-ajeno-3', { action: 'activar', enabled: true })
+  ok('apagar no borra el archivo ajeno', contenido() === AJENO, JSON.stringify(contenido()))
   v = await pedir('jev-ajeno-4', { action: 'quitar-llave' })
   ok('quitar la llave tampoco borra el archivo ajeno', contenido() === AJENO,
     JSON.stringify(contenido()))
+  orca.secrets.jevKey = LLAVE
+  // El caso del dueno: guardo la llave con Jev apagado (no se escribio espejo) y despues
+  // encendio el interruptor. Encender es un gesto explicito: reemplaza el archivo ajeno.
+  v = await pedir('jev-ajeno-1', { action: 'activar', enabled: true })
+  ok('encender el interruptor con llave en la boveda reemplaza el archivo ajeno',
+    v && v.ok === true && contenido() === ESPEJO && orca.store.jevStatus.mirror === 'activo',
+    JSON.stringify([v, contenido(), orca.store.jevStatus]))
+  ok('y el archivo nuevo empieza por la cabecera del plugin',
+    (contenido() || '').split('\n')[0] === CABECERA, JSON.stringify(contenido()))
+  ok('sin que la llave aparezca en el veredicto ni en el estado',
+    !JSON.stringify([v, orca.store.jevStatus]).includes(LLAVE))
+  // Apagar y encender otra vez con el espejo ya propio: nada que reemplazar, mismo estado.
+  await pedir('jev-ajeno-off', { action: 'activar', enabled: false })
+  v = await pedir('jev-ajeno-on', { action: 'activar', enabled: true })
+  ok('encender de nuevo con el espejo propio sigue en activo',
+    v && v.ok === true && contenido() === ESPEJO && orca.store.jevStatus.mirror === 'activo',
+    JSON.stringify([v, contenido()]))
+  // Con Jev encendido, un archivo ajeno que aparezca despues lo reemplaza tambien el
+  // guardado de la llave desde el panel.
+  writeFileSync(espejo, AJENO, { mode: 0o600 })
   v = await pedir('jev-ajeno-5', { action: 'guardar-llave', value: LLAVE })
-  ok('escribir la llave en el panel SI lo reemplaza, con la cabecera',
-    v && v.ok === true && contenido() === `${CABECERA}\nTYPESAFE_API_KEY=${LLAVE}\n` &&
-    orca.store.jevStatus.mirror === 'activo', JSON.stringify([v, contenido()]))
+  ok('escribir la llave en el panel tambien lo reemplaza, con la cabecera',
+    v && v.ok === true && contenido() === ESPEJO && orca.store.jevStatus.mirror === 'activo',
+    JSON.stringify([v, contenido()]))
 
   v = await pedir('jev-raro-1', { action: 'inventada' })
   ok('una accion que no existe se contesta, no se calla',
@@ -1946,6 +2108,28 @@ console.log('\nworker: la llave de Jev, su espejo 0600 y el aviso de que no es o
   ok('al arrancar con Jev apagado, el espejo viejo se borra', !existsSync(espejo),
     JSON.stringify(orca2.store.jevStatus))
   apagar2()
+}
+
+{
+  // Lo que corre por su cuenta (arranque, revision de salud) NO pisa un archivo ajeno:
+  // lo dice (`ajeno`) y lo deja intacto. Solo un gesto del dueno lo reemplaza.
+  const LLAVE = 'tsk-FALSA-2222222222222222'
+  const AJENO = 'TYPESAFE_API_KEY=copiada-a-mano\n'
+  const espejo = join(process.env.HOME, '.wa-inbox', 'jev.env')
+  rmSync(join(process.env.HOME, '.wa-inbox'), { recursive: true, force: true })
+  mkdirSync(join(process.env.HOME, '.wa-inbox'), { recursive: true })
+  writeFileSync(espejo, AJENO, { mode: 0o600 })
+
+  const orca = hostFalso(herramientas('jev-arranque-ajeno', '#!/bin/sh\necho \'[]\'\n'),
+    { chats: [], jevEnabled: true })
+  orca.secrets.jevKey = LLAVE
+  const { apagar } = await arranca(orca)
+  await hasta(() => orca.store.jevStatus && orca.store.jevStatus.mirror === 'ajeno')
+  ok('al arrancar con un archivo ajeno, el estado dice ajeno y el archivo no se toca',
+    orca.store.jevStatus && orca.store.jevStatus.mirror === 'ajeno' &&
+    orca.store.jevStatus.keySet === true && readFileSync(espejo, 'utf8') === AJENO,
+    JSON.stringify([orca.store.jevStatus, readFileSync(espejo, 'utf8')]))
+  apagar()
 }
 
 // ───────── T6: las acciones del dueno sobre una tarjeta del tablero ─────────
@@ -2382,6 +2566,59 @@ console.log('\nworker: traer la libreta deja la lista al dia en segundos')
   ok('y ahi paran: no es un sync por cada latido', cuenta() === base + 2, `${base} -> ${cuenta()}`)
   apagar()
 }
+// ───────── tras (re)arrancar, el primer latido conectado dispara UN sync ─────────
+console.log('\nworker: el primer latido tras un arranque pide un sync y solo uno')
+{
+  // Visto en vivo: el plugin reinicia tras mas de 2 minutos caido, el sync del arranque
+  // corre ~0.5 s despues de lanzar el sidecar -antes de que haya un solo latido- y la
+  // salud sale `transport-silent` ("sin senal desde <hora vieja>"). El aviso rojo se
+  // quedaba hasta el sync de 5 minutos con la linea ya conectada.
+  const guion = join(RAIZ, 'sidecar-primer-latido.cjs')
+  writeFileSync(guion,
+    '#!/usr/bin/env node\n' +
+    'function emit (m) { process.stdout.write(JSON.stringify(m) + "\\n") }\n' +
+    'emit({ type: "connection", state: "connecting" })\n' +
+    // Ni un latido durante el primer segundo y medio: el sync del arranque corre en ese hueco.
+    'setTimeout(() => { emit({ type: "connection", state: "open" });\n' +
+    '  setInterval(() => emit({ type: "latido", ts: Date.now(), conectado: true }), 300) }, 1500)\n' +
+    'setInterval(() => {}, 1000)\n', { mode: 0o755 })
+  const syncs = join(RAIZ, 'syncs-primer-latido.txt')
+  const wascope = '#!/bin/sh\n' +
+    `[ "$1" = "sync" ] && echo "$@" >> ${JSON.stringify(syncs)}\n` +
+    'echo \'[{"synced": true, "destinos": []}]\'\n'
+  const cuenta = () => existsSync(syncs) ? readFileSync(syncs, 'utf8').trim().split('\n').length : 0
+  const resolvedor = join(RAIZ, 'resolve-primer-latido.mjs')
+  writeFileSync(resolvedor,
+    'import { mkdirSync } from "node:fs"\n' +
+    'const dir = ' + JSON.stringify(join(RAIZ, 'auth-primer-latido')) + '\n' +
+    'mkdirSync(dir, { recursive: true })\n' +
+    'process.stdout.write(JSON.stringify({ ok: true, dir }))\n')
+  const herr = herramientas('primer-latido', wascope)
+  const orca = hostFalso(herr, { chats: [] }, guion)
+  orca.host.call = (function (original) {
+    return async (action, params) => {
+      if (action === 'settings.get') {
+        return { value: { toolsDir: herr, sidecarPath: guion, authDirResolverPath: resolvedor } }
+      }
+      return original(action, params)
+    }
+  })(orca.host.call)
+  const { apagar } = await arranca(orca)
+  const alArrancar = cuenta()
+  ok('el sync del arranque corre antes de que haya latido', alArrancar >= 1 &&
+    !(orca.store.sidecar && orca.store.sidecar.latido), `${alArrancar} ${JSON.stringify(orca.store.sidecar)}`)
+  const llego = await hasta(() => orca.store.sidecar && orca.store.sidecar.latido, 8000)
+  ok('despues llega el primer latido conectado', !!llego)
+  const extra = await hasta(() => cuenta() >= alArrancar + 1, 8000)
+  ok('y pide un sync mas, sin esperar los 5 minutos', extra, `${alArrancar} -> ${cuenta()}`)
+  ok('con el motivo de la conexion', orca.store.syncStatus && orca.store.syncStatus.trigger === 'conexion',
+    JSON.stringify(orca.store.syncStatus))
+  await dormir(3000)
+  ok('y ahi para: no es un sync por cada latido', cuenta() === alArrancar + 1,
+    `${alArrancar} -> ${cuenta()}`)
+  apagar()
+}
+
 // ───────── el catalogo de proyectos: lo que Orca conoce, propuesto al dueno ─────────
 console.log('\nworker: el catalogo deriva propuestas de `orca worktree ps` sin inventar nada')
 {

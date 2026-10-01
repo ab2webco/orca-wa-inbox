@@ -27,6 +27,7 @@ import { crearCatalogo, leerCatalogo, PROJECTS_KEY } from './catalogo.mjs'
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
 const TOOLS = join(PLUGIN_DIR, 'bin')
 const SCOPE_KEY = 'scope'          // { [chatJid]: ScopeEntry }
+const ROUTES_KEY = 'routes'        // [{ pattern, workspace }]: las reglas de texto del panel
 // Como le fue al ultimo sync. El panel no puede ejecutar nada, asi que sin esto no
 // tiene forma de distinguir "todavia buscando" de "fallo hace media hora".
 const STATUS_KEY = 'syncStatus'
@@ -458,10 +459,11 @@ async function leerLlaveJev(orca, estado) {
 /** Deja el espejo como dicen los ajustes y publica el estado para el panel.
  *
  *  Con Jev encendido y llave, el espejo existe; en cualquier otro caso no. `forzar` solo
- *  lo pide un guardado de la llave desde el panel: es lo unico que puede pisar un archivo
- *  que no escribio el plugin. Todo lo demas lo respeta y lo dice en el estado (`ajeno`),
- *  porque el lector de Python lo trata como "sin llave" y el usuario tiene que saber por
- *  que. */
+ *  lo piden los gestos explicitos del dueno en el panel —guardar la llave y encender el
+ *  interruptor—: son lo unico que puede pisar un archivo que no escribio el plugin. Lo
+ *  que corre por su cuenta (arranque, revision de salud) lo respeta y lo dice en el
+ *  estado (`ajeno`), porque el lector de Python lo trata como "sin llave" y el usuario
+ *  tiene que saber por que. */
 async function aplicarJev(orca, habilitado, llave, { forzar = false } = {}) {
   const activo = habilitado && llave !== null
   const r = activo
@@ -710,7 +712,7 @@ const SIDECAR_VEREDICTO = Object.freeze({
 /** Lo que el panel puede pedirle al worker sobre el alcance, y como se contesta. Mismos
  *  codigos estables que el resto del contrato: el panel los traduce por codigo y nunca
  *  por el texto (§11-E1). */
-const SCOPE_ACCION = Object.freeze({ QUITAR: 'quitar' })
+const SCOPE_ACCION = Object.freeze({ QUITAR: 'quitar', REGLA_QUITAR: 'regla-quitar' })
 
 const SCOPE_VEREDICTO = Object.freeze({
   QUITADO: 'quitado',
@@ -719,8 +721,21 @@ const SCOPE_VEREDICTO = Object.freeze({
   // `wa-scope rm` acepta tambien un trozo de NOMBRE y ahi resuelve por parecido. El
   // nombre visible no es identidad -cambia y se repite (§11-A1)-, asi que lo que no sea
   // un jid se rechaza en vez de adivinar cual conversacion se queria quitar.
-  JID_INVALIDO: 'jid-invalido'
+  JID_INVALIDO: 'jid-invalido',
+  // Una regla de texto quitada de la base y del storage del panel.
+  REGLA_QUITADA: 'regla-quitada',
+  // Lo que llega como patron de una regla no es un texto acotado y legible: no llega a la
+  // linea de comandos.
+  PATRON_INVALIDO: 'patron-invalido'
 })
+
+/** Lo mas largo que puede ser el patron de una regla de texto. Un texto que tiene que
+ *  aparecer en un mensaje no pasa de unas palabras; sin tope seria un lugar donde dejar
+ *  cualquier cosa. */
+const PATRON_MAX = 120
+// Sin caracteres de control: un salto de linea en un patron seria una segunda linea que
+// nadie pidio, y `wa-scope` lo guardaria tal cual.
+const PATRON_RE = /^[^\u0000-\u001f\u007f]+$/
 
 /** Del motivo que devolvio el resolvedor al codigo estable que lee el panel.
  *
@@ -962,9 +977,12 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
       } else if (mensaje?.type === 'latido') {
         // La hora del SIDECAR, no la de esta escritura: lo que el panel quiere saber es
         // cuando dio senales de vida la linea, no cuando el worker las copio.
-        escribir({ latido: { ts: Number(mensaje.ts) || Date.now(),
+        const escrito = escribir({ latido: { ts: Number(mensaje.ts) || Date.now(),
           conectado: mensaje.conectado === true } })
-        if (mensaje.conectado === true) avisar(alConectar, 'latido')
+        // El aviso espera a que el latido este EN storage: quien lo recibe pide un sync,
+        // y el sync lee la salud de la linea de ahi. Avisar antes dejaba una ventana en la
+        // que el sync todavia veia el latido de antes.
+        if (mensaje.conectado === true) escrito.then(() => avisar(alConectar, 'latido'))
       } else if (mensaje?.type === 'libreta') {
         // Si la lista de personas llego. Hasta aca, una libreta que nunca se
         // sincronizo se veia EXACTAMENTE igual que "no tiene conversaciones
@@ -1290,6 +1308,7 @@ export default function activate(orca) {
     // moverlo entero, o el sidecar le pregunta por el alcance a una instalacion
     // distinta de la que lee el resto del plugin (§11-E4).
     dirIngesta = s.toolsDir || TOOLS
+    primeraConexionPendiente = true
     apagarSidecar = lanzarSidecar({ orca, scriptPath: s.sidecarPath, authDir: resuelto.dir,
       toolsDir: dirIngesta, alSalir: alSalirSidecar, alLinea: alCambiarLinea,
       alAlmacen: () => ingesta.pedir(), alConectar: alConectarLibreta,
@@ -1335,10 +1354,22 @@ export default function activate(orca) {
   let libretaHasta = 0
   let libretaConectada = false
   const libretaViva = () => Date.now() < libretaHasta
+  // Tras cada (re)arranque del sidecar, UN sync cuando llega el primer latido conectado.
+  // El sync del arranque corre ~0.5 s despues de lanzarlo, antes de que haya latido: la
+  // salud sale `transport-silent` ("sin senal desde <hora vieja>") y el aviso rojo se
+  // quedaba hasta el sync de 5 minutos con la linea ya conectada. Es un sync por arranque
+  // y no uno por latido: el aviso que ya manda el sidecar, sin una llamada nueva al host.
+  let primeraConexionPendiente = false
   function alConectarLibreta () {
-    if (!libretaViva() || libretaConectada) return
-    libretaConectada = true
-    sincronizarPronto('libreta')
+    const primera = primeraConexionPendiente
+    primeraConexionPendiente = false
+    // Si ademas hay una peticion de libreta viva, ese sync ya cubre la conexion.
+    if (libretaViva() && !libretaConectada) {
+      libretaConectada = true
+      sincronizarPronto('libreta')
+      return
+    }
+    if (primera) sincronizarPronto('conexion')
   }
   function alLlegarLibreta () {
     if (!libretaViva()) return
@@ -1628,6 +1659,42 @@ export default function activate(orca) {
     return { ok: true, code: SCOPE_VEREDICTO.QUITADO }
   }
 
+  /** Quitar una regla de texto, de verdad y en los dos registros.
+   *
+   *  Las reglas que se crean con el CLI viven en `scope.db` (tabla `route`) y cada sync las
+   *  vuelve a empujar al panel (`rutas_efectivas`, bin/wa-scope). Quitarla solo del storage
+   *  del panel dejaba la fila de la base debajo: la regla reaparecia en el siguiente sync,
+   *  igual que una autorizacion que se creia revocada. `wa-scope route --remove` borra la
+   *  de la base y solo el worker puede ejecutarlo.
+   *
+   *  El CLI corre PRIMERO y el storage se reconcilia despues: al reves, un CLI que falla
+   *  dejaria el panel sin la regla y la base con ella. */
+  async function quitarRegla (pedido) {
+    const patron = typeof pedido?.pattern === 'string' ? pedido.pattern.trim().toLowerCase() : ''
+    if (patron.length === 0 || patron.length > PATRON_MAX || !PATRON_RE.test(patron)) {
+      return { ok: false, code: SCOPE_VEREDICTO.PATRON_INVALIDO }
+    }
+    const s = await settings()
+    // La forma `--remove=<patron>` y no dos argumentos: un patron que empiece por `-` se
+    // leeria como otra bandera. Quitar lo que ya no esta no es un error: borra cero filas
+    // y sale con 0.
+    await run(join(s.toolsDir || TOOLS, 'wa-scope'), ['route', `--remove=${patron}`])
+    const reglas = await leer(orca, ROUTES_KEY)
+    // SOLO si la lista se leyo. Una lectura que el host rechazo devuelve null, y guardar
+    // una lista vacia borraria TODAS las reglas por culpa de una lectura fallida.
+    if (Array.isArray(reglas)) {
+      const quedan = reglas.filter((r) =>
+        String(r?.pattern ?? '').trim().toLowerCase() !== patron)
+      // Sin `guardar()`, que se traga el fallo: una regla que sigue en el storage no se
+      // puede contar como quitada.
+      if (quedan.length !== reglas.length) {
+        await orca.host.call('storage.set', { key: ROUTES_KEY, value: quedan })
+      }
+    }
+    orca.log('route rule removed')
+    return { ok: true, code: SCOPE_VEREDICTO.REGLA_QUITADA }
+  }
+
   // El catalogo de proyectos: lo que el panel pide (buscar, aceptar, quitar, anotar) entra
   // por el MISMO canal que el alcance, que es de la misma familia -a que conversacion y a
   // que proyecto se le deja actuar- y asi no se suma un sondeo al host cada 3 s: el worker
@@ -1653,6 +1720,7 @@ export default function activate(orca) {
     // worker tiene un presupuesto de llamadas al host.
     acciones: {
       [SCOPE_ACCION.QUITAR]: (pedido) => quitarAlcance(pedido),
+      [SCOPE_ACCION.REGLA_QUITAR]: (pedido) => quitarRegla(pedido),
       ...crearAccionesCaso({ run, motivoDe, herramienta: (nombre) => tool(nombre) }),
       ...catalogo.acciones
     }
@@ -1699,7 +1767,12 @@ export default function activate(orca) {
       return { ok: false, code: JEV_VEREDICTO.ARGUMENTOS_INVALIDOS }
     }
     await guardar(orca, JEV_ENABLED_KEY, pedido.enabled)
-    const st = await aplicarJev(orca, pedido.enabled, await leerLlaveJev(orca, estadoJev))
+    // Encender es un gesto explicito del dueno, igual que guardar la llave: con la llave
+    // ya en la boveda reemplaza un `jev.env` escrito a mano antes de que el plugin lo
+    // administrara. Sin esto el dueno guardaba la llave con Jev apagado, lo encendia, y
+    // se quedaba en `ajeno` sin nada que escribir en el campo.
+    const st = await aplicarJev(orca, pedido.enabled, await leerLlaveJev(orca, estadoJev),
+      { forzar: pedido.enabled })
     const code = pedido.enabled ? JEV_VEREDICTO.ACTIVADO : JEV_VEREDICTO.DESACTIVADO
     return st.mirror === 'fallo'
       ? { ok: false, code: JEV_VEREDICTO.ESPEJO_FALLO, mirror: st.mirror }
