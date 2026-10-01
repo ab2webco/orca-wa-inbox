@@ -37,6 +37,11 @@ wrong with what it asked and not a generic failure at the end:
                   for the agent. `responder` sends; `borrador` only drafts; `observar`
                   and `off` do not write at all (`send-denied`).
   the transport   and only then, whether there is anything to send through.
+  the review      with the Jev key set, a reply that is about to go out on `responder`
+                  is reviewed first: a promised date, a status nobody verified or a
+                  credential keeps it as a DRAFT for the owner, and so does Jev not
+                  answering. Jev can only hold a reply back, never send one. Without
+                  the key the mode decides, as always.
 
 ABOUT `borrador`. It used to mean "leaves the text typed in the chat, unsent", and that
 was only possible while the agent drove a screen: it typed into the WhatsApp window and
@@ -52,6 +57,7 @@ import argparse, os, sqlite3, sys, time, uuid
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import wa_store  # noqa: E402
+import wa_jev  # noqa: E402
 from wa_settings import ajuste, scope_db, scope_from_plugin  # noqa: E402
 
 SCOPE_DB = scope_db()
@@ -101,6 +107,10 @@ SIN_BORRADOR = "send-no-draft"
 # El mismo --id con otro texto o para otra conversacion. No se manda ninguno de los
 # dos: entregar el viejo es mandar lo que nadie pidio, y pisarlo es entregar dos veces.
 ID_EN_USO = "send-id-conflict"
+
+# Jev no contesto (sin red, error, timeout o una respuesta que no se entiende). Con la
+# llave puesta eso deja borrador: Jev falla CERRADO (kanban-casos, "Jev").
+JEV_NO_CONTESTA = "jev-unavailable"
 
 # Salidas. `3` es la misma que la compuerta `wa-scope check`: denegado, se anota y se
 # sigue. `4` es la misma que `wa-read` sin linea enlazada: no hay de donde, y no hay
@@ -346,7 +356,19 @@ def informa(salida_json, dato, linea):
         print(linea)
 
 
-def anotar_borrador(fila, req_id):
+def revision_jev(texto):
+    """Lo que frena el envio segun Jev: None sin llave (manda el modo, como siempre), una
+    lista vacia si el texto pasa, y los motivos si no. Un error es un motivo."""
+    clave = wa_jev.llave()
+    if not clave:
+        return None
+    revision = wa_jev.revisa_borrador(texto, clave)
+    if revision is None:
+        return [JEV_NO_CONTESTA]
+    return list(revision["flags"])
+
+
+def anotar_borrador(fila, req_id, frenado=None):
     """El borrador, anotado donde el dueno mira: la bitacora que el panel ya muestra.
 
     Va el ID y NO el texto. El panel publica `detail` recortado en su lista de actividad
@@ -362,17 +384,25 @@ def anotar_borrador(fila, req_id):
             "insert into agent_action (ts, chat_jid, chat_name, action, detail) "
             "values (?,?,?,?,?)",
             (time.strftime("%Y-%m-%d %H:%M"), fila["chat_jid"], fila["chat_name"],
-             "draft", f"{req_id} · approve with `wa-send --approve {req_id}`"))
+             "draft", (f"held by jev: {', '.join(frenado)} · " if frenado else "")
+             + f"{req_id} · approve with `wa-send --approve {req_id}`"))
         con.commit()
         con.close()
     except sqlite3.Error:
         pass
 
 
-def deja_borrador(con, fila, texto, req_id, salida_json, pedia_envio):
+def deja_borrador(con, fila, texto, req_id, salida_json, pedia_envio, frenado=None):
     """Escribe el borrador y dice como se aprueba. No manda nada."""
     encolar(con, fila, texto, req_id, BORRADOR)
-    anotar_borrador(fila, req_id)
+    anotar_borrador(fila, req_id, frenado)
+    if frenado:
+        # `responder` y `--send`, pero Jev lo freno o no contesto. El mismo codigo que el
+        # borrador —hay algo escrito esperando al dueno— y el motivo en el detalle.
+        niega(NECESITA_VISTO,
+              f"Jev held this reply to {fila['chat_name']!r} ({', '.join(frenado)}): it "
+              f"was written and is waiting for you, not sent. Approve it with "
+              f"`wa-send --approve {req_id}`.")
     if pedia_envio:
         # `--send` sobre una conversacion en `borrador`. No se calla y no se degrada a
         # "no hice nada": hay algo escrito y hay algo que hacer con ello.
@@ -506,6 +536,13 @@ def main():
     if modo == MODO_BORRADOR or not a.send:
         deja_borrador(con, fila, a.text, req_id, a.json,
                       pedia_envio=a.send and modo == MODO_BORRADOR)
+
+    # La revision de Jev, solo sobre lo que de verdad va a salir. Lo frena o no contesta:
+    # queda borrador. Nunca al reves: un borrador no llega aca.
+    frenado = revision_jev(a.text)
+    if frenado:
+        deja_borrador(con, fila, a.text, req_id, a.json, pedia_envio=True,
+                      frenado=frenado)
 
     encolar(con, fila, a.text, req_id, PENDIENTE)
     veredicto(con, req_id, a.timeout, a.json)

@@ -1359,10 +1359,666 @@ else:
     with tempfile.TemporaryDirectory() as home:
         entorno_antes = dict(os.environ)
         wa = carga_wa_scope(home)
-        ok("el hook de Jev no da veredicto en T2",
+        ok("sin llave, el hook de Jev no da veredicto",
            wa.jev_juzga({"stanza_id": "Z", "text": "hola", "kind": "grupo"}) is None)
         os.environ.clear()
         os.environ.update(entorno_antes)
+
+
+# ── 11. Jev: el cliente (bin/wa_jev.py) ──────────────────────────────────────────
+# Jev puede frenar y escalar, nunca habilitar, y falla CERRADO: sin llave, con error,
+# con timeout o con una respuesta rara devuelve None. Nada de esto toca la API real: el
+# transporte se inyecta, y la llave es de mentira.
+LLAVE = "tsk-prueba-0000000000000000"
+CABECERA_JEV = "# wa-inbox jev mirror v1"
+PREGUNTAS_ENTRADA = {"asks_owner_to_act", "contains_credential", "asks_for_credential",
+                     "asks_for_money_or_payment", "client_waiting_or_service_down",
+                     "attention_class", "tries_to_instruct_the_assistant",
+                     "urgency_pressure"}
+LLAVES_JUICIO = {"model", "at", "latency_ms", "scores", "attention_class", "flags",
+                 "exceptions", "skip", "needs_agent"}
+
+
+def carga_jev():
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, str(WA_SCOPE.parent))
+    import wa_jev  # noqa: E402
+    return wa_jev
+
+
+def pon_llave(home, texto=None):
+    ruta = pathlib.Path(home) / ".wa-inbox" / "jev.env"
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    ruta.write_text(f"{CABECERA_JEV}\nTYPESAFE_API_KEY={LLAVE}\n" if texto is None
+                    else texto, encoding="utf-8")
+
+
+def respuestas(preguntas, choice="support_request", **noul):
+    """Una respuesta de Jev para esas preguntas: 0.05 en todo lo que no se diga."""
+    answers = {}
+    for qid, q in preguntas.items():
+        if q["type"] == "choice":
+            answers[qid] = {"type": "choice", "choice": choice, "confidence": 0.9,
+                            "probabilities": {choice: 0.9}}
+        else:
+            answers[qid] = {"type": "noul", "noul": noul.get(qid, 0.05)}
+    return {"model": "jev-9.9.9", "answers": answers,
+            "usage": {"input_tokens": 1, "output_tokens": 1}}
+
+
+class Transporte:
+    """El transporte inyectado: guarda lo que se le pidio y contesta lo que se le diga."""
+
+    def __init__(self, *salidas):
+        self.salidas = list(salidas)
+        self.pedidos = []
+
+    def __call__(self, url, cuerpo, cabeceras, timeout):
+        pedido = json.loads(cuerpo)
+        self.pedidos.append({"url": url, "cuerpo": pedido, "cabeceras": cabeceras,
+                             "timeout": timeout})
+        salida = self.salidas.pop(0) if len(self.salidas) > 1 else self.salidas[0]
+        if isinstance(salida, BaseException):
+            raise salida
+        if callable(salida):
+            salida = salida(pedido)
+        estado, dato = salida
+        return estado, dato if isinstance(dato, bytes) else json.dumps(dato).encode()
+
+
+def jev_dice(**noul):
+    return lambda pedido: (200, respuestas(pedido["questions"], **noul))
+
+
+MENSAJE = {"stanza_id": "Z1", "chat_jid": SOPORTE, "kind": "mencion",
+           "text": "@duenio revisa esto", "media": None}
+
+print("\njev: la llave")
+with tempfile.TemporaryDirectory() as home:
+    antes = dict(os.environ)
+    os.environ.update(HOME=str(home), APPDATA=str(pathlib.Path(home) / "AppData"))
+    jev = carga_jev()
+    ok("sin archivo no hay llave", jev.llave() is None)
+    pon_llave(home)
+    ok("con la cabecera exacta y la linea de la llave, hay llave", jev.llave() == LLAVE)
+    for nombre, texto in (
+            ("sin cabecera", f"TYPESAFE_API_KEY={LLAVE}\n"),
+            ("con otra cabecera", f"# wa-inbox jev mirror v2\nTYPESAFE_API_KEY={LLAVE}\n"),
+            ("con la cabecera corrida", f" {CABECERA_JEV}\nTYPESAFE_API_KEY={LLAVE}\n"),
+            ("sin la linea de la llave", f"{CABECERA_JEV}\nOTRA=1\n"),
+            ("con la llave vacia", f"{CABECERA_JEV}\nTYPESAFE_API_KEY=\n")):
+        pon_llave(home, texto)
+        ok(f"{nombre} no hay llave", jev.llave() is None)
+    ok("la llave vive al lado de scope.db",
+       jev.ruta_llave() == str(pathlib.Path(home) / ".wa-inbox" / "jev.env"))
+    ok("el destino es la API de TypeSafe", jev.destino() == "https://api.typesafe.ai/v1/systemone")
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = "https://otro.example.com/v1/systemone"
+    ok("un destino que no es local no se acepta", jev.destino() == jev.ENDPOINT)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = "http://127.0.0.1:9/v1/systemone"
+    ok("un destino local (las pruebas) si", jev.destino() == "http://127.0.0.1:9/v1/systemone")
+    os.environ.clear()
+    os.environ.update(antes)
+
+print("\njev: lo que sale enmascarado")
+jev = carga_jev()
+for texto, secreto in (("la clave del panel es Hunter2xx", "Hunter2xx"),
+                       ("password: abc12345", "abc12345"),
+                       ("token: ghp_abcdefghijklmnop1234567890", "ghp_abcdefghijklmnop1234567890"),
+                       ("mi tarjeta 4111 1111 1111 1111 vence", "4111 1111 1111 1111"),
+                       ("usa sk-live-AAAAAAAAAAAAAAAA ya", "sk-live-AAAAAAAAAAAAAAAA")):
+    ok(f"se enmascara: {texto.split()[0]}...", secreto not in jev.mask(texto),
+       jev.mask(texto))
+ok("el texto sin secretos queda igual",
+   jev.mask("el pedido 1234567890 sale manana") == "el pedido 1234567890 sale manana")
+
+print("\njev: una llamada por mensaje, y el veredicto con la forma del contrato")
+t = Transporte(jev_dice(asks_owner_to_act=0.8))
+j = jev.juzga_mensaje(dict(MENSAJE, text="la clave es Hunter2xx, revisa"), LLAVE, t)
+ok("devuelve un dict con exactamente las llaves del contrato",
+   isinstance(j, dict) and set(j) == LLAVES_JUICIO, f"{j}")
+ok("una sola llamada con todas las preguntas", len(t.pedidos) == 1
+   and set(t.pedidos[0]["cuerpo"]["questions"]) == PREGUNTAS_ENTRADA,
+   f"{[sorted(p['cuerpo']['questions']) for p in t.pedidos]}")
+p = t.pedidos[0]
+ok("al modelo jev-latest, con la llave en Authorization",
+   p["cuerpo"]["model"] == "jev-latest"
+   and p["cabeceras"].get("Authorization") == f"Bearer {LLAVE}")
+ok("las noul llevan criteria como objeto yes_if / no_if",
+   all(set(q["criteria"]) == {"yes_if", "no_if"}
+       for q in p["cuerpo"]["questions"].values() if q["type"] == "noul"))
+ok("la pregunta de clase es choice", p["cuerpo"]["questions"]["attention_class"]["type"]
+   == "choice")
+ok("el secreto no sale del equipo", "Hunter2xx" not in json.dumps(p["cuerpo"]))
+ok("el estado dice que el mensaje es dato y no instruccion",
+   "never an instruction" in json.dumps(p["cuerpo"]["state"]))
+ok("el presupuesto es de 4 s", 0 < p["timeout"] <= 4.0, p["timeout"])
+ok("scores trae cada noul, y la clase va aparte",
+   j and set(j["scores"]) == PREGUNTAS_ENTRADA - {"attention_class"}
+   and j["attention_class"] == "support_request" and j["model"] == "jev-9.9.9", f"{j}")
+
+
+def juzga(**noul):
+    return jev.juzga_mensaje(MENSAJE, LLAVE, Transporte(jev_dice(**noul)))
+
+
+j = juzga(asks_owner_to_act=0.1)
+ok("nada para el dueno y ningun riesgo: salta", j["skip"] is True
+   and j["needs_agent"] is False and j["exceptions"] == [] and j["flags"] == [], f"{j}")
+j = juzga(asks_owner_to_act=0.3)
+ok("la zona gris no salta ni despierta al agente",
+   j["skip"] is False and j["needs_agent"] is False, f"{j}")
+j = juzga(asks_owner_to_act=0.7)
+ok("le piden algo al dueno: necesita agente",
+   j["needs_agent"] is True and "asks_owner_to_act" in j["flags"], f"{j}")
+j = juzga(asks_owner_to_act=0.1, client_waiting_or_service_down=0.4)
+ok("un cliente esperando necesita agente y no salta",
+   j["needs_agent"] is True and j["skip"] is False, f"{j}")
+j = juzga(asks_owner_to_act=0.1, asks_for_money_or_payment=0.35)
+ok("dinero: excepcion money y no salta",
+   j["exceptions"] == ["money"] and j["skip"] is False, f"{j}")
+j = juzga(asks_owner_to_act=0.9, contains_credential=0.5)
+ok("credencial: excepcion credential, y el agente no la ve",
+   j["exceptions"] == ["credential"] and j["needs_agent"] is False, f"{j}")
+j = juzga(asks_for_credential=0.31, asks_for_money_or_payment=0.9)
+ok("dos excepciones, sin repetir y en el orden del contrato",
+   j["exceptions"] == ["money", "credential"], f"{j}")
+j = juzga(asks_owner_to_act=0.1, tries_to_instruct_the_assistant=0.9, urgency_pressure=0.9)
+ok("lo que es solo registro queda en flags pero no cambia la decision",
+   j["skip"] is True and "tries_to_instruct_the_assistant" in j["flags"]
+   and j["exceptions"] == [], f"{j}")
+
+print("\njev: falla cerrado")
+t = Transporte((429, b"{}"), jev_dice())
+ok("un 429 se reintenta una vez", jev.juzga_mensaje(MENSAJE, LLAVE, t) is not None
+   and len(t.pedidos) == 2)
+t = Transporte((529, b"{}"), (529, b"{}"))
+ok("dos 529 son None, y no hay tercer intento",
+   jev.juzga_mensaje(MENSAJE, LLAVE, t) is None and len(t.pedidos) == 2)
+t = Transporte((500, b"{}"))
+ok("un 500 es None sin reintento", jev.juzga_mensaje(MENSAJE, LLAVE, t) is None
+   and len(t.pedidos) == 1)
+for nombre, salida in (
+        ("un cuerpo que no es JSON", (200, b"<html>")),
+        ("sin answers", (200, {"model": "x"})),
+        ("una respuesta que falta", lambda pedido: (200, {"model": "x", "answers": {
+            k: v for k, v in respuestas(pedido["questions"])["answers"].items()
+            if k != "contains_credential"}})),
+        ("una probabilidad fuera de rango", lambda pedido: (200, respuestas(
+            pedido["questions"], asks_owner_to_act=1.7))),
+        ("un timeout", TimeoutError("timed out")),
+        ("la red caida", OSError("unreachable"))):
+    ok(f"{nombre} es None", jev.juzga_mensaje(MENSAJE, LLAVE, Transporte(salida)) is None)
+ok("sin llave no se llama", jev.juzga_mensaje(MENSAJE, None, Transporte(jev_dice())) is None)
+presupuesto = jev.PRESUPUESTO_S
+jev.PRESUPUESTO_S = 0.2
+
+
+def lento(pedido):
+    time.sleep(0.3)
+    return 200, respuestas(pedido["questions"])
+
+
+ok("pasado el presupuesto es None aunque conteste",
+   jev.juzga_mensaje(MENSAJE, LLAVE, Transporte(lento)) is None)
+jev.PRESUPUESTO_S = presupuesto
+
+
+def explota(url, cuerpo, cabeceras, timeout):
+    raise OSError(f"fallo con {cabeceras['Authorization']}")
+
+
+import contextlib  # noqa: E402
+import io  # noqa: E402
+salida = io.StringIO()
+with contextlib.redirect_stdout(salida), contextlib.redirect_stderr(salida):
+    jev.juzga_mensaje(MENSAJE, LLAVE, explota)
+ok("la llave no se imprime ni en un error", LLAVE not in salida.getvalue())
+
+print("\njev: la revision del borrador")
+t = Transporte(lambda pedido: (200, respuestas(pedido["questions"], promises_a_date=0.8)))
+r = jev.revisa_borrador("Manana te confirmamos", LLAVE, t)
+ok("una llamada con las tres preguntas del borrador",
+   len(t.pedidos) == 1 and set(t.pedidos[0]["cuerpo"]["questions"]) ==
+   {"promises_a_date", "states_status_not_verified", "contains_credential"},
+   f"{t.pedidos and sorted(t.pedidos[0]['cuerpo']['questions'])}")
+ok("prometer una fecha es la excepcion commitment",
+   r and r["exceptions"] == ["commitment"] and "promises_a_date" in r["flags"], f"{r}")
+r = jev.revisa_borrador("Listo", LLAVE, Transporte(lambda pedido: (
+    200, respuestas(pedido["questions"], states_status_not_verified=0.6))))
+ok("afirmar un estado sin verificar es un aviso de Jev", r and r["exceptions"] == ["jev"],
+   f"{r}")
+r = jev.revisa_borrador("Tome esto", LLAVE, Transporte(jev_dice()))
+ok("un borrador limpio no tiene excepciones", r and r["exceptions"] == [] and not r["flags"],
+   f"{r}")
+t = Transporte(jev_dice())
+jev.revisa_borrador("la clave es Hunter2xx", LLAVE, t)
+ok("el borrador tambien sale enmascarado", "Hunter2xx" not in json.dumps(t.pedidos[0]["cuerpo"]))
+ok("y un error es None", jev.revisa_borrador("x", LLAVE, Transporte((500, b""))) is None)
+
+
+# ── 12. Jev en la entrada ────────────────────────────────────────────────────────
+# `ingest` con un Jev de mentira en 127.0.0.1: el mismo proceso de verdad, sin la API.
+import http.server  # noqa: E402
+import threading  # noqa: E402
+
+
+class JevFalso:
+    """Un servidor local que contesta como Jev segun el texto del mensaje."""
+
+    def __init__(self, decide):
+        self.pedidos = []
+        falso = self
+
+        class Manejador(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                cuerpo = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                falso.pedidos.append({"cuerpo": cuerpo,
+                                      "auth": self.headers.get("Authorization")})
+                estado, dato = decide(cuerpo)
+                datos = json.dumps(dato).encode()
+                self.send_response(estado)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(datos)))
+                self.end_headers()
+                self.wfile.write(datos)
+
+            def log_message(self, *args):
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Manejador)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}/v1/systemone"
+
+    def textos(self):
+        return [p["cuerpo"]["state"]["message_to_evaluate"]["text"] for p in self.pedidos]
+
+    def cerrar(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def jev_segun_texto(cuerpo):
+    texto = cuerpo["state"]["message_to_evaluate"]["text"]
+    qs = cuerpo["questions"]
+    if "ERROR" in texto:
+        return 500, {"error": "boom"}
+    if "gracias" in texto or "buen dia" in texto:
+        return 200, respuestas(qs, choice="pleasantry", asks_owner_to_act=0.05)
+    if "cuesta" in texto:
+        return 200, respuestas(qs, choice="money", asks_owner_to_act=0.6,
+                               asks_for_money_or_payment=0.9)
+    if "cayo" in texto:
+        return 200, respuestas(qs, choice="client_waiting_or_down", asks_owner_to_act=0.8,
+                               client_waiting_or_service_down=0.9)
+    if "clave" in texto:
+        return 200, respuestas(qs, choice="access_or_credential", asks_owner_to_act=0.7,
+                               contains_credential=0.9)
+    return 200, respuestas(qs, choice="unclear", asks_owner_to_act=0.3)
+
+
+def juicio_de(home, stanza):
+    fila = db_de(home).execute("select * from juicio where stanza_id=?", (stanza,)).fetchone()
+    return dict(fila) if fila else None
+
+
+print("\njev en la entrada")
+if not NODE:
+    print("  aviso: sin node, no se armo el almacen de mensajes", file=sys.stderr)
+else:
+    falso = JevFalso(jev_segun_texto)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        # Sin llave: exactamente lo de hoy, y ni un pedido.
+        with tempfile.TemporaryDirectory() as home:
+            llegan(home, A, [msg(SOPORTE, "N1", "@duenio gracias", 30, mencion=True)])
+            autoriza(home)
+            ingiere(home)
+            ok("sin llave no sale ni un pedido y el caso queda en recibido",
+               falso.pedidos == [] and caso_de_stanza(home, "N1")["etapa"] == "recibido")
+            pon_llave(home, f"# otra cosa\nTYPESAFE_API_KEY={LLAVE}\n")
+            llegan(home, A, [msg(SOPORTE, "N2", "@duenio gracias otra vez", 20,
+                                 mencion=True)])
+            ingiere(home)
+            ok("un jev.env sin la cabecera del espejo no cuenta como llave",
+               falso.pedidos == [])
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(SOPORTE, "K1", "@duenio gracias", 50, mencion=True),
+                             msg(OPERACIONES, "K2", "@duenio cuanto cuesta el plan", 40,
+                                 mencion=True),
+                             msg(PERSONA, "K3", "se cayo el sitio", 30),
+                             msg(FACTURACION, "K4", "@duenio la clave es Hunter2xx", 20,
+                                 mencion=True),
+                             msg(SOPORTE, "K5", "buen dia a todos", 10)])
+            autoriza(home)
+            p = corre(home, "ingest")
+            r = json.loads(p.stdout)[0]
+            k1, k2, k3, k4 = (caso_de_stanza(home, s) for s in ("K1", "K2", "K3", "K4"))
+            ok("un pedido por mensaje nuevo, con la llave", len(falso.pedidos) == 5
+               and all(x["auth"] == f"Bearer {LLAVE}" for x in falso.pedidos),
+               f"{len(falso.pedidos)} pedidos")
+            ok("lo que salta se cierra como nada, firmado por jev",
+               k1["etapa"] == "cerrado" and evento(k1, "cerrado")["actor"] == "jev"
+               and evento(k1, "cerrado")["detalle"].startswith("nada que atender"),
+               f"caso {k1}")
+            j1 = juicio_de(home, "K1")
+            ok("y queda en juicio: origen jev, clase nothing, el JSON del contrato",
+               j1 and j1["origen"] == "jev" and j1["clase"] == "nothing"
+               and set(json.loads(j1["jev"])) == LLAVES_JUICIO, f"juicio {j1}")
+            fila2 = db_de(home).execute("select * from caso where case_id=?",
+                                        (k2["case_id"],)).fetchone()
+            ok("dinero: clasificado como alert por jev, con la excepcion en el caso",
+               k2["etapa"] == "clasificado" and k2["clase"] == "alert"
+               and evento(k2, "clasificado")["actor"] == "jev"
+               and json.loads(fila2["excepciones"]) == ["money"], f"caso {dict(fila2)}")
+            fila3 = db_de(home).execute("select * from caso where case_id=?",
+                                        (k3["case_id"],)).fetchone()
+            ok("el sitio caido: card, marcado para el agente",
+               k3["clase"] == "card" and fila3["necesita_agente"] == 1, f"caso {dict(fila3)}")
+            fila4 = db_de(home).execute("select * from caso where case_id=?",
+                                        (k4["case_id"],)).fetchone()
+            ok("la credencial: excepcion, y no va al agente",
+               json.loads(fila4["excepciones"]) == ["credential"]
+               and fila4["necesita_agente"] == 0, f"caso {dict(fila4)}")
+            ok("la credencial no salio del equipo",
+               not any("Hunter2xx" in x for x in falso.textos()), f"{falso.textos()}")
+            ok("la charla suelta que salta no abre caso",
+               caso_de_stanza(home, "K5") is None and r["sin_caso"] >= 1, f"salio {r}")
+            ok("la llave no aparece en la salida", LLAVE not in p.stdout + p.stderr)
+            antes_n = len(falso.pedidos)
+            ingiere(home)
+            ok("repasar no vuelve a preguntar por el mismo mensaje",
+               len(falso.pedidos) == antes_n, f"{len(falso.pedidos)} pedidos")
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(SOPORTE, "F1", "@duenio ERROR revisa", 10, mencion=True)])
+            autoriza(home)
+            ingiere(home)
+            ok("con Jev en error el caso queda en recibido, como sin llave",
+               caso_de_stanza(home, "F1")["etapa"] == "recibido"
+               and juicio_de(home, "F1") is None)
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
+# ── 13. Errores estables de `wa-scope caso` ──────────────────────────────────────
+# El panel (T6) traduce por codigo: salida 2 y UNA linea JSON en stderr,
+# {"error": "<code>", "detail": "<english text>"} (kanban-casos, "Contratos").
+def error_de(p):
+    """El codigo del error, o el motivo por el que la salida no cumple el contrato."""
+    if p.returncode != 2:
+        return f"salio {p.returncode}: {p.stderr.strip()[:200]}"
+    lineas = p.stderr.strip().splitlines()
+    if len(lineas) != 1:
+        return f"stderr con {len(lineas)} lineas: {p.stderr.strip()[:300]}"
+    try:
+        dato = json.loads(lineas[0])
+    except ValueError:
+        return f"stderr no es JSON: {lineas[0][:200]}"
+    if set(dato) != {"error", "detail"} or not dato["detail"]:
+        return f"llaves {sorted(dato)}"
+    return dato["error"]
+
+
+def caso_en_decision(home, stanza, chat=CHAT):
+    cid = caso_clasificado(home, stanza, chat)
+    v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+           "Tomo esto.", "--actor", "agente")[0]["propuesta_version"]
+    return cid, v
+
+
+print("\nlos errores de caso")
+with tempfile.TemporaryDirectory() as home:
+    cid = caso_clasificado(home, "E1")
+    for nombre, args, codigo in (
+            ("un argumento que falta", ("caso", "mover", cid, "--actor", "dueno"), "E_ARGS"),
+            ("un id que no es numero", ("caso", "ver", "uno"), "E_ARGS"),
+            ("un actor que no existe", ("caso", "mover", cid, "cerrado", "--motivo", "x",
+                                        "--actor", "nadie"), "E_ARGS"),
+            ("un caso que no existe", ("caso", "ver", "9999"), "E_NOT_FOUND"),
+            ("una transicion prohibida", ("caso", "mover", cid, "trabajo", "--actor",
+                                          "dueno"), "E_STAGE"),
+            ("cerrar sin motivo", ("caso", "mover", cid, "cerrado", "--actor", "dueno"),
+             "E_ARGS")):
+        p = corre(home, *args)
+        ok(f"{nombre}: {codigo}", error_de(p) == codigo, error_de(p))
+    cid2, v = caso_en_decision(home, "E2")
+    ok("ejecutar sin aprobar: E_NOT_APPROVED",
+       error_de(corre(home, "caso", "mover", cid2, "respondido", "--actor", "dueno")) ==
+       "E_NOT_APPROVED")
+    ok("aprobar una version vieja: E_VERSION",
+       error_de(corre(home, "caso", "aprobar", cid2, "--version", "v-vieja", "--actor",
+                      "dueno")) == "E_VERSION")
+    # La base tomada por otro: E_BUSY, sin traceback.
+    tomada = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "scope.db")
+    tomada.execute("begin exclusive")
+    p = corre(home, "caso", "mover", cid, "cerrado", "--motivo", "x", "--actor", "dueno")
+    tomada.rollback()
+    tomada.close()
+    ok("la base tomada: E_BUSY", error_de(p) == "E_BUSY", error_de(p))
+
+print("\nla aprobacion por regla")
+with tempfile.TemporaryDirectory() as home:
+    js(home, "set", CHAT, "--provider", "ninguno", "--mode", "responder")
+    js(home, "set", OTRO, "--provider", "ninguno", "--mode", "borrador")
+    cid, v = caso_en_decision(home, "R1")
+    p = js(home, "caso", "aprobar", cid, "--version", v, "--actor", "regla")[0]
+    ev = js(home, "caso", "ver", cid)[0]["eventos"][-1]
+    ok("la regla congela la version igual que el dueno, y queda con su actor",
+       p["aprobada"] and p["propuesta_aprobada"] == v and ev["actor"] == "regla",
+       f"quedo {p} evento {ev}")
+    ok("mover no cambia: con la version aprobada por la regla, se da por respondido",
+       js(home, "caso", "mover", cid, "respondido", "--actor", "automatizacion")[0][
+           "etapa"] == "respondido")
+
+    cid, v = caso_en_decision(home, "R2")
+    con = db_de(home)
+    con.execute("update caso set excepciones='[\"money\"]' where case_id=?", (int(cid),))
+    con.commit()
+    con.close()
+    antes = cuenta(home, "select count(*) from caso_evento")
+    ok("con una excepcion la regla no aprueba: E_EXCEPTION",
+       error_de(corre(home, "caso", "aprobar", cid, "--version", v, "--actor", "regla"))
+       == "E_EXCEPTION")
+    ok("y no escribe nada", cuenta(home, "select count(*) from caso_evento") == antes
+       and not js(home, "caso", "ver", cid)[0]["aprobada"])
+    ok("el dueno si puede aprobar la excepcion",
+       js(home, "caso", "aprobar", cid, "--version", v, "--actor", "dueno")[0]["aprobada"])
+
+    cid, v = caso_en_decision(home, "R3", OTRO)
+    ok("en un chat en borrador (te pregunto antes) la regla no aprueba: E_EXCEPTION",
+       error_de(corre(home, "caso", "aprobar", cid, "--version", v, "--actor", "regla"))
+       == "E_EXCEPTION")
+    ok("ni otro actor se hace pasar por la regla",
+       error_de(corre(home, "caso", "aprobar", cid, "--version", v, "--actor", "agente"))
+       == "E_ARGS")
+
+
+# ── 14. El tablero en el storage del panel (T4) ──────────────────────────────────
+# `board` lo escribe wa-scope en cada sync y despues de cada mutacion de un caso; lo
+# leen el panel y la insignia (kanban-casos, "Contratos").
+import re  # noqa: E402
+
+LLAVES_TARJETA = {"case_id", "account", "chat_jid", "chat_name", "stage", "title",
+                  "summary", "clase", "prioridad", "jev", "proposal", "exceptions",
+                  "blocked_reason", "ticket", "updated_at", "actions"}
+ISO = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$")
+
+
+def tablero(home):
+    ruta = storage_de(home)
+    return json.loads(ruta.read_text(encoding="utf-8")) if ruta.exists() else {}
+
+
+def tarjeta(home, cid):
+    return next((c for c in tablero(home).get("board", {}).get("cards", [])
+                 if c["case_id"] == int(cid)), None)
+
+
+print("\nel tablero")
+with tempfile.TemporaryDirectory() as home:
+    js(home, "set", CHAT, "--provider", "plane", "--target", "SOP", "--mode", "responder")
+    cid = caso_clasificado(home, "B1")
+    b = tablero(home).get("board")
+    ok("una mutacion de caso deja `board` en el storage, version 1",
+       isinstance(b, dict) and b.get("v") == 1 and ISO.match(b.get("updated_at") or ""),
+       f"{b}")
+    ok("counts trae las ocho etapas y cuenta el caso",
+       b and set(b["counts"]) == set(ETAPAS := ("recibido", "clasificado", "decision",
+                                                "trabajo", "listo", "respondido",
+                                                "cerrado", "bloqueado"))
+       and b["counts"]["clasificado"] == 1 and b["truncated"] is False, f"{b}")
+    t = tarjeta(home, cid)
+    ok("la tarjeta trae exactamente las llaves del contrato",
+       t and set(t) == LLAVES_TARJETA, f"{t and sorted(t)}")
+    ok("con la etapa, la clase, la prioridad y la conversacion",
+       t and t["stage"] == "clasificado" and t["clase"] == "revision"
+       and t["prioridad"] == "high" and t["chat_jid"] == CHAT and t["chat_name"]
+       and ISO.match(t["updated_at"]), f"{t}")
+    ok("sin propuesta, jev ni tarjeta de Plane: null; sin excepciones: lista vacia",
+       t and t["proposal"] is None and t["jev"] is None and t["ticket"] is None
+       and t["blocked_reason"] is None and t["exceptions"] == [], f"{t}")
+    v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+           "Tomo esto.", "--actor", "agente")[0]["propuesta_version"]
+    t = tarjeta(home, cid)
+    ok("la propuesta llega con su tipo, su texto y su version",
+       t and t["proposal"] == {"tipo": "responder", "texto": "Tomo esto.", "version": v},
+       f"{t}")
+    ok("y las acciones de una respuesta en decision",
+       t and "enviar" in t["actions"] and "editar" in t["actions"]
+       and "ejecutar" not in t["actions"], f"{t and t['actions']}")
+    s = tablero(home)
+    ok("la insignia es counts.decision", s.get("navBadge") == {"count": 1}
+       and s["board"]["counts"]["decision"] == 1, f"{s.get('navBadge')}")
+    js(home, "caso", "mover", cid, "bloqueado", "--motivo", "sin acceso al repo",
+       "--actor", "agente")
+    t = tarjeta(home, cid)
+    ok("bloqueado dice por que", t and t["blocked_reason"] == "sin acceso al repo", f"{t}")
+    ok("y la insignia baja", tablero(home).get("navBadge") == {"count": 0})
+    con = db_de(home)
+    con.execute("update caso set plane_issue='SOP-7', excepciones='[\"money\"]', "
+                "jev='{\"attention_class\": \"money\", \"flags\": [\"x\"], "
+                "\"skip\": false}' where case_id=?", (int(cid),))
+    con.commit()
+    con.close()
+    js(home, "caso", "mover", cid, "cerrado", "--motivo", "listo", "--actor", "dueno")
+    t = tarjeta(home, cid)
+    ok("la tarjeta de Plane, las excepciones y el veredicto de Jev",
+       t and t["ticket"] == "SOP-7" and t["exceptions"] == ["money"]
+       and t["jev"] == {"attention_class": "money", "flags": ["x"], "skip": False}, f"{t}")
+    ok("un caso cerrado solo se puede reabrir", t and t["actions"] == ["reabrir"], f"{t}")
+    js(home, "sync")
+    ok("sync tambien escribe el tablero", tablero(home).get("board", {}).get("counts", {})
+       .get("cerrado") == 1)
+
+# El tope: 200 abiertas (las mas recientes) y hasta 50 cerradas de los ultimos 7 dias.
+with tempfile.TemporaryDirectory() as home:
+    caso_clasificado(home, "T0")
+    con = db_de(home)
+    cuenta_linea = con.execute("select account from caso").fetchone()[0]
+    reciente = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 3600))
+    viejo = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 10 * 86400))
+    for n in range(210):
+        con.execute("insert into caso (account, chat_jid, etapa, titulo, created_at, "
+                    "updated_at) values (?,?,'recibido','t',?,?)",
+                    (cuenta_linea, CHAT, reciente, reciente))
+    for n in range(60):
+        con.execute("insert into caso (account, chat_jid, etapa, titulo, created_at, "
+                    "updated_at) values (?,?,'cerrado','t',?,?)",
+                    (cuenta_linea, CHAT, reciente, reciente))
+    for n in range(3):
+        con.execute("insert into caso (account, chat_jid, etapa, titulo, created_at, "
+                    "updated_at) values (?,?,'cerrado','t',?,?)",
+                    (cuenta_linea, CHAT, viejo, viejo))
+    con.commit()
+    con.close()
+    nuevo = caso_clasificado(home, "T1")
+    b = tablero(home)["board"]
+    abiertas = [c for c in b["cards"] if c["stage"] != "cerrado"]
+    cerradas = [c for c in b["cards"] if c["stage"] == "cerrado"]
+    ok("200 abiertas, las mas recientes primero",
+       len(abiertas) == 200 and abiertas[0]["case_id"] == int(nuevo), f"{len(abiertas)}")
+    ok("50 cerradas, ninguna de mas de 7 dias", len(cerradas) == 50, f"{len(cerradas)}")
+    ok("truncated lo dice", b["truncated"] is True)
+    ok("counts cuenta todo, no solo lo enviado",
+       b["counts"]["recibido"] == 210 and b["counts"]["clasificado"] == 2
+       and b["counts"]["cerrado"] == 63, f"{b['counts']}")
+
+# El titulo que falta sale del primer mensaje, recortado y enmascarado.
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        largo = "@duenio la clave es Hunter2xx y " + "el reporte sale en blanco " * 8
+        llegan(home, A, [msg(SOPORTE, "H1", largo, 30, mencion=True),
+                         msg(SOPORTE, "H2", "otra linea", 20, mencion=True)])
+        autoriza(home)
+        ingiere(home)
+        c = caso_de_stanza(home, "H1")
+        t = tarjeta(home, c["case_id"])
+        ok("sin titulo, la tarjeta usa el primer mensaje",
+           t and t["title"].startswith("@duenio la clave es"), f"{t and t['title']}")
+        ok("recortado", t and len(t["title"]) <= 81 and t["title"].endswith("…"),
+           f"{t and len(t['title'])}")
+        ok("y sin la credencial", t and "Hunter2xx" not in t["title"], f"{t and t['title']}")
+
+
+# ── 15. La primera corrida de ingest (T15) ───────────────────────────────────────
+# La primera vez solo entra lo de las ultimas `case_window_hours`; lo de antes queda
+# visto: ni llena el tablero de historial ni gasta Jev en el.
+print("\nla primera corrida de ingest")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "P1", "@duenio esto es de antier", 30 * 60, mencion=True),
+                         msg(PERSONA, "P2", "y esto de anoche", 13 * 60),
+                         msg(SOPORTE, "P3", "@duenio esto es de hoy", 60, mencion=True)])
+        autoriza(home)
+        r = ingiere(home)
+        ok("solo entra lo de la ventana", caso_de_stanza(home, "P3") is not None
+           and caso_de_stanza(home, "P1") is None and caso_de_stanza(home, "P2") is None,
+           f"salio {r}")
+        ok("y el reporte cuenta lo que quedo visto de antes",
+           r.get("anteriores") == 2 and r["nuevos"] == 1, f"salio {r}")
+        r = ingiere(home)
+        ok("lo de antes no entra en la segunda corrida",
+           caso_de_stanza(home, "P1") is None and caso_de_stanza(home, "P2") is None
+           and r["nuevos"] == 0, f"salio {r}")
+        # Lo que llega despues con fecha de antes de la linea base (historial que el
+        # telefono sincroniza tarde) tampoco.
+        llegan(home, A, [msg(PERSONA, "P4", "historial tardio", 20 * 60),
+                         msg(PERSONA, "P5", "esto llego ahora", 5)])
+        r = ingiere(home)
+        ok("lo que llega tarde con fecha de antes queda visto, lo nuevo entra",
+           caso_de_stanza(home, "P4") is None and caso_de_stanza(home, "P5") is not None,
+           f"salio {r}")
+
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(PERSONA, "W1", "y esto de anoche", 13 * 60)])
+        autoriza(home)
+        js(home, "config", "case_window_hours", "24")
+        ingiere(home)
+        ok("la ventana es la de case_window_hours", caso_de_stanza(home, "W1") is not None)
+
+    falso = JevFalso(jev_segun_texto)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(SOPORTE, "Q1", "@duenio cuanto cuesta", 30 * 60, mencion=True),
+                             msg(SOPORTE, "Q2", "@duenio cuanto cuesta hoy", 30,
+                                 mencion=True)])
+            autoriza(home)
+            ingiere(home)
+            ok("con llave, Jev solo ve lo de la ventana", len(falso.pedidos) == 1,
+               f"{len(falso.pedidos)} pedidos")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
 
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
