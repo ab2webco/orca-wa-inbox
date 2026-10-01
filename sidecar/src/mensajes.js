@@ -67,6 +67,18 @@ export function usuarioDe (valor) {
   return jidDe(valor).split('@')[0].split(':')[0].trim()
 }
 
+/** El jid de una CONVERSACION, sin el dispositivo. En un directo (`@lid`,
+ *  `@s.whatsapp.net`) `X:90@lid` y `X@lid` son la misma persona: el sufijo dice desde
+ *  que aparato escribio, no con quien es la conversacion, y guardarlo duplicaba a la
+ *  persona en la lista (visto en vivo, 2026-10-01: `<lid>@lid` con su nombre y
+ *  `<lid>:90@lid` sin nombre). Es lo mismo que hace `jidNormalizedUser` de Baileys,
+ *  pero solo para los directos: un grupo (`@g.us`) y todo lo demas pasa tal cual. */
+export function jidDeChat (valor) {
+  const jid = jidDe(valor)
+  const m = /^([^@:_]+)(?:_\d+)?(?::\d+)?@(lid|s\.whatsapp\.net)$/.exec(jid)
+  return m ? `${m[1]}@${m[2]}` : jid
+}
+
 /** La identidad de alguien, CON su tipo. Dos numeros iguales en universos distintos no
  *  son la misma persona: el LID que WhatsApp le asigna a un tercero puede coincidir,
  *  digito por digito, con el telefono del propietario. Comparar solo el numero
@@ -262,7 +274,7 @@ export function aNumero (valor) {
  * ocurre antes de escribir, no en la consulta.
  */
 export function filaDeMensaje (wa, { cuenta, identidades }) {
-  const chatJid = wa?.key?.remoteJid
+  const chatJid = jidDeChat(wa?.key?.remoteJid)
   const stanzaId = wa?.key?.id
   if (!chatJid || !stanzaId) return null
   if (!esConversacion(chatJid)) return null
@@ -318,7 +330,7 @@ export function filaDeMensaje (wa, { cuenta, identidades }) {
 const STUB_REVOKE = 68
 
 export function filaDeActualizacion (evento) {
-  const chatJid = evento?.key?.remoteJid
+  const chatJid = jidDeChat(evento?.key?.remoteJid)
   const stanzaId = evento?.key?.id
   const cambio = evento?.update
   if (!chatJid || !stanzaId || !cambio) return null
