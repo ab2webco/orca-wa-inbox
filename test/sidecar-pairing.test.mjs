@@ -15,7 +15,7 @@
 import { decidirTrasCierre, calcularEsperaMs, intentoTrasEvento, mensajeQr, qrVencido,
   tocaEmitirAlmacen, opcionesDeSocket, salidaTrasCierre, repetidosTrasCierre, MOTIVO,
   PARCHES_DE_LIBRETA, CIERRES_REPETIDOS_TOPE, CIERRES_VENTANA_MS,
-  QR_ROTACION_MS, QR_VIGENCIA_MS, SALIDA,
+  QR_ROTACION_MS, QR_VIGENCIA_MS, SALIDA, LATIDO_LINEA_MS, mensajeLatido,
   ALMACEN_LATIDO_MS
 } from '../sidecar/src/index.js'
 
@@ -171,6 +171,28 @@ console.log('\nsidecar: 403, 411 y 440 dejan de reintentar para siempre')
   // Control: lo que ya reconectaba sigue reconectando aunque se repita, porque se cura
   // solo (una red que se cae diez veces sigue siendo una red).
   ok('un 408 repetido no se rinde', decidirTrasCierre(408, 1, 50).reconectar === true)
+}
+
+console.log('\nsidecar: el latido que prueba que la linea sigue viva')
+{
+  // "Conectado" salia de la ultima foto guardada en storage, que no caduca nunca: con
+  // el worker o el sidecar muertos, el panel seguia diciendo "conectado" una semana
+  // despues. El latido es lo que permite caducarla.
+  //
+  // Cada linea de stdout es un `storage.set` del worker, y Orca mata al worker a los 64
+  // sin confirmar: el latido es de a minuto, no de a segundo.
+  ok('late cada minuto o mas, no cada segundo', LATIDO_LINEA_MS >= 60000,
+    String(LATIDO_LINEA_MS))
+  ok('y no mas seguido que los conteos del almacen, que ya tienen freno',
+    LATIDO_LINEA_MS >= ALMACEN_LATIDO_MS, `${LATIDO_LINEA_MS} vs ${ALMACEN_LATIDO_MS}`)
+  const m = mensajeLatido(true, 1758500000000)
+  ok('el mensaje dice que es un latido', m.type === 'latido', JSON.stringify(m))
+  ok('trae su marca de tiempo', m.ts === 1758500000000, JSON.stringify(m))
+  ok('y si el socket esta abierto en ese momento', m.conectado === true &&
+    mensajeLatido(false, 1).conectado === false, JSON.stringify(m))
+  // Un latido no lleva nada de nadie: termina en storage, que lee el panel.
+  ok('y nada mas', Object.keys(m).sort().join(',') === 'conectado,ts,type',
+    JSON.stringify(m))
 }
 
 console.log('\nsidecar: el backoff crece y tiene tope')

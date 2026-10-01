@@ -60,8 +60,10 @@ Baileys intenta login y nunca pide registro.
       Motivos `sesion-reemplazada` (440), `acceso-denegado` (403) y
       `multidispositivo` (411); tope de 3 cierres seguidos en 10 min (un `open` no
       reinicia la cuenta), y salida `SALIDA.RENDIDO` (4) que el worker no relanza.
-- [ ] T3 — Sidecar: latido periódico por stdout (≥60 s, respeta el tope de 64
-      llamadas sin confirmar del host).
+- [x] T3 — Sidecar: latido periódico por stdout (≥60 s, respeta el tope de 64
+      llamadas sin confirmar del host). `{type:'latido', ts, conectado}` cada
+      `LATIDO_LINEA_MS` (60 s) y uno al arrancar; el worker lo guarda en
+      `sidecar.latido` con la hora del sidecar.
 - [ ] T4 — Worker: el `exit` no sobrescribe `sesion-cerrada`; reinicio
       supervisado con backoff y tope para las demás salidas. Prueba en
       `worker.test.mjs`.
@@ -98,4 +100,15 @@ Baileys intenta login y nunca pide registro.
 - RED `node test/worker.test.mjs`:
   `FALLA la salida se clasifica como rendida — {"tipo":"caida","motivo":"sidecar-cayo",...}`
 - GREEN: `sidecar-pairing` 78/78, `worker` 128/128, `sidecar-build` 5/5.
+
+### T3 — latido de la línea
+
+- RED `node test/sidecar-pairing.test.mjs`:
+  `SyntaxError: The requested module '../sidecar/src/index.js' does not provide an export named 'LATIDO_LINEA_MS'`
+- RED `node test/worker.test.mjs`:
+  `FALLA el latido queda en la clave que leen los paneles — {... "store":null,"startedAt":...}` (sin `latido`)
+- GREEN: `sidecar-pairing` 84/84, `worker` 131/131 (dos corridas), `sidecar-build` 5/5.
+- Nota: en una corrida falló "el QR llega a storage" de la prueba previa "el sidecar
+  habla" (ventana de 200 ms entre QR y `open` en el guion falso); dos corridas
+  siguientes en verde. Inestabilidad previa, no de este cambio.
 

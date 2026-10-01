@@ -621,6 +621,9 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
     // lo unico que distingue "no hay ninguna conversacion autorizada" de "esto no
     // funciona". Nunca lleva contenido: ni un cuerpo, ni un numero, ni un remitente.
     store: null,
+    // El ultimo "sigo aca" del sidecar (`mensajeLatido` en sidecar/src/index.js). Sin
+    // esto el "conectado" de los paneles era una foto que no caducaba nunca.
+    latido: null,
     startedAt: new Date().toISOString() }
   // Las escrituras se ENCADENAN sobre una sola promesa. `guardar` es async y nada
   // garantiza que dos `storage.set` en vuelo resuelvan en el orden en que se
@@ -709,6 +712,11 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
         // de notar que se escaneo con el telefono equivocado. Solo el numero visible;
         // el sidecar no manda ni el LID ni nada mas.
         escribir({ me: typeof mensaje.me === 'string' ? mensaje.me : null })
+      } else if (mensaje?.type === 'latido') {
+        // La hora del SIDECAR, no la de esta escritura: lo que el panel quiere saber es
+        // cuando dio senales de vida la linea, no cuando el worker las copio.
+        escribir({ latido: { ts: Number(mensaje.ts) || Date.now(),
+          conectado: mensaje.conectado === true } })
       } else if (mensaje?.type === 'libreta') {
         // Si la lista de personas llego. Hasta aca, una libreta que nunca se
         // sincronizo se veia EXACTAMENTE igual que "no tiene conversaciones
@@ -940,7 +948,7 @@ export default function activate(orca) {
    *  justo lo que el usuario acababa de pedir que dejara de ser cierto. */
   const limpiarEstadoSidecar = () => guardar(orca, SIDECAR_KEY, {
     at: new Date().toISOString(), connection: null, qr: null, motivo: null,
-    statusCode: null, error: null, exited: false, startedAt: null
+    statusCode: null, error: null, exited: false, latido: null, startedAt: null
   })
 
   /** Resuelve el auth dir y lanza el sidecar. Una sola implementacion para el arranque

@@ -659,6 +659,28 @@ console.log('\nworker: el sidecar habla, el panel se entera')
   apagar()
 }
 
+// ───────── el latido de la linea llega a storage ─────────
+console.log('\nworker: el latido del sidecar llega al panel')
+{
+  const guion = join(RAIZ, 'sidecar-late.cjs')
+  writeFileSync(guion,
+    '#!/usr/bin/env node\n' +
+    'function emit (m) { process.stdout.write(JSON.stringify(m) + "\\n") }\n' +
+    'emit({ type: "connection", state: "open" })\n' +
+    'setTimeout(() => emit({ type: "latido", ts: 1758500000000, conectado: true }), 50)\n' +
+    'setInterval(() => {}, 1000)\n',
+    { mode: 0o755 })
+  const orca = hostFalso(herramientas('sidecar-late', '#!/bin/sh\necho \'[]\'\n'), {}, guion)
+  const { apagar } = await arranca(orca)
+  await hasta(() => orca.store.sidecar && orca.store.sidecar.latido, 10000)
+  const l = orca.store.sidecar && orca.store.sidecar.latido
+  ok('el latido queda en la clave que leen los paneles', !!l, JSON.stringify(orca.store.sidecar))
+  ok('con la hora del sidecar, no la de la escritura', l && l.ts === 1758500000000,
+    JSON.stringify(l))
+  ok('y si el socket estaba abierto', l && l.conectado === true, JSON.stringify(l))
+  apagar()
+}
+
 // ───────── el almacen: conteos al panel, y donde estan las herramientas ─────────
 console.log('\nworker: lo que el sidecar guardo y desalojo llega al panel, en numeros')
 {

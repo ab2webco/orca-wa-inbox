@@ -314,6 +314,20 @@ function emitirAlmacen (conteos) {
 // los conteos salen con freno.
 export const ALMACEN_LATIDO_MS = 30000
 
+// Cada cuanto el sidecar dice "sigo aca" por stdout. Es lo que deja caducar el
+// "conectado" del panel: sin latido, la ultima foto guardada en storage no vencia nunca,
+// y con el worker o este proceso muertos el panel seguia diciendo "conectado" una semana
+// despues. Un minuto y no un segundo: cada linea es un `storage.set` del worker, y el
+// host lo mata a los 64 sin confirmar en vuelo (ver ALMACEN_LATIDO_MS). El latido de
+// cada segundo que lee `bin/wa-send` es OTRO, va al almacen y no cruza el host.
+export const LATIDO_LINEA_MS = 60000
+
+/** El latido que sale por stdout: la hora y si el socket esta abierto. Nada mas — esto
+ *  termina en storage, que lee el panel. */
+export function mensajeLatido (conectado, ts = Date.now()) {
+  return { type: 'latido', ts, conectado: conectado === true }
+}
+
 /** Si toca sacar los conteos. Un desalojo fuerza la salida: es lo unico que no se puede
  *  perder, porque perderlo significa que el usuario se entera cuando una fila sale sin
  *  cuerpo y sin explicacion (docs/ENCARGO-TRANSPORTE-UNICO.md §11-F2). */
@@ -757,6 +771,13 @@ async function iniciar () {
   }, ENVIO_LATIDO_MS)
   if (typeof salidaTimer.unref === 'function') salidaTimer.unref()
 
+  // El latido de la linea hacia el panel (ver LATIDO_LINEA_MS). Sale uno ya, para que el
+  // panel no tenga que esperar un minuto entero para creer lo que ve.
+  const latirLinea = () => emitir(mensajeLatido(conectado))
+  latirLinea()
+  const lineaTimer = setInterval(latirLinea, LATIDO_LINEA_MS)
+  if (typeof lineaTimer.unref === 'function') lineaTimer.unref()
+
   // La poda corre sola y REPORTA. "Un almacen sin tope y sin caducidad es un archivo de
   // conversaciones ajenas que nadie borra" (§11-F2), y lo que se desaloja se dice: el
   // conteo viaja al worker, al panel y al `doctor`.
@@ -777,6 +798,7 @@ async function iniciar () {
    *  lo anterior, y recien ahi se sale. */
   function terminar (codigo) {
     clearInterval(salidaTimer)
+    clearInterval(lineaTimer)
     clearInterval(podaTimer)
     almacen.cerrar()
     process.stdout.write('', () => process.exit(codigo ?? 1))
