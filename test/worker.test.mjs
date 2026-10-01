@@ -1929,5 +1929,379 @@ console.log('\nworker: la llave de Jev, su espejo 0600 y el aviso de que no es o
   apagar2()
 }
 
+// ───────── T6: las acciones del dueno sobre una tarjeta del tablero ─────────
+console.log('\nworker: las acciones del dueno sobre el tablero')
+
+// Un wa-scope y un wa-send de mentira que RECUERDAN lo que se les pidio. Son Python
+// porque el argv se guarda tal cual (JSON por linea): comprobar cada bandera con un
+// grep sobre `$*` no distingue un texto con espacios de dos argumentos.
+const ESTADO_FALSO = `
+import json, os, sys, hashlib
+AQUI = os.path.dirname(os.path.abspath(__file__))
+RUTA = os.path.join(AQUI, 'estado.json')
+def carga():
+    with open(RUTA) as f: return json.load(f)
+def guarda(e):
+    with open(RUTA, 'w') as f: json.dump(e, f)
+def anota(nombre):
+    with open(os.path.join(AQUI, nombre), 'a') as f: f.write(json.dumps(sys.argv[1:]) + '\\n')
+def opcion(argv, nombre):
+    for i, a in enumerate(argv):
+        if a == nombre and i + 1 < len(argv): return argv[i + 1]
+        if a.startswith(nombre + '='): return a[len(nombre) + 1:]
+    return None
+`
+const WA_SCOPE_FALSO = '#!/usr/bin/env python3\n' + ESTADO_FALSO + `
+anota('scope.jsonl')
+argv = sys.argv[1:]
+if argv[:1] != ['caso']:
+    print('[{"synced": true, "destinos": []}]'); sys.exit(0)
+e = carga()
+sub, cid = argv[1], argv[2]
+def falla(code, detail='fake'):
+    sys.stderr.write(json.dumps({'error': code, 'detail': detail}) + '\\n'); sys.exit(2)
+if e.get('falla', {}).get(sub): falla(e['falla'][sub])
+caso = e['casos'].get(cid)
+if caso is None: falla('E_NOT_FOUND')
+if opcion(argv, '--actor') is None and sub != 'ver': falla('E_ARGS', 'no actor')
+if sub == 'propuesta':
+    texto = opcion(argv, '--respuesta')
+    caso['propuesta'] = {'tipo': opcion(argv, '--tipo'), 'respuesta': texto}
+    caso['propuesta_version'] = hashlib.sha256(texto.encode()).hexdigest()
+    caso['propuesta_aprobada'] = None
+    caso['etapa'] = 'decision'
+elif sub == 'aprobar':
+    if opcion(argv, '--version') != caso['propuesta_version']: falla('E_VERSION')
+    caso['propuesta_aprobada'] = caso['propuesta_version']
+    if caso['etapa'] == 'decision' and caso['propuesta']['tipo'] == 'trabajar': caso['etapa'] = 'trabajo'
+elif sub == 'mover':
+    caso['etapa'] = argv[3]
+caso['aprobada'] = caso['propuesta_aprobada'] == caso['propuesta_version']
+e['casos'][cid] = caso
+guarda(e)
+print(json.dumps([caso]))
+`
+const WA_SEND_FALSO = '#!/usr/bin/env python3\n' + ESTADO_FALSO + `
+anota('send.jsonl')
+argv = sys.argv[1:]
+e = carga()
+cfg = e.get('send', {})
+def niega(codigo, salida=1):
+    sys.stderr.write('wa-send: ' + codigo + '\\n' + 'detalle largo\\n'); sys.exit(cfg.get('salida', salida))
+if '--approve' in argv:
+    req = argv[argv.index('--approve') + 1]
+    if cfg.get('approve', 'ok') != 'ok': niega(cfg['approve'])
+    if req not in e.setdefault('entregados', []): e['entregados'].append(req)
+    guarda(e)
+    print(json.dumps({'req_id': req, 'estado': 'enviado', 'chat': 'Cliente Alfa'})); sys.exit(0)
+if cfg.get('draft', 'ok') != 'ok': niega(cfg['draft'])
+req = opcion(argv, '--id')
+e.setdefault('borradores', {})[req] = argv[argv.index('--') + 1:] if '--' in argv else argv
+guarda(e)
+print(json.dumps({'req_id': req, 'estado': 'borrador', 'chat': 'Cliente Alfa'}))
+`
+
+const V1 = 'a1'.repeat(32)
+const V2 = 'b2'.repeat(32)
+const CHAT_CASO = '120363000000000001@g.us'
+const casoDe = (extra = {}) => ({
+  case_id: 7, account: 'pn:573000000012', chat_jid: CHAT_CASO, etapa: 'decision',
+  propuesta: { tipo: 'responder', respuesta: 'Hola, ya lo revisamos.' },
+  propuesta_version: V1, propuesta_aprobada: null, aprobada: false, ...extra
+})
+
+/** Un directorio de herramientas con los dos falsos y el estado que pida cada caso. */
+function herramientasCaso (nombre, estado) {
+  const dir = herramientas(nombre, WA_SCOPE_FALSO)
+  writeFileSync(join(dir, 'wa-send'), WA_SEND_FALSO, { mode: 0o755 })
+  writeFileSync(join(dir, 'estado.json'), JSON.stringify(estado))
+  const leer = (archivo) => existsSync(join(dir, archivo))
+    ? readFileSync(join(dir, archivo), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))
+    : []
+  return {
+    dir,
+    estado: () => JSON.parse(readFileSync(join(dir, 'estado.json'), 'utf8')),
+    // Solo lo de `caso`: el sync que corre solo tambien pasa por aca.
+    scope: () => leer('scope.jsonl').filter((a) => a[0] === 'caso'),
+    send: () => leer('send.jsonl')
+  }
+}
+
+let ordenPedido = 0
+/** Deja el pedido como lo deja el panel y espera SU veredicto. */
+async function pideCaso (orca, pedido) {
+  ordenPedido += 1
+  const id = pedido.id ?? `caso-${ordenPedido}`
+  orca.store.scopeRequest = { at: new Date().toISOString(), ...pedido, id }
+  await hasta(() => orca.store.scopeResult && orca.store.scopeResult.requestId === id, 20000)
+  return orca.store.scopeResult
+}
+const verbo = (llamada) => llamada[1]
+
+{
+  const f = herramientasCaso('caso-enviar', { casos: { 7: casoDe() } })
+  const orca = hostFalso(f.dir, { chats: [] })
+  const { apagar } = await arranca(orca)
+  // El panel manda lo que VIO; el texto, el actor y el chat salen del caso, no del pedido.
+  const v = await pideCaso(orca, { action: 'enviar', caseId: 7, version: V1,
+    actor: 'agente', texto: 'OTRO TEXTO', chat: 'otro@g.us' })
+  ok('Enviar contesta que si, con su codigo estable', v && v.ok === true && v.code === 'enviado',
+    JSON.stringify(v))
+  const verbos = f.scope().map(verbo)
+  ok('lee el caso, firma la version y despues lo da por respondido, en ese orden',
+    JSON.stringify(verbos) === JSON.stringify(['ver', 'aprobar', 'mover']), JSON.stringify(f.scope()))
+  ok('TODA mutacion lleva --actor dueno, puesto por el worker y no por el panel',
+    f.scope().filter((a) => verbo(a) !== 'ver').every((a) => {
+      const i = a.indexOf('--actor')
+      return i > 0 && a[i + 1] === 'dueno'
+    }) && !f.scope().some((a) => a.includes('agente')), JSON.stringify(f.scope()))
+  const aprobar = f.scope().find((a) => verbo(a) === 'aprobar')
+  ok('firma la version que el dueno vio', aprobar && aprobar.includes(V1) &&
+    aprobar.includes('--version'), JSON.stringify(aprobar))
+  const [borrador, aprobacion] = f.send()
+  ok('el texto sale del caso, no del pedido',
+    borrador && borrador.includes('Hola, ya lo revisamos.') && !borrador.includes('OTRO TEXTO'),
+    JSON.stringify(f.send()))
+  ok('el chat sale del caso, no del pedido',
+    borrador && borrador.includes(CHAT_CASO) && !borrador.includes('otro@g.us'),
+    JSON.stringify(borrador))
+  ok('deja el borrador y despues lo aprueba: la aprobacion del dueno es la que lo manda',
+    f.send().length === 2 && aprobacion && aprobacion.includes('--approve'), JSON.stringify(f.send()))
+  ok('el borrador NO pide --send: un chat en responder no lo manda solo antes de la aprobacion',
+    borrador && !borrador.includes('--send'), JSON.stringify(borrador))
+  ok('el id de la peticion lo fija el caso y su version: un reintento es el mismo envio',
+    borrador && borrador.some((x) => x.startsWith('--id=') && x.includes('7') && x.includes(V1.slice(0, 12))),
+    JSON.stringify(borrador))
+  ok('un texto que empieza con guion no se confunde con una bandera: va despues de `--`',
+    borrador && borrador.indexOf('--') > 0 && borrador.indexOf('--') < borrador.indexOf('Hola, ya lo revisamos.'),
+    JSON.stringify(borrador))
+  ok('la linea del caso viaja, para no escribirle a la conversacion de otro numero',
+    borrador && borrador.some((x) => x === '--line=pn:573000000012'), JSON.stringify(borrador))
+  ok('el caso termina en respondido', f.estado().casos['7'].etapa === 'respondido',
+    JSON.stringify(f.estado().casos['7']))
+  apagar()
+}
+
+{
+  // La propuesta cambio mientras el dueno miraba (triage corre cada 5 minutos): no se
+  // aprueba ni se manda lo que no vio.
+  const f = herramientasCaso('caso-version', { casos: { 7: casoDe({ propuesta_version: V2 }) } })
+  const orca = hostFalso(f.dir, { chats: [] })
+  const { apagar } = await arranca(orca)
+  const v = await pideCaso(orca, { action: 'enviar', caseId: 7, version: V1 })
+  ok('una version vieja se rechaza con E_VERSION', v && v.ok === false && v.code === 'E_VERSION',
+    JSON.stringify(v))
+  ok('y no se manda NADA', f.send().length === 0, JSON.stringify(f.send()))
+  ok('ni se firma ni se mueve', !f.scope().some((a) => ['aprobar', 'mover'].includes(verbo(a))),
+    JSON.stringify(f.scope()))
+  apagar()
+}
+
+{
+  // El caso cuya propuesta es un trabajo: "Enviar" no es lo que se aprueba ahi.
+  const f = herramientasCaso('caso-enviar-trabajo', { casos: { 7: casoDe({
+    propuesta: { tipo: 'trabajar', instrucciones: 'Revisar el modulo.' } }) } })
+  const orca = hostFalso(f.dir, { chats: [] })
+  const { apagar } = await arranca(orca)
+  const v = await pideCaso(orca, { action: 'enviar', caseId: 7, version: V1 })
+  ok('Enviar sobre una propuesta de trabajo se rechaza', v && v.ok === false && v.code === 'accion-invalida',
+    JSON.stringify(v))
+  ok('sin firmar ni mandar nada', f.send().length === 0 &&
+    !f.scope().some((a) => ['aprobar', 'mover'].includes(verbo(a))), JSON.stringify(f.scope()))
+  apagar()
+}
+
+{
+  // Cada motivo por el que wa-send no manda llega con su codigo y deja el caso donde
+  // estaba: decir "enviado" de lo que no salio es lo peor que puede hacer este panel.
+  for (const [codigo, salida] of [['send-timeout', 1], ['send-rejected', 1], ['send-no-transport', 4],
+    ['send-denied', 3], ['send-needs-approval', 3], ['send-no-draft', 1]]) {
+    const f = herramientasCaso(`caso-send-${codigo}`, { casos: { 7: casoDe() },
+      send: { approve: codigo, salida } })
+    const orca = hostFalso(f.dir, { chats: [] })
+    const { apagar } = await arranca(orca)
+    const v = await pideCaso(orca, { action: 'enviar', caseId: 7, version: V1 })
+    ok(`wa-send ${codigo} (salida ${salida}) llega como ese mismo codigo`,
+      v && v.ok === false && v.code === codigo, JSON.stringify(v))
+    ok(`y con ${codigo} el caso no se da por respondido`,
+      !f.scope().some((a) => verbo(a) === 'mover'), JSON.stringify(f.scope()))
+    apagar()
+  }
+}
+
+{
+  // Un doble clic: dos pedidos con ids distintos sobre la MISMA tarjeta. wa-send entrega
+  // por su `--id`, y ese id sale del caso y su version.
+  const f = herramientasCaso('caso-doble', { casos: { 7: casoDe() } })
+  const orca = hostFalso(f.dir, { chats: [] })
+  const { apagar } = await arranca(orca)
+  const a = await pideCaso(orca, { id: 'clic-1', action: 'enviar', caseId: 7, version: V1 })
+  const b = await pideCaso(orca, { id: 'clic-2', action: 'enviar', caseId: 7, version: V1 })
+  ok('los dos clics se contestan', a && b && a.requestId === 'clic-1' && b.requestId === 'clic-2')
+  ok('pero el mensaje se entrega UNA vez', f.estado().entregados.length === 1,
+    JSON.stringify(f.estado().entregados))
+  // El MISMO pedido dos veces (el panel reescribio la clave): el vigia lo ignora.
+  const antes = f.send().length
+  orca.store.scopeRequest = { at: new Date().toISOString(), id: 'clic-2', action: 'enviar',
+    caseId: 7, version: V1 }
+  await dormir(4500)
+  ok('un pedido con el mismo id no se ejecuta otra vez', f.send().length === antes,
+    JSON.stringify(f.send()))
+  apagar()
+}
+
+{
+  // Editar y enviar: el texto del dueno es una propuesta NUEVA, con su version, y esa es
+  // la que se firma y sale.
+  const f = herramientasCaso('caso-editar', { casos: { 7: casoDe() } })
+  const orca = hostFalso(f.dir, { chats: [] })
+  const { apagar } = await arranca(orca)
+  const v = await pideCaso(orca, { action: 'editar-enviar', caseId: 7, version: V1,
+    texto: '-Hola, le confirmo el jueves.' })
+  ok('Editar y enviar contesta que si', v && v.ok === true && v.code === 'enviado', JSON.stringify(v))
+  const verbos = f.scope().map(verbo)
+  ok('lee, propone, firma la version NUEVA y da por respondido',
+    JSON.stringify(verbos) === JSON.stringify(['ver', 'propuesta', 'aprobar', 'mover']), JSON.stringify(f.scope()))
+  const prop = f.scope().find((a) => verbo(a) === 'propuesta')
+  ok('la propuesta es de tipo responder con el texto del dueno, en una sola bandera `--respuesta=`',
+    prop && prop.includes('--tipo=responder') && prop.includes('--respuesta=-Hola, le confirmo el jueves.'),
+    JSON.stringify(prop))
+  const nueva = f.estado().casos['7'].propuesta_version
+  const aprobar = f.scope().find((a) => verbo(a) === 'aprobar')
+  ok('firma la version nueva, no la que habia', nueva !== V1 && aprobar &&
+    aprobar.includes(nueva) && !aprobar.includes(V1), JSON.stringify(aprobar))
+  ok('manda el texto del dueno', f.send()[0] && f.send()[0].includes('-Hola, le confirmo el jueves.'),
+    JSON.stringify(f.send()))
+  apagar()
+
+  const g = herramientasCaso('caso-editar-viejo', { casos: { 7: casoDe({ propuesta_version: V2 }) } })
+  const orca2 = hostFalso(g.dir, { chats: [] })
+  const { apagar: apagar2 } = await arranca(orca2)
+  const w = await pideCaso(orca2, { action: 'editar-enviar', caseId: 7, version: V1, texto: 'nuevo' })
+  ok('editar sobre una propuesta que cambio se rechaza, sin pisarla',
+    w && w.ok === false && w.code === 'E_VERSION' && !g.scope().some((a) => verbo(a) === 'propuesta'),
+    JSON.stringify([w, g.scope()]))
+  const vacio = await pideCaso(orca2, { action: 'editar-enviar', caseId: 7, version: V2, texto: '   ' })
+  ok('un texto vacio es E_ARGS y no llama a nada', vacio && vacio.ok === false && vacio.code === 'E_ARGS' &&
+    g.scope().length === 1, JSON.stringify([vacio, g.scope()]))
+  apagar2()
+}
+
+{
+  // Ejecutar aprueba un TRABAJO: el agente de la automatizacion lo recoge despues (T7).
+  const f = herramientasCaso('caso-ejecutar', { casos: { 7: casoDe({
+    propuesta: { tipo: 'trabajar', instrucciones: 'Revisar el modulo.' } }) } })
+  const orca = hostFalso(f.dir, { chats: [] })
+  const { apagar } = await arranca(orca)
+  const v = await pideCaso(orca, { action: 'ejecutar', caseId: 7, version: V1 })
+  ok('Ejecutar contesta que quedo aprobado', v && v.ok === true && v.code === 'aprobada', JSON.stringify(v))
+  ok('firma la version y nada mas: ni mueve a mano ni toca WhatsApp',
+    JSON.stringify(f.scope().map(verbo)) === JSON.stringify(['ver', 'aprobar']) && f.send().length === 0,
+    JSON.stringify(f.scope()))
+  ok('el caso queda en trabajo, lo que hace el CLI al firmar un trabajo',
+    f.estado().casos['7'].etapa === 'trabajo')
+  apagar()
+
+  const g = herramientasCaso('caso-ejecutar-respuesta', { casos: { 7: casoDe() } })
+  const orca2 = hostFalso(g.dir, { chats: [] })
+  const { apagar: apagar2 } = await arranca(orca2)
+  const w = await pideCaso(orca2, { action: 'ejecutar', caseId: 7, version: V1 })
+  ok('Ejecutar sobre una respuesta se rechaza: eso se envia, no se ejecuta',
+    w && w.ok === false && w.code === 'accion-invalida' && !g.scope().some((a) => verbo(a) === 'aprobar'),
+    JSON.stringify([w, g.scope()]))
+  apagar2()
+}
+
+{
+  const f = herramientasCaso('caso-mover', { casos: { 7: casoDe(), 8: casoDe({ case_id: 8 }),
+    9: casoDe({ case_id: 9, etapa: 'cerrado' }) } })
+  const orca = hostFalso(f.dir, { chats: [] })
+  const { apagar } = await arranca(orca)
+
+  const r = await pideCaso(orca, { action: 'reclasificar', caseId: 7, nota: 'es una queja, no una consulta' })
+  const re = f.scope().find((a) => verbo(a) === 'mover')
+  ok('Reclasificar devuelve el caso a clasificado con la nota del dueno',
+    r && r.ok === true && r.code === 'reclasificado' && re && re[2] === '7' && re[3] === 'clasificado' &&
+    re.includes('--motivo=es una queja, no una consulta') && re.includes('--actor') &&
+    re[re.indexOf('--actor') + 1] === 'dueno', JSON.stringify([r, re]))
+
+  await pideCaso(orca, { action: 'reclasificar', caseId: 8, nota: '  ' })
+  const sinNota = f.scope().filter((a) => verbo(a) === 'mover')[1]
+  ok('la nota es opcional: sin ella no se pasa --motivo', sinNota && !sinNota.some((x) => x.startsWith('--motivo')),
+    JSON.stringify(sinNota))
+
+  const c = await pideCaso(orca, { action: 'cerrar', caseId: 7, motivo: 'ya lo resolvi por telefono' })
+  const cerrar = f.scope().filter((a) => verbo(a) === 'mover')[2]
+  ok('Cerrar lleva el motivo del dueno', c && c.ok === true && c.code === 'cerrado' && cerrar[3] === 'cerrado' &&
+    cerrar.includes('--motivo=ya lo resolvi por telefono'), JSON.stringify([c, cerrar]))
+
+  await pideCaso(orca, { action: 'cerrar', caseId: 8 })
+  const cerrarSin = f.scope().filter((a) => verbo(a) === 'mover')[3]
+  const motivo = (cerrarSin || []).find((x) => x.startsWith('--motivo='))
+  ok('cerrar sin motivo pone uno: el CLI no deja una tarjeta cerrada sin decir por que',
+    !!motivo && motivo.length > '--motivo='.length, JSON.stringify(cerrarSin))
+
+  const a = await pideCaso(orca, { action: 'reabrir', caseId: 9 })
+  const reabrir = f.scope().filter((x) => verbo(x) === 'mover')[4]
+  ok('Reabrir lo devuelve a recibido', a && a.ok === true && a.code === 'reabierto' &&
+    reabrir[3] === 'recibido', JSON.stringify([a, reabrir]))
+  ok('ninguna de esas toca WhatsApp', f.send().length === 0)
+  apagar()
+}
+
+{
+  // Cada codigo estable del CLI llega al panel igual, para que el panel lo traduzca por
+  // codigo y no por el texto en ingles.
+  for (const codigo of ['E_ARGS', 'E_NOT_FOUND', 'E_STAGE', 'E_NOT_APPROVED', 'E_VERSION',
+    'E_EXCEPTION', 'E_BUSY']) {
+    const f = herramientasCaso(`caso-codigo-${codigo}`, { casos: { 7: casoDe() }, falla: { mover: codigo } })
+    const orca = hostFalso(f.dir, { chats: [] })
+    const { apagar } = await arranca(orca)
+    const v = await pideCaso(orca, { action: 'cerrar', caseId: 7, motivo: 'x' })
+    ok(`el error ${codigo} del CLI llega como ${codigo}`, v && v.ok === false && v.code === codigo,
+      JSON.stringify(v))
+    apagar()
+  }
+  const f = herramientasCaso('caso-sin-firma', { casos: { 7: casoDe() } })
+  writeFileSync(join(f.dir, 'wa-send'),
+    '#!/bin/sh\necho "no agent name is configured. Set it with x" >&2\nexit 1\n', { mode: 0o755 })
+  const orca = hostFalso(f.dir, { chats: [] })
+  const { apagar } = await arranca(orca)
+  const v = await pideCaso(orca, { action: 'enviar', caseId: 7, version: V1 })
+  ok('wa-send sin nombre de agente se distingue de un fallo cualquiera',
+    v && v.ok === false && v.code === 'send-no-signature', JSON.stringify(v))
+  apagar()
+}
+
+{
+  // Lo que no es un pedido valido se rechaza antes de llamar a nadie.
+  const f = herramientasCaso('caso-args', { casos: { 7: casoDe() } })
+  const orca = hostFalso(f.dir, { chats: [] })
+  const { apagar } = await arranca(orca)
+  for (const [nombre, pedido] of [
+    ['un id que no es numero', { action: 'cerrar', caseId: 'siete' }],
+    ['un id negativo', { action: 'cerrar', caseId: -1 }],
+    ['un id con decimales', { action: 'cerrar', caseId: 7.5 }],
+    ['sin id', { action: 'reabrir' }],
+    ['enviar sin version', { action: 'enviar', caseId: 7 }],
+    ['una version que no es un hash', { action: 'enviar', caseId: 7, version: 'cualquier cosa' }]
+  ]) {
+    const v = await pideCaso(orca, pedido)
+    ok(`${nombre} es E_ARGS`, v && v.ok === false && v.code === 'E_ARGS', JSON.stringify(v))
+  }
+  ok('y ninguno llega al CLI', f.scope().length === 0 && f.send().length === 0, JSON.stringify(f.scope()))
+  apagar()
+}
+
+{
+  // Ni siquiera el CLI: sin herramientas el panel recibe el mismo motivo estable de siempre.
+  const orca = hostFalso(herramientas('caso-sin-nada', null), { chats: [] })
+  const { apagar } = await arranca(orca)
+  const v = await pideCaso(orca, { action: 'cerrar', caseId: 7, motivo: 'x' })
+  ok('sin herramientas, el motivo es el estable del worker', v && v.ok === false && v.code === 'sin-herramientas',
+    JSON.stringify(v))
+  apagar()
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)

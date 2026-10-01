@@ -19,6 +19,7 @@ import { dirname, join } from 'node:path'
 
 import { HARNESS_KEY } from './harness.mjs'
 import { llaveValida } from './jev-espejo.mjs'
+import { crearAccionesCaso } from './acciones.mjs'
 
 // Las herramientas viajan dentro del plugin. Antes se buscaban en el PATH del usuario,
 // lo que solo funcionaba en la maquina donde alguien las habia enlazado a mano.
@@ -1576,7 +1577,13 @@ export default function activate(orca) {
     resultKey: SCOPE_RESULT_KEY,
     vencido: SCOPE_VEREDICTO.VENCIDO,
     desconocida: SCOPE_VEREDICTO.ACCION_DESCONOCIDA,
-    acciones: { [SCOPE_ACCION.QUITAR]: (pedido) => quitarAlcance(pedido) }
+    // Las acciones del dueno sobre el tablero (T6) viajan por este mismo canal: otra
+    // clave de pedido seria otra lectura de storage en cada vuelta del vigia, y el
+    // worker tiene un presupuesto de llamadas al host.
+    acciones: {
+      [SCOPE_ACCION.QUITAR]: (pedido) => quitarAlcance(pedido),
+      ...crearAccionesCaso({ run, motivoDe, herramienta: (nombre) => tool(nombre) })
+    }
   })
 
   /** Lo que el panel pide sobre la llave de Jev. La llave llega en el pedido y nada mas:
