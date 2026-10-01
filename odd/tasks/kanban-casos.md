@@ -300,6 +300,16 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
       sync de 5 min); un chat directo guardado con sufijo de dispositivo
       (`<lid>:90@lid`) duplica a la persona; `transport-silent` salta cuando el
       sync cae durante el reinicio del sidecar.
+      Cerrada en W2 (4f96d5f, eccfe91) y W1 (50cda3e).
+- [ ] T17 — Ajustes rehechos para el modelo nuevo: pestañas (Estado,
+      Conversaciones, Proyectos, Su aprobacion, Agente, Avanzado), un guardar por
+      tarjeta, cero `<select>` nativos (en el panel de Orca su lista no se dibuja;
+      Jev ya lo documento y uso grupos de botones), conversaciones y proyectos con
+      autocompletar propio, Jev con interruptor, reglas viejas de Plane marcadas.
+      Prueba que impide volver a meter un `<select>`.
+- [ ] T18 — Huecos de CLI vistos en T6: editar la propuesta en `listo`,
+      reclasificar desde `clasificado`, `wa-send` aprobado por el dueño sin dejar
+      fila de borrador.
 
 Rama `feat/tablero-casos`, desde `main` en v4.9.0. PRs encadenados:
 (T1–T3) decisiones: casos, entrada y Jev; (T4–T6, T13) tablero y ajustes; (T7, T8, T12, T14, T15)
