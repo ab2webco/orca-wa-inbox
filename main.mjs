@@ -977,9 +977,12 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
       } else if (mensaje?.type === 'latido') {
         // La hora del SIDECAR, no la de esta escritura: lo que el panel quiere saber es
         // cuando dio senales de vida la linea, no cuando el worker las copio.
-        escribir({ latido: { ts: Number(mensaje.ts) || Date.now(),
+        const escrito = escribir({ latido: { ts: Number(mensaje.ts) || Date.now(),
           conectado: mensaje.conectado === true } })
-        if (mensaje.conectado === true) avisar(alConectar, 'latido')
+        // El aviso espera a que el latido este EN storage: quien lo recibe pide un sync,
+        // y el sync lee la salud de la linea de ahi. Avisar antes dejaba una ventana en la
+        // que el sync todavia veia el latido de antes.
+        if (mensaje.conectado === true) escrito.then(() => avisar(alConectar, 'latido'))
       } else if (mensaje?.type === 'libreta') {
         // Si la lista de personas llego. Hasta aca, una libreta que nunca se
         // sincronizo se veia EXACTAMENTE igual que "no tiene conversaciones
@@ -1305,6 +1308,7 @@ export default function activate(orca) {
     // moverlo entero, o el sidecar le pregunta por el alcance a una instalacion
     // distinta de la que lee el resto del plugin (§11-E4).
     dirIngesta = s.toolsDir || TOOLS
+    primeraConexionPendiente = true
     apagarSidecar = lanzarSidecar({ orca, scriptPath: s.sidecarPath, authDir: resuelto.dir,
       toolsDir: dirIngesta, alSalir: alSalirSidecar, alLinea: alCambiarLinea,
       alAlmacen: () => ingesta.pedir(), alConectar: alConectarLibreta,
@@ -1350,10 +1354,22 @@ export default function activate(orca) {
   let libretaHasta = 0
   let libretaConectada = false
   const libretaViva = () => Date.now() < libretaHasta
+  // Tras cada (re)arranque del sidecar, UN sync cuando llega el primer latido conectado.
+  // El sync del arranque corre ~0.5 s despues de lanzarlo, antes de que haya latido: la
+  // salud sale `transport-silent` ("sin senal desde <hora vieja>") y el aviso rojo se
+  // quedaba hasta el sync de 5 minutos con la linea ya conectada. Es un sync por arranque
+  // y no uno por latido: el aviso que ya manda el sidecar, sin una llamada nueva al host.
+  let primeraConexionPendiente = false
   function alConectarLibreta () {
-    if (!libretaViva() || libretaConectada) return
-    libretaConectada = true
-    sincronizarPronto('libreta')
+    const primera = primeraConexionPendiente
+    primeraConexionPendiente = false
+    // Si ademas hay una peticion de libreta viva, ese sync ya cubre la conexion.
+    if (libretaViva() && !libretaConectada) {
+      libretaConectada = true
+      sincronizarPronto('libreta')
+      return
+    }
+    if (primera) sincronizarPronto('conexion')
   }
   function alLlegarLibreta () {
     if (!libretaViva()) return

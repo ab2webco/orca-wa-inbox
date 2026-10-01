@@ -2566,6 +2566,59 @@ console.log('\nworker: traer la libreta deja la lista al dia en segundos')
   ok('y ahi paran: no es un sync por cada latido', cuenta() === base + 2, `${base} -> ${cuenta()}`)
   apagar()
 }
+// ───────── tras (re)arrancar, el primer latido conectado dispara UN sync ─────────
+console.log('\nworker: el primer latido tras un arranque pide un sync y solo uno')
+{
+  // Visto en vivo: el plugin reinicia tras mas de 2 minutos caido, el sync del arranque
+  // corre ~0.5 s despues de lanzar el sidecar -antes de que haya un solo latido- y la
+  // salud sale `transport-silent` ("sin senal desde <hora vieja>"). El aviso rojo se
+  // quedaba hasta el sync de 5 minutos con la linea ya conectada.
+  const guion = join(RAIZ, 'sidecar-primer-latido.cjs')
+  writeFileSync(guion,
+    '#!/usr/bin/env node\n' +
+    'function emit (m) { process.stdout.write(JSON.stringify(m) + "\\n") }\n' +
+    'emit({ type: "connection", state: "connecting" })\n' +
+    // Ni un latido durante el primer segundo y medio: el sync del arranque corre en ese hueco.
+    'setTimeout(() => { emit({ type: "connection", state: "open" });\n' +
+    '  setInterval(() => emit({ type: "latido", ts: Date.now(), conectado: true }), 300) }, 1500)\n' +
+    'setInterval(() => {}, 1000)\n', { mode: 0o755 })
+  const syncs = join(RAIZ, 'syncs-primer-latido.txt')
+  const wascope = '#!/bin/sh\n' +
+    `[ "$1" = "sync" ] && echo "$@" >> ${JSON.stringify(syncs)}\n` +
+    'echo \'[{"synced": true, "destinos": []}]\'\n'
+  const cuenta = () => existsSync(syncs) ? readFileSync(syncs, 'utf8').trim().split('\n').length : 0
+  const resolvedor = join(RAIZ, 'resolve-primer-latido.mjs')
+  writeFileSync(resolvedor,
+    'import { mkdirSync } from "node:fs"\n' +
+    'const dir = ' + JSON.stringify(join(RAIZ, 'auth-primer-latido')) + '\n' +
+    'mkdirSync(dir, { recursive: true })\n' +
+    'process.stdout.write(JSON.stringify({ ok: true, dir }))\n')
+  const herr = herramientas('primer-latido', wascope)
+  const orca = hostFalso(herr, { chats: [] }, guion)
+  orca.host.call = (function (original) {
+    return async (action, params) => {
+      if (action === 'settings.get') {
+        return { value: { toolsDir: herr, sidecarPath: guion, authDirResolverPath: resolvedor } }
+      }
+      return original(action, params)
+    }
+  })(orca.host.call)
+  const { apagar } = await arranca(orca)
+  const alArrancar = cuenta()
+  ok('el sync del arranque corre antes de que haya latido', alArrancar >= 1 &&
+    !(orca.store.sidecar && orca.store.sidecar.latido), `${alArrancar} ${JSON.stringify(orca.store.sidecar)}`)
+  const llego = await hasta(() => orca.store.sidecar && orca.store.sidecar.latido, 8000)
+  ok('despues llega el primer latido conectado', !!llego)
+  const extra = await hasta(() => cuenta() >= alArrancar + 1, 8000)
+  ok('y pide un sync mas, sin esperar los 5 minutos', extra, `${alArrancar} -> ${cuenta()}`)
+  ok('con el motivo de la conexion', orca.store.syncStatus && orca.store.syncStatus.trigger === 'conexion',
+    JSON.stringify(orca.store.syncStatus))
+  await dormir(3000)
+  ok('y ahi para: no es un sync por cada latido', cuenta() === alArrancar + 1,
+    `${alArrancar} -> ${cuenta()}`)
+  apagar()
+}
+
 // ───────── el catalogo de proyectos: lo que Orca conoce, propuesto al dueno ─────────
 console.log('\nworker: el catalogo deriva propuestas de `orca worktree ps` sin inventar nada')
 {
