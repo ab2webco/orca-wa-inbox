@@ -19,6 +19,7 @@ import { dirname, join } from 'node:path'
 
 import { HARNESS_KEY } from './harness.mjs'
 import { llaveValida } from './jev-espejo.mjs'
+import { crearAccionesCaso } from './acciones.mjs'
 
 // Las herramientas viajan dentro del plugin. Antes se buscaban en el PATH del usuario,
 // lo que solo funcionaba en la maquina donde alguien las habia enlazado a mano.
@@ -823,7 +824,7 @@ function resolverAuthDir(pluginDir, guion = join(pluginDir, 'sidecar', 'resolve-
  */
 export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
   spawnFn = spawn, env = process.env, alSalir = () => {}, alLinea = () => {},
-  alAlmacen = () => {} }) {
+  alAlmacen = () => {}, alConectar = () => {}, alLibreta = () => {} }) {
   const nacioMs = Date.now()
   let estado = { at: new Date().toISOString(), connection: null, qr: null,
     motivo: null, statusCode: null, error: null, exited: false,
@@ -898,6 +899,13 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
   // mensajes es que `guardados` cambio, no que sea mayor que cero. Cambiar y no solo
   // crecer, porque un sidecar relanzado cuenta otra vez desde cero.
   let guardadosVistos = null
+  // Un aviso al worker nunca puede tumbar la lectura del protocolo: una falla de quien
+  // escucha se registra y la linea siguiente se sigue leyendo.
+  const avisar = (cb, que) => {
+    try { cb() } catch (error) {
+      orca.log(`sidecar ${que} handling failed: ${error.message}`)
+    }
+  }
   proceso.stdout.on('data', (chunk) => {
     restante += chunk.toString('utf8')
     const lineas = restante.split('\n')
@@ -928,6 +936,7 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
           // detras de una sesion ya conectada (docs/ENCARGO...§6).
           ...(mensaje.state === 'open' ? { qr: null } : {})
         })
+        if (mensaje.state === 'open') avisar(alConectar, 'connection')
       } else if (mensaje?.type === 'identidad') {
         // Quien quedo vinculado. El panel de actividad lo pinta al lado de
         // "conectado": tras escanear un QR, saber CUAL linea quedo es la unica forma
@@ -951,12 +960,14 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
         // cuando dio senales de vida la linea, no cuando el worker las copio.
         escribir({ latido: { ts: Number(mensaje.ts) || Date.now(),
           conectado: mensaje.conectado === true } })
+        if (mensaje.conectado === true) avisar(alConectar, 'latido')
       } else if (mensaje?.type === 'libreta') {
         // Si la lista de personas llego. Hasta aca, una libreta que nunca se
         // sincronizo se veia EXACTAMENTE igual que "no tiene conversaciones
         // directas": 296 grupos y ningun nombre, sin una sola senal de que faltaba
         // media lista.
         escribir({ libreta: { ok: mensaje.ok === true, at: new Date().toISOString() } })
+        if (mensaje.ok === true) avisar(alLibreta, 'libreta')
       } else if (mensaje?.type === 'store') {
         // Solo numeros y banderas, nunca una cadena. El protocolo del almacen no trae
         // texto de nadie, y esto termina en `storage`, que lee el panel.
@@ -1268,7 +1279,8 @@ export default function activate(orca) {
     dirIngesta = s.toolsDir || TOOLS
     apagarSidecar = lanzarSidecar({ orca, scriptPath: s.sidecarPath, authDir: resuelto.dir,
       toolsDir: dirIngesta, alSalir: alSalirSidecar, alLinea: alCambiarLinea,
-      alAlmacen: () => ingesta.pedir() })
+      alAlmacen: () => ingesta.pedir(), alConectar: alConectarLibreta,
+      alLibreta: alLlegarLibreta })
     return { ok: true, dir: resuelto.dir }
   }
 
@@ -1276,13 +1288,17 @@ export default function activate(orca) {
    *  conversaciones, actividad, insignia— es del numero anterior hasta el proximo sync,
    *  asi que se pide uno ya en vez de esperar al reloj. Si hay otro sync corriendo, se
    *  reintenta: el que corre puede estar leyendo con la linea de antes. */
-  function alCambiarLinea () {
+  function alCambiarLinea () { sincronizarPronto('linea') }
+
+  /** Pide un sync YA y lo reintenta mientras otro este corriendo: el que corre puede estar
+   *  leyendo lo de antes del cambio que motivo este. */
+  function sincronizarPronto (trigger) {
     let intentos = 0
     const intentar = () => {
       if (detenido) return
       intentos += 1
       // Ocupado no es fallido: un sync que fallo ya dejo su motivo en `syncStatus` y
-      // repetirlo no lo arregla; uno que esta corriendo puede ser de la linea de antes.
+      // repetirlo no lo arregla.
       if (sincronizando) {
         if (intentos < 20) {
           const t = setTimeout(intentar, 3000)
@@ -1290,10 +1306,31 @@ export default function activate(orca) {
         }
         return
       }
-      sincronizar('linea')
-        .catch((error) => orca.log(`line change sync failed: ${error.message}`))
+      sincronizar(trigger)
+        .catch((error) => orca.log(`${trigger} sync failed: ${error.message}`))
     }
     intentar()
+  }
+
+  // "Traer conversaciones" (T16): el boton relanza la sesion y las conversaciones llegan
+  // DESPUES, cuando la linea conecta y el telefono manda la libreta. La lista que lee el
+  // panel solo se rearmaba en el sync de 5 minutos, asi que una conversacion nueva no
+  // aparecia hasta entonces. Mientras la peticion esta viva (`libretaHasta`) se pide un sync
+  // al conectar y otro cuando la libreta llega; no se pide nada por cuenta propia ni en
+  // cada latido: son avisos que el sidecar ya manda, sin una sola llamada nueva al host.
+  const LIBRETA_VENTANA_MS = 3 * 60 * 1000
+  let libretaHasta = 0
+  let libretaConectada = false
+  const libretaViva = () => Date.now() < libretaHasta
+  function alConectarLibreta () {
+    if (!libretaViva() || libretaConectada) return
+    libretaConectada = true
+    sincronizarPronto('libreta')
+  }
+  function alLlegarLibreta () {
+    if (!libretaViva()) return
+    libretaHasta = 0
+    sincronizarPronto('libreta')
   }
 
   // Las acciones sobre la vida del sidecar van EN FILA: un desvincular automatico y un
@@ -1533,7 +1570,15 @@ export default function activate(orca) {
     acciones: {
       [SIDECAR_ACCION.DESVINCULAR]: pedidoDelPanel(() => desvincularSidecar()),
       [SIDECAR_ACCION.REINTENTAR]: pedidoDelPanel(() => reintentarSidecar()),
-      [SIDECAR_ACCION.LIBRETA]: pedidoDelPanel(() => reintentarSidecar())
+      [SIDECAR_ACCION.LIBRETA]: pedidoDelPanel(async () => {
+        const r = await reintentarSidecar()
+        // Solo si la sesion se relanzo: sin sidecar nuevo no llega ninguna libreta.
+        if (r.ok) {
+          libretaHasta = Date.now() + LIBRETA_VENTANA_MS
+          libretaConectada = false
+        }
+        return r
+      })
     }
   })
 
@@ -1576,7 +1621,13 @@ export default function activate(orca) {
     resultKey: SCOPE_RESULT_KEY,
     vencido: SCOPE_VEREDICTO.VENCIDO,
     desconocida: SCOPE_VEREDICTO.ACCION_DESCONOCIDA,
-    acciones: { [SCOPE_ACCION.QUITAR]: (pedido) => quitarAlcance(pedido) }
+    // Las acciones del dueno sobre el tablero (T6) viajan por este mismo canal: otra
+    // clave de pedido seria otra lectura de storage en cada vuelta del vigia, y el
+    // worker tiene un presupuesto de llamadas al host.
+    acciones: {
+      [SCOPE_ACCION.QUITAR]: (pedido) => quitarAlcance(pedido),
+      ...crearAccionesCaso({ run, motivoDe, herramienta: (nombre) => tool(nombre) })
+    }
   })
 
   /** Lo que el panel pide sobre la llave de Jev. La llave llega en el pedido y nada mas:

@@ -245,6 +245,35 @@
       .card-more:focus-visible { outline: 2px solid var(--ring, var(--fb-ring));
                                  outline-offset: 1px; }
 
+      /* Las acciones del dueno (T6). Los botones son los de `.acts`; aca solo cambia que
+         pueden partirse en varias lineas dentro de una columna de 160 px. */
+      .card-acts { flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+      .acts button.primario { background: var(--primary, var(--fb-primary));
+                              color: var(--primary-foreground, var(--fb-primary-foreground));
+                              border-color: transparent; }
+      .acts button.primario:hover { background: var(--primary, var(--fb-primary));
+                                    color: var(--primary-foreground, var(--fb-primary-foreground)); }
+      .tag.aprobada { color: var(--foreground, var(--fb-foreground)); font-weight: 600; }
+      /* Lo que paso con la accion: bueno en texto pleno, malo en --destructive. */
+      .card-msg { margin-top: 6px; font-size: 11px; font-weight: 600; overflow-wrap: anywhere;
+                  color: var(--foreground, var(--fb-foreground)); }
+      .card-msg.mala { color: var(--destructive, var(--fb-destructive)); }
+      .card-form { margin-top: 8px; }
+      .card-form label { display: block; margin-bottom: 4px; font-size: 10px; font-weight: 600;
+                         text-transform: uppercase; letter-spacing: 0.05em;
+                         color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .card-form textarea, .card-form input {
+        display: block; width: 100%; box-sizing: border-box; font: inherit; font-size: 12px;
+        padding: 6px 8px; border-radius: var(--radius-md);
+        border: 1px solid var(--input, var(--fb-border));
+        background: var(--background, var(--fb-background));
+        color: var(--foreground, var(--fb-foreground)); }
+      .card-form textarea { min-height: 96px; resize: vertical; }
+      .card-form textarea:focus-visible, .card-form input:focus-visible {
+        outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px; }
+      .card-form textarea[disabled], .card-form input[disabled] { opacity: 0.6; }
+      .card-form .acts { flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+
       /* Hasta 768 px: una lista agrupada por etapa. "Tu decision" y los bloqueados
          suben al principio; una etapa sin nada no ocupa lugar (la de decision si, para
          poder decir que no hay nada que decidir). */
@@ -254,6 +283,7 @@
         .col, .col.lane { flex: none; margin-left: 0; }
         .col.decision, .col.lane { order: -1; }
         .col.sin-nada:not(.decision) { display: none; }
+        .card .acts button { min-height: 32px; padding: 6px 12px; }
       }
     </style>
   </head>
@@ -309,9 +339,10 @@
     <div id="pending"><p class="empty" data-t="loading">Cargando…</p></div>
     </div>
 
-    <!-- El tablero es de SOLO LECTURA: lo escribe `wa-scope` en la clave `board` y las
-         acciones del dueno (T6) todavia no tienen canal. Un boton que no hace nada esta
-         prohibido, asi que el campo `actions` de cada tarjeta no se pinta. -->
+    <!-- El tablero lo escribe `wa-scope` en la clave `board`. Las acciones del dueno
+         (T6) dejan un pedido en `scopeRequest` y el worker lo cumple: el panel no ejecuta
+         nada ni dice quien firma. Solo se pinta una accion que la tarjeta trae en
+         `actions` Y que vale en su etapa. -->
     <div id="view-board" role="tabpanel" aria-labelledby="tab-board" hidden>
       <p class="meta nota" id="board-synced"></p>
       <p class="meta nota" id="board-note"></p>
@@ -388,7 +419,56 @@
               "agoNow": "ahora",
               "agoMin": "hace {n} min",
               "agoHour": "hace {n} h",
-              "agoDay": "hace {n} d"},
+              "agoDay": "hace {n} d",
+              "acEnviar": "Enviar",
+              "acEditar": "Editar y enviar",
+              "acEjecutar": "Ejecutar",
+              "acReclasificar": "Reclasificar",
+              "acCerrar": "Cerrar",
+              "acReabrir": "Reabrir",
+              "acConfirmEditar": "Enviar",
+              "acConfirmReclasificar": "Reclasificar",
+              "acConfirmCerrar": "Cerrar caso",
+              "acCancelar": "Cancelar",
+              "acEditarLabel": "Respuesta que se enviara",
+              "acNotaLabel": "Nota para el agente (opcional)",
+              "acMotivoLabel": "Motivo del cierre (opcional)",
+              "acAprobada": "Aprobada, en cola",
+              "acOkGeneric": "Hecho",
+              "acOkEnviado": "Enviado",
+              "acOkAprobada": "Aprobada: queda en cola para el agente",
+              "acOkReclasificado": "Devuelto a clasificado",
+              "acOkCerrado": "Caso cerrado",
+              "acOkReabierto": "Caso reabierto",
+              "acWarnTablero": "El tablero puede tardar en ponerse al dia.",
+              "acNoAnswer": "El plugin todavia no responde. Revise el tablero antes de repetir la accion.",
+              "acErrVacio": "Escriba la respuesta antes de enviarla.",
+              "acErrNoWrite": "No se pudo dejar el pedido para el plugin. Intente de nuevo.",
+              "acErrGeneric": "No se pudo completar la accion ({code}).",
+              "acErrArgs": "Los datos de la accion no son validos. Actualice el tablero e intente de nuevo.",
+              "acErrNotFound": "Ese caso ya no existe en esta linea. Se actualizo el tablero.",
+              "acErrStage": "El caso ya no esta en una etapa que permita esa accion. Se actualizo el tablero.",
+              "acErrNotApproved": "La propuesta vigente no esta aprobada, asi que no se pudo continuar.",
+              "acErrVersion": "La propuesta cambio mientras la miraba. Se actualizo el tablero: lea la nueva y decida de nuevo.",
+              "acErrException": "Este caso necesita su decision y no se aprueba por regla.",
+              "acErrBusy": "La base de casos esta ocupada. Intente de nuevo en unos segundos.",
+              "acErrInvalida": "Esa accion no corresponde a lo que propone el caso.",
+              "acErrSendDenied": "Esa conversacion no esta autorizada para responder. Cambie su modo en Ajustes.",
+              "acErrSendNeeds": "El mensaje quedo como borrador y no salio.",
+              "acErrSendNoTransport": "La linea de WhatsApp no esta corriendo y no se envio nada. Abra Orca y revise el estado de la linea.",
+              "acErrSendRejected": "WhatsApp rechazo el mensaje: no se entrego.",
+              "acErrSendTimeout": "La linea no confirmo a tiempo. El envio sigue en cola: vuelva a apretar Enviar y no se duplicara.",
+              "acErrSendNoDraft": "No se encontro el borrador del envio. Intente de nuevo.",
+              "acErrSendConflict": "Ese envio ya existe con otro texto, asi que no se mando nada.",
+              "acErrSendLine": "Esa conversacion no esta autorizada para el numero vinculado ahora. Revise sus Ajustes.",
+              "acErrSendFirma": "Falta el nombre del agente y sin el no se envia. Defina el nombre en Ajustes.",
+              "acErrJev": "Jev no pudo revisar el mensaje: quedo como borrador y no salio.",
+              "acErrDesconocida": "El plugin no entiende esa accion. Actualice el plugin.",
+              "acErrVencido": "El pedido vencio antes de atenderse. Intente de nuevo.",
+              "acErrSinHerr": "El plugin no pudo ejecutar sus herramientas.",
+              "acErrSinPermiso": "Orca no le dio permiso al plugin para ejecutar sus herramientas.",
+              "acErrDemoro": "La accion tardo demasiado y se corto. Revise el tablero antes de repetirla.",
+              "acErrFallo": "La accion fallo. Revise el tablero antes de repetirla."},
         en: {"title": "WhatsApp", "pending": "Waiting on you", "recent": "What your agent did", "loading": "Loading…", "nothingYet": "Nothing yet.", "nothingPending": "Nothing pending in the conversations you allowed.", "nothingAuthorized1": "You have 1 conversation set up and it is off.", "nothingAuthorized": "You have {n} conversations set up and all of them are off.", "nothingMapped": "No conversation is authorized yet.", "runNever": "Your agent has not checked yet.", "runNow": "Checking now…", "runCut": "The run started and never came back", "runFailed": "Last run failed", "runChecked1": "Checked 1 conversation", "runChecked": "Checked {n} conversations", "runNone": "nothing pending", "runWaiting1": "1 waiting", "runWaiting": "{n} waiting", "noData": "no data — run <code>wa-scope sync</code>", "running": "running", "image": "image", "mediaImage": "image", "mediaVideo": "video", "mediaPtt": "voice note", "mediaAudio": "audio", "mediaDocument": "document", "mediaOther": "attachment", "take": "Take", "ignore": "Ignore", "taken": "your agent takes it", "hint": "Your agent handles this on its own, as far as each conversation allows. Mark only to move it up or to keep it away.", "refreshTitle": "Re-read what is stored",
               "kindDirecto": "direct", "kindMencion": "mention", "kindRespuesta": "reply", "kindGrupo": "in the group",
               "actTriage": "triage", "actIssue": "card opened", "actDraft": "draft",
@@ -454,7 +534,56 @@
               "agoNow": "just now",
               "agoMin": "{n} min ago",
               "agoHour": "{n} h ago",
-              "agoDay": "{n} d ago"},
+              "agoDay": "{n} d ago",
+              "acEnviar": "Send",
+              "acEditar": "Edit and send",
+              "acEjecutar": "Run",
+              "acReclasificar": "Reclassify",
+              "acCerrar": "Close",
+              "acReabrir": "Reopen",
+              "acConfirmEditar": "Send",
+              "acConfirmReclasificar": "Reclassify",
+              "acConfirmCerrar": "Close case",
+              "acCancelar": "Cancel",
+              "acEditarLabel": "Reply that will be sent",
+              "acNotaLabel": "Note for the agent (optional)",
+              "acMotivoLabel": "Reason for closing (optional)",
+              "acAprobada": "Approved, queued",
+              "acOkGeneric": "Done",
+              "acOkEnviado": "Sent",
+              "acOkAprobada": "Approved: queued for the agent",
+              "acOkReclasificado": "Sent back to classified",
+              "acOkCerrado": "Case closed",
+              "acOkReabierto": "Case reopened",
+              "acWarnTablero": "The board may take a moment to catch up.",
+              "acNoAnswer": "The plugin has not answered yet. Check the board before repeating the action.",
+              "acErrVacio": "Write the reply before sending it.",
+              "acErrNoWrite": "The request could not be left for the plugin. Try again.",
+              "acErrGeneric": "The action could not be completed ({code}).",
+              "acErrArgs": "The action data is not valid. Refresh the board and try again.",
+              "acErrNotFound": "That case no longer exists on this line. The board was refreshed.",
+              "acErrStage": "The case is no longer in a stage that allows that action. The board was refreshed.",
+              "acErrNotApproved": "The current proposal is not approved, so it could not continue.",
+              "acErrVersion": "The proposal changed while you were looking at it. The board was refreshed: read the new one and decide again.",
+              "acErrException": "This case needs your decision and is not approved by rule.",
+              "acErrBusy": "The case database is busy. Try again in a few seconds.",
+              "acErrInvalida": "That action does not match what the case proposes.",
+              "acErrSendDenied": "That conversation is not allowed to reply. Change its mode in Settings.",
+              "acErrSendNeeds": "The message was left as a draft and was not sent.",
+              "acErrSendNoTransport": "The WhatsApp line is not running and nothing was sent. Open Orca and check the line status.",
+              "acErrSendRejected": "WhatsApp rejected the message: it was not delivered.",
+              "acErrSendTimeout": "The line did not confirm in time. The send is still queued: press Send again and it will not be duplicated.",
+              "acErrSendNoDraft": "The draft for this send was not found. Try again.",
+              "acErrSendConflict": "That send already exists with a different text, so nothing was sent.",
+              "acErrSendLine": "That conversation is not authorized for the number linked now. Check your Settings.",
+              "acErrSendFirma": "The agent name is missing and nothing is sent without it. Set the name in Settings.",
+              "acErrJev": "Jev could not review the message: it was left as a draft and was not sent.",
+              "acErrDesconocida": "The plugin does not understand that action. Update the plugin.",
+              "acErrVencido": "The request expired before it was handled. Try again.",
+              "acErrSinHerr": "The plugin could not run its tools.",
+              "acErrSinPermiso": "Orca did not give the plugin permission to run its tools.",
+              "acErrDemoro": "The action took too long and was cut off. Check the board before repeating it.",
+              "acErrFallo": "The action failed. Check the board before repeating it."},
         pt: {"title": "WhatsApp", "pending": "Aguardando voce", "recent": "O que o agente fez", "loading": "Carregando…", "nothingYet": "Nada ainda.", "nothingPending": "Nada pendente nas conversas que voce autorizou.", "nothingAuthorized1": "Voce tem 1 conversa configurada e ela esta em off.", "nothingAuthorized": "Voce tem {n} conversas configuradas e todas em off.", "nothingMapped": "Nenhuma conversa autorizada ainda.", "runNever": "Seu agente ainda nao revisou.", "runNow": "Revisando agora…", "runCut": "A revisao comecou e nao voltou", "runFailed": "A ultima revisao falhou", "runChecked1": "Revisou 1 conversa", "runChecked": "Revisou {n} conversas", "runNone": "nada pendente", "runWaiting1": "1 aguardando", "runWaiting": "{n} aguardando", "noData": "sem dados — rode <code>wa-scope sync</code>", "running": "rodando", "image": "imagem", "mediaImage": "imagem", "mediaVideo": "video", "mediaPtt": "nota de voz", "mediaAudio": "audio", "mediaDocument": "documento", "mediaOther": "anexo", "take": "Assumir", "ignore": "Ignorar", "taken": "seu agente assume", "hint": "Seu agente cuida disso sozinho, ate onde cada conversa permitir. Marque apenas para adiantar ou para que nao toque.", "refreshTitle": "Reler o que esta salvo",
               "kindDirecto": "direto", "kindMencion": "mencao", "kindRespuesta": "resposta", "kindGrupo": "do grupo",
               "actTriage": "triagem", "actIssue": "cartao aberto", "actDraft": "rascunho",
@@ -520,7 +649,56 @@
               "agoNow": "agora",
               "agoMin": "ha {n} min",
               "agoHour": "ha {n} h",
-              "agoDay": "ha {n} d"}
+              "agoDay": "ha {n} d",
+              "acEnviar": "Enviar",
+              "acEditar": "Editar e enviar",
+              "acEjecutar": "Executar",
+              "acReclasificar": "Reclassificar",
+              "acCerrar": "Fechar",
+              "acReabrir": "Reabrir",
+              "acConfirmEditar": "Enviar",
+              "acConfirmReclasificar": "Reclassificar",
+              "acConfirmCerrar": "Fechar caso",
+              "acCancelar": "Cancelar",
+              "acEditarLabel": "Resposta que sera enviada",
+              "acNotaLabel": "Nota para o agente (opcional)",
+              "acMotivoLabel": "Motivo do fechamento (opcional)",
+              "acAprobada": "Aprovada, na fila",
+              "acOkGeneric": "Feito",
+              "acOkEnviado": "Enviado",
+              "acOkAprobada": "Aprovada: fica na fila para o agente",
+              "acOkReclasificado": "Devolvido para classificado",
+              "acOkCerrado": "Caso fechado",
+              "acOkReabierto": "Caso reaberto",
+              "acWarnTablero": "O quadro pode demorar para se atualizar.",
+              "acNoAnswer": "O plugin ainda nao respondeu. Confira o quadro antes de repetir a acao.",
+              "acErrVacio": "Escreva a resposta antes de enviar.",
+              "acErrNoWrite": "Nao foi possivel deixar o pedido para o plugin. Tente de novo.",
+              "acErrGeneric": "Nao foi possivel concluir a acao ({code}).",
+              "acErrArgs": "Os dados da acao nao sao validos. Atualize o quadro e tente de novo.",
+              "acErrNotFound": "Esse caso nao existe mais nesta linha. O quadro foi atualizado.",
+              "acErrStage": "O caso nao esta mais em uma etapa que permita essa acao. O quadro foi atualizado.",
+              "acErrNotApproved": "A proposta atual nao esta aprovada, entao nao foi possivel continuar.",
+              "acErrVersion": "A proposta mudou enquanto voce a via. O quadro foi atualizado: leia a nova e decida de novo.",
+              "acErrException": "Este caso precisa da sua decisao e nao e aprovado por regra.",
+              "acErrBusy": "A base de casos esta ocupada. Tente de novo em alguns segundos.",
+              "acErrInvalida": "Essa acao nao corresponde ao que o caso propoe.",
+              "acErrSendDenied": "Essa conversa nao esta autorizada a responder. Mude o modo dela em Ajustes.",
+              "acErrSendNeeds": "A mensagem ficou como rascunho e nao foi enviada.",
+              "acErrSendNoTransport": "A linha do WhatsApp nao esta rodando e nada foi enviado. Abra o Orca e confira o estado da linha.",
+              "acErrSendRejected": "O WhatsApp rejeitou a mensagem: ela nao foi entregue.",
+              "acErrSendTimeout": "A linha nao confirmou a tempo. O envio continua na fila: aperte Enviar de novo e ele nao sera duplicado.",
+              "acErrSendNoDraft": "Nao foi encontrado o rascunho deste envio. Tente de novo.",
+              "acErrSendConflict": "Esse envio ja existe com outro texto, entao nada foi enviado.",
+              "acErrSendLine": "Essa conversa nao esta autorizada para o numero vinculado agora. Confira seus Ajustes.",
+              "acErrSendFirma": "Falta o nome do agente e sem ele nada e enviado. Defina o nome em Ajustes.",
+              "acErrJev": "O Jev nao conseguiu revisar a mensagem: ela ficou como rascunho e nao foi enviada.",
+              "acErrDesconocida": "O plugin nao entende essa acao. Atualize o plugin.",
+              "acErrVencido": "O pedido venceu antes de ser atendido. Tente de novo.",
+              "acErrSinHerr": "O plugin nao conseguiu executar suas ferramentas.",
+              "acErrSinPermiso": "O Orca nao deu ao plugin permissao para executar suas ferramentas.",
+              "acErrDemoro": "A acao demorou demais e foi cortada. Confira o quadro antes de repeti-la.",
+              "acErrFallo": "A acao falhou. Confira o quadro antes de repeti-la."}
       }
       var LANG = (function () {
         var tag = String(navigator.language || 'en').toLowerCase()
@@ -928,9 +1106,8 @@
 
       // ───────────────────────── El tablero de casos ─────────────────────────
       // `wa-scope` escribe la clave `board` (odd/tasks/kanban-casos.md, "Contratos") y
-      // este panel solo la LEE. El campo `actions` de cada tarjeta no se usa: las
-      // acciones del dueno (T6) todavia no tienen canal, y un boton que no hace nada
-      // esta prohibido.
+      // este panel la LEE. Las acciones del dueno (T6) salen de `actions`, y viajan por
+      // el canal del worker: un pedido en `scopeRequest`, su veredicto en `scopeResult`.
       //
       // Todo lo que trae una tarjeta es texto de clientes: se arma con createElement y
       // textContent, nunca con innerHTML, asi que no hay nada que escapar ni que olvidar.
@@ -1032,6 +1209,247 @@
           actualizado: board.updated_at }
       }
 
+      // ───────────── Las acciones del dueno sobre una tarjeta (T6) ─────────────
+      // El panel no ejecuta nada y no dice quien firma: deja UN pedido en `scopeRequest`
+      // (el canal del alcance, que el worker ya vigila) con la accion, el caso y, si
+      // aprueba algo, la version que el dueno vio. El worker pone el actor, saca el texto
+      // y el chat del caso y contesta en `scopeResult`, emparejado por el id del pedido.
+      var ACCIONES = ['enviar', 'editar', 'ejecutar', 'reclasificar', 'cerrar', 'reabrir']
+      // Donde vale cada accion. `actions` de la tarjeta dice lo que el CLI ofrece; esto
+      // saca lo que el worker rechazaria siempre: editar desde "Listo para responder" y
+      // reclasificar lo que ya esta clasificado no tienen camino en el CLI, y un boton que
+      // siempre falla es un boton que no hace nada.
+      var ACCION_REGLA = {
+        enviar: { etapas: ['decision', 'listo'], tipo: 'responder', version: true },
+        editar: { etapas: ['decision'], tipo: 'responder', version: true },
+        ejecutar: { etapas: ['decision'], tipo: 'trabajar', version: true },
+        reclasificar: { etapas: ['recibido', 'decision', 'bloqueado'] },
+        cerrar: { etapas: ['recibido', 'clasificado', 'decision', 'trabajo', 'listo',
+          'respondido', 'bloqueado'] },
+        reabrir: { etapas: ['respondido', 'cerrado', 'bloqueado'] }
+      }
+      var ACC_KEY = { enviar: 'acEnviar', editar: 'acEditar', ejecutar: 'acEjecutar',
+        reclasificar: 'acReclasificar', cerrar: 'acCerrar', reabrir: 'acReabrir' }
+      // El nombre con que el worker conoce la accion: "editar" abre un editor, y lo que se
+      // pide es editar Y enviar.
+      var ACC_PEDIDO = { editar: 'editar-enviar' }
+      // Las acciones con un campo antes de confirmar.
+      var ACC_FORM = { editar: { campo: 'textarea', label: 'acEditarLabel', ok: 'acConfirmEditar' },
+        reclasificar: { campo: 'input', label: 'acNotaLabel', ok: 'acConfirmReclasificar' },
+        cerrar: { campo: 'input', label: 'acMotivoLabel', ok: 'acConfirmCerrar' } }
+      var ACC_PRIMARIA = { enviar: true, ejecutar: true }
+      var OK_ACCION = { enviado: 'acOkEnviado', aprobada: 'acOkAprobada',
+        reclasificado: 'acOkReclasificado', cerrado: 'acOkCerrado', reabierto: 'acOkReabierto' }
+      // Los codigos estables del canal: los E_* de `wa-scope caso`, los send-* de `wa-send` y
+      // los propios del worker. El panel traduce por CODIGO; el texto en ingles del CLI no
+      // sale nunca en pantalla.
+      var ERR_ACCION = { E_ARGS: 'acErrArgs', E_NOT_FOUND: 'acErrNotFound', E_STAGE: 'acErrStage',
+        E_NOT_APPROVED: 'acErrNotApproved', E_VERSION: 'acErrVersion', E_EXCEPTION: 'acErrException',
+        E_BUSY: 'acErrBusy', 'accion-invalida': 'acErrInvalida',
+        'send-denied': 'acErrSendDenied', 'send-needs-approval': 'acErrSendNeeds',
+        'send-no-transport': 'acErrSendNoTransport', 'send-rejected': 'acErrSendRejected',
+        'send-timeout': 'acErrSendTimeout', 'send-no-draft': 'acErrSendNoDraft',
+        'send-id-conflict': 'acErrSendConflict', 'send-wrong-line': 'acErrSendLine',
+        'send-line-not-linked': 'acErrSendLine', 'send-ambiguous-line': 'acErrSendLine',
+        'send-no-signature': 'acErrSendFirma', 'jev-unavailable': 'acErrJev',
+        'accion-desconocida': 'acErrDesconocida', vencido: 'acErrVencido',
+        'sin-herramientas': 'acErrSinHerr', 'sin-permiso': 'acErrSinPermiso',
+        demoro: 'acErrDemoro', fallo: 'acErrFallo', 'no-escritura': 'acErrNoWrite' }
+      // Cuanto se espera el veredicto. El worker mira cada 3 s y un envio espera hasta 25 s
+      // al sidecar: mas que eso es un worker que no esta.
+      var ACCION_ESPERA_MS = 90000
+      var ACCION_SONDEO_MS = 1000
+      var TEXTO_MAX = 4096
+      var NOTA_MAX = 500
+
+      // Lo que vive entre repintadas: el sondeo reconstruye el tablero cada 8 s, y sin esto
+      // se llevaria el texto que el dueno esta escribiendo y el "…" de lo que esta en vuelo.
+      var enCurso = null        // { id, accion }: una sola accion a la vez
+      var formularios = {}      // caseId -> { modo, texto, version }
+      var mensajes = {}         // caseId -> { texto, mala, hasta }
+      var tableroActual = null
+
+      function accionesDe (c) {
+        if (!Number.isInteger(c.case_id) || c.case_id <= 0) return []
+        var dichas = textos(c.actions)
+        var prop = esObjeto(c.proposal) ? c.proposal : null
+        return ACCIONES.filter(function (a) {
+          if (dichas.indexOf(a) < 0) return false
+          var regla = ACCION_REGLA[a]
+          if (regla.etapas.indexOf(c.stage) < 0) return false
+          if (regla.tipo && !(prop && prop.tipo === regla.tipo)) return false
+          if (regla.version && !(prop && typeof prop.version === 'string' && prop.version)) return false
+          return true
+        })
+      }
+
+      function errorTexto (codigo, detalle) {
+        if (Object.prototype.hasOwnProperty.call(ERR_ACCION, codigo)) return t(ERR_ACCION[codigo])
+        return fmt('acErrGeneric', { code: String(codigo || detalle || '?').slice(0, 80) })
+      }
+
+      /** Deja el pedido y espera SU veredicto, por id. Sin el id el panel pintaria la
+       *  respuesta que quedo del clic anterior como si fuera la de este. `null` = el
+       *  plugin no contesto. */
+      function pedirAccion (pedido) {
+        pedido.id = 'ac-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8)
+        pedido.at = new Date().toISOString()
+        return call('storage.set', { key: 'scopeRequest', value: pedido }).then(function (r) {
+          if (!r || !r.ok) return { ok: false, code: 'no-escritura' }
+          var fin = Date.now() + ACCION_ESPERA_MS
+          return new Promise(function (resolve) {
+            ;(function vuelta () {
+              call('storage.get', { key: 'scopeResult' }).then(function (v) {
+                var dato = stored(v)
+                if (esObjeto(dato) && dato.requestId === pedido.id) { resolve(dato); return }
+                if (Date.now() > fin) { resolve(null); return }
+                setTimeout(vuelta, ACCION_SONDEO_MS)
+              })
+            })()
+          })
+        }).then(function (v) {
+          // Sin veredicto el pedido sigue escrito, y un envio que nadie atendio no puede
+          // salir despues por su cuenta: se reemplaza por una lapida, que el worker limpia.
+          if (!v) call('storage.set', { key: 'scopeRequest',
+            value: { id: pedido.id, at: new Date().toISOString(), tombstone: true } })
+          return v
+        })
+      }
+
+      function repintar () { renderBoard(tableroActual, true) }
+
+      function cerrarFormulario (id) {
+        delete formularios[id]
+        delete mensajes[id]
+        repintar()
+      }
+
+      function abrirFormulario (c, accion) {
+        var id = String(c.case_id)
+        var prop = esObjeto(c.proposal) ? c.proposal : {}
+        delete mensajes[id]
+        formularios[id] = { modo: accion, version: typeof prop.version === 'string' ? prop.version : null,
+          texto: accion === 'editar' && typeof prop.texto === 'string' ? prop.texto : '' }
+        repintar()
+        var campo = document.getElementById('campo-' + id)
+        if (campo) campo.focus()
+      }
+
+      /** El pedido de esta accion, o null si falta algo (y entonces ya lo dijo). */
+      function pedidoDe (c, accion, f) {
+        var id = String(c.case_id)
+        var prop = esObjeto(c.proposal) ? c.proposal : {}
+        var pedido = { action: ACC_PEDIDO[accion] || accion, caseId: c.case_id }
+        if (accion === 'enviar' || accion === 'ejecutar') pedido.version = prop.version
+        if (accion === 'editar') {
+          var texto = String((f && f.texto) || '').trim()
+          if (!texto) {
+            mensajes[id] = { texto: t('acErrVacio'), mala: true }
+            repintar()
+            return null
+          }
+          pedido.texto = texto
+          // Tras un E_VERSION la version se toma de la tarjeta ya releida (`null`).
+          pedido.version = (f && f.version) || prop.version
+        }
+        if (accion === 'reclasificar') {
+          var nota = String((f && f.texto) || '').trim()
+          if (nota) pedido.nota = nota
+        }
+        if (accion === 'cerrar') {
+          var motivo = String((f && f.texto) || '').trim()
+          if (motivo) pedido.motivo = motivo
+        }
+        return pedido
+      }
+
+      function ejecutarAccion (c, accion) {
+        if (enCurso) return
+        var id = String(c.case_id)
+        var pedido = pedidoDe(c, accion, formularios[id])
+        if (!pedido) return
+        enCurso = { id: id, accion: accion }
+        delete mensajes[id]
+        repintar()
+        return pedirAccion(pedido).then(function (v) {
+          enCurso = null
+          if (!v) {
+            mensajes[id] = { texto: t('acNoAnswer'), mala: true }
+          } else if (v.ok === true) {
+            delete formularios[id]
+            var dicho = porCodigo(OK_ACCION, v.code, t('acOkGeneric'))
+            if (v.warn) dicho += ' ' + t('acWarnTablero')
+            mensajes[id] = { texto: dicho, mala: false, hasta: Date.now() + 12000 }
+          } else {
+            mensajes[id] = { texto: errorTexto(v.code, v.detail), mala: true }
+            if (v.code === 'E_VERSION' && formularios[id]) formularios[id].version = null
+          }
+          // El tablero se relee tras cualquier veredicto: `wa-scope` lo reescribe en cada
+          // cambio, y tras E_VERSION o E_STAGE lo que hay en pantalla ya es viejo.
+          return reload()
+        }).then(repintar, function () { enCurso = null; repintar() })
+      }
+
+      function mensajeNodo (id) {
+        var m = mensajes[id]
+        if (!m || (!m.mala && Date.now() > m.hasta)) return null
+        var nodo = crear('div', 'card-msg' + (m.mala ? ' mala' : ''), m.texto)
+        nodo.setAttribute('role', m.mala ? 'alert' : 'status')
+        return nodo
+      }
+
+      function botonAccion (c, accion) {
+        var id = String(c.case_id)
+        var b = crear('button', (accion === 'cerrar' || accion === 'reabrir' ? 'mute ' : '') +
+          (ACC_PRIMARIA[accion] ? 'primario' : ''),
+          enCurso && enCurso.id === id && enCurso.accion === accion ? '…' : t(ACC_KEY[accion]))
+        b.type = 'button'
+        b.dataset.accion = accion
+        b.disabled = !!enCurso
+        b.addEventListener('click', function () {
+          if (ACC_FORM[accion]) abrirFormulario(c, accion)
+          else ejecutarAccion(c, accion)
+        })
+        return b
+      }
+
+      function formularioNodo (c, f) {
+        var id = String(c.case_id)
+        var def = ACC_FORM[f.modo]
+        var enVuelo = !!enCurso
+        var caja = crear('div', 'card-form')
+        var etiqueta = crear('label', null, t(def.label))
+        etiqueta.setAttribute('for', 'campo-' + id)
+        var campo = crear(def.campo)
+        campo.id = 'campo-' + id
+        if (def.campo === 'input') campo.type = 'text'
+        else campo.rows = 5
+        campo.maxLength = f.modo === 'editar' ? TEXTO_MAX : NOTA_MAX
+        campo.value = f.texto
+        campo.disabled = enVuelo
+        campo.addEventListener('input', function () { f.texto = campo.value })
+        caja.appendChild(etiqueta)
+        caja.appendChild(campo)
+        var msg = mensajeNodo(id)
+        if (msg) caja.appendChild(msg)
+        var fila = crear('div', 'acts')
+        var ok = crear('button', 'primario',
+          enCurso && enCurso.id === id ? '…' : t(def.ok))
+        ok.type = 'button'
+        ok.dataset.confirma = '1'
+        ok.disabled = enVuelo
+        ok.addEventListener('click', function () { ejecutarAccion(c, f.modo) })
+        var cancela = crear('button', 'mute', t('acCancelar'))
+        cancela.type = 'button'
+        cancela.dataset.cancela = '1'
+        cancela.disabled = enVuelo
+        cancela.addEventListener('click', function () { cerrarFormulario(id) })
+        fila.appendChild(ok)
+        fila.appendChild(cancela)
+        caja.appendChild(fila)
+        return caja
+      }
+
       function etiqueta (clase, texto) { return crear('span', 'tag ' + clase, texto) }
 
       function tarjetaNodo (c) {
@@ -1054,6 +1472,13 @@
           var prio = etiqueta('prio' + (PRIO_CLASE[c.prioridad] ? ' ' + PRIO_CLASE[c.prioridad] : ''),
             porCodigo(PRIO_KEY, c.prioridad))
           tags.appendChild(prio)
+        }
+        var posibles = accionesDe(c)
+        // Lo que va a salir se lee entero: no se manda un texto que no se vio.
+        var seEnvia = posibles.indexOf('enviar') >= 0
+        // Un trabajo aprobado es lo que el agente de la automatizacion recoge despues.
+        if (c.stage === 'trabajo' && esObjeto(c.proposal) && c.proposal.tipo === 'trabajar') {
+          tags.appendChild(etiqueta('aprobada', t('acAprobada')))
         }
         if (jev) {
           if (jev.skip === true) tags.appendChild(etiqueta('skip', t('jevLead') + ': ' + t('jevSkip')))
@@ -1081,7 +1506,7 @@
           var caja = crear('div', 'card-prop')
           caja.appendChild(crear('span', 'lead', t('propLead') +
             (prop.tipo ? ' · ' + porCodigo(PROP_KEY, prop.tipo) : '')))
-          if (prop.texto) caja.appendChild(crear('span', 'clamp', prop.texto))
+          if (prop.texto) caja.appendChild(crear('span', seEnvia ? '' : 'clamp', prop.texto))
           nodo.appendChild(caja)
         }
         if (typeof c.blocked_reason === 'string' && c.blocked_reason) {
@@ -1095,6 +1520,20 @@
         var ticket = typeof c.ticket === 'string' ? c.ticket
           : (esObjeto(c.ticket) ? (c.ticket.id || c.ticket.key || c.ticket.identifier || '') : '')
         if (ticket) nodo.appendChild(crear('div', 'card-ticket', t('ticketLead') + ' ' + ticket))
+
+        // Las acciones del dueno: un formulario si hay uno abierto, y si no, los botones.
+        var formulario = formularios[id]
+        if (formulario && ACC_FORM[formulario.modo] && posibles.indexOf(formulario.modo) >= 0) {
+          nodo.appendChild(formularioNodo(c, formulario))
+        } else {
+          var aviso = mensajeNodo(id)
+          if (aviso) nodo.appendChild(aviso)
+          if (posibles.length) {
+            var fila = crear('div', 'acts card-acts')
+            posibles.forEach(function (a) { fila.appendChild(botonAccion(c, a)) })
+            nodo.appendChild(fila)
+          }
+        }
 
         // Lo que se recorta se puede leer entero. Es el unico control del tablero y no es
         // una accion del dueno: solo muestra lo que ya esta en la tarjeta.
@@ -1158,7 +1597,11 @@
         return col
       }
 
-      function renderBoard (board) {
+      function renderBoard (board, forzar) {
+        tableroActual = board
+        // Con un formulario abierto el sondeo no repinta: reconstruir el DOM se llevaria el
+        // texto y el foco del dueno. Lo que cambie se ve al cerrarlo o tras cualquier accion.
+        if (!forzar && Object.keys(formularios).length) return
         var m = modeloTablero(board)
         var cols = el('board-cols')
         var nota = el('board-note')
@@ -1177,6 +1620,14 @@
           avisos.push(t('boardNoCases'))
         } else {
           ETAPAS.forEach(function (e) { cols.appendChild(columnaNodo(e, m)) })
+          // Un formulario o un mensaje de una tarjeta que ya no esta no tiene a quien
+          // pertenecer.
+          var presentes = {}
+          ETAPAS.forEach(function (e) {
+            m.porEtapa[e].forEach(function (c) { presentes[String(c.case_id)] = true })
+          })
+          Object.keys(formularios).forEach(function (k) { if (!presentes[k]) delete formularios[k] })
+          Object.keys(mensajes).forEach(function (k) { if (!presentes[k]) delete mensajes[k] })
           if (m.truncado) avisos.push(t('boardTruncated'))
           if (m.desconocidas) {
             avisos.push(m.desconocidas === 1 ? t('boardUnknown1') : fmt('boardUnknown', m.desconocidas))

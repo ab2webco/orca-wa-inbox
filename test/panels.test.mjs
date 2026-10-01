@@ -2716,9 +2716,9 @@ console.log('\nactivity.html — los titulos nuevos estan en los tres idiomas')
 
 // ── El tablero de casos (T5) ───────────────────────────────────────────────────────
 // `wa-scope` escribe la clave `board` (odd/tasks/kanban-casos.md, "Contratos") y el panel
-// solo la LEE: las acciones del dueno (T6) todavia no tienen canal, y un boton que no hace
-// nada esta prohibido. Todo lo que viene en una tarjeta es texto de clientes, asi que se
-// comprueba que se pinta como texto y nunca como HTML.
+// la lee; las acciones del dueno (T6) viajan por el canal del worker y se prueban mas abajo.
+// Todo lo que viene en una tarjeta es texto de clientes, asi que se comprueba que se pinta
+// como texto y nunca como HTML.
 const hace = (ms) => new Date(Date.now() - ms).toISOString()
 const ETAPAS_TABLERO = ['recibido', 'clasificado', 'decision', 'trabajo', 'listo',
   'respondido', 'cerrado', 'bloqueado']
@@ -2901,19 +2901,331 @@ console.log('\nactivity.html — tablero: texto de clientes, nunca HTML')
   ok('sin ejecutar nada', window.__xss === undefined)
 }
 
-console.log('\nactivity.html — tablero: solo lectura')
+console.log('\nactivity.html — tablero: que botones ofrece cada tarjeta (T6)')
 {
-  const { doc, enviados } = await abrirTablero({ board: tablero([tarjeta(),
-    tarjeta({ case_id: 2, stage: 'listo' })]) })
-  const botones = [...doc.querySelectorAll('#view-board button')]
-  ok('ninguna accion del dueno: el canal de T6 todavia no existe',
-    botones.every((b) => b.classList.contains('card-more')),
-    JSON.stringify(botones.map((b) => b.textContent)))
-  const texto = doc.getElementById('view-board').textContent
-  ok('y el campo `actions` no se pinta', !/enviar|ejecutar|reclasificar|reabrir/i.test(texto), texto)
-  ok('el tablero no escribe nada en storage',
-    enviados.every((e) => e.action !== 'storage.set'),
-    JSON.stringify(enviados.map((e) => e.action)))
+  // Solo lo que la tarjeta trae en `actions` Y vale en su etapa. Un boton que el worker va
+  // a rechazar siempre es un boton que no hace nada, y eso esta prohibido.
+  const botonesDe = async (c, idioma) => {
+    const { doc } = await abrirTablero({ board: tablero([c]) }, idioma)
+    return [...doc.querySelectorAll('.card .card-acts button')].map((b) => b.dataset.accion)
+  }
+  const igual = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+  let r = await botonesDe(tarjeta())
+  ok('en decision con una respuesta: enviar, editar, reclasificar y cerrar',
+    igual(r, ['enviar', 'editar', 'reclasificar', 'cerrar']), JSON.stringify(r))
+  r = await botonesDe(tarjeta({ proposal: { tipo: 'trabajar', texto: 'Revisar el modulo', version: 'abc' } }))
+  ok('en decision con un trabajo: ejecutar, no enviar ni editar',
+    igual(r, ['ejecutar', 'reclasificar', 'cerrar']), JSON.stringify(r))
+  r = await botonesDe(tarjeta({ stage: 'listo', actions: ['enviar', 'editar', 'cerrar'] }))
+  ok('en listo: enviar y cerrar (editar ahi no tiene camino en el CLI)',
+    igual(r, ['enviar', 'cerrar']), JSON.stringify(r))
+  r = await botonesDe(tarjeta({ stage: 'cerrado', actions: ['reabrir'] }))
+  ok('cerrado: solo reabrir', igual(r, ['reabrir']), JSON.stringify(r))
+  r = await botonesDe(tarjeta({ stage: 'trabajo', actions: ['cerrar'] }))
+  ok('en trabajo: solo cerrar', igual(r, ['cerrar']), JSON.stringify(r))
+  r = await botonesDe(tarjeta({ stage: 'clasificado', actions: ['reclasificar', 'cerrar'] }))
+  ok('clasificado no ofrece reclasificar: ya esta ahi y el CLI lo rechaza', igual(r, ['cerrar']),
+    JSON.stringify(r))
+  r = await botonesDe(tarjeta({ stage: 'bloqueado', actions: ['reclasificar', 'cerrar', 'reabrir'] }))
+  ok('bloqueado: reclasificar, cerrar y reabrir', igual(r, ['reclasificar', 'cerrar', 'reabrir']),
+    JSON.stringify(r))
+  r = await botonesDe(tarjeta({ actions: ['cerrar', 'incendiar', 'enviar', 'cerrar'] }))
+  ok('lo que `actions` no trae no se ofrece, lo que no se conoce se ignora y no se repite',
+    igual(r, ['enviar', 'cerrar']), JSON.stringify(r))
+  r = await botonesDe(tarjeta({ actions: [] }))
+  ok('sin acciones, ningun boton', r.length === 0, JSON.stringify(r))
+  r = await botonesDe(tarjeta({ actions: undefined }))
+  ok('sin el campo `actions`, ningun boton', r.length === 0, JSON.stringify(r))
+  r = await botonesDe(tarjeta({ proposal: { tipo: 'responder', texto: 'x' } }))
+  ok('sin la version de la propuesta no se ofrece aprobar ni mandar nada',
+    igual(r, ['reclasificar', 'cerrar']), JSON.stringify(r))
+  const m = await abrirTablero({ board: tablero([tarjeta(), tarjeta({ case_id: 2, stage: 'cerrado',
+    actions: ['reabrir'] })]) })
+  ok('abrir el tablero no escribe nada en storage: solo un clic lo hace',
+    m.enviados.every((e) => e.action !== 'storage.set'), JSON.stringify(m.enviados.map((e) => e.action)))
+  const texto = m.doc.querySelector('.card[data-case="1"] .card-prop').textContent
+  ok('la respuesta que se va a enviar se lee ENTERA: no se manda lo que no se vio',
+    !m.doc.querySelector('.card[data-case="1"] .card-prop .clamp'),
+    m.doc.querySelector('.card[data-case="1"] .card-prop').innerHTML)
+  ok('y sigue siendo texto', texto.includes('Le confirmamos el precio vigente.'))
+}
+
+// El host que contesta como el worker: lee `scopeRequest` y deja SU veredicto. Sin esto
+// el panel esperaria para siempre; con esto se prueba cada camino sin un worker de verdad.
+const conWorker = (respuesta, { demoraMs = 0 } = {}) => {
+  const pedidos = []
+  const gancho = (d, storage) => {
+    if (d.action === 'storage.set' && d.params.key === 'scopeRequest' && d.params.value &&
+        !d.params.value.tombstone) {
+      const pedido = d.params.value
+      pedidos.push(pedido)
+      setTimeout(() => {
+        const r = typeof respuesta === 'function' ? respuesta(pedido, storage) : respuesta
+        if (r) storage.scopeResult = { at: new Date().toISOString(), requestId: pedido.id,
+          action: pedido.action, ...r }
+      }, demoraMs)
+    }
+    return undefined
+  }
+  return { pedidos, gancho }
+}
+const abrirConWorker = async (cards, worker, extra = {}, idioma = 'es-419') => {
+  const storage = { board: tablero(cards), ...extra }
+  const m = await montar('activity.html', storage, idioma, worker.gancho)
+  await espera()
+  m.doc.getElementById('tab-board').click()
+  await espera()
+  return { ...m, storage }
+}
+const hastaPanel = async (cond, ms = 6000) => {
+  const fin = Date.now() + ms
+  while (Date.now() < fin) { if (cond()) return true; await new Promise((r) => setTimeout(r, 50)) }
+  return false
+}
+const botonDe = (doc, caso, accion) => doc.querySelector(`.card[data-case="${caso}"] .card-acts button[data-accion="${accion}"]`)
+
+console.log('\nactivity.html — tablero: Enviar, de punta a punta')
+{
+  // El worker tarda: es lo que hace un envio de verdad, y el estado "en vuelo" es lo que se mira.
+  const w = conWorker({ ok: true, code: 'enviado' }, { demoraMs: 600 })
+  const { doc, storage, enviados } = await abrirConWorker([tarjeta()], w)
+  botonDe(doc, 1, 'enviar').click()
+  await hastaPanel(() => w.pedidos.length > 0)
+  const p = w.pedidos[0]
+  ok('el clic deja UN pedido en la clave del canal del worker', w.pedidos.length === 1 && !!p,
+    JSON.stringify(w.pedidos))
+  ok('con la accion, el caso y la version que el dueno vio',
+    p && p.action === 'enviar' && p.caseId === 1 && p.version === 'abc', JSON.stringify(p))
+  ok('con id y hora, para que el worker lo atienda una sola vez y no uno viejo',
+    p && typeof p.id === 'string' && p.id.length > 6 && !isNaN(Date.parse(p.at)), JSON.stringify(p))
+  ok('y NADA mas: ni quien firma, ni el texto, ni el chat',
+    p && Object.keys(p).sort().join() === 'action,at,caseId,id,version', JSON.stringify(Object.keys(p || {})))
+  ok('mientras espera, TODOS los botones del tablero quedan quietos',
+    [...doc.querySelectorAll('.card-acts button')].every((b) => b.disabled),
+    JSON.stringify([...doc.querySelectorAll('.card-acts button')].map((b) => [b.textContent, b.disabled])))
+  botonDe(doc, 1, 'enviar')?.click()
+  await new Promise((r) => setTimeout(r, 150))
+  ok('y un segundo clic no deja un segundo pedido', w.pedidos.length === 1, JSON.stringify(w.pedidos))
+  const dicho = await hastaPanel(() => /Enviado/.test(doc.querySelector('.card[data-case="1"] .card-msg')?.textContent || ''))
+  ok('el veredicto bueno se dice en la tarjeta', dicho,
+    doc.querySelector('.card[data-case="1"]')?.textContent)
+  ok('y despues los botones vuelven', botonDe(doc, 1, 'enviar') && !botonDe(doc, 1, 'enviar').disabled)
+  ok('relee el tablero tras la accion',
+    enviados.filter((e) => e.action === 'storage.get' && e.params.key === 'board').length >= 2,
+    String(enviados.filter((e) => e.action === 'storage.get' && e.params.key === 'board').length))
+  ok('y sin un clic mas, nada vuelve a escribirse', w.pedidos.length === 1 &&
+    storage.scopeRequest !== undefined)
+}
+
+console.log('\nactivity.html — tablero: cada error se dice, en su idioma')
+{
+  const CODIGOS = ['E_ARGS', 'E_NOT_FOUND', 'E_STAGE', 'E_NOT_APPROVED', 'E_VERSION', 'E_EXCEPTION',
+    'E_BUSY', 'accion-invalida', 'send-denied', 'send-needs-approval', 'send-no-transport',
+    'send-rejected', 'send-timeout', 'send-no-draft', 'send-id-conflict', 'send-wrong-line',
+    'send-line-not-linked', 'send-ambiguous-line', 'send-no-signature', 'jev-unavailable',
+    'accion-desconocida', 'vencido', 'sin-herramientas', 'sin-permiso', 'demoro', 'fallo']
+  const { window } = await montar('activity.html')
+  const S = window.STRINGS
+  const claves = CODIGOS.map((c) => window.ERR_ACCION[c])
+  ok('cada codigo estable tiene su texto', claves.every(Boolean),
+    JSON.stringify(CODIGOS.filter((c) => !window.ERR_ACCION[c])))
+  for (const lang of ['es', 'en', 'pt']) {
+    const sin = claves.filter((k) => !S[lang][k])
+    ok(`${lang}: todos los errores tienen frase`, sin.length === 0, JSON.stringify(sin))
+  }
+  const textos = claves.map((k) => S.es[k])
+  ok('en espanol cada error dice algo distinto del codigo crudo',
+    textos.every((x) => x && !/^E_|^send-/.test(x)), JSON.stringify(textos))
+
+  for (const [codigo, idioma, patron] of [
+    ['E_VERSION', 'es-419', /cambio/i], ['E_VERSION', 'en-US', /changed/i],
+    ['send-timeout', 'es-419', /cola/i], ['send-denied', 'en-US', /not allowed|permission/i],
+    ['E_BUSY', 'pt-BR', /ocupad/i]
+  ]) {
+    const w = conWorker({ ok: false, code: codigo })
+    const m = await abrirConWorker([tarjeta()], w, {}, idioma)
+    botonDe(m.doc, 1, 'enviar').click()
+    const visto = await hastaPanel(() => m.doc.querySelector('.card[data-case="1"] .card-msg.mala'))
+    const msg = m.doc.querySelector('.card[data-case="1"] .card-msg')?.textContent || ''
+    ok(`${codigo} en ${idioma} se dice en la tarjeta`, !!visto && patron.test(msg), msg)
+    ok(`${codigo}: el boton vuelve para poder corregirlo`, !botonDe(m.doc, 1, 'enviar').disabled)
+  }
+
+  const desconocido = conWorker({ ok: false, code: 'algo-nuevo' })
+  const m = await abrirConWorker([tarjeta()], desconocido)
+  botonDe(m.doc, 1, 'enviar').click()
+  await hastaPanel(() => m.doc.querySelector('.card-msg.mala'))
+  ok('un codigo que el panel no conoce se dice con el codigo crudo, no se traga',
+    /algo-nuevo/.test(m.doc.querySelector('.card-msg').textContent), m.doc.querySelector('.card-msg')?.textContent)
+
+  // E_VERSION: la propuesta cambio. El tablero se relee y la tarjeta muestra la nueva.
+  const cambiada = tarjeta({ proposal: { tipo: 'responder', texto: 'Texto nuevo de la propuesta.', version: 'def' } })
+  const w2 = conWorker((pedido, storage) => {
+    storage.board = tablero([cambiada])
+    return { ok: false, code: 'E_VERSION' }
+  })
+  const n = await abrirConWorker([tarjeta()], w2)
+  botonDe(n.doc, 1, 'enviar').click()
+  await hastaPanel(() => n.doc.querySelector('.card-msg.mala'))
+  await hastaPanel(() => /Texto nuevo/.test(n.doc.querySelector('.card[data-case="1"]')?.textContent || ''))
+  ok('E_VERSION refresca el tablero: la tarjeta ya muestra la propuesta nueva',
+    /Texto nuevo de la propuesta/.test(n.doc.querySelector('.card[data-case="1"]').textContent),
+    n.doc.querySelector('.card[data-case="1"]')?.textContent)
+  ok('y el mensaje de que cambio sigue a la vista', !!n.doc.querySelector('.card[data-case="1"] .card-msg.mala'))
+  botonDe(n.doc, 1, 'enviar').click()
+  await hastaPanel(() => w2.pedidos.length === 2)
+  ok('y el siguiente clic lleva la version NUEVA', w2.pedidos[1] && w2.pedidos[1].version === 'def',
+    JSON.stringify(w2.pedidos))
+}
+
+console.log('\nactivity.html — tablero: sin respuesta del plugin')
+{
+  const w = conWorker(null)
+  const { doc, window, storage } = await abrirConWorker([tarjeta()], w)
+  window.ACCION_ESPERA_MS = 700
+  botonDe(doc, 1, 'enviar').click()
+  const dicho = await hastaPanel(() => doc.querySelector('.card[data-case="1"] .card-msg.mala'), 8000)
+  ok('sin veredicto lo dice, no se queda en "…" para siempre', dicho,
+    doc.querySelector('.card[data-case="1"]')?.textContent)
+  ok('y NO afirma que no se envio: no lo sabe', !/no se envio/i.test(doc.querySelector('.card-msg')?.textContent || ''),
+    doc.querySelector('.card-msg')?.textContent)
+  ok('deja una lapida en el pedido: un envio que nadie atendio no sale despues, solo',
+    storage.scopeRequest && storage.scopeRequest.tombstone === true, JSON.stringify(storage.scopeRequest))
+  ok('el boton vuelve', !botonDe(doc, 1, 'enviar').disabled)
+}
+
+console.log('\nactivity.html — tablero: Editar y enviar')
+{
+  const w = conWorker({ ok: true, code: 'enviado' })
+  const { doc, window } = await abrirConWorker([tarjeta()], w)
+  botonDe(doc, 1, 'editar').click()
+  const area = doc.querySelector('.card[data-case="1"] .card-form textarea')
+  ok('abre un editor con la respuesta propuesta', !!area && area.value === 'Le confirmamos el precio vigente.',
+    area && area.value)
+  ok('el editor tiene su etiqueta', !!doc.querySelector('.card-form label') &&
+    doc.querySelector('.card-form label').getAttribute('for') === area.id)
+  area.value = 'Le confirmo el precio de hoy.'
+  area.dispatchEvent(new window.Event('input', { bubbles: true }))
+  doc.getElementById('refresh').click()
+  await espera(); await espera()
+  const despues = doc.querySelector('.card[data-case="1"] .card-form textarea')
+  ok('el sondeo no se lleva lo que el dueno esta escribiendo',
+    !!despues && despues.value === 'Le confirmo el precio de hoy.', despues && despues.value)
+  ok('abrir el editor no escribio nada', w.pedidos.length === 0)
+  doc.querySelector('.card[data-case="1"] .card-form button[data-confirma]').click()
+  await hastaPanel(() => w.pedidos.length === 1)
+  const p = w.pedidos[0]
+  ok('Enviar manda el texto editado con la version de la que se partio',
+    p && p.action === 'editar-enviar' && p.caseId === 1 && p.version === 'abc' &&
+    p.texto === 'Le confirmo el precio de hoy.', JSON.stringify(p))
+  ok('y nada mas', p && Object.keys(p).sort().join() === 'action,at,caseId,id,texto,version')
+  await hastaPanel(() => /Enviado/.test(doc.querySelector('.card[data-case="1"]').textContent))
+  ok('el editor se cierra al enviarse', !doc.querySelector('.card[data-case="1"] .card-form'))
+
+  botonDe(doc, 1, 'editar').click()
+  const vacio = doc.querySelector('.card[data-case="1"] .card-form textarea')
+  vacio.value = '   '
+  vacio.dispatchEvent(new window.Event('input', { bubbles: true }))
+  doc.querySelector('.card-form button[data-confirma]').click()
+  await espera()
+  ok('un texto vacio no se envia y lo dice', w.pedidos.length === 1 &&
+    !!doc.querySelector('.card[data-case="1"] .card-form .card-msg.mala'),
+    doc.querySelector('.card[data-case="1"]').textContent)
+  doc.querySelector('.card-form button[data-cancela]').click()
+  ok('Cancelar cierra el editor sin escribir', !doc.querySelector('.card[data-case="1"] .card-form') &&
+    w.pedidos.length === 1)
+}
+
+console.log('\nactivity.html — tablero: Ejecutar, Reclasificar, Cerrar y Reabrir')
+{
+  const w = conWorker({ ok: true, code: 'hecho' })
+  const trabajo = tarjeta({ proposal: { tipo: 'trabajar', texto: 'Revisar el modulo', version: 'abc' } })
+  const { doc, window } = await abrirConWorker([trabajo, tarjeta({ case_id: 2, stage: 'cerrado', actions: ['reabrir'] })], w)
+  botonDe(doc, 1, 'ejecutar').click()
+  await hastaPanel(() => w.pedidos.length === 1)
+  ok('Ejecutar pide aprobar ESA version del trabajo',
+    w.pedidos[0] && w.pedidos[0].action === 'ejecutar' && w.pedidos[0].caseId === 1 &&
+    w.pedidos[0].version === 'abc', JSON.stringify(w.pedidos[0]))
+  await hastaPanel(() => !botonDe(doc, 1, 'ejecutar')?.disabled)
+
+  botonDe(doc, 1, 'reclasificar').click()
+  const nota = doc.querySelector('.card[data-case="1"] .card-form input')
+  ok('Reclasificar pide una nota opcional', !!nota && !!doc.querySelector('.card-form label'))
+  nota.value = 'Es una queja'
+  nota.dispatchEvent(new window.Event('input', { bubbles: true }))
+  doc.querySelector('.card[data-case="1"] .card-form button[data-confirma]').click()
+  await hastaPanel(() => w.pedidos.length === 2)
+  ok('y la manda con el pedido', w.pedidos[1] && w.pedidos[1].action === 'reclasificar' &&
+    w.pedidos[1].nota === 'Es una queja' && w.pedidos[1].version === undefined, JSON.stringify(w.pedidos[1]))
+  await hastaPanel(() => !!botonDe(doc, 1, 'cerrar') && !botonDe(doc, 1, 'cerrar').disabled)
+
+  botonDe(doc, 1, 'cerrar').click()
+  doc.querySelector('.card[data-case="1"] .card-form button[data-confirma]').click()
+  await hastaPanel(() => w.pedidos.length === 3)
+  ok('Cerrar sin motivo se puede: el motivo es opcional',
+    w.pedidos[2] && w.pedidos[2].action === 'cerrar' && !w.pedidos[2].motivo, JSON.stringify(w.pedidos[2]))
+  await hastaPanel(() => !!botonDe(doc, 2, 'reabrir') && !botonDe(doc, 2, 'reabrir').disabled)
+  botonDe(doc, 1, 'cerrar').click()
+  const motivo = doc.querySelector('.card[data-case="1"] .card-form input')
+  motivo.value = 'Ya lo resolvimos por telefono'
+  motivo.dispatchEvent(new window.Event('input', { bubbles: true }))
+  doc.querySelector('.card[data-case="1"] .card-form button[data-confirma]').click()
+  await hastaPanel(() => w.pedidos.length === 4)
+  ok('Cerrar con motivo lo lleva', w.pedidos[3] && w.pedidos[3].motivo === 'Ya lo resolvimos por telefono',
+    JSON.stringify(w.pedidos[3]))
+  await hastaPanel(() => !!botonDe(doc, 2, 'reabrir') && !botonDe(doc, 2, 'reabrir').disabled)
+  botonDe(doc, 2, 'reabrir').click()
+  await hastaPanel(() => w.pedidos.length === 5)
+  ok('Reabrir va de un solo clic', w.pedidos[4] && w.pedidos[4].action === 'reabrir' && w.pedidos[4].caseId === 2,
+    JSON.stringify(w.pedidos[4]))
+  ok('ninguno de esos pedidos lleva actor', w.pedidos.every((p) => !('actor' in p)), JSON.stringify(w.pedidos))
+}
+
+console.log('\nactivity.html — tablero: lo aprobado y en cola')
+{
+  const w = conWorker({ ok: true, code: 'aprobada' })
+  const { doc } = await abrirConWorker([tarjeta({ stage: 'trabajo', actions: ['cerrar'],
+    proposal: { tipo: 'trabajar', texto: 'Revisar el modulo', version: 'abc' } })], w)
+  const etiqueta = doc.querySelector('.card[data-case="1"] .tag.aprobada')
+  ok('una tarjeta en trabajo se ve aprobada y en cola', !!etiqueta && /aprobada/i.test(etiqueta.textContent),
+    doc.querySelector('.card')?.textContent)
+  const m = await abrirTablero({ board: tablero([tarjeta()]) })
+  ok('y una que espera su decision no', !m.doc.querySelector('.tag.aprobada'))
+}
+
+console.log('\nactivity.html — tablero: texto de clientes en el editor y en los mensajes, nunca HTML')
+{
+  const hostil = '<img src=x onerror="window.__xss2=1"><b>negrita</b>'
+  const w = conWorker({ ok: false, code: hostil })
+  const m = await abrirConWorker([tarjeta({ proposal: { tipo: 'responder', texto: hostil, version: 'abc' } })], w)
+  botonDe(m.doc, 1, 'editar').click()
+  const area = m.doc.querySelector('.card-form textarea')
+  ok('el editor lleva el texto como texto', area.value === hostil && m.doc.querySelectorAll('.card-form img, .card-form b').length === 0)
+  m.doc.querySelector('.card-form button[data-cancela]').click()
+  botonDe(m.doc, 1, 'enviar').click()
+  await hastaPanel(() => m.doc.querySelector('.card-msg.mala'))
+  ok('un codigo hostil del veredicto se pinta como texto', m.doc.querySelectorAll('.card img, .card b').length === 0 &&
+    m.window.__xss2 === undefined && m.doc.querySelector('.card-msg').textContent.includes('<img'))
+}
+
+console.log('\nactivity.html — tablero: textos de las acciones (tres idiomas)')
+{
+  const { window } = await montar('activity.html')
+  const S = window.STRINGS
+  const nuevas = Object.keys(S.en).filter((k) => /^ac[A-Z]/.test(k))
+  ok('hay textos de las acciones', nuevas.length > 40, String(nuevas.length))
+  ok('cada texto existe en espanol, ingles y portugues', nuevas.every((k) => S.es[k] && S.pt[k]),
+    JSON.stringify(nuevas.filter((k) => !S.es[k] || !S.pt[k])))
+  const conTilde = nuevas.filter((k) => /[^\x00-\x7f…]/.test(S.es[k] + S.pt[k]))
+  ok('van sin tildes ni enie, como el resto del panel', conTilde.length === 0, JSON.stringify(conTilde))
+  const tuteo = nuevas.filter((k) => /\b(tu|tus|te|ti)\b/i.test(S.es[k]))
+  ok('y el espanol habla de usted', tuteo.length === 0, JSON.stringify(tuteo))
+  const igualPt = nuevas.filter((k) => S.pt[k] === S.en[k] && S.en[k].length > 6)
+  ok('el portugues es propio, no ingles prestado', igualPt.length === 0, JSON.stringify(igualPt))
+  ok('los botones se llaman como pide la tarea',
+    S.es.acEnviar === 'Enviar' && S.es.acEditar === 'Editar y enviar' && S.es.acEjecutar === 'Ejecutar' &&
+    S.es.acReclasificar === 'Reclasificar' && S.es.acCerrar === 'Cerrar' && S.es.acReabrir === 'Reabrir',
+    JSON.stringify([S.es.acEnviar, S.es.acEditar, S.es.acEjecutar]))
 }
 
 console.log('\nactivity.html — tablero: estados vacios')
