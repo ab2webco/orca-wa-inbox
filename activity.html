@@ -23,6 +23,11 @@
         --fb-accent: #f5f5f5; --fb-accent-foreground: #171717;
         --fb-destructive: #e40014;
         --fb-border: #e5e5e5; --fb-ring: #a1a1a1;
+        --fb-card: #fff; --fb-muted: #f5f5f5;
+        /* Los dos tonos de getPlaneStateTone (orca-oss TaskPage.tsx) que la allowlist no
+           trae: emerald-500 y sky-500 de Tailwind. Y el texto de prioridad alta, el
+           amber-700/amber-200 de los carriles de Orca (workspace-status.ts). */
+        --tone-emerald: #10b981; --tone-sky: #0ea5e9; --tone-amber-text: #b45309;
       }
       @media (prefers-color-scheme: dark) {
         :root {
@@ -33,8 +38,12 @@
           --fb-accent: #404040; --fb-accent-foreground: #fafafa;
           --fb-destructive: #ff6568;
           --fb-border: rgb(255 255 255 / 0.07); --fb-ring: #737373;
+          --fb-card: #171717; --fb-muted: #262626;
+          --tone-amber-text: #fde68a;
         }
       }
+      html.light { --tone-amber-text: #b45309; }
+      html.dark { --tone-amber-text: #fde68a; }
       /* Los widgets nativos siguen al tema real del host, no a la preferencia del
          sistema. */
       html.light { color-scheme: light; }
@@ -46,9 +55,9 @@
          12 px, el px-3 de la casa (PortsPanel.tsx:335). */
       body {
         margin: 0; padding: 0 0 16px;
-        /* Geist es la fuente de la app, pero el iframe no ve sus @font-face: pedirla
-           solo daria un fallback distinto en cada maquina. Se queda el del sistema. */
-        font-family: system-ui, -apple-system, sans-serif;
+        /* La fuente de la app: el shell del host la embebe y la publica en --font-sans
+           (plugin-panel-shell.ts, PANEL_BASE_STYLE). Sin host, la del sistema. */
+        font-family: var(--font-sans, system-ui, -apple-system, sans-serif);
         font-size: 13px; letter-spacing: 0.01em;
         color: var(--foreground, var(--fb-foreground));
         background: var(--background, var(--fb-background));
@@ -168,122 +177,314 @@
                    background: var(--primary, var(--fb-primary));
                    color: var(--primary-foreground, var(--fb-primary-foreground)); }
 
-      /* El tablero. Siete columnas del flujo y, aparte, el carril de bloqueados. Las
-         columnas se desplazan DENTRO de su contenedor (entre 769 y ~1300 px no caben las
-         ocho): la pagina nunca. Hasta 768 px pasa a una lista agrupada por etapa. */
-      .board-cols { display: flex; gap: 8px; padding: 0 12px; overflow-x: auto;
-                    align-items: flex-start; }
-      .col { flex: 1 0 160px; min-width: 0; padding: 8px;
-             border: 1px solid var(--border, var(--fb-border));
-             border-radius: var(--radius-md);
-             background: var(--secondary, var(--fb-secondary)); }
-      .col.lane { border-style: dashed; margin-left: 4px; }
-      /* "Tu decision" es lo unico que espera al dueno: filete grueso en --primary y la
-         cuenta rellena. El resto del tablero es informativo. */
-      .col.decision { border: 2px solid var(--primary, var(--fb-primary)); padding: 7px; }
-      .col-head { display: flex; align-items: center; justify-content: space-between;
-                  gap: 6px; margin: 0 0 8px; font-size: 11px; font-weight: 600;
-                  text-transform: uppercase; letter-spacing: 0.05em;
-                  color: var(--muted-foreground, var(--fb-muted-foreground)); }
-      .col.decision .col-head { color: var(--foreground, var(--fb-foreground));
-                                font-size: 12px; }
-      .col.lane .col-head { color: var(--destructive, var(--fb-destructive)); }
-      .col-name { overflow-wrap: anywhere; }
-      .col-count { flex: none; min-width: 20px; padding: 0 6px; line-height: 18px;
-                   text-align: center; letter-spacing: 0; border-radius: 9999px;
-                   background: var(--background, var(--fb-background));
+      /* ── El tablero ──────────────────────────────────────────────────────────────
+         Copia el tablero de Plane en Orca (orca-oss/src/renderer/src/components):
+         la barra de TaskPage.tsx, la fila de etapas de plane-board-minimap.tsx, la
+         columna de plane-board-column.tsx y la tarjeta de plane-board-card.tsx. Las
+         clases de Tailwind de alla se traducen a CSS con los tokens que el host inyecta;
+         cada bloque nombra la clase que imita. */
+
+      /* Los puntos de etapa: getPlaneStateTone (TaskPage.tsx) pinta lo terminado en
+         esmeralda, lo empezado en cielo, lo cancelado en --destructive y el resto en
+         apagado. La allowlist no trae esos dos tonos, asi que van los de la paleta de
+         Tailwind que usa la app (emerald-500, sky-500). "Su decision" va en --primary:
+         es la columna del dueno. */
+      .dot-etapa { flex: none; display: inline-block; width: 8px; height: 8px;
+                   border-radius: 9999px; border: 1px solid transparent;
+                   background: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .dot-etapa.t-recibido { background: transparent;
+                   border-color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .dot-etapa.t-decision { background: var(--primary, var(--fb-primary)); }
+      .dot-etapa.t-trabajo, .dot-etapa.t-listo { background: var(--tone-sky); }
+      .dot-etapa.t-listo { background: transparent; border-color: var(--tone-sky);
+                   box-shadow: inset 0 0 0 2px var(--tone-sky); }
+      .dot-etapa.t-respondido, .dot-etapa.t-cerrado { background: var(--tone-emerald); }
+      .dot-etapa.t-cerrado { opacity: 0.55; }
+      .dot-etapa.t-bloqueado { background: var(--destructive, var(--fb-destructive)); }
+
+      /* La barra: `rounded-md border border-border/50 bg-muted/50 px-3 pt-2`. */
+      .board-bar { margin: 0 12px 8px; padding: 8px 12px;
                    border: 1px solid var(--border, var(--fb-border));
-                   color: var(--foreground, var(--fb-foreground)); }
-      .col.decision.con-casos .col-count { background: var(--primary, var(--fb-primary));
-             border-color: transparent;
-             color: var(--primary-foreground, var(--fb-primary-foreground)); }
-      .col-empty, .col-more { font-size: 11px; margin: 0;
+                   border-radius: var(--radius-md);
+                   background: color-mix(in srgb, var(--muted, var(--fb-muted)) 50%, transparent); }
+      /* La fila de etapas (plane-board-minimap.tsx): `px-2 py-1 text-[11px] rounded-md`,
+         elegida `border-border/60 bg-accent text-foreground`. Se desplaza dentro de si
+         misma; la pagina nunca. */
+      .chips { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: thin;
+               margin: 0 -4px; padding: 0 4px 2px; }
+      .chip { flex: none; display: inline-flex; align-items: center; gap: 6px;
+              padding: 4px 8px; font: inherit; font-size: 11px; line-height: 16px;
+              border: 1px solid transparent; border-radius: var(--radius-md);
+              background: none; cursor: pointer;
+              color: var(--muted-foreground, var(--fb-muted-foreground));
+              transition: background-color 90ms ease, color 90ms ease; }
+      .chip:hover { color: var(--foreground, var(--fb-foreground));
+              background: color-mix(in srgb, var(--accent, var(--fb-accent)) 60%, transparent); }
+      .chip[aria-pressed="true"] { color: var(--foreground, var(--fb-foreground));
+              background: var(--accent, var(--fb-accent));
+              border-color: var(--border, var(--fb-border)); }
+      .chip:focus-visible { outline: 1px solid var(--ring, var(--fb-ring)); outline-offset: 0; }
+      .chip-name { font-weight: 500; white-space: nowrap; }
+      .chip-count { font-variant-numeric: tabular-nums; }
+      /* Lo que espera al dueno pesa mas: la cuenta en pastilla, como la de la pestana. */
+      .chip.fuerte .chip-name { color: var(--foreground, var(--fb-foreground)); font-weight: 600; }
+      .chip.fuerte .chip-count { min-width: 18px; padding: 0 5px; border-radius: 9999px;
+              text-align: center; font-weight: 600; font-size: 10px; line-height: 16px;
+              background: var(--primary, var(--fb-primary));
+              color: var(--primary-foreground, var(--fb-primary-foreground)); }
+
+      .bar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+                 margin-top: 8px; }
+      /* El buscador: `h-8 rounded-md border-border/50 bg-background pl-8 text-xs`, con la
+         lupa `size-3.5` a la izquierda. */
+      .search { position: relative; flex: 1 1 240px; min-width: 0; }
+      .search > svg { position: absolute; left: 10px; top: 50%; width: 14px; height: 14px;
+              transform: translateY(-50%); pointer-events: none;
+              color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round;
+            stroke-linejoin: round; }
+      .search input { display: block; width: 100%; height: 32px; padding: 0 32px;
+              font: inherit; font-size: 12px; border-radius: var(--radius-md);
+              border: 1px solid var(--input, var(--fb-border));
+              background: var(--background, var(--fb-background));
+              color: var(--foreground, var(--fb-foreground)); }
+      .search input::placeholder { color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .search input:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: -1px; }
+      .search-clear { position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+              display: inline-flex; align-items: center; justify-content: center;
+              width: 22px; height: 22px; padding: 0; border: 0; border-radius: var(--radius-md);
+              background: none; cursor: pointer;
+              color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .search-clear:hover { color: var(--foreground, var(--fb-foreground)); }
+      .search-clear svg { width: 14px; height: 14px; }
+      /* Lista/Tablero: el ToggleGroup `outline sm`, cada boton `h-7 px-2 text-[11px]`. */
+      .seg { flex: none; display: inline-flex; overflow: hidden;
+             border: 1px solid var(--border, var(--fb-border)); border-radius: var(--radius-md); }
+      .seg button { display: inline-flex; align-items: center; gap: 6px; height: 28px;
+             padding: 0 8px; font: inherit; font-size: 11px; border: 0; cursor: pointer;
+             background: transparent; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .seg button + button { border-left: 1px solid var(--border, var(--fb-border)); }
+      .seg button:hover { color: var(--foreground, var(--fb-foreground)); }
+      .seg button[aria-pressed="true"] { background: var(--accent, var(--fb-accent));
+             color: var(--accent-foreground, var(--fb-accent-foreground)); }
+      .seg button:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: -2px; }
+      .seg svg { width: 14px; height: 14px; }
+      #board-shown { white-space: nowrap; }
+
+      /* Un solo estado vacio y en calma, como el de Plane: `px-4 py-10 text-center`. */
+      .board-empty { margin: 8px 12px; padding: 40px 16px; text-align: center; }
+      .board-empty .t { margin: 0; font-size: 13px; font-weight: 500;
+              color: var(--foreground, var(--fb-foreground)); }
+      .board-empty .b { margin: 6px auto 0; max-width: 360px; font-size: 12px;
+              color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .board-empty.error .t { color: var(--destructive, var(--fb-destructive)); }
+      .board-nada { margin: 0; padding: 32px 16px; text-align: center; font-size: 12px;
+              color: var(--muted-foreground, var(--fb-muted-foreground)); }
+
+      .board-body { display: flex; align-items: flex-start; gap: 12px; padding: 0 12px; }
+      .board-main { flex: 1 1 auto; min-width: 0; }
+
+      /* Las columnas: `flex gap-3 overflow-x-auto p-3`. Se desplazan DENTRO de su
+         contenedor; la pagina nunca. Todas a la altura de la mas alta. */
+      .board-cols { display: flex; gap: 12px; overflow-x: auto; align-items: stretch;
+              padding-bottom: 8px; scrollbar-width: thin; }
+      /* La columna: `w-72 rounded-md border border-border/50 bg-muted/20`. */
+      .col { flex: 0 0 272px; min-width: 0; min-height: 240px; display: flex;
+             flex-direction: column; border: 1px solid var(--border, var(--fb-border));
+             border-radius: var(--radius-md);
+             background: color-mix(in srgb, var(--muted, var(--fb-muted)) 20%, transparent); }
+      /* Su cabecera: `gap-2 border-b px-3 py-2`, nombre `text-[12px] font-medium`, cuenta
+         `ml-auto text-[11px] text-muted-foreground`. */
+      .col-head { display: flex; align-items: center; gap: 8px; margin: 0; padding: 8px 12px;
+             border-bottom: 1px solid var(--border, var(--fb-border));
+             font-size: 12px; font-weight: 500; color: var(--foreground, var(--fb-foreground)); }
+      .col-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .col-count { flex: none; margin-left: auto; font-size: 11px; font-weight: 400;
+             font-variant-numeric: tabular-nums;
              color: var(--muted-foreground, var(--fb-muted-foreground)); }
-      .col-more { margin-top: 6px; font-weight: 600; }
-      .card { margin: 0 0 8px; padding: 8px; font-size: 12px; line-height: 1.4;
+      .col-body { display: flex; flex-direction: column; gap: 8px; padding: 8px; }
+      /* La columna sin casos se pliega a su cabecera, en vertical: dice su nombre y su
+         cero sin ocupar el ancho de una columna llena. */
+      .col.vacia { flex: 0 0 40px; }
+      .col.vacia .col-head { flex-direction: column; gap: 10px; padding: 12px 0;
+             border-bottom: 0; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .col.vacia .col-name { writing-mode: vertical-rl; overflow: visible; }
+      .col.vacia .col-count { margin-left: 0; }
+      /* "Su decision" con casos: un tinte de --primary, sin gritar. */
+      .col.decision.con-casos { border-color: color-mix(in srgb, var(--primary, var(--fb-primary)) 35%, var(--border, var(--fb-border)));
+             background: color-mix(in srgb, var(--primary, var(--fb-primary)) 4%, transparent); }
+      /* Bloqueado: distinto pero no a gritos. El tinte de 4 % de los carriles de Orca
+         (workspace-status.ts, `laneTint`) en --destructive, y el filete punteado. */
+      .col.lane { border-style: dashed;
+             background: color-mix(in srgb, var(--destructive, var(--fb-destructive)) 4%, transparent); }
+      .col-more, .col-nada { margin: 0; padding: 2px 4px; font-size: 11px;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+
+      /* La tarjeta: `flex flex-col gap-2 rounded-md border border-border/60 bg-card
+         px-2.5 py-2 shadow-xs hover:bg-accent`. */
+      .card { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px;
+              font-size: 12px; line-height: 1.4; text-align: left; cursor: pointer;
               border: 1px solid var(--border, var(--fb-border));
               border-radius: var(--radius-md);
-              background: var(--background, var(--fb-background)); }
-      .card:last-of-type { margin-bottom: 0; }
-      .card.urgente { border-left: 3px solid var(--destructive, var(--fb-destructive)); }
-      .card-title { font-weight: 600; overflow-wrap: anywhere; }
-      /* El nombre del chat entero y la antiguedad debajo: lado a lado, en una columna de
-         160 px el nombre se partia en tres lineas. */
-      .card-chat { margin-top: 2px; font-size: 11px;
-                   color: var(--muted-foreground, var(--fb-muted-foreground)); }
-      .card-chat .name { display: block; overflow-wrap: anywhere; }
-      .card-chat .when { display: block; margin-left: 0; }
-      .card-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
-      /* Con el radio de pastilla, una etiqueta de dos lineas se ve como un huevo. */
-      .card-tags .tag { overflow-wrap: anywhere; border-radius: 8px; padding: 1px 6px; }
-      .tag.prio.urgente { color: var(--destructive, var(--fb-destructive));
-                          border-color: var(--destructive, var(--fb-destructive));
-                          font-weight: 600; }
-      .tag.prio.alta { color: var(--foreground, var(--fb-foreground)); font-weight: 600; }
-      .tag.skip { border-style: dashed; }
-      .card-exc { margin-top: 6px; font-weight: 600; overflow-wrap: anywhere;
-                  color: var(--foreground, var(--fb-foreground)); }
-      .card-sum, .card-prop, .card-blocked, .card-ticket { margin-top: 6px;
-                  overflow-wrap: anywhere; }
-      .card-sum { color: var(--muted-foreground, var(--fb-muted-foreground)); }
-      .card-prop { padding-left: 8px;
-                   border-left: 2px solid var(--border, var(--fb-border)); }
-      .card-prop .lead, .card-blocked .lead { display: block; font-size: 10px;
-                  font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
-                  color: var(--muted-foreground, var(--fb-muted-foreground)); }
-      .card-blocked { color: var(--destructive, var(--fb-destructive)); }
-      .card-blocked .lead { color: inherit; }
-      .card-ticket { font-size: 11px;
-                  color: var(--muted-foreground, var(--fb-muted-foreground)); }
-      /* El recorte: tres lineas hasta que el dueno pida verlo todo. */
-      .card:not(.abierta) .clamp { display: -webkit-box; -webkit-line-clamp: 3;
-                  -webkit-box-orient: vertical; overflow: hidden; }
-      .card-more { font: inherit; font-size: 11px; margin-top: 6px; padding: 0; cursor: pointer;
-                   border: 0; background: none; text-decoration: underline;
-                   color: var(--muted-foreground, var(--fb-muted-foreground)); }
-      .card-more:hover { color: var(--foreground, var(--fb-foreground)); }
-      .card-more:focus-visible { outline: 2px solid var(--ring, var(--fb-ring));
-                                 outline-offset: 1px; }
-
-      /* Las acciones del dueno (T6). Los botones son los de `.acts`; aca solo cambia que
-         pueden partirse en varias lineas dentro de una columna de 160 px. */
-      .card-acts { flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-      .acts button.primario { background: var(--primary, var(--fb-primary));
-                              color: var(--primary-foreground, var(--fb-primary-foreground));
-                              border-color: transparent; }
-      .acts button.primario:hover { background: var(--primary, var(--fb-primary));
-                                    color: var(--primary-foreground, var(--fb-primary-foreground)); }
-      .tag.aprobada { color: var(--foreground, var(--fb-foreground)); font-weight: 600; }
-      /* Lo que paso con la accion: bueno en texto pleno, malo en --destructive. */
-      .card-msg { margin-top: 6px; font-size: 11px; font-weight: 600; overflow-wrap: anywhere;
-                  color: var(--foreground, var(--fb-foreground)); }
+              background: var(--card, var(--fb-card));
+              color: var(--card-foreground, var(--foreground, var(--fb-foreground)));
+              box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+              transition: background-color 90ms ease, border-color 90ms ease; }
+      .card:hover { background: color-mix(in srgb, var(--accent, var(--fb-accent)) 60%, var(--card, var(--fb-card))); }
+      .card:focus-visible { outline: 1px solid var(--ring, var(--fb-ring)); outline-offset: 0; }
+      .card.elegida { background: var(--accent, var(--fb-accent));
+              border-color: color-mix(in srgb, var(--ring, var(--fb-ring)) 60%, transparent); }
+      /* Arriba: el numero `font-mono text-[11px] text-muted-foreground` y la prioridad
+         `ml-auto text-[11px]`. Color solo para urgente y alta. */
+      .card-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+      .card-id { flex: none; font-family: var(--font-mono, ui-monospace, Menlo, monospace);
+              font-size: 11px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .card-prio { flex: none; margin-left: auto; font-size: 11px;
+              color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .card-prio.alta { color: var(--tone-amber-text); font-weight: 500; }
+      .card-prio.urgente { color: var(--destructive, var(--fb-destructive)); font-weight: 600; }
+      /* El titulo: `line-clamp-2 text-[13px] font-medium text-foreground`. */
+      .card-title { margin: 0; font-size: 13px; font-weight: 500; line-height: 1.35;
+              overflow-wrap: anywhere; color: var(--foreground, var(--fb-foreground)); }
+      .clamp1 { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+      .clamp2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+      .clamp3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+      /* La linea apagada: `text-[11px] text-muted-foreground`; el chat se corta, la hora no. */
+      .card-meta, .det-meta { display: flex; align-items: baseline; gap: 6px; min-width: 0;
+              font-size: 11px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .card-meta .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .card-meta .when, .det-meta .when { flex: none; margin-left: 0; }
+      .card-meta .sep, .det-meta .sep { flex: none; }
+      .card-exc { font-size: 11px; font-weight: 500; overflow-wrap: anywhere;
+              color: var(--foreground, var(--fb-foreground)); }
+      .card-blocked { font-size: 11px; overflow-wrap: anywhere;
+              color: var(--destructive, var(--fb-destructive)); }
+      .card-aprobada { font-size: 11px; font-weight: 500;
+              color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .card-aprobada::before { content: "\2713  "; }
+      /* La respuesta que se manda: entera y aparte, con el filete de una cita. */
+      .card-prop { padding-left: 8px; white-space: pre-wrap; overflow-wrap: anywhere;
+              border-left: 2px solid var(--border, var(--fb-border));
+              color: var(--foreground, var(--fb-foreground)); }
+      .card-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+      .card-msg { font-size: 11px; font-weight: 600; overflow-wrap: anywhere;
+              color: var(--foreground, var(--fb-foreground)); }
       .card-msg.mala { color: var(--destructive, var(--fb-destructive)); }
-      .card-form { margin-top: 8px; }
-      .card-form label { display: block; margin-bottom: 4px; font-size: 10px; font-weight: 600;
-                         text-transform: uppercase; letter-spacing: 0.05em;
-                         color: var(--muted-foreground, var(--fb-muted-foreground)); }
+
+      /* Los botones del tablero: el Button de Orca en `size="sm"` (h-8 px-3 text-xs
+         rounded-md), `default` en --primary y `outline` para el resto. */
+      .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+             height: 28px; padding: 0 10px; font: inherit; font-size: 12px; font-weight: 500;
+             cursor: pointer; white-space: nowrap; border-radius: var(--radius-md);
+             border: 1px solid var(--border, var(--fb-border));
+             background: var(--background, var(--fb-background));
+             color: var(--foreground, var(--fb-foreground));
+             transition: background-color 90ms ease, color 90ms ease, opacity 90ms ease; }
+      .btn:hover { background: var(--accent, var(--fb-accent));
+             color: var(--accent-foreground, var(--fb-accent-foreground)); }
+      .btn.primario { border-color: transparent; background: var(--primary, var(--fb-primary));
+             color: var(--primary-foreground, var(--fb-primary-foreground)); }
+      .btn.primario:hover { opacity: 0.9; background: var(--primary, var(--fb-primary));
+             color: var(--primary-foreground, var(--fb-primary-foreground)); }
+      .btn.mute { color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .btn[disabled] { opacity: 0.5; cursor: default; }
+      .btn:active:not([disabled]) { transform: translateY(1px); }
+      .btn:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px; }
+
+      /* La lista: los renglones de la lista de Plane, `grid gap-3 px-3 py-2
+         hover:bg-muted/50`, bajo la cabecera de grupo `border-b bg-muted/50 px-3 py-1.5
+         text-[12px] font-semibold`. */
+      .board-list { border: 1px solid var(--border, var(--fb-border));
+             border-radius: var(--radius-md); overflow: hidden;
+             background: var(--background, var(--fb-background)); }
+      .grupo + .grupo { border-top: 1px solid var(--border, var(--fb-border)); }
+      .grupo-head { display: flex; align-items: center; gap: 8px; margin: 0; padding: 6px 12px;
+             font-size: 12px; font-weight: 600; color: var(--foreground, var(--fb-foreground));
+             border-bottom: 1px solid var(--border, var(--fb-border));
+             background: color-mix(in srgb, var(--muted, var(--fb-muted)) 50%, transparent); }
+      .grupo.lane .grupo-head { background: color-mix(in srgb, var(--destructive, var(--fb-destructive)) 5%, transparent); }
+      .grupo .col-more { padding: 6px 12px; }
+      .card.fila { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto;
+             align-items: start; gap: 4px 12px; padding: 8px 12px; border: 0;
+             border-radius: 0; box-shadow: none; background: transparent; }
+      .card.fila + .card.fila, .card.fila + .board-detail, .board-detail + .card.fila {
+             border-top: 1px solid var(--border, var(--fb-border)); }
+      .card.fila:hover { background: color-mix(in srgb, var(--muted, var(--fb-muted)) 50%, transparent); }
+      .card.fila.elegida { background: var(--accent, var(--fb-accent)); }
+      .card.fila .card-id { padding-top: 2px; }
+      .card.fila .card-prio { margin-left: 0; padding-top: 2px; }
+      .fila-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+
+      /* El detalle: el panel de un elemento de Plane, al costado del tablero. */
+      .board-detail { flex: 0 0 380px; width: 380px; min-width: 0; position: sticky; top: 8px;
+             max-height: calc(100vh - 16px); overflow: auto; padding: 12px 14px 16px;
+             border: 1px solid var(--border, var(--fb-border)); border-radius: var(--radius-md);
+             background: var(--card, var(--fb-card));
+             color: var(--card-foreground, var(--foreground, var(--fb-foreground)));
+             box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); }
+      .det-head { display: flex; align-items: center; gap: 8px; }
+      /* La pastilla de etapa: `rounded-full border px-2 py-0.5 text-[10px] font-medium`. */
+      .etapa-pill { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px;
+             font-size: 10px; font-weight: 500; border-radius: 9999px;
+             border: 1px solid var(--border, var(--fb-border));
+             color: var(--foreground, var(--fb-foreground));
+             background: color-mix(in srgb, var(--muted, var(--fb-muted)) 40%, transparent); }
+      .det-close { margin-left: auto; display: inline-flex; align-items: center;
+             justify-content: center; width: 28px; height: 28px; padding: 0; font: inherit;
+             font-size: 18px; line-height: 1; border: 0; border-radius: var(--radius-md);
+             background: none; cursor: pointer;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .det-close:hover { background: var(--accent, var(--fb-accent));
+             color: var(--foreground, var(--fb-foreground)); }
+      .det-close:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px; }
+      .det-title { margin: 10px 0 6px; font-size: 15px; font-weight: 600; line-height: 1.35;
+             overflow-wrap: anywhere; color: var(--foreground, var(--fb-foreground)); }
+      .det-meta { flex-wrap: wrap; gap: 2px 6px; }
+      .det-meta .name { overflow-wrap: anywhere; }
+      .det-meta .card-prio { margin-left: 0; }
+      .board-detail > .card-exc, .board-detail > .card-aprobada { margin-top: 10px; }
+      .det-sec { margin-top: 16px; }
+      .det-label { margin: 0 0 6px; font-size: 11px; font-weight: 500;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .det-sec.card-blocked .det-label { color: inherit; }
+      .det-sum, .det-text { margin: 0; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+      .det-sec .card-prop { padding: 8px 10px; line-height: 1.5; border-left: 0;
+             border-radius: var(--radius-md);
+             background: color-mix(in srgb, var(--muted, var(--fb-muted)) 60%, transparent); }
+      .det-jev p { margin: 0 0 2px; overflow-wrap: anywhere; }
+      .det-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+      .det-acciones .card-msg { margin-bottom: 8px; }
+      .det-hist { margin: 0; padding: 0; list-style: none; font-size: 11px; }
+      .det-hist li { display: flex; gap: 8px; justify-content: space-between; padding: 3px 0;
+             border-top: 1px solid var(--border, var(--fb-border)); }
+      .det-hist li:first-child { border-top: 0; }
+      .det-hist .when { margin-left: auto; }
+      .card-form label { display: block; margin-bottom: 4px; font-size: 11px; font-weight: 500;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .card-form textarea, .card-form input {
         display: block; width: 100%; box-sizing: border-box; font: inherit; font-size: 12px;
-        padding: 6px 8px; border-radius: var(--radius-md);
+        line-height: 1.5; padding: 6px 8px; border-radius: var(--radius-md);
         border: 1px solid var(--input, var(--fb-border));
         background: var(--background, var(--fb-background));
         color: var(--foreground, var(--fb-foreground)); }
-      .card-form textarea { min-height: 96px; resize: vertical; }
+      .card-form textarea { min-height: 120px; resize: vertical; }
       .card-form textarea:focus-visible, .card-form input:focus-visible {
         outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px; }
       .card-form textarea[disabled], .card-form input[disabled] { opacity: 0.6; }
-      .card-form .acts { flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+      .card-form .card-msg { margin-top: 6px; }
+      .card-form .det-acts { margin-top: 8px; }
 
-      /* Hasta 768 px: una lista agrupada por etapa. "Tu decision" y los bloqueados
-         suben al principio; una etapa sin nada no ocupa lugar (la de decision si, para
-         poder decir que no hay nada que decidir). */
+      /* Hasta 768 px la lista es la vista natural y el detalle se abre en el lugar, debajo
+         de lo elegido. El buscador toma la fila entera. */
       @media (max-width: 768px) {
-        .board-cols { display: flex; flex-direction: column; align-items: stretch; overflow: visible;
-                       gap: 10px; }
-        .col, .col.lane { flex: none; margin-left: 0; }
-        .col.decision, .col.lane { order: -1; }
-        .col.sin-nada:not(.decision) { display: none; }
-        .card .acts button { min-height: 32px; padding: 6px 12px; }
+        .board-body { flex-direction: column; align-items: stretch; }
+        .board-detail { position: static; width: auto; flex: none; max-height: none; }
+        .board-detail.en-linea { border: 0; border-radius: 0; box-shadow: none;
+             background: color-mix(in srgb, var(--muted, var(--fb-muted)) 35%, transparent); }
+        .search { flex-basis: 100%; }
+        #board-shown { margin-left: auto; }
+        .btn { min-height: 32px; padding: 0 12px; }
+        .card.fila { grid-template-columns: 40px minmax(0, 1fr) auto; gap: 4px 8px; }
       }
     </style>
   </head>
@@ -343,10 +544,38 @@
          (T6) dejan un pedido en `scopeRequest` y el worker lo cumple: el panel no ejecuta
          nada ni dice quien firma. Solo se pinta una accion que la tarjeta trae en
          `actions` Y que vale en su etapa. -->
+    <!-- La barra copia la de Plane en Orca (TaskPage.tsx): las etapas con su cuenta, que
+         filtran; el buscador; Lista/Tablero y cuantos se muestran. Los iconos son los de
+         lucide que usa la app, en linea porque el panel no puede pedir nada afuera. -->
     <div id="view-board" role="tabpanel" aria-labelledby="tab-board" hidden>
+      <div class="board-bar" id="board-bar" hidden>
+        <div class="chips" id="board-chips" role="group" data-t-aria="boardStagesLabel"></div>
+        <div class="bar-row">
+          <div class="search">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            <input id="board-search" type="text" autocomplete="off" spellcheck="false"
+                   data-t-ph="boardSearchPh" data-t-aria="boardSearchPh" />
+            <button type="button" class="search-clear" id="board-search-clear"
+                    data-t-title="boardSearchClear" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+          </div>
+          <div class="seg" id="board-view" role="group" data-t-aria="boardViewLabel">
+            <button type="button" data-vista="list" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg><span data-t="boardViewList">Lista</span></button>
+            <button type="button" data-vista="board" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/><path d="M15 3v18"/></svg><span data-t="boardViewBoard">Tablero</span></button>
+          </div>
+          <span class="meta" id="board-shown"></span>
+        </div>
+      </div>
       <p class="meta nota" id="board-synced"></p>
       <p class="meta nota" id="board-note"></p>
-      <div class="board-cols" id="board-cols"></div>
+      <div class="board-empty" id="board-empty" hidden><p class="t"></p><p class="b"></p></div>
+      <div class="board-body" id="board-body" hidden>
+        <div class="board-main">
+          <p class="board-nada" id="board-nada" hidden></p>
+          <div class="board-cols" id="board-cols"></div>
+          <div class="board-list" id="board-list" hidden></div>
+        </div>
+        <aside class="board-detail" id="board-detail" hidden></aside>
+      </div>
     </div>
 
     <script>
@@ -371,27 +600,62 @@
               "stageRespondido": "Respondido",
               "stageCerrado": "Cerrado",
               "stageBloqueado": "Bloqueado",
-              "boardEmptyCol": "Nada aqui",
-              "boardEmptyDecision": "Nada que decidir",
               "boardMore": "+{n} mas sin mostrar",
-              "boardNoData": "El tablero todavia no tiene datos. Aparecera tras la proxima sincronizacion.",
-              "boardNoCases": "Sin casos todavia. Cada pedido que llegue por WhatsApp aparecera aqui.",
               "boardUnsupported": "Este panel no entiende la version {v} del tablero. Actualice el plugin.",
               "boardTruncated": "Se muestran los casos mas recientes; hay mas de los que caben aqui.",
               "boardUnknown1": "1 caso con una etapa que este panel no conoce no se muestra.",
               "boardUnknown": "{n} casos con una etapa que este panel no conoce no se muestran.",
               "boardUpdated": "Actualizado {cuando}",
               "boardUntitled": "(sin titulo)",
-              "boardShowAll": "Ver todo",
-              "boardShowLess": "Ver menos",
-              "claseCard": "tarjeta",
-              "claseAlert": "aviso",
-              "claseNothing": "nada que hacer",
-              "claseDoubtful": "dudoso",
-              "prioUrgent": "Prioridad urgente",
-              "prioHigh": "Prioridad alta",
-              "prioMedium": "Prioridad media",
-              "prioLow": "Prioridad baja",
+              "boardAll": "Todos",
+              "boardStagesLabel": "Etapas",
+              "boardSearchPh": "Buscar por numero, titulo o chat",
+              "boardSearchClear": "Borrar la busqueda",
+              "boardViewLabel": "Vista",
+              "boardViewList": "Lista",
+              "boardViewBoard": "Tablero",
+              "boardShown": "{n} mostrados",
+              "boardShown1": "1 mostrado",
+              "boardNoMatch": "Ningun caso coincide con la busqueda.",
+              "boardStageNone": "Ningun caso en esta etapa.",
+              "boardEmptyTitle": "Todavia no hay casos",
+              "boardEmptyBody": "Cada pedido que llegue por WhatsApp aparecera aqui.",
+              "boardNoDataTitle": "El tablero todavia no tiene datos",
+              "boardNoDataBody": "Aparecera tras la proxima sincronizacion.",
+              "boardVersionTitle": "No se puede mostrar el tablero",
+              "boardReadSend": "Leer y enviar",
+              "boardReadRun": "Leer y ejecutar",
+              "detClose": "Cerrar el detalle",
+              "detSummary": "Resumen",
+              "detJev": "Revision de Jev",
+              "detActions": "Acciones",
+              "detHistory": "Historia",
+              "detPrio": "Prioridad",
+              "jevSignals": "Senales",
+              "flagOther": "otra senal",
+              "excOther": "otro motivo",
+              "jevClsOther": "otro tipo de mensaje",
+              "jevClsSupport": "solicitud de soporte",
+              "jevClsBug": "reporte de una falla",
+              "jevClsStatus": "pregunta por el estado de un trabajo",
+              "jevClsTicket": "mencion de un ticket que ya existe",
+              "jevClsAccess": "pedido de acceso o credencial",
+              "jevClsMoney": "tema de dinero",
+              "jevClsDecision": "pide una decision",
+              "jevClsDeploy": "pedido de despliegue",
+              "jevClsWaiting": "cliente esperando o servicio caido",
+              "jevClsPleasantry": "saludo o cortesia",
+              "jevClsMeeting": "reunion o llamada",
+              "jevClsMention": "mencion sin pedido",
+              "jevClsNotice": "aviso al equipo",
+              "jevClsChatter": "conversacion entre otras personas",
+              "jevClsUnclear": "mensaje poco claro",
+              "jevClsEmpty": "sin texto legible",
+              "jevClsNoMatch": "otro tipo de mensaje",
+              "prioUrgent": "Urgente",
+              "prioHigh": "Alta",
+              "prioMedium": "Media",
+              "prioLow": "Baja",
               "flagAsksOwnerToAct": "le pide actuar",
               "flagContainsCredential": "trae una credencial",
               "flagAsksForCredential": "pide una credencial",
@@ -401,9 +665,8 @@
               "flagStatusNotVerified": "afirma un estado sin verificar",
               "flagInstructsAssistant": "intenta darle ordenes al asistente",
               "flagUrgencyPressure": "mete presion de urgencia",
-              "jevLead": "Jev",
-              "jevSkip": "sin accion",
-              "jevSees": "Jev ve",
+              "jevSkip": "No requiere accion",
+              "jevSees": "Lo ve como",
               "excLead": "Necesita su decision por",
               "excMoney": "dinero",
               "excCredential": "credencial",
@@ -486,27 +749,62 @@
               "stageRespondido": "Replied",
               "stageCerrado": "Closed",
               "stageBloqueado": "Blocked",
-              "boardEmptyCol": "Nothing here",
-              "boardEmptyDecision": "Nothing to decide",
               "boardMore": "+{n} more not shown",
-              "boardNoData": "The board has no data yet. It will show up after the next sync.",
-              "boardNoCases": "No cases yet. Every request that arrives on WhatsApp will show up here.",
               "boardUnsupported": "This panel does not understand version {v} of the board. Update the plugin.",
               "boardTruncated": "Showing the most recent cases; there are more than fit here.",
               "boardUnknown1": "1 case with a stage this panel does not know is not shown.",
               "boardUnknown": "{n} cases with a stage this panel does not know are not shown.",
               "boardUpdated": "Updated {cuando}",
               "boardUntitled": "(untitled)",
-              "boardShowAll": "Show all",
-              "boardShowLess": "Show less",
-              "claseCard": "card",
-              "claseAlert": "alert",
-              "claseNothing": "nothing to do",
-              "claseDoubtful": "doubtful",
-              "prioUrgent": "Urgent priority",
-              "prioHigh": "High priority",
-              "prioMedium": "Medium priority",
-              "prioLow": "Low priority",
+              "boardAll": "All",
+              "boardStagesLabel": "Stages",
+              "boardSearchPh": "Search by number, title or chat",
+              "boardSearchClear": "Clear search",
+              "boardViewLabel": "View",
+              "boardViewList": "List",
+              "boardViewBoard": "Board",
+              "boardShown": "{n} shown",
+              "boardShown1": "1 shown",
+              "boardNoMatch": "No case matches the search.",
+              "boardStageNone": "No case in this stage.",
+              "boardEmptyTitle": "No cases yet",
+              "boardEmptyBody": "Every request that arrives on WhatsApp will show up here.",
+              "boardNoDataTitle": "The board has no data yet",
+              "boardNoDataBody": "It will show up after the next sync.",
+              "boardVersionTitle": "The board cannot be shown",
+              "boardReadSend": "Read and send",
+              "boardReadRun": "Read and run",
+              "detClose": "Close details",
+              "detSummary": "Summary",
+              "detJev": "Jev review",
+              "detActions": "Actions",
+              "detHistory": "History",
+              "detPrio": "Priority",
+              "jevSignals": "Signals",
+              "flagOther": "another signal",
+              "excOther": "another reason",
+              "jevClsOther": "another kind of message",
+              "jevClsSupport": "support request",
+              "jevClsBug": "bug report",
+              "jevClsStatus": "question about the status of some work",
+              "jevClsTicket": "reference to an existing ticket",
+              "jevClsAccess": "access or credential request",
+              "jevClsMoney": "money matter",
+              "jevClsDecision": "asks for a decision",
+              "jevClsDeploy": "deploy request",
+              "jevClsWaiting": "client waiting or service down",
+              "jevClsPleasantry": "greeting or small talk",
+              "jevClsMeeting": "meeting or call",
+              "jevClsMention": "mention with no ask",
+              "jevClsNotice": "notice to the team",
+              "jevClsChatter": "conversation between other people",
+              "jevClsUnclear": "unclear message",
+              "jevClsEmpty": "no readable text",
+              "jevClsNoMatch": "another kind of message",
+              "prioUrgent": "Urgent",
+              "prioHigh": "High",
+              "prioMedium": "Medium",
+              "prioLow": "Low",
               "flagAsksOwnerToAct": "asks you to act",
               "flagContainsCredential": "contains a credential",
               "flagAsksForCredential": "asks for a credential",
@@ -516,9 +814,8 @@
               "flagStatusNotVerified": "states a status that is not verified",
               "flagInstructsAssistant": "tries to instruct the assistant",
               "flagUrgencyPressure": "applies urgency pressure",
-              "jevLead": "Jev",
-              "jevSkip": "no action needed",
-              "jevSees": "Jev sees",
+              "jevSkip": "No action needed",
+              "jevSees": "Reads it as",
               "excLead": "Needs your decision because",
               "excMoney": "money",
               "excCredential": "credential",
@@ -601,27 +898,62 @@
               "stageRespondido": "Respondido",
               "stageCerrado": "Fechado",
               "stageBloqueado": "Bloqueado",
-              "boardEmptyCol": "Nada aqui",
-              "boardEmptyDecision": "Nada a decidir",
               "boardMore": "+{n} mais nao mostrados",
-              "boardNoData": "O quadro ainda nao tem dados. Aparecera depois da proxima sincronizacao.",
-              "boardNoCases": "Sem casos ainda. Cada pedido que chegar pelo WhatsApp aparecera aqui.",
               "boardUnsupported": "Este painel nao entende a versao {v} do quadro. Atualize o plugin.",
               "boardTruncated": "Mostrando os casos mais recentes; ha mais do que cabem aqui.",
               "boardUnknown1": "1 caso com uma etapa que este painel nao conhece nao e mostrado.",
               "boardUnknown": "{n} casos com uma etapa que este painel nao conhece nao sao mostrados.",
               "boardUpdated": "Atualizado {cuando}",
               "boardUntitled": "(sem titulo)",
-              "boardShowAll": "Ver tudo",
-              "boardShowLess": "Ver menos",
-              "claseCard": "cartao",
-              "claseAlert": "alerta",
-              "claseNothing": "nada a fazer",
-              "claseDoubtful": "duvidoso",
-              "prioUrgent": "Prioridade urgente",
-              "prioHigh": "Prioridade alta",
-              "prioMedium": "Prioridade media",
-              "prioLow": "Prioridade baixa",
+              "boardAll": "Todos",
+              "boardStagesLabel": "Etapas",
+              "boardSearchPh": "Buscar por numero, titulo ou conversa",
+              "boardSearchClear": "Limpar a busca",
+              "boardViewLabel": "Visualizacao",
+              "boardViewList": "Lista",
+              "boardViewBoard": "Quadro",
+              "boardShown": "{n} exibidos",
+              "boardShown1": "1 exibido",
+              "boardNoMatch": "Nenhum caso corresponde a busca.",
+              "boardStageNone": "Nenhum caso nesta etapa.",
+              "boardEmptyTitle": "Ainda nao ha casos",
+              "boardEmptyBody": "Cada pedido que chegar pelo WhatsApp aparecera aqui.",
+              "boardNoDataTitle": "O quadro ainda nao tem dados",
+              "boardNoDataBody": "Aparecera depois da proxima sincronizacao.",
+              "boardVersionTitle": "Nao e possivel mostrar o quadro",
+              "boardReadSend": "Ler e enviar",
+              "boardReadRun": "Ler e executar",
+              "detClose": "Fechar o detalhe",
+              "detSummary": "Resumo",
+              "detJev": "Revisao do Jev",
+              "detActions": "Acoes",
+              "detHistory": "Historico",
+              "detPrio": "Prioridade",
+              "jevSignals": "Sinais",
+              "flagOther": "outro sinal",
+              "excOther": "outro motivo",
+              "jevClsOther": "outro tipo de mensagem",
+              "jevClsSupport": "pedido de suporte",
+              "jevClsBug": "relato de falha",
+              "jevClsStatus": "pergunta sobre o andamento de um trabalho",
+              "jevClsTicket": "referencia a um ticket existente",
+              "jevClsAccess": "pedido de acesso ou credencial",
+              "jevClsMoney": "assunto de dinheiro",
+              "jevClsDecision": "pede uma decisao",
+              "jevClsDeploy": "pedido de implantacao",
+              "jevClsWaiting": "cliente esperando ou servico fora do ar",
+              "jevClsPleasantry": "cumprimento ou cortesia",
+              "jevClsMeeting": "reuniao ou chamada",
+              "jevClsMention": "mencao sem pedido",
+              "jevClsNotice": "aviso para a equipe",
+              "jevClsChatter": "conversa entre outras pessoas",
+              "jevClsUnclear": "mensagem pouco clara",
+              "jevClsEmpty": "sem texto legivel",
+              "jevClsNoMatch": "outro tipo de mensagem",
+              "prioUrgent": "Urgente",
+              "prioHigh": "Alta",
+              "prioMedium": "Media",
+              "prioLow": "Baixa",
               "flagAsksOwnerToAct": "pede que voce aja",
               "flagContainsCredential": "traz uma credencial",
               "flagAsksForCredential": "pede uma credencial",
@@ -631,9 +963,8 @@
               "flagStatusNotVerified": "afirma um status nao verificado",
               "flagInstructsAssistant": "tenta dar ordens ao assistente",
               "flagUrgencyPressure": "faz pressao de urgencia",
-              "jevLead": "Jev",
-              "jevSkip": "sem acao",
-              "jevSees": "Jev ve",
+              "jevSkip": "Nao requer acao",
+              "jevSees": "Ve como",
               "excLead": "Precisa da sua decisao por",
               "excMoney": "dinheiro",
               "excCredential": "credencial",
@@ -736,6 +1067,9 @@
         })
         Array.prototype.forEach.call(document.querySelectorAll('[data-t-ph]'), function (node) {
           node.placeholder = t(node.dataset.tPh)
+        })
+        Array.prototype.forEach.call(document.querySelectorAll('[data-t-aria]'), function (node) {
+          node.setAttribute('aria-label', t(node.dataset.tAria))
         })
         Array.prototype.forEach.call(document.querySelectorAll('[data-t-title]'), function (node) {
           node.title = t(node.dataset.tTitle)
@@ -1109,15 +1443,22 @@
       // este panel la LEE. Las acciones del dueno (T6) salen de `actions`, y viajan por
       // el canal del worker: un pedido en `scopeRequest`, su veredicto en `scopeResult`.
       //
+      // La forma es la del tablero de Plane en Orca (orca-oss, TaskPage.tsx y
+      // task-page-plane-board.tsx): una fila de etapas con su cuenta que filtra, un
+      // buscador, Lista/Tablero, columnas de ancho fijo con tarjetas cortas, y al hacer
+      // clic un detalle donde estan el texto entero y todas las acciones.
+      //
       // Todo lo que trae una tarjeta es texto de clientes: se arma con createElement y
       // textContent, nunca con innerHTML, asi que no hay nada que escapar ni que olvidar.
       var ETAPAS = ['recibido', 'clasificado', 'decision', 'trabajo', 'listo',
         'respondido', 'cerrado', 'bloqueado']
+      // La fila de etapas y la lista: lo que espera al dueno primero; el resto en el orden
+      // del flujo y los bloqueados al final, aparte.
+      var ORDEN_FILTRO = ['decision', 'recibido', 'clasificado', 'trabajo', 'listo',
+        'respondido', 'cerrado', 'bloqueado']
       var ETAPA_KEY = { recibido: 'stageRecibido', clasificado: 'stageClasificado',
         decision: 'stageDecision', trabajo: 'stageTrabajo', listo: 'stageListo',
         respondido: 'stageRespondido', cerrado: 'stageCerrado', bloqueado: 'stageBloqueado' }
-      var CLASE_KEY = { card: 'claseCard', alert: 'claseAlert', nothing: 'claseNothing',
-        doubtful: 'claseDoubtful' }
       // `none` no es una prioridad: no tiene texto y no se pinta.
       var PRIO_KEY = { urgent: 'prioUrgent', high: 'prioHigh', medium: 'prioMedium',
         low: 'prioLow' }
@@ -1132,17 +1473,33 @@
         states_status_not_verified: 'flagStatusNotVerified',
         tries_to_instruct_the_assistant: 'flagInstructsAssistant',
         urgency_pressure: 'flagUrgencyPressure' }
+      // Las clases de atencion que Jev elige (bin/wa_jev.py, CLASES_ATENCION). Un codigo
+      // que este panel no conozca se dice con una frase generica: nunca crudo.
+      var JEV_CLASE_KEY = { support_request: 'jevClsSupport', bug_report: 'jevClsBug',
+        status_question: 'jevClsStatus', existing_ticket_reference: 'jevClsTicket',
+        access_or_credential: 'jevClsAccess', money: 'jevClsMoney',
+        needs_decision: 'jevClsDecision', deploy_request: 'jevClsDeploy',
+        client_waiting_or_down: 'jevClsWaiting', pleasantry: 'jevClsPleasantry',
+        meeting: 'jevClsMeeting', bare_mention: 'jevClsMention',
+        notice_to_team: 'jevClsNotice', unrelated_chatter: 'jevClsChatter',
+        unclear: 'jevClsUnclear', empty_or_audio_only: 'jevClsEmpty', no_match: 'jevClsNoMatch' }
       var EXC_KEY = { money: 'excMoney', credential: 'excCredential',
         commitment: 'excCommitment', jev: 'excJev' }
       var PROP_KEY = { responder: 'propResponder', trabajar: 'propTrabajar',
         escalar: 'propEscalar', descartar: 'propDescartar' }
 
-      // Desde cuantos caracteres un texto puede no caber en tres lineas de la columna
-      // mas angosta: solo una primera aproximacion, ajustarVerTodo() mide de verdad.
-      var LARGO_RECORTE = 60
+      // Hasta cuantos caracteres la respuesta se lee ENTERA en la tarjeta, al lado de su
+      // Enviar. Mas larga, la tarjeta no la manda: su boton abre el detalle para leerla.
+      var PROPUESTA_EN_TARJETA = 200
       var vistaActiva = 'inbox'
       var VISTAS = ['inbox', 'board']
-      var abiertas = {}
+
+      // Lo que el dueno eligio mirar. Vive en memoria: guardarlo costaria llamadas al host
+      // en cada sondeo, y el iframe del panel no tiene almacenamiento propio.
+      var filtroEtapa = 'todos'
+      var busqueda = ''
+      var vistaElegida = null   // null = la natural del ancho: lista hasta 768 px
+      var seleccion = null      // el caso cuyo detalle esta abierto
 
       function crear (tag, clase, texto) {
         var nodo = document.createElement(tag)
@@ -1158,6 +1515,16 @@
       function textos (x) {
         return Array.isArray(x)
           ? x.filter(function (v) { return typeof v === 'string' && v }) : []
+      }
+
+      /** Una lista de codigos dicha en palabras, sin repetir la frase generica. */
+      function frases (mapa, codigos, respaldo) {
+        var vistas = []
+        codigos.forEach(function (c) {
+          var f = porCodigo(mapa, c, respaldo)
+          if (vistas.indexOf(f) < 0) vistas.push(f)
+        })
+        return vistas.join(', ')
       }
 
       /** "hace 5 min": el sello de una tarjeta es de maquina y no dice nada de un
@@ -1205,9 +1572,30 @@
           total += counts[e]
         })
         return { estado: total === 0 ? 'vacio' : 'ok', porEtapa: porEtapa, counts: counts,
-          desconocidas: desconocidas, truncado: board.truncated === true,
+          total: total, desconocidas: desconocidas, truncado: board.truncated === true,
           actualizado: board.updated_at }
       }
+
+      /** Sin tildes ni mayusculas: "renovacion" encuentra "Renovación". */
+      function plano (texto) {
+        return String(texto == null ? '' : texto).normalize('NFD')
+          .replace(/[̀-ͯ]/g, '').toLowerCase()
+      }
+
+      /** Si un caso entra en la busqueda: por su numero (con o sin #), su titulo o su chat. */
+      function coincide (c, q) {
+        if (!q) return true
+        var limpio = q.charAt(0) === '#' ? q.slice(1) : q
+        if (!limpio) return true
+        if (/^\d+$/.test(limpio) && String(c.case_id) === limpio) return true
+        return plano(c.title).indexOf(limpio) >= 0 || plano(c.chat_name).indexOf(limpio) >= 0
+      }
+
+      function estrecho () {
+        return typeof window.matchMedia === 'function' &&
+          window.matchMedia('(max-width: 768px)').matches
+      }
+      function vistaEfectiva () { return vistaElegida || (estrecho() ? 'list' : 'board') }
 
       // ───────────── Las acciones del dueno sobre una tarjeta (T6) ─────────────
       // El panel no ejecuta nada y no dice quien firma: deja UN pedido en `scopeRequest`
@@ -1283,6 +1671,13 @@
         })
       }
 
+      /** La unica accion que la tarjeta lleva a la vista: la que el caso espera del dueno. */
+      function primariaDe (posibles) {
+        if (posibles.indexOf('enviar') >= 0) return 'enviar'
+        if (posibles.indexOf('ejecutar') >= 0) return 'ejecutar'
+        return null
+      }
+
       function errorTexto (codigo, detalle) {
         if (Object.prototype.hasOwnProperty.call(ERR_ACCION, codigo)) return t(ERR_ACCION[codigo])
         return fmt('acErrGeneric', { code: String(codigo || detalle || '?').slice(0, 80) })
@@ -1330,6 +1725,7 @@
         delete mensajes[id]
         formularios[id] = { modo: accion, version: typeof prop.version === 'string' ? prop.version : null,
           texto: accion === 'editar' && typeof prop.texto === 'string' ? prop.texto : '' }
+        seleccion = id
         repintar()
         var campo = document.getElementById('campo-' + id)
         if (campo) campo.focus()
@@ -1400,12 +1796,13 @@
 
       function botonAccion (c, accion) {
         var id = String(c.case_id)
-        var b = crear('button', (accion === 'cerrar' || accion === 'reabrir' ? 'mute ' : '') +
-          (ACC_PRIMARIA[accion] ? 'primario' : ''),
-          enCurso && enCurso.id === id && enCurso.accion === accion ? '…' : t(ACC_KEY[accion]))
+        var enVuelo = !!(enCurso && enCurso.id === id && enCurso.accion === accion)
+        var b = crear('button', 'btn' + (accion === 'cerrar' || accion === 'reabrir' ? ' mute' : '') +
+          (ACC_PRIMARIA[accion] ? ' primario' : ''), enVuelo ? '…' : t(ACC_KEY[accion]))
         b.type = 'button'
         b.dataset.accion = accion
         b.disabled = !!enCurso
+        if (enVuelo) b.setAttribute('aria-busy', 'true')
         b.addEventListener('click', function () {
           if (ACC_FORM[accion]) abrirFormulario(c, accion)
           else ejecutarAccion(c, accion)
@@ -1423,7 +1820,7 @@
         var campo = crear(def.campo)
         campo.id = 'campo-' + id
         if (def.campo === 'input') campo.type = 'text'
-        else campo.rows = 5
+        else campo.rows = 6
         campo.maxLength = f.modo === 'editar' ? TEXTO_MAX : NOTA_MAX
         campo.value = f.texto
         campo.disabled = enVuelo
@@ -1432,14 +1829,14 @@
         caja.appendChild(campo)
         var msg = mensajeNodo(id)
         if (msg) caja.appendChild(msg)
-        var fila = crear('div', 'acts')
-        var ok = crear('button', 'primario',
+        var fila = crear('div', 'det-acts')
+        var ok = crear('button', 'btn primario',
           enCurso && enCurso.id === id ? '…' : t(def.ok))
         ok.type = 'button'
         ok.dataset.confirma = '1'
         ok.disabled = enVuelo
         ok.addEventListener('click', function () { ejecutarAccion(c, f.modo) })
-        var cancela = crear('button', 'mute', t('acCancelar'))
+        var cancela = crear('button', 'btn mute', t('acCancelar'))
         cancela.type = 'button'
         cancela.dataset.cancela = '1'
         cancela.disabled = enVuelo
@@ -1450,189 +1847,466 @@
         return caja
       }
 
-      function etiqueta (clase, texto) { return crear('span', 'tag ' + clase, texto) }
+      /** El punto de color de una etapa, como el de las columnas de Plane. */
+      function puntoEtapa (etapa) {
+        var p = crear('span', 'dot-etapa t-' + etapa)
+        p.setAttribute('aria-hidden', 'true')
+        return p
+      }
 
-      function tarjetaNodo (c) {
-        var id = String(c.case_id)
-        var nodo = crear('article', 'card' + (c.prioridad === 'urgent' ? ' urgente' : '') +
-          (abiertas[id] ? ' abierta' : ''))
-        nodo.dataset.case = id
-        nodo.appendChild(crear('div', 'card-title',
-          typeof c.title === 'string' && c.title ? c.title : t('boardUntitled')))
-        var linea = crear('div', 'card-chat')
-        linea.appendChild(crear('span', 'name', c.chat_name))
-        var cuandoTxt = hace(c.updated_at)
-        if (cuandoTxt) linea.appendChild(crear('span', 'when', cuandoTxt))
-        nodo.appendChild(linea)
+      function prioNodo (c) {
+        if (!Object.prototype.hasOwnProperty.call(PRIO_KEY, c.prioridad)) return null
+        return crear('span', 'card-prio' + (PRIO_CLASE[c.prioridad] ? ' ' + PRIO_CLASE[c.prioridad] : ''),
+          t(PRIO_KEY[c.prioridad]))
+      }
 
-        var jev = esObjeto(c.jev) ? c.jev : null
-        var tags = crear('div', 'card-tags')
-        if (c.clase) tags.appendChild(etiqueta('clase', porCodigo(CLASE_KEY, c.clase)))
-        if (c.prioridad && c.prioridad !== 'none') {
-          var prio = etiqueta('prio' + (PRIO_CLASE[c.prioridad] ? ' ' + PRIO_CLASE[c.prioridad] : ''),
-            porCodigo(PRIO_KEY, c.prioridad))
-          tags.appendChild(prio)
-        }
-        var posibles = accionesDe(c)
-        // Lo que va a salir se lee entero: no se manda un texto que no se vio.
-        var seEnvia = posibles.indexOf('enviar') >= 0
-        // Un trabajo aprobado es lo que el agente de la automatizacion recoge despues.
-        if (c.stage === 'trabajo' && esObjeto(c.proposal) && c.proposal.tipo === 'trabajar') {
-          tags.appendChild(etiqueta('aprobada', t('acAprobada')))
-        }
-        if (jev) {
-          if (jev.skip === true) tags.appendChild(etiqueta('skip', t('jevLead') + ': ' + t('jevSkip')))
-          if (jev.attention_class && jev.attention_class !== c.clase) {
-            tags.appendChild(etiqueta('jevclase', t('jevSees') + ': ' +
-              porCodigo(CLASE_KEY, jev.attention_class)))
-          }
-          textos(jev.flags).forEach(function (f) {
-            tags.appendChild(etiqueta('flag', t('jevLead') + ': ' + porCodigo(FLAG_KEY, f)))
-          })
-        }
-        if (tags.childNodes.length) nodo.appendChild(tags)
-
-        // Por que espera al dueno: es lo que ninguna otra parte de la tarjeta dice.
+      /** "Necesita su decision por: dinero", en una sola linea. */
+      function excepcionNodo (c) {
         var excepciones = textos(c.exceptions)
-        if (excepciones.length) {
-          nodo.appendChild(crear('div', 'card-exc', t('excLead') + ': ' +
-            excepciones.map(function (e) { return porCodigo(EXC_KEY, e) }).join(' · ')))
+        if (!excepciones.length) return null
+        return crear('div', 'card-exc', t('excLead') + ': ' +
+          frases(EXC_KEY, excepciones, t('excOther')))
+      }
+
+      function bloqueoTexto (c) {
+        return typeof c.blocked_reason === 'string' && c.blocked_reason ? c.blocked_reason : ''
+      }
+
+      function aprobadaNodo (c) {
+        if (c.stage === 'trabajo' && esObjeto(c.proposal) && c.proposal.tipo === 'trabajar') {
+          return crear('div', 'card-aprobada', t('acAprobada'))
         }
-        if (typeof c.summary === 'string' && c.summary) {
-          nodo.appendChild(crear('div', 'card-sum clamp', c.summary))
+        return null
+      }
+
+      /** Lo que la tarjeta y la fila de la lista comparten debajo del titulo: el motivo, el
+       *  bloqueo, lo aprobado y, si el caso espera su respuesta, la respuesta a la vista
+       *  junto a su unico boton. */
+      function extrasDe (c) {
+        var id = String(c.case_id)
+        var nodos = []
+        var exc = excepcionNodo(c)
+        if (exc) nodos.push(exc)
+        var bloqueo = bloqueoTexto(c)
+        if (bloqueo) nodos.push(crear('div', 'card-blocked clamp2', bloqueo))
+        var aprobada = aprobadaNodo(c)
+        if (aprobada) nodos.push(aprobada)
+        var primaria = primariaDe(accionesDe(c))
+        var aviso = formularios[id] ? null : mensajeNodo(id)
+        if (primaria) {
+          var texto = String(c.proposal.texto || '')
+          // No se manda lo que no se vio: el boton de la tarjeta solo manda una respuesta que
+          // esta ENTERA a la vista. Si es larga, el boton abre el detalle para leerla.
+          var entera = texto.length <= PROPUESTA_EN_TARJETA
+          if (texto) nodos.push(crear('div', 'card-prop' + (entera ? '' : ' clamp3'), texto))
+          if (aviso) nodos.push(aviso)
+          var fila = crear('div', 'card-acts')
+          if (entera) {
+            fila.appendChild(botonAccion(c, primaria))
+          } else {
+            var leer = crear('button', 'btn', t(primaria === 'enviar' ? 'boardReadSend' : 'boardReadRun'))
+            leer.type = 'button'
+            leer.dataset.abrir = '1'
+            leer.disabled = !!enCurso
+            leer.addEventListener('click', function () { abrirCaso(c) })
+            fila.appendChild(leer)
+          }
+          nodos.push(fila)
+        } else if (aviso) {
+          nodos.push(aviso)
         }
-        var prop = esObjeto(c.proposal) ? c.proposal : null
-        if (prop && (prop.texto || prop.tipo)) {
-          var caja = crear('div', 'card-prop')
-          caja.appendChild(crear('span', 'lead', t('propLead') +
-            (prop.tipo ? ' · ' + porCodigo(PROP_KEY, prop.tipo) : '')))
-          if (prop.texto) caja.appendChild(crear('span', seEnvia ? '' : 'clamp', prop.texto))
-          nodo.appendChild(caja)
+        return nodos
+      }
+
+      /** La tarjeta y la fila se abren igual: clic, o Enter/espacio con el foco encima. */
+      function hacerAbrible (nodo, c) {
+        var id = String(c.case_id)
+        nodo.dataset.case = id
+        nodo.tabIndex = 0
+        nodo.setAttribute('aria-controls', 'board-detail')
+        nodo.setAttribute('aria-expanded', seleccion === id ? 'true' : 'false')
+        if (seleccion === id) nodo.classList.add('elegida')
+        nodo.addEventListener('click', function (event) {
+          if (event.target && event.target.closest && event.target.closest('button, textarea, input')) return
+          abrirCaso(c)
+        })
+        nodo.addEventListener('keydown', function (event) {
+          if (event.target !== nodo) return
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            abrirCaso(c)
+          }
+        })
+      }
+
+      function tituloDe (c) {
+        return typeof c.title === 'string' && c.title ? c.title : t('boardUntitled')
+      }
+
+      function metaNodo (c) {
+        var meta = crear('div', 'card-meta')
+        meta.appendChild(crear('span', 'name', c.chat_name))
+        var cuandoTxt = hace(c.updated_at)
+        if (cuandoTxt) {
+          meta.appendChild(crear('span', 'sep', '·'))
+          meta.appendChild(crear('span', 'when', cuandoTxt))
         }
-        if (typeof c.blocked_reason === 'string' && c.blocked_reason) {
-          var bloqueo = crear('div', 'card-blocked')
-          bloqueo.appendChild(crear('span', 'lead', t('blockedLead')))
-          bloqueo.appendChild(crear('span', 'clamp', c.blocked_reason))
-          nodo.appendChild(bloqueo)
+        return meta
+      }
+
+      /** La tarjeta, con la anatomia de la de Plane (plane-board-card.tsx): arriba el numero
+       *  y la prioridad, el titulo en dos lineas, y una linea apagada con el chat y la hora. */
+      function tarjetaNodo (c) {
+        var nodo = crear('article', 'card' + (c.prioridad === 'urgent' ? ' urgente' : ''))
+        hacerAbrible(nodo, c)
+        var arriba = crear('div', 'card-top')
+        arriba.appendChild(crear('span', 'card-id', '#' + c.case_id))
+        var prio = prioNodo(c)
+        if (prio) arriba.appendChild(prio)
+        nodo.appendChild(arriba)
+        nodo.appendChild(crear('h4', 'card-title clamp2', tituloDe(c)))
+        nodo.appendChild(metaNodo(c))
+        extrasDe(c).forEach(function (n) { nodo.appendChild(n) })
+        return nodo
+      }
+
+      /** La fila de la lista: el mismo caso en un renglon, como la lista de Plane. */
+      function filaNodo (c) {
+        var nodo = crear('article', 'card fila' + (c.prioridad === 'urgent' ? ' urgente' : ''))
+        hacerAbrible(nodo, c)
+        nodo.appendChild(crear('span', 'card-id', '#' + c.case_id))
+        var centro = crear('div', 'fila-main')
+        centro.appendChild(crear('h4', 'card-title clamp1', tituloDe(c)))
+        centro.appendChild(metaNodo(c))
+        extrasDe(c).forEach(function (n) { centro.appendChild(n) })
+        nodo.appendChild(centro)
+        var prio = prioNodo(c)
+        if (prio) nodo.appendChild(prio)
+        return nodo
+      }
+
+      function cuentaTexto (visibles, n) {
+        return busqueda ? visibles + ' / ' + n : String(n)
+      }
+
+      function columnaNodo (etapa, m, tarjetas, sola) {
+        var n = m.counts[etapa]
+        // Antes una columna vacia era una caja con "Nada aqui": ocho de esas tapaban el
+        // tablero. Ahora se encoge a su cabecera, como una columna plegada.
+        var vacia = !tarjetas.length && !sola
+        var col = crear('section', 'col' + (etapa === 'decision' ? ' decision' : '') +
+          (etapa === 'bloqueado' ? ' lane' : '') + (n > 0 ? ' con-casos' : '') +
+          (vacia ? ' vacia' : ''))
+        col.dataset.stage = etapa
+        var nombre = t(ETAPA_KEY[etapa])
+        if (vacia) col.title = nombre
+        var cab = crear('h3', 'col-head')
+        cab.appendChild(puntoEtapa(etapa))
+        cab.appendChild(crear('span', 'col-name', nombre))
+        cab.appendChild(crear('span', 'col-count', cuentaTexto(tarjetas.length, n)))
+        col.appendChild(cab)
+        if (vacia) return col
+        var cuerpo = crear('div', 'col-body')
+        tarjetas.forEach(function (c) { cuerpo.appendChild(tarjetaNodo(c)) })
+        if (!tarjetas.length) cuerpo.appendChild(crear('p', 'col-nada', t('boardStageNone')))
+        if (!busqueda && n > m.porEtapa[etapa].length) {
+          cuerpo.appendChild(crear('p', 'col-more', fmt('boardMore', n - m.porEtapa[etapa].length)))
+        }
+        col.appendChild(cuerpo)
+        return col
+      }
+
+      function grupoNodo (etapa, m, tarjetas) {
+        var grupo = crear('section', 'grupo' + (etapa === 'bloqueado' ? ' lane' : ''))
+        grupo.dataset.stage = etapa
+        var cab = crear('h3', 'grupo-head')
+        cab.appendChild(puntoEtapa(etapa))
+        cab.appendChild(crear('span', 'col-name', t(ETAPA_KEY[etapa])))
+        cab.appendChild(crear('span', 'col-count', cuentaTexto(tarjetas.length, m.counts[etapa])))
+        grupo.appendChild(cab)
+        tarjetas.forEach(function (c) { grupo.appendChild(filaNodo(c)) })
+        if (!busqueda && m.counts[etapa] > m.porEtapa[etapa].length) {
+          grupo.appendChild(crear('p', 'col-more', fmt('boardMore', m.counts[etapa] - m.porEtapa[etapa].length)))
+        }
+        return grupo
+      }
+
+      /** La fila de etapas: "Todos" y cada etapa con su punto y su cuenta. Filtra. */
+      function renderChips (m) {
+        var caja = el('board-chips')
+        caja.textContent = ''
+        ;['todos'].concat(ORDEN_FILTRO).forEach(function (e) {
+          var n = e === 'todos' ? m.total : m.counts[e]
+          var b = crear('button', 'chip' + (e === 'decision' && n > 0 ? ' fuerte' : '') +
+            (e === 'bloqueado' ? ' lane' : ''))
+          b.type = 'button'
+          b.dataset.etapa = e
+          b.setAttribute('aria-pressed', filtroEtapa === e ? 'true' : 'false')
+          if (e !== 'todos') b.appendChild(puntoEtapa(e))
+          b.appendChild(crear('span', 'chip-name', e === 'todos' ? t('boardAll') : t(ETAPA_KEY[e])))
+          b.appendChild(crear('span', 'chip-count', n))
+          b.addEventListener('click', function () {
+            filtroEtapa = e
+            repintar()
+            var mismo = el('board-chips').querySelector('[data-etapa="' + e + '"]')
+            if (mismo) mismo.focus()
+          })
+          caja.appendChild(b)
+        })
+      }
+
+      function seccion (clase, titulo) {
+        var s = crear('section', 'det-sec' + (clase ? ' ' + clase : ''))
+        if (titulo) s.appendChild(crear('h4', 'det-label', titulo))
+        return s
+      }
+
+      /** Lo que vio Jev, en palabras: sin accion, como lee el mensaje, y sus senales. */
+      function jevNodo (jev) {
+        var caja = crear('div', 'det-jev')
+        if (jev.skip === true) caja.appendChild(crear('p', null, t('jevSkip')))
+        if (typeof jev.attention_class === 'string' && jev.attention_class) {
+          caja.appendChild(crear('p', null, t('jevSees') + ': ' +
+            porCodigo(JEV_CLASE_KEY, jev.attention_class, t('jevClsOther'))))
+        }
+        var flags = textos(jev.flags)
+        if (flags.length) {
+          caja.appendChild(crear('p', null, t('jevSignals') + ': ' +
+            frases(FLAG_KEY, flags, t('flagOther'))))
+        }
+        return caja.childNodes.length ? caja : null
+      }
+
+      /** La historia del caso (`caso_evento`), solo si la clave la trae como `events`. */
+      function historiaNodo (c) {
+        var eventos = Array.isArray(c.events) ? c.events.filter(esObjeto) : []
+        if (!eventos.length) return null
+        var lista = crear('ol', 'det-hist')
+        eventos.forEach(function (ev) {
+          var hacia = ETAPA_KEY[ev.a] ? t(ETAPA_KEY[ev.a]) : null
+          if (!hacia) return
+          var desde = ETAPA_KEY[ev.de] ? t(ETAPA_KEY[ev.de]) + ' → ' : ''
+          var li = crear('li')
+          li.appendChild(crear('span', 'hist-que', desde + hacia))
+          var cuandoTxt = hace(ev.at)
+          if (cuandoTxt) li.appendChild(crear('span', 'when', cuandoTxt))
+          lista.appendChild(li)
+        })
+        return lista.childNodes.length ? lista : null
+      }
+
+      /** El detalle del caso: el texto entero, lo que vio Jev y todas las acciones. */
+      function renderDetalle (c) {
+        var caja = el('board-detail')
+        caja.textContent = ''
+        if (!c) {
+          caja.hidden = true
+          delete caja.dataset.case
+          return
+        }
+        var id = String(c.case_id)
+        caja.hidden = false
+        caja.dataset.case = id
+        caja.setAttribute('aria-label', '#' + id + ' ' + tituloDe(c))
+
+        var cab = crear('div', 'det-head')
+        cab.appendChild(crear('span', 'card-id', '#' + id))
+        var pastilla = crear('span', 'etapa-pill')
+        pastilla.appendChild(puntoEtapa(c.stage))
+        pastilla.appendChild(crear('span', null, t(ETAPA_KEY[c.stage])))
+        cab.appendChild(pastilla)
+        var cierra = crear('button', 'det-close', '×')
+        cierra.type = 'button'
+        cierra.dataset.cerrarDetalle = '1'
+        cierra.title = t('detClose')
+        cierra.setAttribute('aria-label', t('detClose'))
+        cierra.addEventListener('click', cerrarDetalle)
+        cab.appendChild(cierra)
+        caja.appendChild(cab)
+
+        caja.appendChild(crear('h3', 'det-title', tituloDe(c)))
+        var meta = metaNodo(c)
+        meta.className = 'det-meta'
+        var prio = prioNodo(c)
+        if (prio) {
+          meta.appendChild(crear('span', 'sep', '·'))
+          prio.textContent = t('detPrio') + ': ' + prio.textContent
+          meta.appendChild(prio)
         }
         // El ticket es un texto, no un enlace: lo que llega de la clave es de fuera y un
         // href armado con ello no se abre desde el iframe del panel.
         var ticket = typeof c.ticket === 'string' ? c.ticket
           : (esObjeto(c.ticket) ? (c.ticket.id || c.ticket.key || c.ticket.identifier || '') : '')
-        if (ticket) nodo.appendChild(crear('div', 'card-ticket', t('ticketLead') + ' ' + ticket))
+        if (ticket) {
+          meta.appendChild(crear('span', 'sep', '·'))
+          meta.appendChild(crear('span', 'card-ticket', t('ticketLead') + ' ' + ticket))
+        }
+        caja.appendChild(meta)
+
+        var exc = excepcionNodo(c)
+        if (exc) caja.appendChild(exc)
+        var aprobada = aprobadaNodo(c)
+        if (aprobada) caja.appendChild(aprobada)
+        var bloqueo = bloqueoTexto(c)
+        if (bloqueo) {
+          var sb = seccion('card-blocked', t('blockedLead'))
+          sb.appendChild(crear('p', 'det-text', bloqueo))
+          caja.appendChild(sb)
+        }
+        if (typeof c.summary === 'string' && c.summary) {
+          var ss = seccion(null, t('detSummary'))
+          ss.appendChild(crear('p', 'det-sum', c.summary))
+          caja.appendChild(ss)
+        }
+        var prop = esObjeto(c.proposal) ? c.proposal : null
+        if (prop && (prop.texto || prop.tipo)) {
+          var sp = seccion('det-prop', t('propLead') +
+            (prop.tipo ? ' · ' + porCodigo(PROP_KEY, prop.tipo, '') : ''))
+          if (prop.texto) sp.appendChild(crear('div', 'card-prop', prop.texto))
+          caja.appendChild(sp)
+        }
+        var jev = esObjeto(c.jev) ? jevNodo(c.jev) : null
+        if (jev) {
+          var sj = seccion(null, t('detJev'))
+          sj.appendChild(jev)
+          caja.appendChild(sj)
+        }
 
         // Las acciones del dueno: un formulario si hay uno abierto, y si no, los botones.
+        var posibles = accionesDe(c)
         var formulario = formularios[id]
-        if (formulario && ACC_FORM[formulario.modo] && posibles.indexOf(formulario.modo) >= 0) {
-          nodo.appendChild(formularioNodo(c, formulario))
-        } else {
-          var aviso = mensajeNodo(id)
-          if (aviso) nodo.appendChild(aviso)
-          if (posibles.length) {
-            var fila = crear('div', 'acts card-acts')
-            posibles.forEach(function (a) { fila.appendChild(botonAccion(c, a)) })
-            nodo.appendChild(fila)
-          }
-        }
-
-        // Lo que se recorta se puede leer entero. Es el unico control del tablero y no es
-        // una accion del dueno: solo muestra lo que ya esta en la tarjeta.
-        var largo = Array.prototype.some.call(nodo.querySelectorAll('.clamp'), function (n) {
-          return n.textContent.length > LARGO_RECORTE
-        })
-        if (largo) {
-          var mas = crear('button', 'card-more', abiertas[id] ? t('boardShowLess') : t('boardShowAll'))
-          mas.type = 'button'
-          mas.setAttribute('aria-expanded', abiertas[id] ? 'true' : 'false')
-          mas.addEventListener('click', function () {
-            var abierta = nodo.classList.toggle('abierta')
-            if (abierta) abiertas[id] = true
-            else delete abiertas[id]
-            mas.textContent = abierta ? t('boardShowLess') : t('boardShowAll')
-            mas.setAttribute('aria-expanded', abierta ? 'true' : 'false')
-          })
-          nodo.appendChild(mas)
-        }
-        return nodo
-      }
-
-      /** El boton "Ver todo" solo sobra cuando nada esta recortado de verdad. Se mide
-       *  con el layout real: sin layout (vista oculta, o jsdom) no se sabe y se deja. */
-      function ajustarVerTodo () {
-        Array.prototype.forEach.call(el('board-cols').querySelectorAll('.card'), function (c) {
-          var mas = c.querySelector('.card-more')
-          if (!mas) return
-          if (c.classList.contains('abierta')) { mas.hidden = false; return }
-          var recortado = false
-          var medido = false
-          Array.prototype.forEach.call(c.querySelectorAll('.clamp'), function (n) {
-            if (n.clientHeight > 0) {
-              medido = true
-              if (n.scrollHeight > n.clientHeight + 1) recortado = true
+        var abierto = formulario && ACC_FORM[formulario.modo] && posibles.indexOf(formulario.modo) >= 0
+        var aviso = abierto ? null : mensajeNodo(id)
+        if (abierto || aviso || posibles.length) {
+          var sa = seccion('det-acciones', t('detActions'))
+          if (abierto) {
+            sa.appendChild(formularioNodo(c, formulario))
+          } else {
+            if (aviso) sa.appendChild(aviso)
+            if (posibles.length) {
+              var fila = crear('div', 'det-acts')
+              posibles.forEach(function (a) { fila.appendChild(botonAccion(c, a)) })
+              sa.appendChild(fila)
             }
-          })
-          mas.hidden = medido && !recortado
-        })
+          }
+          caja.appendChild(sa)
+        }
+        var historia = historiaNodo(c)
+        if (historia) {
+          var sh = seccion(null, t('detHistory'))
+          sh.appendChild(historia)
+          caja.appendChild(sh)
+        }
       }
 
-      function columnaNodo (etapa, m) {
-        var tarjetas = m.porEtapa[etapa]
-        var n = m.counts[etapa]
-        var col = crear('section', 'col' + (etapa === 'decision' ? ' decision' : '') +
-          (etapa === 'bloqueado' ? ' lane' : '') + (n > 0 ? ' con-casos' : '') +
-          (n === 0 && !tarjetas.length ? ' sin-nada' : ''))
-        col.dataset.stage = etapa
-        var cab = crear('h3', 'col-head')
-        cab.appendChild(crear('span', 'col-name', t(ETAPA_KEY[etapa])))
-        cab.appendChild(crear('span', 'col-count', n))
-        col.appendChild(cab)
-        if (!n && !tarjetas.length) {
-          col.appendChild(crear('p', 'col-empty',
-            t(etapa === 'decision' ? 'boardEmptyDecision' : 'boardEmptyCol')))
-        }
-        tarjetas.forEach(function (c) { col.appendChild(tarjetaNodo(c)) })
-        if (n > tarjetas.length) {
-          col.appendChild(crear('p', 'col-more', fmt('boardMore', n - tarjetas.length)))
-        }
-        return col
+      function abrirCaso (c) {
+        seleccion = String(c.case_id)
+        repintar()
+      }
+
+      function cerrarDetalle () {
+        var id = seleccion
+        seleccion = null
+        repintar()
+        var card = id && el('board-body').querySelector('.card[data-case="' + id + '"]')
+        if (card) card.focus()
+      }
+
+      function mostrarVacio (titulo, cuerpo, error) {
+        var caja = el('board-empty')
+        caja.hidden = false
+        caja.className = 'board-empty' + (error ? ' error' : '')
+        caja.querySelector('.t').textContent = titulo
+        caja.querySelector('.b').textContent = cuerpo
       }
 
       function renderBoard (board, forzar) {
         tableroActual = board
-        // Con un formulario abierto el sondeo no repinta: reconstruir el DOM se llevaria el
-        // texto y el foco del dueno. Lo que cambie se ve al cerrarlo o tras cualquier accion.
-        if (!forzar && Object.keys(formularios).length) return
+        // Con un formulario abierto en el detalle el sondeo no repinta: reconstruir el DOM
+        // se llevaria el texto y el foco del dueno. Lo que cambie se ve al cerrarlo o tras
+        // cualquier accion.
+        if (!forzar && seleccion && formularios[seleccion]) return
         var m = modeloTablero(board)
         var cols = el('board-cols')
+        var lista = el('board-list')
         var nota = el('board-note')
         var sello = el('board-synced')
         var contador = el('tab-board-count')
+        var nada = el('board-nada')
+        // El detalle pudo quedar dentro de la lista (en lo angosto): vuelve a su lugar antes
+        // de vaciarla, o se iria con ella.
+        if (el('board-detail').parentNode !== el('board-body')) el('board-body').appendChild(el('board-detail'))
         cols.textContent = ''
+        lista.textContent = ''
         sello.textContent = ''
         nota.className = 'meta nota'
+        el('board-empty').hidden = true
+        nada.hidden = true
         var avisos = []
+        var detalleDe = null
         if (m.estado === 'sin-datos') {
-          avisos.push(t('boardNoData'))
+          mostrarVacio(t('boardNoDataTitle'), t('boardNoDataBody'), false)
         } else if (m.estado === 'version') {
-          avisos.push(fmt('boardUnsupported', { v: m.v }))
-          nota.className += ' stale'
+          mostrarVacio(t('boardVersionTitle'), fmt('boardUnsupported', { v: m.v }), true)
         } else if (m.estado === 'vacio') {
-          avisos.push(t('boardNoCases'))
+          mostrarVacio(t('boardEmptyTitle'), t('boardEmptyBody'), false)
         } else {
-          ETAPAS.forEach(function (e) { cols.appendChild(columnaNodo(e, m)) })
-          // Un formulario o un mensaje de una tarjeta que ya no esta no tiene a quien
-          // pertenecer.
+          // Un formulario, un mensaje o un detalle de una tarjeta que ya no esta no tiene a
+          // quien pertenecer.
           var presentes = {}
           ETAPAS.forEach(function (e) {
-            m.porEtapa[e].forEach(function (c) { presentes[String(c.case_id)] = true })
+            m.porEtapa[e].forEach(function (c) { presentes[String(c.case_id)] = c })
           })
           Object.keys(formularios).forEach(function (k) { if (!presentes[k]) delete formularios[k] })
           Object.keys(mensajes).forEach(function (k) { if (!presentes[k]) delete mensajes[k] })
+          if (seleccion && !presentes[seleccion]) seleccion = null
+          detalleDe = seleccion ? presentes[seleccion] : null
+
+          renderChips(m)
+          var q = plano(busqueda.trim())
+          var etapas = filtroEtapa === 'todos' ? ETAPAS : [filtroEtapa]
+          var vis = {}
+          var mostrados = 0
+          ETAPAS.forEach(function (e) {
+            vis[e] = etapas.indexOf(e) >= 0
+              ? m.porEtapa[e].filter(function (c) { return coincide(c, q) }) : []
+            mostrados += vis[e].length
+          })
+          var vista = vistaEfectiva()
+          Array.prototype.forEach.call(el('board-view').querySelectorAll('button[data-vista]'),
+            function (b) { b.setAttribute('aria-pressed', b.dataset.vista === vista ? 'true' : 'false') })
+          el('board-shown').textContent = mostrados === 1 ? t('boardShown1') : fmt('boardShown', mostrados)
+          cols.hidden = vista !== 'board'
+          lista.hidden = vista !== 'list'
+          if (q && !mostrados) {
+            nada.textContent = t('boardNoMatch')
+            nada.hidden = false
+          } else if (vista === 'board') {
+            etapas.forEach(function (e) {
+              cols.appendChild(columnaNodo(e, m, vis[e], filtroEtapa !== 'todos'))
+            })
+          } else {
+            var algun = false
+            ORDEN_FILTRO.forEach(function (e) {
+              if (!vis[e].length) return
+              algun = true
+              lista.appendChild(grupoNodo(e, m, vis[e]))
+            })
+            if (!algun) {
+              nada.textContent = t('boardStageNone')
+              nada.hidden = false
+            }
+          }
           if (m.truncado) avisos.push(t('boardTruncated'))
           if (m.desconocidas) {
             avisos.push(m.desconocidas === 1 ? t('boardUnknown1') : fmt('boardUnknown', m.desconocidas))
           }
         }
+        var conCasos = m.estado === 'ok'
+        el('board-bar').hidden = !conCasos
+        el('board-body').hidden = !conCasos
+        renderDetalle(detalleDe)
+        ubicarDetalle()
         if (m.estado === 'ok' || m.estado === 'vacio') {
           var edad = hace(m.actualizado)
           if (edad) {
@@ -1643,11 +2317,49 @@
         }
         nota.textContent = avisos.join(' ')
         // La insignia de la pestana: lo unico que espera al dueno.
-        var porDecidir = m.estado === 'ok' ? m.counts.decision : 0
+        var porDecidir = conCasos ? m.counts.decision : 0
         contador.textContent = porDecidir ? String(porDecidir) : ''
         contador.hidden = !porDecidir
-        ajustarVerTodo()
       }
+
+      /** A lo ancho el detalle va al costado, como el panel de un elemento en Plane. En lo
+       *  angosto se abre en el lugar: debajo de la fila elegida en la lista, o debajo de las
+       *  columnas en el tablero. */
+      function ubicarDetalle () {
+        var caja = el('board-detail')
+        var cuerpo = el('board-body')
+        var fila = seleccion && estrecho() && vistaEfectiva() === 'list'
+          ? el('board-list').querySelector('.card[data-case="' + seleccion + '"]') : null
+        if (fila) {
+          fila.parentNode.insertBefore(caja, fila.nextSibling)
+          caja.classList.add('en-linea')
+        } else {
+          if (caja.parentNode !== cuerpo) cuerpo.appendChild(caja)
+          caja.classList.remove('en-linea')
+        }
+      }
+
+      el('board-search').addEventListener('input', function () {
+        busqueda = el('board-search').value
+        el('board-search-clear').hidden = !busqueda
+        repintar()
+      })
+      el('board-search-clear').addEventListener('click', function () {
+        busqueda = ''
+        el('board-search').value = ''
+        el('board-search-clear').hidden = true
+        repintar()
+        el('board-search').focus()
+      })
+      Array.prototype.forEach.call(el('board-view').querySelectorAll('button[data-vista]'), function (b) {
+        b.addEventListener('click', function () {
+          vistaElegida = b.dataset.vista
+          repintar()
+        })
+      })
+      document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && seleccion && vistaActiva === 'board') cerrarDetalle()
+      })
 
       function mostrarVista (cual) {
         vistaActiva = cual
@@ -1657,7 +2369,6 @@
           el('tab-' + v).setAttribute('aria-selected', activa ? 'true' : 'false')
           el('tab-' + v).tabIndex = activa ? 0 : -1
         })
-        if (cual === 'board') ajustarVerTodo()
       }
       VISTAS.forEach(function (v) {
         el('tab-' + v).addEventListener('click', function () { mostrarVista(v) })
@@ -1669,7 +2380,13 @@
           el('tab-' + otra).focus()
         })
       })
-      window.addEventListener('resize', ajustarVerTodo)
+      // Al cruzar los 768 px cambia la vista natural y el lugar del detalle.
+      var eraEstrecho = estrecho()
+      window.addEventListener('resize', function () {
+        if (estrecho() === eraEstrecho) return
+        eraEstrecho = estrecho()
+        repintar()
+      })
 
       function reload() {
         return Promise.all([
