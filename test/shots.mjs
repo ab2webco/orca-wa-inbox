@@ -433,14 +433,60 @@ const BUSQUEDA_FALLIDA = Object.assign({}, SIN_PROYECTOS, {
 // Editar la primera conversacion: el formulario por chat con su proyecto elegido.
 const EDITAR_CONVERSACION = "document.querySelector('[data-edit]').click()"
 
+// T17: los ajustes van en seis pestanas. Cada captura de config.html dice en cual se
+// fotografia (`pestana`); sin decirlo es Estado, que es donde viven la linea y los avisos.
+// Escribir en un autocompletar como lo hace el dueno: foco, texto y el evento `input`.
+const escribirEn = (id, texto) => `const c = document.getElementById('${id}');
+  c.focus(); c.value = ${JSON.stringify(texto)};
+  c.dispatchEvent(new Event('input', { bubbles: true }));`
+// Y elegir una opcion de su lista con un clic.
+const elegirEn = (id, lista, texto, valor) => escribirEn(id, texto) +
+  `document.querySelector('#${lista} [role="option"][data-value="${valor}"]').click();`
+// Todo listo (linea, nombre y una conversacion): la pestana de entrada es Conversaciones.
+const CON_LINEA = Object.assign({}, DATOS,
+  { sidecar: { connection: 'open', qr: null, exited: false, latido: LATIDO_FRESCO } })
+
 const PANELES = [
-  { nombre: 'config', archivo: 'config.html', anchos: ANCHOS, datos: DATOS },
+  // Las seis pestanas, a los cuatro anchos, en los dos idiomas y los dos temas.
+  { nombre: 'config-tab-estado', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: DATOS, pestana: 'estado' },
+  // Conversaciones trae la regla vieja de Plane (`cobros`) marcada.
+  { nombre: 'config-tab-chats', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: CON_LINEA, pestana: 'chats' },
+  { nombre: 'config-tab-proyectos', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: DATOS, pestana: 'proyectos' },
+  { nombre: 'config-tab-aprobacion', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: DATOS, pestana: 'aprobacion' },
+  { nombre: 'config-tab-agente', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: DATOS, pestana: 'agente' },
+  { nombre: 'config-tab-avanzado', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: DATOS, pestana: 'avanzado' },
+  // La pestana de entrada sin tocar nada: con todo listo, Conversaciones.
+  { nombre: 'config-entrada-lista', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: CON_LINEA, pestana: null },
+  // El autocompletar abierto con resultados, sin ninguno, y el de proyecto.
+  { nombre: 'config-combo-abierto', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: CON_LINEA, pestana: 'chats',
+    guion: escribirEn('chat-search', 'o') +
+      "c.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))",
+    espera: 300 },
+  { nombre: 'config-combo-sin-coincidencias', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: CON_LINEA, pestana: 'chats',
+    guion: escribirEn('chat-search', 'zzzz'), espera: 300 },
+  { nombre: 'config-combo-proyecto', archivo: 'config.html', anchos: ANCHOS,
+    datos: CON_LINEA, pestana: 'chats', guion: escribirEn('workspace-search', ''),
+    espera: 300 },
+  // Jev encendido, con llave.
+  { nombre: 'config-jev-encendido', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, pestana: 'aprobacion',
+    datos: Object.assign({}, DATOS, { jevStatus: { at: new Date().toISOString(),
+      enabled: true, keySet: true, mirror: 'activo' } }) },
   { nombre: 'config-proyectos-vacio', archivo: 'config.html', anchos: ANCHOS,
-    datos: SIN_PROYECTOS },
+    enTodosLosAnchos: true, datos: SIN_PROYECTOS, pestana: 'proyectos' },
   { nombre: 'config-proyectos-fallo', archivo: 'config.html', anchos: ANCHOS_ESTADO,
-    datos: BUSQUEDA_FALLIDA },
+    datos: BUSQUEDA_FALLIDA, pestana: 'proyectos' },
   { nombre: 'config-conversacion-editar', archivo: 'config.html', anchos: ANCHOS,
-    guion: EDITAR_CONVERSACION, espera: 400, datos: DATOS },
+    guion: EDITAR_CONVERSACION, espera: 400, datos: CON_LINEA, pestana: 'chats' },
   {
     nombre: 'actividad',
     archivo: 'activity.html',
@@ -623,13 +669,13 @@ const PANELES = [
   // esos. A 320 ademas la fila se parte en bloques y el aviso de desvincular es el
   // parrafo mas largo del panel.
   {
-    nombre: 'config-buscando', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    nombre: 'config-buscando', archivo: 'config.html', anchos: ANCHOS_ESTADO, pestana: 'chats',
     datos: Object.assign({}, SIN_CHATS, {
       syncStatus: { running: true, startedAt: new Date().toISOString(), trigger: 'activate' }
     })
   },
   {
-    nombre: 'config-fallo', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    nombre: 'config-fallo', archivo: 'config.html', anchos: ANCHOS_ESTADO, pestana: 'chats',
     datos: Object.assign({}, SIN_CHATS, {
       syncStatus: {
         ok: false, at: new Date().toISOString(), chats: 0, reason: 'sin-herramientas',
@@ -639,7 +685,7 @@ const PANELES = [
     })
   },
   {
-    nombre: 'config-sin-respuesta', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    nombre: 'config-sin-respuesta', archivo: 'config.html', anchos: ANCHOS_ESTADO, pestana: 'chats',
     datos: Object.assign({}, SIN_CHATS, {
       syncStatus: { running: true, startedAt: HACE_DIEZ_MINUTOS, trigger: 'activate' }
     })
@@ -731,18 +777,18 @@ const PANELES = [
     // era visual: el panel decia "guardado" con un tilde verde sobre una escritura que
     // no ocurrio, y eso no lo delata ninguna prueba de codigo, solo mirarlo.
     nombre: 'config-guardado-fallo', archivo: 'config.html', anchos: ANCHOS_ESTADO,
-    datos: DATOS, stub: { falla: ['inboxDays'] },
-    guion: `document.getElementById('inbox-days').value = '30';
-            document.getElementById('save-days').click()`
+    datos: DATOS, stub: { falla: ['inboxDays'] }, pestana: 'avanzado',
+    guion: `document.querySelector('#inbox-days [data-value="30"]').click();
+            document.getElementById('save-reading').click()`
   },
   {
     // Y el guardado EN VUELO: el boton ocupado mientras el host todavia no contesta.
     // Sin poder verlo, un boton que se queda muerto y uno que esta trabajando son la
     // misma imagen.
     nombre: 'config-guardado-en-vuelo', archivo: 'config.html', anchos: ANCHOS_ESTADO,
-    datos: DATOS, stub: { demoraSet: 4000 },
-    guion: `document.getElementById('inbox-days').value = '30';
-            document.getElementById('save-days').click()`,
+    datos: DATOS, stub: { demoraSet: 4000 }, pestana: 'avanzado',
+    guion: `document.querySelector('#inbox-days [data-value="30"]').click();
+            document.getElementById('save-reading').click()`,
     espera: 600
   },
 
@@ -874,13 +920,8 @@ const PANELES = [
     // quedo, y que debajo esta la llave. Una lista desplegada no se puede fotografiar
     // —la pinta el sistema— asi que lo que se mira es lo que si queda en la pagina.
     nombre: 'config-elegir-autorizada', archivo: 'config.html', anchos: ANCHOS,
-    datos: DATOS,
-    guion: `const b = document.getElementById('chat-search');
-            b.value = 'laura mendez';
-            b.dispatchEvent(new Event('input'));
-            const s = document.getElementById('chat-pick');
-            s.value = '573000000000@s.whatsapp.net';
-            s.dispatchEvent(new Event('change'));`,
+    datos: DATOS, pestana: 'chats',
+    guion: elegirEn('chat-search', 'chat-list', 'laura mendez', '573000000000@s.whatsapp.net'),
     espera: 400
   },
   {
@@ -889,13 +930,8 @@ const PANELES = [
     // Sin permiso no hay insignia ni aviso, y el renglon de identidad es lo unico que
     // dice cual conversacion es antes de darle permiso a un agente sobre ella.
     nombre: 'config-elegir-sin-autorizar', archivo: 'config.html', anchos: ANCHOS,
-    datos: DATOS,
-    guion: `const b = document.getElementById('chat-search');
-            b.value = 'taller demo 2';
-            b.dispatchEvent(new Event('input'));
-            const s = document.getElementById('chat-pick');
-            s.value = '120363000000000004@g.us';
-            s.dispatchEvent(new Event('change'));`,
+    datos: DATOS, pestana: 'chats',
+    guion: elegirEn('chat-search', 'chat-list', 'taller demo 2', '120363000000000004@g.us'),
     espera: 400
   },
   // ── La linea muerta (odd/tasks/linea-muerta.md) ──────────────────────────────────
@@ -951,7 +987,7 @@ const PANELES = [
   // del nuevo no paso), y el panel no lo pinta como si fuera del vinculado.
   {
     nombre: 'config-numero-nuevo', archivo: 'config.html', anchos: ANCHOS,
-    enTodosLosAnchos: true,
+    enTodosLosAnchos: true, pestana: 'chats',
     datos: Object.assign({}, DATOS, {
       sidecar: { connection: 'open', qr: null, exited: false, me: '+573000000012',
         cuenta: 'pn:573000000012', latido: LATIDO_FRESCO },
@@ -982,9 +1018,8 @@ const PANELES = [
       chats: [{ jid: '100000000000002@lid', name: 'Nueva', kind: 'directo', own: true,
         last: '2026-09-17 14:05', unread: 0 }].concat(DATOS.chats)
     }),
-    guion: `const s = document.getElementById('chat-pick');
-            s.value = '100000000000002@lid';
-            s.dispatchEvent(new Event('change'));`,
+    pestana: 'chats',
+    guion: elegirEn('chat-search', 'chat-list', 'nueva', '100000000000002@lid'),
     espera: 400
   },
   // T10: una subida de esquema que no borro ningun mensaje no dice "se borro".
@@ -1078,6 +1113,14 @@ async function main() {
           null, { timeout: 5000 }
         ).catch(() => problemas.push(`${donde}: quedo vacio`))
 
+        // La pestana de la captura (T17). `null` deja la que el panel elige solo.
+        const pestana = panel.archivo === 'config.html' && panel.pestana !== null
+          ? (panel.pestana || 'estado') : null
+        if (pestana) {
+          await pagina.click(`#tab-${pestana}`)
+          await pagina.waitForTimeout(100)
+        }
+
         // Los estados que solo existen despues de un clic. Fotografiar el panel recien
         // cargado nunca los muestra, y son justo los dos que se entregaron rotos.
         if (panel.guion) {
@@ -1100,22 +1143,20 @@ async function main() {
           problemas.push(`${donde}: error JS — ${errores[0]}`)
         }
 
-        // La lista desplegada de un select, en Linux, la pinta el motor de render con
-        // el color del control: un fondo transparente ahi es blanco sobre blanco y no
-        // se ve en ninguna captura, porque la captura fotografia el control cerrado.
-        // Por eso se mide en vez de mirarse, y en los dos temas.
+        // T17: ni un select nativo (su lista no se abre en el panel de Orca). Y la lista
+        // del autocompletar flota sobre lo que sigue: con fondo transparente se leeria
+        // el texto de abajo a traves de ella. Se mide en vez de mirarse, en los dos temas.
         for (const malo of await pagina.evaluate(() => {
           const opaco = (c) => {
             const m = /rgba?\(([^)]+)\)/.exec(c || '')
             return m ? Number((m[1].split(',')[3] ?? '1').trim()) > 0.99 : false
           }
           const salida = []
-          for (const el of document.querySelectorAll('select, select option')) {
+          if (document.querySelector('select')) salida.push('hay un <select> nativo')
+          for (const el of document.querySelectorAll('.combo-list:not([hidden])')) {
             const e = getComputedStyle(el)
-            const que = el.tagName.toLowerCase() + (el.id ? '#' + el.id : '')
-            if (!opaco(e.backgroundColor)) salida.push(`${que} sin fondo propio (${e.backgroundColor})`)
-            else if (e.backgroundColor === e.color) salida.push(`${que} con el texto del color del fondo`)
-            if (!opaco(e.color)) salida.push(`${que} con el texto transparente (${e.color})`)
+            if (!opaco(e.backgroundColor)) salida.push(`#${el.id} sin fondo propio (${e.backgroundColor})`)
+            else if (e.backgroundColor === e.color) salida.push(`#${el.id} con el texto del color del fondo`)
           }
           return salida
         })) {
@@ -1140,7 +1181,7 @@ async function main() {
     for (const p of problemas) console.error(`  ${p}`)
     process.exit(1)
   }
-  console.log('sin desbordes, sin errores de JS y con los select legibles')
+  console.log('sin desbordes, sin errores de JS, sin selects y con las listas opacas')
 }
 
 main().catch((error) => {
