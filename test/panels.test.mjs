@@ -874,6 +874,19 @@ console.log('\nel codigo del CLI, dicho en el idioma del panel')
   ok('la re-clave de la linea se dice en espanol', /numero/i.test(opcReclave) &&
     !/were assigned|re-keyed/.test(opcReclave), opcReclave)
 
+  // T9f: lo de antes que no se pudo atribuir con certeza pide una decision, con el
+  // comando exacto, en el idioma del panel.
+  const decide = await montar('config.html', { health: { ok: true, optional: [{
+    que: 'data from a previous number', code: 'store-rekey-pending',
+    howCode: 'store-rekey-decide',
+    como: '3 conversations and 12 messages ... run: wa-scope reclave --numero <n>' }] } },
+  'es-419')
+  await espera()
+  const opcDecide = decide.doc.getElementById('opcionales').textContent
+  ok('el pedido de decision se dice en espanol, con el comando',
+    /numero anterior/i.test(opcDecide) && /wa-scope reclave --numero/.test(opcDecide) &&
+    !/cannot be matched/.test(opcDecide), opcDecide)
+
   const pt = await montar('config.html', { health: salud }, 'pt-BR')
   await espera()
   ok('y en portugues tambien',

@@ -61,6 +61,16 @@ export function topesDe (filas, previos = { max: 20000, dias: 90 }) {
   return { max: entero('capture_max', previos.max), dias: entero('capture_days', previos.dias) }
 }
 
+/** De las filas de `wa-scope config --json` a la decision del dueno sobre los datos de
+ *  antes de T9 (`wa-scope reclave --numero`): la cuenta `pn:<digitos>` a la que
+ *  pertenecen, o `null`. Cualquier otra cosa se ignora: una cuenta que no es de un
+ *  telefono no puede recibir nada. */
+export function reclaveDecididaDe (filas) {
+  const fila = (Array.isArray(filas) ? filas : []).find((f) => f?.key === 'reclave_local_a')
+  const valor = String(fila?.value ?? '')
+  return /^pn:\d{6,}$/.test(valor) ? valor : null
+}
+
 /**
  * El alcance vivo, con su cache. `toolsDir` lo pasa el worker: las herramientas viajan
  * juntas y buscarlas en el PATH ya habia mandado a una a la instalacion equivocada
@@ -70,6 +80,7 @@ export function crearAlcance ({ toolsDir, ejecutar = correr, ttlMs = ALCANCE_TTL
   ahora = () => Date.now() }) {
   let mapa = new Map()
   let topes = { max: 20000, dias: 90 }
+  let decidida = null
   let cargadoEn = 0
   let cargoAlgunaVez = false
 
@@ -89,8 +100,10 @@ export function crearAlcance ({ toolsDir, ejecutar = correr, ttlMs = ALCANCE_TTL
       return cargoAlgunaVez
     }
     try {
-      topes = topesDe(JSON.parse(ejecutar(join(toolsDir, 'wa-scope'),
-        ['config', '--json']) || '[]'), topes)
+      const ajustes = JSON.parse(ejecutar(join(toolsDir, 'wa-scope'),
+        ['config', '--json']) || '[]')
+      topes = topesDe(ajustes, topes)
+      decidida = reclaveDecididaDe(ajustes)
     } catch {
       // Sin ajustes se usan los topes anteriores, que arrancan en los de fabrica.
     }
@@ -102,6 +115,8 @@ export function crearAlcance ({ toolsDir, ejecutar = correr, ttlMs = ALCANCE_TTL
     /** Deniega por defecto, y tambien mientras no se haya podido cargar nunca. */
     modo: (cuenta, jid) => (cargoAlgunaVez ? modoEn(mapa, cuenta, jid) : 'off'),
     topes: () => ({ ...topes }),
+    /** De que numero dijo el dueno que son los datos de antes de T9, o `null`. */
+    reclaveDecidida: () => decidida,
     listo: () => cargoAlgunaVez,
     // Para poder decir "llegaron 40 y se guardaron 0 porque no hay ninguna autorizada"
     // en vez de dejar una bandeja vacia sin explicacion.

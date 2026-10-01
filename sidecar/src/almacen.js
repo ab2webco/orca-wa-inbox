@@ -198,6 +198,36 @@ create table if not exists reclave (
 // que el propio registro declara.
 const CUENTAS_VIA_MUERTA = "account = 'web' or account like 'web:%'"
 
+/** (usuario, servidor) de un jid, sin dispositivo: `X:3@lid` y `X@lid` son el mismo. */
+function usuarioDe (jid) {
+  const [usuario = '', servidor = ''] = String(jid || '').split('@')
+  return `${usuario.split(':')[0]}@${servidor}`
+}
+
+/**
+ * Si lo que quedo bajo la cuenta fija `local` se puede pasar SOLO al numero de su
+ * linea (T9). Pura: decide con los datos que se le pasan.
+ *
+ * Falla cerrada. Otros usuarios pueden tener la fila `local` de `linea` pisada por OTRO
+ * numero —le paso al dueno—, y ahi re-clavar le daria al numero nuevo lo del viejo. Se
+ * mueve solo con evidencia de que la identidad de `local` es la que produjo los datos:
+ *   - su telefono es el numero emparejado AHORA, y
+ *   - todo mensaje propio con remitente conocido (los de grupo; en un directo el
+ *     remitente propio es null y no prueba nada) lo firmo su LID o su telefono.
+ * Si no, `bloquear`: no se mueve nada y el dueno decide (`wa-scope reclave --numero`).
+ * Sin numero emparejado todavia (emparejando), `esperar`: no se decide a ciegas.
+ */
+export function decidirReclave ({ lineaLocal, remitentesPropios = [], emparejada }) {
+  if (!emparejada) return { accion: 'esperar', hacia: null, motivo: 'sin-emparejar' }
+  const hacia = cuentaDeIdentidad(lineaLocal?.pn)
+  if (!hacia) return { accion: 'bloquear', hacia: null, motivo: 'sin-telefono' }
+  if (hacia !== emparejada) return { accion: 'bloquear', hacia, motivo: 'otro-numero' }
+  const propios = new Set([lineaLocal?.lid, lineaLocal?.pn].filter(Boolean).map(usuarioDe))
+  const ajeno = remitentesPropios.filter(Boolean).some((j) => !propios.has(usuarioDe(j)))
+  if (ajeno) return { accion: 'bloquear', hacia, motivo: 'remitentes-ajenos' }
+  return { accion: 'mover', hacia, motivo: 'identidad-comprobada' }
+}
+
 /** Las columnas que tiene HOY una tabla. Se pregunta en vez de asumirse porque la
  *  migracion tiene que poder correr sobre dos formas distintas del mismo nombre. */
 function columnasDe (con, tabla) {
@@ -452,10 +482,15 @@ class Almacen {
    * descarta: es la misma conversacion o el mismo mensaje, no contenido distinto.
    * Devuelve que movio, o `null` si no habia nada que mover.
    */
-  reclavarLocal (ahora = Date.now()) {
+  reclavarLocal ({ hacia: elegida = null, ahora = Date.now() } = {}) {
     const fila = this.con.prepare("select pn from linea where account='local'").get()
-    const hacia = cuentaDeIdentidad(fila?.pn)
+    // `elegida` es la decision del dueno (`wa-scope reclave --numero`): manda sobre lo
+    // que diga la fila `local`, que puede estar pisada por otro numero.
+    const hacia = elegida || cuentaDeIdentidad(fila?.pn)
     if (!hacia) return null
+    const hayAlgo = ['chat', 'mensaje', 'envio', 'linea'].some((t) => Number(this.con
+      .prepare(`select count(*) c from ${t} where account='local'`).get().c) > 0)
+    if (!hayAlgo) return null
     const contar = (tabla) => Number(this.con.prepare(
       `select count(*) c from ${tabla} where account='local'`).get().c) || 0
     this.con.exec('begin immediate')
@@ -492,6 +527,51 @@ class Almacen {
       try { this.con.exec('rollback') } catch { /* nada abierto */ }
       throw error
     }
+  }
+
+  /**
+   * Lo que el sidecar corre al saber que numero esta emparejado: decide con
+   * `decidirReclave` si lo de `local` pasa solo a su numero, y si no, lo deja como
+   * esta y anota que hace falta una decision (`store_meta.reclave_pendiente`, que
+   * muestra `wa-read doctor` con el comando exacto). `decidida` es la decision del
+   * dueno, que manda sobre la evidencia.
+   */
+  resolverLocal ({ emparejada = null, decidida = null, ahora = Date.now() } = {}) {
+    const contar = (sql) => Number(this.con.prepare(sql).get().c) || 0
+    const chats = contar("select count(*) c from chat where account='local'")
+    const mensajes = contar("select count(*) c from mensaje where account='local'")
+    const hayLinea = contar("select count(*) c from linea where account='local'") > 0
+    const borrarPendiente = () =>
+      this.con.prepare("delete from store_meta where key='reclave_pendiente'").run()
+    if (!chats && !mensajes && !hayLinea) {
+      borrarPendiente()
+      return { accion: 'nada' }
+    }
+    if (decidida && cuentaDeIdentidad(String(decidida).replace(/^pn:/, ''))) {
+      const r = this.reclavarLocal({ hacia: decidida, ahora })
+      borrarPendiente()
+      return { accion: 'movida', hacia: decidida, motivo: 'decidida', ...r }
+    }
+    const lineaLocal = this.con.prepare("select lid, pn from linea where account='local'")
+      .get() || {}
+    const remitentesPropios = this.con.prepare(
+      "select distinct sender_jid j from mensaje where account='local' and from_me=1 " +
+      'and sender_jid is not null').all().map((f) => f.j)
+    const d = decidirReclave({ lineaLocal, remitentesPropios, emparejada })
+    if (d.accion === 'mover') {
+      const r = this.reclavarLocal({ hacia: d.hacia, ahora })
+      borrarPendiente()
+      return { accion: 'movida', hacia: d.hacia, motivo: d.motivo, ...r }
+    }
+    if (d.accion === 'bloquear') {
+      // Solo numeros y el motivo: nada de quien es ni de que se hablo.
+      this.con.prepare('insert into store_meta (key,value) values (?,?) ' +
+        'on conflict(key) do update set value=excluded.value')
+        .run('reclave_pendiente', JSON.stringify({ motivo: d.motivo, chats, mensajes,
+          at: Math.floor(ahora / 1000) }))
+      return { accion: 'bloqueada', motivo: d.motivo, chats, mensajes }
+    }
+    return { accion: d.accion, motivo: d.motivo }
   }
 
   /** Deja `cuenta` como linea activa. NO copia nada ni toca las filas de otra cuenta:

@@ -20,6 +20,7 @@ lo dice con un motivo estable en vez de devolver una lista vacia: una bandeja va
 lee como "no hay nada que atender", que es lo contrario de "no puedo leer nada"
 (§11-E5).
 """
+import json
 import os
 import sqlite3
 import sys
@@ -649,6 +650,26 @@ def reclaves():
     except sqlite3.Error:
         return []
     return [dict(r) for r in filas]
+
+
+def reclave_pendiente():
+    """Lo de antes de T9 que el sidecar NO pudo atribuir con certeza a un numero, o None.
+
+    Lo anota el sidecar (`resolverLocal`) cuando la evidencia no alcanza —por ejemplo,
+    la fila `local` de `linea` pisada por otro numero—: no mueve nada y espera la
+    decision del dueno. Trae solo cuantas conversaciones y mensajes y por que."""
+    ruta = store_db_path()
+    if not os.path.exists(ruta):
+        return None
+    try:
+        con = sqlite3.connect(f"file:{ruta}?mode=ro", uri=True, timeout=5)
+        fila = con.execute(
+            "select value from store_meta where key='reclave_pendiente'").fetchone()
+        con.close()
+        datos = json.loads(fila[0]) if fila and fila[0] else None
+    except (sqlite3.Error, ValueError, TypeError):
+        return None
+    return datos if isinstance(datos, dict) else None
 
 
 def ultimo_desalojo(con):

@@ -747,6 +747,18 @@ const PANELES = [
           howCode: 'store-migrated-clean' }] }
     })
   },
+  // T9f: lo de antes que no se pudo atribuir con certeza a un numero. No se movio nada
+  // y el panel pide la decision con el comando exacto.
+  {
+    nombre: 'config-legado-pendiente', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true,
+    datos: Object.assign({}, DATOS, {
+      health: { ok: true, optional: [
+        { que: 'data from a previous number', code: 'store-rekey-pending',
+          como: 'conversations stored before each number had its own line stay hidden',
+          howCode: 'store-rekey-decide' }] }
+    })
+  },
   {
     nombre: 'config-sidecar-reintentar', archivo: 'config.html', anchos: ANCHOS,
     datos: Object.assign({}, DATOS, { sidecar: {

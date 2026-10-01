@@ -379,6 +379,28 @@ async function iniciar () {
   // y las autorizaciones del viejo. Con credenciales ya guardadas se sabe desde el
   // arranque; emparejando es `null` hasta que WhatsApp diga quien es, y en ese rato no
   // se guarda ni se manda nada a nombre de nadie.
+  const mediaDir = rutaMedia(process.env)
+  // Las herramientas las pasa el worker: buscarlas en el PATH ya habia mandado a una
+  // a la instalacion equivocada (§11-E4).
+  const alcance = crearAlcance({ toolsDir: process.env.WA_SIDECAR_TOOLS_DIR })
+  alcance.refrescar(true)
+
+  /** Lo que quedo de antes de T9 bajo la cuenta fija `local`. Se pasa a su numero solo
+   *  con evidencia, o por decision del dueno (`wa-scope reclave --numero`, que llega por
+   *  el alcance); si no, queda guardado y oculto y `wa-read doctor` pide la decision
+   *  (falla cerrada: `resolverLocal` en almacen.js). Un fallo aca no tumba la linea. */
+  const resolverLegado = () => {
+    try {
+      const r = almacen.resolverLocal({ emparejada: cuenta, decidida: alcance.reclaveDecidida() })
+      // Solo que paso, sin numeros de nadie: va al log del worker.
+      if (r.accion === 'movida' || r.accion === 'bloqueada') {
+        process.stderr.write(`legado: ${r.accion} (${r.motivo})\n`)
+      }
+    } catch (error) {
+      emitirError('legado-sin-resolver', error?.message || error)
+    }
+  }
+
   let cuenta = null
   const fijarCuenta = (pn) => {
     const nueva = cuentaDeIdentidad(pn)
@@ -389,13 +411,10 @@ async function iniciar () {
     // Sin numero ni contenido: solo que la linea activa cambio, para el log del worker.
     if (cambio && antes) process.stderr.write('linea: cambio la linea activa\n')
     emitir({ type: 'linea', cuenta, cambio, ts: Date.now() })
+    // Con el numero emparejado conocido recien se puede decidir sobre lo de antes.
+    resolverLegado()
   }
   fijarCuenta(state.creds?.me?.id)
-  const mediaDir = rutaMedia(process.env)
-  // Las herramientas las pasa el worker: buscarlas en el PATH ya habia mandado a una
-  // a la instalacion equivocada (§11-E4).
-  const alcance = crearAlcance({ toolsDir: process.env.WA_SIDECAR_TOOLS_DIR })
-  alcance.refrescar(true)
 
   let identidades = identidadesPropias(null, null)
   const nombresDeChat = new Map()
@@ -793,7 +812,17 @@ async function iniciar () {
 
   // El latido de la linea hacia el panel (ver LATIDO_LINEA_MS). Sale uno ya, para que el
   // panel no tenga que esperar un minuto entero para creer lo que ve.
-  const latirLinea = () => emitir(mensajeLatido(conectado))
+  const latirLinea = () => {
+    emitir(mensajeLatido(conectado))
+    // En el mismo reloj, la decision del dueno sobre lo de antes (`wa-scope reclave
+    // --numero`): se aplica en menos de un minuto, sin reiniciar nada. Con la linea
+    // conectada el panel no ofrece Reintentar, y mandar a apretarlo seria mandar a
+    // un boton que no esta. Sin nada en `local`, `resolverLocal` no hace nada.
+    if (cuenta) {
+      alcance.refrescar()
+      resolverLegado()
+    }
+  }
   latirLinea()
   const lineaTimer = setInterval(latirLinea, LATIDO_LINEA_MS)
   if (typeof lineaTimer.unref === 'function') lineaTimer.unref()

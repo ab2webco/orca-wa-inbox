@@ -217,6 +217,23 @@ def cmd_doctor(a):
     # La re-clave de `local` al numero de su linea (T9), por lo mismo que la migracion
     # de arriba: `ok: False` para que llegue al panel, y no bloquea, porque no hay nada
     # roto. Se dice adonde fueron las conversaciones de antes.
+    # Lo de antes de T9 que no se pudo atribuir con certeza (T9f, falla cerrada): no se
+    # movio nada y hace falta que el dueno diga de que numero es. No caduca: es una
+    # decision pendiente, no un aviso de algo que ya paso.
+    pendiente = wa_store.reclave_pendiente()
+    if pendiente:
+        wa_scope = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wa-scope")
+        filas.append({
+            "check": "data from a previous number", "ok": False,
+            "detalle": (f"optional — {pendiente.get('chats', 0)} conversations and "
+                        f"{pendiente.get('mensajes', 0)} messages were stored before each "
+                        f"number had its own line, and they cannot be matched for sure to "
+                        f"the number linked now, so they stay hidden. Nothing was "
+                        f"deleted. If they came from another number of yours, run: "
+                        f"{wa_scope} reclave --numero <that number, digits only>; it "
+                        f"is applied within a minute."),
+            "requerido": False, "code": "store-rekey-pending",
+            "detailCode": "store-rekey-decide", "via": None})
     # Con la misma semana de vida que el de la migracion: es el mismo tipo de aviso.
     for r in [x for x in wa_store.reclaves()[-1:] if reciente(x["at"])]:
         numero = str(r["hacia"]).replace("pn:", "+", 1)

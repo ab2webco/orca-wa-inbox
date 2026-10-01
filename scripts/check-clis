@@ -665,22 +665,9 @@ def revisa_reclave_local(fallos: list) -> int:
         subprocess.run([shutil.which("node"), "--input-type=module", "-e", js], env=env,
                        check=True, capture_output=True, timeout=120)
 
-        # Sin el comando explicito, los comandos de todos los dias NO re-clavan nada.
+        # Ya conectada al arranque (T9f): con el numero que anoto el sidecar, cualquier
+        # comando de wa-scope la aplica sola. No hace falta el comando explicito.
         scope("sync")
-        con = sqlite3.connect(home / ".wa-inbox" / "scope.db")
-        locales = con.execute("select count(*) from chat_scope where account='local'").fetchone()[0]
-        con.close()
-        hechas += 1
-        if not locales:
-            fallos.append("un `wa-scope sync` re-clavo `local` por su cuenta: la migracion "
-                          "tiene que ser explicita hasta reparar los datos vivos")
-
-        p = scope("reclave", "--json")
-        r = (json.loads(p.stdout or "[]") or [{}])[0]
-        hechas += 1
-        if r.get("hacia") != VIEJA:
-            fallos.append(f"`wa-scope reclave` no fue al numero que anoto el sidecar: {r!r} "
-                          f"{(p.stderr or '').strip()[:200]}")
         con = sqlite3.connect(home / ".wa-inbox" / "scope.db")
         quedan = {t: con.execute(f"select count(*) from {t} where account='local'").fetchone()[0]
                   for t in ("chat_scope", "agent_action", "work", "juicio")}
@@ -689,7 +676,8 @@ def revisa_reclave_local(fallos: list) -> int:
         con.close()
         hechas += 2
         if any(quedan.values()):
-            fallos.append(f"despues de la re-clave quedan filas `local`: {quedan!r}")
+            fallos.append(f"con el numero anotado por el sidecar, wa-scope no re-clavo solo: "
+                          f"quedan filas `local` {quedan!r}")
         if rastro_viejo:
             fallos.append("el rastro de la corrida de antes no paso al numero")
 
@@ -711,6 +699,19 @@ def revisa_reclave_local(fallos: list) -> int:
         hechas += 1
         if segunda.get("movidas"):
             fallos.append(f"correr la re-clave dos veces volvio a mover algo: {segunda!r}")
+
+        # La decision del dueno, cuando la evidencia no alcanzo: `--numero` la deja
+        # anotada para que el sidecar la lea al arrancar. Un numero que no es un numero
+        # se rechaza en vez de anotarse.
+        p = scope("reclave", "--numero", "+57 300 000 0011", "--json")
+        anotada = valor(env, "reclave_local_a")
+        hechas += 2
+        if anotada != "pn:573000000011":
+            fallos.append(f"`wa-scope reclave --numero` no dejo la decision anotada: {anotada!r} "
+                          f"{(p.stderr or '').strip()[:200]}")
+        malo = scope("reclave", "--numero", "hola")
+        if malo.returncode == 0 or valor(env, "reclave_local_a") != "pn:573000000011":
+            fallos.append("`wa-scope reclave --numero` acepto algo que no es un numero")
     return hechas
 
 

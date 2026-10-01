@@ -760,6 +760,12 @@
           howStoreMigratedClean: 'El almacen quedo en la version de hoy sin perder ' +
             'ningun mensaje. Solo se retiraron las lineas de la via de WhatsApp Web, ' +
             'que ya no existe',
+          hStoreRekeyPending: 'Conversaciones de un numero anterior',
+          howStoreRekeyDecide: 'Hay conversaciones guardadas de antes de que cada ' +
+            'numero tuviera su propia linea, y no se puede saber con certeza que son del ' +
+            'numero vinculado ahora: quedan ocultas y no se borro nada. Si son de otro ' +
+            'numero suyo, ejecute en la carpeta bin del plugin: wa-scope reclave ' +
+            '--numero <ese numero, solo digitos>; se aplica en menos de un minuto',
           hStoreRekeyed: 'Conversaciones atribuidas a su numero',
           howStoreRekeyedLine: 'Lo que estaba guardado de antes de que cada numero ' +
             'tuviera su propia linea quedo con el numero de donde vino. No se borro nada',
@@ -989,6 +995,12 @@
           howStoreMigratedClean: 'The store is now on the current version without ' +
             'losing any message. Only the lines of the removed WhatsApp Web route ' +
             'were retired',
+          hStoreRekeyPending: 'Conversations from a previous number',
+          howStoreRekeyDecide: 'Some conversations were stored before each number had ' +
+            'its own line, and they cannot be matched for sure to the number linked now: ' +
+            'they stay hidden and nothing was deleted. If they came from another number ' +
+            'of yours, run in the plugin bin folder: wa-scope reclave --numero <that ' +
+            'number, digits only>; it is applied within a minute',
           hStoreRekeyed: 'Conversations assigned to their number',
           howStoreRekeyedLine: 'What was stored before each number had its own line ' +
             'now belongs to the number it came from. Nothing was deleted',
@@ -1100,6 +1112,12 @@
           'armazem de novo',
         howStoreMigratedClean: 'O armazem ficou na versao de hoje sem perder nenhuma ' +
           'mensagem. So foram retiradas as linhas da via de WhatsApp Web, que ja nao existe',
+        hStoreRekeyPending: 'Conversas de um numero anterior',
+        howStoreRekeyDecide: 'Ha conversas guardadas de antes de cada numero ter a sua ' +
+          'propria linha, e nao da para saber com certeza que sao do numero vinculado ' +
+          'agora: ficam ocultas e nada foi apagado. Se forem de outro numero seu, ' +
+          'execute na pasta bin do plugin: wa-scope reclave --numero <esse numero, so ' +
+          'digitos>; e aplicado em menos de um minuto',
         hStoreRekeyed: 'Conversas atribuidas ao seu numero',
         howStoreRekeyedLine: 'O que estava guardado de antes de cada numero ter a sua ' +
           'propria linha ficou com o numero de onde veio. Nada foi apagado',
@@ -1423,6 +1441,8 @@
         'store-migrated': 'hStoreMigrated',
         // Lo de antes de T9 paso al numero de su linea (bin/wa-read, `cmd_doctor`).
         'store-rekeyed': 'hStoreRekeyed',
+        // Lo de antes que NO se pudo atribuir con certeza: pide una decision (T9f).
+        'store-rekey-pending': 'hStoreRekeyPending',
         unknown: 'hUnknown'
       }
       // Aca solo entran codigos cuyo detalle es una FRASE. Un detalle que es dato crudo
@@ -1439,7 +1459,8 @@
         'store-migrated-dropped': 'howStoreMigratedDropped',
         // Una subida que no borro ningun mensaje (T10): decir "se borro" asustaba.
         'store-migrated-clean': 'howStoreMigratedClean',
-        'store-rekeyed-line': 'howStoreRekeyedLine'
+        'store-rekeyed-line': 'howStoreRekeyedLine',
+        'store-rekey-decide': 'howStoreRekeyDecide'
       }
       function porCodigo(mapa, code, respaldo) {
         var key = mapa[code]

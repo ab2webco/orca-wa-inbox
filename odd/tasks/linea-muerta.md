@@ -108,7 +108,7 @@ Baileys intenta login y nunca pide registro.
   - [x] T9e — Worker y paneles: la cuenta viaja a `sidecar.cuenta`; el panel etiqueta
         autorizaciones y decisiones con ella; datos de otra línea se muestran como
         vacíos honestos; el worker sincroniza al cambiar de línea.
-  - [~] T9f — Migración `local` → cuenta de la identidad en `capture.db` (sidecar) y
+  - [x] T9f — Migración `local` → cuenta de la identidad en `capture.db` (sidecar) y
         `scope.db` (`wa-scope`), atómica y visible en `wa-read doctor`. Escrita y
         probada, SIN conectar al arranque hasta que el lead repare los datos vivos.
   - [x] T9g — Capturas: selector de conversaciones y panel de actividad tras cambiar
@@ -347,3 +347,31 @@ Baileys intenta login y nunca pide registro.
   selector y en el renglón de identidad, sin jid; el aviso dice "sin perder ningún
   mensaje", sin "se borró".
 
+
+### T9f — conectada al arranque, fallando cerrada
+
+- Con los datos vivos ya reparados por el lead, la re-clave se conecta al arranque,
+  pero solo con evidencia (otros usuarios pueden tener la fila `local` pisada por otro
+  número, como la tuvo el dueño). `decidirReclave` (pura) mueve solo si el teléfono de
+  la fila `local` es el número emparejado Y todo mensaje propio con remitente conocido
+  (los de grupo) lo firmó su LID o su teléfono. Si no: no mueve nada, anota
+  `store_meta.reclave_pendiente` y `wa-read doctor` pide la decisión
+  (`store-rekey-pending`, traducido es/en/pt) con el comando exacto
+  `wa-scope reclave --numero <número>`. Esa decisión la lee el sidecar por `wa-scope
+  config` en cada latido y se aplica en menos de un minuto. `wa-scope` aplica en cada
+  arranque el número que anotó el sidecar (idempotente).
+- RED `node test/almacen.test.mjs`: `TypeError: a1.resolverLocal is not a function`;
+  luego `SyntaxError: ... does not provide an export named 'reclaveDecididaDe'`.
+- RED `scripts/check-clis`: sin re-clave automática quedaban filas `local`, y
+  `wa-scope reclave --numero` no existía (`usage: wa-scope ...`).
+- RED `node test/panels.test.mjs`:
+  `FALLA el pedido de decision se dice en espanol, con el comando — ... data from a previous number ...`
+- Casos probados: actualización limpia (se mueve sola), número cambiado (bloqueada,
+  nada se mueve, el doctor pide la decisión), número emparejado distinto de la fila
+  `local` (bloqueada), decisión del dueño (se mueve al número que dijo y el pedido
+  desaparece), ya re-clavado (nada), emparejando sin número (espera).
+- GREEN: `almacen` 231/231, `panels` 432/432, `check-clis` 183, `npm run check` exit 0.
+- Captura `config-legado-pendiente`, ES y EN, oscuro y claro, 1440/768/390/320,
+  revisada: el pedido se lee entero con el comando, sin desbordes. Se cambió "apriete
+  Reintentar" por "se aplica en menos de un minuto": con la línea conectada el panel no
+  ofrece Reintentar.

@@ -36,6 +36,7 @@ import { fileURLToPath } from 'node:url'
 
 import { identidadesPropias, identidadPropia } from '../sidecar/src/mensajes.js'
 import { abrirAlmacen, ESQUEMA_VERSION, rutaAlmacen, rutaMedia } from '../sidecar/src/almacen.js'
+import { reclaveDecididaDe } from '../sidecar/src/alcance.js'
 import { ingerirActualizacion, ingerirChats, ingerirContactos, ingerirMensaje,
   nombreDeContacto } from '../sidecar/src/ingesta.js'
 
@@ -301,6 +302,107 @@ console.log('\nT9f: lo de `local` pasa al numero de su linea — explicito, atom
   alm3.anotarChat({ cuenta: 'local', chatJid: ALFA, nombre: 'Cliente Alfa', esGrupo: 1 })
   ok('sin telefono conocido no se inventa un numero', alm3.reclavarLocal() === null)
   alm3.cerrar()
+}
+
+console.log('\nT9f: la decision del dueno llega al sidecar por `wa-scope config`')
+{
+  // `wa-scope reclave --numero` la anota en los ajustes; el sidecar la lee con los topes.
+  ok('lee la cuenta decidida', reclaveDecididaDe([{ key: 'capture_max', value: '5' },
+    { key: 'reclave_local_a', value: 'pn:573000000011' }]) === 'pn:573000000011')
+  ok('sin decision no hay cuenta', reclaveDecididaDe([{ key: 'capture_max', value: '5' }]) === null)
+  ok('y algo que no es una cuenta de telefono se ignora',
+    reclaveDecididaDe([{ key: 'reclave_local_a', value: 'local' }]) === null &&
+    reclaveDecididaDe('basura') === null)
+}
+
+console.log('\nT9f: la re-clave al arrancar solo con evidencia — si no, no mueve nada y pregunta')
+{
+  // Otros usuarios pueden estar como el dueno estuvo: la fila `local` de `linea` pisada
+  // por OTRO numero. Re-clavar ahi le daria al numero nuevo lo del viejo. Se mueve solo
+  // cuando hay evidencia de que la identidad de `local` es la que produjo los datos.
+  const VIEJO_PN = '573000000011:7@s.whatsapp.net'
+  const VIEJO_LID = '100000000000001:3@lid'
+  const NUEVO_PN = '573000000012:7@s.whatsapp.net'
+  const NUEVO_LID = '100000000000002:1@lid'
+  const legado = (home, linea, remitente) => {
+    const a = abrirAlmacen(rutaAlmacen({ HOME: home }))
+    a.registrarLinea({ cuenta: 'local', ...linea, nombre: 'De antes' })
+    a.anotarChat({ cuenta: 'local', chatJid: ALFA, nombre: 'Cliente Alfa', esGrupo: 1 })
+    a.guardarMensaje({ cuenta: 'local', chatJid: ALFA, stanzaId: 'P1', ts: T0, fromMe: 1,
+      senderJid: remitente, senderName: null, body: 'lo mande yo', mediaTipo: null,
+      mediaBytes: null, mencionaMe: 0, citaMe: 0 })
+    // Un directo propio: su remitente es null y no prueba nada en ningun sentido.
+    a.guardarMensaje({ cuenta: 'local', chatJid: LAURA, stanzaId: 'P2', ts: T0, fromMe: 1,
+      senderJid: null, senderName: null, body: 'directo', mediaTipo: null,
+      mediaBytes: null, mencionaMe: 0, citaMe: 0 })
+    return a
+  }
+  const locales = (home) => {
+    const c = new DatabaseSync(rutaAlmacen({ HOME: home }))
+    const n = c.prepare("select (select count(*) from chat where account='local') + " +
+      "(select count(*) from mensaje where account='local') c").get().c
+    c.close()
+    return n
+  }
+
+  // 1. Actualizacion limpia: la fila `local` es del numero emparejado y lo que mando
+  //    desde los grupos lo firmo esa misma identidad.
+  const limpia = nueva()
+  const a1 = legado(limpia, { lid: VIEJO_LID, pn: VIEJO_PN }, '100000000000001@lid')
+  const r1 = a1.resolverLocal({ emparejada: 'pn:573000000011' })
+  a1.cerrar()
+  ok('actualizacion limpia: se re-clava sola', r1.accion === 'movida' &&
+    r1.hacia === 'pn:573000000011', JSON.stringify(r1))
+  ok('y no queda nada en `local`', locales(limpia) === 0, String(locales(limpia)))
+
+  // 2. Cambio de numero: la fila `local` dice el numero nuevo (se piso), pero lo que se
+  //    mando desde los grupos lo firmo OTRA identidad. No se toca nada.
+  const cambiada = nueva()
+  const a2 = legado(cambiada, { lid: NUEVO_LID, pn: NUEVO_PN }, '100000000000001@lid')
+  const r2 = a2.resolverLocal({ emparejada: 'pn:573000000012' })
+  a2.cerrar()
+  ok('numero cambiado: no se re-clava', r2.accion === 'bloqueada', JSON.stringify(r2))
+  ok('y todo sigue en `local`, sin borrar', locales(cambiada) === 3, String(locales(cambiada)))
+  const doc = leerJson(cambiada, ['doctor'])
+  const pendiente = (doc.filas || []).find((f) => f.code === 'store-rekey-pending')
+  ok('el doctor pide la decision, con el comando exacto', pendiente &&
+    pendiente.requerido === false && pendiente.ok === false &&
+    pendiente.detailCode === 'store-rekey-decide' &&
+    /wa-scope reclave --numero/.test(pendiente.detalle), JSON.stringify(doc.filas))
+  ok('y no anuncia una re-clave que no paso',
+    !(doc.filas || []).some((f) => f.code === 'store-rekeyed'), JSON.stringify(doc.filas))
+
+  // Tambien bloquea si la fila `local` es de un numero que no es el emparejado.
+  const otro = nueva()
+  const a3 = legado(otro, { lid: VIEJO_LID, pn: VIEJO_PN }, '100000000000001@lid')
+  const r3 = a3.resolverLocal({ emparejada: 'pn:573000000012' })
+  a3.cerrar()
+  ok('si el emparejado es otro numero, tampoco', r3.accion === 'bloqueada', JSON.stringify(r3))
+
+  // La decision del dueno destraba: dice de que numero son, y ahi si se mueven.
+  const a4 = abrirAlmacen(rutaAlmacen({ HOME: cambiada }))
+  const r4 = a4.resolverLocal({ emparejada: 'pn:573000000012', decidida: 'pn:573000000011' })
+  a4.cerrar()
+  ok('con la decision del dueno se mueven al numero que el dijo',
+    r4.accion === 'movida' && r4.hacia === 'pn:573000000011' && locales(cambiada) === 0,
+    JSON.stringify(r4))
+  const doc2 = leerJson(cambiada, ['doctor'])
+  ok('y el pedido de decision desaparece del doctor',
+    !(doc2.filas || []).some((f) => f.code === 'store-rekey-pending'), JSON.stringify(doc2.filas))
+
+  // 3. Ya re-clavado (o nunca hubo `local`): no hace nada.
+  const a5 = abrirAlmacen(rutaAlmacen({ HOME: limpia }))
+  const r5 = a5.resolverLocal({ emparejada: 'pn:573000000011' })
+  a5.cerrar()
+  ok('sin nada en `local`, no hace nada', r5.accion === 'nada', JSON.stringify(r5))
+
+  // Emparejando (todavia sin numero), espera: no decide a ciegas.
+  const espera = nueva()
+  const a6 = legado(espera, { lid: VIEJO_LID, pn: VIEJO_PN }, '100000000000001@lid')
+  const r6 = a6.resolverLocal({ emparejada: null })
+  a6.cerrar()
+  ok('sin numero emparejado todavia, espera', r6.accion === 'esperar' &&
+    locales(espera) === 3, JSON.stringify(r6))
 }
 
 // ── El escenario completo, que es donde viven los seis casos de uso ─────────────────

@@ -815,6 +815,13 @@ def db():
     con.row_factory = sqlite3.Row
     con.executescript(SCHEMA)
     migrate(con)
+    # La re-clave de `local` al numero que anoto el sidecar (T9f). Idempotente: sin
+    # filas `local` no hace nada. Un fallo aca no puede dejar sin CLI al agente: se dice
+    # y se sigue, y la proxima vez se vuelve a intentar.
+    try:
+        aplicar_reclave(con)
+    except sqlite3.Error as exc:
+        print(f"wa-scope: re-key from local skipped: {exc}", file=sys.stderr)
     return con
 
 
@@ -1723,6 +1730,25 @@ def cmd_accounts(con, a):
 
 
 def cmd_reclave(con, a):
+    """La re-clave de `local` a mano, y la decision del dueno cuando no hubo evidencia.
+
+    Sin argumentos aplica el numero que anoto el sidecar (lo mismo que ya pasa solo al
+    abrir la base). Con `--numero` deja anotado de que numero son los datos de antes:
+    es la salida que ofrece `wa-read doctor` cuando el sidecar NO los pudo atribuir con
+    certeza (falla cerrada, T9f). El sidecar lee la decision al arrancar."""
+    if a.numero is not None:
+        digitos = re.sub(r"\D", "", a.numero or "")
+        if not re.fullmatch(r"\d{6,}", digitos):
+            sys.exit(f"not saved: {a.numero!r} is not a phone number (digits only, with "
+                     "the country code)")
+        con.execute("insert into settings (key,value) values ('reclave_local_a',?) "
+                    "on conflict(key) do update set value=excluded.value", (f"pn:{digitos}",))
+        con.commit()
+    return [dict(aplicar_reclave(con), decidida=(f"pn:{digitos}" if a.numero is not None
+                                                  else None))]
+
+
+def aplicar_reclave(con):
     """Pasa lo que colgaba de `local` al numero de su linea (T9), en scope.db y en el
     storage del panel.
 
@@ -1730,9 +1756,10 @@ def cmd_reclave(con, a):
     lo suyo (`reclavarLocal`, tabla `reclave`), para que las dos bases terminen en el
     MISMO numero. Sin esa anotacion no se mueve nada.
 
-    EXPLICITO, a proposito: ningun comando de todos los dias lo corre. En una maquina
-    donde la fila `local` se piso con OTRO numero, re-clavar le daria al nuevo las
-    autorizaciones del viejo, que es la fuga que T9 cierra.
+    Corre al abrir la base (`db()`), y es seguro porque el numero NO se deduce aca: lo
+    anota el sidecar solo con evidencia de que la identidad de `local` produjo los
+    datos, o por decision del dueno (falla cerrada, T9f). Sin numero anotado no se
+    mueve nada: lo de `local` queda guardado y oculto.
 
     Todo o nada en scope.db (una transaccion). Si el numero ya tenia su propia fila
     (lo autorizo despues de vincular), la suya manda y la copia `local` se descarta. Se
@@ -1740,8 +1767,8 @@ def cmd_reclave(con, a):
     destino = next((r["hacia"] for r in reversed(wa_store.reclaves())
                     if r.get("desde") == CUENTA_LOCAL), None)
     if not destino:
-        return [{"hacia": None, "movidas": 0,
-                 "motivo": "capture.db has no re-key from local; nothing was moved"}]
+        return {"hacia": None, "movidas": 0,
+                "motivo": "capture.db has no re-key from local; nothing was moved"}
     movidas = {}
     try:
         con.execute("begin immediate")
@@ -1785,8 +1812,8 @@ def cmd_reclave(con, a):
     if etiquetadas:
         plugin_store_write(scope, extra={"decisions": decisiones})
     movidas["panel"] = etiquetadas
-    return [{"desde": CUENTA_LOCAL, "hacia": destino,
-             "movidas": sum(movidas.values()), "detalle": movidas}]
+    return {"desde": CUENTA_LOCAL, "hacia": destino,
+            "movidas": sum(movidas.values()), "detalle": movidas}
 
 
 def cmd_log(con, a):
@@ -1969,9 +1996,13 @@ def main():
     s.add_argument("--issue", default=""); s.add_argument("--detail", default="")
     s.set_defaults(fn=cmd_record)
 
-    add("reclave", help="assign what was stored under 'local' to the phone number the "
-                        "sidecar recorded in capture.db (explicit; nothing runs it "
-                        "on its own)").set_defaults(fn=cmd_reclave)
+    s = add("reclave", help="assign what was stored under 'local' to the phone number "
+                            "the sidecar recorded in capture.db; with --numero, record "
+                            "which number that data came from")
+    s.add_argument("--numero", default=None,
+                   help="the phone number the old data came from (digits, with the "
+                        "country code); the sidecar applies it on its next start")
+    s.set_defaults(fn=cmd_reclave)
 
     s = add("juicio", help="caches a message's verdict, keyed by "
                            "(account, chat_jid, stanza_id); bin/wa_store.py reads it")
