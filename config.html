@@ -277,6 +277,16 @@
       #pairing-unlink.confirmar {
         border-color: var(--destructive, var(--fb-destructive));
         color: var(--destructive, var(--fb-destructive)); }
+      /* El aviso de Jev es lo que hay que leer ANTES de encender: tiene caja y filete,
+         las cajas de Orca son para avisos. Sin tinte de color: no es un error. */
+      .jev-aviso { margin: 0 0 12px; padding: 9px 11px; font-size: 12px; line-height: 1.5;
+                   border: 1px solid var(--border, var(--fb-border));
+                   border-radius: var(--radius-md);
+                   color: var(--foreground, var(--fb-foreground)); }
+      #jev-status { margin: 0 0 12px; }
+      .jev-nota { color: var(--destructive, var(--fb-destructive)); margin: 8px 0 0; }
+      .jev-nota[hidden] { display: none; }
+      #jev-mirror-note code { overflow-wrap: anywhere; }
     </style>
   </head>
   <body>
@@ -515,6 +525,35 @@
         </div>
         <div id="routes-wrap"></div>
       </section>
+
+      <!-- Jev (opcional): lo unico del plugin que manda texto de clientes fuera del
+           equipo. Apagado de fabrica, y el aviso va ARRIBA de los controles y siempre a la
+           vista: quien lo enciende ya leyo a donde va lo que se envia. La llave no se
+           muestra nunca: el panel solo sabe "guardada" o "sin llave". -->
+      <section>
+        <h2 data-t="jevLegend"></h2>
+        <p class="jev-aviso" id="jev-aviso" data-t="jevDisclosure"></p>
+        <p class="pairing-msg" id="jev-status"></p>
+        <label for="jev-key" data-t="jevKeyLabel"></label>
+        <input id="jev-key" type="password" autocomplete="off" autocapitalize="off"
+               spellcheck="false" data-t-ph="jevKeyPh" />
+        <p class="hint" data-t="jevKeyHelp"></p>
+        <div class="actions">
+          <button id="jev-save-key" data-t="jevSaveKey"></button>
+          <button id="jev-remove-key" hidden data-t="jevRemoveKey"></button>
+          <span class="said" id="said-jev-key"></span>
+        </div>
+        <p class="hint jev-nota" id="jev-mirror-note" hidden></p>
+        <label for="jev-enabled" data-t="jevEnabledLabel"></label>
+        <select id="jev-enabled">
+          <option value="off" data-t="jevOff"></option>
+          <option value="on" data-t="jevOn"></option>
+        </select>
+        <div class="actions">
+          <button class="primary" id="jev-save-enabled" data-t="jevSaveEnabled"></button>
+          <span class="said" id="said-jev-enabled"></span>
+        </div>
+      </section>
     </div>
 
     <script>
@@ -712,6 +751,32 @@
           empty: 'Ninguna conversacion autorizada. Lo que no esta aca, su agente no lo ve.',
           colChat: 'Conversacion', colTarget: 'Por defecto', colPerm: 'Permiso',
           edit: 'Editar', remove: 'Quitar',
+          // --- Jev (opcional): lo unico que manda texto de clientes fuera del equipo ---
+          jevLegend: 'Jev (opcional)',
+          jevDisclosure: '<b>Apagado de fábrica.</b> Si lo enciendes, el texto de los mensajes que llegan y de los borradores de respuesta se envía a <code>api.typesafe.ai</code> (Jev, de TypeSafe) para decidir qué necesita tu atención y revisar las respuestas antes de que salgan. Las credenciales se enmascaran antes de enviar. Sin llave no se envía nada y todo funciona como hasta ahora.',
+          jevKeyLabel: 'Llave de TypeSafe',
+          jevKeyPh: 'Pega tu llave aquí',
+          jevKeyPhSet: 'Guardada. Escribe otra para reemplazarla',
+          jevKeyHelp: 'Se guarda en el almacén de secretos de Orca, y el plugin deja una copia legible solo por tu usuario en <code>~/.wa-inbox/jev.env</code> para que las herramientas puedan leerla. Nunca se vuelve a mostrar: solo verás si está guardada.',
+          jevSaveKey: 'Guardar llave',
+          jevRemoveKey: 'Quitar llave',
+          jevEnabledLabel: 'Usar Jev',
+          jevOff: 'Apagado: no se envía nada',
+          jevOn: 'Encendido: envía a api.typesafe.ai',
+          jevSaveEnabled: 'Guardar',
+          jevStOffNo: 'Apagado · sin llave',
+          jevStOffYes: 'Apagado · llave guardada',
+          jevStOnNo: 'Encendido, pero sin llave: no se envía nada',
+          jevStOnYes: 'Encendido · llave guardada',
+          jevMirrorForeign: 'Hay un archivo de llave en <code>~/.wa-inbox/jev.env</code> que no escribió el plugin, y por eso las herramientas no lo usan. Escribe la llave aquí arriba y guárdala para reemplazarlo.',
+          jevMirrorFail: 'No se pudo escribir el archivo de llave. Intenta de nuevo; si sigue igual, revisa el registro del plugin.',
+          jevKeyEmpty: 'Escribe la llave primero.',
+          jevKeySaved: 'Llave guardada',
+          jevKeyRemoved: 'Llave quitada',
+          jevSaved: 'Guardado',
+          jevErrInvalid: 'La llave no es válida: debe ser una sola palabra, sin espacios, de hasta 512 caracteres.',
+          jevErrVault: 'Orca no dejó guardar la llave. Revisa que el plugin tenga permiso para guardar secretos y vuelve a intentarlo.',
+          jevErrGeneric: 'No se pudo completar. Intenta de nuevo.',
           routesLegend: 'A que proyecto va',
           routesHelp: 'Un grupo de operaciones lleva trabajo de varios clientes. Cuando el mensaje ' +
             'menciona a uno, la tarjeta va a SU proyecto, no al de la conversacion.',
@@ -956,6 +1021,32 @@
           empty: 'No conversation allowed yet. What is not here, your agent cannot see.',
           colChat: 'Conversation', colTarget: 'Default', colPerm: 'Permission',
           edit: 'Edit', remove: 'Remove',
+          // --- Jev (opcional): lo unico que manda texto de clientes fuera del equipo ---
+          jevLegend: 'Jev (optional)',
+          jevDisclosure: '<b>Off by default.</b> If you turn it on, the text of incoming messages and of drafted replies is sent to <code>api.typesafe.ai</code> (TypeSafe\'s Jev) to decide what needs your attention and to check replies before they go out. Credentials are masked before sending. Without a key nothing is sent and everything works as it does today.',
+          jevKeyLabel: 'TypeSafe key',
+          jevKeyPh: 'Paste your key here',
+          jevKeyPhSet: 'Saved. Type another one to replace it',
+          jevKeyHelp: 'It is kept in Orca\'s secret store, and the plugin leaves a copy readable only by your user at <code>~/.wa-inbox/jev.env</code> so the tools can read it. It is never shown again: you only see whether it is saved.',
+          jevSaveKey: 'Save key',
+          jevRemoveKey: 'Remove key',
+          jevEnabledLabel: 'Use Jev',
+          jevOff: 'Off: nothing is sent',
+          jevOn: 'On: sends to api.typesafe.ai',
+          jevSaveEnabled: 'Save',
+          jevStOffNo: 'Off · no key',
+          jevStOffYes: 'Off · key saved',
+          jevStOnNo: 'On, but there is no key: nothing is sent',
+          jevStOnYes: 'On · key saved',
+          jevMirrorForeign: 'There is a key file at <code>~/.wa-inbox/jev.env</code> that the plugin did not write, so the tools ignore it. Enter the key above and save it to replace the file.',
+          jevMirrorFail: 'The key file could not be written. Try again; if it keeps failing, check the plugin log.',
+          jevKeyEmpty: 'Enter the key first.',
+          jevKeySaved: 'Key saved',
+          jevKeyRemoved: 'Key removed',
+          jevSaved: 'Saved',
+          jevErrInvalid: 'The key is not valid: it must be a single word, no spaces, up to 512 characters.',
+          jevErrVault: 'Orca would not store the key. Check that the plugin may store secrets and try again.',
+          jevErrGeneric: 'It could not be completed. Try again.',
           routesLegend: 'Where the card goes',
           routesHelp: 'An ops group carries work for several clients. When a message names one, ' +
             'the card goes to THAT project, not the conversation default.',
@@ -1213,6 +1304,32 @@
           'permissao de responder.',
         save: 'Salvar conversa', saveEdit: 'Salvar alteracoes', cancelEdit: 'Cancelar edicao',
         colChat: 'Conversa', colPerm: 'Permissao', edit: 'Editar', remove: 'Remover',
+        // --- Jev (opcional): lo unico que manda texto de clientes fuera del equipo ---
+        jevLegend: 'Jev (opcional)',
+        jevDisclosure: '<b>Desligado por padrão.</b> Se você ligar, o texto das mensagens recebidas e dos rascunhos de resposta é enviado para <code>api.typesafe.ai</code> (Jev, da TypeSafe) para decidir o que precisa da sua atenção e revisar as respostas antes de saírem. As credenciais são mascaradas antes do envio. Sem chave nada é enviado e tudo funciona como até agora.',
+        jevKeyLabel: 'Chave da TypeSafe',
+        jevKeyPh: 'Cole a sua chave aqui',
+        jevKeyPhSet: 'Salva. Digite outra para substituí-la',
+        jevKeyHelp: 'Ela fica no cofre de segredos do Orca, e o plugin deixa uma cópia legível só pelo seu usuário em <code>~/.wa-inbox/jev.env</code> para que as ferramentas possam lê-la. Nunca é mostrada de novo: você só vê se está salva.',
+        jevSaveKey: 'Salvar chave',
+        jevRemoveKey: 'Remover chave',
+        jevEnabledLabel: 'Usar o Jev',
+        jevOff: 'Desligado: nada é enviado',
+        jevOn: 'Ligado: envia para api.typesafe.ai',
+        jevSaveEnabled: 'Salvar',
+        jevStOffNo: 'Desligado · sem chave',
+        jevStOffYes: 'Desligado · chave salva',
+        jevStOnNo: 'Ligado, mas sem chave: nada é enviado',
+        jevStOnYes: 'Ligado · chave salva',
+        jevMirrorForeign: 'Há um arquivo de chave em <code>~/.wa-inbox/jev.env</code> que o plugin não escreveu, por isso as ferramentas o ignoram. Digite a chave acima e salve para substituir o arquivo.',
+        jevMirrorFail: 'Não foi possível escrever o arquivo de chave. Tente de novo; se continuar, veja o registro do plugin.',
+        jevKeyEmpty: 'Digite a chave primeiro.',
+        jevKeySaved: 'Chave salva',
+        jevKeyRemoved: 'Chave removida',
+        jevSaved: 'Salvo',
+        jevErrInvalid: 'A chave não é válida: deve ser uma só palavra, sem espaços, de até 512 caracteres.',
+        jevErrVault: 'O Orca não deixou guardar a chave. Confira se o plugin pode guardar segredos e tente de novo.',
+        jevErrGeneric: 'Não foi possível concluir. Tente de novo.',
         routesLegend: 'Para qual projeto vai', addRoute: 'Adicionar regra',
         savedOk: 'Salvo', removedOk: 'Removido', named: 'Se chama',
         off: 'off — nao toca', observe: 'observar — so le, nao escreve',
@@ -1534,7 +1651,8 @@
       function apagarLoQueNecesitaWorker(sinWorker) {
         // Desvincular y reintentar dejan un pedido que solo el worker puede atender: sin
         // nadie del otro lado son el mismo silencio de 45 s que este aviso reemplaza.
-        var dependen = ['sync-retry', 'pairing-unlink', 'pairing-retry']
+        var dependen = ['sync-retry', 'pairing-unlink', 'pairing-retry', 'jev-save-key',
+          'jev-remove-key', 'jev-save-enabled']
         dependen.forEach(function (id) {
           var b = el(id)
           if (b) b.disabled = !!sinWorker
@@ -2801,6 +2919,89 @@
         }))
       })
 
+      // ---------- Jev (opcional) ----------
+      // La llave y el interruptor viajan por el canal del worker, como desvincular: el
+      // panel no puede tocar `secrets` ni escribir el espejo. El estado que vuelve dice
+      // solo SI hay llave y que paso con el archivo; la llave no vuelve nunca.
+      var JEV_HOW_KEY = {
+        'llave-invalida': 'jevErrInvalid',
+        'boveda-fallo': 'jevErrVault',
+        'espejo-fallo': 'jevMirrorFail'
+      }
+
+      function renderJev (st) {
+        var s = st && typeof st === 'object' ? st : {}
+        var enabled = s.enabled === true
+        var keySet = s.keySet === true
+        el('jev-status').textContent =
+          t(enabled ? (keySet ? 'jevStOnYes' : 'jevStOnNo') : (keySet ? 'jevStOffYes' : 'jevStOffNo'))
+        el('jev-remove-key').hidden = !keySet
+        el('jev-key').placeholder = t(keySet ? 'jevKeyPhSet' : 'jevKeyPh')
+        // No se pisa lo que el usuario esta eligiendo en este momento.
+        if (document.activeElement !== el('jev-enabled')) {
+          el('jev-enabled').value = enabled ? 'on' : 'off'
+        }
+        // Un archivo de llave que no escribio el plugin no se toca solo: el lector lo trata
+        // como "sin llave", y el usuario tiene que saber por que no anda.
+        var nota = el('jev-mirror-note')
+        var clave = s.mirror === 'ajeno' ? 'jevMirrorForeign'
+          : s.mirror === 'fallo' ? 'jevMirrorFail' : ''
+        nota.hidden = !clave
+        nota.innerHTML = clave ? t(clave) : ''
+      }
+
+      function jevRefrescar () {
+        return read('jevStatus', true).then(function (v) { if (hayRespuesta(v)) renderJev(v) })
+      }
+
+      function pedirJev (pedido) {
+        return pedirAlWorker('jevRequest', 'jevResult', pedido)
+      }
+
+      /** Dice el veredicto al lado del boton y devuelve si fue bueno. El worker contesta
+       *  CODIGO; la frase la arma el panel, que sabe el idioma. */
+      function jevDecir (id, v, okKey) {
+        if (!v) { said(id, t('pairingNoAnswer'), true); return false }
+        if (!v.ok) { said(id, t(JEV_HOW_KEY[v.code] || 'jevErrGeneric'), true); return false }
+        said(id, '✓ ' + t(okKey))
+        return true
+      }
+
+      el('jev-save-key').addEventListener('click', function (event) {
+        var llave = el('jev-key').value.trim()
+        if (!llave) { said('said-jev-key', t('jevKeyEmpty'), true); return }
+        var pedido = { action: 'guardar-llave', value: llave }
+        busy(event.currentTarget, pedirJev(pedido).then(function (v) {
+          // Sin respuesta la llave seguiria escrita en storage, en claro, esperando a un
+          // worker que no esta: se reemplaza por una lapida que ya no la lleva. Un panel
+          // no puede borrar una clave, solo escribir encima.
+          if (!v) {
+            write('jevRequest', { id: pedido.id, at: new Date().toISOString(), tombstone: true })
+          }
+          // El campo se vacia solo si se guardo: ante un fallo la llave se queda para
+          // corregirla, que es lo que el usuario necesita.
+          if (jevDecir('said-jev-key', v, 'jevKeySaved')) el('jev-key').value = ''
+          return jevRefrescar()
+        }))
+      })
+
+      el('jev-remove-key').addEventListener('click', function (event) {
+        busy(event.currentTarget, pedirJev({ action: 'quitar-llave' }).then(function (v) {
+          jevDecir('said-jev-key', v, 'jevKeyRemoved')
+          return jevRefrescar()
+        }))
+      })
+
+      el('jev-save-enabled').addEventListener('click', function (event) {
+        var encender = el('jev-enabled').value === 'on'
+        busy(event.currentTarget, pedirJev({ action: 'activar', enabled: encender })
+          .then(function (v) {
+            jevDecir('said-jev-enabled', v, 'jevSaved')
+            return jevRefrescar()
+          }))
+      })
+
+
       var timerSidecar = null
       function vigilarSidecar (activo) {
         if (timerSidecar) { clearInterval(timerSidecar); timerSidecar = null }
@@ -2828,7 +3029,7 @@
       var CLAVES = ['scope', 'agentName', 'health', 'routes', 'tone', 'chats',
                     'chatsAccount', 'transcribeQuality', 'inboxDays', 'ownerName',
                     'transcribe', 'transcribeLang', 'syncStatus', 'syncMinutes',
-                    'workerBeat', 'sidecar']
+                    'workerBeat', 'sidecar', 'jevStatus']
       var CLAVES_VIVAS = ['chats', 'chatsAccount', 'health', 'syncStatus', 'workerBeat',
                           'sidecar']
 
@@ -2867,6 +3068,7 @@
             pintarClave('transcribe', v('transcribe'), sello)
             pintarClave('transcribeLang', v('transcribeLang'), sello)
             pintarClave('syncMinutes', v('syncMinutes'), sello)
+            if (hayRespuesta(v('jevStatus'))) renderJev(v('jevStatus'))
             // Sin guardia de foco: renderChats no toca el buscador — reconstruye el
             // select y pintarChats ya conserva el texto filtrado y lo elegido. La
             // guardia solo lograba que, con el cursor en el buscador, la lista nunca
@@ -2936,6 +3138,7 @@
       window.addEventListener('focus', reloadDeUsuario)
 
       applyStrings()
+      renderJev(null)
       resetScopeForm()
       call('storage.get', { key: 'scope' }).then(function (r) {
         // Un `rate_limited` es prueba de que el puente CONTESTO: es el host poniendo
