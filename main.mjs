@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import { HARNESS_KEY } from './harness.mjs'
+import { llaveValida } from './jev-espejo.mjs'
 
 // Las herramientas viajan dentro del plugin. Antes se buscaban en el PATH del usuario,
 // lo que solo funcionaba en la maquina donde alguien las habia enlazado a mano.
@@ -66,6 +67,38 @@ const SIDECAR_RESULT_KEY = 'sidecarResult'
 const SCOPE_REQUEST_KEY = 'scopeRequest'
 const SCOPE_RESULT_KEY = 'scopeResult'
 const MODES = ['off', 'observar', 'borrador', 'responder']
+
+// La llave de Jev (TypeSafe), secreto PROPIO del plugin. Cuatro claves y no una: el panel
+// no puede llamar a `secrets.*` (solo storage), asi que escribe un pedido y el worker lo
+// atiende, igual que `scopeRequest`; el veredicto va en otra clave porque el pedido se
+// borra al leerlo. El estado es lo unico que el panel pinta, y nunca lleva la llave, ni
+// siquiera sus ultimos caracteres: solo "guardada" o "sin llave".
+const JEV_REQUEST_KEY = 'jevRequest'
+const JEV_RESULT_KEY = 'jevResult'
+const JEV_STATUS_KEY = 'jevStatus'
+// El interruptor. Apagado de fabrica: encenderlo es lo que manda el texto de los clientes
+// a api.typesafe.ai, y lo decide el dueno con el aviso a la vista.
+const JEV_ENABLED_KEY = 'jevEnabled'
+const JEV_SECRET_NAME = 'jevKey'
+const JEV_ACCION = Object.freeze({
+  GUARDAR: 'guardar-llave', QUITAR: 'quitar-llave', ACTIVAR: 'activar'
+})
+const JEV_VEREDICTO = Object.freeze({
+  GUARDADA: 'guardada',
+  QUITADA: 'quitada',
+  ACTIVADO: 'activado',
+  DESACTIVADO: 'desactivado',
+  VENCIDO: 'vencido',
+  ACCION_DESCONOCIDA: 'accion-desconocida',
+  LLAVE_INVALIDA: 'llave-invalida',
+  ARGUMENTOS_INVALIDOS: 'argumentos-invalidos',
+  BOVEDA_FALLO: 'boveda-fallo',
+  ESPEJO_FALLO: 'espejo-fallo'
+})
+const JEV_ESPEJO_SCRIPT = join(PLUGIN_DIR, 'jev-espejo.mjs')
+// Cuantas veces se registra que la boveda no contesta: la revision corre cada 5 minutos
+// y cada registro es una llamada al host.
+const JEV_AVISOS_MAX = 3
 
 /** El nombre del agente lo define quien usa el plugin. No viene con uno puesto.
  *
@@ -368,6 +401,91 @@ async function leer(orca, key) {
 function guardar(orca, key, value) {
   return orca.host.call('storage.set', { key, value })
     .catch((error) => orca.log(`storage.set ${key} failed: ${error.message}`))
+}
+
+/** El espejo de la llave en `~/.wa-inbox/jev.env`, escrito en un SUBPROCESO.
+ *
+ *  Es lo que leen los CLIs de Python, que no pueden abrir la boveda `secrets`. El worker
+ *  no escribe disco -su valla no tiene permiso de escritura-, asi que el subproceso sin
+ *  valla (`mandoSinValla`) es la unica escritura. La llave viaja por STDIN: nunca por
+ *  argv, que cualquier `ps` ve. `modo`: guardar | sincronizar | borrar | estado. Nunca
+ *  rechaza: un fallo vuelve como `{ ok: false, motivo }`. */
+function espejoJev(modo, llave) {
+  return new Promise((resolve) => {
+    try {
+      const m = mandoSinValla(process.execPath, [JEV_ESPEJO_SCRIPT, modo])
+      const hijo = execFile(m.cmd, m.args,
+        { timeout: 10000, maxBuffer: 64 * 1024,
+          env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } },
+        (error, stdout) => {
+          try {
+            const r = JSON.parse(stdout || 'null')
+            if (r && typeof r === 'object' && typeof r.ok === 'boolean') { resolve(r); return }
+          } catch {
+            // Cae al motivo de abajo.
+          }
+          resolve({ ok: false, motivo: 'sin-json',
+            detalle: String(error?.code ?? error?.name ?? '').slice(0, 60) })
+        })
+      // Un hijo que muere antes de leer su stdin da EPIPE como EVENTO del stream: sin un
+      // escucha seria una excepcion no atrapada, y tumbaria al worker entero.
+      hijo.stdin.on('error', (error) => resolve({ ok: false, motivo: 'stdin',
+        detalle: String(error?.code ?? '').slice(0, 60) }))
+      hijo.stdin.end(typeof llave === 'string' ? llave : '')
+    } catch (error) {
+      resolve({ ok: false, motivo: 'no-arranco',
+        detalle: String(error?.code ?? error?.name ?? '').slice(0, 60) })
+    }
+  })
+}
+
+/** La llave guardada, o null. El motivo de un fallo se registra una vez y sin valores. */
+async function leerLlaveJev(orca, estado) {
+  try {
+    const r = await orca.host.call('secrets.get', { key: JEV_SECRET_NAME })
+    return typeof r?.value === 'string' && r.value.length > 0 ? r.value : null
+  } catch (error) {
+    estado.avisos += 1
+    if (estado.avisos <= JEV_AVISOS_MAX) {
+      orca.log(`secrets.get failed (${motivoDe(error)}): ${String(error?.message ?? '').slice(0, 120)}`)
+    }
+    return null
+  }
+}
+
+/** Deja el espejo como dicen los ajustes y publica el estado para el panel.
+ *
+ *  Con Jev encendido y llave, el espejo existe; en cualquier otro caso no. `forzar` solo
+ *  lo pide un guardado de la llave desde el panel: es lo unico que puede pisar un archivo
+ *  que no escribio el plugin. Todo lo demas lo respeta y lo dice en el estado (`ajeno`),
+ *  porque el lector de Python lo trata como "sin llave" y el usuario tiene que saber por
+ *  que. */
+async function aplicarJev(orca, habilitado, llave, { forzar = false } = {}) {
+  const activo = habilitado && llave !== null
+  const r = activo
+    ? await espejoJev(forzar ? 'guardar' : 'sincronizar', llave)
+    : await espejoJev('borrar')
+  let espejo
+  if (!r.ok) {
+    espejo = 'fallo'
+    orca.log(`jev mirror failed (${r.motivo}): ${r.detalle ?? ''}`)
+  } else if (activo) {
+    espejo = r.estado === 'ajeno' ? 'ajeno' : 'activo'
+  } else {
+    espejo = habilitado ? 'sin-llave' : 'apagado'
+  }
+  const estado = { at: new Date().toISOString(), enabled: habilitado,
+    keySet: llave !== null, mirror: espejo }
+  await guardar(orca, JEV_STATUS_KEY, estado)
+  return estado
+}
+
+/** Lo que dicen los ajustes ahora mismo, aplicado: al arrancar y en cada revision de
+ *  salud, que ya existe. No hay un bucle propio: un espejo que alguien borro o copio a
+ *  mano se nota en la proxima vuelta, sin otra llamada al host por tick. */
+async function reconciliarJev(orca, estado) {
+  const habilitado = (await leer(orca, JEV_ENABLED_KEY)) === true
+  return aplicarJev(orca, habilitado, await leerLlaveJev(orca, estado))
 }
 
 /** Cuanto se espera a que el sidecar muera por las buenas antes de forzarlo. */
@@ -1064,11 +1182,20 @@ export default function activate(orca) {
   const memoriaSalud = {}
   dirHerramientas().then((dir) => checkSystem(orca, dir, memoriaSalud))
     .catch((error) => orca.log(`initial check failed: ${error.message}`))
+  // La llave de Jev: el espejo que leen los CLIs se deja como dicen los ajustes desde el
+  // primer momento, sin esperar a que alguien abra el panel.
+  const estadoJev = { avisos: 0 }
+  reconciliarJev(orca, estadoJev)
+    .catch((error) => orca.log(`jev reconcile failed: ${error.message}`))
   // Y despues se repite: la salud de la linea cambia sola, y un diagnostico que solo se
-  // mira al arrancar es una foto que no caduca.
+  // mira al arrancar es una foto que no caduca. El espejo de Jev usa esta misma vuelta.
   const pararSalud = programarSalud(() => detenido ? null
-    : dirHerramientas().then((dir) => checkSystem(orca, dir, memoriaSalud))
-      .catch((error) => orca.log(`health check failed: ${error.message}`)))
+    : Promise.all([
+      dirHerramientas().then((dir) => checkSystem(orca, dir, memoriaSalud))
+        .catch((error) => orca.log(`health check failed: ${error.message}`)),
+      reconciliarJev(orca, estadoJev)
+        .catch((error) => orca.log(`jev reconcile failed: ${error.message}`))
+    ]))
 
   // El arnes del agente. Todo lo que sabe hoy vive en el prompt, que se lee una vez
   // por corrida: un modelo mas chico improvisa. En la carpeta de trabajo del plugin
@@ -1350,6 +1477,9 @@ export default function activate(orca) {
       const pedido = await leer(orca, requestKey)
       if (!pedido || typeof pedido !== 'object') return
       if (typeof pedido.id !== 'string' || typeof pedido.at !== 'string') return
+      // La lapida que deja un panel que se rindio: es un pedido ya vacio, sin nada que
+      // atender ni que contestar. Se limpia y listo.
+      if (pedido.tombstone === true) { await guardar(orca, requestKey, null); return }
       if (pedido.id === ultimoPedido) return
       // La memoria de verdad es el veredicto, no la variable: un worker que se reinicio
       // con el pedido todavia escrito lo volveria a ejecutar, y eso es exactamente el
@@ -1449,12 +1579,75 @@ export default function activate(orca) {
     acciones: { [SCOPE_ACCION.QUITAR]: (pedido) => quitarAlcance(pedido) }
   })
 
+  /** Lo que el panel pide sobre la llave de Jev. La llave llega en el pedido y nada mas:
+   *  el vigia lo borra de storage ANTES de actuar, asi que en disco vive solo el rato
+   *  entre la escritura del panel y la siguiente vuelta (3 s). Ni el veredicto ni el
+   *  estado ni un log la repiten. */
+  async function guardarLlaveJev (pedido) {
+    const valor = typeof pedido.value === 'string' ? pedido.value.trim() : ''
+    if (!llaveValida(valor)) return { ok: false, code: JEV_VEREDICTO.LLAVE_INVALIDA }
+    try {
+      await orca.host.call('secrets.set', { key: JEV_SECRET_NAME, value: valor })
+    } catch (error) {
+      // Sin el mensaje del host: a una llave no se le da la oportunidad de aparecer en un
+      // log por la puerta de un error.
+      orca.log(`secrets.set failed (${motivoDe(error)})`)
+      return { ok: false, code: JEV_VEREDICTO.BOVEDA_FALLO }
+    }
+    const habilitado = (await leer(orca, JEV_ENABLED_KEY)) === true
+    const st = await aplicarJev(orca, habilitado, valor, { forzar: true })
+    return st.mirror === 'fallo'
+      ? { ok: false, code: JEV_VEREDICTO.ESPEJO_FALLO, mirror: st.mirror }
+      : { ok: true, code: JEV_VEREDICTO.GUARDADA, mirror: st.mirror }
+  }
+
+  async function quitarLlaveJev () {
+    try {
+      await orca.host.call('secrets.delete', { key: JEV_SECRET_NAME })
+    } catch (error) {
+      orca.log(`secrets.delete failed (${motivoDe(error)})`)
+      return { ok: false, code: JEV_VEREDICTO.BOVEDA_FALLO }
+    }
+    const habilitado = (await leer(orca, JEV_ENABLED_KEY)) === true
+    const st = await aplicarJev(orca, habilitado, null)
+    return st.mirror === 'fallo'
+      ? { ok: false, code: JEV_VEREDICTO.ESPEJO_FALLO, mirror: st.mirror }
+      : { ok: true, code: JEV_VEREDICTO.QUITADA, mirror: st.mirror }
+  }
+
+  async function activarJev (pedido) {
+    if (typeof pedido.enabled !== 'boolean') {
+      return { ok: false, code: JEV_VEREDICTO.ARGUMENTOS_INVALIDOS }
+    }
+    await guardar(orca, JEV_ENABLED_KEY, pedido.enabled)
+    const st = await aplicarJev(orca, pedido.enabled, await leerLlaveJev(orca, estadoJev))
+    const code = pedido.enabled ? JEV_VEREDICTO.ACTIVADO : JEV_VEREDICTO.DESACTIVADO
+    return st.mirror === 'fallo'
+      ? { ok: false, code: JEV_VEREDICTO.ESPEJO_FALLO, mirror: st.mirror }
+      : { ok: true, code, mirror: st.mirror }
+  }
+
+  const atenderPedidoJev = crearVigia({
+    nombre: 'jev',
+    requestKey: JEV_REQUEST_KEY,
+    resultKey: JEV_RESULT_KEY,
+    vencido: JEV_VEREDICTO.VENCIDO,
+    desconocida: JEV_VEREDICTO.ACCION_DESCONOCIDA,
+    acciones: {
+      [JEV_ACCION.GUARDAR]: (pedido) => guardarLlaveJev(pedido),
+      [JEV_ACCION.QUITAR]: () => quitarLlaveJev(),
+      [JEV_ACCION.ACTIVAR]: (pedido) => activarJev(pedido)
+    }
+  })
+
   const pedidoTimer = setInterval(() => {
     atenderPedido().catch((error) => orca.log(`sync request failed: ${error.message}`))
     atenderPedidoSidecar()
       .catch((error) => orca.log(`sidecar request failed: ${error.message}`))
     atenderPedidoScope()
       .catch((error) => orca.log(`scope request failed: ${error.message}`))
+    atenderPedidoJev()
+      .catch((error) => orca.log(`jev request failed: ${error.message}`))
   }, PETICION_MS)
   if (typeof pedidoTimer.unref === 'function') pedidoTimer.unref()
 

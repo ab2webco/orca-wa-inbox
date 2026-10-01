@@ -24,7 +24,8 @@
  */
 import { mandoSinValla } from '../main.mjs'
 import {
-  mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, rmSync
+  mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, rmSync,
+  statSync, readdirSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
@@ -92,8 +93,11 @@ function herramientas (nombre, guion, modo = 0o755) {
 function hostFalso (toolsDir, store = {}, sidecarPath = SIDECAR_STUB) {
   const logs = []
   const avisos = []
+  // La boveda de `secrets`: el worker es el unico que la toca (el panel no puede).
+  const secrets = {}
   return {
     store,
+    secrets,
     logs,
     avisos,
     log: (m) => logs.push(String(m)),
@@ -101,6 +105,9 @@ function hostFalso (toolsDir, store = {}, sidecarPath = SIDECAR_STUB) {
       call: async (action, params) => {
         if (action === 'storage.get') return { value: store[params.key] }
         if (action === 'storage.set') { store[params.key] = params.value; return { ok: true } }
+        if (action === 'secrets.get') return { value: secrets[params.key] ?? null }
+        if (action === 'secrets.set') { secrets[params.key] = params.value; return { ok: true } }
+        if (action === 'secrets.delete') { delete secrets[params.key]; return { ok: true } }
         if (action === 'settings.get') return { value: { toolsDir, sidecarPath } }
         if (action === 'settings.set') return { ok: true }
         if (action === 'notifications.show') { avisos.push(params); return { ok: true } }
@@ -1768,6 +1775,158 @@ console.log('\nworker: desvincular espera a que el sidecar viejo muera antes de 
     `escrito-al-morir.json presente=${resucitado}`)
 
   apagar()
+}
+
+
+// ───────── la llave de Jev es del plugin y el espejo lo escribe el worker ─────────
+console.log('\nworker: la llave de Jev, su espejo 0600 y el aviso de que no es obligatoria')
+{
+  // Una llave de mentira, obviamente falsa. Esta prueba comprueba POR DONDE pasa, y la
+  // primera regla es que no pasa por ningun log ni por ningun veredicto.
+  const LLAVE = 'tsk-FALSA-0000000000000000'
+  const CABECERA = '# wa-inbox jev mirror v1'
+  const espejo = join(process.env.HOME, '.wa-inbox', 'jev.env')
+  const contenido = () => existsSync(espejo) ? readFileSync(espejo, 'utf8') : null
+  rmSync(join(process.env.HOME, '.wa-inbox'), { recursive: true, force: true })
+
+  const orca = hostFalso(herramientas('jev', '#!/bin/sh\necho \'[]\'\n'), { chats: [] })
+  const { apagar } = await arranca(orca)
+  await hasta(() => orca.store.jevStatus)
+
+  const pedir = async (id, extra) => {
+    orca.store.jevRequest = { id, at: new Date().toISOString(), ...extra }
+    await hasta(() => orca.store.jevResult && orca.store.jevResult.requestId === id, 15000)
+    return orca.store.jevResult
+  }
+
+  ok('apagado de fabrica: sin llave, sin espejo y el estado lo dice',
+    orca.store.jevStatus && orca.store.jevStatus.enabled === false &&
+    orca.store.jevStatus.keySet === false && orca.store.jevStatus.mirror === 'apagado' &&
+    contenido() === null, JSON.stringify(orca.store.jevStatus))
+
+  let v = await pedir('jev-on-1', { action: 'activar', enabled: true })
+  ok('encenderlo sin llave contesta que si y no escribe nada',
+    v && v.ok === true && contenido() === null, JSON.stringify(v))
+  ok('y el estado dice que falta la llave',
+    orca.store.jevStatus.enabled === true && orca.store.jevStatus.keySet === false &&
+    orca.store.jevStatus.mirror === 'sin-llave', JSON.stringify(orca.store.jevStatus))
+
+  v = await pedir('jev-key-1', { action: 'guardar-llave', value: `  ${LLAVE}\n` })
+  ok('guardar la llave contesta que si', v && v.ok === true && v.code === 'guardada',
+    JSON.stringify(v))
+  ok('la llave queda en la boveda de secrets', orca.secrets.jevKey === LLAVE,
+    JSON.stringify(orca.secrets))
+  ok('el espejo tiene el formato EXACTO del contrato: cabecera y una linea',
+    contenido() === `${CABECERA}\nTYPESAFE_API_KEY=${LLAVE}\n`, JSON.stringify(contenido()))
+  ok('el espejo es 0600',
+    process.platform === 'win32' || (statSync(espejo).mode & 0o777) === 0o600,
+    (statSync(espejo).mode & 0o777).toString(8))
+  ok('no queda un temporal al lado del espejo',
+    readdirSync(dirname(espejo)).every((f) => !f.endsWith('.tmp')),
+    JSON.stringify(readdirSync(dirname(espejo))))
+  ok('el estado dice que esta guardada y activa, sin decir cual es',
+    orca.store.jevStatus.keySet === true && orca.store.jevStatus.mirror === 'activo',
+    JSON.stringify(orca.store.jevStatus))
+  ok('la llave NO se repite en el estado, ni en el veredicto, ni en el pedido',
+    !JSON.stringify([orca.store.jevStatus, orca.store.jevResult, orca.store.jevRequest])
+      .includes(LLAVE), JSON.stringify([orca.store.jevStatus, orca.store.jevResult]))
+  ok('el pedido con la llave se borra de storage', orca.store.jevRequest === null,
+    JSON.stringify(orca.store.jevRequest))
+
+  v = await pedir('jev-off-1', { action: 'activar', enabled: false })
+  ok('apagarlo borra el espejo y deja la llave guardada',
+    v && v.ok === true && contenido() === null && orca.secrets.jevKey === LLAVE,
+    JSON.stringify([v, contenido()]))
+  ok('y el estado lo cuenta', orca.store.jevStatus.enabled === false &&
+    orca.store.jevStatus.keySet === true && orca.store.jevStatus.mirror === 'apagado',
+    JSON.stringify(orca.store.jevStatus))
+
+  v = await pedir('jev-on-2', { action: 'activar', enabled: true })
+  ok('encenderlo con la llave puesta reescribe el espejo',
+    v && v.ok === true && contenido() === `${CABECERA}\nTYPESAFE_API_KEY=${LLAVE}\n`,
+    JSON.stringify([v, contenido()]))
+
+  // Una llave con espacio o salto de linea metida a la fuerza escribiria una segunda
+  // linea en el espejo: se rechaza antes de tocar nada.
+  for (const [id, malo] of [['jev-mala-1', 'dos palabras'], ['jev-mala-2', 'a\nB=1'],
+    ['jev-mala-3', '   '], ['jev-mala-4', 'x'.repeat(600)], ['jev-mala-5', 42]]) {
+    v = await pedir(id, { action: 'guardar-llave', value: malo })
+    ok(`una llave invalida (${id}) se rechaza y no cambia nada`,
+      v && v.ok === false && v.code === 'llave-invalida' && orca.secrets.jevKey === LLAVE &&
+      contenido() === `${CABECERA}\nTYPESAFE_API_KEY=${LLAVE}\n`, JSON.stringify(v))
+  }
+
+  v = await pedir('jev-del-1', { action: 'quitar-llave' })
+  ok('quitar la llave la borra de la boveda y borra el espejo',
+    v && v.ok === true && v.code === 'quitada' && orca.secrets.jevKey === undefined &&
+    contenido() === null, JSON.stringify([v, orca.secrets, contenido()]))
+  ok('y el estado vuelve a decir que falta', orca.store.jevStatus.keySet === false &&
+    orca.store.jevStatus.mirror === 'sin-llave', JSON.stringify(orca.store.jevStatus))
+
+  // Un archivo sin la cabecera NO es nuestro —alguien lo copio a mano—: el lector de
+  // Python lo trata como "sin llave", y el worker no lo borra ni lo pisa por su cuenta.
+  const AJENO = 'TYPESAFE_API_KEY=copiada-a-mano\n'
+  writeFileSync(espejo, AJENO, { mode: 0o600 })
+  orca.secrets.jevKey = LLAVE
+  v = await pedir('jev-ajeno-1', { action: 'activar', enabled: true })
+  ok('con un archivo ajeno, encender no lo pisa y el estado lo dice',
+    contenido() === AJENO && orca.store.jevStatus.mirror === 'ajeno',
+    JSON.stringify([contenido(), orca.store.jevStatus]))
+  v = await pedir('jev-ajeno-2', { action: 'activar', enabled: false })
+  ok('apagar tampoco borra el archivo ajeno', contenido() === AJENO, JSON.stringify(contenido()))
+  await pedir('jev-ajeno-3', { action: 'activar', enabled: true })
+  v = await pedir('jev-ajeno-4', { action: 'quitar-llave' })
+  ok('quitar la llave tampoco borra el archivo ajeno', contenido() === AJENO,
+    JSON.stringify(contenido()))
+  v = await pedir('jev-ajeno-5', { action: 'guardar-llave', value: LLAVE })
+  ok('escribir la llave en el panel SI lo reemplaza, con la cabecera',
+    v && v.ok === true && contenido() === `${CABECERA}\nTYPESAFE_API_KEY=${LLAVE}\n` &&
+    orca.store.jevStatus.mirror === 'activo', JSON.stringify([v, contenido()]))
+
+  v = await pedir('jev-raro-1', { action: 'inventada' })
+  ok('una accion que no existe se contesta, no se calla',
+    v && v.ok === false && v.code === 'accion-desconocida', JSON.stringify(v))
+
+  // El panel que se rinde deja una lapida sin la llave: se limpia y no se ejecuta.
+  orca.store.jevRequest = { id: 'jev-lapida', at: new Date().toISOString(), tombstone: true }
+  await hasta(() => orca.store.jevRequest === null, 15000)
+  ok('una lapida del panel se borra sin contestar nada',
+    orca.store.jevRequest === null &&
+    !(orca.store.jevResult && orca.store.jevResult.requestId === 'jev-lapida'),
+    JSON.stringify(orca.store.jevResult))
+
+  ok('ningun log del plugin lleva la llave',
+    !orca.logs.some((l) => l.includes(LLAVE)), JSON.stringify(orca.logs))
+  apagar()
+}
+
+{
+  // Al arrancar el worker deja el espejo como dicen los ajustes, sin esperar al panel:
+  // una llave puesta en una sesion anterior sigue valiendo, y un espejo que quedo de una
+  // sesion en la que Jev ya estaba apagado se va.
+  const LLAVE = 'tsk-FALSA-1111111111111111'
+  const espejo = join(process.env.HOME, '.wa-inbox', 'jev.env')
+  rmSync(join(process.env.HOME, '.wa-inbox'), { recursive: true, force: true })
+
+  const orca = hostFalso(herramientas('jev-arranque', '#!/bin/sh\necho \'[]\'\n'),
+    { chats: [], jevEnabled: true })
+  orca.secrets.jevKey = LLAVE
+  const { apagar } = await arranca(orca)
+  await hasta(() => orca.store.jevStatus && orca.store.jevStatus.mirror === 'activo')
+  ok('al arrancar con Jev encendido y llave, el espejo queda escrito',
+    existsSync(espejo) &&
+    readFileSync(espejo, 'utf8') === `# wa-inbox jev mirror v1\nTYPESAFE_API_KEY=${LLAVE}\n`,
+    JSON.stringify(orca.store.jevStatus))
+  apagar()
+
+  const orca2 = hostFalso(herramientas('jev-arranque-2', '#!/bin/sh\necho \'[]\'\n'),
+    { chats: [], jevEnabled: false })
+  orca2.secrets.jevKey = LLAVE
+  const { apagar: apagar2 } = await arranca(orca2)
+  await hasta(() => orca2.store.jevStatus && orca2.store.jevStatus.mirror === 'apagado')
+  ok('al arrancar con Jev apagado, el espejo viejo se borra', !existsSync(espejo),
+    JSON.stringify(orca2.store.jevStatus))
+  apagar2()
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

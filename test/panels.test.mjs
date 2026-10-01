@@ -3044,5 +3044,199 @@ console.log('\nactivity.html — tablero: composicion (los anchos los mira shots
   ok('el texto del cliente parte las palabras largas', /overflow-wrap:\s*anywhere/.test(html))
 }
 
+// ───────── Jev: opcional, apagado de fabrica, con el aviso a la vista ─────────
+// Es lo unico del plugin que manda el texto de los clientes fuera del equipo. Lo que se
+// prueba es lo que importa de verdad: que el aviso este en los tres idiomas y diga a
+// donde va, que venga apagado, que la llave viaje por el canal del worker y NUNCA vuelva
+// a la pantalla, y que cada falla se diga.
+console.log('\nconfig.html — Jev: el aviso esta en los tres idiomas y dice a donde va el texto')
+{
+  for (const [lang, apagado, masc] of [
+    ['es-419', /apagado de f/i, /enmascaran/i],
+    ['en-US', /off by default/i, /masked/i],
+    ['pt-BR', /desligado por padr/i, /mascaradas/i]
+  ]) {
+    const { doc } = await montar('config.html', {}, lang)
+    const aviso = doc.getElementById('jev-aviso').textContent
+    ok(`${lang}: el aviso nombra el destino del texto`, /api\.typesafe\.ai/.test(aviso), aviso)
+    ok(`${lang}: dice que viene apagado`, apagado.test(aviso), aviso)
+    ok(`${lang}: dice que las credenciales se enmascaran`, masc.test(aviso), aviso)
+    ok(`${lang}: el interruptor viene apagado`,
+      doc.getElementById('jev-enabled').value === 'off', doc.getElementById('jev-enabled').value)
+    ok(`${lang}: la llave se pide en un campo que no la muestra`,
+      doc.getElementById('jev-key').type === 'password', doc.getElementById('jev-key').type)
+    const sinTraducir = Array.prototype.filter.call(
+      doc.querySelectorAll('[data-t^="jev"]'), (n) => /^jev[A-Z]/.test(n.textContent))
+    ok(`${lang}: ningun texto de Jev quedo sin traducir`, sinTraducir.length === 0,
+      sinTraducir.map((n) => n.textContent).join(', '))
+  }
+}
+
+console.log('\nconfig.html — Jev: de usted y sin tildes ni enie, como el resto del panel')
+{
+  const { window } = await montar('config.html')
+  const S = window.STRINGS
+  const claves = Object.keys(S.en).filter((k) => /^jev/.test(k))
+  ok('hay textos de Jev', claves.length > 20, String(claves.length))
+  const conTilde = claves.filter((k) => /[^\x00-\x7f\u00b7]/.test(S.es[k] + S.pt[k]))
+  ok('los textos de Jev van sin tildes ni enie en espanol y portugues', conTilde.length === 0,
+    JSON.stringify(conTilde))
+  const tuteo = claves.filter((k) => /\b(tu|tus|te|ti|enciendes|escribe|pega|intenta|revisa|verás|veras)\b/i
+    .test(S.es[k].replace(/<[^>]*>/g, '')))
+  ok('el espanol de Jev habla de usted, no de tu', tuteo.length === 0, JSON.stringify(tuteo))
+  ok('el aviso dice "Si lo enciende" y la ayuda de la llave "solo vera"',
+    S.es.jevDisclosure.includes('Si lo enciende') && S.es.jevDisclosure.includes('su atencion') &&
+    S.es.jevKeyHelp.includes('solo vera') && S.es.jevKeyPh === 'Pegue su llave aqui')
+}
+
+/** El worker de mentira para Jev: hace lo que el de verdad —toma el pedido de storage,
+ *  lo borra, contesta con codigo y deja el estado— sin tocar disco. `resultado` decide
+ *  que contesta. */
+function trabajadorJev (resultado) {
+  return (d, st) => {
+    if (d.action === 'storage.set' && d.params.key === 'jevRequest' && d.params.value &&
+        !d.params.value.tombstone) {
+      const pedido = d.params.value
+      st.jevRequestVisto = pedido
+      st.jevRequest = null
+      const r = resultado(pedido, st)
+      st.jevResult = { at: new Date().toISOString(), requestId: pedido.id,
+        action: pedido.action, ...r }
+      return { ok: true }
+    }
+    return undefined
+  }
+}
+
+const LLAVE_JEV = 'tsk-FALSA-0000000000000000'
+
+console.log('\nconfig.html — Jev: guardar la llave va por el worker y no vuelve a la pantalla')
+{
+  const storage = {}
+  const { doc, window } = await montar('config.html', storage, 'es-419',
+    trabajadorJev((pedido, st) => {
+      st.jevStatus = { at: new Date().toISOString(), enabled: false, keySet: true,
+        mirror: 'apagado' }
+      return { ok: true, code: 'guardada', mirror: 'apagado' }
+    }))
+  ok('sin estado dice apagado y sin llave',
+    /apagado/i.test(doc.getElementById('jev-status').textContent) &&
+    /sin llave/i.test(doc.getElementById('jev-status').textContent),
+    doc.getElementById('jev-status').textContent)
+  ok('sin llave no se ofrece quitarla', doc.getElementById('jev-remove-key').hidden)
+
+  doc.getElementById('jev-save-key').click()
+  await espera()
+  ok('con el campo vacio no manda nada y lo dice',
+    !storage.jevRequestVisto && doc.getElementById('said-jev-key').textContent.length > 0,
+    JSON.stringify(storage.jevRequestVisto))
+
+  doc.getElementById('jev-key').value = `  ${LLAVE_JEV}  `
+  doc.getElementById('jev-save-key').click()
+  await new Promise((r) => setTimeout(r, 3500))
+  const pedido = storage.jevRequestVisto
+  ok('manda el pedido a la clave del worker, con id y marca de tiempo',
+    !!pedido && pedido.action === 'guardar-llave' && typeof pedido.id === 'string' &&
+    !isNaN(Date.parse(pedido.at)), JSON.stringify(pedido))
+  ok('y lleva la llave sin los espacios', !!pedido && pedido.value === LLAVE_JEV,
+    JSON.stringify(pedido))
+  ok('el campo queda vacio: la llave no se queda en pantalla',
+    doc.getElementById('jev-key').value === '', doc.getElementById('jev-key').value)
+  ok('la llave no aparece en ningun lugar de la pagina',
+    !doc.documentElement.outerHTML.includes(LLAVE_JEV) &&
+    !doc.body.textContent.includes(LLAVE_JEV))
+  ok('la pantalla dice que esta guardada', /llave guardada/i.test(
+    doc.getElementById('jev-status').textContent), doc.getElementById('jev-status').textContent)
+  ok('confirma el guardado al lado del boton',
+    doc.getElementById('said-jev-key').textContent.includes('✓'),
+    doc.getElementById('said-jev-key').textContent)
+  ok('ahora ofrece quitarla', !doc.getElementById('jev-remove-key').hidden)
+  ok('y el campo avisa que ya hay una, sin decir cual',
+    /guardada/i.test(doc.getElementById('jev-key').placeholder),
+    doc.getElementById('jev-key').placeholder)
+  ok('encender Jev no pasa solo por guardar la llave',
+    doc.getElementById('jev-enabled').value === 'off', doc.getElementById('jev-enabled').value)
+  void window
+}
+
+console.log('\nconfig.html — Jev: encender, quitar la llave y lo que dice cada estado')
+{
+  const storage = { jevStatus: { at: new Date().toISOString(), enabled: false, keySet: true,
+    mirror: 'apagado' } }
+  const { doc } = await montar('config.html', storage, 'es-419',
+    trabajadorJev((pedido, st) => {
+      if (pedido.action === 'activar') {
+        st.jevStatus = { at: new Date().toISOString(), enabled: pedido.enabled, keySet: true,
+          mirror: pedido.enabled ? 'activo' : 'apagado' }
+        return { ok: true, code: pedido.enabled ? 'activado' : 'desactivado' }
+      }
+      st.jevStatus = { at: new Date().toISOString(), enabled: st.jevStatus.enabled,
+        keySet: false, mirror: 'sin-llave' }
+      return { ok: true, code: 'quitada' }
+    }))
+  ok('con llave guardada y Jev apagado: apagado y llave guardada',
+    /apagado.*llave guardada/i.test(doc.getElementById('jev-status').textContent),
+    doc.getElementById('jev-status').textContent)
+
+  doc.getElementById('jev-enabled').value = 'on'
+  doc.getElementById('jev-save-enabled').click()
+  await new Promise((r) => setTimeout(r, 3500))
+  ok('encender manda activar con enabled verdadero',
+    storage.jevRequestVisto && storage.jevRequestVisto.action === 'activar' &&
+    storage.jevRequestVisto.enabled === true, JSON.stringify(storage.jevRequestVisto))
+  ok('y la pantalla dice encendido con llave',
+    /encendido.*llave guardada/i.test(doc.getElementById('jev-status').textContent),
+    doc.getElementById('jev-status').textContent)
+
+  doc.getElementById('jev-remove-key').click()
+  await new Promise((r) => setTimeout(r, 3500))
+  ok('quitar la llave manda quitar-llave',
+    storage.jevRequestVisto && storage.jevRequestVisto.action === 'quitar-llave',
+    JSON.stringify(storage.jevRequestVisto))
+  ok('y la pantalla dice que esta encendido pero no se envia nada',
+    /sin llave/i.test(doc.getElementById('jev-status').textContent) &&
+    /no se envia|no se envía/i.test(doc.getElementById('jev-status').textContent),
+    doc.getElementById('jev-status').textContent)
+  ok('sin llave ya no se ofrece quitarla', doc.getElementById('jev-remove-key').hidden)
+}
+
+console.log('\nconfig.html — Jev: lo que falla se dice, y un archivo ajeno se explica')
+{
+  const storage = { jevStatus: { at: new Date().toISOString(), enabled: true, keySet: true,
+    mirror: 'ajeno' } }
+  const { doc } = await montar('config.html', storage, 'es-419',
+    trabajadorJev(() => ({ ok: false, code: 'llave-invalida' })))
+  const nota = doc.getElementById('jev-mirror-note')
+  ok('con un archivo de llave que no es del plugin lo explica y manda a escribir la llave',
+    !nota.hidden && /jev\.env/.test(nota.textContent) && /escriba la llave/i.test(nota.textContent),
+    `hidden=${nota.hidden} ${nota.textContent}`)
+  doc.getElementById('jev-key').value = 'dos palabras'
+  doc.getElementById('jev-save-key').click()
+  await new Promise((r) => setTimeout(r, 3500))
+  const dicho = doc.getElementById('said-jev-key')
+  ok('una llave invalida se dice con la frase del panel, no con el codigo',
+    dicho.className.includes('bad') && /no es v/i.test(dicho.textContent) &&
+    !/llave-invalida/.test(dicho.textContent), dicho.textContent)
+  ok('y la llave tecleada se queda para corregirla',
+    doc.getElementById('jev-key').value === 'dos palabras')
+}
+
+console.log('\nconfig.html — Jev: si el worker no contesta, la llave no queda esperando en storage')
+{
+  const storage = {}
+  const { doc, window } = await montar('config.html', storage, 'es-419')
+  window.VEREDICTO_ESPERA_MS = 400
+  doc.getElementById('jev-key').value = LLAVE_JEV
+  doc.getElementById('jev-save-key').click()
+  await new Promise((r) => setTimeout(r, 4500))
+  ok('el panel dice que el plugin no contesto',
+    /no contest/i.test(doc.getElementById('said-jev-key').textContent),
+    doc.getElementById('said-jev-key').textContent)
+  ok('y el pedido con la llave se reemplaza por una lapida SIN la llave',
+    !!storage.jevRequest && storage.jevRequest.tombstone === true &&
+    !JSON.stringify(storage.jevRequest).includes(LLAVE_JEV),
+    JSON.stringify(storage.jevRequest))
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)

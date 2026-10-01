@@ -278,6 +278,18 @@ hechas += 1
 assert.deepEqual(processSpawn, [{ kind: 'process:spawn' }],
   'the worker requires the process:spawn capability to execute wa-scope')
 
+// La llave de Jev es un secreto PROPIO del plugin (boveda `secrets`, como el Advisor) y el
+// unico host al que sale el texto de los clientes es api.typesafe.ai, que se declara para
+// que el consentimiento lo muestre. Lo llama el CLI de Python —que ninguna valla de Orca
+// limita—, pero un host que no esta en el manifiesto es un host que el usuario no vio.
+hechas += 1
+assert.ok(clases.has('secrets'),
+  'the Jev key is a plugin secret: the manifest must declare the secrets capability')
+const red = capabilities.filter(({ kind }) => kind === 'net:fetch')
+hechas += 1
+assert.deepEqual(red, [{ kind: 'net:fetch', hosts: ['api.typesafe.ai'] }],
+  'the only network host the plugin declares is api.typesafe.ai (TypeSafe, for Jev)')
+
 // La descripcion es lo UNICO que el usuario lee antes de instalar: no puede prometer
 // una funcion que el plugin ya no tiene. Prometia "conecta lineas de WhatsApp Web
 // lanzando la CLI de Orca" mucho despues de que eso dejara de existir, y nada lo
