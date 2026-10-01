@@ -126,7 +126,7 @@ casos resueltos sin modelo grande, latencia, fallos).
 
 - [ ] T0 — Sonda en vivo del despliegue de agente desde una automatización y
       del reporte de vuelta (descartable, worktree limpiado).
-- [ ] T1 — Esquema `caso`, `caso_mensaje`, `caso_evento` + migración sobre
+- [x] T1 — Esquema `caso`, `caso_mensaje`, `caso_evento` + migración sobre
       `scope.db` existente; `wa-scope caso` (crear, mover, propuesta,
       resultado, listar, unir, separar) con validación de etapas y transiciones;
       regla de agrupación; backfill de `work` abiertos; versión de propuesta.
