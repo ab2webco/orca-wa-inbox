@@ -221,13 +221,17 @@ with tempfile.TemporaryDirectory() as home:
     # Cada par (de, a) del plan, recorrido de verdad. La etapa se pone a mano en la base
     # para no depender de los otros comandos; el motivo va siempre, para que lo que se
     # mida sea la transicion y no la falta de motivo.
+    # Con una propuesta aprobada en su version vigente: las transiciones que ejecutan
+    # algo la exigen (seccion siguiente), y aca se mide la tabla, no la firma.
     malas = []
     for de in PERMITIDAS:
         for a in PERMITIDAS:
             if de == a:
                 continue
             con = db_de(home)
-            con.execute("update caso set etapa=? where case_id=?", (de, int(cid)))
+            con.execute("update caso set etapa=?, propuesta=?, propuesta_version='v', "
+                        "propuesta_aprobada='v' where case_id=?",
+                        (de, '{"tipo":"trabajar","instrucciones":"x"}', int(cid)))
             con.commit()
             antes = con.execute("select count(*) from caso_evento").fetchone()[0]
             con.close()
@@ -239,6 +243,30 @@ with tempfile.TemporaryDirectory() as home:
                 malas.append(f"{de}->{a}: salio {p.returncode}, "
                              f"{despues - antes} eventos")
     ok("todas las transiciones del plan, y solo esas", not malas, "; ".join(malas))
+
+    # Lo que EJECUTA algo (lanzar el trabajo, dar por enviada una respuesta) no se
+    # puede hacer con `mover` sin la firma del dueno en la version vigente: si no,
+    # "nada corre sin tu clic" se salta con un comando.
+    sin_firma = []
+    for de, a in (("decision", "trabajo"), ("decision", "respondido"),
+                  ("listo", "respondido"), ("listo", "trabajo")):
+        for aprobada in (None, "vieja"):
+            con = db_de(home)
+            con.execute("update caso set etapa=?, propuesta=?, propuesta_version='v', "
+                        "propuesta_aprobada=? where case_id=?",
+                        (de, '{"tipo":"trabajar","instrucciones":"x"}', aprobada,
+                         int(cid)))
+            con.commit()
+            antes = con.execute("select count(*) from caso_evento").fetchone()[0]
+            con.close()
+            p = corre(home, "caso", "mover", cid, a, "--actor", "automatizacion")
+            if (p.returncode == 0
+                    or cuenta(home, "select count(*) from caso_evento") != antes
+                    or "aprob" not in p.stderr):
+                sin_firma.append(f"{de}->{a} con firma {aprobada}: salio {p.returncode}"
+                                 f" {p.stderr.strip()[:80]}")
+    ok("mover a lo que ejecuta exige la version vigente aprobada, y sin ella no escribe",
+       not sin_firma, "; ".join(sin_firma))
 
     # Un caso de OTRA linea no existe para esta (T9).
     con = db_de(home)

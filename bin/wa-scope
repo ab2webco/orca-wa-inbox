@@ -107,6 +107,11 @@ TRANSICIONES_CASO = {
     "cerrado":     ("recibido",),
     "bloqueado":   ("recibido", "clasificado", "decision", "cerrado"),
 }
+# Las transiciones que EJECUTAN algo: lanzar el trabajo, dar por enviada una respuesta.
+# Exigen que la version vigente de la propuesta sea la que firmo el dueno, venga de
+# `aprobar` o de `mover`: si no, "nada corre sin tu clic" se salta con un comando.
+TRANSICIONES_CON_FIRMA = (("decision", "trabajo"), ("decision", "respondido"),
+                          ("listo", "respondido"), ("listo", "trabajo"))
 # Cerrar o bloquear sin decir por que deja una tarjeta muda en la columna que mas se
 # mira despues.
 ETAPAS_CON_MOTIVO = ("cerrado", "bloqueado")
@@ -2045,6 +2050,11 @@ def caso_valida(caso, hacia, motivo=None):
     if hacia in ETAPAS_CON_MOTIVO and not (motivo or "").strip():
         sys.exit(f"moving case #{caso['case_id']} to {hacia} needs --motivo: a card "
                  f"in {hacia} has to say why")
+    if (de, hacia) in TRANSICIONES_CON_FIRMA and not (
+            caso.get("propuesta_aprobada")
+            and caso["propuesta_aprobada"] == caso.get("propuesta_version")):
+        sys.exit(f"case #{caso['case_id']} cannot go from {de} to {hacia}: its current "
+                 f"proposal is not approved by the owner (`caso aprobar --version`)")
 
 
 def caso_mover(con, caso, hacia, actor, detalle="", **campos):
@@ -2180,7 +2190,8 @@ def cmd_caso_aprobar(con, a):
     detalle = f"aprobada {a.version}"
     campos = {"propuesta_aprobada": a.version}
     if json.loads(caso["propuesta"])["tipo"] == "trabajar":
-        caso_valida(caso, "trabajo")
+        # Se valida con la firma que se esta poniendo: es justo la que la exige.
+        caso_valida(dict(caso, **campos), "trabajo")
         caso_mover(con, caso, "trabajo", a.actor, detalle, **campos)
     else:
         caso_tocar(con, caso, a.actor, detalle, **campos)
