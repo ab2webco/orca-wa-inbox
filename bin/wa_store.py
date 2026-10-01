@@ -469,11 +469,46 @@ def chats(con, limite, query=None, solo_no_leidos=False, linea=None):
             from chat c where 1 = 1 {donde}
             order by coalesce(c.last_ts, 0) desc, c.rowid
             limit ?""", args + [limite]).fetchall()
-    return [{"id": r["id"], "jid": r["chat_jid"],
-             "kind": "grupo" if r["is_group"] else "directo",
-             "unread": r["unread"], "last": ts(r["last_ts"]),
-             "name": nombre_de(r), "account": r["account"]}
-            for r in filas]
+    propios = chats_propios(con)
+    out = []
+    for r in filas:
+        item = {"id": r["id"], "jid": r["chat_jid"],
+                "kind": "grupo" if r["is_group"] else "directo",
+                "unread": r["unread"], "last": ts(r["last_ts"]),
+                "name": nombre_de(r), "account": r["account"]}
+        # El "mensaje a uno mismo" de la linea (T10): se llamaba como su jid pelado.
+        # Se marca y se llama como la linea, que es como lo muestra WhatsApp.
+        propio = propios.get((r["account"], usuario_de(r["chat_jid"])))
+        if propio is not None:
+            item["own"] = True
+            if propio:
+                item["name"] = propio
+        out.append(item)
+    return out
+
+
+def usuario_de(jid):
+    """(usuario, servidor) de un jid, sin el dispositivo: `X:7@lid` y `X@lid` son el
+    mismo usuario. El servidor va en la llave porque un LID y un telefono son numeros
+    distintos que no se pueden confundir."""
+    texto = str(jid or "")
+    usuario, _, servidor = texto.partition("@")
+    return (usuario.split(":")[0], servidor)
+
+
+def chats_propios(con):
+    """{(cuenta, (usuario, servidor)): nombre de la linea} con el LID y el telefono de
+    cada linea: son los jids de su chat consigo misma."""
+    propios = {}
+    try:
+        filas = con.execute("select account, lid, pn, name from linea").fetchall()
+    except sqlite3.Error:
+        return propios
+    for f in filas:
+        for jid in (f["lid"], f["pn"]):
+            if jid:
+                propios[(f["account"], usuario_de(jid))] = f["name"] or ""
+    return propios
 
 
 def resolver_chat(con, ref, linea=None):

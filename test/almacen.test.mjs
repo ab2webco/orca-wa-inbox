@@ -846,6 +846,58 @@ console.log('\nMigracion: lo que se llevo se DICE, y por el camino que ve el pan
     `salio ${doctor.code}`)
 }
 
+console.log('\nT10: el aviso de la migracion dura una semana y no dice que borro lo que no borro')
+{
+  // Visto en vivo: "Almacen de mensajes actualizado — ... se borro" una semana despues,
+  // con `cuerpos=0`. No se habia borrado ningun mensaje.
+  const home = nueva()
+  almacenViejo(home, { cuerpos: 0 })
+  abrirAlmacen(rutaAlmacen({ HOME: home })).cerrar()
+  const doctor = leerJson(home, ['doctor'])
+  const fila = (doctor.filas || []).find((f) => f.code === 'store-migrated')
+  ok('sin cuerpos borrados, el renglon no habla de borrar mensajes',
+    fila && fila.detailCode === 'store-migrated-clean' && !/dropped/i.test(fila.detalle),
+    JSON.stringify(fila))
+
+  // La misma migracion, ocho dias despues: ya no se avisa.
+  const con = new DatabaseSync(rutaAlmacen({ HOME: home }))
+  con.prepare('update migracion set at = ?').run(Math.floor(Date.now() / 1000) - 8 * 86400)
+  con.close()
+  const despues = leerJson(home, ['doctor'])
+  ok('pasada una semana el aviso ya no sale',
+    !(despues.filas || []).some((f) => f.code === 'store-migrated'),
+    JSON.stringify(despues.filas))
+}
+
+console.log('\nT10: el chat propio de la linea se reconoce, no se muestra como un jid')
+{
+  // El "mensaje a uno mismo" de la linea aparece en la lista con el jid pelado
+  // (`<lid>@lid`). Su jid es el LID o el telefono de la linea, sin el dispositivo.
+  const home = nueva()
+  const alm = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  const CUENTA_T10 = 'pn:573000000012'
+  alm.activarLinea(CUENTA_T10)
+  alm.registrarLinea({ cuenta: CUENTA_T10, lid: '100000000000002:1@lid',
+    pn: '573000000012:7@s.whatsapp.net', nombre: 'Nueva' })
+  alm.anotarChat({ cuenta: CUENTA_T10, chatJid: '100000000000002@lid',
+    nombre: '100000000000002@lid', esGrupo: 0, ts: Math.floor(Date.now() / 1000) - 1 })
+  alm.anotarChat({ cuenta: CUENTA_T10, chatJid: '573000000012@s.whatsapp.net', nombre: '',
+    esGrupo: 0, ts: Math.floor(Date.now() / 1000) - 2 })
+  alm.anotarChat({ cuenta: CUENTA_T10, chatJid: LAURA, nombre: 'Laura Mendez', esGrupo: 0,
+    ts: Math.floor(Date.now() / 1000) })
+  alm.cerrar()
+  const r = leerJson(home, ['chats'])
+  const porJid = Object.fromEntries((r.filas || []).map((c) => [c.jid, c]))
+  ok('el chat propio por LID se marca como propio',
+    porJid['100000000000002@lid']?.own === true, JSON.stringify(porJid['100000000000002@lid']))
+  ok('y por telefono tambien', porJid['573000000012@s.whatsapp.net']?.own === true,
+    JSON.stringify(porJid['573000000012@s.whatsapp.net']))
+  ok('y se llama como la linea, no como su jid',
+    porJid['100000000000002@lid']?.name === 'Nueva', JSON.stringify(porJid['100000000000002@lid']))
+  ok('un chat ajeno no se marca', porJid[LAURA] && !porJid[LAURA].own,
+    JSON.stringify(porJid[LAURA]))
+}
+
 console.log('\nMigracion: un almacen ya al dia se deja quieto')
 {
   const home = nueva()

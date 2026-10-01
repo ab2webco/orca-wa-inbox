@@ -25,7 +25,7 @@ anything".
 
 Global: --json  JSON output instead of a table.
 """
-import argparse, json, os, subprocess, sys
+import argparse, json, os, subprocess, sys, time
 
 # Sin esto Python deja un __pycache__ DENTRO de bin/, y el directorio del plugin
 # instalado esta direccionado por hash: un archivo que aparece despues de la
@@ -101,6 +101,19 @@ REQUISITOS = """The plugin cannot read messages yet.
 """
 
 
+# Cuanto se sigue avisando de algo que paso una vez (una subida de esquema, una
+# re-clave). Pasado esto ya no le pide nada a nadie y solo ensucia el panel.
+AVISO_UNICO_S = 7 * 86400
+
+
+def reciente(epoch):
+    """Si un aviso de una sola vez todavia vale la pena mostrarlo."""
+    try:
+        return time.time() - int(epoch) <= AVISO_UNICO_S
+    except (TypeError, ValueError):
+        return False
+
+
 def cmd_doctor(a):
     """Para que el usuario sepa que le falta antes de que nada dependa de esto.
 
@@ -168,7 +181,23 @@ def cmd_doctor(a):
     # es justo el momento en que el usuario necesita leer que paso con lo viejo; si
     # este renglon colgara del almacen abierto, no se veria nunca.
     migracion = wa_store.ultima_migracion()
-    if migracion and (migracion["cuerpos"] or migracion["lineas"]):
+    # Una semana, no para siempre (T10): visto en vivo, el aviso seguia en el panel
+    # semanas despues de una subida que ya no le pedia nada a nadie.
+    if migracion and not reciente(migracion["at"]):
+        migracion = None
+    if migracion and not migracion["cuerpos"] and migracion["lineas"]:
+        # Sin cuerpos no se borro ningun mensaje: solo se retiraron las lineas de la via
+        # que ya no existe. Decir "se borro" asustaba por algo que no paso.
+        filas.append({
+            "check": "message store upgrade", "ok": False,
+            "detalle": (f"optional — the message store was upgraded from version "
+                        f"{migracion['desde']} to {migracion['hasta']} on "
+                        f"{wa_store.ts(migracion['at'])} without losing any message. "
+                        f"The {migracion['lineas']} lines of the removed WhatsApp Web "
+                        f"route were retired, and the linked line fills the store."),
+            "requerido": False, "code": "store-migrated",
+            "detailCode": "store-migrated-clean", "via": None})
+    elif migracion and migracion["cuerpos"]:
         # `ok: False` a proposito, por lo mismo que el renglon de retencion de aca
         # arriba: `checkSystem` arma la lista de opcionales del panel con
         # `requerido === false && !ok` (main.mjs), asi que un renglon en verde no llega
@@ -188,7 +217,8 @@ def cmd_doctor(a):
     # La re-clave de `local` al numero de su linea (T9), por lo mismo que la migracion
     # de arriba: `ok: False` para que llegue al panel, y no bloquea, porque no hay nada
     # roto. Se dice adonde fueron las conversaciones de antes.
-    for r in wa_store.reclaves()[-1:]:
+    # Con la misma semana de vida que el de la migracion: es el mismo tipo de aviso.
+    for r in [x for x in wa_store.reclaves()[-1:] if reciente(x["at"])]:
         numero = str(r["hacia"]).replace("pn:", "+", 1)
         filas.append({
             "check": "line re-keyed", "ok": False,

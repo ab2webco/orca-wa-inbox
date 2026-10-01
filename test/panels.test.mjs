@@ -2031,6 +2031,56 @@ console.log('\nconfig.html — T9: el selector y las autorizaciones son de la li
     JSON.stringify(storage.scope))
 }
 
+console.log('\nconfig.html — T10: el chat propio se nombra como en WhatsApp y va primero')
+{
+  const storage = {
+    chats: [
+      { jid: '200@g.us', name: 'Grupo Nuevo', kind: 'grupo' },
+      { jid: '100000000000002@lid', name: 'Nueva', kind: 'directo', own: true },
+      // Sin nombre de linea conocido: el nombre que llega es su jid.
+      { jid: '573000000012@s.whatsapp.net', name: '573000000012@s.whatsapp.net',
+        kind: 'directo', own: true }
+    ]
+  }
+  const { doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  const opciones = [...doc.getElementById('chat-pick').options]
+  const textos = opciones.map((o) => o.textContent)
+  ok('el chat propio va primero, con el nombre de la linea y "(tú)"',
+    /Nueva \(tú\)/.test(textos[1] || ''), JSON.stringify(textos))
+  ok('ninguna opcion muestra un jid pelado', !textos.some((t) => /@lid|@s\.whatsapp\.net/.test(t)),
+    JSON.stringify(textos))
+  doc.getElementById('chat-pick').value = '573000000012@s.whatsapp.net'
+  doc.getElementById('chat-pick').dispatchEvent(new doc.defaultView.Event('change'))
+  await espera()
+  const identidad = doc.getElementById('chat-id').textContent
+  const nombre = doc.getElementById('chat').value
+  ok('elegido, ni el renglon de identidad ni el nombre muestran el jid',
+    !/@s\.whatsapp\.net|@lid/.test(identidad + ' ' + nombre), `${identidad} / ${nombre}`)
+
+  const en = await montar('config.html', { chats: storage.chats }, 'en-US')
+  await espera()
+  const textosEn = [...en.doc.getElementById('chat-pick').options].map((o) => o.textContent)
+  ok('en ingles dice "(you)"', /Nueva \(you\)/.test(textosEn[1] || ''), JSON.stringify(textosEn))
+}
+
+console.log('\nconfig.html — T10: una migracion que no borro nada no dice que borro')
+{
+  const { doc } = await montar('config.html', { health: { ok: true, optional: [{
+    que: 'message store upgrade', code: 'store-migrated', howCode: 'store-migrated-clean',
+    como: 'the message store was upgraded without losing any message' }] } }, 'es-419')
+  await espera()
+  const texto = doc.getElementById('opcionales').textContent
+  ok('el aviso dice que no se perdio ningun mensaje, sin "se borro"',
+    /ningun mensaje/i.test(texto) && !/borr/i.test(texto) && !/without losing/.test(texto), texto)
+  const { window } = await montar('config.html')
+  const S = window.STRINGS
+  const nuevas = ['howStoreMigratedClean', 'chatOwnTag', 'chatOwnNoName']
+  ok('los textos nuevos estan en los tres idiomas, con portugues propio',
+    nuevas.every((k) => S.es[k] && S.en[k] && S.pt[k] && S.pt[k] !== S.en[k]),
+    JSON.stringify(nuevas.map((k) => [S.es[k], S.en[k], S.pt && S.pt[k]])))
+}
+
 console.log('\nconfig.html — los estados de falla ofrecen reintentar, no reiniciar Orca')
 {
   for (const code of ['sidecar-no-arranco', 'sidecar-authdir-fallo', 'sidecar-cayo']) {

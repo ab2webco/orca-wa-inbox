@@ -443,11 +443,15 @@ def almacen_con_lineas(home: pathlib.Path, activa: str) -> None:
         "const a = abrirAlmacen(rutaAlmacen({ HOME: process.env.HOME }));"
         "a.registrarLinea({ cuenta: %r, pn: '573001112233:7@s.whatsapp.net', nombre: 'Vieja' });"
         "a.anotarChat({ cuenta: %r, chatJid: '100@g.us', nombre: 'Grupo Viejo', esGrupo: 1 });"
-        "a.registrarLinea({ cuenta: %r, pn: '573000000012:7@s.whatsapp.net', nombre: 'Nueva' });"
+        "a.registrarLinea({ cuenta: %r, lid: '100000000000002:1@lid', "
+        "pn: '573000000012:7@s.whatsapp.net', nombre: 'Nueva' });"
         "a.anotarChat({ cuenta: %r, chatJid: '200@g.us', nombre: 'Grupo Nuevo', esGrupo: 1 });"
+        # El chat de la linea consigo misma (T10), que se anota con su jid como nombre.
+        "a.anotarChat({ cuenta: %r, chatJid: '100000000000002@lid', "
+        "nombre: '100000000000002@lid', esGrupo: 0 });"
         "a.activarLinea(%r); a.latir(); a.cerrar();"
         % ((RAIZ / "sidecar" / "src" / "almacen.js").as_uri(), VIEJA, VIEJA, NUEVA, NUEVA,
-           activa))
+           NUEVA, activa))
     subprocess.run([shutil.which("node") or "node", "--input-type=module", "-e", js],
                    env=entorno(home), check=True, capture_output=True, timeout=120)
 
@@ -539,9 +543,17 @@ def revisa_linea_por_numero(fallos: list) -> int:
                           f"{act.get('authorized')} de {act.get('mapped')}")
         if act.get("account") != NUEVA:
             fallos.append(f"la actividad no dice de que linea es: account={act.get('account')!r}")
-        if sorted(c.get("jid") for c in s.get("chats") or []) != ["200@g.us"]:
+        if sorted(c.get("jid") for c in s.get("chats") or []) != [
+                "100000000000002@lid", "200@g.us"]:
             fallos.append(f"el selector del numero nuevo ofrece "
                           f"{[c.get('jid') for c in s.get('chats') or []]}")
+        # T10: el chat propio llega al panel marcado y con el nombre de la linea, no con
+        # su jid pelado.
+        propio = next((c for c in s.get("chats") or []
+                       if c.get("jid") == "100000000000002@lid"), {})
+        hechas += 1
+        if propio.get("own") is not True or propio.get("name") != "Nueva":
+            fallos.append(f"el chat propio de la linea llega al panel como {propio!r}")
 
         # Lo que se escribe con el numero nuevo vinculado es del numero nuevo, en TODAS
         # las tablas: el `default 'local'` de las columnas nuevas es solo para las filas

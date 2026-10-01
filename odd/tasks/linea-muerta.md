@@ -114,6 +114,16 @@ Baileys intenta login y nunca pide registro.
   - [x] T9g — Capturas: selector de conversaciones y panel de actividad tras cambiar
         de número (listas limpias), ES/EN, 1440/768/390/320, revisadas a ojo.
 
+- [x] T10 — Dos detalles vistos en vivo tras el cambio de número:
+  - [x] (a) El chat de la línea consigo misma se mostraba con su jid pelado. Ahora
+        `wa-read chats` lo marca (`own`, por el LID o el teléfono de la línea, sin
+        dispositivo) y lo nombra como la línea; el panel lo pone primero como
+        "<nombre> (tú)" / "(you)" / "(você)", y sin nombre conocido "Su propio chat".
+        Nunca muestra su jid, tampoco en el renglón de identidad.
+  - [x] (b) El aviso de la subida de esquema seguía semanas después y decía "se borró"
+        con `cuerpos=0`. Ahora dura 7 días (igual que el de la re-clave) y, sin cuerpos
+        borrados, sale con `store-migrated-clean`: "sin perder ningún mensaje".
+
 ## Criterios de aceptación
 
 - Con credenciales muertas (401), el panel muestra un QR nuevo sin intervención.
@@ -321,3 +331,19 @@ Baileys intenta login y nunca pide registro.
   las filas `local` no cambian y todo queda con la cuenta del número nuevo (también el
   rastro `triage@<cuenta>`). Es una prueba de guardia sobre código ya implementado:
   pasó en verde de entrada (no hubo RED que observar). 182 comprobaciones.
+
+### T10 — chat propio y aviso de migración
+
+- RED `node test/almacen.test.mjs` (5 fallas), entre ellas
+  `FALLA sin cuerpos borrados, el renglon no habla de borrar mensajes — {... "detailCode":"store-migrated-dropped" ...}`,
+  `FALLA pasada una semana el aviso ya no sale`,
+  `FALLA el chat propio por LID se marca como propio — {... "name":"<jid>@lid" ...}`.
+- RED `scripts/check-clis`: `el chat propio de la linea llega al panel como {... 'name': 'Nueva', ... }` (sin `own`).
+- RED `node test/panels.test.mjs` (6 fallas), entre ellas
+  `FALLA el chat propio va primero, con el nombre de la linea y "(tú)" — [... "○  Nueva", "○  <jid>@s.whatsapp.net"]`.
+- GREEN: `almacen` 217/217, `check-clis` 183, `panels` 431/431, `npm run check` exit 0.
+- Capturas: `config-chat-propio` y `config-migracion-limpia`, ES y EN, oscuro y claro,
+  1440/768/390/320 (32), revisadas a ojo: "Nueva (tú)"/"Nueva (you)" elegido en el
+  selector y en el renglón de identidad, sin jid; el aviso dice "sin perder ningún
+  mensaje", sin "se borró".
+

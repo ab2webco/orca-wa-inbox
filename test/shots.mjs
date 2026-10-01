@@ -721,6 +721,32 @@ const PANELES = [
         run: { state: 'interrupted', startedAt: '2026-09-24 08:46', endedAt: null } })
     })
   },
+  // T10: el chat de la linea consigo misma se llamaba como su jid pelado. Ahora va
+  // primero y como en WhatsApp, "<nombre> (tu)". Se fotografia elegido, que es lo que
+  // queda a la vista (la lista desplegada la pinta el sistema).
+  {
+    nombre: 'config-chat-propio', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true,
+    datos: Object.assign({}, DATOS, {
+      chats: [{ jid: '100000000000002@lid', name: 'Nueva', kind: 'directo', own: true,
+        last: '2026-09-17 14:05', unread: 0 }].concat(DATOS.chats)
+    }),
+    guion: `const s = document.getElementById('chat-pick');
+            s.value = '100000000000002@lid';
+            s.dispatchEvent(new Event('change'));`,
+    espera: 400
+  },
+  // T10: una subida de esquema que no borro ningun mensaje no dice "se borro".
+  {
+    nombre: 'config-migracion-limpia', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true,
+    datos: Object.assign({}, DATOS, {
+      health: { ok: true, optional: [
+        { que: 'message store upgrade', code: 'store-migrated',
+          como: 'the message store was upgraded without losing any message',
+          howCode: 'store-migrated-clean' }] }
+    })
+  },
   {
     nombre: 'config-sidecar-reintentar', archivo: 'config.html', anchos: ANCHOS,
     datos: Object.assign({}, DATOS, { sidecar: {

@@ -708,8 +708,11 @@ def build_chats():
         chats = json.loads(out.stdout or "[]")
     except (OSError, ValueError, subprocess.SubprocessError):
         return []
-    return [{"jid": c.get("jid"), "name": c.get("name"), "kind": c.get("kind"),
-             "unread": c.get("unread"), "last": c.get("last")}
+    # `own` marca el chat de la linea consigo misma (T10): el panel lo nombra como
+    # WhatsApp ("<nombre> (tu)") y lo pone primero, en vez de mostrar su jid pelado.
+    return [dict({"jid": c.get("jid"), "name": c.get("name"), "kind": c.get("kind"),
+                  "unread": c.get("unread"), "last": c.get("last")},
+                 **({"own": True} if c.get("own") else {}))
             for c in chats if c.get("jid")][:400]
 
 

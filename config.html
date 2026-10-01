@@ -633,6 +633,7 @@
           chatFetchDone: "Pidiendo la lista. Puede tardar unos segundos.",
           chatCount: "{n} de {total}", chatNoMatch: "Ninguna coincide con eso",
           chatGroupOn: "Ya autorizadas", chatGroupOff: "Sin autorizar",
+          chatOwnTag: "(t\u00fa)", chatOwnNoName: "Su propio chat",
           chatAlready: "ya autorizada: {m}",
           scopeRmFail: "No se pudo quitar la autorizacion, asi que sigue en pie. " +
             "Intente de nuevo.",
@@ -756,6 +757,9 @@
             'que habia guardado la via de WhatsApp Web, que ya no existe, ' +
             'estaba en un formato que esta version no sabe leer y se borro. ' +
             'La linea enlazada lo vuelve a llenar',
+          howStoreMigratedClean: 'El almacen quedo en la version de hoy sin perder ' +
+            'ningun mensaje. Solo se retiraron las lineas de la via de WhatsApp Web, ' +
+            'que ya no existe',
           hStoreRekeyed: 'Conversaciones atribuidas a su numero',
           howStoreRekeyedLine: 'Lo que estaba guardado de antes de que cada numero ' +
             'tuviera su propia linea quedo con el numero de donde vino. No se borro nada',
@@ -869,6 +873,7 @@
           chatFetchDone: "Asking for the list. It can take a few seconds.",
           chatCount: "{n} of {total}", chatNoMatch: "Nothing matches that",
           chatGroupOn: "Already authorised", chatGroupOff: "Not authorised",
+          chatOwnTag: "(you)", chatOwnNoName: "Your own chat",
           chatAlready: "already authorised: {m}",
           scopeRmFail: "The authorisation could not be removed, so it is still in " +
             "force. Try again.",
@@ -981,6 +986,9 @@
             'What the removed WhatsApp Web route had cached was in a format ' +
             'this version cannot read, so it was dropped. The linked line ' +
             'fills the store again',
+          howStoreMigratedClean: 'The store is now on the current version without ' +
+            'losing any message. Only the lines of the removed WhatsApp Web route ' +
+            'were retired',
           hStoreRekeyed: 'Conversations assigned to their number',
           howStoreRekeyedLine: 'What was stored before each number had its own line ' +
             'now belongs to the number it came from. Nothing was deleted',
@@ -1090,6 +1098,8 @@
           'de WhatsApp Web, que ja nao existe, tinha guardado estava num formato ' +
           'que esta versao nao sabe ler e foi apagado. A linha vinculada enche o ' +
           'armazem de novo',
+        howStoreMigratedClean: 'O armazem ficou na versao de hoje sem perder nenhuma ' +
+          'mensagem. So foram retiradas as linhas da via de WhatsApp Web, que ja nao existe',
         hStoreRekeyed: 'Conversas atribuidas ao seu numero',
         howStoreRekeyedLine: 'O que estava guardado de antes de cada numero ter a sua ' +
           'propria linha ficou com o numero de onde veio. Nada foi apagado',
@@ -1165,6 +1175,7 @@
         chatFetchDone: 'Pedindo a lista. Pode demorar alguns segundos.',
         chatCount: '{n} de {total}', chatNoMatch: 'Nada corresponde a isso',
         chatGroupOn: 'Ja autorizadas', chatGroupOff: 'Sem autorizacao',
+        chatOwnTag: '(voc\u00ea)', chatOwnNoName: 'Seu proprio chat',
         chatAlready: 'ja autorizada: {m}',
         scopeRmFail: 'Nao foi possivel remover a autorizacao, entao ela continua ' +
           'valendo. Tente de novo.',
@@ -1426,6 +1437,8 @@
         'transcribe-no-model': 'howTranscribeNoModel',
         'retention-evicted': 'howRetentionEvicted',
         'store-migrated-dropped': 'howStoreMigratedDropped',
+        // Una subida que no borro ningun mensaje (T10): decir "se borro" asustaba.
+        'store-migrated-clean': 'howStoreMigratedClean',
         'store-rekeyed-line': 'howStoreRekeyedLine'
       }
       function porCodigo(mapa, code, respaldo) {
@@ -1902,8 +1915,20 @@
         return usuario.length > 5 ? '\u2026' + usuario.slice(-5) : usuario
       }
 
+      /** Como se llama una conversacion en pantalla. El chat de la linea consigo misma
+       *  (`own`, T10) se nombra como en WhatsApp —"<nombre> (tu)"— y nunca con su jid
+       *  pelado: sin nombre de linea conocido es "Su propio chat". */
+      function nombreVisible (c) {
+        if (!c) return ''
+        if (c.own) {
+          var propio = c.name && String(c.name).indexOf('@') === -1 ? c.name : ''
+          return propio ? propio + ' ' + t('chatOwnTag') : t('chatOwnNoName')
+        }
+        return c.name || c.jid
+      }
+
       function etiqueta (c, repetido) {
-        var txt = (c.kind === 'grupo' ? '\u25A3  ' : '\u25CB  ') + (c.name || c.jid)
+        var txt = (c.kind === 'grupo' ? '\u25A3  ' : '\u25CB  ') + nombreVisible(c)
         var modo = modoDe(c.jid)
         // El permiso va EN la etiqueta y no solo en la tabla de abajo: quien busca una
         // conversacion para cambiarla necesita saber como quedo sin cambiar de seccion.
@@ -1926,14 +1951,17 @@
       }
 
       function renderChats (chats) {
-        chatsTodos = Array.isArray(chats) && deEstaLinea(chatsCuenta) ? chats : []
+        chatsTodos = Array.isArray(chats) && deEstaLinea(chatsCuenta) ? chats.slice() : []
+        // El chat propio primero, como en WhatsApp (T10). `sort` estable: el resto
+        // conserva el orden que trae la lista.
+        chatsTodos.sort(function (a, b) { return (b.own ? 1 : 0) - (a.own ? 1 : 0) })
         chatsPorJid = {}
         buscaPorJid = {}
         chatsTodos.forEach(function (c) {
           chatsPorJid[c.jid] = c
           // El jid entra al indice: hay grupos que comparten nombre y la llave es lo
           // unico que los distingue.
-          buscaPorJid[c.jid] = aplanar(c.name) + ' ' + aplanar(c.jid)
+          buscaPorJid[c.jid] = aplanar(nombreVisible(c)) + ' ' + aplanar(c.jid)
         })
         pintarChats()
       }
@@ -2042,7 +2070,8 @@
         var n = el('chat-id')
         if (!jid) { n.textContent = ''; return }
         var c = chatsPorJid[jid]
-        var partes = [jid]
+        // El propio no muestra su jid: es el chat de la linea consigo misma (T10).
+        var partes = [c && c.own ? nombreVisible(c) : jid]
         if (c && c.last) partes.push(c.last)
         var modo = modoDe(jid)
         if (modo) partes.push(fmt('chatAlready', { m: porCodigo(MODE_KEY, modo, modo) }))
@@ -2052,7 +2081,7 @@
       el('chat-search').addEventListener('input', pintarChats)
       el('chat-pick').addEventListener('change', function () {
         var c = chatsPorJid[el('chat-pick').value]
-        el('chat').value = c ? (c.name || c.jid) : ''
+        el('chat').value = c ? nombreVisible(c) : ''
         pintarIdentidad()
       })
 
