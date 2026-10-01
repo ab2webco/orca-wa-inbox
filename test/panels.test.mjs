@@ -2798,12 +2798,12 @@ console.log('\nactivity.html — tablero: columnas')
     cuenta('decision') === '4' && cuenta('cerrado') === '9' && cuenta('recibido') === '0',
     JSON.stringify(ETAPAS_TABLERO.map(cuenta)))
   const nombre = (e) => doc.querySelector(`.col[data-stage="${e}"] .col-name`).textContent
-  ok('"Tu decision" se llama como la pidio el dueno', nombre('decision') === 'Tu decisión',
+  ok('"Su decision" se llama como la pidio el dueno', nombre('decision') === 'Su decision',
     nombre('decision'))
   ok('las demas, por su nombre', nombre('trabajo') === 'En trabajo' &&
     nombre('listo') === 'Listo para responder' && nombre('bloqueado') === 'Bloqueado',
     JSON.stringify(ETAPAS_TABLERO.map(nombre)))
-  ok('"Tu decision" es la unica columna de primera clase',
+  ok('"Su decision" es la unica columna de primera clase',
     doc.querySelectorAll('.col.decision').length === 1 &&
     doc.querySelector('.col[data-stage="decision"]').classList.contains('decision'))
   ok('el carril de bloqueados es distinto de las columnas del flujo',
@@ -2815,7 +2815,7 @@ console.log('\nactivity.html — tablero: columnas')
   ok('una columna sin tarjetas lo dice, no queda un hueco mudo',
     doc.querySelector('.col[data-stage="recibido"] .col-empty').textContent.trim().length > 0)
   const sinDecidir = await abrirTablero({ board: tablero([tarjeta({ stage: 'trabajo' })]) })
-  ok('"Tu decision" vacia dice que no hay nada que decidir',
+  ok('"Su decision" vacia dice que no hay nada que decidir',
     /nada/i.test(sinDecidir.doc.querySelector('.col[data-stage="decision"] .col-empty').textContent))
   // `counts` dice 4 y solo hay 1 tarjeta: faltan 3, y callarlo las haria desaparecer.
   ok('si la cuenta supera las tarjetas, dice cuantas faltan por mostrar',
@@ -2934,7 +2934,7 @@ console.log('\nactivity.html — tablero: estados vacios')
     v2.doc.getElementById('board-note').textContent)
   const corto = await abrirTablero({ board: tablero([tarjeta()], { truncated: true }) })
   ok('truncated avisa que no se ve todo',
-    /m[aá]s recientes|no caben/i.test(corto.doc.getElementById('board-note').textContent),
+    /mas recientes|no caben/i.test(corto.doc.getElementById('board-note').textContent),
     corto.doc.getElementById('board-note').textContent)
   const raro = await abrirTablero({ board: tablero([tarjeta(), tarjeta({ case_id: 9,
     stage: 'etapa-nueva' })]) })
@@ -2995,11 +2995,11 @@ console.log('\nactivity.html — tablero: tres idiomas')
   const board = tablero([tarjeta({ ticket: 'ACM-42' }), tarjeta({ case_id: 2, stage: 'bloqueado',
     blocked_reason: 'x', exceptions: [] })])
   // Partida a proposito: check-voseo lee esa raiz como voseo aunque sea portugues.
-  const DECISION_PT = ['Sua d', 'ecis\u00e3o'].join('')
+  const DECISION_PT = ['Sua d', 'ecisao'].join('')
   for (const [lang, decision, hace5, flag] of [
-    ['es-419', 'Tu decisión', /hace 5 min/, /dinero/i],
+    ['es-419', 'Su decision', /hace 5 min/, /dinero/i],
     ['en-US', 'Your decision', /5 min ago/, /money/i],
-    ['pt-BR', DECISION_PT, /há 5 min/, /dinheiro/i]
+    ['pt-BR', DECISION_PT, /ha 5 min/, /dinheiro/i]
   ]) {
     const m = await abrirTablero({ board }, lang)
     const d = m.doc
@@ -3019,6 +3019,16 @@ console.log('\nactivity.html — tablero: tres idiomas')
   const faltan = nuevas.filter((k) => !S.es[k] || !S.pt[k])
   ok('cada texto del tablero existe en espanol, ingles y portugues', faltan.length === 0,
     JSON.stringify(faltan))
+  // Como el resto del panel: de usted y sin tildes ni enie, en espanol y en portugues.
+  const conTilde = nuevas.filter((k) => /[^\x00-\x7f\u2026]/.test(S.es[k] + S.pt[k]))
+  ok('los textos del tablero van sin tildes ni enie, como el resto del panel',
+    conTilde.length === 0, JSON.stringify(conTilde))
+  const tuteo = nuevas.filter((k) => /\b(tu|tus|te|ti)\b|\bActualiza\b/i.test(S.es[k]) ||
+    /\bvoc[eê]\b/i.test(S.pt[k]) && !/\bvoce\b/.test(S.pt[k]))
+  ok('y el espanol habla de usted, no de tu', tuteo.length === 0, JSON.stringify(tuteo))
+  ok('"Actualice el plugin" y "Su decision": usted en los dos textos que lo pedian',
+    S.es.boardUnsupported.includes('Actualice el plugin') && S.es.excLead === 'Necesita su decision por' &&
+    S.es.flagAsksOwnerToAct === 'le pide actuar')
   const igualPt = nuevas.filter((k) => S.pt[k] === S.en[k] && !/^(stageTrabajo|clase)/.test(k) &&
     S.en[k].length > 6)
   ok('y el portugues es propio, no ingles prestado', igualPt.length === 0, JSON.stringify(igualPt))

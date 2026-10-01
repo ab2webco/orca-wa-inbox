@@ -427,7 +427,7 @@ const PANELES = [
     guion: ABRIR_TABLERO, espera: 400, datos: conTablero(tableroDe([]))
   },
   {
-    // Una tarjeta en cada etapa menos "Tu decision": la columna que dice que no hay nada
+    // Una tarjeta en cada etapa menos "Su decision": la columna que dice que no hay nada
     // que decidir es el estado sano y el mas comun.
     nombre: 'tablero-sin-decisiones', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
     guion: ABRIR_TABLERO, espera: 400,
