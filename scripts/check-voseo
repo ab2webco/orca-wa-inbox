@@ -28,7 +28,7 @@ PANELES = {"config.html": ("        en: {", "      var LANG ="),
 
 # El espanol tambien vive fuera de los paneles: mensajes de los CLI, comentarios del
 # worker, textos esperados por las pruebas y documentacion.
-OTROS = ["main.mjs", "jev-espejo.mjs", "harness.mjs", "README.md",
+OTROS = ["main.mjs", "jev-espejo.mjs", "acciones.mjs", "harness.mjs", "README.md",
          "bin/wa-read", "bin/wa-scope", "bin/wa-send", "bin/wa-transcribe",
          "bin/wa_settings.py", "bin/wa_store.py",
          "automations/README.md", "docs/ESCRIBIR-UN-PLUGIN.md",
