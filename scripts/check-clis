@@ -543,6 +543,40 @@ def revisa_linea_por_numero(fallos: list) -> int:
             fallos.append(f"el selector del numero nuevo ofrece "
                           f"{[c.get('jid') for c in s.get('chats') or []]}")
 
+        # Lo que se escribe con el numero nuevo vinculado es del numero nuevo, en TODAS
+        # las tablas: el `default 'local'` de las columnas nuevas es solo para las filas
+        # de antes, y una fila nueva que cayera ahi seria la fuga otra vez.
+        def locales():
+            c = sqlite3.connect(home / ".wa-inbox" / "scope.db")
+            n = {t: c.execute(f"select count(*) from {t} where account='local'").fetchone()[0]
+                 for t in ("chat_scope", "agent_action", "work", "digest", "juicio")}
+            c.close()
+            return n
+        antes = locales()
+        scope("set", "200@g.us", "--target", "NEW", "--mode", "observar")
+        scope("record", "--chat", "200@g.us", "--name", "Grupo Nuevo", "--stanza", "N1",
+              "--action", "issue", "--detail", "")
+        scope("check", "999@g.us", "--for", "responder")
+        scope("work", "--stanza", "N1", "--chat", "200@g.us", "--name", "Grupo Nuevo",
+              "--next", "seguir")
+        scope("juicio", "--chat", "200@g.us", "--stanza", "N1", "--clase", "card")
+        scope("rotate", "--keep", "0")
+        scope("lock")
+        scope("unlock")
+        hechas += 2
+        if locales() != antes:
+            fallos.append(f"con el numero nuevo vinculado se escribieron filas `local`: "
+                          f"{antes!r} -> {locales()!r}")
+        c = sqlite3.connect(home / ".wa-inbox" / "scope.db")
+        nuevas = {t: c.execute(f"select count(*) from {t} where account=?", (NUEVA,)).fetchone()[0]
+                  for t in ("chat_scope", "work", "digest", "juicio")}
+        rastro_nuevo = c.execute("select count(*) from run_trace where name=?",
+                                 (f"triage@{NUEVA}",)).fetchone()[0]
+        c.close()
+        if not all(nuevas.values()) or not rastro_nuevo:
+            fallos.append(f"lo escrito con el numero nuevo no quedo con su cuenta: {nuevas!r}, "
+                          f"rastro={rastro_nuevo}")
+
         # Vuelve el numero viejo: todo reaparece, nada se borro.
         activar(home, VIEJA)
         lista = {f.get("chat_jid"): f.get("mode")

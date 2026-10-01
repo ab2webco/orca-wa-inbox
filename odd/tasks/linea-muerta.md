@@ -313,3 +313,11 @@ Baileys intenta login y nunca pide registro.
   ahora dice "esperando el primer sync de esta linea…" (es/en/pt). Vuelto a
   fotografiar y revisado en los 16.
 - `npm run check` exit 0.
+
+### T9 — guardia pedido por el lead: nada nuevo cae en `local`
+
+- `scripts/check-clis` (`revisa_linea_por_numero`): con el número nuevo vinculado se
+  escriben `set`, `record`, `check` denegado, `work`, `juicio`, `rotate` y una corrida;
+  las filas `local` no cambian y todo queda con la cuenta del número nuevo (también el
+  rastro `triage@<cuenta>`). Es una prueba de guardia sobre código ya implementado:
+  pasó en verde de entrada (no hubo RED que observar). 182 comprobaciones.
