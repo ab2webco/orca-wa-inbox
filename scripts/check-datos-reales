@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""Ningun dato real de una persona en el repositorio.
+
+El repositorio es PUBLICO y el plugin lo usan muchas personas. Las pruebas, las
+capturas, los comentarios y los archivos de tareas se escriben mirando una instalacion
+viva, y es facil que un telefono, un LID o el nombre de un grupo de un cliente real
+termine copiado en un fixture. Ya paso: por eso existe este chequeo.
+
+Lo que se vigila es lo que tiene forma de identificador de WhatsApp:
+
+  - un celular colombiano completo: 57 3 y nueve digitos;
+  - un jid de 14 o 15 digitos en `@lid` o `@s.whatsapp.net` (con o sin dispositivo).
+
+Todo lo que coincide tiene que estar en la lista de valores FALSOS de abajo. Para un
+dato nuevo de prueba se usa uno de esos, o se agrega uno que se vea falso a simple
+vista (ceros, secuencias). Esta lista no puede tener un valor real: si un real
+aparece en el repositorio, se reemplaza, no se agrega aca.
+
+Los nombres de personas y de grupos no tienen forma reconocible y no los puede vigilar
+un patron: esos se revisan a mano.
+"""
+import pathlib
+import re
+import subprocess
+import sys
+
+RAIZ = pathlib.Path(__file__).resolve().parent.parent
+
+# Telefonos de mentira, todos con forma de secuencia o de ceros.
+TELEFONOS_FALSOS = {
+    "573000000000", "573000000001", "573000000002", "573000000011", "573000000012",
+    "573000000013", "573001112233", "573001234567", "573002220000", "573005554433",
+    "573007776655", "573009998877", "573009999999",
+}
+# LIDs de mentira.
+LIDS_FALSOS = {"100000000000001", "100000000000002", "199887766554433"}
+
+TELEFONO = re.compile(r"(?<!\d)573\d{9}(?!\d)")
+JID = re.compile(r"(?<!\d)(\d{14,15})(?::\d+)?@(?:lid|s\.whatsapp\.net)")
+
+
+def archivos():
+    salida = subprocess.run(["git", "ls-files", "-z"], cwd=RAIZ, capture_output=True,
+                            check=True).stdout.decode("utf-8")
+    for nombre in salida.split("\0"):
+        if not nombre:
+            continue
+        ruta = RAIZ / nombre
+        if ruta.is_file():
+            yield nombre, ruta
+
+
+def revisar():
+    hallazgos = []
+    for nombre, ruta in archivos():
+        try:
+            texto = ruta.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue          # binarios: imagenes, fuentes
+        for n, linea in enumerate(texto.splitlines(), 1):
+            for m in TELEFONO.finditer(linea):
+                if m.group(0) not in TELEFONOS_FALSOS:
+                    hallazgos.append(f"{nombre}:{n}: telefono que no es de prueba")
+            for m in JID.finditer(linea):
+                if m.group(1) not in LIDS_FALSOS and m.group(1) not in TELEFONOS_FALSOS:
+                    hallazgos.append(f"{nombre}:{n}: jid que no es de prueba")
+    return hallazgos
+
+
+def main():
+    hallazgos = revisar()
+    if hallazgos:
+        # El valor NO se imprime: la salida de este chequeo termina en logs de CI.
+        print("Datos que parecen de una persona real en el repositorio:", file=sys.stderr)
+        for h in hallazgos:
+            print(f"  {h}", file=sys.stderr)
+        print("Reemplacelos por valores de prueba (ver la lista en este script).",
+              file=sys.stderr)
+        return 1
+    print(f"{len(TELEFONOS_FALSOS) + len(LIDS_FALSOS)} valores de prueba permitidos, "
+          "ningun telefono ni jid real")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
