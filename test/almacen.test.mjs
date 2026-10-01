@@ -551,7 +551,7 @@ console.log('\nF3: apagar la captura borra los CUERPOS, no la contabilidad')
  *  `store_meta`, `pragma user_version` en 0, `capturado` con su indice por edad y una
  *  `linea` de dos columnas con las cuentas `web` y `web:<lid>`. */
 function almacenViejo (home, { cuerpos = 0,
-  lineas = ['web', 'web:262444127674377'] } = {}) {
+  lineas = ['web', 'web:100000000000001'] } = {}) {
   const ruta = rutaAlmacen({ HOME: home })
   const con = new DatabaseSync(ruta)
   con.exec(`
@@ -857,7 +857,7 @@ console.log('\nalmacen: reparar las menciones que se guardaron antes de saber el
   const grupo = '120363000000000001@g.us'
   const fila = (stanzaId, body, extra = {}) => ({
     cuenta: CUENTA, chatJid: grupo, stanzaId, ts: 1700000000, fromMe: 0,
-    senderJid: '573009998877@s.whatsapp.net', senderName: 'Jhon', body,
+    senderJid: '573009998877@s.whatsapp.net', senderName: 'Pedro', body,
     mediaTipo: null, mediaBytes: null, mencionaMe: 0, citaMe: 0, ...extra
   })
 
@@ -930,12 +930,12 @@ console.log('\ningesta: la libreta de nombres y los directos')
   ok('despues la agenda del telefono',
     nombreDeContacto({ name: 'Laura Mendez', notify: 'lau' }) === 'Laura Mendez')
   ok('y de ultimo como se presenta quien escribe',
-    nombreDeContacto({ notify: 'Jhon' }) === 'Jhon')
+    nombreDeContacto({ notify: 'Pedro' }) === 'Pedro')
   ok('sin nada, cadena vacia — no se inventa un nombre',
     nombreDeContacto({}) === '' && nombreDeContacto(null) === '')
 
   // Llegan los chats ANTES que la libreta, que es el orden real de los eventos.
-  const DIRECTO = '573172561455@s.whatsapp.net'
+  const DIRECTO = '573000000013@s.whatsapp.net'
   ingerirChats({
     almacen: alm,
     cuenta: CUENTA,
@@ -1008,15 +1008,15 @@ console.log('\ninbox: lo que llega a un chat autorizado se ve, con @ o sin @')
   const DIRECTO = '573009998877@s.whatsapp.net'
   alm.registrarLinea({ cuenta: CUENTA, lid: MI_LID, pn: MI_TEL, nombre: 'Yo' })
   autorizar(casa, { jid: GRUPO, nombre: 'Operaciones', modo: 'responder' })
-  autorizar(casa, { jid: DIRECTO, nombre: 'Jhon', modo: 'responder' })
+  autorizar(casa, { jid: DIRECTO, nombre: 'Pedro', modo: 'responder' })
 
   const T = 1700000000
   // Las filas de `chat` tienen que existir: `inbox` hace join contra ellas.
   alm.anotarChat({ cuenta: CUENTA, chatJid: GRUPO, nombre: 'Operaciones', esGrupo: 1, ts: T })
-  alm.anotarChat({ cuenta: CUENTA, chatJid: DIRECTO, nombre: 'Jhon', esGrupo: 0, ts: T })
+  alm.anotarChat({ cuenta: CUENTA, chatJid: DIRECTO, nombre: 'Pedro', esGrupo: 0, ts: T })
   const fila = (chat, id, ts, body, extra = {}) => ({
     cuenta: CUENTA, chatJid: chat, stanzaId: id, ts, fromMe: 0,
-    senderJid: '573009998877@s.whatsapp.net', senderName: 'Jhon', body,
+    senderJid: '573009998877@s.whatsapp.net', senderName: 'Pedro', body,
     mediaTipo: null, mediaBytes: null, mencionaMe: 0, citaMe: 0, ...extra
   })
 
@@ -1073,7 +1073,7 @@ console.log('\nJuicio cacheado: T2/T5/T6 — el veredicto viaja en la fila, o no
   alm.anotarChat({ cuenta: CUENTA, chatJid: GRUPO, nombre: 'Grupo Juicio', esGrupo: 1, ts: T })
   const fila = (id, ts, body) => ({
     cuenta: CUENTA, chatJid: GRUPO, stanzaId: id, ts, fromMe: 0,
-    senderJid: '573009998877@s.whatsapp.net', senderName: 'Jhon', body,
+    senderJid: '573009998877@s.whatsapp.net', senderName: 'Pedro', body,
     mediaTipo: null, mediaBytes: null, mencionaMe: 0, citaMe: 0
   })
   alm.guardarMensaje(fila('J1', T, 'ya lo clasificaron antes'))
@@ -1120,7 +1120,7 @@ console.log('\nJuicio cacheado: T6 — sin scope.db, y sin la tabla, la bandeja 
   alm.anotarChat({ cuenta: CUENTA, chatJid: GRUPO, nombre: 'Sin Alcance', esGrupo: 1, ts: 1710000000 })
   alm.guardarMensaje({
     cuenta: CUENTA, chatJid: GRUPO, stanzaId: 'N1', ts: 1710000000, fromMe: 0,
-    senderJid: '573009998877@s.whatsapp.net', senderName: 'Jhon', body: 'hola',
+    senderJid: '573009998877@s.whatsapp.net', senderName: 'Pedro', body: 'hola',
     mediaTipo: null, mediaBytes: null, mencionaMe: 0, citaMe: 0
   })
   alm.cerrar()

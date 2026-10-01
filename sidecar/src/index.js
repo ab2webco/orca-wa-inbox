@@ -49,12 +49,37 @@ export const MOTIVO = Object.freeze({
 // resolver Baileys.
 const CIERRE = Object.freeze({
   LOGGED_OUT: 401,
+  // `badSession`: WhatsApp ya no reconoce la sesion guardada. Para el dueno es lo
+  // mismo que un 401 -hay que volver a vincular- y por eso se trata igual.
+  BAD_SESSION: 500,
   // connectionLost Y timedOut comparten ESTE MISMO codigo en esta version de
   // Baileys. Inventar cual de los dos fue seria mentirle al motivo que el panel
   // traduce; se lo llama por lo que es, un socket caido.
   SOCKET_CAIDO_408: 408,
   RESTART_REQUIRED: 515
 })
+
+/** Como termina el sidecar cuando decide no seguir. Es CONTRATO con el worker
+ *  (`SIDECAR_SALIDA` en main.mjs, y la prueba del worker compara los dos): el codigo
+ *  de salida llega siempre, y la ultima linea de stdout puede llegar despues del evento
+ *  de salida o no llegar.
+ *
+ *  Ninguno es 0 ni 1: 0 es "termino sin decir por que" y 1 es un reventon, y los dos
+ *  siguen siendo caidas que el worker reinicia. */
+export const SALIDA = Object.freeze({
+  // La sesion guardada esta muerta (401/500). El worker borra `wa-auth` por el mismo
+  // camino que el boton Desvincular y relanza: el sidecar nuevo arranca sin `me`,
+  // Baileys registra en vez de hacer login, y el QR aparece solo.
+  CREDENCIALES_MUERTAS: 3
+})
+
+/** El codigo con que sale el sidecar tras un cierre, o `null` si sigue vivo. Pura,
+ *  como `decidirTrasCierre`, para que el contrato con el worker se pruebe sin socket. */
+export function salidaTrasCierre (decision) {
+  if (decision.reconectar) return null
+  if (decision.borrarCredenciales) return SALIDA.CREDENCIALES_MUERTAS
+  return null
+}
 
 const BACKOFF_BASE_MS = 1000
 const BACKOFF_MAX_MS = 30000
@@ -91,23 +116,28 @@ export function intentoTrasEvento (intento, evento) {
  *  que motivo. No toca la red ni el disco -eso lo hace quien la llama- para que se
  *  pueda probar sin un socket vivo. */
 export function decidirTrasCierre (statusCode, intento = 1) {
-  if (statusCode === CIERRE.LOGGED_OUT) {
-    // Reconectar aca reproduciria el mismo cierre en bucle: el usuario tiene que
-    // escanear un QR nuevo, no esperar a que el sidecar lo resuelva solo.
-    return { reconectar: false, esperaMs: 0, motivo: MOTIVO.SESION_CERRADA }
+  if (statusCode === CIERRE.LOGGED_OUT || statusCode === CIERRE.BAD_SESSION) {
+    // Reconectar con ESTAS credenciales reproduciria el mismo cierre en bucle, y
+    // conservarlas es peor: con `creds.me` puesto Baileys hace login y nunca registro
+    // (lib/Socket/socket.js:157-162), asi que ningun reinicio produce un QR. Hay que
+    // tirarlas; lo hace el worker cuando este proceso ya murio (ver `SALIDA`).
+    return { reconectar: false, borrarCredenciales: true, esperaMs: 0,
+      motivo: MOTIVO.SESION_CERRADA }
   }
   if (statusCode === CIERRE.RESTART_REQUIRED) {
     // Baileys lo pide tras el primer QR escaneado. Esperar aca solo demora el
     // emparejamiento sin ganar nada.
-    return { reconectar: true, esperaMs: 0, motivo: MOTIVO.REINICIO_REQUERIDO }
+    return { reconectar: true, borrarCredenciales: false, esperaMs: 0,
+      motivo: MOTIVO.REINICIO_REQUERIDO }
   }
   if (statusCode === CIERRE.SOCKET_CAIDO_408) {
-    return { reconectar: true, esperaMs: calcularEsperaMs(intento), motivo: MOTIVO.SOCKET_CAIDO }
+    return { reconectar: true, borrarCredenciales: false,
+      esperaMs: calcularEsperaMs(intento), motivo: MOTIVO.SOCKET_CAIDO }
   }
   // Cualquier otro codigo -o ninguno- reconecta igual, con el mismo backoff: negar
-  // la reconexion por defecto dejaria colgada una caida que nadie prevfunciono a
-  // mano.
-  return { reconectar: true, esperaMs: calcularEsperaMs(intento), motivo: MOTIVO.DESCONOCIDO }
+  // la reconexion por defecto dejaria colgada una caida que nadie previo a mano.
+  return { reconectar: true, borrarCredenciales: false,
+    esperaMs: calcularEsperaMs(intento), motivo: MOTIVO.DESCONOCIDO }
 }
 
 // Cada cuanto Baileys genera un QR nuevo. NO son los ~20 s que tarda el cliente web
@@ -278,7 +308,7 @@ async function iniciar () {
   // se fuerza aparte para que una carpeta vieja no quede mas abierta de lo debido.
   chmodSync(authDir, 0o700)
 
-  const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers,
+  const { default: makeWASocket, useMultiFileAuthState, Browsers,
     downloadMediaMessage, fetchLatestBaileysVersion } =
     await import('@whiskeysockets/baileys')
 
@@ -373,7 +403,7 @@ async function iniciar () {
     socket = sock
     conectado = false
 
-    // El numero como lo reconoce una persona: `573008236130:7@s.whatsapp.net` no le
+    // El numero como lo reconoce una persona: `573000000011:7@s.whatsapp.net` no le
     // dice nada a nadie. Se corta el sufijo de dispositivo y el servidor.
     const numeroVisible = (pn) => {
       const usuario = String(pn || '').split('@')[0].split(':')[0]
@@ -495,9 +525,14 @@ async function iniciar () {
         const decision = decidirTrasCierre(statusCode, intento)
         emitirConexion('close', { motivo: decision.motivo, statusCode: statusCode ?? null })
         if (!decision.reconectar) {
-          emitirError(decision.motivo, statusCode === DisconnectReason.loggedOut
-            ? 'la sesion se cerro; hace falta escanear un QR nuevo'
+          emitirError(decision.motivo, decision.borrarCredenciales
+            ? 'la sesion se cerro; las credenciales guardadas ya no sirven'
             : 'el socket no va a reintentar mas')
+          // Salir A PROPOSITO y con codigo, en vez de quedarse sin socket esperando a
+          // que el bucle de eventos se vacie solo: asi salia con 0, y un 0 no le decia
+          // al worker que la sesion habia muerto — lo pintaba como "se cayo" y el panel
+          // ofrecia Reintentar, que repetia el mismo 401 sin un solo QR.
+          terminar(salidaTrasCierre(decision))
           return
         }
         setTimeout(conectar, decision.esperaMs)
@@ -684,6 +719,16 @@ async function iniciar () {
     }
   }, 60 * 60 * 1000)
   if (typeof podaTimer.unref === 'function') podaTimer.unref()
+
+  /** Irse con un codigo que el worker sabe leer (`SALIDA`). Lo ultimo que se emitio
+   *  tiene que llegar antes: la escritura vacia resuelve cuando stdout ya entrego todo
+   *  lo anterior, y recien ahi se sale. */
+  function terminar (codigo) {
+    clearInterval(salidaTimer)
+    clearInterval(podaTimer)
+    almacen.cerrar()
+    process.stdout.write('', () => process.exit(codigo ?? 1))
+  }
 
   conectar()
 }

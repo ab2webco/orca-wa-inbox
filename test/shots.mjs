@@ -82,7 +82,7 @@ const DATOS = {
   agentName: 'Watson',
   tone: 'Espanol neutro. Trata de usted. Frases cortas, sin modismos.',
   transcribeQuality: 'optima',
-  ownerName: 'Fabiana Olivar',
+  ownerName: 'Persona De Ejemplo',
   inboxDays: '7',
   transcribe: 'local',
   transcribeLang: 'auto',
@@ -115,9 +115,9 @@ const DATOS = {
       last: '2026-09-16 18:20', unread: 1 },
     { jid: '573000000000@s.whatsapp.net', name: 'Laura M\u00e9ndez', kind: 'directo',
       last: '2026-09-17 13:30', unread: 0 },
-    { jid: '120363000000000004@g.us', name: 'Lista de espera | IA Builder Lab \u{1F680} #2',
+    { jid: '120363000000000004@g.us', name: 'Lista de espera | Taller Demo \u{1F680} #2',
       kind: 'grupo', last: '2026-09-15 09:04', unread: 12 },
-    { jid: '120363000000000005@g.us', name: 'PMO - Ab2Web -  NetSat', kind: 'grupo',
+    { jid: '120363000000000005@g.us', name: 'Comite - Cliente -  Sur', kind: 'grupo',
       last: '2026-09-14 16:48', unread: 0 },
     { jid: '573000000001@s.whatsapp.net', name: 'Camila Restrepo', kind: 'directo',
       last: '2026-09-13 11:22', unread: 2 }
@@ -626,7 +626,7 @@ const PANELES = [
     nombre: 'config-elegir-sin-autorizar', archivo: 'config.html', anchos: ANCHOS,
     datos: DATOS,
     guion: `const b = document.getElementById('chat-search');
-            b.value = 'ia builder lab 2';
+            b.value = 'taller demo 2';
             b.dispatchEvent(new Event('input'));
             const s = document.getElementById('chat-pick');
             s.value = '120363000000000004@g.us';

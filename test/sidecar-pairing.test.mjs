@@ -13,8 +13,8 @@
  * desincroniza en silencio.
  */
 import { decidirTrasCierre, calcularEsperaMs, intentoTrasEvento, mensajeQr, qrVencido,
-  tocaEmitirAlmacen, opcionesDeSocket, MOTIVO, PARCHES_DE_LIBRETA, QR_ROTACION_MS,
-  QR_VIGENCIA_MS,
+  tocaEmitirAlmacen, opcionesDeSocket, salidaTrasCierre, MOTIVO, PARCHES_DE_LIBRETA,
+  QR_ROTACION_MS, QR_VIGENCIA_MS, SALIDA,
   ALMACEN_LATIDO_MS
 } from '../sidecar/src/index.js'
 
@@ -74,6 +74,45 @@ console.log('\nsidecar: decidirTrasCierre por statusCode')
   const sinCodigo = decidirTrasCierre(undefined, 1)
   ok('sin statusCode tambien reconecta', sinCodigo.reconectar === true,
     JSON.stringify(sinCodigo))
+}
+
+console.log('\nsidecar: las credenciales muertas se tiran, no se reusan')
+{
+  // Medido en la maquina del dueno (2026-10-01): WhatsApp cerro la sesion con 401 y
+  // `creds.json` se quedo con `me` puesto. Con `me`, Baileys 6.7.24 hace LOGIN y no
+  // registro (lib/Socket/socket.js:157-162), asi que ningun reinicio podia producir un
+  // QR: el mismo 401, para siempre. La credencial muerta hay que tirarla.
+  const cerrada = decidirTrasCierre(401, 1)
+  ok('un 401 pide borrar las credenciales', cerrada.borrarCredenciales === true,
+    JSON.stringify(cerrada))
+  // 500 es `badSession`: la sesion guardada ya no la reconoce WhatsApp. Reconectar con
+  // ella es el mismo callejon que el 401.
+  const mala = decidirTrasCierre(500, 1)
+  ok('un 500 (badSession) tambien', mala.borrarCredenciales === true &&
+    mala.reconectar === false && mala.motivo === MOTIVO.SESION_CERRADA,
+    JSON.stringify(mala))
+  // Control: lo que se cura solo NO toca las credenciales. Borrarlas ante una caida de
+  // red le pediria al dueno escanear un QR por un wifi que se corto.
+  for (const codigo of [408, 515, 428, 503, undefined]) {
+    const d = decidirTrasCierre(codigo, 1)
+    ok(`un ${codigo ?? 'cierre sin codigo'} no borra nada`, d.borrarCredenciales === false,
+      JSON.stringify(d))
+  }
+
+  // El sidecar no borra la carpeta el mismo: sale con un codigo propio y el worker
+  // reusa el MISMO desvincular del boton del panel, que ya espera a que el proceso
+  // muera antes de borrar (una credencial a medias fue el "desvinculo y ya no conecta"
+  // de produccion). Un codigo de salida es el contrato, y no la ultima linea de stdout,
+  // porque el evento de salida del hijo puede llegar antes que su ultima linea.
+  ok('los codigos de salida son distintos entre si',
+    new Set(Object.values(SALIDA)).size === Object.values(SALIDA).length, JSON.stringify(SALIDA))
+  ok('y ninguno se confunde con un exit 0 ni con un reventon (1)',
+    Object.values(SALIDA).every((c) => Number.isInteger(c) && c > 1 && c < 126),
+    JSON.stringify(SALIDA))
+  ok('tras un 401 el sidecar sale con el codigo de credenciales muertas',
+    salidaTrasCierre(cerrada) === SALIDA.CREDENCIALES_MUERTAS, String(salidaTrasCierre(cerrada)))
+  ok('tras un cierre que reconecta no sale', salidaTrasCierre(decidirTrasCierre(408, 1)) === null,
+    String(salidaTrasCierre(decidirTrasCierre(408, 1))))
 }
 
 console.log('\nsidecar: el backoff crece y tiene tope')

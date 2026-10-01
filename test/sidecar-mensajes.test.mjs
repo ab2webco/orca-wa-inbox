@@ -273,10 +273,10 @@ console.log('\nmensajes: la identidad de la sesion se lee de donde de verdad est
   // Y por `creds.update` aparece. Por eso hay que volver a preguntar.
   const tras = identidadDeSesion(
     { me: { id: '573001112233:7@s.whatsapp.net', lid: '199887766554433:7@lid',
-      name: 'Fabian' } }, null)
+      name: 'Dueno' } }, null)
   ok('tras creds.update el LID ya esta', tras.lid === '199887766554433:7@lid',
     JSON.stringify(tras))
-  ok('y el nombre tambien', tras.nombre === 'Fabian', JSON.stringify(tras))
+  ok('y el nombre tambien', tras.nombre === 'Dueno', JSON.stringify(tras))
 
   // `creds.me` manda sobre `sock.user`: es el registro persistente, y es el que tenia
   // el LID cuando la tabla `linea` lo tenia en NULL.

@@ -1122,6 +1122,89 @@ console.log('\nworker: tras desvincular, el estado que lee el panel ya no es el 
   apagar()
 }
 
+// ───────── credenciales muertas: el QR nuevo aparece solo ─────────
+// Medido en la maquina del dueno (2026-10-01): WhatsApp cerro la sesion desde el
+// telefono (401), `creds.json` se quedo con `me` puesto y Baileys, con `me`, hace login
+// y no registro: ningun reinicio podia producir un QR. El panel ofrecia "Reintentar",
+// que repetia el mismo 401. Ahora el sidecar sale con su codigo de credenciales muertas
+// y el worker hace solo lo que hace el boton Desvincular: borra y relanza.
+console.log('\nworker: con credenciales muertas el QR nuevo aparece sin que nadie apriete nada')
+{
+  const authFalso = join(RAIZ, 'auth-muerta')
+  const borrados = join(RAIZ, 'borrados-muerta.txt')
+  const resolvedor = join(RAIZ, 'resolve-muerta.mjs')
+  writeFileSync(resolvedor,
+    'import { appendFileSync, rmSync } from "node:fs"\n' +
+    'const dir = ' + JSON.stringify(authFalso) + '\n' +
+    'if (process.argv.includes("--borrar")) {\n' +
+    '  appendFileSync(' + JSON.stringify(borrados) + ', "x\\n")\n' +
+    '  rmSync(dir, { recursive: true, force: true })\n' +
+    '}\n' +
+    'process.stdout.write(JSON.stringify({ ok: true, dir }))\n')
+  mkdirSync(authFalso, { recursive: true })
+  writeFileSync(join(authFalso, 'creds.json'), '{"me":{"id":"573000000000:7@s.whatsapp.net"}}')
+  // El almacen de mensajes vive en OTRO lado (`~/.wa-inbox/capture.db`) y no se toca:
+  // tirar una credencial no puede llevarse las conversaciones guardadas.
+  const almacenFalso = join(RAIZ, 'capture-muerta.db')
+  writeFileSync(almacenFalso, 'mensajes')
+
+  // El sidecar de mentira se porta como el de verdad: con `creds.json` (credencial
+  // muerta) cierra con 401 y sale con 3; sin ella, registra y emite un QR.
+  const guion = join(RAIZ, 'sidecar-credencial-muerta.cjs')
+  writeFileSync(guion,
+    '#!/usr/bin/env node\n' +
+    'const fs = require("node:fs")\n' +
+    'const path = require("node:path")\n' +
+    'const dir = process.env.WA_SIDECAR_AUTH_DIR\n' +
+    'function emit (m) { process.stdout.write(JSON.stringify(m) + "\\n") }\n' +
+    'if (fs.existsSync(path.join(dir, "creds.json"))) {\n' +
+    '  emit({ type: "connection", state: "close", motivo: "sesion-cerrada", statusCode: 401 })\n' +
+    '  emit({ type: "error", code: "sesion-cerrada", detail: "la sesion se cerro" })\n' +
+    '  process.stdout.write("", () => process.exit(3))\n' +
+    '} else {\n' +
+    '  fs.mkdirSync(dir, { recursive: true })\n' +
+    '  emit({ type: "qr", qr: "QR-NUEVO", ts: Date.now(), rotation: 1, ttlMs: 75000 })\n' +
+    '  setInterval(() => {}, 1000)\n' +
+    '}\n', { mode: 0o755 })
+
+  const orca = hostFalso(herramientas('muerta', '#!/bin/sh\necho \'[]\'\n'), {}, guion)
+  orca.host.call = (function (original) {
+    return async (action, params) => {
+      if (action === 'settings.get') {
+        return { value: { toolsDir: join(RAIZ, 'muerta'), sidecarPath: guion,
+          authDirResolverPath: resolvedor } }
+      }
+      return original(action, params)
+    }
+  })(orca.host.call)
+
+  const { apagar } = await arranca(orca)
+  const conQr = await hasta(() => orca.store.sidecar && orca.store.sidecar.qr &&
+    orca.store.sidecar.qr.qr === 'QR-NUEVO', 15000)
+  ok('el QR nuevo llega a storage sin ningun pedido del panel', conQr,
+    JSON.stringify(orca.store.sidecar))
+  ok('porque la credencial muerta se borro', !existsSync(join(authFalso, 'creds.json')),
+    authFalso)
+  ok('el pedido del panel no tuvo nada que ver', !orca.store.sidecarRequest,
+    JSON.stringify(orca.store.sidecarRequest))
+  await dormir(1500)
+  const veces = existsSync(borrados)
+    ? readFileSync(borrados, 'utf8').trim().split('\n').filter(Boolean).length : 0
+  ok('se borro UNA vez: el sidecar nuevo, ya sin credencial, no vuelve a disparar el borrado',
+    veces === 1, `borrados=${veces}`)
+  ok('y el almacen de mensajes sigue en su lugar', existsSync(almacenFalso), almacenFalso)
+  apagar()
+
+  // El codigo de salida es el contrato entre las dos puntas. Vive en dos archivos
+  // porque el worker no importa el sidecar (arrastraria Baileys y el almacen dentro de
+  // la valla), y por eso se comparan aca: si uno cambia solo, el QR deja de aparecer.
+  const { SALIDA } = await import('../sidecar/src/index.js')
+  const { SIDECAR_SALIDA } = await import('../main.mjs')
+  ok('el worker y el sidecar usan los mismos codigos de salida',
+    JSON.stringify(SALIDA) === JSON.stringify(SIDECAR_SALIDA),
+    `sidecar=${JSON.stringify(SALIDA)} worker=${JSON.stringify(SIDECAR_SALIDA)}`)
+}
+
 // ───────── el reintento: el panel ya no manda a reiniciar Orca ─────────
 // "Reinicie Orca" es lo mas debil que puede decir un panel: manda a apagar la aplicacion
 // entera por un proceso hijo que el propio plugin sabe relanzar.

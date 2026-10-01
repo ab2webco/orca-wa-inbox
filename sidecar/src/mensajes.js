@@ -94,9 +94,9 @@ export function identidadesPropias (lid, telefono) {
  *  todavia no `lid` ni `name`, que Baileys completa despues por `creds.update`. Medido
  *  en una instalacion viva, la tabla `linea` quedaba asi:
  *
- *      lid=NULL  pn=573008236130:7@s.whatsapp.net  name=NULL
+ *      lid=NULL  pn=573000000011:7@s.whatsapp.net  name=NULL
  *
- *  mientras `creds.json` ya decia `me.lid = 262444127674377:7@lid`. Con el LID vacio,
+ *  mientras `creds.json` ya decia `me.lid = 100000000000001:7@lid`. Con el LID vacio,
  *  `identidadesPropias` solo conoce el telefono, `mencionaA` no puede acertar nunca
  *  -las menciones de WhatsApp viajan en `@lid`- y `menciona_me` queda en 0 sobre
  *  mensajes que nombran al dueno con todas las letras. Aguas abajo eso es la bandeja

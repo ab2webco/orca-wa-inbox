@@ -122,10 +122,10 @@ console.log('\nconfig.html')
 
   // Para quien trabaja. No es el nombre del agente: es el del dueno, y el prompt lo
   // lee para saber a quien le reporta.
-  doc.getElementById('owner').value = '  Fabiana Olivar  '
+  doc.getElementById('owner').value = '  Persona De Ejemplo  '
   doc.getElementById('save-owner').click()
   await espera()
-  ok('guarda para quien trabaja', storage.ownerName === 'Fabiana Olivar',
+  ok('guarda para quien trabaja', storage.ownerName === 'Persona De Ejemplo',
     `storage.ownerName = ${JSON.stringify(storage.ownerName)}`)
   ok('confirma el dueno en pantalla',
     doc.getElementById('said-owner').textContent.includes('✓'))
@@ -496,14 +496,14 @@ console.log('\nconfig.html')
 
   // Guardar sin recargar es media funcion: el panel abre mintiendo sobre lo que rige.
   const guardado = await montar('config.html', {
-    inboxDays: '90', ownerName: 'Fabiana Olivar', transcribe: 'off', transcribeLang: 'pt'
+    inboxDays: '90', ownerName: 'Persona De Ejemplo', transcribe: 'off', transcribeLang: 'pt'
   })
   await espera()
   ok('recarga la ventana guardada',
     guardado.doc.getElementById('inbox-days').value === '90',
     `inbox-days = ${guardado.doc.getElementById('inbox-days').value}`)
   ok('recarga para quien trabaja',
-    guardado.doc.getElementById('owner').value === 'Fabiana Olivar',
+    guardado.doc.getElementById('owner').value === 'Persona De Ejemplo',
     `owner = ${JSON.stringify(guardado.doc.getElementById('owner').value)}`)
   ok('recarga el modo de transcripcion',
     guardado.doc.getElementById('transcribe').value === 'off',
@@ -1014,7 +1014,7 @@ console.log('\nel contrato CLI -> panel')
   wa('config', 'inbox_days', '30')
   wa('config', 'transcribe', 'off')
   wa('config', 'transcribe_lang', 'pt')
-  wa('config', 'owner_name', 'Fabiana Olivar')
+  wa('config', 'owner_name', 'Persona De Ejemplo')
   wa('route', '--match', 'acme', '--target', 'ACM')
   const sincronizado = wa('sync', '--json')
 
@@ -1080,7 +1080,7 @@ console.log('\nel contrato CLI -> panel')
     panel.doc.getElementById('inbox-days').value === '30' &&
     panel.doc.getElementById('transcribe').value === 'off' &&
     panel.doc.getElementById('lang').value === 'pt' &&
-    panel.doc.getElementById('owner').value === 'Fabiana Olivar',
+    panel.doc.getElementById('owner').value === 'Persona De Ejemplo',
     `${panel.doc.getElementById('inbox-days').value} / ` +
     `${panel.doc.getElementById('transcribe').value} / ` +
     `${panel.doc.getElementById('lang').value}`)
@@ -1945,10 +1945,10 @@ console.log('\nconfig.html — la palabra "sidecar" no se le muestra a nadie')
 // Los tres nombres de abajo estan copiados del almacen de la cuenta viva. Con 296
 // conversaciones, encontrar una es LA interaccion diaria del panel, y lo que habia
 // comparaba `indexOf` sobre el texto crudo: entre "Lab" y "#2" hay un emoji, y
-// "PMO - Ab2Web -  NetSat" trae dos espacios seguidos. Nadie escribe eso.
+// "Comite - Cliente -  Sur" trae dos espacios seguidos. Nadie escribe eso.
 const CHATS_REALES = [
-  { jid: '120363000000000001@g.us', name: 'Lista de espera | IA Builder Lab \u{1F680} #2', kind: 'grupo' },
-  { jid: '120363000000000002@g.us', name: 'PMO - Ab2Web -  NetSat', kind: 'grupo' },
+  { jid: '120363000000000001@g.us', name: 'Lista de espera | Taller Demo \u{1F680} #2', kind: 'grupo' },
+  { jid: '120363000000000002@g.us', name: 'Comite - Cliente -  Sur', kind: 'grupo' },
   { jid: '120363000000000003@g.us', name: 'Operaciones internas', kind: 'grupo' },
   { jid: '573000000001@s.whatsapp.net', name: 'Laura Méndez', kind: 'directo' },
   { jid: '573000000002@s.whatsapp.net', name: 'Camila Restrepo', kind: 'directo' }
@@ -1959,7 +1959,7 @@ console.log('\nconfig.html — buscar una conversacion como la gente la escribe 
   const { doc } = await montar('config.html', {
     chats: CHATS_REALES,
     scope: {
-      '120363000000000002@g.us': { chatName: 'PMO - Ab2Web -  NetSat', provider: 'plane',
+      '120363000000000002@g.us': { chatName: 'Comite - Cliente -  Sur', provider: 'plane',
         target: 'PMO', mode: 'responder' }
     }
   }, 'es-419')
@@ -1973,23 +1973,23 @@ console.log('\nconfig.html — buscar una conversacion como la gente la escribe 
   // Tildes: el dueno escribe "mendez" sin tilde y el grupo se llama "Méndez".
   ok('sin tilde encuentra lo que si la tiene',
     buscar('mendez').some((t) => t.includes('Méndez')), JSON.stringify(buscar('mendez')))
-  // Emoji y puntuacion en el medio: "ia builder lab 2" tiene que llegar a
-  // "IA Builder Lab 🚀 #2".
+  // Emoji y puntuacion en el medio: "taller demo 2" tiene que llegar a
+  // "Taller Demo 🚀 #2".
   ok('el emoji y la almohadilla no cortan la busqueda',
-    buscar('ia builder lab 2').some((t) => t.includes('Builder')),
-    JSON.stringify(buscar('ia builder lab 2')))
+    buscar('taller demo 2').some((t) => t.includes('Taller')),
+    JSON.stringify(buscar('taller demo 2')))
   // Doble espacio y guiones: nadie los reproduce al escribir.
   ok('los guiones y el espacio de mas no hacen falta',
-    buscar('pmo ab2web netsat').some((t) => t.includes('Ab2Web')),
-    JSON.stringify(buscar('pmo ab2web netsat')))
+    buscar('comite cliente sur').some((t) => t.includes('Comite')),
+    JSON.stringify(buscar('comite cliente sur')))
   // Y sin recordar el orden, que es como se busca un grupo del que uno recuerda dos
   // palabras sueltas.
   ok('las palabras sueltas valen en cualquier orden',
-    buscar('netsat pmo').some((t) => t.includes('Ab2Web')),
-    JSON.stringify(buscar('netsat pmo')))
+    buscar('sur comite').some((t) => t.includes('Comite')),
+    JSON.stringify(buscar('sur comite')))
   // Lo que NO puede pasar: traer lo que nadie escribio. El fallo caro con 296 filas no
   // es no encontrar la conversacion, es autorizar la equivocada.
-  const sueltas = buscar('ia builder lab 2')
+  const sueltas = buscar('taller demo 2')
   ok('y no arrastra las que no tienen nada que ver',
     !sueltas.some((t) => t.includes('Operaciones')), JSON.stringify(sueltas))
   ok('sigue diciendo cuantas quedaron',
@@ -2002,7 +2002,7 @@ console.log('\nconfig.html — las tres que importan no se pierden entre las 296
   const { doc } = await montar('config.html', {
     chats: CHATS_REALES,
     scope: {
-      '120363000000000002@g.us': { chatName: 'PMO - Ab2Web -  NetSat', provider: 'plane',
+      '120363000000000002@g.us': { chatName: 'Comite - Cliente -  Sur', provider: 'plane',
         target: 'PMO', mode: 'responder' },
       '573000000001@s.whatsapp.net': { chatName: 'Laura Méndez', provider: 'ninguno',
         target: null, mode: 'observar' }
@@ -2015,7 +2015,7 @@ console.log('\nconfig.html — las tres que importan no se pierden entre las 296
     JSON.stringify(grupos.map((g) => g.label)))
   ok('y lo autorizado va primero: son las que el dueno vuelve a tocar',
     grupos.length === 2 && grupos[0].children.length === 2 &&
-    [...grupos[0].children].every((o) => /Ab2Web|Méndez/.test(o.textContent)),
+    [...grupos[0].children].every((o) => /Comite|Méndez/.test(o.textContent)),
     JSON.stringify(grupos.map((g) => [...g.children].map((o) => o.textContent))))
   ok('cada una dice con que permiso quedo, no solo que esta autorizada',
     grupos.length === 2 &&
@@ -2049,7 +2049,7 @@ console.log('\nconfig.html — quitar una autorizacion pasa por el worker y no m
   const storage = {
     chats: CHATS_REALES,
     scope: {
-      '120363000000000002@g.us': { chatName: 'PMO - Ab2Web -  NetSat', provider: 'plane',
+      '120363000000000002@g.us': { chatName: 'Comite - Cliente -  Sur', provider: 'plane',
         target: 'PMO', mode: 'responder' }
     }
   }
@@ -2094,7 +2094,7 @@ console.log('\nconfig.html — un quitado que el worker NO pudo hacer no se anun
   const storage = {
     chats: CHATS_REALES,
     scope: {
-      '120363000000000002@g.us': { chatName: 'PMO - Ab2Web -  NetSat', provider: 'plane',
+      '120363000000000002@g.us': { chatName: 'Comite - Cliente -  Sur', provider: 'plane',
         target: 'PMO', mode: 'responder' }
     }
   }
@@ -2171,11 +2171,11 @@ console.log('\nconfig.html — las traducciones de la espera larga y "Comprobar 
 console.log('\nactivity.html — la cabecera no puede contradecir a la lista')
 {
   const pendientes = [
-    { stanzaId: 'M1', date: '2026-09-23 17:35', chat: 'Ab2Web Operaciones',
-      chatJid: '120363000000000001@g.us', sender: 'Jhon Tamayo', kind: 'mencion',
+    { stanzaId: 'M1', date: '2026-09-23 17:35', chat: 'Equipo Operaciones',
+      chatJid: '120363000000000001@g.us', sender: 'Pedro Gomez', kind: 'mencion',
       text: '@yo Como vas?' },
-    { stanzaId: 'M2', date: '2026-09-23 17:35', chat: 'Ab2Web Operaciones',
-      chatJid: '120363000000000001@g.us', sender: 'Jhon Tamayo', kind: 'mencion',
+    { stanzaId: 'M2', date: '2026-09-23 17:35', chat: 'Equipo Operaciones',
+      chatJid: '120363000000000001@g.us', sender: 'Pedro Gomez', kind: 'mencion',
       text: '@yo ya hiciste las tareas?' }
   ]
   const actividad = {
@@ -2217,7 +2217,7 @@ console.log('\nactivity.html — dice si la linea esta viva y sobre cuanto actua
   const chats = new Array(298).fill(0).map((_, i) => ({ jid: `c${i}`, name: `c${i}` }))
 
   const viva = await montar('activity.html',
-    { activity: base, chats, sidecar: { connection: 'open', me: '+573008236130' } },
+    { activity: base, chats, sidecar: { connection: 'open', me: '+573000000011' } },
     'es-419')
   await espera()
   ok('dice que la linea esta conectada',
@@ -2225,7 +2225,7 @@ console.log('\nactivity.html — dice si la linea esta viva y sobre cuanto actua
     viva.doc.getElementById('linea').textContent)
   // Tras escanear un QR, saber CUAL quedo es la unica forma de notar que se escaneo
   // con el telefono equivocado.
-  ok('y con que numero', viva.doc.getElementById('linea').textContent.includes('+573008236130'),
+  ok('y con que numero', viva.doc.getElementById('linea').textContent.includes('+573000000011'),
     viva.doc.getElementById('linea').textContent)
   // "Reviso 1 conversacion" sin decir de cuantas no informa nada: 1 de 1 es cobertura
   // completa y 1 de 298 es un agente que casi no ve.
@@ -2284,11 +2284,11 @@ console.log('\nactivity.html — el texto ya no ensena que hay que marcar para q
 console.log('\nactivity.html — lo que pide decision va primero y solo')
 {
   const recent = [
-    { ts: '2026-09-23 18:40', chat: 'Ab2Web Operaciones', action: 'alert',
-      issue: null, detail: 'Piden precio | Jhon pregunta cuanto vale el modulo nuevo' },
-    { ts: '2026-09-23 18:08', chat: 'Ab2Web Operaciones', action: 'reply',
+    { ts: '2026-09-23 18:40', chat: 'Equipo Operaciones', action: 'alert',
+      issue: null, detail: 'Piden precio | Pedro pregunta cuanto vale el modulo nuevo' },
+    { ts: '2026-09-23 18:08', chat: 'Equipo Operaciones', action: 'reply',
       issue: null, detail: 'Acuse enviado al cliente' },
-    { ts: '2026-09-23 18:05', chat: 'Ab2Web Operaciones', action: 'issue',
+    { ts: '2026-09-23 18:05', chat: 'Equipo Operaciones', action: 'issue',
       issue: 'ACM-9', detail: 'Revisar el proyecto de camara' }
   ]
   const { doc } = await montar('activity.html',

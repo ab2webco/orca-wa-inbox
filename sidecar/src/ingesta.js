@@ -131,7 +131,7 @@ export function ingerirChats ({ almacen, cuenta, chats, nombreDeChat = () => nul
     if (!fila) { omitidos += 1; continue }
     // La conversacion del dueno CONSIGO MISMO no es una conversacion que se pueda
     // autorizar: no hay nadie al otro lado a quien contestarle. WhatsApp la manda como
-    // un directo mas -medido: `262444127674377@lid`, el propio LID del dueno, entre las
+    // un directo mas -medido: `100000000000001@lid`, el propio LID del dueno, entre las
     // tres unicas directas de la cuenta- y en una lista donde escasean las directas,
     // una de cada tres siendo uno mismo es ruido caro.
     if (esPropio(fila.chatJid)) { omitidos += 1; continue }
@@ -159,7 +159,7 @@ export function ingerirChats ({ almacen, cuenta, chats, nombreDeChat = () => nul
  * Los grupos traen su asunto en su propio evento; las conversaciones directas no. Su
  * nombre vive en la libreta del telefono y llega por su propio canal, que hasta aca no
  * se escuchaba. Sin el, un directo se llama como su numero -medido en la cuenta del
- * dueno: `573172561455@s.whatsapp.net` y `262444127674377@lid` de tres directas en
+ * dueno: `573000000013@s.whatsapp.net` y `100000000000001@lid` de tres directas en
  * total- y un directo que se llama como su numero es inelegible en la practica aunque
  * este en la lista.
  *
