@@ -32,7 +32,7 @@ it written in the chat" about a message that is not there.
 Task service per conversation: plane, linear, github — or `ninguno` when that
 conversation opens no cards and the agent only reads, summarizes or replies.
 """
-import argparse, json, os, re, sqlite3, subprocess, sys, time
+import argparse, hashlib, json, os, re, sqlite3, subprocess, sys, time
 
 # El modulo vive al lado, y esto se carga tanto como script como importado
 # por ruta desde los chequeos: sin esto el segundo caso no lo encuentra.
@@ -110,6 +110,16 @@ TRANSICIONES_CASO = {
 # Cerrar o bloquear sin decir por que deja una tarjeta muda en la columna que mas se
 # mira despues.
 ETAPAS_CON_MOTIVO = ("cerrado", "bloqueado")
+# Lo que puede decir una propuesta. `responder` y `trabajar` llevan texto que alguien va
+# a ejecutar (la respuesta, las instrucciones del agente); `escalar` y `descartar` solo
+# dicen lo que el dueno decide.
+TIPOS_PROPUESTA = ("responder", "trabajar", "escalar", "descartar")
+# Que campo exige cada tipo: una propuesta de responder sin respuesta es una tarjeta que
+# el dueno aprueba y que el ejecutor no sabe que enviar.
+CAMPO_DE_TIPO = {"responder": "respuesta", "trabajar": "instrucciones"}
+# Las etapas en las que el dueno puede firmar: la decision, y el resultado del trabajo
+# (que llega como una propuesta `responder` en `listo`).
+ETAPAS_APROBABLES = ("decision", "listo")
 # Quien hizo cada cosa. Es la dimension de "decisiones tomadas por actor" en las
 # estadisticas, asi que es un vocabulario cerrado y no texto libre.
 ACTORES_CASO = ("agente", "jev", "dueno", "automatizacion", "trabajador")
@@ -311,6 +321,10 @@ create table if not exists caso (
   resumen    text,
   propuesta  text,               -- JSON: tipo, respuesta, instrucciones, repo
   propuesta_version text,        -- sha256 del JSON canonico; lo que aprueba el dueno
+  -- La version que el dueno aprobo. El ejecutor solo corre la propuesta cuya version
+  -- ES esta: si triage re-propone despues, las dos dejan de coincidir y la aprobacion
+  -- ya no vale, sin que nadie tenga que acordarse de borrarla.
+  propuesta_aprobada text,
   plane_issue text,
   created_at text not null,
   updated_at text not null
@@ -910,6 +924,10 @@ def migrate(con):
         if "plane_project" in cols:
             con.execute("update chat_scope set target = plane_project, "
                         "provider = coalesce(provider,'plane') where target is null")
+    # Una base creada por el primer commit del tablero ya tiene `caso` sin esta columna.
+    caso_cols = {r["name"] for r in con.execute("pragma table_info(caso)")}
+    if "propuesta_aprobada" not in caso_cols:
+        con.execute("alter table caso add column propuesta_aprobada text")
     work_cols = {r["name"] for r in con.execute("pragma table_info(work)")}
     if "notified_at" not in work_cols:
         con.execute("alter table work add column notified_at text")
@@ -2006,6 +2024,9 @@ def caso_fila(con, row):
     agrupa."""
     caso = dict(row)
     caso["propuesta"] = json.loads(caso["propuesta"]) if caso.get("propuesta") else None
+    # Lo que el ejecutor lee: aprobada es "la version vigente ES la que firmo el dueno".
+    caso["aprobada"] = bool(caso.get("propuesta_aprobada")
+                            and caso["propuesta_aprobada"] == caso.get("propuesta_version"))
     caso["mensajes"] = con.execute("select count(*) from caso_mensaje where case_id=?",
                                    (caso["case_id"],)).fetchone()[0]
     return caso
@@ -2091,6 +2112,74 @@ def cmd_caso_clasificar(con, a):
         caso_valida(caso, "clasificado")
         caso_mover(con, caso, "clasificado", a.actor, detalle, clase=clase,
                    prioridad=a.prioridad)
+    con.commit()
+    return [caso_fila(con, caso_de(con, a.id))]
+
+
+def propuesta_canonica(propuesta):
+    """El JSON canonico de una propuesta y su version: llaves ordenadas, sin espacios.
+    Dos propuestas con el mismo contenido tienen la misma version aunque lleguen con las
+    banderas en otro orden; es lo que deja a triage repasar cada cinco minutos sin
+    invalidar lo que el dueno ya firmo."""
+    texto = json.dumps(propuesta, sort_keys=True, separators=(",", ":"),
+                       ensure_ascii=False)
+    return texto, hashlib.sha256(texto.encode("utf-8")).hexdigest()
+
+
+def cmd_caso_propuesta(con, a):
+    caso = caso_de(con, a.id)
+    propuesta = {"tipo": a.tipo}
+    for campo in ("respuesta", "instrucciones", "repo"):
+        valor = (getattr(a, campo) or "").strip()
+        if valor:
+            propuesta[campo] = valor
+    falta = CAMPO_DE_TIPO.get(a.tipo)
+    if falta and falta not in propuesta:
+        sys.exit(f"a {a.tipo} proposal needs --{falta}: the owner approves that text "
+                 f"and the executor runs it")
+    texto, version = propuesta_canonica(propuesta)
+    if caso["etapa"] == "decision" and caso["propuesta_version"] == version:
+        # Triage repasa cada cinco minutos: lo mismo no es un cambio ni deja evento.
+        return [caso_fila(con, caso)]
+    detalle = f"{a.tipo} {version}"
+    if caso["etapa"] == "decision":
+        caso_tocar(con, caso, a.actor, detalle, propuesta=texto,
+                   propuesta_version=version, propuesta_aprobada=None)
+    else:
+        caso_valida(caso, "decision")
+        caso_mover(con, caso, "decision", a.actor, detalle, propuesta=texto,
+                   propuesta_version=version, propuesta_aprobada=None)
+    con.commit()
+    return [caso_fila(con, caso_de(con, a.id))]
+
+
+def cmd_caso_aprobar(con, a):
+    """El dueno firma una VERSION. Si la vigente ya es otra (triage re-propuso mientras
+    miraba la tarjeta) se rechaza sin escribir: aprobar lo que no vio es justo lo que
+    esto existe para impedir.
+
+    Aprobar siempre deja la marca `propuesta_aprobada`; solo `trabajar` ademas mueve el
+    caso a `trabajo`. Enviar una respuesta, abrir la tarjeta de Plane o cerrar lo
+    descartado es del ejecutor, que lee la marca: este comando no toca WhatsApp."""
+    caso = caso_de(con, a.id)
+    if not caso["propuesta_version"]:
+        sys.exit(f"case #{a.id} has no proposal to approve")
+    if a.version != caso["propuesta_version"]:
+        sys.exit(f"stale version: case #{a.id} is now at proposal version "
+                 f"{caso['propuesta_version']}, not {a.version}; the owner has to see "
+                 f"the current one before approving it")
+    if caso["propuesta_aprobada"] == a.version:
+        return [caso_fila(con, caso)]
+    if caso["etapa"] not in ETAPAS_APROBABLES:
+        sys.exit(f"case #{a.id} is in {caso['etapa']}: only a case in "
+                 f"{' or '.join(ETAPAS_APROBABLES)} can be approved")
+    detalle = f"aprobada {a.version}"
+    campos = {"propuesta_aprobada": a.version}
+    if json.loads(caso["propuesta"])["tipo"] == "trabajar":
+        caso_valida(caso, "trabajo")
+        caso_mover(con, caso, "trabajo", a.actor, detalle, **campos)
+    else:
+        caso_tocar(con, caso, a.actor, detalle, **campos)
     con.commit()
     return [caso_fila(con, caso_de(con, a.id))]
 
@@ -2320,6 +2409,24 @@ def main():
     c.add_argument("id", type=int); c.add_argument("--clase", required=True)
     c.add_argument("--prioridad", required=True, choices=list(PRIORIDADES_CASO))
     c.set_defaults(fn=cmd_caso_clasificar)
+
+    c = muta("propuesta", help="stores the proposal and moves the case to decision; "
+                               "prints its version (sha256 of the canonical JSON)")
+    c.add_argument("id", type=int)
+    c.add_argument("--tipo", required=True, choices=list(TIPOS_PROPUESTA))
+    c.add_argument("--respuesta", help="the reply text (required for responder)")
+    c.add_argument("--instrucciones", help="the work to do (required for trabajar)")
+    c.add_argument("--repo", help="where the work happens")
+    c.set_defaults(fn=cmd_caso_propuesta)
+
+    c = caso("aprobar", help="the owner's approval of ONE proposal version; refused if "
+                             "the current version is another one")
+    c.add_argument("id", type=int)
+    c.add_argument("--version", required=True,
+                   help="the propuesta_version the owner saw")
+    # Solo el dueno firma: un agente que aprobara lo suyo borraria el clic.
+    c.add_argument("--actor", required=True, choices=["dueno"])
+    c.set_defaults(fn=cmd_caso_aprobar)
 
     c = caso("listar", help="the cases of the active line, newest first")
     c.add_argument("--etapa", choices=list(ETAPAS_CASO)); c.add_argument("--chat")

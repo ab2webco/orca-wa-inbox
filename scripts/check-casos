@@ -10,6 +10,7 @@ re-propone cada cinco minutos, y "nada corre sin tu clic" depende de eso.
 Cada caso corre en su propio HOME temporal, como scripts/check-closing: la base vive en
 ~/.wa-inbox/scope.db y no hay variable para moverla.
 """
+import hashlib
 import json
 import os
 import pathlib
@@ -253,6 +254,172 @@ with tempfile.TemporaryDirectory() as home:
     ok("ni se mueve", corre(home, "caso", "mover", str(ajeno), "clasificado",
                             "--actor", "dueno").returncode != 0)
 
+
+
+# ── 3. La propuesta y la aprobacion congelada ────────────────────────────────────
+# Triage re-propone cada cinco minutos. Lo que el dueno aprueba es una VERSION, y una
+# aprobacion de una version que ya no es la vigente no puede escribir nada.
+def caso_clasificado(home, stanza="S1", chat=CHAT):
+    cid = str(js(home, "caso", "crear", "--chat", chat, "--stanza", stanza,
+                 "--actor", "agente")[0]["case_id"])
+    js(home, "caso", "clasificar", cid, "--clase", "revision", "--prioridad", "high",
+       "--actor", "agente")
+    return cid
+
+
+print("\nla propuesta")
+with tempfile.TemporaryDirectory() as home:
+    cid = caso_clasificado(home)
+    p = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+           "Ya lo revisamos, queda para hoy.", "--actor", "agente")[0]
+    v1 = p["propuesta_version"]
+    ok("proponer mueve clasificado -> decision y devuelve la version",
+       p["etapa"] == "decision" and bool(v1) and len(v1) == 64, f"quedo {p}")
+    ok("la propuesta queda guardada, con su tipo y su texto",
+       p["propuesta"] == {"tipo": "responder",
+                          "respuesta": "Ya lo revisamos, queda para hoy."},
+       f"propuesta {p['propuesta']}")
+    esperada = hashlib.sha256(json.dumps(
+        p["propuesta"], sort_keys=True, separators=(",", ":"),
+        ensure_ascii=False).encode()).hexdigest()
+    ok("la version es el sha256 del JSON canonico (llaves ordenadas, sin espacios)",
+       v1 == esperada, f"{v1} != {esperada}")
+    ev = js(home, "caso", "ver", cid)[0]["eventos"][-1]
+    ok("proponer deja su evento con el actor y la version",
+       ev["de"] == "clasificado" and ev["a"] == "decision" and ev["actor"] == "agente"
+       and v1 in ev["detalle"], f"evento {ev}")
+
+    antes = cuenta(home, "select count(*) from caso_evento")
+    otra = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+              "Ya lo revisamos, queda para hoy.", "--actor", "agente")[0]
+    ok("proponer lo mismo da la misma version", otra["propuesta_version"] == v1)
+    ok("y no escribe un evento por cada repaso de triage",
+       cuenta(home, "select count(*) from caso_evento") == antes)
+    ok("el orden de las banderas no cambia la version",
+       js(home, "caso", "propuesta", cid, "--actor", "agente", "--respuesta",
+          "Ya lo revisamos, queda para hoy.", "--tipo", "responder"
+          )[0]["propuesta_version"] == v1)
+
+    nueva = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+               "Lo vemos manana.", "--actor", "agente")[0]
+    ok("otro texto es otra version, y el caso sigue en decision",
+       nueva["propuesta_version"] != v1 and nueva["etapa"] == "decision")
+    ok("proponer sin tipo, o con un tipo desconocido, se rechaza",
+       corre(home, "caso", "propuesta", cid, "--actor", "agente").returncode != 0
+       and corre(home, "caso", "propuesta", cid, "--tipo", "volar", "--actor",
+                 "agente").returncode != 0)
+    ok("responder sin respuesta se rechaza",
+       corre(home, "caso", "propuesta", cid, "--tipo", "responder", "--actor",
+             "agente").returncode != 0)
+    ok("trabajar sin instrucciones se rechaza",
+       corre(home, "caso", "propuesta", cid, "--tipo", "trabajar", "--actor",
+             "agente").returncode != 0)
+    ok("proponer sin actor se rechaza",
+       corre(home, "caso", "propuesta", cid, "--tipo", "descartar").returncode != 0)
+
+    # Un caso sin clasificar no puede saltar a decision: la tabla de transiciones.
+    crudo = str(js(home, "caso", "crear", "--chat", CHAT, "--stanza", "S9",
+                   "--actor", "agente")[0]["case_id"])
+    p = corre(home, "caso", "propuesta", crudo, "--tipo", "descartar", "--actor",
+              "agente")
+    ok("desde recibido no se propone", p.returncode != 0 and "recibido" in p.stderr,
+       p.stderr.strip())
+
+print("\nla aprobacion congelada")
+with tempfile.TemporaryDirectory() as home:
+    cid = caso_clasificado(home)
+    v1 = js(home, "caso", "propuesta", cid, "--tipo", "trabajar", "--instrucciones",
+            "Corregir el login", "--repo", "ejemplo/app", "--actor", "agente"
+            )[0]["propuesta_version"]
+    p = js(home, "caso", "ver", cid)[0]
+    ok("el repo y las instrucciones van en la propuesta",
+       p["propuesta"] == {"tipo": "trabajar", "instrucciones": "Corregir el login",
+                          "repo": "ejemplo/app"}, f"propuesta {p['propuesta']}")
+    ok("sin aprobar no figura aprobada", p["aprobada"] is False)
+
+    # Triage re-propone mientras el dueno mira la tarjeta.
+    v2 = js(home, "caso", "propuesta", cid, "--tipo", "trabajar", "--instrucciones",
+            "Corregir el login y el registro", "--actor", "agente"
+            )[0]["propuesta_version"]
+    eventos = cuenta(home, "select count(*) from caso_evento")
+    p = corre(home, "caso", "aprobar", cid, "--version", v1, "--actor", "dueno")
+    ok("aprobar una version que ya no es la vigente sale distinto de cero",
+       p.returncode != 0 and "version" in p.stderr, f"salio {p.returncode}: {p.stderr}")
+    caso = js(home, "caso", "ver", cid)[0]
+    ok("y no escribe nada: ni evento, ni etapa, ni marca",
+       cuenta(home, "select count(*) from caso_evento") == eventos
+       and caso["etapa"] == "decision" and caso["aprobada"] is False
+       and caso["propuesta_version"] == v2, f"quedo {caso}")
+
+    ok("aprobar sin --version se rechaza",
+       corre(home, "caso", "aprobar", cid, "--actor", "dueno").returncode != 0)
+    ok("aprobar solo lo puede firmar el dueno",
+       corre(home, "caso", "aprobar", cid, "--version", v2, "--actor", "agente"
+             ).returncode != 0)
+
+    p = js(home, "caso", "aprobar", cid, "--version", v2, "--actor", "dueno")[0]
+    ok("aprobar la vigente de un trabajo pasa decision -> trabajo",
+       p["etapa"] == "trabajo" and p["aprobada"] is True, f"quedo {p}")
+    ev = js(home, "caso", "ver", cid)[0]["eventos"][-1]
+    ok("el evento guarda la version aprobada y al dueno",
+       ev["actor"] == "dueno" and ev["de"] == "decision" and ev["a"] == "trabajo"
+       and v2 in ev["detalle"], f"evento {ev}")
+    antes = cuenta(home, "select count(*) from caso_evento")
+    again = js(home, "caso", "aprobar", cid, "--version", v2, "--actor", "dueno")[0]
+    ok("aprobar dos veces lo mismo (doble clic) no escribe de nuevo",
+       again["etapa"] == "trabajo"
+       and cuenta(home, "select count(*) from caso_evento") == antes)
+    p = corre(home, "caso", "propuesta", cid, "--tipo", "descartar", "--actor",
+              "agente")
+    ok("con el trabajo en marcha ya no se re-propone", p.returncode != 0
+       and "trabajo" in p.stderr, p.stderr.strip())
+
+with tempfile.TemporaryDirectory() as home:
+    cid = caso_clasificado(home)
+    v1 = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+            "Listo, ya quedo.", "--actor", "agente")[0]["propuesta_version"]
+    p = js(home, "caso", "aprobar", cid, "--version", v1, "--actor", "dueno")[0]
+    ok("aprobar una respuesta solo deja la marca: enviar es del ejecutor",
+       p["etapa"] == "decision" and p["aprobada"] is True
+       and p["propuesta_aprobada"] == v1, f"quedo {p}")
+    v2 = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+            "Listo, ya quedo, gracias.", "--actor", "agente")[0]
+    ok("re-proponer distinto limpia la marca: lo aprobado era otra cosa",
+       v2["aprobada"] is False and v2["propuesta_aprobada"] is None, f"quedo {v2}")
+    ok("y la version vieja ya no se puede aprobar",
+       corre(home, "caso", "aprobar", cid, "--version", v1, "--actor", "dueno"
+             ).returncode != 0)
+
+    # Un caso que no esta esperando decision no se aprueba.
+    crudo = str(js(home, "caso", "crear", "--chat", CHAT, "--stanza", "S7",
+                   "--actor", "agente")[0]["case_id"])
+    ok("aprobar un caso sin propuesta se rechaza",
+       corre(home, "caso", "aprobar", crudo, "--version", v1, "--actor", "dueno"
+             ).returncode != 0)
+
+
+# Una base que ya creo `caso` con el primer commit del tablero, sin la marca de
+# aprobacion: tiene que ganar la columna sin perder el caso que ya tenia.
+print("\nla migracion de la marca de aprobacion")
+with tempfile.TemporaryDirectory() as home:
+    (pathlib.Path(home) / ".wa-inbox").mkdir(parents=True)
+    vieja = db_de(home)
+    vieja.executescript("""
+      create table caso (
+        case_id integer primary key autoincrement, account text not null default 'local',
+        chat_jid text not null, etapa text not null default 'recibido', clase text,
+        prioridad text, titulo text, resumen text, propuesta text,
+        propuesta_version text, plane_issue text, created_at text not null,
+        updated_at text not null);
+      insert into caso (account, chat_jid, etapa, clase, prioridad, created_at, updated_at)
+        values ('local', '%s', 'clasificado', 'revision', 'high',
+                '2026-01-01 08:00:00', '2026-01-01 08:00:00');
+    """ % CHAT)
+    vieja.commit()
+    vieja.close()
+    p = js(home, "caso", "propuesta", "1", "--tipo", "descartar", "--actor", "agente")
+    ok("la base con `caso` anterior gana la columna y sigue sirviendo",
+       p[0]["etapa"] == "decision" and p[0]["aprobada"] is False, f"quedo {p}")
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
