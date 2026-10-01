@@ -1317,6 +1317,10 @@ DEFAULT_CONFIG = {
     "owner_name": "",         # como se llama quien usa esto; el prompt lo usa
     # Como escribe el agente. Sin esto hereda el tono de quien escribio el prompt, que
     # es justo lo que no se quiere: el prompt lo escribio un dev, no la empresa.
+    # La regla de agrupacion de casos (kanban-casos): un mensaje se suma al caso abierto
+    # de su conversacion si ese caso se movio en las ultimas N horas. No sale al panel,
+    # como lock_ttl_s.
+    "case_window_hours": "12",
     "transcribe": "local",    # local | off | api. Local no manda el audio a ningun lado.
     "transcribe_model": "",   # vacio = lo decide la calidad; fijarlo pisa la calidad
     "transcribe_lang": "auto",    # los audios mezclan espanol e ingles
@@ -2260,6 +2264,52 @@ def cmd_caso_separar(con, a):
     return [caso_fila(con, caso_de(con, nuevo))]
 
 
+def ventana_casos(con):
+    """Las horas de la regla de agrupacion. Lo guardado ya paso por `valida_ajuste`; si
+    igual llega algo que no sirve, rige el arranque y no una ventana de cero."""
+    valor = merged_settings(con).get("case_window_hours")
+    if valida_ajuste("case_window_hours", valor):
+        valor = DEFAULT_CONFIG["case_window_hours"]
+    return int(str(valor).strip())
+
+
+def cmd_caso_asignar(con, a):
+    """La regla de agrupacion: el mensaje se suma al caso abierto (no cerrado) de su
+    conversacion que se movio en las ultimas N horas; si no hay, abre uno en recibido.
+
+    Sumarse a un caso `respondido` lo devuelve a `recibido`: el cliente volvio a
+    escribir y eso hay que leerlo. En cualquier otra etapa solo suma el mensaje y deja
+    el evento. Un mensaje ya asignado devuelve su caso sin escribir: triage repasa."""
+    cuenta = cuenta_activa()
+    ya = caso_de_mensaje(con, a.stanza)
+    if ya:
+        caso = caso_de(con, ya)
+        if caso["chat_jid"] != a.chat:
+            sys.exit(f"message {a.stanza} already belongs to case #{ya}, of another chat")
+        return [caso_fila(con, caso)]
+    desde = time.strftime("%Y-%m-%d %H:%M:%S",
+                          time.localtime(time.time() - ventana_casos(con) * 3600))
+    row = con.execute(
+        "select * from caso where account=? and chat_jid=? and etapa <> 'cerrado' "
+        "and updated_at >= ? order by updated_at desc, case_id desc limit 1",
+        (cuenta, a.chat, desde)).fetchone()
+    if not row:
+        case_id = caso_nuevo(con, a.chat, a.actor, stanzas=[a.stanza],
+                             detalle=f"mensaje {a.stanza}")
+        con.commit()
+        return [caso_fila(con, caso_de(con, case_id))]
+    caso = dict(row)
+    con.execute("insert into caso_mensaje (account, stanza_id, case_id, at) "
+                "values (?,?,?,?)", (cuenta, a.stanza, caso["case_id"], ahora_caso()))
+    if caso["etapa"] == "respondido":
+        caso_valida(caso, "recibido")
+        caso_mover(con, caso, "recibido", a.actor, f"mensaje {a.stanza}")
+    else:
+        caso_tocar(con, caso, a.actor, f"mensaje {a.stanza}")
+    con.commit()
+    return [caso_fila(con, caso_de(con, caso["case_id"]))]
+
+
 def cmd_caso_listar(con, a):
     sql, params = "select * from caso where account=?", [cuenta_activa()]
     if a.etapa:
@@ -2523,6 +2573,11 @@ def main():
     c = muta("separar", help="moves some messages of a case to a NEW case in recibido")
     c.add_argument("id", type=int); c.add_argument("stanzas", nargs="+")
     c.set_defaults(fn=cmd_caso_separar)
+
+    c = muta("asignar", help="the grouping rule: joins the open case of the same chat "
+                             "moved in the last case_window_hours, or opens a new one")
+    c.add_argument("stanza"); c.add_argument("--chat", required=True)
+    c.set_defaults(fn=cmd_caso_asignar)
 
     c = caso("listar", help="the cases of the active line, newest first")
     c.add_argument("--etapa", choices=list(ETAPAS_CASO)); c.add_argument("--chat")

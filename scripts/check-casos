@@ -618,6 +618,106 @@ with tempfile.TemporaryDirectory() as home:
        and cuenta(home, "select count(*) from caso_evento") == eventos)
 
 
+# ── 7. La regla de agrupacion ────────────────────────────────────────────────────
+# Un mensaje nuevo va al caso abierto de su conversacion si ese caso se movio en las
+# ultimas N horas (default 12); si no, abre uno. Cinco mensajes del mismo pedido son UNA
+# tarjeta, y el pedido de manana es otra.
+def envejece(home, cid, horas):
+    sello = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - horas * 3600))
+    con = db_de(home)
+    con.execute("update caso set updated_at=? where case_id=?", (sello, int(cid)))
+    con.commit()
+    con.close()
+
+
+def asigna(home, stanza, chat=CHAT):
+    return js(home, "caso", "asignar", stanza, "--chat", chat, "--actor", "agente")[0]
+
+
+print("\nla regla de agrupacion")
+with tempfile.TemporaryDirectory() as home:
+    ok("la ventana arranca en 12 horas",
+       js(home, "config", "case_window_hours")[0]["value"] == "12")
+    primero = asigna(home, "G1")
+    cid = str(primero["case_id"])
+    ok("el primer mensaje de una conversacion abre un caso en recibido",
+       primero["etapa"] == "recibido" and primero["mensajes"] == 1, f"creo {primero}")
+    envejece(home, cid, 11)
+    segundo = asigna(home, "G2")
+    ok("dentro de la ventana se suma al caso abierto",
+       str(segundo["case_id"]) == cid and segundo["mensajes"] == 2, f"quedo {segundo}")
+    ev = js(home, "caso", "ver", cid)[0]["eventos"][-1]
+    ok("sumarse deja un evento sin mover la etapa",
+       ev["de"] == "recibido" and ev["a"] == "recibido" and "G2" in ev["detalle"]
+       and ev["actor"] == "agente", f"evento {ev}")
+
+    antes = (cuenta(home, "select count(*) from caso"),
+             cuenta(home, "select count(*) from caso_evento"))
+    otra_vez = asigna(home, "G2")
+    ok("asignar un mensaje ya asignado devuelve su caso y no escribe",
+       str(otra_vez["case_id"]) == cid and antes ==
+       (cuenta(home, "select count(*) from caso"),
+        cuenta(home, "select count(*) from caso_evento")))
+
+    otro_chat = asigna(home, "G3", OTRO)
+    ok("otra conversacion abre su propio caso", str(otro_chat["case_id"]) != cid)
+
+    envejece(home, cid, 13)
+    fuera = asigna(home, "G4")
+    ok("fuera de la ventana abre un caso nuevo",
+       str(fuera["case_id"]) != cid and fuera["etapa"] == "recibido", f"quedo {fuera}")
+
+    js(home, "config", "case_window_hours", "24")
+    envejece(home, str(fuera["case_id"]), 30)
+    envejece(home, cid, 13)
+    ancha = asigna(home, "G5")
+    ok("la ventana configurada manda: con 24 horas, 13 todavia agrupa",
+       str(ancha["case_id"]) == cid, f"quedo {ancha}")
+
+with tempfile.TemporaryDirectory() as home:
+    cid = str(asigna(home, "R1")["case_id"])
+    con = db_de(home)
+    con.execute("update caso set etapa='respondido' where case_id=?", (int(cid),))
+    con.commit()
+    con.close()
+    r = asigna(home, "R2")
+    ok("sumarse a un caso respondido lo devuelve a recibido",
+       str(r["case_id"]) == cid and r["etapa"] == "recibido", f"quedo {r}")
+    ev = js(home, "caso", "ver", cid)[0]["eventos"][-1]
+    ok("con su evento respondido -> recibido",
+       ev["de"] == "respondido" and ev["a"] == "recibido" and "R2" in ev["detalle"],
+       f"evento {ev}")
+
+    con = db_de(home)
+    con.execute("update caso set etapa='trabajo' where case_id=?", (int(cid),))
+    con.commit()
+    con.close()
+    t = asigna(home, "R3")
+    ok("sumarse a un caso en otra etapa no la cambia",
+       str(t["case_id"]) == cid and t["etapa"] == "trabajo", f"quedo {t}")
+
+    js(home, "caso", "mover", cid, "cerrado", "--motivo", "resuelto", "--actor", "dueno")
+    c = asigna(home, "R4")
+    ok("un caso cerrado, aunque sea reciente, no recibe mensajes",
+       str(c["case_id"]) != cid, f"quedo {c}")
+
+    # Un caso de OTRA linea, de la misma conversacion y recien movido, no existe aca.
+    con = db_de(home)
+    con.execute("insert into caso (account, chat_jid, etapa, created_at, updated_at) "
+                "values ('pn:573000000001', ?, 'recibido', ?, ?)",
+                (OTRO, time.strftime("%Y-%m-%d %H:%M:%S"),
+                 time.strftime("%Y-%m-%d %H:%M:%S")))
+    ajeno = con.execute("select max(case_id) from caso").fetchone()[0]
+    con.commit()
+    con.close()
+    propio = asigna(home, "R5", OTRO)
+    ok("la agrupacion no se suma a un caso de otra linea",
+       propio["case_id"] != ajeno and propio["account"] == "local", f"quedo {propio}")
+    ok("asignar sin --chat o sin actor se rechaza",
+       corre(home, "caso", "asignar", "R6", "--actor", "agente").returncode != 0
+       and corre(home, "caso", "asignar", "R6", "--chat", CHAT).returncode != 0)
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

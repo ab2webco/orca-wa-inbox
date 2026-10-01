@@ -80,6 +80,12 @@ AJUSTES = [
     (["config", "capture_max", "muchos"], False, "500"),
     (["config", "capture_days", "7"], True, "7"),
     (["config", "capture_days", "siempre"], False, "7"),
+    # La ventana de la regla de agrupacion de casos. Cero o negativa no agruparia nunca
+    # y abriria una tarjeta por mensaje: se rechaza al guardarse.
+    (["config", "case_window_hours", "24"], True, "24"),
+    (["config", "case_window_hours", "0"], False, "24"),
+    (["config", "case_window_hours", "-3"], False, "24"),
+    (["config", "case_window_hours", "medio dia"], False, "24"),
 ]
 
 # Con que arranca cada ajuste de la via web en una instalacion nueva. Van aca y no en un

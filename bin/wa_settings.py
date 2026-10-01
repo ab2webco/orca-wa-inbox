@@ -284,7 +284,10 @@ CONFIG_OPCIONES = {
     "transcribe_lang": ("auto", "es", "en", "pt"),
 }
 CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s", "sync_minutes",
-                    "capture_max", "capture_days")
+                    "capture_max", "capture_days", "case_window_hours")
+# Los numericos que ademas tienen que ser mayores que cero. Una ventana de agrupacion de
+# cero horas no agrupa nunca: abre una tarjeta por mensaje sin decir por que.
+CONFIG_POSITIVOS = ("case_window_hours",)
 
 
 def valida_ajuste(key, value):
@@ -293,9 +296,11 @@ def valida_ajuste(key, value):
         return f"{key} only accepts: {', '.join(CONFIG_OPCIONES[key])}"
     if key in CONFIG_NUMERICOS:
         try:
-            int(str(value).strip())
+            numero = int(str(value).strip())
         except (TypeError, ValueError):
             return f"{key} has to be a whole number, not {value!r}"
+        if key in CONFIG_POSITIVOS and numero <= 0:
+            return f"{key} has to be greater than zero, not {value!r}"
     return None
 
 
