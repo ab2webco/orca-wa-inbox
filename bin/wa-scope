@@ -11,6 +11,7 @@ agent. With hundreds of groups, permission has to be an explicit allowlist.
   wa-scope check <chat> [--for responder]   the gate: exit 0 = authorized
   wa-scope voice <chat>               tone, instructions, provider and permission there
   wa-scope closing                    closed cards its conversation does not know about
+  wa-scope ingest                     new messages -> cases, in code, no agent
   wa-scope run                        how the last run went, and over how many chats
   wa-scope log [-n 50]                what the agent did, and where
 
@@ -334,6 +335,11 @@ create table if not exists caso (
   -- ya no vale, sin que nadie tenga que acordarse de borrarla.
   propuesta_aprobada text,
   plane_issue text,
+  -- A donde iria la tarjeta, como lo resolvio `where` al llegar el mensaje: JSON con
+  -- provider, target, why y matched (la regla de contenido que lo decidio, si hubo
+  -- una). `ninguno` y "sin destino" quedan dichos tal cual, con target null; null en la
+  -- columna es "todavia no se enruto".
+  ruta text,
   created_at text not null,
   updated_at text not null
 );
@@ -936,6 +942,8 @@ def migrate(con):
     caso_cols = {r["name"] for r in con.execute("pragma table_info(caso)")}
     if "propuesta_aprobada" not in caso_cols:
         con.execute("alter table caso add column propuesta_aprobada text")
+    if "ruta" not in caso_cols:
+        con.execute("alter table caso add column ruta text")
     work_cols = {r["name"] for r in con.execute("pragma table_info(work)")}
     if "notified_at" not in work_cols:
         con.execute("alter table work add column notified_at text")
@@ -2066,6 +2074,7 @@ def caso_fila(con, row):
     agrupa."""
     caso = dict(row)
     caso["propuesta"] = json.loads(caso["propuesta"]) if caso.get("propuesta") else None
+    caso["ruta"] = json.loads(caso["ruta"]) if caso.get("ruta") else None
     # Lo que el ejecutor lee: aprobada es "la version vigente ES la que firmo el dueno".
     caso["aprobada"] = bool(caso.get("propuesta_aprobada")
                             and caso["propuesta_aprobada"] == caso.get("propuesta_version"))
@@ -2369,34 +2378,53 @@ def cmd_caso_asignar(con, a):
     escribir y eso hay que leerlo. En cualquier otra etapa solo suma el mensaje y deja
     el evento. Un mensaje ya asignado devuelve su caso sin escribir: triage repasa."""
     caso_toma(con)
-    cuenta = cuenta_activa()
-    ya = caso_de_mensaje(con, a.stanza)
+    case_id, _ = caso_asigna(con, a.stanza, a.chat, a.actor)
+    con.commit()
+    return [caso_fila(con, caso_de(con, case_id))]
+
+
+def caso_abierto_de_chat(con, chat, horas, excluir=("cerrado",)):
+    """El caso de la conversacion que se movio en las ultimas `horas` y no esta en una de
+    las etapas `excluir`, o None. El mas reciente si hay varios."""
+    desde = time.strftime("%Y-%m-%d %H:%M:%S",
+                          time.localtime(time.time() - horas * 3600))
+    marcas = ",".join("?" * len(excluir))
+    row = con.execute(
+        f"select * from caso where account=? and chat_jid=? and etapa not in ({marcas}) "
+        "and updated_at >= ? order by updated_at desc, case_id desc limit 1",
+        (cuenta_activa(), chat, *excluir, desde)).fetchone()
+    return dict(row) if row else None
+
+
+def caso_asigna(con, stanza, chat, actor):
+    """La regla de agrupacion, sin transaccion propia: la comparten el comando y
+    `ingest`, y cada uno toma la base y confirma a su manera. Devuelve (case_id, que):
+    `ya` si el mensaje ya tenia caso, `nuevo` si abrio uno, `unido` si se sumo a uno."""
+    ya = caso_de_mensaje(con, stanza)
     if ya:
         caso = caso_de(con, ya)
-        if caso["chat_jid"] != a.chat:
-            sys.exit(f"message {a.stanza} already belongs to case #{ya}, of another chat")
-        return [caso_fila(con, caso)]
-    desde = time.strftime("%Y-%m-%d %H:%M:%S",
-                          time.localtime(time.time() - ventana_casos(con) * 3600))
-    row = con.execute(
-        "select * from caso where account=? and chat_jid=? and etapa <> 'cerrado' "
-        "and updated_at >= ? order by updated_at desc, case_id desc limit 1",
-        (cuenta, a.chat, desde)).fetchone()
-    if not row:
-        case_id = caso_nuevo(con, a.chat, a.actor, stanzas=[a.stanza],
-                             detalle=f"mensaje {a.stanza}")
-        con.commit()
-        return [caso_fila(con, caso_de(con, case_id))]
-    caso = dict(row)
+        if caso["chat_jid"] != chat:
+            sys.exit(f"message {stanza} already belongs to case #{ya}, of another chat")
+        return ya, "ya"
+    caso = caso_abierto_de_chat(con, chat, ventana_casos(con))
+    if not caso:
+        return caso_nuevo(con, chat, actor, stanzas=[stanza],
+                          detalle=f"mensaje {stanza}"), "nuevo"
+    caso_suma_mensaje(con, caso, stanza, actor)
+    return caso["case_id"], "unido"
+
+
+def caso_suma_mensaje(con, caso, stanza, actor, reabre=True):
+    """Un mensaje mas en un caso abierto, con su evento. Un caso `respondido` vuelve a
+    `recibido` (el cliente escribio otra vez) salvo que `reabre` sea False."""
     con.execute("insert into caso_mensaje (account, stanza_id, case_id, at) "
-                "values (?,?,?,?)", (cuenta, a.stanza, caso["case_id"], ahora_caso()))
-    if caso["etapa"] == "respondido":
+                "values (?,?,?,?)", (cuenta_activa(), stanza, caso["case_id"],
+                                     ahora_caso()))
+    if reabre and caso["etapa"] == "respondido":
         caso_valida(caso, "recibido")
-        caso_mover(con, caso, "recibido", a.actor, f"mensaje {a.stanza}")
+        caso_mover(con, caso, "recibido", actor, f"mensaje {stanza}")
     else:
-        caso_tocar(con, caso, a.actor, f"mensaje {a.stanza}")
-    con.commit()
-    return [caso_fila(con, caso_de(con, caso["case_id"]))]
+        caso_tocar(con, caso, actor, f"mensaje {stanza}")
 
 
 def cmd_caso_listar(con, a):
@@ -2420,6 +2448,236 @@ def cmd_caso_ver(con, a):
         "select id, de, a, actor, detalle, at from caso_evento where case_id=? "
         "order by id", (a.id,))]
     return [caso]
+
+
+# ── La entrada: de un mensaje que llega a un caso, sin despertar al agente ──────────
+# (kanban-casos, "Giro", T2). Todo lo estructurado —agrupar, deduplicar, lo que el dueno
+# ya decidio, lo que el agente ya juzgo, lo determinista, la ruta— es codigo y corre apenas
+# llega el mensaje; al agente le quedan los casos que necesitan lenguaje.
+
+# Un audio no se oye: el cuerpo vacio mas un adjunto con una de estas extensiones es la
+# nota de voz que CLASSIFICATION.md manda dejar como dudosa.
+EXTENSIONES_AUDIO = (".opus", ".ogg", ".oga", ".mp3", ".m4a", ".aac", ".wav", ".amr")
+# Lo que ingest reporta, en este orden. `casos` va aparte: son los ids tocados.
+CONTEOS_INGEST = ("vistos", "nuevos", "casos_creados", "unidos", "cerrados", "dudosos",
+                  "sin_caso", "ignorados")
+# La prioridad de un caso que ingest clasifica. No la inventa: ni el dueno ni un veredicto
+# cacheado dicen cuan urgente es, y `none` es la unica que no afirma nada.
+PRIORIDAD_INGEST = "none"
+
+
+def jev_juzga(mensaje):
+    """El enchufe de Jev (T3): un veredicto por mensaje, que ingest pide SOLO cuando ni el
+    dueno, ni el cache, ni una regla determinista lo resolvieron. T3 la llena: una
+    llamada, el resultado cacheado en `juicio` (`wa-scope juicio --origen jev`) y devuelto
+    con la forma de `veredicto_de` (`accion`, `clase`, `actor`, `detalle`).
+
+    En T2 no opina: devuelve None, que es "sin veredicto" — el caso queda en `recibido` y
+    lo clasifica el agente, como siempre. Jev puede frenar y escalar, nunca habilitar: por
+    eso un None —sin llave, con error o con timeout— nunca es una razon para cerrar."""
+    return None
+
+
+def veredicto_de(m, decision):
+    """Que hacer con un mensaje antes de agruparlo, o None si nada lo resuelve.
+
+    El orden es la autoridad de quien lo dijo: el dueno manda; despues un juicio que ya
+    se hizo mirando el mensaje (el cache); despues lo que se sabe sin mirar (cuerpo
+    vacio); y recien al final, Jev. Un cuerpo vacio no pisa un juicio cacheado: el agente
+    pudo haber leido el adjunto, y esta regla no."""
+    if decision == "ignore":
+        return {"accion": "cerrar", "actor": "dueno", "dueno": True,
+                "motivo": "ignorado por el dueno"}
+    if decision == "take":
+        return {"accion": "clasificar", "clase": "card", "actor": "dueno",
+                "detalle": "tomado por el dueno"}
+    juicio = m.get("juicio")
+    if juicio:
+        if juicio["clase"] == "nothing":
+            return {"accion": "cerrar", "actor": juicio["origen"],
+                    "motivo": "nada que atender (veredicto en cache)"}
+        return {"accion": "clasificar", "clase": juicio["clase"], "actor": juicio["origen"],
+                "detalle": "veredicto en cache"}
+    if m.get("kind") != "grupo" and not (m.get("text") or "").strip():
+        ruta = (m.get("media") or "").lower()
+        audio = ruta.endswith(EXTENSIONES_AUDIO)
+        return {"accion": "clasificar", "clase": "doubtful", "actor": "automatizacion",
+                "detalle": "sin texto: audio" if audio else "sin texto"}
+    return jev_juzga(m)
+
+
+def ingest_lee():
+    """Lo que `wa-read inbox` le daria al agente, con la misma funcion y los mismos
+    filtros, pero sin un proceso mas por el medio. Solo lectura: de capture.db no se
+    escribe nada."""
+    fuente = wa_store.abrir()
+    try:
+        dias = wa_store.entero(wa_store.ajustes(), "inbox_days")
+        return wa_store.inbox(fuente, dias, 500, 5, "todos",
+                              wa_store.linea_activa(fuente))
+    finally:
+        fuente.close()
+
+
+def caso_enruta(con, case_id, texto, chat):
+    """Guarda en el caso a donde iria su tarjeta, con la misma logica de `where`. El
+    destino del chat se guarda al primer mensaje; despues solo lo cambia una regla de
+    CONTENIDO distinta de la que ya lo decidio: el contenido manda sobre el chat, y el
+    primer mensaje que nombra a un cliente no se pisa con una linea cualquiera."""
+    caso = caso_de(con, case_id)
+    if caso["etapa"] == "cerrado":
+        return False
+    destino = resolve_target(con, texto, chat)
+    nueva = {"provider": destino["provider"], "target": destino["target"],
+             "why": destino["why"], "matched": destino["matched"]}
+    actual = json.loads(caso["ruta"]) if caso["ruta"] else None
+    if actual is not None and (not nueva["matched"]
+                               or nueva["matched"] == actual.get("matched")):
+        return False
+    caso_tocar(con, caso, "automatizacion",
+               f"ruta {nueva['provider'] or 'sin destino'}:{nueva['target'] or '-'}",
+               ruta=json.dumps(nueva, ensure_ascii=False, sort_keys=True))
+    return True
+
+
+def caso_clasifica(con, case_id, veredicto):
+    """Aplica una clasificacion de ingest. Desde `recibido` clasifica; un caso que ya es
+    `clasificado` solo mejora de dudoso a firme y nunca al reves. Cualquier otra etapa
+    ya tiene un dueno de la decision (propuesta, trabajo, respuesta) y un mensaje mas no
+    la cambia. Devuelve si escribio."""
+    caso = caso_de(con, case_id)
+    clase = veredicto["clase"]
+    detalle = f"{clase} · {PRIORIDAD_INGEST} · {veredicto['detalle']}"
+    if caso["etapa"] == "recibido":
+        caso_valida(caso, "clasificado")
+        caso_mover(con, caso, "clasificado", veredicto["actor"], detalle, clase=clase,
+                   prioridad=PRIORIDAD_INGEST)
+        return True
+    if (caso["etapa"] == "clasificado" and caso["clase"] == "doubtful"
+            and clase != "doubtful"):
+        caso_tocar(con, caso, veredicto["actor"], detalle, clase=clase,
+                   prioridad=PRIORIDAD_INGEST)
+        return True
+    return False
+
+
+def ingest_mensaje(con, m, veredicto, horas):
+    """Un mensaje nuevo, en SU transaccion: o queda todo (caso, ruta, clasificacion,
+    eventos) o nada, y la fila de `caso_mensaje` es lo que hace que un reintento no lo
+    repita. Devuelve los conteos de lo que hizo y el caso tocado."""
+    hecho = dict.fromkeys(CONTEOS_INGEST, 0)
+    stanza, chat = m["stanza_id"], m["chat_jid"]
+    suelto = m.get("kind") == "grupo"
+    caso_toma(con)
+    try:
+        # Con la base ya tomada: otro `ingest` pudo llegar a este mensaje entre la
+        # lectura y ahora, y asignarlo dos veces es justo lo que el dedupe impide.
+        if caso_de_mensaje(con, stanza):
+            con.rollback()
+            return hecho, None
+        accion = veredicto["accion"] if veredicto else None
+        if accion == "cerrar" and not (suelto and not veredicto.get("dueno")):
+            # Lo que se descarta no se mezcla con el pedido de otro: abre su propio caso
+            # y lo cierra. Sumarlo a uno abierto lo cerraria entero, o reabriria uno
+            # respondido porque el cliente dijo "gracias".
+            case_id = caso_nuevo(con, chat, "automatizacion", stanzas=[stanza],
+                                 detalle=f"mensaje {stanza}")
+            caso = caso_de(con, case_id)
+            caso_valida(caso, "cerrado", veredicto["motivo"])
+            caso_mover(con, caso, "cerrado", veredicto["actor"], veredicto["motivo"])
+            hecho.update(nuevos=1, casos_creados=1, cerrados=1,
+                         ignorados=1 if veredicto.get("dueno") else 0)
+        elif accion == "cerrar":
+            # Una linea suelta que el agente ya juzgo "nada": no hay nada que casar.
+            hecho["sin_caso"] = 1
+            con.rollback()
+            return hecho, None
+        elif suelto and accion is None:
+            caso = caso_abierto_de_chat(con, chat, horas, ("cerrado", "respondido"))
+            # Se suma solo si el mensaje tambien es de la ventana: una linea de ayer no
+            # entra a un caso de hoy.
+            edad = antiguedad_min(m.get("date"))
+            if not caso or edad is None or edad > horas * 60:
+                hecho["sin_caso"] = 1
+                con.rollback()
+                return hecho, None
+            caso_suma_mensaje(con, caso, stanza, "automatizacion", reabre=False)
+            hecho.update(nuevos=1, unidos=1)
+            case_id = caso["case_id"]
+        else:
+            case_id, que = caso_asigna(con, stanza, chat, "automatizacion")
+            hecho.update(nuevos=1, casos_creados=int(que == "nuevo"),
+                         unidos=int(que == "unido"))
+            caso_enruta(con, case_id, m.get("text") or "", chat)
+            if accion == "clasificar" and caso_clasifica(con, case_id, veredicto):
+                hecho["dudosos"] = int(veredicto["clase"] == "doubtful")
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+    return hecho, case_id
+
+
+def cmd_ingest(con, a):
+    """Los mensajes nuevos de las conversaciones autorizadas pasan a casos.
+
+    Lee lo mismo que el agente (`wa-read inbox`) y lo que no esta en `caso_mensaje` lo
+    resuelve en este orden: lo que el dueno marco en el panel, el juicio que el agente ya
+    cacheo, las reglas deterministas (cuerpo vacio o solo audio: dudoso), y Jev (T3, hoy
+    no opina). Lo que nada resuelve queda en `recibido` para el agente.
+
+    Cada mensaje es una transaccion: repetirlo no cambia nada y no escribe eventos.
+    Deny by default: una conversacion que no esta en el alcance, o esta en `off`, no
+    existe para esto. Una linea suelta de un grupo (`kind` grupo, que no nombra ni cita al
+    dueno) no abre caso: se suma al caso abierto de ese grupo si lo hay y es de la
+    ventana, y si no queda sin caso — se cuenta en `sin_caso` y el agente la ve en la
+    bandeja como siempre. Las suyas se procesan DESPUES de las que si abren caso, para
+    que un lote con una mencion y su chat alrededor sea un solo caso y no dos."""
+    cuenta = cuenta_activa()
+    total = dict.fromkeys(CONTEOS_INGEST, 0)
+    casos = set()
+    try:
+        mensajes = ingest_lee()
+    except wa_store.SinFuente as exc:
+        return [dict(total, casos=[], sin_fuente=exc.reason)]
+    scope = merged_scope(con)
+    decisiones = decisions_read()
+    horas = ventana_casos(con)
+    abren, sueltos = [], []
+    # Del mas viejo al mas nuevo: el inbox viene al reves, y el primero de un pedido es
+    # el que abre el caso.
+    for m in reversed(mensajes):
+        entrada = scope.get(m.get("chat_jid"))
+        if m.get("account") != cuenta or not entrada or entrada.get("mode") == "off":
+            continue
+        total["vistos"] += 1
+        if caso_de_mensaje(con, m["stanza_id"]):
+            continue
+        veredicto = veredicto_de(m, (decisiones.get(m["stanza_id"]) or {}).get("decision"))
+        if m.get("kind") == "grupo" and veredicto is None:
+            sueltos.append((m, veredicto))
+        else:
+            abren.append((m, veredicto))
+    for m, veredicto in abren + sueltos:
+        hecho, case_id = ingest_mensaje(con, m, veredicto, horas)
+        for k, v in hecho.items():
+            total[k] += v
+        if case_id is not None:
+            casos.add(case_id)
+    return [dict(total, casos=sorted(casos))]
+
+
+def cmd_sync(con, a):
+    """Deja el tablero y el panel al dia. La entrada corre primero —es local y barata— y
+    una falla suya no puede dejar sin sync al panel: se dice y se sigue."""
+    try:
+        cmd_ingest(con, a)
+    except (sqlite3.Error, OSError) as exc:
+        print(f"wa-scope: ingest skipped: {exc}", file=sys.stderr)
+    except SystemExit as exc:
+        print(f"wa-scope: ingest skipped: {exc.code}", file=sys.stderr)
+    return [{"synced": push_to_plugin(con, with_activity=True),
+             "destinos": plugin_store_targets()}]
 
 
 def cmd_record(con, a):
@@ -2563,9 +2821,15 @@ def main():
     s = add("agent", help="see or set your agent's name")
     s.add_argument("name", nargs="?"); s.set_defaults(fn=cmd_agent)
 
-    s = add("sync", help="pushes registry, name and activity to the plugin panel")
-    s.set_defaults(fn=lambda con, a: [{"synced": push_to_plugin(con, with_activity=True),
-                                       "destinos": plugin_store_targets()}])
+    s = add("ingest", help="new messages of the authorized chats become cases: the owner's "
+                           "decisions, the cached verdict and the deterministic rules "
+                           "applied in code, no agent; idempotent. Prints the counts "
+                           "and the touched case ids")
+    s.set_defaults(fn=cmd_ingest)
+
+    s = add("sync", help="runs ingest, then pushes registry, name and activity to the "
+                         "plugin panel")
+    s.set_defaults(fn=cmd_sync)
 
     s = add("log"); s.add_argument("-n", type=int, default=50)
     s.set_defaults(fn=cmd_log)

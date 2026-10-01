@@ -17,6 +17,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -506,6 +507,10 @@ with tempfile.TemporaryDirectory() as home:
     p = js(home, "caso", "propuesta", "1", "--tipo", "descartar", "--actor", "agente")
     ok("la base con `caso` anterior gana la columna y sigue sirviendo",
        p[0]["etapa"] == "decision" and p[0]["aprobada"] is False, f"quedo {p}")
+    ok("y gana tambien la ruta, todavia sin enrutar",
+       p[0]["ruta"] is None and cuenta(home, "select count(*) from pragma_table_info"
+                                             "('caso') where name='ruta'") == 1,
+       f"quedo {p}")
 
 
 # ── 4. El resultado del trabajador ───────────────────────────────────────────────
@@ -999,6 +1004,365 @@ with tempfile.TemporaryDirectory() as home:
        f"quedo {propio}")
     ok("un mensaje de la otra linea se puede asignar tambien en esta",
        asigna(home, "K1")["account"] == NUEVA)
+
+
+
+# ── 10. La entrada: `wa-scope ingest` ────────────────────────────────────────────
+# Lo estructurado (agrupar, deduplicar, clasificar lo determinista, enrutar, aplicar lo
+# que decidio el dueno) deja de ser trabajo del agente y corre en codigo apenas llega el
+# mensaje (kanban-casos, T2). Se ejercita contra un capture.db armado por el escritor de
+# verdad, el sidecar: el esquema es suyo y copiarlo a mano es como se desincroniza.
+A = "pn:573000000001"
+B = "pn:573000000002"
+PN = {A: "573000000001:7@s.whatsapp.net", B: "573000000002:7@s.whatsapp.net"}
+SOPORTE = "120363000000000001@g.us"
+OPERACIONES = "120363000000000003@g.us"
+FACTURACION = "120363000000000004@g.us"
+PERSONA = "573000000002@s.whatsapp.net"
+NODE = shutil.which("node")
+
+ALMACEN_JS = """
+import { abrirAlmacen, rutaAlmacen } from %r;
+const d = JSON.parse(process.env.DATOS);
+const a = abrirAlmacen(rutaAlmacen({ HOME: process.env.HOME }));
+a.registrarLinea({ cuenta: d.cuenta, pn: d.pn, nombre: 'Prueba' });
+for (const c of d.chats) {
+  a.anotarChat({ cuenta: d.cuenta, chatJid: c.jid, nombre: c.nombre, esGrupo: c.grupo ? 1 : 0 });
+}
+for (const m of d.mensajes) {
+  a.guardarMensaje({ cuenta: d.cuenta, chatJid: m.chat, stanzaId: m.id, ts: m.ts,
+    fromMe: m.yo ? 1 : 0, senderJid: m.de || null, senderName: m.nombre || 'Ana',
+    body: m.texto || '', mediaTipo: m.media || null, mediaBytes: null,
+    mencionaMe: m.mencion ? 1 : 0, citaMe: m.cita ? 1 : 0 }, { mediaPath: m.ruta || null });
+}
+if (d.activar) a.activarLinea(d.cuenta);
+a.latir(); a.cerrar();
+""" % (RAIZ / "sidecar" / "src" / "almacen.js").as_uri()
+
+AJENO = "120363000000000009@g.us"
+CHATS = [{"jid": SOPORTE, "nombre": "Soporte Norte", "grupo": True},
+         {"jid": AJENO, "nombre": "Sin autorizar", "grupo": True},
+         {"jid": OPERACIONES, "nombre": "Operaciones", "grupo": True},
+         {"jid": FACTURACION, "nombre": "Facturacion", "grupo": True},
+         {"jid": PERSONA, "nombre": "Cliente Uno", "grupo": False}]
+
+
+def msg(chat, mid, texto="", minutos=1, **extra):
+    """Un mensaje que llego hace `minutos`. Por defecto es una linea suelta del chat."""
+    return dict(chat=chat, id=mid, texto=texto, ts=int(time.time() - minutos * 60), **extra)
+
+
+def llegan(home, cuenta, mensajes, activar=True):
+    env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+               APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"),
+               DATOS=json.dumps({"cuenta": cuenta, "pn": PN[cuenta], "chats": CHATS,
+                                 "mensajes": mensajes, "activar": activar}))
+    (pathlib.Path(home) / ".wa-inbox").mkdir(parents=True, exist_ok=True)
+    subprocess.run([NODE, "--input-type=module", "-e", ALMACEN_JS], env=env, check=True,
+                   capture_output=True, timeout=120)
+
+
+def storage_de(home):
+    man = json.loads((RAIZ / "orca-plugin.json").read_text(encoding="utf-8"))
+    base = (pathlib.Path(home) / "Library" / "Application Support" / "orca"
+            if sys.platform == "darwin" else pathlib.Path(home) / ".config" / "orca")
+    return base / "plugins-data" / f"{man['publisher']}.{man['id']}" / "storage.json"
+
+
+def decide(home, stanza, decision, cuenta):
+    """Lo que el panel deja en storage cuando el dueno aprieta Tomar o Ignorar."""
+    ruta = storage_de(home)
+    datos = json.loads(ruta.read_text(encoding="utf-8")) if ruta.exists() else {}
+    datos.setdefault("decisions", {})[stanza] = {
+        "decision": decision, "at": "2026-10-01 09:00", "account": cuenta}
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    ruta.write_text(json.dumps(datos), encoding="utf-8")
+
+
+def ingiere(home):
+    return js(home, "ingest")[0]
+
+
+def caso_de_stanza(home, stanza):
+    fila = db_de(home).execute(
+        "select case_id from caso_mensaje where stanza_id=?", (stanza,)).fetchone()
+    return js(home, "caso", "ver", str(fila["case_id"]))[0] if fila else None
+
+
+def evento(caso, a):
+    """El evento con que el caso llego a la etapa `a`: el ultimo no es una llave estable,
+    porque la ruta tambien deja el suyo."""
+    return next(e for e in caso["eventos"] if e["a"] == a and e["de"] != a)
+
+
+def autoriza(home):
+    js(home, "set", SOPORTE, "--provider", "plane", "--target", "SOP", "--mode", "borrador")
+    js(home, "set", OPERACIONES, "--provider", "plane", "--target", "OPS", "--mode", "observar")
+    js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "observar")
+    js(home, "set", FACTURACION, "--provider", "plane", "--target", "FAC", "--mode", "observar")
+
+
+print("\nla entrada")
+if not NODE:
+    print("  aviso: sin node, no se armo el almacen de mensajes", file=sys.stderr)
+else:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "E0", "@duenio revisa el login", 50, mencion=True)])
+        autoriza(home)
+        # Un chat que nadie autorizo: el almacen solo guarda lo autorizado, pero la
+        # compuerta vive tambien aca (deny by default) y se prueba con una fila que se
+        # cuela sin autorizacion.
+        llegan(home, A, [msg(AJENO, "X1", "hola", 40, mencion=True)])
+        r = ingiere(home)
+        ok("un chat sin autorizar se ignora: ni caso ni evento",
+           cuenta(home, "select count(*) from caso where chat_jid=?", AJENO) == 0
+           and cuenta(home, "select count(*) from caso_mensaje where stanza_id='X1'") == 0,
+           f"salio {r}")
+        js(home, "mode", OPERACIONES, "off")
+        llegan(home, A, [msg(OPERACIONES, "X2", "hola", 30, mencion=True)])
+        ingiere(home)
+        ok("un chat en off se ignora igual",
+           cuenta(home, "select count(*) from caso_mensaje where stanza_id='X2'") == 0)
+        js(home, "mode", OPERACIONES, "observar")
+
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "M1", "@duenio revisa el login", 50, mencion=True)])
+        autoriza(home)
+        r = ingiere(home)
+        ok("el reporte cuenta lo visto, lo nuevo y lo creado",
+           r["vistos"] == 1 and r["nuevos"] == 1 and r["casos_creados"] == 1
+           and r["unidos"] == 0 and r["cerrados"] == 0 and r["dudosos"] == 0
+           and r["sin_caso"] == 0 and r["ignorados"] == 0, f"salio {r}")
+        c = caso_de_stanza(home, "M1")
+        ok("una mencion abre un caso en recibido con su mensaje",
+           c and c["etapa"] == "recibido" and c["chat_jid"] == SOPORTE
+           and c["account"] == A and len(c["mensajes"]) == 1, f"caso {c}")
+        ok("el reporte nombra el caso tocado", r["casos"] == [c["case_id"]], f"salio {r}")
+        ev = c["eventos"]
+        ok("el nacimiento deja su evento, de la automatizacion",
+           len(ev) >= 1 and ev[0]["de"] is None and ev[0]["a"] == "recibido"
+           and ev[0]["actor"] == "automatizacion", f"eventos {ev}")
+        ruta = db_de(home).execute("select ruta from caso where case_id=?",
+                                   (c["case_id"],)).fetchone()["ruta"]
+        ok("la ruta del caso queda guardada, la del destino del chat",
+           json.loads(ruta)["provider"] == "plane" and json.loads(ruta)["target"] == "SOP",
+           f"ruta {ruta}")
+        ok("y el evento de la ruta dice que se enruto",
+           any("ruta" in e["detalle"] for e in c["eventos"]), f"eventos {ev}")
+
+        eventos, casos = (cuenta(home, "select count(*) from caso_evento"),
+                          cuenta(home, "select count(*) from caso"))
+        r2 = ingiere(home)
+        ok("correrlo otra vez no cambia nada y no escribe eventos",
+           r2["nuevos"] == 0 and r2["casos_creados"] == 0 and r2["casos"] == []
+           and cuenta(home, "select count(*) from caso_evento") == eventos
+           and cuenta(home, "select count(*) from caso") == casos, f"salio {r2}")
+
+        # Una cita al dueno (respuesta) y un directo: tambien son suyos.
+        llegan(home, A, [msg(SOPORTE, "M2", "sigue fallando", 45, cita=True),
+                         msg(PERSONA, "D1", "hola, tienen un minuto?", 44)])
+        r = ingiere(home)
+        c1 = caso_de_stanza(home, "M1")
+        ok("una respuesta al dueno se une al caso abierto de su chat",
+           caso_de_stanza(home, "M2")["case_id"] == c1["case_id"]
+           and len(caso_de_stanza(home, "M1")["mensajes"]) == 2 and r["unidos"] == 1
+           and r["casos_creados"] == 1, f"salio {r}")
+        d = caso_de_stanza(home, "D1")
+        ok("un directo abre su propio caso",
+           d["chat_jid"] == PERSONA and d["etapa"] == "recibido", f"caso {d}")
+        ruta_d = json.loads(db_de(home).execute(
+            "select ruta from caso where case_id=?", (d["case_id"],)).fetchone()["ruta"])
+        ok("una conversacion en ninguno deja la ruta como ninguno, sin destino",
+           ruta_d["provider"] == "ninguno" and ruta_d["target"] is None,
+           f"ruta {ruta_d}")
+        ev = caso_de_stanza(home, "M1")["eventos"][-1]
+        ok("unirse deja un evento sin mover la etapa",
+           ev["de"] == ev["a"] == "recibido" and "M2" in ev["detalle"]
+           and ev["actor"] == "automatizacion", f"evento {ev}")
+
+        # Una linea suelta de un grupo no abre caso; si hay uno abierto, se suma.
+        llegan(home, A, [msg(SOPORTE, "G1", "alguien vio el deploy?", 20),
+                         msg(OPERACIONES, "G2", "buenos dias a todos", 20)])
+        r = ingiere(home)
+        ok("el chat suelto de un grupo se suma al caso abierto de ese grupo",
+           caso_de_stanza(home, "G1")["case_id"] == c1["case_id"] and r["unidos"] == 1,
+           f"salio {r}")
+        ok("y sin caso abierto no abre uno: queda sin caso y se cuenta",
+           caso_de_stanza(home, "G2") is None and r["sin_caso"] == 1
+           and cuenta(home, "select count(*) from caso where chat_jid=?", OPERACIONES) == 0,
+           f"salio {r}")
+        eventos = cuenta(home, "select count(*) from caso_evento")
+        r = ingiere(home)
+        ok("el chat sin caso no escribe nada al repasarlo",
+           r["nuevos"] == 0 and r["sin_caso"] == 1
+           and cuenta(home, "select count(*) from caso_evento") == eventos, f"salio {r}")
+
+        # Fuera de la ventana el chat suelto no se suma aunque el caso siga abierto.
+        llegan(home, A, [msg(SOPORTE, "G3", "esto es de ayer", 20 * 60)])
+        r = ingiere(home)
+        ok("una linea suelta mas vieja que la ventana no se suma",
+           caso_de_stanza(home, "G3") is None and r["sin_caso"] >= 1, f"salio {r}")
+
+        # Un caso respondido no se reabre por una linea suelta (si por una mencion).
+        con = db_de(home)
+        con.execute("update caso set etapa='respondido' where case_id=?", (c1["case_id"],))
+        con.commit()
+        con.close()
+        llegan(home, A, [msg(SOPORTE, "G4", "gracias", 5)])
+        ingiere(home)
+        ok("una linea suelta no reabre un caso respondido",
+           caso_de_stanza(home, "G4") is None
+           and js(home, "caso", "ver", str(c1["case_id"]))[0]["etapa"] == "respondido")
+        llegan(home, A, [msg(SOPORTE, "M3", "@duenio otra cosa", 4, mencion=True)])
+        ingiere(home)
+        ok("una mencion si lo devuelve a recibido",
+           caso_de_stanza(home, "M3")["case_id"] == c1["case_id"]
+           and caso_de_stanza(home, "M3")["etapa"] == "recibido")
+
+    # Lo determinista: sin cuerpo o solo audio es dudoso, sin gastar al agente en eso.
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "V1", "", 30, mencion=True),
+                         msg(PERSONA, "V2", "", 20, media="audio", ruta="/tmp/nota.opus"),
+                         msg(PERSONA, "V3", "hola", 10)])
+        autoriza(home)
+        r = ingiere(home)
+        v1, v2, v3 = (caso_de_stanza(home, s) for s in ("V1", "V2", "V3"))
+        ok("una mencion sin cuerpo queda clasificada como dudosa",
+           v1["etapa"] == "clasificado" and v1["clase"] == "doubtful", f"caso {v1}")
+        ok("el evento lo firma la automatizacion y dice que no hay texto",
+           evento(v1, "clasificado")["actor"] == "automatizacion"
+           and "sin texto" in evento(v1, "clasificado")["detalle"],
+           f"eventos {v1['eventos']}")
+        ok("un audio solo tambien, y el detalle lo dice",
+           v2["clase"] == "doubtful" and "audio" in evento(v2, "clasificado")["detalle"],
+           f"caso {v2}")
+        ok("el mensaje con texto que llega despues se une al caso dudoso sin cambiarlo",
+           v3["case_id"] == v2["case_id"] and v3["clase"] == "doubtful", f"caso {v3}")
+        ok("el reporte cuenta los dudosos", r["dudosos"] >= 2, f"salio {r}")
+
+    # El juicio que el agente ya dejo en cache se aplica sin volver a razonar.
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "J1", "gracias!", 50, mencion=True),
+                         msg(PERSONA, "J2", "se cayo el sitio", 40),
+                         msg(OPERACIONES, "J3", "pidieron el precio", 30, mencion=True),
+                         msg(FACTURACION, "J4", "no se que pide esto", 20, mencion=True)])
+        autoriza(home)
+        for stanza, chat, clase, origen in (("J1", SOPORTE, "nothing", "agente"),
+                                            ("J2", PERSONA, "card", "agente"),
+                                            ("J3", OPERACIONES, "alert", "agente"),
+                                            ("J4", FACTURACION, "doubtful", "jev")):
+            js(home, "juicio", "--chat", chat, "--stanza", stanza, "--clase", clase,
+               "--origen", origen)
+        r = ingiere(home)
+        j1, j2, j3, j4 = (caso_de_stanza(home, s) for s in ("J1", "J2", "J3", "J4"))
+        ok("nothing cierra el caso con el motivo y la firma del agente, dicho que es cache",
+           j1["etapa"] == "cerrado" and evento(j1, "cerrado")["detalle"].startswith(
+               "nada que atender") and "cache" in evento(j1, "cerrado")["detalle"]
+           and evento(j1, "cerrado")["actor"] == "agente" and r["cerrados"] == 1,
+           f"caso {j1}")
+        ok("card deja el caso clasificado como card",
+           j2["etapa"] == "clasificado" and j2["clase"] == "card"
+           and evento(j2, "clasificado")["actor"] == "agente", f"caso {j2}")
+        ok("alert lo deja clasificado como alert", j3["clase"] == "alert", f"caso {j3}")
+        ok("doubtful lo deja dudoso, firmado por quien lo juzgo",
+           j4["clase"] == "doubtful" and evento(j4, "clasificado")["actor"] == "jev"
+           and r["dudosos"] == 1, f"caso {j4} salio {r}")
+        eventos = cuenta(home, "select count(*) from caso_evento")
+        ingiere(home)
+        ok("y repasarlos no escribe", cuenta(home, "select count(*) from caso_evento") ==
+           eventos)
+
+    # Un veredicto firme mejora a uno dudoso, pero uno dudoso no empeora a uno firme.
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(PERSONA, "Q1", "", 50),
+                         msg(PERSONA, "Q2", "se cayo el sitio", 40),
+                         msg(PERSONA, "Q3", "", 30)])
+        autoriza(home)
+        js(home, "juicio", "--chat", PERSONA, "--stanza", "Q2", "--clase", "card")
+        ingiere(home)
+        q = caso_de_stanza(home, "Q1")
+        ok("un mensaje con veredicto firme mejora al caso que era dudoso",
+           q["clase"] == "card" and len(q["mensajes"]) == 3
+           and [e["a"] for e in q["eventos"] if e["actor"] != "automatizacion"] ==
+           ["clasificado"], f"caso {q}")
+        ok("y uno vacio que llega despues no lo vuelve dudoso", q["clase"] == "card")
+
+    # Lo que decidio el dueno va primero.
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "O1", "ya lo vimos", 50, mencion=True),
+                         msg(SOPORTE, "O2", "necesito ayuda con esto", 40, mencion=True),
+                         msg(OPERACIONES, "O3", "buenos dias", 30)])
+        autoriza(home)
+        decide(home, "O1", "ignore", A)
+        decide(home, "O2", "take", A)
+        decide(home, "O3", "ignore", B)        # de otra linea: no cuenta
+        r = ingiere(home)
+        o1, o2 = caso_de_stanza(home, "O1"), caso_de_stanza(home, "O2")
+        ok("ignorar cierra el caso con el motivo, firmado por el dueno",
+           o1["etapa"] == "cerrado" and evento(o1, "cerrado")["detalle"] ==
+           "ignorado por el dueno" and evento(o1, "cerrado")["actor"] == "dueno"
+           and r["ignorados"] == 1, f"caso {o1} salio {r}")
+        ok("tomar clasifica el caso como card, firmado por el dueno",
+           o2["etapa"] == "clasificado" and o2["clase"] == "card"
+           and evento(o2, "clasificado")["actor"] == "dueno", f"caso {o2}")
+        ok("lo ignorado no cierra el caso de otro mensaje del mismo chat",
+           o1["case_id"] != o2["case_id"])
+        ok("una decision de otra linea no se aplica",
+           caso_de_stanza(home, "O3") is None, f"caso {caso_de_stanza(home, 'O3')}")
+
+    # Una linea no ve nada de la otra, aunque el chat sea el mismo.
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "L1", "@duenio revisa", 30, mencion=True)])
+        autoriza(home)
+        ingiere(home)
+        llegan(home, B, [msg(SOPORTE, "L2", "@duenio otra cosa", 20, mencion=True)])
+        r = ingiere(home)
+        ok("con otra linea activa y sin autorizar no se crea nada",
+           r["vistos"] == 0 and cuenta(home, "select count(*) from caso where account=?",
+                                       B) == 0, f"salio {r}")
+        js(home, "set", SOPORTE, "--provider", "plane", "--target", "NUEVO",
+           "--mode", "borrador")
+        r = ingiere(home)
+        ok("autorizada para la otra linea, solo ve sus mensajes",
+           r["vistos"] == 1 and r["casos_creados"] == 1
+           and cuenta(home, "select count(*) from caso_mensaje where account=? "
+                            "and stanza_id='L2'", B) == 1
+           and cuenta(home, "select count(*) from caso_mensaje where account=? "
+                            "and stanza_id='L1'", B) == 0, f"salio {r}")
+        ok("y no toca los casos de la primera",
+           cuenta(home, "select count(*) from caso where account=?", A) == 1)
+        llegan(home, A, [], activar=True)
+        r = ingiere(home)
+        ok("la primera, de vuelta, solo ve lo suyo y conserva su caso",
+           r["vistos"] == 1 and r["nuevos"] == 0 and len(js(home, "caso", "listar")) == 1
+           and js(home, "caso", "listar")[0]["account"] == A, f"salio {r}")
+
+    # sync pone el tablero al dia: ingest corre primero.
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "S1", "@duenio revisa", 10, mencion=True)])
+        autoriza(home)
+        js(home, "sync")
+        ok("wa-scope sync ingiere antes de empujar al panel",
+           caso_de_stanza(home, "S1") is not None)
+
+    # Sin almacen de mensajes (una maquina sin linea vinculada) no hay nada que ingerir, y
+    # eso se dice con su codigo en vez de salir como un error.
+    with tempfile.TemporaryDirectory() as home:
+        r = ingiere(home)
+        ok("sin almacen de mensajes no ingiere nada y lo dice",
+           r["vistos"] == 0 and r["casos"] == [] and r["sin_fuente"] == "no-transport",
+           f"salio {r}")
+        ok("y sync sigue andando",
+           js(home, "sync")[0]["synced"] in (True, False))
+
+    # El punto donde T3 enchufa a Jev: sin llave, no opina.
+    with tempfile.TemporaryDirectory() as home:
+        entorno_antes = dict(os.environ)
+        wa = carga_wa_scope(home)
+        ok("el hook de Jev no da veredicto en T2",
+           wa.jev_juzga({"stanza_id": "Z", "text": "hola", "kind": "grupo"}) is None)
+        os.environ.clear()
+        os.environ.update(entorno_antes)
 
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
