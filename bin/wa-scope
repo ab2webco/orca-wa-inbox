@@ -33,7 +33,7 @@ it written in the chat" about a message that is not there.
 Task service per conversation: plane, linear, github — or `ninguno` when that
 conversation opens no cards and the agent only reads, summarizes or replies.
 """
-import argparse, hashlib, json, os, re, sqlite3, subprocess, sys, time, unicodedata
+import argparse, datetime, hashlib, json, os, re, sqlite3, subprocess, sys, time, unicodedata
 
 # El modulo vive al lado, y esto se carga tanto como script como importado
 # por ruta desde los chequeos: sin esto el segundo caso no lo encuentra.
@@ -460,26 +460,24 @@ def plugin_store_write(scope, agent_name=None, activity=None, health=None,
                 data["agentName"] = agent_name
             if activity is not None:
                 data["activity"] = activity
-                # La insignia del nav, que Orca lee de esta MISMA clave reservada
-                # (`navBadge`, plugin-nav-badge.ts): no hay API nueva, el host la lee
-                # y nunca la escribe.
-                #
-                # Cuenta lo que espera una decision del dueno -los avisos- y NADA mas.
-                # No la cola: eso el agente lo atiende solo, y una insignia que suba
-                # con cada linea de un grupo autorizado deja de mirarse a la semana.
-                #
-                # Sale del MISMO `recent` que pinta la seccion "Necesita su decision",
-                # a proposito: dos fuentes para el mismo numero es como el panel
-                # termino diciendo "nada pendiente" con dos mensajes en pantalla.
-                data["navBadge"] = {"count": sum(
-                    1 for r in (activity.get("recent") or [])
-                    if r.get("action") == "alert")}
             if health is not None:
                 data["health"] = health
             if routes is not None:
                 data["routes"] = routes
             if extra:
                 data.update(extra)
+                if "board" in extra:
+                    # La insignia del nav, que Orca lee de esta MISMA clave reservada
+                    # (`navBadge`, plugin-nav-badge.ts): el host la lee y nunca la
+                    # escribe. Es `board.counts.decision` y nada mas (T10), en la
+                    # misma escritura que el tablero: dos fuentes para el mismo numero
+                    # es como la insignia se quedaba pegada contando avisos ya
+                    # atendidos. Sin un tablero valido no hay insignia.
+                    cuenta = insignia_de(extra["board"])
+                    if cuenta is None:
+                        data.pop("navBadge", None)
+                    else:
+                        data["navBadge"] = {"count": cuenta}
             tmp = path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(data, fh, ensure_ascii=False, indent=2)
@@ -488,6 +486,17 @@ def plugin_store_write(scope, agent_name=None, activity=None, health=None,
         except (OSError, ValueError):
             continue
     return ok
+
+
+def insignia_de(tablero):
+    """`counts.decision` de un tablero valido (v 1), o None."""
+    if not isinstance(tablero, dict) or tablero.get("v") != 1:
+        return None
+    counts = tablero.get("counts")
+    decision = counts.get("decision") if isinstance(counts, dict) else None
+    if isinstance(decision, bool) or not isinstance(decision, int) or decision < 0:
+        return None
+    return decision
 
 
 RUN_NAME = "triage"
@@ -678,7 +687,9 @@ def push_to_plugin(con, with_activity=False):
     # TODOS los ajustes que el panel muestra viajan de vuelta, no solo el tono. Si uno
     # vive nada mas en la base, el panel abre con el campo vacio y miente sobre lo que
     # rige: el dueno ve "sin nombre" teniendo owner_name puesto por terminal.
-    extra = None
+    # El tablero viaja en TODO sync, se haya releido WhatsApp o no: sale de scope.db,
+    # que es justo lo que no reusa nada (kanban-casos, T4).
+    extra = {"board": build_board(con)}
     if with_activity:
         efectivos = merged_settings(con)
         # La lista de conversaciones es la TERCERA lectura de WhatsApp de este sync.
@@ -686,7 +697,8 @@ def push_to_plugin(con, with_activity=False):
         # ya esta guardada en vez de pagarla otra vez.
         # `chatsAccount` dice de que linea es la lista: el selector del panel no ofrece
         # las conversaciones del numero anterior como si fueran del vinculado (T9).
-        extra = {} if reusando else {"chats": build_chats(), "chatsAccount": cuenta}
+        if not reusando:
+            extra.update(chats=build_chats(), chatsAccount=cuenta)
         for flat, name in PANEL_SETTINGS.items():
             # agentName ya viaja en su propio parametro, mas arriba.
             if flat == "agentName":
@@ -2099,6 +2111,9 @@ def sello_caso(sello):
 
 
 def caso_evento(con, case_id, de, a, actor, detalle="", at=None):
+    # Todo cambio de un caso deja evento: es la marca de que el tablero del panel quedo
+    # viejo y hay que volver a escribirlo al terminar (T4).
+    _TABLERO_SUCIO.append(case_id)
     con.execute("insert into caso_evento (case_id, de, a, actor, detalle, at) "
                 "values (?,?,?,?,?,?)", (case_id, de, a, actor, detalle or "",
                                          at or ahora_caso()))
@@ -2827,6 +2842,163 @@ def cmd_ingest(con, a):
     return [dict(total, casos=sorted(casos))]
 
 
+# ── El tablero en el storage del panel (kanban-casos, T4) ───────────────────────────
+# Topes: el host lee el storage entero en cada pintada. Las abiertas son las que se
+# trabajan; de las cerradas basta lo reciente para ver que paso.
+TOPE_ABIERTAS = 200
+TOPE_CERRADAS = 50
+DIAS_CERRADAS = 7
+# El titulo que falta sale del primer mensaje: una linea que se lee de un vistazo.
+LARGO_TITULO = 80
+# Lo que el dueno puede hacer con la tarjeta en cada etapa. El panel pinta los botones;
+# el canal panel -> worker (T6) es quien los valida de verdad.
+ACCIONES_DE_ETAPA = {
+    "recibido": ("reclasificar", "cerrar"),
+    "clasificado": ("reclasificar", "cerrar"),
+    "decision": ("enviar", "editar", "ejecutar", "reclasificar", "cerrar"),
+    "trabajo": ("cerrar",),
+    "listo": ("enviar", "editar", "cerrar"),
+    "respondido": ("cerrar", "reabrir"),
+    "cerrado": ("reabrir",),
+    "bloqueado": ("reclasificar", "cerrar", "reabrir"),
+}
+# En decision, lo que se ejecuta depende de la propuesta: una respuesta se envia, un
+# trabajo se ejecuta. Lo que no aplica no se ofrece.
+ACCION_DE_TIPO = {"enviar": "responder", "ejecutar": "trabajar"}
+
+_TABLERO_SUCIO = []
+
+
+def iso_caso(sello):
+    """Un sello de los casos (hora local, a segundos) en ISO con su zona."""
+    try:
+        cuando = datetime.datetime.strptime(str(sello), "%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return None
+    return cuando.astimezone().isoformat(timespec="seconds")
+
+
+def acciones_de(etapa, tipo):
+    acciones = ACCIONES_DE_ETAPA.get(etapa, ())
+    if etapa == "decision":
+        acciones = tuple(x for x in acciones
+                         if x not in ACCION_DE_TIPO or ACCION_DE_TIPO[x] == tipo)
+    return list(acciones)
+
+
+def titulos_de_mensajes(con, case_ids):
+    """{case_id: titulo} para los casos sin titulo, del primer mensaje con texto. El
+    texto vive en capture.db y se lee en solo lectura; sin almacen no hay titulo."""
+    if not case_ids:
+        return {}
+    cuenta = cuenta_activa()
+    de_caso = {}
+    for i in range(0, len(case_ids), 500):
+        parte = case_ids[i:i + 500]
+        de_caso.update((r["stanza_id"], r["case_id"]) for r in con.execute(
+            f"select stanza_id, case_id from caso_mensaje where account=? and case_id in "
+            f"({','.join('?' * len(parte))})", (cuenta, *parte)))
+    if not de_caso:
+        return {}
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return {}
+    primeros = {}
+    try:
+        stanzas = list(de_caso)
+        for i in range(0, len(stanzas), 500):
+            parte = stanzas[i:i + 500]
+            for stanza, cuerpo, ts in fuente.execute(
+                    f"select stanza_id, body, ts from mensaje where account=? and "
+                    f"stanza_id in ({','.join('?' * len(parte))}) and trim(body) <> ''",
+                    (cuenta, *parte)):
+                cid = de_caso[stanza]
+                if cid not in primeros or ts < primeros[cid][0]:
+                    primeros[cid] = (ts, cuerpo)
+    except sqlite3.Error:
+        return {}
+    finally:
+        fuente.close()
+    titulos = {}
+    for cid, (_, cuerpo) in primeros.items():
+        # Enmascarado: el titulo termina en el storage del panel, y una clave pegada en
+        # el primer mensaje no tiene por que quedar ahi.
+        texto = " ".join(wa_jev.mask(cuerpo).split())
+        if len(texto) > LARGO_TITULO:
+            texto = texto[:LARGO_TITULO].rstrip() + "…"
+        titulos[cid] = texto
+    return titulos
+
+
+def tarjeta_de(caso, nombres, titulos, motivos):
+    """Un caso con la forma de una tarjeta del contrato `board`."""
+    propuesta = json.loads(caso["propuesta"]) if caso["propuesta"] else None
+    tipo = (propuesta or {}).get("tipo")
+    nombre = nombres.get(caso["chat_jid"]) or caso["chat_jid"]
+    return {
+        "case_id": caso["case_id"], "account": caso["account"],
+        "chat_jid": caso["chat_jid"], "chat_name": nombre, "stage": caso["etapa"],
+        "title": caso["titulo"] or titulos.get(caso["case_id"]) or nombre,
+        "summary": caso["resumen"], "clase": caso["clase"], "prioridad": caso["prioridad"],
+        "jev": json.loads(caso["jev"]) if caso["jev"] else None,
+        "proposal": {"tipo": tipo,
+                     "texto": propuesta.get("respuesta") or propuesta.get("instrucciones"),
+                     "version": caso["propuesta_version"]} if propuesta else None,
+        "exceptions": json.loads(caso["excepciones"]) if caso["excepciones"] else [],
+        "blocked_reason": (motivos.get(caso["case_id"]) if caso["etapa"] == "bloqueado"
+                           else None),
+        "ticket": caso["plane_issue"] or None,
+        "updated_at": iso_caso(caso["updated_at"]),
+        "actions": acciones_de(caso["etapa"], tipo),
+    }
+
+
+def build_board(con):
+    """El tablero de la linea activa, con la forma del contrato `board`: hasta 200
+    abiertas (las mas recientes) mas las cerradas de los ultimos 7 dias hasta 50, y
+    `counts` sobre TODO, no solo sobre lo que se manda."""
+    cuenta = cuenta_activa()
+    counts = dict.fromkeys(ETAPAS_CASO, 0)
+    for r in con.execute("select etapa, count(*) n from caso where account=? "
+                         "group by etapa", (cuenta,)):
+        if r["etapa"] in counts:
+            counts[r["etapa"]] = r["n"]
+    abiertas = con.execute(
+        "select * from caso where account=? and etapa <> 'cerrado' "
+        "order by updated_at desc, case_id desc limit ?",
+        (cuenta, TOPE_ABIERTAS + 1)).fetchall()
+    desde = time.strftime("%Y-%m-%d %H:%M:%S",
+                          time.localtime(time.time() - DIAS_CERRADAS * 86400))
+    cerradas = con.execute(
+        "select * from caso where account=? and etapa = 'cerrado' and updated_at >= ? "
+        "order by updated_at desc, case_id desc limit ?",
+        (cuenta, desde, TOPE_CERRADAS + 1)).fetchall()
+    truncado = len(abiertas) > TOPE_ABIERTAS or len(cerradas) > TOPE_CERRADAS
+    casos = abiertas[:TOPE_ABIERTAS] + cerradas[:TOPE_CERRADAS]
+    nombres = {jid: r.get("chat_name") for jid, r in merged_scope(con).items()}
+    titulos = titulos_de_mensajes(con, [c["case_id"] for c in casos if not c["titulo"]])
+    bloqueados = [c["case_id"] for c in casos if c["etapa"] == "bloqueado"]
+    motivos = {}
+    if bloqueados:
+        # El ultimo motivo con que cada uno entro a bloqueado.
+        for r in con.execute(
+                f"select case_id, detalle from caso_evento where a='bloqueado' and "
+                f"case_id in ({','.join('?' * len(bloqueados))}) order by id",
+                bloqueados):
+            motivos[r["case_id"]] = r["detalle"] or None
+    return {"v": 1,
+            "updated_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+            "truncated": truncado, "counts": counts,
+            "cards": [tarjeta_de(c, nombres, titulos, motivos) for c in casos]}
+
+
+def publica_tablero(con):
+    """El tablero (y su insignia) al storage del panel, despues de una mutacion."""
+    _TABLERO_SUCIO.clear()
+    return plugin_store_write(None, extra={"board": build_board(con)})
+
+
 def cmd_sync(con, a):
     """Deja el tablero y el panel al dia. La entrada corre primero —es local y barata— y
     una falla suya no puede dejar sin sync al panel: se dice y se sigue."""
@@ -3111,7 +3283,15 @@ def main():
             a.json = True
         try:
             con = db()
-            rows = a.fn(con, a)
+            try:
+                rows = a.fn(con, a)
+            finally:
+                # Despues de cada mutacion de un caso, el tablero del panel al dia. sync
+                # ya lo escribe en su propio empuje.
+                if _TABLERO_SUCIO and a.cmd != "sync":
+                    if con.in_transaction:
+                        con.rollback()
+                    publica_tablero(con)
             con.close()
         except sqlite3.OperationalError as exc:
             # Solo para el tablero: la base tomada es un error con codigo, no un traceback.

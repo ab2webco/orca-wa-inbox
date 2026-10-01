@@ -372,17 +372,21 @@ def revisa_juicio(fallos: list) -> int:
 
 
 def revisa_insignia_nav(fallos: list) -> int:
-    """La insignia del nav cuenta avisos, y solo avisos.
+    """La insignia del nav es `board.counts.decision`, y nada mas (kanban-casos, T10).
 
     Orca la lee de una clave reservada del storage del propio plugin -`navBadge`,
     plugin-nav-badge.ts- y nunca la escribe. Su contrato: un entero POSITIVO pinta
     insignia y cualquier otra cosa -cero, un texto, la clave ausente- no pinta
     ninguna, para que no quede un "0" colgado en la barra.
 
+    Antes contaba las filas `alert` de la actividad y se quedaba pegada: un aviso ya
+    atendido seguia sumando. Ahora sale del MISMO `board` que pinta la columna "Tu
+    decision", escrito en la misma escritura: dos fuentes para el mismo numero es como
+    el panel termino diciendo "nada pendiente" con dos tarjetas en pantalla. Sin un
+    `board` valido no hay insignia.
+
     Se prueba corriendo el CLI de verdad y no leyendo la funcion, por lo mismo que el
-    resto de este archivo. Y se prueba que NO cuente la cola: una insignia que suba
-    con cada linea de un grupo autorizado deja de mirarse a la semana, y entonces el
-    aviso que si importa se pierde entre el ruido.
+    resto de este archivo.
     """
     hechas = 0
     with tempfile.TemporaryDirectory() as tmp:
@@ -396,43 +400,79 @@ def revisa_insignia_nav(fallos: list) -> int:
         man = json.loads((RAIZ / "orca-plugin.json").read_text(encoding="utf-8"))
         store = (home / "Library" / "Application Support" / "orca" / "plugins-data" /
                  f"{man['publisher']}.{man['id']}" / "storage.json")
+        if sys.platform != "darwin":
+            store = (home / ".config" / "orca" / "plugins-data" /
+                     f"{man['publisher']}.{man['id']}" / "storage.json")
+
+        def storage():
+            return json.loads(store.read_text(encoding="utf-8")) if store.exists() else {}
 
         def insignia():
-            if not store.exists():
-                return None
-            return json.loads(store.read_text(encoding="utf-8")).get("navBadge")
+            return storage().get("navBadge")
+
+        def en_decision(stanza):
+            caso = json.loads(scope("caso", "crear", "--chat", "100@g.us", "--stanza",
+                                    stanza, "--actor", "agente", "--json").stdout)[0]
+            cid = str(caso["case_id"])
+            scope("caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+                  "--actor", "agente")
+            scope("caso", "propuesta", cid, "--tipo", "responder", "--respuesta", "Tomo esto.",
+                  "--actor", "agente")
+            return cid
 
         scope("set", "100@g.us", "--target", "SOP", "--mode", "responder")
         scope("sync")
-
         hechas += 1
-        if (insignia() or {}).get("count") != 0:
-            fallos.append(f"sin un solo aviso la insignia dice {insignia()!r}, "
+        if insignia() != {"count": 0}:
+            fallos.append(f"sin un solo caso en decision la insignia dice {insignia()!r}, "
                           "y con cero Orca no pinta nada — tiene que ser 0")
 
+        # Un aviso de la bitacora ya no es una decision pendiente: no suma.
         scope("record", "--chat", "100@g.us", "--name", "G", "--stanza", "A1",
               "--action", "alert", "--detail", "Piden descuento | el precio no es mio")
         scope("sync")
         hechas += 1
-        if (insignia() or {}).get("count") != 1:
-            fallos.append(f"con UN aviso la insignia dice {insignia()!r} en vez de 1")
+        if insignia() != {"count": 0}:
+            fallos.append(f"una fila alert de la bitacora movio la insignia a {insignia()!r}: "
+                          "solo cuentan los casos en decision")
 
-        # Lo que el agente hace solo no es una decision del dueno y no puede sumar.
-        for accion in ("issue", "sent", "draft", "closed", "skipped", "failed"):
-            scope("record", "--chat", "100@g.us", "--name", "G", "--stanza",
-                  f"B-{accion}", "--action", accion, "--detail", "")
+        uno = en_decision("D1")
+        hechas += 1
+        if insignia() != {"count": 1}:
+            fallos.append(f"con UN caso en decision la insignia dice {insignia()!r} "
+                          "en vez de 1, despues de la mutacion y sin esperar al sync")
+        en_decision("D2")
         scope("sync")
         hechas += 1
-        if (insignia() or {}).get("count") != 1:
-            fallos.append(f"seis acciones que el agente hizo SOLO movieron la insignia "
-                          f"a {insignia()!r}: solo los avisos cuentan")
+        s = storage()
+        if insignia() != {"count": 2} or (s.get("board") or {}).get(
+                "counts", {}).get("decision") != 2:
+            fallos.append(f"con dos casos en decision la insignia dice {insignia()!r} y "
+                          f"el tablero {(s.get('board') or {}).get('counts')!r}")
 
-        scope("record", "--chat", "100@g.us", "--name", "G", "--stanza", "A2",
-              "--action", "alert", "--detail", "Piden acceso | no doy accesos")
-        scope("sync")
+        # Lo que se resuelve deja de contar: la insignia ya no se queda pegada.
+        scope("caso", "mover", uno, "cerrado", "--motivo", "resuelto", "--actor", "dueno")
         hechas += 1
-        if (insignia() or {}).get("count") != 2:
-            fallos.append(f"con dos avisos la insignia dice {insignia()!r} en vez de 2")
+        if insignia() != {"count": 1}:
+            fallos.append(f"cerrar un caso en decision dejo la insignia en {insignia()!r}")
+
+        # Sin un `board` valido no se escribe insignia.
+        wa = cargar_modulo("wa_scope_insignia", BIN / "wa-scope")
+        antes = dict(os.environ)
+        os.environ.update(env)
+        try:
+            for nombre, tablero in (("un board sin counts", {"v": 1}),
+                                    ("un board de otra version", {"v": 2, "counts": {
+                                        "decision": 3}}),
+                                    ("un counts.decision que no es entero", {
+                                        "v": 1, "counts": {"decision": "3"}})):
+                wa.plugin_store_write(None, extra={"board": tablero})
+                hechas += 1
+                if "navBadge" in storage():
+                    fallos.append(f"con {nombre} quedo la insignia {insignia()!r}")
+        finally:
+            os.environ.clear()
+            os.environ.update(antes)
 
     return hechas
 
@@ -500,10 +540,17 @@ def revisa_linea_por_numero(fallos: list) -> int:
         def storage():
             return json.loads(store.read_text(encoding="utf-8")) if store.exists() else {}
 
-        # Con el numero viejo vinculado: autoriza, avisa y corre.
+        # Con el numero viejo vinculado: autoriza, avisa, deja un caso esperando al
+        # dueno y corre.
         scope("set", "100@g.us", "--target", "SOP", "--mode", "responder")
         scope("record", "--chat", "100@g.us", "--name", "Grupo Viejo", "--stanza", "A1",
               "--action", "alert", "--detail", "Piden descuento | el precio no es mio")
+        caso = json.loads(scope("caso", "crear", "--chat", "100@g.us", "--stanza", "A1",
+                                "--actor", "agente", "--json").stdout or "[{}]")[0]
+        scope("caso", "clasificar", str(caso.get("case_id")), "--clase", "card",
+              "--prioridad", "none", "--actor", "agente")
+        scope("caso", "propuesta", str(caso.get("case_id")), "--tipo", "responder",
+              "--respuesta", "Tomo esto.", "--actor", "agente")
         scope("lock", "--note", "triage")
         scope("unlock")
         # Lo que dejo la version de antes: una autorizacion `local` en la base y otra
@@ -542,7 +589,7 @@ def revisa_linea_por_numero(fallos: list) -> int:
             fallos.append(f"'lo ultimo que hizo' del numero nuevo trae lo del viejo: "
                           f"{act['recent']!r}")
         if (s.get("navBadge") or {}).get("count") != 0:
-            fallos.append(f"la insignia del numero nuevo cuenta avisos del viejo: "
+            fallos.append(f"la insignia del numero nuevo cuenta los casos del viejo: "
                           f"{s.get('navBadge')!r}")
         if act.get("authorized") or act.get("mapped"):
             fallos.append(f"la cobertura del numero nuevo cuenta las del viejo: "
@@ -610,7 +657,8 @@ def revisa_linea_por_numero(fallos: list) -> int:
         s = storage()
         hechas += 1
         if (s.get("navBadge") or {}).get("count") != 1:
-            fallos.append(f"al volver el numero viejo su aviso no reaparece: "
+            fallos.append(f"al volver el numero viejo su caso en decision no reaparece "
+                          f"en la insignia: "
                           f"{s.get('navBadge')!r}")
         # Lo de antes sin cuenta sigue guardado como `local`: no se lo apropia nadie
         # hasta que la migracion lo atribuya.

@@ -1839,6 +1839,133 @@ with tempfile.TemporaryDirectory() as home:
        == "E_ARGS")
 
 
+# ── 14. El tablero en el storage del panel (T4) ──────────────────────────────────
+# `board` lo escribe wa-scope en cada sync y despues de cada mutacion de un caso; lo
+# leen el panel y la insignia (kanban-casos, "Contratos").
+import re  # noqa: E402
+
+LLAVES_TARJETA = {"case_id", "account", "chat_jid", "chat_name", "stage", "title",
+                  "summary", "clase", "prioridad", "jev", "proposal", "exceptions",
+                  "blocked_reason", "ticket", "updated_at", "actions"}
+ISO = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$")
+
+
+def tablero(home):
+    ruta = storage_de(home)
+    return json.loads(ruta.read_text(encoding="utf-8")) if ruta.exists() else {}
+
+
+def tarjeta(home, cid):
+    return next((c for c in tablero(home).get("board", {}).get("cards", [])
+                 if c["case_id"] == int(cid)), None)
+
+
+print("\nel tablero")
+with tempfile.TemporaryDirectory() as home:
+    js(home, "set", CHAT, "--provider", "plane", "--target", "SOP", "--mode", "responder")
+    cid = caso_clasificado(home, "B1")
+    b = tablero(home).get("board")
+    ok("una mutacion de caso deja `board` en el storage, version 1",
+       isinstance(b, dict) and b.get("v") == 1 and ISO.match(b.get("updated_at") or ""),
+       f"{b}")
+    ok("counts trae las ocho etapas y cuenta el caso",
+       b and set(b["counts"]) == set(ETAPAS := ("recibido", "clasificado", "decision",
+                                                "trabajo", "listo", "respondido",
+                                                "cerrado", "bloqueado"))
+       and b["counts"]["clasificado"] == 1 and b["truncated"] is False, f"{b}")
+    t = tarjeta(home, cid)
+    ok("la tarjeta trae exactamente las llaves del contrato",
+       t and set(t) == LLAVES_TARJETA, f"{t and sorted(t)}")
+    ok("con la etapa, la clase, la prioridad y la conversacion",
+       t and t["stage"] == "clasificado" and t["clase"] == "revision"
+       and t["prioridad"] == "high" and t["chat_jid"] == CHAT and t["chat_name"]
+       and ISO.match(t["updated_at"]), f"{t}")
+    ok("sin propuesta, jev ni tarjeta de Plane: null; sin excepciones: lista vacia",
+       t and t["proposal"] is None and t["jev"] is None and t["ticket"] is None
+       and t["blocked_reason"] is None and t["exceptions"] == [], f"{t}")
+    v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+           "Tomo esto.", "--actor", "agente")[0]["propuesta_version"]
+    t = tarjeta(home, cid)
+    ok("la propuesta llega con su tipo, su texto y su version",
+       t and t["proposal"] == {"tipo": "responder", "texto": "Tomo esto.", "version": v},
+       f"{t}")
+    ok("y las acciones de una respuesta en decision",
+       t and "enviar" in t["actions"] and "editar" in t["actions"]
+       and "ejecutar" not in t["actions"], f"{t and t['actions']}")
+    s = tablero(home)
+    ok("la insignia es counts.decision", s.get("navBadge") == {"count": 1}
+       and s["board"]["counts"]["decision"] == 1, f"{s.get('navBadge')}")
+    js(home, "caso", "mover", cid, "bloqueado", "--motivo", "sin acceso al repo",
+       "--actor", "agente")
+    t = tarjeta(home, cid)
+    ok("bloqueado dice por que", t and t["blocked_reason"] == "sin acceso al repo", f"{t}")
+    ok("y la insignia baja", tablero(home).get("navBadge") == {"count": 0})
+    con = db_de(home)
+    con.execute("update caso set plane_issue='SOP-7', excepciones='[\"money\"]', "
+                "jev='{\"attention_class\": \"money\", \"flags\": [\"x\"], "
+                "\"skip\": false}' where case_id=?", (int(cid),))
+    con.commit()
+    con.close()
+    js(home, "caso", "mover", cid, "cerrado", "--motivo", "listo", "--actor", "dueno")
+    t = tarjeta(home, cid)
+    ok("la tarjeta de Plane, las excepciones y el veredicto de Jev",
+       t and t["ticket"] == "SOP-7" and t["exceptions"] == ["money"]
+       and t["jev"] == {"attention_class": "money", "flags": ["x"], "skip": False}, f"{t}")
+    ok("un caso cerrado solo se puede reabrir", t and t["actions"] == ["reabrir"], f"{t}")
+    js(home, "sync")
+    ok("sync tambien escribe el tablero", tablero(home).get("board", {}).get("counts", {})
+       .get("cerrado") == 1)
+
+# El tope: 200 abiertas (las mas recientes) y hasta 50 cerradas de los ultimos 7 dias.
+with tempfile.TemporaryDirectory() as home:
+    caso_clasificado(home, "T0")
+    con = db_de(home)
+    cuenta_linea = con.execute("select account from caso").fetchone()[0]
+    reciente = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 3600))
+    viejo = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 10 * 86400))
+    for n in range(210):
+        con.execute("insert into caso (account, chat_jid, etapa, titulo, created_at, "
+                    "updated_at) values (?,?,'recibido','t',?,?)",
+                    (cuenta_linea, CHAT, reciente, reciente))
+    for n in range(60):
+        con.execute("insert into caso (account, chat_jid, etapa, titulo, created_at, "
+                    "updated_at) values (?,?,'cerrado','t',?,?)",
+                    (cuenta_linea, CHAT, reciente, reciente))
+    for n in range(3):
+        con.execute("insert into caso (account, chat_jid, etapa, titulo, created_at, "
+                    "updated_at) values (?,?,'cerrado','t',?,?)",
+                    (cuenta_linea, CHAT, viejo, viejo))
+    con.commit()
+    con.close()
+    nuevo = caso_clasificado(home, "T1")
+    b = tablero(home)["board"]
+    abiertas = [c for c in b["cards"] if c["stage"] != "cerrado"]
+    cerradas = [c for c in b["cards"] if c["stage"] == "cerrado"]
+    ok("200 abiertas, las mas recientes primero",
+       len(abiertas) == 200 and abiertas[0]["case_id"] == int(nuevo), f"{len(abiertas)}")
+    ok("50 cerradas, ninguna de mas de 7 dias", len(cerradas) == 50, f"{len(cerradas)}")
+    ok("truncated lo dice", b["truncated"] is True)
+    ok("counts cuenta todo, no solo lo enviado",
+       b["counts"]["recibido"] == 210 and b["counts"]["clasificado"] == 2
+       and b["counts"]["cerrado"] == 63, f"{b['counts']}")
+
+# El titulo que falta sale del primer mensaje, recortado y enmascarado.
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        largo = "@duenio la clave es Hunter2xx y " + "el reporte sale en blanco " * 8
+        llegan(home, A, [msg(SOPORTE, "H1", largo, 30, mencion=True),
+                         msg(SOPORTE, "H2", "otra linea", 20, mencion=True)])
+        autoriza(home)
+        ingiere(home)
+        c = caso_de_stanza(home, "H1")
+        t = tarjeta(home, c["case_id"])
+        ok("sin titulo, la tarjeta usa el primer mensaje",
+           t and t["title"].startswith("@duenio la clave es"), f"{t and t['title']}")
+        ok("recortado", t and len(t["title"]) <= 81 and t["title"].endswith("…"),
+           f"{t and len(t['title'])}")
+        ok("y sin la credencial", t and "Hunter2xx" not in t["title"], f"{t and t['title']}")
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
