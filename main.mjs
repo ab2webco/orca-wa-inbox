@@ -20,6 +20,7 @@ import { dirname, join } from 'node:path'
 import { HARNESS_KEY } from './harness.mjs'
 import { llaveValida } from './jev-espejo.mjs'
 import { crearAccionesCaso } from './acciones.mjs'
+import { crearCatalogo, leerCatalogo, PROJECTS_KEY } from './catalogo.mjs'
 
 // Las herramientas viajan dentro del plugin. Antes se buscaban en el PATH del usuario,
 // lo que solo funcionaba en la maquina donde alguien las habia enlazado a mano.
@@ -586,10 +587,13 @@ async function resolverCasaOrca(waScope) {
  *  Los subprocesos NO heredan la valla — es lo mismo que hace que `wa-read doctor` si
  *  conteste — asi que la decision de ruta y la escritura se hacen del otro lado. Es el
  *  mismo modulo corriendo como script: una sola implementacion. */
-function sembrarFuera(toolsDir) {
+function sembrarFuera(toolsDir, proyectos = null) {
   const guion = join(PLUGIN_DIR, 'harness.mjs')
   return new Promise((resolve) => {
-    const mSiembra = mandoSinValla(process.execPath, [guion, PLUGIN_DIR, toolsDir])
+    // Los proyectos aceptados viajan por argv: el subproceso no los puede leer del
+    // storage con la misma garantia, y el worker no puede dejarlos en un archivo.
+    const mSiembra = mandoSinValla(process.execPath,
+      [guion, PLUGIN_DIR, toolsDir, ...(proyectos ? [JSON.stringify(proyectos)] : [])])
     execFile(mSiembra.cmd, mSiembra.args,
       // El worker es el helper de Electron: sin esto arrancaria una ventana en vez de
       // un Node. Con node pelado —los chequeos— la variable sobra y no molesta.
@@ -1216,15 +1220,24 @@ export default function activate(orca) {
   // La carpeta la crea una version de Orca que no todos tienen todavia, asi que esto
   // falla callado y deja el motivo escrito, como el sync. Sin ella el plugin anda
   // exactamente igual que antes.
-  dirHerramientas()
-    .then((dir) => sembrarFuera(dir))
-    .then(async (estado) => {
+  //
+  // Con los proyectos que el dueno acepto: PROJECTS.md se genera de esa lista, y vuelve
+  // a sembrarse cada vez que el catalogo cambia (`crearCatalogo`, abajo). Las siembras
+  // van en fila: una lenta del arranque que terminara DESPUES de la de un cambio dejaria
+  // el archivo con la lista vieja hasta el proximo cambio.
+  let siembra = Promise.resolve()
+  const resembrar = (lista) => {
+    siembra = siembra.then(async () => {
+      const proyectos = lista ?? leerCatalogo(await leer(orca, PROJECTS_KEY))
+      const estado = await sembrarFuera(await dirHerramientas(), proyectos)
       await guardar(orca, HARNESS_KEY, estado)
       orca.log(estado.ok
         ? `harness: ${estado.files.map((f) => `${f.name} ${f.action}`).join(', ')} in ${estado.dir}`
         : `harness not seeded (${estado.reason}): ${estado.detail}`)
-    })
-    .catch((error) => orca.log(`harness failed: ${error.message}`))
+    }).catch((error) => orca.log(`harness failed: ${error.message}`))
+    return siembra
+  }
+  resembrar()
 
   // El sidecar de Baileys (T3): el UNICO transporte de esta rebanada. El directorio de
   // auth se resuelve en un subproceso -mismo motivo que el arnes, arriba: el worker no
@@ -1615,6 +1628,20 @@ export default function activate(orca) {
     return { ok: true, code: SCOPE_VEREDICTO.QUITADO }
   }
 
+  // El catalogo de proyectos: lo que el panel pide (buscar, aceptar, quitar, anotar) entra
+  // por el MISMO canal que el alcance, que es de la misma familia -a que conversacion y a
+  // que proyecto se le deja actuar- y asi no se suma un sondeo al host cada 3 s: el worker
+  // muere a los 64 llamados sin confirmar. `orca` corre sin la valla, como el resto de lo
+  // que no es del plugin.
+  const catalogo = crearCatalogo({
+    orca, leer: (key) => leer(orca, key), guardar: (key, value) => guardar(orca, key, value),
+    correr: (cmd, args) => {
+      const m = mandoSinValla(cmd, args)
+      return run(m.cmd, m.args, { timeoutMs: 15000 })
+    },
+    motivoDe, resembrar
+  })
+
   const atenderPedidoScope = crearVigia({
     nombre: 'scope',
     requestKey: SCOPE_REQUEST_KEY,
@@ -1626,7 +1653,8 @@ export default function activate(orca) {
     // worker tiene un presupuesto de llamadas al host.
     acciones: {
       [SCOPE_ACCION.QUITAR]: (pedido) => quitarAlcance(pedido),
-      ...crearAccionesCaso({ run, motivoDe, herramienta: (nombre) => tool(nombre) })
+      ...crearAccionesCaso({ run, motivoDe, herramienta: (nombre) => tool(nombre) }),
+      ...catalogo.acciones
     }
   })
 

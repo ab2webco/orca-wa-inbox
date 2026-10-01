@@ -250,6 +250,200 @@ def revisa_migracion_cuentas(fallos: list) -> int:
     return hechas
 
 
+def revisa_proyectos(fallos: list) -> int:
+    """Los ajustes por chat apuntan a un PROYECTO (kanban-casos, T13).
+
+    Lo que se prueba es lo que no se ve en el codigo: que una base de antes de este
+    cambio gane la columna sin perder una fila ni una columna vieja, que una conversacion
+    sin proyecto siga funcionando (el dueno ya no elige servicio de tareas), que la
+    resolucion del destino vea el proyecto, y que lo que escribe el panel no se pierda
+    en el siguiente sync — las reglas del panel se perdian ahi.
+    """
+    hechas = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+
+        def scope(*args):
+            return subprocess.run([str(BIN / "wa-scope"), *args, "--json"],
+                                  capture_output=True, text=True, env=env, timeout=180)
+
+        def filas(*args):
+            p = scope(*args)
+            return json.loads(p.stdout or "[]") if p.returncode == 0 else p
+
+        man = json.loads((RAIZ / "orca-plugin.json").read_text(encoding="utf-8"))
+        base = ((home / "Library" / "Application Support" / "orca") if sys.platform == "darwin"
+                else (home / ".config" / "orca"))
+        store = base / "plugins-data" / f"{man['publisher']}.{man['id']}" / "storage.json"
+        store.parent.mkdir(parents=True, exist_ok=True)
+
+        def storage():
+            return json.loads(store.read_text(encoding="utf-8")) if store.exists() else {}
+
+        def guarda(**claves):
+            datos = storage()
+            datos.update(claves)
+            store.write_text(json.dumps(datos), encoding="utf-8")
+
+        GRUPO, DIRECTO = "100@g.us", "200@s.whatsapp.net"
+        PROYECTOS = [
+            {"id": "alfa-demo", "name": "Alfa Demo", "path": "/srv/ejemplo/alfa-demo",
+             "note": "Tienda en linea"},
+            {"id": "beta-demo", "name": "Beta Demo", "path": "/srv/ejemplo/beta-demo",
+             "note": ""}]
+
+        # ── La migracion: una base de antes, con una conversacion y una regla.
+        scope("set", GRUPO, "--provider", "plane", "--target", "SOP", "--mode", "responder")
+        scope("route", "--match", "acme", "--provider", "plane", "--target", "ACM")
+        db = home / ".wa-inbox" / "scope.db"
+        con = sqlite3.connect(db)
+        # Se deja la base como la dejaba la version anterior: sin la columna nueva.
+        for tabla in ("chat_scope", "route"):
+            if "workspace" in {r[1] for r in con.execute(f"pragma table_info({tabla})")}:
+                con.execute(f"alter table {tabla} drop column workspace")
+        con.commit()
+        con.close()
+        scope("list")
+        con = sqlite3.connect(db)
+        cs = {r[1] for r in con.execute("pragma table_info(chat_scope)")}
+        rt = {r[1] for r in con.execute("pragma table_info(route)")}
+        fila = con.execute("select provider, target, mode, workspace from chat_scope "
+                           "where chat_jid=?", (GRUPO,)).fetchone()
+        regla = con.execute("select provider, target, workspace from route "
+                            "where pattern='acme'").fetchone()
+        con.close()
+        hechas += 4
+        if "workspace" not in cs or "workspace" not in rt:
+            fallos.append(f"la migracion no agrego la columna workspace: chat_scope={'workspace' in cs} "
+                          f"route={'workspace' in rt}")
+        if fila != ("plane", "SOP", "responder", None):
+            fallos.append(f"la migracion toco lo que ya estaba en chat_scope: {fila!r}")
+        if regla != ("plane", "ACM", None):
+            fallos.append(f"la migracion toco la regla vieja: {regla!r}")
+        if not {"provider", "target", "initial_state"} <= cs:
+            fallos.append(f"las columnas viejas de chat_scope no se conservan: {sorted(cs)}")
+
+        # ── El catalogo: lo guarda el worker en storage y el CLI lo espeja a la base.
+        guarda(projects=PROYECTOS)
+        listado = filas("projects")
+        hechas += 3
+        if [p.get("id") for p in listado] != ["alfa-demo", "beta-demo"] \
+                or listado[0].get("path") != "/srv/ejemplo/alfa-demo" \
+                or listado[0].get("note") != "Tienda en linea":
+            fallos.append(f"wa-scope projects no lista lo que acepto el dueno: {listado!r}")
+        con = sqlite3.connect(db)
+        espejo = [r[0] for r in con.execute("select id from project order by id")]
+        con.close()
+        if espejo != ["alfa-demo", "beta-demo"]:
+            fallos.append(f"el catalogo no se espejo a scope.db: {espejo!r}")
+        # Sin el storage -Orca cerrado, otra maquina- el CLI sigue viendo lo ultimo.
+        store.unlink()
+        if [p.get("id") for p in filas("projects")] != ["alfa-demo", "beta-demo"]:
+            fallos.append("sin storage el CLI perdio el catalogo espejado")
+        guarda(projects=PROYECTOS)
+
+        # ── set --workspace.
+        p = scope("set", GRUPO, "--workspace", "no-existe")
+        hechas += 1
+        if p.returncode == 0 or "no-existe" not in (p.stderr + p.stdout):
+            fallos.append(f"set --workspace con un proyecto que no existe no se rechaza: "
+                          f"rc={p.returncode} {p.stderr.strip()[:120]}")
+        p = scope("set", GRUPO, "--workspace", "alfa-demo", "--mode", "borrador")
+        hechas += 2
+        if p.returncode != 0:
+            fallos.append(f"set --workspace con un proyecto del catalogo falla: {p.stderr.strip()[:200]}")
+        lista = filas("list")
+        grupo = next((r for r in lista if r["chat_jid"] == GRUPO), {}) if isinstance(lista, list) else {}
+        if grupo.get("workspace") != "alfa-demo" or grupo.get("target") != "SOP":
+            fallos.append(f"list no trae el proyecto o perdio el destino viejo: {grupo!r}")
+        if (storage().get("scope") or {}).get(GRUPO, {}).get("workspace") != "alfa-demo":
+            fallos.append("el proyecto no viaja al storage que lee el panel")
+
+        # Una conversacion SIN proyecto sigue andando: no hay servicio de tareas que elegir.
+        p = scope("set", DIRECTO, "--mode", "borrador")
+        hechas += 3
+        if p.returncode != 0:
+            fallos.append(f"una conversacion sin proyecto ni destino no se puede activar: "
+                          f"{p.stderr.strip()[:200]}")
+        directo = next((r for r in filas("list") if r["chat_jid"] == DIRECTO), {})
+        if directo.get("workspace") is not None or directo.get("mode") != "borrador":
+            fallos.append(f"la conversacion sin proyecto quedo mal: {directo!r}")
+        voz = filas("voice", GRUPO)
+        if not isinstance(voz, list) or voz[0].get("workspace") != "alfa-demo":
+            fallos.append(f"voice no dice el proyecto de la conversacion: {voz!r}")
+
+        # ── where: el proyecto manda, y el contenido puede cambiarlo.
+        ruta = lambda texto, chat: (filas("where", texto, "--chat", chat) or [{}])[0]
+        d = ruta("hola", GRUPO)
+        hechas += 1
+        if d.get("workspace") != "alfa-demo" or d.get("workspace_path") != "/srv/ejemplo/alfa-demo":
+            fallos.append(f"where no resuelve al proyecto de la conversacion: {d!r}")
+        scope("route", "--match", "beta", "--workspace", "beta-demo")
+        d = ruta("pasa algo con BETA", GRUPO)
+        hechas += 2
+        if d.get("workspace") != "beta-demo" or d.get("matched") != "beta":
+            fallos.append(f"una regla de texto no manda el caso a su proyecto: {d!r}")
+        if d.get("target") != "SOP":
+            fallos.append(f"una regla solo de proyecto pisa el destino viejo del chat: {d!r}")
+        d = ruta("hola", DIRECTO)
+        hechas += 1
+        if d.get("workspace") is not None:
+            fallos.append(f"un chat sin proyecto resuelve a uno: {d!r}")
+        p = scope("route", "--match", "sola")
+        hechas += 1
+        if p.returncode == 0:
+            fallos.append("una regla sin proyecto ni destino se acepta")
+        reglas = filas("route")
+        beta = next((r for r in reglas if r["pattern"] == "beta"), {}) if isinstance(reglas, list) else {}
+        hechas += 1
+        if beta.get("workspace") != "beta-demo":
+            fallos.append(f"route no lista el proyecto de la regla: {reglas!r}")
+
+        # Un proyecto que el dueno quito del catalogo deja de resolver, pero no se borra
+        # de la conversacion: puede volver.
+        guarda(projects=[PROYECTOS[1]])
+        d = ruta("hola", GRUPO)
+        hechas += 2
+        if d.get("workspace") is not None:
+            fallos.append(f"un proyecto que ya no esta en el catalogo sigue resolviendo: {d!r}")
+        if "alfa-demo" not in (d.get("why") or "") and "alfa-demo" not in json.dumps(d):
+            fallos.append(f"where no dice que el proyecto de la conversacion ya no esta: {d!r}")
+        guarda(projects=PROYECTOS)
+
+        # ── Lo que escribe el panel manda, y no se pierde en el sync.
+        datos = storage()
+        datos["scope"][GRUPO]["workspace"] = None
+        datos["routes"] = [{"pattern": "gama", "workspace": "beta-demo"}]
+        store.write_text(json.dumps(datos), encoding="utf-8")
+        d = ruta("hola", GRUPO)
+        hechas += 1
+        if d.get("workspace") is not None:
+            fallos.append(f"quitar el proyecto en el panel no lo quita: {d!r}")
+        d = ruta("algo de gama", GRUPO)
+        hechas += 1
+        if d.get("workspace") != "beta-demo":
+            fallos.append(f"una regla del panel con proyecto no se aplica: {d!r}")
+        scope("sync")
+        despues = storage()
+        hechas += 3
+        if not any(r.get("pattern") == "gama" and r.get("workspace") == "beta-demo"
+                   for r in despues.get("routes") or []):
+            fallos.append(f"el sync borro la regla que el panel acababa de guardar: "
+                          f"{despues.get('routes')!r}")
+        if not any(r.get("pattern") == "beta" and r.get("workspace") == "beta-demo"
+                   for r in despues.get("routes") or []):
+            fallos.append(f"el sync no trae al panel la regla del CLI con su proyecto: "
+                          f"{despues.get('routes')!r}")
+        con = sqlite3.connect(db)
+        ws_db = con.execute("select workspace from chat_scope where chat_jid=?",
+                            (GRUPO,)).fetchone()
+        con.close()
+        if ws_db != (None,):
+            fallos.append(f"el proyecto que el panel quito sigue en la base: {ws_db!r}")
+    return hechas
+
+
 def revisa_juicio(fallos: list) -> int:
     """La tabla `juicio` se agrega sola sobre una base vieja, y el veredicto se guarda
     una vez por llave (odd/tasks/juicio-cacheado.md, T1/T2).
@@ -1586,7 +1780,8 @@ def main() -> int:
                       + revisa_casa_del_runtime(fallos)
                       + revisa_juicio(fallos)
                       + revisa_linea_por_numero(fallos)
-                      + revisa_reclave_local(fallos))
+                      + revisa_reclave_local(fallos)
+                      + revisa_proyectos(fallos))
     aislado.cleanup()
 
     if fallos:

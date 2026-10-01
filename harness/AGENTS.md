@@ -89,6 +89,31 @@ The triage runs every 5 minutes and the take every 2. Most of the time there is
 nothing to do, and that is fine: say it in one line and finish. A run that
 manufactures work to justify itself is worse than a run that did nothing.
 
+## The orchestrator: reply, or dispatch
+
+You work cases, not messages. For each case that needs an agent, decide ONE of two
+things:
+
+- **Draft the reply** when the answer needs only language:
+  `wa-scope caso propuesta <id> --tipo responder --respuesta "<text>"`.
+- When answering needs work in a codebase,
+  **dispatch the requirement to the project**. The project is the `workspace` that
+  `wa-scope where` prints for the case's chat; `PROJECTS.md` gives its path and what
+  the owner says it is for. Hand the requirement to that project through Orca,
+  together with the **reply instruction**: what the client asked, what to find out,
+  and what to answer once it is done. The project's own harness decides whether that
+  means a ticket, doing the work or just answering. It reports back with
+  `wa-scope caso resultado <id> --actor trabajador --respuesta "<reply>" --resumen "<what was done>"`.
+
+A chat with no project has nowhere to dispatch to: reply if a reply is enough, and
+leave the work to the owner (`--tipo escalar`) when it is not.
+
+You never send on WhatsApp, and neither does the project you dispatch to. Sending is
+done by the plugin's own code after the owner's rules and the review: the reply
+travels as a proposal or as a result, never as a message you type. Do not write
+anything into the owner's repositories either: this folder is the only place the
+plugin puts files.
+
 ## The rest of the folder
 
 | File | What it is for |
@@ -96,3 +121,4 @@ manufactures work to justify itself is worse than a run that did nothing.
 | `COMMANDS.md` | every command, with its real flags, taken from the tools' own `--help` |
 | `CLASSIFICATION.md` | what counts as support and what does not, from 266 real mentions |
 | `EXAMPLES.md` | one message handled well and one handled badly, worked through |
+| `PROJECTS.md` | the projects the owner accepted, with their path and purpose; generated, the plugin rewrites it whenever the list changes |

@@ -395,8 +395,12 @@ console.log('\nworker: el arnes de la carpeta del plugin')
   ok('siembra en la carpeta de trabajo del plugin', e && e.dir === carpeta,
     `${e && e.dir} != ${carpeta}`)
   const puestos = (e?.files ?? []).map((f) => f.name).sort()
-  ok('deja los cuatro archivos del arnes',
-    puestos.join(',') === 'AGENTS.md,CLASSIFICATION.md,COMMANDS.md,EXAMPLES.md',
+  // PROJECTS.md es el quinto y es DISTINTO de los otros cuatro: no sale de harness/ sino
+  // de la lista de proyectos que el dueno acepto en los ajustes. Se siembra siempre,
+  // vacio incluido, porque el AGENTS.md lo nombra y un archivo nombrado que no existe es
+  // una instruccion que el agente obedece sin obtener nada.
+  ok('deja los cuatro archivos del arnes y el generado de proyectos',
+    puestos.join(',') === 'AGENTS.md,CLASSIFICATION.md,COMMANDS.md,EXAMPLES.md,PROJECTS.md',
     puestos.join(','))
 
   const lee = (n) => readFileSync(join(carpeta, n), 'utf8')
@@ -411,6 +415,21 @@ console.log('\nworker: el arnes de la carpeta del plugin')
   ]) {
     ok(`el AGENTS.md sembrado lleva la regla de ${nombre}`, agentes.includes(frase))
   }
+  // El orquestador: por caso, o redacta la respuesta o despacha el pedido al proyecto, y
+  // nunca envia el mismo.
+  for (const [nombre, frase] of [
+    ['la lista de proyectos', 'PROJECTS.md'],
+    ['despachar al proyecto', 'dispatch the requirement to the project'],
+    ['no enviar por WhatsApp', 'never send on WhatsApp'],
+    ['reportar el resultado', 'wa-scope caso resultado']
+  ]) {
+    ok(`el AGENTS.md sembrado lleva el orquestador: ${nombre}`, agentes.includes(frase),
+      frase)
+  }
+  const generado = existsSync(join(carpeta, 'PROJECTS.md')) ? lee('PROJECTS.md') : ''
+  ok('y PROJECTS.md sin proyectos lo dice, con la advertencia de que se reescribe',
+    /No projects accepted yet/.test(generado) && /overwritten/.test(generado.slice(0, 400)),
+    generado.slice(0, 200))
   // Y la referencia sale del `--help` de verdad, no de una transcripcion a mano.
   ok('la referencia se genera con el --help de las herramientas',
     lee('COMMANDS.md').includes('AYUDA V1 de wa-scope --help'))
@@ -2363,6 +2382,222 @@ console.log('\nworker: traer la libreta deja la lista al dia en segundos')
   ok('y ahi paran: no es un sync por cada latido', cuenta() === base + 2, `${base} -> ${cuenta()}`)
   apagar()
 }
+// ───────── el catalogo de proyectos: lo que Orca conoce, propuesto al dueno ─────────
+console.log('\nworker: el catalogo deriva propuestas de `orca worktree ps` sin inventar nada')
+{
+  const { comandoOrca, ORCA_ARGS, leerWorktrees, leerRepos, proponer } =
+    await import('../catalogo.mjs')
+
+  ok('en macOS la CLI se llama orca', comandoOrca('darwin', {}) === 'orca')
+  // En Linux `orca` es el lector de pantalla de GNOME: arrancarlo habla.
+  ok('en Linux se llama orca-ide y nunca cae a orca',
+    comandoOrca('linux', {}) === 'orca-ide')
+  ok('ORCA_CLI_COMMAND manda en cualquier plataforma',
+    comandoOrca('linux', { ORCA_CLI_COMMAND: ' /opt/orca/bin/orca ' }) === '/opt/orca/bin/orca')
+  // La frontera de seguridad: los argumentos son literales, nada del panel llega aca.
+  ok('los argumentos son literales',
+    JSON.stringify(ORCA_ARGS) === JSON.stringify({
+      worktrees: ['worktree', 'ps', '--json'], repos: ['repo', 'list', '--json'] }))
+
+  ok('un sobre que no es el de la CLI da lista vacia, no excepcion',
+    leerWorktrees(null).length === 0 && leerWorktrees({ result: 3 }).length === 0 &&
+    leerRepos('x').length === 0 && leerRepos({ result: { repos: 'no' } }).length === 0)
+  ok('un worktree sin ruta o sin repo se descarta',
+    leerWorktrees({ result: { worktrees: [{ repo: 'a' }, { path: '/x' },
+      { repo: 'b', path: '/b', repoId: 'rb' }] } }).length === 1)
+
+  const wt = (repoId, repo, path, extra = {}) =>
+    ({ repoId, repo, path, isArchived: false, isMainWorktree: false, ...extra })
+  const worktrees = [
+    wt('r1', 'tienda-demo', '/srv/ejemplo/tienda-demo', { isMainWorktree: true }),
+    // Un worktree hijo del mismo repo, dentro de otra carpeta: no es otro proyecto.
+    wt('r1', 'tienda-demo', '/srv/ejemplo/tienda-demo-ramas/fix-1'),
+    // Archivado: no se propone.
+    wt('r2', 'viejo-demo', '/srv/ejemplo/viejo-demo', { isArchived: true }),
+    // Anidado dentro de otro proyecto: queda cubierto por el de arriba.
+    wt('r3', 'modulo-demo', '/srv/ejemplo/tienda-demo/modulo'),
+    wt('r4', 'api-demo', '/srv/ejemplo/api-demo', { isMainWorktree: true }),
+    // Dos repos con el mismo nombre: los ids no pueden chocar.
+    wt('r5', 'api-demo', '/srv/otro/api-demo', { isMainWorktree: true })
+  ]
+  const repos = leerRepos({ result: { repos: [
+    { id: 'r1', path: '/srv/ejemplo/tienda-demo', displayName: 'Tienda Demo' },
+    { id: 'r4', path: '/srv/ejemplo/api-demo', displayName: 'API Demo' }
+  ] } })
+  const propuestas = proponer(worktrees, repos, [])
+  ok('descarta los archivados', !propuestas.some((p) => p.path.includes('viejo-demo')),
+    JSON.stringify(propuestas))
+  ok('colapsa los anidados en el proyecto que los cubre',
+    !propuestas.some((p) => p.path.endsWith('/modulo')) &&
+    propuestas.filter((p) => p.path.includes('tienda-demo')).length === 1,
+    JSON.stringify(propuestas))
+  ok('un repo con varios worktrees es un solo proyecto, en la ruta del repo',
+    propuestas.find((p) => p.path === '/srv/ejemplo/tienda-demo')?.name === 'Tienda Demo',
+    JSON.stringify(propuestas))
+  ok('el nombre sale de `repo list` y, sin el, del nombre del repo',
+    propuestas.find((p) => p.path === '/srv/otro/api-demo')?.name === 'api-demo',
+    JSON.stringify(propuestas))
+  const ids = propuestas.map((p) => p.id)
+  ok('los ids son estables, sin signos y no se repiten',
+    new Set(ids).size === ids.length && ids.every((i) => /^[a-z0-9][a-z0-9-]*$/.test(i)),
+    ids.join(','))
+  ok('el orden es el de los ids', JSON.stringify(ids) === JSON.stringify([...ids].sort()))
+  ok('las propuestas llevan solo id, name y path',
+    propuestas.every((p) => Object.keys(p).sort().join() === 'id,name,path'),
+    JSON.stringify(propuestas))
+
+  const aceptado = [{ id: 'tienda-demo', name: 'Tienda Demo', path: '/srv/ejemplo/tienda-demo',
+    note: '' }]
+  const resto = proponer(worktrees, repos, aceptado)
+  ok('lo ya aceptado no se vuelve a proponer',
+    !resto.some((p) => p.path === '/srv/ejemplo/tienda-demo'), JSON.stringify(resto))
+  ok('ni lo que queda dentro de un proyecto aceptado',
+    proponer([wt('r9', 'sub-demo', '/srv/ejemplo/tienda-demo/sub')], [], aceptado).length === 0)
+  // Un id nuevo que choca con uno ya aceptado, de OTRO proyecto, no lo pisa.
+  const choque = proponer([wt('r7', 'tienda-demo', '/srv/tercero/tienda-demo',
+    { isMainWorktree: true })], [], aceptado)
+  ok('un id que choca con uno aceptado recibe sufijo',
+    choque.length === 1 && choque[0].id === 'tienda-demo-2', JSON.stringify(choque))
+}
+
+// ───────── el catalogo en el worker: el panel pide, Orca contesta, el dueno decide ─────────
+console.log('\nworker: el catalogo de proyectos se refresca, se acepta y llega al arnes')
+{
+  const { comandoOrca } = await import('../catalogo.mjs')
+  // Un bloque anterior borra RAIZ entera (arriba): sin un userData de Orca el arnes no
+  // tiene donde sembrarse, asi que se vuelve a poner el de este archivo.
+  for (const base of [join(process.env.HOME, 'Library', 'Application Support'),
+    process.env.XDG_CONFIG_HOME, process.env.APPDATA]) {
+    mkdirSync(join(base, 'orca'), { recursive: true })
+  }
+  const bin = join(RAIZ, 'orca-falsa')
+  mkdirSync(bin, { recursive: true })
+  writeFileSync(join(bin, 'ps.json'), JSON.stringify({ id: 'x', ok: true, result: { worktrees: [
+    { repoId: 'r1', repo: 'alfa-demo', path: '/srv/ejemplo/alfa-demo', isArchived: false,
+      isMainWorktree: true },
+    { repoId: 'r2', repo: 'beta-demo', path: '/srv/ejemplo/beta-demo', isArchived: false,
+      isMainWorktree: true },
+    { repoId: 'r3', repo: 'gama-demo', path: '/srv/ejemplo/gama-demo', isArchived: true,
+      isMainWorktree: true }
+  ] } }))
+  writeFileSync(join(bin, 'repos.json'), JSON.stringify({ id: 'x', ok: true, result: { repos: [
+    { id: 'r1', path: '/srv/ejemplo/alfa-demo', displayName: 'Alfa Demo' }
+  ] } }))
+  // La CLI de mentira. Anota cada llamada: lo unico que el catalogo puede ejecutar son
+  // estas dos, con estos argumentos.
+  writeFileSync(join(bin, comandoOrca()), [
+    '#!/bin/sh',
+    'echo "$@" >> "$(dirname "$0")/llamadas.txt"',
+    'case "$1 $2" in',
+    '  "worktree ps") cat "$(dirname "$0")/ps.json" ;;',
+    '  "repo list") cat "$(dirname "$0")/repos.json" ;;',
+    '  *) echo "comando inesperado" >&2; exit 2 ;;',
+    'esac', ''
+  ].join('\n'), { mode: 0o755 })
+  const pathAntes = process.env.PATH
+  process.env.PATH = `${bin}:${pathAntes}`
+
+  const orca = hostFalso(herramientas('catalogo', BUENO), { chats: [] })
+  const { apagar } = await arranca(orca)
+  const pide = async (id, extra) => {
+    orca.store.scopeRequest = { ...extra, id, at: new Date().toISOString() }
+    await hasta(() => orca.store.scopeResult && orca.store.scopeResult.requestId === id, 15000)
+    return orca.store.scopeResult
+  }
+  const md = () => {
+    const carpeta = workspaceDir(PLUGIN_DIR)
+    const ruta = carpeta && join(carpeta, 'PROJECTS.md')
+    return ruta && existsSync(ruta) ? readFileSync(ruta, 'utf8') : ''
+  }
+
+  const r1 = await pide('cat-1', { action: 'proyectos-refrescar' })
+  ok('refrescar contesta que si y cuantas propuestas hay',
+    r1 && r1.ok === true && r1.code === 'refrescado' && r1.proposals === 2, JSON.stringify(r1))
+  const st = orca.store.projectsStatus
+  ok('publica las propuestas para el panel, sin los archivados',
+    st && st.ok === true && st.proposals.map((p) => p.id).join() === 'alfa-demo,beta-demo',
+    JSON.stringify(st))
+  ok('el nombre sale de `repo list`', st && st.proposals[0].name === 'Alfa Demo',
+    JSON.stringify(st))
+  ok('refrescar NO acepta nada por si solo', orca.store.projects === undefined,
+    JSON.stringify(orca.store.projects))
+  const llamadas = readFileSync(join(bin, 'llamadas.txt'), 'utf8').trim().split('\n')
+  ok('solo corrio `worktree ps --json` y `repo list --json`',
+    llamadas.every((l) => l === 'worktree ps --json' || l === 'repo list --json') &&
+    llamadas.length === 2, JSON.stringify(llamadas))
+
+  const r2 = await pide('cat-2', { action: 'proyectos-aceptar',
+    ids: ['alfa-demo', 'inventado'] })
+  ok('aceptar contesta cuantos entraron', r2 && r2.ok === true && r2.added === 1,
+    JSON.stringify(r2))
+  ok('guarda el proyecto con el nombre y la ruta que dijo Orca',
+    JSON.stringify(orca.store.projects) === JSON.stringify([
+      { id: 'alfa-demo', name: 'Alfa Demo', path: '/srv/ejemplo/alfa-demo', note: '' }]),
+    JSON.stringify(orca.store.projects))
+  ok('lo aceptado sale de las propuestas',
+    orca.store.projectsStatus.proposals.map((p) => p.id).join() === 'beta-demo',
+    JSON.stringify(orca.store.projectsStatus))
+  ok('un id que Orca no propone no entra, aunque el panel lo mande',
+    !orca.store.projects.some((p) => p.id === 'inventado'))
+  ok('el arnes se regenera con el proyecto aceptado',
+    await hasta(() => md().includes('alfa-demo') && md().includes('/srv/ejemplo/alfa-demo'), 20000),
+    md())
+
+  const r3 = await pide('cat-3', { action: 'proyectos-nota', project: 'alfa-demo',
+    note: 'Tienda\nen linea.  Cobros y envios' })
+  ok('la nota se guarda en una sola linea', r3 && r3.ok === true &&
+    orca.store.projects[0].note === 'Tienda en linea. Cobros y envios',
+    JSON.stringify([r3, orca.store.projects]))
+  ok('y llega al arnes',
+    await hasta(() => md().includes('Tienda en linea. Cobros y envios'), 20000), md())
+
+  const r4 = await pide('cat-4', { action: 'proyectos-aceptar', ids: ['no-existe'] })
+  ok('aceptar solo lo que no es propuesta no cambia nada y lo dice',
+    r4 && r4.ok === false && r4.code === 'sin-cambios', JSON.stringify(r4))
+  const r5 = await pide('cat-5', { action: 'proyectos-aceptar', ids: 'alfa-demo' })
+  ok('un pedido mal formado se rechaza con codigo',
+    r5 && r5.ok === false && r5.code === 'argumentos-invalidos', JSON.stringify(r5))
+  const r6 = await pide('cat-6', { action: 'proyectos-nota', project: 'fantasma', note: 'x' })
+  ok('una nota para un proyecto que no esta se rechaza',
+    r6 && r6.ok === false && r6.code === 'proyecto-no-existe', JSON.stringify(r6))
+
+  const r7 = await pide('cat-7', { action: 'proyectos-quitar', project: 'alfa-demo' })
+  ok('quitar lo saca del catalogo', r7 && r7.ok === true &&
+    JSON.stringify(orca.store.projects) === '[]', JSON.stringify([r7, orca.store.projects]))
+  ok('y del arnes, que vuelve a decir que no hay proyectos',
+    await hasta(() => !md().includes('alfa-demo') && /No projects accepted yet/.test(md()), 20000),
+    md())
+  apagar()
+
+  // Al arrancar, el arnes sale con lo que ya estaba aceptado: no espera a que alguien
+  // abra el panel.
+  const orca2 = hostFalso(herramientas('catalogo-2', BUENO), { chats: [],
+    projects: [{ id: 'beta-demo', name: 'Beta Demo', path: '/srv/ejemplo/beta-demo',
+      note: 'Backend' }] })
+  const { apagar: apagar2 } = await arranca(orca2)
+  ok('al arrancar siembra PROJECTS.md con los proyectos ya aceptados',
+    await hasta(() => md().includes('beta-demo') && md().includes('Backend'), 20000), md())
+  apagar2()
+
+  // Sin la CLI de Orca: se dice, no se finge una lista vacia.
+  process.env.PATH = '/usr/bin:/bin'
+  const orca3 = hostFalso(herramientas('catalogo-3', BUENO), { chats: [] })
+  const { apagar: apagar3 } = await arranca(orca3)
+  orca3.store.scopeRequest = { id: 'cat-sin', at: new Date().toISOString(),
+    action: 'proyectos-refrescar' }
+  await hasta(() => orca3.store.scopeResult && orca3.store.scopeResult.requestId === 'cat-sin', 15000)
+  const sin = orca3.store.scopeResult
+  ok('sin la CLI de Orca el pedido falla con codigo estable',
+    sin && sin.ok === false && sin.code === 'sin-cli-orca', JSON.stringify(sin))
+  ok('y el estado dice que no se pudo preguntar, no que no hay propuestas',
+    orca3.store.projectsStatus && orca3.store.projectsStatus.ok === false &&
+    orca3.store.projectsStatus.reason === 'sin-cli-orca',
+    JSON.stringify(orca3.store.projectsStatus))
+  apagar3()
+  process.env.PATH = pathAntes
+}
+
+rmSync(RAIZ, { recursive: true, force: true })
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)

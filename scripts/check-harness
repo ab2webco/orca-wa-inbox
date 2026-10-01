@@ -37,6 +37,13 @@ REGLAS = [
      r"language and (the )?register come from"),
 ]
 
+# Los archivos que el plugin GENERA en la carpeta del orquestador y que no salen de
+# `harness/`: PROJECTS.md es la lista de proyectos que el dueno acepto en los ajustes,
+# asi que su contenido no puede vivir en el repo. Son el unico caso en que el arnes
+# siembra mas archivos que los que hay en `harness/`, y eso es deliberado: lo que se
+# comprueba abajo es que sigan siendo UNA excepcion con nombre, no un hueco en la regla.
+GENERADOS = {"PROJECTS.md": "ARCHIVO_PROYECTOS = 'PROJECTS.md'"}
+
 # Donde tiene que estar cada regla. El AGENTS.md es lo que Orca le mete al contexto al
 # agente sin que nadie lo pida; los prompts son lo que llega aunque no haya carpeta.
 OBLIGATORIOS = ["harness/AGENTS.md", "prompts/triage.md", "prompts/take.md"]
@@ -90,7 +97,20 @@ def main() -> int:
         fallos.append("harness/EXAMPLES.md  ya no trae el mensaje atendido bien")
 
     # Lo que el prompt manda leer tiene que existir en el arnes, o el `cat` no trae nada.
+    # Lo generado cuenta como sembrado, pero solo si el plugin de verdad lo declara, el
+    # AGENTS.md lo nombra, y NO esta tambien en `harness/` (se sembraria dos veces, y la
+    # copia del repo ganaria sobre la generada).
     sembrados = {p.name for p in ARNES.glob("*.md")}
+    siembra = (RAIZ / "harness.mjs").read_text(encoding="utf-8")
+    for archivo, declaracion in GENERADOS.items():
+        comprobaciones += 3
+        if declaracion not in siembra:
+            fallos.append(f"harness.mjs  ya no declara el archivo generado {archivo}")
+        if archivo not in cuerpos["harness/AGENTS.md"]:
+            fallos.append(f"harness/AGENTS.md  no nombra {archivo}, que el plugin genera")
+        if archivo in sembrados:
+            fallos.append(f"harness/{archivo}  existe en el repo y tambien se genera")
+        sembrados.add(archivo)
     for rel in ("prompts/triage.md", "prompts/take.md"):
         cuerpo = (RAIZ / rel).read_text(encoding="utf-8")
         nombrados = set(re.findall(r"\b([A-Z][A-Z]+\.md)\b", cuerpo))
@@ -115,7 +135,8 @@ def main() -> int:
             print(f"  {f}", file=sys.stderr)
         return 1
     print(f"{comprobaciones} comprobaciones: las {len(REGLAS)} reglas duras siguen "
-          f"alcanzables por el arnes y por los dos prompts")
+          f"alcanzables por el arnes y por los dos prompts; "
+          f"{len(GENERADOS)} archivo generado declarado")
     return 0
 
 
