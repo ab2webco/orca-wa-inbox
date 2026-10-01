@@ -158,7 +158,11 @@ una automatización de agente).
 - **Orquestador propio del plugin.** El plugin crea su workspace
   (`workspace: "plugin-owned"` de Orca: `<userData>/plugin-workspaces/<plugin>`)
   con un harness preparado para atender casos y la lista de proyectos que el
-  dueño elige en los ajustes (como hace el plugin de Jev). El agente del
+  dueño elige en los ajustes. El plugin de Jev tiene el catálogo, no el
+  orquestador: lista con `orca worktree ps --json` (y nombres con
+  `orca repo list --json`), el dueño acepta propuestas en los ajustes y el
+  worker las guarda; ese patrón se reutiliza. La carpeta `plugin-owned` nace
+  vacía: el worker la ubica (`ORCA_USER_DATA_PATH`) y siembra el harness. El agente del
   orquestador decide por caso: responder, o despachar el pedido al proyecto,
   cuyo propio harness decide si crea ticket, procesa el requerimiento o solo
   responde. El proyecto devuelve resultado, evidencia, texto de respuesta y
@@ -187,6 +191,57 @@ una automatización de agente).
 - **Primera corrida de `ingest`** (riesgo de T2): solo entra lo de las últimas
   `case_window_hours`; lo anterior se marca visto, para no llenar el tablero de
   historial ni gastar Jev en él.
+
+## Contratos (congelados antes de los escritores en paralelo)
+
+**Aprobación por regla.** `wa-scope caso aprobar <id> --actor regla` congela la
+versión igual que el dueño y queda en `caso_evento` con actor `regla`. Se niega
+(`E_EXCEPTION`) si el caso tiene alguna excepción: dinero, credencial,
+compromiso, aviso o error de Jev, o chat en modo "te pregunto antes". `mover`
+no cambia: sigue exigiendo una versión aprobada.
+
+**Errores de `wa-scope caso`.** Salida 2 y una línea JSON en stderr:
+`{"error": "<code>", "detail": "<english text>"}`. Códigos: `E_ARGS`,
+`E_NOT_FOUND`, `E_STAGE` (transición no permitida), `E_NOT_APPROVED`,
+`E_VERSION` (la propuesta cambió), `E_EXCEPTION`, `E_BUSY` (base tomada).
+
+**`jev_juzga(mensaje)`** devuelve `None` (sin llave, error, timeout o fuera de
+alcance) o un dict:
+`{"model": str, "at": iso, "latency_ms": int, "scores": {question_id: float},
+"attention_class": str | None, "flags": [question_id ≥ umbral],
+"exceptions": ["money" | "credential" | "commitment" | "jev"],
+"skip": bool, "needs_agent": bool}`. Se cachea en `juicio` (columna nueva
+`jev` TEXT con ese JSON, `origen = 'jev'`); la clave sigue siendo
+(account, chat_jid, stanza_id).
+
+**Storage `board`** (lo escribe `wa-scope`, lo lee el panel y la insignia):
+
+```json
+{
+  "v": 1,
+  "updated_at": "iso",
+  "truncated": false,
+  "counts": {"recibido": 0, "clasificado": 0, "decision": 0, "trabajo": 0,
+             "listo": 0, "respondido": 0, "cerrado": 0, "bloqueado": 0},
+  "cards": [{
+    "case_id": 1, "account": "pn:…", "chat_jid": "…", "chat_name": "…",
+    "stage": "decision", "title": "…", "summary": "…",
+    "clase": "card", "prioridad": "none",
+    "jev": {"attention_class": "…", "flags": ["…"], "skip": false} ,
+    "proposal": {"tipo": "responder", "texto": "…", "version": "…"},
+    "exceptions": ["money"],
+    "blocked_reason": null,
+    "ticket": null,
+    "updated_at": "iso",
+    "actions": ["enviar", "editar", "ejecutar", "reclasificar", "cerrar", "reabrir"]
+  }]
+}
+```
+
+`jev`, `proposal`, `blocked_reason` y `ticket` pueden ser `null`. Tope: 200
+tarjetas abiertas (las más recientes por `updated_at`) más las cerradas de los
+últimos 7 días hasta 50; `truncated` dice si se cortó. `counts` cuenta todo,
+no solo lo enviado. La insignia del nav = `counts.decision`.
 
 ## Tareas
 
@@ -250,8 +305,11 @@ orquestador y automatización; (T9–T11) estadísticas.
   WhatsApp.
 - Sin mensajes nuevos ni casos pendientes, ninguna corrida gasta tokens de
   modelo.
-- Sin llave de Jev, nada sale solo: todo lo que habría salido queda para el
-  dueño.
+- Sin llave de Jev, todo funciona como hoy: manda el modo del chat. Con llave,
+  un error, timeout o aviso de Jev deja borrador para el dueño (falla cerrado).
+  Motivo: Jev nunca habilita, así que su ausencia tampoco puede quitar lo que el
+  modo del dueño ya habilita; el plugin es público y apagar las respuestas
+  automáticas de quien no tiene llave rompería a esos usuarios.
 - Ningún mensaje sale por WhatsApp sin pasar la revisión de Jev o la aprobación
   del dueño.
 - Un mensaje nuevo llega al tablero clasificado sin que despierte ningún agente
