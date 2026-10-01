@@ -113,6 +113,9 @@ ETAPAS_CON_MOTIVO = ("cerrado", "bloqueado")
 # Quien hizo cada cosa. Es la dimension de "decisiones tomadas por actor" en las
 # estadisticas, asi que es un vocabulario cerrado y no texto libre.
 ACTORES_CASO = ("agente", "jev", "dueno", "automatizacion", "trabajador")
+# Las prioridades de Plane, tal cual: el caso que requiere trabajo abre ahi su tarjeta,
+# y traducir entre dos escalas es como una urgencia termina en "media".
+PRIORIDADES_CASO = ("urgent", "high", "medium", "low", "none")
 
 # Plane agrupa los estados en estos cinco grupos y cada proyecto renombra las columnas
 # a gusto ("Listo", "Entregado", "QA aprobado"). El cierre se decide por el GRUPO y
@@ -2008,6 +2011,90 @@ def caso_fila(con, row):
     return caso
 
 
+def caso_valida(caso, hacia, motivo=None):
+    """La transicion, revisada ANTES de escribir nada. Sale con el error si no vale."""
+    de = caso["etapa"]
+    if hacia not in TRANSICIONES_CASO.get(de, ()):
+        sys.exit(f"case #{caso['case_id']} cannot go from {de} to {hacia}: from {de} "
+                 f"it only goes to {', '.join(TRANSICIONES_CASO.get(de, ())) or 'nowhere'}")
+    if hacia in ETAPAS_CON_MOTIVO and not (motivo or "").strip():
+        sys.exit(f"moving case #{caso['case_id']} to {hacia} needs --motivo: a card "
+                 f"in {hacia} has to say why")
+
+
+def caso_mover(con, caso, hacia, actor, detalle="", **campos):
+    """Cambia la etapa (y los campos que vengan) y deja el evento. Quien llama ya
+    valido con `caso_valida`; no hace commit, para que una operacion de varios pasos
+    sea una sola transaccion."""
+    momento = ahora_caso()
+    sets = dict(campos, etapa=hacia, updated_at=momento)
+    con.execute(f"update caso set {', '.join(f'{k}=?' for k in sets)} where case_id=?",
+                (*sets.values(), caso["case_id"]))
+    caso_evento(con, caso["case_id"], caso["etapa"], hacia, actor, detalle, momento)
+
+
+def caso_tocar(con, caso, actor, detalle, **campos):
+    """Un cambio que no mueve la etapa igual deja evento, con `de` igual a `a`."""
+    caso_mover(con, caso, caso["etapa"], actor, detalle, **campos)
+
+
+def caso_nuevo(con, chat_jid, actor, titulo=None, stanzas=(), detalle=""):
+    """Un caso en recibido con sus mensajes y su evento de nacimiento. Sin commit."""
+    momento = ahora_caso()
+    cuenta = cuenta_activa()
+    case_id = con.execute(
+        "insert into caso (account, chat_jid, etapa, titulo, created_at, updated_at) "
+        "values (?,?,'recibido',?,?,?)",
+        (cuenta, chat_jid, titulo, momento, momento)).lastrowid
+    for stanza in stanzas:
+        con.execute("insert into caso_mensaje (account, stanza_id, case_id, at) "
+                    "values (?,?,?,?)", (cuenta, stanza, case_id, momento))
+    caso_evento(con, case_id, None, "recibido", actor, detalle, momento)
+    return case_id
+
+
+def caso_de_mensaje(con, stanza):
+    row = con.execute("select case_id from caso_mensaje where account=? and stanza_id=?",
+                      (cuenta_activa(), stanza)).fetchone()
+    return row["case_id"] if row else None
+
+
+def cmd_caso_crear(con, a):
+    if a.stanza:
+        ya = caso_de_mensaje(con, a.stanza)
+        if ya:
+            sys.exit(f"message {a.stanza} already belongs to case #{ya}: a message is "
+                     f"in one case at most (use `caso unir` or `caso separar`)")
+    case_id = caso_nuevo(con, a.chat, a.actor, a.titulo,
+                         [a.stanza] if a.stanza else [], "creado")
+    con.commit()
+    return [caso_fila(con, caso_de(con, case_id))]
+
+
+def cmd_caso_mover(con, a):
+    caso = caso_de(con, a.id)
+    caso_valida(caso, a.etapa, a.motivo)
+    caso_mover(con, caso, a.etapa, a.actor, (a.motivo or "").strip())
+    con.commit()
+    return [caso_fila(con, caso_de(con, a.id))]
+
+
+def cmd_caso_clasificar(con, a):
+    caso = caso_de(con, a.id)
+    clase = (a.clase or "").strip()
+    if not clase:
+        sys.exit("--clase is empty: a classified case says what kind of request it is")
+    detalle = f"{clase} · {a.prioridad}"
+    if caso["etapa"] == "clasificado":
+        caso_tocar(con, caso, a.actor, detalle, clase=clase, prioridad=a.prioridad)
+    else:
+        caso_valida(caso, "clasificado")
+        caso_mover(con, caso, "clasificado", a.actor, detalle, clase=clase,
+                   prioridad=a.prioridad)
+    con.commit()
+    return [caso_fila(con, caso_de(con, a.id))]
+
+
 def cmd_caso_listar(con, a):
     sql, params = "select * from caso where account=?", [cuenta_activa()]
     if a.etapa:
@@ -2211,6 +2298,28 @@ def main():
         sp.add_argument("--json", dest="json_sub", action="store_true",
                         default=argparse.SUPPRESS)
         return sp
+
+    def muta(name, **kw):
+        # Todo lo que cambia un caso dice quien lo cambio: sin actor no hay estadistica
+        # de decisiones, y sin evento no hay nada que mostrar en la tarjeta.
+        sp = caso(name, **kw)
+        sp.add_argument("--actor", required=True, choices=list(ACTORES_CASO))
+        return sp
+
+    c = muta("crear", help="opens a case in recibido")
+    c.add_argument("--chat", required=True, help="the chat_jid of the conversation")
+    c.add_argument("--stanza", help="its first message")
+    c.add_argument("--titulo"); c.set_defaults(fn=cmd_caso_crear)
+
+    c = muta("mover", help="moves a case to another stage; only the allowed transitions")
+    c.add_argument("id", type=int); c.add_argument("etapa", choices=list(ETAPAS_CASO))
+    c.add_argument("--motivo", help="why; required to close or block")
+    c.set_defaults(fn=cmd_caso_mover)
+
+    c = muta("clasificar", help="kind and priority; moves recibido -> clasificado")
+    c.add_argument("id", type=int); c.add_argument("--clase", required=True)
+    c.add_argument("--prioridad", required=True, choices=list(PRIORIDADES_CASO))
+    c.set_defaults(fn=cmd_caso_clasificar)
 
     c = caso("listar", help="the cases of the active line, newest first")
     c.add_argument("--etapa", choices=list(ETAPAS_CASO)); c.add_argument("--chat")
