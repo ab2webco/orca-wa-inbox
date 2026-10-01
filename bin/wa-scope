@@ -49,6 +49,7 @@ from wa_settings import (  # noqa: E402
     plugin_store_targets, settings_from_plugin, user_data_roots, valida_ajuste)
 import wa_store  # noqa: E402  (solo lectura: de capture.db se lee la linea activa)
 import wa_jev  # noqa: E402  (el cliente de Jev: falla cerrado, nunca habilita)
+import wa_reglas  # noqa: E402  (el piso fijo de excepciones: corre siempre, con o sin Jev)
 
 def scope_db_path():
     """Estado propio de la herramienta. En Windows va al APPDATA y no al home."""
@@ -62,6 +63,8 @@ DB = scope_db_path()
 # Las herramientas viajan juntas. Buscarlas en el PATH ya habia mandado a wa-scope a
 # un wa-read de otra instalacion.
 WA_READ = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wa-read")
+# Y la unica puerta de salida a WhatsApp, que el tick usa igual que el tablero.
+WA_SEND = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wa-send")
 # El panel del plugin guarda aca via storage.* del host. Es la MISMA verdad que ve el
 # CLI, y vive en wa_settings.py porque wa-read tiene que leerla igual: tenerla solo
 # aca hacia que el panel y el lector de WhatsApp contestaran distinto.
@@ -1916,6 +1919,8 @@ def cmd_pending(con, a):
     Por lo mismo, un store viejo no es "no hay nada que hacer": es que nadie esta
     sincronizando, o sea una instalacion rota. Sale 2, como cuando el sistema no puede
     leer, porque callarlo dejaria al agente sin correr durante dias sin decir por que."""
+    if getattr(a, "needs_agent", False):
+        pendiente_agente(con)
     raw = plugin_store_raw()
     activity = raw.get("activity") or {}
     health = raw.get("health") or {}
@@ -2474,6 +2479,12 @@ def cmd_caso_propuesta(con, a):
         caso_valida(caso, "decision")
         caso_mover(con, caso, "decision", a.actor, detalle, propuesta=texto,
                    propuesta_version=version, propuesta_aprobada=None)
+    # Lo que saldria al chat pasa por el piso fijo: con dinero, credencial o compromiso,
+    # la regla del dueno ya no lo puede aprobar sola (E_EXCEPTION). Solo la respuesta:
+    # las instrucciones de un trabajo no salen a WhatsApp.
+    if propuesta.get("respuesta"):
+        caso_marca_regla(con, a.id, wa_reglas.excepciones(propuesta["respuesta"],
+                                                           wa_reglas.SALIDA))
     con.commit()
     return [caso_fila(con, caso_de(con, a.id))]
 
@@ -2543,6 +2554,8 @@ def cmd_caso_resultado(con, a):
     caso_valida(caso, "listo")
     caso_mover(con, caso, "listo", a.actor, f"responder {version}", propuesta=texto,
                propuesta_version=version, propuesta_aprobada=None, resumen=resumen)
+    # La respuesta del trabajador tambien saldria al chat: el mismo piso que una propuesta.
+    caso_marca_regla(con, a.id, wa_reglas.excepciones(respuesta, wa_reglas.SALIDA))
     con.commit()
     return [caso_fila(con, caso_de(con, a.id))]
 
@@ -2894,6 +2907,24 @@ def caso_marca_jev(con, case_id, juicio):
         con.execute("update caso set jev=? where case_id=?", (resumen, case_id))
 
 
+def caso_marca_regla(con, case_id, excepciones):
+    """El piso fijo (T19), en el caso: las excepciones que dio `wa_reglas` se suman a las
+    que ya tenia (las de Jev o las de antes) y nunca se borran, igual que en
+    `caso_marca_jev`. Deja evento de la regla fija solo cuando cambia algo, y el evento
+    lleva los NOMBRES de las excepciones, nunca el texto que las disparo. Sin commit."""
+    if not excepciones:
+        return False
+    caso = caso_de(con, case_id)
+    previas = json.loads(caso["excepciones"]) if caso.get("excepciones") else []
+    unidas = [e for e in wa_jev.ORDEN_EXCEPCIONES if e in set(previas) | set(excepciones)]
+    if unidas == previas:
+        return False
+    nuevas = [e for e in unidas if e not in previas]
+    caso_tocar(con, caso, "regla", "regla fija: excepciones " + ", ".join(nuevas),
+               excepciones=json.dumps(unidas))
+    return True
+
+
 def ingest_mensaje(con, m, veredicto, horas):
     """Un mensaje nuevo, en SU transaccion: o queda todo (caso, ruta, clasificacion,
     eventos) o nada, y la fila de `caso_mensaje` es lo que hace que un reintento no lo
@@ -2901,6 +2932,9 @@ def ingest_mensaje(con, m, veredicto, horas):
     hecho = dict.fromkeys(CONTEOS_INGEST, 0)
     stanza, chat = m["stanza_id"], m["chat_jid"]
     suelto = m.get("kind") == "grupo"
+    # El piso fijo sobre lo que entro: dinero y credenciales (un compromiso es de lo que
+    # sale, no de lo que pide el cliente). Se calcula antes de tomar la base.
+    piso = wa_reglas.excepciones(m.get("text") or "", wa_reglas.ENTRADA)
     caso_toma(con)
     try:
         # Con la base ya tomada: otro `ingest` pudo llegar a este mensaje entre la
@@ -2920,6 +2954,7 @@ def ingest_mensaje(con, m, veredicto, horas):
             caso_mover(con, caso, "cerrado", veredicto["actor"], veredicto["motivo"])
             if veredicto.get("jev"):
                 caso_marca_jev(con, case_id, veredicto["jev"])
+            caso_marca_regla(con, case_id, piso)
             hecho.update(nuevos=1, casos_creados=1, cerrados=1,
                          ignorados=1 if veredicto.get("dueno") else 0)
         elif accion == "cerrar":
@@ -2939,6 +2974,7 @@ def ingest_mensaje(con, m, veredicto, horas):
             caso_suma_mensaje(con, caso, stanza, "automatizacion", reabre=False)
             hecho.update(nuevos=1, unidos=1)
             case_id = caso["case_id"]
+            caso_marca_regla(con, case_id, piso)
         else:
             case_id, que = caso_asigna(con, stanza, chat, "automatizacion")
             hecho.update(nuevos=1, casos_creados=int(que == "nuevo"),
@@ -2948,6 +2984,7 @@ def ingest_mensaje(con, m, veredicto, horas):
                 hecho["dudosos"] = int(veredicto["clase"] == "doubtful")
             if veredicto and veredicto.get("jev"):
                 caso_marca_jev(con, case_id, veredicto["jev"])
+            caso_marca_regla(con, case_id, piso)
         con.commit()
     except BaseException:
         con.rollback()
@@ -3221,6 +3258,314 @@ def cmd_record(con, a):
     return [{"ok": True}]
 
 
+# ── El tick: la automatizacion solo-comando (kanban-casos, T7) ──────────────────────
+# Orca corre `wa-scope tick` cada minuto con el runner del precheck: sin agente, sin
+# terminal, sin modelo. Hace lo que no necesita lenguaje: la entrada de respaldo, la
+# aprobacion por regla de lo que no es excepcion, el envio por la unica puerta de salida
+# (`wa-send`, con Jev y el piso fijo) y el tablero al dia. Lo que necesita lenguaje lo
+# marca `pending --needs-agent`, que es el precheck de la automatizacion del agente.
+
+# El candado del tick es un archivo con flock y no una fila de `run_lock`: esa tabla es
+# la del agente y el panel la pinta como "corriendo"; un tick cada minuto la tendria
+# encendida sin que haya agente. Y un flock se suelta solo si el proceso muere.
+CANDADO_TICK = "tick.lock"
+# Cuanto espera `wa-send` el veredicto de cada envio (el mismo plazo que el tablero en
+# acciones.mjs), y cuanto puede gastar el tick enviando: Orca corta el comando a los
+# 300 s por defecto. Lo que no entra queda para el minuto siguiente, con el mismo id.
+PLAZO_ENVIO_TICK_S = 25
+PRESUPUESTO_TICK_S = 180
+# Las etapas cuya propuesta `responder` el tick puede mandar: la decision y el resultado
+# de un trabajo (`listo`). Las dos son aprobables (ETAPAS_APROBABLES).
+ETAPAS_TICK = ("decision", "listo")
+# Los motivos de `wa-send` (bin/wa-send) que el tick distingue. Son codigos estables.
+ENVIO_FRENADO = "send-needs-approval"
+ENVIO_SIN_LINEA = "send-no-transport"
+# Lo que no se arregla reintentando: WhatsApp lo rechazo, o el mismo id ya nombra otro
+# texto (cambio la firma entre el borrador y ahora). La tarjeta va a bloqueado con el
+# motivo y la ve el dueno.
+ENVIO_BLOQUEA = ("send-rejected", "send-id-conflict")
+CONTEOS_TICK = ("enviados", "excepciones", "frenados", "esperando", "bloqueados",
+                "errores", "pospuestos")
+
+
+def tick_toma():
+    """El candado del tick, o None si otro tick lo tiene. No espera: un tick que llega
+    mientras otro envia no tiene nada que hacer que el otro no este haciendo."""
+    ruta = os.path.join(os.path.dirname(DB), CANDADO_TICK)
+    os.makedirs(os.path.dirname(ruta), exist_ok=True)
+    fh = open(ruta, "a+")
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        return None
+    return fh
+
+
+def id_envio_caso(case_id, version):
+    """El id de la peticion a `wa-send` para esta version del caso. Es EL MISMO que arma
+    el tablero (acciones.mjs, `entregar`): el tick, un reintento y el clic del dueno
+    sobre la misma version nombran la misma peticion, y `wa-send` la entrega una vez."""
+    return f"caso-{case_id}-{str(version)[:12]}"
+
+
+def envios_del_almacen(req_ids):
+    """{req_id: estado} de la bandeja de salida, en solo lectura, y si el sidecar late.
+    Sin almacen no hay ni lo uno ni lo otro."""
+    ruta = wa_store.store_db_path()
+    if not os.path.exists(ruta):
+        return {}, False
+    try:
+        fuente = sqlite3.connect(f"file:{ruta}?mode=ro", uri=True, timeout=10)
+    except sqlite3.Error:
+        return {}, False
+    try:
+        vivo = wa_store.sidecar_vivo(fuente)
+        estados = {}
+        ids = list(req_ids)
+        for i in range(0, len(ids), 500):
+            parte = ids[i:i + 500]
+            estados.update(fuente.execute(
+                f"select req_id, estado from envio where req_id in "
+                f"({','.join('?' * len(parte))})", parte).fetchall())
+        return estados, vivo
+    except sqlite3.Error:
+        return {}, False
+    finally:
+        fuente.close()
+
+
+def candidatos_tick(con):
+    """Los casos abiertos de la linea activa cuya propuesta vigente es una respuesta, en
+    un chat `responder`: lo unico que el tick puede mandar solo. Del mas viejo al mas
+    nuevo, para que nadie espere detras de lo que llego despues."""
+    scope = merged_scope(con)
+    marcas = ",".join("?" * len(ETAPAS_TICK))
+    salida = []
+    for row in con.execute(
+            f"select * from caso where account=? and etapa in ({marcas}) and propuesta is "
+            f"not null and propuesta_version is not null order by updated_at, case_id",
+            (cuenta_activa(), *ETAPAS_TICK)):
+        caso = dict(row)
+        try:
+            propuesta = json.loads(caso["propuesta"])
+        except (TypeError, ValueError):
+            continue
+        if propuesta.get("tipo") != "responder" or not propuesta.get("respuesta"):
+            continue
+        if (scope.get(caso["chat_jid"]) or {}).get("mode") != "responder":
+            continue
+        salida.append((caso, propuesta["respuesta"]))
+    return salida
+
+
+def tick_cierra(con, case_id, hacia, detalle, firma=True):
+    """Mueve el caso en su propia transaccion, releyendolo con la base tomada: entre la
+    lectura y aca pudo moverlo el dueno. `firma=False` registra un envio que ya salio con
+    la aprobacion del dueno en `wa-send --approve` (fuera del tablero): el mensaje esta
+    en la linea, y negarse a anotarlo dejaria la tarjeta mintiendo."""
+    caso_toma(con)
+    try:
+        caso = caso_de(con, case_id)
+        if caso["etapa"] not in ETAPAS_TICK:
+            con.rollback()
+            return False
+        if firma:
+            caso_valida(caso, hacia, detalle)
+        caso_mover(con, caso, hacia, "automatizacion", detalle)
+        con.commit()
+        return True
+    except BaseException:
+        con.rollback()
+        raise
+
+
+def tick_frena(con, case_id, detalle):
+    """`wa-send` dejo el texto como borrador (Jev o el piso fijo lo frenaron). El caso
+    sigue en su etapa SIN la firma de la regla: la que cuenta ahora es la del dueno."""
+    caso_toma(con)
+    try:
+        caso = caso_de(con, case_id)
+        caso_tocar(con, caso, "automatizacion", detalle, propuesta_aprobada=None)
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+
+
+def tick_envia(caso, texto, req):
+    """`wa-send --send` con el id del caso: (codigo, detalle). `None` es enviado. Nunca
+    devuelve el texto del mensaje: lo que se lee de stderr es el codigo y su detalle."""
+    args = [WA_SEND, f"--id={req}"]
+    if caso.get("account"):
+        args.append(f"--line={caso['account']}")
+    args += ["--send", f"--timeout={PLAZO_ENVIO_TICK_S}", "--json", "--", caso["chat_jid"],
+             texto]
+    try:
+        p = subprocess.run(args, capture_output=True, text=True,
+                           timeout=PLAZO_ENVIO_TICK_S + 30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return "fallo", str(exc)[:200]
+    if p.returncode == 0:
+        return None, ""
+    lineas = [l.strip() for l in (p.stderr or "").splitlines() if l.strip()]
+    primera = lineas[0] if lineas else ""
+    if primera.startswith("wa-send: "):
+        return primera[len("wa-send: "):].split()[0], " ".join(lineas[1:])[:200]
+    if "no agent name is configured" in primera:
+        return "send-no-signature", primera[:200]
+    return "fallo", primera[:200]
+
+
+def cmd_tick(con, a):
+    """Una vuelta del minuto. Idempotente: correrlo dos veces seguidas no manda ni anota
+    nada la segunda. Imprime UNA linea JSON con los conteos y nunca el texto de un
+    mensaje (la salida termina en el historial de corridas de Orca)."""
+    resumen = dict({"busy": False, "ingest": None, "sin_transporte": False,
+                    "sin_firma": False}, **dict.fromkeys(CONTEOS_TICK, 0))
+    candado = tick_toma()
+    if candado is None:
+        resumen["busy"] = True
+        print(json.dumps(resumen, ensure_ascii=False))
+        return None
+    try:
+        inicio = time.time()
+        # La entrada de respaldo: el worker la dispara al llegar cada mensaje; si ese
+        # evento se perdio, el minuto la recoge. Una falla suya no frena el resto.
+        try:
+            hecho = cmd_ingest(con, a)[0]
+            resumen["ingest"] = {k: hecho.get(k, 0) for k in
+                                 ("nuevos", "casos_creados", "cerrados")}
+        except (sqlite3.Error, OSError, SystemExit) as exc:
+            if con.in_transaction:
+                con.rollback()
+            print(f"wa-scope: ingest skipped: {exc}", file=sys.stderr)
+        candidatos = candidatos_tick(con)
+        estados, vivo = envios_del_almacen(
+            [id_envio_caso(c["case_id"], c["propuesta_version"]) for c, _ in candidatos])
+        if candidatos and not vivo:
+            # Sin la linea corriendo no se firma ni se encola nada: quedaria aprobado por
+            # la regla algo que no salio. El minuto siguiente lo intenta de nuevo.
+            resumen["sin_transporte"] = True
+            candidatos = []
+        for caso, texto in candidatos:
+            if time.time() - inicio > PRESUPUESTO_TICK_S:
+                resumen["pospuestos"] += 1
+                continue
+            try:
+                tick_caso(con, caso, texto, estados, resumen)
+            except CasoFalla as falla:
+                resumen["errores"] += 1
+                print(f"wa-scope: tick case #{caso['case_id']}: {falla}", file=sys.stderr)
+            except sqlite3.OperationalError as exc:
+                resumen["errores"] += 1
+                print(f"wa-scope: tick case #{caso['case_id']}: {exc}", file=sys.stderr)
+            if resumen["sin_transporte"] or resumen["sin_firma"]:
+                break
+        try:
+            publica_tablero(con)
+        except (OSError, sqlite3.Error) as exc:
+            print(f"wa-scope: board not published: {exc}", file=sys.stderr)
+    finally:
+        candado.close()
+    print(json.dumps(resumen, ensure_ascii=False))
+    return None
+
+
+def tick_caso(con, caso, texto, estados, resumen):
+    """Un caso del tick: lo que ya pasa en la bandeja de salida manda; si no hay nada,
+    firma la regla y sale por `wa-send`."""
+    cid, version = caso["case_id"], caso["propuesta_version"]
+    req = id_envio_caso(cid, version)
+    estado = estados.get(req)
+    if estado == "borrador":
+        # Frenado antes, o dejado por el tablero: espera al dueno, no al minuto.
+        resumen["esperando"] += 1
+        return
+    if estado == "enviado":
+        aprobada = caso.get("propuesta_aprobada") == version
+        if tick_cierra(con, cid, "respondido", f"enviado {req}", firma=aprobada):
+            resumen["enviados"] += 1
+        return
+    if estado == "rechazado":
+        if tick_cierra(con, cid, "bloqueado", f"send-rejected {req}"):
+            resumen["bloqueados"] += 1
+        return
+    # Sin peticion, o pendiente (un tick anterior se quedo sin veredicto): la regla firma
+    # —idempotente si ya firmo— y se pregunta con el MISMO id.
+    try:
+        cmd_caso_aprobar(con, argparse.Namespace(id=cid, version=version, actor="regla"))
+    except CasoFalla as falla:
+        if falla.error != "E_EXCEPTION":
+            raise
+        resumen["excepciones"] += 1
+        return
+    codigo, detalle = tick_envia(caso, texto, req)
+    if codigo is None:
+        if tick_cierra(con, cid, "respondido", f"enviado {req}"):
+            resumen["enviados"] += 1
+        return
+    if codigo == ENVIO_FRENADO:
+        tick_frena(con, cid, f"envio frenado: {codigo} {req} {detalle}".strip()[:300])
+        resumen["frenados"] += 1
+        return
+    if codigo == ENVIO_SIN_LINEA:
+        resumen["sin_transporte"] = True
+        return
+    if codigo == "send-no-signature":
+        resumen["sin_firma"] = True
+        return
+    if codigo in ENVIO_BLOQUEA:
+        if tick_cierra(con, cid, "bloqueado", f"{codigo} {req}"):
+            resumen["bloqueados"] += 1
+        return
+    # send-timeout, send-denied y lo demas: queda como esta y el minuto siguiente
+    # pregunta por el mismo id, que no entrega dos veces.
+    resumen["errores"] += 1
+    print(f"wa-scope: tick case #{cid}: {codigo}", file=sys.stderr)
+
+
+def casos_para_agente(con):
+    """Los casos abiertos de la linea activa que necesitan lenguaje, los ids.
+
+    - `recibido`: nada lo clasifico (sin llave de Jev, Jev con error, o reabierto por un
+      mensaje que Jev no juzgo). Clasificar y redactar es del agente, como antes.
+    - `clasificado` con propuesta: el dueno lo reclasifico y hay que proponer de nuevo.
+    - `clasificado` sin propuesta y marcado `necesita_agente` por Jev.
+    - `clasificado` sin propuesta y SIN veredicto de Jev (`jev` vacio): lo clasifico una
+      regla, el dueno o un veredicto en cache, y nadie mas va a redactar la respuesta.
+      Sin llave de Jev este es el camino de todos los casos.
+
+    Lo que Jev juzgo y no marco para el agente (la zona gris, o una credencial que el
+    agente no debe ver) no lo despierta: lo resuelve el dueno en el tablero. Un trabajo
+    aprobado (`trabajo`) tampoco: su despacho es T8."""
+    casos = []
+    for r in con.execute(
+            "select case_id, etapa, propuesta, jev, necesita_agente from caso where "
+            "account=? and etapa in ('recibido','clasificado') order by updated_at, case_id",
+            (cuenta_activa(),)):
+        if (r["etapa"] == "recibido" or r["propuesta"] or r["necesita_agente"]
+                or not r["jev"]):
+            casos.append(r["case_id"])
+    return casos
+
+
+def pendiente_agente(con):
+    """`pending --needs-agent`: el precheck del agente. 0 con los casos si alguno
+    necesita lenguaje; 1 callado si no. Lee solo la base propia: es barato a proposito."""
+    casos = casos_para_agente(con)
+    if not casos:
+        sys.exit(1)
+    print(json.dumps({"needs_agent": len(casos), "cases": casos}, ensure_ascii=False))
+    sys.exit(0)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -3286,7 +3631,15 @@ def main():
                             "to do, 2 = blocked (for the precheck)")
     s.add_argument("--only-taken", action="store_true",
                    help="only counts what was marked by hand with Take")
+    s.add_argument("--needs-agent", action="store_true",
+                   help="the agent automation's precheck: 0 (and the case ids) only when "
+                        "an open case needs language; 1, silent, otherwise")
     s.set_defaults(fn=cmd_pending)
+
+    s = add("tick", help="one minute of the command-only automation, no model: backup "
+                         "ingest, rule approval and wa-send --send of the clean replies "
+                         "on responder chats, board sync. Idempotent; one JSON line")
+    s.set_defaults(fn=cmd_tick)
 
     s = add("work", help="what is in progress and what is left; the state between runs")
     s.add_argument("--stanza"); s.add_argument("--chat"); s.add_argument("--name")
@@ -3511,6 +3864,8 @@ def main():
         print(json.dumps({"error": falla.error, "detail": falla.detail},
                          ensure_ascii=False), file=sys.stderr)
         sys.exit(2)
+    if rows is None:                     # el comando ya escribio su propia salida (tick)
+        return
     if a.json:
         print(json.dumps(rows, ensure_ascii=False, indent=2)); return
     if not rows:

@@ -471,7 +471,7 @@ console.log('\nwa-send: con llave, Jev revisa antes de enviar')
   const { home, almacen } = casaConJev()
   ponerLlave(home, `TYPESAFE_API_KEY=${LLAVE_JEV}\n`)
   const socket = socketFalso()
-  const r = await correrEnvio(home, ['Cliente Alfa', 'Manana te confirmamos', '--send'],
+  const r = await correrEnvio(home, ['Cliente Alfa', 'Tomo esto', '--send'],
     { almacen, socket, env: jev.env })
   ok('sin la cabecera del espejo no hay llave: manda el modo, como hoy',
     r.code === 0 && socket.enviados.length === 1 && jev.pedidos.length === 0, r.stderr)
@@ -496,6 +496,72 @@ console.log('\nwa-send: con llave, Jev revisa antes de enviar')
     aprobado.stderr)
   almacen.cerrar()
   jev.cerrar()
+}
+
+// ── El piso fijo (T19): dinero, credenciales y compromisos, con o sin Jev ───────────
+console.log('\nwa-send: el piso fijo frena lo que es del dueno, sin llave de Jev')
+{
+  const { home, almacen } = casaConJev()
+  const socket = socketFalso()
+  const precio = await correrEnvio(home, ['Cliente Alfa', 'el precio es $1.400', '--send',
+    '--id', 'REQ-PRECIO'], { almacen, socket })
+  ok('un precio NO sale sin el dueno, aunque no haya llave', socket.enviados.length === 0,
+    JSON.stringify(socket.enviados))
+  ok('queda como borrador, con el codigo de siempre',
+    precio.primera === 'wa-send: send-needs-approval' && precio.code === 3 &&
+    filasEnvio(home)[0]?.estado === ENVIO.BORRADOR, precio.stderr)
+  ok('y dice por que: la regla fija, con la excepcion', precio.stderr.includes('money') &&
+    precio.stderr.includes('--approve REQ-PRECIO'), precio.stderr)
+  ok('la bitacora del borrador tambien lo dice',
+    bitacora(home).some((f) => f.action === 'draft' && f.detail.includes('money') &&
+      f.detail.includes('REQ-PRECIO')), JSON.stringify(bitacora(home)))
+  ok('y no copia el texto en la bitacora',
+    !bitacora(home).some((f) => f.detail.includes('1.400')), JSON.stringify(bitacora(home)))
+
+  const limpio = await correrEnvio(home, ['Cliente Alfa', 'hola, ya lo revisamos', '--send'],
+    { almacen, socket })
+  ok('lo limpio sigue saliendo', limpio.code === 0 && socket.enviados.length === 1,
+    limpio.stderr)
+
+  const promesa = await correrEnvio(home, ['Cliente Alfa', 'Queda listo el viernes', '--send'],
+    { almacen, socket })
+  ok('una fecha prometida tampoco sale', socket.enviados.length === 1 &&
+    promesa.primera === 'wa-send: send-needs-approval' &&
+    promesa.stderr.includes('commitment'), promesa.stderr)
+
+  const aprobado = await correrEnvio(home, ['--approve', 'REQ-PRECIO'], { almacen, socket })
+  ok('el dueno es la compuerta: su aprobacion lo envia', aprobado.code === 0 &&
+    socket.enviados.length === 2 && socket.enviados[1].texto.startsWith('el precio es $1.400'),
+  aprobado.stderr + JSON.stringify(socket.enviados))
+  almacen.cerrar()
+}
+{
+  // Jev dice que no hay nada: el piso igual frena. Jev solo suma.
+  const jev = await jevFalso(jevDice())
+  const { home, almacen } = casaConJev()
+  ponerLlave(home)
+  const socket = socketFalso()
+  const r = await correrEnvio(home, ['Cliente Alfa', 'el precio es $1.400', '--send'],
+    { almacen, socket, env: jev.env })
+  ok('con Jev limpio, el piso igual lo deja para el dueno',
+    socket.enviados.length === 0 && r.primera === 'wa-send: send-needs-approval' &&
+    r.stderr.includes('money'), r.stderr)
+  almacen.cerrar()
+  jev.cerrar()
+}
+{
+  // El nombre del agente no cuenta: la firma la pone la herramienta, no la respuesta.
+  const home = nueva()
+  firmar(home, 'Pago Rapido Hoy')
+  const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  almacen.registrarLinea({ cuenta: CUENTA, lid: 'x@lid', pn: 'y@s.whatsapp.net' })
+  autorizar(home, { jid: ALFA, nombre: 'Cliente Alfa', modo: 'responder' })
+  const socket = socketFalso()
+  const r = await correrEnvio(home, ['Cliente Alfa', 'hola, ya lo revisamos', '--send'],
+    { almacen, socket })
+  ok('la firma del agente no dispara el piso', r.code === 0 && socket.enviados.length === 1,
+    r.stderr)
+  almacen.cerrar()
 }
 
 console.log('\nwa-send: sin nombre de agente no se envia, ni siquiera en responder')

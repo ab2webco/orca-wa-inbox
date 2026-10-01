@@ -481,6 +481,12 @@ const PANELES = [
     enTodosLosAnchos: true, pestana: 'aprobacion',
     datos: Object.assign({}, DATOS, { jevStatus: { at: new Date().toISOString(),
       enabled: true, keySet: true, mirror: 'activo' } }) },
+  // Jev encendido con la llave guardada, pero con un `jev.env` que el plugin no escribio:
+  // la nota no manda a reescribir la llave y ofrece usar la guardada.
+  { nombre: 'config-jev-ajeno', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, pestana: 'aprobacion',
+    datos: Object.assign({}, DATOS, { jevStatus: { at: new Date().toISOString(),
+      enabled: true, keySet: true, mirror: 'ajeno' } }) },
   { nombre: 'config-proyectos-vacio', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, datos: SIN_PROYECTOS, pestana: 'proyectos' },
   { nombre: 'config-proyectos-fallo', archivo: 'config.html', anchos: ANCHOS_ESTADO,

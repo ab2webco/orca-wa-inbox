@@ -273,11 +273,14 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
 - [x] T6 — Canal panel → worker → `wa-scope caso` para las acciones del dueño
       (`--actor dueno` lo fuerza el worker), códigos de error estables.
       Cerrada en W1 (7f5e775); `npm run check` verde tras integrar la ronda 2.
-- [ ] T7 — `wa-scope tick` + automatización solo-comando; automatización de
+- [x] T7 — `wa-scope tick` + automatización solo-comando; automatización de
       agente con precheck `pending --needs-agent` y prompt corto por caso;
       reemplazan `triage` y `take` (conservar ids de lo que el dueño ya
       prendió; lo decide el test de manifiesto); `engines` exige un Orca con
       automatizaciones solo-comando.
+      Cerrada en W3 (8e36089, 5250852; integrada 7b8b06b): `tick` cada minuto sin
+      modelo y `workspace: plugin-owned`; `triage` conserva su id con precheck
+      `--needs-agent`; `take` se borra; `engines >=1.4.160`. Check verde.
 - [ ] T8 — Despacho al proyecto desde el orquestador: entrega del pedido con su
       instrucción de respuesta, reporte con `caso resultado`, verificación con
       evidencia (sin evidencia → Bloqueado). Depende de T0 y T12.
@@ -286,7 +289,7 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
       Hecho en W3 (652b6b9): catálogo desde Orca y PROJECTS.md en el harness.
       Falta registrar el workspace propio del plugin (`workspace: plugin-owned`), que
       va con T7.
-- [ ] T13 — Ajustes por chat: proyecto en lugar de Plane, modos nuevos, reglas
+- [x] T13 — Ajustes por chat: proyecto en lugar de Plane, modos nuevos, reglas
       por texto a proyecto; migración sin pérdida.
       Cerrada en W3 (bac9ec1, 8efe23c); la UI la rehace T17.
 - [ ] T14 — Aprobación por WhatsApp (chat propio): sonda en vivo primero, luego
@@ -306,19 +309,29 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
       (`<lid>:90@lid`) duplica a la persona; `transport-silent` salta cuando el
       sync cae durante el reinicio del sidecar.
       Cerrada en W2 (4f96d5f, eccfe91) y W1 (50cda3e).
-- [ ] T17 — Ajustes rehechos para el modelo nuevo: pestañas (Estado,
+- [x] T17 — Ajustes rehechos para el modelo nuevo: pestañas (Estado,
       Conversaciones, Proyectos, Su aprobacion, Agente, Avanzado), un guardar por
       tarjeta, cero `<select>` nativos (en el panel de Orca su lista no se dibuja;
       Jev ya lo documento y uso grupos de botones), conversaciones y proyectos con
       autocompletar propio, Jev con interruptor, reglas viejas de Plane marcadas.
       Prueba que impide volver a meter un `<select>`.
-- [ ] T19 — Piso fijo de excepciones sin Jev: reglas en código (dinero,
+      Cerrada (a2e27c0, integrada e070d43).
+- [x] T19 — Piso fijo de excepciones sin Jev: reglas en código (dinero,
       credencial, compromiso de fecha) sobre el mensaje que entra y sobre la
       respuesta propuesta o enviada; se suman a las de Jev (Jev solo agrega). Así
       "Su aprobacion" dice la verdad con Jev apagado. Prefiere preguntar de más.
+      Cerrada en W2 (545e25b, 5bb186b) y el texto de ajustes (5e856eb).
 - [ ] T18 — Huecos de CLI vistos en T6: editar la propuesta en `listo`,
       reclasificar desde `clasificado`, `wa-send` aprobado por el dueño sin dejar
       fila de borrador.
+- [ ] T20 — Huecos de T7: un caso que Jev juzgó en zona gris o con credencial
+      queda en `clasificado` sin propuesta, no despierta al agente y no cuenta en
+      la insignia (debe llegar a "Tu decisión"); los avisos de cierre de Plane del
+      triage viejo ya no corren (decidir si se retiran con Plane).
+- [ ] T21 — Sin pestaña Bandeja: el tablero es el panel. Historial del agente en
+      el detalle de la tarjeta, "Atender ahora" e "Ignorar" como acciones de la
+      tarjeta, proyecto asignable a mano desde el detalle. Va con el rediseño del
+      tablero (W4).
 
 Rama `feat/tablero-casos`, desde `main` en v4.9.0. PRs encadenados:
 (T1–T3) decisiones: casos, entrada y Jev; (T4–T6, T13) tablero y ajustes; (T7, T8, T12, T14, T15)

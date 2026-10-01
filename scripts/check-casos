@@ -315,13 +315,13 @@ print("\nla propuesta")
 with tempfile.TemporaryDirectory() as home:
     cid = caso_clasificado(home)
     p = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
-           "Ya lo revisamos, queda para hoy.", "--actor", "agente")[0]
+           "Ya lo revisamos, queda en curso.", "--actor", "agente")[0]
     v1 = p["propuesta_version"]
     ok("proponer mueve clasificado -> decision y devuelve la version",
        p["etapa"] == "decision" and bool(v1) and len(v1) == 64, f"quedo {p}")
     ok("la propuesta queda guardada, con su tipo y su texto",
        p["propuesta"] == {"tipo": "responder",
-                          "respuesta": "Ya lo revisamos, queda para hoy."},
+                          "respuesta": "Ya lo revisamos, queda en curso."},
        f"propuesta {p['propuesta']}")
     esperada = hashlib.sha256(json.dumps(
         p["propuesta"], sort_keys=True, separators=(",", ":"),
@@ -335,7 +335,7 @@ with tempfile.TemporaryDirectory() as home:
 
     antes = cuenta(home, "select count(*) from caso_evento")
     otra = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
-              "Ya lo revisamos, queda para hoy.", "--actor", "agente")[0]
+              "Ya lo revisamos, queda en curso.", "--actor", "agente")[0]
     ok("proponer lo mismo da la misma version", otra["propuesta_version"] == v1)
     ok("y no escribe un evento por cada repaso de triage",
        cuenta(home, "select count(*) from caso_evento") == antes)
@@ -2019,6 +2019,499 @@ if NODE:
         falso.cerrar()
         os.environ.clear()
         os.environ.update(antes)
+
+
+# ── 16. El piso fijo de excepciones (T19) ────────────────────────────────────────
+# Sin la llave de Jev nada marcaba dinero, credenciales ni compromisos, y la aprobacion
+# por regla dejaba salir una respuesta con un precio sin el dueno. El piso es codigo
+# determinista: siempre corre, y Jev solo puede sumar.
+def carga_reglas():
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, str(WA_SCOPE.parent))
+    import wa_reglas  # noqa: E402
+    return wa_reglas
+
+
+print("\nel piso fijo: el modulo")
+reglas = carga_reglas()
+ok("usa los nombres de excepcion de Jev",
+   set(reglas.EXCEPCIONES_PISO) <= set(carga_jev().ORDEN_EXCEPCIONES)
+   and set(reglas.EXCEPCIONES_PISO) == {"money", "credential", "commitment"})
+for texto, direccion, esperado in (
+        # dinero, en las dos direcciones y en los tres idiomas
+        ("cuanto vale el plan?", "entrada", ["money"]),
+        ("¿Cuánto cuesta la instalación?", "entrada", ["money"]),
+        ("el precio es $1.400", "salida", ["money"]),
+        ("son 250.000 COP", "salida", ["money"]),
+        ("le envio la factura", "entrada", ["money"]),
+        ("ya hice la transferencia", "entrada", ["money"]),
+        ("me hacen un descuento?", "entrada", ["money"]),
+        ("necesito la cotización", "entrada", ["money"]),
+        ("ya pagué", "entrada", ["money"]),
+        ("hay que pagar hoy", "entrada", ["money"]),
+        ("queda un saldo de 1,250.50", "entrada", ["money"]),
+        ("cuanto me cobran por eso", "entrada", ["money"]),
+        ("send me the invoice please", "entrada", ["money"]),
+        ("what's the price?", "entrada", ["money"]),
+        ("the fee is 30 USD", "salida", ["money"]),
+        ("can I get a refund", "entrada", ["money"]),
+        ("€ 40 per month", "salida", ["money"]),
+        ("qual é o preço?", "entrada", ["money"]),
+        ("mando o boleto ou pix?", "entrada", ["money"]),
+        ("custa R$ 99", "salida", ["money"]),
+        ("o pagamento caiu", "entrada", ["money"]),
+        # credencial, en las dos direcciones
+        ("la contraseña es Hunter2xx", "entrada", ["credential"]),
+        ("me pasas usuario y clave?", "entrada", ["credential"]),
+        ("cual es el password del wifi", "entrada", ["credential"]),
+        ("qual é a senha?", "entrada", ["credential"]),
+        ("el código de verificación es 482913", "entrada", ["credential"]),
+        ("ahi va el token ghp_abcdefghijklmnop1234", "salida", ["credential"]),
+        ("mi PIN es 4455", "entrada", ["credential"]),
+        ("entra a https://x.example.com/?access_token=abc123def", "entrada",
+         ["credential"]),
+        # compromiso: solo en lo que sale
+        ("Queda listo el viernes", "salida", ["commitment"]),
+        ("Mañana te confirmo", "salida", ["commitment"]),
+        ("lo revisamos hoy", "salida", ["commitment"]),
+        ("pasado mañana lo tienes", "salida", ["commitment"]),
+        ("el lunes lo vemos", "salida", ["commitment"]),
+        ("a más tardar el 15/10", "salida", ["commitment"]),
+        ("en 2 horas te lo envío", "salida", ["commitment"]),
+        ("le confirmo que sale", "salida", ["commitment"]),
+        ("tomorrow it will be ready", "salida", ["commitment"]),
+        ("we'll fix it by Friday", "salida", ["commitment"]),
+        ("fica pronto amanhã", "salida", ["commitment"]),
+        ("hoje eu te envio", "salida", ["commitment"]),
+        # varias a la vez, en el orden del contrato
+        ("Mañana te paso la factura y la clave: Abc12345", "salida",
+         ["money", "credential", "commitment"]),
+        # lo limpio
+        ("hola, ya lo revisamos", "salida", []),
+        # avisar no es prometer: sin fecha ni entrega, una respuesta de soporte sigue sola
+        ("ya lo revisamos y te aviso", "salida", []),
+        ("en cuanto sepa algo les avisamos", "salida", []),
+        ("we'll keep you posted", "salida", []),
+        ("assim que souber te aviso", "salida", []),
+        ("Tomo esto.", "salida", []),
+        ("gracias!", "entrada", []),
+        ("el sitio carga lento", "entrada", []),
+        ("revisa la pagina de inicio", "entrada", []),
+        ("Thanks, we are looking into it", "salida", []),
+        ("Obrigado, estamos olhando", "salida", []),
+        ("", "salida", []),
+        (None, "entrada", []),
+        # lo de entrada nunca es compromiso, aunque nombre una fecha
+        ("lo necesito para mañana el viernes", "entrada", []),
+        ("can you have it by Friday?", "entrada", [])):
+    salio = reglas.excepciones(texto, direccion)
+    ok(f"{direccion}: {texto!r} -> {esperado}", salio == esperado, f"salio {salio}")
+
+
+def _da_error(f):
+    try:
+        f()
+    except ValueError:
+        return True
+    return False
+
+
+ok("una direccion desconocida levanta ValueError",
+   _da_error(lambda: reglas.excepciones("x", "otra")))
+
+
+def fila_caso(home, cid):
+    return dict(db_de(home).execute("select * from caso where case_id=?",
+                                    (int(cid),)).fetchone())
+
+
+def excepciones_de(home, cid):
+    valor = fila_caso(home, cid)["excepciones"]
+    return json.loads(valor) if valor else []
+
+
+print("\nel piso fijo: entrada, propuesta y aprobacion por regla, sin Jev")
+if not NODE:
+    print("  aviso: sin node, no se armo el almacen de mensajes", file=sys.stderr)
+else:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(PERSONA, "G1", "cuanto vale el plan? la clave es Zx9secreta",
+                             10)])
+        autoriza(home)
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        ingiere(home)
+        c = caso_de_stanza(home, "G1")
+        ok("ingest marca dinero y credencial desde el mensaje que entra",
+           c and excepciones_de(home, c["case_id"]) == ["money", "credential"],
+           f"{c and fila_caso(home, c['case_id'])}")
+        ev = [e for e in (c or {}).get("eventos", []) if e["actor"] == "regla"]
+        ok("con un evento de la regla fija",
+           len(ev) == 1 and "money" in ev[0]["detalle"]
+           and "credential" in ev[0]["detalle"], f"{c and c['eventos']}")
+        ok("y el secreto no queda en ningun evento",
+           cuenta(home, "select count(*) from caso_evento where detalle like '%Zx9secreta%'")
+           == 0)
+        cid = str(c["case_id"])
+        js(home, "caso", "clasificar", cid, "--clase", "alert", "--prioridad", "none",
+           "--actor", "agente")
+        v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+               "Hola, ya lo revisamos.", "--actor", "agente")[0]["propuesta_version"]
+        ok("una propuesta limpia no borra lo que entro: la regla sigue sin aprobar",
+           excepciones_de(home, cid) == ["money", "credential"]
+           and error_de(corre(home, "caso", "aprobar", cid, "--version", v, "--actor",
+                              "regla")) == "E_EXCEPTION")
+
+    with tempfile.TemporaryDirectory() as home:
+        js(home, "set", CHAT, "--provider", "ninguno", "--mode", "responder")
+        cid = caso_clasificado(home, "G2")
+        v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+               "Queda listo el viernes", "--actor", "agente")[0]["propuesta_version"]
+        ok("una propuesta que promete fecha marca commitment",
+           excepciones_de(home, cid) == ["commitment"], f"{fila_caso(home, cid)}")
+        ok("y la regla no la aprueba: E_EXCEPTION",
+           error_de(corre(home, "caso", "aprobar", cid, "--version", v, "--actor", "regla"))
+           == "E_EXCEPTION")
+        ok("el dueno si", js(home, "caso", "aprobar", cid, "--version", v, "--actor",
+                             "dueno")[0]["aprobada"])
+        evs = js(home, "caso", "ver", cid)[0]["eventos"]
+        ok("el evento de la propuesta dice que fue la regla fija, sin el texto",
+           any(e["actor"] == "regla" and "commitment" in e["detalle"]
+               and "viernes" not in e["detalle"] for e in evs), f"{evs}")
+
+        cid = caso_clasificado(home, "G3")
+        v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+               "Hola, con gusto lo revisamos.", "--actor", "agente")[0]["propuesta_version"]
+        ok("un saludo sin compromisos no deja excepcion", excepciones_de(home, cid) == [])
+        ok("ni evento de la regla fija",
+           not any(e["actor"] == "regla" for e in js(home, "caso", "ver", cid)[0]["eventos"]))
+        ok("y la regla lo aprueba",
+           js(home, "caso", "aprobar", cid, "--version", v, "--actor", "regla")[0]["aprobada"])
+
+        cid = caso_clasificado(home, "G4")
+        js(home, "caso", "propuesta", cid, "--tipo", "trabajar", "--instrucciones",
+           "revisar el cobro duplicado de manana", "--actor", "agente")
+        ok("las instrucciones de un trabajo no salen al chat: no marcan",
+           excepciones_de(home, cid) == [], f"{fila_caso(home, cid)}")
+
+    print("\nel piso fijo: con Jev, la union")
+    falso = JevFalso(lambda cuerpo: (200, respuestas(cuerpo["questions"],
+                                                     choice="support_request",
+                                                     asks_owner_to_act=0.8)))
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "U1", "cuanto vale el plan?", 10)])
+            autoriza(home)
+            ingiere(home)
+            c = caso_de_stanza(home, "U1")
+            ok("Jev dijo que no hay excepcion y se pregunto",
+               len(falso.pedidos) == 1, f"{len(falso.pedidos)} pedidos")
+            ok("pero la del piso queda: Jev solo suma",
+               c and excepciones_de(home, c["case_id"]) == ["money"],
+               f"{c and fila_caso(home, c['case_id'])}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
+# ── 17. El tick: la automatizacion solo-comando (T7) ─────────────────────────────
+# `wa-scope tick` corre cada minuto sin modelo: ingest de respaldo, aprobacion por regla
+# de las respuestas limpias en chats `responder`, envio por `wa-send --send` (Jev y el
+# piso fijo siguen mandando) con un id por caso y version, y el tablero al dia. Aca el
+# sidecar es de mentira: late en store_meta y da por enviado lo pendiente, como
+# `atenderSalida`. El envio de verdad lo prueba test/envio.test.mjs.
+class SidecarFalso:
+    """Late y entrega: lo `pendiente` pasa a `enviado` una vez, como `tomarEnvio`."""
+
+    def __init__(self, home, demora=0.0, late=True):
+        self.ruta = pathlib.Path(home) / ".wa-inbox" / "capture.db"
+        self.entregados = []
+        self.demora = demora
+        self.late = late
+        self.parar = threading.Event()
+        self.hilo = threading.Thread(target=self._vuelta, daemon=True)
+        self.hilo.start()
+
+    def _vuelta(self):
+        con = sqlite3.connect(self.ruta, timeout=10)
+        while not self.parar.is_set():
+            ahora = int(time.time())
+            if self.late:
+                con.execute("insert into store_meta (key, value) values ('sidecar_beat', ?) "
+                            "on conflict(key) do update set value=excluded.value",
+                            (str(ahora),))
+                con.commit()
+            filas = [r[0] for r in con.execute(
+                "select req_id from envio where estado='pendiente'")]
+            for req in filas:
+                if self.demora:
+                    time.sleep(self.demora)
+                cur = con.execute("update envio set estado='enviado', stanza_id=?, "
+                                  "settled_at=? where req_id=? and estado='pendiente'",
+                                  (f"STANZA-{req}", ahora, req))
+                con.commit()
+                if cur.rowcount == 1:
+                    self.entregados.append(req)
+            time.sleep(0.05)
+        con.close()
+
+    def cerrar(self):
+        self.parar.set()
+        self.hilo.join(timeout=5)
+
+
+LIMPIA = "Recibido, ya lo estamos revisando."
+
+
+def tick(home, *extra):
+    """Una corrida del tick: (salida, resumen). El resumen es UNA linea JSON."""
+    env = dict(os.environ, HOME=str(home),
+               XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+               APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"))
+    p = subprocess.run([str(WA_SCOPE), "tick", "--json", *extra], capture_output=True,
+                       text=True, env=env, timeout=300)
+    lineas = [l for l in p.stdout.splitlines() if l.strip()]
+    try:
+        resumen = json.loads(lineas[0]) if len(lineas) == 1 else None
+    except ValueError:
+        resumen = None
+    return p, resumen
+
+
+def linea_lista(home, modo_persona="responder", modo_soporte="borrador"):
+    """Un almacen con la linea A activa, el nombre del agente y dos chats autorizados."""
+    llegan(home, A, [])
+    js(home, "agent", "Agente De Ejemplo")
+    js(home, "set", PERSONA, "--provider", "ninguno", "--mode", modo_persona)
+    js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", modo_soporte)
+
+
+def propuesta_lista(home, stanza, chat=PERSONA, texto=LIMPIA, tipo="responder"):
+    cid = str(js(home, "caso", "crear", "--chat", chat, "--stanza", stanza,
+                 "--actor", "agente")[0]["case_id"])
+    js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+       "--actor", "agente")
+    campo = "--respuesta" if tipo == "responder" else "--instrucciones"
+    v = js(home, "caso", "propuesta", cid, "--tipo", tipo, campo, texto,
+           "--actor", "agente")[0]["propuesta_version"]
+    return cid, v
+
+
+def envios(home):
+    ruta = pathlib.Path(home) / ".wa-inbox" / "capture.db"
+    if not ruta.exists():
+        return []
+    con = sqlite3.connect(ruta)
+    con.row_factory = sqlite3.Row
+    filas = [dict(r) for r in con.execute("select req_id, estado, body from envio")]
+    con.close()
+    return filas
+
+
+print("\nel tick")
+with tempfile.TemporaryDirectory() as home:
+    p, r = tick(home)
+    ok("sobre un HOME vacio el tick no hace nada y sale 0", p.returncode == 0,
+       f"salio {p.returncode}: {p.stderr.strip()[:300]}")
+    ok("y dice lo que hizo en UNA linea JSON con conteos", isinstance(r, dict)
+       and r.get("enviados") == 0 and r.get("busy") is False, f"{p.stdout[:300]}")
+    ok("sin traceback", "Traceback" not in p.stderr, p.stderr[-300:])
+
+# El id del envio es el mismo que usa el tablero (acciones.mjs, `entregar`): si el tick
+# deja un borrador frenado, el clic del dueno aprueba ESE y no encola otro.
+ok("el id del envio del tick es el del tablero: caso-<id>-<version12>",
+   "`caso-${c.case_id}-${version.slice(0, 12)}`"
+   in (RAIZ / "acciones.mjs").read_text(encoding="utf-8"))
+
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        sidecar = SidecarFalso(home)
+        try:
+            cid, v = propuesta_lista(home, "T1")
+            p, r = tick(home)
+            caso = js(home, "caso", "ver", cid)[0]
+            req = f"caso-{cid}-{v[:12]}"
+            ok("una respuesta limpia en un chat responder sale una vez, con el id del caso",
+               sidecar.entregados == [req], f"entregados {sidecar.entregados} {p.stderr[-300:]}")
+            ok("y el caso queda respondido", caso["etapa"] == "respondido",
+               f"quedo {caso['etapa']} {p.stderr[-300:]}")
+            ok("aprobada por la regla, con su evento",
+               any(e["actor"] == "regla" and e["detalle"] == f"aprobada {v}"
+                   for e in caso["eventos"]), f"{caso['eventos']}")
+            ok("el resumen cuenta el envio", r and r.get("enviados") == 1, f"{p.stdout[:300]}")
+            ok("y no imprime el texto del mensaje", LIMPIA not in p.stdout + p.stderr)
+            t = tarjeta(home, cid)
+            ok("el tablero queda al dia", t and t["stage"] == "respondido", f"{t}")
+            antes = cuenta(home, "select count(*) from caso_evento")
+            p, r = tick(home)
+            ok("un segundo tick no manda nada ni escribe eventos",
+               sidecar.entregados == [req]
+               and cuenta(home, "select count(*) from caso_evento") == antes
+               and r and r.get("enviados") == 0, f"{sidecar.entregados} {p.stdout[:200]}")
+
+            cid, v = propuesta_lista(home, "T2")
+            con = db_de(home)
+            con.execute("update caso set excepciones='[\"money\"]' where case_id=?",
+                        (int(cid),))
+            con.commit()
+            con.close()
+            p, r = tick(home)
+            caso = js(home, "caso", "ver", cid)[0]
+            ok("con una excepcion no sale nada y queda en decision para el dueno",
+               caso["etapa"] == "decision" and not caso["aprobada"]
+               and not any(e["req_id"].startswith(f"caso-{cid}-") for e in envios(home)),
+               f"{caso['etapa']} {envios(home)}")
+            ok("y el resumen la cuenta como excepcion, no como error",
+               r and r.get("excepciones") == 1 and r.get("errores") == 0, f"{p.stdout[:300]}")
+
+            cid, v = propuesta_lista(home, "T3", chat=SOPORTE)
+            p, r = tick(home)
+            caso = js(home, "caso", "ver", cid)[0]
+            ok("un chat en borrador (te pregunto antes) no sale solo: queda en decision",
+               caso["etapa"] == "decision" and not caso["aprobada"]
+               and not any(e["req_id"].startswith(f"caso-{cid}-") for e in envios(home)),
+               f"{caso['etapa']} {envios(home)}")
+
+            cid, v = propuesta_lista(home, "T4", tipo="trabajar", texto="Revisar el login")
+            p, r = tick(home)
+            caso = js(home, "caso", "ver", cid)[0]
+            ok("un trabajo no lo toca el tick: el despacho es otra tarea",
+               caso["etapa"] == "decision" and not caso["aprobada"], f"{caso['etapa']}")
+        finally:
+            sidecar.cerrar()
+
+    # Dos ticks a la vez: el segundo no espera ni manda, y el envio sale una vez.
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        sidecar = SidecarFalso(home, demora=2.0)
+        try:
+            cid, v = propuesta_lista(home, "U1")
+            env = dict(os.environ, HOME=str(home),
+                       XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+                       APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"))
+            primero = subprocess.Popen([str(WA_SCOPE), "tick", "--json"], env=env,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                       text=True)
+            limite = time.time() + 30
+            while time.time() < limite and not envios(home):
+                time.sleep(0.05)
+            p, r = tick(home)
+            salida, _ = primero.communicate(timeout=120)
+            ok("un tick encima de otro sale 0 diciendo que estaba ocupado",
+               p.returncode == 0 and r and r.get("busy") is True, f"{p.stdout[:300]}")
+            ok("y el mensaje sale una sola vez", sidecar.entregados == [f"caso-{cid}-{v[:12]}"],
+               f"{sidecar.entregados}")
+            ok("el primero termina y lo da por respondido",
+               primero.returncode == 0 and js(home, "caso", "ver", cid)[0]["etapa"]
+               == "respondido", f"{salida[:300]}")
+        finally:
+            sidecar.cerrar()
+
+    # Jev frena: queda borrador para el dueno, el caso sigue en decision sin la firma de
+    # la regla, y el tick siguiente no lo vuelve a intentar.
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        sidecar = SidecarFalso(home)
+        antes_env = dict(os.environ)
+        os.environ["WA_INBOX_JEV_ENDPOINT"] = "http://127.0.0.1:9/v1/systemone"
+        try:
+            pon_llave(home)
+            cid, v = propuesta_lista(home, "J1")
+            p, r = tick(home)
+            caso = js(home, "caso", "ver", cid)[0]
+            filas = [e for e in envios(home) if e["req_id"] == f"caso-{cid}-{v[:12]}"]
+            ok("con Jev sin contestar no sale: queda el borrador con el id del caso",
+               sidecar.entregados == [] and len(filas) == 1 and filas[0]["estado"] == "borrador",
+               f"{filas} {p.stderr[-300:]}")
+            ok("el caso sigue en decision, sin la firma de la regla, con el motivo",
+               caso["etapa"] == "decision" and not caso["aprobada"]
+               and "send-needs-approval" in caso["eventos"][-1]["detalle"],
+               f"{caso['etapa']} {caso['eventos'][-1]}")
+            ok("el resumen lo cuenta como frenado", r and r.get("frenados") == 1,
+               f"{p.stdout[:300]}")
+            antes = cuenta(home, "select count(*) from caso_evento")
+            p, r = tick(home)
+            ok("el tick siguiente no lo reintenta: es del dueno",
+               cuenta(home, "select count(*) from caso_evento") == antes
+               and r and r.get("esperando") == 1, f"{p.stdout[:300]}")
+        finally:
+            sidecar.cerrar()
+            os.environ.clear()
+            os.environ.update(antes_env)
+
+    # Sin sidecar vivo no se aprueba ni se encola nada: se dice y se sale 0.
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        cid, v = propuesta_lista(home, "N1")
+        con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+        con.execute("delete from store_meta where key='sidecar_beat'")
+        con.commit()
+        con.close()
+        p, r = tick(home)
+        caso = js(home, "caso", "ver", cid)[0]
+        ok("sin la linea corriendo el tick sale 0 y lo dice",
+           p.returncode == 0 and r and r.get("sin_transporte") is True, f"{p.stdout[:300]}")
+        ok("y no aprueba ni encola nada", caso["etapa"] == "decision" and not caso["aprobada"]
+           and envios(home) == [], f"{caso['etapa']} {envios(home)}")
+
+
+# ── 17. `pending --needs-agent`: el precheck del agente (T7) ──────────────────────
+# Sale 0 solo cuando un caso necesita lenguaje; si no, 1 rapido y callado.
+print("\npending --needs-agent")
+
+
+def necesita(home):
+    return corre(home, "pending", "--needs-agent")
+
+
+with tempfile.TemporaryDirectory() as home:
+    p = necesita(home)
+    ok("sin casos sale 1 y no imprime nada", p.returncode == 1 and not p.stdout.strip(),
+       f"{p.returncode} {p.stdout[:200]} {p.stderr[-200:]}")
+    cid = str(js(home, "caso", "crear", "--chat", CHAT, "--stanza", "G1",
+                 "--actor", "automatizacion")[0]["case_id"])
+    p = necesita(home)
+    ok("un caso en recibido (nada lo clasifico) necesita al agente",
+       p.returncode == 0 and int(cid) in json.loads(p.stdout)["cases"], f"{p.stdout}")
+    js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+       "--actor", "agente")
+    ok("clasificado sin Jev y sin propuesta tambien: nadie mas redacta",
+       necesita(home).returncode == 0)
+    v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta", LIMPIA,
+           "--actor", "agente")[0]["propuesta_version"]
+    ok("con la propuesta en decision ya no", necesita(home).returncode == 1)
+    js(home, "caso", "mover", cid, "clasificado", "--actor", "dueno")
+    ok("reclasificado por el dueno vuelve a necesitar propuesta",
+       necesita(home).returncode == 0)
+    js(home, "caso", "mover", cid, "cerrado", "--motivo", "listo", "--actor", "dueno")
+    ok("cerrado no", necesita(home).returncode == 1)
+
+    def con_jev(stanza, agente, excepciones=None):
+        c = str(js(home, "caso", "crear", "--chat", CHAT, "--stanza", stanza,
+                   "--actor", "automatizacion")[0]["case_id"])
+        js(home, "caso", "clasificar", c, "--clase", "card", "--prioridad", "none",
+           "--actor", "jev")
+        con = db_de(home)
+        con.execute("update caso set jev=?, necesita_agente=?, excepciones=? where case_id=?",
+                    ('{"attention_class": "x", "flags": [], "skip": false}', agente,
+                     json.dumps(excepciones) if excepciones else None, int(c)))
+        con.commit()
+        con.close()
+        return c
+
+    gris = con_jev("G2", 0)
+    ok("Jev lo juzgo y no pide agente: 1", necesita(home).returncode == 1)
+    clave = con_jev("G3", 0, ["credential"])
+    ok("una credencial que Jev no manda al agente tampoco lo despierta",
+       necesita(home).returncode == 1)
+    pide = con_jev("G4", 1)
+    p = necesita(home)
+    ok("Jev marca que necesita agente y no hay propuesta: 0, con ese caso",
+       p.returncode == 0 and json.loads(p.stdout)["cases"] == [int(pide)], f"{p.stdout}")
 
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
