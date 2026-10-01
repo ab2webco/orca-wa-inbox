@@ -258,15 +258,18 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
       cacheado de trabajo sí abre caso; las decisiones del dueño solo se aplican a
       mensajes que todavía no tienen caso (sobre un caso ya abierto actúa el
       tablero, T6); el hook de Jev es `jev_juzga`, hoy sin veredicto.
-- [ ] T3 — Jev: secreto propio + espejo 0600, `net:fetch` a `api.typesafe.ai`,
+- [x] T3 — Jev: secreto propio + espejo 0600, `net:fetch` a `api.typesafe.ai`,
       cliente stdlib que falla cerrado, preguntas y umbrales del POC, caché en
       `juicio`, llamado desde `ingest`; revisión de borradores en `wa-send`;
       ajuste apagado por defecto con el aviso en config. (Cierra T3/T4 de
       `juicio-cacheado.md`.)
-- [ ] T4 — Sync del tablero: storage `board` con tope, escrito por `wa-scope`
+      Cerrada en W1 (a9abae5, 152eb67) y W3 (29d78a1, c7c5f90, f97d0dc); parser verificado contra respuestas reales del POC.
+- [x] T4 — Sync del tablero: storage `board` con tope, escrito por `wa-scope`
       en cada sync y en cada mutación de caso.
-- [ ] T5 — Tablero en `activity.html`: columnas, tarjeta con propuesta, veredicto
+      Cerrada en W1 (d4fe893).
+- [x] T5 — Tablero en `activity.html`: columnas, tarjeta con propuesta, veredicto
       de Jev y acciones; móvil en lista por etapa.
+      Solo lectura cerrada en W2 (5e66fbd, 6f7e229); las acciones entran con T6.
 - [ ] T6 — Canal panel → worker → `wa-scope caso` para las acciones del dueño
       (`--actor dueno` lo fuerza el worker), códigos de error estables.
 - [ ] T7 — `wa-scope tick` + automatización solo-comando; automatización de
@@ -283,13 +286,20 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
       por texto a proyecto; migración sin pérdida.
 - [ ] T14 — Aprobación por WhatsApp (chat propio): sonda en vivo primero, luego
       mensaje de excepción, lectura de la respuesta citada, envío o cierre.
-- [ ] T15 — Primera corrida de `ingest` con línea base (`case_window_hours`).
+- [x] T15 — Primera corrida de `ingest` con línea base (`case_window_hours`).
+      Cerrada en W1 (c0613ff).
 - [ ] T0 — Sonda en vivo del despliegue de agente desde una automatización
       (necesita una cuenta Claude global en Orca).
 - [ ] T9 — Pestaña de estadísticas desde `caso_evento`.
-- [ ] T10 — Insignia del nav = tarjetas en "Tu decisión" (hoy se queda pegada).
+- [x] T10 — Insignia del nav = tarjetas en "Tu decisión" (hoy se queda pegada).
+      Cerrada en W1 (d4fe893): la escribe wa-scope junto con `board`.
 - [ ] T11 — Capturas: tablero y estadísticas, 1440/768/390/320, ES y EN, claro y
       oscuro (`activity.html` tiene los dos).
+- [ ] T16 — Defectos vistos en vivo (2026-10-01, línea de prueba): "Traer
+      conversaciones" relanza la sesión pero no refresca la lista (queda para el
+      sync de 5 min); un chat directo guardado con sufijo de dispositivo
+      (`<lid>:90@lid`) duplica a la persona; `transport-silent` salta cuando el
+      sync cae durante el reinicio del sidecar.
 
 Rama `feat/tablero-casos`, desde `main` en v4.9.0. PRs encadenados:
 (T1–T3) decisiones: casos, entrada y Jev; (T4–T6, T13) tablero y ajustes; (T7, T8, T12, T14, T15)
