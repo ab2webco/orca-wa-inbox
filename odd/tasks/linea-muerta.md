@@ -98,7 +98,7 @@ Baileys intenta login y nunca pide registro.
   - [x] T9a — Sidecar: la cuenta sale de la identidad (`pn:<dígitos>` de
         `creds.me.id`); al abrir, si difiere de `store_meta.linea_activa`, cambia la
         línea activa. Nunca copia filas ni pisa la `linea` de otra identidad.
-  - [ ] T9b — `wa_store`/`wa-read` (solo lectura): `linea_activa()`; `inbox`,
+  - [x] T9b — `wa_store`/`wa-read` (solo lectura): `linea_activa()`; `inbox`,
         `chats`, `whoami`, `state` y `doctor` miran la línea activa por defecto.
   - [ ] T9c — `wa-scope`: `chat_scope`, `juicio`, `agent_action`, `work`, `digest`
         y `run_trace` por cuenta, filtrados por la línea activa; `scope`, `chats`,
@@ -218,3 +218,11 @@ Baileys intenta login y nunca pide registro.
 - Cuenta `pn:<dígitos>`: el teléfono está en `creds.me.id` desde el emparejamiento; el
   LID llega después por `creds.update`. Sin identidad (emparejando) no se escribe ni se
   manda nada. Se quitó `WA_SIDECAR_CUENTA`: forzar una cuenta fija es justo la fuga.
+
+### T9b — los lectores miran la línea activa
+
+- RED `node test/almacen.test.mjs` (3 fallas), entre ellas:
+  `FALLA y \`whoami\` dice el numero nuevo, uno solo — [{... "account":"pn:573001112233" ...},{... "account":"pn:573000000012" ...}]`
+- RED doctor: `FALLA y el doctor habla de la linea activa, no de las dos — {... "via":"pn:573001112233"}`
+- GREEN: `almacen` 200/200, `check-clis` ok. Un almacén sin `linea_activa` (de antes)
+  sigue leyendo todas; `--line` puede pedir otra línea nombrándola.

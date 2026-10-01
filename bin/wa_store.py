@@ -203,6 +203,22 @@ def abrir():
     return con
 
 
+def linea_activa(con):
+    """La linea vinculada AHORA (`store_meta.linea_activa`, la escribe el sidecar al
+    abrir), o None en un almacen que nunca la anoto.
+
+    Cada numero es su linea: vincular otro numero NO hereda las conversaciones ni las
+    autorizaciones del anterior, y lo del anterior sigue guardado para el dia que se
+    vuelva a vincular. Los lectores miran solo esta; None —un almacen de antes de que
+    hubiera lineas por numero— lee todas, que es lo que hacia siempre."""
+    try:
+        fila = con.execute(
+            "select value from store_meta where key='linea_activa'").fetchone()
+        return fila[0] if fila and fila[0] else None
+    except sqlite3.Error:
+        return None
+
+
 def ultimo_latido(con):
     """El ultimo latido del sidecar en el almacen, en segundos de epoch, o None si
     nunca latio (o la base no lo sabe decir)."""

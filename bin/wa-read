@@ -117,7 +117,9 @@ def cmd_doctor(a):
         filas = [{"check": "a message transport", "ok": False, "detalle": exc.detail,
                   "requerido": True, "code": exc.reason, "via": None}]
     else:
-        lineas = wa_store.whoami(con)
+        # La linea vinculada AHORA: las de otros numeros siguen guardadas, pero no son
+        # las que este equipo esta leyendo.
+        lineas = wa_store.whoami(con, wa_store.linea_activa(con))
         cuantas = len(lineas)
         etiquetas = ", ".join(x.get("account") or "?" for x in lineas)
         via = lineas[0].get("account") if lineas else None
@@ -283,6 +285,11 @@ def main():
     except SinFuente as exc:
         morir_sin_fuente(exc.reason, exc.detail, exc.code)
     try:
+        # Sin `--line`, la linea que esta vinculada AHORA. Leer todas mezclaba las
+        # conversaciones del numero viejo con las del nuevo (visto en vivo, 2026-10-01).
+        # Otra linea se puede pedir a proposito, nombrandola.
+        if not a.line:
+            a.line = wa_store.linea_activa(con)
         rows = a.fn(con, a)
     finally:
         con.close()

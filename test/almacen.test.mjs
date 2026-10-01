@@ -202,12 +202,37 @@ console.log('\nT9: cada numero, su linea — la linea activa no pisa a la otra')
   ok('y las de la vieja siguen ahi, sin borrar', chatsVieja === 1, String(chatsVieja))
   con.close()
 
+  // T9b: los lectores miran SOLO la linea activa.
+  const chatsActiva = leerJson(home, ['chats'])
+  ok('con el numero nuevo vinculado, `wa-read chats` no muestra las del viejo',
+    chatsActiva.code === 0 && Array.isArray(chatsActiva.filas) &&
+    chatsActiva.filas.length === 0, chatsActiva.stdout + chatsActiva.stderr)
+  const quien = leerJson(home, ['whoami'])
+  ok('y `whoami` dice el numero nuevo, uno solo',
+    (quien.filas || []).length === 1 && quien.filas[0].account === NUEVA,
+    JSON.stringify(quien.filas))
+  const estado = leerJson(home, ['state'])
+  ok('y `state` mide la linea activa', (estado.filas || []).length === 1 &&
+    estado.filas[0].account === NUEVA, JSON.stringify(estado.filas))
+  const doc = leerJson(home, ['doctor'])
+  const transporte = (doc.filas || []).find((f) => f.check === 'a message transport')
+  ok('y el doctor habla de la linea activa, no de las dos',
+    transporte && transporte.via === NUEVA && !/Vieja|573001112233/.test(transporte.detalle),
+    JSON.stringify(transporte))
+  // `--line` sigue pudiendo pedir otra a proposito: se nombra, no se hereda.
+  const explicita = leerJson(home, ['chats', '--line', VIEJA])
+  ok('pidiendo la vieja por nombre, sus conversaciones siguen ahi',
+    (explicita.filas || []).length === 1, JSON.stringify(explicita.filas))
+
   // Vuelve el numero viejo: reaparece tal cual.
   const alm2 = abrirAlmacen(rutaAlmacen({ HOME: home }))
   const vuelta = alm2.activarLinea(VIEJA)
   ok('volver a vincular el numero viejo lo reactiva', vuelta.cambio === true &&
     alm2.lineaActiva() === VIEJA, JSON.stringify(vuelta))
   alm2.cerrar()
+  const deVuelta = leerJson(home, ['chats'])
+  ok('y sus conversaciones reaparecen tal cual', (deVuelta.filas || []).length === 1 &&
+    deVuelta.filas[0].jid === ALFA, JSON.stringify(deVuelta.filas))
 }
 
 // ── El escenario completo, que es donde viven los seis casos de uso ─────────────────
