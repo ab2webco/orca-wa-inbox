@@ -492,6 +492,37 @@ with tempfile.TemporaryDirectory() as home:
        and cuenta(home, "select count(*) from caso_evento") == eventos, p.stderr.strip())
 
 
+# ── 5. Listar y ver ──────────────────────────────────────────────────────────────
+# El panel pide una columna (una etapa) o una conversacion: el filtro tiene que ser
+# exacto, y los eventos de una tarjeta se leen de arriba abajo, el ultimo al final.
+print("\nlistar y ver")
+with tempfile.TemporaryDirectory() as home:
+    uno = caso_clasificado(home, "L1")
+    dos = str(js(home, "caso", "crear", "--chat", CHAT, "--stanza", "L2",
+                 "--actor", "agente")[0]["case_id"])
+    tres = str(js(home, "caso", "crear", "--chat", OTRO, "--stanza", "L3",
+                  "--actor", "agente")[0]["case_id"])
+    ids = lambda filas: sorted(str(c["case_id"]) for c in filas)  # noqa: E731
+    ok("sin filtro lista los tres", ids(js(home, "caso", "listar")) ==
+       sorted([uno, dos, tres]))
+    ok("--etapa deja solo esa columna",
+       ids(js(home, "caso", "listar", "--etapa", "recibido")) == sorted([dos, tres])
+       and ids(js(home, "caso", "listar", "--etapa", "clasificado")) == [uno])
+    ok("--chat deja solo esa conversacion",
+       ids(js(home, "caso", "listar", "--chat", OTRO)) == [tres])
+    ok("--etapa y --chat se combinan",
+       ids(js(home, "caso", "listar", "--etapa", "recibido", "--chat", CHAT)) == [dos])
+    ok("una etapa fuera del vocabulario se rechaza",
+       corre(home, "caso", "listar", "--etapa", "inventada").returncode != 0)
+    ok("listar viene de lo mas reciente a lo mas viejo",
+       str(js(home, "caso", "listar")[0]["case_id"]) == tres)
+    ev = js(home, "caso", "ver", uno)[0]["eventos"]
+    ok("ver trae los eventos en orden, el ultimo al final",
+       [e["a"] for e in ev] == ["recibido", "clasificado"], f"eventos {ev}")
+    ok("ver de un caso que no existe se rechaza",
+       corre(home, "caso", "ver", "999").returncode != 0)
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
