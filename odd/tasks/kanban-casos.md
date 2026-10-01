@@ -141,9 +141,15 @@ Jev (llamadas, casos resueltos sin modelo grande, latencia, fallos).
       `wa-scope caso` (crear, mover, clasificar, propuesta, aprobar, resultado,
       listar, ver, unir, separar, asignar); regla de agrupación; backfill;
       aprobación congelada a la versión.
-- [ ] T2 — `wa-scope ingest`: mensajes nuevos → casos, dedupe local, reglas
+- [x] T2 — `wa-scope ingest`: mensajes nuevos → casos, dedupe local, reglas
       deterministas, ruta; el worker lo dispara con el evento `store` del
-      sidecar (con rebote) y en cada sync.
+      sidecar (con rebote) y en cada sync. Cerrada con `npm run check` en verde
+      (check-casos 179/179, worker 167/167). Decisiones: lo que se descarta
+      (ignorar del dueño, `nothing` cacheado) abre su propio caso y lo cierra,
+      nunca cierra uno abierto; la línea suelta de un grupo con un veredicto
+      cacheado de trabajo sí abre caso; las decisiones del dueño solo se aplican a
+      mensajes que todavía no tienen caso (sobre un caso ya abierto actúa el
+      tablero, T6); el hook de Jev es `jev_juzga`, hoy sin veredicto.
 - [ ] T3 — Jev: secreto propio + espejo 0600, `net:fetch` a `api.typesafe.ai`,
       cliente stdlib que falla cerrado, preguntas y umbrales del POC, caché en
       `juicio`, llamado desde `ingest`; revisión de borradores en `wa-send`;
