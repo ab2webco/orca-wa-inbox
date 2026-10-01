@@ -746,6 +746,38 @@ console.log('\nworker: el latido del sidecar llega al panel')
   apagar()
 }
 
+// ───────── T9: de que numero es la linea, y que pasa cuando cambia ─────────
+console.log('\nworker: la linea vinculada llega al panel y un numero nuevo dispara un sync')
+{
+  // Cada numero, su linea. El panel necesita saber CUAL esta vinculada para no pintar
+  // lo del numero anterior como si fuera del nuevo, y lo que muestra (conversaciones,
+  // actividad, insignia) tiene que rearmarse para el numero nuevo sin esperar 5 min.
+  const guion = join(RAIZ, 'sidecar-otra-linea.cjs')
+  writeFileSync(guion,
+    '#!/usr/bin/env node\n' +
+    'function emit (m) { process.stdout.write(JSON.stringify(m) + "\\n") }\n' +
+    'emit({ type: "connection", state: "open" })\n' +
+    'setTimeout(() => emit({ type: "linea", cuenta: "pn:573000000012", cambio: true, ts: Date.now() }), 50)\n' +
+    'setTimeout(() => emit({ type: "identidad", me: "+573000000012", cuenta: "pn:573000000012", reparados: 0, ts: Date.now() }), 100)\n' +
+    'setInterval(() => {}, 1000)\n', { mode: 0o755 })
+  const syncs = join(RAIZ, 'syncs-linea.txt')
+  const wascope = '#!/bin/sh\n' +
+    `[ "$1" = "sync" ] && echo "$@" >> ${JSON.stringify(syncs)}\n` +
+    'echo \'[{"synced": true, "destinos": []}]\'\n'
+  const orca = hostFalso(herramientas('otra-linea', wascope), {}, guion)
+  const { apagar } = await arranca(orca)
+  const antes = existsSync(syncs) ? readFileSync(syncs, 'utf8').trim().split('\n').length : 0
+  await hasta(() => orca.store.sidecar && orca.store.sidecar.cuenta, 10000)
+  ok('la cuenta de la linea vinculada queda en la clave que leen los paneles',
+    orca.store.sidecar && orca.store.sidecar.cuenta === 'pn:573000000012',
+    JSON.stringify(orca.store.sidecar))
+  const sincronizo = await hasta(() => existsSync(syncs) &&
+    readFileSync(syncs, 'utf8').trim().split('\n').length > antes, 10000)
+  ok('y el cambio de linea dispara un sync, sin esperar al reloj', sincronizo,
+    existsSync(syncs) ? readFileSync(syncs, 'utf8') : '(sin syncs)')
+  apagar()
+}
+
 // ───────── el almacen: conteos al panel, y donde estan las herramientas ─────────
 console.log('\nworker: lo que el sidecar guardo y desalojo llega al panel, en numeros')
 {

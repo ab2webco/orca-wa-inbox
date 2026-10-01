@@ -1966,6 +1966,60 @@ console.log('\nconfig.html — 440, 403 y 411 se explican, cada uno con su salid
     `sin portugues = ${JSON.stringify(sinPt)}`)
 }
 
+// ───────── T9: cada numero, su linea ─────────
+// Visto en vivo (2026-10-01): tras vincular OTRO numero el panel seguia mostrando las
+// 305 conversaciones y las autorizaciones del viejo. Lo del numero anterior queda
+// guardado, pero el panel no lo pinta como si fuera del vinculado.
+const VIEJA = 'pn:573001112233'
+const NUEVA = 'pn:573000000012'
+const SIDECAR_NUEVA = { connection: 'open', qr: null, exited: false, me: '+573000000012',
+  cuenta: NUEVA, latido: { ts: Date.now(), conectado: true } }
+console.log('\nconfig.html — T9: el selector y las autorizaciones son de la linea vinculada')
+{
+  const storage = {
+    sidecar: SIDECAR_NUEVA,
+    chats: [{ jid: '100@g.us', name: 'Grupo Viejo', kind: 'grupo' }],
+    chatsAccount: VIEJA,
+    scope: {
+      '100@g.us': { chatName: 'Grupo Viejo', mode: 'responder', provider: 'ninguno',
+        account: VIEJA },
+      // Una de antes de T9, sin cuenta: es de la linea de siempre, no del numero nuevo.
+      '300@g.us': { chatName: 'Legado', mode: 'responder', provider: 'ninguno' }
+    }
+  }
+  const { doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  const opciones = [...doc.getElementById('chat-pick').options].map((o) => o.value)
+  ok('el selector no ofrece las conversaciones del numero anterior',
+    !opciones.includes('100@g.us'), JSON.stringify(opciones))
+  const tabla = doc.getElementById('scope-wrap').textContent
+  ok('la tabla de autorizaciones no muestra las del numero anterior',
+    !/Grupo Viejo|Legado/.test(tabla), tabla)
+
+  // Llega el sync del numero nuevo: su lista si se ofrece.
+  storage.chats = [{ jid: '200@g.us', name: 'Grupo Nuevo', kind: 'grupo' }]
+  storage.chatsAccount = NUEVA
+  doc.defaultView.dispatchEvent(new doc.defaultView.Event('focus'))
+  await espera()
+  const nuevas = [...doc.getElementById('chat-pick').options].map((o) => o.value)
+  ok('control: la lista del numero vinculado si se ofrece', nuevas.includes('200@g.us'),
+    JSON.stringify(nuevas))
+
+  // Lo que se autoriza ahora queda etiquetado con el numero vinculado.
+  doc.getElementById('chat-pick').value = '200@g.us'
+  doc.getElementById('chat-pick').dispatchEvent(new doc.defaultView.Event('change'))
+  await espera()
+  doc.getElementById('mode').value = 'observar'
+  doc.getElementById('save-scope').click()
+  await espera()
+  const entrada = (storage.scope || {})['200@g.us']
+  ok('la autorizacion nueva queda atada al numero vinculado',
+    entrada && entrada.account === NUEVA, JSON.stringify(entrada))
+  ok('y las del numero anterior siguen guardadas, sin borrar',
+    storage.scope['100@g.us'] && storage.scope['100@g.us'].account === VIEJA,
+    JSON.stringify(storage.scope))
+}
+
 console.log('\nconfig.html — los estados de falla ofrecen reintentar, no reiniciar Orca')
 {
   for (const code of ['sidecar-no-arranco', 'sidecar-authdir-fallo', 'sidecar-cayo']) {
@@ -2416,6 +2470,79 @@ console.log('\nactivity.html — "linea conectada" solo con latido fresco')
     !!(S.es.lineaSinSenal && S.en.lineaSinSenal && S.pt.lineaSinSenal &&
       S.pt.lineaSinSenal !== S.en.lineaSinSenal),
     JSON.stringify([S.es.lineaSinSenal, S.en.lineaSinSenal, S.pt && S.pt.lineaSinSenal]))
+}
+
+console.log('\nactivity.html — T9: tras cambiar de numero, la actividad del anterior no se pinta')
+{
+  // Lo que se vio en vivo con +573000000012 recien vinculado: "actua sobre 3 de 306",
+  // avisos y "lo ultimo que hizo" del numero viejo, y "la revision arranco y no volvio
+  // · 2026-09-24 08:46", que era la corrida del viejo.
+  const VIEJA_A = 'pn:573001112233'
+  const NUEVA_A = 'pn:573000000012'
+  const sidecar = { connection: 'open', me: '+573000000012', cuenta: NUEVA_A,
+    latido: { ts: Date.now(), conectado: true } }
+  const vieja = {
+    account: VIEJA_A, syncedAt: '2026-09-24 09:00', running: false, mapped: 306,
+    authorized: 3,
+    pending: [{ stanzaId: 'P1', chat: 'Grupo Viejo', chatJid: '100@g.us', text: 'pendiente viejo',
+      date: '2026-09-24 08:40' }],
+    recent: [{ ts: '2026-09-24 08:45', chat: 'Grupo Viejo', action: 'alert',
+      detail: 'Piden descuento | aviso viejo' },
+    { ts: '2026-09-24 08:44', chat: 'Grupo Viejo', action: 'issue', issue: 'SOP-1',
+      detail: 'accion vieja' }],
+    run: { state: 'interrupted', startedAt: '2026-09-24 08:46', endedAt: null }
+  }
+  const chats = new Array(306).fill(0).map((_, i) => ({ jid: `c${i}`, name: `c${i}` }))
+  const storage = { activity: vieja, chats, chatsAccount: VIEJA_A, sidecar,
+    decisions: { P1: { decision: 'take', at: '2026-09-24T08:41:00Z', account: VIEJA_A } } }
+  const { doc } = await montar('activity.html', storage, 'es-419')
+  await espera()
+  const todo = doc.body.textContent
+  ok('no muestra la cobertura del numero anterior', !/3 de 306/.test(
+    doc.getElementById('cobertura').textContent), doc.getElementById('cobertura').textContent)
+  ok('ni sus avisos', !/aviso viejo|Piden descuento/.test(doc.getElementById('alerts').textContent),
+    doc.getElementById('alerts').textContent)
+  ok('ni lo ultimo que hizo', !/accion vieja|SOP-1/.test(doc.getElementById('recent').textContent),
+    doc.getElementById('recent').textContent)
+  ok('ni su corrida', !/08:46/.test(doc.getElementById('runline').textContent),
+    doc.getElementById('runline').textContent)
+  ok('ni su cola', !/pendiente viejo/.test(doc.getElementById('pending').textContent),
+    doc.getElementById('pending').textContent)
+  ok('y no se queda en blanco: dice que no hay nada de esta linea todavia',
+    doc.getElementById('alerts').textContent.trim().length > 0 &&
+    doc.getElementById('recent').textContent.trim().length > 0, todo.slice(0, 300))
+
+  // Control: con la actividad del numero vinculado, si se pinta.
+  storage.activity = Object.assign({}, vieja, { account: NUEVA_A })
+  storage.chatsAccount = NUEVA_A
+  doc.defaultView.dispatchEvent(new doc.defaultView.Event('focus'))
+  await espera()
+  ok('control: la actividad del numero vinculado si se pinta',
+    /aviso viejo|Piden descuento/.test(doc.getElementById('alerts').textContent),
+    doc.getElementById('alerts').textContent)
+  ok('control: y su cobertura', /3 de 306/.test(doc.getElementById('cobertura').textContent),
+    doc.getElementById('cobertura').textContent)
+}
+
+console.log('\nactivity.html — T9: lo que se marca queda atado al numero vinculado')
+{
+  const NUEVA_D = 'pn:573000000012'
+  const storage = {
+    sidecar: { connection: 'open', cuenta: NUEVA_D, latido: { ts: Date.now(), conectado: true } },
+    activity: { account: NUEVA_D, syncedAt: '2026-10-01 10:00', mapped: 1, authorized: 1,
+      pending: [{ stanzaId: 'N1', chat: 'Grupo Nuevo', chatJid: '200@g.us', text: 'hola',
+        date: '2026-10-01 09:59' }], recent: [] },
+    chatsAccount: NUEVA_D, chats: [{ jid: '200@g.us', name: 'Grupo Nuevo' }]
+  }
+  const { doc } = await montar('activity.html', storage, 'es-419')
+  await espera()
+  const boton = doc.querySelector('[data-decision="take"], button[data-take], #pending button')
+  ok('la cola ofrece marcar el mensaje', !!boton, doc.getElementById('pending').innerHTML.slice(0, 300))
+  if (boton) boton.click()
+  await espera()
+  const d = (storage.decisions || {}).N1
+  ok('la decision queda etiquetada con el numero vinculado', d && d.account === NUEVA_D,
+    JSON.stringify(storage.decisions))
 }
 
 console.log('\nactivity.html — el texto ya no ensena que hay que marcar para que actue')

@@ -1902,8 +1902,19 @@
         return txt
       }
 
+      // Cada numero, su linea (T9). `cuentaVinculada` es el numero que dice el sidecar
+      // (`sidecar.cuenta`); `chatsCuenta`, de que numero es la lista guardada. Lo de otro
+      // numero queda guardado pero no se ofrece ni se lista: tras vincular un numero
+      // nuevo, el panel mostraba las 305 conversaciones y las autorizaciones del viejo.
+      // Sin numero conocido (un worker de antes) no se filtra nada.
+      var cuentaVinculada = null
+      var chatsCuenta = null
+      function deEstaLinea (cuenta) {
+        return !cuentaVinculada || (cuenta || 'local') === cuentaVinculada
+      }
+
       function renderChats (chats) {
-        chatsTodos = Array.isArray(chats) ? chats : []
+        chatsTodos = Array.isArray(chats) && deEstaLinea(chatsCuenta) ? chats : []
         chatsPorJid = {}
         buscaPorJid = {}
         chatsTodos.forEach(function (c) {
@@ -2039,9 +2050,15 @@
         // fuente. Se guarda y se repinta aca en vez de pedir `scope` otra vez: el panel
         // ya lo lee en cada vuelta completa, y una lectura de mas sale del mismo cupo
         // de 30 mensajes por 10 s que el clic del usuario.
-        alcancePorJid = entries && typeof entries === 'object' ? entries : {}
+        var todas = entries && typeof entries === 'object' ? entries : {}
+        // Solo las de la linea vinculada (T9); las de otro numero siguen en storage.
+        entries = {}
+        Object.keys(todas).forEach(function (jid) {
+          if (deEstaLinea(todas[jid] && todas[jid].account)) entries[jid] = todas[jid]
+        })
+        alcancePorJid = entries
         pintarChats()
-        var keys = entries ? Object.keys(entries) : []
+        var keys = Object.keys(entries)
         if (!keys.length) {
           el('scope-wrap').innerHTML = '<p class="empty">' + t('empty') + '</p>'
           return
@@ -2168,6 +2185,9 @@
                         mode: mode, tone: el('chat-tone').value.trim() || null,
                         instructions: el('chat-instructions').value.trim() || null,
                         updatedAt: new Date().toISOString() }
+          // Autorizar es autorizar para ESTE numero (T9): el mismo grupo visto desde
+          // otro numero propio es otra autorizacion.
+          if (cuentaVinculada) next[jid].account = cuentaVinculada
           return write('scope', next).then(function () {
             renderScope(next)
             resetScopeForm()
@@ -2744,10 +2764,11 @@
       // una caida se note aunque nadie este mirando el QR (docs/ENCARGO...§6); mientras
       // se empareja, ademas, `vigilarSidecar` la sondea aparte cada 2 s.
       var CLAVES = ['scope', 'agentName', 'health', 'routes', 'tone', 'chats',
-                    'transcribeQuality', 'inboxDays', 'ownerName', 'transcribe',
-                    'transcribeLang', 'syncStatus', 'syncMinutes', 'workerBeat',
-                    'sidecar']
-      var CLAVES_VIVAS = ['chats', 'health', 'syncStatus', 'workerBeat', 'sidecar']
+                    'chatsAccount', 'transcribeQuality', 'inboxDays', 'ownerName',
+                    'transcribe', 'transcribeLang', 'syncStatus', 'syncMinutes',
+                    'workerBeat', 'sidecar']
+      var CLAVES_VIVAS = ['chats', 'chatsAccount', 'health', 'syncStatus', 'workerBeat',
+                          'sidecar']
 
       function reload(soloVivas) {
         if (!liveStorage) return Promise.resolve()
@@ -2769,6 +2790,13 @@
               if (k in leido) return leido[k]
               return k in ultimaLectura ? ultimaLectura[k] : SIN_RESPUESTA
             }
+            // La linea vinculada, ANTES de pintar nada: decide que conversaciones y que
+            // autorizaciones son de este numero (T9).
+            var sc0 = v('sidecar')
+            if (hayRespuesta(sc0) && sc0 && typeof sc0.cuenta === 'string' && sc0.cuenta) {
+              cuentaVinculada = sc0.cuenta
+            }
+            if (hayRespuesta(v('chatsAccount'))) chatsCuenta = v('chatsAccount')
             if (hayRespuesta(v('scope'))) renderScope(v('scope'))
             pintarClave('tone', v('tone'), sello)
             pintarClave('transcribeQuality', v('transcribeQuality'), sello)

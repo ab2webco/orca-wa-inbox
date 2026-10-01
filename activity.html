@@ -583,6 +583,9 @@
           if (!r.ok) throw new Error(r.error || r.errorCode || t('errRead'))
           var next = stored(r) || {}
           next[stanzaId] = { decision: decision, at: new Date().toISOString() }
+          // Lo marcado es de ESTE numero (T9): un "tomar esto" no puede despertar al
+          // agente sobre otra linea.
+          if (cuentaVinculada) next[stanzaId].account = cuentaVinculada
           return call('storage.set', { key: 'decisions', value: next })
         }).then(function (r) {
           // Sin esto una escritura rechazada se ve identica a una exitosa: nada pasa.
@@ -601,22 +604,46 @@
         node.className = 'meta' + (bad ? ' stale' : '')
       }
 
+      // Cada numero, su linea (T9). Tras vincular OTRO numero, este panel seguia
+      // mostrando la cobertura, los avisos, lo ultimo hecho, la cola y la corrida del
+      // anterior (visto en vivo: "actua sobre 3 de 306", "arranco y no volvio · 09-24").
+      // Hasta que el sync arme la actividad del numero nuevo, lo que hay es de otro
+      // numero y se muestra como vacio honesto; lo del anterior sigue guardado y vuelve
+      // si ese numero se vincula de nuevo. Sin numero conocido no se filtra nada.
+      var cuentaVinculada = null
+      function deEstaLinea (cuenta) {
+        return !cuentaVinculada || (cuenta || 'local') === cuentaVinculada
+      }
+
       function reload() {
         return Promise.all([
           call('storage.get', { key: 'activity' }),
           call('storage.get', { key: 'decisions' }),
           call('storage.get', { key: 'sidecar' }),
-          call('storage.get', { key: 'chats' })
+          call('storage.get', { key: 'chats' }),
+          call('storage.get', { key: 'chatsAccount' })
         ]).then(function (results) {
+          var sc = stored(results[2])
+          if (sc && typeof sc.cuenta === 'string' && sc.cuenta) cuentaVinculada = sc.cuenta
           var a = stored(results[0]) || {}
-          var decided = stored(results[1]) || {}
+          if (!deEstaLinea(a.account)) {
+            a = { account: cuentaVinculada, pending: [], recent: [], running: false,
+              syncedAt: null, mapped: 0, authorized: 0,
+              run: { state: 'never', startedAt: null, endedAt: null } }
+          }
+          var chats = deEstaLinea(stored(results[4])) ? stored(results[3]) : null
+          var todas = stored(results[1]) || {}
+          var decided = {}
+          Object.keys(todas).forEach(function (k) {
+            if (deEstaLinea(todas[k] && todas[k].account)) decided[k] = todas[k]
+          })
           var vivos = (a.pending || []).filter(function (m) {
             var d = decided[m.stanzaId]
             return !d || d.decision !== 'ignore'
           })
           renderSynced(a)
-          renderLinea(stored(results[2]))
-          renderCobertura(a, stored(results[3]))
+          renderLinea(sc)
+          renderCobertura(a, chats)
           renderRun(a, vivos.length)
           // Lo marcado se ve al instante, sin esperar al proximo `wa-scope sync`.
           renderPending(vivos.map(function (m) {

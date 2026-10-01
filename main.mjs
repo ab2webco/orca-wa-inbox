@@ -640,7 +640,7 @@ function resolverAuthDir(pluginDir, guion = join(pluginDir, 'sidecar', 'resolve-
  * indefinidamente en vez de una corrida puntual).
  */
 export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
-  spawnFn = spawn, env = process.env, alSalir = () => {} }) {
+  spawnFn = spawn, env = process.env, alSalir = () => {}, alLinea = () => {} }) {
   const nacioMs = Date.now()
   let estado = { at: new Date().toISOString(), connection: null, qr: null,
     motivo: null, statusCode: null, error: null, exited: false,
@@ -657,6 +657,8 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
     // El ultimo "sigo aca" del sidecar (`mensajeLatido` en sidecar/src/index.js). Sin
     // esto el "conectado" de los paneles era una foto que no caducaba nunca.
     latido: null,
+    // De que numero es la linea (`pn:<digitos>`), cuando el sidecar lo sabe.
+    cuenta: null,
     startedAt: new Date().toISOString() }
   // Las escrituras se ENCADENAN sobre una sola promesa. `guardar` es async y nada
   // garantiza que dos `storage.set` en vuelo resuelvan en el orden en que se
@@ -744,7 +746,19 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
         // "conectado": tras escanear un QR, saber CUAL linea quedo es la unica forma
         // de notar que se escaneo con el telefono equivocado. Solo el numero visible;
         // el sidecar no manda ni el LID ni nada mas.
-        escribir({ me: typeof mensaje.me === 'string' ? mensaje.me : null })
+        escribir({ me: typeof mensaje.me === 'string' ? mensaje.me : null,
+          ...(typeof mensaje.cuenta === 'string' ? { cuenta: mensaje.cuenta } : {}) })
+      } else if (mensaje?.type === 'linea') {
+        // De que NUMERO es la linea vinculada (`pn:<digitos>`). Cada numero es su linea:
+        // el panel lo compara con lo que tiene guardado para no pintar lo del numero
+        // anterior como si fuera del nuevo, y etiqueta con esto lo que autoriza.
+        const cuenta = typeof mensaje.cuenta === 'string' ? mensaje.cuenta : null
+        escribir({ cuenta })
+        if (cuenta && mensaje.cambio === true) {
+          try { alLinea(cuenta) } catch (error) {
+            orca.log(`sidecar line change handling failed: ${error.message}`)
+          }
+        }
       } else if (mensaje?.type === 'latido') {
         // La hora del SIDECAR, no la de esta escritura: lo que el panel quiere saber es
         // cuando dio senales de vida la linea, no cuando el worker las copio.
@@ -1004,7 +1018,8 @@ export default function activate(orca) {
    *  justo lo que el usuario acababa de pedir que dejara de ser cierto. */
   const limpiarEstadoSidecar = () => guardar(orca, SIDECAR_KEY, {
     at: new Date().toISOString(), connection: null, qr: null, motivo: null,
-    statusCode: null, error: null, exited: false, latido: null, startedAt: null
+    statusCode: null, error: null, exited: false, latido: null, cuenta: null,
+    startedAt: null
   })
 
   /** Resuelve el auth dir y lanza el sidecar. Una sola implementacion para el arranque
@@ -1040,8 +1055,32 @@ export default function activate(orca) {
     // moverlo entero, o el sidecar le pregunta por el alcance a una instalacion
     // distinta de la que lee el resto del plugin (§11-E4).
     apagarSidecar = lanzarSidecar({ orca, scriptPath: s.sidecarPath, authDir: resuelto.dir,
-      toolsDir: s.toolsDir || TOOLS, alSalir: alSalirSidecar })
+      toolsDir: s.toolsDir || TOOLS, alSalir: alSalirSidecar, alLinea: alCambiarLinea })
     return { ok: true, dir: resuelto.dir }
+  }
+
+  /** Se vinculo un numero distinto (o el primero): lo que muestran los paneles —
+   *  conversaciones, actividad, insignia— es del numero anterior hasta el proximo sync,
+   *  asi que se pide uno ya en vez de esperar al reloj. Si hay otro sync corriendo, se
+   *  reintenta: el que corre puede estar leyendo con la linea de antes. */
+  function alCambiarLinea () {
+    let intentos = 0
+    const intentar = () => {
+      if (detenido) return
+      intentos += 1
+      // Ocupado no es fallido: un sync que fallo ya dejo su motivo en `syncStatus` y
+      // repetirlo no lo arregla; uno que esta corriendo puede ser de la linea de antes.
+      if (sincronizando) {
+        if (intentos < 20) {
+          const t = setTimeout(intentar, 3000)
+          if (typeof t.unref === 'function') t.unref()
+        }
+        return
+      }
+      sincronizar('linea')
+        .catch((error) => orca.log(`line change sync failed: ${error.message}`))
+    }
+    intentar()
   }
 
   // Las acciones sobre la vida del sidecar van EN FILA: un desvincular automatico y un

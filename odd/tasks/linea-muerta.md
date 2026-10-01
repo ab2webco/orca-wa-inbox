@@ -105,7 +105,7 @@ Baileys intenta login y nunca pide registro.
         `activity`, `navBadge` y `decisions` del storage se rearman por línea; lo que
         el panel autorizó se persiste en `chat_scope` para no perderse al cambiar.
   - [x] T9d — `wa-send` se niega a mandar por una autorización de otra identidad.
-  - [ ] T9e — Worker y paneles: la cuenta viaja a `sidecar.cuenta`; el panel etiqueta
+  - [x] T9e — Worker y paneles: la cuenta viaja a `sidecar.cuenta`; el panel etiqueta
         autorizaciones y decisiones con ella; datos de otra línea se muestran como
         vacíos honestos; el worker sincroniza al cambiar de línea.
   - [ ] T9f — Migración `local` → cuenta de la identidad en `capture.db` (sidecar) y
@@ -256,3 +256,22 @@ Baileys intenta login y nunca pide registro.
   `FALLA ni nombrando la linea vieja a proposito` (el mensaje salía).
 - GREEN: `envio` 54/54, `check-clis`, `check-harness` y `check-prompts` ok. Código nuevo
   `send-line-not-linked` (sale 3, como el permiso), documentado en harness/COMMANDS.md.
+
+### T9e — worker y paneles por línea
+
+- RED `node test/worker.test.mjs` (contra el `main.mjs` commiteado):
+  `FALLA la cuenta de la linea vinculada queda en la clave que leen los paneles — {... "me":"+573000000012" ...}` (sin `cuenta`)
+  y `FALLA y el cambio de linea dispara un sync, sin esperar al reloj`.
+- RED `node test/panels.test.mjs` (9 fallas), reproduce la captura en vivo:
+  `FALLA el selector no ofrece las conversaciones del numero anterior — ["","100@g.us"]`,
+  `FALLA no muestra la cobertura del numero anterior — El agente actua sobre 3 de 306 conversaciones`,
+  `FALLA ni su corrida — La revision arranco y no volvio · 2026-09-24 08:46`,
+  `FALLA ni su cola — ... pendiente viejo✓ lo toma tu agente`,
+  `FALLA la decision queda etiquetada con el numero vinculado`.
+- GREEN: `worker` 149/149, `panels` 423/423, `check-panels` y `check-voseo` ok.
+- Cómo: el sidecar emite `{type:'linea', cuenta, cambio}`; el worker lo deja en
+  `sidecar.cuenta` y, si cambió, pide un sync (reintenta mientras otro sync corre). Los
+  paneles comparan `sidecar.cuenta` con `chatsAccount`, `activity.account` y el
+  `account` de cada autorización y decisión: lo de otro número no se pinta (vacíos
+  honestos) y lo nuevo se etiqueta con el número vinculado. La insignia la reescribe el
+  sync que dispara el cambio de línea (probado en `check-clis`).
