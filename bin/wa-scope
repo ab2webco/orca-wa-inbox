@@ -132,7 +132,14 @@ CAMPO_DE_TIPO = {"responder": "respuesta", "trabajar": "instrucciones"}
 ETAPAS_APROBABLES = ("decision", "listo")
 # Quien hizo cada cosa. Es la dimension de "decisiones tomadas por actor" en las
 # estadisticas, asi que es un vocabulario cerrado y no texto libre.
-ACTORES_CASO = ("agente", "jev", "dueno", "automatizacion", "trabajador")
+ACTORES_CASO = ("agente", "jev", "dueno", "automatizacion", "trabajador", "regla")
+# Quien puede firmar una version: el dueno, o la regla del dueno cuando el caso no tiene
+# ninguna excepcion (kanban-casos, "Contratos": aprobacion por regla).
+FIRMANTES_CASO = ("dueno", "regla")
+# Los codigos de error de `wa-scope caso` (kanban-casos, "Contratos"). Son contrato con
+# el panel, que traduce por codigo: el texto se puede reescribir, el codigo no.
+ERRORES_CASO = ("E_ARGS", "E_NOT_FOUND", "E_STAGE", "E_NOT_APPROVED", "E_VERSION",
+                "E_EXCEPTION", "E_BUSY")
 # Las prioridades de Plane, tal cual: el caso que requiere trabajo abre ahi su tarjeta,
 # y traducir entre dos escalas es como una urgencia termina en "media".
 PRIORIDADES_CASO = ("urgent", "high", "medium", "low", "none")
@@ -2050,6 +2057,33 @@ def cmd_juicio(con, a):
              "clase": a.clase, "origen": a.origen, "at": ahora}]
 
 
+class CasoFalla(SystemExit):
+    """Un error de `wa-scope caso`: salida 2 y una linea JSON en stderr con el codigo y
+    el detalle en ingles. Lo escribe `main`; quien lo atrapa antes (sync) lo dice a su
+    manera."""
+
+    def __init__(self, codigo, detalle):
+        super().__init__(2)
+        self.error, self.detail = codigo, detalle
+
+    def __str__(self):
+        return f"{self.error}: {self.detail}"
+
+
+def caso_falla(codigo, detalle):
+    raise CasoFalla(codigo, detalle)
+
+
+def caso_args_falla(mensaje):
+    """El `error` de argparse en los subcomandos de caso: E_ARGS y no el uso entero."""
+    caso_falla("E_ARGS", mensaje)
+
+
+def base_tomada(exc):
+    texto = str(exc).lower()
+    return "locked" in texto or "busy" in texto
+
+
 def ahora_caso():
     """Con segundos, a diferencia de `ahora()`: de `caso_evento` salen las medianas de
     "tiempo a clasificar" y "a responder", y al minuto dos pasos de la misma corrida
@@ -2086,7 +2120,7 @@ def caso_de(con, case_id):
     row = con.execute("select * from caso where case_id=? and account=?",
                       (case_id, cuenta_activa())).fetchone()
     if not row:
-        sys.exit(f"no case #{case_id} on this line")
+        caso_falla("E_NOT_FOUND", f"no case #{case_id} on this line")
     return dict(row)
 
 
@@ -2108,16 +2142,16 @@ def caso_valida(caso, hacia, motivo=None):
     """La transicion, revisada ANTES de escribir nada. Sale con el error si no vale."""
     de = caso["etapa"]
     if hacia not in TRANSICIONES_CASO.get(de, ()):
-        sys.exit(f"case #{caso['case_id']} cannot go from {de} to {hacia}: from {de} "
-                 f"it only goes to {', '.join(TRANSICIONES_CASO.get(de, ())) or 'nowhere'}")
+        caso_falla("E_STAGE", f"case #{caso['case_id']} cannot go from {de} to {hacia}: from {de} "
+                              f"it only goes to {', '.join(TRANSICIONES_CASO.get(de, ())) or 'nowhere'}")
     if hacia in ETAPAS_CON_MOTIVO and not (motivo or "").strip():
-        sys.exit(f"moving case #{caso['case_id']} to {hacia} needs --motivo: a card "
-                 f"in {hacia} has to say why")
+        caso_falla("E_ARGS", f"moving case #{caso['case_id']} to {hacia} needs --motivo: a card "
+                             f"in {hacia} has to say why")
     if (de, hacia) in TRANSICIONES_CON_FIRMA and not (
             caso.get("propuesta_aprobada")
             and caso["propuesta_aprobada"] == caso.get("propuesta_version")):
-        sys.exit(f"case #{caso['case_id']} cannot go from {de} to {hacia}: its current "
-                 f"proposal is not approved by the owner (`caso aprobar --version`)")
+        caso_falla("E_NOT_APPROVED", f"case #{caso['case_id']} cannot go from {de} to {hacia}: its current "
+                                     f"proposal is not approved by the owner (`caso aprobar --version`)")
 
 
 def caso_mover(con, caso, hacia, actor, detalle="", **campos):
@@ -2187,8 +2221,8 @@ def cmd_caso_crear(con, a):
     if a.stanza:
         ya = caso_de_mensaje(con, a.stanza)
         if ya:
-            sys.exit(f"message {a.stanza} already belongs to case #{ya}: a message is "
-                     f"in one case at most (use `caso unir` or `caso separar`)")
+            caso_falla("E_ARGS", f"message {a.stanza} already belongs to case #{ya}: a message is "
+                                 f"in one case at most (use `caso unir` or `caso separar`)")
     case_id = caso_nuevo(con, a.chat, a.actor, a.titulo,
                          [a.stanza] if a.stanza else [], "creado")
     con.commit()
@@ -2209,7 +2243,7 @@ def cmd_caso_clasificar(con, a):
     caso = caso_de(con, a.id)
     clase = (a.clase or "").strip()
     if not clase:
-        sys.exit("--clase is empty: a classified case says what kind of request it is")
+        caso_falla("E_ARGS", "--clase is empty: a classified case says what kind of request it is")
     detalle = f"{clase} · {a.prioridad}"
     if caso["etapa"] == "clasificado":
         caso_tocar(con, caso, a.actor, detalle, clase=clase, prioridad=a.prioridad)
@@ -2250,8 +2284,8 @@ def cmd_caso_propuesta(con, a):
             propuesta[campo] = valor
     falta = CAMPO_DE_TIPO.get(a.tipo)
     if falta and falta not in propuesta:
-        sys.exit(f"a {a.tipo} proposal needs --{falta}: the owner approves that text "
-                 f"and the executor runs it")
+        caso_falla("E_ARGS", f"a {a.tipo} proposal needs --{falta}: the owner approves that text "
+                             f"and the executor runs it")
     texto, version = propuesta_canonica(propuesta)
     if caso["etapa"] == "decision" and caso["propuesta_version"] == version:
         # Triage repasa cada cinco minutos: lo mismo no es un cambio ni deja evento.
@@ -2279,16 +2313,26 @@ def cmd_caso_aprobar(con, a):
     caso_toma(con)
     caso = caso_de(con, a.id)
     if not caso["propuesta_version"]:
-        sys.exit(f"case #{a.id} has no proposal to approve")
+        caso_falla("E_STAGE", f"case #{a.id} has no proposal to approve")
     if a.version != caso["propuesta_version"]:
-        sys.exit(f"stale version: case #{a.id} is now at proposal version "
-                 f"{caso['propuesta_version']}, not {a.version}; the owner has to see "
-                 f"the current one before approving it")
+        caso_falla("E_VERSION", f"stale version: case #{a.id} is now at proposal version "
+                                f"{caso['propuesta_version']}, not {a.version}; the owner has to see "
+                                f"the current one before approving it")
+    if a.actor == "regla":
+        # La regla del dueno da permiso solo a lo que no es una excepcion: dinero,
+        # credencial, compromiso, aviso o error de Jev, o un chat en "te pregunto antes".
+        excepciones = json.loads(caso["excepciones"]) if caso.get("excepciones") else []
+        modo = (merged_scope(con).get(caso["chat_jid"]) or {}).get("mode")
+        if excepciones or modo == "borrador":
+            caso_falla("E_EXCEPTION",
+                       f"case #{a.id} needs the owner: "
+                       + (f"exceptions {', '.join(excepciones)}" if excepciones
+                          else "its chat is on borrador (ask before sending)"))
     if caso["propuesta_aprobada"] == a.version:
         return [caso_fila(con, caso)]
     if caso["etapa"] not in ETAPAS_APROBABLES:
-        sys.exit(f"case #{a.id} is in {caso['etapa']}: only a case in "
-                 f"{' or '.join(ETAPAS_APROBABLES)} can be approved")
+        caso_falla("E_STAGE", f"case #{a.id} is in {caso['etapa']}: only a case in "
+                              f"{' or '.join(ETAPAS_APROBABLES)} can be approved")
     detalle = f"aprobada {a.version}"
     campos = {"propuesta_aprobada": a.version}
     # Solo desde decision: en listo el trabajo ya corrio, y firmar ahi no lanza otro.
@@ -2314,8 +2358,8 @@ def cmd_caso_resultado(con, a):
     respuesta = texto_caso((a.respuesta or "").strip())
     resumen = texto_caso((a.resumen or "").strip())
     if not respuesta or not resumen:
-        sys.exit("a result needs --respuesta and --resumen: the owner reads the summary "
-                 "and approves the reply")
+        caso_falla("E_ARGS", "a result needs --respuesta and --resumen: the owner reads the summary "
+                             "and approves the reply")
     texto, version = propuesta_canonica({"tipo": "responder", "respuesta": respuesta})
     if (caso["etapa"] == "listo" and caso["propuesta_version"] == version
             and caso["resumen"] == resumen):
@@ -2333,13 +2377,13 @@ def cmd_caso_unir(con, a):
     dejan evento: el tablero tiene que poder explicar por que una tarjeta desaparecio."""
     caso_toma(con)
     if a.destino == a.origen:
-        sys.exit(f"case #{a.destino} cannot be joined with itself")
+        caso_falla("E_ARGS", f"case #{a.destino} cannot be joined with itself")
     destino, origen = caso_de(con, a.destino), caso_de(con, a.origen)
     if destino["chat_jid"] != origen["chat_jid"]:
-        sys.exit(f"cases #{a.destino} and #{a.origen} are from different chats: a case "
-                 f"answers one conversation")
+        caso_falla("E_ARGS", f"cases #{a.destino} and #{a.origen} are from different chats: a case "
+                             f"answers one conversation")
     if destino["etapa"] == "cerrado":
-        sys.exit(f"case #{a.destino} is cerrado: reopen it before joining into it")
+        caso_falla("E_STAGE", f"case #{a.destino} is cerrado: reopen it before joining into it")
     motivo = f"unido a {a.destino}"
     caso_valida(origen, "cerrado", motivo)
     cuenta = cuenta_activa()
@@ -2366,10 +2410,10 @@ def cmd_caso_separar(con, a):
         (cuenta, a.id))}
     ajenos = [s for s in stanzas if s not in suyos]
     if ajenos:
-        sys.exit(f"not in case #{a.id}: {', '.join(ajenos)}; nothing was moved")
+        caso_falla("E_ARGS", f"not in case #{a.id}: {', '.join(ajenos)}; nothing was moved")
     if set(stanzas) == suyos:
-        sys.exit(f"those are all the messages of case #{a.id}: separating them would "
-                 f"leave it empty")
+        caso_falla("E_ARGS", f"those are all the messages of case #{a.id}: separating them would "
+                             f"leave it empty")
     nuevo = caso_nuevo(con, caso["chat_jid"], a.actor, caso["titulo"],
                        detalle=f"separado de {a.id}")
     for s in stanzas:
@@ -2425,7 +2469,7 @@ def caso_asigna(con, stanza, chat, actor):
     if ya:
         caso = caso_de(con, ya)
         if caso["chat_jid"] != chat:
-            sys.exit(f"message {stanza} already belongs to case #{ya}, of another chat")
+            caso_falla("E_ARGS", f"message {stanza} already belongs to case #{ya}, of another chat")
         return ya, "ya"
     caso = caso_abierto_de_chat(con, chat, ventana_casos(con))
     if not caso:
@@ -2791,7 +2835,7 @@ def cmd_sync(con, a):
     except (sqlite3.Error, OSError) as exc:
         print(f"wa-scope: ingest skipped: {exc}", file=sys.stderr)
     except SystemExit as exc:
-        print(f"wa-scope: ingest skipped: {exc.code}", file=sys.stderr)
+        print(f"wa-scope: ingest skipped: {exc}", file=sys.stderr)
     return [{"synced": push_to_plugin(con, with_activity=True),
              "destinos": plugin_store_targets()}]
 
@@ -2974,11 +3018,13 @@ def main():
 
     s = add("caso", help="the case board: a case groups the messages of one request, "
                          "and every change leaves an event (odd/tasks/kanban-casos.md)")
+    s.error = caso_args_falla
     casos = s.add_subparsers(dest="caso_cmd", required=True)
 
     def caso(name, **kw):
         # SUPPRESS: sin el flag, el subcomando no pisa un --json dicho antes.
         sp = casos.add_parser(name, **kw)
+        sp.error = caso_args_falla
         sp.add_argument("--json", dest="json_sub", action="store_true",
                         default=argparse.SUPPRESS)
         return sp
@@ -3015,14 +3061,16 @@ def main():
     c.set_defaults(fn=cmd_caso_propuesta)
 
     c = caso("aprobar", help="the owner's approval of ONE proposal version; refused if "
-                             "the current version is another one")
+                             "the current version is another one. --actor regla is the "
+                             "owner's rule, refused (E_EXCEPTION) when the case has an "
+                             "exception or its chat is on borrador")
     c.add_argument("id", type=int)
     c.add_argument("--version", required=True,
                    help="the propuesta_version the owner saw")
     # El actor queda en `dueno` para que el evento diga quien firmo. Es solo una bandera:
     # cualquiera que corra este CLI puede escribirla. La compuerta real del clic es el
     # canal panel -> worker (kanban-casos, T4), no este flag.
-    c.add_argument("--actor", required=True, choices=["dueno"])
+    c.add_argument("--actor", required=True, choices=list(FIRMANTES_CASO))
     c.set_defaults(fn=cmd_caso_aprobar)
 
     c = caso("resultado", help="the deployed worker's result: trabajo -> listo, its reply "
@@ -3057,12 +3105,23 @@ def main():
     c = caso("ver", help="one case with its messages and its events")
     c.add_argument("id", type=int); c.set_defaults(fn=cmd_caso_ver)
 
-    a = ap.parse_args()
-    if getattr(a, "json_sub", False):
-        a.json = True
-    con = db()
-    rows = a.fn(con, a)
-    con.close()
+    try:
+        a = ap.parse_args()
+        if getattr(a, "json_sub", False):
+            a.json = True
+        try:
+            con = db()
+            rows = a.fn(con, a)
+            con.close()
+        except sqlite3.OperationalError as exc:
+            # Solo para el tablero: la base tomada es un error con codigo, no un traceback.
+            if a.cmd != "caso" or not base_tomada(exc):
+                raise
+            caso_falla("E_BUSY", f"the case database is busy: {exc}")
+    except CasoFalla as falla:
+        print(json.dumps({"error": falla.error, "detail": falla.detail},
+                         ensure_ascii=False), file=sys.stderr)
+        sys.exit(2)
     if a.json:
         print(json.dumps(rows, ensure_ascii=False, indent=2)); return
     if not rows:
