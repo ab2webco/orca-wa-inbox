@@ -2743,6 +2743,23 @@ console.log('\nconfig.html — Jev: el aviso esta en los tres idiomas y dice a d
   }
 }
 
+console.log('\nconfig.html — Jev: de usted y sin tildes ni enie, como el resto del panel')
+{
+  const { window } = await montar('config.html')
+  const S = window.STRINGS
+  const claves = Object.keys(S.en).filter((k) => /^jev/.test(k))
+  ok('hay textos de Jev', claves.length > 20, String(claves.length))
+  const conTilde = claves.filter((k) => /[^\x00-\x7f\u00b7]/.test(S.es[k] + S.pt[k]))
+  ok('los textos de Jev van sin tildes ni enie en espanol y portugues', conTilde.length === 0,
+    JSON.stringify(conTilde))
+  const tuteo = claves.filter((k) => /\b(tu|tus|te|ti|enciendes|escribe|pega|intenta|revisa|verás|veras)\b/i
+    .test(S.es[k].replace(/<[^>]*>/g, '')))
+  ok('el espanol de Jev habla de usted, no de tu', tuteo.length === 0, JSON.stringify(tuteo))
+  ok('el aviso dice "Si lo enciende" y la ayuda de la llave "solo vera"',
+    S.es.jevDisclosure.includes('Si lo enciende') && S.es.jevDisclosure.includes('su atencion') &&
+    S.es.jevKeyHelp.includes('solo vera') && S.es.jevKeyPh === 'Pegue su llave aqui')
+}
+
 /** El worker de mentira para Jev: hace lo que el de verdad —toma el pedido de storage,
  *  lo borra, contesta con codigo y deja el estado— sin tocar disco. `resultado` decide
  *  que contesta. */
@@ -2862,7 +2879,7 @@ console.log('\nconfig.html — Jev: lo que falla se dice, y un archivo ajeno se 
     trabajadorJev(() => ({ ok: false, code: 'llave-invalida' })))
   const nota = doc.getElementById('jev-mirror-note')
   ok('con un archivo de llave que no es del plugin lo explica y manda a escribir la llave',
-    !nota.hidden && /jev\.env/.test(nota.textContent) && /escribe la llave/i.test(nota.textContent),
+    !nota.hidden && /jev\.env/.test(nota.textContent) && /escriba la llave/i.test(nota.textContent),
     `hidden=${nota.hidden} ${nota.textContent}`)
   doc.getElementById('jev-key').value = 'dos palabras'
   doc.getElementById('jev-save-key').click()
