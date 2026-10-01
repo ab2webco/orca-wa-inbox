@@ -270,8 +270,9 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
 - [x] T5 — Tablero en `activity.html`: columnas, tarjeta con propuesta, veredicto
       de Jev y acciones; móvil en lista por etapa.
       Solo lectura cerrada en W2 (5e66fbd, 6f7e229); las acciones entran con T6.
-- [ ] T6 — Canal panel → worker → `wa-scope caso` para las acciones del dueño
+- [x] T6 — Canal panel → worker → `wa-scope caso` para las acciones del dueño
       (`--actor dueno` lo fuerza el worker), códigos de error estables.
+      Cerrada en W1 (7f5e775); `npm run check` verde tras integrar la ronda 2.
 - [ ] T7 — `wa-scope tick` + automatización solo-comando; automatización de
       agente con precheck `pending --needs-agent` y prompt corto por caso;
       reemplazan `triage` y `take` (conservar ids de lo que el dueño ya
@@ -282,8 +283,12 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
       evidencia (sin evidencia → Bloqueado). Depende de T0 y T12.
 - [ ] T12 — Orquestador: workspace propio del plugin con harness de atención y
       la lista de proyectos elegidos en los ajustes, refrescada cuando cambia.
+      Hecho en W3 (652b6b9): catálogo desde Orca y PROJECTS.md en el harness.
+      Falta registrar el workspace propio del plugin (`workspace: plugin-owned`), que
+      va con T7.
 - [ ] T13 — Ajustes por chat: proyecto en lugar de Plane, modos nuevos, reglas
       por texto a proyecto; migración sin pérdida.
+      Cerrada en W3 (bac9ec1, 8efe23c); la UI la rehace T17.
 - [ ] T14 — Aprobación por WhatsApp (chat propio): sonda en vivo primero, luego
       mensaje de excepción, lectura de la respuesta citada, envío o cierre.
 - [x] T15 — Primera corrida de `ingest` con línea base (`case_window_hours`).
@@ -295,7 +300,7 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
       Cerrada en W1 (d4fe893): la escribe wa-scope junto con `board`.
 - [ ] T11 — Capturas: tablero y estadísticas, 1440/768/390/320, ES y EN, claro y
       oscuro (`activity.html` tiene los dos).
-- [ ] T16 — Defectos vistos en vivo (2026-10-01, línea de prueba): "Traer
+- [x] T16 — Defectos vistos en vivo (2026-10-01, línea de prueba): "Traer
       conversaciones" relanza la sesión pero no refresca la lista (queda para el
       sync de 5 min); un chat directo guardado con sufijo de dispositivo
       (`<lid>:90@lid`) duplica a la persona; `transport-silent` salta cuando el
