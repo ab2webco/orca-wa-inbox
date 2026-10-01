@@ -83,8 +83,10 @@ Baileys intenta login y nunca pide registro.
       sin latido el renglón sale con el código nuevo `transport-silent` (bloquea, se
       traduce en el panel, no notifica). `checkSystem` cada `SALUD_MS` (5 min), sin
       encimarse, y sin repetir la misma notificación.
-- [ ] T8 — Capturas de los estados nuevos (sin señal, sesión cerrada → QR) a
-      1440/768/390/320, ES y EN, revisadas a ojo.
+- [x] T8 — Capturas de los estados nuevos (sin señal, sesión cerrada → QR) a
+      1440/768/390/320, ES y EN, revisadas a ojo. `test/shots.mjs` gana
+      `enTodosLosAnchos` (los estados marcados van también en inglés a los cuatro
+      anchos) y `LATIDO_FRESCO` (el latido se sella al fotografiar).
 
 ## Criterios de aceptación
 
@@ -161,4 +163,18 @@ Baileys intenta login y nunca pide registro.
   transporte esta en verde" ahora hace `almacen.latir()` antes (línea viva).
 - GREEN: `almacen` 186/186, `panels` 408/408, `worker` 147/147, `check-clis` ok,
   `envio` en verde, `check-voseo` ok.
+
+### T8 — capturas
+
+- `npm run shots`: 408 capturas, "sin desbordes, sin errores de JS y con los select
+  legibles" (en ../.orca-wa-inbox-capturas/).
+- Revisadas a ojo, ES y EN, oscuro y claro, a 1440/768/390/320 (16 por estado, 96 en
+  total; la parte superior donde viven la alerta, la vinculación y el renglón de la
+  línea): `config-sidecar-sin-senal`, `config-sidecar-401-tapado`,
+  `config-sidecar-reemplazada`, `config-sidecar-sesion-cerrada`, `config-sidecar-qr`,
+  `actividad-linea-muda`. Control: `config-sidecar-conectado-es-dark-320` y
+  `actividad-linea-viva-es-light-1440` siguen diciendo conectado.
+- Lo que delató mirar: la alerta de `transport-silent` decía "Reintente la conexion
+  aca arriba" con el botón DEBAJO. Corregido en es/en/pt ("aca abajo"/"below"/"aqui
+  embaixo") y vuelto a fotografiar.
 
