@@ -2453,6 +2453,59 @@ const verbo = (llamada) => llamada[1]
 }
 
 {
+  // Lo que era la bandeja, ahora en el tablero: "Atender ahora" (era Tomar), "Ignorar" y
+  // el proyecto puesto a mano. Las tres por el mismo canal, con --actor dueno.
+  const f = herramientasCaso('caso-bandeja', { casos: {
+    7: casoDe({ etapa: 'clasificado', propuesta: null, propuesta_version: null }),
+    8: casoDe({ case_id: 8, etapa: 'recibido', propuesta: null, propuesta_version: null }) } })
+  const orca = hostFalso(f.dir, { chats: [] })
+  const { apagar } = await arranca(orca)
+  const actorDueno = (a) => { const i = a.indexOf('--actor'); return i > 0 && a[i + 1] === 'dueno' }
+
+  const at = await pideCaso(orca, { action: 'atender', caseId: 7, actor: 'agente' })
+  const llamadaAt = f.scope().find((a) => verbo(a) === 'atender')
+  ok('Atender ahora pide `caso atender` sobre ese caso, firmado por el dueno',
+    at && at.ok === true && at.code === 'atendido' && llamadaAt && llamadaAt[2] === '7' &&
+    actorDueno(llamadaAt) && !llamadaAt.includes('agente'), JSON.stringify([at, llamadaAt]))
+
+  const ig = await pideCaso(orca, { action: 'ignorar', caseId: 8 })
+  const llamadaIg = f.scope().filter((a) => verbo(a) === 'mover').pop()
+  ok('Ignorar cierra el caso con un motivo propio, firmado por el dueno',
+    ig && ig.ok === true && ig.code === 'ignorado' && llamadaIg && llamadaIg[2] === '8' &&
+    llamadaIg[3] === 'cerrado' && llamadaIg.some((x) => /^--motivo=.+/.test(x)) &&
+    actorDueno(llamadaIg), JSON.stringify([ig, llamadaIg]))
+
+  const pr = await pideCaso(orca, { action: 'proyecto', caseId: 7, proyecto: 'beta-demo' })
+  const llamadaPr = f.scope().filter((a) => verbo(a) === 'proyecto').pop()
+  ok('el proyecto viaja en una sola bandera `--proyecto=`, firmado por el dueno',
+    pr && pr.ok === true && pr.code === 'proyecto-cambiado' && llamadaPr && llamadaPr[2] === '7' &&
+    llamadaPr.includes('--proyecto=beta-demo') && actorDueno(llamadaPr), JSON.stringify([pr, llamadaPr]))
+
+  const sin = await pideCaso(orca, { action: 'proyecto', caseId: 7, proyecto: '' })
+  const llamadaSin = f.scope().filter((a) => verbo(a) === 'proyecto').pop()
+  ok('sin proyecto se pide con `--proyecto=`', sin && sin.ok === true &&
+    llamadaSin && llamadaSin.includes('--proyecto='), JSON.stringify([sin, llamadaSin]))
+
+  const antes = f.scope().length
+  for (const [nombre, valor] of [['con mayusculas', 'Beta'], ['con espacios', 'beta demo'],
+    ['que empieza con guion', '-x'], ['que no es texto', 7]]) {
+    const v = await pideCaso(orca, { action: 'proyecto', caseId: 7, proyecto: valor })
+    ok(`un proyecto ${nombre} es E_ARGS`, v && v.ok === false && v.code === 'E_ARGS', JSON.stringify(v))
+  }
+  ok('y ninguno llega al CLI', f.scope().length === antes, JSON.stringify(f.scope().slice(antes)))
+  ok('ninguna de las tres toca WhatsApp', f.send().length === 0)
+  apagar()
+
+  const g = herramientasCaso('caso-atender-etapa', { casos: { 7: casoDe() }, falla: { atender: 'E_STAGE' } })
+  const orca2 = hostFalso(g.dir, { chats: [] })
+  const { apagar: apagar2 } = await arranca(orca2)
+  const v = await pideCaso(orca2, { action: 'atender', caseId: 7 })
+  ok('atender fuera de recibido o clasificado llega como E_STAGE', v && v.ok === false && v.code === 'E_STAGE',
+    JSON.stringify(v))
+  apagar2()
+}
+
+{
   // Cada codigo estable del CLI llega al panel igual, para que el panel lo traduzca por
   // codigo y no por el texto en ingles.
   for (const codigo of ['E_ARGS', 'E_NOT_FOUND', 'E_STAGE', 'E_NOT_APPROVED', 'E_VERSION',

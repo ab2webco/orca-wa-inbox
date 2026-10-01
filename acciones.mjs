@@ -29,7 +29,12 @@ export const CASO_ACCION = Object.freeze({
   EJECUTAR: 'ejecutar',
   RECLASIFICAR: 'reclasificar',
   CERRAR: 'cerrar',
-  REABRIR: 'reabrir'
+  REABRIR: 'reabrir',
+  // Lo que era la bandeja (T7 quito "Tomar"): que el agente lo atienda en su proxima
+  // corrida, dejarlo de lado, y el proyecto del caso puesto a mano.
+  ATENDER: 'atender',
+  IGNORAR: 'ignorar',
+  PROYECTO: 'proyecto'
 })
 
 /** Los veredictos buenos y los malos propios de este canal. Los errores de `wa-scope
@@ -40,6 +45,9 @@ export const CASO_VEREDICTO = Object.freeze({
   RECLASIFICADO: 'reclasificado',
   CERRADO: 'cerrado',
   REABIERTO: 'reabierto',
+  ATENDIDO: 'atendido',
+  IGNORADO: 'ignorado',
+  PROYECTO_CAMBIADO: 'proyecto-cambiado',
   ARGS: 'E_ARGS',
   VERSION: 'E_VERSION',
   // La accion no corresponde a lo que el caso propone (enviar un trabajo, ejecutar una
@@ -63,6 +71,10 @@ const NOTA_MAX = 500
 // El CLI no deja cerrar una tarjeta sin decir por que; si el dueno no lo dice, lo dice
 // el worker. Va en ingles: es el texto de un evento, no de la pantalla.
 const MOTIVO_CIERRE = 'closed by the owner'
+const MOTIVO_IGNORADO = 'ignored by the owner'
+// La forma de un id de proyecto, la misma que valida `wa-scope` (ID_PROYECTO). Lo que no
+// la tiene no llega al CLI: un valor con guion al principio seria otra bandera.
+const ID_PROYECTO = /^[a-z0-9][a-z0-9-]*$/
 // Cuanto espera `wa-send` el veredicto del sidecar, y cuanto el proceso en total. Va por
 // debajo del tiempo que el panel espera su respuesta: un envio que tarda mas queda en
 // cola con su id, y volver a apretar pregunta por el mismo.
@@ -277,6 +289,32 @@ export function crearAccionesCaso ({ run, herramienta, motivoDe }) {
       const id = idDeCaso(pedido)
       await mover(id, 'recibido')
       return { ok: true, code: CASO_VEREDICTO.REABIERTO, caseId: id }
+    }),
+
+    // Marca el caso para el agente: `pending --needs-agent` lo cuenta y triage lo toma en
+    // su proxima corrida. El CLI dice E_STAGE fuera de recibido y clasificado.
+    [CASO_ACCION.ATENDER]: aceptarRechazo(async (pedido) => {
+      const id = idDeCaso(pedido)
+      await caso(['atender', String(id), '--actor', ACTOR])
+      return { ok: true, code: CASO_VEREDICTO.ATENDIDO, caseId: id }
+    }),
+
+    [CASO_ACCION.IGNORAR]: aceptarRechazo(async (pedido) => {
+      const id = idDeCaso(pedido)
+      await mover(id, 'cerrado', MOTIVO_IGNORADO)
+      return { ok: true, code: CASO_VEREDICTO.IGNORADO, caseId: id }
+    }),
+
+    // El proyecto en UNA bandera `--proyecto=`: vacio es "sin proyecto". Que este en el
+    // catalogo aceptado lo decide el CLI (E_ARGS si no).
+    [CASO_ACCION.PROYECTO]: aceptarRechazo(async (pedido) => {
+      const id = idDeCaso(pedido)
+      const p = pedido.proyecto ?? ''
+      if (typeof p !== 'string' || (p !== '' && !ID_PROYECTO.test(p)) || p.length > 120) {
+        throw new Rechazo(CASO_VEREDICTO.ARGS, 'proyecto')
+      }
+      await caso(['proyecto', String(id), `--proyecto=${p}`, '--actor', ACTOR])
+      return { ok: true, code: CASO_VEREDICTO.PROYECTO_CAMBIADO, caseId: id }
     })
   }
 }

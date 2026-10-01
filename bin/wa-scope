@@ -2419,6 +2419,47 @@ def cmd_caso_mover(con, a):
     return [caso_fila(con, caso_de(con, a.id))]
 
 
+def cmd_caso_atender(con, a):
+    """El dueno pide que el agente atienda este caso en su proxima corrida (lo que era
+    "Tomar" en la bandeja): lo marca `necesita_agente`, que es lo que mira
+    `pending --needs-agent`. Solo antes de que haya una propuesta."""
+    caso_toma(con)
+    caso = caso_de(con, a.id)
+    if caso["etapa"] not in ETAPAS_ATENDER:
+        caso_falla("E_STAGE", f"case #{a.id} is in {caso['etapa']}: only a case in "
+                              f"{' or '.join(ETAPAS_ATENDER)} can be handed to the agent")
+    caso_tocar(con, caso, a.actor, "the owner asked the agent to handle it now",
+               necesita_agente=1)
+    con.commit()
+    return [caso_fila(con, caso_de(con, a.id))]
+
+
+def cmd_caso_proyecto(con, a):
+    """El proyecto del caso, puesto a mano por el dueno: uno del catalogo aceptado, o
+    ninguno con `--proyecto ''`. Queda en la ruta del caso marcado como del dueno, y
+    una regla de contenido ya no lo pisa (`caso_enruta`)."""
+    caso_toma(con)
+    caso = caso_de(con, a.id)
+    if caso["etapa"] not in ETAPAS_PROYECTO:
+        caso_falla("E_STAGE", f"case #{a.id} is in {caso['etapa']}: its project can only "
+                              f"change in {', '.join(ETAPAS_PROYECTO)}")
+    pedido = (a.proyecto or "").strip()
+    proyecto = None
+    if pedido:
+        proyecto = next((p for p in proyectos_del_dueno(con) if p["id"] == pedido), None)
+        if not proyecto:
+            caso_falla("E_ARGS", f"unknown project: {pedido} (it is not in the accepted list)")
+    ruta = json.loads(caso["ruta"]) if caso["ruta"] else {}
+    ruta.update({"workspace": proyecto["id"] if proyecto else None,
+                 "workspace_name": proyecto["name"] if proyecto else None,
+                 "workspace_path": proyecto["path"] if proyecto else None,
+                 "workspace_why": "set by the owner", "por_dueno": True})
+    caso_tocar(con, caso, a.actor, f"proyecto {proyecto['id'] if proyecto else 'none'}",
+               ruta=json.dumps(ruta, ensure_ascii=False, sort_keys=True))
+    con.commit()
+    return [caso_fila(con, caso_de(con, a.id))]
+
+
 def cmd_caso_clasificar(con, a):
     caso_toma(con)
     caso = caso_de(con, a.id)
@@ -2853,6 +2894,8 @@ def caso_enruta(con, case_id, texto, chat):
              "workspace": destino["workspace"],
              "why": destino["why"], "matched": destino["matched"]}
     actual = json.loads(caso["ruta"]) if caso["ruta"] else None
+    if actual is not None and actual.get("por_dueno"):
+        return False
     if actual is not None and (not nueva["matched"]
                                or nueva["matched"] == actual.get("matched")):
         return False
@@ -3090,15 +3133,23 @@ LARGO_TITULO = 80
 # Lo que el dueno puede hacer con la tarjeta en cada etapa. El panel pinta los botones;
 # el canal panel -> worker (T6) es quien los valida de verdad.
 ACCIONES_DE_ETAPA = {
-    "recibido": ("reclasificar", "cerrar"),
-    "clasificado": ("reclasificar", "cerrar"),
-    "decision": ("enviar", "editar", "ejecutar", "reclasificar", "cerrar"),
+    "recibido": ("atender", "ignorar", "reclasificar", "cerrar", "proyecto"),
+    "clasificado": ("atender", "ignorar", "reclasificar", "cerrar", "proyecto"),
+    "decision": ("enviar", "editar", "ejecutar", "reclasificar", "cerrar", "proyecto"),
     "trabajo": ("cerrar",),
     "listo": ("enviar", "editar", "cerrar"),
     "respondido": ("cerrar", "reabrir"),
     "cerrado": ("reabrir",),
-    "bloqueado": ("reclasificar", "cerrar", "reabrir"),
+    "bloqueado": ("reclasificar", "cerrar", "reabrir", "proyecto"),
 }
+# Donde el dueno puede pedir que el agente lo atienda ya (lo que era "Tomar" en la
+# bandeja): lo que todavia no tiene propuesta.
+ETAPAS_ATENDER = ("recibido", "clasificado")
+# Donde se le puede cambiar el proyecto: antes de que un trabajo aprobado salga a correr
+# en el proyecto que tenia, y nunca sobre lo cerrado.
+ETAPAS_PROYECTO = ("recibido", "clasificado", "decision", "bloqueado")
+# Cuantos eventos de cada caso viajan en la tarjeta: la historia reciente, no la entera.
+EVENTOS_EN_TARJETA = 20
 # En decision, lo que se ejecuta depende de la propuesta: una respuesta se envia, un
 # trabajo se ejecuta. Lo que no aplica no se ofrece.
 ACCION_DE_TIPO = {"enviar": "responder", "ejecutar": "trabajar"}
@@ -3168,9 +3219,10 @@ def titulos_de_mensajes(con, case_ids):
     return titulos
 
 
-def tarjeta_de(caso, nombres, titulos, motivos):
+def tarjeta_de(caso, nombres, titulos, motivos, eventos=None):
     """Un caso con la forma de una tarjeta del contrato `board`."""
     propuesta = json.loads(caso["propuesta"]) if caso["propuesta"] else None
+    ruta = json.loads(caso["ruta"]) if caso["ruta"] else {}
     tipo = (propuesta or {}).get("tipo")
     nombre = nombres.get(caso["chat_jid"]) or caso["chat_jid"]
     return {
@@ -3188,6 +3240,13 @@ def tarjeta_de(caso, nombres, titulos, motivos):
         "ticket": caso["plane_issue"] or None,
         "updated_at": iso_caso(caso["updated_at"]),
         "actions": acciones_de(caso["etapa"], tipo),
+        "project": ({"id": ruta["workspace"], "name": ruta.get("workspace_name") or
+                     ruta["workspace"]} if ruta.get("workspace") else None),
+        "needs_agent": bool(caso["necesita_agente"]),
+        # La historia del caso (`caso_evento`): de que etapa a cual, quien y cuando. Sin
+        # `detalle`: es texto de maquina en ingles y el panel no lo muestra.
+        "events": [{"de": e["de"], "a": e["a"], "actor": e["actor"], "at": iso_caso(e["at"])}
+                   for e in (eventos or {}).get(caso["case_id"], [])],
     }
 
 
@@ -3224,10 +3283,19 @@ def build_board(con):
                 f"case_id in ({','.join('?' * len(bloqueados))}) order by id",
                 bloqueados):
             motivos[r["case_id"]] = r["detalle"] or None
+    eventos = {}
+    ids = [c["case_id"] for c in casos]
+    for i in range(0, len(ids), 500):
+        parte = ids[i:i + 500]
+        for r in con.execute(
+                f"select case_id, de, a, actor, at from caso_evento where case_id in "
+                f"({','.join('?' * len(parte))}) order by id", parte):
+            eventos.setdefault(r["case_id"], []).append(dict(r))
+    eventos = {k: v[-EVENTOS_EN_TARJETA:] for k, v in eventos.items()}
     return {"v": 1,
             "updated_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
             "truncated": truncado, "counts": counts,
-            "cards": [tarjeta_de(c, nombres, titulos, motivos) for c in casos]}
+            "cards": [tarjeta_de(c, nombres, titulos, motivos, eventos) for c in casos]}
 
 
 def publica_tablero(con):
@@ -3779,6 +3847,16 @@ def main():
     c.add_argument("id", type=int); c.add_argument("etapa", choices=list(ETAPAS_CASO))
     c.add_argument("--motivo", help="why; required to close or block")
     c.set_defaults(fn=cmd_caso_mover)
+
+    c = muta("atender", help="the owner asks the agent to handle the case on its next "
+                             "run: marks it needs-agent (recibido or clasificado)")
+    c.add_argument("id", type=int); c.set_defaults(fn=cmd_caso_atender)
+
+    c = muta("proyecto", help="sets the case's project from the accepted list, or none "
+                              "with --proyecto ''; a content rule no longer changes it")
+    c.add_argument("id", type=int)
+    c.add_argument("--proyecto", required=True, help="the project id, or '' for none")
+    c.set_defaults(fn=cmd_caso_proyecto)
 
     c = muta("clasificar", help="kind and priority; moves recibido -> clasificado")
     c.add_argument("id", type=int); c.add_argument("--clase", required=True)

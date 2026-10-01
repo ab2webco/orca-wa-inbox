@@ -1846,7 +1846,8 @@ import re  # noqa: E402
 
 LLAVES_TARJETA = {"case_id", "account", "chat_jid", "chat_name", "stage", "title",
                   "summary", "clase", "prioridad", "jev", "proposal", "exceptions",
-                  "blocked_reason", "ticket", "updated_at", "actions"}
+                  "blocked_reason", "ticket", "updated_at", "actions", "project",
+                  "needs_agent", "events"}
 ISO = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$")
 
 
@@ -2513,6 +2514,77 @@ with tempfile.TemporaryDirectory() as home:
     ok("Jev marca que necesita agente y no hay propuesta: 0, con ese caso",
        p.returncode == 0 and json.loads(p.stdout)["cases"] == [int(pide)], f"{p.stdout}")
 
+
+# ── Lo que era la bandeja, en el tablero: atender ya y el proyecto a mano ──────────
+# La pestana "Bandeja" se fue. "Tomar" es ahora "Atender ahora" sobre un caso en
+# recibido o clasificado: lo marca para el agente, y `pending --needs-agent` lo cuenta.
+# El proyecto del caso se elige a mano del catalogo aceptado y deja su evento.
+def acepta_proyectos(home, *ids):
+    ruta = storage_de(home)
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    datos = json.loads(ruta.read_text(encoding="utf-8")) if ruta.exists() else {}
+    datos["projects"] = [{"id": i, "name": i.replace("-", " ").title(),
+                          "path": f"/srv/ejemplo/{i}", "note": ""} for i in ids]
+    ruta.write_text(json.dumps(datos), encoding="utf-8")
+
+
+print("\natender ahora y el proyecto a mano")
+with tempfile.TemporaryDirectory() as home:
+    cid = str(js(home, "caso", "crear", "--chat", CHAT, "--stanza", "AT1",
+                 "--actor", "automatizacion")[0]["case_id"])
+    js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+       "--actor", "jev")
+    con = db_de(home)
+    con.execute("update caso set jev=?, necesita_agente=0 where case_id=?",
+                ('{"attention_class": "x", "flags": [], "skip": false}', int(cid)))
+    con.commit()
+    con.close()
+    ok("antes: Jev lo juzgo y no lo pide, el agente no lo ve", necesita(home).returncode == 1)
+    r = js(home, "caso", "atender", cid, "--actor", "dueno")[0]
+    ok("atender lo marca para el agente", r["necesita_agente"] == 1, f"{r}")
+    p = necesita(home)
+    ok("y `pending --needs-agent` lo cuenta en su proxima corrida",
+       p.returncode == 0 and int(cid) in json.loads(p.stdout)["cases"], p.stdout)
+    ok("deja su evento, firmado por el dueno",
+       cuenta(home, "select count(*) from caso_evento where case_id=? and actor='dueno' "
+              "and de=a", int(cid)) == 1)
+    ok("sin actor no se puede", corre(home, "caso", "atender", cid).returncode != 0)
+    t = tarjeta(home, cid)
+    ok("la tarjeta dice que espera al agente y ofrece atender e ignorar",
+       t and t["needs_agent"] is True and "atender" in t["actions"] and "ignorar" in t["actions"],
+       f"{t and t['actions']}")
+    ok("y trae su historia, sin el detalle de maquina",
+       t and len(t["events"]) >= 3 and all(set(e) == {"de", "a", "actor", "at"} for e in t["events"])
+       and t["events"][-1]["actor"] == "dueno", f"{t and t['events']}")
+    js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta", "Hola.",
+       "--actor", "agente")
+    p = corre(home, "caso", "atender", cid, "--actor", "dueno", "--json")
+    ok("con propuesta (decision) ya no se atiende: E_STAGE",
+       p.returncode != 0 and "E_STAGE" in p.stderr, p.stderr)
+
+    acepta_proyectos(home, "alfa-demo", "beta-demo")
+    r = js(home, "caso", "proyecto", cid, "--proyecto", "beta-demo", "--actor", "dueno")[0]
+    ok("el proyecto se pone a mano del catalogo", (r["ruta"] or {}).get("workspace") == "beta-demo",
+       f"{r['ruta']}")
+    ok("y deja su evento", cuenta(home, "select count(*) from caso_evento where case_id=? "
+                                  "and detalle='proyecto beta-demo'", int(cid)) == 1)
+    t = tarjeta(home, cid)
+    ok("la tarjeta lo trae con su nombre", t and t["project"] == {"id": "beta-demo",
+                                                                  "name": "Beta Demo"},
+       f"{t and t['project']}")
+    p = corre(home, "caso", "proyecto", cid, "--proyecto", "otro-demo", "--actor", "dueno",
+              "--json")
+    ok("uno fuera del catalogo es E_ARGS y no toca nada",
+       p.returncode != 0 and "E_ARGS" in p.stderr and
+       tarjeta(home, cid)["project"]["id"] == "beta-demo", p.stderr)
+    r = js(home, "caso", "proyecto", cid, "--proyecto", "", "--actor", "dueno")[0]
+    ok("con '' queda sin proyecto", (r["ruta"] or {}).get("workspace") is None and
+       tarjeta(home, cid)["project"] is None, f"{r['ruta']}")
+    js(home, "caso", "mover", cid, "cerrado", "--motivo", "listo", "--actor", "dueno")
+    p = corre(home, "caso", "proyecto", cid, "--proyecto", "alfa-demo", "--actor", "dueno",
+              "--json")
+    ok("un caso cerrado no cambia de proyecto: E_STAGE",
+       p.returncode != 0 and "E_STAGE" in p.stderr, p.stderr)
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
