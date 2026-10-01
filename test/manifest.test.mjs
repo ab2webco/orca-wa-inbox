@@ -240,6 +240,54 @@ for (const auto of automations) {
   }
 }
 
+// ── T7: el minuto es un comando, el agente solo para lo que necesita lenguaje ──
+// `tick` corre sin modelo (command-only, orca-oss 0ee91f3e59 / #406); `triage` conserva
+// su id —la reconciliacion de Orca identifica la fila por (plugin, id) y con otro id el
+// dueno perderia lo que ya encendio— pero solo despierta con `pending --needs-agent`.
+// `take` se fue: el tablero lo reemplazo, y Orca borra la fila de un id que el plugin ya
+// no declara (plugin-automation-reconciliation.ts:183-195).
+const porId = new Map(automations.map((auto) => [auto.id, auto]))
+hechas += 1
+assert.deepEqual([...porId.keys()].sort(), ['tick', 'triage'],
+  'the plugin declares exactly the tick (command) and triage (agent) automations')
+const tick = porId.get('tick')
+hechas += 1
+assert.ok(typeof tick.command === 'string' && tick.command.length <= COMMAND_MAX,
+  `tick: a command of at most ${COMMAND_MAX} characters (it measures ${tick.command?.length})`)
+hechas += 1
+assert.ok(!('provider' in tick) && !('prompt' in tick) && !('precheck' in tick),
+  'tick: command-only, no provider, no prompt and no precheck — zero model tokens')
+hechas += 1
+assert.match(tick.command, /"\$WA\/wa-scope" tick --json$/,
+  'tick: the command ends running `wa-scope tick --json`')
+hechas += 1
+assert.equal(tick.trigger, '* * * * *', 'tick: every minute')
+// Sin destino, una fila command-only termina en skipped_unavailable: el cwd del comando
+// es el destino resuelto (command-run-dispatch.ts:63-69).
+hechas += 1
+assert.equal(tick.workspace, WORKSPACE_PROPIO, 'tick: runs in the plugin-owned workspace')
+const triage = porId.get('triage')
+hechas += 1
+assert.ok(triage.provider && triage.prompt === 'prompts/triage.md' && !('command' in triage),
+  'triage: still the agent automation, with its prompt')
+hechas += 1
+assert.match(triage.precheck ?? '', /"\$WA\/wa-scope" pending --needs-agent$/,
+  'triage: gated by `wa-scope pending --needs-agent`')
+hechas += 1
+assert.equal(triage.workspace, WORKSPACE_PROPIO, 'triage: runs in the plugin-owned workspace')
+// engines: Orca compara solo x.y.z e ignora el sufijo de prerelease
+// (src/shared/plugins/plugin-manifest.ts:211-230). Las automatizaciones solo-comando
+// llegaron en 1.4.160-lab.84.rc, asi que lo maximo que se puede exigir sin dejar fuera
+// la 1.4.160-lab.89.rc instalada es 1.4.160.
+const version = (texto) => texto.replace(/^>=/, '').split(/[-+]/)[0].split('.').map(Number)
+const [ma, mi, pa] = version(manifest.engines.orca)
+hechas += 1
+assert.ok(ma > 1 || (ma === 1 && (mi > 4 || (mi === 4 && pa >= 160))),
+  `engines.orca ${manifest.engines.orca}: command-only automations need Orca 1.4.160`)
+hechas += 1
+assert.deepEqual(version(manifest.engines.orca), [1, 4, 160],
+  'engines.orca: 1.4.160 exactly; a higher patch would lock out 1.4.160-lab.89.rc')
+
 // ── Ids duplicados (plugin-manifest-contribution-validation.ts:49-57) ──
 for (const [nombre, lista] of [['panels', panels], ['commands', commands],
   ['automations', automations]]) {

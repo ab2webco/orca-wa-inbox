@@ -39,14 +39,16 @@ function delPrecheck (origen, precheck) {
 
 const manifiesto = JSON.parse(readFileSync(join(RAIZ, 'orca-plugin.json'), 'utf8'))
 const COPIAS = new Map()
+// `tick` es solo-comando (T7): su linea de shell vive en `command`, no en `precheck`.
+const lineaDe = (auto) => auto.command ?? auto.precheck
 for (const auto of manifiesto.contributes.automations) {
-  COPIAS.set(`orca-plugin.json (${auto.id})`, delPrecheck(`orca-plugin.json (${auto.id})`, auto.precheck))
+  COPIAS.set(`orca-plugin.json (${auto.id})`, delPrecheck(`orca-plugin.json (${auto.id})`, lineaDe(auto)))
 }
-for (const nombre of ['whatsapp-triage.json', 'whatsapp-tomar-lo-marcado.json']) {
+for (const nombre of ['whatsapp-triage.json', 'whatsapp-tick.json']) {
   const auto = JSON.parse(readFileSync(join(RAIZ, 'automations', nombre), 'utf8'))
-  COPIAS.set(`automations/${nombre}`, delPrecheck(`automations/${nombre}`, auto.precheck))
+  COPIAS.set(`automations/${nombre}`, delPrecheck(`automations/${nombre}`, lineaDe(auto)))
 }
-for (const nombre of ['take.md', 'triage.md']) {
+for (const nombre of ['triage.md']) {
   COPIAS.set(`prompts/${nombre}`, delPrompt(nombre))
 }
 

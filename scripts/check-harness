@@ -46,7 +46,9 @@ GENERADOS = {"PROJECTS.md": "ARCHIVO_PROYECTOS = 'PROJECTS.md'"}
 
 # Donde tiene que estar cada regla. El AGENTS.md es lo que Orca le mete al contexto al
 # agente sin que nadie lo pida; los prompts son lo que llega aunque no haya carpeta.
-OBLIGATORIOS = ["harness/AGENTS.md", "prompts/triage.md", "prompts/take.md"]
+# `prompts/take.md` se fue con su automation (T7): el tablero reemplazo "tomar lo
+# marcado", y el unico prompt que queda es el del agente de casos.
+OBLIGATORIOS = ["harness/AGENTS.md", "prompts/triage.md"]
 
 
 def plano(texto: str) -> str:
@@ -111,7 +113,7 @@ def main() -> int:
         if archivo in sembrados:
             fallos.append(f"harness/{archivo}  existe en el repo y tambien se genera")
         sembrados.add(archivo)
-    for rel in ("prompts/triage.md", "prompts/take.md"):
+    for rel in ("prompts/triage.md",):
         cuerpo = (RAIZ / rel).read_text(encoding="utf-8")
         nombrados = set(re.findall(r"\b([A-Z][A-Z]+\.md)\b", cuerpo))
         comprobaciones += 1
@@ -135,7 +137,7 @@ def main() -> int:
             print(f"  {f}", file=sys.stderr)
         return 1
     print(f"{comprobaciones} comprobaciones: las {len(REGLAS)} reglas duras siguen "
-          f"alcanzables por el arnes y por los dos prompts; "
+          f"alcanzables por el arnes y por el prompt; "
           f"{len(GENERADOS)} archivo generado declarado")
     return 0
 
