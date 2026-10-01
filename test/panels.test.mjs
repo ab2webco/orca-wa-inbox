@@ -2321,7 +2321,8 @@ console.log('\nactivity.html — dice si la linea esta viva y sobre cuanto actua
   const chats = new Array(298).fill(0).map((_, i) => ({ jid: `c${i}`, name: `c${i}` }))
 
   const viva = await montar('activity.html',
-    { activity: base, chats, sidecar: { connection: 'open', me: '+573000000011' } },
+    { activity: base, chats, sidecar: { connection: 'open', me: '+573000000011',
+      latido: { ts: Date.now(), conectado: true } } },
     'es-419')
   await espera()
   ok('dice que la linea esta conectada',
@@ -2356,11 +2357,54 @@ console.log('\nactivity.html — dice si la linea esta viva y sobre cuanto actua
   // atencion aunque no haya nada pendiente.
   const cero = await montar('activity.html',
     { activity: Object.assign({}, base, { authorized: 0 }), chats,
-      sidecar: { connection: 'open' } }, 'es-419')
+      sidecar: { connection: 'open', latido: { ts: Date.now(), conectado: true } } }, 'es-419')
   await espera()
   ok('con cero autorizadas se avisa',
     cero.doc.getElementById('cobertura').className.includes('vieja'),
     cero.doc.getElementById('cobertura').className)
+}
+
+// ───────── "Linea conectada" con el mismo criterio de vida que el panel de config ─────────
+console.log('\nactivity.html — "linea conectada" solo con latido fresco')
+{
+  const base = { pending: [], recent: [], running: false, syncedAt: '2026-09-23 17:41',
+    mapped: 1, authorized: 1 }
+  const viejoMs = Date.now() - 10 * 60 * 1000
+  const hora = new Date(viejoMs).toTimeString().slice(0, 5)
+  const muda = await montar('activity.html', { activity: base, chats: [],
+    sidecar: { connection: 'open', me: '+573000000011',
+      latido: { ts: viejoMs, conectado: true } } }, 'es-419')
+  await espera()
+  const linea = muda.doc.getElementById('linea')
+  ok('con el latido viejo no dice conectada', !/conectada/i.test(linea.textContent),
+    linea.textContent)
+  ok('dice que no da senal, y desde cuando', /senal/i.test(linea.textContent) &&
+    linea.textContent.includes(hora), `${linea.textContent} / ${hora}`)
+  ok('y se marca como dato viejo', linea.className.includes('stale'), linea.className)
+
+  const nunca = await montar('activity.html', { activity: base, chats: [],
+    sidecar: { connection: 'open' } }, 'es-419')
+  await espera()
+  ok('sin ningun latido tampoco dice conectada',
+    !/conectada/i.test(nunca.doc.getElementById('linea').textContent),
+    nunca.doc.getElementById('linea').textContent)
+
+  // Los dos paneles deciden "conectado" con el MISMO plazo: si uno dijera conectada y
+  // el otro sin senal sobre el mismo dato, el dueno no sabria a cual creerle.
+  const plazo = (archivo) => {
+    const m = /var LATIDO_LINEA_VENCE_MS = (\d+)/.exec(readFileSync(join(root, archivo), 'utf8'))
+    return m ? Number(m[1]) : null
+  }
+  ok('config y actividad usan el mismo plazo de latido',
+    plazo('config.html') !== null && plazo('config.html') === plazo('activity.html'),
+    `config=${plazo('config.html')} actividad=${plazo('activity.html')}`)
+
+  const { window } = await montar('activity.html')
+  const S = window.STRINGS
+  ok('el texto nuevo existe en los tres idiomas, con portugues propio',
+    !!(S.es.lineaSinSenal && S.en.lineaSinSenal && S.pt.lineaSinSenal &&
+      S.pt.lineaSinSenal !== S.en.lineaSinSenal),
+    JSON.stringify([S.es.lineaSinSenal, S.en.lineaSinSenal, S.pt && S.pt.lineaSinSenal]))
 }
 
 console.log('\nactivity.html — el texto ya no ensena que hay que marcar para que actue')

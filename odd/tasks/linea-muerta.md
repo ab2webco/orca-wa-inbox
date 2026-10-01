@@ -74,7 +74,9 @@ Baileys intenta login y nunca pide registro.
       `silent` ("La linea no da senal desde las HH:MM", con Reintentar y
       Desvincular); `LATIDO_LINEA_VENCE_MS` = 150 s; `statusCode` 401/500 manda sobre
       el `sidecar-cayo` viejo; textos de 440/403/411 en es, en y pt.
-- [ ] T6 — Panel de actividad: mismo criterio de vida para "Línea conectada".
+- [x] T6 — Panel de actividad: mismo criterio de vida para "Línea conectada".
+      Sin latido fresco: "La linea no da senal desde las HH:MM" (clase `stale`), con el
+      mismo `LATIDO_LINEA_VENCE_MS` que config.html (la prueba compara los dos).
 - [ ] T7 — `wa-read doctor`: el transporte exige `sidecar_beat` fresco
       (misma regla que `sidecar_vivo` en `bin/wa-send`); `checkSystem`
       periódico.
@@ -136,4 +138,11 @@ Baileys intenta login y nunca pide registro.
 - Fixtures "conectado" existentes del panel de config: ahora traen `latido` fresco
   (cambió la regla, no la intención de esas pruebas).
 - GREEN: `panels` 401/401; `check-panels` ok; `check-voseo` ok.
+
+### T6 — panel de actividad
+
+- RED `node test/panels.test.mjs` (6 fallas), entre ellas:
+  `FALLA con el latido viejo no dice conectada — Linea conectada · +573000000011`,
+  `FALLA config y actividad usan el mismo plazo de latido — config=150000 actividad=null`.
+- GREEN: `panels` 407/407; `check-panels` ok; `check-voseo` ok.
 
