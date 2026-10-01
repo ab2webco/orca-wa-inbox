@@ -136,13 +136,15 @@ COMPROMISO = re.compile(
     # what
     r"queda(?:ra|n|rian?)? list[oa]s?|estara list[oa]s?|va a quedar|"
     r"(?:te|se|le|les) (?:lo |la |los |las )?(?:envio|enviamos|envia|mando|mandamos|"
-    r"paso|pasamos|confirmo|confirmamos|aviso|avisamos|entrego|entregamos)|"
+    # "te aviso" stays out on purpose: it promises news, not a date or a delivery,
+    # and it ends most support replies.
+    r"paso|pasamos|confirmo|confirmamos|entrego|entregamos)|"
     r"(?:le|te|les) confirm\w*|nos comprometemos|sin falta|"
     r"lo tendr\w*|la tendr\w*|tendr(?:e|emos) list\w*|"
     r"will be (?:ready|done|fixed|sent|delivered)|"
     r"(?:i|we)(?:'ll| will) (?:send|have|get|confirm|deliver|fix|finish)|"
     r"fica(?:ra)? pront[oa]|estara pront[oa]|(?:te|lhe) (?:envio|enviamos|mando|"
-    r"confirmo|confirmamos|aviso)"
+    r"confirmo|confirmamos)"
     r")\b"
     # dd/mm, dd-mm-yyyy and clock times
     r"|(?<!\d)\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?(?!\d)"

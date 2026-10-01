@@ -2088,6 +2088,11 @@ for texto, direccion, esperado in (
          ["money", "credential", "commitment"]),
         # lo limpio
         ("hola, ya lo revisamos", "salida", []),
+        # avisar no es prometer: sin fecha ni entrega, una respuesta de soporte sigue sola
+        ("ya lo revisamos y te aviso", "salida", []),
+        ("en cuanto sepa algo les avisamos", "salida", []),
+        ("we'll keep you posted", "salida", []),
+        ("assim que souber te aviso", "salida", []),
         ("Tomo esto.", "salida", []),
         ("gracias!", "entrada", []),
         ("el sitio carga lento", "entrada", []),
