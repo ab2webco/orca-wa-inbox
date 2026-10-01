@@ -1797,6 +1797,150 @@ console.log('\nworker: desvincular espera a que el sidecar viejo muera antes de 
 }
 
 
+// ───────── quitar una regla de texto: el panel pide, el worker borra en LOS DOS lados ──
+// Las reglas que se crean con el CLI viven en `scope.db` (tabla `route`) y el sync las
+// vuelve a empujar al panel (`rutas_efectivas`). Quitar la fila solo del storage del
+// panel dejaba la de la base debajo: la regla "vieja" reaparecia en el siguiente sync.
+console.log('\nworker: quitar una regla de texto la saca de la base y del storage')
+{
+  const dir = herramientas('regla-bueno', [
+    '#!/bin/sh',
+    'if [ "$1" = "route" ]; then',
+    '  echo "$@" >> "$0.llamadas"',
+    '  echo \'[{"removed": true}]\'',
+    '  exit 0',
+    'fi',
+    'echo \'[{"synced": true, "destinos": []}]\'',
+    ''
+  ].join('\n'))
+  const llamadas = () => existsSync(join(dir, 'wa-scope.llamadas'))
+    ? readFileSync(join(dir, 'wa-scope.llamadas'), 'utf8') : ''
+  const orca = hostFalso(dir, {
+    chats: [],
+    routes: [
+      { pattern: 'attus', provider: 'plane', target: 'ATT', note: 'regla vieja' },
+      { pattern: 'acme', workspace: 'alfa-demo' }
+    ]
+  })
+  const { apagar } = await arranca(orca)
+  const pedir = async (id, extra) => {
+    orca.store.scopeRequest = { id, at: new Date().toISOString(), ...extra }
+    await hasta(() => orca.store.scopeResult && orca.store.scopeResult.requestId === id, 15000)
+    return orca.store.scopeResult
+  }
+
+  let v = await pedir('regla-1', { action: 'regla-quitar', pattern: '  ATTUS ' })
+  ok('el worker contesta con un codigo estable',
+    v && v.ok === true && v.code === 'regla-quitada', JSON.stringify(v))
+  ok('corrio `wa-scope route --remove` con el patron limpio y en minusculas',
+    /^route --remove=attus$/m.test(llamadas()), JSON.stringify(llamadas()))
+  ok('la regla ya no esta en el storage del panel y las demas siguen',
+    Array.isArray(orca.store.routes) && orca.store.routes.length === 1 &&
+    orca.store.routes[0].pattern === 'acme', JSON.stringify(orca.store.routes))
+  ok('borra el pedido: un clic quita una vez', orca.store.scopeRequest === null)
+
+  // Una regla que solo existe en el storage (el CLI borra cero filas y sale con 0).
+  orca.store.routes = [{ pattern: 'solo-panel', workspace: 'alfa-demo' },
+    { pattern: 'acme', workspace: 'alfa-demo' }]
+  v = await pedir('regla-2', { action: 'regla-quitar', pattern: 'solo-panel' })
+  ok('una regla que solo esta en el storage tambien se quita',
+    v && v.ok === true && orca.store.routes.length === 1 &&
+    orca.store.routes[0].pattern === 'acme', JSON.stringify([v, orca.store.routes]))
+
+  // Un patron que no es un patron nunca llega a la linea de comandos.
+  const antes = llamadas()
+  for (const [id, malo] of [['regla-m1', ''], ['regla-m2', '   '], ['regla-m3', 42],
+    ['regla-m4', 'x'.repeat(300)], ['regla-m5', 'a\nb'], ['regla-m6', null]]) {
+    v = await pedir(id, { action: 'regla-quitar', pattern: malo })
+    ok(`un patron invalido se rechaza con codigo (${JSON.stringify(malo).slice(0, 12)})`,
+      v && v.ok === false && v.code === 'patron-invalido', JSON.stringify(v))
+  }
+  ok('y no corrio nada', llamadas() === antes, JSON.stringify(llamadas()))
+  ok('ni toco las reglas', orca.store.routes.length === 1, JSON.stringify(orca.store.routes))
+  apagar()
+}
+
+{
+  // Sin lista de reglas legible NO se escribe una lista vacia: borraria todas por culpa
+  // de una lectura fallida.
+  const dir = herramientas('regla-sin-lista', [
+    '#!/bin/sh', 'echo \'[{"removed": true}]\'', ''].join('\n'))
+  const orca = hostFalso(dir, { chats: [] })
+  const { apagar } = await arranca(orca)
+  orca.store.scopeRequest = { id: 'regla-sl', action: 'regla-quitar', pattern: 'attus',
+    at: new Date().toISOString() }
+  await hasta(() => orca.store.scopeResult && orca.store.scopeResult.requestId === 'regla-sl',
+    15000)
+  ok('con la base quitada y sin lista en el storage contesta que si',
+    orca.store.scopeResult && orca.store.scopeResult.ok === true,
+    JSON.stringify(orca.store.scopeResult))
+  ok('y no inventa una lista vacia', !('routes' in orca.store), JSON.stringify(orca.store.routes))
+  apagar()
+}
+
+{
+  // El CLI que no esta: decirlo, y NO quitar la regla del storage (seguiria viva en la
+  // base y el panel diria que se fue).
+  const orca = hostFalso(herramientas('regla-sin-cli', null), {
+    chats: [], routes: [{ pattern: 'attus', provider: 'plane', target: 'ATT' }]
+  })
+  const { apagar } = await arranca(orca)
+  orca.store.scopeRequest = { id: 'regla-mal', action: 'regla-quitar', pattern: 'attus',
+    at: new Date().toISOString() }
+  await hasta(() => orca.store.scopeResult && orca.store.scopeResult.requestId === 'regla-mal',
+    15000)
+  const v = orca.store.scopeResult
+  ok('si no puede correr el CLI, lo dice con el codigo estable',
+    v && v.ok === false && v.code === 'sin-herramientas', JSON.stringify(v))
+  ok('y la regla sigue en el storage, sin fingir que se fue',
+    orca.store.routes.length === 1, JSON.stringify(orca.store.routes))
+  apagar()
+}
+
+{
+  // El recorrido de verdad: la base real de `wa-scope` en un HOME temporal. Una regla
+  // creada con el CLI, quitada por el worker, NO vuelve con el siguiente `wa-scope sync`.
+  const CLI = join(PLUGIN_DIR, 'bin', 'wa-scope')
+  const dir = herramientas('regla-real', `#!/bin/sh\nexec "${CLI}" "$@"\n`)
+  const man = JSON.parse(readFileSync(join(PLUGIN_DIR, 'orca-plugin.json'), 'utf8'))
+  const base = process.platform === 'darwin'
+    ? join(process.env.HOME, 'Library', 'Application Support', 'orca')
+    : join(process.env.HOME, '.config', 'orca')
+  const almacen = join(base, 'plugins-data', `${man.publisher}.${man.id}`, 'storage.json')
+  mkdirSync(dirname(almacen), { recursive: true })
+  const cli = (...args) => new Promise((resolve, reject) => {
+    execFileNode(CLI, args, { env: process.env, timeout: 60000 }, (error, stdout) =>
+      error ? reject(error) : resolve(stdout))
+  })
+  const reglasDelAlmacen = () => (JSON.parse(readFileSync(almacen, 'utf8')).routes || [])
+    .map((r) => r.pattern)
+
+  rmSync(join(process.env.HOME, '.wa-inbox'), { recursive: true, force: true })
+  await cli('route', '--match', 'attus', '--provider', 'plane', '--target', 'ATT',
+    '--note', 'regla vieja')
+  writeFileSync(almacen, JSON.stringify({}))
+  await cli('sync')
+  ok('antes de quitar, el sync empuja la regla de la base al panel',
+    reglasDelAlmacen().includes('attus'), JSON.stringify(reglasDelAlmacen()))
+
+  const orca = hostFalso(dir, { chats: [], routes: [{ pattern: 'attus', provider: 'plane',
+    target: 'ATT', note: 'regla vieja' }] })
+  const { apagar } = await arranca(orca)
+  orca.store.scopeRequest = { id: 'regla-real', action: 'regla-quitar', pattern: 'ATTUS',
+    at: new Date().toISOString() }
+  await hasta(() => orca.store.scopeResult && orca.store.scopeResult.requestId === 'regla-real',
+    30000)
+  ok('el worker quita la regla con el CLI real',
+    orca.store.scopeResult && orca.store.scopeResult.ok === true,
+    JSON.stringify(orca.store.scopeResult))
+  apagar()
+  // Lo que Orca persistiria del storage del panel, y el sync que corre cada pocos minutos.
+  writeFileSync(almacen, JSON.stringify({ routes: orca.store.routes }))
+  await cli('sync')
+  ok('despues de un `wa-scope sync` la regla quitada sigue quitada',
+    !reglasDelAlmacen().includes('attus'), JSON.stringify(reglasDelAlmacen()))
+}
+
 // ───────── la llave de Jev es del plugin y el espejo lo escribe el worker ─────────
 console.log('\nworker: la llave de Jev, su espejo 0600 y el aviso de que no es obligatoria')
 {

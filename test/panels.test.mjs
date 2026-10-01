@@ -90,6 +90,23 @@ async function montar (archivo, storage = {}, idioma = null, gancho = null) {
 
 const espera = () => new Promise((r) => setTimeout(r, 60))
 
+/** Un worker que atiende `regla-quitar` como el de verdad: `wa-scope route --remove`
+ *  borra la fila de la base y el worker saca la regla del storage del panel; recien
+ *  despues deja el veredicto. */
+function trabajadorReglas (d, st) {
+  if (!(d.action === 'storage.set' && d.params.key === 'scopeRequest' && d.params.value)) {
+    return undefined
+  }
+  const p = d.params.value
+  st.scopeRequest = p
+  if (p.action === 'regla-quitar') {
+    st.routes = (st.routes || []).filter((r) => r.pattern !== p.pattern)
+    st.scopeResult = { at: new Date().toISOString(), requestId: p.id, action: p.action,
+      ok: true, code: 'regla-quitada' }
+  }
+  return { ok: true }
+}
+
 // ── Los controles de config.html, manejados como los maneja el dueno (T17) ──
 // En el panel de Orca la lista de un `<select>` nativo no se abre (iframe con sandbox),
 // asi que no queda ninguno: pocas opciones son grupos de botones con `aria-pressed`, y
@@ -425,7 +442,7 @@ console.log('\nconfig.html — T17: las reglas viejas de Plane se marcan y se pu
   const storage = { projects: PROYECTOS_PRUEBA, routes: [
     { pattern: 'cobros', provider: 'plane', target: 'FIN' },
     { pattern: 'envios', workspace: 'alfa-demo' }] }
-  const { doc } = await montar('config.html', storage, 'es-419')
+  const { doc } = await montar('config.html', storage, 'es-419', trabajadorReglas)
   await espera()
   const filas = [...doc.querySelectorAll('#routes-wrap tbody tr')]
   const vieja = filas.find((f) => f.textContent.includes('cobros'))
@@ -436,10 +453,99 @@ console.log('\nconfig.html — T17: las reglas viejas de Plane se marcan y se pu
     /vieja/i.test(vieja.textContent), vieja?.textContent)
   ok('la regla a un proyecto no lleva esa marca', nueva && !nueva.querySelector('.legacy'))
   vieja.querySelector('[data-rrm]').click()
-  await espera()
+  await new Promise((r) => setTimeout(r, 3000))
   ok('Quitar la borra y deja la otra',
     JSON.stringify(storage.routes) === JSON.stringify([{ pattern: 'envios', workspace: 'alfa-demo' }]),
     JSON.stringify(storage.routes))
+}
+
+console.log('\nconfig.html — quitar una regla pasa por el worker y no miente')
+{
+  const reglas = () => [{ pattern: 'attus', provider: 'plane', target: 'ATT' },
+    { pattern: 'envios', workspace: 'alfa-demo' }]
+  // Confirmado: pide, espera, dice que si y la fila se va.
+  {
+    const storage = { projects: PROYECTOS_PRUEBA, routes: reglas() }
+    // El worker tarda: el veredicto llega 1,5 s despues del pedido.
+    const { doc } = await montar('config.html', storage, 'es-419', (d, st) => {
+      if (!(d.action === 'storage.set' && d.params.key === 'scopeRequest' && d.params.value)) {
+        return undefined
+      }
+      st.scopeRequest = d.params.value
+      setTimeout(() => trabajadorReglas(d, st), 1500)
+      return { ok: true }
+    })
+    await espera()
+    const boton = [...doc.querySelectorAll('#routes-wrap tbody tr')]
+      .find((f) => f.textContent.includes('attus')).querySelector('[data-rrm]')
+    boton.click()
+    await espera()
+    ok('el boton queda ocupado mientras se espera al worker',
+      boton.disabled || boton.getAttribute('aria-busy') === 'true',
+      `${boton.disabled} ${boton.getAttribute('aria-busy')}`)
+    ok('el pedido va por el canal del worker con id, marca de tiempo y patron',
+      !!storage.scopeRequest && storage.scopeRequest.action === 'regla-quitar' &&
+      storage.scopeRequest.pattern === 'attus' && typeof storage.scopeRequest.id === 'string' &&
+      !isNaN(Date.parse(storage.scopeRequest.at)), JSON.stringify(storage.scopeRequest))
+    ok('y todavia no dice que la quito',
+      !/✓/.test(doc.getElementById('said-route').textContent),
+      doc.getElementById('said-route').textContent)
+    await new Promise((r) => setTimeout(r, 3000))
+    ok('cuando el worker confirma, lo dice con la regla',
+      /✓.*attus/.test(doc.getElementById('said-route').textContent),
+      doc.getElementById('said-route').textContent)
+    ok('la fila desaparece y la otra sigue',
+      !doc.getElementById('routes-wrap').textContent.includes('attus') &&
+      doc.getElementById('routes-wrap').textContent.includes('envios'),
+      doc.getElementById('routes-wrap').textContent)
+  }
+  // El worker no pudo: la regla sigue en pie y el panel lo dice como fallo, en espanol.
+  {
+    const storage = { projects: PROYECTOS_PRUEBA, routes: reglas() }
+    const { doc } = await montar('config.html', storage, 'es-419', (d, st) => {
+      if (d.action === 'storage.set' && d.params.key === 'scopeRequest' && d.params.value) {
+        st.scopeRequest = d.params.value
+        st.scopeResult = { at: new Date().toISOString(), requestId: d.params.value.id,
+          action: d.params.value.action, ok: false, code: 'sin-herramientas',
+          detail: 'spawn wa-scope ENOENT' }
+        return { ok: true }
+      }
+      return undefined
+    })
+    await espera()
+    doc.querySelector('[data-rrm]').click()
+    await new Promise((r) => setTimeout(r, 3000))
+    const dicho = doc.getElementById('said-route')
+    ok('un fallo del worker no se anuncia como hecho',
+      !/✓/.test(dicho.textContent) && /bad/.test(dicho.className) && dicho.textContent.length > 0,
+      `${dicho.className} ${dicho.textContent}`)
+    ok('y sin el texto crudo del CLI', !/spawn|ENOENT/.test(dicho.textContent), dicho.textContent)
+    ok('la regla sigue en la tabla y en el storage',
+      doc.getElementById('routes-wrap').textContent.includes('attus') &&
+      storage.routes.length === 2, doc.getElementById('routes-wrap').textContent)
+  }
+  // Sin respuesta: se dice que no contesto, no se finge.
+  {
+    const storage = { projects: PROYECTOS_PRUEBA, routes: reglas() }
+    const { doc, window } = await montar('config.html', storage, 'es-419')
+    window.VEREDICTO_ESPERA_MS = 400
+    await espera()
+    doc.querySelector('[data-rrm]').click()
+    await new Promise((r) => setTimeout(r, 4500))
+    const dicho = doc.getElementById('said-route')
+    ok('si el worker no contesta, el panel dice que no hubo respuesta',
+      /no contest/i.test(dicho.textContent) && /bad/.test(dicho.className),
+      `${dicho.className} ${dicho.textContent}`)
+    ok('y la regla sigue donde estaba',
+      doc.getElementById('routes-wrap').textContent.includes('attus') && storage.routes.length === 2)
+  }
+  // Los tres idiomas.
+  const { window } = await montar('config.html')
+  const S = window.STRINGS
+  const nuevas = ['routeRmFail', 'routeRmBadPattern']
+  ok('los textos nuevos existen en los tres idiomas, el portugues propio',
+    nuevas.every((k) => S.es[k] && S.en[k] && S.pt[k] && S.pt[k] !== S.en[k]),
+    JSON.stringify(nuevas.filter((k) => !S.es[k] || !S.en[k] || !S.pt[k])))
 }
 
 console.log('\nconfig.html — T17: los modos son botones y escriben lo mismo que el select')
@@ -941,7 +1047,14 @@ console.log('\nconfig.html')
   // Quitar
   doc.querySelector('[data-rrm]').click()
   await espera()
-  ok('Quitar borra la regla', (storage.routes || []).length === 0)
+  // Como la autorizacion, la regla vive en `scope.db` Y en el storage del panel: quitarla
+  // es cosa del worker (`wa-scope route --remove`), el panel solo lo pide. Lo que se
+  // confirma y lo que falla tiene su propia rebanada mas abajo.
+  ok('Quitar manda el pedido de la regla al worker, con su patron',
+    !!storage.scopeRequest && storage.scopeRequest.action === 'regla-quitar' &&
+    storage.scopeRequest.pattern === 'acme', JSON.stringify(storage.scopeRequest))
+  ok('y no reescribe sus reglas por su cuenta',
+    (storage.routes || []).some((r) => r.pattern === 'acme'), JSON.stringify(storage.routes))
   // Quitar una conversacion ya NO lo hace el panel: el registro vive tambien en
   // `scope.db` y borrar solo del storage descubre la fila del CLI que sigue abajo — la
   // autorizacion seguia en pie mientras el panel decia que la habia quitado. Lo que se

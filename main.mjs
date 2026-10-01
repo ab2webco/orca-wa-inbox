@@ -27,6 +27,7 @@ import { crearCatalogo, leerCatalogo, PROJECTS_KEY } from './catalogo.mjs'
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
 const TOOLS = join(PLUGIN_DIR, 'bin')
 const SCOPE_KEY = 'scope'          // { [chatJid]: ScopeEntry }
+const ROUTES_KEY = 'routes'        // [{ pattern, workspace }]: las reglas de texto del panel
 // Como le fue al ultimo sync. El panel no puede ejecutar nada, asi que sin esto no
 // tiene forma de distinguir "todavia buscando" de "fallo hace media hora".
 const STATUS_KEY = 'syncStatus'
@@ -711,7 +712,7 @@ const SIDECAR_VEREDICTO = Object.freeze({
 /** Lo que el panel puede pedirle al worker sobre el alcance, y como se contesta. Mismos
  *  codigos estables que el resto del contrato: el panel los traduce por codigo y nunca
  *  por el texto (§11-E1). */
-const SCOPE_ACCION = Object.freeze({ QUITAR: 'quitar' })
+const SCOPE_ACCION = Object.freeze({ QUITAR: 'quitar', REGLA_QUITAR: 'regla-quitar' })
 
 const SCOPE_VEREDICTO = Object.freeze({
   QUITADO: 'quitado',
@@ -720,8 +721,21 @@ const SCOPE_VEREDICTO = Object.freeze({
   // `wa-scope rm` acepta tambien un trozo de NOMBRE y ahi resuelve por parecido. El
   // nombre visible no es identidad -cambia y se repite (§11-A1)-, asi que lo que no sea
   // un jid se rechaza en vez de adivinar cual conversacion se queria quitar.
-  JID_INVALIDO: 'jid-invalido'
+  JID_INVALIDO: 'jid-invalido',
+  // Una regla de texto quitada de la base y del storage del panel.
+  REGLA_QUITADA: 'regla-quitada',
+  // Lo que llega como patron de una regla no es un texto acotado y legible: no llega a la
+  // linea de comandos.
+  PATRON_INVALIDO: 'patron-invalido'
 })
+
+/** Lo mas largo que puede ser el patron de una regla de texto. Un texto que tiene que
+ *  aparecer en un mensaje no pasa de unas palabras; sin tope seria un lugar donde dejar
+ *  cualquier cosa. */
+const PATRON_MAX = 120
+// Sin caracteres de control: un salto de linea en un patron seria una segunda linea que
+// nadie pidio, y `wa-scope` lo guardaria tal cual.
+const PATRON_RE = /^[^\u0000-\u001f\u007f]+$/
 
 /** Del motivo que devolvio el resolvedor al codigo estable que lee el panel.
  *
@@ -1629,6 +1643,42 @@ export default function activate(orca) {
     return { ok: true, code: SCOPE_VEREDICTO.QUITADO }
   }
 
+  /** Quitar una regla de texto, de verdad y en los dos registros.
+   *
+   *  Las reglas que se crean con el CLI viven en `scope.db` (tabla `route`) y cada sync las
+   *  vuelve a empujar al panel (`rutas_efectivas`, bin/wa-scope). Quitarla solo del storage
+   *  del panel dejaba la fila de la base debajo: la regla reaparecia en el siguiente sync,
+   *  igual que una autorizacion que se creia revocada. `wa-scope route --remove` borra la
+   *  de la base y solo el worker puede ejecutarlo.
+   *
+   *  El CLI corre PRIMERO y el storage se reconcilia despues: al reves, un CLI que falla
+   *  dejaria el panel sin la regla y la base con ella. */
+  async function quitarRegla (pedido) {
+    const patron = typeof pedido?.pattern === 'string' ? pedido.pattern.trim().toLowerCase() : ''
+    if (patron.length === 0 || patron.length > PATRON_MAX || !PATRON_RE.test(patron)) {
+      return { ok: false, code: SCOPE_VEREDICTO.PATRON_INVALIDO }
+    }
+    const s = await settings()
+    // La forma `--remove=<patron>` y no dos argumentos: un patron que empiece por `-` se
+    // leeria como otra bandera. Quitar lo que ya no esta no es un error: borra cero filas
+    // y sale con 0.
+    await run(join(s.toolsDir || TOOLS, 'wa-scope'), ['route', `--remove=${patron}`])
+    const reglas = await leer(orca, ROUTES_KEY)
+    // SOLO si la lista se leyo. Una lectura que el host rechazo devuelve null, y guardar
+    // una lista vacia borraria TODAS las reglas por culpa de una lectura fallida.
+    if (Array.isArray(reglas)) {
+      const quedan = reglas.filter((r) =>
+        String(r?.pattern ?? '').trim().toLowerCase() !== patron)
+      // Sin `guardar()`, que se traga el fallo: una regla que sigue en el storage no se
+      // puede contar como quitada.
+      if (quedan.length !== reglas.length) {
+        await orca.host.call('storage.set', { key: ROUTES_KEY, value: quedan })
+      }
+    }
+    orca.log('route rule removed')
+    return { ok: true, code: SCOPE_VEREDICTO.REGLA_QUITADA }
+  }
+
   // El catalogo de proyectos: lo que el panel pide (buscar, aceptar, quitar, anotar) entra
   // por el MISMO canal que el alcance, que es de la misma familia -a que conversacion y a
   // que proyecto se le deja actuar- y asi no se suma un sondeo al host cada 3 s: el worker
@@ -1654,6 +1704,7 @@ export default function activate(orca) {
     // worker tiene un presupuesto de llamadas al host.
     acciones: {
       [SCOPE_ACCION.QUITAR]: (pedido) => quitarAlcance(pedido),
+      [SCOPE_ACCION.REGLA_QUITAR]: (pedido) => quitarRegla(pedido),
       ...crearAccionesCaso({ run, motivoDe, herramienta: (nombre) => tool(nombre) }),
       ...catalogo.acciones
     }
