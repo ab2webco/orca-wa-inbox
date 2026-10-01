@@ -77,9 +77,12 @@ Baileys intenta login y nunca pide registro.
 - [x] T6 — Panel de actividad: mismo criterio de vida para "Línea conectada".
       Sin latido fresco: "La linea no da senal desde las HH:MM" (clase `stale`), con el
       mismo `LATIDO_LINEA_VENCE_MS` que config.html (la prueba compara los dos).
-- [ ] T7 — `wa-read doctor`: el transporte exige `sidecar_beat` fresco
+- [x] T7 — `wa-read doctor`: el transporte exige `sidecar_beat` fresco
       (misma regla que `sidecar_vivo` en `bin/wa-send`); `checkSystem`
-      periódico.
+      periódico. La regla vive ahora en `wa_store.sidecar_vivo` y la usan los dos;
+      sin latido el renglón sale con el código nuevo `transport-silent` (bloquea, se
+      traduce en el panel, no notifica). `checkSystem` cada `SALUD_MS` (5 min), sin
+      encimarse, y sin repetir la misma notificación.
 - [ ] T8 — Capturas de los estados nuevos (sin señal, sesión cerrada → QR) a
       1440/768/390/320, ES y EN, revisadas a ojo.
 
@@ -145,4 +148,17 @@ Baileys intenta login y nunca pide registro.
   `FALLA con el latido viejo no dice conectada — Linea conectada · +573000000011`,
   `FALLA config y actividad usan el mismo plazo de latido — config=150000 actividad=null`.
 - GREEN: `panels` 407/407; `check-panels` ok; `check-voseo` ok.
+
+### T7 — doctor y salud periódica
+
+- RED `node test/almacen.test.mjs`:
+  `FALLA con el latido viejo, el transporte NO esta en verde — {"check":"a message transport","ok":true,"detalle":"2 linked lines (local, segunda)",...}`
+- RED `node test/panels.test.mjs`:
+  `FALLA la linea sin senal se dice en espanol — ⚠a message transport transport-silent: the linked line has given no sign of life since 2026-09-30 17:44`
+- RED `node test/worker.test.mjs`: `FALLA se revisa cada pocos minutos, no cada segundo — undefined`
+  y la suite se cortó con exit 1 (el blindaje de T4 funcionando).
+- Fixture actualizado: la prueba F2 del doctor "con la linea enlazada, el renglon del
+  transporte esta en verde" ahora hace `almacen.latir()` antes (línea viva).
+- GREEN: `almacen` 186/186, `panels` 408/408, `worker` 147/147, `check-clis` ok,
+  `envio` en verde, `check-voseo` ok.
 

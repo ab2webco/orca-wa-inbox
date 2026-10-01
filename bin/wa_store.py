@@ -36,6 +36,14 @@ ESQUEMA_VERSION = 1
 # Motivos estables. El panel los traduce por codigo, nunca por el texto: cambiar el
 # texto no rompe nada, renombrar el codigo desincroniza el panel en silencio (§11-E1).
 SIN_TRANSPORTE = "no-transport"
+# Hay linea enlazada pero el sidecar no late: nadie esta leyendo WhatsApp AHORA. Codigo
+# propio y no `no-transport`, porque la accion del dueno es otra: no escanear un QR,
+# sino relanzar la conexion desde el panel.
+LINEA_MUDA = "transport-silent"
+# Cuanto vale el latido que el sidecar escribe en `store_meta` cada segundo (`latir()`
+# en sidecar/src/almacen.js). El MISMO numero que `LATIDO_VENCE_MS` de
+# sidecar/src/envio.js, y `scripts/check-clis` compara los dos (via `bin/wa-send`).
+LATIDO_VENCE_S = 15
 ESQUEMA_AJENO = "store-schema"
 
 # Lo que `state` devuelve cuando NO hay firma que devolver. Son contrato con wa-scope
@@ -193,6 +201,25 @@ def abrir():
         con.close()
         raise SinFuente(SIN_TRANSPORTE, SIN_TRANSPORTE_DETALLE)
     return con
+
+
+def ultimo_latido(con):
+    """El ultimo latido del sidecar en el almacen, en segundos de epoch, o None si
+    nunca latio (o la base no lo sabe decir)."""
+    try:
+        fila = con.execute(
+            "select value from store_meta where key='sidecar_beat'").fetchone()
+        return int(fila[0]) if fila else None
+    except (sqlite3.Error, TypeError, ValueError):
+        return None
+
+
+def sidecar_vivo(con):
+    """Si hay alguien del otro lado AHORA. Una fila en `linea` dice que alguna vez hubo
+    una linea; esto dice que el sidecar sigue corriendo. Es la regla de `wa-send` y la
+    del `doctor`, escrita una sola vez."""
+    latido = ultimo_latido(con)
+    return latido is not None and (time.time() - latido) <= LATIDO_VENCE_S
 
 
 SIN_TRANSPORTE_DETALLE = (

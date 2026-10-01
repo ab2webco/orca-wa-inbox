@@ -542,6 +542,64 @@ console.log('\nworker: un requisito accionable sigue avisando')
   apagar()
 }
 
+// ───────── la salud se vuelve a mirar, sin repetir el mismo aviso ─────────
+// `checkSystem` corria UNA vez, al activar: un sidecar que moria despues dejaba el
+// diagnostico en verde para siempre. Ahora se repite; y repetirlo no puede repetir la
+// notificacion, o cada cinco minutos saldria el mismo aviso hasta que dejen de leerlos.
+console.log('\nworker: la salud se revisa sola, y el mismo aviso no se repite')
+{
+  const { programarSalud, checkSystem, SALUD_MS } = await import('../main.mjs')
+  ok('se revisa cada pocos minutos, no cada segundo', SALUD_MS >= 60000 && SALUD_MS <= 15 * 60000,
+    String(SALUD_MS))
+  let vueltas = 0
+  const parar = programarSalud(async () => { vueltas += 1 }, 100)
+  await dormir(450)
+  parar()
+  const alParar = vueltas
+  await dormir(300)
+  ok('la revision se repite', alParar >= 3, `vueltas=${alParar}`)
+  ok('y se detiene cuando se apaga el plugin', vueltas === alParar,
+    `al parar=${alParar} despues=${vueltas}`)
+  // Una revision lenta (el doctor tarda) no se encima con la siguiente.
+  let enVuelo = 0
+  let maximo = 0
+  const pararLenta = programarSalud(async () => {
+    enVuelo += 1; maximo = Math.max(maximo, enVuelo)
+    await dormir(250)
+    enVuelo -= 1
+  }, 50)
+  await dormir(600)
+  pararLenta()
+  ok('dos revisiones no corren a la vez', maximo === 1, `maximo=${maximo}`)
+
+  const DOCTOR_ACCIONABLE = '#!/usr/bin/env node\n' +
+    'console.log(JSON.stringify([{ check: "sqlite3 available", ok: false,' +
+    ' detalle: "not in PATH", requerido: true, code: "sqlite3" }]))\nprocess.exit(1)\n'
+  const dir = herramientas('doctor-repetido', '#!/bin/sh\necho \'[]\'\n')
+  writeFileSync(join(dir, 'wa-read'), DOCTOR_ACCIONABLE, { mode: 0o755 })
+  const orca = hostFalso(dir, { chats: [] })
+  const memoria = {}
+  await checkSystem(orca, dir, memoria)
+  await checkSystem(orca, dir, memoria)
+  ok('el mismo requisito, dos revisiones: UN aviso', orca.avisos.length === 1,
+    JSON.stringify(orca.avisos))
+
+  // La linea muda bloquea y se pinta en el panel, al lado del QR: igual que "sin
+  // transporte", no saca notificacion.
+  const DOCTOR_MUDO = '#!/usr/bin/env node\n' +
+    'console.log(JSON.stringify([{ check: "a message transport", ok: false,' +
+    ' detalle: "no sign of life", requerido: true, code: "transport-silent" }]))\n' +
+    'process.exit(1)\n'
+  const dirMudo = herramientas('doctor-mudo', '#!/bin/sh\necho \'[]\'\n')
+  writeFileSync(join(dirMudo, 'wa-read'), DOCTOR_MUDO, { mode: 0o755 })
+  const orcaMudo = hostFalso(dirMudo, { chats: [] })
+  await checkSystem(orcaMudo, dirMudo, {})
+  ok('la linea muda llega al panel', orcaMudo.store.health &&
+    orcaMudo.store.health.problemCode === 'transport-silent', JSON.stringify(orcaMudo.store.health))
+  ok('y no saca notificacion: el panel ya lo dice', orcaMudo.avisos.length === 0,
+    JSON.stringify(orcaMudo.avisos))
+}
+
 // ───────── el latido: "no contesto" y "no esta" son dos cosas ─────────
 console.log('\nworker: el latido')
 {

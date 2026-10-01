@@ -120,11 +120,24 @@ def cmd_doctor(a):
         lineas = wa_store.whoami(con)
         cuantas = len(lineas)
         etiquetas = ", ".join(x.get("account") or "?" for x in lineas)
-        filas = [{"check": "a message transport", "ok": True,
-                  "detalle": (f"{cuantas} linked line"
-                              f"{'' if cuantas == 1 else 's'} ({etiquetas})"),
-                  "requerido": True, "code": SIN_TRANSPORTE,
-                  "via": lineas[0].get("account") if lineas else None}]
+        via = lineas[0].get("account") if lineas else None
+        if wa_store.sidecar_vivo(con):
+            filas = [{"check": "a message transport", "ok": True,
+                      "detalle": (f"{cuantas} linked line"
+                                  f"{'' if cuantas == 1 else 's'} ({etiquetas})"),
+                      "requerido": True, "code": SIN_TRANSPORTE, "via": via}]
+        else:
+            # Una fila en `linea` dice que alguna vez hubo una linea, no que alguien la
+            # este leyendo. Medido en la maquina del dueno: el sidecar muerto desde el
+            # dia anterior y este renglon en verde, porque la fila seguia ahi.
+            latido = wa_store.ultimo_latido(con)
+            desde = (f"since {wa_store.ts(latido)}" if latido
+                     else "at all since it was linked")
+            filas = [{"check": "a message transport", "ok": False,
+                      "detalle": (f"the linked line has given no sign of life {desde}: "
+                                  "nothing is reading WhatsApp right now. Restart the "
+                                  "connection from the plugin settings."),
+                      "requerido": True, "code": wa_store.LINEA_MUDA, "via": via}]
         # El desalojo va al doctor porque es lo unico del almacen que el usuario puede
         # cambiar: subir `capture_max` o `capture_days` desde el panel. Un tope que
         # muerde en silencio deja filas sin cuerpo sin que nadie sepa por que (§11-F2).

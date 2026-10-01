@@ -480,6 +480,36 @@ console.log('\nF4/A1: la llave aisla dos lineas propias')
   con.close()
 }
 
+// ── El doctor exige que la linea este VIVA, no solo que exista ──────────────────────
+// Medido en la maquina del dueno (2026-10-01): el doctor daba el transporte por bueno
+// porque habia una fila en `linea`, con el sidecar muerto desde el dia anterior. Una
+// fila en `linea` dice que alguna vez hubo una linea; el latido dice que hay alguien
+// del otro lado AHORA. Es la misma regla que ya usaba `wa-send` (`sidecar_vivo`).
+console.log('\nel doctor: el transporte exige latido fresco')
+{
+  const viejoMs = Date.now() - 10 * 60 * 1000
+  almacen.latir(viejoMs)
+  const doctor = leerJson(home, ['doctor'])
+  const fila = (doctor.filas || []).find((f) => f.check === 'a message transport')
+  ok('con el latido viejo, el transporte NO esta en verde', fila && fila.ok === false,
+    JSON.stringify(fila))
+  ok('con un codigo propio, que el panel traduce', fila && fila.code === 'transport-silent',
+    JSON.stringify(fila))
+  ok('y bloquea, como cualquier transporte que no lee', fila && fila.requerido === true &&
+    doctor.code === 1, `salio ${doctor.code} ${JSON.stringify(fila)}`)
+  const hora = new Date(viejoMs).toTimeString().slice(0, 5)
+  ok('el detalle dice desde cuando', (fila?.detalle || '').includes(hora),
+    `${fila?.detalle} / ${hora}`)
+
+  // Control: el mismo almacen con latido de ahora vuelve a verde. Sin esto, la regla de
+  // arriba se cumpliria con un doctor que no da el transporte por bueno nunca.
+  almacen.latir()
+  const vivo = leerJson(home, ['doctor'])
+  const filaViva = (vivo.filas || []).find((f) => f.check === 'a message transport')
+  ok('control: con latido de ahora el transporte vuelve a verde',
+    filaViva && filaViva.ok === true && vivo.code === 0, JSON.stringify(filaViva))
+}
+
 console.log('\nF2: tope de retencion, con desalojo VISIBLE')
 {
   const podado = almacen.podar({ max: 3, dias: 36500, ahora: (T0 + 3000) * 1000 })
@@ -499,6 +529,9 @@ console.log('\nF2: tope de retencion, con desalojo VISIBLE')
 
 console.log('\nF2: y el desalojo se puede VER desde el doctor, que es lo que pinta el panel')
 {
+  // El sidecar late en el almacen cada segundo mientras vive (`latir`). Este es el caso
+  // de una linea viva: latido de ahora.
+  almacen.latir()
   const doctor = leerJson(home, ['doctor'])
   const transporte = (doctor.filas || []).find((f) => f.code === 'no-transport')
   ok('con la linea enlazada, el renglon del transporte esta en verde',

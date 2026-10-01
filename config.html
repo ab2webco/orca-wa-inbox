@@ -728,6 +728,9 @@
           hNoTransportLinked: 'Su linea esta enlazada',
           hNoTransportLinkedHow: 'Leer las conversaciones todavia no esta disponible. ' +
             'No hace falta que haga nada mas.',
+          hTransportSilent: 'Su linea no da senal',
+          hTransportSilentHow: 'La linea esta enlazada pero nadie esta leyendo ' +
+            'WhatsApp ahora. Reintente la conexion aca arriba.',
           hTranscribe: 'Transcripcion de audio',
           hUnknown: 'No se pudo verificar el estado',
           howTranscribeMissingTool: 'Falta bin/wa-transcribe dentro del plugin',
@@ -955,6 +958,9 @@
           hNoTransportLinked: 'Your line is linked',
           hNoTransportLinkedHow: 'Reading conversations is not available yet. ' +
             'There is nothing else for you to do.',
+          hTransportSilent: 'Your line gives no signal',
+          hTransportSilentHow: 'The line is linked but nothing is reading WhatsApp ' +
+            'right now. Retry the connection above.',
           hTranscribe: 'Audio transcription',
           hUnknown: 'Could not check the status',
           howTranscribeMissingTool: 'bin/wa-transcribe is missing from the plugin',
@@ -1058,6 +1064,9 @@
         hNoTransportLinked: 'A sua linha esta vinculada',
         hNoTransportLinkedHow: 'Ler as conversas ainda nao esta disponivel. Voce nao ' +
           'precisa fazer mais nada.',
+        hTransportSilent: 'A sua linha nao da sinal',
+        hTransportSilentHow: 'A linha esta vinculada mas ninguem esta lendo o ' +
+          'WhatsApp agora. Tente a conexao de novo aqui em cima.',
         hTranscribe: 'Transcricao de audio',
         hUnknown: 'Nao foi possivel verificar o estado',
         howTranscribeMissingTool: 'Falta bin/wa-transcribe dentro do plugin',
@@ -1375,6 +1384,9 @@
       var HEALTH_KEY = {
         // El unico requisito que hoy bloquea: todavia no hay transporte de mensajes.
         'no-transport': 'hNoTransport',
+        // Hay linea enlazada pero el sidecar no late: el doctor ya no la da por buena
+        // con una fila en `linea` (bin/wa-read, `cmd_doctor`).
+        'transport-silent': 'hTransportSilent',
         // No lo manda el CLI sino el worker, cuando las herramientas ni contestaron.
         // Faltaba, y sin el la alerta salia con la frase en INGLES que arma el worker,
         // en un panel en espanol. Mismo defecto que "both routes are off: turn the
@@ -1395,6 +1407,7 @@
       // —una ruta, un tamano, el error de un proceso— no se traduce: se muestra.
       var HEALTH_HOW_KEY = {
         'no-transport': 'hNoTransportHow',
+        'transport-silent': 'hTransportSilentHow',
         'transcribe-missing-tool': 'howTranscribeMissingTool',
         'transcribe-unknown': 'howTranscribeUnknown',
         'transcribe-orca-outdated': 'howTranscribeOrcaOutdated',

@@ -852,6 +852,17 @@ console.log('\nel codigo del CLI, dicho en el idioma del panel')
   ok('y su detalle tecnico se muestra tal cual',
     alertaCrudo.includes('/ruta/que/no/existe/wa-read'), alertaCrudo)
 
+  // La linea existe pero no da senal: el doctor ya no la da por buena con una fila en
+  // `linea`. Se dice en el idioma del panel, no con la frase en ingles del CLI.
+  const muda = await montar('config.html', { health: { ok: false,
+    problem: 'a message transport', problemCode: 'transport-silent',
+    detail: 'transport-silent: the linked line has given no sign of life since ' +
+      '2026-09-30 17:44', optional: [] } }, 'es-419')
+  await espera()
+  const alertaMuda = muda.doc.getElementById('alert').textContent
+  ok('la linea sin senal se dice en espanol', /senal/i.test(alertaMuda) &&
+    !/sign of life/i.test(alertaMuda), alertaMuda)
+
   const pt = await montar('config.html', { health: salud }, 'pt-BR')
   await espera()
   ok('y en portugues tambien',

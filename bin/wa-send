@@ -114,11 +114,12 @@ BORRADOR, PENDIENTE, ENVIADO, RECHAZADO_ = (
 # sidecar al tomar la fila, y esta CLI no decide nada con el. Lo que espera es un final.
 FINALES = (ENVIADO, RECHAZADO_)
 
-# Cuanto vale el latido del sidecar. El MISMO numero que `LATIDO_VENCE_MS` en
-# `sidecar/src/envio.js`, y `scripts/check-clis` compara los dos: dos constantes que
-# nadie obliga a coincidir terminan no coincidiendo, y aca el sintoma seria decirle al
-# dueno que arranque algo que ya esta corriendo.
-LATIDO_VENCE_S = 15
+# Cuanto vale el latido del sidecar. Vive en `wa_store`, que lo comparte con el
+# `doctor`; es el MISMO numero que `LATIDO_VENCE_MS` en `sidecar/src/envio.js`, y
+# `scripts/check-clis` compara los dos: dos constantes que nadie obliga a coincidir
+# terminan no coincidiendo, y aca el sintoma seria decirle al dueno que arranque algo
+# que ya esta corriendo.
+LATIDO_VENCE_S = wa_store.LATIDO_VENCE_S
 # Cuanto espera esta CLI un veredicto, y cada cuanto pregunta. Es un proceso corto que
 # alguien mira: tiene que terminar aunque del otro lado no conteste nadie.
 PLAZO_S = 30
@@ -243,13 +244,9 @@ def almacen():
 def sidecar_vivo(con):
     """Si hay alguien del otro lado. Sin esto, un sidecar apagado y uno ocupado se ven
     igual —una fila que no avanza— y las dos cosas contestarian "se vencio el plazo",
-    que manda al dueno a mirar lo que no esta roto."""
-    try:
-        fila = con.execute(
-            "select value from store_meta where key='sidecar_beat'").fetchone()
-        return bool(fila) and (time.time() - int(fila[0])) <= LATIDO_VENCE_S
-    except (sqlite3.Error, TypeError, ValueError):
-        return False
+    que manda al dueno a mirar lo que no esta roto. La regla vive en `wa_store`: el
+    `doctor` usa la misma."""
+    return wa_store.sidecar_vivo(con)
 
 
 def con_transporte():

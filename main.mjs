@@ -77,8 +77,35 @@ const DEFAULT_SETTINGS = { agentName: '', signMessages: true, toolsDir: TOOLS,
   sidecarPath: join(PLUGIN_DIR, 'sidecar', 'sidecar.cjs'),
   authDirResolverPath: join(PLUGIN_DIR, 'sidecar', 'resolve-auth-dir.mjs') }
 
-/** Corre `wa-read doctor` y avisa por notificacion si algo falta. */
-async function checkSystem(orca, toolsDir = TOOLS) {
+// Los codigos del doctor que bloquean pero NO notifican: el panel los pinta al lado del
+// QR, que es justo donde esta la accion. Una notificacion del sistema por esto saldria
+// en cada revision de una maquina recien instalada, o con la linea caida.
+const SIN_AVISO = new Set(['no-transport', 'transport-silent'])
+
+// Cada cuanto se vuelve a correr el doctor. Antes corria UNA vez, al activar: un sidecar
+// que moria despues dejaba el diagnostico en verde para siempre. Cinco minutos: el
+// doctor es un proceso de Python y la caida que importa ya la pinta el panel por el
+// latido de la linea en menos de tres.
+export const SALUD_MS = 5 * 60 * 1000
+
+/** Repite `correr` cada `cadaMs`, sin encimar una vuelta con la siguiente (el doctor
+ *  puede tardar). Devuelve con que pararlo. */
+export function programarSalud(correr, cadaMs = SALUD_MS) {
+  let enVuelo = false
+  const timer = setInterval(() => {
+    if (enVuelo) return
+    enVuelo = true
+    Promise.resolve().then(correr).catch(() => {}).finally(() => { enVuelo = false })
+  }, cadaMs)
+  if (typeof timer.unref === 'function') timer.unref()
+  return () => clearInterval(timer)
+}
+
+/** Corre `wa-read doctor` y avisa por notificacion si algo falta.
+ *
+ *  `memoria` recuerda lo ultimo que se aviso: repetida la revision, el MISMO problema no
+ *  vuelve a sacar la misma notificacion. Avisa cuando el problema cambia. */
+export async function checkSystem(orca, toolsDir = TOOLS, memoria = {}) {
   // El motivo se conserva: "no pude comprobar el sistema" sin la causa deja al usuario
   // en el mismo callejon que el spinner eterno.
   let porque = ''
@@ -113,7 +140,7 @@ async function checkSystem(orca, toolsDir = TOOLS) {
   // notificacion del sistema ademas de eso saldria en cada arranque de una maquina
   // recien instalada, que es la manera mas rapida de enseniar a ignorarlas. El motivo
   // viaja a `health`, que el panel pinta al lado del QR, y no a una notificacion.
-  const accionables = failed.filter((c) => c.code !== 'no-transport')
+  const accionables = failed.filter((c) => !SIN_AVISO.has(c.code))
 
   // El estado se PUBLICA siempre. El panel lo lee en `health` y no lo escribia nadie:
   // una maquina que no puede leer WhatsApp se veia exactamente igual que una sana.
@@ -130,7 +157,13 @@ async function checkSystem(orca, toolsDir = TOOLS) {
       : { ok: true, optional: opcional }
   await guardar(orca, HEALTH_KEY, salud)
 
+  const clave = !legible ? 'sin-herramientas'
+    : accionables.map((c) => c.code || c.check).sort().join(',')
+  const repetido = memoria.avisado === clave
+  memoria.avisado = clave
+
   if (!legible) {
+    if (repetido) return
     await orca.host.call('notifications.show', {
       title: 'Could not check the system',
       body: `Could not run the plugin tools. Check that ${toolsDir} is executable.` +
@@ -142,7 +175,7 @@ async function checkSystem(orca, toolsDir = TOOLS) {
   // El log si lo dice siempre: es donde se mira cuando algo no anda, y callarlo ahi
   // seria esconder justo lo que explica una bandeja vacia.
   if (failed.length) orca.log(`check: missing ${failed.map((c) => c.code || c.check).join(', ')}`)
-  if (!accionables.length) return
+  if (!accionables.length || repetido) return
 
   await orca.host.call('notifications.show', {
     // El worker no tiene forma de saber en que idioma esta el usuario — el host no se
@@ -930,8 +963,14 @@ export default function activate(orca) {
   // Al activarse, lo primero es decir si este sistema puede leer WhatsApp. Si no puede,
   // el usuario se tiene que enterar ahora y no cuando una automatizacion lleve una
   // semana sin correr sin explicar por que.
-  dirHerramientas().then((dir) => checkSystem(orca, dir))
+  const memoriaSalud = {}
+  dirHerramientas().then((dir) => checkSystem(orca, dir, memoriaSalud))
     .catch((error) => orca.log(`initial check failed: ${error.message}`))
+  // Y despues se repite: la salud de la linea cambia sola, y un diagnostico que solo se
+  // mira al arrancar es una foto que no caduca.
+  const pararSalud = programarSalud(() => detenido ? null
+    : dirHerramientas().then((dir) => checkSystem(orca, dir, memoriaSalud))
+      .catch((error) => orca.log(`health check failed: ${error.message}`)))
 
   // El arnes del agente. Todo lo que sabe hoy vive en el prompt, que se lee una vez
   // por corrida: un modelo mas chico improvisa. En la carpeta de trabajo del plugin
@@ -1424,6 +1463,7 @@ export default function activate(orca) {
     clearInterval(pedidoTimer)
     clearInterval(latidoTimer)
     clearTimeout(reinicioTimer)
+    pararSalud()
     apagarSidecar()
   }
 }
