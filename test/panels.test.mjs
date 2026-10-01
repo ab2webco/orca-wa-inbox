@@ -90,6 +90,64 @@ async function montar (archivo, storage = {}, idioma = null, gancho = null) {
 
 const espera = () => new Promise((r) => setTimeout(r, 60))
 
+// ── Los controles de config.html, manejados como los maneja el dueno (T17) ──
+// En el panel de Orca la lista de un `<select>` nativo no se abre (iframe con sandbox),
+// asi que no queda ninguno: pocas opciones son grupos de botones con `aria-pressed`, y
+// muchas son un autocompletar dibujado por la pagina. Estos ayudantes aprietan lo que
+// el dueno aprieta, no asignan `.value` por debajo.
+const evento = (doc, tipo) => new doc.defaultView.Event(tipo, { bubbles: true })
+const tecla = (doc, key) => new doc.defaultView.KeyboardEvent('keydown', { key, bubbles: true })
+/** El valor apretado de un grupo de botones. */
+const valorSeg = (doc, id) =>
+  doc.querySelector(`#${id} button[aria-pressed="true"]`)?.dataset.value ?? null
+/** Aprieta la opcion `valor` de un grupo de botones. */
+function elegirSeg (doc, id, valor) {
+  const b = doc.querySelector(`#${id} button[data-value="${valor}"]`)
+  if (!b) throw new Error(`#${id} no ofrece ${valor}`)
+  b.click()
+}
+/** Los textos de las opciones de un grupo, por su valor. */
+const textosSeg = (doc, id) => Object.fromEntries([...doc.querySelectorAll(`#${id} button`)]
+  .map((b) => [b.dataset.value, b.textContent]))
+/** Escribe en un autocompletar como se escribe: valor y evento `input`. */
+function escribir (doc, id, texto) {
+  const n = doc.getElementById(id)
+  n.focus()
+  n.value = texto
+  n.dispatchEvent(evento(doc, 'input'))
+}
+/** Las opciones que muestra la lista de un autocompletar. */
+const opcionesCombo = (doc, listaId) =>
+  [...doc.querySelectorAll(`#${listaId} [role="option"]`)]
+/** Abre el autocompletar de conversaciones y aprieta la de ese jid. */
+function elegirChat (doc, jid, texto = '') {
+  escribir(doc, 'chat-search', texto)
+  const o = doc.querySelector(`#chat-list [role="option"][data-value="${jid}"]`)
+  if (!o) throw new Error(`la lista no ofrece ${jid}`)
+  o.click()
+}
+/** Elige un proyecto en uno de los dos autocompletar de proyecto ('' = Sin proyecto). */
+function elegirProyecto (doc, prefijo, id) {
+  escribir(doc, `${prefijo}-search`, '')
+  const o = doc.querySelector(`#${prefijo}-list [role="option"][data-value="${id}"]`)
+  if (!o) throw new Error(`#${prefijo}-list no ofrece ${JSON.stringify(id)}`)
+  o.click()
+}
+/** Los proyectos que ofrece un autocompletar de proyecto, por su id. */
+function proyectosOfrecidos (doc, prefijo) {
+  escribir(doc, `${prefijo}-search`, '')
+  const ids = opcionesCombo(doc, `${prefijo}-list`).map((o) => o.dataset.value)
+  doc.getElementById(`${prefijo}-search`).dispatchEvent(tecla(doc, 'Escape'))
+  return ids
+}
+/** Los textos de la lista de conversaciones, abierta con lo que haya escrito. */
+function listaChats (doc) {
+  const n = doc.getElementById('chat-search')
+  n.focus()
+  n.dispatchEvent(tecla(doc, 'ArrowDown'))
+  return opcionesCombo(doc, 'chat-list').map((o) => o.textContent)
+}
+
 // ───────────────────────── config.html ─────────────────────────
 // Los proyectos que el dueno acepto (T12): los que ofrece el selector de cada conversacion
 // y de cada regla. Datos de ejemplo.
@@ -97,6 +155,415 @@ const PROYECTOS_PRUEBA = [
   { id: 'alfa-demo', name: 'Alfa Demo', path: '/srv/ejemplo/alfa-demo', note: 'Tienda en linea' },
   { id: 'beta-demo', name: 'Beta Demo', path: '/srv/ejemplo/beta-demo', note: '' }
 ]
+
+// ───────── T17: ajustes rehechos para el modelo nuevo ─────────
+console.log('\nconfig.html — T17: ni un <select> nativo, en ningun panel')
+{
+  // En Orca el panel vive en un iframe con sandbox y la lista de un select no se dibuja:
+  // el dueno no podia encender Jev porque su select no abria. Se prueba en el archivo Y
+  // despues de pintar, porque un select tambien se puede crear desde el script.
+  for (const archivo of ['config.html', 'activity.html']) {
+    const fuente = readFileSync(join(root, archivo), 'utf8')
+    ok(`${archivo}: el archivo no trae ningun <select>`, !/<select\b/i.test(fuente))
+    const { doc } = await montar(archivo, { chats: [{ jid: '1@g.us', name: 'Uno', kind: 'grupo' }],
+      projects: PROYECTOS_PRUEBA }, 'es-419')
+    await espera()
+    ok(`${archivo}: y pintado tampoco hay ninguno`,
+      doc.querySelectorAll('select').length === 0,
+      String(doc.querySelectorAll('select').length))
+  }
+}
+
+console.log('\nconfig.html — T17: pestanas')
+{
+  const { doc } = await montar('config.html', {}, 'es-419')
+  await espera()
+  const PESTANAS = ['estado', 'chats', 'proyectos', 'aprobacion', 'agente', 'avanzado']
+  const tabs = [...doc.querySelectorAll('[role="tablist"] [role="tab"]')]
+  ok('hay seis pestanas, en este orden',
+    JSON.stringify(tabs.map((t) => t.id)) === JSON.stringify(PESTANAS.map((p) => `tab-${p}`)),
+    JSON.stringify(tabs.map((t) => t.id)))
+  ok('cada pestana tiene su texto', tabs.every((t) => t.textContent.trim().length > 2),
+    JSON.stringify(tabs.map((t) => t.textContent)))
+  // Cada control vive en su pestana: lo que el dueno busca tiene un solo lugar.
+  const DONDE = {
+    estado: ['pairing-msg', 'qr-wrap', 'checklist', 'opcionales'],
+    chats: ['chat-search', 'chat-list', 'chat-fetch', 'scope-wrap', 'mode', 'workspace-search',
+      'save-scope', 'r-match', 'r-workspace-search', 'save-route', 'routes-wrap'],
+    proyectos: ['projects-wrap', 'proposals-wrap', 'projects-refresh'],
+    aprobacion: ['exceptions', 'jev-aviso', 'jev-enabled', 'jev-key', 'jev-save-key'],
+    agente: ['agent', 'owner', 'tone', 'save-agent'],
+    avanzado: ['transcribe', 'lang', 'quality', 'save-voice', 'inbox-days', 'sync-minutes',
+      'save-reading']
+  }
+  const fuera = []
+  for (const [p, ids] of Object.entries(DONDE)) {
+    for (const id of ids) {
+      const n = doc.getElementById(id)
+      if (!n || !n.closest(`#view-${p}`)) fuera.push(`${id} -> ${p}`)
+    }
+  }
+  ok('cada control vive en su pestana', fuera.length === 0, JSON.stringify(fuera))
+  ok('el aviso general queda fuera de las pestanas: se ve desde cualquiera',
+    !doc.getElementById('alert').closest('[role="tabpanel"]'))
+
+  doc.getElementById('tab-avanzado').click()
+  await espera()
+  ok('apretar una pestana la muestra y esconde las demas',
+    !doc.getElementById('view-avanzado').hidden &&
+    PESTANAS.filter((p) => p !== 'avanzado').every((p) => doc.getElementById(`view-${p}`).hidden))
+  ok('y la marca como elegida',
+    doc.getElementById('tab-avanzado').getAttribute('aria-selected') === 'true' &&
+    doc.getElementById('tab-estado').getAttribute('aria-selected') === 'false')
+  doc.getElementById('tab-avanzado').dispatchEvent(tecla(doc, 'ArrowRight'))
+  ok('las flechas pasan a la pestana vecina',
+    doc.getElementById('tab-agente').getAttribute('aria-selected') === 'true' ||
+    doc.getElementById('tab-estado').getAttribute('aria-selected') === 'true')
+
+  // Las pestanas en los tres idiomas, y en portugues propio.
+  const S = doc.defaultView.STRINGS
+  const claves = ['tabEstado', 'tabChats', 'tabProyectos', 'tabAprobacion', 'tabAgente',
+    'tabAvanzado']
+  ok('las pestanas se nombran en los tres idiomas',
+    claves.every((k) => S.es[k] && S.en[k] && S.pt[k]), JSON.stringify(claves.map((k) => S.pt[k])))
+  ok('Su aprobacion va de usted y sin tildes',
+    S.es.tabAprobacion === 'Su aprobacion', S.es.tabAprobacion)
+}
+
+console.log('\nconfig.html — T17: la pestana de entrada depende de lo que falta')
+{
+  // Sin linea, sin nombre y sin conversaciones: se abre en Estado, que dice que falta.
+  const nuevo = await montar('config.html', {}, 'es-419')
+  await espera()
+  ok('con la configuracion a medias se abre en Estado',
+    nuevo.doc.getElementById('tab-estado').getAttribute('aria-selected') === 'true')
+  const lista = nuevo.doc.getElementById('checklist')
+  const falta = (item) => lista.querySelector(`[data-item="${item}"]`)?.dataset.ok
+  ok('la lista dice que falta la linea, el nombre y una conversacion',
+    falta('linea') === 'false' && falta('agente') === 'false' && falta('chat') === 'false',
+    lista.textContent)
+  ok('y nombra los proyectos y Jev, Jev como opcional',
+    falta('proyectos') === 'false' && falta('jev') === 'false' &&
+    /opcional/i.test(lista.querySelector('[data-item="jev"]').textContent), lista.textContent)
+  // Cada falta lleva a la pestana donde se arregla.
+  lista.querySelector('[data-item="chat"] button').click()
+  ok('el boton de una falta lleva a su pestana',
+    nuevo.doc.getElementById('tab-chats').getAttribute('aria-selected') === 'true')
+
+  // Todo listo: se abre donde se trabaja a diario, Conversaciones.
+  const listo = await montar('config.html', {
+    agentName: 'Watson', projects: PROYECTOS_PRUEBA,
+    sidecar: { connection: 'open', qr: null, exited: false,
+      latido: { ts: Date.now(), conectado: true } },
+    scope: { '1@g.us': { chatName: 'Uno', mode: 'responder', workspace: 'alfa-demo' } }
+  }, 'es-419')
+  await espera()
+  ok('con todo listo se abre en Conversaciones',
+    listo.doc.getElementById('tab-chats').getAttribute('aria-selected') === 'true')
+  ok('y Estado dice que lo necesario esta listo',
+    ['linea', 'agente', 'chat', 'proyectos'].every((i) =>
+      listo.doc.querySelector(`#checklist [data-item="${i}"]`)?.dataset.ok === 'true'))
+  // El sondeo no cambia la pestana que el dueno eligio.
+  listo.doc.getElementById('tab-proyectos').click()
+  listo.window.dispatchEvent(new listo.window.Event('focus'))
+  await espera()
+  ok('el sondeo no le cambia la pestana al dueno',
+    listo.doc.getElementById('tab-proyectos').getAttribute('aria-selected') === 'true')
+}
+
+console.log('\nconfig.html — T17: el autocompletar de conversaciones')
+{
+  const storage = {
+    projects: PROYECTOS_PRUEBA,
+    chats: [
+      { jid: '120363000000000001@g.us', name: 'Soporte Norte', kind: 'grupo' },
+      { jid: '120363000000000002@g.us', name: 'Operaciones', kind: 'grupo' },
+      { jid: '573000000001@s.whatsapp.net', name: 'Laura Mendez', kind: 'directo' }
+    ]
+  }
+  const { doc, window } = await montar('config.html', storage, 'es-419')
+  await espera()
+  const input = doc.getElementById('chat-search')
+  ok('es un combobox con su lista', input.getAttribute('role') === 'combobox' &&
+    input.getAttribute('aria-controls') === 'chat-list' &&
+    doc.getElementById('chat-list').getAttribute('role') === 'listbox')
+  ok('cerrado al cargar', input.getAttribute('aria-expanded') === 'false' &&
+    doc.getElementById('chat-list').hidden)
+  ok('Traer conversaciones esta al lado del buscador',
+    doc.getElementById('chat-fetch').closest('.combo-row') === input.closest('.combo-row'))
+
+  escribir(doc, 'chat-search', 'laura')
+  let opciones = opcionesCombo(doc, 'chat-list')
+  ok('escribir abre la lista y filtra por nombre',
+    input.getAttribute('aria-expanded') === 'true' && opciones.length === 1 &&
+    opciones[0].textContent.includes('Laura Mendez'), opciones.map((o) => o.textContent).join(' | '))
+  ok('cada opcion dice si es un grupo o un chat directo',
+    /Directo/.test(opciones[0].textContent), opciones[0].textContent)
+  escribir(doc, 'chat-search', '573000000001')
+  ok('tambien filtra por numero', opcionesCombo(doc, 'chat-list').length === 1)
+  escribir(doc, 'chat-search', '')
+  opciones = opcionesCombo(doc, 'chat-list')
+  ok('sin texto muestra todas, los grupos marcados como grupo',
+    opciones.length === 3 && opciones.filter((o) => /Grupo/.test(o.textContent)).length === 2,
+    opciones.map((o) => o.textContent).join(' | '))
+
+  escribir(doc, 'chat-search', 'zzzz')
+  ok('sin coincidencias lo dice, sin opciones',
+    opcionesCombo(doc, 'chat-list').length === 0 &&
+    /Ninguna coincide/.test(doc.getElementById('chat-list').textContent),
+    doc.getElementById('chat-list').textContent)
+
+  // Teclado: flechas mueven, Enter elige, Esc cierra.
+  escribir(doc, 'chat-search', 'o')
+  input.dispatchEvent(tecla(doc, 'ArrowDown'))
+  input.dispatchEvent(tecla(doc, 'ArrowDown'))
+  const activa = () => doc.getElementById(input.getAttribute('aria-activedescendant') || 'x')
+  const segunda = opcionesCombo(doc, 'chat-list')[1]
+  ok('flecha abajo mueve la opcion activa', activa() === segunda &&
+    segunda.getAttribute('aria-selected') === 'true', input.getAttribute('aria-activedescendant'))
+  input.dispatchEvent(tecla(doc, 'ArrowUp'))
+  ok('flecha arriba vuelve', activa() === opcionesCombo(doc, 'chat-list')[0])
+  input.dispatchEvent(tecla(doc, 'Escape'))
+  ok('Esc cierra la lista sin borrar lo escrito',
+    input.getAttribute('aria-expanded') === 'false' && doc.getElementById('chat-list').hidden &&
+    input.value === 'o')
+  escribir(doc, 'chat-search', 'operaciones')
+  input.dispatchEvent(tecla(doc, 'ArrowDown'))
+  input.dispatchEvent(tecla(doc, 'Enter'))
+  ok('Enter elige la activa: el nombre queda en el campo y la lista se cierra',
+    input.value === 'Operaciones' && input.getAttribute('aria-expanded') === 'false',
+    input.value)
+  ok('y debajo se ve su identificador',
+    doc.getElementById('chat-id').textContent.includes('120363000000000002@g.us'),
+    doc.getElementById('chat-id').textContent)
+
+  // Clic elige, y lo elegido es lo que se guarda.
+  elegirChat(doc, '573000000001@s.whatsapp.net', 'laura')
+  ok('un clic elige', input.value === 'Laura Mendez', input.value)
+  elegirSeg(doc, 'mode', 'observar')
+  doc.getElementById('save-scope').click()
+  await espera()
+  ok('guardar autoriza la conversacion elegida, por su jid',
+    storage.scope && storage.scope['573000000001@s.whatsapp.net'] &&
+    storage.scope['573000000001@s.whatsapp.net'].mode === 'observar',
+    JSON.stringify(storage.scope))
+
+  // El sondeo repinta cada pocos segundos: la lista abierta y lo escrito sobreviven.
+  escribir(doc, 'chat-search', 'sop')
+  input.dispatchEvent(tecla(doc, 'ArrowDown'))
+  const antes = input.getAttribute('aria-activedescendant')
+  storage.chats = storage.chats.concat([{ jid: '120363000000000009@g.us',
+    name: 'Soporte Sur', kind: 'grupo' }])
+  window.dispatchEvent(new window.Event('focus'))
+  await espera()
+  opciones = opcionesCombo(doc, 'chat-list')
+  ok('tras el repintado la lista sigue abierta y con lo escrito',
+    input.value === 'sop' && input.getAttribute('aria-expanded') === 'true' &&
+    !doc.getElementById('chat-list').hidden, `${input.value} ${input.getAttribute('aria-expanded')}`)
+  ok('y ya trae lo nuevo, filtrado', opciones.length === 2 &&
+    opciones.some((o) => o.textContent.includes('Soporte Sur')),
+    opciones.map((o) => o.textContent).join(' | '))
+  ok('y la opcion activa sigue siendo la misma', input.getAttribute('aria-activedescendant') === antes &&
+    activa()?.dataset.value === '120363000000000001@g.us', input.getAttribute('aria-activedescendant'))
+}
+
+console.log('\nconfig.html — T17: sin conversaciones la lista lo dice')
+{
+  const { doc } = await montar('config.html', {
+    syncStatus: { running: true, startedAt: new Date().toISOString(), trigger: 'activate' }
+  }, 'es-419')
+  await espera()
+  escribir(doc, 'chat-search', '')
+  ok('la lista abierta dice que esta buscando, sin opciones',
+    opcionesCombo(doc, 'chat-list').length === 0 &&
+    /Buscando/.test(doc.getElementById('chat-list').textContent),
+    doc.getElementById('chat-list').textContent)
+}
+
+console.log('\nconfig.html — T17: el proyecto se elige con el mismo autocompletar')
+{
+  const storage = { projects: PROYECTOS_PRUEBA,
+    chats: [{ jid: '1@g.us', name: 'Soporte Norte', kind: 'grupo' }] }
+  const { doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  const ws = doc.getElementById('workspace-search')
+  ok('el proyecto es un combobox', ws.getAttribute('role') === 'combobox' &&
+    doc.getElementById('workspace-list').getAttribute('role') === 'listbox')
+  escribir(doc, 'workspace-search', 'beta')
+  const ofrecidos = opcionesCombo(doc, 'workspace-list')
+  ok('filtra los proyectos por nombre', ofrecidos.length === 1 &&
+    ofrecidos[0].textContent.includes('Beta Demo'), ofrecidos.map((o) => o.textContent).join(' | '))
+  escribir(doc, 'workspace-search', '')
+  ok('sin texto ofrece Sin proyecto y los aceptados',
+    JSON.stringify(opcionesCombo(doc, 'workspace-list').map((o) => o.dataset.value)) ===
+    JSON.stringify(['', 'alfa-demo', 'beta-demo']))
+  escribir(doc, 'workspace-search', 'zzzz')
+  ok('y dice cuando ninguno coincide', opcionesCombo(doc, 'workspace-list').length === 0 &&
+    doc.getElementById('workspace-list').textContent.length > 0)
+
+  elegirChat(doc, '1@g.us')
+  elegirProyecto(doc, 'workspace', 'beta-demo')
+  ok('elegido, el campo muestra el nombre del proyecto', ws.value === 'Beta Demo', ws.value)
+  doc.getElementById('save-scope').click()
+  await espera()
+  ok('y guardar la conversacion lleva ese proyecto',
+    storage.scope && storage.scope['1@g.us'].workspace === 'beta-demo',
+    JSON.stringify(storage.scope))
+
+  // Las reglas por texto eligen el proyecto igual.
+  doc.getElementById('r-match').value = 'Facturacion'
+  elegirProyecto(doc, 'r-workspace', 'alfa-demo')
+  doc.getElementById('save-route').click()
+  await espera()
+  ok('una regla por texto guarda el proyecto elegido en su autocompletar',
+    (storage.routes || []).some((r) => r.pattern === 'facturacion' && r.workspace === 'alfa-demo'),
+    JSON.stringify(storage.routes))
+}
+
+console.log('\nconfig.html — T17: las reglas viejas de Plane se marcan y se pueden quitar')
+{
+  const storage = { projects: PROYECTOS_PRUEBA, routes: [
+    { pattern: 'cobros', provider: 'plane', target: 'FIN' },
+    { pattern: 'envios', workspace: 'alfa-demo' }] }
+  const { doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  const filas = [...doc.querySelectorAll('#routes-wrap tbody tr')]
+  const vieja = filas.find((f) => f.textContent.includes('cobros'))
+  const nueva = filas.find((f) => f.textContent.includes('envios'))
+  ok('la regla vieja se ve con su destino de antes',
+    vieja && /plane/i.test(vieja.textContent) && /FIN/.test(vieja.textContent), vieja?.textContent)
+  ok('y marcada como vieja', vieja && !!vieja.querySelector('.legacy') &&
+    /vieja/i.test(vieja.textContent), vieja?.textContent)
+  ok('la regla a un proyecto no lleva esa marca', nueva && !nueva.querySelector('.legacy'))
+  vieja.querySelector('[data-rrm]').click()
+  await espera()
+  ok('Quitar la borra y deja la otra',
+    JSON.stringify(storage.routes) === JSON.stringify([{ pattern: 'envios', workspace: 'alfa-demo' }]),
+    JSON.stringify(storage.routes))
+}
+
+console.log('\nconfig.html — T17: los modos son botones y escriben lo mismo que el select')
+{
+  const { doc } = await montar('config.html', {}, 'es-419')
+  await espera()
+  ok('los cuatro modos, con los valores que lee wa-scope',
+    JSON.stringify(Object.keys(textosSeg(doc, 'mode'))) ===
+    JSON.stringify(['off', 'observar', 'borrador', 'responder']))
+  ok('una conversacion nueva arranca apagada', valorSeg(doc, 'mode') === 'off')
+  elegirSeg(doc, 'mode', 'responder')
+  ok('apretar un modo lo marca y suelta el otro', valorSeg(doc, 'mode') === 'responder' &&
+    doc.querySelectorAll('#mode button[aria-pressed="true"]').length === 1)
+  ok('y debajo explica que hace, con las excepciones',
+    /excepciones/i.test(doc.getElementById('mode-desc').textContent),
+    doc.getElementById('mode-desc').textContent)
+}
+
+console.log('\nconfig.html — T17: Avanzado, un guardar por tarjeta')
+{
+  const { doc, storage, enviados } = await montar('config.html', {}, 'es-419')
+  await espera()
+  elegirSeg(doc, 'transcribe', 'off')
+  elegirSeg(doc, 'lang', 'pt')
+  elegirSeg(doc, 'quality', 'minima')
+  const antes = enviados.length
+  doc.getElementById('save-voice').click()
+  await espera(); await espera()
+  ok('Notas de voz guarda sus tres valores con un solo boton',
+    storage.transcribe === 'off' && storage.transcribeLang === 'pt' &&
+    storage.transcribeQuality === 'minima',
+    JSON.stringify([storage.transcribe, storage.transcribeLang, storage.transcribeQuality]))
+  ok('sin tocar las claves de la otra tarjeta',
+    !enviados.slice(antes).some((d) => d.action === 'storage.set' &&
+      ['inboxDays', 'syncMinutes'].includes(d.params.key)))
+  ok('y lo confirma', /✓/.test(doc.getElementById('said-voice').textContent))
+
+  elegirSeg(doc, 'inbox-days', '30')
+  elegirSeg(doc, 'sync-minutes', '15')
+  doc.getElementById('save-reading').click()
+  await espera(); await espera()
+  ok('Lectura guarda la ventana y la frecuencia con un solo boton',
+    storage.inboxDays === '30' && storage.syncMinutes === '15',
+    JSON.stringify([storage.inboxDays, storage.syncMinutes]))
+  ok('con los mismos valores de antes, en texto',
+    typeof storage.inboxDays === 'string' && typeof storage.syncMinutes === 'string')
+  ok('y lo confirma', /✓/.test(doc.getElementById('said-reading').textContent))
+  ok('ya no hay un boton de guardar por campo',
+    !doc.getElementById('save-days') && !doc.getElementById('save-sync') &&
+    !doc.getElementById('save-lang') && !doc.getElementById('save-quality') &&
+    !doc.getElementById('save-transcribe') && !doc.getElementById('save-tone') &&
+    !doc.getElementById('save-owner'))
+}
+
+console.log('\nconfig.html — T17: Agente, un guardar para nombre, dueno y tono')
+{
+  const { doc, storage } = await montar('config.html', {}, 'es-419')
+  await espera()
+  doc.getElementById('agent').value = 'Watson'
+  doc.getElementById('owner').value = '  Persona De Ejemplo '
+  doc.getElementById('tone').value = 'De usted, frases cortas.'
+  doc.getElementById('save-agent').click()
+  await espera(); await espera()
+  ok('un clic guarda los tres',
+    storage.agentName === 'Watson' && storage.ownerName === 'Persona De Ejemplo' &&
+    storage.tone === 'De usted, frases cortas.',
+    JSON.stringify([storage.agentName, storage.ownerName, storage.tone]))
+  ok('y lo confirma', /✓/.test(doc.getElementById('said-agent').textContent))
+  doc.getElementById('agent').value = ''
+  doc.getElementById('save-agent').click()
+  await espera()
+  ok('sin nombre no guarda y lo dice', storage.agentName === 'Watson' &&
+    doc.getElementById('said-agent').classList.contains('bad'))
+}
+
+console.log('\nconfig.html — T17: Jev se enciende con un interruptor')
+{
+  const storage = { jevStatus: { at: new Date().toISOString(), enabled: false, keySet: true,
+    mirror: 'apagado' } }
+  const { doc } = await montar('config.html', storage, 'es-419', (d, st) => {
+    if (d.action === 'storage.set' && d.params.key === 'jevRequest' && d.params.value) {
+      const p = d.params.value
+      st.jevRequestVisto = p
+      st.jevStatus = { at: new Date().toISOString(), enabled: p.enabled, keySet: true,
+        mirror: 'activo' }
+      st.jevResult = { at: new Date().toISOString(), requestId: p.id, action: p.action,
+        ok: true, code: 'activado' }
+      return { ok: true }
+    }
+    return undefined
+  })
+  await espera()
+  const sw = doc.getElementById('jev-enabled')
+  ok('es un interruptor, apagado', sw.getAttribute('role') === 'switch' &&
+    sw.getAttribute('aria-checked') === 'false', sw.outerHTML.slice(0, 120))
+  const aviso = doc.getElementById('jev-aviso')
+  ok('el aviso de a donde va el texto esta arriba del interruptor',
+    !!(aviso.compareDocumentPosition(sw) & doc.defaultView.Node.DOCUMENT_POSITION_FOLLOWING))
+  sw.click()
+  await new Promise((r) => setTimeout(r, 2500))
+  ok('apretarlo manda el mismo pedido de siempre: activar con enabled verdadero',
+    storage.jevRequestVisto && storage.jevRequestVisto.action === 'activar' &&
+    storage.jevRequestVisto.enabled === true, JSON.stringify(storage.jevRequestVisto))
+  ok('y queda encendido con lo que dice el worker', sw.getAttribute('aria-checked') === 'true' &&
+    /encendido/i.test(doc.getElementById('jev-status').textContent),
+    doc.getElementById('jev-status').textContent)
+  ok('no hay un boton aparte de guardar el interruptor', !doc.getElementById('jev-save-enabled'))
+}
+
+console.log('\nconfig.html — T17: Su aprobacion explica las excepciones fijas')
+{
+  const { doc } = await montar('config.html', {}, 'es-419')
+  await espera()
+  const texto = doc.getElementById('exceptions').textContent
+  ok('nombra dinero, credenciales, compromisos, Jev y "Le pregunto antes"',
+    /dinero/i.test(texto) && /credencial/i.test(texto) && /fecha|compromiso/i.test(texto) &&
+    /Jev/.test(texto) && /Le pregunto antes/.test(texto), texto)
+  ok('y dice que Jev solo puede detener, nunca habilitar', /nunca/i.test(texto), texto)
+  // Aprobar desde el chat propio de WhatsApp es trabajo futuro: no se anuncia.
+  const vista = doc.getElementById('view-aprobacion').textContent
+  ok('sin nada que todavia no existe: ni WhatsApp como canal de aprobacion',
+    !/proximamente|pronto|coming soon/i.test(vista) &&
+    !/(por|desde|en) (su )?(chat propio|WhatsApp)/i.test(vista), vista)
+}
 
 console.log('\nconfig.html')
 {
@@ -107,77 +574,73 @@ console.log('\nconfig.html')
   ok('los textos se tradujeron', doc.querySelector('.sub').textContent.length > 0,
     'los data-t quedaron vacios: applyStrings no corrio')
 
-  // Nombre del agente
+  // Nombre del agente (T17: la tarjeta Agente guarda nombre, dueno y tono juntos).
   doc.getElementById('agent').value = 'Watson'
   doc.getElementById('save-agent').click()
   await espera()
   ok('guarda el nombre del agente', storage.agentName === 'Watson',
     `storage.agentName = ${JSON.stringify(storage.agentName)}`)
   ok('confirma el guardado en pantalla',
-    doc.getElementById('said-agent').textContent.includes('Watson'))
-  ok('bloquea el campo y ofrece editar',
-    doc.getElementById('agent').disabled && !doc.getElementById('edit-agent').hidden)
+    doc.getElementById('said-agent').textContent.includes('✓'))
+  ok('el campo queda con el nombre guardado',
+    doc.getElementById('agent').value === 'Watson')
 
-  // Calidad de la transcripcion
-  doc.getElementById('quality').value = 'minima'
-  doc.getElementById('save-quality').click()
+  // Calidad de la transcripcion (tarjeta Notas de voz).
+  elegirSeg(doc, 'quality', 'minima')
+  doc.getElementById('save-voice').click()
   await espera()
   ok('guarda la calidad de transcripcion', storage.transcribeQuality === 'minima',
     `storage.transcribeQuality = ${JSON.stringify(storage.transcribeQuality)}`)
   ok('confirma la calidad en pantalla',
-    doc.getElementById('said-quality').textContent.includes('✓'))
+    doc.getElementById('said-voice').textContent.includes('✓'))
 
   // Para quien trabaja. No es el nombre del agente: es el del dueno, y el prompt lo
   // lee para saber a quien le reporta.
   doc.getElementById('owner').value = '  Persona De Ejemplo  '
-  doc.getElementById('save-owner').click()
+  doc.getElementById('save-agent').click()
   await espera()
   ok('guarda para quien trabaja', storage.ownerName === 'Persona De Ejemplo',
     `storage.ownerName = ${JSON.stringify(storage.ownerName)}`)
   ok('confirma el dueno en pantalla',
-    doc.getElementById('said-owner').textContent.includes('✓'))
+    doc.getElementById('said-agent').textContent.includes('✓'))
 
   // Modo de transcripcion. Poder apagarla entera sin abrir una terminal es el punto.
-  doc.getElementById('transcribe').value = 'off'
-  doc.getElementById('save-transcribe').click()
+  elegirSeg(doc, 'transcribe', 'off')
+  doc.getElementById('save-voice').click()
   await espera()
   ok('guarda el modo de transcripcion', storage.transcribe === 'off',
     `storage.transcribe = ${JSON.stringify(storage.transcribe)}`)
   ok('confirma el modo en pantalla',
-    doc.getElementById('said-transcribe').textContent.includes('✓'))
+    doc.getElementById('said-voice').textContent.includes('✓'))
 
-  doc.getElementById('lang').value = 'pt'
-  doc.getElementById('save-lang').click()
+  elegirSeg(doc, 'lang', 'pt')
+  doc.getElementById('save-voice').click()
   await espera()
   ok('guarda el idioma de los audios', storage.transcribeLang === 'pt',
     `storage.transcribeLang = ${JSON.stringify(storage.transcribeLang)}`)
-  ok('confirma el idioma en pantalla',
-    doc.getElementById('said-lang').textContent.includes('✓'))
 
   // La ventana de lectura. Era un tope escondido: solo se movia por terminal, asi que
   // desde el panel una mencion del viernes desaparecia el lunes sin explicacion.
-  doc.getElementById('inbox-days').value = '30'
-  doc.getElementById('save-days').click()
+  elegirSeg(doc, 'inbox-days', '30')
+  doc.getElementById('save-reading').click()
   await espera()
   ok('guarda la ventana de lectura', storage.inboxDays === '30',
     `storage.inboxDays = ${JSON.stringify(storage.inboxDays)}`)
   ok('confirma la ventana en pantalla',
-    doc.getElementById('said-days').textContent.includes('✓'))
+    doc.getElementById('said-reading').textContent.includes('✓'))
 
   // Cada cuanto se relee WhatsApp. Es lo que acota cuanto tarda un mensaje en llegarle
   // al agente: el precheck de las automations contesta con lo que dejo el ultimo sync,
   // asi que si esto no se pudiera cambiar el retraso seria una constante escondida.
-  doc.getElementById('sync-minutes').value = '15'
-  doc.getElementById('save-sync').click()
+  elegirSeg(doc, 'sync-minutes', '15')
+  doc.getElementById('save-reading').click()
   await espera()
   ok('guarda cada cuanto revisa WhatsApp', storage.syncMinutes === '15',
     `storage.syncMinutes = ${JSON.stringify(storage.syncMinutes)}`)
-  ok('confirma la frecuencia en pantalla',
-    doc.getElementById('said-sync').textContent.includes('✓'))
 
-  // Un select no puede ofrecer un valor que el CLI vaya a rechazar: si lo ofrece, el
-  // panel dice guardado y `wa-scope` lo tira. Las listas se comprueban, no se confian.
-  const opciones = (id) => [...doc.getElementById(id).options].map((o) => o.value)
+  // Un grupo de botones no puede ofrecer un valor que el CLI vaya a rechazar: si lo
+  // ofrece, el panel dice guardado y `wa-scope` lo tira. Se comprueba, no se confia.
+  const opciones = (id) => Object.keys(textosSeg(doc, id))
   ok('el modo de transcripcion solo ofrece lo que el CLI acepta',
     JSON.stringify(opciones('transcribe')) === JSON.stringify(['local', 'off']),
     `opciones = ${JSON.stringify(opciones('transcribe'))}`)
@@ -190,18 +653,21 @@ console.log('\nconfig.html')
 
   // Permiso y servicio de tareas son dos ejes. Mientras el permiso dijo "abre tarjeta",
   // el panel prometia a la vez que no abria ninguna (proveedor ninguno) y que abria una.
-  const permisos = [...doc.getElementById('mode').options].map((o) => o.textContent)
+  // Se miran los botones y la frase que explica cada modo.
+  const S0 = doc.defaultView.STRINGS
+  const permisos = Object.values(textosSeg(doc, 'mode'))
+    .concat(['es', 'en', 'pt'].flatMap((l) => ['off', 'observe', 'draft', 'reply']
+      .map((k) => S0[l][k])))
   ok('ningun permiso habla de tarjetas',
     permisos.every((txt) => !/tarjeta|cartao|card/i.test(txt)),
     `permisos = ${JSON.stringify(permisos)}`)
   // Los modos tienen nombre de dueno (T13): el valor guardado no cambia, el rotulo si.
   ok('los valores guardados de los modos no cambian',
-    JSON.stringify([...doc.getElementById('mode').options].map((o) => o.value)) ===
+    JSON.stringify(opciones('mode')) ===
     JSON.stringify(['off', 'observar', 'borrador', 'responder']))
   const esMod = await montar('config.html', {}, 'es-419')
   await espera()
-  const modo = (valor) => [...esMod.doc.getElementById('mode').options]
-    .find((o) => o.value === valor)?.textContent || ''
+  const modo = (valor) => textosSeg(esMod.doc, 'mode')[valor] || ''
   ok('off se llama Apagado', /^Apagado/.test(modo('off')), modo('off'))
   ok('observar se llama Solo leer', /^Solo leer/.test(modo('observar')), modo('observar'))
   ok('borrador se llama Le pregunto antes', /^Le pregunto antes/.test(modo('borrador')),
@@ -218,8 +684,7 @@ console.log('\nconfig.html')
   ]
   doc.defaultView.dispatchEvent(new doc.defaultView.Event('focus'))
   await espera()
-  doc.getElementById('chat-pick').value = '1@g.us'
-  doc.getElementById('chat-pick').dispatchEvent(new doc.defaultView.Event('change'))
+  elegirChat(doc, '1@g.us')
   await espera()
   ok('elegir de la lista llena el nombre de la conversacion',
     doc.getElementById('chat').value === 'Soporte Norte',
@@ -230,16 +695,19 @@ console.log('\nconfig.html')
     !doc.getElementById('provider') && !doc.getElementById('target') &&
     !doc.getElementById('target-hint'))
   const proyecto = doc.getElementById('workspace')
-  const ofrecidos = [...proyecto.options].map((o) => o.value)
+  ok('una conversacion nueva arranca sin proyecto, y el campo lo dice',
+    proyecto.value === '' &&
+    /^(Sin proyecto|No project)$/.test(doc.getElementById('workspace-search').value),
+    `workspace = ${JSON.stringify(proyecto.value)}`)
+  escribir(doc, 'workspace-search', '')
+  const ofrecidos = opcionesCombo(doc, 'workspace-list').map((o) => o.dataset.value)
   ok('el selector de proyecto ofrece Sin proyecto y los aceptados',
     JSON.stringify(ofrecidos) === JSON.stringify(['', 'alfa-demo', 'beta-demo']),
     JSON.stringify(ofrecidos))
   ok('y los nombra por su nombre, no por su id',
-    [...proyecto.options].some((o) => o.textContent === 'Alfa Demo'))
-  ok('una conversacion nueva arranca sin proyecto', proyecto.value === '',
-    `workspace = ${JSON.stringify(proyecto.value)}`)
-  proyecto.value = 'alfa-demo'
-  doc.getElementById('mode').value = 'borrador'
+    opcionesCombo(doc, 'workspace-list').some((o) => o.textContent.includes('Alfa Demo')))
+  elegirProyecto(doc, 'workspace', 'alfa-demo')
+  elegirSeg(doc, 'mode', 'borrador')
   doc.getElementById('chat-instructions').value = 'Resuma lo que manden y aviseme.'
   doc.getElementById('save-scope').click()
   await espera()
@@ -271,29 +739,26 @@ console.log('\nconfig.html')
     /Le pregunto antes|Ask me first/.test(doc.getElementById('scope-wrap').textContent),
     doc.getElementById('scope-wrap').textContent)
 
-  // Buscador de conversaciones. Con 200 conversaciones un select nativo no se
+  // Buscador de conversaciones. Con 200 conversaciones una lista sin filtro no se
   // navega, asi que el filtro es parte de que el control sirva, no un adorno.
-  if (doc.getElementById('chat-search')) {
-    doc.getElementById('chat-search').value = 'laura'
-    doc.getElementById('chat-search').dispatchEvent(new doc.defaultView.Event('input'))
+  {
+    escribir(doc, 'chat-search', 'laura')
     await espera()
-    const opciones = [...doc.getElementById('chat-pick').options].map((o) => o.textContent)
+    const opciones = opcionesCombo(doc, 'chat-list').map((o) => o.textContent)
     ok('el buscador filtra la lista',
       opciones.some((t) => t.includes('Laura')) && !opciones.some((t) => t.includes('Operaciones')),
       `opciones = ${JSON.stringify(opciones)}`)
     ok('dice cuantas quedaron', /\d+\s+(de|of)\s+\d+/.test(doc.getElementById('chat-count').textContent),
       `chat-count = ${JSON.stringify(doc.getElementById('chat-count').textContent)}`)
-    doc.getElementById('chat-search').value = 'zzzz'
-    doc.getElementById('chat-search').dispatchEvent(new doc.defaultView.Event('input'))
+    escribir(doc, 'chat-search', 'zzzz')
     await espera()
     ok('avisa cuando nada coincide',
-      doc.getElementById('chat-pick').options.length === 1 &&
-      doc.getElementById('chat-pick').options[0].textContent.length > 0)
-    doc.getElementById('chat-search').value = ''
-    doc.getElementById('chat-search').dispatchEvent(new doc.defaultView.Event('input'))
+      opcionesCombo(doc, 'chat-list').length === 0 &&
+      doc.getElementById('chat-list').textContent.length > 0)
+    escribir(doc, 'chat-search', '')
     await espera()
     ok('al limpiar el buscador vuelven todas',
-      doc.getElementById('chat-pick').options.length > 1)
+      opcionesCombo(doc, 'chat-list').length > 1)
   }
 
   // ───── el panel nunca se queda diciendo que busca ─────
@@ -307,9 +772,9 @@ console.log('\nconfig.html')
   })
   await espera()
   ok('mientras busca de verdad, lo dice y no ofrece nada que apretar',
-    /Buscando|Looking|Procurando/.test(buscando.doc.getElementById('chat-pick').textContent) &&
+    /Buscando|Looking|Procurando/.test(buscando.doc.getElementById('chat-count').textContent) &&
     buscando.doc.getElementById('sync-state').hidden,
-    `chat-pick = ${JSON.stringify(buscando.doc.getElementById('chat-pick').textContent)}`)
+    `chat-count = ${JSON.stringify(buscando.doc.getElementById('chat-count').textContent)}`)
 
   const fallo = await montar('config.html', {
     chats: [],
@@ -412,16 +877,15 @@ console.log('\nconfig.html')
   conFoco.window.dispatchEvent(new conFoco.window.Event('focus'))
   await espera()
   ok('la lista se llena con el cursor puesto en el buscador',
-    [...conFoco.doc.getElementById('chat-pick').options].some((o) => o.textContent.includes('Laura')),
-    `chat-pick = ${JSON.stringify([...conFoco.doc.getElementById('chat-pick').options].map((o) => o.textContent))}`)
+    listaChats(conFoco.doc).some((txt) => txt.includes('Laura')),
+    `chat-list = ${JSON.stringify(listaChats(conFoco.doc))}`)
 
   // Y lo que el usuario ya habia tecleado no se pierde en la recarga.
-  conFoco.doc.getElementById('chat-search').value = 'laura'
-  conFoco.doc.getElementById('chat-search').dispatchEvent(new conFoco.window.Event('input'))
+  escribir(conFoco.doc, 'chat-search', 'laura')
   await espera()
   conFoco.window.dispatchEvent(new conFoco.window.Event('focus'))
   await espera()
-  const trasRecarga = [...conFoco.doc.getElementById('chat-pick').options].map((o) => o.textContent)
+  const trasRecarga = opcionesCombo(conFoco.doc, 'chat-list').map((o) => o.textContent)
   ok('el texto del buscador sobrevive a la recarga',
     conFoco.doc.getElementById('chat-search').value === 'laura')
   ok('y sigue filtrando despues de recargar',
@@ -440,10 +904,12 @@ console.log('\nconfig.html')
     doc.getElementById('workspace').value === 'alfa-demo',
     `workspace = ${doc.getElementById('workspace').value}`)
   // El input #chat esta oculto: comprobarlo solo dejaba pasar el caso real, en el que
-  // el select visible se quedaba en "Elija una conversacion".
-  ok('Editar deja el select visible en esa conversacion',
-    doc.getElementById('chat-pick').value === '1@g.us',
-    `chat-pick = ${JSON.stringify(doc.getElementById('chat-pick').value)}`)
+  // el campo visible se quedaba vacio.
+  ok('Editar deja el campo visible en esa conversacion, sin poder cambiarla',
+    doc.getElementById('chat-search').value === 'Soporte Norte' &&
+    doc.getElementById('chat-search').readOnly,
+    `chat-search = ${JSON.stringify(doc.getElementById('chat-search').value)}`)
+  ok('Editar carga el modo de la conversacion', valorSeg(doc, 'mode') === 'borrador')
   ok('Editar cambia el boton a guardar cambios',
     doc.getElementById('save-scope').textContent.toLowerCase().includes('cambio') ||
     doc.getElementById('save-scope').textContent.toLowerCase().includes('change'))
@@ -451,14 +917,16 @@ console.log('\nconfig.html')
   await espera()
   ok('Cancelar edicion limpia',
     doc.getElementById('chat').value === '' &&
+    doc.getElementById('chat-search').value === '' &&
+    !doc.getElementById('chat-search').readOnly &&
     doc.getElementById('chat-instructions').value === '' &&
-    doc.getElementById('workspace').value === '')
+    doc.getElementById('workspace').value === '' && valorSeg(doc, 'mode') === 'off')
 
   // Reglas de ruteo: el texto manda el caso a un PROYECTO, no a un destino que se escribe.
   ok('la regla ya no pide servicio de tareas ni destino',
     !doc.getElementById('r-provider') && !doc.getElementById('r-target'))
   doc.getElementById('r-match').value = 'ACME'
-  doc.getElementById('r-workspace').value = 'beta-demo'
+  elegirProyecto(doc, 'r-workspace', 'beta-demo')
   doc.getElementById('save-route').click()
   await espera()
   ok('guarda una regla de ruteo con su proyecto',
@@ -506,12 +974,12 @@ console.log('\nconfig.html')
   // reload() se corre, cada campo se llena con el dato del vecino y no se nota.
   const calidad = await montar('config.html', { transcribeQuality: 'minima' })
   await espera()
-  ok('carga la calidad guardada', calidad.doc.getElementById('quality').value === 'minima',
-    `quality = ${calidad.doc.getElementById('quality').value}`)
+  ok('carga la calidad guardada', valorSeg(calidad.doc, 'quality') === 'minima',
+    `quality = ${valorSeg(calidad.doc, 'quality')}`)
   const sinCalidad = await montar('config.html', {})
   await espera()
   ok('sin nada guardado la calidad queda en optima',
-    sinCalidad.doc.getElementById('quality').value === 'optima')
+    valorSeg(sinCalidad.doc, 'quality') === 'optima')
 
   // Guardar sin recargar es media funcion: el panel abre mintiendo sobre lo que rige.
   const guardado = await montar('config.html', {
@@ -519,40 +987,40 @@ console.log('\nconfig.html')
   })
   await espera()
   ok('recarga la ventana guardada',
-    guardado.doc.getElementById('inbox-days').value === '90',
-    `inbox-days = ${guardado.doc.getElementById('inbox-days').value}`)
+    valorSeg(guardado.doc, 'inbox-days') === '90',
+    `inbox-days = ${valorSeg(guardado.doc, 'inbox-days')}`)
   ok('recarga para quien trabaja',
     guardado.doc.getElementById('owner').value === 'Persona De Ejemplo',
     `owner = ${JSON.stringify(guardado.doc.getElementById('owner').value)}`)
   ok('recarga el modo de transcripcion',
-    guardado.doc.getElementById('transcribe').value === 'off',
-    `transcribe = ${guardado.doc.getElementById('transcribe').value}`)
+    valorSeg(guardado.doc, 'transcribe') === 'off',
+    `transcribe = ${valorSeg(guardado.doc, 'transcribe')}`)
   ok('recarga el idioma de los audios',
-    guardado.doc.getElementById('lang').value === 'pt',
-    `lang = ${guardado.doc.getElementById('lang').value}`)
+    valorSeg(guardado.doc, 'lang') === 'pt',
+    `lang = ${valorSeg(guardado.doc, 'lang')}`)
 
   const guardadoSync = await montar('config.html', { syncMinutes: '30' })
   await espera()
   ok('recarga la frecuencia guardada',
-    guardadoSync.doc.getElementById('sync-minutes').value === '30',
-    `sync-minutes = ${guardadoSync.doc.getElementById('sync-minutes').value}`)
+    valorSeg(guardadoSync.doc, 'sync-minutes') === '30',
+    `sync-minutes = ${valorSeg(guardadoSync.doc, 'sync-minutes')}`)
 
   const porDefecto = await montar('config.html', {})
   await espera()
   // 7 y no 1: una mencion del viernes tiene que seguir a la vista el lunes.
   ok('sin nada guardado la ventana queda en 7 dias',
-    porDefecto.doc.getElementById('inbox-days').value === '7',
-    `inbox-days = ${porDefecto.doc.getElementById('inbox-days').value}`)
+    valorSeg(porDefecto.doc, 'inbox-days') === '7',
+    `inbox-days = ${valorSeg(porDefecto.doc, 'inbox-days')}`)
   ok('sin nada guardado transcribe en local',
-    porDefecto.doc.getElementById('transcribe').value === 'local')
+    valorSeg(porDefecto.doc, 'transcribe') === 'local')
   ok('sin nada guardado el idioma se detecta',
-    porDefecto.doc.getElementById('lang').value === 'auto')
+    valorSeg(porDefecto.doc, 'lang') === 'auto')
   ok('sin nada guardado el dueno queda vacio',
     porDefecto.doc.getElementById('owner').value === '')
   // 5 y no 1: un minuto convertiria el sync en el problema que vino a arreglar.
   ok('sin nada guardado revisa WhatsApp cada 5 minutos',
-    porDefecto.doc.getElementById('sync-minutes').value === '5',
-    `sync-minutes = ${porDefecto.doc.getElementById('sync-minutes').value}`)
+    valorSeg(porDefecto.doc, 'sync-minutes') === '5',
+    `sync-minutes = ${valorSeg(porDefecto.doc, 'sync-minutes')}`)
 
   // La terminal puede fijar un valor que el select no ofrece (`config inbox_days 45`).
   // Si el select lo ignora queda en blanco y el panel miente sobre lo que rige: peor
@@ -560,8 +1028,8 @@ console.log('\nconfig.html')
   const aMano = await montar('config.html', { inboxDays: '45' })
   await espera()
   ok('un valor puesto por terminal se ve en vez de dejar el select en blanco',
-    aMano.doc.getElementById('inbox-days').value === '45',
-    `inbox-days = ${JSON.stringify(aMano.doc.getElementById('inbox-days').value)}`)
+    valorSeg(aMano.doc, 'inbox-days') === '45',
+    `inbox-days = ${JSON.stringify(valorSeg(aMano.doc, 'inbox-days'))}`)
 }
 
 // ───────────────────────── activity.html ─────────────────────────
@@ -852,7 +1320,7 @@ console.log('\nel codigo del CLI, dicho en el idioma del panel')
   // nuestro calendario de entregas. Quien lo lee nunca conocio ninguna de las dos, y
   // "llega con la proxima entrega" es informacion nuestra, no suya.
   ok('y el detalle, cuando es una frase, tambien se dice en espanol',
-    alertaEs.includes('Escanee el codigo de aca arriba') &&
+    alertaEs.includes('Escanee el codigo de la pestana Estado') &&
     !/sidecar/i.test(alertaEs), alertaEs)
   ok('el aviso no le cuenta al usuario nuestro historial ni nuestro calendario',
     !/vias viejas|proxima entrega|sidecar/i.test(alertaEs), alertaEs)
@@ -1131,13 +1599,13 @@ console.log('\nel contrato CLI -> panel')
     panel.doc.getElementById('scope-wrap').textContent.includes(entrada.chatName),
     panel.doc.getElementById('scope-wrap').textContent.slice(0, 200))
   ok('el panel recarga los ajustes que escribio el CLI',
-    panel.doc.getElementById('inbox-days').value === '30' &&
-    panel.doc.getElementById('transcribe').value === 'off' &&
-    panel.doc.getElementById('lang').value === 'pt' &&
+    valorSeg(panel.doc, 'inbox-days') === '30' &&
+    valorSeg(panel.doc, 'transcribe') === 'off' &&
+    valorSeg(panel.doc, 'lang') === 'pt' &&
     panel.doc.getElementById('owner').value === 'Persona De Ejemplo',
-    `${panel.doc.getElementById('inbox-days').value} / ` +
-    `${panel.doc.getElementById('transcribe').value} / ` +
-    `${panel.doc.getElementById('lang').value}`)
+    `${valorSeg(panel.doc, 'inbox-days')} / ` +
+    `${valorSeg(panel.doc, 'transcribe')} / ` +
+    `${valorSeg(panel.doc, 'lang')}`)
   ok('el panel pinta la regla de ruteo que escribio el CLI',
     panel.doc.getElementById('routes-wrap').textContent.includes('ACM'))
   ok('la salud que escribio el CLI llega a la pantalla',
@@ -1210,15 +1678,15 @@ console.log('\nconfig.html — un guardado que falla no dice guardado')
     if (d.action === 'storage.set' && d.params.key === 'inboxDays') return { ok: false }
     return undefined
   })
-  doc.getElementById('inbox-days').value = '30'
-  doc.getElementById('save-days').click()
+  elegirSeg(doc, 'inbox-days', '30')
+  doc.getElementById('save-reading').click()
   await espera()
   await espera()
-  const dijo = doc.getElementById('said-days').textContent
+  const dijo = doc.getElementById('said-reading').textContent
   ok('un ajuste que no se pudo guardar no dice guardado',
     !dijo.includes('\u2713'), `dijo ${JSON.stringify(dijo)}`)
   ok('el error queda marcado en rojo',
-    doc.getElementById('said-days').className.includes('bad'))
+    doc.getElementById('said-reading').className.includes('bad'))
   ok('y no queda nada escrito en el storage', storage.inboxDays === undefined,
     `inboxDays = ${JSON.stringify(storage.inboxDays)}`)
 }
@@ -1234,15 +1702,14 @@ console.log('\nconfig.html: el sondeo no pisa lo que el usuario acaba de hacer')
   demora = 400
   window.dispatchEvent(new window.Event('focus'))   // el sondeo pide sus claves
   await espera()                                     // ya salieron, con inboxDays = 7
-  doc.getElementById('inbox-days').value = '30'
-  doc.getElementById('inbox-days').dispatchEvent(new window.Event('change'))
+  elegirSeg(doc, 'inbox-days', '30')
   demora = 0
-  doc.getElementById('save-days').focus()            // lo que hace el clic en Chromium
-  doc.getElementById('save-days').click()
+  doc.getElementById('save-reading').focus()         // lo que hace el clic en Chromium
+  doc.getElementById('save-reading').click()
   await new Promise((r) => setTimeout(r, 700))       // aterriza la pintura del sondeo
   ok('un sondeo que leyo antes del guardado no repinta el valor viejo encima',
-    storage.inboxDays === '30' && doc.getElementById('inbox-days').value === '30',
-    `guardado = ${storage.inboxDays}, select = ${doc.getElementById('inbox-days').value}`)
+    storage.inboxDays === '30' && valorSeg(doc, 'inbox-days') === '30',
+    `guardado = ${storage.inboxDays}, grupo = ${valorSeg(doc, 'inbox-days')}`)
 }
 
 {
@@ -1250,15 +1717,13 @@ console.log('\nconfig.html: el sondeo no pisa lo que el usuario acaba de hacer')
   // proteger todavia, y el boton termina mandando el valor que el usuario ya no ve.
   const storage = { inboxDays: '7' }
   const { window, doc } = await montar('config.html', storage, 'es-419')
-  doc.getElementById('inbox-days').value = '30'
-  doc.getElementById('inbox-days').dispatchEvent(new window.Event('change'))
-  doc.getElementById('inbox-days').blur()            // mira otra cosa antes de guardar
+  elegirSeg(doc, 'inbox-days', '30')
+  doc.getElementById('agent').focus()                // mira otra cosa antes de guardar
   window.dispatchEvent(new window.Event('focus'))
   await espera(); await espera()
-  ok('un select cambiado y sin guardar no lo repinta el sondeo',
-    doc.getElementById('inbox-days').value === '30',
-    doc.getElementById('inbox-days').value)
-  doc.getElementById('save-days').click()
+  ok('un grupo cambiado y sin guardar no lo repinta el sondeo',
+    valorSeg(doc, 'inbox-days') === '30', valorSeg(doc, 'inbox-days'))
+  doc.getElementById('save-reading').click()
   await espera(); await espera()
   ok('y la accion manda el valor que el usuario eligio, no el que habia guardado',
     storage.inboxDays === '30', String(storage.inboxDays))
@@ -2032,7 +2497,8 @@ console.log('\nconfig.html — T9: el selector y las autorizaciones son de la li
   }
   const { doc } = await montar('config.html', storage, 'es-419')
   await espera()
-  const opciones = [...doc.getElementById('chat-pick').options].map((o) => o.value)
+  listaChats(doc)
+  const opciones = opcionesCombo(doc, 'chat-list').map((o) => o.dataset.value)
   ok('el selector no ofrece las conversaciones del numero anterior',
     !opciones.includes('100@g.us'), JSON.stringify(opciones))
   const tabla = doc.getElementById('scope-wrap').textContent
@@ -2044,15 +2510,15 @@ console.log('\nconfig.html — T9: el selector y las autorizaciones son de la li
   storage.chatsAccount = NUEVA
   doc.defaultView.dispatchEvent(new doc.defaultView.Event('focus'))
   await espera()
-  const nuevas = [...doc.getElementById('chat-pick').options].map((o) => o.value)
+  listaChats(doc)
+  const nuevas = opcionesCombo(doc, 'chat-list').map((o) => o.dataset.value)
   ok('control: la lista del numero vinculado si se ofrece', nuevas.includes('200@g.us'),
     JSON.stringify(nuevas))
 
   // Lo que se autoriza ahora queda etiquetado con el numero vinculado.
-  doc.getElementById('chat-pick').value = '200@g.us'
-  doc.getElementById('chat-pick').dispatchEvent(new doc.defaultView.Event('change'))
+  elegirChat(doc, '200@g.us')
   await espera()
-  doc.getElementById('mode').value = 'observar'
+  elegirSeg(doc, 'mode', 'observar')
   doc.getElementById('save-scope').click()
   await espera()
   const entrada = (storage.scope || {})['200@g.us']
@@ -2076,24 +2542,22 @@ console.log('\nconfig.html — T10: el chat propio se nombra como en WhatsApp y 
   }
   const { doc } = await montar('config.html', storage, 'es-419')
   await espera()
-  const opciones = [...doc.getElementById('chat-pick').options]
-  const textos = opciones.map((o) => o.textContent)
+  const textos = listaChats(doc)
   ok('el chat propio va primero, con el nombre de la linea y "(tú)"',
-    /Nueva \(tú\)/.test(textos[1] || ''), JSON.stringify(textos))
+    /Nueva \(tú\)/.test(textos[0] || ''), JSON.stringify(textos))
   ok('ninguna opcion muestra un jid pelado', !textos.some((t) => /@lid|@s\.whatsapp\.net/.test(t)),
     JSON.stringify(textos))
-  doc.getElementById('chat-pick').value = '573000000012@s.whatsapp.net'
-  doc.getElementById('chat-pick').dispatchEvent(new doc.defaultView.Event('change'))
+  elegirChat(doc, '573000000012@s.whatsapp.net')
   await espera()
   const identidad = doc.getElementById('chat-id').textContent
-  const nombre = doc.getElementById('chat').value
+  const nombre = doc.getElementById('chat').value + ' ' + doc.getElementById('chat-search').value
   ok('elegido, ni el renglon de identidad ni el nombre muestran el jid',
     !/@s\.whatsapp\.net|@lid/.test(identidad + ' ' + nombre), `${identidad} / ${nombre}`)
 
   const en = await montar('config.html', { chats: storage.chats }, 'en-US')
   await espera()
-  const textosEn = [...en.doc.getElementById('chat-pick').options].map((o) => o.textContent)
-  ok('en ingles dice "(you)"', /Nueva \(you\)/.test(textosEn[1] || ''), JSON.stringify(textosEn))
+  const textosEn = listaChats(en.doc)
+  ok('en ingles dice "(you)"', /Nueva \(you\)/.test(textosEn[0] || ''), JSON.stringify(textosEn))
 }
 
 console.log('\nconfig.html — T10: una migracion que no borro nada no dice que borro')
@@ -2227,9 +2691,8 @@ console.log('\nconfig.html — buscar una conversacion como la gente la escribe 
   }, 'es-419')
   await espera()
   const buscar = (texto) => {
-    doc.getElementById('chat-search').value = texto
-    doc.getElementById('chat-search').dispatchEvent(new doc.defaultView.Event('input'))
-    return [...doc.getElementById('chat-pick').options].map((o) => o.textContent)
+    escribir(doc, 'chat-search', texto)
+    return opcionesCombo(doc, 'chat-list').map((o) => o.textContent)
   }
 
   // Tildes: el dueno escribe "mendez" sin tilde y el grupo se llama "Méndez".
@@ -2271,27 +2734,28 @@ console.log('\nconfig.html — las tres que importan no se pierden entre las 296
     }
   }, 'es-419')
   await espera()
-  const sel = doc.getElementById('chat-pick')
-  const grupos = [...sel.querySelectorAll('optgroup')]
+  listaChats(doc)
+  const grupos = [...doc.querySelectorAll('#chat-list [role="group"]')]
+  const opcionesDe = (g) => [...g.querySelectorAll('[role="option"]')]
+  const rotulo = (g) => g.getAttribute('aria-label')
   ok('la lista separa lo autorizado de lo que no', grupos.length === 2,
-    JSON.stringify(grupos.map((g) => g.label)))
+    JSON.stringify(grupos.map(rotulo)))
   ok('y lo autorizado va primero: son las que el dueno vuelve a tocar',
-    grupos.length === 2 && grupos[0].children.length === 2 &&
-    [...grupos[0].children].every((o) => /Comite|Méndez/.test(o.textContent)),
-    JSON.stringify(grupos.map((g) => [...g.children].map((o) => o.textContent))))
+    grupos.length === 2 && opcionesDe(grupos[0]).length === 2 &&
+    opcionesDe(grupos[0]).every((o) => /Comite|Méndez/.test(o.textContent)),
+    JSON.stringify(grupos.map((g) => opcionesDe(g).map((o) => o.textContent))))
   ok('cada una dice con que permiso quedo, no solo que esta autorizada',
     grupos.length === 2 &&
-    [...grupos[0].children].some((o) => /Automatico/.test(o.textContent)) &&
-    [...grupos[0].children].some((o) => /Solo leer/.test(o.textContent)),
-    JSON.stringify(grupos.length ? [...grupos[0].children].map((o) => o.textContent) : []))
+    opcionesDe(grupos[0]).some((o) => /Automatico/.test(o.textContent)) &&
+    opcionesDe(grupos[0]).some((o) => /Solo leer/.test(o.textContent)),
+    JSON.stringify(grupos.length ? opcionesDe(grupos[0]).map((o) => o.textContent) : []))
   ok('las etiquetas de los dos grupos estan en espanol, no en ingles',
-    grupos.length === 2 && !/authori/i.test(grupos.map((g) => g.label).join(' ')),
-    JSON.stringify(grupos.map((g) => g.label)))
+    grupos.length === 2 && !/authori/i.test(grupos.map(rotulo).join(' ')),
+    JSON.stringify(grupos.map(rotulo)))
 
   // §11-A1: el nombre visible NO es identidad. Antes de autorizar hay que poder ver
   // cual conversacion es, y la unica respuesta es la llave.
-  sel.value = '573000000001@s.whatsapp.net'
-  sel.dispatchEvent(new doc.defaultView.Event('change'))
+  elegirChat(doc, '573000000001@s.whatsapp.net')
   await espera()
   const identidad = doc.getElementById('chat-id')
   ok('al elegir una, el panel muestra su identificador y no solo el nombre',
@@ -2344,8 +2808,8 @@ console.log('\nconfig.html — quitar una autorizacion pasa por el worker y no m
   // El veredicto se sondea cada 2 s.
   await new Promise((r) => setTimeout(r, 3000))
   ok('cuando el worker confirma, el panel lo dice',
-    /✓/.test(doc.getElementById('said-scope').textContent),
-    doc.getElementById('said-scope').textContent)
+    /✓/.test(doc.getElementById('said-scope-rm').textContent),
+    doc.getElementById('said-scope-rm').textContent)
   ok('y la fila desaparece de la tabla',
     !doc.getElementById('scope-wrap').querySelector('[data-rm]'),
     doc.getElementById('scope-wrap').textContent)
@@ -2374,7 +2838,7 @@ console.log('\nconfig.html — un quitado que el worker NO pudo hacer no se anun
   await espera()
   doc.getElementById('scope-wrap').querySelector('[data-rm]').click()
   await new Promise((r) => setTimeout(r, 3000))
-  const dicho = doc.getElementById('said-scope')
+  const dicho = doc.getElementById('said-scope-rm')
   ok('no dice que la quito', !/✓/.test(dicho.textContent), dicho.textContent)
   ok('lo dice como un fallo', /bad/.test(dicho.className), dicho.className)
   ok('y en espanol, no con el texto crudo del CLI',
@@ -2452,9 +2916,9 @@ console.log('\nconfig.html — T12: el catalogo de proyectos se busca, se acepta
     !doc.getElementById('proposals-wrap').textContent.includes('Gama Demo'),
     doc.getElementById('projects-wrap').textContent)
   ok('y se puede elegir en el selector de proyecto de las conversaciones',
-    [...doc.getElementById('workspace').options].some((o) => o.value === 'gama-demo'))
+    proyectosOfrecidos(doc, 'workspace').includes('gama-demo'))
   ok('y en el de las reglas',
-    [...doc.getElementById('r-workspace').options].some((o) => o.value === 'gama-demo'))
+    proyectosOfrecidos(doc, 'r-workspace').includes('gama-demo'))
   ok('el panel lo dice con una marca de exito',
     /✓/.test(doc.getElementById('said-projects').textContent),
     doc.getElementById('said-projects').textContent)
@@ -2478,7 +2942,7 @@ console.log('\nconfig.html — T12: el catalogo de proyectos se busca, se acepta
   await new Promise((r) => setTimeout(r, 3000))
   ok('cuando el worker confirma, el proyecto sale de la lista y del selector',
     !doc.getElementById('projects-wrap').textContent.includes('Alfa Demo') &&
-    ![...doc.getElementById('workspace').options].some((o) => o.value === 'alfa-demo'),
+    !proyectosOfrecidos(doc, 'workspace').includes('alfa-demo'),
     doc.getElementById('projects-wrap').textContent)
 }
 
@@ -2497,7 +2961,7 @@ console.log('\nconfig.html — T12: un fallo al buscar se dice, y sin proyectos 
   ok('sin proyectos aceptados la lista lo dice',
     /todavia no/i.test(doc.getElementById('projects-wrap').textContent),
     doc.getElementById('projects-wrap').textContent)
-  const ofrecidos = [...doc.getElementById('workspace').options].map((o) => o.value)
+  const ofrecidos = proyectosOfrecidos(doc, 'workspace')
   ok('y el selector de proyecto solo ofrece Sin proyecto',
     JSON.stringify(ofrecidos) === JSON.stringify(['']), JSON.stringify(ofrecidos))
   ok('con una pista que manda a agregar uno',
@@ -2505,7 +2969,7 @@ console.log('\nconfig.html — T12: un fallo al buscar se dice, y sin proyectos 
     /todavia no|agregue/i.test(doc.getElementById('workspace-hint').textContent),
     doc.getElementById('workspace-hint').textContent)
   ok('las reglas no se pueden crear sin un proyecto al que mandar',
-    doc.getElementById('r-workspace').disabled)
+    doc.getElementById('r-workspace-search').disabled)
 
   const sinBuscar = await montar('config.html', {}, 'es-419')
   await espera()
@@ -2551,7 +3015,7 @@ console.log('\nconfig.html — T13: lo de antes se conserva y un proyecto quitad
 
   fila('Legado').querySelector('[data-edit]').click()
   await espera()
-  doc.getElementById('workspace').value = 'alfa-demo'
+  elegirProyecto(doc, 'workspace', 'alfa-demo')
   doc.getElementById('save-scope').click()
   await espera()
   ok('editar una conversacion de antes le pone proyecto y NO borra lo viejo',
@@ -2564,8 +3028,11 @@ console.log('\nconfig.html — T13: lo de antes se conserva y un proyecto quitad
   f2.querySelector('[data-edit]').click()
   await espera()
   ok('editar una con un proyecto que ya no esta lo deja elegido',
-    doc.getElementById('workspace').value === 'viejo-demo',
+    doc.getElementById('workspace').value === 'viejo-demo' &&
+    /viejo-demo/.test(doc.getElementById('workspace-search').value),
     `workspace = ${doc.getElementById('workspace').value}`)
+  ok('y la lista lo ofrece, marcado, para poder dejarlo',
+    proyectosOfrecidos(doc, 'workspace').includes('viejo-demo'))
   doc.getElementById('save-scope').click()
   await espera()
   ok('y guardar sin tocarlo no lo borra: el proyecto puede volver',
@@ -2573,7 +3040,7 @@ console.log('\nconfig.html — T13: lo de antes se conserva y un proyecto quitad
     JSON.stringify(storage.scope['20@g.us']))
   doc.querySelector('[data-edit]').click()
   await espera()
-  doc.getElementById('workspace').value = ''
+  elegirProyecto(doc, 'workspace', '')
   doc.getElementById('save-scope').click()
   await espera()
   ok('Sin proyecto lo quita de verdad, con null y no con un texto vacio',
@@ -2586,8 +3053,7 @@ console.log('\nconfig.html — T13: los modos se llaman distinto en cada idioma'
   const nombres = async (idioma) => {
     const { doc } = await montar('config.html', {}, idioma)
     await espera()
-    return Object.fromEntries([...doc.getElementById('mode').options]
-      .map((o) => [o.value, o.textContent]))
+    return textosSeg(doc, 'mode')
   }
   const en = await nombres('en-US')
   ok('en ingles', /^Off/.test(en.off) && /^Read only/.test(en.observar) &&
@@ -3623,7 +4089,8 @@ console.log('\nconfig.html — Jev: el aviso esta en los tres idiomas y dice a d
     ok(`${lang}: dice que viene apagado`, apagado.test(aviso), aviso)
     ok(`${lang}: dice que las credenciales se enmascaran`, masc.test(aviso), aviso)
     ok(`${lang}: el interruptor viene apagado`,
-      doc.getElementById('jev-enabled').value === 'off', doc.getElementById('jev-enabled').value)
+      doc.getElementById('jev-enabled').getAttribute('aria-checked') === 'false',
+      doc.getElementById('jev-enabled').getAttribute('aria-checked'))
     ok(`${lang}: la llave se pide en un campo que no la muestra`,
       doc.getElementById('jev-key').type === 'password', doc.getElementById('jev-key').type)
     const sinTraducir = Array.prototype.filter.call(
@@ -3716,7 +4183,8 @@ console.log('\nconfig.html — Jev: guardar la llave va por el worker y no vuelv
     /guardada/i.test(doc.getElementById('jev-key').placeholder),
     doc.getElementById('jev-key').placeholder)
   ok('encender Jev no pasa solo por guardar la llave',
-    doc.getElementById('jev-enabled').value === 'off', doc.getElementById('jev-enabled').value)
+    doc.getElementById('jev-enabled').getAttribute('aria-checked') === 'false',
+    doc.getElementById('jev-enabled').getAttribute('aria-checked'))
   void window
 }
 
@@ -3739,8 +4207,7 @@ console.log('\nconfig.html — Jev: encender, quitar la llave y lo que dice cada
     /apagado.*llave guardada/i.test(doc.getElementById('jev-status').textContent),
     doc.getElementById('jev-status').textContent)
 
-  doc.getElementById('jev-enabled').value = 'on'
-  doc.getElementById('jev-save-enabled').click()
+  doc.getElementById('jev-enabled').click()
   await new Promise((r) => setTimeout(r, 3500))
   ok('encender manda activar con enabled verdadero',
     storage.jevRequestVisto && storage.jevRequestVisto.action === 'activar' &&

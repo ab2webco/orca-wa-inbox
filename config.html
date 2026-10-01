@@ -37,8 +37,8 @@
           --fb-ring: #737373;
         }
       }
-      /* Los widgets nativos (scrollbar, lista del select) siguen al tema real del
-         host, no a la preferencia del sistema. */
+      /* Los widgets nativos (scrollbar, autocompletado del navegador) siguen al tema
+         real del host, no a la preferencia del sistema. */
       html.light { color-scheme: light; }
       html.dark { color-scheme: dark; }
       * { box-sizing: border-box; }
@@ -73,31 +73,22 @@
       h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
            color: var(--muted-foreground, var(--fb-muted-foreground));
            margin: 0 0 10px; font-weight: 600; }
-      label { display: block; font-size: 12px; margin: 10px 0 4px;
+      label, .label { display: block; font-size: 12px; margin: 12px 0 4px;
               color: var(--muted-foreground, var(--fb-muted-foreground)); }
-      label:first-of-type { margin-top: 0; }
+      section > h2 + label, section > h2 + .label { margin-top: 0; }
+      [hidden] { display: none !important; }
       /* Campos como el primitivo Input de Orca: fondo transparente, filete de
          --input y radio md (components/ui/input.tsx). */
-      input, select, textarea {
+      input, textarea {
         font: inherit; width: 100%; padding: 7px 9px; border-radius: var(--radius-md);
         border: 1px solid var(--input, var(--fb-input)); background: transparent;
         color: var(--foreground, var(--fb-foreground));
       }
       textarea { resize: vertical; }
-      /* En Linux la lista desplegada del select la dibuja el mismo motor de render y
-         hereda el color del control: con el fondo transparente salia blanca, y en
-         tema oscuro con el texto en --foreground eso es blanco sobre blanco. En macOS
-         es un menu del sistema y este CSS no la toca. Se fijan las dos propiedades en
-         el control Y en las opciones porque el hueco entre ellas lo pinta el fondo
-         del control, no el de la opcion. El cerrado no cambia: el token es el mismo
-         fondo que ya tiene detras. */
-      select { background-color: var(--background, var(--fb-background));
-               color: var(--foreground, var(--fb-foreground)); }
-      select option { background-color: var(--background, var(--fb-background));
-                      color: var(--foreground, var(--fb-foreground)); }
       input:disabled { opacity: 1; color: var(--foreground, var(--fb-foreground));
                        border-color: transparent; background: var(--muted, var(--fb-muted)); }
-      input:focus-visible, select:focus-visible, textarea:focus-visible {
+      input[readonly] { background: var(--muted, var(--fb-muted)); }
+      input:focus-visible, textarea:focus-visible {
         outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px;
         border-color: transparent;
       }
@@ -129,10 +120,112 @@
                     text-decoration: underline; text-underline-offset: 2px; }
       button.link:hover { background: none; color: var(--primary, var(--fb-primary));
                           text-decoration-thickness: 2px; }
-      /* El buscador y la lista son un solo control: pegados, sin costura visible. */
-      #chat-search { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
-      #chat-pick { border-top-left-radius: 0; border-top-right-radius: 0; border-top: 0; }
+      /* Pestanas (T17). Mismo dibujo que las del tablero (activity.html): subrayado en
+         --primary, que es el token de enfasis. Se envuelven en vez de desplazarse: una
+         pestana que queda fuera de la vista a 320 px no existe para quien no la ve. */
+      .tabs { display: flex; flex-wrap: wrap; gap: 0 2px; padding: 0 8px; margin: 0;
+              border-bottom: 1px solid var(--border, var(--fb-border)); }
+      .tab { font: inherit; font-size: 13px; padding: 7px 8px; cursor: pointer;
+             border: 0; border-bottom: 2px solid transparent; border-radius: 0;
+             margin-bottom: -1px; background: none; white-space: nowrap;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .tab:hover { background: none; color: var(--foreground, var(--fb-foreground)); }
+      .tab:active { transform: none; }
+      .tab[aria-selected="true"] { color: var(--foreground, var(--fb-foreground));
+             font-weight: 600; border-bottom-color: var(--primary, var(--fb-primary)); }
+      .tab:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: -2px; }
+      [role="tabpanel"] > section:first-child { border-top: 0; }
+      .hint.lead { margin: 0 0 10px; }
+
+      /* Grupos de botones en vez de selects: la lista de un select nativo no se abre en el
+         panel de Orca (iframe con sandbox). Un renglon de opciones que se envuelve, con
+         la elegida en --primary — la unica superficie de enfasis de la allowlist. */
+      .seg { display: flex; flex-wrap: wrap; gap: 4px; }
+      .seg button { padding: 5px 10px; font-weight: 400; background: transparent;
+                    color: var(--foreground, var(--fb-foreground)); }
+      .seg button:hover { background: var(--accent, var(--fb-accent)); }
+      .seg button[aria-pressed="true"], .seg button[aria-pressed="true"]:hover {
+        background: var(--primary, var(--fb-primary));
+        color: var(--primary-foreground, var(--fb-primary-foreground));
+        border-color: transparent; font-weight: 500; }
+
+      /* El autocompletar: UN campo, y la lista se dibuja debajo, en la pagina. Fondo
+         opaco (--background) y filete: flota sobre lo que sigue y tiene que taparlo. */
+      .combo { position: relative; min-width: 0; }
+      .combo-row { display: flex; gap: 8px; align-items: flex-start; }
+      .combo-row .combo { flex: 1; }
+      .combo-row > button { white-space: nowrap; }
+      .combo-list { position: absolute; z-index: 5; left: 0; right: 0; top: calc(100% + 4px);
+                    max-height: 264px; overflow-y: auto; padding: 4px;
+                    border: 1px solid var(--border, var(--fb-border));
+                    border-radius: var(--radius-md);
+                    background: var(--background, var(--fb-background));
+                    box-shadow: 0 6px 20px rgb(0 0 0 / 0.18); }
+      .combo-group { padding: 6px 8px 2px; font-size: 11px; font-weight: 600;
+                     text-transform: uppercase; letter-spacing: 0.05em;
+                     color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .combo-opt { display: flex; gap: 8px; align-items: baseline; padding: 6px 8px;
+                   border-radius: calc(var(--radius-md) * 0.75); cursor: pointer;
+                   color: var(--foreground, var(--fb-foreground)); }
+      .combo-opt[aria-selected="true"] { background: var(--accent, var(--fb-accent));
+                   color: var(--accent-foreground, var(--fb-accent-foreground)); }
+      .combo-kind { flex: none; font-size: 10px; text-transform: uppercase;
+                    letter-spacing: 0.04em; padding: 0 5px; border-radius: 4px;
+                    border: 1px solid var(--border, var(--fb-border));
+                    color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .combo-name { min-width: 0; overflow-wrap: anywhere; }
+      .combo-sub { flex: none; margin-left: auto; font-size: 11px; white-space: nowrap;
+                   color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .combo-empty { padding: 8px; font-size: 12px;
+                     color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      @media (max-width: 420px) {
+        .combo-row { flex-wrap: wrap; }
+        .combo-row .combo { flex-basis: 100%; }
+        .combo-opt { flex-wrap: wrap; }
+        .combo-sub { margin-left: 0; white-space: normal; }
+      }
       #chat-count { margin-top: 4px; }
+      #said-chat-fetch:not(:empty) { display: block; margin-top: 6px; }
+
+      /* El interruptor de Jev: un boton con role=switch, no un select. */
+      .switch-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+                    margin: 4px 0 2px; font-size: 13px; }
+      .switch { position: relative; width: 38px; height: 22px; padding: 0; flex: none;
+                border-radius: 9999px; border: 1px solid var(--input, var(--fb-input));
+                background: var(--muted, var(--fb-muted)); }
+      .switch:hover { background: var(--muted, var(--fb-muted)); }
+      .switch:active { transform: none; }
+      .switch .knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+                      border-radius: 50%; transition: left 120ms ease;
+                      background: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .switch[aria-checked="true"], .switch[aria-checked="true"]:hover {
+        background: var(--primary, var(--fb-primary)); border-color: transparent; }
+      .switch[aria-checked="true"] .knob { left: 18px;
+        background: var(--primary-foreground, var(--fb-primary-foreground)); }
+
+      /* Lo que falta (Estado) y las reglas fijas (Su aprobacion). */
+      .checklist, .rules { list-style: none; margin: 0; padding: 0; }
+      .checklist li { display: flex; gap: 8px; align-items: baseline; padding: 7px 0;
+                      border-top: 1px solid var(--border, var(--fb-border)); font-size: 12px; }
+      .checklist li:first-child { border-top: 0; }
+      .checklist .mark { flex: none; width: 14px; text-align: center; }
+      .checklist [data-ok="true"] { color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .checklist .what { flex: 1; min-width: 0; }
+      .checklist .tag { font-size: 11px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .checklist button.link { margin-left: 0; white-space: nowrap; }
+      .checklist .done { padding: 7px 0 0; font-size: 12px; font-weight: 500; }
+      .rules li { position: relative; padding: 5px 0 5px 16px; font-size: 12px; line-height: 1.5; }
+      .rules li::before { content: '\25CF'; position: absolute; left: 2px; top: 5px;
+                          font-size: 8px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+
+      /* Una regla de antes (Plane) se marca como tal: ya no se usa, pero borrarla
+         callado seria perder lo que el dueno configuro. */
+      .legacy { display: inline-block; margin-left: 6px; padding: 0 6px; font-size: 10px;
+                border-radius: 9999px; border: 1px dashed currentColor;
+                background: var(--muted, var(--fb-muted));
+                color: var(--foreground, var(--fb-foreground)); }
+      tr.vieja td:first-child, tr.vieja td:nth-child(2) {
+        color: var(--muted-foreground, var(--fb-muted-foreground)); }
       /* Un jid no tiene espacios donde partir, y a 320 px se sale del panel. Se parte
          donde haga falta: un identificador cortado se sigue leyendo, un panel con
          scroll horizontal no. */
@@ -140,7 +233,6 @@
       .row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
       /* Proyecto y permiso: dos campos, no tres. */
       .row.dos { grid-template-columns: 1fr 1fr; margin-top: 10px; }
-      .row2 { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
       .actions { display: flex; align-items: center; gap: 10px; margin-top: 14px;
                  min-height: 30px; flex-wrap: wrap; }
       /* Una fila de acciones sin nada visible deja 44 px de aire entre dos campos
@@ -179,6 +271,7 @@
            donde parte una etiqueta a la mitad. */
         td.acts { text-align: left; margin-top: 6px; white-space: normal; }
         td.acts button { margin-bottom: 4px; }
+        td.acts button.link:first-child { margin-left: 0; }
         .row, .row.dos { grid-template-columns: 1fr; }
       }
       /* Los cuatro permisos. La allowlist no tiene verde ni ambar y no se fabrican:
@@ -312,266 +405,326 @@
            pagina, asi que repetirlo lo dice dos veces. La bajada si aporta: explica que
            hace el panel, no como se llama. -->
       <p class="sub" data-t="sub"></p>
+      <!-- El aviso general va FUERA de las pestanas: un plugin que no corre se tiene que
+           ver desde cualquiera de ellas, no solo desde Estado. -->
       <div class="alert" id="alert" hidden></div>
-      <div id="opcionales" hidden></div>
 
-      <!-- El transporte unico (T3/T4, docs/ENCARGO-TRANSPORTE-UNICO.md). Primera
-           seccion a proposito: sin sesion nada mas de este panel importa todavia. -->
-      <section>
-        <h2 data-t="pairingLegend"></h2>
-        <p class="pairing-msg" id="pairing-msg"></p>
-        <p class="hint" id="pairing-detail" hidden></p>
-        <!-- Lo que el panel de verdad leyo del worker y del sidecar, en frase y no en
-             nombre de campo. Solo aparece cuando la espera ya deja de ser normal
-             (`pairingDiagnostico`): antes de eso no hay nada raro que contar. -->
-        <p class="hint" id="pairing-diag" hidden></p>
-        <div id="qr-wrap" hidden>
-          <canvas id="qr-canvas"></canvas>
-        </div>
-        <!-- "Me toca refrescar?" tenia que tener una respuesta en la pantalla: sin
-             esto, la unica forma de forzar una lectura nueva era salir del panel y
-             volver. Va por el carril de USUARIO (`call(..., true)`), no por el del
-             sondeo, para no gastarle su cupo. -->
-        <div class="actions">
-          <button id="pairing-refresh" data-t="pairingRefresh"></button>
-          <span class="said" id="said-pairing-refresh"></span>
-        </div>
-        <!-- Desvincular es irreversible desde aca y no hay modal donde preguntar
-             (`surface` es un enum cerrado y `window.open` esta anulado, §6), asi que
-             la confirmacion vive en el boton mismo: el aviso aparece, el boton cambia
-             de texto, y hay por donde volver atras. -->
-        <p class="hint pairing-warn" id="pairing-warn" hidden></p>
-        <div class="actions" id="pairing-actions" hidden>
-          <button id="pairing-retry" hidden data-t="pairingRetry"></button>
-          <button id="pairing-unlink" hidden data-t="pairingUnlink"></button>
-          <button id="pairing-cancel" hidden data-t="pairingUnlinkCancel"></button>
-          <span class="said" id="said-pairing"></span>
-        </div>
-      </section>
+      <!-- Seis pestanas (T17). Antes era una sola columna larga con diez botones de
+           guardar; el dueno no encontraba nada. Cada control vive en UNA pestana y cada
+           tarjeta tiene UN guardar. -->
+      <div class="tabs" role="tablist" data-t-label="tabsLabel">
+        <button class="tab" id="tab-estado" role="tab" aria-controls="view-estado"
+                data-t="tabEstado"></button>
+        <button class="tab" id="tab-chats" role="tab" aria-controls="view-chats"
+                data-t="tabChats"></button>
+        <button class="tab" id="tab-proyectos" role="tab" aria-controls="view-proyectos"
+                data-t="tabProyectos"></button>
+        <button class="tab" id="tab-aprobacion" role="tab" aria-controls="view-aprobacion"
+                data-t="tabAprobacion"></button>
+        <button class="tab" id="tab-agente" role="tab" aria-controls="view-agente"
+                data-t="tabAgente"></button>
+        <button class="tab" id="tab-avanzado" role="tab" aria-controls="view-avanzado"
+                data-t="tabAvanzado"></button>
+      </div>
 
-      <section>
-        <h2 data-t="agentLegend"></h2>
-        <label for="agent" data-t="agentLabel"></label>
-        <div class="row2">
-          <input id="agent" data-t-ph="agentPh" />
-          <button id="edit-agent" hidden data-t-title="editName">&#9998;</button>
-        </div>
-        <p class="hint" data-t="agentHelp"></p>
-        <div class="actions">
-          <button class="primary" id="save-agent" data-t="saveName"></button>
-          <button id="cancel-agent" hidden data-t="cancel"></button>
-          <span class="said" id="said-agent"></span>
-        </div>
-
-        <label for="owner" data-t="ownerLabel"></label>
-        <input id="owner" data-t-ph="ownerPh" />
-        <p class="hint" data-t="ownerHelp"></p>
-        <div class="actions">
-          <button id="save-owner" data-t="saveOwner"></button>
-          <span class="said" id="said-owner"></span>
-        </div>
-
-        <label for="tone" data-t="toneLabel"></label>
-        <textarea id="tone" rows="3" data-t-ph="tonePh"></textarea>
-        <p class="hint" data-t="toneHelp"></p>
-        <div class="actions">
-          <button id="save-tone" data-t="saveTone"></button>
-          <span class="said" id="said-tone"></span>
-        </div>
-
-        <label for="transcribe" data-t="transcribeLabel"></label>
-        <select id="transcribe">
-          <option value="local" data-t="trLocal"></option>
-          <option value="off" data-t="trOff"></option>
-        </select>
-        <p class="hint" data-t="transcribeHelp"></p>
-        <div class="actions">
-          <button id="save-transcribe" data-t="saveTranscribe"></button>
-          <span class="said" id="said-transcribe"></span>
-        </div>
-
-        <label for="lang" data-t="langLabel"></label>
-        <select id="lang">
-          <option value="auto" data-t="langAuto"></option>
-          <option value="es" data-t="langEs"></option>
-          <option value="en" data-t="langEn"></option>
-          <option value="pt" data-t="langPt"></option>
-        </select>
-        <p class="hint" data-t="langHelp"></p>
-        <div class="actions">
-          <button id="save-lang" data-t="saveLang"></button>
-          <span class="said" id="said-lang"></span>
-        </div>
-
-        <label for="quality" data-t="qualityLabel"></label>
-        <select id="quality">
-          <option value="optima" data-t="qualityOptima"></option>
-          <option value="minima" data-t="qualityMinima"></option>
-        </select>
-        <p class="hint" data-t="qualityHelp"></p>
-        <div class="actions">
-          <button id="save-quality" data-t="saveQuality"></button>
-          <span class="said" id="said-quality"></span>
-        </div>
-      </section>
-
-      <!-- Los proyectos: las carpetas donde se hace el trabajo de cada conversacion. Orca
-           PROPONE los que conoce (`orca worktree ps`) y solo lo que el dueno agrega aca le
-           llega al agente que atiende los casos. Nada se agrega solo. -->
-      <section>
-        <h2 data-t="projectsLegend"></h2>
-        <p class="hint" style="margin:0 0 10px" data-t="projectsHelp"></p>
-        <div id="projects-wrap"></div>
-        <div class="actions">
-          <button id="projects-refresh" data-t="projectsRefresh"></button>
-          <span class="said" id="said-projects"></span>
-        </div>
-        <p class="hint" id="projects-status"></p>
-        <div id="proposals-wrap"></div>
-      </section>
-
-      <section>
-        <h2 data-t="mapLegend"></h2>
-        <label for="inbox-days" data-t="daysLabel"></label>
-        <select id="inbox-days">
-          <option value="1" data-t="days1"></option>
-          <option value="3" data-t="days3"></option>
-          <option value="7" data-t="days7"></option>
-          <option value="14" data-t="days14"></option>
-          <option value="30" data-t="days30"></option>
-          <option value="90" data-t="days90"></option>
-          <option value="0" data-t="days0"></option>
-        </select>
-        <p class="hint" data-t="daysHelp"></p>
-        <div class="actions">
-          <button id="save-days" data-t="saveDays"></button>
-          <span class="said" id="said-days"></span>
-        </div>
-
-        <label for="sync-minutes" data-t="syncLabel"></label>
-        <select id="sync-minutes">
-          <option value="2" data-t="sync2"></option>
-          <option value="5" data-t="sync5"></option>
-          <option value="10" data-t="sync10"></option>
-          <option value="15" data-t="sync15"></option>
-          <option value="30" data-t="sync30"></option>
-          <option value="60" data-t="sync60"></option>
-        </select>
-        <p class="hint" data-t="syncHelp"></p>
-        <div class="actions">
-          <button id="save-sync" data-t="saveSync"></button>
-          <span class="said" id="said-sync"></span>
-        </div>
-
-        <label for="chat-search" data-t="chatLabel"></label>
-        <input id="chat-search" type="search" autocomplete="off" data-t-ph="chatSearchPh" />
-        <select id="chat-pick" size="1"></select>
-        <!-- Que conversacion quedo elegida, por su LLAVE. El nombre visible no es
-             identidad: cambia y se repite (§11-A1), y con 296 filas el fallo caro de
-             esta pantalla no es no encontrar una, es autorizar la de al lado. -->
-        <p class="hint" id="chat-id"></p>
-        <p class="hint" id="chat-count"></p>
-        <!-- Traer la libreta a mano. Las personas llegan por `resyncAppState`, que
-             Baileys corre UNA sola vez y solo si la ventana de la sincronizacion
-             inicial se completo; si no, la lista sale con los grupos y ninguna persona,
-             y no hay forma de volver a pedirla. Medido: 296 grupos y cero directos. -->
-        <div class="actions">
-          <button id="chat-fetch" data-t="chatFetch"></button>
-          <span class="said" id="said-chat-fetch"></span>
-        </div>
-        <!-- Lo que paso de verdad con la busqueda. Antes el unico aviso era la opcion
-             "Buscando…" del select, que no caduca nunca: si el sync fallaba, el panel
-             seguia diciendo que buscaba y el usuario no tenia nada que apretar. -->
-        <div id="sync-state" hidden>
-          <p class="hint" id="sync-msg"></p>
-          <p class="hint" id="sync-detail" hidden></p>
+      <!-- ───────── Estado ───────── -->
+      <div id="view-estado" role="tabpanel" aria-labelledby="tab-estado">
+        <!-- El transporte unico (T3/T4, docs/ENCARGO-TRANSPORTE-UNICO.md). Primera
+             seccion a proposito: sin sesion nada mas de este panel importa todavia. -->
+        <section>
+          <h2 data-t="pairingLegend"></h2>
+          <p class="pairing-msg" id="pairing-msg"></p>
+          <p class="hint" id="pairing-detail" hidden></p>
+          <!-- Lo que el panel de verdad leyo del worker y del sidecar, en frase y no en
+               nombre de campo. Solo aparece cuando la espera ya deja de ser normal
+               (`pairingDiagnostico`): antes de eso no hay nada raro que contar. -->
+          <p class="hint" id="pairing-diag" hidden></p>
+          <div id="qr-wrap" hidden>
+            <canvas id="qr-canvas"></canvas>
+          </div>
+          <!-- "Me toca refrescar?" tenia que tener una respuesta en la pantalla. Va por
+               el carril de USUARIO (`call(..., true)`), no por el del sondeo. -->
           <div class="actions">
-            <button id="sync-retry" data-t="syncRetry"></button>
-            <span class="said" id="said-sync"></span>
+            <button id="pairing-refresh" data-t="pairingRefresh"></button>
+            <span class="said" id="said-pairing-refresh"></span>
           </div>
-        </div>
-        <p class="hint" id="chat-help" data-t="chatHelp"></p>
-        <input id="chat" data-t-ph="chatPh" hidden />
-        <div class="row dos">
-          <div>
-            <label for="workspace" data-t="workspaceLabel"></label>
-            <select id="workspace"></select>
+          <!-- Desvincular es irreversible desde aca y no hay modal donde preguntar
+               (`surface` es un enum cerrado y `window.open` esta anulado, §6), asi que
+               la confirmacion vive en el boton mismo. -->
+          <p class="hint pairing-warn" id="pairing-warn" hidden></p>
+          <div class="actions" id="pairing-actions" hidden>
+            <button id="pairing-retry" hidden data-t="pairingRetry"></button>
+            <button id="pairing-unlink" hidden data-t="pairingUnlink"></button>
+            <button id="pairing-cancel" hidden data-t="pairingUnlinkCancel"></button>
+            <span class="said" id="said-pairing"></span>
           </div>
-          <div>
-            <label for="mode" data-t="permLabel"></label>
-            <select id="mode">
-              <option value="off" data-t="off"></option>
-              <option value="observar" data-t="observe"></option>
-              <option value="borrador" data-t="draft"></option>
-              <option value="responder" data-t="reply"></option>
-            </select>
-          </div>
-        </div>
-        <p class="hint" id="workspace-hint"></p>
-        <label for="chat-tone" data-t="chatToneLabel"></label>
-        <input id="chat-tone" data-t-ph="chatTonePh" />
-        <label for="chat-instructions" data-t="chatInstrLabel"></label>
-        <textarea id="chat-instructions" rows="3" data-t-ph="chatInstrPh"></textarea>
-        <p class="hint" data-t="chatInstrHelp"></p>
-        <div class="actions">
-          <button class="primary" id="save-scope" data-t="save"></button>
-          <button id="cancel-edit" hidden data-t="cancelEdit"></button>
-          <span class="said" id="said-scope"></span>
-        </div>
-        <div id="scope-wrap"></div>
-      </section>
+        </section>
 
-      <section>
-        <h2 data-t="routesLegend"></h2>
-        <p class="hint" style="margin:0 0 10px" data-t="routesHelp"></p>
-        <div class="row dos">
-          <div>
-            <label for="r-match" data-t="routeMatch"></label>
-            <input id="r-match" data-t-ph="routeMatchPh" />
-          </div>
-          <div>
-            <label for="r-workspace" data-t="routeTarget"></label>
-            <select id="r-workspace"></select>
-          </div>
-        </div>
-        <p class="hint" id="route-hint"></p>
-        <div class="actions">
-          <button id="save-route" data-t="addRoute"></button>
-          <span class="said" id="said-route"></span>
-        </div>
-        <div id="routes-wrap"></div>
-      </section>
+        <!-- Lo que falta para que el agente trabaje, con un boton a la pestana donde se
+             arregla cada cosa. Se arma con lo que el panel YA lee: no gasta cupo. -->
+        <section>
+          <h2 data-t="checkLegend"></h2>
+          <ul class="checklist" id="checklist"></ul>
+        </section>
 
-      <!-- Jev (opcional): lo unico del plugin que manda texto de clientes fuera del
-           equipo. Apagado de fabrica, y el aviso va ARRIBA de los controles y siempre a la
-           vista: quien lo enciende ya leyo a donde va lo que se envia. La llave no se
-           muestra nunca: el panel solo sabe "guardada" o "sin llave". -->
-      <section>
-        <h2 data-t="jevLegend"></h2>
-        <p class="jev-aviso" id="jev-aviso" data-t="jevDisclosure"></p>
-        <p class="pairing-msg" id="jev-status"></p>
-        <label for="jev-key" data-t="jevKeyLabel"></label>
-        <input id="jev-key" type="password" autocomplete="off" autocapitalize="off"
-               spellcheck="false" data-t-ph="jevKeyPh" />
-        <p class="hint" data-t="jevKeyHelp"></p>
-        <div class="actions">
-          <button id="jev-save-key" data-t="jevSaveKey"></button>
-          <button id="jev-remove-key" hidden data-t="jevRemoveKey"></button>
-          <span class="said" id="said-jev-key"></span>
-        </div>
-        <p class="hint jev-nota" id="jev-mirror-note" hidden></p>
-        <label for="jev-enabled" data-t="jevEnabledLabel"></label>
-        <select id="jev-enabled">
-          <option value="off" data-t="jevOff"></option>
-          <option value="on" data-t="jevOn"></option>
-        </select>
-        <div class="actions">
-          <button class="primary" id="jev-save-enabled" data-t="jevSaveEnabled"></button>
-          <span class="said" id="said-jev-enabled"></span>
-        </div>
-      </section>
+        <div id="opcionales" hidden></div>
+      </div>
+
+      <!-- ───────── Conversaciones ───────── -->
+      <div id="view-chats" role="tabpanel" aria-labelledby="tab-chats" hidden>
+        <section>
+          <h2 data-t="scopeLegend"></h2>
+          <p class="hint lead" data-t="scopeHelp"></p>
+          <div id="scope-wrap"></div>
+          <span class="said" id="said-scope-rm"></span>
+        </section>
+
+        <!-- Agregar o cambiar una conversacion: un buscador que filtra mientras se
+             escribe, el proyecto con el mismo buscador, y el modo con botones. -->
+        <section class="card" id="scope-form">
+          <h2 id="scope-form-title" data-t="formLegend"></h2>
+          <label for="chat-search" data-t="chatLabel"></label>
+          <div class="combo-row">
+            <div class="combo">
+              <input id="chat-search" type="text" autocomplete="off" spellcheck="false"
+                     role="combobox" aria-autocomplete="list" aria-expanded="false"
+                     aria-controls="chat-list" data-t-ph="chatSearchPh" />
+              <div class="combo-list" id="chat-list" role="listbox" hidden
+                   data-t-label="chatLabel"></div>
+            </div>
+            <!-- Traer la libreta a mano. Las personas llegan por `resyncAppState`, que
+                 Baileys corre UNA sola vez; si la sincronizacion inicial no se completo,
+                 la lista sale sin ninguna persona y no hay otra forma de pedirla. -->
+            <button id="chat-fetch" data-t="chatFetch"></button>
+          </div>
+          <span class="said" id="said-chat-fetch"></span>
+          <!-- Que conversacion quedo elegida, por su LLAVE. El nombre visible no es
+               identidad: cambia y se repite (§11-A1). -->
+          <p class="hint" id="chat-id"></p>
+          <p class="hint" id="chat-count"></p>
+          <!-- Lo que paso de verdad con la busqueda. Un "Buscando…" que no caduca nunca
+               deja al usuario sin nada que apretar si el sync fallo. -->
+          <div id="sync-state" hidden>
+            <p class="hint" id="sync-msg"></p>
+            <p class="hint" id="sync-detail" hidden></p>
+            <div class="actions">
+              <button id="sync-retry" data-t="syncRetry"></button>
+              <span class="said" id="said-sync"></span>
+            </div>
+          </div>
+          <input id="chat" type="hidden" />
+
+          <label for="workspace-search" data-t="workspaceLabel"></label>
+          <div class="combo">
+            <input id="workspace-search" type="text" autocomplete="off" spellcheck="false"
+                   role="combobox" aria-autocomplete="list" aria-expanded="false"
+                   aria-controls="workspace-list" data-t-ph="workspaceSearchPh" />
+            <div class="combo-list" id="workspace-list" role="listbox" hidden
+                 data-t-label="workspaceLabel"></div>
+          </div>
+          <input id="workspace" type="hidden" />
+          <p class="hint" id="workspace-hint"></p>
+
+          <span class="label" id="mode-label" data-t="permLabel"></span>
+          <div class="seg" id="mode" role="group" aria-labelledby="mode-label">
+            <button type="button" data-value="off" data-t="modeOff"></button>
+            <button type="button" data-value="observar" data-t="modeObserve"></button>
+            <button type="button" data-value="borrador" data-t="modeDraft"></button>
+            <button type="button" data-value="responder" data-t="modeReply"></button>
+          </div>
+          <p class="hint" id="mode-desc"></p>
+
+          <label for="chat-tone" data-t="chatToneLabel"></label>
+          <input id="chat-tone" data-t-ph="chatTonePh" />
+          <label for="chat-instructions" data-t="chatInstrLabel"></label>
+          <textarea id="chat-instructions" rows="3" data-t-ph="chatInstrPh"></textarea>
+          <p class="hint" data-t="chatInstrHelp"></p>
+          <div class="actions">
+            <button class="primary" id="save-scope" data-t="save"></button>
+            <button id="cancel-edit" hidden data-t="cancelEdit"></button>
+            <span class="said" id="said-scope"></span>
+          </div>
+        </section>
+
+        <!-- Reglas por texto: un grupo de operaciones lleva trabajo de varios clientes, y
+             la palabra del mensaje decide el proyecto. Las viejas de Plane se marcan. -->
+        <section class="card">
+          <h2 data-t="routesLegend"></h2>
+          <p class="hint lead" data-t="routesHelp"></p>
+          <div class="row dos">
+            <div>
+              <label for="r-match" data-t="routeMatch"></label>
+              <input id="r-match" data-t-ph="routeMatchPh" />
+            </div>
+            <div>
+              <label for="r-workspace-search" data-t="routeTarget"></label>
+              <div class="combo">
+                <input id="r-workspace-search" type="text" autocomplete="off"
+                       spellcheck="false" role="combobox" aria-autocomplete="list"
+                       aria-expanded="false" aria-controls="r-workspace-list"
+                       data-t-ph="workspaceSearchPh" />
+                <div class="combo-list" id="r-workspace-list" role="listbox" hidden
+                     data-t-label="routeTarget"></div>
+              </div>
+              <input id="r-workspace" type="hidden" />
+            </div>
+          </div>
+          <p class="hint" id="route-hint"></p>
+          <div class="actions">
+            <button class="primary" id="save-route" data-t="addRoute"></button>
+            <span class="said" id="said-route"></span>
+          </div>
+          <p class="hint" id="routes-legacy-help" hidden data-t="routeLegacyHelp"></p>
+          <div id="routes-wrap"></div>
+        </section>
+      </div>
+
+      <!-- ───────── Proyectos ───────── -->
+      <!-- Las carpetas donde se hace el trabajo de cada conversacion. Orca PROPONE los que
+           conoce (`orca worktree ps`) y solo lo que el dueno agrega aca le llega al agente
+           que atiende los casos. Nada se agrega solo. -->
+      <div id="view-proyectos" role="tabpanel" aria-labelledby="tab-proyectos" hidden>
+        <section>
+          <h2 data-t="projectsLegend"></h2>
+          <p class="hint lead" data-t="projectsHelp"></p>
+          <div id="projects-wrap"></div>
+          <div class="actions">
+            <button id="projects-refresh" data-t="projectsRefresh"></button>
+            <span class="said" id="said-projects"></span>
+          </div>
+          <p class="hint" id="projects-status"></p>
+          <div id="proposals-wrap"></div>
+        </section>
+      </div>
+
+      <!-- ───────── Su aprobacion ───────── -->
+      <div id="view-aprobacion" role="tabpanel" aria-labelledby="tab-aprobacion" hidden>
+        <!-- Reglas FIJAS: el panel no ofrece apagarlas porque el codigo no deja
+             (`cmd_caso_aprobar`, bin/wa-scope). Decirlas es lo unico que hay que hacer. -->
+        <section>
+          <h2 data-t="approvalLegend"></h2>
+          <div id="exceptions">
+            <p class="hint lead" data-t="approvalIntro"></p>
+            <ul class="rules">
+              <li data-t="apMoney"></li>
+              <li data-t="apCredential"></li>
+              <li data-t="apCommitment"></li>
+              <li data-t="apJev"></li>
+              <li data-t="apDraft"></li>
+            </ul>
+            <p class="hint" data-t="approvalNote"></p>
+          </div>
+        </section>
+
+        <!-- Jev (opcional): lo unico del plugin que manda texto de clientes fuera del
+             equipo. Apagado de fabrica, y el aviso va ARRIBA de los controles y siempre a
+             la vista. La llave no se muestra nunca: el panel solo sabe "guardada" o "sin
+             llave". -->
+        <section class="card">
+          <h2 data-t="jevLegend"></h2>
+          <p class="jev-aviso" id="jev-aviso" data-t="jevDisclosure"></p>
+          <p class="pairing-msg" id="jev-status"></p>
+          <div class="switch-row">
+            <button type="button" class="switch" id="jev-enabled" role="switch"
+                    aria-checked="false" aria-labelledby="jev-enabled-label"><span
+                    class="knob"></span></button>
+            <span id="jev-enabled-label" data-t="jevEnabledLabel"></span>
+            <span class="said" id="said-jev-enabled"></span>
+          </div>
+          <p class="hint" id="jev-switch-text"></p>
+          <label for="jev-key" data-t="jevKeyLabel"></label>
+          <input id="jev-key" type="password" autocomplete="off" autocapitalize="off"
+                 spellcheck="false" data-t-ph="jevKeyPh" />
+          <p class="hint" data-t="jevKeyHelp"></p>
+          <div class="actions">
+            <button id="jev-save-key" data-t="jevSaveKey"></button>
+            <button id="jev-remove-key" hidden data-t="jevRemoveKey"></button>
+            <span class="said" id="said-jev-key"></span>
+          </div>
+          <p class="hint jev-nota" id="jev-mirror-note" hidden></p>
+        </section>
+      </div>
+
+      <!-- ───────── Agente ───────── -->
+      <div id="view-agente" role="tabpanel" aria-labelledby="tab-agente" hidden>
+        <section class="card">
+          <h2 data-t="agentLegend"></h2>
+          <label for="agent" data-t="agentLabel"></label>
+          <input id="agent" data-t-ph="agentPh" />
+          <p class="hint" data-t="agentHelp"></p>
+          <label for="owner" data-t="ownerLabel"></label>
+          <input id="owner" data-t-ph="ownerPh" />
+          <p class="hint" data-t="ownerHelp"></p>
+          <label for="tone" data-t="toneLabel"></label>
+          <textarea id="tone" rows="3" data-t-ph="tonePh"></textarea>
+          <p class="hint" data-t="toneHelp"></p>
+          <div class="actions">
+            <button class="primary" id="save-agent" data-t="saveCard"></button>
+            <span class="said" id="said-agent"></span>
+          </div>
+        </section>
+      </div>
+
+      <!-- ───────── Avanzado ───────── -->
+      <div id="view-avanzado" role="tabpanel" aria-labelledby="tab-avanzado" hidden>
+        <section class="card">
+          <h2 data-t="voiceLegend"></h2>
+          <span class="label" id="transcribe-label" data-t="transcribeLabel"></span>
+          <div class="seg" id="transcribe" role="group" aria-labelledby="transcribe-label">
+            <button type="button" data-value="local" data-t="trLocal"></button>
+            <button type="button" data-value="off" data-t="trOff"></button>
+          </div>
+          <p class="hint" data-t="transcribeHelp"></p>
+          <span class="label" id="lang-label" data-t="langLabel"></span>
+          <div class="seg" id="lang" role="group" aria-labelledby="lang-label">
+            <button type="button" data-value="auto" data-t="langAuto"></button>
+            <button type="button" data-value="es" data-t="langEs"></button>
+            <button type="button" data-value="en" data-t="langEn"></button>
+            <button type="button" data-value="pt" data-t="langPt"></button>
+          </div>
+          <p class="hint" data-t="langHelp"></p>
+          <span class="label" id="quality-label" data-t="qualityLabel"></span>
+          <div class="seg" id="quality" role="group" aria-labelledby="quality-label">
+            <button type="button" data-value="optima" data-t="qualityOptima"></button>
+            <button type="button" data-value="minima" data-t="qualityMinima"></button>
+          </div>
+          <p class="hint" data-t="qualityHelp"></p>
+          <div class="actions">
+            <button class="primary" id="save-voice" data-t="saveCard"></button>
+            <span class="said" id="said-voice"></span>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2 data-t="readingLegend"></h2>
+          <span class="label" id="inbox-days-label" data-t="daysLabel"></span>
+          <div class="seg" id="inbox-days" role="group" aria-labelledby="inbox-days-label">
+            <button type="button" data-value="1" data-t="days1"></button>
+            <button type="button" data-value="3" data-t="days3"></button>
+            <button type="button" data-value="7" data-t="days7"></button>
+            <button type="button" data-value="14" data-t="days14"></button>
+            <button type="button" data-value="30" data-t="days30"></button>
+            <button type="button" data-value="90" data-t="days90"></button>
+            <button type="button" data-value="0" data-t="days0"></button>
+          </div>
+          <p class="hint" data-t="daysHelp"></p>
+          <span class="label" id="sync-minutes-label" data-t="syncLabel"></span>
+          <div class="seg" id="sync-minutes" role="group" aria-labelledby="sync-minutes-label">
+            <button type="button" data-value="2" data-t="sync2"></button>
+            <button type="button" data-value="5" data-t="sync5"></button>
+            <button type="button" data-value="10" data-t="sync10"></button>
+            <button type="button" data-value="15" data-t="sync15"></button>
+            <button type="button" data-value="30" data-t="sync30"></button>
+            <button type="button" data-value="60" data-t="sync60"></button>
+          </div>
+          <p class="hint" data-t="syncHelp"></p>
+          <div class="actions">
+            <button class="primary" id="save-reading" data-t="saveCard"></button>
+            <span class="said" id="said-reading"></span>
+          </div>
+        </section>
+      </div>
     </div>
-
     <script>
       'use strict'
 
@@ -658,35 +811,49 @@
           pairingHowRestart: 'Reiniciando la conexion.',
           pairingHowUnknown: 'Motivo desconocido.',
           optionalTitle: "Opcional \u2014 nada de esto bloquea al agente:",
+          // --- pestanas y lo que falta (T17) ---
+          tabsLabel: 'Secciones de los ajustes',
+          tabEstado: 'Estado', tabChats: 'Conversaciones', tabProyectos: 'Proyectos',
+          tabAprobacion: 'Su aprobacion', tabAgente: 'Agente', tabAvanzado: 'Avanzado',
+          checkLegend: 'Lo que falta',
+          chkLinea: 'Vincular la linea de WhatsApp',
+          chkAgente: 'Darle un nombre a su agente',
+          chkChat: 'Autorizar al menos una conversacion',
+          chkProyectos: 'Agregar al menos un proyecto',
+          chkJev: 'Encender Jev con su llave',
+          chkRecommended: 'recomendado: sin proyectos el agente solo responde',
+          chkOptional: 'opcional',
+          chkAllDone: 'Lo necesario esta listo: su agente ya puede trabajar.',
+          saveCard: 'Guardar',
+          saveFailed: 'No se pudo guardar. Intente de nuevo.',
           toneLabel: "Como escribe",
           tonePh: "ej. Espanol neutro, usted, formal. Sin modismos regionales.",
           toneHelp: "Vale para todas las conversaciones. Cada una puede tener el suyo y pisa este.",
-          saveTone: "Guardar tono",
-          toneSaved: "Tono guardado",
-          transcribeLabel: "Notas de voz",
-          trLocal: "local — el audio no sale de este equipo",
-          trOff: "off — no las transcribe",
-          transcribeHelp: "Con off el agente no sabe que dice un audio y se lo deja " +
-            "marcado para escucharlo. api sube el audio a un tercero.",
-          saveTranscribe: "Guardar notas de voz",
-          transcribeSaved: "Notas de voz guardadas",
+          voiceLegend: 'Notas de voz',
+          readingLegend: 'Lectura de WhatsApp',
+          transcribeLabel: "Transcribir las notas de voz",
+          trLocal: "En este equipo",
+          trOff: "No transcribir",
+          transcribeHelp: "En este equipo el audio no sale de su maquina. Sin transcribir, " +
+            "el agente no sabe que dice un audio y se lo deja marcado para escucharlo.",
           langLabel: "Idioma de los audios",
-          langAuto: "detectar automaticamente",
-          langEs: "espanol", langEn: "ingles", langPt: "portugues",
+          langAuto: "Detectar",
+          langEs: "Espanol", langEn: "Ingles", langPt: "Portugues",
           langHelp: "Fijarlo acierta mas que detectarlo cuando los audios mezclan dos idiomas.",
-          saveLang: "Guardar idioma", langSaved: "Idioma guardado",
           qualityLabel: "Calidad de la transcripcion",
-          qualityOptima: "optima — recomendado",
-          qualityMinima: "minima — equipos sin computo",
-          qualityHelp: "Minima solo si el equipo no puede con el modelo grande: en " +
-            "español deforma nombres y pedidos, no decida leyendo su texto.",
-          saveQuality: "Guardar calidad",
-          qualitySaved: "Calidad guardada",
-          chatHelp: "Se elige de la lista. Hay grupos con el mismo nombre, asi que se guarda por identificador.",
-          chatSearchPh: "Escriba para filtrar",
+          qualityOptima: "Optima",
+          qualityMinima: "Minima",
+          qualityHelp: "Recomendado: optima. Minima solo si el equipo no puede con el modelo " +
+            "grande: deforma nombres y pedidos, no decida leyendo su texto.",
+          chatSearchPh: "Escriba un nombre o un numero",
           chatFetch: "Traer conversaciones",
           chatFetchDone: "Pidiendo la lista. Puede tardar unos segundos.",
           chatCount: "{n} de {total}", chatNoMatch: "Ninguna coincide con eso",
+          kindGroup: 'Grupo', kindDirect: 'Directo',
+          scopeLegend: 'Conversaciones autorizadas',
+          scopeHelp: 'Su agente solo ve las que estan aca. Cada una tiene su proyecto y su modo.',
+          formLegend: 'Agregar una conversacion',
+          formEditing: 'Cambiar una conversacion',
           chatGroupOn: "Ya autorizadas", chatGroupOff: "Sin autorizar",
           chatOwnTag: "(t\u00fa)", chatOwnNoName: "Su propio chat",
           chatAlready: "ya autorizada: {m}",
@@ -700,7 +867,6 @@
           chatInstrHelp: "El tono es COMO escribe; esto es QUE hace. Manda sobre el " +
             "comportamiento por defecto, menos en las reglas de seguridad: nunca una " +
             "credencial, nunca enviar sin permiso de responder.",
-          pickOne: "Elija una conversacion",
           noChats: "Buscando sus conversaciones…",
           // Ningun estado nombra un comando: si el usuario tiene que abrir una
           // terminal para que el panel sirva, el panel no sirve.
@@ -714,34 +880,30 @@
           syncNoRecord: "Las herramientas corrieron pero no dejaron nada escrito.",
           syncFailed: "No pude leer WhatsApp.",
           syncNoChats: "No encontre ninguna conversacion. Enlace su linea de " +
-            "WhatsApp aca arriba y vuelva a intentar.",
+            "WhatsApp en la pestana Estado y vuelva a intentar.",
           syncStalled: "Llevo un rato buscando y no llego nada.",
           sub: 'Que conversaciones ve su agente, y hasta donde puede actuar en cada una.',
           agentLegend: 'Su agente', agentLabel: 'Como se llama',
           agentPh: 'ej. Watson, Viernes, Asistente',
           agentHelp: 'Firma cada mensaje que escriba, para que nadie dude de si habla usted o el.',
-          saveName: 'Guardar nombre', saveChange: 'Guardar cambio', cancel: 'Cancelar',
-          editName: 'Cambiar el nombre',
           ownerLabel: 'Para quien trabaja',
           ownerPh: 'ej. Ana Restrepo',
           ownerHelp: 'Su nombre. El agente lo usa para saber de quien es el trabajo que ' +
             'atiende y a quien le reporta.',
-          saveOwner: 'Guardar', ownerSaved: 'Guardado',
           daysLabel: 'Hasta cuando atras mira',
-          days1: '1 dia — solo lo de hoy', days3: '3 dias',
-          days7: '7 dias — recomendado', days14: '14 dias', days30: '30 dias',
-          days90: '90 dias', days0: 'todo el historial',
-          daysHelp: 'Con un dia, una mencion del viernes que nadie contesto ya no ' +
-            'aparece el lunes. Se leen como maximo los 500 mensajes mas nuevos de la ventana.',
-          saveDays: 'Guardar ventana', daysSaved: 'Ventana guardada',
+          days1: '1 dia', days3: '3 dias',
+          days7: '7 dias', days14: '14 dias', days30: '30 dias',
+          days90: '90 dias', days0: 'Todo',
+          daysHelp: 'Recomendado: 7 dias. Con un dia, una mencion del viernes que nadie ' +
+            'contesto ya no aparece el lunes. Se leen como maximo los 500 mensajes mas ' +
+            'nuevos de la ventana.',
           syncLabel: 'Cada cuanto revisa WhatsApp',
-          sync2: 'cada 2 minutos', sync5: 'cada 5 minutos — recomendado',
-          sync10: 'cada 10 minutos', sync15: 'cada 15 minutos',
-          sync30: 'cada 30 minutos', sync60: 'cada hora',
-          syncHelp: 'Es la unica vez que se abre la base de WhatsApp, asi que tambien ' +
-            'es lo que mas puede tardar un mensaje nuevo en aparecer aca y en llegarle ' +
-            'al agente. Mas seguido cuesta mas lectura; mas espaciado, mas espera.',
-          saveSync: 'Guardar frecuencia', syncSaved: 'Frecuencia guardada',
+          sync2: '2 min', sync5: '5 min',
+          sync10: '10 min', sync15: '15 min',
+          sync30: '30 min', sync60: '1 hora',
+          syncHelp: 'Recomendado: 5 min. Es lo que mas puede tardar un mensaje nuevo en ' +
+            'aparecer aca y en llegarle al agente. Mas seguido cuesta mas lectura; mas ' +
+            'espaciado, mas espera.',
           workerGone: 'El plugin no responde',
           workerGoneHow: 'Lo mas probable es que falte aprobarlo: abra Ajustes > Plugins y ' +
             'pulse "Review & enable" en WhatsApp Inbox. Hasta que lo apruebe, Orca no lo ' +
@@ -752,15 +914,16 @@
           workerStale: 'El plugin dejo de responder',
           workerStaleHow: 'Espere unos segundos y, si no vuelve, reinicie Orca. Dejo de ' +
             'dar senales hace {s} s.',
-          mapLegend: 'Conversaciones', chatLabel: 'Conversacion',
-          chatPh: 'nombre exacto del grupo o su JID',
-          permLabel: 'Permiso',
+          chatLabel: 'Conversacion',
+          permLabel: 'Modo',
           workspaceLabel: 'Proyecto',
           workspaceNone: 'Sin proyecto',
           workspaceMissing: '{id} (ya no esta en la lista)',
+          workspaceSearchPh: 'Escriba para buscar un proyecto',
+          workspaceNoMatch: 'Ningun proyecto coincide con eso',
           workspaceHint: 'Es donde se hace el trabajo de esta conversacion. Sin proyecto, el ' +
             'agente solo responde y lo que pida trabajo se lo deja a usted.',
-          workspaceHintNoProjects: 'Todavia no hay proyectos: agregue uno en la seccion Proyectos.',
+          workspaceHintNoProjects: 'Todavia no hay proyectos: agregue uno en la pestana Proyectos.',
           // --- Proyectos: el catalogo que reparte el agente que atiende los casos ---
           projectsLegend: 'Proyectos',
           projectsHelp: 'Son las carpetas donde se hace el trabajo de cada conversacion. Orca ' +
@@ -792,11 +955,24 @@
           projGone: 'Ese proyecto ya no esta en su lista.',
           projFull: 'La lista llego a su tope de proyectos. Quite alguno antes de agregar otro.',
           colProject: 'Proyecto',
-          routesNeedProject: 'Agregue un proyecto arriba para poder crear reglas.',
+          routesNeedProject: 'Agregue un proyecto en la pestana Proyectos para poder crear reglas.',
           save: 'Guardar conversacion', saveEdit: 'Guardar cambios', cancelEdit: 'Cancelar edicion',
           empty: 'Ninguna conversacion autorizada. Lo que no esta aca, su agente no lo ve.',
-          colChat: 'Conversacion', colPerm: 'Permiso',
+          colChat: 'Conversacion', colPerm: 'Modo',
           edit: 'Editar', remove: 'Quitar',
+          // --- Su aprobacion: las excepciones fijas (bin/wa-scope, cmd_caso_aprobar) ---
+          approvalLegend: 'Cuando le pregunta a usted',
+          approvalIntro: 'Su agente responde solo. Le pregunta antes de enviar unicamente en ' +
+            'estos casos, y estas reglas no se pueden apagar:',
+          apMoney: '<b>Dinero:</b> precios, cobros, pagos o descuentos.',
+          apCredential: '<b>Credenciales:</b> claves, accesos o codigos.',
+          apCommitment: '<b>Compromisos:</b> una respuesta que promete una fecha o una entrega.',
+          apJev: '<b>Jev:</b> si esta encendido y marca el mensaje, o no contesta, la ' +
+            'respuesta espera su aprobacion.',
+          apDraft: '<b>Le pregunto antes:</b> en las conversaciones con ese modo nada sale ' +
+            'sin su aprobacion.',
+          approvalNote: 'Jev solo puede detener una respuesta, nunca habilitarla. Lo que ' +
+            'espera su aprobacion aparece en el tablero, en "Su decision".',
           // --- Jev (opcional): lo unico que manda texto de clientes fuera del equipo ---
           jevLegend: 'Jev (opcional)',
           jevDisclosure: '<b>Apagado de fabrica.</b> Si lo enciende, el texto de los mensajes que llegan y de los borradores de respuesta se envia a <code>api.typesafe.ai</code> (Jev, de TypeSafe) para decidir que necesita su atencion y revisar las respuestas antes de que salgan. Las credenciales se enmascaran antes de enviar. Sin llave no se envia nada y todo funciona como hasta ahora.',
@@ -809,7 +985,6 @@
           jevEnabledLabel: 'Usar Jev',
           jevOff: 'Apagado: no se envia nada',
           jevOn: 'Encendido: envia a api.typesafe.ai',
-          jevSaveEnabled: 'Guardar',
           jevStOffNo: 'Apagado · sin llave',
           jevStOffYes: 'Apagado · llave guardada',
           jevStOnNo: 'Encendido, pero sin llave: no se envia nada',
@@ -823,18 +998,21 @@
           jevErrInvalid: 'La llave no es valida: debe ser una sola palabra, sin espacios, de hasta 512 caracteres.',
           jevErrVault: 'Orca no dejo guardar la llave. Revise que el plugin tenga permiso para guardar secretos y vuelva a intentarlo.',
           jevErrGeneric: 'No se pudo completar. Intente de nuevo.',
-          routesLegend: 'A que proyecto va',
+          routesLegend: 'Reglas por texto',
           routesHelp: 'Un grupo de operaciones lleva trabajo de varios clientes. Cuando el mensaje ' +
             'menciona a uno, el caso va a SU proyecto, no al de la conversacion.',
           routeMatch: 'Cuando el mensaje diga', routeMatchPh: 'ej. facturacion',
           routeTarget: 'Va al proyecto',
           addRoute: 'Agregar regla', noRoutes: 'Sin reglas. Todo va al proyecto de cada conversacion.',
           colWhen: 'Cuando diga', colGoes: 'Va a',
+          routeLegacy: 'regla vieja',
+          routeLegacyHelp: 'Las reglas viejas mandaban el caso a Plane y ya no se usan. Quitelas ' +
+            'o cambielas por una regla a un proyecto.',
           notReady: 'WhatsApp no esta conectado.',
           notReadyHow: 'Revise los requisitos aca abajo.',
           hNoTools: 'Las herramientas del plugin no contestaron',
           hNoTransport: 'Enlace su linea de WhatsApp',
-          hNoTransportHow: 'Escanee el codigo de aca arriba con el telefono de la ' +
+          hNoTransportHow: 'Escanee el codigo de la pestana Estado con el telefono de la ' +
             'linea que quiere usar. Hasta que lo haga, su agente no ve ninguna ' +
             'conversacion.',
           hNoTransportLinked: 'Su linea esta enlazada',
@@ -888,10 +1066,12 @@
           needsUpdateHow: 'Actualice Orca.',
           needName: 'Ponga un nombre.', needChat: 'Falta la conversacion.',
           needMatch: 'Falta el texto y el proyecto.',
-          savedOk: 'Guardado', removedOk: 'Quitado', named: 'Se llama',
-          off: 'Apagado — no la toca', observe: 'Solo leer — no escribe',
-          draft: 'Le pregunto antes — escribe y espera su aprobacion',
-          reply: 'Automatico — responde y envia solo'
+          savedOk: 'Guardado', removedOk: 'Quitado',
+          off: 'Apagado: su agente no lee esta conversacion.',
+          observe: 'Solo leer: lee y le avisa, pero no escribe nunca.',
+          draft: 'Le pregunto antes: escribe la respuesta y espera su aprobacion para enviarla.',
+          reply: 'Automatico: responde solo, menos en las excepciones de Su aprobacion, que le ' +
+            'pregunta a usted.'
         },
         en: {
           title: 'WhatsApp Inbox',
@@ -961,35 +1141,49 @@
           pairingHowRestart: 'Restarting the connection.',
           pairingHowUnknown: 'Unknown reason.',
           optionalTitle: "Optional \u2014 none of this blocks the agent:",
+          // --- tabs and what is missing (T17) ---
+          tabsLabel: 'Settings sections',
+          tabEstado: 'Status', tabChats: 'Conversations', tabProyectos: 'Projects',
+          tabAprobacion: 'Your approval', tabAgente: 'Agent', tabAvanzado: 'Advanced',
+          checkLegend: 'What is missing',
+          chkLinea: 'Link the WhatsApp line',
+          chkAgente: 'Give your agent a name',
+          chkChat: 'Allow at least one conversation',
+          chkProyectos: 'Add at least one project',
+          chkJev: 'Turn Jev on with your key',
+          chkRecommended: 'recommended: with no projects the agent only replies',
+          chkOptional: 'optional',
+          chkAllDone: 'Everything needed is ready: your agent can work.',
+          saveCard: 'Save',
+          saveFailed: 'It could not be saved. Try again.',
           toneLabel: "How it writes",
           tonePh: "e.g. Neutral Spanish, formal. No regional slang.",
           toneHelp: "Applies to every conversation. Each one can override it.",
-          saveTone: "Save tone",
-          toneSaved: "Tone saved",
-          transcribeLabel: "Voice notes",
-          trLocal: "local — the audio never leaves this machine",
-          trOff: "off — does not transcribe them",
-          transcribeHelp: "With off the agent cannot know what an audio says and flags it " +
-            "for you to listen to. api uploads the audio to a third party.",
-          saveTranscribe: "Save voice notes",
-          transcribeSaved: "Voice notes saved",
+          voiceLegend: 'Voice notes',
+          readingLegend: 'Reading WhatsApp',
+          transcribeLabel: "Transcribe voice notes",
+          trLocal: "On this machine",
+          trOff: "Do not transcribe",
+          transcribeHelp: "On this machine the audio never leaves your computer. Without " +
+            "transcription the agent cannot know what an audio says and flags it for you.",
           langLabel: "Language of the audios",
-          langAuto: "detect automatically",
+          langAuto: "Detect",
           langEs: "Spanish", langEn: "English", langPt: "Portuguese",
           langHelp: "Pinning it beats detection when the audios mix two languages.",
-          saveLang: "Save language", langSaved: "Language saved",
           qualityLabel: "Transcription quality",
-          qualityOptima: "optimal — recommended",
-          qualityMinima: "minimal — low-spec machines",
-          qualityHelp: "Minimal only if the machine cannot run the big model: it " +
-            "mangles names and requests in Spanish, so do not decide from its text.",
-          saveQuality: "Save quality",
-          qualitySaved: "Quality saved",
-          chatHelp: "Pick from the list. Some groups share a name, so it is stored by identifier.",
-          chatSearchPh: "Type to filter",
+          qualityOptima: "Optimal",
+          qualityMinima: "Minimal",
+          qualityHelp: "Recommended: optimal. Minimal only if the machine cannot run the big " +
+            "model: it mangles names and requests, so do not decide from its text.",
+          chatSearchPh: "Type a name or a number",
           chatFetch: "Fetch conversations",
           chatFetchDone: "Asking for the list. It can take a few seconds.",
           chatCount: "{n} of {total}", chatNoMatch: "Nothing matches that",
+          kindGroup: 'Group', kindDirect: 'Direct',
+          scopeLegend: 'Allowed conversations',
+          scopeHelp: 'Your agent only sees the ones listed here. Each has its project and its mode.',
+          formLegend: 'Add a conversation',
+          formEditing: 'Change a conversation',
           chatGroupOn: "Already authorised", chatGroupOff: "Not authorised",
           chatOwnTag: "(you)", chatOwnNoName: "Your own chat",
           chatAlready: "already authorised: {m}",
@@ -1003,7 +1197,6 @@
           chatInstrHelp: "The tone is HOW it writes; this is WHAT it does. It overrides the " +
             "default behaviour, except the safety rules: never a credential, never send " +
             "without reply permission.",
-          pickOne: "Pick a conversation",
           noChats: "Looking for your conversations…",
           noChatsFail: "No conversations",
           syncRetry: "Look again", syncAsked: "Looking again…",
@@ -1014,35 +1207,30 @@
           syncTimeout: "Reading WhatsApp took too long and was cut off.",
           syncNoRecord: "The tools ran but wrote nothing.",
           syncFailed: "I could not read WhatsApp.",
-          syncNoChats: "I found no conversations. Link your WhatsApp line above " +
-            "and try again.",
+          syncNoChats: "I found no conversations. Link your WhatsApp line in the " +
+            "Status tab and try again.",
           syncStalled: "I have been looking for a while and nothing arrived.",
           sub: 'Which conversations your agent sees, and how far it can act in each one.',
           agentLegend: 'Your agent', agentLabel: 'What it is called',
           agentPh: 'e.g. Watson, Friday, Assistant',
           agentHelp: 'Signs every message it writes, so nobody wonders if it was you or it.',
-          saveName: 'Save name', saveChange: 'Save change', cancel: 'Cancel',
-          editName: 'Change the name',
           ownerLabel: 'Who it works for',
           ownerPh: 'e.g. Ana Restrepo',
           ownerHelp: 'Your name. The agent uses it to know whose work it is handling and ' +
             'who it reports to.',
-          saveOwner: 'Save', ownerSaved: 'Saved',
           daysLabel: 'How far back it looks',
-          days1: '1 day — today only', days3: '3 days',
-          days7: '7 days — recommended', days14: '14 days', days30: '30 days',
-          days90: '90 days', days0: 'the whole history',
-          daysHelp: 'With one day, a Friday mention nobody answered is gone by Monday. ' +
-            'At most the 500 newest messages in the window are read.',
-          saveDays: 'Save window', daysSaved: 'Window saved',
+          days1: '1 day', days3: '3 days',
+          days7: '7 days', days14: '14 days', days30: '30 days',
+          days90: '90 days', days0: 'All',
+          daysHelp: 'Recommended: 7 days. With one day, a Friday mention nobody answered is ' +
+            'gone by Monday. At most the 500 newest messages in the window are read.',
           syncLabel: 'How often it checks WhatsApp',
-          sync2: 'every 2 minutes', sync5: 'every 5 minutes — recommended',
-          sync10: 'every 10 minutes', sync15: 'every 15 minutes',
-          sync30: 'every 30 minutes', sync60: 'every hour',
-          syncHelp: 'This is the only time WhatsApp\'s database is opened, so it is ' +
-            'also the longest a new message can take to show up here and to reach the ' +
-            'agent. More often costs more reading; less often costs more waiting.',
-          saveSync: 'Save frequency', syncSaved: 'Frequency saved',
+          sync2: '2 min', sync5: '5 min',
+          sync10: '10 min', sync15: '15 min',
+          sync30: '30 min', sync60: '1 hour',
+          syncHelp: 'Recommended: 5 min. It is the longest a new message can take to show ' +
+            'up here and to reach the agent. More often costs more reading; less often ' +
+            'costs more waiting.',
           workerGone: 'The plugin is not responding',
           workerGoneHow: 'Most likely it still needs approving: open Settings > Plugins ' +
             'and press "Review & enable" on WhatsApp Inbox. Until you do, Orca does not ' +
@@ -1053,15 +1241,16 @@
           workerStale: 'The plugin stopped responding',
           workerStaleHow: 'Wait a few seconds and, if it does not come back, restart ' +
             'Orca. It stopped signalling {s} s ago.',
-          mapLegend: 'Conversations', chatLabel: 'Conversation',
-          chatPh: 'exact group name or its JID',
-          permLabel: 'Permission',
+          chatLabel: 'Conversation',
+          permLabel: 'Mode',
           workspaceLabel: 'Project',
           workspaceNone: 'No project',
           workspaceMissing: '{id} (no longer in the list)',
+          workspaceSearchPh: 'Type to find a project',
+          workspaceNoMatch: 'No project matches that',
           workspaceHint: 'This is where the work of this conversation happens. With no ' +
             'project, the agent only replies and leaves anything that needs work to you.',
-          workspaceHintNoProjects: 'There are no projects yet: add one in the Projects section.',
+          workspaceHintNoProjects: 'There are no projects yet: add one in the Projects tab.',
           // --- Projects: the catalog the case agent hands work out from ---
           projectsLegend: 'Projects',
           projectsHelp: 'These are the folders where the work of each conversation happens. ' +
@@ -1092,11 +1281,24 @@
           projGone: 'That project is no longer in your list.',
           projFull: 'The list reached its project limit. Remove one before adding another.',
           colProject: 'Project',
-          routesNeedProject: 'Add a project above to be able to create rules.',
+          routesNeedProject: 'Add a project in the Projects tab to be able to create rules.',
           save: 'Save conversation', saveEdit: 'Save changes', cancelEdit: 'Cancel editing',
           empty: 'No conversation allowed yet. What is not here, your agent cannot see.',
-          colChat: 'Conversation', colPerm: 'Permission',
+          colChat: 'Conversation', colPerm: 'Mode',
           edit: 'Edit', remove: 'Remove',
+          // --- Your approval: the fixed exceptions (bin/wa-scope, cmd_caso_aprobar) ---
+          approvalLegend: 'When it asks you',
+          approvalIntro: 'Your agent replies on its own. It asks you before sending only in ' +
+            'these cases, and these rules cannot be turned off:',
+          apMoney: '<b>Money:</b> prices, charges, payments or discounts.',
+          apCredential: '<b>Credentials:</b> passwords, access or codes.',
+          apCommitment: '<b>Commitments:</b> a reply that promises a date or a delivery.',
+          apJev: '<b>Jev:</b> if it is on and flags the message, or does not answer, the ' +
+            'reply waits for your approval.',
+          apDraft: '<b>Ask me first:</b> in conversations on that mode nothing goes out ' +
+            'without your approval.',
+          approvalNote: 'Jev can only stop a reply, never allow one. What waits for your ' +
+            'approval shows up on the board, under "Your decision".',
           // --- Jev (opcional): lo unico que manda texto de clientes fuera del equipo ---
           jevLegend: 'Jev (optional)',
           jevDisclosure: '<b>Off by default.</b> If you turn it on, the text of incoming messages and of drafted replies is sent to <code>api.typesafe.ai</code> (TypeSafe\'s Jev) to decide what needs your attention and to check replies before they go out. Credentials are masked before sending. Without a key nothing is sent and everything works as it does today.',
@@ -1109,7 +1311,6 @@
           jevEnabledLabel: 'Use Jev',
           jevOff: 'Off: nothing is sent',
           jevOn: 'On: sends to api.typesafe.ai',
-          jevSaveEnabled: 'Save',
           jevStOffNo: 'Off · no key',
           jevStOffYes: 'Off · key saved',
           jevStOnNo: 'On, but there is no key: nothing is sent',
@@ -1123,18 +1324,21 @@
           jevErrInvalid: 'The key is not valid: it must be a single word, no spaces, up to 512 characters.',
           jevErrVault: 'Orca would not store the key. Check that the plugin may store secrets and try again.',
           jevErrGeneric: 'It could not be completed. Try again.',
-          routesLegend: 'Which project it goes to',
+          routesLegend: 'Text rules',
           routesHelp: 'An ops group carries work for several clients. When a message names one, ' +
             'the case goes to THAT project, not the conversation one.',
           routeMatch: 'When the message says', routeMatchPh: 'e.g. billing',
           routeTarget: 'Goes to project',
           addRoute: 'Add rule', noRoutes: 'No rules. Everything goes to each conversation project.',
           colWhen: 'When it says', colGoes: 'Goes to',
+          routeLegacy: 'old rule',
+          routeLegacyHelp: 'Old rules sent the case to Plane and are no longer used. Remove ' +
+            'them or replace them with a rule to a project.',
           notReady: 'WhatsApp is not connected.',
           notReadyHow: 'Check the requirements below.',
           hNoTools: 'The plugin tools did not answer',
           hNoTransport: 'Link your WhatsApp line',
-          hNoTransportHow: 'Scan the code above with the phone of the line you want ' +
+          hNoTransportHow: 'Scan the code in the Status tab with the phone of the line you want ' +
             'to use. Until you do, your agent sees no conversations.',
           hNoTransportLinked: 'Your line is linked',
           hNoTransportLinkedHow: 'Reading conversations is not available yet. ' +
@@ -1179,10 +1383,12 @@
           needsUpdateHow: 'Update Orca.',
           needName: 'Give it a name.', needChat: 'Pick a conversation.',
           needMatch: 'Text and project are both required.',
-          savedOk: 'Saved', removedOk: 'Removed', named: 'Called',
-          off: 'Off — leaves it alone', observe: 'Read only — never writes',
-          draft: 'Ask me first — writes and waits for your approval',
-          reply: 'Automatic — replies and sends on its own'
+          savedOk: 'Saved', removedOk: 'Removed',
+          off: 'Off: your agent does not read this conversation.',
+          observe: 'Read only: it reads and tells you, but never writes.',
+          draft: 'Ask me first: it writes the reply and waits for your approval to send it.',
+          reply: 'Automatic: it replies on its own, except for the exceptions in Your ' +
+            'approval, where it asks you.'
         }
       }
       STRINGS.pt = Object.assign({}, STRINGS.en, {
@@ -1253,7 +1459,7 @@
         pairingHowUnknown: 'Motivo desconhecido.',
         hNoTools: 'As ferramentas do plugin nao responderam',
         hNoTransport: 'Vincule a sua linha do WhatsApp',
-        hNoTransportHow: 'Escaneie o codigo acima com o telefone da linha que voce ' +
+        hNoTransportHow: 'Escaneie o codigo da aba Estado com o telefone da linha que voce ' +
           'quer usar. Ate fazer isso, o seu agente nao ve nenhuma conversa.',
         hNoTransportLinked: 'A sua linha esta vinculada',
         hNoTransportLinkedHow: 'Ler as conversas ainda nao esta disponivel. Voce nao ' +
@@ -1293,36 +1499,48 @@
         modeReply: 'Automatico',
         provNone: 'nenhum', provPlane: 'plane', provLinear: 'linear',
         provGithub: 'github',
-        toneLabel: 'Como escreve', saveTone: 'Salvar tom', toneSaved: 'Tom salvo',
-        transcribeLabel: 'Notas de voz',
-        trLocal: 'local — o audio nao sai deste equipamento',
-        trOff: 'off — nao transcreve',
-        transcribeHelp: 'Com off o agente nao sabe o que um audio diz e marca para voce ' +
-          'ouvir. api envia o audio para um terceiro.',
-        saveTranscribe: 'Salvar notas de voz', transcribeSaved: 'Notas de voz salvas',
-        langLabel: 'Idioma dos audios', langAuto: 'detectar automaticamente',
-        langEs: 'espanhol', langEn: 'ingles', langPt: 'portugues',
+        // --- abas e o que falta (T17) ---
+        tabsLabel: 'Secoes dos ajustes',
+        tabEstado: 'Estado', tabChats: 'Conversas', tabProyectos: 'Projetos',
+        tabAprobacion: 'Sua aprovacao', tabAgente: 'Agente', tabAvanzado: 'Avancado',
+        checkLegend: 'O que falta',
+        chkLinea: 'Vincular a linha do WhatsApp',
+        chkAgente: 'Dar um nome ao seu agente',
+        chkChat: 'Autorizar pelo menos uma conversa',
+        chkProyectos: 'Adicionar pelo menos um projeto',
+        chkJev: 'Ligar o Jev com a sua chave',
+        chkRecommended: 'recomendado: sem projetos o agente so responde',
+        chkOptional: 'opcional',
+        chkAllDone: 'O necessario esta pronto: o seu agente ja pode trabalhar.',
+        saveCard: 'Salvar',
+        saveFailed: 'Nao foi possivel salvar. Tente de novo.',
+        toneLabel: 'Como escreve',
+        voiceLegend: 'Notas de voz',
+        readingLegend: 'Leitura do WhatsApp',
+        transcribeLabel: 'Transcrever as notas de voz',
+        trLocal: 'Neste equipamento',
+        trOff: 'Nao transcrever',
+        transcribeHelp: 'Neste equipamento o audio nao sai da sua maquina. Sem transcrever, o ' +
+          'agente nao sabe o que um audio diz e marca para voce ouvir.',
+        langLabel: 'Idioma dos audios', langAuto: 'Detectar',
+        langEs: 'Espanhol', langEn: 'Ingles', langPt: 'Portugues',
         langHelp: 'Fixar acerta mais que detectar quando os audios misturam dois idiomas.',
-        saveLang: 'Salvar idioma', langSaved: 'Idioma salvo',
         ownerLabel: 'Para quem trabalha', ownerPh: 'ex. Ana Restrepo',
         ownerHelp: 'Seu nome. O agente usa para saber de quem e o trabalho que atende e a ' +
           'quem se reporta.',
-        saveOwner: 'Salvar', ownerSaved: 'Salvo',
         daysLabel: 'Ate quando atras olha',
-        days1: '1 dia — so o de hoje', days3: '3 dias',
-        days7: '7 dias — recomendado', days14: '14 dias', days30: '30 dias',
-        days90: '90 dias', days0: 'todo o historico',
-        daysHelp: 'Com um dia, uma mencao de sexta que ninguem respondeu nao aparece mais ' +
-          'na segunda. Sao lidas no maximo as 500 mensagens mais novas da janela.',
-        saveDays: 'Salvar janela', daysSaved: 'Janela salva',
+        days1: '1 dia', days3: '3 dias',
+        days7: '7 dias', days14: '14 dias', days30: '30 dias',
+        days90: '90 dias', days0: 'Tudo',
+        daysHelp: 'Recomendado: 7 dias. Com um dia, uma mencao de sexta que ninguem respondeu ' +
+          'nao aparece mais na segunda. Sao lidas no maximo as 500 mensagens mais novas da janela.',
         syncLabel: 'De quanto em quanto tempo verifica o WhatsApp',
-        sync2: 'a cada 2 minutos', sync5: 'a cada 5 minutos — recomendado',
-        sync10: 'a cada 10 minutos', sync15: 'a cada 15 minutos',
-        sync30: 'a cada 30 minutos', sync60: 'a cada hora',
-        syncHelp: 'E a unica vez que a base do WhatsApp e aberta, entao tambem e o ' +
-          'maximo que uma mensagem nova pode demorar para aparecer aqui e chegar ao ' +
-          'agente. Mais seguido custa mais leitura; mais espacado, mais espera.',
-        saveSync: 'Salvar frequencia', syncSaved: 'Frequencia salva',
+        sync2: '2 min', sync5: '5 min',
+        sync10: '10 min', sync15: '15 min',
+        sync30: '30 min', sync60: '1 hora',
+        syncHelp: 'Recomendado: 5 min. E o maximo que uma mensagem nova pode demorar para ' +
+          'aparecer aqui e chegar ao agente. Mais seguido custa mais leitura; mais espacado, ' +
+          'mais espera.',
         optionalTitle: 'Opcional \u2014 nada disso bloqueia o agente:',
         workerGone: 'O plugin nao responde',
         workerGoneHow: 'O mais provavel e que falte aprova-lo: abra Ajustes > Plugins e ' +
@@ -1335,14 +1553,11 @@
         workerStaleHow: 'Espere alguns segundos e, se nao voltar, reinicie o Orca. ' +
           'Parou de dar sinal ha {s} s.',
         qualityLabel: 'Qualidade da transcricao',
-        qualityOptima: 'otima — recomendado',
-        qualityMinima: 'minima — equipamentos sem computo',
-        qualityHelp: 'Minima so se a maquina nao aguentar o modelo grande: em ' +
-          'espanhol deforma nomes e pedidos, nao decida lendo o texto dela.',
-        saveQuality: 'Salvar qualidade', qualitySaved: 'Qualidade salva',
-        pickOne: 'Escolha uma conversa',
+        qualityOptima: 'Otima',
+        qualityMinima: 'Minima',
+        qualityHelp: 'Recomendado: otima. Minima so se a maquina nao aguentar o modelo grande: ' +
+          'deforma nomes e pedidos, nao decida lendo o texto dela.',
         agentLegend: 'Seu agente', agentLabel: 'Como se chama',
-        saveName: 'Salvar nome', saveChange: 'Salvar alteracao', cancel: 'Cancelar',
         noChats: 'Procurando suas conversas…',
         noChatsFail: 'Sem conversas',
         syncRetry: 'Procurar de novo', syncAsked: 'Procurando de novo…',
@@ -1354,9 +1569,9 @@
         syncNoRecord: 'As ferramentas rodaram mas nao escreveram nada.',
         syncFailed: 'Nao consegui ler o WhatsApp.',
         syncNoChats: 'Nao encontrei nenhuma conversa. Vincule a sua linha do ' +
-          'WhatsApp acima e tente de novo.',
+          'WhatsApp na aba Estado e tente de novo.',
         syncStalled: 'Faz um tempo que procuro e nada chegou.',
-        chatSearchPh: 'Digite para filtrar',
+        chatSearchPh: 'Digite um nome ou um numero',
         chatFetch: 'Buscar conversas',
         chatFetchDone: 'Pedindo a lista. Pode demorar alguns segundos.',
         chatCount: '{n} de {total}', chatNoMatch: 'Nada corresponde a isso',
@@ -1365,14 +1580,21 @@
         chatAlready: 'ja autorizada: {m}',
         scopeRmFail: 'Nao foi possivel remover a autorizacao, entao ela continua ' +
           'valendo. Tente de novo.',
-        editName: 'Mudar o nome', mapLegend: 'Conversas', chatLabel: 'Conversa',
-        permLabel: 'Permissao',
+        kindGroup: 'Grupo', kindDirect: 'Direto',
+        scopeLegend: 'Conversas autorizadas',
+        scopeHelp: 'O seu agente so ve as que estao aqui. Cada uma tem o seu projeto e o seu modo.',
+        formLegend: 'Adicionar uma conversa',
+        formEditing: 'Mudar uma conversa',
+        chatLabel: 'Conversa',
+        permLabel: 'Modo',
         workspaceLabel: 'Projeto',
         workspaceNone: 'Sem projeto',
         workspaceMissing: '{id} (nao esta mais na lista)',
+        workspaceSearchPh: 'Digite para buscar um projeto',
+        workspaceNoMatch: 'Nenhum projeto corresponde a isso',
         workspaceHint: 'E onde se faz o trabalho desta conversa. Sem projeto, o agente so ' +
           'responde e deixa para voce o que pedir trabalho.',
-        workspaceHintNoProjects: 'Ainda nao ha projetos: adicione um na secao Projetos.',
+        workspaceHintNoProjects: 'Ainda nao ha projetos: adicione um na aba Projetos.',
         // --- Projetos: o catalogo que o agente dos casos distribui ---
         projectsLegend: 'Projetos',
         projectsHelp: 'Sao as pastas onde se faz o trabalho de cada conversa. O Orca propoe ' +
@@ -1404,7 +1626,7 @@
         projGone: 'Esse projeto nao esta mais na sua lista.',
         projFull: 'A lista chegou ao limite de projetos. Remova algum antes de adicionar outro.',
         colProject: 'Projeto',
-        routesNeedProject: 'Adicione um projeto acima para poder criar regras.',
+        routesNeedProject: 'Adicione um projeto na aba Projetos para poder criar regras.',
         chatToneLabel: 'Como escreve aqui (opcional)',
         chatTonePh: 'vazio = usa o tom global',
         chatInstrLabel: 'O que faz aqui (opcional)',
@@ -1414,7 +1636,20 @@
           'padrao, menos nas regras de seguranca: nunca uma credencial, nunca enviar sem ' +
           'permissao de responder.',
         save: 'Salvar conversa', saveEdit: 'Salvar alteracoes', cancelEdit: 'Cancelar edicao',
-        colChat: 'Conversa', colPerm: 'Permissao', edit: 'Editar', remove: 'Remover',
+        colChat: 'Conversa', colPerm: 'Modo', edit: 'Editar', remove: 'Remover',
+        // --- Sua aprovacao: as excecoes fixas (bin/wa-scope, cmd_caso_aprobar) ---
+        approvalLegend: 'Quando pergunta a voce',
+        approvalIntro: 'O seu agente responde sozinho. Pergunta antes de enviar somente nestes ' +
+          'casos, e estas regras nao podem ser desligadas:',
+        apMoney: '<b>Dinheiro:</b> precos, cobrancas, pagamentos ou descontos.',
+        apCredential: '<b>Credenciais:</b> senhas, acessos ou codigos.',
+        apCommitment: '<b>Compromissos:</b> uma resposta que promete uma data ou uma entrega.',
+        apJev: '<b>Jev:</b> se estiver ligado e marcar a mensagem, ou nao responder, a ' +
+          'resposta espera a sua aprovacao.',
+        apDraft: '<b>Pergunto antes:</b> nas conversas com esse modo nada sai sem a sua ' +
+          'aprovacao.',
+        approvalNote: 'O Jev so pode deter uma resposta, nunca habilita-la. O que espera a sua ' +
+          'aprovacao aparece no quadro, em "Sua decisao".',
         // --- Jev (opcional): lo unico que manda texto de clientes fuera del equipo ---
         jevLegend: 'Jev (opcional)',
         jevDisclosure: '<b>Desligado por padrao.</b> Se voce ligar, o texto das mensagens recebidas e dos rascunhos de resposta e enviado para <code>api.typesafe.ai</code> (Jev, da TypeSafe) para decidir o que precisa da sua atencao e revisar as respostas antes de sairem. As credenciais sao mascaradas antes do envio. Sem chave nada e enviado e tudo funciona como ate agora.',
@@ -1427,7 +1662,6 @@
         jevEnabledLabel: 'Usar o Jev',
         jevOff: 'Desligado: nada e enviado',
         jevOn: 'Ligado: envia para api.typesafe.ai',
-        jevSaveEnabled: 'Salvar',
         jevStOffNo: 'Desligado · sem chave',
         jevStOffYes: 'Desligado · chave salva',
         jevStOnNo: 'Ligado, mas sem chave: nada e enviado',
@@ -1441,15 +1675,34 @@
         jevErrInvalid: 'A chave nao e valida: deve ser uma so palavra, sem espacos, de ate 512 caracteres.',
         jevErrVault: 'O Orca nao deixou guardar a chave. Confira se o plugin pode guardar segredos e tente de novo.',
         jevErrGeneric: 'Nao foi possivel concluir. Tente de novo.',
-        routesLegend: 'Para qual projeto vai', addRoute: 'Adicionar regra',
+        routesLegend: 'Regras por texto', addRoute: 'Adicionar regra',
         routeTarget: 'Vai para o projeto',
         noRoutes: 'Sem regras. Tudo vai para o projeto de cada conversa.',
         routesHelp: 'Um grupo de operacoes leva trabalho de varios clientes. Quando a mensagem ' +
           'cita um, o caso vai para o projeto DELE, nao para o da conversa.',
-        savedOk: 'Salvo', removedOk: 'Removido', named: 'Se chama',
-        off: 'Desligado — nao toca', observe: 'So ler — nao escreve',
-        draft: 'Pergunto antes — escreve e espera a sua aprovacao',
-        reply: 'Automatico — responde e envia sozinho'
+        routeLegacy: 'regra antiga',
+        routeLegacyHelp: 'As regras antigas mandavam o caso para o Plane e ja nao sao usadas. ' +
+          'Remova ou troque por uma regra para um projeto.',
+        sub: 'Quais conversas o seu agente ve, e ate onde pode agir em cada uma.',
+        tonePh: 'ex. Espanhol neutro, formal. Sem girias regionais.',
+        toneHelp: 'Vale para todas as conversas. Cada uma pode ter o seu e substitui este.',
+        agentPh: 'ex. Watson, Sexta, Assistente',
+        agentHelp: 'Assina cada mensagem que escreve, para ninguem duvidar se foi voce ou ele.',
+        empty: 'Nenhuma conversa autorizada. O que nao esta aqui, o seu agente nao ve.',
+        routeMatch: 'Quando a mensagem disser', routeMatchPh: 'ex. faturamento',
+        colWhen: 'Quando disser', colGoes: 'Vai para',
+        notReady: 'O WhatsApp nao esta conectado.',
+        notReadyHow: 'Confira os requisitos aqui embaixo.',
+        needsUpdate: 'Esta versao do Orca nao deixa salvar daqui.',
+        needsUpdateHow: 'Atualize o Orca.',
+        needName: 'Coloque um nome.', needChat: 'Falta a conversa.',
+        needMatch: 'Faltam o texto e o projeto.',
+        savedOk: 'Salvo', removedOk: 'Removido',
+        off: 'Desligado: o seu agente nao le esta conversa.',
+        observe: 'So ler: le e avisa voce, mas nunca escreve.',
+        draft: 'Pergunto antes: escreve a resposta e espera a sua aprovacao para envia-la.',
+        reply: 'Automatico: responde sozinho, menos nas excecoes de Sua aprovacao, em que ' +
+          'pergunta a voce.'
       })
 
       var LANG = (function () {
@@ -1470,6 +1723,9 @@
         Array.prototype.forEach.call(q('[data-t-ph]'), function (n) { n.placeholder = t(n.dataset.tPh) })
         Array.prototype.forEach.call(q('[data-t-title]'), function (n) {
           n.title = t(n.dataset.tTitle); n.setAttribute('aria-label', t(n.dataset.tTitle))
+        })
+        Array.prototype.forEach.call(q('[data-t-label]'), function (n) {
+          n.setAttribute('aria-label', t(n.dataset.tLabel))
         })
         repintarProyectos()
       }
@@ -1768,7 +2024,7 @@
         // Desvincular y reintentar dejan un pedido que solo el worker puede atender: sin
         // nadie del otro lado son el mismo silencio de 45 s que este aviso reemplaza.
         var dependen = ['sync-retry', 'pairing-unlink', 'pairing-retry', 'jev-save-key',
-          'jev-remove-key', 'jev-save-enabled']
+          'jev-remove-key', 'jev-enabled', 'chat-fetch']
         dependen.forEach(function (id) {
           var b = el(id)
           if (b) b.disabled = !!sinWorker
@@ -1806,99 +2062,57 @@
         el('alert').hidden = false
       }
 
-      // ---------- nombre del agente ----------
-      var savedAgent = null, agentDirty = false
-      el('agent').addEventListener('input', function () { agentDirty = true })
-
-      function showAgentSaved(name) {
-        savedAgent = name
-        el('agent').value = name
-        el('agent').disabled = true
-        el('edit-agent').hidden = false
-        el('save-agent').hidden = true
-        el('cancel-agent').hidden = true
-        agentDirty = false
-        delete sucios.agent
+      // ---------- grupos de botones (T17) ----------
+      // La lista de un select nativo no se abre en el panel de Orca: el iframe tiene
+      // sandbox y Electron no dibuja el desplegable (el plugin hermano lo documenta en
+      // orca-jev-advisor-dev/adapters/orca/panels/config.html). Con pocas opciones, un
+      // grupo de botones con `aria-pressed`; el valor viaja en `data-value`, el mismo que
+      // escribia el select.
+      function apretar (boton, si) {
+        boton.setAttribute('aria-pressed', si ? 'true' : 'false')
       }
-      function showAgentEditing() {
-        el('agent').disabled = false
-        el('edit-agent').hidden = true
-        el('save-agent').hidden = false
-        el('save-agent').textContent = savedAgent ? t('saveChange') : t('saveName')
-        el('cancel-agent').hidden = !savedAgent
-        el('agent').focus(); el('agent').select()
+      function valorSeg (id) {
+        var on = el(id).querySelector('button[aria-pressed="true"]')
+        return on ? on.getAttribute('data-value') : ''
       }
-      el('edit-agent').addEventListener('click', showAgentEditing)
-      el('cancel-agent').addEventListener('click', function () {
-        showAgentSaved(savedAgent); said('said-agent', '')
-      })
-      el('save-agent').addEventListener('click', function (event) {
-        var name = el('agent').value.trim()
-        if (!name) { said('said-agent', t('needName'), true); return }
-        // agentDirty se apaga antes de escribir: `guardar` relee y repinta, y con la
-        // bandera puesta pintarClave se saltearia su propio repintado.
-        agentDirty = false
-        busy(event.currentTarget, guardar([['agentName', name]]).then(function (mal) {
-          if (mal.length) { agentDirty = true; said('said-agent', 'error', true); return }
-          said('said-agent', '✓ ' + t('named') + ' ' + savedAgent)
-        }))
-      })
-
-      // ---------- tono ----------
-      el('save-tone').addEventListener('click', function (event) {
-        var tone = el('tone').value.trim()
-        busy(event.currentTarget, guardar([['tone', tone]]).then(function (mal) {
-          said('said-tone', mal.length ? 'error' : '\u2713 ' + t('toneSaved'), !!mal.length)
-        }))
-      })
-
-      // ---------- para quien trabaja ----------
-      // No es el nombre del agente: es el del dueno. El prompt lo lee para saber a
-      // quien le reporta, y sin el se dirige al cliente como si trabajara solo.
-      el('save-owner').addEventListener('click', function (event) {
-        busy(event.currentTarget, guardar([['ownerName', el('owner').value.trim()]])
-          .then(function (mal) {
-            said('said-owner', mal.length ? 'error' : '\u2713 ' + t('ownerSaved'), !!mal.length)
-          }))
-      })
-
-      // ---------- transcripcion: modo, idioma y calidad ----------
-      el('save-transcribe').addEventListener('click', function (event) {
-        busy(event.currentTarget, guardar([['transcribe', el('transcribe').value]])
-          .then(function (mal) {
-            said('said-transcribe',
-              mal.length ? 'error' : '\u2713 ' + t('transcribeSaved'), !!mal.length)
-          }))
-      })
-
-      el('save-lang').addEventListener('click', function (event) {
-        busy(event.currentTarget, guardar([['transcribeLang', el('lang').value]])
-          .then(function (mal) {
-            said('said-lang', mal.length ? 'error' : '\u2713 ' + t('langSaved'), !!mal.length)
-          }))
-      })
-
-      el('save-quality').addEventListener('click', function (event) {
-        busy(event.currentTarget, guardar([['transcribeQuality', el('quality').value]])
-          .then(function (mal) {
-            said('said-quality', mal.length ? 'error' : '\u2713 ' + t('qualitySaved'), !!mal.length)
-          }))
-      })
-
-      // ---------- ventana de lectura ----------
-      el('save-days').addEventListener('click', function (event) {
-        busy(event.currentTarget, guardar([['inboxDays', el('inbox-days').value]])
-          .then(function (mal) {
-            said('said-days', mal.length ? 'error' : '\u2713 ' + t('daysSaved'), !!mal.length)
-          }))
-      })
-
-      // ---------- frecuencia del sync ----------
-      el('save-sync').addEventListener('click', function (event) {
-        busy(event.currentTarget, guardar([['syncMinutes', el('sync-minutes').value]])
-          .then(function (mal) {
-            said('said-sync', mal.length ? 'error' : '\u2713 ' + t('syncSaved'), !!mal.length)
-          }))
+      /** Deja el grupo mostrando lo que rige. La terminal puede fijar un valor que el
+       *  grupo no ofrece (`wa-scope config inbox_days 45`): se agrega un boton con ese
+       *  valor tal cual, porque un grupo sin ninguno apretado miente sobre lo que rige. */
+      function ponerSeg (id, valor, porDefecto) {
+        var grupo = el(id)
+        var v = valor === null || valor === undefined || valor === '' ? porDefecto : String(valor)
+        var botones = grupo.querySelectorAll('button')
+        var hay = Array.prototype.some.call(botones, function (b) {
+          return b.getAttribute('data-value') === v
+        })
+        if (!hay) {
+          var b = document.createElement('button')
+          b.type = 'button'
+          b.setAttribute('data-value', v)
+          b.textContent = v
+          grupo.appendChild(b)
+          cablearBoton(grupo, b)
+          botones = grupo.querySelectorAll('button')
+        }
+        Array.prototype.forEach.call(botones, function (x) {
+          apretar(x, x.getAttribute('data-value') === v)
+        })
+      }
+      function cablearBoton (grupo, b) {
+        b.addEventListener('click', function () {
+          Array.prototype.forEach.call(grupo.querySelectorAll('button'), function (x) {
+            apretar(x, x === b)
+          })
+          // Un `change` del grupo, como el del select: lo escuchan la marca de "sucio" y
+          // quien muestra la descripcion de lo elegido.
+          grupo.dispatchEvent(new Event('change'))
+        })
+      }
+      Array.prototype.forEach.call(document.querySelectorAll('.seg'), function (grupo) {
+        Array.prototype.forEach.call(grupo.querySelectorAll('button'), function (b) {
+          apretar(b, false)
+          cablearBoton(grupo, b)
+        })
       })
 
       // ---------- que puede pisar el sondeo, y que no ----------
@@ -1940,17 +2154,21 @@
       }
       Object.keys(CONTROLES).forEach(function (k) { ensuciar(CONTROLES[k][0]) })
 
+      /** El valor que muestra un control de la tabla, sea campo o grupo de botones. */
+      function valorDe (id) {
+        var n = el(id)
+        return n.classList.contains('seg') ? valorSeg(id) : n.value.trim()
+      }
+
       function pintarClave (key, valor, s) {
         var c = CONTROLES[key]
         if (!c || !hayRespuesta(valor) || !vigente(s) || sucios[c[0]]) return
         var n = el(c[0])
-        if (document.activeElement === n) return
-        if (key === 'agentName') {
-          if (typeof valor === 'string' && valor && !agentDirty) showAgentSaved(valor)
-          return
-        }
-        if (n.tagName === 'SELECT') ponerEnSelect(c[0], valor, c[1])
+        // `contains` y no `===`: en un grupo el foco queda en uno de sus botones.
+        if (n.contains(document.activeElement)) return
+        if (n.classList.contains('seg')) ponerSeg(c[0], valor, c[1])
         else n.value = typeof valor === 'string' ? valor : c[1]
+        if (key === 'agentName') nombreAgente = typeof valor === 'string' ? valor : ''
       }
 
       /** Guarda y deja el control mostrando lo que quedo GUARDADO.
@@ -1983,43 +2201,188 @@
         })
       }
 
-      // Deja el select mostrando lo que rige de verdad. La terminal puede fijar un valor
-      // que el select no ofrece (`wa-scope config inbox_days 45`): sin agregarlo, .value
-      // no engancha, el control queda en blanco y el panel miente sobre lo que rige.
-      function ponerEnSelect (id, valor, porDefecto) {
-        var sel = el(id)
-        var v = valor === null || valor === undefined || valor === '' ? porDefecto : String(valor)
-        var hay = Array.prototype.some.call(sel.options, function (o) { return o.value === v })
-        if (!hay) {
-          var o = document.createElement('option')
-          o.value = v
-          o.textContent = v
-          sel.appendChild(o)
+      // ---------- un guardar por tarjeta (T17) ----------
+      // Antes eran diez botones, uno por campo, y el dueno no sabia cual habia apretado.
+      // Cada tarjeta guarda TODOS sus campos con un clic: escribir uno que no cambio es
+      // inofensivo, y olvidar uno que si cambio era el defecto.
+      var nombreAgente = ''
+      function guardarTarjeta (boton, saidId, claves) {
+        var pares = claves.map(function (k) { return [k, valorDe(CONTROLES[k][0])] })
+        return busy(boton, guardar(pares).then(function (mal) {
+          said(saidId, mal.length ? t('saveFailed') : '✓ ' + t('savedOk'), !!mal.length)
+          pintarChecklist()
+        }))
+      }
+
+      // El nombre del agente firma cada mensaje y no puede quedar vacio. El dueno (su
+      // nombre) y el tono si: vacios, el prompt usa los de fabrica.
+      el('save-agent').addEventListener('click', function (event) {
+        if (!el('agent').value.trim()) { said('said-agent', t('needName'), true); return }
+        guardarTarjeta(event.currentTarget, 'said-agent', ['agentName', 'ownerName', 'tone'])
+      })
+      el('save-voice').addEventListener('click', function (event) {
+        guardarTarjeta(event.currentTarget, 'said-voice',
+          ['transcribe', 'transcribeLang', 'transcribeQuality'])
+      })
+      el('save-reading').addEventListener('click', function (event) {
+        guardarTarjeta(event.currentTarget, 'said-reading', ['inboxDays', 'syncMinutes'])
+      })
+
+      // ---------- el autocompletar (T17) ----------
+      // UN campo: lo que se escribe filtra una lista que dibuja la pagina, debajo. El
+      // dueno lo pidio asi ("es raro desplegar el select y el buscador aparte, eso debe
+      // ser como un autocomplete"), y ademas la lista de un select nativo no se abre en el
+      // panel de Orca. Patron combobox/listbox de ARIA: flechas mueven, Enter elige, Esc
+      // cierra, clic elige.
+      //
+      // El sondeo repinta cada 12 s. Lo que el dueno escribio y la lista abierta tienen
+      // que sobrevivir: `refrescar` vuelve a dibujar la lista con el mismo filtro y la
+      // misma opcion activa, y NUNCA toca el texto del campo.
+      //
+      // `cfg.opciones(terminos)` devuelve { items, vacio }: cada item es
+      // { value, nombre, kind?, sub?, grupo? } y `vacio` lo que se dice sin ninguno.
+      function idDeOpcion (lista, value) {
+        return lista + '-o-' + (String(value).replace(/[^A-Za-z0-9_-]/g, '_') || '_vacio')
+      }
+      function crearCombo (cfg) {
+        var input = el(cfg.input), lista = el(cfg.lista)
+        var c = { abierto: false, activo: null, escrito: false, items: [] }
+
+        function terminos () {
+          return c.escrito ? aplanar(input.value).split(' ').filter(Boolean) : []
         }
-        sel.value = v
+        function pintar () {
+          var r = cfg.opciones(terminos())
+          c.items = r.items
+          if (!c.items.some(function (i) { return i.value === c.activo })) c.activo = null
+          if (!c.items.length) {
+            lista.innerHTML = '<div class="combo-empty">' + esc(r.vacio || '') + '</div>'
+          } else {
+            var html = '', grupo = null, abierto = false
+            c.items.forEach(function (i) {
+              if ((i.grupo || null) !== grupo) {
+                if (abierto) html += '</div>'
+                grupo = i.grupo || null
+                abierto = !!grupo
+                if (grupo) {
+                  html += '<div role="group" aria-label="' + escAttr(grupo) + '">' +
+                    '<div class="combo-group" role="presentation">' + esc(grupo) + '</div>'
+                }
+              }
+              html += '<div class="combo-opt" role="option" id="' +
+                escAttr(idDeOpcion(cfg.lista, i.value)) + '" data-value="' + escAttr(i.value) +
+                '" aria-selected="' + (i.value === c.activo ? 'true' : 'false') + '">' +
+                (i.kind ? '<span class="combo-kind">' + esc(i.kind) + '</span>' : '') +
+                '<span class="combo-name">' + esc(i.nombre) + '</span>' +
+                (i.sub ? '<span class="combo-sub">' + esc(i.sub) + '</span>' : '') + '</div>'
+            })
+            if (abierto) html += '</div>'
+            lista.innerHTML = html
+          }
+          marcarActivo()
+        }
+        function marcarActivo () {
+          var id = c.activo === null ? '' : idDeOpcion(cfg.lista, c.activo)
+          Array.prototype.forEach.call(lista.querySelectorAll('[role="option"]'), function (o) {
+            o.setAttribute('aria-selected', o.id === id ? 'true' : 'false')
+          })
+          if (id) {
+            input.setAttribute('aria-activedescendant', id)
+            var n = el(id)
+            if (n && n.scrollIntoView) n.scrollIntoView({ block: 'nearest' })
+          } else {
+            input.removeAttribute('aria-activedescendant')
+          }
+        }
+        function abrir () {
+          if (input.disabled || input.readOnly) return
+          c.abierto = true
+          lista.hidden = false
+          input.setAttribute('aria-expanded', 'true')
+          pintar()
+        }
+        function cerrar () {
+          c.abierto = false
+          c.activo = null
+          lista.hidden = true
+          input.setAttribute('aria-expanded', 'false')
+          input.removeAttribute('aria-activedescendant')
+        }
+        function mover (paso) {
+          if (!c.items.length) return
+          var i = c.items.map(function (x) { return x.value }).indexOf(c.activo)
+          i = i < 0 ? (paso > 0 ? 0 : c.items.length - 1)
+            : Math.max(0, Math.min(c.items.length - 1, i + paso))
+          c.activo = c.items[i].value
+          marcarActivo()
+        }
+        function elegir (value) {
+          var item = c.items.filter(function (i) { return i.value === value })[0]
+          if (!item) return
+          c.escrito = false
+          cerrar()
+          cfg.elegir(item)
+        }
+
+        input.addEventListener('input', function () {
+          c.escrito = true
+          c.activo = null
+          abrir()
+          if (cfg.alEscribir) cfg.alEscribir()
+        })
+        input.addEventListener('click', function () { if (!c.abierto) abrir() })
+        input.addEventListener('keydown', function (e) {
+          if (e.key === 'ArrowDown') {
+            e.preventDefault()
+            if (!c.abierto) abrir()
+            mover(1)
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault()
+            if (!c.abierto) abrir()
+            mover(-1)
+          } else if (e.key === 'Enter') {
+            if (c.abierto && c.activo !== null) { e.preventDefault(); elegir(c.activo) }
+          } else if (e.key === 'Escape') {
+            if (c.abierto) { e.preventDefault(); cerrar() }
+          } else if (e.key === 'Tab') {
+            cerrar()
+          }
+        })
+        input.addEventListener('blur', function () { cerrar() })
+        // El clic en la lista no puede llevarse el foco: el `blur` la cerraria antes de que
+        // llegue el `click`.
+        lista.addEventListener('mousedown', function (e) { e.preventDefault() })
+        lista.addEventListener('click', function (e) {
+          var o = e.target.closest ? e.target.closest('[role="option"]') : null
+          if (o) elegir(o.getAttribute('data-value'))
+        })
+
+        return {
+          refrescar: function () { if (c.abierto) pintar() },
+          cerrar: cerrar,
+          escribiendo: function () { return c.escrito || document.activeElement === input },
+          olvidar: function () { c.escrito = false }
+        }
       }
 
       // ---------- selector de conversaciones ----------
       // Se elige de la lista en vez de escribir el nombre exacto. El valor es el jid,
       // porque hay grupos que comparten nombre y el nombre no identifica nada.
       var chatsPorJid = {}
-      // El jid que se esta editando. renderChats corre cada 8 s y reconstruye el
-      // select entero; sin recordarlo, a mitad de una edicion la conversacion
-      // desaparecia de la lista y el select quedaba en blanco.
+      // El jid que se esta editando: mientras dura la edicion la conversacion no cambia
+      // y el campo queda de solo lectura.
       var editandoJid = ''
+      // El jid que el dueno eligio de la lista. Escribir otra cosa encima lo suelta: lo
+      // que se autoriza es lo que se ve en el campo, nunca la eleccion de antes.
+      var chatElegido = ''
 
-      // Deja el select mostrando este jid. Si no esta en la lista — el sync todavia
-      // no lo trajo — se le agrega una opcion, porque si no `.value` no hace nada y
-      // el select se queda callado en "Elija una conversacion".
       function pickChat (jid, nombre) {
-        var sel = el('chat-pick')
-        if (jid && !Array.prototype.some.call(sel.options, function (o) { return o.value === jid })) {
-          var o = document.createElement('option')
-          o.value = jid
-          o.textContent = nombre || jid
-          sel.appendChild(o)
-        }
-        sel.value = jid || ''
+        chatElegido = jid || ''
+        var c = chatsPorJid[jid]
+        var visible = c ? nombreVisible(c) : (nombre || jid || '')
+        el('chat-search').value = visible
+        el('chat').value = visible
+        pintarIdentidad()
       }
 
       // La lista completa se guarda aparte: el buscador filtra sobre esto, no sobre
@@ -2056,7 +2419,7 @@
        *  estado sin salida es el mismo callejon que el spinner eterno. */
       function estadoVacio (estado) {
         if (estado && estado.running && edadMs(estado.startedAt) < CORRIENDO_MS) {
-          // Sin texto aparte: la opcion del select ya dice que esta buscando, y
+          // Sin texto aparte: el renglon del buscador ya dice que esta buscando, y
           // repetirlo debajo no agrega nada que mirar.
           return { corto: t('noChats'), largo: '', detalle: '', boton: false }
         }
@@ -2078,9 +2441,6 @@
         var v = estadoVacio(estadoSync)
         var mostrar = !chatsTodos.length && !!(v.largo || v.boton)
         el('sync-state').hidden = !mostrar
-        // "Se elige de la lista" es consejo sobre una lista que no esta. Mientras el
-        // aviso ocupa ese lugar, la pista estorba mas de lo que ayuda.
-        el('chat-help').hidden = mostrar
         if (!mostrar) return
         el('sync-msg').textContent = v.largo
         el('sync-detail').textContent = v.detalle
@@ -2118,9 +2478,8 @@
       // Lo que NO se hizo, a proposito: coincidencia aproximada (Levenshtein y
       // compania). Con 296 filas el fallo caro no es no encontrar la conversacion, es
       // AUTORIZAR LA EQUIVOCADA, y una busqueda que devuelve lo que el usuario no
-      // escribio empuja exactamente hacia ahi. Tampoco una lista propia con teclado:
-      // cambiaria un control nativo y accesible por codigo, para resolver algo que el
-      // filtro ya resuelve.
+      // escribio empuja exactamente hacia ahi. (La lista propia con teclado, que antes
+      // se descarto, llego en T17: el desplegable nativo no se abre en el panel de Orca.)
       function aplanar (texto) {
         return String(texto == null ? '' : texto)
           .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -2165,16 +2524,17 @@
         return c.name || c.jid
       }
 
-      function etiqueta (c, repetido) {
-        var txt = (c.kind === 'grupo' ? '\u25A3  ' : '\u25CB  ') + nombreVisible(c)
+      /** Lo que acompana el nombre en la lista: con que modo quedo, y el desempate. */
+      function detalleChat (c, repetido) {
+        var partes = []
         var modo = modoDe(c.jid)
-        // El permiso va EN la etiqueta y no solo en la tabla de abajo: quien busca una
-        // conversacion para cambiarla necesita saber como quedo sin cambiar de seccion.
-        if (modo) txt += ' \u00b7 ' + porCodigo(MODE_KEY, modo, modo)
+        // El modo va EN la opcion y no solo en la tabla: quien busca una conversacion
+        // para cambiarla necesita saber como quedo sin cambiar de seccion.
+        if (modo) partes.push(porCodigo(MODE_KEY, modo, modo))
         // Y el desempate aparece SOLO cuando hay dos que se llaman igual. Ponerlo
         // siempre ensuciaria 296 renglones para resolver un choque que casi nunca hay.
-        if (repetido) txt += ' \u00b7 ' + colaDeJid(c.jid)
-        return txt
+        if (repetido) partes.push(colaDeJid(c.jid))
+        return partes.length ? '· ' + partes.join(' · ') : ''
       }
 
       // Cada numero, su linea (T9). `cuentaVinculada` es el numero que dice el sidecar
@@ -2204,59 +2564,20 @@
         pintarChats()
       }
 
-      /** Mete un lote de conversaciones en el select, bajo su titulo. */
-      function agregarGrupo (sel, lista, titulo, repetidos) {
-        if (!lista.length) return
-        var destino = sel
-        if (titulo) {
-          destino = document.createElement('optgroup')
-          destino.label = titulo
-          sel.appendChild(destino)
-        }
-        lista.forEach(function (c) {
-          var o = document.createElement('option')
-          o.value = c.jid
-          o.textContent = etiqueta(c, repetidos[aplanar(c.name || c.jid)] > 1)
-          destino.appendChild(o)
-        })
-      }
-
-      // Cuantas filas muestra el selector cuando hay busqueda. Un `select` con `size`
-      // de 1 se pinta COLAPSADO: el filtro corria bien y el usuario no veia nada,
-      // porque para ver el resultado habia que abrir el desplegable a mano. Escribir y
-      // que no pase nada visible se lee como un buscador roto, y era la queja.
-      //
-      // Con `size` mayor el MISMO control nativo se pinta como lista y los resultados
-      // aparecen tecleando. No se cambia el control por codigo propio —eso costaria la
-      // accesibilidad y el teclado que ya trae— solo se deja de pedirle que se esconda.
-      var FILAS_BUSCANDO = 8
-
-      function pintarChats () {
-        var sel = el('chat-pick')
-        var elegido = sel.value
-        var terminos = aplanar(el('chat-search').value).split(' ').filter(Boolean)
-        sel.innerHTML = ''
-        if (!chatsTodos.length) {
-          var o = document.createElement('option')
-          o.value = ''; o.textContent = estadoVacio(estadoSync).corto
-          sel.appendChild(o)
-          el('chat-count').textContent = ''
-          el('chat-id').textContent = ''
-          pintarEstadoSync()
-          return
-        }
-        pintarEstadoSync()
-        var visibles = terminos.length
+      /** Las conversaciones que ofrece el autocompletar con lo escrito. */
+      function filtrarChats (terminos) {
+        return terminos.length
           ? chatsTodos.filter(function (c) {
               var texto = buscaPorJid[c.jid] || ''
-              return terminos.every(function (t) { return texto.indexOf(t) !== -1 })
+              return terminos.every(function (x) { return texto.indexOf(x) !== -1 })
             })
           : chatsTodos
-        var vacio = document.createElement('option')
-        vacio.value = ''
-        vacio.textContent = visibles.length ? t('pickOne') : t('chatNoMatch')
-        sel.appendChild(vacio)
+      }
 
+      function opcionesDeChats (terminos) {
+        if (!chatsTodos.length) return { items: [], vacio: estadoVacio(estadoSync).corto }
+        var visibles = filtrarChats(terminos)
+        if (!visibles.length) return { items: [], vacio: t('chatNoMatch') }
         // Nombres repetidos ENTRE LAS QUE SE VEN: dos homonimos que el filtro no puso
         // juntos no se confunden con nada.
         var repetidos = {}
@@ -2264,36 +2585,59 @@
           var k = aplanar(c.name || c.jid)
           repetidos[k] = (repetidos[k] || 0) + 1
         })
-
-        // Lo autorizado, arriba y aparte. Con 296 filas las tres que importan son
-        // invisibles, y son justo las que el dueno vuelve a abrir: para cambiarles el
-        // permiso, el destino o las instrucciones.
-        // Colapsado mientras no se busca —una lista de 296 filas abierta no es una
-        // pantalla, es un muro— y desplegado en cuanto hay terminos, que es cuando hay
-        // algo que mirar. Nunca mas alto que lo que hay: un hueco vacio debajo del
-        // ultimo resultado se ve como que faltan filas por cargar.
-        sel.size = terminos.length
-          ? Math.max(2, Math.min(FILAS_BUSCANDO, visibles.length + 1))
-          : 1
-
-        var conPermiso = visibles.filter(function (c) { return !!modoDe(c.jid) })
-        if (conPermiso.length) {
-          var sinPermiso = visibles.filter(function (c) { return !modoDe(c.jid) })
-          agregarGrupo(sel, conPermiso, t('chatGroupOn'), repetidos)
-          agregarGrupo(sel, sinPermiso, t('chatGroupOff'), repetidos)
-        } else {
-          // Sin ninguna autorizada, un unico titulo "Sin autorizar" encima de la lista
-          // entera no dice nada: es ruido sobre el caso del primer dia.
-          agregarGrupo(sel, visibles, '', repetidos)
+        var item = function (grupo) {
+          return function (c) {
+            return { value: c.jid, nombre: nombreVisible(c), grupo: grupo,
+              kind: t(c.kind === 'grupo' ? 'kindGroup' : 'kindDirect'),
+              sub: detalleChat(c, repetidos[aplanar(c.name || c.jid)] > 1) }
+          }
         }
+        // Lo autorizado, arriba y aparte. Con 296 filas las tres que importan son
+        // invisibles, y son justo las que el dueno vuelve a abrir. Sin ninguna
+        // autorizada, un unico titulo "Sin autorizar" no dice nada: es ruido.
+        var conModo = visibles.filter(function (c) { return !!modoDe(c.jid) })
+        if (!conModo.length) return { items: visibles.map(item(null)) }
+        var sinModo = visibles.filter(function (c) { return !modoDe(c.jid) })
+        return { items: conModo.map(item(t('chatGroupOn')))
+          .concat(sinModo.map(item(t('chatGroupOff')))) }
+      }
 
-        // Contar solo cuando se esta filtrando: "214 de 214" no le dice nada a nadie.
-        el('chat-count').textContent = terminos.length
-          ? t('chatCount').replace('{n}', visibles.length).replace('{total}', chatsTodos.length)
+      var comboChats = crearCombo({
+        input: 'chat-search', lista: 'chat-list',
+        opciones: opcionesDeChats,
+        elegir: function (item) { pickChat(item.value, item.nombre) },
+        alEscribir: function () {
+          // Lo escrito ya no es lo elegido: se suelta, y se autoriza solo lo que se ve.
+          if (!editandoJid && chatElegido && el('chat-search').value !== el('chat').value) {
+            chatElegido = ''
+            el('chat').value = ''
+            pintarIdentidad()
+          }
+          pintarCuenta()
+        }
+      })
+
+      /** El renglon de debajo del buscador: el estado de la lista si no hay ninguna, y
+       *  cuantas quedaron si se esta filtrando ("214 de 214" no le dice nada a nadie). */
+      function pintarCuenta () {
+        var n = el('chat-count')
+        if (!chatsTodos.length) { n.textContent = estadoVacio(estadoSync).corto; return }
+        var terminos = comboChats.escribiendo() && !chatElegido
+          ? aplanar(el('chat-search').value).split(' ').filter(Boolean) : []
+        n.textContent = terminos.length
+          ? t('chatCount').replace('{n}', filtrarChats(terminos).length)
+            .replace('{total}', chatsTodos.length)
           : ''
+      }
+
+      function pintarChats () {
+        pintarEstadoSync()
+        pintarCuenta()
+        // El campo NO se toca: es lo que el dueno esta escribiendo. Solo se redibuja la
+        // lista, si esta abierta, con el mismo filtro y la misma opcion activa.
+        comboChats.refrescar()
         if (editandoJid) pickChat(editandoJid, (chatsPorJid[editandoJid] || {}).name)
-        else if (elegido) sel.value = elegido
-        pintarIdentidad()
+        else pintarIdentidad()
       }
 
       /** La identidad de lo que quedo elegido, debajo del selector.
@@ -2304,7 +2648,7 @@
        *  tenia permiso, tambien: guardar encima de una autorizacion sin saberlo es la
        *  otra mitad del mismo error. */
       function pintarIdentidad () {
-        var jid = el('chat-pick').value
+        var jid = editandoJid || chatElegido
         var n = el('chat-id')
         if (!jid) { n.textContent = ''; return }
         var c = chatsPorJid[jid]
@@ -2313,15 +2657,8 @@
         if (c && c.last) partes.push(c.last)
         var modo = modoDe(jid)
         if (modo) partes.push(fmt('chatAlready', { m: porCodigo(MODE_KEY, modo, modo) }))
-        n.textContent = partes.join(' \u00b7 ')
+        n.textContent = partes.join(' · ')
       }
-
-      el('chat-search').addEventListener('input', pintarChats)
-      el('chat-pick').addEventListener('change', function () {
-        var c = chatsPorJid[el('chat-pick').value]
-        el('chat').value = c ? nombreVisible(c) : ''
-        pintarIdentidad()
-      })
 
       // ---------- proyectos (T12) ----------
       // El catalogo vive en storage (`projects`, lo escribe el worker) y las propuestas en
@@ -2356,33 +2693,84 @@
         return p ? esc(p.name || p.id) : esc(fmt('workspaceMissing', { id: id }))
       }
 
-      function opcionDeProyecto(p) {
-        return '<option value="' + escAttr(p.id) + '">' + esc(p.name || p.id) + '</option>'
+      /** El nombre de un proyecto para un campo de texto, sin escapar. */
+      function nombreDeProyectoPlano(id) {
+        if (!id) return t('workspaceNone')
+        var p = proyectos.filter(function (x) { return x.id === id })[0]
+        return p ? (p.name || p.id) : fmt('workspaceMissing', { id: id })
       }
 
-      /** Los dos selectores que ofrecen proyectos: el de cada conversacion y el de cada
-       *  regla. `valor` es lo que debe quedar elegido en el de la conversacion; sin el se
-       *  conserva lo que habia. */
-      function pintarSelectoresDeProyecto(valor) {
-        var ws = el('workspace')
-        var actual = valor === undefined ? ws.value : valor
-        var html = '<option value="">' + esc(t('workspaceNone')) + '</option>' +
-          proyectos.map(opcionDeProyecto).join('')
+      /** Los proyectos que ofrece un autocompletar de proyecto, con lo escrito. `actual` es
+       *  el que tiene elegido: uno que el dueno quito del catalogo se sigue ofreciendo,
+       *  marcado, para que guardar sin tocarlo no lo borre — puede volver. */
+      function opcionesDeProyectos(terminos, conNinguno, actual) {
+        var items = []
+        if (conNinguno) items.push({ value: '', nombre: t('workspaceNone') })
+        proyectos.forEach(function (p) {
+          items.push({ value: p.id, nombre: p.name || p.id, sub: p.path || '' })
+        })
         if (actual && !proyectos.some(function (p) { return p.id === actual })) {
-          html += '<option value="' + escAttr(actual) + '">' +
-            esc(fmt('workspaceMissing', { id: actual })) + '</option>'
+          items.push({ value: actual, nombre: fmt('workspaceMissing', { id: actual }) })
         }
-        ws.innerHTML = html
-        ws.value = actual || ''
+        if (terminos.length) {
+          items = items.filter(function (i) {
+            var texto = aplanar(i.nombre) + ' ' + aplanar(i.value)
+            return terminos.every(function (x) { return texto.indexOf(x) !== -1 })
+          })
+        }
+        return { items: items, vacio: t('workspaceNoMatch') }
+      }
+
+      /** El autocompletar de proyecto de la conversacion y el de la regla: el mismo
+       *  control, y el valor elegido vive en un campo oculto (`#workspace`, `#r-workspace`). */
+      function comboDeProyecto(prefijo, conNinguno) {
+        // Escribir sin elegir no cambia el proyecto: al salir del campo vuelve a decir el
+        // que de verdad quedo elegido, que es el que se guarda.
+        el(prefijo + '-search').addEventListener('blur', function () {
+          combo.olvidar()
+          var v = el(prefijo).value
+          el(prefijo + '-search').value = v || conNinguno ? nombreDeProyectoPlano(v) : ''
+        })
+        var combo = crearCombo({
+          input: prefijo + '-search', lista: prefijo + '-list',
+          opciones: function (terminos) {
+            return opcionesDeProyectos(terminos, conNinguno, el(prefijo).value)
+          },
+          elegir: function (item) {
+            el(prefijo).value = item.value
+            el(prefijo + '-search').value = conNinguno || item.value
+              ? nombreDeProyectoPlano(item.value) : ''
+          }
+        })
+        return combo
+      }
+      var comboProyecto = comboDeProyecto('workspace', true)
+      var comboRegla = comboDeProyecto('r-workspace', false)
+
+      /** Los dos autocompletar que ofrecen proyectos: el de cada conversacion y el de cada
+       *  regla. `valor` es lo que debe quedar elegido en el de la conversacion; sin el se
+       *  conserva lo que habia. Lo que el dueno esta escribiendo no se pisa. */
+      function pintarSelectoresDeProyecto(valor) {
+        var forzar = valor !== undefined
+        if (forzar) {
+          el('workspace').value = valor || ''
+          comboProyecto.olvidar()
+          comboProyecto.cerrar()
+        }
+        if (forzar || !comboProyecto.escribiendo()) {
+          el('workspace-search').value = nombreDeProyectoPlano(el('workspace').value)
+        }
+        comboProyecto.refrescar()
         el('workspace-hint').textContent = t(proyectos.length ? 'workspaceHint'
           : 'workspaceHintNoProjects')
+        // La regla solo apunta a un proyecto del catalogo: uno quitado se suelta.
         var rs = el('r-workspace')
-        var elegido = rs.value
-        rs.innerHTML = proyectos.map(opcionDeProyecto).join('')
-        if (elegido && proyectos.some(function (p) { return p.id === elegido })) {
-          rs.value = elegido
+        if (rs.value && !proyectos.some(function (p) { return p.id === rs.value })) rs.value = ''
+        if (!comboRegla.escribiendo()) {
+          el('r-workspace-search').value = rs.value ? nombreDeProyectoPlano(rs.value) : ''
         }
-        rs.disabled = !proyectos.length
+        el('r-workspace-search').disabled = !proyectos.length
+        comboRegla.refrescar()
         el('route-hint').textContent = proyectos.length ? '' : t('routesNeedProject')
       }
 
@@ -2558,33 +2946,55 @@
         })
       }
 
+      // Lo que hace cada modo, debajo de los botones: el nombre corto cabe en el boton y
+      // la frase entera dice que pasa con los mensajes de esa conversacion.
+      var MODE_DESC = { off: 'off', observar: 'observe', borrador: 'draft', responder: 'reply' }
+      function pintarModo() {
+        var m = valorSeg('mode')
+        el('mode-desc').textContent = MODE_DESC[m] ? t(MODE_DESC[m]) : ''
+      }
+      el('mode').addEventListener('change', pintarModo)
+
       function startEdit(entry, key) {
         if (!entry) return
         editandoJid = key
         pickChat(key, entry.chatName || key)
         el('chat').value = entry.chatName || key
+        // Mientras se edita, la conversacion no cambia: cambiarla seria otra autorizacion.
+        el('chat-search').readOnly = true
+        comboChats.cerrar()
         // El proyecto de la conversacion, aunque ya no este en la lista: se ofrece como
         // opcion propia para que guardar sin tocarlo no lo borre, que puede volver.
         pintarSelectoresDeProyecto(entry.workspace || '')
         el('chat-tone').value = entry.tone || ''
         el('chat-instructions').value = entry.instructions || ''
-        el('mode').value = entry.mode || 'off'
+        ponerSeg('mode', entry.mode, 'off')
+        pintarModo()
+        el('scope-form-title').textContent = t('formEditing')
         el('save-scope').textContent = t('saveEdit')
         el('cancel-edit').hidden = false
         said('said-scope', '')
-        el('chat').focus()
+        var form = el('scope-form')
+        if (form.scrollIntoView) form.scrollIntoView({ block: 'start', behavior: 'smooth' })
       }
       function resetScopeForm() {
         editandoJid = ''
-        el('chat').value = ''; el('mode').value = 'off'
+        chatElegido = ''
+        el('chat').value = ''
+        el('chat-search').value = ''
+        el('chat-search').readOnly = false
+        comboChats.olvidar()
+        ponerSeg('mode', 'off', 'off')
+        pintarModo()
         el('chat-tone').value = ''
         el('chat-instructions').value = ''
         // Una conversacion nueva arranca sin proyecto: la mayoria de los 1 a 1 solo piden
         // que el agente lea y conteste, y elegir uno por inercia mandaria su trabajo a un
         // repo que nada tiene que ver.
         pintarSelectoresDeProyecto('')
-        el('chat-pick').value = ''
         pintarIdentidad()
+        pintarCuenta()
+        el('scope-form-title').textContent = t('formLegend')
         el('save-scope').textContent = t('save')
         el('cancel-edit').hidden = true
       }
@@ -2618,15 +3028,16 @@
       function removeScope(key, name, boton) {
         var pedir = pedirAlWorker('scopeRequest', 'scopeResult',
           { action: 'quitar', jid: key }).then(function (v) {
-          if (!v) { said('said-scope', t('pairingNoAnswer'), true); return }
+          // El veredicto va al lado de la tabla, que es donde se apreto Quitar.
+          if (!v) { said('said-scope-rm', t('pairingNoAnswer'), true); return }
           if (!v.ok) {
             // El detalle crudo del worker es ingles de un subproceso ('spawn ... ENOENT')
             // y no se muestra: el codigo manda cuando el panel lo conoce, y si no, la
             // frase generica, que al menos dice lo que importa — sigue autorizada.
-            said('said-scope', porCodigo(SCOPE_HOW_KEY, v.code, '') || t('scopeRmFail'), true)
+            said('said-scope-rm', porCodigo(SCOPE_HOW_KEY, v.code, '') || t('scopeRmFail'), true)
             return
           }
-          said('said-scope', '✓ ' + t('removedOk') + ': ' + name)
+          said('said-scope-rm', '✓ ' + t('removedOk') + ': ' + name)
           // El alcance NO esta entre las claves que el sondeo refresca, asi que se relee
           // esta sola: repintar con la copia de antes dejaria la fila en pantalla sobre
           // una autorizacion que ya no existe. Un mensaje, por el carril del usuario.
@@ -2641,10 +3052,10 @@
         // La llave es el jid, como la del registro del CLI. Guardando por nombre, lo
         // escrito aca quedaba en una entrada aparte que `wa-scope` no encontraba nunca:
         // el panel decia guardado y el agente seguia con el valor viejo.
-        var jid = editandoJid || el('chat-pick').value
+        var jid = editandoJid || chatElegido
         var chat = el('chat').value.trim() || jid
         var workspace = el('workspace').value || null
-        var mode = el('mode').value
+        var mode = valorSeg('mode') || 'off'
         if (!jid) { said('said-scope', t('needChat'), true); return }
         busy(event.currentTarget, read('scope').then(function (next) {
           next = next || {}
@@ -2663,6 +3074,7 @@
           return write('scope', next).then(function () {
             renderScope(next)
             resetScopeForm()
+            pintarChecklist()
             said('said-scope', '✓ ' + t('savedOk') + ': ' + chat + ' · ' +
               porCodigo(MODE_KEY, mode, mode))
           })
@@ -2673,6 +3085,7 @@
       function renderRoutes(rules) {
         rules = rules || []
         reglasCrudas = rules
+        el('routes-legacy-help').hidden = !rules.some(function (r) { return r && !r.workspace })
         if (!rules.length) {
           el('routes-wrap').innerHTML = '<p class="empty">' + t('noRoutes') + '</p>'
           return
@@ -2681,12 +3094,16 @@
           '<table><thead><tr><th>' + t('colWhen') + '</th><th>' + t('colGoes') +
           '</th><th></th></tr></thead><tbody>' +
           rules.map(function (r, i) {
-            // Una regla de antes (sin proyecto) se sigue viendo con su destino viejo:
-            // sin eso la fila quedaria vacia y el dueno no sabria que quitar.
-            return '<tr><td>' + esc(r.pattern) + '</td><td>' +
-              (r.workspace ? nombreDeProyecto(r.workspace)
-                : esc(porCodigo(PROV_KEY, r.provider || 'plane', r.provider)) + ' / ' +
-                  esc(r.target || '—')) + '</td>' +
+            // Una regla de antes (sin proyecto) se sigue viendo con su destino viejo y
+            // MARCADA como vieja: ya no se usa, pero borrarla callado seria perder lo que
+            // el dueno configuro, y sin la marca no sabria que esta no hace nada.
+            var vieja = !r.workspace
+            return '<tr' + (vieja ? ' class="vieja"' : '') + '><td>' + esc(r.pattern) +
+              '</td><td>' +
+              (vieja ? esc(porCodigo(PROV_KEY, r.provider || 'plane', r.provider)) + ' / ' +
+                  esc(r.target || '—') + '<span class="legacy">' + esc(t('routeLegacy')) +
+                  '</span>'
+                : nombreDeProyecto(r.workspace)) + '</td>' +
               '<td class="acts"><button class="link" data-rrm="' + i + '">' +
               t('remove') + '</button></td></tr>'
           }).join('') + '</tbody></table>'
@@ -2938,6 +3355,7 @@
         if (hayRespuesta(d)) sidecarUlt = d
         else d = sidecarUlt
         var estado = estadoSidecar(d, edadLectura('sidecar'))
+        estadoLinea = estado
         var msg = el('pairing-msg')
         var detalle = el('pairing-detail')
         var diag = el('pairing-diag')
@@ -3234,9 +3652,12 @@
           t(enabled ? (keySet ? 'jevStOnYes' : 'jevStOnNo') : (keySet ? 'jevStOffYes' : 'jevStOffNo'))
         el('jev-remove-key').hidden = !keySet
         el('jev-key').placeholder = t(keySet ? 'jevKeyPhSet' : 'jevKeyPh')
-        // No se pisa lo que el usuario esta eligiendo en este momento.
-        if (document.activeElement !== el('jev-enabled')) {
-          el('jev-enabled').value = enabled ? 'on' : 'off'
+        jevUltimo = s
+        // Mientras viaja el pedido el interruptor muestra lo que el dueno apreto; el
+        // estado que vuelve del worker manda en cuanto llega.
+        if (!jevEnviando) {
+          el('jev-enabled').setAttribute('aria-checked', enabled ? 'true' : 'false')
+          el('jev-switch-text').textContent = t(enabled ? 'jevOn' : 'jevOff')
         }
         // Un archivo de llave que no escribio el plugin no se toca solo: el lector lo trata
         // como "sin llave", y el usuario tiene que saber por que no anda.
@@ -3245,6 +3666,7 @@
           : s.mirror === 'fallo' ? 'jevMirrorFail' : ''
         nota.hidden = !clave
         nota.innerHTML = clave ? t(clave) : ''
+        pintarChecklist()
       }
 
       function jevRefrescar () {
@@ -3289,13 +3711,28 @@
         }))
       })
 
-      el('jev-save-enabled').addEventListener('click', function (event) {
-        var encender = el('jev-enabled').value === 'on'
-        busy(event.currentTarget, pedirJev({ action: 'activar', enabled: encender })
-          .then(function (v) {
-            jevDecir('said-jev-enabled', v, 'jevSaved')
-            return jevRefrescar()
-          }))
+      // El interruptor actua al apretarlo, como todo interruptor: el dueno no podia
+      // encender Jev porque el select no abria, y un "Guardar" aparte despues de un
+      // interruptor es un segundo paso que nadie espera. Manda el mismo pedido de antes.
+      var jevEnviando = false, jevUltimo = null
+      el('jev-enabled').addEventListener('click', function (event) {
+        if (jevEnviando) return
+        var sw = event.currentTarget
+        var encender = sw.getAttribute('aria-checked') !== 'true'
+        jevEnviando = true
+        sw.setAttribute('aria-checked', encender ? 'true' : 'false')
+        sw.setAttribute('aria-busy', 'true')
+        sw.disabled = true
+        el('jev-switch-text').textContent = t(encender ? 'jevOn' : 'jevOff')
+        pedirJev({ action: 'activar', enabled: encender }).then(function (v) {
+          jevDecir('said-jev-enabled', v, 'jevSaved')
+          jevEnviando = false
+          sw.removeAttribute('aria-busy')
+          sw.disabled = workerAusente === true
+          // Lo que dice el worker manda: sin respuesta, el interruptor vuelve a lo que rige.
+          renderJev(jevUltimo)
+          return jevRefrescar()
+        })
       })
 
 
@@ -3313,6 +3750,94 @@
         }, 2000)
       }
 
+
+      // ---------- pestanas (T17) ----------
+      // Seis vistas, una visible. Sin localStorage: en el iframe con sandbox el origen es
+      // opaco y tocarlo tira una excepcion. La pestana no se recuerda entre aperturas, y
+      // la de entrada se decide UNA vez, con lo que falta (`decidirPestana`).
+      var PESTANAS = ['estado', 'chats', 'proyectos', 'aprobacion', 'agente', 'avanzado']
+      var pestanaElegida = false
+      function mostrarPestana (cual) {
+        PESTANAS.forEach(function (p) {
+          var activa = p === cual
+          el('view-' + p).hidden = !activa
+          el('tab-' + p).setAttribute('aria-selected', activa ? 'true' : 'false')
+          el('tab-' + p).tabIndex = activa ? 0 : -1
+        })
+        // Una lista abierta en la pestana que se va quedaria flotando sobre la otra.
+        comboChats.cerrar(); comboProyecto.cerrar(); comboRegla.cerrar()
+      }
+      PESTANAS.forEach(function (p, i) {
+        el('tab-' + p).addEventListener('click', function () {
+          pestanaElegida = true
+          mostrarPestana(p)
+        })
+        // Flechas, Inicio y Fin entre pestanas, como pide el patron de tablist.
+        el('tab-' + p).addEventListener('keydown', function (e) {
+          var j = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1
+            : e.key === 'Home' ? 0 : e.key === 'End' ? PESTANAS.length - 1 : null
+          if (j === null) return
+          e.preventDefault()
+          var otra = PESTANAS[(j + PESTANAS.length) % PESTANAS.length]
+          pestanaElegida = true
+          mostrarPestana(otra)
+          el('tab-' + otra).focus()
+        })
+      })
+
+      // ---------- lo que falta (Estado) ----------
+      // Se arma con lo que el panel YA leyo: ni una lectura de mas contra el cupo del host.
+      var estadoLinea = null
+      function faltas () {
+        var alcance = alcancePorJid || {}
+        var jev = jevUltimo || {}
+        return [
+          { item: 'linea', ok: estadoLinea === 'connected', ir: 'estado', clave: 'chkLinea' },
+          { item: 'agente', ok: !!nombreAgente, ir: 'agente', clave: 'chkAgente' },
+          { item: 'chat', ok: Object.keys(alcance).some(function (j) {
+              return alcance[j] && alcance[j].mode && alcance[j].mode !== 'off'
+            }), ir: 'chats', clave: 'chkChat' },
+          { item: 'proyectos', ok: proyectos.length > 0, ir: 'proyectos',
+            clave: 'chkProyectos', nota: 'chkRecommended' },
+          { item: 'jev', ok: jev.enabled === true && jev.keySet === true, ir: 'aprobacion',
+            clave: 'chkJev', nota: 'chkOptional' }
+        ]
+      }
+      /** Lo imprescindible para que el agente trabaje: linea, nombre y una conversacion.
+       *  Los proyectos se recomiendan (sin ellos solo responde) y Jev es opcional. */
+      function configuracionLista () {
+        return faltas().filter(function (f) {
+          return f.item === 'linea' || f.item === 'agente' || f.item === 'chat'
+        }).every(function (f) { return f.ok })
+      }
+      function pintarChecklist () {
+        var lista = faltas()
+        var html = lista.map(function (f) {
+          return '<li data-item="' + f.item + '" data-ok="' + f.ok + '"><span class="mark">' +
+            (f.ok ? '✓' : '○') + '</span><span class="what">' + esc(t(f.clave)) +
+            (f.nota ? ' <span class="tag">(' + esc(t(f.nota)) + ')</span>' : '') + '</span>' +
+            (f.ok || f.ir === 'estado' ? ''
+              : '<button class="link" data-ir="' + f.ir + '">' +
+                esc(t('tab' + f.ir.charAt(0).toUpperCase() + f.ir.slice(1))) +
+                ' →</button>') + '</li>'
+        }).join('')
+        if (configuracionLista()) html += '<li class="done">' + esc(t('chkAllDone')) + '</li>'
+        el('checklist').innerHTML = html
+        Array.prototype.forEach.call(el('checklist').querySelectorAll('[data-ir]'), function (b) {
+          b.addEventListener('click', function () {
+            pestanaElegida = true
+            mostrarPestana(b.dataset.ir)
+          })
+        })
+      }
+      /** La pestana de entrada: Estado mientras falta lo imprescindible, Conversaciones
+       *  cuando ya esta, que es donde se trabaja a diario. Una sola vez, y nunca encima de
+       *  una que el dueno eligio: el sondeo no le cambia la pantalla a nadie. */
+      function decidirPestana () {
+        if (pestanaElegida) return
+        pestanaElegida = true
+        mostrarPestana(configuracionLista() ? 'chats' : 'estado')
+      }
 
       // ---------- carga y refresco ----------
       var liveStorage = null
@@ -3419,6 +3944,8 @@
             if (hayRespuesta(v('routes'))) renderRoutes(v('routes'))
             renderPairing(v('sidecar'))
             apagarLoQueNecesitaWorker(sinWorker)
+            pintarChecklist()
+            if (!soloVivas) decidirPestana()
           })
       }
 
@@ -3440,8 +3967,10 @@
       window.addEventListener('focus', reloadDeUsuario)
 
       applyStrings()
+      mostrarPestana('estado')
       renderJev(null)
       resetScopeForm()
+      pintarChecklist()
       call('storage.get', { key: 'scope' }).then(function (r) {
         // Un `rate_limited` es prueba de que el puente CONTESTO: es el host poniendo
         // limite, no un Orca sin storage. Tomarlo por lo segundo apagaba TODOS los
@@ -3449,7 +3978,8 @@
         liveStorage = !!r.ok || r.errorCode === 'rate_limited'
         if (!liveStorage) {
           showAlert(t('needsUpdate'), t('needsUpdateHow'))
-          Array.prototype.forEach.call(document.querySelectorAll('button'), function (b) {
+          // Las pestanas no: sin poder guardar, mirar sigue sirviendo.
+          Array.prototype.forEach.call(document.querySelectorAll('button:not(.tab)'), function (b) {
             b.disabled = true
           })
           return
