@@ -10,7 +10,10 @@ re-propone cada cinco minutos, y "nada corre sin tu clic" depende de eso.
 Cada caso corre en su propio HOME temporal, como scripts/check-closing: la base vive en
 ~/.wa-inbox/scope.db y no hay variable para moverla.
 """
+import argparse
 import hashlib
+import importlib.machinery
+import importlib.util
 import json
 import os
 import pathlib
@@ -787,6 +790,71 @@ with tempfile.TemporaryDirectory() as home:
        corre(home, "caso", "asignar", "R6", "--actor", "agente").returncode != 0
        and corre(home, "caso", "asignar", "R6", "--chat", CHAT).returncode != 0)
 
+
+
+# La carrera: triage re-propone MIENTRAS el clic del dueno esta en camino. La lectura de
+# la version y la escritura de la firma tienen que ser una sola transaccion; si no, el
+# clic lee la version vieja y firma encima de la nueva. Como proceso no se puede
+# intercalar a voluntad, asi que se corre la funcion de wa-scope y triage escribe justo
+# despues de que el clic leyo el caso.
+def carga_wa_scope(home):
+    os.environ.update(HOME=str(home), XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+                      APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"))
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, str(WA_SCOPE.parent))
+    cargador = importlib.machinery.SourceFileLoader("wa_scope_carrera", str(WA_SCOPE))
+    spec = importlib.util.spec_from_loader("wa_scope_carrera", cargador)
+    modulo = importlib.util.module_from_spec(spec)
+    cargador.exec_module(modulo)
+    return modulo
+
+
+print("\nla carrera entre aprobar y re-proponer")
+with tempfile.TemporaryDirectory() as home:
+    cid = caso_clasificado(home)
+    v1 = js(home, "caso", "propuesta", cid, "--tipo", "trabajar", "--instrucciones",
+            "Corregir el login", "--actor", "agente")[0]["propuesta_version"]
+    entorno_antes = dict(os.environ)
+    wa = carga_wa_scope(home)
+    leer = wa.caso_de
+    triage_escribio = []
+
+    def caso_de_y_triage(con, case_id):
+        caso = leer(con, case_id)
+        if not triage_escribio:
+            triage = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "scope.db",
+                                     timeout=0.2)
+            try:
+                triage.execute("update caso set propuesta=?, propuesta_version='v2', "
+                               "propuesta_aprobada=null where case_id=?",
+                               ('{"tipo":"trabajar","instrucciones":"Otra cosa"}',
+                                int(cid)))
+                triage.commit()
+                triage_escribio.append(True)
+            except sqlite3.OperationalError:
+                triage_escribio.append(False)
+            finally:
+                triage.close()
+        return caso
+
+    wa.caso_de = caso_de_y_triage
+    con = wa.db()
+    try:
+        wa.cmd_caso_aprobar(con, argparse.Namespace(id=int(cid), version=v1,
+                                                    actor="dueno"))
+    except SystemExit:
+        pass
+    con.close()
+    os.environ.clear()
+    os.environ.update(entorno_antes)
+    caso = js(home, "caso", "ver", cid)[0]
+    firmo_otra = (caso["propuesta_aprobada"] == v1 and caso["propuesta_version"] != v1)
+    ok("el clic no firma una propuesta que cambio entre su lectura y su escritura",
+       not firmo_otra and not (caso["etapa"] == "trabajo" and not caso["aprobada"]),
+       f"triage escribio {triage_escribio}; quedo {caso['etapa']} "
+       f"{caso['propuesta_version']} firmada {caso['propuesta_aprobada']}")
+    ok("y triage no pudo escribir en medio: el clic tenia la base tomada",
+       triage_escribio == [False], f"triage escribio {triage_escribio}")
 
 
 # ── 8. El caso sigue al trabajo que cuelga de el ─────────────────────────────────

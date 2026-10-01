@@ -2041,6 +2041,16 @@ def caso_evento(con, case_id, de, a, actor, detalle="", at=None):
                                          at or ahora_caso()))
 
 
+def caso_toma(con):
+    """Toma la base para escribir ANTES de leer el caso. Leer la version y firmar en
+    dos transacciones deja que triage re-proponga en medio, y el clic firmaria encima
+    de una propuesta que el dueno no vio. Lo pendiente de abrir la base (migraciones)
+    se confirma primero: BEGIN no se anida."""
+    if con.in_transaction:
+        con.commit()
+    con.execute("begin immediate")
+
+
 def caso_de(con, case_id):
     """El caso de la linea activa, o la salida con error. Un id de otra linea no
     existe para esta: es la misma regla que el alcance (T9)."""
@@ -2143,6 +2153,7 @@ def casos_sin_trabajo(con, case_ids, motivo):
 
 
 def cmd_caso_crear(con, a):
+    caso_toma(con)
     if a.stanza:
         ya = caso_de_mensaje(con, a.stanza)
         if ya:
@@ -2155,6 +2166,7 @@ def cmd_caso_crear(con, a):
 
 
 def cmd_caso_mover(con, a):
+    caso_toma(con)
     caso = caso_de(con, a.id)
     caso_valida(caso, a.etapa, a.motivo)
     caso_mover(con, caso, a.etapa, a.actor, (a.motivo or "").strip())
@@ -2163,6 +2175,7 @@ def cmd_caso_mover(con, a):
 
 
 def cmd_caso_clasificar(con, a):
+    caso_toma(con)
     caso = caso_de(con, a.id)
     clase = (a.clase or "").strip()
     if not clase:
@@ -2189,6 +2202,7 @@ def propuesta_canonica(propuesta):
 
 
 def cmd_caso_propuesta(con, a):
+    caso_toma(con)
     caso = caso_de(con, a.id)
     propuesta = {"tipo": a.tipo}
     for campo in ("respuesta", "instrucciones", "repo"):
@@ -2223,6 +2237,7 @@ def cmd_caso_aprobar(con, a):
     Aprobar siempre deja la marca `propuesta_aprobada`; solo `trabajar` ademas mueve el
     caso a `trabajo`. Enviar una respuesta, abrir la tarjeta de Plane o cerrar lo
     descartado es del ejecutor, que lee la marca: este comando no toca WhatsApp."""
+    caso_toma(con)
     caso = caso_de(con, a.id)
     if not caso["propuesta_version"]:
         sys.exit(f"case #{a.id} has no proposal to approve")
@@ -2255,6 +2270,7 @@ def cmd_caso_resultado(con, a):
     La firma del dueno se borra: lo que aprobo eran las instrucciones del trabajo, no
     este texto, y enviar algo que nadie vio es lo que el tablero existe para impedir.
     El mismo resultado dos veces (el trabajador reintenta) no escribe nada."""
+    caso_toma(con)
     caso = caso_de(con, a.id)
     respuesta, resumen = (a.respuesta or "").strip(), (a.resumen or "").strip()
     if not respuesta or not resumen:
@@ -2275,6 +2291,7 @@ def cmd_caso_unir(con, a):
     """Junta dos casos que son el mismo pedido: los mensajes (y el trabajo que colgaba)
     del origen pasan al destino, y el origen se cierra diciendo a donde fue. Los dos
     dejan evento: el tablero tiene que poder explicar por que una tarjeta desaparecio."""
+    caso_toma(con)
     if a.destino == a.origen:
         sys.exit(f"case #{a.destino} cannot be joined with itself")
     destino, origen = caso_de(con, a.destino), caso_de(con, a.origen)
@@ -2300,6 +2317,7 @@ def cmd_caso_separar(con, a):
     """Saca mensajes de un caso a uno NUEVO en recibido, de la misma conversacion. Si
     uno solo no es de ese caso no se mueve ninguno; y no se separan todos, que dejaria
     una tarjeta sin mensajes en la columna."""
+    caso_toma(con)
     caso = caso_de(con, a.id)
     cuenta = cuenta_activa()
     stanzas = list(dict.fromkeys(a.stanzas))
@@ -2340,6 +2358,7 @@ def cmd_caso_asignar(con, a):
     Sumarse a un caso `respondido` lo devuelve a `recibido`: el cliente volvio a
     escribir y eso hay que leerlo. En cualquier otra etapa solo suma el mensaje y deja
     el evento. Un mensaje ya asignado devuelve su caso sin escribir: triage repasa."""
+    caso_toma(con)
     cuenta = cuenta_activa()
     ya = caso_de_mensaje(con, a.stanza)
     if ya:
