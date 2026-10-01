@@ -789,7 +789,74 @@ with tempfile.TemporaryDirectory() as home:
 
 
 
-# ── 8. Las lineas: re-clave y otra linea activa ──────────────────────────────────
+# ── 8. El caso sigue al trabajo que cuelga de el ─────────────────────────────────
+# `work --done`, el aviso de cierre y el abandono de una semana cierran `work`. Si el
+# caso migrado no los sigue, queda en trabajo para siempre en el tablero.
+print("\nel caso sigue al trabajo")
+with tempfile.TemporaryDirectory() as home:
+    (pathlib.Path(home) / ".wa-inbox").mkdir(parents=True)
+    vieja = db_de(home)
+    vieja.executescript("""
+      create table work (
+        stanza_id text primary key, chat_jid text, chat_name text, issue text,
+        step text, next_step text, status text not null default 'open',
+        opened_at text, updated_at text);
+      insert into work values ('A1','%(c)s','Soporte Norte','SOP-1','abierta','x','open',
+        '%(h3)s', '%(h3)s');
+      insert into work values ('A2','%(c)s','Soporte Norte','SOP-1','abierta','x','open',
+        '%(h2)s', '%(h2)s');
+      insert into work values ('B1','%(c)s','Soporte Norte','SOP-2','abierta','x','open',
+        '%(h2)s', '%(h2)s');
+      insert into work values ('C1','%(c)s','Soporte Norte','SOP-3','abierta','x','open',
+        '%(h1)s', '%(h1)s');
+    """ % dict(HACE, c=CHAT))
+    vieja.commit()
+    vieja.close()
+    por_issue = {c["plane_issue"]: str(c["case_id"]) for c in js(home, "caso", "listar")}
+    etapa = lambda issue: js(home, "caso", "ver", por_issue[issue])[0]["etapa"]  # noqa: E731
+
+    js(home, "work", "--done", "A1")
+    ok("terminar uno de dos mensajes no cierra el caso", etapa("SOP-1") == "trabajo")
+    js(home, "work", "--done", "A2")
+    ultimo = js(home, "caso", "ver", por_issue["SOP-1"])[0]["eventos"][-1]
+    ok("terminar el ultimo trabajo del caso lo cierra, con motivo y la automatizacion",
+       etapa("SOP-1") == "cerrado" and ultimo["de"] == "trabajo"
+       and ultimo["a"] == "cerrado" and ultimo["actor"] == "automatizacion"
+       and ultimo["detalle"], f"evento {ultimo}")
+
+    # El backlog migrado quedo como ya avisado (closing_baseline) y el aviso no lo
+    # toca. Lo que si avisa es trabajo abierto despues, colgado de un caso.
+    js(home, "agent", "Watson")
+    js(home, "set", CHAT, "--provider", "plane", "--target", "SOP", "--mode", "responder")
+    nuevo = str(js(home, "caso", "crear", "--chat", CHAT, "--stanza", "N1",
+                   "--actor", "agente")[0]["case_id"])
+    js(home, "work", "--stanza", "N1", "--chat", CHAT, "--name", "Soporte Norte",
+       "--issue", "SOP-9", "--step", "tarjeta abierta", "--next", "seguir")
+    con = db_de(home)
+    con.execute("update work set case_id=? where stanza_id='N1'", (int(nuevo),))
+    con.commit()
+    con.close()
+    js(home, "closing", "--result", "avisado", "--issue", "SOP-9", "--chat", CHAT)
+    caso_n = js(home, "caso", "ver", nuevo)[0]
+    ok("el aviso de cierre de la tarjeta cierra su caso",
+       caso_n["etapa"] == "cerrado" and "SOP-9" in caso_n["eventos"][-1]["detalle"],
+       f"quedo {caso_n}")
+
+    con = db_de(home)
+    con.execute("update work set updated_at=? where stanza_id='C1'", (time.strftime(
+        "%Y-%m-%d %H:%M", time.localtime(time.time() - 8 * 86400)),))
+    con.commit()
+    con.close()
+    js(home, "work")
+    ok("el trabajo abandonado por una semana cierra su caso", etapa("SOP-3") == "cerrado")
+    antes = cuenta(home, "select count(*) from caso_evento")
+    js(home, "work")
+    js(home, "work", "--done", "A2")
+    ok("y nada de eso vuelve a escribir sobre un caso ya cerrado",
+       cuenta(home, "select count(*) from caso_evento") == antes)
+
+
+# ── 9. Las lineas: re-clave y otra linea activa ──────────────────────────────────
 # El backfill crea los casos con la cuenta de `work`, que en una maquina de antes es
 # `local`; la re-clave anotada por el sidecar pasa `work` a su numero en la misma
 # apertura. Si los casos no la acompanan, desaparecen del tablero de esa linea.

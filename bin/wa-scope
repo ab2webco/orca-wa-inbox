@@ -1416,8 +1416,11 @@ def cmd_work(con, a):
     now = time.strftime("%Y-%m-%d %H:%M")
     cuenta = cuenta_activa()
     if a.done:
+        casos = casos_de_trabajo(con, "stanza_id=? and account=? and status='open'",
+                                 (a.done, cuenta))
         con.execute("update work set status='done', updated_at=? where stanza_id=? "
                     "and account=?", (now, a.done, cuenta))
+        casos_sin_trabajo(con, casos, "trabajo terminado")
         con.commit()
         return [{"done": a.done}]
     if a.stanza:
@@ -1439,8 +1442,11 @@ def cmd_work(con, a):
         con.commit()
     # Lo que lleva demasiado sin avanzar deja de ser "en curso": es ruido que hace que
     # el agente lo reintente para siempre.
+    corte = corte_abandono()
+    casos = casos_de_trabajo(con, "status='open' and updated_at < ?", (corte,))
     con.execute("update work set status='abandoned' where status='open' "
-                "and updated_at < ?", (corte_abandono(),))
+                "and updated_at < ?", (corte,))
+    casos_sin_trabajo(con, casos, "trabajo abandonado: una semana sin moverse")
     con.commit()
     # Lo en curso de ESTA linea: el trabajo del numero anterior espera a su numero (T9).
     return [dict(r) for r in con.execute(
@@ -1539,9 +1545,12 @@ def closing_mark(con, issue, chat_jid, result, detail=""):
     cuenta = cuenta_activa()
     row = con.execute("select chat_name from work where issue=? and chat_jid=? "
                       "and account=? limit 1", (issue, chat_jid, cuenta)).fetchone()
+    casos = casos_de_trabajo(con, "issue=? and chat_jid=? and account=? "
+                             "and notified_at is null", (issue, chat_jid, cuenta))
     cur = con.execute("update work set notified_at=?, status='done' "
                       "where issue=? and chat_jid=? and account=? and notified_at is null",
                       (now, issue, chat_jid, cuenta))
+    casos_sin_trabajo(con, casos, f"tarjeta {issue} cerrada: {result}")
     if not cur.rowcount:
         # Ya estaba registrado. Anotarlo de nuevo duplicaria la linea en el panel y
         # haria ver dos avisos donde hubo uno.
@@ -2110,6 +2119,27 @@ def caso_de_mensaje(con, stanza):
     row = con.execute("select case_id from caso_mensaje where account=? and stanza_id=?",
                       (cuenta_activa(), stanza)).fetchone()
     return row["case_id"] if row else None
+
+
+def casos_de_trabajo(con, donde, params):
+    """Los casos de los que cuelgan las filas de `work` que se van a cerrar. Se leen
+    ANTES del update: despues ya no se distinguen de las que estaban cerradas."""
+    return sorted({r["case_id"] for r in con.execute(
+        f"select case_id from work where case_id is not null and {donde}", params)})
+
+
+def casos_sin_trabajo(con, case_ids, motivo):
+    """El caso sigue a su trabajo: cuando ya no le queda ninguna fila de `work` abierta
+    (terminada, avisada o abandonada) se cierra con el motivo, firmado por la
+    automatizacion. Un caso con otro mensaje todavia en curso sigue abierto, y uno ya
+    cerrado no se toca. Sin commit: va en la transaccion de quien cierra `work`."""
+    for case_id in case_ids:
+        if con.execute("select 1 from work where case_id=? and status='open' limit 1",
+                       (case_id,)).fetchone():
+            continue
+        row = con.execute("select * from caso where case_id=?", (case_id,)).fetchone()
+        if row and row["etapa"] != "cerrado":
+            caso_mover(con, dict(row), "cerrado", "automatizacion", motivo)
 
 
 def cmd_caso_crear(con, a):
