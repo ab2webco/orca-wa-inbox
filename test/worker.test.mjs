@@ -2546,8 +2546,11 @@ console.log('\nworker: traer la libreta deja la lista al dia en segundos')
     }
   })(orca.host.call)
   const { apagar } = await arranca(orca)
-  // Al arrancar: la libreta que llega NO pedida no dispara nada propio.
+  // Al arrancar: la libreta que llega NO pedida no dispara nada propio. El primer latido
+  // conectado tras el arranque si pide UN sync (ver el bloque siguiente): se espera a que
+  // pase antes de contar, para que no se confunda con uno de la libreta.
   await dormir(2500)
+  await hasta(() => cuenta() >= 2, 8000)
   const base = cuenta()
   await dormir(1500)
   ok('sin que nadie la pida, los latidos y la libreta no disparan un sync', cuenta() === base,
