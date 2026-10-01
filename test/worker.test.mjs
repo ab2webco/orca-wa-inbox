@@ -53,7 +53,10 @@ for (const base of [join(process.env.HOME, 'Library', 'Application Support'),
 
 const PLUGIN_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
 
-const { default: activate, intervaloSync, lanzarSidecar } = await import('../main.mjs')
+const {
+  default: activate, intervaloSync, lanzarSidecar, programarIngesta, correrIngesta,
+  INGESTA_AVISOS_MAX, INGESTA_ESPERA_MS
+} = await import('../main.mjs')
 const { workspaceDir, dataDir } = await import('../harness.mjs')
 
 // Un sidecar de mentira para TODO el resto de las pruebas de este archivo: sin esto
@@ -1548,6 +1551,155 @@ console.log('\nworker: el resolvedor de auth borra el directorio cuando se lo pi
       m.args[2] === '/ruta/al/node' && m.args[3] === 'guion.mjs' && m.args[4] === 'argumento',
       JSON.stringify(m.args.slice(2)))
   }
+}
+
+// ───────── la entrada: un mensaje nuevo se vuelve caso sin esperar al reloj ─────────
+console.log('\nworker: el rebote de la entrada junta las rafagas en una sola corrida')
+{
+  ok('el rebote por defecto es de unos 5 segundos', INGESTA_ESPERA_MS === 5000,
+    `${INGESTA_ESPERA_MS}`)
+  const corridas = []
+  let enCurso = 0
+  let simultaneas = 0
+  const correr = async () => {
+    enCurso += 1
+    simultaneas = Math.max(simultaneas, enCurso)
+    corridas.push(Date.now())
+    await dormir(150)
+    enCurso -= 1
+  }
+  const entrada = programarIngesta(correr, { esperaMs: 80 })
+  for (let i = 0; i < 5; i += 1) { entrada.pedir(); await dormir(25) }
+  ok('mientras llegan pedidos seguidos no corre: espera a que se calme', corridas.length === 0,
+    `${corridas.length} corridas`)
+  await hasta(() => corridas.length >= 1, 3000)
+  await dormir(400)
+  ok('una rafaga de cinco pedidos es UNA corrida', corridas.length === 1,
+    `${corridas.length} corridas`)
+
+  // Un pedido que llega con una corrida en curso no arranca otra a la vez: espera, y
+  // despues corre UNA vez mas por mucho que hayan sido.
+  entrada.pedir()
+  await hasta(() => enCurso === 1, 3000)
+  for (let i = 0; i < 4; i += 1) entrada.pedir()
+  await hasta(() => corridas.length >= 3, 3000)
+  await dormir(600)
+  ok('los pedidos de una corrida en curso suman UNA corrida mas, no cuatro',
+    corridas.length === 3, `${corridas.length} corridas`)
+  ok('y nunca hay dos corriendo a la vez', simultaneas === 1, `${simultaneas} a la vez`)
+
+  // Apagar cancela lo que esta esperando.
+  const antes = corridas.length
+  entrada.pedir()
+  entrada.parar()
+  await dormir(300)
+  ok('parar cancela el pedido que esperaba', corridas.length === antes,
+    `${corridas.length - antes} corridas despues de parar`)
+
+  // Una corrida que revienta no apaga la entrada.
+  let intentos = 0
+  const revienta = programarIngesta(async () => { intentos += 1; throw new Error('x') },
+    { esperaMs: 20 })
+  revienta.pedir()
+  await dormir(150)
+  revienta.pedir()
+  await dormir(150)
+  ok('una corrida que falla no impide la siguiente', intentos === 2, `${intentos} intentos`)
+  revienta.parar()
+}
+
+console.log('\nworker: la corrida de la entrada no gasta llamadas al host y su log tiene tope')
+{
+  const marca = join(RAIZ, 'ingesta-llamadas.txt')
+  const buena = herramientas('ingesta-buena', '#!/bin/sh\n' +
+    `echo "$@" >> ${JSON.stringify(marca)}\n` +
+    'echo \'[{"nuevos": 2, "casos": [1]}]\'\n')
+  const orca = hostFalso(buena)
+  let llamadas = 0
+  const original = orca.host.call
+  orca.host.call = async (action, params) => { llamadas += 1; return original(action, params) }
+  const estado = { avisos: 0 }
+  await correrIngesta(orca, buena, estado)
+  ok('corre `wa-scope ingest --json`',
+    existsSync(marca) && readFileSync(marca, 'utf8').trim() === 'ingest --json',
+    existsSync(marca) ? readFileSync(marca, 'utf8') : '(no corrio)')
+  ok('es un proceso hijo: cero llamadas al host, que Orca cuenta y mata a las 64',
+    llamadas === 0, `${llamadas} llamadas`)
+  ok('y una corrida buena no escribe en el log', orca.logs.length === 0,
+    JSON.stringify(orca.logs))
+
+  const rota = herramientas('ingesta-rota',
+    '#!/bin/sh\necho "NameError: algo se rompio" >&2\nexit 1\n')
+  const orca2 = hostFalso(rota)
+  const estado2 = { avisos: 0 }
+  for (let i = 0; i < INGESTA_AVISOS_MAX + 6; i += 1) await correrIngesta(orca2, rota, estado2)
+  ok('una entrada que falla lo dice, con la causa',
+    orca2.logs.length > 0 && orca2.logs[0].includes('ingest failed') &&
+    orca2.logs[0].includes('NameError'), JSON.stringify(orca2.logs))
+  ok('pero el log tiene tope: cada linea es una llamada al host',
+    orca2.logs.length === INGESTA_AVISOS_MAX, `${orca2.logs.length} lineas`)
+  ok('y la ultima dice que no se registran mas',
+    orca2.logs[orca2.logs.length - 1].includes('no se registran mas'),
+    orca2.logs[orca2.logs.length - 1])
+}
+
+console.log('\nworker: un evento store con mensajes nuevos dispara UNA ingesta, en un hijo')
+{
+  const guion = join(RAIZ, 'sidecar-store-ingesta.cjs')
+  writeFileSync(guion,
+    '#!/usr/bin/env node\n' +
+    'function emit (m) { process.stdout.write(JSON.stringify(m) + "\\n") }\n' +
+    'emit({ type: "connection", state: "open" })\n' +
+    'const base = { llegaron: 9, sinAutorizar: 0, actualizados: 0, autorizadas: 1 }\n' +
+    // Sin nada nuevo, y despues una rafaga de tres lecturas de un almacen que sigue
+    // creciendo, y una cuarta igual a la tercera.
+    'setTimeout(() => emit({ type: "store", at: 1, ...base, guardados: 0 }), 100)\n' +
+    'setTimeout(() => emit({ type: "store", at: 2, ...base, guardados: 3 }), 300)\n' +
+    'setTimeout(() => emit({ type: "store", at: 3, ...base, guardados: 5 }), 500)\n' +
+    'setTimeout(() => emit({ type: "store", at: 4, ...base, guardados: 5 }), 700)\n' +
+    'setInterval(() => {}, 1000)\n', { mode: 0o755 })
+  const llamadas = join(RAIZ, 'ingesta-evento.txt')
+  const wascope = '#!/bin/sh\n' +
+    `[ "$1" = "ingest" ] && echo "$@ $(date +%s)" >> ${JSON.stringify(llamadas)}\n` +
+    'echo \'[{"synced": true, "destinos": []}]\'\n'
+  const orca = hostFalso(herramientas('ingesta-evento', wascope), {}, guion)
+  const { apagar } = await arranca(orca)
+  const antes = Date.now()
+  await hasta(() => existsSync(llamadas), 15000)
+  const lineas = () => existsSync(llamadas) ? readFileSync(llamadas, 'utf8').trim().split('\n') : []
+  ok('llega la ingesta', lineas().length >= 1, '(no corrio)')
+  ok('espera el rebote: no corre en cuanto llega el evento', Date.now() - antes >= 3500,
+    `${Date.now() - antes} ms`)
+  await dormir(2500)
+  ok('tres lecturas seguidas de un almacen que crece son UNA ingesta', lineas().length === 1,
+    lineas().join(' | '))
+  ok('con `ingest --json`', lineas()[0] && lineas()[0].startsWith('ingest --json'),
+    lineas()[0])
+  apagar()
+}
+
+console.log('\nworker: sin mensajes nuevos en el evento store no hay ingesta')
+{
+  const guion = join(RAIZ, 'sidecar-store-quieto.cjs')
+  writeFileSync(guion,
+    '#!/usr/bin/env node\n' +
+    'function emit (m) { process.stdout.write(JSON.stringify(m) + "\\n") }\n' +
+    'emit({ type: "connection", state: "open" })\n' +
+    'const base = { llegaron: 4, sinAutorizar: 4, actualizados: 0, autorizadas: 1, guardados: 0 }\n' +
+    'setTimeout(() => emit({ type: "store", at: 1, ...base }), 100)\n' +
+    'setTimeout(() => emit({ type: "store", at: 2, ...base }), 300)\n' +
+    'setInterval(() => {}, 1000)\n', { mode: 0o755 })
+  const llamadas = join(RAIZ, 'ingesta-quieta.txt')
+  const wascope = '#!/bin/sh\n' +
+    `[ "$1" = "ingest" ] && echo "$@" >> ${JSON.stringify(llamadas)}\n` +
+    'echo \'[{"synced": true, "destinos": []}]\'\n'
+  const orca = hostFalso(herramientas('ingesta-quieta', wascope), {}, guion)
+  const { apagar } = await arranca(orca)
+  await hasta(() => orca.store.sidecar && orca.store.sidecar.store && orca.store.sidecar.store.at === 2, 10000)
+  await dormir(INGESTA_ESPERA_MS + 1500)
+  ok('con guardados en 0 no corre nada', !existsSync(llamadas),
+    existsSync(llamadas) ? readFileSync(llamadas, 'utf8') : '')
+  apagar()
 }
 
 rmSync(RAIZ, { recursive: true, force: true })

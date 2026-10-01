@@ -282,6 +282,70 @@ function motivoDeCrudo(error) {
   })
 }
 
+// La entrada de los casos (kanban-casos, T2): cuando el sidecar guarda mensajes nuevos, un
+// `wa-scope ingest` los vuelve casos sin esperar al reloj de 5 minutos ni despertar a
+// ningun agente. El rebote junta una rafaga en UNA corrida: el sidecar ya saca los
+// conteos con freno de 30 s, y aun asi un mensaje y el chat que lo rodea llegan juntos.
+export const INGESTA_ESPERA_MS = 5 * 1000
+const INGESTA_TIMEOUT_MS = 60 * 1000
+// Cada `orca.log` es una llamada al host y Orca mata al worker a los 64 sin confirmar
+// (ver STDERR_MAX_LINEAS): una ingesta que falla en cada mensaje no puede llevarselo.
+export const INGESTA_AVISOS_MAX = 5
+
+/** Convierte "pasaron cosas" en UNA corrida de `correr`, despues de que se calma.
+ *
+ *  `pedir()` reinicia la espera, asi que una rafaga es una sola corrida; si llega un
+ *  pedido con una corrida en curso no arranca otra encima —dos ingestas a la vez se
+ *  disputarian la base—, queda anotado y corre UNA vez mas al terminar la actual. Una
+ *  corrida que falla no apaga nada: `correr` dice lo suyo, esto sigue. Pura como
+ *  `programarSalud`, para probar la regla sin esperar los segundos reales. */
+export function programarIngesta(correr, { esperaMs = INGESTA_ESPERA_MS } = {}) {
+  let timer = null
+  let enVuelo = false
+  let otraVez = false
+  let parado = false
+
+  const lanzar = () => {
+    timer = null
+    if (parado) return
+    enVuelo = true
+    Promise.resolve().then(correr).catch(() => {}).finally(() => {
+      enVuelo = false
+      if (otraVez && !parado) { otraVez = false; lanzar() }
+    })
+  }
+
+  return {
+    pedir() {
+      if (parado) return
+      if (enVuelo) { otraVez = true; return }
+      clearTimeout(timer)
+      timer = setTimeout(lanzar, esperaMs)
+      if (typeof timer.unref === 'function') timer.unref()
+    },
+    parar() {
+      parado = true
+      clearTimeout(timer)
+      timer = null
+    }
+  }
+}
+
+/** Una corrida de `wa-scope ingest`. Es un proceso hijo y no toca el host: ni el
+ *  directorio de herramientas se pregunta a `settings.get` —llega ya resuelto—, ni una
+ *  corrida buena escribe en el log. Solo la falla se dice, con tope. */
+export async function correrIngesta(orca, toolsDir, estado) {
+  try {
+    await run(join(toolsDir, 'wa-scope'), ['ingest', '--json'],
+      { timeoutMs: INGESTA_TIMEOUT_MS })
+  } catch (error) {
+    estado.avisos += 1
+    if (estado.avisos > INGESTA_AVISOS_MAX) return
+    const cola = estado.avisos === INGESTA_AVISOS_MAX ? ' (no se registran mas)' : ''
+    orca.log(`ingest failed (${motivoDe(error)}): ${String(error?.message ?? error).slice(0, 200)}${cola}`)
+  }
+}
+
 /** Cada cuanto releer WhatsApp, segun lo que el usuario dejo puesto. */
 export async function intervaloSync(orca) {
   const minutos = parseInt(String((await leer(orca, 'syncMinutes')) ?? ''), 10)
@@ -640,7 +704,8 @@ function resolverAuthDir(pluginDir, guion = join(pluginDir, 'sidecar', 'resolve-
  * indefinidamente en vez de una corrida puntual).
  */
 export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
-  spawnFn = spawn, env = process.env, alSalir = () => {}, alLinea = () => {} }) {
+  spawnFn = spawn, env = process.env, alSalir = () => {}, alLinea = () => {},
+  alAlmacen = () => {} }) {
   const nacioMs = Date.now()
   let estado = { at: new Date().toISOString(), connection: null, qr: null,
     motivo: null, statusCode: null, error: null, exited: false,
@@ -711,6 +776,10 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
   // stdout no respeta los saltos de linea, asi que lo que no cierra en `\n` se guarda
   // para la proxima vuelta en vez de intentar parsearlo a medias.
   let restante = ''
+  // Los conteos del sidecar son ACUMULADOS desde que arranco: lo que dice que llegaron
+  // mensajes es que `guardados` cambio, no que sea mayor que cero. Cambiar y no solo
+  // crecer, porque un sidecar relanzado cuenta otra vez desde cero.
+  let guardadosVistos = null
   proceso.stdout.on('data', (chunk) => {
     restante += chunk.toString('utf8')
     const lineas = restante.split('\n')
@@ -796,6 +865,13 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
           chatsHistorial: Number(mensaje.chatsHistorial) || 0,
           historialCompleto: mensaje.historialCompleto === true
         } })
+        const guardados = Number(mensaje.guardados) || 0
+        if (guardados > 0 && guardados !== guardadosVistos) {
+          try { alAlmacen() } catch (error) {
+            orca.log(`sidecar store handling failed: ${error.message}`)
+          }
+        }
+        guardadosVistos = guardados
       } else if (mensaje?.type === 'error') {
         escribir({ error: { code: mensaje.code ?? null,
           detail: String(mensaje.detail ?? '').slice(0, 300) } })
@@ -960,6 +1036,14 @@ export default function activate(orca) {
 
   const dirHerramientas = async () => (await settings()).toolsDir || TOOLS
 
+  // La entrada de los casos. El directorio de herramientas lo deja resuelto
+  // `arrancarSidecar`, que ya lee los ajustes: preguntarlo en cada ingesta seria una
+  // llamada al host por mensaje nuevo.
+  let dirIngesta = TOOLS
+  const estadoIngesta = { avisos: 0 }
+  const ingesta = programarIngesta(
+    () => detenido ? null : correrIngesta(orca, dirIngesta, estadoIngesta))
+
   // El sync automatico sale del mismo directorio que los comandos. Antes iba fijo a
   // bin/: quien movia toolsDir tenia la mitad del plugin leyendo de otro lado.
   const sincronizar = async (trigger) =>
@@ -1054,8 +1138,10 @@ export default function activate(orca) {
     // `s.toolsDir` y no `TOOLS`: quien mueve el directorio de herramientas tiene que
     // moverlo entero, o el sidecar le pregunta por el alcance a una instalacion
     // distinta de la que lee el resto del plugin (§11-E4).
+    dirIngesta = s.toolsDir || TOOLS
     apagarSidecar = lanzarSidecar({ orca, scriptPath: s.sidecarPath, authDir: resuelto.dir,
-      toolsDir: s.toolsDir || TOOLS, alSalir: alSalirSidecar, alLinea: alCambiarLinea })
+      toolsDir: dirIngesta, alSalir: alSalirSidecar, alLinea: alCambiarLinea,
+      alAlmacen: () => ingesta.pedir() })
     return { ok: true, dir: resuelto.dir }
   }
 
@@ -1503,6 +1589,7 @@ export default function activate(orca) {
     clearInterval(latidoTimer)
     clearTimeout(reinicioTimer)
     pararSalud()
+    ingesta.parar()
     apagarSidecar()
   }
 }
