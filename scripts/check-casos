@@ -523,6 +523,101 @@ with tempfile.TemporaryDirectory() as home:
        corre(home, "caso", "ver", "999").returncode != 0)
 
 
+# ── 6. Unir y separar ────────────────────────────────────────────────────────────
+# La regla de agrupacion se equivoca a veces; el agente lo corrige a mano. Ningun
+# mensaje se pierde ni queda en dos casos, y los dos casos cuentan lo que paso.
+def mensajes_de(home, cid):
+    return sorted(m["stanza_id"] for m in js(home, "caso", "ver", cid)[0]["mensajes"])
+
+
+print("\nunir")
+with tempfile.TemporaryDirectory() as home:
+    destino = caso_clasificado(home, "U1")
+    origen = str(js(home, "caso", "crear", "--chat", CHAT, "--stanza", "U2",
+                    "--actor", "agente")[0]["case_id"])
+    con = db_de(home)
+    con.execute("insert into caso_mensaje (account, stanza_id, case_id, at) "
+                "values ('local', 'U3', ?, '2026-01-01 00:00:00')", (int(origen),))
+    con.commit()
+    con.close()
+    u = js(home, "caso", "unir", destino, origen, "--actor", "agente")[0]
+    ok("unir pasa los mensajes del origen al destino",
+       mensajes_de(home, destino) == ["U1", "U2", "U3"] and u["mensajes"] == 3,
+       f"quedo {mensajes_de(home, destino)}")
+    o = js(home, "caso", "ver", origen)[0]
+    ok("el origen queda cerrado y vacio",
+       o["etapa"] == "cerrado" and o["mensajes"] == [], f"quedo {o}")
+    ok("con el motivo 'unido a <destino>'",
+       o["eventos"][-1]["detalle"] == f"unido a {destino}"
+       and o["eventos"][-1]["de"] == "recibido" and o["eventos"][-1]["a"] == "cerrado"
+       and o["eventos"][-1]["actor"] == "agente", f"evento {o['eventos'][-1]}")
+    d = js(home, "caso", "ver", destino)[0]["eventos"][-1]
+    ok("el destino tambien deja su evento, sin cambiar de etapa",
+       d["de"] == "clasificado" and d["a"] == "clasificado" and origen in d["detalle"]
+       and d["actor"] == "agente", f"evento {d}")
+
+    eventos = cuenta(home, "select count(*) from caso_evento")
+    ok("unir un caso consigo mismo se rechaza",
+       corre(home, "caso", "unir", destino, destino, "--actor", "agente"
+             ).returncode != 0)
+    ok("unir un origen ya cerrado se rechaza",
+       corre(home, "caso", "unir", destino, origen, "--actor", "agente"
+             ).returncode != 0)
+    ajeno = str(js(home, "caso", "crear", "--chat", OTRO, "--stanza", "U9",
+                   "--actor", "agente")[0]["case_id"])
+    eventos += 1
+    ok("unir casos de dos conversaciones distintas se rechaza",
+       corre(home, "caso", "unir", destino, ajeno, "--actor", "agente"
+             ).returncode != 0)
+    ok("unir hacia un caso cerrado se rechaza",
+       corre(home, "caso", "unir", origen, destino, "--actor", "agente"
+             ).returncode != 0)
+    ok("unir sin actor se rechaza",
+       corre(home, "caso", "unir", destino, ajeno).returncode != 0)
+    ok("ninguno de los rechazos escribe",
+       cuenta(home, "select count(*) from caso_evento") == eventos
+       and mensajes_de(home, destino) == ["U1", "U2", "U3"])
+
+print("\nseparar")
+with tempfile.TemporaryDirectory() as home:
+    cid = caso_clasificado(home, "P1")
+    con = db_de(home)
+    for s in ("P2", "P3"):
+        con.execute("insert into caso_mensaje (account, stanza_id, case_id, at) "
+                    "values ('local', ?, ?, '2026-01-01 00:00:00')", (s, int(cid)))
+    con.commit()
+    con.close()
+    nuevo = js(home, "caso", "separar", cid, "P2", "P3", "--actor", "agente")[0]
+    nid = str(nuevo["case_id"])
+    ok("separar abre un caso nuevo en recibido, en la misma conversacion",
+       nid != cid and nuevo["etapa"] == "recibido" and nuevo["chat_jid"] == CHAT,
+       f"creo {nuevo}")
+    ok("con esos mensajes, que salen del original",
+       mensajes_de(home, nid) == ["P2", "P3"] and mensajes_de(home, cid) == ["P1"])
+    ev_nuevo = js(home, "caso", "ver", nid)[0]["eventos"]
+    ev_orig = js(home, "caso", "ver", cid)[0]["eventos"][-1]
+    ok("el caso nuevo nace con un evento que dice de donde salio",
+       len(ev_nuevo) == 1 and ev_nuevo[0]["a"] == "recibido"
+       and cid in ev_nuevo[0]["detalle"], f"eventos {ev_nuevo}")
+    ok("el original deja su evento, sin cambiar de etapa",
+       ev_orig["de"] == "clasificado" and ev_orig["a"] == "clasificado"
+       and nid in ev_orig["detalle"], f"evento {ev_orig}")
+
+    casos = cuenta(home, "select count(*) from caso")
+    eventos = cuenta(home, "select count(*) from caso_evento")
+    p = corre(home, "caso", "separar", cid, "P2", "--actor", "agente")
+    ok("separar un mensaje que no es de ese caso se rechaza con un error claro",
+       p.returncode != 0 and "P2" in p.stderr, p.stderr.strip())
+    p = corre(home, "caso", "separar", cid, "P1", "NADA", "--actor", "agente")
+    ok("si uno solo no es del caso, no se separa ninguno", p.returncode != 0
+       and mensajes_de(home, cid) == ["P1"])
+    ok("separar todos los mensajes dejaria un caso vacio: se rechaza",
+       corre(home, "caso", "separar", cid, "P1", "--actor", "agente").returncode != 0)
+    ok("ningun rechazo escribe",
+       cuenta(home, "select count(*) from caso") == casos
+       and cuenta(home, "select count(*) from caso_evento") == eventos)
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

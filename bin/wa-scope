@@ -2207,6 +2207,59 @@ def cmd_caso_resultado(con, a):
     return [caso_fila(con, caso_de(con, a.id))]
 
 
+def cmd_caso_unir(con, a):
+    """Junta dos casos que son el mismo pedido: los mensajes (y el trabajo que colgaba)
+    del origen pasan al destino, y el origen se cierra diciendo a donde fue. Los dos
+    dejan evento: el tablero tiene que poder explicar por que una tarjeta desaparecio."""
+    if a.destino == a.origen:
+        sys.exit(f"case #{a.destino} cannot be joined with itself")
+    destino, origen = caso_de(con, a.destino), caso_de(con, a.origen)
+    if destino["chat_jid"] != origen["chat_jid"]:
+        sys.exit(f"cases #{a.destino} and #{a.origen} are from different chats: a case "
+                 f"answers one conversation")
+    if destino["etapa"] == "cerrado":
+        sys.exit(f"case #{a.destino} is cerrado: reopen it before joining into it")
+    motivo = f"unido a {a.destino}"
+    caso_valida(origen, "cerrado", motivo)
+    cuenta = cuenta_activa()
+    n = con.execute("update caso_mensaje set case_id=? where account=? and case_id=?",
+                    (a.destino, cuenta, a.origen)).rowcount
+    con.execute("update work set case_id=? where account=? and case_id=?",
+                (a.destino, cuenta, a.origen))
+    caso_mover(con, origen, "cerrado", a.actor, motivo)
+    caso_tocar(con, destino, a.actor, f"recibe {n} mensajes de {a.origen}")
+    con.commit()
+    return [caso_fila(con, caso_de(con, a.destino))]
+
+
+def cmd_caso_separar(con, a):
+    """Saca mensajes de un caso a uno NUEVO en recibido, de la misma conversacion. Si
+    uno solo no es de ese caso no se mueve ninguno; y no se separan todos, que dejaria
+    una tarjeta sin mensajes en la columna."""
+    caso = caso_de(con, a.id)
+    cuenta = cuenta_activa()
+    stanzas = list(dict.fromkeys(a.stanzas))
+    suyos = {r["stanza_id"] for r in con.execute(
+        "select stanza_id from caso_mensaje where account=? and case_id=?",
+        (cuenta, a.id))}
+    ajenos = [s for s in stanzas if s not in suyos]
+    if ajenos:
+        sys.exit(f"not in case #{a.id}: {', '.join(ajenos)}; nothing was moved")
+    if set(stanzas) == suyos:
+        sys.exit(f"those are all the messages of case #{a.id}: separating them would "
+                 f"leave it empty")
+    nuevo = caso_nuevo(con, caso["chat_jid"], a.actor, caso["titulo"],
+                       detalle=f"separado de {a.id}")
+    for s in stanzas:
+        con.execute("update caso_mensaje set case_id=? where account=? and stanza_id=?",
+                    (nuevo, cuenta, s))
+        con.execute("update work set case_id=? where account=? and stanza_id=?",
+                    (nuevo, cuenta, s))
+    caso_tocar(con, caso, a.actor, f"separa {', '.join(stanzas)} a {nuevo}")
+    con.commit()
+    return [caso_fila(con, caso_de(con, nuevo))]
+
+
 def cmd_caso_listar(con, a):
     sql, params = "select * from caso where account=?", [cuenta_activa()]
     if a.etapa:
@@ -2461,6 +2514,15 @@ def main():
     # de un trabajo que no hizo.
     c.add_argument("--actor", required=True, choices=["trabajador"])
     c.set_defaults(fn=cmd_caso_resultado)
+
+    c = muta("unir", help="joins two cases of the same chat: the origin's messages go to "
+                          "the destination and the origin is closed")
+    c.add_argument("destino", type=int); c.add_argument("origen", type=int)
+    c.set_defaults(fn=cmd_caso_unir)
+
+    c = muta("separar", help="moves some messages of a case to a NEW case in recibido")
+    c.add_argument("id", type=int); c.add_argument("stanzas", nargs="+")
+    c.set_defaults(fn=cmd_caso_separar)
 
     c = caso("listar", help="the cases of the active line, newest first")
     c.add_argument("--etapa", choices=list(ETAPAS_CASO)); c.add_argument("--chat")
