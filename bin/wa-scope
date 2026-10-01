@@ -112,6 +112,9 @@ TRANSICIONES_CASO = {
 # `aprobar` o de `mover`: si no, "nada corre sin tu clic" se salta con un comando.
 TRANSICIONES_CON_FIRMA = (("decision", "trabajo"), ("decision", "respondido"),
                           ("listo", "respondido"), ("listo", "trabajo"))
+# Las etapas de antes de la firma. Un caso que vuelve a una de ellas (reabierto,
+# re-clasificado) pierde la aprobacion que tenia.
+ETAPAS_SIN_FIRMA = ("recibido", "clasificado", "decision")
 # Cerrar o bloquear sin decir por que deja una tarjeta muda en la columna que mas se
 # mira despues.
 ETAPAS_CON_MOTIVO = ("cerrado", "bloqueado")
@@ -2062,6 +2065,10 @@ def caso_mover(con, caso, hacia, actor, detalle="", **campos):
     valido con `caso_valida`; no hace commit, para que una operacion de varios pasos
     sea una sola transaccion."""
     momento = ahora_caso()
+    if hacia != caso["etapa"] and hacia in ETAPAS_SIN_FIRMA:
+        # Entrar de nuevo a estas etapas es empezar otra decision: la firma de la
+        # vuelta anterior no vale para esta, aunque la propuesta haya quedado igual.
+        campos.setdefault("propuesta_aprobada", None)
     sets = dict(campos, etapa=hacia, updated_at=momento)
     con.execute(f"update caso set {', '.join(f'{k}=?' for k in sets)} where case_id=?",
                 (*sets.values(), caso["case_id"]))
