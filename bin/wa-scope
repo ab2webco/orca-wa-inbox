@@ -1931,14 +1931,18 @@ def aplicar_reclave(con):
     movidas = {}
     try:
         con.execute("begin immediate")
-        for tabla in ("chat_scope", "juicio"):
+        # `caso_mensaje` lleva la cuenta en la llave, como `juicio`: si el numero ya
+        # tenia ese mensaje en un caso suyo, el suyo manda.
+        for tabla in ("chat_scope", "juicio", "caso_mensaje"):
             movidas[tabla] = con.execute(
                 f"select count(*) c from {tabla} where account=?", (CUENTA_LOCAL,)
             ).fetchone()["c"]
             con.execute(f"update or ignore {tabla} set account=? where account=?",
                         (destino, CUENTA_LOCAL))
             con.execute(f"delete from {tabla} where account=?", (CUENTA_LOCAL,))
-        for tabla in ("agent_action", "work", "digest"):
+        # `caso` va con `work`: el backfill crea los casos con la cuenta del trabajo, y
+        # si el trabajo cambia de linea y el caso no, la tarjeta desaparece del tablero.
+        for tabla in ("agent_action", "work", "digest", "caso"):
             movidas[tabla] = con.execute(
                 f"update {tabla} set account=? where account=?",
                 (destino, CUENTA_LOCAL)).rowcount

@@ -776,6 +776,71 @@ with tempfile.TemporaryDirectory() as home:
        and corre(home, "caso", "asignar", "R6", "--chat", CHAT).returncode != 0)
 
 
+
+# ── 8. Las lineas: re-clave y otra linea activa ──────────────────────────────────
+# El backfill crea los casos con la cuenta de `work`, que en una maquina de antes es
+# `local`; la re-clave anotada por el sidecar pasa `work` a su numero en la misma
+# apertura. Si los casos no la acompanan, desaparecen del tablero de esa linea.
+VIEJA = "pn:573001112233"
+NUEVA = "pn:573000000012"
+
+
+def almacen(home, linea, reclave=None):
+    """Lo minimo de capture.db que wa-scope lee: la linea activa y la re-clave."""
+    con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+    con.executescript("create table if not exists store_meta (key text primary key, "
+                      "value text); create table if not exists reclave (at text, "
+                      "desde text, hacia text, chats integer, mensajes integer);")
+    con.execute("insert or replace into store_meta values ('linea_activa', ?)", (linea,))
+    if reclave:
+        con.execute("insert into reclave values ('2026-01-01 00:00:00', 'local', ?, 1, 1)",
+                    (reclave,))
+    con.commit()
+    con.close()
+
+
+print("\nlas lineas")
+with tempfile.TemporaryDirectory() as home:
+    (pathlib.Path(home) / ".wa-inbox").mkdir(parents=True)
+    vieja = db_de(home)
+    vieja.executescript("""
+      create table work (
+        stanza_id text primary key, chat_jid text, chat_name text, issue text,
+        step text, next_step text, status text not null default 'open',
+        opened_at text, updated_at text);
+      insert into work values ('K1','%(c)s','Soporte Norte','SOP-1','tarjeta abierta',
+        'seguir', 'open', '%(h2)s', '%(h2)s');
+      insert into work values ('K2','%(c)s','Soporte Norte','SOP-2','tarjeta abierta',
+        'seguir', 'open', '%(h1)s', '%(h1)s');
+    """ % dict(HACE, c=CHAT))
+    vieja.commit()
+    vieja.close()
+    almacen(home, VIEJA, reclave=VIEJA)
+    casos = js(home, "caso", "listar")
+    ok("con la re-clave anotada, los casos del backfill pasan al numero con su trabajo",
+       sorted(c["plane_issue"] for c in casos) == ["SOP-1", "SOP-2"]
+       and all(c["account"] == VIEJA for c in casos), f"listo {casos}")
+    ok("y sus mensajes tambien",
+       cuenta(home, "select count(*) from caso_mensaje where account=?", VIEJA) == 2
+       and cuenta(home, "select count(*) from caso_mensaje where account='local'") == 0)
+    cid = str(casos[0]["case_id"])
+    ok("el caso re-clavado se puede ver y mover desde su linea",
+       js(home, "caso", "ver", cid)[0]["case_id"] == int(cid))
+
+    # Otro numero vinculado: lo de la linea anterior queda guardado y no se ve.
+    almacen(home, NUEVA)
+    ok("otra linea activa no lista los casos de la anterior",
+       js(home, "caso", "listar") == [])
+    ok("ni los puede ver", corre(home, "caso", "ver", cid).returncode != 0)
+    propio = asigna(home, "K9")
+    ok("ni la agrupacion se suma a ellos: abre su propio caso",
+       propio["account"] == NUEVA and str(propio["case_id"]) != cid
+       and cuenta(home, "select count(*) from caso where account=?", VIEJA) == 2,
+       f"quedo {propio}")
+    ok("un mensaje de la otra linea se puede asignar tambien en esta",
+       asigna(home, "K1")["account"] == NUEVA)
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
