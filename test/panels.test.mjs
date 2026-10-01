@@ -2714,5 +2714,325 @@ console.log('\nactivity.html — los titulos nuevos estan en los tres idiomas')
   }
 }
 
+// ── El tablero de casos (T5) ───────────────────────────────────────────────────────
+// `wa-scope` escribe la clave `board` (odd/tasks/kanban-casos.md, "Contratos") y el panel
+// solo la LEE: las acciones del dueno (T6) todavia no tienen canal, y un boton que no hace
+// nada esta prohibido. Todo lo que viene en una tarjeta es texto de clientes, asi que se
+// comprueba que se pinta como texto y nunca como HTML.
+const hace = (ms) => new Date(Date.now() - ms).toISOString()
+const ETAPAS_TABLERO = ['recibido', 'clasificado', 'decision', 'trabajo', 'listo',
+  'respondido', 'cerrado', 'bloqueado']
+const cuentas = (extra = {}) => Object.assign(
+  Object.fromEntries(ETAPAS_TABLERO.map((e) => [e, 0])), extra)
+const tarjeta = (extra = {}) => Object.assign({
+  case_id: 1, account: 'local', chat_jid: '120363000000000001@g.us',
+  chat_name: 'Soporte Acme', stage: 'decision', title: 'Piden descuento del 30%',
+  summary: 'Quiere respuesta hoy.', clase: 'card', prioridad: 'high',
+  jev: { attention_class: 'card', flags: ['asks_for_money_or_payment'], skip: false },
+  proposal: { tipo: 'responder', texto: 'Le confirmamos el precio vigente.', version: 'abc' },
+  exceptions: ['money'], blocked_reason: null, ticket: null,
+  updated_at: hace(5 * 60000),
+  actions: ['enviar', 'editar', 'ejecutar', 'reclasificar', 'cerrar', 'reabrir']
+}, extra)
+const tablero = (cards, extra = {}) => ({
+  v: 1, updated_at: hace(60000), truncated: false,
+  counts: cuentas(cards.reduce((acc, c) => (acc[c.stage] = (acc[c.stage] || 0) + 1, acc), {})),
+  cards, ...extra
+})
+const abrirTablero = async (storage, idioma = 'es-419') => {
+  const m = await montar('activity.html', storage, idioma)
+  await espera()
+  m.doc.getElementById('tab-board').click()
+  await espera()
+  return m
+}
+
+console.log('\nactivity.html — tablero: pestanas')
+{
+  const { doc } = await montar('activity.html', { board: tablero([tarjeta()]) }, 'es-419')
+  await espera()
+  const bandeja = doc.getElementById('view-inbox')
+  const vista = doc.getElementById('view-board')
+  ok('hay dos pestanas: la bandeja de siempre y el tablero',
+    !!doc.getElementById('tab-inbox') && !!doc.getElementById('tab-board'))
+  ok('abre en la bandeja, que es lo que habia', !bandeja.hidden && vista.hidden)
+  ok('la bandeja conserva sus tres secciones',
+    !!bandeja.querySelector('#alerts') && !!bandeja.querySelector('#recent') &&
+    !!bandeja.querySelector('#pending'))
+  doc.getElementById('tab-board').click()
+  ok('la pestana del tablero lo muestra y oculta la bandeja', bandeja.hidden && !vista.hidden)
+  ok('y marca cual esta activa para el lector de pantalla',
+    doc.getElementById('tab-board').getAttribute('aria-selected') === 'true' &&
+    doc.getElementById('tab-inbox').getAttribute('aria-selected') === 'false')
+  doc.getElementById('tab-inbox').click()
+  ok('volver a la bandeja la devuelve', !bandeja.hidden && vista.hidden)
+
+  // El sondeo relee cada 8 s y repinta: sin recordar la pestana, quien mira el tablero
+  // lo veria volverse a la bandeja a medio leer.
+  doc.getElementById('tab-board').click()
+  doc.getElementById('refresh').click()
+  await espera()
+  ok('releer no devuelve a la bandeja', !vista.hidden && bandeja.hidden)
+  ok('la pestana lleva la cuenta de lo que espera al dueno',
+    /1/.test(doc.getElementById('tab-board').textContent),
+    doc.getElementById('tab-board').textContent)
+}
+
+console.log('\nactivity.html — tablero: columnas')
+{
+  const cards = [
+    tarjeta({ case_id: 1, stage: 'decision' }),
+    tarjeta({ case_id: 2, stage: 'trabajo', exceptions: [], proposal: null }),
+    tarjeta({ case_id: 3, stage: 'bloqueado', blocked_reason: 'El envio fue rechazado',
+      exceptions: [] })
+  ]
+  const board = tablero(cards, { counts: cuentas({ decision: 4, trabajo: 1, bloqueado: 1,
+    cerrado: 9 }) })
+  const { doc } = await abrirTablero({ board })
+  const cols = [...doc.querySelectorAll('#board-cols .col')]
+  ok('son las ocho etapas, en el orden del flujo y el carril aparte',
+    JSON.stringify(cols.map((c) => c.dataset.stage)) === JSON.stringify(ETAPAS_TABLERO),
+    JSON.stringify(cols.map((c) => c.dataset.stage)))
+  const cuenta = (e) => doc.querySelector(`.col[data-stage="${e}"] .col-count`).textContent.trim()
+  ok('cada columna dice su cuenta de `counts`, no las tarjetas que hay',
+    cuenta('decision') === '4' && cuenta('cerrado') === '9' && cuenta('recibido') === '0',
+    JSON.stringify(ETAPAS_TABLERO.map(cuenta)))
+  const nombre = (e) => doc.querySelector(`.col[data-stage="${e}"] .col-name`).textContent
+  ok('"Tu decision" se llama como la pidio el dueno', nombre('decision') === 'Tu decisión',
+    nombre('decision'))
+  ok('las demas, por su nombre', nombre('trabajo') === 'En trabajo' &&
+    nombre('listo') === 'Listo para responder' && nombre('bloqueado') === 'Bloqueado',
+    JSON.stringify(ETAPAS_TABLERO.map(nombre)))
+  ok('"Tu decision" es la unica columna de primera clase',
+    doc.querySelectorAll('.col.decision').length === 1 &&
+    doc.querySelector('.col[data-stage="decision"]').classList.contains('decision'))
+  ok('el carril de bloqueados es distinto de las columnas del flujo',
+    doc.querySelector('.col[data-stage="bloqueado"]').classList.contains('lane'))
+  ok('cada tarjeta cae en su columna',
+    doc.querySelectorAll('.col[data-stage="decision"] .card').length === 1 &&
+    doc.querySelectorAll('.col[data-stage="trabajo"] .card').length === 1 &&
+    doc.querySelectorAll('.col[data-stage="bloqueado"] .card').length === 1)
+  ok('una columna sin tarjetas lo dice, no queda un hueco mudo',
+    doc.querySelector('.col[data-stage="recibido"] .col-empty').textContent.trim().length > 0)
+  const sinDecidir = await abrirTablero({ board: tablero([tarjeta({ stage: 'trabajo' })]) })
+  ok('"Tu decision" vacia dice que no hay nada que decidir',
+    /nada/i.test(sinDecidir.doc.querySelector('.col[data-stage="decision"] .col-empty').textContent))
+  // `counts` dice 4 y solo hay 1 tarjeta: faltan 3, y callarlo las haria desaparecer.
+  ok('si la cuenta supera las tarjetas, dice cuantas faltan por mostrar',
+    /3/.test(doc.querySelector('.col[data-stage="decision"] .col-more').textContent),
+    doc.querySelector('.col[data-stage="decision"] .col-more')?.textContent)
+  ok('y no lo dice donde no falta ninguna',
+    !doc.querySelector('.col[data-stage="trabajo"] .col-more'))
+}
+
+console.log('\nactivity.html — tablero: la tarjeta')
+{
+  const ticket = 'ACM-42'
+  const board = tablero([
+    tarjeta({ ticket }),
+    tarjeta({ case_id: 2, stage: 'bloqueado', exceptions: [], proposal: null,
+      blocked_reason: 'El envio fue rechazado por el servidor', prioridad: 'urgent',
+      clase: 'alert', jev: { attention_class: 'alert', flags: [], skip: true } })
+  ])
+  const { doc } = await abrirTablero({ board })
+  const a = doc.querySelector('.card[data-case="1"]')
+  const t = a.textContent
+  ok('titulo y chat', t.includes('Piden descuento del 30%') && t.includes('Soporte Acme'), t)
+  ok('el resumen', t.includes('Quiere respuesta hoy.'))
+  ok('la clase y la prioridad, en espanol', /tarjeta/i.test(a.querySelector('.tag.clase').textContent) &&
+    /alta/i.test(a.querySelector('.tag.prio').textContent),
+    a.querySelector('.tag.clase')?.textContent + ' / ' + a.querySelector('.tag.prio')?.textContent)
+  ok('la bandera de Jev se dice en palabras, no como codigo',
+    /dinero|pago/i.test(a.querySelector('.tag.flag').textContent) &&
+    !/asks_for/.test(a.textContent), a.querySelector('.tag.flag')?.textContent)
+  ok('por que espera al dueno: la excepcion', /dinero/i.test(a.querySelector('.card-exc').textContent),
+    a.querySelector('.card-exc')?.textContent)
+  ok('la propuesta, con su tipo y su texto',
+    /responder/i.test(a.querySelector('.card-prop').textContent) &&
+    a.querySelector('.card-prop').textContent.includes('Le confirmamos el precio vigente.'))
+  ok('el ticket', a.querySelector('.card-ticket').textContent.includes(ticket))
+  ok('la antiguedad es relativa', /hace 5 min/.test(a.querySelector('.when').textContent),
+    a.querySelector('.when')?.textContent)
+  const b = doc.querySelector('.card[data-case="2"]')
+  ok('el motivo del bloqueo', b.querySelector('.card-blocked').textContent
+    .includes('El envio fue rechazado por el servidor'))
+  ok('lo urgente se marca distinto de lo alto',
+    b.querySelector('.tag.prio').classList.contains('urgente') &&
+    !a.querySelector('.tag.prio').classList.contains('urgente'))
+  ok('Jev que dice "sin accion" se ve', /jev/i.test(b.textContent) &&
+    b.querySelector('.tag.skip') !== null)
+  ok('sin ticket ni propuesta no se pinta un hueco',
+    !b.querySelector('.card-ticket') && !b.querySelector('.card-prop'))
+
+  // Prioridad "none" no es una prioridad: no se pinta una etiqueta que no dice nada.
+  const sinPrio = await abrirTablero({ board: tablero([tarjeta({ prioridad: 'none' })]) })
+  ok('prioridad none no pinta etiqueta', !sinPrio.doc.querySelector('.tag.prio'))
+
+  // Un codigo que el panel no conoce se ve tal cual y no desaparece (como kind y action).
+  const raro = await abrirTablero({ board: tablero([tarjeta({ clase: 'nueva-clase',
+    prioridad: 'cosmica', exceptions: ['otra'],
+    jev: { attention_class: null, flags: ['bandera_nueva'], skip: false } })]) })
+  const rt = raro.doc.querySelector('.card').textContent
+  ok('codigos nuevos se pintan tal cual',
+    ['nueva-clase', 'cosmica', 'otra', 'bandera_nueva'].every((c) => rt.includes(c)), rt)
+
+  // El contrato permite null en jev, proposal, blocked_reason y ticket.
+  const nulos = await abrirTablero({ board: tablero([tarjeta({ jev: null, proposal: null,
+    exceptions: [], blocked_reason: null, ticket: null, summary: '', clase: null,
+    prioridad: null })]) })
+  ok('con todo lo opcional en null pinta solo titulo y chat',
+    nulos.doc.querySelectorAll('.card').length === 1 &&
+    nulos.doc.querySelector('.card').textContent.includes('Piden descuento') &&
+    !nulos.doc.querySelector('.card .tag'))
+}
+
+console.log('\nactivity.html — tablero: texto de clientes, nunca HTML')
+{
+  const hostil = '<img src=x onerror="window.__xss=1"><b>negrita</b>'
+  const board = tablero([tarjeta({ title: hostil, chat_name: hostil, summary: hostil,
+    proposal: { tipo: 'responder', texto: hostil, version: 'v' }, ticket: hostil,
+    blocked_reason: hostil, exceptions: [hostil],
+    jev: { attention_class: hostil, flags: [hostil], skip: false },
+    clase: hostil, prioridad: hostil })])
+  const { doc, window } = await abrirTablero({ board })
+  ok('ninguna etiqueta del cliente llega al DOM', doc.querySelectorAll('#board-cols img, #board-cols b').length === 0)
+  ok('y el texto se ve literal', doc.querySelector('.card-title').textContent === hostil,
+    doc.querySelector('.card-title')?.textContent)
+  ok('sin ejecutar nada', window.__xss === undefined)
+}
+
+console.log('\nactivity.html — tablero: solo lectura')
+{
+  const { doc, enviados } = await abrirTablero({ board: tablero([tarjeta(),
+    tarjeta({ case_id: 2, stage: 'listo' })]) })
+  const botones = [...doc.querySelectorAll('#view-board button')]
+  ok('ninguna accion del dueno: el canal de T6 todavia no existe',
+    botones.every((b) => b.classList.contains('card-more')),
+    JSON.stringify(botones.map((b) => b.textContent)))
+  const texto = doc.getElementById('view-board').textContent
+  ok('y el campo `actions` no se pinta', !/enviar|ejecutar|reclasificar|reabrir/i.test(texto), texto)
+  ok('el tablero no escribe nada en storage',
+    enviados.every((e) => e.action !== 'storage.set'),
+    JSON.stringify(enviados.map((e) => e.action)))
+}
+
+console.log('\nactivity.html — tablero: estados vacios')
+{
+  const sin = await abrirTablero({})
+  ok('sin la clave `board` dice que todavia no hay datos y no queda en blanco',
+    sin.doc.getElementById('board-note').textContent.trim().length > 0 &&
+    sin.doc.querySelectorAll('#board-cols .col').length === 0,
+    sin.doc.getElementById('board-note').textContent)
+  const vacio = await abrirTablero({ board: tablero([]) })
+  ok('un tablero sin casos lo dice',
+    /sin casos|no hay casos/i.test(vacio.doc.getElementById('board-note').textContent),
+    vacio.doc.getElementById('board-note').textContent)
+  const v2 = await abrirTablero({ board: { v: 2, cards: [], counts: {} } })
+  ok('una version que este panel no entiende se dice, no se adivina',
+    /version|versi/i.test(v2.doc.getElementById('board-note').textContent) &&
+    v2.doc.querySelectorAll('.card').length === 0,
+    v2.doc.getElementById('board-note').textContent)
+  const corto = await abrirTablero({ board: tablero([tarjeta()], { truncated: true }) })
+  ok('truncated avisa que no se ve todo',
+    /m[aá]s recientes|no caben/i.test(corto.doc.getElementById('board-note').textContent),
+    corto.doc.getElementById('board-note').textContent)
+  const raro = await abrirTablero({ board: tablero([tarjeta(), tarjeta({ case_id: 9,
+    stage: 'etapa-nueva' })]) })
+  ok('una tarjeta de una etapa desconocida no se cuela en otra columna',
+    raro.doc.querySelectorAll('.card').length === 1)
+  ok('y se avisa que hubo una que no se pudo ubicar',
+    /1/.test(raro.doc.getElementById('board-note').textContent) &&
+    raro.doc.getElementById('board-note').textContent.length > 3,
+    raro.doc.getElementById('board-note').textContent)
+  const roto = await abrirTablero({ board: { v: 1, cards: 'no-es-lista', counts: null } })
+  ok('un `board` malformado no rompe el panel', roto.doc.querySelectorAll('.card').length === 0 &&
+    roto.doc.getElementById('tab-inbox') !== null)
+  const vieja = await abrirTablero({ board: tablero([tarjeta()], { updated_at: hace(3 * 3600000) }) })
+  ok('un tablero viejo se marca como viejo',
+    !!vieja.doc.querySelector('#board-synced .vieja'), vieja.doc.getElementById('board-synced').innerHTML)
+}
+
+console.log('\nactivity.html — tablero: cada numero, su tablero (T9)')
+{
+  const ajena = tarjeta({ case_id: 7, account: 'pn:573000000013', title: 'Caso de otra linea' })
+  const mia = tarjeta({ case_id: 8, account: 'pn:573000000012', title: 'Caso de esta linea' })
+  const { doc } = await abrirTablero({
+    board: tablero([ajena, mia]),
+    sidecar: { connection: 'open', cuenta: 'pn:573000000012', latido: { ts: Date.now() } } })
+  const t = doc.getElementById('board-cols').textContent
+  ok('no pinta los casos de otro numero', !t.includes('Caso de otra linea') &&
+    t.includes('Caso de esta linea'), t)
+  ok('y la cuenta de la columna es la de lo que se ve',
+    doc.querySelector('.col[data-stage="decision"] .col-count').textContent.trim() === '1')
+  const sinLinea = await abrirTablero({ board: tablero([ajena, mia]) })
+  ok('sin numero conocido no se filtra nada', sinLinea.doc.querySelectorAll('.card').length === 2)
+}
+
+console.log('\nactivity.html — tablero: textos largos y ver todo')
+{
+  const largo = 'Texto muy largo sin fin '.repeat(40)
+  const cards = [tarjeta({ proposal: { tipo: 'trabajar', texto: largo, version: 'v' } }),
+    tarjeta({ case_id: 2, stage: 'listo', proposal: { tipo: 'responder', texto: 'corto',
+      version: 'v' }, summary: '' })]
+  const { doc } = await abrirTablero({ board: tablero(cards) })
+  const larga = doc.querySelector('.card[data-case="1"]')
+  const corta = doc.querySelector('.card[data-case="2"]')
+  ok('lo largo ofrece verlo completo y lo corto no',
+    !!larga.querySelector('.card-more') && !corta.querySelector('.card-more'))
+  larga.querySelector('.card-more').click()
+  ok('verlo completo abre la tarjeta', larga.classList.contains('abierta') &&
+    larga.querySelector('.card-more').getAttribute('aria-expanded') === 'true')
+  doc.getElementById('refresh').click()
+  await espera()
+  ok('y sigue abierta tras el sondeo',
+    doc.querySelector('.card[data-case="1"]').classList.contains('abierta'))
+  doc.querySelector('.card[data-case="1"] .card-more').click()
+  ok('y se vuelve a cerrar', !doc.querySelector('.card[data-case="1"]').classList.contains('abierta'))
+}
+
+console.log('\nactivity.html — tablero: tres idiomas')
+{
+  const board = tablero([tarjeta({ ticket: 'ACM-42' }), tarjeta({ case_id: 2, stage: 'bloqueado',
+    blocked_reason: 'x', exceptions: [] })])
+  // Partida a proposito: check-voseo lee esa raiz como voseo aunque sea portugues.
+  const DECISION_PT = ['Sua d', 'ecis\u00e3o'].join('')
+  for (const [lang, decision, hace5, flag] of [
+    ['es-419', 'Tu decisión', /hace 5 min/, /dinero/i],
+    ['en-US', 'Your decision', /5 min ago/, /money/i],
+    ['pt-BR', DECISION_PT, /há 5 min/, /dinheiro/i]
+  ]) {
+    const m = await abrirTablero({ board }, lang)
+    const d = m.doc
+    ok(`${lang}: la columna se llama ${decision}`,
+      d.querySelector('.col[data-stage="decision"] .col-name').textContent === decision,
+      d.querySelector('.col[data-stage="decision"] .col-name')?.textContent)
+    ok(`${lang}: la antiguedad`, hace5.test(d.querySelector('.card .when').textContent),
+      d.querySelector('.card .when')?.textContent)
+    ok(`${lang}: la bandera de Jev`, flag.test(d.querySelector('.tag.flag').textContent),
+      d.querySelector('.tag.flag')?.textContent)
+    ok(`${lang}: la pestana`, d.getElementById('tab-board').textContent.trim().length > 0)
+  }
+  const { window } = await montar('activity.html')
+  const S = window.STRINGS
+  const nuevas = Object.keys(S.en).filter((k) => /^(tab|board|stage|clase|prio|flag|jev|exc|prop|blocked|ticket|ago)/.test(k))
+  ok('hay textos nuevos del tablero', nuevas.length > 20, String(nuevas.length))
+  const faltan = nuevas.filter((k) => !S.es[k] || !S.pt[k])
+  ok('cada texto del tablero existe en espanol, ingles y portugues', faltan.length === 0,
+    JSON.stringify(faltan))
+  const igualPt = nuevas.filter((k) => S.pt[k] === S.en[k] && !/^(stageTrabajo|clase)/.test(k) &&
+    S.en[k].length > 6)
+  ok('y el portugues es propio, no ingles prestado', igualPt.length === 0, JSON.stringify(igualPt))
+}
+
+console.log('\nactivity.html — tablero: composicion (los anchos los mira shots)')
+{
+  const html = readFileSync(join(root, 'activity.html'), 'utf8')
+  ok('hay un corte a 768 px que pasa el tablero a lista por etapa',
+    /@media\s*\(max-width:\s*768px\)/.test(html))
+  ok('las columnas se desplazan dentro de su contenedor y no la pagina',
+    /\.board-cols\s*\{[^}]*overflow-x:\s*auto/.test(html))
+  ok('el texto del cliente parte las palabras largas', /overflow-wrap:\s*anywhere/.test(html))
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)

@@ -17,7 +17,7 @@
            jsdom). Son los valores reales de main.css, no un gris inventado: antes
            eran solo oscuros y el panel salia ilegible en cuanto el tema era claro. */
         --fb-background: #fff; --fb-foreground: #0a0a0a;
-        --fb-primary: #171717;
+        --fb-primary: #171717; --fb-primary-foreground: #fafafa;
         --fb-secondary: #f5f5f5; --fb-secondary-foreground: #171717;
         --fb-muted-foreground: #737373;
         --fb-accent: #f5f5f5; --fb-accent-foreground: #171717;
@@ -27,7 +27,7 @@
       @media (prefers-color-scheme: dark) {
         :root {
           --fb-background: #0a0a0a; --fb-foreground: #fafafa;
-          --fb-primary: #e5e5e5;
+          --fb-primary: #e5e5e5; --fb-primary-foreground: #171717;
           --fb-secondary: #262626; --fb-secondary-foreground: #fafafa;
           --fb-muted-foreground: #a1a1a1;
           --fb-accent: #404040; --fb-accent-foreground: #fafafa;
@@ -148,6 +148,113 @@
       /* "sin datos" y el error de una accion si son fallos: --destructive. */
       .stale { color: var(--destructive, var(--fb-destructive)); }
       code { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+
+      [hidden] { display: none !important; }
+
+      /* Pestanas: Bandeja (lo de siempre) y Tablero (los casos). Subrayado en
+         --primary, que es el token de enfasis; sin color de exito en la allowlist. */
+      .tabs { display: flex; gap: 4px; padding: 0 12px; margin: 0 0 10px;
+              border-bottom: 1px solid var(--border, var(--fb-border)); }
+      .tab { font: inherit; font-size: 13px; padding: 6px 10px; cursor: pointer;
+             border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;
+             background: none; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .tab:hover { color: var(--foreground, var(--fb-foreground)); }
+      .tab[aria-selected="true"] { color: var(--foreground, var(--fb-foreground));
+             font-weight: 600; border-bottom-color: var(--primary, var(--fb-primary)); }
+      .tab:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: -2px; }
+      .tab-count { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px;
+                   font-size: 10px; line-height: 16px; text-align: center; font-weight: 600;
+                   border-radius: 9999px;
+                   background: var(--primary, var(--fb-primary));
+                   color: var(--primary-foreground, var(--fb-primary-foreground)); }
+
+      /* El tablero. Siete columnas del flujo y, aparte, el carril de bloqueados. Las
+         columnas se desplazan DENTRO de su contenedor (entre 769 y ~1300 px no caben las
+         ocho): la pagina nunca. Hasta 768 px pasa a una lista agrupada por etapa. */
+      .board-cols { display: flex; gap: 8px; padding: 0 12px; overflow-x: auto;
+                    align-items: flex-start; }
+      .col { flex: 1 0 160px; min-width: 0; padding: 8px;
+             border: 1px solid var(--border, var(--fb-border));
+             border-radius: var(--radius-md);
+             background: var(--secondary, var(--fb-secondary)); }
+      .col.lane { border-style: dashed; margin-left: 4px; }
+      /* "Tu decision" es lo unico que espera al dueno: filete grueso en --primary y la
+         cuenta rellena. El resto del tablero es informativo. */
+      .col.decision { border: 2px solid var(--primary, var(--fb-primary)); padding: 7px; }
+      .col-head { display: flex; align-items: center; justify-content: space-between;
+                  gap: 6px; margin: 0 0 8px; font-size: 11px; font-weight: 600;
+                  text-transform: uppercase; letter-spacing: 0.05em;
+                  color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .col.decision .col-head { color: var(--foreground, var(--fb-foreground));
+                                font-size: 12px; }
+      .col.lane .col-head { color: var(--destructive, var(--fb-destructive)); }
+      .col-name { overflow-wrap: anywhere; }
+      .col-count { flex: none; min-width: 20px; padding: 0 6px; line-height: 18px;
+                   text-align: center; letter-spacing: 0; border-radius: 9999px;
+                   background: var(--background, var(--fb-background));
+                   border: 1px solid var(--border, var(--fb-border));
+                   color: var(--foreground, var(--fb-foreground)); }
+      .col.decision.con-casos .col-count { background: var(--primary, var(--fb-primary));
+             border-color: transparent;
+             color: var(--primary-foreground, var(--fb-primary-foreground)); }
+      .col-empty, .col-more { font-size: 11px; margin: 0;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .col-more { margin-top: 6px; font-weight: 600; }
+      .card { margin: 0 0 8px; padding: 8px; font-size: 12px; line-height: 1.4;
+              border: 1px solid var(--border, var(--fb-border));
+              border-radius: var(--radius-md);
+              background: var(--background, var(--fb-background)); }
+      .card:last-of-type { margin-bottom: 0; }
+      .card.urgente { border-left: 3px solid var(--destructive, var(--fb-destructive)); }
+      .card-title { font-weight: 600; overflow-wrap: anywhere; }
+      /* El nombre del chat entero y la antiguedad debajo: lado a lado, en una columna de
+         160 px el nombre se partia en tres lineas. */
+      .card-chat { margin-top: 2px; font-size: 11px;
+                   color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .card-chat .name { display: block; overflow-wrap: anywhere; }
+      .card-chat .when { display: block; margin-left: 0; }
+      .card-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+      /* Con el radio de pastilla, una etiqueta de dos lineas se ve como un huevo. */
+      .card-tags .tag { overflow-wrap: anywhere; border-radius: 8px; padding: 1px 6px; }
+      .tag.prio.urgente { color: var(--destructive, var(--fb-destructive));
+                          border-color: var(--destructive, var(--fb-destructive));
+                          font-weight: 600; }
+      .tag.prio.alta { color: var(--foreground, var(--fb-foreground)); font-weight: 600; }
+      .tag.skip { border-style: dashed; }
+      .card-exc { margin-top: 6px; font-weight: 600; overflow-wrap: anywhere;
+                  color: var(--foreground, var(--fb-foreground)); }
+      .card-sum, .card-prop, .card-blocked, .card-ticket { margin-top: 6px;
+                  overflow-wrap: anywhere; }
+      .card-sum { color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .card-prop { padding-left: 8px;
+                   border-left: 2px solid var(--border, var(--fb-border)); }
+      .card-prop .lead, .card-blocked .lead { display: block; font-size: 10px;
+                  font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+                  color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .card-blocked { color: var(--destructive, var(--fb-destructive)); }
+      .card-blocked .lead { color: inherit; }
+      .card-ticket { font-size: 11px;
+                  color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      /* El recorte: tres lineas hasta que el dueno pida verlo todo. */
+      .card:not(.abierta) .clamp { display: -webkit-box; -webkit-line-clamp: 3;
+                  -webkit-box-orient: vertical; overflow: hidden; }
+      .card-more { font: inherit; font-size: 11px; margin-top: 6px; padding: 0; cursor: pointer;
+                   border: 0; background: none; text-decoration: underline;
+                   color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .card-more:hover { color: var(--foreground, var(--fb-foreground)); }
+      .card-more:focus-visible { outline: 2px solid var(--ring, var(--fb-ring));
+                                 outline-offset: 1px; }
+
+      /* Hasta 768 px: una lista agrupada por etapa. "Tu decision" y los bloqueados
+         suben al principio; una etapa sin nada no ocupa lugar (la de decision si, para
+         poder decir que no hay nada que decidir). */
+      @media (max-width: 768px) {
+        .board-cols { display: flex; flex-direction: column; align-items: stretch; overflow: visible;
+                       gap: 10px; }
+        .col, .col.lane { flex: none; margin-left: 0; }
+        .col.decision, .col.lane { order: -1; }
+        .col.sin-nada:not(.decision) { display: none; }
+      }
     </style>
   </head>
   <body>
@@ -164,6 +271,17 @@
          estoy conectado" se leen igual. -->
     <p class="meta nota" id="linea"></p>
     <p class="meta nota" id="cobertura"></p>
+
+    <!-- Dos vistas: la bandeja de siempre y el tablero de casos. -->
+    <div class="tabs" role="tablist">
+      <button class="tab" id="tab-inbox" role="tab" aria-selected="true"
+              aria-controls="view-inbox" data-t="tabInbox">Bandeja</button>
+      <button class="tab" id="tab-board" role="tab" aria-selected="false"
+              aria-controls="view-board" tabindex="-1"><span data-t="tabBoard">Tablero</span><span
+              class="tab-count" id="tab-board-count" hidden></span></button>
+    </div>
+
+    <div id="view-inbox" role="tabpanel" aria-labelledby="tab-inbox">
 
     <!-- EL ORDEN ES EL MENSAJE. Antes la pantalla abria con "Esperando respuesta" y
          un boton Tomar en cada fila: se leia como que sin el dueno no pasa nada, y no
@@ -189,6 +307,16 @@
     <h2 data-t="queue">En cola para la proxima corrida</h2>
     <p class="meta nota" data-t="hint"></p>
     <div id="pending"><p class="empty" data-t="loading">Cargando…</p></div>
+    </div>
+
+    <!-- El tablero es de SOLO LECTURA: lo escribe `wa-scope` en la clave `board` y las
+         acciones del dueno (T6) todavia no tienen canal. Un boton que no hace nada esta
+         prohibido, asi que el campo `actions` de cada tarjeta no se pinta. -->
+    <div id="view-board" role="tabpanel" aria-labelledby="tab-board" hidden>
+      <p class="meta nota" id="board-synced"></p>
+      <p class="meta nota" id="board-note"></p>
+      <div class="board-cols" id="board-cols"></div>
+    </div>
 
     <script>
       'use strict'
@@ -201,21 +329,198 @@
               "actSent": "enviado", "actSkipped": "saltado", "actDenied": "denegado",
               "actClosed": "cierre avisado", "actFailed": "fallo", "actAlert": "aviso",
               "errNoId": "sin id de mensaje", "errRead": "no pude leer",
-              "errSave": "no pude guardar", "lineaConectada": "Linea conectada", "lineaConectando": "Conectando la linea\u2026", "lineaSinVincular": "Falta escanear el codigo QR en Ajustes", "lineaCaida": "La linea esta caida", "syncLineaNueva": "esperando el primer sync de esta linea\u2026", "lineaSinSenal": "La linea no da senal desde las {hora}", "cobertura": "El agente actua sobre {n} de {total} conversaciones", "coberturaSinTotal": "El agente actua sobre {n} conversaciones", "needsYou": "Necesita su decision", "queue": "En cola para la proxima corrida", "nothingNeeded": "Nada que decidir. El agente no necesita nada de usted."},
+              "errSave": "no pude guardar", "lineaConectada": "Linea conectada", "lineaConectando": "Conectando la linea\u2026", "lineaSinVincular": "Falta escanear el codigo QR en Ajustes", "lineaCaida": "La linea esta caida", "syncLineaNueva": "esperando el primer sync de esta linea\u2026", "lineaSinSenal": "La linea no da senal desde las {hora}", "cobertura": "El agente actua sobre {n} de {total} conversaciones", "coberturaSinTotal": "El agente actua sobre {n} conversaciones", "needsYou": "Necesita su decision", "queue": "En cola para la proxima corrida", "nothingNeeded": "Nada que decidir. El agente no necesita nada de usted.",
+              "tabInbox": "Bandeja",
+              "tabBoard": "Tablero",
+              "stageRecibido": "Recibido",
+              "stageClasificado": "Clasificado",
+              "stageDecision": "Tu decisión",
+              "stageTrabajo": "En trabajo",
+              "stageListo": "Listo para responder",
+              "stageRespondido": "Respondido",
+              "stageCerrado": "Cerrado",
+              "stageBloqueado": "Bloqueado",
+              "boardEmptyCol": "Nada aquí",
+              "boardEmptyDecision": "Nada que decidir",
+              "boardMore": "+{n} más sin mostrar",
+              "boardNoData": "El tablero todavía no tiene datos. Aparecerá tras la próxima sincronización.",
+              "boardNoCases": "Sin casos todavía. Cada pedido que llegue por WhatsApp aparecerá aquí.",
+              "boardUnsupported": "Este panel no entiende la versión {v} del tablero. Actualiza el plugin.",
+              "boardTruncated": "Se muestran los casos más recientes; hay más de los que caben aquí.",
+              "boardUnknown1": "1 caso con una etapa que este panel no conoce no se muestra.",
+              "boardUnknown": "{n} casos con una etapa que este panel no conoce no se muestran.",
+              "boardUpdated": "Actualizado {cuando}",
+              "boardUntitled": "(sin título)",
+              "boardShowAll": "Ver todo",
+              "boardShowLess": "Ver menos",
+              "claseCard": "tarjeta",
+              "claseAlert": "aviso",
+              "claseNothing": "nada que hacer",
+              "claseDoubtful": "dudoso",
+              "prioUrgent": "Prioridad urgente",
+              "prioHigh": "Prioridad alta",
+              "prioMedium": "Prioridad media",
+              "prioLow": "Prioridad baja",
+              "flagAsksOwnerToAct": "te pide actuar",
+              "flagContainsCredential": "trae una credencial",
+              "flagAsksForCredential": "pide una credencial",
+              "flagAsksForMoney": "habla de dinero o de un pago",
+              "flagClientWaiting": "cliente esperando o servicio caído",
+              "flagPromisesDate": "promete una fecha",
+              "flagStatusNotVerified": "afirma un estado sin verificar",
+              "flagInstructsAssistant": "intenta darle órdenes al asistente",
+              "flagUrgencyPressure": "mete presión de urgencia",
+              "jevLead": "Jev",
+              "jevSkip": "sin acción",
+              "jevSees": "Jev ve",
+              "excLead": "Necesita tu decisión por",
+              "excMoney": "dinero",
+              "excCredential": "credencial",
+              "excCommitment": "compromiso",
+              "excJev": "aviso de Jev",
+              "propLead": "Propuesta",
+              "propResponder": "responder",
+              "propTrabajar": "trabajar",
+              "propEscalar": "escalar",
+              "propDescartar": "descartar",
+              "blockedLead": "Motivo del bloqueo",
+              "ticketLead": "Ticket",
+              "agoNow": "ahora",
+              "agoMin": "hace {n} min",
+              "agoHour": "hace {n} h",
+              "agoDay": "hace {n} d"},
         en: {"title": "WhatsApp", "pending": "Waiting on you", "recent": "What your agent did", "loading": "Loading…", "nothingYet": "Nothing yet.", "nothingPending": "Nothing pending in the conversations you allowed.", "nothingAuthorized1": "You have 1 conversation set up and it is off.", "nothingAuthorized": "You have {n} conversations set up and all of them are off.", "nothingMapped": "No conversation is authorized yet.", "runNever": "Your agent has not checked yet.", "runNow": "Checking now…", "runCut": "The run started and never came back", "runFailed": "Last run failed", "runChecked1": "Checked 1 conversation", "runChecked": "Checked {n} conversations", "runNone": "nothing pending", "runWaiting1": "1 waiting", "runWaiting": "{n} waiting", "noData": "no data — run <code>wa-scope sync</code>", "running": "running", "image": "image", "mediaImage": "image", "mediaVideo": "video", "mediaPtt": "voice note", "mediaAudio": "audio", "mediaDocument": "document", "mediaOther": "attachment", "take": "Take", "ignore": "Ignore", "taken": "your agent takes it", "hint": "Your agent handles this on its own, as far as each conversation allows. Mark only to move it up or to keep it away.", "refreshTitle": "Re-read what is stored",
               "kindDirecto": "direct", "kindMencion": "mention", "kindRespuesta": "reply", "kindGrupo": "in the group",
               "actTriage": "triage", "actIssue": "card opened", "actDraft": "draft",
               "actSent": "sent", "actSkipped": "skipped", "actDenied": "denied",
               "actClosed": "closing announced", "actFailed": "failed", "actAlert": "alert",
               "errNoId": "no message id", "errRead": "could not read",
-              "errSave": "could not save", "lineaConectada": "Line connected", "lineaConectando": "Connecting the line\u2026", "lineaSinVincular": "The QR code still has to be scanned in Settings", "lineaCaida": "The line is down", "syncLineaNueva": "waiting for this line\u2019s first sync\u2026", "lineaSinSenal": "No signal from the line since {hora}", "cobertura": "Your agent acts on {n} of {total} conversations", "coberturaSinTotal": "Your agent acts on {n} conversations", "needsYou": "Needs your decision", "queue": "Queued for the next run", "nothingNeeded": "Nothing to decide. Your agent does not need anything from you."},
+              "errSave": "could not save", "lineaConectada": "Line connected", "lineaConectando": "Connecting the line\u2026", "lineaSinVincular": "The QR code still has to be scanned in Settings", "lineaCaida": "The line is down", "syncLineaNueva": "waiting for this line\u2019s first sync\u2026", "lineaSinSenal": "No signal from the line since {hora}", "cobertura": "Your agent acts on {n} of {total} conversations", "coberturaSinTotal": "Your agent acts on {n} conversations", "needsYou": "Needs your decision", "queue": "Queued for the next run", "nothingNeeded": "Nothing to decide. Your agent does not need anything from you.",
+              "tabInbox": "Inbox",
+              "tabBoard": "Board",
+              "stageRecibido": "Received",
+              "stageClasificado": "Classified",
+              "stageDecision": "Your decision",
+              "stageTrabajo": "In progress",
+              "stageListo": "Ready to reply",
+              "stageRespondido": "Replied",
+              "stageCerrado": "Closed",
+              "stageBloqueado": "Blocked",
+              "boardEmptyCol": "Nothing here",
+              "boardEmptyDecision": "Nothing to decide",
+              "boardMore": "+{n} more not shown",
+              "boardNoData": "The board has no data yet. It will show up after the next sync.",
+              "boardNoCases": "No cases yet. Every request that arrives on WhatsApp will show up here.",
+              "boardUnsupported": "This panel does not understand version {v} of the board. Update the plugin.",
+              "boardTruncated": "Showing the most recent cases; there are more than fit here.",
+              "boardUnknown1": "1 case with a stage this panel does not know is not shown.",
+              "boardUnknown": "{n} cases with a stage this panel does not know are not shown.",
+              "boardUpdated": "Updated {cuando}",
+              "boardUntitled": "(untitled)",
+              "boardShowAll": "Show all",
+              "boardShowLess": "Show less",
+              "claseCard": "card",
+              "claseAlert": "alert",
+              "claseNothing": "nothing to do",
+              "claseDoubtful": "doubtful",
+              "prioUrgent": "Urgent priority",
+              "prioHigh": "High priority",
+              "prioMedium": "Medium priority",
+              "prioLow": "Low priority",
+              "flagAsksOwnerToAct": "asks you to act",
+              "flagContainsCredential": "contains a credential",
+              "flagAsksForCredential": "asks for a credential",
+              "flagAsksForMoney": "talks about money or a payment",
+              "flagClientWaiting": "client waiting or service down",
+              "flagPromisesDate": "promises a date",
+              "flagStatusNotVerified": "states a status that is not verified",
+              "flagInstructsAssistant": "tries to instruct the assistant",
+              "flagUrgencyPressure": "applies urgency pressure",
+              "jevLead": "Jev",
+              "jevSkip": "no action needed",
+              "jevSees": "Jev sees",
+              "excLead": "Needs your decision because",
+              "excMoney": "money",
+              "excCredential": "credential",
+              "excCommitment": "commitment",
+              "excJev": "flagged by Jev",
+              "propLead": "Proposal",
+              "propResponder": "reply",
+              "propTrabajar": "work on it",
+              "propEscalar": "escalate",
+              "propDescartar": "discard",
+              "blockedLead": "Blocked because",
+              "ticketLead": "Ticket",
+              "agoNow": "just now",
+              "agoMin": "{n} min ago",
+              "agoHour": "{n} h ago",
+              "agoDay": "{n} d ago"},
         pt: {"title": "WhatsApp", "pending": "Aguardando voce", "recent": "O que o agente fez", "loading": "Carregando…", "nothingYet": "Nada ainda.", "nothingPending": "Nada pendente nas conversas que voce autorizou.", "nothingAuthorized1": "Voce tem 1 conversa configurada e ela esta em off.", "nothingAuthorized": "Voce tem {n} conversas configuradas e todas em off.", "nothingMapped": "Nenhuma conversa autorizada ainda.", "runNever": "Seu agente ainda nao revisou.", "runNow": "Revisando agora…", "runCut": "A revisao comecou e nao voltou", "runFailed": "A ultima revisao falhou", "runChecked1": "Revisou 1 conversa", "runChecked": "Revisou {n} conversas", "runNone": "nada pendente", "runWaiting1": "1 aguardando", "runWaiting": "{n} aguardando", "noData": "sem dados — rode <code>wa-scope sync</code>", "running": "rodando", "image": "imagem", "mediaImage": "imagem", "mediaVideo": "video", "mediaPtt": "nota de voz", "mediaAudio": "audio", "mediaDocument": "documento", "mediaOther": "anexo", "take": "Assumir", "ignore": "Ignorar", "taken": "seu agente assume", "hint": "Seu agente cuida disso sozinho, ate onde cada conversa permitir. Marque apenas para adiantar ou para que nao toque.", "refreshTitle": "Reler o que esta salvo",
               "kindDirecto": "direto", "kindMencion": "mencao", "kindRespuesta": "resposta", "kindGrupo": "do grupo",
               "actTriage": "triagem", "actIssue": "cartao aberto", "actDraft": "rascunho",
               "actSent": "enviado", "actSkipped": "pulado", "actDenied": "negado",
               "actClosed": "fecho avisado", "actFailed": "falhou", "actAlert": "alerta",
               "errNoId": "sem id da mensagem", "errRead": "nao consegui ler",
-              "errSave": "nao consegui salvar", "lineaConectada": "Linha conectada", "lineaConectando": "Conectando a linha\u2026", "lineaSinVincular": "Falta escanear o codigo QR em Ajustes", "lineaCaida": "A linha esta fora do ar", "syncLineaNueva": "esperando o primeiro sync desta linha\u2026", "lineaSinSenal": "A linha nao da sinal desde as {hora}", "cobertura": "Seu agente atua em {n} de {total} conversas", "coberturaSinTotal": "Seu agente atua em {n} conversas", "needsYou": "Precisa da sua decisao", "queue": "Na fila para a proxima rodada", "nothingNeeded": "Nada a decidir. Seu agente nao precisa de nada de voce."}
+              "errSave": "nao consegui salvar", "lineaConectada": "Linha conectada", "lineaConectando": "Conectando a linha\u2026", "lineaSinVincular": "Falta escanear o codigo QR em Ajustes", "lineaCaida": "A linha esta fora do ar", "syncLineaNueva": "esperando o primeiro sync desta linha\u2026", "lineaSinSenal": "A linha nao da sinal desde as {hora}", "cobertura": "Seu agente atua em {n} de {total} conversas", "coberturaSinTotal": "Seu agente atua em {n} conversas", "needsYou": "Precisa da sua decisao", "queue": "Na fila para a proxima rodada", "nothingNeeded": "Nada a decidir. Seu agente nao precisa de nada de voce.",
+              "tabInbox": "Caixa de entrada",
+              "tabBoard": "Quadro",
+              "stageRecibido": "Recebido",
+              "stageClasificado": "Classificado",
+              "stageDecision": "Sua decisão",
+              "stageTrabajo": "Em andamento",
+              "stageListo": "Pronto para responder",
+              "stageRespondido": "Respondido",
+              "stageCerrado": "Fechado",
+              "stageBloqueado": "Bloqueado",
+              "boardEmptyCol": "Nada aqui",
+              "boardEmptyDecision": "Nada a decidir",
+              "boardMore": "+{n} mais não mostrados",
+              "boardNoData": "O quadro ainda não tem dados. Aparecerá depois da próxima sincronização.",
+              "boardNoCases": "Sem casos ainda. Cada pedido que chegar pelo WhatsApp aparecerá aqui.",
+              "boardUnsupported": "Este painel não entende a versão {v} do quadro. Atualize o plugin.",
+              "boardTruncated": "Mostrando os casos mais recentes; há mais do que cabem aqui.",
+              "boardUnknown1": "1 caso com uma etapa que este painel não conhece não é mostrado.",
+              "boardUnknown": "{n} casos com uma etapa que este painel não conhece não são mostrados.",
+              "boardUpdated": "Atualizado {cuando}",
+              "boardUntitled": "(sem título)",
+              "boardShowAll": "Ver tudo",
+              "boardShowLess": "Ver menos",
+              "claseCard": "cartão",
+              "claseAlert": "alerta",
+              "claseNothing": "nada a fazer",
+              "claseDoubtful": "duvidoso",
+              "prioUrgent": "Prioridade urgente",
+              "prioHigh": "Prioridade alta",
+              "prioMedium": "Prioridade média",
+              "prioLow": "Prioridade baixa",
+              "flagAsksOwnerToAct": "pede que você aja",
+              "flagContainsCredential": "traz uma credencial",
+              "flagAsksForCredential": "pede uma credencial",
+              "flagAsksForMoney": "fala de dinheiro ou de um pagamento",
+              "flagClientWaiting": "cliente esperando ou serviço fora do ar",
+              "flagPromisesDate": "promete uma data",
+              "flagStatusNotVerified": "afirma um status não verificado",
+              "flagInstructsAssistant": "tenta dar ordens ao assistente",
+              "flagUrgencyPressure": "faz pressão de urgência",
+              "jevLead": "Jev",
+              "jevSkip": "sem ação",
+              "jevSees": "Jev vê",
+              "excLead": "Precisa da sua decisão por",
+              "excMoney": "dinheiro",
+              "excCredential": "credencial",
+              "excCommitment": "compromisso",
+              "excJev": "aviso do Jev",
+              "propLead": "Proposta",
+              "propResponder": "responder",
+              "propTrabajar": "trabalhar",
+              "propEscalar": "escalar",
+              "propDescartar": "descartar",
+              "blockedLead": "Bloqueado porque",
+              "ticketLead": "Ticket",
+              "agoNow": "agora",
+              "agoMin": "há {n} min",
+              "agoHour": "há {n} h",
+              "agoDay": "há {n} d"}
       }
       var LANG = (function () {
         var tag = String(navigator.language || 'en').toLowerCase()
@@ -241,7 +546,7 @@
       // Sin respaldo el codigo crudo es el respaldo: un valor que este panel todavia no
       // conoce se ve feo pero no miente, que es lo que importa en una lista de pendientes.
       function porCodigo(mapa, code, respaldo) {
-        var key = mapa[code]
+        var key = Object.prototype.hasOwnProperty.call(mapa, code) ? mapa[code] : null
         if (key) return t(key)
         if (respaldo !== undefined) return respaldo
         return String(code == null ? '' : code)
@@ -621,13 +926,308 @@
         return !cuentaVinculada || (cuenta || 'local') === cuentaVinculada
       }
 
+      // ───────────────────────── El tablero de casos ─────────────────────────
+      // `wa-scope` escribe la clave `board` (odd/tasks/kanban-casos.md, "Contratos") y
+      // este panel solo la LEE. El campo `actions` de cada tarjeta no se usa: las
+      // acciones del dueno (T6) todavia no tienen canal, y un boton que no hace nada
+      // esta prohibido.
+      //
+      // Todo lo que trae una tarjeta es texto de clientes: se arma con createElement y
+      // textContent, nunca con innerHTML, asi que no hay nada que escapar ni que olvidar.
+      var ETAPAS = ['recibido', 'clasificado', 'decision', 'trabajo', 'listo',
+        'respondido', 'cerrado', 'bloqueado']
+      var ETAPA_KEY = { recibido: 'stageRecibido', clasificado: 'stageClasificado',
+        decision: 'stageDecision', trabajo: 'stageTrabajo', listo: 'stageListo',
+        respondido: 'stageRespondido', cerrado: 'stageCerrado', bloqueado: 'stageBloqueado' }
+      var CLASE_KEY = { card: 'claseCard', alert: 'claseAlert', nothing: 'claseNothing',
+        doubtful: 'claseDoubtful' }
+      // `none` no es una prioridad: no tiene texto y no se pinta.
+      var PRIO_KEY = { urgent: 'prioUrgent', high: 'prioHigh', medium: 'prioMedium',
+        low: 'prioLow' }
+      var PRIO_CLASE = { urgent: 'urgente', high: 'alta' }
+      // Las preguntas de Jev por su id (§ "Jev" de la tarea): el id no es una frase.
+      var FLAG_KEY = { asks_owner_to_act: 'flagAsksOwnerToAct',
+        contains_credential: 'flagContainsCredential',
+        asks_for_credential: 'flagAsksForCredential',
+        asks_for_money_or_payment: 'flagAsksForMoney',
+        client_waiting_or_service_down: 'flagClientWaiting',
+        promises_a_date: 'flagPromisesDate',
+        states_status_not_verified: 'flagStatusNotVerified',
+        tries_to_instruct_the_assistant: 'flagInstructsAssistant',
+        urgency_pressure: 'flagUrgencyPressure' }
+      var EXC_KEY = { money: 'excMoney', credential: 'excCredential',
+        commitment: 'excCommitment', jev: 'excJev' }
+      var PROP_KEY = { responder: 'propResponder', trabajar: 'propTrabajar',
+        escalar: 'propEscalar', descartar: 'propDescartar' }
+
+      // Desde cuantos caracteres un texto puede no caber en tres lineas de la columna
+      // mas angosta: solo una primera aproximacion, ajustarVerTodo() mide de verdad.
+      var LARGO_RECORTE = 60
+      var vistaActiva = 'inbox'
+      var VISTAS = ['inbox', 'board']
+      var abiertas = {}
+
+      function crear (tag, clase, texto) {
+        var nodo = document.createElement(tag)
+        if (clase) nodo.className = clase
+        if (texto !== undefined && texto !== null) nodo.textContent = String(texto)
+        return nodo
+      }
+
+      function esObjeto (x) { return x !== null && typeof x === 'object' && !Array.isArray(x) }
+
+      /** Lista de textos: lo que no sea lista o texto se ignora, un `board` malformado no
+       *  puede tumbar la bandeja. */
+      function textos (x) {
+        return Array.isArray(x)
+          ? x.filter(function (v) { return typeof v === 'string' && v }) : []
+      }
+
+      /** "hace 5 min": el sello de una tarjeta es de maquina y no dice nada de un
+       *  vistazo. Una fecha que no se entiende se calla. */
+      function hace (stamp) {
+        var ms = Date.parse(String(stamp || ''))
+        if (!ms) return ''
+        var min = Math.floor((Date.now() - ms) / 60000)
+        if (min < 1) return t('agoNow')
+        if (min < 60) return fmt('agoMin', min)
+        if (min < 1440) return fmt('agoHour', Math.floor(min / 60))
+        return fmt('agoDay', Math.floor(min / 1440))
+      }
+
+      /** Lo que el panel va a pintar, ya limpio: tarjetas por etapa, cuentas y avisos. No
+       *  toca el DOM, asi que el panel no se rompe por lo que traiga la clave.
+       *
+       *  `counts` manda sobre las tarjetas (cuenta todo, no solo lo enviado); si las
+       *  tarjetas de otro numero se descartaron, ya no es del mismo universo y se cuenta
+       *  lo que se ve. */
+      function modeloTablero (board) {
+        if (!esObjeto(board)) return { estado: 'sin-datos' }
+        if (board.v !== 1) return { estado: 'version', v: board.v == null ? '?' : board.v }
+        var todas = Array.isArray(board.cards) ? board.cards.filter(esObjeto) : []
+        var propias = todas.filter(function (c) { return deEstaLinea(c.account) })
+        var descartadas = propias.length !== todas.length
+        var porEtapa = {}
+        ETAPAS.forEach(function (e) { porEtapa[e] = [] })
+        var desconocidas = 0
+        propias.forEach(function (c) {
+          if (ETAPAS.indexOf(c.stage) >= 0) porEtapa[c.stage].push(c)
+          else desconocidas += 1
+        })
+        ETAPAS.forEach(function (e) {
+          porEtapa[e].sort(function (a, b) {
+            return (Date.parse(b.updated_at) || 0) - (Date.parse(a.updated_at) || 0)
+          })
+        })
+        var counts = {}
+        var total = 0
+        ETAPAS.forEach(function (e) {
+          var dicho = esObjeto(board.counts) ? Number(board.counts[e]) : NaN
+          var n = (!descartadas && isFinite(dicho) && dicho >= 0) ? Math.floor(dicho) : 0
+          counts[e] = Math.max(n, porEtapa[e].length)
+          total += counts[e]
+        })
+        return { estado: total === 0 ? 'vacio' : 'ok', porEtapa: porEtapa, counts: counts,
+          desconocidas: desconocidas, truncado: board.truncated === true,
+          actualizado: board.updated_at }
+      }
+
+      function etiqueta (clase, texto) { return crear('span', 'tag ' + clase, texto) }
+
+      function tarjetaNodo (c) {
+        var id = String(c.case_id)
+        var nodo = crear('article', 'card' + (c.prioridad === 'urgent' ? ' urgente' : '') +
+          (abiertas[id] ? ' abierta' : ''))
+        nodo.dataset.case = id
+        nodo.appendChild(crear('div', 'card-title',
+          typeof c.title === 'string' && c.title ? c.title : t('boardUntitled')))
+        var linea = crear('div', 'card-chat')
+        linea.appendChild(crear('span', 'name', c.chat_name))
+        var cuandoTxt = hace(c.updated_at)
+        if (cuandoTxt) linea.appendChild(crear('span', 'when', cuandoTxt))
+        nodo.appendChild(linea)
+
+        var jev = esObjeto(c.jev) ? c.jev : null
+        var tags = crear('div', 'card-tags')
+        if (c.clase) tags.appendChild(etiqueta('clase', porCodigo(CLASE_KEY, c.clase)))
+        if (c.prioridad && c.prioridad !== 'none') {
+          var prio = etiqueta('prio' + (PRIO_CLASE[c.prioridad] ? ' ' + PRIO_CLASE[c.prioridad] : ''),
+            porCodigo(PRIO_KEY, c.prioridad))
+          tags.appendChild(prio)
+        }
+        if (jev) {
+          if (jev.skip === true) tags.appendChild(etiqueta('skip', t('jevLead') + ': ' + t('jevSkip')))
+          if (jev.attention_class && jev.attention_class !== c.clase) {
+            tags.appendChild(etiqueta('jevclase', t('jevSees') + ': ' +
+              porCodigo(CLASE_KEY, jev.attention_class)))
+          }
+          textos(jev.flags).forEach(function (f) {
+            tags.appendChild(etiqueta('flag', t('jevLead') + ': ' + porCodigo(FLAG_KEY, f)))
+          })
+        }
+        if (tags.childNodes.length) nodo.appendChild(tags)
+
+        // Por que espera al dueno: es lo que ninguna otra parte de la tarjeta dice.
+        var excepciones = textos(c.exceptions)
+        if (excepciones.length) {
+          nodo.appendChild(crear('div', 'card-exc', t('excLead') + ': ' +
+            excepciones.map(function (e) { return porCodigo(EXC_KEY, e) }).join(' · ')))
+        }
+        if (typeof c.summary === 'string' && c.summary) {
+          nodo.appendChild(crear('div', 'card-sum clamp', c.summary))
+        }
+        var prop = esObjeto(c.proposal) ? c.proposal : null
+        if (prop && (prop.texto || prop.tipo)) {
+          var caja = crear('div', 'card-prop')
+          caja.appendChild(crear('span', 'lead', t('propLead') +
+            (prop.tipo ? ' · ' + porCodigo(PROP_KEY, prop.tipo) : '')))
+          if (prop.texto) caja.appendChild(crear('span', 'clamp', prop.texto))
+          nodo.appendChild(caja)
+        }
+        if (typeof c.blocked_reason === 'string' && c.blocked_reason) {
+          var bloqueo = crear('div', 'card-blocked')
+          bloqueo.appendChild(crear('span', 'lead', t('blockedLead')))
+          bloqueo.appendChild(crear('span', 'clamp', c.blocked_reason))
+          nodo.appendChild(bloqueo)
+        }
+        // El ticket es un texto, no un enlace: lo que llega de la clave es de fuera y un
+        // href armado con ello no se abre desde el iframe del panel.
+        var ticket = typeof c.ticket === 'string' ? c.ticket
+          : (esObjeto(c.ticket) ? (c.ticket.id || c.ticket.key || c.ticket.identifier || '') : '')
+        if (ticket) nodo.appendChild(crear('div', 'card-ticket', t('ticketLead') + ' ' + ticket))
+
+        // Lo que se recorta se puede leer entero. Es el unico control del tablero y no es
+        // una accion del dueno: solo muestra lo que ya esta en la tarjeta.
+        var largo = Array.prototype.some.call(nodo.querySelectorAll('.clamp'), function (n) {
+          return n.textContent.length > LARGO_RECORTE
+        })
+        if (largo) {
+          var mas = crear('button', 'card-more', abiertas[id] ? t('boardShowLess') : t('boardShowAll'))
+          mas.type = 'button'
+          mas.setAttribute('aria-expanded', abiertas[id] ? 'true' : 'false')
+          mas.addEventListener('click', function () {
+            var abierta = nodo.classList.toggle('abierta')
+            if (abierta) abiertas[id] = true
+            else delete abiertas[id]
+            mas.textContent = abierta ? t('boardShowLess') : t('boardShowAll')
+            mas.setAttribute('aria-expanded', abierta ? 'true' : 'false')
+          })
+          nodo.appendChild(mas)
+        }
+        return nodo
+      }
+
+      /** El boton "Ver todo" solo sobra cuando nada esta recortado de verdad. Se mide
+       *  con el layout real: sin layout (vista oculta, o jsdom) no se sabe y se deja. */
+      function ajustarVerTodo () {
+        Array.prototype.forEach.call(el('board-cols').querySelectorAll('.card'), function (c) {
+          var mas = c.querySelector('.card-more')
+          if (!mas) return
+          if (c.classList.contains('abierta')) { mas.hidden = false; return }
+          var recortado = false
+          var medido = false
+          Array.prototype.forEach.call(c.querySelectorAll('.clamp'), function (n) {
+            if (n.clientHeight > 0) {
+              medido = true
+              if (n.scrollHeight > n.clientHeight + 1) recortado = true
+            }
+          })
+          mas.hidden = medido && !recortado
+        })
+      }
+
+      function columnaNodo (etapa, m) {
+        var tarjetas = m.porEtapa[etapa]
+        var n = m.counts[etapa]
+        var col = crear('section', 'col' + (etapa === 'decision' ? ' decision' : '') +
+          (etapa === 'bloqueado' ? ' lane' : '') + (n > 0 ? ' con-casos' : '') +
+          (n === 0 && !tarjetas.length ? ' sin-nada' : ''))
+        col.dataset.stage = etapa
+        var cab = crear('h3', 'col-head')
+        cab.appendChild(crear('span', 'col-name', t(ETAPA_KEY[etapa])))
+        cab.appendChild(crear('span', 'col-count', n))
+        col.appendChild(cab)
+        if (!n && !tarjetas.length) {
+          col.appendChild(crear('p', 'col-empty',
+            t(etapa === 'decision' ? 'boardEmptyDecision' : 'boardEmptyCol')))
+        }
+        tarjetas.forEach(function (c) { col.appendChild(tarjetaNodo(c)) })
+        if (n > tarjetas.length) {
+          col.appendChild(crear('p', 'col-more', fmt('boardMore', n - tarjetas.length)))
+        }
+        return col
+      }
+
+      function renderBoard (board) {
+        var m = modeloTablero(board)
+        var cols = el('board-cols')
+        var nota = el('board-note')
+        var sello = el('board-synced')
+        var contador = el('tab-board-count')
+        cols.textContent = ''
+        sello.textContent = ''
+        nota.className = 'meta nota'
+        var avisos = []
+        if (m.estado === 'sin-datos') {
+          avisos.push(t('boardNoData'))
+        } else if (m.estado === 'version') {
+          avisos.push(fmt('boardUnsupported', { v: m.v }))
+          nota.className += ' stale'
+        } else if (m.estado === 'vacio') {
+          avisos.push(t('boardNoCases'))
+        } else {
+          ETAPAS.forEach(function (e) { cols.appendChild(columnaNodo(e, m)) })
+          if (m.truncado) avisos.push(t('boardTruncated'))
+          if (m.desconocidas) {
+            avisos.push(m.desconocidas === 1 ? t('boardUnknown1') : fmt('boardUnknown', m.desconocidas))
+          }
+        }
+        if (m.estado === 'ok' || m.estado === 'vacio') {
+          var edad = hace(m.actualizado)
+          if (edad) {
+            var texto = fmt('boardUpdated', { cuando: edad })
+            if (viejo(m.actualizado)) sello.appendChild(crear('span', 'vieja', texto))
+            else sello.textContent = texto
+          }
+        }
+        nota.textContent = avisos.join(' ')
+        // La insignia de la pestana: lo unico que espera al dueno.
+        var porDecidir = m.estado === 'ok' ? m.counts.decision : 0
+        contador.textContent = porDecidir ? String(porDecidir) : ''
+        contador.hidden = !porDecidir
+        ajustarVerTodo()
+      }
+
+      function mostrarVista (cual) {
+        vistaActiva = cual
+        VISTAS.forEach(function (v) {
+          var activa = v === cual
+          el('view-' + v).hidden = !activa
+          el('tab-' + v).setAttribute('aria-selected', activa ? 'true' : 'false')
+          el('tab-' + v).tabIndex = activa ? 0 : -1
+        })
+        if (cual === 'board') ajustarVerTodo()
+      }
+      VISTAS.forEach(function (v) {
+        el('tab-' + v).addEventListener('click', function () { mostrarVista(v) })
+        // Flechas entre pestanas, como pide el patron de tablist.
+        el('tab-' + v).addEventListener('keydown', function (event) {
+          if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+          var otra = VISTAS[(VISTAS.indexOf(v) + 1) % VISTAS.length]
+          mostrarVista(otra)
+          el('tab-' + otra).focus()
+        })
+      })
+      window.addEventListener('resize', ajustarVerTodo)
+
       function reload() {
         return Promise.all([
           call('storage.get', { key: 'activity' }),
           call('storage.get', { key: 'decisions' }),
           call('storage.get', { key: 'sidecar' }),
           call('storage.get', { key: 'chats' }),
-          call('storage.get', { key: 'chatsAccount' })
+          call('storage.get', { key: 'chatsAccount' }),
+          call('storage.get', { key: 'board' })
         ]).then(function (results) {
           var sc = stored(results[2])
           if (sc && typeof sc.cuenta === 'string' && sc.cuenta) cuentaVinculada = sc.cuenta
@@ -658,6 +1258,7 @@
           }), a)
           renderAlerts(a.recent)
           renderRecent(a.recent)
+          renderBoard(stored(results[5]))
         })
       }
 
