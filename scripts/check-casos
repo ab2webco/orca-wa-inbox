@@ -338,10 +338,23 @@ with tempfile.TemporaryDirectory() as home:
     ok("proponer lo mismo da la misma version", otra["propuesta_version"] == v1)
     ok("y no escribe un evento por cada repaso de triage",
        cuenta(home, "select count(*) from caso_evento") == antes)
-    ok("el orden de las banderas no cambia la version",
-       js(home, "caso", "propuesta", cid, "--actor", "agente", "--respuesta",
-          "Ya lo revisamos, queda para hoy.", "--tipo", "responder"
-          )[0]["propuesta_version"] == v1)
+    # La misma letra puede llegar compuesta o descompuesta segun quien la tipeo (macOS
+    # entrega NFD): es el mismo texto y tiene que ser la misma version.
+    nfc = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+             "Revisé el acceso.", "--actor", "agente")[0]
+    nfd = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+             "Revisé el acceso.", "--actor", "agente")[0]
+    ok("el mismo texto en NFC y en NFD es la misma version",
+       nfc["propuesta_version"] == nfd["propuesta_version"]
+       and nfd["propuesta"]["respuesta"] == "Revisé el acceso.", f"quedo {nfd}")
+    # Un byte que no es UTF-8 en argv llega como un sustituto suelto: no puede tumbar
+    # el comando con un traceback a mitad de la corrida de triage.
+    p = corre(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+              "Hola \udcff", "--actor", "agente")
+    ok("un byte invalido en la respuesta no revienta: se guarda reemplazado",
+       p.returncode == 0 and "Traceback" not in p.stderr
+       and json.loads(p.stdout)[0]["propuesta"]["respuesta"].startswith("Hola "),
+       p.stderr.strip()[-200:])
 
     nueva = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
                "Lo vemos manana.", "--actor", "agente")[0]

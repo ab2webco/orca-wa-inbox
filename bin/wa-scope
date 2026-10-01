@@ -32,7 +32,7 @@ it written in the chat" about a message that is not there.
 Task service per conversation: plane, linear, github — or `ninguno` when that
 conversation opens no cards and the agent only reads, summarizes or replies.
 """
-import argparse, hashlib, json, os, re, sqlite3, subprocess, sys, time
+import argparse, hashlib, json, os, re, sqlite3, subprocess, sys, time, unicodedata
 
 # El modulo vive al lado, y esto se carga tanto como script como importado
 # por ruta desde los chequeos: sin esto el segundo caso no lo encuentra.
@@ -2196,9 +2196,18 @@ def propuesta_canonica(propuesta):
     Dos propuestas con el mismo contenido tienen la misma version aunque lleguen con las
     banderas en otro orden; es lo que deja a triage repasar cada cinco minutos sin
     invalidar lo que el dueno ya firmo."""
+    propuesta = {k: texto_caso(v) for k, v in propuesta.items()}
     texto = json.dumps(propuesta, sort_keys=True, separators=(",", ":"),
                        ensure_ascii=False)
-    return texto, hashlib.sha256(texto.encode("utf-8")).hexdigest()
+    return texto, hashlib.sha256(texto.encode("utf-8", "replace")).hexdigest()
+
+
+def texto_caso(valor):
+    """Un texto de la tarjeta, normalizado: NFC, porque la misma letra llega compuesta o
+    descompuesta segun quien la tipeo y tiene que dar la misma version; y sin sustitutos
+    sueltos (un byte que no es UTF-8 en argv), que sqlite y el hash no aceptan."""
+    limpio = str(valor).encode("utf-8", "replace").decode("utf-8")
+    return unicodedata.normalize("NFC", limpio)
 
 
 def cmd_caso_propuesta(con, a):
@@ -2272,7 +2281,8 @@ def cmd_caso_resultado(con, a):
     El mismo resultado dos veces (el trabajador reintenta) no escribe nada."""
     caso_toma(con)
     caso = caso_de(con, a.id)
-    respuesta, resumen = (a.respuesta or "").strip(), (a.resumen or "").strip()
+    respuesta = texto_caso((a.respuesta or "").strip())
+    resumen = texto_caso((a.resumen or "").strip())
     if not respuesta or not resumen:
         sys.exit("a result needs --respuesta and --resumen: the owner reads the summary "
                  "and approves the reply")
@@ -2629,7 +2639,9 @@ def main():
     c.add_argument("id", type=int)
     c.add_argument("--version", required=True,
                    help="the propuesta_version the owner saw")
-    # Solo el dueno firma: un agente que aprobara lo suyo borraria el clic.
+    # El actor queda en `dueno` para que el evento diga quien firmo. Es solo una bandera:
+    # cualquiera que corra este CLI puede escribirla. La compuerta real del clic es el
+    # canal panel -> worker (kanban-casos, T4), no este flag.
     c.add_argument("--actor", required=True, choices=["dueno"])
     c.set_defaults(fn=cmd_caso_aprobar)
 
