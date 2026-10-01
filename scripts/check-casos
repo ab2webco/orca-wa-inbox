@@ -95,7 +95,10 @@ with tempfile.TemporaryDirectory() as home:
         'contestar', 'open', '%(h2)s', '%(h2)s');
       insert into work values ('HECHO1','%(c)s','Soporte Norte','SOP-3','listo',
         null, 'done', '2026-01-01 08:00', '2026-01-02 08:00');
-    """ % dict(HACE, c=CHAT))
+      insert into work values ('RANCIO','%(c)s','Soporte Norte','SOP-4','tarjeta abierta',
+        'seguir', 'open', '%(d8)s', '%(d8)s');
+    """ % dict(HACE, c=CHAT, d8=time.strftime(
+        "%Y-%m-%d %H:%M", time.localtime(time.time() - 8 * 86400))))
     vieja.commit()
     vieja.close()
 
@@ -106,6 +109,12 @@ with tempfile.TemporaryDirectory() as home:
     ok("los backfill quedan en trabajo", all(c["etapa"] == "trabajo" for c in casos),
        f"etapas {[c['etapa'] for c in casos]}")
     ok("el trabajo terminado no se migra", "SOP-3" not in por_issue)
+    # `wa-scope work` lo da por abandonado; migrado, dejaria un caso en trabajo para
+    # siempre.
+    ok("el trabajo abierto de mas de una semana no se migra",
+       "SOP-4" not in por_issue
+       and cuenta(home, "select count(*) from work where stanza_id='RANCIO' "
+                        "and case_id is not null") == 0)
     ok("dos mensajes de la misma tarjeta son un solo caso",
        cuenta(home, "select count(*) from caso_mensaje where case_id=?",
               (por_issue.get("SOP-1") or {}).get("case_id")) == 2)
@@ -114,7 +123,7 @@ with tempfile.TemporaryDirectory() as home:
                     "and detalle='backfill' and a='trabajo'") == 3)
     ok("work queda colgando de su caso",
        cuenta(home, "select count(*) from work where status='open' "
-                    "and case_id is null") == 0)
+                    "and case_id is null and stanza_id <> 'RANCIO'") == 0)
 
     # Correrla de nuevo no duplica nada.
     js(home, "caso", "listar")
@@ -127,6 +136,9 @@ with tempfile.TemporaryDirectory() as home:
     ok("wa-scope work sigue listando lo abierto",
        sorted(r["stanza_id"] for r in abiertos) ==
        ["VIEJO1", "VIEJO2", "VIEJO3", "VIEJO4"], f"listo {abiertos}")
+    ok("y el rancio queda abandonado, sin caso",
+       cuenta(home, "select count(*) from work where stanza_id='RANCIO' "
+                    "and status='abandoned' and case_id is null") == 1)
     js(home, "agent", "Watson")
     js(home, "set", CHAT, "--provider", "plane", "--target", "SOP", "--mode", "responder")
     ok("wa-scope closing no avisa el backlog migrado", js(home, "closing") == [])

@@ -1035,7 +1035,8 @@ def casos_backfill(con):
         for r in con.execute(
                 "select stanza_id, account, chat_jid, chat_name, issue, next_step, "
                 "opened_at, updated_at from work "
-                "where status='open' and case_id is null order by opened_at, stanza_id"):
+                "where status='open' and case_id is null and updated_at >= ? "
+                "order by opened_at, stanza_id", (corte_abandono(),)):
             issue = (r["issue"] or "").strip()
             llave = ((r["account"], r["chat_jid"], issue) if issue
                      else (r["account"], r["chat_jid"], None, r["stanza_id"]))
@@ -1403,6 +1404,13 @@ def cmd_where(con, a):
     return [resolve_target(con, a.text, a.chat)]
 
 
+def corte_abandono():
+    """Desde cuando el trabajo abierto que no se movio deja de estar en curso: una
+    semana. Lo usan `wa-scope work`, que lo abandona, y el backfill de casos, que no lo
+    migra: un caso nacido de algo que se abandona despues quedaria en trabajo."""
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(time.time() - 7 * 86400))
+
+
 def cmd_work(con, a):
     """El estado entre corridas. El agente lee esto al empezar y lo actualiza al cerrar."""
     now = time.strftime("%Y-%m-%d %H:%M")
@@ -1432,8 +1440,7 @@ def cmd_work(con, a):
     # Lo que lleva demasiado sin avanzar deja de ser "en curso": es ruido que hace que
     # el agente lo reintente para siempre.
     con.execute("update work set status='abandoned' where status='open' "
-                "and updated_at < ?", (time.strftime(
-                    "%Y-%m-%d %H:%M", time.localtime(time.time() - 7 * 86400)),))
+                "and updated_at < ?", (corte_abandono(),))
     con.commit()
     # Lo en curso de ESTA linea: el trabajo del numero anterior espera a su numero (T9).
     return [dict(r) for r in con.execute(
