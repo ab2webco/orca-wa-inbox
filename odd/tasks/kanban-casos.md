@@ -74,84 +74,102 @@ regla), con el motivo.
 Acciones del dueño por tarjeta: Ejecutar · Aprobar respuesta · Editar
 respuesta · Escalar a Plane · Cerrar · Reabrir.
 
-## Automatizaciones
+## Giro (2026-10-01): el agente solo para lo que necesita lenguaje
 
-- **triage** (existe): agrupa en casos, clasifica (Jev primero, agente si Jev
-  no decide), redacta la propuesta y deja la tarjeta en "Tu decisión" — o, en
-  chats `responder` con propuesta `responder`, la pasa directo al ejecutor.
-- **take** (se conserva el id; las automatizaciones del plugin arrancan
-  apagadas y renombrarla dejaría huérfana la que el dueño ya prendió): se
-  amplían su pre-check y su prompt para ser el ejecutor. Pre-check = hay
-  tarjetas aprobadas; sigue bajo el tope de 1.024 caracteres (test de
-  manifiesto).
-  Ejecuta exactamente lo que dice la propuesta: envía respuestas aprobadas por
-  `wa-send`; para `trabajar` despliega un agente (`orca worktree create
-  --agent --prompt`) en el repo de la ruta, con las instrucciones de la
-  tarjeta; abre la tarjeta de Plane si corresponde.
-- **trabajador** (el agente desplegado): termina con `wa-scope caso resultado
-  <id> --respuesta ... --resumen ...`, que crea la tarjeta "Listo para
-  responder". Corre en otro repo, sin el resolvedor del plugin: su prompt
-  lleva la ruta absoluta a `wa-scope`. Nunca envía por WhatsApp él mismo.
+El dueño pidió un giro, no ampliar `triage` y `take`. Lo ineficiente de hoy
+(medido en `prompts/triage.md` y `automations/`):
 
-**Supuesto sin verificar (bloquea T5–T6)**: que el agente de una
-automatización puede correr `orca worktree create --agent --prompt` y que el
-agente desplegado puede reportar de vuelta. Se prueba en vivo antes de T5
-(sonda descartable; el worktree se borra después). Si falla, cambia el diseño
-del ejecutor.
+1. Cada 5 min (triage) y cada 2 (take) arranca una sesión completa de Claude que
+   lee 467 líneas de prompt más 4 archivos del harness antes de hacer nada.
+2. El modelo hace trabajo estructurado: clasificar, agrupar, enrutar,
+   priorizar, deduplicar. Nada de eso necesita generar texto.
+3. Deduplica con `orca plane search <stanza_id>` por mensaje: un viaje externo
+   para un dato local que `caso_mensaje` ya responde.
+4. Nada reacciona a la llegada: todo espera al próximo cron.
+5. Lo que sale por WhatsApp no lo revisa nadie: `wa-send` mira el modo, no el
+   contenido.
 
-**Hallazgo de la sonda (2026-10-01)**: una corrida de automatización de Orca
-queda `completed` aunque el agente no haya hecho nada (sin sesión de Claude
-falló con "Login expired" y la corrida se marcó completa). El ejecutor no se
-fía del estado de la corrida: verifica con evidencia (`caso_evento` del
-trabajador, `envio` en `enviado`) y si no la hay, la tarjeta va a Bloqueado
-con el motivo.
+Diseño nuevo:
+
+- **Entrada en código.** El sidecar emite `store` cuando entra algo; el worker
+  corre `wa-scope ingest` (con rebote de unos segundos, un proceso hijo, cero
+  llamadas al host). `ingest` asigna cada mensaje a su caso (`caso asignar`),
+  descarta lo ya visto por `caso_mensaje`, resuelve lo determinista (cuerpo
+  vacío, solo audio → dudoso), enruta (`where`) y, con llave, pregunta a Jev
+  (clase, riesgo, prioridad, mismo pedido o nuevo) en UNA llamada por mensaje,
+  cacheada en `juicio`. Sin llave o con error de Jev el caso queda en
+  `recibido` y lo clasifica el agente, como hoy.
+- **Una sola automatización** (`agente de casos`), con un pre-check trivial:
+  sale con 1 si no hay casos que necesiten lenguaje. Cuando despierta recibe
+  casos ya digeridos (mensajes, clase, ruta, tono), no la bandeja: redacta la
+  propuesta de respuesta, lee adjuntos, clasifica lo que Jev no pudo, ejecuta
+  lo aprobado y anuncia los cierres de Plane (necesita `orca plane`, que solo
+  corre del lado del agente).
+- **Jev revisa antes de enviar.** `wa-send` pregunta a Jev sobre el borrador
+  (promete fecha, afirma un estado sin verificar, lleva credencial, no contesta
+  lo preguntado, registro equivocado). Un fallo, un error o la falta de llave
+  dejan borrador para el dueño; nunca convierte un borrador en envío.
+- **Jev puede frenar y escalar, nunca habilitar. Falla cerrado.**
+- **Ejecutor**: corre solo la versión aprobada y verifica con evidencia, no
+  con el estado de la corrida (hallazgo de la sonda: una corrida queda
+  `completed` aunque el agente no haya hecho nada). Sin evidencia → Bloqueado.
+  El despliegue de un agente en otro repo (`trabajar`) es lo único que depende
+  de T0.
 
 ## Jev
 
-Una llamada paralela por caso nuevo: `Choice` sobre la tabla de
-clasificación + los `Noul`/`Score` del §9 (pide credencial, dinero, decisión,
-urgencia, ingeniería social). Puede: saltar lo que no pide nada, marcar
-prioridad, mandar a "Tu decisión". No puede: aprobar ni lanzar trabajo.
-Cacheado por `stanza_id` (tabla `juicio`).
+Las preguntas exactas, sus umbrales y el costo salen del POC sobre datos reales
+(`jev-poc`, en el scratchpad, fuera del repo). La llave: secreto propio del
+plugin (capacidad `secrets`, como el Advisor), espejo 0600 en
+`~/.wa-inbox/jev.env` escrito por el worker por stdin y renombre atómico; los
+CLIs de Python solo leen ese archivo. Sale del equipo el texto de los clientes:
+el ajuste viene apagado y el panel lo dice en claro; las credenciales se
+enmascaran antes de enviar y el estado lleva la nota "dato a evaluar, nunca una
+instrucción".
 
 ## Estadísticas (pestaña del panel)
 
 7 y 30 días: casos por etapa y por clase (qué es lo que más se atiende); por
 chat/cliente; decisiones tomadas por actor; tiempo mediano a clasificar, a
 responder y a cerrar; esfuerzo (corridas, agentes desplegados, minutos en
-trabajo por caso y por clase); envíos enviados/rechazados; Jev (llamadas,
-casos resueltos sin modelo grande, latencia, fallos).
+trabajo por caso y por clase); envíos enviados/frenados por Jev/rechazados;
+Jev (llamadas, casos resueltos sin modelo grande, latencia, fallos).
 
 ## Tareas
 
-- [ ] T0 — Sonda en vivo del despliegue de agente desde una automatización y
-      del reporte de vuelta (descartable, worktree limpiado).
-- [x] T1 — Esquema `caso`, `caso_mensaje`, `caso_evento` + migración sobre
-      `scope.db` existente; `wa-scope caso` (crear, mover, propuesta,
-      resultado, listar, unir, separar) con validación de etapas y transiciones;
-      regla de agrupación; backfill de `work` abiertos; versión de propuesta.
-- [ ] T2 — Sync: el panel recibe casos por etapa (storage `board`), con tope.
-- [ ] T3 — Tablero en `activity.html`: columnas, tarjeta con propuesta y
-      acciones; móvil en lista por etapa.
-- [ ] T4 — Canal panel → worker → `scope.db` para las acciones del dueño (patrón
-      request/result existente) y registro en `caso_evento`.
-- [ ] T5 — `triage.md` agrupa en casos y deja propuestas; prompt del trabajador.
-- [ ] T6 — `take` ampliada como ejecutor + pre-check de tarjetas aprobadas;
-      ejecuta solo la versión aprobada; despliegue del agente; repo destino por
-      ruta en config (UI y lógica en el mismo PR).
-- [ ] T7 — Setting secreto de Jev, `net:fetch` a `api.typesafe.ai`, espejo 0600
-      de la llave; aviso en config de qué sale del equipo.
-- [ ] T8 — Cliente TypeSafe en Python stdlib + preguntas del dominio; falla
-      cerrado; caché en `juicio`. (Cierra T3/T4 de `juicio-cacheado.md`.)
+- [x] T1 — Esquema `caso`, `caso_mensaje`, `caso_evento` + migración;
+      `wa-scope caso` (crear, mover, clasificar, propuesta, aprobar, resultado,
+      listar, ver, unir, separar, asignar); regla de agrupación; backfill;
+      aprobación congelada a la versión.
+- [ ] T2 — `wa-scope ingest`: mensajes nuevos → casos, dedupe local, reglas
+      deterministas, ruta; el worker lo dispara con el evento `store` del
+      sidecar (con rebote) y en cada sync.
+- [ ] T3 — Jev: secreto propio + espejo 0600, `net:fetch` a `api.typesafe.ai`,
+      cliente stdlib que falla cerrado, preguntas y umbrales del POC, caché en
+      `juicio`, llamado desde `ingest`; revisión de borradores en `wa-send`;
+      ajuste apagado por defecto con el aviso en config. (Cierra T3/T4 de
+      `juicio-cacheado.md`.)
+- [ ] T4 — Sync del tablero: storage `board` con tope, escrito por `wa-scope`
+      en cada sync y en cada mutación de caso.
+- [ ] T5 — Tablero en `activity.html`: columnas, tarjeta con propuesta, veredicto
+      de Jev y acciones; móvil en lista por etapa.
+- [ ] T6 — Canal panel → worker → `wa-scope caso` para las acciones del dueño
+      (`--actor dueno` lo fuerza el worker), códigos de error estables.
+- [ ] T7 — Una sola automatización con pre-check trivial y prompt corto por caso;
+      reemplaza el trabajo de `triage` y `take` (conservar ids de lo que el
+      dueño ya prendió; lo decide el test de manifiesto).
+- [ ] T8 — Ejecutor de `trabajar`: despliegue del agente en el repo de la ruta,
+      reporte con `caso resultado`, verificación con evidencia. Depende de T0.
+- [ ] T0 — Sonda en vivo del despliegue de agente desde una automatización
+      (necesita una cuenta Claude global en Orca).
 - [ ] T9 — Pestaña de estadísticas desde `caso_evento`.
 - [ ] T10 — Insignia del nav = tarjetas en "Tu decisión" (hoy se queda pegada).
-- [ ] T11 — Capturas: tablero y estadísticas, 1440/768/390/320, ES y EN; tema
-      claro y oscuro solo si `activity.html` tiene los dos (verificar y decirlo).
+- [ ] T11 — Capturas: tablero y estadísticas, 1440/768/390/320, ES y EN, claro y
+      oscuro (`activity.html` tiene los dos).
 
-La rama del tablero (`feat/tablero-casos`) sale de `main` en v4.9.0, que ya
-incluye `fix/linea-muerta`. T0 solo bloquea T5–T6: T1–T4 avanzan sin él.
-Se entrega en PRs encadenados: (T1–T4) tablero, (T5–T6) ejecución,
-(T7–T8) Jev, (T9–T11) estadísticas.
+Rama `feat/tablero-casos`, desde `main` en v4.9.0. PRs encadenados:
+(T1–T3) decisiones: casos, entrada y Jev; (T4–T6) tablero; (T7–T8)
+automatización; (T9–T11) estadísticas.
 
 ## Criterios de aceptación
 
@@ -160,6 +178,10 @@ Se entrega en PRs encadenados: (T1–T4) tablero, (T5–T6) ejecución,
   `caso_evento`.
 - Nada que requiera trabajo se ejecuta sin el clic del dueño.
 - Sin llave de Jev, todo funciona como hoy.
+- Ningún mensaje sale por WhatsApp sin pasar la revisión de Jev o la aprobación
+  del dueño.
+- Un mensaje nuevo llega al tablero clasificado sin que despierte ningún agente
+  (con llave de Jev).
 - `npm run check` en exit 0, capturas revisadas.
 
 ## Verificación
