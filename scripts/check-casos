@@ -4493,17 +4493,21 @@ TRABAJO = "Reproducir el reporte en blanco y corregirlo; responder que ya quedo.
 
 
 def orca_despacho(carpeta, worktrees=(WT_ALFA,), vivos=("term_worker1",), falla=None,
-                  automatizaciones=(), corridas=(), cuentas=(), rechaza=None, listo=True):
+                  automatizaciones=(), corridas=(), cuentas=(), rechaza=None, listo=True,
+                  arranca_en=1, idle=True):
     """Una `orca` de mentira para el despacho: contesta lo que diga estado.json y anota cada
     llamada (sus argumentos enteros, en JSON) en calls.jsonl. `rechaza` es {cuenta: error}
     para `terminal create` ("" es sin --claude-account); `listo`, lo que dice `terminal
-    wait`. No contesta nada de `orchestration`: el despacho ya no la usa."""
+    wait --for composer-ready`, e `idle`, lo que dice `--for tui-idle`. `arranca_en` es la
+    linea del brief con la que el agente empieza su turno (1: la primera; None: nunca): hasta
+    entonces `terminal state` dice lo que Orca vio en vivo, Enter sin turno y sin sesion.
+    No contesta nada de `orchestration`: el despacho ya no la usa."""
     carpeta = pathlib.Path(carpeta)
     (carpeta / "estado.json").write_text(json.dumps(
         {"worktrees": list(worktrees), "vivos": list(vivos), "falla": falla or {},
          "automatizaciones": list(automatizaciones), "corridas": list(corridas),
          "cuentas": list(cuentas), "rechaza": rechaza or {}, "listo": listo,
-         "n": 0}), encoding="utf-8")
+         "arranca_en": arranca_en, "idle": idle, "briefs": 0, "n": 0}), encoding="utf-8")
     exe = carpeta / "orca"
     exe.write_text("""#!/usr/bin/env python3
 import json, os, sys
@@ -4520,6 +4524,8 @@ clave = " ".join(a[:2])
 if clave in e["falla"]:
     sale({"ok": False, "error": {"code": "falla_falsa", "message": e["falla"][clave]}}, 1)
 e["n"] += 1
+if clave == "terminal send" and (valor("--text") or "").startswith("Read "):
+    e["briefs"] += 1
 json.dump(e, open(os.path.join(d, "estado.json"), "w"))
 n = e["n"]
 if clave == "worktree list":
@@ -4533,7 +4539,22 @@ if clave == "terminal create":
                                               "title": valor("--title")}}})
 if clave == "terminal wait":
     sale({"ok": True, "result": {"wait": {"condition": valor("--for"),
-                                          "satisfied": e["listo"]}}})
+                                          "satisfied": e["idle"] if valor("--for") == "tui-idle"
+                                          else e["listo"]}}})
+if clave == "terminal state":
+    turno = e["arranca_en"] is not None and e["briefs"] >= e["arranca_en"]
+    if turno:
+        sesion = {"read": True, "queuedInput": {"supported": True, "pending": 0},
+                  "unparsedRecords": 0, "state": "working", "lastTurnAtMs": 1700000000000}
+        pendiente = None
+    else:
+        sesion = {"read": False, "reason": "agent-session-unknown"}
+        pendiente = ({"evidence": "submit-without-turn", "sinceMs": 1700000000000}
+                     if e["briefs"] else None)
+    sale({"ok": True, "result": {"agentSession": {
+        "handle": valor("--terminal"), "agent": "claude" if turno else None,
+        "sessionId": "ses-falsa" if turno else None, "session": sesion,
+        "unsubmittedInput": {"observed": True, "pending": pendiente}}}})
 if clave == "account list":
     sale({"ok": True, "result": {"accounts": e["cuentas"]}})
 if clave == "terminal list":
@@ -5289,6 +5310,138 @@ if NODE:
            js(home, "caso", "ver", cid)[0]["etapa"] == "bloqueado"
            and "terminal_not_writable" in motivo_bloqueo(home, cid)
            and cerradas(carpeta) == ["term_worker1"], f"{motivo_bloqueo(home, cid)}")
+
+    # La linea del brief se pierde: `composer-ready` llega mientras Claude todavia arranca,
+    # Orca ve el Enter sin turno y el agente queda con el composer vacio. El despacho mira
+    # `terminal state` despues de escribir: sin turno, espera `tui-idle` y la escribe de
+    # nuevo (dos veces por tick a lo mas); un tick siguiente sigue intentando, y con los
+    # reenvios agotados va a Bloqueado. Con un turno empezado no vuelve a escribir nunca.
+    print("\nT8: la linea del brief que el agente no recibio")
+    NO_RECIBIO = "el agente del proyecto no recibió el trabajo"
+
+    def esperas(carpeta, para):
+        return [x for x in llamadas_orca(carpeta, "terminal wait") if bandera(x, "--for") == para]
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, arranca_en=2)
+        cid = trabajo_firmado(home, "L1")
+        p, r = tick_orca(home, carpeta)
+        fila = (despachos(home, cid) or [{}])[-1]
+        envios_l1 = lanzamientos(carpeta)
+        ok("la primera linea se pierde: la escribe otra vez y el turno empieza",
+           p.returncode == 0 and len(envios_l1) == 2
+           and len({bandera(x, "--text") for x in envios_l1}) == 1
+           and fila.get("estado") == "activo" and r.get("despachados") == 1
+           and js(home, "caso", "ver", cid)[0]["etapa"] == "trabajo",
+           f"{envios_l1} {fila} {r} {p.stderr[-400:]}")
+        orden = [" ".join(x[:2]) + (f" {bandera(x, '--for')}" if x[:2] == ["terminal", "wait"]
+                                    else "") for x in llamadas_orca(carpeta)
+                 if " ".join(x[:2]) in ("terminal wait", "terminal send", "terminal state")]
+        entre = orden[2:orden.index("terminal send", 2)] if orden.count("terminal send") > 1 \
+            else []
+        ok("mira el estado, espera tui-idle y recien ahi reenvia",
+           orden[:2] == ["terminal wait composer-ready", "terminal send"]
+           and "terminal state" in entre and "terminal wait tui-idle" in entre, f"{orden}")
+        ok("la fila anota el reenvio y que el turno empezo",
+           fila.get("reenvios") == 1 and fila.get("turno_at"), f"{fila}")
+        estados_antes = len(llamadas_orca(carpeta, "terminal state"))
+        tick_orca(home, carpeta)
+        tick_orca(home, carpeta)
+        ok("con el turno visto, los ticks siguientes no reenvian ni vuelven a mirar",
+           len(lanzamientos(carpeta)) == 2
+           and len(llamadas_orca(carpeta, "terminal state")) == estados_antes
+           and despachos(home, cid)[-1]["estado"] == "activo", f"{lanzamientos(carpeta)}")
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta)
+        cid = trabajo_firmado(home, "L2")
+        tick_orca(home, carpeta)
+        tick_orca(home, carpeta)
+        fila = (despachos(home, cid) or [{}])[-1]
+        ok("con el turno empezado a la primera: una sola linea, sin tui-idle ni reenvios",
+           len(lanzamientos(carpeta)) == 1 and not esperas(carpeta, "tui-idle")
+           and fila.get("reenvios") == 0 and fila.get("turno_at")
+           and fila.get("estado") == "activo", f"{fila} {lanzamientos(carpeta)}")
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, arranca_en=None, idle=False)
+        cid = trabajo_firmado(home, "L3")
+        tick_orca(home, carpeta)
+        tick_orca(home, carpeta)
+        fila = (despachos(home, cid) or [{}])[-1]
+        ok("sin tui-idle (el agente esta ocupado) no le escribe encima",
+           len(lanzamientos(carpeta)) == 1 and esperas(carpeta, "tui-idle")
+           and fila.get("reenvios") == 0 and fila.get("estado") == "activo", f"{fila}")
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, arranca_en=None)
+        cid = trabajo_firmado(home, "L4")
+        p, r = tick_orca(home, carpeta)
+        fila = (despachos(home, cid) or [{}])[-1]
+        ok("nunca empieza: dos reenvios en el tick, y el despacho sigue activo",
+           p.returncode == 0 and len(lanzamientos(carpeta)) == 3 and fila.get("reenvios") == 2
+           and fila.get("estado") == "activo" and not fila.get("turno_at"), f"{fila}")
+        tick_orca(home, carpeta)
+        tick_orca(home, carpeta)
+        fila = (despachos(home, cid) or [{}])[-1]
+        ok("los ticks siguientes reenvian uno por vuelta hasta el tope",
+           len(lanzamientos(carpeta)) == 5 and fila.get("reenvios") == 4
+           and fila.get("estado") == "activo", f"{fila}")
+        p, r = tick_orca(home, carpeta)
+        fila = (despachos(home, cid) or [{}])[-1]
+        ok("agotados los reenvios: bloqueado con el motivo, su terminal cerrada",
+           len(lanzamientos(carpeta)) == 5 and fila.get("estado") == "bloqueado"
+           and js(home, "caso", "ver", cid)[0]["etapa"] == "bloqueado"
+           and NO_RECIBIO in motivo_bloqueo(home, cid)
+           and cerradas(carpeta) == ["term_worker1"]
+           and r.get("bloqueados_por_despacho") == 1, f"{fila} {motivo_bloqueo(home, cid)}")
+
+    # El despacho que ya quedo trabado en vivo (lanzado por la version de antes, sin mirar el
+    # estado): el siguiente tick lo cura solo, sin que el dueno haga nada.
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, arranca_en=None, falla={"terminal state": "unknown_command"})
+        cid = trabajo_firmado(home, "L5")
+        tick_orca(home, carpeta)
+        fila = (despachos(home, cid) or [{}])[-1]
+        ok("sin estado legible no reenvia: el despacho queda activo como antes",
+           len(lanzamientos(carpeta)) == 1 and fila.get("estado") == "activo"
+           and fila.get("reenvios") == 0, f"{fila}")
+        cambia_orca(carpeta, falla={}, arranca_en=2)
+        p, r = tick_orca(home, carpeta)
+        fila = (despachos(home, cid) or [{}])[-1]
+        ok("el tick siguiente ve el Enter sin turno y reescribe la linea",
+           p.returncode == 0 and len(lanzamientos(carpeta)) == 2
+           and fila.get("reenvios") == 1 and fila.get("estado") == "activo"
+           and esperas(carpeta, "tui-idle"), f"{fila} {p.stderr[-300:]}")
+        tick_orca(home, carpeta)
+        tick_orca(home, carpeta)
+        fila = (despachos(home, cid) or [{}])[-1]
+        ok("y en cuanto el turno empieza no vuelve a escribirle",
+           len(lanzamientos(carpeta)) == 2 and fila.get("turno_at")
+           and fila.get("estado") == "activo", f"{fila}")
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, arranca_en=None, falla={"terminal state": "unknown_command"})
+        cid = trabajo_firmado(home, "L6")
+        tick_orca(home, carpeta)
+        js(home, "caso", "resultado", cid, "--estado", "necesita", "--actor", "trabajador",
+           "--resumen", "Falta el rango de fechas.", "--respuesta", "Que rango de fechas?")
+        cambia_orca(carpeta, falla={})
+        tick_orca(home, carpeta)
+        ok("un agente que ya reporto nunca recibe la linea otra vez",
+           len(lanzamientos(carpeta)) == 1, f"{lanzamientos(carpeta)}")
 
     # El caso que bloqueo `no_active_sender_terminal` (la orquestacion desde el tick) nunca
     # llego a un agente: despues de actualizar se despacha de nuevo, UNA vez, aunque su firma
