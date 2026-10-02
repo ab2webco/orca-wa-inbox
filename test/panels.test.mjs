@@ -3975,6 +3975,48 @@ const hastaPanel = async (cond, ms = 6000) => {
   return false
 }
 
+console.log('\nactivity.html — tablero: Autorizar')
+{
+  const escalado = tarjeta({ case_id: 21, stage: 'decision', exceptions: ['credential', 'commitment'],
+    proposal: { tipo: 'escalar', texto: null, version: 'v-esc' },
+    actions: ['editar', 'autorizar', 'reclasificar', 'cerrar'] })
+  const w = conWorker({ ok: true, code: 'autorizado', agent: 'launched' })
+  const { doc } = await abrirConWorker([escalado,
+    tarjeta({ case_id: 22, stage: 'decision', exceptions: ['money'],
+      actions: ['enviar', 'editar', 'autorizar', 'reclasificar', 'cerrar'] }),
+    tarjeta({ case_id: 23, stage: 'decision', exceptions: [], proposal: { tipo: 'escalar', texto: null, version: 'v3' },
+      actions: ['editar', 'autorizar', 'cerrar'] }),
+    tarjeta({ case_id: 24, stage: 'clasificado', exceptions: ['credential'], proposal: null,
+      actions: ['autorizar', 'atender', 'cerrar'] })], w)
+  const d = abrirDetalle(doc, 21)
+  const boton = d.querySelector('button[data-accion="autorizar"]')
+  ok('un caso en decision con excepciones y sin texto ofrece Autorizar',
+    !!boton && /Autorizar/.test(boton.textContent), boton?.outerHTML)
+  ok('con una linea que dice que el agente podra atenderlo y que la respuesta se vuelve a pedir',
+    /agente podra atenderlo/.test(d.textContent) && /dinero, credenciales o fechas/.test(d.textContent) &&
+    /se la vuelve a pedir/.test(d.textContent), d.textContent.slice(-300))
+  ok('si hay una respuesta lista para enviar no se ofrece (se manda o se edita)',
+    !abrirDetalle(doc, 22).querySelector('button[data-accion="autorizar"]'))
+  ok('sin excepciones tampoco', !abrirDetalle(doc, 23).querySelector('button[data-accion="autorizar"]'))
+  ok('ni fuera de decision', !abrirDetalle(doc, 24).querySelector('button[data-accion="autorizar"]'))
+  abrirDetalle(doc, 21).querySelector('button[data-accion="autorizar"]').click()
+  await hastaPanel(() => w.pedidos.length > 0)
+  const p = w.pedidos[0]
+  ok('el clic pide `autorizar` sobre ese caso, y nada mas',
+    p && p.action === 'autorizar' && p.caseId === 21 && !('texto' in p) && !('actor' in p),
+    JSON.stringify(p))
+  await hastaPanel(() => /agente|proxima/i.test(abrirDetalle(doc, 21)?.textContent || ''))
+  ok('y dice que el agente salio', /lanz|salio|corrida|agente/i.test(
+    doc.querySelector('#board-detail .card-msg')?.textContent || ''),
+  doc.querySelector('#board-detail .card-msg')?.textContent)
+  const en = await abrirTablero({ board: tablero([escalado]) }, 'en-US')
+  ok('en ingles dice Authorize', /Authorize/.test(
+    abrirDetalle(en.doc, 21).querySelector('button[data-accion="autorizar"]')?.textContent || ''))
+  const pt = await abrirTablero({ board: tablero([escalado]) }, 'pt-BR')
+  ok('y en portugues Autorizar', /Autorizar/.test(
+    abrirDetalle(pt.doc, 21).querySelector('button[data-accion="autorizar"]')?.textContent || ''))
+}
+
 console.log('\nactivity.html — tablero: Enviar, de punta a punta')
 {
   // El worker tarda: es lo que hace un envio de verdad, y el estado "en vuelo" es lo que se mira.

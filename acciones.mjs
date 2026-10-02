@@ -33,6 +33,7 @@ export const CASO_ACCION = Object.freeze({
   // Lo que era la bandeja (T7 quito "Tomar"): que el agente lo atienda en su proxima
   // corrida, dejarlo de lado, y el proyecto del caso puesto a mano.
   ATENDER: 'atender',
+  AUTORIZAR: 'autorizar',
   IGNORAR: 'ignorar',
   PROYECTO: 'proyecto'
 })
@@ -46,6 +47,7 @@ export const CASO_VEREDICTO = Object.freeze({
   CERRADO: 'cerrado',
   REABIERTO: 'reabierto',
   ATENDIDO: 'atendido',
+  AUTORIZADO: 'autorizado',
   IGNORADO: 'ignorado',
   PROYECTO_CAMBIADO: 'proyecto-cambiado',
   ARGS: 'E_ARGS',
@@ -301,6 +303,17 @@ export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage })
       // `lanzarTriage` nunca lanza; dice como le fue y el panel lo muestra.
       const agente = lanzarTriage ? await lanzarTriage() : {}
       return { ok: true, code: CASO_VEREDICTO.ATENDIDO, caseId: id, ...agente }
+    }),
+
+    // El dueno suelta las excepciones de ENTRADA de un caso en decision: el CLI las quita,
+    // lo marca para el agente y lo devuelve a clasificado (E_STAGE si no esta en decision o
+    // no trae excepciones). Lo que el agente redacte sigue pasando por el piso de salida.
+    // Despierta al agente igual que Atender ahora, y con la misma salvedad.
+    [CASO_ACCION.AUTORIZAR]: aceptarRechazo(async (pedido) => {
+      const id = idDeCaso(pedido)
+      await caso(['autorizar', String(id), '--actor', ACTOR])
+      const agente = lanzarTriage ? await lanzarTriage() : {}
+      return { ok: true, code: CASO_VEREDICTO.AUTORIZADO, caseId: id, ...agente }
     }),
 
     [CASO_ACCION.IGNORAR]: aceptarRechazo(async (pedido) => {

@@ -616,7 +616,7 @@
               "agoHour": "hace {n} h",
               "agoDay": "hace {n} d",
               "acEnviar": "Enviar",
-              "acEditar": "Editar y enviar",
+              "acEditar": "Editar y enviar", "acAutorizar": "Autorizar", "acAutorizarNota": "El agente podra atenderlo; si la respuesta trae dinero, credenciales o fechas, se la vuelve a pedir.", "acOkAutorizado": "Autorizado: el agente lo atendera",
               "acEjecutar": "Ejecutar",
               "acReclasificar": "Reclasificar",
               "acCerrar": "Cerrar",
@@ -784,7 +784,7 @@
               "agoHour": "{n} h ago",
               "agoDay": "{n} d ago",
               "acEnviar": "Send",
-              "acEditar": "Edit and send",
+              "acEditar": "Edit and send", "acAutorizar": "Authorize", "acAutorizarNota": "The agent will be able to handle it; if its reply carries money, credentials or dates, it asks you again.", "acOkAutorizado": "Authorized: the agent will handle it",
               "acEjecutar": "Run",
               "acReclasificar": "Reclassify",
               "acCerrar": "Close",
@@ -952,7 +952,7 @@
               "agoHour": "ha {n} h",
               "agoDay": "ha {n} d",
               "acEnviar": "Enviar",
-              "acEditar": "Editar e enviar",
+              "acEditar": "Editar e enviar", "acAutorizar": "Autorizar", "acAutorizarNota": "O agente podera atende-lo; se a resposta trouxer dinheiro, credenciais ou datas, ele pergunta de novo.", "acOkAutorizado": "Autorizado: o agente vai atender",
               "acEjecutar": "Executar",
               "acReclasificar": "Reclassificar",
               "acCerrar": "Fechar",
@@ -1475,7 +1475,7 @@
       // (el canal del alcance, que el worker ya vigila) con la accion, el caso y, si
       // aprueba algo, la version que el dueno vio. El worker pone el actor, saca el texto
       // y el chat del caso y contesta en `scopeResult`, emparejado por el id del pedido.
-      var ACCIONES = ['atender', 'ignorar', 'enviar', 'editar', 'ejecutar', 'reclasificar',
+      var ACCIONES = ['atender', 'ignorar', 'enviar', 'editar', 'ejecutar', 'autorizar', 'reclasificar',
         'cerrar', 'reabrir', 'proyecto']
       // Donde vale cada accion. `actions` de la tarjeta dice lo que el CLI ofrece; esto
       // saca lo que el worker rechazaria siempre: editar desde "Listo para responder" y
@@ -1485,6 +1485,8 @@
         enviar: { etapas: ['decision', 'listo'], tipo: 'responder', version: true },
         editar: { etapas: ['decision'], tipos: ['responder', 'escalar'], version: true },
         ejecutar: { etapas: ['decision'], tipo: 'trabajar', version: true },
+        // Soltar las excepciones de ENTRADA: solo con excepciones y sin una respuesta lista.
+        autorizar: { etapas: ['decision'], conExcepciones: true, sinTexto: true },
         reclasificar: { etapas: ['recibido', 'decision', 'bloqueado'] },
         cerrar: { etapas: ['recibido', 'clasificado', 'decision', 'trabajo', 'listo',
           'respondido', 'bloqueado'] },
@@ -1497,7 +1499,7 @@
       }
       var ACC_KEY = { enviar: 'acEnviar', editar: 'acEditar', ejecutar: 'acEjecutar',
         reclasificar: 'acReclasificar', cerrar: 'acCerrar', reabrir: 'acReabrir',
-        atender: 'acAtender', ignorar: 'acIgnorar', proyecto: 'acProyecto' }
+        atender: 'acAtender', ignorar: 'acIgnorar', proyecto: 'acProyecto', autorizar: 'acAutorizar' }
       // El nombre con que el worker conoce la accion: "editar" abre un editor, y lo que se
       // pide es editar Y enviar.
       var ACC_PEDIDO = { editar: 'editar-enviar' }
@@ -1510,7 +1512,7 @@
       var ACC_APAGADA = { cerrar: true, reabrir: true, ignorar: true }
       var OK_ACCION = { enviado: 'acOkEnviado', aprobada: 'acOkAprobada',
         reclasificado: 'acOkReclasificado', cerrado: 'acOkCerrado', reabierto: 'acOkReabierto',
-        atendido: 'acOkAtendido', ignorado: 'acOkIgnorado', 'proyecto-cambiado': 'acOkProyecto' }
+        atendido: 'acOkAtendido', autorizado: 'acOkAutorizado', ignorado: 'acOkIgnorado', 'proyecto-cambiado': 'acOkProyecto' }
       // Lo que dice `agent` en el veredicto de "atender": si el worker pudo lanzar la
       // automatizacion del agente al momento. `launched` NO es "ya esta respondiendo": que
       // el agente no tenga sesion de Claude solo lo dice Orca despues de despachar.
@@ -1556,6 +1558,8 @@
           if (regla.etapas.indexOf(c.stage) < 0) return false
           if (regla.tipo && !(prop && prop.tipo === regla.tipo)) return false
           if (regla.tipos && !(prop && regla.tipos.indexOf(prop.tipo) >= 0)) return false
+          if (regla.conExcepciones && !textos(c.exceptions).length) return false
+          if (regla.sinTexto && prop && prop.texto) return false
           if (regla.version && !(prop && typeof prop.version === 'string' && prop.version)) return false
           return true
         })
@@ -1673,7 +1677,7 @@
             mensajes[id] = { texto: t('acNoAnswer'), mala: true }
           } else if (v.ok === true) {
             delete formularios[id]
-            var agente = v.code === 'atendido' && Object.prototype.hasOwnProperty.call(AGENTE_KEY, v.agent)
+            var agente = (v.code === 'atendido' || v.code === 'autorizado') && Object.prototype.hasOwnProperty.call(AGENTE_KEY, v.agent)
               ? v.agent : null
             if (agente) {
               var motivo = typeof v.agentReason === 'string' ? v.agentReason.slice(0, AGENTE_MOTIVO_MAX) : ''
@@ -2305,6 +2309,7 @@
             sa.appendChild(formularioNodo(c, formulario))
           } else {
             if (aviso) sa.appendChild(aviso)
+            if (posibles.indexOf('autorizar') >= 0) sa.appendChild(crear('p', 'det-text', t('acAutorizarNota')))
             if (posibles.length) {
               var fila = crear('div', 'det-acts')
               posibles.forEach(function (a) { fila.appendChild(botonAccion(c, a)) })

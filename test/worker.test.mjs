@@ -2520,6 +2520,36 @@ const AUTOMATIZACIONES_VARIAS = [
     apagar()
   })
 
+  // Autorizar: el dueno suelta las excepciones de entrada de un caso en decision, y el agente
+  // lo ve YA, igual que con Atender ahora.
+  await conOrcaFalsa('orca-autoriza', { automatizaciones: AUTOMATIZACIONES_VARIAS }, async (o) => {
+    const f = herramientasCaso('autorizar-lanza', { casos: {
+      7: casoDe({ etapa: 'decision', excepciones: '["credential"]' }) } })
+    const orca = hostFalso(f.dir, { chats: [] })
+    const { apagar } = await arranca(orca)
+    const v = await pideCaso(orca, { action: 'autorizar', caseId: 7, actor: 'agente' })
+    const llamada = f.scope().find((a) => verbo(a) === 'autorizar')
+    ok('Autorizar pide `caso autorizar` firmado por el dueno y lanza al agente',
+      v && v.ok === true && v.code === 'autorizado' && v.agent === 'launched' && llamada &&
+      llamada[2] === '7' && llamada.includes('dueno') && !llamada.includes('agente'),
+      JSON.stringify([v, llamada]))
+    ok('lanza la automatizacion del plugin, y ninguna otra',
+      JSON.stringify(o.llamadas()) === JSON.stringify([
+        'automations list --json', 'automations run auto-triage --json']), JSON.stringify(o.llamadas()))
+    apagar()
+  })
+
+  await conOrcaFalsa('orca-autoriza-etapa', { automatizaciones: AUTOMATIZACIONES_VARIAS }, async () => {
+    const f = herramientasCaso('autorizar-etapa', { casos: { 7: casoDe({ etapa: 'clasificado' }) },
+      falla: { autorizar: 'E_STAGE' } })
+    const orca = hostFalso(f.dir, { chats: [] })
+    const { apagar } = await arranca(orca)
+    const v = await pideCaso(orca, { action: 'autorizar', caseId: 7 })
+    ok('si el caso no esta en decision o no tiene excepciones llega E_STAGE y no se lanza nada',
+      v && v.ok === false && v.code === 'E_STAGE' && v.agent === undefined, JSON.stringify(v))
+    apagar()
+  })
+
   await conOrcaFalsa('orca-sin-triage', { automatizaciones: AUTOMATIZACIONES_VARIAS.slice(0, 3) }, async (o) => {
     const f = herramientasCaso('atender-sin-triage', casos())
     const orca = hostFalso(f.dir, { chats: [] })
