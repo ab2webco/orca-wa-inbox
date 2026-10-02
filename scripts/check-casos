@@ -3137,6 +3137,115 @@ with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as car
        f"{p.returncode} {r}")
 
 
+# ── "Autorizar": el dueno dice "esto lo puedes ver" ──────────────────────────────────
+# Visto en vivo: un caso con credencial y compromiso (un falso positivo: "acceso" era acceso
+# a un proyecto) llegaba a decision sin texto. El dueno lo devolvia a clasificado, el agente
+# volvia a verlo con las mismas excepciones y volvia a escalarlo. Autorizar le quita las
+# excepciones DE ENTRADA al caso (y deja dicho cuales), lo marca para el agente y lo suelta;
+# lo que el agente redacte sigue pasando por el piso de salida.
+print("\nautorizar: el dueno suelta las excepciones de entrada")
+
+
+def tablero_de(home, cid):
+    corre(home, "tick", "--json")
+    return tarjeta(home, cid)
+
+
+def caso_escalado(home, stanza, excepciones):
+    """Un caso en decision con una propuesta `escalar` sin texto y estas excepciones."""
+    cid = str(js(home, "caso", "crear", "--chat", CHAT, "--stanza", stanza,
+                 "--actor", "automatizacion")[0]["case_id"])
+    js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+       "--actor", "jev")
+    js(home, "caso", "propuesta", cid, "--tipo", "escalar", "--actor", "agente")
+    con = db_de(home)
+    con.execute("update caso set excepciones=?, necesita_agente=1 where case_id=?",
+                (json.dumps(excepciones), int(cid)))
+    con.commit()
+    con.close()
+    return cid
+
+
+with tempfile.TemporaryDirectory() as home:
+    js(home, "set", CHAT, "--provider", "plane", "--target", "SOP", "--mode", "responder")
+    cid = caso_escalado(home, "AU1", ["credential", "commitment"])
+    ok("la tarjeta ofrece Autorizar solo con excepciones",
+       "autorizar" in tablero_de(home, cid)["actions"]
+       and "autorizar" not in tablero_de(home, caso_en_decision(home, "AU0")[0])["actions"],
+       f"{tablero_de(home, cid)['actions']}")
+    p = corre(home, "caso", "autorizar", cid, "--actor", "agente")
+    ok("solo lo autoriza el dueno: E_ARGS", error_de(p) == "E_ARGS", error_de(p))
+    r = js(home, "caso", "autorizar", cid, "--actor", "dueno")[0]
+    ok("el caso vuelve a clasificado, sin excepciones y marcado para el agente",
+       r["etapa"] == "clasificado" and not json.loads(fila_de(home, int(cid))["excepciones"] or "[]")
+       and r["necesita_agente"] == 1 and r["propuesta"] is None, f"{r}")
+    ver = js(home, "caso", "ver", cid)[0]
+    ev = [e for e in ver["eventos"] if e["actor"] == "dueno"][-1]
+    ok("el evento dice cuales dispenso",
+       ev["de"] == "decision" and ev["a"] == "clasificado" and "credential" in ev["detalle"]
+       and "commitment" in ev["detalle"], f"{ev}")
+    ok("el agente lo ve, y el tick no lo devuelve al dueno",
+       int(cid) in para_el_agente(home), f"{para_el_agente(home)}")
+    corre(home, "tick", "--json")
+    ok("tras el tick sigue en clasificado", tablero_de(home, cid)["stage"] == "clasificado")
+    # Sin excepciones, o fuera de decision, no hay nada que autorizar.
+    p = corre(home, "caso", "autorizar", cid, "--actor", "dueno")
+    ok("lo que ya no esta en decision no se autoriza: E_STAGE", error_de(p) == "E_STAGE",
+       error_de(p))
+
+    # Lo que el agente redacta tras autorizar sigue pasando por el piso de salida.
+    v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+           "Lo entregamos manana a las 10.", "--actor", "agente")[0]["propuesta_version"]
+    ok("una respuesta con compromiso vuelve a traer su excepcion y espera al dueno",
+       "commitment" in json.loads(fila_de(home, int(cid))["excepciones"] or "[]"), 
+       f"{fila_de(home, int(cid))['excepciones']}")
+    ok("y la regla no la firma por su cuenta",
+       error_de(corre(home, "caso", "aprobar", cid, "--version", v, "--actor", "regla"))
+       == "E_EXCEPTION")
+
+# Un mismo mensaje juzgado otra vez no devuelve lo dispensado; uno nuevo si.
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "AJ1", "@duenio la clave es Zx9secreta", 20, mencion=True)])
+        autoriza(home)
+        ingiere(home)
+        cid = caso_de_stanza(home, "AJ1")["case_id"]
+        ok("el piso fijo marca la credencial de entrada",
+           "credential" in json.loads(fila_de(home, cid)["excepciones"] or "[]"))
+        corre(home, "tick", "--json")
+        ok("y el tick lo manda al dueno", fila_de(home, cid)["etapa"] == "decision",
+           fila_de(home, cid)["etapa"])
+        js(home, "caso", "autorizar", str(cid), "--actor", "dueno")
+        con = db_de(home)
+        con.execute("delete from caso_mensaje where stanza_id='AJ1'")
+        con.commit()
+        con.close()
+        ingiere(home)
+        ok("juzgar el mismo mensaje otra vez no devuelve la excepcion",
+           not json.loads(fila_de(home, cid)["excepciones"] or "[]"),
+           f"{fila_de(home, cid)['excepciones']}")
+        llegan(home, A, [msg(SOPORTE, "AJ2", "@duenio y la clave nueva es Qq8otrasecreta", 5,
+                             mencion=True)])
+        ingiere(home)
+        ok("un mensaje NUEVO si la vuelve a levantar",
+           "credential" in json.loads(fila_de(home, cid)["excepciones"] or "[]"),
+           f"{fila_de(home, cid)['excepciones']}")
+        corre(home, "tick", "--json")
+        ok("y el caso vuelve al dueno aunque ya hubiera pasado por decision",
+           fila_de(home, cid)["etapa"] == "decision", fila_de(home, cid)["etapa"])
+
+# Reclasificar sin autorizar no despierta al agente para volver a escalar.
+with tempfile.TemporaryDirectory() as home:
+    js(home, "set", CHAT, "--provider", "plane", "--target", "SOP", "--mode", "responder")
+    cid = caso_escalado(home, "AR1", ["credential", "commitment"])
+    js(home, "caso", "mover", cid, "clasificado", "--actor", "dueno")
+    ok("reclasificar sin autorizar no despierta al agente", int(cid) not in para_el_agente(home),
+       f"{para_el_agente(home)}")
+    corre(home, "tick", "--json")
+    ok("ni el tick lo devuelve a decision en bucle", tablero_de(home, cid)["stage"] == "clasificado",
+       tablero_de(home, cid)["stage"])
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

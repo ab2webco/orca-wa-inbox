@@ -373,6 +373,10 @@ create table if not exists caso (
   jev text,
   -- 1 cuando Jev o una regla dicen que esto necesita al agente (lenguaje).
   necesita_agente integer not null default 0,
+  -- Lo que el dueno autorizo (JSON): {"excepciones": [...], "mensajes": [stanza_id...]}.
+  -- Esas excepciones no vuelven por juzgar OTRA VEZ esos mismos mensajes; un mensaje nuevo
+  -- se juzga de cero.
+  dispensa text,
   created_at text not null,
   updated_at text not null
 );
@@ -1090,6 +1094,8 @@ def migrate(con):
     if "necesita_agente" not in caso_cols:
         con.execute("alter table caso add column necesita_agente integer not null "
                     "default 0")
+    if "dispensa" not in caso_cols:
+        con.execute("alter table caso add column dispensa text")
     # T3: el veredicto entero de Jev, cacheado junto a su clase.
     if "jev" not in {r["name"] for r in con.execute("pragma table_info(juicio)")}:
         con.execute("alter table juicio add column jev text")
@@ -2443,6 +2449,38 @@ def cmd_caso_atender(con, a):
     return [caso_fila(con, caso_de(con, a.id))]
 
 
+def cmd_caso_autorizar(con, a):
+    """El dueno dice "esto lo puede ver el agente": las excepciones de ENTRADA de un caso en
+    decision (un falso positivo de Jev, o el piso fijo sobre un "acceso" a un proyecto) se
+    dispensan. Deja dicho cuales en el evento, las quita del caso, lo marca para el agente
+    y lo devuelve a clasificado sin la propuesta que no iba a ninguna parte.
+
+    Solo lo dice el dueno. Lo que el agente redacte despues sigue pasando por el piso de
+    SALIDA: con dinero, una credencial o un compromiso se queda en decision esperando el
+    envio del dueno. Esas excepciones no vuelven por juzgar otra vez los mismos mensajes;
+    un mensaje nuevo se juzga de cero."""
+    if a.actor != "dueno":
+        caso_falla("E_ARGS", "authorizing is the owner's call: --actor must be dueno")
+    caso_toma(con)
+    caso = caso_de(con, a.id)
+    excepciones = json.loads(caso["excepciones"]) if caso.get("excepciones") else []
+    if caso["etapa"] != "decision" or not excepciones:
+        caso_falla("E_STAGE", f"case #{a.id} is in {caso['etapa']}"
+                              f"{'' if excepciones else ' with no exceptions'}: only a case in "
+                              f"decision that carries exceptions can be authorized")
+    previa = json.loads(caso["dispensa"]) if caso.get("dispensa") else {}
+    mensajes = [r["stanza_id"] for r in con.execute(
+        "select stanza_id from caso_mensaje where case_id=? order by at, stanza_id", (a.id,))]
+    dispensa = {"excepciones": [e for e in wa_jev.ORDEN_EXCEPCIONES
+                                if e in set(previa.get("excepciones", [])) | set(excepciones)],
+                "mensajes": sorted(set(previa.get("mensajes", [])) | set(mensajes))}
+    caso_mover(con, caso, "clasificado", "dueno", "autorizadas: " + ", ".join(excepciones),
+               excepciones=None, necesita_agente=1, propuesta=None, propuesta_version=None,
+               dispensa=json.dumps(dispensa, sort_keys=True))
+    con.commit()
+    return [caso_fila(con, caso_de(con, a.id))]
+
+
 def cmd_caso_proyecto(con, a):
     """El proyecto del caso, puesto a mano por el dueno: uno del catalogo aceptado, o
     ninguno con `--proyecto ''`. Queda en la ruta del caso marcado como del dueno, y
@@ -3000,15 +3038,28 @@ def caso_clasifica(con, case_id, veredicto):
     return False
 
 
-def caso_marca_jev(con, case_id, juicio):
+def excepciones_sin_dispensa(caso, excepciones, stanza):
+    """Las excepciones de ENTRADA de un mensaje, menos las que el dueno ya autorizo para
+    ese mismo mensaje. Sin `stanza` (lo que sale, el piso de salida) no se quita nada."""
+    try:
+        dispensa = json.loads(caso.get("dispensa") or "null")
+    except (TypeError, ValueError):
+        dispensa = None
+    if not stanza or not isinstance(dispensa, dict) or stanza not in dispensa.get("mensajes", []):
+        return list(excepciones)
+    return [e for e in excepciones if e not in dispensa.get("excepciones", [])]
+
+
+def caso_marca_jev(con, case_id, juicio, stanza=None):
     """Lo que Jev dijo, en el caso: las excepciones se suman (nunca se borran: un caso que
     tuvo una no sale solo), la marca de agente solo se prende, y el resumen para la
     tarjeta es el del ultimo veredicto. Deja evento de jev cuando cambia lo que decide
     algo —una excepcion o el agente—; el resumen solo es lo que se muestra. Sin commit."""
     caso = caso_de(con, case_id)
     previas = json.loads(caso["excepciones"]) if caso.get("excepciones") else []
+    nuevas_jev = excepciones_sin_dispensa(caso, juicio["exceptions"], stanza)
     excepciones = [e for e in wa_jev.ORDEN_EXCEPCIONES
-                   if e in set(previas) | set(juicio["exceptions"])]
+                   if e in set(previas) | set(nuevas_jev)]
     agente = int(bool(caso.get("necesita_agente")) or bool(juicio["needs_agent"]))
     resumen = json.dumps({"attention_class": juicio.get("attention_class"),
                           "flags": juicio["flags"], "skip": juicio["skip"]},
@@ -3023,7 +3074,7 @@ def caso_marca_jev(con, case_id, juicio):
         con.execute("update caso set jev=? where case_id=?", (resumen, case_id))
 
 
-def caso_marca_regla(con, case_id, excepciones):
+def caso_marca_regla(con, case_id, excepciones, stanza=None):
     """El piso fijo (T19), en el caso: las excepciones que dio `wa_reglas` se suman a las
     que ya tenia (las de Jev o las de antes) y nunca se borran, igual que en
     `caso_marca_jev`. Deja evento de la regla fija solo cuando cambia algo, y el evento
@@ -3031,6 +3082,9 @@ def caso_marca_regla(con, case_id, excepciones):
     if not excepciones:
         return False
     caso = caso_de(con, case_id)
+    excepciones = excepciones_sin_dispensa(caso, excepciones, stanza)
+    if not excepciones:
+        return False
     previas = json.loads(caso["excepciones"]) if caso.get("excepciones") else []
     unidas = [e for e in wa_jev.ORDEN_EXCEPCIONES if e in set(previas) | set(excepciones)]
     if unidas == previas:
@@ -3116,14 +3170,14 @@ def ingest_mensaje(con, m, veredicto, horas):
             caso_suma_mensaje(con, caso_de(con, case_id), stanza, "automatizacion",
                               reabre=False)
             hecho.update(nuevos=1, unidos=1)
-            caso_marca_regla(con, case_id, piso)
+            caso_marca_regla(con, case_id, piso, stanza)
         elif reciente:
             # Llego pegado a un caso que se acaba de abrir y pide algo: Jev, mirandolo solo,
             # no entiende que es parte del pedido (un enlace pelado), y no se cierra.
             case_id = reciente["case_id"]
             caso_suma_mensaje(con, reciente, stanza, "automatizacion", reabre=False)
             hecho.update(nuevos=1, unidos=1)
-            caso_marca_regla(con, case_id, piso)
+            caso_marca_regla(con, case_id, piso, stanza)
         elif accion == "cerrar" and not (suelto and not veredicto.get("dueno")):
             # Lo que se descarta no se mezcla con el pedido de otro: abre su propio caso
             # y lo cierra. Sumarlo a uno abierto lo cerraria entero, o reabriria uno
@@ -3134,8 +3188,8 @@ def ingest_mensaje(con, m, veredicto, horas):
             caso_valida(caso, "cerrado", veredicto["motivo"])
             caso_mover(con, caso, "cerrado", veredicto["actor"], veredicto["motivo"])
             if veredicto.get("jev"):
-                caso_marca_jev(con, case_id, veredicto["jev"])
-            caso_marca_regla(con, case_id, piso)
+                caso_marca_jev(con, case_id, veredicto["jev"], stanza)
+            caso_marca_regla(con, case_id, piso, stanza)
             hecho.update(nuevos=1, casos_creados=1, cerrados=1,
                          ignorados=1 if veredicto.get("dueno") else 0)
         elif accion == "cerrar":
@@ -3155,7 +3209,7 @@ def ingest_mensaje(con, m, veredicto, horas):
             caso_suma_mensaje(con, caso, stanza, "automatizacion", reabre=False)
             hecho.update(nuevos=1, unidos=1)
             case_id = caso["case_id"]
-            caso_marca_regla(con, case_id, piso)
+            caso_marca_regla(con, case_id, piso, stanza)
         else:
             previo = caso_abierto_de_chat(con, chat, horas)
             case_id, que = caso_asigna(con, stanza, chat, "automatizacion")
@@ -3169,8 +3223,8 @@ def ingest_mensaje(con, m, veredicto, horas):
             elif accion == "clasificar" and caso_clasifica(con, case_id, veredicto):
                 hecho["dudosos"] = int(veredicto["clase"] == "doubtful")
             if veredicto and veredicto.get("jev"):
-                caso_marca_jev(con, case_id, veredicto["jev"])
-            caso_marca_regla(con, case_id, piso)
+                caso_marca_jev(con, case_id, veredicto["jev"], stanza)
+            caso_marca_regla(con, case_id, piso, stanza)
             if (que == "unido" and previo and previo["case_id"] == case_id
                     and previo["etapa"] in ETAPAS_QUE_VUELVEN
                     and caso_de(con, case_id)["etapa"] == "recibido"):
@@ -3307,7 +3361,8 @@ LARGO_TITULO = 80
 ACCIONES_DE_ETAPA = {
     "recibido": ("atender", "ignorar", "reclasificar", "cerrar", "proyecto"),
     "clasificado": ("atender", "ignorar", "reclasificar", "cerrar", "proyecto"),
-    "decision": ("enviar", "editar", "ejecutar", "reclasificar", "cerrar", "proyecto"),
+    "decision": ("enviar", "editar", "ejecutar", "autorizar", "reclasificar", "cerrar",
+                 "proyecto"),
     "trabajo": ("cerrar",),
     "listo": ("enviar", "editar", "cerrar"),
     "respondido": ("cerrar", "reabrir"),
@@ -3338,11 +3393,14 @@ def iso_caso(sello):
     return cuando.astimezone().isoformat(timespec="seconds")
 
 
-def acciones_de(etapa, tipo):
+def acciones_de(etapa, tipo, con_excepciones=False):
     acciones = ACCIONES_DE_ETAPA.get(etapa, ())
     if etapa == "decision":
         acciones = tuple(x for x in acciones
                          if x not in ACCION_DE_TIPO or ACCION_DE_TIPO[x] == tipo)
+        # Autorizar solo tiene sentido si hay excepciones de entrada que dispensar.
+        if not con_excepciones:
+            acciones = tuple(x for x in acciones if x != "autorizar")
     return list(acciones)
 
 
@@ -3411,7 +3469,7 @@ def tarjeta_de(caso, nombres, titulos, motivos, eventos=None):
                            else None),
         "ticket": caso["plane_issue"] or None,
         "updated_at": iso_caso(caso["updated_at"]),
-        "actions": acciones_de(caso["etapa"], tipo),
+        "actions": acciones_de(caso["etapa"], tipo, bool(json.loads(caso["excepciones"] or "[]"))),
         "project": ({"id": ruta["workspace"], "name": ruta.get("workspace_name") or
                      ruta["workspace"]} if ruta.get("workspace") else None),
         "needs_agent": bool(caso["necesita_agente"]),
@@ -3949,24 +4007,35 @@ def _lista_json(texto):
 
 
 def casos_credencial_a_decision(con):
-    """Un caso clasificado, sin propuesta y con una credencial (Jev o piso fijo) no lo ve el
-    agente: pasa a `decision` para que el dueno lo vea en "Su decision", con la excepcion
-    y sin propuesta. Una sola vez por reapertura: si el dueno lo devuelve a clasificado, no
-    se vuelve a mover, pero un caso reabierto (otra vuelta por `recibido`) vuelve a contar. Deja el evento de `clasificado` a `decision`. Devuelve cuantos movio."""
+    """Un caso recibido o clasificado, sin propuesta y con una credencial (Jev o piso fijo)
+    no lo ve el agente: pasa a `decision` para que el dueno lo vea en "Su decision", con la
+    excepcion y sin propuesta (uno recibido se clasifica primero: nadie lo hizo). Una sola
+    vez por reapertura o autorizacion: si el dueno lo devuelve a clasificado, no se vuelve a
+    mover; un caso reabierto (otra vuelta por `recibido`) o autorizado vuelve a contar.
+    Devuelve cuantos movio."""
     movidos = 0
     caso_toma(con)
     try:
         for r in con.execute(
-                "select case_id from caso where account=? and etapa='clasificado' and "
+                "select case_id from caso where account=? and etapa in ('recibido','clasificado') and "
                 "propuesta is null and excepciones like '%credential%' and not exists "
                 "(select 1 from caso_evento e where e.case_id=caso.case_id and e.a='decision' and "
                 "e.id > (select coalesce(max(r.id), 0) from caso_evento r where "
-                "r.case_id=caso.case_id and r.a='recibido' and "
-                "(r.de is null or r.de <> 'recibido'))) "
+                "r.case_id=caso.case_id and ((r.a='recibido' and "
+                "(r.de is null or r.de <> 'recibido')) or "
+                "(r.actor='dueno' and r.de='decision' and r.a='clasificado' and "
+                "r.detalle like 'autorizadas:%')))) "
                 "order by updated_at, case_id", (cuenta_activa(),)).fetchall():
             caso = caso_de(con, r["case_id"])
             if "credential" not in _lista_json(caso.get("excepciones")):
                 continue
+            if caso["etapa"] == "recibido":
+                # Sin Jev nadie lo clasifico: la excepcion es lo que dice que va al dueno.
+                caso_valida(caso, "clasificado")
+                caso_mover(con, caso, "clasificado", "automatizacion",
+                           f"alert · {PRIORIDAD_INGEST} · excepcion credential",
+                           clase="alert", prioridad=PRIORIDAD_INGEST)
+                caso = caso_de(con, r["case_id"])
             caso_valida(caso, "decision")
             caso_mover(con, caso, "decision", "automatizacion",
                        "excepcion credential: lo decide el dueno")
@@ -4205,6 +4274,10 @@ def main():
     c = muta("atender", help="the owner asks the agent to handle the case on its next "
                              "run: marks it needs-agent (recibido or clasificado)")
     c.add_argument("id", type=int); c.set_defaults(fn=cmd_caso_atender)
+
+    c = muta("autorizar", help="the owner waives the inbound exceptions of a case in decision: "
+                               "the agent may draft it (owner only)")
+    c.add_argument("id", type=int); c.set_defaults(fn=cmd_caso_autorizar)
 
     c = muta("proyecto", help="sets the case's project from the accepted list, or none "
                               "with --proyecto ''; a content rule no longer changes it")
