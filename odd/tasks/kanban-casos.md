@@ -284,6 +284,32 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
 - [ ] T8 — Despacho al proyecto desde el orquestador: entrega del pedido con su
       instrucción de respuesta, reporte con `caso resultado`, verificación con
       evidencia (sin evidencia → Bloqueado). Depende de T0 y T12.
+      Diseño acordado con el dueño (2026-10-01): el agente del caso actúa como
+      orquestador.
+      1. Toma el caso entero (la ráfaga de mensajes, no el último; ver el arreglo de
+         ráfagas) y el proyecto del caso.
+      2. Mira el proyecto en solo lectura (repo, PROJECTS.md, Plane) y decide:
+         - responder él mismo si es una respuesta;
+         - crear la tarea en Plane (`orca plane create`, con el brief completo: mensajes,
+           enlaces, cliente, qué hacer, qué responder) y despacharla al agente del
+           proyecto por orquestación de Orca (`orchestration task-create` +
+           `worker-start` en el workspace del proyecto, con el orquestador como
+           coordinador);
+         - o dejarla en Plane para un humano.
+      3. El trabajador reporta con `wa-scope caso resultado` (resumen, respuesta,
+         evidencia): el resultado no depende del buzón de orquestación. Nunca llama a
+         `wa-send`; solo `tick` envía, con el piso de salida.
+      4. Sin evidencia → Bloqueado. Sin resultado en N horas → Bloqueado ("sin respuesta
+         del proyecto"). Un fallo de cuenta o de lanzamiento se ve en Bloqueado, nunca
+         en silencio.
+      5. El permiso va por chat (su modo) y por proyecto (aceptado en ajustes, con su
+         proyecto de Plane): Automático sin excepción despacha solo; lo demás lo
+         aprueba el dueño.
+      6. Las corridas de trabajadores entran en la limpieza de workspaces de `tick`.
+      Sondas: la orquestación está activa (`task-list` pide un Run); una
+      automatización solo-comando sí llama a `orca orchestration` (run-list OK);
+      `caso resultado` existe; T0 queda probado por las corridas de triage.
+      Va después de desplegar la tanda de arreglos en curso (tablero-w6).
 - [ ] T12 — Orquestador: workspace propio del plugin con harness de atención y
       la lista de proyectos elegidos en los ajustes, refrescada cuando cambia.
       Hecho en W3 (652b6b9): catálogo desde Orca y PROJECTS.md en el harness.
