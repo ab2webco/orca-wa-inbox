@@ -459,6 +459,10 @@ create table if not exists caso_despacho (
   terminal  text,                -- el handle de la terminal del agente
   cuenta_claude text,            -- el id de la cuenta de Claude elegida; null = la del espacio
   reintento_de integer,          -- la fila que este despacho reintenta (una sola vez)
+  -- La linea del brief se puede perder (composer-ready llega antes de que Claude acepte
+  -- texto): cuantas veces se reescribio, y cuando se vio su primer turno (ya no se reescribe).
+  reenvios  integer not null default 0,
+  turno_at  text,
   -- lanzando | activo | esperando (pidio informacion al cliente) | reportado | bloqueado |
   -- cancelado | continuado (la respuesta del cliente abrio otro despacho)
   estado    text not null default 'lanzando',
@@ -1199,6 +1203,10 @@ def migrate(con):
         con.execute("alter table caso_despacho add column cuenta_claude text")
     if "reintento_de" not in despacho_cols:
         con.execute("alter table caso_despacho add column reintento_de integer")
+    if "reenvios" not in despacho_cols:
+        con.execute("alter table caso_despacho add column reenvios integer not null default 0")
+    if "turno_at" not in despacho_cols:
+        con.execute("alter table caso_despacho add column turno_at text")
     # T3: el veredicto entero de Jev, cacheado junto a su clase.
     if "jev" not in {r["name"] for r in con.execute("pragma table_info(juicio)")}:
         con.execute("alter table juicio add column jev text")
@@ -5218,6 +5226,17 @@ APROBACION_VIEJA = "aprobación vieja: vuelve a aprobar"
 # Lo que bloqueo la orquestacion desde el tick: se reintenta UNA vez, por terminal.
 REINTENTA_MOTIVO = "no_active_sender_terminal"
 LEE_EL_BRIEF = "Read {} and follow it exactly."
+# `composer-ready` puede llegar mientras Claude todavia arranca: el Enter llega sin turno y la
+# linea se pierde. Despues de escribirla se mira `terminal state` hasta DESPACHO_VERIFICA_S;
+# sin turno, se espera `tui-idle` y se escribe de nuevo: a lo mas REENVIOS_POR_TICK en una
+# vuelta y REENVIOS_MAX en total. Agotados, el despacho va a Bloqueado. Con un turno visto
+# (o un reporte del agente) no se reescribe nunca.
+DESPACHO_VERIFICA_S = 6
+DESPACHO_SONDEO_S = 1
+DESPACHO_IDLE_MS = 10000
+REENVIOS_POR_TICK = 2
+REENVIOS_MAX = 4
+NO_RECIBIO = "el agente del proyecto no recibió el trabajo"
 # Los despachos con un agente que puede estar vivo: mientras haya uno, no se lanza otro.
 DESPACHO_EN_VUELO = ("lanzando", "activo", "esperando")
 # Las etapas desde las que una firma lleva a `trabajo` (TRANSICIONES_CON_FIRMA).
@@ -5484,21 +5503,87 @@ def abre_agente(cli, selector, cid, nombre):
     return terminal, cuenta, None
 
 
-def entrega_brief(cli, terminal, ruta, nombre):
+def turno_del_agente(cli, terminal):
+    """Lo que dice `terminal state` del agente: "empezo" (su sesion ya tiene un turno), "no"
+    (sin sesion: el Enter llego sin turno, o la linea nunca llego) o None si no se sabe (un
+    error, la terminal sin pty). Solo "no" deja reescribir la linea."""
+    res, error = orca_llama(cli, ["terminal", "state", "--terminal", terminal], DESPACHO_LISTA_S)
+    sesion_agente = (res or {}).get("agentSession")
+    if error or not isinstance(sesion_agente, dict):
+        return None
+    sesion = sesion_agente.get("session")
+    sesion = sesion if isinstance(sesion, dict) else {}
+    if sesion.get("read") is True:
+        return "empezo"
+    entrada = sesion_agente.get("unsubmittedInput")
+    entrada = entrada if isinstance(entrada, dict) else {}
+    if entrada.get("observed") is not True:
+        return None
+    pendiente = entrada.get("pending")
+    sin_turno = isinstance(pendiente, dict) and pendiente.get("evidence") == "submit-without-turn"
+    if sin_turno or sesion.get("reason") == "agent-session-unknown":
+        return "no"
+    return None
+
+
+def espera_turno(cli, terminal, limite):
+    """Mira el estado hasta que el turno empiece, no se sepa, o pase DESPACHO_VERIFICA_S (o
+    `limite`, el reloj del tick)."""
+    hasta = min(time.time() + DESPACHO_VERIFICA_S, limite)
+    while True:
+        turno = turno_del_agente(cli, terminal)
+        if turno != "no" or time.time() + DESPACHO_SONDEO_S > hasta:
+            return turno
+        time.sleep(DESPACHO_SONDEO_S)
+
+
+# Lo que puede tardar un reenvio entero: esperar tui-idle, volver a mirar y escribir.
+REENVIO_COSTO_S = DESPACHO_IDLE_MS // 1000 + 10 + 2 * DESPACHO_LISTA_S
+
+
+def reescribe_brief(cli, terminal, ruta):
+    """Con el agente quieto (`tui-idle`) y todavia sin turno, le escribe la linea otra vez.
+    Devuelve (si la escribio, el turno que vio): un agente ocupado o con turno no se toca."""
+    res, error = orca_llama(cli, ["terminal", "wait", "--terminal", terminal, "--for",
+                                  "tui-idle", "--timeout-ms", str(DESPACHO_IDLE_MS)],
+                            DESPACHO_IDLE_MS // 1000 + 10)
+    espera = (res or {}).get("wait")
+    if error or not (isinstance(espera, dict) and espera.get("satisfied") is True):
+        return False, None
+    turno = turno_del_agente(cli, terminal)
+    if turno != "no":
+        return False, turno
+    _, error = orca_llama(cli, ["terminal", "send", "--terminal", terminal, "--text",
+                                LEE_EL_BRIEF.format(ruta), "--enter"], DESPACHO_LISTA_S)
+    return not error, None
+
+
+def entrega_brief(cli, terminal, ruta, nombre, limite):
     """Espera el composer del agente y le escribe UNA linea: que lea el brief y lo siga. El
-    texto de varias lineas nunca se teclea en la TUI. None, o el motivo."""
+    texto de varias lineas nunca se teclea en la TUI. Despues mira que su turno empiece y, si
+    la linea se perdio, la reescribe (REENVIOS_POR_TICK, dentro de `limite`).
+    (motivo o None, reenvios, si se vio el turno)."""
     res, error = orca_llama(cli, ["terminal", "wait", "--terminal", terminal, "--for",
                                   "composer-ready", "--timeout-ms", str(DESPACHO_LISTO_MS)],
                             DESPACHO_LISTO_MS // 1000 + 10)
     espera = (res or {}).get("wait")
     if error or not (isinstance(espera, dict) and espera.get("satisfied") is True):
         return (f"el agente de {nombre} no quedó listo para recibir el trabajo: "
-                f"{error or 'Orca no vio su composer a tiempo'}")
+                f"{error or 'Orca no vio su composer a tiempo'}"), 0, False
     _, error = orca_llama(cli, ["terminal", "send", "--terminal", terminal, "--text",
                                 LEE_EL_BRIEF.format(ruta), "--enter"], DESPACHO_LISTA_S)
     if error:
-        return f"no pude darle el trabajo al agente de {nombre}: {error}"
-    return None
+        return f"no pude darle el trabajo al agente de {nombre}: {error}", 0, False
+    reenvios = 0
+    turno = espera_turno(cli, terminal, limite)
+    while (turno == "no" and reenvios < REENVIOS_POR_TICK
+           and time.time() + REENVIO_COSTO_S + DESPACHO_VERIFICA_S <= limite):
+        escrita, turno = reescribe_brief(cli, terminal, ruta)
+        if not escrita:
+            break
+        reenvios += 1
+        turno = espera_turno(cli, terminal, limite)
+    return None, reenvios, turno == "empezo"
 
 
 def ruta_de_brief(case_id, fila):
@@ -5718,6 +5803,7 @@ def entrega_respuesta(con, cli, f, entrada, vivas, resumen):
             if not error:
                 despacho_anota(con, f["id"], estado="activo", evento_id=entrada["id"],
                                resultado=None, created_at=ahora_caso(),
+                               turno_at=f["turno_at"] or ahora_caso(),
                                mensajes=json.dumps(todos))
                 caso_toma(con)
                 try:
@@ -5733,7 +5819,7 @@ def entrega_respuesta(con, cli, f, entrada, vivas, resumen):
     despacho_cierra(con, f["id"], "continuado")
 
 
-def tick_vigila(con, resumen):
+def tick_vigila(con, resumen, inicio=None):
     """Los despachos en vuelo de la linea activa: el agente reporto (se suelta, o espera al
     cliente), el cliente contesto su pregunta (se le entrega), el caso se movio por otra mano
     (se suelta), la terminal se fue sin reporte, paso el plazo, o un lanzamiento quedo a
@@ -5795,7 +5881,10 @@ def tick_vigila(con, resumen):
         if f["workspace_selector"] not in vivas:
             vivas[f["workspace_selector"]] = terminales_vivas(cli, f["workspace_selector"])
         lista = vivas[f["workspace_selector"]]
-        if lista is None or f["terminal"] in lista:
+        if lista is None:
+            continue
+        if f["terminal"] in lista:
+            cura_entrega(con, cli, f, proyecto, resumen, inicio)
             continue
         suelta_trabajador(cli, f)
         if despacho_cierra(con, f["id"], "bloqueado", "sin reporte", bloquea=(
@@ -5803,7 +5892,42 @@ def tick_vigila(con, resumen):
             resumen["bloqueados_por_despacho"] += 1
 
 
-def despacha(con, caso, instrucciones, evento_id, resumen, reintento_de=None, vieja=False):
+def cura_entrega(con, cli, f, proyecto, resumen, inicio):
+    """Un despacho activo cuyo agente vive pero nunca empezo su turno (la linea del brief se
+    perdio, tambien en uno lanzado antes de esta revision): se la reescribe una vez por
+    vuelta, hasta REENVIOS_MAX; agotados, Bloqueado. Un turno visto o un reporte lo cierran
+    para siempre: nunca se le duplica el trabajo."""
+    if (f["estado"] != "activo" or f["resultado"] or f["turno_at"]
+            or _lista_json(f["informes"])):
+        return
+    ruta = ruta_de_brief(f["case_id"], f["id"])
+    if not os.path.isfile(ruta):
+        return
+    if inicio is not None and time.time() - inicio > DESPACHO_LIMITE_S - REENVIO_COSTO_S:
+        return
+    turno = turno_del_agente(cli, f["terminal"])
+    if turno == "empezo":
+        despacho_anota(con, f["id"], turno_at=ahora_caso())
+        return
+    if turno != "no":
+        return
+    reenvios = f["reenvios"] or 0
+    if reenvios >= REENVIOS_MAX:
+        suelta_trabajador(cli, f)
+        if despacho_cierra(con, f["id"], "bloqueado", NO_RECIBIO, bloquea=(
+                f"{NO_RECIBIO} ({proyecto}: la línea del brief se envió "
+                f"{reenvios + 1} veces y nunca empezó)")):
+            resumen["bloqueados_por_despacho"] += 1
+        return
+    escrita, turno = reescribe_brief(cli, f["terminal"], ruta)
+    if escrita:
+        despacho_anota(con, f["id"], reenvios=reenvios + 1)
+    elif turno == "empezo":
+        despacho_anota(con, f["id"], turno_at=ahora_caso())
+
+
+def despacha(con, caso, instrucciones, evento_id, resumen, reintento_de=None, vieja=False,
+             limite=None):
     """Lanza UN despacho. La fila `lanzando` se escribe primero, con la base tomada; lo que
     devuelve Orca se anota al llegar. Cualquier falla va a Bloqueado con su texto.
 
@@ -5868,8 +5992,10 @@ def despacha(con, caso, instrucciones, evento_id, resumen, reintento_de=None, vi
         if terminal or cuenta:
             # Con la base: una vuelta que muere aca deja la terminal a la vista del vigia.
             despacho_anota(con, fila, terminal=terminal, cuenta_claude=cuenta)
+    reenvios, turno = 0, False
     if not motivo:
-        motivo = entrega_brief(cli, terminal, ruta, nombre)
+        motivo, reenvios, turno = entrega_brief(
+            cli, terminal, ruta, nombre, limite or time.time() + DESPACHO_LIMITE_S)
         if motivo:
             # Una terminal que abrio el despacho y no recibio el trabajo no queda colgada.
             suelta_trabajador(cli, {"terminal": terminal})
@@ -5877,7 +6003,8 @@ def despacha(con, caso, instrucciones, evento_id, resumen, reintento_de=None, vi
         if despacho_cierra(con, fila, "bloqueado", motivo[:LARGO_MOTIVO], bloquea=motivo):
             resumen["bloqueados_por_despacho"] += 1
         return
-    despacho_anota(con, fila, estado="activo")
+    despacho_anota(con, fila, estado="activo", reenvios=reenvios,
+                   turno_at=ahora_caso() if turno else None)
     caso_toma(con)
     try:
         caso_tocar(con, caso_de(con, cid), "automatizacion",
@@ -5892,7 +6019,7 @@ def despacha(con, caso, instrucciones, evento_id, resumen, reintento_de=None, vi
 def tick_despacha(con, resumen, inicio):
     """Lo del minuto: vigilar lo que esta en vuelo y lanzar a lo mas UN trabajo, si el
     lanzamiento entero cabe antes de DESPACHO_LIMITE_S."""
-    tick_vigila(con, resumen)
+    tick_vigila(con, resumen, inicio)
     # Primero el reintento de lo que bloqueo la orquestacion (lo mas viejo). Una firma
     # vieja no llama a Orca: va a Bloqueado sin quitarle el turno a una nueva.
     pendientes = [(caso, instrucciones, None, fila)
@@ -5908,7 +6035,8 @@ def tick_despacha(con, resumen, inicio):
         resumen["pospuestos"] += 1
         return
     caso, instrucciones, evento_id, reintento_de = pendientes[0]
-    despacha(con, caso, instrucciones, evento_id, resumen, reintento_de=reintento_de)
+    despacha(con, caso, instrucciones, evento_id, resumen, reintento_de=reintento_de,
+             limite=inicio + DESPACHO_LIMITE_S)
 
 
 DETALLE_ATENDER = "the owner asked the agent to handle it now"
