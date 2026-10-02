@@ -482,6 +482,35 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
       6. El dueño recibe un resumen del estado del equipo y lo que esté trabado.
       Depende de T22 (roles y números), T8 (despacho) y de `wa-read wait`.
 
+- [ ] T24 — Skills section in settings, requested by the owner (2026-10-02), so any
+      workspace agent can message the team over WhatsApp: tell a dev a task is ready,
+      ask for something it needs, notify the owner, wait for an answer.
+      1. A "Skills" section in config.html lists the plugin's installable skills, where
+         each one is installed (global or which projects) and its version against the
+         plugin's version, with Install, Update and Remove.
+      2. Target: Global (every project) or one or more specific projects, picked from the
+         Orca workspaces list (never typed paths). Agents: the ones Orca detects
+         (claude-code, codex, the shared .agents/skills), like Orca's own Settings.
+      3. Same mechanism as Orca: `npx skills add <source> --skill <name>` with `--global`
+         or project-local, as `orca skills install` resolves it. The source is the
+         installed plugin's own folder, so the skill matches the running plugin and needs
+         no network or push. To verify first: that the skills CLI accepts a local path,
+         and what a project-local install writes into the user's repo (tell the user it
+         is a file in their repo; offer to keep it out of git).
+      4. New skill `whatsapp-avisos` (English, generic, no real data):
+         - resolves the plugin's bin through a stable path the plugin keeps up to date
+           (the `.wa-bin` idea, at a fixed user-level location), never a hard-coded path;
+         - send a notice or a request to a person or group by its configured name, only
+           to chats the user enabled for it (mode Responder or a new "Solo avisos");
+         - wait for an answer with `wa-read wait` (T18) and return it to the agent;
+         - the rules: sends to the user's own chats skip the Jev quality review (T22
+           point 1); sends to anyone else keep it; never a credential; no dates or
+           money promised on the team's behalf; a held message is reported back with
+           the approve command, never retried around the hold.
+      5. Remove uninstalls exactly what Install wrote; the plugin never writes skills
+         anywhere the user did not choose.
+      Depende de T18 (`wa-read wait`, stable command) y T22 (dueño y Solo avisos).
+
 Rama `feat/tablero-casos`, desde `main` en v4.9.0. PRs encadenados:
 (T1–T3) decisiones: casos, entrada y Jev; (T4–T6, T13) tablero y ajustes; (T7, T8, T12, T14, T15)
 orquestador y automatización; (T9–T11) estadísticas.
