@@ -28,7 +28,10 @@ BIN = RAIZ / "bin"
 # antes hacia falta enjaular —el doctor abria la sesion de WhatsApp Web del usuario y
 # le conducia el navegador— ya no existe: sin transportes, el doctor no abre nada.
 CASOS = [
-    ("wa-read", ["doctor", "--json"], False, {}),
+    # Con HOME propio, como todo lo demas: `wa-read doctor` llama a `wa-transcribe --check`, que
+    # le pregunta a `wa-scope config`, y eso abre (y migra) ~/.wa-inbox/scope.db. Con el HOME
+    # real, este chequeo le agrego columnas a la base viva del dueno.
+    ("wa-read", ["doctor", "--json"], True, {}),
     ("wa-scope", ["config", "--json"], True, {}),
     # Con un nombre en vez de un JID, wa-scope tiene que preguntarle a wa-read.
     # Ese camino llamaba a ~/tools/wa-read — una ruta fuera del plugin — y reventaba
@@ -43,7 +46,7 @@ CASOS = [
     # El rastro de la corrida sobre una base recien creada: es la rama que contesta
     # "nunca corrio", y es justo la que nadie ejecuta a mano.
     ("wa-scope", ["run", "--json"], True, {}),
-    ("wa-transcribe", ["--check", "--json"], False, {}),
+    ("wa-transcribe", ["--check", "--json"], True, {}),
     ("wa-send", ["--help"], False, {}),
 ]
 

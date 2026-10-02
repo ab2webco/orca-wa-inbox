@@ -3637,6 +3637,8 @@ def jev_y_borradores(cuerpo):
     """Jev de mentira que tambien revisa borradores: sin banderas."""
     if "message_to_evaluate" in cuerpo["state"]:
         return jev_segun_texto(cuerpo)
+    if "escuchado" in cuerpo["state"].get("reply_to_review", ""):
+        return 200, respuestas(cuerpo["questions"], states_status_not_verified=0.9)
     return 200, respuestas(cuerpo["questions"])
 
 
@@ -3803,6 +3805,58 @@ if NODE:
         falso.cerrar()
         os.environ.clear()
         os.environ.update(antes)
+
+
+
+# ── El esquema nuevo no rompe al codigo anterior ────────────────────────────────────────
+# Las columnas que se agregan a `chat_scope` las migra el codigo nuevo y las ve tambien el
+# anterior, que sigue corriendo en la maquina del dueno hasta que se actualiza. Se ejercita
+# con el codigo de verdad de una version anterior (git archive), sobre una base que ya
+# tiene las columnas: cada ruta que lee chat_scope tiene que seguir andando, y lo que el
+# codigo anterior escribe no puede borrar lo que la columna nueva guarda.
+print("\nla base con columnas nuevas sigue sirviendo al codigo anterior")
+ANTERIOR = "c78d297"
+import tarfile  # noqa: E402
+import io as _io  # noqa: E402
+base = subprocess.run(["git", "-C", str(RAIZ), "archive", "--format=tar", ANTERIOR, "bin"],
+                      capture_output=True)
+if base.returncode != 0 or not NODE:
+    print(f"  aviso: sin el commit {ANTERIOR}, no se probo el codigo anterior", file=sys.stderr)
+else:
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as viejo:
+        tarfile.open(fileobj=_io.BytesIO(base.stdout)).extractall(viejo)
+        env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+                   APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"), ORCA_CLI_COMMAND=SIN_ORCA)
+        llegan(home, A, [])
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder", "--ack", "off",
+           "--greeting-text", "Hola, ¿en qué le ayudo?")
+        cols = {r[1] for r in sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "scope.db")
+                .execute("pragma table_info(chat_scope)")}
+        ok("la base tiene las columnas nuevas", {"acuse", "acuse_texto", "saludo", "saludo_texto"} <= cols)
+        for args in (["list", "--json"], ["voice", PERSONA, "--json"], ["check", PERSONA, "--for",
+                     "observar", "--json"], ["where", "hola", "--chat", PERSONA, "--json"],
+                     ["config", "--json"], ["caso", "listar", "--json"], ["pending", "--json"],
+                     ["set", PERSONA, "--mode", "borrador", "--json"]):
+            p = subprocess.run([str(pathlib.Path(viejo) / "bin" / "wa-scope"), *args],
+                               capture_output=True, text=True, env=env, timeout=120)
+            ok(f"el codigo anterior corre `{args[0]}` sobre la base nueva",
+               "Traceback" not in p.stderr and p.returncode in (0, 1, 2), f"{p.returncode} {p.stderr[-200:]}")
+        fila = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "scope.db").execute(
+            "select acuse, saludo_texto from chat_scope where chat_jid=?", (PERSONA,)).fetchone()
+        ok("y lo que escribio no borra las columnas nuevas",
+           fila == ("off", "Hola, ¿en qué le ayudo?"), f"{fila}")
+        # Y la base ANTERIOR (sin las columnas) la migra el codigo nuevo, dos veces sin romper.
+        with tempfile.TemporaryDirectory() as home2:
+            env2 = dict(env, HOME=str(home2), XDG_CONFIG_HOME=str(pathlib.Path(home2) / ".config"),
+                        APPDATA=str(pathlib.Path(home2) / "AppData" / "Roaming"))
+            subprocess.run([str(pathlib.Path(viejo) / "bin" / "wa-scope"), "set", PERSONA,
+                            "--provider", "ninguno", "--mode", "observar"], env=env2,
+                           capture_output=True, timeout=120)
+            for _ in range(2):
+                p = subprocess.run([str(WA_SCOPE), "list", "--json"], capture_output=True, text=True,
+                                   env=env2, timeout=120)
+                ok("el codigo nuevo migra una base anterior, y repetirlo no rompe",
+                   p.returncode == 0 and "Traceback" not in p.stderr, p.stderr[-200:])
 
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
