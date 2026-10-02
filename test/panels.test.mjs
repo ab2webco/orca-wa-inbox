@@ -4552,10 +4552,16 @@ console.log('\nactivity.html — tablero: Atender ahora dice si el agente salio'
   ok('ni lo pinta como error', !!lanzado && !lanzado.classList.contains('mala') &&
     lanzado.getAttribute('role') === 'status', lanzado?.className)
 
-  const sinTriage = await clic({ agent: 'triage-not-found' })
-  ok('triage-not-found pide aprobar de nuevo el plugin y dice que el caso sigue marcado',
-    /aprueb/i.test(sinTriage?.textContent || '') && /marcado/.test(sinTriage?.textContent || '') &&
-    sinTriage.classList.contains('mala') && sinTriage.getAttribute('role') === 'alert', sinTriage?.textContent)
+  const enCurso = await clic({ agent: 'running' })
+  ok('running: ya hay un agente de casos trabajando, y no es un error',
+    /ya hay un agente de casos trabajando/i.test(enCurso?.textContent || '') &&
+    !enCurso.classList.contains('mala'), enCurso?.textContent)
+
+  const sinCuenta = await clic({ agent: 'run-failed', agentReason: 'sin-cuenta' })
+  ok('un motivo estable de wa-scope se dice con su frase, como en el tablero',
+    /no pude lanzar al agente: ninguna cuenta de Claude esta libre/i.test(sinCuenta?.textContent || '') &&
+    /marcado/.test(sinCuenta?.textContent || '') && sinCuenta.classList.contains('mala') &&
+    sinCuenta.getAttribute('role') === 'alert', sinCuenta?.textContent)
 
   const sinCli = await clic({ agent: 'orca-cli-missing' })
   ok('orca-cli-missing dice que no se hallo la CLI de Orca',
@@ -4563,7 +4569,7 @@ console.log('\nactivity.html — tablero: Atender ahora dice si el agente salio'
 
   const fallo = await clic({ agent: 'run-failed', agentReason: 'exit-1' })
   ok('run-failed dice el motivo corto que dio el worker',
-    /no se pudo lanzar el agente/i.test(fallo?.textContent || '') && /exit-1/.test(fallo?.textContent || '') &&
+    /no pude lanzar al agente/i.test(fallo?.textContent || '') && /exit-1/.test(fallo?.textContent || '') &&
     fallo.classList.contains('mala'), fallo?.textContent)
   const largo = await clic({ agent: 'run-failed', agentReason: 'x'.repeat(500) })
   ok('un motivo desmedido se recorta', (largo?.textContent || '').length < 300, (largo?.textContent || '').length)
@@ -4582,6 +4588,72 @@ console.log('\nactivity.html — tablero: Atender ahora dice si el agente salio'
   const raro = await clic({ agent: 'inventado' })
   ok('un codigo de agente desconocido no rompe: cae al mensaje de siempre',
     /proxima corrida/.test(raro?.textContent || ''), raro?.textContent)
+}
+
+console.log('\nactivity.html — tablero: si no pude lanzar al agente, se dice')
+{
+  const AHORA = new Date().toISOString().slice(0, 16).replace('T', ' ')
+  const actividad = { syncedAt: AHORA, running: false, pending: [], recent: [],
+    mapped: 3, authorized: 3,
+    run: { state: 'ok', startedAt: AHORA, endedAt: AHORA, looked: 3, pending: 0, reason: null } }
+  const fallo = (reason, detail = 'orca terminal create: This Claude account is in use') =>
+    ({ state: 'failed', reason, detail, at: '2026-10-02T13:50:00-05:00' })
+  const marcado = tarjeta({ case_id: 5, stage: 'clasificado', proposal: null, exceptions: [],
+    needs_agent: true, waits_agent: true })
+  const recibido = tarjeta({ case_id: 6, stage: 'recibido', proposal: null, exceptions: [],
+    needs_agent: false, waits_agent: true })
+  const otro = tarjeta({ case_id: 7, stage: 'decision', waits_agent: false })
+  const abre = async (launch, idioma = 'es-419', espera = 2) => (await abrirTablero({ activity: actividad,
+    board: tablero([marcado, recibido, otro], { agent_waiting: espera, agent_launch: launch }) },
+  idioma)).doc
+  const nota = (doc, id) => doc.querySelector(`.card[data-case="${id}"] .card-agente`)
+  const linea = (doc) => doc.getElementById('runline')
+
+  const doc = await abre(fallo('sin-cuenta'))
+  ok('la tarjeta marcada dice que no pude lanzar al agente, y por que',
+    /No pude lanzar al agente: ninguna cuenta de Claude esta libre/.test(nota(doc, 5)?.textContent || '') &&
+    !/proxima corrida/.test(nota(doc, 5)?.textContent || ''), nota(doc, 5)?.textContent)
+  ok('pintada como falla, con el detalle de Orca al pasar el raton',
+    nota(doc, 5)?.classList.contains('fallo') && /in use/.test(nota(doc, 5)?.title || ''),
+    nota(doc, 5)?.outerHTML)
+  ok('tambien la que espera al agente sin estar marcada',
+    /No pude lanzar al agente/.test(nota(doc, 6)?.textContent || ''), nota(doc, 6)?.textContent)
+  ok('y no la que no lo espera', !nota(doc, 7), nota(doc, 7)?.textContent)
+  ok('la linea de la revision lo dice despues de los casos para el agente',
+    /2 casos para el agente · No pude lanzar al agente: ninguna cuenta de Claude esta libre/.test(
+      linea(doc).textContent) && linea(doc).classList.contains('stale'), linea(doc).textContent)
+
+  const motivos = { 'sin-cli': /CLI de Orca/, 'sin-espacio': /espacio del plugin/,
+    'sin-terminal': /terminal/, 'no-listo': /listo/, 'no-recibio': /no recibio/,
+    'a-medias': /a la mitad/, 'sin-tiempo': /tiempo/, 'sin-prompt': /prompt/ }
+  const malos = []
+  for (const [codigo, frase] of Object.entries(motivos)) {
+    const d = await abre(fallo(codigo))
+    if (!frase.test(nota(d, 5)?.textContent || '')) malos.push(`${codigo}: ${nota(d, 5)?.textContent}`)
+  }
+  ok('cada motivo estable tiene su frase', malos.length === 0, JSON.stringify(malos))
+  const raro = await abre(fallo('codigo-nuevo'))
+  ok('un motivo que el panel no conoce dice la falla igual, sin el codigo crudo',
+    /No pude lanzar al agente/.test(nota(raro, 5)?.textContent || '') &&
+    !/codigo-nuevo/.test(nota(raro, 5)?.textContent || ''), nota(raro, 5)?.textContent)
+
+  const corriendo = await abre({ state: 'running', reason: null, detail: null, at: '2026-10-02T13:50:00-05:00' })
+  ok('con el agente corriendo la tarjeta no dice falla',
+    !/No pude/.test(nota(corriendo, 5)?.textContent || '') &&
+    !/No pude/.test(linea(corriendo).textContent), nota(corriendo, 5)?.textContent)
+  const sinEspera = await abre(fallo('sin-cuenta'), 'es-419', 0)
+  ok('una falla vieja sin casos esperando no se dice en la linea',
+    !/No pude/.test(linea(sinEspera).textContent), linea(sinEspera).textContent)
+  const sinDato = await abre(undefined)
+  ok('un tablero sin agent_launch conserva el aviso de siempre',
+    /proxima corrida/.test(nota(sinDato, 5)?.textContent || ''), nota(sinDato, 5)?.textContent)
+
+  const en = await abre(fallo('sin-cuenta'), 'en')
+  ok('en ingles', /Could not launch the agent: no Claude account is free/.test(nota(en, 5)?.textContent || '') &&
+    /Could not launch the agent/.test(linea(en).textContent), nota(en, 5)?.textContent)
+  const pt = await abre(fallo('sin-cuenta'), 'pt-BR')
+  ok('en portugues', /Nao consegui lancar o agente/.test(nota(pt, 5)?.textContent || ''),
+    nota(pt, 5)?.textContent)
 }
 
 console.log('\nactivity.html — tablero: el proyecto del caso, a mano')

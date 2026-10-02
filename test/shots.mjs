@@ -724,8 +724,23 @@ const PANELES = [
     guion: ABRIR_TABLERO + `;
       document.querySelector('.card[data-case="4"] .card-acts button[data-accion="atender"]').click()`,
     espera: 1500, datos: conTablero(tableroDe(TABLERO_CASOS)),
-    stub: { veredictoAccion: { ok: true, code: 'atendido', agent: 'run-failed', agentReason: 'exit-1' },
+    stub: { veredictoAccion: { ok: true, code: 'atendido', agent: 'run-failed', agentReason: 'sin-cuenta' },
       demoraVeredicto: 0 }
+  },
+  {
+    // El ultimo lanzamiento del agente de casos fallo: lo dicen las tarjetas que lo esperan
+    // y la linea de la revision, en vez de prometer la proxima corrida.
+    nombre: 'tablero-agente-fallo', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
+    datos: Object.assign(corrida({ state: 'ok', startedAt: AHORA_CORTO, endedAt: AHORA_CORTO,
+      looked: 4, pending: 0, reason: null }), { board: tableroDe(TABLERO_CASOS.map((c) => (
+      c.stage === 'recibido' || c.stage === 'clasificado'
+        ? Object.assign({}, c, { waits_agent: true }) : c)), {
+      agent_waiting: TABLERO_CASOS.filter((c) => c.stage === 'recibido' ||
+        c.stage === 'clasificado').length,
+      agent_launch: { state: 'failed', reason: 'sin-cuenta', at: minutos(2),
+        detail: 'orca terminal create: This Claude account is in use by an assigned worktree' }
+    }) })
   },
   // 1. Reviso y no habia nada: el caso comun y sano.
   {
