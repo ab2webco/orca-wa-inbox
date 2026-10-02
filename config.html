@@ -539,6 +539,21 @@
           <label for="chat-instructions" data-t="chatInstrLabel"></label>
           <textarea id="chat-instructions" rows="3" data-t-ph="chatInstrPh"></textarea>
           <p class="hint" data-t="chatInstrHelp"></p>
+          <span class="label" id="chat-ack-label" data-t="ackLabel"></span>
+          <div class="seg" id="chat-ack" role="group" aria-labelledby="chat-ack-label">
+            <button type="button" data-value="default" data-t="autoDefault"></button>
+            <button type="button" data-value="on" data-t="autoOn"></button>
+            <button type="button" data-value="off" data-t="autoOff"></button>
+          </div>
+          <input id="chat-ack-text" data-t-ph="ackPh" />
+          <span class="label" id="chat-greeting-label" data-t="greetingLabel"></span>
+          <div class="seg" id="chat-greeting" role="group" aria-labelledby="chat-greeting-label">
+            <button type="button" data-value="default" data-t="autoDefault"></button>
+            <button type="button" data-value="on" data-t="autoOn"></button>
+            <button type="button" data-value="off" data-t="autoOff"></button>
+          </div>
+          <input id="chat-greeting-text" data-t-ph="greetingPh" />
+          <p class="hint" data-t="chatAutoHelp"></p>
           <div class="actions">
             <button class="primary" id="save-scope" data-t="save"></button>
             <button id="cancel-edit" hidden data-t="cancelEdit"></button>
@@ -613,6 +628,29 @@
               <li data-t="apDraft"></li>
             </ul>
             <p class="hint" data-t="approvalNote"></p>
+          </div>
+        </section>
+
+        <!-- Respuestas automaticas: lo unico que el motor contesta solo, sin el agente. -->
+        <section class="card">
+          <h2 id="auto-legend-h" data-t="autoLegend"></h2>
+          <p class="hint lead" data-t="autoIntro"></p>
+          <span class="label" id="ack-mode-label" data-t="ackLabel"></span>
+          <div class="seg" id="ack-mode" role="group" aria-labelledby="ack-mode-label">
+            <button type="button" data-value="on" data-t="autoOn"></button>
+            <button type="button" data-value="off" data-t="autoOff"></button>
+          </div>
+          <input id="ack-text" data-t-ph="ackPh" />
+          <span class="label" id="greeting-mode-label" data-t="greetingLabel"></span>
+          <div class="seg" id="greeting-mode" role="group" aria-labelledby="greeting-mode-label">
+            <button type="button" data-value="on" data-t="autoOn"></button>
+            <button type="button" data-value="off" data-t="autoOff"></button>
+          </div>
+          <input id="greeting-text" data-t-ph="greetingPh" />
+          <p class="hint" data-t="autoTextHelp"></p>
+          <div class="actions">
+            <button class="primary" id="save-auto" data-t="saveCard"></button>
+            <span class="said" id="said-auto"></span>
           </div>
         </section>
 
@@ -830,6 +868,20 @@
           toneLabel: "Como escribe",
           tonePh: "ej. Espanol neutro, usted, formal. Sin modismos regionales.",
           toneHelp: "Vale para todas las conversaciones. Cada una puede tener el suyo y pisa este.",
+          autoLegend: 'Respuestas automaticas',
+          autoIntro: 'Solo en las conversaciones donde su agente puede responder por si mismo. ' +
+            'Un pedido nuevo dirigido al asistente recibe un acuse de recibo al instante, y un ' +
+            'saludo recibe un saludo. Nada con dinero, credenciales o riesgo se contesta solo: ' +
+            'pasa a usted.',
+          ackLabel: 'Acuse de recibo',
+          greetingLabel: 'Saludo',
+          autoOn: 'Activado', autoOff: 'Desactivado', autoDefault: 'Segun el general',
+          ackPh: 'Recibimos su mensaje. Ya lo estamos revisando y le respondemos por aqui.',
+          greetingPh: 'Hola, ¿en que le puedo ayudar?',
+          autoTextHelp: 'Deje el texto vacio para usar el de fabrica. No prometa horas ni fechas: ' +
+            'es lo que el acuse nunca debe hacer.',
+          chatAutoHelp: 'Solo se envia si la conversacion esta en Automatico. Segun el general usa ' +
+            'lo de la tarjeta Respuestas automaticas, en Su aprobacion.',
           voiceLegend: 'Notas de voz',
           readingLegend: 'Lectura de WhatsApp',
           transcribeLabel: "Transcribir las notas de voz",
@@ -1168,6 +1220,20 @@
           toneLabel: "How it writes",
           tonePh: "e.g. Neutral Spanish, formal. No regional slang.",
           toneHelp: "Applies to every conversation. Each one can override it.",
+          autoLegend: 'Automatic replies',
+          autoIntro: 'Only in conversations where your agent may reply on its own. A new ' +
+            'request addressed to the assistant gets an acknowledgement right away, and a ' +
+            'greeting gets a greeting. Anything with money, credentials or risk is never ' +
+            'answered automatically: it goes to you.',
+          ackLabel: 'Acknowledgement',
+          greetingLabel: 'Greeting',
+          autoOn: 'On', autoOff: 'Off', autoDefault: 'Use the default',
+          ackPh: 'Recibimos su mensaje. Ya lo estamos revisando y le respondemos por aqui.',
+          greetingPh: 'Hola, ¿en que le puedo ayudar?',
+          autoTextHelp: 'Leave the text empty to use the built-in one. Do not promise times or ' +
+            'dates: that is what an acknowledgement must never do.',
+          chatAutoHelp: 'Only sent if the conversation is on Automatic. Use the default takes ' +
+            'the Automatic replies card, under Your approval.',
           voiceLegend: 'Voice notes',
           readingLegend: 'Reading WhatsApp',
           transcribeLabel: "Transcribe voice notes",
@@ -1531,6 +1597,20 @@
         saveCard: 'Salvar',
         saveFailed: 'Nao foi possivel salvar. Tente de novo.',
         toneLabel: 'Como escreve',
+        autoLegend: 'Respostas automaticas',
+        autoIntro: 'Somente nas conversas em que o seu agente pode responder sozinho. Um pedido ' +
+          'novo dirigido ao assistente recebe um aviso de recebimento na hora, e uma saudacao ' +
+          'recebe uma saudacao. Nada com dinheiro, credenciais ou risco e respondido sozinho: ' +
+          'passa para voce.',
+        ackLabel: 'Aviso de recebimento',
+        greetingLabel: 'Saudacao',
+        autoOn: 'Ativado', autoOff: 'Desativado', autoDefault: 'Conforme o geral',
+        ackPh: 'Recibimos su mensaje. Ya lo estamos revisando y le respondemos por aqui.',
+        greetingPh: 'Hola, ¿en que le puedo ayudar?',
+        autoTextHelp: 'Deixe o texto vazio para usar o de fabrica. Nao prometa horarios nem ' +
+          'datas: e o que o aviso nunca deve fazer.',
+        chatAutoHelp: 'So e enviado se a conversa estiver em Automatico. Conforme o geral usa o ' +
+          'cartao Respostas automaticas, em Sua aprovacao.',
         voiceLegend: 'Notas de voz',
         readingLegend: 'Leitura do WhatsApp',
         transcribeLabel: 'Transcrever as notas de voz',
@@ -2174,7 +2254,11 @@
         transcribeQuality: ['quality', 'optima'],
         // 7 dias y no 1: una mencion del viernes tiene que seguir a la vista el lunes.
         inboxDays: ['inbox-days', '7'],
-        syncMinutes: ['sync-minutes', '5']
+        syncMinutes: ['sync-minutes', '5'],
+        ackMode: ['ack-mode', 'on'],
+        ackText: ['ack-text', ''],
+        greetingMode: ['greeting-mode', 'on'],
+        greetingText: ['greeting-text', '']
       }
       Object.keys(CONTROLES).forEach(function (k) { ensuciar(CONTROLES[k][0]) })
 
@@ -2247,6 +2331,10 @@
       el('save-voice').addEventListener('click', function (event) {
         guardarTarjeta(event.currentTarget, 'said-voice',
           ['transcribe', 'transcribeLang', 'transcribeQuality'])
+      })
+      el('save-auto').addEventListener('click', function (event) {
+        guardarTarjeta(event.currentTarget, 'said-auto',
+          ['ackMode', 'ackText', 'greetingMode', 'greetingText'])
       })
       el('save-reading').addEventListener('click', function (event) {
         guardarTarjeta(event.currentTarget, 'said-reading', ['inboxDays', 'syncMinutes'])
@@ -2992,6 +3080,10 @@
         pintarSelectoresDeProyecto(entry.workspace || '')
         el('chat-tone').value = entry.tone || ''
         el('chat-instructions').value = entry.instructions || ''
+        ponerSeg('chat-ack', entry.ack, 'default')
+        el('chat-ack-text').value = entry.ackText || ''
+        ponerSeg('chat-greeting', entry.greeting, 'default')
+        el('chat-greeting-text').value = entry.greetingText || ''
         ponerSeg('mode', entry.mode, 'off')
         pintarModo()
         el('scope-form-title').textContent = t('formEditing')
@@ -3012,6 +3104,10 @@
         pintarModo()
         el('chat-tone').value = ''
         el('chat-instructions').value = ''
+        ponerSeg('chat-ack', 'default', 'default')
+        el('chat-ack-text').value = ''
+        ponerSeg('chat-greeting', 'default', 'default')
+        el('chat-greeting-text').value = ''
         // Una conversacion nueva arranca sin proyecto: la mayoria de los 1 a 1 solo piden
         // que el agente lea y conteste, y elegir uno por inercia mandaria su trabajo a un
         // repo que nada tiene que ver.
@@ -3091,6 +3187,11 @@
             chatName: chat, workspace: workspace,
             mode: mode, tone: el('chat-tone').value.trim() || null,
             instructions: el('chat-instructions').value.trim() || null,
+            // `default` es null: vale lo de la tarjeta de respuestas automaticas.
+            ack: valorSeg('chat-ack') === 'default' ? null : valorSeg('chat-ack'),
+            ackText: el('chat-ack-text').value.trim() || null,
+            greeting: valorSeg('chat-greeting') === 'default' ? null : valorSeg('chat-greeting'),
+            greetingText: el('chat-greeting-text').value.trim() || null,
             updatedAt: new Date().toISOString() })
           // Autorizar es autorizar para ESTE numero (T9): el mismo grupo visto desde
           // otro numero propio es otra autorizacion.
@@ -3830,6 +3931,17 @@
         })
         // Una lista abierta en la pestana que se va quedaria flotando sobre la otra.
         comboChats.cerrar(); comboProyecto.cerrar(); comboRegla.cerrar()
+        if (activaAuto(cual)) leerAuto()
+      }
+      // Las cuatro claves de las respuestas automaticas se leen al abrir SU pestana y no en
+      // cada vuelta: el host admite 30 mensajes por 10 s y la vuelta entera ya gasta casi
+      // todo el cupo que le queda al clic.
+      function activaAuto (cual) { return cual === 'aprobacion' }
+      function leerAuto () {
+        var sello = guardadoSeq
+        ;['ackMode', 'ackText', 'greetingMode', 'greetingText'].forEach(function (k) {
+          read(k, true).then(function (v) { pintarClave(k, v, sello) })
+        })
       }
       PESTANAS.forEach(function (p, i) {
         el('tab-' + p).addEventListener('click', function () {

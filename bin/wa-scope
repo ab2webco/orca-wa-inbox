@@ -232,6 +232,10 @@ create table if not exists chat_scope (
   hours         text default 'L-V 08:00-18:00',
   tone          text,                -- como escribe en ESTA conversacion; pisa el global
   instructions  text,                -- que hace en ESTA conversacion; el tono es el como
+  acuse         text,                -- on | off | null (= el ajuste global `ack`)
+  acuse_texto   text,                -- el texto del acuse en ESTA conversacion
+  saludo        text,                -- on | off | null (= el ajuste global `greeting`)
+  saludo_texto  text,
   timezone      text default 'America/Bogota',
   notes         text,
   updated_at    text,
@@ -341,6 +345,19 @@ create table if not exists juicio (
   -- hace que un mensaje se pregunte UNA vez: la proxima corrida lo lee de aca.
   jev       text,
   primary key (account, chat_jid, stanza_id)
+);
+-- Lo que el motor contesta solo en un caso: el acuse de recibo o el saludo. Una fila por
+-- (caso, tipo) es lo que lo hace UNA vez; `req_id` es el id de wa-send (`caso-<id>-acuse`),
+-- que es lo que hace que un reintento no entregue dos. ingest la deja `pendiente`; el tick
+-- la manda y la pasa a `enviado`, o a `omitido` con la razon.
+create table if not exists respuesta_auto (
+  case_id integer not null,
+  tipo    text not null,                -- acuse | saludo
+  req_id  text not null,
+  estado  text not null default 'pendiente',  -- pendiente | enviado | omitido
+  razon   text,
+  at      text not null,
+  primary key (case_id, tipo)
 );
 -- La transcripcion de una nota de voz, calculada UNA vez por mensaje: lo que juzga Jev, lo
 -- que mira el piso fijo y lo que lee el agente en el hilo salen de aca. Guarda tambien el
@@ -684,6 +701,14 @@ def persistir_panel(con):
             "instructions=coalesce(excluded.instructions, chat_scope.instructions), "
             "updated_at=excluded.updated_at",
             (cuenta_de_entrada(e), jid, *(fila[c] for c in cols)))
+        for flat, columna in AUTO_PANEL:
+            if flat in e:
+                valor = e.get(flat)
+                valor = (valor.strip() if isinstance(valor, str) and valor.strip()
+                         and (columna not in ("acuse", "saludo")
+                              or valor.strip() in ("on", "off")) else None)
+                con.execute(f"update chat_scope set {columna}=? where account=? and chat_jid=?",
+                            (valor, cuenta_de_entrada(e), jid))
         # El proyecto solo se toca si el panel lo dijo: una entrada de un panel anterior
         # no trae la clave y no puede borrar el que se puso por terminal.
         if "workspace" in e:
@@ -707,6 +732,8 @@ def push_to_plugin(con, with_activity=False):
                       "target": r.get("target"), "workspace": r.get("workspace"),
                       "mode": r.get("mode") or "off",
                       "tone": r.get("tone"), "instructions": r.get("instructions"),
+                      "ack": r.get("acuse"), "ackText": r.get("acuse_texto"),
+                      "greeting": r.get("saludo"), "greetingText": r.get("saludo_texto"),
                       "updatedAt": r.get("updated_at"), "account": cuenta}
     activity = health = None
     reusando = False
@@ -929,6 +956,11 @@ def build_health():
     return out
 
 
+# Lo que el panel guarda por conversacion para las respuestas automaticas, y la columna.
+AUTO_PANEL = (("ack", "acuse"), ("ackText", "acuse_texto"),
+              ("greeting", "saludo"), ("greetingText", "saludo_texto"))
+
+
 def merged_scope(con):
     """Lo del panel manda sobre lo del CLI cuando el mismo chat esta en los dos:
     el panel es lo que el usuario acaba de tocar."""
@@ -937,7 +969,8 @@ def merged_scope(con):
     cuenta = cuenta_activa()
     rows = {r["chat_jid"]: dict(r) for r in con.execute(
         "select account, chat_jid, chat_name, provider, target, workspace, mode, "
-        "initial_state, hours, tone, instructions, timezone, notes, updated_at "
+        "initial_state, hours, tone, instructions, acuse, acuse_texto, saludo, "
+        "saludo_texto, timezone, notes, updated_at "
         "from chat_scope "
         "where account=?", (cuenta,))}
     for jid, e in plugin_store_read().items():
@@ -964,6 +997,14 @@ def merged_scope(con):
             valor = e.get(campo)
             if isinstance(valor, str) and valor.strip():
                 row[campo] = valor
+        # Los de las respuestas automaticas: la clave presente manda, null incluido (es "usar
+        # el global"); una entrada de un panel anterior no la trae y vale lo de la base.
+        for flat, columna in AUTO_PANEL:
+            if flat in e:
+                valor = e.get(flat)
+                row[columna] = (valor.strip() if isinstance(valor, str) and valor.strip()
+                                and (columna not in ("acuse", "saludo")
+                                     or valor.strip() in ("on", "off")) else None)
         rows[jid] = row
     # En "ninguno" el destino no existe, aunque haya quedado uno guardado de antes.
     # Se apaga aca y no en cada comando para que ninguno — check, where, voice, el
@@ -1087,6 +1128,9 @@ def migrate(con):
         con.execute("alter table chat_scope add column tone text")
     if "instructions" not in cols:
         con.execute("alter table chat_scope add column instructions text")
+    for columna in ("acuse", "acuse_texto", "saludo", "saludo_texto"):
+        if columna not in cols:
+            con.execute(f"alter table chat_scope add column {columna} text")
     if "target" not in cols:
         con.execute("alter table chat_scope add column target text")
         if "plane_project" in cols:
@@ -1289,6 +1333,21 @@ def cmd_list(con, a):
                                        (r.get("chat_name") or "").lower()))
 
 
+def auto_valor(pedido, actual):
+    """El interruptor de una respuesta automatica en una conversacion: on, off, o `default`
+    (null: vale el global). Sin pedido queda lo que habia."""
+    if pedido is None:
+        return actual
+    return None if pedido == "default" else pedido
+
+
+def auto_texto(pedido, actual):
+    """El texto propio de una respuesta automatica; vacio lo quita (vale el global)."""
+    if pedido is None:
+        return actual
+    return pedido.strip()[:LARGO_AUTO] or None
+
+
 def cmd_set(con, a):
     jid, name = jid_of(con, a.chat)
     cur = con.execute("select * from chat_scope where chat_jid=? and account=?",
@@ -1323,6 +1382,10 @@ def cmd_set(con, a):
         "tone": a.tone if a.tone is not None else cur.get("tone"),
         "instructions": (a.instructions if a.instructions is not None
                          else cur.get("instructions")),
+        "acuse": auto_valor(a.ack, cur.get("acuse")),
+        "acuse_texto": auto_texto(a.ack_text, cur.get("acuse_texto")),
+        "saludo": auto_valor(a.greeting, cur.get("saludo")),
+        "saludo_texto": auto_texto(a.greeting_text, cur.get("saludo_texto")),
         "timezone": a.timezone or cur.get("timezone") or "America/Bogota",
         "notes": a.notes or cur.get("notes"),
         "updated_at": time.strftime("%Y-%m-%d %H:%M"),
@@ -1346,10 +1409,17 @@ def cmd_set(con, a):
     con.commit()
     # Lo que se acaba de decir por terminal tambien se corrige en la entrada del panel:
     # `persistir_panel` le da la razon al panel, y su entrada trae el proyecto de antes.
-    if a.workspace is not None:
-        store = plugin_store_read()
-        if jid in store and cuenta_de_entrada(store[jid]) == cuenta_activa():
-            store[jid] = dict(store[jid], workspace=workspace)
+    store = plugin_store_read()
+    if jid in store and cuenta_de_entrada(store[jid]) == cuenta_activa():
+        cambios = {}
+        if a.workspace is not None:
+            cambios["workspace"] = workspace
+        for flat, columna in AUTO_PANEL:
+            if getattr(a, {"ack": "ack", "ackText": "ack_text", "greeting": "greeting",
+                           "greetingText": "greeting_text"}[flat]) is not None:
+                cambios[flat] = vals[columna]
+        if cambios:
+            store[jid] = dict(store[jid], **cambios)
             plugin_store_write(store, agent_name_of(con))
     push_to_plugin(con)
     return [vals]
@@ -1535,6 +1605,14 @@ DEFAULT_CONFIG = {
     # de su conversacion si ese caso se movio en las ultimas N horas. No sale al panel,
     # como lock_ttl_s.
     "case_window_hours": "12",
+    # Lo que el motor contesta solo (tick, por wa-send, en chats `responder`): el acuse a un
+    # pedido nuevo dirigido al asistente y el saludo a un saludo dirigido. Cada conversacion
+    # puede pisar el interruptor y el texto. Sin hora ni fecha: lo que promete tiene que ser
+    # cierto siempre, y el piso fijo lo comprueba (scripts/check-casos).
+    "ack": "on",
+    "ack_text": "Recibimos su mensaje. Ya lo estamos revisando y le respondemos por aquí.",
+    "greeting": "on",
+    "greeting_text": "Hola, ¿en qué le puedo ayudar?",
     "transcribe": "local",    # local | off | api. Local no manda el audio a ningun lado.
     "transcribe_model": "",   # vacio = lo decide la calidad; fijarlo pisa la calidad
     "transcribe_lang": "auto",    # los audios mezclan espanol e ingles
@@ -2960,6 +3038,149 @@ CONTEOS_INGEST = ("vistos", "nuevos", "casos_creados", "unidos", "cerrados", "du
 PRIORIDAD_INGEST = "none"
 
 
+# ── Lo que el motor contesta solo: acuse de recibo y saludo ───────────────────────────
+# Un pedido NUEVO dirigido al asistente (un directo, o en un grupo una mencion o una cita
+# suya) en una conversacion `responder` recibe UN acuse al instante; un saludo dirigido
+# recibe un saludo en vez de cerrarse en silencio. Lo manda el tick por wa-send (el piso
+# fijo y Jev siguen mandando) con un id fijo por caso. Jev sigue siendo el clasificador y
+# el freno: con una excepcion o una bandera de riesgo no se manda nada y el caso es del
+# dueno.
+LARGO_AUTO = 300
+# Lo que Jev llama un pedido: lo que merece saber que se recibio.
+CLASES_PEDIDO = ("support_request", "bug_report", "status_question",
+                 "client_waiting_or_down", "needs_decision", "deploy_request")
+# Las banderas de Jev que NO son un riesgo: dicen que algo se pide y que alguien espera.
+BANDERAS_SIN_RIESGO = ("asks_owner_to_act", "client_waiting_or_service_down")
+# Un saludo de verdad (y no un gracias): lo unico que se contesta con un saludo.
+SALUDO = re.compile(r"\b(hola|ola|hello|hi|hey|buen(?:os|as)?\s+(?:dias?|tardes?|noches?)|"
+                    r"bom\s+dia|boa\s+(?:tarde|noite)|saludos)\b")
+TIPOS_AUTO = ("acuse", "saludo")
+
+
+def auto_ajuste(fila, ajustes, tipo):
+    """(activo, texto) de una respuesta automatica en una conversacion: lo propio de la
+    conversacion pisa lo global, y el texto vacio cae al global y al de fabrica."""
+    clave, texto_clave = (("ack", "ack_text") if tipo == "acuse" else ("greeting", "greeting_text"))
+    fila = fila or {}
+    estado = fila.get(tipo) or ajustes.get(clave) or DEFAULT_CONFIG[clave]
+    texto = ((fila.get(f"{tipo}_texto") or "").strip() or (ajustes.get(texto_clave) or "").strip()
+             or DEFAULT_CONFIG[texto_clave])
+    return estado == "on", texto[:LARGO_AUTO]
+
+
+def auto_de_jev(m, juicio):
+    """`acuse`, `saludo` o None: lo que corresponde contestar solo a este mensaje segun lo
+    que Jev dijo. Necesita que ingest haya anotado `modo` y lo que esta activo."""
+    if m.get("modo") != "responder" or m.get("kind") not in KINDS_DE_ATENCION:
+        return None
+    riesgo = juicio["exceptions"] or [f for f in juicio["flags"] if f not in BANDERAS_SIN_RIESGO]
+    if riesgo:
+        return None
+    clase = juicio.get("attention_class")
+    if clase in CLASES_PEDIDO and m.get("auto_acuse"):
+        return "acuse"
+    if (clase == "pleasantry" and juicio["skip"] and m.get("auto_saludo")
+            and SALUDO.search(wa_reglas.normaliza(m.get("text") or ""))):
+        return "saludo"
+    return None
+
+
+def auto_registra(con, case_id, tipo):
+    """Deja pendiente la respuesta automatica del caso, una sola vez. Sin commit: va en la
+    transaccion del mensaje."""
+    con.execute("insert or ignore into respuesta_auto (case_id, tipo, req_id, at) values "
+                "(?,?,?,?)", (case_id, tipo, f"caso-{case_id}-{tipo}",
+                              time.strftime("%Y-%m-%d %H:%M:%S")))
+
+
+def tick_auto_marca(con, case_id, tipo, estado, razon=None):
+    con.execute("update respuesta_auto set estado=?, razon=? where case_id=? and tipo=?",
+                (estado, razon, case_id, tipo))
+
+
+def tick_auto_cierra(con, fila, estado, razon, detalle):
+    """Cierra una respuesta automatica en su propia transaccion: la marca, el evento y, si
+    era un saludo, el caso (respondido si salio, cerrado con motivo si no)."""
+    caso_toma(con)
+    try:
+        caso = caso_de(con, fila["case_id"])
+        tick_auto_marca(con, fila["case_id"], fila["tipo"], estado, razon)
+        if fila["tipo"] == "saludo" and caso["etapa"] in ("recibido", "clasificado"):
+            if estado == "enviado":
+                caso_mover(con, caso, "respondido", "automatizacion", detalle)
+            else:
+                caso_mover(con, caso, "cerrado", "automatizacion", detalle)
+        else:
+            caso_tocar(con, caso, "automatizacion", detalle)
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+
+
+def auto_omite(caso, scope, ajustes, tipo):
+    """La razon por la que NO se manda, o None si se manda. Se mira de nuevo al mandar:
+    entre el ingest y el tick el dueno pudo cambiar el chat, o el caso pudo marcarse."""
+    if caso["etapa"] == "cerrado" and tipo == "acuse":
+        return "caso-cerrado"
+    if (scope.get(caso["chat_jid"]) or {}).get("mode") != "responder":
+        return "modo"
+    if not auto_ajuste(scope.get(caso["chat_jid"]), ajustes, tipo)[0]:
+        return "apagado"
+    if _lista_json(caso.get("excepciones")):
+        return "excepcion"
+    try:
+        resumen = json.loads(caso.get("jev") or "{}")
+    except (TypeError, ValueError):
+        resumen = {}
+    if [f for f in resumen.get("flags") or [] if f not in BANDERAS_SIN_RIESGO]:
+        return "riesgo"
+    return None
+
+
+def tick_automaticas(con, resumen):
+    """Manda los acuses y saludos pendientes, antes que cualquier propuesta: son lo que el
+    cliente espera ya. Cada uno sale por `wa-send` con su id fijo, asi que un reintento no
+    entrega dos."""
+    filas = [dict(r) for r in con.execute(
+        "select ra.case_id, ra.tipo, ra.req_id from respuesta_auto ra join caso c on "
+        "c.case_id=ra.case_id where ra.estado='pendiente' and c.account=? order by ra.at, "
+        "ra.case_id", (cuenta_activa(),))]
+    if not filas:
+        return
+    estados, vivo = envios_del_almacen([f["req_id"] for f in filas])
+    if not vivo:
+        resumen["sin_transporte"] = True
+        return
+    scope, ajustes = merged_scope(con), merged_settings(con)
+    for fila in filas:
+        caso = caso_de(con, fila["case_id"])
+        razon = auto_omite(caso, scope, ajustes, fila["tipo"])
+        if razon:
+            tick_auto_cierra(con, fila, "omitido", razon, f"{fila['tipo']} omitido: {razon}")
+            continue
+        if estados.get(fila["req_id"]) == "enviado":
+            tick_auto_cierra(con, fila, "enviado", None, f"{fila['tipo']} enviado {fila['req_id']}")
+            resumen["automaticas"] += 1
+            continue
+        texto = auto_ajuste(scope.get(caso["chat_jid"]), ajustes, fila["tipo"])[1]
+        codigo, detalle = tick_envia(caso, texto, fila["req_id"])
+        if codigo is None:
+            tick_auto_cierra(con, fila, "enviado", None, f"{fila['tipo']} enviado {fila['req_id']}")
+            resumen["automaticas"] += 1
+        elif codigo == ENVIO_SIN_LINEA:
+            resumen["sin_transporte"] = True
+            return
+        elif codigo == "send-no-signature":
+            resumen["sin_firma"] = True
+            return
+        elif codigo == ENVIO_FRENADO or codigo in ENVIO_BLOQUEA or codigo == "send-denied":
+            tick_auto_cierra(con, fila, "omitido", codigo, f"{fila['tipo']} omitido: {codigo}")
+        else:
+            resumen["errores"] += 1
+            print(f"wa-scope: tick auto case #{fila['case_id']}: {codigo}", file=sys.stderr)
+
+
 # ── Las notas de voz: se transcriben al entrar, con tope de tiempo y de cantidad ──────
 # Un audio no se oye y el agente no lo transcribe: lo hace el motor, una vez, con la
 # herramienta del plugin y los ajustes `transcribe*` (modo, calidad, modelo e idioma; los
@@ -3137,11 +3358,16 @@ def jev_juzga(mensaje, con=None):
     return juicio
 
 
-def veredicto_de_jev(m, juicio):
+def veredicto_de_jev(m, juicio, con=None):
     """Lo que ingest hace con un veredicto de Jev. Lo que salta se cierra como nada; el
     resto se clasifica con la clase que dio Jev y lleva el veredicto para marcar el caso.
     Una linea suelta de un grupo solo abre caso si Jev la escala (excepcion o agente): la
     zona gris de la charla de un grupo sigue el camino de hoy."""
+    auto = auto_de_jev(m, juicio)
+    if juicio["skip"] and auto == "saludo":
+        # Un saludo dirigido al asistente no se descarta: tiene su caso y su respuesta.
+        return {"accion": "clasificar", "clase": "nothing", "actor": "jev",
+                "detalle": "jev saludo", "jev": juicio, "auto": "saludo"}
     if juicio["skip"]:
         return {"accion": "cerrar", "actor": "jev", "motivo": "nada que atender (jev)",
                 "jev": juicio}
@@ -3149,7 +3375,8 @@ def veredicto_de_jev(m, juicio):
     if m.get("kind") == "grupo" and clase == "doubtful":
         return None
     return {"accion": "clasificar", "clase": clase, "actor": "jev",
-            "detalle": f"jev {juicio.get('attention_class') or '-'}", "jev": juicio}
+            "detalle": f"jev {juicio.get('attention_class') or '-'}", "jev": juicio,
+            "auto": auto}
 
 
 def veredicto_de(m, decision, con=None):
@@ -3537,6 +3764,10 @@ def ingest_mensaje(con, m, veredicto, horas):
             hecho.update(nuevos=1, casos_creados=int(que == "nuevo"),
                          unidos=int(que == "unido"))
             caso_enruta(con, case_id, m.get("text") or "", chat)
+            if que == "nuevo" and veredicto and veredicto.get("auto") and not piso:
+                # La respuesta que el motor manda solo: una por caso nuevo, y nunca con el
+                # piso fijo avisando de dinero o de una credencial.
+                auto_registra(con, case_id, veredicto["auto"])
             if (que == "unido" and previo and previo["case_id"] == case_id
                     and previo["etapa"] in ETAPAS_QUE_VUELVEN
                     and veredicto and es_charla_ajena(veredicto.get("jev"))):
@@ -3616,6 +3847,7 @@ def cmd_ingest(con, a):
     decisiones = decisions_read()
     horas = ventana_casos(con)
     desde = linea_base_ingest(con, horas)
+    ajustes_auto = merged_settings(con)
     abren, sueltos = [], []
     # Del mas viejo al mas nuevo: el inbox viene al reves, y el primero de un pedido es
     # el que abre el caso.
@@ -3630,7 +3862,10 @@ def cmd_ingest(con, a):
         if anterior_a(m, desde):
             total["anteriores"] += 1
             continue
-        nuevos.append(m)
+        nuevos.append(dict(
+            m, modo=entrada.get("mode"),
+            auto_acuse=auto_ajuste(entrada, ajustes_auto, "acuse")[0],
+            auto_saludo=auto_ajuste(entrada, ajustes_auto, "saludo")[0]))
     nuevos = transcribe_nuevos(con, nuevos, horas, total)
     # Lo que ya tiene decision del dueno o juicio del agente se resuelve solo; el resto,
     # junto con lo que llego pegado en el mismo chat, se juzga como una rafaga.
@@ -3909,7 +4144,7 @@ ENVIO_SIN_LINEA = "send-no-transport"
 # motivo y la ve el dueno.
 ENVIO_BLOQUEA = ("send-rejected", "send-id-conflict")
 CONTEOS_TICK = ("enviados", "excepciones", "frenados", "esperando", "bloqueados",
-                "errores", "pospuestos", "limpiados", "limpieza_error")
+                "errores", "pospuestos", "limpiados", "limpieza_error", "automaticas")
 
 # La limpieza de los espacios que deja `triage` (un espacio nuevo por corrida: Orca no los
 # cierra). Mira la CLI a lo mas cada LIMPIEZA_CADA_S, quita solo corridas ya terminadas
@@ -4187,6 +4422,12 @@ def cmd_tick(con, a):
             if con.in_transaction:
                 con.rollback()
             print(f"wa-scope: credential cases not routed: {exc}", file=sys.stderr)
+        try:
+            tick_automaticas(con, resumen)
+        except (sqlite3.Error, CasoFalla) as exc:
+            if con.in_transaction:
+                con.rollback()
+            print(f"wa-scope: automatic replies skipped: {exc}", file=sys.stderr)
         candidatos = candidatos_tick(con)
         estados, vivo = envios_del_almacen(
             [id_envio_caso(c["case_id"], c["propuesta_version"]) for c, _ in candidatos])
@@ -4412,6 +4653,14 @@ def main():
     s.add_argument("--tone", help="how it writes in this conversation; overrides the global one")
     s.add_argument("--instructions",
                    help="what it does in this conversation; the tone is only the how")
+    s.add_argument("--ack", choices=["on", "off", "default"],
+                   help="the immediate acknowledgement of a new request here; default = the "
+                        "global `ack` setting")
+    s.add_argument("--ack-text", help="the acknowledgement text here; empty = the global one")
+    s.add_argument("--greeting", choices=["on", "off", "default"],
+                   help="the reply to a greeting addressed to the assistant here; default = "
+                        "the global `greeting` setting")
+    s.add_argument("--greeting-text", help="the greeting text here; empty = the global one")
     s.set_defaults(fn=cmd_set)
 
     s = add("mode", help="change only the mode")

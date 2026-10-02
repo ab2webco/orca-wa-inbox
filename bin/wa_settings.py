@@ -268,7 +268,11 @@ PANEL_SETTINGS = {"tone": "tone", "agentName": "agent_name",
                   # que acota cuanto puede tardar un mensaje en aparecer: el precheck
                   # contesta sobre el ultimo sync, asi que si esto fuera una constante
                   # escondida el retraso tambien lo seria.
-                  "syncMinutes": "sync_minutes"}
+                  "syncMinutes": "sync_minutes",
+                  # Respuestas automaticas del motor: el acuse de recibo a un pedido nuevo
+                  # y el saludo a un saludo. El valor de una conversacion pisa estos.
+                  "ackMode": "ack", "ackText": "ack_text",
+                  "greetingMode": "greeting", "greetingText": "greeting_text"}
 
 # Lo que cada ajuste acepta. Un valor invalido no revienta al guardarse: revienta
 # despues, en la corrida del agente, lejos de donde se tipeo — o peor, no revienta y
@@ -282,6 +286,8 @@ CONFIG_OPCIONES = {
     # Solo los idiomas que el panel ofrece y con los que se probo. Un codigo sin probar
     # degrada la transcripcion en silencio, y eso se descubre tres audios despues.
     "transcribe_lang": ("auto", "es", "en", "pt"),
+    "ack": ("on", "off"),
+    "greeting": ("on", "off"),
 }
 CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s", "sync_minutes",
                     "capture_max", "capture_days", "case_window_hours")

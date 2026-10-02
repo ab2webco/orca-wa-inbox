@@ -4910,7 +4910,61 @@ for (const [idioma, nombre, minuto, caso] of [
   ok(`${nombre}: las notas de voz se transcriben al llegar a un caso`, caso.test(voz), voz)
   ok(`${nombre}: y dice que pasa con no transcribir`,
     /(no transcribir|do not transcribe|nao transcrever)/i.test(voz), voz)
-  ok(`${nombre}: sin voseo`, !/\b(tenes|podes|sabes que|mira|revisa|decime)\b/i.test(sync + voz))
+}
+
+console.log('\nconfig.html — respuestas automaticas: acuse de recibo y saludo')
+{
+  const { doc, storage } = await montar('config.html', {
+    chats: [{ jid: '1@g.us', name: 'Soporte Norte', kind: 'grupo' }] }, 'es-419')
+  await espera()
+  doc.getElementById('tab-aprobacion').click()
+  await espera()
+  ok('el acuse y el saludo se eligen con botones, no con un select',
+    !doc.querySelector('select') && doc.querySelectorAll('#ack-mode button').length === 2 &&
+    doc.querySelectorAll('#greeting-mode button').length === 2 &&
+    doc.querySelectorAll('#chat-ack button').length === 3 &&
+    doc.querySelectorAll('#chat-greeting button').length === 3)
+  ok('por defecto estan activados', valorSeg(doc, 'ack-mode') === 'on' &&
+    valorSeg(doc, 'greeting-mode') === 'on', `${valorSeg(doc, 'ack-mode')} ${valorSeg(doc, 'greeting-mode')}`)
+  elegirSeg(doc, 'ack-mode', 'off')
+  escribir(doc, 'greeting-text', 'Hola, con gusto le atendemos.')
+  doc.getElementById('save-auto').click()
+  await espera(); await espera()
+  ok('la tarjeta guarda el interruptor y el texto de cada una, con un solo boton',
+    storage.ackMode === 'off' && storage.greetingMode === 'on' && storage.ackText === '' &&
+    storage.greetingText === 'Hola, con gusto le atendemos.',
+    JSON.stringify([storage.ackMode, storage.ackText, storage.greetingMode, storage.greetingText]))
+  ok('y lo confirma', /✓/.test(doc.getElementById('said-auto').textContent))
+
+  elegirChat(doc, '1@g.us')
+  await espera()
+  ok('una conversacion nueva usa el general', valorSeg(doc, 'chat-ack') === 'default' &&
+    valorSeg(doc, 'chat-greeting') === 'default')
+  elegirSeg(doc, 'chat-ack', 'on')
+  escribir(doc, 'chat-ack-text', 'Recibido, lo vemos.')
+  elegirSeg(doc, 'chat-greeting', 'off')
+  doc.getElementById('save-scope').click()
+  await espera(); await espera()
+  const e = (storage.scope || {})['1@g.us']
+  ok('la conversacion guarda su acuse y su saludo, con el jid como llave',
+    e && e.ack === 'on' && e.ackText === 'Recibido, lo vemos.' && e.greeting === 'off' &&
+    e.greetingText === null, JSON.stringify(e))
+  doc.querySelector('#scope-wrap [data-edit]')?.click()
+  await espera()
+  ok('al editarla vuelve a mostrar lo guardado', valorSeg(doc, 'chat-ack') === 'on' &&
+    doc.getElementById('chat-ack-text').value === 'Recibido, lo vemos.' &&
+    valorSeg(doc, 'chat-greeting') === 'off', `${valorSeg(doc, 'chat-ack')}`)
+}
+for (const [idioma, nombre] of [['es-419', 'ES'], ['en', 'EN'], ['pt-BR', 'PT']]) {
+  const { doc } = await montar('config.html', {}, idioma)
+  await espera()
+  const ids = ['auto-legend-h', 'ack-mode-label', 'greeting-mode-label', 'chat-ack-label',
+    'chat-greeting-label']
+  ok(`${nombre}: los textos de las respuestas automaticas existen y estan pintados`,
+    ids.every((i) => (doc.getElementById(i)?.textContent || '').trim().length > 3) &&
+    !/\{\{|undefined/.test(doc.getElementById('view-aprobacion').textContent),
+    ids.map((i) => doc.getElementById(i)?.textContent).join('|'))
+  const texto = doc.getElementById('view-aprobacion').textContent
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

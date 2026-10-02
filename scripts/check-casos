@@ -3622,6 +3622,189 @@ if NODE:
            == "Haz algo.", f"{p['propuesta']}")
 
 
+
+# ── Acuse de recibo y saludo: el motor contesta solo lo que no necesita criterio ────────
+# Un pedido nuevo dirigido al asistente, en un chat `responder`, recibe UN acuse al
+# instante (tick, por wa-send, con id `caso-<id>-acuse`); un saludo dirigido recibe un
+# saludo (`caso-<id>-saludo`) en vez de cerrarse en silencio. Lo que Jev o el piso fijo
+# marcaron con riesgo, y la charla que no es para el asistente, no reciben nada.
+print("\nacuse de recibo y saludo")
+SIN_DIRIGIR = "120363000000000010@g.us"
+CON_CLAVE = "120363000000000011@g.us"
+
+
+def jev_y_borradores(cuerpo):
+    """Jev de mentira que tambien revisa borradores: sin banderas."""
+    if "message_to_evaluate" in cuerpo["state"]:
+        return jev_segun_texto(cuerpo)
+    return 200, respuestas(cuerpo["questions"])
+
+
+def entregas(sidecar, tipo):
+    return [r for r in sidecar.entregados if r.endswith(f"-{tipo}")]
+
+
+def cuerpo_de(home, req):
+    return next((e["body"] for e in envios(home) if e["req_id"] == req), None)
+
+
+if NODE:
+    ajustes_def = {r["key"]: r["value"] for r in js(pathlib.Path(tempfile.mkdtemp()), "config")}
+    carga_jev()
+    sys.path.insert(0, str(WA_SCOPE.parent))
+    import wa_reglas  # noqa: E402
+    for clave in ("ack_text", "greeting_text"):
+        ok(f"el texto por defecto de {clave} pasa el piso fijo, sin dinero ni compromiso",
+           wa_reglas.excepciones(ajustes_def.get(clave) or "?", wa_reglas.SALIDA) == []
+           and bool(ajustes_def.get(clave)), f"{ajustes_def.get(clave)!r}")
+    ok("y el acuse no promete hora ni fecha",
+       not re.search(r"\d|manana|hoy|hora|minuto|pronto", ajustes_def["ack_text"], re.I),
+       ajustes_def["ack_text"])
+    ok("ni lleva voseo", not re.search(r"\b(tenes|podes|escribinos|avisanos)\b",
+                                       ajustes_def["ack_text"] + ajustes_def["greeting_text"]))
+
+    falso = JevFalso(jev_y_borradores)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            CHATS.extend([{"jid": SIN_DIRIGIR, "nombre": "Sin dirigir", "grupo": True},
+                          {"jid": CON_CLAVE, "nombre": "Con clave", "grupo": True}])
+            llegan(home, A, [msg(PERSONA, "Q1", "revisa este caso por favor", 5),
+                             msg(OPERACIONES, "Q2", "@duenio revisa este caso", 5, mencion=True),
+                             msg(SIN_DIRIGIR, "Q3", "revisa este caso", 4),
+                             msg(SOPORTE, "Q4", "@duenio revisa este caso", 4, mencion=True),
+                             msg(CON_CLAVE, "Q5", "@duenio revisa este caso: la clave es Hunter2xx",
+                                 3, mencion=True),
+                             msg(FACTURACION, "Q6", "@duenio revisa este caso", 3, mencion=True)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+            js(home, "set", OPERACIONES, "--provider", "ninguno", "--mode", "responder")
+            js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+            js(home, "set", FACTURACION, "--provider", "ninguno", "--mode", "responder")
+            js(home, "set", FACTURACION, "--ack", "off")
+            js(home, "set", SIN_DIRIGIR, "--provider", "ninguno", "--mode", "responder")
+            js(home, "set", CON_CLAVE, "--provider", "ninguno", "--mode", "responder")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                c1, c2, c4, c5, c6 = (caso_de_stanza(home, x) for x in ("Q1", "Q2", "Q4", "Q5", "Q6"))
+                antes_tick = list(sidecar.entregados)
+                tick(home)
+                esperado = {f"caso-{c1['case_id']}-acuse", f"caso-{c2['case_id']}-acuse"}
+                ok("el acuse sale una vez por caso nuevo dirigido, con id caso-<id>-acuse",
+                   set(entregas(sidecar, "acuse")) == esperado
+                   and len(entregas(sidecar, "acuse")) == 2, f"{sidecar.entregados}")
+                ok("con el texto por defecto",
+                   ajustes_def["ack_text"] in (cuerpo_de(home, f"caso-{c1['case_id']}-acuse") or ""),
+                   f"{cuerpo_de(home, 'caso-%s-acuse' % c1['case_id'])!r}")
+                ok("y deja un evento en el caso",
+                   any("acuse" in e["detalle"] for e in js(home, "caso", "ver",
+                                                           str(c1["case_id"]))[0]["eventos"]))
+                ok("el caso sigue su camino: el acuse no lo cierra ni lo mueve",
+                   js(home, "caso", "ver", str(c1["case_id"]))[0]["etapa"] in ("recibido", "clasificado"))
+                q3 = caso_de_stanza(home, "Q3")
+                ok("un grupo sin mencion ni cita no recibe acuse, abra o no un caso",
+                   not q3 or f"caso-{q3['case_id']}-acuse" not in sidecar.entregados)
+                ok("un chat en borrador tampoco", f"caso-{c4['case_id']}-acuse" not in sidecar.entregados)
+                ok("una credencial no recibe acuse y va al dueno",
+                   f"caso-{c5['case_id']}-acuse" not in sidecar.entregados, f"{sidecar.entregados}")
+                ok("el chat con el acuse apagado no recibe nada",
+                   f"caso-{c6['case_id']}-acuse" not in sidecar.entregados)
+                antes_n = len(sidecar.entregados)
+                tick(home)
+                ingiere(home)
+                tick(home)
+                ok("repetir ticks e ingests no manda un segundo acuse", len(sidecar.entregados) == antes_n,
+                   f"{sidecar.entregados}")
+                llegan(home, A, [msg(PERSONA, "Q7", "no funciono otra vez", 1)])
+                ingiere(home)
+                tick(home)
+                ok("un mensaje que se suma al mismo caso no recibe otro acuse",
+                   len(entregas(sidecar, "acuse")) == 2, f"{sidecar.entregados}")
+            finally:
+                sidecar.cerrar()
+
+        falso.pedidos.clear()
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "S1", "buen dia", 5),
+                             msg(SIN_DIRIGIR, "S2", "buen dia a todos", 5),
+                             msg(OPERACIONES, "S3", "@duenio buen dia", 5, mencion=True),
+                             msg(FACTURACION, "S4", "@duenio gracias", 5, mencion=True)])
+            js(home, "agent", "Agente De Ejemplo")
+            for chat in (PERSONA, OPERACIONES, FACTURACION, SIN_DIRIGIR):
+                js(home, "set", chat, "--provider", "ninguno", "--mode", "responder")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                tick(home)
+                s1, s3 = caso_de_stanza(home, "S1"), caso_de_stanza(home, "S3")
+                ok("un saludo dirigido recibe un saludo, con id caso-<id>-saludo",
+                   set(entregas(sidecar, "saludo")) == {f"caso-{s1['case_id']}-saludo",
+                                                       f"caso-{s3['case_id']}-saludo"},
+                   f"{sidecar.entregados}")
+                ok("con el saludo por defecto",
+                   ajustes_def["greeting_text"] in (cuerpo_de(home, f"caso-{s1['case_id']}-saludo") or ""))
+                ok("y el caso no se cierra en silencio: queda respondido",
+                   js(home, "caso", "ver", str(s1["case_id"]))[0]["etapa"] == "respondido",
+                   js(home, "caso", "ver", str(s1["case_id"]))[0]["etapa"])
+                ok("un saludo no recibe ademas un acuse", not entregas(sidecar, "acuse"))
+                ok("la charla de grupo sin dirigir sigue callada",
+                   caso_de_stanza(home, "S2") is None, f"{caso_de_stanza(home, 'S2')}")
+                ok("y un gracias no recibe saludo: se cierra como siempre",
+                   len(entregas(sidecar, "saludo")) == 2
+                   and caso_de_stanza(home, "S4")["etapa"] == "cerrado")
+                n = len(sidecar.entregados)
+                tick(home)
+                ok("repetir el tick no repite el saludo", len(sidecar.entregados) == n)
+            finally:
+                sidecar.cerrar()
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "W1", "buen dia", 5)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+            js(home, "set", PERSONA, "--greeting-text", "Buen dia, con gusto le atendemos.")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                tick(home)
+                w1 = caso_de_stanza(home, "W1")
+                ok("el texto del saludo es configurable por chat",
+                   "Buen dia, con gusto le atendemos." in (cuerpo_de(home, f"caso-{w1['case_id']}-saludo") or ""),
+                   f"{envios(home)}")
+            finally:
+                sidecar.cerrar()
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "W2", "buen dia", 5)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+            js(home, "config", "greeting", "off")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                tick(home)
+                w2 = caso_de_stanza(home, "W2")
+                ok("con el saludo apagado en lo global vuelve el camino de antes: se cierra",
+                   not sidecar.entregados and w2["etapa"] == "cerrado", f"{sidecar.entregados} {w2 and w2['etapa']}")
+                js(home, "set", PERSONA, "--greeting", "on")
+                llegan(home, A, [msg(PERSONA, "W3", "hola buen dia", 1)])
+                ingiere(home)
+                tick(home)
+                ok("y lo de un chat pisa lo global", len(entregas(sidecar, "saludo")) == 1,
+                   f"{sidecar.entregados}")
+            finally:
+                sidecar.cerrar()
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
