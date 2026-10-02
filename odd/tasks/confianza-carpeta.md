@@ -44,7 +44,7 @@ terminal se cierra. El reenvío de la línea perdida también mira la pantalla.
   shell (lanzamiento y reenvío); el agente de casos falla con `se-cerro` y,
   tras tres seguidas, `se-cierra` y espera una hora; el despacho va a
   Bloqueado con el motivo y se reintenta una vez.
-- [ ] T2 Tablero: las frases de `se-cerro` y `se-cierra` en los tres idiomas.
+- [x] T2 Tablero: las frases de `se-cerro` y `se-cierra` en los tres idiomas.
 
 ## Criterios de aceptación
 

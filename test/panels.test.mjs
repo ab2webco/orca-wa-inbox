@@ -4823,7 +4823,9 @@ console.log('\nactivity.html — tablero: si no pude lanzar al agente, se dice')
 
   const motivos = { 'sin-cli': /CLI de Orca/, 'sin-espacio': /espacio del plugin/,
     'sin-terminal': /terminal/, 'no-listo': /listo/, 'no-recibio': /no recibio/,
-    'a-medias': /a la mitad/, 'sin-tiempo': /tiempo/, 'sin-prompt': /prompt/ }
+    'a-medias': /a la mitad/, 'sin-tiempo': /tiempo/, 'sin-prompt': /prompt/,
+    'se-cerro': /Claude se cerro al abrir; lo vuelvo a abrir en unos minutos/,
+    'se-cierra': /Claude se cerro al abrir tres veces seguidas; espero una hora/ }
   const malos = []
   for (const [codigo, frase] of Object.entries(motivos)) {
     const d = await abre(fallo(codigo))
@@ -4849,6 +4851,16 @@ console.log('\nactivity.html — tablero: si no pude lanzar al agente, se dice')
   const en = await abre(fallo('sin-cuenta'), 'en')
   ok('en ingles', /Could not launch the agent: no Claude account is free/.test(nota(en, 5)?.textContent || '') &&
     /Could not launch the agent/.test(linea(en).textContent), nota(en, 5)?.textContent)
+  const cerrado = await abre(Object.assign(fallo('se-cerro'), {
+    detail: 'Claude se cerro al abrir: Security guide' }))
+  ok('Claude se cerro al abrir: la tarjeta lo dice y la ultima linea va al pasar el raton',
+    /No pude lanzar al agente: Claude se cerro al abrir/.test(nota(cerrado, 5)?.textContent || '') &&
+    /Security guide/.test(nota(cerrado, 5)?.title || '') &&
+    /No pude lanzar al agente: Claude se cerro al abrir/.test(linea(cerrado).textContent),
+    nota(cerrado, 5)?.outerHTML)
+  const cierraEn = await abre(fallo('se-cierra'), 'en')
+  ok('y en ingles, la pausa de una hora', /three times in a row; I will wait an hour/.test(
+    nota(cierraEn, 5)?.textContent || ''), nota(cierraEn, 5)?.textContent)
   const pt = await abre(fallo('sin-cuenta'), 'pt-BR')
   ok('en portugues', /Nao consegui lancar o agente/.test(nota(pt, 5)?.textContent || ''),
     nota(pt, 5)?.textContent)
