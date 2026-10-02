@@ -400,6 +400,9 @@
       .det-escalar .det-text + .det-text { margin-top: 4px; }
       .det-hist .hist-quien { color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .det-proyecto { margin-top: 6px; font-size: 12px; overflow-wrap: anywhere; }
+      .det-link { background: none; border: 0; padding: 0; font: inherit; cursor: pointer;
+             color: inherit; text-decoration: underline; }
+      .det-link:focus-visible { outline: 2px solid var(--ring, var(--fb-ring, currentColor)); outline-offset: 2px; }
       .det-proyecto .det-k { color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .card-agente { font-size: 11px; font-weight: 500;
               color: var(--muted-foreground, var(--fb-muted-foreground)); }
@@ -638,7 +641,7 @@
               "acAgentFallo": "El caso quedo marcado, pero no se pudo lanzar el agente ({reason}). Lo tomara en su proxima corrida.",
               "acOkIgnorado": "Caso ignorado",
               "acOkProyecto": "Proyecto actualizado",
-              "detProject": "Proyecto",
+              "detProject": "Proyecto", "detPrevCase": "Caso anterior",
               "boardNeedsAgent": "Para el agente en su proxima corrida",
                             "detHistTouch": "actualizado",
               "actorAgente": "el agente",
@@ -806,7 +809,7 @@
               "acAgentFallo": "The case is marked, but we could not launch the agent ({reason}). It will pick it up on its next run.",
               "acOkIgnorado": "Case ignored",
               "acOkProyecto": "Project updated",
-              "detProject": "Project",
+              "detProject": "Project", "detPrevCase": "Previous case",
               "boardNeedsAgent": "For your agent on its next run",
                             "detHistTouch": "updated",
               "actorAgente": "your agent",
@@ -974,7 +977,7 @@
               "acAgentFallo": "O caso ficou marcado, mas nao foi possivel lancar o agente ({reason}). Ele vai pegar o caso na proxima rodada.",
               "acOkIgnorado": "Caso ignorado",
               "acOkProyecto": "Projeto atualizado",
-              "detProject": "Projeto",
+              "detProject": "Projeto", "detPrevCase": "Caso anterior",
               "boardNeedsAgent": "Para o agente na proxima rodada",
                             "detHistTouch": "atualizado",
               "actorAgente": "o agente",
@@ -2265,6 +2268,25 @@
             ? (typeof proyecto.name === 'string' && proyecto.name ? proyecto.name : proyecto.id)
             : t('acProyectoNinguno')))
           caja.appendChild(fp)
+        }
+
+        // Un caso es un pedido: si este abrio aparte de uno que ya estaba, se dice cual.
+        if (Number.isInteger(c.related_case) && c.related_case > 0) {
+          var rel = c.related_case
+          var fr = crear('div', 'det-proyecto')
+          fr.appendChild(crear('span', 'det-k', t('detPrevCase') + ': '))
+          var cartas = tableroActual && Array.isArray(tableroActual.cards) ? tableroActual.cards : []
+          var destino = cartas.filter(function (x) { return esObjeto(x) && x.case_id === rel })[0]
+          if (destino) {
+            var enlace = crear('button', 'det-link', '#' + rel)
+            enlace.type = 'button'
+            enlace.dataset.relacionado = String(rel)
+            enlace.addEventListener('click', function () { abrirCaso(destino) })
+            fr.appendChild(enlace)
+          } else {
+            fr.appendChild(crear('span', null, '#' + rel))
+          }
+          caja.appendChild(fr)
         }
 
         var exc = excepcionNodo(c)

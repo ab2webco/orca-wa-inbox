@@ -3975,6 +3975,32 @@ const hastaPanel = async (cond, ms = 6000) => {
   return false
 }
 
+console.log('\nactivity.html — un caso es un pedido: "Caso anterior"')
+{
+  const anterior = tarjeta({ case_id: 30, stage: 'respondido', proposal: null, exceptions: [],
+    actions: ['cerrar', 'reabrir'], title: 'Pedido de la manana' })
+  const nuevo = tarjeta({ case_id: 31, stage: 'clasificado', proposal: null, exceptions: [],
+    related_case: 30, actions: ['atender', 'cerrar'], title: 'Otro pedido distinto' })
+  const { doc } = await abrirTablero({ board: tablero([anterior, nuevo]) })
+  const d = abrirDetalle(doc, 31)
+  const enlace = d.querySelector('button[data-relacionado="30"]')
+  ok('el detalle dice cual es el caso anterior, con un enlace',
+    !!enlace && /Caso anterior/.test(d.textContent) && /#30/.test(enlace.textContent), d.textContent.slice(0, 300))
+  enlace.click()
+  ok('el enlace abre el detalle de ese caso', !!detalle(doc).dataset.case && detalle(doc).dataset.case === '30',
+    detalle(doc).dataset.case)
+  ok('un caso sin anterior no trae la linea', !/Caso anterior/.test(abrirDetalle(doc, 30).textContent))
+  const fuera = await abrirTablero({ board: tablero([nuevo]) })
+  const df = abrirDetalle(fuera.doc, 31)
+  ok('si el anterior ya no esta en el tablero se dice igual, sin enlace',
+    /Caso anterior: #30/.test(df.textContent) && !df.querySelector('button[data-relacionado]'),
+    df.textContent.slice(0, 300))
+  const en = await abrirTablero({ board: tablero([nuevo]) }, 'en-US')
+  ok('en ingles y portugues', /Previous case/.test(abrirDetalle(en.doc, 31).textContent))
+  const pt = await abrirTablero({ board: tablero([nuevo]) }, 'pt-BR')
+  ok('en portugues', /Caso anterior/.test(abrirDetalle(pt.doc, 31).textContent))
+}
+
 console.log('\nactivity.html — tablero: Autorizar')
 {
   const escalado = tarjeta({ case_id: 21, stage: 'decision', exceptions: ['credential', 'commitment'],
