@@ -4814,6 +4814,9 @@ def build_board(con):
             # La ultima vez que se lanzo al agente de casos: si fallo, el panel lo dice en
             # las tarjetas que lo esperan y en la linea de la revision, con su motivo.
             "agent_launch": agente_del_tablero(con),
+            # Los espacios del plugin que la limpieza no pudo quitar tras sus intentos: el
+            # panel lo dice en la linea de la revision, para que el dueno los quite a mano.
+            "workspaces_stuck": espacios_atascados(con),
             "cards": [dict(tarjeta_de(c, nombres, titulos, motivos, eventos, sin_agente,
                                       solo_leer, despachos),
                            # Lo cuenta `agent_waiting`: el panel le pone la falla de
@@ -4880,30 +4883,58 @@ CONTEOS_TICK = ("enviados", "excepciones", "frenados", "esperando", "bloqueados"
                 "errores", "pospuestos", "limpiados", "limpieza_error", "automaticas",
                 "revisiones", "transcritos", "rancias", "despachados",
                 "bloqueados_por_despacho", "respuestas_al_proyecto", "agente_lanzado",
-                "agente_error", "trabajos_sin_clic")
+                "agente_error", "trabajos_sin_clic", "limpieza_atascados")
 
-# La limpieza de los espacios que deja `triage` (un espacio nuevo por corrida: Orca no los
-# cierra). Mira la CLI a lo mas cada LIMPIEZA_CADA_S, quita solo corridas ya terminadas
-# y de hace mas de LIMPIEZA_GRACIA_S (quien mira el resultado todavia lo ve) y no mas de
-# LIMPIEZA_TOPE por vuelta. `worktree rm` sobre un espacio de carpeta borra el registro y
-# sus terminales, nunca los archivos; la raiz de la carpeta no tiene `::workspace:`.
+# La limpieza de los espacios que dejan las corridas del plugin. Orca fuerza `new_per_run`
+# en las automatizaciones de un plugin: cada corrida crea un hijo `::workspace:<uuid>` de
+# la carpeta del plugin, con una terminal de shell adentro, y nunca lo cierra. La fuente es
+# `worktree list` y no las corridas: los hijos de una automatizacion que Orca borro y
+# recreo (ids nuevos al reactivar el plugin) ya no estan en ninguna lista de corridas. Mira
+# a lo mas cada LIMPIEZA_CADA_S (LIMPIEZA_SIGUE_S si quedaron pendientes), solo lo que paso
+# LIMPIEZA_GRACIA_S sin actividad, y no mas de LIMPIEZA_TOPE por vuelta. Visto en vivo:
+# `worktree rm` contesto `removed: true` y el espacio seguia en la lista, con su terminal
+# viva. Por eso cierra primero las terminales y despues vuelve a listar: lo que sigue ahi
+# cuenta un intento, y a los LIMPIEZA_INTENTOS se dice (resumen y tablero) sin dejar de
+# intentarlo, al final de la cola. `worktree rm` sobre un espacio de carpeta borra el
+# registro y sus terminales, nunca los archivos; la raiz de la carpeta no tiene
+# `::workspace:` y no se toca nunca.
 PLUGIN_KEY = "ab2web.orca-wa-inbox"
 AUTOMATIZACION_TRIAGE = "triage"
 LIMPIEZA_CADA_S = 300
+LIMPIEZA_SIGUE_S = 60
 LIMPIEZA_GRACIA_S = 120
-LIMPIEZA_TOPE = 5
+LIMPIEZA_TOPE = 10
 LIMPIEZA_PLAZO_S = 15
+LIMPIEZA_PRESUPUESTO_S = 60
 LIMPIEZA_INTENTOS = 3
 ESTADOS_EN_CURSO = ("pending", "dispatching", "dispatched")
 MARCA_ESPACIO = "::workspace:"
-def id_triage(automatizaciones):
-    """La automatizacion `triage` de ESTE plugin (por su origen, nunca por el nombre), o
+
+
+def automatizacion_del_plugin(automatizaciones, cual):
+    """La automatizacion `cual` de ESTE plugin (por su origen, nunca por el nombre), o
     None."""
     return next((a for a in automatizaciones if isinstance(a, dict)
                  and isinstance(a.get("pluginOrigin"), dict)
                  and a["pluginOrigin"].get("pluginKey") == PLUGIN_KEY
-                 and a["pluginOrigin"].get("automationId") == AUTOMATIZACION_TRIAGE
+                 and a["pluginOrigin"].get("automationId") == cual
                  and isinstance(a.get("id"), str) and a.get("id")), None)
+
+
+def id_triage(automatizaciones):
+    """La automatizacion `triage` de ESTE plugin, o None."""
+    return automatizacion_del_plugin(automatizaciones, AUTOMATIZACION_TRIAGE)
+
+
+def carpeta_del_plugin(automatizaciones):
+    """La ruta (comparable) donde corren las automatizaciones de este plugin, la de su
+    `runContext`, o None. Es la misma para todas: `plugin-workspaces/<plugin>`."""
+    for cual in (AUTOMATIZACION_TRIAGE, "tick"):
+        contexto = (automatizacion_del_plugin(automatizaciones, cual) or {}).get("runContext")
+        ruta = ruta_comparable(contexto.get("path")) if isinstance(contexto, dict) else None
+        if ruta:
+            return ruta
+    return None
 
 
 def orca_json(cli, args):
@@ -4918,30 +4949,105 @@ def orca_json(cli, args):
     return sobre if isinstance(sobre, dict) else None
 
 
-def espacios_a_limpiar(corridas, ahora):
-    """Los ids de espacio de las corridas terminadas hace mas de la gracia. Solo los que
-    llevan `::workspace:`: la raiz de la carpeta no se toca nunca."""
+def lista_de_orca(cli, args, clave):
+    """La lista `clave` del resultado de Orca, o None si no contesto `ok` o llego cortada:
+    con una lista incompleta no se sabe que hay en vuelo."""
+    sobre = orca_json(cli, args)
+    res = (sobre or {}).get("result")
+    res = res if isinstance(res, dict) else {}
+    lista = res.get(clave)
+    if not sobre or sobre.get("ok") is not True or not isinstance(lista, list) \
+            or res.get("truncated"):
+        return None
+    return [x for x in lista if isinstance(x, dict)]
+
+
+def marca_s(valor):
+    """Un sello de Orca (ms desde la epoca) en segundos, o None."""
+    if isinstance(valor, bool) or not isinstance(valor, (int, float)) or valor < 1e12:
+        return None
+    return valor / 1000
+
+
+def sin_id(selector):
+    texto = str(selector or "")
+    return texto[3:] if texto.startswith("id:") else texto
+
+
+def en_vuelo_del_plugin(con):
+    """(espacios, terminales) del agente de casos y de los despachos en vuelo: la limpieza
+    no los toca nunca, esten donde esten."""
+    filas = con.execute("select workspace_selector, terminal from agente_corrida where estado "
+                        "in (?, ?)", AGENTE_EN_VUELO).fetchall()
+    filas += con.execute(f"select workspace_selector, terminal from caso_despacho where estado "
+                         f"in ({','.join('?' * len(DESPACHO_EN_VUELO))})",
+                         DESPACHO_EN_VUELO).fetchall()
+    return ({sin_id(r["workspace_selector"]) for r in filas if r["workspace_selector"]},
+            {r["terminal"] for r in filas if r["terminal"]})
+
+
+def intentos_de_limpieza(con):
+    """{espacio: intentos fallidos} de lo que se quiso quitar y seguia en la lista."""
+    fila = con.execute("select value from settings where key='limpieza_intentos'").fetchone()
+    try:
+        valor = json.loads(fila["value"]) if fila else {}
+    except (TypeError, ValueError):
+        valor = {}
+    return {k: v for k, v in valor.items() if isinstance(k, str) and isinstance(v, int)} \
+        if isinstance(valor, dict) else {}
+
+
+def espacios_atascados(con):
+    """Cuantos espacios del plugin no se pudieron quitar tras LIMPIEZA_INTENTOS."""
+    return sum(1 for v in intentos_de_limpieza(con).values() if v >= LIMPIEZA_INTENTOS)
+
+
+def guarda_ajuste(con, llave, valor):
+    con.execute("insert into settings (key,value) values (?,?) on conflict(key) "
+                "do update set value=excluded.value", (llave, valor))
+    con.commit()
+
+
+def espacios_a_limpiar(con, espacios, terminales, carpeta, en_curso, ahora):
+    """[(id, terminales)] de los hijos de la carpeta del plugin que se pueden quitar: con
+    `::workspace:` (la raiz no), quietos desde hace LIMPIEZA_GRACIA_S (un sello que no se
+    lee es no saber, y no se toca), fuera de una corrida en vuelo y sin el agente de casos
+    ni un despacho en vuelo adentro. Primero lo que menos se intento."""
+    por_espacio = {}
+    for t in terminales:
+        por_espacio.setdefault(t.get("worktreeId"), []).append(t)
+    vuelo_espacios, vuelo_terminales = en_vuelo_del_plugin(con)
+    intentos = intentos_de_limpieza(con)
     hallados = []
-    for c in corridas:
-        if not isinstance(c, dict) or c.get("status") in ESTADOS_EN_CURSO:
+    for w in espacios:
+        ident = w.get("id")
+        if not isinstance(ident, str) or MARCA_ESPACIO not in ident \
+                or ruta_comparable(w.get("path")) != carpeta:
             continue
-        espacio = c.get("workspaceId")
-        if not isinstance(espacio, str) or MARCA_ESPACIO not in espacio:
+        suyas = por_espacio.get(ident, [])
+        if ident in en_curso or ident in vuelo_espacios \
+                or any(t.get("handle") in vuelo_terminales for t in suyas):
             continue
-        marcas = [c.get(k) for k in ("dispatchedAt", "startedAt", "createdAt")
-                  if isinstance(c.get(k), (int, float))]
-        if not marcas or ahora - max(marcas) / 1000 < LIMPIEZA_GRACIA_S:
+        marcas = [m for m in [marca_s(w.get(k)) for k in ("createdAt", "sortOrder",
+                                                          "lastActivityAt")]
+                  + [marca_s(t.get("lastOutputAt")) for t in suyas] if m]
+        if not marcas or ahora - max(marcas) < LIMPIEZA_GRACIA_S:
             continue
-        if espacio not in hallados:
-            hallados.append(espacio)
-    return hallados
+        hallados.append((ident, suyas))
+    return sorted(hallados, key=lambda h: intentos.get(h[0], 0))
 
 
 def tick_limpia(con, resumen):
-    """Quita de la barra lateral los espacios de las corridas de `triage` que ya terminaron.
-    Cierra en silencio: sin CLI o con un error el tick sigue y lo cuenta en
-    `limpieza_error`. Lo ya quitado (o rendido tras varios intentos) queda en `settings`,
-    para que los mismos primeros ids no acaparen el tope."""
+    """Quita de la barra lateral los espacios que dejan las corridas del plugin, y dice en
+    `limpieza_atascados` cuantos no se pudieron quitar. Sin CLI o con un error el tick sigue
+    y lo cuenta en `limpieza_error`."""
+    try:
+        limpia_espacios(con, resumen)
+    finally:
+        resumen["limpieza_atascados"] = espacios_atascados(con)
+
+
+def limpia_espacios(con, resumen):
     ahora = time.time()
     fila = con.execute("select value from settings where key='limpieza_at'").fetchone()
     try:
@@ -4949,53 +5055,68 @@ def tick_limpia(con, resumen):
             return
     except (TypeError, ValueError):
         pass
-    con.execute("insert into settings (key,value) values ('limpieza_at',?) on conflict(key) "
-                "do update set value=excluded.value", (str(ahora),))
+    guarda_ajuste(con, "limpieza_at", str(ahora))
+    # La marca de antes daba por quitado lo que `rm` dijo quitar: no vale como intento.
+    con.execute("delete from settings where key='limpieza_hecha'")
     con.commit()
     cli = orca_cli_path()
     if not cli:
         resumen["limpieza_error"] += 1
         return
-    lista = orca_json(cli, ["automations", "list"])
-    automatizaciones = ((lista or {}).get("result") or {}).get("automations")
-    if not lista or lista.get("ok") is False or not isinstance(automatizaciones, list):
+    automatizaciones = lista_de_orca(cli, ["automations", "list"], "automations")
+    if automatizaciones is None:
         resumen["limpieza_error"] += 1
         return
+    carpeta = carpeta_del_plugin(automatizaciones)
+    if not carpeta:
+        return
+    en_curso = set()
     triage = (id_triage(automatizaciones) or {}).get("id")
-    if not triage:
-        return
-    corridas = orca_json(cli, ["automations", "runs", "--id", triage])
-    lista_corridas = ((corridas or {}).get("result") or {}).get("runs")
-    if not corridas or corridas.get("ok") is False or not isinstance(lista_corridas, list):
+    if triage:
+        corridas = lista_de_orca(cli, ["automations", "runs", "--id", triage], "runs")
+        if corridas is None:
+            resumen["limpieza_error"] += 1
+            return
+        en_curso = {c.get("workspaceId") for c in corridas if c.get("status") in ESTADOS_EN_CURSO}
+    espacios = lista_de_orca(cli, ["worktree", "list", "--limit", "1000"], "worktrees")
+    terminales = lista_de_orca(cli, ["terminal", "list", "--limit", "1000"], "terminals") \
+        if espacios is not None else None
+    if espacios is None or terminales is None:
         resumen["limpieza_error"] += 1
         return
-    fila = con.execute("select value from settings where key='limpieza_hecha'").fetchone()
-    try:
-        hecho = json.loads(fila["value"]) if fila else {}
-    except (TypeError, ValueError):
-        hecho = {}
-    if not isinstance(hecho, dict):
-        hecho = {}
-    intentos = 0
-    for espacio in espacios_a_limpiar(lista_corridas, ahora):
-        if hecho.get(espacio, 0) >= LIMPIEZA_INTENTOS:
-            continue
-        if intentos >= LIMPIEZA_TOPE:
+    candidatos = espacios_a_limpiar(con, espacios, terminales, carpeta, en_curso, ahora)
+    intentos = intentos_de_limpieza(con)
+    tocados = []
+    for ident, suyas in candidatos:
+        if len(tocados) >= LIMPIEZA_TOPE or time.time() - ahora > LIMPIEZA_PRESUPUESTO_S:
             break
-        intentos += 1
-        r = orca_json(cli, ["worktree", "rm", "--worktree", f"id:{espacio}"])
-        if r is not None and r.get("ok") is True:
-            hecho[espacio] = LIMPIEZA_INTENTOS
-            resumen["limpiados"] += 1
-        else:
-            hecho[espacio] = hecho.get(espacio, 0) + 1
+        tocados.append(ident)
+        # Primero sus terminales: con una viva adentro, `rm` dijo que si y el espacio quedo.
+        for t in suyas:
+            if isinstance(t.get("handle"), str) and t["handle"]:
+                orca_json(cli, ["terminal", "close", "--terminal", t["handle"]])
+        orca_json(cli, ["worktree", "rm", "--worktree", f"id:{ident}"])
+    quedan = None
+    if tocados:
+        despues = lista_de_orca(cli, ["worktree", "list", "--limit", "1000"], "worktrees")
+        if despues is None:
             resumen["limpieza_error"] += 1
-    # Solo lo que sigue en la lista de corridas: Orca poda las viejas y esto no crece.
-    vigentes = {c.get("workspaceId") for c in lista_corridas if isinstance(c, dict)}
-    hecho = {k: v for k, v in hecho.items() if k in vigentes}
-    con.execute("insert into settings (key,value) values ('limpieza_hecha',?) on conflict(key) "
-                "do update set value=excluded.value", (json.dumps(hecho, sort_keys=True),))
-    con.commit()
+        else:
+            quedan = {w.get("id") for w in despues}
+    for ident in tocados if quedan is not None else []:
+        if ident in quedan:
+            intentos[ident] = intentos.get(ident, 0) + 1
+            resumen["limpieza_error"] += 1
+        else:
+            intentos.pop(ident, None)
+            resumen["limpiados"] += 1
+    # Solo lo que sigue en la lista: lo que ya no esta no se cuenta, y esto no crece.
+    vigentes = {w.get("id") for w in espacios} if quedan is None else quedan
+    guarda_ajuste(con, "limpieza_intentos", json.dumps(
+        {k: v for k, v in intentos.items() if k in vigentes}, sort_keys=True))
+    # Con pendientes que todavia no se intentaron, la vuelta siguiente es al minuto.
+    if any(i not in tocados and intentos.get(i, 0) < LIMPIEZA_INTENTOS for i, _ in candidatos):
+        guarda_ajuste(con, "limpieza_at", str(ahora - LIMPIEZA_CADA_S + LIMPIEZA_SIGUE_S))
 
 
 def tick_toma():
@@ -5232,7 +5353,11 @@ def cmd_tick(con, a):
             print(f"wa-scope: board not published: {exc}", file=sys.stderr)
         # Lo ultimo y sin que pueda tumbar el tick: lo que importa ya salio.
         try:
+            atascados = espacios_atascados(con)
             tick_limpia(con, resumen)
+            # El tablero ya salio: si cambio lo que no se pudo quitar, sale otra vez.
+            if resumen["limpieza_atascados"] != atascados:
+                publica_tablero(con)
         except (OSError, sqlite3.Error, subprocess.SubprocessError, ValueError):
             if con.in_transaction:
                 con.rollback()

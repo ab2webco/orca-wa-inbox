@@ -3347,49 +3347,104 @@ with tempfile.TemporaryDirectory() as home:
     ok("un caso cerrado no cambia de proyecto: E_STAGE",
        p.returncode != 0 and "E_STAGE" in p.stderr, p.stderr)
 
-# ── El tick limpia los espacios de trabajo que deja `triage` ─────────────────────────
-# Orca crea un espacio por corrida (`new_per_run`) y nunca lo cierra. El tick, a lo mas
-# cada 5 minutos, mira las corridas de la automatizacion de este plugin y quita de la
-# barra lateral las que ya terminaron: nunca la raiz, nunca una corrida en vuelo, nunca
-# una de hace menos de 2 minutos, y no mas de 5 por vuelta. Todo con una CLI de mentira.
-print("\nel tick limpia los espacios de las corridas terminadas")
-RAIZ_WS = "repo-demo::carpeta-demo"
+# ── El tick limpia los espacios que dejan las corridas del plugin ─────────────────────
+# Orca crea un espacio por corrida de un plugin (`new_per_run`), con una terminal de shell
+# adentro, y nunca lo cierra. El tick, a lo mas cada 5 minutos (al minuto si quedan), mira
+# `worktree list` y quita todo hijo `::workspace:` de la carpeta del plugin pasada la
+# gracia, sea de la automatizacion de ahora o de una que Orca borro y recreo: cierra sus
+# terminales, `worktree rm`, y vuelve a listar. Visto en vivo: `rm` dijo `removed: true` y
+# el espacio seguia ahi. Nunca la raiz, otro plugin, una corrida en vuelo, ni el espacio
+# del agente de casos o de un despacho en vuelo. Todo con una CLI de mentira.
+print("\nel tick limpia los espacios del plugin")
+CARPETA_PLUGIN = "/srv/demo/plugin-workspaces/ab2web.orca-wa-inbox"
+CARPETA_OTRO = "/srv/demo/plugin-workspaces/otro.plugin"
+RAIZ_WS = f"repo-demo::{CARPETA_PLUGIN}"
+AUTOS_PLUGIN = [
+    {"id": "auto-otra", "pluginOrigin": {"pluginKey": "otro.plugin", "automationId": "triage"},
+     "runContext": {"kind": "workspace-run", "repoId": "repo-demo", "path": CARPETA_OTRO}},
+    {"id": "auto-tick", "pluginOrigin": {"pluginKey": "ab2web.orca-wa-inbox",
+                                         "automationId": "tick"},
+     "runContext": {"kind": "workspace-run", "repoId": "repo-demo", "path": CARPETA_PLUGIN}},
+    {"id": "auto-triage", "pluginOrigin": {"pluginKey": "ab2web.orca-wa-inbox",
+                                           "automationId": "triage"},
+     "runContext": {"kind": "workspace-run", "repoId": "repo-demo", "path": CARPETA_PLUGIN}}]
 
 
 def ws(sufijo):
     return f"{RAIZ_WS}::workspace:{sufijo}"
 
 
-def orca_falso(carpeta, corridas, automatizaciones=None):
-    """Una `orca` de mentira: guarda cada llamada en calls.log y contesta lo que se le dio."""
+def ms_hace(segundos):
+    return int((time.time() - segundos) * 1000)
+
+
+def wt(sufijo, hace_s=600, carpeta=CARPETA_PLUGIN, raiz=False):
+    """Un espacio como lo lista `worktree list`: la raiz de la carpeta o un hijo."""
+    ident = f"repo-demo::{carpeta}" + ("" if raiz else f"::workspace:{sufijo}")
+    return {"id": ident, "repoId": "repo-demo", "path": carpeta, "isArchived": False,
+            "displayName": "WA Inbox (plugin)", "isMainWorktree": False,
+            "sortOrder": ms_hace(hace_s), "lastActivityAt": ms_hace(hace_s)}
+
+
+def term(handle, espacio, hace_s=600):
+    return {"handle": handle, "worktreeId": espacio, "liveness": "running",
+            "lastOutputAt": ms_hace(hace_s)}
+
+
+def orca_falso(carpeta, corridas=(), automatizaciones=None, worktrees=None, terminales=(),
+               pegados=(), trunca=False):
+    """Una `orca` de mentira con estado: `worktree rm` quita el espacio de la lista (salvo
+    los `pegados`, que contestan `removed: true` y siguen ahi, como en vivo) y `terminal
+    close` quita la terminal. Anota cada llamada en calls.log."""
     carpeta = pathlib.Path(carpeta)
-    lista = automatizaciones if automatizaciones is not None else [
-        {"id": "auto-otra", "pluginOrigin": {"pluginKey": "otro.plugin",
-                                            "automationId": "triage"}},
-        {"id": "auto-triage", "pluginOrigin": {"pluginKey": "ab2web.orca-wa-inbox",
-                                               "automationId": "triage"}}]
-    (carpeta / "list.json").write_text(json.dumps(
-        {"ok": True, "result": {"automations": lista}}), encoding="utf-8")
-    (carpeta / "runs.json").write_text(json.dumps(
-        {"ok": True, "result": {"runs": corridas}}), encoding="utf-8")
+    (carpeta / "estado.json").write_text(json.dumps({
+        "automations": AUTOS_PLUGIN if automatizaciones is None else automatizaciones,
+        "runs": list(corridas),
+        "worktrees": [wt("", raiz=True)] if worktrees is None else list(worktrees),
+        "terminals": list(terminales), "pegados": list(pegados), "trunca": trunca}),
+        encoding="utf-8")
     exe = carpeta / "orca"
     exe.write_text("""#!/usr/bin/env python3
 import json, os, sys
 d = os.path.dirname(os.path.abspath(__file__))
 a = sys.argv[1:]
 open(os.path.join(d, "calls.log"), "a").write(" ".join(a) + "\\n")
-if a[:2] == ["automations", "list"]:
-    print(open(os.path.join(d, "list.json")).read())
-elif a[:2] == ["automations", "runs"]:
-    print(open(os.path.join(d, "runs.json")).read())
-elif a[:2] == ["worktree", "rm"]:
-    print(json.dumps({"ok": True, "result": {"removed": True}}))
-else:
-    print(json.dumps({"ok": False, "error": {"code": "unknown"}}))
-    sys.exit(1)
+ruta = os.path.join(d, "estado.json")
+e = json.load(open(ruta))
+def valor(flag):
+    return a[a.index(flag) + 1] if flag in a else None
+def sale(x, code=0):
+    json.dump(e, open(ruta, "w"))
+    print(json.dumps(x)); sys.exit(code)
+clave = " ".join(a[:2])
+if clave == "automations list":
+    sale({"ok": True, "result": {"automations": e["automations"]}})
+if clave == "automations runs":
+    sale({"ok": True, "result": {"runs": e["runs"]}})
+if clave == "worktree list":
+    sale({"ok": True, "result": {"worktrees": e["worktrees"], "totalCount": len(e["worktrees"]),
+                                 "truncated": e["trunca"]}})
+if clave == "terminal list":
+    sale({"ok": True, "result": {"terminals": e["terminals"], "truncated": False}})
+if clave == "terminal close":
+    e["terminals"] = [t for t in e["terminals"] if t["handle"] != valor("--terminal")]
+    sale({"ok": True, "result": {"closed": True}})
+if clave == "worktree rm":
+    sel = (valor("--worktree") or "")[3:]
+    if sel not in e["pegados"]:
+        e["worktrees"] = [w for w in e["worktrees"] if w["id"] != sel]
+    sale({"ok": True, "result": {"removed": True}})
+sale({"ok": False, "error": {"code": "unknown"}}, 1)
 """, encoding="utf-8")
     exe.chmod(0o755)
     return exe
+
+
+def cambia_falso(carpeta, **cambios):
+    ruta = pathlib.Path(carpeta) / "estado.json"
+    e = json.loads(ruta.read_text(encoding="utf-8"))
+    e.update(cambios)
+    ruta.write_text(json.dumps(e), encoding="utf-8")
 
 
 def llamadas(carpeta):
@@ -3400,6 +3455,11 @@ def llamadas(carpeta):
 def quitados(carpeta):
     return [x.split("--worktree id:")[1].split()[0] for x in llamadas(carpeta)
             if x.startswith("worktree rm")]
+
+
+def quedan(carpeta):
+    return [w["id"] for w in json.loads(
+        (pathlib.Path(carpeta) / "estado.json").read_text(encoding="utf-8"))["worktrees"]]
 
 
 def corrida(sufijo, estado, hace_s, raiz=False):
@@ -3421,56 +3481,145 @@ def olvida_limpieza(home):
     con.close()
 
 
+def adelanta_limpieza(home, segundos):
+    con = db_de(home)
+    con.execute("update settings set value=cast(value as real) - ? where key='limpieza_at'",
+                (segundos,))
+    con.commit()
+    con.close()
+
+
 with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
-    orca_falso(carpeta, [
-        corrida("aaa", "completed", 600),
-        corrida("raiz", "completed", 600, raiz=True),
-        corrida("bbb", "dispatched", 600),
-        corrida("pend", "pending", 600),
-        corrida("nulo", "completed", 600),
-        corrida("ccc", "completed", 30),
-        corrida("ddd", "skipped_precheck", 600),
-        corrida("eee", "dispatch_failed", 600)])
+    orca_falso(carpeta, corridas=[
+        corrida("aaa", "completed", 600), corrida("raiz", "completed", 600, raiz=True),
+        corrida("bbb", "dispatched", 600), corrida("pend", "pending", 600),
+        corrida("nulo", "completed", 600), corrida("ccc", "completed", 30)],
+        worktrees=[wt("", raiz=True), wt("aaa"), wt("bbb"), wt("pend"), wt("ccc", 30),
+                   # De una automatizacion que Orca borro y recreo: ninguna corrida los nombra.
+                   wt("huerfano-1"), wt("huerfano-2", 3 * 3600), wt("reciente", 30),
+                   wt("x1", carpeta=CARPETA_OTRO), wt("activo"), wt("con-shell")],
+        terminales=[term("term_activo", ws("activo"), 10),
+                    term("term_shell", ws("con-shell"), 900),
+                    term("term_raiz", RAIZ_WS, 900)])
     p, r = tick_con(home, carpeta)
     ok("el tick sale 0", p.returncode == 0, p.stderr[-300:])
-    ok("quita solo las terminadas con espacio propio y de hace mas de 2 minutos",
-       sorted(quitados(carpeta)) == sorted([ws("aaa"), ws("ddd"), ws("eee")]),
-       f"{quitados(carpeta)}")
-    ok("nunca la raiz, ni una corrida en vuelo, ni una sin espacio, ni una reciente",
-       not any(x in quitados(carpeta) for x in (RAIZ_WS, ws("bbb"), ws("pend"), ws("ccc"))))
-    ok("busca la automatizacion de ESTE plugin: la `runs` es de la suya",
-       any(x.startswith("automations runs") and "auto-triage" in x
-           and "auto-otra" not in x for x in llamadas(carpeta)), f"{llamadas(carpeta)}")
-    ok("la linea del tick cuenta lo limpiado y no dice nada del espacio",
-       r.get("limpiados") == 3 and r.get("limpieza_error") == 0
-       and "aaa" not in p.stdout and "carpeta-demo" not in p.stdout, p.stdout[-300:])
+    ok("quita las corridas terminadas y los hijos de la carpeta que ninguna corrida nombra",
+       sorted(quitados(carpeta)) == sorted([ws("aaa"), ws("huerfano-1"), ws("huerfano-2"),
+                                            ws("con-shell")]), f"{quitados(carpeta)}")
+    ok("nunca la raiz, otro plugin, una corrida en vuelo, ni algo de hace menos de 2 minutos",
+       not any(x in quitados(carpeta) for x in (
+           RAIZ_WS, wt("x1", carpeta=CARPETA_OTRO)["id"], ws("bbb"), ws("pend"), ws("ccc"),
+           ws("reciente"))), f"{quitados(carpeta)}")
+    ok("ni un espacio con una terminal que escribio hace poco",
+       ws("activo") not in quitados(carpeta)
+       and not any("term_activo" in x for x in llamadas(carpeta)), f"{llamadas(carpeta)}")
+    orden = [x for x in llamadas(carpeta) if "term_shell" in x or ws("con-shell") in x]
+    ok("cierra la terminal del espacio antes de quitarlo",
+       len(orden) == 2 and orden[0].startswith("terminal close --terminal term_shell")
+       and orden[1].startswith("worktree rm"), f"{orden}")
+    ok("la terminal de la raiz no se toca", not any("term_raiz" in x for x in llamadas(carpeta)))
+    ok("vuelve a listar despues de quitar: verifica",
+       [x.split()[:2] for x in llamadas(carpeta)].count(["worktree", "list"]) == 2
+       and llamadas(carpeta)[-1].startswith("worktree list"), f"{llamadas(carpeta)}")
+    ok("busca la carpeta en las automatizaciones de ESTE plugin, y las corridas de la suya",
+       any(x.startswith("automations runs") and "auto-triage" in x for x in llamadas(carpeta))
+       and not any("auto-otra" in x for x in llamadas(carpeta)), f"{llamadas(carpeta)}")
+    ok("la linea del tick cuenta lo quitado y no dice nada del espacio",
+       r.get("limpiados") == 4 and r.get("limpieza_error") == 0
+       and r.get("limpieza_atascados") == 0
+       and "huerfano" not in p.stdout and "plugin-workspaces" not in p.stdout, p.stdout[-300:])
     antes = len(llamadas(carpeta))
     p, r = tick_con(home, carpeta)
     ok("un segundo tick enseguida no llama a la CLI", len(llamadas(carpeta)) == antes
        and r.get("limpiados") == 0, f"{len(llamadas(carpeta))} vs {antes}")
     olvida_limpieza(home)
     p, r = tick_con(home, carpeta)
-    ok("pasado el plazo vuelve a mirar, pero no quita dos veces el mismo",
-       len(quitados(carpeta)) == 3 and len(llamadas(carpeta)) == antes + 2
-       and r.get("limpiados") == 0, f"{quitados(carpeta)} {r}")
-    # La corrida de ahora mismo sigue en vuelo y mas tarde termina.
-    pathlib.Path(carpeta, "runs.json").write_text(json.dumps({"ok": True, "result": {"runs": [
-        corrida("bbb", "completed", 600), corrida("ccc", "completed", 600)]}}),
-        encoding="utf-8")
+    ok("pasado el plazo vuelve a mirar, y lo que ya no esta no se quita dos veces",
+       len(quitados(carpeta)) == 4 and r.get("limpiados") == 0, f"{quitados(carpeta)} {r}")
+    # La corrida en vuelo termina, y lo reciente pasa la gracia.
+    cambia_falso(carpeta, runs=[corrida("bbb", "completed", 600)],
+                 worktrees=[wt("", raiz=True), wt("bbb"), wt("reciente", 600)])
     olvida_limpieza(home)
     p, r = tick_con(home, carpeta)
     ok("lo que termino despues (y paso la gracia) se quita entonces",
-       sorted(quitados(carpeta)[3:]) == sorted([ws("bbb"), ws("ccc")]), f"{quitados(carpeta)}")
+       sorted(quitados(carpeta)[4:]) == sorted([ws("bbb"), ws("reciente")])
+       and r.get("limpiados") == 2, f"{quitados(carpeta)} {r}")
 
 with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
-    orca_falso(carpeta, [corrida(f"m{i}", "completed", 600 + i) for i in range(8)])
+    # Visto en vivo: `rm` contesta `removed: true` y el espacio sigue en la lista.
+    orca_falso(carpeta, worktrees=[wt("", raiz=True), wt("pegado"), wt("suelto")],
+               pegados=[ws("pegado")])
     p, r = tick_con(home, carpeta)
-    ok("no quita mas de 5 por vuelta", len(quitados(carpeta)) == 5 and r.get("limpiados") == 5,
-       f"{len(quitados(carpeta))} {r}")
+    ok("un rm que dice ok pero el espacio sigue listado no cuenta como quitado",
+       r.get("limpiados") == 1 and r.get("limpieza_error") == 1
+       and r.get("limpieza_atascados") == 0 and ws("pegado") in quedan(carpeta), f"{r}")
     olvida_limpieza(home)
     p, r = tick_con(home, carpeta)
-    ok("la vuelta siguiente sigue con los que faltan, sin repetir",
-       len(set(quitados(carpeta))) == 8 and len(quitados(carpeta)) == 8, f"{quitados(carpeta)}")
+    ok("y se reintenta en la vuelta siguiente", quitados(carpeta).count(ws("pegado")) == 2
+       and r.get("limpieza_atascados") == 0, f"{quitados(carpeta)} {r}")
+    olvida_limpieza(home)
+    p, r = tick_con(home, carpeta)
+    ok("al tercer intento fallido lo dice en la linea del tick",
+       quitados(carpeta).count(ws("pegado")) == 3 and r.get("limpieza_atascados") == 1,
+       f"{quitados(carpeta)} {r}")
+    atascados = (tablero(home).get("board") or {}).get("workspaces_stuck")
+    ok("y el tablero cuenta los espacios que no se pudieron quitar", atascados == 1,
+       f"{atascados}")
+    olvida_limpieza(home)
+    p, r = tick_con(home, carpeta)
+    ok("no se rinde: sigue intentando", quitados(carpeta).count(ws("pegado")) == 4
+       and r.get("limpieza_atascados") == 1, f"{quitados(carpeta)} {r}")
+    cambia_falso(carpeta, pegados=[])
+    olvida_limpieza(home)
+    p, r = tick_con(home, carpeta)
+    ok("cuando por fin se va, cuenta como quitado y deja de decirlo",
+       r.get("limpiados") == 1 and r.get("limpieza_atascados") == 0
+       and ws("pegado") not in quedan(carpeta)
+       and (tablero(home).get("board") or {}).get("workspaces_stuck") == 0, f"{r}")
+
+with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+    orca_falso(carpeta, worktrees=[wt("", raiz=True)] + [wt(f"m{i:02d}", 600 + i)
+                                                         for i in range(14)])
+    p, r = tick_con(home, carpeta)
+    ok("no quita mas de 10 por vuelta", len(quitados(carpeta)) == 10
+       and r.get("limpiados") == 10, f"{len(quitados(carpeta))} {r}")
+    antes = len(llamadas(carpeta))
+    tick_con(home, carpeta)
+    ok("en el mismo minuto no vuelve", len(llamadas(carpeta)) == antes)
+    adelanta_limpieza(home, 61)
+    p, r = tick_con(home, carpeta)
+    ok("con pendientes vuelve al minuto, no a los 5, y no repite",
+       len(quitados(carpeta)) == 14 and len(set(quitados(carpeta))) == 14
+       and r.get("limpiados") == 4, f"{quitados(carpeta)} {r}")
+    antes = len(llamadas(carpeta))
+    adelanta_limpieza(home, 61)
+    tick_con(home, carpeta)
+    ok("sin pendientes espera los 5 minutos", len(llamadas(carpeta)) == antes,
+       f"{llamadas(carpeta)[antes:]}")
+
+with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+    # El agente de casos vivo y un despacho en vuelo: su espacio no se toca nunca, aunque
+    # sea un hijo de la carpeta y lleve rato quieto.
+    orca_falso(carpeta, worktrees=[wt("", raiz=True), wt("agente"), wt("despacho"),
+                                   wt("suelto")],
+               terminales=[term("term_agente", ws("agente"), 900),
+                           term("term_despacho", ws("despacho"), 900)])
+    corre(home, "list")
+    con = db_de(home)
+    momento = time.strftime("%Y-%m-%d %H:%M:%S")
+    con.execute("insert into agente_corrida (origen, estado, workspace_selector, terminal, "
+                "turno_at, created_at, updated_at) values ('tick', 'activo', ?, 'term_agente', "
+                "?, ?, ?)", (f"id:{RAIZ_WS}", momento, momento, momento))
+    con.execute("insert into caso_despacho (case_id, evento_id, workspace_selector, terminal, "
+                "estado, created_at, updated_at) values (9999, 1, ?, 'term_otro', 'activo', ?, ?)",
+                (f"id:{ws('despacho')}", momento, momento))
+    con.commit()
+    con.close()
+    p, r = tick_con(home, carpeta)
+    ok("el espacio de la terminal del agente de casos y el de un despacho no se tocan",
+       quitados(carpeta) == [ws("suelto")]
+       and not any("term_agente" in x or "term_despacho" in x for x in llamadas(carpeta)
+                   if not x.startswith("terminal list")), f"{llamadas(carpeta)}")
 
 with tempfile.TemporaryDirectory() as home:
     p = corre(home, "tick")
@@ -3480,16 +3629,23 @@ with tempfile.TemporaryDirectory() as home:
        f"{p.returncode} {p.stdout[-200:]} {p.stderr[-200:]}")
 
 with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
-    orca_falso(carpeta, [corrida("zzz", "completed", 600)], automatizaciones=[
-        {"id": "auto-otra", "pluginOrigin": {"pluginKey": "otro.plugin",
-                                            "automationId": "triage"}}])
+    orca_falso(carpeta, worktrees=[wt("", raiz=True), wt("zzz")], automatizaciones=[
+        AUTOS_PLUGIN[0], {"id": "auto-triage", "pluginOrigin": {
+            "pluginKey": "ab2web.orca-wa-inbox", "automationId": "triage"}}])
     p, r = tick_con(home, carpeta)
-    ok("sin la automatizacion de este plugin no quita nada y sale 0",
+    ok("sin la carpeta del plugin (ninguna automatizacion la dice) no quita nada y sale 0",
        p.returncode == 0 and quitados(carpeta) == [] and r.get("limpiados") == 0,
        f"{quitados(carpeta)} {r}")
 
 with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
-    exe = orca_falso(carpeta, [corrida("yyy", "completed", 600)])
+    orca_falso(carpeta, worktrees=[wt("", raiz=True), wt("zzz")], trunca=True)
+    p, r = tick_con(home, carpeta)
+    ok("con la lista de espacios incompleta no quita nada y lo cuenta",
+       p.returncode == 0 and quitados(carpeta) == [] and r.get("limpieza_error") == 1,
+       f"{quitados(carpeta)} {r}")
+
+with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+    exe = orca_falso(carpeta, worktrees=[wt("", raiz=True), wt("yyy")])
     exe.write_text("#!/bin/sh\nexit 3\n", encoding="utf-8")
     p, r = tick_con(home, carpeta)
     ok("una CLI que falla deja el tick en 0 y cuenta el error",

@@ -9,11 +9,17 @@ instalado y viceversa.
 | `whatsapp-tick.json` | 1 min | `wa-scope tick` (solo comando, sin agente) |
 | `whatsapp-triage.json` | 5 min, a toda hora (y al instante con "Atender ahora") | agente, con precheck `wa-scope pending --needs-agent --precheck` |
 
-`tick` también limpia: a lo sumo cada 5 minutos quita de la barra lateral (`orca worktree
-rm`, solo el registro y sus terminales, nunca los archivos ni la raíz de la carpeta) los
-espacios `::workspace:` que `triage` deja en cada corrida ya terminada, 5 por vuelta como
-máximo y 2 minutos después de que acabó. Sin la CLI de Orca, o con un error, no hace nada
-y lo cuenta en `limpieza_error`.
+`tick` también limpia: a lo sumo cada 5 minutos (al minuto si le quedaron pendientes)
+quita de la barra lateral (`orca worktree rm`, solo el registro, nunca los archivos ni la
+raíz de la carpeta) todo hijo `::workspace:` de la carpeta del plugin que lista `orca
+worktree list`, sea de la automatización de ahora o de una que Orca borró y recreó: 10
+por vuelta como máximo, 2 minutos después de su última actividad, nunca el de una corrida
+en vuelo ni el que aloja la terminal del agente de casos o de un despacho en vuelo.
+Primero cierra sus terminales (`orca terminal close`), después lo quita y vuelve a listar:
+en vivo `rm` contestó `removed: true` y el espacio seguía ahí. Lo que sigue en la lista
+cuenta un intento y se reintenta; a los 3 lo dice `limpieza_atascados` en la línea del
+tick y el tablero ("N espacios del plugin no se pudieron quitar"). Sin la CLI de Orca, o
+con un error, no hace nada y lo cuenta en `limpieza_error`.
 
 `tick` es un comando, no un agente (`orca automations create --command` en un Orca
 1.4.160-lab.84 o más nuevo), pero despierta a dos:

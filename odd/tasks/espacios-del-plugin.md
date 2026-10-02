@@ -36,7 +36,7 @@
 
 - [x] T1 `pending --needs-agent --precheck` y el manifiesto (orca-plugin.json,
   automations/, resolver_formas) con el precheck nuevo.
-- [ ] T2 La limpieza por `worktree list`, con terminales cerradas antes, verificacion y
+- [x] T2 La limpieza por `worktree list`, con terminales cerradas antes, verificacion y
   reintentos contados.
 - [ ] T3 El tablero: `workspaces_stuck` y "N espacios del plugin no se pudieron quitar".
 
