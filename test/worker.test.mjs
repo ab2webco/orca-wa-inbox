@@ -408,19 +408,25 @@ console.log('\nworker: el arnes de la carpeta del plugin')
   const agentes = lee('AGENTS.md')
   for (const [nombre, frase] of [
     ['la credencial', 'credential never passes through the agent'],
-    ['el permiso responder', 'Without the `responder` permission nothing is sent'],
-    ['la duda', 'When in doubt, no card is opened'],
-    ['ninguno', '`ninguno` conversation never opens a card'],
+    ['no enviar', 'You never send anything on WhatsApp'],
+    ['la duda', 'When in doubt, you propose nothing'],
+    ['las promesas', 'Never promise a date or a price'],
     ['el tono', 'come from `wa-scope voice`']
   ]) {
     ok(`el AGENTS.md sembrado lleva la regla de ${nombre}`, agentes.includes(frase))
+  }
+  // El arnes describe el modelo de casos: ningun archivo sembrado manda al dueno a botones
+  // que ya no existen.
+  for (const n of ['AGENTS.md', 'CLASSIFICATION.md', 'COMMANDS.md', 'EXAMPLES.md']) {
+    ok(`el ${n} sembrado ya no habla de Take or Ignore`,
+      !/Take or Ignore|only-taken|take lock/i.test(lee(n)))
   }
   // El orquestador: por caso, o redacta la respuesta o despacha el pedido al proyecto, y
   // nunca envia el mismo.
   for (const [nombre, frase] of [
     ['la lista de proyectos', 'PROJECTS.md'],
-    ['despachar al proyecto', 'dispatch the requirement to the project'],
-    ['no enviar por WhatsApp', 'never send on WhatsApp'],
+    ['despachar al proyecto', '**Dispatch** when answering needs work in a codebase'],
+    ['no enviar por WhatsApp', 'You propose; you never send.'],
     ['reportar el resultado', 'wa-scope caso resultado']
   ]) {
     ok(`el AGENTS.md sembrado lleva el orquestador: ${nombre}`, agentes.includes(frase),

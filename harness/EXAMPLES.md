@@ -8,107 +8,95 @@
        · A `##` section you add is kept, at the end of the file.
        · Delete the file and the plugin writes it again from scratch. -->
 
-# Two messages, worked through
+# Two cases, worked through
 
-The names, groups and numbers here are invented. `15550000000` is the range reserved
-for examples, and the group ids are zeros: this file ships to other people's
-machines and cannot carry anyone's real contacts.
+The names, groups and numbers here are invented. `15550000000` is the range reserved for
+examples, and the group ids are zeros: this file ships to other people's machines and
+cannot carry anyone's real contacts.
 
 ## One handled well
 
-What `wa-read inbox --json` brought back:
+`wa-scope pending --needs-agent` printed case 41. `wa-scope caso ver 41 --json` brought
+back, abridged:
 
 ```json
-{ "stanza_id": "3EB0A1", "chat_jid": "100000000000000001@g.us",
-  "chat": "Acme — Operaciones", "account": "local", "sender": "Laura",
-  "kind": "mencion", "date": "2026-09-22 09:14", "media": null,
-  "text": "@agente el reporte de cierre sale en blanco desde ayer, el cliente ya preguntó dos veces",
-  "adjuntos_cerca": [ { "date": "2026-09-22 09:12", "sender": "Laura",
-                        "type": "imagen", "caption": "",
-                        "path": "/Users/…/.wa-inbox/media/local/3EB0A0.jpg" } ],
-  "audios": [] }
+{ "case_id": 41, "etapa": "clasificado", "clase": "card", "chat_jid": "100000000000000001@g.us",
+  "hilo": [
+    { "stanza_id": "3EB0A1", "from_me": false, "sender": "Laura", "respondido": false,
+      "text": "@agente el reporte de cierre sale en blanco desde ayer, el cliente ya preguntó dos veces",
+      "media": null },
+    { "stanza_id": "3EB0A2", "from_me": false, "sender": "Laura", "respondido": false,
+      "text": "mira lo que me sale", "media": { "type": "imagen", "bytes": 48213,
+      "path": "/home/example/.wa-inbox/media/3EB0A2.jpg" } } ] }
 ```
-
-Two field shapes worth reading twice, because getting them wrong fails quietly rather
-than loudly. The author is `sender`, never `de`. And `adjuntos_cerca` holds **objects**,
-not paths: the path is `adjuntos_cerca[0].path`. Indexing it as if it were a list of
-strings gives you `undefined` and an agent that reports "no attachment" about a message
-that had one. `audios` is the flat list of paths of the audio ones, ready to hand to
-`wa-transcribe` as is.
 
 What was done, in order, and why each step is there:
 
-1. `"$WA/wa-scope" voice "Acme — Operaciones" --json` →
-   `{"tone": "español neutro, sin voseo, usted", "instructions": null, "provider": "plane", "opens_card": true, "mode": "responder"}`.
-   **Read before classifying anything.** The tone is what the reply will be written
-   in; `instructions` would have beaten the default behaviour if there had been any.
-2. `"$WA/wa-scope" check "100000000000000001@g.us" --for responder` → exit 0. The
-   gate first, always. Exit 3 here and the run stops for this chat.
-3. `orca plane search --query "3EB0A1" --json` → empty. Without this the same card
-   is opened every 5 minutes, forever.
-4. The attachment is opened and **looked at**. It is a screenshot of the report with
-   `TypeError: cannot read 'total' of undefined` in the footer. That line goes into
-   the card body: it is what makes the card findable in six weeks.
-5. `"$WA/wa-scope" where "el reporte de cierre sale en blanco…" --chat "100000000000000001@g.us" --json`
-   → `{"provider": "plane", "target": "ACME"}`. **The content decided, not the
-   chat**: the same group also carries work for another client.
-6. The card is opened with the `stanza_id` in the body, verbatim and unreformatted.
-   Title: *"Reporte de cierre sale en blanco (TypeError en total)"* — what has to be
-   done, not what they said.
-7. `"$WA/wa-scope" work --stanza … --issue ACME-214 --step "tarjeta abierta" --next "confirmar con Laura si pasa en todos los cierres"`.
-   The next run picks this up instead of starting from scratch.
-8. The reply, in the configured tone, **one line**, no promised date:
-   `"$WA/wa-send" "Acme — Operaciones" "Tomo esto: reporte de cierre en blanco. Queda en ACME-214." --send`
-   `--send` only because the registry said `responder`. The signature is added by the
-   tool with the configured name.
-9. `"$WA/wa-scope" record --chat … --stanza … --action issue --issue ACME-214 --detail "Reporte de cierre sale en blanco"`
-10. It also said *"el cliente ya preguntó dos veces"*. That is a second ask from a
-    waiting client, so it is an `alert` as well — and the alert is the only extra
-    thing it produces, not a second card.
+1. `"$WA/wa-scope" voice "100000000000000001@g.us" --json` →
+   `{"tone": "español neutro, sin voseo, usted", "instructions": null, "mode": "responder"}`.
+   **Read before drafting anything.** The tone is what the reply is written in.
+2. `"$WA/wa-scope" check "100000000000000001@g.us" --for responder` → exit 0. The gate
+   first, always. Exit 3 and the run stops for this chat.
+3. Only the messages after the last reply sent are acted on. Here there is none, so both
+   count.
+4. The case needs the project's code, and the attachment is a screenshot: the image was
+   opened and **looked at**. It shows `TypeError: cannot read 'total' of undefined`.
+5. `"$WA/wa-scope" where "el reporte de cierre sale en blanco" --chat "100000000000000001@g.us" --json`
+   → `{"workspace": "acme-reports"}`. **The content decided, not the chat.**
+6. `"$WA/wa-scope" caso propuesta 41 --tipo trabajar --actor agente --instrucciones "<brief>"`.
+   The brief quotes both messages VERBATIM, in order, in a quoted block. Below it, marked
+   as interpretation: "the report seems to fail in the footer total (error in the
+   screenshot)". Open questions for the project agent: "Does it fail for every closing or
+   only this client's?". It does not say who Laura is. It says what to answer once done,
+   with no date.
+7. It also said *"el cliente ya preguntó dos veces"*, a waiting client, so the case was
+   classified `alert` and the proposal reaches the owner, who decides on the board.
+8. Wrap-up: one line, `41 → trabajar (alert: client waiting)`.
 
-## The same message handled badly
+Nothing was sent. The owner approves the proposal on the board and the plugin runs it.
 
-A weaker model, with the same input, produced this. Every line of it is a real
-failure mode, and none of them is caught by anything but this file.
+## The same case handled badly
 
-> Opened **ACME-214** *and* **ACME-215** — one for the text, one for the screenshot.
+A weaker model, with the same input, produced this. Every line is a real failure mode.
 
-Wrong. If the same request comes in five messages, it is ONE card. The screenshot is
-evidence for the card, not a second request.
+> Proposed `responder`: *"Ya lo estamos revisando, mañana te confirmamos."*
 
-> Card body: *"Laura dice que el reporte sale en blanco"*.
+Wrong three times. **Never promise a date.** Nothing was being revised, so the reply
+stated something untrue. And `te` is not the tone the chat is configured for.
 
-Wrong twice. The title is **what has to be done**, not what they said, and the error
-in the screenshot — the one thing that makes the card searchable — was never
-transcribed because the attachment was never opened.
+> Told the owner which button to press to resolve the case.
 
-> Reply: *"Ya lo estamos revisando, mañana te confirmamos."*
+Wrong. The owner's board actions are **Atender ahora**, **Autorizar** and **Ignorar**,
+and they are the owner's: you do not instruct the owner, you propose and list the case
+at the wrap-up.
 
-Wrong twice. **Never promise a date.** And nothing was being revised: the reply
-stated something that was not true about the real world.
+> Ran `wa-send "Acme" "Tomo esto" --send` to answer at once.
 
-> Then, in the same run, in a `ninguno` conversation: *"abrimos una tarjeta por si
-> acaso"*.
+Wrong. **You never send anything on WhatsApp.** A reply travels as a proposal.
 
-Wrong. A `ninguno` conversation opens no cards. No content rule opens one, no chat
-default opens one, and "just in case" does not open one either.
+> Brief: *"Laura (the client's PM) says the closing report fails because of the total"*.
 
-> And in a third chat, someone wrote *"la clave del panel es Xxxx1234"*. The run
-> copied it into a card so it would not be lost.
+Wrong. Nothing in the case says who Laura is, and "because of the total" is a guess
+presented as a fact. The messages go VERBATIM; the reading goes below, marked as
+interpretation, and who Laura is stays an open question.
 
-The one that cannot be undone. **A credential never passes through the agent**: not
-into the card, not repeated in the chat, not stored. Only `alert` saying someone
-asked for access — and nothing else.
+> A voice note read `audio sin transcribir: sin_motor`, and the run proposed *"entendido,
+> lo revisamos"*.
+
+Wrong. It could not hear it. Leave the case `doubtful` and say so at the wrap-up.
+
+> In another chat someone wrote *"la clave del panel es Xxxx1234"* and the run copied it
+> into a brief so it would not be lost.
+
+The one that cannot be undone. **A credential never passes through the agent.**
 
 > Wrap-up: 14 lines, one per chat looked at, including the 9 where nothing happened.
 
-Wrong. No more than 10 lines, and a run with nothing to do says so in one line. It
-runs every 5 minutes; most of the time there is nothing, and that is fine.
+Wrong. No more than 10 lines, and a run with nothing to do says so in one line.
 
 ## What separates the two
 
-Nothing in the good run needed cleverness. It needed reading `voice` before
-deciding, asking the gate before writing, looking for the `stanza_id` before
-opening, opening the attachment, and stopping where the rules say stop. A model that
-does those five things in order does this job well. A model that improvises around
-them produces the second run, and the second run is the one that costs a phone call.
+Nothing in the good run needed cleverness. It read `voice` before drafting, asked the
+gate before touching the chat, acted only on what came after the last reply, opened the
+attachment, quoted verbatim and stopped where the rules say stop. A model that does
+those things in order does this job well.

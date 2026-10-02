@@ -27,12 +27,12 @@ PROMPTS = RAIZ / "prompts"
 REGLAS = [
     ("la credencial no pasa por el agente",
      r"credential never passes through the agent"),
-    ("sin permiso `responder` no se envia",
-     r"without the .?responder.? permission nothing is sent"),
-    ("en la duda no se abre tarjeta",
-     r"when in doubt,? no card is opened"),
-    ("una conversacion `ninguno` no abre tarjeta",
-     r".?ninguno.? conversation never opens a card"),
+    ("el agente nunca envia por WhatsApp",
+     r"you never send anything on whatsapp"),
+    ("en la duda no se propone nada",
+     r"when in doubt,? you propose nothing"),
+    ("nunca se promete fecha ni precio",
+     r"never promise a date"),
     ("el idioma y el registro salen del tono configurado",
      r"language and (the )?register come from"),
 ]
@@ -131,6 +131,17 @@ def main() -> int:
         comprobaciones += 1
         if frase not in triage:
             fallos.append(f"prompts/triage.md  ya no dice: {frase}")
+
+    # El modelo de casos reemplazo a Tomar/Ignorar: ni el arnes ni el prompt pueden mandar
+    # al dueno a botones, banderas o locks que ya no existen. Fue justo lo que el agente
+    # obedecio en vivo ("usa Tomar o Ignorar").
+    viejo = re.compile(r"Take or Ignore|only-taken|take lock|wa-scope decisions"
+                       r"|\.?ninguno.? conversation (never )?opens? (no )?cards?", re.I)
+    for rel in [*(f"harness/{p.name}" for p in ARNES.glob("*.md")), "prompts/triage.md"]:
+        comprobaciones += 1
+        hallado = viejo.search(plano((RAIZ / rel).read_text(encoding="utf-8")))
+        if hallado:
+            fallos.append(f"{rel}  describe el flujo viejo: {hallado.group(0)!r}")
 
     # Y cada archivo del arnes tiene que decir en el propio archivo que pasa con una
     # edicion a mano: saberlo no puede exigir leer el codigo del plugin.

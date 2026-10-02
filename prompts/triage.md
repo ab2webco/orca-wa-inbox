@@ -159,10 +159,10 @@ Each `hilo` message with an attachment carries `media` (`type`, `bytes` and the 
 
 **Obey the `tone` to the letter** in every reply you draft, and follow the conversation's
 `instructions` for what to do there. They never move the five hard rules: a credential
-never passes through the agent; when in doubt, no card is opened; without the
-`responder` permission nothing is sent by you or anyone on your behalf; a `ninguno`
-conversation never opens a card; and the language and register come from this `tone`,
-not from your habits.
+never passes through the agent; you never send anything on WhatsApp (a reply is a
+proposal, and only the plugin sends it); when in doubt, you propose nothing; never
+promise a date or a price; and the language and register come from this `tone`, not
+from your habits.
 
 ## STEP 3 — One decision per case
 

@@ -4445,7 +4445,7 @@ def main():
     s = add("pending", help="is there work, from the last sync; 0 = yes, 1 = nothing "
                             "to do, 2 = blocked (for the precheck)")
     s.add_argument("--only-taken", action="store_true",
-                   help="only counts what was marked by hand with Take")
+                   help=argparse.SUPPRESS)  # legacy precheck of the removed manual-mark flow
     s.add_argument("--needs-agent", action="store_true",
                    help="the agent automation's precheck: 0 (and the case ids) only when "
                         "an open case needs language; 1, silent, otherwise")
