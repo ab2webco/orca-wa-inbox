@@ -16,7 +16,7 @@ import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { leerCatalogo, limpiarLinea } from './catalogo.mjs'
 
@@ -33,6 +33,15 @@ const MARCA_HELP = '<!-- HARNESS:HELP -->'
  *  lista, sin respetar ediciones: lo que contiene no lo escribe nadie a mano, es una
  *  copia de los ajustes. */
 export const ARCHIVO_PROYECTOS = 'PROJECTS.md'
+/** El archivo con la ruta del `bin/` de ESTE plugin, una linea. Lo generan la siembra (que
+ *  corre en cada activacion y en cada cambio del catalogo) y lo leen el prompt de triage y
+ *  los comandos de las automatizaciones, que corren en esta misma carpeta: es la unica
+ *  fuente de la ruta, en vez de un resolvedor copiado en cinco sitios. */
+export const ARCHIVO_BIN = '.wa-bin'
+/** Donde viven las skills del agente dentro de la carpeta de trabajo: Claude Code las lee
+ *  de `.claude/skills/<nombre>/SKILL.md`. En el repo salen de `harness/skills/`. */
+const SKILLS_REPO = 'skills'
+const SKILLS_DESTINO = join('.claude', 'skills')
 
 /** El archivo que Orca deja en SU userData para decir por donde contesta. Aca solo se
  *  usa como senal de "esta carpeta es un userData de Orca": es el mismo marcador que
@@ -306,9 +315,9 @@ function corre(cmd, args, timeoutMs = 20000) {
 // y lo que trae cada uno sale de argparse, no de una transcripcion: una bandera que
 // cambie se ve en la proxima siembra en vez de envejecer en silencio.
 const SUBCOMANDOS = ['voice', 'check', 'lock', 'unlock', 'work', 'closing', 'where',
-  'route', 'decisions', 'record', 'juicio', 'alert', 'config', 'agent', 'list', 'set',
-  'accounts', 'pending', 'run', 'sync', 'rotate', 'projects', 'caso', 'caso propuesta',
-  'caso resultado']
+  'route', 'record', 'juicio', 'alert', 'config', 'agent', 'list', 'set',
+  'accounts', 'pending', 'run', 'sync', 'rotate', 'projects', 'caso', 'caso ver',
+  'caso clasificar', 'caso mover', 'caso propuesta', 'caso resultado']
 
 /** La referencia de comandos, sacada del `--help` de las propias herramientas. */
 export async function referencia(toolsDir) {
@@ -386,6 +395,7 @@ export async function sembrar(pluginDir, toolsDir, proyectos = null) {
     const marcas = leerManifiesto(dir)
     sembrarArchivos({ fuente, dir, ayuda, motivoAyuda, marcas, archivos, nuevoManifiesto })
     sembrarGenerado({ dir, proyectos, marcas, archivos, nuevoManifiesto })
+    sembrarBin({ dir, toolsDir: toolsDir || join(pluginDir, "bin"), archivos, nuevoManifiesto })
     writeFileSync(join(dir, MANIFIESTO),
       `${JSON.stringify({ plugin: manifiesto(pluginDir).key, version, at, files: nuevoManifiesto }, null, 2)}\n`,
       'utf8')
@@ -398,9 +408,20 @@ export async function sembrar(pluginDir, toolsDir, proyectos = null) {
 
 /** El grueso de la siembra, aparte para que `sembrar` pueda devolver el motivo en vez
  *  de lanzar: una carpeta que no se puede escribir no puede tumbar la activacion. */
+export function plantillasDelArnes(fuente) {
+  const planas = readdirSync(fuente).filter((f) => f.endsWith('.md')).sort()
+    .map((nombre) => ({ nombre, origen: join(fuente, nombre) }))
+  const raiz = join(fuente, SKILLS_REPO)
+  const skills = existsSync(raiz)
+    ? readdirSync(raiz).sort().filter((n) => existsSync(join(raiz, n, 'SKILL.md')))
+      .map((n) => ({ nombre: join(SKILLS_DESTINO, n, 'SKILL.md'), origen: join(raiz, n, 'SKILL.md') }))
+    : []
+  return [...planas, ...skills]
+}
+
 function sembrarArchivos({ fuente, dir, ayuda, motivoAyuda, marcas, archivos, nuevoManifiesto }) {
-  for (const nombre of readdirSync(fuente).filter((f) => f.endsWith('.md')).sort()) {
-    let plantilla = readFileSync(join(fuente, nombre), 'utf8')
+  for (const { nombre, origen } of plantillasDelArnes(fuente)) {
+    let plantilla = readFileSync(origen, 'utf8')
     if (plantilla.includes(MARCA_HELP)) {
       if (ayuda === null) {
         archivos.push({ name: nombre, action: 'sin-herramientas', detail: motivoAyuda })
@@ -412,6 +433,7 @@ function sembrarArchivos({ fuente, dir, ayuda, motivoAyuda, marcas, archivos, nu
       plantilla = plantilla.replace(MARCA_HELP, ayuda)
     }
     const destino = join(dir, nombre)
+    mkdirSync(dirname(destino), { recursive: true })
     const previo = existsSync(destino) ? readFileSync(destino, 'utf8') : null
     const anotadas = marcas[nombre]?.sections ?? {}
     const junto = previo === null
@@ -460,6 +482,20 @@ function sembrarGenerado({ dir, proyectos, marcas, archivos, nuevoManifiesto }) 
     yours: [], refreshed: [] })
 }
 
+/** `.wa-bin`: la ruta absoluta del `bin/` de este plugin, una linea. Se reescribe entero
+ *  cuando cambia: no lo edita nadie, es una copia de dato del worker. */
+function sembrarBin({ dir, toolsDir, archivos, nuevoManifiesto }) {
+  const destino = join(dir, ARCHIVO_BIN)
+  const texto = `${resolve(toolsDir)}\n`
+  const previo = existsSync(destino) ? readFileSync(destino, 'utf8') : null
+  let action = 'igual'
+  if (previo === null) action = 'creado'
+  else if (previo !== texto) action = 'actualizado'
+  if (action !== 'igual') writeFileSync(destino, texto, 'utf8')
+  nuevoManifiesto[ARCHIVO_BIN] = { generated: true, hash: huella(texto) }
+  archivos.push({ name: ARCHIVO_BIN, bytes: Buffer.byteLength(texto, 'utf8'), action,
+    yours: [], refreshed: [] })
+}
 
 // Y como subproceso: `node harness.mjs <pluginDir> <toolsDir>` imprime el mismo estado
 // que devuelve sembrar(). Es la unica forma de que el worker siembre — dentro de la

@@ -394,33 +394,55 @@ console.log('\nworker: el arnes de la carpeta del plugin')
   const carpeta = workspaceDir(PLUGIN_DIR)
   ok('siembra en la carpeta de trabajo del plugin', e && e.dir === carpeta,
     `${e && e.dir} != ${carpeta}`)
+  const lee = (n) => readFileSync(join(carpeta, n), 'utf8')
   const puestos = (e?.files ?? []).map((f) => f.name).sort()
   // PROJECTS.md es el quinto y es DISTINTO de los otros cuatro: no sale de harness/ sino
   // de la lista de proyectos que el dueno acepto en los ajustes. Se siembra siempre,
   // vacio incluido, porque el AGENTS.md lo nombra y un archivo nombrado que no existe es
   // una instruccion que el agente obedece sin obtener nada.
-  ok('deja los cuatro archivos del arnes y el generado de proyectos',
-    puestos.join(',') === 'AGENTS.md,CLASSIFICATION.md,COMMANDS.md,EXAMPLES.md,PROJECTS.md',
+  ok('deja los archivos del arnes, las dos skills, el CLAUDE.md y lo generado',
+    puestos.join(',') === ['.claude/skills/whatsapp-cli/SKILL.md',
+      '.claude/skills/whatsapp-soporte/SKILL.md', '.wa-bin', 'AGENTS.md', 'CLASSIFICATION.md',
+      'CLAUDE.md', 'COMMANDS.md', 'EXAMPLES.md', 'PROJECTS.md'].join(','),
     puestos.join(','))
+  // `.wa-bin`: la ruta del bin de ESTE plugin, una linea. Es la unica fuente de la que leen
+  // el prompt y las dos automations.
+  ok('siembra `.wa-bin` con la ruta de las herramientas que usa el worker',
+    lee('.wa-bin') === `${dir}\n`, JSON.stringify(lee('.wa-bin')))
+  // Las skills van donde Claude Code las lee, con un frontmatter valido.
+  for (const nombre of ['whatsapp-soporte', 'whatsapp-cli']) {
+    const skill = lee(`.claude/skills/${nombre}/SKILL.md`)
+    ok(`la skill ${nombre} se siembra con su frontmatter`,
+      skill.startsWith(`---\nname: ${nombre}\ndescription: `) && /\n---\n/.test(skill),
+      skill.slice(0, 120))
+    ok(`y ${nombre} no manda a Take or Ignore`, !/Take or Ignore|only-taken/i.test(skill))
+  }
+  ok('el CLAUDE.md sembrado apunta a AGENTS.md y a las skills',
+    /AGENTS\.md/.test(lee('CLAUDE.md')) && /whatsapp-soporte/.test(lee('CLAUDE.md')))
 
-  const lee = (n) => readFileSync(join(carpeta, n), 'utf8')
   // Las cinco reglas duras tienen que llegar al archivo que Orca le mete al contexto.
   const agentes = lee('AGENTS.md')
   for (const [nombre, frase] of [
     ['la credencial', 'credential never passes through the agent'],
-    ['el permiso responder', 'Without the `responder` permission nothing is sent'],
-    ['la duda', 'When in doubt, no card is opened'],
-    ['ninguno', '`ninguno` conversation never opens a card'],
+    ['no enviar', 'You never send anything on WhatsApp'],
+    ['la duda', 'When in doubt, you propose nothing'],
+    ['las promesas', 'Never promise a date or a price'],
     ['el tono', 'come from `wa-scope voice`']
   ]) {
     ok(`el AGENTS.md sembrado lleva la regla de ${nombre}`, agentes.includes(frase))
+  }
+  // El arnes describe el modelo de casos: ningun archivo sembrado manda al dueno a botones
+  // que ya no existen.
+  for (const n of ['AGENTS.md', 'CLASSIFICATION.md', 'COMMANDS.md', 'EXAMPLES.md']) {
+    ok(`el ${n} sembrado ya no habla de Take or Ignore`,
+      !/Take or Ignore|only-taken|take lock/i.test(lee(n)))
   }
   // El orquestador: por caso, o redacta la respuesta o despacha el pedido al proyecto, y
   // nunca envia el mismo.
   for (const [nombre, frase] of [
     ['la lista de proyectos', 'PROJECTS.md'],
-    ['despachar al proyecto', 'dispatch the requirement to the project'],
-    ['no enviar por WhatsApp', 'never send on WhatsApp'],
+    ['despachar al proyecto', '**Dispatch** when answering needs work in a codebase'],
+    ['no enviar por WhatsApp', 'You propose; you never send.'],
     ['reportar el resultado', 'wa-scope caso resultado']
   ]) {
     ok(`el AGENTS.md sembrado lleva el orquestador: ${nombre}`, agentes.includes(frase),
@@ -438,6 +460,9 @@ console.log('\nworker: el arnes de la carpeta del plugin')
 
   // ── segunda activacion: el usuario edito una seccion y agrego otra suya.
   const antes = lee('COMMANDS.md')
+  const rutaSkill = join(carpeta, '.claude', 'skills', 'whatsapp-soporte', 'SKILL.md')
+  const skillAntes = readFileSync(rutaSkill, 'utf8')
+  writeFileSync(rutaSkill, skillAntes.replace('## Tone', '## Tone\n\nMI TONO'))
   writeFileSync(join(carpeta, 'COMMANDS.md'),
     `${antes.replace('## Where the tools are', '## Where the tools are\n\nESTO LO ESCRIBO YO')}\n## Mia\n\nmis notas\n`)
   writeFileSync(join(dir, 'version.txt'), 'V2\n')
@@ -457,6 +482,13 @@ console.log('\nworker: el arnes de la carpeta del plugin')
   ok('y lo que no toco si se actualiza', final.includes('AYUDA V2 de wa-scope --help'),
     JSON.stringify(comandos))
   ok('la referencia vieja ya no esta', !final.includes('AYUDA V1 de wa-scope --help'))
+  const skillDespues = readFileSync(rutaSkill, 'utf8')
+  ok('una seccion de la skill que el usuario edito queda como suya',
+    skillDespues.includes('MI TONO') &&
+    (e2?.files ?? []).find((f) => f.name.endsWith('whatsapp-soporte/SKILL.md'))?.yours.includes('Tone'))
+  ok('y lo demas de la skill sigue siendo el del plugin', skillDespues.includes('## Never'))
+  ok('`.wa-bin` no cambia entre activaciones', lee('.wa-bin') === `${dir}\n` &&
+    (e2?.files ?? []).find((f) => f.name === '.wa-bin')?.action === 'igual')
   // Un archivo que nadie toco y que no cambio no se reescribe: sin esto cada arranque
   // dejaria la carpeta con cuatro archivos "modificados" que no cambiaron en nada.
   const agentes2 = (e2?.files ?? []).find((f) => f.name === 'AGENTS.md')

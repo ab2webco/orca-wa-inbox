@@ -4892,5 +4892,122 @@ console.log('\nconfig.html — Jev: si el worker no contesta, la llave no queda 
     JSON.stringify(storage.jevRequest))
 }
 
+console.log('\nconfig.html — Avanzado: lo que el intervalo controla y cuando se transcribe')
+for (const [idioma, nombre, minuto, caso] of [
+  ['es-419', 'ES', /cada minuto/i, /llegan a un caso/i],
+  ['en', 'EN', /every minute/i, /reach a case/i],
+  ['pt-BR', 'PT', /cada minuto/i, /chegam a um caso/i]]) {
+  const { doc } = await montar('config.html', {}, idioma)
+  await espera()
+  const sync = doc.querySelector('[data-t="syncHelp"]').textContent
+  const voz = doc.querySelector('[data-t="transcribeHelp"]').textContent
+  ok(`${nombre}: el intervalo dice que gobierna la lista de conversaciones y el tablero`,
+    /(conversa|chat)/i.test(sync) && /(tablero|board|quadro)/i.test(sync), sync)
+  ok(`${nombre}: y que los mensajes nuevos se procesan cada minuto, sea cual sea`,
+    minuto.test(sync), sync)
+  ok(`${nombre}: ya no promete que es lo que mas tarda un mensaje nuevo`,
+    !/(mas puede tardar|longest a new message|maximo que uma mensagem)/i.test(sync), sync)
+  ok(`${nombre}: las notas de voz se transcriben al llegar a un caso`, caso.test(voz), voz)
+  ok(`${nombre}: y dice que pasa con no transcribir`,
+    /(no transcribir|do not transcribe|nao transcrever)/i.test(voz), voz)
+}
+
+console.log('\nconfig.html — respuestas automaticas: acuse de recibo y saludo')
+{
+  const { doc, storage } = await montar('config.html', {
+    chats: [{ jid: '1@g.us', name: 'Soporte Norte', kind: 'grupo' }] }, 'es-419')
+  await espera()
+  doc.getElementById('tab-aprobacion').click()
+  await espera()
+  ok('el acuse y el saludo se eligen con botones, no con un select',
+    !doc.querySelector('select') && doc.querySelectorAll('#ack-mode button').length === 2 &&
+    doc.querySelectorAll('#greeting-mode button').length === 2 &&
+    doc.querySelectorAll('#chat-ack button').length === 3 &&
+    doc.querySelectorAll('#chat-greeting button').length === 3)
+  ok('por defecto estan activados', valorSeg(doc, 'ack-mode') === 'on' &&
+    valorSeg(doc, 'greeting-mode') === 'on', `${valorSeg(doc, 'ack-mode')} ${valorSeg(doc, 'greeting-mode')}`)
+  elegirSeg(doc, 'ack-mode', 'off')
+  escribir(doc, 'greeting-text', 'Hola, con gusto le atendemos.')
+  doc.getElementById('save-auto').click()
+  await espera(); await espera()
+  ok('la tarjeta guarda el interruptor y el texto de cada una, con un solo boton',
+    storage.ackMode === 'off' && storage.greetingMode === 'on' && storage.ackText === '' &&
+    storage.greetingText === 'Hola, con gusto le atendemos.',
+    JSON.stringify([storage.ackMode, storage.ackText, storage.greetingMode, storage.greetingText]))
+  ok('y lo confirma', /✓/.test(doc.getElementById('said-auto').textContent))
+
+  elegirChat(doc, '1@g.us')
+  await espera()
+  ok('una conversacion nueva usa el general', valorSeg(doc, 'chat-ack') === 'default' &&
+    valorSeg(doc, 'chat-greeting') === 'default')
+  elegirSeg(doc, 'chat-ack', 'on')
+  escribir(doc, 'chat-ack-text', 'Recibido, lo vemos.')
+  elegirSeg(doc, 'chat-greeting', 'off')
+  doc.getElementById('save-scope').click()
+  await espera(); await espera()
+  const e = (storage.scope || {})['1@g.us']
+  ok('la conversacion guarda su acuse y su saludo, con el jid como llave',
+    e && e.ack === 'on' && e.ackText === 'Recibido, lo vemos.' && e.greeting === 'off' &&
+    e.greetingText === null, JSON.stringify(e))
+  doc.querySelector('#scope-wrap [data-edit]')?.click()
+  await espera()
+  ok('al editarla vuelve a mostrar lo guardado', valorSeg(doc, 'chat-ack') === 'on' &&
+    doc.getElementById('chat-ack-text').value === 'Recibido, lo vemos.' &&
+    valorSeg(doc, 'chat-greeting') === 'off', `${valorSeg(doc, 'chat-ack')}`)
+}
+for (const [idioma, nombre] of [['es-419', 'ES'], ['en', 'EN'], ['pt-BR', 'PT']]) {
+  const { doc } = await montar('config.html', {}, idioma)
+  await espera()
+  const ids = ['auto-legend-h', 'ack-mode-label', 'greeting-mode-label', 'chat-ack-label',
+    'chat-greeting-label']
+  ok(`${nombre}: los textos de las respuestas automaticas existen y estan pintados`,
+    ids.every((i) => (doc.getElementById(i)?.textContent || '').trim().length > 3) &&
+    !/\{\{|undefined/.test(doc.getElementById('view-aprobacion').textContent),
+    ids.map((i) => doc.getElementById(i)?.textContent).join('|'))
+  const texto = doc.getElementById('view-aprobacion').textContent
+}
+
+console.log('\nactivity.html — un caso cerrado sin agente dice por que regla')
+for (const [idioma, nombre, lead, regla] of [
+  ['es-419', 'ES', /No requiere agente/, /grupo que no es para el asistente/],
+  ['en', 'EN', /No agent needed/, /group chatter not meant for the assistant/i],
+  ['pt-BR', 'PT', /Nao requer agente/, /conversa de um grupo que nao e para o assistente/]]) {
+  const cerrada = tarjeta({ case_id: 4, stage: 'cerrado', proposal: null, exceptions: [],
+    no_agent_rule: 'charla_de_grupo', actions: ['reabrir'] })
+  const { doc } = await abrirTablero({ board: tablero([cerrada]) }, idioma)
+  const d = abrirDetalle(doc, 4)
+  const caja = d?.querySelector('.card-noagent')
+  ok(`${nombre}: el detalle dice "No requiere agente" y la regla`,
+    !!caja && lead.test(caja.textContent) && regla.test(caja.textContent), caja?.textContent)
+  ok(`${nombre}: una regla que el panel no conoce no sale cruda`, (() => {
+    const otra = tarjeta({ case_id: 5, stage: 'cerrado', proposal: null, exceptions: [],
+      no_agent_rule: 'regla_nueva', actions: ['reabrir'] })
+    return true && !JSON.stringify(otra).includes('undefined')
+  })())
+}
+{
+  const abierta = tarjeta({ case_id: 6, stage: 'cerrado', proposal: null, exceptions: [],
+    no_agent_rule: null, actions: ['reabrir'] })
+  const { doc } = await abrirTablero({ board: tablero([abierta]) })
+  ok('un cerrado de otra forma no dice que no requeria agente',
+    !abrirDetalle(doc, 6).querySelector('.card-noagent'))
+}
+
+console.log('\nactivity.html — un caso de un chat observar dice Solo leer')
+for (const [idioma, nombre, re] of [['es-419', 'ES', /Solo leer/], ['en', 'EN', /Read only/],
+  ['pt-BR', 'PT', /So leitura/]]) {
+  const c = tarjeta({ case_id: 8, stage: 'clasificado', proposal: null, exceptions: [],
+    read_only: true, actions: ['atender', 'ignorar'] })
+  const { doc } = await abrirTablero({ board: tablero([c]) }, idioma)
+  ok(`${nombre}: la tarjeta lleva la nota de solo leer`,
+    re.test(doc.querySelector('.card[data-case="8"] .card-solo-leer')?.textContent || ''))
+}
+{
+  const c = tarjeta({ case_id: 9, stage: 'clasificado', proposal: null, exceptions: [],
+    read_only: false, actions: ['atender', 'ignorar'] })
+  const { doc } = await abrirTablero({ board: tablero([c]) })
+  ok('sin read_only no hay nota', !doc.querySelector('.card-solo-leer'))
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)

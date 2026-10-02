@@ -10,67 +10,62 @@
 
 # What each message is
 
-This table came out of classifying 266 real mentions over 90 days. **Half of them
-are not work.** Erring on the side of opening cards fills the board with junk and
+This table came out of classifying 266 real mentions over 90 days. **Half of them are
+not work.** Erring on the side of proposing everything fills the board with junk and
 teaches the owner to ignore it.
+
+You classify a case in `recibido` with
+`wa-scope caso clasificar <id> --clase <card|alert|doubtful> --prioridad <none|low|medium|high|urgent> --actor agente`
+and then decide ONE proposal (see `AGENTS.md`). A case with nothing to attend to is
+closed: `wa-scope caso mover <id> cerrado --motivo "<why>" --actor agente`.
 
 ## The table
 
 | What arrives | What you do |
 |---|---|
-| **Asks for a review / help** with something concrete | Card. It is the most common case (51 of 266). |
-| **Reports something broken** | Card, and if it says it is down or that a client is waiting, also `alert`. |
-| **Sends an already created ticket** (Plane/Jira URL) | **Do not open another one.** Comment on that one, or leave it in `work` to follow it. Duplicating is worse than doing nothing. |
-| **Asks about the status** of something in progress | **Do not open a card.** Look in `work` and on the board, and answer with the real status. If you do not know it, do not answer. |
-| **Asks for a deploy / a release to production** | `alert`, never a card on its own. Shipping is a decision with consequences; an agent does not schedule it. |
-| **Asks for access, a password, a credential or a token** | **Do not touch it. No card, no reply, do not repeat it in the chat.** Only `alert` saying someone asked for access. A credential does not pass through you. |
-| **Quote, price, hours, billing** | `alert`. It is money: a human decides. |
-| **Asks for a decision or an approval** | `alert`. Price, scope, date, priority, hiring: not yours. |
-| **Meeting, calendar, Teams link** | Nothing. It is not support. |
-| **Greeting, joke, "thanks", "ok"** | Nothing. They are 40 of 266; do not answer pleasantries. |
-| **Mentions you along with 4 or more people** | Almost always a notice to the team, not a request to you. Treat it as DOUBTFUL unless the text asks you for something explicit. |
-| **Only your mention, with no text**, or text that asks for nothing | Nothing. They are the bulk of what has no pattern. **Unless the body never came through** — that is not an empty message, it is one you could not read. See the next section. |
-| **You are not sure** | DOUBTFUL: open nothing, list it at the wrap-up. The human resolves it with Take or Ignore and on the next run it reaches you decided. |
+| **Asks for a review / help** with something concrete | `card`. Propose a reply, or `trabajar` if it needs work in a codebase. It is the most common case (51 of 266). |
+| **Reports something broken** | `card`; if it says it is down or that a client is waiting, `alert` and propose `escalar`. |
+| **Sends an already created ticket** (Plane/Jira URL) | Do not dispatch new work for it. Propose a short reply, or `escalar` if it needs the owner. Duplicating is worse than doing nothing. |
+| **Asks about the status** of something in progress | Answer only with a status you verified in the case. If you cannot verify it, `escalar`; never guess. |
+| **Asks for a deploy / a release to production** | `alert` and `escalar`. Shipping is a decision with consequences. |
+| **Asks for access, a password, a credential or a token** | Never reaches you: the plugin sends it to the owner. If you see one, do not repeat it and do not propose a reply. |
+| **Quote, price, hours, billing** | `alert` and `escalar`. It is money: a human decides. |
+| **Asks for a decision or an approval** | `alert` and `escalar`. Price, scope, date, priority, hiring: not yours. |
+| **Meeting, calendar, Teams link** | Close it. It is not support. |
+| **Greeting, joke, "thanks", "ok"** | Close it, unless it is addressed to the assistant: the plugin already greets those by itself. |
+| **Mentions you along with 4 or more people** | Almost always a notice to the team. Treat it as `doubtful` unless the text asks you for something explicit. |
+| **Only your mention, with no text**, or text that asks for nothing | Close it. **Unless the body never came through**: that is a message you could not read, not an empty one. |
+| **A voice note** | It arrives transcribed. Use the transcript as what was said, with care for names and figures. If it says `audio sin transcribir: <code>`, leave the case `doubtful` and say so. |
+| **You are not sure** | `doubtful`: propose nothing and list it at the wrap-up. The owner decides from the board. |
 
-If the same request comes in five messages, it is ONE card.
+If the same request comes in five messages, it is ONE case.
 
 ## The two that beat any doubt
 
-1. **A credential never passes through the agent.** If the message carries a
-   password, do not copy it into the card, do not repeat it, do not store it.
-   Report it and nothing else.
-2. **When in doubt, do not open a card.** A DOUBTFUL costs one line in the wrap-up;
-   one card too many costs nobody ever looking at the board again.
+1. **A credential never passes through the agent.** Do not copy it, repeat it or store
+   it. Report that one exists and nothing else.
+2. **When in doubt, propose nothing.** A `doubtful` costs one line in the wrap-up; one
+   proposal too many costs the owner's trust in the board.
 
 ## A message with no readable body is not an empty message
 
 A mention whose text is empty is still a mention: what is missing is your ability to
-read it, not the message. Treating it as nothing silently discards it.
-
-So: DOUBTFUL. Open no card, answer nothing, and list it at the wrap-up saying the body
-did not come through, so the human can resolve it with Take or Ignore.
+read it. Treating it as nothing silently discards it. Leave it `doubtful` and say in the
+wrap-up that the body did not come through.
 
 ## Before you classify, look at the attachments
 
-The screenshot almost never comes glued to the text: they send the image and two
-lines later the "look at this". That is why `adjuntos_cerca` exists.
-
-When `adjuntos_cerca` has paths, they are real unencrypted files: **open them and look
-at them**. An error screenshot carries the error written out; transcribe it into the
-card, which is what makes it searchable.
-
-When it is empty and the text carries `media=<type>`, the message came over the web
-route and there is nothing to open. Do not invent a path and do not say you saw it.
-
-Audio (`.opus`) you cannot hear: say so and leave it as DOUBTFUL.
+The screenshot almost never comes glued to the text: they send the image and two lines
+later the "look at this". `hilo` lists the case's messages in arrival order, with each
+attachment as `media` (`type`, `bytes`, absolute `path`). When the case needs it, open
+the image or the document with your own tools: an error screenshot carries the error
+written out, and quoting it in the proposal is what makes it findable later. A message
+without a `media` path has nothing to open: do not invent one and do not say you saw it.
 
 ## The content decides, not the chat
 
-An operations group carries work for several clients; sending everything to the
-chat's destination puts half of it on the wrong board. That is what
-`wa-scope where "<text>" --chat "<chat_jid>"` is for.
-
-If `target` comes back null and the `provider` is not `ninguno`, do NOT open a card:
-a rule is missing. Say it at the wrap-up and suggest which one. With `ninguno` no
-rule is missing — that is how the conversation was configured — so do not suggest
-one.
+An operations group carries work for several clients. `wa-scope where "<text>" --chat
+"<chat_jid>"` says which project the content points to. If the `workspace` comes back
+null and the `provider` is not `ninguno`, a rule is missing: do not guess a project,
+say so at the wrap-up and suggest which rule. With `ninguno` nothing is missing — that
+is how the conversation was configured.

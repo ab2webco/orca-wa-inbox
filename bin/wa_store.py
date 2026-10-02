@@ -411,6 +411,7 @@ def inbox(con, dias, limite, ventana, solo="todos", linea=None):
             "escribio_despues": bool(r["mine"] and r["ts"] <= r["mine"]),
             "text": (r["body"] or "").replace("\n", " "),
             "media": r["media_path"] or None,
+            "media_type": r["media_type"] or None,
         }
         # El veredicto cacheado, la misma llave que identifica el mensaje. Es una
         # PISTA mas, junto a `kind` y `escribio_despues`: informa, no decide, y su
