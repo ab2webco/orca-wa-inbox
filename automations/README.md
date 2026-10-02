@@ -19,11 +19,27 @@ y lo cuenta en `limpieza_error`.
 1.4.160-lab.84 o más nuevo), pero despierta a dos:
 
 - **El agente de casos.** Con un caso que lo espera (lo mismo que `pending --needs-agent`)
-  lanza `triage` en el acto (`orca automations run`), sin esperar su cron: no si el dueño
-  la apagó, no con una corrida en vuelo (en curso y de hace menos de 30 min: Orca deja
-  corridas en `dispatched` días después) y no dos veces en 5 minutos. El precheck de
-  `triage` **sale con 1 cuando ningún caso necesita lenguaje**, con lo que Orca marca la
-  corrida `skipped_precheck` y no despierta al agente.
+  lo abre él mismo por terminal, sin esperar el cron de `triage`: Orca lanza las
+  automatizaciones con la cuenta de Claude activa y no deja elegir otra, así que con esa
+  cuenta tomada por un espacio con cuenta asignada cada corrida es `dispatch_failed`. Usa
+  el mismo código del despacho al proyecto: `terminal create --agent claude` en el espacio
+  del plugin (el `runContext` de la automatización `triage`, nunca un `::workspace:` de
+  una corrida), con otra cuenta autenticada si la primera falla, el prompt de
+  `prompts/triage.md` copiado a `despachos/` y una sola línea, y la verificación del turno.
+  Nunca dos a la vez (una fila en `agente_corrida`, escrita con la base tomada, o el lock
+  del agente puesto, lo impiden), a lo más uno por vuelta y no antes de 5 minutos del
+  anterior. La terminal se cierra cuando el agente soltó el lock, cuando se fue sola o a
+  los 30 minutos. Si no lo pudo lanzar, el tablero lo dice con el motivo. "Atender ahora"
+  usa el mismo camino (`wa-scope agente lanzar`), sin la espera. La automatización
+  `triage` queda de respaldo con su cron: el precheck **sale con 1 cuando ningún caso
+  necesita lenguaje** (Orca marca la corrida `skipped_precheck`), y si su agente llega con
+  otro trabajando, se frena en el `lock`.
+- **La cuenta de Claude del bot.** Ajustes, pestaña Agente, guarda `botClaudeAccount`: el
+  id de una cuenta de `orca account list` o `auto`. El agente de casos y el del proyecto
+  abren primero con esa; si no aparece, no tiene sesión, no tiene cuota (95 % o más) o
+  falla al abrir, siguen la regla automática (sin elegir cuenta y, si esa está tomada, la
+  autenticada de menos uso) y anotan la cuenta usada y el motivo (`respaldo`). El tablero
+  lo dice en la línea de la revisión y en la tarjeta del despacho.
 - **El agente del proyecto (T8).** Un `trabajar` aprobado (una firma de `decision` a
   `trabajo`; nunca lo que puso ahí el backfill) abre Claude en el espacio exacto del
   proyecto, uno por tick: el brief va a un archivo en la carpeta de datos del plugin

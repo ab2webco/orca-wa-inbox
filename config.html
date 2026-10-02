@@ -148,6 +148,12 @@
         background: var(--primary, var(--fb-primary));
         color: var(--primary-foreground, var(--fb-primary-foreground));
         border-color: transparent; font-weight: 500; }
+      /* Las cuentas de Claude del bot: una por renglon, el correo y debajo su estado. */
+      .seg.cuentas { flex-direction: column; align-items: stretch; }
+      .seg.cuentas button { display: flex; flex-direction: column; align-items: flex-start;
+                            gap: 2px; text-align: left; min-width: 0; }
+      .seg.cuentas .cuenta-nombre { max-width: 100%; overflow-wrap: anywhere; }
+      .seg.cuentas .cuenta-nota { font-size: 11px; opacity: 0.75; overflow-wrap: anywhere; }
 
       /* El autocompletar: UN campo, y la lista se dibuja debajo, en la pagina. Fondo
          opaco (--background) y filete: flota sobre lo que sigue y tiene que taparlo. */
@@ -768,6 +774,23 @@
             <span class="said" id="said-agent"></span>
           </div>
         </section>
+
+        <!-- Con que cuenta de Claude abre el bot sus agentes (el de casos y el de cada
+             proyecto). Las cuentas las lee el worker de `orca account list`; lo elegido
+             (un id, o `auto`) lo usa `wa-scope` al abrir, con respaldo automatico. -->
+        <section class="card">
+          <h2 data-t="botAccountLegend"></h2>
+          <p class="hint lead" id="bot-account-label" data-t="botAccountHelp"></p>
+          <div class="seg cuentas" id="bot-account" role="group" aria-labelledby="bot-account-label">
+            <button type="button" data-value="auto" data-t="botAccountAuto"></button>
+          </div>
+          <p class="hint" id="bot-account-status"></p>
+          <div class="actions">
+            <button class="primary" id="save-bot-account" data-t="saveCard"></button>
+            <button id="bot-account-refresh" data-t="botAccountRefresh"></button>
+            <span class="said" id="said-bot-account"></span>
+          </div>
+        </section>
       </div>
 
       <!-- ───────── Avanzado ───────── -->
@@ -1005,6 +1028,18 @@
             "WhatsApp en la pestana Estado y vuelva a intentar.",
           syncStalled: "Llevo un rato buscando y no llego nada.",
           sub: 'Que conversaciones ve su agente, y hasta donde puede actuar en cada una.',
+          botAccountLegend: 'Cuenta de Claude del bot',
+          botAccountHelp: 'Con que cuenta abren Claude el agente de casos y el agente de cada ' +
+            'proyecto. Si la elegida no tiene sesion, no tiene cuota o falla al abrir, uso la ' +
+            'automatica y el tablero te dice con cual y por que.',
+          botAccountAuto: 'Automatica',
+          botAccountAutoHint: 'La de Orca y, si esta ocupada o sin sesion, una con sesion y cuota libre, la de menos uso',
+          botAccountNoSession: 'sin sesion', botAccountActive: 'la activa en Orca',
+          botAccountUsed: '{n} % usado', botAccountMissing: 'ya no aparece en Orca',
+          botAccountLoading: 'Leyendo las cuentas de Claude…',
+          botAccountFail: 'No pude leer las cuentas de Claude de Orca. Automatica sigue disponible.',
+          botAccountNone: 'Orca no tiene cuentas de Claude administradas: se usa la automatica.',
+          botAccountRefresh: 'Volver a leer las cuentas',
           agentLegend: 'Su agente', agentLabel: 'Como se llama',
           agentPh: 'ej. Watson, Viernes, Asistente',
           agentHelp: 'Firma cada mensaje que escriba, para que nadie dude de si habla usted o el.',
@@ -1391,6 +1426,18 @@
             "Status tab and try again.",
           syncStalled: "I have been looking for a while and nothing arrived.",
           sub: 'Which conversations your agent sees, and how far it can act in each one.',
+          botAccountLegend: 'Bot Claude account',
+          botAccountHelp: 'Which account the case agent and each project agent open Claude ' +
+            'with. If the chosen one has no session, no quota left or fails to open, I use the ' +
+            'automatic one and the board tells you which one and why.',
+          botAccountAuto: 'Automatic',
+          botAccountAutoHint: 'Orca\'s own and, if it is busy or signed out, a signed-in one with quota left, the least used',
+          botAccountNoSession: 'signed out', botAccountActive: 'active in Orca',
+          botAccountUsed: '{n}% used', botAccountMissing: 'no longer listed by Orca',
+          botAccountLoading: 'Reading the Claude accounts…',
+          botAccountFail: 'Could not read the Claude accounts from Orca. Automatic is still available.',
+          botAccountNone: 'Orca has no managed Claude accounts: the automatic one is used.',
+          botAccountRefresh: 'Read the accounts again',
           agentLegend: 'Your agent', agentLabel: 'What it is called',
           agentPh: 'e.g. Watson, Friday, Assistant',
           agentHelp: 'Signs every message it writes, so nobody wonders if it was you or it.',
@@ -1791,6 +1838,18 @@
         qualityMinima: 'Minima',
         qualityHelp: 'Recomendado: otima. Minima so se a maquina nao aguentar o modelo grande: ' +
           'deforma nomes e pedidos, nao decida lendo o texto dela.',
+        botAccountLegend: 'Conta do Claude do bot',
+        botAccountHelp: 'Com qual conta o agente de casos e o agente de cada projeto abrem o ' +
+          'Claude. Se a escolhida nao tiver sessao, cota ou falhar ao abrir, uso a automatica e ' +
+          'o quadro diz qual e por que.',
+        botAccountAuto: 'Automatica',
+        botAccountAutoHint: 'A do Orca e, se estiver ocupada ou sem sessao, uma com sessao e cota livre, a menos usada',
+        botAccountNoSession: 'sem sessao', botAccountActive: 'a ativa no Orca',
+        botAccountUsed: '{n} % usado', botAccountMissing: 'nao aparece mais no Orca',
+        botAccountLoading: 'Lendo as contas do Claude…',
+        botAccountFail: 'Nao consegui ler as contas do Claude no Orca. A automatica continua disponivel.',
+        botAccountNone: 'O Orca nao tem contas do Claude administradas: usa-se a automatica.',
+        botAccountRefresh: 'Ler as contas de novo',
         agentLegend: 'Seu agente', agentLabel: 'Como se chama',
         noChats: 'Procurando suas conversas…',
         noChatsFail: 'Sem conversas',
@@ -2427,7 +2486,8 @@
         ackMode: ['ack-mode', 'on'],
         ackText: ['ack-text', ''],
         greetingMode: ['greeting-mode', 'on'],
-        greetingText: ['greeting-text', '']
+        greetingText: ['greeting-text', ''],
+        botClaudeAccount: ['bot-account', 'auto']
       }
       Object.keys(CONTROLES).forEach(function (k) { ensuciar(CONTROLES[k][0]) })
 
@@ -2497,6 +2557,86 @@
         if (!el('agent').value.trim()) { said('said-agent', t('needName'), true); return }
         guardarTarjeta(event.currentTarget, 'said-agent', ['agentName', 'ownerName', 'tone'])
       })
+      el('save-bot-account').addEventListener('click', function (event) {
+        guardarTarjeta(event.currentTarget, 'said-bot-account', ['botClaudeAccount'])
+      })
+      el('bot-account-refresh').addEventListener('click', function (event) {
+        leerCuentasBot(event.currentTarget)
+      })
+
+      // ---------- la cuenta de Claude del bot ----------
+      // Las cuentas las lee el worker (`orca account list`): el panel no ejecuta nada. Se
+      // piden al abrir la pestana Agente y con su boton, nunca en el sondeo: cada pedido
+      // es un viaje al worker. La guardada que Orca ya no lista se muestra igual, apretada
+      // y dicha: un grupo sin nada apretado mentiria sobre lo que rige.
+      var cuentasBot = []
+      var cuentasLeyendo = false
+      function opcionCuenta (valor, nombre, nota) {
+        var b = document.createElement('button')
+        b.type = 'button'
+        b.setAttribute('data-value', valor)
+        var n = document.createElement('span')
+        n.className = 'cuenta-nombre'
+        n.textContent = nombre
+        b.appendChild(n)
+        if (nota) {
+          var m = document.createElement('span')
+          m.className = 'cuenta-nota'
+          m.textContent = nota
+          b.appendChild(m)
+        }
+        return b
+      }
+      function pintarCuentasBot (guardada, leidas) {
+        var grupo = el('bot-account')
+        var elegida = sucios['bot-account'] ? valorSeg('bot-account') : guardada
+        grupo.textContent = ''
+        var opciones = [opcionCuenta('auto', t('botAccountAuto'), t('botAccountAutoHint'))]
+        var ids = { auto: true }
+        cuentasBot.forEach(function (c) {
+          var notas = []
+          if (!c.authenticated) notas.push(t('botAccountNoSession'))
+          if (c.active) notas.push(t('botAccountActive'))
+          if (typeof c.used === 'number') notas.push(fmt('botAccountUsed', { n: c.used }))
+          opciones.push(opcionCuenta(c.id, c.email || c.id, notas.join(' · ')))
+          ids[c.id] = true
+        })
+        if (guardada && !ids[guardada]) {
+          // Sin la lista no se sabe si Orca la tiene: no se dice que falta.
+          opciones.push(opcionCuenta(guardada, guardada, leidas ? t('botAccountMissing') : ''))
+        }
+        opciones.forEach(function (b) {
+          grupo.appendChild(b)
+          cablearBoton(grupo, b)
+        })
+        ponerSeg('bot-account', elegida || 'auto', 'auto')
+      }
+      function leerCuentasBot (boton) {
+        if (cuentasLeyendo) return
+        cuentasLeyendo = true
+        el('bot-account-status').textContent = t('botAccountLoading')
+        var pedir = Promise.all([
+          read('botClaudeAccount', true),
+          pedirAlWorker('scopeRequest', 'scopeResult', { action: 'cuentas-claude' })
+        ]).then(function (rs) {
+          var guardada = hayRespuesta(rs[0]) && typeof rs[0] === 'string' && rs[0] ? rs[0] : 'auto'
+          var v = rs[1]
+          var leidas = !!(v && v.ok === true && Array.isArray(v.accounts))
+          if (leidas) {
+            cuentasBot = v.accounts.filter(function (c) {
+              return c && typeof c.id === 'string' && c.id
+            })
+            el('bot-account-status').textContent = cuentasBot.length ? '' : t('botAccountNone')
+          } else {
+            el('bot-account-status').textContent = t('botAccountFail')
+          }
+          pintarCuentasBot(guardada, leidas)
+        }, function () {
+          el('bot-account-status').textContent = t('botAccountFail')
+        }).then(function () { cuentasLeyendo = false })
+        return boton ? busy(boton, pedir) : pedir
+      }
+
       el('save-voice').addEventListener('click', function (event) {
         guardarTarjeta(event.currentTarget, 'said-voice',
           ['transcribe', 'transcribeLang', 'transcribeQuality'])
@@ -4236,6 +4376,7 @@
         // Una lista abierta en la pestana que se va quedaria flotando sobre la otra.
         comboChats.cerrar(); comboProyecto.cerrar(); comboRegla.cerrar()
         if (activaAuto(cual)) leerAuto()
+        if (cual === 'agente') leerCuentasBot()
       }
       // Las cuatro claves de las respuestas automaticas se leen al abrir SU pestana y no en
       // cada vuelta: el host admite 30 mensajes por 10 s y la vuelta entera ya gasta casi

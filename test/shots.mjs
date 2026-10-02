@@ -503,6 +503,14 @@ const elegirEn = (id, lista, texto, valor) => escribirEn(id, texto) +
 const CON_LINEA = Object.assign({}, DATOS,
   { sidecar: { connection: 'open', qr: null, exited: false, latido: LATIDO_FRESCO } })
 
+// Las cuentas de Claude que el worker lee de `orca account list` (de ejemplo).
+const CUENTAS_CLAUDE = [
+  { id: 'cuenta-bot', email: 'bot.whatsapp@example.invalid', authenticated: true, active: false, used: 12 },
+  { id: 'cuenta-equipo', email: 'equipo.soporte.con.un.correo.largo@example.invalid',
+    authenticated: true, active: true, used: 64 },
+  { id: 'cuenta-vieja', email: 'vieja@example.invalid', authenticated: false, active: false, used: null }
+]
+
 const PANELES = [
   // Las seis pestanas, a los cuatro anchos, en los dos idiomas y los dos temas.
   { nombre: 'config-tab-estado', archivo: 'config.html', anchos: ANCHOS,
@@ -514,8 +522,16 @@ const PANELES = [
     enTodosLosAnchos: true, datos: DATOS, pestana: 'proyectos' },
   { nombre: 'config-tab-aprobacion', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, datos: DATOS, pestana: 'aprobacion' },
+  // Agente trae la cuenta de Claude del bot: la lista la contesta el worker.
   { nombre: 'config-tab-agente', archivo: 'config.html', anchos: ANCHOS,
-    enTodosLosAnchos: true, datos: DATOS, pestana: 'agente' },
+    enTodosLosAnchos: true, pestana: 'agente', guion: 'void 0', espera: 2500,
+    datos: Object.assign({}, DATOS, { botClaudeAccount: 'cuenta-bot' }),
+    stub: { veredictoAccion: { ok: true, code: 'cuentas', accounts: CUENTAS_CLAUDE } } },
+  // Sin poder leer las cuentas: lo dice, y Automatica sigue a mano.
+  { nombre: 'config-cuenta-bot-fallo', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, pestana: 'agente', guion: 'void 0', espera: 2500,
+    datos: Object.assign({}, DATOS, { botClaudeAccount: 'cuenta-que-ya-no-esta' }),
+    stub: { veredictoAccion: { ok: false, code: 'cuentas-fallo' } } },
   { nombre: 'config-tab-avanzado', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, datos: DATOS, pestana: 'avanzado' },
   // La pestana de entrada sin tocar nada: con todo listo, Conversaciones.
@@ -620,6 +636,20 @@ const PANELES = [
     nombre: 'tablero-despacho', archivo: 'activity.html', anchos: ANCHOS,
     enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
     datos: conTablero(tableroDe(TABLERO_DESPACHO))
+  },
+  {
+    // El despacho y el agente de casos que no se abrieron con la cuenta del bot: con cual y
+    // por que.
+    nombre: 'tablero-cuenta-respaldo', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
+    datos: Object.assign(corrida({ state: 'ok', startedAt: AHORA_CORTO, endedAt: AHORA_CORTO,
+      looked: 4, pending: 0, reason: null }), { board: tableroDe(TABLERO_DESPACHO.map((c) => (
+      c.case_id === 31 ? Object.assign({}, c, { dispatch: Object.assign({}, c.dispatch,
+        { account: 'equipo.soporte@example.invalid', fallback: 'elegida-sin-sesion' }) }) : c)), {
+      agent_waiting: 1,
+      agent_launch: { state: 'running', at: minutos(1), account: 'equipo.soporte@example.invalid',
+        fallback: 'elegida-sin-sesion' }
+    }) })
   },
   {
     nombre: 'tablero-vacio', archivo: 'activity.html', anchos: ANCHOS,
@@ -752,8 +782,23 @@ const PANELES = [
     guion: ABRIR_TABLERO + `;
       document.querySelector('.card[data-case="4"] .card-acts button[data-accion="atender"]').click()`,
     espera: 1500, datos: conTablero(tableroDe(TABLERO_CASOS)),
-    stub: { veredictoAccion: { ok: true, code: 'atendido', agent: 'run-failed', agentReason: 'exit-1' },
+    stub: { veredictoAccion: { ok: true, code: 'atendido', agent: 'run-failed', agentReason: 'sin-cuenta' },
       demoraVeredicto: 0 }
+  },
+  {
+    // El ultimo lanzamiento del agente de casos fallo: lo dicen las tarjetas que lo esperan
+    // y la linea de la revision, en vez de prometer la proxima corrida.
+    nombre: 'tablero-agente-fallo', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
+    datos: Object.assign(corrida({ state: 'ok', startedAt: AHORA_CORTO, endedAt: AHORA_CORTO,
+      looked: 4, pending: 0, reason: null }), { board: tableroDe(TABLERO_CASOS.map((c) => (
+      c.stage === 'recibido' || c.stage === 'clasificado'
+        ? Object.assign({}, c, { waits_agent: true }) : c)), {
+      agent_waiting: TABLERO_CASOS.filter((c) => c.stage === 'recibido' ||
+        c.stage === 'clasificado').length,
+      agent_launch: { state: 'failed', reason: 'sin-cuenta', at: minutos(2),
+        detail: 'orca terminal create: This Claude account is in use by an assigned worktree' }
+    }) })
   },
   // 1. Reviso y no habia nada: el caso comun y sano.
   {

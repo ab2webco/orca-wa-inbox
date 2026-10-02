@@ -415,6 +415,8 @@
       .card-agente { font-size: 11px; font-weight: 500;
               color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .card-agente::before { content: "\2192  "; }
+      /* No pude lanzar al agente: un fallo, con el color de lo bloqueado. */
+      .card-agente.fallo { color: var(--destructive, var(--fb-destructive)); overflow-wrap: anywhere; }
       /* El autocompletar de proyecto: el de los ajustes (config.html, T17). Fondo opaco y
          filete: la lista flota sobre lo que sigue y tiene que taparlo. */
       .combo { position: relative; min-width: 0; }
@@ -651,13 +653,31 @@
               "acErrProyectoElegir": "Elija un proyecto de la lista.",
               "acOkAtendido": "El agente lo atendera en su proxima corrida",
               "acAgentLanzado": "Se lanzo el agente para este caso. Si en unos minutos no hay respuesta, revise que el agente tenga la sesion iniciada.",
-              "acAgentSinTriage": "El caso quedo marcado, pero Orca no tiene la automatizacion de triaje de este plugin. Apruebe el plugin de nuevo en Orca; el agente lo tomara en su proxima corrida.",
               "acAgentSinCli": "El caso quedo marcado, pero no se encontro la CLI de Orca para lanzar el agente. Lo tomara en su proxima corrida.",
-              "acAgentFallo": "El caso quedo marcado, pero no se pudo lanzar el agente ({reason}). Lo tomara en su proxima corrida.",
+              "acAgentEnCurso": "Ya hay un agente de casos trabajando: vera este caso en esta revision.",
+              "acAgentFallo": "El caso quedo marcado, pero no pude lanzar al agente: {reason}.",
               "acOkIgnorado": "Caso ignorado",
               "acOkProyecto": "Proyecto actualizado",
               "detProject": "Proyecto", "detPrevCase": "Caso anterior",
               "boardNeedsAgent": "Para el agente en su proxima corrida",
+              "botFallback": "Cuenta de respaldo: {account} ({reason})",
+              "agentFallback": "Agente de casos con la cuenta de respaldo {account} ({reason})",
+              "fallbackOrca": "la que elige Orca",
+              "fallbackWhy_elegida-no-esta": "la elegida ya no aparece en Orca",
+              "fallbackWhy_elegida-sin-sesion": "la elegida no tiene sesion",
+              "fallbackWhy_elegida-sin-cuota": "la elegida no tiene cuota",
+              "fallbackWhy_elegida-fallo": "la elegida fallo al abrir",
+              "agentFail": "No pude lanzar al agente: {reason}",
+              "agentFailGeneric": "No pude lanzar al agente",
+              "agentWhy_sin-cli": "no encuentro la CLI de Orca en esta maquina",
+              "agentWhy_sin-espacio": "Orca no tiene el espacio del plugin; aprueba el plugin de nuevo en Orca",
+              "agentWhy_sin-prompt": "falta el prompt del agente en el plugin",
+              "agentWhy_sin-cuenta": "ninguna cuenta de Claude esta libre",
+              "agentWhy_sin-terminal": "Orca no abrio su terminal",
+              "agentWhy_no-listo": "Claude no quedo listo a tiempo",
+              "agentWhy_no-recibio": "el agente no recibio el trabajo",
+              "agentWhy_a-medias": "el lanzamiento anterior se corto a la mitad",
+              "agentWhy_sin-tiempo": "no alcanzo el tiempo para abrirlo",
                             "detHistTouch": "actualizado",
               "histMessage": "llego un mensaje", "histSticker": "llego un sticker",
               "histAudio": "llego un audio", "histJev": "Jev: {que}",
@@ -853,13 +873,31 @@
               "acErrProyectoElegir": "Pick a project from the list.",
               "acOkAtendido": "Your agent will handle it on its next run",
               "acAgentLanzado": "The agent was launched for this case. If there is no reply in a few minutes, check that the agent is signed in.",
-              "acAgentSinTriage": "The case is marked, but Orca does not have this plugin's triage automation. Approve the plugin again in Orca; the agent will pick it up on its next run.",
               "acAgentSinCli": "The case is marked, but the Orca CLI was not found to launch the agent. It will pick it up on its next run.",
-              "acAgentFallo": "The case is marked, but we could not launch the agent ({reason}). It will pick it up on its next run.",
+              "acAgentEnCurso": "A case agent is already working: it will see this case in this run.",
+              "acAgentFallo": "The case is marked, but I could not launch the agent: {reason}.",
               "acOkIgnorado": "Case ignored",
               "acOkProyecto": "Project updated",
               "detProject": "Project", "detPrevCase": "Previous case",
               "boardNeedsAgent": "For your agent on its next run",
+              "botFallback": "Fallback account: {account} ({reason})",
+              "agentFallback": "Case agent on the fallback account {account} ({reason})",
+              "fallbackOrca": "the one Orca picks",
+              "fallbackWhy_elegida-no-esta": "the chosen one is no longer listed by Orca",
+              "fallbackWhy_elegida-sin-sesion": "the chosen one is signed out",
+              "fallbackWhy_elegida-sin-cuota": "the chosen one has no quota left",
+              "fallbackWhy_elegida-fallo": "the chosen one failed to open",
+              "agentFail": "Could not launch the agent: {reason}",
+              "agentFailGeneric": "Could not launch the agent",
+              "agentWhy_sin-cli": "the Orca CLI is not on this machine",
+              "agentWhy_sin-espacio": "Orca does not have the plugin workspace; approve the plugin again in Orca",
+              "agentWhy_sin-prompt": "the agent prompt is missing from the plugin",
+              "agentWhy_sin-cuenta": "no Claude account is free",
+              "agentWhy_sin-terminal": "Orca did not open its terminal",
+              "agentWhy_no-listo": "Claude was not ready in time",
+              "agentWhy_no-recibio": "the agent did not receive the work",
+              "agentWhy_a-medias": "the previous launch was cut off halfway",
+              "agentWhy_sin-tiempo": "there was not enough time to open it",
                             "detHistTouch": "updated",
               "histMessage": "a message arrived", "histSticker": "a sticker arrived",
               "histAudio": "a voice note arrived", "histJev": "Jev: {que}",
@@ -1055,13 +1093,31 @@
               "acErrProyectoElegir": "Escolha um projeto da lista.",
               "acOkAtendido": "O agente vai atender na proxima rodada",
               "acAgentLanzado": "O agente foi lancado para este caso. Se nao houver resposta em alguns minutos, confira se o agente esta com a sessao iniciada.",
-              "acAgentSinTriage": "O caso ficou marcado, mas o Orca nao tem a automacao de triagem deste plugin. Aprove o plugin de novo no Orca; o agente vai pegar o caso na proxima rodada.",
               "acAgentSinCli": "O caso ficou marcado, mas a CLI do Orca nao foi encontrada para lancar o agente. Ele vai pegar o caso na proxima rodada.",
-              "acAgentFallo": "O caso ficou marcado, mas nao foi possivel lancar o agente ({reason}). Ele vai pegar o caso na proxima rodada.",
+              "acAgentEnCurso": "Ja ha um agente de casos trabalhando: ele vai ver este caso nesta rodada.",
+              "acAgentFallo": "O caso ficou marcado, mas nao consegui lancar o agente: {reason}.",
               "acOkIgnorado": "Caso ignorado",
               "acOkProyecto": "Projeto atualizado",
               "detProject": "Projeto", "detPrevCase": "Caso anterior",
               "boardNeedsAgent": "Para o agente na proxima rodada",
+              "botFallback": "Conta de reserva: {account} ({reason})",
+              "agentFallback": "Agente de casos com a conta de reserva {account} ({reason})",
+              "fallbackOrca": "a que o Orca escolhe",
+              "fallbackWhy_elegida-no-esta": "a escolhida nao aparece mais no Orca",
+              "fallbackWhy_elegida-sin-sesion": "a escolhida esta sem sessao",
+              "fallbackWhy_elegida-sin-cuota": "a escolhida esta sem cota",
+              "fallbackWhy_elegida-fallo": "a escolhida falhou ao abrir",
+              "agentFail": "Nao consegui lancar o agente: {reason}",
+              "agentFailGeneric": "Nao consegui lancar o agente",
+              "agentWhy_sin-cli": "a CLI do Orca nao esta nesta maquina",
+              "agentWhy_sin-espacio": "o Orca nao tem o espaco do plugin; aprove o plugin de novo no Orca",
+              "agentWhy_sin-prompt": "falta o prompt do agente no plugin",
+              "agentWhy_sin-cuenta": "nenhuma conta do Claude esta livre",
+              "agentWhy_sin-terminal": "o Orca nao abriu o terminal",
+              "agentWhy_no-listo": "o Claude nao ficou pronto a tempo",
+              "agentWhy_no-recibio": "o agente nao recebeu o trabalho",
+              "agentWhy_a-medias": "o lancamento anterior foi cortado no meio",
+              "agentWhy_sin-tiempo": "nao deu tempo de abri-lo",
                             "detHistTouch": "atualizado",
               "histMessage": "chegou uma mensagem", "histSticker": "chegou um sticker",
               "histAudio": "chegou um audio", "histJev": "Jev: {que}",
@@ -1395,10 +1451,19 @@
           var dueno = board && esObjeto(board.counts) && Number.isInteger(board.counts.decision)
             ? board.counts.decision : null
           if (agente) partes.push(agente === 1 ? t('runAgent1') : fmt('runAgent', agente))
+          // Con casos esperando, que el agente no se pudo lanzar se dice aqui tambien.
+          var falla = agente ? falloAgente(board) : ''
+          if (falla) partes.push(falla)
+          // El agente de casos que corre con otra cuenta que la del bot: con cual y por que.
+          var lanz = esObjeto(board) && esObjeto(board.agent_launch) ? board.agent_launch : null
+          var respaldoAg = lanz && (lanz.state === 'running' || lanz.state === 'launching')
+            ? respaldoTexto('agentFallback', lanz.account, lanz.fallback) : ''
+          if (respaldoAg) partes.push(respaldoAg)
           if (dueno) partes.push(dueno === 1 ? t('runOwner1') : fmt('runOwner', dueno))
           if (!agente && !dueno && agente !== null && dueno !== null) partes.push(t('runNone'))
           texto = partes.join(' · ')
-          if (viejo(r.endedAt)) clase += ' vieja'
+          if (falla) clase += ' stale'
+          else if (viejo(r.endedAt)) clase += ' vieja'
         }
         nodo.textContent = texto
         nodo.className = clase
@@ -1659,7 +1724,7 @@
       // Lo que dice `agent` en el veredicto de "atender": si el worker pudo lanzar la
       // automatizacion del agente al momento. `launched` NO es "ya esta respondiendo": que
       // el agente no tenga sesion de Claude solo lo dice Orca despues de despachar.
-      var AGENTE_KEY = { launched: 'acAgentLanzado', 'triage-not-found': 'acAgentSinTriage',
+      var AGENTE_KEY = { launched: 'acAgentLanzado', running: 'acAgentEnCurso',
         'orca-cli-missing': 'acAgentSinCli', 'run-failed': 'acAgentFallo' }
       var AGENTE_MOTIVO_MAX = 40
       // Los codigos estables del canal: los E_* de `wa-scope caso`, los send-* de `wa-send` y
@@ -1823,9 +1888,12 @@
             var agente = (v.code === 'atendido' || v.code === 'autorizado') && Object.prototype.hasOwnProperty.call(AGENTE_KEY, v.agent)
               ? v.agent : null
             if (agente) {
-              var motivo = typeof v.agentReason === 'string' ? v.agentReason.slice(0, AGENTE_MOTIVO_MAX) : ''
+              // Un motivo de `wa-scope agente lanzar` se dice con la frase del tablero; uno
+              // del worker (exit-1, timeout) va tal cual, corto.
+              var motivo = typeof v.agentReason === 'string'
+                ? (motivoAgente(v.agentReason) || v.agentReason.slice(0, AGENTE_MOTIVO_MAX)) : ''
               mensajes[id] = { texto: fmt(AGENTE_KEY[agente], { reason: motivo || '?' }),
-                mala: agente !== 'launched', hasta: Date.now() + 12000 }
+                mala: agente !== 'launched' && agente !== 'running', hasta: Date.now() + 12000 }
             } else {
               var dicho = porCodigo(OK_ACCION, v.code, t('acOkGeneric'))
               if (v.warn) dicho += ' ' + t('acWarnTablero')
@@ -2073,11 +2141,47 @@
         return (STRINGS[LANG] && STRINGS[LANG][key]) || STRINGS.en[key] || ''
       }
 
-      /** "Para el agente en su proxima corrida": el caso que el dueno o Jev le pasaron. */
+      /** La frase de un motivo estable de un lanzamiento fallido del agente de casos, o ''.
+       *  Un codigo que este panel no conoce no se muestra crudo. */
+      function motivoAgente (codigo) {
+        if (typeof codigo !== 'string' || !/^[a-z0-9-]{1,40}$/.test(codigo)) return ''
+        var key = 'agentWhy_' + codigo
+        return (STRINGS[LANG] && STRINGS[LANG][key]) || STRINGS.en[key] || ''
+      }
+
+      /** "Cuenta de respaldo: <cuenta> (<por que>)": un agente que no se abrio con la cuenta
+       *  de Claude del bot (Ajustes, pestana Agente). '' si fue con ella o no se sabe por que.
+       *  `clave` es la frase: la del despacho o la del agente de casos. */
+      function respaldoTexto (clave, cuenta, porQue) {
+        if (typeof porQue !== 'string' || !/^[a-z0-9-]{1,40}$/.test(porQue)) return ''
+        var key = 'fallbackWhy_' + porQue
+        var razon = (STRINGS[LANG] && STRINGS[LANG][key]) || STRINGS.en[key]
+        if (!razon) return ''
+        var quien = typeof cuenta === 'string' && cuenta ? cuenta.slice(0, 120) : t('fallbackOrca')
+        return fmt(clave, { account: quien, reason: razon })
+      }
+
+      /** "No pude lanzar al agente: <motivo>" si el ultimo lanzamiento fallo, o ''. */
+      function falloAgente (board) {
+        var l = esObjeto(board) ? board.agent_launch : null
+        if (!esObjeto(l) || l.state !== 'failed') return ''
+        var m = motivoAgente(l.reason)
+        return m ? fmt('agentFail', { reason: m }) : t('agentFailGeneric')
+      }
+
+      /** "Para el agente en su proxima corrida": el caso que el dueno o Jev le pasaron. Si el
+       *  ultimo lanzamiento del agente fallo, eso es lo que se dice, en todas las que lo
+       *  esperan: prometer la proxima corrida mientras cada una falla es esconderlo. */
       function agenteNodo (c) {
-        if (c.needs_agent === true && (c.stage === 'recibido' || c.stage === 'clasificado')) {
-          return crear('div', 'card-agente', t('boardNeedsAgent'))
+        if (c.stage !== 'recibido' && c.stage !== 'clasificado') return null
+        var falla = c.waits_agent === true || c.needs_agent === true ? falloAgente(tableroActual) : ''
+        if (falla) {
+          var nodo = crear('div', 'card-agente fallo', falla)
+          var detalle = tableroActual.agent_launch.detail
+          if (typeof detalle === 'string' && detalle) nodo.title = detalle.slice(0, 200)
+          return nodo
         }
+        if (c.needs_agent === true) return crear('div', 'card-agente', t('boardNeedsAgent'))
         return null
       }
 
@@ -2100,6 +2204,8 @@
         } else if (c.stage === 'trabajo') {
           lineas.push(conCuando(fmt('boardDispatched', p), d.at))
           lineas.push(t('boardDispatchWaiting'))
+          var respaldo = respaldoTexto('botFallback', d.account, d.fallback)
+          if (respaldo) lineas.push(respaldo)
         } else if (c.stage === 'listo' && d.outcome === 'resuelto') {
           lineas.push(fmt('boardDispatchSolved', p))
         } else if (c.stage === 'listo' && d.outcome === 'necesita') {
