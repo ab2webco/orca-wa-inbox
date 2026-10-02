@@ -320,6 +320,26 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
       Cerrada en W3 (bac9ec1, 8efe23c); la UI la rehace T17.
 - [ ] T14 — Aprobación por WhatsApp (chat propio): sonda en vivo primero, luego
       mensaje de excepción, lectura de la respuesta citada, envío o cierre.
+      Rediseño pedido por el dueño (2026-10-01): una automatización de verdad, no un
+      tablero donde todo espera.
+      1. Pregunta solo lo crítico:
+         - lo que sale con un precio o un monto;
+         - una credencial real (por su forma, no por la palabra "acceso");
+         - una fecha prometida;
+         - una alerta de Jev.
+         Lo demás lo hace y lo informa.
+      2. Cuando algo necesita al dueño, Alfred le escribe al número del dueño un
+         informe corto: el caso, qué pide el cliente, qué va a hacer y la respuesta o
+         la tarea. El dueño contesta por WhatsApp: "sí" aprueba, "no" cierra, y otro
+         texto es la corrección.
+         - La respuesta queda atada a `propuesta_version` y vence a las N horas.
+         - Solo vale el número del dueño, configurado en ajustes; nunca se adivina.
+      3. Lo que el dueño escribe a Alfred desde su número cuenta como instrucción del
+         dueño para el caso abierto de ese chat ("procede", "dale la info").
+      4. Lo no crítico que hizo solo le llega al dueño como resumen: corto, agrupado y
+         sin texto sensible.
+      5. El tablero queda como vista y control manual. Nada depende de que el dueño
+         lo abra.
 - [x] T15 — Primera corrida de `ingest` con línea base (`case_window_hours`).
       Cerrada en W1 (c0613ff).
 - [ ] T0 — Sonda en vivo del despliegue de agente desde una automatización
