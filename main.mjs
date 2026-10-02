@@ -1710,8 +1710,9 @@ export default function activate(orca) {
     correr: (cmd, args) => correrOrca(cmd, args),
     motivoDe, resembrar
   })
-  // "Atender ahora" despierta al agente en el momento, por la misma CLI de Orca.
-  const lanzarTriage = crearLanzadorTriage({ correr: correrOrca })
+  // "Atender ahora" abre al agente de casos en el momento, por el mismo camino que el tick
+  // (`wa-scope agente lanzar`), sin la valla: el hijo ejecuta la CLI de Orca.
+  const lanzarTriage = crearLanzadorTriage({ correr: correrOrca, herramienta: (nombre) => tool(nombre) })
 
   const atenderPedidoScope = crearVigia({
     nombre: 'scope',

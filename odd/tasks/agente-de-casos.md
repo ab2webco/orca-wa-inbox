@@ -31,7 +31,7 @@ tiene varias.
 - [x] T1 `wa-scope`: tabla `agente_corrida`; el tick vigila y lanza a lo más UN
   agente de casos por vuelta (nunca dos a la vez, ni con el lock tomado), cada
   5 min como mucho; cierra su terminal cuando terminó o a los 30 min.
-- [ ] T2 `wa-scope agente lanzar`: lo mismo para "Atender ahora", con plazo; el
+- [x] T2 `wa-scope agente lanzar`: lo mismo para "Atender ahora", con plazo; el
   worker lo usa en vez de `orca automations run`.
 - [ ] T3 Tablero: `agent_launch` y `waits_agent`; "No pude lanzar al agente:
   <motivo>" en las tarjetas que esperan al agente y en la línea de la revisión.

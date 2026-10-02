@@ -2189,6 +2189,11 @@ def opcion(argv, nombre):
 const WA_SCOPE_FALSO = '#!/usr/bin/env python3\n' + ESTADO_FALSO + `
 anota('scope.jsonl')
 argv = sys.argv[1:]
+if argv[:2] == ['agente', 'lanzar']:
+    cfg = carga().get('agente') or {}
+    if cfg.get('sale'):
+        sys.stderr.write('SECRETO mensaje del cliente\\n'); sys.exit(cfg['sale'])
+    print(json.dumps(cfg.get('salida', {'agent': 'launched'}))); sys.exit(0)
 if argv[:1] != ['caso']:
     print('[{"synced": true, "destinos": []}]'); sys.exit(0)
 e = carga()
@@ -2484,33 +2489,21 @@ const verbo = (llamada) => llamada[1]
   apagar()
 }
 
-// La CLI de Orca de mentira para "Atender ahora": lista las automatizaciones y las corre.
-// Anota cada llamada. Sin esto el worker alcanzaria la `orca` de verdad de quien corre las
-// pruebas, y correria su agente.
-async function conOrcaFalsa (nombre, { automatizaciones, ejecucion = 'ok', sinCli = false }, prueba) {
+// "Atender ahora" abre al agente de casos por el MISMO camino que el tick: `wa-scope agente
+// lanzar`, que lo abre por terminal con una cuenta de Claude que sirva. Nunca `orca
+// automations run`: Orca la lanza con la cuenta activa y, tomada, falla en silencio. Aqui
+// hay una `orca` de mentira en el PATH que anota cada llamada: no se la puede llamar.
+async function conOrcaVigilada (nombre, prueba) {
   const { comandoOrca } = await import('../catalogo.mjs')
   const bin = join(RAIZ, nombre)
   mkdirSync(bin, { recursive: true })
-  writeFileSync(join(bin, 'lista.json'), JSON.stringify({ id: 'x', ok: true,
-    result: { automations: automatizaciones } }))
-  writeFileSync(join(bin, 'ejecucion.txt'), ejecucion)
   writeFileSync(join(bin, comandoOrca()), [
     '#!/bin/sh',
-    'D="$(dirname "$0")"',
-    'echo "$@" >> "$D/llamadas.txt"',
-    'case "$1 $2" in',
-    '  "automations list") cat "$D/lista.json" ;;',
-    '  "automations run")',
-    '    case "$(cat "$D/ejecucion.txt")" in',
-    '      ok) echo \'{"id":"x","ok":true,"result":{"run":{"id":"r1"}}}\' ;;',
-    '      sale) echo "SECRETO mensaje del cliente" >&2; exit 1 ;;',
-    '      rechaza) echo \'{"id":"x","ok":false,"error":{"code":"automation_disabled","message":"SECRETO mensaje del cliente"}}\' ;;',
-    '    esac ;;',
-    '  *) echo "comando inesperado" >&2; exit 2 ;;',
-    'esac', ''
+    'echo "$@" >> "$(dirname "$0")/llamadas.txt"',
+    'echo \'{"ok":true,"result":{"automations":[],"run":{"id":"r1"}}}\'', ''
   ].join('\n'), { mode: 0o755 })
   const pathAntes = process.env.PATH
-  process.env.PATH = sinCli ? '/usr/bin:/bin' : `${bin}:/usr/bin:/bin`
+  process.env.PATH = `${bin}:/usr/bin:/bin`
   try {
     await prueba({
       llamadas: () => existsSync(join(bin, 'llamadas.txt'))
@@ -2521,42 +2514,37 @@ async function conOrcaFalsa (nombre, { automatizaciones, ejecucion = 'ok', sinCl
   }
 }
 
-const AUTOMATIZACION_TRIAGE = (extra = {}) => ({ id: 'auto-triage', name: 'Mi triage',
-  pluginOrigin: { pluginKey: 'ab2web.orca-wa-inbox', automationId: 'triage' }, ...extra })
-const AUTOMATIZACIONES_VARIAS = [
-  { id: 'auto-ajena', name: 'WhatsApp: triage',
-    pluginOrigin: { pluginKey: 'otro.plugin-ajeno', automationId: 'triage' } },
-  { id: 'auto-suelta', name: 'WhatsApp: triage', pluginOrigin: null },
-  { id: 'auto-tick', name: 'WhatsApp: every minute (no agent)',
-    pluginOrigin: { pluginKey: 'ab2web.orca-wa-inbox', automationId: 'tick' } },
-  AUTOMATIZACION_TRIAGE()
-]
+/** Lo que el `wa-scope` falso recibio fuera de `caso`: el lanzamiento del agente. */
+const lanzamientosAgente = (f) => (existsSync(join(f.dir, 'scope.jsonl'))
+  ? readFileSync(join(f.dir, 'scope.jsonl'), 'utf8').trim().split('\n').filter(Boolean)
+    .map((l) => JSON.parse(l)).filter((a) => a[0] === 'agente')
+  : [])
 
 {
-  // Atender ahora marca el caso Y despierta al agente: la automatizacion `triage` se busca
-  // por el origen del plugin (nunca por el nombre: el dueno la puede renombrar) y se lanza.
-  const casos = () => ({ casos: {
+  const casos = (agente) => ({ agente, casos: {
     7: casoDe({ etapa: 'clasificado', propuesta: null, propuesta_version: null }) } })
 
-  await conOrcaFalsa('orca-lanza', { automatizaciones: AUTOMATIZACIONES_VARIAS }, async (o) => {
-    const f = herramientasCaso('atender-lanza', casos())
+  await conOrcaVigilada('orca-atender', async (o) => {
+    const f = herramientasCaso('atender-lanza', casos({ salida: { agent: 'launched' } }))
     const orca = hostFalso(f.dir, { chats: [] })
     const { apagar } = await arranca(orca)
     const v = await pideCaso(orca, { action: 'atender', caseId: 7 })
     ok('lanzado: contesta atendido y dice que el agente salio',
       v && v.ok === true && v.code === 'atendido' && v.agent === 'launched', JSON.stringify(v))
     ok('el caso quedo marcado', f.scope().some((a) => verbo(a) === 'atender'), JSON.stringify(f.scope()))
-    ok('corre la automatizacion del plugin por su origen y no la homonima de otro plugin ni la renombrada por nombre',
-      JSON.stringify(o.llamadas()) === JSON.stringify([
-        'automations list --json', 'automations run auto-triage --json']), JSON.stringify(o.llamadas()))
+    ok('abre al agente con `wa-scope agente lanzar`, el camino del tick, con su plazo',
+      JSON.stringify(lanzamientosAgente(f)) === JSON.stringify([
+        ['agente', 'lanzar', '--plazo-s', '60', '--json']]), JSON.stringify(lanzamientosAgente(f)))
+    ok('y nunca le pide a Orca que corra la automatizacion', o.llamadas().length === 0,
+      JSON.stringify(o.llamadas()))
     apagar()
   })
 
   // Autorizar: el dueno suelta las excepciones de entrada de un caso en decision, y el agente
   // lo ve YA, igual que con Atender ahora.
-  await conOrcaFalsa('orca-autoriza', { automatizaciones: AUTOMATIZACIONES_VARIAS }, async (o) => {
-    const f = herramientasCaso('autorizar-lanza', { casos: {
-      7: casoDe({ etapa: 'decision', excepciones: '["credential"]' }) } })
+  await conOrcaVigilada('orca-autoriza', async (o) => {
+    const f = herramientasCaso('autorizar-lanza', { agente: { salida: { agent: 'launched' } },
+      casos: { 7: casoDe({ etapa: 'decision', excepciones: '["credential"]' }) } })
     const orca = hostFalso(f.dir, { chats: [] })
     const { apagar } = await arranca(orca)
     const v = await pideCaso(orca, { action: 'autorizar', caseId: 7, actor: 'agente' })
@@ -2565,57 +2553,46 @@ const AUTOMATIZACIONES_VARIAS = [
       v && v.ok === true && v.code === 'autorizado' && v.agent === 'launched' && llamada &&
       llamada[2] === '7' && llamada.includes('dueno') && !llamada.includes('agente'),
       JSON.stringify([v, llamada]))
-    ok('lanza la automatizacion del plugin, y ninguna otra',
-      JSON.stringify(o.llamadas()) === JSON.stringify([
-        'automations list --json', 'automations run auto-triage --json']), JSON.stringify(o.llamadas()))
+    ok('por el mismo camino, y sin la automatizacion', lanzamientosAgente(f).length === 1 &&
+      o.llamadas().length === 0, JSON.stringify([lanzamientosAgente(f), o.llamadas()]))
     apagar()
   })
 
-  await conOrcaFalsa('orca-autoriza-etapa', { automatizaciones: AUTOMATIZACIONES_VARIAS }, async () => {
+  await conOrcaVigilada('orca-autoriza-etapa', async () => {
     const f = herramientasCaso('autorizar-etapa', { casos: { 7: casoDe({ etapa: 'clasificado' }) },
       falla: { autorizar: 'E_STAGE' } })
     const orca = hostFalso(f.dir, { chats: [] })
     const { apagar } = await arranca(orca)
     const v = await pideCaso(orca, { action: 'autorizar', caseId: 7 })
     ok('si el caso no esta en decision o no tiene excepciones llega E_STAGE y no se lanza nada',
-      v && v.ok === false && v.code === 'E_STAGE' && v.agent === undefined, JSON.stringify(v))
+      v && v.ok === false && v.code === 'E_STAGE' && v.agent === undefined &&
+      lanzamientosAgente(f).length === 0, JSON.stringify(v))
     apagar()
   })
 
-  await conOrcaFalsa('orca-sin-triage', { automatizaciones: AUTOMATIZACIONES_VARIAS.slice(0, 3) }, async (o) => {
-    const f = herramientasCaso('atender-sin-triage', casos())
-    const orca = hostFalso(f.dir, { chats: [] })
-    const { apagar } = await arranca(orca)
-    const v = await pideCaso(orca, { action: 'atender', caseId: 7 })
-    ok('sin la automatizacion `triage` del plugin: triage-not-found, y el caso sigue marcado',
-      v && v.ok === true && v.code === 'atendido' && v.agent === 'triage-not-found' &&
-      f.scope().some((a) => verbo(a) === 'atender'), JSON.stringify(v))
-    ok('y no corre nada', !o.llamadas().some((l) => l.startsWith('automations run')), JSON.stringify(o.llamadas()))
-    apagar()
-  })
-
-  await conOrcaFalsa('orca-no-esta', { automatizaciones: [], sinCli: true }, async () => {
-    const f = herramientasCaso('atender-sin-cli', casos())
-    const orca = hostFalso(f.dir, { chats: [] })
-    const { apagar } = await arranca(orca)
-    const v = await pideCaso(orca, { action: 'atender', caseId: 7 })
-    ok('sin la CLI de Orca: orca-cli-missing, y el caso sigue marcado',
-      v && v.ok === true && v.code === 'atendido' && v.agent === 'orca-cli-missing' &&
-      f.scope().some((a) => verbo(a) === 'atender'), JSON.stringify(v))
-    apagar()
-  })
-
-  for (const [modo, razon] of [['sale', 'exit-1'], ['rechaza', 'automation_disabled']]) {
-    await conOrcaFalsa(`orca-falla-${modo}`, { automatizaciones: [AUTOMATIZACION_TRIAGE()], ejecucion: modo }, async () => {
-      const f = herramientasCaso(`atender-falla-${modo}`, casos())
+  const resultados = [
+    ['ya hay uno corriendo', { salida: { agent: 'running' } }, { agent: 'running' }],
+    ['nadie lo espera ya', { salida: { agent: 'nothing' } }, { agent: 'running' }],
+    ['ninguna cuenta sirve', { salida: { agent: 'failed', reason: 'sin-cuenta' } },
+      { agent: 'run-failed', agentReason: 'sin-cuenta' }],
+    ['no hay CLI de Orca', { salida: { agent: 'failed', reason: 'sin-cli' } },
+      { agent: 'orca-cli-missing' }],
+    ['un motivo que no es un codigo', { salida: { agent: 'failed', reason: 'SECRETO mensaje del cliente' } },
+      { agent: 'run-failed', agentReason: 'failed' }],
+    ['wa-scope sale mal', { sale: 1 }, { agent: 'run-failed', agentReason: 'exit-1' }]
+  ]
+  for (const [como, agente, espera] of resultados) {
+    await conOrcaVigilada(`orca-atender-${espera.agent}-${espera.agentReason || 'x'}`, async () => {
+      const f = herramientasCaso(`atender-${como.replace(/\W+/g, '-')}`, casos(agente))
       const orca = hostFalso(f.dir, { chats: [] })
       const { apagar } = await arranca(orca)
       const v = await pideCaso(orca, { action: 'atender', caseId: 7 })
-      ok(`si el lanzamiento falla (${modo}): run-failed con un motivo corto, y el caso sigue marcado`,
-        v && v.ok === true && v.code === 'atendido' && v.agent === 'run-failed' &&
-        v.agentReason === razon && f.scope().some((a) => verbo(a) === 'atender'), JSON.stringify(v))
-      ok('y el motivo nunca lleva el texto de un mensaje', !/SECRETO/.test(JSON.stringify(orca.store.scopeResult)),
-        JSON.stringify(orca.store.scopeResult))
+      ok(`${como}: el caso sigue marcado y el veredicto lo dice con un codigo`,
+        v && v.ok === true && v.code === 'atendido' && v.agent === espera.agent &&
+        v.agentReason === espera.agentReason && f.scope().some((a) => verbo(a) === 'atender'),
+        JSON.stringify(v))
+      ok(`${como}: el veredicto nunca lleva el texto de un mensaje`,
+        !/SECRETO/.test(JSON.stringify(orca.store.scopeResult)), JSON.stringify(orca.store.scopeResult))
       apagar()
     })
   }
