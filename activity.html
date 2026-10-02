@@ -392,6 +392,12 @@
              border-top: 1px solid var(--border, var(--fb-border)); }
       .det-hist li:first-child { border-top: 0; }
       .det-hist .when { margin-left: auto; }
+      .hist-reabierto { margin: 0 0 4px; padding: 3px 0; font-size: 11px; font-weight: 600;
+             border-bottom: 1px solid var(--border, var(--fb-border)); }
+      .hist-previa { margin-top: 8px; font-size: 11px; }
+      .hist-previa summary { cursor: pointer; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .hist-previa .hist-reabierto { margin-top: 8px; }
+      .det-escalar .det-text + .det-text { margin-top: 4px; }
       .det-hist .hist-quien { color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .det-proyecto { margin-top: 6px; font-size: 12px; overflow-wrap: anywhere; }
       .det-proyecto .det-k { color: var(--muted-foreground, var(--fb-muted-foreground)); }
@@ -517,7 +523,7 @@
       // El shell del panel no inyecta el idioma, asi que sale de navigator.language,
       // que en el renderer de Electron refleja el idioma del app.
       var STRINGS = {
-        es: {"title": "WhatsApp", "nothingAuthorized1": "Tiene 1 conversacion configurada y esta en off.", "nothingAuthorized": "Tiene {n} conversaciones configuradas y todas en off.", "nothingMapped": "Todavia no ha autorizado ninguna conversacion.", "runNever": "Su agente todavia no ha revisado.", "runNow": "Revisando ahora…", "runCut": "La revision arranco y no volvio", "runFailed": "La ultima revision fallo", "runChecked1": "Reviso 1 conversacion", "runChecked": "Reviso {n} conversaciones", "runNone": "nada pendiente", "runWaiting1": "1 esperando", "runWaiting": "{n} esperando", "noData": "sin datos — corra <code>wa-scope sync</code>", "running": "corriendo", "refreshTitle": "Releer lo guardado",
+        es: {"title": "WhatsApp", "nothingAuthorized1": "Tiene 1 conversacion configurada y esta en off.", "nothingAuthorized": "Tiene {n} conversaciones configuradas y todas en off.", "nothingMapped": "Todavia no ha autorizado ninguna conversacion.", "runNever": "Su agente todavia no ha revisado.", "runNow": "Revisando ahora…", "runCut": "La revision arranco y no volvio", "runFailed": "La ultima revision fallo", "runLast": "Ultima revision {hora}", "runLastNoTime": "Ultima revision", "runNone": "nada pendiente", "runAgent1": "1 caso para el agente", "runAgent": "{n} casos para el agente", "runOwner1": "1 espera su decision", "runOwner": "{n} esperan su decision", "histReopened": "Reabierto", "histPrev": "Ver historia anterior", "escLead": "El agente lo dejo a su decision", "escWhy": "Motivo", "escJev": "Jev lo ve como", "escHow": "No hay una respuesta redactada. Use Editar y enviar para responder usted.", "noData": "sin datos — corra <code>wa-scope sync</code>", "running": "corriendo", "refreshTitle": "Releer lo guardado",
                                                                                     "lineaConectada": "Linea conectada", "lineaConectando": "Conectando la linea\u2026", "lineaSinVincular": "Falta escanear el codigo QR en Ajustes", "lineaCaida": "La linea esta caida", "syncLineaNueva": "esperando el primer sync de esta linea\u2026", "lineaSinSenal": "La linea no da senal desde las {hora}", "cobertura": "El agente actua sobre {n} de {total} conversaciones", "coberturaSinTotal": "El agente actua sobre {n} conversaciones",                                           "stageRecibido": "Recibido",
               "stageClasificado": "Clasificado",
               "stageDecision": "Su decision",
@@ -685,7 +691,7 @@
               "acErrSinPermiso": "Orca no le dio permiso al plugin para ejecutar sus herramientas.",
               "acErrDemoro": "La accion tardo demasiado y se corto. Revise el tablero antes de repetirla.",
               "acErrFallo": "La accion fallo. Revise el tablero antes de repetirla."},
-        en: {"title": "WhatsApp", "nothingAuthorized1": "You have 1 conversation set up and it is off.", "nothingAuthorized": "You have {n} conversations set up and all of them are off.", "nothingMapped": "No conversation is authorized yet.", "runNever": "Your agent has not checked yet.", "runNow": "Checking now…", "runCut": "The run started and never came back", "runFailed": "Last run failed", "runChecked1": "Checked 1 conversation", "runChecked": "Checked {n} conversations", "runNone": "nothing pending", "runWaiting1": "1 waiting", "runWaiting": "{n} waiting", "noData": "no data — run <code>wa-scope sync</code>", "running": "running", "refreshTitle": "Re-read what is stored",
+        en: {"title": "WhatsApp", "nothingAuthorized1": "You have 1 conversation set up and it is off.", "nothingAuthorized": "You have {n} conversations set up and all of them are off.", "nothingMapped": "No conversation is authorized yet.", "runNever": "Your agent has not checked yet.", "runNow": "Checking now…", "runCut": "The run started and never came back", "runFailed": "Last run failed", "runLast": "Last run {hora}", "runLastNoTime": "Last run", "runNone": "nothing pending", "runAgent1": "1 case for the agent", "runAgent": "{n} cases for the agent", "runOwner1": "1 waiting for your decision", "runOwner": "{n} waiting for your decision", "histReopened": "Reopened", "histPrev": "Show earlier history", "escLead": "The agent left it to your decision", "escWhy": "Reason", "escJev": "Jev reads it as", "escHow": "There is no drafted reply. Use Edit and send to answer yourself.", "noData": "no data — run <code>wa-scope sync</code>", "running": "running", "refreshTitle": "Re-read what is stored",
                                                                                     "lineaConectada": "Line connected", "lineaConectando": "Connecting the line\u2026", "lineaSinVincular": "The QR code still has to be scanned in Settings", "lineaCaida": "The line is down", "syncLineaNueva": "waiting for this line\u2019s first sync\u2026", "lineaSinSenal": "No signal from the line since {hora}", "cobertura": "Your agent acts on {n} of {total} conversations", "coberturaSinTotal": "Your agent acts on {n} conversations",                                           "stageRecibido": "Received",
               "stageClasificado": "Classified",
               "stageDecision": "Your decision",
@@ -853,7 +859,7 @@
               "acErrSinPermiso": "Orca did not give the plugin permission to run its tools.",
               "acErrDemoro": "The action took too long and was cut off. Check the board before repeating it.",
               "acErrFallo": "The action failed. Check the board before repeating it."},
-        pt: {"title": "WhatsApp", "nothingAuthorized1": "Voce tem 1 conversa configurada e ela esta em off.", "nothingAuthorized": "Voce tem {n} conversas configuradas e todas em off.", "nothingMapped": "Nenhuma conversa autorizada ainda.", "runNever": "Seu agente ainda nao revisou.", "runNow": "Revisando agora…", "runCut": "A revisao comecou e nao voltou", "runFailed": "A ultima revisao falhou", "runChecked1": "Revisou 1 conversa", "runChecked": "Revisou {n} conversas", "runNone": "nada pendente", "runWaiting1": "1 aguardando", "runWaiting": "{n} aguardando", "noData": "sem dados — rode <code>wa-scope sync</code>", "running": "rodando", "refreshTitle": "Reler o que esta salvo",
+        pt: {"title": "WhatsApp", "nothingAuthorized1": "Voce tem 1 conversa configurada e ela esta em off.", "nothingAuthorized": "Voce tem {n} conversas configuradas e todas em off.", "nothingMapped": "Nenhuma conversa autorizada ainda.", "runNever": "Seu agente ainda nao revisou.", "runNow": "Revisando agora…", "runCut": "A revisao comecou e nao voltou", "runFailed": "A ultima revisao falhou", "runLast": "Ultima revisao {hora}", "runLastNoTime": "Ultima revisao", "runNone": "nada pendente", "runAgent1": "1 caso para o agente", "runAgent": "{n} casos para o agente", "runOwner1": "1 aguarda sua decisao", "runOwner": "{n} aguardam sua decisao", "histReopened": "Reaberto", "histPrev": "Ver historico anterior", "escLead": "O agente deixou para a sua decisao", "escWhy": "Motivo", "escJev": "Jev ve como", "escHow": "Nao ha resposta redigida. Use Editar e enviar para responder voce mesmo.", "noData": "sem dados — rode <code>wa-scope sync</code>", "running": "rodando", "refreshTitle": "Reler o que esta salvo",
                                                                                     "lineaConectada": "Linha conectada", "lineaConectando": "Conectando a linha\u2026", "lineaSinVincular": "Falta escanear o codigo QR em Ajustes", "lineaCaida": "A linha esta fora do ar", "syncLineaNueva": "esperando o primeiro sync desta linha\u2026", "lineaSinSenal": "A linha nao da sinal desde as {hora}", "cobertura": "Seu agente atua em {n} de {total} conversas", "coberturaSinTotal": "Seu agente atua em {n} conversas",                                           "stageRecibido": "Recebido",
               "stageClasificado": "Classificado",
               "stageDecision": "Sua decisao",
@@ -1241,7 +1247,7 @@
        *  Sin color propio: la allowlist del host no trae ni exito ni advertencia. El
        *  peso lo dan las dos clases que ya existen — `vieja` para lo que pide atencion
        *  y `stale` (--destructive) para lo que si es un fallo. */
-      function renderRun(activity, pendientesAhora) {
+      function renderRun(activity, board) {
         var nodo = el('runline')
         var r = activity && activity.run
         var clase = 'meta nota run'
@@ -1268,19 +1274,17 @@
             (r.endedAt ? ' · ' + cuando(r.endedAt) : '')
           clase += ' stale'
         } else {
-          var n = r.looked == null ? 0 : r.looked
-          // El pendiente de AHORA, no el que dejo anotado la corrida. Se contradecian
-          // en pantalla: la cabecera decia "nada pendiente" con dos mensajes listados
-          // justo debajo, porque `r.pending` es de la ultima corrida y la lista se
-          // pinta con `activity.pending`, que se actualiza en cada sync. Un panel que
-          // se contradice consigo mismo no se cree ni cuando acierta.
-          var p = pendientesAhora == null
-            ? (r.pending == null ? 0 : r.pending)
-            : pendientesAhora
-          texto = (n === 1 ? t('runChecked1') : fmt('runChecked', n)) + ' · ' +
-            (p === 0 ? t('runNone')
-              : p === 1 ? t('runWaiting1') : fmt('runWaiting', p)) +
-            (r.endedAt ? ' · ' + cuando(r.endedAt) : '')
+          // Casos de verdad, del tablero: los que esperan al agente (los mismos que
+          // `pending --needs-agent`) y los que esperan al dueno. Un cero no se dice. La
+          // cola vieja de mensajes (`activity.pending`) ya no significa nada aqui.
+          var partes = [r.endedAt ? fmt('runLast', { hora: cuando(r.endedAt) }) : t('runLastNoTime')]
+          var agente = board && Number.isInteger(board.agent_waiting) ? board.agent_waiting : null
+          var dueno = board && esObjeto(board.counts) && Number.isInteger(board.counts.decision)
+            ? board.counts.decision : null
+          if (agente) partes.push(agente === 1 ? t('runAgent1') : fmt('runAgent', agente))
+          if (dueno) partes.push(dueno === 1 ? t('runOwner1') : fmt('runOwner', dueno))
+          if (!agente && !dueno && agente !== null && dueno !== null) partes.push(t('runNone'))
+          texto = partes.join(' · ')
           if (viejo(r.endedAt)) clase += ' vieja'
         }
         nodo.textContent = texto
@@ -1479,7 +1483,7 @@
       // siempre falla es un boton que no hace nada.
       var ACCION_REGLA = {
         enviar: { etapas: ['decision', 'listo'], tipo: 'responder', version: true },
-        editar: { etapas: ['decision'], tipo: 'responder', version: true },
+        editar: { etapas: ['decision'], tipos: ['responder', 'escalar'], version: true },
         ejecutar: { etapas: ['decision'], tipo: 'trabajar', version: true },
         reclasificar: { etapas: ['recibido', 'decision', 'bloqueado'] },
         cerrar: { etapas: ['recibido', 'clasificado', 'decision', 'trabajo', 'listo',
@@ -1551,6 +1555,7 @@
           var regla = ACCION_REGLA[a]
           if (regla.etapas.indexOf(c.stage) < 0) return false
           if (regla.tipo && !(prop && prop.tipo === regla.tipo)) return false
+          if (regla.tipos && !(prop && regla.tipos.indexOf(prop.tipo) >= 0)) return false
           if (regla.version && !(prop && typeof prop.version === 'string' && prop.version)) return false
           return true
         })
@@ -1902,7 +1907,9 @@
       /** "Necesita su decision por: dinero", en una sola linea. */
       function excepcionNodo (c) {
         var excepciones = textos(c.exceptions)
-        if (!excepciones.length) return null
+        // Solo es una necesidad mientras el caso espera su decision: en Respondido, o en
+        // cualquier otra etapa, ya paso y seria una frase que miente.
+        if (c.stage !== 'decision' || !excepciones.length) return null
         return crear('div', 'card-exc', t('excLead') + ': ' +
           frases(EXC_KEY, excepciones, t('excOther')))
       }
@@ -2132,26 +2139,70 @@
         return caja.childNodes.length ? caja : null
       }
 
+      /** Una propuesta `escalar` no trae texto: el agente no redacto nada y lo dejo al dueno.
+       *  Se dice eso, con el porque (las excepciones y lo que Jev leyo) y como responder, en
+       *  vez de una caja de propuesta vacia. */
+      function escalarNodo (c) {
+        var s = seccion('det-escalar', t('escLead'))
+        var motivos = []
+        var excepciones = textos(c.exceptions)
+        if (excepciones.length) motivos.push(frases(EXC_KEY, excepciones, t('excOther')))
+        var clase = esObjeto(c.jev) && typeof c.jev.attention_class === 'string' ? c.jev.attention_class : ''
+        if (clase) motivos.push(t('escJev') + ' ' + porCodigo(JEV_CLASE_KEY, clase, t('jevClsOther')))
+        if (motivos.length) s.appendChild(crear('p', 'det-text', t('escWhy') + ': ' + motivos.join('. ')))
+        s.appendChild(crear('p', 'det-text', t('escHow')))
+        return s
+      }
+
       /** La historia del caso (`caso_evento`), solo si la clave la trae como `events`. */
       function historiaNodo (c) {
         var eventos = Array.isArray(c.events) ? c.events.filter(esObjeto) : []
         if (!eventos.length) return null
-        var lista = crear('ol', 'det-hist')
+        // Cada reapertura (algo vuelve a Recibido desde otra etapa) empieza un tramo nuevo:
+        // lo que espera ahora es el ultimo y va primero; lo anterior se pliega.
+        var tramos = [[]]
         eventos.forEach(function (ev) {
-          var hacia = ETAPA_KEY[ev.a] ? t(ETAPA_KEY[ev.a]) : null
-          if (!hacia) return
-          // Lo que no movio la etapa (una clasificacion, un proyecto, "atender") es un cambio
-          // dentro de la misma etapa.
-          var que = ev.de === ev.a ? hacia + ' · ' + t('detHistTouch')
-            : (ETAPA_KEY[ev.de] ? t(ETAPA_KEY[ev.de]) + ' → ' : '') + hacia
-          var li = crear('li')
-          li.appendChild(crear('span', 'hist-que', que))
-          li.appendChild(crear('span', 'hist-quien', porCodigo(ACTOR_KEY, ev.actor, t('actorOtro'))))
-          var cuandoTxt = hace(ev.at)
-          if (cuandoTxt) li.appendChild(crear('span', 'when', cuandoTxt))
-          lista.appendChild(li)
+          if (ev.a === 'recibido' && ETAPA_KEY[ev.de] && ev.de !== 'recibido') tramos.push([])
+          tramos[tramos.length - 1].push(ev)
         })
-        return lista.childNodes.length ? lista : null
+        function lista (evs) {
+          var ol = crear('ol', 'det-hist')
+          evs.forEach(function (ev) {
+            var hacia = ETAPA_KEY[ev.a] ? t(ETAPA_KEY[ev.a]) : null
+            if (!hacia) return
+            // Lo que no movio la etapa (una clasificacion, un proyecto, "atender") es un cambio
+            // dentro de la misma etapa.
+            var que = ev.de === ev.a ? hacia + ' · ' + t('detHistTouch')
+              : (ETAPA_KEY[ev.de] ? t(ETAPA_KEY[ev.de]) + ' → ' : '') + hacia
+            var li = crear('li')
+            li.appendChild(crear('span', 'hist-que', que))
+            li.appendChild(crear('span', 'hist-quien', porCodigo(ACTOR_KEY, ev.actor, t('actorOtro'))))
+            var cuandoTxt = hace(ev.at)
+            if (cuandoTxt) li.appendChild(crear('span', 'when', cuandoTxt))
+            ol.appendChild(li)
+          })
+          return ol.childNodes.length ? ol : null
+        }
+        function marca (evs) {
+          var cuandoTxt = hace(evs[0].at)
+          return crear('div', 'hist-reabierto', t('histReopened') + (cuandoTxt ? ' · ' + cuandoTxt : ''))
+        }
+        var caja = crear('div', 'det-hist-caja')
+        var ultimo = tramos[tramos.length - 1]
+        if (tramos.length > 1) caja.appendChild(marca(ultimo))
+        var actual = lista(ultimo)
+        if (actual) caja.appendChild(actual)
+        if (tramos.length > 1) {
+          var previa = crear('details', 'hist-previa')
+          previa.appendChild(crear('summary', null, t('histPrev')))
+          for (var k = tramos.length - 2; k >= 0; k--) {
+            if (k > 0) previa.appendChild(marca(tramos[k]))
+            var anterior = lista(tramos[k])
+            if (anterior) previa.appendChild(anterior)
+          }
+          caja.appendChild(previa)
+        }
+        return caja.childNodes.length ? caja : null
       }
 
       /** El detalle del caso: el texto entero, lo que vio Jev y todas las acciones. */
@@ -2228,7 +2279,9 @@
           caja.appendChild(ss)
         }
         var prop = esObjeto(c.proposal) ? c.proposal : null
-        if (prop && (prop.texto || prop.tipo)) {
+        if (prop && prop.tipo === 'escalar' && !prop.texto) {
+          caja.appendChild(escalarNodo(c))
+        } else if (prop && (prop.texto || prop.tipo)) {
           var sp = seccion('det-prop', t('propLead') +
             (prop.tipo ? ' · ' + porCodigo(PROP_KEY, prop.tipo, '') : ''))
           if (prop.texto) sp.appendChild(crear('div', 'card-prop', prop.texto))
@@ -2461,8 +2514,9 @@
           renderSynced(a)
           renderLinea(sc)
           renderCobertura(a, chats)
-          renderRun(a, Array.isArray(a.pending) ? a.pending.length : null)
-          renderBoard(stored(results[5]))
+          var tablero = stored(results[5])
+          renderRun(a, esObjeto(tablero) ? tablero : null)
+          renderBoard(tablero)
         })
       }
 
