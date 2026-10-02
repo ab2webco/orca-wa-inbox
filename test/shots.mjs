@@ -800,6 +800,16 @@ const PANELES = [
         detail: 'orca terminal create: This Claude account is in use by an assigned worktree' }
     }) })
   },
+  {
+    // El tick no pudo quitar de la barra lateral dos espacios que dejaron las corridas del
+    // plugin: lo dice la linea de la revision, para que el dueno los quite a mano.
+    nombre: 'tablero-espacios-atascados', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
+    datos: Object.assign(corrida({ state: 'ok', startedAt: AHORA_CORTO, endedAt: AHORA_CORTO,
+      looked: 4, pending: 0, reason: null }), { board: tableroDe(TABLERO_CASOS, {
+      agent_waiting: 1, workspaces_stuck: 2
+    }) })
+  },
   // 1. Reviso y no habia nada: el caso comun y sano.
   {
     nombre: 'actividad-sin-nada', archivo: 'activity.html', anchos: ANCHOS_ESTADO,

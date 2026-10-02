@@ -38,7 +38,7 @@
   automations/, resolver_formas) con el precheck nuevo.
 - [x] T2 La limpieza por `worktree list`, con terminales cerradas antes, verificacion y
   reintentos contados.
-- [ ] T3 El tablero: `workspaces_stuck` y "N espacios del plugin no se pudieron quitar".
+- [x] T3 El tablero: `workspaces_stuck` y "N espacios del plugin no se pudieron quitar".
 
 ## Criterios
 
