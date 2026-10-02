@@ -434,6 +434,31 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
          - el Super admin global (los números del dueño) vale en todos los chats.
       Va después de tablero-w7.
 
+- [ ] T23 — Supervisión del equipo por WhatsApp, pedida por el dueño (2026-10-01).
+      El bot le avisa a cada miembro del equipo el estado de sus tareas y le pide lo que
+      falta.
+      1. Equipo: personas con rol Operador (T22) y su número de WhatsApp, enlazadas con
+         su miembro de Plane, elegido en ajustes con el autocompletar de miembros de
+         `orca plane members list`.
+      2. Fuente de verdad: las tareas de Plane asignadas a cada uno, más los trabajos
+         despachados por el plugin (T8). Una automatización solo-comando las lee, sin
+         modelo, y detecta los cambios.
+      3. Avisos, siempre con el enlace a la tarea como evidencia, para que Jev no los
+         frene por estado sin verificar:
+         - una tarea suya quedó lista ("revisa");
+         - una tarea quedó bloqueada esperando algo de él ("requiere de ti: …");
+         - una tarea sin movimiento en N días;
+         - un resumen diario corto de lo pendiente.
+      4. Respuestas por WhatsApp:
+         - "listo", "bloqueado por …" o una pregunta de estado;
+         - el bot comenta y mueve la tarea en Plane (`orca plane comment add`,
+           `status set`);
+         - lo ambiguo lo resuelve el agente.
+      5. Respeta el horario de cada persona (`hours`), con un tope de mensajes al día por
+         persona y modo "Solo avisos": el agente nunca charla por su cuenta.
+      6. El dueño recibe un resumen del estado del equipo y lo que esté trabado.
+      Depende de T22 (roles y números), T8 (despacho) y de `wa-read wait`.
+
 Rama `feat/tablero-casos`, desde `main` en v4.9.0. PRs encadenados:
 (T1–T3) decisiones: casos, entrada y Jev; (T4–T6, T13) tablero y ajustes; (T7, T8, T12, T14, T15)
 orquestador y automatización; (T9–T11) estadísticas.
