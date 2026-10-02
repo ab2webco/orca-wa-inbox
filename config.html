@@ -215,6 +215,14 @@
       .checklist button.link { margin-left: 0; white-space: nowrap; }
       .checklist .done { padding: 7px 0 0; font-size: 12px; font-weight: 500; }
       .rules li { position: relative; padding: 5px 0 5px 16px; font-size: 12px; line-height: 1.5; }
+      .rules + .hint.lead { margin-top: 12px; }
+      /* Los niveles por regla (T22.3): el nombre de la regla arriba de sus tres botones. */
+      .ap-reglas { margin-top: 4px; }
+      .ap-regla { display: block; margin: 8px 0 4px; font-size: 12px;
+                  color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      /* Los numeros del dueno: nombre e id, y el id se parte donde haga falta a 320 px. */
+      .owner-id { display: block; font-size: 11px; overflow-wrap: anywhere;
+                  color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .rules li::before { content: '\25CF'; position: absolute; left: 2px; top: 5px;
                           font-size: 8px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
 
@@ -554,6 +562,36 @@
           </div>
           <input id="chat-greeting-text" data-t-ph="greetingPh" />
           <p class="hint" data-t="chatAutoHelp"></p>
+          <!-- T22.3: cada regla de aprobacion con su nivel en ESTA conversacion. Grupos de
+               botones como el modo: un select nativo no se abre en el panel de Orca. -->
+          <span class="label" data-t="chatApLabel"></span>
+          <div class="ap-reglas">
+            <span class="ap-regla" id="chat-ap-money-label" data-t="apRuleMoney"></span>
+            <div class="seg" id="chat-ap-money" role="group" aria-labelledby="chat-ap-money-label">
+              <button type="button" data-value="ask" data-t="apLvlAsk"></button>
+              <button type="button" data-value="agent" data-t="apLvlAgent"></button>
+              <button type="button" data-value="allow" data-t="apLvlAllow"></button>
+            </div>
+            <span class="ap-regla" id="chat-ap-credential-label" data-t="apRuleCredential"></span>
+            <div class="seg" id="chat-ap-credential" role="group" aria-labelledby="chat-ap-credential-label">
+              <button type="button" data-value="ask" data-t="apLvlAsk"></button>
+              <button type="button" data-value="agent" data-t="apLvlAgent"></button>
+              <button type="button" data-value="allow" data-t="apLvlAllow"></button>
+            </div>
+            <span class="ap-regla" id="chat-ap-commitment-label" data-t="apRuleCommitment"></span>
+            <div class="seg" id="chat-ap-commitment" role="group" aria-labelledby="chat-ap-commitment-label">
+              <button type="button" data-value="ask" data-t="apLvlAsk"></button>
+              <button type="button" data-value="agent" data-t="apLvlAgent"></button>
+              <button type="button" data-value="allow" data-t="apLvlAllow"></button>
+            </div>
+            <span class="ap-regla" id="chat-ap-quality-label" data-t="apRuleQuality"></span>
+            <div class="seg" id="chat-ap-quality" role="group" aria-labelledby="chat-ap-quality-label">
+              <button type="button" data-value="ask" data-t="apLvlAsk"></button>
+              <button type="button" data-value="agent" data-t="apLvlAgent"></button>
+              <button type="button" data-value="allow" data-t="apLvlAllow"></button>
+            </div>
+          </div>
+          <p class="hint" data-t="chatApHelp"></p>
           <div class="actions">
             <button class="primary" id="save-scope" data-t="save"></button>
             <button id="cancel-edit" hidden data-t="cancelEdit"></button>
@@ -614,8 +652,8 @@
 
       <!-- ───────── Su aprobacion ───────── -->
       <div id="view-aprobacion" role="tabpanel" aria-labelledby="tab-aprobacion" hidden>
-        <!-- Reglas FIJAS: el panel no ofrece apagarlas porque el codigo no deja
-             (`cmd_caso_aprobar`, bin/wa-scope). Decirlas es lo unico que hay que hacer. -->
+        <!-- Las reglas tal como son (T22.4): que pide cada una, los tres niveles que cada
+             conversacion elige (bin/wa_reglas.py, NIVELES_DEFECTO) y lo que no se apaga. -->
         <section>
           <h2 data-t="approvalLegend"></h2>
           <div id="exceptions">
@@ -627,7 +665,35 @@
               <li data-t="apJev"></li>
               <li data-t="apDraft"></li>
             </ul>
+            <p class="hint lead" data-t="apLevelsIntro"></p>
+            <ul class="rules">
+              <li data-t="apLvlAskDesc"></li>
+              <li data-t="apLvlAgentDesc"></li>
+              <li data-t="apLvlAllowDesc"></li>
+              <li data-t="apFixed"></li>
+            </ul>
             <p class="hint" data-t="approvalNote"></p>
+          </div>
+        </section>
+
+        <!-- Los numeros del dueno (T22.1): se eligen de los que ya escribieron en las
+             conversaciones, por el id que dejo WhatsApp. Nunca se escribe un numero. -->
+        <section class="card" id="owners-card">
+          <h2 data-t="ownersLegend"></h2>
+          <p class="hint lead" data-t="ownersIntro"></p>
+          <div id="owners-wrap"></div>
+          <label for="owner-search" data-t="ownersAddLabel"></label>
+          <div class="combo">
+            <input id="owner-search" type="text" autocomplete="off" spellcheck="false"
+                   role="combobox" aria-autocomplete="list" aria-expanded="false"
+                   aria-controls="owner-list" data-t-ph="ownersSearchPh" />
+            <div class="combo-list" id="owner-list" role="listbox" hidden
+                 data-t-label="ownersAddLabel"></div>
+          </div>
+          <p class="hint" data-t="ownersHelp"></p>
+          <div class="actions">
+            <button class="primary" id="save-owners" data-t="saveCard"></button>
+            <span class="said" id="said-owners"></span>
           </div>
         </section>
 
@@ -1019,19 +1085,55 @@
           edit: 'Editar', remove: 'Quitar',
           // --- Su aprobacion: las excepciones fijas (bin/wa-scope, cmd_caso_aprobar) ---
           approvalLegend: 'Cuando le pregunta a usted',
-          approvalIntro: 'Su agente responde solo. Le pregunta antes de enviar unicamente en ' +
-            'estos casos, y estas reglas no se pueden apagar:',
-          apMoney: '<b>Dinero:</b> precios, cobros, pagos o descuentos.',
-          apCredential: '<b>Credenciales:</b> claves, accesos o codigos.',
-          apCommitment: '<b>Compromisos:</b> una respuesta que promete una fecha o una entrega.',
-          apJev: '<b>Jev:</b> si esta encendido y marca el mensaje, o no contesta, la ' +
-            'respuesta espera su aprobacion.',
+          approvalIntro: 'Su agente responde solo. Le pregunta antes de enviar unicamente por estas ' +
+            'reglas, y cada conversacion decide que hace con cada una:',
+          apMoney: '<b>Dinero:</b> una respuesta con un monto o un precio. Que el cliente pregunte ' +
+            'cuanto cuesta no lo es: lo es la respuesta que dice la cifra.',
+          apCredential: '<b>Credenciales:</b> una respuesta que pide o nombra una clave, un token o un ' +
+            'codigo. Pedir un enlace, una URL o acceso a una pagina no lo es.',
+          apCommitment: '<b>Compromisos:</b> una respuesta que promete una fecha u hora concreta. La ' +
+            'palabra "fecha" o un "te confirmo" solos no lo son, y una pregunta no promete nada.',
+          apJev: '<b>Calidad (Jev):</b> si esta encendido y la respuesta afirma algo que nadie ' +
+            'verifico, la marca. Si Jev no contesta, la respuesta espera su aprobacion.',
           apDraft: '<b>Le pregunto antes:</b> en las conversaciones con ese modo nada sale ' +
             'sin su aprobacion.',
-          approvalNote: 'Dinero, credenciales y compromisos se detectan con reglas fijas ' +
-            'aunque Jev este apagado; ante la duda, le pregunta. Jev solo puede detener una ' +
-            'respuesta, nunca habilitarla. Lo que espera su aprobacion aparece en el tablero, ' +
-            'en "Su decision".',
+          approvalNote: 'Estas reglas detectan dinero, credenciales y compromisos aunque Jev este ' +
+            'apagado. Jev solo puede detener una respuesta, nunca habilitarla. Lo que espera su ' +
+            'aprobacion aparece en el tablero, en "Su decision".',
+          apLevelsIntro: 'Los tres niveles, que se eligen en cada conversacion (pestana ' +
+            'Conversaciones). Por defecto dinero, credenciales y compromisos le preguntan, y la ' +
+            'calidad vuelve al agente:',
+          apLvlAskDesc: '<b>Preguntarme:</b> la respuesta espera su aprobacion en "Su decision".',
+          apLvlAgentDesc: '<b>Que el agente lo revise:</b> la respuesta vuelve al agente para que ' +
+            'la reescriba sin eso; si a la tercera sigue igual, le pregunta a usted.',
+          apLvlAllowDesc: '<b>Permitir:</b> la respuesta sale sola.',
+          apFixed: '<b>Siempre, en todas:</b> un secreto con su valor (una clave, un token o un ' +
+            'codigo) nunca sale sin usted, y una credencial que llega nunca pasa por el agente.',
+          // --- Los numeros del dueno (T22.1) ---
+          ownersLegend: 'Sus numeros de confianza',
+          ownersIntro: 'Lo que usted escribe desde estos numeros cuenta como una orden suya. Lo ' +
+            'que se le responde ahi, o se le envia a su propio chat, no pasa por las reglas de ' +
+            'arriba: solo se frena un secreto.',
+          ownersAddLabel: 'Agregar un numero',
+          ownersSearchPh: 'Busque por nombre…',
+          ownersHelp: 'Se eligen de las personas que ya escribieron en sus conversaciones, por el ' +
+            'id que deja WhatsApp; un numero no se escribe a mano. La autoridad sale de ese id, ' +
+            'nunca de lo que diga el mensaje.',
+          ownersEmpty: 'Todavia no eligio ningun numero.',
+          ownersNoMatch: 'Nadie con ese nombre escribio en sus conversaciones.',
+          ownersNoCandidates: 'Todavia no hay personas para elegir: aparecen cuando alguien escribe ' +
+            'en una conversacion autorizada.',
+          ownersKindContact: 'persona',
+          ownersSeenIn: 'escribio en {chats}',
+          ownersDirect: 'chat directo',
+          ownersSaved: 'Numeros guardados',
+          // --- Los niveles por conversacion (T22.3) ---
+          chatApLabel: 'Aprobacion en esta conversacion',
+          apRuleMoney: 'Dinero', apRuleCredential: 'Credenciales', apRuleCommitment: 'Compromisos',
+          apRuleQuality: 'Calidad de la respuesta (Jev)',
+          apLvlAsk: 'Preguntarme', apLvlAgent: 'Que el agente lo revise', apLvlAllow: 'Permitir',
+          chatApHelp: 'Preguntarme: espera su aprobacion. Que el agente lo revise: vuelve al ' +
+            'agente para que la reescriba. Permitir: sale sola. Un secreto nunca sale sin usted.',
           // --- Jev (opcional): lo unico que manda texto de clientes fuera del equipo ---
           jevLegend: 'Jev (opcional)',
           jevDisclosure: '<b>Apagado de fabrica.</b> Si lo enciende, el texto de los mensajes que llegan y de los borradores de respuesta se envia a <code>api.typesafe.ai</code> (Jev, de TypeSafe) para decidir que necesita su atencion y revisar las respuestas antes de que salgan. Las credenciales se enmascaran antes de enviar. Sin llave no se envia nada y todo funciona como hasta ahora.',
@@ -1367,18 +1469,52 @@
           edit: 'Edit', remove: 'Remove',
           // --- Your approval: the fixed exceptions (bin/wa-scope, cmd_caso_aprobar) ---
           approvalLegend: 'When it asks you',
-          approvalIntro: 'Your agent replies on its own. It asks you before sending only in ' +
-            'these cases, and these rules cannot be turned off:',
-          apMoney: '<b>Money:</b> prices, charges, payments or discounts.',
-          apCredential: '<b>Credentials:</b> passwords, access or codes.',
-          apCommitment: '<b>Commitments:</b> a reply that promises a date or a delivery.',
-          apJev: '<b>Jev:</b> if it is on and flags the message, or does not answer, the ' +
-            'reply waits for your approval.',
+          approvalIntro: 'Your agent replies on its own. It asks you before sending only because of ' +
+            'these rules, and each conversation decides what to do with each one:',
+          apMoney: '<b>Money:</b> a reply with an amount or a price. A client asking what it costs ' +
+            'is not: the reply that states the figure is.',
+          apCredential: '<b>Credentials:</b> a reply that asks for or names a password, a token or a ' +
+            'code. Asking for a link, a URL or access to a page is not.',
+          apCommitment: '<b>Commitments:</b> a reply that promises a concrete date or time. The word ' +
+            '"date" or a "I will confirm" alone are not, and a question promises nothing.',
+          apJev: '<b>Quality (Jev):</b> if it is on and the reply states something nobody verified, ' +
+            'it flags it. If Jev does not answer, the reply waits for your approval.',
           apDraft: '<b>Ask me first:</b> in conversations on that mode nothing goes out ' +
             'without your approval.',
-          approvalNote: 'Money, credentials and commitments are caught by fixed rules even ' +
-            'with Jev off; when in doubt, it asks you. Jev can only stop a reply, never allow ' +
-            'one. What waits for your approval shows up on the board, under "Your decision".',
+          approvalNote: 'These rules catch money, credentials and commitments even with Jev off. Jev ' +
+            'can only stop a reply, never allow one. What waits for your approval shows up on the ' +
+            'board, under "Your decision".',
+          apLevelsIntro: 'The three levels, picked in each conversation (Conversations tab). By ' +
+            'default money, credentials and commitments ask you, and quality goes back to the agent:',
+          apLvlAskDesc: '<b>Ask me:</b> the reply waits for your approval under "Your decision".',
+          apLvlAgentDesc: '<b>Let the agent revise it:</b> the reply goes back to the agent to ' +
+            'rewrite it without that; if it is still there the third time, it asks you.',
+          apLvlAllowDesc: '<b>Allow:</b> the reply goes out on its own.',
+          apFixed: '<b>Always, everywhere:</b> a secret with its value (a password, a token or a ' +
+            'code) never goes out without you, and an incoming credential never reaches the agent.',
+          ownersLegend: 'Your trusted numbers',
+          ownersIntro: 'What you write from these numbers counts as your order. What is answered ' +
+            'there, or sent to your own chat, skips the rules above: only a secret is held.',
+          ownersAddLabel: 'Add a number',
+          ownersSearchPh: 'Search by name…',
+          ownersHelp: 'They are picked from the people who already wrote in your conversations, by ' +
+            'the id WhatsApp leaves; a number is never typed. Authority comes from that id, never ' +
+            'from what the message says.',
+          ownersEmpty: 'No number picked yet.',
+          ownersNoMatch: 'Nobody with that name wrote in your conversations.',
+          ownersNoCandidates: 'No people to pick yet: they show up when someone writes in an ' +
+            'authorized conversation.',
+          ownersKindContact: 'person',
+          ownersSeenIn: 'wrote in {chats}',
+          ownersDirect: 'direct chat',
+          ownersSaved: 'Numbers saved',
+          chatApLabel: 'Approval in this conversation',
+          apRuleMoney: 'Money', apRuleCredential: 'Credentials', apRuleCommitment: 'Commitments',
+          apRuleQuality: 'Quality of the reply (Jev)',
+          apLvlAsk: 'Ask me', apLvlAgent: 'Let the agent revise it', apLvlAllow: 'Allow',
+          chatApHelp: 'Ask me: it waits for your approval. Let the agent revise it: it goes back ' +
+            'to the agent to rewrite. Allow: it goes out on its own. A secret never goes out ' +
+            'without you.',
           // --- Jev (opcional): lo unico que manda texto de clientes fuera del equipo ---
           jevLegend: 'Jev (optional)',
           jevDisclosure: '<b>Off by default.</b> If you turn it on, the text of incoming messages and of drafted replies is sent to <code>api.typesafe.ai</code> (TypeSafe\'s Jev) to decide what needs your attention and to check replies before they go out. Credentials are masked before sending. Without a key nothing is sent and everything works as it does today.',
@@ -1739,19 +1875,52 @@
         colChat: 'Conversa', colPerm: 'Modo', edit: 'Editar', remove: 'Remover',
         // --- Sua aprovacao: as excecoes fixas (bin/wa-scope, cmd_caso_aprobar) ---
         approvalLegend: 'Quando pergunta a voce',
-        approvalIntro: 'O seu agente responde sozinho. Pergunta antes de enviar somente nestes ' +
-          'casos, e estas regras nao podem ser desligadas:',
-        apMoney: '<b>Dinheiro:</b> precos, cobrancas, pagamentos ou descontos.',
-        apCredential: '<b>Credenciais:</b> senhas, acessos ou codigos.',
-        apCommitment: '<b>Compromissos:</b> uma resposta que promete uma data ou uma entrega.',
-        apJev: '<b>Jev:</b> se estiver ligado e marcar a mensagem, ou nao responder, a ' +
-          'resposta espera a sua aprovacao.',
+        approvalIntro: 'O seu agente responde sozinho. Pergunta antes de enviar somente por estas ' +
+          'regras, e cada conversa decide o que fazer com cada uma:',
+        apMoney: '<b>Dinheiro:</b> uma resposta com um valor ou um preco. O cliente perguntar ' +
+          'quanto custa nao e: e a resposta que diz o valor.',
+        apCredential: '<b>Credenciais:</b> uma resposta que pede ou nomeia uma senha, um token ou um ' +
+          'codigo. Pedir um link, uma URL ou acesso a uma pagina nao e.',
+        apCommitment: '<b>Compromissos:</b> uma resposta que promete uma data ou hora concreta. A ' +
+          'palavra "data" ou um "te confirmo" sozinhos nao sao, e uma pergunta nao promete nada.',
+        apJev: '<b>Qualidade (Jev):</b> se estiver ligado e a resposta afirmar algo que ninguem ' +
+          'verificou, ele marca. Se o Jev nao responder, a resposta espera a sua aprovacao.',
         apDraft: '<b>Pergunto antes:</b> nas conversas com esse modo nada sai sem a sua ' +
           'aprovacao.',
-        approvalNote: 'Dinheiro, credenciais e compromissos sao detectados por regras fixas ' +
-          'mesmo com o Jev desligado; na duvida, pergunta a voce. O Jev so pode deter uma ' +
-          'resposta, nunca habilita-la. O que espera a sua aprovacao aparece no quadro, em ' +
-          '"Sua decisao".',
+        approvalNote: 'Estas regras detectam dinheiro, credenciais e compromissos mesmo com o Jev ' +
+          'desligado. O Jev so pode deter uma resposta, nunca habilita-la. O que espera a sua ' +
+          'aprovacao aparece no quadro, em "Sua decisao".',
+        apLevelsIntro: 'Os tres niveis, escolhidos em cada conversa (aba Conversas). Por padrao ' +
+          'dinheiro, credenciais e compromissos perguntam a voce, e a qualidade volta ao agente:',
+        apLvlAskDesc: '<b>Perguntar a mim:</b> a resposta espera a sua aprovacao em "Sua decisao".',
+        apLvlAgentDesc: '<b>Que o agente revise:</b> a resposta volta ao agente para reescreve-la ' +
+          'sem isso; se na terceira continuar, pergunta a voce.',
+        apLvlAllowDesc: '<b>Permitir:</b> a resposta sai sozinha.',
+        apFixed: '<b>Sempre, em todas:</b> um segredo com o seu valor (uma senha, um token ou um ' +
+          'codigo) nunca sai sem voce, e uma credencial que chega nunca passa pelo agente.',
+        ownersLegend: 'Seus numeros de confianca',
+        ownersIntro: 'O que voce escreve destes numeros conta como uma ordem sua. O que se ' +
+          'responde ali, ou se envia ao seu proprio chat, nao passa pelas regras acima: so um ' +
+          'segredo e retido.',
+        ownersAddLabel: 'Adicionar um numero',
+        ownersSearchPh: 'Busque pelo nome…',
+        ownersHelp: 'Sao escolhidos entre as pessoas que ja escreveram nas suas conversas, pelo id ' +
+          'que o WhatsApp deixa; um numero nunca e digitado. A autoridade sai desse id, nunca do ' +
+          'que a mensagem diz.',
+        ownersEmpty: 'Nenhum numero escolhido ainda.',
+        ownersNoMatch: 'Ninguem com esse nome escreveu nas suas conversas.',
+        ownersNoCandidates: 'Ainda nao ha pessoas para escolher: aparecem quando alguem escreve ' +
+          'numa conversa autorizada.',
+        ownersKindContact: 'pessoa',
+        ownersSeenIn: 'escreveu em {chats}',
+        ownersDirect: 'chat direto',
+        ownersSaved: 'Numeros salvos',
+        chatApLabel: 'Aprovacao nesta conversa',
+        apRuleMoney: 'Dinheiro', apRuleCredential: 'Credenciais', apRuleCommitment: 'Compromissos',
+        apRuleQuality: 'Qualidade da resposta (Jev)',
+        apLvlAsk: 'Perguntar a mim', apLvlAgent: 'Que o agente revise', apLvlAllow: 'Permitir',
+        chatApHelp: 'Perguntar a mim: espera a sua aprovacao. Que o agente revise: volta ao ' +
+          'agente para reescrever. Permitir: sai sozinha. Um segredo nunca sai sem voce.',
         // --- Jev (opcional): lo unico que manda texto de clientes fuera del equipo ---
         jevLegend: 'Jev (opcional)',
         jevDisclosure: '<b>Desligado por padrao.</b> Se voce ligar, o texto das mensagens recebidas e dos rascunhos de resposta e enviado para <code>api.typesafe.ai</code> (Jev, da TypeSafe) para decidir o que precisa da sua atencao e revisar as respostas antes de sairem. As credenciais sao mascaradas antes do envio. Sem chave nada e enviado e tudo funciona como ate agora.',
@@ -3067,6 +3236,27 @@
       }
       el('mode').addEventListener('change', pintarModo)
 
+      // Los niveles de aprobacion de una conversacion (T22.3), con los mismos defectos que
+      // bin/wa_reglas.py (NIVELES_DEFECTO): lo que no dice la entrada queda por defecto.
+      var REGLAS_NIVEL = ['money', 'credential', 'commitment', 'quality']
+      var NIVELES_DEFECTO = { money: 'ask', credential: 'ask', commitment: 'ask', quality: 'agent' }
+      var NIVELES = ['ask', 'agent', 'allow']
+      function ponerNiveles(aprobacion) {
+        var a = aprobacion && typeof aprobacion === 'object' ? aprobacion : {}
+        REGLAS_NIVEL.forEach(function (r) {
+          ponerSeg('chat-ap-' + r, NIVELES.indexOf(a[r]) !== -1 ? a[r] : NIVELES_DEFECTO[r],
+            NIVELES_DEFECTO[r])
+        })
+      }
+      function nivelesDelFormulario() {
+        var salida = {}
+        REGLAS_NIVEL.forEach(function (r) {
+          var v = valorSeg('chat-ap-' + r)
+          salida[r] = NIVELES.indexOf(v) !== -1 ? v : NIVELES_DEFECTO[r]
+        })
+        return salida
+      }
+
       function startEdit(entry, key) {
         if (!entry) return
         editandoJid = key
@@ -3084,6 +3274,7 @@
         el('chat-ack-text').value = entry.ackText || ''
         ponerSeg('chat-greeting', entry.greeting, 'default')
         el('chat-greeting-text').value = entry.greetingText || ''
+        ponerNiveles(entry.approval)
         ponerSeg('mode', entry.mode, 'off')
         pintarModo()
         el('scope-form-title').textContent = t('formEditing')
@@ -3108,6 +3299,7 @@
         el('chat-ack-text').value = ''
         ponerSeg('chat-greeting', 'default', 'default')
         el('chat-greeting-text').value = ''
+        ponerNiveles(null)
         // Una conversacion nueva arranca sin proyecto: la mayoria de los 1 a 1 solo piden
         // que el agente lea y conteste, y elegir uno por inercia mandaria su trabajo a un
         // repo que nada tiene que ver.
@@ -3192,6 +3384,7 @@
             ackText: el('chat-ack-text').value.trim() || null,
             greeting: valorSeg('chat-greeting') === 'default' ? null : valorSeg('chat-greeting'),
             greetingText: el('chat-greeting-text').value.trim() || null,
+            approval: nivelesDelFormulario(),
             updatedAt: new Date().toISOString() })
           // Autorizar es autorizar para ESTE numero (T9): el mismo grupo visto desde
           // otro numero propio es otra autorizacion.
@@ -3205,6 +3398,117 @@
           })
         }))
       })
+
+      // ---------- los numeros del dueno (T22.1) ----------
+      // Se eligen de los que ya escribieron (`senders`, que deja wa-scope) y de los chats
+      // directos, por el id que dejo WhatsApp sin el dispositivo. Nunca se escribe un
+      // numero: un id adivinado le daria a otro la autoridad del dueno.
+      var duenosGuardados = []
+      var duenosEnEdicion = null
+      var remitentes = []
+      function idSinDispositivo(jid) {
+        var t = String(jid || '')
+        var i = t.indexOf('@')
+        if (i <= 0) return ''
+        return t.slice(0, i).split(':')[0] + t.slice(i)
+      }
+      function listaDeDuenos(lista) {
+        var vistos = {}
+        return (Array.isArray(lista) ? lista : []).filter(function (d) {
+          var id = d && idSinDispositivo(d.id)
+          if (!id || vistos[id]) return false
+          vistos[id] = true
+          return true
+        }).map(function (d) {
+          return { id: idSinDispositivo(d.id), name: typeof d.name === 'string' ? d.name : '' }
+        })
+      }
+      function duenosVisibles() { return duenosEnEdicion || duenosGuardados }
+      function renderOwners(lista) {
+        duenosGuardados = listaDeDuenos(lista)
+        if (!duenosEnEdicion) pintarDuenos()
+      }
+      function renderSenders(lista) {
+        remitentes = Array.isArray(lista) ? lista.filter(function (r) {
+          return r && typeof r.id === 'string' && r.id.indexOf('@') > 0
+        }) : []
+        comboDuenos.refrescar()
+      }
+      function pintarDuenos() {
+        var lista = duenosVisibles()
+        var caja = el('owners-wrap')
+        if (!lista.length) {
+          caja.innerHTML = '<p class="empty">' + esc(t('ownersEmpty')) + '</p>'
+          return
+        }
+        caja.innerHTML = '<table><tbody>' + lista.map(function (d) {
+          return '<tr><td>' + esc(d.name || d.id) + '<span class="owner-id">' + esc(d.id) +
+            '</span></td><td class="acts"><button class="link" data-orm="' + escAttr(d.id) +
+            '">' + t('remove') + '</button></td></tr>'
+        }).join('') + '</tbody></table>'
+        Array.prototype.forEach.call(caja.querySelectorAll('[data-orm]'), function (b) {
+          b.addEventListener('click', function () {
+            duenosEnEdicion = duenosVisibles().filter(function (d) { return d.id !== b.dataset.orm })
+            pintarDuenos()
+          })
+        })
+      }
+      /** Las personas que se pueden elegir: quienes escribieron y los chats directos, sin
+       *  los grupos, sin el chat de la linea consigo misma (ya es del dueno) y sin las ya
+       *  elegidas. */
+      function candidatosDeDueno() {
+        var porId = {}
+        var orden = []
+        function sumar(id, nombre, sub) {
+          id = idSinDispositivo(id)
+          if (!id || /@g\.us$/.test(id)) return
+          if (!porId[id]) { porId[id] = { id: id, name: '', subs: [] }; orden.push(id) }
+          if (!porId[id].name && nombre) porId[id].name = nombre
+          if (sub && porId[id].subs.indexOf(sub) === -1) porId[id].subs.push(sub)
+        }
+        remitentes.forEach(function (r) {
+          var chats = Array.isArray(r.chats) ? r.chats.filter(Boolean).slice(0, 3) : []
+          sumar(r.id, r.name, chats.length ? t('ownersSeenIn').replace('{chats}', chats.join(', ')) : '')
+        })
+        chatsTodos.forEach(function (c) {
+          if (c.kind === 'directo' && !c.own) sumar(c.jid, c.name, t('ownersDirect'))
+        })
+        var elegidos = {}
+        duenosVisibles().forEach(function (d) { elegidos[d.id] = true })
+        return orden.filter(function (id) { return !elegidos[id] }).map(function (id) { return porId[id] })
+      }
+      var comboDuenos = crearCombo({
+        input: 'owner-search', lista: 'owner-list',
+        opciones: function (terminos) {
+          var todos = candidatosDeDueno()
+          if (!todos.length) return { items: [], vacio: t('ownersNoCandidates') }
+          var visibles = terminos.length ? todos.filter(function (c) {
+            var texto = aplanar(c.name + ' ' + c.id)
+            return terminos.every(function (x) { return texto.indexOf(x) !== -1 })
+          }) : todos
+          if (!visibles.length) return { items: [], vacio: t('ownersNoMatch') }
+          return { items: visibles.map(function (c) {
+            return { value: c.id, nombre: c.name || c.id, real: c.name,
+              kind: t('ownersKindContact'), sub: c.subs.join(' · ') }
+          }) }
+        },
+        elegir: function (item) {
+          duenosEnEdicion = duenosVisibles().concat([{ id: item.value, name: item.real || '' }])
+          el('owner-search').value = ''
+          pintarDuenos()
+        }
+      })
+      el('save-owners').addEventListener('click', function (event) {
+        var lista = duenosVisibles().slice()
+        busy(event.currentTarget, write('owners', lista).then(function (r) {
+          if (r && r.ok === false) { said('said-owners', t('saveFail'), true); return }
+          duenosGuardados = lista
+          duenosEnEdicion = null
+          pintarDuenos()
+          said('said-owners', '✓ ' + t('ownersSaved'))
+        }))
+      })
+      pintarDuenos()
 
       // ---------- reglas de ruteo ----------
       function renderRoutes(rules) {
@@ -4027,7 +4331,8 @@
       var CLAVES = ['scope', 'agentName', 'health', 'routes', 'tone', 'chats',
                     'chatsAccount', 'transcribeQuality', 'inboxDays', 'ownerName',
                     'transcribe', 'transcribeLang', 'syncStatus', 'syncMinutes',
-                    'workerBeat', 'sidecar', 'jevStatus', 'projects', 'projectsStatus']
+                    'workerBeat', 'sidecar', 'jevStatus', 'projects', 'projectsStatus',
+                    'owners', 'senders']
       var CLAVES_VIVAS = ['chats', 'chatsAccount', 'health', 'syncStatus', 'workerBeat',
                           'sidecar']
 
@@ -4081,6 +4386,8 @@
                 ? v('syncStatus') : null
             }
             if (hayRespuesta(v('chats'))) renderChats(v('chats'))
+            if (hayRespuesta(v('senders'))) renderSenders(v('senders'))
+            if (hayRespuesta(v('owners'))) renderOwners(v('owners'))
             pintarClave('agentName', v('agentName'), sello)
             // El latido manda sobre todo lo demas: si nadie esta corriendo, el health
             // que haya es de otra sesion y "todo bien" seria mentira. Un rechazo del

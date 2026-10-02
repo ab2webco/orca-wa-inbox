@@ -671,6 +671,100 @@ console.log('\nconfig.html — T17: Su aprobacion explica las excepciones fijas'
     !/(por|desde|en) (su )?(chat propio|WhatsApp)/i.test(vista), vista)
 }
 
+console.log('\nconfig.html — T22: las reglas como son, por conversacion y con niveles')
+{
+  const { doc } = await montar('config.html', {}, 'es-419')
+  await espera()
+  const texto = doc.getElementById('exceptions').textContent
+  ok('ya no dice que las reglas no se pueden apagar', !/no se pueden apagar/i.test(texto), texto)
+  ok('nombra los tres niveles', /Preguntarme/.test(texto) &&
+    /Que el agente lo revise/.test(texto) && /Permitir/.test(texto), texto)
+  ok('dice lo que es cada regla: un monto, una fecha u hora concreta, una pregunta no promete',
+    /monto/i.test(texto) && /fecha u hora/i.test(texto) && /pregunta/i.test(texto), texto)
+  ok('y lo que no se apaga nunca: un secreto', /secreto/i.test(texto), texto)
+}
+
+console.log('\nconfig.html — T22: los numeros del dueno se eligen de los que escribieron')
+{
+  const { doc, storage } = await montar('config.html', {
+    chats: [{ jid: '100000000000001@lid', name: 'Ana Duena', kind: 'directo' },
+      { jid: '120363000000000001@g.us', name: 'Soporte Norte', kind: 'grupo' }],
+    senders: [{ id: '100000000000002@lid', name: 'Beto Socio', chats: ['Soporte Norte'] }]
+  }, 'es-419')
+  await espera()
+  ok('la tarjeta esta en Su aprobacion',
+    !!doc.querySelector('#view-aprobacion #owners-card'), 'falta #owners-card')
+  escribir(doc, 'owner-search', 'beto')
+  let opciones = opcionesCombo(doc, 'owner-list')
+  ok('el autocompletar ofrece a quien escribio, con su nombre y donde',
+    opciones.length === 1 && opciones[0].dataset.value === '100000000000002@lid' &&
+    opciones[0].textContent.includes('Beto Socio') &&
+    opciones[0].textContent.includes('Soporte Norte'), opciones.map((o) => o.textContent))
+  escribir(doc, 'owner-search', 'soporte')
+  ok('un grupo no es una persona: no se ofrece',
+    !opcionesCombo(doc, 'owner-list').some((o) => o.dataset.value.endsWith('@g.us')),
+    opcionesCombo(doc, 'owner-list').map((o) => o.dataset.value))
+  escribir(doc, 'owner-search', '+57 300 000 0000')
+  ok('un numero escrito a mano no se puede elegir', opcionesCombo(doc, 'owner-list').length === 0)
+  escribir(doc, 'owner-search', 'beto')
+  opcionesCombo(doc, 'owner-list')[0].click()
+  escribir(doc, 'owner-search', 'ana')
+  opciones = opcionesCombo(doc, 'owner-list')
+  ok('un directo tambien se ofrece, por su id', opciones.length === 1 &&
+    opciones[0].dataset.value === '100000000000001@lid', opciones.map((o) => o.dataset.value))
+  opciones[0].click()
+  ok('lo elegido se lista antes de guardar',
+    doc.getElementById('owners-wrap').textContent.includes('Beto Socio') &&
+    doc.getElementById('owners-wrap').textContent.includes('Ana Duena'),
+  doc.getElementById('owners-wrap').textContent)
+  doc.getElementById('save-owners').click()
+  await espera()
+  ok('guardar deja los ids observados, con nombre',
+    JSON.stringify(storage.owners) === JSON.stringify([
+      { id: '100000000000002@lid', name: 'Beto Socio' },
+      { id: '100000000000001@lid', name: 'Ana Duena' }]), JSON.stringify(storage.owners))
+  doc.querySelector('#owners-wrap [data-orm="100000000000002@lid"]').click()
+  doc.getElementById('save-owners').click()
+  await espera()
+  ok('quitar uno y guardar lo saca', JSON.stringify(storage.owners) ===
+    JSON.stringify([{ id: '100000000000001@lid', name: 'Ana Duena' }]), JSON.stringify(storage.owners))
+}
+
+console.log('\nconfig.html — T22: cada conversacion con sus niveles de aprobacion')
+{
+  const JID = '120363000000000001@g.us'
+  const { doc, storage } = await montar('config.html', {
+    chats: [{ jid: JID, name: 'Soporte Norte', kind: 'grupo' }]
+  }, 'es-419')
+  await espera()
+  const grupos = ['chat-ap-money', 'chat-ap-credential', 'chat-ap-commitment', 'chat-ap-quality']
+  ok('el editor tiene un grupo de tres botones por regla',
+    grupos.every((g) => doc.querySelectorAll(`#${g} button`).length === 3),
+    grupos.map((g) => doc.querySelectorAll(`#${g} button`).length))
+  ok('con los textos del dueno', JSON.stringify(textosSeg(doc, 'chat-ap-money')) ===
+    JSON.stringify({ ask: 'Preguntarme', agent: 'Que el agente lo revise', allow: 'Permitir' }),
+  JSON.stringify(textosSeg(doc, 'chat-ap-money')))
+  ok('una conversacion nueva arranca con los niveles por defecto',
+    valorSeg(doc, 'chat-ap-money') === 'ask' && valorSeg(doc, 'chat-ap-credential') === 'ask' &&
+    valorSeg(doc, 'chat-ap-commitment') === 'ask' && valorSeg(doc, 'chat-ap-quality') === 'agent',
+  grupos.map((g) => valorSeg(doc, g)))
+  elegirChat(doc, JID, 'soporte')
+  elegirSeg(doc, 'mode', 'responder')
+  elegirSeg(doc, 'chat-ap-money', 'allow')
+  elegirSeg(doc, 'chat-ap-quality', 'ask')
+  doc.getElementById('save-scope').click()
+  await espera()
+  ok('guardar deja los cuatro niveles en la conversacion',
+    JSON.stringify(storage.scope?.[JID]?.approval) === JSON.stringify(
+      { money: 'allow', credential: 'ask', commitment: 'ask', quality: 'ask' }),
+  JSON.stringify(storage.scope?.[JID]))
+  ok('y el formulario vuelve a los de por defecto', valorSeg(doc, 'chat-ap-money') === 'ask')
+  doc.querySelector(`[data-edit="${JID}"]`)?.click()
+  await espera()
+  ok('editarla trae sus niveles', valorSeg(doc, 'chat-ap-money') === 'allow' &&
+    valorSeg(doc, 'chat-ap-quality') === 'ask', grupos.map((g) => valorSeg(doc, g)))
+}
+
 console.log('\nconfig.html')
 {
   const { doc, storage } = await montar('config.html', { projects: PROYECTOS_PRUEBA })
