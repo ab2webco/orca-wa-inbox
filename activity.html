@@ -669,6 +669,8 @@
               "fallbackWhy_elegida-fallo": "la elegida fallo al abrir",
               "agentFail": "No pude lanzar al agente: {reason}",
               "agentFailGeneric": "No pude lanzar al agente",
+              "stuckWorkspaces1": "1 espacio del plugin no se pudo quitar",
+              "stuckWorkspaces": "{n} espacios del plugin no se pudieron quitar",
               "agentWhy_sin-cli": "no encuentro la CLI de Orca en esta maquina",
               "agentWhy_sin-espacio": "Orca no tiene el espacio del plugin; aprueba el plugin de nuevo en Orca",
               "agentWhy_sin-prompt": "falta el prompt del agente en el plugin",
@@ -889,6 +891,8 @@
               "fallbackWhy_elegida-fallo": "the chosen one failed to open",
               "agentFail": "Could not launch the agent: {reason}",
               "agentFailGeneric": "Could not launch the agent",
+              "stuckWorkspaces1": "1 plugin workspace could not be removed",
+              "stuckWorkspaces": "{n} plugin workspaces could not be removed",
               "agentWhy_sin-cli": "the Orca CLI is not on this machine",
               "agentWhy_sin-espacio": "Orca does not have the plugin workspace; approve the plugin again in Orca",
               "agentWhy_sin-prompt": "the agent prompt is missing from the plugin",
@@ -1109,6 +1113,8 @@
               "fallbackWhy_elegida-fallo": "a escolhida falhou ao abrir",
               "agentFail": "Nao consegui lancar o agente: {reason}",
               "agentFailGeneric": "Nao consegui lancar o agente",
+              "stuckWorkspaces1": "1 espaco do plugin nao pode ser removido",
+              "stuckWorkspaces": "{n} espacos do plugin nao puderam ser removidos",
               "agentWhy_sin-cli": "a CLI do Orca nao esta nesta maquina",
               "agentWhy_sin-espacio": "o Orca nao tem o espaco do plugin; aprove o plugin de novo no Orca",
               "agentWhy_sin-prompt": "falta o prompt do agente no plugin",
@@ -1464,6 +1470,14 @@
           texto = partes.join(' · ')
           if (falla) clase += ' stale'
           else if (viejo(r.endedAt)) clase += ' vieja'
+        }
+        // Los espacios que el tick no pudo quitar de la barra lateral tras sus intentos
+        // (`workspaces_stuck`): se dicen en cualquier estado, para que el dueno los quite.
+        var atascados = board && Number.isInteger(board.workspaces_stuck) && board.workspaces_stuck > 0
+          ? board.workspaces_stuck : 0
+        if (atascados) {
+          texto += ' · ' + (atascados === 1 ? t('stuckWorkspaces1') : fmt('stuckWorkspaces', atascados))
+          if (!/ stale/.test(clase)) clase = clase.replace(' vieja', '') + ' stale'
         }
         nodo.textContent = texto
         nodo.className = clase

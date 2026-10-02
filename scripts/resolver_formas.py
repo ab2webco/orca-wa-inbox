@@ -30,7 +30,7 @@ RAIZ = pathlib.Path(__file__).resolve().parent.parent
 
 LEER = 'WA="$(cat .wa-bin 2>/dev/null)"'
 COLAS = {
-    "triage": '"$WA/wa-scope" pending --needs-agent',
+    "triage": '"$WA/wa-scope" pending --needs-agent --precheck',
     "tick": '"$WA/wa-scope" tick --json',
 }
 

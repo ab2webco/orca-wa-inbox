@@ -7,13 +7,19 @@ instalado y viceversa.
 | archivo | cada | corre |
 |---|---|---|
 | `whatsapp-tick.json` | 1 min | `wa-scope tick` (solo comando, sin agente) |
-| `whatsapp-triage.json` | 5 min, a toda hora (y al instante con "Atender ahora") | agente, con precheck `wa-scope pending --needs-agent` |
+| `whatsapp-triage.json` | 5 min, a toda hora (y al instante con "Atender ahora") | agente, con precheck `wa-scope pending --needs-agent --precheck` |
 
-`tick` también limpia: a lo sumo cada 5 minutos quita de la barra lateral (`orca worktree
-rm`, solo el registro y sus terminales, nunca los archivos ni la raíz de la carpeta) los
-espacios `::workspace:` que `triage` deja en cada corrida ya terminada, 5 por vuelta como
-máximo y 2 minutos después de que acabó. Sin la CLI de Orca, o con un error, no hace nada
-y lo cuenta en `limpieza_error`.
+`tick` también limpia: a lo sumo cada 5 minutos (al minuto si le quedaron pendientes)
+quita de la barra lateral (`orca worktree rm`, solo el registro, nunca los archivos ni la
+raíz de la carpeta) todo hijo `::workspace:` de la carpeta del plugin que lista `orca
+worktree list`, sea de la automatización de ahora o de una que Orca borró y recreó: 10
+por vuelta como máximo, 2 minutos después de su última actividad, nunca el de una corrida
+en vuelo ni el que aloja la terminal del agente de casos o de un despacho en vuelo.
+Primero cierra sus terminales (`orca terminal close`), después lo quita y vuelve a listar:
+en vivo `rm` contestó `removed: true` y el espacio seguía ahí. Lo que sigue en la lista
+cuenta un intento y se reintenta; a los 3 lo dice `limpieza_atascados` en la línea del
+tick y el tablero ("N espacios del plugin no se pudieron quitar"). Sin la CLI de Orca, o
+con un error, no hace nada y lo cuenta en `limpieza_error`.
 
 `tick` es un comando, no un agente (`orca automations create --command` en un Orca
 1.4.160-lab.84 o más nuevo), pero despierta a dos:
@@ -31,9 +37,13 @@ y lo cuenta en `limpieza_error`.
   anterior. La terminal se cierra cuando el agente soltó el lock, cuando se fue sola o a
   los 30 minutos. Si no lo pudo lanzar, el tablero lo dice con el motivo. "Atender ahora"
   usa el mismo camino (`wa-scope agente lanzar`), sin la espera. La automatización
-  `triage` queda de respaldo con su cron: el precheck **sale con 1 cuando ningún caso
-  necesita lenguaje** (Orca marca la corrida `skipped_precheck`), y si su agente llega con
-  otro trabajando, se frena en el `lock`.
+  `triage` queda de respaldo con su cron: el precheck (`pending --needs-agent --precheck`)
+  **sale con 1 cuando ningún caso necesita lenguaje o cuando el tick se encarga** (corrió
+  hace menos de 3 minutos y su último lanzamiento no falló por `sin-cli`, `sin-espacio` o
+  `sin-prompt`, lo único que el cron sí arregla). Orca marca la corrida `skipped_precheck`
+  y no crea su espacio: con el precheck en 0 crea uno por corrida aunque después falle. Si
+  su agente llega con otro trabajando, se frena en el `lock`. El primer paso del agente
+  sigue con `pending --needs-agent`, sin `--precheck`.
 - **La cuenta de Claude del bot.** Ajustes, pestaña Agente, guarda `botClaudeAccount`: el
   id de una cuenta de `orca account list` o `auto`. El agente de casos y el del proyecto
   abren primero con esa; si no aparece, no tiene sesión, no tiene cuota (95 % o más) o

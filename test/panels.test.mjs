@@ -3563,6 +3563,34 @@ console.log('\nactivity.html — la linea de arriba cuenta casos, no la cola vie
   ok('una corrida que fallo se sigue diciendo con su motivo',
     /fallo: sin cuota/.test(linea(fallo)), linea(fallo))
 
+  // Los espacios que el tick no pudo quitar de la barra lateral tras sus intentos: el dueno
+  // los ve aqui para quitarlos a mano. Un cero no se dice.
+  const nodo = (d) => d.getElementById('runline')
+  const atascados = await con(tablero([tarjeta({ case_id: 1 })], { agent_waiting: 0,
+    workspaces_stuck: 2 }))
+  ok('dice cuantos espacios del plugin no se pudieron quitar, en rojo',
+    /2 espacios del plugin no se pudieron quitar/.test(linea(atascados)) &&
+    /stale/.test(nodo(atascados).className), `${linea(atascados)} ${nodo(atascados).className}`)
+  const unoAtascado = await con(tablero([tarjeta({ case_id: 1 })], { workspaces_stuck: 1 }))
+  ok('y uno en singular', /1 espacio del plugin no se pudo quitar/.test(linea(unoAtascado)),
+    linea(unoAtascado))
+  const corriendo = await con(tablero([tarjeta({ case_id: 1 })], { workspaces_stuck: 3 }),
+    'es-419', { ...actividad, run: { state: 'running', startedAt: AHORA } })
+  ok('tambien mientras revisa', /3 espacios del plugin no se pudieron quitar/.test(
+    linea(corriendo)), linea(corriendo))
+  const ninguno = await con(tablero([tarjeta({ case_id: 1 })], { workspaces_stuck: 0 }))
+  ok('cero espacios atascados no se dice', !/espacio/.test(linea(ninguno)), linea(ninguno))
+  const raro = await con(tablero([tarjeta({ case_id: 1 })], { workspaces_stuck: '2' }))
+  ok('un numero que no es entero no se dice', !/espacio/.test(linea(raro)), linea(raro))
+  const atascadoEn = await con(tablero([tarjeta({ case_id: 1 })], { workspaces_stuck: 2 }),
+    'en-US')
+  ok('los espacios atascados en ingles',
+    /2 plugin workspaces could not be removed/.test(linea(atascadoEn)), linea(atascadoEn))
+  const atascadoPt = await con(tablero([tarjeta({ case_id: 1 })], { workspaces_stuck: 2 }),
+    'pt-BR')
+  ok('y en portugues', /2 espacos do plugin nao puderam ser removidos/.test(linea(atascadoPt)),
+    linea(atascadoPt))
+
   const en = await con(tablero([tarjeta({ case_id: 1 })], { agent_waiting: 2 }), 'en-US')
   ok('en ingles', /Last run \d{2}:\d{2}/.test(linea(en)) && /2 cases for the agent/.test(linea(en))
     && /1 waiting for your decision/.test(linea(en)), linea(en))
