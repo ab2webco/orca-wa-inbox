@@ -432,6 +432,14 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
          - un rol de grupo vale solo dentro de ese grupo y para los proyectos de ese
            chat;
          - el Super admin global (los números del dueño) vale en todos los chats.
+      8. Varios proyectos por chat:
+         - un grupo puede tener una lista de proyectos, no uno solo;
+         - el proyecto de cada caso sale, en este orden, de: una regla de texto que
+           coincide (ya existe); el agente, que elige entre los proyectos del chat por el
+           contenido y deja escrito por qué; y, si queda ambiguo, una pregunta corta al que
+           escribió ("¿es sobre A o sobre B?") o el dueño;
+         - el caso muestra su proyecto y se cambia desde la tarjeta (ya existe);
+         - el rol Operador de un grupo vale para los proyectos de ese grupo.
       Va después de tablero-w7.
 
 - [ ] T23 — Supervisión del equipo por WhatsApp, pedida por el dueño (2026-10-01).
