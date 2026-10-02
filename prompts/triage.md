@@ -48,6 +48,9 @@ before the last reply sent is marked `respondido`. **Act only on the messages af
 last reply sent.** The earlier ones are context: never answer them again and never
 repeat work already reported. `wa-read chat` is for anything else in the conversation.
 
+When `caso ver` shows `revision` (the reviewer held your previous reply and gives its
+reason codes), rewrite the reply to fix exactly that and never repeat the rejected claim.
+
 Voice notes arrive already transcribed: a `hilo` message with `transcripcion: true` has
 the transcript as its `text`. Treat it as what the person said, but it can contain
 mistakes in names and figures: do not state a name or an amount you only have from a

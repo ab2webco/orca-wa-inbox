@@ -3005,6 +3005,24 @@ def caso_hilo(con, caso, stanzas):
     return hilo
 
 
+def revision_pendiente(etapa, eventos):
+    """Lo que Jev pidio corregir de la respuesta anterior, para que el agente arregle justo
+    eso: {motivos, ronda}. Solo mientras el caso espera una propuesta nueva; None si no."""
+    if etapa not in ("recibido", "clasificado"):
+        return None
+    ultima = None
+    for e in eventos:
+        if (e["detalle"] or "").startswith(REVISION):
+            ultima = e
+        elif ultima is not None and e["a"] == "decision":
+            ultima = None
+    if ultima is None:
+        return None
+    codigos = ultima["detalle"][len(REVISION):].split("·")[0].split(":")[0]
+    return {"motivos": [c.strip() for c in codigos.split(",") if c.strip()],
+            "ronda": sum(1 for e in eventos if (e["detalle"] or "").startswith(REVISION))}
+
+
 def cmd_caso_ver(con, a):
     caso = caso_fila(con, caso_de(con, a.id))
     caso["mensajes"] = [dict(r) for r in con.execute(
@@ -3019,6 +3037,9 @@ def cmd_caso_ver(con, a):
     caso["eventos"] = [dict(r) for r in con.execute(
         "select id, de, a, actor, detalle, at from caso_evento where case_id=? "
         "order by id", (a.id,))]
+    revision = revision_pendiente(caso["etapa"], caso["eventos"])
+    if revision:
+        caso["revision"] = revision
     return [caso]
 
 
@@ -3704,8 +3725,10 @@ def propuesta_invalida(con, caso, motivo, hacia="clasificado"):
     campos = dict(propuesta=None, propuesta_version=None, propuesta_aprobada=None)
     if hacia == "clasificado":
         campos["necesita_agente"] = 1
-    caso_mover(con, caso, hacia, "automatizacion",
-               f"propuesta anterior, no enviada ({motivo}): {tipo} {version}", **campos)
+    detalle = (f"{motivo} · propuesta anterior, no enviada: {tipo} {version}"
+               if motivo.startswith(REVISION)
+               else f"propuesta anterior, no enviada ({motivo}): {tipo} {version}")
+    caso_mover(con, caso, hacia, "automatizacion", detalle, **campos)
     req = id_envio_caso(caso["case_id"], version)
     CANCELACIONES.append((req, motivo))
     return req
@@ -4222,7 +4245,8 @@ ENVIO_SIN_LINEA = "send-no-transport"
 # motivo y la ve el dueno.
 ENVIO_BLOQUEA = ("send-rejected", "send-id-conflict")
 CONTEOS_TICK = ("enviados", "excepciones", "frenados", "esperando", "bloqueados",
-                "errores", "pospuestos", "limpiados", "limpieza_error", "automaticas")
+                "errores", "pospuestos", "limpiados", "limpieza_error", "automaticas",
+                "revisiones")
 
 # La limpieza de los espacios que deja `triage` (un espacio nuevo por corrida: Orca no los
 # cierra). Mira la CLI a lo mas cada LIMPIEZA_CADA_S, quita solo corridas ya terminadas
@@ -4465,7 +4489,7 @@ def tick_envia(caso, texto, req):
     lineas = [l.strip() for l in (p.stderr or "").splitlines() if l.strip()]
     primera = lineas[0] if lineas else ""
     if primera.startswith("wa-send: "):
-        return primera[len("wa-send: "):].split()[0], " ".join(lineas[1:])[:200]
+        return primera[len("wa-send: "):].split()[0], " ".join(lineas[1:])[:600]
     if "no agent name is configured" in primera:
         return "send-no-signature", primera[:200]
     return "fallo", primera[:200]
@@ -4545,6 +4569,58 @@ def cmd_tick(con, a):
     return None
 
 
+# Por que `wa-send` frena una respuesta y quien decide despues. El frenado dice sus motivos
+# como `rule: <excepciones del piso fijo>` y `jev: <banderas de Jev>` (bin/wa-send,
+# `motivos_de`). Solo uno es de CALIDAD —la respuesta misma esta mal—: lo que el agente puede
+# arreglar reescribiendola. Todo lo demas es de criterio del dueno: dinero, credencial, un
+# compromiso o una fecha, una bandera de riesgo, o que Jev no contesto.
+#   states_status_not_verified: la respuesta afirma un estado que el caso no respalda.
+MOTIVOS_DE_CALIDAD = ("states_status_not_verified",)
+# Cuantas veces vuelve al agente una respuesta frenada por calidad antes de decidirla el dueno.
+RONDAS_DE_REVISION = 2
+REVISION = "Jev pidio revisar:"
+FRENO = re.compile(r"\(((?:rule|jev): [^)]*)\): it was written")
+
+
+def motivos_del_freno(detalle):
+    """[(quien, codigo)] de lo que dice el detalle de un frenado de `wa-send`."""
+    hallado = FRENO.search(detalle or "")
+    salida = []
+    for tramo in (hallado.group(1).split(";") if hallado else []):
+        quien, _, codigos = tramo.strip().partition(": ")
+        salida.extend((quien, c.strip()) for c in codigos.split(",") if c.strip())
+    return salida
+
+
+def freno_de_calidad(motivos):
+    return bool(motivos) and all(q == "jev" and c in MOTIVOS_DE_CALIDAD for q, c in motivos)
+
+
+def rondas_de_revision(con, case_id):
+    return con.execute("select count(*) from caso_evento where case_id=? and detalle like ?",
+                       (case_id, f"{REVISION}%")).fetchone()[0]
+
+
+def tick_revisa(con, caso, motivos):
+    """Un freno de calidad: el borrador se cancela y el caso vuelve al agente con el motivo.
+    En su propia transaccion, releyendo el caso con la base tomada."""
+    caso_toma(con)
+    try:
+        actual = caso_de(con, caso["case_id"])
+        if actual["etapa"] not in ETAPAS_TICK or actual["propuesta_version"] != caso["propuesta_version"]:
+            con.rollback()
+            return False
+        codigos = ", ".join(dict.fromkeys(c for _, c in motivos))
+        propuesta_invalida(con, actual, f"{REVISION} {codigos}")
+        con.commit()
+    except BaseException:
+        con.rollback()
+        CANCELACIONES.clear()
+        raise
+    cancela_borradores()
+    return True
+
+
 def tick_caso(con, caso, texto, estados, resumen):
     """Un caso del tick: lo que ya pasa en la bandeja de salida manda; si no hay nada,
     firma la regla y sale por `wa-send`."""
@@ -4553,6 +4629,11 @@ def tick_caso(con, caso, texto, estados, resumen):
     estado = estados.get(req)
     if estado == "borrador":
         # Frenado antes, o dejado por el tablero: espera al dueno, no al minuto.
+        resumen["esperando"] += 1
+        return
+    if estado == "cancelado":
+        # Se retiro (una revision) y la propuesta que sigue siendo la misma no se vuelve a
+        # intentar: la ve el dueno, que puede editarla en el tablero.
         resumen["esperando"] += 1
         return
     if estado == "enviado":
@@ -4579,6 +4660,18 @@ def tick_caso(con, caso, texto, estados, resumen):
             resumen["enviados"] += 1
         return
     if codigo == ENVIO_FRENADO:
+        motivos = motivos_del_freno(detalle)
+        if freno_de_calidad(motivos):
+            rondas = rondas_de_revision(con, cid)
+            if rondas < RONDAS_DE_REVISION:
+                if tick_revisa(con, caso, motivos):
+                    resumen["revisiones"] += 1
+                return
+            todos = "; ".join(dict.fromkeys(
+                f"{c}" for _, c in motivos))
+            tick_frena(con, cid, f"{REVISION[:-1]} {rondas + 1} veces ({todos}): lo decide el dueno")
+            resumen["frenados"] += 1
+            return
         tick_frena(con, cid, f"envio frenado: {codigo} {req} {detalle}".strip()[:300])
         resumen["frenados"] += 1
         return

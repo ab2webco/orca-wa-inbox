@@ -3637,6 +3637,8 @@ def jev_y_borradores(cuerpo):
     """Jev de mentira que tambien revisa borradores: sin banderas."""
     if "message_to_evaluate" in cuerpo["state"]:
         return jev_segun_texto(cuerpo)
+    if "aseguramos" in cuerpo["state"].get("reply_to_review", ""):
+        return 200, respuestas(cuerpo["questions"], promises_a_date=0.9)
     if "escuchado" in cuerpo["state"].get("reply_to_review", ""):
         return 200, respuestas(cuerpo["questions"], states_status_not_verified=0.9)
     return 200, respuestas(cuerpo["questions"])
@@ -3813,7 +3815,7 @@ if NODE:
 # borrador; 22 minutos despues llego un pedido nuevo al MISMO caso, que se quedo en
 # `decision` con la propuesta vieja y su boton Enviar, y nadie redacto el pedido nuevo.
 print("\nuna propuesta anterior al mensaje nuevo deja de valer")
-VIEJA = "Su audio fue recibido y escuchado completo, sin errores."
+VIEJA = "Lo aseguramos: su audio fue recibido."
 
 
 def envejece_propuesta(home, cid, minutos=30):
@@ -3855,7 +3857,7 @@ if NODE:
                        "--actor", "agente")[0]["propuesta_version"]
                 tick(home)
                 req = f"caso-{cid}-{v[:12]}"
-                ok("Jev frena la propuesta inventada: queda borrador y el caso en decision",
+                ok("Jev frena la propuesta con riesgo: queda borrador y el caso en decision",
                    [e["estado"] for e in envios(home) if e["req_id"] == req] == ["borrador"]
                    and js(home, "caso", "ver", cid)[0]["etapa"] == "decision", f"{envios(home)}")
                 envejece_propuesta(home, cid)
@@ -3979,6 +3981,113 @@ else:
                                    env=env2, timeout=120)
                 ok("el codigo nuevo migra una base anterior, y repetirlo no rompe",
                    p.returncode == 0 and "Traceback" not in p.stderr, p.stderr[-200:])
+
+
+
+# ── Un freno de CALIDAD vuelve al agente; uno CRITICO va al dueno ──────────────────────
+# Cuando `wa-send` frena una respuesta aprobada por regla, el motivo decide: si la respuesta
+# misma esta mal (Jev: `states_status_not_verified`, afirma algo que el caso no respalda) se
+# cancela el borrador y el agente la reescribe, con el motivo a la vista, hasta dos veces; a
+# la tercera, o si hay dinero, credencial, compromiso o riesgo, decide el dueno.
+print("\nel freno de calidad vuelve al agente")
+
+
+def propone(home, cid, texto):
+    return js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta", texto,
+              "--actor", "agente")[0]["propuesta_version"]
+
+
+if NODE:
+    falso = JevFalso(jev_y_borradores)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "Z1", "revisa este caso: mi audio", 40)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+            js(home, "config", "ack", "off")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                cid = str(caso_de_stanza(home, "Z1")["case_id"])
+                js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+                   "--actor", "agente")
+                v1 = propone(home, cid, "Su audio fue escuchado completo, sin errores.")
+                tick(home)
+                ver = js(home, "caso", "ver", cid)[0]
+                ok("un freno de calidad cancela el borrador y devuelve el caso al agente",
+                   ver["etapa"] == "clasificado" and not ver["propuesta"]
+                   and [e["estado"] for e in envios(home) if e["req_id"] == f"caso-{cid}-{v1[:12]}"]
+                   == ["cancelado"] and int(cid) in para_el_agente(home),
+                   f"{ver['etapa']} {envios(home)}")
+                ok("`caso ver` dice el motivo exacto de la revision",
+                   ver.get("revision", {}).get("motivos") == ["states_status_not_verified"]
+                   and ver["revision"]["ronda"] == 1, f"{ver.get('revision')}")
+                ok("y queda un evento con el motivo, sin el texto",
+                   any(e["detalle"].startswith("Jev pidio revisar: states_status_not_verified")
+                       for e in ver["eventos"]) and "audio" not in json.dumps(ver["eventos"]),
+                   f"{ver['eventos']}")
+                ok("el borrador cancelado no se puede aprobar",
+                   aprobar_borrador(home, f"caso-{cid}-{v1[:12]}").returncode != 0)
+                v2 = propone(home, cid, "Su audio ya fue escuchado por el equipo.")
+                tick(home)
+                ver = js(home, "caso", "ver", cid)[0]
+                ok("la segunda vez vuelve a pasar por el agente",
+                   ver["etapa"] == "clasificado" and ver["revision"]["ronda"] == 2, f"{ver['etapa']}")
+                v3 = propone(home, cid, "Ya escuchado su audio, todo bien.")
+                tick(home)
+                ver = js(home, "caso", "ver", cid)[0]
+                ok("a la tercera lo decide el dueno, con la propuesta y todos los motivos",
+                   ver["etapa"] == "decision" and ver["propuesta"] and int(cid) not in para_el_agente(home)
+                   and [e["estado"] for e in envios(home) if e["req_id"] == f"caso-{cid}-{v3[:12]}"]
+                   == ["borrador"], f"{ver['etapa']} {envios(home)}")
+                ok("y el evento dice que se revisaron las tres veces",
+                   any("Jev pidio revisar 3 veces" in e["detalle"] for e in ver["eventos"]),
+                   f"{[e['detalle'] for e in ver['eventos']]}")
+                ok("lo retenido no sale solo", not sidecar.entregados, f"{sidecar.entregados}")
+            finally:
+                sidecar.cerrar()
+
+        falso.pedidos.clear()
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "Z2", "revisa este caso: el plan", 40)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+            js(home, "config", "ack", "off")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                cid = str(caso_de_stanza(home, "Z2")["case_id"])
+                js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+                   "--actor", "agente")
+                propone(home, cid, "El plan cuesta $50 al mes.")
+                tick(home)
+                ver = js(home, "caso", "ver", cid)[0]
+                ok("el dinero va directo al dueno, sin vuelta por el agente",
+                   ver["etapa"] == "decision" and ver["propuesta"] and int(cid) not in para_el_agente(home)
+                   and not ver.get("revision"), f"{ver['etapa']} {envios(home)}")
+                cid2 = str(js(home, "caso", "crear", "--chat", OPERACIONES, "--stanza", "Z3",
+                              "--actor", "agente")[0]["case_id"])
+                js(home, "set", OPERACIONES, "--provider", "ninguno", "--mode", "responder")
+                js(home, "caso", "clasificar", cid2, "--clase", "card", "--prioridad", "none",
+                   "--actor", "agente")
+                v2 = js(home, "caso", "propuesta", cid2, "--tipo", "responder", "--respuesta",
+                        "Lo aseguramos de nuestra parte.", "--actor", "agente")[0]["propuesta_version"]
+                tick(home)
+                ver = js(home, "caso", "ver", cid2)[0]
+                ok("una bandera de Jev critica (compromiso) tambien va al dueno, con su borrador",
+                   ver["etapa"] == "decision" and ver["propuesta"] and int(cid2) not in para_el_agente(home)
+                   and [e["estado"] for e in envios(home) if e["req_id"] == f"caso-{cid2}-{v2[:12]}"]
+                   == ["borrador"] and not ver.get("revision"), f"{ver['etapa']} {envios(home)}")
+            finally:
+                sidecar.cerrar()
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
 
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
