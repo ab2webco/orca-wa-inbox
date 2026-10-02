@@ -5144,6 +5144,7 @@ def orca_despacho(carpeta, worktrees=(WT_ALFA,), vivos=("term_worker1",), falla=
          "pantalla_inicial": pantalla, "pantalla": "composer", "cursor": 0, "confia": False,
          "sale_tras": sale_tras, "ilegible": ilegible, "en_shell": 0, "aceptadas": 0,
          "pantallas": {"confianza": CONFIANZA_NUEVA, "confianza-vieja": CONFIANZA_VIEJA,
+                       "confianza-orca": CONFIANZA_NUEVA,
                        "composer": COMPOSER, "shell": SHELL}}), encoding="utf-8")
     exe = carpeta / "orca"
     exe.write_text("""#!/usr/bin/env python3
@@ -5197,6 +5198,18 @@ n = e["n"]
 if clave == "terminal read":
     if e["ilegible"]:
         sale({"ok": False, "error": {"code": "runtime_error", "message": "terminal_asleep"}}, 1)
+    if e["pantalla"] == "confianza-orca":
+        # Como la devuelve la Orca de verdad (2026-10-02 18:28, Claude Code 2.1.288): la
+        # opcion sin cursor no aparece, y al bajar el cursor la linea nueva se monta encima
+        # de la anterior, con un caracter de mas entre el cursor y el texto.
+        lineas = (["persona@equipo [18:28:19] [~/srv/ejemplo/carpeta]",
+                   " Claude Code'll be able to read, edit, and execute files here.",
+                   " Security guide", " ❯ No, exit"] if e["cursor"] == 0 else
+                  ["persona@equipo [18:28:19] [~/srv/ejemplo/carpeta]",
+                   " ❯lYes, I trust this folderread, edit, and execute files here."])
+        sale({"ok": True, "result": {"terminal": {"handle": valor("--terminal"),
+                                                  "status": "running", "tail": lineas,
+                                                  "truncated": False}}})
     lineas = []
     for l in e["pantallas"][e["pantalla"]]:
         if l.startswith(("{si}", "{no}")):
@@ -6659,6 +6672,18 @@ if NODE:
            and fila["turno_at"] and r.get("agente_lanzado") == 1, f"{fila} {r}")
 
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        orca_casos(carpeta, pantalla="confianza-orca")
+        caso_para_agente(home, "AT0")
+        p, r = tick_orca(home, carpeta)
+        fila = corridas_agente(home)[-1]
+        ok("con la pantalla como la devuelve Orca (sin la opcion Yes y con la linea montada) "
+           "tambien acepta: flecha abajo, Enter y la linea",
+           p.returncode == 0 and envios_crudos(carpeta) == ["abajo", "enter", "brief"]
+           and estado_orca(carpeta)["en_shell"] == 0,
+           f"{envios_crudos(carpeta)} {fila} {p.stderr[-300:]}")
+        ok("y la corrida queda activa", fila["estado"] == "activo" and fila["turno_at"], f"{fila}")
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
         orca_casos(carpeta, pantalla="shell")
         cid = caso_para_agente(home, "AT2")
         p, r = tick_orca(home, carpeta)
@@ -6754,6 +6779,21 @@ if NODE:
            corridas_agente(home)[-1]["cuenta_claude"] == "cuenta-bot"
            and lanzado(home).get("account") == "cuenta-bot@example.invalid"
            and lanzado(home).get("fallback") is None, f"{lanzado(home)}")
+
+    # Una cuenta de endpoint propio (como la muestra Orca: authMethod custom-endpoint, sin
+    # auth ni cuota) no tiene sesion que vencer: se usa tal cual.
+    PROPIA = {"provider": "claude", "id": "cuenta-propia", "email": "endpoint · Ejemplo",
+              "active": False, "authMethod": "custom-endpoint", "endpointLabel": "endpoint · Ejemplo",
+              "endpointModel": "modelo-ejemplo", "quota": None, "auth": None}
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        orca_casos(carpeta, cuentas=CUENTAS + [PROPIA])
+        elige_cuenta(home, "cuenta-propia")
+        caso_para_agente(home, "CB0")
+        tick_orca(home, carpeta)
+        abiertas = creadas(carpeta)
+        ok("una elegida de endpoint propio abre con ella, sin respaldo",
+           [bandera(x, "--claude-account") for x in abiertas] == ["cuenta-propia"]
+           and lanzado(home).get("fallback") is None, f"{abiertas} {lanzado(home)}")
 
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
         orca_casos(carpeta, cuentas=CUENTAS + [cuenta_claude("cuenta-bot", 20, estado="expired")])

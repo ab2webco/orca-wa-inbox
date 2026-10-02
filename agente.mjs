@@ -93,7 +93,9 @@ export function cuentasDe (payload) {
     return {
       id: textoCorto(c.id),
       email: textoCorto(c.email),
-      authenticated: esRegistro(c.auth) && c.auth.state === 'authenticated',
+      // Una cuenta de endpoint propio no tiene sesion que Orca vigile: vale tal cual.
+      authenticated: c.authMethod === 'custom-endpoint' ||
+        (esRegistro(c.auth) && c.auth.state === 'authenticated'),
       active: c.active === true,
       used: typeof usado === 'number' && Number.isFinite(usado) ? Math.round(usado) : null
     }

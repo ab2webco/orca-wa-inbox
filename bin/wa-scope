@@ -6010,6 +6010,10 @@ def uso_de(c):
 
 
 def autenticada(c):
+    """Si la cuenta puede abrir Claude. Una de endpoint propio (`custom-endpoint`) no tiene
+    sesion que Orca vigile: su llave la guarda Orca y vale tal cual."""
+    if c.get("authMethod") == "custom-endpoint":
+        return True
     auth = c.get("auth") if isinstance(c.get("auth"), dict) else {}
     return auth.get("state") == "authenticated"
 
@@ -6146,6 +6150,27 @@ PANTALLA_CONFIANZA = re.compile(
 # Las opciones de esa pantalla, con su cursor (❯) delante de la marcada.
 OPCION_CONFIANZA = re.compile(r"^(?P<cursor>[❯›>]\s*)?(?:\d+\.\s*)?(?P<que>yes|no),\s",
                               re.IGNORECASE)
+# Las mismas opciones dentro de una linea cualquiera: la cola que devuelve Orca no es la
+# pantalla dibujada. Al mover el cursor, la linea nueva se monta sobre la anterior (en vivo,
+# 2026-10-02: "❯lYes, I trust this folderread, edit, ...") y la opcion sin cursor puede no
+# venir. El cursor cuenta si esta a tres caracteres o menos antes del texto.
+OPCION_EN_LINEA = re.compile(r"(?:\d+\.\s*)?(?:(?P<que>yes), (?:i trust|proceed)|(?P<no>no), exit)",
+                             re.IGNORECASE)
+CURSOR_DE_OPCION = re.compile(r"[❯›]")
+
+
+def opciones_de_confianza(vistas):
+    """(orden de las opciones como aparecen, la marcada). El orden es "yes" y "no" segun su
+    primera aparicion; la marcada es la ultima opcion vista con el cursor delante, o None."""
+    orden, marcada = [], None
+    for l in vistas:
+        for m in OPCION_EN_LINEA.finditer(l):
+            que = "yes" if m["que"] else "no"
+            if que not in orden:
+                orden.append(que)
+            if CURSOR_DE_OPCION.search(l[max(0, m.start() - 3):m.start()]):
+                marcada = que
+    return orden, marcada
 # El composer de Claude: la regla que lo encierra, o su linea (❯ o > al principio).
 REGLA_DE_CLAUDE = re.compile(r"^[─━]{10,}$")
 COMPOSER_DE_CLAUDE = re.compile(r"^(?:[│┃]\s*)?[❯>](?:\s|$)")
@@ -6233,24 +6258,19 @@ def acepta_confianza(cli, terminal, lineas):
             return motivo_se_cerro(lineas)
         if vista != "confianza":
             return None
-        vistas = lineas_visibles(lineas)
-        grupo = []
-        for l in reversed(vistas):
-            if OPCION_CONFIANZA.match(l):
-                grupo.insert(0, OPCION_CONFIANZA.match(l))
-            elif grupo:
-                break
-        si = [i for i, m in enumerate(grupo) if m["que"].lower() == "yes"]
-        marcada = [i for i, m in enumerate(grupo) if m["cursor"]]
-        if len(si) != 1 or len(marcada) != 1:
+        orden, marcada = opciones_de_confianza(lineas_visibles(lineas))
+        if marcada is None:
             return NO_ACEPTO
-        if si[0] == marcada[0]:
+        if marcada == "yes":
             _, error = orca_llama(cli, ["terminal", "send", "--terminal", terminal, "--enter"],
                                   DESPACHO_LISTA_S)
             if error:
                 return f"{NO_ACEPTO}: {error}"
             break
-        tecla = TECLA_ABAJO if si[0] > marcada[0] else TECLA_ARRIBA
+        # "No" marcado: Yes va debajo, salvo que la pantalla lo muestre arriba (si Orca no lo
+        # trajo, es la de 2.1.288, con Yes debajo).
+        yes_arriba = "yes" in orden and orden.index("yes") < orden.index("no")
+        tecla = TECLA_ARRIBA if yes_arriba else TECLA_ABAJO
         _, error = orca_llama(cli, ["terminal", "send", "--terminal", terminal, "--text", tecla],
                               DESPACHO_LISTA_S)
         if error:
