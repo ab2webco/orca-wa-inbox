@@ -2184,7 +2184,7 @@ import re  # noqa: E402
 LLAVES_TARJETA = {"case_id", "account", "chat_jid", "chat_name", "stage", "title",
                   "summary", "clase", "prioridad", "jev", "proposal", "exceptions",
                   "blocked_reason", "no_agent_rule", "read_only", "ticket", "updated_at", "actions", "project",
-                  "needs_agent", "events", "related_case", "dispatch"}
+                  "needs_agent", "events", "related_case", "dispatch", "waits_agent"}
 ISO = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$")
 
 
@@ -5561,36 +5561,213 @@ if NODE:
            len(llamadas_orca(carpeta, "terminal create")) == 1
            and despachos(home, cid)[-1]["estado"] == "activo", f"{despachos(home, cid)}")
 
-    # El tick despierta al agente de casos en el acto, una vez, y nunca con una corrida en vuelo.
-    print("\nel tick despierta al agente de casos")
-    TRIAGE = [{"id": "auto-otra", "pluginOrigin": {"pluginKey": "otro.plugin",
-                                                  "automationId": "triage"}},
-              {"id": "auto-triage", "pluginOrigin": {"pluginKey": "ab2web.orca-wa-inbox",
-                                                     "automationId": "triage"}}]
+    # ── El agente de casos, por terminal ─────────────────────────────────────────────────
+    # Orca lanza `triage` con la cuenta de Claude ACTIVA y no deja elegir otra: con esa
+    # cuenta tomada, cada corrida es `dispatch_failed` y el agente no corre nunca. El tick
+    # abre al agente de casos el mismo, como el despacho al proyecto (T8): en el espacio del
+    # plugin (el de la automatizacion, nunca uno `::workspace:` de una corrida), con otra
+    # cuenta si la activa esta tomada, el prompt de triage como brief y una linea.
+    print("\nel agente de casos se lanza por terminal")
+    PLUGIN_WS = "/srv/ejemplo/plugin-workspaces/ab2web.orca-wa-inbox"
+    WT_PLUGIN = {"id": f"repo-plugin::{PLUGIN_WS}", "repoId": "repo-plugin", "path": PLUGIN_WS,
+                 "displayName": "WA Inbox (plugin)", "isArchived": False, "isMainWorktree": True}
+    WT_CORRIDA = {"id": f"repo-plugin::{PLUGIN_WS}::workspace:corrida-1", "repoId": "repo-plugin",
+                  "path": PLUGIN_WS, "displayName": "WhatsApp: triage run 1", "isArchived": False,
+                  "isMainWorktree": False}
+    TRIAGE_WS = [{"id": "auto-otra", "pluginOrigin": {"pluginKey": "otro.plugin",
+                                                     "automationId": "triage"},
+                  "runContext": {"repoId": "repo-otro", "path": "/srv/ejemplo/otro"}},
+                 {"id": "auto-triage", "enabled": True,
+                  "pluginOrigin": {"pluginKey": "ab2web.orca-wa-inbox", "automationId": "triage"},
+                  "runContext": {"kind": "workspace-run", "repoId": "repo-plugin",
+                                 "path": PLUGIN_WS}}]
+    FALLIDAS = [corrida("f1", "dispatch_failed", 900), corrida("f2", "dispatch_failed", 300)]
+    CUENTAS = [cuenta_claude("cuenta-activa", 30, activa=True),
+               cuenta_claude("cuenta-libre", 10)]
+    PROMPT_TRIAGE = (RAIZ / "prompts" / "triage.md").read_text(encoding="utf-8")
+
+    def orca_casos(carpeta, **extra):
+        base = dict(worktrees=[WT_PLUGIN, WT_CORRIDA, WT_ALFA], automatizaciones=TRIAGE_WS,
+                    corridas=FALLIDAS, cuentas=CUENTAS, rechaza={"": EN_USO})
+        base.update(extra)
+        return orca_despacho(carpeta, **base)
+
+    def caso_para_agente(home, stanza):
+        return str(js(home, "caso", "crear", "--chat", CHAT, "--stanza", stanza,
+                      "--actor", "automatizacion")[0]["case_id"])
+
+    def corridas_agente(home):
+        con = db_de(home)
+        try:
+            return [dict(r) for r in con.execute("select * from agente_corrida order by id")]
+        except sqlite3.OperationalError:
+            return []
+        finally:
+            con.close()
+
+    def agente_lanzar(home, carpeta, *extra):
+        p = corre(home, "agente", "lanzar", *extra,
+                  extra={"ORCA_CLI_COMMAND": str(pathlib.Path(carpeta) / "orca")})
+        try:
+            return p, json.loads(p.stdout or "null")
+        except ValueError:
+            return p, None
+
+    def envejece_agente(home, segundos):
+        con = db_de(home)
+        con.execute("update agente_corrida set created_at=datetime(created_at, ?), "
+                    "updated_at=datetime(updated_at, ?)", (f"-{segundos} seconds",
+                                                           f"-{segundos} seconds"))
+        con.commit()
+        con.close()
+
+    def creadas(carpeta):
+        return llamadas_orca(carpeta, "terminal create")
+
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
-        orca_despacho(carpeta, automatizaciones=TRIAGE,
-                      corridas=[corrida("viejo", "completed", 900)])
+        orca_casos(carpeta)
         p, r = tick_orca(home, carpeta)
-        ok("sin casos que necesiten al agente no llama a nadie",
-           not llamadas_orca(carpeta, "automations run") and r.get("agente_lanzado") == 0,
-           f"{llamadas_orca(carpeta)}")
-        js(home, "caso", "crear", "--chat", CHAT, "--stanza", "TR1", "--actor", "automatizacion")
+        ok("sin casos que esperen al agente no abre nada", creadas(carpeta) == []
+           and r.get("agente_lanzado") == 0, f"{creadas(carpeta)}")
+        cid = caso_para_agente(home, "AC1")
         p, r = tick_orca(home, carpeta)
-        lanzadas = llamadas_orca(carpeta, "automations run")
-        ok("con un caso para el agente lanza la automatizacion de ESTE plugin, una vez",
-           len(lanzadas) == 1 and "auto-triage" in lanzadas[0] and r.get("agente_lanzado") == 1,
-           f"{lanzadas} {r} {p.stderr[-300:]}")
+        abiertas = creadas(carpeta)
+        ok("con un caso para el agente y la activa tomada, abre Claude con otra cuenta",
+           len(abiertas) == 2 and bandera(abiertas[0], "--claude-account") is None
+           and bandera(abiertas[1], "--claude-account") == "cuenta-libre"
+           and bandera(abiertas[1], "--agent") == "claude", f"{abiertas} {p.stderr[-300:]}")
+        ok("en el espacio del plugin que dice la automatizacion, no en el de una corrida",
+           all(bandera(x, "--worktree") == f"id:repo-plugin::{PLUGIN_WS}" for x in abiertas),
+           f"{[bandera(x, '--worktree') for x in abiertas]}")
+        ok("no le pide a Orca que corra la automatizacion: ya sabe que falla",
+           llamadas_orca(carpeta, "automations run") == [], f"{llamadas_orca(carpeta)}")
+        ok("le da UNA linea: que lea el brief, y el brief es el prompt de triage",
+           len(lanzamientos(carpeta)) == 1 and brief(carpeta) == PROMPT_TRIAGE,
+           f"{lanzamientos(carpeta)}")
+        ruta = ruta_brief(carpeta)
+        ok("el brief vive en la carpeta de datos, solo para el dueno",
+           ruta.startswith(str(pathlib.Path(home) / ".wa-inbox"))
+           and (os.stat(ruta).st_mode & 0o077) == 0, ruta)
+        fila = corridas_agente(home)
+        ok("la corrida queda activa, con su terminal y la cuenta que se uso",
+           len(fila) == 1 and fila[0]["estado"] == "activo" and fila[0]["terminal"] == "term_worker1"
+           and fila[0]["cuenta_claude"] == "cuenta-libre" and fila[0]["turno_at"], f"{fila}")
+        ok("la linea del tick lo cuenta", r.get("agente_lanzado") == 1
+           and r.get("agente_error") == 0, f"{r}")
+        lanzado = (tablero(home).get("board") or {}).get("agent_launch") or {}
+        ok("el tablero dice que el agente esta corriendo, sin falla",
+           lanzado.get("state") == "running" and not lanzado.get("reason"), f"{lanzado}")
         p, r = tick_orca(home, carpeta)
-        ok("y el tick siguiente no la relanza", len(llamadas_orca(carpeta, "automations run")) == 1
+        ok("con uno en vuelo, el tick siguiente no abre otro", len(creadas(carpeta)) == 2
+           and r.get("agente_lanzado") == 0, f"{creadas(carpeta)}")
+        p, v = agente_lanzar(home, carpeta)
+        ok("Atender ahora con uno en vuelo no abre otro: dice que ya esta corriendo",
+           p.returncode == 0 and v == {"agent": "running"} and len(creadas(carpeta)) == 2,
+           f"{p.returncode} {v} {p.stderr[-200:]}")
+        # El agente termino su revision: tomo el lock y lo solto.
+        js(home, "lock", "--note", "triage")
+        js(home, "unlock")
+        envejece_agente(home, 120)
+        p, r = tick_orca(home, carpeta)
+        ok("cuando el agente termino su revision, el tick cierra su terminal",
+           cerradas(carpeta) == ["term_worker1"]
+           and corridas_agente(home)[-1]["estado"] == "terminado", f"{corridas_agente(home)}")
+        ok("y su brief no queda en disco", not os.path.exists(ruta), ruta)
+        ok("con el caso todavia esperando, no lo relanza antes de 5 minutos",
+           len(creadas(carpeta)) == 2, f"{creadas(carpeta)}")
+        p, v = agente_lanzar(home, carpeta)
+        ok("pero Atender ahora si lo lanza en el acto, por el mismo camino",
+           p.returncode == 0 and (v or {}).get("agent") == "launched"
+           and len(creadas(carpeta)) == 4 and len(lanzamientos(carpeta)) == 2,
+           f"{v} {creadas(carpeta)} {p.stderr[-300:]}")
+        ok("y queda anotado como del dueno", corridas_agente(home)[-1]["origen"] == "dueno",
+           f"{corridas_agente(home)}")
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        # Ninguna cuenta sirve: la activa esta tomada y la otra sin sesion.
+        orca_casos(carpeta, cuentas=[cuenta_claude("cuenta-activa", 30, activa=True),
+                                     cuenta_claude("cuenta-sin-sesion", 5, estado="expired")])
+        cid = caso_para_agente(home, "AC2")
+        p, r = tick_orca(home, carpeta)
+        fila = corridas_agente(home)
+        ok("sin cuenta usable, la corrida falla con un motivo estable y no deja terminal",
+           len(fila) == 1 and fila[0]["estado"] == "fallido" and fila[0]["motivo"] == "sin-cuenta"
+           and cerradas(carpeta) == [] and len(creadas(carpeta)) == 1, f"{fila} {creadas(carpeta)}")
+        ok("la linea del tick lo cuenta como error", r.get("agente_error") == 1
            and r.get("agente_lanzado") == 0, f"{r}")
-    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
-        orca_despacho(carpeta, automatizaciones=TRIAGE,
-                      corridas=[corrida("vuelo", "dispatched", 30)])
-        js(home, "caso", "crear", "--chat", CHAT, "--stanza", "TR2", "--actor", "automatizacion")
+        lanzado = (tablero(home).get("board") or {}).get("agent_launch") or {}
+        ok("el tablero dice que no pudo lanzar al agente, y por que",
+           lanzado.get("state") == "failed" and lanzado.get("reason") == "sin-cuenta"
+           and "in use" in (lanzado.get("detail") or ""), f"{lanzado}")
+        ok("y la tarjeta que espera al agente lo sabe", (tarjeta(home, cid) or {}).get("waits_agent")
+           is True, f"{tarjeta(home, cid)}")
         p, r = tick_orca(home, carpeta)
-        ok("con una corrida en vuelo no lanza otra",
-           not llamadas_orca(carpeta, "automations run") and r.get("agente_lanzado") == 0,
-           f"{llamadas_orca(carpeta)} {r}")
+        ok("no reintenta cada minuto: espera 5", len(creadas(carpeta)) == 1, f"{creadas(carpeta)}")
+        envejece_agente(home, 301)
+        cambia_orca(carpeta, cuentas=CUENTAS)
+        p, r = tick_orca(home, carpeta)
+        ok("pasados 5 minutos reintenta, y con una cuenta libre lo logra",
+           len(creadas(carpeta)) == 3 and corridas_agente(home)[-1]["estado"] == "activo"
+           and r.get("agente_lanzado") == 1, f"{corridas_agente(home)} {r}")
+        lanzado = (tablero(home).get("board") or {}).get("agent_launch") or {}
+        ok("y el tablero deja de decir la falla", lanzado.get("state") == "running"
+           and not lanzado.get("reason"), f"{lanzado}")
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        # La automatizacion no dice su espacio: no se adivina.
+        orca_casos(carpeta, automatizaciones=[{"id": "auto-triage", "pluginOrigin": {
+            "pluginKey": "ab2web.orca-wa-inbox", "automationId": "triage"}}])
+        caso_para_agente(home, "AC3")
+        p, r = tick_orca(home, carpeta)
+        fila = corridas_agente(home)
+        ok("sin el espacio del plugin no abre nada y lo dice",
+           creadas(carpeta) == [] and fila and fila[-1]["estado"] == "fallido"
+           and fila[-1]["motivo"] == "sin-espacio", f"{fila} {creadas(carpeta)}")
+        p, v = agente_lanzar(home, carpeta)
+        ok("Atender ahora dice lo mismo, con su motivo",
+           p.returncode == 0 and v == {"agent": "failed", "reason": "sin-espacio"}, f"{v}")
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        # Otro agente de casos (la automatizacion) tiene el lock: no se abre un segundo.
+        orca_casos(carpeta)
+        caso_para_agente(home, "AC4")
+        js(home, "lock", "--note", "triage")
+        p, r = tick_orca(home, carpeta)
+        ok("con el lock tomado por otro agente de casos, no abre nada",
+           creadas(carpeta) == [] and corridas_agente(home) == [], f"{creadas(carpeta)}")
+        p, v = agente_lanzar(home, carpeta)
+        ok("y Atender ahora dice que ya hay uno corriendo", v == {"agent": "running"}, f"{v}")
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        # El Enter llego sin turno: se reescribe la linea, como en el despacho.
+        orca_casos(carpeta, arranca_en=2)
+        caso_para_agente(home, "AC5")
+        tick_orca(home, carpeta)
+        ok("si la linea se pierde, la reescribe y el turno empieza",
+           len(lanzamientos(carpeta)) == 2 and corridas_agente(home)[-1]["turno_at"]
+           and corridas_agente(home)[-1]["reenvios"] == 1, f"{corridas_agente(home)}")
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        # Un agente que nunca termina se cierra a los 30 minutos.
+        orca_casos(carpeta)
+        caso_para_agente(home, "AC6")
+        tick_orca(home, carpeta)
+        js(home, "lock", "--note", "triage")
+        envejece_agente(home, 31 * 60)
+        tick_orca(home, carpeta)
+        ok("a los 30 minutos cierra la terminal aunque siga trabajando",
+           cerradas(carpeta) == ["term_worker1"]
+           and corridas_agente(home)[-1]["estado"] == "vencido", f"{corridas_agente(home)}")
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        # La terminal se fue (el dueno la cerro, o Claude salio): la corrida termino.
+        orca_casos(carpeta)
+        caso_para_agente(home, "AC7")
+        tick_orca(home, carpeta)
+        cambia_orca(carpeta, vivos=[])
+        tick_orca(home, carpeta)
+        ok("una terminal que ya no esta deja la corrida terminada",
+           corridas_agente(home)[-1]["estado"] == "terminado", f"{corridas_agente(home)}")
 
     # Volver a trabajo desde respondido es del motor, nunca de un comando.
     with tempfile.TemporaryDirectory() as home:
