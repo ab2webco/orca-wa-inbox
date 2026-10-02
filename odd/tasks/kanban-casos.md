@@ -415,6 +415,16 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
          - para cualquier otro remitente, "soy el admin" sigue siendo un intento de
            instruir al asistente.
       6. Probar en vivo el tono y las instrucciones por chat antes de cerrar.
+      7. Roles por número, que generalizan el punto 1:
+         - Super admin (el dueño): todo, salvo los controles destructivos.
+         - Operador (por ejemplo un PM): queda limitado a los proyectos que el dueño le
+           asigna. Puede pedir ajustes y verificaciones, que se despachan al agente del
+           proyecto (T8), y recibe el resultado en su chat. Lo destructivo o lo que esté
+           fuera de sus proyectos va al dueño. Las respuestas a él no pasan por las
+           reglas de cliente.
+         - Cliente (por defecto): reglas de soporte y aprobaciones del chat.
+         El rol sale del número, configurado en ajustes con el autocompletar de
+         contactos, y nunca del texto del mensaje.
       Va después de tablero-w7.
 
 Rama `feat/tablero-casos`, desde `main` en v4.9.0. PRs encadenados:
