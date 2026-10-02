@@ -2797,11 +2797,55 @@ def cmd_caso_listar(con, a):
         sql + " order by updated_at desc, case_id desc", params).fetchall()]
 
 
+def caso_hilo(caso, stanzas):
+    """El hilo de un caso, para quien lo lee: sus mensajes y las respuestas ENVIADAS al
+    chat (`from_me`) intercaladas, por la hora del mensaje y no por cuando se agrupo, y con
+    el orden de captura como desempate (dos mensajes del mismo segundo). Todo mensaje de
+    antes de la ultima respuesta enviada lleva `respondido`: es contexto, no algo que
+    atender otra vez. None si no hay almacen de mensajes: `caso ver` sigue sirviendo."""
+    if not stanzas:
+        return None
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return None
+    try:
+        marcas = ",".join("?" * len(stanzas))
+        propios = fuente.execute(
+            f"select min(ts) t from mensaje where account=? and chat_jid=? and "
+            f"revocado=0 and stanza_id in ({marcas})",
+            (caso["account"], caso["chat_jid"], *stanzas)).fetchone()
+        if propios is None or propios["t"] is None:
+            return None
+        filas = fuente.execute(
+            f"select rowid r, stanza_id, ts, from_me, sender_name, sender_jid, body, "
+            f"media_path from mensaje where account=? and chat_jid=? and revocado=0 and "
+            f"(stanza_id in ({marcas}) or (from_me=1 and ts >= ?)) order by ts, rowid",
+            (caso["account"], caso["chat_jid"], *stanzas, propios["t"])).fetchall()
+    except sqlite3.Error:
+        return None
+    finally:
+        fuente.close()
+    ultima = max((i for i, r in enumerate(filas) if r["from_me"]), default=-1)
+    return [{"stanza_id": r["stanza_id"], "date": wa_store.ts(r["ts"]),
+             "from_me": bool(r["from_me"]), "sender": wa_store.quien(r),
+             "text": (r["body"] or "").replace("\n", " "), "media": r["media_path"] or None,
+             "en_caso": r["stanza_id"] in stanzas,
+             "respondido": bool(i < ultima and not r["from_me"])}
+            for i, r in enumerate(filas)]
+
+
 def cmd_caso_ver(con, a):
     caso = caso_fila(con, caso_de(con, a.id))
     caso["mensajes"] = [dict(r) for r in con.execute(
         "select stanza_id, at from caso_mensaje where case_id=? order by at, stanza_id",
         (a.id,))]
+    hilo = caso_hilo(caso, [m["stanza_id"] for m in caso["mensajes"]])
+    if hilo is not None:
+        caso["hilo"] = hilo
+        # Los mensajes del caso, en el mismo orden de llegada que el hilo.
+        orden = {x["stanza_id"]: i for i, x in enumerate(hilo)}
+        caso["mensajes"].sort(key=lambda m: orden.get(m["stanza_id"], len(orden)))
     caso["eventos"] = [dict(r) for r in con.execute(
         "select id, de, a, actor, detalle, at from caso_evento where case_id=? "
         "order by id", (a.id,))]

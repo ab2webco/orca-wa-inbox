@@ -138,8 +138,11 @@ Exit 1 = nothing needs you: unlock and say so in one line. Exit 0 prints
     "$WA/wa-scope" caso ver <id> --json
     "$WA/wa-read" chat "<chat_jid>" --json
 
-`caso ver` gives the case's stage, its messages (`stanza_id`), its route and what Jev
-said; `wa-read chat` gives the text of those messages. Read only the ones in the case.
+`caso ver` gives the case's stage, its route, what Jev said and `hilo`: the case's
+messages and the replies already sent (`from_me`), in strict arrival order. Every message
+before the last reply sent is marked `respondido`. **Act only on the messages after the
+last reply sent.** The earlier ones are context: never answer them again and never
+repeat work already reported. `wa-read chat` is for anything else in the conversation.
 
 ## STEP 2 — How it writes there
 
@@ -160,7 +163,11 @@ not from your habits.
   - A reply is enough: `"$WA/wa-scope" caso propuesta <id> --tipo responder --respuesta "<text>" --actor agente`.
     The signature is added on sending; do not write it.
   - It needs work in a codebase: `--tipo trabajar --instrucciones "<what to do and what to answer>"`
-    (`AGENTS.md`, "The orchestrator").
+    (`AGENTS.md`, "The orchestrator"). The brief carries the customer's or owner's
+    messages VERBATIM, in a quoted block and in arrival order; below it, your reading,
+    marked as interpretation. Never state who a person is or what a name, product or term
+    refers to unless the case or the project files say so: list those as open questions
+    for the project agent ("Who is <name>?", "What does '<phrase>' refer to?").
   - It needs the owner (price, scope, a decision, access): `--tipo escalar`.
   - Doubtful (an audio you cannot hear, a bare mention): leave it classified as
     `doubtful`, propose nothing, and list it at the wrap-up.

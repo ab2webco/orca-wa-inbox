@@ -3025,6 +3025,43 @@ if NODE:
         js(home, "caso", "mover", str(cid), "recibido", "--actor", "dueno")
         ok("reabrir a mano no inventa un titulo", fila_de(home, cid)["titulo"] == antes_t)
 
+# ── Lo que lee el agente: el hilo del caso, en orden de llegada y con lo ya contestado ──
+# `caso ver` trae `hilo`: los mensajes del caso y las respuestas que se enviaron (from_me)
+# intercaladas, por la hora del mensaje y no por el momento en que se agrupo; los empates los
+# decide el orden de captura. Todo mensaje de antes de la ultima respuesta lleva
+# `respondido`: es contexto, no algo por atender de nuevo.
+print("\nel hilo del caso, en orden de llegada")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(PERSONA, "Z1", "primero de todos", 12), msg(PERSONA, "A1", "segundo, mismo segundo", 12),
+                         msg(PERSONA, "Y1", "mi respuesta de entonces", 10, yo=True),
+                         msg(PERSONA, "B1", "despues de la respuesta", 4)])
+        listo_persona(home)
+        ingiere(home)
+        c = caso_de_stanza(home, "Z1")
+        ok("los de antes y los de despues de la respuesta caen en el mismo caso",
+           c is not None and caso_de_stanza(home, "B1")["case_id"] == c["case_id"]
+           and caso_de_stanza(home, "A1")["case_id"] == c["case_id"], f"{c}")
+        hilo = js(home, "caso", "ver", str(c["case_id"]))[0].get("hilo")
+        ok("el hilo trae los mensajes y la respuesta enviada, en orden de llegada y no alfabetico",
+           hilo and [x["stanza_id"] for x in hilo] == ["Z1", "A1", "Y1", "B1"], f"{hilo}")
+        ok("la respuesta enviada va marcada como mia",
+           hilo[2]["from_me"] is True and hilo[0]["from_me"] is False)
+        ok("lo anterior a la ultima respuesta va marcado `respondido`; lo posterior, no",
+           [x["respondido"] for x in hilo] == [True, True, False, False], f"{hilo}")
+        ok("con la hora y el texto para leerlos", all(x.get("date") and "text" in x for x in hilo))
+        ver = js(home, "caso", "ver", str(c["case_id"]))[0]
+        ok("y `mensajes` sigue el mismo orden",
+           [x["stanza_id"] for x in ver["mensajes"]] == ["Z1", "A1", "B1"],
+           f"{ver['mensajes']}")
+
+    with tempfile.TemporaryDirectory() as home:
+        cid = str(js(home, "caso", "crear", "--chat", PERSONA, "--stanza", "S1",
+                     "--actor", "automatizacion")[0]["case_id"])
+        ver = js(home, "caso", "ver", cid)[0]
+        ok("sin el almacen de mensajes `caso ver` sigue funcionando, sin hilo",
+           ver["mensajes"][0]["stanza_id"] == "S1" and not ver.get("hilo"), f"{ver}")
+
 # ── El tablero dice cuantos casos esperan al agente ─────────────────────────────────
 print("\nel tablero cuenta lo que espera al agente")
 with tempfile.TemporaryDirectory() as home:
