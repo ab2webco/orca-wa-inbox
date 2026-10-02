@@ -2626,6 +2626,8 @@ const lanzamientosAgente = (f) => (existsSync(join(f.dir, 'scope.jsonl'))
       quota: { session: { usedPercent: 20 } }, authMethod: 'SECRETO-metodo' },
     { provider: 'claude', id: 'cuenta-sin', email: 'sin@example.invalid', active: true,
       auth: { state: 'expired' }, quota: {} },
+    { provider: 'claude', id: 'cuenta-propia', email: 'endpoint · Ejemplo', active: false,
+      authMethod: 'custom-endpoint', auth: null, quota: null },
     { provider: 'codex', id: 'cuenta-codex', email: 'codex@example.invalid', active: false,
       auth: { state: 'authenticated' } }] } }
 
@@ -2640,7 +2642,8 @@ const lanzamientosAgente = (f) => (existsSync(join(f.dir, 'scope.jsonl'))
     ok('solo las de Claude, con lo que el panel muestra y nada mas',
       JSON.stringify(v && v.accounts) === JSON.stringify([
         { id: 'cuenta-bot', email: 'bot@example.invalid', authenticated: true, active: false, used: 20 },
-        { id: 'cuenta-sin', email: 'sin@example.invalid', authenticated: false, active: true, used: null }]),
+        { id: 'cuenta-sin', email: 'sin@example.invalid', authenticated: false, active: true, used: null },
+        { id: 'cuenta-propia', email: 'endpoint · Ejemplo', authenticated: true, active: false, used: null }]),
       JSON.stringify(v && v.accounts))
     ok('ni un dato de autenticacion llega al storage',
       !/SECRETO/.test(JSON.stringify(orca.store.scopeResult)), JSON.stringify(orca.store.scopeResult))
