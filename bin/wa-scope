@@ -2995,7 +2995,7 @@ def caso_hilo(con, caso, stanzas):
     hilo = []
     for i, r in enumerate(filas):
         texto, transcripcion = texto_de_audio(con, caso, r, (r["body"] or "").replace("\n", " "))
-        x = {"stanza_id": r["stanza_id"], "date": wa_store.ts(r["ts"]),
+        x = {"stanza_id": r["stanza_id"], "date": wa_store.ts(r["ts"]), "ts": r["ts"],
              "from_me": bool(r["from_me"]), "sender": wa_store.quien(r), "text": texto,
              "media": media_de_fila(r), "en_caso": r["stanza_id"] in stanzas,
              "respondido": bool(i < ultima and not r["from_me"])}
@@ -3255,6 +3255,9 @@ TIPOS_AUDIO = ("audio", "ptt")
 # sin abrirse ni marcarse. Cada uno corre un modelo local; un chat que vuelca cien audios no
 # puede dejar la maquina ocupada.
 TOPE_AUDIOS_INGEST = 5
+# Los audios que corrieron el motor en la vuelta del tick que esta en curso: ingest y el relleno
+# de los casos de antes (`tick_reconcilia`) comparten el tope. `cmd_tick` lo pone a cero.
+GASTO_AUDIOS = [0]
 # Cuanto puede tardar UN audio. Pasado esto se corta y se marca `timeout`.
 TRANSCRIBE_TIMEOUT_S = 120
 CODIGO_RAZON = re.compile(r"^[a-z0-9_-]{1,40}$")
@@ -3353,6 +3356,7 @@ def transcribe_nuevos(con, nuevos, horas, total):
                 continue
             texto, razon, corrio = transcribe_archivo(m["media"], ajustes)
             gastados += int(corrio)
+            GASTO_AUDIOS[0] += int(corrio)
             transcripcion_guarda(con, cuenta, chat, stanza, texto, razon)
             fila = {"ok": int(texto is not None), "texto": texto, "razon": razon}
         if fila["ok"]:
@@ -4325,7 +4329,7 @@ ENVIO_SIN_LINEA = "send-no-transport"
 ENVIO_BLOQUEA = ("send-rejected", "send-id-conflict")
 CONTEOS_TICK = ("enviados", "excepciones", "frenados", "esperando", "bloqueados",
                 "errores", "pospuestos", "limpiados", "limpieza_error", "automaticas",
-                "revisiones")
+                "revisiones", "transcritos", "rancias")
 
 # La limpieza de los espacios que deja `triage` (un espacio nuevo por corrida: Orca no los
 # cierra). Mira la CLI a lo mas cada LIMPIEZA_CADA_S, quita solo corridas ya terminadas
@@ -4581,6 +4585,7 @@ def cmd_tick(con, a):
     resumen = dict({"busy": False, "ingest": None, "sin_transporte": False,
                     "sin_firma": False}, **dict.fromkeys(CONTEOS_TICK, 0))
     candado = tick_toma()
+    GASTO_AUDIOS[0] = 0
     if candado is None:
         resumen["busy"] = True
         print(json.dumps(resumen, ensure_ascii=False))
@@ -4597,6 +4602,13 @@ def cmd_tick(con, a):
             if con.in_transaction:
                 con.rollback()
             print(f"wa-scope: ingest skipped: {exc}", file=sys.stderr)
+        try:
+            tick_reconcilia(con, resumen, inicio)
+        except (sqlite3.Error, OSError, CasoFalla) as exc:
+            if con.in_transaction:
+                con.rollback()
+            CANCELACIONES.clear()
+            print(f"wa-scope: open cases not reconciled: {exc}", file=sys.stderr)
         try:
             casos_credencial_a_decision(con)
         except (sqlite3.Error, CasoFalla) as exc:
@@ -4646,6 +4658,121 @@ def cmd_tick(con, a):
         candado.close()
     print(json.dumps(resumen, ensure_ascii=False))
     return None
+
+
+# ── Los casos abiertos de antes de una actualizacion ─────────────────────────────────────
+# Transcribir un audio y retirar la propuesta que un mensaje nuevo deja atras solo ocurren al
+# llegar el mensaje. Un caso abierto de antes se quedaba con su nota de voz sin oir y con la
+# propuesta vieja y su borrador. El tick lo recoge: solo casos abiertos de la linea activa,
+# con tope por vuelta, y cada cosa una vez (la transcripcion guardada y la propuesta
+# retirada son lo que impide repetirla, sin una marca aparte).
+TOPE_CASOS_RECONCILIA = TOPE_ABIERTAS
+TOPE_RANCIAS_TICK = 10
+
+
+def entrantes_del_caso(fuente, caso, stanzas):
+    """Los mensajes del cliente que el caso agrupa, del mas viejo al mas nuevo."""
+    if not stanzas:
+        return []
+    return fuente.execute(
+        f"select m.stanza_id, m.ts, m.body, m.media_type, m.media_path, c.is_group, "
+        f"m.menciona_me, m.cita_me from mensaje m left join chat c on c.account=m.account and "
+        f"c.chat_jid=m.chat_jid where m.account=? and m.chat_jid=? and m.from_me=0 and "
+        f"m.revocado=0 and m.stanza_id in ({','.join('?' * len(stanzas))}) order by m.ts, m.rowid",
+        (caso["account"], caso["chat_jid"], *stanzas)).fetchall()
+
+
+def texto_de_entrante(con, caso, r):
+    """El texto del mensaje con la transcripcion de su audio, si la tiene."""
+    texto = (r["body"] or "").replace("\n", " ").strip()
+    if (r["media_type"] or "").lower() in TIPOS_AUDIO:
+        fila = transcripcion_de(con, caso["account"], caso["chat_jid"], r["stanza_id"])
+        if fila and fila["ok"]:
+            texto = " ".join(t for t in (texto, fila["texto"]) if t)
+    return texto
+
+
+def reevalua_audio(con, caso, r, texto):
+    """El piso fijo y Jev sobre el texto de un audio recien transcrito, como en ingest. Un
+    caso que el dueno ya firmo (o que ya esta en trabajo) no se vuelve a juzgar."""
+    actual = caso_de(con, caso["case_id"])
+    firmada = bool(actual.get("propuesta_aprobada")
+                   and actual["propuesta_aprobada"] == actual.get("propuesta_version"))
+    if actual["etapa"] == "trabajo" or firmada:
+        return
+    piso = wa_reglas.excepciones(texto, wa_reglas.ENTRADA)
+    m = {"account": caso["account"], "chat_jid": caso["chat_jid"], "stanza_id": r["stanza_id"],
+         "date": wa_store.ts(r["ts"]), "kind": wa_store.clase_de(r), "text": texto,
+         "media": r["media_path"], "media_type": r["media_type"]}
+    juicio = jev_juzga(m, con)
+    caso_toma(con)
+    try:
+        caso_marca_regla(con, caso["case_id"], piso, r["stanza_id"])
+        if juicio is not None:
+            caso_marca_jev(con, caso["case_id"], juicio, r["stanza_id"])
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+
+
+def tick_reconcilia(con, resumen, inicio):
+    """Pone al dia los casos abiertos de la linea activa: transcribe los audios que ingest
+    nunca vio (el tope de audios es el de ingest, y comparte lo gastado en esta vuelta) y
+    retira la propuesta que un mensaje posterior dejo atras, por el mismo camino que un
+    mensaje que se suma (`propuesta_rancia`)."""
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return
+    ajustes = merged_settings(con)
+    try:
+        casos = [dict(r) for r in con.execute(
+            "select * from caso where account=? and etapa not in ('cerrado','respondido') "
+            "order by updated_at desc, case_id desc limit ?",
+            (cuenta_activa(), TOPE_CASOS_RECONCILIA))]
+        for caso in casos:
+            stanzas = [r["stanza_id"] for r in con.execute(
+                "select stanza_id from caso_mensaje where case_id=? order by at, stanza_id",
+                (caso["case_id"],))]
+            try:
+                filas = entrantes_del_caso(fuente, caso, stanzas)
+            except sqlite3.Error:
+                return
+            for r in filas:
+                if ((r["media_type"] or "").lower() not in TIPOS_AUDIO or not r["media_path"]
+                        or transcripcion_de(con, caso["account"], caso["chat_jid"],
+                                            r["stanza_id"]) is not None):
+                    continue
+                if (GASTO_AUDIOS[0] >= TOPE_AUDIOS_INGEST
+                        or time.time() - inicio > PRESUPUESTO_TICK_S):
+                    break
+                texto, razon, corrio = transcribe_archivo(r["media_path"], ajustes)
+                GASTO_AUDIOS[0] += int(corrio)
+                transcripcion_guarda(con, caso["account"], caso["chat_jid"], r["stanza_id"],
+                                     texto, razon)
+                resumen["transcritos"] += 1
+                if texto:
+                    reevalua_audio(con, caso, r, texto_de_entrante(con, caso, r))
+            actual = caso_de(con, caso["case_id"])
+            if (actual["etapa"] not in ETAPAS_TICK or not actual["propuesta_version"]
+                    or resumen["rancias"] >= TOPE_RANCIAS_TICK):
+                continue
+            caso_toma(con)
+            try:
+                for r in filas:
+                    m = {"date": wa_store.ts(r["ts"]), "text": texto_de_entrante(con, caso, r)}
+                    if propuesta_rancia(con, caso["case_id"], m):
+                        resumen["rancias"] += 1
+                        break
+                con.commit()
+            except BaseException:
+                con.rollback()
+                CANCELACIONES.clear()
+                raise
+            cancela_borradores()
+    finally:
+        fuente.close()
 
 
 # Por que `wa-send` frena una respuesta y quien decide despues. El frenado dice sus motivos
