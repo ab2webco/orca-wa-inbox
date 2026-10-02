@@ -15,10 +15,27 @@ espacios `::workspace:` que `triage` deja en cada corrida ya terminada, 5 por vu
 máximo y 2 minutos después de que acabó. Sin la CLI de Orca, o con un error, no hace nada
 y lo cuenta en `limpieza_error`.
 
-`tick` no despierta a ningún agente: es un comando (`orca automations create --command`
-en un Orca 1.4.160-lab.84 o más nuevo). El precheck de `triage` **sale con 1 cuando
-ningún caso necesita lenguaje**, con lo que Orca marca la corrida `skipped_precheck` y
-no despierta al agente.
+`tick` es un comando, no un agente (`orca automations create --command` en un Orca
+1.4.160-lab.84 o más nuevo), pero despierta a dos:
+
+- **El agente de casos.** Con un caso que lo espera (lo mismo que `pending --needs-agent`)
+  lanza `triage` en el acto (`orca automations run`), sin esperar su cron: no si el dueño
+  la apagó, no con una corrida en vuelo (en curso y de hace menos de 30 min: Orca deja
+  corridas en `dispatched` días después) y no dos veces en 5 minutos. El precheck de
+  `triage` **sale con 1 cuando ningún caso necesita lenguaje**, con lo que Orca marca la
+  corrida `skipped_precheck` y no despierta al agente.
+- **El agente del proyecto (T8).** Un `trabajar` aprobado (una firma de `decision` a
+  `trabajo`; nunca lo que puso ahí el backfill) va a `orchestration run-create`,
+  `task-create` con el brief y `worker-start` en el espacio exacto del proyecto, uno por
+  tick. Una fila en `caso_despacho` (escrita antes de llamar a Orca) impide relanzar; que
+  el agente siga se mira por su terminal en `orca terminal list`. Sin proyecto, con un
+  proyecto ambiguo, sin reporte, sin respuesta en 4 h o con un error de Orca, el caso va a
+  Bloqueado con el motivo. El agente reporta con `caso resultado` (`resuelto`, `necesita`
+  o `bloqueado`), que manda la respuesta en el acto por el mismo piso; si pidió
+  información, lo que conteste el cliente vuelve a su terminal o a un despacho nuevo.
+
+La línea del tick cuenta `despachados`, `bloqueados_por_despacho`,
+`respuestas_al_proyecto`, `agente_lanzado` y `agente_error`.
 
 Las dos encuentran las herramientas leyendo `.wa-bin`, en la carpeta de trabajo del
 plugin (`workspace: plugin-owned`): el worker escribe ahi la ruta de su propio `bin/` en
