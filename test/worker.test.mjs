@@ -2599,6 +2599,66 @@ const lanzamientosAgente = (f) => (existsSync(join(f.dir, 'scope.jsonl'))
 }
 
 {
+  // La cuenta de Claude del bot: Ajustes pide la lista de cuentas al worker, que la lee de
+  // `orca account list` y devuelve solo lo que el panel muestra. Nada de credenciales.
+  const { comandoOrca } = await import('../catalogo.mjs')
+  const conCuentas = async (nombre, salida, prueba) => {
+    const bin = join(RAIZ, nombre)
+    mkdirSync(bin, { recursive: true })
+    writeFileSync(join(bin, 'salida.json'), JSON.stringify(salida))
+    writeFileSync(join(bin, comandoOrca()), [
+      '#!/bin/sh',
+      'echo "$@" >> "$(dirname "$0")/llamadas.txt"',
+      'cat "$(dirname "$0")/salida.json"', ''
+    ].join('\n'), { mode: 0o755 })
+    const pathAntes = process.env.PATH
+    process.env.PATH = `${bin}:/usr/bin:/bin`
+    try {
+      await prueba(() => existsSync(join(bin, 'llamadas.txt'))
+        ? readFileSync(join(bin, 'llamadas.txt'), 'utf8').trim().split('\n').filter(Boolean) : [])
+    } finally {
+      process.env.PATH = pathAntes
+    }
+  }
+  const CUENTAS_ORCA = { ok: true, result: { accounts: [
+    { provider: 'claude', id: 'cuenta-bot', email: 'bot@example.invalid', active: false,
+      auth: { state: 'authenticated', accountId: 'SECRETO-auth' },
+      quota: { session: { usedPercent: 20 } }, authMethod: 'SECRETO-metodo' },
+    { provider: 'claude', id: 'cuenta-sin', email: 'sin@example.invalid', active: true,
+      auth: { state: 'expired' }, quota: {} },
+    { provider: 'codex', id: 'cuenta-codex', email: 'codex@example.invalid', active: false,
+      auth: { state: 'authenticated' } }] } }
+
+  await conCuentas('orca-cuentas', CUENTAS_ORCA, async (llamadas) => {
+    const f = herramientasCaso('cuentas-claude', { casos: {} })
+    const orca = hostFalso(f.dir, { chats: [] })
+    const { apagar } = await arranca(orca)
+    const v = await pideCaso(orca, { action: 'cuentas-claude' })
+    ok('Ajustes pide las cuentas y el worker las lee de `orca account list`',
+      v && v.ok === true && v.code === 'cuentas' && llamadas().includes('account list --json'),
+      JSON.stringify([v, llamadas()]))
+    ok('solo las de Claude, con lo que el panel muestra y nada mas',
+      JSON.stringify(v && v.accounts) === JSON.stringify([
+        { id: 'cuenta-bot', email: 'bot@example.invalid', authenticated: true, active: false, used: 20 },
+        { id: 'cuenta-sin', email: 'sin@example.invalid', authenticated: false, active: true, used: null }]),
+      JSON.stringify(v && v.accounts))
+    ok('ni un dato de autenticacion llega al storage',
+      !/SECRETO/.test(JSON.stringify(orca.store.scopeResult)), JSON.stringify(orca.store.scopeResult))
+    apagar()
+  })
+
+  await conCuentas('orca-cuentas-falla', { ok: false, error: { code: 'runtime_unavailable' } }, async () => {
+    const f = herramientasCaso('cuentas-claude-falla', { casos: {} })
+    const orca = hostFalso(f.dir, { chats: [] })
+    const { apagar } = await arranca(orca)
+    const v = await pideCaso(orca, { action: 'cuentas-claude' })
+    ok('si Orca no contesta la lista, el veredicto lo dice con un codigo',
+      v && v.ok === false && v.code === 'cuentas-fallo', JSON.stringify(v))
+    apagar()
+  })
+}
+
+{
   // Lo que era la bandeja, ahora en el tablero: "Atender ahora" (era Tomar), "Ignorar" y
   // el proyecto puesto a mano. Las tres por el mismo canal, con --actor dueno.
   // Atender tambien lanza el agente: aqui con una CLI de Orca falsa, nunca la de verdad.

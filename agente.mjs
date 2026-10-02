@@ -17,6 +17,8 @@
  * el motivo de un fallo es uno de los codigos de `wa-scope` o sale del codigo de salida.
  */
 
+import { comandoOrca } from './catalogo.mjs'
+
 /** Lo que el panel lee en `agent`. Renombrar uno rompe el canal en silencio. */
 export const AGENTE_VEREDICTO = Object.freeze({
   LANZADO: 'launched',
@@ -65,5 +67,58 @@ export function crearLanzadorTriage ({ correr, herramienta }) {
     const motivo = typeof r.reason === 'string' && CODIGO.test(r.reason) ? r.reason : 'failed'
     if (motivo === 'sin-cli') return { agent: AGENTE_VEREDICTO.SIN_CLI }
     return { agent: AGENTE_VEREDICTO.FALLO, agentReason: motivo }
+  }
+}
+
+/**
+ * Las cuentas de Claude que Ajustes ofrece para el bot ("Cuenta de Claude del bot"): las de
+ * `orca account list`, con lo que el panel muestra y nada mas. La CLI nunca imprime
+ * credenciales, y aun asi solo pasan cinco campos: lo demas no tiene por que llegar al
+ * storage del panel. Lo elegido lo guarda el panel (`botClaudeAccount`) y lo usa `wa-scope`.
+ */
+export const CUENTAS_ACCION = 'cuentas-claude'
+const CUENTAS_MAX = 50
+const TEXTO_MAX = 200
+
+const textoCorto = (v) => (typeof v === 'string' && v.trim() && v.length <= TEXTO_MAX ? v.trim() : null)
+
+/** @param {unknown} payload @returns {Array<{ id: string, email: string | null,
+ *  authenticated: boolean, active: boolean, used: number | null }> | null} */
+export function cuentasDe (payload) {
+  const lista = esRegistro(payload) && esRegistro(payload.result) ? payload.result.accounts : null
+  if (!Array.isArray(lista)) return null
+  return lista.filter((c) => esRegistro(c) && String(c.provider ?? '').toLowerCase() === 'claude' &&
+    textoCorto(c.id)).slice(0, CUENTAS_MAX).map((c) => {
+    const usado = esRegistro(c.quota) && esRegistro(c.quota.session) ? c.quota.session.usedPercent : null
+    return {
+      id: textoCorto(c.id),
+      email: textoCorto(c.email),
+      authenticated: esRegistro(c.auth) && c.auth.state === 'authenticated',
+      active: c.active === true,
+      used: typeof usado === 'number' && Number.isFinite(usado) ? Math.round(usado) : null
+    }
+  })
+}
+
+/**
+ * @param {{ correr: (cmd: string, args: readonly string[], opts?: { timeoutMs: number }) =>
+ *             Promise<{ stdout: string }>, plataforma?: string,
+ *           env?: Record<string, string | undefined> }} deps
+ */
+export function crearListaCuentas ({ correr, plataforma = process.platform, env = process.env }) {
+  return async function listarCuentas () {
+    let salida
+    try {
+      salida = await correr(comandoOrca(plataforma, env), ['account', 'list', '--json'],
+        { timeoutMs: 15000 })
+    } catch (error) {
+      const sinCli = error?.exitCode === 127 || error?.spawnCode === 'ENOENT'
+      return { ok: false, code: sinCli ? 'orca-cli-missing' : 'cuentas-fallo' }
+    }
+    let sobre = null
+    try { sobre = JSON.parse(String(salida?.stdout ?? '') || 'null') } catch { /* cae abajo */ }
+    const cuentas = esRegistro(sobre) && sobre.ok !== false ? cuentasDe(sobre) : null
+    if (!cuentas) return { ok: false, code: 'cuentas-fallo' }
+    return { ok: true, code: 'cuentas', accounts: cuentas }
   }
 }

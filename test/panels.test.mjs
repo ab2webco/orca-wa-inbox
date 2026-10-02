@@ -4590,6 +4590,82 @@ console.log('\nactivity.html — tablero: Atender ahora dice si el agente salio'
     /proxima corrida/.test(raro?.textContent || ''), raro?.textContent)
 }
 
+console.log('\nconfig.html — la cuenta de Claude del bot')
+{
+  const CUENTAS = [
+    { id: 'cuenta-bot', email: 'bot@example.invalid', authenticated: true, active: false, used: 20 },
+    { id: 'cuenta-sin', email: 'sin@example.invalid', authenticated: false, active: true, used: null }]
+  const conCuentas = (respuesta, pedidos) => (d, st) => {
+    if (!(d.action === 'storage.set' && d.params.key === 'scopeRequest' && d.params.value)) {
+      return undefined
+    }
+    const p = d.params.value
+    pedidos.push(p)
+    st.scopeRequest = p
+    st.scopeResult = { at: new Date().toISOString(), requestId: p.id, action: p.action, ...respuesta }
+    return { ok: true }
+  }
+  const abrir = async (storage, respuesta, idioma = 'es-419') => {
+    const pedidos = []
+    const m = await montar('config.html', storage, idioma, conCuentas(respuesta, pedidos))
+    m.doc.getElementById('tab-agente').click()
+    await hastaPanel(() => m.doc.querySelectorAll('#bot-account button').length > 1 ||
+      /No pude/.test(m.doc.getElementById('bot-account-status')?.textContent || ''))
+    return { ...m, pedidos }
+  }
+  const opciones = (doc) => [...doc.querySelectorAll('#bot-account button')]
+    .map((b) => [b.dataset.value, b.textContent.replace(/\s+/g, ' ').trim()])
+
+  const { doc, storage, pedidos } = await abrir({ botClaudeAccount: 'cuenta-bot' },
+    { ok: true, code: 'cuentas', accounts: CUENTAS })
+  ok('la pestana Agente tiene la seccion "Cuenta de Claude del bot"',
+    /Cuenta de Claude del bot/.test(doc.getElementById('view-agente').textContent),
+    doc.getElementById('view-agente').textContent.slice(0, 200))
+  ok('le pide las cuentas al worker por el canal de siempre',
+    pedidos.some((p) => p.action === 'cuentas-claude'), JSON.stringify(pedidos))
+  const ops = opciones(doc)
+  ok('ofrece Automatica y cada cuenta por su correo, nunca un select',
+    (ops[0] || [])[0] === 'auto' && /Automatica/.test((ops[0] || [])[1]) &&
+    ops.some(([v, txt]) => v === 'cuenta-bot' && /bot@example\.invalid/.test(txt)) &&
+    ops.some(([v, txt]) => v === 'cuenta-sin' && /sin@example\.invalid/.test(txt)) &&
+    !doc.querySelector('#view-agente select'), JSON.stringify(ops))
+  ok('la que no tiene sesion lo dice', ops.some(([v, txt]) => v === 'cuenta-sin' && /sin sesion/.test(txt)),
+    JSON.stringify(ops))
+  ok('lo guardado queda apretado', valorSeg(doc, 'bot-account') === 'cuenta-bot', valorSeg(doc, 'bot-account'))
+  elegirSeg(doc, 'bot-account', 'auto')
+  doc.getElementById('save-bot-account').click()
+  await hastaPanel(() => storage.botClaudeAccount === 'auto')
+  ok('elegir Automatica y guardar deja `auto`', storage.botClaudeAccount === 'auto', storage.botClaudeAccount)
+  elegirSeg(doc, 'bot-account', 'cuenta-sin')
+  doc.getElementById('save-bot-account').click()
+  await hastaPanel(() => storage.botClaudeAccount === 'cuenta-sin')
+  ok('y una cuenta guarda su id, no su correo', storage.botClaudeAccount === 'cuenta-sin',
+    storage.botClaudeAccount)
+
+  const vieja = await abrir({ botClaudeAccount: 'cuenta-que-ya-no-esta' },
+    { ok: true, code: 'cuentas', accounts: CUENTAS })
+  ok('una guardada que Orca ya no lista se ve, apretada y dicha',
+    valorSeg(vieja.doc, 'bot-account') === 'cuenta-que-ya-no-esta' &&
+    opciones(vieja.doc).some(([v, txt]) => v === 'cuenta-que-ya-no-esta' && /ya no aparece/.test(txt)),
+    JSON.stringify(opciones(vieja.doc)))
+
+  const sinNada = await abrir({}, { ok: true, code: 'cuentas', accounts: CUENTAS })
+  ok('sin nada guardado rige Automatica', valorSeg(sinNada.doc, 'bot-account') === 'auto',
+    valorSeg(sinNada.doc, 'bot-account'))
+
+  const falla = await abrir({ botClaudeAccount: 'cuenta-bot' }, { ok: false, code: 'cuentas-fallo' })
+  ok('si no pudo leer las cuentas lo dice, y Automatica sigue a mano',
+    /No pude leer las cuentas de Claude/.test(falla.doc.getElementById('bot-account-status').textContent) &&
+    opciones(falla.doc).some(([v]) => v === 'auto'), falla.doc.getElementById('bot-account-status').textContent)
+  ok('y sin la lista no dice que la guardada ya no aparece: no lo sabe',
+    valorSeg(falla.doc, 'bot-account') === 'cuenta-bot' &&
+    !opciones(falla.doc).some(([, txt]) => /ya no aparece/.test(txt)), JSON.stringify(opciones(falla.doc)))
+
+  const en = await abrir({}, { ok: true, code: 'cuentas', accounts: CUENTAS }, 'en')
+  ok('en ingles', /Bot Claude account/.test(en.doc.getElementById('view-agente').textContent) &&
+    /Automatic/.test((opciones(en.doc)[0] || [])[1]), JSON.stringify(opciones(en.doc)))
+}
+
 console.log('\nactivity.html — tablero: si no pude lanzar al agente, se dice')
 {
   const AHORA = new Date().toISOString().slice(0, 16).replace('T', ' ')
@@ -4654,6 +4730,51 @@ console.log('\nactivity.html — tablero: si no pude lanzar al agente, se dice')
   const pt = await abre(fallo('sin-cuenta'), 'pt-BR')
   ok('en portugues', /Nao consegui lancar o agente/.test(nota(pt, 5)?.textContent || ''),
     nota(pt, 5)?.textContent)
+}
+
+console.log('\nactivity.html — tablero: con que cuenta de Claude, si no fue la del bot')
+{
+  const AHORA = new Date().toISOString().slice(0, 16).replace('T', ' ')
+  const actividad = { syncedAt: AHORA, running: false, pending: [], recent: [],
+    mapped: 3, authorized: 3,
+    run: { state: 'ok', startedAt: AHORA, endedAt: AHORA, looked: 3, pending: 0, reason: null } }
+  const despacho = (extra) => tarjeta({ case_id: 9, stage: 'trabajo', exceptions: [],
+    proposal: { tipo: 'trabajar', texto: 'Revisar el reporte', version: 'v9' },
+    dispatch: Object.assign({ project: 'Alfa Demo', state: 'activo', outcome: null,
+      at: '2026-10-02T13:50:00-05:00', updated_at: '2026-10-02T13:50:00-05:00' }, extra) })
+  const abre = async (cards, extra = {}, idioma = 'es-419') => (await abrirTablero({ activity: actividad,
+    board: tablero(cards, Object.assign({ agent_waiting: 1 }, extra)) }, idioma)).doc
+  const texto = (doc, id) => doc.querySelector(`.card[data-case="${id}"] .card-despacho`)?.textContent || ''
+
+  const conRespaldo = await abre([despacho({ account: 'libre@example.invalid', fallback: 'elegida-sin-sesion' })])
+  ok('el despacho que no uso la cuenta del bot dice cual uso y por que',
+    /Cuenta de respaldo: libre@example\.invalid \(la elegida no tiene sesion\)/.test(texto(conRespaldo, 9)),
+    texto(conRespaldo, 9))
+  const sinRespaldo = await abre([despacho({ account: 'bot@example.invalid', fallback: null })])
+  ok('con la cuenta del bot no agrega nada', !/respaldo/.test(texto(sinRespaldo, 9)), texto(sinRespaldo, 9))
+  const motivos = { 'elegida-no-esta': /ya no aparece/, 'elegida-sin-cuota': /cuota/,
+    'elegida-fallo': /fallo al abrir/ }
+  const malos = []
+  for (const [codigo, frase] of Object.entries(motivos)) {
+    const d = await abre([despacho({ account: 'libre@example.invalid', fallback: codigo })])
+    if (!frase.test(texto(d, 9))) malos.push(`${codigo}: ${texto(d, 9)}`)
+  }
+  ok('cada motivo del respaldo tiene su frase', malos.length === 0, JSON.stringify(malos))
+  const sinCuenta = await abre([despacho({ account: null, fallback: 'elegida-fallo' })])
+  ok('sin saber cual uso, dice que la eligio Orca',
+    /Cuenta de respaldo: la que elige Orca/.test(texto(sinCuenta, 9)), texto(sinCuenta, 9))
+
+  const agente = await abre([tarjeta({ case_id: 5, stage: 'clasificado', proposal: null,
+    exceptions: [], waits_agent: true })], { agent_launch: { state: 'running',
+    at: '2026-10-02T13:50:00-05:00', account: 'libre@example.invalid', fallback: 'elegida-fallo' } })
+  const linea = agente.getElementById('runline').textContent
+  ok('la linea de la revision dice con que cuenta corre el agente de casos y por que',
+    /Agente de casos con la cuenta de respaldo libre@example\.invalid \(la elegida fallo al abrir\)/.test(linea),
+    linea)
+  const en = await abre([despacho({ account: 'libre@example.invalid', fallback: 'elegida-sin-sesion' })],
+    {}, 'en')
+  ok('en ingles', /Fallback account: libre@example\.invalid \(the chosen one is signed out\)/.test(texto(en, 9)),
+    texto(en, 9))
 }
 
 console.log('\nactivity.html — tablero: el proyecto del caso, a mano')

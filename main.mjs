@@ -20,7 +20,7 @@ import { dirname, join } from 'node:path'
 import { HARNESS_KEY } from './harness.mjs'
 import { llaveValida } from './jev-espejo.mjs'
 import { crearAccionesCaso } from './acciones.mjs'
-import { crearLanzadorTriage } from './agente.mjs'
+import { CUENTAS_ACCION, crearLanzadorTriage, crearListaCuentas } from './agente.mjs'
 import { crearCatalogo, leerCatalogo, PROJECTS_KEY } from './catalogo.mjs'
 
 // Las herramientas viajan dentro del plugin. Antes se buscaban en el PATH del usuario,
@@ -1713,6 +1713,8 @@ export default function activate(orca) {
   // "Atender ahora" abre al agente de casos en el momento, por el mismo camino que el tick
   // (`wa-scope agente lanzar`), sin la valla: el hijo ejecuta la CLI de Orca.
   const lanzarTriage = crearLanzadorTriage({ correr: correrOrca, herramienta: (nombre) => tool(nombre) })
+  // Las cuentas de Claude que Ajustes ofrece para el bot, por la misma CLI.
+  const listarCuentas = crearListaCuentas({ correr: correrOrca })
 
   const atenderPedidoScope = crearVigia({
     nombre: 'scope',
@@ -1727,6 +1729,7 @@ export default function activate(orca) {
       [SCOPE_ACCION.QUITAR]: (pedido) => quitarAlcance(pedido),
       [SCOPE_ACCION.REGLA_QUITAR]: (pedido) => quitarRegla(pedido),
       ...crearAccionesCaso({ run, motivoDe, lanzarTriage, herramienta: (nombre) => tool(nombre) }),
+      [CUENTAS_ACCION]: () => listarCuentas(),
       ...catalogo.acciones
     }
   })
