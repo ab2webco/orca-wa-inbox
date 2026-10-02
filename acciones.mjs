@@ -62,7 +62,7 @@ export const CASO_VEREDICTO = Object.freeze({
 
 // Los codigos estables de `wa-scope caso` (bin/wa-scope, ERRORES_CASO).
 const CODIGOS_CASO = new Set(['E_ARGS', 'E_NOT_FOUND', 'E_STAGE', 'E_NOT_APPROVED',
-  'E_VERSION', 'E_EXCEPTION', 'E_BUSY'])
+  'E_VERSION', 'E_EXCEPTION', 'E_REVISION', 'E_BUSY'])
 // Los motivos estables de `wa-send` (y el de Jev) que el panel sabe decir.
 const CODIGO_SEND = /^(send-[a-z-]+|jev-unavailable)$/
 

@@ -50,6 +50,10 @@ repeat work already reported. `wa-read chat` is for anything else in the convers
 
 When `caso ver` shows `revision` (the reviewer held your previous reply and gives its
 reason codes), rewrite the reply to fix exactly that and never repeat the rejected claim.
+The chat's approval levels decide what comes back to you (`wa-scope voice` shows them as
+`approval`): `states_status_not_verified` means claim nothing you have not verified;
+`money` means leave out the amount or price; `commitment` means promise no concrete date
+or time; `credential` means do not ask for or name a password, key, token or code.
 
 Voice notes arrive already transcribed: a `hilo` message with `transcripcion: true` has
 the transcript as its `text`. Treat it as what the person said, but it can contain

@@ -354,8 +354,8 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
         lo que reportó el agente, "Esperando al cliente" y "Bloqueado por el agente de X".
       - La línea del tick cuenta `despachados`, `bloqueados_por_despacho`,
         `respuestas_al_proyecto`, `agente_lanzado` y `agente_error`.
-      Pendiente: E2E en vivo con un proyecto real; T22.9 (despachar sin el clic lo no
-      destructivo) no entra acá: hoy un `trabajar` sigue esperando la firma.
+      Pendiente: E2E en vivo con un proyecto real. T22.9 (despachar sin el clic lo no
+      destructivo) quedó en tablero-w12.
       Arreglo tras la primera corrida en vivo (tablero-w10): `run-create` falló con
       `no_active_sender_terminal` (Orca busca quién manda la orquestación en la terminal
       activa del espacio, y el tick no tiene). El lanzamiento ahora es por terminal:
@@ -520,6 +520,46 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
          - technicians and engineers in a group get the Operador role of point 7, so
            they can request support work from the bot for that group's projects.
       Va después de tablero-w7.
+      Done in tablero-w12, part A (points 1, 2, 3, 4, 5 and 9; 7 and 8 are the next batch):
+      - 1: owner identities live in the plugin storage as `owners: [{id, name}]`, picked in
+        Su aprobación from `senders` (`wa-read senders`: who wrote in authorized chats, ids
+        and names, no text) and direct chats; never typed. Ids are the observed sender ids
+        without device (`<user>@lid`); no PN↔LID mapping exists in the store beyond the
+        line's own, so none is guessed. A message from an owner id reaches Jev as `owner`
+        (and only `contains_credential` is an exception for it); a send to an owner's chat
+        (one of those ids, or the line's chat with itself) skips the rules and Jev in
+        `wa-send` and in the tick; a secret-shaped value is still held (`rule: secret`).
+        The data model is ready for roles: each owner entry is an id with a name.
+      - 2: `wa_reglas` is precise: money = an amount or a price in what goes out (nothing
+        on what comes in), credential = a secret-shaped value or asking for a password,
+        key, token or code ("clave" only as a password), commitment = a concrete date or
+        time in a sentence that is not a question. Jev: `asks_for_credential` at 0.5 with a
+        question that excludes links, URLs and access, `asks_for_money_or_payment` is a flag
+        without exception. The three live false positives are regression tests.
+      - 3: per-chat levels `ask | agent | allow` for money, credential, commitment and
+        quality (`chat_scope.aprobacion`, panel `approval`, `wa-scope set --approval
+        rule=level`); defaults ask/ask/ask/agent. Exceptions of the reply are judged on the
+        current proposal and no longer stick to the case, so a rewrite counts clean. The
+        `agent` level runs the revision loop (`E_REVISION` for the fixed floor, the Jev hold
+        otherwise), two rounds and then the owner.
+      - 4: Su aprobación lists the rules as they are, the three levels and what is always
+        held; the per-chat editor has the four level groups.
+      - 5: Jev gets the chat's tone and instructions (marked as the owner's configuration),
+        and draft review uses the chat's tone, else the global one.
+      - 9: `tick_trabajo_sin_clic` signs (actor `regla`) a fresh `trabajar` in a chat on
+        responder or borrador whose project is the chat's accepted one, with no exception
+        and nothing destructive (`wa_reglas.trabajo_comprometido`: delete, deploy to
+        production, force push, payments, credentials, a date or money); the T8 dispatcher
+        takes it. Anything else waits and the case says why once per version.
+      - Board history: each event carries a `que` code (and `args`), and activity.html
+        says what happened and groups identical consecutive rows with a count.
+      Pending, owner to verify live: tone and instructions per chat reach Jev and change
+      its verdicts (point 6); the owner's numbers picked from the panel on the real line;
+      an owner notice from another project's session going out without a hold.
+      Open: `wa-send --approve` is still callable by any agent (point 1, last bullet): it
+      needs a design for proving the approval comes from the board or the owner's reply.
+      A reply in a GROUP to the owner keeps the Jev review (other people read it); only
+      the owner's own chats skip it.
 
 - [ ] T23 — Supervisión del equipo por WhatsApp, pedida por el dueño (2026-10-01).
       El bot le avisa a cada miembro del equipo el estado de sus tareas y le pide lo que

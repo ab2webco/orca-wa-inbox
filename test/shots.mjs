@@ -135,6 +135,13 @@ const DATOS = {
     { jid: '573000000001@s.whatsapp.net', name: 'Camila Restrepo', kind: 'directo',
       last: '2026-09-13 11:22', unread: 2 }
   ],
+  // T22.1: quienes escribieron (ids de prueba, sin texto) y el numero del dueno ya elegido.
+  senders: [
+    { id: '100000000000001@lid', name: 'Ana Restrepo', chats: ['Soporte — Cliente Norte'] },
+    { id: '100000000000002@lid', name: 'Beto Socio',
+      chats: ['Operaciones internas', 'Proyecto Andes — QA'] }
+  ],
+  owners: [{ id: '100000000000001@lid', name: 'Ana Restrepo' }],
   // Los proyectos que el dueno acepto (T12) y lo que Orca propone todavia (T12). Rutas y
   // nombres de ejemplo: ninguno existe en ninguna maquina.
   projects: [
@@ -360,10 +367,22 @@ const TABLERO_CASOS = [
         'si quieres, lo revisamos en una llamada esta semana.' },
     exceptions: ['money'], project: { id: 'alfa-demo', name: 'Alfa Demo' },
     // La historia del caso (`caso_evento`): lo que hizo el agente con el, paso a paso.
+    // T22: lo que no mueve la etapa dice que paso, y lo repetido va con su cuenta.
     events: [
-      { de: null, a: 'recibido', actor: 'automatizacion', at: minutos(30) },
-      { de: 'recibido', a: 'clasificado', actor: 'jev', at: minutos(29) },
-      { de: 'clasificado', a: 'decision', actor: 'agente', at: minutos(3) }] }),
+      { de: null, a: 'recibido', actor: 'automatizacion', que: 'message', at: minutos(30) },
+      { de: 'recibido', a: 'recibido', actor: 'automatizacion', que: 'message', at: minutos(30) },
+      { de: 'recibido', a: 'recibido', actor: 'automatizacion', que: 'message', at: minutos(29) },
+      { de: 'recibido', a: 'recibido', actor: 'automatizacion', que: 'sticker', at: minutos(29) },
+      { de: 'recibido', a: 'clasificado', actor: 'jev', que: 'classified', args: ['card'],
+        at: minutos(29) },
+      { de: 'clasificado', a: 'clasificado', actor: 'jev', que: 'jev', args: ['agent'],
+        at: minutos(29) },
+      { de: 'clasificado', a: 'decision', actor: 'agente', que: 'proposal', args: ['responder'],
+        at: minutos(3) },
+      { de: 'decision', a: 'decision', actor: 'regla', que: 'rule', args: ['money'],
+        at: minutos(3) },
+      { de: 'decision', a: 'decision', actor: 'automatizacion', que: 'held',
+        args: ['money', 'states_status_not_verified'], at: minutos(2) }] }),
   caso(2, 'decision', {
     title: 'Pide el acceso al tablero de Andes', clase: 'alert', prioridad: 'urgent',
     chat_name: 'Operaciones internas', updated_at: minutos(22),
@@ -531,6 +550,15 @@ const PANELES = [
     datos: BUSQUEDA_FALLIDA, pestana: 'proyectos' },
   { nombre: 'config-conversacion-editar', archivo: 'config.html', anchos: ANCHOS,
     guion: EDITAR_CONVERSACION, espera: 400, datos: CON_LINEA, pestana: 'chats' },
+  // T22.3: los niveles de aprobacion del chat, debajo de las respuestas automaticas.
+  { nombre: 'config-conversacion-niveles', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: CON_LINEA, pestana: 'chats',
+    guion: EDITAR_CONVERSACION + ";document.getElementById('chat-ap-money').scrollIntoView()" },
+  // T22.1: elegir los numeros del dueno de quienes escribieron.
+  { nombre: 'config-duenos-combo', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 300, datos: CON_LINEA, pestana: 'aprobacion',
+    guion: "document.getElementById('owners-card').scrollIntoView();" +
+      escribirEn('owner-search', '') },
   {
     nombre: 'actividad',
     archivo: 'activity.html',

@@ -382,3 +382,24 @@ def ajuste(key, fallback=None):
     except Exception:                     # noqa: BLE001 - sin registro manda el default
         pass
     return fallback
+
+
+def duenos():
+    """Los remitentes de confianza que el dueno eligio en ajustes (T22.1): sus ids tal
+    como WhatsApp los deja en el almacen (`<usuario>@lid`, o `@s.whatsapp.net` si asi
+    llegan), sin el dispositivo. Nunca un numero escrito a mano ni adivinado: el panel
+    solo ofrece los que vio en las conversaciones.
+
+    Viven en el almacen del plugin, por instalacion, en `owners`: `[{id, name}]`. Lo que
+    no tiene forma de id se ignora: un valor sucio no puede volver dueno a nadie."""
+    lista = plugin_store_raw().get("owners")
+    salida = []
+    for d in lista if isinstance(lista, list) else []:
+        jid = d.get("id") if isinstance(d, dict) else None
+        if not isinstance(jid, str) or "@" not in jid:
+            continue
+        usuario, _, servidor = jid.strip().partition("@")
+        usuario = usuario.split(":")[0]
+        if usuario and servidor and f"{usuario}@{servidor}" not in salida:
+            salida.append(f"{usuario}@{servidor}")
+    return salida
