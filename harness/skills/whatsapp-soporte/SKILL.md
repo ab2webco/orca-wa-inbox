@@ -24,9 +24,10 @@ Never write either one yourself, and never answer a message that is only a greet
 
 ## What never reaches you
 
-Only four things are skipped without you, and the board says which one ("No requiere
-agente"): Jev said `skip`; group chatter not addressed to the assistant; a thanks after a
-reply with no question; a lone sticker. Everything else reaches you, whatever Jev's class
+Only a few things are skipped without you, and the board says which one ("No requiere
+agente"): Jev said `skip`; group chatter not addressed to the assistant; a group line not
+addressed to it that asks for nothing; a thanks after a reply with no question; a lone
+sticker. In an `observar` chat you never draft unless the owner pressed Atender ahora. Everything else reaches you, whatever Jev's class
 or flags, except a credential, which goes straight to the owner. So a case in front of you
 is never "nothing": classify it, and propose or list it as doubtful.
 

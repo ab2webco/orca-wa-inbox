@@ -4993,5 +4993,21 @@ for (const [idioma, nombre, lead, regla] of [
     !abrirDetalle(doc, 6).querySelector('.card-noagent'))
 }
 
+console.log('\nactivity.html — un caso de un chat observar dice Solo leer')
+for (const [idioma, nombre, re] of [['es-419', 'ES', /Solo leer/], ['en', 'EN', /Read only/],
+  ['pt-BR', 'PT', /So leitura/]]) {
+  const c = tarjeta({ case_id: 8, stage: 'clasificado', proposal: null, exceptions: [],
+    read_only: true, actions: ['atender', 'ignorar'] })
+  const { doc } = await abrirTablero({ board: tablero([c]) }, idioma)
+  ok(`${nombre}: la tarjeta lleva la nota de solo leer`,
+    re.test(doc.querySelector('.card[data-case="8"] .card-solo-leer')?.textContent || ''))
+}
+{
+  const c = tarjeta({ case_id: 9, stage: 'clasificado', proposal: null, exceptions: [],
+    read_only: false, actions: ['atender', 'ignorar'] })
+  const { doc } = await abrirTablero({ board: tablero([c]) })
+  ok('sin read_only no hay nota', !doc.querySelector('.card-solo-leer'))
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)

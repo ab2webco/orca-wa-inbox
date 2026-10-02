@@ -2183,7 +2183,7 @@ import re  # noqa: E402
 
 LLAVES_TARJETA = {"case_id", "account", "chat_jid", "chat_name", "stage", "title",
                   "summary", "clase", "prioridad", "jev", "proposal", "exceptions",
-                  "blocked_reason", "no_agent_rule", "ticket", "updated_at", "actions", "project",
+                  "blocked_reason", "no_agent_rule", "read_only", "ticket", "updated_at", "actions", "project",
                   "needs_agent", "events", "related_case"}
 ISO = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$")
 
@@ -2881,7 +2881,7 @@ def para_el_agente(home):
 
 
 SALUDO = {"attention_class": "pleasantry", "flags": [], "skip": False}
-for modo, despierta in (("responder", True), ("borrador", True), ("observar", True)):
+for modo, despierta in (("responder", True), ("borrador", True), ("observar", False)):
     with tempfile.TemporaryDirectory() as home:
         js(home, "set", CHAT, "--provider", "plane", "--target", "SOP", "--mode", modo)
         saludo = caso_juzgado(home, "T20A", SALUDO)
@@ -4162,7 +4162,7 @@ if NODE:
                c and c["etapa"] != "cerrado" and int(c["case_id"]) in para_el_agente(home),
                f"{c and c['etapa']} {para_el_agente(home)}")
 
-        for modo in ("responder", "observar"):
+        for modo in ("responder", "borrador"):
             with tempfile.TemporaryDirectory() as home:
                 abre(home, [msg(PERSONA, "L8", "tenemos reunion el martes", 5)], modo)
                 c = caso_de_stanza(home, "L8")
@@ -4170,7 +4170,7 @@ if NODE:
                    c and int(c["case_id"]) in para_el_agente(home), f"{c and c['etapa']} {para_el_agente(home)}")
 
         with tempfile.TemporaryDirectory() as home:
-            abre(home, [msg(PERSONA, "L9", "urgente ya", 5)], "observar")
+            abre(home, [msg(PERSONA, "L9", "urgente ya", 5)])
             c = caso_de_stanza(home, "L9")
             ok("una clase marcada por Jev (bandera de riesgo) despierta al agente",
                c and int(c["case_id"]) in para_el_agente(home), f"{para_el_agente(home)}")
@@ -4188,6 +4188,78 @@ if NODE:
             ok("una credencial va al dueno y no al agente",
                c and int(c["case_id"]) not in para_el_agente(home)
                and tarjeta(home, c["case_id"])["stage"] == "decision", f"{c and c['etapa']}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
+
+# ── Un grupo no dirigido solo despierta al agente por un pedido; observar no redacta ────────
+print("\nun grupo no dirigido es caro: solo un pedido lo despierta; observar solo lee")
+if NODE:
+    falso = JevFalso(jev_y_borradores)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        def abre2(home, mensajes, modo="responder"):
+            pon_llave(home)
+            llegan(home, A, mensajes)
+            js(home, "agent", "Agente De Ejemplo")
+            for chat in (PERSONA, OPERACIONES, SIN_DIRIGIR):
+                js(home, "set", chat, "--provider", "ninguno", "--mode", modo)
+            js(home, "config", "ack", "off")
+            js(home, "config", "greeting", "off")
+            ingiere(home)
+
+        with tempfile.TemporaryDirectory() as home:
+            abre2(home, [msg(SIN_DIRIGIR, "G1", "algo raro que no se entiende", 9),
+                         msg(SIN_DIRIGIR, "G2", "tenemos reunion el martes", 8),
+                         msg(SIN_DIRIGIR, "G3", "urgente ya", 7)])
+            ok("`unclear`, una clase que no es un pedido o una bandera de riesgo sola, en un grupo "
+               "no dirigido, quedan callados", all(caso_de_stanza(home, x) is None for x in ("G1", "G2", "G3"))
+               and para_el_agente(home) == [], f"{para_el_agente(home)}")
+        with tempfile.TemporaryDirectory() as home:
+            abre2(home, [msg(SIN_DIRIGIR, "G4", "revisa este caso", 9)])
+            c = caso_de_stanza(home, "G4")
+            ok("un pedido en un grupo no dirigido si despierta al agente",
+               c and int(c["case_id"]) in para_el_agente(home), f"{para_el_agente(home)}")
+        with tempfile.TemporaryDirectory() as home:
+            abre2(home, [msg(SIN_DIRIGIR, "G5", "cuanto cuesta", 9)])
+            ok("dinero en un grupo no dirigido tambien", caso_de_stanza(home, "G5") is not None)
+        with tempfile.TemporaryDirectory() as home:
+            abre2(home, [msg(OPERACIONES, "G6", "@duenio algo raro que no se entiende", 9, mencion=True)])
+            c = caso_de_stanza(home, "G6")
+            ok("la misma linea dirigida al asistente (mencion) llega al agente",
+               c and int(c["case_id"]) in para_el_agente(home), f"{para_el_agente(home)}")
+        with tempfile.TemporaryDirectory() as home:
+            abre2(home, [msg(SIN_DIRIGIR, "G7", "@duenio la clave es Hunter2xx", 9)])
+            corre(home, "tick", "--json")
+            c = caso_de_stanza(home, "G7")
+            ok("una credencial en un grupo no dirigido va al dueno",
+               c and int(c["case_id"]) not in para_el_agente(home)
+               and tarjeta(home, c["case_id"])["stage"] == "decision")
+        ok("la regla `grupo_no_dirigido` esta en la lista cerrada y el tablero la traduce",
+           'grupo_no_dirigido' in (RAIZ / "bin" / "wa-scope").read_text(encoding="utf-8")
+           and "noAgent_grupo_no_dirigido" in (RAIZ / "activity.html").read_text(encoding="utf-8"))
+
+        with tempfile.TemporaryDirectory() as home:
+            abre2(home, [msg(PERSONA, "O1", "revisa este caso", 9)], "observar")
+            c = caso_de_stanza(home, "O1")
+            cid = str(c["case_id"])
+            ok("en un chat `observar` el agente no redacta", int(cid) not in para_el_agente(home),
+               f"{para_el_agente(home)}")
+            t = tarjeta(home, cid)
+            ok("el caso queda en el tablero, marcado como Solo leer", t and t["read_only"] is True
+               and t["stage"] in ("recibido", "clasificado"), f"{t}")
+            js(home, "caso", "atender", cid, "--actor", "dueno")
+            ok("Atender ahora lo despierta aunque el chat sea `observar`",
+               int(cid) in para_el_agente(home))
+            ok("y deja de marcarse Solo leer", tarjeta(home, cid)["read_only"] is False)
+        with tempfile.TemporaryDirectory() as home:
+            abre2(home, [msg(PERSONA, "O2", "revisa este caso", 9)], "responder")
+            ok("en `responder` no hay nota de solo leer",
+               tarjeta(home, caso_de_stanza(home, "O2")["case_id"])["read_only"] is False)
     finally:
         falso.cerrar()
         os.environ.clear()

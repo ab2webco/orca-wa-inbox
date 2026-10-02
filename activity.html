@@ -619,6 +619,8 @@
               "noAgent_charla_de_grupo": "Charla de un grupo que no es para el asistente.",
               "noAgent_gracias_sin_pregunta": "Un gracias despues de una respuesta, sin ninguna pregunta.",
               "noAgent_sticker_suelto": "Un sticker suelto, sin texto ni nada mas en la rafaga.",
+              "noAgent_grupo_no_dirigido": "Una linea de un grupo que no es para el asistente y no pide nada.",
+              "boardReadOnly": "Solo leer: el agente no redacta en este chat. Use Atender ahora si lo quiere.",
               "ticketLead": "Ticket",
               "agoNow": "ahora",
               "agoMin": "hace {n} min",
@@ -792,6 +794,8 @@
               "noAgent_charla_de_grupo": "Group chatter not meant for the assistant.",
               "noAgent_gracias_sin_pregunta": "A thanks after a reply, with no question in it.",
               "noAgent_sticker_suelto": "A lone sticker, with no text and nothing else in the burst.",
+              "noAgent_grupo_no_dirigido": "A group line not meant for the assistant that asks for nothing.",
+              "boardReadOnly": "Read only: the agent does not draft in this chat. Use Handle now if you want it to.",
               "ticketLead": "Ticket",
               "agoNow": "just now",
               "agoMin": "{n} min ago",
@@ -965,6 +969,8 @@
               "noAgent_charla_de_grupo": "Uma conversa de um grupo que nao e para o assistente.",
               "noAgent_gracias_sin_pregunta": "Um obrigado depois de uma resposta, sem nenhuma pergunta.",
               "noAgent_sticker_suelto": "Um sticker solto, sem texto nem mais nada na rajada.",
+              "noAgent_grupo_no_dirigido": "Uma linha de um grupo que nao e para o assistente e nao pede nada.",
+              "boardReadOnly": "So leitura: o agente nao redige neste chat. Use Atender agora se quiser.",
               "ticketLead": "Ticket",
               "agoNow": "agora",
               "agoMin": "ha {n} min",
@@ -1978,6 +1984,7 @@
         if (aprobada) nodos.push(aprobada)
         var agente = agenteNodo(c)
         if (agente) nodos.push(agente)
+        if (c.read_only === true) nodos.push(crear('div', 'card-solo-leer', t('boardReadOnly')))
         var primaria = primariaDe(accionesDe(c))
         var aviso = formularios[id] ? null : mensajeNodo(id)
         if (primaria === 'atender') {

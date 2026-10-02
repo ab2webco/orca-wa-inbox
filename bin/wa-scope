@@ -2541,7 +2541,7 @@ def cmd_caso_atender(con, a):
     if caso["etapa"] not in ETAPAS_ATENDER:
         caso_falla("E_STAGE", f"case #{a.id} is in {caso['etapa']}: only a case in "
                               f"{' or '.join(ETAPAS_ATENDER)} can be handed to the agent")
-    caso_tocar(con, caso, a.actor, "the owner asked the agent to handle it now",
+    caso_tocar(con, caso, a.actor, DETALLE_ATENDER,
                necesita_agente=1)
     con.commit()
     return [caso_fila(con, caso_de(con, a.id))]
@@ -3076,7 +3076,17 @@ SIN_AGENTE = {
     "gracias_sin_pregunta": "un gracias despues de una respuesta, sin ninguna pregunta",
     # Un sticker sin texto, en una rafaga que no trae nada mas: no pide nada.
     "sticker_suelto": "un sticker suelto, sin texto ni nada mas en la rafaga",
+    # Una rafaga de un grupo que NO nombra ni cita al asistente, y que Jev no clasifico como un
+    # pedido ni marco con una bandera que necesite al agente, ni trae dinero, compromiso o
+    # credencial: en un grupo con mucho movimiento, cada linea suelta despertando al agente
+    # es una corrida por charla. Un pedido, o una mencion, si lo despierta.
+    "grupo_no_dirigido": "una linea de un grupo que no es para el asistente y no pide nada",
 }
+# Las clases de Jev que son un pedido (o lo que merece una respuesta): lo que despierta al
+# agente aunque el mensaje no vaya dirigido a el.
+CLASES_QUE_PIDEN = ("support_request", "bug_report", "status_question",
+                    "client_waiting_or_down", "needs_decision", "deploy_request",
+                    "access_or_credential", "money")
 PREFIJO_SIN_AGENTE = "No requiere agente: "
 
 
@@ -3430,6 +3440,11 @@ def veredicto_de_jev(m, juicio, con=None):
             and not juicio["flags"] and not juicio["exceptions"]):
         # Charla de un grupo que no es para el asistente (`charla_de_grupo`): no abre caso;
         # si hay uno abierto del grupo, la linea se suma a el y nada mas.
+        return None
+    if (m.get("kind") == "grupo" and juicio.get("attention_class") not in CLASES_QUE_PIDEN
+            and not juicio["needs_agent"]
+            and not set(juicio["exceptions"]) & {"money", "commitment", "credential"}):
+        # `grupo_no_dirigido`: no abre caso; si hay uno abierto del grupo se suma a el.
         return None
     return {"accion": "clasificar", "clase": clase, "actor": "jev",
             "detalle": f"jev {juicio.get('attention_class') or '-'}", "jev": juicio,
@@ -4149,7 +4164,8 @@ def titulos_de_mensajes(con, case_ids):
     return titulos
 
 
-def tarjeta_de(caso, nombres, titulos, motivos, eventos=None, sin_agente=None):
+def tarjeta_de(caso, nombres, titulos, motivos, eventos=None, sin_agente=None,
+               solo_leer=()):
     """Un caso con la forma de una tarjeta del contrato `board`."""
     propuesta = json.loads(caso["propuesta"]) if caso["propuesta"] else None
     ruta = json.loads(caso["ruta"]) if caso["ruta"] else {}
@@ -4171,6 +4187,9 @@ def tarjeta_de(caso, nombres, titulos, motivos, eventos=None, sin_agente=None):
         # que el panel traduce), o None.
         "no_agent_rule": (regla_de_motivo((sin_agente or {}).get(caso["case_id"]))
                           if caso["etapa"] == "cerrado" else None),
+        # Un caso de un chat `observar` que el agente no redacta (el dueno no apreto Atender
+        # ahora): se ve en el tablero con la nota "Solo leer".
+        "read_only": caso["case_id"] in solo_leer,
         "ticket": caso["plane_issue"] or None,
         "updated_at": iso_caso(caso["updated_at"]),
         "actions": acciones_de(caso["etapa"], tipo, bool(json.loads(caso["excepciones"] or "[]"))),
@@ -4219,6 +4238,10 @@ def build_board(con):
                 f"case_id in ({','.join('?' * len(bloqueados))}) order by id",
                 bloqueados):
             motivos[r["case_id"]] = r["detalle"] or None
+    modos = {jid: r.get("mode") for jid, r in merged_scope(con).items()}
+    solo_leer = {c["case_id"] for c in casos
+                 if c["etapa"] in ("recibido", "clasificado") and modos.get(c["chat_jid"]) == "observar"
+                 and not atendido_por_dueno(con, c["case_id"])}
     sin_agente = {}
     cerrados = [c["case_id"] for c in casos if c["etapa"] == "cerrado"]
     for i in range(0, len(cerrados), 500):
@@ -4242,7 +4265,7 @@ def build_board(con):
             "truncated": truncado, "counts": counts,
             # Los casos que esperan al agente: los mismos que `pending --needs-agent`.
             "agent_waiting": len(casos_para_agente(con)),
-            "cards": [tarjeta_de(c, nombres, titulos, motivos, eventos, sin_agente)
+            "cards": [tarjeta_de(c, nombres, titulos, motivos, eventos, sin_agente, solo_leer)
                       for c in casos]}
 
 
@@ -4747,6 +4770,15 @@ def tick_caso(con, caso, texto, estados, resumen):
     print(f"wa-scope: tick case #{cid}: {codigo}", file=sys.stderr)
 
 
+DETALLE_ATENDER = "the owner asked the agent to handle it now"
+
+
+def atendido_por_dueno(con, case_id):
+    """Si el dueno apreto Atender ahora en este caso."""
+    return con.execute("select 1 from caso_evento where case_id=? and actor='dueno' and "
+                       "detalle=? limit 1", (case_id, DETALLE_ATENDER)).fetchone() is not None
+
+
 def casos_para_agente(con):
     """Los casos abiertos de la linea activa que necesitan lenguaje, los ids.
 
@@ -4774,6 +4806,10 @@ def casos_para_agente(con):
             "order by updated_at, case_id", (cuenta_activa(),)):
         # Una credencial nunca pasa por el agente, con la propuesta que tenga.
         if "credential" in _lista_json(r["excepciones"]):
+            continue
+        # `observar` lee y avisa, nunca escribe: el agente no redacta ahi. El caso queda en el
+        # tablero para el dueno, salvo que apriete Atender ahora.
+        if modos.get(r["chat_jid"]) == "observar" and not atendido_por_dueno(con, r["case_id"]):
             continue
         if r["etapa"] == "recibido" or r["propuesta"] or r["necesita_agente"]:
             casos.append(r["case_id"])
