@@ -425,6 +425,13 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
          - Cliente (por defecto): reglas de soporte y aprobaciones del chat.
          El rol sale del número, configurado en ajustes con el autocompletar de
          contactos, y nunca del texto del mensaje.
+         Los roles se asignan al agregar o editar la conversación:
+         - en un directo, el rol de esa persona;
+         - en un grupo, la lista de sus participantes (con nombre, desde WhatsApp), donde
+           a cada uno se le marca Operador o Super admin; el resto queda como Cliente;
+         - un rol de grupo vale solo dentro de ese grupo y para los proyectos de ese
+           chat;
+         - el Super admin global (los números del dueño) vale en todos los chats.
       Va después de tablero-w7.
 
 Rama `feat/tablero-casos`, desde `main` en v4.9.0. PRs encadenados:
