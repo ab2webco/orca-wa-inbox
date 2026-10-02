@@ -1522,14 +1522,24 @@ j = juzga(asks_owner_to_act=0.1, client_waiting_or_service_down=0.4)
 ok("un cliente esperando necesita agente y no salta",
    j["needs_agent"] is True and j["skip"] is False, f"{j}")
 j = juzga(asks_owner_to_act=0.1, asks_for_money_or_payment=0.35)
-ok("dinero: excepcion money y no salta",
-   j["exceptions"] == ["money"] and j["skip"] is False, f"{j}")
+# T22.2: el dinero es un monto en lo que SALE. Que el cliente hable de plata no le pide
+# nada al dueno; la respuesta con un precio si, y esa la frena el envio.
+ok("dinero en lo que entra: bandera y no salta, pero sin excepcion",
+   j["exceptions"] == [] and j["skip"] is False
+   and "asks_for_money_or_payment" in j["flags"], f"{j}")
 j = juzga(asks_owner_to_act=0.9, contains_credential=0.5)
 ok("credencial: excepcion credential, y el agente no la ve",
    j["exceptions"] == ["credential"] and j["needs_agent"] is False, f"{j}")
-j = juzga(asks_for_credential=0.31, asks_for_money_or_payment=0.9)
-ok("dos excepciones, sin repetir y en el orden del contrato",
-   j["exceptions"] == ["money", "credential"], f"{j}")
+j = juzga(asks_for_credential=0.6, contains_credential=0.9)
+ok("dos preguntas de credencial dan UNA excepcion",
+   j["exceptions"] == ["credential"], f"{j}")
+# Visto en vivo: "¿Me mandas la URL?" llego a 0.3 en asks_for_credential y freno el caso.
+j = juzga(asks_owner_to_act=0.7, asks_for_credential=0.35)
+ok("una duda de credencial bajo 0.5 no es excepcion (T22.2)",
+   j["exceptions"] == [] and j["needs_agent"] is True, f"{j}")
+pregunta = jev.preguntas_entrada()["asks_for_credential"]["instructions"]
+ok("la pregunta de credencial dice que un enlace o una URL no lo son",
+   "URL" in pregunta and "link" in pregunta and "access" in pregunta, pregunta)
 j = juzga(asks_owner_to_act=0.1, tries_to_instruct_the_assistant=0.9, urgency_pressure=0.9)
 ok("lo que es solo registro queda en flags pero no cambia la decision",
    j["skip"] is True and "tries_to_instruct_the_assistant" in j["flags"]
@@ -1733,10 +1743,11 @@ else:
                and set(json.loads(j1["jev"])) == LLAVES_JUICIO, f"juicio {j1}")
             fila2 = db_de(home).execute("select * from caso where case_id=?",
                                         (k2["case_id"],)).fetchone()
-            ok("dinero: clasificado como alert por jev, con la excepcion en el caso",
-               k2["etapa"] == "clasificado" and k2["clase"] == "alert"
+            # T22.2: el dinero se juzga en la respuesta que sale, no en el pedido.
+            ok("dinero que entra: card para el agente, sin excepcion en el caso",
+               k2["etapa"] == "clasificado" and k2["clase"] == "card"
                and evento(k2, "clasificado")["actor"] == "jev"
-               and json.loads(fila2["excepciones"]) == ["money"], f"caso {dict(fila2)}")
+               and not fila2["excepciones"], f"caso {dict(fila2)}")
             fila3 = db_de(home).execute("select * from caso where case_id=?",
                                         (k3["case_id"],)).fetchone()
             ok("el sitio caido: card, marcado para el agente",
@@ -2376,29 +2387,29 @@ ok("usa los nombres de excepcion de Jev",
    set(reglas.EXCEPCIONES_PISO) <= set(carga_jev().ORDEN_EXCEPCIONES)
    and set(reglas.EXCEPCIONES_PISO) == {"money", "credential", "commitment"})
 for texto, direccion, esperado in (
-        # dinero, en las dos direcciones y en los tres idiomas
-        ("cuanto vale el plan?", "entrada", ["money"]),
-        ("¿Cuánto cuesta la instalación?", "entrada", ["money"]),
+        # dinero (T22.2): un monto o un precio en lo que SALE. Lo que pide el cliente no
+        # es una excepcion: lo que se le contesta con un precio si.
         ("el precio es $1.400", "salida", ["money"]),
         ("son 250.000 COP", "salida", ["money"]),
-        ("le envio la factura", "entrada", ["money"]),
-        ("ya hice la transferencia", "entrada", ["money"]),
-        ("me hacen un descuento?", "entrada", ["money"]),
-        ("necesito la cotización", "entrada", ["money"]),
-        ("ya pagué", "entrada", ["money"]),
-        ("hay que pagar hoy", "entrada", ["money"]),
-        ("queda un saldo de 1,250.50", "entrada", ["money"]),
-        ("cuanto me cobran por eso", "entrada", ["money"]),
-        ("send me the invoice please", "entrada", ["money"]),
-        ("what's the price?", "entrada", ["money"]),
+        ("queda un saldo de 1,250.50", "salida", ["money"]),
+        ("el plan cuesta 50 al mes", "salida", ["money"]),
+        ("le hacemos un descuento del 10%", "salida", ["money"]),
+        ("son 300 mil pesos", "salida", ["money"]),
         ("the fee is 30 USD", "salida", ["money"]),
-        ("can I get a refund", "entrada", ["money"]),
         ("€ 40 per month", "salida", ["money"]),
-        ("qual é o preço?", "entrada", ["money"]),
-        ("mando o boleto ou pix?", "entrada", ["money"]),
         ("custa R$ 99", "salida", ["money"]),
-        ("o pagamento caiu", "entrada", ["money"]),
-        # credencial, en las dos direcciones
+        ("o orçamento fica em 1.200", "salida", ["money"]),
+        ("le paso la cotización con el equipo", "salida", []),
+        ("le envio la factura por correo", "salida", []),
+        ("revisamos el pago y le aviso", "salida", []),
+        ("we'll check the invoice", "salida", []),
+        ("cuanto vale el plan?", "entrada", []),
+        ("¿Cuánto cuesta la instalación?", "entrada", []),
+        ("ya hice la transferencia de 1.400", "entrada", []),
+        ("send me the invoice please", "entrada", []),
+        ("el ticket 4512 sigue abierto", "salida", []),
+        # credencial: un valor con forma de secreto, o alguien que pide una clave, un
+        # token o un codigo. "acceso" solo, una URL o un enlace no lo son.
         ("la contraseña es Hunter2xx", "entrada", ["credential"]),
         ("me pasas usuario y clave?", "entrada", ["credential"]),
         ("cual es el password del wifi", "entrada", ["credential"]),
@@ -2408,7 +2419,16 @@ for texto, direccion, esperado in (
         ("mi PIN es 4455", "entrada", ["credential"]),
         ("entra a https://x.example.com/?access_token=abc123def", "entrada",
          ["credential"]),
-        # compromiso: solo en lo que sale
+        ("me mandas tu clave del panel?", "entrada", ["credential"]),
+        ("¿Ya tienes listo el Artifact? ¿Me mandas la URL?", "entrada", []),
+        ("¿Ya tienes listo el Artifact? ¿Me mandas la URL?", "salida", []),
+        ("te comparto el enlace: https://demo.example.com/informe", "salida", []),
+        ("ya tienes acceso al tablero", "salida", []),
+        ("necesito acceso al repositorio", "entrada", []),
+        ("es clave que lo revisemos con calma", "salida", []),
+        # compromiso (T22.2): una fecha u hora concreta prometida en lo que sale. La
+        # palabra "fecha", "te confirmo" o "para el" solos no lo son, y una pregunta no
+        # promete nada.
         ("Queda listo el viernes", "salida", ["commitment"]),
         ("Mañana te confirmo", "salida", ["commitment"]),
         ("lo revisamos hoy", "salida", ["commitment"]),
@@ -2416,13 +2436,21 @@ for texto, direccion, esperado in (
         ("el lunes lo vemos", "salida", ["commitment"]),
         ("a más tardar el 15/10", "salida", ["commitment"]),
         ("en 2 horas te lo envío", "salida", ["commitment"]),
-        ("le confirmo que sale", "salida", ["commitment"]),
+        ("a las 3 pm te llamo", "salida", ["commitment"]),
         ("tomorrow it will be ready", "salida", ["commitment"]),
         ("we'll fix it by Friday", "salida", ["commitment"]),
         ("fica pronto amanhã", "salida", ["commitment"]),
         ("hoje eu te envio", "salida", ["commitment"]),
+        ("le confirmo que sale", "salida", []),
+        ("te confirmo apenas lo vea el equipo", "salida", []),
+        ("¿Para qué fecha lo necesitas?", "salida", []),
+        ("¿Qué fecha te queda mejor para la revisión?", "salida", []),
+        ("¿Te sirve el viernes a las 10?", "salida", []),
+        ("¿Te sirve el viernes? Lo dejamos listo el lunes.", "salida", ["commitment"]),
+        ("lo dejamos para el equipo de soporte", "salida", []),
+        ("anoté la fecha de entrega que nos diste", "salida", []),
         # varias a la vez, en el orden del contrato
-        ("Mañana te paso la factura y la clave: Abc12345", "salida",
+        ("Mañana te paso la factura de $200 y la clave: Abc12345", "salida",
          ["money", "credential", "commitment"]),
         # lo limpio
         ("hola, ya lo revisamos", "salida", []),
@@ -2457,6 +2485,17 @@ def _da_error(f):
 ok("una direccion desconocida levanta ValueError",
    _da_error(lambda: reglas.excepciones("x", "otra")))
 
+# El control destructivo: un valor con forma de secreto. Es lo unico que ningun nivel de
+# un chat ni el dueno apagan en lo que sale (T22.1).
+for texto, esperado in (("la clave: Abc12345", True),
+                        ("ahi va el token ghp_abcdefghijklmnop1234", True),
+                        ("el código de verificación es 482913", True),
+                        ("te mando la clave por otro medio", False),
+                        ("¿Me mandas la URL?", False),
+                        ("", False), (None, False)):
+    ok(f"secreto: {texto!r} -> {esperado}", reglas.secreto(texto) is esperado,
+       f"salio {reglas.secreto(texto)}")
+
 
 def fila_caso(home, cid):
     return dict(db_de(home).execute("select * from caso where case_id=?",
@@ -2479,13 +2518,13 @@ else:
         js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
         ingiere(home)
         c = caso_de_stanza(home, "G1")
-        ok("ingest marca dinero y credencial desde el mensaje que entra",
-           c and excepciones_de(home, c["case_id"]) == ["money", "credential"],
+        # Lo que entra solo marca la credencial: el dinero es de lo que SALE (T22.2).
+        ok("ingest marca la credencial del mensaje que entra, y no el dinero",
+           c and excepciones_de(home, c["case_id"]) == ["credential"],
            f"{c and fila_caso(home, c['case_id'])}")
         ev = [e for e in (c or {}).get("eventos", []) if e["actor"] == "regla"]
         ok("con un evento de la regla fija",
-           len(ev) == 1 and "money" in ev[0]["detalle"]
-           and "credential" in ev[0]["detalle"], f"{c and c['eventos']}")
+           len(ev) == 1 and "credential" in ev[0]["detalle"], f"{c and c['eventos']}")
         ok("y el secreto no queda en ningun evento",
            cuenta(home, "select count(*) from caso_evento where detalle like '%Zx9secreta%'")
            == 0)
@@ -2495,7 +2534,7 @@ else:
         v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
                "Hola, ya lo revisamos.", "--actor", "agente")[0]["propuesta_version"]
         ok("una propuesta limpia no borra lo que entro: la regla sigue sin aprobar",
-           excepciones_de(home, cid) == ["money", "credential"]
+           excepciones_de(home, cid) == ["credential"]
            and error_de(corre(home, "caso", "aprobar", cid, "--version", v, "--actor",
                               "regla")) == "E_EXCEPTION")
 
@@ -2540,14 +2579,14 @@ else:
     try:
         with tempfile.TemporaryDirectory() as home:
             pon_llave(home)
-            llegan(home, A, [msg(PERSONA, "U1", "cuanto vale el plan?", 10)])
+            llegan(home, A, [msg(PERSONA, "U1", "me pasas la clave del panel?", 10)])
             autoriza(home)
             ingiere(home)
             c = caso_de_stanza(home, "U1")
             ok("Jev dijo que no hay excepcion y se pregunto",
                len(falso.pedidos) == 1, f"{len(falso.pedidos)} pedidos")
             ok("pero la del piso queda: Jev solo suma",
-               c and excepciones_de(home, c["case_id"]) == ["money"],
+               c and excepciones_de(home, c["case_id"]) == ["credential"],
                f"{c and fila_caso(home, c['case_id'])}")
     finally:
         falso.cerrar()

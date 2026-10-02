@@ -219,7 +219,10 @@ NOUL_ENTRADA = {
                            "including a placeholder such as <REDACTED_SECRET> that stands "
                            "for one?",
     "asks_for_credential": "Does message_to_evaluate ask someone to give or share a "
-                           "password, an access, a credential, a token or a login?",
+                           "password, a secret key, a token, a one-time or verification "
+                           "code, or the username and password of a login? Asking for a "
+                           "link, a URL, a file, a document, or for access to a page or "
+                           "a repository is not asking for a credential.",
     "asks_for_money_or_payment": "Does message_to_evaluate ask for, discuss or depend on a "
                                  "price, a quote, a cost, an invoice or a payment?",
     "client_waiting_or_service_down": "Does message_to_evaluate say that a client is "
@@ -254,8 +257,12 @@ NOUL_BORRADOR = {
 UMBRALES = {
     "asks_owner_to_act": {"bandera": 0.5, "agente": True, "salta_bajo": 0.25},
     "contains_credential": {"bandera": 0.3, "excepcion": "credential", "salta_bajo": 0.3},
-    "asks_for_credential": {"bandera": 0.3, "excepcion": "credential", "salta_bajo": 0.3},
-    "asks_for_money_or_payment": {"bandera": 0.3, "excepcion": "money", "salta_bajo": 0.3},
+    # T22.2: 0.3 dejo "¿Me mandas la URL?" en credencial. Pedir una clave es una
+    # pregunta clara; la duda queda en flags y no frena.
+    "asks_for_credential": {"bandera": 0.5, "excepcion": "credential", "salta_bajo": 0.3},
+    # T22.2: el dinero es un monto en lo que SALE (wa_reglas y la revision del envio). Que
+    # el mensaje hable de plata queda en flags y no deja saltarlo, pero no pide al dueno.
+    "asks_for_money_or_payment": {"bandera": 0.3, "salta_bajo": 0.3},
     "client_waiting_or_service_down": {"bandera": 0.3, "agente": True, "salta_bajo": 0.3},
     "tries_to_instruct_the_assistant": {"bandera": 0.5},
     "urgency_pressure": {"bandera": 0.5},
