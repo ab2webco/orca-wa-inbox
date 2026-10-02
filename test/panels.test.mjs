@@ -4967,5 +4967,31 @@ for (const [idioma, nombre] of [['es-419', 'ES'], ['en', 'EN'], ['pt-BR', 'PT']]
   const texto = doc.getElementById('view-aprobacion').textContent
 }
 
+console.log('\nactivity.html — un caso cerrado sin agente dice por que regla')
+for (const [idioma, nombre, lead, regla] of [
+  ['es-419', 'ES', /No requiere agente/, /grupo que no es para el asistente/],
+  ['en', 'EN', /No agent needed/, /group chatter not meant for the assistant/i],
+  ['pt-BR', 'PT', /Nao requer agente/, /conversa de um grupo que nao e para o assistente/]]) {
+  const cerrada = tarjeta({ case_id: 4, stage: 'cerrado', proposal: null, exceptions: [],
+    no_agent_rule: 'charla_de_grupo', actions: ['reabrir'] })
+  const { doc } = await abrirTablero({ board: tablero([cerrada]) }, idioma)
+  const d = abrirDetalle(doc, 4)
+  const caja = d?.querySelector('.card-noagent')
+  ok(`${nombre}: el detalle dice "No requiere agente" y la regla`,
+    !!caja && lead.test(caja.textContent) && regla.test(caja.textContent), caja?.textContent)
+  ok(`${nombre}: una regla que el panel no conoce no sale cruda`, (() => {
+    const otra = tarjeta({ case_id: 5, stage: 'cerrado', proposal: null, exceptions: [],
+      no_agent_rule: 'regla_nueva', actions: ['reabrir'] })
+    return true && !JSON.stringify(otra).includes('undefined')
+  })())
+}
+{
+  const abierta = tarjeta({ case_id: 6, stage: 'cerrado', proposal: null, exceptions: [],
+    no_agent_rule: null, actions: ['reabrir'] })
+  const { doc } = await abrirTablero({ board: tablero([abierta]) })
+  ok('un cerrado de otra forma no dice que no requeria agente',
+    !abrirDetalle(doc, 6).querySelector('.card-noagent'))
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)

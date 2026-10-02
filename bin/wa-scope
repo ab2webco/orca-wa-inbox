@@ -3059,6 +3059,39 @@ CONTEOS_INGEST = ("vistos", "nuevos", "casos_creados", "unidos", "cerrados", "du
 PRIORIDAD_INGEST = "none"
 
 
+# ── Lo que NO necesita al agente: una lista cerrada ───────────────────────────────────
+# Un caso llega al agente SALVO que una de estas reglas diga lo contrario, y salvo una
+# credencial, que va al dueno. Lo que no esta aca —cualquier otra clase de Jev, una bandera,
+# una clase que no se conoce, una zona gris, Jev apagado o caido— necesita al agente. Es el
+# unico lugar donde un veredicto de Jev puede dejar un caso sin agente: el descarte de
+# `ingest`, `casos_para_agente` y el tablero ("No requiere agente: ...") leen esta tabla.
+SIN_AGENTE = {
+    # Jev dijo `skip`: nada para el dueno y ningun riesgo en ninguna de sus preguntas.
+    "jev_skip": "Jev dijo que no hay nada que atender",
+    # Un saludo o charla de un grupo que no nombra ni cita al asistente: no es para el. (Un
+    # saludo DIRIGIDO al asistente no esta aca: se contesta con un saludo.)
+    "charla_de_grupo": "charla de un grupo que no es para el asistente",
+    # Un gracias u ok despues de una respuesta, sin una sola pregunta ni marca: el caso sigue
+    # respondido.
+    "gracias_sin_pregunta": "un gracias despues de una respuesta, sin ninguna pregunta",
+    # Un sticker sin texto, en una rafaga que no trae nada mas: no pide nada.
+    "sticker_suelto": "un sticker suelto, sin texto ni nada mas en la rafaga",
+}
+PREFIJO_SIN_AGENTE = "No requiere agente: "
+
+
+def motivo_sin_agente(regla):
+    return f"{PREFIJO_SIN_AGENTE}{SIN_AGENTE[regla]}"
+
+
+def regla_de_motivo(detalle):
+    """La clave de `SIN_AGENTE` que dice un motivo de cierre, o None."""
+    for regla, texto in SIN_AGENTE.items():
+        if (detalle or "").startswith(motivo_sin_agente(regla)):
+            return regla
+    return None
+
+
 # ── Lo que el motor contesta solo: acuse de recibo y saludo ───────────────────────────
 # Un pedido NUEVO dirigido al asistente (un directo, o en un grupo una mencion o una cita
 # suya) en una conversacion `responder` recibe UN acuse al instante; un saludo dirigido
@@ -3390,10 +3423,13 @@ def veredicto_de_jev(m, juicio, con=None):
         return {"accion": "clasificar", "clase": "nothing", "actor": "jev",
                 "detalle": "jev saludo", "jev": juicio, "auto": "saludo"}
     if juicio["skip"]:
-        return {"accion": "cerrar", "actor": "jev", "motivo": "nada que atender (jev)",
+        return {"accion": "cerrar", "actor": "jev", "motivo": motivo_sin_agente("jev_skip"),
                 "jev": juicio}
     clase = clase_de_jev(juicio)
-    if m.get("kind") == "grupo" and clase == "doubtful":
+    if (m.get("kind") == "grupo" and juicio.get("attention_class") in CLASES_CHARLA
+            and not juicio["flags"] and not juicio["exceptions"]):
+        # Charla de un grupo que no es para el asistente (`charla_de_grupo`): no abre caso;
+        # si hay uno abierto del grupo, la linea se suma a el y nada mas.
         return None
     return {"accion": "clasificar", "clase": clase, "actor": "jev",
             "detalle": f"jev {juicio.get('attention_class') or '-'}", "jev": juicio,
@@ -3425,6 +3461,9 @@ def veredicto_de(m, decision, con=None):
                     "motivo": "nada que atender (veredicto en cache)"}
         return {"accion": "clasificar", "clase": juicio["clase"], "actor": juicio["origen"],
                 "detalle": "veredicto en cache"}
+    if m.get("sticker_suelto") and not (m.get("text") or "").strip():
+        return {"accion": "cerrar", "actor": "automatizacion",
+                "motivo": motivo_sin_agente("sticker_suelto")}
     if m.get("kind") != "grupo" and not (m.get("text") or "").strip():
         ruta = (m.get("media") or "").lower()
         audio = ruta.endswith(EXTENSIONES_AUDIO)
@@ -3484,7 +3523,8 @@ def mensaje_de_rafaga(rafaga):
     media = next((m.get("media") for m in rafaga if m.get("media")), None)
     sin = next((m.get("sin_transcribir") for m in rafaga if m.get("sin_transcribir")), None)
     return dict(primero, text=SEPARADOR_RAFAGA.join(t for t in textos if t),
-                kind=kind, media=media, juicio=None, sin_transcribir=sin)
+                kind=kind, media=media, juicio=None, sin_transcribir=sin,
+                sticker_suelto=all(m.get("sticker_suelto") for m in rafaga))
 
 
 def con_respuesta(con, m, horas):
@@ -3685,7 +3725,8 @@ def caso_devuelve(con, caso, previo, juicio):
     transicion que el dueno o el agente puedan pedir, es deshacer la reapertura."""
     motivo = "skip" if juicio.get("skip") else juicio.get("attention_class")
     caso_mover(con, caso, previo["etapa"], "jev",
-               f"jev {motivo}: el mensaje no pide nada, sigue {previo['etapa']}",
+               f"{motivo_sin_agente('gracias_sin_pregunta')} · jev {motivo}: sigue "
+               f"{previo['etapa']}",
                propuesta=previo["propuesta"], propuesta_version=previo["propuesta_version"],
                propuesta_aprobada=previo["propuesta_aprobada"])
 
@@ -3965,7 +4006,8 @@ def cmd_ingest(con, a):
         nuevos.append(dict(
             m, modo=entrada.get("mode"),
             auto_acuse=auto_ajuste(entrada, ajustes_auto, "acuse")[0],
-            auto_saludo=auto_ajuste(entrada, ajustes_auto, "saludo")[0]))
+            auto_saludo=auto_ajuste(entrada, ajustes_auto, "saludo")[0],
+            sticker_suelto=(m.get("media_type") == "sticker" and not (m.get("text") or "").strip())))
     nuevos = transcribe_nuevos(con, nuevos, horas, total)
     # Lo que ya tiene decision del dueno o juicio del agente se resuelve solo; el resto,
     # junto con lo que llego pegado en el mismo chat, se juzga como una rafaga.
@@ -4107,7 +4149,7 @@ def titulos_de_mensajes(con, case_ids):
     return titulos
 
 
-def tarjeta_de(caso, nombres, titulos, motivos, eventos=None):
+def tarjeta_de(caso, nombres, titulos, motivos, eventos=None, sin_agente=None):
     """Un caso con la forma de una tarjeta del contrato `board`."""
     propuesta = json.loads(caso["propuesta"]) if caso["propuesta"] else None
     ruta = json.loads(caso["ruta"]) if caso["ruta"] else {}
@@ -4125,6 +4167,10 @@ def tarjeta_de(caso, nombres, titulos, motivos, eventos=None):
         "exceptions": json.loads(caso["excepciones"]) if caso["excepciones"] else [],
         "blocked_reason": (motivos.get(caso["case_id"]) if caso["etapa"] == "bloqueado"
                            else None),
+        # La regla de SIN_AGENTE por la que se cerro un caso sin pasar por el agente (su clave,
+        # que el panel traduce), o None.
+        "no_agent_rule": (regla_de_motivo((sin_agente or {}).get(caso["case_id"]))
+                          if caso["etapa"] == "cerrado" else None),
         "ticket": caso["plane_issue"] or None,
         "updated_at": iso_caso(caso["updated_at"]),
         "actions": acciones_de(caso["etapa"], tipo, bool(json.loads(caso["excepciones"] or "[]"))),
@@ -4173,6 +4219,15 @@ def build_board(con):
                 f"case_id in ({','.join('?' * len(bloqueados))}) order by id",
                 bloqueados):
             motivos[r["case_id"]] = r["detalle"] or None
+    sin_agente = {}
+    cerrados = [c["case_id"] for c in casos if c["etapa"] == "cerrado"]
+    for i in range(0, len(cerrados), 500):
+        parte = cerrados[i:i + 500]
+        for r in con.execute(
+                f"select case_id, detalle from caso_evento where a='cerrado' and detalle like ? "
+                f"and case_id in ({','.join('?' * len(parte))}) order by id",
+                (PREFIJO_SIN_AGENTE + "%", *parte)):
+            sin_agente[r["case_id"]] = r["detalle"]
     eventos = {}
     ids = [c["case_id"] for c in casos]
     for i in range(0, len(ids), 500):
@@ -4187,7 +4242,8 @@ def build_board(con):
             "truncated": truncado, "counts": counts,
             # Los casos que esperan al agente: los mismos que `pending --needs-agent`.
             "agent_waiting": len(casos_para_agente(con)),
-            "cards": [tarjeta_de(c, nombres, titulos, motivos, eventos) for c in casos]}
+            "cards": [tarjeta_de(c, nombres, titulos, motivos, eventos, sin_agente)
+                      for c in casos]}
 
 
 def publica_tablero(con):
@@ -4722,14 +4778,14 @@ def casos_para_agente(con):
         if r["etapa"] == "recibido" or r["propuesta"] or r["necesita_agente"]:
             casos.append(r["case_id"])
             continue
-        if not r["jev"]:
-            casos.append(r["case_id"])
-            continue
+        # Lo demas llega al agente, salvo que Jev haya dicho `skip` (la regla `jev_skip` de
+        # SIN_AGENTE): una clase que no se conoce, una bandera, una zona gris, o ningun
+        # veredicto, necesitan lenguaje.
         try:
-            skip = bool(json.loads(r["jev"]).get("skip"))
+            skip = bool(json.loads(r["jev"]).get("skip")) if r["jev"] else False
         except (TypeError, ValueError, AttributeError):
             skip = False
-        if not skip and modos.get(r["chat_jid"]) in ("responder", "borrador"):
+        if not skip:
             casos.append(r["case_id"])
     return casos
 

@@ -1650,6 +1650,10 @@ def jev_segun_texto(cuerpo):
     qs = cuerpo["questions"]
     if "ERROR" in texto:
         return 500, {"error": "boom"}
+    if "reunion" in texto:
+        return 200, respuestas(qs, choice="meeting", asks_owner_to_act=0.3)
+    if "urgente ya" in texto:
+        return 200, respuestas(qs, choice="unclear", asks_owner_to_act=0.3, urgency_pressure=0.9)
     if "gracias" in texto or "buen dia" in texto:
         return 200, respuestas(qs, choice="pleasantry", asks_owner_to_act=0.05)
     if "no funciono" in texto:
@@ -1721,7 +1725,7 @@ else:
                f"{len(falso.pedidos)} pedidos")
             ok("lo que salta se cierra como nada, firmado por jev",
                k1["etapa"] == "cerrado" and evento(k1, "cerrado")["actor"] == "jev"
-               and evento(k1, "cerrado")["detalle"].startswith("nada que atender"),
+               and evento(k1, "cerrado")["detalle"].startswith("No requiere agente"),
                f"caso {k1}")
             j1 = juicio_de(home, "K1")
             ok("y queda en juicio: origen jev, clase nothing, el JSON del contrato",
@@ -2179,7 +2183,7 @@ import re  # noqa: E402
 
 LLAVES_TARJETA = {"case_id", "account", "chat_jid", "chat_name", "stage", "title",
                   "summary", "clase", "prioridad", "jev", "proposal", "exceptions",
-                  "blocked_reason", "ticket", "updated_at", "actions", "project",
+                  "blocked_reason", "no_agent_rule", "ticket", "updated_at", "actions", "project",
                   "needs_agent", "events", "related_case"}
 ISO = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$")
 
@@ -2838,14 +2842,16 @@ with tempfile.TemporaryDirectory() as home:
         return c
 
     gris = con_jev("G2", 0)
-    ok("Jev lo juzgo y no pide agente: 1", necesita(home).returncode == 1)
+    ok("una clase que Jev juzgo sin skip y no esta en la lista cerrada despierta al agente",
+       necesita(home).returncode == 0 and json.loads(necesita(home).stdout)["cases"] == [int(gris)],
+       f"{necesita(home).stdout}")
     clave = con_jev("G3", 0, ["credential"])
-    ok("una credencial que Jev no manda al agente tampoco lo despierta",
-       necesita(home).returncode == 1)
+    ok("una credencial no despierta al agente",
+       int(clave) not in json.loads(necesita(home).stdout)["cases"])
     pide = con_jev("G4", 1)
     p = necesita(home)
     ok("Jev marca que necesita agente y no hay propuesta: 0, con ese caso",
-       p.returncode == 0 and json.loads(p.stdout)["cases"] == [int(pide)], f"{p.stdout}")
+       p.returncode == 0 and json.loads(p.stdout)["cases"] == [int(gris), int(pide)], f"{p.stdout}")
 
 
 # ── T20: un caso clasificado sin propuesta siempre llega a alguien ────────────────────
@@ -2875,7 +2881,7 @@ def para_el_agente(home):
 
 
 SALUDO = {"attention_class": "pleasantry", "flags": [], "skip": False}
-for modo, despierta in (("responder", True), ("borrador", True), ("observar", False)):
+for modo, despierta in (("responder", True), ("borrador", True), ("observar", True)):
     with tempfile.TemporaryDirectory() as home:
         js(home, "set", CHAT, "--provider", "plane", "--target", "SOP", "--mode", modo)
         saludo = caso_juzgado(home, "T20A", SALUDO)
@@ -3100,10 +3106,10 @@ with tempfile.TemporaryDirectory() as home:
        "--actor", "jev")
     con = db_de(home)
     con.execute("update caso set jev=?, necesita_agente=0 where case_id=?",
-                ('{"attention_class": "x", "flags": [], "skip": false}', int(cid)))
+                ('{"attention_class": "pleasantry", "flags": [], "skip": true}', int(cid)))
     con.commit()
     con.close()
-    ok("antes: Jev lo juzgo y no lo pide, el agente no lo ve", necesita(home).returncode == 1)
+    ok("antes: Jev dijo skip, el agente no lo ve", necesita(home).returncode == 1)
     r = js(home, "caso", "atender", cid, "--actor", "dueno")[0]
     ok("atender lo marca para el agente", r["necesita_agente"] == 1, f"{r}")
     p = necesita(home)
@@ -4084,6 +4090,104 @@ if NODE:
                    == ["borrador"] and not ver.get("revision"), f"{ver['etapa']} {envios(home)}")
             finally:
                 sidecar.cerrar()
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
+
+# ── "No necesita al agente" es una lista cerrada ───────────────────────────────────────
+# Lo unico que se salta al agente esta nombrado en UN conjunto (`SIN_AGENTE`): Jev `skip`, la
+# charla de grupo sin dirigir, un gracias despues de una respuesta, y un sticker suelto.
+# Todo lo demas —cualquier otra clase de Jev, una bandera, una clase que no se conoce, Jev
+# apagado o caido— llega al agente, salvo una credencial, que va al dueno.
+print("\nlo que no necesita al agente es una lista cerrada")
+if NODE:
+    falso = JevFalso(jev_y_borradores)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        def abre(home, mensajes, modo="responder"):
+            pon_llave(home)
+            llegan(home, A, mensajes)
+            js(home, "agent", "Agente De Ejemplo")
+            for chat in (PERSONA, OPERACIONES, SIN_DIRIGIR):
+                js(home, "set", chat, "--provider", "ninguno", "--mode", modo)
+            js(home, "config", "ack", "off")
+            js(home, "config", "greeting", "off")
+            ingiere(home)
+
+        with tempfile.TemporaryDirectory() as home:
+            abre(home, [msg(PERSONA, "L1", "gracias", 30)])
+            c = caso_de_stanza(home, "L1")
+            t = tarjeta(home, c["case_id"])
+            ok("Jev skip cierra, y el tablero dice cual regla", c["etapa"] == "cerrado"
+               and t["no_agent_rule"] == "jev_skip", f"{c['etapa']} {t and t.get('no_agent_rule')}")
+
+        with tempfile.TemporaryDirectory() as home:
+            abre(home, [msg(SIN_DIRIGIR, "L2", "jaja", 5)])
+            ok("la charla de un grupo que no es para el asistente no abre caso ni despierta",
+               caso_de_stanza(home, "L2") is None and para_el_agente(home) == [])
+
+        with tempfile.TemporaryDirectory() as home:
+            abre(home, [msg(PERSONA, "L3", "revisa este caso", 60)])
+            c = caso_de_stanza(home, "L3")
+            cid = str(c["case_id"])
+            con = db_de(home)
+            con.execute("update caso set etapa='respondido' where case_id=?", (int(cid),))
+            con.commit()
+            con.close()
+            llegan(home, A, [msg(PERSONA, "L4", "jaja", 1)])
+            ingiere(home)
+            ver = js(home, "caso", "ver", cid)[0]
+            ok("un gracias despues de una respuesta, sin pregunta, no despierta al agente",
+               ver["etapa"] == "respondido" and any("No requiere agente" in e["detalle"]
+                                                    for e in ver["eventos"]), f"{ver['etapa']}")
+
+        with tempfile.TemporaryDirectory() as home:
+            abre(home, [msg(PERSONA, "L5", "", 5, media="sticker", ruta=archivo_media(home, "s.webp"),
+                            bytes=10)])
+            c = caso_de_stanza(home, "L5")
+            ok("un sticker suelto, sin texto, no despierta al agente",
+               c and c["etapa"] == "cerrado" and para_el_agente(home) == []
+               and tarjeta(home, c["case_id"])["no_agent_rule"] == "sticker_suelto", f"{c}")
+
+        with tempfile.TemporaryDirectory() as home:
+            abre(home, [msg(PERSONA, "L6", "", 5, media="sticker", ruta=archivo_media(home, "s.webp"),
+                            bytes=10),
+                        msg(PERSONA, "L7", "revisa este caso por favor", 4)])
+            c = caso_de_stanza(home, "L7")
+            ok("un sticker junto a un texto en la misma rafaga despierta al agente",
+               c and c["etapa"] != "cerrado" and int(c["case_id"]) in para_el_agente(home),
+               f"{c and c['etapa']} {para_el_agente(home)}")
+
+        for modo in ("responder", "observar"):
+            with tempfile.TemporaryDirectory() as home:
+                abre(home, [msg(PERSONA, "L8", "tenemos reunion el martes", 5)], modo)
+                c = caso_de_stanza(home, "L8")
+                ok(f"una clase de Jev que no esta en la lista cerrada despierta al agente ({modo})",
+                   c and int(c["case_id"]) in para_el_agente(home), f"{c and c['etapa']} {para_el_agente(home)}")
+
+        with tempfile.TemporaryDirectory() as home:
+            abre(home, [msg(PERSONA, "L9", "urgente ya", 5)], "observar")
+            c = caso_de_stanza(home, "L9")
+            ok("una clase marcada por Jev (bandera de riesgo) despierta al agente",
+               c and int(c["case_id"]) in para_el_agente(home), f"{para_el_agente(home)}")
+
+        with tempfile.TemporaryDirectory() as home:
+            abre(home, [msg(PERSONA, "L10", "ERROR no entiendo", 5)])
+            c = caso_de_stanza(home, "L10")
+            ok("con Jev caido el caso llega al agente, no se cierra",
+               c and c["etapa"] != "cerrado" and int(c["case_id"]) in para_el_agente(home))
+
+        with tempfile.TemporaryDirectory() as home:
+            abre(home, [msg(PERSONA, "L11", "@duenio la clave es Hunter2xx", 5)])
+            c = caso_de_stanza(home, "L11")
+            corre(home, "tick", "--json")
+            ok("una credencial va al dueno y no al agente",
+               c and int(c["case_id"]) not in para_el_agente(home)
+               and tarjeta(home, c["case_id"])["stage"] == "decision", f"{c and c['etapa']}")
     finally:
         falso.cerrar()
         os.environ.clear()

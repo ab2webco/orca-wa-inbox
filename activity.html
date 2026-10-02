@@ -614,6 +614,11 @@
               "propEscalar": "escalar",
               "propDescartar": "descartar",
               "blockedLead": "Motivo del bloqueo",
+              "noAgentLead": "No requiere agente",
+              "noAgent_jev_skip": "Jev dijo que no hay nada que atender.",
+              "noAgent_charla_de_grupo": "Charla de un grupo que no es para el asistente.",
+              "noAgent_gracias_sin_pregunta": "Un gracias despues de una respuesta, sin ninguna pregunta.",
+              "noAgent_sticker_suelto": "Un sticker suelto, sin texto ni nada mas en la rafaga.",
               "ticketLead": "Ticket",
               "agoNow": "ahora",
               "agoMin": "hace {n} min",
@@ -782,6 +787,11 @@
               "propEscalar": "escalate",
               "propDescartar": "discard",
               "blockedLead": "Blocked because",
+              "noAgentLead": "No agent needed",
+              "noAgent_jev_skip": "Jev said there is nothing to attend to.",
+              "noAgent_charla_de_grupo": "Group chatter not meant for the assistant.",
+              "noAgent_gracias_sin_pregunta": "A thanks after a reply, with no question in it.",
+              "noAgent_sticker_suelto": "A lone sticker, with no text and nothing else in the burst.",
               "ticketLead": "Ticket",
               "agoNow": "just now",
               "agoMin": "{n} min ago",
@@ -950,6 +960,11 @@
               "propEscalar": "escalar",
               "propDescartar": "descartar",
               "blockedLead": "Bloqueado porque",
+              "noAgentLead": "Nao requer agente",
+              "noAgent_jev_skip": "O Jev disse que nao ha nada a atender.",
+              "noAgent_charla_de_grupo": "Uma conversa de um grupo que nao e para o assistente.",
+              "noAgent_gracias_sin_pregunta": "Um obrigado depois de uma resposta, sem nenhuma pergunta.",
+              "noAgent_sticker_suelto": "Um sticker solto, sem texto nem mais nada na rajada.",
               "ticketLead": "Ticket",
               "agoNow": "agora",
               "agoMin": "ha {n} min",
@@ -1926,6 +1941,14 @@
         return typeof c.blocked_reason === 'string' && c.blocked_reason ? c.blocked_reason : ''
       }
 
+      /** Por que un caso se cerro sin pasar por el agente: la regla de la lista cerrada del
+       *  motor, en el idioma del usuario. Una regla que este panel no conoce no se muestra. */
+      function sinAgenteTexto (c) {
+        if (c.stage !== 'cerrado' || typeof c.no_agent_rule !== 'string') return ''
+        var key = 'noAgent_' + c.no_agent_rule
+        return (STRINGS[LANG] && STRINGS[LANG][key]) || STRINGS.en[key] || ''
+      }
+
       /** "Para el agente en su proxima corrida": el caso que el dueno o Jev le pasaron. */
       function agenteNodo (c) {
         if (c.needs_agent === true && (c.stage === 'recibido' || c.stage === 'clasificado')) {
@@ -2299,6 +2322,12 @@
           var sb = seccion('card-blocked', t('blockedLead'))
           sb.appendChild(crear('p', 'det-text', bloqueo))
           caja.appendChild(sb)
+        }
+        var sinAgente = sinAgenteTexto(c)
+        if (sinAgente) {
+          var sa = seccion('card-noagent', t('noAgentLead'))
+          sa.appendChild(crear('p', 'det-text', sinAgente))
+          caja.appendChild(sa)
         }
         if (typeof c.summary === 'string' && c.summary) {
           var ss = seccion(null, t('detSummary'))
