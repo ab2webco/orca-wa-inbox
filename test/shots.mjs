@@ -390,7 +390,9 @@ const TABLERO_CASOS = [
   caso(7, 'trabajo', { title: 'Reporte en blanco al exportar', prioridad: 'high',
     chat_name: 'Soporte — Cliente Norte', updated_at: minutos(35), ticket: 'SOP-214',
     proposal: { tipo: 'trabajar', version: 'v7d20',
-      texto: 'Reproducir el error de exportación y corregirlo en el repositorio del reporte.' } }),
+      texto: 'Reproducir el error de exportación y corregirlo en el repositorio del reporte.' },
+    dispatch: { project: 'Alfa Demo', state: 'activo', outcome: null, at: minutos(33),
+      updated_at: minutos(33) } }),
   caso(8, 'listo', { title: 'Estado de la exportación', prioridad: 'low',
     chat_name: 'Soporte — Cliente Norte', updated_at: minutos(70), ticket: 'SOP-211',
     proposal: { tipo: 'responder', version: 'v8e11',
@@ -403,6 +405,30 @@ const TABLERO_CASOS = [
     chat_name: 'Lista de espera | Taller Demo \u{1F680} #2', updated_at: minutos(41),
     blocked_reason: 'El envío fue rechazado: el grupo ya no existe.',
     proposal: { tipo: 'responder', version: 'v9f42', texto: 'Gracias, ya quedó listo.' } })
+]
+// T8: lo que pasa con un trabajo despachado al agente del proyecto, una tarjeta por
+// estado: trabajando, pidio informacion, espera al cliente, resuelto y bloqueado por el agente.
+const despacho = (estado, resultado, hace) => ({ project: 'Alfa Demo', state: estado,
+  outcome: resultado, at: minutos(hace + 20), updated_at: minutos(hace) })
+const TABLERO_DESPACHO = [
+  caso(31, 'trabajo', { title: 'El reporte de ventas sale en blanco', prioridad: 'high',
+    updated_at: minutos(12),
+    proposal: { tipo: 'trabajar', version: 'vT1', texto: 'Reproducir el reporte y corregirlo.' },
+    dispatch: despacho('activo', null, 12) }),
+  caso(32, 'listo', { title: 'No carga el inventario', chat_name: 'Laura Méndez',
+    updated_at: minutos(4),
+    proposal: { tipo: 'responder', version: 'vT2', texto: 'Para revisarlo, ¿cuál bodega es?' },
+    dispatch: despacho('activo', 'necesita', 4) }),
+  caso(33, 'respondido', { title: 'Error al exportar facturas', updated_at: minutos(25),
+    dispatch: despacho('esperando', 'necesita', 25) }),
+  caso(34, 'listo', { title: 'El filtro de fechas no responde', updated_at: minutos(2),
+    proposal: { tipo: 'responder', version: 'vT4',
+      texto: 'Ya quedó corregido, ¿puedes verificarlo?' },
+    dispatch: despacho('reportado', 'resuelto', 2) }),
+  caso(35, 'bloqueado', { title: 'Borrar los pedidos de prueba', prioridad: 'medium',
+    updated_at: minutos(8),
+    blocked_reason: 'bloqueado por el agente del proyecto: hace falta borrar datos en producción',
+    dispatch: despacho('bloqueado', 'bloqueado', 8) })
 ]
 const tableroDe = (cards, extra) => Object.assign({ v: 1, updated_at: minutos(1),
   truncated: false,
@@ -560,6 +586,12 @@ const PANELES = [
     enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS)),
     guion: ABRIR_TABLERO + `;
       document.querySelector('.card[data-case="1"]').click()`
+  },
+  {
+    // T8: el despacho al agente del proyecto en cada estado.
+    nombre: 'tablero-despacho', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
+    datos: conTablero(tableroDe(TABLERO_DESPACHO))
   },
   {
     nombre: 'tablero-vacio', archivo: 'activity.html', anchos: ANCHOS,
