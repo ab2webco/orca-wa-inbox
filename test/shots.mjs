@@ -334,7 +334,8 @@ const conLinea = (sidecar) => Object.assign({},
 const minutos = (n) => new Date(AHORA_MS - n * 60000).toISOString()
 const CUENTAS_VACIAS = { recibido: 0, clasificado: 0, decision: 0, trabajo: 0, listo: 0,
   respondido: 0, cerrado: 0, bloqueado: 0 }
-const ACCIONES = ['enviar', 'editar', 'ejecutar', 'reclasificar', 'cerrar', 'reabrir']
+const ACCIONES = ['atender', 'ignorar', 'enviar', 'editar', 'ejecutar', 'reclasificar', 'cerrar',
+  'reabrir', 'proyecto']
 const caso = (id, etapa, extra) => Object.assign({
   case_id: id, account: 'local', chat_jid: `1203630000000000${10 + id}@g.us`,
   chat_name: 'Soporte — Cliente Norte', stage: etapa, title: 'Caso de ejemplo',
@@ -352,7 +353,12 @@ const TABLERO_CASOS = [
     proposal: { tipo: 'responder', version: 'v1f3a',
       texto: 'Hola, gracias por avisar. El precio de renovación es el vigente; ' +
         'si quieres, lo revisamos en una llamada esta semana.' },
-    exceptions: ['money'] }),
+    exceptions: ['money'], project: { id: 'alfa-demo', name: 'Alfa Demo' },
+    // La historia del caso (`caso_evento`): lo que hizo el agente con el, paso a paso.
+    events: [
+      { de: null, a: 'recibido', actor: 'automatizacion', at: minutos(30) },
+      { de: 'recibido', a: 'clasificado', actor: 'jev', at: minutos(29) },
+      { de: 'clasificado', a: 'decision', actor: 'agente', at: minutos(3) }] }),
   caso(2, 'decision', {
     title: 'Pide el acceso al tablero de Andes', clase: 'alert', prioridad: 'urgent',
     chat_name: 'Operaciones internas', updated_at: minutos(22),
@@ -371,7 +377,7 @@ const TABLERO_CASOS = [
     chat_name: 'Proyecto Andes — QA', updated_at: minutos(1) }),
   caso(5, 'clasificado', { title: 'El reporte de ayer salió en blanco', prioridad: 'high',
     chat_name: 'Soporte — Cliente Norte', updated_at: minutos(9),
-    summary: 'Lo necesitan hoy.',
+    summary: 'Lo necesitan hoy.', needs_agent: true,
     jev: { attention_class: 'bug_report', skip: false, flags: ['urgency_pressure'] } }),
   caso(6, 'clasificado', { title: 'Saludo de buenos días', clase: 'nothing',
     chat_name: 'Comite - Cliente -  Sur', updated_at: minutos(14),
@@ -399,8 +405,9 @@ const tableroDe = (cards, extra) => Object.assign({ v: 1, updated_at: minutos(1)
     Object.assign({}, CUENTAS_VACIAS)),
   cards }, extra)
 const conTablero = (board) => Object.assign({}, DATOS, { board })
-// El tablero queda en su pestana: sin el clic se fotografia la bandeja de siempre.
-const ABRIR_TABLERO = "document.getElementById('tab-board').click()"
+// El panel ES el tablero (la bandeja se fue): no hay pestana que apretar. Queda como
+// primer paso de los guiones para que cada uno diga desde donde arranca.
+const ABRIR_TABLERO = 'void 0'
 
 // Textos de la longitud y la forma de los de verdad: un nombre sin espacios donde partir,
 // un parrafo largo y una URL. Es lo que desborda una columna de 160 px.
@@ -558,6 +565,23 @@ const PANELES = [
     nombre: 'tablero-version', archivo: 'activity.html', anchos: ANCHOS,
     enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
     datos: conTablero({ v: 2, updated_at: minutos(1), cards: [], counts: {} })
+  },
+  {
+    // Lo que era la cola: un caso en Recibido, con Atender ahora e Ignorar en el detalle.
+    nombre: 'tablero-recibido', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="4"]').click()`
+  },
+  {
+    // Cambiar el proyecto: el autocompletar abierto con el catalogo aceptado.
+    nombre: 'tablero-proyecto', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="5"]').click();
+      document.querySelector('#board-detail button[data-accion="proyecto"]').click();
+      const c = document.querySelector('#board-detail input[role="combobox"]');
+      c.focus(); c.click()`
   },
   {
     // Una tarjeta en cada etapa menos "Su decision": el estado sano y el mas comun.

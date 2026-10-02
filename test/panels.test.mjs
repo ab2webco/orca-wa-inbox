@@ -1194,61 +1194,30 @@ console.log('\nactivity.html')
 {
   const actividad = {
     syncedAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
-    running: false,
-    pending: [
-      { stanzaId: 'S1', date: '2026-09-17 12:06', chat: 'Soporte Acme', sender: 'Ana',
-        kind: 'mencion', text: 'necesito el reporte', hasMedia: true },
-      { stanzaId: 'S2', date: '2026-09-17 11:00', chat: 'Soporte Acme', sender: 'Beto',
-        kind: 'directo', text: 'hola', hasMedia: false }
-    ],
+    running: false, mapped: 1, authorized: 1,
+    pending: [{ stanzaId: 'S1', date: '2026-09-17 12:06', chat: 'Soporte Acme', sender: 'Ana',
+      kind: 'mencion', text: 'necesito el reporte', hasMedia: true }],
     recent: [{ ts: '2026-09-17 11:30', chat: 'Soporte Acme', action: 'issue',
-      issue: 'ACM-1', detail: 'reporte mensual' },
-    // El cierre que no se avisa por permiso no deja rastro en el chat: este renglon
-    // es el UNICO lugar donde el dueno se entera de que la tarjeta se cerro y su
-    // cliente no lo supo. Si el panel no lo pinta, la decision es invisible.
-    { ts: '2026-09-17 11:40', chat: 'Andes QA', action: 'skipped',
-      issue: 'AND-7', detail: 'AND-7 · observar · Andes QA' }]
+      issue: 'ACM-1', detail: 'reporte mensual' }]
   }
-  const { doc, storage } = await montar('activity.html', { activity: actividad })
-
+  const { doc, enviados } = await montar('activity.html', { activity: actividad })
   ok('los textos se tradujeron', doc.querySelector('h1').textContent.length > 0)
-  ok('lista los pendientes', doc.getElementById('pending').textContent.includes('necesito el reporte'))
-  ok('marca los que traen imagen', doc.getElementById('pending').textContent.toLowerCase().includes('imagen') ||
-    doc.getElementById('pending').textContent.toLowerCase().includes('image'))
-  ok('muestra lo ultimo que hizo', doc.getElementById('recent').textContent.includes('ACM-1'))
-  ok('muestra el cierre que no se aviso por permiso',
-    doc.getElementById('recent').textContent.includes('AND-7') &&
-    doc.getElementById('recent').textContent.includes('observar'),
-    doc.getElementById('recent').textContent.slice(0, 200))
   ok('muestra el sello de sincronizacion', doc.getElementById('synced').textContent.length > 0)
-  // Tomar no abre tarjeta por si mismo: eso lo decide el servicio de tareas de esa
-  // conversacion. Prometerla aca era la misma contradiccion que en los permisos.
-  ok('la pista de actividad no promete una tarjeta',
-    !/tarjeta|cartao|card/i.test(doc.querySelector('[data-t="hint"]').textContent),
-    doc.querySelector('[data-t="hint"]').textContent)
-
-  doc.querySelector('[data-take]').click()
-  await espera()
-  ok('Tomar guarda la decision', (storage.decisions || {}).S1?.decision === 'take',
-    `storage.decisions = ${JSON.stringify(storage.decisions)}`)
-  ok('Tomar se ve marcado en la lista',
-    doc.getElementById('pending').textContent.includes('✓'))
-
-  doc.querySelector('[data-ignore]').click()
-  await espera()
-  ok('Ignorar guarda la decision', (storage.decisions || {}).S2?.decision === 'ignore')
-  ok('lo ignorado desaparece de la lista',
-    !doc.getElementById('pending').textContent.includes('hola'))
-
+  // La bandeja se fue (el dueno la pidio fuera): lo que pedia decision esta en la columna
+  // "Su decision", lo que hizo el agente en la historia de cada caso, y la cola son los
+  // casos en Recibido y Clasificado, con "Atender ahora" e "Ignorar".
+  ok('no hay pestanas: el panel es el tablero', !doc.querySelector('[role="tablist"]') &&
+    !doc.getElementById('tab-inbox') && !doc.getElementById('view-inbox'))
+  ok('ni las tres secciones de la bandeja', !doc.getElementById('alerts') &&
+    !doc.getElementById('recent') && !doc.getElementById('pending'))
+  ok('ni Tomar ni Ignorar sobre mensajes sueltos',
+    !doc.querySelector('[data-take], [data-ignore]') && !doc.body.textContent.includes('necesito el reporte'))
   doc.getElementById('refresh').click()
   await espera()
-  ok('el boton de releer no rompe nada',
-    doc.getElementById('pending').textContent.includes('necesito el reporte'))
-
-  const vacio = await montar('activity.html', { activity: { pending: [], recent: [], syncedAt: '2026-09-17 12:00' } })
-  await espera()
-  ok('dice algo cuando no hay nada pendiente',
-    vacio.doc.getElementById('pending').textContent.trim().length > 0)
+  ok('el boton de releer no rompe nada', !doc.getElementById('view-board').hidden)
+  ok('el panel no lee ni escribe la vieja clave `decisions`',
+    !enviados.some((e) => e.params && e.params.key === 'decisions'),
+    JSON.stringify(enviados.map((e) => e.params && e.params.key)))
   const sinDatos = await montar('activity.html', {})
   await espera()
   ok('avisa cuando nunca se sincronizo',
@@ -1335,10 +1304,10 @@ console.log('\nactivity.html — la corrida dice como le fue')
         reason: null } }
   }, 'es-419')
   await espera()
-  ok('con todo en off la lista vacia lo dice',
-    /3 conversaciones/.test(todoOff.doc.getElementById('pending').textContent) &&
-    /off/.test(todoOff.doc.getElementById('pending').textContent),
-    todoOff.doc.getElementById('pending').textContent.trim())
+  ok('con todo en off el tablero vacio lo dice',
+    /3 conversaciones/.test(todoOff.doc.getElementById('board-empty').textContent) &&
+    /off/.test(todoOff.doc.getElementById('board-empty').textContent),
+    todoOff.doc.getElementById('board-empty').textContent.trim())
 
   // Y ninguna registrada tampoco es lo mismo que "nada pendiente".
   const sinRegistro = await montar('activity.html', {
@@ -1348,8 +1317,8 @@ console.log('\nactivity.html — la corrida dice como le fue')
   }, 'es-419')
   await espera()
   ok('sin ninguna conversacion registrada lo dice distinto',
-    /no ha autorizado/i.test(sinRegistro.doc.getElementById('pending').textContent),
-    sinRegistro.doc.getElementById('pending').textContent.trim())
+    /no ha autorizado/i.test(sinRegistro.doc.getElementById('board-empty').textContent),
+    sinRegistro.doc.getElementById('board-empty').textContent.trim())
 
   // 5. Corriendo ahora.
   const corriendo = await montar('activity.html', {
@@ -1387,8 +1356,8 @@ console.log('\nactivity.html — la corrida dice como le fue')
   }, 'en-US')
   await espera()
   ok('y el aviso de todo en off tambien',
-    /all of them are off/i.test(offEn.doc.getElementById('pending').textContent),
-    offEn.doc.getElementById('pending').textContent.trim())
+    /all of them are off/i.test(offEn.doc.getElementById('board-empty').textContent),
+    offEn.doc.getElementById('board-empty').textContent.trim())
 }
 
 // ───────── el idioma: lo que el CLI manda en codigo, el panel lo dice ─────────
@@ -1576,47 +1545,6 @@ console.log('\nel codigo del CLI, dicho en el idioma del panel')
     raro.doc.getElementById('opcionales').textContent.includes('a new thing'),
     raro.doc.getElementById('alert').textContent)
 
-  const actividad = {
-    syncedAt: '2026-09-17 14:02', running: false,
-    pending: [{ stanzaId: 'K1', date: '2026-09-17 13:58', chat: 'Soporte', sender: 'Ana',
-      kind: 'mencion', text: 'el reporte', hasMedia: false }],
-    recent: [{ ts: '2026-09-17 13:52', chat: 'Soporte', action: 'closed',
-      issue: 'SOP-1', detail: '' }]
-  }
-  const actEs = await montar('activity.html', { activity: actividad }, 'es-419')
-  await espera()
-  ok('el tipo de mensaje se dice en espanol',
-    actEs.doc.getElementById('pending').textContent.includes('mencion'),
-    actEs.doc.getElementById('pending').textContent)
-  ok('y la accion de la bitacora tambien',
-    actEs.doc.getElementById('recent').textContent.includes('cierre avisado'),
-    actEs.doc.getElementById('recent').textContent)
-
-  const actEn = await montar('activity.html', { activity: actividad }, 'en-US')
-  await espera()
-  ok('en ingles, mention y closing announced',
-    actEn.doc.getElementById('pending').textContent.includes('mention') &&
-    actEn.doc.getElementById('recent').textContent.includes('closing announced'),
-    actEn.doc.getElementById('recent').textContent)
-
-  const actPt = await montar('activity.html', { activity: actividad }, 'pt-BR')
-  await espera()
-  ok('en portugues, mencao y fecho avisado',
-    actPt.doc.getElementById('pending').textContent.includes('mencao') &&
-    actPt.doc.getElementById('recent').textContent.includes('fecho avisado'),
-    actPt.doc.getElementById('recent').textContent)
-
-  const actRaro = await montar('activity.html', {
-    activity: { syncedAt: '2026-09-17 14:02', running: false,
-      pending: [{ stanzaId: 'K2', date: '2026-09-17 13:00', chat: 'Soporte',
-        sender: 'Ana', kind: 'todavia-no-existe', text: 'x', hasMedia: false }],
-      recent: [{ ts: '2026-09-17 13:00', chat: 'Soporte', action: 'tampoco-existe',
-        issue: null, detail: '' }] }
-  }, 'es-419')
-  await espera()
-  ok('un kind o un action nuevos se pintan tal cual y no desaparecen',
-    actRaro.doc.getElementById('pending').textContent.includes('todavia-no-existe') &&
-    actRaro.doc.getElementById('recent').textContent.includes('tampoco-existe'))
 }
 
 // ───────── el contrato entre el CLI y los paneles ─────────
@@ -1776,8 +1704,8 @@ console.log('\nel contrato CLI -> panel')
     JSON.parse(readFileSync(almacen, 'utf8')), 'es-419')
   await espera()
   ok('con todo en off, el panel contra el CLI real lo dice',
-    /off/.test(apagada.doc.getElementById('pending').textContent),
-    apagada.doc.getElementById('pending').textContent.trim())
+    /off/.test(apagada.doc.getElementById('board-empty').textContent),
+    apagada.doc.getElementById('board-empty').textContent.trim())
 }
 
 // ───────── lo que falla se DICE ─────────
@@ -3263,14 +3191,6 @@ console.log('\nactivity.html — la cabecera no puede contradecir a la lista')
     !/nada pendiente/i.test(linea), linea)
   ok('y dice cuantos hay de verdad', /2 esperando/i.test(linea), linea)
 
-  // Lo marcado como ignorar sale de la lista Y de la cuenta: si no, la cabecera
-  // seguiria contando algo que el dueno ya saco de en medio.
-  const conIgnorado = await montar('activity.html',
-    { activity: actividad, decisions: { M2: { decision: 'ignore' } } }, 'es-419')
-  await espera()
-  const linea2 = conIgnorado.doc.getElementById('runline').textContent
-  ok('lo ignorado tampoco se cuenta arriba', /1 esperando/i.test(linea2), linea2)
-
   // Y cuando de verdad no hay nada, se sigue diciendo.
   const vacio = await montar('activity.html',
     { activity: Object.assign({}, actividad, { pending: [] }) }, 'es-419')
@@ -3395,151 +3315,36 @@ console.log('\nactivity.html — T9: tras cambiar de numero, la actividad del an
     run: { state: 'interrupted', startedAt: '2026-09-24 08:46', endedAt: null }
   }
   const chats = new Array(306).fill(0).map((_, i) => ({ jid: `c${i}`, name: `c${i}` }))
-  const storage = { activity: vieja, chats, chatsAccount: VIEJA_A, sidecar,
-    decisions: { P1: { decision: 'take', at: '2026-09-24T08:41:00Z', account: VIEJA_A } } }
+  const storage = { activity: vieja, chats, chatsAccount: VIEJA_A, sidecar }
   const { doc } = await montar('activity.html', storage, 'es-419')
   await espera()
   const todo = doc.body.textContent
   ok('no muestra la cobertura del numero anterior', !/3 de 306/.test(
     doc.getElementById('cobertura').textContent), doc.getElementById('cobertura').textContent)
-  ok('ni sus avisos', !/aviso viejo|Piden descuento/.test(doc.getElementById('alerts').textContent),
-    doc.getElementById('alerts').textContent)
-  ok('ni lo ultimo que hizo', !/accion vieja|SOP-1/.test(doc.getElementById('recent').textContent),
-    doc.getElementById('recent').textContent)
+  ok('ni sus avisos ni lo ultimo que hizo', !/aviso viejo|Piden descuento|accion vieja|SOP-1/.test(todo),
+    todo.slice(0, 300))
   ok('ni su corrida', !/08:46/.test(doc.getElementById('runline').textContent),
     doc.getElementById('runline').textContent)
-  ok('ni su cola', !/pendiente viejo/.test(doc.getElementById('pending').textContent),
-    doc.getElementById('pending').textContent)
+  ok('ni su cola', !/pendiente viejo/.test(todo), todo.slice(0, 300))
   // El sync de la linea nueva lo pide el worker solo (T9e): mandar a correr un comando
   // en una terminal seria falso, y es justo el callejon que el panel dejo de ofrecer.
   const sello = doc.getElementById('synced').textContent
   ok('la cabecera no manda a una terminal: dice que espera el sync de esta linea',
     !/wa-scope|corra/i.test(sello) && /linea/i.test(sello), sello)
-  ok('y no se queda en blanco: dice que no hay nada de esta linea todavia',
-    doc.getElementById('alerts').textContent.trim().length > 0 &&
-    doc.getElementById('recent').textContent.trim().length > 0, todo.slice(0, 300))
+  ok('y no se queda en blanco: el tablero dice que no tiene datos todavia',
+    !doc.getElementById('board-empty').hidden &&
+    doc.getElementById('board-empty').textContent.trim().length > 0, todo.slice(0, 300))
 
   // Control: con la actividad del numero vinculado, si se pinta.
   storage.activity = Object.assign({}, vieja, { account: NUEVA_A })
   storage.chatsAccount = NUEVA_A
   doc.defaultView.dispatchEvent(new doc.defaultView.Event('focus'))
   await espera()
-  ok('control: la actividad del numero vinculado si se pinta',
-    /aviso viejo|Piden descuento/.test(doc.getElementById('alerts').textContent),
-    doc.getElementById('alerts').textContent)
+  ok('control: la corrida del numero vinculado si se pinta',
+    /08:46/.test(doc.getElementById('runline').textContent),
+    doc.getElementById('runline').textContent)
   ok('control: y su cobertura', /3 de 306/.test(doc.getElementById('cobertura').textContent),
     doc.getElementById('cobertura').textContent)
-}
-
-console.log('\nactivity.html — T9: lo que se marca queda atado al numero vinculado')
-{
-  const NUEVA_D = 'pn:573000000012'
-  const storage = {
-    sidecar: { connection: 'open', cuenta: NUEVA_D, latido: { ts: Date.now(), conectado: true } },
-    activity: { account: NUEVA_D, syncedAt: '2026-10-01 10:00', mapped: 1, authorized: 1,
-      pending: [{ stanzaId: 'N1', chat: 'Grupo Nuevo', chatJid: '200@g.us', text: 'hola',
-        date: '2026-10-01 09:59' }], recent: [] },
-    chatsAccount: NUEVA_D, chats: [{ jid: '200@g.us', name: 'Grupo Nuevo' }]
-  }
-  const { doc } = await montar('activity.html', storage, 'es-419')
-  await espera()
-  const boton = doc.querySelector('[data-decision="take"], button[data-take], #pending button')
-  ok('la cola ofrece marcar el mensaje', !!boton, doc.getElementById('pending').innerHTML.slice(0, 300))
-  if (boton) boton.click()
-  await espera()
-  const d = (storage.decisions || {}).N1
-  ok('la decision queda etiquetada con el numero vinculado', d && d.account === NUEVA_D,
-    JSON.stringify(storage.decisions))
-}
-
-console.log('\nactivity.html — el texto ya no ensena que hay que marcar para que actue')
-{
-  for (const [lang, re] of [['es-419', /solo en su proxima corrida|atiende esto solo/i],
-    ['en-US', /on its own/i], ['pt-BR', /sozinho/i]]) {
-    const m = await montar('activity.html', { activity: { pending: [], recent: [] } }, lang)
-    await espera()
-    const hint = Array.prototype.map.call(m.doc.querySelectorAll('.nota'),
-      (n) => n.textContent).join(' ')
-    ok(`${lang}: dice que el agente actua solo, no que hay que marcarle`,
-      re.test(hint), hint.slice(0, 160))
-  }
-}
-
-// ── El panel como bandeja PARA AGENTES ─────────────────────────────────────────────
-// La pantalla abria con "Esperando respuesta" y un boton Tomar en cada fila: se leia
-// como que sin el dueno no pasa nada. No es asi — el agente clasifica, abre tarjeta,
-// responde y alerta por su cuenta (prompts/triage.md, pasos 7 a 11), y lo demostro en
-// la cuenta del dueno contestando dos mensajes solo.
-//
-// Lo unico que de verdad lo espera a el son las alertas: lo que el agente levanto
-// porque NO le corresponde decidirlo. `wa-scope alert` ya las guardaba como una accion
-// mas, asi que quedaban al fondo, mezcladas con las respuestas y con el mismo peso.
-console.log('\nactivity.html — lo que pide decision va primero y solo')
-{
-  const recent = [
-    { ts: '2026-09-23 18:40', chat: 'Equipo Operaciones', action: 'alert',
-      issue: null, detail: 'Piden precio | Pedro pregunta cuanto vale el modulo nuevo' },
-    { ts: '2026-09-23 18:08', chat: 'Equipo Operaciones', action: 'reply',
-      issue: null, detail: 'Acuse enviado al cliente' },
-    { ts: '2026-09-23 18:05', chat: 'Equipo Operaciones', action: 'issue',
-      issue: 'ACM-9', detail: 'Revisar el proyecto de camara' }
-  ]
-  const { doc } = await montar('activity.html',
-    { activity: { pending: [], recent, running: false, syncedAt: '2026-09-23 18:41',
-      mapped: 1, authorized: 1,
-      run: { state: 'ok', endedAt: '2026-09-23 18:41', looked: 1, pending: 0 } } },
-    'es-419')
-  await espera()
-
-  const alerts = doc.getElementById('alerts').textContent
-  const hechas = doc.getElementById('recent').textContent
-
-  ok('la alerta esta en su propia seccion', /Piden precio/.test(alerts), alerts)
-  // `alert` guarda "titulo | cuerpo": partirlos deja la pregunta legible sin abrir nada.
-  ok('y se parte en titulo y porque, sin la barra cruda',
-    /cuanto vale el modulo/.test(alerts) && !/\|/.test(alerts), alerts)
-  // Repetirla abajo haria que lo que pide una decision se lea como cosa ya hecha.
-  ok('la alerta NO se repite entre lo que ya hizo', !/Piden precio/.test(hechas), hechas)
-  ok('lo que hizo si esta: la respuesta', /Acuse enviado/.test(hechas), hechas)
-  ok('y la tarjeta que abrio', /ACM-9/.test(hechas), hechas)
-
-  // El orden es el mensaje: lo que espera al dueno va antes que lo que ya se hizo.
-  const cuerpo = doc.body.innerHTML
-  ok('lo que pide decision va ANTES que el feed del agente',
-    cuerpo.indexOf('id="alerts"') < cuerpo.indexOf('id="recent"'))
-  ok('y la cola va de ultima: eso lo atiende solo',
-    cuerpo.indexOf('id="recent"') < cuerpo.indexOf('id="pending"'))
-}
-
-console.log('\nactivity.html — sin alertas lo dice, no deja un hueco')
-{
-  const { doc } = await montar('activity.html',
-    { activity: { pending: [], recent: [
-      { ts: '2026-09-23 18:08', chat: 'Ops', action: 'reply', issue: null,
-        detail: 'Acuse enviado' }
-    ], mapped: 1, authorized: 1 } }, 'es-419')
-  await espera()
-  const alerts = doc.getElementById('alerts').textContent
-  // Casi siempre va a estar vacia, y esa es la idea: una seccion que se llena todos
-  // los dias no la mira nadie. Pero vacia tiene que DECIR que no hay nada.
-  ok('dice que no necesita nada del dueno', /no necesita nada/i.test(alerts), alerts)
-  ok('y lo que hizo sigue estando', /Acuse enviado/.test(doc.getElementById('recent').textContent))
-}
-
-console.log('\nactivity.html — los titulos nuevos estan en los tres idiomas')
-{
-  for (const [lang, decision, cola] of [
-    ['es-419', /necesita su decision/i, /en cola/i],
-    ['en-US', /needs your decision/i, /queued/i],
-    ['pt-BR', /precisa da sua decisao/i, /na fila/i]
-  ]) {
-    const m = await montar('activity.html', { activity: { pending: [], recent: [] } }, lang)
-    await espera()
-    const h = Array.prototype.map.call(m.doc.querySelectorAll('h2'),
-      (n) => n.textContent).join(' | ')
-    ok(`${lang}: "necesita su decision" esta traducido`, decision.test(h), h)
-    ok(`${lang}: y "en cola" tambien`, cola.test(h), h)
-  }
 }
 
 // ── El tablero de casos (T5, rehecho con la anatomia del tablero de Plane en Orca) ──
@@ -3574,8 +3379,6 @@ const tablero = (cards, extra = {}) => ({
 const abrirTablero = async (storage, idioma = 'es-419') => {
   const m = await montar('activity.html', storage, idioma)
   await espera()
-  m.doc.getElementById('tab-board').click()
-  await espera()
   return m
 }
 /** Abre el detalle de un caso con un clic en su tarjeta, como lo hace el dueno. */
@@ -3593,35 +3396,15 @@ const buscar = (doc, texto) => {
 const visibles = (doc) => [...doc.querySelectorAll('#board-body .card[data-case]')]
   .map((n) => n.dataset.case)
 
-console.log('\nactivity.html — tablero: pestanas')
+console.log('\nactivity.html — tablero: es lo que se ve al abrir')
 {
   const { doc } = await montar('activity.html', { board: tablero([tarjeta()]) }, 'es-419')
   await espera()
-  const bandeja = doc.getElementById('view-inbox')
-  const vista = doc.getElementById('view-board')
-  ok('hay dos pestanas: la bandeja de siempre y el tablero',
-    !!doc.getElementById('tab-inbox') && !!doc.getElementById('tab-board'))
-  ok('abre en la bandeja, que es lo que habia', !bandeja.hidden && vista.hidden)
-  ok('la bandeja conserva sus tres secciones',
-    !!bandeja.querySelector('#alerts') && !!bandeja.querySelector('#recent') &&
-    !!bandeja.querySelector('#pending'))
-  doc.getElementById('tab-board').click()
-  ok('la pestana del tablero lo muestra y oculta la bandeja', bandeja.hidden && !vista.hidden)
-  ok('y marca cual esta activa para el lector de pantalla',
-    doc.getElementById('tab-board').getAttribute('aria-selected') === 'true' &&
-    doc.getElementById('tab-inbox').getAttribute('aria-selected') === 'false')
-  doc.getElementById('tab-inbox').click()
-  ok('volver a la bandeja la devuelve', !bandeja.hidden && vista.hidden)
-
-  // El sondeo relee cada 8 s y repinta: sin recordar la pestana, quien mira el tablero
-  // lo veria volverse a la bandeja a medio leer.
-  doc.getElementById('tab-board').click()
+  ok('el tablero se ve sin apretar nada', !doc.getElementById('view-board').hidden &&
+    !!doc.querySelector('.card[data-case="1"]'))
   doc.getElementById('refresh').click()
   await espera()
-  ok('releer no devuelve a la bandeja', !vista.hidden && bandeja.hidden)
-  ok('la pestana lleva la cuenta de lo que espera al dueno',
-    /1/.test(doc.getElementById('tab-board').textContent),
-    doc.getElementById('tab-board').textContent)
+  ok('releer lo deja ahi', !!doc.querySelector('.card[data-case="1"]'))
 }
 
 console.log('\nactivity.html — tablero: columnas')
@@ -4051,8 +3834,6 @@ const abrirConWorker = async (cards, worker, extra = {}, idioma = 'es-419') => {
   const storage = { board: tablero(cards), ...extra }
   const m = await montar('activity.html', storage, idioma, worker.gancho)
   await espera()
-  m.doc.getElementById('tab-board').click()
-  await espera()
   return { ...m, storage }
 }
 const hastaPanel = async (cond, ms = 6000) => {
@@ -4360,7 +4141,7 @@ console.log('\nactivity.html — tablero: estados vacios')
     raro.doc.getElementById('board-note').textContent)
   const roto = await abrirTablero({ board: { v: 1, cards: 'no-es-lista', counts: null } })
   ok('un `board` malformado no rompe el panel', roto.doc.querySelectorAll('.card').length === 0 &&
-    roto.doc.getElementById('tab-inbox') !== null)
+    roto.doc.getElementById('view-board') !== null && !!roto.doc.getElementById('synced'))
   const vieja = await abrirTablero({ board: tablero([tarjeta()], { updated_at: hace(3 * 3600000) }) })
   ok('un tablero viejo se marca como viejo',
     !!vieja.doc.querySelector('#board-synced .vieja'), vieja.doc.getElementById('board-synced').innerHTML)
@@ -4423,12 +4204,11 @@ console.log('\nactivity.html — tablero: tres idiomas')
     const det = abrirDetalle(d, 1)
     ok(`${lang}: lo que vio Jev`, flag.test(det.querySelector('.det-jev').textContent) &&
       clase.test(det.querySelector('.det-jev').textContent), det.querySelector('.det-jev')?.textContent)
-    ok(`${lang}: la pestana`, d.getElementById('tab-board').textContent.trim().length > 0)
     ok(`${lang}: el buscador`, d.getElementById('board-search').placeholder.length > 5)
   }
   const { window } = await montar('activity.html')
   const S = window.STRINGS
-  const nuevas = Object.keys(S.en).filter((k) => /^(tab|board|stage|prio|flag|jev|exc|prop|blocked|ticket|ago|det)/.test(k))
+  const nuevas = Object.keys(S.en).filter((k) => /^(board|stage|prio|flag|jev|exc|prop|blocked|ticket|ago|det|actor)/.test(k))
   ok('hay textos nuevos del tablero', nuevas.length > 40, String(nuevas.length))
   const faltan = nuevas.filter((k) => !S.es[k] || !S.pt[k])
   ok('cada texto del tablero existe en espanol, ingles y portugues', faltan.length === 0,
@@ -4455,6 +4235,146 @@ console.log('\nactivity.html — tablero: tres idiomas')
     ['es', 'en', 'pt'].some((l) => !S[l][window.JEV_CLASE_KEY[c]]))
   ok('cada clase de atencion de Jev tiene su frase en los tres idiomas', sinFrase.length === 0,
     JSON.stringify(sinFrase))
+}
+
+console.log('\nactivity.html — tablero: lo que era la cola, con Atender ahora e Ignorar')
+{
+  const recibido = tarjeta({ case_id: 4, stage: 'recibido', proposal: null, exceptions: [],
+    title: 'Nota de voz', actions: ['atender', 'ignorar', 'reclasificar', 'cerrar', 'proyecto'] })
+  const clasificado = tarjeta({ case_id: 5, stage: 'clasificado', proposal: null, exceptions: [],
+    needs_agent: true, actions: ['atender', 'ignorar', 'reclasificar', 'cerrar', 'proyecto'] })
+  const w = conWorker({ ok: true, code: 'atendido' })
+  const { doc, storage } = await abrirConWorker([recibido, clasificado], w)
+  ok('un caso en Recibido lleva Atender ahora en la tarjeta',
+    botonTarjeta(doc, 4, 'atender')?.textContent === 'Atender ahora',
+    doc.querySelector('.card[data-case="4"]')?.innerHTML)
+  ok('uno marcado para el agente lo dice en la tarjeta',
+    /proxima corrida/.test(doc.querySelector('.card[data-case="5"] .card-agente')?.textContent || ''),
+    doc.querySelector('.card[data-case="5"]')?.textContent)
+  const d = abrirDetalle(doc, 4)
+  ok('el detalle ofrece Atender ahora, Ignorar, Reclasificar, Cerrar y Cambiar proyecto',
+    [...d.querySelectorAll('.det-acts button[data-accion]')].map((b) => b.dataset.accion).join() ===
+      'atender,ignorar,reclasificar,cerrar,proyecto',
+    [...d.querySelectorAll('.det-acts button[data-accion]')].map((b) => b.dataset.accion).join())
+  botonTarjeta(doc, 4, 'atender').click()
+  await hastaPanel(() => w.pedidos.length === 1)
+  ok('Atender ahora deja UN pedido con el caso y nada mas',
+    w.pedidos[0] && w.pedidos[0].action === 'atender' && w.pedidos[0].caseId === 4 &&
+    Object.keys(w.pedidos[0]).sort().join() === 'action,at,caseId,id', JSON.stringify(w.pedidos))
+  ok('y dice que el agente lo atendera', await hastaPanel(() =>
+    /proxima corrida/.test(mensajeDe(doc, 4)?.textContent || '')), mensajeDe(doc, 4)?.textContent)
+  ok('sin tocar la vieja clave `decisions`', !('decisions' in storage))
+
+  const w2 = conWorker({ ok: true, code: 'ignorado' })
+  const m = await abrirConWorker([recibido], w2)
+  botonDe(m.doc, 4, 'ignorar').click()
+  await hastaPanel(() => w2.pedidos.length === 1)
+  ok('Ignorar va de un clic, sin formulario', w2.pedidos[0] && w2.pedidos[0].action === 'ignorar' &&
+    w2.pedidos[0].caseId === 4, JSON.stringify(w2.pedidos))
+  ok('y se dice', await hastaPanel(() => /ignorado/i.test(mensajeDe(m.doc, 4)?.textContent || '')))
+
+  const e = await abrirTablero({ board: tablero([tarjeta({ case_id: 9, stage: 'decision',
+    actions: ['atender', 'ignorar', 'enviar'] })]) })
+  abrirDetalle(e.doc, 9)
+  ok('fuera de Recibido y Clasificado no se ofrecen aunque `actions` los traiga',
+    !e.doc.querySelector('#board-detail button[data-accion="atender"]') &&
+    !e.doc.querySelector('#board-detail button[data-accion="ignorar"]'))
+}
+
+console.log('\nactivity.html — tablero: el proyecto del caso, a mano')
+{
+  const caso = tarjeta({ case_id: 6, stage: 'clasificado', proposal: null, exceptions: [],
+    project: { id: 'alfa-demo', name: 'Alfa Demo' },
+    actions: ['atender', 'ignorar', 'reclasificar', 'cerrar', 'proyecto'] })
+  const w = conWorker({ ok: true, code: 'proyecto-cambiado' })
+  const { doc, window } = await abrirConWorker([caso], w, { projects: PROYECTOS_PRUEBA })
+  const d = abrirDetalle(doc, 6)
+  ok('el detalle dice el proyecto del caso', /Alfa Demo/.test(d.querySelector('.det-proyecto')?.textContent || ''),
+    d.querySelector('.det-proyecto')?.textContent)
+  botonDe(doc, 6, 'proyecto').click()
+  const campo = doc.querySelector('#board-detail .card-form input[role="combobox"]')
+  ok('Cambiar proyecto abre un autocompletar, no un select', !!campo &&
+    !doc.querySelector('select') && campo.getAttribute('aria-expanded') === 'false', !!campo)
+  campo.focus()
+  campo.value = 'bet'
+  campo.dispatchEvent(new window.Event('input', { bubbles: true }))
+  const opciones = () => [...doc.querySelectorAll('#board-detail [role="listbox"] [role="option"]')]
+  ok('escribir filtra el catalogo aceptado', opciones().map((o) => o.dataset.value).join() === 'beta-demo' &&
+    campo.getAttribute('aria-expanded') === 'true', opciones().map((o) => o.textContent).join())
+  doc.getElementById('refresh').click()
+  await espera(); await espera()
+  ok('el sondeo no se lleva lo escrito', doc.querySelector('#board-detail .card-form input[role="combobox"]')?.value === 'bet')
+  const c2 = doc.querySelector('#board-detail .card-form input[role="combobox"]')
+  c2.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+  c2.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  ok('flechas y Enter eligen, y el campo dice lo elegido',
+    doc.querySelector('#board-detail .card-form input[role="combobox"]').value === 'Beta Demo')
+  ok('elegir no escribe nada todavia', w.pedidos.length === 0)
+  doc.querySelector('#board-detail .card-form button[data-confirma]').click()
+  await hastaPanel(() => w.pedidos.length === 1)
+  ok('Guardar manda el id del proyecto elegido', w.pedidos[0] && w.pedidos[0].action === 'proyecto' &&
+    w.pedidos[0].caseId === 6 && w.pedidos[0].proyecto === 'beta-demo' &&
+    Object.keys(w.pedidos[0]).sort().join() === 'action,at,caseId,id,proyecto', JSON.stringify(w.pedidos))
+  await hastaPanel(() => /actualizado/i.test(mensajeDe(doc, 6)?.textContent || ''))
+
+  botonDe(doc, 6, 'proyecto').click()
+  const c3 = doc.querySelector('#board-detail .card-form input[role="combobox"]')
+  c3.focus()
+  c3.dispatchEvent(new window.Event('click', { bubbles: true }))
+  const ninguno = opciones().find((o) => o.dataset.value === '')
+  ok('la lista ofrece quedar sin proyecto', !!ninguno && /sin proyecto/i.test(ninguno.textContent),
+    opciones().map((o) => o.textContent).join())
+  ninguno.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  doc.querySelector('#board-detail .card-form button[data-confirma]').click()
+  await hastaPanel(() => w.pedidos.length === 2)
+  ok('y se pide con el id vacio', w.pedidos[1] && w.pedidos[1].proyecto === '', JSON.stringify(w.pedidos[1]))
+
+  await hastaPanel(() => !!botonDe(doc, 6, 'proyecto') && !botonDe(doc, 6, 'proyecto').disabled)
+  botonDe(doc, 6, 'proyecto').click()
+  const c4 = doc.querySelector('#board-detail .card-form input[role="combobox"]')
+  c4.value = 'algo que no es'
+  c4.dispatchEvent(new window.Event('input', { bubbles: true }))
+  doc.querySelector('#board-detail .card-form button[data-confirma]').click()
+  await espera()
+  ok('sin elegir de la lista no se manda nada y lo dice', w.pedidos.length === 2 &&
+    !!doc.querySelector('#board-detail .card-form .card-msg.mala'), detalle(doc).textContent)
+
+  const sinCat = await abrirConWorker([caso], conWorker(null), {})
+  botonDe(sinCat.doc, 6, 'proyecto').click()
+  const c5 = sinCat.doc.querySelector('#board-detail .card-form input[role="combobox"]')
+  c5.dispatchEvent(new sinCat.window.Event('click', { bubbles: true }))
+  ok('sin catalogo aceptado manda a Ajustes', /Ajustes/.test(detalle(sinCat.doc).textContent),
+    detalle(sinCat.doc).textContent.slice(0, 300))
+}
+
+console.log('\nactivity.html — tablero: lo que hizo el agente, en la historia del caso')
+{
+  const caso = tarjeta({ case_id: 3, events: [
+    { de: null, a: 'recibido', actor: 'automatizacion', at: hace(40 * 60000) },
+    { de: 'recibido', a: 'clasificado', actor: 'jev', at: hace(39 * 60000) },
+    { de: 'clasificado', a: 'decision', actor: 'agente', at: hace(10 * 60000) },
+    { de: 'decision', a: 'decision', actor: 'dueno', at: hace(5 * 60000) },
+    { de: 'decision', a: 'decision', actor: 'actor_nuevo', at: hace(4 * 60000) }] })
+  const { doc } = await abrirTablero({ board: tablero([caso]) })
+  const h = abrirDetalle(doc, 3).querySelector('.det-hist')
+  const filas = [...h.querySelectorAll('li')].map((li) => li.textContent)
+  ok('cada paso con quien lo hizo, en palabras', filas.length === 5 &&
+    /el agente/.test(filas[2]) && /Jev/.test(filas[1]) && /usted/.test(filas[3]),
+    JSON.stringify(filas))
+  ok('lo que no movio la etapa se dice como actualizado', /actualizado/.test(filas[3]), filas[3])
+  ok('un actor que el panel no conoce no sale crudo', !/actor_nuevo/.test(h.textContent) &&
+    /otro/.test(filas[4]), filas[4])
+}
+
+console.log('\nactivity.html — tablero: la ultima corrida del agente, en una linea')
+{
+  const AHORA = new Date().toISOString().slice(0, 16).replace('T', ' ')
+  const { doc } = await abrirTablero({ board: tablero([tarjeta()]), activity: { syncedAt: AHORA,
+    pending: [], recent: [], mapped: 2, authorized: 2,
+    run: { state: 'ok', startedAt: AHORA, endedAt: AHORA, looked: 2, pending: 0, reason: null } } })
+  const linea = doc.getElementById('runline')
+  ok('la linea de la corrida vive en el tablero', doc.getElementById('view-board').contains(linea) &&
+    /2 conversaciones/.test(linea.textContent), linea.textContent)
 }
 
 console.log('\nactivity.html — tablero: composicion (los anchos los mira shots)')
