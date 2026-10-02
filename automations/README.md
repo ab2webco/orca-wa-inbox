@@ -9,6 +9,12 @@ instalado y viceversa.
 | `whatsapp-tick.json` | 1 min | `wa-scope tick` (solo comando, sin agente) |
 | `whatsapp-triage.json` | 5 min, a toda hora (y al instante con "Atender ahora") | agente, con precheck `wa-scope pending --needs-agent` |
 
+`tick` también limpia: a lo sumo cada 5 minutos quita de la barra lateral (`orca worktree
+rm`, solo el registro y sus terminales, nunca los archivos ni la raíz de la carpeta) los
+espacios `::workspace:` que `triage` deja en cada corrida ya terminada, 5 por vuelta como
+máximo y 2 minutos después de que acabó. Sin la CLI de Orca, o con un error, no hace nada
+y lo cuenta en `limpieza_error`.
+
 `tick` no despierta a ningún agente: es un comando (`orca automations create --command`
 en un Orca 1.4.160-lab.84 o más nuevo). El precheck de `triage` **sale con 1 cuando
 ningún caso necesita lenguaje**, con lo que Orca marca la corrida `skipped_precheck` y

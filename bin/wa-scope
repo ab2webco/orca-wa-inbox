@@ -44,7 +44,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from wa_settings import (  # noqa: E402
     CONFIG_NUMERICOS, CONFIG_OPCIONES, PANEL_SETTINGS, PLUGIN_ID,
-    PLUGIN_ID_ANTERIOR, orca_cli_path, orca_runtime_home, plugin_store_path,
+    PLUGIN_ID_ANTERIOR, orca_cli_path, orca_env, orca_runtime_home, plugin_store_path,
     plugin_store_raw,
     plugin_store_targets, settings_from_plugin, user_data_roots, valida_ajuste)
 import wa_store  # noqa: E402  (solo lectura: de capture.db se lee la linea activa)
@@ -3423,7 +3423,118 @@ ENVIO_SIN_LINEA = "send-no-transport"
 # motivo y la ve el dueno.
 ENVIO_BLOQUEA = ("send-rejected", "send-id-conflict")
 CONTEOS_TICK = ("enviados", "excepciones", "frenados", "esperando", "bloqueados",
-                "errores", "pospuestos")
+                "errores", "pospuestos", "limpiados", "limpieza_error")
+
+# La limpieza de los espacios que deja `triage` (un espacio nuevo por corrida: Orca no los
+# cierra). Mira la CLI a lo mas cada LIMPIEZA_CADA_S, quita solo corridas ya terminadas
+# y de hace mas de LIMPIEZA_GRACIA_S (quien mira el resultado todavia lo ve) y no mas de
+# LIMPIEZA_TOPE por vuelta. `worktree rm` sobre un espacio de carpeta borra el registro y
+# sus terminales, nunca los archivos; la raiz de la carpeta no tiene `::workspace:`.
+PLUGIN_KEY = "ab2web.orca-wa-inbox"
+AUTOMATIZACION_TRIAGE = "triage"
+LIMPIEZA_CADA_S = 300
+LIMPIEZA_GRACIA_S = 120
+LIMPIEZA_TOPE = 5
+LIMPIEZA_PLAZO_S = 15
+LIMPIEZA_INTENTOS = 3
+ESTADOS_EN_CURSO = ("pending", "dispatching", "dispatched")
+MARCA_ESPACIO = "::workspace:"
+
+
+def orca_json(cli, args):
+    """Una llamada a la CLI de Orca con `--json`: el sobre {ok, ...} o None si no hay CLI,
+    se acabo el plazo o no devolvio JSON. Nunca imprime lo que contesto."""
+    try:
+        p = subprocess.run([cli, *args, "--json"], capture_output=True, text=True,
+                           timeout=LIMPIEZA_PLAZO_S, env=orca_env())
+        sobre = json.loads(p.stdout or "null")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return sobre if isinstance(sobre, dict) else None
+
+
+def espacios_a_limpiar(corridas, ahora):
+    """Los ids de espacio de las corridas terminadas hace mas de la gracia. Solo los que
+    llevan `::workspace:`: la raiz de la carpeta no se toca nunca."""
+    hallados = []
+    for c in corridas:
+        if not isinstance(c, dict) or c.get("status") in ESTADOS_EN_CURSO:
+            continue
+        espacio = c.get("workspaceId")
+        if not isinstance(espacio, str) or MARCA_ESPACIO not in espacio:
+            continue
+        marcas = [c.get(k) for k in ("dispatchedAt", "startedAt", "createdAt")
+                  if isinstance(c.get(k), (int, float))]
+        if not marcas or ahora - max(marcas) / 1000 < LIMPIEZA_GRACIA_S:
+            continue
+        if espacio not in hallados:
+            hallados.append(espacio)
+    return hallados
+
+
+def tick_limpia(con, resumen):
+    """Quita de la barra lateral los espacios de las corridas de `triage` que ya terminaron.
+    Cierra en silencio: sin CLI o con un error el tick sigue y lo cuenta en
+    `limpieza_error`. Lo ya quitado (o rendido tras varios intentos) queda en `settings`,
+    para que los mismos primeros ids no acaparen el tope."""
+    ahora = time.time()
+    fila = con.execute("select value from settings where key='limpieza_at'").fetchone()
+    try:
+        if fila and ahora - float(fila["value"]) < LIMPIEZA_CADA_S:
+            return
+    except (TypeError, ValueError):
+        pass
+    con.execute("insert into settings (key,value) values ('limpieza_at',?) on conflict(key) "
+                "do update set value=excluded.value", (str(ahora),))
+    con.commit()
+    cli = orca_cli_path()
+    if not cli:
+        resumen["limpieza_error"] += 1
+        return
+    lista = orca_json(cli, ["automations", "list"])
+    automatizaciones = ((lista or {}).get("result") or {}).get("automations")
+    if not lista or lista.get("ok") is False or not isinstance(automatizaciones, list):
+        resumen["limpieza_error"] += 1
+        return
+    triage = next((a.get("id") for a in automatizaciones if isinstance(a, dict)
+                   and isinstance(a.get("pluginOrigin"), dict)
+                   and a["pluginOrigin"].get("pluginKey") == PLUGIN_KEY
+                   and a["pluginOrigin"].get("automationId") == AUTOMATIZACION_TRIAGE
+                   and isinstance(a.get("id"), str) and a.get("id")), None)
+    if not triage:
+        return
+    corridas = orca_json(cli, ["automations", "runs", "--id", triage])
+    lista_corridas = ((corridas or {}).get("result") or {}).get("runs")
+    if not corridas or corridas.get("ok") is False or not isinstance(lista_corridas, list):
+        resumen["limpieza_error"] += 1
+        return
+    fila = con.execute("select value from settings where key='limpieza_hecha'").fetchone()
+    try:
+        hecho = json.loads(fila["value"]) if fila else {}
+    except (TypeError, ValueError):
+        hecho = {}
+    if not isinstance(hecho, dict):
+        hecho = {}
+    intentos = 0
+    for espacio in espacios_a_limpiar(lista_corridas, ahora):
+        if hecho.get(espacio, 0) >= LIMPIEZA_INTENTOS:
+            continue
+        if intentos >= LIMPIEZA_TOPE:
+            break
+        intentos += 1
+        r = orca_json(cli, ["worktree", "rm", "--worktree", f"id:{espacio}"])
+        if r is not None and r.get("ok") is True:
+            hecho[espacio] = LIMPIEZA_INTENTOS
+            resumen["limpiados"] += 1
+        else:
+            hecho[espacio] = hecho.get(espacio, 0) + 1
+            resumen["limpieza_error"] += 1
+    # Solo lo que sigue en la lista de corridas: Orca poda las viejas y esto no crece.
+    vigentes = {c.get("workspaceId") for c in lista_corridas if isinstance(c, dict)}
+    hecho = {k: v for k, v in hecho.items() if k in vigentes}
+    con.execute("insert into settings (key,value) values ('limpieza_hecha',?) on conflict(key) "
+                "do update set value=excluded.value", (json.dumps(hecho, sort_keys=True),))
+    con.commit()
 
 
 def tick_toma():
@@ -3616,6 +3727,13 @@ def cmd_tick(con, a):
             publica_tablero(con)
         except (OSError, sqlite3.Error) as exc:
             print(f"wa-scope: board not published: {exc}", file=sys.stderr)
+        # Lo ultimo y sin que pueda tumbar el tick: lo que importa ya salio.
+        try:
+            tick_limpia(con, resumen)
+        except (OSError, sqlite3.Error, subprocess.SubprocessError, ValueError):
+            if con.in_transaction:
+                con.rollback()
+            resumen["limpieza_error"] += 1
     finally:
         candado.close()
     print(json.dumps(resumen, ensure_ascii=False))
