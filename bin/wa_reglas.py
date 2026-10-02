@@ -27,6 +27,7 @@ How it is meant to be read:
 
 Spanish, English and Portuguese; accents and case do not matter. Python stdlib only.
 """
+import json
 import os
 import re
 import sys
@@ -189,3 +190,44 @@ def excepciones(texto, direccion):
     if direccion == SALIDA and _compromiso(original):
         halladas.add("commitment")
     return [e for e in wa_jev.ORDEN_EXCEPCIONES if e in halladas]
+
+
+# ── The levels of each chat (T22.3) ──────────────────────────────────────────────────
+# Per chat, each rule has one of three levels: ask the owner, let the agent revise the
+# reply, or allow it. Defaults: money, credential and commitment ask; the quality of the
+# reply (what Jev flags as a status nobody verified) goes back to the agent, which is the
+# revision loop of tablero-w7. The destructive control (`secreto`) has no level.
+PREGUNTAR, AGENTE, PERMITIR = "ask", "agent", "allow"
+NIVELES = (PREGUNTAR, AGENTE, PERMITIR)
+REGLAS_CON_NIVEL = ("money", "credential", "commitment", "quality")
+NIVELES_DEFECTO = {"money": PREGUNTAR, "credential": PREGUNTAR, "commitment": PREGUNTAR,
+                   "quality": AGENTE}
+# What each hold reason is about. `rule` is this floor, `jev` is Jev's draft review (the
+# reasons `wa-send` writes as `rule: a, b; jev: c`). A reason that is not here has no
+# level and always asks: `secret` (a secret-shaped value), Jev's `contains_credential` and
+# `jev-unavailable` (Jev fails closed).
+REGLA_DE_MOTIVO = {("rule", "money"): "money", ("rule", "credential"): "credential",
+                   ("rule", "commitment"): "commitment",
+                   ("jev", "promises_a_date"): "commitment",
+                   ("jev", "states_status_not_verified"): "quality"}
+SECRETO = "secret"
+
+
+def niveles(dato):
+    """The four levels of a chat, from what its settings hold: a dict, its JSON, or
+    nothing. Anything unknown or invalid falls back to the default: a typo in a stored
+    value can never open a rule the owner did not open."""
+    if isinstance(dato, str):
+        try:
+            dato = json.loads(dato)
+        except ValueError:
+            dato = None
+    dato = dato if isinstance(dato, dict) else {}
+    return {r: (dato.get(r) if dato.get(r) in NIVELES else NIVELES_DEFECTO[r])
+            for r in REGLAS_CON_NIVEL}
+
+
+def nivel_de_motivo(quien, codigo, niv):
+    """The level that applies to one hold reason in a chat with levels `niv`."""
+    regla = REGLA_DE_MOTIVO.get((quien, codigo))
+    return niv[regla] if regla else PREGUNTAR

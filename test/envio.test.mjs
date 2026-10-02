@@ -564,6 +564,73 @@ console.log('\nwa-send: el piso fijo frena lo que es del dueno, sin llave de Jev
   almacen.cerrar()
 }
 
+// ── Los niveles por chat (T22.3) ──────────────────────────────────────────────────────
+console.log('\nwa-send: cada chat decide sus niveles, y el secreto se frena siempre')
+{
+  const jev = await jevFalso((cuerpo) => {
+    const texto = cuerpo.state.reply_to_review || ''
+    return jevDice({
+      promises_a_date: texto.includes('viernes') ? 0.9 : 0.05,
+      states_status_not_verified: texto.includes('escuchado') ? 0.9 : 0.05
+    })(cuerpo)
+  })
+  const { home, almacen } = casaConJev()
+  ponerLlave(home)
+  execFileSync(WA_SCOPE, ['set', ALFA, '--approval', 'money=allow', '--approval',
+    'credential=allow', '--approval', 'quality=allow', '--approval', 'commitment=allow'],
+  { env: entorno(home), encoding: 'utf8' })
+  const socket = socketFalso()
+  const precio = await correrEnvio(home, ['Cliente Alfa', 'el precio es $1.400', '--send'],
+    { almacen, socket, env: jev.env })
+  ok('dinero en Permitir sale', precio.code === 0 && socket.enviados.length === 1, precio.stderr)
+  const fecha = await correrEnvio(home, ['Cliente Alfa', 'Queda listo el viernes', '--send'],
+    { almacen, socket, env: jev.env })
+  ok('compromiso en Permitir sale, aunque Jev marque la fecha',
+    fecha.code === 0 && socket.enviados.length === 2, fecha.stderr)
+  const calidad = await correrEnvio(home, ['Cliente Alfa', 'Su audio fue escuchado', '--send'],
+    { almacen, socket, env: jev.env })
+  ok('calidad en Permitir sale, aunque Jev la marque',
+    calidad.code === 0 && socket.enviados.length === 3, calidad.stderr)
+  const nombra = await correrEnvio(home, ['Cliente Alfa', 'te mando la clave por otro medio',
+    '--send'], { almacen, socket, env: jev.env })
+  ok('nombrar una clave con la credencial en Permitir sale',
+    nombra.code === 0 && socket.enviados.length === 4, nombra.stderr)
+  const secreto = await correrEnvio(home, ['Cliente Alfa', 'la clave: Abc12345', '--send',
+    '--id', 'REQ-SECRETO'], { almacen, socket, env: jev.env })
+  ok('un valor con forma de secreto NO sale, aunque todo este en Permitir',
+    socket.enviados.length === 4 && secreto.primera === 'wa-send: send-needs-approval' &&
+    secreto.stderr.includes('rule: secret'), secreto.stderr)
+  ok('y no copia el secreto en la bitacora',
+    !bitacora(home).some((f) => f.detail.includes('Abc12345')), JSON.stringify(bitacora(home)))
+  almacen.cerrar()
+  jev.cerrar()
+}
+{
+  const jev = await jevFalso((cuerpo) => jevDice({
+    states_status_not_verified: (cuerpo.state.reply_to_review || '').includes('Tomo') ? 0.9 : 0.05
+  })(cuerpo))
+  const { home, almacen } = casaConJev()
+  ponerLlave(home)
+  // Lo que el panel guarda manda sobre la base, como el modo.
+  escribirPanel(home, { agentName: 'Agente De Ejemplo',
+    scope: { [ALFA]: { chatName: 'Cliente Alfa', mode: 'responder', provider: 'ninguno',
+      approval: { money: 'agent', quality: 'ask' } } } })
+  const socket = socketFalso()
+  const precio = await correrEnvio(home, ['Cliente Alfa', 'el precio es $1.400', '--send'],
+    { almacen, socket, env: jev.env })
+  ok('dinero en Que el agente lo revise: no sale y dice que lo reescriba el agente',
+    socket.enviados.length === 0 && precio.primera === 'wa-send: send-needs-approval' &&
+    precio.stderr.includes('rule: money') && precio.stderr.includes('rewrite'), precio.stderr)
+  const calidad = await correrEnvio(home, ['Cliente Alfa', 'Tomo esto', '--send'],
+    { almacen, socket, env: jev.env })
+  ok('calidad en Preguntarme (desde el panel): no sale, y espera al dueno',
+    socket.enviados.length === 0 && calidad.primera === 'wa-send: send-needs-approval' &&
+    calidad.stderr.includes('states_status_not_verified') &&
+    !calidad.stderr.includes('rewrite'), calidad.stderr)
+  almacen.cerrar()
+  jev.cerrar()
+}
+
 console.log('\nwa-send: sin nombre de agente no se envia, ni siquiera en responder')
 {
   const home = nueva()

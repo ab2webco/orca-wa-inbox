@@ -2543,11 +2543,23 @@ else:
         cid = caso_clasificado(home, "G2")
         v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
                "Queda listo el viernes", "--actor", "agente")[0]["propuesta_version"]
-        ok("una propuesta que promete fecha marca commitment",
-           excepciones_de(home, cid) == ["commitment"], f"{fila_caso(home, cid)}")
+        # T22.3: lo que dice la respuesta es de ESA respuesta. Se ve en la tarjeta, pero no
+        # queda pegado al caso: la que el agente reescribe sin la fecha vale limpia.
+        ok("una propuesta que promete fecha muestra commitment en la tarjeta",
+           tarjeta(home, cid)["exceptions"] == ["commitment"], f"{tarjeta(home, cid)}")
+        ok("sin pegarse al caso", excepciones_de(home, cid) == [], f"{fila_caso(home, cid)}")
         ok("y la regla no la aprueba: E_EXCEPTION",
            error_de(corre(home, "caso", "aprobar", cid, "--version", v, "--actor", "regla"))
            == "E_EXCEPTION")
+        v_limpia = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+                      "Lo revisamos con el equipo.", "--actor", "agente")[0]["propuesta_version"]
+        ok("la misma tarjeta, reescrita sin la fecha, ya no la muestra y la regla la aprueba",
+           tarjeta(home, cid)["exceptions"] == []
+           and js(home, "caso", "aprobar", cid, "--version", v_limpia, "--actor",
+                  "regla")[0]["aprobada"], f"{tarjeta(home, cid)}")
+        cid = caso_clasificado(home, "G2b")
+        v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+               "Queda listo el viernes", "--actor", "agente")[0]["propuesta_version"]
         ok("el dueno si", js(home, "caso", "aprobar", cid, "--version", v, "--actor",
                              "dueno")[0]["aprobada"])
         evs = js(home, "caso", "ver", cid)[0]["eventos"]
@@ -3408,9 +3420,10 @@ with tempfile.TemporaryDirectory() as home:
     # Lo que el agente redacta tras autorizar sigue pasando por el piso de salida.
     v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
            "Lo entregamos manana a las 10.", "--actor", "agente")[0]["propuesta_version"]
+    # T22.3: la excepcion de la respuesta se ve en la tarjeta y no se pega al caso.
     ok("una respuesta con compromiso vuelve a traer su excepcion y espera al dueno",
-       "commitment" in json.loads(fila_de(home, int(cid))["excepciones"] or "[]"), 
-       f"{fila_de(home, int(cid))['excepciones']}")
+       "commitment" in tablero_de(home, cid)["exceptions"],
+       f"{tablero_de(home, cid)['exceptions']}")
     ok("y la regla no la firma por su cuenta",
        error_de(corre(home, "caso", "aprobar", cid, "--version", v, "--actor", "regla"))
        == "E_EXCEPTION")
@@ -4138,6 +4151,141 @@ if NODE:
         os.environ.clear()
         os.environ.update(antes)
 
+
+
+# ── Los niveles de aprobacion por chat (T22.3) ─────────────────────────────────────────
+# Cada regla (dinero, credencial, compromiso, calidad de Jev) tiene, por chat, tres niveles:
+# Preguntarme (`ask`), Que el agente lo revise (`agent`) y Permitir (`allow`). Por defecto
+# las tres primeras preguntan y la calidad vuelve al agente. Un valor con forma de secreto
+# se frena siempre: es el control destructivo, que ningun nivel apaga.
+print("\nlos niveles de aprobacion por chat")
+
+
+def niveles_de(home, chat):
+    return next((e.get("approval") for j, e in (tablero(home).get("scope") or {}).items()
+                 if j == chat), None)
+
+
+with tempfile.TemporaryDirectory() as home:
+    js(home, "set", CHAT, "--provider", "ninguno", "--mode", "responder")
+    ok("una conversacion nueva lleva los niveles por defecto, tambien en el panel",
+       niveles_de(home, CHAT) == {"money": "ask", "credential": "ask", "commitment": "ask",
+                                  "quality": "agent"}, f"{niveles_de(home, CHAT)}")
+    js(home, "set", CHAT, "--approval", "money=allow", "--approval", "commitment=agent")
+    ok("--approval cambia solo la regla que nombra",
+       niveles_de(home, CHAT) == {"money": "allow", "credential": "ask",
+                                  "commitment": "agent", "quality": "agent"},
+       f"{niveles_de(home, CHAT)}")
+    mal = corre(home, "set", CHAT, "--approval", "money=siempre")
+    ok("un nivel que no existe se rechaza sin guardar nada", mal.returncode != 0
+       and niveles_de(home, CHAT)["money"] == "allow", mal.stderr)
+    mal = corre(home, "set", CHAT, "--approval", "propinas=allow")
+    ok("una regla que no existe tambien", mal.returncode != 0, mal.stderr)
+    ok("`voice` dice los niveles del chat",
+       js(home, "voice", CHAT)[0].get("approval", {}).get("commitment") == "agent",
+       f"{js(home, 'voice', CHAT)}")
+    # Lo que guarda el panel manda, igual que el modo: es lo ultimo que toco el usuario.
+    datos = tablero(home)
+    datos["scope"][CHAT]["approval"] = {"money": "ask", "quality": "allow"}
+    storage_de(home).write_text(json.dumps(datos), encoding="utf-8")
+    js(home, "sync")
+    ok("los niveles del panel mandan, y lo que no dice queda por defecto",
+       niveles_de(home, CHAT) == {"money": "ask", "credential": "ask", "commitment": "ask",
+                                  "quality": "allow"}, f"{niveles_de(home, CHAT)}")
+
+    cid = caso_clasificado(home, "N1")
+    v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+           "El plan cuesta $50 al mes.", "--actor", "agente")[0]["propuesta_version"]
+    ok("dinero en Preguntarme: la regla no la aprueba (E_EXCEPTION)",
+       error_de(corre(home, "caso", "aprobar", cid, "--version", v, "--actor", "regla"))
+       == "E_EXCEPTION")
+    js(home, "set", CHAT, "--approval", "money=allow")
+    ok("dinero en Permitir: la regla la aprueba",
+       js(home, "caso", "aprobar", cid, "--version", v, "--actor", "regla")[0]["aprobada"])
+    cid = caso_clasificado(home, "N2")
+    v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+           "El plan cuesta $50 al mes.", "--actor", "agente")[0]["propuesta_version"]
+    js(home, "set", CHAT, "--approval", "money=agent")
+    ok("dinero en Que el agente lo revise: E_REVISION, ni el dueno ni el envio",
+       error_de(corre(home, "caso", "aprobar", cid, "--version", v, "--actor", "regla"))
+       == "E_REVISION")
+    js(home, "set", CHAT, "--approval", "credential=allow", "--approval", "money=allow")
+    cid = caso_clasificado(home, "N3")
+    v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+           "Listo, la clave: Abc12345", "--actor", "agente")[0]["propuesta_version"]
+    ok("un secreto en la respuesta se frena aunque la credencial este en Permitir",
+       error_de(corre(home, "caso", "aprobar", cid, "--version", v, "--actor", "regla"))
+       == "E_EXCEPTION")
+    cid = caso_clasificado(home, "N4")
+    v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+           "Te mando la clave por otro medio.", "--actor", "agente")[0]["propuesta_version"]
+    ok("nombrar la clave sin el valor, con la credencial en Permitir, si sale",
+       js(home, "caso", "aprobar", cid, "--version", v, "--actor", "regla")[0]["aprobada"])
+
+if NODE:
+    falso = JevFalso(jev_y_borradores)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "config", "ack", "off")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder",
+               "--approval", "money=agent")
+            js(home, "set", OPERACIONES, "--provider", "ninguno", "--mode", "responder",
+               "--approval", "money=allow", "--approval", "quality=allow")
+            js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "responder",
+               "--approval", "quality=ask")
+            sidecar = SidecarFalso(home)
+            try:
+                cid, v1 = propuesta_lista(home, "N5", PERSONA, "El plan cuesta $50 al mes.")
+                tick(home)
+                ver = js(home, "caso", "ver", cid)[0]
+                ok("tick: dinero en Que el agente lo revise vuelve al agente con el motivo",
+                   ver["etapa"] == "clasificado" and not ver["propuesta"]
+                   and int(cid) in para_el_agente(home)
+                   and (ver.get("revision") or {}).get("motivos") == ["money"]
+                   and not sidecar.entregados, f"{ver['etapa']} {ver.get('revision')}")
+                propone(home, cid, "El plan cuesta $60 al mes.")
+                tick(home)
+                propone(home, cid, "El plan cuesta $70 al mes.")
+                tick(home)
+                ver = js(home, "caso", "ver", cid)[0]
+                ok("y a la tercera lo decide el dueno, sin enviar nada",
+                   ver["etapa"] == "decision" and ver["propuesta"]
+                   and int(cid) not in para_el_agente(home) and not sidecar.entregados,
+                   f"{ver['etapa']} {[e['detalle'] for e in ver['eventos']]}")
+                tick(home)
+                ok("el minuto siguiente no vuelve a anotar lo mismo",
+                   sum(1 for e in js(home, "caso", "ver", cid)[0]["eventos"]
+                       if "lo decide el dueno" in e["detalle"]) == 1)
+
+                cid, _ = propuesta_lista(home, "N6", OPERACIONES, "El plan cuesta $50 al mes.")
+                cid2, _ = propuesta_lista(home, "N7", OPERACIONES,
+                                          "Su audio fue escuchado completo.")
+                tick(home)
+                ok("tick: dinero en Permitir sale", js(home, "caso", "ver", cid)[0]["etapa"]
+                   == "respondido", f"{js(home, 'caso', 'ver', cid)[0]['etapa']}")
+                ok("tick: calidad en Permitir sale aunque Jev la marque",
+                   js(home, "caso", "ver", cid2)[0]["etapa"] == "respondido",
+                   f"{js(home, 'caso', 'ver', cid2)[0]['etapa']} {envios(home)}")
+
+                cid, v = propuesta_lista(home, "N8", SOPORTE, "Su audio fue escuchado completo.")
+                tick(home)
+                ver = js(home, "caso", "ver", cid)[0]
+                ok("tick: calidad en Preguntarme va directo al dueno, con su borrador",
+                   ver["etapa"] == "decision" and ver["propuesta"] and not ver.get("revision")
+                   and [e["estado"] for e in envios(home)
+                        if e["req_id"] == f"caso-{cid}-{v[:12]}"] == ["borrador"],
+                   f"{ver['etapa']} {envios(home)}")
+            finally:
+                sidecar.cerrar()
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
 
 
 # ── "No necesita al agente" es una lista cerrada ───────────────────────────────────────

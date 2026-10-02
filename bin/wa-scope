@@ -144,7 +144,7 @@ FIRMANTES_CASO = ("dueno", "regla")
 # Los codigos de error de `wa-scope caso` (kanban-casos, "Contratos"). Son contrato con
 # el panel, que traduce por codigo: el texto se puede reescribir, el codigo no.
 ERRORES_CASO = ("E_ARGS", "E_NOT_FOUND", "E_STAGE", "E_NOT_APPROVED", "E_VERSION",
-                "E_EXCEPTION", "E_BUSY")
+                "E_EXCEPTION", "E_REVISION", "E_BUSY")
 # Las prioridades de Plane, tal cual: el caso que requiere trabajo abre ahi su tarjeta,
 # y traducir entre dos escalas es como una urgencia termina en "media".
 PRIORIDADES_CASO = ("urgent", "high", "medium", "low", "none")
@@ -238,6 +238,7 @@ create table if not exists chat_scope (
   acuse_texto   text,                -- el texto del acuse en ESTA conversacion
   saludo        text,                -- on | off | null (= el ajuste global `greeting`)
   saludo_texto  text,
+  aprobacion    text,                -- los niveles de cada regla en ESTE chat (T22.3), JSON
   timezone      text default 'America/Bogota',
   notes         text,
   updated_at    text,
@@ -743,6 +744,10 @@ def persistir_panel(con):
                               or valor.strip() in ("on", "off")) else None)
                 con.execute(f"update chat_scope set {columna}=? where account=? and chat_jid=?",
                             (valor, cuenta_de_entrada(e), jid))
+        if isinstance(e.get("approval"), dict):
+            con.execute("update chat_scope set aprobacion=? where account=? and chat_jid=?",
+                        (json.dumps(wa_reglas.niveles(e["approval"]), sort_keys=True),
+                         cuenta_de_entrada(e), jid))
         # El proyecto solo se toca si el panel lo dijo: una entrada de un panel anterior
         # no trae la clave y no puede borrar el que se puso por terminal.
         if "workspace" in e:
@@ -768,6 +773,7 @@ def push_to_plugin(con, with_activity=False):
                       "tone": r.get("tone"), "instructions": r.get("instructions"),
                       "ack": r.get("acuse"), "ackText": r.get("acuse_texto"),
                       "greeting": r.get("saludo"), "greetingText": r.get("saludo_texto"),
+                      "approval": r["niveles"],
                       "updatedAt": r.get("updated_at"), "account": cuenta}
     activity = health = None
     reusando = False
@@ -1004,7 +1010,7 @@ def merged_scope(con):
     rows = {r["chat_jid"]: dict(r) for r in con.execute(
         "select account, chat_jid, chat_name, provider, target, workspace, mode, "
         "initial_state, hours, tone, instructions, acuse, acuse_texto, saludo, "
-        "saludo_texto, timezone, notes, updated_at "
+        "saludo_texto, aprobacion, timezone, notes, updated_at "
         "from chat_scope "
         "where account=?", (cuenta,))}
     for jid, e in plugin_store_read().items():
@@ -1039,6 +1045,10 @@ def merged_scope(con):
                 row[columna] = (valor.strip() if isinstance(valor, str) and valor.strip()
                                 and (columna not in ("acuse", "saludo")
                                      or valor.strip() in ("on", "off")) else None)
+        # Los niveles del panel mandan cuando el panel los dice (T22.3); lo que no nombra
+        # queda por defecto. Una entrada de un panel anterior no trae la clave.
+        if isinstance(e.get("approval"), dict):
+            row["aprobacion"] = json.dumps(wa_reglas.niveles(e["approval"]), sort_keys=True)
         rows[jid] = row
     # En "ninguno" el destino no existe, aunque haya quedado uno guardado de antes.
     # Se apaga aca y no en cada comando para que ninguno — check, where, voice, el
@@ -1046,6 +1056,7 @@ def merged_scope(con):
     for row in rows.values():
         if (row.get("provider") or "plane") == SIN_TARJETA:
             row["target"] = None
+        row["niveles"] = wa_reglas.niveles(row.get("aprobacion"))
     return rows
 
 
@@ -1162,7 +1173,7 @@ def migrate(con):
         con.execute("alter table chat_scope add column tone text")
     if "instructions" not in cols:
         con.execute("alter table chat_scope add column instructions text")
-    for columna in ("acuse", "acuse_texto", "saludo", "saludo_texto"):
+    for columna in ("acuse", "acuse_texto", "saludo", "saludo_texto", "aprobacion"):
         if columna not in cols:
             con.execute(f"alter table chat_scope add column {columna} text")
     if "target" not in cols:
@@ -1388,6 +1399,24 @@ def auto_texto(pedido, actual):
     return pedido.strip()[:LARGO_AUTO] or None
 
 
+def niveles_pedidos(pedidos, actual):
+    """Los niveles del chat con los `regla=nivel` de `--approval` encima (T22.3). Lo que no
+    se nombra queda como estaba. Una regla o un nivel que no existe sale sin guardar nada:
+    un nivel mal escrito no puede quedar abriendo una regla."""
+    niv = wa_reglas.niveles(actual)
+    for pedido in pedidos or ():
+        regla, _, nivel = str(pedido).partition("=")
+        regla, nivel = regla.strip(), nivel.strip()
+        if regla not in wa_reglas.REGLAS_CON_NIVEL:
+            sys.exit(f"unknown rule in --approval: {regla!r} (use "
+                     f"{', '.join(wa_reglas.REGLAS_CON_NIVEL)})")
+        if nivel not in wa_reglas.NIVELES:
+            sys.exit(f"unknown level in --approval {regla}: {nivel!r} (use "
+                     f"{', '.join(wa_reglas.NIVELES)})")
+        niv[regla] = nivel
+    return json.dumps(niv, sort_keys=True)
+
+
 def cmd_set(con, a):
     jid, name = jid_of(con, a.chat)
     cur = con.execute("select * from chat_scope where chat_jid=? and account=?",
@@ -1426,6 +1455,7 @@ def cmd_set(con, a):
         "acuse_texto": auto_texto(a.ack_text, cur.get("acuse_texto")),
         "saludo": auto_valor(a.greeting, cur.get("saludo")),
         "saludo_texto": auto_texto(a.greeting_text, cur.get("saludo_texto")),
+        "aprobacion": niveles_pedidos(a.approval, cur.get("aprobacion")),
         "timezone": a.timezone or cur.get("timezone") or "America/Bogota",
         "notes": a.notes or cur.get("notes"),
         "updated_at": time.strftime("%Y-%m-%d %H:%M"),
@@ -1454,6 +1484,8 @@ def cmd_set(con, a):
         cambios = {}
         if a.workspace is not None:
             cambios["workspace"] = workspace
+        if a.approval:
+            cambios["approval"] = json.loads(vals["aprobacion"])
         for flat, columna in AUTO_PANEL:
             if getattr(a, {"ack": "ack", "ackText": "ack_text", "greeting": "greeting",
                            "greetingText": "greeting_text"}[flat]) is not None:
@@ -2127,7 +2159,10 @@ def cmd_voice(con, a):
              "opens_card": provider != SIN_TARJETA,
              "target": row.get("target") or None,
              "workspace": row.get("workspace") or None,
-             "mode": row.get("mode") or "off"}]
+             "mode": row.get("mode") or "off",
+             # Los niveles de aprobacion de este chat (T22.3): lo que el agente puede
+             # mandar solo, lo que vuelve a el para reescribir y lo que espera al dueno.
+             "approval": row.get("niveles") or wa_reglas.niveles(None)}]
 
 
 def cmd_config(con, a):
@@ -2717,10 +2752,72 @@ def cmd_caso_propuesta(con, a):
     # la regla del dueno ya no lo puede aprobar sola (E_EXCEPTION). Solo la respuesta:
     # las instrucciones de un trabajo no salen a WhatsApp.
     if propuesta.get("respuesta"):
-        caso_marca_regla(con, a.id, wa_reglas.excepciones(propuesta["respuesta"],
+        caso_anota_salida(con, a.id, wa_reglas.excepciones(propuesta["respuesta"],
                                                            wa_reglas.SALIDA))
     con.commit()
     return [caso_fila(con, caso_de(con, a.id))]
+
+
+def frenos_de_regla(con, caso):
+    """(al dueno, al agente): lo que impide que la regla del dueno apruebe sola la propuesta
+    vigente del caso, con los niveles de su chat (T22.3).
+
+    - Lo que entro y quedo en el caso: una credencial (nunca pasa por el agente) o un aviso
+      de Jev van al dueno. Dinero o compromiso de entrada son de casos de antes de T22: en
+      Permitir no frenan, y si no, van al dueno (reescribir la respuesta no los quita).
+    - Lo que dice la respuesta, juzgado ahora y no pegado al caso: cada excepcion del piso
+      con su nivel. Un valor con forma de secreto va al dueno siempre (`secret`).
+    - Un chat en `borrador` pregunta todo."""
+    scope = merged_scope(con).get(caso["chat_jid"]) or {}
+    niv = scope.get("niveles") or wa_reglas.niveles(None)
+    al_dueno, al_agente = [], []
+    for e in _lista_json(caso.get("excepciones")):
+        if e in wa_reglas.REGLAS_CON_NIVEL and e != "credential" \
+                and niv[e] == wa_reglas.PERMITIR:
+            continue
+        al_dueno.append(e)
+    respuesta = respuesta_de_propuesta(caso)
+    secreto = wa_reglas.secreto(respuesta)
+    if secreto:
+        al_dueno.append(wa_reglas.SECRETO)
+    for e in wa_reglas.excepciones(respuesta, wa_reglas.SALIDA):
+        if e == "credential" and secreto:
+            continue
+        nivel = niv[e]
+        if nivel == wa_reglas.PREGUNTAR and e not in al_dueno:
+            al_dueno.append(e)
+        elif nivel == wa_reglas.AGENTE:
+            al_agente.append(e)
+    if scope.get("mode") == "borrador":
+        al_dueno.append("borrador")
+    return al_dueno, al_agente
+
+
+def respuesta_de_propuesta(caso):
+    """El texto que saldria al chat con la propuesta vigente, o ''. `caso` es un dict o
+    una fila de sqlite."""
+    try:
+        propuesta = json.loads(caso["propuesta"] or "null")
+    except (TypeError, ValueError):
+        return ""
+    return str(propuesta.get("respuesta") or "") if isinstance(propuesta, dict) else ""
+
+
+def excepciones_de_tarjeta(caso):
+    """Lo que la tarjeta muestra: las excepciones del caso y las de la respuesta vigente,
+    en el orden del contrato. Las de la respuesta no se guardan en el caso (T22.3): la que
+    el agente reescribe sin la fecha vale limpia."""
+    salida = wa_reglas.excepciones(respuesta_de_propuesta(caso), wa_reglas.SALIDA)
+    todas = set(_lista_json(caso["excepciones"])) | set(salida)
+    return [e for e in wa_jev.ORDEN_EXCEPCIONES if e in todas]
+
+
+def caso_anota_salida(con, case_id, excepciones):
+    """La respuesta de la propuesta lleva excepciones del piso fijo: queda el evento de la
+    regla, con los NOMBRES y nunca el texto, pero no se pegan al caso. Sin commit."""
+    if excepciones:
+        caso_tocar(con, caso_de(con, case_id), "regla",
+                   "regla fija: la respuesta lleva " + ", ".join(excepciones))
 
 
 def cmd_caso_aprobar(con, a):
@@ -2740,15 +2837,17 @@ def cmd_caso_aprobar(con, a):
                                 f"{caso['propuesta_version']}, not {a.version}; the owner has to see "
                                 f"the current one before approving it")
     if a.actor == "regla":
-        # La regla del dueno da permiso solo a lo que no es una excepcion: dinero,
-        # credencial, compromiso, aviso o error de Jev, o un chat en "te pregunto antes".
-        excepciones = json.loads(caso["excepciones"]) if caso.get("excepciones") else []
-        modo = (merged_scope(con).get(caso["chat_jid"]) or {}).get("mode")
-        if excepciones or modo == "borrador":
-            caso_falla("E_EXCEPTION",
-                       f"case #{a.id} needs the owner: "
-                       + (f"exceptions {', '.join(excepciones)}" if excepciones
-                          else "its chat is on borrador (ask before sending)"))
+        # La regla del dueno da permiso solo a lo que no es una excepcion, con los niveles
+        # del chat (T22.3): lo que pide al dueno (E_EXCEPTION) y lo que vuelve al agente
+        # para reescribir (E_REVISION). Un chat en "te pregunto antes" siempre pide.
+        al_dueno, al_agente = frenos_de_regla(con, caso)
+        if al_dueno:
+            caso_falla("E_EXCEPTION", f"case #{a.id} needs the owner: "
+                       + ", ".join("its chat is on borrador (ask before sending)"
+                                   if m == "borrador" else m for m in al_dueno))
+        if al_agente:
+            caso_falla("E_REVISION", f"case #{a.id} goes back to the agent to rewrite its "
+                                     f"reply: {', '.join(al_agente)}")
     if caso["propuesta_aprobada"] == a.version:
         return [caso_fila(con, caso)]
     if caso["etapa"] not in ETAPAS_APROBABLES:
@@ -2826,7 +2925,7 @@ def cmd_caso_resultado(con, a):
     caso_mover(con, caso, "listo", a.actor, f"responder {version}", propuesta=texto,
                propuesta_version=version, propuesta_aprobada=None, resumen=resumen)
     # La respuesta del trabajador tambien saldria al chat: el mismo piso que una propuesta.
-    caso_marca_regla(con, a.id, wa_reglas.excepciones(respuesta, wa_reglas.SALIDA))
+    caso_anota_salida(con, a.id, wa_reglas.excepciones(respuesta, wa_reglas.SALIDA))
     resultado_al_despacho(con, a.id, estado, resumen, respuesta)
     con.commit()
     # La respuesta sale YA, por el mismo camino que el tick: lo que la retiene (el modo del
@@ -3138,15 +3237,16 @@ def revision_pendiente(etapa, eventos):
         return None
     ultima = None
     for e in eventos:
-        if (e["detalle"] or "").startswith(REVISION):
+        if (e["detalle"] or "").startswith(REVISIONES):
             ultima = e
         elif ultima is not None and e["a"] == "decision":
             ultima = None
     if ultima is None:
         return None
-    codigos = ultima["detalle"][len(REVISION):].split("·")[0].split(":")[0]
+    prefijo = next(p for p in REVISIONES if ultima["detalle"].startswith(p))
+    codigos = ultima["detalle"][len(prefijo):].split("·")[0].split(":")[0]
     return {"motivos": [c.strip() for c in codigos.split(",") if c.strip()],
-            "ronda": sum(1 for e in eventos if (e["detalle"] or "").startswith(REVISION))}
+            "ronda": sum(1 for e in eventos if (e["detalle"] or "").startswith(REVISIONES))}
 
 
 def cmd_caso_ver(con, a):
@@ -3912,7 +4012,7 @@ def propuesta_invalida(con, caso, motivo, hacia="clasificado"):
     if hacia == "clasificado":
         campos["necesita_agente"] = 1
     detalle = (f"{motivo} · propuesta anterior, no enviada: {tipo} {version}"
-               if motivo.startswith(REVISION)
+               if motivo.startswith(REVISIONES)
                else f"propuesta anterior, no enviada ({motivo}): {tipo} {version}")
     caso_mover(con, caso, hacia, "automatizacion", detalle, **campos)
     req = id_envio_caso(caso["case_id"], version)
@@ -4349,7 +4449,7 @@ def tarjeta_de(caso, nombres, titulos, motivos, eventos=None, sin_agente=None,
         "proposal": {"tipo": tipo,
                      "texto": propuesta.get("respuesta") or propuesta.get("instrucciones"),
                      "version": caso["propuesta_version"]} if propuesta else None,
-        "exceptions": json.loads(caso["excepciones"]) if caso["excepciones"] else [],
+        "exceptions": excepciones_de_tarjeta(caso),
         "blocked_reason": (motivos.get(caso["case_id"]) if caso["etapa"] == "bloqueado"
                            else None),
         # La regla de SIN_AGENTE por la que se cerro un caso sin pasar por el agente (su clave,
@@ -5043,9 +5143,16 @@ def tick_reconcilia(con, resumen, inicio):
 # compromiso o una fecha, una bandera de riesgo, o que Jev no contesto.
 #   states_status_not_verified: la respuesta afirma un estado que el caso no respalda.
 MOTIVOS_DE_CALIDAD = ("states_status_not_verified",)
+# Desde T22.3 lo que vuelve al agente lo deciden los niveles del chat: la calidad va por
+# defecto en "Que el agente lo revise", y dinero, credencial o compromiso pueden ir ahi
+# tambien (`wa_reglas.nivel_de_motivo`). Con los niveles por defecto el resultado es el de
+# antes: solo la calidad vuelve.
 # Cuantas veces vuelve al agente una respuesta frenada por calidad antes de decidirla el dueno.
 RONDAS_DE_REVISION = 2
 REVISION = "Jev pidio revisar:"
+# Lo mismo cuando lo pidio el piso fijo (una excepcion de la respuesta en nivel agente).
+REVISION_REGLA = "La regla pidio revisar:"
+REVISIONES = (REVISION, REVISION_REGLA)
 FRENO = re.compile(r"\(((?:rule|jev): [^)]*)\): it was written")
 
 
@@ -5059,13 +5166,17 @@ def motivos_del_freno(detalle):
     return salida
 
 
-def freno_de_calidad(motivos):
-    return bool(motivos) and all(q == "jev" and c in MOTIVOS_DE_CALIDAD for q, c in motivos)
+def freno_revisable(motivos, niv):
+    """Si todo lo que freno el envio es para que el agente lo reescriba, con los niveles
+    `niv` del chat. Un motivo sin nivel (un secreto, Jev sin contestar) pide al dueno."""
+    return bool(motivos) and all(
+        wa_reglas.nivel_de_motivo(q, c, niv) == wa_reglas.AGENTE for q, c in motivos)
 
 
 def rondas_de_revision(con, case_id):
-    return con.execute("select count(*) from caso_evento where case_id=? and detalle like ?",
-                       (case_id, f"{REVISION}%")).fetchone()[0]
+    return con.execute("select count(*) from caso_evento where case_id=? and "
+                       "(detalle like ? or detalle like ?)",
+                       (case_id, f"{REVISION}%", f"{REVISION_REGLA}%")).fetchone()[0]
 
 
 def tick_revisa(con, caso, motivos):
@@ -5078,7 +5189,8 @@ def tick_revisa(con, caso, motivos):
             con.rollback()
             return False
         codigos = ", ".join(dict.fromkeys(c for _, c in motivos))
-        propuesta_invalida(con, actual, f"{REVISION} {codigos}")
+        prefijo = REVISION if any(q == "jev" for q, _ in motivos) else REVISION_REGLA
+        propuesta_invalida(con, actual, f"{prefijo} {codigos}")
         con.commit()
     except BaseException:
         con.rollback()
@@ -5086,6 +5198,35 @@ def tick_revisa(con, caso, motivos):
         raise
     cancela_borradores()
     return True
+
+
+def tick_revision_regla(con, caso, resumen):
+    """La regla no aprueba porque la respuesta lleva algo que el chat deja al agente
+    (E_REVISION): vuelve al agente con el motivo, como un freno de calidad, hasta
+    RONDAS_DE_REVISION veces; despues lo decide el dueno, con la propuesta y sin enviar
+    nada. Ese aviso se anota una sola vez por version."""
+    cid, version = caso["case_id"], caso["propuesta_version"]
+    _, al_agente = frenos_de_regla(con, caso_de(con, cid))
+    motivos = [("rule", c) for c in al_agente]
+    rondas = rondas_de_revision(con, cid)
+    if rondas < RONDAS_DE_REVISION:
+        if tick_revisa(con, caso, motivos):
+            resumen["revisiones"] += 1
+        return
+    resumen["excepciones"] += 1
+    marca = f"· {version[:12]}"
+    if con.execute("select 1 from caso_evento where case_id=? and detalle like ? limit 1",
+                   (cid, f"{REVISION_REGLA[:-1]}%{marca}")).fetchone():
+        return
+    caso_toma(con)
+    try:
+        caso_tocar(con, caso_de(con, cid), "automatizacion",
+                   f"{REVISION_REGLA[:-1]} {rondas + 1} veces "
+                   f"({', '.join(c for _, c in motivos)}): lo decide el dueno {marca}")
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
 
 
 def tick_caso(con, caso, texto, estados, resumen):
@@ -5117,6 +5258,9 @@ def tick_caso(con, caso, texto, estados, resumen):
     try:
         cmd_caso_aprobar(con, argparse.Namespace(id=cid, version=version, actor="regla"))
     except CasoFalla as falla:
+        if falla.error == "E_REVISION":
+            tick_revision_regla(con, caso, resumen)
+            return
         if falla.error != "E_EXCEPTION":
             raise
         resumen["excepciones"] += 1
@@ -5128,7 +5272,9 @@ def tick_caso(con, caso, texto, estados, resumen):
         return
     if codigo == ENVIO_FRENADO:
         motivos = motivos_del_freno(detalle)
-        if freno_de_calidad(motivos):
+        niv = (merged_scope(con).get(caso["chat_jid"]) or {}).get("niveles") \
+            or wa_reglas.niveles(None)
+        if freno_revisable(motivos, niv):
             rondas = rondas_de_revision(con, cid)
             if rondas < RONDAS_DE_REVISION:
                 if tick_revisa(con, caso, motivos):
@@ -6065,6 +6211,9 @@ def main():
                    help="the reply to a greeting addressed to the assistant here; default = "
                         "the global `greeting` setting")
     s.add_argument("--greeting-text", help="the greeting text here; empty = the global one")
+    s.add_argument("--approval", action="append", metavar="RULE=LEVEL",
+                   help="the level of one approval rule here (T22.3): rule money, credential, "
+                        "commitment or quality; level ask, agent or allow. Repeatable")
     s.set_defaults(fn=cmd_set)
 
     s = add("mode", help="change only the mode")
