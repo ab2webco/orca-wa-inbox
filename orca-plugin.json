@@ -73,7 +73,7 @@
         "provider": "claude",
         "trigger": "*/5 * * * *",
         "timezone": "America/Bogota",
-        "precheck": "WA=\"$(cat .wa-bin 2>/dev/null)\"; [ -x \"$WA/wa-scope\" ] || exit 1; \"$WA/wa-scope\" pending --needs-agent",
+        "precheck": "WA=\"$(cat .wa-bin 2>/dev/null)\"; [ -x \"$WA/wa-scope\" ] || exit 1; \"$WA/wa-scope\" pending --needs-agent --precheck",
         "prompt": "prompts/triage.md",
         "workspace": "plugin-owned"
       }

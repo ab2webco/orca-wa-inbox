@@ -2969,6 +2969,78 @@ with tempfile.TemporaryDirectory() as home:
        p.returncode == 0 and json.loads(p.stdout)["cases"] == [int(gris), int(pide)], f"{p.stdout}")
 
 
+# ── El precheck del cron: callado cuando el tick se encarga ───────────────────────────
+# Orca fuerza un espacio nuevo por corrida en las automatizaciones de un plugin: con el
+# precheck en 0 crea `::workspace:<uuid>` y una terminal, aunque despues la corrida falle.
+# Desde que el tick abre al agente de casos por terminal, el cron es el respaldo: su
+# precheck (`--precheck`) sale 1 si el tick corrio hace poco y su ultimo lanzamiento no
+# fallo por algo que el cron si arregla. El primer paso del agente sigue sin `--precheck`.
+print("\npending --needs-agent --precheck: el cron no corre si el tick se encarga")
+
+
+def precheck(home):
+    return corre(home, "pending", "--needs-agent", "--precheck")
+
+
+def ultima_corrida_agente(home, estado, motivo=None):
+    con = db_de(home)
+    con.execute("insert into agente_corrida (origen, estado, motivo, created_at, updated_at) "
+                "values ('tick', ?, ?, datetime('now','localtime'), datetime('now','localtime'))",
+                (estado, motivo))
+    con.commit()
+    con.close()
+
+
+def tick_hace(home, segundos):
+    con = db_de(home)
+    n = con.execute("update settings set value=? where key='tick_at'",
+                    (str(time.time() - segundos),)).rowcount
+    con.commit()
+    con.close()
+    return n
+
+
+with tempfile.TemporaryDirectory() as home:
+    p = precheck(home)
+    ok("sin casos sale 1 y no imprime nada", p.returncode == 1 and not p.stdout.strip(),
+       f"{p.returncode} {p.stdout[:200]} {p.stderr[-200:]}")
+    cid = str(js(home, "caso", "crear", "--chat", CHAT, "--stanza", "PC1",
+                 "--actor", "automatizacion")[0]["case_id"])
+    p = precheck(home)
+    ok("con un caso y un tick que nunca corrio, el cron sigue: 0 con los casos",
+       p.returncode == 0 and int(cid) in json.loads(p.stdout or "{}").get("cases", []),
+       f"{p.returncode} {p.stdout[:200]} {p.stderr[-200:]}")
+    tick(home)
+    p = precheck(home)
+    ok("un tick sin la CLI de Orca no puede abrir al agente: el cron sigue",
+       p.returncode == 0, f"{p.returncode} {p.stdout[:200]} {p.stderr[-200:]}")
+    ultima_corrida_agente(home, "activo")
+    p = precheck(home)
+    ok("con el tick al dia y su agente en vuelo, el precheck sale 1, callado",
+       p.returncode == 1 and not p.stdout.strip(), f"{p.returncode} {p.stdout[:200]}")
+    ok("y el primer paso del agente (sin --precheck) sigue viendo el caso",
+       necesita(home).returncode == 0)
+    ultima_corrida_agente(home, "fallido", "sin-cuenta")
+    ok("una cuenta tomada no la arregla el cron (Orca lo lanza con la activa): 1",
+       precheck(home).returncode == 1)
+    ultima_corrida_agente(home, "terminado")
+    ok("un agente que termino y el caso sigue: el tick lo relanza, el cron no corre",
+       precheck(home).returncode == 1)
+    for motivo in ("sin-cli", "sin-espacio", "sin-prompt"):
+        ultima_corrida_agente(home, "fallido", motivo)
+        ok(f"una falla del tick que el cron si arregla ({motivo}): 0",
+           precheck(home).returncode == 0)
+    ultima_corrida_agente(home, "activo")
+    ok("el tick anota cuando corrio", tick_hace(home, 60) == 1)
+    ok("hace un minuto sigue encargado", precheck(home).returncode == 1)
+    tick_hace(home, 4 * 60)
+    p = precheck(home)
+    ok("un tick que no corre hace mas de 3 minutos no se encarga: el cron sigue",
+       p.returncode == 0, f"{p.returncode} {p.stdout[:200]}")
+    js(home, "caso", "mover", cid, "cerrado", "--motivo", "listo", "--actor", "dueno")
+    ok("sin casos, 1 aunque el tick no corra", precheck(home).returncode == 1)
+
+
 # ── T20: un caso clasificado sin propuesta siempre llega a alguien ────────────────────
 # Visto en vivo: un saludo al asistente en un chat `responder`, que Jev juzgo sin marcas,
 # se quedaba en clasificado para siempre. Ahora lo despierta al agente segun el modo del
@@ -6025,6 +6097,8 @@ if NODE:
            and fila[0]["cuenta_claude"] == "cuenta-libre" and fila[0]["turno_at"], f"{fila}")
         ok("la linea del tick lo cuenta", r.get("agente_lanzado") == 1
            and r.get("agente_error") == 0, f"{r}")
+        ok("con el agente abierto por el tick, el precheck del cron sale 1: Orca no abre "
+           "otro espacio", precheck(home).returncode == 1)
         lanzado = (tablero(home).get("board") or {}).get("agent_launch") or {}
         ok("el tablero dice que el agente esta corriendo, sin falla",
            lanzado.get("state") == "running" and not lanzado.get("reason"), f"{lanzado}")
@@ -6094,6 +6168,7 @@ if NODE:
         ok("sin el espacio del plugin no abre nada y lo dice",
            creadas(carpeta) == [] and fila and fila[-1]["estado"] == "fallido"
            and fila[-1]["motivo"] == "sin-espacio", f"{fila} {creadas(carpeta)}")
+        ok("y el cron queda de respaldo: el precheck sale 0", precheck(home).returncode == 0)
         p, v = agente_lanzar(home, carpeta)
         ok("Atender ahora dice lo mismo, con su motivo",
            p.returncode == 0 and v == {"agent": "failed", "reason": "sin-espacio"}, f"{v}")

@@ -274,8 +274,10 @@ hechas += 1
 assert.ok(triage.provider && triage.prompt === 'prompts/triage.md' && !('command' in triage),
   'triage: still the agent automation, with its prompt')
 hechas += 1
-assert.match(triage.precheck ?? '', /"\$WA\/wa-scope" pending --needs-agent$/,
-  'triage: gated by `wa-scope pending --needs-agent`')
+// `--precheck`: callado cuando el tick abre al agente de casos por terminal. Orca crea un
+// espacio por corrida de un plugin (`new_per_run`) aunque la corrida falle despues.
+assert.match(triage.precheck ?? '', /"\$WA\/wa-scope" pending --needs-agent --precheck$/,
+  'triage: gated by `wa-scope pending --needs-agent --precheck`, quiet while tick launches the agent')
 hechas += 1
 assert.match(triage.precheck ?? '', /^WA="\$\(cat \.wa-bin 2>\/dev\/null\)"; \[ -x "\$WA\/wa-scope" \] \|\| exit 1; /,
   'triage: finds the tools in `.wa-bin`, and stops quietly without it')

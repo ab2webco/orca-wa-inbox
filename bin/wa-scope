@@ -2144,7 +2144,7 @@ def cmd_pending(con, a):
     sincronizando, o sea una instalacion rota. Sale 2, como cuando el sistema no puede
     leer, porque callarlo dejaria al agente sin correr durante dias sin decir por que."""
     if getattr(a, "needs_agent", False):
-        pendiente_agente(con)
+        pendiente_agente(con, precheck=getattr(a, "precheck", False))
     raw = plugin_store_raw()
     activity = raw.get("activity") or {}
     health = raw.get("health") or {}
@@ -5147,6 +5147,10 @@ def cmd_tick(con, a):
         return None
     try:
         inicio = time.time()
+        try:
+            tick_anota(con)
+        except sqlite3.Error as exc:
+            print(f"wa-scope: tick time not recorded: {exc}", file=sys.stderr)
         # La entrada de respaldo: el worker la dispara al llegar cada mensaje; si ese
         # evento se perdio, el minuto la recoge. Una falla suya no frena el resto.
         try:
@@ -6901,11 +6905,45 @@ def casos_credencial_a_decision(con):
     return movidos
 
 
-def pendiente_agente(con):
-    """`pending --needs-agent`: el precheck del agente. 0 con los casos si alguno
-    necesita lenguaje; 1 callado si no. Lee solo la base propia: es barato a proposito."""
+# El precheck del cron `triage` (`pending --needs-agent --precheck`). Orca fuerza un espacio
+# nuevo por corrida en las automatizaciones de un plugin (`new_per_run`): con el precheck
+# en 0 crea `::workspace:<uuid>` y una terminal aunque la corrida falle despues, y con la
+# cuenta activa tomada fallan todas. El tick abre al agente de casos por terminal, asi que
+# el cron solo corre si el tick no se encarga: no corrio en TICK_VIVO_S, o su ultimo
+# lanzamiento fallo por algo que el cron si arregla (la automatizacion no necesita la CLI
+# de Orca, ni el espacio raiz del plugin, ni el prompt copiado a `despachos/`). Una cuenta
+# tomada no la arregla: Orca la lanza con la activa.
+TICK_VIVO_S = 180
+CRON_ARREGLA = ("sin-cli", "sin-espacio", "sin-prompt")
+
+
+def tick_anota(con):
+    """Cuando corrio el tick: lo lee el precheck del cron."""
+    con.execute("insert into settings (key,value) values ('tick_at',?) on conflict(key) "
+                "do update set value=excluded.value", (str(time.time()),))
+    con.commit()
+
+
+def tick_se_encarga(con):
+    """Si el tick abre al agente de casos: corrio hace poco y su ultimo lanzamiento no
+    fallo por algo que el cron arregla. Sin dato, no: el cron es el respaldo."""
+    fila = con.execute("select value from settings where key='tick_at'").fetchone()
+    try:
+        if not fila or time.time() - float(fila["value"]) > TICK_VIVO_S:
+            return False
+    except (TypeError, ValueError):
+        return False
+    ultima = con.execute("select estado, motivo from agente_corrida order by id desc "
+                         "limit 1").fetchone()
+    return not (ultima and ultima["estado"] == "fallido" and ultima["motivo"] in CRON_ARREGLA)
+
+
+def pendiente_agente(con, precheck=False):
+    """`pending --needs-agent`: 0 con los casos si alguno necesita lenguaje; 1 callado si
+    no. Lee solo la base propia: es barato a proposito. Con `precheck` (el del cron),
+    tambien 1 callado mientras el tick se encarga del agente."""
     casos = casos_para_agente(con)
-    if not casos:
+    if not casos or (precheck and tick_se_encarga(con)):
         sys.exit(1)
     print(json.dumps({"needs_agent": len(casos), "cases": casos}, ensure_ascii=False))
     sys.exit(0)
@@ -6988,8 +7026,11 @@ def main():
     s.add_argument("--only-taken", action="store_true",
                    help=argparse.SUPPRESS)  # legacy precheck of the removed manual-mark flow
     s.add_argument("--needs-agent", action="store_true",
-                   help="the agent automation's precheck: 0 (and the case ids) only when "
-                        "an open case needs language; 1, silent, otherwise")
+                   help="0 (and the case ids) only when an open case needs language; 1, "
+                        "silent, otherwise. The agent's own first step")
+    s.add_argument("--precheck", action="store_true",
+                   help="with --needs-agent, the agent automation's precheck: also 1, "
+                        "silent, while the tick launches the case agent itself")
     s.set_defaults(fn=cmd_pending)
 
     s = add("tick", help="one minute of the command-only automation, no model: backup "

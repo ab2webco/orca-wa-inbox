@@ -7,7 +7,7 @@ instalado y viceversa.
 | archivo | cada | corre |
 |---|---|---|
 | `whatsapp-tick.json` | 1 min | `wa-scope tick` (solo comando, sin agente) |
-| `whatsapp-triage.json` | 5 min, a toda hora (y al instante con "Atender ahora") | agente, con precheck `wa-scope pending --needs-agent` |
+| `whatsapp-triage.json` | 5 min, a toda hora (y al instante con "Atender ahora") | agente, con precheck `wa-scope pending --needs-agent --precheck` |
 
 `tick` también limpia: a lo sumo cada 5 minutos quita de la barra lateral (`orca worktree
 rm`, solo el registro y sus terminales, nunca los archivos ni la raíz de la carpeta) los
@@ -31,9 +31,13 @@ y lo cuenta en `limpieza_error`.
   anterior. La terminal se cierra cuando el agente soltó el lock, cuando se fue sola o a
   los 30 minutos. Si no lo pudo lanzar, el tablero lo dice con el motivo. "Atender ahora"
   usa el mismo camino (`wa-scope agente lanzar`), sin la espera. La automatización
-  `triage` queda de respaldo con su cron: el precheck **sale con 1 cuando ningún caso
-  necesita lenguaje** (Orca marca la corrida `skipped_precheck`), y si su agente llega con
-  otro trabajando, se frena en el `lock`.
+  `triage` queda de respaldo con su cron: el precheck (`pending --needs-agent --precheck`)
+  **sale con 1 cuando ningún caso necesita lenguaje o cuando el tick se encarga** (corrió
+  hace menos de 3 minutos y su último lanzamiento no falló por `sin-cli`, `sin-espacio` o
+  `sin-prompt`, lo único que el cron sí arregla). Orca marca la corrida `skipped_precheck`
+  y no crea su espacio: con el precheck en 0 crea uno por corrida aunque después falle. Si
+  su agente llega con otro trabajando, se frena en el `lock`. El primer paso del agente
+  sigue con `pending --needs-agent`, sin `--precheck`.
 - **La cuenta de Claude del bot.** Ajustes, pestaña Agente, guarda `botClaudeAccount`: el
   id de una cuenta de `orca account list` o `auto`. El agente de casos y el del proyecto
   abren primero con esa; si no aparece, no tiene sesión, no tiene cuota (95 % o más) o
