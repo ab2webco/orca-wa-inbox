@@ -1039,7 +1039,7 @@ for (const c of d.chats) {
 for (const m of d.mensajes) {
   a.guardarMensaje({ cuenta: d.cuenta, chatJid: m.chat, stanzaId: m.id, ts: m.ts,
     fromMe: m.yo ? 1 : 0, senderJid: m.de || null, senderName: m.nombre || 'Ana',
-    body: m.texto || '', mediaTipo: m.media || null, mediaBytes: null,
+    body: m.texto || '', mediaTipo: m.media || null, mediaBytes: m.bytes ?? null,
     mencionaMe: m.mencion ? 1 : 0, citaMe: m.cita ? 1 : 0 }, { mediaPath: m.ruta || null });
 }
 if (d.activar) a.activarLinea(d.cuenta);
@@ -3408,6 +3408,171 @@ with tempfile.TemporaryDirectory() as home:
     ok("ni el tick lo devuelve a decision en bucle", tablero_de(home, cid)["stage"] == "clasificado",
        tablero_de(home, cid)["stage"])
 
+
+# ── Los audios se transcriben al entrar, y los adjuntos se ven en el hilo ───────────────
+# `wa-scope ingest` transcribe la nota de voz que llega con `bin/wa-transcribe` (aqui, uno
+# falso que nunca toca un modelo) y guarda el texto por mensaje: el texto que juzga Jev, el
+# piso fijo y el hilo del agente salen de ahi. Los adjuntos salen en el hilo con tipo,
+# tamano y la ruta que da el almacen.
+print("\nlos audios se transcriben al entrar")
+TRANSCRIPTOR_FALSO = """#!/usr/bin/env python3
+import json, os, sys, time
+ruta = [a for a in sys.argv[1:] if not a.startswith("-")][0]
+nombre = os.path.basename(ruta)
+with open(os.environ["FAKE_LOG"], "a") as f:
+    f.write(nombre + "\\n")
+if nombre.startswith("lento"):
+    time.sleep(30)
+if nombre.startswith("falla"):
+    print(json.dumps({"ok": False, "codigo": "sin_motor", "razon": "no engine"}))
+    sys.exit(1)
+if nombre.startswith("clave"):
+    print(json.dumps({"ok": True, "texto": "la clave es Zx9secreta"}))
+else:
+    print(json.dumps({"ok": True, "texto": "revisa este caso: dijo " + nombre}))
+"""
+
+
+def prepara_transcriptor(home):
+    """Un wa-transcribe falso y el registro de a que audios se lo pidieron."""
+    ruta = pathlib.Path(home) / "wa-transcribe-falso"
+    ruta.write_text(TRANSCRIPTOR_FALSO, encoding="utf-8")
+    ruta.chmod(0o755)
+    registro = pathlib.Path(home) / "llamadas.log"
+    registro.write_text("", encoding="utf-8")
+    return {"WA_INBOX_TRANSCRIBE_CLI": str(ruta), "FAKE_LOG": str(registro)}, registro
+
+
+def archivo_media(home, nombre, contenido=b"OPUS-BYTES-0001"):
+    ruta = pathlib.Path(home) / ".wa-inbox" / "media" / nombre
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    ruta.write_bytes(contenido)
+    return str(ruta)
+
+
+def audio(home, mid, nombre, minutos=3, **extra):
+    return msg(PERSONA, mid, "", minutos, media="audio", ruta=archivo_media(home, nombre),
+               bytes=15, **extra)
+
+
+def llamadas(registro):
+    return [x for x in registro.read_text(encoding="utf-8").splitlines() if x]
+
+
+def hilo_de(home, stanza):
+    c = caso_de_stanza(home, stanza)
+    return next((x for x in (c or {}).get("hilo", []) if x["stanza_id"] == stanza), None)
+
+
+def ingiere_con(home, env):
+    p = subprocess.run([str(WA_SCOPE), "ingest", "--json"], capture_output=True, text=True,
+                       env=dict(os.environ, HOME=str(home),
+                                XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+                                APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"),
+                                ORCA_CLI_COMMAND=SIN_ORCA, **env), timeout=120)
+    if p.returncode != 0:
+        raise AssertionError(f"ingest salio {p.returncode}: {p.stderr.strip()}")
+    return json.loads(p.stdout)[0]
+
+
+if not NODE:
+    print("  aviso: sin node, no se armo el almacen de mensajes", file=sys.stderr)
+else:
+    falso = JevFalso(jev_segun_texto)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            env, registro = prepara_transcriptor(home)
+            pon_llave(home)
+            llegan(home, A, [audio(home, "V1", "uno.ogg")])
+            listo_persona(home)
+            ingiere_con(home, env)
+            ok("el audio se transcribe una vez", llamadas(registro) == ["uno.ogg"],
+               f"{llamadas(registro)}")
+            ok("y Jev juzga el texto de la transcripcion",
+               falso.textos() == ["revisa este caso: dijo uno.ogg"], f"{falso.textos()}")
+            x = hilo_de(home, "V1")
+            ok("el hilo muestra la transcripcion como el texto del mensaje, marcada",
+               x and x["text"] == "revisa este caso: dijo uno.ogg" and x["transcripcion"] is True,
+               f"{x}")
+            con = db_de(home)
+            con.execute("delete from caso_mensaje")
+            con.commit()
+            con.close()
+            ingiere_con(home, env)
+            ok("un reintento no vuelve a transcribir el mismo mensaje",
+               llamadas(registro) == ["uno.ogg"], f"{llamadas(registro)}")
+
+        falso.pedidos.clear()
+        with tempfile.TemporaryDirectory() as home:
+            env, registro = prepara_transcriptor(home)
+            pon_llave(home)
+            llegan(home, A, [audio(home, "R1", "clave.ogg")])
+            listo_persona(home)
+            ingiere_con(home, env)
+            c = caso_de_stanza(home, "R1")
+            ok("el piso fijo corre sobre la transcripcion",
+               c and excepciones_de(home, c["case_id"]) == ["credential"],
+               f"{c and fila_caso(home, c['case_id'])}")
+            ok("y la clave no sale del equipo",
+               not any("Zx9secreta" in t for t in falso.textos()), f"{falso.textos()}")
+            ok("ni queda en un evento",
+               cuenta(home, "select count(*) from caso_evento where detalle like '%Zx9secreta%'")
+               == 0)
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+    # Sin Jev: lo que falla, o se apaga, queda dicho y el caso no se adivina.
+    with tempfile.TemporaryDirectory() as home:
+        env, registro = prepara_transcriptor(home)
+        llegan(home, A, [audio(home, "F1", "falla1.ogg")])
+        listo_persona(home)
+        ingiere_con(home, env)
+        x = hilo_de(home, "F1")
+        ok("si no se pudo, el hilo lo dice con el codigo",
+           x and x["text"] == "audio sin transcribir: sin_motor"
+           and x["transcripcion"] is False, f"{x}")
+        c = caso_de_stanza(home, "F1")
+        ok("y el caso queda como dudoso, sin adivinar",
+           c["clase"] == "doubtful" and "audio sin transcribir: sin_motor"
+           in evento(c, "clasificado")["detalle"], f"{c}")
+
+    with tempfile.TemporaryDirectory() as home:
+        env, registro = prepara_transcriptor(home)
+        js(home, "config", "transcribe", "off")
+        llegan(home, A, [audio(home, "O1", "uno.ogg")])
+        listo_persona(home)
+        ingiere_con(home, env)
+        x = hilo_de(home, "O1")
+        ok("con transcribe off no se llama al transcriptor y se marca",
+           llamadas(registro) == [] and x and x["text"] == "audio sin transcribir: off",
+           f"{llamadas(registro)} {x}")
+
+    with tempfile.TemporaryDirectory() as home:
+        env, registro = prepara_transcriptor(home)
+        llegan(home, A, [audio(home, "L1", "lento1.ogg")])
+        listo_persona(home)
+        ingiere_con(home, dict(env, WA_INBOX_TRANSCRIBE_TIMEOUT_S="1"))
+        x = hilo_de(home, "L1")
+        ok("un audio que se cuelga se corta por tiempo y se marca",
+           x and x["text"] == "audio sin transcribir: timeout", f"{x}")
+
+    with tempfile.TemporaryDirectory() as home:
+        env, registro = prepara_transcriptor(home)
+        llegan(home, A, [audio(home, f"T{i}", f"t{i}.ogg", 30 - i) for i in range(1, 8)])
+        listo_persona(home)
+        r = ingiere_con(home, env)
+        ok("por corrida se transcriben a lo mas cinco audios", len(llamadas(registro)) == 5
+           and r.get("audios_diferidos") == 2, f"{llamadas(registro)} {r}")
+        ok("los que sobran no se abren ni se marcan: esperan a la proxima",
+           caso_de_stanza(home, "T7") is None and caso_de_stanza(home, "T1") is not None)
+        ingiere_con(home, env)
+        ok("la proxima corrida toma los que faltaron y no repite ninguno",
+           sorted(llamadas(registro)) == sorted(f"t{i}.ogg" for i in range(1, 8)),
+           f"{llamadas(registro)}")
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:

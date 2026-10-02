@@ -342,6 +342,20 @@ create table if not exists juicio (
   jev       text,
   primary key (account, chat_jid, stanza_id)
 );
+-- La transcripcion de una nota de voz, calculada UNA vez por mensaje: lo que juzga Jev, lo
+-- que mira el piso fijo y lo que lee el agente en el hilo salen de aca. Guarda tambien el
+-- fallo (`ok` 0 y el codigo en `razon`): un audio que no se pudo transcribir se dice, no
+-- se adivina, y tampoco se vuelve a pagar en cada reintento.
+create table if not exists transcripcion (
+  account   text not null default 'local',
+  chat_jid  text not null,
+  stanza_id text not null,
+  ok        integer not null,
+  texto     text,
+  razon     text,
+  at        text not null,
+  primary key (account, chat_jid, stanza_id)
+);
 -- El caso del tablero (odd/tasks/kanban-casos.md): cinco mensajes del mismo pedido son
 -- UN caso, con su etapa, la propuesta que espera al dueno y la tarjeta de Plane si
 -- hizo falta una. Va en scope.db por lo mismo que `juicio`: capture.db es del sidecar.
@@ -2797,7 +2811,24 @@ def cmd_caso_listar(con, a):
         sql + " order by updated_at desc, case_id desc", params).fetchall()]
 
 
-def caso_hilo(caso, stanzas):
+def sin_transcribir(razon):
+    return f"audio sin transcribir: {razon}"
+
+
+def texto_de_audio(con, caso, r, texto):
+    """(texto, transcripcion) de un mensaje del hilo. Un audio muestra su transcripcion como el
+    texto del mensaje y lo marca (`transcripcion` true); uno que no se transcribio lo dice con
+    el codigo (`false`), tambien el que ingest nunca intento. El resto no lleva la marca."""
+    if r["from_me"] or (r["media_type"] or "").lower() not in TIPOS_AUDIO:
+        return texto, None
+    fila = transcripcion_de(con, caso["account"], caso["chat_jid"], r["stanza_id"])
+    if fila and fila["ok"]:
+        return " ".join(t for t in (texto, fila["texto"]) if t), True
+    return " ".join(t for t in (texto, sin_transcribir((fila or {}).get("razon")
+                                                       or "no_intentado")) if t), False
+
+
+def caso_hilo(con, caso, stanzas):
     """El hilo de un caso, para quien lo lee: sus mensajes y las respuestas ENVIADAS al
     chat (`from_me`) intercaladas, por la hora del mensaje y no por cuando se agrupo, y con
     el orden de captura como desempate (dos mensajes del mismo segundo). Todo mensaje de
@@ -2819,20 +2850,25 @@ def caso_hilo(caso, stanzas):
             return None
         filas = fuente.execute(
             f"select rowid r, stanza_id, ts, from_me, sender_name, sender_jid, body, "
-            f"media_path from mensaje where account=? and chat_jid=? and revocado=0 and "
-            f"(stanza_id in ({marcas}) or (from_me=1 and ts >= ?)) order by ts, rowid",
+            f"media_type, media_bytes, media_path from mensaje where account=? and chat_jid=? "
+            f"and revocado=0 and (stanza_id in ({marcas}) or (from_me=1 and ts >= ?)) order by ts, rowid",
             (caso["account"], caso["chat_jid"], *stanzas, propios["t"])).fetchall()
     except sqlite3.Error:
         return None
     finally:
         fuente.close()
     ultima = max((i for i, r in enumerate(filas) if r["from_me"]), default=-1)
-    return [{"stanza_id": r["stanza_id"], "date": wa_store.ts(r["ts"]),
-             "from_me": bool(r["from_me"]), "sender": wa_store.quien(r),
-             "text": (r["body"] or "").replace("\n", " "), "media": r["media_path"] or None,
-             "en_caso": r["stanza_id"] in stanzas,
+    hilo = []
+    for i, r in enumerate(filas):
+        texto, transcripcion = texto_de_audio(con, caso, r, (r["body"] or "").replace("\n", " "))
+        x = {"stanza_id": r["stanza_id"], "date": wa_store.ts(r["ts"]),
+             "from_me": bool(r["from_me"]), "sender": wa_store.quien(r), "text": texto,
+             "media": r["media_path"] or None, "en_caso": r["stanza_id"] in stanzas,
              "respondido": bool(i < ultima and not r["from_me"])}
-            for i, r in enumerate(filas)]
+        if transcripcion is not None:
+            x["transcripcion"] = transcripcion
+        hilo.append(x)
+    return hilo
 
 
 def cmd_caso_ver(con, a):
@@ -2840,7 +2876,7 @@ def cmd_caso_ver(con, a):
     caso["mensajes"] = [dict(r) for r in con.execute(
         "select stanza_id, at from caso_mensaje where case_id=? order by at, stanza_id",
         (a.id,))]
-    hilo = caso_hilo(caso, [m["stanza_id"] for m in caso["mensajes"]])
+    hilo = caso_hilo(con, caso, [m["stanza_id"] for m in caso["mensajes"]])
     if hilo is not None:
         caso["hilo"] = hilo
         # Los mensajes del caso, en el mismo orden de llegada que el hilo.
@@ -2862,10 +2898,129 @@ def cmd_caso_ver(con, a):
 EXTENSIONES_AUDIO = (".opus", ".ogg", ".oga", ".mp3", ".m4a", ".aac", ".wav", ".amr")
 # Lo que ingest reporta, en este orden. `casos` va aparte: son los ids tocados.
 CONTEOS_INGEST = ("vistos", "nuevos", "casos_creados", "unidos", "cerrados", "dudosos",
-                  "sin_caso", "ignorados", "anteriores")
+                  "sin_caso", "ignorados", "anteriores", "audios_diferidos")
 # La prioridad de un caso que ingest clasifica. No la inventa: ni el dueno ni un veredicto
 # cacheado dicen cuan urgente es, y `none` es la unica que no afirma nada.
 PRIORIDAD_INGEST = "none"
+
+
+# ── Las notas de voz: se transcriben al entrar, con tope de tiempo y de cantidad ──────
+# Un audio no se oye y el agente no lo transcribe: lo hace el motor, una vez, con la
+# herramienta del plugin y los ajustes `transcribe*` (modo, calidad, modelo e idioma; los
+# tres ultimos los lee la propia herramienta). El texto se guarda por mensaje en
+# `transcripcion` y a partir de ahi es el texto del mensaje.
+TIPOS_AUDIO = ("audio", "ptt")
+# Cuantos audios se transcriben por corrida de ingest: lo que sobra espera a la siguiente,
+# sin abrirse ni marcarse. Cada uno corre un modelo local; un chat que vuelca cien audios no
+# puede dejar la maquina ocupada.
+TOPE_AUDIOS_INGEST = 5
+# Cuanto puede tardar UN audio. Pasado esto se corta y se marca `timeout`.
+TRANSCRIBE_TIMEOUT_S = 120
+CODIGO_RAZON = re.compile(r"^[a-z0-9_-]{1,40}$")
+
+
+def es_audio(m):
+    return (m.get("media_type") or "").lower() in TIPOS_AUDIO and bool(m.get("media"))
+
+
+def transcriptor_cli():
+    """La herramienta que transcribe: la del plugin, al lado de este ejecutable. La variable
+    existe para que una prueba ponga una falsa; no hay otra razon para tocarla."""
+    return os.environ.get("WA_INBOX_TRANSCRIBE_CLI") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "wa-transcribe")
+
+
+def transcribe_timeout():
+    try:
+        return max(1, int(os.environ.get("WA_INBOX_TRANSCRIBE_TIMEOUT_S") or TRANSCRIBE_TIMEOUT_S))
+    except ValueError:
+        return TRANSCRIBE_TIMEOUT_S
+
+
+def transcribe_archivo(ruta, ajustes):
+    """(texto, codigo, corrio). El codigo es estable y corto: es lo que lee el agente en
+    "audio sin transcribir: <codigo>". `corrio` dice si llego a correr el motor, porque
+    solo eso cuenta para el tope."""
+    modo = (ajustes.get("transcribe") or "local").strip().lower()
+    if modo == "off":
+        return None, "off", False
+    if modo == "api":
+        return None, "api_no_disponible", False
+    if not os.path.isfile(ruta):
+        return None, "sin_archivo", False
+    try:
+        p = subprocess.run([transcriptor_cli(), ruta, "--json"], capture_output=True,
+                           text=True, timeout=transcribe_timeout())
+    except subprocess.TimeoutExpired:
+        return None, "timeout", True
+    except OSError:
+        return None, "sin_herramienta", False
+    try:
+        r = json.loads(p.stdout or "null")
+    except ValueError:
+        r = None
+    if not isinstance(r, dict):
+        return None, "fallo", True
+    texto = " ".join(str(r.get("texto") or "").split())
+    if r.get("ok") and texto:
+        return texto, None, True
+    if r.get("ok"):
+        return None, "vacio", True
+    codigo = str(r.get("codigo") or "fallo")
+    return None, codigo if CODIGO_RAZON.match(codigo) else "fallo", True
+
+
+def transcripcion_de(con, cuenta, chat, stanza):
+    fila = con.execute("select ok, texto, razon from transcripcion where account=? and "
+                       "chat_jid=? and stanza_id=?", (cuenta, chat, stanza)).fetchone()
+    return dict(fila) if fila else None
+
+
+def transcripcion_guarda(con, cuenta, chat, stanza, texto, razon):
+    con.execute("insert into transcripcion (account, chat_jid, stanza_id, ok, texto, razon, at) "
+                "values (?,?,?,?,?,?,?) on conflict(account, chat_jid, stanza_id) do nothing",
+                (cuenta, chat, stanza, int(texto is not None), texto, razon,
+                 time.strftime("%Y-%m-%d %H:%M")))
+    con.commit()
+
+
+def transcribe_nuevos(con, nuevos, horas, total):
+    """Los mensajes nuevos, con el texto de sus audios. Un audio con transcripcion sigue con
+    ella como `text` (se suma al pie, si lo tuviera); uno que no se pudo queda sin texto y
+    con `sin_transcribir`: el codigo. Pasado el tope los audios que sobran se SACAN de la
+    corrida (no se abren ni se marcan) y se cuentan en `audios_diferidos`.
+
+    Una linea suelta de un grupo solo se transcribe si va a sumarse a un caso: si el chat
+    ya tiene uno abierto, o si en este mismo lote hay algo que lo abre."""
+    ajustes = merged_settings(con)
+    cuenta = cuenta_activa()
+    abre = {m["chat_jid"] for m in nuevos if m.get("kind") != "grupo"}
+    gastados, salida = 0, []
+    for m in nuevos:
+        if not es_audio(m):
+            salida.append(m)
+            continue
+        chat, stanza = m["chat_jid"], m["stanza_id"]
+        if (m.get("kind") == "grupo" and chat not in abre
+                and not caso_abierto_de_chat(con, chat, horas, ("cerrado", "respondido"))):
+            salida.append(m)
+            continue
+        fila = transcripcion_de(con, cuenta, chat, stanza)
+        if fila is None:
+            if gastados >= TOPE_AUDIOS_INGEST:
+                total["audios_diferidos"] += 1
+                continue
+            texto, razon, corrio = transcribe_archivo(m["media"], ajustes)
+            gastados += int(corrio)
+            transcripcion_guarda(con, cuenta, chat, stanza, texto, razon)
+            fila = {"ok": int(texto is not None), "texto": texto, "razon": razon}
+        if fila["ok"]:
+            m = dict(m, text=" ".join(t for t in ((m.get("text") or "").strip(), fila["texto"])
+                                      if t))
+        else:
+            m = dict(m, sin_transcribir=fila["razon"] or "fallo")
+        salida.append(m)
+    return salida
 
 
 def jev_cacheado(con, m):
@@ -2969,8 +3124,10 @@ def veredicto_de(m, decision, con=None):
     if m.get("kind") != "grupo" and not (m.get("text") or "").strip():
         ruta = (m.get("media") or "").lower()
         audio = ruta.endswith(EXTENSIONES_AUDIO)
+        sin = m.get("sin_transcribir")
         return {"accion": "clasificar", "clase": "doubtful", "actor": "automatizacion",
-                "detalle": "sin texto: audio" if audio else "sin texto"}
+                "detalle": (f"audio sin transcribir: {sin}" if sin
+                            else "sin texto: audio" if audio else "sin texto")}
     juicio_jev = jev_juzga(m, con)
     return veredicto_de_jev(m, juicio_jev) if juicio_jev is not None else None
 
@@ -3021,8 +3178,9 @@ def mensaje_de_rafaga(rafaga):
     kind = next((m.get("kind") for m in rafaga if m.get("kind") in KINDS_DE_ATENCION),
                 primero.get("kind"))
     media = next((m.get("media") for m in rafaga if m.get("media")), None)
+    sin = next((m.get("sin_transcribir") for m in rafaga if m.get("sin_transcribir")), None)
     return dict(primero, text=SEPARADOR_RAFAGA.join(t for t in textos if t),
-                kind=kind, media=media, juicio=None)
+                kind=kind, media=media, juicio=None, sin_transcribir=sin)
 
 
 def con_respuesta(con, m, horas):
@@ -3417,6 +3575,7 @@ def cmd_ingest(con, a):
             total["anteriores"] += 1
             continue
         nuevos.append(m)
+    nuevos = transcribe_nuevos(con, nuevos, horas, total)
     # Lo que ya tiene decision del dueno o juicio del agente se resuelve solo; el resto,
     # junto con lo que llego pegado en el mismo chat, se juzga como una rafaga.
     # El juicio de Jev queda en la cache bajo el primer mensaje de la rafaga: ese no la

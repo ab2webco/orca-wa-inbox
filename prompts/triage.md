@@ -144,6 +144,12 @@ before the last reply sent is marked `respondido`. **Act only on the messages af
 last reply sent.** The earlier ones are context: never answer them again and never
 repeat work already reported. `wa-read chat` is for anything else in the conversation.
 
+Voice notes arrive already transcribed: a `hilo` message with `transcripcion: true` has
+the transcript as its `text`. Treat it as what the person said, but it can contain
+mistakes in names and figures: do not state a name or an amount you only have from a
+transcript. `transcripcion: false` means it could not be transcribed
+(`audio sin transcribir: <code>`): say so, never guess what it said.
+
 ## STEP 2 — How it writes there
 
     "$WA/wa-scope" voice "<chat_jid>" --json
@@ -169,8 +175,8 @@ not from your habits.
     refers to unless the case or the project files say so: list those as open questions
     for the project agent ("Who is <name>?", "What does '<phrase>' refer to?").
   - It needs the owner (price, scope, a decision, access): `--tipo escalar`.
-  - Doubtful (an audio you cannot hear, a bare mention): leave it classified as
-    `doubtful`, propose nothing, and list it at the wrap-up.
+  - Doubtful (a bare mention, or a voice note marked `audio sin transcribir: <code>`): leave
+    it classified as `doubtful`, propose nothing, and list it at the wrap-up.
 
 Never promise a date, never state a status you did not verify, never repeat a
 credential. A proposal goes to the board: the plugin sends it only if it is not an
