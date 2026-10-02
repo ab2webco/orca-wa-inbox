@@ -626,6 +626,10 @@
               "acProyectoSinCatalogo": "Todavia no acepto ningun proyecto. Hagalo en Ajustes, pestana Proyectos.",
               "acErrProyectoElegir": "Elija un proyecto de la lista.",
               "acOkAtendido": "El agente lo atendera en su proxima corrida",
+              "acAgentLanzado": "Se lanzo el agente para este caso. Si en unos minutos no hay respuesta, revise que el agente tenga la sesion iniciada.",
+              "acAgentSinTriage": "El caso quedo marcado, pero Orca no tiene la automatizacion de triaje de este plugin. Apruebe el plugin de nuevo en Orca; el agente lo tomara en su proxima corrida.",
+              "acAgentSinCli": "El caso quedo marcado, pero no se encontro la CLI de Orca para lanzar el agente. Lo tomara en su proxima corrida.",
+              "acAgentFallo": "El caso quedo marcado, pero no se pudo lanzar el agente ({reason}). Lo tomara en su proxima corrida.",
               "acOkIgnorado": "Caso ignorado",
               "acOkProyecto": "Proyecto actualizado",
               "detProject": "Proyecto",
@@ -790,6 +794,10 @@
               "acProyectoSinCatalogo": "You have not accepted any project yet. Do it in Settings, Projects tab.",
               "acErrProyectoElegir": "Pick a project from the list.",
               "acOkAtendido": "Your agent will handle it on its next run",
+              "acAgentLanzado": "The agent was launched for this case. If there is no reply in a few minutes, check that the agent is signed in.",
+              "acAgentSinTriage": "The case is marked, but Orca does not have this plugin's triage automation. Approve the plugin again in Orca; the agent will pick it up on its next run.",
+              "acAgentSinCli": "The case is marked, but the Orca CLI was not found to launch the agent. It will pick it up on its next run.",
+              "acAgentFallo": "The case is marked, but we could not launch the agent ({reason}). It will pick it up on its next run.",
               "acOkIgnorado": "Case ignored",
               "acOkProyecto": "Project updated",
               "detProject": "Project",
@@ -954,6 +962,10 @@
               "acProyectoSinCatalogo": "Voce ainda nao aceitou nenhum projeto. Faca isso em Ajustes, aba Projetos.",
               "acErrProyectoElegir": "Escolha um projeto da lista.",
               "acOkAtendido": "O agente vai atender na proxima rodada",
+              "acAgentLanzado": "O agente foi lancado para este caso. Se nao houver resposta em alguns minutos, confira se o agente esta com a sessao iniciada.",
+              "acAgentSinTriage": "O caso ficou marcado, mas o Orca nao tem a automacao de triagem deste plugin. Aprove o plugin de novo no Orca; o agente vai pegar o caso na proxima rodada.",
+              "acAgentSinCli": "O caso ficou marcado, mas a CLI do Orca nao foi encontrada para lancar o agente. Ele vai pegar o caso na proxima rodada.",
+              "acAgentFallo": "O caso ficou marcado, mas nao foi possivel lancar o agente ({reason}). Ele vai pegar o caso na proxima rodada.",
               "acOkIgnorado": "Caso ignorado",
               "acOkProyecto": "Projeto atualizado",
               "detProject": "Projeto",
@@ -1495,6 +1507,12 @@
       var OK_ACCION = { enviado: 'acOkEnviado', aprobada: 'acOkAprobada',
         reclasificado: 'acOkReclasificado', cerrado: 'acOkCerrado', reabierto: 'acOkReabierto',
         atendido: 'acOkAtendido', ignorado: 'acOkIgnorado', 'proyecto-cambiado': 'acOkProyecto' }
+      // Lo que dice `agent` en el veredicto de "atender": si el worker pudo lanzar la
+      // automatizacion del agente al momento. `launched` NO es "ya esta respondiendo": que
+      // el agente no tenga sesion de Claude solo lo dice Orca despues de despachar.
+      var AGENTE_KEY = { launched: 'acAgentLanzado', 'triage-not-found': 'acAgentSinTriage',
+        'orca-cli-missing': 'acAgentSinCli', 'run-failed': 'acAgentFallo' }
+      var AGENTE_MOTIVO_MAX = 40
       // Los codigos estables del canal: los E_* de `wa-scope caso`, los send-* de `wa-send` y
       // los propios del worker. El panel traduce por CODIGO; el texto en ingles del CLI no
       // sale nunca en pantalla.
@@ -1650,9 +1668,17 @@
             mensajes[id] = { texto: t('acNoAnswer'), mala: true }
           } else if (v.ok === true) {
             delete formularios[id]
-            var dicho = porCodigo(OK_ACCION, v.code, t('acOkGeneric'))
-            if (v.warn) dicho += ' ' + t('acWarnTablero')
-            mensajes[id] = { texto: dicho, mala: false, hasta: Date.now() + 12000 }
+            var agente = v.code === 'atendido' && Object.prototype.hasOwnProperty.call(AGENTE_KEY, v.agent)
+              ? v.agent : null
+            if (agente) {
+              var motivo = typeof v.agentReason === 'string' ? v.agentReason.slice(0, AGENTE_MOTIVO_MAX) : ''
+              mensajes[id] = { texto: fmt(AGENTE_KEY[agente], { reason: motivo || '?' }),
+                mala: agente !== 'launched', hasta: Date.now() + 12000 }
+            } else {
+              var dicho = porCodigo(OK_ACCION, v.code, t('acOkGeneric'))
+              if (v.warn) dicho += ' ' + t('acWarnTablero')
+              mensajes[id] = { texto: dicho, mala: false, hasta: Date.now() + 12000 }
+            }
           } else {
             mensajes[id] = { texto: errorTexto(v.code, v.detail), mala: true }
             if (v.code === 'E_VERSION' && formularios[id]) formularios[id].version = null

@@ -4281,6 +4281,59 @@ console.log('\nactivity.html — tablero: lo que era la cola, con Atender ahora 
     !e.doc.querySelector('#board-detail button[data-accion="ignorar"]'))
 }
 
+console.log('\nactivity.html — tablero: Atender ahora dice si el agente salio')
+{
+  const caso = () => tarjeta({ case_id: 4, stage: 'recibido', proposal: null, exceptions: [],
+    title: 'Nota de voz', actions: ['atender', 'ignorar', 'reclasificar', 'cerrar', 'proyecto'] })
+  const clic = async (respuesta, idioma = 'es-419') => {
+    const w = conWorker({ ok: true, code: 'atendido', caseId: 4, ...respuesta })
+    const { doc } = await abrirConWorker([caso()], w, {}, idioma)
+    botonTarjeta(doc, 4, 'atender').click()
+    await hastaPanel(() => w.pedidos.length === 1)
+    await hastaPanel(() => !!mensajeDe(doc, 4))
+    return mensajeDe(doc, 4)
+  }
+
+  const lanzado = await clic({ agent: 'launched' })
+  ok('lanzado: junto a la tarjeta dice que se lanzo el agente',
+    /se lanzo el agente/i.test(lanzado?.textContent || ''), lanzado?.textContent)
+  ok('y no promete que ya esta respondiendo: el login del agente solo se sabe despues',
+    !/ya (esta|estan)|respondiendo|atendiendo/i.test(lanzado?.textContent || ''), lanzado?.textContent)
+  ok('ni lo pinta como error', !!lanzado && !lanzado.classList.contains('mala') &&
+    lanzado.getAttribute('role') === 'status', lanzado?.className)
+
+  const sinTriage = await clic({ agent: 'triage-not-found' })
+  ok('triage-not-found pide aprobar de nuevo el plugin y dice que el caso sigue marcado',
+    /aprueb/i.test(sinTriage?.textContent || '') && /marcado/.test(sinTriage?.textContent || '') &&
+    sinTriage.classList.contains('mala') && sinTriage.getAttribute('role') === 'alert', sinTriage?.textContent)
+
+  const sinCli = await clic({ agent: 'orca-cli-missing' })
+  ok('orca-cli-missing dice que no se hallo la CLI de Orca',
+    /CLI de Orca/.test(sinCli?.textContent || '') && sinCli.classList.contains('mala'), sinCli?.textContent)
+
+  const fallo = await clic({ agent: 'run-failed', agentReason: 'exit-1' })
+  ok('run-failed dice el motivo corto que dio el worker',
+    /no se pudo lanzar el agente/i.test(fallo?.textContent || '') && /exit-1/.test(fallo?.textContent || '') &&
+    fallo.classList.contains('mala'), fallo?.textContent)
+  const largo = await clic({ agent: 'run-failed', agentReason: 'x'.repeat(500) })
+  ok('un motivo desmedido se recorta', (largo?.textContent || '').length < 300, (largo?.textContent || '').length)
+
+  const en = await clic({ agent: 'launched' }, 'en')
+  ok('en ingles', /agent was launched/i.test(en?.textContent || '') &&
+    !/(already|is now) (replying|handling)/i.test(en?.textContent || ''), en?.textContent)
+  const enFallo = await clic({ agent: 'run-failed', agentReason: 'exit-1' }, 'en')
+  ok('y el fallo tambien', /could not launch the agent/i.test(enFallo?.textContent || ''), enFallo?.textContent)
+  const pt = await clic({ agent: 'launched' }, 'pt-BR')
+  ok('en portugues', /agente foi lan/i.test(pt?.textContent || ''), pt?.textContent)
+
+  const viejo = await clic({})
+  ok('un worker que no dice nada del agente conserva el mensaje de siempre',
+    /proxima corrida/.test(viejo?.textContent || ''), viejo?.textContent)
+  const raro = await clic({ agent: 'inventado' })
+  ok('un codigo de agente desconocido no rompe: cae al mensaje de siempre',
+    /proxima corrida/.test(raro?.textContent || ''), raro?.textContent)
+}
+
 console.log('\nactivity.html — tablero: el proyecto del caso, a mano')
 {
   const caso = tarjeta({ case_id: 6, stage: 'clasificado', proposal: null, exceptions: [],

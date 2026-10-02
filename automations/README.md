@@ -7,7 +7,7 @@ instalado y viceversa.
 | archivo | cada | corre |
 |---|---|---|
 | `whatsapp-tick.json` | 1 min | `wa-scope tick` (solo comando, sin agente) |
-| `whatsapp-triage.json` | 5 min, L-V 8-18 | agente, con precheck `wa-scope pending --needs-agent` |
+| `whatsapp-triage.json` | 5 min, a toda hora (y al instante con "Atender ahora") | agente, con precheck `wa-scope pending --needs-agent` |
 
 `tick` no despierta a ningún agente: es un comando (`orca automations create --command`
 en un Orca 1.4.160-lab.84 o más nuevo). El precheck de `triage` **sale con 1 cuando

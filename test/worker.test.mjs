@@ -2452,9 +2452,123 @@ const verbo = (llamada) => llamada[1]
   apagar()
 }
 
+// La CLI de Orca de mentira para "Atender ahora": lista las automatizaciones y las corre.
+// Anota cada llamada. Sin esto el worker alcanzaria la `orca` de verdad de quien corre las
+// pruebas, y correria su agente.
+async function conOrcaFalsa (nombre, { automatizaciones, ejecucion = 'ok', sinCli = false }, prueba) {
+  const { comandoOrca } = await import('../catalogo.mjs')
+  const bin = join(RAIZ, nombre)
+  mkdirSync(bin, { recursive: true })
+  writeFileSync(join(bin, 'lista.json'), JSON.stringify({ id: 'x', ok: true,
+    result: { automations: automatizaciones } }))
+  writeFileSync(join(bin, 'ejecucion.txt'), ejecucion)
+  writeFileSync(join(bin, comandoOrca()), [
+    '#!/bin/sh',
+    'D="$(dirname "$0")"',
+    'echo "$@" >> "$D/llamadas.txt"',
+    'case "$1 $2" in',
+    '  "automations list") cat "$D/lista.json" ;;',
+    '  "automations run")',
+    '    case "$(cat "$D/ejecucion.txt")" in',
+    '      ok) echo \'{"id":"x","ok":true,"result":{"run":{"id":"r1"}}}\' ;;',
+    '      sale) echo "SECRETO mensaje del cliente" >&2; exit 1 ;;',
+    '      rechaza) echo \'{"id":"x","ok":false,"error":{"code":"automation_disabled","message":"SECRETO mensaje del cliente"}}\' ;;',
+    '    esac ;;',
+    '  *) echo "comando inesperado" >&2; exit 2 ;;',
+    'esac', ''
+  ].join('\n'), { mode: 0o755 })
+  const pathAntes = process.env.PATH
+  process.env.PATH = sinCli ? '/usr/bin:/bin' : `${bin}:/usr/bin:/bin`
+  try {
+    await prueba({
+      llamadas: () => existsSync(join(bin, 'llamadas.txt'))
+        ? readFileSync(join(bin, 'llamadas.txt'), 'utf8').trim().split('\n').filter(Boolean) : []
+    })
+  } finally {
+    process.env.PATH = pathAntes
+  }
+}
+
+const AUTOMATIZACION_TRIAGE = (extra = {}) => ({ id: 'auto-triage', name: 'Mi triage',
+  pluginOrigin: { pluginKey: 'ab2web.orca-wa-inbox', automationId: 'triage' }, ...extra })
+const AUTOMATIZACIONES_VARIAS = [
+  { id: 'auto-ajena', name: 'WhatsApp: triage',
+    pluginOrigin: { pluginKey: 'otro.plugin-ajeno', automationId: 'triage' } },
+  { id: 'auto-suelta', name: 'WhatsApp: triage', pluginOrigin: null },
+  { id: 'auto-tick', name: 'WhatsApp: every minute (no agent)',
+    pluginOrigin: { pluginKey: 'ab2web.orca-wa-inbox', automationId: 'tick' } },
+  AUTOMATIZACION_TRIAGE()
+]
+
+{
+  // Atender ahora marca el caso Y despierta al agente: la automatizacion `triage` se busca
+  // por el origen del plugin (nunca por el nombre: el dueno la puede renombrar) y se lanza.
+  const casos = () => ({ casos: {
+    7: casoDe({ etapa: 'clasificado', propuesta: null, propuesta_version: null }) } })
+
+  await conOrcaFalsa('orca-lanza', { automatizaciones: AUTOMATIZACIONES_VARIAS }, async (o) => {
+    const f = herramientasCaso('atender-lanza', casos())
+    const orca = hostFalso(f.dir, { chats: [] })
+    const { apagar } = await arranca(orca)
+    const v = await pideCaso(orca, { action: 'atender', caseId: 7 })
+    ok('lanzado: contesta atendido y dice que el agente salio',
+      v && v.ok === true && v.code === 'atendido' && v.agent === 'launched', JSON.stringify(v))
+    ok('el caso quedo marcado', f.scope().some((a) => verbo(a) === 'atender'), JSON.stringify(f.scope()))
+    ok('corre la automatizacion del plugin por su origen y no la homonima de otro plugin ni la renombrada por nombre',
+      JSON.stringify(o.llamadas()) === JSON.stringify([
+        'automations list --json', 'automations run auto-triage --json']), JSON.stringify(o.llamadas()))
+    apagar()
+  })
+
+  await conOrcaFalsa('orca-sin-triage', { automatizaciones: AUTOMATIZACIONES_VARIAS.slice(0, 3) }, async (o) => {
+    const f = herramientasCaso('atender-sin-triage', casos())
+    const orca = hostFalso(f.dir, { chats: [] })
+    const { apagar } = await arranca(orca)
+    const v = await pideCaso(orca, { action: 'atender', caseId: 7 })
+    ok('sin la automatizacion `triage` del plugin: triage-not-found, y el caso sigue marcado',
+      v && v.ok === true && v.code === 'atendido' && v.agent === 'triage-not-found' &&
+      f.scope().some((a) => verbo(a) === 'atender'), JSON.stringify(v))
+    ok('y no corre nada', !o.llamadas().some((l) => l.startsWith('automations run')), JSON.stringify(o.llamadas()))
+    apagar()
+  })
+
+  await conOrcaFalsa('orca-no-esta', { automatizaciones: [], sinCli: true }, async () => {
+    const f = herramientasCaso('atender-sin-cli', casos())
+    const orca = hostFalso(f.dir, { chats: [] })
+    const { apagar } = await arranca(orca)
+    const v = await pideCaso(orca, { action: 'atender', caseId: 7 })
+    ok('sin la CLI de Orca: orca-cli-missing, y el caso sigue marcado',
+      v && v.ok === true && v.code === 'atendido' && v.agent === 'orca-cli-missing' &&
+      f.scope().some((a) => verbo(a) === 'atender'), JSON.stringify(v))
+    apagar()
+  })
+
+  for (const [modo, razon] of [['sale', 'exit-1'], ['rechaza', 'automation_disabled']]) {
+    await conOrcaFalsa(`orca-falla-${modo}`, { automatizaciones: [AUTOMATIZACION_TRIAGE()], ejecucion: modo }, async () => {
+      const f = herramientasCaso(`atender-falla-${modo}`, casos())
+      const orca = hostFalso(f.dir, { chats: [] })
+      const { apagar } = await arranca(orca)
+      const v = await pideCaso(orca, { action: 'atender', caseId: 7 })
+      ok(`si el lanzamiento falla (${modo}): run-failed con un motivo corto, y el caso sigue marcado`,
+        v && v.ok === true && v.code === 'atendido' && v.agent === 'run-failed' &&
+        v.agentReason === razon && f.scope().some((a) => verbo(a) === 'atender'), JSON.stringify(v))
+      ok('y el motivo nunca lleva el texto de un mensaje', !/SECRETO/.test(JSON.stringify(orca.store.scopeResult)),
+        JSON.stringify(orca.store.scopeResult))
+      apagar()
+    })
+  }
+}
+
 {
   // Lo que era la bandeja, ahora en el tablero: "Atender ahora" (era Tomar), "Ignorar" y
   // el proyecto puesto a mano. Las tres por el mismo canal, con --actor dueno.
+  // Atender tambien lanza el agente: aqui con una CLI de Orca falsa, nunca la de verdad.
+  const pathAntesBandeja = process.env.PATH
+  const binBandeja = join(RAIZ, 'orca-bandeja')
+  mkdirSync(binBandeja, { recursive: true })
+  writeFileSync(join(binBandeja, (await import('../catalogo.mjs')).comandoOrca()),
+    '#!/bin/sh\necho \'{"ok":true,"result":{"automations":[]}}\'\n', { mode: 0o755 })
+  process.env.PATH = `${binBandeja}:/usr/bin:/bin`
   const f = herramientasCaso('caso-bandeja', { casos: {
     7: casoDe({ etapa: 'clasificado', propuesta: null, propuesta_version: null }),
     8: casoDe({ case_id: 8, etapa: 'recibido', propuesta: null, propuesta_version: null }) } })
@@ -2503,6 +2617,7 @@ const verbo = (llamada) => llamada[1]
   ok('atender fuera de recibido o clasificado llega como E_STAGE', v && v.ok === false && v.code === 'E_STAGE',
     JSON.stringify(v))
   apagar2()
+  process.env.PATH = pathAntesBandeja
 }
 
 {

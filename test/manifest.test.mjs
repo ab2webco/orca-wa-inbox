@@ -275,6 +275,13 @@ assert.match(triage.precheck ?? '', /"\$WA\/wa-scope" pending --needs-agent$/,
   'triage: gated by `wa-scope pending --needs-agent`')
 hechas += 1
 assert.equal(triage.workspace, WORKSPACE_PROPIO, 'triage: runs in the plugin-owned workspace')
+// "Atender ahora" lanza esta automatizacion por su id, a cualquier hora: el horario de
+// oficina no la puede apagar, y el precheck mantiene gratis las corridas sin casos.
+hechas += 1
+assert.equal(triage.trigger, '*/5 * * * *', 'triage: every 5 minutes, any hour, any day')
+hechas += 1
+assert.equal(JSON.parse(readFileSync(new URL('../automations/whatsapp-triage.json', import.meta.url), 'utf8')).trigger,
+  triage.trigger, 'automations/whatsapp-triage.json: the same schedule as the manifest')
 // engines: Orca compara solo x.y.z e ignora el sufijo de prerelease
 // (src/shared/plugins/plugin-manifest.ts:211-230). Las automatizaciones solo-comando
 // llegaron en 1.4.160-lab.84.rc, asi que lo maximo que se puede exigir sin dejar fuera

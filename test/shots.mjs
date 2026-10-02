@@ -673,6 +673,23 @@ const PANELES = [
     espera: 1500, datos: conTablero(tableroDe(TABLERO_CASOS)),
     stub: { veredictoAccion: { ok: true, code: 'enviado' }, demoraVeredicto: 0 }
   },
+  {
+    // Atender ahora: el agente salio. Dice "lanzado", no "ya responde".
+    nombre: 'tablero-atender-lanzado', archivo: 'activity.html', anchos: ANCHOS,
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="4"] .card-acts button[data-accion="atender"]').click()`,
+    espera: 1500, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    stub: { veredictoAccion: { ok: true, code: 'atendido', agent: 'launched' }, demoraVeredicto: 0 }
+  },
+  {
+    // Atender ahora: el caso quedo marcado pero el agente no se pudo lanzar.
+    nombre: 'tablero-atender-fallo', archivo: 'activity.html', anchos: ANCHOS,
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="4"] .card-acts button[data-accion="atender"]').click()`,
+    espera: 1500, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    stub: { veredictoAccion: { ok: true, code: 'atendido', agent: 'run-failed', agentReason: 'exit-1' },
+      demoraVeredicto: 0 }
+  },
   // 1. Reviso y no habia nada: el caso comun y sano.
   {
     nombre: 'actividad-sin-nada', archivo: 'activity.html', anchos: ANCHOS_ESTADO,

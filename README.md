@@ -193,7 +193,7 @@ command-only automations (`engines.orca` says `>=1.4.160`: Orca compares only
 | id | What it runs | When | Model tokens |
 |---|---|---|---|
 | `tick` | `wa-scope tick`: picks up any message the live trigger missed, approves by the owner's rule every clean reply on a `responder` chat, sends it through `wa-send --send` (Jev and the fixed exception floor still review it), and refreshes the board and badge | every minute | none: it is a command, no agent and no terminal |
-| `triage` | the case agent, with `prompts/triage.md`: it drafts a reply, classifies, or proposes work for the cases that need language | every 5 minutes, Mon-Fri 8-18 | only when its precheck `wa-scope pending --needs-agent` finds a case that needs language; otherwise the run is `skipped_precheck` |
+| `triage` | the case agent, with `prompts/triage.md`: it drafts a reply, classifies, or proposes work for the cases that need language | every 5 minutes, any hour, plus right away when the owner presses "Atender ahora" on the board | only when its precheck `wa-scope pending --needs-agent` finds a case that needs language; otherwise the run is `skipped_precheck` |
 
 What never leaves on its own: anything with an exception (money, a credential, a
 commitment, a Jev flag or a Jev error) and anything on a chat in `borrador`. Those stay

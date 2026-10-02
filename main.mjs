@@ -20,6 +20,7 @@ import { dirname, join } from 'node:path'
 import { HARNESS_KEY } from './harness.mjs'
 import { llaveValida } from './jev-espejo.mjs'
 import { crearAccionesCaso } from './acciones.mjs'
+import { crearLanzadorTriage } from './agente.mjs'
 import { crearCatalogo, leerCatalogo, PROJECTS_KEY } from './catalogo.mjs'
 
 // Las herramientas viajan dentro del plugin. Antes se buscaban en el PATH del usuario,
@@ -1700,14 +1701,17 @@ export default function activate(orca) {
   // que proyecto se le deja actuar- y asi no se suma un sondeo al host cada 3 s: el worker
   // muere a los 64 llamados sin confirmar. `orca` corre sin la valla, como el resto de lo
   // que no es del plugin.
+  const correrOrca = (cmd, args, { timeoutMs = 15000 } = {}) => {
+    const m = mandoSinValla(cmd, args)
+    return run(m.cmd, m.args, { timeoutMs })
+  }
   const catalogo = crearCatalogo({
     orca, leer: (key) => leer(orca, key), guardar: (key, value) => guardar(orca, key, value),
-    correr: (cmd, args) => {
-      const m = mandoSinValla(cmd, args)
-      return run(m.cmd, m.args, { timeoutMs: 15000 })
-    },
+    correr: (cmd, args) => correrOrca(cmd, args),
     motivoDe, resembrar
   })
+  // "Atender ahora" despierta al agente en el momento, por la misma CLI de Orca.
+  const lanzarTriage = crearLanzadorTriage({ correr: correrOrca })
 
   const atenderPedidoScope = crearVigia({
     nombre: 'scope',
@@ -1721,7 +1725,7 @@ export default function activate(orca) {
     acciones: {
       [SCOPE_ACCION.QUITAR]: (pedido) => quitarAlcance(pedido),
       [SCOPE_ACCION.REGLA_QUITAR]: (pedido) => quitarRegla(pedido),
-      ...crearAccionesCaso({ run, motivoDe, herramienta: (nombre) => tool(nombre) }),
+      ...crearAccionesCaso({ run, motivoDe, lanzarTriage, herramienta: (nombre) => tool(nombre) }),
       ...catalogo.acciones
     }
   })

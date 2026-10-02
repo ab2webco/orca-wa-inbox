@@ -144,9 +144,10 @@ const opcional = (valor, campo) => {
  *
  * `run` y `motivoDe` son los del worker (mismo env, mismo tope de salida, mismos motivos
  * estables); `herramienta(nombre)` resuelve la ruta de un CLI en el directorio de
- * herramientas vigente.
+ * herramientas vigente. `lanzarTriage` (opcional) lanza la automatizacion del agente
+ * (`agente.mjs`); sin el, "Atender ahora" solo marca el caso.
  */
-export function crearAccionesCaso ({ run, herramienta, motivoDe }) {
+export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage }) {
   /** `wa-scope caso <sub> ...`: devuelve las filas del JSON o lanza el rechazo. */
   async function caso (args) {
     const cmd = await herramienta('wa-scope')
@@ -296,7 +297,10 @@ export function crearAccionesCaso ({ run, herramienta, motivoDe }) {
     [CASO_ACCION.ATENDER]: aceptarRechazo(async (pedido) => {
       const id = idDeCaso(pedido)
       await caso(['atender', String(id), '--actor', ACTOR])
-      return { ok: true, code: CASO_VEREDICTO.ATENDIDO, caseId: id }
+      // El caso ya esta marcado: pase lo que pase al lanzar, la corrida programada lo toma.
+      // `lanzarTriage` nunca lanza; dice como le fue y el panel lo muestra.
+      const agente = lanzarTriage ? await lanzarTriage() : {}
+      return { ok: true, code: CASO_VEREDICTO.ATENDIDO, caseId: id, ...agente }
     }),
 
     [CASO_ACCION.IGNORAR]: aceptarRechazo(async (pedido) => {
