@@ -440,6 +440,17 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
            escribió ("¿es sobre A o sobre B?") o el dueño;
          - el caso muestra su proyecto y se cambia desde la tarjeta (ya existe);
          - el rol Operador de un grupo vale para los proyectos de ese grupo.
+      9. Approval gates what is sent, not what is done (owner, 2026-10-02, after case
+         #6 sat in "Su decision" with Ejecutar although the owner asked for it):
+         - a `trabajar` proposal that is not destructive and stays inside the chat's
+           projects is dispatched to the project agent (T8) at once, with no button;
+         - destructive or compromising work (delete, production deploy, force push,
+           payments, credentials, anything outside the chat's projects, anything that
+           commits the team to a date or money) still waits for the owner;
+         - the approval rules of point 3 apply to the reply that goes out with the
+           result, so the owner approves before sending, never before doing;
+         - technicians and engineers in a group get the Operador role of point 7, so
+           they can request support work from the bot for that group's projects.
       Va después de tablero-w7.
 
 - [ ] T23 — Supervisión del equipo por WhatsApp, pedida por el dueño (2026-10-01).
