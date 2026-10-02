@@ -835,8 +835,9 @@
           transcribeLabel: "Transcribir las notas de voz",
           trLocal: "En este equipo",
           trOff: "No transcribir",
-          transcribeHelp: "En este equipo el audio no sale de su maquina. Sin transcribir, " +
-            "el agente no sabe que dice un audio y se lo deja marcado para escucharlo.",
+          transcribeHelp: "Las notas de voz se transcriben cuando llegan a un caso. En este " +
+            "equipo el audio no sale de su maquina. Con No transcribir, el audio queda " +
+            "marcado como sin transcribir y el agente lo dice en vez de adivinar.",
           langLabel: "Idioma de los audios",
           langAuto: "Detectar",
           langEs: "Espanol", langEn: "Ingles", langPt: "Portugues",
@@ -900,13 +901,14 @@
           daysHelp: 'Recomendado: 7 dias. Con un dia, una mencion del viernes que nadie ' +
             'contesto ya no aparece el lunes. Se leen como maximo los 500 mensajes mas ' +
             'nuevos de la ventana.',
-          syncLabel: 'Cada cuanto revisa WhatsApp',
+          syncLabel: 'Cada cuanto actualiza las conversaciones',
           sync2: '2 min', sync5: '5 min',
           sync10: '10 min', sync15: '15 min',
           sync30: '30 min', sync60: '1 hora',
-          syncHelp: 'Recomendado: 5 min. Es lo que mas puede tardar un mensaje nuevo en ' +
-            'aparecer aca y en llegarle al agente. Mas seguido cuesta mas lectura; mas ' +
-            'espaciado, mas espera.',
+          syncHelp: 'Recomendado: 5 min. Es cada cuanto se vuelve a leer WhatsApp para ' +
+            'actualizar la lista de conversaciones y el tablero. Los mensajes nuevos se ' +
+            'procesan cada minuto, sin importar este valor. Mas seguido cuesta mas ' +
+            'lectura; mas espaciado, mas espera.',
           workerGone: 'El plugin no responde',
           workerGoneHow: 'Lo mas probable es que falte aprobarlo: abra Ajustes > Plugins y ' +
             'pulse "Review & enable" en WhatsApp Inbox. Hasta que lo apruebe, Orca no lo ' +
@@ -1171,8 +1173,9 @@
           transcribeLabel: "Transcribe voice notes",
           trLocal: "On this machine",
           trOff: "Do not transcribe",
-          transcribeHelp: "On this machine the audio never leaves your computer. Without " +
-            "transcription the agent cannot know what an audio says and flags it for you.",
+          transcribeHelp: "Voice notes are transcribed when they reach a case. On this machine " +
+            "the audio never leaves your computer. With Do not transcribe, the audio is " +
+            "marked as not transcribed and the agent says so instead of guessing.",
           langLabel: "Language of the audios",
           langAuto: "Detect",
           langEs: "Spanish", langEn: "English", langPt: "Portuguese",
@@ -1233,13 +1236,14 @@
           days90: '90 days', days0: 'All',
           daysHelp: 'Recommended: 7 days. With one day, a Friday mention nobody answered is ' +
             'gone by Monday. At most the 500 newest messages in the window are read.',
-          syncLabel: 'How often it checks WhatsApp',
+          syncLabel: 'How often it refreshes the chat lists',
           sync2: '2 min', sync5: '5 min',
           sync10: '10 min', sync15: '15 min',
           sync30: '30 min', sync60: '1 hour',
-          syncHelp: 'Recommended: 5 min. It is the longest a new message can take to show ' +
-            'up here and to reach the agent. More often costs more reading; less often ' +
-            'costs more waiting.',
+          syncHelp: 'Recommended: 5 min. It is how often WhatsApp is re-read to refresh the ' +
+            'chat lists and the board. New messages are processed every minute, ' +
+            'whatever this value is. More often costs more reading; less often costs ' +
+            'more waiting.',
           workerGone: 'The plugin is not responding',
           workerGoneHow: 'Most likely it still needs approving: open Settings > Plugins ' +
             'and press "Review & enable" on WhatsApp Inbox. Until you do, Orca does not ' +
@@ -1532,8 +1536,9 @@
         transcribeLabel: 'Transcrever as notas de voz',
         trLocal: 'Neste equipamento',
         trOff: 'Nao transcrever',
-        transcribeHelp: 'Neste equipamento o audio nao sai da sua maquina. Sem transcrever, o ' +
-          'agente nao sabe o que um audio diz e marca para voce ouvir.',
+        transcribeHelp: 'As notas de voz sao transcritas quando chegam a um caso. Neste ' +
+          'equipamento o audio nao sai da sua maquina. Com Nao transcrever, o audio fica ' +
+          'marcado como nao transcrito e o agente diz isso em vez de adivinhar.',
         langLabel: 'Idioma dos audios', langAuto: 'Detectar',
         langEs: 'Espanhol', langEn: 'Ingles', langPt: 'Portugues',
         langHelp: 'Fixar acerta mais que detectar quando os audios misturam dois idiomas.',
@@ -1546,13 +1551,14 @@
         days90: '90 dias', days0: 'Tudo',
         daysHelp: 'Recomendado: 7 dias. Com um dia, uma mencao de sexta que ninguem respondeu ' +
           'nao aparece mais na segunda. Sao lidas no maximo as 500 mensagens mais novas da janela.',
-        syncLabel: 'De quanto em quanto tempo verifica o WhatsApp',
+        syncLabel: 'De quanto em quanto tempo atualiza as conversas',
         sync2: '2 min', sync5: '5 min',
         sync10: '10 min', sync15: '15 min',
         sync30: '30 min', sync60: '1 hora',
-        syncHelp: 'Recomendado: 5 min. E o maximo que uma mensagem nova pode demorar para ' +
-          'aparecer aqui e chegar ao agente. Mais seguido custa mais leitura; mais espacado, ' +
-          'mais espera.',
+        syncHelp: 'Recomendado: 5 min. E de quanto em quanto tempo o WhatsApp e relido para ' +
+          'atualizar a lista de conversas e o quadro. As mensagens novas sao processadas ' +
+          'a cada minuto, seja qual for este valor. Mais seguido custa mais leitura; mais ' +
+          'espacado, mais espera.',
         optionalTitle: 'Opcional \u2014 nada disso bloqueia o agente:',
         workerGone: 'O plugin nao responde',
         workerGoneHow: 'O mais provavel e que falte aprova-lo: abra Ajustes > Plugins e ' +

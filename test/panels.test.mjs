@@ -4892,5 +4892,26 @@ console.log('\nconfig.html — Jev: si el worker no contesta, la llave no queda 
     JSON.stringify(storage.jevRequest))
 }
 
+console.log('\nconfig.html — Avanzado: lo que el intervalo controla y cuando se transcribe')
+for (const [idioma, nombre, minuto, caso] of [
+  ['es-419', 'ES', /cada minuto/i, /llegan a un caso/i],
+  ['en', 'EN', /every minute/i, /reach a case/i],
+  ['pt-BR', 'PT', /cada minuto/i, /chegam a um caso/i]]) {
+  const { doc } = await montar('config.html', {}, idioma)
+  await espera()
+  const sync = doc.querySelector('[data-t="syncHelp"]').textContent
+  const voz = doc.querySelector('[data-t="transcribeHelp"]').textContent
+  ok(`${nombre}: el intervalo dice que gobierna la lista de conversaciones y el tablero`,
+    /(conversa|chat)/i.test(sync) && /(tablero|board|quadro)/i.test(sync), sync)
+  ok(`${nombre}: y que los mensajes nuevos se procesan cada minuto, sea cual sea`,
+    minuto.test(sync), sync)
+  ok(`${nombre}: ya no promete que es lo que mas tarda un mensaje nuevo`,
+    !/(mas puede tardar|longest a new message|maximo que uma mensagem)/i.test(sync), sync)
+  ok(`${nombre}: las notas de voz se transcriben al llegar a un caso`, caso.test(voz), voz)
+  ok(`${nombre}: y dice que pasa con no transcribir`,
+    /(no transcribir|do not transcribe|nao transcrever)/i.test(voz), voz)
+  ok(`${nombre}: sin voseo`, !/\b(tenes|podes|sabes que|mira|revisa|decime)\b/i.test(sync + voz))
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)
