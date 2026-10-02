@@ -4763,6 +4763,48 @@ console.log('\nactivity.html — tablero: lo que hizo el agente, en la historia 
     /otro/.test(filas[4]), filas[4])
 }
 
+console.log('\nactivity.html — T22: la historia dice que paso, y agrupa lo repetido')
+{
+  const caso = tarjeta({ case_id: 4, events: [
+    { de: null, a: 'recibido', actor: 'automatizacion', que: 'message', at: hace(50 * 60000) },
+    { de: 'recibido', a: 'recibido', actor: 'automatizacion', que: 'sticker', at: hace(49 * 60000) },
+    { de: 'recibido', a: 'recibido', actor: 'automatizacion', que: 'message', at: hace(48 * 60000) },
+    { de: 'recibido', a: 'recibido', actor: 'automatizacion', que: 'message', at: hace(47 * 60000) },
+    { de: 'recibido', a: 'recibido', actor: 'automatizacion', que: 'message', at: hace(46 * 60000) },
+    { de: 'recibido', a: 'recibido', actor: 'jev', que: 'jev', args: ['agent'], at: hace(45 * 60000) },
+    { de: 'recibido', a: 'recibido', actor: 'regla', que: 'rule', args: ['money'], at: hace(44 * 60000) },
+    { de: 'decision', a: 'decision', actor: 'automatizacion', que: 'held',
+      args: ['money', 'states_status_not_verified'], at: hace(43 * 60000) },
+    { de: 'clasificado', a: 'clasificado', actor: 'automatizacion', que: 'revision',
+      args: ['commitment'], at: hace(42 * 60000) },
+    { de: 'decision', a: 'decision', actor: 'regla', que: 'work_waits', args: ['delete'],
+      at: hace(41 * 60000) },
+    { de: 'decision', a: 'decision', actor: 'automatizacion', que: 'algo_nuevo', at: hace(40 * 60000) }] })
+  const { doc } = await abrirTablero({ board: tablero([caso]) })
+  const h = abrirDetalle(doc, 4).querySelector('.det-hist')
+  const filas = [...h.querySelectorAll('li')].map((li) => li.textContent)
+  ok('un sticker dice que llego un sticker', filas.some((f) => /llego un sticker/.test(f)),
+    JSON.stringify(filas))
+  ok('tres mensajes seguidos van en una fila con su cuenta',
+    filas.filter((f) => /llego un mensaje ×3/.test(f)).length === 1 && filas.length === 9,
+    JSON.stringify(filas))
+  ok('lo que dijo Jev', filas.some((f) => /Jev: necesita agente/.test(f)), JSON.stringify(filas))
+  ok('lo que marco la regla fija', filas.some((f) => /regla fija: dinero/.test(f)),
+    JSON.stringify(filas))
+  ok('un envio retenido, con sus motivos en palabras',
+    filas.some((f) => /envio retenido: dinero/.test(f) && !/states_status/.test(f)),
+    JSON.stringify(filas))
+  ok('lo que volvio al agente para reescribir', filas.some((f) => /el agente lo reescribe/.test(f)),
+    JSON.stringify(filas))
+  ok('un trabajo que espera al dueno', filas.some((f) => /espera su firma: borrar/.test(f)),
+    JSON.stringify(filas))
+  ok('lo que el panel no conoce sigue diciendo actualizado, sin el codigo crudo',
+    /actualizado/.test(filas[filas.length - 1]) && !/algo_nuevo/.test(h.textContent),
+    filas[filas.length - 1])
+  ok('la primera fila sigue siendo la llegada al tablero', /Recibido/.test(filas[0]) &&
+    /llego un mensaje/.test(filas[0]), filas[0])
+}
+
 console.log('\nactivity.html — tablero: la ultima corrida del agente, en una linea')
 {
   const AHORA = new Date().toISOString().slice(0, 16).replace('T', ' ')

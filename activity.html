@@ -659,6 +659,26 @@
               "detProject": "Proyecto", "detPrevCase": "Caso anterior",
               "boardNeedsAgent": "Para el agente en su proxima corrida",
                             "detHistTouch": "actualizado",
+              "histMessage": "llego un mensaje", "histSticker": "llego un sticker",
+              "histAudio": "llego un audio", "histJev": "Jev: {que}",
+              "histJevAgent": "necesita agente", "histRule": "regla fija: {que}",
+              "histHeld": "envio retenido: {que}",
+              "histRevision": "volvio al agente, el agente lo reescribe: {que}",
+              "histOwnerDecides": "lo decide usted: {que}",
+              "histWorkWaits": "el trabajo espera su firma: {que}",
+              "histProposal": "propuesta: {que}", "histApproved": "aprobada",
+              "histSent": "enviado", "histRoute": "destino del caso",
+              "histProject": "proyecto cambiado", "histClassified": "clasificado: {que}",
+              "histRetitled": "titulo nuevo", "histWithdrawn": "propuesta retirada",
+              "histAuthorized": "excepciones autorizadas", "histAttend": "atender ahora",
+              "motSecret": "un secreto", "motJevDown": "Jev no contesto",
+              "motDelete": "borrar", "motDeploy": "desplegar a produccion",
+              "motForcePush": "push forzado", "motPayment": "pagos",
+              "motOutside": "fuera del proyecto del chat", "motMode": "el chat solo observa",
+              "motStale": "propuesta de hace mas de un dia",
+              "motExceptions": "excepciones del caso", "motNoInstr": "sin instrucciones",
+              "claseCard": "para el agente", "claseAlert": "para usted",
+              "claseDoubtful": "dudoso", "claseNothing": "nada que atender",
               "actorAgente": "el agente",
               "actorJev": "Jev",
               "actorDueno": "usted",
@@ -841,6 +861,26 @@
               "detProject": "Project", "detPrevCase": "Previous case",
               "boardNeedsAgent": "For your agent on its next run",
                             "detHistTouch": "updated",
+              "histMessage": "a message arrived", "histSticker": "a sticker arrived",
+              "histAudio": "a voice note arrived", "histJev": "Jev: {que}",
+              "histJevAgent": "needs the agent", "histRule": "fixed rule: {que}",
+              "histHeld": "send held: {que}",
+              "histRevision": "back to the agent, the agent rewrites it: {que}",
+              "histOwnerDecides": "you decide: {que}",
+              "histWorkWaits": "the work waits for your signature: {que}",
+              "histProposal": "proposal: {que}", "histApproved": "approved",
+              "histSent": "sent", "histRoute": "case destination",
+              "histProject": "project changed", "histClassified": "classified: {que}",
+              "histRetitled": "new title", "histWithdrawn": "proposal withdrawn",
+              "histAuthorized": "exceptions authorized", "histAttend": "handle now",
+              "motSecret": "a secret", "motJevDown": "Jev did not answer",
+              "motDelete": "deleting", "motDeploy": "deploying to production",
+              "motForcePush": "force push", "motPayment": "payments",
+              "motOutside": "outside the chat's project", "motMode": "the chat only observes",
+              "motStale": "a proposal older than a day",
+              "motExceptions": "the case's exceptions", "motNoInstr": "no instructions",
+              "claseCard": "for the agent", "claseAlert": "for you",
+              "claseDoubtful": "unclear", "claseNothing": "nothing to handle",
               "actorAgente": "your agent",
               "actorJev": "Jev",
               "actorDueno": "you",
@@ -1023,6 +1063,26 @@
               "detProject": "Projeto", "detPrevCase": "Caso anterior",
               "boardNeedsAgent": "Para o agente na proxima rodada",
                             "detHistTouch": "atualizado",
+              "histMessage": "chegou uma mensagem", "histSticker": "chegou um sticker",
+              "histAudio": "chegou um audio", "histJev": "Jev: {que}",
+              "histJevAgent": "precisa do agente", "histRule": "regra fixa: {que}",
+              "histHeld": "envio retido: {que}",
+              "histRevision": "voltou ao agente, o agente reescreve: {que}",
+              "histOwnerDecides": "voce decide: {que}",
+              "histWorkWaits": "o trabalho espera a sua assinatura: {que}",
+              "histProposal": "proposta: {que}", "histApproved": "aprovada",
+              "histSent": "enviado", "histRoute": "destino do caso",
+              "histProject": "projeto alterado", "histClassified": "classificado: {que}",
+              "histRetitled": "titulo novo", "histWithdrawn": "proposta retirada",
+              "histAuthorized": "excecoes autorizadas", "histAttend": "atender agora",
+              "motSecret": "um segredo", "motJevDown": "o Jev nao respondeu",
+              "motDelete": "apagar", "motDeploy": "publicar em producao",
+              "motForcePush": "push forcado", "motPayment": "pagamentos",
+              "motOutside": "fora do projeto do chat", "motMode": "o chat so observa",
+              "motStale": "proposta de mais de um dia",
+              "motExceptions": "excecoes do caso", "motNoInstr": "sem instrucoes",
+              "claseCard": "para o agente", "claseAlert": "para voce",
+              "claseDoubtful": "duvidoso", "claseNothing": "nada a atender",
               "actorAgente": "o agente",
               "actorJev": "Jev",
               "actorDueno": "voce",
@@ -1413,6 +1473,36 @@
         commitment: 'excCommitment', jev: 'excJev' }
       var PROP_KEY = { responder: 'propResponder', trabajar: 'propTrabajar',
         escalar: 'propEscalar', descartar: 'propDescartar' }
+      // Lo que paso en cada evento de la historia (T22), por el codigo `que` que deja
+      // wa-scope (`que_del_evento`). Un codigo que el panel no conoce dice "actualizado".
+      var HIST_KEY = { message: 'histMessage', sticker: 'histSticker', audio: 'histAudio',
+        jev: 'histJev', rule: 'histRule', held: 'histHeld', revision: 'histRevision',
+        owner_decides: 'histOwnerDecides', work_waits: 'histWorkWaits',
+        proposal: 'histProposal', approved: 'histApproved', sent: 'histSent',
+        route: 'histRoute', project: 'histProject', classified: 'histClassified',
+        retitled: 'histRetitled', withdrawn: 'histWithdrawn', authorized: 'histAuthorized',
+        attend: 'histAttend' }
+      // Los motivos y excepciones que viajan en `args`, en palabras.
+      var MOTIVO_KEY = { money: 'excMoney', credential: 'excCredential',
+        commitment: 'excCommitment', jev: 'excJev', secret: 'motSecret',
+        agent: 'histJevAgent', 'jev-unavailable': 'motJevDown',
+        promises_a_date: 'flagPromisesDate', states_status_not_verified: 'flagStatusNotVerified',
+        contains_credential: 'flagContainsCredential', delete: 'motDelete',
+        deploy: 'motDeploy', force_push: 'motForcePush', payment: 'motPayment',
+        outside_project: 'motOutside', mode: 'motMode', stale: 'motStale',
+        exceptions: 'motExceptions', no_instructions: 'motNoInstr',
+        responder: 'propResponder', trabajar: 'propTrabajar', escalar: 'propEscalar',
+        descartar: 'propDescartar', card: 'claseCard', alert: 'claseAlert',
+        doubtful: 'claseDoubtful', nothing: 'claseNothing' }
+      /** Lo que paso en un evento, en una frase; '' si el panel no lo sabe decir. */
+      function queDelEvento (ev) {
+        var key = typeof ev.que === 'string' && Object.prototype.hasOwnProperty.call(HIST_KEY, ev.que)
+          ? HIST_KEY[ev.que] : null
+        if (!key) return ''
+        var args = Array.isArray(ev.args) ? ev.args.filter(function (x) { return typeof x === 'string' }) : []
+        var detalle = frases(MOTIVO_KEY, args, t('excOther'))
+        return detalle ? t(key).replace('{que}', detalle) : t(key).replace(/:?\s*\{que\}/, '')
+      }
 
       // Hasta cuantos caracteres la respuesta se lee ENTERA en la tarjeta, al lado de su
       // Enviar. Mas larga, la tarjeta no la manda: su boton abre el detalle para leerla.
@@ -2273,17 +2363,32 @@
         })
         function lista (evs) {
           var ol = crear('ol', 'det-hist')
+          // Las filas iguales seguidas (tres mensajes que llegan uno tras otro) van en una,
+          // con su cuenta: la historia dice que paso, no lo repite (T22).
+          var filas = []
           evs.forEach(function (ev) {
             var hacia = ETAPA_KEY[ev.a] ? t(ETAPA_KEY[ev.a]) : null
             if (!hacia) return
-            // Lo que no movio la etapa (una clasificacion, un proyecto, "atender") es un cambio
-            // dentro de la misma etapa.
-            var que = ev.de === ev.a ? hacia + ' · ' + t('detHistTouch')
-              : (ETAPA_KEY[ev.de] ? t(ETAPA_KEY[ev.de]) + ' → ' : '') + hacia
+            // Lo que no movio la etapa es un cambio dentro de la misma etapa: dice que fue
+            // (un mensaje, lo que dijo Jev, un envio retenido) y, si no se sabe, "actualizado".
+            var paso = queDelEvento(ev)
+            var que = ev.de === ev.a ? hacia + ' · ' + (paso || t('detHistTouch'))
+              : (ETAPA_KEY[ev.de] ? t(ETAPA_KEY[ev.de]) + ' → ' : '') + hacia +
+                (paso ? ' · ' + paso : '')
+            var quien = porCodigo(ACTOR_KEY, ev.actor, t('actorOtro'))
+            var previa = filas[filas.length - 1]
+            if (previa && previa.que === que && previa.quien === quien) {
+              previa.n += 1
+              previa.at = ev.at
+              return
+            }
+            filas.push({ que: que, quien: quien, at: ev.at, n: 1 })
+          })
+          filas.forEach(function (f) {
             var li = crear('li')
-            li.appendChild(crear('span', 'hist-que', que))
-            li.appendChild(crear('span', 'hist-quien', porCodigo(ACTOR_KEY, ev.actor, t('actorOtro'))))
-            var cuandoTxt = hace(ev.at)
+            li.appendChild(crear('span', 'hist-que', f.que + (f.n > 1 ? ' ×' + f.n : '')))
+            li.appendChild(crear('span', 'hist-quien', f.quien))
+            var cuandoTxt = hace(f.at)
             if (cuandoTxt) li.appendChild(crear('span', 'when', cuandoTxt))
             ol.appendChild(li)
           })
