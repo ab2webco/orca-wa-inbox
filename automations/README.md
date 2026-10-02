@@ -65,7 +65,15 @@ con un error, no hace nada y lo cuenta en `limpieza_error`.
   usable, sin reporte, sin respuesta en 4 h o con un error de Orca, el caso va a Bloqueado
   con el motivo. Una firma de más de 24 h que el despacho ve por primera vez tampoco se
   lanza ("aprobación vieja: vuelve a aprobar"); lo único que se reintenta solo, una vez,
-  es lo que bloqueó `no_active_sender_terminal`. El agente reporta con `caso resultado` (`resuelto`, `necesita`
+  es lo que bloqueó `no_active_sender_terminal` o un Claude que se cerró al abrir. Antes de
+  escribir la línea se lee la terminal (`terminal read`): `composer-ready` también se cumple
+  con la pantalla de Claude Code que pide confiar en la carpeta (una vez por cuenta y
+  carpeta), y en 2.1.288 su opción marcada es "No, exit". Con esa pantalla a la vista se
+  mueve el cursor con las flechas hasta la opción Yes, se lo ve ahí y va un Enter solo; con
+  el prompt de un shell (Claude se cerró) no se escribe nada y el motivo es "Claude se cerro
+  al abrir: <su última línea>". El reenvío de la línea perdida mira lo mismo. El agente de
+  casos usa el mismo código: su corrida falla con `se-cerro`, el tick abre otra a los 5 min,
+  y la tercera seguida (`se-cierra`) espera una hora. El agente reporta con `caso resultado` (`resuelto`, `necesita`
   o `bloqueado`), que manda la respuesta en el acto por el mismo piso; si pidió
   información, lo que conteste el cliente vuelve a su terminal o a un despacho nuevo.
 

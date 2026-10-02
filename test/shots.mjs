@@ -801,6 +801,20 @@ const PANELES = [
     }) })
   },
   {
+    // Claude se cerro al abrir tres veces seguidas: el tick espera una hora y lo dice.
+    nombre: 'tablero-agente-se-cierra', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
+    datos: Object.assign(corrida({ state: 'ok', startedAt: AHORA_CORTO, endedAt: AHORA_CORTO,
+      looked: 4, pending: 0, reason: null }), { board: tableroDe(TABLERO_CASOS.map((c) => (
+      c.stage === 'recibido' || c.stage === 'clasificado'
+        ? Object.assign({}, c, { waits_agent: true }) : c)), {
+      agent_waiting: TABLERO_CASOS.filter((c) => c.stage === 'recibido' ||
+        c.stage === 'clasificado').length,
+      agent_launch: { state: 'failed', reason: 'se-cierra', at: minutos(2),
+        detail: 'Claude se cerro al abrir: Security guide' }
+    }) })
+  },
+  {
     // El tick no pudo quitar de la barra lateral dos espacios que dejaron las corridas del
     // plugin: lo dice la linea de la revision, para que el dueno los quite a mano.
     nombre: 'tablero-espacios-atascados', archivo: 'activity.html', anchos: ANCHOS,
