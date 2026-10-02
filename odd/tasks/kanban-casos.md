@@ -389,6 +389,10 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
            autocompletar de chats y nunca adivinados;
          - sus mensajes cuentan como orden del dueño, y lo que se les responde o se
            envía por su pedido no pasa por las reglas de aprobación;
+         - wa-send to one of the owner's own chats (e.g. a notice from another project's
+           session) skips the Jev quality review; only the credential floor stays
+           (owner, 2026-10-02: "review and hold what comes from users who are not me");
+           a send to anyone else keeps the Jev review, because it protects the reader;
          - solo quedan los controles destructivos: nunca repetir una credencial real;
            nada irreversible en un proyecto (borrar, despliegue a producción, push
            forzado, pagos) sin una confirmación explícita en ese chat.
