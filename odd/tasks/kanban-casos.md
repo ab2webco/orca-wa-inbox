@@ -377,12 +377,11 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
       Hecho: un clasificado sin propuesta despierta al agente en chats `responder` o
       `borrador` (sin `skip`); con credencial pasa a `decision` una vez. Los avisos de
       Plane siguen pendientes.
-- [ ] T21 — Sin pestaña Bandeja: el tablero es el panel. Historial del agente en
+- [x] T21 — Sin pestaña Bandeja: el tablero es el panel. Historial del agente en
       el detalle de la tarjeta, "Atender ahora" e "Ignorar" como acciones de la
       tarjeta, proyecto asignable a mano desde el detalle. Va con el rediseño del
       tablero (W4).
       Hecha en W4 (8b6c626, c9154ce, 7e4d31d).
-- [x] T21 — (cerrada, ver arriba).
 - [ ] T22 — Reglas de aprobación afinadas, pedidas por el dueño (2026-10-01) tras ver
       que casi todos los frenos del día fueron falsos positivos.
       1. Números del dueño:
