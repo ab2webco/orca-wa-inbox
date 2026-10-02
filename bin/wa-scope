@@ -3687,6 +3687,78 @@ def caso_retitula(con, case_id, previo, stanza, texto):
     caso_tocar(con, caso, "automatizacion", detalle, titulo=titulo, resumen=resumen)
 
 
+# Los borradores retenidos que hay que retirar de la bandeja de salida una vez confirmada la
+# transaccion que invalido su propuesta: (req_id, motivo). Los vacia `cancela_borradores`.
+CANCELACIONES = []
+
+
+def propuesta_invalida(con, caso, motivo, hacia="clasificado"):
+    """Una propuesta que ya no vale: queda en la historia (version y tipo, nunca el texto),
+    se borra del caso para que ni se apruebe ni se mande, y el caso vuelve a `clasificado`
+    marcado para el agente. Devuelve el id de la peticion de su borrador. Sin commit."""
+    version = caso["propuesta_version"]
+    try:
+        tipo = json.loads(caso["propuesta"]).get("tipo") or "-"
+    except (TypeError, ValueError, AttributeError):
+        tipo = "-"
+    campos = dict(propuesta=None, propuesta_version=None, propuesta_aprobada=None)
+    if hacia == "clasificado":
+        campos["necesita_agente"] = 1
+    caso_mover(con, caso, hacia, "automatizacion",
+               f"propuesta anterior, no enviada ({motivo}): {tipo} {version}", **campos)
+    req = id_envio_caso(caso["case_id"], version)
+    CANCELACIONES.append((req, motivo))
+    return req
+
+
+def propuesta_rancia(con, case_id, m, veredicto=None):
+    """Si el mensaje que acaba de sumarse al caso deja sin efecto su propuesta vigente. Una
+    propuesta en `decision` o `listo` responde a lo que se sabia al hacerla: un mensaje que
+    llega despues es lo ultimo que dijo el cliente, y dejarla con su boton Enviar es lo que
+    dejaba el caso parado (nadie redacta el pedido nuevo, `casos_para_agente` no mira
+    `decision`). Un mensaje mas viejo que la propuesta (una resincronizacion) no la
+    invalida, y una credencial manda al dueno, sin propuesta, como siempre."""
+    caso = caso_de(con, case_id)
+    if caso["etapa"] not in ("decision", "listo") or not caso["propuesta_version"]:
+        return False
+    if "credential" in _lista_json(caso.get("excepciones")):
+        return False
+    hecha = con.execute("select at from caso_evento where case_id=? and detalle like ? "
+                        "order by id desc limit 1",
+                        (case_id, f"% {caso['propuesta_version']}")).fetchone()
+    llego = antiguedad_s(m.get("date"))
+    if hecha and llego is not None:
+        try:
+            if llego + 60 <= time.mktime(time.strptime(hecha["at"], "%Y-%m-%d %H:%M:%S")):
+                return False
+        except ValueError:
+            pass
+    # Con una credencial en lo que acaba de llegar (el piso fijo o Jev) el caso es del dueno:
+    # se queda en decision, sin propuesta, y no pasa por el agente.
+    jev = (veredicto or {}).get("jev") or {}
+    credencial = ("credential" in wa_reglas.excepciones(m.get("text") or "", wa_reglas.ENTRADA)
+                  or "credential" in (jev.get("exceptions") or []))
+    propuesta_invalida(con, caso, "mensaje nuevo", "decision" if credencial else "clasificado")
+    return True
+
+
+def cancela_borradores():
+    """Retira de la bandeja de salida los borradores de las propuestas que se invalidaron,
+    con `wa-send --cancel`, que solo toca un `borrador`. Si falla se dice, y la propuesta ya
+    no esta en el caso: el boton Enviar del tablero no puede mandarla."""
+    pendientes, CANCELACIONES[:] = list(CANCELACIONES), []
+    for req, motivo in pendientes:
+        try:
+            p = subprocess.run([WA_SEND, "--cancel", req, "--reason", motivo, "--json"],
+                               capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.SubprocessError) as exc:
+            print(f"wa-scope: could not cancel draft {req}: {exc}", file=sys.stderr)
+            continue
+        if p.returncode != 0:
+            print(f"wa-scope: could not cancel draft {req}: "
+                  f"{(p.stderr or '').strip()[:120]}", file=sys.stderr)
+
+
 def ingest_mensaje(con, m, veredicto, horas):
     """Un mensaje nuevo, en SU transaccion: o queda todo (caso, ruta, clasificacion,
     eventos) o nada, y la fila de `caso_mensaje` es lo que hace que un reintento no lo
@@ -3720,6 +3792,7 @@ def ingest_mensaje(con, m, veredicto, horas):
             # no entiende que es parte del pedido (un enlace pelado), y no se cierra.
             case_id = reciente["case_id"]
             caso_suma_mensaje(con, reciente, stanza, "automatizacion", reabre=False)
+            propuesta_rancia(con, case_id, m, veredicto)
             hecho.update(nuevos=1, unidos=1)
             caso_marca_regla(con, case_id, piso, stanza)
         elif accion == "cerrar" and not (suelto and not veredicto.get("dueno")):
@@ -3751,8 +3824,9 @@ def ingest_mensaje(con, m, veredicto, horas):
                 con.rollback()
                 return hecho, None
             caso_suma_mensaje(con, caso, stanza, "automatizacion", reabre=False)
-            hecho.update(nuevos=1, unidos=1)
             case_id = caso["case_id"]
+            propuesta_rancia(con, case_id, m, veredicto)
+            hecho.update(nuevos=1, unidos=1)
             caso_marca_regla(con, case_id, piso, stanza)
         else:
             previo = caso_abierto_de_chat(con, chat, horas)
@@ -3763,6 +3837,8 @@ def ingest_mensaje(con, m, veredicto, horas):
             case_id, que = caso_asigna(con, stanza, chat, "automatizacion", aparte)
             hecho.update(nuevos=1, casos_creados=int(que == "nuevo"),
                          unidos=int(que == "unido"))
+            if que == "unido":
+                propuesta_rancia(con, case_id, m, veredicto)
             caso_enruta(con, case_id, m.get("text") or "", chat)
             if que == "nuevo" and veredicto and veredicto.get("auto") and not piso:
                 # La respuesta que el motor manda solo: una por caso nuevo, y nunca con el
@@ -3784,6 +3860,7 @@ def ingest_mensaje(con, m, veredicto, horas):
         con.commit()
     except BaseException:
         con.rollback()
+        CANCELACIONES.clear()
         raise
     return hecho, case_id
 
@@ -3893,6 +3970,7 @@ def cmd_ingest(con, a):
                 abren.append((x, veredicto))
     for m, veredicto in abren + sueltos:
         hecho, case_id = ingest_mensaje(con, m, veredicto, horas)
+        cancela_borradores()
         for k, v in hecho.items():
             total[k] += v
         if case_id is not None:

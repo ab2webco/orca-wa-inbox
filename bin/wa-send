@@ -106,6 +106,8 @@ RECHAZADO = "send-rejected"
 SIN_VEREDICTO = "send-timeout"
 # Un --approve sobre algo que no esta.
 SIN_BORRADOR = "send-no-draft"
+# Un --approve (o un reintento) sobre un borrador que se cancelo: no hay nada que aprobar.
+CANCELADO = "send-cancelled"
 # El mismo --id con otro texto o para otra conversacion. No se manda ninguno de los
 # dos: entregar el viejo es mandar lo que nadie pidio, y pisarlo es entregar dos veces.
 ID_EN_USO = "send-id-conflict"
@@ -127,9 +129,12 @@ CUENTA_LOCAL = "local"
 # tabla la escriben los dos lados.
 BORRADOR, PENDIENTE, ENVIADO, RECHAZADO_ = (
     "borrador", "pendiente", "enviado", "rechazado")
+# El borrador que alguien retiro (`--cancel`): final, y el sidecar no lo toca nunca (solo
+# toma `pendiente`). Se queda como fila, con su motivo: nada se borra.
+CANCELADO_ = "cancelado"
 # `enviando` es el quinto estado y no se nombra aca a proposito: lo escribe SOLO el
 # sidecar al tomar la fila, y esta CLI no decide nada con el. Lo que espera es un final.
-FINALES = (ENVIADO, RECHAZADO_)
+FINALES = (ENVIADO, RECHAZADO_, CANCELADO_)
 
 # Cuanto vale el latido del sidecar. Vive en `wa_store`, que lo comparte con el
 # `doctor`; es el MISMO numero que `LATIDO_VENCE_MS` en `sidecar/src/envio.js`, y
@@ -342,6 +347,9 @@ def veredicto(con, req_id, plazo_s, salida_json):
     if fila["estado"] == RECHAZADO_:
         niega(RECHAZADO, f"WhatsApp refused it: {fila['motivo'] or 'no reason given'}. "
                          "Nothing was delivered.")
+    if fila["estado"] == CANCELADO_:
+        niega(CANCELADO, f"this draft was cancelled ({fila['motivo'] or 'no reason given'}): "
+                         "nothing was sent and it cannot be approved.")
     informa(salida_json, {"req_id": req_id, "estado": ENVIADO,
                           "chat": fila["chat_name"], "stanza_id": fila["stanza_id"]},
             f"sent · {fila['chat_name']} · {req_id}")
@@ -479,10 +487,32 @@ def aprobar(req_id, plazo_s, salida_json):
     if fila["estado"] == RECHAZADO_:
         niega(RECHAZADO, f"WhatsApp refused it: {fila['motivo'] or 'no reason given'}. "
                          "Nothing was delivered.")
+    if fila["estado"] == CANCELADO_:
+        niega(CANCELADO, f"this draft was cancelled ({fila['motivo'] or 'no reason given'}): "
+                         "nothing was sent and it cannot be approved.")
     con.execute("update envio set estado=? where req_id=? and estado=?",
                 (PENDIENTE, req_id, BORRADOR))
     con.commit()
     veredicto(con, req_id, plazo_s, salida_json)
+
+
+def cancelar(req_id, motivo, salida_json):
+    """Retira un borrador: pasa de `borrador` a `cancelado`, y solo de ahi. Lo que ya salio,
+    o esta saliendo, no se toca: cancelar no puede deshacer un envio. No borra la fila."""
+    con = almacen()
+    if con is None:
+        informa(salida_json, {"req_id": req_id, "estado": None, "cancelled": False},
+                f"nothing to cancel · {req_id}")
+        sys.exit(0)
+    cur = con.execute("update envio set estado=?, motivo=?, settled_at=? where req_id=? "
+                      "and estado=?", (CANCELADO_, (motivo or "cancelled")[:200],
+                                       int(time.time()), req_id, BORRADOR))
+    con.commit()
+    fila = con.execute("select estado from envio where req_id=?", (req_id,)).fetchone()
+    informa(salida_json, {"req_id": req_id, "estado": fila["estado"] if fila else None,
+                          "cancelled": cur.rowcount == 1},
+            f"{'cancelled' if cur.rowcount == 1 else 'nothing to cancel'} · {req_id}")
+    sys.exit(0)
 
 
 def main():
@@ -507,6 +537,10 @@ def main():
     ap.add_argument("--approve", metavar="ID",
                     help="send a draft that was waiting: the explicit approval that "
                          "`borrador` needs")
+    ap.add_argument("--cancel", metavar="ID",
+                    help="withdraw a draft that was waiting: it can no longer be approved "
+                         "or sent (a request already sent is not touched)")
+    ap.add_argument("--reason", default="", help="why, with --cancel (kept with the row)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     a = ap.parse_args()
 
@@ -514,6 +548,8 @@ def main():
         listar_borradores(a.json)
     if a.approve:
         aprobar(a.approve, a.timeout, a.json)
+    if a.cancel:
+        cancelar(a.cancel, a.reason, a.json)
     if not a.chat or a.text is None:
         ap.error("the chat and the text are required (or use --drafts / --approve)")
 

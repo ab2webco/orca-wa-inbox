@@ -3808,6 +3808,128 @@ if NODE:
 
 
 
+# ── Un mensaje nuevo invalida la propuesta que ya no responde a lo ultimo ───────────────
+# Caso vivo: una propuesta inventada ("su audio fue escuchado") quedo frenada como
+# borrador; 22 minutos despues llego un pedido nuevo al MISMO caso, que se quedo en
+# `decision` con la propuesta vieja y su boton Enviar, y nadie redacto el pedido nuevo.
+print("\nuna propuesta anterior al mensaje nuevo deja de valer")
+VIEJA = "Su audio fue recibido y escuchado completo, sin errores."
+
+
+def envejece_propuesta(home, cid, minutos=30):
+    """La propuesta se hizo `minutos` antes de lo que llega despues: los mensajes de las
+    pruebas llevan la hora que se les da, y los eventos la de la corrida."""
+    con = db_de(home)
+    con.execute("update caso_evento set at=strftime('%Y-%m-%d %H:%M:%S', at, ?) where case_id=?",
+                (f"-{minutos} minutes", int(cid)))
+    con.commit()
+    con.close()
+
+
+def aprobar_borrador(home, req):
+    env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+               APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"))
+    return subprocess.run([str(RAIZ / "bin" / "wa-send"), "--approve", req, "--json",
+                           "--timeout=3"], capture_output=True, text=True, env=env, timeout=60)
+
+
+if NODE:
+    falso = JevFalso(jev_y_borradores)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "P1", "revisa este caso: mi audio", 40)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+            js(home, "config", "ack", "off")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                c = caso_de_stanza(home, "P1")
+                cid = str(c["case_id"])
+                js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+                   "--actor", "agente")
+                v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta", VIEJA,
+                       "--actor", "agente")[0]["propuesta_version"]
+                tick(home)
+                req = f"caso-{cid}-{v[:12]}"
+                ok("Jev frena la propuesta inventada: queda borrador y el caso en decision",
+                   [e["estado"] for e in envios(home) if e["req_id"] == req] == ["borrador"]
+                   and js(home, "caso", "ver", cid)[0]["etapa"] == "decision", f"{envios(home)}")
+                envejece_propuesta(home, cid)
+                llegan(home, A, [msg(PERSONA, "P2", "no funciono otra vez, revisa este caso", 1)])
+                ingiere(home)
+                ver = js(home, "caso", "ver", cid)[0]
+                ok("un pedido nuevo en el mismo caso deja la propuesta vieja sin efecto",
+                   ver["etapa"] == "clasificado" and not ver["propuesta"]
+                   and not ver["propuesta_version"] and not ver["aprobada"], f"{ver['etapa']} {ver['propuesta']}")
+                ok("queda en la historia como propuesta anterior no enviada, sin su texto",
+                   any("propuesta anterior, no enviada" in e["detalle"] for e in ver["eventos"])
+                   and not any(VIEJA in json.dumps(e) for e in ver["eventos"]), f"{ver['eventos']}")
+                ok("y el borrador retenido se cancela, sin borrar la fila",
+                   [e["estado"] for e in envios(home) if e["req_id"] == req] == ["cancelado"],
+                   f"{envios(home)}")
+                a = aprobar_borrador(home, req)
+                ok("wa-send --approve sobre el borrador cancelado se niega",
+                   a.returncode != 0 and not sidecar.entregados, f"{a.returncode} {a.stderr[:200]}")
+                ok("el caso despierta al agente para el pedido nuevo", int(cid) in para_el_agente(home),
+                   f"{para_el_agente(home)}")
+                t = tarjeta(home, cid)
+                ok("el tablero muestra el pedido nuevo y no la propuesta vieja",
+                   t and t["stage"] == "clasificado" and not t["proposal"], f"{t}")
+                tick(home)
+                ok("un tick despues no manda nada de lo viejo", not any(
+                    r.startswith(f"caso-{cid}-{v[:12]}") for r in sidecar.entregados))
+            finally:
+                sidecar.cerrar()
+
+        # Un caso en decision SIN propuesta no se toca: lo de hoy.
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "N1", "revisa este caso", 40)])
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "borrador")
+            ingiere(home)
+            cid = str(caso_de_stanza(home, "N1")["case_id"])
+            con = db_de(home)
+            con.execute("update caso set etapa='decision', propuesta=NULL, propuesta_version=NULL "
+                        "where case_id=?", (int(cid),))
+            con.commit()
+            con.close()
+            llegan(home, A, [msg(PERSONA, "N2", "revisa este caso otra vez", 1)])
+            ingiere(home)
+            ok("un mensaje en un caso en decision sin propuesta lo deja donde estaba",
+               js(home, "caso", "ver", cid)[0]["etapa"] == "decision",
+               js(home, "caso", "ver", cid)[0]["etapa"])
+
+        # Una credencial sigue yendo al dueno, sin propuesta.
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "K1", "revisa este caso", 40)])
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "borrador")
+            ingiere(home)
+            cid = str(caso_de_stanza(home, "K1")["case_id"])
+            js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+               "--actor", "agente")
+            js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+               "Lo revisamos y le avisamos.", "--actor", "agente")
+            envejece_propuesta(home, cid)
+            llegan(home, A, [msg(PERSONA, "K2", "la clave es Hunter2xx, revisa este caso", 1)])
+            ingiere(home)
+            ver = js(home, "caso", "ver", cid)[0]
+            ok("un mensaje con una credencial lleva el caso al dueno, sin propuesta",
+               ver["etapa"] == "decision" and not ver["propuesta"]
+               and "credential" in (ver["excepciones"] or []),
+               f"{ver['etapa']} {ver['propuesta']} {ver['excepciones']}")
+            ok("y no despierta al agente", int(cid) not in para_el_agente(home))
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
+
 # ── El esquema nuevo no rompe al codigo anterior ────────────────────────────────────────
 # Las columnas que se agregan a `chat_scope` las migra el codigo nuevo y las ve tambien el
 # anterior, que sigue corriendo en la maquina del dueno hasta que se actualiza. Se ejercita

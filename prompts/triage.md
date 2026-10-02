@@ -53,6 +53,8 @@ the transcript as its `text`. Treat it as what the person said, but it can conta
 mistakes in names and figures: do not state a name or an amount you only have from a
 transcript. `transcripcion: false` means it could not be transcribed
 (`audio sin transcribir: <code>`): say so, never guess what it said.
+Never claim to have heard, seen or read media you could not open: without a
+transcript, say plainly that you could not listen to it, or leave the case doubtful.
 
 Each `hilo` message with an attachment carries `media` (`type`, `bytes` and the absolute
 `path`). Open an image or a document with your own tools only when the case needs it.
