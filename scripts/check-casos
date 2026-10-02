@@ -1651,6 +1651,10 @@ def jev_segun_texto(cuerpo):
         return 500, {"error": "boom"}
     if "gracias" in texto or "buen dia" in texto:
         return 200, respuestas(qs, choice="pleasantry", asks_owner_to_act=0.05)
+    if "revisa este caso" in texto.lower():
+        return 200, respuestas(qs, choice="support_request", asks_owner_to_act=0.8)
+    if "soporte.example.com" in texto:
+        return 200, respuestas(qs, choice="existing_ticket_reference", asks_owner_to_act=0.05)
     if "charla entre ustedes" in texto:
         return 200, respuestas(qs, choice="unrelated_chatter", asks_owner_to_act=0.3)
     if "jaja" in texto:
@@ -1843,6 +1847,121 @@ if NODE:
            any(e["de"] == "respondido" and e["a"] == "recibido"
                and VERSION_ENVIADA[:12] in e["detalle"] for e in ver["eventos"]),
            f"{ver['eventos']}")
+
+
+# ── 12c. Una rafaga de mensajes se juzga como una sola cosa ──────────────────────────
+# Visto en vivo: tres mensajes en un segundo —el enlace a una conversacion de otro
+# sistema, una nota del cliente y "Revisa este caso"— se juzgaban uno por uno. Jev vio el
+# enlace pelado, dijo "nada que atender" y lo cerro en su propio caso: un pedido partido
+# en dos con la pieza clave cerrada en silencio. Ahora lo que llega junto en un chat se
+# juzga junto, y lo que llega tras un caso recien abierto se suma a el.
+ENLACE = "https://soporte.example.com/c/123"
+NOTA_CLIENTE = "nota: el cliente Ana Demo pregunta por su pedido"
+
+
+def listo_persona(home):
+    autoriza(home)
+    js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "borrador")
+
+
+def casos_de(home, *stanzas):
+    return [caso_de_stanza(home, x) for x in stanzas]
+
+
+print("\nuna rafaga se juzga junta")
+if NODE:
+    falso = JevFalso(jev_segun_texto)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "R1", ENLACE, 5), msg(PERSONA, "R2", NOTA_CLIENTE, 5),
+                             msg(PERSONA, "R3", "Revisa este caso", 5)])
+            listo_persona(home)
+            ingiere(home)
+            c1, c2, c3 = casos_de(home, "R1", "R2", "R3")
+            ok("el enlace, la nota y el pedido caen en un solo caso",
+               c1 and c1["case_id"] == c2["case_id"] == c3["case_id"], f"{[c and c['case_id'] for c in (c1, c2, c3)]}")
+            ok("y ese caso no esta cerrado: lo pide el dueno",
+               c1["etapa"] != "cerrado" and not any(e["a"] == "cerrado" for e in c1["eventos"]),
+               f"{c1['etapa']}")
+            ok("Jev vio la rafaga entera, en orden y en una sola llamada",
+               len(falso.pedidos) == 1 and falso.textos()[0].find(ENLACE) >= 0
+               and falso.textos()[0].find(ENLACE) < falso.textos()[0].find("Ana Demo")
+               < falso.textos()[0].find("Revisa este caso"), f"{falso.textos()}")
+            # El mismo juicio, otra vez: la cache lo tiene por la rafaga.
+            con = db_de(home)
+            for tabla in ("caso_evento", "caso_mensaje", "caso"):
+                con.execute(f"delete from {tabla}")
+            con.commit()
+            con.close()
+            ingiere(home)
+            ok("volver a juzgar la misma rafaga no llama a Jev: la cache la tiene",
+               len(falso.pedidos) == 1, f"{len(falso.pedidos)} pedidos")
+            ok("y el resultado es el mismo", caso_de_stanza(home, "R1")["case_id"]
+               == caso_de_stanza(home, "R3")["case_id"])
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            falso.pedidos.clear()
+            llegan(home, A, [msg(PERSONA, "S1", ENLACE, 5), msg(PERSONA, "S2", NOTA_CLIENTE, 5)])
+            listo_persona(home)
+            ingiere(home)
+            c1, c2 = casos_de(home, "S1", "S2")
+            ok("una rafaga que entera no pide nada se descarta junta, en un solo caso cerrado",
+               c1["case_id"] == c2["case_id"] and c1["etapa"] == "cerrado"
+               and len(falso.pedidos) == 1, f"{c1['etapa']} {len(falso.pedidos)}")
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "G0")
+            llegan(home, A, [msg(SOPORTE, "G1", "@duenio gracias", 5, mencion=True)])
+            ingiere(home)
+            g = caso_de_stanza(home, "G1")
+            ok("un \"gracias\" suelto tras una respuesta sigue siendo su caso cerrado",
+               g["case_id"] != cid and g["etapa"] == "cerrado"
+               and fila_de(home, cid)["etapa"] == "respondido", f"{g['etapa']}")
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            falso.pedidos.clear()
+            llegan(home, A, [msg(PERSONA, "T1", ENLACE, 30), msg(PERSONA, "T2", "Revisa este caso", 10)])
+            listo_persona(home)
+            ingiere(home)
+            c1, c2 = casos_de(home, "T1", "T2")
+            ok("dos rafagas separadas por diez minutos se juzgan por separado",
+               len(falso.pedidos) == 2 and c1["case_id"] != c2["case_id"]
+               and c1["etapa"] == "cerrado" and c2["etapa"] != "cerrado",
+               f"{len(falso.pedidos)} {c1['etapa']} {c2['etapa']}")
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            falso.pedidos.clear()
+            llegan(home, A, [msg(PERSONA, "U1", "Revisa este caso", 5)])
+            listo_persona(home)
+            ingiere(home)
+            llegan(home, A, [msg(PERSONA, "U2", ENLACE, 5)])
+            ingiere(home)
+            c1, c2 = casos_de(home, "U1", "U2")
+            ok("una rafaga partida en dos corridas se suma al mismo caso, sin cerrar",
+               c1["case_id"] == c2["case_id"] and c1["etapa"] != "cerrado",
+               f"{c1['case_id']} {c2['case_id']} {c1['etapa']}")
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "V1", ENLACE, 5),
+                             msg(PERSONA, "V2", "Revisa este caso, la clave es Zx9secreta", 5)])
+            listo_persona(home)
+            ingiere(home)
+            c = caso_de_stanza(home, "V1")
+            ok("el piso fijo corre por mensaje y suma sus excepciones al caso",
+               "credential" in json.loads(fila_de(home, c["case_id"])["excepciones"] or "[]"),
+               f"{fila_de(home, c['case_id'])['excepciones']}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
 
 
 # ── 13. Errores estables de `wa-scope caso` ──────────────────────────────────────

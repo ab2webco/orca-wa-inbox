@@ -383,7 +383,7 @@ def inbox(con, dias, limite, ventana, solo="todos", linea=None):
           -- de esconder es la misma regla que el resto del plugin: una lista vacia
           -- tiene que significar que no hay nada, no que no se miro.
           {donde}
-        order by m.ts desc
+        order by m.ts desc, m.rowid desc
         limit ?"""
     filas = con.execute(sql, [corte] + args + [limite]).fetchall()
 

@@ -2877,6 +2877,70 @@ def veredicto_de(m, decision, con=None):
     return veredicto_de_jev(m, juicio_jev) if juicio_jev is not None else None
 
 
+# Una rafaga: los mensajes de un chat que llegan a menos de esto uno del otro se juzgan
+# como UNA cosa. Juzgarlos uno por uno parte un pedido (un enlace pelado, una nota y
+# "revisa este caso") y cierra en silencio la pieza que Jev no entiende sola.
+RAFAGA_S = 180
+# Lo que va a Jev de una rafaga: los textos en orden, uno por linea.
+SEPARADOR_RAFAGA = "\n"
+KINDS_DE_ATENCION = ("directo", "respuesta", "mencion")
+
+
+def antiguedad_s(sello):
+    """Segundos entre dos sellos "%Y-%m-%d %H:%M" no hace falta: el sello como epoch, o
+    None si no se lee."""
+    try:
+        return time.mktime(time.strptime(str(sello), "%Y-%m-%d %H:%M"))
+    except (TypeError, ValueError):
+        return None
+
+
+def agrupa_rafagas(mensajes):
+    """Del mas viejo al mas nuevo: las rafagas de cada chat, en el orden en que empiezan.
+    Un mensaje se suma a la rafaga abierta de su chat si llego a lo mas RAFAGA_S despues
+    del anterior; si no, abre otra. Una fecha que no se lee es una rafaga de uno."""
+    rafagas, abiertas = [], {}
+    for m in mensajes:
+        chat, cuando = m.get("chat_jid"), antiguedad_s(m.get("date"))
+        actual = abiertas.get(chat)
+        if (actual is not None and cuando is not None and actual["ultimo"] is not None
+                and 0 <= cuando - actual["ultimo"] <= RAFAGA_S):
+            actual["mensajes"].append(m)
+            actual["ultimo"] = cuando
+            continue
+        actual = {"mensajes": [m], "ultimo": cuando}
+        abiertas[chat] = actual
+        rafagas.append(actual["mensajes"])
+    return rafagas
+
+
+def mensaje_de_rafaga(rafaga):
+    """El mensaje que se le pide a Jev por una rafaga de mas de uno: el texto junto y en
+    orden, el mas atento de sus tipos y la llave de cache del primero. Los adjuntos solo
+    cuentan si no hay texto en ninguno."""
+    primero = rafaga[0]
+    textos = [(m.get("text") or "").strip() for m in rafaga]
+    kind = next((m.get("kind") for m in rafaga if m.get("kind") in KINDS_DE_ATENCION),
+                primero.get("kind"))
+    media = next((m.get("media") for m in rafaga if m.get("media")), None)
+    return dict(primero, text=SEPARADOR_RAFAGA.join(t for t in textos if t),
+                kind=kind, media=media, juicio=None)
+
+
+def caso_de_rafaga_reciente(con, chat):
+    """El caso del chat que se abrio o se reabrio hace menos de RAFAGA_S y sigue esperando
+    (recibido, clasificado o decision), o None. Es lo que une un mensaje que llega solo,
+    en otra corrida, a lo que su rafaga ya abrio."""
+    desde = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - RAFAGA_S))
+    fila = con.execute(
+        "select c.* from caso c where c.account=? and c.chat_jid=? and c.etapa in "
+        "('recibido','clasificado','decision') and exists (select 1 from caso_evento e "
+        "where e.case_id=c.case_id and e.a='recibido' and (e.de is null or e.de <> 'recibido') "
+        "and e.at >= ?) order by c.updated_at desc, c.case_id desc limit 1",
+        (cuenta_activa(), chat, desde)).fetchone()
+    return dict(fila) if fila else None
+
+
 def ingest_lee():
     """Lo que `wa-read inbox` le daria al agente, con la misma funcion y los mismos
     filtros, pero sin un proceso mas por el medio. Solo lectura: de capture.db no se
@@ -3043,7 +3107,24 @@ def ingest_mensaje(con, m, veredicto, horas):
             con.rollback()
             return hecho, None
         accion = veredicto["accion"] if veredicto else None
-        if accion == "cerrar" and not (suelto and not veredicto.get("dueno")):
+        reciente = (caso_de_rafaga_reciente(con, chat)
+                    if accion == "cerrar" and not suelto and not veredicto.get("dueno")
+                    and not veredicto.get("al_caso") else None)
+        if accion == "cerrar" and veredicto.get("al_caso") and not suelto:
+            # Lo que llego en la misma rafaga que ya se descarto: el mismo caso cerrado.
+            case_id = veredicto["al_caso"]
+            caso_suma_mensaje(con, caso_de(con, case_id), stanza, "automatizacion",
+                              reabre=False)
+            hecho.update(nuevos=1, unidos=1)
+            caso_marca_regla(con, case_id, piso)
+        elif reciente:
+            # Llego pegado a un caso que se acaba de abrir y pide algo: Jev, mirandolo solo,
+            # no entiende que es parte del pedido (un enlace pelado), y no se cierra.
+            case_id = reciente["case_id"]
+            caso_suma_mensaje(con, reciente, stanza, "automatizacion", reabre=False)
+            hecho.update(nuevos=1, unidos=1)
+            caso_marca_regla(con, case_id, piso)
+        elif accion == "cerrar" and not (suelto and not veredicto.get("dueno")):
             # Lo que se descarta no se mezcla con el pedido de otro: abre su propio caso
             # y lo cierra. Sumarlo a uno abierto lo cerraria entero, o reabriria uno
             # respondido porque el cliente dijo "gracias".
@@ -3163,6 +3244,7 @@ def cmd_ingest(con, a):
     abren, sueltos = [], []
     # Del mas viejo al mas nuevo: el inbox viene al reves, y el primero de un pedido es
     # el que abre el caso.
+    nuevos = []
     for m in reversed(mensajes):
         entrada = scope.get(m.get("chat_jid"))
         if m.get("account") != cuenta or not entrada or entrada.get("mode") == "off":
@@ -3173,18 +3255,40 @@ def cmd_ingest(con, a):
         if anterior_a(m, desde):
             total["anteriores"] += 1
             continue
-        veredicto = veredicto_de(m, (decisiones.get(m["stanza_id"]) or {}).get("decision"),
-                                 con)
-        if m.get("kind") == "grupo" and veredicto is None:
-            sueltos.append((m, veredicto))
+        nuevos.append(m)
+    # Lo que ya tiene decision del dueno o juicio del agente se resuelve solo; el resto,
+    # junto con lo que llego pegado en el mismo chat, se juzga como una rafaga.
+    # El juicio de Jev queda en la cache bajo el primer mensaje de la rafaga: ese no la
+    # saca de la rafaga. El juicio de un agente o del dueno si.
+    sueltas = [m for m in nuevos if m["stanza_id"] in decisiones
+               or (m.get("juicio") and m["juicio"].get("origen") != "jev")]
+    libres = [m for m in nuevos if m not in sueltas]
+    por_rafaga = {m["stanza_id"]: r for r in agrupa_rafagas(libres) for m in r}
+    for m in nuevos:
+        if m in sueltas:
+            veredicto = veredicto_de(m, (decisiones.get(m["stanza_id"]) or {}).get("decision"),
+                                     con)
+            grupo = [m]
         else:
-            abren.append((m, veredicto))
+            grupo = por_rafaga[m["stanza_id"]]
+            if grupo[0] is not m:
+                continue
+            veredicto = veredicto_de(mensaje_de_rafaga(grupo) if len(grupo) > 1 else m,
+                                     None, con)
+        for x in grupo:
+            if x.get("kind") == "grupo" and veredicto is None:
+                sueltos.append((x, veredicto))
+            else:
+                abren.append((x, veredicto))
     for m, veredicto in abren + sueltos:
         hecho, case_id = ingest_mensaje(con, m, veredicto, horas)
         for k, v in hecho.items():
             total[k] += v
         if case_id is not None:
             casos.add(case_id)
+            if veredicto and veredicto.get("accion") == "cerrar":
+                # El resto de una rafaga que no pide nada se suma a ese mismo caso cerrado.
+                veredicto.setdefault("al_caso", case_id)
     # Lo que Jev dejo con una credencial no pasa por el agente: va al dueno ya.
     casos_credencial_a_decision(con)
     return [dict(total, casos=sorted(casos))]
