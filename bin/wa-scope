@@ -5714,9 +5714,10 @@ def tick_caso(con, caso, texto, estados, resumen):
 # Lo que dice que el agente sigue es su terminal, viva en `orca terminal list`. Nada se
 # relanza mientras viva, y nada se relanza solo: un fallo va a Bloqueado con su texto y
 # vuelve a correr cuando el dueno firma de nuevo. La unica excepcion es lo que bloqueo la
-# orquestacion (`no_active_sender_terminal`): nunca llego a un agente y se reintenta una vez.
-# Un agente que no avanza (por ejemplo, Claude se quedo en "confiar en esta carpeta" y la
-# linea fue a esa pregunta) no reporta: lo atrapan los mismos plazos.
+# orquestacion (`no_active_sender_terminal`), o un Claude que se cerro al abrir: nunca llego
+# a un agente y se reintenta una vez. La pantalla de "confiar en esta carpeta" se acepta antes
+# de escribir la linea (`entrega_brief`); un agente que no avanza por otra cosa no reporta: lo
+# atrapan los mismos plazos.
 DESPACHO_SIN_RESPUESTA_S = 4 * 3600
 # Cuanto espera un caso la respuesta del cliente a la pregunta del agente; despues, lo que el
 # cliente escriba entra como siempre y el trabajador se suelta.
@@ -5749,8 +5750,11 @@ ERROR_DE_CUENTA = re.compile(
 # vuelve a aprobar. Lo que se firmo antes de actualizar no arranca solo dias despues.
 APROBACION_VIGENTE_S = 24 * 3600
 APROBACION_VIEJA = "aprobación vieja: vuelve a aprobar"
-# Lo que bloqueo la orquestacion desde el tick: se reintenta UNA vez, por terminal.
+# Lo que bloqueo la orquestacion desde el tick: se reintenta UNA vez, por terminal. Lo mismo
+# con un Claude que se cerro al abrir (`entrega_brief`): nunca recibio el trabajo.
 REINTENTA_MOTIVO = "no_active_sender_terminal"
+SE_CERRO = "Claude se cerro al abrir"
+REINTENTA_MOTIVOS = (REINTENTA_MOTIVO, SE_CERRO)
 LEE_EL_BRIEF = "Read {} and follow it exactly."
 # `composer-ready` puede llegar mientras Claude todavia arranca: el Enter llega sin turno y la
 # linea se pierde. Despues de escribirla se mira `terminal state` hasta DESPACHO_VERIFICA_S;
@@ -5877,7 +5881,8 @@ def reintento_vale(con, caso, fila_id):
     f = con.execute("select * from caso_despacho where id=?", (fila_id,)).fetchone()
     if (not f or f["case_id"] != caso["case_id"] or caso["etapa"] != "bloqueado"
             or f["estado"] != "bloqueado" or f["reintento_de"] is not None
-            or REINTENTA_MOTIVO not in (f["motivo"] or "") or not f["instrucciones"]):
+            or not any(m in (f["motivo"] or "") for m in REINTENTA_MOTIVOS)
+            or not f["instrucciones"]):
         return None
     if con.execute("select 1 from caso_despacho where case_id=? and id>? limit 1",
                    (f["case_id"], f["id"])).fetchone():
@@ -5899,13 +5904,15 @@ def reintento_vale(con, caso, fila_id):
 
 def casos_por_reintentar(con):
     """[(caso, instrucciones, fila_id)] de la linea activa: los que bloqueo la orquestacion
-    desde el tick (`no_active_sender_terminal`) y nunca llegaron a un agente."""
+    desde el tick (`no_active_sender_terminal`) o un Claude que se cerro al abrir, y nunca
+    llegaron a un agente."""
     salida = []
+    alguno = " or ".join("instr(coalesce(d.motivo, ''), ?) > 0" for _ in REINTENTA_MOTIVOS)
     for d in con.execute(
             "select d.id, d.case_id from caso_despacho d join caso c on c.case_id = d.case_id "
             "where c.account=? and c.etapa='bloqueado' and d.estado='bloqueado' and "
-            "d.reintento_de is null and instr(coalesce(d.motivo, ''), ?) > 0 order by d.id",
-            (cuenta_activa(), REINTENTA_MOTIVO)).fetchall():
+            f"d.reintento_de is null and ({alguno}) order by d.id",
+            (cuenta_activa(), *REINTENTA_MOTIVOS)).fetchall():
         caso = dict(con.execute("select * from caso where case_id=?", (d["case_id"],)).fetchone())
         vale = reintento_vale(con, caso, d["id"])
         if vale:
@@ -6122,52 +6129,246 @@ def espera_turno(cli, terminal, limite):
         time.sleep(DESPACHO_SONDEO_S)
 
 
-# Lo que puede tardar un reenvio entero: esperar tui-idle, volver a mirar y escribir.
-REENVIO_COSTO_S = DESPACHO_IDLE_MS // 1000 + 10 + 2 * DESPACHO_LISTA_S
+# ── Lo que muestra la terminal antes de escribirle ─────────────────────────────────────
+# `composer-ready` no alcanza para escribir la linea: Orca lo toma de la marca de Claude (el
+# cursor despues del pegado entre corchetes), y la pantalla de Claude Code que pide confiar
+# en la carpeta la pone igual. Esa pantalla sale una vez por cuenta de Claude y por carpeta,
+# y en Claude Code 2.1.288 la opcion marcada es "No, exit": el Enter de la linea la elige y
+# Claude se cierra. Por eso, antes de escribir, se lee la terminal (`terminal read`).
+#
+# Las frases de esa pantalla, de la de ahora y de la de antes ("Do you trust the files in
+# this folder?" con "1. Yes, proceed"). Solo cuentan las que no tienen debajo el composer de
+# Claude: aceptada la pantalla, sus restos pueden quedar arriba en la cola de la terminal.
+PANTALLA_CONFIANZA = re.compile(
+    r"do you trust the files in this folder|quick safety check: is this a project you created"
+    r"|claude code'll be able to read, edit, and execute files here|claude code may read files "
+    r"in this folder|yes, i trust this folder|yes, proceed|security guide", re.IGNORECASE)
+# Las opciones de esa pantalla, con su cursor (❯) delante de la marcada.
+OPCION_CONFIANZA = re.compile(r"^(?P<cursor>[❯›>]\s*)?(?:\d+\.\s*)?(?P<que>yes|no),\s",
+                              re.IGNORECASE)
+# El composer de Claude: la regla que lo encierra, o su linea (❯ o > al principio).
+REGLA_DE_CLAUDE = re.compile(r"^[─━]{10,}$")
+COMPOSER_DE_CLAUDE = re.compile(r"^(?:[│┃]\s*)?[❯>](?:\s|$)")
+# El prompt de un shell al final de la cola: Claude ya no esta. Un ❯ o > solo, con la regla
+# de Claude encima, es su composer y no un shell.
+PROMPT_DE_SHELL = re.compile(r"[$%#>»❯➜λ]$")
+CABECERA_DE_PROMPT = re.compile(r"^\S+@\S+")
+TECLA_ABAJO, TECLA_ARRIBA = "\x1b[B", "\x1b[A"
+PANTALLA_LINEAS = 60
+CONFIANZA_PASOS = 3
+CONFIANZA_PAUSA_S = 0.5
+CONFIANZA_ESPERA_S = 8
+CONFIANZA_LISTO_MS = 20000
+NO_ACEPTO = "Claude pide confiar en la carpeta y no pude aceptarlo"
+
+
+def lineas_visibles(lineas):
+    """Las lineas con texto, sin espacios de mas y con el apostrofo recto."""
+    return [" ".join(l.replace("’", "'").split()) for l in lineas or []
+            if isinstance(l, str) and l.strip()]
+
+
+def que_muestra(lineas):
+    """Lo que muestra la cola de una terminal: "shell" (Claude ya no esta), "confianza" (la
+    pantalla que pide confiar en la carpeta), "otra" (Claude, en otra cosa) o None si no se
+    pudo leer."""
+    if lineas is None:
+        return None
+    vistas = lineas_visibles(lineas)
+    if (vistas and PROMPT_DE_SHELL.search(vistas[-1]) and not vistas[-1].startswith(("│", "┃"))
+            and not (len(vistas) > 1 and REGLA_DE_CLAUDE.match(vistas[-2]))):
+        return "shell"
+    frases = [i for i, l in enumerate(vistas) if PANTALLA_CONFIANZA.search(l)]
+    if not frases:
+        return "otra"
+    debajo = vistas[frases[-1] + 1:]
+    if any(REGLA_DE_CLAUDE.match(l) or (COMPOSER_DE_CLAUDE.match(l)
+                                        and not OPCION_CONFIANZA.match(l)) for l in debajo):
+        return "otra"
+    return "confianza"
+
+
+def ultima_de_claude(lineas):
+    """La ultima linea que dejo Claude antes del prompt del shell (sin el prompt)."""
+    vistas = lineas_visibles(lineas)
+    while vistas and (PROMPT_DE_SHELL.search(vistas[-1]) or CABECERA_DE_PROMPT.match(vistas[-1])):
+        vistas.pop()
+    return vistas[-1] if vistas else ""
+
+
+def motivo_se_cerro(lineas):
+    ultima = ultima_de_claude(lineas)
+    return f"{SE_CERRO}: {ultima}" if ultima else SE_CERRO
+
+
+def pantalla_de(cli, terminal):
+    """Las ultimas lineas de la terminal (`terminal read`), o None si no se pudo leer."""
+    res, error = orca_llama(cli, ["terminal", "read", "--terminal", terminal, "--limit",
+                                  str(PANTALLA_LINEAS)], DESPACHO_LISTA_S)
+    datos = (res or {}).get("terminal")
+    cola = datos.get("tail") if isinstance(datos, dict) else None
+    if error or not isinstance(cola, list):
+        return None
+    return [l for l in cola if isinstance(l, str)]
+
+
+def mira_pantalla(cli, terminal):
+    """(que muestra, sus lineas) de la terminal."""
+    lineas = pantalla_de(cli, terminal)
+    return que_muestra(lineas), lineas
+
+
+def acepta_confianza(cli, terminal, lineas):
+    """Acepta la pantalla de Claude Code que pide confiar en la carpeta. None si quedo
+    aceptada (o ya no estaba), o el motivo por el que no.
+
+    Aceptarla esta bien: la carpeta es el espacio del propio plugin (el agente de casos) o la
+    del proyecto que el dueno le asigno a ese chat en los ajustes (el despacho). El orden de
+    las opciones no se adivina (en 2.1.288 "No, exit" va arriba y marcada; antes, "1. Yes,
+    proceed"): se mueve el cursor con las flechas hasta la que dice Yes, se lo ve ahi en una
+    lectura nueva y recien entonces va el Enter, solo, sin texto."""
+    for _ in range(CONFIANZA_PASOS + 1):
+        vista = que_muestra(lineas)
+        if vista == "shell":
+            return motivo_se_cerro(lineas)
+        if vista != "confianza":
+            return None
+        vistas = lineas_visibles(lineas)
+        grupo = []
+        for l in reversed(vistas):
+            if OPCION_CONFIANZA.match(l):
+                grupo.insert(0, OPCION_CONFIANZA.match(l))
+            elif grupo:
+                break
+        si = [i for i, m in enumerate(grupo) if m["que"].lower() == "yes"]
+        marcada = [i for i, m in enumerate(grupo) if m["cursor"]]
+        if len(si) != 1 or len(marcada) != 1:
+            return NO_ACEPTO
+        if si[0] == marcada[0]:
+            _, error = orca_llama(cli, ["terminal", "send", "--terminal", terminal, "--enter"],
+                                  DESPACHO_LISTA_S)
+            if error:
+                return f"{NO_ACEPTO}: {error}"
+            break
+        tecla = TECLA_ABAJO if si[0] > marcada[0] else TECLA_ARRIBA
+        _, error = orca_llama(cli, ["terminal", "send", "--terminal", terminal, "--text", tecla],
+                              DESPACHO_LISTA_S)
+        if error:
+            return f"{NO_ACEPTO}: {error}"
+        time.sleep(CONFIANZA_PAUSA_S)
+        lineas = pantalla_de(cli, terminal)
+    else:
+        return NO_ACEPTO
+    hasta = time.time() + CONFIANZA_ESPERA_S
+    while True:
+        time.sleep(CONFIANZA_PAUSA_S)
+        lineas = pantalla_de(cli, terminal)
+        vista = que_muestra(lineas)
+        if vista == "shell":
+            return motivo_se_cerro(lineas)
+        if vista == "otra":
+            return None
+        if time.time() > hasta:
+            return NO_ACEPTO
+
+
+def pantalla_sin_agente(cli, terminal):
+    """Lo que la cura mira antes que nada en un agente vivo sin turno: con un shell a la
+    vista, el motivo (Claude se cerro); con la confianza a la vista la acepta (la linea se
+    reescribe en una vuelta siguiente) y solo devuelve motivo si no pudo. None si nada."""
+    vista, lineas = mira_pantalla(cli, terminal)
+    if vista == "shell":
+        return motivo_se_cerro(lineas)
+    if vista == "confianza":
+        return acepta_confianza(cli, terminal, lineas)
+    return None
+
+
+def espera_composer(cli, terminal, listo_ms):
+    """(si Orca vio el composer del agente, el error)."""
+    res, error = orca_llama(cli, ["terminal", "wait", "--terminal", terminal, "--for",
+                                  "composer-ready", "--timeout-ms", str(listo_ms)],
+                            listo_ms // 1000 + 10)
+    espera = (res or {}).get("wait")
+    return not error and isinstance(espera, dict) and espera.get("satisfied") is True, error
+
+
+# Lo que puede tardar un reenvio entero: mirar la pantalla, esperar tui-idle, volver a mirar
+# el estado y la pantalla, y escribir.
+REENVIO_COSTO_S = DESPACHO_IDLE_MS // 1000 + 10 + 4 * DESPACHO_LISTA_S
 
 
 def reescribe_brief(cli, terminal, ruta):
     """Con el agente quieto (`tui-idle`) y todavia sin turno, le escribe la linea otra vez.
-    Devuelve (si la escribio, el turno que vio): un agente ocupado o con turno no se toca."""
+    Devuelve (si la escribio, el turno que vio, lo que muestra la pantalla, sus lineas): un
+    agente ocupado o con turno no se toca, y con la confianza o un shell a la vista tampoco
+    (la linea iria a la pregunta, o se correria como un comando)."""
+    vista, lineas = mira_pantalla(cli, terminal)
+    if vista in ("shell", "confianza"):
+        return False, None, vista, lineas
     res, error = orca_llama(cli, ["terminal", "wait", "--terminal", terminal, "--for",
                                   "tui-idle", "--timeout-ms", str(DESPACHO_IDLE_MS)],
                             DESPACHO_IDLE_MS // 1000 + 10)
     espera = (res or {}).get("wait")
     if error or not (isinstance(espera, dict) and espera.get("satisfied") is True):
-        return False, None
+        return False, None, vista, lineas
     turno = turno_del_agente(cli, terminal)
     if turno != "no":
-        return False, turno
+        return False, turno, vista, lineas
+    vista, lineas = mira_pantalla(cli, terminal)
+    if vista in ("shell", "confianza"):
+        return False, None, vista, lineas
     _, error = orca_llama(cli, ["terminal", "send", "--terminal", terminal, "--text",
                                 LEE_EL_BRIEF.format(ruta), "--enter"], DESPACHO_LISTA_S)
-    return not error, None
+    return not error, None, vista, lineas
 
 
 def entrega_brief(cli, terminal, ruta, nombre, limite, listo_ms=DESPACHO_LISTO_MS):
-    """Espera el composer del agente y le escribe UNA linea: que lea el brief y lo siga. El
-    texto de varias lineas nunca se teclea en la TUI. Despues mira que su turno empiece y, si
-    la linea se perdio, la reescribe (REENVIOS_POR_TICK, dentro de `limite`).
-    (motivo o None, reenvios, si se vio el turno)."""
-    res, error = orca_llama(cli, ["terminal", "wait", "--terminal", terminal, "--for",
-                                  "composer-ready", "--timeout-ms", str(listo_ms)],
-                            listo_ms // 1000 + 10)
-    espera = (res or {}).get("wait")
-    if error or not (isinstance(espera, dict) and espera.get("satisfied") is True):
+    """Espera el composer del agente, mira la pantalla y le escribe UNA linea: que lea el
+    brief y lo siga. El texto de varias lineas nunca se teclea en la TUI. Con la pantalla de
+    confianza a la vista la acepta primero; con un shell (Claude se cerro) no escribe nada.
+    Despues mira que su turno empiece y, si la linea se perdio, la reescribe
+    (REENVIOS_POR_TICK, dentro de `limite`). (motivo o None, reenvios, si se vio el turno)."""
+    listo, error = espera_composer(cli, terminal, listo_ms)
+    vista, lineas = mira_pantalla(cli, terminal)
+    if vista == "confianza":
+        motivo = acepta_confianza(cli, terminal, lineas)
+        if motivo:
+            return motivo, 0, False
+        listo, error = espera_composer(cli, terminal, max(2000, min(
+            CONFIANZA_LISTO_MS, int((limite - time.time() - DESPACHO_VERIFICA_S) * 1000))))
+        vista, lineas = mira_pantalla(cli, terminal)
+    if vista == "shell":
+        return motivo_se_cerro(lineas), 0, False
+    if not listo:
         return (f"el agente de {nombre} no quedó listo para recibir el trabajo: "
                 f"{error or 'Orca no vio su composer a tiempo'}"), 0, False
     _, error = orca_llama(cli, ["terminal", "send", "--terminal", terminal, "--text",
                                 LEE_EL_BRIEF.format(ruta), "--enter"], DESPACHO_LISTA_S)
     if error:
         return f"no pude darle el trabajo al agente de {nombre}: {error}", 0, False
-    reenvios = 0
+    reenvios, aceptada = 0, False
     turno = espera_turno(cli, terminal, limite)
     while (turno == "no" and reenvios < REENVIOS_POR_TICK
            and time.time() + REENVIO_COSTO_S + DESPACHO_VERIFICA_S <= limite):
-        escrita, turno = reescribe_brief(cli, terminal, ruta)
+        escrita, turno, vista, lineas = reescribe_brief(cli, terminal, ruta)
+        if vista == "shell":
+            return motivo_se_cerro(lineas), reenvios, False
+        if vista == "confianza" and not aceptada:
+            motivo = acepta_confianza(cli, terminal, lineas)
+            if motivo:
+                return motivo, reenvios, False
+            aceptada, turno = True, "no"
+            continue
         if not escrita:
             break
         reenvios += 1
         turno = espera_turno(cli, terminal, limite)
+    if turno != "empezo":
+        # Sin turno visto: si Claude se cerro despues de la linea, que no quede como activo.
+        vista, lineas = mira_pantalla(cli, terminal)
+        if vista == "shell":
+            return motivo_se_cerro(lineas), reenvios, False
     return None, reenvios, turno == "empezo"
 
 
@@ -6490,6 +6691,13 @@ def cura_entrega(con, cli, f, proyecto, resumen, inicio):
         return
     if inicio is not None and time.time() - inicio > DESPACHO_LIMITE_S - REENVIO_COSTO_S:
         return
+    motivo = pantalla_sin_agente(cli, f["terminal"])
+    if motivo:
+        suelta_trabajador(cli, f)
+        if despacho_cierra(con, f["id"], "bloqueado", motivo[:LARGO_MOTIVO], bloquea=(
+                f"{motivo} ({proyecto})")):
+            resumen["bloqueados_por_despacho"] += 1
+        return
     turno = turno_del_agente(cli, f["terminal"])
     if turno == "empezo":
         despacho_anota(con, f["id"], turno_at=ahora_caso())
@@ -6504,7 +6712,7 @@ def cura_entrega(con, cli, f, proyecto, resumen, inicio):
                 f"{reenvios + 1} veces y nunca empezó)")):
             resumen["bloqueados_por_despacho"] += 1
         return
-    escrita, turno = reescribe_brief(cli, f["terminal"], ruta)
+    escrita, turno, _, _ = reescribe_brief(cli, f["terminal"], ruta)
     if escrita:
         despacho_anota(con, f["id"], reenvios=reenvios + 1)
     elif turno == "empezo":
@@ -6657,7 +6865,12 @@ AGENTE_NOMBRE = "casos"
 AGENTE_PLAZO_DUENO_S = 60
 # Los motivos de un lanzamiento fallido, estables: el panel los traduce.
 MOTIVOS_AGENTE = ("sin-cli", "sin-espacio", "sin-prompt", "sin-cuenta", "sin-terminal",
-                  "no-listo", "no-recibio", "a-medias", "sin-tiempo")
+                  "no-listo", "no-recibio", "a-medias", "sin-tiempo", "se-cerro", "se-cierra")
+# Claude que se cierra al abrir: la corrida falla con `se-cerro` y el tick abre otra a los
+# AGENTE_ESPERA_S. La AGENTE_CIERRES_MAX-esima seguida es `se-cierra`, y despues de ella el
+# tick no abre otra hasta AGENTE_PAUSA_S ("Atender ahora" si: lo pide el dueno).
+AGENTE_CIERRES_MAX = 3
+AGENTE_PAUSA_S = 3600
 ESTADO_DE_AGENTE = {"lanzando": "launching", "activo": "running", "terminado": "done",
                     "vencido": "expired", "fallido": "failed"}
 LARGO_DETALLE_AGENTE = 160
@@ -6737,9 +6950,29 @@ def reviso_despues(con, fila):
                 and r["started_at"] >= str(fila["created_at"])[:16])
 
 
+def codigo_de_falla(con, fila, motivo):
+    """El motivo estable de una corrida que no recibio el trabajo: `se-cerro` si Claude se
+    cerro (`se-cierra` si es la AGENTE_CIERRES_MAX-esima seguida), si no `no-listo`."""
+    if not motivo.startswith(SE_CERRO):
+        return "no-listo"
+    seguidas = 1
+    for r in con.execute("select estado, motivo from agente_corrida where id<>? order by id desc",
+                         (fila,)):
+        if r["estado"] != "fallido" or r["motivo"] not in ("se-cerro", "se-cierra"):
+            break
+        seguidas += 1
+    return "se-cierra" if seguidas >= AGENTE_CIERRES_MAX else "se-cerro"
+
+
 def cura_agente(con, cli, f, resumen):
     """Un agente vivo cuyo turno no se vio: lo mira y, si la linea se perdio, la reescribe
-    (una vez por vuelta, hasta REENVIOS_MAX; agotados, la corrida falla)."""
+    (una vez por vuelta, hasta REENVIOS_MAX; agotados, la corrida falla). Si Claude se cerro,
+    la corrida falla y su terminal se cierra: el tick siguiente abre otra."""
+    motivo = pantalla_sin_agente(cli, f["terminal"])
+    if motivo:
+        agente_cierra(con, cli, f, "fallido", codigo_de_falla(con, f["id"], motivo), motivo)
+        resumen["agente_error"] += 1
+        return
     turno = turno_del_agente(cli, f["terminal"])
     if turno == "empezo":
         agente_anota(con, f["id"], turno_at=ahora_caso())
@@ -6752,7 +6985,7 @@ def cura_agente(con, cli, f, resumen):
                       f"la línea del brief se envió {reenvios + 1} veces y nunca empezó")
         resumen["agente_error"] += 1
         return
-    escrita, turno = reescribe_brief(cli, f["terminal"], ruta_brief_agente(f["id"]))
+    escrita, turno, _, _ = reescribe_brief(cli, f["terminal"], ruta_brief_agente(f["id"]))
     if escrita:
         agente_anota(con, f["id"], reenvios=reenvios + 1)
     elif turno == "empezo":
@@ -6816,16 +7049,18 @@ def escribe_brief_agente(fila):
 def toma_corrida(con, origen):
     """La fila `lanzando` de una corrida nueva, o lo que lo impide: "running" (hay una en
     vuelo o el lock del agente esta puesto) o "waiting" (el tick, antes de AGENTE_ESPERA_S
-    de la anterior)."""
+    de la anterior, o de AGENTE_PAUSA_S si la anterior fue `se-cierra`)."""
     caso_toma(con)
     try:
         if con.execute("select 1 from agente_corrida where estado in (?, ?)",
                        AGENTE_EN_VUELO).fetchone() or lock_del_agente(con):
             con.rollback()
             return None, "running"
-        ultima = con.execute("select created_at from agente_corrida order by id desc "
-                             "limit 1").fetchone()
-        if origen == "tick" and ultima and edad_de(ultima["created_at"]) < AGENTE_ESPERA_S:
+        ultima = con.execute("select created_at, estado, motivo from agente_corrida order by "
+                             "id desc limit 1").fetchone()
+        pausa = (AGENTE_PAUSA_S if ultima and ultima["estado"] == "fallido"
+                 and ultima["motivo"] == "se-cierra" else AGENTE_ESPERA_S)
+        if origen == "tick" and ultima and edad_de(ultima["created_at"]) < pausa:
             con.rollback()
             return None, "waiting"
         momento = ahora_caso()
@@ -6878,7 +7113,7 @@ def lanza_agente(con, origen, hasta):
             cli, terminal, ruta, AGENTE_NOMBRE, hasta,
             listo_ms=max(5000, min(DESPACHO_LISTO_MS, queda() - 8000)))
         if motivo:
-            falla = ("no-listo", motivo)
+            falla = (codigo_de_falla(con, fila, motivo), motivo)
     if falla:
         agente_cierra(con, cli, f, "fallido", falla[0], falla[1])
         return {"agent": "failed", "reason": falla[0]}

@@ -5091,22 +5091,60 @@ PEDIDO = "El reporte de ventas sale en blanco desde ayer, pueden revisarlo?"
 TRABAJO = "Reproducir el reporte en blanco y corregirlo; responder que ya quedo."
 
 
+# Lo que `orca terminal read` devuelve de verdad, con datos de mentira. La confianza de
+# Claude Code 2.1.288 (dibujada en un HOME aislado): "No, exit" arriba y marcada, sin
+# numeros. La de antes: "1. Yes, proceed" arriba y marcada. El shell, como quedo la terminal
+# de la corrida del 2026-10-02 17:04: restos de la confianza y el prompt.
+CONFIANZA_NUEVA = [
+    "─" * 100, " Accessing workspace:", "", " /srv/ejemplo/carpeta", "",
+    " Quick safety check: Is this a project you created or one you trust? (Like your own code, a",
+    " well-known open source project, or work from your team). If not, take a moment to review what's in",
+    " this folder first.", "", " Claude Code'll be able to read, edit, and execute files here.", "",
+    " Security guide", "", "{no}No, exit", "{si}Yes, I trust this folder", "",
+    " Enter to confirm · Esc to cancel"]
+CONFIANZA_VIEJA = [
+    " Do you trust the files in this folder?", "", " /srv/ejemplo/carpeta", "",
+    " Claude Code may read files in this folder. Reading untrusted files may lead Claude Code to",
+    " behave in unexpected ways.", "", "{si}1. Yes, proceed", "{no}2. No, exit", "",
+    " Enter to confirm · Esc to exit"]
+COMPOSER = [
+    " ▐▛███▜▌   Claude Code v2.1.288", "▝▜█████▛▘  Opus · Claude Max", "  ▘▘ ▝▝    /srv/ejemplo/carpeta",
+    "", "─" * 100, "❯ ", "─" * 100, "  ⏵⏵ auto mode on (shift+tab to cycle)",
+    "                                                                                ◐ medium · /effort"]
+SHELL = ["", " Claude Code'll be able to read, edit, and execute files here.", "", " Security guide",
+         "", "persona@equipo [17:04:01] [~/srv/ejemplo/carpeta]", "-> %"]
+ABAJO, ARRIBA = "\x1b[B", "\x1b[A"
+
+
 def orca_despacho(carpeta, worktrees=(WT_ALFA,), vivos=("term_worker1",), falla=None,
                   automatizaciones=(), corridas=(), cuentas=(), rechaza=None, listo=True,
-                  arranca_en=1, idle=True):
+                  arranca_en=1, idle=True, pantalla="composer", sale_tras=None, ilegible=False):
     """Una `orca` de mentira para el despacho: contesta lo que diga estado.json y anota cada
     llamada (sus argumentos enteros, en JSON) en calls.jsonl. `rechaza` es {cuenta: error}
     para `terminal create` ("" es sin --claude-account); `listo`, lo que dice `terminal
     wait --for composer-ready`, e `idle`, lo que dice `--for tui-idle`. `arranca_en` es la
     linea del brief con la que el agente empieza su turno (1: la primera; None: nunca): hasta
     entonces `terminal state` dice lo que Orca vio en vivo, Enter sin turno y sin sesion.
-    No contesta nada de `orchestration`: el despacho ya no la usa."""
+    No contesta nada de `orchestration`: el despacho ya no la usa.
+
+    `pantalla` es lo que muestra Claude al abrir: "composer", "confianza" (la de 2.1.288,
+    No marcado), "confianza-vieja" (Yes marcado) o "shell" (Claude se cerro al abrir).
+    La confianza se acepta una vez (por cuenta y carpeta): las terminales que se abren
+    despues ven el composer. Flecha abajo/arriba mueve el cursor y Enter elige: Yes deja el
+    composer, No deja el shell. `sale_tras` es "aceptar" o "brief": Claude se cierra
+    despues de eso. Lo que se escribe con el shell a la vista se anota en `en_shell`, y una
+    linea del brief solo cuenta (`briefs`) si llego a un composer. `ilegible`: `terminal
+    read` falla."""
     carpeta = pathlib.Path(carpeta)
     (carpeta / "estado.json").write_text(json.dumps(
         {"worktrees": list(worktrees), "vivos": list(vivos), "falla": falla or {},
          "automatizaciones": list(automatizaciones), "corridas": list(corridas),
          "cuentas": list(cuentas), "rechaza": rechaza or {}, "listo": listo,
-         "arranca_en": arranca_en, "idle": idle, "briefs": 0, "n": 0}), encoding="utf-8")
+         "arranca_en": arranca_en, "idle": idle, "briefs": 0, "n": 0,
+         "pantalla_inicial": pantalla, "pantalla": "composer", "cursor": 0, "confia": False,
+         "sale_tras": sale_tras, "ilegible": ilegible, "en_shell": 0, "aceptadas": 0,
+         "pantallas": {"confianza": CONFIANZA_NUEVA, "confianza-vieja": CONFIANZA_VIEJA,
+                       "composer": COMPOSER, "shell": SHELL}}), encoding="utf-8")
     exe = carpeta / "orca"
     exe.write_text("""#!/usr/bin/env python3
 import json, os, sys
@@ -5123,10 +5161,50 @@ clave = " ".join(a[:2])
 if clave in e["falla"]:
     sale({"ok": False, "error": {"code": "falla_falsa", "message": e["falla"][clave]}}, 1)
 e["n"] += 1
-if clave == "terminal send" and (valor("--text") or "").startswith("Read "):
-    e["briefs"] += 1
+def opciones():
+    return [l for l in e["pantallas"][e["pantalla"]] if l.startswith(("{si}", "{no}"))]
+def elige():
+    marcada = opciones()[e["cursor"]]
+    if marcada.startswith("{si}"):
+        e["confia"] = True
+        e["aceptadas"] += 1
+        e["pantalla"] = "shell" if e["sale_tras"] == "aceptar" else "composer"
+    else:
+        e["pantalla"] = "shell"
+if clave == "terminal create" and (valor("--claude-account") or "") not in e["rechaza"]:
+    inicial = e["pantalla_inicial"]
+    if inicial.startswith("confianza") and e["confia"]:
+        inicial = "composer"
+    e["pantalla"] = inicial
+    e["cursor"] = 0
+if clave == "terminal send":
+    texto = valor("--text") or ""
+    if e["pantalla"] == "shell":
+        e["en_shell"] += 1
+    elif e["pantalla"].startswith("confianza"):
+        if texto in ("\x1b[B", "\x1b[A"):
+            e["cursor"] = max(0, min(len(opciones()) - 1,
+                                     e["cursor"] + (1 if texto == "\x1b[B" else -1)))
+        elif "--enter" in a:
+            # Lo que se teclee no mueve la seleccion; el Enter elige la marcada.
+            elige()
+    elif texto.startswith("Read "):
+        e["briefs"] += 1
+        if e["sale_tras"] == "brief":
+            e["pantalla"] = "shell"
 json.dump(e, open(os.path.join(d, "estado.json"), "w"))
 n = e["n"]
+if clave == "terminal read":
+    if e["ilegible"]:
+        sale({"ok": False, "error": {"code": "runtime_error", "message": "terminal_asleep"}}, 1)
+    lineas = []
+    for l in e["pantallas"][e["pantalla"]]:
+        if l.startswith(("{si}", "{no}")):
+            marcada = opciones().index(l) == e["cursor"]
+            l = (" ❯ " if marcada else "   ") + l[4:]
+        lineas.append(l)
+    sale({"ok": True, "result": {"terminal": {"handle": valor("--terminal"), "status": "running",
+                                              "tail": lineas, "truncated": False}}})
 if clave == "worktree list":
     sale({"ok": True, "result": {"worktrees": e["worktrees"], "totalCount": len(e["worktrees"]),
                                  "truncated": False}})
@@ -5138,8 +5216,9 @@ if clave == "terminal create":
                                               "title": valor("--title")}}})
 if clave == "terminal wait":
     sale({"ok": True, "result": {"wait": {"condition": valor("--for"),
-                                          "satisfied": e["idle"] if valor("--for") == "tui-idle"
-                                          else e["listo"]}}})
+                                          "satisfied": (e["idle"] if valor("--for") == "tui-idle"
+                                                        else e["listo"])
+                                          and e["pantalla"] != "shell"}}})
 if clave == "terminal state":
     turno = e["arranca_en"] is not None and e["briefs"] >= e["arranca_en"]
     if turno:
@@ -6042,6 +6121,194 @@ if NODE:
         ok("un agente que ya reporto nunca recibe la linea otra vez",
            len(lanzamientos(carpeta)) == 1, f"{lanzamientos(carpeta)}")
 
+    # La pantalla de confianza de Claude Code (por cuenta y por carpeta) se come la linea
+    # del brief: `composer-ready` se cumple con ella a la vista y, en 2.1.288, el Enter elige
+    # "No, exit". Antes de escribir, el despacho lee la terminal: con la confianza a la vista
+    # mueve el cursor hasta Yes, lo ve ahi y recien manda Enter; con el shell a la vista
+    # (Claude se cerro) no escribe nada. El reenvio de la linea perdida mira lo mismo.
+    print("\nT8: la confianza en la carpeta y Claude que se cierra al abrir")
+    SE_CERRO = "Claude se cerro al abrir"
+
+    def dibuja(pantalla, cursor=0):
+        opciones = [l for l in pantalla if l.startswith(("{si}", "{no}"))]
+        return [((" ❯ " if opciones.index(l) == cursor else "   ") + l[4:])
+                if l.startswith(("{si}", "{no}")) else l for l in pantalla]
+
+    antes = dict(os.environ)
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            wsm = carga_wa_scope(home)
+            for nombre, lineas, esperado in (
+                    ("la confianza de 2.1.288", dibuja(CONFIANZA_NUEVA), "confianza"),
+                    ("con el cursor en Yes", dibuja(CONFIANZA_NUEVA, 1), "confianza"),
+                    ("la confianza de antes", dibuja(CONFIANZA_VIEJA), "confianza"),
+                    ("con el apostrofo tipografico",
+                     [" Claude Code’ll be able to read, edit, and execute files here."],
+                     "confianza"),
+                    ("el composer de Claude", COMPOSER, "otra"),
+                    ("el composer sin pie, ❯ bajo el borde", COMPOSER[:6], "otra"),
+                    ("el shell con restos de la confianza", SHELL, "shell"),
+                    ("un prompt de bash", ["persona@equipo:~/srv/ejemplo$ "], "shell"),
+                    ("un prompt de pure", ["~/srv/ejemplo", "❯"], "shell"),
+                    ("nada legible", None, None)):
+                salio = wsm.que_muestra(lineas) if hasattr(wsm, "que_muestra") else "falta"
+                ok(f"la pantalla: {nombre} -> {esperado}", salio == esperado, f"salio {salio}")
+            ultima = wsm.ultima_de_claude(SHELL) if hasattr(wsm, "ultima_de_claude") else None
+            ok("la ultima linea de Claude, sin el prompt del shell",
+               ultima == "Security guide", f"{ultima!r}")
+            ok("las frases de la confianza viven en una sola constante",
+               hasattr(wsm, "PANTALLA_CONFIANZA") and all(wsm.PANTALLA_CONFIANZA.search(f) for f in (
+                   "Do you trust the files in this folder?", "Yes, proceed",
+                   "Yes, I trust this folder", "Security guide",
+                   "Claude Code'll be able to read, edit, and execute files here.")))
+    finally:
+        os.environ.clear()
+        os.environ.update(antes)
+
+    def envios_crudos(carpeta):
+        """Los `terminal send` en orden: ("abajo"|"arriba"|"enter"|"brief"|"otro")."""
+        return envios_crudos_de(llamadas_orca(carpeta, "terminal send"))
+
+    def envios_crudos_de(llamadas):
+        salida = []
+        for x in llamadas:
+            texto = bandera(x, "--text")
+            salida.append("abajo" if texto == ABAJO else "arriba" if texto == ARRIBA
+                          else "enter" if texto is None and "--enter" in x
+                          else "brief" if (texto or "").startswith(LEE_BRIEF[0]) else "otro")
+        return salida
+
+    def estado_orca(carpeta):
+        return json.loads((pathlib.Path(carpeta) / "estado.json").read_text(encoding="utf-8"))
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, pantalla="confianza")
+        cid = trabajo_firmado(home, "K1")
+        p, r = tick_orca(home, carpeta)
+        fila = (despachos(home, cid) or [{}])[-1]
+        e = estado_orca(carpeta)
+        ok("confianza con No marcado: flecha abajo, Enter, y recien ahi la linea del brief",
+           p.returncode == 0 and envios_crudos(carpeta) == ["abajo", "enter", "brief"]
+           and e["aceptadas"] == 1 and e["en_shell"] == 0,
+           f"{envios_crudos(carpeta)} {e['aceptadas']} {p.stderr[-400:]}")
+        orden = []
+        for x in llamadas_orca(carpeta):
+            if x[:2] in (["terminal", "wait"], ["terminal", "read"]):
+                orden.append(" ".join(x[:2]))
+            elif x[:2] == ["terminal", "send"]:
+                orden.append(envios_crudos_de([x])[0])
+        tras_enter = orden[orden.index("enter") + 1:orden.index("brief")] if "enter" in orden \
+            and "brief" in orden else []
+        ok("lee la pantalla antes de cada tecla y vuelve a esperar el composer tras aceptar",
+           orden[:2] == ["terminal wait", "terminal read"] and "abajo" in orden
+           and orden[orden.index("abajo") + 1:orden.index("abajo") + 2] == ["terminal read"]
+           and "terminal wait" in tras_enter and tras_enter[-1:] == ["terminal read"], f"{orden}")
+        ok("y el turno empieza: el despacho queda activo", fila.get("estado") == "activo"
+           and fila.get("turno_at") and r.get("despachados") == 1, f"{fila} {r}")
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, pantalla="confianza-vieja")
+        cid = trabajo_firmado(home, "K2")
+        tick_orca(home, carpeta)
+        ok("confianza de antes, con Yes marcado: solo Enter, sin flechas",
+           envios_crudos(carpeta) == ["enter", "brief"]
+           and estado_orca(carpeta)["aceptadas"] == 1
+           and despachos(home, cid)[-1]["estado"] == "activo", f"{envios_crudos(carpeta)}")
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, pantalla="shell")
+        cid = trabajo_firmado(home, "K3")
+        p, r = tick_orca(home, carpeta)
+        fila = (despachos(home, cid) or [{}])[-1]
+        motivo = motivo_bloqueo(home, cid)
+        ok("Claude se cerro al abrir: no escribe nada en el shell",
+           p.returncode == 0 and envios_crudos(carpeta) == []
+           and estado_orca(carpeta)["en_shell"] == 0, f"{envios_crudos(carpeta)}")
+        ok("bloqueado con el motivo y la ultima linea de Claude, no la del prompt",
+           fila.get("estado") == "bloqueado" and f"{SE_CERRO}: Security guide" in motivo
+           and "persona@equipo" not in motivo and "-> %" not in motivo, f"{motivo} {fila}")
+        ok("y su terminal cerrada", cerradas(carpeta) == ["term_worker1"], f"{cerradas(carpeta)}")
+        tick_orca(home, carpeta)
+        ok("el tick siguiente abre una terminal nueva, una vez",
+           len(llamadas_orca(carpeta, "terminal create")) == 2
+           and envios_crudos(carpeta) == [], f"{llamadas_orca(carpeta, 'terminal create')}")
+        tick_orca(home, carpeta)
+        tick_orca(home, carpeta)
+        ok("y no mas: el caso queda bloqueado esperando al dueno",
+           len(llamadas_orca(carpeta, "terminal create")) == 2
+           and js(home, "caso", "ver", cid)[0]["etapa"] == "bloqueado"
+           and SE_CERRO in motivo_bloqueo(home, cid), f"{motivo_bloqueo(home, cid)}")
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, arranca_en=None, sale_tras="brief")
+        cid = trabajo_firmado(home, "K4")
+        p, r = tick_orca(home, carpeta)
+        fila = (despachos(home, cid) or [{}])[-1]
+        ok("Claude se cierra despues de la linea: no la reenvia al shell",
+           p.returncode == 0 and envios_crudos(carpeta) == ["brief"]
+           and estado_orca(carpeta)["en_shell"] == 0, f"{envios_crudos(carpeta)}")
+        ok("bloqueado con el motivo, su terminal cerrada",
+           fila.get("estado") == "bloqueado" and SE_CERRO in motivo_bloqueo(home, cid)
+           and cerradas(carpeta) == ["term_worker1"], f"{fila} {motivo_bloqueo(home, cid)}")
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        # Un despacho activo sin turno (lanzado antes, sin estado legible) cuyo Claude ya se
+        # cerro: el tick que lo cura ve el shell y no le escribe.
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, arranca_en=None, falla={"terminal state": "unknown_command"})
+        cid = trabajo_firmado(home, "K5")
+        tick_orca(home, carpeta)
+        cambia_orca(carpeta, falla={}, pantalla="shell")
+        p, r = tick_orca(home, carpeta)
+        filas = despachos(home, cid) or [{}]
+        ok("la cura no reenvia con el shell a la vista: bloqueado con el motivo",
+           p.returncode == 0 and estado_orca(carpeta)["en_shell"] == 0
+           and filas[0].get("estado") == "bloqueado" and SE_CERRO in (filas[0].get("motivo") or "")
+           and "term_worker1" in cerradas(carpeta),
+           f"{envios_crudos(carpeta)} {filas} {p.stderr[-300:]}")
+        ok("y el reintento abre una terminal nueva en la misma vuelta",
+           len(filas) == 2 and filas[1].get("reintento_de") == filas[0].get("id")
+           and len(llamadas_orca(carpeta, "terminal create")) == 2, f"{filas}")
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        # La cura con la confianza a la vista: no le escribe la linea encima; la acepta, y el
+        # tick siguiente reescribe la linea en el composer.
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, arranca_en=None, falla={"terminal state": "unknown_command"})
+        cid = trabajo_firmado(home, "K6")
+        tick_orca(home, carpeta)
+        cambia_orca(carpeta, falla={}, pantalla="confianza", cursor=0, arranca_en=2)
+        tick_orca(home, carpeta)
+        ok("la cura con la confianza a la vista no le escribe encima: la acepta y recien "
+           "ahi reescribe la linea",
+           envios_crudos(carpeta) == ["brief", "abajo", "enter", "brief"]
+           and estado_orca(carpeta)["aceptadas"] == 1 and estado_orca(carpeta)["en_shell"] == 0
+           and despachos(home, cid)[-1]["reenvios"] == 1, f"{envios_crudos(carpeta)}")
+        tick_orca(home, carpeta)
+        fila = (despachos(home, cid) or [{}])[-1]
+        ok("y el turno empieza", envios_crudos(carpeta) == ["brief", "abajo", "enter", "brief"]
+           and fila.get("turno_at") and fila.get("estado") == "activo", f"{fila}")
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, ilegible=True)
+        cid = trabajo_firmado(home, "K7")
+        tick_orca(home, carpeta)
+        ok("sin pantalla legible escribe la linea como antes",
+           envios_crudos(carpeta) == ["brief"]
+           and despachos(home, cid)[-1]["estado"] == "activo", f"{envios_crudos(carpeta)}")
+
     # El caso que bloqueo `no_active_sender_terminal` (la orquestacion desde el tick) nunca
     # llego a un agente: despues de actualizar se despacha de nuevo, UNA vez, aunque su firma
     # tenga mas de 24 h.
@@ -6370,6 +6637,91 @@ if NODE:
         tick_orca(home, carpeta)
         ok("una terminal que ya no esta deja la corrida terminada",
            corridas_agente(home)[-1]["estado"] == "terminado", f"{corridas_agente(home)}")
+
+    # La confianza en la carpeta del plugin, y Claude que se cierra al abrir: lo mismo que el
+    # despacho. Una corrida cuyo Claude se cerro falla con `se-cerro` y su terminal se
+    # cierra; el tick siguiente (a los 5 minutos) abre otra. Tres seguidas son `se-cierra` y
+    # el tick espera una hora antes de abrir otra.
+    print("\nel agente de casos: la confianza en la carpeta y Claude que se cierra")
+
+    def con_cuenta(carpeta):
+        return [x for x in creadas(carpeta) if bandera(x, "--claude-account")]
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        orca_casos(carpeta, pantalla="confianza")
+        caso_para_agente(home, "AT1")
+        p, r = tick_orca(home, carpeta)
+        fila = corridas_agente(home)[-1]
+        ok("acepta la confianza (flecha abajo, Enter) y despues le da la linea",
+           p.returncode == 0 and envios_crudos(carpeta) == ["abajo", "enter", "brief"]
+           and estado_orca(carpeta)["en_shell"] == 0, f"{envios_crudos(carpeta)} {p.stderr[-300:]}")
+        ok("y el turno empieza: la corrida queda activa", fila["estado"] == "activo"
+           and fila["turno_at"] and r.get("agente_lanzado") == 1, f"{fila} {r}")
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        orca_casos(carpeta, pantalla="shell")
+        cid = caso_para_agente(home, "AT2")
+        p, r = tick_orca(home, carpeta)
+        fila = corridas_agente(home)[-1]
+        ok("Claude se cerro al abrir: no escribe nada en la terminal",
+           p.returncode == 0 and envios_crudos(carpeta) == []
+           and estado_orca(carpeta)["en_shell"] == 0, f"{envios_crudos(carpeta)}")
+        ok("la corrida falla con se-cerro, el detalle dice la ultima linea y se cierra la terminal",
+           fila["estado"] == "fallido" and fila["motivo"] == "se-cerro"
+           and (fila["detalle"] or "").startswith(f"{SE_CERRO}: Security guide")
+           and cerradas(carpeta) == ["term_worker1"] and r.get("agente_error") == 1,
+           f"{fila} {cerradas(carpeta)} {r}")
+        lanzado = (tablero(home).get("board") or {}).get("agent_launch") or {}
+        ok("el tablero lo dice", lanzado.get("state") == "failed"
+           and lanzado.get("reason") == "se-cerro" and SE_CERRO in (lanzado.get("detail") or ""),
+           f"{lanzado}")
+        envejece_agente(home, 301)
+        tick_orca(home, carpeta)
+        ok("a los 5 minutos abre una terminal nueva", len(con_cuenta(carpeta)) == 2
+           and corridas_agente(home)[-1]["motivo"] == "se-cerro", f"{corridas_agente(home)}")
+        envejece_agente(home, 301)
+        tick_orca(home, carpeta)
+        fila = corridas_agente(home)[-1]
+        ok("la tercera seguida es se-cierra", len(con_cuenta(carpeta)) == 3
+           and fila["motivo"] == "se-cierra" and SE_CERRO in (fila["detalle"] or ""), f"{fila}")
+        lanzado = (tablero(home).get("board") or {}).get("agent_launch") or {}
+        ok("y el tablero lo dice", lanzado.get("reason") == "se-cierra", f"{lanzado}")
+        envejece_agente(home, 301)
+        tick_orca(home, carpeta)
+        envejece_agente(home, 1800)
+        tick_orca(home, carpeta)
+        ok("despues de tres, el tick no abre otra en la hora siguiente",
+           len(con_cuenta(carpeta)) == 3 and envios_crudos(carpeta) == [], f"{con_cuenta(carpeta)}")
+        envejece_agente(home, 1500)
+        cambia_orca(carpeta, pantalla_inicial="composer")
+        p, r = tick_orca(home, carpeta)
+        ok("pasada la hora vuelve a abrirlo, y con Claude sano lo logra",
+           len(con_cuenta(carpeta)) == 4 and corridas_agente(home)[-1]["estado"] == "activo"
+           and envios_crudos(carpeta) == ["brief"], f"{corridas_agente(home)[-1]} {r}")
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        orca_casos(carpeta, pantalla="confianza", sale_tras="aceptar")
+        caso_para_agente(home, "AT3")
+        tick_orca(home, carpeta)
+        fila = corridas_agente(home)[-1]
+        ok("acepta la confianza y Claude se cierra igual: no le escribe la linea",
+           envios_crudos(carpeta) == ["abajo", "enter"] and estado_orca(carpeta)["en_shell"] == 0
+           and fila["estado"] == "fallido" and fila["motivo"] == "se-cerro"
+           and cerradas(carpeta) == ["term_worker1"], f"{envios_crudos(carpeta)} {fila}")
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        # Una corrida activa sin turno cuyo Claude se cerro (la de las 17:04): la cura ve el
+        # shell, no reenvia, falla con el motivo y cierra la terminal en vez de esperar 30 min.
+        orca_casos(carpeta, arranca_en=None, falla={"terminal state": "unknown_command"})
+        caso_para_agente(home, "AT4")
+        tick_orca(home, carpeta)
+        cambia_orca(carpeta, falla={}, pantalla="shell")
+        tick_orca(home, carpeta)
+        fila = corridas_agente(home)[-1]
+        ok("la cura no reenvia al shell: falla con se-cerro y cierra la terminal",
+           envios_crudos(carpeta) == ["brief"] and estado_orca(carpeta)["en_shell"] == 0
+           and fila["estado"] == "fallido" and fila["motivo"] == "se-cerro"
+           and cerradas(carpeta) == ["term_worker1"], f"{envios_crudos(carpeta)} {fila}")
 
     # ── La cuenta de Claude del bot ─────────────────────────────────────────────────────
     # El dueno elige en Ajustes con que cuenta abren Claude el agente de casos y el agente
