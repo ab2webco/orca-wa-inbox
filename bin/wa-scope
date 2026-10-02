@@ -2771,6 +2771,63 @@ def cmd_caso_propuesta(con, a):
     return [caso_fila(con, caso_de(con, a.id))]
 
 
+def propuesta_tipo(caso):
+    try:
+        propuesta = json.loads(caso.get("propuesta") or "null")
+    except (TypeError, ValueError):
+        return None
+    return propuesta.get("tipo") if isinstance(propuesta, dict) else None
+
+
+# Los modos en que un trabajo puede salir sin el clic (T22.9). `observar` solo lee: el
+# agente no hace nada ahi por su cuenta.
+MODOS_SIN_CLIC = ("responder", "borrador")
+
+
+def trabajo_espera_al_dueno(con, caso):
+    """Por que un `trabajar` no puede ir al agente del proyecto sin el clic del dueno, o []
+    (T22.9). La aprobacion frena lo que SALE, no lo que se HACE; esto es lo que si espera:
+
+    - lo que destruye o compromete (`wa_reglas.trabajo_comprometido`): borrar, desplegar a
+      produccion, forzar un push, pagos, credenciales, una fecha o plata;
+    - lo que no queda dentro del proyecto del chat: un chat sin proyecto aceptado, un caso
+      que una regla o el dueno mando a otro proyecto, o un `repo` que no es el del chat;
+    - una credencial que entro con el caso, un chat que solo observa, y una propuesta de
+      hace mas de APROBACION_VIGENTE_S: la ve el dueno.
+    Ante la duda, espera."""
+    try:
+        propuesta = json.loads(caso.get("propuesta") or "null")
+    except (TypeError, ValueError):
+        propuesta = None
+    if not isinstance(propuesta, dict) or not propuesta.get("instrucciones"):
+        return ["no_instructions"]
+    motivos = list(wa_reglas.trabajo_comprometido(
+        " \n".join(str(propuesta.get(k) or "") for k in ("instrucciones", "respuesta"))))
+    scope = merged_scope(con).get(caso["chat_jid"]) or {}
+    if scope.get("mode") not in MODOS_SIN_CLIC:
+        motivos.append("mode")
+    del_chat = scope.get("workspace")
+    try:
+        ruta = json.loads(caso.get("ruta") or "null") or {}
+    except (TypeError, ValueError):
+        ruta = {}
+    proyecto = next((x for x in proyectos_del_dueno(con) if x["id"] == del_chat), None) \
+        if del_chat else None
+    repo = str(propuesta.get("repo") or "").strip()
+    if (not proyecto or (ruta.get("workspace") and ruta["workspace"] != del_chat)
+            or (repo and repo not in (proyecto["id"], proyecto.get("path"),
+                                      proyecto.get("name")))):
+        motivos.append("outside_project")
+    if _lista_json(caso.get("excepciones")):
+        motivos.append("exceptions")
+    hecha = con.execute("select at from caso_evento where case_id=? and detalle=? "
+                        "order by id desc limit 1",
+                        (caso["case_id"], f"trabajar {caso['propuesta_version']}")).fetchone()
+    if not hecha or edad_de(hecha["at"]) > APROBACION_VIGENTE_S:
+        motivos.append("stale")
+    return list(dict.fromkeys(motivos))
+
+
 def frenos_de_regla(con, caso):
     """(al dueno, al agente): lo que impide que la regla del dueno apruebe sola la propuesta
     vigente del caso, con los niveles de su chat (T22.3).
@@ -2869,7 +2926,14 @@ def cmd_caso_aprobar(con, a):
         caso_falla("E_VERSION", f"stale version: case #{a.id} is now at proposal version "
                                 f"{caso['propuesta_version']}, not {a.version}; the owner has to see "
                                 f"the current one before approving it")
-    if a.actor == "regla":
+    if a.actor == "regla" and propuesta_tipo(caso) == "trabajar":
+        # T22.9: la regla firma un trabajo solo si no destruye ni compromete nada y queda
+        # dentro del proyecto del chat. Lo demas sigue esperando la firma del dueno.
+        espera = trabajo_espera_al_dueno(con, caso)
+        if espera:
+            caso_falla("E_EXCEPTION", f"case #{a.id} work waits for the owner: "
+                                      + ", ".join(espera))
+    elif a.actor == "regla":
         # La regla del dueno da permiso solo a lo que no es una excepcion, con los niveles
         # del chat (T22.3): lo que pide al dueno (E_EXCEPTION) y lo que vuelve al agente
         # para reescribir (E_REVISION). Un chat en "te pregunto antes" siempre pide.
@@ -4527,9 +4591,104 @@ def tarjeta_de(caso, nombres, titulos, motivos, eventos=None, sin_agente=None,
         "related_case": caso["relacionado"],
         # La historia del caso (`caso_evento`): de que etapa a cual, quien y cuando. Sin
         # `detalle`: es texto de maquina en ingles y el panel no lo muestra.
-        "events": [{"de": e["de"], "a": e["a"], "actor": e["actor"], "at": iso_caso(e["at"])}
+        "events": [dict({"de": e["de"], "a": e["a"], "actor": e["actor"],
+                         "at": iso_caso(e["at"])},
+                        **({"que": e["que"]} if e.get("que") else {}),
+                        **({"args": e["args"]} if e.get("args") else {}))
                    for e in (eventos or {}).get(caso["case_id"], [])],
     }
+
+
+# El detalle de un evento, traducido a un codigo estable para la historia del tablero
+# (T22): "llego un sticker", "Jev: necesita agente", "envio retenido: <motivo>". Solo
+# codigos y nombres de excepciones o motivos: nunca el texto de un mensaje.
+RE_EV_MENSAJE = re.compile(r"^mensaje (\S+)")
+RE_EV_PROPUESTA = re.compile(r"^(responder|trabajar|escalar|descartar) [0-9a-f]{64}$")
+RE_EV_CLASE = re.compile(r"^(card|alert|doubtful|nothing) · ")
+RE_EV_LISTA = re.compile(r"[a-z_-]+")
+
+
+def _codigos(texto):
+    return [c for c in RE_EV_LISTA.findall(texto or "")][:8]
+
+
+def que_del_evento(detalle, medios=None):
+    """(codigo, [argumentos]) de un detalle de `caso_evento`, o (None, []) si no se sabe
+    decir: el panel entonces muestra "actualizado", como antes."""
+    d = detalle.strip()
+    m = RE_EV_MENSAJE.match(d)
+    if m:
+        tipo = (medios or {}).get(m.group(1))
+        return ({"sticker": "sticker", "audio": "audio"}.get(tipo, "message"), [])
+    if d.startswith("jev: "):
+        partes = []
+        if "necesita agente" in d:
+            partes.append("agent")
+        exc = re.search(r"excepciones ([a-z, ]+)", d)
+        partes += _codigos(exc.group(1)) if exc else []
+        return "jev", partes
+    if d.startswith("regla fija:"):
+        return "rule", [c for c in _codigos(d.split(":", 1)[1])
+                        if c in wa_jev.ORDEN_EXCEPCIONES]
+    if d.startswith("envio frenado:"):
+        return "held", list(dict.fromkeys(c for _, c in motivos_del_freno(d)))
+    if " veces (" in d and "lo decide el dueno" in d:
+        return "owner_decides", _codigos(d.split("(", 1)[1].split(")", 1)[0])
+    if d.startswith(REVISIONES):
+        prefijo = next(p for p in REVISIONES if d.startswith(p))
+        return "revision", _codigos(d[len(prefijo):].split("·")[0])
+    if d.startswith(ESPERA_DUENO):
+        return "work_waits", _codigos(d[len(ESPERA_DUENO):].split("·")[0])
+    if "propuesta anterior, no enviada" in d:
+        return "withdrawn", []
+    if d.startswith("aprobada "):
+        return "approved", []
+    if d.startswith("enviado "):
+        return "sent", []
+    if d.startswith("ruta "):
+        return "route", []
+    if d.startswith("proyecto "):
+        return "project", []
+    if d.startswith("autorizadas:"):
+        return "authorized", []
+    if d == DETALLE_ATENDER:
+        return "attend", []
+    if "titulo y resumen nuevos" in d:
+        return "retitled", []
+    m = RE_EV_PROPUESTA.match(d)
+    if m:
+        return "proposal", [m.group(1)]
+    m = RE_EV_CLASE.match(d)
+    if m:
+        return "classified", [m.group(1)]
+    return None, []
+
+
+def medios_de_eventos(eventos):
+    """{stanza: 'sticker' | 'audio' | ...} de los mensajes que nombran los eventos, en una
+    lectura del almacen. Sin almacen, vacio: la historia dice "llego un mensaje"."""
+    stanzas = sorted({m.group(1) for lista in eventos.values() for e in lista
+                      if (m := RE_EV_MENSAJE.match((e.get("detalle") or "").strip()))})
+    if not stanzas:
+        return {}
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return {}
+    salida = {}
+    try:
+        for i in range(0, len(stanzas), 500):
+            parte = stanzas[i:i + 500]
+            for r in fuente.execute(
+                    f"select stanza_id, media_type from mensaje where account=? and "
+                    f"stanza_id in ({','.join('?' * len(parte))})", (cuenta_activa(), *parte)):
+                tipo = (r["media_type"] or "").lower()
+                salida[r["stanza_id"]] = ("audio" if tipo in TIPOS_AUDIO else tipo)
+    except sqlite3.Error:
+        return {}
+    finally:
+        fuente.close()
+    return salida
 
 
 def build_board(con):
@@ -4583,10 +4742,16 @@ def build_board(con):
     for i in range(0, len(ids), 500):
         parte = ids[i:i + 500]
         for r in con.execute(
-                f"select case_id, de, a, actor, at from caso_evento where case_id in "
+                f"select case_id, de, a, actor, detalle, at from caso_evento where case_id in "
                 f"({','.join('?' * len(parte))}) order by id", parte):
             eventos.setdefault(r["case_id"], []).append(dict(r))
     eventos = {k: v[-EVENTOS_EN_TARJETA:] for k, v in eventos.items()}
+    # Lo que paso en cada evento, en un codigo que el panel traduce (T22): el detalle es
+    # texto de maquina y no viaja. Un mensaje dice si fue un sticker o un audio.
+    medios = medios_de_eventos(eventos)
+    for lista in eventos.values():
+        for e in lista:
+            e["que"], e["args"] = que_del_evento(e.pop("detalle", "") or "", medios)
     despachos = {}
     con_despacho = [c["case_id"] for c in casos if c["etapa"] in ETAPAS_CON_DESPACHO]
     for i in range(0, len(con_despacho), 500):
@@ -4666,7 +4831,7 @@ CONTEOS_TICK = ("enviados", "excepciones", "frenados", "esperando", "bloqueados"
                 "errores", "pospuestos", "limpiados", "limpieza_error", "automaticas",
                 "revisiones", "transcritos", "rancias", "despachados",
                 "bloqueados_por_despacho", "respuestas_al_proyecto", "agente_lanzado",
-                "agente_error")
+                "agente_error", "trabajos_sin_clic")
 
 # La limpieza de los espacios que deja `triage` (un espacio nuevo por corrida: Orca no los
 # cierra). Mira la CLI a lo mas cada LIMPIEZA_CADA_S, quita solo corridas ya terminadas
@@ -5043,6 +5208,15 @@ def cmd_tick(con, a):
                 print(f"wa-scope: tick case #{caso['case_id']}: {exc}", file=sys.stderr)
             if resumen["sin_transporte"] or resumen["sin_firma"]:
                 break
+        # T22.9: el trabajo que no destruye ni compromete lo firma la regla, y el despacho
+        # que sigue lo toma en esta misma vuelta.
+        try:
+            tick_trabajo_sin_clic(con, resumen)
+        except (sqlite3.Error, CasoFalla) as exc:
+            if con.in_transaction:
+                con.rollback()
+            resumen["errores"] += 1
+            print(f"wa-scope: work without a click skipped: {exc}", file=sys.stderr)
         # El trabajo firmado, al agente de su proyecto (T8). Despues de los envios: una
         # respuesta que ya esta lista no espera detras de un lanzamiento.
         try:
@@ -5258,6 +5432,41 @@ def tick_revisa(con, caso, motivos):
         raise
     cancela_borradores()
     return True
+
+
+ESPERA_DUENO = "trabajo espera al dueno:"
+
+
+def tick_trabajo_sin_clic(con, resumen):
+    """Los `trabajar` en decision sin firma de la linea activa: la regla firma lo que no
+    destruye ni compromete y queda en el proyecto del chat (T22.9); lo demas espera, y el
+    caso dice por que una sola vez por version."""
+    for row in con.execute("select * from caso where account=? and etapa='decision' and "
+                           "propuesta_version is not null and (propuesta_aprobada is null or "
+                           "propuesta_aprobada <> propuesta_version) order by updated_at, case_id",
+                           (cuenta_activa(),)).fetchall():
+        caso = dict(row)
+        if propuesta_tipo(caso) != "trabajar":
+            continue
+        espera = trabajo_espera_al_dueno(con, caso)
+        if not espera:
+            cmd_caso_aprobar(con, argparse.Namespace(id=caso["case_id"],
+                                                     version=caso["propuesta_version"],
+                                                     actor="regla"))
+            resumen["trabajos_sin_clic"] += 1
+            continue
+        marca = f"· {caso['propuesta_version'][:12]}"
+        if con.execute("select 1 from caso_evento where case_id=? and detalle like ? limit 1",
+                       (caso["case_id"], f"{ESPERA_DUENO}%{marca}")).fetchone():
+            continue
+        caso_toma(con)
+        try:
+            caso_tocar(con, caso_de(con, caso["case_id"]), "regla",
+                       f"{ESPERA_DUENO} {', '.join(espera)} {marca}")
+            con.commit()
+        except BaseException:
+            con.rollback()
+            raise
 
 
 def tick_revision_regla(con, caso, resumen):

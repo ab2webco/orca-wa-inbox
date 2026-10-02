@@ -834,6 +834,37 @@ def carga_wa_scope(home):
     return modulo
 
 
+print("\nla historia del tablero: que paso, en codigos (T22)")
+with tempfile.TemporaryDirectory() as home:
+    ws = carga_wa_scope(home)
+    v64 = "a" * 64
+    for detalle, medios, esperado in (
+            ("mensaje S9", {}, ("message", [])),
+            ("mensaje S9", {"S9": "sticker"}, ("sticker", [])),
+            ("mensaje S9", {"S9": "audio"}, ("audio", [])),
+            ("jev: necesita agente", {}, ("jev", ["agent"])),
+            ("jev: excepciones money, credential; necesita agente", {},
+             ("jev", ["agent", "money", "credential"])),
+            ("regla fija: la respuesta lleva money, commitment", {},
+             ("rule", ["money", "commitment"])),
+            ("regla fija: excepciones credential", {}, ("rule", ["credential"])),
+            ("envio frenado: send-needs-approval caso-1-abc Held this reply to 'X' (rule: "
+             "money; jev: states_status_not_verified): it was written and is waiting", {},
+             ("held", ["money", "states_status_not_verified"])),
+            ("Jev pidio revisar: states_status_not_verified · propuesta anterior, no enviada: "
+             "responder " + v64, {}, ("revision", ["states_status_not_verified"])),
+            ("La regla pidio revisar 3 veces (money): lo decide el dueno · abc", {},
+             ("owner_decides", ["money"])),
+            ("trabajo espera al dueno: delete, deploy · abc123", {},
+             ("work_waits", ["delete", "deploy"])),
+            ("responder " + v64, {}, ("proposal", ["responder"])),
+            ("card · none · jev support_request", {}, ("classified", ["card"])),
+            ("aprobada " + v64, {}, ("approved", [])),
+            ("algo que nadie conoce", {}, (None, []))):
+        salio = ws.que_del_evento(detalle, medios)
+        ok(f"evento {detalle[:40]!r} -> {esperado[0]}", salio == esperado, f"salio {salio}")
+
+
 print("\nla carrera entre aprobar y re-proponer")
 with tempfile.TemporaryDirectory() as home:
     cid = caso_clasificado(home)
@@ -3208,8 +3239,12 @@ with tempfile.TemporaryDirectory() as home:
        t and t["needs_agent"] is True and "atender" in t["actions"] and "ignorar" in t["actions"],
        f"{t and t['actions']}")
     ok("y trae su historia, sin el detalle de maquina",
-       t and len(t["events"]) >= 3 and all(set(e) == {"de", "a", "actor", "at"} for e in t["events"])
+       t and len(t["events"]) >= 3
+       and all({"de", "a", "actor", "at"} <= set(e) <= {"de", "a", "actor", "at", "que", "args"}
+               and "detalle" not in e for e in t["events"])
        and t["events"][-1]["actor"] == "dueno", f"{t and t['events']}")
+    ok("cada evento dice que paso con un codigo, no con el texto (T22)",
+       t and t["events"][-1].get("que") == "attend", f"{t and t['events']}")
     js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta", "Hola.",
        "--actor", "agente")
     p = corre(home, "caso", "atender", cid, "--actor", "dueno", "--json")
@@ -5786,6 +5821,106 @@ if NODE:
         p = corre(home, "caso", "mover", cid, "trabajo", "--actor", "dueno")
         ok("caso mover de respondido a trabajo se rechaza: E_STAGE",
            p.returncode == 2 and "E_STAGE" in p.stderr, p.stderr)
+
+# ── T22.9: la aprobacion frena lo que sale, no lo que se hace ─────────────────────────
+# Un `trabajar` que no destruye ni compromete y que queda dentro del proyecto del chat va al
+# agente del proyecto sin el clic: entra a `trabajo` firmado por la regla y el despacho de T8
+# lo toma. Borrar, desplegar a produccion, forzar un push, pagos, credenciales, otro
+# proyecto, o comprometer una fecha o plata siguen esperando al dueno. Ante la duda, espera.
+print("\nT22.9: el trabajo que no compromete sale sin el clic")
+reglas = carga_reglas()
+for texto, esperado in (
+        ("Reproducir el reporte en blanco y corregirlo", []),
+        ("Ajustar el CSS del boton de inicio y revisar el formulario de contacto", []),
+        ("Borrar la tabla de pedidos viejos", ["delete"]),
+        ("Eliminar el usuario de prueba del panel", ["delete"]),
+        ("Desplegar el arreglo a produccion", ["deploy"]),
+        ("deploy the fix to production", ["deploy"]),
+        ("git push --force a main", ["force_push"]),
+        ("Hacer el reembolso al cliente", ["payment"]),
+        ("Rotar el token de la API y mandarlo", ["credential"]),
+        ("Dejarlo listo para el viernes", ["commitment"]),
+        ("Cotizar el cambio en $300", ["money"])):
+    salio = reglas.trabajo_comprometido(texto)
+    ok(f"trabajo: {texto!r} -> {esperado}", salio == esperado, f"salio {salio}")
+
+if NODE:
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo", "beta-demo")
+        js(home, "set", PERSONA, "--workspace", "alfa-demo")
+        orca_despacho(carpeta)
+
+        def trabajar(stanza, instrucciones, chat=PERSONA, minutos=5):
+            llegan(home, A, [msg(chat, stanza, PEDIDO, minutos)])
+            cid = str(js(home, "caso", "crear", "--chat", chat, "--stanza", stanza,
+                         "--actor", "agente")[0]["case_id"])
+            js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "high",
+               "--actor", "agente")
+            js(home, "caso", "propuesta", cid, "--tipo", "trabajar", "--instrucciones",
+               instrucciones, "--actor", "agente")
+            return cid
+
+        def entrada_trabajo(cid):
+            return next((e for e in js(home, "caso", "ver", cid)[0]["eventos"]
+                         if e["a"] == "trabajo" and e["de"] == "decision"), None)
+
+        bueno = trabajar("P1", TRABAJO)
+        tick_orca(home, carpeta)
+        ev = entrada_trabajo(bueno)
+        ok("un trabajo limpio dentro del proyecto del chat entra a trabajo firmado por la regla",
+           ev is not None and ev["actor"] == "regla", f"{js(home, 'caso', 'ver', bueno)[0]['eventos']}")
+        ok("y el despacho de T8 lo toma sin el clic",
+           [f["case_id"] for f in despachos(home) or []] == [int(bueno)], f"{despachos(home)}")
+
+        borra = trabajar("P2", "Borrar la tabla de pedidos viejos y desplegar a produccion")
+        tick_orca(home, carpeta)
+        ver = js(home, "caso", "ver", borra)[0]
+        ok("lo destructivo sigue esperando al dueno, sin despacho",
+           ver["etapa"] == "decision" and not ver["aprobada"]
+           and int(borra) not in [f["case_id"] for f in despachos(home) or []], f"{ver['etapa']}")
+        ok("y la tarjeta dice por que espera",
+           any("espera al dueno" in e["detalle"] and "delete" in e["detalle"]
+               for e in ver["eventos"]), f"{[e['detalle'] for e in ver['eventos']]}")
+        tick_orca(home, carpeta)
+        ok("ese aviso se anota una sola vez",
+           sum(1 for e in js(home, "caso", "ver", borra)[0]["eventos"]
+               if "espera al dueno" in e["detalle"]) == 1)
+
+        otro = trabajar("P3", TRABAJO)
+        js(home, "caso", "proyecto", otro, "--proyecto", "beta-demo", "--actor", "dueno")
+        tick_orca(home, carpeta)
+        ok("en otro proyecto que el del chat, espera al dueno",
+           js(home, "caso", "ver", otro)[0]["etapa"] == "decision")
+
+        js(home, "set", SOPORTE, "--workspace", "")
+        sin = trabajar("P4", TRABAJO, chat=SOPORTE)
+        tick_orca(home, carpeta)
+        ok("un chat sin proyecto espera al dueno", js(home, "caso", "ver", sin)[0]["etapa"] == "decision")
+
+        js(home, "set", OPERACIONES, "--provider", "ninguno", "--mode", "observar",
+           "--workspace", "alfa-demo")
+        mira = trabajar("P5", TRABAJO, chat=OPERACIONES)
+        tick_orca(home, carpeta)
+        ok("en un chat que solo observa, espera al dueno",
+           js(home, "caso", "ver", mira)[0]["etapa"] == "decision")
+
+        # El mensaje tambien es viejo: uno posterior a la propuesta la retiraria (T19).
+        vieja = trabajar("P6", "Revisar el formulario de contacto", minutos=3 * 24 * 60)
+        con = db_de(home)
+        con.execute("update caso_evento set at=datetime('now','localtime','-2 days') "
+                    "where case_id=? and a='decision'", (int(vieja),))
+        con.commit()
+        con.close()
+        tick_orca(home, carpeta)
+        ok("una propuesta de hace mas de un dia no sale sola: la ve el dueno",
+           js(home, "caso", "ver", vieja)[0]["etapa"] == "decision")
+
+        dueno = trabajar("P7", "Borrar la cache del sitio")
+        v = js(home, "caso", "ver", dueno)[0]["propuesta_version"]
+        ok("y el dueno lo puede aprobar como siempre",
+           js(home, "caso", "aprobar", dueno, "--version", v, "--actor", "dueno")[0]["etapa"]
+           == "trabajo")
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:

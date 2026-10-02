@@ -231,3 +231,51 @@ def nivel_de_motivo(quien, codigo, niv):
     """The level that applies to one hold reason in a chat with levels `niv`."""
     regla = REGLA_DE_MOTIVO.get((quien, codigo))
     return niv[regla] if regla else PREGUNTAR
+
+
+# ── Work that waits for the owner (T22.9) ────────────────────────────────────────────
+# Approval gates what is SENT, not what is DONE: a `trabajar` proposal goes to the
+# project's agent without a click unless the work itself destroys or commits something.
+# These are the reasons it still waits. When in doubt, wait: the patterns lean wide.
+TRABAJO_BORRA = _palabras(
+    r"borr(?:ar|a|en|e|o|amos|ando)", r"elimin\w*", r"suprim\w*", r"purg\w*", r"vaci(?:ar|a)",
+    r"dar de baja", r"delete\w*", r"remove", r"drop", r"truncate", r"wipe", r"purge",
+    r"rm -rf", r"apag(?:ar|a) (?:el|la) (?:servidor|servicio|base)")
+TRABAJO_DESPLIEGA = re.compile(
+    r"\b(?:produccion|prod|production|live|en vivo)\b")
+TRABAJO_VERBO_DESPLIEGUE = _palabras(
+    r"despleg\w*", r"desplieg\w*", r"deploy\w*", r"publica\w*", r"sub(?:ir|e|a|amos)",
+    r"lanza\w*", r"release\w*", r"merge\w*", r"pasa\w*", r"llev\w*", r"ship\w*", r"push\w*")
+TRABAJO_FUERZA = re.compile(
+    r"push\s+(?:-f\b|--force)|force[- ]push|push forzado|forzar (?:el )?push|"
+    r"reset --hard|--force-with-lease")
+TRABAJO_PAGO = _palabras(
+    r"pag(?:o|os|ar|a|amos|ue)", r"cobr\w*", r"factur\w*", r"reembols\w*", r"refund\w*",
+    r"payments?", r"pay", r"charge\w*", r"invoic\w*", r"transferenc\w*", r"transferi\w*",
+    r"consign\w*", r"billing", r"suscripci\w*", r"subscription\w*", r"tarjeta de credito")
+ORDEN_TRABAJO = ("delete", "deploy", "force_push", "payment", "credential", "commitment",
+                 "money")
+
+
+def trabajo_comprometido(texto):
+    """Why a piece of work must wait for the owner instead of going to the project's agent
+    without a click (T22.9), in a stable order; an empty list is work that can go. Only the
+    reason NAMES, never the text."""
+    original = texto or ""
+    if not original.strip():
+        return []
+    t = normaliza(original)
+    halladas = set()
+    if TRABAJO_BORRA.search(t):
+        halladas.add("delete")
+    if TRABAJO_FUERZA.search(t):
+        halladas.add("force_push")
+    if any(TRABAJO_DESPLIEGA.search(f) and TRABAJO_VERBO_DESPLIEGUE.search(f)
+           for f in FRASES.findall(t)):
+        halladas.add("deploy")
+    if TRABAJO_PAGO.search(t):
+        halladas.add("payment")
+    salida = excepciones(original, SALIDA)
+    for e in salida:
+        halladas.add(e)
+    return [r for r in ORDEN_TRABAJO if r in halladas]
