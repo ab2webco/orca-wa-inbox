@@ -377,6 +377,9 @@ create table if not exists caso (
   -- Esas excepciones no vuelven por juzgar OTRA VEZ esos mismos mensajes; un mensaje nuevo
   -- se juzga de cero.
   dispensa text,
+  -- El caso anterior del mismo chat (un caso es un pedido: lo nuevo abre otro y apunta al
+  -- que ya estaba).
+  relacionado integer,
   created_at text not null,
   updated_at text not null
 );
@@ -1096,6 +1099,8 @@ def migrate(con):
                     "default 0")
     if "dispensa" not in caso_cols:
         con.execute("alter table caso add column dispensa text")
+    if "relacionado" not in caso_cols:
+        con.execute("alter table caso add column relacionado integer")
     # T3: el veredicto entero de Jev, cacheado junto a su clase.
     if "jev" not in {r["name"] for r in con.execute("pragma table_info(juicio)")}:
         con.execute("alter table juicio add column jev text")
@@ -2370,14 +2375,15 @@ def caso_tocar(con, caso, actor, detalle, **campos):
     caso_mover(con, caso, caso["etapa"], actor, detalle, **campos)
 
 
-def caso_nuevo(con, chat_jid, actor, titulo=None, stanzas=(), detalle=""):
-    """Un caso en recibido con sus mensajes y su evento de nacimiento. Sin commit."""
+def caso_nuevo(con, chat_jid, actor, titulo=None, stanzas=(), detalle="", relacionado=None):
+    """Un caso en recibido con sus mensajes y su evento de nacimiento. Sin commit.
+    `relacionado` es el caso anterior del mismo chat, si lo hay."""
     momento = ahora_caso()
     cuenta = cuenta_activa()
     case_id = con.execute(
-        "insert into caso (account, chat_jid, etapa, titulo, created_at, updated_at) "
-        "values (?,?,'recibido',?,?,?)",
-        (cuenta, chat_jid, titulo, momento, momento)).lastrowid
+        "insert into caso (account, chat_jid, etapa, titulo, relacionado, created_at, "
+        "updated_at) values (?,?,'recibido',?,?,?,?)",
+        (cuenta, chat_jid, titulo, relacionado, momento, momento)).lastrowid
     for stanza in stanzas:
         con.execute("insert into caso_mensaje (account, stanza_id, case_id, at) "
                     "values (?,?,?,?)", (cuenta, stanza, case_id, momento))
@@ -2738,10 +2744,19 @@ def caso_abierto_de_chat(con, chat, horas, excluir=("cerrado",)):
     return dict(row) if row else None
 
 
-def caso_asigna(con, stanza, chat, actor):
+def ultimo_caso_de_chat(con, chat):
+    """El id del caso mas reciente de la conversacion, cerrado o no, o None."""
+    fila = con.execute("select max(case_id) n from caso where account=? and chat_jid=?",
+                       (cuenta_activa(), chat)).fetchone()
+    return fila["n"]
+
+
+def caso_asigna(con, stanza, chat, actor, aparte=None):
     """La regla de agrupacion, sin transaccion propia: la comparten el comando y
     `ingest`, y cada uno toma la base y confirma a su manera. Devuelve (case_id, que):
-    `ya` si el mensaje ya tenia caso, `nuevo` si abrio uno, `unido` si se sumo a uno."""
+    `ya` si el mensaje ya tenia caso, `nuevo` si abrio uno, `unido` si se sumo a uno.
+    Con `aparte` (el id de un caso abierto) abre uno nuevo aunque ese seguiria agrupando:
+    un pedido distinto no se mezcla con el de antes, y el nuevo apunta al otro."""
     ya = caso_de_mensaje(con, stanza)
     if ya:
         caso = caso_de(con, ya)
@@ -2749,9 +2764,10 @@ def caso_asigna(con, stanza, chat, actor):
             caso_falla("E_ARGS", f"message {stanza} already belongs to case #{ya}, of another chat")
         return ya, "ya"
     caso = caso_abierto_de_chat(con, chat, ventana_casos(con))
-    if not caso:
-        return caso_nuevo(con, chat, actor, stanzas=[stanza],
-                          detalle=f"mensaje {stanza}"), "nuevo"
+    if not caso or aparte is not None:
+        return caso_nuevo(con, chat, actor, stanzas=[stanza], detalle=f"mensaje {stanza}",
+                          relacionado=aparte if aparte is not None
+                          else ultimo_caso_de_chat(con, chat)), "nuevo"
     caso_suma_mensaje(con, caso, stanza, actor)
     return caso["case_id"], "unido"
 
@@ -2965,6 +2981,19 @@ def mensaje_de_rafaga(rafaga):
                 kind=kind, media=media, juicio=None)
 
 
+def con_respuesta(con, m, horas):
+    """El mensaje, con la ultima respuesta enviada a su chat si el caso de ahora esta
+    respondido: es el contexto con que Jev lo distingue de un pedido nuevo."""
+    caso = caso_abierto_de_chat(con, m.get("chat_jid"), horas)
+    if not caso or caso["etapa"] != "respondido" or not caso.get("propuesta"):
+        return m
+    try:
+        texto = json.loads(caso["propuesta"]).get("respuesta")
+    except (TypeError, ValueError, AttributeError):
+        return m
+    return dict(m, respuesta_previa=texto) if texto else m
+
+
 def caso_de_rafaga_reciente(con, chat):
     """El caso del chat que se abrio o se reabrio hace menos de RAFAGA_S y sigue esperando
     (recibido, clasificado o decision), o None. Es lo que une un mensaje que llega solo,
@@ -3099,6 +3128,15 @@ def caso_marca_regla(con, case_id, excepciones, stanza=None):
 # era charla ajena. `listo` no esta: un mensaje no lo reabre (no sale de ahi a recibido).
 ETAPAS_QUE_VUELVEN = ("respondido",)
 CLASES_CHARLA = ("unrelated_chatter", "pleasantry")
+# Un caso es un pedido. Tras una respuesta, Jev no tiene una clase de "seguimiento": lo que
+# tiene es la clase del mensaje, leida con la respuesta ya enviada de contexto. Aqui se
+# traduce: `bug_report` ("no funciono") y `status_question` ("como va") son el seguimiento de
+# lo que ya se contesto y reabren el caso; la charla y los saludos se quedan en el caso sin
+# reabrirlo; cualquier otra clase de pedido es uno nuevo, y las que no dicen nada
+# (`unclear`, `no_match`, audio sin texto) o la falta de Jev, tambien: mejor una tarjeta
+# limpia que una mezclada.
+CLASES_SEGUIMIENTO = ("bug_report", "status_question")
+CLASES_SIN_PEDIDO = (None, "unclear", "no_match", "empty_or_audio_only")
 LARGO_RESUMEN_REABIERTO = 280
 
 
@@ -3112,6 +3150,27 @@ def es_charla_ajena(juicio):
         return True
     return (juicio.get("attention_class") in CLASES_CHARLA and not juicio.get("flags")
             and not juicio.get("exceptions") and not juicio.get("needs_agent"))
+
+
+def continuidad(veredicto):
+    """Que es un mensaje respecto del caso que ya se respondio: `charla`, `seguimiento` o
+    `nuevo` (un pedido distinto, o nada que lo diga: sin Jev, o una clase vacia)."""
+    juicio = veredicto.get("jev") if veredicto else None
+    if not juicio:
+        return "nuevo"
+    if es_charla_ajena(juicio):
+        return "charla"
+    if juicio.get("attention_class") in CLASES_SEGUIMIENTO:
+        return "seguimiento"
+    return "nuevo"
+
+
+def es_pedido_nuevo(veredicto):
+    """Si Jev dijo EXPLICITAMENTE que es un pedido distinto (una clase de pedido, no la
+    falta de clase): lo que decide abrir otro caso aunque el de trabajo siga abierto."""
+    juicio = veredicto.get("jev") if veredicto else None
+    return bool(juicio) and continuidad(veredicto) == "nuevo" \
+        and juicio.get("attention_class") not in CLASES_SIN_PEDIDO
 
 
 def caso_devuelve(con, caso, previo, juicio):
@@ -3212,7 +3271,11 @@ def ingest_mensaje(con, m, veredicto, horas):
             caso_marca_regla(con, case_id, piso, stanza)
         else:
             previo = caso_abierto_de_chat(con, chat, horas)
-            case_id, que = caso_asigna(con, stanza, chat, "automatizacion")
+            aparte = None
+            if previo and ((previo["etapa"] == "respondido" and continuidad(veredicto) == "nuevo")
+                           or (previo["etapa"] == "trabajo" and es_pedido_nuevo(veredicto))):
+                aparte = previo["case_id"]
+            case_id, que = caso_asigna(con, stanza, chat, "automatizacion", aparte)
             hecho.update(nuevos=1, casos_creados=int(que == "nuevo"),
                          unidos=int(que == "unido"))
             caso_enruta(con, case_id, m.get("text") or "", chat)
@@ -3227,7 +3290,7 @@ def ingest_mensaje(con, m, veredicto, horas):
             caso_marca_regla(con, case_id, piso, stanza)
             if (que == "unido" and previo and previo["case_id"] == case_id
                     and previo["etapa"] in ETAPAS_QUE_VUELVEN
-                    and caso_de(con, case_id)["etapa"] == "recibido"):
+                    and caso_de(con, case_id)["etapa"] != previo["etapa"]):
                 caso_retitula(con, case_id, previo, stanza, m.get("text") or "")
         con.commit()
     except BaseException:
@@ -3320,15 +3383,15 @@ def cmd_ingest(con, a):
     por_rafaga = {m["stanza_id"]: r for r in agrupa_rafagas(libres) for m in r}
     for m in nuevos:
         if m in sueltas:
-            veredicto = veredicto_de(m, (decisiones.get(m["stanza_id"]) or {}).get("decision"),
-                                     con)
+            veredicto = veredicto_de(con_respuesta(con, m, horas),
+                                     (decisiones.get(m["stanza_id"]) or {}).get("decision"), con)
             grupo = [m]
         else:
             grupo = por_rafaga[m["stanza_id"]]
             if grupo[0] is not m:
                 continue
-            veredicto = veredicto_de(mensaje_de_rafaga(grupo) if len(grupo) > 1 else m,
-                                     None, con)
+            base = mensaje_de_rafaga(grupo) if len(grupo) > 1 else m
+            veredicto = veredicto_de(con_respuesta(con, base, horas), None, con)
         for x in grupo:
             if x.get("kind") == "grupo" and veredicto is None:
                 sueltos.append((x, veredicto))
@@ -3473,6 +3536,8 @@ def tarjeta_de(caso, nombres, titulos, motivos, eventos=None):
         "project": ({"id": ruta["workspace"], "name": ruta.get("workspace_name") or
                      ruta["workspace"]} if ruta.get("workspace") else None),
         "needs_agent": bool(caso["necesita_agente"]),
+        # El caso anterior del mismo chat, si este abrio aparte de uno que ya estaba.
+        "related_case": caso["relacionado"],
         # La historia del caso (`caso_evento`): de que etapa a cual, quien y cuando. Sin
         # `detalle`: es texto de maquina en ingles y el panel no lo muestra.
         "events": [{"de": e["de"], "a": e["a"], "actor": e["actor"], "at": iso_caso(e["at"])}

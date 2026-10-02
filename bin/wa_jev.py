@@ -205,7 +205,11 @@ INSTRUCCION_CLASE = (
     "The state holds a WhatsApp message (message_to_evaluate) and who it is addressed "
     "to. Decide what message_to_evaluate asks of the OWNER or the owner's team. If it is "
     "a conversation between other people (addressed_to_owner is false) and asks nothing "
-    "of the owner or the owner's team, choose the matching option that asks nothing.")
+    "of the owner or the owner's team, choose the matching option that asks nothing. If "
+    "case_context.last_reply_already_sent is present, that request was already answered: "
+    "choose bug_report or status_question when message_to_evaluate follows up on that "
+    "answer (it did not work, or it asks how it is going), and the matching request option "
+    "when it asks for something new.")
 NOUL_ENTRADA = {
     "asks_owner_to_act": "Does message_to_evaluate ask the owner to do something, such as "
                          "answer, review, fix, send, decide, approve or deploy? Answer no "
@@ -293,9 +297,15 @@ def estado_mensaje(m):
     if m.get("media"):
         mensaje["attachment"] = os.path.splitext(str(m["media"]))[1].lstrip(".") or "file"
     chat = str(m.get("chat_jid") or "")
-    return {"note": NOTA, "owner": DUENO,
-            "chat": {"type": "group" if chat.endswith("@g.us") else "direct"},
-            "message_to_evaluate": mensaje}
+    estado = {"note": NOTA, "owner": DUENO,
+              "chat": {"type": "group" if chat.endswith("@g.us") else "direct"},
+              "message_to_evaluate": mensaje}
+    if m.get("respuesta_previa"):
+        # Lo ultimo que ya se le contesto a este chat: con eso Jev distingue un seguimiento
+        # de esa respuesta de un pedido nuevo.
+        estado["case_context"] = {"last_reply_already_sent": recorta(
+            mask(str(m["respuesta_previa"])), 600)}
+    return estado
 
 
 def estado_borrador(texto, pregunta=None):

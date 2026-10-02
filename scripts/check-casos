@@ -1222,9 +1222,10 @@ else:
            and js(home, "caso", "ver", str(c1["case_id"]))[0]["etapa"] == "respondido")
         llegan(home, A, [msg(SOPORTE, "M3", "@duenio otra cosa", 4, mencion=True)])
         ingiere(home)
-        ok("una mencion si lo devuelve a recibido",
-           caso_de_stanza(home, "M3")["case_id"] == c1["case_id"]
-           and caso_de_stanza(home, "M3")["etapa"] == "recibido")
+        ok("una mencion tras la respuesta (sin Jev) abre un caso nuevo, enlazado, y deja el viejo",
+           caso_de_stanza(home, "M3")["case_id"] != c1["case_id"]
+           and caso_de_stanza(home, "M3")["etapa"] == "recibido"
+           and js(home, "caso", "ver", str(c1["case_id"]))[0]["etapa"] == "respondido")
 
     # Lo determinista: sin cuerpo o solo audio es dudoso, sin gastar al agente en eso.
     with tempfile.TemporaryDirectory() as home:
@@ -1651,6 +1652,10 @@ def jev_segun_texto(cuerpo):
         return 500, {"error": "boom"}
     if "gracias" in texto or "buen dia" in texto:
         return 200, respuestas(qs, choice="pleasantry", asks_owner_to_act=0.05)
+    if "no funciono" in texto:
+        return 200, respuestas(qs, choice="bug_report", asks_owner_to_act=0.7)
+    if "otra solicitud nueva" in texto:
+        return 200, respuestas(qs, choice="support_request", asks_owner_to_act=0.8)
     if "revisa este caso" in texto.lower():
         return 200, respuestas(qs, choice="support_request", asks_owner_to_act=0.8)
     if "soporte.example.com" in texto:
@@ -1766,6 +1771,14 @@ else:
 # tarjeta quedo en Clasificado pidiendo "Atender ahora" por nada. Un mensaje sigue
 # reabriendo el caso, pero si Jev dice que es charla ajena o un saludo, sin marcas, el
 # caso vuelve a donde estaba. Sin Jev, o con Jev en error, sigue reabierto.
+def tarjeta_de_tablero(home, cid):
+    """La tarjeta del tablero publicado: el tick lo deja al dia."""
+    corre(home, "tick", "--json")
+    ruta = storage_de(home)
+    cards = json.loads(ruta.read_text(encoding="utf-8")).get("board", {}).get("cards", [])
+    return next((c for c in cards if c["case_id"] == int(cid)), None)
+
+
 PROPUESTA_ENVIADA = json.dumps({"tipo": "responder", "respuesta": "Ya quedo, gracias."},
                                sort_keys=True)
 VERSION_ENVIADA = "a1b2c3d4e5f6" * 5 + "a1b2"
@@ -1823,8 +1836,10 @@ if NODE:
             llegan(home, A, [msg(SOPORTE, "H4", "@duenio cuanto cuesta el plan", 5,
                                  mencion=True)])
             ingiere(home)
-            ok("si Jev ve algo que atender (dinero) el caso sigue reabierto",
-               fila_de(home, cid)["etapa"] == "clasificado", f"{fila_de(home, cid)['etapa']}")
+            nuevo_caso = caso_de_stanza(home, "H4")
+            ok("si Jev ve algo nuevo que atender (dinero) abre su propio caso, y el viejo sigue respondido",
+               nuevo_caso["case_id"] != cid and nuevo_caso["etapa"] == "clasificado"
+               and fila_de(home, cid)["etapa"] == "respondido", f"{nuevo_caso['etapa']}")
     finally:
         falso.cerrar()
         os.environ.clear()
@@ -1837,16 +1852,116 @@ if NODE:
         llegan(home, A, [msg(SOPORTE, "H6", "@duenio charla entre ustedes", 5, mencion=True)])
         ingiere(home)
         fila = fila_de(home, cid)
-        ok("sin Jev el caso queda reabierto, en recibido", fila["etapa"] == "recibido",
-           f"{fila['etapa']}")
-        ok("y su propuesta ya enviada no queda como pendiente ni con firma",
-           fila["propuesta"] is None and fila["propuesta_version"] is None
-           and fila["propuesta_aprobada"] is None, f"{fila}")
-        ver = js(home, "caso", "ver", str(cid))[0]
-        ok("el evento de la reapertura nombra la version enviada, no el texto",
-           any(e["de"] == "respondido" and e["a"] == "recibido"
-               and VERSION_ENVIADA[:12] in e["detalle"] for e in ver["eventos"]),
-           f"{ver['eventos']}")
+        nuevo_caso = caso_de_stanza(home, "H6")
+        ok("sin Jev un mensaje tras una respuesta abre un caso nuevo: una tarjeta limpia",
+           nuevo_caso["case_id"] != cid and nuevo_caso["etapa"] == "recibido"
+           and fila["etapa"] == "respondido", f"{fila['etapa']} {nuevo_caso['etapa']}")
+        ok("el caso viejo queda tal cual, con la respuesta que ya salio",
+           fila["propuesta"] == PROPUESTA_ENVIADA and fila["propuesta_aprobada"] == VERSION_ENVIADA,
+           f"{fila}")
+        ok("y el nuevo apunta al anterior",
+           fila_de(home, nuevo_caso["case_id"])["relacionado"] == cid
+           and tarjeta_de_tablero(home, nuevo_caso["case_id"])["related_case"] == cid)
+
+
+# ── 12d. Un caso es un pedido ────────────────────────────────────────────────────────
+# Una tarjeta mezclaba tres pedidos de tres horas: cada mensaje nuevo reabria el mismo caso.
+# Tras una respuesta, Jev juzga el mensaje con esa respuesta de contexto: un pedido nuevo
+# abre su caso (enlazado al anterior); un seguimiento (`bug_report`, `status_question`:
+# "no funciono", "como va") reabre el viejo; una charla (`pleasantry`, `unrelated_chatter`)
+# se queda en el viejo sin reabrirlo. Sin Jev, o con una clase que no dice nada (`unclear`,
+# `no_match`), un caso nuevo: mejor una tarjeta limpia que una mezclada. Un caso abierto sin
+# responder (recibido, clasificado, decision) sigue juntando mensajes; uno en trabajo
+# tambien, salvo que Jev diga que es un pedido nuevo.
+print("\nun caso es un pedido")
+if NODE:
+    falso = JevFalso(jev_segun_texto)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "N1")
+            llegan(home, A, [msg(SOPORTE, "N2", "@duenio otra solicitud nueva sobre otro tema", 5,
+                                 mencion=True)])
+            ingiere(home)
+            n = caso_de_stanza(home, "N2")
+            ok("un pedido nuevo tras una respuesta abre un caso nuevo",
+               n["case_id"] != cid and n["etapa"] == "clasificado"
+               and fila_de(home, cid)["etapa"] == "respondido", f"{n['etapa']}")
+            ok("enlazado al caso anterior, en la tarjeta tambien",
+               fila_de(home, n["case_id"])["relacionado"] == cid
+               and tarjeta_de_tablero(home, n["case_id"])["related_case"] == cid)
+            ok("Jev vio la respuesta que ya salio como contexto",
+               "Ya quedo" in json.dumps(falso.pedidos[-1]["cuerpo"]["state"]),
+               json.dumps(falso.pedidos[-1]["cuerpo"]["state"])[:300])
+            ok("el caso viejo no recibio el mensaje",
+               len(js(home, "caso", "ver", str(cid))[0]["mensajes"]) == 1)
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "N3")
+            llegan(home, A, [msg(SOPORTE, "N4", "@duenio no funciono lo que me mandaron", 5,
+                                 mencion=True)])
+            ingiere(home)
+            fila = fila_de(home, cid)
+            ok("un seguimiento (\"no funciono\") reabre el mismo caso",
+               caso_de_stanza(home, "N4")["case_id"] == cid and fila["etapa"] == "clasificado"
+               and fila["relacionado"] is None, f"{fila['etapa']}")
+            ok("y la respuesta ya enviada no queda como pendiente",
+               fila["propuesta"] is None and fila["propuesta_version"] is None, f"{fila}")
+            ver = js(home, "caso", "ver", str(cid))[0]
+            ok("con su evento de reapertura",
+               any(e["de"] == "respondido" and e["a"] == "recibido"
+                   and VERSION_ENVIADA[:12] in e["detalle"] for e in ver["eventos"]))
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "N5")
+            llegan(home, A, [msg(SOPORTE, "N6", "@duenio jaja", 5, mencion=True)])
+            ingiere(home)
+            ok("un saludo o una charla se queda en el caso viejo, sin reabrirlo",
+               caso_de_stanza(home, "N6")["case_id"] == cid
+               and fila_de(home, cid)["etapa"] == "respondido"
+               and fila_de(home, cid)["relacionado"] is None)
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(SOPORTE, "N7", "@duenio revisa el pedido", 10, mencion=True)])
+            autoriza(home)
+            ingiere(home)
+            abierto = caso_de_stanza(home, "N7")
+            llegan(home, A, [msg(SOPORTE, "N8", "@duenio otra solicitud nueva distinta", 5,
+                                 mencion=True)])
+            ingiere(home)
+            ok("un caso abierto sin responder sigue juntando los mensajes nuevos",
+               abierto["etapa"] == "clasificado"
+               and caso_de_stanza(home, "N8")["case_id"] == abierto["case_id"],
+               f"{caso_de_stanza(home, 'N8')['case_id']} {abierto['case_id']}")
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "N9")
+            con = db_de(home)
+            con.execute("update caso set etapa='trabajo' where case_id=?", (cid,))
+            con.commit()
+            con.close()
+            llegan(home, A, [msg(SOPORTE, "NA", "@duenio una cosa suelta sin clase clara", 5,
+                                 mencion=True)])
+            ingiere(home)
+            ok("un caso en trabajo junta lo que Jev no ve como pedido nuevo",
+               caso_de_stanza(home, "NA")["case_id"] == cid, f"{caso_de_stanza(home, 'NA')['case_id']}")
+            llegan(home, A, [msg(SOPORTE, "NB", "@duenio otra solicitud nueva muy distinta", 4,
+                                 mencion=True)])
+            ingiere(home)
+            nb = caso_de_stanza(home, "NB")
+            ok("pero si Jev dice que es un pedido nuevo, abre otro, enlazado",
+               nb["case_id"] != cid and fila_de(home, nb["case_id"])["relacionado"] == cid
+               and fila_de(home, cid)["etapa"] == "trabajo", f"{nb['case_id']}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
 
 
 # ── 12c. Una rafaga de mensajes se juzga como una sola cosa ──────────────────────────
@@ -2065,7 +2180,7 @@ import re  # noqa: E402
 LLAVES_TARJETA = {"case_id", "account", "chat_jid", "chat_name", "stage", "title",
                   "summary", "clase", "prioridad", "jev", "proposal", "exceptions",
                   "blocked_reason", "ticket", "updated_at", "actions", "project",
-                  "needs_agent", "events"}
+                  "needs_agent", "events", "related_case"}
 ISO = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$")
 
 
@@ -2860,38 +2975,49 @@ with tempfile.TemporaryDirectory() as home:
 # el evento. Una credencial no se copia: el titulo sale enmascarado y sin resumen.
 print("\nun caso reabierto muestra el mensaje nuevo")
 if NODE:
-    with tempfile.TemporaryDirectory() as home:
-        cid = caso_respondido(home, "T1")
-        con = db_de(home)
-        con.execute("update caso set titulo='Pedido de ayer', resumen='Lo de ayer' "
-                    "where case_id=?", (cid,))
-        con.commit()
-        con.close()
-        llegan(home, A, [msg(SOPORTE, "T2", "@duenio ahora necesito otra cosa distinta", 5,
-                             mencion=True)])
-        ingiere(home)
-        fila = fila_de(home, cid)
-        ok("al reabrir, el titulo y el resumen son los del mensaje nuevo",
-           fila["etapa"] == "recibido"
-           and fila["titulo"] == "@duenio ahora necesito otra cosa distinta"
-           and fila["resumen"] == "@duenio ahora necesito otra cosa distinta", f"{fila}")
-        ver = js(home, "caso", "ver", str(cid))[0]
-        ok("el titulo de antes queda en la historia",
-           any("Pedido de ayer" in e["detalle"] for e in ver["eventos"]), f"{ver['eventos']}")
-        ok("la tarjeta del tablero lo muestra",
-           tarjeta(home, cid)["title"] == "@duenio ahora necesito otra cosa distinta",
-           f"{tarjeta(home, cid)}")
+    falso = JevFalso(jev_segun_texto)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "T1")
+            con = db_de(home)
+            con.execute("update caso set titulo='Pedido de ayer', resumen='Lo de ayer' "
+                        "where case_id=?", (cid,))
+            con.commit()
+            con.close()
+            llegan(home, A, [msg(SOPORTE, "T2", "@duenio no funciono lo de ayer", 5,
+                                 mencion=True)])
+            ingiere(home)
+            fila = fila_de(home, cid)
+            ok("al reabrir, el titulo y el resumen son los del mensaje nuevo",
+               fila["etapa"] == "clasificado"
+               and fila["titulo"] == "@duenio no funciono lo de ayer"
+               and fila["resumen"] == "@duenio no funciono lo de ayer", f"{fila}")
+            ver = js(home, "caso", "ver", str(cid))[0]
+            ok("el titulo de antes queda en la historia",
+               any("Pedido de ayer" in e["detalle"] for e in ver["eventos"]),
+               f"{ver['eventos']}")
+            ok("la tarjeta del tablero lo muestra",
+               tarjeta(home, cid)["title"] == "@duenio no funciono lo de ayer",
+               f"{tarjeta(home, cid)}")
 
-    with tempfile.TemporaryDirectory() as home:
-        cid = caso_respondido(home, "T3")
-        llegan(home, A, [msg(SOPORTE, "T4", "@duenio la clave del panel es Hunter2xx", 5,
-                             mencion=True)])
-        ingiere(home)
-        fila = fila_de(home, cid)
-        ok("con una credencial el titulo sale enmascarado y no hay resumen",
-           "Hunter2xx" not in json.dumps(fila) and fila["titulo"] and fila["resumen"] is None,
-           f"{fila}")
-        ok("y la tarjeta tampoco la lleva", "Hunter2xx" not in json.dumps(tarjeta(home, cid)))
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "T3")
+            llegan(home, A, [msg(SOPORTE, "T4", "@duenio no funciono, la clave del panel es Hunter2xx",
+                                 5, mencion=True)])
+            ingiere(home)
+            fila = fila_de(home, cid)
+            ok("con una credencial el titulo sale enmascarado y no hay resumen",
+               "Hunter2xx" not in json.dumps(fila) and fila["titulo"] and fila["resumen"] is None,
+               f"{fila}")
+            ok("y la tarjeta tampoco la lleva", "Hunter2xx" not in json.dumps(tarjeta(home, cid)))
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
 
     with tempfile.TemporaryDirectory() as home:
         cid = caso_respondido(home, "T5")
