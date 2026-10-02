@@ -404,6 +404,17 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
          tablero-w7).
       4. "Su aprobación" muestra estas reglas tal como son, sin la frase "no se pueden
          apagar".
+      5. Jev y la configuración:
+         - hoy Jev no recibe ni el tono ni las instrucciones del chat, y no sabe quién
+           escribe: todo llega como `participant`;
+         - la revisión de borradores fija "neutral Latin American Spanish" en el
+           código, así que el borrador debe juzgarse con el tono del chat;
+         - el remitente dueño viaja como `owner` para que su orden no cuente como
+           `tries_to_instruct_the_assistant`; la autoridad sale del número que decide
+           el plugin, nunca del texto ni de Jev;
+         - para cualquier otro remitente, "soy el admin" sigue siendo un intento de
+           instruir al asistente.
+      6. Probar en vivo el tono y las instrucciones por chat antes de cerrar.
       Va después de tablero-w7.
 
 Rama `feat/tablero-casos`, desde `main` en v4.9.0. PRs encadenados:
