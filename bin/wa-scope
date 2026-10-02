@@ -44,7 +44,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from wa_settings import (  # noqa: E402
     CONFIG_NUMERICOS, CONFIG_OPCIONES, PANEL_SETTINGS, PLUGIN_ID,
-    PLUGIN_ID_ANTERIOR, orca_cli_path, orca_env, orca_runtime_home, plugin_store_path,
+    PLUGIN_ID_ANTERIOR, duenos, orca_cli_path, orca_env, orca_runtime_home, plugin_store_path,
     plugin_store_raw,
     plugin_store_targets, settings_from_plugin, user_data_roots, valida_ajuste)
 import wa_store  # noqa: E402  (solo lectura: de capture.db se lee la linea activa)
@@ -806,7 +806,7 @@ def push_to_plugin(con, with_activity=False):
         # `chatsAccount` dice de que linea es la lista: el selector del panel no ofrece
         # las conversaciones del numero anterior como si fueran del vinculado (T9).
         if not reusando:
-            extra.update(chats=build_chats(), chatsAccount=cuenta)
+            extra.update(chats=build_chats(), chatsAccount=cuenta, senders=build_senders())
         for flat, name in PANEL_SETTINGS.items():
             # agentName ya viaja en su propio parametro, mas arriba.
             if flat == "agentName":
@@ -951,6 +951,19 @@ def build_chats():
                   "unread": c.get("unread"), "last": c.get("last")},
                  **({"own": True} if c.get("own") else {}))
             for c in chats if c.get("jid")][:400]
+
+
+def build_senders():
+    """Quienes escribieron en las conversaciones autorizadas, para elegir en el panel los
+    numeros del dueno por su nombre (T22.1): ids y nombres, nunca texto."""
+    try:
+        out = subprocess.run([WA_READ, "senders", "-n", "400", "--json"],
+                             capture_output=True, text=True, timeout=90)
+        filas = json.loads(out.stdout or "[]")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return []
+    return [{"id": f.get("id"), "name": f.get("name") or "", "chats": f.get("chats") or []}
+            for f in filas if isinstance(f, dict) and f.get("id")][:400]
 
 
 def build_health():
@@ -2770,6 +2783,10 @@ def frenos_de_regla(con, caso):
     - Un chat en `borrador` pregunta todo."""
     scope = merged_scope(con).get(caso["chat_jid"]) or {}
     niv = scope.get("niveles") or wa_reglas.niveles(None)
+    if chat_es_del_dueno(caso.get("account"), caso["chat_jid"]):
+        # Lo que se le contesta al dueno no pasa por las reglas (T22.1): solo queda el
+        # control destructivo, un secreto, y lo que el propio dueno pidio con el modo.
+        niv = dict.fromkeys(wa_reglas.REGLAS_CON_NIVEL, wa_reglas.PERMITIR)
     al_dueno, al_agente = [], []
     for e in _lista_json(caso.get("excepciones")):
         if e in wa_reglas.REGLAS_CON_NIVEL and e != "credential" \
@@ -2791,6 +2808,22 @@ def frenos_de_regla(con, caso):
     if scope.get("mode") == "borrador":
         al_dueno.append("borrador")
     return al_dueno, al_agente
+
+
+def chat_es_del_dueno(cuenta, chat_jid):
+    """Si la conversacion es del dueno (T22.1): el directo con uno de sus numeros o el chat
+    de la linea consigo misma. Sin almacen solo cuentan sus numeros."""
+    ids = duenos()
+    if wa_store.es_dueno(chat_jid, ids):
+        return True
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return False
+    try:
+        return wa_store.chat_del_dueno(fuente, cuenta or cuenta_activa(), chat_jid, ids)
+    finally:
+        fuente.close()
 
 
 def respuesta_de_propuesta(caso):
@@ -3769,6 +3802,9 @@ def mensaje_de_rafaga(rafaga):
     sin = next((m.get("sin_transcribir") for m in rafaga if m.get("sin_transcribir")), None)
     return dict(primero, text=SEPARADOR_RAFAGA.join(t for t in textos if t),
                 kind=kind, media=media, juicio=None, sin_transcribir=sin,
+                # Una rafaga es del dueno solo si TODA es suya: lo que otro escribio en
+                # medio sigue siendo de un participante.
+                de_dueno=all(m.get("de_dueno") for m in rafaga),
                 sticker_suelto=all(m.get("sticker_suelto") for m in rafaga))
 
 
@@ -4068,6 +4104,16 @@ def cancela_borradores():
                   f"{(p.stderr or '').strip()[:120]}", file=sys.stderr)
 
 
+def piso_de_entrada(m):
+    """Las excepciones del piso fijo sobre un mensaje que entro. Del dueno (T22.1), lo
+    que nombra o pide una clave es su orden: solo cuenta un valor con forma de secreto,
+    que nunca pasa por el agente."""
+    texto = m.get("text") or ""
+    if m.get("de_dueno"):
+        return ["credential"] if wa_reglas.secreto(texto) else []
+    return wa_reglas.excepciones(texto, wa_reglas.ENTRADA)
+
+
 def ingest_mensaje(con, m, veredicto, horas):
     """Un mensaje nuevo, en SU transaccion: o queda todo (caso, ruta, clasificacion,
     eventos) o nada, y la fila de `caso_mensaje` es lo que hace que un reintento no lo
@@ -4075,9 +4121,9 @@ def ingest_mensaje(con, m, veredicto, horas):
     hecho = dict.fromkeys(CONTEOS_INGEST, 0)
     stanza, chat = m["stanza_id"], m["chat_jid"]
     suelto = m.get("kind") == "grupo"
-    # El piso fijo sobre lo que entro: dinero y credenciales (un compromiso es de lo que
-    # sale, no de lo que pide el cliente). Se calcula antes de tomar la base.
-    piso = wa_reglas.excepciones(m.get("text") or "", wa_reglas.ENTRADA)
+    # El piso fijo sobre lo que entro: la credencial (dinero y compromiso son de lo que
+    # sale). Se calcula antes de tomar la base.
+    piso = piso_de_entrada(m)
     caso_toma(con)
     try:
         # Con la base ya tomada: otro `ingest` pudo llegar a este mensaje entre la
@@ -4252,6 +4298,9 @@ def cmd_ingest(con, a):
     horas = ventana_casos(con)
     desde = linea_base_ingest(con, horas)
     ajustes_auto = merged_settings(con)
+    # Los numeros del dueno (T22.1), leidos una vez: lo que escriben es una orden suya.
+    ids_dueno = duenos()
+    tono_global = ajustes_auto.get("tone") or DEFAULT_CONFIG["tone"]
     abren, sueltos = [], []
     # Del mas viejo al mas nuevo: el inbox viene al reves, y el primero de un pedido es
     # el que abre el caso.
@@ -4268,6 +4317,11 @@ def cmd_ingest(con, a):
             continue
         nuevos.append(dict(
             m, modo=entrada.get("mode"),
+            de_dueno=wa_store.es_dueno(m.get("sender_jid"), ids_dueno),
+            # Lo que Jev necesita del chat para juzgar (T22.5): como escribe el asistente
+            # ahi y que hace, tal como el dueno lo configuro.
+            tono=(entrada.get("tone") or "").strip() or tono_global,
+            instrucciones=(entrada.get("instructions") or "").strip() or None,
             auto_acuse=auto_ajuste(entrada, ajustes_auto, "acuse")[0],
             auto_saludo=auto_ajuste(entrada, ajustes_auto, "saludo")[0],
             sticker_suelto=(m.get("media_type") == "sticker" and not (m.get("text") or "").strip())))
@@ -5037,7 +5091,8 @@ def entrantes_del_caso(fuente, caso, stanzas):
         return []
     return fuente.execute(
         f"select m.stanza_id, m.ts, m.body, m.media_type, m.media_path, c.is_group, "
-        f"m.menciona_me, m.cita_me from mensaje m left join chat c on c.account=m.account and "
+        f"m.menciona_me, m.cita_me, m.sender_jid from mensaje m left join chat c on "
+        f"c.account=m.account and "
         f"c.chat_jid=m.chat_jid where m.account=? and m.chat_jid=? and m.from_me=0 and "
         f"m.revocado=0 and m.stanza_id in ({','.join('?' * len(stanzas))}) order by m.ts, m.rowid",
         (caso["account"], caso["chat_jid"], *stanzas)).fetchall()
@@ -5061,10 +5116,15 @@ def reevalua_audio(con, caso, r, texto):
                    and actual["propuesta_aprobada"] == actual.get("propuesta_version"))
     if actual["etapa"] == "trabajo" or firmada:
         return
-    piso = wa_reglas.excepciones(texto, wa_reglas.ENTRADA)
     m = {"account": caso["account"], "chat_jid": caso["chat_jid"], "stanza_id": r["stanza_id"],
          "date": wa_store.ts(r["ts"]), "kind": wa_store.clase_de(r), "text": texto,
-         "media": r["media_path"], "media_type": r["media_type"]}
+         "media": r["media_path"], "media_type": r["media_type"],
+         "de_dueno": wa_store.es_dueno(r["sender_jid"])}
+    entrada = merged_scope(con).get(caso["chat_jid"]) or {}
+    m["tono"] = ((entrada.get("tone") or "").strip()
+                 or merged_settings(con).get("tone") or DEFAULT_CONFIG["tone"])
+    m["instrucciones"] = (entrada.get("instructions") or "").strip() or None
+    piso = piso_de_entrada(m)
     juicio = jev_juzga(m, con)
     caso_toma(con)
     try:

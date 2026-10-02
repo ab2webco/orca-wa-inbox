@@ -7,6 +7,7 @@ that store — it never writes to it, and it never talks to WhatsApp.
 
   inbox [--days N] [--limit N]  what arrived in the conversations you authorized
   chats [--query TXT] [-n N]    list chats (groups and 1:1) with unread counts
+  senders [-n N]                who wrote in the authorized chats: ids and names, no text
   whoami                        your LID and how many groups
   chat <id|name> [-n N]         latest messages of a chat
   media <id|name> [-n N]        latest images/videos/audio, with the path on disk
@@ -269,6 +270,10 @@ def cmd_chats(con, a):
     return wa_store.chats(con, a.n, a.query, a.unread, a.line)
 
 
+def cmd_senders(con, a):
+    return wa_store.remitentes(con, a.line, a.n)
+
+
 def cmd_chat(con, a):
     return wa_store.chat(con, wa_store.resolver_chat(con, a.chat, a.line), a.n, a.days)
 
@@ -312,6 +317,11 @@ def main():
     s = add("chats", cmd_chats, help="list chats")
     s.add_argument("--query"); s.add_argument("--unread", action="store_true")
     s.add_argument("-n", type=int, default=30)
+
+    s = add("senders", cmd_senders,
+            help="who wrote in the authorized chats (ids and names, no text): the panel "
+                 "offers them to pick the owner's numbers")
+    s.add_argument("-n", type=int, default=400)
 
     s = add("chat", cmd_chat, help="messages of a chat")
     s.add_argument("chat"); s.add_argument("-n", type=int, default=40)

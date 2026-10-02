@@ -37,6 +37,9 @@ wrong with what it asked and not a generic failure at the end:
                   for the agent. `responder` sends; `borrador` only drafts; `observar`
                   and `off` do not write at all (`send-denied`).
   the transport   and only then, whether there is anything to send through.
+  the owner       a send to the owner's own chat (one of the numbers picked in the
+                  settings, or the line's chat with itself) skips the rules and Jev:
+                  only a secret-shaped value is still held.
   the review      a reply that is about to go out on `responder` goes through the
                   fixed floor first, with or without Jev: money, a credential or a
                   promised date or delivery keeps it as a DRAFT for the owner. With the
@@ -380,13 +383,14 @@ def informa(salida_json, dato, linea):
         print(linea)
 
 
-def revision_jev(texto):
+def revision_jev(texto, tono=None):
     """Lo que frena el envio segun Jev: None sin llave (manda el modo, como siempre), una
-    lista vacia si el texto pasa, y los motivos si no. Un error es un motivo."""
+    lista vacia si el texto pasa, y los motivos si no. Un error es un motivo. `tono` es el
+    del chat o el global (T22.5): con ese registro se juzga."""
     clave = wa_jev.llave()
     if not clave:
         return None
-    revision = wa_jev.revisa_borrador(texto, clave)
+    revision = wa_jev.revisa_borrador(texto, clave, tono=tono)
     if revision is None:
         return [JEV_NO_CONTESTA]
     return list(revision["flags"])
@@ -651,8 +655,17 @@ def main():
     # Con los niveles del chat (T22.3): lo que esta en Permitir no frena, y lo que esta en
     # "Que el agente lo revise" frena para que quien lo escribio lo reescriba.
     niv = fila.get("niveles") or wa_reglas.niveles(None)
-    piso = revision_piso(sin_firma, niv)
-    jev = jev_permitido(revision_jev(a.text) if jev_hace_falta(niv) else None, niv)
+    if wa_store.chat_del_dueno(con, fila["account"], fila["chat_jid"]):
+        # El chat del dueno (T22.1): un numero suyo o la linea consigo misma. Lo que se le
+        # manda no protege a ningun tercero, asi que no pasa por las reglas ni por Jev (un
+        # aviso de la sesion de otro proyecto, por ejemplo). Solo queda el control
+        # destructivo: nunca repetir un secreto.
+        piso = [wa_reglas.SECRETO] if wa_reglas.secreto(sin_firma) else []
+        jev = None
+    else:
+        piso = revision_piso(sin_firma, niv)
+        tono = (fila.get("tone") or "").strip() or ajuste("tone")
+        jev = jev_permitido(revision_jev(a.text, tono) if jev_hace_falta(niv) else None, niv)
     frenado = motivos_de(piso, jev)
     if frenado:
         deja_borrador(con, fila, a.text, req_id, a.json, pedia_envio=True,

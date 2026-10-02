@@ -631,6 +631,63 @@ console.log('\nwa-send: cada chat decide sus niveles, y el secreto se frena siem
   jev.cerrar()
 }
 
+// ── El chat del dueno (T22.1) ────────────────────────────────────────────────────────
+console.log('\nwa-send: al chat del dueno no lo frenan las reglas ni Jev, solo un secreto')
+{
+  const DUENO = '100000000000001@lid'
+  const jev = await jevFalso(jevDice({ states_status_not_verified: 0.9, promises_a_date: 0.9 }))
+  const { home, almacen } = casaConJev()
+  ponerLlave(home)
+  autorizar(home, { jid: DUENO, nombre: 'Dueno Directo', modo: 'responder' })
+  autorizar(home, { jid: 'x@lid', nombre: 'Yo Mismo', modo: 'responder' })
+  escribirPanel(home, { agentName: 'Agente De Ejemplo',
+    owners: [{ id: '100000000000001:3@lid', name: 'Dueno Real' }] })
+  const socket = socketFalso()
+  const aviso = await correrEnvio(home, ['Dueno Directo',
+    'Aviso: el informe quedo verificado, cuesta $50 y sale el viernes', '--send'],
+  { almacen, socket, env: jev.env })
+  ok('un aviso al chat de un numero del dueno sale', aviso.code === 0 &&
+    socket.enviados.length === 1 && socket.enviados[0].jid === DUENO, aviso.stderr)
+  const propio = await correrEnvio(home, ['Yo Mismo', 'Aviso: tarea lista y verificada',
+    '--send'], { almacen, socket, env: jev.env })
+  ok('y uno al chat de la linea consigo misma tambien', propio.code === 0 &&
+    socket.enviados.length === 2, propio.stderr)
+  ok('sin preguntarle a Jev por ninguno', jev.pedidos.length === 0,
+    JSON.stringify(jev.pedidos.map((p) => p.cuerpo.state)))
+  const secreto = await correrEnvio(home, ['Dueno Directo', 'la clave: Abc12345', '--send'],
+    { almacen, socket, env: jev.env })
+  ok('un secreto al chat del dueno igual se frena', socket.enviados.length === 2 &&
+    secreto.primera === 'wa-send: send-needs-approval' &&
+    secreto.stderr.includes('rule: secret'), secreto.stderr)
+  const ajeno = await correrEnvio(home, ['Cliente Alfa', 'Aviso: tarea lista y verificada',
+    '--send'], { almacen, socket, env: jev.env })
+  ok('a cualquier otro chat Jev sigue revisando', socket.enviados.length === 2 &&
+    ajeno.primera === 'wa-send: send-needs-approval' && jev.pedidos.length === 1, ajeno.stderr)
+  almacen.cerrar()
+  jev.cerrar()
+}
+
+console.log('\nwa-send: Jev juzga el borrador con el tono del chat (T22.5)')
+{
+  const jev = await jevFalso(jevDice())
+  const { home, almacen } = casaConJev()
+  ponerLlave(home)
+  execFileSync(WA_SCOPE, ['set', ALFA, '--tone', 'Cercano, tutea, frases cortas'],
+    { env: entorno(home), encoding: 'utf8' })
+  autorizar(home, { jid: LAURA, nombre: 'Laura Mendez', modo: 'responder' })
+  execFileSync(WA_SCOPE, ['config', 'tone', 'Formal y de usted, sin emojis'],
+    { env: entorno(home), encoding: 'utf8' })
+  const socket = socketFalso()
+  await correrEnvio(home, ['Cliente Alfa', 'Hola, ya quedo', '--send'], { almacen, socket, env: jev.env })
+  await correrEnvio(home, ['Laura Mendez', 'Hola, ya quedo', '--send'], { almacen, socket, env: jev.env })
+  const registros = jev.pedidos.map((p) => p.cuerpo.state.expected_register)
+  ok('con el tono de la conversacion, y sin el, el global',
+    registros[0] === 'Cercano, tutea, frases cortas' &&
+    registros[1] === 'Formal y de usted, sin emojis', JSON.stringify(registros))
+  almacen.cerrar()
+  jev.cerrar()
+}
+
 console.log('\nwa-send: sin nombre de agente no se envia, ni siquiera en responder')
 {
   const home = nueva()
