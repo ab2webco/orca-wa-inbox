@@ -76,7 +76,23 @@ The engine appends the case's attachment paths to the brief.
 ## Handing work to a project agent
 
 The project is the `workspace` that `wa-scope where` prints; `PROJECTS.md` has its path
-and purpose. **Coming (T8, `odd/tasks/kanban-casos.md`):** the automatic dispatch to the
-project's agent and its report with `wa-scope caso resultado`. Until it exists, an
-approved `trabajar` waits on the board: do not start another agent or touch the owner's
-repositories.
+and purpose. Once a `trabajar` is approved, the plugin's tick dispatches it by itself to
+the agent of that project, in that project's Orca workspace, with the case's messages
+verbatim. Never start that agent yourself and never touch the owner's repositories.
+
+## Reporting from a project agent
+
+The project agent reports with `wa-scope caso resultado <id> --actor trabajador` and
+exactly one outcome:
+
+- `--estado resuelto --resumen "<what was done, with evidence>" --respuesta "<reply>"`:
+  the reply says what was done and asks the customer to verify it.
+- `--estado necesita --resumen "<what is missing>" --respuesta "<question>"`: the reply
+  is the question. The case waits for the customer, and the answer comes back to the
+  same agent (or to a new one, with the whole thread and these reports).
+- `--estado bloqueado --resumen "<why>"`: destructive, outside the project, or it needs
+  the owner. Nothing goes to the customer; the owner sees the reason.
+
+`caso resultado` is the one way out: it sends the reply at once through the plugin's
+review and the owner's rules, or holds it for the owner, and records it on the case.
+Never run wa-send, and never write to the customer any other way.

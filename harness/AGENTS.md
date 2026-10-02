@@ -64,7 +64,9 @@ say it in one line and finish.
 - **Reply** when the answer needs only language: `--tipo responder`.
 - **Dispatch** when answering needs work in a codebase: `--tipo trabajar` with a brief
   (verbatim messages, open questions). The project is the `workspace` of `wa-scope where`;
-  `PROJECTS.md` has its path. The project agent reports with `wa-scope caso resultado`.
+  `PROJECTS.md` has its path. Once approved, the plugin dispatches it to the project's
+  agent by itself; never start that agent yourself. The project agent reports with
+  `wa-scope caso resultado` (resuelto, necesita or bloqueado).
 - **Escalate** (`--tipo escalar`) when it needs the owner.
 
 Never write into the owner's repositories: this folder is the only place the plugin puts

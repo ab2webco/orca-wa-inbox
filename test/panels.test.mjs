@@ -4271,6 +4271,55 @@ console.log('\nactivity.html — tablero: lo aprobado y en cola')
   ok('y una que espera su decision no', !m.doc.querySelector('.card-aprobada'))
 }
 
+console.log('\nactivity.html — tablero: el despacho al agente del proyecto (T8)')
+{
+  const desde = hace(12 * 60000)
+  const board = tablero([
+    tarjeta({ case_id: 1, stage: 'trabajo', exceptions: [], actions: ['cerrar'],
+      proposal: { tipo: 'trabajar', texto: 'Revisar el modulo', version: 'abc' },
+      dispatch: { project: 'Alfa Demo', state: 'activo', outcome: null, at: desde, updated_at: desde } }),
+    tarjeta({ case_id: 2, stage: 'listo', exceptions: [], actions: ['enviar', 'editar', 'cerrar'],
+      proposal: { tipo: 'responder', texto: '¿Cuál reporte es?', version: 'def' },
+      dispatch: { project: 'Alfa Demo', state: 'activo', outcome: 'necesita', at: desde, updated_at: desde } }),
+    tarjeta({ case_id: 3, stage: 'respondido', exceptions: [], proposal: null, actions: ['cerrar', 'reabrir'],
+      dispatch: { project: 'Alfa Demo', state: 'esperando', outcome: 'necesita', at: desde, updated_at: desde } }),
+    tarjeta({ case_id: 4, stage: 'bloqueado', exceptions: [], proposal: null, actions: ['cerrar'],
+      blocked_reason: 'bloqueado por el agente del proyecto: hace falta borrar datos',
+      dispatch: { project: 'Alfa Demo', state: 'bloqueado', outcome: 'bloqueado', at: desde, updated_at: desde } }),
+    tarjeta({ case_id: 5, stage: 'listo', exceptions: [], actions: ['enviar', 'editar', 'cerrar'],
+      proposal: { tipo: 'responder', texto: 'Ya quedó, ¿puedes verificar?', version: 'ghi' },
+      dispatch: { project: 'Alfa Demo', state: 'reportado', outcome: 'resuelto', at: desde, updated_at: desde } }),
+    tarjeta({ case_id: 6, stage: 'trabajo', exceptions: [], actions: ['cerrar'],
+      proposal: { tipo: 'trabajar', texto: 'Revisar', version: 'jkl' } })
+  ])
+  const { doc } = await abrirTablero({ board })
+  const txt = (id) => doc.querySelector(`.card[data-case="${id}"] .card-despacho`)?.textContent || ''
+  ok('en trabajo dice a donde se despacho y desde cuando',
+    /Despachado a Alfa Demo/.test(txt(1)) && /hace 12 min/.test(txt(1)) &&
+    /Esperando al agente del proyecto/.test(txt(1)), txt(1))
+  ok('y ya no dice "en cola": salio', !doc.querySelector('.card[data-case="1"] .card-aprobada'))
+  ok('en listo con necesita dice que el proyecto pide informacion', /pide mas informacion/.test(txt(2)), txt(2))
+  ok('en respondido esperando al cliente lo dice con su hora',
+    /Esperando al cliente/.test(txt(3)) && /hace 12 min/.test(txt(3)), txt(3))
+  ok('bloqueado por el agente lo dice, y el motivo sigue a la vista',
+    /Bloqueado por el agente de Alfa Demo/.test(txt(4)) &&
+    /borrar datos/.test(doc.querySelector('.card[data-case="4"] .card-blocked')?.textContent || ''), txt(4))
+  ok('en listo con resuelto dice quien lo resolvio', /Resuelto por el agente de Alfa Demo/.test(txt(5)), txt(5))
+  ok('sin despacho, en trabajo sigue "aprobada, en cola"',
+    !txt(6) && !!doc.querySelector('.card[data-case="6"] .card-aprobada'))
+  const hostil = '<img src=x onerror="window.__xssDesp=1">'
+  const m = await abrirTablero({ board: tablero([tarjeta({ stage: 'trabajo', exceptions: [],
+    dispatch: { project: hostil, state: 'activo', outcome: null, at: desde } })]) })
+  ok('el nombre del proyecto es texto, nunca HTML', !m.doc.querySelector('.card-despacho img') &&
+    m.doc.querySelector('.card-despacho').textContent.includes('<img'))
+  const raro = await abrirTablero({ board: tablero([tarjeta({ stage: 'trabajo', exceptions: [],
+    dispatch: 'no-es-un-objeto' })]) })
+  ok('un despacho con otra forma no pinta nada ni rompe', !raro.doc.querySelector('.card-despacho') &&
+    !!raro.doc.querySelector('.card[data-case="1"]'))
+  const en = await abrirTablero({ board }, 'en-US')
+  ok('en ingles tambien', /Dispatched to Alfa Demo/.test(en.doc.querySelector('.card[data-case="1"] .card-despacho')?.textContent || ''))
+}
+
 console.log('\nactivity.html — tablero: texto de clientes en el editor y en los mensajes, nunca HTML')
 {
   const hostil = '<img src=x onerror="window.__xss2=1"><b>negrita</b>'

@@ -233,10 +233,17 @@ alcance) o un dict:
     "blocked_reason": null,
     "ticket": null,
     "updated_at": "iso",
-    "actions": ["enviar", "editar", "ejecutar", "reclasificar", "cerrar", "reabrir"]
+    "actions": ["enviar", "editar", "ejecutar", "reclasificar", "cerrar", "reabrir"],
+    "dispatch": {"project": "Alfa Demo", "state": "activo", "outcome": null,
+                 "at": "iso", "updated_at": "iso"}
   }]
 }
 ```
+
+`dispatch` (T8) es el ultimo despacho del caso al agente del proyecto, o `null`. Solo
+viaja cuando dice algo de la etapa: en `trabajo` (lanzando, activo, o la respuesta del
+cliente por entregar), en `listo` con lo que reporto (`outcome` resuelto o necesita), en
+`respondido` esperando al cliente y en `bloqueado` por el agente.
 
 `jev`, `proposal`, `blocked_reason` y `ticket` pueden ser `null`. Tope: 200
 tarjetas abiertas (las más recientes por `updated_at`) más las cerradas de los
@@ -310,6 +317,45 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
       automatización solo-comando sí llama a `orca orchestration` (run-list OK);
       `caso resultado` existe; T0 queda probado por las corridas de triage.
       Va después de desplegar la tanda de arreglos en curso (tablero-w6).
+      Hecho en tablero-w9 (falta la prueba E2E en vivo, por eso sigue abierta):
+      - `tick` despacha solo, sin agente que lo dispare: un caso que entró a `trabajo` por
+        una firma (desde `decision` o `listo`) con su `trabajar` aprobado en la versión
+        vigente. Lo que puso ahí el backfill no se despacha nunca. Uno por tick, dentro de
+        `PRESUPUESTO_TICK_S` (si el lanzamiento entero no cabe, espera al minuto siguiente).
+      - `caso_despacho` (tabla nueva, `create if not exists`: una `scope.db` vieja la gana
+        sola) con una fila por entrada firmada a `trabajo`, escrita `lanzando` dentro del
+        candado del tick ANTES de llamar a Orca. Una fila `lanzando` de más de 10 min (el
+        tick murió a mitad) no se relanza: va a Bloqueado.
+      - El proyecto del caso (o del chat) se resuelve con `orca worktree list`: por su ruta,
+        y si no, por nombre visible exacto. Uno → `id:<repoId>::<path>`; cero o varios →
+        Bloqueado ("no encuentro el proyecto X" / "X es ambiguo"). Sin proyecto, también.
+      - `run-create` → `task-create --spec <brief>` → `worker-start --from <coordinador>
+        --worktree <selector> --agent claude`. El brief va en inglés: el caso, cada mensaje
+        tal cual en orden (transcripciones, adjuntos, lo ya contestado), lo aprobado, lo
+        que reportaron agentes anteriores, las reglas (nunca wa-send, nada destructivo,
+        no afirmar quién es nadie) y los tres comandos exactos con la ruta absoluta.
+      - Vivo = su terminal en `orca terminal list --worktree <selector>`. Sin terminal ni
+        resultado → Bloqueado ("terminó sin reportar"); sin resultado en 4 h → Bloqueado y
+        `worker-stop` (tolera `stop_unknown`); cualquier error de Orca → Bloqueado con su
+        texto. Nada se relanza solo; una firma nueva es un despacho nuevo.
+      - Ampliación del dueño: `caso resultado --estado resuelto|necesita|bloqueado`
+        (`resuelto` por defecto). `necesita` manda la pregunta y el caso espera al cliente
+        (en `respondido`, con el despacho `esperando`); lo que conteste vuelve a `trabajo`
+        (solo el motor: `caso mover` lo rechaza) y llega a la terminal viva del agente con
+        `orca terminal send --enter`, o a un despacho nuevo con el hilo entero y los
+        reportes anteriores. Nunca dos agentes vivos por caso. Una credencial en la
+        respuesta no va al agente. La espera vence a las 72 h.
+      - `caso resultado` manda la respuesta en el acto, con el candado del tick y su misma
+        vuelta (`tick_caso`): regla del dueño, piso fijo, Jev y modo del chat. Lo retenido
+        queda para el dueño como en el tick, y el tick no lo manda dos veces.
+      - El tick lanza `triage` en el acto cuando un caso espera al agente: no si está
+        apagada, no con una corrida en curso de menos de 30 min, no dos veces en 5 min.
+      - Tablero: "Despachado a <proyecto> · hace X / Esperando al agente del proyecto",
+        lo que reportó el agente, "Esperando al cliente" y "Bloqueado por el agente de X".
+      - La línea del tick cuenta `despachados`, `bloqueados_por_despacho`,
+        `respuestas_al_proyecto`, `agente_lanzado` y `agente_error`.
+      Pendiente: E2E en vivo con un proyecto real; T22.9 (despachar sin el clic lo no
+      destructivo) no entra acá: hoy un `trabajar` sigue esperando la firma.
 - [ ] T12 — Orquestador: workspace propio del plugin con harness de atención y
       la lista de proyectos elegidos en los ajustes, refrescada cuando cambia.
       Hecho en W3 (652b6b9): catálogo desde Orca y PROJECTS.md en el harness.

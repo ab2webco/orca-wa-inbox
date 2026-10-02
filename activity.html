@@ -295,6 +295,12 @@
       .card-aprobada { font-size: 11px; font-weight: 500;
               color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .card-aprobada::before { content: "\2713  "; }
+      /* El despacho al agente del proyecto: la linea de la etapa y, debajo, la que dice a
+         quien se espera. Mismo peso que lo aprobado: es lo que paso con eso. */
+      .card-despacho { font-size: 11px; font-weight: 500; overflow-wrap: anywhere;
+              color: var(--foreground, var(--fb-foreground)); }
+      .card-despacho > :first-child::before { content: "\2192  "; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .card-despacho-sub { font-weight: 400; color: var(--muted-foreground, var(--fb-muted-foreground)); }
       /* La respuesta que se manda: entera y aparte, con el filete de una cita. */
       .card-prop { padding-left: 8px; white-space: pre-wrap; overflow-wrap: anywhere;
               border-left: 2px solid var(--border, var(--fb-border));
@@ -375,7 +381,8 @@
       .det-meta { flex-wrap: wrap; gap: 2px 6px; }
       .det-meta .name { overflow-wrap: anywhere; }
       .det-meta .card-prio { margin-left: 0; }
-      .board-detail > .card-exc, .board-detail > .card-aprobada { margin-top: 10px; }
+      .board-detail > .card-exc, .board-detail > .card-aprobada,
+      .board-detail > .card-despacho { margin-top: 10px; }
       .det-sec { margin-top: 16px; }
       .det-label { margin: 0 0 6px; font-size: 11px; font-weight: 500;
              color: var(--muted-foreground, var(--fb-muted-foreground)); }
@@ -667,6 +674,13 @@
               "acNotaLabel": "Nota para el agente (opcional)",
               "acMotivoLabel": "Motivo del cierre (opcional)",
               "acAprobada": "Aprobada, en cola",
+              "boardDispatched": "Despachado a {p}",
+              "boardDispatchWaiting": "Esperando al agente del proyecto",
+              "boardDispatchAnswer": "El cliente respondio: va al agente del proyecto",
+              "boardDispatchSolved": "Resuelto por el agente de {p}",
+              "boardDispatchNeeds": "{p} pide mas informacion al cliente",
+              "boardDispatchCustomer": "Esperando al cliente",
+              "boardDispatchBlocked": "Bloqueado por el agente de {p}",
               "acOkGeneric": "Hecho",
               "acOkEnviado": "Enviado",
               "acOkAprobada": "Aprobada: queda en cola para el agente",
@@ -842,6 +856,13 @@
               "acNotaLabel": "Note for the agent (optional)",
               "acMotivoLabel": "Reason for closing (optional)",
               "acAprobada": "Approved, queued",
+              "boardDispatched": "Dispatched to {p}",
+              "boardDispatchWaiting": "Waiting for the project's agent",
+              "boardDispatchAnswer": "The customer answered: it goes to the project's agent",
+              "boardDispatchSolved": "Solved by the {p} agent",
+              "boardDispatchNeeds": "{p} asks the customer for more information",
+              "boardDispatchCustomer": "Waiting for the customer",
+              "boardDispatchBlocked": "Blocked by the {p} agent",
               "acOkGeneric": "Done",
               "acOkEnviado": "Sent",
               "acOkAprobada": "Approved: queued for the agent",
@@ -1017,6 +1038,13 @@
               "acNotaLabel": "Nota para o agente (opcional)",
               "acMotivoLabel": "Motivo do fechamento (opcional)",
               "acAprobada": "Aprovada, na fila",
+              "boardDispatched": "Enviado para {p}",
+              "boardDispatchWaiting": "Aguardando o agente do projeto",
+              "boardDispatchAnswer": "O cliente respondeu: vai para o agente do projeto",
+              "boardDispatchSolved": "Resolvido pelo agente de {p}",
+              "boardDispatchNeeds": "{p} pede mais informacoes ao cliente",
+              "boardDispatchCustomer": "Aguardando o cliente",
+              "boardDispatchBlocked": "Bloqueado pelo agente de {p}",
               "acOkGeneric": "Feito",
               "acOkEnviado": "Enviado",
               "acOkAprobada": "Aprovada: fica na fila para o agente",
@@ -1963,7 +1991,47 @@
         return null
       }
 
+      /** Una linea del despacho con su antiguedad: "Despachado a Alfa · hace 5 min". */
+      function conCuando (texto, stamp) {
+        var cuando = hace(stamp)
+        return cuando ? texto + ' · ' + cuando : texto
+      }
+
+      /** Lo que dice el despacho al agente del proyecto (T8), segun la etapa: a donde fue y
+       *  desde cuando, lo que reporto el agente, o que el caso espera al cliente. Un
+       *  despacho que no se entiende se calla. */
+      function despachoNodo (c) {
+        var d = esObjeto(c.dispatch) ? c.dispatch : null
+        if (!d || typeof d.project !== 'string' || !d.project) return null
+        var p = { p: d.project }
+        var lineas = []
+        if (c.stage === 'trabajo' && d.state === 'esperando') {
+          lineas.push(t('boardDispatchAnswer'))
+        } else if (c.stage === 'trabajo') {
+          lineas.push(conCuando(fmt('boardDispatched', p), d.at))
+          lineas.push(t('boardDispatchWaiting'))
+        } else if (c.stage === 'listo' && d.outcome === 'resuelto') {
+          lineas.push(fmt('boardDispatchSolved', p))
+        } else if (c.stage === 'listo' && d.outcome === 'necesita') {
+          lineas.push(fmt('boardDispatchNeeds', p))
+        } else if (c.stage === 'respondido' && d.state === 'esperando') {
+          lineas.push(conCuando(t('boardDispatchCustomer'), d.updated_at || d.at))
+          lineas.push(fmt('boardDispatchNeeds', p))
+        } else if (c.stage === 'bloqueado' && d.outcome === 'bloqueado') {
+          lineas.push(fmt('boardDispatchBlocked', p))
+        }
+        if (!lineas.length) return null
+        var nodo = crear('div', 'card-despacho')
+        lineas.forEach(function (linea, i) {
+          nodo.appendChild(crear('div', i ? 'card-despacho-sub' : null, linea))
+        })
+        return nodo
+      }
+
+      /** Lo aprobado: el despacho si ya salio al proyecto; si no, "Aprobada, en cola". */
       function aprobadaNodo (c) {
+        var despacho = despachoNodo(c)
+        if (despacho) return despacho
         if (c.stage === 'trabajo' && esObjeto(c.proposal) && c.proposal.tipo === 'trabajar') {
           return crear('div', 'card-aprobada', t('acAprobada'))
         }
