@@ -11,6 +11,7 @@ El panel manda sobre la base: es lo que el usuario acaba de tocar. La base es la
 la terminal, y `wa-scope config` la mantiene espejada hacia el panel en cada escritura.
 """
 import json
+import re
 import os
 import shutil
 import socket
@@ -272,7 +273,10 @@ PANEL_SETTINGS = {"tone": "tone", "agentName": "agent_name",
                   # Respuestas automaticas del motor: el acuse de recibo a un pedido nuevo
                   # y el saludo a un saludo. El valor de una conversacion pisa estos.
                   "ackMode": "ack", "ackText": "ack_text",
-                  "greetingMode": "greeting", "greetingText": "greeting_text"}
+                  "greetingMode": "greeting", "greetingText": "greeting_text",
+                  # Con que cuenta de Claude abre el bot sus agentes (el de casos y el de
+                  # cada proyecto): un id de `orca account list`, o `auto`.
+                  "botClaudeAccount": "bot_claude_account"}
 
 # Lo que cada ajuste acepta. Un valor invalido no revienta al guardarse: revienta
 # despues, en la corrida del agente, lejos de donde se tipeo — o peor, no revienta y
@@ -296,8 +300,14 @@ CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s", "sync_minutes",
 CONFIG_POSITIVOS = ("case_window_hours",)
 
 
+# Un id (o correo) de cuenta de `orca account list`: viaja como argumento a la CLI de Orca.
+CUENTA_CLAUDE = re.compile(r"^(auto|[A-Za-z0-9][A-Za-z0-9._@+:-]{0,199})$")
+
+
 def valida_ajuste(key, value):
     """Devuelve el motivo del rechazo, o None si el valor sirve."""
+    if key == "bot_claude_account" and not CUENTA_CLAUDE.match(str(value)):
+        return f"{key} has to be auto or the id of an account from `orca account list`"
     if key in CONFIG_OPCIONES and value not in CONFIG_OPCIONES[key]:
         return f"{key} only accepts: {', '.join(CONFIG_OPCIONES[key])}"
     if key in CONFIG_NUMERICOS:

@@ -458,6 +458,8 @@ create table if not exists caso_despacho (
   dispatch_id text,
   terminal  text,                -- el handle de la terminal del agente
   cuenta_claude text,            -- el id de la cuenta de Claude elegida; null = la del espacio
+  cuenta_etiqueta text,          -- su correo, como lo ve el dueno
+  respaldo  text,                -- por que no se uso la cuenta del bot (RESPALDOS_CUENTA)
   reintento_de integer,          -- la fila que este despacho reintenta (una sola vez)
   -- La linea del brief se puede perder (composer-ready llega antes de que Claude acepte
   -- texto): cuantas veces se reescribio, y cuando se vio su primer turno (ya no se reescribe).
@@ -487,6 +489,8 @@ create table if not exists agente_corrida (
   workspace_selector text,         -- el espacio del plugin: id:<repoId>::<path>
   terminal  text,
   cuenta_claude text,              -- la cuenta elegida; null = la del espacio o la activa
+  cuenta_etiqueta text,            -- su correo, como lo ve el dueno
+  respaldo  text,                  -- por que no se uso la cuenta del bot (RESPALDOS_CUENTA)
   reenvios  integer not null default 0,
   turno_at  text,
   motivo    text,                  -- un codigo estable (MOTIVOS_AGENTE), que el panel traduce
@@ -1225,6 +1229,9 @@ def migrate(con):
         con.execute("alter table caso_despacho add column reenvios integer not null default 0")
     if "turno_at" not in despacho_cols:
         con.execute("alter table caso_despacho add column turno_at text")
+    for columna in ("cuenta_etiqueta", "respaldo"):
+        if columna not in despacho_cols:
+            con.execute(f"alter table caso_despacho add column {columna} text")
     # T3: el veredicto entero de Jev, cacheado junto a su clase.
     if "jev" not in {r["name"] for r in con.execute("pragma table_info(juicio)")}:
         con.execute("alter table juicio add column jev text")
@@ -1679,6 +1686,9 @@ DEFAULT_CONFIG = {
     "ack_text": "Recibimos su mensaje. Ya lo estamos revisando y le respondemos por aquí.",
     "greeting": "on",
     "greeting_text": "Hola, ¿en qué le puedo ayudar?",
+    # La cuenta de Claude con que se abren el agente de casos y el del proyecto: el id de
+    # una cuenta de `orca account list`, o `auto` (la regla automatica de `abre_agente`).
+    "bot_claude_account": "auto",
     "transcribe": "local",    # local | off | api. Local no manda el audio a ningun lado.
     "transcribe_model": "",   # vacio = lo decide la calidad; fijarlo pisa la calidad
     "transcribe_lang": "auto",    # los audios mezclan espanol e ingles
@@ -4465,13 +4475,18 @@ def build_board(con):
     for i in range(0, len(con_despacho), 500):
         parte = con_despacho[i:i + 500]
         for r in con.execute(
-                f"select case_id, proyecto, estado, resultado, created_at, updated_at from "
+                f"select case_id, proyecto, estado, resultado, created_at, updated_at, "
+                f"cuenta_etiqueta, respaldo from "
                 f"caso_despacho where case_id in ({','.join('?' * len(parte))}) order by id",
                 parte):
             despachos[r["case_id"]] = {"project": r["proyecto"], "state": r["estado"],
                                        "outcome": r["resultado"],
                                        "at": iso_caso(r["created_at"]),
-                                       "updated_at": iso_caso(r["updated_at"])}
+                                       "updated_at": iso_caso(r["updated_at"]),
+                                       # Con que cuenta de Claude se abrio, y por que no
+                                       # con la del bot si fue otra (RESPALDOS_CUENTA).
+                                       "account": r["cuenta_etiqueta"],
+                                       "fallback": r["respaldo"]}
     return {"v": 1,
             "updated_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
             "truncated": truncado, "counts": counts,
@@ -5420,55 +5435,113 @@ def terminal_creada(resultado):
     return handle.strip() if isinstance(handle, str) and handle.strip() else None
 
 
-def cuenta_de_reintento(cli):
-    """(id, None) de la cuenta de Claude para el segundo intento, o (None, por que no):
-    autenticada, no la activa (la que acaba de fallar), bajo CUENTA_TOPE_USO de su sesion, la
-    de menos uso. Una sin cuota conocida va despues de todas las que la tienen."""
+# Por que el lanzamiento no uso la cuenta de Claude que el dueno eligio para el bot
+# (`bot_claude_account`), y fue por la regla automatica. Son codigos: el panel los traduce.
+RESPALDOS_CUENTA = ("elegida-no-esta", "elegida-sin-sesion", "elegida-sin-cuota", "elegida-fallo")
+
+
+def cuentas_claude(cli):
+    """(las cuentas de Claude de `orca account list`, None) o (None, por que no)."""
     res, error = orca_llama(cli, ["account", "list"], DESPACHO_LISTA_S)
     if error or not isinstance(res.get("accounts"), list):
         return None, f"no pude listar las cuentas: {error or 'Orca no devolvió la lista'}"
+    return [c for c in res["accounts"] if isinstance(c, dict)
+            and str(c.get("provider") or "").lower() == "claude"
+            and isinstance(c.get("id"), str) and c["id"].strip()], None
+
+
+def uso_de(c):
+    """El % usado de la sesion de una cuenta, o None si no se sabe."""
+    cuota = c.get("quota") if isinstance(c.get("quota"), dict) else {}
+    sesion = cuota.get("session") if isinstance(cuota.get("session"), dict) else {}
+    usado = sesion.get("usedPercent")
+    return None if isinstance(usado, bool) or not isinstance(usado, (int, float)) else usado
+
+
+def autenticada(c):
+    auth = c.get("auth") if isinstance(c.get("auth"), dict) else {}
+    return auth.get("state") == "authenticated"
+
+
+def etiqueta_de(c):
+    """Como la ve el dueno: su correo; sin correo, su id."""
+    correo = c.get("email") if isinstance(c, dict) else None
+    return correo.strip() if isinstance(correo, str) and correo.strip() else (c or {}).get("id")
+
+
+def cuenta_de_reintento(cli, excluir=(), cuentas=None):
+    """(cuenta, None) de Claude para el intento automatico, o (None, por que no): autenticada,
+    no la activa (la que acaba de fallar) ni las de `excluir`, bajo CUENTA_TOPE_USO de su
+    sesion, la de menos uso. Una sin cuota conocida va despues de todas las que la tienen."""
+    if cuentas is None:
+        cuentas, error = cuentas_claude(cli)
+        if error:
+            return None, error
     elegibles = []
-    for c in res["accounts"]:
-        if (not isinstance(c, dict) or str(c.get("provider") or "").lower() != "claude"
-                or c.get("active") is True or not isinstance(c.get("id"), str)
-                or not c["id"].strip()):
+    for c in cuentas:
+        if c.get("active") is True or c["id"].strip() in excluir or not autenticada(c):
             continue
-        auth = c.get("auth") if isinstance(c.get("auth"), dict) else {}
-        if auth.get("state") != "authenticated":
+        usado = uso_de(c)
+        if usado is not None and usado >= CUENTA_TOPE_USO:
             continue
-        cuota = c.get("quota") if isinstance(c.get("quota"), dict) else {}
-        sesion = cuota.get("session") if isinstance(cuota.get("session"), dict) else {}
-        usado = sesion.get("usedPercent")
-        if isinstance(usado, bool) or not isinstance(usado, (int, float)):
-            usado = None
-        elif usado >= CUENTA_TOPE_USO:
-            continue
-        elegibles.append(((usado is None, usado or 0), c["id"].strip()))
+        elegibles.append(((usado is None, usado or 0), c["id"].strip(), c))
     if not elegibles:
         return None, None
-    return min(elegibles)[1], None
+    return min(elegibles, key=lambda e: e[:2])[2], None
 
 
-def abre_agente(cli, selector, titulo, nombre, arranque_ms=DESPACHO_ARRANQUE_MS):
-    """(terminal, cuenta, motivo): abre Claude en un espacio de Orca (el del proyecto, o el
-    del plugin para el agente de casos). Primero sin elegir cuenta (manda el pin del espacio
-    o la seleccion global); si esa esta tomada o sin sesion, UNA vez con la de
-    `cuenta_de_reintento`. `cuenta` es la elegida, o None."""
+def cuenta_del_bot(con):
+    """El id de la cuenta de Claude que el dueno eligio para el bot, o None (Automatica)."""
+    valor = (merged_settings(con).get("bot_claude_account") or "auto").strip()
+    return None if valor == "auto" else valor
+
+
+def abre_agente(cli, selector, titulo, nombre, arranque_ms=DESPACHO_ARRANQUE_MS, preferida=None):
+    """Abre Claude en un espacio de Orca (el del proyecto, o el del plugin para el agente de
+    casos). Con `preferida` (la cuenta del bot), esa primero; si no esta, no tiene sesion, no
+    tiene cuota o falla al abrir, la regla automatica y `respaldo` dice por que. La regla
+    automatica: sin elegir cuenta (manda el pin del espacio o la seleccion global) y, si esa
+    esta tomada o sin sesion, UNA vez con la de `cuenta_de_reintento`.
+    Devuelve {terminal, cuenta (id elegido o None), etiqueta, motivo, respaldo}."""
     orden = ["terminal", "create", "--worktree", selector, "--agent", DESPACHO_AGENTE,
              "--title", titulo, "--timeout-ms", str(arranque_ms)]
     plazo = arranque_ms // 1000 + 10
+    salida = {"terminal": None, "cuenta": None, "etiqueta": None, "motivo": None,
+              "respaldo": None}
+    cuentas, excluir = None, set()
+    if preferida:
+        cuentas, _ = cuentas_claude(cli)
+        c = next((x for x in cuentas or [] if preferida in (x["id"].strip(), x.get("email"))),
+                 None)
+        usado = uso_de(c) if c else None
+        if not c:
+            salida["respaldo"] = "elegida-no-esta"
+        elif not autenticada(c):
+            salida["respaldo"] = "elegida-sin-sesion"
+        elif usado is not None and usado >= CUENTA_TOPE_USO:
+            salida["respaldo"] = "elegida-sin-cuota"
+        else:
+            res, error = orca_llama(cli, orden + ["--claude-account", c["id"].strip()], plazo)
+            terminal = None if error else terminal_creada(res)
+            if terminal:
+                return dict(salida, terminal=terminal, cuenta=c["id"].strip(),
+                            etiqueta=etiqueta_de(c))
+            salida["respaldo"] = "elegida-fallo"
+        if c:
+            excluir.add(c["id"].strip())
     res, error = orca_llama(cli, orden, plazo)
-    cuenta = None
     if error and ERROR_DE_CUENTA.search(error):
-        cuenta, por_que = cuenta_de_reintento(cli)
+        cuenta, por_que = cuenta_de_reintento(cli, excluir, cuentas)
         if not cuenta:
-            return None, None, (f"ninguna cuenta de Claude disponible: {error}"
-                                + (f"; {por_que}" if por_que else ""))
-        res, error = orca_llama(cli, orden + ["--claude-account", cuenta], plazo)
+            return dict(salida, motivo=(f"ninguna cuenta de Claude disponible: {error}"
+                                        + (f"; {por_que}" if por_que else "")))
+        salida.update(cuenta=cuenta["id"].strip(), etiqueta=etiqueta_de(cuenta))
+        res, error = orca_llama(cli, orden + ["--claude-account", salida["cuenta"]], plazo)
     terminal = None if error else terminal_creada(res)
     if not terminal:
-        return None, cuenta, f"no pude despachar a {nombre}: {error or 'Orca no devolvió la terminal'}"
-    return terminal, cuenta, None
+        return dict(salida, motivo=(f"no pude despachar a {nombre}: "
+                                    f"{error or 'Orca no devolvió la terminal'}"))
+    return dict(salida, terminal=terminal)
 
 
 def turno_del_agente(cli, terminal):
@@ -5956,10 +6029,13 @@ def despacha(con, caso, instrucciones, evento_id, resumen, reintento_de=None, vi
     terminal = None
     if not motivo:
         despacho_anota(con, fila, mensajes=json.dumps(vistos))
-        terminal, cuenta, motivo = abre_agente(cli, selector, f"WhatsApp case #{cid}", nombre)
-        if terminal or cuenta:
+        abierto = abre_agente(cli, selector, f"WhatsApp case #{cid}", nombre,
+                              preferida=cuenta_del_bot(con))
+        terminal, motivo = abierto["terminal"], abierto["motivo"]
+        if terminal or abierto["cuenta"] or abierto["respaldo"]:
             # Con la base: una vuelta que muere aca deja la terminal a la vista del vigia.
-            despacho_anota(con, fila, terminal=terminal, cuenta_claude=cuenta)
+            despacho_anota(con, fila, terminal=terminal, cuenta_claude=abierto["cuenta"],
+                           cuenta_etiqueta=abierto["etiqueta"], respaldo=abierto["respaldo"])
     reenvios, turno = 0, False
     if not motivo:
         motivo, reenvios, turno = entrega_brief(
@@ -6241,11 +6317,14 @@ def lanza_agente(con, origen, hasta):
     if not falla and queda() < 15000:
         falla = ("sin-tiempo", "no quedaba tiempo para abrir al agente")
     if not falla:
-        terminal, cuenta, motivo = abre_agente(
+        abierto = abre_agente(
             cli, selector, AGENTE_TITULO, AGENTE_NOMBRE,
-            arranque_ms=max(5000, min(DESPACHO_ARRANQUE_MS, queda() // 2)))
-        if terminal or cuenta:
-            agente_anota(con, fila, terminal=terminal, cuenta_claude=cuenta)
+            arranque_ms=max(5000, min(DESPACHO_ARRANQUE_MS, queda() // 2)),
+            preferida=cuenta_del_bot(con))
+        terminal, motivo = abierto["terminal"], abierto["motivo"]
+        if terminal or abierto["cuenta"] or abierto["respaldo"]:
+            agente_anota(con, fila, terminal=terminal, cuenta_claude=abierto["cuenta"],
+                         cuenta_etiqueta=abierto["etiqueta"], respaldo=abierto["respaldo"])
             f["terminal"] = terminal
         if motivo:
             falla = ("sin-cuenta" if ERROR_DE_CUENTA.search(motivo) else "sin-terminal", motivo)
@@ -6298,7 +6377,8 @@ def agente_del_tablero(con):
     return {"state": ESTADO_DE_AGENTE.get(r["estado"], "failed"),
             "reason": r["motivo"] if fallo else None,
             "detail": r["detalle"] if fallo else None,
-            "at": iso_caso(r["created_at"]), "updated_at": iso_caso(r["updated_at"])}
+            "at": iso_caso(r["created_at"]), "updated_at": iso_caso(r["updated_at"]),
+            "account": r["cuenta_etiqueta"], "fallback": r["respaldo"]}
 
 
 DETALLE_ATENDER = "the owner asked the agent to handle it now"

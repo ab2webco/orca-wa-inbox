@@ -34,6 +34,12 @@ y lo cuenta en `limpieza_error`.
   `triage` queda de respaldo con su cron: el precheck **sale con 1 cuando ningún caso
   necesita lenguaje** (Orca marca la corrida `skipped_precheck`), y si su agente llega con
   otro trabajando, se frena en el `lock`.
+- **La cuenta de Claude del bot.** Ajustes, pestaña Agente, guarda `botClaudeAccount`: el
+  id de una cuenta de `orca account list` o `auto`. El agente de casos y el del proyecto
+  abren primero con esa; si no aparece, no tiene sesión, no tiene cuota (95 % o más) o
+  falla al abrir, siguen la regla automática (sin elegir cuenta y, si esa está tomada, la
+  autenticada de menos uso) y anotan la cuenta usada y el motivo (`respaldo`). El tablero
+  lo dice en la línea de la revisión y en la tarjeta del despacho.
 - **El agente del proyecto (T8).** Un `trabajar` aprobado (una firma de `decision` a
   `trabajo`; nunca lo que puso ahí el backfill) abre Claude en el espacio exacto del
   proyecto, uno por tick: el brief va a un archivo en la carpeta de datos del plugin
