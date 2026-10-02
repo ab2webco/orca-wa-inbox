@@ -3119,6 +3119,8 @@ def cmd_ingest(con, a):
             total[k] += v
         if case_id is not None:
             casos.add(case_id)
+    # Lo que Jev dejo con una credencial no pasa por el agente: va al dueno ya.
+    casos_credencial_a_decision(con)
     return [dict(total, casos=sorted(casos))]
 
 
@@ -3514,6 +3516,12 @@ def cmd_tick(con, a):
             if con.in_transaction:
                 con.rollback()
             print(f"wa-scope: ingest skipped: {exc}", file=sys.stderr)
+        try:
+            casos_credencial_a_decision(con)
+        except (sqlite3.Error, CasoFalla) as exc:
+            if con.in_transaction:
+                con.rollback()
+            print(f"wa-scope: credential cases not routed: {exc}", file=sys.stderr)
         candidatos = candidatos_tick(con)
         estados, vivo = envios_del_almacen(
             [id_envio_caso(c["case_id"], c["propuesta_version"]) for c, _ in candidatos])
@@ -3610,18 +3618,70 @@ def casos_para_agente(con):
       regla, el dueno o un veredicto en cache, y nadie mas va a redactar la respuesta.
       Sin llave de Jev este es el camino de todos los casos.
 
-    Lo que Jev juzgo y no marco para el agente (la zona gris, o una credencial que el
-    agente no debe ver) no lo despierta: lo resuelve el dueno en el tablero. Un trabajo
-    aprobado (`trabajo`) tampoco: su despacho es T8."""
+    - `clasificado` sin propuesta, juzgado por Jev sin `skip` y sin credencial, en un chat
+      `responder` o `borrador`: un saludo o la zona gris tambien merece su respuesta (o su
+      borrador); sin esto el caso se quedaba en clasificado para siempre (T20). En los
+      demas modos, o con `skip`, sigue sin despertarlo.
+
+    Una credencial (la de Jev o la del piso fijo) nunca pasa por el agente: la mueve
+    `casos_credencial_a_decision` al dueno. Un trabajo aprobado (`trabajo`) tampoco
+    despierta: su despacho es T8."""
     casos = []
+    modos = {jid: e.get("mode") for jid, e in merged_scope(con).items()}
     for r in con.execute(
-            "select case_id, etapa, propuesta, jev, necesita_agente from caso where "
-            "account=? and etapa in ('recibido','clasificado') order by updated_at, case_id",
-            (cuenta_activa(),)):
-        if (r["etapa"] == "recibido" or r["propuesta"] or r["necesita_agente"]
-                or not r["jev"]):
+            "select case_id, chat_jid, etapa, propuesta, jev, necesita_agente, excepciones "
+            "from caso where account=? and etapa in ('recibido','clasificado') "
+            "order by updated_at, case_id", (cuenta_activa(),)):
+        if r["etapa"] == "recibido" or r["propuesta"] or r["necesita_agente"]:
+            casos.append(r["case_id"])
+            continue
+        if "credential" in _lista_json(r["excepciones"]):
+            continue
+        if not r["jev"]:
+            casos.append(r["case_id"])
+            continue
+        try:
+            skip = bool(json.loads(r["jev"]).get("skip"))
+        except (TypeError, ValueError, AttributeError):
+            skip = False
+        if not skip and modos.get(r["chat_jid"]) in ("responder", "borrador"):
             casos.append(r["case_id"])
     return casos
+
+
+def _lista_json(texto):
+    try:
+        valor = json.loads(texto) if texto else []
+    except (TypeError, ValueError):
+        return []
+    return valor if isinstance(valor, list) else []
+
+
+def casos_credencial_a_decision(con):
+    """Un caso clasificado, sin propuesta y con una credencial (Jev o piso fijo) no lo ve el
+    agente: pasa a `decision` para que el dueno lo vea en "Su decision", con la excepcion
+    y sin propuesta. Una sola vez por caso: si el dueno lo devuelve a clasificado, no se
+    vuelve a mover. Deja el evento de `clasificado` a `decision`. Devuelve cuantos movio."""
+    movidos = 0
+    caso_toma(con)
+    try:
+        for r in con.execute(
+                "select case_id from caso where account=? and etapa='clasificado' and "
+                "propuesta is null and excepciones like '%credential%' and not exists "
+                "(select 1 from caso_evento e where e.case_id=caso.case_id and e.a='decision') "
+                "order by updated_at, case_id", (cuenta_activa(),)).fetchall():
+            caso = caso_de(con, r["case_id"])
+            if "credential" not in _lista_json(caso.get("excepciones")):
+                continue
+            caso_valida(caso, "decision")
+            caso_mover(con, caso, "decision", "automatizacion",
+                       "excepcion credential: lo decide el dueno")
+            movidos += 1
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+    return movidos
 
 
 def pendiente_agente(con):

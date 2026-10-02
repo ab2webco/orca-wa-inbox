@@ -2515,6 +2515,79 @@ with tempfile.TemporaryDirectory() as home:
        p.returncode == 0 and json.loads(p.stdout)["cases"] == [int(pide)], f"{p.stdout}")
 
 
+# ── T20: un caso clasificado sin propuesta siempre llega a alguien ────────────────────
+# Visto en vivo: un saludo al asistente en un chat `responder`, que Jev juzgo sin marcas,
+# se quedaba en clasificado para siempre. Ahora lo despierta al agente segun el modo del
+# chat; una credencial no pasa por el agente y va a "Su decision"; `skip` sigue siendo skip.
+print("\nT20: clasificado sin propuesta llega al agente o al dueno")
+
+
+def caso_juzgado(home, stanza, jev_json, agente=0, excepciones=None):
+    c = str(js(home, "caso", "crear", "--chat", CHAT, "--stanza", stanza,
+               "--actor", "automatizacion")[0]["case_id"])
+    js(home, "caso", "clasificar", c, "--clase", "card", "--prioridad", "none",
+       "--actor", "jev")
+    con = db_de(home)
+    con.execute("update caso set jev=?, necesita_agente=?, excepciones=? where case_id=?",
+                (json.dumps(jev_json), agente,
+                 json.dumps(excepciones) if excepciones else None, int(c)))
+    con.commit()
+    con.close()
+    return c
+
+
+def para_el_agente(home):
+    p = necesita(home)
+    return json.loads(p.stdout)["cases"] if p.returncode == 0 else []
+
+
+SALUDO = {"attention_class": "pleasantry", "flags": [], "skip": False}
+for modo, despierta in (("responder", True), ("borrador", True), ("observar", False)):
+    with tempfile.TemporaryDirectory() as home:
+        js(home, "set", CHAT, "--provider", "plane", "--target", "SOP", "--mode", modo)
+        saludo = caso_juzgado(home, "T20A", SALUDO)
+        ok(f"un saludo que Jev juzgo sin marcas en un chat `{modo}` "
+           f"{'despierta' if despierta else 'no despierta'} al agente",
+           (int(saludo) in para_el_agente(home)) is despierta, f"{para_el_agente(home)}")
+
+with tempfile.TemporaryDirectory() as home:
+    js(home, "set", CHAT, "--provider", "plane", "--target", "SOP", "--mode", "responder")
+    salta = caso_juzgado(home, "T20B", {"attention_class": "pleasantry", "flags": [], "skip": True})
+    ok("con `skip` de Jev sigue sin despertar al agente", para_el_agente(home) == [],
+       f"{para_el_agente(home)}")
+    clave = caso_juzgado(home, "T20C", {"attention_class": "access_or_credential",
+                                        "flags": ["asks_for_credential"], "skip": False},
+                         agente=0, excepciones=["credential"])
+    ok("una credencial no despierta al agente aunque el chat sea `responder`",
+       int(clave) not in para_el_agente(home), f"{para_el_agente(home)}")
+    # El mismo caso sin la marca de Jev pero con el piso fijo en `excepciones`: igual.
+    p = corre(home, "tick", "--json")
+    ok("el tick lo mueve a decision, con la excepcion y sin propuesta",
+       p.returncode == 0 and tarjeta(home, clave) is not None
+       and tarjeta(home, clave)["stage"] == "decision"
+       and tarjeta(home, clave)["exceptions"] == ["credential"]
+       and tarjeta(home, clave)["proposal"] is None, f"{p.stderr[-300:]} {tarjeta(home, clave)}")
+    ok("y deja su evento de clasificado a decision", cuenta(
+        home, "select count(*) from caso_evento where case_id=? and de='clasificado' "
+        "and a='decision' and actor='automatizacion'", int(clave)) == 1)
+    ok("sin que el agente lo vea", int(clave) not in para_el_agente(home))
+    p = corre(home, "tick", "--json")
+    ok("repetir el tick no vuelve a escribir", cuenta(
+        home, "select count(*) from caso_evento where case_id=? and a='decision'",
+        int(clave)) == 1)
+    t = tablero(home).get("board", {})
+    ok("la cuenta del tablero lo cuenta en decision",
+       t.get("counts", {}).get("decision") == 1, f"{t.get('counts')}")
+    ok("el que `skip` saco sigue en clasificado", tarjeta(home, salta)["stage"] == "clasificado")
+    ok("y el saludo no es una excepcion: se queda para el agente",
+       tarjeta(home, caso_juzgado(home, "T20D", SALUDO))["stage"] == "clasificado")
+    ok("`pending --needs-agent` sale 0 con el saludo y 1 sin casos",
+       necesita(home).returncode == 0)
+
+with tempfile.TemporaryDirectory() as home:
+    ok("sin casos `pending --needs-agent` sigue saliendo 1", necesita(home).returncode == 1)
+
+
 # ── Lo que era la bandeja, en el tablero: atender ya y el proyecto a mano ──────────
 # La pestana "Bandeja" se fue. "Tomar" es ahora "Atender ahora" sobre un caso en
 # recibido o clasificado: lo marca para el agente, y `pending --needs-agent` lo cuenta.

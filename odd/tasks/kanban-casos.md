@@ -324,10 +324,13 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
 - [ ] T18 — Huecos de CLI vistos en T6: editar la propuesta en `listo`,
       reclasificar desde `clasificado`, `wa-send` aprobado por el dueño sin dejar
       fila de borrador.
-- [ ] T20 — Huecos de T7: un caso que Jev juzgó en zona gris o con credencial
+- [x] T20 — Huecos de T7: un caso que Jev juzgó en zona gris o con credencial
       queda en `clasificado` sin propuesta, no despierta al agente y no cuenta en
       la insignia (debe llegar a "Tu decisión"); los avisos de cierre de Plane del
       triage viejo ya no corren (decidir si se retiran con Plane).
+      Hecho: un clasificado sin propuesta despierta al agente en chats `responder` o
+      `borrador` (sin `skip`); con credencial pasa a `decision` una vez. Los avisos de
+      Plane siguen pendientes.
 - [ ] T21 — Sin pestaña Bandeja: el tablero es el panel. Historial del agente en
       el detalle de la tarjeta, "Atender ahora" e "Ignorar" como acciones de la
       tarjeta, proyecto asignable a mano desde el detalle. Va con el rediseño del
