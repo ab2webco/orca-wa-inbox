@@ -2344,6 +2344,15 @@ def caso_mover(con, caso, hacia, actor, detalle="", **campos):
         # Entrar de nuevo a estas etapas es empezar otra decision: la firma de la
         # vuelta anterior no vale para esta, aunque la propuesta haya quedado igual.
         campos.setdefault("propuesta_aprobada", None)
+    if hacia == "recibido" and caso["etapa"] != "recibido":
+        # Reabrir es empezar otra decision: la propuesta de la vuelta anterior (la que ya
+        # salio, por ejemplo) no puede quedar en la tarjeta como si esperara al dueno, ni
+        # su version como la vigente. La version queda en el evento; el texto, en la
+        # bandeja de salida, y la misma peticion `caso-<id>-<version>` no reenvia.
+        if caso.get("propuesta_version"):
+            detalle = f"{detalle} · propuesta {caso['propuesta_version'][:12]} retirada"
+        campos.setdefault("propuesta", None)
+        campos.setdefault("propuesta_version", None)
     sets = dict(campos, etapa=hacia, updated_at=momento)
     con.execute(f"update caso set {', '.join(f'{k}=?' for k in sets)} where case_id=?",
                 (*sets.values(), caso["case_id"]))
@@ -2968,6 +2977,35 @@ def caso_marca_regla(con, case_id, excepciones):
     return True
 
 
+# Las etapas a las que un caso reabierto por un mensaje vuelve si Jev dice que el mensaje
+# era charla ajena. `listo` no esta: un mensaje no lo reabre (no sale de ahi a recibido).
+ETAPAS_QUE_VUELVEN = ("respondido",)
+CLASES_CHARLA = ("unrelated_chatter", "pleasantry")
+
+
+def es_charla_ajena(juicio):
+    """Si Jev dijo que el mensaje no pide nada: `skip`, o charla ajena o un saludo sin
+    marcas, sin excepciones y sin agente. Sin veredicto (Jev apagado o en error) no lo es:
+    ante la duda el caso se queda reabierto."""
+    if not juicio:
+        return False
+    if juicio.get("skip"):
+        return True
+    return (juicio.get("attention_class") in CLASES_CHARLA and not juicio.get("flags")
+            and not juicio.get("exceptions") and not juicio.get("needs_agent"))
+
+
+def caso_devuelve(con, caso, previo, juicio):
+    """Deja el caso donde estaba antes del mensaje, con lo que tenia (la propuesta que ya
+    salio y su firma), y el evento que dice por que. No pasa por `caso_valida`: no es una
+    transicion que el dueno o el agente puedan pedir, es deshacer la reapertura."""
+    motivo = "skip" if juicio.get("skip") else juicio.get("attention_class")
+    caso_mover(con, caso, previo["etapa"], "jev",
+               f"jev {motivo}: el mensaje no pide nada, sigue {previo['etapa']}",
+               propuesta=previo["propuesta"], propuesta_version=previo["propuesta_version"],
+               propuesta_aprobada=previo["propuesta_aprobada"])
+
+
 def ingest_mensaje(con, m, veredicto, horas):
     """Un mensaje nuevo, en SU transaccion: o queda todo (caso, ruta, clasificacion,
     eventos) o nada, y la fila de `caso_mensaje` es lo que hace que un reintento no lo
@@ -3019,11 +3057,16 @@ def ingest_mensaje(con, m, veredicto, horas):
             case_id = caso["case_id"]
             caso_marca_regla(con, case_id, piso)
         else:
+            previo = caso_abierto_de_chat(con, chat, horas)
             case_id, que = caso_asigna(con, stanza, chat, "automatizacion")
             hecho.update(nuevos=1, casos_creados=int(que == "nuevo"),
                          unidos=int(que == "unido"))
             caso_enruta(con, case_id, m.get("text") or "", chat)
-            if accion == "clasificar" and caso_clasifica(con, case_id, veredicto):
+            if (que == "unido" and previo and previo["case_id"] == case_id
+                    and previo["etapa"] in ETAPAS_QUE_VUELVEN
+                    and veredicto and es_charla_ajena(veredicto.get("jev"))):
+                caso_devuelve(con, caso_de(con, case_id), previo, veredicto["jev"])
+            elif accion == "clasificar" and caso_clasifica(con, case_id, veredicto):
                 hecho["dudosos"] = int(veredicto["clase"] == "doubtful")
             if veredicto and veredicto.get("jev"):
                 caso_marca_jev(con, case_id, veredicto["jev"])
@@ -3632,10 +3675,11 @@ def casos_para_agente(con):
             "select case_id, chat_jid, etapa, propuesta, jev, necesita_agente, excepciones "
             "from caso where account=? and etapa in ('recibido','clasificado') "
             "order by updated_at, case_id", (cuenta_activa(),)):
+        # Una credencial nunca pasa por el agente, con la propuesta que tenga.
+        if "credential" in _lista_json(r["excepciones"]):
+            continue
         if r["etapa"] == "recibido" or r["propuesta"] or r["necesita_agente"]:
             casos.append(r["case_id"])
-            continue
-        if "credential" in _lista_json(r["excepciones"]):
             continue
         if not r["jev"]:
             casos.append(r["case_id"])
@@ -3660,15 +3704,18 @@ def _lista_json(texto):
 def casos_credencial_a_decision(con):
     """Un caso clasificado, sin propuesta y con una credencial (Jev o piso fijo) no lo ve el
     agente: pasa a `decision` para que el dueno lo vea en "Su decision", con la excepcion
-    y sin propuesta. Una sola vez por caso: si el dueno lo devuelve a clasificado, no se
-    vuelve a mover. Deja el evento de `clasificado` a `decision`. Devuelve cuantos movio."""
+    y sin propuesta. Una sola vez por reapertura: si el dueno lo devuelve a clasificado, no
+    se vuelve a mover, pero un caso reabierto (otra vuelta por `recibido`) vuelve a contar. Deja el evento de `clasificado` a `decision`. Devuelve cuantos movio."""
     movidos = 0
     caso_toma(con)
     try:
         for r in con.execute(
                 "select case_id from caso where account=? and etapa='clasificado' and "
                 "propuesta is null and excepciones like '%credential%' and not exists "
-                "(select 1 from caso_evento e where e.case_id=caso.case_id and e.a='decision') "
+                "(select 1 from caso_evento e where e.case_id=caso.case_id and e.a='decision' and "
+                "e.id > (select coalesce(max(r.id), 0) from caso_evento r where "
+                "r.case_id=caso.case_id and r.a='recibido' and "
+                "(r.de is null or r.de <> 'recibido'))) "
                 "order by updated_at, case_id", (cuenta_activa(),)).fetchall():
             caso = caso_de(con, r["case_id"])
             if "credential" not in _lista_json(caso.get("excepciones")):

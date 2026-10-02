@@ -1644,6 +1644,10 @@ def jev_segun_texto(cuerpo):
         return 500, {"error": "boom"}
     if "gracias" in texto or "buen dia" in texto:
         return 200, respuestas(qs, choice="pleasantry", asks_owner_to_act=0.05)
+    if "charla entre ustedes" in texto:
+        return 200, respuestas(qs, choice="unrelated_chatter", asks_owner_to_act=0.3)
+    if "jaja" in texto:
+        return 200, respuestas(qs, choice="pleasantry", asks_owner_to_act=0.3)
     if "cuesta" in texto:
         return 200, respuestas(qs, choice="money", asks_owner_to_act=0.6,
                                asks_for_money_or_payment=0.9)
@@ -1744,6 +1748,94 @@ else:
         falso.cerrar()
         os.environ.clear()
         os.environ.update(antes)
+
+
+# ── 12b. La charla no reabre un caso respondido ──────────────────────────────────
+# Visto en vivo: un caso respondido, la gente del grupo siguio charlando entre si, y la
+# tarjeta quedo en Clasificado pidiendo "Atender ahora" por nada. Un mensaje sigue
+# reabriendo el caso, pero si Jev dice que es charla ajena o un saludo, sin marcas, el
+# caso vuelve a donde estaba. Sin Jev, o con Jev en error, sigue reabierto.
+PROPUESTA_ENVIADA = json.dumps({"tipo": "responder", "respuesta": "Ya quedo, gracias."},
+                               sort_keys=True)
+VERSION_ENVIADA = "a1b2c3d4e5f6" * 5 + "a1b2"
+
+
+def caso_respondido(home, stanza):
+    """Un caso que ya se respondio: su propuesta salio y el dueno la firmo."""
+    llegan(home, A, [msg(SOPORTE, stanza, "@duenio revisa el pedido", 50, mencion=True)])
+    autoriza(home)
+    ingiere(home)
+    cid = caso_de_stanza(home, stanza)["case_id"]
+    con = db_de(home)
+    con.execute("update caso set etapa='respondido', propuesta=?, propuesta_version=?, "
+                "propuesta_aprobada=? where case_id=?",
+                (PROPUESTA_ENVIADA, VERSION_ENVIADA, VERSION_ENVIADA, cid))
+    con.commit()
+    con.close()
+    return cid
+
+
+def fila_de(home, cid):
+    return dict(db_de(home).execute("select * from caso where case_id=?", (cid,)).fetchone())
+
+
+print("\nla charla no reabre un caso respondido")
+if NODE:
+    falso = JevFalso(jev_segun_texto)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        for texto in ("@duenio charla entre ustedes", "@duenio jaja"):
+            with tempfile.TemporaryDirectory() as home:
+                pon_llave(home)
+                cid = caso_respondido(home, "H1")
+                llegan(home, A, [msg(SOPORTE, "H2", texto, 5, mencion=True)])
+                ingiere(home)
+                fila = fila_de(home, cid)
+                ver = js(home, "caso", "ver", str(cid))[0]
+                ok(f"con Jev ({texto.split(maxsplit=1)[1]}) el caso vuelve a respondido",
+                   fila["etapa"] == "respondido" and len(ver["mensajes"]) == 2,
+                   f"etapa {fila['etapa']}")
+                pares = [(e["de"], e["a"], e["actor"]) for e in ver["eventos"]
+                         if e["de"] != e["a"]][-2:]
+                ok("la historia dice que se reabrio y que Jev lo devolvio",
+                   pares == [("respondido", "recibido", "automatizacion"),
+                             ("recibido", "respondido", "jev")], f"{pares}")
+                ok("y vuelve con lo que tenia: la propuesta enviada y su firma",
+                   fila["propuesta"] == PROPUESTA_ENVIADA
+                   and fila["propuesta_version"] == VERSION_ENVIADA
+                   and fila["propuesta_aprobada"] == VERSION_ENVIADA, f"{fila}")
+
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            cid = caso_respondido(home, "H3")
+            llegan(home, A, [msg(SOPORTE, "H4", "@duenio cuanto cuesta el plan", 5,
+                                 mencion=True)])
+            ingiere(home)
+            ok("si Jev ve algo que atender (dinero) el caso sigue reabierto",
+               fila_de(home, cid)["etapa"] == "clasificado", f"{fila_de(home, cid)['etapa']}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+    # Sin llave: fallar hacia la atencion, y la tarjeta no presenta como pendiente lo que
+    # ya salio.
+    with tempfile.TemporaryDirectory() as home:
+        cid = caso_respondido(home, "H5")
+        llegan(home, A, [msg(SOPORTE, "H6", "@duenio charla entre ustedes", 5, mencion=True)])
+        ingiere(home)
+        fila = fila_de(home, cid)
+        ok("sin Jev el caso queda reabierto, en recibido", fila["etapa"] == "recibido",
+           f"{fila['etapa']}")
+        ok("y su propuesta ya enviada no queda como pendiente ni con firma",
+           fila["propuesta"] is None and fila["propuesta_version"] is None
+           and fila["propuesta_aprobada"] is None, f"{fila}")
+        ver = js(home, "caso", "ver", str(cid))[0]
+        ok("el evento de la reapertura nombra la version enviada, no el texto",
+           any(e["de"] == "respondido" and e["a"] == "recibido"
+               and VERSION_ENVIADA[:12] in e["detalle"] for e in ver["eventos"]),
+           f"{ver['eventos']}")
 
 
 # ── 13. Errores estables de `wa-scope caso` ──────────────────────────────────────
@@ -2586,6 +2678,53 @@ with tempfile.TemporaryDirectory() as home:
 
 with tempfile.TemporaryDirectory() as home:
     ok("sin casos `pending --needs-agent` sigue saliendo 1", necesita(home).returncode == 1)
+
+
+# ── Un caso reabierto con una credencial llega al dueno, no al agente ─────────────────
+# Visto en vivo: un caso respondido recibio otra pregunta, Jev marco credencial y
+# compromiso, y se quedo en clasificado: la propuesta que ya salio lo frenaba, y el
+# "una sola vez" miraba toda la historia en vez de esta vuelta.
+print("\nun caso reabierto con credencial llega al dueno")
+with tempfile.TemporaryDirectory() as home:
+    js(home, "set", CHAT, "--provider", "plane", "--target", "SOP", "--mode", "responder")
+    cid, _ = caso_en_decision(home, "RC1")
+    con = db_de(home)
+    con.execute("update caso set etapa='respondido' where case_id=?", (int(cid),))
+    con.commit()
+    con.close()
+    # Un caso que ya paso por decision (el evento esta en su historia) y salio respondido.
+    js(home, "caso", "mover", cid, "recibido", "--actor", "automatizacion")
+    ok("reabrir retira la propuesta que ya salio",
+       fila_caso(home, cid)["propuesta"] is None
+       and fila_caso(home, cid)["propuesta_version"] is None, f"{fila_caso(home, cid)}")
+    js(home, "caso", "clasificar", cid, "--clase", "alert", "--prioridad", "none",
+       "--actor", "jev")
+    con = db_de(home)
+    con.execute("update caso set excepciones=?, necesita_agente=1 where case_id=?",
+                (json.dumps(["credential", "commitment"]), int(cid)))
+    con.commit()
+    con.close()
+    ok("la credencial no despierta al agente", int(cid) not in para_el_agente(home),
+       f"{para_el_agente(home)}")
+    corre(home, "tick", "--json")
+    ok("el tick lo mueve a decision aunque ya haya pasado por decision antes",
+       tarjeta(home, cid)["stage"] == "decision", f"{tarjeta(home, cid)}")
+    ok("y solo una vez por reapertura", cuenta(
+        home, "select count(*) from caso_evento where case_id=? and a='decision' "
+        "and actor='automatizacion'", int(cid)) == 1)
+
+with tempfile.TemporaryDirectory() as home:
+    js(home, "set", CHAT, "--provider", "plane", "--target", "SOP", "--mode", "responder")
+    cid = caso_juzgado(home, "RC2", {"attention_class": "access_or_credential",
+                                     "flags": ["asks_for_credential"], "skip": False},
+                       agente=1, excepciones=["credential"])
+    con = db_de(home)
+    con.execute("update caso set propuesta=?, propuesta_version=? where case_id=?",
+                (PROPUESTA_ENVIADA, VERSION_ENVIADA, int(cid)))
+    con.commit()
+    con.close()
+    ok("una credencial con una propuesta vieja tampoco despierta al agente",
+       int(cid) not in para_el_agente(home), f"{para_el_agente(home)}")
 
 
 # ── Lo que era la bandeja, en el tablero: atender ya y el proyecto a mano ──────────
