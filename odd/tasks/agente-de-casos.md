@@ -35,7 +35,7 @@ tiene varias.
   worker lo usa en vez de `orca automations run`.
 - [x] T3 Tablero: `agent_launch` y `waits_agent`; "No pude lanzar al agente:
   <motivo>" en las tarjetas que esperan al agente y en la línea de la revisión.
-- [ ] T4 Cuenta de Claude del bot (config.html, pestaña Agente): "Automática" o
+- [x] T4 Cuenta de Claude del bot (config.html, pestaña Agente): "Automática" o
   una cuenta de `orca account list`; la usan el agente de casos y el despacho
   al proyecto, con respaldo automático y el tablero dice cuál se usó y por qué.
 
