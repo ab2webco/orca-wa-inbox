@@ -2981,6 +2981,7 @@ def caso_marca_regla(con, case_id, excepciones):
 # era charla ajena. `listo` no esta: un mensaje no lo reabre (no sale de ahi a recibido).
 ETAPAS_QUE_VUELVEN = ("respondido",)
 CLASES_CHARLA = ("unrelated_chatter", "pleasantry")
+LARGO_RESUMEN_REABIERTO = 280
 
 
 def es_charla_ajena(juicio):
@@ -3004,6 +3005,24 @@ def caso_devuelve(con, caso, previo, juicio):
                f"jev {motivo}: el mensaje no pide nada, sigue {previo['etapa']}",
                propuesta=previo["propuesta"], propuesta_version=previo["propuesta_version"],
                propuesta_aprobada=previo["propuesta_aprobada"])
+
+
+def caso_retitula(con, case_id, previo, stanza, texto):
+    """Un caso reabierto por un mensaje nuevo muestra ese mensaje: es lo que espera, y el
+    titulo de la primera vez lo esconde. El titulo es el del primer mensaje (enmascarado y
+    corto, como `titulos_de_mensajes`) y el resumen es el texto enmascarado; con una
+    credencial en el caso no hay resumen. El titulo de antes queda en el evento."""
+    caso = caso_de(con, case_id)
+    limpio = " ".join(wa_jev.mask(texto).split())
+    if not limpio:
+        return
+    titulo = limpio[:LARGO_TITULO].rstrip() + ("…" if len(limpio) > LARGO_TITULO else "")
+    credencial = "credential" in _lista_json(caso.get("excepciones"))
+    resumen = None if credencial else limpio[:LARGO_RESUMEN_REABIERTO]
+    detalle = f"mensaje {stanza}: titulo y resumen nuevos"
+    if previo.get("titulo"):
+        detalle += f" · titulo anterior: {previo['titulo']}"
+    caso_tocar(con, caso, "automatizacion", detalle, titulo=titulo, resumen=resumen)
 
 
 def ingest_mensaje(con, m, veredicto, horas):
@@ -3071,6 +3090,10 @@ def ingest_mensaje(con, m, veredicto, horas):
             if veredicto and veredicto.get("jev"):
                 caso_marca_jev(con, case_id, veredicto["jev"])
             caso_marca_regla(con, case_id, piso)
+            if (que == "unido" and previo and previo["case_id"] == case_id
+                    and previo["etapa"] in ETAPAS_QUE_VUELVEN
+                    and caso_de(con, case_id)["etapa"] == "recibido"):
+                caso_retitula(con, case_id, previo, stanza, m.get("text") or "")
         con.commit()
     except BaseException:
         con.rollback()
@@ -3340,6 +3363,8 @@ def build_board(con):
     return {"v": 1,
             "updated_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
             "truncated": truncado, "counts": counts,
+            # Los casos que esperan al agente: los mismos que `pending --needs-agent`.
+            "agent_waiting": len(casos_para_agente(con)),
             "cards": [tarjeta_de(c, nombres, titulos, motivos, eventos) for c in casos]}
 
 

@@ -2727,6 +2727,69 @@ with tempfile.TemporaryDirectory() as home:
        int(cid) not in para_el_agente(home), f"{para_el_agente(home)}")
 
 
+# ── Un caso reabierto muestra lo nuevo, no lo de la primera vez ─────────────────────
+# Visto en vivo: un caso de las 17:19, respondido y reabierto a las 20:24 por otra
+# pregunta, seguia con el titulo y el resumen de la primera: lo que esperaba era
+# invisible. El titulo y el resumen pasan al mensaje nuevo; el titulo viejo queda en
+# el evento. Una credencial no se copia: el titulo sale enmascarado y sin resumen.
+print("\nun caso reabierto muestra el mensaje nuevo")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        cid = caso_respondido(home, "T1")
+        con = db_de(home)
+        con.execute("update caso set titulo='Pedido de ayer', resumen='Lo de ayer' "
+                    "where case_id=?", (cid,))
+        con.commit()
+        con.close()
+        llegan(home, A, [msg(SOPORTE, "T2", "@duenio ahora necesito otra cosa distinta", 5,
+                             mencion=True)])
+        ingiere(home)
+        fila = fila_de(home, cid)
+        ok("al reabrir, el titulo y el resumen son los del mensaje nuevo",
+           fila["etapa"] == "recibido"
+           and fila["titulo"] == "@duenio ahora necesito otra cosa distinta"
+           and fila["resumen"] == "@duenio ahora necesito otra cosa distinta", f"{fila}")
+        ver = js(home, "caso", "ver", str(cid))[0]
+        ok("el titulo de antes queda en la historia",
+           any("Pedido de ayer" in e["detalle"] for e in ver["eventos"]), f"{ver['eventos']}")
+        ok("la tarjeta del tablero lo muestra",
+           tarjeta(home, cid)["title"] == "@duenio ahora necesito otra cosa distinta",
+           f"{tarjeta(home, cid)}")
+
+    with tempfile.TemporaryDirectory() as home:
+        cid = caso_respondido(home, "T3")
+        llegan(home, A, [msg(SOPORTE, "T4", "@duenio la clave del panel es Hunter2xx", 5,
+                             mencion=True)])
+        ingiere(home)
+        fila = fila_de(home, cid)
+        ok("con una credencial el titulo sale enmascarado y no hay resumen",
+           "Hunter2xx" not in json.dumps(fila) and fila["titulo"] and fila["resumen"] is None,
+           f"{fila}")
+        ok("y la tarjeta tampoco la lleva", "Hunter2xx" not in json.dumps(tarjeta(home, cid)))
+
+    with tempfile.TemporaryDirectory() as home:
+        cid = caso_respondido(home, "T5")
+        antes_t = fila_de(home, cid)["titulo"]
+        js(home, "caso", "mover", str(cid), "recibido", "--actor", "dueno")
+        ok("reabrir a mano no inventa un titulo", fila_de(home, cid)["titulo"] == antes_t)
+
+# ── El tablero dice cuantos casos esperan al agente ─────────────────────────────────
+print("\nel tablero cuenta lo que espera al agente")
+with tempfile.TemporaryDirectory() as home:
+    corre(home, "tick", "--json")
+    ok("sin casos son 0", tablero(home).get("board", {}).get("agent_waiting") == 0,
+       f"{tablero(home).get('board')}")
+    c1 = str(js(home, "caso", "crear", "--chat", CHAT, "--stanza", "AW1",
+                "--actor", "automatizacion")[0]["case_id"])
+    js(home, "caso", "crear", "--chat", CHAT, "--stanza", "AW2", "--actor", "automatizacion")
+    n = tablero(home).get("board", {}).get("agent_waiting")
+    ok("cuenta los mismos casos que `pending --needs-agent`",
+       n == 2 and len(para_el_agente(home)) == 2, f"{n} {para_el_agente(home)}")
+    js(home, "caso", "mover", c1, "cerrado", "--motivo", "listo", "--actor", "dueno")
+    ok("y baja cuando uno se cierra",
+       tablero(home).get("board", {}).get("agent_waiting") == 1)
+
+
 # ── Lo que era la bandeja, en el tablero: atender ya y el proyecto a mano ──────────
 # La pestana "Bandeja" se fue. "Tomar" es ahora "Atender ahora" sobre un caso en
 # recibido o clasificado: lo marca para el agente, y `pending --needs-agent` lo cuenta.
