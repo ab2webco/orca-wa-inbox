@@ -43,6 +43,11 @@ const SALIDA = process.env.WA_INBOX_CAPTURAS ??
 const SOLO = (process.env.WA_INBOX_SOLO ?? '').split(',').map((x) => x.trim()).filter(Boolean)
 
 const ANCHOS = [1440, 768, 390, 320]
+// Para mirar un solo cambio sin sacar los demas: WA_INBOX_TEMA=dark, WA_INBOX_ANCHO=1440 y
+// WA_INBOX_IDIOMA=es dejan solo ese tema, ese ancho y ese idioma.
+const SOLO_TEMA = process.env.WA_INBOX_TEMA ?? ''
+const SOLO_ANCHO = Number(process.env.WA_INBOX_ANCHO ?? 0)
+const SOLO_IDIOMA = process.env.WA_INBOX_IDIOMA ?? ''
 
 // El panel saca el idioma de navigator.language, asi que el idioma de la captura es el
 // locale del contexto. Se fotografia en espanol y en ingles porque el defecto que esto
@@ -1133,6 +1138,50 @@ const PANELES = [
     })
   },
   {
+    // Un caso reabierto por un seguimiento: su historia partida en tramos con "Reabierto", el
+    // caso anterior enlazado, y la excepcion que ya no es una necesidad en Respondido.
+    nombre: 'tablero-nuevo-reabierto', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400,
+    datos: Object.assign(conTablero(tableroDe([
+      caso(41, 'clasificado', {
+        title: 'No funcionó lo que me mandaron ayer', prioridad: 'medium', related_case: 40,
+        summary: 'No funcionó lo que me mandaron ayer.', needs_agent: true,
+        actions: ['atender', 'ignorar', 'reclasificar', 'cerrar', 'proyecto'],
+        events: [
+          { de: null, a: 'recibido', actor: 'automatizacion', at: minutos(60 * 3) },
+          { de: 'recibido', a: 'clasificado', actor: 'jev', at: minutos(60 * 3 - 1) },
+          { de: 'clasificado', a: 'decision', actor: 'agente', at: minutos(60 * 2) },
+          { de: 'decision', a: 'respondido', actor: 'dueno', at: minutos(60 * 2 - 3) },
+          { de: 'respondido', a: 'recibido', actor: 'automatizacion', at: minutos(6) },
+          { de: 'recibido', a: 'clasificado', actor: 'jev', at: minutos(5) }] }),
+      caso(40, 'respondido', {
+        title: 'Pedido del reporte mensual', exceptions: ['commitment'],
+        actions: ['cerrar', 'reabrir'], updated_at: minutos(60 * 2) }),
+      caso(42, 'decision', { title: 'Piden su acceso al proyecto', exceptions: ['credential', 'commitment'],
+        proposal: { tipo: 'escalar', texto: null, version: 'v-esc' },
+        jev: { attention_class: 'access_or_credential', skip: false, flags: ['asks_for_credential'] },
+        actions: ['editar', 'autorizar', 'reclasificar', 'cerrar', 'proyecto'] })
+    ], { agent_waiting: 2 })), { activity: Object.assign({}, DATOS.activity, {
+      run: { state: 'ok', startedAt: '2026-09-17 14:01', endedAt: '2026-09-17 14:02',
+        looked: 3, pending: 0, reason: null } }) }),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="41"]').click()`
+  },
+  {
+    // La propuesta escalar sin texto: dice por que, y ofrece Autorizar y Editar y enviar.
+    nombre: 'tablero-nuevo-autorizar', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400,
+    datos: conTablero(tableroDe([
+      caso(42, 'decision', { title: 'Piden su acceso al proyecto', exceptions: ['credential', 'commitment'],
+        summary: 'Dice que necesita acceso al proyecto para revisar el reporte.',
+        proposal: { tipo: 'escalar', texto: null, version: 'v-esc' },
+        jev: { attention_class: 'access_or_credential', skip: false, flags: ['asks_for_credential'] },
+        actions: ['editar', 'autorizar', 'reclasificar', 'cerrar', 'proyecto'] })
+    ], { agent_waiting: 2 })),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="42"]').click()`
+  },
+  {
     nombre: 'config-sidecar-reintentar', archivo: 'config.html', anchos: ANCHOS,
     datos: Object.assign({}, DATOS, { sidecar: {
       connection: null, qr: null, exited: true, motivo: 'sidecar-no-arranco',
@@ -1150,8 +1199,11 @@ async function main() {
   let tomadas = 0
 
   for (const idioma of IDIOMAS) {
+   if (SOLO_IDIOMA && idioma.tag !== SOLO_IDIOMA) continue
    for (const tema of TEMAS) {
+    if (SOLO_TEMA && tema !== SOLO_TEMA) continue
     for (const ancho of ANCHOS) {
+      if (SOLO_ANCHO && ancho !== SOLO_ANCHO) continue
       const contexto = await navegador.newContext({
         viewport: { width: ancho, height: 900 },
         colorScheme: tema,

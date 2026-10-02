@@ -1237,9 +1237,9 @@ console.log('\nactivity.html — la corrida dice como le fue')
       looked: 3, pending: 0, reason: null } }
   }, 'es-419')
   await espera()
-  ok('lo sano dice sobre cuantas reviso y que no habia nada',
-    /3 conversaciones/.test(linea(sano.doc)) && /nada pendiente/.test(linea(sano.doc)),
-    linea(sano.doc))
+  ok('lo sano dice la hora de la ultima revision y no inventa pendientes',
+    /Ultima revision \d{2}:\d{2}/.test(linea(sano.doc)) &&
+    !/esperando|conversaciones/.test(linea(sano.doc)), linea(sano.doc))
 
   // Y con trabajo, el mismo renglon dice cuanto. El pendiente va tambien en la LISTA:
   // el renglon cuenta lo que se ve abajo, no lo que dejo anotado la corrida — que es
@@ -1256,8 +1256,8 @@ console.log('\nactivity.html — la corrida dice como le fue')
         looked: 3, pending: 2, reason: null } }
   }, 'es-419')
   await espera()
-  ok('con trabajo dice cuantas quedaron esperando',
-    /2 esperando/.test(linea(conTrabajo.doc)), linea(conTrabajo.doc))
+  ok('la cola vieja de mensajes ya no se cuenta en la linea',
+    !/2 esperando/.test(linea(conTrabajo.doc)), linea(conTrabajo.doc))
 
   // 2. Nunca corrio: el precheck salio 127, la automation no tiene proyecto, o esta
   //    pausada. Nada de eso llega hasta aca; lo unico que se sabe es que no hubo corrida.
@@ -1340,8 +1340,8 @@ console.log('\nactivity.html — la corrida dice como le fue')
     linea(viejo.doc) === '', linea(viejo.doc))
 
   // Los tres idiomas, porque media traduccion no se ve hasta que la ve el usuario.
-  for (const [locale, esperado] of [['en-US', /Checked 3 conversations/],
-    ['pt-BR', /Revisou 3 conversas/]]) {
+  for (const [locale, esperado] of [['en-US', /Last run \d{2}:\d{2}/],
+    ['pt-BR', /Ultima revisao \d{2}:\d{2}/]]) {
     const m = await montar('activity.html', {
       activity: { ...base, run: { state: 'ok', startedAt: AHORA, endedAt: AHORA,
         looked: 3, pending: 0, reason: null } }
@@ -1682,8 +1682,8 @@ console.log('\nel contrato CLI -> panel')
     JSON.parse(readFileSync(almacen, 'utf8')), 'es-419')
   await espera()
   const lineaOk = cerrada.doc.getElementById('runline').textContent
-  ok('al soltar el lock, el panel dice sobre cuantas reviso y que encontro',
-    /1 conversacion/.test(lineaOk) && /nada pendiente|esperando/.test(lineaOk),
+  ok('al soltar el lock, el panel dice la hora de la ultima revision y lo que encontro',
+    /Ultima revision/.test(lineaOk) && /nada pendiente|para el agente|su decision/.test(lineaOk),
     lineaOk.trim())
 
   // Y una corrida que fallo cambia el renglon, con el motivo tal cual lo dio el CLI.
@@ -3187,16 +3187,15 @@ console.log('\nactivity.html — la cabecera no puede contradecir a la lista')
   const { doc } = await montar('activity.html', { activity: actividad }, 'es-419')
   await espera()
   const linea = doc.getElementById('runline').textContent
-  ok('con dos pendientes a la vista, la cabecera NO dice "nada pendiente"',
-    !/nada pendiente/i.test(linea), linea)
-  ok('y dice cuantos hay de verdad', /2 esperando/i.test(linea), linea)
+  ok('con dos pendientes a la vista, la cabecera no cuenta la cola vieja',
+    !/nada pendiente|esperando/i.test(linea), linea)
 
   // Y cuando de verdad no hay nada, se sigue diciendo.
   const vacio = await montar('activity.html',
     { activity: Object.assign({}, actividad, { pending: [] }) }, 'es-419')
   await espera()
-  ok('sin pendientes si dice que no hay nada',
-    /nada pendiente/i.test(vacio.doc.getElementById('runline').textContent),
+  ok('sin pendientes tampoco inventa un numero',
+    !/esperando/i.test(vacio.doc.getElementById('runline').textContent),
     vacio.doc.getElementById('runline').textContent)
 }
 
@@ -3405,6 +3404,140 @@ console.log('\nactivity.html — tablero: es lo que se ve al abrir')
   doc.getElementById('refresh').click()
   await espera()
   ok('releer lo deja ahi', !!doc.querySelector('.card[data-case="1"]'))
+}
+
+console.log('\nactivity.html — la excepcion solo es una necesidad en Decision')
+{
+  const respondido = tarjeta({ case_id: 7, stage: 'respondido', exceptions: ['commitment'],
+    proposal: null, actions: ['cerrar', 'reabrir'] })
+  const enDecision = tarjeta({ case_id: 8, stage: 'decision', exceptions: ['money'] })
+  const { doc } = await abrirTablero({ board: tablero([respondido, enDecision]) })
+  const tarjetaR = doc.querySelector('.card[data-case="7"]')
+  ok('en Respondido la tarjeta no dice que necesita su decision',
+    !tarjetaR.querySelector('.card-exc') && !/Necesita su decision/.test(tarjetaR.textContent),
+    tarjetaR.textContent)
+  ok('en Decision si, con el motivo',
+    /Necesita su decision por: dinero/.test(
+      doc.querySelector('.card[data-case="8"] .card-exc')?.textContent || ''))
+  ok('y el detalle de Respondido tampoco lo presenta como una necesidad actual',
+    !/Necesita su decision/.test(abrirDetalle(doc, 7).textContent))
+}
+
+console.log('\nactivity.html — la linea de arriba cuenta casos, no la cola vieja')
+{
+  const AHORA = new Date().toISOString().slice(0, 16).replace('T', ' ')
+  const actividad = { syncedAt: AHORA, running: false, pending: [], recent: [],
+    mapped: 3, authorized: 3,
+    run: { state: 'ok', startedAt: AHORA, endedAt: AHORA, looked: 3, pending: 11,
+      reason: null } }
+  const linea = (d) => d.getElementById('runline').textContent.trim()
+  const con = async (board, idioma = 'es-419', act = actividad) =>
+    (await abrirTablero({ activity: act, board }, idioma)).doc
+
+  const dos = await con(tablero([tarjeta({ case_id: 1 })], { agent_waiting: 2 }))
+  ok('dice cuantos casos esperan al agente y cuantos su decision',
+    /2 casos para el agente/.test(linea(dos)) && /1 espera su decision/.test(linea(dos)),
+    linea(dos))
+  ok('lleva la hora de la ultima revision', /Ultima revision \d{2}:\d{2}/.test(linea(dos)),
+    linea(dos))
+  ok('y no usa la cola vieja (11 esperando, 3 conversaciones)',
+    !/11|esperando|conversaciones/.test(linea(dos)), linea(dos))
+
+  const uno = await con(tablero([tarjeta({ case_id: 1, stage: 'recibido' }),
+    tarjeta({ case_id: 2, stage: 'decision' }), tarjeta({ case_id: 3, stage: 'decision' })],
+  { agent_waiting: 1 }))
+  ok('uno y varios se dicen en singular y en plural',
+    /1 caso para el agente/.test(linea(uno)) && /2 esperan su decision/.test(linea(uno)),
+    linea(uno))
+
+  const soloDueno = await con(tablero([tarjeta({ case_id: 1 })], { agent_waiting: 0 }))
+  ok('un cero no se dice', !/agente/.test(linea(soloDueno)), linea(soloDueno))
+
+  const nada = await con(tablero([tarjeta({ case_id: 1, stage: 'respondido', proposal: null })],
+    { agent_waiting: 0 }))
+  ok('sin casos esperando dice que no hay nada pendiente',
+    /Ultima revision/.test(linea(nada)) && /nada pendiente/.test(linea(nada)), linea(nada))
+
+  const sinTablero = await con(null)
+  ok('sin tablero solo dice la hora, sin inventar numeros',
+    /Ultima revision/.test(linea(sinTablero)) && !/nada pendiente|agente|decision/.test(
+      linea(sinTablero)), linea(sinTablero))
+
+  const fallo = await con(tablero([tarjeta()], { agent_waiting: 2 }), 'es-419',
+    { ...actividad, run: { state: 'failed', startedAt: AHORA, endedAt: AHORA,
+      looked: null, pending: null, reason: 'sin cuota' } })
+  ok('una corrida que fallo se sigue diciendo con su motivo',
+    /fallo: sin cuota/.test(linea(fallo)), linea(fallo))
+
+  const en = await con(tablero([tarjeta({ case_id: 1 })], { agent_waiting: 2 }), 'en-US')
+  ok('en ingles', /Last run \d{2}:\d{2}/.test(linea(en)) && /2 cases for the agent/.test(linea(en))
+    && /1 waiting for your decision/.test(linea(en)), linea(en))
+  const pt = await con(tablero([tarjeta({ case_id: 1 })], { agent_waiting: 2 }), 'pt-BR')
+  ok('y en portugues', /Ultima revisao \d{2}:\d{2}/.test(linea(pt))
+    && /2 casos para o agente/.test(linea(pt)) && /1 aguarda sua decisao/.test(linea(pt)),
+  linea(pt))
+}
+
+console.log('\nactivity.html — la historia marca cada reapertura')
+{
+  const ev = (de, a, actor, ms) => ({ de, a, actor, at: hace(ms) })
+  const reabierta = tarjeta({ case_id: 9, stage: 'recibido', proposal: null, exceptions: [],
+    actions: ['atender', 'ignorar', 'cerrar'],
+    events: [ev(null, 'recibido', 'automatizacion', 3 * 3600000),
+      ev('recibido', 'clasificado', 'jev', 3 * 3600000 - 1000),
+      ev('clasificado', 'decision', 'agente', 2.9 * 3600000),
+      ev('decision', 'respondido', 'trabajador', 2.8 * 3600000),
+      ev('respondido', 'recibido', 'automatizacion', 5 * 60000),
+      ev('recibido', 'clasificado', 'jev', 4 * 60000)] })
+  const { doc } = await abrirTablero({ board: tablero([reabierta]) })
+  const d = abrirDetalle(doc, 9)
+  const reabierto = d.querySelector('.hist-reabierto')
+  ok('la historia tiene una marca "Reabierto" con su hora',
+    !!reabierto && /Reabierto/.test(reabierto.textContent) && /hace/.test(reabierto.textContent),
+    reabierto?.textContent)
+  const previa = d.querySelector('details.hist-previa')
+  ok('lo anterior queda detras de "Ver historia anterior"',
+    !!previa && /Ver historia anterior/.test(previa.querySelector('summary').textContent))
+  ok('lo anterior no esta abierto', !previa.open)
+  ok('lo nuevo se ve primero y fuera de lo plegado',
+    /Respondido → Recibido/.test(d.querySelector('.det-hist').textContent)
+    && !previa.contains(d.querySelector('.det-hist')))
+  ok('y lo viejo (la decision del agente) esta dentro de lo plegado',
+    /Su decision/.test(previa.textContent) && /el agente/.test(previa.textContent))
+
+  const limpia = tarjeta({ case_id: 10, stage: 'clasificado', proposal: null, exceptions: [],
+    events: [ev(null, 'recibido', 'automatizacion', 60000), ev('recibido', 'clasificado', 'jev', 30000)] })
+  const sola = await abrirTablero({ board: tablero([limpia]) })
+  const ds = abrirDetalle(sola.doc, 10)
+  ok('un caso que nunca se reabrio no lleva marca ni pliegue',
+    !ds.querySelector('.hist-reabierto') && !ds.querySelector('details.hist-previa')
+    && ds.querySelectorAll('.det-hist li').length === 2)
+}
+
+console.log('\nactivity.html — una propuesta escalar sin texto dice por que')
+{
+  const escalar = tarjeta({ case_id: 11, stage: 'decision', exceptions: ['credential', 'commitment'],
+    proposal: { tipo: 'escalar', texto: null, version: 'v-esc' },
+    jev: { attention_class: 'access_or_credential', flags: ['asks_for_credential'], skip: false },
+    actions: ['editar', 'reclasificar', 'cerrar'] })
+  const { doc } = await abrirTablero({ board: tablero([escalar]) })
+  const d = abrirDetalle(doc, 11)
+  ok('no hay una caja de propuesta vacia', !d.querySelector('.det-prop .card-prop')
+    && !d.querySelector('.det-prop'), d.innerHTML.slice(0, 400))
+  const aviso = d.querySelector('.det-escalar')
+  ok('dice que el agente lo dejo a su decision',
+    !!aviso && /dejo a su decision/.test(aviso.textContent), aviso?.textContent)
+  ok('con el motivo: las excepciones y lo que Jev vio',
+    /credencial/i.test(aviso?.textContent || '') && /compromiso/i.test(aviso?.textContent || '')
+    && /Jev/.test(aviso?.textContent || ''), aviso?.textContent)
+  const boton = d.querySelector('button[data-accion="editar"]')
+  ok('y ofrece Editar y enviar para responder', !!boton && /Editar y enviar/.test(boton.textContent))
+  ok('en la tarjeta tampoco hay una caja vacia',
+    !doc.querySelector('.card[data-case="11"] .card-prop'))
+  const conTexto = await abrirTablero({ board: tablero([tarjeta({ case_id: 12 })]) })
+  ok('una propuesta con texto sigue mostrandose igual',
+    /Le confirmamos el precio vigente/.test(abrirDetalle(conTexto.doc, 12).textContent)
+    && !abrirDetalle(conTexto.doc, 12).querySelector('.det-escalar'))
 }
 
 console.log('\nactivity.html — tablero: columnas')
@@ -3840,6 +3973,74 @@ const hastaPanel = async (cond, ms = 6000) => {
   const fin = Date.now() + ms
   while (Date.now() < fin) { if (cond()) return true; await new Promise((r) => setTimeout(r, 50)) }
   return false
+}
+
+console.log('\nactivity.html — un caso es un pedido: "Caso anterior"')
+{
+  const anterior = tarjeta({ case_id: 30, stage: 'respondido', proposal: null, exceptions: [],
+    actions: ['cerrar', 'reabrir'], title: 'Pedido de la manana' })
+  const nuevo = tarjeta({ case_id: 31, stage: 'clasificado', proposal: null, exceptions: [],
+    related_case: 30, actions: ['atender', 'cerrar'], title: 'Otro pedido distinto' })
+  const { doc } = await abrirTablero({ board: tablero([anterior, nuevo]) })
+  const d = abrirDetalle(doc, 31)
+  const enlace = d.querySelector('button[data-relacionado="30"]')
+  ok('el detalle dice cual es el caso anterior, con un enlace',
+    !!enlace && /Caso anterior/.test(d.textContent) && /#30/.test(enlace.textContent), d.textContent.slice(0, 300))
+  enlace.click()
+  ok('el enlace abre el detalle de ese caso', !!detalle(doc).dataset.case && detalle(doc).dataset.case === '30',
+    detalle(doc).dataset.case)
+  ok('un caso sin anterior no trae la linea', !/Caso anterior/.test(abrirDetalle(doc, 30).textContent))
+  const fuera = await abrirTablero({ board: tablero([nuevo]) })
+  const df = abrirDetalle(fuera.doc, 31)
+  ok('si el anterior ya no esta en el tablero se dice igual, sin enlace',
+    /Caso anterior: #30/.test(df.textContent) && !df.querySelector('button[data-relacionado]'),
+    df.textContent.slice(0, 300))
+  const en = await abrirTablero({ board: tablero([nuevo]) }, 'en-US')
+  ok('en ingles y portugues', /Previous case/.test(abrirDetalle(en.doc, 31).textContent))
+  const pt = await abrirTablero({ board: tablero([nuevo]) }, 'pt-BR')
+  ok('en portugues', /Caso anterior/.test(abrirDetalle(pt.doc, 31).textContent))
+}
+
+console.log('\nactivity.html — tablero: Autorizar')
+{
+  const escalado = tarjeta({ case_id: 21, stage: 'decision', exceptions: ['credential', 'commitment'],
+    proposal: { tipo: 'escalar', texto: null, version: 'v-esc' },
+    actions: ['editar', 'autorizar', 'reclasificar', 'cerrar'] })
+  const w = conWorker({ ok: true, code: 'autorizado', agent: 'launched' })
+  const { doc } = await abrirConWorker([escalado,
+    tarjeta({ case_id: 22, stage: 'decision', exceptions: ['money'],
+      actions: ['enviar', 'editar', 'autorizar', 'reclasificar', 'cerrar'] }),
+    tarjeta({ case_id: 23, stage: 'decision', exceptions: [], proposal: { tipo: 'escalar', texto: null, version: 'v3' },
+      actions: ['editar', 'autorizar', 'cerrar'] }),
+    tarjeta({ case_id: 24, stage: 'clasificado', exceptions: ['credential'], proposal: null,
+      actions: ['autorizar', 'atender', 'cerrar'] })], w)
+  const d = abrirDetalle(doc, 21)
+  const boton = d.querySelector('button[data-accion="autorizar"]')
+  ok('un caso en decision con excepciones y sin texto ofrece Autorizar',
+    !!boton && /Autorizar/.test(boton.textContent), boton?.outerHTML)
+  ok('con una linea que dice que el agente podra atenderlo y que la respuesta se vuelve a pedir',
+    /agente podra atenderlo/.test(d.textContent) && /dinero, credenciales o fechas/.test(d.textContent) &&
+    /se la vuelve a pedir/.test(d.textContent), d.textContent.slice(-300))
+  ok('si hay una respuesta lista para enviar no se ofrece (se manda o se edita)',
+    !abrirDetalle(doc, 22).querySelector('button[data-accion="autorizar"]'))
+  ok('sin excepciones tampoco', !abrirDetalle(doc, 23).querySelector('button[data-accion="autorizar"]'))
+  ok('ni fuera de decision', !abrirDetalle(doc, 24).querySelector('button[data-accion="autorizar"]'))
+  abrirDetalle(doc, 21).querySelector('button[data-accion="autorizar"]').click()
+  await hastaPanel(() => w.pedidos.length > 0)
+  const p = w.pedidos[0]
+  ok('el clic pide `autorizar` sobre ese caso, y nada mas',
+    p && p.action === 'autorizar' && p.caseId === 21 && !('texto' in p) && !('actor' in p),
+    JSON.stringify(p))
+  await hastaPanel(() => /agente|proxima/i.test(abrirDetalle(doc, 21)?.textContent || ''))
+  ok('y dice que el agente salio', /lanz|salio|corrida|agente/i.test(
+    doc.querySelector('#board-detail .card-msg')?.textContent || ''),
+  doc.querySelector('#board-detail .card-msg')?.textContent)
+  const en = await abrirTablero({ board: tablero([escalado]) }, 'en-US')
+  ok('en ingles dice Authorize', /Authorize/.test(
+    abrirDetalle(en.doc, 21).querySelector('button[data-accion="autorizar"]')?.textContent || ''))
+  const pt = await abrirTablero({ board: tablero([escalado]) }, 'pt-BR')
+  ok('y en portugues Autorizar', /Autorizar/.test(
+    abrirDetalle(pt.doc, 21).querySelector('button[data-accion="autorizar"]')?.textContent || ''))
 }
 
 console.log('\nactivity.html — tablero: Enviar, de punta a punta')
@@ -4427,7 +4628,7 @@ console.log('\nactivity.html — tablero: la ultima corrida del agente, en una l
     run: { state: 'ok', startedAt: AHORA, endedAt: AHORA, looked: 2, pending: 0, reason: null } } })
   const linea = doc.getElementById('runline')
   ok('la linea de la corrida vive en el tablero', doc.getElementById('view-board').contains(linea) &&
-    /2 conversaciones/.test(linea.textContent), linea.textContent)
+    /Ultima revision/.test(linea.textContent), linea.textContent)
 }
 
 console.log('\nactivity.html — tablero: composicion (los anchos los mira shots)')

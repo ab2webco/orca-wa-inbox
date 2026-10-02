@@ -44,7 +44,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from wa_settings import (  # noqa: E402
     CONFIG_NUMERICOS, CONFIG_OPCIONES, PANEL_SETTINGS, PLUGIN_ID,
-    PLUGIN_ID_ANTERIOR, orca_cli_path, orca_runtime_home, plugin_store_path,
+    PLUGIN_ID_ANTERIOR, orca_cli_path, orca_env, orca_runtime_home, plugin_store_path,
     plugin_store_raw,
     plugin_store_targets, settings_from_plugin, user_data_roots, valida_ajuste)
 import wa_store  # noqa: E402  (solo lectura: de capture.db se lee la linea activa)
@@ -373,6 +373,13 @@ create table if not exists caso (
   jev text,
   -- 1 cuando Jev o una regla dicen que esto necesita al agente (lenguaje).
   necesita_agente integer not null default 0,
+  -- Lo que el dueno autorizo (JSON): {"excepciones": [...], "mensajes": [stanza_id...]}.
+  -- Esas excepciones no vuelven por juzgar OTRA VEZ esos mismos mensajes; un mensaje nuevo
+  -- se juzga de cero.
+  dispensa text,
+  -- El caso anterior del mismo chat (un caso es un pedido: lo nuevo abre otro y apunta al
+  -- que ya estaba).
+  relacionado integer,
   created_at text not null,
   updated_at text not null
 );
@@ -1090,6 +1097,10 @@ def migrate(con):
     if "necesita_agente" not in caso_cols:
         con.execute("alter table caso add column necesita_agente integer not null "
                     "default 0")
+    if "dispensa" not in caso_cols:
+        con.execute("alter table caso add column dispensa text")
+    if "relacionado" not in caso_cols:
+        con.execute("alter table caso add column relacionado integer")
     # T3: el veredicto entero de Jev, cacheado junto a su clase.
     if "jev" not in {r["name"] for r in con.execute("pragma table_info(juicio)")}:
         con.execute("alter table juicio add column jev text")
@@ -2344,6 +2355,15 @@ def caso_mover(con, caso, hacia, actor, detalle="", **campos):
         # Entrar de nuevo a estas etapas es empezar otra decision: la firma de la
         # vuelta anterior no vale para esta, aunque la propuesta haya quedado igual.
         campos.setdefault("propuesta_aprobada", None)
+    if hacia == "recibido" and caso["etapa"] != "recibido":
+        # Reabrir es empezar otra decision: la propuesta de la vuelta anterior (la que ya
+        # salio, por ejemplo) no puede quedar en la tarjeta como si esperara al dueno, ni
+        # su version como la vigente. La version queda en el evento; el texto, en la
+        # bandeja de salida, y la misma peticion `caso-<id>-<version>` no reenvia.
+        if caso.get("propuesta_version"):
+            detalle = f"{detalle} · propuesta {caso['propuesta_version'][:12]} retirada"
+        campos.setdefault("propuesta", None)
+        campos.setdefault("propuesta_version", None)
     sets = dict(campos, etapa=hacia, updated_at=momento)
     con.execute(f"update caso set {', '.join(f'{k}=?' for k in sets)} where case_id=?",
                 (*sets.values(), caso["case_id"]))
@@ -2355,14 +2375,15 @@ def caso_tocar(con, caso, actor, detalle, **campos):
     caso_mover(con, caso, caso["etapa"], actor, detalle, **campos)
 
 
-def caso_nuevo(con, chat_jid, actor, titulo=None, stanzas=(), detalle=""):
-    """Un caso en recibido con sus mensajes y su evento de nacimiento. Sin commit."""
+def caso_nuevo(con, chat_jid, actor, titulo=None, stanzas=(), detalle="", relacionado=None):
+    """Un caso en recibido con sus mensajes y su evento de nacimiento. Sin commit.
+    `relacionado` es el caso anterior del mismo chat, si lo hay."""
     momento = ahora_caso()
     cuenta = cuenta_activa()
     case_id = con.execute(
-        "insert into caso (account, chat_jid, etapa, titulo, created_at, updated_at) "
-        "values (?,?,'recibido',?,?,?)",
-        (cuenta, chat_jid, titulo, momento, momento)).lastrowid
+        "insert into caso (account, chat_jid, etapa, titulo, relacionado, created_at, "
+        "updated_at) values (?,?,'recibido',?,?,?,?)",
+        (cuenta, chat_jid, titulo, relacionado, momento, momento)).lastrowid
     for stanza in stanzas:
         con.execute("insert into caso_mensaje (account, stanza_id, case_id, at) "
                     "values (?,?,?,?)", (cuenta, stanza, case_id, momento))
@@ -2430,6 +2451,38 @@ def cmd_caso_atender(con, a):
                               f"{' or '.join(ETAPAS_ATENDER)} can be handed to the agent")
     caso_tocar(con, caso, a.actor, "the owner asked the agent to handle it now",
                necesita_agente=1)
+    con.commit()
+    return [caso_fila(con, caso_de(con, a.id))]
+
+
+def cmd_caso_autorizar(con, a):
+    """El dueno dice "esto lo puede ver el agente": las excepciones de ENTRADA de un caso en
+    decision (un falso positivo de Jev, o el piso fijo sobre un "acceso" a un proyecto) se
+    dispensan. Deja dicho cuales en el evento, las quita del caso, lo marca para el agente
+    y lo devuelve a clasificado sin la propuesta que no iba a ninguna parte.
+
+    Solo lo dice el dueno. Lo que el agente redacte despues sigue pasando por el piso de
+    SALIDA: con dinero, una credencial o un compromiso se queda en decision esperando el
+    envio del dueno. Esas excepciones no vuelven por juzgar otra vez los mismos mensajes;
+    un mensaje nuevo se juzga de cero."""
+    if a.actor != "dueno":
+        caso_falla("E_ARGS", "authorizing is the owner's call: --actor must be dueno")
+    caso_toma(con)
+    caso = caso_de(con, a.id)
+    excepciones = json.loads(caso["excepciones"]) if caso.get("excepciones") else []
+    if caso["etapa"] != "decision" or not excepciones:
+        caso_falla("E_STAGE", f"case #{a.id} is in {caso['etapa']}"
+                              f"{'' if excepciones else ' with no exceptions'}: only a case in "
+                              f"decision that carries exceptions can be authorized")
+    previa = json.loads(caso["dispensa"]) if caso.get("dispensa") else {}
+    mensajes = [r["stanza_id"] for r in con.execute(
+        "select stanza_id from caso_mensaje where case_id=? order by at, stanza_id", (a.id,))]
+    dispensa = {"excepciones": [e for e in wa_jev.ORDEN_EXCEPCIONES
+                                if e in set(previa.get("excepciones", [])) | set(excepciones)],
+                "mensajes": sorted(set(previa.get("mensajes", [])) | set(mensajes))}
+    caso_mover(con, caso, "clasificado", "dueno", "autorizadas: " + ", ".join(excepciones),
+               excepciones=None, necesita_agente=1, propuesta=None, propuesta_version=None,
+               dispensa=json.dumps(dispensa, sort_keys=True))
     con.commit()
     return [caso_fila(con, caso_de(con, a.id))]
 
@@ -2691,10 +2744,19 @@ def caso_abierto_de_chat(con, chat, horas, excluir=("cerrado",)):
     return dict(row) if row else None
 
 
-def caso_asigna(con, stanza, chat, actor):
+def ultimo_caso_de_chat(con, chat):
+    """El id del caso mas reciente de la conversacion, cerrado o no, o None."""
+    fila = con.execute("select max(case_id) n from caso where account=? and chat_jid=?",
+                       (cuenta_activa(), chat)).fetchone()
+    return fila["n"]
+
+
+def caso_asigna(con, stanza, chat, actor, aparte=None):
     """La regla de agrupacion, sin transaccion propia: la comparten el comando y
     `ingest`, y cada uno toma la base y confirma a su manera. Devuelve (case_id, que):
-    `ya` si el mensaje ya tenia caso, `nuevo` si abrio uno, `unido` si se sumo a uno."""
+    `ya` si el mensaje ya tenia caso, `nuevo` si abrio uno, `unido` si se sumo a uno.
+    Con `aparte` (el id de un caso abierto) abre uno nuevo aunque ese seguiria agrupando:
+    un pedido distinto no se mezcla con el de antes, y el nuevo apunta al otro."""
     ya = caso_de_mensaje(con, stanza)
     if ya:
         caso = caso_de(con, ya)
@@ -2702,9 +2764,10 @@ def caso_asigna(con, stanza, chat, actor):
             caso_falla("E_ARGS", f"message {stanza} already belongs to case #{ya}, of another chat")
         return ya, "ya"
     caso = caso_abierto_de_chat(con, chat, ventana_casos(con))
-    if not caso:
-        return caso_nuevo(con, chat, actor, stanzas=[stanza],
-                          detalle=f"mensaje {stanza}"), "nuevo"
+    if not caso or aparte is not None:
+        return caso_nuevo(con, chat, actor, stanzas=[stanza], detalle=f"mensaje {stanza}",
+                          relacionado=aparte if aparte is not None
+                          else ultimo_caso_de_chat(con, chat)), "nuevo"
     caso_suma_mensaje(con, caso, stanza, actor)
     return caso["case_id"], "unido"
 
@@ -2734,11 +2797,55 @@ def cmd_caso_listar(con, a):
         sql + " order by updated_at desc, case_id desc", params).fetchall()]
 
 
+def caso_hilo(caso, stanzas):
+    """El hilo de un caso, para quien lo lee: sus mensajes y las respuestas ENVIADAS al
+    chat (`from_me`) intercaladas, por la hora del mensaje y no por cuando se agrupo, y con
+    el orden de captura como desempate (dos mensajes del mismo segundo). Todo mensaje de
+    antes de la ultima respuesta enviada lleva `respondido`: es contexto, no algo que
+    atender otra vez. None si no hay almacen de mensajes: `caso ver` sigue sirviendo."""
+    if not stanzas:
+        return None
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return None
+    try:
+        marcas = ",".join("?" * len(stanzas))
+        propios = fuente.execute(
+            f"select min(ts) t from mensaje where account=? and chat_jid=? and "
+            f"revocado=0 and stanza_id in ({marcas})",
+            (caso["account"], caso["chat_jid"], *stanzas)).fetchone()
+        if propios is None or propios["t"] is None:
+            return None
+        filas = fuente.execute(
+            f"select rowid r, stanza_id, ts, from_me, sender_name, sender_jid, body, "
+            f"media_path from mensaje where account=? and chat_jid=? and revocado=0 and "
+            f"(stanza_id in ({marcas}) or (from_me=1 and ts >= ?)) order by ts, rowid",
+            (caso["account"], caso["chat_jid"], *stanzas, propios["t"])).fetchall()
+    except sqlite3.Error:
+        return None
+    finally:
+        fuente.close()
+    ultima = max((i for i, r in enumerate(filas) if r["from_me"]), default=-1)
+    return [{"stanza_id": r["stanza_id"], "date": wa_store.ts(r["ts"]),
+             "from_me": bool(r["from_me"]), "sender": wa_store.quien(r),
+             "text": (r["body"] or "").replace("\n", " "), "media": r["media_path"] or None,
+             "en_caso": r["stanza_id"] in stanzas,
+             "respondido": bool(i < ultima and not r["from_me"])}
+            for i, r in enumerate(filas)]
+
+
 def cmd_caso_ver(con, a):
     caso = caso_fila(con, caso_de(con, a.id))
     caso["mensajes"] = [dict(r) for r in con.execute(
         "select stanza_id, at from caso_mensaje where case_id=? order by at, stanza_id",
         (a.id,))]
+    hilo = caso_hilo(caso, [m["stanza_id"] for m in caso["mensajes"]])
+    if hilo is not None:
+        caso["hilo"] = hilo
+        # Los mensajes del caso, en el mismo orden de llegada que el hilo.
+        orden = {x["stanza_id"]: i for i, x in enumerate(hilo)}
+        caso["mensajes"].sort(key=lambda m: orden.get(m["stanza_id"], len(orden)))
     caso["eventos"] = [dict(r) for r in con.execute(
         "select id, de, a, actor, detalle, at from caso_evento where case_id=? "
         "order by id", (a.id,))]
@@ -2868,6 +2975,83 @@ def veredicto_de(m, decision, con=None):
     return veredicto_de_jev(m, juicio_jev) if juicio_jev is not None else None
 
 
+# Una rafaga: los mensajes de un chat que llegan a menos de esto uno del otro se juzgan
+# como UNA cosa. Juzgarlos uno por uno parte un pedido (un enlace pelado, una nota y
+# "revisa este caso") y cierra en silencio la pieza que Jev no entiende sola.
+RAFAGA_S = 180
+# Lo que va a Jev de una rafaga: los textos en orden, uno por linea.
+SEPARADOR_RAFAGA = "\n"
+KINDS_DE_ATENCION = ("directo", "respuesta", "mencion")
+
+
+def antiguedad_s(sello):
+    """Segundos entre dos sellos "%Y-%m-%d %H:%M" no hace falta: el sello como epoch, o
+    None si no se lee."""
+    try:
+        return time.mktime(time.strptime(str(sello), "%Y-%m-%d %H:%M"))
+    except (TypeError, ValueError):
+        return None
+
+
+def agrupa_rafagas(mensajes):
+    """Del mas viejo al mas nuevo: las rafagas de cada chat, en el orden en que empiezan.
+    Un mensaje se suma a la rafaga abierta de su chat si llego a lo mas RAFAGA_S despues
+    del anterior; si no, abre otra. Una fecha que no se lee es una rafaga de uno."""
+    rafagas, abiertas = [], {}
+    for m in mensajes:
+        chat, cuando = m.get("chat_jid"), antiguedad_s(m.get("date"))
+        actual = abiertas.get(chat)
+        if (actual is not None and cuando is not None and actual["ultimo"] is not None
+                and 0 <= cuando - actual["ultimo"] <= RAFAGA_S):
+            actual["mensajes"].append(m)
+            actual["ultimo"] = cuando
+            continue
+        actual = {"mensajes": [m], "ultimo": cuando}
+        abiertas[chat] = actual
+        rafagas.append(actual["mensajes"])
+    return rafagas
+
+
+def mensaje_de_rafaga(rafaga):
+    """El mensaje que se le pide a Jev por una rafaga de mas de uno: el texto junto y en
+    orden, el mas atento de sus tipos y la llave de cache del primero. Los adjuntos solo
+    cuentan si no hay texto en ninguno."""
+    primero = rafaga[0]
+    textos = [(m.get("text") or "").strip() for m in rafaga]
+    kind = next((m.get("kind") for m in rafaga if m.get("kind") in KINDS_DE_ATENCION),
+                primero.get("kind"))
+    media = next((m.get("media") for m in rafaga if m.get("media")), None)
+    return dict(primero, text=SEPARADOR_RAFAGA.join(t for t in textos if t),
+                kind=kind, media=media, juicio=None)
+
+
+def con_respuesta(con, m, horas):
+    """El mensaje, con la ultima respuesta enviada a su chat si el caso de ahora esta
+    respondido: es el contexto con que Jev lo distingue de un pedido nuevo."""
+    caso = caso_abierto_de_chat(con, m.get("chat_jid"), horas)
+    if not caso or caso["etapa"] != "respondido" or not caso.get("propuesta"):
+        return m
+    try:
+        texto = json.loads(caso["propuesta"]).get("respuesta")
+    except (TypeError, ValueError, AttributeError):
+        return m
+    return dict(m, respuesta_previa=texto) if texto else m
+
+
+def caso_de_rafaga_reciente(con, chat):
+    """El caso del chat que se abrio o se reabrio hace menos de RAFAGA_S y sigue esperando
+    (recibido, clasificado o decision), o None. Es lo que une un mensaje que llega solo,
+    en otra corrida, a lo que su rafaga ya abrio."""
+    desde = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - RAFAGA_S))
+    fila = con.execute(
+        "select c.* from caso c where c.account=? and c.chat_jid=? and c.etapa in "
+        "('recibido','clasificado','decision') and exists (select 1 from caso_evento e "
+        "where e.case_id=c.case_id and e.a='recibido' and (e.de is null or e.de <> 'recibido') "
+        "and e.at >= ?) order by c.updated_at desc, c.case_id desc limit 1",
+        (cuenta_activa(), chat, desde)).fetchone()
+    return dict(fila) if fila else None
+
+
 def ingest_lee():
     """Lo que `wa-read inbox` le daria al agente, con la misma funcion y los mismos
     filtros, pero sin un proceso mas por el medio. Solo lectura: de capture.db no se
@@ -2927,15 +3111,28 @@ def caso_clasifica(con, case_id, veredicto):
     return False
 
 
-def caso_marca_jev(con, case_id, juicio):
+def excepciones_sin_dispensa(caso, excepciones, stanza):
+    """Las excepciones de ENTRADA de un mensaje, menos las que el dueno ya autorizo para
+    ese mismo mensaje. Sin `stanza` (lo que sale, el piso de salida) no se quita nada."""
+    try:
+        dispensa = json.loads(caso.get("dispensa") or "null")
+    except (TypeError, ValueError):
+        dispensa = None
+    if not stanza or not isinstance(dispensa, dict) or stanza not in dispensa.get("mensajes", []):
+        return list(excepciones)
+    return [e for e in excepciones if e not in dispensa.get("excepciones", [])]
+
+
+def caso_marca_jev(con, case_id, juicio, stanza=None):
     """Lo que Jev dijo, en el caso: las excepciones se suman (nunca se borran: un caso que
     tuvo una no sale solo), la marca de agente solo se prende, y el resumen para la
     tarjeta es el del ultimo veredicto. Deja evento de jev cuando cambia lo que decide
     algo —una excepcion o el agente—; el resumen solo es lo que se muestra. Sin commit."""
     caso = caso_de(con, case_id)
     previas = json.loads(caso["excepciones"]) if caso.get("excepciones") else []
+    nuevas_jev = excepciones_sin_dispensa(caso, juicio["exceptions"], stanza)
     excepciones = [e for e in wa_jev.ORDEN_EXCEPCIONES
-                   if e in set(previas) | set(juicio["exceptions"])]
+                   if e in set(previas) | set(nuevas_jev)]
     agente = int(bool(caso.get("necesita_agente")) or bool(juicio["needs_agent"]))
     resumen = json.dumps({"attention_class": juicio.get("attention_class"),
                           "flags": juicio["flags"], "skip": juicio["skip"]},
@@ -2950,7 +3147,7 @@ def caso_marca_jev(con, case_id, juicio):
         con.execute("update caso set jev=? where case_id=?", (resumen, case_id))
 
 
-def caso_marca_regla(con, case_id, excepciones):
+def caso_marca_regla(con, case_id, excepciones, stanza=None):
     """El piso fijo (T19), en el caso: las excepciones que dio `wa_reglas` se suman a las
     que ya tenia (las de Jev o las de antes) y nunca se borran, igual que en
     `caso_marca_jev`. Deja evento de la regla fija solo cuando cambia algo, y el evento
@@ -2958,6 +3155,9 @@ def caso_marca_regla(con, case_id, excepciones):
     if not excepciones:
         return False
     caso = caso_de(con, case_id)
+    excepciones = excepciones_sin_dispensa(caso, excepciones, stanza)
+    if not excepciones:
+        return False
     previas = json.loads(caso["excepciones"]) if caso.get("excepciones") else []
     unidas = [e for e in wa_jev.ORDEN_EXCEPCIONES if e in set(previas) | set(excepciones)]
     if unidas == previas:
@@ -2966,6 +3166,84 @@ def caso_marca_regla(con, case_id, excepciones):
     caso_tocar(con, caso, "regla", "regla fija: excepciones " + ", ".join(nuevas),
                excepciones=json.dumps(unidas))
     return True
+
+
+# Las etapas a las que un caso reabierto por un mensaje vuelve si Jev dice que el mensaje
+# era charla ajena. `listo` no esta: un mensaje no lo reabre (no sale de ahi a recibido).
+ETAPAS_QUE_VUELVEN = ("respondido",)
+CLASES_CHARLA = ("unrelated_chatter", "pleasantry")
+# Un caso es un pedido. Tras una respuesta, Jev no tiene una clase de "seguimiento": lo que
+# tiene es la clase del mensaje, leida con la respuesta ya enviada de contexto. Aqui se
+# traduce: `bug_report` ("no funciono") y `status_question` ("como va") son el seguimiento de
+# lo que ya se contesto y reabren el caso; la charla y los saludos se quedan en el caso sin
+# reabrirlo; cualquier otra clase de pedido es uno nuevo, y las que no dicen nada
+# (`unclear`, `no_match`, audio sin texto) o la falta de Jev, tambien: mejor una tarjeta
+# limpia que una mezclada.
+CLASES_SEGUIMIENTO = ("bug_report", "status_question")
+CLASES_SIN_PEDIDO = (None, "unclear", "no_match", "empty_or_audio_only")
+LARGO_RESUMEN_REABIERTO = 280
+
+
+def es_charla_ajena(juicio):
+    """Si Jev dijo que el mensaje no pide nada: `skip`, o charla ajena o un saludo sin
+    marcas, sin excepciones y sin agente. Sin veredicto (Jev apagado o en error) no lo es:
+    ante la duda el caso se queda reabierto."""
+    if not juicio:
+        return False
+    if juicio.get("skip"):
+        return True
+    return (juicio.get("attention_class") in CLASES_CHARLA and not juicio.get("flags")
+            and not juicio.get("exceptions") and not juicio.get("needs_agent"))
+
+
+def continuidad(veredicto):
+    """Que es un mensaje respecto del caso que ya se respondio: `charla`, `seguimiento` o
+    `nuevo` (un pedido distinto, o nada que lo diga: sin Jev, o una clase vacia)."""
+    juicio = veredicto.get("jev") if veredicto else None
+    if not juicio:
+        return "nuevo"
+    if es_charla_ajena(juicio):
+        return "charla"
+    if juicio.get("attention_class") in CLASES_SEGUIMIENTO:
+        return "seguimiento"
+    return "nuevo"
+
+
+def es_pedido_nuevo(veredicto):
+    """Si Jev dijo EXPLICITAMENTE que es un pedido distinto (una clase de pedido, no la
+    falta de clase): lo que decide abrir otro caso aunque el de trabajo siga abierto."""
+    juicio = veredicto.get("jev") if veredicto else None
+    return bool(juicio) and continuidad(veredicto) == "nuevo" \
+        and juicio.get("attention_class") not in CLASES_SIN_PEDIDO
+
+
+def caso_devuelve(con, caso, previo, juicio):
+    """Deja el caso donde estaba antes del mensaje, con lo que tenia (la propuesta que ya
+    salio y su firma), y el evento que dice por que. No pasa por `caso_valida`: no es una
+    transicion que el dueno o el agente puedan pedir, es deshacer la reapertura."""
+    motivo = "skip" if juicio.get("skip") else juicio.get("attention_class")
+    caso_mover(con, caso, previo["etapa"], "jev",
+               f"jev {motivo}: el mensaje no pide nada, sigue {previo['etapa']}",
+               propuesta=previo["propuesta"], propuesta_version=previo["propuesta_version"],
+               propuesta_aprobada=previo["propuesta_aprobada"])
+
+
+def caso_retitula(con, case_id, previo, stanza, texto):
+    """Un caso reabierto por un mensaje nuevo muestra ese mensaje: es lo que espera, y el
+    titulo de la primera vez lo esconde. El titulo es el del primer mensaje (enmascarado y
+    corto, como `titulos_de_mensajes`) y el resumen es el texto enmascarado; con una
+    credencial en el caso no hay resumen. El titulo de antes queda en el evento."""
+    caso = caso_de(con, case_id)
+    limpio = " ".join(wa_jev.mask(texto).split())
+    if not limpio:
+        return
+    titulo = limpio[:LARGO_TITULO].rstrip() + ("…" if len(limpio) > LARGO_TITULO else "")
+    credencial = "credential" in _lista_json(caso.get("excepciones"))
+    resumen = None if credencial else limpio[:LARGO_RESUMEN_REABIERTO]
+    detalle = f"mensaje {stanza}: titulo y resumen nuevos"
+    if previo.get("titulo"):
+        detalle += f" · titulo anterior: {previo['titulo']}"
+    caso_tocar(con, caso, "automatizacion", detalle, titulo=titulo, resumen=resumen)
 
 
 def ingest_mensaje(con, m, veredicto, horas):
@@ -2986,7 +3264,24 @@ def ingest_mensaje(con, m, veredicto, horas):
             con.rollback()
             return hecho, None
         accion = veredicto["accion"] if veredicto else None
-        if accion == "cerrar" and not (suelto and not veredicto.get("dueno")):
+        reciente = (caso_de_rafaga_reciente(con, chat)
+                    if accion == "cerrar" and not suelto and not veredicto.get("dueno")
+                    and not veredicto.get("al_caso") else None)
+        if accion == "cerrar" and veredicto.get("al_caso") and not suelto:
+            # Lo que llego en la misma rafaga que ya se descarto: el mismo caso cerrado.
+            case_id = veredicto["al_caso"]
+            caso_suma_mensaje(con, caso_de(con, case_id), stanza, "automatizacion",
+                              reabre=False)
+            hecho.update(nuevos=1, unidos=1)
+            caso_marca_regla(con, case_id, piso, stanza)
+        elif reciente:
+            # Llego pegado a un caso que se acaba de abrir y pide algo: Jev, mirandolo solo,
+            # no entiende que es parte del pedido (un enlace pelado), y no se cierra.
+            case_id = reciente["case_id"]
+            caso_suma_mensaje(con, reciente, stanza, "automatizacion", reabre=False)
+            hecho.update(nuevos=1, unidos=1)
+            caso_marca_regla(con, case_id, piso, stanza)
+        elif accion == "cerrar" and not (suelto and not veredicto.get("dueno")):
             # Lo que se descarta no se mezcla con el pedido de otro: abre su propio caso
             # y lo cierra. Sumarlo a uno abierto lo cerraria entero, o reabriria uno
             # respondido porque el cliente dijo "gracias".
@@ -2996,8 +3291,8 @@ def ingest_mensaje(con, m, veredicto, horas):
             caso_valida(caso, "cerrado", veredicto["motivo"])
             caso_mover(con, caso, "cerrado", veredicto["actor"], veredicto["motivo"])
             if veredicto.get("jev"):
-                caso_marca_jev(con, case_id, veredicto["jev"])
-            caso_marca_regla(con, case_id, piso)
+                caso_marca_jev(con, case_id, veredicto["jev"], stanza)
+            caso_marca_regla(con, case_id, piso, stanza)
             hecho.update(nuevos=1, casos_creados=1, cerrados=1,
                          ignorados=1 if veredicto.get("dueno") else 0)
         elif accion == "cerrar":
@@ -3017,17 +3312,30 @@ def ingest_mensaje(con, m, veredicto, horas):
             caso_suma_mensaje(con, caso, stanza, "automatizacion", reabre=False)
             hecho.update(nuevos=1, unidos=1)
             case_id = caso["case_id"]
-            caso_marca_regla(con, case_id, piso)
+            caso_marca_regla(con, case_id, piso, stanza)
         else:
-            case_id, que = caso_asigna(con, stanza, chat, "automatizacion")
+            previo = caso_abierto_de_chat(con, chat, horas)
+            aparte = None
+            if previo and ((previo["etapa"] == "respondido" and continuidad(veredicto) == "nuevo")
+                           or (previo["etapa"] == "trabajo" and es_pedido_nuevo(veredicto))):
+                aparte = previo["case_id"]
+            case_id, que = caso_asigna(con, stanza, chat, "automatizacion", aparte)
             hecho.update(nuevos=1, casos_creados=int(que == "nuevo"),
                          unidos=int(que == "unido"))
             caso_enruta(con, case_id, m.get("text") or "", chat)
-            if accion == "clasificar" and caso_clasifica(con, case_id, veredicto):
+            if (que == "unido" and previo and previo["case_id"] == case_id
+                    and previo["etapa"] in ETAPAS_QUE_VUELVEN
+                    and veredicto and es_charla_ajena(veredicto.get("jev"))):
+                caso_devuelve(con, caso_de(con, case_id), previo, veredicto["jev"])
+            elif accion == "clasificar" and caso_clasifica(con, case_id, veredicto):
                 hecho["dudosos"] = int(veredicto["clase"] == "doubtful")
             if veredicto and veredicto.get("jev"):
-                caso_marca_jev(con, case_id, veredicto["jev"])
-            caso_marca_regla(con, case_id, piso)
+                caso_marca_jev(con, case_id, veredicto["jev"], stanza)
+            caso_marca_regla(con, case_id, piso, stanza)
+            if (que == "unido" and previo and previo["case_id"] == case_id
+                    and previo["etapa"] in ETAPAS_QUE_VUELVEN
+                    and caso_de(con, case_id)["etapa"] != previo["etapa"]):
+                caso_retitula(con, case_id, previo, stanza, m.get("text") or "")
         con.commit()
     except BaseException:
         con.rollback()
@@ -3097,6 +3405,7 @@ def cmd_ingest(con, a):
     abren, sueltos = [], []
     # Del mas viejo al mas nuevo: el inbox viene al reves, y el primero de un pedido es
     # el que abre el caso.
+    nuevos = []
     for m in reversed(mensajes):
         entrada = scope.get(m.get("chat_jid"))
         if m.get("account") != cuenta or not entrada or entrada.get("mode") == "off":
@@ -3107,18 +3416,40 @@ def cmd_ingest(con, a):
         if anterior_a(m, desde):
             total["anteriores"] += 1
             continue
-        veredicto = veredicto_de(m, (decisiones.get(m["stanza_id"]) or {}).get("decision"),
-                                 con)
-        if m.get("kind") == "grupo" and veredicto is None:
-            sueltos.append((m, veredicto))
+        nuevos.append(m)
+    # Lo que ya tiene decision del dueno o juicio del agente se resuelve solo; el resto,
+    # junto con lo que llego pegado en el mismo chat, se juzga como una rafaga.
+    # El juicio de Jev queda en la cache bajo el primer mensaje de la rafaga: ese no la
+    # saca de la rafaga. El juicio de un agente o del dueno si.
+    sueltas = [m for m in nuevos if m["stanza_id"] in decisiones
+               or (m.get("juicio") and m["juicio"].get("origen") != "jev")]
+    libres = [m for m in nuevos if m not in sueltas]
+    por_rafaga = {m["stanza_id"]: r for r in agrupa_rafagas(libres) for m in r}
+    for m in nuevos:
+        if m in sueltas:
+            veredicto = veredicto_de(con_respuesta(con, m, horas),
+                                     (decisiones.get(m["stanza_id"]) or {}).get("decision"), con)
+            grupo = [m]
         else:
-            abren.append((m, veredicto))
+            grupo = por_rafaga[m["stanza_id"]]
+            if grupo[0] is not m:
+                continue
+            base = mensaje_de_rafaga(grupo) if len(grupo) > 1 else m
+            veredicto = veredicto_de(con_respuesta(con, base, horas), None, con)
+        for x in grupo:
+            if x.get("kind") == "grupo" and veredicto is None:
+                sueltos.append((x, veredicto))
+            else:
+                abren.append((x, veredicto))
     for m, veredicto in abren + sueltos:
         hecho, case_id = ingest_mensaje(con, m, veredicto, horas)
         for k, v in hecho.items():
             total[k] += v
         if case_id is not None:
             casos.add(case_id)
+            if veredicto and veredicto.get("accion") == "cerrar":
+                # El resto de una rafaga que no pide nada se suma a ese mismo caso cerrado.
+                veredicto.setdefault("al_caso", case_id)
     # Lo que Jev dejo con una credencial no pasa por el agente: va al dueno ya.
     casos_credencial_a_decision(con)
     return [dict(total, casos=sorted(casos))]
@@ -3137,7 +3468,8 @@ LARGO_TITULO = 80
 ACCIONES_DE_ETAPA = {
     "recibido": ("atender", "ignorar", "reclasificar", "cerrar", "proyecto"),
     "clasificado": ("atender", "ignorar", "reclasificar", "cerrar", "proyecto"),
-    "decision": ("enviar", "editar", "ejecutar", "reclasificar", "cerrar", "proyecto"),
+    "decision": ("enviar", "editar", "ejecutar", "autorizar", "reclasificar", "cerrar",
+                 "proyecto"),
     "trabajo": ("cerrar",),
     "listo": ("enviar", "editar", "cerrar"),
     "respondido": ("cerrar", "reabrir"),
@@ -3168,11 +3500,14 @@ def iso_caso(sello):
     return cuando.astimezone().isoformat(timespec="seconds")
 
 
-def acciones_de(etapa, tipo):
+def acciones_de(etapa, tipo, con_excepciones=False):
     acciones = ACCIONES_DE_ETAPA.get(etapa, ())
     if etapa == "decision":
         acciones = tuple(x for x in acciones
                          if x not in ACCION_DE_TIPO or ACCION_DE_TIPO[x] == tipo)
+        # Autorizar solo tiene sentido si hay excepciones de entrada que dispensar.
+        if not con_excepciones:
+            acciones = tuple(x for x in acciones if x != "autorizar")
     return list(acciones)
 
 
@@ -3241,10 +3576,12 @@ def tarjeta_de(caso, nombres, titulos, motivos, eventos=None):
                            else None),
         "ticket": caso["plane_issue"] or None,
         "updated_at": iso_caso(caso["updated_at"]),
-        "actions": acciones_de(caso["etapa"], tipo),
+        "actions": acciones_de(caso["etapa"], tipo, bool(json.loads(caso["excepciones"] or "[]"))),
         "project": ({"id": ruta["workspace"], "name": ruta.get("workspace_name") or
                      ruta["workspace"]} if ruta.get("workspace") else None),
         "needs_agent": bool(caso["necesita_agente"]),
+        # El caso anterior del mismo chat, si este abrio aparte de uno que ya estaba.
+        "related_case": caso["relacionado"],
         # La historia del caso (`caso_evento`): de que etapa a cual, quien y cuando. Sin
         # `detalle`: es texto de maquina en ingles y el panel no lo muestra.
         "events": [{"de": e["de"], "a": e["a"], "actor": e["actor"], "at": iso_caso(e["at"])}
@@ -3297,6 +3634,8 @@ def build_board(con):
     return {"v": 1,
             "updated_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
             "truncated": truncado, "counts": counts,
+            # Los casos que esperan al agente: los mismos que `pending --needs-agent`.
+            "agent_waiting": len(casos_para_agente(con)),
             "cards": [tarjeta_de(c, nombres, titulos, motivos, eventos) for c in casos]}
 
 
@@ -3355,7 +3694,118 @@ ENVIO_SIN_LINEA = "send-no-transport"
 # motivo y la ve el dueno.
 ENVIO_BLOQUEA = ("send-rejected", "send-id-conflict")
 CONTEOS_TICK = ("enviados", "excepciones", "frenados", "esperando", "bloqueados",
-                "errores", "pospuestos")
+                "errores", "pospuestos", "limpiados", "limpieza_error")
+
+# La limpieza de los espacios que deja `triage` (un espacio nuevo por corrida: Orca no los
+# cierra). Mira la CLI a lo mas cada LIMPIEZA_CADA_S, quita solo corridas ya terminadas
+# y de hace mas de LIMPIEZA_GRACIA_S (quien mira el resultado todavia lo ve) y no mas de
+# LIMPIEZA_TOPE por vuelta. `worktree rm` sobre un espacio de carpeta borra el registro y
+# sus terminales, nunca los archivos; la raiz de la carpeta no tiene `::workspace:`.
+PLUGIN_KEY = "ab2web.orca-wa-inbox"
+AUTOMATIZACION_TRIAGE = "triage"
+LIMPIEZA_CADA_S = 300
+LIMPIEZA_GRACIA_S = 120
+LIMPIEZA_TOPE = 5
+LIMPIEZA_PLAZO_S = 15
+LIMPIEZA_INTENTOS = 3
+ESTADOS_EN_CURSO = ("pending", "dispatching", "dispatched")
+MARCA_ESPACIO = "::workspace:"
+
+
+def orca_json(cli, args):
+    """Una llamada a la CLI de Orca con `--json`: el sobre {ok, ...} o None si no hay CLI,
+    se acabo el plazo o no devolvio JSON. Nunca imprime lo que contesto."""
+    try:
+        p = subprocess.run([cli, *args, "--json"], capture_output=True, text=True,
+                           timeout=LIMPIEZA_PLAZO_S, env=orca_env())
+        sobre = json.loads(p.stdout or "null")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return sobre if isinstance(sobre, dict) else None
+
+
+def espacios_a_limpiar(corridas, ahora):
+    """Los ids de espacio de las corridas terminadas hace mas de la gracia. Solo los que
+    llevan `::workspace:`: la raiz de la carpeta no se toca nunca."""
+    hallados = []
+    for c in corridas:
+        if not isinstance(c, dict) or c.get("status") in ESTADOS_EN_CURSO:
+            continue
+        espacio = c.get("workspaceId")
+        if not isinstance(espacio, str) or MARCA_ESPACIO not in espacio:
+            continue
+        marcas = [c.get(k) for k in ("dispatchedAt", "startedAt", "createdAt")
+                  if isinstance(c.get(k), (int, float))]
+        if not marcas or ahora - max(marcas) / 1000 < LIMPIEZA_GRACIA_S:
+            continue
+        if espacio not in hallados:
+            hallados.append(espacio)
+    return hallados
+
+
+def tick_limpia(con, resumen):
+    """Quita de la barra lateral los espacios de las corridas de `triage` que ya terminaron.
+    Cierra en silencio: sin CLI o con un error el tick sigue y lo cuenta en
+    `limpieza_error`. Lo ya quitado (o rendido tras varios intentos) queda en `settings`,
+    para que los mismos primeros ids no acaparen el tope."""
+    ahora = time.time()
+    fila = con.execute("select value from settings where key='limpieza_at'").fetchone()
+    try:
+        if fila and ahora - float(fila["value"]) < LIMPIEZA_CADA_S:
+            return
+    except (TypeError, ValueError):
+        pass
+    con.execute("insert into settings (key,value) values ('limpieza_at',?) on conflict(key) "
+                "do update set value=excluded.value", (str(ahora),))
+    con.commit()
+    cli = orca_cli_path()
+    if not cli:
+        resumen["limpieza_error"] += 1
+        return
+    lista = orca_json(cli, ["automations", "list"])
+    automatizaciones = ((lista or {}).get("result") or {}).get("automations")
+    if not lista or lista.get("ok") is False or not isinstance(automatizaciones, list):
+        resumen["limpieza_error"] += 1
+        return
+    triage = next((a.get("id") for a in automatizaciones if isinstance(a, dict)
+                   and isinstance(a.get("pluginOrigin"), dict)
+                   and a["pluginOrigin"].get("pluginKey") == PLUGIN_KEY
+                   and a["pluginOrigin"].get("automationId") == AUTOMATIZACION_TRIAGE
+                   and isinstance(a.get("id"), str) and a.get("id")), None)
+    if not triage:
+        return
+    corridas = orca_json(cli, ["automations", "runs", "--id", triage])
+    lista_corridas = ((corridas or {}).get("result") or {}).get("runs")
+    if not corridas or corridas.get("ok") is False or not isinstance(lista_corridas, list):
+        resumen["limpieza_error"] += 1
+        return
+    fila = con.execute("select value from settings where key='limpieza_hecha'").fetchone()
+    try:
+        hecho = json.loads(fila["value"]) if fila else {}
+    except (TypeError, ValueError):
+        hecho = {}
+    if not isinstance(hecho, dict):
+        hecho = {}
+    intentos = 0
+    for espacio in espacios_a_limpiar(lista_corridas, ahora):
+        if hecho.get(espacio, 0) >= LIMPIEZA_INTENTOS:
+            continue
+        if intentos >= LIMPIEZA_TOPE:
+            break
+        intentos += 1
+        r = orca_json(cli, ["worktree", "rm", "--worktree", f"id:{espacio}"])
+        if r is not None and r.get("ok") is True:
+            hecho[espacio] = LIMPIEZA_INTENTOS
+            resumen["limpiados"] += 1
+        else:
+            hecho[espacio] = hecho.get(espacio, 0) + 1
+            resumen["limpieza_error"] += 1
+    # Solo lo que sigue en la lista de corridas: Orca poda las viejas y esto no crece.
+    vigentes = {c.get("workspaceId") for c in lista_corridas if isinstance(c, dict)}
+    hecho = {k: v for k, v in hecho.items() if k in vigentes}
+    con.execute("insert into settings (key,value) values ('limpieza_hecha',?) on conflict(key) "
+                "do update set value=excluded.value", (json.dumps(hecho, sort_keys=True),))
+    con.commit()
 
 
 def tick_toma():
@@ -3548,6 +3998,13 @@ def cmd_tick(con, a):
             publica_tablero(con)
         except (OSError, sqlite3.Error) as exc:
             print(f"wa-scope: board not published: {exc}", file=sys.stderr)
+        # Lo ultimo y sin que pueda tumbar el tick: lo que importa ya salio.
+        try:
+            tick_limpia(con, resumen)
+        except (OSError, sqlite3.Error, subprocess.SubprocessError, ValueError):
+            if con.in_transaction:
+                con.rollback()
+            resumen["limpieza_error"] += 1
     finally:
         candado.close()
     print(json.dumps(resumen, ensure_ascii=False))
@@ -3632,10 +4089,11 @@ def casos_para_agente(con):
             "select case_id, chat_jid, etapa, propuesta, jev, necesita_agente, excepciones "
             "from caso where account=? and etapa in ('recibido','clasificado') "
             "order by updated_at, case_id", (cuenta_activa(),)):
+        # Una credencial nunca pasa por el agente, con la propuesta que tenga.
+        if "credential" in _lista_json(r["excepciones"]):
+            continue
         if r["etapa"] == "recibido" or r["propuesta"] or r["necesita_agente"]:
             casos.append(r["case_id"])
-            continue
-        if "credential" in _lista_json(r["excepciones"]):
             continue
         if not r["jev"]:
             casos.append(r["case_id"])
@@ -3658,21 +4116,35 @@ def _lista_json(texto):
 
 
 def casos_credencial_a_decision(con):
-    """Un caso clasificado, sin propuesta y con una credencial (Jev o piso fijo) no lo ve el
-    agente: pasa a `decision` para que el dueno lo vea en "Su decision", con la excepcion
-    y sin propuesta. Una sola vez por caso: si el dueno lo devuelve a clasificado, no se
-    vuelve a mover. Deja el evento de `clasificado` a `decision`. Devuelve cuantos movio."""
+    """Un caso recibido o clasificado, sin propuesta y con una credencial (Jev o piso fijo)
+    no lo ve el agente: pasa a `decision` para que el dueno lo vea en "Su decision", con la
+    excepcion y sin propuesta (uno recibido se clasifica primero: nadie lo hizo). Una sola
+    vez por reapertura o autorizacion: si el dueno lo devuelve a clasificado, no se vuelve a
+    mover; un caso reabierto (otra vuelta por `recibido`) o autorizado vuelve a contar.
+    Devuelve cuantos movio."""
     movidos = 0
     caso_toma(con)
     try:
         for r in con.execute(
-                "select case_id from caso where account=? and etapa='clasificado' and "
+                "select case_id from caso where account=? and etapa in ('recibido','clasificado') and "
                 "propuesta is null and excepciones like '%credential%' and not exists "
-                "(select 1 from caso_evento e where e.case_id=caso.case_id and e.a='decision') "
+                "(select 1 from caso_evento e where e.case_id=caso.case_id and e.a='decision' and "
+                "e.id > (select coalesce(max(r.id), 0) from caso_evento r where "
+                "r.case_id=caso.case_id and ((r.a='recibido' and "
+                "(r.de is null or r.de <> 'recibido')) or "
+                "(r.actor='dueno' and r.de='decision' and r.a='clasificado' and "
+                "r.detalle like 'autorizadas:%')))) "
                 "order by updated_at, case_id", (cuenta_activa(),)).fetchall():
             caso = caso_de(con, r["case_id"])
             if "credential" not in _lista_json(caso.get("excepciones")):
                 continue
+            if caso["etapa"] == "recibido":
+                # Sin Jev nadie lo clasifico: la excepcion es lo que dice que va al dueno.
+                caso_valida(caso, "clasificado")
+                caso_mover(con, caso, "clasificado", "automatizacion",
+                           f"alert · {PRIORIDAD_INGEST} · excepcion credential",
+                           clase="alert", prioridad=PRIORIDAD_INGEST)
+                caso = caso_de(con, r["case_id"])
             caso_valida(caso, "decision")
             caso_mover(con, caso, "decision", "automatizacion",
                        "excepcion credential: lo decide el dueno")
@@ -3911,6 +4383,10 @@ def main():
     c = muta("atender", help="the owner asks the agent to handle the case on its next "
                              "run: marks it needs-agent (recibido or clasificado)")
     c.add_argument("id", type=int); c.set_defaults(fn=cmd_caso_atender)
+
+    c = muta("autorizar", help="the owner waives the inbound exceptions of a case in decision: "
+                               "the agent may draft it (owner only)")
+    c.add_argument("id", type=int); c.set_defaults(fn=cmd_caso_autorizar)
 
     c = muta("proyecto", help="sets the case's project from the accepted list, or none "
                               "with --proyecto ''; a content rule no longer changes it")
