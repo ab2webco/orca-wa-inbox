@@ -4266,6 +4266,214 @@ if NODE:
         os.environ.update(antes)
 
 
+# ── El tick pone al dia los casos abiertos antes de la actualizacion ─────────────────────
+# Dos cosas solo corrian al llegar un mensaje: transcribir sus audios, y retirar la propuesta
+# que un mensaje nuevo deja atras. Un caso abierto de antes se quedaba con el audio sin oir y
+# con la propuesta vieja. El tick lo recoge: acotado por tick y una vez por caso.
+print("\nel tick reconcilia los casos abiertos de antes")
+
+
+def caso_de_antes(home, stanza, chat=PERSONA, etapa=None):
+    """Un caso que ya existia: se arma sin pasar por ingest, que es lo que no hacia la
+    version anterior con sus audios."""
+    cid = str(js(home, "caso", "crear", "--chat", chat, "--stanza", stanza,
+                 "--actor", "agente")[0]["case_id"])
+    if etapa:
+        con = db_de(home)
+        con.execute("update caso set etapa=? where case_id=?", (etapa, int(cid)))
+        con.commit()
+        con.close()
+    return cid
+
+
+def suma_al_caso(home, cid, stanza):
+    """El mensaje ya esta en el caso, como lo dejo el codigo anterior: sin retirar nada."""
+    con = db_de(home)
+    con.execute("insert into caso_mensaje (account, stanza_id, case_id, at) values (?,?,?,?)",
+                (A, stanza, int(cid), "2026-10-01 10:00:00"))
+    con.commit()
+    con.close()
+
+
+def tick_con(home, env):
+    previo = dict(os.environ)
+    os.environ.update(env)
+    try:
+        return tick(home)
+    finally:
+        os.environ.clear()
+        os.environ.update(previo)
+
+
+if NODE:
+    # 1. Los audios de un caso abierto se transcriben, una sola vez.
+    with tempfile.TemporaryDirectory() as home:
+        env, registro = prepara_transcriptor(home)
+        llegan(home, A, [audio(home, "B1", "uno.ogg"), audio(home, "B2", "clave.ogg"),
+                         audio(home, "B3", "cerrado.ogg"), audio(home, "B4", "resp.ogg")])
+        linea_lista(home)
+        c1 = caso_de_antes(home, "B1")
+        c2 = caso_de_antes(home, "B2")
+        caso_de_antes(home, "B3", etapa="cerrado")
+        caso_de_antes(home, "B4", etapa="respondido")
+        x = hilo_de(home, "B1")
+        ok("antes del tick el audio del caso abierto sale sin transcribir",
+           x and x["text"] == "audio sin transcribir: no_intentado", f"{x}")
+        p, r = tick_con(home, env)
+        ok("el tick transcribe los audios de los casos abiertos y no los de los cerrados",
+           sorted(llamadas(registro)) == ["clave.ogg", "uno.ogg"], f"{llamadas(registro)} {p.stderr}")
+        x = hilo_de(home, "B1")
+        ok("y el hilo los muestra transcritos",
+           x and x["text"] == "revisa este caso: dijo uno.ogg" and x["transcripcion"] is True, f"{x}")
+        ok("el piso fijo corre sobre lo transcrito: la clave queda como excepcion del caso",
+           excepciones_de(home, c2) == ["credential"], f"{excepciones_de(home, c2)}")
+        ok("y el caso limpio no gana excepciones", excepciones_de(home, c1) == [],
+           f"{excepciones_de(home, c1)}")
+        ok("ni la clave queda escrita en un evento",
+           cuenta(home, "select count(*) from caso_evento where detalle like '%Zx9secreta%'") == 0)
+        eventos = cuenta(home, "select count(*) from caso_evento")
+        tick_con(home, env)
+        ok("un segundo tick no vuelve a transcribir nada",
+           sorted(llamadas(registro)) == ["clave.ogg", "uno.ogg"], f"{llamadas(registro)}")
+        ok("y no deja eventos nuevos",
+           cuenta(home, "select count(*) from caso_evento") == eventos)
+
+    # 2. El tope: cinco por tick, compartidos con lo que entra por ingest.
+    with tempfile.TemporaryDirectory() as home:
+        env, registro = prepara_transcriptor(home)
+        llegan(home, A, [audio(home, f"T{i}", f"a{i}.ogg", minutos=30 - i) for i in range(1, 5)])
+        linea_lista(home)
+        for i in range(1, 5):
+            caso_de_antes(home, f"T{i}")
+        llegan(home, A, [audio(home, f"N{i}", f"n{i}.ogg", minutos=2) for i in range(1, 4)])
+        tick_con(home, env)
+        ok("ingest y el relleno comparten el tope de cinco audios por tick",
+           len(llamadas(registro)) == 5, f"{llamadas(registro)}")
+        tick_con(home, env)
+        ok("lo que sobro se transcribe en el tick siguiente, sin repetir ninguno",
+           len(llamadas(registro)) == 7 and len(set(llamadas(registro))) == 7,
+           f"{llamadas(registro)}")
+
+    # 3. Un caso que el dueno ya firmo no se vuelve a juzgar, aunque se transcriba.
+    with tempfile.TemporaryDirectory() as home:
+        env, registro = prepara_transcriptor(home)
+        llegan(home, A, [audio(home, "D1", "clave.ogg")])
+        linea_lista(home)
+        cid = caso_de_antes(home, "D1")
+        con = db_de(home)
+        con.execute("update caso set etapa='decision', propuesta='{\"tipo\": \"responder\"}', "
+                    "propuesta_version='v1', propuesta_aprobada='v1' where case_id=?", (int(cid),))
+        con.commit()
+        con.close()
+        tick_con(home, env)
+        ok("se transcribe pero no se re-juzga un caso ya decidido por el dueno",
+           llamadas(registro) == ["clave.ogg"] and excepciones_de(home, cid) == [],
+           f"{llamadas(registro)} {excepciones_de(home, cid)}")
+
+    # 4. Cada mensaje del hilo lleva la hora de llegada.
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(PERSONA, "H1", "hola uno", 9), msg(PERSONA, "H2", "hola dos", 3)])
+        linea_lista(home)
+        cid = caso_de_antes(home, "H1")
+        suma_al_caso(home, cid, "H2")
+        hilo = js(home, "caso", "ver", cid)[0]["hilo"]
+        ok("todo mensaje del hilo lleva su `ts` de llegada",
+           len(hilo) == 2 and all(isinstance(x.get("ts"), int) and x["ts"] > 0 for x in hilo),
+           f"{[x.get('ts') for x in hilo]}")
+        ok("y en orden", (hilo[0].get("ts") or 0) < (hilo[1].get("ts") or 0),
+           f"{[x.get('ts') for x in hilo]}")
+
+    # 5. La propuesta anterior al ultimo mensaje se retira, una vez.
+    falso = JevFalso(jev_y_borradores)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "Q1", "revisa este caso: mi audio", 40)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+            js(home, "config", "ack", "off")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                cid = str(caso_de_stanza(home, "Q1")["case_id"])
+                js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+                   "--actor", "agente")
+                v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta", VIEJA,
+                       "--actor", "agente")[0]["propuesta_version"]
+                tick(home)
+                req = f"caso-{cid}-{v[:12]}"
+                ok("(antes) el borrador esta retenido y el caso en decision",
+                   [e["estado"] for e in envios(home) if e["req_id"] == req] == ["borrador"]
+                   and js(home, "caso", "ver", cid)[0]["etapa"] == "decision")
+                envejece_propuesta(home, cid)
+                llegan(home, A, [msg(PERSONA, "Q2", "no funciono otra vez, revisa este caso", 1)])
+                suma_al_caso(home, cid, "Q2")
+                p, r = tick(home)
+                ver = js(home, "caso", "ver", cid)[0]
+                ok("el tick retira la propuesta que quedo atras y vuelve a clasificado",
+                   ver["etapa"] == "clasificado" and not ver["propuesta"]
+                   and not ver["propuesta_version"], f"{ver['etapa']} {ver['propuesta']} {p.stderr}")
+                ok("queda en la historia sin el texto",
+                   any("propuesta anterior, no enviada" in e["detalle"] for e in ver["eventos"])
+                   and not any(VIEJA in json.dumps(e) for e in ver["eventos"]))
+                ok("cancela el borrador retenido",
+                   [e["estado"] for e in envios(home) if e["req_id"] == req] == ["cancelado"],
+                   f"{envios(home)}")
+                ok("y despierta al agente", int(cid) in para_el_agente(home),
+                   f"{para_el_agente(home)}")
+                eventos = len(ver["eventos"])
+                tick(home)
+                tick(home)
+                ok("dos ticks mas no tocan nada: ni eventos ni etapa",
+                   len(js(home, "caso", "ver", cid)[0]["eventos"]) == eventos
+                   and js(home, "caso", "ver", cid)[0]["etapa"] == "clasificado")
+                # Un caso cuya propuesta es POSTERIOR a su ultimo mensaje se queda como esta.
+                js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+                llegan(home, A, [msg(SOPORTE, "Q3", "revisa este caso", 40)])
+                cid2, v2 = propuesta_lista(home, "Q3", chat=SOPORTE)
+                con = db_de(home)
+                con.execute("update caso set etapa='decision' where case_id=?", (int(cid2),))
+                con.commit()
+                con.close()
+                tick(home)
+                ver2 = js(home, "caso", "ver", cid2)[0]
+                ok("una propuesta mas nueva que el ultimo mensaje no se toca",
+                   ver2["propuesta_version"] == v2 and ver2["etapa"] == "decision",
+                   f"{ver2['etapa']} {ver2['propuesta_version']}")
+            finally:
+                sidecar.cerrar()
+
+        # El tope por tick: lo que sobra se retira en el siguiente.
+        with tempfile.TemporaryDirectory() as home:
+            llegan(home, A, [msg(PERSONA, f"C{i}", "pide algo", 40) for i in range(1, 13)]
+                   + [msg(PERSONA, f"C{i}n", "otra cosa", 1) for i in range(1, 13)])
+            linea_lista(home, modo_persona="borrador")
+            ids = []
+            for i in range(1, 13):
+                cid = caso_de_antes(home, f"C{i}")
+                js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+                   "--actor", "agente")
+                js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta", LIMPIA,
+                   "--actor", "agente")
+                envejece_propuesta(home, cid)
+                suma_al_caso(home, cid, f"C{i}n")
+                ids.append(cid)
+            tick(home)
+            quedan = [c for c in ids if js(home, "caso", "ver", c)[0]["propuesta_version"]]
+            ok("el tope limita cuantas propuestas se retiran por tick", len(quedan) == 2,
+               f"{len(quedan)} con propuesta tras un tick")
+            for _ in range(3):
+                tick(home)
+            quedan = [c for c in ids if js(home, "caso", "ver", c)[0]["propuesta_version"]]
+            ok("y los ticks siguientes terminan el resto", not quedan, f"{len(quedan)}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
