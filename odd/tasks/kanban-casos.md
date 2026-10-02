@@ -381,6 +381,31 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
       el detalle de la tarjeta, "Atender ahora" e "Ignorar" como acciones de la
       tarjeta, proyecto asignable a mano desde el detalle. Va con el rediseño del
       tablero (W4).
+      Hecha en W4 (8b6c626, c9154ce, 7e4d31d).
+- [x] T21 — (cerrada, ver arriba).
+- [ ] T22 — Reglas de aprobación afinadas, pedidas por el dueño (2026-10-01) tras ver
+      que casi todos los frenos del día fueron falsos positivos.
+      1. Números del dueño:
+         - en ajustes el dueño elige uno o varios números de confianza, con el
+           autocompletar de chats y nunca adivinados;
+         - sus mensajes cuentan como orden del dueño, y lo que se les responde o se
+           envía por su pedido no pasa por las reglas de aprobación;
+         - solo quedan los controles destructivos: nunca repetir una credencial real;
+           nada irreversible en un proyecto (borrar, despliegue a producción, push
+           forzado, pagos) sin una confirmación explícita en ese chat.
+      2. Piso más preciso:
+         - credencial = un valor con forma de secreto, o alguien que pide una clave o
+           un código ("acceso" solo no cuenta);
+         - compromiso = una fecha u hora concreta en lo que sale ("te confirmo" y
+           "para el" no cuentan);
+         - dinero = un monto o un precio en lo que sale.
+      3. Por chat, cada regla con tres niveles: Preguntarme / Que el agente lo revise /
+         Permitir. Por defecto: dinero, credencial y fecha en Preguntarme; los avisos
+         de calidad de Jev en Que el agente lo revise (la ronda de revisión de
+         tablero-w7).
+      4. "Su aprobación" muestra estas reglas tal como son, sin la frase "no se pueden
+         apagar".
+      Va después de tablero-w7.
 
 Rama `feat/tablero-casos`, desde `main` en v4.9.0. PRs encadenados:
 (T1–T3) decisiones: casos, entrada y Jev; (T4–T6, T13) tablero y ajustes; (T7, T8, T12, T14, T15)
