@@ -4493,13 +4493,16 @@ TRABAJO = "Reproducir el reporte en blanco y corregirlo; responder que ya quedo.
 
 
 def orca_despacho(carpeta, worktrees=(WT_ALFA,), vivos=("term_worker1",), falla=None,
-                  automatizaciones=(), corridas=()):
+                  automatizaciones=(), corridas=(), cuentas=(), rechaza=None, listo=True):
     """Una `orca` de mentira para el despacho: contesta lo que diga estado.json y anota cada
-    llamada (sus argumentos enteros, en JSON) en calls.jsonl."""
+    llamada (sus argumentos enteros, en JSON) en calls.jsonl. `rechaza` es {cuenta: error}
+    para `terminal create` ("" es sin --claude-account); `listo`, lo que dice `terminal
+    wait`. No contesta nada de `orchestration`: el despacho ya no la usa."""
     carpeta = pathlib.Path(carpeta)
     (carpeta / "estado.json").write_text(json.dumps(
         {"worktrees": list(worktrees), "vivos": list(vivos), "falla": falla or {},
          "automatizaciones": list(automatizaciones), "corridas": list(corridas),
+         "cuentas": list(cuentas), "rechaza": rechaza or {}, "listo": listo,
          "n": 0}), encoding="utf-8")
     exe = carpeta / "orca"
     exe.write_text("""#!/usr/bin/env python3
@@ -4522,18 +4525,22 @@ n = e["n"]
 if clave == "worktree list":
     sale({"ok": True, "result": {"worktrees": e["worktrees"], "totalCount": len(e["worktrees"]),
                                  "truncated": False}})
-if clave == "orchestration run-create":
-    sale({"ok": True, "result": {"run": {"id": f"run_falso{n}", "coordinator_handle": f"term_coord{n}"}}})
-if clave == "orchestration task-create":
-    sale({"ok": True, "result": {"task": {"id": f"task_falso{n}"}}})
-if clave == "orchestration worker-start":
-    sale({"ok": True, "result": {"dispatchId": f"disp_falso{n}", "effects": [
-        {"kind": "terminal", "role": "agent", "id": "term_worker1"}]}})
+if clave == "terminal create":
+    cuenta = valor("--claude-account") or ""
+    if cuenta in e["rechaza"]:
+        sale({"ok": False, "error": {"code": "runtime_error", "message": e["rechaza"][cuenta]}}, 1)
+    sale({"ok": True, "result": {"terminal": {"handle": "term_worker1",
+                                              "title": valor("--title")}}})
+if clave == "terminal wait":
+    sale({"ok": True, "result": {"wait": {"condition": valor("--for"),
+                                          "satisfied": e["listo"]}}})
+if clave == "account list":
+    sale({"ok": True, "result": {"accounts": e["cuentas"]}})
 if clave == "terminal list":
     sale({"ok": True, "result": {"terminals": [{"handle": h} for h in e["vivos"]],
                                  "truncated": False}})
-if clave == "orchestration worker-stop":
-    sale({"ok": False, "error": {"code": "stop_unknown", "message": "unknown"}}, 1)
+if clave == "terminal close":
+    sale({"ok": True, "result": {"closed": True}})
 if clave == "terminal send":
     sale({"ok": True, "result": {"sent": True}})
 if clave == "automations list":
@@ -4606,6 +4613,57 @@ def motivo_bloqueo(home, cid):
     return (t or {}).get("blocked_reason") or ""
 
 
+def bandera(args, flag):
+    return args[args.index(flag) + 1] if flag in args else None
+
+
+LEE_BRIEF = ("Read ", " and follow it exactly.")
+
+
+def lanzamientos(carpeta):
+    """Las lineas que el despacho escribio en la terminal del agente: `Read <brief> ...`."""
+    return [x for x in llamadas_orca(carpeta, "terminal send")
+            if (bandera(x, "--text") or "").startswith(LEE_BRIEF[0])]
+
+
+def ruta_brief(carpeta, i=-1):
+    envios = lanzamientos(carpeta)
+    texto = bandera(envios[i], "--text") if envios else ""
+    return texto[len(LEE_BRIEF[0]):-len(LEE_BRIEF[1])] if texto.endswith(LEE_BRIEF[1]) else ""
+
+
+def brief(carpeta, i=-1):
+    ruta = ruta_brief(carpeta, i)
+    try:
+        return pathlib.Path(ruta).read_text(encoding="utf-8") if ruta else ""
+    except OSError:
+        return ""
+
+
+def respuestas_a_terminal(carpeta):
+    """Lo que se le escribio al agente que no es el lanzamiento: la respuesta del cliente."""
+    return [x for x in llamadas_orca(carpeta, "terminal send") if x not in lanzamientos(carpeta)]
+
+
+def cerradas(carpeta):
+    return [bandera(x, "--terminal") for x in llamadas_orca(carpeta, "terminal close")]
+
+
+def orquestacion(carpeta):
+    return [x for x in llamadas_orca(carpeta) if x[:1] == ["orchestration"]]
+
+
+def cuenta_claude(cid, usado, activa=False, estado="authenticated", proveedor="claude"):
+    return {"provider": proveedor, "id": cid, "email": f"{cid}@example.invalid",
+            "active": activa, "auth": {"state": estado},
+            "quota": {"session": {"usedPercent": usado}}}
+
+
+EN_USO = ('This Claude account is in use by an assigned worktree ("otro-espacio"). Close that '
+          'Claude terminal before launching it globally, or launch this terminal with an '
+          'assigned Claude account.')
+
+
 if NODE:
     # Una base de antes de T8, con trabajo abierto: el backfill lo pone en `trabajo` sin
     # firma. La tabla del despacho se agrega sola y ese caso no se despacha nunca.
@@ -4640,8 +4698,10 @@ if NODE:
         p, r = tick_orca(home, carpeta)
         ok("el tick con despacho sale 0, sin traceback",
            p.returncode == 0 and "Traceback" not in p.stderr, p.stderr[-400:])
-        arranques = llamadas_orca(carpeta, "orchestration worker-start")
+        arranques = llamadas_orca(carpeta, "terminal create")
         ok("un trabajo firmado se despacha una vez", len(arranques) == 1, f"{arranques}")
+        ok("sin orquestacion de Orca: un tick no tiene terminal que la mande",
+           not orquestacion(carpeta), f"{orquestacion(carpeta)}")
         filas = despachos(home)
         ok("solo el firmado: el del backfill no tiene despacho",
            filas is not None and [f["case_id"] for f in filas] == [int(cid)], f"{filas}")
@@ -4650,23 +4710,40 @@ if NODE:
         ok("el resumen cuenta el despacho", r.get("despachados") == 1
            and r.get("bloqueados_por_despacho") == 0, f"{r}")
         fila = (filas or [{}])[0]
-        ok("la fila guarda run, task, dispatch, terminal y el selector",
-           fila.get("run_id") == "run_falso2" and fila.get("task_id") == "task_falso3"
-           and fila.get("dispatch_id") == "disp_falso4" and fila.get("terminal") == "term_worker1"
+        ok("la fila guarda la terminal y el selector, sin cuenta elegida",
+           fila.get("terminal") == "term_worker1"
            and fila.get("workspace_selector") == f"id:{WT_ALFA['id']}"
-           and fila.get("estado") == "activo", f"{fila}")
+           and fila.get("estado") == "activo" and fila.get("cuenta_claude") is None, f"{fila}")
         arranque = arranques[0] if arranques else []
-
-        def bandera(args, flag):
-            return args[args.index(flag) + 1] if flag in args else None
-        ok("worker-start va al espacio exacto del proyecto, con el coordinador y claude",
+        ok("terminal create va al espacio exacto del proyecto, con claude y sin cuenta",
            bandera(arranque, "--worktree") == f"id:{WT_ALFA['id']}"
-           and bandera(arranque, "--from") == "term_coord2"
-           and bandera(arranque, "--run") == "run_falso2"
-           and bandera(arranque, "--task") == "task_falso3"
-           and bandera(arranque, "--agent") == "claude", f"{arranque}")
-        tareas = llamadas_orca(carpeta, "orchestration task-create")
-        spec = bandera(tareas[0], "--spec") if tareas else ""
+           and bandera(arranque, "--agent") == "claude"
+           and f"#{cid}" in (bandera(arranque, "--title") or "")
+           and bandera(arranque, "--timeout-ms") == "60000"
+           and "--claude-account" not in arranque, f"{arranque}")
+        orden = [" ".join(x[:2]) for x in llamadas_orca(carpeta)
+                 if " ".join(x[:2]) in ("terminal create", "terminal wait", "terminal send")]
+        espera = (llamadas_orca(carpeta, "terminal wait") or [[]])[0]
+        ok("espera el composer de esa terminal antes de escribirle",
+           orden == ["terminal create", "terminal wait", "terminal send"]
+           and bandera(espera, "--terminal") == "term_worker1"
+           and bandera(espera, "--for") == "composer-ready", f"{orden} {espera}")
+        envio = (lanzamientos(carpeta) or [[]])[0]
+        texto = bandera(envio, "--text") or ""
+        ruta = ruta_brief(carpeta)
+        ok("le escribe UNA linea, con Enter: lee el brief y siguelo",
+           len(llamadas_orca(carpeta, "terminal send")) == 1
+           and bandera(envio, "--terminal") == "term_worker1" and "--enter" in envio
+           and "\n" not in texto and texto == f"Read {ruta} and follow it exactly.", f"{envio}")
+        datos = pathlib.Path(home) / ".wa-inbox"
+        ok("el brief vive en la carpeta de datos del plugin, nunca en el repo del proyecto",
+           ruta and pathlib.Path(ruta).is_absolute()
+           and pathlib.Path(ruta).parent == datos / "despachos"
+           and not ruta.startswith(PROYECTO_PATH) and pathlib.Path(ruta).is_file(), ruta)
+        ok("y solo lo lee el dueno de la maquina",
+           ruta and pathlib.Path(ruta).is_file()
+           and (pathlib.Path(ruta).stat().st_mode & 0o077) == 0, ruta)
+        spec = brief(carpeta)
         wa = str(WA_SCOPE)
         ok("el brief lleva el caso, el mensaje tal cual y lo aprobado",
            f"#{cid}" in spec and PEDIDO in spec and TRABAJO in spec, spec[:600])
@@ -4694,9 +4771,9 @@ if NODE:
         # Dos ticks mas con el agente vivo: nada se relanza.
         tick_orca(home, carpeta)
         p, r = tick_orca(home, carpeta)
-        ok("con la terminal viva no se relanza ni se crea otra corrida",
-           len(llamadas_orca(carpeta, "orchestration worker-start")) == 1
-           and len(llamadas_orca(carpeta, "orchestration run-create")) == 1
+        ok("con la terminal viva no se relanza ni se le vuelve a escribir",
+           len(llamadas_orca(carpeta, "terminal create")) == 1
+           and len(lanzamientos(carpeta)) == 1
            and r.get("despachados") == 0, f"{r}")
         ok("y mira la terminal en el espacio del proyecto",
            any(bandera(x, "--worktree") == f"id:{WT_ALFA['id']}"
@@ -4716,7 +4793,7 @@ if NODE:
         ok("la fila queda bloqueada", despachos(home, cid)[-1]["estado"] == "bloqueado",
            f"{despachos(home, cid)}")
         p, r = tick_orca(home, carpeta)
-        ok("y nada lo relanza", len(llamadas_orca(carpeta, "orchestration worker-start")) == 1)
+        ok("y nada lo relanza", len(llamadas_orca(carpeta, "terminal create")) == 1)
 
         # El dueno lo vuelve a aprobar: otra firma, otro despacho.
         cambia_orca(carpeta, vivos=["term_worker1"])
@@ -4725,16 +4802,17 @@ if NODE:
         js(home, "caso", "aprobar", cid, "--version", ver["propuesta_version"], "--actor", "dueno")
         p, r = tick_orca(home, carpeta)
         ok("una firma nueva desde bloqueado es un despacho nuevo",
-           len(llamadas_orca(carpeta, "orchestration worker-start")) == 2
+           len(llamadas_orca(carpeta, "terminal create")) == 2
            and len(despachos(home, cid)) == 2 and r.get("despachados") == 1, f"{r}")
 
         # Cerrar el caso con el agente vivo lo detiene.
+        antes = len(cerradas(carpeta))
         js(home, "caso", "mover", cid, "cerrado", "--motivo", "ya no hace falta", "--actor", "dueno")
         tick_orca(home, carpeta)
-        ok("un caso cerrado con el agente vivo detiene al trabajador",
-           any(bandera(x, "--dispatch") == despachos(home, cid)[-1]["dispatch_id"]
-               for x in llamadas_orca(carpeta, "orchestration worker-stop"))
-           and despachos(home, cid)[-1]["estado"] == "cancelado", f"{despachos(home, cid)}")
+        ok("un caso cerrado con el agente vivo cierra su terminal",
+           cerradas(carpeta)[antes:] == ["term_worker1"]
+           and despachos(home, cid)[-1]["estado"] == "cancelado",
+           f"{cerradas(carpeta)} {despachos(home, cid)}")
 
     # Sin respuesta en N horas: bloqueado y el trabajador se detiene.
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
@@ -4752,9 +4830,8 @@ if NODE:
            js(home, "caso", "ver", cid)[0]["etapa"] == "bloqueado"
            and "sin respuesta del proyecto" in motivo_bloqueo(home, cid),
            f"{motivo_bloqueo(home, cid)} {p.stderr[-300:]}")
-        ok("y detiene al trabajador aunque Orca diga stop_unknown",
-           [x for x in llamadas_orca(carpeta, "orchestration worker-stop")
-            if "disp_falso4" in x] and p.returncode == 0, f"{llamadas_orca(carpeta)}")
+        ok("y cierra la terminal del agente", cerradas(carpeta) == ["term_worker1"]
+           and p.returncode == 0, f"{llamadas_orca(carpeta)}")
 
     # Un lanzamiento que quedo a medias (el tick murio) no se relanza: va al dueno.
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
@@ -4770,7 +4847,7 @@ if NODE:
         con.close()
         tick_orca(home, carpeta)
         ok("un despacho que quedo lanzando no se relanza y va a bloqueado",
-           len(llamadas_orca(carpeta, "orchestration worker-start")) == 1
+           len(llamadas_orca(carpeta, "terminal create")) == 1
            and js(home, "caso", "ver", cid)[0]["etapa"] == "bloqueado"
            and "a medias" in motivo_bloqueo(home, cid), f"{motivo_bloqueo(home, cid)}")
 
@@ -4784,7 +4861,7 @@ if NODE:
         ok("sin el proyecto en Orca: bloqueado, no encuentro el proyecto",
            js(home, "caso", "ver", cid)[0]["etapa"] == "bloqueado"
            and "no encuentro el proyecto Alfa Demo" in motivo_bloqueo(home, cid)
-           and not llamadas_orca(carpeta, "orchestration run-create"),
+           and not llamadas_orca(carpeta, "terminal create"),
            f"{motivo_bloqueo(home, cid)} {p.stderr[-300:]}")
         ok("y cuenta como bloqueado por despacho", r.get("bloqueados_por_despacho") == 1, f"{r}")
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
@@ -4798,7 +4875,7 @@ if NODE:
         ok("con dos espacios que coinciden: bloqueado, es ambiguo",
            js(home, "caso", "ver", cid)[0]["etapa"] == "bloqueado"
            and "Alfa Demo es ambiguo" in motivo_bloqueo(home, cid)
-           and not llamadas_orca(carpeta, "orchestration run-create"), motivo_bloqueo(home, cid))
+           and not llamadas_orca(carpeta, "terminal create"), motivo_bloqueo(home, cid))
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
         linea_lista(home)
         acepta_proyectos(home, "alfa-demo")
@@ -4808,7 +4885,7 @@ if NODE:
         tick_orca(home, carpeta)
         ok("una sola coincidencia por nombre visible sirve, con su id exacto",
            [a[a.index("--worktree") + 1] for a in
-            llamadas_orca(carpeta, "orchestration worker-start")] == ["id:r1::/srv/a"],
+            llamadas_orca(carpeta, "terminal create")] == ["id:r1::/srv/a"],
            f"{llamadas_orca(carpeta)}")
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
         linea_lista(home)
@@ -4823,16 +4900,19 @@ if NODE:
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
         linea_lista(home)
         acepta_proyectos(home, "alfa-demo")
-        orca_despacho(carpeta, falla={"orchestration worker-start":
-                                      "no_active_sender_terminal: la cuenta no responde"})
+        orca_despacho(carpeta, falla={"terminal create":
+                                      "Timed out waiting for terminal handle after creation"})
         cid = trabajo_firmado(home, "D8")
         p, r = tick_orca(home, carpeta)
-        ok("un fallo de worker-start: bloqueado con el texto del error",
+        ok("un fallo de terminal create: bloqueado con el texto del error",
            js(home, "caso", "ver", cid)[0]["etapa"] == "bloqueado"
-           and "la cuenta no responde" in motivo_bloqueo(home, cid)
+           and "Timed out waiting for terminal handle" in motivo_bloqueo(home, cid)
            and r.get("bloqueados_por_despacho") == 1, f"{motivo_bloqueo(home, cid)} {r}")
+        ok("un error que no es de cuenta no prueba otra cuenta",
+           not llamadas_orca(carpeta, "account list") and not lanzamientos(carpeta),
+           f"{llamadas_orca(carpeta)}")
         tick_orca(home, carpeta)
-        ok("y no se reintenta solo", len(llamadas_orca(carpeta, "orchestration worker-start")) == 1)
+        ok("y no se reintenta solo", len(llamadas_orca(carpeta, "terminal create")) == 1)
 
     # A lo mas un lanzamiento por tick.
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
@@ -4843,11 +4923,11 @@ if NODE:
         dos = trabajo_firmado(home, "D10")
         p, r = tick_orca(home, carpeta)
         ok("dos firmados: un solo lanzamiento por tick",
-           len(llamadas_orca(carpeta, "orchestration worker-start")) == 1
+           len(llamadas_orca(carpeta, "terminal create")) == 1
            and r.get("despachados") == 1, f"{r}")
         p, r = tick_orca(home, carpeta)
         ok("y el otro en el tick siguiente",
-           len(llamadas_orca(carpeta, "orchestration worker-start")) == 2
+           len(llamadas_orca(carpeta, "terminal create")) == 2
            and {f["case_id"] for f in despachos(home)} == {int(uno), int(dos)}, f"{r}")
 
     # Hasta el final: el resultado vuelve, el trabajador se suelta y la respuesta sale por
@@ -4873,9 +4953,12 @@ if NODE:
             p, r = tick_orca(home, carpeta)
             ok("y el tick no la vuelve a mandar", sidecar.entregados.count(req) == 1
                and r.get("enviados") == 0, f"{sidecar.entregados} {r}")
-            ok("y el trabajador se suelta: worker-stop y la fila reportada",
-               any("disp_falso4" in x for x in llamadas_orca(carpeta, "orchestration worker-stop"))
+            ok("y el trabajador se suelta: su terminal se cierra y la fila queda reportada",
+               cerradas(carpeta) == ["term_worker1"]
                and despachos(home, cid)[-1]["estado"] == "reportado", f"{despachos(home, cid)}")
+            ok("y el brief del despacho cerrado se borra: no queda copia del cliente",
+               ruta_brief(carpeta) and not pathlib.Path(ruta_brief(carpeta)).exists(),
+               ruta_brief(carpeta))
         finally:
             sidecar.cerrar()
 
@@ -4942,9 +5025,7 @@ if NODE:
                                                        for e in envios(home)), f"{envios(home)}")
             ok("la fila queda bloqueada y el trabajador se suelta",
                despachos(home, cid)[-1]["estado"] == "bloqueado"
-               and any("disp_falso4" in x for x in llamadas_orca(carpeta,
-                                                                 "orchestration worker-stop")),
-               f"{despachos(home, cid)}")
+               and cerradas(carpeta) == ["term_worker1"], f"{despachos(home, cid)}")
             t = tarjeta(home, cid)
             ok("y la tarjeta dice que lo bloqueo el agente del proyecto",
                (t.get("dispatch") or {}).get("outcome") == "bloqueado", f"{t.get('dispatch')}")
@@ -4975,7 +5056,7 @@ if NODE:
                f"{sidecar.entregados} {p.stderr[-300:]}")
             ok("y el caso espera al cliente con su despacho vivo, sin soltar al trabajador",
                ver["etapa"] == "respondido" and despachos(home, cid)[-1]["estado"] == "esperando"
-               and not llamadas_orca(carpeta, "orchestration worker-stop"),
+               and not cerradas(carpeta),
                f"{ver['etapa']} {despachos(home, cid)}")
             t = tarjeta(home, cid)
             ok("la tarjeta dice que espera al cliente",
@@ -4984,18 +5065,18 @@ if NODE:
             respuesta_cliente = "Es el de ventas del 30 de septiembre"
             llegan(home, A, [msg(PERSONA, "D15b", respuesta_cliente, 0)])
             p, r = tick_orca(home, carpeta)
-            envios_t = llamadas_orca(carpeta, "terminal send")
+            envios_t = respuestas_a_terminal(carpeta)
             ok("la respuesta del cliente va a la terminal viva del agente, con Enter",
                len(envios_t) == 1 and "term_worker1" in envios_t[0]
                and respuesta_cliente in " ".join(envios_t[0]) and "--enter" in envios_t[0],
                f"{envios_t} {p.stderr[-300:]}")
             ok("sin otro agente: el mismo despacho sigue activo",
-               len(llamadas_orca(carpeta, "orchestration worker-start")) == 1
+               len(llamadas_orca(carpeta, "terminal create")) == 1
                and despachos(home, cid)[-1]["estado"] == "activo"
                and js(home, "caso", "ver", cid)[0]["etapa"] == "trabajo",
                f"{despachos(home, cid)}")
             tick_orca(home, carpeta)
-            ok("y no se entrega dos veces", len(llamadas_orca(carpeta, "terminal send")) == 1)
+            ok("y no se entrega dos veces", len(respuestas_a_terminal(carpeta)) == 1)
             hecho = js(home, "caso", "resultado", cid, "--respuesta",
                        "Ya quedó; ¿puedes verificar el reporte?", "--resumen",
                        "Corregido el reporte del 30", "--actor", "trabajador")[0]
@@ -5004,7 +5085,7 @@ if NODE:
                js(home, "caso", "ver", cid)[0]["etapa"] == "respondido"
                and f"caso-{cid}-{hecho['propuesta_version'][:12]}" in sidecar.entregados
                and despachos(home, cid)[-1]["estado"] == "reportado"
-               and llamadas_orca(carpeta, "orchestration worker-stop"),
+               and cerradas(carpeta) == ["term_worker1"],
                f"{despachos(home, cid)}")
         finally:
             sidecar.cerrar()
@@ -5026,11 +5107,12 @@ if NODE:
             cambia_orca(carpeta, vivos=[])
             llegan(home, A, [msg(PERSONA, "D16b", "Del 30 de septiembre", 0)])
             p, r = tick_orca(home, carpeta)
-            arranques = llamadas_orca(carpeta, "orchestration worker-start")
-            tareas = llamadas_orca(carpeta, "orchestration task-create")
-            spec = tareas[-1][tareas[-1].index("--spec") + 1] if tareas else ""
+            arranques = llamadas_orca(carpeta, "terminal create")
+            spec = brief(carpeta)
             ok("sin terminal: un despacho nuevo, uno solo",
-               len(arranques) == 2 and not llamadas_orca(carpeta, "terminal send")
+               len(arranques) == 2 and not respuestas_a_terminal(carpeta)
+               and len(lanzamientos(carpeta)) == 2
+               and ruta_brief(carpeta, 0) != ruta_brief(carpeta, 1)
                and [f["estado"] for f in despachos(home, cid)] == ["continuado", "activo"],
                f"{despachos(home, cid)} {p.stderr[-300:]}")
             ok("con el hilo entero y lo que reporto el anterior",
@@ -5039,7 +5121,7 @@ if NODE:
                and "Falta la fecha del reporte" in spec and TRABAJO in spec, spec[:2000])
             p, r = tick_orca(home, carpeta)
             ok("y el tick siguiente no lanza otro",
-               len(llamadas_orca(carpeta, "orchestration worker-start")) == 2)
+               len(llamadas_orca(carpeta, "terminal create")) == 2)
         finally:
             sidecar.cerrar()
 
@@ -5059,7 +5141,7 @@ if NODE:
             llegan(home, A, [msg(PERSONA, "D17b", "la contraseña es Hunter2xx", 0)])
             tick_orca(home, carpeta)
             ok("una credencial en la respuesta no llega a la terminal del agente",
-               not llamadas_orca(carpeta, "terminal send")
+               not respuestas_a_terminal(carpeta)
                and not any("Hunter2xx" in " ".join(x) for x in llamadas_orca(carpeta))
                and js(home, "caso", "ver", cid)[0]["etapa"] != "trabajo",
                f"{js(home, 'caso', 'ver', cid)[0]['etapa']}")
@@ -5116,6 +5198,215 @@ if NODE:
                f"{ver['etapa']} {hecho.get('envio')}")
         finally:
             sidecar.cerrar()
+
+    # La cuenta de Claude: primero sin elegir (manda el pin del espacio o la global); si esa
+    # esta tomada por otro espacio o sin sesion, UNA vez con la autenticada de menos uso.
+    print("\nT8: la cuenta de Claude del lanzamiento")
+    CUENTAS = [cuenta_claude("acct-activa", 5, activa=True),
+               cuenta_claude("acct-llena", 97),
+               cuenta_claude("acct-sin-login", 1, estado="unauthenticated"),
+               cuenta_claude("acct-codex", 0, proveedor="codex"),
+               cuenta_claude("acct-b", 40),
+               cuenta_claude("acct-c", 12)]
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, cuentas=CUENTAS, rechaza={"": f"runtime_error {EN_USO}"})
+        cid = trabajo_firmado(home, "C1")
+        p, r = tick_orca(home, carpeta)
+        creadas = llamadas_orca(carpeta, "terminal create")
+        ok("cuenta tomada por otro espacio: reintenta una vez con otra cuenta",
+           len(creadas) == 2 and "--claude-account" not in creadas[0]
+           and len(llamadas_orca(carpeta, "account list")) == 1, f"{creadas} {p.stderr[-300:]}")
+        ok("la elegida es la Claude autenticada de menos uso bajo 95%, nunca la activa",
+           len(creadas) == 2 and bandera(creadas[1], "--claude-account") == "acct-c"
+           and bandera(creadas[1], "--agent") == "claude"
+           and bandera(creadas[1], "--worktree") == f"id:{WT_ALFA['id']}", f"{creadas}")
+        fila = (despachos(home, cid) or [{}])[-1]
+        ok("y la fila guarda la cuenta usada (el id, nada mas) y sigue el lanzamiento",
+           fila.get("cuenta_claude") == "acct-c" and fila.get("estado") == "activo"
+           and len(lanzamientos(carpeta)) == 1 and r.get("despachados") == 1
+           and js(home, "caso", "ver", cid)[0]["etapa"] == "trabajo", f"{fila} {r}")
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, cuentas=[cuenta_claude("acct-activa", 5, activa=True),
+                                        cuenta_claude("acct-b", 40)],
+                      rechaza={"": "Claude is not logged in. Please run /login"})
+        cid = trabajo_firmado(home, "C2")
+        tick_orca(home, carpeta)
+        creadas = llamadas_orca(carpeta, "terminal create")
+        ok("una cuenta sin sesion tambien prueba otra cuenta",
+           [bandera(x, "--claude-account") for x in creadas] == [None, "acct-b"]
+           and (despachos(home, cid) or [{}])[-1].get("cuenta_claude") == "acct-b",
+           f"{creadas} {despachos(home, cid)}")
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, cuentas=CUENTAS[:4], rechaza={"": f"runtime_error {EN_USO}"})
+        cid = trabajo_firmado(home, "C3")
+        p, r = tick_orca(home, carpeta)
+        ok("sin otra cuenta usable: bloqueado, ninguna cuenta de Claude disponible",
+           js(home, "caso", "ver", cid)[0]["etapa"] == "bloqueado"
+           and "ninguna cuenta de Claude disponible" in motivo_bloqueo(home, cid)
+           and "in use by an assigned worktree" in motivo_bloqueo(home, cid)
+           and len(llamadas_orca(carpeta, "terminal create")) == 1
+           and r.get("bloqueados_por_despacho") == 1, f"{motivo_bloqueo(home, cid)} {r}")
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, cuentas=CUENTAS, rechaza={"": f"runtime_error {EN_USO}",
+                                                         "acct-c": "quota exhausted"})
+        cid = trabajo_firmado(home, "C4")
+        tick_orca(home, carpeta)
+        tick_orca(home, carpeta)
+        ok("si la otra cuenta tambien falla: bloqueado con su texto, sin un tercer intento",
+           js(home, "caso", "ver", cid)[0]["etapa"] == "bloqueado"
+           and "quota exhausted" in motivo_bloqueo(home, cid)
+           and len(llamadas_orca(carpeta, "terminal create")) == 2, motivo_bloqueo(home, cid))
+
+    # La terminal abre pero el agente no queda listo, o no se le puede escribir: Bloqueado
+    # con el motivo, y la terminal que abrio el despacho se cierra.
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, listo=False)
+        cid = trabajo_firmado(home, "C5")
+        p, r = tick_orca(home, carpeta)
+        ok("sin composer listo: bloqueado, sin escribirle y cerrando su terminal",
+           js(home, "caso", "ver", cid)[0]["etapa"] == "bloqueado"
+           and "no quedó listo" in motivo_bloqueo(home, cid)
+           and not llamadas_orca(carpeta, "terminal send")
+           and cerradas(carpeta) == ["term_worker1"]
+           and despachos(home, cid)[-1]["estado"] == "bloqueado", f"{motivo_bloqueo(home, cid)}")
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, falla={"terminal send": "terminal_not_writable"})
+        cid = trabajo_firmado(home, "C6")
+        tick_orca(home, carpeta)
+        ok("si no se le puede escribir: bloqueado con el texto y su terminal cerrada",
+           js(home, "caso", "ver", cid)[0]["etapa"] == "bloqueado"
+           and "terminal_not_writable" in motivo_bloqueo(home, cid)
+           and cerradas(carpeta) == ["term_worker1"], f"{motivo_bloqueo(home, cid)}")
+
+    # El caso que bloqueo `no_active_sender_terminal` (la orquestacion desde el tick) nunca
+    # llego a un agente: despues de actualizar se despacha de nuevo, UNA vez, aunque su firma
+    # tenga mas de 24 h.
+    print("\nT8: el reintento de lo que bloqueo la orquestacion")
+    VIEJO = ("no_active_sender_terminal Orchestration requires an active sender terminal in "
+             "this worktree")
+
+    def firma_hace(home, cid, horas):
+        con = db_de(home)
+        con.execute("update caso_evento set at=datetime('now','localtime',?) where case_id=? "
+                    "and a='trabajo'", (f"-{horas} hours", int(cid)))
+        con.commit()
+        con.close()
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, falla={"terminal create": VIEJO})
+        cid = trabajo_firmado(home, "R1")
+        tick_orca(home, carpeta)
+        con = db_de(home)
+        con.execute("update caso_despacho set motivo=? where case_id=?",
+                    ("no pude despachar a Alfa Demo: orca orchestration run-create: " + VIEJO,
+                     int(cid)))
+        con.commit()
+        con.close()
+        ok("el caso de partida: bloqueado por no_active_sender_terminal",
+           js(home, "caso", "ver", cid)[0]["etapa"] == "bloqueado"
+           and "no_active_sender_terminal" in motivo_bloqueo(home, cid), motivo_bloqueo(home, cid))
+        firma_hace(home, cid, 30)
+        cambia_orca(carpeta, falla={})
+        p, r = tick_orca(home, carpeta)
+        filas = despachos(home, cid)
+        ok("se despacha de nuevo, solo, aunque la firma tenga 30 h",
+           len(llamadas_orca(carpeta, "terminal create")) == 2 and len(lanzamientos(carpeta)) == 1
+           and js(home, "caso", "ver", cid)[0]["etapa"] == "trabajo"
+           and r.get("despachados") == 1, f"{filas} {r} {p.stderr[-300:]}")
+        ok("con una fila nueva que dice a cual reintenta",
+           [f["estado"] for f in filas] == ["bloqueado", "activo"]
+           and filas[1]["reintento_de"] == filas[0]["id"], f"{filas}")
+        ok("y el evento lo cuenta: lo movio la automatizacion",
+           any(e["de"] == "bloqueado" and e["a"] == "trabajo" and e["actor"] == "automatizacion"
+               for e in js(home, "caso", "ver", cid)[0].get("eventos", [])),
+           f"{js(home, 'caso', 'ver', cid)[0].get('eventos')}")
+        tick_orca(home, carpeta)
+        ok("y el tick siguiente no lo repite", len(llamadas_orca(carpeta, "terminal create")) == 2
+           and len(despachos(home, cid)) == 2)
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, falla={"terminal create": VIEJO})
+        cid = trabajo_firmado(home, "R2")
+        for _ in range(4):
+            tick_orca(home, carpeta)
+        ok("un solo reintento: si vuelve a fallar igual, queda bloqueado",
+           len(llamadas_orca(carpeta, "terminal create")) == 2
+           and [f["estado"] for f in despachos(home, cid)] == ["bloqueado", "bloqueado"]
+           and js(home, "caso", "ver", cid)[0]["etapa"] == "bloqueado",
+           f"{despachos(home, cid)}")
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, falla={"terminal create": VIEJO})
+        cid = trabajo_firmado(home, "R3")
+        tick_orca(home, carpeta)
+        js(home, "caso", "mover", cid, "cerrado", "--motivo", "lo resolvi a mano", "--actor", "dueno")
+        js(home, "caso", "mover", cid, "recibido", "--actor", "dueno")
+        js(home, "caso", "mover", cid, "bloqueado", "--motivo", "espera al cliente",
+           "--actor", "dueno")
+        cambia_orca(carpeta, falla={})
+        tick_orca(home, carpeta)
+        ok("si el dueno ya movio el caso, no se reintenta",
+           len(llamadas_orca(carpeta, "terminal create")) == 1
+           and js(home, "caso", "ver", cid)[0]["etapa"] == "bloqueado", f"{despachos(home, cid)}")
+
+    # Una firma de mas de 24 h que el despacho ve por primera vez no se lanza: el dueno la
+    # vuelve a aprobar. Las viejas no le quitan el turno a una nueva.
+    print("\nT8: la aprobacion vieja")
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta)
+        viejo = trabajo_firmado(home, "V1")
+        firma_hace(home, viejo, 25)
+        nuevo = trabajo_firmado(home, "V2")
+        p, r = tick_orca(home, carpeta)
+        creadas = llamadas_orca(carpeta, "terminal create")
+        ok("una firma de 25 h no se lanza: bloqueado, aprobación vieja",
+           js(home, "caso", "ver", viejo)[0]["etapa"] == "bloqueado"
+           and "aprobación vieja: vuelve a aprobar" in motivo_bloqueo(home, viejo)
+           and [f["estado"] for f in despachos(home, viejo)] == ["bloqueado"],
+           f"{motivo_bloqueo(home, viejo)} {despachos(home, viejo)}")
+        ok("y en el mismo tick se lanza la nueva",
+           len(creadas) == 1 and [f["case_id"] for f in despachos(home)
+                                  if f["estado"] == "activo"] == [int(nuevo)]
+           and r.get("despachados") == 1 and r.get("bloqueados_por_despacho") == 1, f"{r}")
+        tick_orca(home, carpeta)
+        ok("la vieja no se lanza despues", len(llamadas_orca(carpeta, "terminal create")) == 1)
+        js(home, "caso", "mover", viejo, "decision", "--actor", "dueno")
+        ver = js(home, "caso", "ver", viejo)[0]
+        js(home, "caso", "aprobar", viejo, "--version", ver["propuesta_version"], "--actor", "dueno")
+        cambia_orca(carpeta, vivos=[])
+        js(home, "caso", "resultado", nuevo, "--estado", "bloqueado", "--resumen", "fuera",
+           "--actor", "trabajador")
+        tick_orca(home, carpeta)
+        ok("vuelta a aprobar, se lanza", len(llamadas_orca(carpeta, "terminal create")) == 2
+           and despachos(home, viejo)[-1]["estado"] == "activo", f"{despachos(home, viejo)}")
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta)
+        cid = trabajo_firmado(home, "V3")
+        firma_hace(home, cid, 23)
+        tick_orca(home, carpeta)
+        ok("una firma de 23 h todavia se lanza",
+           len(llamadas_orca(carpeta, "terminal create")) == 1
+           and despachos(home, cid)[-1]["estado"] == "activo", f"{despachos(home, cid)}")
 
     # El tick despierta al agente de casos en el acto, una vez, y nunca con una corrida en vuelo.
     print("\nel tick despierta al agente de casos")

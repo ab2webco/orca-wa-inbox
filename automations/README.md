@@ -25,12 +25,21 @@ y lo cuenta en `limpieza_error`.
   `triage` **sale con 1 cuando ningún caso necesita lenguaje**, con lo que Orca marca la
   corrida `skipped_precheck` y no despierta al agente.
 - **El agente del proyecto (T8).** Un `trabajar` aprobado (una firma de `decision` a
-  `trabajo`; nunca lo que puso ahí el backfill) va a `orchestration run-create`,
-  `task-create` con el brief y `worker-start` en el espacio exacto del proyecto, uno por
-  tick. Una fila en `caso_despacho` (escrita antes de llamar a Orca) impide relanzar; que
-  el agente siga se mira por su terminal en `orca terminal list`. Sin proyecto, con un
-  proyecto ambiguo, sin reporte, sin respuesta en 4 h o con un error de Orca, el caso va a
-  Bloqueado con el motivo. El agente reporta con `caso resultado` (`resuelto`, `necesita`
+  `trabajo`; nunca lo que puso ahí el backfill) abre Claude en el espacio exacto del
+  proyecto, uno por tick: el brief va a un archivo en la carpeta de datos del plugin
+  (`despachos/`, junto a `scope.db`, nunca en el repo del proyecto), `orca terminal create
+  --agent claude`, `terminal wait --for composer-ready` y una sola línea con
+  `terminal send`: que lea ese archivo y lo siga. La orquestación de Orca no sirve desde el
+  tick: busca quién la manda en la terminal activa del espacio, y la automatización no
+  tiene ninguna (`no_active_sender_terminal`). Si la cuenta de Claude está tomada por otro
+  espacio o sin sesión, prueba una vez con la autenticada de menos uso (bajo 95 %) y anota
+  su id en `caso_despacho`. Una fila en `caso_despacho` (escrita antes de llamar a Orca)
+  impide relanzar; que el agente siga se mira por su terminal en `orca terminal list`, y al
+  soltarlo se cierra esa terminal. Sin proyecto, con un proyecto ambiguo, sin cuenta
+  usable, sin reporte, sin respuesta en 4 h o con un error de Orca, el caso va a Bloqueado
+  con el motivo. Una firma de más de 24 h que el despacho ve por primera vez tampoco se
+  lanza ("aprobación vieja: vuelve a aprobar"); lo único que se reintenta solo, una vez,
+  es lo que bloqueó `no_active_sender_terminal`. El agente reporta con `caso resultado` (`resuelto`, `necesita`
   o `bloqueado`), que manda la respuesta en el acto por el mismo piso; si pidió
   información, lo que conteste el cliente vuelve a su terminal o a un despacho nuevo.
 

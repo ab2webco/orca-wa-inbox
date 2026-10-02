@@ -356,6 +356,19 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
         `respuestas_al_proyecto`, `agente_lanzado` y `agente_error`.
       Pendiente: E2E en vivo con un proyecto real; T22.9 (despachar sin el clic lo no
       destructivo) no entra acá: hoy un `trabajar` sigue esperando la firma.
+      Arreglo tras la primera corrida en vivo (tablero-w10): `run-create` falló con
+      `no_active_sender_terminal` (Orca busca quién manda la orquestación en la terminal
+      activa del espacio, y el tick no tiene). El lanzamiento ahora es por terminal:
+      brief en `despachos/caso-<id>-<fila>.md` junto a `scope.db` (0600, se borra al
+      cerrar el despacho) → `terminal create --worktree <selector> --agent claude` →
+      `terminal wait --for composer-ready` → una línea con `terminal send --enter`.
+      Cuenta tomada o sin sesión → un reintento con la Claude autenticada de menos uso bajo
+      95 % (no la activa), su id en `caso_despacho.cuenta_claude`; sin ninguna → Bloqueado
+      "ninguna cuenta de Claude disponible". Soltar al agente es `terminal close`. Lo que
+      bloqueó `no_active_sender_terminal` se despacha de nuevo UNA vez
+      (`caso_despacho.reintento_de`); una firma de más de 24 h que el despacho ve por
+      primera vez va a Bloqueado "aprobación vieja: vuelve a aprobar". `run_id`, `task_id` y
+      `dispatch_id` quedan sin uso en la tabla.
 - [ ] T12 — Orquestador: workspace propio del plugin con harness de atención y
       la lista de proyectos elegidos en los ajustes, refrescada cuando cambia.
       Hecho en W3 (652b6b9): catálogo desde Orca y PROJECTS.md en el harness.

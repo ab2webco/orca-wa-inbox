@@ -451,10 +451,14 @@ create table if not exists caso_despacho (
   evento_id integer not null,
   proyecto  text,                -- el nombre del proyecto, como lo ve el dueno
   workspace_selector text,       -- el espacio exacto de Orca: id:<repoId>::<path>
+  -- run_id, task_id y dispatch_id eran de la orquestacion de Orca, que el tick no puede usar
+  -- (no tiene terminal que la mande): quedan sin uso, para que una base vieja siga valiendo.
   run_id    text,
   task_id   text,
   dispatch_id text,
   terminal  text,                -- el handle de la terminal del agente
+  cuenta_claude text,            -- el id de la cuenta de Claude elegida; null = la del espacio
+  reintento_de integer,          -- la fila que este despacho reintenta (una sola vez)
   -- lanzando | activo | esperando (pidio informacion al cliente) | reportado | bloqueado |
   -- cancelado | continuado (la respuesta del cliente abrio otro despacho)
   estado    text not null default 'lanzando',
@@ -1189,6 +1193,12 @@ def migrate(con):
         con.execute("alter table caso add column dispensa text")
     if "relacionado" not in caso_cols:
         con.execute("alter table caso add column relacionado integer")
+    # El despacho por terminal (T8): una base con la tabla de antes gana las dos columnas.
+    despacho_cols = {r["name"] for r in con.execute("pragma table_info(caso_despacho)")}
+    if "cuenta_claude" not in despacho_cols:
+        con.execute("alter table caso_despacho add column cuenta_claude text")
+    if "reintento_de" not in despacho_cols:
+        con.execute("alter table caso_despacho add column reintento_de integer")
     # T3: el veredicto entero de Jev, cacheado junto a su clase.
     if "jev" not in {r["name"] for r in con.execute("pragma table_info(juicio)")}:
         con.execute("alter table juicio add column jev text")
@@ -5150,9 +5160,13 @@ def tick_caso(con, caso, texto, estados, resumen):
 
 # ── El despacho al proyecto (kanban-casos, T8) ─────────────────────────────────────────
 # Un trabajo que el dueno firmo (decision -> trabajo con su `trabajar` aprobado) llega solo
-# al agente del proyecto: el tick abre una corrida de orquestacion de Orca, le da la tarea
-# con el brief y arranca un agente en el espacio EXACTO del proyecto. El agente reporta con
-# `caso resultado` y uno de tres desenlaces, nunca por WhatsApp:
+# al agente del proyecto: el tick escribe el brief en la carpeta de datos del plugin (nunca
+# en el repo del proyecto), abre una terminal de Claude en el espacio EXACTO del proyecto
+# (`orca terminal create --agent claude`), espera su composer y le escribe UNA linea: que lea
+# el brief y lo siga. La orquestacion de Orca no sirve aca: resuelve quien la manda por la
+# terminal activa del espacio, y la automatizacion del tick no tiene ninguna
+# (`no_active_sender_terminal`). El agente reporta con `caso resultado` y uno de tres
+# desenlaces, nunca por WhatsApp:
 #
 #   - `resuelto`: su respuesta sale por el mismo piso que cualquier otra (tick_caso, o el
 #     Enviar del dueno) y el trabajador se suelta;
@@ -5163,10 +5177,12 @@ def tick_caso(con, caso, texto, estados, resumen):
 #
 # Lo que puso en `trabajo` el backfill no tiene firma y nunca se despacha.
 #
-# El estado de la orquestacion de Orca no es confiable (en la sonda dio `failed` a los 23 s
-# con el agente trabajando): lo que dice que el agente sigue es su terminal, viva en
-# `orca terminal list`. Nada se relanza mientras viva, y nada se relanza solo: un fallo va
-# a Bloqueado con su texto y vuelve a correr cuando el dueno firma de nuevo.
+# Lo que dice que el agente sigue es su terminal, viva en `orca terminal list`. Nada se
+# relanza mientras viva, y nada se relanza solo: un fallo va a Bloqueado con su texto y
+# vuelve a correr cuando el dueno firma de nuevo. La unica excepcion es lo que bloqueo la
+# orquestacion (`no_active_sender_terminal`): nunca llego a un agente y se reintenta una vez.
+# Un agente que no avanza (por ejemplo, Claude se quedo en "confiar en esta carpeta" y la
+# linea fue a esa pregunta) no reporta: lo atrapan los mismos plazos.
 DESPACHO_SIN_RESPUESTA_S = 4 * 3600
 # Cuanto espera un caso la respuesta del cliente a la pregunta del agente; despues, lo que el
 # cliente escriba entra como siempre y el trabajador se suelta.
@@ -5175,18 +5191,39 @@ ESPERA_CLIENTE_S = 72 * 3600
 # corriendo, asi que no se relanza, se le avisa al dueno.
 DESPACHO_A_MEDIAS_S = 600
 DESPACHO_LISTA_S = 15
-DESPACHO_CREA_S = 20
+# Lo que espera Orca a que aparezca la terminal, y despues a que su composer acepte texto.
 DESPACHO_ARRANQUE_MS = 60000
-# Lo que puede tardar un lanzamiento entero: si no cabe en lo que le queda al tick, espera
-# al minuto siguiente. Orca corta el comando a los 300 s.
-DESPACHO_RESERVA_S = (DESPACHO_LISTA_S + 2 * DESPACHO_CREA_S
-                      + DESPACHO_ARRANQUE_MS // 1000 + 10)
+DESPACHO_LISTO_MS = 90000
+# Lo que puede tardar un lanzamiento entero (listar, abrir, esperar, escribir): si no termina
+# antes de DESPACHO_LIMITE_S desde que empezo el tick, espera al minuto siguiente. Orca corta
+# el comando a los 300 s; lo que sigue al despacho (el tablero, la limpieza) usa el resto. El
+# segundo intento con otra cuenta no entra en la reserva: sigue a un rechazo inmediato.
+DESPACHO_RESERVA_S = (2 * DESPACHO_LISTA_S + DESPACHO_ARRANQUE_MS // 1000 + 10
+                      + DESPACHO_LISTO_MS // 1000 + 10)
+DESPACHO_LIMITE_S = 260
 DESPACHO_AGENTE = "claude"
+# La cuenta de Claude del segundo intento: autenticada, no la activa (la que acaba de
+# fallar) y con menos de esto de su sesion usada.
+CUENTA_TOPE_USO = 95
+# Los errores de `terminal create` que se arreglan con otra cuenta: la activa esta tomada por
+# un espacio con cuenta asignada, o no tiene sesion.
+ERROR_DE_CUENTA = re.compile(
+    r"in use by an assigned worktree|not logged in|\blog ?in\b|/login|not authenticated|"
+    r"unauthenticated|authentication|unauthorized|oauth|credentials? (?:expired|invalid|missing)",
+    re.IGNORECASE)
+# Una firma que el despacho ve por primera vez con mas de esto no se lanza: el dueno la
+# vuelve a aprobar. Lo que se firmo antes de actualizar no arranca solo dias despues.
+APROBACION_VIGENTE_S = 24 * 3600
+APROBACION_VIEJA = "aprobación vieja: vuelve a aprobar"
+# Lo que bloqueo la orquestacion desde el tick: se reintenta UNA vez, por terminal.
+REINTENTA_MOTIVO = "no_active_sender_terminal"
+LEE_EL_BRIEF = "Read {} and follow it exactly."
 # Los despachos con un agente que puede estar vivo: mientras haya uno, no se lanza otro.
 DESPACHO_EN_VUELO = ("lanzando", "activo", "esperando")
 # Las etapas desde las que una firma lleva a `trabajo` (TRANSICIONES_CON_FIRMA).
 ETAPAS_QUE_DESPACHAN = ("decision", "listo")
-# El brief viaja por argv: un caso enorme deja afuera sus mensajes mas viejos, y lo dice.
+# El brief es un archivo, pero con tope: un caso enorme deja afuera sus mensajes mas viejos,
+# y lo dice. La respuesta del cliente a la terminal viva usa el mismo tope.
 TOPE_BRIEF = 100_000
 LARGO_MOTIVO = 300
 RESPUESTA_AL_PROYECTO = "el cliente respondio a la pregunta del proyecto"
@@ -5232,7 +5269,7 @@ def edad_de(sello):
 
 def entrada_a_trabajo(con, case_id):
     """El evento con que el caso entro por ultima vez a `trabajo`, o None."""
-    return con.execute("select id, de, actor from caso_evento where case_id=? and a='trabajo' "
+    return con.execute("select id, de, actor, at from caso_evento where case_id=? and a='trabajo' "
                        "and (de is null or de <> 'trabajo') order by id desc limit 1",
                        (case_id,)).fetchone()
 
@@ -5243,11 +5280,11 @@ def stanzas_de_caso(con, case_id):
 
 
 def casos_por_despachar(con):
-    """[(caso, instrucciones, evento_id)] de la linea activa, del mas viejo al mas nuevo, sin
-    un despacho para esa entrada a `trabajo` y sin otro en vuelo:
+    """[(caso, instrucciones, evento_id, vieja)] de la linea activa, del mas viejo al mas
+    nuevo, sin un despacho para esa entrada a `trabajo` y sin otro en vuelo:
 
     - entro por una firma (desde decision o listo), con su `trabajar` aprobado en la version
-      vigente: el trabajo nuevo;
+      vigente: el trabajo nuevo. `vieja` si la firma tiene mas de APROBACION_VIGENTE_S;
     - volvio desde `respondido` porque el cliente contesto la pregunta del agente, y el
       despacho anterior ya no tiene terminal (`continuado`): sigue el MISMO trabajo aprobado.
     """
@@ -5267,7 +5304,7 @@ def casos_por_despachar(con):
                                  (caso["case_id"],)).fetchone()
             if (previa and previa["estado"] == "continuado" and previa["instrucciones"]
                     and previa["evento_id"] < entrada["id"]):
-                salida.append((caso, previa["instrucciones"], entrada["id"]))
+                salida.append((caso, previa["instrucciones"], entrada["id"], False))
             continue
         if not (caso["propuesta_aprobada"]
                 and caso["propuesta_aprobada"] == caso["propuesta_version"]):
@@ -5282,7 +5319,52 @@ def casos_por_despachar(con):
         if (entrada["de"] not in ETAPAS_QUE_DESPACHAN
                 or (entrada["de"], "trabajo") not in TRANSICIONES_CON_FIRMA):
             continue
-        salida.append((caso, propuesta["instrucciones"], entrada["id"]))
+        salida.append((caso, propuesta["instrucciones"], entrada["id"],
+                       edad_de(entrada["at"]) > APROBACION_VIGENTE_S))
+    return salida
+
+
+def reintento_vale(con, caso, fila_id):
+    """La fila a reintentar (dict) si el caso sigue como lo dejo ese bloqueo, o None: la
+    fila es la ultima del caso, la bloqueo `no_active_sender_terminal`, no es ella misma un
+    reintento, nadie movio el caso despues y la firma sigue vigente. Una fila mas nueva del
+    caso (el reintento incluido) la descarta: se reintenta UNA vez."""
+    f = con.execute("select * from caso_despacho where id=?", (fila_id,)).fetchone()
+    if (not f or f["case_id"] != caso["case_id"] or caso["etapa"] != "bloqueado"
+            or f["estado"] != "bloqueado" or f["reintento_de"] is not None
+            or REINTENTA_MOTIVO not in (f["motivo"] or "") or not f["instrucciones"]):
+        return None
+    if con.execute("select 1 from caso_despacho where case_id=? and id>? limit 1",
+                   (f["case_id"], f["id"])).fetchone():
+        return None
+    entrada = entrada_a_trabajo(con, f["case_id"])
+    if not entrada or entrada["id"] != f["evento_id"]:
+        return None
+    ultimo = con.execute("select de, a, actor from caso_evento where case_id=? and "
+                         "(de is null or de <> a) order by id desc limit 1",
+                         (f["case_id"],)).fetchone()
+    if not ultimo or (ultimo["de"], ultimo["a"], ultimo["actor"]) != (
+            "trabajo", "bloqueado", "automatizacion"):
+        return None
+    if not (caso["propuesta_aprobada"]
+            and caso["propuesta_aprobada"] == caso["propuesta_version"]):
+        return None
+    return dict(f)
+
+
+def casos_por_reintentar(con):
+    """[(caso, instrucciones, fila_id)] de la linea activa: los que bloqueo la orquestacion
+    desde el tick (`no_active_sender_terminal`) y nunca llegaron a un agente."""
+    salida = []
+    for d in con.execute(
+            "select d.id, d.case_id from caso_despacho d join caso c on c.case_id = d.case_id "
+            "where c.account=? and c.etapa='bloqueado' and d.estado='bloqueado' and "
+            "d.reintento_de is null and instr(coalesce(d.motivo, ''), ?) > 0 order by d.id",
+            (cuenta_activa(), REINTENTA_MOTIVO)).fetchall():
+        caso = dict(con.execute("select * from caso where case_id=?", (d["case_id"],)).fetchone())
+        vale = reintento_vale(con, caso, d["id"])
+        if vale:
+            salida.append((caso, vale["instrucciones"], vale["id"]))
     return salida
 
 
@@ -5345,21 +5427,97 @@ def espacio_del_proyecto(cli, proyecto):
     return f"path:{w['path'].strip()}", None
 
 
-def terminal_de(resultado):
-    """El handle de la terminal del agente en lo que devolvio `worker-start`: el efecto
-    `{kind: terminal, role: agent}`, donde venga."""
-    pila = [resultado]
-    while pila:
-        x = pila.pop()
-        if isinstance(x, dict):
-            if x.get("kind") == "terminal" and x.get("role") == "agent":
-                handle = x.get("id") or x.get("handle")
-                if isinstance(handle, str) and handle:
-                    return handle
-            pila.extend(x.values())
-        elif isinstance(x, list):
-            pila.extend(x)
+def terminal_creada(resultado):
+    """El handle de la terminal en lo que devolvio `terminal create`, o None."""
+    terminal = (resultado or {}).get("terminal")
+    handle = terminal.get("handle") if isinstance(terminal, dict) else None
+    return handle.strip() if isinstance(handle, str) and handle.strip() else None
+
+
+def cuenta_de_reintento(cli):
+    """(id, None) de la cuenta de Claude para el segundo intento, o (None, por que no):
+    autenticada, no la activa (la que acaba de fallar), bajo CUENTA_TOPE_USO de su sesion, la
+    de menos uso. Una sin cuota conocida va despues de todas las que la tienen."""
+    res, error = orca_llama(cli, ["account", "list"], DESPACHO_LISTA_S)
+    if error or not isinstance(res.get("accounts"), list):
+        return None, f"no pude listar las cuentas: {error or 'Orca no devolvió la lista'}"
+    elegibles = []
+    for c in res["accounts"]:
+        if (not isinstance(c, dict) or str(c.get("provider") or "").lower() != "claude"
+                or c.get("active") is True or not isinstance(c.get("id"), str)
+                or not c["id"].strip()):
+            continue
+        auth = c.get("auth") if isinstance(c.get("auth"), dict) else {}
+        if auth.get("state") != "authenticated":
+            continue
+        cuota = c.get("quota") if isinstance(c.get("quota"), dict) else {}
+        sesion = cuota.get("session") if isinstance(cuota.get("session"), dict) else {}
+        usado = sesion.get("usedPercent")
+        if isinstance(usado, bool) or not isinstance(usado, (int, float)):
+            usado = None
+        elif usado >= CUENTA_TOPE_USO:
+            continue
+        elegibles.append(((usado is None, usado or 0), c["id"].strip()))
+    if not elegibles:
+        return None, None
+    return min(elegibles)[1], None
+
+
+def abre_agente(cli, selector, cid, nombre):
+    """(terminal, cuenta, motivo): abre Claude en el espacio del proyecto. Primero sin
+    elegir cuenta (manda el pin del espacio o la seleccion global); si esa esta tomada o sin
+    sesion, UNA vez con la de `cuenta_de_reintento`. `cuenta` es la elegida, o None."""
+    orden = ["terminal", "create", "--worktree", selector, "--agent", DESPACHO_AGENTE,
+             "--title", f"WhatsApp case #{cid}", "--timeout-ms", str(DESPACHO_ARRANQUE_MS)]
+    plazo = DESPACHO_ARRANQUE_MS // 1000 + 10
+    res, error = orca_llama(cli, orden, plazo)
+    cuenta = None
+    if error and ERROR_DE_CUENTA.search(error):
+        cuenta, por_que = cuenta_de_reintento(cli)
+        if not cuenta:
+            return None, None, (f"ninguna cuenta de Claude disponible: {error}"
+                                + (f"; {por_que}" if por_que else ""))
+        res, error = orca_llama(cli, orden + ["--claude-account", cuenta], plazo)
+    terminal = None if error else terminal_creada(res)
+    if not terminal:
+        return None, cuenta, f"no pude despachar a {nombre}: {error or 'Orca no devolvió la terminal'}"
+    return terminal, cuenta, None
+
+
+def entrega_brief(cli, terminal, ruta, nombre):
+    """Espera el composer del agente y le escribe UNA linea: que lea el brief y lo siga. El
+    texto de varias lineas nunca se teclea en la TUI. None, o el motivo."""
+    res, error = orca_llama(cli, ["terminal", "wait", "--terminal", terminal, "--for",
+                                  "composer-ready", "--timeout-ms", str(DESPACHO_LISTO_MS)],
+                            DESPACHO_LISTO_MS // 1000 + 10)
+    espera = (res or {}).get("wait")
+    if error or not (isinstance(espera, dict) and espera.get("satisfied") is True):
+        return (f"el agente de {nombre} no quedó listo para recibir el trabajo: "
+                f"{error or 'Orca no vio su composer a tiempo'}")
+    _, error = orca_llama(cli, ["terminal", "send", "--terminal", terminal, "--text",
+                                LEE_EL_BRIEF.format(ruta), "--enter"], DESPACHO_LISTA_S)
+    if error:
+        return f"no pude darle el trabajo al agente de {nombre}: {error}"
     return None
+
+
+def ruta_de_brief(case_id, fila):
+    """El brief de un despacho, en la carpeta de datos del plugin (junto a scope.db)."""
+    return os.path.join(os.path.dirname(DB), "despachos", f"caso-{case_id}-{fila}.md")
+
+
+def escribe_brief(con, caso, proyecto, instrucciones, fila):
+    """(ruta, None) o (None, motivo). Solo el dueno de la maquina lo lee: lleva los
+    mensajes del cliente."""
+    ruta = ruta_de_brief(caso["case_id"], fila)
+    try:
+        os.makedirs(os.path.dirname(ruta), mode=0o700, exist_ok=True)
+        fd = os.open(ruta, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(brief_de_despacho(con, caso, proyecto, instrucciones))
+    except OSError as exc:
+        return None, f"no pude escribir el brief del despacho: {exc}"[:LARGO_MOTIVO]
+    return ruta, None
 
 
 def cita(texto):
@@ -5501,6 +5659,12 @@ def despacho_cierra(con, fila, estado, motivo=None, bloquea=None):
         f = con.execute("select * from caso_despacho where id=?", (fila,)).fetchone()
         con.execute("update caso_despacho set estado=?, motivo=coalesce(?, motivo), "
                     "updated_at=? where id=?", (estado, motivo, ahora_caso(), fila))
+        if f:
+            # El brief lleva los mensajes del cliente: no queda una copia de un despacho cerrado.
+            try:
+                os.remove(ruta_de_brief(f["case_id"], fila))
+            except OSError:
+                pass
         movido = False
         if bloquea and f:
             caso = con.execute("select * from caso where case_id=?", (f["case_id"],)).fetchone()
@@ -5518,11 +5682,11 @@ def despacho_cierra(con, fila, estado, motivo=None, bloquea=None):
 
 
 def suelta_trabajador(cli, fila):
-    """`worker-stop` del despacho. Lo que conteste (stop_unknown incluido) no cambia nada:
-    el caso ya se movio por lo que dijo su terminal o su resultado."""
-    if cli and fila.get("dispatch_id"):
-        orca_llama(cli, ["orchestration", "worker-stop", "--dispatch", fila["dispatch_id"]],
-                   DESPACHO_LISTA_S)
+    """Cierra la terminal del agente del despacho. Lo que conteste (una terminal que ya no
+    esta incluida) no cambia nada: el caso ya se movio por lo que dijo su terminal o su
+    resultado."""
+    if cli and fila.get("terminal"):
+        orca_llama(cli, ["terminal", "close", "--terminal", fila["terminal"]], DESPACHO_LISTA_S)
 
 
 def terminales_vivas(cli, selector):
@@ -5558,7 +5722,7 @@ def entrega_respuesta(con, cli, f, entrada, vivas, resumen):
                 caso_toma(con)
                 try:
                     caso_tocar(con, caso_de(con, f["case_id"]), "automatizacion",
-                               f"respuesta del cliente al agente ({f['dispatch_id']})")
+                               f"respuesta del cliente al agente ({f['terminal']})")
                     con.commit()
                 except BaseException:
                     con.rollback()
@@ -5639,27 +5803,51 @@ def tick_vigila(con, resumen):
             resumen["bloqueados_por_despacho"] += 1
 
 
-def despacha(con, caso, instrucciones, evento_id, resumen):
-    """Lanza UN despacho. La fila `lanzando` se escribe primero, con la base tomada; cada
-    id que devuelve Orca se anota al llegar. Cualquier falla va a Bloqueado con su texto."""
+def despacha(con, caso, instrucciones, evento_id, resumen, reintento_de=None, vieja=False):
+    """Lanza UN despacho. La fila `lanzando` se escribe primero, con la base tomada; lo que
+    devuelve Orca se anota al llegar. Cualquier falla va a Bloqueado con su texto.
+
+    - `reintento_de`: la fila que bloqueo `no_active_sender_terminal`. Si el caso sigue como
+      lo dejo (`reintento_vale`), el motor lo devuelve a `trabajo` y la fila nueva lo dice.
+    - `vieja`: la firma tiene mas de APROBACION_VIGENTE_S. La fila se escribe igual (es la
+      que impide volver a mirarla) y va a Bloqueado sin llamar a Orca."""
     cid = caso["case_id"]
     caso_toma(con)
     try:
         actual = caso_de(con, cid)
-        entrada = entrada_a_trabajo(con, cid)
-        if (actual["etapa"] != "trabajo" or not entrada or entrada["id"] != evento_id
-                or con.execute("select 1 from caso_despacho where case_id=? and evento_id=?",
-                               (cid, evento_id)).fetchone()):
-            con.rollback()
-            return
+        if reintento_de is not None:
+            if not reintento_vale(con, actual, reintento_de):
+                con.rollback()
+                return
+            # De bloqueado a trabajo no lo hace ningun comando: solo este reintento, que
+            # sigue la firma de antes (el lanzamiento anterior nunca llego a un agente).
+            caso_mover(con, actual, "trabajo", "automatizacion",
+                       f"reintento del despacho {reintento_de}: el lanzamiento anterior no "
+                       f"llegó a ningún agente")
+            evento_id = entrada_a_trabajo(con, cid)["id"]
+            actual = caso_de(con, cid)
+        else:
+            entrada = entrada_a_trabajo(con, cid)
+            if (actual["etapa"] != "trabajo" or not entrada or entrada["id"] != evento_id
+                    or con.execute("select 1 from caso_despacho where case_id=? and evento_id=?",
+                                   (cid, evento_id)).fetchone()):
+                con.rollback()
+                return
         momento = ahora_caso()
         fila = con.execute("insert into caso_despacho (case_id, evento_id, estado, instrucciones, "
-                           "created_at, updated_at) values (?,?,'lanzando',?,?,?)",
-                           (cid, evento_id, instrucciones, momento, momento)).lastrowid
+                           "reintento_de, created_at, updated_at) values (?,?,'lanzando',?,?,?,?)",
+                           (cid, evento_id, instrucciones, reintento_de, momento,
+                            momento)).lastrowid
         con.commit()
     except BaseException:
         con.rollback()
         raise
+    if vieja and reintento_de is None:
+        if despacho_cierra(con, fila, "bloqueado", "aprobación vieja", bloquea=(
+                f"{APROBACION_VIEJA} (la firma tiene más de {APROBACION_VIGENTE_S // 3600} h y "
+                f"no la lancé)")):
+            resumen["bloqueados_por_despacho"] += 1
+        return
     proyecto, motivo = proyecto_del_caso(con, actual)
     cli = orca_cli_path()
     if proyecto:
@@ -5671,43 +5859,29 @@ def despacha(con, caso, instrucciones, evento_id, resumen):
         selector, motivo = espacio_del_proyecto(cli, proyecto)
     if not motivo:
         despacho_anota(con, fila, workspace_selector=selector)
-        res, error = orca_llama(cli, ["orchestration", "run-create", "--objective",
-                                      f"WhatsApp case #{cid} for {nombre}"], DESPACHO_CREA_S)
-        corrida = (res or {}).get("run") if isinstance((res or {}).get("run"), dict) else {}
-        run_id, coordinador = corrida.get("id"), corrida.get("coordinator_handle")
-        if error or not run_id or not coordinador:
-            motivo = f"no pude despachar a {nombre}: {error or 'Orca no devolvió la corrida'}"
-    if not motivo:
-        despacho_anota(con, fila, run_id=run_id)
         vistos = stanzas_de_caso(con, cid)
-        res, error = orca_llama(cli, ["orchestration", "task-create", "--run", run_id,
-                                      "--task-title", f"WhatsApp case #{cid}",
-                                      "--spec", brief_de_despacho(con, actual, proyecto,
-                                                                  instrucciones)],
-                                DESPACHO_CREA_S)
-        tarea = (res or {}).get("task") if isinstance((res or {}).get("task"), dict) else {}
-        task_id = tarea.get("id")
-        if error or not task_id:
-            motivo = f"no pude despachar a {nombre}: {error or 'Orca no devolvió la tarea'}"
+        ruta, motivo = escribe_brief(con, actual, proyecto, instrucciones, fila)
+    terminal = None
     if not motivo:
-        despacho_anota(con, fila, task_id=task_id, mensajes=json.dumps(vistos))
-        res, error = orca_llama(cli, ["orchestration", "worker-start", "--run", run_id,
-                                      "--task", task_id, "--from", coordinador,
-                                      "--worktree", selector, "--agent", DESPACHO_AGENTE,
-                                      "--timeout-ms", str(DESPACHO_ARRANQUE_MS)],
-                                DESPACHO_ARRANQUE_MS // 1000 + 10)
-        dispatch_id = (res or {}).get("dispatchId")
-        if error or not isinstance(dispatch_id, str) or not dispatch_id:
-            motivo = f"no pude despachar a {nombre}: {error or 'Orca no devolvió el despacho'}"
+        despacho_anota(con, fila, mensajes=json.dumps(vistos))
+        terminal, cuenta, motivo = abre_agente(cli, selector, cid, nombre)
+        if terminal or cuenta:
+            # Con la base: una vuelta que muere aca deja la terminal a la vista del vigia.
+            despacho_anota(con, fila, terminal=terminal, cuenta_claude=cuenta)
+    if not motivo:
+        motivo = entrega_brief(cli, terminal, ruta, nombre)
+        if motivo:
+            # Una terminal que abrio el despacho y no recibio el trabajo no queda colgada.
+            suelta_trabajador(cli, {"terminal": terminal})
     if motivo:
         if despacho_cierra(con, fila, "bloqueado", motivo[:LARGO_MOTIVO], bloquea=motivo):
             resumen["bloqueados_por_despacho"] += 1
         return
-    despacho_anota(con, fila, dispatch_id=dispatch_id, terminal=terminal_de(res), estado="activo")
+    despacho_anota(con, fila, estado="activo")
     caso_toma(con)
     try:
         caso_tocar(con, caso_de(con, cid), "automatizacion",
-                   f"despachado a {proyecto['id']} ({dispatch_id})")
+                   f"despachado a {proyecto['id']} ({terminal})")
         con.commit()
     except BaseException:
         con.rollback()
@@ -5717,15 +5891,24 @@ def despacha(con, caso, instrucciones, evento_id, resumen):
 
 def tick_despacha(con, resumen, inicio):
     """Lo del minuto: vigilar lo que esta en vuelo y lanzar a lo mas UN trabajo, si el
-    lanzamiento entero cabe en lo que le queda al tick."""
+    lanzamiento entero cabe antes de DESPACHO_LIMITE_S."""
     tick_vigila(con, resumen)
-    pendientes = casos_por_despachar(con)
+    # Primero el reintento de lo que bloqueo la orquestacion (lo mas viejo). Una firma
+    # vieja no llama a Orca: va a Bloqueado sin quitarle el turno a una nueva.
+    pendientes = [(caso, instrucciones, None, fila)
+                  for caso, instrucciones, fila in casos_por_reintentar(con)]
+    for caso, instrucciones, evento_id, vieja in casos_por_despachar(con):
+        if vieja:
+            despacha(con, caso, instrucciones, evento_id, resumen, vieja=True)
+        else:
+            pendientes.append((caso, instrucciones, evento_id, None))
     if not pendientes:
         return
-    if time.time() - inicio > PRESUPUESTO_TICK_S - DESPACHO_RESERVA_S:
+    if time.time() - inicio > DESPACHO_LIMITE_S - DESPACHO_RESERVA_S:
         resumen["pospuestos"] += 1
         return
-    despacha(con, *pendientes[0], resumen)
+    caso, instrucciones, evento_id, reintento_de = pendientes[0]
+    despacha(con, caso, instrucciones, evento_id, resumen, reintento_de=reintento_de)
 
 
 DETALLE_ATENDER = "the owner asked the agent to handle it now"
