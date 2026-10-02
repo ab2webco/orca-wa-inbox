@@ -20,6 +20,14 @@ en un Orca 1.4.160-lab.84 o más nuevo). El precheck de `triage` **sale con 1 cu
 ningún caso necesita lenguaje**, con lo que Orca marca la corrida `skipped_precheck` y
 no despierta al agente.
 
+Las dos encuentran las herramientas leyendo `.wa-bin`, en la carpeta de trabajo del
+plugin (`workspace: plugin-owned`): el worker escribe ahi la ruta de su propio `bin/` en
+cada activacion (`harness.mjs`, `sembrarBin`). No hay resolvedor por instalacion ni por
+`PATH`. Sin `.wa-bin` salen con 1, calladas, y la siguiente activacion lo siembra; el
+resolvedor viejo no cabe junto a esta forma en los 1024 caracteres del manifiesto. Con un
+build instalado y uno de desarrollo abiertos a la vez, comparten carpeta y gana el ultimo
+que sembro.
+
 ## Crearlas
 
 ```bash

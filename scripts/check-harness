@@ -14,8 +14,10 @@ que este en uno solo se pierde en la mitad de las maquinas, asi que se exige en 
 Ademas se comprueba que lo que el prompt manda leer exista de verdad: un `cat` a un
 archivo que nadie siembra es una instruccion que el agente obedece sin obtener nada.
 """
+import os
 import pathlib
 import re
+import subprocess
 import sys
 
 RAIZ = pathlib.Path(__file__).resolve().parent.parent
@@ -55,6 +57,30 @@ def plano(texto: str) -> str:
     """Un solo espacio entre palabras: las frases del prompt van partidas en dos
     lineas y buscarlas literalmente solo encontraria la mitad."""
     return re.sub(r"\s+", " ", texto)
+
+
+def ayuda_de_las_herramientas() -> str:
+    """El `--help` de verdad de cada herramienta y de cada subcomando, todo junto: las
+    banderas de una skill se comprueban contra esto y no contra una lista a mano."""
+    textos = []
+
+    def corre(*args: str) -> str:
+        p = subprocess.run([str(RAIZ / "bin" / args[0]), *args[1:], "--help"],
+                           capture_output=True, text=True, timeout=60,
+                           env=dict(os.environ, HOME="/nonexistent"))
+        return p.stdout
+
+    for herramienta in ("wa-scope", "wa-read", "wa-send", "wa-transcribe"):
+        base = corre(herramienta)
+        textos.append(base)
+        for grupo in re.findall(r"\{([a-z,-]+)\}", base):
+            for sub in grupo.split(","):
+                texto = corre(herramienta, sub)
+                textos.append(texto)
+                if herramienta == "wa-scope" and sub == "caso":
+                    for g2 in re.findall(r"\{([a-z,-]+)\}", texto):
+                        textos.extend(corre(herramienta, sub, s2) for s2 in g2.split(","))
+    return "\n".join(textos)
 
 
 def main() -> int:
@@ -137,11 +163,51 @@ def main() -> int:
     # obedecio en vivo ("usa Tomar o Ignorar").
     viejo = re.compile(r"Take or Ignore|only-taken|take lock|wa-scope decisions"
                        r"|\.?ninguno.? conversation (never )?opens? (no )?cards?", re.I)
-    for rel in [*(f"harness/{p.name}" for p in ARNES.glob("*.md")), "prompts/triage.md"]:
+    for rel in [*(f"harness/{p.name}" for p in ARNES.glob("*.md")),
+                *(str(p.relative_to(RAIZ)) for p in ARNES.glob("skills/*/SKILL.md")),
+                "prompts/triage.md"]:
         comprobaciones += 1
         hallado = viejo.search(plano((RAIZ / rel).read_text(encoding="utf-8")))
         if hallado:
             fallos.append(f"{rel}  describe el flujo viejo: {hallado.group(0)!r}")
+
+    # Las skills del agente: `harness/skills/<nombre>/SKILL.md` se siembran en
+    # `.claude/skills/<nombre>/SKILL.md`. Claude Code solo las carga con un frontmatter
+    # valido (name igual a la carpeta, description que diga cuando usarla), y una skill que
+    # inventa una bandera le ensena al agente un comando que no existe.
+    skills = sorted((ARNES / "skills").glob("*/SKILL.md"))
+    comprobaciones += 1
+    if {p.parent.name for p in skills} != {"whatsapp-soporte", "whatsapp-cli"}:
+        fallos.append("harness/skills  tienen que estar whatsapp-soporte y whatsapp-cli")
+    ayuda = ayuda_de_las_herramientas()
+    for ruta in skills:
+        rel = ruta.relative_to(RAIZ)
+        cuerpo = ruta.read_text(encoding="utf-8")
+        marco = re.match(r"---\n(.*?)\n---\n", cuerpo, re.S)
+        comprobaciones += 4
+        campos = dict(re.findall(r"^(\w+): (.+)$", marco.group(1), re.M)) if marco else {}
+        if not marco or campos.get("name") != ruta.parent.name:
+            fallos.append(f"{rel}  el frontmatter no empieza el archivo o su `name` no es "
+                          f"{ruta.parent.name}")
+        if len(campos.get("description", "")) < 40 or "use" not in campos.get("description", "").lower():
+            fallos.append(f"{rel}  la `description` no dice cuando usar la skill")
+        if "you edited is yours" not in cuerpo[:1500]:
+            fallos.append(f"{rel}  no dice en el propio archivo que pasa con una edicion a mano")
+        inventadas = sorted({f for f in re.findall(r"(?<![\w-])--[a-z][a-z-]+", cuerpo)
+                             if f not in ayuda})
+        if inventadas:
+            fallos.append(f"{rel}  usa banderas que ninguna herramienta tiene: {inventadas}")
+        if "wa-send" in cuerpo and "never run" not in cuerpo.lower():
+            fallos.append(f"{rel}  nombra wa-send sin decir que el agente no lo usa")
+    # Y el CLAUDE.md del espacio de trabajo apunta a AGENTS.md y a las dos skills.
+    comprobaciones += 1
+    claude = (ARNES / "CLAUDE.md").read_text(encoding="utf-8") if (ARNES / "CLAUDE.md").exists() else ""
+    if not all(x in claude for x in ("AGENTS.md", "whatsapp-soporte", "whatsapp-cli")):
+        fallos.append("harness/CLAUDE.md  tiene que apuntar a AGENTS.md y a las dos skills")
+    # El worker siembra las skills y `.wa-bin` con la misma huella que el resto.
+    comprobaciones += 1
+    if "plantillasDelArnes" not in siembra or "sembrarBin(" not in siembra:
+        fallos.append("harness.mjs  ya no siembra las skills o `.wa-bin`")
 
     # Y cada archivo del arnes tiene que decir en el propio archivo que pasa con una
     # edicion a mano: saberlo no puede exigir leer el codigo del plugin.

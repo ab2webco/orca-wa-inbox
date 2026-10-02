@@ -42,7 +42,7 @@ OTROS = ["main.mjs", "jev-espejo.mjs", "acciones.mjs", "harness.mjs", "README.md
          "sidecar/src/ingesta.js", "sidecar/src/alcance.js", "sidecar/src/envio.js",
          "sidecar/build.mjs", "sidecar/resolve-auth-dir.mjs",
          "scripts/check-clis", "scripts/check-closing", "scripts/check-resolver",
-         "scripts/resolver.py",
+         "scripts/resolver_formas.py",
          "scripts/check-harness", "scripts/check-panels", "scripts/check-prompts"]
 
 # scripts/voseo.py y este mismo archivo nombran las formas prohibidas a proposito:

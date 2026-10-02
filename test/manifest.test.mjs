@@ -261,6 +261,9 @@ hechas += 1
 assert.match(tick.command, /"\$WA\/wa-scope" tick --json$/,
   'tick: the command ends running `wa-scope tick --json`')
 hechas += 1
+assert.match(tick.command, /^WA="\$\(cat \.wa-bin 2>\/dev\/null\)"; \[ -x "\$WA\/wa-scope" \] \|\| exit 1; /,
+  'tick: finds the tools in `.wa-bin`, the single source the worker seeds, and stops quietly without it')
+hechas += 1
 assert.equal(tick.trigger, '* * * * *', 'tick: every minute')
 // Sin destino, una fila command-only termina en skipped_unavailable: el cwd del comando
 // es el destino resuelto (command-run-dispatch.ts:63-69).
@@ -273,6 +276,9 @@ assert.ok(triage.provider && triage.prompt === 'prompts/triage.md' && !('command
 hechas += 1
 assert.match(triage.precheck ?? '', /"\$WA\/wa-scope" pending --needs-agent$/,
   'triage: gated by `wa-scope pending --needs-agent`')
+hechas += 1
+assert.match(triage.precheck ?? '', /^WA="\$\(cat \.wa-bin 2>\/dev\/null\)"; \[ -x "\$WA\/wa-scope" \] \|\| exit 1; /,
+  'triage: finds the tools in `.wa-bin`, and stops quietly without it')
 hechas += 1
 assert.equal(triage.workspace, WORKSPACE_PROPIO, 'triage: runs in the plugin-owned workspace')
 // "Atender ahora" lanza esta automatizacion por su id, a cualquier hora: el horario de

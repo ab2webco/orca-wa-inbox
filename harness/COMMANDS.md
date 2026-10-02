@@ -74,11 +74,11 @@ JID alone.
 
 ## Where the tools are
 
-The tools ship inside the plugin, but you are not standing in the plugin folder: Orca
-runs the automation in a workspace, where no `./bin/` exists. That is why the prompt
-resolves the path instead of assuming it, and why `PATH` is not trusted. When several
-copies are installed, the highest **version** in `orca-plugin.json` wins, and a
-registered dev path wins over every installed copy.
+The tools ship inside the plugin, but you are not standing in the plugin folder: Orca runs
+the automation in this workspace, where no `./bin/` exists. The plugin writes the absolute
+path of its own `bin/` into `.wa-bin`, one line, every time it starts and every time it
+seeds this folder: `WA="$(cat .wa-bin 2>/dev/null)"`. `PATH` is never trusted. If `.wa-bin`
+is missing or `"$WA/wa-scope"` is not executable, stop and say so in one line.
 
 ## Reference
 
