@@ -3574,6 +3574,54 @@ else:
            sorted(llamadas(registro)) == sorted(f"t{i}.ogg" for i in range(1, 8)),
            f"{llamadas(registro)}")
 
+print("\nlos adjuntos en el hilo y en el brief")
+if NODE:
+    import base64  # noqa: E402
+    with tempfile.TemporaryDirectory() as home:
+        contenido = b"CONTENIDO-DE-LA-IMAGEN-XYZ"
+        foto = archivo_media(home, "foto1.jpg", contenido)
+        doc = archivo_media(home, "contrato.pdf", b"%PDF-fake")
+        llegan(home, A, [msg(PERSONA, "M1", "mira esto", 5, media="imagen", ruta=foto, bytes=2048),
+                         msg(PERSONA, "M2", "", 4, media="documento", ruta=doc, bytes=9),
+                         msg(PERSONA, "M3", "solo texto", 3)])
+        listo_persona(home)
+        ingiere(home)
+        c = caso_de_stanza(home, "M1")
+        por_id = {x["stanza_id"]: x for x in c["hilo"]}
+        ok("cada adjunto sale con tipo, tamano y la ruta absoluta del almacen",
+           por_id["M1"]["media"] == {"type": "imagen", "bytes": 2048, "path": foto}
+           and por_id["M2"]["media"] == {"type": "documento", "bytes": 9, "path": doc}
+           and os.path.isabs(foto), f"{por_id}")
+        ok("y un mensaje sin adjunto no lleva nada", por_id["M3"]["media"] is None)
+        js(home, "caso", "clasificar", str(c["case_id"]), "--clase", "card", "--prioridad",
+           "none", "--actor", "agente")
+        p = js(home, "caso", "propuesta", str(c["case_id"]), "--tipo", "trabajar",
+               "--instrucciones", "Revisa el adjunto y responde.", "--actor", "agente")[0]
+        instr = p["propuesta"]["instrucciones"]
+        ok("el brief de trabajar lista los adjuntos del caso",
+           instr.startswith("Revisa el adjunto y responde.") and foto in instr and doc in instr
+           and "imagen" in instr, f"{instr}")
+        js(home, "caso", "propuesta", str(c["case_id"]), "--tipo", "trabajar",
+           "--instrucciones", "Revisa el adjunto y responde.", "--actor", "agente")
+        ok("repetir la propuesta no cambia la version",
+           len([e for e in js(home, "caso", "ver", str(c["case_id"]))[0]["eventos"]
+                if e["a"] == "decision"]) == 1)
+        ok("el tablero no lleva los bytes ni base64 del adjunto",
+           contenido.decode() not in json.dumps(tablero(home))
+           and base64.b64encode(contenido).decode() not in json.dumps(tablero(home)))
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(PERSONA, "N1", "solo texto", 5)])
+        listo_persona(home)
+        ingiere(home)
+        c = caso_de_stanza(home, "N1")
+        js(home, "caso", "clasificar", str(c["case_id"]), "--clase", "card", "--prioridad",
+           "none", "--actor", "agente")
+        p = js(home, "caso", "propuesta", str(c["case_id"]), "--tipo", "trabajar",
+               "--instrucciones", "Haz algo.", "--actor", "agente")[0]
+        ok("sin adjuntos el brief queda tal cual", p["propuesta"]["instrucciones"]
+           == "Haz algo.", f"{p['propuesta']}")
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

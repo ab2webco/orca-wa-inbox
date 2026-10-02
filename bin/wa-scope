@@ -2575,6 +2575,11 @@ def cmd_caso_propuesta(con, a):
     if falta and falta not in propuesta:
         caso_falla("E_ARGS", f"a {a.tipo} proposal needs --{falta}: the owner approves that text "
                              f"and the executor runs it")
+    if a.tipo == "trabajar":
+        # El brief lleva los adjuntos del caso: el agente del proyecto los abre con lo suyo.
+        adjuntos = brief_de_adjuntos(con, caso)
+        if adjuntos and adjuntos not in propuesta["instrucciones"]:
+            propuesta["instrucciones"] += "\n\n" + adjuntos
     texto, version = propuesta_canonica(propuesta)
     if caso["etapa"] == "decision" and caso["propuesta_version"] == version:
         # Triage repasa cada cinco minutos: lo mismo no es un cambio ni deja evento.
@@ -2811,6 +2816,19 @@ def cmd_caso_listar(con, a):
         sql + " order by updated_at desc, case_id desc", params).fetchall()]
 
 
+def media_de_fila(r):
+    """El adjunto de un mensaje para quien lo lee: tipo, tamano y la ruta ABSOLUTA que da el
+    almacen (bajo ~/.wa-inbox/media), o None. Nunca los bytes: el agente abre el archivo con
+    sus propias herramientas cuando el caso lo pide."""
+    ruta = r["media_path"]
+    if not ruta:
+        return None
+    tamano = r["media_bytes"]
+    if tamano is None and os.path.isfile(ruta):
+        tamano = os.path.getsize(ruta)
+    return {"type": r["media_type"], "bytes": tamano, "path": ruta}
+
+
 def sin_transcribir(razon):
     return f"audio sin transcribir: {razon}"
 
@@ -2826,6 +2844,44 @@ def texto_de_audio(con, caso, r, texto):
         return " ".join(t for t in (texto, fila["texto"]) if t), True
     return " ".join(t for t in (texto, sin_transcribir((fila or {}).get("razon")
                                                        or "no_intentado")) if t), False
+
+
+def adjuntos_de_caso(caso, stanzas):
+    """Los adjuntos de los mensajes del caso, en orden de llegada: [(media)]. Sin almacen, o
+    sin adjuntos, vacio."""
+    if not stanzas:
+        return []
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return []
+    try:
+        filas = fuente.execute(
+            f"select media_type, media_bytes, media_path from mensaje where account=? and "
+            f"chat_jid=? and revocado=0 and media_path is not null and media_path <> '' and "
+            f"stanza_id in ({','.join('?' * len(stanzas))}) order by ts, rowid",
+            (caso["account"], caso["chat_jid"], *stanzas)).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        fuente.close()
+    return [media_de_fila(r) for r in filas]
+
+
+def brief_de_adjuntos(con, caso):
+    """El bloque que el brief de un trabajo lleva con los adjuntos del caso, o ''. Va escrito
+    por el motor y no por el agente: el agente del proyecto necesita las rutas y no hay por
+    que confiar en que alguien las copie."""
+    stanzas = [r["stanza_id"] for r in con.execute(
+        "select stanza_id from caso_mensaje where case_id=? order by at, stanza_id",
+        (caso["case_id"],))]
+    adjuntos = adjuntos_de_caso(caso, stanzas)
+    if not adjuntos:
+        return ""
+    lineas = [f"- {a['type']}, {a['bytes'] if a['bytes'] is not None else '?'} bytes: {a['path']}"
+              for a in adjuntos]
+    return ("Attachments of this case (open them with your own tools when the work needs "
+            "them):\n" + "\n".join(lineas))
 
 
 def caso_hilo(con, caso, stanzas):
@@ -2863,7 +2919,7 @@ def caso_hilo(con, caso, stanzas):
         texto, transcripcion = texto_de_audio(con, caso, r, (r["body"] or "").replace("\n", " "))
         x = {"stanza_id": r["stanza_id"], "date": wa_store.ts(r["ts"]),
              "from_me": bool(r["from_me"]), "sender": wa_store.quien(r), "text": texto,
-             "media": r["media_path"] or None, "en_caso": r["stanza_id"] in stanzas,
+             "media": media_de_fila(r), "en_caso": r["stanza_id"] in stanzas,
              "respondido": bool(i < ultima and not r["from_me"])}
         if transcripcion is not None:
             x["transcripcion"] = transcripcion

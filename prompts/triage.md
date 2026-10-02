@@ -150,6 +150,9 @@ mistakes in names and figures: do not state a name or an amount you only have fr
 transcript. `transcripcion: false` means it could not be transcribed
 (`audio sin transcribir: <code>`): say so, never guess what it said.
 
+Each `hilo` message with an attachment carries `media` (`type`, `bytes` and the absolute
+`path`). Open an image or a document with your own tools only when the case needs it.
+
 ## STEP 2 — How it writes there
 
     "$WA/wa-scope" voice "<chat_jid>" --json
