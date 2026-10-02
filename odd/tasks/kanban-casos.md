@@ -439,6 +439,11 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
            session) skips the Jev quality review; only the credential floor stays
            (owner, 2026-10-02: "review and hold what comes from users who are not me");
            a send to anyone else keeps the Jev review, because it protects the reader;
+         - `wa-send --approve` is documented as "an explicit act of the owner" but any
+           agent that can run the CLI can call it (seen 2026-10-02: a project session
+           approved its own held notices). Once owner chats send without a hold, an
+           agent must not be able to approve a hold: approval comes from the board, or
+           from the owner's WhatsApp reply (T14), never from an agent's CLI call;
          - solo quedan los controles destructivos: nunca repetir una credencial real;
            nada irreversible en un proyecto (borrar, despliegue a producción, push
            forzado, pagos) sin una confirmación explícita en ese chat.
