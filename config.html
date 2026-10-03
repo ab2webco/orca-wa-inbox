@@ -141,6 +141,7 @@
          panel de Orca (iframe con sandbox). Un renglon de opciones que se envuelve, con
          la elegida en --primary — la unica superficie de enfasis de la allowlist. */
       .seg { display: flex; flex-wrap: wrap; gap: 4px; }
+      .seg + input, .seg + textarea { margin-top: 8px; }
       .seg button { padding: 5px 10px; font-weight: 400; background: transparent;
                     color: var(--foreground, var(--fb-foreground)); }
       .seg button:hover { background: var(--accent, var(--fb-accent)); }
