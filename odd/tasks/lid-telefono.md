@@ -44,4 +44,9 @@ it.
       by digits and by the full number, identity line). Screenshots
       `config-combo-telefono` (search "+57 300") looked at in ES at 1440/768/390/320,
       light and dark, and EN at 1440/320 light and dark.
-- [ ] L4 `npm run check` green.
+- [x] L4 `npm run check` green.
+      Proof: exit 0 (with WA_INBOX_CAPTURAS in a private folder): check-clis 224,
+      check-closing 36/36, check-casos 957/957, manifest 110/110, resolver 29/29,
+      userdata 15/15, sidecar-build 5/5, pairing 88/88, mensajes 99/99, almacen
+      270/270, envio 90/90, panels 994/994, worker 395/395, 1144 screenshots without
+      overflow or JS errors.
