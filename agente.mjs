@@ -124,3 +124,92 @@ export function crearListaCuentas ({ correr, plataforma = process.platform, env 
     return { ok: true, code: 'cuentas', accounts: cuentas }
   }
 }
+
+/**
+ * Las automatizaciones del plugin, encendidas solas. Cada vez que el dueno vuelve a aprobar
+ * el plugin (una actualizacion), Orca las recrea APAGADAS y con ids nuevos, y el tick y el
+ * triage quedan sin correr hasta que alguien las enciende a mano. El worker las enciende al
+ * arrancar y en cada vuelta de la salud: `orca automations list`, y `automations edit <id>
+ * --enabled` para cada una apagada que sea de este plugin.
+ *
+ * Se reconocen por lo que declara el manifiesto, nunca por un id: el plugin
+ * (`<publisher>.<id>`, el `pluginOrigin.pluginKey` que Orca anota) y el id de cada
+ * automatizacion (`pluginOrigin.automationId`). Una del dueno, de otro plugin, o una vieja
+ * que el manifiesto ya no declara no se toca nunca. Solo se enciende la que Orca dice
+ * apagada (`enabled: false`): sin el dato, no se adivina. Y solo un id que nunca se vio
+ * encendido: la que el dueno apaga a mano despues de verla andar se queda apagada.
+ */
+const esTexto = (v) => typeof v === 'string' && v.trim().length > 0
+
+/** @returns {{ pluginKey: string | null, ids: string[] }} */
+export function automatizacionesDelManifiesto (manifiesto) {
+  const m = esRegistro(manifiesto) ? manifiesto : {}
+  const pluginKey = esTexto(m.publisher) && esTexto(m.id) ? `${m.publisher}.${m.id}` : null
+  const lista = esRegistro(m.contributes) && Array.isArray(m.contributes.automations)
+    ? m.contributes.automations : []
+  return { pluginKey, ids: lista.filter((a) => esRegistro(a) && esTexto(a.id)).map((a) => a.id) }
+}
+
+const delPlugin = (a, { pluginKey, ids }) => esRegistro(a) && esTexto(a.id) &&
+  esRegistro(a.pluginOrigin) && a.pluginOrigin.pluginKey === pluginKey &&
+  ids.includes(a.pluginOrigin.automationId)
+
+const listaDe = (payload) =>
+  esRegistro(payload) && esRegistro(payload.result) && Array.isArray(payload.result.automations)
+    ? payload.result.automations : []
+
+/** Los ids de Orca de las automatizaciones de este plugin que estan apagadas. */
+export function apagadasDelPlugin (payload, propias) {
+  if (!propias.pluginKey) return []
+  return listaDe(payload).filter((a) => delPlugin(a, propias) && a.enabled === false).map((a) => a.id)
+}
+
+/**
+ * @param {{ correr: (cmd: string, args: readonly string[], opts?: { timeoutMs: number }) =>
+ *             Promise<{ stdout: string }>, manifiesto: unknown, plataforma?: string,
+ *           env?: Record<string, string | undefined> }} deps
+ * @returns {() => Promise<{ ok: boolean, code: string, enabled: string[], failed: string[] }>}
+ */
+export function crearEncendedor ({ correr, manifiesto, plataforma = process.platform, env = process.env }) {
+  const propias = automatizacionesDelManifiesto(manifiesto)
+  // Los ids que ya se vieron encendidos en esta activacion.
+  const vistasEncendidas = new Set()
+  return async function encender () {
+    const cmd = comandoOrca(plataforma, env)
+    let sobre = null
+    try {
+      const salida = await correr(cmd, ['automations', 'list', '--json'], { timeoutMs: 15000 })
+      sobre = JSON.parse(String(salida?.stdout ?? '') || 'null')
+    } catch {
+      sobre = null
+    }
+    if (!esRegistro(sobre) || sobre.ok === false || !esRegistro(sobre.result)) {
+      return { ok: false, code: 'automatizaciones-fallo', enabled: [], failed: [] }
+    }
+    const enabled = []
+    const failed = []
+    for (const a of listaDe(sobre)) {
+      if (delPlugin(a, propias) && a.enabled === true) vistasEncendidas.add(a.id)
+    }
+    for (const id of apagadasDelPlugin(sobre, propias).filter((id) => !vistasEncendidas.has(id))) {
+      let respuesta = null
+      try {
+        const salida = await correr(cmd, ['automations', 'edit', id, '--enabled', '--json'],
+          { timeoutMs: 15000 })
+        try { respuesta = JSON.parse(String(salida?.stdout ?? '') || 'null') } catch { /* sin sobre */ }
+      } catch {
+        failed.push(id)
+        continue
+      }
+      // Orca puede contestar `ok: false` con salida 0: eso no la encendio.
+      if (esRegistro(respuesta) && respuesta.ok === false) failed.push(id)
+      else {
+        enabled.push(id)
+        vistasEncendidas.add(id)
+      }
+    }
+    return failed.length
+      ? { ok: false, code: 'encender-fallo', enabled, failed }
+      : { ok: true, code: enabled.length ? 'encendidas' : 'al-dia', enabled, failed }
+  }
+}
