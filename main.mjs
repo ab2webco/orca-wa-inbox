@@ -14,13 +14,14 @@
  * quitaron enteros, y con ellos el despachador de pestanas que vivia en este archivo.
  */
 import { execFile, spawn } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import { HARNESS_KEY } from './harness.mjs'
 import { llaveValida } from './jev-espejo.mjs'
 import { crearAccionesCaso } from './acciones.mjs'
-import { CUENTAS_ACCION, crearLanzadorTriage, crearListaCuentas } from './agente.mjs'
+import { CUENTAS_ACCION, crearEncendedor, crearLanzadorTriage, crearListaCuentas } from './agente.mjs'
 import { crearCatalogo, leerCatalogo, PROJECTS_KEY } from './catalogo.mjs'
 
 // Las herramientas viajan dentro del plugin. Antes se buscaban en el PATH del usuario,
@@ -1203,7 +1204,7 @@ export default function activate(orca) {
 
   // Antes que nada lo que necesita todo lo demas: donde esta el Orca vivo. Se vuelve a
   // resolver en cada arranque porque el runtime cambia de socket en cada arranque.
-  dirHerramientas()
+  const casaResuelta = dirHerramientas()
     .then((dir) => resolverCasaOrca(join(dir, 'wa-scope')))
     .then((casa) => orca.log(casa && casa.path
       ? `orca runtime home: ${casa.path} (${casa.source || 'probe'})`
@@ -1715,6 +1716,25 @@ export default function activate(orca) {
   const lanzarTriage = crearLanzadorTriage({ correr: correrOrca, herramienta: (nombre) => tool(nombre) })
   // Las cuentas de Claude que Ajustes ofrece para el bot, por la misma CLI.
   const listarCuentas = crearListaCuentas({ correr: correrOrca })
+  // Las automatizaciones del plugin (tick y triage): Orca las recrea apagadas tras cada
+  // nueva aprobacion. Se encienden al arrancar y en cada vuelta de la salud, las que el
+  // manifiesto declara y ninguna otra. La carpeta del plugin se lee dentro de la valla.
+  let manifiesto = null
+  try {
+    manifiesto = JSON.parse(readFileSync(join(PLUGIN_DIR, 'orca-plugin.json'), 'utf8'))
+  } catch (error) {
+    orca.log(`automations: manifest not readable: ${String(error?.message ?? error).slice(0, 160)}`)
+  }
+  const encender = crearEncendedor({ correr: correrOrca, manifiesto })
+  const encenderAutomatizaciones = () => detenido ? null : encender().then((r) => {
+    if (r.enabled.length || !r.ok) {
+      orca.log(`automations: ${r.code}; enabled ${r.enabled.join(', ') || 'none'}` +
+        (r.failed.length ? `; failed ${r.failed.join(', ')}` : ''))
+    }
+  }).catch((error) => orca.log(`automations failed: ${error.message}`))
+  // Despues de resolver la casa de Orca: sin ella la CLI le preguntaria a otro runtime.
+  casaResuelta.then(encenderAutomatizaciones)
+  const pararAutomatizaciones = programarSalud(encenderAutomatizaciones)
 
   const atenderPedidoScope = crearVigia({
     nombre: 'scope',
@@ -1942,6 +1962,7 @@ export default function activate(orca) {
     clearInterval(latidoTimer)
     clearTimeout(reinicioTimer)
     pararSalud()
+    pararAutomatizaciones()
     ingesta.parar()
     apagarSidecar()
   }

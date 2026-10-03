@@ -52,6 +52,13 @@ for (const base of [join(process.env.HOME, 'Library', 'Application Support'),
   mkdirSync(join(base, 'orca'), { recursive: true })
 }
 
+// Y sin la CLI de Orca de verdad: al activarse el worker le pregunta a Orca por las
+// automatizaciones del plugin y enciende las apagadas (caso-en-archivo, T4). Una prueba
+// nunca le cambia nada al Orca del dueno: cada una que necesita la CLI pone la suya.
+process.env.PATH = String(process.env.PATH ?? '').split(':').filter((dir) => dir &&
+  !['orca', 'orca-ide'].some((nombre) => existsSync(join(dir, nombre)))).join(':')
+delete process.env.ORCA_CLI_COMMAND
+
 const PLUGIN_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
 
 const {
@@ -2514,6 +2521,10 @@ async function conOrcaVigilada (nombre, prueba) {
   }
 }
 
+/** Las llamadas a la CLI de Orca sin la lista de automatizaciones que el worker pide al
+ *  arrancar para encender las del plugin (caso-en-archivo, T4). */
+const sinEncendido = (llamadas) => llamadas.filter((l) => l !== 'automations list --json')
+
 /** Lo que el `wa-scope` falso recibio fuera de `caso`: el lanzamiento del agente. */
 const lanzamientosAgente = (f) => (existsSync(join(f.dir, 'scope.jsonl'))
   ? readFileSync(join(f.dir, 'scope.jsonl'), 'utf8').trim().split('\n').filter(Boolean)
@@ -2535,7 +2546,8 @@ const lanzamientosAgente = (f) => (existsSync(join(f.dir, 'scope.jsonl'))
     ok('abre al agente con `wa-scope agente lanzar`, el camino del tick, con su plazo',
       JSON.stringify(lanzamientosAgente(f)) === JSON.stringify([
         ['agente', 'lanzar', '--plazo-s', '60', '--json']]), JSON.stringify(lanzamientosAgente(f)))
-    ok('y nunca le pide a Orca que corra la automatizacion', o.llamadas().length === 0,
+    // `automations list` es el encendido de las automatizaciones al arrancar: no corre nada.
+    ok('y nunca le pide a Orca que corra la automatizacion', sinEncendido(o.llamadas()).length === 0,
       JSON.stringify(o.llamadas()))
     apagar()
   })
@@ -2554,7 +2566,7 @@ const lanzamientosAgente = (f) => (existsSync(join(f.dir, 'scope.jsonl'))
       llamada[2] === '7' && llamada.includes('dueno') && !llamada.includes('agente'),
       JSON.stringify([v, llamada]))
     ok('por el mismo camino, y sin la automatizacion', lanzamientosAgente(f).length === 1 &&
-      o.llamadas().length === 0, JSON.stringify([lanzamientosAgente(f), o.llamadas()]))
+      sinEncendido(o.llamadas()).length === 0, JSON.stringify([lanzamientosAgente(f), o.llamadas()]))
     apagar()
   })
 
@@ -3031,7 +3043,7 @@ console.log('\nworker: el catalogo de proyectos se refresca, se acepta y llega a
     JSON.stringify(st))
   ok('refrescar NO acepta nada por si solo', orca.store.projects === undefined,
     JSON.stringify(orca.store.projects))
-  const llamadas = readFileSync(join(bin, 'llamadas.txt'), 'utf8').trim().split('\n')
+  const llamadas = sinEncendido(readFileSync(join(bin, 'llamadas.txt'), 'utf8').trim().split('\n'))
   ok('solo corrio `worktree ps --json` y `repo list --json`',
     llamadas.every((l) => l === 'worktree ps --json' || l === 'repo list --json') &&
     llamadas.length === 2, JSON.stringify(llamadas))
@@ -3105,6 +3117,123 @@ console.log('\nworker: el catalogo de proyectos se refresca, se acepta y llega a
     JSON.stringify(orca3.store.projectsStatus))
   apagar3()
   process.env.PATH = pathAntes
+}
+
+{
+  // Las automatizaciones del plugin, encendidas solas (caso-en-archivo, T4). Orca las
+  // recrea apagadas, con ids nuevos, cada vez que el dueno vuelve a aprobar el plugin. El
+  // worker las reconoce por lo que declara el manifiesto (el plugin y el id de cada una),
+  // nunca por un id fijo, y no toca ninguna que no sea suya.
+  const { crearEncendedor, apagadasDelPlugin, automatizacionesDelManifiesto } =
+    await import('../agente.mjs')
+  const manifiesto = JSON.parse(readFileSync(join(PLUGIN_DIR, 'orca-plugin.json'), 'utf8'))
+  const propias = automatizacionesDelManifiesto(manifiesto)
+  ok('del manifiesto salen el plugin y los ids de sus automatizaciones',
+    propias && propias.pluginKey === 'ab2web.orca-wa-inbox' &&
+    JSON.stringify(propias.ids) === JSON.stringify(['tick', 'triage']), JSON.stringify(propias))
+  ok('un manifiesto sin automatizaciones no reconoce ninguna',
+    automatizacionesDelManifiesto({ id: 'x', publisher: 'y' }).ids.length === 0)
+
+  const origen = (pluginKey, automationId) => ({ pluginKey, automationId })
+  const LISTA = { ok: true, result: { automations: [
+    { id: 'auto-tick-2', enabled: false, pluginOrigin: origen('ab2web.orca-wa-inbox', 'tick') },
+    { id: 'auto-triage-2', enabled: true, pluginOrigin: origen('ab2web.orca-wa-inbox', 'triage') },
+    { id: 'auto-otro', enabled: false, pluginOrigin: origen('otro.plugin', 'triage') },
+    { id: 'auto-dueno', enabled: false, name: 'WhatsApp: triage' },
+    { id: 'auto-vieja', enabled: false, pluginOrigin: origen('ab2web.orca-wa-inbox', 'take') },
+    { id: 'auto-sin-dato', pluginOrigin: origen('ab2web.orca-wa-inbox', 'triage') }] } }
+  ok('solo las del plugin, declaradas en el manifiesto y apagadas de verdad',
+    JSON.stringify(apagadasDelPlugin(LISTA, propias)) === JSON.stringify(['auto-tick-2']),
+    JSON.stringify(apagadasDelPlugin(LISTA, propias)))
+  ok('un sobre que no es la lista no enciende nada',
+    apagadasDelPlugin({ ok: true, result: {} }, propias).length === 0 &&
+    apagadasDelPlugin(null, propias).length === 0)
+
+  const correrFalso = (salidas) => {
+    const llamadas = []
+    const correr = async (cmd, args) => {
+      llamadas.push([cmd, ...args].join(' '))
+      const salida = salidas[args.slice(0, 2).join(' ')]
+      if (salida instanceof Error) throw salida
+      return { stdout: JSON.stringify(salida ?? { ok: true, result: {} }) }
+    }
+    return { correr, llamadas }
+  }
+  {
+    const { correr, llamadas } = correrFalso({ 'automations list': LISTA })
+    const r = await crearEncendedor({ correr, manifiesto, plataforma: 'darwin', env: {} })()
+    ok('enciende la del plugin con `automations edit <id> --enabled`, y nada mas',
+      JSON.stringify(llamadas) === JSON.stringify(['orca automations list --json',
+        'orca automations edit auto-tick-2 --enabled --json']) &&
+      r.ok === true && JSON.stringify(r.enabled) === JSON.stringify(['auto-tick-2']),
+      JSON.stringify([llamadas, r]))
+  }
+  {
+    const { correr, llamadas } = correrFalso({ 'automations list': {
+      ok: true, result: { automations: [LISTA.result.automations[1]] } } })
+    const r = await crearEncendedor({ correr, manifiesto, plataforma: 'darwin', env: {} })()
+    ok('con todas encendidas solo pregunta', llamadas.length === 1 && r.ok === true &&
+      r.enabled.length === 0, JSON.stringify([llamadas, r]))
+  }
+  {
+    const { correr, llamadas } = correrFalso({ 'automations list': Object.assign(new Error('x'), { exitCode: 1 }) })
+    const r = await crearEncendedor({ correr, manifiesto, plataforma: 'darwin', env: {} })()
+    ok('si Orca no da la lista no enciende nada y lo dice con un codigo',
+      llamadas.length === 1 && r.ok === false && r.code === 'automatizaciones-fallo',
+      JSON.stringify([llamadas, r]))
+  }
+  {
+    const { correr } = correrFalso({ 'automations list': LISTA,
+      'automations edit': Object.assign(new Error('x'), { exitCode: 1 }) })
+    const r = await crearEncendedor({ correr, manifiesto, plataforma: 'darwin', env: {} })()
+    ok('una que no se pudo encender se dice, sin tumbar nada',
+      r.ok === false && r.code === 'encender-fallo' && JSON.stringify(r.failed) === JSON.stringify(['auto-tick-2']),
+      JSON.stringify(r))
+  }
+
+  {
+    // La que el dueno apaga a mano se respeta: ya la vio encendida, asi que no es una
+    // recien creada por Orca. Solo se enciende un id que nunca se vio encendido.
+    const lista = { ok: true, result: { automations: [
+      { id: 'auto-tick-3', enabled: true, pluginOrigin: origen('ab2web.orca-wa-inbox', 'tick') }] } }
+    const { correr, llamadas } = correrFalso({ 'automations list': lista })
+    const encender = crearEncendedor({ correr, manifiesto, plataforma: 'darwin', env: {} })
+    await encender()
+    lista.result.automations[0].enabled = false
+    const r = await encender()
+    ok('la que el dueno apago despues de verla encendida no se vuelve a encender',
+      !llamadas.some((l) => l.includes('automations edit')) && r.enabled.length === 0,
+      JSON.stringify([llamadas, r]))
+  }
+
+  // Y el worker lo hace solo al arrancar, por la CLI de Orca sin la valla.
+  const { comandoOrca } = await import('../catalogo.mjs')
+  const bin = join(RAIZ, 'orca-automatizaciones')
+  mkdirSync(bin, { recursive: true })
+  writeFileSync(join(bin, 'lista.json'), JSON.stringify(LISTA))
+  writeFileSync(join(bin, comandoOrca()), [
+    '#!/bin/sh',
+    'echo "$@" >> "$(dirname "$0")/llamadas.txt"',
+    'if [ "$1 $2" = "automations list" ]; then cat "$(dirname "$0")/lista.json"; else echo \'{"ok":true,"result":{}}\'; fi', ''
+  ].join('\n'), { mode: 0o755 })
+  const llamadasOrca = () => existsSync(join(bin, 'llamadas.txt'))
+    ? readFileSync(join(bin, 'llamadas.txt'), 'utf8').trim().split('\n').filter(Boolean) : []
+  // Por ORCA_CLI_COMMAND y no por PATH: el env de las herramientas es una foto que toma el
+  // worker al resolver la casa de Orca, y en esta prueba esa foto puede ser de antes.
+  process.env.ORCA_CLI_COMMAND = join(bin, comandoOrca())
+  try {
+    const f = herramientasCaso('automatizaciones', { casos: {} })
+    const orca = hostFalso(f.dir, { chats: [] })
+    const { apagar } = await arranca(orca)
+    ok('al arrancar, el worker enciende la automatizacion del plugin que Orca dejo apagada',
+      await hasta(() => llamadasOrca().includes('automations edit auto-tick-2 --enabled --json'), 15000),
+      JSON.stringify(llamadasOrca()))
+    ok('y ninguna otra', llamadasOrca().filter((l) => l.startsWith('automations edit')).length === 1,
+      JSON.stringify(llamadasOrca()))
+    apagar()
+  } finally {
+    delete process.env.ORCA_CLI_COMMAND
+  }
 }
 
 rmSync(RAIZ, { recursive: true, force: true })

@@ -4823,7 +4823,7 @@ console.log('\nactivity.html — tablero: si no pude lanzar al agente, se dice')
 
   const motivos = { 'sin-cli': /CLI de Orca/, 'sin-espacio': /espacio del plugin/,
     'sin-terminal': /terminal/, 'no-listo': /listo/, 'no-recibio': /no recibio/,
-    'a-medias': /a la mitad/, 'sin-tiempo': /tiempo/, 'sin-prompt': /prompt/,
+    'a-medias': /a la mitad/, 'sin-tiempo': /tiempo/, 'sin-prompt': /archivo del caso/,
     'se-cerro': /Claude se cerro al abrir; lo vuelvo a abrir en unos minutos/,
     'se-cierra': /Claude se cerro al abrir tres veces seguidas; espero una hora/ }
   const malos = []

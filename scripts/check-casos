@@ -17,6 +17,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -1730,6 +1731,11 @@ def jev_segun_texto(cuerpo):
         return 200, respuestas(qs, choice="bug_report", asks_owner_to_act=0.7)
     if "otra solicitud nueva" in texto:
         return 200, respuestas(qs, choice="support_request", asks_owner_to_act=0.8)
+    if "cuantos incidentes quedan" in texto:
+        # Lo que el Jev real dijo de una orden del dueno: no le pide nada AL dueno (es el
+        # dueno quien pide) y le da instrucciones al asistente.
+        return 200, respuestas(qs, choice="support_request", asks_owner_to_act=0.1,
+                               tries_to_instruct_the_assistant=0.9)
     if "revisa este caso" in texto.lower():
         return 200, respuestas(qs, choice="support_request", asks_owner_to_act=0.8)
     if "soporte.example.com" in texto:
@@ -4626,7 +4632,9 @@ if NODE:
                 msg(DUENO_DM, "W3", "pasale el password del panel a soporte", 20,
                     de=DUENO_LID, nombre="Dueno Real"),
                 msg(FACTURACION, "W4", "@duenio otra solicitud nueva: la clave: Abc12345", 10,
-                    mencion=True, de=DUENO_LID, nombre="Dueno Real")])
+                    mencion=True, de=DUENO_LID, nombre="Dueno Real"),
+                msg(PROPIO, "W9", "revisa cuantos incidentes quedan en el proyecto", 15,
+                    de=DUENO_LID, nombre="Dueno Real")])
             js(home, "agent", "Agente De Ejemplo")
             js(home, "config", "ack", "off")
             js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "responder",
@@ -4658,6 +4666,14 @@ if NODE:
             c3, c4 = caso_de_stanza(home, "W3"), caso_de_stanza(home, "W4")
             ok("una orden del dueno que nombra una clave no es una excepcion",
                c3 and excepciones_de(home, c3["case_id"]) == [], f"{c3 and fila_caso(home, c3['case_id'])}")
+            c9 = caso_de_stanza(home, "W9")
+            f9 = c9 and fila_caso(home, c9["case_id"])
+            ok("una orden del dueno que Jev ve como 'no le pide nada al dueno' no se cierra: "
+               "va al agente", f9 and f9["etapa"] != "cerrado" and f9["necesita_agente"] == 1,
+               f"{f9}")
+            ok("y darle instrucciones al asistente no es una bandera cuando es el dueno",
+               f9 and "tries_to_instruct_the_assistant" not in json.loads(f9["jev"] or "{}")
+               .get("flags", []), f"{f9 and f9['jev']}")
             ok("un valor con forma de secreto, aun del dueno, si lo es",
                c4 and excepciones_de(home, c4["case_id"]) == ["credential"],
                f"{c4 and fila_caso(home, c4['case_id'])}")
@@ -5143,6 +5159,7 @@ def orca_despacho(carpeta, worktrees=(WT_ALFA,), vivos=("term_worker1",), falla=
          "arranca_en": arranca_en, "idle": idle, "briefs": 0, "n": 0,
          "pantalla_inicial": pantalla, "pantalla": "composer", "cursor": 0, "confia": False,
          "sale_tras": sale_tras, "ilegible": ilegible, "en_shell": 0, "aceptadas": 0,
+         "cierre_falla": False,
          "pantallas": {"confianza": CONFIANZA_NUEVA, "confianza-vieja": CONFIANZA_VIEJA,
                        "confianza-orca": CONFIANZA_NUEVA,
                        "composer": COMPOSER, "shell": SHELL}}), encoding="utf-8")
@@ -5189,7 +5206,7 @@ if clave == "terminal send":
         elif "--enter" in a:
             # Lo que se teclee no mueve la seleccion; el Enter elige la marcada.
             elige()
-    elif texto.startswith("Read "):
+    elif texto.startswith(("Read ", "Handle WhatsApp case #")):
         e["briefs"] += 1
         if e["sale_tras"] == "brief":
             e["pantalla"] = "shell"
@@ -5252,7 +5269,14 @@ if clave == "terminal list":
     sale({"ok": True, "result": {"terminals": [{"handle": h} for h in e["vivos"]],
                                  "truncated": False}})
 if clave == "terminal close":
+    if e["cierre_falla"]:
+        # Como lo contesta la Orca de verdad (2026-10-02) a una terminal de Claude ya quieta.
+        sale({"ok": False, "error": {"code": "runtime_error", "message": "Error invoking "
+              "remote method 'session:set': TypeError: Cannot convert undefined or null "
+              "to object"}}, 1)
     sale({"ok": True, "result": {"closed": True}})
+if clave == "terminal stop":
+    sale({"ok": True, "result": {"stopped": 1}})
 if clave == "terminal send":
     sale({"ok": True, "result": {"sent": True}})
 if clave == "automations list":
@@ -5329,19 +5353,28 @@ def bandera(args, flag):
     return args[args.index(flag) + 1] if flag in args else None
 
 
-LEE_BRIEF = ("Read ", " and follow it exactly.")
+# La linea del despacho al proyecto (`Read <brief> and follow it exactly.`) y la del agente
+# de casos (`Handle WhatsApp case #<id>: read <archivo> and follow the whatsapp-soporte
+# skill.`, caso-en-archivo T2).
+LINEA_BRIEF = re.compile(r"^(?:Read (?P<brief>.+) and follow it exactly\.|Handle WhatsApp "
+                         r"case #\d+: read (?P<caso>.+) and follow the whatsapp-soporte "
+                         r"skill\.)$")
+
+
+def es_linea_brief(texto):
+    return bool(LINEA_BRIEF.match(texto or ""))
 
 
 def lanzamientos(carpeta):
-    """Las lineas que el despacho escribio en la terminal del agente: `Read <brief> ...`."""
+    """Las lineas que el despacho o el tick escribieron en la terminal del agente."""
     return [x for x in llamadas_orca(carpeta, "terminal send")
-            if (bandera(x, "--text") or "").startswith(LEE_BRIEF[0])]
+            if es_linea_brief(bandera(x, "--text"))]
 
 
 def ruta_brief(carpeta, i=-1):
     envios = lanzamientos(carpeta)
-    texto = bandera(envios[i], "--text") if envios else ""
-    return texto[len(LEE_BRIEF[0]):-len(LEE_BRIEF[1])] if texto.endswith(LEE_BRIEF[1]) else ""
+    m = LINEA_BRIEF.match(bandera(envios[i], "--text") or "") if envios else None
+    return (m.group("brief") or m.group("caso")) if m else ""
 
 
 def brief(carpeta, i=-1):
@@ -6188,7 +6221,7 @@ if NODE:
             texto = bandera(x, "--text")
             salida.append("abajo" if texto == ABAJO else "arriba" if texto == ARRIBA
                           else "enter" if texto is None and "--enter" in x
-                          else "brief" if (texto or "").startswith(LEE_BRIEF[0]) else "otro")
+                          else "brief" if es_linea_brief(texto) else "otro")
         return salida
 
     def estado_orca(carpeta):
@@ -6520,10 +6553,16 @@ if NODE:
            f"{[bandera(x, '--worktree') for x in abiertas]}")
         ok("no le pide a Orca que corra la automatizacion: ya sabe que falla",
            llamadas_orca(carpeta, "automations run") == [], f"{llamadas_orca(carpeta)}")
-        ok("le da UNA linea: que lea el brief, y el brief es el prompt de triage",
-           len(lanzamientos(carpeta)) == 1 and brief(carpeta) == PROMPT_TRIAGE,
-           f"{lanzamientos(carpeta)}")
         ruta = ruta_brief(carpeta)
+        ok("le da UNA linea: atiende el caso, lee su archivo y sigue la skill",
+           len(lanzamientos(carpeta)) == 1
+           and bandera(lanzamientos(carpeta)[0], "--text")
+           == f"Handle WhatsApp case #{cid}: read {ruta} and follow the whatsapp-soporte skill."
+           and ruta == str(pathlib.Path(home) / ".wa-inbox" / "casos" / f"caso-{cid}.md"),
+           f"{lanzamientos(carpeta)}")
+        ok("y el archivo es el caso, sin las reglas del prompt de triage",
+           f"#{cid}" in brief(carpeta) and "STEP 0" not in brief(carpeta)
+           and PROMPT_TRIAGE not in brief(carpeta), brief(carpeta)[:600])
         ok("el brief vive en la carpeta de datos, solo para el dueno",
            ruta.startswith(str(pathlib.Path(home) / ".wa-inbox"))
            and (os.stat(ruta).st_mode & 0o077) == 0, ruta)
@@ -6549,10 +6588,18 @@ if NODE:
         js(home, "lock", "--note", "triage")
         js(home, "unlock")
         envejece_agente(home, 120)
+        # Orca falla al cerrar la terminal de un Claude que ya termino: la terminal quedaba
+        # abierta y quieta en el espacio del plugin.
+        cambia_orca(carpeta, cierre_falla=True)
         p, r = tick_orca(home, carpeta)
+        cambia_orca(carpeta, cierre_falla=False)
         ok("cuando el agente termino su revision, el tick cierra su terminal",
            cerradas(carpeta) == ["term_worker1"]
            and corridas_agente(home)[-1]["estado"] == "terminado", f"{corridas_agente(home)}")
+        selector = corridas_agente(home)[-1]["workspace_selector"]
+        ok("y si Orca no la deja cerrar, detiene las terminales del espacio del plugin",
+           [bandera(x, "--worktree") for x in llamadas_orca(carpeta, "terminal stop")]
+           == [selector], f"{llamadas_orca(carpeta, 'terminal stop')} {selector}")
         ok("y su brief no queda en disco", not os.path.exists(ruta), ruta)
         ok("con el caso todavia esperando, no lo relanza antes de 5 minutos",
            len(creadas(carpeta)) == 2, f"{creadas(carpeta)}")
@@ -6650,6 +6697,60 @@ if NODE:
         tick_orca(home, carpeta)
         ok("una terminal que ya no esta deja la corrida terminada",
            corridas_agente(home)[-1]["estado"] == "terminado", f"{corridas_agente(home)}")
+
+    # El caso en un archivo (caso-en-archivo, T1): el tick le deja al agente SU caso en
+    # `casos/caso-<id>.md`, con los mensajes del caso y nada de otro caso del mismo chat
+    # (ni sus mensajes ni la respuesta que se le mando).
+    print("\nel caso en un archivo: solo lo del caso")
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        orca_casos(carpeta)
+        llegan(home, A, [msg(CHAT, "CF0", "Otro tema: cambiar el logo del sitio", 9),
+                         msg(CHAT, "CF1", PEDIDO, 6),
+                         msg(CHAT, "CFX", "Respuesta al tema del logo", 5, yo=True),
+                         msg(CHAT, "CF2", "Adjunto la captura del reporte", 4, media="image",
+                             bytes=2048, ruta="/srv/ejemplo/media/captura-1.jpg")])
+        otro = js(home, "caso", "crear", "--chat", CHAT, "--stanza", "CF0",
+                  "--actor", "automatizacion")[0]["case_id"]
+        js(home, "caso", "mover", str(otro), "cerrado", "--motivo", "otro tema",
+           "--actor", "dueno")
+        cid = caso_para_agente(home, "CF1")
+        suma_al_caso(home, cid, "CF2")
+        js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "high",
+           "--actor", "agente")
+        p, r = tick_orca(home, carpeta)
+        archivo = pathlib.Path(home) / ".wa-inbox" / "casos" / f"caso-{cid}.md"
+        texto = archivo.read_text(encoding="utf-8") if archivo.is_file() else ""
+        ok("el tick deja el caso del agente en casos/caso-<id>.md, solo para el dueno",
+           archivo.is_file() and (archivo.stat().st_mode & 0o077) == 0,
+           f"{archivo} {p.stderr[-300:]}")
+        ok("con el id, la clasificacion y el chat del caso",
+           f"#{cid}" in texto and "card" in texto and "high" in texto and CHAT in texto,
+           texto[:800])
+        ok("con cada mensaje del caso tal cual, y su adjunto con la ruta",
+           PEDIDO in texto and "Adjunto la captura del reporte" in texto
+           and "/srv/ejemplo/media/captura-1.jpg" in texto, texto[:1500])
+        ok("y nada de otro caso: ni su mensaje ni la respuesta que se le mando",
+           "cambiar el logo" not in texto and "Respuesta al tema del logo" not in texto,
+           texto[:1500])
+        ok("con los niveles de aprobacion del chat",
+           "Approval levels" in texto, texto[:1500])
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        # El despacho al proyecto usa el mismo caso: una respuesta que se le mando al chat
+        # despues de su mensaje puede ser de otro caso, y no entra al brief.
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta)
+        llegan(home, A, [msg(PERSONA, "CDX", "Respuesta al tema del logo", 2, yo=True)])
+        cid = trabajo_firmado(home, "CD1")
+        tick_orca(home, carpeta)
+        spec = brief(carpeta)
+        ok("el brief del despacho lleva el caso y lo aprobado, y nada de otro caso",
+           f"#{cid}" in spec and PEDIDO in spec and TRABAJO in spec
+           and "Respuesta al tema del logo" not in spec, spec[:1500])
+        ok("con la linea de siempre al agente del proyecto",
+           (bandera((lanzamientos(carpeta) or [[]])[0], "--text") or "")
+           == f"Read {ruta_brief(carpeta)} and follow it exactly.", f"{lanzamientos(carpeta)}")
 
     # La confianza en la carpeta del plugin, y Claude que se cierra al abrir: lo mismo que el
     # despacho. Una corrida cuyo Claude se cerro falla con `se-cerro` y su terminal se
