@@ -5159,7 +5159,7 @@ def orca_despacho(carpeta, worktrees=(WT_ALFA,), vivos=("term_worker1",), falla=
          "arranca_en": arranca_en, "idle": idle, "briefs": 0, "n": 0,
          "pantalla_inicial": pantalla, "pantalla": "composer", "cursor": 0, "confia": False,
          "sale_tras": sale_tras, "ilegible": ilegible, "en_shell": 0, "aceptadas": 0,
-         "cierre_falla": False,
+         "cierre_falla": False, "titulos": {},
          "pantallas": {"confianza": CONFIANZA_NUEVA, "confianza-vieja": CONFIANZA_VIEJA,
                        "confianza-orca": CONFIANZA_NUEVA,
                        "composer": COMPOSER, "shell": SHELL}}), encoding="utf-8")
@@ -5266,8 +5266,9 @@ if clave == "terminal state":
 if clave == "account list":
     sale({"ok": True, "result": {"accounts": e["cuentas"]}})
 if clave == "terminal list":
-    sale({"ok": True, "result": {"terminals": [{"handle": h} for h in e["vivos"]],
-                                 "truncated": False}})
+    sale({"ok": True, "result": {"terminals": [
+        dict({"handle": h}, **({"title": e["titulos"][h]} if h in e["titulos"] else {}))
+        for h in e["vivos"]], "truncated": False}})
 if clave == "terminal close":
     if e["cierre_falla"]:
         # Como lo contesta la Orca de verdad (2026-10-02) a una terminal de Claude ya quieta.
@@ -5604,6 +5605,37 @@ if NODE:
            f"{llamadas_orca(carpeta, 'terminal send')} {p.stderr[-300:]}")
         ok("y nunca detiene las terminales del proyecto",
            not llamadas_orca(carpeta, "terminal stop"), f"{llamadas_orca(carpeta, 'terminal stop')}")
+
+    # Al reiniciar Orca, las pestanas de los agentes vuelven con handles nuevos y el plugin
+    # las perdia: quedaban abiertas (2026-10-02, "Despacho caso-15-5" y "WhatsApp case #17").
+    # El tick las reconoce por el titulo y cierra las que no son de nada en curso; las del
+    # dueno, y las de un despacho en curso aunque cambie su handle, no se tocan.
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta)
+        cid = trabajo_firmado(home, "D2c")
+        tick_orca(home, carpeta)
+        did = despachos(home, cid)[-1]["id"]
+        cambia_orca(carpeta, vivos=["term_worker1", "term_vuelta", "term_vieja", "term_agente",
+                                    "term_dueno"],
+                    titulos={"term_worker1": f"WhatsApp case #{cid}",
+                             "term_vuelta": f"✳ Despacho caso-{cid}-{did}",
+                             "term_vieja": "✳ Despacho caso-990-77",
+                             "term_agente": "◐ WhatsApp: case agent",
+                             "term_dueno": "◐ Guardia de bots"})
+        antes = len(cerradas(carpeta))
+        con = db_de(home)
+        con.execute("delete from settings where key='limpieza_at'")
+        con.commit()
+        con.close()
+        p, r = tick_orca(home, carpeta)
+        nuevas = cerradas(carpeta)[antes:]
+        ok("el tick cierra las terminales del plugin que no son de nada en curso",
+           sorted(nuevas) == ["term_agente", "term_vieja"] and p.returncode == 0,
+           f"{nuevas} {p.stderr[-300:]}")
+        ok("y no toca las del dueno ni las de un despacho en curso",
+           not {"term_dueno", "term_vuelta", "term_worker1"} & set(nuevas), f"{nuevas}")
 
     # Un lanzamiento que quedo a medias (el tick murio) no se relanza: va al dueno.
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
