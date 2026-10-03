@@ -7008,7 +7008,16 @@ for texto, esperado in (
         ("Hacer el reembolso al cliente", ["payment"]),
         ("Rotar el token de la API y mandarlo", ["credential"]),
         ("Dejarlo listo para el viernes", ["commitment"]),
-        ("Cotizar el cambio en $300", ["money"])):
+        ("Cotizar el cambio en $300", ["money"]),
+        # Los mensajes del cliente que el trabajo cita, con su sello de hora, son lo que el
+        # cliente pidio, no lo que el trabajo compromete (caso #14 en vivo: "22:15" frenaba
+        # todo despacho que citara un mensaje).
+        ("Verbatim messages (arrival order):\n[2026-10-02 22:15] Persona Demo:\n"
+         "> Revisa cuantos incidentes hay\n\nReport the count from the tracker.", []),
+        ("[2026-10-02 09:30] Persona Demo:\n> lo necesito para el viernes, cuesta $300\n\n"
+         "Revisar el reporte y decir que falta.", []),
+        ("[2026-10-02 09:30] Persona Demo:\n> revisa el reporte\n\n"
+         "Dejarlo listo para el viernes", ["commitment"])):
     salio = reglas.trabajo_comprometido(texto)
     ok(f"trabajo: {texto!r} -> {esperado}", salio == esperado, f"salio {salio}")
 

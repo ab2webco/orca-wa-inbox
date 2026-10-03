@@ -257,6 +257,15 @@ ORDEN_TRABAJO = ("delete", "deploy", "force_push", "payment", "credential", "com
                  "money")
 
 
+# The customer's messages as a work brief quotes them: `> ` lines and the
+# `[YYYY-MM-DD HH:MM] Name:` stamp above each one.
+CITA = re.compile(r"^\s*(?:>.*|\[\d{4}-\d{2}-\d{2} \d{1,2}:\d{2}\][^\n]*)$", re.MULTILINE)
+
+
+def sin_citas(texto):
+    return CITA.sub("", texto or "")
+
+
 def trabajo_comprometido(texto):
     """Why a piece of work must wait for the owner instead of going to the project's agent
     without a click (T22.9), in a stable order; an empty list is work that can go. Only the
@@ -275,7 +284,9 @@ def trabajo_comprometido(texto):
         halladas.add("deploy")
     if TRABAJO_PAGO.search(t):
         halladas.add("payment")
-    salida = excepciones(original, SALIDA)
+    # A date or an amount the customer wrote, quoted in the work, is what was asked, not
+    # what the work commits to; the quote's arrival stamp is not a promised time either.
+    salida = excepciones(sin_citas(original), SALIDA)
     for e in salida:
         halladas.add(e)
     return [r for r in ORDEN_TRABAJO if r in halladas]
