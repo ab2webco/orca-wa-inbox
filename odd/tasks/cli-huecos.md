@@ -27,9 +27,19 @@ tools, so the Skills section (T24) can build on it.
 
 ## Checklist
 
-- [ ] C1 propuesta en `listo` (check-casos).
-- [ ] C2 reclasificar (check-casos).
-- [ ] C3 `--approve` sin borrador (check-clis / check-casos).
-- [ ] C4 `wa-read wait` (check-clis).
-- [ ] C5 ruta estable del bin (worker test + check-harness).
-- [ ] C6 docs/skill + `npm run check` en verde.
+- [x] C1 propuesta en `listo` (check-casos). `listo -> decision` en la tabla de etapas; la
+      misma propuesta en listo no escribe. El panel ofrece "Editar y enviar" en listo.
+      Rojo: E_STAGE; verde: check-casos "editar la propuesta en listo" 7/7 (ae7507c).
+- [x] C2 reclasificar (check-casos). Ya funcionaba en el CLI (desde clasificado toca el
+      caso, desde decision vuelve a clasificado); se fijo con pruebas, sin rojo posible:
+      check-casos "reclasificar" 4/4 (6619462).
+- [x] C3 `--approve` sin borrador (test/envio.test.mjs). La fila `draft` de la actividad
+      se quita al aprobar y al retirar. Rojo: la fila seguia; verde: envio 93/93 (0b1175d).
+- [x] C4 `wa-read wait` (check-clis `revisa_espera` + sin transporte). Rojo: subcomando
+      inexistente; verde: check-clis 233 comprobaciones (f0978b8).
+- [x] C5 ruta estable del bin: `<dir de estado>/bin-path` (`~/.wa-inbox/bin-path`,
+      `%APPDATA%\wa-inbox\bin-path`), escrito en cada siembra aunque no haya carpeta de
+      trabajo. Rojo: no existia; verde: worker 398/398; check-harness compara la ruta con
+      `wa_store.inbox_dir()` (2d5c716, 5d6fcea).
+- [x] C6 docs/skill + `npm run check` en verde: COMMANDS.md, skill whatsapp-cli y README;
+      check-harness exige `bin-path` y `wa-read wait` (5d6fcea). `npm run check` sale 0.
