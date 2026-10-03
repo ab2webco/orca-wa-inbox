@@ -17,6 +17,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -5189,7 +5190,7 @@ if clave == "terminal send":
         elif "--enter" in a:
             # Lo que se teclee no mueve la seleccion; el Enter elige la marcada.
             elige()
-    elif texto.startswith("Read "):
+    elif texto.startswith(("Read ", "Handle WhatsApp case #")):
         e["briefs"] += 1
         if e["sale_tras"] == "brief":
             e["pantalla"] = "shell"
@@ -5329,19 +5330,28 @@ def bandera(args, flag):
     return args[args.index(flag) + 1] if flag in args else None
 
 
-LEE_BRIEF = ("Read ", " and follow it exactly.")
+# La linea del despacho al proyecto (`Read <brief> and follow it exactly.`) y la del agente
+# de casos (`Handle WhatsApp case #<id>: read <archivo> and follow the whatsapp-soporte
+# skill.`, caso-en-archivo T2).
+LINEA_BRIEF = re.compile(r"^(?:Read (?P<brief>.+) and follow it exactly\.|Handle WhatsApp "
+                         r"case #\d+: read (?P<caso>.+) and follow the whatsapp-soporte "
+                         r"skill\.)$")
+
+
+def es_linea_brief(texto):
+    return bool(LINEA_BRIEF.match(texto or ""))
 
 
 def lanzamientos(carpeta):
-    """Las lineas que el despacho escribio en la terminal del agente: `Read <brief> ...`."""
+    """Las lineas que el despacho o el tick escribieron en la terminal del agente."""
     return [x for x in llamadas_orca(carpeta, "terminal send")
-            if (bandera(x, "--text") or "").startswith(LEE_BRIEF[0])]
+            if es_linea_brief(bandera(x, "--text"))]
 
 
 def ruta_brief(carpeta, i=-1):
     envios = lanzamientos(carpeta)
-    texto = bandera(envios[i], "--text") if envios else ""
-    return texto[len(LEE_BRIEF[0]):-len(LEE_BRIEF[1])] if texto.endswith(LEE_BRIEF[1]) else ""
+    m = LINEA_BRIEF.match(bandera(envios[i], "--text") or "") if envios else None
+    return (m.group("brief") or m.group("caso")) if m else ""
 
 
 def brief(carpeta, i=-1):
@@ -6188,7 +6198,7 @@ if NODE:
             texto = bandera(x, "--text")
             salida.append("abajo" if texto == ABAJO else "arriba" if texto == ARRIBA
                           else "enter" if texto is None and "--enter" in x
-                          else "brief" if (texto or "").startswith(LEE_BRIEF[0]) else "otro")
+                          else "brief" if es_linea_brief(texto) else "otro")
         return salida
 
     def estado_orca(carpeta):
@@ -6520,10 +6530,16 @@ if NODE:
            f"{[bandera(x, '--worktree') for x in abiertas]}")
         ok("no le pide a Orca que corra la automatizacion: ya sabe que falla",
            llamadas_orca(carpeta, "automations run") == [], f"{llamadas_orca(carpeta)}")
-        ok("le da UNA linea: que lea el brief, y el brief es el prompt de triage",
-           len(lanzamientos(carpeta)) == 1 and brief(carpeta) == PROMPT_TRIAGE,
-           f"{lanzamientos(carpeta)}")
         ruta = ruta_brief(carpeta)
+        ok("le da UNA linea: atiende el caso, lee su archivo y sigue la skill",
+           len(lanzamientos(carpeta)) == 1
+           and bandera(lanzamientos(carpeta)[0], "--text")
+           == f"Handle WhatsApp case #{cid}: read {ruta} and follow the whatsapp-soporte skill."
+           and ruta == str(pathlib.Path(home) / ".wa-inbox" / "casos" / f"caso-{cid}.md"),
+           f"{lanzamientos(carpeta)}")
+        ok("y el archivo es el caso, sin las reglas del prompt de triage",
+           f"#{cid}" in brief(carpeta) and "STEP 0" not in brief(carpeta)
+           and PROMPT_TRIAGE not in brief(carpeta), brief(carpeta)[:600])
         ok("el brief vive en la carpeta de datos, solo para el dueno",
            ruta.startswith(str(pathlib.Path(home) / ".wa-inbox"))
            and (os.stat(ruta).st_mode & 0o077) == 0, ruta)
@@ -6687,6 +6703,23 @@ if NODE:
            texto[:1500])
         ok("con los niveles de aprobacion del chat",
            "Approval levels" in texto, texto[:1500])
+
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        # El despacho al proyecto usa el mismo caso: una respuesta que se le mando al chat
+        # despues de su mensaje puede ser de otro caso, y no entra al brief.
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta)
+        llegan(home, A, [msg(PERSONA, "CDX", "Respuesta al tema del logo", 2, yo=True)])
+        cid = trabajo_firmado(home, "CD1")
+        tick_orca(home, carpeta)
+        spec = brief(carpeta)
+        ok("el brief del despacho lleva el caso y lo aprobado, y nada de otro caso",
+           f"#{cid}" in spec and PEDIDO in spec and TRABAJO in spec
+           and "Respuesta al tema del logo" not in spec, spec[:1500])
+        ok("con la linea de siempre al agente del proyecto",
+           (bandera((lanzamientos(carpeta) or [[]])[0], "--text") or "")
+           == f"Read {ruta_brief(carpeta)} and follow it exactly.", f"{lanzamientos(carpeta)}")
 
     # La confianza en la carpeta del plugin, y Claude que se cierra al abrir: lo mismo que el
     # despacho. Una corrida cuyo Claude se cerro falla con `se-cerro` y su terminal se

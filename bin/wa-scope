@@ -5760,6 +5760,8 @@ REINTENTA_MOTIVO = "no_active_sender_terminal"
 SE_CERRO = "Claude se cerro al abrir"
 REINTENTA_MOTIVOS = (REINTENTA_MOTIVO, SE_CERRO)
 LEE_EL_BRIEF = "Read {} and follow it exactly."
+# La del agente de casos (caso-en-archivo): su caso en un archivo, y las reglas en el arnes.
+ATIENDE_EL_CASO = "Handle WhatsApp case #{}: read {} and follow the whatsapp-soporte skill."
 # `composer-ready` puede llegar mientras Claude todavia arranca: el Enter llega sin turno y la
 # linea se pierde. Despues de escribirla se mira `terminal state` hasta DESPACHO_VERIFICA_S;
 # sin turno, se espera `tui-idle` y se escribe de nuevo: a lo mas REENVIOS_POR_TICK en una
@@ -6322,7 +6324,7 @@ def espera_composer(cli, terminal, listo_ms):
 REENVIO_COSTO_S = DESPACHO_IDLE_MS // 1000 + 10 + 4 * DESPACHO_LISTA_S
 
 
-def reescribe_brief(cli, terminal, ruta):
+def reescribe_brief(cli, terminal, linea):
     """Con el agente quieto (`tui-idle`) y todavia sin turno, le escribe la linea otra vez.
     Devuelve (si la escribio, el turno que vio, lo que muestra la pantalla, sus lineas): un
     agente ocupado o con turno no se toca, y con la confianza o un shell a la vista tampoco
@@ -6343,13 +6345,13 @@ def reescribe_brief(cli, terminal, ruta):
     if vista in ("shell", "confianza"):
         return False, None, vista, lineas
     _, error = orca_llama(cli, ["terminal", "send", "--terminal", terminal, "--text",
-                                LEE_EL_BRIEF.format(ruta), "--enter"], DESPACHO_LISTA_S)
+                                linea, "--enter"], DESPACHO_LISTA_S)
     return not error, None, vista, lineas
 
 
-def entrega_brief(cli, terminal, ruta, nombre, limite, listo_ms=DESPACHO_LISTO_MS):
-    """Espera el composer del agente, mira la pantalla y le escribe UNA linea: que lea el
-    brief y lo siga. El texto de varias lineas nunca se teclea en la TUI. Con la pantalla de
+def entrega_brief(cli, terminal, linea, nombre, limite, listo_ms=DESPACHO_LISTO_MS):
+    """Espera el composer del agente, mira la pantalla y le escribe UNA `linea`: que lea el
+    brief (o el archivo de su caso) y lo siga. El texto de varias lineas nunca se teclea en la TUI. Con la pantalla de
     confianza a la vista la acepta primero; con un shell (Claude se cerro) no escribe nada.
     Despues mira que su turno empiece y, si la linea se perdio, la reescribe
     (REENVIOS_POR_TICK, dentro de `limite`). (motivo o None, reenvios, si se vio el turno)."""
@@ -6368,14 +6370,14 @@ def entrega_brief(cli, terminal, ruta, nombre, limite, listo_ms=DESPACHO_LISTO_M
         return (f"el agente de {nombre} no quedó listo para recibir el trabajo: "
                 f"{error or 'Orca no vio su composer a tiempo'}"), 0, False
     _, error = orca_llama(cli, ["terminal", "send", "--terminal", terminal, "--text",
-                                LEE_EL_BRIEF.format(ruta), "--enter"], DESPACHO_LISTA_S)
+                                linea, "--enter"], DESPACHO_LISTA_S)
     if error:
         return f"no pude darle el trabajo al agente de {nombre}: {error}", 0, False
     reenvios, aceptada = 0, False
     turno = espera_turno(cli, terminal, limite)
     while (turno == "no" and reenvios < REENVIOS_POR_TICK
            and time.time() + REENVIO_COSTO_S + DESPACHO_VERIFICA_S <= limite):
-        escrita, turno, vista, lineas = reescribe_brief(cli, terminal, ruta)
+        escrita, turno, vista, lineas = reescribe_brief(cli, terminal, linea)
         if vista == "shell":
             return motivo_se_cerro(lineas), reenvios, False
         if vista == "confianza" and not aceptada:
@@ -6440,31 +6442,11 @@ def brief_de_despacho(con, caso, proyecto, instrucciones):
     ruta absoluta de este wa-scope."""
     cid = caso["case_id"]
     wa = ruta_wa_scope()
-    chat = merged_scope(con).get(caso["chat_jid"]) or {}
-    hilo = caso_hilo(con, caso, stanzas_de_caso(con, cid), una_linea=False) or []
-    bloques = []
-    for m in hilo:
-        quien = "us (already sent to the chat)" if m["from_me"] else (m["sender"] or "unknown")
-        marca = " (context, already answered)" if m.get("respondido") else ""
-        if m.get("transcripcion") is True:
-            marca += " (voice note, transcribed)"
-        bloque = [f"[{m['date']}] {quien}{marca}:", cita(m["text"])]
-        if m.get("media"):
-            media = m["media"]
-            bloque.append(f"  attachment: {media['type']}, "
-                          f"{media['bytes'] if media['bytes'] is not None else '?'} bytes: "
-                          f"{media['path']}")
-        bloques.append("\n".join(bloque))
-    cabeza = [
-        f"WhatsApp case #{cid}: {caso['titulo'] or 'untitled'}",
-        f"Project: {proyecto['name']} ({proyecto['path']}). You are the project agent; the "
-        f"owner approved this work for this project.",
-        f"Chat: {chat.get('chat_name') or caso['chat_jid']}",
+    cabeza = cabeza_del_caso(con, caso) + [
+        "",
+        f"You are the project agent of {proyecto['name']} ({proyecto['path']}); the owner "
+        f"approved this work for this project.",
     ]
-    if chat.get("tone"):
-        cabeza.append(f"Tone of the chat: {chat['tone']}")
-    if chat.get("instructions"):
-        cabeza.append(f"Owner's instructions for the chat: {chat['instructions']}")
     informes = informes_del_caso(con, cid)
     previos = []
     if informes:
@@ -6506,18 +6488,8 @@ def brief_de_despacho(con, caso, proyecto, instrucciones):
         "internal details and no date or amount you cannot keep.",
         f"The whole case, if you need it: {wa} caso ver {cid} --json",
     ]
-    omitidos = 0
-    while True:
-        cuerpo = ["", "## Messages of the case, verbatim, in arrival order"]
-        if omitidos:
-            cuerpo.append(f"({omitidos} earlier messages left out for size: read them with "
-                          f"`caso ver`)")
-        cuerpo.extend(bloques[omitidos:] or ["(the message store is not available: read the "
-                                             "case with `caso ver`)"])
-        texto = "\n".join(cabeza + cuerpo + [""] + cola)
-        if len(texto) <= TOPE_BRIEF or omitidos >= len(bloques):
-            return texto
-        omitidos += 1
+    return mensajes_con_tope(cabeza, bloques_del_caso(con, caso), cola,
+                             "## Messages of the case, verbatim, in arrival order")
 
 
 # ── El caso en un archivo (caso-en-archivo) ───────────────────────────────────────────
@@ -6549,16 +6521,22 @@ def escribe_privado(ruta, texto):
 def bloques_del_caso(con, caso):
     """Los mensajes del caso, cada uno citado tal cual, en orden de llegada: solo los que
     son del caso (`en_caso`). Una respuesta propia del chat puede ser de otro caso, asi que
-    no entra. None si no hay almacen de mensajes."""
+    no entra, y tampoco decide que ya se contesto: lo dice el propio caso, con la ultima
+    vez que llego a `respondido`. None si no hay almacen de mensajes."""
     hilo = caso_hilo(con, caso, stanzas_de_caso(con, caso["case_id"]), una_linea=False)
     if hilo is None:
         return None
+    contestado = con.execute(
+        "select max(at) from caso_evento where case_id=? and a='respondido' and "
+        "(de is null or de <> 'respondido')", (caso["case_id"],)).fetchone()[0]
+    corte = sello_a_epoch(contestado) if contestado else None
     bloques = []
     for m in hilo:
         if not m.get("en_caso"):
             continue
         quien = "us" if m["from_me"] else (m["sender"] or "unknown")
-        marca = " (context, already answered)" if m.get("respondido") else ""
+        respondido = corte is not None and m["ts"] is not None and m["ts"] < corte
+        marca = " (context, already answered)" if respondido else ""
         if m.get("transcripcion") is True:
             marca += " (voice note, transcribed)"
         elif m.get("transcripcion") is False:
@@ -6891,7 +6869,7 @@ def cura_entrega(con, cli, f, proyecto, resumen, inicio):
                 f"{reenvios + 1} veces y nunca empezó)")):
             resumen["bloqueados_por_despacho"] += 1
         return
-    escrita, turno, _, _ = reescribe_brief(cli, f["terminal"], ruta)
+    escrita, turno, _, _ = reescribe_brief(cli, f["terminal"], LEE_EL_BRIEF.format(ruta))
     if escrita:
         despacho_anota(con, f["id"], reenvios=reenvios + 1)
     elif turno == "empezo":
@@ -6970,7 +6948,8 @@ def despacha(con, caso, instrucciones, evento_id, resumen, reintento_de=None, vi
     reenvios, turno = 0, False
     if not motivo:
         motivo, reenvios, turno = entrega_brief(
-            cli, terminal, ruta, nombre, limite or time.time() + DESPACHO_LIMITE_S)
+            cli, terminal, LEE_EL_BRIEF.format(ruta), nombre,
+            limite or time.time() + DESPACHO_LIMITE_S)
         if motivo:
             # Una terminal que abrio el despacho y no recibio el trabajo no queda colgada.
             suelta_trabajador(cli, {"terminal": terminal})
@@ -7055,14 +7034,18 @@ ESTADO_DE_AGENTE = {"lanzando": "launching", "activo": "running", "terminado": "
 LARGO_DETALLE_AGENTE = 160
 
 
-def ruta_prompt_triage():
-    """El prompt de la automatizacion, el del manifiesto: el mismo texto para los dos."""
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        "prompts", "triage.md")
-
-
 def ruta_brief_agente(fila):
+    """El brief de una corrida de antes del archivo del caso (la copia del prompt de
+    triage): ya no se escribe, pero una que estaba en vuelo al actualizar lo lee."""
     return os.path.join(os.path.dirname(DB), "despachos", f"agente-casos-{fila}.md")
+
+
+def linea_del_agente(f):
+    """La linea que el agente de casos recibe: atender SU caso leyendo su archivo, con las
+    reglas del arnes. Una corrida de antes, sin caso, lee su brief como siempre."""
+    if f.get("case_id") is None:
+        return LEE_EL_BRIEF.format(ruta_brief_agente(f["id"]))
+    return ATIENDE_EL_CASO.format(f["case_id"], ruta_de_caso(f["case_id"]))
 
 
 def espacio_del_plugin(cli):
@@ -7169,7 +7152,7 @@ def cura_agente(con, cli, f, resumen):
                       f"la línea del brief se envió {reenvios + 1} veces y nunca empezó")
         resumen["agente_error"] += 1
         return
-    escrita, turno, _, _ = reescribe_brief(cli, f["terminal"], ruta_brief_agente(f["id"]))
+    escrita, turno, _, _ = reescribe_brief(cli, f["terminal"], linea_del_agente(f))
     if escrita:
         agente_anota(con, f["id"], reenvios=reenvios + 1)
     elif turno == "empezo":
@@ -7213,21 +7196,6 @@ def tick_vigila_agente(con, cli, resumen):
             espera = (res or {}).get("wait")
             if not error and isinstance(espera, dict) and espera.get("satisfied") is True:
                 agente_cierra(con, cli, f, "terminado")
-
-
-def escribe_brief_agente(fila):
-    """(ruta, None) o (None, motivo): el prompt de triage, copiado a la carpeta de datos."""
-    ruta = ruta_brief_agente(fila)
-    try:
-        with open(ruta_prompt_triage(), encoding="utf-8") as fh:
-            prompt = fh.read()
-        os.makedirs(os.path.dirname(ruta), mode=0o700, exist_ok=True)
-        fd = os.open(ruta, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(prompt)
-    except OSError as exc:
-        return None, str(exc)
-    return ruta, None
 
 
 def caso_para_corrida(con, origen, casos):
@@ -7290,16 +7258,14 @@ def lanza_agente(con, origen, hasta):
     f = {"id": fila, "terminal": None, "case_id": cid}
     cli = orca_cli_path()
     queda = lambda: int((hasta - time.time()) * 1000)  # noqa: E731
-    falla, selector, ruta, terminal = None, None, None, None
+    falla, selector, terminal = None, None, None
     if not cli:
         falla = ("sin-cli", "no encuentro la CLI de Orca en esta máquina")
     if not falla:
         selector, falla = espacio_del_plugin(cli)
     if not falla:
         agente_anota(con, fila, workspace_selector=selector)
-        ruta, error = escribe_brief_agente(fila)
-        if not error:
-            _, error = escribe_caso(con, cid)
+        _, error = escribe_caso(con, cid)
         falla = ("sin-prompt", error) if error else None
     if not falla and queda() < 15000:
         falla = ("sin-tiempo", "no quedaba tiempo para abrir al agente")
@@ -7318,7 +7284,7 @@ def lanza_agente(con, origen, hasta):
     reenvios, turno = 0, False
     if not falla:
         motivo, reenvios, turno = entrega_brief(
-            cli, terminal, ruta, AGENTE_NOMBRE, hasta,
+            cli, terminal, linea_del_agente(f), AGENTE_NOMBRE, hasta,
             listo_ms=max(5000, min(DESPACHO_LISTO_MS, queda() - 8000)))
         if motivo:
             falla = (codigo_de_falla(con, fila, motivo), motivo)

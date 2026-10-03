@@ -23,7 +23,10 @@ After an update/re-approval the plugin's automations come back enabled without a
 
 - [x] T1 Case file writer (`casos/caso-<id>.md`), only case messages, tests in check-casos.
       Proof: check-casos "el caso en un archivo: solo lo del caso" (5 checks), 941/941 green.
-- [ ] T2 One-line brief for the case agent and the dispatch to project agents.
+- [x] T2 One-line brief for the case agent and the dispatch to project agents.
+      Proof: check-casos agent+dispatch section 626/626 ("le da UNA linea: atiende el caso",
+      "el brief del despacho lleva el caso y lo aprobado, y nada de otro caso"); panels
+      `sin-prompt` text names the case file.
 - [ ] T3 Rules into the skill/CLAUDE.md, `prompts/triage.md` as a pointer; harness tests.
 - [ ] T4 Worker enables the plugin automations found disabled; worker tests.
 - [ ] T5 Live E2E after deploy: a real case answered from the case file; automations
