@@ -37,6 +37,11 @@ it.
       Proof: `revisa_telefono_de_lid` RED (`phone` missing in wa-read and in the
       panel's synced list), then GREEN "8 CLI arrancan, 224 comprobaciones". Covers
       LID with pairing, LID without, phone direct, group, and a store without the table.
-- [ ] L3 Panel shows and searches the phone — test/panels.test.mjs + screenshots
+- [x] L3 Panel shows and searches the phone — test/panels.test.mjs + screenshots
       1440/768/390/320 both themes.
+      Proof: RED 18 failures (976/994), then GREEN 994/994 (ES and EN: phone next to
+      the name, unnamed LID named by its phone, +1/+506 formats, search by "300 777",
+      by digits and by the full number, identity line). Screenshots
+      `config-combo-telefono` (search "+57 300") looked at in ES at 1440/768/390/320,
+      light and dark, and EN at 1440/320 light and dark.
 - [ ] L4 `npm run check` green.

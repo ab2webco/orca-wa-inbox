@@ -2857,6 +2857,69 @@ console.log('\nconfig.html — buscar una conversacion como la gente la escribe 
     doc.getElementById('chat-count').textContent)
 }
 
+// WhatsApp guarda los directos con un id interno (`<digitos>@lid`) y ya no muestra el
+// numero: el dueno no distinguia un chat de otro ni lo encontraba por el telefono de su
+// agenda. El sidecar anota el telefono de cada LID y la lista lo trae en `phone`.
+const CHATS_CON_TELEFONO = [
+  { jid: '111122223333@lid', name: 'Persona Guardada', kind: 'directo', phone: '+573007776655' },
+  { jid: '111122224444@lid', name: '111122224444@lid', kind: 'directo', phone: '+573000000002' },
+  { jid: '111122225555@lid', name: 'Sin Telefono', kind: 'directo', phone: null },
+  { jid: '573000000001@s.whatsapp.net', name: 'Laura Mendez', kind: 'directo',
+    phone: '+573000000001' },
+  { jid: '111122226666@lid', name: 'Socio Norte', kind: 'directo', phone: '+14155550100' },
+  { jid: '111122227777@lid', name: 'Socio Sur', kind: 'directo', phone: '+50688888888' },
+  { jid: '120363000000000001@g.us', name: 'Soporte Norte', kind: 'grupo', phone: null }
+]
+
+for (const idioma of ['es-419', 'en-US']) {
+  console.log(`\nconfig.html — el telefono de un directo guardado con su LID (${idioma})`)
+  const { doc } = await montar('config.html', { chats: CHATS_CON_TELEFONO }, idioma)
+  await espera()
+  const buscar = (texto) => {
+    escribir(doc, 'chat-search', texto)
+    return opcionesCombo(doc, 'chat-list').map((o) => o.textContent)
+  }
+  const opcion = (jid) => {
+    escribir(doc, 'chat-search', '')
+    return doc.querySelector(`#chat-list [role="option"][data-value="${jid}"]`)
+      ?.textContent || ''
+  }
+
+  ok('el telefono va al lado del nombre, con el codigo de pais aparte',
+    opcion('111122223333@lid').includes('Persona Guardada') &&
+    opcion('111122223333@lid').includes('+57 300 777 6655'), opcion('111122223333@lid'))
+  ok('sin nombre, el directo se llama como su telefono y no como su id interno',
+    opcion('111122224444@lid').includes('+57 300 000 0002') &&
+    !opcion('111122224444@lid').includes('@lid'), opcion('111122224444@lid'))
+  ok('y el telefono no se repite cuando ya es el nombre',
+    opcion('111122224444@lid').split('+57').length === 2, opcion('111122224444@lid'))
+  ok('un directo por telefono tambien lo muestra',
+    opcion('573000000001@s.whatsapp.net').includes('+57 300 000 0001'),
+    opcion('573000000001@s.whatsapp.net'))
+  ok('el formato sirve para cualquier codigo de pais',
+    opcion('111122226666@lid').includes('+1 415 555 0100') &&
+    opcion('111122227777@lid').includes('+506 8888 8888'),
+    `${opcion('111122226666@lid')} | ${opcion('111122227777@lid')}`)
+  ok('sin telefono conocido no se inventa ninguno, ni en un grupo',
+    !opcion('111122225555@lid').includes('+') &&
+    !opcion('120363000000000001@g.us').includes('+'),
+    `${opcion('111122225555@lid')} | ${opcion('120363000000000001@g.us')}`)
+
+  // Lo que la gente escribe: el numero como lo tiene en la agenda, con o sin espacios.
+  ok('buscar un pedazo del numero con espacios lo encuentra',
+    buscar('300 777').some((t) => t.includes('Persona Guardada')), JSON.stringify(buscar('300 777')))
+  ok('y los digitos seguidos tambien',
+    buscar('3007776655').some((t) => t.includes('Persona Guardada')),
+    JSON.stringify(buscar('3007776655')))
+  ok('el numero completo, con el +, trae solo esa conversacion',
+    buscar('+57 300 777 6655').length === 1, JSON.stringify(buscar('+57 300 777 6655')))
+
+  elegirChat(doc, '111122223333@lid', 'persona')
+  ok('elegida, la identidad de abajo dice tambien el telefono',
+    doc.getElementById('chat-id').textContent.includes('+57 300 777 6655'),
+    doc.getElementById('chat-id').textContent)
+}
+
 console.log('\nconfig.html — las tres que importan no se pierden entre las 296')
 {
   const { doc } = await montar('config.html', {
