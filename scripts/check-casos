@@ -7215,7 +7215,11 @@ with tempfile.TemporaryDirectory() as home:
             ("yes 4", {"accion": "si", "caso": 4}),
             ("NO 18", {"accion": "no", "caso": 18}),
             ("si", {"accion": "si", "caso": None}),
+            ("yes", {"accion": "si", "caso": None}),
             ("no.", {"accion": "no", "caso": None}),
+            # ok y dale se escriben de pasada: sin el numero no aprueban nada.
+            ("ok", None),
+            ("Dale!", None),
             ("18 mas corto y sin el precio", {"accion": "corregir", "caso": 18,
                                               "texto": "mas corto y sin el precio"}),
             ("#9 cambie el saludo", {"accion": "corregir", "caso": 9, "texto": "cambie el saludo"}),
