@@ -262,8 +262,13 @@ ORDEN_TRABAJO = ("delete", "deploy", "force_push", "payment", "credential", "com
 CITA = re.compile(r"^\s*(?:>.*|\[\d{4}-\d{2}-\d{2} \d{1,2}:\d{2}\][^\n]*)$", re.MULTILINE)
 
 
+# A full date with its time (`2026-10-03 07:39`) records when something happened; a promise
+# names a day or an hour, never both stamped together.
+SELLO = re.compile(r"\b\d{4}-\d{2}-\d{2}[ T]\d{1,2}:\d{2}(?::\d{2})?\b")
+
+
 def sin_citas(texto):
-    return CITA.sub("", texto or "")
+    return SELLO.sub("", CITA.sub("", texto or ""))
 
 
 def trabajo_comprometido(texto):

@@ -7079,7 +7079,12 @@ for texto, esperado in (
         ("[2026-10-02 09:30] Persona Demo:\n> lo necesito para el viernes, cuesta $300\n\n"
          "Revisar el reporte y decir que falta.", []),
         ("[2026-10-02 09:30] Persona Demo:\n> revisa el reporte\n\n"
-         "Dejarlo listo para el viernes", ["commitment"])):
+         "Dejarlo listo para el viernes", ["commitment"]),
+        # Una fecha con hora que el trabajo cita como dato (cuando paso algo) no es una
+        # promesa (caso #18 en vivo: "(2026-10-03 07:39)" en la interpretacion).
+        ("Waits at alert time (2026-10-03 07:39): 10 h, 9 h and 4 h.\n\n"
+         "Verify the three conversations and draft the note.", []),
+        ("Entregarlo hoy a las 10:00", ["commitment"])):
     salio = reglas.trabajo_comprometido(texto)
     ok(f"trabajo: {texto!r} -> {esperado}", salio == esperado, f"salio {salio}")
 
