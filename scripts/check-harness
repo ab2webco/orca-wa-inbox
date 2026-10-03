@@ -7,9 +7,11 @@ la que una regla se cae sin que nadie lo note: el diff se lee entero, se aprueba
 semanas despues el agente manda una clave por WhatsApp.
 
 Asi que no se lee el diff: se comprueba que cada regla dura siga ALCANZABLE por el
-agente, y por los dos caminos que tiene. El arnes es el que se lee siempre, pero solo
-existe donde Orca le da carpeta al plugin; el prompt es el que llega siempre. Una regla
-que este en uno solo se pierde en la mitad de las maquinas, asi que se exige en ambos.
+agente, y por los dos caminos que tiene dentro de su carpeta: el AGENTS.md, que Orca le
+mete al contexto solo, y la skill whatsapp-soporte, que dice como se atiende un caso.
+Desde caso-en-archivo (T3) el agente de casos corre siempre en la carpeta del plugin (el
+tick lo abre ahi, con UNA linea que apunta a su caso y a la skill), y el prompt de triage
+es solo un puntero al arnes: las reglas ya no viven en el prompt.
 
 Ademas se comprueba que lo que el prompt manda leer exista de verdad: un `cat` a un
 archivo que nadie siembra es una instruccion que el agente obedece sin obtener nada.
@@ -47,10 +49,11 @@ REGLAS = [
 GENERADOS = {"PROJECTS.md": "ARCHIVO_PROYECTOS = 'PROJECTS.md'"}
 
 # Donde tiene que estar cada regla. El AGENTS.md es lo que Orca le mete al contexto al
-# agente sin que nadie lo pida; los prompts son lo que llega aunque no haya carpeta.
-# `prompts/take.md` se fue con su automation (T7): el tablero reemplazo "tomar lo
-# marcado", y el unico prompt que queda es el del agente de casos.
-OBLIGATORIOS = ["harness/AGENTS.md", "prompts/triage.md"]
+# agente sin que nadie lo pida; la skill whatsapp-soporte es la que sigue con su caso.
+OBLIGATORIOS = ["harness/AGENTS.md", "harness/skills/whatsapp-soporte/SKILL.md"]
+SKILL_SOPORTE = "harness/skills/whatsapp-soporte/SKILL.md"
+# El prompt de triage es un puntero: corto, sin los pasos, y apuntando a la skill.
+PUNTERO_MAX_LINEAS = 30
 
 
 def plano(texto: str) -> str:
@@ -148,15 +151,27 @@ def main() -> int:
         for archivo in sorted(nombrados - sembrados):
             fallos.append(f"{rel}  manda leer {archivo}, que el plugin no siembra")
 
-    # Dos reglas del prompt del agente que no pueden perderse sin que nadie lo note: solo
-    # se actua sobre lo posterior a la ultima respuesta enviada, y el encargo de un trabajo
-    # lleva los mensajes textuales y no inventa quien es nadie.
-    triage = " ".join((RAIZ / "prompts" / "triage.md").read_text(encoding="utf-8").split())
+    # Dos reglas del agente que no pueden perderse sin que nadie lo note: solo se actua
+    # sobre lo posterior a la ultima respuesta enviada, y el encargo de un trabajo lleva
+    # los mensajes textuales y no inventa quien es nadie. Viven en la skill.
+    soporte = cuerpos[SKILL_SOPORTE]
     for frase in ("`respondido`", "Act only on the messages after the last reply sent",
-                  "VERBATIM", "open questions"):
+                  "VERBATIM", "open questions", "casos/caso-<id>.md"):
         comprobaciones += 1
-        if frase not in triage:
-            fallos.append(f"prompts/triage.md  ya no dice: {frase}")
+        if frase.lower() not in soporte.lower():
+            fallos.append(f"{SKILL_SOPORTE}  ya no dice: {frase}")
+
+    # Y el prompt de triage es un puntero: corto, sin los pasos de antes, y mandando a la
+    # skill. Unas reglas en el prompt y otras en el arnes terminan diciendo dos cosas.
+    crudo = (RAIZ / "prompts" / "triage.md").read_text(encoding="utf-8")
+    comprobaciones += 3
+    if len(crudo.splitlines()) > PUNTERO_MAX_LINEAS:
+        fallos.append(f"prompts/triage.md  tiene {len(crudo.splitlines())} lineas: es un "
+                      f"puntero al arnes, a lo mas {PUNTERO_MAX_LINEAS}")
+    if "whatsapp-soporte" not in crudo:
+        fallos.append("prompts/triage.md  no manda a la skill whatsapp-soporte")
+    if re.search(r"^## STEP", crudo, re.M):
+        fallos.append("prompts/triage.md  todavia trae los pasos: viven en la skill")
 
     # El modelo de casos reemplazo a Tomar/Ignorar: ni el arnes ni el prompt pueden mandar
     # al dueno a botones, banderas o locks que ya no existen. Fue justo lo que el agente
@@ -224,7 +239,7 @@ def main() -> int:
             print(f"  {f}", file=sys.stderr)
         return 1
     print(f"{comprobaciones} comprobaciones: las {len(REGLAS)} reglas duras siguen "
-          f"alcanzables por el arnes y por el prompt; "
+          f"alcanzables por el AGENTS.md y por la skill; el prompt es un puntero; "
           f"{len(GENERADOS)} archivo generado declarado")
     return 0
 
