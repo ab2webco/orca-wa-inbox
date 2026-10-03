@@ -175,7 +175,7 @@ PERMITIDAS = {
     "clasificado": {"decision", "bloqueado", "cerrado"},
     "decision":    {"trabajo", "respondido", "clasificado", "bloqueado", "cerrado"},
     "trabajo":     {"listo", "bloqueado", "cerrado"},
-    "listo":       {"respondido", "trabajo", "bloqueado", "cerrado"},
+    "listo":       {"respondido", "trabajo", "decision", "bloqueado", "cerrado"},
     "respondido":  {"cerrado", "recibido"},
     "cerrado":     {"recibido"},
     "bloqueado":   {"recibido", "clasificado", "decision", "cerrado"},
@@ -589,6 +589,56 @@ with tempfile.TemporaryDirectory() as home:
     ok("un caso que no esta en trabajo no recibe resultado, y nada se escribe",
        p.returncode != 0 and "clasificado" in p.stderr
        and cuenta(home, "select count(*) from caso_evento") == eventos, p.stderr.strip())
+
+
+# ── 4b. Editar la propuesta en listo (cli-huecos, C1) ────────────────────────────
+# La respuesta que dejo el trabajador es una propuesta como cualquier otra: el dueno (o
+# el agente) puede cambiarla. Cambiada es otra decision: vuelve a `decision` con su
+# version nueva y sin la firma de la de antes, y eso deja su evento.
+print("\neditar la propuesta en listo")
+with tempfile.TemporaryDirectory() as home:
+    cid, _ = caso_en_trabajo(home)
+    r = js(home, "caso", "resultado", cid, "--respuesta", "Ya quedo el login.",
+           "--resumen", "Se corrigio la validacion del formulario.",
+           "--actor", "trabajador")[0]
+    v_listo = r["propuesta_version"]
+    js(home, "caso", "aprobar", cid, "--version", v_listo, "--actor", "dueno")
+    antes = cuenta(home, "select count(*) from caso_evento")
+    p = corre(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+              "Ya quedo el login: pruebe de nuevo, por favor.", "--actor", "dueno")
+    e = json.loads(p.stdout or "[{}]")[0] if p.returncode == 0 else {}
+    ok("proponer sobre un caso en listo se acepta", p.returncode == 0, p.stderr.strip())
+    ok("y lo devuelve a decision", e.get("etapa") == "decision", f"quedo {e}")
+    ok("con la propuesta y la version nuevas",
+       e.get("propuesta") == {"tipo": "responder",
+                              "respuesta": "Ya quedo el login: pruebe de nuevo, por favor."}
+       and e.get("propuesta_version") not in (None, v_listo), f"quedo {e}")
+    ok("y sin la firma de la version de listo",
+       e.get("aprobada") is False and e.get("propuesta_aprobada") is None, f"quedo {e}")
+    ev = js(home, "caso", "ver", cid)[0]["eventos"][-1]
+    ok("deja UN evento listo -> decision con el actor y la version nueva",
+       cuenta(home, "select count(*) from caso_evento") == antes + 1
+       and ev["de"] == "listo" and ev["a"] == "decision" and ev["actor"] == "dueno"
+       and (e.get("propuesta_version") or "-") in ev["detalle"], f"evento {ev}")
+    p = corre(home, "caso", "aprobar", cid, "--version", e.get("propuesta_version") or "-",
+              "--actor", "dueno")
+    a = json.loads(p.stdout or "[{}]")[0] if p.returncode == 0 else {}
+    ok("la version editada se aprueba en decision",
+       a.get("etapa") == "decision" and a.get("aprobada") is True, p.stderr.strip() or f"quedo {a}")
+
+    # Repetir en listo la MISMA propuesta que ya tiene no es un cambio: ni mueve la
+    # tarjeta ni le quita la firma (el agente repasa lo que ya dejo).
+    cid2, _ = caso_en_trabajo(home, "S2")
+    r2 = js(home, "caso", "resultado", cid2, "--respuesta", "Listo, ya funciona.",
+            "--resumen", "Se reinicio el servicio.", "--actor", "trabajador")[0]
+    js(home, "caso", "aprobar", cid2, "--version", r2["propuesta_version"],
+       "--actor", "dueno")
+    antes = cuenta(home, "select count(*) from caso_evento")
+    igual = js(home, "caso", "propuesta", cid2, "--tipo", "responder", "--respuesta",
+               "Listo, ya funciona.", "--actor", "agente")[0]
+    ok("la misma propuesta en listo no mueve ni escribe nada",
+       igual["etapa"] == "listo" and igual["aprobada"] is True
+       and cuenta(home, "select count(*) from caso_evento") == antes, f"quedo {igual}")
 
 
 # ── 5. Listar y ver ──────────────────────────────────────────────────────────────
