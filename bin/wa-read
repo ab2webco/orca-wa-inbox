@@ -11,6 +11,8 @@ that store — it never writes to it, and it never talks to WhatsApp.
   whoami                        your LID and how many groups
   chat <id|name> [-n N]         latest messages of a chat
   media <id|name> [-n N]        latest images/videos/audio, with the path on disk
+  wait <id|name> [--after X] [--timeout S]
+                                block until someone else writes in that chat
   state                         how much the store changed, without reading it
   doctor                        check the requirements
 
@@ -19,7 +21,8 @@ Every read command takes `--line ACCOUNT` to answer for one linked line only. Th
 (account, jid) and never the JID alone.
 
 Exit codes are domain answers, not failure levels: 1 = a requirement is missing,
-2 = that chat reference is ambiguous, 4 = there is nothing to read from. Reason on the
+2 = that chat reference is ambiguous, 3 = that chat is not authorized (`wait`), 4 =
+there is nothing to read from, 5 = `wait` ended with no new message. Reason on the
 first line of stderr, stdout empty or parseable. Refusing is the point: an empty list
 reads as "there is nothing to attend to", which is the opposite of "I cannot read
 anything".
@@ -45,6 +48,34 @@ EXIT_SOURCE = 4
 # nada; renombrar el codigo desincroniza el panel en silencio.
 SIN_TRANSPORTE = wa_store.SIN_TRANSPORTE
 SIN_TRANSPORTE_DETALLE = wa_store.SIN_TRANSPORTE_DETALLE
+# `wait`: una conversacion que el dueno no autorizo no se espera (nada de ella llega al
+# almacen, asi que esperarla es esperar hasta el plazo sin decir por que), y el plazo
+# vencido sin nada nuevo es una respuesta, no un fallo.
+EXIT_NO_AUTORIZADO = 3
+EXIT_SIN_NOVEDAD = 5
+NO_AUTORIZADO = "chat-not-authorized"
+SIN_NOVEDAD = "wait-timeout"
+# Cuanto espera `wait` y cada cuanto mira el almacen si no se le dice. Son banderas, no
+# constantes escondidas: quien llama sabe cuanto puede esperar.
+ESPERA_S = 300.0
+SONDEO_S = 2.0
+SONDEO_MIN_S = 0.05
+
+AYUDA_WAIT = f"""Block until someone else writes in an authorized chat, then print what arrived.
+
+Only messages from the other side count: what this line sends never wakes it. It reads
+the message store every --poll seconds; it never talks to WhatsApp. The chat follows the
+same rules as `chat` (a JID, the id from `chats`, or part of its name; `--line` for one
+line), and it must be authorized for the agent (any mode but `off`).
+
+--after takes the stanza_id of a message of that chat (what arrived after it, which may
+already be there) or a time in epoch seconds. Without it, only what arrives from now on.
+
+Exit codes: 0 = new messages, printed oldest first (each with its stanza_id, for the next
+--after); 1 = no chat or no --after message matches; 2 = the chat reference is ambiguous;
+3 = `{NO_AUTORIZADO}`, the chat is not authorized; 4 = `no-transport`, there is nothing
+to read from; 5 = `{SIN_NOVEDAD}`, --timeout ended with no new message. The reason is on
+the first line of stderr and stdout is empty when it does not exit 0."""
 
 
 def morir_sin_fuente(reason, detail, code=EXIT_SOURCE):
@@ -282,6 +313,43 @@ def cmd_media(con, a):
     return wa_store.media(con, wa_store.resolver_chat(con, a.chat, a.line), a.n)
 
 
+def autorizada(fila):
+    """Si el dueno autorizo esta conversacion: la pregunta va a `wa-scope list`, que cruza
+    la base y lo que se toco en el panel, igual que el sidecar antes de guardar un
+    mensaje. Copiar ese cruce aca seria tener dos verdades. Si no se puede saber, no."""
+    exe = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wa-scope")
+    try:
+        p = subprocess.run([exe, "list", "--json"], capture_output=True, text=True,
+                           timeout=60)
+        filas = json.loads(p.stdout or "[]") if p.returncode == 0 else []
+    except (OSError, ValueError, subprocess.SubprocessError):
+        filas = []
+    return any(isinstance(r, dict) and r.get("chat_jid") == fila["chat_jid"]
+               and (r.get("account") or "local") == fila["account"]
+               and (r.get("mode") or "off") != "off" for r in filas)
+
+
+def cmd_wait(con, a):
+    fila = wa_store.resolver_chat(con, a.chat, a.line)
+    if not autorizada(fila):
+        morir_sin_fuente(NO_AUTORIZADO,
+                         f"{wa_store.nombre_de(fila)!r} is not authorized for the agent "
+                         "(its mode is off): nothing from it reaches the store. Authorize "
+                         "it in the plugin settings.", EXIT_NO_AUTORIZADO)
+    base = wa_store.desde_donde(con, fila, a.after)
+    sondeo = max(SONDEO_MIN_S, a.poll)
+    limite = time.monotonic() + max(0.0, a.timeout)
+    while True:
+        filas = wa_store.nuevos(con, fila, base)
+        if filas:
+            return filas
+        if time.monotonic() >= limite:
+            morir_sin_fuente(SIN_NOVEDAD,
+                             f"no new message in {wa_store.nombre_de(fila)!r} within "
+                             f"{a.timeout:g}s.", EXIT_SIN_NOVEDAD)
+        time.sleep(min(sondeo, max(0.0, limite - time.monotonic())))
+
+
 def cmd_whoami(con, a):
     return wa_store.whoami(con, a.line)
 
@@ -329,6 +397,16 @@ def main():
 
     s = add("media", cmd_media, help="attachments of a chat, with the path on disk")
     s.add_argument("chat"); s.add_argument("-n", type=int, default=15)
+
+    s = add("wait", cmd_wait, help="block until someone else writes in an authorized chat",
+            description=AYUDA_WAIT, formatter_class=argparse.RawDescriptionHelpFormatter)
+    s.add_argument("chat")
+    s.add_argument("--after", default=None, metavar="STANZA|EPOCH",
+                   help="start after this message of the chat, or after this time")
+    s.add_argument("--timeout", type=float, default=ESPERA_S, metavar="S",
+                   help=f"how long to wait, in seconds (default {ESPERA_S:g}; 0 looks once)")
+    s.add_argument("--poll", type=float, default=SONDEO_S, metavar="S",
+                   help=f"how often to read the store, in seconds (default {SONDEO_S:g})")
 
     add("whoami", cmd_whoami)
     add("doctor", help="check the requirements")
