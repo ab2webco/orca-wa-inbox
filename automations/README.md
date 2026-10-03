@@ -4,14 +4,89 @@ Las definiciones viven acá versionadas porque Orca las guarda en el `orca-data.
 cada instalación, y ese archivo es por build: lo que crees en el dev no existe en el
 instalado y viceversa.
 
-| archivo | cada | precheck |
+| archivo | cada | corre |
 |---|---|---|
-| `whatsapp-triage.json` | 5 min, L-V 8-18 | `wa-scope pending` |
-| `whatsapp-tomar-lo-marcado.json` | 2 min | `wa-scope pending --only-taken` |
+| `whatsapp-tick.json` | 1 min | `wa-scope tick` (solo comando, sin agente) |
+| `whatsapp-triage.json` | 5 min, a toda hora (y al instante con "Atender ahora") | agente, con precheck `wa-scope pending --needs-agent --precheck` |
 
-El precheck hace dos cosas: sincroniza el panel (barato, sin agente) y **sale con 1 cuando
-no hay nada**, con lo que Orca marca la corrida `skipped_precheck` y no despierta al
-agente. Por eso la de "tomar" puede correr cada 2 minutos sin costar nada.
+`tick` también limpia: a lo sumo cada 5 minutos (al minuto si le quedaron pendientes)
+quita de la barra lateral (`orca worktree rm`, solo el registro, nunca los archivos ni la
+raíz de la carpeta) todo hijo `::workspace:` de la carpeta del plugin que lista `orca
+worktree list`, sea de la automatización de ahora o de una que Orca borró y recreó: 10
+por vuelta como máximo, 2 minutos después de su última actividad, nunca el de una corrida
+en vuelo ni el que aloja la terminal del agente de casos o de un despacho en vuelo.
+Primero cierra sus terminales (`orca terminal close`), después lo quita y vuelve a listar:
+en vivo `rm` contestó `removed: true` y el espacio seguía ahí. Lo que sigue en la lista
+cuenta un intento y se reintenta; a los 3 lo dice `limpieza_atascados` en la línea del
+tick y el tablero ("N espacios del plugin no se pudieron quitar"). Sin la CLI de Orca, o
+con un error, no hace nada y lo cuenta en `limpieza_error`.
+
+`tick` es un comando, no un agente (`orca automations create --command` en un Orca
+1.4.160-lab.84 o más nuevo), pero despierta a dos:
+
+- **El agente de casos.** Con un caso que lo espera (lo mismo que `pending --needs-agent`)
+  lo abre él mismo por terminal, sin esperar el cron de `triage`: Orca lanza las
+  automatizaciones con la cuenta de Claude activa y no deja elegir otra, así que con esa
+  cuenta tomada por un espacio con cuenta asignada cada corrida es `dispatch_failed`. Usa
+  el mismo código del despacho al proyecto: `terminal create --agent claude` en el espacio
+  del plugin (el `runContext` de la automatización `triage`, nunca un `::workspace:` de
+  una corrida), con otra cuenta autenticada si la primera falla, el prompt de
+  `prompts/triage.md` copiado a `despachos/` y una sola línea, y la verificación del turno.
+  Nunca dos a la vez (una fila en `agente_corrida`, escrita con la base tomada, o el lock
+  del agente puesto, lo impiden), a lo más uno por vuelta y no antes de 5 minutos del
+  anterior. La terminal se cierra cuando el agente soltó el lock, cuando se fue sola o a
+  los 30 minutos. Si no lo pudo lanzar, el tablero lo dice con el motivo. "Atender ahora"
+  usa el mismo camino (`wa-scope agente lanzar`), sin la espera. La automatización
+  `triage` queda de respaldo con su cron: el precheck (`pending --needs-agent --precheck`)
+  **sale con 1 cuando ningún caso necesita lenguaje o cuando el tick se encarga** (corrió
+  hace menos de 3 minutos y su último lanzamiento no falló por `sin-cli`, `sin-espacio` o
+  `sin-prompt`, lo único que el cron sí arregla). Orca marca la corrida `skipped_precheck`
+  y no crea su espacio: con el precheck en 0 crea uno por corrida aunque después falle. Si
+  su agente llega con otro trabajando, se frena en el `lock`. El primer paso del agente
+  sigue con `pending --needs-agent`, sin `--precheck`.
+- **La cuenta de Claude del bot.** Ajustes, pestaña Agente, guarda `botClaudeAccount`: el
+  id de una cuenta de `orca account list` o `auto`. El agente de casos y el del proyecto
+  abren primero con esa; si no aparece, no tiene sesión, no tiene cuota (95 % o más) o
+  falla al abrir, siguen la regla automática (sin elegir cuenta y, si esa está tomada, la
+  autenticada de menos uso) y anotan la cuenta usada y el motivo (`respaldo`). El tablero
+  lo dice en la línea de la revisión y en la tarjeta del despacho.
+- **El agente del proyecto (T8).** Un `trabajar` aprobado (una firma de `decision` a
+  `trabajo`; nunca lo que puso ahí el backfill) abre Claude en el espacio exacto del
+  proyecto, uno por tick: el brief va a un archivo en la carpeta de datos del plugin
+  (`despachos/`, junto a `scope.db`, nunca en el repo del proyecto), `orca terminal create
+  --agent claude`, `terminal wait --for composer-ready` y una sola línea con
+  `terminal send`: que lea ese archivo y lo siga. La orquestación de Orca no sirve desde el
+  tick: busca quién la manda en la terminal activa del espacio, y la automatización no
+  tiene ninguna (`no_active_sender_terminal`). Si la cuenta de Claude está tomada por otro
+  espacio o sin sesión, prueba una vez con la autenticada de menos uso (bajo 95 %) y anota
+  su id en `caso_despacho`. Una fila en `caso_despacho` (escrita antes de llamar a Orca)
+  impide relanzar; que el agente siga se mira por su terminal en `orca terminal list`, y al
+  soltarlo se cierra esa terminal. Sin proyecto, con un proyecto ambiguo, sin cuenta
+  usable, sin reporte, sin respuesta en 4 h o con un error de Orca, el caso va a Bloqueado
+  con el motivo. Una firma de más de 24 h que el despacho ve por primera vez tampoco se
+  lanza ("aprobación vieja: vuelve a aprobar"); lo único que se reintenta solo, una vez,
+  es lo que bloqueó `no_active_sender_terminal` o un Claude que se cerró al abrir. Antes de
+  escribir la línea se lee la terminal (`terminal read`): `composer-ready` también se cumple
+  con la pantalla de Claude Code que pide confiar en la carpeta (una vez por cuenta y
+  carpeta), y en 2.1.288 su opción marcada es "No, exit". Con esa pantalla a la vista se
+  mueve el cursor con las flechas hasta la opción Yes, se lo ve ahí y va un Enter solo; con
+  el prompt de un shell (Claude se cerró) no se escribe nada y el motivo es "Claude se cerro
+  al abrir: <su última línea>". El reenvío de la línea perdida mira lo mismo. El agente de
+  casos usa el mismo código: su corrida falla con `se-cerro`, el tick abre otra a los 5 min,
+  y la tercera seguida (`se-cierra`) espera una hora. El agente reporta con `caso resultado` (`resuelto`, `necesita`
+  o `bloqueado`), que manda la respuesta en el acto por el mismo piso; si pidió
+  información, lo que conteste el cliente vuelve a su terminal o a un despacho nuevo.
+
+La línea del tick cuenta `despachados`, `bloqueados_por_despacho`,
+`respuestas_al_proyecto`, `agente_lanzado` y `agente_error`.
+
+Las dos encuentran las herramientas leyendo `.wa-bin`, en la carpeta de trabajo del
+plugin (`workspace: plugin-owned`): el worker escribe ahi la ruta de su propio `bin/` en
+cada activacion (`harness.mjs`, `sembrarBin`). No hay resolvedor por instalacion ni por
+`PATH`. Sin `.wa-bin` salen con 1, calladas, y la siguiente activacion lo siembra; el
+resolvedor viejo no cabe junto a esta forma en los 1024 caracteres del manifiesto. Con un
+build instalado y uno de desarrollo abiertos a la vez, comparten carpeta y gana el ultimo
+que sembro.
 
 ## Crearlas
 

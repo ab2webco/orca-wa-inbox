@@ -466,6 +466,16 @@ async function iniciar () {
       migradoLineas: almacen.migracion.lineas }, true)
   }
 
+  // T16b: los directos que se guardaron con dispositivo (`:N`) se juntaron en su chat
+  // de siempre. Va por stderr y solo con numeros: es una nota para quien mire el log el
+  // dia que pregunte adonde se fue la fila duplicada, no una falla.
+  if (almacen.dispositivosUnidos) {
+    process.stderr.write(
+      `almacen: ${almacen.dispositivosUnidos.chats} chats directos con dispositivo ` +
+      `juntados en el chat sin dispositivo; ${almacen.dispositivosUnidos.mensajes} ` +
+      'mensajes movidos\n')
+  }
+
   /** Los bytes de un adjunto, ya descifrados por Baileys. Devuelve `null` cuando no se
    *  pueden bajar o son demasiados: la fila se guarda igual, SIN ruta, porque una ruta
    *  que no se puede respaldar falla con "no such file" lejos de aca (§11-C4). */

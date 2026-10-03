@@ -749,6 +749,52 @@ console.log('\nel doctor: el transporte exige latido fresco')
     filaViva && filaViva.ok === true && vivo.code === 0, JSON.stringify(filaViva))
 }
 
+// ── T16c: la alarma de "linea muda" no salta durante un reinicio normal ────────────
+// Visto en vivo (2026-10-01): el sync de 5 minutos corrio mientras el boton "Traer
+// conversaciones" reiniciaba el sidecar y el doctor dijo "ninguna senal de vida desde
+// las 12:20" sobre una linea que estaba recibiendo. Un sidecar que reinicia deja de
+// latir lo que tarda en arrancar —cargar Baileys, preguntar la version, abrir el
+// almacen—, y 15 s (el plazo de `wa-send`, que es un proceso que espera un veredicto) es
+// demasiado corto para eso. El DIAGNOSTICO del doctor tiene su propio plazo.
+console.log('\nT16c: el doctor no da la linea por muda durante un reinicio')
+{
+  const ahora = Date.now()
+  const transporte = () => (leerJson(home, ['doctor']).filas || [])
+    .find((f) => f.check === 'a message transport')
+
+  almacen.latir(ahora - 45 * 1000)
+  const reiniciando = transporte()
+  ok('con 45 s sin latir (un reinicio) el transporte sigue en verde',
+    reiniciando && reiniciando.ok === true, JSON.stringify(reiniciando))
+
+  const limiteMs = ahora - 100 * 1000
+  almacen.latir(limiteMs)
+  const lento = transporte()
+  ok('y con 100 s todavia, un arranque lento', lento && lento.ok === true,
+    JSON.stringify(lento))
+
+  const muerto = ahora - 4 * 60 * 1000
+  almacen.latir(muerto)
+  const mudo = transporte()
+  ok('con 4 minutos sin latir si es una linea muda', mudo && mudo.ok === false &&
+    mudo.code === 'transport-silent', JSON.stringify(mudo))
+  const horaReal = new Date(muerto).toTimeString().slice(0, 5)
+  ok('y el "desde" es el ultimo latido de verdad', (mudo?.detalle || '').includes(
+    `since ${new Date(muerto).getFullYear()}-`) && (mudo?.detalle || '').includes(horaReal),
+    String(mudo?.detalle))
+
+  // `wa-send` NO cambia: un envio que espera un veredicto no puede esperar dos minutos
+  // a saber que no hay nadie. El plazo del doctor y el de wa-send son dos preguntas.
+  almacen.latir(ahora - 45 * 1000)
+  const r = spawnSync('python3', ['-c',
+    'import sys; sys.path.insert(0, sys.argv[1]); import wa_store; ' +
+    'con = wa_store.abrir(); print(wa_store.sidecar_vivo(con))', join(RAIZ, 'bin')],
+  { env: { ...process.env, HOME: home, PYTHONDONTWRITEBYTECODE: '1' }, encoding: 'utf8' })
+  ok('con 45 s sin latir, `sidecar_vivo` (la regla de wa-send) sigue diciendo que no',
+    r.stdout.trim() === 'False', `${r.stdout} ${r.stderr}`)
+  almacen.latir()
+}
+
 console.log('\nF2: tope de retencion, con desalojo VISIBLE')
 {
   const podado = almacen.podar({ max: 3, dias: 36500, ahora: (T0 + 3000) * 1000 })
@@ -1467,6 +1513,145 @@ console.log('\nJuicio cacheado: T6 — sin scope.db, y sin la tabla, la bandeja 
   const n1b = (sinTabla.filas || []).find((f) => f.stanza_id === 'N1')
   ok('y la fila sigue sin `juicio`, sin romperse', n1b && !('juicio' in n1b),
     JSON.stringify(n1b))
+}
+
+// ── T16b: el mismo directo, con y sin dispositivo ──────────────────────────────────
+// Visto en vivo (2026-10-01): en una linea enlazada la lista traia a la misma persona
+// dos veces, `<lid>@lid` con su nombre y `<lid>:90@lid` sin nombre. El sidecar tiene
+// que dejar de producir la segunda, y el almacen que ya la tiene tiene que juntarla con
+// la primera sin perder un mensaje.
+console.log('\nT16b: un directo con dispositivo (`:N`) no duplica a la persona')
+{
+  const casa = nueva()
+  const alm = abrirAlmacen(rutaAlmacen({ HOME: casa }))
+  const LIMPIO = '100000000000001@lid'
+  const CON_DISPOSITIVO = '100000000000001:90@lid'
+  const alcanceAbierto = () => 'observar'
+  const wa = (chat, id) => ({
+    key: { remoteJid: chat, fromMe: false, id }, messageTimestamp: T0 + 10,
+    pushName: 'Persona Uno', message: { conversation: 'hola' }
+  })
+  await ingerirMensaje({ almacen: alm, alcance: alcanceAbierto, cuenta: CUENTA,
+    identidades: YO, wa: wa(CON_DISPOSITIVO, 'Z1'), mediaDir })
+  await ingerirMensaje({ almacen: alm, alcance: alcanceAbierto, cuenta: CUENTA,
+    identidades: YO, wa: wa(LIMPIO, 'Z2'), mediaDir })
+  ingerirContactos({ almacen: alm, cuenta: CUENTA,
+    contactos: [{ id: CON_DISPOSITIVO, name: 'Persona Uno' }] })
+  const chats = alm.con.prepare(
+    "select chat_jid, chat_name from chat where chat_jid like '100000000000001%'").all()
+  ok('un solo chat para la persona, sin dispositivo',
+    chats.length === 1 && chats[0].chat_jid === LIMPIO, JSON.stringify(chats))
+  ok('y ahi quedaron sus dos mensajes',
+    alm.con.prepare('select count(*) n from mensaje where chat_jid = ?').get(LIMPIO).n === 2)
+  ok('la libreta nombro el chat sin dispositivo',
+    alm.con.prepare('select chat_name from chat where chat_jid = ?').get(LIMPIO)
+      .chat_name === 'Persona Uno')
+  alm.cerrar()
+}
+
+console.log('\nT16b: la migracion junta los directos con dispositivo que ya estaban guardados')
+{
+  const home = nueva()
+  const ruta = rutaAlmacen({ HOME: home })
+  const LIMPIO = '100000000000001@lid'
+  const DISP = '100000000000001:90@lid'
+  const DISP2 = '100000000000001:12@lid'
+  const TEL = '573000000012@s.whatsapp.net'
+  const TEL_DISP = '573000000012:3@s.whatsapp.net'
+  const SOLO_DISP = '573000000013:5@s.whatsapp.net'
+  const SOLO_LIMPIO = '573000000013@s.whatsapp.net'
+  const GRUPO = '120363000000000099@g.us'
+  const OTRA = 'pn:573000000011'
+
+  // Un almacen de HOY, con las filas como las dejaba el defecto, escritas a mano.
+  const prep = abrirAlmacen(ruta)
+  prep.registrarLinea({ cuenta: CUENTA, lid: MI_LID, pn: MI_TEL, nombre: 'Linea' })
+  prep.cerrar()
+  const con = new DatabaseSync(ruta)
+  const chat = con.prepare('insert into chat (account, chat_jid, chat_name, is_group, ' +
+    'unread, last_ts, first_seen) values (?,?,?,?,?,?,?)')
+  const msg = con.prepare('insert into mensaje (account, chat_jid, stanza_id, ts, ' +
+    'from_me, body, captured_at) values (?,?,?,?,?,?,?)')
+  chat.run(CUENTA, LIMPIO, 'Persona Uno', 0, 1, T0 + 5, T0 - 100)
+  chat.run(CUENTA, DISP, '', 0, 4, T0 + 50, T0 - 200)
+  chat.run(CUENTA, DISP2, '', 0, 0, T0 + 20, T0 - 50)
+  chat.run(CUENTA, TEL, '', 0, 0, T0 + 1, T0)
+  chat.run(CUENTA, TEL_DISP, 'Laura Mendez', 0, 2, T0 + 9, T0 - 10)
+  chat.run(CUENTA, SOLO_DISP, '', 0, 0, T0 + 3, T0)
+  chat.run(CUENTA, GRUPO, 'Grupo Alfa', 1, 0, T0, T0)
+  chat.run(OTRA, DISP, '', 0, 0, T0, T0)
+  msg.run(CUENTA, LIMPIO, 'A1', T0 + 1, 0, 'ya estaba', T0)
+  msg.run(CUENTA, DISP, 'A2', T0 + 2, 0, 'solo con dispositivo', T0)
+  msg.run(CUENTA, DISP, 'A1', T0 + 1, 0, 'duplicado distinto', T0 + 9)
+  msg.run(CUENTA, DISP2, 'A3', T0 + 3, 1, 'otro dispositivo', T0)
+  msg.run(CUENTA, TEL_DISP, 'B1', T0 + 4, 0, 'del telefono', T0)
+  msg.run(CUENTA, SOLO_DISP, 'C1', T0 + 5, 0, 'chat que solo existia asi', T0)
+  msg.run(CUENTA, GRUPO, 'G1', T0 + 6, 0, 'grupo', T0)
+  msg.run(OTRA, DISP, 'A2', T0 + 2, 0, 'de otra linea', T0)
+  con.close()
+
+  const alm = abrirAlmacen(ruta)
+  const q = alm.con
+  const jids = q.prepare('select account, chat_jid from chat order by account, chat_jid')
+    .all().map((f) => `${f.account}|${f.chat_jid}`)
+  ok('no queda ningun chat directo con dispositivo',
+    !jids.some((j) => /:\d+@(lid|s\.whatsapp\.net)$/.test(j)), JSON.stringify(jids))
+  const unido = q.prepare('select * from chat where account=? and chat_jid=?')
+    .get(CUENTA, LIMPIO)
+  ok('se queda la fila con nombre', unido?.chat_name === 'Persona Uno',
+    JSON.stringify(unido))
+  ok('con SU no leido y la ultima actividad de la fila mas reciente',
+    unido?.unread === 1 && unido?.last_ts === T0 + 50, JSON.stringify(unido))
+  ok('y la primera vez que se la vio, la mas vieja', unido?.first_seen === T0 - 200,
+    JSON.stringify(unido))
+  const tel = q.prepare('select chat_name from chat where account=? and chat_jid=?')
+    .get(CUENTA, TEL)
+  ok('si el nombre estaba en la fila con dispositivo, se conserva',
+    tel?.chat_name === 'Laura Mendez', JSON.stringify(tel))
+  ok('un chat que solo existia con dispositivo se renombra, no se pierde',
+    q.prepare('select count(*) n from chat where account=? and chat_jid=?')
+      .get(CUENTA, SOLO_LIMPIO).n === 1)
+  const mensajes = q.prepare('select chat_jid, stanza_id, body from mensaje ' +
+    'where account=? order by stanza_id, chat_jid').all(CUENTA)
+  const de = (id, jid) => mensajes.find((m) => m.stanza_id === id && m.chat_jid === jid)
+  ok('los mensajes de los chats con dispositivo pasan al chat sin dispositivo',
+    de('A2', LIMPIO) && de('A3', LIMPIO) && de('B1', TEL) && de('C1', SOLO_LIMPIO),
+    JSON.stringify(mensajes))
+  ok('ante una llave repetida gana el mensaje que ya estaba',
+    de('A1', LIMPIO)?.body === 'ya estaba', JSON.stringify(de('A1', LIMPIO)))
+  ok('y no se pierde ningun mensaje: el repetido queda donde estaba',
+    mensajes.length === 7 && de('A1', DISP)?.body === 'duplicado distinto',
+    JSON.stringify(mensajes))
+  ok('un grupo no se toca', q.prepare('select count(*) n from chat where chat_jid=?')
+    .get(GRUPO).n === 1 && de('G1', GRUPO))
+  ok('la otra linea se junta en SU cuenta, sin mezclarse',
+    q.prepare('select count(*) n from mensaje where account=? and chat_jid=?')
+      .get(OTRA, LIMPIO).n === 1 &&
+    q.prepare('select count(*) n from chat where account=? and chat_jid=?')
+      .get(OTRA, LIMPIO).n === 1)
+  const nota = q.prepare("select value from store_meta where key='jid_dispositivo_unido'")
+    .get()
+  const datos = nota ? JSON.parse(nota.value) : {}
+  ok('queda anotado cuanto junto, solo numeros',
+    datos.chats === 5 && datos.mensajes === 5, JSON.stringify(datos))
+  ok('el almacen lo dice al abrir', alm.dispositivosUnidos?.chats === 5,
+    JSON.stringify(alm.dispositivosUnidos))
+  alm.cerrar()
+
+  const otra = abrirAlmacen(ruta)
+  ok('reabrirlo no vuelve a juntar nada', otra.dispositivosUnidos === null,
+    JSON.stringify(otra.dispositivosUnidos))
+  const estado = JSON.stringify([
+    otra.con.prepare('select * from chat order by account, chat_jid').all(),
+    otra.con.prepare('select * from mensaje order by account, chat_jid, stanza_id').all()])
+  otra.cerrar()
+  const tercera = abrirAlmacen(ruta)
+  ok('ni cambia el contenido: es idempotente',
+    JSON.stringify([
+      tercera.con.prepare('select * from chat order by account, chat_jid').all(),
+      tercera.con.prepare('select * from mensaje order by account, chat_jid, stanza_id').all()
+    ]) === estado)
+  tercera.cerrar()
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

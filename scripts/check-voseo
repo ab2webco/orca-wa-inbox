@@ -28,9 +28,9 @@ PANELES = {"config.html": ("        en: {", "      var LANG ="),
 
 # El espanol tambien vive fuera de los paneles: mensajes de los CLI, comentarios del
 # worker, textos esperados por las pruebas y documentacion.
-OTROS = ["main.mjs", "harness.mjs", "README.md",
+OTROS = ["main.mjs", "jev-espejo.mjs", "acciones.mjs", "harness.mjs", "README.md",
          "bin/wa-read", "bin/wa-scope", "bin/wa-send", "bin/wa-transcribe",
-         "bin/wa_settings.py", "bin/wa_store.py",
+         "bin/wa_settings.py", "bin/wa_store.py", "bin/wa_jev.py", "bin/wa_reglas.py",
          "automations/README.md", "docs/ESCRIBIR-UN-PLUGIN.md",
          "docs/el-plugin-whatsapp-inbox.html",
          "test/manifest.test.mjs", "test/panels.test.mjs", "test/worker.test.mjs",
@@ -42,7 +42,7 @@ OTROS = ["main.mjs", "harness.mjs", "README.md",
          "sidecar/src/ingesta.js", "sidecar/src/alcance.js", "sidecar/src/envio.js",
          "sidecar/build.mjs", "sidecar/resolve-auth-dir.mjs",
          "scripts/check-clis", "scripts/check-closing", "scripts/check-resolver",
-         "scripts/resolver.py",
+         "scripts/resolver_formas.py",
          "scripts/check-harness", "scripts/check-panels", "scripts/check-prompts"]
 
 # scripts/voseo.py y este mismo archivo nombran las formas prohibidas a proposito:

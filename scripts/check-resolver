@@ -1,27 +1,13 @@
 #!/usr/bin/env python3
-"""Las cinco copias del resolvedor siguen siendo la misma, y salen de un solo texto.
+"""Las herramientas del plugin salen de UNA fuente, el archivo `.wa-bin`, y todo lo que
+la lee dice lo mismo.
 
-El resolvedor —el que decide DE CUAL instalacion salen wa-scope, wa-read y wa-send— vive
-inlineado en cinco lugares: los dos `precheck` de `orca-plugin.json`, los dos de
-`automations/` y el bloque de cada prompt. No es pereza: un precheck es una cadena de
-shell dentro de un JSON y un prompt es texto que lee un modelo; ninguno de los dos puede
-importar un archivo. Lo que no se puede evitar se comprueba.
-
-Existe porque la duplicacion ya cobro: una correccion aplicada a cuatro copias se ve
-perfecta en el diff y falla en la quinta, y la quinta es la que corre en la maquina del
-usuario. Peor todavia: las copias ya habian divergido solas —los prompts ordenaban de una
-forma y los precheck de otra— y nadie lo vio, porque nada las comparaba.
-
-La copia editable es `scripts/resolver.py`, y ademas corre sola: `python3
-scripts/resolver.py` imprime el bin que elegiria en esta maquina. Las dos formas
-publicadas las emite `scripts/resolver_formas.py`, que es el unico lugar donde vive la
-derivacion:
-
-  - prompts: el texto tal cual, con comentarios. El agente los lee y le sirven.
-  - precheck: el mismo programa minificado. No es estetica: el esquema de Orca corta el
-    precheck en 1024 caracteres (orca-oss/src/shared/plugins/
-    plugin-automation-contribution.ts:57) y pasarse no degrada nada — Orca no puede leer
-    el manifiesto y el plugin entero queda como `invalid-development-plugin`. Ya paso.
+El resolvedor de cinco copias (dos en `orca-plugin.json`, dos en `automations/` y el
+bloque del prompt) se fue: ver `scripts/resolver_formas.py`. Lo que se comprueba ahora es
+que quedo UNA forma corta en esos mismos cinco lugares, que el worker de verdad siembra
+el archivo, y que ninguno tiene un camino por `PATH`: un `wa-scope` pelado puede ser una
+copia vieja que lee otra base, que es como el agente del dueno llego a mandar un WhatsApp
+con herramientas de otra instalacion.
 """
 import json
 import pathlib
@@ -29,141 +15,79 @@ import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from resolver_formas import RAIZ, compacto, legible, precheck as precheck_esperado
+from resolver_formas import COLAS, RAIZ, bloque_prompt, comando
 
-CANONICO = RAIZ / "scripts" / "resolver.py"
+# orca-oss/src/shared/plugins/plugin-automation-contribution.ts:43 y :57: el techo del
+# `command` y del `precheck`. Pasarse invalida el manifiesto entero, no solo la automation.
+TECHO = 1024
+ARCHIVO_POR_AUTOMATION = {"triage": "whatsapp-triage.json", "tick": "whatsapp-tick.json"}
+BLOQUE = re.compile(r"```sh\n(WA=[\s\S]*?)\n```")
 
-# El precheck mete el resolvedor entero dentro de un `python3 -c "..."` en una linea de
-# shell. Cualquiera de estos cuatro caracteres lo partiria ahi, y el sintoma no seria un
-# error claro sino un WA vacio en una corrida automatica que nadie mira.
-PROHIBIDOS = ('"', "$", "`", "\\")
 
-# orca-oss/src/shared/plugins/plugin-automation-contribution.ts:57 —
-# `precheck: z.string().min(1).max(1024).optional()`. Se comprueba aca ademas de en
-# test/manifest.test.mjs porque este es el chequeo que corre cuando alguien edita el
-# resolvedor, que es exactamente cuando el precheck crece.
-PRECHECK_MAX = 1024
-
-# Lo que cada automation corre DESPUES de resolver. Es lo unico que las distingue: si
-# alguna vez dos prechecks se diferencian en algo mas, es que el resolvedor divergio.
-COLAS = {
-    "triage": '"$WA/wa-scope" pending',
-    "take": '"$WA/wa-scope" pending --only-taken',
-}
-ARCHIVO_POR_AUTOMATION = {
-    "triage": "whatsapp-triage.json",
-    "take": "whatsapp-tomar-lo-marcado.json",
-}
-
-HEREDOC = re.compile(r"WA=\$\(python3 - <<'PY'\n([\s\S]*?)\nPY\n\)")
+def campo(auto: dict) -> str:
+    return "command" if "command" in auto else "precheck"
 
 
 def main() -> int:
     fallos = []
-    comprobaciones = 0
+    n = 0
 
-    canonico = legible()
-
-    # ── 1. El canonico es Python de verdad. Un error de sintaxis aca se publica a las
-    # cinco copias de un golpe y solo aparece en la primera corrida automatica.
-    comprobaciones += 1
-    try:
-        compile(canonico, str(CANONICO), "exec")
-    except SyntaxError as error:
-        fallos.append(f"scripts/resolver.py no compila: linea {error.lineno}: {error.msg}")
-        # Sin canonico valido, comparar las copias contra el no dice nada util.
-        print("El resolvedor no se puede publicar:", file=sys.stderr)
-        for f in fallos:
-            print(f"  {f}", file=sys.stderr)
-        return 1
-
-    # ── 2. Lo minificado tambien es Python de verdad. El canonico compila y su version
-    # compacta no: eso es exactamente lo que un minificador roto produce, y solo se veria
-    # en la primera corrida programada.
-    comprobaciones += 1
-    try:
-        compile(compacto(canonico), "<precheck>", "exec")
-    except SyntaxError as error:
-        fallos.append(f"el resolvedor minificado no compila: linea {error.lineno}: "
-                      f"{error.msg}")
-
-    # ── 3. Los cuatro caracteres que no sobreviven al viaje por el precheck.
-    comprobaciones += 1
-    presentes = [c for c in PROHIBIDOS if c in canonico]
-    if presentes:
-        fallos.append(f"scripts/resolver.py usa {presentes}, que parten el "
-                      f"`python3 -c` del precheck")
-
-    # ── 4. La identidad anterior no vuelve por la puerta de atras. En los comentarios
-    # si se nombra —ahi es la explicacion de por que no se resuelve— pero en el codigo
-    # significaria volver a resolver hacia la build 3.0.1, que manda WhatsApp
-    # conduciendo la app de escritorio por un camino que este plugin borro.
-    minificado = compacto(canonico)
-    comprobaciones += 1
-    if "ab2web.wa-inbox" in minificado:
-        fallos.append("scripts/resolver.py vuelve a buscar ab2web.wa-inbox: esa no es "
-                      "una version vieja, es otro producto")
-
-    # ── 5. Los dos precheck del manifiesto, que es lo que corre en la instalacion.
     manifiesto = json.loads((RAIZ / "orca-plugin.json").read_text(encoding="utf-8"))
     automations = manifiesto["contributes"]["automations"]
-    comprobaciones += 1
+    n += 1
     if {a["id"] for a in automations} != set(COLAS):
-        fallos.append(f"orca-plugin.json ya no declara las automations {sorted(COLAS)}: "
-                      f"este chequeo estaria mirando nada")
+        fallos.append(f"orca-plugin.json ya no declara las automations {sorted(COLAS)}")
         automations = []
     for auto in automations:
-        comprobaciones += 1
-        esperado = precheck_esperado(COLAS[auto["id"]], canonico)
-        # El techo de Orca. Un precheck que se pasa no falla la automation: invalida el
-        # manifiesto, y el plugin no carga.
-        comprobaciones += 1
-        if len(esperado) > PRECHECK_MAX:
-            fallos.append(f"el precheck de {auto['id']} mide {len(esperado)} caracteres "
-                          f"y Orca acepta {PRECHECK_MAX}: el manifiesto quedaria invalido")
-        if auto["precheck"] != esperado:
-            fallos.append(f"orca-plugin.json ({auto['id']}): el precheck no es el "
-                          f"resolvedor de scripts/resolver.py")
-
-        # ── 6. La copia versionada en automations/, que es de donde se crean.
+        esperado = comando(COLAS[auto["id"]])
+        n += 4
+        if auto.get(campo(auto)) != esperado:
+            fallos.append(f"orca-plugin.json ({auto['id']}): el {campo(auto)} no es la forma "
+                          f"de scripts/resolver_formas.py")
+        if len(esperado) > TECHO:
+            fallos.append(f"el {campo(auto)} de {auto['id']} mide {len(esperado)} y Orca "
+                          f"acepta {TECHO}")
+        if auto.get("workspace") != "plugin-owned":
+            fallos.append(f"{auto['id']}: ya no corre en la carpeta del plugin, y `.wa-bin` "
+                          f"vive ahi (`workspace: plugin-owned`)")
         f = RAIZ / "automations" / ARCHIVO_POR_AUTOMATION[auto["id"]]
-        comprobaciones += 1
         try:
-            copia = json.loads(f.read_text(encoding="utf-8"))["precheck"]
+            copia = json.loads(f.read_text(encoding="utf-8"))[campo(auto)]
         except (OSError, ValueError, KeyError) as error:
-            fallos.append(f"automations/{f.name}: no se pudo leer el precheck ({error})")
+            fallos.append(f"automations/{f.name}: no se pudo leer ({error})")
             continue
         if copia != esperado:
-            fallos.append(f"automations/{f.name}: el precheck no es el resolvedor de "
-                          f"scripts/resolver.py")
+            fallos.append(f"automations/{f.name}: no es la forma de scripts/resolver_formas.py")
 
-    # ── 7. Los dos prompts, que llevan el texto completo con sus comentarios.
-    prompts = sorted((RAIZ / "prompts").glob("*.md"))
-    comprobaciones += 1
-    if not prompts:
-        fallos.append("prompts/  no hay ningun prompt que revisar")
-    for ruta in prompts:
+    for ruta in sorted((RAIZ / "prompts").glob("*.md")):
         cuerpo = ruta.read_text(encoding="utf-8")
-        bloques = HEREDOC.findall(cuerpo)
-        comprobaciones += 1
-        if len(bloques) != 1:
-            fallos.append(f"{ruta.relative_to(RAIZ)}: {len(bloques)} bloques que "
-                          f"resuelven el bin, tiene que haber exactamente uno")
-            continue
-        if bloques[0] != canonico:
-            fallos.append(f"{ruta.relative_to(RAIZ)}: el bloque que resuelve el bin no "
-                          f"es scripts/resolver.py")
+        bloques = BLOQUE.findall(cuerpo)
+        n += 3
+        if len(bloques) != 1 or bloques[0] != bloque_prompt():
+            fallos.append(f"{ruta.relative_to(RAIZ)}: tiene que haber exactamente un bloque "
+                          f"que resuelve el bin y ser el de scripts/resolver_formas.py")
+        if "python3 -" in cuerpo or "devPluginPaths" in cuerpo:
+            fallos.append(f"{ruta.relative_to(RAIZ)}: volvio el resolvedor inlineado")
+        if "Never fall back to a bare `wa-scope` from PATH" not in cuerpo:
+            fallos.append(f"{ruta.relative_to(RAIZ)}: ya no prohibe el `wa-scope` pelado de PATH")
+
+    # Y el worker de verdad escribe el archivo que todo esto lee.
+    n += 2
+    arnes = (RAIZ / "harness.mjs").read_text(encoding="utf-8")
+    if "ARCHIVO_BIN = '.wa-bin'" not in arnes or "sembrarBin(" not in arnes:
+        fallos.append("harness.mjs ya no siembra `.wa-bin`: nadie escribiria la ruta que "
+                      "las automations leen")
+    if "ab2web.wa-inbox" in (RAIZ / "orca-plugin.json").read_text(encoding="utf-8"):
+        fallos.append("orca-plugin.json nombra ab2web.wa-inbox: esa no es una version vieja, "
+                      "es otro producto")
 
     if fallos:
-        print("Las copias del resolvedor divergieron:", file=sys.stderr)
+        print("Las herramientas ya no salen de una sola fuente:", file=sys.stderr)
         for f in dict.fromkeys(fallos):
             print(f"  {f}", file=sys.stderr)
-        print("\nEditar scripts/resolver.py y volver a publicarlo en las cinco copias. "
-              "Una copia con su propio criterio es como el agente termino mandando un "
-              "WhatsApp con las herramientas de otra instalacion.", file=sys.stderr)
         return 1
-    print(f"{comprobaciones} comprobaciones: las 5 copias del resolvedor salen de "
-          f"scripts/resolver.py")
+    print(f"{n} comprobaciones: las herramientas salen de `.wa-bin`, con una sola forma en "
+          f"el manifiesto, `automations/` y el prompt")
     return 0
 
 

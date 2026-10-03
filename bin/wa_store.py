@@ -27,7 +27,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from wa_settings import settings_from_plugin  # noqa: E402
+from wa_settings import duenos, settings_from_plugin  # noqa: E402
 
 # La version del esquema la escribe el sidecar en `store_meta`. Si no coincide, se
 # NIEGA con un motivo propio en vez de contestar filas a medias: un lector que consulta
@@ -45,6 +45,15 @@ LINEA_MUDA = "transport-silent"
 # en sidecar/src/almacen.js). El MISMO numero que `LATIDO_VENCE_MS` de
 # sidecar/src/envio.js, y `scripts/check-clis` compara los dos (via `bin/wa-send`).
 LATIDO_VENCE_S = 15
+# Cuanto sin latir antes de que el DOCTOR diga que la linea esta muda. Es otra pregunta
+# que la de `LATIDO_VENCE_S`: `wa-send` espera un veredicto y necesita saber ya si hay
+# alguien; el doctor diagnostica, y un diagnostico falso manda al dueno a relanzar lo
+# que ya esta arrancando. Un sidecar que reinicia (el boton "Traer conversaciones", una
+# caida con su espera de hasta 60 s) deja de latir lo que tarda en cargar Baileys,
+# preguntar la version y abrir el almacen: visto en vivo, el sync de 5 minutos cayo en
+# esa ventana y dijo "ninguna senal de vida" sobre una linea que estaba recibiendo.
+# NO es la constante que `scripts/check-clis` compara con el sidecar: esa es la de arriba.
+LATIDO_MUDO_S = 120
 ESQUEMA_AJENO = "store-schema"
 
 # Lo que `state` devuelve cuando NO hay firma que devolver. Son contrato con wa-scope
@@ -256,6 +265,14 @@ def sidecar_vivo(con):
     return latido is not None and (time.time() - latido) <= LATIDO_VENCE_S
 
 
+def sidecar_mudo(con):
+    """Si el sidecar lleva tanto sin latir que ya no es un reinicio: es la regla del
+    doctor (`LATIDO_MUDO_S`). Nunca haber latido tambien es mudo: nadie leyo esta linea
+    desde que se enlazo."""
+    latido = ultimo_latido(con)
+    return latido is None or (time.time() - latido) > LATIDO_MUDO_S
+
+
 SIN_TRANSPORTE_DETALLE = (
     "no linked WhatsApp line can be read yet. Link a line from the plugin settings, "
     "with the QR code.")
@@ -366,7 +383,7 @@ def inbox(con, dias, limite, ventana, solo="todos", linea=None):
           -- de esconder es la misma regla que el resto del plugin: una lista vacia
           -- tiene que significar que no hay nada, no que no se miro.
           {donde}
-        order by m.ts desc
+        order by m.ts desc, m.rowid desc
         limit ?"""
     filas = con.execute(sql, [corte] + args + [limite]).fetchall()
 
@@ -387,6 +404,9 @@ def inbox(con, dias, limite, ventana, solo="todos", linea=None):
             # lineas propias, y contestar desde la equivocada no se deshace (§11-A1).
             "account": r["account"],
             "sender": quien(r),
+            # El id del remitente, sin el dispositivo: es lo que dice si escribio uno de
+            # los numeros del dueno (T22.1). El nombre se repite y cambia; esto no.
+            "sender_jid": jid_sin_dispositivo(r["sender_jid"]),
             "kind": clase_de(r),
             # Si el dueno escribio en ese chat DESPUES de este mensaje. Antes esto
             # borraba la fila; ahora la acompana, que es lo que deja al agente decidir
@@ -394,6 +414,7 @@ def inbox(con, dias, limite, ventana, solo="todos", linea=None):
             "escribio_despues": bool(r["mine"] and r["ts"] <= r["mine"]),
             "text": (r["body"] or "").replace("\n", " "),
             "media": r["media_path"] or None,
+            "media_type": r["media_type"] or None,
         }
         # El veredicto cacheado, la misma llave que identifica el mensaje. Es una
         # PISTA mas, junto a `kind` y `escribio_despues`: informa, no decide, y su
@@ -495,6 +516,59 @@ def usuario_de(jid):
     texto = str(jid or "")
     usuario, _, servidor = texto.partition("@")
     return (usuario.split(":")[0], servidor)
+
+
+def jid_sin_dispositivo(jid):
+    """`X:7@lid` -> `X@lid`. None sin jid."""
+    usuario, servidor = usuario_de(jid)
+    return f"{usuario}@{servidor}" if usuario and servidor else None
+
+
+def es_dueno(jid, ids=None):
+    """Si `jid` es uno de los numeros del dueno (T22.1). La autoridad sale de aca: del id
+    que dejo WhatsApp, nunca del texto del mensaje."""
+    ids = duenos() if ids is None else ids
+    propio = jid_sin_dispositivo(jid)
+    return bool(propio) and propio in ids
+
+
+def chat_del_dueno(con, cuenta, chat_jid, ids=None):
+    """Si la conversacion es del dueno: el directo con uno de sus numeros, o el chat de
+    la linea consigo misma. Lo que se le manda ahi no protege a ningun tercero."""
+    if es_dueno(chat_jid, ids):
+        return True
+    if con is None:
+        return False
+    return (cuenta, usuario_de(chat_jid)) in chats_propios(con)
+
+
+def remitentes(con, linea=None, limite=400):
+    """Quienes escribieron en las conversaciones autorizadas, para que el panel ofrezca
+    elegir los numeros del dueno por su nombre: [{id, name, chats, last}], del mas
+    reciente al mas viejo. Solo ids y nombres, nunca el texto de nadie."""
+    donde, args = filtro_linea(linea)
+    filas = con.execute(
+        f"""select m.sender_jid, m.sender_name, m.ts, c.chat_name, c.chat_jid
+            from mensaje m join chat c on c.account = m.account and c.chat_jid = m.chat_jid
+            where m.from_me = 0 and m.sender_jid is not null {donde}
+            order by m.ts desc limit 20000""", args).fetchall()
+    vistos = {}
+    for r in filas:
+        jid = jid_sin_dispositivo(r["sender_jid"])
+        if not jid:
+            continue
+        item = vistos.get(jid)
+        if item is None:
+            if len(vistos) >= limite:
+                continue
+            item = vistos[jid] = {"id": jid, "name": r["sender_name"] or "", "chats": [],
+                                  "last": ts(r["ts"])}
+        if not item["name"] and r["sender_name"]:
+            item["name"] = r["sender_name"]
+        nombre = r["chat_name"] or r["chat_jid"]
+        if nombre not in item["chats"] and len(item["chats"]) < 3:
+            item["chats"].append(nombre)
+    return list(vistos.values())
 
 
 def chats_propios(con):

@@ -37,6 +37,15 @@ wrong with what it asked and not a generic failure at the end:
                   for the agent. `responder` sends; `borrador` only drafts; `observar`
                   and `off` do not write at all (`send-denied`).
   the transport   and only then, whether there is anything to send through.
+  the owner       a send to the owner's own chat (one of the numbers picked in the
+                  settings, or the line's chat with itself) skips the rules and Jev:
+                  only a secret-shaped value is still held.
+  the review      a reply that is about to go out on `responder` goes through the
+                  fixed floor first, with or without Jev: money, a credential or a
+                  promised date or delivery keeps it as a DRAFT for the owner. With the
+                  Jev key set, Jev reviews it too and can only ADD reasons: a status
+                  nobody verified, or Jev not answering, also keeps it. Neither can
+                  ever send a reply; the owner's `--approve` always can.
 
 ABOUT `borrador`. It used to mean "leaves the text typed in the chat, unsent", and that
 was only possible while the agent drove a screen: it typed into the WhatsApp window and
@@ -52,6 +61,8 @@ import argparse, os, sqlite3, sys, time, uuid
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import wa_store  # noqa: E402
+import wa_jev  # noqa: E402
+import wa_reglas  # noqa: E402
 from wa_settings import ajuste, scope_db, scope_from_plugin  # noqa: E402
 
 SCOPE_DB = scope_db()
@@ -98,9 +109,15 @@ RECHAZADO = "send-rejected"
 SIN_VEREDICTO = "send-timeout"
 # Un --approve sobre algo que no esta.
 SIN_BORRADOR = "send-no-draft"
+# Un --approve (o un reintento) sobre un borrador que se cancelo: no hay nada que aprobar.
+CANCELADO = "send-cancelled"
 # El mismo --id con otro texto o para otra conversacion. No se manda ninguno de los
 # dos: entregar el viejo es mandar lo que nadie pidio, y pisarlo es entregar dos veces.
 ID_EN_USO = "send-id-conflict"
+
+# Jev no contesto (sin red, error, timeout o una respuesta que no se entiende). Con la
+# llave puesta eso deja borrador: Jev falla CERRADO (kanban-casos, "Jev").
+JEV_NO_CONTESTA = "jev-unavailable"
 
 # Salidas. `3` es la misma que la compuerta `wa-scope check`: denegado, se anota y se
 # sigue. `4` es la misma que `wa-read` sin linea enlazada: no hay de donde, y no hay
@@ -115,9 +132,12 @@ CUENTA_LOCAL = "local"
 # tabla la escriben los dos lados.
 BORRADOR, PENDIENTE, ENVIADO, RECHAZADO_ = (
     "borrador", "pendiente", "enviado", "rechazado")
+# El borrador que alguien retiro (`--cancel`): final, y el sidecar no lo toca nunca (solo
+# toma `pendiente`). Se queda como fila, con su motivo: nada se borra.
+CANCELADO_ = "cancelado"
 # `enviando` es el quinto estado y no se nombra aca a proposito: lo escribe SOLO el
 # sidecar al tomar la fila, y esta CLI no decide nada con el. Lo que espera es un final.
-FINALES = (ENVIADO, RECHAZADO_)
+FINALES = (ENVIADO, RECHAZADO_, CANCELADO_)
 
 # Cuanto vale el latido del sidecar. Vive en `wa_store`, que lo comparte con el
 # `doctor`; es el MISMO numero que `LATIDO_VENCE_MS` en `sidecar/src/envio.js`, y
@@ -161,13 +181,20 @@ def conversaciones_registradas(ref):
     filas = {}
     try:
         con = sqlite3.connect(f"file:{SCOPE_DB}?mode=ro", uri=True)
-        for cuenta, jid, nombre, modo in con.execute(
-                "select account, chat_jid, chat_name, mode from chat_scope "
+        con.row_factory = sqlite3.Row
+        # `select *`: una base de antes de T22.3 no tiene `aprobacion`, y nombrarla haria
+        # fallar la consulta entera, o sea negar el permiso de un chat autorizado.
+        for r in con.execute(
+                "select * from chat_scope "
                 "where chat_jid=? or lower(trim(chat_name))=lower(trim(?))",
                 (objetivo, objetivo.replace("‎", ""))):
-            filas[(cuenta or CUENTA_LOCAL, jid)] = {
-                "account": cuenta or CUENTA_LOCAL, "chat_jid": jid,
-                "chat_name": nombre or jid, "mode": modo or "off"}
+            r = dict(r)
+            cuenta, jid = r.get("account") or CUENTA_LOCAL, r["chat_jid"]
+            filas[(cuenta, jid)] = {
+                "account": cuenta, "chat_jid": jid,
+                "chat_name": r.get("chat_name") or jid, "mode": r.get("mode") or "off",
+                "niveles": wa_reglas.niveles(r.get("aprobacion")),
+                "tone": r.get("tone")}
         con.close()
     except Exception:                     # noqa: BLE001 - sin registro no hay permiso
         pass
@@ -196,12 +223,19 @@ def conversaciones_registradas(ref):
         # `anotarChat` ya escribe: un nombre vacio no es una eleccion y no puede borrar
         # el que ya se sabia. La llave, que es lo que decide a donde va el mensaje, no
         # depende de esto.
-        anterior = filas.get(llave, {}).get("chat_name")
+        previa = filas.get(llave, {})
+        anterior = previa.get("chat_name")
         util = nombre if nombre and nombre != jid else None
+        tono = entrada.get("tone")
         filas[llave] = {
             "account": cuenta_panel, "chat_jid": jid,
             "chat_name": util or anterior or nombre or jid,
-            "mode": entrada.get("mode") or "off"}
+            "mode": entrada.get("mode") or "off",
+            # Los niveles del panel mandan cuando los dice (T22.3), como el modo.
+            "niveles": (wa_reglas.niveles(entrada["approval"])
+                        if isinstance(entrada.get("approval"), dict)
+                        else previa.get("niveles") or wa_reglas.niveles(None)),
+            "tone": tono if isinstance(tono, str) and tono.strip() else previa.get("tone")}
     return sorted(filas.values(), key=lambda f: (f["account"], f["chat_jid"]))
 
 
@@ -330,6 +364,9 @@ def veredicto(con, req_id, plazo_s, salida_json):
     if fila["estado"] == RECHAZADO_:
         niega(RECHAZADO, f"WhatsApp refused it: {fila['motivo'] or 'no reason given'}. "
                          "Nothing was delivered.")
+    if fila["estado"] == CANCELADO_:
+        niega(CANCELADO, f"this draft was cancelled ({fila['motivo'] or 'no reason given'}): "
+                         "nothing was sent and it cannot be approved.")
     informa(salida_json, {"req_id": req_id, "estado": ENVIADO,
                           "chat": fila["chat_name"], "stanza_id": fila["stanza_id"]},
             f"sent · {fila['chat_name']} · {req_id}")
@@ -346,7 +383,65 @@ def informa(salida_json, dato, linea):
         print(linea)
 
 
-def anotar_borrador(fila, req_id):
+def revision_jev(texto, tono=None):
+    """Lo que frena el envio segun Jev: None sin llave (manda el modo, como siempre), una
+    lista vacia si el texto pasa, y los motivos si no. Un error es un motivo. `tono` es el
+    del chat o el global (T22.5): con ese registro se juzga."""
+    clave = wa_jev.llave()
+    if not clave:
+        return None
+    revision = wa_jev.revisa_borrador(texto, clave, tono=tono)
+    if revision is None:
+        return [JEV_NO_CONTESTA]
+    return list(revision["flags"])
+
+
+def revision_piso(texto, niv=None):
+    """Lo que frena el envio segun el piso fijo (`wa_reglas`): siempre corre, haya o no
+    llave de Jev. Solo los NOMBRES de las excepciones, nunca el texto que las disparo.
+
+    Con los niveles del chat (T22.3) lo que esta en Permitir no frena. Un valor con forma
+    de secreto frena siempre, como `secret`: es el control destructivo y no tiene nivel."""
+    niv = niv or wa_reglas.niveles(None)
+    secreto = wa_reglas.secreto(texto)
+    halladas = [e for e in wa_reglas.excepciones(texto, wa_reglas.SALIDA)
+                if not (e == "credential" and secreto)
+                and niv.get(e) != wa_reglas.PERMITIR]
+    return halladas + ([wa_reglas.SECRETO] if secreto else [])
+
+
+def jev_permitido(jev, niv):
+    """Las banderas de Jev que siguen frenando con los niveles del chat. Lo que no tiene
+    nivel (una credencial, Jev sin contestar) frena siempre."""
+    if jev is None:
+        return None
+    return [c for c in jev if wa_reglas.nivel_de_motivo("jev", c, niv) != wa_reglas.PERMITIR]
+
+
+def jev_hace_falta(niv):
+    """Si a Jev le queda algo que revisar en este chat. Con la calidad y el compromiso en
+    Permitir, lo unico que preguntaria es la credencial, y esa la frena el piso fijo por su
+    forma: no se manda el texto de un cliente afuera para nada."""
+    return not (niv["quality"] == wa_reglas.PERMITIR
+                and niv["commitment"] == wa_reglas.PERMITIR)
+
+
+def motivos_de(piso, jev):
+    """Los motivos para el dueno, cada uno con quien lo dijo: `rule` es el piso fijo,
+    `jev` es Jev. Una lista vacia es que nada lo freno."""
+    return ([f"rule: {', '.join(piso)}"] if piso else []) + \
+        ([f"jev: {', '.join(jev)}"] if jev else [])
+
+
+def para_el_agente(piso, jev, niv):
+    """Si todo lo que freno es de nivel "Que el agente lo revise" en este chat: entonces
+    quien lo escribio lo reescribe, y el dueno solo lo ve si el agente no lo arregla."""
+    motivos = [("rule", c) for c in piso] + [("jev", c) for c in (jev or [])]
+    return bool(motivos) and all(wa_reglas.nivel_de_motivo(q, c, niv) == wa_reglas.AGENTE
+                                 for q, c in motivos)
+
+
+def anotar_borrador(fila, req_id, frenado=None):
     """El borrador, anotado donde el dueno mira: la bitacora que el panel ya muestra.
 
     Va el ID y NO el texto. El panel publica `detail` recortado en su lista de actividad
@@ -362,17 +457,31 @@ def anotar_borrador(fila, req_id):
             "insert into agent_action (ts, chat_jid, chat_name, action, detail) "
             "values (?,?,?,?,?)",
             (time.strftime("%Y-%m-%d %H:%M"), fila["chat_jid"], fila["chat_name"],
-             "draft", f"{req_id} · approve with `wa-send --approve {req_id}`"))
+             "draft", (f"held by {'; '.join(frenado)} · " if frenado else "")
+             + f"{req_id} · approve with `wa-send --approve {req_id}`"))
         con.commit()
         con.close()
     except sqlite3.Error:
         pass
 
 
-def deja_borrador(con, fila, texto, req_id, salida_json, pedia_envio):
+def deja_borrador(con, fila, texto, req_id, salida_json, pedia_envio, frenado=None,
+                  reescribir=False):
     """Escribe el borrador y dice como se aprueba. No manda nada."""
     encolar(con, fila, texto, req_id, BORRADOR)
-    anotar_borrador(fila, req_id)
+    anotar_borrador(fila, req_id, frenado)
+    if frenado:
+        # `responder` y `--send`, pero el piso fijo o Jev lo frenaron (o Jev no
+        # contesto). El mismo codigo que el borrador —hay algo escrito esperando al
+        # dueno— y el motivo en el detalle. Con todo en "Que el agente lo revise" (T22.3)
+        # el detalle le dice a quien lo escribio que lo reescriba.
+        niega(NECESITA_VISTO,
+              f"Held this reply to {fila['chat_name']!r} ({'; '.join(frenado)}): it "
+              f"was written and is waiting for you, not sent. "
+              + ("This chat leaves these reasons to the agent: rewrite the reply without "
+                 f"them and send it again (cancel this one with `wa-send --cancel {req_id}`)."
+                 if reescribir else
+                 f"Approve it with `wa-send --approve {req_id}`."))
     if pedia_envio:
         # `--send` sobre una conversacion en `borrador`. No se calla y no se degrada a
         # "no hice nada": hay algo escrito y hay algo que hacer con ello.
@@ -433,10 +542,32 @@ def aprobar(req_id, plazo_s, salida_json):
     if fila["estado"] == RECHAZADO_:
         niega(RECHAZADO, f"WhatsApp refused it: {fila['motivo'] or 'no reason given'}. "
                          "Nothing was delivered.")
+    if fila["estado"] == CANCELADO_:
+        niega(CANCELADO, f"this draft was cancelled ({fila['motivo'] or 'no reason given'}): "
+                         "nothing was sent and it cannot be approved.")
     con.execute("update envio set estado=? where req_id=? and estado=?",
                 (PENDIENTE, req_id, BORRADOR))
     con.commit()
     veredicto(con, req_id, plazo_s, salida_json)
+
+
+def cancelar(req_id, motivo, salida_json):
+    """Retira un borrador: pasa de `borrador` a `cancelado`, y solo de ahi. Lo que ya salio,
+    o esta saliendo, no se toca: cancelar no puede deshacer un envio. No borra la fila."""
+    con = almacen()
+    if con is None:
+        informa(salida_json, {"req_id": req_id, "estado": None, "cancelled": False},
+                f"nothing to cancel · {req_id}")
+        sys.exit(0)
+    cur = con.execute("update envio set estado=?, motivo=?, settled_at=? where req_id=? "
+                      "and estado=?", (CANCELADO_, (motivo or "cancelled")[:200],
+                                       int(time.time()), req_id, BORRADOR))
+    con.commit()
+    fila = con.execute("select estado from envio where req_id=?", (req_id,)).fetchone()
+    informa(salida_json, {"req_id": req_id, "estado": fila["estado"] if fila else None,
+                          "cancelled": cur.rowcount == 1},
+            f"{'cancelled' if cur.rowcount == 1 else 'nothing to cancel'} · {req_id}")
+    sys.exit(0)
 
 
 def main():
@@ -461,6 +592,10 @@ def main():
     ap.add_argument("--approve", metavar="ID",
                     help="send a draft that was waiting: the explicit approval that "
                          "`borrador` needs")
+    ap.add_argument("--cancel", metavar="ID",
+                    help="withdraw a draft that was waiting: it can no longer be approved "
+                         "or sent (a request already sent is not touched)")
+    ap.add_argument("--reason", default="", help="why, with --cancel (kept with the row)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     a = ap.parse_args()
 
@@ -468,12 +603,19 @@ def main():
         listar_borradores(a.json)
     if a.approve:
         aprobar(a.approve, a.timeout, a.json)
+    if a.cancel:
+        cancelar(a.cancel, a.reason, a.json)
     if not a.chat or a.text is None:
         ap.error("the chat and the text are required (or use --drafts / --approve)")
 
+    # El piso fijo mira la respuesta, no la firma: el nombre del agente lo eligio el dueno
+    # y no es algo que la respuesta prometa.
+    sin_firma = a.text
     # Todo mensaje del agente va firmado, para que nunca haya duda de si escribe la
     # persona o su agente. --raw es la excepcion, para cuando escribe ella.
     sig = signature()
+    if sig and sin_firma.rstrip().endswith(sig):
+        sin_firma = sin_firma.rstrip()[:-len(sig)]
     if not a.raw:
         if not sig:
             sys.exit("no agent name is configured. Set it with "
@@ -506,6 +648,28 @@ def main():
     if modo == MODO_BORRADOR or not a.send:
         deja_borrador(con, fila, a.text, req_id, a.json,
                       pedia_envio=a.send and modo == MODO_BORRADOR)
+
+    # La revision, solo sobre lo que de verdad va a salir: el piso fijo siempre, y Jev
+    # con la llave. Cualquiera de los dos que lo frene (o Jev sin contestar) lo deja
+    # borrador; ninguno lo manda. Nunca al reves: un borrador no llega aca.
+    # Con los niveles del chat (T22.3): lo que esta en Permitir no frena, y lo que esta en
+    # "Que el agente lo revise" frena para que quien lo escribio lo reescriba.
+    niv = fila.get("niveles") or wa_reglas.niveles(None)
+    if wa_store.chat_del_dueno(con, fila["account"], fila["chat_jid"]):
+        # El chat del dueno (T22.1): un numero suyo o la linea consigo misma. Lo que se le
+        # manda no protege a ningun tercero, asi que no pasa por las reglas ni por Jev (un
+        # aviso de la sesion de otro proyecto, por ejemplo). Solo queda el control
+        # destructivo: nunca repetir un secreto.
+        piso = [wa_reglas.SECRETO] if wa_reglas.secreto(sin_firma) else []
+        jev = None
+    else:
+        piso = revision_piso(sin_firma, niv)
+        tono = (fila.get("tone") or "").strip() or ajuste("tone")
+        jev = jev_permitido(revision_jev(a.text, tono) if jev_hace_falta(niv) else None, niv)
+    frenado = motivos_de(piso, jev)
+    if frenado:
+        deja_borrador(con, fila, a.text, req_id, a.json, pedia_envio=True,
+                      frenado=frenado, reescribir=para_el_agente(piso, jev, niv))
 
     encolar(con, fila, a.text, req_id, PENDIENTE)
     veredicto(con, req_id, a.timeout, a.json)
