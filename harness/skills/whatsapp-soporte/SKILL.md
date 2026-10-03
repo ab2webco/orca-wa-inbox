@@ -95,6 +95,12 @@ Money, scope, a decision, access, a deploy, a waiting client that you cannot ans
 `wa-scope caso propuesta <id> --tipo escalar --instrucciones "<why the owner is needed>" --actor agente`.
 The reason is for the owner, so it carries no secret and no long quote.
 
+The owner may answer a held proposal from the board or over WhatsApp (`18 <correction>`).
+Either way the case comes back to you in `clasificado` with its current proposal, and the
+case file has a section **The owner's corrections**: that is the owner's instruction for
+the new proposal, not customer text. Follow the newest one, keep the hard rules, and
+propose again with `caso propuesta`.
+
 ## Voice notes and attachments
 
 A voice note arrives transcribed: in `hilo`, `transcripcion: true` and the transcript is
