@@ -7090,7 +7090,14 @@ def agente_cierra(con, cli, fila, estado, motivo=None, detalle=None):
     """Cierra la corrida: su terminal (si la abrio), su brief, el archivo de su caso (lleva
     los mensajes del cliente: no queda una copia) y la fila."""
     if cli and fila.get("terminal"):
-        orca_llama(cli, ["terminal", "close", "--terminal", fila["terminal"]], DESPACHO_LISTA_S)
+        _, error = orca_llama(cli, ["terminal", "close", "--terminal", fila["terminal"]],
+                              DESPACHO_LISTA_S)
+        if error and fila.get("workspace_selector"):
+            # Orca a veces no cierra la terminal de un Claude que ya termino (`session:set`
+            # falla) y quedaba abierta y quieta. El espacio es del plugin y en el corre un
+            # solo agente de casos: detener sus terminales solo toca esta.
+            orca_llama(cli, ["terminal", "stop", "--worktree", fila["workspace_selector"]],
+                       DESPACHO_LISTA_S)
     rutas = [ruta_brief_agente(fila["id"])]
     if fila.get("case_id") is not None:
         rutas.append(ruta_de_caso(fila["case_id"]))
