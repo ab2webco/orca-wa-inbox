@@ -12,7 +12,7 @@ WA="$(cat .wa-bin 2>/dev/null)"
 ```
 
 If `WA` is empty, or if `"$WA/wa-scope"` is not executable, **stop and say so in one
-line**.
+line**. Never fall back to a bare `wa-scope` from PATH.
 
 Before you draft anything for a chat, run `"$WA/wa-scope" voice "<chat_jid>" --json` and
 obey its `tone` to the letter. You never send anything on WhatsApp: you leave proposals.
