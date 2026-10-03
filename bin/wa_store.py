@@ -492,12 +492,14 @@ def chats(con, limite, query=None, solo_no_leidos=False, linea=None):
             order by coalesce(c.last_ts, 0) desc, c.rowid
             limit ?""", args + [limite]).fetchall()
     propios = chats_propios(con)
+    pares = telefonos_de_lid(con)
     out = []
     for r in filas:
         item = {"id": r["id"], "jid": r["chat_jid"],
                 "kind": "grupo" if r["is_group"] else "directo",
                 "unread": r["unread"], "last": ts(r["last_ts"]),
-                "name": nombre_de(r), "account": r["account"]}
+                "name": nombre_de(r), "account": r["account"],
+                "phone": telefono_de(r["account"], r["chat_jid"], pares)}
         # El "mensaje a uno mismo" de la linea (T10): se llamaba como su jid pelado.
         # Se marca y se llama como la linea, que es como lo muestra WhatsApp.
         propio = propios.get((r["account"], usuario_de(r["chat_jid"])))
@@ -507,6 +509,30 @@ def chats(con, limite, query=None, solo_no_leidos=False, linea=None):
                 item["name"] = propio
         out.append(item)
     return out
+
+
+def telefonos_de_lid(con):
+    """El telefono de cada LID, por linea: `{(cuenta, lid): pn}`. Lo anota el sidecar
+    (`lid_telefono`); un almacen de antes de esa tabla no tiene ninguno, y eso no es un
+    error: el telefono es un dato de mas, no una condicion para listar."""
+    try:
+        filas = con.execute("select account, lid, pn from lid_telefono").fetchall()
+    except sqlite3.Error:
+        return {}
+    return {(f["account"], f["lid"]): f["pn"] for f in filas}
+
+
+def telefono_de(cuenta, chat_jid, pares):
+    """El telefono de un directo en formato E.164 (`+<digitos>`), o None. Un directo por
+    telefono lo lleva en su jid; uno por LID, en el par que anoto el sidecar. Un grupo
+    no tiene telefono."""
+    jid = jid_sin_dispositivo(chat_jid) or ""
+    if jid.endswith("@lid"):
+        jid = pares.get((cuenta, jid)) or ""
+    usuario, _, servidor = jid.partition("@")
+    if servidor == "s.whatsapp.net" and usuario.isdigit():
+        return f"+{usuario}"
+    return None
 
 
 def usuario_de(jid):

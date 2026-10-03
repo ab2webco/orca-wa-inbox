@@ -6,7 +6,8 @@ and writes what it receives into a message store. This tool is the query layer o
 that store — it never writes to it, and it never talks to WhatsApp.
 
   inbox [--days N] [--limit N]  what arrived in the conversations you authorized
-  chats [--query TXT] [-n N]    list chats (groups and 1:1) with unread counts
+  chats [--query TXT] [-n N]    list chats (groups and 1:1) with unread counts, and
+                                the phone of a 1:1 (`phone`, +E.164) when known
   senders [-n N]                who wrote in the authorized chats: ids and names, no text
   whoami                        your LID and how many groups
   chat <id|name> [-n N]         latest messages of a chat

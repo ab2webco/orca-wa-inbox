@@ -33,7 +33,10 @@ it.
       Proof: RED `no such table: lid_telefono`, then GREEN 270/270 (14 new checks in
       "ingesta: el telefono de cada LID": contacts, received direct/group messages,
       history `pnJid`/`lidJid`, own messages ignored, old store gets the table).
-- [ ] L2 Exposed by `wa-read chats` — check-clis.
+- [x] L2 Exposed by `wa-read chats` — check-clis.
+      Proof: `revisa_telefono_de_lid` RED (`phone` missing in wa-read and in the
+      panel's synced list), then GREEN "8 CLI arrancan, 224 comprobaciones". Covers
+      LID with pairing, LID without, phone direct, group, and a store without the table.
 - [ ] L3 Panel shows and searches the phone — test/panels.test.mjs + screenshots
       1440/768/390/320 both themes.
 - [ ] L4 `npm run check` green.
