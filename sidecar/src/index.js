@@ -156,6 +156,13 @@ export function intentoTrasEvento (intento, evento) {
  *  que motivo. No toca la red ni el disco -eso lo hace quien la llama- para que se
  *  pueda probar sin un socket vivo. */
 export function decidirTrasCierre (statusCode, intento = 1, repetidos = 1) {
+  if (statusCode === CIERRE.BAD_SESSION && repetidos <= CIERRES_REPETIDOS_TOPE) {
+    // Baileys tambien cierra con 500 por un error pasajero del servidor ("Stream
+    // Errored"): borrar al primero dejaba al dueno escaneando un QR sin motivo. Se
+    // reintenta; si se repite seguido, la sesion si esta mala y abajo se tira.
+    return { reconectar: true, borrarCredenciales: false,
+      esperaMs: calcularEsperaMs(intento), motivo: MOTIVO.DESCONOCIDO }
+  }
   if (statusCode === CIERRE.LOGGED_OUT || statusCode === CIERRE.BAD_SESSION) {
     // Reconectar con ESTAS credenciales reproduciria el mismo cierre en bucle, y
     // conservarlas es peor: con `creds.me` puesto Baileys hace login y nunca registro

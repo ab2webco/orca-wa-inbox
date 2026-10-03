@@ -48,6 +48,21 @@ console.log('\nsidecar: decidirTrasCierre por statusCode')
   ok('y el motivo dice que hace falta sesion nueva',
     cerrada.motivo === MOTIVO.SESION_CERRADA, JSON.stringify(cerrada))
 
+  // 500: Baileys lo usa para la sesion mala Y para un error pasajero del servidor
+  // ("Stream Errored"). Borrar las credenciales al primero dejo la linea del dueno
+  // pidiendo QR tras una actualizacion (2026-10-03): se reintenta, y solo se borran si
+  // se repite seguido.
+  const mala1 = decidirTrasCierre(500, 1, 1)
+  ok('un 500 suelto reconecta con espera y NO borra las credenciales',
+    mala1.reconectar === true && mala1.borrarCredenciales === false && mala1.esperaMs > 0,
+    JSON.stringify(mala1))
+  const malaTope = decidirTrasCierre(500, 4, CIERRES_REPETIDOS_TOPE + 1)
+  ok('500 repetido pasado el tope: ahi si se borran',
+    malaTope.reconectar === false && malaTope.borrarCredenciales === true &&
+    malaTope.motivo === MOTIVO.SESION_CERRADA, JSON.stringify(malaTope))
+  ok('un 401 borra al primero: WhatsApp cerro la sesion de verdad',
+    decidirTrasCierre(401, 1, 1).borrarCredenciales === true)
+
   // 515 = restartRequired: Baileys lo pide tras el primer QR escaneado. Esperar aca
   // solo demora el emparejamiento sin ganar nada.
   const reinicio = decidirTrasCierre(515, 1)
@@ -86,15 +101,15 @@ console.log('\nsidecar: las credenciales muertas se tiran, no se reusan')
   const cerrada = decidirTrasCierre(401, 1)
   ok('un 401 pide borrar las credenciales', cerrada.borrarCredenciales === true,
     JSON.stringify(cerrada))
-  // 500 es `badSession`: la sesion guardada ya no la reconoce WhatsApp. Reconectar con
-  // ella es el mismo callejon que el 401.
-  const mala = decidirTrasCierre(500, 1)
-  ok('un 500 (badSession) tambien', mala.borrarCredenciales === true &&
+  // 500 es `badSession` cuando se repite: la sesion guardada ya no la reconoce WhatsApp,
+  // y reconectar con ella es el mismo callejon que el 401. Uno suelto se reintenta.
+  const mala = decidirTrasCierre(500, 1, CIERRES_REPETIDOS_TOPE + 1)
+  ok('un 500 (badSession) repetido tambien', mala.borrarCredenciales === true &&
     mala.reconectar === false && mala.motivo === MOTIVO.SESION_CERRADA,
     JSON.stringify(mala))
   // Control: lo que se cura solo NO toca las credenciales. Borrarlas ante una caida de
   // red le pediria al dueno escanear un QR por un wifi que se corto.
-  for (const codigo of [408, 515, 428, 503, undefined]) {
+  for (const codigo of [408, 515, 428, 503, 500, undefined]) {
     const d = decidirTrasCierre(codigo, 1)
     ok(`un ${codigo ?? 'cierre sin codigo'} no borra nada`, d.borrarCredenciales === false,
       JSON.stringify(d))
