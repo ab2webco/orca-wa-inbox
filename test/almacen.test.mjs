@@ -1364,6 +1364,21 @@ console.log('\ningesta: la libreta de nombres y los directos')
     alm.nombrarChat({ cuenta: CUENTA, chatJid: DIRECTO, nombre: 'Otro' }) === false)
   ok('y un nombre igual al jid no cuenta como nombre',
     alm.nombrarChat({ cuenta: CUENTA, chatJid: DIRECTO, nombre: DIRECTO }) === false)
+
+  // WhatsApp ya guarda el directo con el LID y no con el numero, pero la libreta del
+  // telefono llega por numero, con el LID al lado (`lid`). Sin mirar ese campo el directo
+  // nunca tenia nombre aunque el contacto estuviera guardado en el telefono.
+  const DIRECTO_LID = '111122223333@lid'
+  alm.anotarChat({ cuenta: CUENTA, chatJid: DIRECTO_LID, nombre: '', esGrupo: 0,
+    ts: 1700000000, ahora: Date.now() })
+  const conLid = ingerirContactos({ almacen: alm, cuenta: CUENTA, esPropio, recordarNombre,
+    contactos: [{ id: '573007776655@s.whatsapp.net', name: 'Persona Guardada',
+      lid: DIRECTO_LID }] })
+  ok('la libreta nombra el directo guardado con su LID',
+    alm.con.prepare('select chat_name from chat where chat_jid=?').get(DIRECTO_LID)
+      .chat_name === 'Persona Guardada' && conLid.nombrados === 1, JSON.stringify(conLid))
+  ok('y el nombre queda en memoria tambien por el LID',
+    memoria.get(DIRECTO_LID) === 'Persona Guardada')
   alm.cerrar()
 }
 
