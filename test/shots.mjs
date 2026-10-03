@@ -32,9 +32,22 @@ const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..')
 // capturas adentro, correr este mismo arnes dejaba el plugin en "No valido" —
 // 328 PNG son 207 MB — y el sintoma aparecia en Orca, lejos de la causa. La
 // verificacion no puede romper lo que verifica.
-const SALIDA = join(RAIZ, '..', '.orca-wa-inbox-capturas')
+//
+// WA_INBOX_CAPTURAS cambia la carpeta: dos copias del repo (un worktree por rama) que
+// comparten la de arriba se borran las capturas una a la otra, porque cada corrida la
+// vacia antes de empezar.
+const SALIDA = process.env.WA_INBOX_CAPTURAS ??
+  join(RAIZ, '..', '.orca-wa-inbox-capturas')
+// WA_INBOX_SOLO="tablero,config-sidecar" fotografia solo los paneles cuyo nombre empieza
+// asi: para mirar un estado sin esperar las cientos de capturas de los demas.
+const SOLO = (process.env.WA_INBOX_SOLO ?? '').split(',').map((x) => x.trim()).filter(Boolean)
 
 const ANCHOS = [1440, 768, 390, 320]
+// Para mirar un solo cambio sin sacar los demas: WA_INBOX_TEMA=dark, WA_INBOX_ANCHO=1440 y
+// WA_INBOX_IDIOMA=es dejan solo ese tema, ese ancho y ese idioma.
+const SOLO_TEMA = process.env.WA_INBOX_TEMA ?? ''
+const SOLO_ANCHO = Number(process.env.WA_INBOX_ANCHO ?? 0)
+const SOLO_IDIOMA = process.env.WA_INBOX_IDIOMA ?? ''
 
 // El panel saca el idioma de navigator.language, asi que el idioma de la captura es el
 // locale del contexto. Se fotografia en espanol y en ingles porque el defecto que esto
@@ -122,16 +135,40 @@ const DATOS = {
     { jid: '573000000001@s.whatsapp.net', name: 'Camila Restrepo', kind: 'directo',
       last: '2026-09-13 11:22', unread: 2 }
   ],
-  // Una de las conversaciones va en "ninguno": es el caso que motivo la opcion — un
-  // uno a uno que solo quiere lectura y respuesta, sin tablero.
+  // T22.1: quienes escribieron (ids de prueba, sin texto) y el numero del dueno ya elegido.
+  senders: [
+    { id: '100000000000001@lid', name: 'Ana Restrepo', chats: ['Soporte — Cliente Norte'] },
+    { id: '100000000000002@lid', name: 'Beto Socio',
+      chats: ['Operaciones internas', 'Proyecto Andes — QA'] }
+  ],
+  owners: [{ id: '100000000000001@lid', name: 'Ana Restrepo' }],
+  // Los proyectos que el dueno acepto (T12) y lo que Orca propone todavia (T12). Rutas y
+  // nombres de ejemplo: ninguno existe en ninguna maquina.
+  projects: [
+    { id: 'alfa-demo', name: 'Alfa Demo', path: '/srv/ejemplo/alfa-demo',
+      note: 'Tienda en linea: cobros, envios y facturas' },
+    { id: 'beta-demo', name: 'Beta Demo', path: '/srv/ejemplo/beta-demo', note: '' }
+  ],
+  projectsStatus: {
+    at: new Date().toISOString(), ok: true, reason: null, detail: null,
+    proposals: [
+      { id: 'gama-demo', name: 'Gama Demo', path: '/srv/ejemplo/gama-demo' },
+      { id: 'delta-servicio-con-un-nombre-largo',
+        name: 'Delta Servicio Con Un Nombre Largo De Verdad',
+        path: '/srv/ejemplo/clientes/region-andina/delta-servicio-con-un-nombre-largo' }
+    ]
+  },
+  // Dos conversaciones ya con proyecto; una de antes de T13, que sigue con su servicio y
+  // destino viejos y se ve sin proyecto; y una en "ninguno": el caso que motivo la opcion —
+  // un uno a uno que solo quiere lectura y respuesta, sin tablero.
   scope: {
     '120363000000000001@g.us': {
-      chatName: 'Soporte — Cliente Norte', provider: 'plane',
-      target: 'SOP', mode: 'responder', updatedAt: '2026-09-17T14:02:00Z'
+      chatName: 'Soporte — Cliente Norte', provider: 'ninguno', target: null,
+      workspace: 'alfa-demo', mode: 'responder', updatedAt: '2026-09-17T14:02:00Z'
     },
     '120363000000000002@g.us': {
-      chatName: 'Operaciones internas', provider: 'plane',
-      target: 'OPS', mode: 'borrador', updatedAt: '2026-09-17T09:41:00Z'
+      chatName: 'Operaciones internas', provider: 'ninguno', target: null,
+      workspace: 'beta-demo', mode: 'borrador', updatedAt: '2026-09-17T09:41:00Z'
     },
     '120363000000000003@g.us': {
       chatName: 'Proyecto Andes — QA', provider: 'github',
@@ -146,8 +183,10 @@ const DATOS = {
     }
   },
   routes: [
-    { pattern: 'andes', provider: 'github', target: 'acme/andes' },
-    { pattern: 'facturacion', provider: 'plane', target: 'FIN' }
+    { pattern: 'andes', workspace: 'beta-demo' },
+    { pattern: 'facturacion', workspace: 'alfa-demo' },
+    // Una regla de antes de T13: sigue mostrando su destino viejo para poder quitarla.
+    { pattern: 'cobros', provider: 'plane', target: 'FIN' }
   ],
   decisions: {},
   // Las claves salen de build_activity() en wa-scope, no de lo que parezca razonable:
@@ -243,6 +282,16 @@ function stub(datos, opciones) {
       } else {
         datos[d.params.key] = d.params.value
         respuesta = { ok: true }
+        // El worker contestando una accion del tablero: deja SU veredicto, emparejado por el
+        // id del pedido, despues de `demoraVeredicto`. Sin poder tardar no se fotografia lo
+        // que esta en vuelo; sin poder fallar, tampoco un error.
+        const v = opciones && opciones.veredictoAccion
+        if (d.params.key === 'scopeRequest' && v && d.params.value && !d.params.value.tombstone) {
+          const id = d.params.value.id
+          setTimeout(function () {
+            datos.scopeResult = Object.assign({ at: new Date().toISOString(), requestId: id }, v)
+          }, opciones.demoraVeredicto || 0)
+        }
       }
     } else if (d.action === 'notifications.show') {
       respuesta = { ok: true }
@@ -291,8 +340,241 @@ const conLinea = (sidecar) => Object.assign({},
     looked: 4, pending: 0, reason: null }),
   { sidecar })
 
+// El tablero de casos (T5). La clave `board` la escribe `wa-scope` (odd/tasks/kanban-casos.md,
+// "Contratos"): estas tarjetas tienen esa forma exacta y datos INVENTADOS. Los nombres
+// de los chats y los textos de las propuestas son de ejemplo, igual que arriba.
+const minutos = (n) => new Date(AHORA_MS - n * 60000).toISOString()
+const CUENTAS_VACIAS = { recibido: 0, clasificado: 0, decision: 0, trabajo: 0, listo: 0,
+  respondido: 0, cerrado: 0, bloqueado: 0 }
+const ACCIONES = ['atender', 'ignorar', 'enviar', 'editar', 'ejecutar', 'reclasificar', 'cerrar',
+  'reabrir', 'proyecto']
+const caso = (id, etapa, extra) => Object.assign({
+  case_id: id, account: 'local', chat_jid: `1203630000000000${10 + id}@g.us`,
+  chat_name: 'Soporte — Cliente Norte', stage: etapa, title: 'Caso de ejemplo',
+  summary: '', clase: 'card', prioridad: 'none', jev: null, proposal: null,
+  exceptions: [], blocked_reason: null, ticket: null, updated_at: minutos(5),
+  actions: ACCIONES
+}, extra)
+const TABLERO_CASOS = [
+  caso(1, 'decision', {
+    title: 'Piden descuento del 30% en la renovación', prioridad: 'high',
+    chat_name: 'Soporte — Cliente Norte', updated_at: minutos(3),
+    summary: 'Dice que otro proveedor se lo deja en 1.400 y quiere respuesta hoy.',
+    jev: { attention_class: 'money', skip: false,
+      flags: ['asks_for_money_or_payment', 'client_waiting_or_service_down'] },
+    proposal: { tipo: 'responder', version: 'v1f3a',
+      texto: 'Hola, gracias por avisar. El precio de renovación es el vigente; ' +
+        'si quieres, lo revisamos en una llamada esta semana.' },
+    exceptions: ['money'], project: { id: 'alfa-demo', name: 'Alfa Demo' },
+    // La historia del caso (`caso_evento`): lo que hizo el agente con el, paso a paso.
+    // T22: lo que no mueve la etapa dice que paso, y lo repetido va con su cuenta.
+    events: [
+      { de: null, a: 'recibido', actor: 'automatizacion', que: 'message', at: minutos(30) },
+      { de: 'recibido', a: 'recibido', actor: 'automatizacion', que: 'message', at: minutos(30) },
+      { de: 'recibido', a: 'recibido', actor: 'automatizacion', que: 'message', at: minutos(29) },
+      { de: 'recibido', a: 'recibido', actor: 'automatizacion', que: 'sticker', at: minutos(29) },
+      { de: 'recibido', a: 'clasificado', actor: 'jev', que: 'classified', args: ['card'],
+        at: minutos(29) },
+      { de: 'clasificado', a: 'clasificado', actor: 'jev', que: 'jev', args: ['agent'],
+        at: minutos(29) },
+      { de: 'clasificado', a: 'decision', actor: 'agente', que: 'proposal', args: ['responder'],
+        at: minutos(3) },
+      { de: 'decision', a: 'decision', actor: 'regla', que: 'rule', args: ['money'],
+        at: minutos(3) },
+      { de: 'decision', a: 'decision', actor: 'automatizacion', que: 'held',
+        args: ['money', 'states_status_not_verified'], at: minutos(2) }] }),
+  caso(2, 'decision', {
+    title: 'Pide el acceso al tablero de Andes', clase: 'alert', prioridad: 'urgent',
+    chat_name: 'Operaciones internas', updated_at: minutos(22),
+    summary: 'Es una persona que no está en el equipo.',
+    jev: { attention_class: 'access_or_credential', skip: false, flags: ['asks_for_credential'] },
+    proposal: { tipo: 'escalar', version: 'v2b71', texto: 'Escalar al responsable de accesos.' },
+    exceptions: ['credential', 'jev'] }),
+  caso(3, 'decision', {
+    title: 'Promete entrega el viernes', prioridad: 'medium', chat_name: 'Laura Méndez',
+    updated_at: minutos(48),
+    proposal: { tipo: 'responder', version: 'v3c09',
+      texto: 'Te confirmo que lo tendrás el viernes a primera hora.' },
+    jev: { attention_class: 'needs_decision', skip: false, flags: ['promises_a_date'] },
+    exceptions: ['commitment'] }),
+  caso(4, 'recibido', { title: 'Nota de voz sin transcribir', clase: 'doubtful',
+    chat_name: 'Proyecto Andes — QA', updated_at: minutos(1) }),
+  caso(5, 'clasificado', { title: 'El reporte de ayer salió en blanco', prioridad: 'high',
+    chat_name: 'Soporte — Cliente Norte', updated_at: minutos(9),
+    summary: 'Lo necesitan hoy.', needs_agent: true,
+    jev: { attention_class: 'bug_report', skip: false, flags: ['urgency_pressure'] } }),
+  caso(6, 'clasificado', { title: 'Saludo de buenos días', clase: 'nothing',
+    chat_name: 'Comite - Cliente -  Sur', updated_at: minutos(14),
+    jev: { attention_class: 'pleasantry', skip: true, flags: [] } }),
+  caso(7, 'trabajo', { title: 'Reporte en blanco al exportar', prioridad: 'high',
+    chat_name: 'Soporte — Cliente Norte', updated_at: minutos(35), ticket: 'SOP-214',
+    proposal: { tipo: 'trabajar', version: 'v7d20',
+      texto: 'Reproducir el error de exportación y corregirlo en el repositorio del reporte.' },
+    dispatch: { project: 'Alfa Demo', state: 'activo', outcome: null, at: minutos(33),
+      updated_at: minutos(33) } }),
+  caso(8, 'listo', { title: 'Estado de la exportación', prioridad: 'low',
+    chat_name: 'Soporte — Cliente Norte', updated_at: minutos(70), ticket: 'SOP-211',
+    proposal: { tipo: 'responder', version: 'v8e11',
+      texto: 'Ya quedó corregido; la exportación funciona de nuevo.' } }),
+  caso(9, 'respondido', { title: 'Consulta por el horario', chat_name: 'Laura Méndez',
+    updated_at: minutos(130) }),
+  caso(10, 'cerrado', { title: 'Cotización aprobada', chat_name: 'Operaciones internas',
+    updated_at: minutos(60 * 26), ticket: 'OPS-77' }),
+  caso(11, 'bloqueado', { title: 'No se pudo enviar la respuesta', prioridad: 'medium',
+    chat_name: 'Lista de espera | Taller Demo \u{1F680} #2', updated_at: minutos(41),
+    blocked_reason: 'El envío fue rechazado: el grupo ya no existe.',
+    proposal: { tipo: 'responder', version: 'v9f42', texto: 'Gracias, ya quedó listo.' } })
+]
+// T8: lo que pasa con un trabajo despachado al agente del proyecto, una tarjeta por
+// estado: trabajando, pidio informacion, espera al cliente, resuelto y bloqueado por el agente.
+const despacho = (estado, resultado, hace) => ({ project: 'Alfa Demo', state: estado,
+  outcome: resultado, at: minutos(hace + 20), updated_at: minutos(hace) })
+const TABLERO_DESPACHO = [
+  caso(31, 'trabajo', { title: 'El reporte de ventas sale en blanco', prioridad: 'high',
+    updated_at: minutos(12),
+    proposal: { tipo: 'trabajar', version: 'vT1', texto: 'Reproducir el reporte y corregirlo.' },
+    dispatch: despacho('activo', null, 12) }),
+  caso(32, 'listo', { title: 'No carga el inventario', chat_name: 'Laura Méndez',
+    updated_at: minutos(4),
+    proposal: { tipo: 'responder', version: 'vT2', texto: 'Para revisarlo, ¿cuál bodega es?' },
+    dispatch: despacho('activo', 'necesita', 4) }),
+  caso(33, 'respondido', { title: 'Error al exportar facturas', updated_at: minutos(25),
+    dispatch: despacho('esperando', 'necesita', 25) }),
+  caso(34, 'listo', { title: 'El filtro de fechas no responde', updated_at: minutos(2),
+    proposal: { tipo: 'responder', version: 'vT4',
+      texto: 'Ya quedó corregido, ¿puedes verificarlo?' },
+    dispatch: despacho('reportado', 'resuelto', 2) }),
+  caso(35, 'bloqueado', { title: 'Borrar los pedidos de prueba', prioridad: 'medium',
+    updated_at: minutos(8),
+    blocked_reason: 'bloqueado por el agente del proyecto: hace falta borrar datos en producción',
+    dispatch: despacho('bloqueado', 'bloqueado', 8) })
+]
+const tableroDe = (cards, extra) => Object.assign({ v: 1, updated_at: minutos(1),
+  truncated: false,
+  counts: cards.reduce((acc, c) => Object.assign(acc, { [c.stage]: acc[c.stage] + 1 }),
+    Object.assign({}, CUENTAS_VACIAS)),
+  cards }, extra)
+const conTablero = (board) => Object.assign({}, DATOS, { board })
+// El panel ES el tablero (la bandeja se fue): no hay pestana que apretar. Queda como
+// primer paso de los guiones para que cada uno diga desde donde arranca.
+const ABRIR_TABLERO = 'void 0'
+
+// Textos de la longitud y la forma de los de verdad: un nombre sin espacios donde partir,
+// un parrafo largo y una URL. Es lo que desborda una columna de 160 px.
+const LARGO = 'Necesitamos que revisen la integración completa del módulo de ' +
+  'facturación antes del cierre de mes, porque los totales no coinciden con lo que ' +
+  'reporta el banco y el cliente ya preguntó dos veces por la diferencia. '
+const TABLERO_LARGO = tableroDe([
+  caso(21, 'decision', {
+    title: 'Revisión_de_la_integración_de_facturación_con_el_banco_antes_del_cierre_de_mes',
+    chat_name: 'Grupo_de_operaciones_y_finanzas_de_la_región_andina_con_nombre_larguisimo',
+    summary: LARGO.repeat(2), prioridad: 'urgent', updated_at: minutos(12),
+    proposal: { tipo: 'responder', version: 'vL1', texto: LARGO.repeat(3) +
+      'https://ejemplo.invalid/reportes/facturacion/2026/09/conciliacion-completa-del-banco' },
+    jev: { attention_class: 'support_request', skip: false,
+      flags: ['asks_for_money_or_payment', 'promises_a_date', 'states_status_not_verified',
+        'una_bandera_que_el_panel_no_conoce'] },
+    exceptions: ['money', 'commitment', 'jev'] }),
+  caso(22, 'bloqueado', { title: 'Cierre del mes', updated_at: minutos(50),
+    blocked_reason: LARGO + 'ENVIO_RECHAZADO_CODIGO_0123456789_ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+    ticket: 'FIN-1234567890-ejemplo-de-ticket-con-nombre-largo' })
+])
+
+// Los proyectos (T12/T13), que solo se ven recien con estos datos: sin proyectos aceptados,
+// con la busqueda de Orca fallida, y con una conversacion en edicion.
+const SIN_PROYECTOS = Object.assign({}, DATOS, { projects: [], projectsStatus: null })
+const BUSQUEDA_FALLIDA = Object.assign({}, SIN_PROYECTOS, {
+  projectsStatus: { at: new Date().toISOString(), ok: false, proposals: [],
+    reason: 'sin-cli-orca', detail: 'spawn orca ENOENT' }
+})
+// Editar la primera conversacion: el formulario por chat con su proyecto elegido.
+const EDITAR_CONVERSACION = "document.querySelector('[data-edit]').click()"
+
+// T17: los ajustes van en seis pestanas. Cada captura de config.html dice en cual se
+// fotografia (`pestana`); sin decirlo es Estado, que es donde viven la linea y los avisos.
+// Escribir en un autocompletar como lo hace el dueno: foco, texto y el evento `input`.
+const escribirEn = (id, texto) => `const c = document.getElementById('${id}');
+  c.focus(); c.value = ${JSON.stringify(texto)};
+  c.dispatchEvent(new Event('input', { bubbles: true }));`
+// Y elegir una opcion de su lista con un clic.
+const elegirEn = (id, lista, texto, valor) => escribirEn(id, texto) +
+  `document.querySelector('#${lista} [role="option"][data-value="${valor}"]').click();`
+// Todo listo (linea, nombre y una conversacion): la pestana de entrada es Conversaciones.
+const CON_LINEA = Object.assign({}, DATOS,
+  { sidecar: { connection: 'open', qr: null, exited: false, latido: LATIDO_FRESCO } })
+
+// Las cuentas de Claude que el worker lee de `orca account list` (de ejemplo).
+const CUENTAS_CLAUDE = [
+  { id: 'cuenta-bot', email: 'bot.whatsapp@example.invalid', authenticated: true, active: false, used: 12 },
+  { id: 'cuenta-equipo', email: 'equipo.soporte.con.un.correo.largo@example.invalid',
+    authenticated: true, active: true, used: 64 },
+  { id: 'cuenta-vieja', email: 'vieja@example.invalid', authenticated: false, active: false, used: null }
+]
+
 const PANELES = [
-  { nombre: 'config', archivo: 'config.html', anchos: ANCHOS, datos: DATOS },
+  // Las seis pestanas, a los cuatro anchos, en los dos idiomas y los dos temas.
+  { nombre: 'config-tab-estado', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: DATOS, pestana: 'estado' },
+  // Conversaciones trae la regla vieja de Plane (`cobros`) marcada.
+  { nombre: 'config-tab-chats', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: CON_LINEA, pestana: 'chats' },
+  { nombre: 'config-tab-proyectos', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: DATOS, pestana: 'proyectos' },
+  { nombre: 'config-tab-aprobacion', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: DATOS, pestana: 'aprobacion' },
+  // Agente trae la cuenta de Claude del bot: la lista la contesta el worker.
+  { nombre: 'config-tab-agente', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, pestana: 'agente', guion: 'void 0', espera: 2500,
+    datos: Object.assign({}, DATOS, { botClaudeAccount: 'cuenta-bot' }),
+    stub: { veredictoAccion: { ok: true, code: 'cuentas', accounts: CUENTAS_CLAUDE } } },
+  // Sin poder leer las cuentas: lo dice, y Automatica sigue a mano.
+  { nombre: 'config-cuenta-bot-fallo', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, pestana: 'agente', guion: 'void 0', espera: 2500,
+    datos: Object.assign({}, DATOS, { botClaudeAccount: 'cuenta-que-ya-no-esta' }),
+    stub: { veredictoAccion: { ok: false, code: 'cuentas-fallo' } } },
+  { nombre: 'config-tab-avanzado', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: DATOS, pestana: 'avanzado' },
+  // La pestana de entrada sin tocar nada: con todo listo, Conversaciones.
+  { nombre: 'config-entrada-lista', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: CON_LINEA, pestana: null },
+  // El autocompletar abierto con resultados, sin ninguno, y el de proyecto.
+  { nombre: 'config-combo-abierto', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: CON_LINEA, pestana: 'chats',
+    guion: escribirEn('chat-search', 'o') +
+      "c.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))",
+    espera: 300 },
+  { nombre: 'config-combo-sin-coincidencias', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: CON_LINEA, pestana: 'chats',
+    guion: escribirEn('chat-search', 'zzzz'), espera: 300 },
+  { nombre: 'config-combo-proyecto', archivo: 'config.html', anchos: ANCHOS,
+    datos: CON_LINEA, pestana: 'chats', guion: escribirEn('workspace-search', ''),
+    espera: 300 },
+  // Jev encendido, con llave.
+  { nombre: 'config-jev-encendido', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, pestana: 'aprobacion',
+    datos: Object.assign({}, DATOS, { jevStatus: { at: new Date().toISOString(),
+      enabled: true, keySet: true, mirror: 'activo' } }) },
+  // Jev encendido con la llave guardada, pero con un `jev.env` que el plugin no escribio:
+  // la nota no manda a reescribir la llave y ofrece usar la guardada.
+  { nombre: 'config-jev-ajeno', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, pestana: 'aprobacion',
+    datos: Object.assign({}, DATOS, { jevStatus: { at: new Date().toISOString(),
+      enabled: true, keySet: true, mirror: 'ajeno' } }) },
+  { nombre: 'config-proyectos-vacio', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: SIN_PROYECTOS, pestana: 'proyectos' },
+  { nombre: 'config-proyectos-fallo', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    datos: BUSQUEDA_FALLIDA, pestana: 'proyectos' },
+  { nombre: 'config-conversacion-editar', archivo: 'config.html', anchos: ANCHOS,
+    guion: EDITAR_CONVERSACION, espera: 400, datos: CON_LINEA, pestana: 'chats' },
+  // T22.3: los niveles de aprobacion del chat, debajo de las respuestas automaticas.
+  { nombre: 'config-conversacion-niveles', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: CON_LINEA, pestana: 'chats',
+    guion: EDITAR_CONVERSACION + ";document.getElementById('chat-ap-money').scrollIntoView()" },
+  // T22.1: elegir los numeros del dueno de quienes escribieron.
+  { nombre: 'config-duenos-combo', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 300, datos: CON_LINEA, pestana: 'aprobacion',
+    guion: "document.getElementById('owners-card').scrollIntoView();" +
+      escribirEn('owner-search', '') },
   {
     nombre: 'actividad',
     archivo: 'activity.html',
@@ -305,6 +587,242 @@ const PANELES = [
           looked: 4, pending: 3, reason: null }
       })
     })
+  },
+  // El tablero de casos (T5, con la anatomia del de Plane en Orca) y las acciones del dueno
+  // (T6). Los estados que pide el rediseno van a los cuatro anchos, en los dos idiomas y los
+  // dos temas: a lo ancho son columnas y desde 768 hacia abajo la lista por etapa, que es
+  // donde se rompe. La bandeja de siempre queda detras de la otra pestana.
+  {
+    nombre: 'tablero-poblado', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
+    datos: conTablero(tableroDe(TABLERO_CASOS, {
+      // Hay mas casos de los que caben: lo dice el aviso y "+n mas sin mostrar".
+      truncated: true,
+      counts: Object.assign({}, CUENTAS_VACIAS, { recibido: 1, clasificado: 2, decision: 3,
+        trabajo: 1, listo: 1, respondido: 1, cerrado: 12, bloqueado: 1 })
+    }))
+  },
+  {
+    // Una etapa elegida en la fila de arriba: queda solo "Su decision".
+    nombre: 'tablero-filtrado', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('#board-chips button[data-etapa="decision"]').click()`
+  },
+  {
+    // Buscar por el chat, sin la tilde: los casos de "Soporte — Cliente Norte".
+    nombre: 'tablero-busqueda', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    guion: ABRIR_TABLERO + `;
+      const c = document.getElementById('board-search');
+      c.value = 'norte'; c.dispatchEvent(new Event('input', { bubbles: true }))`
+  },
+  {
+    // La lista elegida a mano, tambien a lo ancho.
+    nombre: 'tablero-lista', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('#board-view button[data-vista="list"]').click()`
+  },
+  {
+    // El detalle de un caso abierto, con su texto entero, Jev y todas las acciones.
+    nombre: 'tablero-detalle', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="1"]').click()`
+  },
+  {
+    // T8: el despacho al agente del proyecto en cada estado.
+    nombre: 'tablero-despacho', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
+    datos: conTablero(tableroDe(TABLERO_DESPACHO))
+  },
+  {
+    // El despacho y el agente de casos que no se abrieron con la cuenta del bot: con cual y
+    // por que.
+    nombre: 'tablero-cuenta-respaldo', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
+    datos: Object.assign(corrida({ state: 'ok', startedAt: AHORA_CORTO, endedAt: AHORA_CORTO,
+      looked: 4, pending: 0, reason: null }), { board: tableroDe(TABLERO_DESPACHO.map((c) => (
+      c.case_id === 31 ? Object.assign({}, c, { dispatch: Object.assign({}, c.dispatch,
+        { account: 'equipo.soporte@example.invalid', fallback: 'elegida-sin-sesion' }) }) : c)), {
+      agent_waiting: 1,
+      agent_launch: { state: 'running', at: minutos(1), account: 'equipo.soporte@example.invalid',
+        fallback: 'elegida-sin-sesion' }
+    }) })
+  },
+  {
+    nombre: 'tablero-vacio', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400, datos: conTablero(tableroDe([]))
+  },
+  {
+    // El estado de error: una version del tablero que este panel no entiende.
+    nombre: 'tablero-version', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
+    datos: conTablero({ v: 2, updated_at: minutos(1), cards: [], counts: {} })
+  },
+  {
+    // Lo que era la cola: un caso en Recibido, con Atender ahora e Ignorar en el detalle.
+    nombre: 'tablero-recibido', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="4"]').click()`
+  },
+  {
+    // Cambiar el proyecto: el autocompletar abierto con el catalogo aceptado.
+    nombre: 'tablero-proyecto', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="5"]').click();
+      document.querySelector('#board-detail button[data-accion="proyecto"]').click();
+      const c = document.querySelector('#board-detail input[role="combobox"]');
+      c.focus(); c.click()`
+  },
+  {
+    // Una tarjeta en cada etapa menos "Su decision": el estado sano y el mas comun.
+    nombre: 'tablero-sin-decisiones', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
+    guion: ABRIR_TABLERO, espera: 400,
+    datos: conTablero(tableroDe(TABLERO_CASOS.filter((c) => c.stage !== 'decision')))
+  },
+  {
+    // Antes de que `wa-scope` escriba nada: no hay clave `board`.
+    nombre: 'tablero-sin-datos', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
+    guion: ABRIR_TABLERO, espera: 400, datos: DATOS
+  },
+  {
+    nombre: 'tablero-textos-largos', archivo: 'activity.html', anchos: ANCHOS,
+    guion: ABRIR_TABLERO, espera: 400, datos: conTablero(TABLERO_LARGO)
+  },
+  {
+    // Lo largo se lee entero en el detalle.
+    nombre: 'tablero-detalle-largo', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
+    guion: ABRIR_TABLERO + "; document.querySelector('.card[data-case=\"21\"]').click()",
+    espera: 400, datos: conTablero(TABLERO_LARGO)
+  },
+  // Las acciones del dueno (T6) en cada uno de sus estados: desde el detalle, salvo el
+  // Enviar de la tarjeta, que es el unico boton que la tarjeta lleva a la vista.
+  {
+    // Editar y enviar: el editor abierto en el detalle, con lo que el dueno esta escribiendo.
+    nombre: 'tablero-accion-editar', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true,
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="1"]').click();
+      document.querySelector('#board-detail button[data-accion="editar"]').click();
+      const area = document.querySelector('.card-form textarea');
+      area.value = 'Hola, gracias por avisar. El precio de renovación es el vigente y no ' +
+        'podemos bajarlo; si quieres, lo revisamos en una llamada esta semana.';
+      area.dispatchEvent(new Event('input', { bubbles: true }))`,
+    espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS))
+  },
+  {
+    // Cerrar con motivo: el segundo formulario, el de un solo renglon.
+    nombre: 'tablero-accion-cerrar', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="5"]').click();
+      document.querySelector('#board-detail button[data-accion="cerrar"]').click();
+      const motivo = document.querySelector('.card-form input');
+      motivo.value = 'Ya lo resolvimos por teléfono';
+      motivo.dispatchEvent(new Event('input', { bubbles: true }))`,
+    espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS))
+  },
+  {
+    // Reclasificar: la nota opcional, vacia.
+    nombre: 'tablero-accion-reclasificar', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="2"]').click();
+      document.querySelector('#board-detail button[data-accion="reclasificar"]').click()`,
+    espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS))
+  },
+  {
+    // Enviando desde la tarjeta: el worker tarda y todos los botones quedan quietos.
+    nombre: 'tablero-accion-enviando', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="1"] .card-acts button[data-accion="enviar"]').click()`,
+    espera: 500, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    stub: { veredictoAccion: { ok: true, code: 'enviado' }, demoraVeredicto: 600000 }
+  },
+  {
+    // La propuesta cambio mientras el dueno la miraba: el error dicho en la tarjeta y en el
+    // detalle abierto.
+    nombre: 'tablero-accion-error', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true,
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="1"]').click();
+      document.querySelector('#board-detail button[data-accion="enviar"]').click()`,
+    espera: 1500, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    stub: { veredictoAccion: { ok: false, code: 'E_VERSION' }, demoraVeredicto: 0 }
+  },
+  {
+    // La linea de WhatsApp no esta: otro error, de wa-send y no del CLI de casos.
+    nombre: 'tablero-accion-sin-linea', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="3"] .card-acts button[data-accion="enviar"]').click()`,
+    espera: 1500, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    stub: { veredictoAccion: { ok: false, code: 'send-no-transport' }, demoraVeredicto: 0 }
+  },
+  {
+    // Enviado: lo bueno tambien se dice.
+    nombre: 'tablero-accion-enviado', archivo: 'activity.html', anchos: ANCHOS_ESTADO,
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="3"] .card-acts button[data-accion="enviar"]').click()`,
+    espera: 1500, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    stub: { veredictoAccion: { ok: true, code: 'enviado' }, demoraVeredicto: 0 }
+  },
+  {
+    // Atender ahora: el agente salio. Dice "lanzado", no "ya responde".
+    nombre: 'tablero-atender-lanzado', archivo: 'activity.html', anchos: ANCHOS,
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="4"] .card-acts button[data-accion="atender"]').click()`,
+    espera: 1500, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    stub: { veredictoAccion: { ok: true, code: 'atendido', agent: 'launched' }, demoraVeredicto: 0 }
+  },
+  {
+    // Atender ahora: el caso quedo marcado pero el agente no se pudo lanzar.
+    nombre: 'tablero-atender-fallo', archivo: 'activity.html', anchos: ANCHOS,
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="4"] .card-acts button[data-accion="atender"]').click()`,
+    espera: 1500, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    stub: { veredictoAccion: { ok: true, code: 'atendido', agent: 'run-failed', agentReason: 'sin-cuenta' },
+      demoraVeredicto: 0 }
+  },
+  {
+    // El ultimo lanzamiento del agente de casos fallo: lo dicen las tarjetas que lo esperan
+    // y la linea de la revision, en vez de prometer la proxima corrida.
+    nombre: 'tablero-agente-fallo', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
+    datos: Object.assign(corrida({ state: 'ok', startedAt: AHORA_CORTO, endedAt: AHORA_CORTO,
+      looked: 4, pending: 0, reason: null }), { board: tableroDe(TABLERO_CASOS.map((c) => (
+      c.stage === 'recibido' || c.stage === 'clasificado'
+        ? Object.assign({}, c, { waits_agent: true }) : c)), {
+      agent_waiting: TABLERO_CASOS.filter((c) => c.stage === 'recibido' ||
+        c.stage === 'clasificado').length,
+      agent_launch: { state: 'failed', reason: 'sin-cuenta', at: minutos(2),
+        detail: 'orca terminal create: This Claude account is in use by an assigned worktree' }
+    }) })
+  },
+  {
+    // Claude se cerro al abrir tres veces seguidas: el tick espera una hora y lo dice.
+    nombre: 'tablero-agente-se-cierra', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
+    datos: Object.assign(corrida({ state: 'ok', startedAt: AHORA_CORTO, endedAt: AHORA_CORTO,
+      looked: 4, pending: 0, reason: null }), { board: tableroDe(TABLERO_CASOS.map((c) => (
+      c.stage === 'recibido' || c.stage === 'clasificado'
+        ? Object.assign({}, c, { waits_agent: true }) : c)), {
+      agent_waiting: TABLERO_CASOS.filter((c) => c.stage === 'recibido' ||
+        c.stage === 'clasificado').length,
+      agent_launch: { state: 'failed', reason: 'se-cierra', at: minutos(2),
+        detail: 'Claude se cerro al abrir: Security guide' }
+    }) })
+  },
+  {
+    // El tick no pudo quitar de la barra lateral dos espacios que dejaron las corridas del
+    // plugin: lo dice la linea de la revision, para que el dueno los quite a mano.
+    nombre: 'tablero-espacios-atascados', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
+    datos: Object.assign(corrida({ state: 'ok', startedAt: AHORA_CORTO, endedAt: AHORA_CORTO,
+      looked: 4, pending: 0, reason: null }), { board: tableroDe(TABLERO_CASOS, {
+      agent_waiting: 1, workspaces_stuck: 2
+    }) })
   },
   // 1. Reviso y no habia nada: el caso comun y sano.
   {
@@ -372,13 +890,13 @@ const PANELES = [
   // esos. A 320 ademas la fila se parte en bloques y el aviso de desvincular es el
   // parrafo mas largo del panel.
   {
-    nombre: 'config-buscando', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    nombre: 'config-buscando', archivo: 'config.html', anchos: ANCHOS_ESTADO, pestana: 'chats',
     datos: Object.assign({}, SIN_CHATS, {
       syncStatus: { running: true, startedAt: new Date().toISOString(), trigger: 'activate' }
     })
   },
   {
-    nombre: 'config-fallo', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    nombre: 'config-fallo', archivo: 'config.html', anchos: ANCHOS_ESTADO, pestana: 'chats',
     datos: Object.assign({}, SIN_CHATS, {
       syncStatus: {
         ok: false, at: new Date().toISOString(), chats: 0, reason: 'sin-herramientas',
@@ -388,7 +906,7 @@ const PANELES = [
     })
   },
   {
-    nombre: 'config-sin-respuesta', archivo: 'config.html', anchos: ANCHOS_ESTADO,
+    nombre: 'config-sin-respuesta', archivo: 'config.html', anchos: ANCHOS_ESTADO, pestana: 'chats',
     datos: Object.assign({}, SIN_CHATS, {
       syncStatus: { running: true, startedAt: HACE_DIEZ_MINUTOS, trigger: 'activate' }
     })
@@ -480,18 +998,18 @@ const PANELES = [
     // era visual: el panel decia "guardado" con un tilde verde sobre una escritura que
     // no ocurrio, y eso no lo delata ninguna prueba de codigo, solo mirarlo.
     nombre: 'config-guardado-fallo', archivo: 'config.html', anchos: ANCHOS_ESTADO,
-    datos: DATOS, stub: { falla: ['inboxDays'] },
-    guion: `document.getElementById('inbox-days').value = '30';
-            document.getElementById('save-days').click()`
+    datos: DATOS, stub: { falla: ['inboxDays'] }, pestana: 'avanzado',
+    guion: `document.querySelector('#inbox-days [data-value="30"]').click();
+            document.getElementById('save-reading').click()`
   },
   {
     // Y el guardado EN VUELO: el boton ocupado mientras el host todavia no contesta.
     // Sin poder verlo, un boton que se queda muerto y uno que esta trabajando son la
     // misma imagen.
     nombre: 'config-guardado-en-vuelo', archivo: 'config.html', anchos: ANCHOS_ESTADO,
-    datos: DATOS, stub: { demoraSet: 4000 },
-    guion: `document.getElementById('inbox-days').value = '30';
-            document.getElementById('save-days').click()`,
+    datos: DATOS, stub: { demoraSet: 4000 }, pestana: 'avanzado',
+    guion: `document.querySelector('#inbox-days [data-value="30"]').click();
+            document.getElementById('save-reading').click()`,
     espera: 600
   },
 
@@ -623,13 +1141,8 @@ const PANELES = [
     // quedo, y que debajo esta la llave. Una lista desplegada no se puede fotografiar
     // —la pinta el sistema— asi que lo que se mira es lo que si queda en la pagina.
     nombre: 'config-elegir-autorizada', archivo: 'config.html', anchos: ANCHOS,
-    datos: DATOS,
-    guion: `const b = document.getElementById('chat-search');
-            b.value = 'laura mendez';
-            b.dispatchEvent(new Event('input'));
-            const s = document.getElementById('chat-pick');
-            s.value = '573000000000@s.whatsapp.net';
-            s.dispatchEvent(new Event('change'));`,
+    datos: DATOS, pestana: 'chats',
+    guion: elegirEn('chat-search', 'chat-list', 'laura mendez', '573000000000@s.whatsapp.net'),
     espera: 400
   },
   {
@@ -638,13 +1151,8 @@ const PANELES = [
     // Sin permiso no hay insignia ni aviso, y el renglon de identidad es lo unico que
     // dice cual conversacion es antes de darle permiso a un agente sobre ella.
     nombre: 'config-elegir-sin-autorizar', archivo: 'config.html', anchos: ANCHOS,
-    datos: DATOS,
-    guion: `const b = document.getElementById('chat-search');
-            b.value = 'taller demo 2';
-            b.dispatchEvent(new Event('input'));
-            const s = document.getElementById('chat-pick');
-            s.value = '120363000000000004@g.us';
-            s.dispatchEvent(new Event('change'));`,
+    datos: DATOS, pestana: 'chats',
+    guion: elegirEn('chat-search', 'chat-list', 'taller demo 2', '120363000000000004@g.us'),
     espera: 400
   },
   // ── La linea muerta (odd/tasks/linea-muerta.md) ──────────────────────────────────
@@ -700,7 +1208,7 @@ const PANELES = [
   // del nuevo no paso), y el panel no lo pinta como si fuera del vinculado.
   {
     nombre: 'config-numero-nuevo', archivo: 'config.html', anchos: ANCHOS,
-    enTodosLosAnchos: true,
+    enTodosLosAnchos: true, pestana: 'chats',
     datos: Object.assign({}, DATOS, {
       sidecar: { connection: 'open', qr: null, exited: false, me: '+573000000012',
         cuenta: 'pn:573000000012', latido: LATIDO_FRESCO },
@@ -731,9 +1239,8 @@ const PANELES = [
       chats: [{ jid: '100000000000002@lid', name: 'Nueva', kind: 'directo', own: true,
         last: '2026-09-17 14:05', unread: 0 }].concat(DATOS.chats)
     }),
-    guion: `const s = document.getElementById('chat-pick');
-            s.value = '100000000000002@lid';
-            s.dispatchEvent(new Event('change'));`,
+    pestana: 'chats',
+    guion: elegirEn('chat-search', 'chat-list', 'nueva', '100000000000002@lid'),
     espera: 400
   },
   // T10: una subida de esquema que no borro ningun mensaje no dice "se borro".
@@ -760,6 +1267,50 @@ const PANELES = [
     })
   },
   {
+    // Un caso reabierto por un seguimiento: su historia partida en tramos con "Reabierto", el
+    // caso anterior enlazado, y la excepcion que ya no es una necesidad en Respondido.
+    nombre: 'tablero-nuevo-reabierto', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400,
+    datos: Object.assign(conTablero(tableroDe([
+      caso(41, 'clasificado', {
+        title: 'No funcionó lo que me mandaron ayer', prioridad: 'medium', related_case: 40,
+        summary: 'No funcionó lo que me mandaron ayer.', needs_agent: true,
+        actions: ['atender', 'ignorar', 'reclasificar', 'cerrar', 'proyecto'],
+        events: [
+          { de: null, a: 'recibido', actor: 'automatizacion', at: minutos(60 * 3) },
+          { de: 'recibido', a: 'clasificado', actor: 'jev', at: minutos(60 * 3 - 1) },
+          { de: 'clasificado', a: 'decision', actor: 'agente', at: minutos(60 * 2) },
+          { de: 'decision', a: 'respondido', actor: 'dueno', at: minutos(60 * 2 - 3) },
+          { de: 'respondido', a: 'recibido', actor: 'automatizacion', at: minutos(6) },
+          { de: 'recibido', a: 'clasificado', actor: 'jev', at: minutos(5) }] }),
+      caso(40, 'respondido', {
+        title: 'Pedido del reporte mensual', exceptions: ['commitment'],
+        actions: ['cerrar', 'reabrir'], updated_at: minutos(60 * 2) }),
+      caso(42, 'decision', { title: 'Piden su acceso al proyecto', exceptions: ['credential', 'commitment'],
+        proposal: { tipo: 'escalar', texto: null, version: 'v-esc' },
+        jev: { attention_class: 'access_or_credential', skip: false, flags: ['asks_for_credential'] },
+        actions: ['editar', 'autorizar', 'reclasificar', 'cerrar', 'proyecto'] })
+    ], { agent_waiting: 2 })), { activity: Object.assign({}, DATOS.activity, {
+      run: { state: 'ok', startedAt: '2026-09-17 14:01', endedAt: '2026-09-17 14:02',
+        looked: 3, pending: 0, reason: null } }) }),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="41"]').click()`
+  },
+  {
+    // La propuesta escalar sin texto: dice por que, y ofrece Autorizar y Editar y enviar.
+    nombre: 'tablero-nuevo-autorizar', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400,
+    datos: conTablero(tableroDe([
+      caso(42, 'decision', { title: 'Piden su acceso al proyecto', exceptions: ['credential', 'commitment'],
+        summary: 'Dice que necesita acceso al proyecto para revisar el reporte.',
+        proposal: { tipo: 'escalar', texto: null, version: 'v-esc' },
+        jev: { attention_class: 'access_or_credential', skip: false, flags: ['asks_for_credential'] },
+        actions: ['editar', 'autorizar', 'reclasificar', 'cerrar', 'proyecto'] })
+    ], { agent_waiting: 2 })),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="42"]').click()`
+  },
+  {
     nombre: 'config-sidecar-reintentar', archivo: 'config.html', anchos: ANCHOS,
     datos: Object.assign({}, DATOS, { sidecar: {
       connection: null, qr: null, exited: true, motivo: 'sidecar-no-arranco',
@@ -777,8 +1328,11 @@ async function main() {
   let tomadas = 0
 
   for (const idioma of IDIOMAS) {
+   if (SOLO_IDIOMA && idioma.tag !== SOLO_IDIOMA) continue
    for (const tema of TEMAS) {
+    if (SOLO_TEMA && tema !== SOLO_TEMA) continue
     for (const ancho of ANCHOS) {
+      if (SOLO_ANCHO && ancho !== SOLO_ANCHO) continue
       const contexto = await navegador.newContext({
         viewport: { width: ancho, height: 900 },
         colorScheme: tema,
@@ -786,6 +1340,7 @@ async function main() {
         deviceScaleFactor: 2
       })
       for (const panel of PANELES) {
+        if (SOLO.length && !SOLO.some((p) => panel.nombre.startsWith(p))) continue
         if (!panel.anchos.includes(ancho)) continue
         // En ingles, por defecto, solo los extremos; los estados marcados van a todos.
         if (!panel.enTodosLosAnchos && !idioma.anchos.includes(ancho)) continue
@@ -826,6 +1381,14 @@ async function main() {
           null, { timeout: 5000 }
         ).catch(() => problemas.push(`${donde}: quedo vacio`))
 
+        // La pestana de la captura (T17). `null` deja la que el panel elige solo.
+        const pestana = panel.archivo === 'config.html' && panel.pestana !== null
+          ? (panel.pestana || 'estado') : null
+        if (pestana) {
+          await pagina.click(`#tab-${pestana}`)
+          await pagina.waitForTimeout(100)
+        }
+
         // Los estados que solo existen despues de un clic. Fotografiar el panel recien
         // cargado nunca los muestra, y son justo los dos que se entregaron rotos.
         if (panel.guion) {
@@ -848,22 +1411,20 @@ async function main() {
           problemas.push(`${donde}: error JS — ${errores[0]}`)
         }
 
-        // La lista desplegada de un select, en Linux, la pinta el motor de render con
-        // el color del control: un fondo transparente ahi es blanco sobre blanco y no
-        // se ve en ninguna captura, porque la captura fotografia el control cerrado.
-        // Por eso se mide en vez de mirarse, y en los dos temas.
+        // T17: ni un select nativo (su lista no se abre en el panel de Orca). Y la lista
+        // del autocompletar flota sobre lo que sigue: con fondo transparente se leeria
+        // el texto de abajo a traves de ella. Se mide en vez de mirarse, en los dos temas.
         for (const malo of await pagina.evaluate(() => {
           const opaco = (c) => {
             const m = /rgba?\(([^)]+)\)/.exec(c || '')
             return m ? Number((m[1].split(',')[3] ?? '1').trim()) > 0.99 : false
           }
           const salida = []
-          for (const el of document.querySelectorAll('select, select option')) {
+          if (document.querySelector('select')) salida.push('hay un <select> nativo')
+          for (const el of document.querySelectorAll('.combo-list:not([hidden])')) {
             const e = getComputedStyle(el)
-            const que = el.tagName.toLowerCase() + (el.id ? '#' + el.id : '')
-            if (!opaco(e.backgroundColor)) salida.push(`${que} sin fondo propio (${e.backgroundColor})`)
-            else if (e.backgroundColor === e.color) salida.push(`${que} con el texto del color del fondo`)
-            if (!opaco(e.color)) salida.push(`${que} con el texto transparente (${e.color})`)
+            if (!opaco(e.backgroundColor)) salida.push(`#${el.id} sin fondo propio (${e.backgroundColor})`)
+            else if (e.backgroundColor === e.color) salida.push(`#${el.id} con el texto del color del fondo`)
           }
           return salida
         })) {
@@ -888,7 +1449,7 @@ async function main() {
     for (const p of problemas) console.error(`  ${p}`)
     process.exit(1)
   }
-  console.log('sin desbordes, sin errores de JS y con los select legibles')
+  console.log('sin desbordes, sin errores de JS, sin selects y con las listas opacas')
 }
 
 main().catch((error) => {

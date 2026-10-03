@@ -18,12 +18,17 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import { HARNESS_KEY } from './harness.mjs'
+import { llaveValida } from './jev-espejo.mjs'
+import { crearAccionesCaso } from './acciones.mjs'
+import { CUENTAS_ACCION, crearLanzadorTriage, crearListaCuentas } from './agente.mjs'
+import { crearCatalogo, leerCatalogo, PROJECTS_KEY } from './catalogo.mjs'
 
 // Las herramientas viajan dentro del plugin. Antes se buscaban en el PATH del usuario,
 // lo que solo funcionaba en la maquina donde alguien las habia enlazado a mano.
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
 const TOOLS = join(PLUGIN_DIR, 'bin')
 const SCOPE_KEY = 'scope'          // { [chatJid]: ScopeEntry }
+const ROUTES_KEY = 'routes'        // [{ pattern, workspace }]: las reglas de texto del panel
 // Como le fue al ultimo sync. El panel no puede ejecutar nada, asi que sin esto no
 // tiene forma de distinguir "todavia buscando" de "fallo hace media hora".
 const STATUS_KEY = 'syncStatus'
@@ -66,6 +71,38 @@ const SIDECAR_RESULT_KEY = 'sidecarResult'
 const SCOPE_REQUEST_KEY = 'scopeRequest'
 const SCOPE_RESULT_KEY = 'scopeResult'
 const MODES = ['off', 'observar', 'borrador', 'responder']
+
+// La llave de Jev (TypeSafe), secreto PROPIO del plugin. Cuatro claves y no una: el panel
+// no puede llamar a `secrets.*` (solo storage), asi que escribe un pedido y el worker lo
+// atiende, igual que `scopeRequest`; el veredicto va en otra clave porque el pedido se
+// borra al leerlo. El estado es lo unico que el panel pinta, y nunca lleva la llave, ni
+// siquiera sus ultimos caracteres: solo "guardada" o "sin llave".
+const JEV_REQUEST_KEY = 'jevRequest'
+const JEV_RESULT_KEY = 'jevResult'
+const JEV_STATUS_KEY = 'jevStatus'
+// El interruptor. Apagado de fabrica: encenderlo es lo que manda el texto de los clientes
+// a api.typesafe.ai, y lo decide el dueno con el aviso a la vista.
+const JEV_ENABLED_KEY = 'jevEnabled'
+const JEV_SECRET_NAME = 'jevKey'
+const JEV_ACCION = Object.freeze({
+  GUARDAR: 'guardar-llave', QUITAR: 'quitar-llave', ACTIVAR: 'activar'
+})
+const JEV_VEREDICTO = Object.freeze({
+  GUARDADA: 'guardada',
+  QUITADA: 'quitada',
+  ACTIVADO: 'activado',
+  DESACTIVADO: 'desactivado',
+  VENCIDO: 'vencido',
+  ACCION_DESCONOCIDA: 'accion-desconocida',
+  LLAVE_INVALIDA: 'llave-invalida',
+  ARGUMENTOS_INVALIDOS: 'argumentos-invalidos',
+  BOVEDA_FALLO: 'boveda-fallo',
+  ESPEJO_FALLO: 'espejo-fallo'
+})
+const JEV_ESPEJO_SCRIPT = join(PLUGIN_DIR, 'jev-espejo.mjs')
+// Cuantas veces se registra que la boveda no contesta: la revision corre cada 5 minutos
+// y cada registro es una llamada al host.
+const JEV_AVISOS_MAX = 3
 
 /** El nombre del agente lo define quien usa el plugin. No viene con uno puesto.
  *
@@ -282,6 +319,70 @@ function motivoDeCrudo(error) {
   })
 }
 
+// La entrada de los casos (kanban-casos, T2): cuando el sidecar guarda mensajes nuevos, un
+// `wa-scope ingest` los vuelve casos sin esperar al reloj de 5 minutos ni despertar a
+// ningun agente. El rebote junta una rafaga en UNA corrida: el sidecar ya saca los
+// conteos con freno de 30 s, y aun asi un mensaje y el chat que lo rodea llegan juntos.
+export const INGESTA_ESPERA_MS = 5 * 1000
+const INGESTA_TIMEOUT_MS = 60 * 1000
+// Cada `orca.log` es una llamada al host y Orca mata al worker a los 64 sin confirmar
+// (ver STDERR_MAX_LINEAS): una ingesta que falla en cada mensaje no puede llevarselo.
+export const INGESTA_AVISOS_MAX = 5
+
+/** Convierte "pasaron cosas" en UNA corrida de `correr`, despues de que se calma.
+ *
+ *  `pedir()` reinicia la espera, asi que una rafaga es una sola corrida; si llega un
+ *  pedido con una corrida en curso no arranca otra encima —dos ingestas a la vez se
+ *  disputarian la base—, queda anotado y corre UNA vez mas al terminar la actual. Una
+ *  corrida que falla no apaga nada: `correr` dice lo suyo, esto sigue. Pura como
+ *  `programarSalud`, para probar la regla sin esperar los segundos reales. */
+export function programarIngesta(correr, { esperaMs = INGESTA_ESPERA_MS } = {}) {
+  let timer = null
+  let enVuelo = false
+  let otraVez = false
+  let parado = false
+
+  const lanzar = () => {
+    timer = null
+    if (parado) return
+    enVuelo = true
+    Promise.resolve().then(correr).catch(() => {}).finally(() => {
+      enVuelo = false
+      if (otraVez && !parado) { otraVez = false; lanzar() }
+    })
+  }
+
+  return {
+    pedir() {
+      if (parado) return
+      if (enVuelo) { otraVez = true; return }
+      clearTimeout(timer)
+      timer = setTimeout(lanzar, esperaMs)
+      if (typeof timer.unref === 'function') timer.unref()
+    },
+    parar() {
+      parado = true
+      clearTimeout(timer)
+      timer = null
+    }
+  }
+}
+
+/** Una corrida de `wa-scope ingest`. Es un proceso hijo y no toca el host: ni el
+ *  directorio de herramientas se pregunta a `settings.get` —llega ya resuelto—, ni una
+ *  corrida buena escribe en el log. Solo la falla se dice, con tope. */
+export async function correrIngesta(orca, toolsDir, estado) {
+  try {
+    await run(join(toolsDir, 'wa-scope'), ['ingest', '--json'],
+      { timeoutMs: INGESTA_TIMEOUT_MS })
+  } catch (error) {
+    estado.avisos += 1
+    if (estado.avisos > INGESTA_AVISOS_MAX) return
+    const cola = estado.avisos === INGESTA_AVISOS_MAX ? ' (no se registran mas)' : ''
+    orca.log(`ingest failed (${motivoDe(error)}): ${String(error?.message ?? error).slice(0, 200)}${cola}`)
+  }
+}
+
 /** Cada cuanto releer WhatsApp, segun lo que el usuario dejo puesto. */
 export async function intervaloSync(orca) {
   const minutos = parseInt(String((await leer(orca, 'syncMinutes')) ?? ''), 10)
@@ -304,6 +405,92 @@ async function leer(orca, key) {
 function guardar(orca, key, value) {
   return orca.host.call('storage.set', { key, value })
     .catch((error) => orca.log(`storage.set ${key} failed: ${error.message}`))
+}
+
+/** El espejo de la llave en `~/.wa-inbox/jev.env`, escrito en un SUBPROCESO.
+ *
+ *  Es lo que leen los CLIs de Python, que no pueden abrir la boveda `secrets`. El worker
+ *  no escribe disco -su valla no tiene permiso de escritura-, asi que el subproceso sin
+ *  valla (`mandoSinValla`) es la unica escritura. La llave viaja por STDIN: nunca por
+ *  argv, que cualquier `ps` ve. `modo`: guardar | sincronizar | borrar | estado. Nunca
+ *  rechaza: un fallo vuelve como `{ ok: false, motivo }`. */
+function espejoJev(modo, llave) {
+  return new Promise((resolve) => {
+    try {
+      const m = mandoSinValla(process.execPath, [JEV_ESPEJO_SCRIPT, modo])
+      const hijo = execFile(m.cmd, m.args,
+        { timeout: 10000, maxBuffer: 64 * 1024,
+          env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } },
+        (error, stdout) => {
+          try {
+            const r = JSON.parse(stdout || 'null')
+            if (r && typeof r === 'object' && typeof r.ok === 'boolean') { resolve(r); return }
+          } catch {
+            // Cae al motivo de abajo.
+          }
+          resolve({ ok: false, motivo: 'sin-json',
+            detalle: String(error?.code ?? error?.name ?? '').slice(0, 60) })
+        })
+      // Un hijo que muere antes de leer su stdin da EPIPE como EVENTO del stream: sin un
+      // escucha seria una excepcion no atrapada, y tumbaria al worker entero.
+      hijo.stdin.on('error', (error) => resolve({ ok: false, motivo: 'stdin',
+        detalle: String(error?.code ?? '').slice(0, 60) }))
+      hijo.stdin.end(typeof llave === 'string' ? llave : '')
+    } catch (error) {
+      resolve({ ok: false, motivo: 'no-arranco',
+        detalle: String(error?.code ?? error?.name ?? '').slice(0, 60) })
+    }
+  })
+}
+
+/** La llave guardada, o null. El motivo de un fallo se registra una vez y sin valores. */
+async function leerLlaveJev(orca, estado) {
+  try {
+    const r = await orca.host.call('secrets.get', { key: JEV_SECRET_NAME })
+    return typeof r?.value === 'string' && r.value.length > 0 ? r.value : null
+  } catch (error) {
+    estado.avisos += 1
+    if (estado.avisos <= JEV_AVISOS_MAX) {
+      orca.log(`secrets.get failed (${motivoDe(error)}): ${String(error?.message ?? '').slice(0, 120)}`)
+    }
+    return null
+  }
+}
+
+/** Deja el espejo como dicen los ajustes y publica el estado para el panel.
+ *
+ *  Con Jev encendido y llave, el espejo existe; en cualquier otro caso no. `forzar` solo
+ *  lo piden los gestos explicitos del dueno en el panel —guardar la llave y encender el
+ *  interruptor—: son lo unico que puede pisar un archivo que no escribio el plugin. Lo
+ *  que corre por su cuenta (arranque, revision de salud) lo respeta y lo dice en el
+ *  estado (`ajeno`), porque el lector de Python lo trata como "sin llave" y el usuario
+ *  tiene que saber por que. */
+async function aplicarJev(orca, habilitado, llave, { forzar = false } = {}) {
+  const activo = habilitado && llave !== null
+  const r = activo
+    ? await espejoJev(forzar ? 'guardar' : 'sincronizar', llave)
+    : await espejoJev('borrar')
+  let espejo
+  if (!r.ok) {
+    espejo = 'fallo'
+    orca.log(`jev mirror failed (${r.motivo}): ${r.detalle ?? ''}`)
+  } else if (activo) {
+    espejo = r.estado === 'ajeno' ? 'ajeno' : 'activo'
+  } else {
+    espejo = habilitado ? 'sin-llave' : 'apagado'
+  }
+  const estado = { at: new Date().toISOString(), enabled: habilitado,
+    keySet: llave !== null, mirror: espejo }
+  await guardar(orca, JEV_STATUS_KEY, estado)
+  return estado
+}
+
+/** Lo que dicen los ajustes ahora mismo, aplicado: al arrancar y en cada revision de
+ *  salud, que ya existe. No hay un bucle propio: un espejo que alguien borro o copio a
+ *  mano se nota en la proxima vuelta, sin otra llamada al host por tick. */
+async function reconciliarJev(orca, estado) {
+  const habilitado = (await leer(orca, JEV_ENABLED_KEY)) === true
+  return aplicarJev(orca, habilitado, await leerLlaveJev(orca, estado))
 }
 
 /** Cuanto se espera a que el sidecar muera por las buenas antes de forzarlo. */
@@ -403,10 +590,13 @@ async function resolverCasaOrca(waScope) {
  *  Los subprocesos NO heredan la valla — es lo mismo que hace que `wa-read doctor` si
  *  conteste — asi que la decision de ruta y la escritura se hacen del otro lado. Es el
  *  mismo modulo corriendo como script: una sola implementacion. */
-function sembrarFuera(toolsDir) {
+function sembrarFuera(toolsDir, proyectos = null) {
   const guion = join(PLUGIN_DIR, 'harness.mjs')
   return new Promise((resolve) => {
-    const mSiembra = mandoSinValla(process.execPath, [guion, PLUGIN_DIR, toolsDir])
+    // Los proyectos aceptados viajan por argv: el subproceso no los puede leer del
+    // storage con la misma garantia, y el worker no puede dejarlos en un archivo.
+    const mSiembra = mandoSinValla(process.execPath,
+      [guion, PLUGIN_DIR, toolsDir, ...(proyectos ? [JSON.stringify(proyectos)] : [])])
     execFile(mSiembra.cmd, mSiembra.args,
       // El worker es el helper de Electron: sin esto arrancaria una ventana en vez de
       // un Node. Con node pelado —los chequeos— la variable sobra y no molesta.
@@ -523,7 +713,7 @@ const SIDECAR_VEREDICTO = Object.freeze({
 /** Lo que el panel puede pedirle al worker sobre el alcance, y como se contesta. Mismos
  *  codigos estables que el resto del contrato: el panel los traduce por codigo y nunca
  *  por el texto (§11-E1). */
-const SCOPE_ACCION = Object.freeze({ QUITAR: 'quitar' })
+const SCOPE_ACCION = Object.freeze({ QUITAR: 'quitar', REGLA_QUITAR: 'regla-quitar' })
 
 const SCOPE_VEREDICTO = Object.freeze({
   QUITADO: 'quitado',
@@ -532,8 +722,21 @@ const SCOPE_VEREDICTO = Object.freeze({
   // `wa-scope rm` acepta tambien un trozo de NOMBRE y ahi resuelve por parecido. El
   // nombre visible no es identidad -cambia y se repite (§11-A1)-, asi que lo que no sea
   // un jid se rechaza en vez de adivinar cual conversacion se queria quitar.
-  JID_INVALIDO: 'jid-invalido'
+  JID_INVALIDO: 'jid-invalido',
+  // Una regla de texto quitada de la base y del storage del panel.
+  REGLA_QUITADA: 'regla-quitada',
+  // Lo que llega como patron de una regla no es un texto acotado y legible: no llega a la
+  // linea de comandos.
+  PATRON_INVALIDO: 'patron-invalido'
 })
+
+/** Lo mas largo que puede ser el patron de una regla de texto. Un texto que tiene que
+ *  aparecer en un mensaje no pasa de unas palabras; sin tope seria un lugar donde dejar
+ *  cualquier cosa. */
+const PATRON_MAX = 120
+// Sin caracteres de control: un salto de linea en un patron seria una segunda linea que
+// nadie pidio, y `wa-scope` lo guardaria tal cual.
+const PATRON_RE = /^[^\u0000-\u001f\u007f]+$/
 
 /** Del motivo que devolvio el resolvedor al codigo estable que lee el panel.
  *
@@ -640,7 +843,8 @@ function resolverAuthDir(pluginDir, guion = join(pluginDir, 'sidecar', 'resolve-
  * indefinidamente en vez de una corrida puntual).
  */
 export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
-  spawnFn = spawn, env = process.env, alSalir = () => {}, alLinea = () => {} }) {
+  spawnFn = spawn, env = process.env, alSalir = () => {}, alLinea = () => {},
+  alAlmacen = () => {}, alConectar = () => {}, alLibreta = () => {} }) {
   const nacioMs = Date.now()
   let estado = { at: new Date().toISOString(), connection: null, qr: null,
     motivo: null, statusCode: null, error: null, exited: false,
@@ -711,6 +915,17 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
   // stdout no respeta los saltos de linea, asi que lo que no cierra en `\n` se guarda
   // para la proxima vuelta en vez de intentar parsearlo a medias.
   let restante = ''
+  // Los conteos del sidecar son ACUMULADOS desde que arranco: lo que dice que llegaron
+  // mensajes es que `guardados` cambio, no que sea mayor que cero. Cambiar y no solo
+  // crecer, porque un sidecar relanzado cuenta otra vez desde cero.
+  let guardadosVistos = null
+  // Un aviso al worker nunca puede tumbar la lectura del protocolo: una falla de quien
+  // escucha se registra y la linea siguiente se sigue leyendo.
+  const avisar = (cb, que) => {
+    try { cb() } catch (error) {
+      orca.log(`sidecar ${que} handling failed: ${error.message}`)
+    }
+  }
   proceso.stdout.on('data', (chunk) => {
     restante += chunk.toString('utf8')
     const lineas = restante.split('\n')
@@ -741,6 +956,7 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
           // detras de una sesion ya conectada (docs/ENCARGO...§6).
           ...(mensaje.state === 'open' ? { qr: null } : {})
         })
+        if (mensaje.state === 'open') avisar(alConectar, 'connection')
       } else if (mensaje?.type === 'identidad') {
         // Quien quedo vinculado. El panel de actividad lo pinta al lado de
         // "conectado": tras escanear un QR, saber CUAL linea quedo es la unica forma
@@ -762,14 +978,19 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
       } else if (mensaje?.type === 'latido') {
         // La hora del SIDECAR, no la de esta escritura: lo que el panel quiere saber es
         // cuando dio senales de vida la linea, no cuando el worker las copio.
-        escribir({ latido: { ts: Number(mensaje.ts) || Date.now(),
+        const escrito = escribir({ latido: { ts: Number(mensaje.ts) || Date.now(),
           conectado: mensaje.conectado === true } })
+        // El aviso espera a que el latido este EN storage: quien lo recibe pide un sync,
+        // y el sync lee la salud de la linea de ahi. Avisar antes dejaba una ventana en la
+        // que el sync todavia veia el latido de antes.
+        if (mensaje.conectado === true) escrito.then(() => avisar(alConectar, 'latido'))
       } else if (mensaje?.type === 'libreta') {
         // Si la lista de personas llego. Hasta aca, una libreta que nunca se
         // sincronizo se veia EXACTAMENTE igual que "no tiene conversaciones
         // directas": 296 grupos y ningun nombre, sin una sola senal de que faltaba
         // media lista.
         escribir({ libreta: { ok: mensaje.ok === true, at: new Date().toISOString() } })
+        if (mensaje.ok === true) avisar(alLibreta, 'libreta')
       } else if (mensaje?.type === 'store') {
         // Solo numeros y banderas, nunca una cadena. El protocolo del almacen no trae
         // texto de nadie, y esto termina en `storage`, que lee el panel.
@@ -796,6 +1017,13 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
           chatsHistorial: Number(mensaje.chatsHistorial) || 0,
           historialCompleto: mensaje.historialCompleto === true
         } })
+        const guardados = Number(mensaje.guardados) || 0
+        if (guardados > 0 && guardados !== guardadosVistos) {
+          try { alAlmacen() } catch (error) {
+            orca.log(`sidecar store handling failed: ${error.message}`)
+          }
+        }
+        guardadosVistos = guardados
       } else if (mensaje?.type === 'error') {
         escribir({ error: { code: mensaje.code ?? null,
           detail: String(mensaje.detail ?? '').slice(0, 300) } })
@@ -960,6 +1188,14 @@ export default function activate(orca) {
 
   const dirHerramientas = async () => (await settings()).toolsDir || TOOLS
 
+  // La entrada de los casos. El directorio de herramientas lo deja resuelto
+  // `arrancarSidecar`, que ya lee los ajustes: preguntarlo en cada ingesta seria una
+  // llamada al host por mensaje nuevo.
+  let dirIngesta = TOOLS
+  const estadoIngesta = { avisos: 0 }
+  const ingesta = programarIngesta(
+    () => detenido ? null : correrIngesta(orca, dirIngesta, estadoIngesta))
+
   // El sync automatico sale del mismo directorio que los comandos. Antes iba fijo a
   // bin/: quien movia toolsDir tenia la mitad del plugin leyendo de otro lado.
   const sincronizar = async (trigger) =>
@@ -980,11 +1216,20 @@ export default function activate(orca) {
   const memoriaSalud = {}
   dirHerramientas().then((dir) => checkSystem(orca, dir, memoriaSalud))
     .catch((error) => orca.log(`initial check failed: ${error.message}`))
+  // La llave de Jev: el espejo que leen los CLIs se deja como dicen los ajustes desde el
+  // primer momento, sin esperar a que alguien abra el panel.
+  const estadoJev = { avisos: 0 }
+  reconciliarJev(orca, estadoJev)
+    .catch((error) => orca.log(`jev reconcile failed: ${error.message}`))
   // Y despues se repite: la salud de la linea cambia sola, y un diagnostico que solo se
-  // mira al arrancar es una foto que no caduca.
+  // mira al arrancar es una foto que no caduca. El espejo de Jev usa esta misma vuelta.
   const pararSalud = programarSalud(() => detenido ? null
-    : dirHerramientas().then((dir) => checkSystem(orca, dir, memoriaSalud))
-      .catch((error) => orca.log(`health check failed: ${error.message}`)))
+    : Promise.all([
+      dirHerramientas().then((dir) => checkSystem(orca, dir, memoriaSalud))
+        .catch((error) => orca.log(`health check failed: ${error.message}`)),
+      reconciliarJev(orca, estadoJev)
+        .catch((error) => orca.log(`jev reconcile failed: ${error.message}`))
+    ]))
 
   // El arnes del agente. Todo lo que sabe hoy vive en el prompt, que se lee una vez
   // por corrida: un modelo mas chico improvisa. En la carpeta de trabajo del plugin
@@ -994,15 +1239,24 @@ export default function activate(orca) {
   // La carpeta la crea una version de Orca que no todos tienen todavia, asi que esto
   // falla callado y deja el motivo escrito, como el sync. Sin ella el plugin anda
   // exactamente igual que antes.
-  dirHerramientas()
-    .then((dir) => sembrarFuera(dir))
-    .then(async (estado) => {
+  //
+  // Con los proyectos que el dueno acepto: PROJECTS.md se genera de esa lista, y vuelve
+  // a sembrarse cada vez que el catalogo cambia (`crearCatalogo`, abajo). Las siembras
+  // van en fila: una lenta del arranque que terminara DESPUES de la de un cambio dejaria
+  // el archivo con la lista vieja hasta el proximo cambio.
+  let siembra = Promise.resolve()
+  const resembrar = (lista) => {
+    siembra = siembra.then(async () => {
+      const proyectos = lista ?? leerCatalogo(await leer(orca, PROJECTS_KEY))
+      const estado = await sembrarFuera(await dirHerramientas(), proyectos)
       await guardar(orca, HARNESS_KEY, estado)
       orca.log(estado.ok
         ? `harness: ${estado.files.map((f) => `${f.name} ${f.action}`).join(', ')} in ${estado.dir}`
         : `harness not seeded (${estado.reason}): ${estado.detail}`)
-    })
-    .catch((error) => orca.log(`harness failed: ${error.message}`))
+    }).catch((error) => orca.log(`harness failed: ${error.message}`))
+    return siembra
+  }
+  resembrar()
 
   // El sidecar de Baileys (T3): el UNICO transporte de esta rebanada. El directorio de
   // auth se resuelve en un subproceso -mismo motivo que el arnes, arriba: el worker no
@@ -1054,8 +1308,12 @@ export default function activate(orca) {
     // `s.toolsDir` y no `TOOLS`: quien mueve el directorio de herramientas tiene que
     // moverlo entero, o el sidecar le pregunta por el alcance a una instalacion
     // distinta de la que lee el resto del plugin (§11-E4).
+    dirIngesta = s.toolsDir || TOOLS
+    primeraConexionPendiente = true
     apagarSidecar = lanzarSidecar({ orca, scriptPath: s.sidecarPath, authDir: resuelto.dir,
-      toolsDir: s.toolsDir || TOOLS, alSalir: alSalirSidecar, alLinea: alCambiarLinea })
+      toolsDir: dirIngesta, alSalir: alSalirSidecar, alLinea: alCambiarLinea,
+      alAlmacen: () => ingesta.pedir(), alConectar: alConectarLibreta,
+      alLibreta: alLlegarLibreta })
     return { ok: true, dir: resuelto.dir }
   }
 
@@ -1063,13 +1321,17 @@ export default function activate(orca) {
    *  conversaciones, actividad, insignia— es del numero anterior hasta el proximo sync,
    *  asi que se pide uno ya en vez de esperar al reloj. Si hay otro sync corriendo, se
    *  reintenta: el que corre puede estar leyendo con la linea de antes. */
-  function alCambiarLinea () {
+  function alCambiarLinea () { sincronizarPronto('linea') }
+
+  /** Pide un sync YA y lo reintenta mientras otro este corriendo: el que corre puede estar
+   *  leyendo lo de antes del cambio que motivo este. */
+  function sincronizarPronto (trigger) {
     let intentos = 0
     const intentar = () => {
       if (detenido) return
       intentos += 1
       // Ocupado no es fallido: un sync que fallo ya dejo su motivo en `syncStatus` y
-      // repetirlo no lo arregla; uno que esta corriendo puede ser de la linea de antes.
+      // repetirlo no lo arregla.
       if (sincronizando) {
         if (intentos < 20) {
           const t = setTimeout(intentar, 3000)
@@ -1077,10 +1339,43 @@ export default function activate(orca) {
         }
         return
       }
-      sincronizar('linea')
-        .catch((error) => orca.log(`line change sync failed: ${error.message}`))
+      sincronizar(trigger)
+        .catch((error) => orca.log(`${trigger} sync failed: ${error.message}`))
     }
     intentar()
+  }
+
+  // "Traer conversaciones" (T16): el boton relanza la sesion y las conversaciones llegan
+  // DESPUES, cuando la linea conecta y el telefono manda la libreta. La lista que lee el
+  // panel solo se rearmaba en el sync de 5 minutos, asi que una conversacion nueva no
+  // aparecia hasta entonces. Mientras la peticion esta viva (`libretaHasta`) se pide un sync
+  // al conectar y otro cuando la libreta llega; no se pide nada por cuenta propia ni en
+  // cada latido: son avisos que el sidecar ya manda, sin una sola llamada nueva al host.
+  const LIBRETA_VENTANA_MS = 3 * 60 * 1000
+  let libretaHasta = 0
+  let libretaConectada = false
+  const libretaViva = () => Date.now() < libretaHasta
+  // Tras cada (re)arranque del sidecar, UN sync cuando llega el primer latido conectado.
+  // El sync del arranque corre ~0.5 s despues de lanzarlo, antes de que haya latido: la
+  // salud sale `transport-silent` ("sin senal desde <hora vieja>") y el aviso rojo se
+  // quedaba hasta el sync de 5 minutos con la linea ya conectada. Es un sync por arranque
+  // y no uno por latido: el aviso que ya manda el sidecar, sin una llamada nueva al host.
+  let primeraConexionPendiente = false
+  function alConectarLibreta () {
+    const primera = primeraConexionPendiente
+    primeraConexionPendiente = false
+    // Si ademas hay una peticion de libreta viva, ese sync ya cubre la conexion.
+    if (libretaViva() && !libretaConectada) {
+      libretaConectada = true
+      sincronizarPronto('libreta')
+      return
+    }
+    if (primera) sincronizarPronto('conexion')
+  }
+  function alLlegarLibreta () {
+    if (!libretaViva()) return
+    libretaHasta = 0
+    sincronizarPronto('libreta')
   }
 
   // Las acciones sobre la vida del sidecar van EN FILA: un desvincular automatico y un
@@ -1264,6 +1559,9 @@ export default function activate(orca) {
       const pedido = await leer(orca, requestKey)
       if (!pedido || typeof pedido !== 'object') return
       if (typeof pedido.id !== 'string' || typeof pedido.at !== 'string') return
+      // La lapida que deja un panel que se rindio: es un pedido ya vacio, sin nada que
+      // atender ni que contestar. Se limpia y listo.
+      if (pedido.tombstone === true) { await guardar(orca, requestKey, null); return }
       if (pedido.id === ultimoPedido) return
       // La memoria de verdad es el veredicto, no la variable: un worker que se reinicio
       // con el pedido todavia escrito lo volveria a ejecutar, y eso es exactamente el
@@ -1317,7 +1615,15 @@ export default function activate(orca) {
     acciones: {
       [SIDECAR_ACCION.DESVINCULAR]: pedidoDelPanel(() => desvincularSidecar()),
       [SIDECAR_ACCION.REINTENTAR]: pedidoDelPanel(() => reintentarSidecar()),
-      [SIDECAR_ACCION.LIBRETA]: pedidoDelPanel(() => reintentarSidecar())
+      [SIDECAR_ACCION.LIBRETA]: pedidoDelPanel(async () => {
+        const r = await reintentarSidecar()
+        // Solo si la sesion se relanzo: sin sidecar nuevo no llega ninguna libreta.
+        if (r.ok) {
+          libretaHasta = Date.now() + LIBRETA_VENTANA_MS
+          libretaConectada = false
+        }
+        return r
+      })
     }
   })
 
@@ -1354,13 +1660,144 @@ export default function activate(orca) {
     return { ok: true, code: SCOPE_VEREDICTO.QUITADO }
   }
 
+  /** Quitar una regla de texto, de verdad y en los dos registros.
+   *
+   *  Las reglas que se crean con el CLI viven en `scope.db` (tabla `route`) y cada sync las
+   *  vuelve a empujar al panel (`rutas_efectivas`, bin/wa-scope). Quitarla solo del storage
+   *  del panel dejaba la fila de la base debajo: la regla reaparecia en el siguiente sync,
+   *  igual que una autorizacion que se creia revocada. `wa-scope route --remove` borra la
+   *  de la base y solo el worker puede ejecutarlo.
+   *
+   *  El CLI corre PRIMERO y el storage se reconcilia despues: al reves, un CLI que falla
+   *  dejaria el panel sin la regla y la base con ella. */
+  async function quitarRegla (pedido) {
+    const patron = typeof pedido?.pattern === 'string' ? pedido.pattern.trim().toLowerCase() : ''
+    if (patron.length === 0 || patron.length > PATRON_MAX || !PATRON_RE.test(patron)) {
+      return { ok: false, code: SCOPE_VEREDICTO.PATRON_INVALIDO }
+    }
+    const s = await settings()
+    // La forma `--remove=<patron>` y no dos argumentos: un patron que empiece por `-` se
+    // leeria como otra bandera. Quitar lo que ya no esta no es un error: borra cero filas
+    // y sale con 0.
+    await run(join(s.toolsDir || TOOLS, 'wa-scope'), ['route', `--remove=${patron}`])
+    const reglas = await leer(orca, ROUTES_KEY)
+    // SOLO si la lista se leyo. Una lectura que el host rechazo devuelve null, y guardar
+    // una lista vacia borraria TODAS las reglas por culpa de una lectura fallida.
+    if (Array.isArray(reglas)) {
+      const quedan = reglas.filter((r) =>
+        String(r?.pattern ?? '').trim().toLowerCase() !== patron)
+      // Sin `guardar()`, que se traga el fallo: una regla que sigue en el storage no se
+      // puede contar como quitada.
+      if (quedan.length !== reglas.length) {
+        await orca.host.call('storage.set', { key: ROUTES_KEY, value: quedan })
+      }
+    }
+    orca.log('route rule removed')
+    return { ok: true, code: SCOPE_VEREDICTO.REGLA_QUITADA }
+  }
+
+  // El catalogo de proyectos: lo que el panel pide (buscar, aceptar, quitar, anotar) entra
+  // por el MISMO canal que el alcance, que es de la misma familia -a que conversacion y a
+  // que proyecto se le deja actuar- y asi no se suma un sondeo al host cada 3 s: el worker
+  // muere a los 64 llamados sin confirmar. `orca` corre sin la valla, como el resto de lo
+  // que no es del plugin.
+  const correrOrca = (cmd, args, { timeoutMs = 15000 } = {}) => {
+    const m = mandoSinValla(cmd, args)
+    return run(m.cmd, m.args, { timeoutMs })
+  }
+  const catalogo = crearCatalogo({
+    orca, leer: (key) => leer(orca, key), guardar: (key, value) => guardar(orca, key, value),
+    correr: (cmd, args) => correrOrca(cmd, args),
+    motivoDe, resembrar
+  })
+  // "Atender ahora" abre al agente de casos en el momento, por el mismo camino que el tick
+  // (`wa-scope agente lanzar`), sin la valla: el hijo ejecuta la CLI de Orca.
+  const lanzarTriage = crearLanzadorTriage({ correr: correrOrca, herramienta: (nombre) => tool(nombre) })
+  // Las cuentas de Claude que Ajustes ofrece para el bot, por la misma CLI.
+  const listarCuentas = crearListaCuentas({ correr: correrOrca })
+
   const atenderPedidoScope = crearVigia({
     nombre: 'scope',
     requestKey: SCOPE_REQUEST_KEY,
     resultKey: SCOPE_RESULT_KEY,
     vencido: SCOPE_VEREDICTO.VENCIDO,
     desconocida: SCOPE_VEREDICTO.ACCION_DESCONOCIDA,
-    acciones: { [SCOPE_ACCION.QUITAR]: (pedido) => quitarAlcance(pedido) }
+    // Las acciones del dueno sobre el tablero (T6) viajan por este mismo canal: otra
+    // clave de pedido seria otra lectura de storage en cada vuelta del vigia, y el
+    // worker tiene un presupuesto de llamadas al host.
+    acciones: {
+      [SCOPE_ACCION.QUITAR]: (pedido) => quitarAlcance(pedido),
+      [SCOPE_ACCION.REGLA_QUITAR]: (pedido) => quitarRegla(pedido),
+      ...crearAccionesCaso({ run, motivoDe, lanzarTriage, herramienta: (nombre) => tool(nombre) }),
+      [CUENTAS_ACCION]: () => listarCuentas(),
+      ...catalogo.acciones
+    }
+  })
+
+  /** Lo que el panel pide sobre la llave de Jev. La llave llega en el pedido y nada mas:
+   *  el vigia lo borra de storage ANTES de actuar, asi que en disco vive solo el rato
+   *  entre la escritura del panel y la siguiente vuelta (3 s). Ni el veredicto ni el
+   *  estado ni un log la repiten. */
+  async function guardarLlaveJev (pedido) {
+    const valor = typeof pedido.value === 'string' ? pedido.value.trim() : ''
+    if (!llaveValida(valor)) return { ok: false, code: JEV_VEREDICTO.LLAVE_INVALIDA }
+    try {
+      await orca.host.call('secrets.set', { key: JEV_SECRET_NAME, value: valor })
+    } catch (error) {
+      // Sin el mensaje del host: a una llave no se le da la oportunidad de aparecer en un
+      // log por la puerta de un error.
+      orca.log(`secrets.set failed (${motivoDe(error)})`)
+      return { ok: false, code: JEV_VEREDICTO.BOVEDA_FALLO }
+    }
+    const habilitado = (await leer(orca, JEV_ENABLED_KEY)) === true
+    const st = await aplicarJev(orca, habilitado, valor, { forzar: true })
+    return st.mirror === 'fallo'
+      ? { ok: false, code: JEV_VEREDICTO.ESPEJO_FALLO, mirror: st.mirror }
+      : { ok: true, code: JEV_VEREDICTO.GUARDADA, mirror: st.mirror }
+  }
+
+  async function quitarLlaveJev () {
+    try {
+      await orca.host.call('secrets.delete', { key: JEV_SECRET_NAME })
+    } catch (error) {
+      orca.log(`secrets.delete failed (${motivoDe(error)})`)
+      return { ok: false, code: JEV_VEREDICTO.BOVEDA_FALLO }
+    }
+    const habilitado = (await leer(orca, JEV_ENABLED_KEY)) === true
+    const st = await aplicarJev(orca, habilitado, null)
+    return st.mirror === 'fallo'
+      ? { ok: false, code: JEV_VEREDICTO.ESPEJO_FALLO, mirror: st.mirror }
+      : { ok: true, code: JEV_VEREDICTO.QUITADA, mirror: st.mirror }
+  }
+
+  async function activarJev (pedido) {
+    if (typeof pedido.enabled !== 'boolean') {
+      return { ok: false, code: JEV_VEREDICTO.ARGUMENTOS_INVALIDOS }
+    }
+    await guardar(orca, JEV_ENABLED_KEY, pedido.enabled)
+    // Encender es un gesto explicito del dueno, igual que guardar la llave: con la llave
+    // ya en la boveda reemplaza un `jev.env` escrito a mano antes de que el plugin lo
+    // administrara. Sin esto el dueno guardaba la llave con Jev apagado, lo encendia, y
+    // se quedaba en `ajeno` sin nada que escribir en el campo.
+    const st = await aplicarJev(orca, pedido.enabled, await leerLlaveJev(orca, estadoJev),
+      { forzar: pedido.enabled })
+    const code = pedido.enabled ? JEV_VEREDICTO.ACTIVADO : JEV_VEREDICTO.DESACTIVADO
+    return st.mirror === 'fallo'
+      ? { ok: false, code: JEV_VEREDICTO.ESPEJO_FALLO, mirror: st.mirror }
+      : { ok: true, code, mirror: st.mirror }
+  }
+
+  const atenderPedidoJev = crearVigia({
+    nombre: 'jev',
+    requestKey: JEV_REQUEST_KEY,
+    resultKey: JEV_RESULT_KEY,
+    vencido: JEV_VEREDICTO.VENCIDO,
+    desconocida: JEV_VEREDICTO.ACCION_DESCONOCIDA,
+    acciones: {
+      [JEV_ACCION.GUARDAR]: (pedido) => guardarLlaveJev(pedido),
+      [JEV_ACCION.QUITAR]: () => quitarLlaveJev(),
+      [JEV_ACCION.ACTIVAR]: (pedido) => activarJev(pedido)
+    }
   })
 
   const pedidoTimer = setInterval(() => {
@@ -1369,6 +1806,8 @@ export default function activate(orca) {
       .catch((error) => orca.log(`sidecar request failed: ${error.message}`))
     atenderPedidoScope()
       .catch((error) => orca.log(`scope request failed: ${error.message}`))
+    atenderPedidoJev()
+      .catch((error) => orca.log(`jev request failed: ${error.message}`))
   }, PETICION_MS)
   if (typeof pedidoTimer.unref === 'function') pedidoTimer.unref()
 
@@ -1503,6 +1942,7 @@ export default function activate(orca) {
     clearInterval(latidoTimer)
     clearTimeout(reinicioTimer)
     pararSalud()
+    ingesta.parar()
     apagarSidecar()
   }
 }

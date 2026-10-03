@@ -8,8 +8,9 @@ hasta dónde puede actuar tu agente.
 **El plugin lee cuando hay una línea enlazada, y no antes.** Se enlaza desde el panel
 de ajustes escaneando un código QR; a partir de ahí un proceso hijo mantiene la línea
 abierta y guarda lo que llega. Sin línea enlazada, `wa-read` se niega con el motivo
-estable `no-transport` y `wa-scope pending` bloquea las automatizaciones, que es lo
-honesto — una bandeja siempre vacía se lee como una semana tranquila.
+estable `no-transport` y `wa-scope tick` lo dice en su resumen (`sin_transporte`) sin
+aprobar ni encolar nada, que es lo honesto — una bandeja siempre vacía se lee como una
+semana tranquila.
 
 Enlazada la línea, los mismos comandos contestan con código 0, y una lista vacía
 significa que de verdad no hubo nada. Las dos respuestas son distintas a propósito:
@@ -40,15 +41,12 @@ El worker relee WhatsApp cada 5 minutos por defecto. Lo puede cambiar en el pane
 wa-scope config sync_minutes 10
 ```
 
-Ese número es también el peor caso para que un mensaje nuevo se vea. El precheck de las
-automations —`wa-scope pending`— **no relee WhatsApp**: contesta con lo que dejó el
-último sync, porque un precheck que corre cada dos minutos y empieza por la lectura
-cara no es un precheck.
-
-Si el sync deja de correr, el precheck **no** dice "no hay nada que hacer": sale con
-código 2 y lo explica. Callarlo dejaría al agente sin correr durante días sin decir por
-qué. Mientras no haya una línea enlazada, el precheck bloquea con el código
-`no-transport` por esa misma razón.
+Ese número ya no es el peor caso para que un mensaje nuevo se vea: el worker corre
+`wa-scope ingest` apenas el sidecar guarda un mensaje, y `wa-scope tick` lo repite cada
+minuto por si ese aviso se perdió. El precheck del agente —`wa-scope pending
+--needs-agent --precheck`— **no relee WhatsApp**: mira solo la base de casos, y sale con 1,
+callado, cuando ningún caso necesita lenguaje o cuando el tick ya abre al agente de casos
+por terminal (Orca crea un espacio por cada corrida de un plugin, aunque falle).
 
 
 ## De dónde lee
@@ -185,32 +183,43 @@ una automatización de un plugin.
 Si esta versión de Orca todavía no le da carpeta al plugin, no se siembra nada, el
 motivo queda en el estado que lee el panel y **todo lo demás funciona igual**.
 
-### Las dos automatizaciones corren en esa misma carpeta
+### Automations
 
-Las dos automatizaciones que aporta el plugin —*triage* y *Take what was marked*—
-declaran `workspace: "plugin-owned"`, así que Orca las apunta a
-`<userData>/plugin-workspaces/ab2web.orca-wa-inbox`: **una carpeta que Orca crea para
-el plugin, no un repo tuyo**. No es "un proyecto interno" en el sentido de uno de tus
-checkouts: nace vacía, la registra Orca a nombre del plugin, y es la misma en la que
-ya vivían `AGENTS.md` y compañía. El plugin nunca nombra una ruta ni elige un repo
-tuyo — pide "mi carpeta" y Orca decide cuál es.
+The plugin declares two automations. Both run in the folder Orca creates for the
+plugin (`workspace: "plugin-owned"`, `<userData>/plugin-workspaces/ab2web.orca-wa-inbox`),
+never in one of your repos. They need Orca 1.4.160-lab.84 or later, the first build with
+command-only automations (`engines.orca` says `>=1.4.160`: Orca compares only
+`x.y.z`, so a 1.4.160 build older than lab.84 does not load this manifest at all).
 
-Antes no lo declaraban, y por eso aparecían como **"Todavía sin proyecto"**: Orca hace
-nacer sin proyecto a toda automatización aportada por un plugin, justamente para no
-adivinar en qué repo tuyo trabajar.
+| id | What it runs | When | Model tokens |
+|---|---|---|---|
+| `tick` | `wa-scope tick`: picks up any message the live trigger missed, approves by the owner's rule every clean reply on a `responder` chat, sends it through `wa-send --send` (Jev and the fixed exception floor still review it), and refreshes the board and badge | every minute | none: it is a command, no agent and no terminal |
+| `triage` | the case agent, with `prompts/triage.md`: it drafts a reply, classifies, or proposes work for the cases that need language | every 5 minutes, any hour, plus right away when the owner presses "Atender ahora" on the board | only when its precheck `wa-scope pending --needs-agent --precheck` finds a case that needs language and the tick is not launching the case agent itself (it has not run for 3 minutes, or its last launch failed in a way the automation does not share); otherwise the run is `skipped_precheck` and Orca creates no workspace for it |
 
-Lo que **no** cambia: siguen naciendo **pausadas**. Encender trabajo automático es
-decisión suya y Orca nunca la toma por usted, ni al instalar ni al actualizar. Se
-encienden una por una desde la lista de Automations, o con:
+What never leaves on its own: anything with an exception (money, a credential, a
+commitment, a Jev flag or a Jev error) and anything on a chat in `borrador`. Those stay
+in *Your decision* on the board. A reply that Jev or the floor holds back is left as a
+draft with the case's own request id, so approving it from the board sends that same
+draft once.
 
-```
-orca automations edit <id> --enabled
-```
+**New automations arrive paused.** Orca never turns on scheduled work for you, neither
+on install nor on update. Turn each one on from the Automations list, or with
+`orca automations edit <id> --enabled`.
 
-Al actualizar el plugin, Orca vuelve a conciliar las filas que ya existían **en su
-lugar** —las empareja por el `id` del manifiesto, no crea duplicados— y les pone el
-destino nuevo. Lo único que respeta intacto es lo que haya tocado usted: si usted le
-puso un proyecto a mano, ese se queda.
+**How updates behave.** Every plugin update changes its content hash, so Orca asks you
+to approve the plugin again; that approval reconciles the automations:
+
+- a row whose `id` is still declared is updated **in place**: name, prompt, precheck,
+  command, provider, schedule and time zone follow the new manifest, unless you edited
+  that field yourself, in which case your value stays (`orca automations show <id>`
+  lists it under the fields you edited). Whether it is enabled is never touched, so
+  `triage` keeps the on/off you gave it;
+- a new `id` (here, `tick`) is created paused;
+- an `id` the plugin no longer declares is deleted with its run history. `take`
+  (*Take what was marked*) is gone: the board replaced it.
+
+Disabling the plugin deletes its automations, and enabling it again recreates them
+paused: after a disable/enable you turn them on again.
 
 ## Lo que el plugin NO hace
 

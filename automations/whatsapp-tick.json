@@ -1,0 +1,6 @@
+{
+  "name": "WhatsApp: every minute (no agent)",
+  "trigger": "* * * * *",
+  "timezone": "America/Bogota",
+  "command": "WA=\"$(cat .wa-bin 2>/dev/null)\"; [ -x \"$WA/wa-scope\" ] || exit 1; \"$WA/wa-scope\" tick --json"
+}

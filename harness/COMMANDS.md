@@ -16,106 +16,69 @@
 # The commands
 
 Four tools ship inside the plugin. The prompt resolves their directory into `$WA`
-before anything else, so **every command below is run as `"$WA/<tool>"`** — never as
-a bare name from `PATH`. On someone else's machine the tools are not in `PATH`, and
-if a name does resolve it may be an old copy reading another database.
+before anything else, so **every command below is run as `"$WA/<tool>"`**, never as a
+bare name from `PATH`: on someone else's machine a `PATH` hit may be an old copy reading
+another database. If `$WA` is empty, or `"$WA/wa-scope"` is not executable, stop and say
+so in one line.
 
-| Tool | What it does |
+| Tool | What it does | Yours? |
+|---|---|---|
+| `wa-scope` | the authorization registry, the cases, and the commands you use to read and propose | yes |
+| `wa-read` | read-only access to WhatsApp: the inbox, chats, messages, attachments | yes |
+| `wa-transcribe` | turns a voice note into text; the plugin already runs it on every voice note that reaches a case | rarely |
+| `wa-send` | writes and sends WhatsApp messages | **no: the plugin sends, you never do** |
+
+## What you run on a case
+
+    "$WA/wa-scope" pending --needs-agent        # exit 1 = nothing needs you
+    "$WA/wa-scope" caso ver <id> --json         # stage, route, Jev's verdict, and `hilo`
+    "$WA/wa-scope" voice "<chat_jid>" --json    # tone and instructions for that chat
+    "$WA/wa-scope" caso clasificar <id> --clase <card|alert|doubtful> --prioridad <p> --actor agente
+    "$WA/wa-scope" caso propuesta <id> --tipo <responder|trabajar|escalar|descartar> --actor agente ...
+    "$WA/wa-scope" caso mover <id> cerrado --motivo "<why>" --actor agente
+    "$WA/wa-read" chat "<chat_jid>" --json      # anything else in the conversation
+
+`caso ver` brings the case's messages and the replies already sent (`from_me`) in strict
+arrival order in `hilo`. Every message before the last reply sent is marked `respondido`:
+it is context, never answer it again. A voice note shows its transcript as `text`, with
+`transcripcion: true`; an attachment shows `media` with `type`, `bytes` and `path`.
+
+## Permissions, and who sends
+
+| Mode | What the plugin does with a proposal |
 |---|---|
-| `wa-scope` | the authorization registry, the state between runs, and everything the agent records |
-| `wa-read` | read-only access to WhatsApp: inbox, chats, messages, attachments |
-| `wa-send` | writes the reply, and sends it only with `--send` and only where the registry says `responder` |
-| `wa-transcribe` | turns a voice note into text, when this machine can |
+| `off` | nothing: the chat does not exist for you. This is the default for any chat nobody registered. |
+| `observar` | the case exists and the owner sees it; nothing is ever sent. |
+| `borrador` | your reply waits on the board for the owner's approval. |
+| `responder` | your reply is sent by the plugin on its own, unless the case carries an exception (money, credential, commitment, a Jev warning): then it waits for the owner. |
 
-## The permission ladder, and what `borrador` really does
+WhatsApp has no draft of its own: a reply waiting for approval is **not** written in the
+chat and the client cannot see it. Say it is a proposal waiting for approval.
 
-| Mode | It may |
-|---|---|
-| `off` | nothing. This is the default for any chat nobody registered. |
-| `observar` | read, and open a card. It never writes in WhatsApp. |
-| `borrador` | write the reply. **Nothing reaches WhatsApp until the owner approves it.** |
-| `responder` | send by itself. |
-
-`borrador` used to mean "the text is left typed in the chat, unsent". It is not that
-any more and it cannot be: **WhatsApp has no draft of its own**, so nothing can be
-left sitting in someone's chat window. That rung was only possible while the agent
-drove a screen, and that transport is gone.
-
-What it does now: `wa-send "<chat>" "<text>" --send` on a `borrador` conversation
-stores the reply, answers `send-needs-approval` on the first stderr line with the id,
-and sends nothing. The owner lists what is waiting with `wa-send --drafts` and sends
-one with `wa-send --approve <id>`.
-
-**So never report a draft as "left written in the chat".** It is not there. Say the
-reply is waiting for approval, and give the id. Reporting the old behaviour about a
-message the client cannot see is the exact failure this wording exists to prevent.
-
-Some exit codes are answers, not failures, and all of them are load-bearing:
+## Exit codes that are answers, not failures
 
 | Code | Where | What it means |
 |---|---|---|
-| `3` | `wa-scope check` | denied. Note it and move on. Do not negotiate with the gate. |
-| `4` | `wa-scope lock` | another run is already going. Stop there, read nothing, open nothing. |
-| `4` | `wa-read` (any read) | `no-transport` on the first stderr line: no WhatsApp line is linked yet, so there is nothing to read. This is a normal state, not a broken tool. |
-| `2` | `wa-read chat` / `media` | that chat reference matches more than one conversation. The candidates are on stderr. Pick one with its JID, or add `--line`. |
-| `3` | `wa-send` | `send-denied`: that conversation's permission does not write. Same answer as the gate — note it and move on. |
-| `3` | `wa-send` | `send-needs-approval`: the conversation is on `borrador`. The reply was written and is waiting for the owner. Nothing was sent. |
-| `3` | `wa-send` | `send-line-not-linked`: that conversation is authorized for another phone number, not for the one linked now. Each number is its own line. Nothing was sent. Note it and move on. |
-| `4` | `wa-send` | `send-no-transport`: the line is not running, so there is nothing to send through. Nothing was queued. |
+| `1` | `wa-scope pending --needs-agent` | nothing needs you. Say so in one line and finish. |
+| `3` | `wa-scope check` | denied. Note it and move on. |
+| `4` | `wa-scope lock` | another run is going. Stop there, read nothing. |
+| `4` | `wa-read` (any read) | `no-transport` on the first stderr line: no WhatsApp line is linked yet. A normal state, not a broken tool: stop and say so in one line. |
+| `2` | `wa-read chat` / `media` | that chat reference matches more than one conversation; the candidates are on stderr. Pick one with its JID, or add `--line`. |
 
-`wa-send` answers with the same two-line shape as the reads: the stable code on the
-first line of stderr, the human detail on the second. The codes that matter are
-`send-denied`, `send-needs-approval`, `send-no-transport` (the line is down) and
-`send-rejected` (the line is up and WhatsApp refused the message) — those last two are
-different on purpose, because what the owner has to do about each is different.
+An **empty list is not `no-transport`**: once a line is linked, every read answers with
+exit 0 and `[]` means the inbox really is quiet.
 
-**Retrying a send.** Every request carries an id (`--id`). The same id delivers **once**:
-if a verdict is slow and you ask again with the same id, it is not sent twice. Retry
-with the same id, never with a new one — a duplicate message in a client's group cannot
-be taken back.
-
-`no-transport` is the one worth knowing by name. It means the owner has not linked a
-line from the plugin settings yet — the QR code lives there. There is nothing for you
-to fix and nothing to retry: **stop the run and say so in one line.** Do not open
-cards, do not guess at conversations, and do not report it as a failure of the tools —
-they answered correctly. `wa-scope pending` already returns `hay_trabajo: false` with
-this code, so a run that starts anyway has ignored its own precheck.
-
-An **empty list is not this**. Once a line is linked, every read answers with exit 0,
-and `[]` means the inbox really is quiet. The two are different answers on purpose:
-treating an empty list as a broken tool, or a refusal as a quiet week, are the two
-mistakes this contract exists to prevent.
-
-The owner can have more than one line linked at once — a personal number and a support
-one. Every read takes `--line <account>` to answer for one of them, and every inbox row
-carries its `account`. The same one-to-one conversation seen from two of the owner's
-own lines is the *same* JID, so a chat is identified by `(account, jid)` and never by
-the JID alone. When you are about to write, that distinction is the difference between
-answering the client and answering from the wrong number.
-
-Cards are opened with the task service's own CLI, which `wa-scope where` names in
-`provider`: `orca plane create`, `orca linear save-issue` or `gh issue create`. With
-`provider: ninguno` no card is opened at all.
+The owner can have more than one line linked. Every read takes `--line <account>`, and
+every row carries its `account`: a chat is identified by `(account, jid)`, never by the
+JID alone.
 
 ## Where the tools are
 
-The tools ship inside the plugin, but **you are not standing in the plugin folder**:
-Orca runs the automation in a workspace, where no `./bin/` exists. That is why the
-prompt resolves the path instead of assuming it — and why `PATH` is not trusted either:
-on someone else's machine the tools are not there, and a `PATH` hit may be an old copy
-from another tree, reading another database.
-
-When several copies are installed, the one that wins is the highest **version** in
-`orca-plugin.json` — never the one installed most recently, which is not the same thing:
-a 3.0.1 downloaded today is still older than a 3.13.0 from last week. A registered dev
-path with a usable `bin/` wins over every installed copy, which is the point of dev mode.
-The pre-rename identity `ab2web.wa-inbox` is not resolved at all: that build sends
-WhatsApp by driving the desktop app, a path this plugin removed, so running it is not
-running an old version, it is running another product.
-
-If the resolution comes back empty, or `"$WA/wa-scope"` is not executable, **stop and
-say so in one line**. Better a run that did nothing and said so than one that worked on
-another tree's data — or one that sent a real message through code that was deleted.
+The tools ship inside the plugin, but you are not standing in the plugin folder: Orca runs
+the automation in this workspace, where no `./bin/` exists. The plugin writes the absolute
+path of its own `bin/` into `.wa-bin`, one line, every time it starts and every time it
+seeds this folder: `WA="$(cat .wa-bin 2>/dev/null)"`. `PATH` is never trusted. If `.wa-bin`
+is missing or `"$WA/wa-scope"` is not executable, stop and say so in one line.
 
 ## Reference
 

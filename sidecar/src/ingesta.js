@@ -15,7 +15,7 @@ import { join } from 'node:path'
 
 import { asegurarDirectorio } from './almacen.js'
 import { aNumero, esConversacion, esGrupo, filaDeActualizacion, filaDeMensaje,
-  jidDe } from './mensajes.js'
+  jidDeChat } from './mensajes.js'
 
 /** Lo que se contesta de cada mensaje. Son motivos, no booleanos: el sidecar los cuenta
  *  por separado para poder decir "llegaron 40, se guardaron 12" sin nombrar a nadie. */
@@ -89,7 +89,8 @@ export async function ingerirMensaje ({ almacen, alcance, cuenta, identidades, w
  *  `@status` y `@lid.status` SON conversaciones reales y una whitelist las esconderia
  *  sin avisar. */
 export function filaDeChat (chat) {
-  const jid = jidDe(chat?.id)
+  // Sin el dispositivo (`:N`): ver `jidDeChat`.
+  const jid = jidDeChat(chat?.id)
   if (!jid || !esConversacion(jid)) return null
   const nombre = [chat?.name, chat?.displayName, chat?.subject]
     .find((n) => typeof n === 'string' && n.trim()) || ''
@@ -183,7 +184,7 @@ export function ingerirContactos ({ almacen, cuenta, contactos, recordarNombre =
   esPropio = () => false }) {
   let nombrados = 0
   for (const contacto of Array.isArray(contactos) ? contactos : []) {
-    const jid = jidDe(contacto?.id) || jidDe(contacto)
+    const jid = jidDeChat(contacto?.id) || jidDeChat(contacto)
     if (!jid || !esConversacion(jid) || esPropio(jid)) continue
     const nombre = nombreDeContacto(contacto)
     if (!nombre) continue

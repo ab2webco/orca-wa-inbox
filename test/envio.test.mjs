@@ -19,6 +19,7 @@
  * cliente no se puede retirar, asi que el MISMO `--id` entrega UNA sola vez.
  */
 import { spawn, execFileSync } from 'node:child_process'
+import { createServer } from 'node:http'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -56,8 +57,8 @@ function nueva () {
   return home
 }
 
-function entorno (home) {
-  return { ...process.env, HOME: home, ORCA_CLI_COMMAND: join(home, 'no-existe-orca') }
+function entorno (home, extra = {}) {
+  return { ...process.env, HOME: home, ORCA_CLI_COMMAND: join(home, 'no-existe-orca'), ...extra }
 }
 
 function autorizar (home, { jid, nombre, modo, cuenta = CUENTA }) {
@@ -106,12 +107,12 @@ function socketFalso ({ falla = null } = {}) {
  * colgado.
  */
 function correrEnvio (home, args, { almacen = null, socket = null, conectado = true,
-  latir = true } = {}) {
+  latir = true, env = {} } = {}) {
   return new Promise((resolve) => {
     // El primer latido ANTES de arrancar: `wa-send` mira si hay sidecar vivo antes de
     // encolar nada, y un latido que llega tarde se veria como un sidecar apagado.
     if (almacen && latir) almacen.latir()
-    const p = spawn(WA_SEND, args, { env: entorno(home) })
+    const p = spawn(WA_SEND, args, { env: entorno(home, env) })
     let stdout = ''
     let stderr = ''
     p.stdout.on('data', (d) => { stdout += d })
@@ -363,6 +364,328 @@ console.log('\nwa-send: borrador deja un borrador y NO envia, y se aprueba a man
     JSON.stringify(socket.enviados))
   ok('y contesta el veredicto que ya habia, sin fallar', otra.code === 0, otra.stderr)
   almacen.cerrar()
+}
+
+// ── Jev revisa lo que va a salir ─────────────────────────────────────────────────────
+// Con llave, `wa-send --send` en `responder` le pregunta a Jev por el texto. Una
+// bandera, un error o un timeout lo dejan como borrador para el dueno y dicen por que;
+// nunca al reves. Sin llave manda el modo, como siempre. Jev es un servidor de mentira
+// en 127.0.0.1: la API real no se toca, y la llave es de prueba.
+const LLAVE_JEV = 'tsk-prueba-0000000000000000'
+
+function ponerLlave (home, texto = `# wa-inbox jev mirror v1\nTYPESAFE_API_KEY=${LLAVE_JEV}\n`) {
+  writeFileSync(join(home, '.wa-inbox', 'jev.env'), texto, 'utf8')
+}
+
+/** Un Jev local: `decide(cuerpo)` devuelve `[estado, respuesta]`. */
+async function jevFalso (decide) {
+  const pedidos = []
+  const server = createServer((req, res) => {
+    let datos = ''
+    req.on('data', (d) => { datos += d })
+    req.on('end', () => {
+      const cuerpo = JSON.parse(datos)
+      pedidos.push({ cuerpo, auth: req.headers.authorization })
+      const [estado, respuesta] = decide(cuerpo)
+      res.writeHead(estado, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(respuesta))
+    })
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const url = `http://127.0.0.1:${server.address().port}/v1/systemone`
+  return { pedidos, env: { WA_INBOX_JEV_ENDPOINT: url }, cerrar: () => server.close() }
+}
+
+function jevDice (noul = {}) {
+  return (cuerpo) => [200, { model: 'jev-9.9.9', answers: Object.fromEntries(
+    Object.keys(cuerpo.questions).map((q) => [q, { type: 'noul', noul: noul[q] ?? 0.05 }])) }]
+}
+
+function bitacora (home) {
+  const con = new DatabaseSync(join(home, '.wa-inbox', 'scope.db'))
+  const filas = con.prepare('select action, detail from agent_action order by id').all()
+  con.close()
+  return filas
+}
+
+function casaConJev () {
+  const home = nueva()
+  firmar(home, 'Agente De Ejemplo')
+  const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  almacen.registrarLinea({ cuenta: CUENTA, lid: 'x@lid', pn: 'y@s.whatsapp.net' })
+  autorizar(home, { jid: ALFA, nombre: 'Cliente Alfa', modo: 'responder' })
+  return { home, almacen }
+}
+
+console.log('\nwa-send: con llave, Jev revisa antes de enviar')
+{
+  const jev = await jevFalso(jevDice())
+  const { home, almacen } = casaConJev()
+  ponerLlave(home)
+  const socket = socketFalso()
+  const r = await correrEnvio(home, ['Cliente Alfa', 'Tomo esto', '--send'],
+    { almacen, socket, env: jev.env })
+  ok('un texto limpio sale', r.code === 0 && socket.enviados.length === 1, r.stderr)
+  ok('despues de UNA pregunta a Jev, con la llave y las tres preguntas del borrador',
+    jev.pedidos.length === 1 && jev.pedidos[0].auth === `Bearer ${LLAVE_JEV}` &&
+    JSON.stringify(Object.keys(jev.pedidos[0].cuerpo.questions).sort()) ===
+      JSON.stringify(['contains_credential', 'promises_a_date', 'states_status_not_verified']),
+    JSON.stringify(jev.pedidos.map((p) => Object.keys(p.cuerpo.questions))))
+  ok('la llave no aparece en la salida', !(r.stdout + r.stderr).includes(LLAVE_JEV))
+  almacen.cerrar()
+  jev.cerrar()
+}
+{
+  const jev = await jevFalso(jevDice({ promises_a_date: 0.9 }))
+  const { home, almacen } = casaConJev()
+  ponerLlave(home)
+  const socket = socketFalso()
+  const r = await correrEnvio(home, ['Cliente Alfa', 'Manana te confirmamos', '--send',
+    '--id', 'REQ-JEV'], { almacen, socket, env: jev.env })
+  ok('una fecha prometida NO sale', socket.enviados.length === 0, JSON.stringify(socket.enviados))
+  ok('queda como borrador para el dueno', r.primera === 'wa-send: send-needs-approval' &&
+    r.code === 3 && filasEnvio(home)[0]?.estado === ENVIO.BORRADOR, r.stderr)
+  ok('y dice por que: lo freno Jev, con la pregunta', r.stderr.includes('promises_a_date'),
+    r.stderr)
+  ok('la bitacora del borrador tambien dice por que',
+    bitacora(home).some((f) => f.action === 'draft' && f.detail.includes('promises_a_date')),
+    JSON.stringify(bitacora(home)))
+  almacen.cerrar()
+  jev.cerrar()
+}
+{
+  const jev = await jevFalso(() => [500, { error: 'boom' }])
+  const { home, almacen } = casaConJev()
+  ponerLlave(home)
+  const socket = socketFalso()
+  const r = await correrEnvio(home, ['Cliente Alfa', 'Tomo esto', '--send'],
+    { almacen, socket, env: jev.env })
+  ok('con Jev en error NO sale: falla cerrado', socket.enviados.length === 0 &&
+    r.primera === 'wa-send: send-needs-approval', r.stderr)
+  ok('y dice que Jev no contesto', r.stderr.includes('jev-unavailable'), r.stderr)
+  almacen.cerrar()
+  jev.cerrar()
+}
+{
+  const jev = await jevFalso(jevDice({ promises_a_date: 0.9 }))
+  const { home, almacen } = casaConJev()
+  ponerLlave(home, `TYPESAFE_API_KEY=${LLAVE_JEV}\n`)
+  const socket = socketFalso()
+  const r = await correrEnvio(home, ['Cliente Alfa', 'Tomo esto', '--send'],
+    { almacen, socket, env: jev.env })
+  ok('sin la cabecera del espejo no hay llave: manda el modo, como hoy',
+    r.code === 0 && socket.enviados.length === 1 && jev.pedidos.length === 0, r.stderr)
+  almacen.cerrar()
+  jev.cerrar()
+}
+{
+  const jev = await jevFalso(jevDice({ promises_a_date: 0.9 }))
+  const { home, almacen } = casaConJev()
+  ponerLlave(home)
+  autorizar(home, { jid: LAURA, nombre: 'Laura Mendez', modo: 'borrador' })
+  const socket = socketFalso()
+  const r = await correrEnvio(home, ['Laura Mendez', 'Manana te confirmamos', '--send',
+    '--id', 'REQ-B'], { almacen, socket, env: jev.env })
+  ok('en borrador no hace falta preguntar: ya espera al dueno',
+    socket.enviados.length === 0 && jev.pedidos.length === 0 &&
+    r.primera === 'wa-send: send-needs-approval', r.stderr)
+  const aprobado = await correrEnvio(home, ['--approve', 'REQ-B'],
+    { almacen, socket, env: jev.env })
+  ok('y la aprobacion del dueno lo envia sin pasar por Jev',
+    aprobado.code === 0 && socket.enviados.length === 1 && jev.pedidos.length === 0,
+    aprobado.stderr)
+  almacen.cerrar()
+  jev.cerrar()
+}
+
+// ── El piso fijo (T19): dinero, credenciales y compromisos, con o sin Jev ───────────
+console.log('\nwa-send: el piso fijo frena lo que es del dueno, sin llave de Jev')
+{
+  const { home, almacen } = casaConJev()
+  const socket = socketFalso()
+  const precio = await correrEnvio(home, ['Cliente Alfa', 'el precio es $1.400', '--send',
+    '--id', 'REQ-PRECIO'], { almacen, socket })
+  ok('un precio NO sale sin el dueno, aunque no haya llave', socket.enviados.length === 0,
+    JSON.stringify(socket.enviados))
+  ok('queda como borrador, con el codigo de siempre',
+    precio.primera === 'wa-send: send-needs-approval' && precio.code === 3 &&
+    filasEnvio(home)[0]?.estado === ENVIO.BORRADOR, precio.stderr)
+  ok('y dice por que: la regla fija, con la excepcion', precio.stderr.includes('money') &&
+    precio.stderr.includes('--approve REQ-PRECIO'), precio.stderr)
+  ok('la bitacora del borrador tambien lo dice',
+    bitacora(home).some((f) => f.action === 'draft' && f.detail.includes('money') &&
+      f.detail.includes('REQ-PRECIO')), JSON.stringify(bitacora(home)))
+  ok('y no copia el texto en la bitacora',
+    !bitacora(home).some((f) => f.detail.includes('1.400')), JSON.stringify(bitacora(home)))
+
+  const limpio = await correrEnvio(home, ['Cliente Alfa', 'hola, ya lo revisamos', '--send'],
+    { almacen, socket })
+  ok('lo limpio sigue saliendo', limpio.code === 0 && socket.enviados.length === 1,
+    limpio.stderr)
+
+  const promesa = await correrEnvio(home, ['Cliente Alfa', 'Queda listo el viernes', '--send'],
+    { almacen, socket })
+  ok('una fecha prometida tampoco sale', socket.enviados.length === 1 &&
+    promesa.primera === 'wa-send: send-needs-approval' &&
+    promesa.stderr.includes('commitment'), promesa.stderr)
+
+  const aprobado = await correrEnvio(home, ['--approve', 'REQ-PRECIO'], { almacen, socket })
+  ok('el dueno es la compuerta: su aprobacion lo envia', aprobado.code === 0 &&
+    socket.enviados.length === 2 && socket.enviados[1].texto.startsWith('el precio es $1.400'),
+  aprobado.stderr + JSON.stringify(socket.enviados))
+  almacen.cerrar()
+}
+{
+  // Jev dice que no hay nada: el piso igual frena. Jev solo suma.
+  const jev = await jevFalso(jevDice())
+  const { home, almacen } = casaConJev()
+  ponerLlave(home)
+  const socket = socketFalso()
+  const r = await correrEnvio(home, ['Cliente Alfa', 'el precio es $1.400', '--send'],
+    { almacen, socket, env: jev.env })
+  ok('con Jev limpio, el piso igual lo deja para el dueno',
+    socket.enviados.length === 0 && r.primera === 'wa-send: send-needs-approval' &&
+    r.stderr.includes('money'), r.stderr)
+  almacen.cerrar()
+  jev.cerrar()
+}
+{
+  // El nombre del agente no cuenta: la firma la pone la herramienta, no la respuesta.
+  const home = nueva()
+  firmar(home, 'Pago Rapido Hoy')
+  const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  almacen.registrarLinea({ cuenta: CUENTA, lid: 'x@lid', pn: 'y@s.whatsapp.net' })
+  autorizar(home, { jid: ALFA, nombre: 'Cliente Alfa', modo: 'responder' })
+  const socket = socketFalso()
+  const r = await correrEnvio(home, ['Cliente Alfa', 'hola, ya lo revisamos', '--send'],
+    { almacen, socket })
+  ok('la firma del agente no dispara el piso', r.code === 0 && socket.enviados.length === 1,
+    r.stderr)
+  almacen.cerrar()
+}
+
+// ── Los niveles por chat (T22.3) ──────────────────────────────────────────────────────
+console.log('\nwa-send: cada chat decide sus niveles, y el secreto se frena siempre')
+{
+  const jev = await jevFalso((cuerpo) => {
+    const texto = cuerpo.state.reply_to_review || ''
+    return jevDice({
+      promises_a_date: texto.includes('viernes') ? 0.9 : 0.05,
+      states_status_not_verified: texto.includes('escuchado') ? 0.9 : 0.05
+    })(cuerpo)
+  })
+  const { home, almacen } = casaConJev()
+  ponerLlave(home)
+  execFileSync(WA_SCOPE, ['set', ALFA, '--approval', 'money=allow', '--approval',
+    'credential=allow', '--approval', 'quality=allow', '--approval', 'commitment=allow'],
+  { env: entorno(home), encoding: 'utf8' })
+  const socket = socketFalso()
+  const precio = await correrEnvio(home, ['Cliente Alfa', 'el precio es $1.400', '--send'],
+    { almacen, socket, env: jev.env })
+  ok('dinero en Permitir sale', precio.code === 0 && socket.enviados.length === 1, precio.stderr)
+  const fecha = await correrEnvio(home, ['Cliente Alfa', 'Queda listo el viernes', '--send'],
+    { almacen, socket, env: jev.env })
+  ok('compromiso en Permitir sale, aunque Jev marque la fecha',
+    fecha.code === 0 && socket.enviados.length === 2, fecha.stderr)
+  const calidad = await correrEnvio(home, ['Cliente Alfa', 'Su audio fue escuchado', '--send'],
+    { almacen, socket, env: jev.env })
+  ok('calidad en Permitir sale, aunque Jev la marque',
+    calidad.code === 0 && socket.enviados.length === 3, calidad.stderr)
+  const nombra = await correrEnvio(home, ['Cliente Alfa', 'te mando la clave por otro medio',
+    '--send'], { almacen, socket, env: jev.env })
+  ok('nombrar una clave con la credencial en Permitir sale',
+    nombra.code === 0 && socket.enviados.length === 4, nombra.stderr)
+  const secreto = await correrEnvio(home, ['Cliente Alfa', 'la clave: Abc12345', '--send',
+    '--id', 'REQ-SECRETO'], { almacen, socket, env: jev.env })
+  ok('un valor con forma de secreto NO sale, aunque todo este en Permitir',
+    socket.enviados.length === 4 && secreto.primera === 'wa-send: send-needs-approval' &&
+    secreto.stderr.includes('rule: secret'), secreto.stderr)
+  ok('y no copia el secreto en la bitacora',
+    !bitacora(home).some((f) => f.detail.includes('Abc12345')), JSON.stringify(bitacora(home)))
+  almacen.cerrar()
+  jev.cerrar()
+}
+{
+  const jev = await jevFalso((cuerpo) => jevDice({
+    states_status_not_verified: (cuerpo.state.reply_to_review || '').includes('Tomo') ? 0.9 : 0.05
+  })(cuerpo))
+  const { home, almacen } = casaConJev()
+  ponerLlave(home)
+  // Lo que el panel guarda manda sobre la base, como el modo.
+  escribirPanel(home, { agentName: 'Agente De Ejemplo',
+    scope: { [ALFA]: { chatName: 'Cliente Alfa', mode: 'responder', provider: 'ninguno',
+      approval: { money: 'agent', quality: 'ask' } } } })
+  const socket = socketFalso()
+  const precio = await correrEnvio(home, ['Cliente Alfa', 'el precio es $1.400', '--send'],
+    { almacen, socket, env: jev.env })
+  ok('dinero en Que el agente lo revise: no sale y dice que lo reescriba el agente',
+    socket.enviados.length === 0 && precio.primera === 'wa-send: send-needs-approval' &&
+    precio.stderr.includes('rule: money') && precio.stderr.includes('rewrite'), precio.stderr)
+  const calidad = await correrEnvio(home, ['Cliente Alfa', 'Tomo esto', '--send'],
+    { almacen, socket, env: jev.env })
+  ok('calidad en Preguntarme (desde el panel): no sale, y espera al dueno',
+    socket.enviados.length === 0 && calidad.primera === 'wa-send: send-needs-approval' &&
+    calidad.stderr.includes('states_status_not_verified') &&
+    !calidad.stderr.includes('rewrite'), calidad.stderr)
+  almacen.cerrar()
+  jev.cerrar()
+}
+
+// ── El chat del dueno (T22.1) ────────────────────────────────────────────────────────
+console.log('\nwa-send: al chat del dueno no lo frenan las reglas ni Jev, solo un secreto')
+{
+  const DUENO = '100000000000001@lid'
+  const jev = await jevFalso(jevDice({ states_status_not_verified: 0.9, promises_a_date: 0.9 }))
+  const { home, almacen } = casaConJev()
+  ponerLlave(home)
+  autorizar(home, { jid: DUENO, nombre: 'Dueno Directo', modo: 'responder' })
+  autorizar(home, { jid: 'x@lid', nombre: 'Yo Mismo', modo: 'responder' })
+  escribirPanel(home, { agentName: 'Agente De Ejemplo',
+    owners: [{ id: '100000000000001:3@lid', name: 'Dueno Real' }] })
+  const socket = socketFalso()
+  const aviso = await correrEnvio(home, ['Dueno Directo',
+    'Aviso: el informe quedo verificado, cuesta $50 y sale el viernes', '--send'],
+  { almacen, socket, env: jev.env })
+  ok('un aviso al chat de un numero del dueno sale', aviso.code === 0 &&
+    socket.enviados.length === 1 && socket.enviados[0].jid === DUENO, aviso.stderr)
+  const propio = await correrEnvio(home, ['Yo Mismo', 'Aviso: tarea lista y verificada',
+    '--send'], { almacen, socket, env: jev.env })
+  ok('y uno al chat de la linea consigo misma tambien', propio.code === 0 &&
+    socket.enviados.length === 2, propio.stderr)
+  ok('sin preguntarle a Jev por ninguno', jev.pedidos.length === 0,
+    JSON.stringify(jev.pedidos.map((p) => p.cuerpo.state)))
+  const secreto = await correrEnvio(home, ['Dueno Directo', 'la clave: Abc12345', '--send'],
+    { almacen, socket, env: jev.env })
+  ok('un secreto al chat del dueno igual se frena', socket.enviados.length === 2 &&
+    secreto.primera === 'wa-send: send-needs-approval' &&
+    secreto.stderr.includes('rule: secret'), secreto.stderr)
+  const ajeno = await correrEnvio(home, ['Cliente Alfa', 'Aviso: tarea lista y verificada',
+    '--send'], { almacen, socket, env: jev.env })
+  ok('a cualquier otro chat Jev sigue revisando', socket.enviados.length === 2 &&
+    ajeno.primera === 'wa-send: send-needs-approval' && jev.pedidos.length === 1, ajeno.stderr)
+  almacen.cerrar()
+  jev.cerrar()
+}
+
+console.log('\nwa-send: Jev juzga el borrador con el tono del chat (T22.5)')
+{
+  const jev = await jevFalso(jevDice())
+  const { home, almacen } = casaConJev()
+  ponerLlave(home)
+  execFileSync(WA_SCOPE, ['set', ALFA, '--tone', 'Cercano, tutea, frases cortas'],
+    { env: entorno(home), encoding: 'utf8' })
+  autorizar(home, { jid: LAURA, nombre: 'Laura Mendez', modo: 'responder' })
+  execFileSync(WA_SCOPE, ['config', 'tone', 'Formal y de usted, sin emojis'],
+    { env: entorno(home), encoding: 'utf8' })
+  const socket = socketFalso()
+  await correrEnvio(home, ['Cliente Alfa', 'Hola, ya quedo', '--send'], { almacen, socket, env: jev.env })
+  await correrEnvio(home, ['Laura Mendez', 'Hola, ya quedo', '--send'], { almacen, socket, env: jev.env })
+  const registros = jev.pedidos.map((p) => p.cuerpo.state.expected_register)
+  ok('con el tono de la conversacion, y sin el, el global',
+    registros[0] === 'Cercano, tutea, frases cortas' &&
+    registros[1] === 'Formal y de usted, sin emojis', JSON.stringify(registros))
+  almacen.cerrar()
+  jev.cerrar()
 }
 
 console.log('\nwa-send: sin nombre de agente no se envia, ni siquiera en responder')

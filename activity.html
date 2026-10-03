@@ -17,24 +17,33 @@
            jsdom). Son los valores reales de main.css, no un gris inventado: antes
            eran solo oscuros y el panel salia ilegible en cuanto el tema era claro. */
         --fb-background: #fff; --fb-foreground: #0a0a0a;
-        --fb-primary: #171717;
+        --fb-primary: #171717; --fb-primary-foreground: #fafafa;
         --fb-secondary: #f5f5f5; --fb-secondary-foreground: #171717;
         --fb-muted-foreground: #737373;
         --fb-accent: #f5f5f5; --fb-accent-foreground: #171717;
         --fb-destructive: #e40014;
         --fb-border: #e5e5e5; --fb-ring: #a1a1a1;
+        --fb-card: #fff; --fb-muted: #f5f5f5;
+        /* Los dos tonos de getPlaneStateTone (orca-oss TaskPage.tsx) que la allowlist no
+           trae: emerald-500 y sky-500 de Tailwind. Y el texto de prioridad alta, el
+           amber-700/amber-200 de los carriles de Orca (workspace-status.ts). */
+        --tone-emerald: #10b981; --tone-sky: #0ea5e9; --tone-amber-text: #b45309;
       }
       @media (prefers-color-scheme: dark) {
         :root {
           --fb-background: #0a0a0a; --fb-foreground: #fafafa;
-          --fb-primary: #e5e5e5;
+          --fb-primary: #e5e5e5; --fb-primary-foreground: #171717;
           --fb-secondary: #262626; --fb-secondary-foreground: #fafafa;
           --fb-muted-foreground: #a1a1a1;
           --fb-accent: #404040; --fb-accent-foreground: #fafafa;
           --fb-destructive: #ff6568;
           --fb-border: rgb(255 255 255 / 0.07); --fb-ring: #737373;
+          --fb-card: #171717; --fb-muted: #262626;
+          --tone-amber-text: #fde68a;
         }
       }
+      html.light { --tone-amber-text: #b45309; }
+      html.dark { --tone-amber-text: #fde68a; }
       /* Los widgets nativos siguen al tema real del host, no a la preferencia del
          sistema. */
       html.light { color-scheme: light; }
@@ -46,9 +55,9 @@
          12 px, el px-3 de la casa (PortsPanel.tsx:335). */
       body {
         margin: 0; padding: 0 0 16px;
-        /* Geist es la fuente de la app, pero el iframe no ve sus @font-face: pedirla
-           solo daria un fallback distinto en cada maquina. Se queda el del sistema. */
-        font-family: system-ui, -apple-system, sans-serif;
+        /* La fuente de la app: el shell del host la embebe y la publica en --font-sans
+           (plugin-panel-shell.ts, PANEL_BASE_STYLE). Sin host, la del sistema. */
+        font-family: var(--font-sans, system-ui, -apple-system, sans-serif);
         font-size: 13px; letter-spacing: 0.01em;
         color: var(--foreground, var(--fb-foreground));
         background: var(--background, var(--fb-background));
@@ -82,62 +91,13 @@
       .dot { display: inline-block; width: 6px; height: 6px; border-radius: 9999px;
              background: var(--primary, var(--fb-primary));
              margin-right: 5px; vertical-align: middle; }
-      /* Etiqueta meta de 11 px: el STYLEGUIDE la fija en 600 y 0.05em, igual que
-         PortsPanel.tsx:336. */
-      h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
-           color: var(--muted-foreground, var(--fb-muted-foreground));
-           margin: 14px 0 6px; padding: 0 12px; font-weight: 600; }
-      h2:first-of-type { margin-top: 0; }
-      .item { padding: 7px 12px; border-bottom: 1px solid var(--border, var(--fb-border)); }
-      .item:last-child { border-bottom: 0; }
-      .line1 { display: flex; gap: 6px; align-items: baseline; }
-      .who { font-weight: 500; }
-      .chat { color: var(--muted-foreground, var(--fb-muted-foreground)); font-size: 11px; }
       .when { margin-left: auto; color: var(--muted-foreground, var(--fb-muted-foreground));
               font-size: 11px; white-space: nowrap; }
-      /* Un mensaje sin cuerpo no se puede confundir con uno cuyo cuerpo si se leyo. */
-      .text { color: var(--muted-foreground, var(--fb-muted-foreground)); margin-top: 2px;
-              line-height: 1.4; overflow-wrap: anywhere; }
-      /* Las tres clases de aviso, sin tres tonos: la allowlist no los tiene. Se
-         separan por peso y superficie — mencion en texto pleno y 600, directo como
-         superficie --accent, media con filete punteado. */
-      .tag { font-size: 10px; border: 1px solid var(--border, var(--fb-border));
-             border-radius: 9999px; padding: 0 6px;
-             color: var(--muted-foreground, var(--fb-muted-foreground)); }
-      .tag.mencion { color: var(--foreground, var(--fb-foreground)); font-weight: 600; }
-      .tag.directo { background: var(--accent, var(--fb-accent));
-                     color: var(--accent-foreground, var(--fb-accent-foreground));
-                     border-color: transparent; }
-      .tag.media { border-style: dashed; }
-      .empty { color: var(--muted-foreground, var(--fb-muted-foreground)); padding: 8px 12px; }
-      .acts { display: flex; gap: 10px; margin-top: 5px; }
-      .acts button {
-        font: inherit; font-size: 11px; padding: 3px 10px; cursor: pointer;
-        border: 1px solid var(--border, var(--fb-border));
-        border-radius: var(--radius-md);
-        background: var(--secondary, var(--fb-secondary));
-        color: var(--secondary-foreground, var(--fb-secondary-foreground));
-        transition: background-color 90ms ease, color 90ms ease;
-      }
-      .acts button:hover { background: var(--accent, var(--fb-accent));
-                           color: var(--accent-foreground, var(--fb-accent-foreground));
-                           text-decoration: underline; }
-      .acts button:active { transform: translateY(1px); }
-      .acts button[disabled] { opacity: 0.5; cursor: default; }
-      .acts button.mute { color: var(--muted-foreground, var(--fb-muted-foreground)); }
-      header button:focus-visible, .acts button:focus-visible {
+      header button:focus-visible {
         outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px;
       }
-      /* Tomado = enfasis, no color de exito: la barra va en --primary. El relleno
-         izquierdo compensa los 2 px para que el texto no se corra. */
-      .item.taken { border-left: 2px solid var(--primary, var(--fb-primary));
-                    padding-left: 10px; }
-      .done { font-size: 11px; font-weight: 500;
-              color: var(--foreground, var(--fb-foreground)); margin-top: 4px; }
-      /* El renglon de la corrida contesta "por que no hace nada": tiene que leerse
-         ANTES que la pista de abajo, que es texto de servicio. Sin color propio —la
-         allowlist no tiene uno de exito—, la jerarquia la dan el texto pleno y el 500,
-         que es lo mismo que hace `.done`. */
+      /* El renglon de la corrida contesta "por que no hace nada". Sin color propio —la
+         allowlist no tiene uno de exito—, la jerarquia la dan el texto pleno y el 500. */
       .run { color: var(--foreground, var(--fb-foreground)); font-weight: 500; }
       /* Dos grados de mala noticia, con los dos unicos tokens que hay para eso. Una
          sincronizacion vieja no es un error: solo avisa que lo de abajo puede estar
@@ -148,6 +108,366 @@
       /* "sin datos" y el error de una accion si son fallos: --destructive. */
       .stale { color: var(--destructive, var(--fb-destructive)); }
       code { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+
+      [hidden] { display: none !important; }
+      /* ── El tablero ──────────────────────────────────────────────────────────────
+         Copia el tablero de Plane en Orca (orca-oss/src/renderer/src/components):
+         la barra de TaskPage.tsx, la fila de etapas de plane-board-minimap.tsx, la
+         columna de plane-board-column.tsx y la tarjeta de plane-board-card.tsx. Las
+         clases de Tailwind de alla se traducen a CSS con los tokens que el host inyecta;
+         cada bloque nombra la clase que imita. */
+
+      /* Los puntos de etapa: getPlaneStateTone (TaskPage.tsx) pinta lo terminado en
+         esmeralda, lo empezado en cielo, lo cancelado en --destructive y el resto en
+         apagado. La allowlist no trae esos dos tonos, asi que van los de la paleta de
+         Tailwind que usa la app (emerald-500, sky-500). "Su decision" va en --primary:
+         es la columna del dueno. */
+      .dot-etapa { flex: none; display: inline-block; width: 8px; height: 8px;
+                   border-radius: 9999px; border: 1px solid transparent;
+                   background: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .dot-etapa.t-recibido { background: transparent;
+                   border-color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .dot-etapa.t-decision { background: var(--primary, var(--fb-primary)); }
+      .dot-etapa.t-trabajo, .dot-etapa.t-listo { background: var(--tone-sky); }
+      .dot-etapa.t-listo { background: transparent; border-color: var(--tone-sky);
+                   box-shadow: inset 0 0 0 2px var(--tone-sky); }
+      .dot-etapa.t-respondido, .dot-etapa.t-cerrado { background: var(--tone-emerald); }
+      .dot-etapa.t-cerrado { opacity: 0.55; }
+      .dot-etapa.t-bloqueado { background: var(--destructive, var(--fb-destructive)); }
+
+      /* La barra: `rounded-md border border-border/50 bg-muted/50 px-3 pt-2`. */
+      .board-bar { margin: 0 12px 8px; padding: 8px 12px;
+                   border: 1px solid var(--border, var(--fb-border));
+                   border-radius: var(--radius-md);
+                   background: color-mix(in srgb, var(--muted, var(--fb-muted)) 50%, transparent); }
+      /* La fila de etapas (plane-board-minimap.tsx): `px-2 py-1 text-[11px] rounded-md`,
+         elegida `border-border/60 bg-accent text-foreground`. Se desplaza dentro de si
+         misma; la pagina nunca. */
+      .chips { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: thin;
+               margin: 0 -4px; padding: 0 4px 2px; }
+      .chip { flex: none; display: inline-flex; align-items: center; gap: 6px;
+              padding: 4px 8px; font: inherit; font-size: 11px; line-height: 16px;
+              border: 1px solid transparent; border-radius: var(--radius-md);
+              background: none; cursor: pointer;
+              color: var(--muted-foreground, var(--fb-muted-foreground));
+              transition: background-color 90ms ease, color 90ms ease; }
+      .chip:hover { color: var(--foreground, var(--fb-foreground));
+              background: color-mix(in srgb, var(--accent, var(--fb-accent)) 60%, transparent); }
+      .chip[aria-pressed="true"] { color: var(--foreground, var(--fb-foreground));
+              background: var(--accent, var(--fb-accent));
+              border-color: var(--border, var(--fb-border)); }
+      .chip:focus-visible { outline: 1px solid var(--ring, var(--fb-ring)); outline-offset: 0; }
+      .chip-name { font-weight: 500; white-space: nowrap; }
+      .chip-count { font-variant-numeric: tabular-nums; }
+      /* Lo que espera al dueno pesa mas: la cuenta en pastilla, como la de la pestana. */
+      .chip.fuerte .chip-name { color: var(--foreground, var(--fb-foreground)); font-weight: 600; }
+      .chip.fuerte .chip-count { min-width: 18px; padding: 0 5px; border-radius: 9999px;
+              text-align: center; font-weight: 600; font-size: 10px; line-height: 16px;
+              background: var(--primary, var(--fb-primary));
+              color: var(--primary-foreground, var(--fb-primary-foreground)); }
+
+      .bar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+                 margin-top: 8px; }
+      /* El buscador: `h-8 rounded-md border-border/50 bg-background pl-8 text-xs`, con la
+         lupa `size-3.5` a la izquierda. */
+      .search { position: relative; flex: 1 1 240px; min-width: 0; }
+      .search > svg { position: absolute; left: 10px; top: 50%; width: 14px; height: 14px;
+              transform: translateY(-50%); pointer-events: none;
+              color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round;
+            stroke-linejoin: round; }
+      .search input { display: block; width: 100%; height: 32px; padding: 0 32px;
+              font: inherit; font-size: 12px; border-radius: var(--radius-md);
+              border: 1px solid var(--input, var(--fb-border));
+              background: var(--background, var(--fb-background));
+              color: var(--foreground, var(--fb-foreground)); }
+      .search input::placeholder { color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .search input:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: -1px; }
+      .search-clear { position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+              display: inline-flex; align-items: center; justify-content: center;
+              width: 22px; height: 22px; padding: 0; border: 0; border-radius: var(--radius-md);
+              background: none; cursor: pointer;
+              color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .search-clear:hover { color: var(--foreground, var(--fb-foreground)); }
+      .search-clear svg { width: 14px; height: 14px; }
+      /* Lista/Tablero: el ToggleGroup `outline sm`, cada boton `h-7 px-2 text-[11px]`. */
+      .seg { flex: none; display: inline-flex; overflow: hidden;
+             border: 1px solid var(--border, var(--fb-border)); border-radius: var(--radius-md); }
+      .seg button { display: inline-flex; align-items: center; gap: 6px; height: 28px;
+             padding: 0 8px; font: inherit; font-size: 11px; border: 0; cursor: pointer;
+             background: transparent; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .seg button + button { border-left: 1px solid var(--border, var(--fb-border)); }
+      .seg button:hover { color: var(--foreground, var(--fb-foreground)); }
+      .seg button[aria-pressed="true"] { background: var(--accent, var(--fb-accent));
+             color: var(--accent-foreground, var(--fb-accent-foreground)); }
+      .seg button:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: -2px; }
+      .seg svg { width: 14px; height: 14px; }
+      #board-shown { white-space: nowrap; }
+
+      /* Un solo estado vacio y en calma, como el de Plane: `px-4 py-10 text-center`. */
+      .board-empty { margin: 8px 12px; padding: 40px 16px; text-align: center; }
+      .board-empty .t { margin: 0; font-size: 13px; font-weight: 500;
+              color: var(--foreground, var(--fb-foreground)); }
+      .board-empty .b { margin: 6px auto 0; max-width: 360px; font-size: 12px;
+              color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .board-empty.error .t { color: var(--destructive, var(--fb-destructive)); }
+      .board-nada { margin: 0; padding: 32px 16px; text-align: center; font-size: 12px;
+              color: var(--muted-foreground, var(--fb-muted-foreground)); }
+
+      .board-body { display: flex; align-items: flex-start; gap: 12px; padding: 0 12px; }
+      .board-main { flex: 1 1 auto; min-width: 0; }
+
+      /* Las columnas: `flex gap-3 overflow-x-auto p-3`. Se desplazan DENTRO de su
+         contenedor; la pagina nunca. Todas a la altura de la mas alta. */
+      .board-cols { display: flex; gap: 12px; overflow-x: auto; align-items: stretch;
+              padding-bottom: 8px; scrollbar-width: thin; }
+      /* La columna: `w-72 rounded-md border border-border/50 bg-muted/20`. */
+      .col { flex: 0 0 272px; min-width: 0; min-height: 240px; display: flex;
+             flex-direction: column; border: 1px solid var(--border, var(--fb-border));
+             border-radius: var(--radius-md);
+             background: color-mix(in srgb, var(--muted, var(--fb-muted)) 20%, transparent); }
+      /* Su cabecera: `gap-2 border-b px-3 py-2`, nombre `text-[12px] font-medium`, cuenta
+         `ml-auto text-[11px] text-muted-foreground`. */
+      .col-head { display: flex; align-items: center; gap: 8px; margin: 0; padding: 8px 12px;
+             border-bottom: 1px solid var(--border, var(--fb-border));
+             font-size: 12px; font-weight: 500; color: var(--foreground, var(--fb-foreground)); }
+      .col-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .col-count { flex: none; margin-left: auto; font-size: 11px; font-weight: 400;
+             font-variant-numeric: tabular-nums;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .col-body { display: flex; flex-direction: column; gap: 8px; padding: 8px; }
+      /* La columna sin casos se pliega a su cabecera, en vertical: dice su nombre y su
+         cero sin ocupar el ancho de una columna llena. */
+      .col.vacia { flex: 0 0 40px; }
+      .col.vacia .col-head { flex-direction: column; gap: 10px; padding: 12px 0;
+             border-bottom: 0; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .col.vacia .col-name { writing-mode: vertical-rl; overflow: visible; }
+      .col.vacia .col-count { margin-left: 0; }
+      /* "Su decision" con casos: un tinte de --primary, sin gritar. */
+      .col.decision.con-casos { border-color: color-mix(in srgb, var(--primary, var(--fb-primary)) 35%, var(--border, var(--fb-border)));
+             background: color-mix(in srgb, var(--primary, var(--fb-primary)) 4%, transparent); }
+      /* Bloqueado: distinto pero no a gritos. El tinte de 4 % de los carriles de Orca
+         (workspace-status.ts, `laneTint`) en --destructive, y el filete punteado. */
+      .col.lane { border-style: dashed;
+             background: color-mix(in srgb, var(--destructive, var(--fb-destructive)) 4%, transparent); }
+      .col-more, .col-nada { margin: 0; padding: 2px 4px; font-size: 11px;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+
+      /* La tarjeta: `flex flex-col gap-2 rounded-md border border-border/60 bg-card
+         px-2.5 py-2 shadow-xs hover:bg-accent`. */
+      .card { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px;
+              font-size: 12px; line-height: 1.4; text-align: left; cursor: pointer;
+              border: 1px solid var(--border, var(--fb-border));
+              border-radius: var(--radius-md);
+              background: var(--card, var(--fb-card));
+              color: var(--card-foreground, var(--foreground, var(--fb-foreground)));
+              box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+              transition: background-color 90ms ease, border-color 90ms ease; }
+      .card:hover { background: color-mix(in srgb, var(--accent, var(--fb-accent)) 60%, var(--card, var(--fb-card))); }
+      .card:focus-visible { outline: 1px solid var(--ring, var(--fb-ring)); outline-offset: 0; }
+      .card.elegida { background: color-mix(in srgb, var(--accent, var(--fb-accent)) 55%, var(--card, var(--fb-card)));
+              border-color: color-mix(in srgb, var(--ring, var(--fb-ring)) 60%, transparent); }
+      /* Arriba: el numero `font-mono text-[11px] text-muted-foreground` y la prioridad
+         `ml-auto text-[11px]`. Color solo para urgente y alta. */
+      .card-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+      .card-id { flex: none; font-family: var(--font-mono, ui-monospace, Menlo, monospace);
+              font-size: 11px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .card-prio { flex: none; margin-left: auto; font-size: 11px;
+              color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .card-prio.alta { color: var(--tone-amber-text); font-weight: 500; }
+      .card-prio.urgente { color: var(--destructive, var(--fb-destructive)); font-weight: 600; }
+      /* El titulo: `line-clamp-2 text-[13px] font-medium text-foreground`. */
+      .card-title { margin: 0; font-size: 13px; font-weight: 500; line-height: 1.35;
+              overflow-wrap: anywhere; color: var(--foreground, var(--fb-foreground)); }
+      .clamp1 { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+      .clamp2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+      .clamp3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+      /* La linea apagada: `text-[11px] text-muted-foreground`; el chat se corta, la hora no. */
+      .card-meta, .det-meta { display: flex; align-items: baseline; gap: 6px; min-width: 0;
+              font-size: 11px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .card-meta .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .card-meta .when, .det-meta .when { flex: none; margin-left: 0; }
+      .card-meta .sep, .det-meta .sep { flex: none; }
+      .card-exc { font-size: 11px; font-weight: 500; overflow-wrap: anywhere;
+              color: var(--foreground, var(--fb-foreground)); }
+      .card-blocked { font-size: 11px; overflow-wrap: anywhere;
+              color: var(--destructive, var(--fb-destructive)); }
+      .card-aprobada { font-size: 11px; font-weight: 500;
+              color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .card-aprobada::before { content: "\2713  "; }
+      /* El despacho al agente del proyecto: la linea de la etapa y, debajo, la que dice a
+         quien se espera. Mismo peso que lo aprobado: es lo que paso con eso. */
+      .card-despacho { font-size: 11px; font-weight: 500; overflow-wrap: anywhere;
+              color: var(--foreground, var(--fb-foreground)); }
+      .card-despacho > :first-child::before { content: "\2192  "; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .card-despacho-sub { font-weight: 400; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      /* La respuesta que se manda: entera y aparte, con el filete de una cita. */
+      .card-prop { padding-left: 8px; white-space: pre-wrap; overflow-wrap: anywhere;
+              border-left: 2px solid var(--border, var(--fb-border));
+              color: var(--foreground, var(--fb-foreground)); }
+      .card-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+      .card-msg { font-size: 11px; font-weight: 600; overflow-wrap: anywhere;
+              color: var(--foreground, var(--fb-foreground)); }
+      .card-msg.mala { color: var(--destructive, var(--fb-destructive)); }
+
+      /* Los botones del tablero: el Button de Orca en `size="sm"` (h-8 px-3 text-xs
+         rounded-md), `default` en --primary y `outline` para el resto. */
+      .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+             height: 28px; padding: 0 10px; font: inherit; font-size: 12px; font-weight: 500;
+             cursor: pointer; white-space: nowrap; border-radius: var(--radius-md);
+             border: 1px solid var(--border, var(--fb-border));
+             background: var(--background, var(--fb-background));
+             color: var(--foreground, var(--fb-foreground));
+             transition: background-color 90ms ease, color 90ms ease, opacity 90ms ease; }
+      .btn:hover { background: var(--accent, var(--fb-accent));
+             color: var(--accent-foreground, var(--fb-accent-foreground)); }
+      .btn.primario { border-color: transparent; background: var(--primary, var(--fb-primary));
+             color: var(--primary-foreground, var(--fb-primary-foreground)); }
+      .btn.primario:hover { opacity: 0.9; background: var(--primary, var(--fb-primary));
+             color: var(--primary-foreground, var(--fb-primary-foreground)); }
+      .btn.mute { color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .btn[disabled] { opacity: 0.5; cursor: default; }
+      .btn:active:not([disabled]) { transform: translateY(1px); }
+      .btn:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px; }
+
+      /* La lista: los renglones de la lista de Plane, `grid gap-3 px-3 py-2
+         hover:bg-muted/50`, bajo la cabecera de grupo `border-b bg-muted/50 px-3 py-1.5
+         text-[12px] font-semibold`. */
+      .board-list { border: 1px solid var(--border, var(--fb-border));
+             border-radius: var(--radius-md); overflow: hidden;
+             background: var(--background, var(--fb-background)); }
+      .grupo + .grupo { border-top: 1px solid var(--border, var(--fb-border)); }
+      .grupo-head { display: flex; align-items: center; gap: 8px; margin: 0; padding: 6px 12px;
+             font-size: 12px; font-weight: 600; color: var(--foreground, var(--fb-foreground));
+             border-bottom: 1px solid var(--border, var(--fb-border));
+             background: color-mix(in srgb, var(--muted, var(--fb-muted)) 50%, transparent); }
+      .grupo.lane .grupo-head { background: color-mix(in srgb, var(--destructive, var(--fb-destructive)) 5%, transparent); }
+      .grupo .col-more { padding: 6px 12px; }
+      .card.fila { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto;
+             align-items: start; gap: 4px 12px; padding: 8px 12px; border: 0;
+             border-radius: 0; box-shadow: none; background: transparent; }
+      .card.fila + .card.fila, .card.fila + .board-detail, .board-detail + .card.fila {
+             border-top: 1px solid var(--border, var(--fb-border)); }
+      .card.fila:hover { background: color-mix(in srgb, var(--muted, var(--fb-muted)) 50%, transparent); }
+      .card.fila.elegida { background: var(--accent, var(--fb-accent)); }
+      .card.fila .card-id { padding-top: 2px; }
+      .card.fila .card-prio { margin-left: 0; padding-top: 2px; }
+      .fila-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+
+      /* El detalle: el panel de un elemento de Plane, al costado del tablero. */
+      .board-detail { flex: 0 0 380px; width: 380px; min-width: 0; position: sticky; top: 8px;
+             max-height: calc(100vh - 16px); overflow: auto; padding: 12px 14px 16px;
+             border: 1px solid var(--border, var(--fb-border)); border-radius: var(--radius-md);
+             background: var(--card, var(--fb-card));
+             color: var(--card-foreground, var(--foreground, var(--fb-foreground)));
+             box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); }
+      .det-head { display: flex; align-items: center; gap: 8px; }
+      /* La pastilla de etapa: `rounded-full border px-2 py-0.5 text-[10px] font-medium`. */
+      .etapa-pill { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px;
+             font-size: 10px; font-weight: 500; border-radius: 9999px;
+             border: 1px solid var(--border, var(--fb-border));
+             color: var(--foreground, var(--fb-foreground));
+             background: color-mix(in srgb, var(--muted, var(--fb-muted)) 40%, transparent); }
+      .det-close { margin-left: auto; display: inline-flex; align-items: center;
+             justify-content: center; width: 28px; height: 28px; padding: 0; font: inherit;
+             font-size: 18px; line-height: 1; border: 0; border-radius: var(--radius-md);
+             background: none; cursor: pointer;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .det-close:hover { background: var(--accent, var(--fb-accent));
+             color: var(--foreground, var(--fb-foreground)); }
+      .det-close:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px; }
+      .det-title { margin: 10px 0 6px; font-size: 15px; font-weight: 600; line-height: 1.35;
+             overflow-wrap: anywhere; color: var(--foreground, var(--fb-foreground)); }
+      .det-meta { flex-wrap: wrap; gap: 2px 6px; }
+      .det-meta .name { overflow-wrap: anywhere; }
+      .det-meta .card-prio { margin-left: 0; }
+      .board-detail > .card-exc, .board-detail > .card-aprobada,
+      .board-detail > .card-despacho { margin-top: 10px; }
+      .det-sec { margin-top: 16px; }
+      .det-label { margin: 0 0 6px; font-size: 11px; font-weight: 500;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .det-sec.card-blocked .det-label { color: inherit; }
+      .det-sum, .det-text { margin: 0; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+      .det-sec .card-prop { padding: 8px 10px; line-height: 1.5; border-left: 0;
+             border-radius: var(--radius-md);
+             background: color-mix(in srgb, var(--muted, var(--fb-muted)) 60%, transparent); }
+      .det-jev p { margin: 0 0 2px; overflow-wrap: anywhere; }
+      .det-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+      .det-acciones .card-msg { margin-bottom: 8px; }
+      .det-hist { margin: 0; padding: 0; list-style: none; font-size: 11px; }
+      .det-hist li { display: flex; gap: 8px; justify-content: space-between; padding: 3px 0;
+             border-top: 1px solid var(--border, var(--fb-border)); }
+      .det-hist li:first-child { border-top: 0; }
+      .det-hist .when { margin-left: auto; }
+      .hist-reabierto { margin: 0 0 4px; padding: 3px 0; font-size: 11px; font-weight: 600;
+             border-bottom: 1px solid var(--border, var(--fb-border)); }
+      .hist-previa { margin-top: 8px; font-size: 11px; }
+      .hist-previa summary { cursor: pointer; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .hist-previa .hist-reabierto { margin-top: 8px; }
+      .det-acciones .det-text { margin-bottom: 8px; }
+      .det-escalar .det-text + .det-text { margin-top: 4px; }
+      .det-hist .hist-quien { color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .det-proyecto { margin-top: 6px; font-size: 12px; overflow-wrap: anywhere; }
+      .det-link { background: none; border: 0; padding: 0; font: inherit; cursor: pointer;
+             color: inherit; text-decoration: underline; }
+      .det-link:focus-visible { outline: 2px solid var(--ring, var(--fb-ring, currentColor)); outline-offset: 2px; }
+      .det-proyecto .det-k { color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .card-agente { font-size: 11px; font-weight: 500;
+              color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .card-agente::before { content: "\2192  "; }
+      /* No pude lanzar al agente: un fallo, con el color de lo bloqueado. */
+      .card-agente.fallo { color: var(--destructive, var(--fb-destructive)); overflow-wrap: anywhere; }
+      /* El autocompletar de proyecto: el de los ajustes (config.html, T17). Fondo opaco y
+         filete: la lista flota sobre lo que sigue y tiene que taparlo. */
+      .combo { position: relative; min-width: 0; }
+      .combo-list { position: absolute; z-index: 5; left: 0; right: 0; top: calc(100% + 4px);
+              max-height: 264px; overflow-y: auto; padding: 4px;
+              border: 1px solid var(--border, var(--fb-border)); border-radius: var(--radius-md);
+              background: var(--background, var(--fb-background));
+              box-shadow: 0 6px 20px rgb(0 0 0 / 0.18); }
+      /* Dentro del detalle la lista va en el flujo: el detalle se desplaza solo y una lista
+         que flota se cortaria en su borde. */
+      .board-detail .combo-list { position: static; margin-top: 4px; max-height: 220px;
+              box-shadow: none; }
+      .combo-opt { display: flex; gap: 8px; align-items: baseline; padding: 6px 8px;
+              border-radius: calc(var(--radius-md) * 0.75); cursor: pointer;
+              color: var(--foreground, var(--fb-foreground)); }
+      .combo-opt[aria-selected="true"], .combo-opt:hover { background: var(--accent, var(--fb-accent));
+              color: var(--accent-foreground, var(--fb-accent-foreground)); }
+      .combo-name { min-width: 0; overflow-wrap: anywhere; }
+      .combo-sub { flex: none; margin-left: auto; font-size: 11px; white-space: nowrap;
+              color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .combo-empty { padding: 8px; font-size: 12px;
+              color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .card-form label { display: block; margin-bottom: 4px; font-size: 11px; font-weight: 500;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .card-form textarea, .card-form input {
+        display: block; width: 100%; box-sizing: border-box; font: inherit; font-size: 12px;
+        line-height: 1.5; padding: 6px 8px; border-radius: var(--radius-md);
+        border: 1px solid var(--input, var(--fb-border));
+        background: var(--background, var(--fb-background));
+        color: var(--foreground, var(--fb-foreground)); }
+      .card-form textarea { min-height: 120px; resize: vertical; }
+      .card-form textarea:focus-visible, .card-form input:focus-visible {
+        outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px; }
+      .card-form textarea[disabled], .card-form input[disabled] { opacity: 0.6; }
+      .card-form .card-msg { margin-top: 6px; }
+      .card-form .det-acts { margin-top: 8px; }
+
+      /* Hasta 768 px la lista es la vista natural y el detalle se abre en el lugar, debajo
+         de lo elegido. El buscador toma la fila entera. */
+      @media (max-width: 768px) {
+        .board-body { flex-direction: column; align-items: stretch; }
+        .board-detail { position: static; width: auto; flex: none; max-height: none; }
+        .board-detail.en-linea { border: 0; border-radius: 0; box-shadow: none;
+             background: color-mix(in srgb, var(--muted, var(--fb-muted)) 35%, transparent); }
+        .search { flex-basis: 100%; }
+        #board-shown { margin-left: auto; }
+        .btn { min-height: 32px; padding: 0 12px; }
+        .card.fila { grid-template-columns: 40px minmax(0, 1fr) auto; gap: 4px 8px; }
+        /* Con el detalle abierto justo debajo, la fila no repite lo que el detalle dice. */
+        .card.fila.elegida .fila-main > :not(.card-title):not(.card-meta) { display: none; }
+      }
     </style>
   </head>
   <body>
@@ -165,57 +485,729 @@
     <p class="meta nota" id="linea"></p>
     <p class="meta nota" id="cobertura"></p>
 
-    <!-- EL ORDEN ES EL MENSAJE. Antes la pantalla abria con "Esperando respuesta" y
-         un boton Tomar en cada fila: se leia como que sin el dueno no pasa nada, y no
-         es asi — el agente clasifica, abre tarjeta, responde y alerta por su cuenta
-         (prompts/triage.md, pasos 7 a 11).
+    <!-- La bandeja se fue: el panel es el tablero. Lo que pedia decision es la columna
+         "Su decision", lo que hizo el agente es la historia de cada caso, y la cola son
+         los casos en Recibido y Clasificado, con "Atender ahora" e "Ignorar". -->
 
-         Ahora abre con lo UNICO que de verdad lo espera a el: las alertas, que son
-         las que el agente levanto porque no le corresponde decidirlas. Casi siempre
-         va a estar vacia, y esa es la idea.
-
-         Despues lo que el agente HIZO, que es el grueso y estaba al fondo.
-         Y al final la cola, que es informativa: eso lo atiende solo. -->
-    <h2 data-t="needsYou">Necesita su decision</h2>
-    <div id="alerts"><p class="empty" data-t="loading">Cargando…</p></div>
-
-    <h2 data-t="recent">Lo que hizo el agente</h2>
-    <!-- Una sola linea: sobre cuantas conversaciones reviso y que encontro — o por que
-         no reviso. Sin ella, "no hay nada que hacer", "nunca corrio" y "se murio a
-         medias" se ven exactamente iguales. -->
-    <p class="meta nota" id="runline"></p>
-    <div id="recent"><p class="empty" data-t="nothingYet">Nada todavia.</p></div>
-
-    <h2 data-t="queue">En cola para la proxima corrida</h2>
-    <p class="meta nota" data-t="hint"></p>
-    <div id="pending"><p class="empty" data-t="loading">Cargando…</p></div>
+    <!-- El tablero lo escribe `wa-scope` en la clave `board`. Las acciones del dueno
+         (T6) dejan un pedido en `scopeRequest` y el worker lo cumple: el panel no ejecuta
+         nada ni dice quien firma. Solo se pinta una accion que la tarjeta trae en
+         `actions` Y que vale en su etapa. -->
+    <!-- La barra copia la de Plane en Orca (TaskPage.tsx): las etapas con su cuenta, que
+         filtran; el buscador; Lista/Tablero y cuantos se muestran. Los iconos son los de
+         lucide que usa la app, en linea porque el panel no puede pedir nada afuera. -->
+    <div id="view-board">
+      <div class="board-bar" id="board-bar" hidden>
+        <div class="chips" id="board-chips" role="group" data-t-aria="boardStagesLabel"></div>
+        <div class="bar-row">
+          <div class="search">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            <input id="board-search" type="text" autocomplete="off" spellcheck="false"
+                   data-t-ph="boardSearchPh" data-t-aria="boardSearchPh" />
+            <button type="button" class="search-clear" id="board-search-clear"
+                    data-t-title="boardSearchClear" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+          </div>
+          <div class="seg" id="board-view" role="group" data-t-aria="boardViewLabel">
+            <button type="button" data-vista="list" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg><span data-t="boardViewList">Lista</span></button>
+            <button type="button" data-vista="board" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/><path d="M15 3v18"/></svg><span data-t="boardViewBoard">Tablero</span></button>
+          </div>
+          <span class="meta" id="board-shown"></span>
+        </div>
+      </div>
+      <p class="meta nota" id="board-synced"></p>
+      <!-- La ultima corrida del agente, en una linea: sobre cuantas reviso y que encontro,
+           o por que no reviso. Sin ella "no hay nada", "nunca corrio" y "se murio a
+           medias" se ven iguales. -->
+      <p class="meta nota" id="runline"></p>
+      <p class="meta nota" id="board-note"></p>
+      <div class="board-empty" id="board-empty" hidden><p class="t"></p><p class="b"></p></div>
+      <div class="board-body" id="board-body" hidden>
+        <div class="board-main">
+          <p class="board-nada" id="board-nada" hidden></p>
+          <div class="board-cols" id="board-cols"></div>
+          <div class="board-list" id="board-list" hidden></div>
+        </div>
+        <aside class="board-detail" id="board-detail" hidden></aside>
+      </div>
+    </div>
 
     <script>
       'use strict'
       // El shell del panel no inyecta el idioma, asi que sale de navigator.language,
       // que en el renderer de Electron refleja el idioma del app.
       var STRINGS = {
-        es: {"title": "WhatsApp", "pending": "Esperando respuesta", "recent": "Lo que hizo el agente", "loading": "Cargando…", "nothingYet": "Nada todavia.", "nothingPending": "Nada pendiente en las conversaciones que tiene autorizadas.", "nothingAuthorized1": "Tiene 1 conversacion configurada y esta en off.", "nothingAuthorized": "Tiene {n} conversaciones configuradas y todas en off.", "nothingMapped": "Todavia no ha autorizado ninguna conversacion.", "runNever": "Su agente todavia no ha revisado.", "runNow": "Revisando ahora…", "runCut": "La revision arranco y no volvio", "runFailed": "La ultima revision fallo", "runChecked1": "Reviso 1 conversacion", "runChecked": "Reviso {n} conversaciones", "runNone": "nada pendiente", "runWaiting1": "1 esperando", "runWaiting": "{n} esperando", "noData": "sin datos — corra <code>wa-scope sync</code>", "running": "corriendo", "image": "imagen", "mediaImage": "imagen", "mediaVideo": "video", "mediaPtt": "nota de voz", "mediaAudio": "audio", "mediaDocument": "documento", "mediaOther": "adjunto", "take": "Tomar", "ignore": "Ignorar", "taken": "lo toma tu agente", "hint": "Su agente atiende esto solo, hasta donde le permita cada conversacion. Marque solo para adelantarlo o para que no lo toque.", "refreshTitle": "Releer lo guardado",
-              "kindDirecto": "directo", "kindMencion": "mencion", "kindRespuesta": "respuesta", "kindGrupo": "del grupo",
-              "actTriage": "triage", "actIssue": "tarjeta abierta", "actDraft": "borrador",
-              "actSent": "enviado", "actSkipped": "saltado", "actDenied": "denegado",
-              "actClosed": "cierre avisado", "actFailed": "fallo", "actAlert": "aviso",
-              "errNoId": "sin id de mensaje", "errRead": "no pude leer",
-              "errSave": "no pude guardar", "lineaConectada": "Linea conectada", "lineaConectando": "Conectando la linea\u2026", "lineaSinVincular": "Falta escanear el codigo QR en Ajustes", "lineaCaida": "La linea esta caida", "syncLineaNueva": "esperando el primer sync de esta linea\u2026", "lineaSinSenal": "La linea no da senal desde las {hora}", "cobertura": "El agente actua sobre {n} de {total} conversaciones", "coberturaSinTotal": "El agente actua sobre {n} conversaciones", "needsYou": "Necesita su decision", "queue": "En cola para la proxima corrida", "nothingNeeded": "Nada que decidir. El agente no necesita nada de usted."},
-        en: {"title": "WhatsApp", "pending": "Waiting on you", "recent": "What your agent did", "loading": "Loading…", "nothingYet": "Nothing yet.", "nothingPending": "Nothing pending in the conversations you allowed.", "nothingAuthorized1": "You have 1 conversation set up and it is off.", "nothingAuthorized": "You have {n} conversations set up and all of them are off.", "nothingMapped": "No conversation is authorized yet.", "runNever": "Your agent has not checked yet.", "runNow": "Checking now…", "runCut": "The run started and never came back", "runFailed": "Last run failed", "runChecked1": "Checked 1 conversation", "runChecked": "Checked {n} conversations", "runNone": "nothing pending", "runWaiting1": "1 waiting", "runWaiting": "{n} waiting", "noData": "no data — run <code>wa-scope sync</code>", "running": "running", "image": "image", "mediaImage": "image", "mediaVideo": "video", "mediaPtt": "voice note", "mediaAudio": "audio", "mediaDocument": "document", "mediaOther": "attachment", "take": "Take", "ignore": "Ignore", "taken": "your agent takes it", "hint": "Your agent handles this on its own, as far as each conversation allows. Mark only to move it up or to keep it away.", "refreshTitle": "Re-read what is stored",
-              "kindDirecto": "direct", "kindMencion": "mention", "kindRespuesta": "reply", "kindGrupo": "in the group",
-              "actTriage": "triage", "actIssue": "card opened", "actDraft": "draft",
-              "actSent": "sent", "actSkipped": "skipped", "actDenied": "denied",
-              "actClosed": "closing announced", "actFailed": "failed", "actAlert": "alert",
-              "errNoId": "no message id", "errRead": "could not read",
-              "errSave": "could not save", "lineaConectada": "Line connected", "lineaConectando": "Connecting the line\u2026", "lineaSinVincular": "The QR code still has to be scanned in Settings", "lineaCaida": "The line is down", "syncLineaNueva": "waiting for this line\u2019s first sync\u2026", "lineaSinSenal": "No signal from the line since {hora}", "cobertura": "Your agent acts on {n} of {total} conversations", "coberturaSinTotal": "Your agent acts on {n} conversations", "needsYou": "Needs your decision", "queue": "Queued for the next run", "nothingNeeded": "Nothing to decide. Your agent does not need anything from you."},
-        pt: {"title": "WhatsApp", "pending": "Aguardando voce", "recent": "O que o agente fez", "loading": "Carregando…", "nothingYet": "Nada ainda.", "nothingPending": "Nada pendente nas conversas que voce autorizou.", "nothingAuthorized1": "Voce tem 1 conversa configurada e ela esta em off.", "nothingAuthorized": "Voce tem {n} conversas configuradas e todas em off.", "nothingMapped": "Nenhuma conversa autorizada ainda.", "runNever": "Seu agente ainda nao revisou.", "runNow": "Revisando agora…", "runCut": "A revisao comecou e nao voltou", "runFailed": "A ultima revisao falhou", "runChecked1": "Revisou 1 conversa", "runChecked": "Revisou {n} conversas", "runNone": "nada pendente", "runWaiting1": "1 aguardando", "runWaiting": "{n} aguardando", "noData": "sem dados — rode <code>wa-scope sync</code>", "running": "rodando", "image": "imagem", "mediaImage": "imagem", "mediaVideo": "video", "mediaPtt": "nota de voz", "mediaAudio": "audio", "mediaDocument": "documento", "mediaOther": "anexo", "take": "Assumir", "ignore": "Ignorar", "taken": "seu agente assume", "hint": "Seu agente cuida disso sozinho, ate onde cada conversa permitir. Marque apenas para adiantar ou para que nao toque.", "refreshTitle": "Reler o que esta salvo",
-              "kindDirecto": "direto", "kindMencion": "mencao", "kindRespuesta": "resposta", "kindGrupo": "do grupo",
-              "actTriage": "triagem", "actIssue": "cartao aberto", "actDraft": "rascunho",
-              "actSent": "enviado", "actSkipped": "pulado", "actDenied": "negado",
-              "actClosed": "fecho avisado", "actFailed": "falhou", "actAlert": "alerta",
-              "errNoId": "sem id da mensagem", "errRead": "nao consegui ler",
-              "errSave": "nao consegui salvar", "lineaConectada": "Linha conectada", "lineaConectando": "Conectando a linha\u2026", "lineaSinVincular": "Falta escanear o codigo QR em Ajustes", "lineaCaida": "A linha esta fora do ar", "syncLineaNueva": "esperando o primeiro sync desta linha\u2026", "lineaSinSenal": "A linha nao da sinal desde as {hora}", "cobertura": "Seu agente atua em {n} de {total} conversas", "coberturaSinTotal": "Seu agente atua em {n} conversas", "needsYou": "Precisa da sua decisao", "queue": "Na fila para a proxima rodada", "nothingNeeded": "Nada a decidir. Seu agente nao precisa de nada de voce."}
+        es: {"title": "WhatsApp", "nothingAuthorized1": "Tiene 1 conversacion configurada y esta en off.", "nothingAuthorized": "Tiene {n} conversaciones configuradas y todas en off.", "nothingMapped": "Todavia no ha autorizado ninguna conversacion.", "runNever": "Su agente todavia no ha revisado.", "runNow": "Revisando ahora…", "runCut": "La revision arranco y no volvio", "runFailed": "La ultima revision fallo", "runLast": "Ultima revision {hora}", "runLastNoTime": "Ultima revision", "runNone": "nada pendiente", "runAgent1": "1 caso para el agente", "runAgent": "{n} casos para el agente", "runOwner1": "1 espera su decision", "runOwner": "{n} esperan su decision", "histReopened": "Reabierto", "histPrev": "Ver historia anterior", "escLead": "El agente lo dejo a su decision", "escWhy": "Motivo", "escJev": "Jev lo ve como", "escHow": "No hay una respuesta redactada. Use Editar y enviar para responder usted.", "noData": "sin datos — corra <code>wa-scope sync</code>", "running": "corriendo", "refreshTitle": "Releer lo guardado",
+                                                                                    "lineaConectada": "Linea conectada", "lineaConectando": "Conectando la linea\u2026", "lineaSinVincular": "Falta escanear el codigo QR en Ajustes", "lineaCaida": "La linea esta caida", "syncLineaNueva": "esperando el primer sync de esta linea\u2026", "lineaSinSenal": "La linea no da senal desde las {hora}", "cobertura": "El agente actua sobre {n} de {total} conversaciones", "coberturaSinTotal": "El agente actua sobre {n} conversaciones",                                           "stageRecibido": "Recibido",
+              "stageClasificado": "Clasificado",
+              "stageDecision": "Su decision",
+              "stageTrabajo": "En trabajo",
+              "stageListo": "Listo para responder",
+              "stageRespondido": "Respondido",
+              "stageCerrado": "Cerrado",
+              "stageBloqueado": "Bloqueado",
+              "boardMore": "+{n} mas sin mostrar",
+              "boardUnsupported": "Este panel no entiende la version {v} del tablero. Actualice el plugin.",
+              "boardTruncated": "Se muestran los casos mas recientes; hay mas de los que caben aqui.",
+              "boardUnknown1": "1 caso con una etapa que este panel no conoce no se muestra.",
+              "boardUnknown": "{n} casos con una etapa que este panel no conoce no se muestran.",
+              "boardUpdated": "Actualizado {cuando}",
+              "boardUntitled": "(sin titulo)",
+              "boardAll": "Todos",
+              "boardStagesLabel": "Etapas",
+              "boardSearchPh": "Buscar por numero, titulo o chat",
+              "boardSearchClear": "Borrar la busqueda",
+              "boardViewLabel": "Vista",
+              "boardViewList": "Lista",
+              "boardViewBoard": "Tablero",
+              "boardShown": "{n} mostrados",
+              "boardShown1": "1 mostrado",
+              "boardNoMatch": "Ningun caso coincide con la busqueda.",
+              "boardStageNone": "Ningun caso en esta etapa.",
+              "boardEmptyTitle": "Todavia no hay casos",
+              "boardEmptyBody": "Cada pedido que llegue por WhatsApp aparecera aqui.",
+              "boardNoDataTitle": "El tablero todavia no tiene datos",
+              "boardNoDataBody": "Aparecera tras la proxima sincronizacion.",
+              "boardVersionTitle": "No se puede mostrar el tablero",
+              "boardReadSend": "Leer y enviar",
+              "boardReadRun": "Leer y ejecutar",
+              "detClose": "Cerrar el detalle",
+              "detSummary": "Resumen",
+              "detJev": "Revision de Jev",
+              "detActions": "Acciones",
+              "detHistory": "Historia",
+              "detPrio": "Prioridad",
+              "jevSignals": "Senales",
+              "flagOther": "otra senal",
+              "excOther": "otro motivo",
+              "jevClsOther": "otro tipo de mensaje",
+              "jevClsSupport": "solicitud de soporte",
+              "jevClsBug": "reporte de una falla",
+              "jevClsStatus": "pregunta por el estado de un trabajo",
+              "jevClsTicket": "mencion de un ticket que ya existe",
+              "jevClsAccess": "pedido de acceso o credencial",
+              "jevClsMoney": "tema de dinero",
+              "jevClsDecision": "pide una decision",
+              "jevClsDeploy": "pedido de despliegue",
+              "jevClsWaiting": "cliente esperando o servicio caido",
+              "jevClsPleasantry": "saludo o cortesia",
+              "jevClsMeeting": "reunion o llamada",
+              "jevClsMention": "mencion sin pedido",
+              "jevClsNotice": "aviso al equipo",
+              "jevClsChatter": "conversacion entre otras personas",
+              "jevClsUnclear": "mensaje poco claro",
+              "jevClsEmpty": "sin texto legible",
+              "jevClsNoMatch": "otro tipo de mensaje",
+              "prioUrgent": "Urgente",
+              "prioHigh": "Alta",
+              "prioMedium": "Media",
+              "prioLow": "Baja",
+              "flagAsksOwnerToAct": "le pide actuar",
+              "flagContainsCredential": "trae una credencial",
+              "flagAsksForCredential": "pide una credencial",
+              "flagAsksForMoney": "habla de dinero o de un pago",
+              "flagClientWaiting": "cliente esperando o servicio caido",
+              "flagPromisesDate": "promete una fecha",
+              "flagStatusNotVerified": "afirma un estado sin verificar",
+              "flagInstructsAssistant": "intenta darle ordenes al asistente",
+              "flagUrgencyPressure": "mete presion de urgencia",
+              "jevSkip": "No requiere accion",
+              "jevSees": "Lo ve como",
+              "excLead": "Necesita su decision por",
+              "excMoney": "dinero",
+              "excCredential": "credencial",
+              "excCommitment": "compromiso",
+              "excJev": "aviso de Jev",
+              "propLead": "Propuesta",
+              "propResponder": "responder",
+              "propTrabajar": "trabajar",
+              "propEscalar": "escalar",
+              "propDescartar": "descartar",
+              "blockedLead": "Motivo del bloqueo",
+              "noAgentLead": "No requiere agente",
+              "noAgent_jev_skip": "Jev dijo que no hay nada que atender.",
+              "noAgent_charla_de_grupo": "Charla de un grupo que no es para el asistente.",
+              "noAgent_gracias_sin_pregunta": "Un gracias despues de una respuesta, sin ninguna pregunta.",
+              "noAgent_sticker_suelto": "Un sticker suelto, sin texto ni nada mas en la rafaga.",
+              "noAgent_grupo_no_dirigido": "Una linea de un grupo que no es para el asistente y no pide nada.",
+              "boardReadOnly": "Solo leer: el agente no redacta en este chat. Use Atender ahora si lo quiere.",
+              "ticketLead": "Ticket",
+              "agoNow": "ahora",
+              "agoMin": "hace {n} min",
+              "agoHour": "hace {n} h",
+              "agoDay": "hace {n} d",
+              "acEnviar": "Enviar",
+              "acEditar": "Editar y enviar", "acAutorizar": "Autorizar", "acAutorizarNota": "El agente podra atenderlo; si la respuesta trae dinero, credenciales o fechas, se la vuelve a pedir.", "acOkAutorizado": "Autorizado: el agente lo atendera",
+              "acEjecutar": "Ejecutar",
+              "acReclasificar": "Reclasificar",
+              "acCerrar": "Cerrar",
+              "acReabrir": "Reabrir",
+              "acAtender": "Atender ahora",
+              "acIgnorar": "Ignorar",
+              "acProyecto": "Cambiar proyecto",
+              "acConfirmProyecto": "Guardar proyecto",
+              "acProyectoLabel": "Proyecto del caso",
+              "acProyectoPh": "Buscar un proyecto",
+              "acProyectoNinguno": "Sin proyecto",
+              "acProyectoVacioLista": "Ningun proyecto coincide.",
+              "acProyectoSinCatalogo": "Todavia no acepto ningun proyecto. Hagalo en Ajustes, pestana Proyectos.",
+              "acErrProyectoElegir": "Elija un proyecto de la lista.",
+              "acOkAtendido": "El agente lo atendera en su proxima corrida",
+              "acAgentLanzado": "Se lanzo el agente para este caso. Si en unos minutos no hay respuesta, revise que el agente tenga la sesion iniciada.",
+              "acAgentSinCli": "El caso quedo marcado, pero no se encontro la CLI de Orca para lanzar el agente. Lo tomara en su proxima corrida.",
+              "acAgentEnCurso": "Ya hay un agente de casos trabajando: vera este caso en esta revision.",
+              "acAgentFallo": "El caso quedo marcado, pero no pude lanzar al agente: {reason}.",
+              "acOkIgnorado": "Caso ignorado",
+              "acOkProyecto": "Proyecto actualizado",
+              "detProject": "Proyecto", "detPrevCase": "Caso anterior",
+              "boardNeedsAgent": "Para el agente en su proxima corrida",
+              "botFallback": "Cuenta de respaldo: {account} ({reason})",
+              "agentFallback": "Agente de casos con la cuenta de respaldo {account} ({reason})",
+              "fallbackOrca": "la que elige Orca",
+              "fallbackWhy_elegida-no-esta": "la elegida ya no aparece en Orca",
+              "fallbackWhy_elegida-sin-sesion": "la elegida no tiene sesion",
+              "fallbackWhy_elegida-sin-cuota": "la elegida no tiene cuota",
+              "fallbackWhy_elegida-fallo": "la elegida fallo al abrir",
+              "agentFail": "No pude lanzar al agente: {reason}",
+              "agentFailGeneric": "No pude lanzar al agente",
+              "stuckWorkspaces1": "1 espacio del plugin no se pudo quitar",
+              "stuckWorkspaces": "{n} espacios del plugin no se pudieron quitar",
+              "agentWhy_sin-cli": "no encuentro la CLI de Orca en esta maquina",
+              "agentWhy_sin-espacio": "Orca no tiene el espacio del plugin; aprueba el plugin de nuevo en Orca",
+              "agentWhy_sin-prompt": "falta el prompt del agente en el plugin",
+              "agentWhy_sin-cuenta": "ninguna cuenta de Claude esta libre",
+              "agentWhy_sin-terminal": "Orca no abrio su terminal",
+              "agentWhy_no-listo": "Claude no quedo listo a tiempo",
+              "agentWhy_no-recibio": "el agente no recibio el trabajo",
+              "agentWhy_a-medias": "el lanzamiento anterior se corto a la mitad",
+              "agentWhy_sin-tiempo": "no alcanzo el tiempo para abrirlo",
+              "agentWhy_se-cerro": "Claude se cerro al abrir; lo vuelvo a abrir en unos minutos",
+              "agentWhy_se-cierra": "Claude se cerro al abrir tres veces seguidas; espero una hora antes de abrirlo de nuevo",
+                            "detHistTouch": "actualizado",
+              "histMessage": "llego un mensaje", "histSticker": "llego un sticker",
+              "histAudio": "llego un audio", "histJev": "Jev: {que}",
+              "histJevAgent": "necesita agente", "histRule": "regla fija: {que}",
+              "histHeld": "envio retenido: {que}",
+              "histRevision": "volvio al agente, el agente lo reescribe: {que}",
+              "histOwnerDecides": "lo decide usted: {que}",
+              "histWorkWaits": "el trabajo espera su firma: {que}",
+              "histProposal": "propuesta: {que}", "histApproved": "aprobada",
+              "histSent": "enviado", "histRoute": "destino del caso",
+              "histProject": "proyecto cambiado", "histClassified": "clasificado: {que}",
+              "histRetitled": "titulo nuevo", "histWithdrawn": "propuesta retirada",
+              "histAuthorized": "excepciones autorizadas", "histAttend": "atender ahora",
+              "motSecret": "un secreto", "motJevDown": "Jev no contesto",
+              "motDelete": "borrar", "motDeploy": "desplegar a produccion",
+              "motForcePush": "push forzado", "motPayment": "pagos",
+              "motOutside": "fuera del proyecto del chat", "motMode": "el chat solo observa",
+              "motStale": "propuesta de hace mas de un dia",
+              "motExceptions": "excepciones del caso", "motNoInstr": "sin instrucciones",
+              "claseCard": "para el agente", "claseAlert": "para usted",
+              "claseDoubtful": "dudoso", "claseNothing": "nada que atender",
+              "actorAgente": "el agente",
+              "actorJev": "Jev",
+              "actorDueno": "usted",
+              "actorAutomatizacion": "automatico",
+              "actorTrabajador": "el trabajador",
+              "actorRegla": "una regla suya",
+              "actorOtro": "otro",
+              "acConfirmEditar": "Enviar",
+              "acConfirmReclasificar": "Reclasificar",
+              "acConfirmCerrar": "Cerrar caso",
+              "acCancelar": "Cancelar",
+              "acEditarLabel": "Respuesta que se enviara",
+              "acNotaLabel": "Nota para el agente (opcional)",
+              "acMotivoLabel": "Motivo del cierre (opcional)",
+              "acAprobada": "Aprobada, en cola",
+              "boardDispatched": "Despachado a {p}",
+              "boardDispatchWaiting": "Esperando al agente del proyecto",
+              "boardDispatchAnswer": "El cliente respondio: va al agente del proyecto",
+              "boardDispatchSolved": "Resuelto por el agente de {p}",
+              "boardDispatchNeeds": "{p} pide mas informacion al cliente",
+              "boardDispatchCustomer": "Esperando al cliente",
+              "boardDispatchBlocked": "Bloqueado por el agente de {p}",
+              "acOkGeneric": "Hecho",
+              "acOkEnviado": "Enviado",
+              "acOkAprobada": "Aprobada: queda en cola para el agente",
+              "acOkReclasificado": "Devuelto a clasificado",
+              "acOkCerrado": "Caso cerrado",
+              "acOkReabierto": "Caso reabierto",
+              "acWarnTablero": "El tablero puede tardar en ponerse al dia.",
+              "acNoAnswer": "El plugin todavia no responde. Revise el tablero antes de repetir la accion.",
+              "acErrVacio": "Escriba la respuesta antes de enviarla.",
+              "acErrNoWrite": "No se pudo dejar el pedido para el plugin. Intente de nuevo.",
+              "acErrGeneric": "No se pudo completar la accion ({code}).",
+              "acErrArgs": "Los datos de la accion no son validos. Actualice el tablero e intente de nuevo.",
+              "acErrNotFound": "Ese caso ya no existe en esta linea. Se actualizo el tablero.",
+              "acErrStage": "El caso ya no esta en una etapa que permita esa accion. Se actualizo el tablero.",
+              "acErrNotApproved": "La propuesta vigente no esta aprobada, asi que no se pudo continuar.",
+              "acErrVersion": "La propuesta cambio mientras la miraba. Se actualizo el tablero: lea la nueva y decida de nuevo.",
+              "acErrException": "Este caso necesita su decision y no se aprueba por regla.",
+              "acErrBusy": "La base de casos esta ocupada. Intente de nuevo en unos segundos.",
+              "acErrInvalida": "Esa accion no corresponde a lo que propone el caso.",
+              "acErrSendDenied": "Esa conversacion no esta autorizada para responder. Cambie su modo en Ajustes.",
+              "acErrSendNeeds": "El mensaje quedo como borrador y no salio.",
+              "acErrSendNoTransport": "La linea de WhatsApp no esta corriendo y no se envio nada. Abra Orca y revise el estado de la linea.",
+              "acErrSendRejected": "WhatsApp rechazo el mensaje: no se entrego.",
+              "acErrSendTimeout": "La linea no confirmo a tiempo. El envio sigue en cola: vuelva a apretar Enviar y no se duplicara.",
+              "acErrSendNoDraft": "No se encontro el borrador del envio. Intente de nuevo.",
+              "acErrSendConflict": "Ese envio ya existe con otro texto, asi que no se mando nada.",
+              "acErrSendLine": "Esa conversacion no esta autorizada para el numero vinculado ahora. Revise sus Ajustes.",
+              "acErrSendFirma": "Falta el nombre del agente y sin el no se envia. Defina el nombre en Ajustes.",
+              "acErrJev": "Jev no pudo revisar el mensaje: quedo como borrador y no salio.",
+              "acErrDesconocida": "El plugin no entiende esa accion. Actualice el plugin.",
+              "acErrVencido": "El pedido vencio antes de atenderse. Intente de nuevo.",
+              "acErrSinHerr": "El plugin no pudo ejecutar sus herramientas.",
+              "acErrSinPermiso": "Orca no le dio permiso al plugin para ejecutar sus herramientas.",
+              "acErrDemoro": "La accion tardo demasiado y se corto. Revise el tablero antes de repetirla.",
+              "acErrFallo": "La accion fallo. Revise el tablero antes de repetirla."},
+        en: {"title": "WhatsApp", "nothingAuthorized1": "You have 1 conversation set up and it is off.", "nothingAuthorized": "You have {n} conversations set up and all of them are off.", "nothingMapped": "No conversation is authorized yet.", "runNever": "Your agent has not checked yet.", "runNow": "Checking now…", "runCut": "The run started and never came back", "runFailed": "Last run failed", "runLast": "Last run {hora}", "runLastNoTime": "Last run", "runNone": "nothing pending", "runAgent1": "1 case for the agent", "runAgent": "{n} cases for the agent", "runOwner1": "1 waiting for your decision", "runOwner": "{n} waiting for your decision", "histReopened": "Reopened", "histPrev": "Show earlier history", "escLead": "The agent left it to your decision", "escWhy": "Reason", "escJev": "Jev reads it as", "escHow": "There is no drafted reply. Use Edit and send to answer yourself.", "noData": "no data — run <code>wa-scope sync</code>", "running": "running", "refreshTitle": "Re-read what is stored",
+                                                                                    "lineaConectada": "Line connected", "lineaConectando": "Connecting the line\u2026", "lineaSinVincular": "The QR code still has to be scanned in Settings", "lineaCaida": "The line is down", "syncLineaNueva": "waiting for this line\u2019s first sync\u2026", "lineaSinSenal": "No signal from the line since {hora}", "cobertura": "Your agent acts on {n} of {total} conversations", "coberturaSinTotal": "Your agent acts on {n} conversations",                                           "stageRecibido": "Received",
+              "stageClasificado": "Classified",
+              "stageDecision": "Your decision",
+              "stageTrabajo": "In progress",
+              "stageListo": "Ready to reply",
+              "stageRespondido": "Replied",
+              "stageCerrado": "Closed",
+              "stageBloqueado": "Blocked",
+              "boardMore": "+{n} more not shown",
+              "boardUnsupported": "This panel does not understand version {v} of the board. Update the plugin.",
+              "boardTruncated": "Showing the most recent cases; there are more than fit here.",
+              "boardUnknown1": "1 case with a stage this panel does not know is not shown.",
+              "boardUnknown": "{n} cases with a stage this panel does not know are not shown.",
+              "boardUpdated": "Updated {cuando}",
+              "boardUntitled": "(untitled)",
+              "boardAll": "All",
+              "boardStagesLabel": "Stages",
+              "boardSearchPh": "Search by number, title or chat",
+              "boardSearchClear": "Clear search",
+              "boardViewLabel": "View",
+              "boardViewList": "List",
+              "boardViewBoard": "Board",
+              "boardShown": "{n} shown",
+              "boardShown1": "1 shown",
+              "boardNoMatch": "No case matches the search.",
+              "boardStageNone": "No case in this stage.",
+              "boardEmptyTitle": "No cases yet",
+              "boardEmptyBody": "Every request that arrives on WhatsApp will show up here.",
+              "boardNoDataTitle": "The board has no data yet",
+              "boardNoDataBody": "It will show up after the next sync.",
+              "boardVersionTitle": "The board cannot be shown",
+              "boardReadSend": "Read and send",
+              "boardReadRun": "Read and run",
+              "detClose": "Close details",
+              "detSummary": "Summary",
+              "detJev": "Jev review",
+              "detActions": "Actions",
+              "detHistory": "History",
+              "detPrio": "Priority",
+              "jevSignals": "Signals",
+              "flagOther": "another signal",
+              "excOther": "another reason",
+              "jevClsOther": "another kind of message",
+              "jevClsSupport": "support request",
+              "jevClsBug": "bug report",
+              "jevClsStatus": "question about the status of some work",
+              "jevClsTicket": "reference to an existing ticket",
+              "jevClsAccess": "access or credential request",
+              "jevClsMoney": "money matter",
+              "jevClsDecision": "asks for a decision",
+              "jevClsDeploy": "deploy request",
+              "jevClsWaiting": "client waiting or service down",
+              "jevClsPleasantry": "greeting or small talk",
+              "jevClsMeeting": "meeting or call",
+              "jevClsMention": "mention with no ask",
+              "jevClsNotice": "notice to the team",
+              "jevClsChatter": "conversation between other people",
+              "jevClsUnclear": "unclear message",
+              "jevClsEmpty": "no readable text",
+              "jevClsNoMatch": "another kind of message",
+              "prioUrgent": "Urgent",
+              "prioHigh": "High",
+              "prioMedium": "Medium",
+              "prioLow": "Low",
+              "flagAsksOwnerToAct": "asks you to act",
+              "flagContainsCredential": "contains a credential",
+              "flagAsksForCredential": "asks for a credential",
+              "flagAsksForMoney": "talks about money or a payment",
+              "flagClientWaiting": "client waiting or service down",
+              "flagPromisesDate": "promises a date",
+              "flagStatusNotVerified": "states a status that is not verified",
+              "flagInstructsAssistant": "tries to instruct the assistant",
+              "flagUrgencyPressure": "applies urgency pressure",
+              "jevSkip": "No action needed",
+              "jevSees": "Reads it as",
+              "excLead": "Needs your decision because",
+              "excMoney": "money",
+              "excCredential": "credential",
+              "excCommitment": "commitment",
+              "excJev": "flagged by Jev",
+              "propLead": "Proposal",
+              "propResponder": "reply",
+              "propTrabajar": "work on it",
+              "propEscalar": "escalate",
+              "propDescartar": "discard",
+              "blockedLead": "Blocked because",
+              "noAgentLead": "No agent needed",
+              "noAgent_jev_skip": "Jev said there is nothing to attend to.",
+              "noAgent_charla_de_grupo": "Group chatter not meant for the assistant.",
+              "noAgent_gracias_sin_pregunta": "A thanks after a reply, with no question in it.",
+              "noAgent_sticker_suelto": "A lone sticker, with no text and nothing else in the burst.",
+              "noAgent_grupo_no_dirigido": "A group line not meant for the assistant that asks for nothing.",
+              "boardReadOnly": "Read only: the agent does not draft in this chat. Use Handle now if you want it to.",
+              "ticketLead": "Ticket",
+              "agoNow": "just now",
+              "agoMin": "{n} min ago",
+              "agoHour": "{n} h ago",
+              "agoDay": "{n} d ago",
+              "acEnviar": "Send",
+              "acEditar": "Edit and send", "acAutorizar": "Authorize", "acAutorizarNota": "The agent will be able to handle it; if its reply carries money, credentials or dates, it asks you again.", "acOkAutorizado": "Authorized: the agent will handle it",
+              "acEjecutar": "Run",
+              "acReclasificar": "Reclassify",
+              "acCerrar": "Close",
+              "acReabrir": "Reopen",
+              "acAtender": "Handle now",
+              "acIgnorar": "Ignore",
+              "acProyecto": "Change project",
+              "acConfirmProyecto": "Save project",
+              "acProyectoLabel": "Project for this case",
+              "acProyectoPh": "Search for a project",
+              "acProyectoNinguno": "No project",
+              "acProyectoVacioLista": "No project matches.",
+              "acProyectoSinCatalogo": "You have not accepted any project yet. Do it in Settings, Projects tab.",
+              "acErrProyectoElegir": "Pick a project from the list.",
+              "acOkAtendido": "Your agent will handle it on its next run",
+              "acAgentLanzado": "The agent was launched for this case. If there is no reply in a few minutes, check that the agent is signed in.",
+              "acAgentSinCli": "The case is marked, but the Orca CLI was not found to launch the agent. It will pick it up on its next run.",
+              "acAgentEnCurso": "A case agent is already working: it will see this case in this run.",
+              "acAgentFallo": "The case is marked, but I could not launch the agent: {reason}.",
+              "acOkIgnorado": "Case ignored",
+              "acOkProyecto": "Project updated",
+              "detProject": "Project", "detPrevCase": "Previous case",
+              "boardNeedsAgent": "For your agent on its next run",
+              "botFallback": "Fallback account: {account} ({reason})",
+              "agentFallback": "Case agent on the fallback account {account} ({reason})",
+              "fallbackOrca": "the one Orca picks",
+              "fallbackWhy_elegida-no-esta": "the chosen one is no longer listed by Orca",
+              "fallbackWhy_elegida-sin-sesion": "the chosen one is signed out",
+              "fallbackWhy_elegida-sin-cuota": "the chosen one has no quota left",
+              "fallbackWhy_elegida-fallo": "the chosen one failed to open",
+              "agentFail": "Could not launch the agent: {reason}",
+              "agentFailGeneric": "Could not launch the agent",
+              "stuckWorkspaces1": "1 plugin workspace could not be removed",
+              "stuckWorkspaces": "{n} plugin workspaces could not be removed",
+              "agentWhy_sin-cli": "the Orca CLI is not on this machine",
+              "agentWhy_sin-espacio": "Orca does not have the plugin workspace; approve the plugin again in Orca",
+              "agentWhy_sin-prompt": "the agent prompt is missing from the plugin",
+              "agentWhy_sin-cuenta": "no Claude account is free",
+              "agentWhy_sin-terminal": "Orca did not open its terminal",
+              "agentWhy_no-listo": "Claude was not ready in time",
+              "agentWhy_no-recibio": "the agent did not receive the work",
+              "agentWhy_a-medias": "the previous launch was cut off halfway",
+              "agentWhy_sin-tiempo": "there was not enough time to open it",
+              "agentWhy_se-cerro": "Claude closed as it opened; I will open it again in a few minutes",
+              "agentWhy_se-cierra": "Claude closed as it opened three times in a row; I will wait an hour before opening it again",
+                            "detHistTouch": "updated",
+              "histMessage": "a message arrived", "histSticker": "a sticker arrived",
+              "histAudio": "a voice note arrived", "histJev": "Jev: {que}",
+              "histJevAgent": "needs the agent", "histRule": "fixed rule: {que}",
+              "histHeld": "send held: {que}",
+              "histRevision": "back to the agent, the agent rewrites it: {que}",
+              "histOwnerDecides": "you decide: {que}",
+              "histWorkWaits": "the work waits for your signature: {que}",
+              "histProposal": "proposal: {que}", "histApproved": "approved",
+              "histSent": "sent", "histRoute": "case destination",
+              "histProject": "project changed", "histClassified": "classified: {que}",
+              "histRetitled": "new title", "histWithdrawn": "proposal withdrawn",
+              "histAuthorized": "exceptions authorized", "histAttend": "handle now",
+              "motSecret": "a secret", "motJevDown": "Jev did not answer",
+              "motDelete": "deleting", "motDeploy": "deploying to production",
+              "motForcePush": "force push", "motPayment": "payments",
+              "motOutside": "outside the chat's project", "motMode": "the chat only observes",
+              "motStale": "a proposal older than a day",
+              "motExceptions": "the case's exceptions", "motNoInstr": "no instructions",
+              "claseCard": "for the agent", "claseAlert": "for you",
+              "claseDoubtful": "unclear", "claseNothing": "nothing to handle",
+              "actorAgente": "your agent",
+              "actorJev": "Jev",
+              "actorDueno": "you",
+              "actorAutomatizacion": "automatic",
+              "actorTrabajador": "the worker",
+              "actorRegla": "one of your rules",
+              "actorOtro": "other",
+              "acConfirmEditar": "Send",
+              "acConfirmReclasificar": "Reclassify",
+              "acConfirmCerrar": "Close case",
+              "acCancelar": "Cancel",
+              "acEditarLabel": "Reply that will be sent",
+              "acNotaLabel": "Note for the agent (optional)",
+              "acMotivoLabel": "Reason for closing (optional)",
+              "acAprobada": "Approved, queued",
+              "boardDispatched": "Dispatched to {p}",
+              "boardDispatchWaiting": "Waiting for the project's agent",
+              "boardDispatchAnswer": "The customer answered: it goes to the project's agent",
+              "boardDispatchSolved": "Solved by the {p} agent",
+              "boardDispatchNeeds": "{p} asks the customer for more information",
+              "boardDispatchCustomer": "Waiting for the customer",
+              "boardDispatchBlocked": "Blocked by the {p} agent",
+              "acOkGeneric": "Done",
+              "acOkEnviado": "Sent",
+              "acOkAprobada": "Approved: queued for the agent",
+              "acOkReclasificado": "Sent back to classified",
+              "acOkCerrado": "Case closed",
+              "acOkReabierto": "Case reopened",
+              "acWarnTablero": "The board may take a moment to catch up.",
+              "acNoAnswer": "The plugin has not answered yet. Check the board before repeating the action.",
+              "acErrVacio": "Write the reply before sending it.",
+              "acErrNoWrite": "The request could not be left for the plugin. Try again.",
+              "acErrGeneric": "The action could not be completed ({code}).",
+              "acErrArgs": "The action data is not valid. Refresh the board and try again.",
+              "acErrNotFound": "That case no longer exists on this line. The board was refreshed.",
+              "acErrStage": "The case is no longer in a stage that allows that action. The board was refreshed.",
+              "acErrNotApproved": "The current proposal is not approved, so it could not continue.",
+              "acErrVersion": "The proposal changed while you were looking at it. The board was refreshed: read the new one and decide again.",
+              "acErrException": "This case needs your decision and is not approved by rule.",
+              "acErrBusy": "The case database is busy. Try again in a few seconds.",
+              "acErrInvalida": "That action does not match what the case proposes.",
+              "acErrSendDenied": "That conversation is not allowed to reply. Change its mode in Settings.",
+              "acErrSendNeeds": "The message was left as a draft and was not sent.",
+              "acErrSendNoTransport": "The WhatsApp line is not running and nothing was sent. Open Orca and check the line status.",
+              "acErrSendRejected": "WhatsApp rejected the message: it was not delivered.",
+              "acErrSendTimeout": "The line did not confirm in time. The send is still queued: press Send again and it will not be duplicated.",
+              "acErrSendNoDraft": "The draft for this send was not found. Try again.",
+              "acErrSendConflict": "That send already exists with a different text, so nothing was sent.",
+              "acErrSendLine": "That conversation is not authorized for the number linked now. Check your Settings.",
+              "acErrSendFirma": "The agent name is missing and nothing is sent without it. Set the name in Settings.",
+              "acErrJev": "Jev could not review the message: it was left as a draft and was not sent.",
+              "acErrDesconocida": "The plugin does not understand that action. Update the plugin.",
+              "acErrVencido": "The request expired before it was handled. Try again.",
+              "acErrSinHerr": "The plugin could not run its tools.",
+              "acErrSinPermiso": "Orca did not give the plugin permission to run its tools.",
+              "acErrDemoro": "The action took too long and was cut off. Check the board before repeating it.",
+              "acErrFallo": "The action failed. Check the board before repeating it."},
+        pt: {"title": "WhatsApp", "nothingAuthorized1": "Voce tem 1 conversa configurada e ela esta em off.", "nothingAuthorized": "Voce tem {n} conversas configuradas e todas em off.", "nothingMapped": "Nenhuma conversa autorizada ainda.", "runNever": "Seu agente ainda nao revisou.", "runNow": "Revisando agora…", "runCut": "A revisao comecou e nao voltou", "runFailed": "A ultima revisao falhou", "runLast": "Ultima revisao {hora}", "runLastNoTime": "Ultima revisao", "runNone": "nada pendente", "runAgent1": "1 caso para o agente", "runAgent": "{n} casos para o agente", "runOwner1": "1 aguarda sua decisao", "runOwner": "{n} aguardam sua decisao", "histReopened": "Reaberto", "histPrev": "Ver historico anterior", "escLead": "O agente deixou para a sua decisao", "escWhy": "Motivo", "escJev": "Jev ve como", "escHow": "Nao ha resposta redigida. Use Editar e enviar para responder voce mesmo.", "noData": "sem dados — rode <code>wa-scope sync</code>", "running": "rodando", "refreshTitle": "Reler o que esta salvo",
+                                                                                    "lineaConectada": "Linha conectada", "lineaConectando": "Conectando a linha\u2026", "lineaSinVincular": "Falta escanear o codigo QR em Ajustes", "lineaCaida": "A linha esta fora do ar", "syncLineaNueva": "esperando o primeiro sync desta linha\u2026", "lineaSinSenal": "A linha nao da sinal desde as {hora}", "cobertura": "Seu agente atua em {n} de {total} conversas", "coberturaSinTotal": "Seu agente atua em {n} conversas",                                           "stageRecibido": "Recebido",
+              "stageClasificado": "Classificado",
+              "stageDecision": "Sua decisao",
+              "stageTrabajo": "Em andamento",
+              "stageListo": "Pronto para responder",
+              "stageRespondido": "Respondido",
+              "stageCerrado": "Fechado",
+              "stageBloqueado": "Bloqueado",
+              "boardMore": "+{n} mais nao mostrados",
+              "boardUnsupported": "Este painel nao entende a versao {v} do quadro. Atualize o plugin.",
+              "boardTruncated": "Mostrando os casos mais recentes; ha mais do que cabem aqui.",
+              "boardUnknown1": "1 caso com uma etapa que este painel nao conhece nao e mostrado.",
+              "boardUnknown": "{n} casos com uma etapa que este painel nao conhece nao sao mostrados.",
+              "boardUpdated": "Atualizado {cuando}",
+              "boardUntitled": "(sem titulo)",
+              "boardAll": "Todos",
+              "boardStagesLabel": "Etapas",
+              "boardSearchPh": "Buscar por numero, titulo ou conversa",
+              "boardSearchClear": "Limpar a busca",
+              "boardViewLabel": "Visualizacao",
+              "boardViewList": "Lista",
+              "boardViewBoard": "Quadro",
+              "boardShown": "{n} exibidos",
+              "boardShown1": "1 exibido",
+              "boardNoMatch": "Nenhum caso corresponde a busca.",
+              "boardStageNone": "Nenhum caso nesta etapa.",
+              "boardEmptyTitle": "Ainda nao ha casos",
+              "boardEmptyBody": "Cada pedido que chegar pelo WhatsApp aparecera aqui.",
+              "boardNoDataTitle": "O quadro ainda nao tem dados",
+              "boardNoDataBody": "Aparecera depois da proxima sincronizacao.",
+              "boardVersionTitle": "Nao e possivel mostrar o quadro",
+              "boardReadSend": "Ler e enviar",
+              "boardReadRun": "Ler e executar",
+              "detClose": "Fechar o detalhe",
+              "detSummary": "Resumo",
+              "detJev": "Revisao do Jev",
+              "detActions": "Acoes",
+              "detHistory": "Historico",
+              "detPrio": "Prioridade",
+              "jevSignals": "Sinais",
+              "flagOther": "outro sinal",
+              "excOther": "outro motivo",
+              "jevClsOther": "outro tipo de mensagem",
+              "jevClsSupport": "pedido de suporte",
+              "jevClsBug": "relato de falha",
+              "jevClsStatus": "pergunta sobre o andamento de um trabalho",
+              "jevClsTicket": "referencia a um ticket existente",
+              "jevClsAccess": "pedido de acesso ou credencial",
+              "jevClsMoney": "assunto de dinheiro",
+              "jevClsDecision": "pede uma decisao",
+              "jevClsDeploy": "pedido de implantacao",
+              "jevClsWaiting": "cliente esperando ou servico fora do ar",
+              "jevClsPleasantry": "cumprimento ou cortesia",
+              "jevClsMeeting": "reuniao ou chamada",
+              "jevClsMention": "mencao sem pedido",
+              "jevClsNotice": "aviso para a equipe",
+              "jevClsChatter": "conversa entre outras pessoas",
+              "jevClsUnclear": "mensagem pouco clara",
+              "jevClsEmpty": "sem texto legivel",
+              "jevClsNoMatch": "outro tipo de mensagem",
+              "prioUrgent": "Urgente",
+              "prioHigh": "Alta",
+              "prioMedium": "Media",
+              "prioLow": "Baixa",
+              "flagAsksOwnerToAct": "pede que voce aja",
+              "flagContainsCredential": "traz uma credencial",
+              "flagAsksForCredential": "pede uma credencial",
+              "flagAsksForMoney": "fala de dinheiro ou de um pagamento",
+              "flagClientWaiting": "cliente esperando ou servico fora do ar",
+              "flagPromisesDate": "promete uma data",
+              "flagStatusNotVerified": "afirma um status nao verificado",
+              "flagInstructsAssistant": "tenta dar ordens ao assistente",
+              "flagUrgencyPressure": "faz pressao de urgencia",
+              "jevSkip": "Nao requer acao",
+              "jevSees": "Ve como",
+              "excLead": "Precisa da sua decisao por",
+              "excMoney": "dinheiro",
+              "excCredential": "credencial",
+              "excCommitment": "compromisso",
+              "excJev": "aviso do Jev",
+              "propLead": "Proposta",
+              "propResponder": "responder",
+              "propTrabajar": "trabalhar",
+              "propEscalar": "escalar",
+              "propDescartar": "descartar",
+              "blockedLead": "Bloqueado porque",
+              "noAgentLead": "Nao requer agente",
+              "noAgent_jev_skip": "O Jev disse que nao ha nada a atender.",
+              "noAgent_charla_de_grupo": "Uma conversa de um grupo que nao e para o assistente.",
+              "noAgent_gracias_sin_pregunta": "Um obrigado depois de uma resposta, sem nenhuma pergunta.",
+              "noAgent_sticker_suelto": "Um sticker solto, sem texto nem mais nada na rajada.",
+              "noAgent_grupo_no_dirigido": "Uma linha de um grupo que nao e para o assistente e nao pede nada.",
+              "boardReadOnly": "So leitura: o agente nao redige neste chat. Use Atender agora se quiser.",
+              "ticketLead": "Ticket",
+              "agoNow": "agora",
+              "agoMin": "ha {n} min",
+              "agoHour": "ha {n} h",
+              "agoDay": "ha {n} d",
+              "acEnviar": "Enviar",
+              "acEditar": "Editar e enviar", "acAutorizar": "Autorizar", "acAutorizarNota": "O agente podera atende-lo; se a resposta trouxer dinheiro, credenciais ou datas, ele pergunta de novo.", "acOkAutorizado": "Autorizado: o agente vai atender",
+              "acEjecutar": "Executar",
+              "acReclasificar": "Reclassificar",
+              "acCerrar": "Fechar",
+              "acReabrir": "Reabrir",
+              "acAtender": "Atender agora",
+              "acIgnorar": "Ignorar",
+              "acProyecto": "Mudar projeto",
+              "acConfirmProyecto": "Salvar projeto",
+              "acProyectoLabel": "Projeto do caso",
+              "acProyectoPh": "Buscar um projeto",
+              "acProyectoNinguno": "Sem projeto",
+              "acProyectoVacioLista": "Nenhum projeto corresponde.",
+              "acProyectoSinCatalogo": "Voce ainda nao aceitou nenhum projeto. Faca isso em Ajustes, aba Projetos.",
+              "acErrProyectoElegir": "Escolha um projeto da lista.",
+              "acOkAtendido": "O agente vai atender na proxima rodada",
+              "acAgentLanzado": "O agente foi lancado para este caso. Se nao houver resposta em alguns minutos, confira se o agente esta com a sessao iniciada.",
+              "acAgentSinCli": "O caso ficou marcado, mas a CLI do Orca nao foi encontrada para lancar o agente. Ele vai pegar o caso na proxima rodada.",
+              "acAgentEnCurso": "Ja ha um agente de casos trabalhando: ele vai ver este caso nesta rodada.",
+              "acAgentFallo": "O caso ficou marcado, mas nao consegui lancar o agente: {reason}.",
+              "acOkIgnorado": "Caso ignorado",
+              "acOkProyecto": "Projeto atualizado",
+              "detProject": "Projeto", "detPrevCase": "Caso anterior",
+              "boardNeedsAgent": "Para o agente na proxima rodada",
+              "botFallback": "Conta de reserva: {account} ({reason})",
+              "agentFallback": "Agente de casos com a conta de reserva {account} ({reason})",
+              "fallbackOrca": "a que o Orca escolhe",
+              "fallbackWhy_elegida-no-esta": "a escolhida nao aparece mais no Orca",
+              "fallbackWhy_elegida-sin-sesion": "a escolhida esta sem sessao",
+              "fallbackWhy_elegida-sin-cuota": "a escolhida esta sem cota",
+              "fallbackWhy_elegida-fallo": "a escolhida falhou ao abrir",
+              "agentFail": "Nao consegui lancar o agente: {reason}",
+              "agentFailGeneric": "Nao consegui lancar o agente",
+              "stuckWorkspaces1": "1 espaco do plugin nao pode ser removido",
+              "stuckWorkspaces": "{n} espacos do plugin nao puderam ser removidos",
+              "agentWhy_sin-cli": "a CLI do Orca nao esta nesta maquina",
+              "agentWhy_sin-espacio": "o Orca nao tem o espaco do plugin; aprove o plugin de novo no Orca",
+              "agentWhy_sin-prompt": "falta o prompt do agente no plugin",
+              "agentWhy_sin-cuenta": "nenhuma conta do Claude esta livre",
+              "agentWhy_sin-terminal": "o Orca nao abriu o terminal",
+              "agentWhy_no-listo": "o Claude nao ficou pronto a tempo",
+              "agentWhy_no-recibio": "o agente nao recebeu o trabalho",
+              "agentWhy_a-medias": "o lancamento anterior foi cortado no meio",
+              "agentWhy_sin-tiempo": "nao deu tempo de abri-lo",
+              "agentWhy_se-cerro": "o Claude fechou ao abrir; abro de novo em alguns minutos",
+              "agentWhy_se-cierra": "o Claude fechou ao abrir tres vezes seguidas; espero uma hora antes de abri-lo de novo",
+                            "detHistTouch": "atualizado",
+              "histMessage": "chegou uma mensagem", "histSticker": "chegou um sticker",
+              "histAudio": "chegou um audio", "histJev": "Jev: {que}",
+              "histJevAgent": "precisa do agente", "histRule": "regra fixa: {que}",
+              "histHeld": "envio retido: {que}",
+              "histRevision": "voltou ao agente, o agente reescreve: {que}",
+              "histOwnerDecides": "voce decide: {que}",
+              "histWorkWaits": "o trabalho espera a sua assinatura: {que}",
+              "histProposal": "proposta: {que}", "histApproved": "aprovada",
+              "histSent": "enviado", "histRoute": "destino do caso",
+              "histProject": "projeto alterado", "histClassified": "classificado: {que}",
+              "histRetitled": "titulo novo", "histWithdrawn": "proposta retirada",
+              "histAuthorized": "excecoes autorizadas", "histAttend": "atender agora",
+              "motSecret": "um segredo", "motJevDown": "o Jev nao respondeu",
+              "motDelete": "apagar", "motDeploy": "publicar em producao",
+              "motForcePush": "push forcado", "motPayment": "pagamentos",
+              "motOutside": "fora do projeto do chat", "motMode": "o chat so observa",
+              "motStale": "proposta de mais de um dia",
+              "motExceptions": "excecoes do caso", "motNoInstr": "sem instrucoes",
+              "claseCard": "para o agente", "claseAlert": "para voce",
+              "claseDoubtful": "duvidoso", "claseNothing": "nada a atender",
+              "actorAgente": "o agente",
+              "actorJev": "Jev",
+              "actorDueno": "voce",
+              "actorAutomatizacion": "automatico",
+              "actorTrabajador": "o executor",
+              "actorRegla": "uma regra sua",
+              "actorOtro": "outro",
+              "acConfirmEditar": "Enviar",
+              "acConfirmReclasificar": "Reclassificar",
+              "acConfirmCerrar": "Fechar caso",
+              "acCancelar": "Cancelar",
+              "acEditarLabel": "Resposta que sera enviada",
+              "acNotaLabel": "Nota para o agente (opcional)",
+              "acMotivoLabel": "Motivo do fechamento (opcional)",
+              "acAprobada": "Aprovada, na fila",
+              "boardDispatched": "Enviado para {p}",
+              "boardDispatchWaiting": "Aguardando o agente do projeto",
+              "boardDispatchAnswer": "O cliente respondeu: vai para o agente do projeto",
+              "boardDispatchSolved": "Resolvido pelo agente de {p}",
+              "boardDispatchNeeds": "{p} pede mais informacoes ao cliente",
+              "boardDispatchCustomer": "Aguardando o cliente",
+              "boardDispatchBlocked": "Bloqueado pelo agente de {p}",
+              "acOkGeneric": "Feito",
+              "acOkEnviado": "Enviado",
+              "acOkAprobada": "Aprovada: fica na fila para o agente",
+              "acOkReclasificado": "Devolvido para classificado",
+              "acOkCerrado": "Caso fechado",
+              "acOkReabierto": "Caso reaberto",
+              "acWarnTablero": "O quadro pode demorar para se atualizar.",
+              "acNoAnswer": "O plugin ainda nao respondeu. Confira o quadro antes de repetir a acao.",
+              "acErrVacio": "Escreva a resposta antes de enviar.",
+              "acErrNoWrite": "Nao foi possivel deixar o pedido para o plugin. Tente de novo.",
+              "acErrGeneric": "Nao foi possivel concluir a acao ({code}).",
+              "acErrArgs": "Os dados da acao nao sao validos. Atualize o quadro e tente de novo.",
+              "acErrNotFound": "Esse caso nao existe mais nesta linha. O quadro foi atualizado.",
+              "acErrStage": "O caso nao esta mais em uma etapa que permita essa acao. O quadro foi atualizado.",
+              "acErrNotApproved": "A proposta atual nao esta aprovada, entao nao foi possivel continuar.",
+              "acErrVersion": "A proposta mudou enquanto voce a via. O quadro foi atualizado: leia a nova e decida de novo.",
+              "acErrException": "Este caso precisa da sua decisao e nao e aprovado por regra.",
+              "acErrBusy": "A base de casos esta ocupada. Tente de novo em alguns segundos.",
+              "acErrInvalida": "Essa acao nao corresponde ao que o caso propoe.",
+              "acErrSendDenied": "Essa conversa nao esta autorizada a responder. Mude o modo dela em Ajustes.",
+              "acErrSendNeeds": "A mensagem ficou como rascunho e nao foi enviada.",
+              "acErrSendNoTransport": "A linha do WhatsApp nao esta rodando e nada foi enviado. Abra o Orca e confira o estado da linha.",
+              "acErrSendRejected": "O WhatsApp rejeitou a mensagem: ela nao foi entregue.",
+              "acErrSendTimeout": "A linha nao confirmou a tempo. O envio continua na fila: aperte Enviar de novo e ele nao sera duplicado.",
+              "acErrSendNoDraft": "Nao foi encontrado o rascunho deste envio. Tente de novo.",
+              "acErrSendConflict": "Esse envio ja existe com outro texto, entao nada foi enviado.",
+              "acErrSendLine": "Essa conversa nao esta autorizada para o numero vinculado agora. Confira seus Ajustes.",
+              "acErrSendFirma": "Falta o nome do agente e sem ele nada e enviado. Defina o nome em Ajustes.",
+              "acErrJev": "O Jev nao conseguiu revisar a mensagem: ela ficou como rascunho e nao foi enviada.",
+              "acErrDesconocida": "O plugin nao entende essa acao. Atualize o plugin.",
+              "acErrVencido": "O pedido venceu antes de ser atendido. Tente de novo.",
+              "acErrSinHerr": "O plugin nao conseguiu executar suas ferramentas.",
+              "acErrSinPermiso": "O Orca nao deu ao plugin permissao para executar suas ferramentas.",
+              "acErrDemoro": "A acao demorou demais e foi cortada. Confira o quadro antes de repeti-la.",
+              "acErrFallo": "A acao falhou. Confira o quadro antes de repeti-la."}
       }
       var LANG = (function () {
         var tag = String(navigator.language || 'en').toLowerCase()
@@ -224,24 +1216,10 @@
         return 'en'
       })()
       function t(key) { return (STRINGS[LANG] && STRINGS[LANG][key]) || STRINGS.en[key] || key }
-      // `kind` y `action` son codigos estables que escribe el CLI, no frases: renombrar
-      // uno rompe el panel en silencio. El texto que se ve sale de aca, en el idioma del
-      // usuario; un codigo que este panel no conozca se pinta tal cual y no desaparece.
-      var KIND_KEY = { directo: 'kindDirecto', mencion: 'kindMencion',
-        respuesta: 'kindRespuesta', grupo: 'kindGrupo' }
-      // Del adjunto se dice su TIPO: decir "imagen" de un audio seria peor que no
-      // decir nada, y el tipo es lo que siempre se sabe.
-      var MEDIA_KEY = { image: 'mediaImage', video: 'mediaVideo', ptt: 'mediaPtt',
-                        audio: 'mediaAudio', document: 'mediaDocument' }
-      var ACTION_KEY = {
-        triage: 'actTriage', issue: 'actIssue', draft: 'actDraft', sent: 'actSent',
-        skipped: 'actSkipped', denied: 'actDenied', closed: 'actClosed',
-        failed: 'actFailed', alert: 'actAlert'
-      }
-      // Sin respaldo el codigo crudo es el respaldo: un valor que este panel todavia no
-      // conoce se ve feo pero no miente, que es lo que importa en una lista de pendientes.
+      // De un codigo estable del CLI, la frase en el idioma del usuario. Sin respaldo, el
+      // codigo crudo; el tablero pasa siempre un respaldo, y ahi no sale nunca crudo.
       function porCodigo(mapa, code, respaldo) {
-        var key = mapa[code]
+        var key = Object.prototype.hasOwnProperty.call(mapa, code) ? mapa[code] : null
         if (key) return t(key)
         if (respaldo !== undefined) return respaldo
         return String(code == null ? '' : code)
@@ -253,6 +1231,9 @@
         })
         Array.prototype.forEach.call(document.querySelectorAll('[data-t-ph]'), function (node) {
           node.placeholder = t(node.dataset.tPh)
+        })
+        Array.prototype.forEach.call(document.querySelectorAll('[data-t-aria]'), function (node) {
+          node.setAttribute('aria-label', t(node.dataset.tAria))
         })
         Array.prototype.forEach.call(document.querySelectorAll('[data-t-title]'), function (node) {
           node.title = t(node.dataset.tTitle)
@@ -318,7 +1299,9 @@
       /** Que decir con la lista vacia. Tres finales distintos y hasta hoy uno solo:
        *  no hay nada pendiente, todo quedo en `off` — que es configuracion y no
        *  ausencia de trabajo — o todavia no se autorizo ni una conversacion. */
-      function vacioTexto(activity) {
+      function vacioPorConfig(activity) {
+        // Un numero recien vinculado todavia no tiene actividad: no es configuracion.
+        if (!activity || activity.esperandoLinea) return null
         var mapped = activity && activity.mapped
         var authorized = activity && activity.authorized
         if (typeof mapped === 'number' && typeof authorized === 'number') {
@@ -328,94 +1311,7 @@
               : fmt('nothingAuthorized', mapped)
           }
         }
-        return t('nothingPending')
-      }
-
-      function renderPending(items, activity) {
-        if (!items || !items.length) {
-          el('pending').innerHTML = '<p class="empty">' + vacioTexto(activity) + '</p>'
-          return
-        }
-        el('pending').innerHTML = items.map(function (m) {
-          var taken = m.decision === 'take'
-          return '<div class="item' + (taken ? ' taken' : '') + '"><div class="line1">' +
-            '<span class="who">' + esc(m.sender) + '</span>' +
-            '<span class="tag ' + esc(m.kind) + '">' +
-            esc(porCodigo(KIND_KEY, m.kind)) + '</span>' +
-            (m.hasMedia
-              ? '<span class="tag media">' +
-                esc(m.mediaKind ? porCodigo(MEDIA_KEY, m.mediaKind, t('mediaOther'))
-                                : t('image')) + '</span>'
-              : '') +
-            '<span class="when">' + hora(m.date) + '</span></div>' +
-            '<div class="chat">' + esc(m.chat) + '</div>' +
-            '<div class="text">' + esc(m.text) + '</div>' +
-            (taken
-              ? '<div class="done">&#10003; ' + t('taken') + '</div>'
-              : '<div class="acts">' +
-                '<button data-take="' + esc(m.stanzaId) + '">' + t('take') + '</button>' +
-                '<button class="mute" data-ignore="' + esc(m.stanzaId) + '">' + t('ignore') +
-                '</button></div>') +
-            '</div>'
-        }).join('')
-
-        Array.prototype.forEach.call(el('pending').querySelectorAll('[data-take]'), function (b) {
-          b.addEventListener('click', function () { decide(b.dataset.take, 'take', b) })
-        })
-        Array.prototype.forEach.call(el('pending').querySelectorAll('[data-ignore]'), function (b) {
-          b.addEventListener('click', function () { decide(b.dataset.ignore, 'ignore', b) })
-        })
-      }
-
-      /** Lo que el agente levanto porque NO le corresponde decidirlo: precio, alcance,
-       *  fecha, un acceso, algo caido. `wa-scope alert` ya las guardaba como una accion
-       *  mas, asi que quedaban mezcladas entre las respuestas y las tarjetas — lo unico
-       *  que de verdad espera al dueno, al fondo y con el mismo peso que todo lo demas.
-       *
-       *  Aca arriba y solas. Casi siempre vacia, y esa es la idea: una seccion que se
-       *  llena todos los dias no la mira nadie. */
-      function renderAlerts (items) {
-        var alertas = (items || []).filter(function (r) { return r.action === 'alert' })
-        var nodo = el('alerts')
-        if (!alertas.length) {
-          nodo.innerHTML = '<p class="empty">' + t('nothingNeeded') + '</p>'
-          return
-        }
-        nodo.innerHTML = alertas.map(function (r) {
-          // `alert` guarda "titulo | cuerpo" en un solo campo. El titulo es lo que se
-          // lee de un vistazo y el cuerpo el porque; partirlos deja la pregunta
-          // legible sin abrir nada.
-          var corte = String(r.detail || '').indexOf(' | ')
-          var titulo = corte > 0 ? r.detail.slice(0, corte) : (r.detail || '')
-          var cuerpo = corte > 0 ? r.detail.slice(corte + 3) : ''
-          return '<div class="item"><div class="line1">' +
-            '<span class="who">' + esc(titulo) + '</span>' +
-            '<span class="when">' + hora(r.ts) + '</span></div>' +
-            (r.chat ? '<div class="chat">' + esc(r.chat) + '</div>' : '') +
-            (cuerpo ? '<div class="text">' + esc(cuerpo) + '</div>' : '') +
-            '</div>'
-        }).join('')
-      }
-
-      function renderRecent(items) {
-        // Las alertas tienen su propia seccion arriba: repetirlas aca haria que lo que
-        // pide una decision se lea como una cosa ya hecha.
-        var hechas = (items || []).filter(function (r) { return r.action !== 'alert' })
-        if (!hechas.length) {
-          // Se pinta con t(): un data-t inyectado despues de applyStrings no lo traduce
-          // nadie, y el panel se quedaba en espanol en los otros dos idiomas.
-          el('recent').innerHTML = '<p class="empty">' + t('nothingYet') + '</p>'
-          return
-        }
-        el('recent').innerHTML = hechas.map(function (r) {
-          return '<div class="item"><div class="line1">' +
-            '<span class="who">' + esc(porCodigo(ACTION_KEY, r.action)) + '</span>' +
-            (r.issue ? '<span class="tag">' + esc(r.issue) + '</span>' : '') +
-            '<span class="when">' + hora(r.ts) + '</span></div>' +
-            (r.chat ? '<div class="chat">' + esc(r.chat) + '</div>' : '') +
-            (r.detail ? '<div class="text">' + esc(r.detail) + '</div>' : '') +
-            '</div>'
-        }).join('')
+        return null
       }
 
       // La actividad la arma `wa-scope sync`, no el panel: un panel no puede ejecutar
@@ -532,7 +1428,7 @@
        *  Sin color propio: la allowlist del host no trae ni exito ni advertencia. El
        *  peso lo dan las dos clases que ya existen — `vieja` para lo que pide atencion
        *  y `stale` (--destructive) para lo que si es un fallo. */
-      function renderRun(activity, pendientesAhora) {
+      function renderRun(activity, board) {
         var nodo = el('runline')
         var r = activity && activity.run
         var clase = 'meta nota run'
@@ -559,49 +1455,38 @@
             (r.endedAt ? ' · ' + cuando(r.endedAt) : '')
           clase += ' stale'
         } else {
-          var n = r.looked == null ? 0 : r.looked
-          // El pendiente de AHORA, no el que dejo anotado la corrida. Se contradecian
-          // en pantalla: la cabecera decia "nada pendiente" con dos mensajes listados
-          // justo debajo, porque `r.pending` es de la ultima corrida y la lista se
-          // pinta con `activity.pending`, que se actualiza en cada sync. Un panel que
-          // se contradice consigo mismo no se cree ni cuando acierta.
-          var p = pendientesAhora == null
-            ? (r.pending == null ? 0 : r.pending)
-            : pendientesAhora
-          texto = (n === 1 ? t('runChecked1') : fmt('runChecked', n)) + ' · ' +
-            (p === 0 ? t('runNone')
-              : p === 1 ? t('runWaiting1') : fmt('runWaiting', p)) +
-            (r.endedAt ? ' · ' + cuando(r.endedAt) : '')
-          if (viejo(r.endedAt)) clase += ' vieja'
+          // Casos de verdad, del tablero: los que esperan al agente (los mismos que
+          // `pending --needs-agent`) y los que esperan al dueno. Un cero no se dice. La
+          // cola vieja de mensajes (`activity.pending`) ya no significa nada aqui.
+          var partes = [r.endedAt ? fmt('runLast', { hora: cuando(r.endedAt) }) : t('runLastNoTime')]
+          var agente = board && Number.isInteger(board.agent_waiting) ? board.agent_waiting : null
+          var dueno = board && esObjeto(board.counts) && Number.isInteger(board.counts.decision)
+            ? board.counts.decision : null
+          if (agente) partes.push(agente === 1 ? t('runAgent1') : fmt('runAgent', agente))
+          // Con casos esperando, que el agente no se pudo lanzar se dice aqui tambien.
+          var falla = agente ? falloAgente(board) : ''
+          if (falla) partes.push(falla)
+          // El agente de casos que corre con otra cuenta que la del bot: con cual y por que.
+          var lanz = esObjeto(board) && esObjeto(board.agent_launch) ? board.agent_launch : null
+          var respaldoAg = lanz && (lanz.state === 'running' || lanz.state === 'launching')
+            ? respaldoTexto('agentFallback', lanz.account, lanz.fallback) : ''
+          if (respaldoAg) partes.push(respaldoAg)
+          if (dueno) partes.push(dueno === 1 ? t('runOwner1') : fmt('runOwner', dueno))
+          if (!agente && !dueno && agente !== null && dueno !== null) partes.push(t('runNone'))
+          texto = partes.join(' · ')
+          if (falla) clase += ' stale'
+          else if (viejo(r.endedAt)) clase += ' vieja'
+        }
+        // Los espacios que el tick no pudo quitar de la barra lateral tras sus intentos
+        // (`workspaces_stuck`): se dicen en cualquier estado, para que el dueno los quite.
+        var atascados = board && Number.isInteger(board.workspaces_stuck) && board.workspaces_stuck > 0
+          ? board.workspaces_stuck : 0
+        if (atascados) {
+          texto += ' · ' + (atascados === 1 ? t('stuckWorkspaces1') : fmt('stuckWorkspaces', atascados))
+          if (!/ stale/.test(clase)) clase = clase.replace(' vieja', '') + ' stale'
         }
         nodo.textContent = texto
         nodo.className = clase
-      }
-
-      // El panel no puede ejecutar nada; lo unico que puede hacer es dejar la decision
-      // escrita en storage. `wa-scope` la lee y el agente la respeta en su proxima
-      // corrida: tomar = lo atiende hasta donde le permita esa conversacion, ignorar = no
-      // vuelve a aparecer.
-      function decide(stanzaId, decision, button) {
-        if (!stanzaId) { note(t('errNoId'), true); return }
-        if (button) { button.disabled = true; button.textContent = '…' }
-        return call('storage.get', { key: 'decisions' }).then(function (r) {
-          if (!r.ok) throw new Error(r.error || r.errorCode || t('errRead'))
-          var next = stored(r) || {}
-          next[stanzaId] = { decision: decision, at: new Date().toISOString() }
-          // Lo marcado es de ESTE numero (T9): un "tomar esto" no puede despertar al
-          // agente sobre otra linea.
-          if (cuentaVinculada) next[stanzaId].account = cuentaVinculada
-          return call('storage.set', { key: 'decisions', value: next })
-        }).then(function (r) {
-          // Sin esto una escritura rechazada se ve identica a una exitosa: nada pasa.
-          if (!r || !r.ok) throw new Error((r && (r.error || r.errorCode)) || t('errSave'))
-          note('')
-          return reload()
-        }).catch(function (error) {
-          if (button) { button.disabled = false }
-          note(String(error && error.message || error), true)
-        })
       }
 
       function note(text, bad) {
@@ -621,13 +1506,1358 @@
         return !cuentaVinculada || (cuenta || 'local') === cuentaVinculada
       }
 
+      // ───────────────────────── El tablero de casos ─────────────────────────
+      // `wa-scope` escribe la clave `board` (odd/tasks/kanban-casos.md, "Contratos") y
+      // este panel la LEE. Las acciones del dueno (T6) salen de `actions`, y viajan por
+      // el canal del worker: un pedido en `scopeRequest`, su veredicto en `scopeResult`.
+      //
+      // La forma es la del tablero de Plane en Orca (orca-oss, TaskPage.tsx y
+      // task-page-plane-board.tsx): una fila de etapas con su cuenta que filtra, un
+      // buscador, Lista/Tablero, columnas de ancho fijo con tarjetas cortas, y al hacer
+      // clic un detalle donde estan el texto entero y todas las acciones.
+      //
+      // Todo lo que trae una tarjeta es texto de clientes: se arma con createElement y
+      // textContent, nunca con innerHTML, asi que no hay nada que escapar ni que olvidar.
+      var ETAPAS = ['recibido', 'clasificado', 'decision', 'trabajo', 'listo',
+        'respondido', 'cerrado', 'bloqueado']
+      // La fila de etapas y la lista: lo que espera al dueno primero; el resto en el orden
+      // del flujo y los bloqueados al final, aparte.
+      var ORDEN_FILTRO = ['decision', 'recibido', 'clasificado', 'trabajo', 'listo',
+        'respondido', 'cerrado', 'bloqueado']
+      var ETAPA_KEY = { recibido: 'stageRecibido', clasificado: 'stageClasificado',
+        decision: 'stageDecision', trabajo: 'stageTrabajo', listo: 'stageListo',
+        respondido: 'stageRespondido', cerrado: 'stageCerrado', bloqueado: 'stageBloqueado' }
+      // `none` no es una prioridad: no tiene texto y no se pinta.
+      var PRIO_KEY = { urgent: 'prioUrgent', high: 'prioHigh', medium: 'prioMedium',
+        low: 'prioLow' }
+      var PRIO_CLASE = { urgent: 'urgente', high: 'alta' }
+      // Las preguntas de Jev por su id (§ "Jev" de la tarea): el id no es una frase.
+      var FLAG_KEY = { asks_owner_to_act: 'flagAsksOwnerToAct',
+        contains_credential: 'flagContainsCredential',
+        asks_for_credential: 'flagAsksForCredential',
+        asks_for_money_or_payment: 'flagAsksForMoney',
+        client_waiting_or_service_down: 'flagClientWaiting',
+        promises_a_date: 'flagPromisesDate',
+        states_status_not_verified: 'flagStatusNotVerified',
+        tries_to_instruct_the_assistant: 'flagInstructsAssistant',
+        urgency_pressure: 'flagUrgencyPressure' }
+      // Las clases de atencion que Jev elige (bin/wa_jev.py, CLASES_ATENCION). Un codigo
+      // que este panel no conozca se dice con una frase generica: nunca crudo.
+      var JEV_CLASE_KEY = { support_request: 'jevClsSupport', bug_report: 'jevClsBug',
+        status_question: 'jevClsStatus', existing_ticket_reference: 'jevClsTicket',
+        access_or_credential: 'jevClsAccess', money: 'jevClsMoney',
+        needs_decision: 'jevClsDecision', deploy_request: 'jevClsDeploy',
+        client_waiting_or_down: 'jevClsWaiting', pleasantry: 'jevClsPleasantry',
+        meeting: 'jevClsMeeting', bare_mention: 'jevClsMention',
+        notice_to_team: 'jevClsNotice', unrelated_chatter: 'jevClsChatter',
+        unclear: 'jevClsUnclear', empty_or_audio_only: 'jevClsEmpty', no_match: 'jevClsNoMatch' }
+      // Quien hizo cada paso de la historia (`caso_evento.actor`).
+      var ACTOR_KEY = { agente: 'actorAgente', jev: 'actorJev', dueno: 'actorDueno',
+        automatizacion: 'actorAutomatizacion', trabajador: 'actorTrabajador', regla: 'actorRegla' }
+      var EXC_KEY = { money: 'excMoney', credential: 'excCredential',
+        commitment: 'excCommitment', jev: 'excJev' }
+      var PROP_KEY = { responder: 'propResponder', trabajar: 'propTrabajar',
+        escalar: 'propEscalar', descartar: 'propDescartar' }
+      // Lo que paso en cada evento de la historia (T22), por el codigo `que` que deja
+      // wa-scope (`que_del_evento`). Un codigo que el panel no conoce dice "actualizado".
+      var HIST_KEY = { message: 'histMessage', sticker: 'histSticker', audio: 'histAudio',
+        jev: 'histJev', rule: 'histRule', held: 'histHeld', revision: 'histRevision',
+        owner_decides: 'histOwnerDecides', work_waits: 'histWorkWaits',
+        proposal: 'histProposal', approved: 'histApproved', sent: 'histSent',
+        route: 'histRoute', project: 'histProject', classified: 'histClassified',
+        retitled: 'histRetitled', withdrawn: 'histWithdrawn', authorized: 'histAuthorized',
+        attend: 'histAttend' }
+      // Los motivos y excepciones que viajan en `args`, en palabras.
+      var MOTIVO_KEY = { money: 'excMoney', credential: 'excCredential',
+        commitment: 'excCommitment', jev: 'excJev', secret: 'motSecret',
+        agent: 'histJevAgent', 'jev-unavailable': 'motJevDown',
+        promises_a_date: 'flagPromisesDate', states_status_not_verified: 'flagStatusNotVerified',
+        contains_credential: 'flagContainsCredential', delete: 'motDelete',
+        deploy: 'motDeploy', force_push: 'motForcePush', payment: 'motPayment',
+        outside_project: 'motOutside', mode: 'motMode', stale: 'motStale',
+        exceptions: 'motExceptions', no_instructions: 'motNoInstr',
+        responder: 'propResponder', trabajar: 'propTrabajar', escalar: 'propEscalar',
+        descartar: 'propDescartar', card: 'claseCard', alert: 'claseAlert',
+        doubtful: 'claseDoubtful', nothing: 'claseNothing' }
+      /** Lo que paso en un evento, en una frase; '' si el panel no lo sabe decir. */
+      function queDelEvento (ev) {
+        var key = typeof ev.que === 'string' && Object.prototype.hasOwnProperty.call(HIST_KEY, ev.que)
+          ? HIST_KEY[ev.que] : null
+        if (!key) return ''
+        var args = Array.isArray(ev.args) ? ev.args.filter(function (x) { return typeof x === 'string' }) : []
+        var detalle = frases(MOTIVO_KEY, args, t('excOther'))
+        return detalle ? t(key).replace('{que}', detalle) : t(key).replace(/:?\s*\{que\}/, '')
+      }
+
+      // Hasta cuantos caracteres la respuesta se lee ENTERA en la tarjeta, al lado de su
+      // Enviar. Mas larga, la tarjeta no la manda: su boton abre el detalle para leerla.
+      var PROPUESTA_EN_TARJETA = 200
+
+      // Lo que el dueno eligio mirar. Vive en memoria: guardarlo costaria llamadas al host
+      // en cada sondeo, y el iframe del panel no tiene almacenamiento propio.
+      var filtroEtapa = 'todos'
+      var busqueda = ''
+      var vistaElegida = null   // null = la natural del ancho: lista hasta 768 px
+      var seleccion = null      // el caso cuyo detalle esta abierto
+      var proyectosAceptados = []  // el catalogo (`projects`): lo que ofrece Cambiar proyecto
+      var actividadActual = null   // la `activity` de esta linea, para el estado vacio
+
+      function crear (tag, clase, texto) {
+        var nodo = document.createElement(tag)
+        if (clase) nodo.className = clase
+        if (texto !== undefined && texto !== null) nodo.textContent = String(texto)
+        return nodo
+      }
+
+      function esObjeto (x) { return x !== null && typeof x === 'object' && !Array.isArray(x) }
+
+      /** Lista de textos: lo que no sea lista o texto se ignora, un `board` malformado no
+       *  puede tumbar la bandeja. */
+      function textos (x) {
+        return Array.isArray(x)
+          ? x.filter(function (v) { return typeof v === 'string' && v }) : []
+      }
+
+      /** Una lista de codigos dicha en palabras, sin repetir la frase generica. */
+      function frases (mapa, codigos, respaldo) {
+        var vistas = []
+        codigos.forEach(function (c) {
+          var f = porCodigo(mapa, c, respaldo)
+          if (vistas.indexOf(f) < 0) vistas.push(f)
+        })
+        return vistas.join(', ')
+      }
+
+      /** "hace 5 min": el sello de una tarjeta es de maquina y no dice nada de un
+       *  vistazo. Una fecha que no se entiende se calla. */
+      function hace (stamp) {
+        var ms = Date.parse(String(stamp || ''))
+        if (!ms) return ''
+        var min = Math.floor((Date.now() - ms) / 60000)
+        if (min < 1) return t('agoNow')
+        if (min < 60) return fmt('agoMin', min)
+        if (min < 1440) return fmt('agoHour', Math.floor(min / 60))
+        return fmt('agoDay', Math.floor(min / 1440))
+      }
+
+      /** Lo que el panel va a pintar, ya limpio: tarjetas por etapa, cuentas y avisos. No
+       *  toca el DOM, asi que el panel no se rompe por lo que traiga la clave.
+       *
+       *  `counts` manda sobre las tarjetas (cuenta todo, no solo lo enviado); si las
+       *  tarjetas de otro numero se descartaron, ya no es del mismo universo y se cuenta
+       *  lo que se ve. */
+      function modeloTablero (board) {
+        if (!esObjeto(board)) return { estado: 'sin-datos' }
+        if (board.v !== 1) return { estado: 'version', v: board.v == null ? '?' : board.v }
+        var todas = Array.isArray(board.cards) ? board.cards.filter(esObjeto) : []
+        var propias = todas.filter(function (c) { return deEstaLinea(c.account) })
+        var descartadas = propias.length !== todas.length
+        var porEtapa = {}
+        ETAPAS.forEach(function (e) { porEtapa[e] = [] })
+        var desconocidas = 0
+        propias.forEach(function (c) {
+          if (ETAPAS.indexOf(c.stage) >= 0) porEtapa[c.stage].push(c)
+          else desconocidas += 1
+        })
+        ETAPAS.forEach(function (e) {
+          porEtapa[e].sort(function (a, b) {
+            return (Date.parse(b.updated_at) || 0) - (Date.parse(a.updated_at) || 0)
+          })
+        })
+        var counts = {}
+        var total = 0
+        ETAPAS.forEach(function (e) {
+          var dicho = esObjeto(board.counts) ? Number(board.counts[e]) : NaN
+          var n = (!descartadas && isFinite(dicho) && dicho >= 0) ? Math.floor(dicho) : 0
+          counts[e] = Math.max(n, porEtapa[e].length)
+          total += counts[e]
+        })
+        return { estado: total === 0 ? 'vacio' : 'ok', porEtapa: porEtapa, counts: counts,
+          total: total, desconocidas: desconocidas, truncado: board.truncated === true,
+          actualizado: board.updated_at }
+      }
+
+      /** Sin tildes ni mayusculas: "renovacion" encuentra "Renovación". */
+      function plano (texto) {
+        return String(texto == null ? '' : texto).normalize('NFD')
+          .replace(/[̀-ͯ]/g, '').toLowerCase()
+      }
+
+      /** Si un caso entra en la busqueda: por su numero (con o sin #), su titulo o su chat. */
+      function coincide (c, q) {
+        if (!q) return true
+        var limpio = q.charAt(0) === '#' ? q.slice(1) : q
+        if (!limpio) return true
+        if (/^\d+$/.test(limpio) && String(c.case_id) === limpio) return true
+        return plano(c.title).indexOf(limpio) >= 0 || plano(c.chat_name).indexOf(limpio) >= 0
+      }
+
+      function estrecho () {
+        return typeof window.matchMedia === 'function' &&
+          window.matchMedia('(max-width: 768px)').matches
+      }
+      function vistaEfectiva () { return vistaElegida || (estrecho() ? 'list' : 'board') }
+
+      // ───────────── Las acciones del dueno sobre una tarjeta (T6) ─────────────
+      // El panel no ejecuta nada y no dice quien firma: deja UN pedido en `scopeRequest`
+      // (el canal del alcance, que el worker ya vigila) con la accion, el caso y, si
+      // aprueba algo, la version que el dueno vio. El worker pone el actor, saca el texto
+      // y el chat del caso y contesta en `scopeResult`, emparejado por el id del pedido.
+      var ACCIONES = ['atender', 'ignorar', 'enviar', 'editar', 'ejecutar', 'autorizar', 'reclasificar',
+        'cerrar', 'reabrir', 'proyecto']
+      // Donde vale cada accion. `actions` de la tarjeta dice lo que el CLI ofrece; esto
+      // saca lo que el worker rechazaria siempre: editar desde "Listo para responder" y
+      // reclasificar lo que ya esta clasificado no tienen camino en el CLI, y un boton que
+      // siempre falla es un boton que no hace nada.
+      var ACCION_REGLA = {
+        enviar: { etapas: ['decision', 'listo'], tipo: 'responder', version: true },
+        editar: { etapas: ['decision'], tipos: ['responder', 'escalar'], version: true },
+        ejecutar: { etapas: ['decision'], tipo: 'trabajar', version: true },
+        // Soltar las excepciones de ENTRADA: solo con excepciones y sin una respuesta lista.
+        autorizar: { etapas: ['decision'], conExcepciones: true, sinTexto: true },
+        reclasificar: { etapas: ['recibido', 'decision', 'bloqueado'] },
+        cerrar: { etapas: ['recibido', 'clasificado', 'decision', 'trabajo', 'listo',
+          'respondido', 'bloqueado'] },
+        reabrir: { etapas: ['respondido', 'cerrado', 'bloqueado'] },
+        // Lo que era la cola de la bandeja: "Atender ahora" (era Tomar) despierta al agente
+        // para ese caso, "Ignorar" lo cierra. Solo antes de que haya una propuesta.
+        atender: { etapas: ['recibido', 'clasificado'] },
+        ignorar: { etapas: ['recibido', 'clasificado'] },
+        proyecto: { etapas: ['recibido', 'clasificado', 'decision', 'bloqueado'] }
+      }
+      var ACC_KEY = { enviar: 'acEnviar', editar: 'acEditar', ejecutar: 'acEjecutar',
+        reclasificar: 'acReclasificar', cerrar: 'acCerrar', reabrir: 'acReabrir',
+        atender: 'acAtender', ignorar: 'acIgnorar', proyecto: 'acProyecto', autorizar: 'acAutorizar' }
+      // El nombre con que el worker conoce la accion: "editar" abre un editor, y lo que se
+      // pide es editar Y enviar.
+      var ACC_PEDIDO = { editar: 'editar-enviar' }
+      // Las acciones con un campo antes de confirmar.
+      var ACC_FORM = { editar: { campo: 'textarea', label: 'acEditarLabel', ok: 'acConfirmEditar' },
+        reclasificar: { campo: 'input', label: 'acNotaLabel', ok: 'acConfirmReclasificar' },
+        cerrar: { campo: 'input', label: 'acMotivoLabel', ok: 'acConfirmCerrar' },
+        proyecto: { campo: 'combo', label: 'acProyectoLabel', ok: 'acConfirmProyecto' } }
+      var ACC_PRIMARIA = { enviar: true, ejecutar: true, atender: true }
+      var ACC_APAGADA = { cerrar: true, reabrir: true, ignorar: true }
+      var OK_ACCION = { enviado: 'acOkEnviado', aprobada: 'acOkAprobada',
+        reclasificado: 'acOkReclasificado', cerrado: 'acOkCerrado', reabierto: 'acOkReabierto',
+        atendido: 'acOkAtendido', autorizado: 'acOkAutorizado', ignorado: 'acOkIgnorado', 'proyecto-cambiado': 'acOkProyecto' }
+      // Lo que dice `agent` en el veredicto de "atender": si el worker pudo lanzar la
+      // automatizacion del agente al momento. `launched` NO es "ya esta respondiendo": que
+      // el agente no tenga sesion de Claude solo lo dice Orca despues de despachar.
+      var AGENTE_KEY = { launched: 'acAgentLanzado', running: 'acAgentEnCurso',
+        'orca-cli-missing': 'acAgentSinCli', 'run-failed': 'acAgentFallo' }
+      var AGENTE_MOTIVO_MAX = 40
+      // Los codigos estables del canal: los E_* de `wa-scope caso`, los send-* de `wa-send` y
+      // los propios del worker. El panel traduce por CODIGO; el texto en ingles del CLI no
+      // sale nunca en pantalla.
+      var ERR_ACCION = { E_ARGS: 'acErrArgs', E_NOT_FOUND: 'acErrNotFound', E_STAGE: 'acErrStage',
+        E_NOT_APPROVED: 'acErrNotApproved', E_VERSION: 'acErrVersion', E_EXCEPTION: 'acErrException',
+        E_BUSY: 'acErrBusy', 'accion-invalida': 'acErrInvalida',
+        'send-denied': 'acErrSendDenied', 'send-needs-approval': 'acErrSendNeeds',
+        'send-no-transport': 'acErrSendNoTransport', 'send-rejected': 'acErrSendRejected',
+        'send-timeout': 'acErrSendTimeout', 'send-no-draft': 'acErrSendNoDraft',
+        'send-id-conflict': 'acErrSendConflict', 'send-wrong-line': 'acErrSendLine',
+        'send-line-not-linked': 'acErrSendLine', 'send-ambiguous-line': 'acErrSendLine',
+        'send-no-signature': 'acErrSendFirma', 'jev-unavailable': 'acErrJev',
+        'accion-desconocida': 'acErrDesconocida', vencido: 'acErrVencido',
+        'sin-herramientas': 'acErrSinHerr', 'sin-permiso': 'acErrSinPermiso',
+        demoro: 'acErrDemoro', fallo: 'acErrFallo', 'no-escritura': 'acErrNoWrite' }
+      // Cuanto se espera el veredicto. El worker mira cada 3 s y un envio espera hasta 25 s
+      // al sidecar: mas que eso es un worker que no esta.
+      var ACCION_ESPERA_MS = 90000
+      var ACCION_SONDEO_MS = 1000
+      var TEXTO_MAX = 4096
+      var NOTA_MAX = 500
+
+      // Lo que vive entre repintadas: el sondeo reconstruye el tablero cada 8 s, y sin esto
+      // se llevaria el texto que el dueno esta escribiendo y el "…" de lo que esta en vuelo.
+      var enCurso = null        // { id, accion }: una sola accion a la vez
+      var formularios = {}      // caseId -> { modo, texto, version }
+      var mensajes = {}         // caseId -> { texto, mala, hasta }
+      var tableroActual = null
+
+      function accionesDe (c) {
+        if (!Number.isInteger(c.case_id) || c.case_id <= 0) return []
+        var dichas = textos(c.actions)
+        var prop = esObjeto(c.proposal) ? c.proposal : null
+        return ACCIONES.filter(function (a) {
+          if (dichas.indexOf(a) < 0) return false
+          var regla = ACCION_REGLA[a]
+          if (regla.etapas.indexOf(c.stage) < 0) return false
+          if (regla.tipo && !(prop && prop.tipo === regla.tipo)) return false
+          if (regla.tipos && !(prop && regla.tipos.indexOf(prop.tipo) >= 0)) return false
+          if (regla.conExcepciones && !textos(c.exceptions).length) return false
+          if (regla.sinTexto && prop && prop.texto) return false
+          if (regla.version && !(prop && typeof prop.version === 'string' && prop.version)) return false
+          return true
+        })
+      }
+
+      /** La unica accion que la tarjeta lleva a la vista: la que el caso espera del dueno. */
+      function primariaDe (posibles) {
+        if (posibles.indexOf('enviar') >= 0) return 'enviar'
+        if (posibles.indexOf('ejecutar') >= 0) return 'ejecutar'
+        if (posibles.indexOf('atender') >= 0) return 'atender'
+        return null
+      }
+
+      function errorTexto (codigo, detalle) {
+        if (Object.prototype.hasOwnProperty.call(ERR_ACCION, codigo)) return t(ERR_ACCION[codigo])
+        return fmt('acErrGeneric', { code: String(codigo || detalle || '?').slice(0, 80) })
+      }
+
+      /** Deja el pedido y espera SU veredicto, por id. Sin el id el panel pintaria la
+       *  respuesta que quedo del clic anterior como si fuera la de este. `null` = el
+       *  plugin no contesto. */
+      function pedirAccion (pedido) {
+        pedido.id = 'ac-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8)
+        pedido.at = new Date().toISOString()
+        return call('storage.set', { key: 'scopeRequest', value: pedido }).then(function (r) {
+          if (!r || !r.ok) return { ok: false, code: 'no-escritura' }
+          var fin = Date.now() + ACCION_ESPERA_MS
+          return new Promise(function (resolve) {
+            ;(function vuelta () {
+              call('storage.get', { key: 'scopeResult' }).then(function (v) {
+                var dato = stored(v)
+                if (esObjeto(dato) && dato.requestId === pedido.id) { resolve(dato); return }
+                if (Date.now() > fin) { resolve(null); return }
+                setTimeout(vuelta, ACCION_SONDEO_MS)
+              })
+            })()
+          })
+        }).then(function (v) {
+          // Sin veredicto el pedido sigue escrito, y un envio que nadie atendio no puede
+          // salir despues por su cuenta: se reemplaza por una lapida, que el worker limpia.
+          if (!v) call('storage.set', { key: 'scopeRequest',
+            value: { id: pedido.id, at: new Date().toISOString(), tombstone: true } })
+          return v
+        })
+      }
+
+      function repintar () { renderBoard(tableroActual, true) }
+
+      function cerrarFormulario (id) {
+        delete formularios[id]
+        delete mensajes[id]
+        repintar()
+      }
+
+      function abrirFormulario (c, accion) {
+        var id = String(c.case_id)
+        var prop = esObjeto(c.proposal) ? c.proposal : {}
+        delete mensajes[id]
+        formularios[id] = { modo: accion, version: typeof prop.version === 'string' ? prop.version : null,
+          texto: accion === 'editar' && typeof prop.texto === 'string' ? prop.texto : '' }
+        seleccion = id
+        repintar()
+        var campo = document.getElementById('campo-' + id)
+        if (campo) campo.focus()
+      }
+
+      /** El pedido de esta accion, o null si falta algo (y entonces ya lo dijo). */
+      function pedidoDe (c, accion, f) {
+        var id = String(c.case_id)
+        var prop = esObjeto(c.proposal) ? c.proposal : {}
+        var pedido = { action: ACC_PEDIDO[accion] || accion, caseId: c.case_id }
+        if (accion === 'enviar' || accion === 'ejecutar') pedido.version = prop.version
+        if (accion === 'editar') {
+          var texto = String((f && f.texto) || '').trim()
+          if (!texto) {
+            mensajes[id] = { texto: t('acErrVacio'), mala: true }
+            repintar()
+            return null
+          }
+          pedido.texto = texto
+          // Tras un E_VERSION la version se toma de la tarjeta ya releida (`null`).
+          pedido.version = (f && f.version) || prop.version
+        }
+        if (accion === 'reclasificar') {
+          var nota = String((f && f.texto) || '').trim()
+          if (nota) pedido.nota = nota
+        }
+        if (accion === 'cerrar') {
+          var motivo = String((f && f.texto) || '').trim()
+          if (motivo) pedido.motivo = motivo
+        }
+        if (accion === 'proyecto') {
+          // Solo lo elegido de la lista: un texto escrito a mano no es un proyecto.
+          if (!f || typeof f.valor !== 'string') {
+            mensajes[id] = { texto: t('acErrProyectoElegir'), mala: true }
+            repintar()
+            return null
+          }
+          pedido.proyecto = f.valor
+        }
+        return pedido
+      }
+
+      function ejecutarAccion (c, accion) {
+        if (enCurso) return
+        var id = String(c.case_id)
+        var pedido = pedidoDe(c, accion, formularios[id])
+        if (!pedido) return
+        enCurso = { id: id, accion: accion }
+        delete mensajes[id]
+        repintar()
+        return pedirAccion(pedido).then(function (v) {
+          enCurso = null
+          if (!v) {
+            mensajes[id] = { texto: t('acNoAnswer'), mala: true }
+          } else if (v.ok === true) {
+            delete formularios[id]
+            var agente = (v.code === 'atendido' || v.code === 'autorizado') && Object.prototype.hasOwnProperty.call(AGENTE_KEY, v.agent)
+              ? v.agent : null
+            if (agente) {
+              // Un motivo de `wa-scope agente lanzar` se dice con la frase del tablero; uno
+              // del worker (exit-1, timeout) va tal cual, corto.
+              var motivo = typeof v.agentReason === 'string'
+                ? (motivoAgente(v.agentReason) || v.agentReason.slice(0, AGENTE_MOTIVO_MAX)) : ''
+              mensajes[id] = { texto: fmt(AGENTE_KEY[agente], { reason: motivo || '?' }),
+                mala: agente !== 'launched' && agente !== 'running', hasta: Date.now() + 12000 }
+            } else {
+              var dicho = porCodigo(OK_ACCION, v.code, t('acOkGeneric'))
+              if (v.warn) dicho += ' ' + t('acWarnTablero')
+              mensajes[id] = { texto: dicho, mala: false, hasta: Date.now() + 12000 }
+            }
+          } else {
+            mensajes[id] = { texto: errorTexto(v.code, v.detail), mala: true }
+            if (v.code === 'E_VERSION' && formularios[id]) formularios[id].version = null
+          }
+          // El tablero se relee tras cualquier veredicto: `wa-scope` lo reescribe en cada
+          // cambio, y tras E_VERSION o E_STAGE lo que hay en pantalla ya es viejo.
+          return reload()
+        }).then(repintar, function () { enCurso = null; repintar() })
+      }
+
+      function mensajeNodo (id) {
+        var m = mensajes[id]
+        if (!m || (!m.mala && Date.now() > m.hasta)) return null
+        var nodo = crear('div', 'card-msg' + (m.mala ? ' mala' : ''), m.texto)
+        nodo.setAttribute('role', m.mala ? 'alert' : 'status')
+        return nodo
+      }
+
+      function botonAccion (c, accion) {
+        var id = String(c.case_id)
+        var enVuelo = !!(enCurso && enCurso.id === id && enCurso.accion === accion)
+        var b = crear('button', 'btn' + (ACC_APAGADA[accion] ? ' mute' : '') +
+          (ACC_PRIMARIA[accion] ? ' primario' : ''), enVuelo ? '…' : t(ACC_KEY[accion]))
+        b.type = 'button'
+        b.dataset.accion = accion
+        b.disabled = !!enCurso
+        if (enVuelo) b.setAttribute('aria-busy', 'true')
+        b.addEventListener('click', function () {
+          if (ACC_FORM[accion]) abrirFormulario(c, accion)
+          else ejecutarAccion(c, accion)
+        })
+        return b
+      }
+
+      /** El autocompletar de proyecto: el mismo de los ajustes (config.html, T17), porque la
+       *  lista de un select nativo no se abre en el panel de Orca. Patron combobox/listbox
+       *  de ARIA: escribir filtra, flechas mueven, Enter elige, Esc cierra, clic elige. Lo
+       *  que vale es lo ELEGIDO (`f.valor`), no lo escrito: un texto suelto no es un proyecto.
+       *  Las opciones son el catalogo aceptado (`projects`) y "Sin proyecto". */
+      function comboProyectoNodo (id, f, enVuelo) {
+        var caja = crear('div', 'combo')
+        var input = crear('input')
+        input.type = 'text'
+        input.id = 'campo-' + id
+        input.autocomplete = 'off'
+        input.spellcheck = false
+        input.placeholder = t('acProyectoPh')
+        input.setAttribute('role', 'combobox')
+        input.setAttribute('aria-autocomplete', 'list')
+        input.setAttribute('aria-expanded', 'false')
+        input.setAttribute('aria-controls', 'lista-' + id)
+        input.value = f.texto || ''
+        input.disabled = enVuelo
+        var lista = crear('div', 'combo-list')
+        lista.id = 'lista-' + id
+        lista.setAttribute('role', 'listbox')
+        lista.hidden = true
+        var estado = { activo: null, items: [] }
+        var idOpcion = function (v) {
+          return lista.id + '-o-' + (String(v).replace(/[^A-Za-z0-9_-]/g, '_') || '_vacio')
+        }
+
+        function opciones () {
+          var q = f.escrito ? plano(input.value).trim() : ''
+          var todas = [{ value: '', nombre: t('acProyectoNinguno') }].concat(
+            proyectosAceptados.map(function (p) {
+              return { value: p.id, nombre: typeof p.name === 'string' && p.name ? p.name : p.id, sub: p.id }
+            }))
+          return todas.filter(function (i) {
+            return !q || plano(i.nombre).indexOf(q) >= 0 || plano(i.value).indexOf(q) >= 0
+          })
+        }
+        function marcar () {
+          Array.prototype.forEach.call(lista.querySelectorAll('[role="option"]'), function (o) {
+            o.setAttribute('aria-selected', o.dataset.value === estado.activo ? 'true' : 'false')
+          })
+          if (estado.activo !== null) input.setAttribute('aria-activedescendant', idOpcion(estado.activo))
+          else input.removeAttribute('aria-activedescendant')
+        }
+        function pintar () {
+          estado.items = opciones()
+          lista.textContent = ''
+          if (!proyectosAceptados.length) lista.appendChild(crear('div', 'combo-empty', t('acProyectoSinCatalogo')))
+          if (!estado.items.length) lista.appendChild(crear('div', 'combo-empty', t('acProyectoVacioLista')))
+          estado.items.forEach(function (i) {
+            var o = crear('div', 'combo-opt')
+            o.id = idOpcion(i.value)
+            o.setAttribute('role', 'option')
+            o.dataset.value = i.value
+            o.appendChild(crear('span', 'combo-name', i.nombre))
+            if (i.sub && i.sub !== i.nombre) o.appendChild(crear('span', 'combo-sub', i.sub))
+            lista.appendChild(o)
+          })
+          marcar()
+        }
+        function abrir () {
+          if (input.disabled) return
+          lista.hidden = false
+          input.setAttribute('aria-expanded', 'true')
+          pintar()
+        }
+        function cerrar () {
+          lista.hidden = true
+          estado.activo = null
+          input.setAttribute('aria-expanded', 'false')
+          input.removeAttribute('aria-activedescendant')
+        }
+        function mover (paso) {
+          if (!estado.items.length) return
+          var valores = estado.items.map(function (i) { return i.value })
+          var i = valores.indexOf(estado.activo)
+          i = i < 0 ? (paso > 0 ? 0 : valores.length - 1)
+            : Math.max(0, Math.min(valores.length - 1, i + paso))
+          estado.activo = valores[i]
+          marcar()
+        }
+        function elegir (valor) {
+          var item = estado.items.filter(function (i) { return i.value === valor })[0]
+          if (!item) return
+          f.valor = item.value
+          f.texto = item.nombre
+          f.escrito = false
+          input.value = item.nombre
+          var malo = caja.parentNode && caja.parentNode.querySelector('.card-msg.mala')
+          if (malo) malo.remove()
+          delete mensajes[id]
+          cerrar()
+        }
+        input.addEventListener('input', function () {
+          f.texto = input.value
+          f.escrito = true
+          delete f.valor
+          estado.activo = null
+          abrir()
+        })
+        input.addEventListener('click', function () { if (lista.hidden) abrir() })
+        input.addEventListener('keydown', function (e) {
+          if (e.key === 'ArrowDown') {
+            e.preventDefault()
+            if (lista.hidden) abrir()
+            mover(1)
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault()
+            if (lista.hidden) abrir()
+            mover(-1)
+          } else if (e.key === 'Enter') {
+            if (!lista.hidden && estado.activo !== null) { e.preventDefault(); elegir(estado.activo) }
+          } else if (e.key === 'Escape') {
+            // Cierra la lista y no el detalle: el Escape del documento no se entera.
+            if (!lista.hidden) { e.preventDefault(); e.stopPropagation(); cerrar() }
+          } else if (e.key === 'Tab') {
+            cerrar()
+          }
+        })
+        input.addEventListener('blur', cerrar)
+        // El clic en la lista no puede llevarse el foco: el `blur` la cerraria antes del `click`.
+        lista.addEventListener('mousedown', function (e) { e.preventDefault() })
+        lista.addEventListener('click', function (e) {
+          var o = e.target.closest ? e.target.closest('[role="option"]') : null
+          if (o) elegir(o.dataset.value)
+        })
+        caja.appendChild(input)
+        caja.appendChild(lista)
+        return caja
+      }
+
+      function formularioNodo (c, f) {
+        var id = String(c.case_id)
+        var def = ACC_FORM[f.modo]
+        var enVuelo = !!enCurso
+        var caja = crear('div', 'card-form')
+        var etiqueta = crear('label', null, t(def.label))
+        etiqueta.setAttribute('for', 'campo-' + id)
+        caja.appendChild(etiqueta)
+        if (def.campo === 'combo') {
+          caja.appendChild(comboProyectoNodo(id, f, enVuelo))
+        } else {
+          var campo = crear(def.campo)
+          campo.id = 'campo-' + id
+          if (def.campo === 'input') campo.type = 'text'
+          else campo.rows = 6
+          campo.maxLength = f.modo === 'editar' ? TEXTO_MAX : NOTA_MAX
+          campo.value = f.texto
+          campo.disabled = enVuelo
+          campo.addEventListener('input', function () { f.texto = campo.value })
+          caja.appendChild(campo)
+        }
+        var msg = mensajeNodo(id)
+        if (msg) caja.appendChild(msg)
+        var fila = crear('div', 'det-acts')
+        var ok = crear('button', 'btn primario',
+          enCurso && enCurso.id === id ? '…' : t(def.ok))
+        ok.type = 'button'
+        ok.dataset.confirma = '1'
+        ok.disabled = enVuelo
+        ok.addEventListener('click', function () { ejecutarAccion(c, f.modo) })
+        var cancela = crear('button', 'btn mute', t('acCancelar'))
+        cancela.type = 'button'
+        cancela.dataset.cancela = '1'
+        cancela.disabled = enVuelo
+        cancela.addEventListener('click', function () { cerrarFormulario(id) })
+        fila.appendChild(ok)
+        fila.appendChild(cancela)
+        caja.appendChild(fila)
+        return caja
+      }
+
+      /** El punto de color de una etapa, como el de las columnas de Plane. */
+      function puntoEtapa (etapa) {
+        var p = crear('span', 'dot-etapa t-' + etapa)
+        p.setAttribute('aria-hidden', 'true')
+        return p
+      }
+
+      function prioNodo (c) {
+        if (!Object.prototype.hasOwnProperty.call(PRIO_KEY, c.prioridad)) return null
+        return crear('span', 'card-prio' + (PRIO_CLASE[c.prioridad] ? ' ' + PRIO_CLASE[c.prioridad] : ''),
+          t(PRIO_KEY[c.prioridad]))
+      }
+
+      /** "Necesita su decision por: dinero", en una sola linea. */
+      function excepcionNodo (c) {
+        var excepciones = textos(c.exceptions)
+        // Solo es una necesidad mientras el caso espera su decision: en Respondido, o en
+        // cualquier otra etapa, ya paso y seria una frase que miente.
+        if (c.stage !== 'decision' || !excepciones.length) return null
+        return crear('div', 'card-exc', t('excLead') + ': ' +
+          frases(EXC_KEY, excepciones, t('excOther')))
+      }
+
+      function bloqueoTexto (c) {
+        return typeof c.blocked_reason === 'string' && c.blocked_reason ? c.blocked_reason : ''
+      }
+
+      /** Por que un caso se cerro sin pasar por el agente: la regla de la lista cerrada del
+       *  motor, en el idioma del usuario. Una regla que este panel no conoce no se muestra. */
+      function sinAgenteTexto (c) {
+        if (c.stage !== 'cerrado' || typeof c.no_agent_rule !== 'string') return ''
+        var key = 'noAgent_' + c.no_agent_rule
+        return (STRINGS[LANG] && STRINGS[LANG][key]) || STRINGS.en[key] || ''
+      }
+
+      /** La frase de un motivo estable de un lanzamiento fallido del agente de casos, o ''.
+       *  Un codigo que este panel no conoce no se muestra crudo. */
+      function motivoAgente (codigo) {
+        if (typeof codigo !== 'string' || !/^[a-z0-9-]{1,40}$/.test(codigo)) return ''
+        var key = 'agentWhy_' + codigo
+        return (STRINGS[LANG] && STRINGS[LANG][key]) || STRINGS.en[key] || ''
+      }
+
+      /** "Cuenta de respaldo: <cuenta> (<por que>)": un agente que no se abrio con la cuenta
+       *  de Claude del bot (Ajustes, pestana Agente). '' si fue con ella o no se sabe por que.
+       *  `clave` es la frase: la del despacho o la del agente de casos. */
+      function respaldoTexto (clave, cuenta, porQue) {
+        if (typeof porQue !== 'string' || !/^[a-z0-9-]{1,40}$/.test(porQue)) return ''
+        var key = 'fallbackWhy_' + porQue
+        var razon = (STRINGS[LANG] && STRINGS[LANG][key]) || STRINGS.en[key]
+        if (!razon) return ''
+        var quien = typeof cuenta === 'string' && cuenta ? cuenta.slice(0, 120) : t('fallbackOrca')
+        return fmt(clave, { account: quien, reason: razon })
+      }
+
+      /** "No pude lanzar al agente: <motivo>" si el ultimo lanzamiento fallo, o ''. */
+      function falloAgente (board) {
+        var l = esObjeto(board) ? board.agent_launch : null
+        if (!esObjeto(l) || l.state !== 'failed') return ''
+        var m = motivoAgente(l.reason)
+        return m ? fmt('agentFail', { reason: m }) : t('agentFailGeneric')
+      }
+
+      /** "Para el agente en su proxima corrida": el caso que el dueno o Jev le pasaron. Si el
+       *  ultimo lanzamiento del agente fallo, eso es lo que se dice, en todas las que lo
+       *  esperan: prometer la proxima corrida mientras cada una falla es esconderlo. */
+      function agenteNodo (c) {
+        if (c.stage !== 'recibido' && c.stage !== 'clasificado') return null
+        var falla = c.waits_agent === true || c.needs_agent === true ? falloAgente(tableroActual) : ''
+        if (falla) {
+          var nodo = crear('div', 'card-agente fallo', falla)
+          var detalle = tableroActual.agent_launch.detail
+          if (typeof detalle === 'string' && detalle) nodo.title = detalle.slice(0, 200)
+          return nodo
+        }
+        if (c.needs_agent === true) return crear('div', 'card-agente', t('boardNeedsAgent'))
+        return null
+      }
+
+      /** Una linea del despacho con su antiguedad: "Despachado a Alfa · hace 5 min". */
+      function conCuando (texto, stamp) {
+        var cuando = hace(stamp)
+        return cuando ? texto + ' · ' + cuando : texto
+      }
+
+      /** Lo que dice el despacho al agente del proyecto (T8), segun la etapa: a donde fue y
+       *  desde cuando, lo que reporto el agente, o que el caso espera al cliente. Un
+       *  despacho que no se entiende se calla. */
+      function despachoNodo (c) {
+        var d = esObjeto(c.dispatch) ? c.dispatch : null
+        if (!d || typeof d.project !== 'string' || !d.project) return null
+        var p = { p: d.project }
+        var lineas = []
+        if (c.stage === 'trabajo' && d.state === 'esperando') {
+          lineas.push(t('boardDispatchAnswer'))
+        } else if (c.stage === 'trabajo') {
+          lineas.push(conCuando(fmt('boardDispatched', p), d.at))
+          lineas.push(t('boardDispatchWaiting'))
+          var respaldo = respaldoTexto('botFallback', d.account, d.fallback)
+          if (respaldo) lineas.push(respaldo)
+        } else if (c.stage === 'listo' && d.outcome === 'resuelto') {
+          lineas.push(fmt('boardDispatchSolved', p))
+        } else if (c.stage === 'listo' && d.outcome === 'necesita') {
+          lineas.push(fmt('boardDispatchNeeds', p))
+        } else if (c.stage === 'respondido' && d.state === 'esperando') {
+          lineas.push(conCuando(t('boardDispatchCustomer'), d.updated_at || d.at))
+          lineas.push(fmt('boardDispatchNeeds', p))
+        } else if (c.stage === 'bloqueado' && d.outcome === 'bloqueado') {
+          lineas.push(fmt('boardDispatchBlocked', p))
+        }
+        if (!lineas.length) return null
+        var nodo = crear('div', 'card-despacho')
+        lineas.forEach(function (linea, i) {
+          nodo.appendChild(crear('div', i ? 'card-despacho-sub' : null, linea))
+        })
+        return nodo
+      }
+
+      /** Lo aprobado: el despacho si ya salio al proyecto; si no, "Aprobada, en cola". */
+      function aprobadaNodo (c) {
+        var despacho = despachoNodo(c)
+        if (despacho) return despacho
+        if (c.stage === 'trabajo' && esObjeto(c.proposal) && c.proposal.tipo === 'trabajar') {
+          return crear('div', 'card-aprobada', t('acAprobada'))
+        }
+        return null
+      }
+
+      /** Lo que la tarjeta y la fila de la lista comparten debajo del titulo: el motivo, el
+       *  bloqueo, lo aprobado y, si el caso espera su respuesta, la respuesta a la vista
+       *  junto a su unico boton. */
+      function extrasDe (c) {
+        var id = String(c.case_id)
+        var nodos = []
+        var exc = excepcionNodo(c)
+        if (exc) nodos.push(exc)
+        var bloqueo = bloqueoTexto(c)
+        if (bloqueo) nodos.push(crear('div', 'card-blocked clamp2', bloqueo))
+        var aprobada = aprobadaNodo(c)
+        if (aprobada) nodos.push(aprobada)
+        var agente = agenteNodo(c)
+        if (agente) nodos.push(agente)
+        if (c.read_only === true) nodos.push(crear('div', 'card-solo-leer', t('boardReadOnly')))
+        var primaria = primariaDe(accionesDe(c))
+        var aviso = formularios[id] ? null : mensajeNodo(id)
+        if (primaria === 'atender') {
+          // Lo que era Tomar: no manda nada a nadie, solo adelanta al agente.
+          if (aviso) nodos.push(aviso)
+          var filaAt = crear('div', 'card-acts')
+          filaAt.appendChild(botonAccion(c, primaria))
+          nodos.push(filaAt)
+        } else if (primaria) {
+          var texto = String(c.proposal.texto || '')
+          // No se manda lo que no se vio: el boton de la tarjeta solo manda una respuesta que
+          // esta ENTERA a la vista. Si es larga, el boton abre el detalle para leerla.
+          var entera = texto.length <= PROPUESTA_EN_TARJETA
+          if (texto) nodos.push(crear('div', 'card-prop' + (entera ? '' : ' clamp3'), texto))
+          if (aviso) nodos.push(aviso)
+          var fila = crear('div', 'card-acts')
+          if (entera) {
+            fila.appendChild(botonAccion(c, primaria))
+          } else {
+            var leer = crear('button', 'btn', t(primaria === 'enviar' ? 'boardReadSend' : 'boardReadRun'))
+            leer.type = 'button'
+            leer.dataset.abrir = '1'
+            leer.disabled = !!enCurso
+            leer.addEventListener('click', function () { abrirCaso(c) })
+            fila.appendChild(leer)
+          }
+          nodos.push(fila)
+        } else if (aviso) {
+          nodos.push(aviso)
+        }
+        return nodos
+      }
+
+      /** La tarjeta y la fila se abren igual: clic, o Enter/espacio con el foco encima. */
+      function hacerAbrible (nodo, c) {
+        var id = String(c.case_id)
+        nodo.dataset.case = id
+        nodo.tabIndex = 0
+        nodo.setAttribute('aria-controls', 'board-detail')
+        nodo.setAttribute('aria-expanded', seleccion === id ? 'true' : 'false')
+        if (seleccion === id) nodo.classList.add('elegida')
+        nodo.addEventListener('click', function (event) {
+          if (event.target && event.target.closest && event.target.closest('button, textarea, input')) return
+          abrirCaso(c)
+        })
+        nodo.addEventListener('keydown', function (event) {
+          if (event.target !== nodo) return
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            abrirCaso(c)
+          }
+        })
+      }
+
+      function tituloDe (c) {
+        return typeof c.title === 'string' && c.title ? c.title : t('boardUntitled')
+      }
+
+      function metaNodo (c) {
+        var meta = crear('div', 'card-meta')
+        meta.appendChild(crear('span', 'name', c.chat_name))
+        var cuandoTxt = hace(c.updated_at)
+        if (cuandoTxt) {
+          meta.appendChild(crear('span', 'sep', '·'))
+          meta.appendChild(crear('span', 'when', cuandoTxt))
+        }
+        return meta
+      }
+
+      /** La tarjeta, con la anatomia de la de Plane (plane-board-card.tsx): arriba el numero
+       *  y la prioridad, el titulo en dos lineas, y una linea apagada con el chat y la hora. */
+      function tarjetaNodo (c) {
+        var nodo = crear('article', 'card' + (c.prioridad === 'urgent' ? ' urgente' : ''))
+        hacerAbrible(nodo, c)
+        var arriba = crear('div', 'card-top')
+        arriba.appendChild(crear('span', 'card-id', '#' + c.case_id))
+        var prio = prioNodo(c)
+        if (prio) arriba.appendChild(prio)
+        nodo.appendChild(arriba)
+        nodo.appendChild(crear('h4', 'card-title clamp2', tituloDe(c)))
+        nodo.appendChild(metaNodo(c))
+        extrasDe(c).forEach(function (n) { nodo.appendChild(n) })
+        return nodo
+      }
+
+      /** La fila de la lista: el mismo caso en un renglon, como la lista de Plane. */
+      function filaNodo (c) {
+        var nodo = crear('article', 'card fila' + (c.prioridad === 'urgent' ? ' urgente' : ''))
+        hacerAbrible(nodo, c)
+        nodo.appendChild(crear('span', 'card-id', '#' + c.case_id))
+        var centro = crear('div', 'fila-main')
+        centro.appendChild(crear('h4', 'card-title clamp1', tituloDe(c)))
+        centro.appendChild(metaNodo(c))
+        extrasDe(c).forEach(function (n) { centro.appendChild(n) })
+        nodo.appendChild(centro)
+        var prio = prioNodo(c)
+        if (prio) nodo.appendChild(prio)
+        return nodo
+      }
+
+      function cuentaTexto (visibles, n) {
+        return busqueda ? visibles + ' / ' + n : String(n)
+      }
+
+      function columnaNodo (etapa, m, tarjetas, sola) {
+        var n = m.counts[etapa]
+        // Antes una columna vacia era una caja con "Nada aqui": ocho de esas tapaban el
+        // tablero. Ahora se encoge a su cabecera, como una columna plegada.
+        var vacia = !tarjetas.length && !sola
+        var col = crear('section', 'col' + (etapa === 'decision' ? ' decision' : '') +
+          (etapa === 'bloqueado' ? ' lane' : '') + (n > 0 ? ' con-casos' : '') +
+          (vacia ? ' vacia' : ''))
+        col.dataset.stage = etapa
+        var nombre = t(ETAPA_KEY[etapa])
+        if (vacia) col.title = nombre
+        var cab = crear('h3', 'col-head')
+        cab.appendChild(puntoEtapa(etapa))
+        cab.appendChild(crear('span', 'col-name', nombre))
+        cab.appendChild(crear('span', 'col-count', cuentaTexto(tarjetas.length, n)))
+        col.appendChild(cab)
+        if (vacia) return col
+        var cuerpo = crear('div', 'col-body')
+        tarjetas.forEach(function (c) { cuerpo.appendChild(tarjetaNodo(c)) })
+        if (!tarjetas.length) cuerpo.appendChild(crear('p', 'col-nada', t('boardStageNone')))
+        if (!busqueda && n > m.porEtapa[etapa].length) {
+          cuerpo.appendChild(crear('p', 'col-more', fmt('boardMore', n - m.porEtapa[etapa].length)))
+        }
+        col.appendChild(cuerpo)
+        return col
+      }
+
+      function grupoNodo (etapa, m, tarjetas) {
+        var grupo = crear('section', 'grupo' + (etapa === 'bloqueado' ? ' lane' : ''))
+        grupo.dataset.stage = etapa
+        var cab = crear('h3', 'grupo-head')
+        cab.appendChild(puntoEtapa(etapa))
+        cab.appendChild(crear('span', 'col-name', t(ETAPA_KEY[etapa])))
+        cab.appendChild(crear('span', 'col-count', cuentaTexto(tarjetas.length, m.counts[etapa])))
+        grupo.appendChild(cab)
+        tarjetas.forEach(function (c) { grupo.appendChild(filaNodo(c)) })
+        if (!busqueda && m.counts[etapa] > m.porEtapa[etapa].length) {
+          grupo.appendChild(crear('p', 'col-more', fmt('boardMore', m.counts[etapa] - m.porEtapa[etapa].length)))
+        }
+        return grupo
+      }
+
+      /** La fila de etapas: "Todos" y cada etapa con su punto y su cuenta. Filtra. */
+      function renderChips (m) {
+        var caja = el('board-chips')
+        caja.textContent = ''
+        ;['todos'].concat(ORDEN_FILTRO).forEach(function (e) {
+          var n = e === 'todos' ? m.total : m.counts[e]
+          var b = crear('button', 'chip' + (e === 'decision' && n > 0 ? ' fuerte' : '') +
+            (e === 'bloqueado' ? ' lane' : ''))
+          b.type = 'button'
+          b.dataset.etapa = e
+          b.setAttribute('aria-pressed', filtroEtapa === e ? 'true' : 'false')
+          if (e !== 'todos') b.appendChild(puntoEtapa(e))
+          b.appendChild(crear('span', 'chip-name', e === 'todos' ? t('boardAll') : t(ETAPA_KEY[e])))
+          b.appendChild(crear('span', 'chip-count', n))
+          b.addEventListener('click', function () {
+            filtroEtapa = e
+            repintar()
+            var mismo = el('board-chips').querySelector('[data-etapa="' + e + '"]')
+            if (mismo) mismo.focus()
+          })
+          caja.appendChild(b)
+        })
+      }
+
+      function seccion (clase, titulo) {
+        var s = crear('section', 'det-sec' + (clase ? ' ' + clase : ''))
+        if (titulo) s.appendChild(crear('h4', 'det-label', titulo))
+        return s
+      }
+
+      /** Lo que vio Jev, en palabras: sin accion, como lee el mensaje, y sus senales. */
+      function jevNodo (jev) {
+        var caja = crear('div', 'det-jev')
+        if (jev.skip === true) caja.appendChild(crear('p', null, t('jevSkip')))
+        if (typeof jev.attention_class === 'string' && jev.attention_class) {
+          caja.appendChild(crear('p', null, t('jevSees') + ': ' +
+            porCodigo(JEV_CLASE_KEY, jev.attention_class, t('jevClsOther'))))
+        }
+        var flags = textos(jev.flags)
+        if (flags.length) {
+          caja.appendChild(crear('p', null, t('jevSignals') + ': ' +
+            frases(FLAG_KEY, flags, t('flagOther'))))
+        }
+        return caja.childNodes.length ? caja : null
+      }
+
+      /** Una propuesta `escalar` no trae texto: el agente no redacto nada y lo dejo al dueno.
+       *  Se dice eso, con el porque (las excepciones y lo que Jev leyo) y como responder, en
+       *  vez de una caja de propuesta vacia. */
+      function escalarNodo (c) {
+        var s = seccion('det-escalar', t('escLead'))
+        var motivos = []
+        var excepciones = textos(c.exceptions)
+        if (excepciones.length) motivos.push(frases(EXC_KEY, excepciones, t('excOther')))
+        var clase = esObjeto(c.jev) && typeof c.jev.attention_class === 'string' ? c.jev.attention_class : ''
+        if (clase) motivos.push(t('escJev') + ' ' + porCodigo(JEV_CLASE_KEY, clase, t('jevClsOther')))
+        if (motivos.length) s.appendChild(crear('p', 'det-text', t('escWhy') + ': ' + motivos.join('. ')))
+        s.appendChild(crear('p', 'det-text', t('escHow')))
+        return s
+      }
+
+      /** La historia del caso (`caso_evento`), solo si la clave la trae como `events`. */
+      function historiaNodo (c) {
+        var eventos = Array.isArray(c.events) ? c.events.filter(esObjeto) : []
+        if (!eventos.length) return null
+        // Cada reapertura (algo vuelve a Recibido desde otra etapa) empieza un tramo nuevo:
+        // lo que espera ahora es el ultimo y va primero; lo anterior se pliega.
+        var tramos = [[]]
+        eventos.forEach(function (ev) {
+          if (ev.a === 'recibido' && ETAPA_KEY[ev.de] && ev.de !== 'recibido') tramos.push([])
+          tramos[tramos.length - 1].push(ev)
+        })
+        function lista (evs) {
+          var ol = crear('ol', 'det-hist')
+          // Las filas iguales seguidas (tres mensajes que llegan uno tras otro) van en una,
+          // con su cuenta: la historia dice que paso, no lo repite (T22).
+          var filas = []
+          evs.forEach(function (ev) {
+            var hacia = ETAPA_KEY[ev.a] ? t(ETAPA_KEY[ev.a]) : null
+            if (!hacia) return
+            // Lo que no movio la etapa es un cambio dentro de la misma etapa: dice que fue
+            // (un mensaje, lo que dijo Jev, un envio retenido) y, si no se sabe, "actualizado".
+            var paso = queDelEvento(ev)
+            var que = ev.de === ev.a ? hacia + ' · ' + (paso || t('detHistTouch'))
+              : (ETAPA_KEY[ev.de] ? t(ETAPA_KEY[ev.de]) + ' → ' : '') + hacia +
+                (paso ? ' · ' + paso : '')
+            var quien = porCodigo(ACTOR_KEY, ev.actor, t('actorOtro'))
+            var previa = filas[filas.length - 1]
+            if (previa && previa.que === que && previa.quien === quien) {
+              previa.n += 1
+              previa.at = ev.at
+              return
+            }
+            filas.push({ que: que, quien: quien, at: ev.at, n: 1 })
+          })
+          filas.forEach(function (f) {
+            var li = crear('li')
+            li.appendChild(crear('span', 'hist-que', f.que + (f.n > 1 ? ' ×' + f.n : '')))
+            li.appendChild(crear('span', 'hist-quien', f.quien))
+            var cuandoTxt = hace(f.at)
+            if (cuandoTxt) li.appendChild(crear('span', 'when', cuandoTxt))
+            ol.appendChild(li)
+          })
+          return ol.childNodes.length ? ol : null
+        }
+        function marca (evs) {
+          var cuandoTxt = hace(evs[0].at)
+          return crear('div', 'hist-reabierto', t('histReopened') + (cuandoTxt ? ' · ' + cuandoTxt : ''))
+        }
+        var caja = crear('div', 'det-hist-caja')
+        var ultimo = tramos[tramos.length - 1]
+        if (tramos.length > 1) caja.appendChild(marca(ultimo))
+        var actual = lista(ultimo)
+        if (actual) caja.appendChild(actual)
+        if (tramos.length > 1) {
+          var previa = crear('details', 'hist-previa')
+          previa.appendChild(crear('summary', null, t('histPrev')))
+          for (var k = tramos.length - 2; k >= 0; k--) {
+            if (k > 0) previa.appendChild(marca(tramos[k]))
+            var anterior = lista(tramos[k])
+            if (anterior) previa.appendChild(anterior)
+          }
+          caja.appendChild(previa)
+        }
+        return caja.childNodes.length ? caja : null
+      }
+
+      /** El detalle del caso: el texto entero, lo que vio Jev y todas las acciones. */
+      function renderDetalle (c) {
+        var caja = el('board-detail')
+        caja.textContent = ''
+        if (!c) {
+          caja.hidden = true
+          delete caja.dataset.case
+          return
+        }
+        var id = String(c.case_id)
+        caja.hidden = false
+        caja.dataset.case = id
+        caja.setAttribute('aria-label', '#' + id + ' ' + tituloDe(c))
+
+        var cab = crear('div', 'det-head')
+        cab.appendChild(crear('span', 'card-id', '#' + id))
+        var pastilla = crear('span', 'etapa-pill')
+        pastilla.appendChild(puntoEtapa(c.stage))
+        pastilla.appendChild(crear('span', null, t(ETAPA_KEY[c.stage])))
+        cab.appendChild(pastilla)
+        var cierra = crear('button', 'det-close', '×')
+        cierra.type = 'button'
+        cierra.dataset.cerrarDetalle = '1'
+        cierra.title = t('detClose')
+        cierra.setAttribute('aria-label', t('detClose'))
+        cierra.addEventListener('click', cerrarDetalle)
+        cab.appendChild(cierra)
+        caja.appendChild(cab)
+
+        caja.appendChild(crear('h3', 'det-title', tituloDe(c)))
+        var meta = metaNodo(c)
+        meta.className = 'det-meta'
+        var prio = prioNodo(c)
+        if (prio) {
+          meta.appendChild(crear('span', 'sep', '·'))
+          prio.textContent = t('detPrio') + ': ' + prio.textContent
+          meta.appendChild(prio)
+        }
+        // El ticket es un texto, no un enlace: lo que llega de la clave es de fuera y un
+        // href armado con ello no se abre desde el iframe del panel.
+        var ticket = typeof c.ticket === 'string' ? c.ticket
+          : (esObjeto(c.ticket) ? (c.ticket.id || c.ticket.key || c.ticket.identifier || '') : '')
+        if (ticket) {
+          meta.appendChild(crear('span', 'sep', '·'))
+          meta.appendChild(crear('span', 'card-ticket', t('ticketLead') + ' ' + ticket))
+        }
+        caja.appendChild(meta)
+        // El proyecto del caso: el que resolvio la ruta o el que puso el dueno a mano.
+        var proyecto = esObjeto(c.project) && typeof c.project.id === 'string' ? c.project : null
+        if (proyecto || accionesDe(c).indexOf('proyecto') >= 0) {
+          var fp = crear('div', 'det-proyecto')
+          fp.appendChild(crear('span', 'det-k', t('detProject') + ': '))
+          fp.appendChild(crear('span', null, proyecto
+            ? (typeof proyecto.name === 'string' && proyecto.name ? proyecto.name : proyecto.id)
+            : t('acProyectoNinguno')))
+          caja.appendChild(fp)
+        }
+
+        // Un caso es un pedido: si este abrio aparte de uno que ya estaba, se dice cual.
+        if (Number.isInteger(c.related_case) && c.related_case > 0) {
+          var rel = c.related_case
+          var fr = crear('div', 'det-proyecto')
+          fr.appendChild(crear('span', 'det-k', t('detPrevCase') + ': '))
+          var cartas = tableroActual && Array.isArray(tableroActual.cards) ? tableroActual.cards : []
+          var destino = cartas.filter(function (x) { return esObjeto(x) && x.case_id === rel })[0]
+          if (destino) {
+            var enlace = crear('button', 'det-link', '#' + rel)
+            enlace.type = 'button'
+            enlace.dataset.relacionado = String(rel)
+            enlace.addEventListener('click', function () { abrirCaso(destino) })
+            fr.appendChild(enlace)
+          } else {
+            fr.appendChild(crear('span', null, '#' + rel))
+          }
+          caja.appendChild(fr)
+        }
+
+        var exc = excepcionNodo(c)
+        if (exc) caja.appendChild(exc)
+        var aprobada = aprobadaNodo(c)
+        if (aprobada) caja.appendChild(aprobada)
+        var bloqueo = bloqueoTexto(c)
+        if (bloqueo) {
+          var sb = seccion('card-blocked', t('blockedLead'))
+          sb.appendChild(crear('p', 'det-text', bloqueo))
+          caja.appendChild(sb)
+        }
+        var sinAgente = sinAgenteTexto(c)
+        if (sinAgente) {
+          var sa = seccion('card-noagent', t('noAgentLead'))
+          sa.appendChild(crear('p', 'det-text', sinAgente))
+          caja.appendChild(sa)
+        }
+        if (typeof c.summary === 'string' && c.summary) {
+          var ss = seccion(null, t('detSummary'))
+          ss.appendChild(crear('p', 'det-sum', c.summary))
+          caja.appendChild(ss)
+        }
+        var prop = esObjeto(c.proposal) ? c.proposal : null
+        if (prop && prop.tipo === 'escalar' && !prop.texto) {
+          caja.appendChild(escalarNodo(c))
+        } else if (prop && (prop.texto || prop.tipo)) {
+          var sp = seccion('det-prop', t('propLead') +
+            (prop.tipo ? ' · ' + porCodigo(PROP_KEY, prop.tipo, '') : ''))
+          if (prop.texto) sp.appendChild(crear('div', 'card-prop', prop.texto))
+          caja.appendChild(sp)
+        }
+        var jev = esObjeto(c.jev) ? jevNodo(c.jev) : null
+        if (jev) {
+          var sj = seccion(null, t('detJev'))
+          sj.appendChild(jev)
+          caja.appendChild(sj)
+        }
+
+        // Las acciones del dueno: un formulario si hay uno abierto, y si no, los botones.
+        var posibles = accionesDe(c)
+        var formulario = formularios[id]
+        var abierto = formulario && ACC_FORM[formulario.modo] && posibles.indexOf(formulario.modo) >= 0
+        var aviso = abierto ? null : mensajeNodo(id)
+        if (abierto || aviso || posibles.length) {
+          var sa = seccion('det-acciones', t('detActions'))
+          if (abierto) {
+            sa.appendChild(formularioNodo(c, formulario))
+          } else {
+            if (aviso) sa.appendChild(aviso)
+            if (posibles.indexOf('autorizar') >= 0) sa.appendChild(crear('p', 'det-text', t('acAutorizarNota')))
+            if (posibles.length) {
+              var fila = crear('div', 'det-acts')
+              posibles.forEach(function (a) { fila.appendChild(botonAccion(c, a)) })
+              sa.appendChild(fila)
+            }
+          }
+          caja.appendChild(sa)
+        }
+        var historia = historiaNodo(c)
+        if (historia) {
+          var sh = seccion(null, t('detHistory'))
+          sh.appendChild(historia)
+          caja.appendChild(sh)
+        }
+      }
+
+      function abrirCaso (c) {
+        seleccion = String(c.case_id)
+        repintar()
+      }
+
+      function cerrarDetalle () {
+        var id = seleccion
+        seleccion = null
+        repintar()
+        var card = id && el('board-body').querySelector('.card[data-case="' + id + '"]')
+        if (card) card.focus()
+      }
+
+      function mostrarVacio (titulo, cuerpo, error) {
+        var caja = el('board-empty')
+        caja.hidden = false
+        caja.className = 'board-empty' + (error ? ' error' : '')
+        caja.querySelector('.t').textContent = titulo
+        caja.querySelector('.b').textContent = cuerpo
+      }
+
+      function renderBoard (board, forzar) {
+        tableroActual = board
+        // Con un formulario abierto en el detalle el sondeo no repinta: reconstruir el DOM
+        // se llevaria el texto y el foco del dueno. Lo que cambie se ve al cerrarlo o tras
+        // cualquier accion.
+        if (!forzar && seleccion && formularios[seleccion]) return
+        var m = modeloTablero(board)
+        var cols = el('board-cols')
+        var lista = el('board-list')
+        var nota = el('board-note')
+        var sello = el('board-synced')
+        var nada = el('board-nada')
+        // El detalle pudo quedar dentro de la lista (en lo angosto): vuelve a su lugar antes
+        // de vaciarla, o se iria con ella.
+        if (el('board-detail').parentNode !== el('board-body')) el('board-body').appendChild(el('board-detail'))
+        cols.textContent = ''
+        lista.textContent = ''
+        sello.textContent = ''
+        nota.className = 'meta nota'
+        el('board-empty').hidden = true
+        nada.hidden = true
+        var avisos = []
+        var detalleDe = null
+        var porConfig = vacioPorConfig(actividadActual)
+        if (m.estado === 'sin-datos') {
+          mostrarVacio(t('boardNoDataTitle'), porConfig || t('boardNoDataBody'), false)
+        } else if (m.estado === 'version') {
+          mostrarVacio(t('boardVersionTitle'), fmt('boardUnsupported', { v: m.v }), true)
+        } else if (m.estado === 'vacio') {
+          mostrarVacio(t('boardEmptyTitle'), porConfig || t('boardEmptyBody'), false)
+        } else {
+          // Un formulario, un mensaje o un detalle de una tarjeta que ya no esta no tiene a
+          // quien pertenecer.
+          var presentes = {}
+          ETAPAS.forEach(function (e) {
+            m.porEtapa[e].forEach(function (c) { presentes[String(c.case_id)] = c })
+          })
+          Object.keys(formularios).forEach(function (k) { if (!presentes[k]) delete formularios[k] })
+          Object.keys(mensajes).forEach(function (k) { if (!presentes[k]) delete mensajes[k] })
+          if (seleccion && !presentes[seleccion]) seleccion = null
+          detalleDe = seleccion ? presentes[seleccion] : null
+
+          renderChips(m)
+          var q = plano(busqueda.trim())
+          var etapas = filtroEtapa === 'todos' ? ETAPAS : [filtroEtapa]
+          var vis = {}
+          var mostrados = 0
+          ETAPAS.forEach(function (e) {
+            vis[e] = etapas.indexOf(e) >= 0
+              ? m.porEtapa[e].filter(function (c) { return coincide(c, q) }) : []
+            mostrados += vis[e].length
+          })
+          var vista = vistaEfectiva()
+          Array.prototype.forEach.call(el('board-view').querySelectorAll('button[data-vista]'),
+            function (b) { b.setAttribute('aria-pressed', b.dataset.vista === vista ? 'true' : 'false') })
+          el('board-shown').textContent = mostrados === 1 ? t('boardShown1') : fmt('boardShown', mostrados)
+          cols.hidden = vista !== 'board'
+          lista.hidden = vista !== 'list'
+          if (q && !mostrados) {
+            nada.textContent = t('boardNoMatch')
+            nada.hidden = false
+          } else if (vista === 'board') {
+            etapas.forEach(function (e) {
+              cols.appendChild(columnaNodo(e, m, vis[e], filtroEtapa !== 'todos'))
+            })
+          } else {
+            var algun = false
+            ORDEN_FILTRO.forEach(function (e) {
+              if (!vis[e].length) return
+              algun = true
+              lista.appendChild(grupoNodo(e, m, vis[e]))
+            })
+            if (!algun) {
+              nada.textContent = t('boardStageNone')
+              nada.hidden = false
+            }
+          }
+          if (m.truncado) avisos.push(t('boardTruncated'))
+          if (m.desconocidas) {
+            avisos.push(m.desconocidas === 1 ? t('boardUnknown1') : fmt('boardUnknown', m.desconocidas))
+          }
+        }
+        var conCasos = m.estado === 'ok'
+        el('board-bar').hidden = !conCasos
+        el('board-body').hidden = !conCasos
+        renderDetalle(detalleDe)
+        ubicarDetalle()
+        if (m.estado === 'ok' || m.estado === 'vacio') {
+          var edad = hace(m.actualizado)
+          if (edad) {
+            var texto = fmt('boardUpdated', { cuando: edad })
+            if (viejo(m.actualizado)) sello.appendChild(crear('span', 'vieja', texto))
+            else sello.textContent = texto
+          }
+        }
+        nota.textContent = avisos.join(' ')
+      }
+
+      /** A lo ancho el detalle va al costado, como el panel de un elemento en Plane. En lo
+       *  angosto se abre en el lugar: debajo de la fila elegida en la lista, o debajo de las
+       *  columnas en el tablero. */
+      function ubicarDetalle () {
+        var caja = el('board-detail')
+        var cuerpo = el('board-body')
+        var fila = seleccion && estrecho() && vistaEfectiva() === 'list'
+          ? el('board-list').querySelector('.card[data-case="' + seleccion + '"]') : null
+        if (fila) {
+          fila.parentNode.insertBefore(caja, fila.nextSibling)
+          caja.classList.add('en-linea')
+        } else {
+          if (caja.parentNode !== cuerpo) cuerpo.appendChild(caja)
+          caja.classList.remove('en-linea')
+        }
+      }
+
+      el('board-search').addEventListener('input', function () {
+        busqueda = el('board-search').value
+        el('board-search-clear').hidden = !busqueda
+        repintar()
+      })
+      el('board-search-clear').addEventListener('click', function () {
+        busqueda = ''
+        el('board-search').value = ''
+        el('board-search-clear').hidden = true
+        repintar()
+        el('board-search').focus()
+      })
+      Array.prototype.forEach.call(el('board-view').querySelectorAll('button[data-vista]'), function (b) {
+        b.addEventListener('click', function () {
+          vistaElegida = b.dataset.vista
+          repintar()
+        })
+      })
+      document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && seleccion) cerrarDetalle()
+      })
+
+      // Al cruzar los 768 px cambia la vista natural y el lugar del detalle.
+      var eraEstrecho = estrecho()
+      window.addEventListener('resize', function () {
+        if (estrecho() === eraEstrecho) return
+        eraEstrecho = estrecho()
+        repintar()
+      })
+
       function reload() {
         return Promise.all([
           call('storage.get', { key: 'activity' }),
-          call('storage.get', { key: 'decisions' }),
+          call('storage.get', { key: 'projects' }),
           call('storage.get', { key: 'sidecar' }),
           call('storage.get', { key: 'chats' }),
-          call('storage.get', { key: 'chatsAccount' })
+          call('storage.get', { key: 'chatsAccount' }),
+          call('storage.get', { key: 'board' })
         ]).then(function (results) {
           var sc = stored(results[2])
           if (sc && typeof sc.cuenta === 'string' && sc.cuenta) cuentaVinculada = sc.cuenta
@@ -638,26 +2868,18 @@
               run: { state: 'never', startedAt: null, endedAt: null } }
           }
           var chats = deEstaLinea(stored(results[4])) ? stored(results[3]) : null
-          var todas = stored(results[1]) || {}
-          var decided = {}
-          Object.keys(todas).forEach(function (k) {
-            if (deEstaLinea(todas[k] && todas[k].account)) decided[k] = todas[k]
-          })
-          var vivos = (a.pending || []).filter(function (m) {
-            var d = decided[m.stanzaId]
-            return !d || d.decision !== 'ignore'
-          })
+          // El catalogo de proyectos aceptados: lo que ofrece "Cambiar proyecto".
+          var cat = stored(results[1])
+          proyectosAceptados = Array.isArray(cat) ? cat.filter(function (p) {
+            return esObjeto(p) && typeof p.id === 'string' && p.id
+          }) : []
+          actividadActual = a
           renderSynced(a)
           renderLinea(sc)
           renderCobertura(a, chats)
-          renderRun(a, vivos.length)
-          // Lo marcado se ve al instante, sin esperar al proximo `wa-scope sync`.
-          renderPending(vivos.map(function (m) {
-            var d = decided[m.stanzaId]
-            return d ? Object.assign({}, m, { decision: d.decision }) : m
-          }), a)
-          renderAlerts(a.recent)
-          renderRecent(a.recent)
+          var tablero = stored(results[5])
+          renderRun(a, esObjeto(tablero) ? tablero : null)
+          renderBoard(tablero)
         })
       }
 

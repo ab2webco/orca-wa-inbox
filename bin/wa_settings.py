@@ -11,6 +11,7 @@ El panel manda sobre la base: es lo que el usuario acaba de tocar. La base es la
 la terminal, y `wa-scope config` la mantiene espejada hacia el panel en cada escritura.
 """
 import json
+import re
 import os
 import shutil
 import socket
@@ -268,7 +269,14 @@ PANEL_SETTINGS = {"tone": "tone", "agentName": "agent_name",
                   # que acota cuanto puede tardar un mensaje en aparecer: el precheck
                   # contesta sobre el ultimo sync, asi que si esto fuera una constante
                   # escondida el retraso tambien lo seria.
-                  "syncMinutes": "sync_minutes"}
+                  "syncMinutes": "sync_minutes",
+                  # Respuestas automaticas del motor: el acuse de recibo a un pedido nuevo
+                  # y el saludo a un saludo. El valor de una conversacion pisa estos.
+                  "ackMode": "ack", "ackText": "ack_text",
+                  "greetingMode": "greeting", "greetingText": "greeting_text",
+                  # Con que cuenta de Claude abre el bot sus agentes (el de casos y el de
+                  # cada proyecto): un id de `orca account list`, o `auto`.
+                  "botClaudeAccount": "bot_claude_account"}
 
 # Lo que cada ajuste acepta. Un valor invalido no revienta al guardarse: revienta
 # despues, en la corrida del agente, lejos de donde se tipeo — o peor, no revienta y
@@ -282,20 +290,33 @@ CONFIG_OPCIONES = {
     # Solo los idiomas que el panel ofrece y con los que se probo. Un codigo sin probar
     # degrada la transcripcion en silencio, y eso se descubre tres audios despues.
     "transcribe_lang": ("auto", "es", "en", "pt"),
+    "ack": ("on", "off"),
+    "greeting": ("on", "off"),
 }
 CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s", "sync_minutes",
-                    "capture_max", "capture_days")
+                    "capture_max", "capture_days", "case_window_hours")
+# Los numericos que ademas tienen que ser mayores que cero. Una ventana de agrupacion de
+# cero horas no agrupa nunca: abre una tarjeta por mensaje sin decir por que.
+CONFIG_POSITIVOS = ("case_window_hours",)
+
+
+# Un id (o correo) de cuenta de `orca account list`: viaja como argumento a la CLI de Orca.
+CUENTA_CLAUDE = re.compile(r"^(auto|[A-Za-z0-9][A-Za-z0-9._@+:-]{0,199})$")
 
 
 def valida_ajuste(key, value):
     """Devuelve el motivo del rechazo, o None si el valor sirve."""
+    if key == "bot_claude_account" and not CUENTA_CLAUDE.match(str(value)):
+        return f"{key} has to be auto or the id of an account from `orca account list`"
     if key in CONFIG_OPCIONES and value not in CONFIG_OPCIONES[key]:
         return f"{key} only accepts: {', '.join(CONFIG_OPCIONES[key])}"
     if key in CONFIG_NUMERICOS:
         try:
-            int(str(value).strip())
+            numero = int(str(value).strip())
         except (TypeError, ValueError):
             return f"{key} has to be a whole number, not {value!r}"
+        if key in CONFIG_POSITIVOS and numero <= 0:
+            return f"{key} has to be greater than zero, not {value!r}"
     return None
 
 
@@ -371,3 +392,24 @@ def ajuste(key, fallback=None):
     except Exception:                     # noqa: BLE001 - sin registro manda el default
         pass
     return fallback
+
+
+def duenos():
+    """Los remitentes de confianza que el dueno eligio en ajustes (T22.1): sus ids tal
+    como WhatsApp los deja en el almacen (`<usuario>@lid`, o `@s.whatsapp.net` si asi
+    llegan), sin el dispositivo. Nunca un numero escrito a mano ni adivinado: el panel
+    solo ofrece los que vio en las conversaciones.
+
+    Viven en el almacen del plugin, por instalacion, en `owners`: `[{id, name}]`. Lo que
+    no tiene forma de id se ignora: un valor sucio no puede volver dueno a nadie."""
+    lista = plugin_store_raw().get("owners")
+    salida = []
+    for d in lista if isinstance(lista, list) else []:
+        jid = d.get("id") if isinstance(d, dict) else None
+        if not isinstance(jid, str) or "@" not in jid:
+            continue
+        usuario, _, servidor = jid.strip().partition("@")
+        usuario = usuario.split(":")[0]
+        if usuario and servidor and f"{usuario}@{servidor}" not in salida:
+            salida.append(f"{usuario}@{servidor}")
+    return salida
