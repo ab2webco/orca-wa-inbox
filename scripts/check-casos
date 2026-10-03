@@ -7583,6 +7583,35 @@ if NODE:
                cuenta(home, f"select count(*) from aviso where case_id={int(tomado)} and "
                             "tipo='aprobacion' and estado='contestando'") == 1
                and js(home, "caso", "ver", tomado)[0]["etapa"] == "decision")
+
+            # El agente propone otra cosa entre que la respuesta mira el aviso y lo aplica:
+            # el `no` del aviso viejo no cierra la propuesta nueva.
+            llegan(home, A, [msg(PERSONA, "T14", PEDIDO, 3)])
+            nuevo, _ = propuesta_lista(home, "T14", texto="Listo, cuesta $55.")
+            tick(home)
+            js(home, "caso", "propuesta", nuevo, "--tipo", "responder", "--respuesta",
+               "Listo, cuesta $58.", "--actor", "agente")
+            wsf = carga_wa_scope(home)
+            wsf.aviso_estado = lambda *_: None
+            con = wsf.db()
+            wsf.atiende_respuesta(con, {"stanza_id": "R-VIEJO", "chat_jid": DUENO_DM,
+                                        "text": f"no {nuevo}"})
+            con.close()
+            ok("un `no` a un aviso viejo no cierra la propuesta nueva",
+               js(home, "caso", "ver", nuevo)[0]["etapa"] == "decision")
+
+            # `estado` dice desde cuando espera el caso en su etapa, no su ultimo evento.
+            con = db_de(home)
+            con.execute("update caso_evento set at='2026-01-02 03:04:00' where case_id=? and "
+                        "a='decision' and de<>'decision'", (int(tomado),))
+            con.commit()
+            con.close()
+            llegan(home, A, [msg(DUENO_DM, "R12", "estado", 1, de=DUENO_LID)])
+            ingiere(home)
+            lineas = [l for l in (al_dueno(home)[-1]["body"] if al_dueno(home) else "")
+                      .splitlines() if l.startswith(f"{tomado} · ")]
+            ok("`estado` dice desde cuando el caso esta en su etapa",
+               len(lineas) == 1 and "2026-01-02 03:04" in lineas[0], f"{lineas}")
         finally:
             sidecar.cerrar()
 

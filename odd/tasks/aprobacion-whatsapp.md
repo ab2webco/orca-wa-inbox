@@ -79,6 +79,9 @@ no approval number set, the feature is off and everything behaves as today.
   answer that claimed it can.
 - A reply in a `borrador` chat always waits for the owner (the tick never tries it), so it
   reports too, with the code `borrador`.
+- `no N` and a correction check the version again with the database taken: an answer to an
+  older notice never closes or reclassifies a newer proposal. `estado` shows when the case
+  entered its stage, not its last event.
 - "Waits for the owner" = a hold event for the current version: `trabajo espera al dueno`,
   a new `respuesta espera al dueno` (the rule refused to sign a reply, E_EXCEPTION), a
   `wa-send` hold (`envio frenado`), or the revision rounds that end in "lo decide el dueno".

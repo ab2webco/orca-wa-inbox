@@ -5888,6 +5888,11 @@ def aplica_respuesta(con, aviso, r, tx):
         return entrega_del_dueno(con, caso, tx)
     caso_toma(con)
     caso = caso_de(con, n)
+    # Con la base tomada se mira otra vez la version: el agente pudo proponer otra cosa
+    # despues de que se miro el aviso, y el `no` o la correccion de la vieja no la tocan.
+    if caso["propuesta_version"] != version:
+        con.rollback()
+        return tx["cambio"].format(n=n)
     if r["accion"] == "no":
         caso_valida(caso, "cerrado", RECHAZO_WHATSAPP)
         caso_mover(con, caso, "cerrado", "dueno", RECHAZO_WHATSAPP)
@@ -5950,6 +5955,15 @@ def entrega_del_dueno(con, caso, tx):
     return tx["aprobado_sale"].format(n=n)
 
 
+def desde_la_etapa(con, caso):
+    """Cuando entro el caso a la etapa en que esta: el ultimo evento que lo movio ahi. Su
+    `updated_at` no sirve, cambia con cualquier evento (un aviso, una nota)."""
+    fila = con.execute("select at from caso_evento where case_id=? and a=? and "
+                       "(de is null or de<>a) order by id desc limit 1",
+                       (caso["case_id"], caso["etapa"])).fetchone()
+    return fila["at"] if fila else caso["created_at"]
+
+
 def texto_de_estado(con):
     """`estado`: los casos abiertos de la linea activa, uno por linea y por etapa."""
     tx = aviso_textos()
@@ -5961,7 +5975,8 @@ def texto_de_estado(con):
     orden = {e: i for i, e in enumerate(ETAPAS_ESTADO)}
     filas = sorted(filas, key=lambda f: (orden[f["etapa"]], f["case_id"]))
     lineas = [f"{f['case_id']} · {nombre_del_chat(con, f['chat_jid'])} · "
-              f"{tx['etapas'][f['etapa']]} · {tx['desde'].format(x=str(f['updated_at'])[:16])}"
+              f"{tx['etapas'][f['etapa']]} · "
+              f"{tx['desde'].format(x=str(desde_la_etapa(con, f))[:16])}"
               for f in filas[:TOPE_ESTADO]]
     if len(filas) > TOPE_ESTADO:
         lineas.append(tx["estado_mas"].format(x=len(filas) - TOPE_ESTADO))
