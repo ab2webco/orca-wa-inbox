@@ -1,5 +1,28 @@
 # Tablero de casos, ejecución aprobada y Jev
 
+## Estado al 2026-10-03 (manda sobre todo lo de abajo)
+
+El texto de más abajo es la historia de cómo se llegó aquí; varias partes describen
+diseños que se cambiaron. Si algo de abajo contradice esta tabla, vale la tabla. El
+seguimiento vivo está en Plane, proyecto **WhatsApp Inbox (WAINBOX)**.
+
+| Tarea | Estado | Nota |
+|---|---|---|
+| T1–T7, T10, T13, T15–T17, T19–T21 | Hecho | v4.10.0 |
+| T8 Despacho al agente del proyecto | Hecho | Por terminal desde el tick (`terminal create --agent claude` + brief 0600), no por la orquestación de Orca ni tarjetas de Plane. |
+| T12 Espacio propio del plugin | Hecho | Agente de casos, arnés y PROJECTS.md ahí. |
+| T14 Aprobación por WhatsApp | Hecho, v4.12.0 | Número de aprobación elegido entre los de confianza, no el chat propio. Spec: `aprobacion-whatsapp.md`. |
+| T22 puntos 1–5 y 9 (incl. T22.9) | Hecho | v4.10.0, afinado en 4.11.1/4.11.3. |
+| Agente de casos por terminal, archivo del caso, pantalla de confianza, limpieza de espacios | Hecho | `agente-de-casos.md`, `caso-en-archivo.md`, `confianza-carpeta.md`, `espacios-del-plugin.md`. |
+| T0 Sonda de orquestación | Obsoleta | La orquestación pide una terminal emisora; se reemplazó por terminales. Nada depende de T0. |
+| T9 Estadísticas | Pendiente | |
+| T11 Capturas | Solo falta lo de estadísticas (después de T9) | Tablero y ajustes ya están en `npm run check`. |
+| T14.4 Resumen diario por WhatsApp | Pendiente | Lo siguiente de T14. |
+| T18 | Solo falta `wa-read wait` | Lo demás existe. |
+| T22.7 Roles por número, T22.8 varios proyectos por chat | Pendiente | |
+| `wa-send --approve` lo puede llamar cualquier agente | Pendiente (seguridad) | Hueco abierto de T22. |
+| T23 Supervisión del equipo, T24 sección de skills | Pendiente | Dependen de T22.7 y `wa-read wait`. |
+
 ## Objetivo
 
 Que cada pedido que llega por WhatsApp sea un **caso** visible en un tablero,
@@ -288,7 +311,7 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
       Cerrada en W3 (8e36089, 5250852; integrada 7b8b06b): `tick` cada minuto sin
       modelo y `workspace: plugin-owned`; `triage` conserva su id con precheck
       `--needs-agent`; `take` se borra; `engines >=1.4.160`. Check verde.
-- [ ] T8 — Despacho al proyecto desde el orquestador: entrega del pedido con su
+- [x] T8 — (hecho por terminal; ver "Estado" arriba) Despacho al proyecto desde el orquestador: entrega del pedido con su
       instrucción de respuesta, reporte con `caso resultado`, verificación con
       evidencia (sin evidencia → Bloqueado). Depende de T0 y T12.
       Diseño acordado con el dueño (2026-10-01): el agente del caso actúa como
@@ -369,7 +392,7 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
       (`caso_despacho.reintento_de`); una firma de más de 24 h que el despacho ve por
       primera vez va a Bloqueado "aprobación vieja: vuelve a aprobar". `run_id`, `task_id` y
       `dispatch_id` quedan sin uso en la tabla.
-- [ ] T12 — Orquestador: workspace propio del plugin con harness de atención y
+- [x] T12 — Orquestador: workspace propio del plugin con harness de atención y
       la lista de proyectos elegidos en los ajustes, refrescada cuando cambia.
       Hecho en W3 (652b6b9): catálogo desde Orca y PROJECTS.md en el harness.
       Falta registrar el workspace propio del plugin (`workspace: plugin-owned`), que
@@ -377,7 +400,7 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
 - [x] T13 — Ajustes por chat: proyecto en lugar de Plane, modos nuevos, reglas
       por texto a proyecto; migración sin pérdida.
       Cerrada en W3 (bac9ec1, 8efe23c); la UI la rehace T17.
-- [ ] T14 — Aprobación por WhatsApp (chat propio): sonda en vivo primero, luego
+- [x] T14 — (hecho con número de aprobación, ver `aprobacion-whatsapp.md`; lo de abajo es el diseño viejo) Aprobación por WhatsApp (chat propio): sonda en vivo primero, luego
       mensaje de excepción, lectura de la respuesta citada, envío o cierre.
       Rediseño pedido por el dueño (2026-10-01): una automatización de verdad, no un
       tablero donde todo espera.
@@ -401,7 +424,7 @@ no solo lo enviado. La insignia del nav = `counts.decision`.
          lo abra.
 - [x] T15 — Primera corrida de `ingest` con línea base (`case_window_hours`).
       Cerrada en W1 (c0613ff).
-- [ ] T0 — Sonda en vivo del despliegue de agente desde una automatización
+- [x] T0 — (obsoleta: se reemplazó por terminales) Sonda en vivo del despliegue de agente desde una automatización
       (necesita una cuenta Claude global en Orca).
 - [ ] T9 — Pestaña de estadísticas desde `caso_evento`.
 - [x] T10 — Insignia del nav = tarjetas en "Tu decisión" (hoy se queda pegada).
