@@ -5428,6 +5428,7 @@ TEXTOS_AVISO = {
     "es": {"caso": "Caso {n}", "pide": "Pide: {x}", "espera": "Espera porque: {x}",
            "respuesta": "Respuesta propuesta: {x}", "trabajo": "Trabajo propuesto: {x}",
            "credencial": "Hay una credencial en el caso: apruebelo en el tablero, no por aqui.",
+           "credencial_si": "Caso {n} lleva una credencial: apruebelo en el tablero, no por aqui.",
            "como": "Responda si {n} para aprobar, no {n} para cerrar, o {n} y su correccion.",
            "bloqueado": "Caso {n} · {chat} se bloqueo: {x}",
            "aprobado_sale": "Caso {n} aprobado: la respuesta salio.",
@@ -5453,6 +5454,7 @@ TEXTOS_AVISO = {
     "en": {"caso": "Case {n}", "pide": "Asks: {x}", "espera": "Waiting because: {x}",
            "respuesta": "Proposed reply: {x}", "trabajo": "Proposed work: {x}",
            "credencial": "A credential is involved: approve it on the board, not here.",
+           "credencial_si": "Case {n} involves a credential: approve it on the board, not here.",
            "como": "Answer yes {n} to approve, no {n} to close, or {n} and your correction.",
            "bloqueado": "Case {n} · {chat} got blocked: {x}",
            "aprobado_sale": "Case {n} approved: the reply went out.",
@@ -5571,6 +5573,20 @@ def espera_del_dueno(con, caso):
     return None
 
 
+def lleva_credencial(con, caso, motivos):
+    """Si el caso lleva una credencial: su aviso no la muestra y se aprueba en el tablero,
+    nunca por WhatsApp. Un valor con forma de secreto cuenta, venga de la propuesta o de lo
+    que pidio el cliente (el titulo o su primer mensaje)."""
+    try:
+        propuesta = json.loads(caso.get("propuesta") or "null") or {}
+    except (TypeError, ValueError):
+        propuesta = {}
+    cuerpo = str(propuesta.get(CAMPO_DE_TIPO.get(propuesta.get("tipo"), "respuesta")) or "")
+    return bool("credential" in _lista_json(caso.get("excepciones"))
+                or wa_reglas.secreto(cuerpo) or wa_reglas.secreto(que_pide(con, caso))
+                or "credential" in (motivos or []))
+
+
 def texto_de_aviso(con, caso, motivos):
     """El aviso de un caso que espera al dueno. Nunca el valor de una credencial."""
     tx = aviso_textos()
@@ -5582,11 +5598,7 @@ def texto_de_aviso(con, caso, motivos):
     tipo = propuesta.get("tipo")
     cuerpo = str(propuesta.get(CAMPO_DE_TIPO.get(tipo, "respuesta")) or "")
     pide = que_pide(con, caso)
-    # Un valor con forma de secreto no viaja, venga de la respuesta o de lo que pidio el
-    # cliente (el titulo o su primer mensaje).
-    credencial = ("credential" in _lista_json(caso.get("excepciones"))
-                  or wa_reglas.secreto(cuerpo) or wa_reglas.secreto(pide)
-                  or "credential" in motivos)
+    credencial = lleva_credencial(con, caso, motivos)
     lineas = [f"{tx['caso'].format(n=n)} · {nombre_del_chat(con, caso['chat_jid'])}",
               tx["pide"].format(x=pide if not credencial else "-"),
               tx["espera"].format(x=motivos_en_palabras(motivos))]
@@ -5837,6 +5849,10 @@ def aplica_respuesta(con, aviso, r, tx):
     tablero. Devuelve la linea de confirmacion."""
     n, version = aviso["case_id"], aviso["version"]
     if r["accion"] == "si":
+        # El aviso de un caso con credencial manda al tablero: por aca no se aprueba.
+        caso = caso_de(con, n)
+        if lleva_credencial(con, caso, espera_del_dueno(con, caso)):
+            return tx["credencial_si"].format(n=n)
         cmd_caso_aprobar(con, argparse.Namespace(id=n, version=version, actor="dueno",
                                                  via=POR_WHATSAPP))
         aviso_contestado(con, aviso)

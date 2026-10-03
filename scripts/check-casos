@@ -7292,6 +7292,17 @@ if NODE:
                and "Abc12345" not in del_caso[0]["body"]
                and "credencial" in del_caso[0]["body"]
                and "tablero" in del_caso[0]["body"], f"{del_caso}")
+            # Y como el aviso lo dice, se aprueba en el tablero: un `si N` no lo aprueba.
+            llegan(home, A, [msg(DUENO_DM, "R0", f"si {clave}", 1, de=DUENO_LID)])
+            ingiere(home)
+            ver = js(home, "caso", "ver", clave)[0]
+            ok("un caso con una credencial no se aprueba por WhatsApp",
+               not ver["aprobada"] and ver["etapa"] == "decision", f"{ver['eventos'][-2:]}")
+            tick(home)
+            ok("y la confirmacion manda al tablero", any(
+                f"Caso {clave}" in a["body"] and "tablero" in a["body"]
+                and "credencial" in a["body"] for a in al_dueno(home)[-1:]),
+               f"{al_dueno(home)[-1:]}")
 
             # si N: la respuesta retenida sale como si el dueno la mandara en el tablero.
             llegan(home, A, [msg(DUENO_DM, "R1", f"si {dinero}", 1, de=DUENO_LID,

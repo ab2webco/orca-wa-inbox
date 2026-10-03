@@ -69,6 +69,8 @@ no approval number set, the feature is off and everything behaves as today.
   one does not go out either (`approval-expired`, `approval-superseded`).
 - Answers are read only while the approval DM is in `responder`: in any other mode a
   `si N` there is an owner order like any other.
+- A case with a credential (exception, secret-shaped value in the proposal or the request)
+  is approved on the board only: `si N` does not approve it and the answer says so.
 - "Waits for the owner" = a hold event for the current version: `trabajo espera al dueno`,
   a new `respuesta espera al dueno` (the rule refused to sign a reply, E_EXCEPTION), a
   `wa-send` hold (`envio frenado`), or the revision rounds that end in "lo decide el dueno".
