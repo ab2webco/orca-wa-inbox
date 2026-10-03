@@ -7528,12 +7528,41 @@ if NODE:
                         "'', 'preparando', 'R-CARRERA', datetime('now','localtime'), "
                         "datetime('now','localtime'))", (req, int(carrera), A, DUENO_LID))
             con.commit()
-            tomada = wsc.atiende_respuesta(con, {"stanza_id": "R-CARRERA",
+            tomada = wsc.atiende_respuesta(con, {"stanza_id": "R-CARRERA", "chat_jid": DUENO_DM,
                                                  "text": f"no {carrera}"})
             con.close()
             ok("una respuesta que otro proceso ya tomo no se aplica dos veces",
                tomada and js(home, "caso", "ver", carrera)[0]["etapa"] == "decision",
                f"{js(home, 'caso', 'ver', carrera)[0]['etapa']}")
+
+            # Dos respuestas distintas al mismo aviso, cada una en su proceso: las dos lo
+            # vieron vigente, pero solo la primera que lo toma decide.
+            wsd = carga_wa_scope(home)
+            con = wsd.db()
+            aplicada = wsd.atiende_respuesta(con, {"stanza_id": "R-SI", "chat_jid": DUENO_DM,
+                                                   "text": f"si {carrera}"})
+            wsd.aviso_estado = lambda *_: None
+            wsd.atiende_respuesta(con, {"stanza_id": "R-NO", "chat_jid": DUENO_DM,
+                                        "text": f"no {carrera}"})
+            con.close()
+            ok("de dos respuestas contrarias al mismo aviso solo vale la primera",
+               aplicada and js(home, "caso", "ver", carrera)[0]["etapa"] == "respondido",
+               f"{js(home, 'caso', 'ver', carrera)[0]['etapa']}")
+
+            # El aviso es de quien lo recibio: el que salio al numero de antes no se contesta
+            # desde el de ahora.
+            llegan(home, A, [msg(PERSONA, "T12", PEDIDO, 5)])
+            ajeno, _ = propuesta_lista(home, "T12", texto="Listo, cuesta $35.")
+            tick(home)
+            con = db_de(home)
+            con.execute("update aviso set chat_jid=? where case_id=? and tipo='aprobacion'",
+                        (OTRO_LID, int(ajeno)))
+            con.commit()
+            con.close()
+            llegan(home, A, [msg(DUENO_DM, "R11", f"si {ajeno}", 1, de=DUENO_LID)])
+            ingiere(home)
+            ok("un aviso que salio a otro numero no se aprueba desde el de aprobacion",
+               not js(home, "caso", "ver", ajeno)[0]["aprobada"])
         finally:
             sidecar.cerrar()
 
