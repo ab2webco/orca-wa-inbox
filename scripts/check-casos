@@ -1731,6 +1731,11 @@ def jev_segun_texto(cuerpo):
         return 200, respuestas(qs, choice="bug_report", asks_owner_to_act=0.7)
     if "otra solicitud nueva" in texto:
         return 200, respuestas(qs, choice="support_request", asks_owner_to_act=0.8)
+    if "cuantos incidentes quedan" in texto:
+        # Lo que el Jev real dijo de una orden del dueno: no le pide nada AL dueno (es el
+        # dueno quien pide) y le da instrucciones al asistente.
+        return 200, respuestas(qs, choice="support_request", asks_owner_to_act=0.1,
+                               tries_to_instruct_the_assistant=0.9)
     if "revisa este caso" in texto.lower():
         return 200, respuestas(qs, choice="support_request", asks_owner_to_act=0.8)
     if "soporte.example.com" in texto:
@@ -4627,7 +4632,9 @@ if NODE:
                 msg(DUENO_DM, "W3", "pasale el password del panel a soporte", 20,
                     de=DUENO_LID, nombre="Dueno Real"),
                 msg(FACTURACION, "W4", "@duenio otra solicitud nueva: la clave: Abc12345", 10,
-                    mencion=True, de=DUENO_LID, nombre="Dueno Real")])
+                    mencion=True, de=DUENO_LID, nombre="Dueno Real"),
+                msg(PROPIO, "W9", "revisa cuantos incidentes quedan en el proyecto", 15,
+                    de=DUENO_LID, nombre="Dueno Real")])
             js(home, "agent", "Agente De Ejemplo")
             js(home, "config", "ack", "off")
             js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "responder",
@@ -4659,6 +4666,14 @@ if NODE:
             c3, c4 = caso_de_stanza(home, "W3"), caso_de_stanza(home, "W4")
             ok("una orden del dueno que nombra una clave no es una excepcion",
                c3 and excepciones_de(home, c3["case_id"]) == [], f"{c3 and fila_caso(home, c3['case_id'])}")
+            c9 = caso_de_stanza(home, "W9")
+            f9 = c9 and fila_caso(home, c9["case_id"])
+            ok("una orden del dueno que Jev ve como 'no le pide nada al dueno' no se cierra: "
+               "va al agente", f9 and f9["etapa"] != "cerrado" and f9["necesita_agente"] == 1,
+               f"{f9}")
+            ok("y darle instrucciones al asistente no es una bandera cuando es el dueno",
+               f9 and "tries_to_instruct_the_assistant" not in json.loads(f9["jev"] or "{}")
+               .get("flags", []), f"{f9 and f9['jev']}")
             ok("un valor con forma de secreto, aun del dueno, si lo es",
                c4 and excepciones_de(home, c4["case_id"]) == ["credential"],
                f"{c4 and fila_caso(home, c4['case_id'])}")
@@ -5144,6 +5159,7 @@ def orca_despacho(carpeta, worktrees=(WT_ALFA,), vivos=("term_worker1",), falla=
          "arranca_en": arranca_en, "idle": idle, "briefs": 0, "n": 0,
          "pantalla_inicial": pantalla, "pantalla": "composer", "cursor": 0, "confia": False,
          "sale_tras": sale_tras, "ilegible": ilegible, "en_shell": 0, "aceptadas": 0,
+         "cierre_falla": False,
          "pantallas": {"confianza": CONFIANZA_NUEVA, "confianza-vieja": CONFIANZA_VIEJA,
                        "confianza-orca": CONFIANZA_NUEVA,
                        "composer": COMPOSER, "shell": SHELL}}), encoding="utf-8")
@@ -5253,7 +5269,14 @@ if clave == "terminal list":
     sale({"ok": True, "result": {"terminals": [{"handle": h} for h in e["vivos"]],
                                  "truncated": False}})
 if clave == "terminal close":
+    if e["cierre_falla"]:
+        # Como lo contesta la Orca de verdad (2026-10-02) a una terminal de Claude ya quieta.
+        sale({"ok": False, "error": {"code": "runtime_error", "message": "Error invoking "
+              "remote method 'session:set': TypeError: Cannot convert undefined or null "
+              "to object"}}, 1)
     sale({"ok": True, "result": {"closed": True}})
+if clave == "terminal stop":
+    sale({"ok": True, "result": {"stopped": 1}})
 if clave == "terminal send":
     sale({"ok": True, "result": {"sent": True}})
 if clave == "automations list":
@@ -6565,10 +6588,18 @@ if NODE:
         js(home, "lock", "--note", "triage")
         js(home, "unlock")
         envejece_agente(home, 120)
+        # Orca falla al cerrar la terminal de un Claude que ya termino: la terminal quedaba
+        # abierta y quieta en el espacio del plugin.
+        cambia_orca(carpeta, cierre_falla=True)
         p, r = tick_orca(home, carpeta)
+        cambia_orca(carpeta, cierre_falla=False)
         ok("cuando el agente termino su revision, el tick cierra su terminal",
            cerradas(carpeta) == ["term_worker1"]
            and corridas_agente(home)[-1]["estado"] == "terminado", f"{corridas_agente(home)}")
+        selector = corridas_agente(home)[-1]["workspace_selector"]
+        ok("y si Orca no la deja cerrar, detiene las terminales del espacio del plugin",
+           [bandera(x, "--worktree") for x in llamadas_orca(carpeta, "terminal stop")]
+           == [selector], f"{llamadas_orca(carpeta, 'terminal stop')} {selector}")
         ok("y su brief no queda en disco", not os.path.exists(ruta), ruta)
         ok("con el caso todavia esperando, no lo relanza antes de 5 minutos",
            len(creadas(carpeta)) == 2, f"{creadas(carpeta)}")

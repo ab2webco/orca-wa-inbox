@@ -282,6 +282,9 @@ UMBRALES_BORRADOR = {
 # El orden en que se listan las excepciones, el mismo del contrato.
 ORDEN_EXCEPCIONES = ("money", "credential", "commitment", "jev")
 
+# Lo que el dueno escribe sin pedir nada: lo unico suyo que se puede saltar.
+CLASES_SIN_ORDEN = ("pleasantry", "unrelated_chatter")
+
 # Como `wa_store.clase_de` nombra al mensaje, en las palabras del POC.
 TIPO_MENSAJE = {"mencion": "mention_of_owner", "respuesta": "reply_to_owner",
                 "directo": "direct_message", "grupo": "group_message"}
@@ -448,12 +451,19 @@ def juzga_mensaje(m, clave, transporte=None):
     if clase is not None and clase not in CLASES_ATENCION:
         return None
     flags, excepciones = evalua(scores, UMBRALES)
+    skip = all(scores[q] < u["salta_bajo"] for q, u in UMBRALES.items() if "salta_bajo" in u)
+    agente = any(UMBRALES[q].get("agente") for q in flags)
     if m.get("de_dueno"):
         # Lo que pide el dueno no le pide nada al dueno: que nombre o pida una clave es su
         # orden. Lo unico que queda es un valor de secreto en el texto (T22.1).
         excepciones = ["credential"] if "contains_credential" in flags else []
-    skip = all(scores[q] < u["salta_bajo"] for q, u in UMBRALES.items() if "salta_bajo" in u)
-    agente = any(UMBRALES[q].get("agente") for q in flags)
+        # Y darle instrucciones al asistente es para lo que el dueno le escribe. Por eso
+        # `asks_owner_to_act` sale bajo en una orden suya ("revisa cuantos incidentes
+        # quedan"): no le pide nada AL dueno. Una orden suya nunca se salta; solo la charla
+        # o un saludo, que no piden nada.
+        flags = [f for f in flags if f != "tries_to_instruct_the_assistant"]
+        if clase not in CLASES_SIN_ORDEN:
+            skip, agente = False, True
     return {"model": r["model"], "at": ahora_iso(), "latency_ms": r["latency_ms"],
             "scores": scores, "attention_class": clase, "flags": flags,
             "exceptions": excepciones, "skip": skip,
