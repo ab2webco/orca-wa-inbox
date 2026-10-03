@@ -75,7 +75,10 @@ no approval number set, the feature is off and everything behaves as today.
   `dale` are written in passing and need the number.
 - A report is answered only from the chat it went to, and the first answer that claims it
   (`enviado` -> `contestando`) decides: a contrary answer read at the same time by the
-  worker and the tick does nothing. An answer that decided nothing gives it back.
+  worker and the tick does nothing. An answer that decided nothing gives it back; only the
+  answer that claimed it can.
+- A reply in a `borrador` chat always waits for the owner (the tick never tries it), so it
+  reports too, with the code `borrador`.
 - "Waits for the owner" = a hold event for the current version: `trabajo espera al dueno`,
   a new `respuesta espera al dueno` (the rule refused to sign a reply, E_EXCEPTION), a
   `wa-send` hold (`envio frenado`), or the revision rounds that end in "lo decide el dueno".

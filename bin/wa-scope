@@ -5574,6 +5574,11 @@ def espera_del_dueno(con, caso):
             return list(dict.fromkeys(c for _, c in motivos_del_freno(d))) or ["jev"]
         if " veces (" in d and "lo decide el dueno" in d and d.endswith(marca):
             return _codigos(d.split("(", 1)[1].split(")", 1)[0])
+    # En un chat `borrador` toda respuesta espera el visto del dueno: el tick no la intenta
+    # (`candidatos_tick` solo toma `responder`), asi que no queda freno que lo anote.
+    if (propuesta_tipo(caso) == "responder"
+            and (merged_scope(con).get(caso["chat_jid"]) or {}).get("mode") == "borrador"):
+        return ["borrador"]
     return None
 
 
@@ -5828,6 +5833,7 @@ def atiende_respuesta(con, m):
     if not tomada:
         return True
     texto = tx["sin_confirmar"].format(n=n)
+    tomo_aviso = False
     try:
         porque = aviso_estado(con, aviso, horas_aprobacion(con))
         # Despues se toma el aviso: dos respuestas distintas (si en un proceso, no en otro)
@@ -5836,7 +5842,8 @@ def atiende_respuesta(con, m):
             cur = con.execute("update aviso set estado='contestando', updated_at=? where "
                               "req_id=? and estado='enviado'", (ahora_caso(), aviso["req_id"]))
             con.commit()
-            porque = None if cur.rowcount == 1 else "cambio"
+            tomo_aviso = cur.rowcount == 1
+            porque = None if tomo_aviso else "cambio"
         if porque:
             texto = tx[porque].format(n=n)
         else:
@@ -5852,9 +5859,11 @@ def atiende_respuesta(con, m):
         if con.in_transaction:
             con.rollback()
         # Lo que no decidio el caso (un error, una credencial, una correccion sobre un
-        # resultado) devuelve el aviso: se puede contestar otra vez.
-        con.execute("update aviso set estado='enviado', updated_at=? where req_id=? and "
-                    "estado='contestando'", (ahora_caso(), aviso["req_id"]))
+        # resultado) devuelve el aviso: se puede contestar otra vez. Solo lo devuelve quien
+        # lo tomo; la que perdio no suelta el de la otra.
+        if tomo_aviso:
+            con.execute("update aviso set estado='enviado', updated_at=? where req_id=? and "
+                        "estado='contestando'", (ahora_caso(), aviso["req_id"]))
         con.execute("update aviso set texto=?, estado='pendiente', updated_at=? where req_id=?",
                     (texto, ahora_caso(), req))
         con.commit()

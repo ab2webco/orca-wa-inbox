@@ -7563,6 +7563,26 @@ if NODE:
             ingiere(home)
             ok("un aviso que salio a otro numero no se aprueba desde el de aprobacion",
                not js(home, "caso", "ver", ajeno)[0]["aprobada"])
+
+            # La que pierde la carrera no suelta el aviso que la otra esta aplicando.
+            llegan(home, A, [msg(PERSONA, "T13", PEDIDO, 4)])
+            tomado, _ = propuesta_lista(home, "T13", texto="Listo, cuesta $45.")
+            tick(home)
+            con = db_de(home)
+            con.execute("update aviso set estado='contestando' where case_id=? and "
+                        "tipo='aprobacion'", (int(tomado),))
+            con.commit()
+            con.close()
+            wse = carga_wa_scope(home)
+            wse.aviso_estado = lambda *_: None
+            con = wse.db()
+            wse.atiende_respuesta(con, {"stanza_id": "R-PIERDE", "chat_jid": DUENO_DM,
+                                        "text": f"no {tomado}"})
+            con.close()
+            ok("la respuesta que no tomo el aviso no lo devuelve",
+               cuenta(home, f"select count(*) from aviso where case_id={int(tomado)} and "
+                            "tipo='aprobacion' and estado='contestando'") == 1
+               and js(home, "caso", "ver", tomado)[0]["etapa"] == "decision")
         finally:
             sidecar.cerrar()
 
@@ -7661,6 +7681,29 @@ if NODE:
             ver = js(home, "caso", "ver", espera)[0]
             ok("con el directo fuera de Automatico, `si N` no aprueba",
                not ver["aprobada"], f"{ver['etapa']} {ver['eventos'][-3:]}")
+        finally:
+            sidecar.cerrar()
+
+    # Un chat en Borrador: toda respuesta espera el visto del dueno, aunque ninguna regla
+    # la frene, asi que tambien avisa y `si N` la manda.
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home, modo_persona="borrador")
+        js(home, "config", "ack", "off")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        pon_aprobacion(home, DUENO_LID)
+        sidecar = SidecarFalso(home)
+        try:
+            llegan(home, A, [msg(PERSONA, "X1", PEDIDO, 30)])
+            visto, _ = propuesta_lista(home, "X1")
+            tick(home)
+            del_visto = [a for a in al_dueno(home) if f"Caso {visto}" in a["body"]]
+            ok("una respuesta de un chat en Borrador avisa al dueno",
+               len(del_visto) == 1 and "visto" in del_visto[0]["body"], f"{al_dueno(home)}")
+            llegan(home, A, [msg(DUENO_DM, "X2", f"si {visto}", 1, de=DUENO_LID)])
+            ingiere(home)
+            ver = js(home, "caso", "ver", visto)[0]
+            ok("y `si N` la manda", ver["etapa"] == "respondido", f"{ver['eventos'][-2:]}")
         finally:
             sidecar.cerrar()
 
