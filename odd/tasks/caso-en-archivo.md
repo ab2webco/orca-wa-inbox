@@ -30,7 +30,8 @@ After an update/re-approval the plugin's automations come back enabled without a
 - [x] T3 Rules into the skill/CLAUDE.md, `prompts/triage.md` as a pointer; harness tests.
       Proof: check-harness 50 checks (rules in AGENTS.md + skill, pointer <= 30 lines, names
       the skill, no steps); check-prompts 15; resolver 29/29; manifest 110/110.
-- [ ] T4 Worker enables the plugin automations found disabled; worker tests.
+- [x] T4 Worker enables the plugin automations found disabled; worker tests.
+      Proof: worker 395/395 (manifest match, owner-disabled stays off, startup enable).
 - [ ] T5 Live E2E after deploy: a real case answered from the case file; automations
       enabled after re-approval without a click.
 
