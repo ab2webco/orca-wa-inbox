@@ -5051,6 +5051,44 @@ def tick_limpia(con, resumen):
         resumen["limpieza_atascados"] = espacios_atascados(con)
 
 
+# Los titulos de las terminales de los agentes del plugin: el que les pone el plugin al
+# abrirlas, o el que Claude les pone por el brief (`despachos/caso-<caso>-<fila>.md`,
+# `despachos/agente-casos-<fila>.md`). Delante va el icono de estado de Claude.
+TITULO_DE_AGENTE = re.compile(
+    r"(?:Despacho caso-(?P<caso>\d+)-(?P<despacho>\d+)|Despacho agente-casos-(?P<corrida>\d+)"
+    r"|WhatsApp case #(?P<del_caso>\d+)|(?P<agente>WhatsApp: case agent))\s*$")
+
+
+def cierra_huerfanas(con, cli, resumen):
+    """Cierra las terminales de agentes del plugin que no son de nada en curso. Al reiniciar
+    Orca las pestanas vuelven con handles nuevos y el plugin, que las seguia por el handle,
+    las perdia: quedaban abiertas, y Orca hasta volvia a abrir Claude en ellas. Se reconocen
+    por el titulo; una de un despacho o de una corrida en curso no se toca aunque su handle
+    haya cambiado, y ninguna otra terminal del dueno tampoco. Nunca detiene un espacio."""
+    terminales = lista_de_orca(cli, ["terminal", "list", "--limit", "1000"], "terminals")
+    if terminales is None:
+        return
+    despachos = [dict(r) for r in con.execute(
+        f"select id, case_id, terminal from caso_despacho where estado in "
+        f"({','.join('?' * len(DESPACHO_EN_VUELO))})", DESPACHO_EN_VUELO)]
+    corridas = [dict(r) for r in con.execute(
+        f"select id, terminal from agente_corrida where estado in "
+        f"({','.join('?' * len(AGENTE_EN_VUELO))})", AGENTE_EN_VUELO)]
+    en_curso = {x["terminal"] for x in despachos + corridas if x["terminal"]}
+    for t in terminales:
+        handle, m = t.get("handle"), TITULO_DE_AGENTE.search(str(t.get("title") or ""))
+        if not m or not isinstance(handle, str) or not handle or handle in en_curso:
+            continue
+        if m["despacho"] and any(d["id"] == int(m["despacho"]) for d in despachos):
+            continue
+        if m["del_caso"] and any(d["case_id"] == int(m["del_caso"]) for d in despachos):
+            continue
+        if (m["corrida"] or m["agente"]) and corridas:
+            continue
+        cierra_terminal(cli, handle)
+        resumen["limpiados"] += 1
+
+
 def limpia_espacios(con, resumen):
     ahora = time.time()
     fila = con.execute("select value from settings where key='limpieza_at'").fetchone()
@@ -5067,6 +5105,7 @@ def limpia_espacios(con, resumen):
     if not cli:
         resumen["limpieza_error"] += 1
         return
+    cierra_huerfanas(con, cli, resumen)
     automatizaciones = lista_de_orca(cli, ["automations", "list"], "automations")
     if automatizaciones is None:
         resumen["limpieza_error"] += 1
