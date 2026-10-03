@@ -7445,6 +7445,76 @@ if NODE:
                and cuenta(home, "select count(*) from caso_mensaje where stanza_id='R10'") == 0,
                ultimo)
             ok("nada de esto salio a otro chat", a_otro(home) == 0)
+
+            # Revision del PR (Copilot): credencial, destinatario viejo, carrera y
+            # recuperacion.
+            llegan(home, A, [msg(PERSONA, "T9", PEDIDO, 8)])
+            titulo, _ = propuesta_lista(home, "T9", texto="Listo, cuesta $40.")
+            con = db_de(home)
+            con.execute("update caso set titulo='la clave es: Xyz98765' where case_id=?",
+                        (int(titulo),))
+            con.commit()
+            con.close()
+            tick(home)
+            del_titulo = [a for a in al_dueno(home) if f"Caso {titulo}" in a["body"]]
+            ok("un secreto en lo que pide el cliente tampoco viaja en el aviso",
+               len(del_titulo) == 1 and "Xyz98765" not in del_titulo[0]["body"]
+               and "credencial" in del_titulo[0]["body"], f"{del_titulo}")
+            llegan(home, A, [msg(PERSONA, "T10", PEDIDO, 7)])
+            secreto_b, _ = propuesta_lista(home, "T10", texto="Recibido.", tipo="trabajar")
+            js(home, "caso", "mover", secreto_b, "bloqueado", "--motivo",
+               "falta acceso, la clave es: Abc12345", "--actor", "automatizacion")
+            tick(home)
+            del_b = [a for a in al_dueno(home) if f"Caso {secreto_b}" in a["body"]]
+            ok("ni en el motivo de un bloqueo", len(del_b) == 1
+               and "Abc12345" not in del_b[0]["body"], f"{del_b}")
+
+            # El numero viejo sigue autorizado: lo unico que lo frena es que ya no es el
+            # de aprobacion.
+            js(home, "set", OTRO_LID, "--provider", "ninguno", "--mode", "responder")
+            con = db_de(home)
+            con.execute("insert into aviso (req_id, tipo, case_id, account, chat_jid, texto, "
+                        "estado, at, updated_at) values ('aviso-b-99-1', 'bloqueo', null, ?, "
+                        "?, 'Caso 99 se bloqueo: viejo', 'pendiente', "
+                        "datetime('now','localtime'), datetime('now','localtime'))",
+                        (A, OTRO_LID))
+            con.execute("insert into aviso (req_id, tipo, case_id, account, chat_jid, texto, "
+                        "estado, stanza_id, at, updated_at) values ('aviso-r-colgado', "
+                        "'respuesta', ?, ?, ?, '', 'preparando', 'R-COLGADO', "
+                        "datetime('now','localtime','-20 minutes'), "
+                        "datetime('now','localtime','-20 minutes'))",
+                        (int(viejo), A, DUENO_LID))
+            con.commit()
+            con.close()
+            tick(home)
+            ok("un aviso pendiente para un numero que ya no es el de aprobacion no sale",
+               not any(f["req_id"] == "aviso-b-99-1" for f in envios(home))
+               and cuenta(home, "select count(*) from aviso where req_id='aviso-b-99-1' "
+                                "and estado='fallido'") == 1)
+            colgado = [f for f in envios(home) if f["req_id"] == "aviso-r-colgado"]
+            ok("una respuesta tomada que quedo a medias se confirma igual, mandando al tablero",
+               len(colgado) == 1 and "tablero" in colgado[0]["body"], f"{colgado}")
+
+            # La carrera: el worker y el tick leen la misma respuesta. Quien no la tomo
+            # primero no la aplica.
+            llegan(home, A, [msg(PERSONA, "T11", PEDIDO, 6)])
+            carrera, _ = propuesta_lista(home, "T11", texto="Listo, cuesta $15.")
+            tick(home)
+            wsc = carga_wa_scope(home)
+            wsc.respuesta_vista = lambda *_: False
+            con = wsc.db()
+            req = "aviso-r-" + hashlib.sha256(b"R-CARRERA").hexdigest()[:16]
+            con.execute("insert into aviso (req_id, tipo, case_id, account, chat_jid, texto, "
+                        "estado, stanza_id, at, updated_at) values (?, 'respuesta', ?, ?, ?, "
+                        "'', 'preparando', 'R-CARRERA', datetime('now','localtime'), "
+                        "datetime('now','localtime'))", (req, int(carrera), A, DUENO_LID))
+            con.commit()
+            tomada = wsc.atiende_respuesta(con, {"stanza_id": "R-CARRERA",
+                                                 "text": f"no {carrera}"})
+            con.close()
+            ok("una respuesta que otro proceso ya tomo no se aplica dos veces",
+               tomada and js(home, "caso", "ver", carrera)[0]["etapa"] == "decision",
+               f"{js(home, 'caso', 'ver', carrera)[0]['etapa']}")
         finally:
             sidecar.cerrar()
 
