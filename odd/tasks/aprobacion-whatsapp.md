@@ -45,7 +45,7 @@ no approval number set, the feature is off and everything behaves as today.
 4. **Blocked notice**: when a case moves to `bloqueado` (a dispatch reported blocked or
    failed), send one line to the approval number with the case and the reason.
 5. **`estado` command**: the owner writes `estado` to the approval DM and gets the open
-   cases by stage, one line each (number, conversation, stage, waiting since).
+   cases (everything the board shows open: not `cerrado`) by stage, one line each (number, conversation, stage, waiting since).
 6. Board events for each of these ("aviso enviado por WhatsApp", "aprobado por WhatsApp")
    so the history says what happened.
 
@@ -61,7 +61,9 @@ no approval number set, the feature is off and everything behaves as today.
 - Table `aviso` (scope.db): one row per WhatsApp message to the approval number
   (`aprobacion` per case + version, `bloqueo` per blocked event, `respuesta` per answer).
   Its `req_id` is the `wa-send --id`, so nothing goes out twice; the tick sends what is
-  `pendiente`.
+  `pendiente`. If `wa-send` refuses it because the approval chat is not authorized
+  (`send-denied`, `send-line-not-linked`), it stays `pendiente` and goes out once the
+  owner authorizes the chat.
 - "Waits for the owner" = a hold event for the current version: `trabajo espera al dueno`,
   a new `respuesta espera al dueno` (the rule refused to sign a reply, E_EXCEPTION), a
   `wa-send` hold (`envio frenado`), or the revision rounds that end in "lo decide el dueno".

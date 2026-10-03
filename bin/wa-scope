@@ -5366,6 +5366,9 @@ def tick_envia(caso, texto, req):
 # si el caso trae una, el aviso dice que la hay y que se aprueba en el tablero.
 # Lo que `wa-send` contesta y se arregla solo: el minuto siguiente lo intenta con el mismo id.
 AVISO_REINTENTA = (ENVIO_SIN_LINEA, "send-no-signature", "send-timeout", "fallo")
+# El chat del numero de aprobacion sin autorizar (o autorizado para otra linea): lo
+# arregla el dueno en el panel, asi que el aviso espera en vez de perderse.
+AVISO_ESPERA_PERMISO = ("send-denied", "send-line-not-linked")
 # Lo que la regla deja cuando no firma una respuesta (E_EXCEPTION): el gemelo de
 # ESPERA_DUENO para lo que sale al chat. Una vez por version.
 RESPUESTA_ESPERA = "respuesta espera al dueno:"
@@ -5383,7 +5386,8 @@ LARGO_PIDE = 140
 LARGO_PROPUESTA = 300
 LARGO_CORRECCION = 1000
 TOPE_ESTADO = 15
-ETAPAS_ESTADO = ("recibido", "clasificado", "decision", "trabajo", "listo", "bloqueado")
+ETAPAS_ESTADO = ("recibido", "clasificado", "decision", "trabajo", "listo", "respondido",
+                 "bloqueado")
 SI_NO = re.compile(r"^(si|sí|yes|ok|dale|no)(?:\s+#?(\d+))?$", re.I)
 CORRIGE = re.compile(r"^#?(\d+)\s+(.+)$", re.S)
 ESTADO = re.compile(r"^(estado|status)$", re.I)
@@ -5439,7 +5443,8 @@ TEXTOS_AVISO = {
            "desde": "desde {x}",
            "etapas": {"recibido": "recibido", "clasificado": "clasificado",
                       "decision": "espera su decision", "trabajo": "en trabajo",
-                      "listo": "resultado listo", "bloqueado": "bloqueado"}},
+                      "listo": "resultado listo", "respondido": "respondido, espera al cliente",
+                      "bloqueado": "bloqueado"}},
     "en": {"caso": "Case {n}", "pide": "Asks: {x}", "espera": "Waiting because: {x}",
            "respuesta": "Proposed reply: {x}", "trabajo": "Proposed work: {x}",
            "credencial": "A credential is involved: approve it on the board, not here.",
@@ -5463,7 +5468,8 @@ TEXTOS_AVISO = {
            "desde": "since {x}",
            "etapas": {"recibido": "received", "clasificado": "classified",
                       "decision": "waits for you", "trabajo": "in progress",
-                      "listo": "result ready", "bloqueado": "blocked"}},
+                      "listo": "result ready", "respondido": "answered, waits for the client",
+                      "bloqueado": "blocked"}},
 }
 
 
@@ -5695,8 +5701,8 @@ def envia_avisos(con, resumen=None, inicio=None):
             continue
         codigo, detalle = tick_envia({"account": f["account"], "chat_jid": f["chat_jid"]},
                                      f["texto"], f["req_id"])
-        if codigo in AVISO_REINTENTA:
-            if codigo in (ENVIO_SIN_LINEA, "send-no-signature"):
+        if codigo in AVISO_REINTENTA + AVISO_ESPERA_PERMISO:
+            if codigo in (ENVIO_SIN_LINEA, "send-no-signature") + AVISO_ESPERA_PERMISO:
                 break
             continue
         momento = ahora_caso()

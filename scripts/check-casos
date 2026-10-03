@@ -7444,6 +7444,10 @@ if NODE:
                f"{viejo}" in ultimo and f"{bloq}" in ultimo and "Cliente Uno" in ultimo
                and cuenta(home, "select count(*) from caso_mensaje where stanza_id='R10'") == 0,
                ultimo)
+            # Abierto es lo que el tablero muestra abierto: respondido espera al cliente.
+            ok("`estado` tambien lista un caso respondido, que sigue abierto",
+               any(l.startswith(f"{dinero} · ") and "respondido" in l
+                   for l in ultimo.splitlines()), ultimo)
             ok("nada de esto salio a otro chat", a_otro(home) == 0)
 
             # Revision del PR (Copilot): credencial, destinatario viejo, carrera y
@@ -7546,6 +7550,30 @@ if NODE:
             ok("con dos pendientes, un `si` pelado no aprueba ninguno",
                not js(home, "caso", "ver", dos)[0]["aprobada"]
                and not js(home, "caso", "ver", tres)[0]["aprobada"])
+        finally:
+            sidecar.cerrar()
+
+    # El numero elegido antes de autorizar su chat: wa-send lo niega, y el aviso espera a
+    # que el dueno lo autorice en vez de perderse.
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        pon_duenos(home, DUENO_LID)
+        pon_aprobacion(home, DUENO_LID)
+        sidecar = SidecarFalso(home)
+        try:
+            llegan(home, A, [msg(PERSONA, "W1", PEDIDO, 30)])
+            espera, _ = propuesta_lista(home, "W1", texto="Listo, cuesta $50.")
+            tick(home)
+            ok("con el chat del numero sin autorizar el aviso no sale y queda pendiente",
+               al_dueno(home) == []
+               and cuenta(home, "select count(*) from aviso where estado='pendiente'") == 1,
+               f"{al_dueno(home)}")
+            js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+            tick(home)
+            avisos = al_dueno(home)
+            ok("y sale en cuanto el dueno lo autoriza", len(avisos) == 1
+               and f"Caso {espera}" in avisos[0]["body"], f"{avisos}")
         finally:
             sidecar.cerrar()
 
