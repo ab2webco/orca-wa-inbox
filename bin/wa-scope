@@ -5394,6 +5394,7 @@ TOPE_ESTADO = 15
 ETAPAS_ESTADO = ("recibido", "clasificado", "decision", "trabajo", "listo", "respondido",
                  "bloqueado")
 SI_NO = re.compile(r"^(si|sí|yes|ok|dale|no)(?:\s+#?(\d+))?$", re.I)
+SOLO_CON_NUMERO = ("ok", "dale")
 CORRIGE = re.compile(r"^#?(\d+)\s+(.+)$", re.S)
 ESTADO = re.compile(r"^(estado|status)$", re.I)
 
@@ -5491,7 +5492,9 @@ def lee_respuesta(texto):
     if ESTADO.match(pelado):
         return {"accion": "estado", "caso": None, "texto": ""}
     m = SI_NO.match(pelado)
-    if m:
+    # `ok` y `dale` se escriben de pasada: solos no aprueban, necesitan el numero. Solo si,
+    # yes y no valen sin el (el unico aviso pendiente).
+    if m and (m.group(2) or m.group(1).lower() not in SOLO_CON_NUMERO):
         return {"accion": "no" if m.group(1).lower() == "no" else "si",
                 "caso": int(m.group(2)) if m.group(2) else None, "texto": ""}
     m = CORRIGE.match(t)
