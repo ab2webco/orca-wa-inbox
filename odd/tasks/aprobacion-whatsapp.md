@@ -92,7 +92,8 @@ no approval number set, the feature is off and everything behaves as today.
 - [x] A4 Blocked notice + `estado` command. Proof: same section.
 - [x] A5 Skill says where the owner's correction arrives (case file section "The owner's
       corrections"); scripts/check-harness guards the phrase (51 checks).
-- [ ] A6 Full `npm run check` green.
+- [x] A6 Full `npm run check` green (exit 0): casos 1010, paneles 989, worker 395,
+      almacen 256, harness 51, 1144 screenshots without overflow or JS errors.
 
 ## Acceptance
 
