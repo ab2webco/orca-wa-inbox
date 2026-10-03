@@ -15,7 +15,10 @@ description: How to use the plugin's command line tools (wa-scope, wa-read, wa-t
 # The WhatsApp tools
 
 Run every tool as `"$WA/<tool>"`, with `WA` read from `.wa-bin` (never a bare name from
-`PATH`). `COMMANDS.md` has the full `--help` of each one.
+`PATH`). `COMMANDS.md` has the full `--help` of each one. Outside this folder, the plugin
+keeps the same path in `bin-path` in the tools' state folder:
+`WA="$(cat ~/.wa-inbox/bin-path)"` on macOS and Linux, `%APPDATA%\wa-inbox\bin-path` on
+Windows.
 
 ## You propose; only the plugin sends
 
@@ -31,6 +34,7 @@ owner approves it on the board otherwise.
     "$WA/wa-scope" check "<chat_jid>" --for responder   # exit 3 = denied
     "$WA/wa-scope" where "<text>" --chat "<chat_jid>" --json
     "$WA/wa-read" chat "<chat_jid>" --json      # more of the conversation
+    "$WA/wa-read" wait "<chat_jid>" --after <stanza_id> --timeout 600 --json   # block until the other side writes
 
 `hilo` marks every message before the last reply sent as `respondido`: context only.
 
@@ -42,8 +46,9 @@ owner approves it on the board otherwise.
     "$WA/wa-scope" caso propuesta <id> --tipo escalar --instrucciones "<why>" --actor agente
     "$WA/wa-scope" caso mover <id> cerrado --motivo "<why>" --actor agente
 
-The same proposal twice changes nothing. A stage that is not allowed fails without
-writing; read the error instead of retrying.
+The same proposal twice changes nothing. A different proposal on a case in `listo` (the
+result of a job) sends it back to `decision`, to be approved again. A stage that is not
+allowed fails without writing; read the error instead of retrying.
 
 ## One run at a time
 
@@ -60,4 +65,5 @@ machine can transcribe. Never run it on a case's note again.
 
 `wa-read`: `4` with `no-transport` on the first stderr line = no line linked, stop and say
 so; `2` = the chat reference matches more than one conversation, pick one by JID. An empty
-list with exit 0 means the inbox is quiet.
+list with exit 0 means the inbox is quiet. `wa-read wait`: `5` = `wait-timeout`, nobody
+wrote before `--timeout`; `3` = `chat-not-authorized`, the owner has not enabled that chat.
