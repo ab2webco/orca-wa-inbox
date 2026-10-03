@@ -15,7 +15,7 @@ import { join } from 'node:path'
 
 import { asegurarDirectorio } from './almacen.js'
 import { aNumero, esConversacion, esGrupo, filaDeActualizacion, filaDeMensaje,
-  jidDeChat } from './mensajes.js'
+  identidadPropia, jidDeChat, parDeMensaje, parLidTelefono } from './mensajes.js'
 
 /** Lo que se contesta de cada mensaje. Son motivos, no booleanos: el sidecar los cuenta
  *  por separado para poder decir "llegaron 40, se guardaron 12" sin nombrar a nadie. */
@@ -60,6 +60,13 @@ export async function ingerirMensaje ({ almacen, alcance, cuenta, identidades, w
     ts: fila.ts,
     ahora
   })
+  // El telefono de quien escribe, tambien contabilidad y tambien en `off`. El del dueno
+  // no: es el de la linea, no el de nadie con quien se converse.
+  const par = parDeMensaje(wa)
+  const propio = (jid) => !!identidades?.has(identidadPropia(jid))
+  if (par && !propio(par.lid) && !propio(par.pn)) {
+    almacen.anotarTelefono({ cuenta, ...par, ahora })
+  }
 
   if (alcance(cuenta, fila.chatJid) === 'off') return { motivo: INGESTA.SIN_AUTORIZAR }
 
@@ -136,6 +143,9 @@ export function ingerirChats ({ almacen, cuenta, chats, nombreDeChat = () => nul
     // tres unicas directas de la cuenta- y en una lista donde escasean las directas,
     // una de cada tres siendo uno mismo es ruido caro.
     if (esPropio(fila.chatJid)) { omitidos += 1; continue }
+    // `IConversation` trae el par en `pnJid`/`lidJid` cuando WhatsApp lo sabe.
+    const par = parLidTelefono(chat?.id, chat?.pnJid) || parLidTelefono(chat?.lidJid, chat?.id)
+    if (par) almacen.anotarTelefono({ cuenta, ...par, ahora })
     if (fila.nombre) recordarNombre(fila.chatJid, fila.nombre)
     almacen.anotarChat({
       cuenta,
@@ -186,11 +196,15 @@ export function ingerirContactos ({ almacen, cuenta, contactos, recordarNombre =
   for (const contacto of Array.isArray(contactos) ? contactos : []) {
     const jid = jidDeChat(contacto?.id) || jidDeChat(contacto)
     if (!jid || !esConversacion(jid) || esPropio(jid)) continue
+    // La libreta llega por numero, con el LID al lado: es el par que deja mostrar el
+    // telefono de un directo guardado con su LID. Se anota aunque no traiga nombre.
+    const lid = jidDeChat(contacto?.lid)
+    const par = parLidTelefono(lid, jid)
+    if (par && !esPropio(par.lid)) almacen.anotarTelefono({ cuenta, ...par })
     const nombre = nombreDeContacto(contacto)
     if (!nombre) continue
-    // La libreta llega por numero, con el LID al lado: el directo puede estar guardado
-    // con cualquiera de los dos, asi que se nombran ambos.
-    const lid = jidDeChat(contacto?.lid)
+    // El directo puede estar guardado con cualquiera de los dos, asi que se nombran
+    // ambos.
     for (const cual of lid && lid !== jid && !esPropio(lid) ? [jid, lid] : [jid]) {
       recordarNombre(cual, nombre)
       // Solo pone nombre donde no lo hay. La libreta llega en lotes y a destiempo: si ya

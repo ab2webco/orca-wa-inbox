@@ -36,7 +36,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { chmodSync, existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { cuentaDeIdentidad, jidDeChat } from './mensajes.js'
+import { cuentaDeIdentidad, jidDeChat, parLidTelefono } from './mensajes.js'
 
 // El esquema lo crea el escritor y lo LEE `bin/wa_store.py`. Si algun dia divergen, el
 // lector tiene que decirlo en voz alta en vez de contestar filas incompletas: por eso
@@ -83,6 +83,19 @@ create table if not exists chat (
   last_ts    integer,
   first_seen integer not null,
   primary key (account, chat_jid)
+);
+
+-- CONTABILIDAD. El telefono de cada LID. WhatsApp guarda los directos con un id
+-- interno (<digitos>@lid) y ya no muestra el numero: sin esto el dueno no distingue
+-- un chat de otro ni lo encuentra por el telefono de su agenda. Un jid y un numero,
+-- por linea, de la libreta, de los mensajes y del historial: nunca un cuerpo. Nueva
+-- tabla y no una columna de chat: el par existe aunque la conversacion no.
+create table if not exists lid_telefono (
+  account    text not null,
+  lid        text not null,
+  pn         text not null,
+  updated_at integer not null,
+  primary key (account, lid)
 );
 
 -- CONTENIDO. Solo de conversaciones autorizadas. La llave lleva la CUENTA adelante
@@ -702,6 +715,20 @@ class Almacen {
        where account = ? and chat_jid = ?
          and (chat_name is null or chat_name = '' or chat_name = chat_jid)`)
       .run(limpio, cuenta, chatJid)
+    return (r.changes || 0) > 0
+  }
+
+  /** El telefono de un LID. Contabilidad, como el nombre: se anota aunque el chat este
+   *  en `off` o todavia no exista. Devuelve si cambio algo; lo que no es un LID y un
+   *  telefono, en ese orden, no se anota. */
+  anotarTelefono ({ cuenta, lid, pn, ahora = Date.now() }) {
+    const par = parLidTelefono(lid, pn)
+    if (!cuenta || !par) return false
+    const r = this.con.prepare(`insert into lid_telefono (account, lid, pn, updated_at)
+      values (?,?,?,?)
+      on conflict(account, lid) do update set pn=excluded.pn, updated_at=excluded.updated_at
+        where lid_telefono.pn <> excluded.pn`)
+      .run(cuenta, par.lid, par.pn, Math.floor(ahora / 1000))
     return (r.changes || 0) > 0
   }
 
