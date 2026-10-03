@@ -188,10 +188,15 @@ export function ingerirContactos ({ almacen, cuenta, contactos, recordarNombre =
     if (!jid || !esConversacion(jid) || esPropio(jid)) continue
     const nombre = nombreDeContacto(contacto)
     if (!nombre) continue
-    recordarNombre(jid, nombre)
-    // Solo pone nombre donde no lo hay. La libreta llega en lotes y a destiempo: si ya
-    // se sabia como se llama esa conversacion, un lote viejo no puede degradarlo.
-    if (almacen.nombrarChat({ cuenta, chatJid: jid, nombre })) nombrados += 1
+    // La libreta llega por numero, con el LID al lado: el directo puede estar guardado
+    // con cualquiera de los dos, asi que se nombran ambos.
+    const lid = jidDeChat(contacto?.lid)
+    for (const cual of lid && lid !== jid && !esPropio(lid) ? [jid, lid] : [jid]) {
+      recordarNombre(cual, nombre)
+      // Solo pone nombre donde no lo hay. La libreta llega en lotes y a destiempo: si ya
+      // se sabia como se llama esa conversacion, un lote viejo no puede degradarlo.
+      if (almacen.nombrarChat({ cuenta, chatJid: cual, nombre })) nombrados += 1
+    }
   }
   return { nombrados }
 }

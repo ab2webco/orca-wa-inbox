@@ -3535,7 +3535,8 @@ console.log('\nactivity.html — la linea de arriba cuenta casos, no la cola vie
   ok('lleva la hora de la ultima revision', /Ultima revision \d{2}:\d{2}/.test(linea(dos)),
     linea(dos))
   ok('y no usa la cola vieja (11 esperando, 3 conversaciones)',
-    !/11|esperando|conversaciones/.test(linea(dos)), linea(dos))
+    // El 11 de la cola, no el de una hora como 14:11.
+    !/(^|[^:\d])11(?![\d:])|esperando|conversaciones/.test(linea(dos)), linea(dos))
 
   const uno = await con(tablero([tarjeta({ case_id: 1, stage: 'recibido' }),
     tarjeta({ case_id: 2, stage: 'decision' }), tarjeta({ case_id: 3, stage: 'decision' })],
