@@ -6714,7 +6714,33 @@ def suelta_trabajador(cli, fila):
     esta incluida) no cambia nada: el caso ya se movio por lo que dijo su terminal o su
     resultado."""
     if cli and fila.get("terminal"):
-        orca_llama(cli, ["terminal", "close", "--terminal", fila["terminal"]], DESPACHO_LISTA_S)
+        cierra_terminal(cli, fila["terminal"], fila.get("workspace_selector"))
+
+
+# Lo que se espera a que Claude salga antes de cerrar el shell que queda.
+SALIDA_CLAUDE_S = 3
+
+
+def cierra_terminal(cli, handle, selector=None, detener_espacio=False):
+    """Cierra la terminal de un agente del plugin. Orca a veces no cierra la de un Claude
+    quieto (`session:set` falla) y quedaba abierta y detenida: entonces se le pide a Claude
+    que salga (`/exit`) y al shell que queda tambien (`exit`; si Claude aun no salio, Claude
+    lo toma como la misma orden). Si con eso sigue viva y `detener_espacio`, se detienen las
+    terminales del espacio: solo en el del plugin, donde corre un unico agente de casos. En
+    un proyecto nunca: ahi estan las terminales del dueno."""
+    _, error = orca_llama(cli, ["terminal", "close", "--terminal", handle], DESPACHO_LISTA_S)
+    if not error:
+        return
+    orca_llama(cli, ["terminal", "send", "--terminal", handle, "--text", "/exit", "--enter"],
+               DESPACHO_LISTA_S)
+    time.sleep(SALIDA_CLAUDE_S)
+    orca_llama(cli, ["terminal", "send", "--terminal", handle, "--text", "exit", "--enter"],
+               DESPACHO_LISTA_S)
+    if not detener_espacio or not selector:
+        return
+    vivas = terminales_vivas(cli, selector)
+    if vivas is not None and handle in vivas:
+        orca_llama(cli, ["terminal", "stop", "--worktree", selector], DESPACHO_LISTA_S)
 
 
 def terminales_vivas(cli, selector):
@@ -7090,14 +7116,8 @@ def agente_cierra(con, cli, fila, estado, motivo=None, detalle=None):
     """Cierra la corrida: su terminal (si la abrio), su brief, el archivo de su caso (lleva
     los mensajes del cliente: no queda una copia) y la fila."""
     if cli and fila.get("terminal"):
-        _, error = orca_llama(cli, ["terminal", "close", "--terminal", fila["terminal"]],
-                              DESPACHO_LISTA_S)
-        if error and fila.get("workspace_selector"):
-            # Orca a veces no cierra la terminal de un Claude que ya termino (`session:set`
-            # falla) y quedaba abierta y quieta. El espacio es del plugin y en el corre un
-            # solo agente de casos: detener sus terminales solo toca esta.
-            orca_llama(cli, ["terminal", "stop", "--worktree", fila["workspace_selector"]],
-                       DESPACHO_LISTA_S)
+        cierra_terminal(cli, fila["terminal"], fila.get("workspace_selector"),
+                        detener_espacio=True)
     rutas = [ruta_brief_agente(fila["id"])]
     if fila.get("case_id") is not None:
         rutas.append(ruta_de_caso(fila["case_id"]))
