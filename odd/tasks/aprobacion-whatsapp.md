@@ -73,6 +73,9 @@ no approval number set, the feature is off and everything behaves as today.
   is approved on the board only: `si N` does not approve it and the answer says so.
 - Without a number only `si`, `yes` and `no` count (the one pending report); `ok` and
   `dale` are written in passing and need the number.
+- A report is answered only from the chat it went to, and the first answer that claims it
+  (`enviado` -> `contestando`) decides: a contrary answer read at the same time by the
+  worker and the tick does nothing. An answer that decided nothing gives it back.
 - "Waits for the owner" = a hold event for the current version: `trabajo espera al dueno`,
   a new `respuesta espera al dueno` (the rule refused to sign a reply, E_EXCEPTION), a
   `wa-send` hold (`envio frenado`), or the revision rounds that end in "lo decide el dueno".

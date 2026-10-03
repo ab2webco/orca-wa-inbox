@@ -512,6 +512,7 @@ create table if not exists aviso (
   chat_jid  text not null,        -- el directo del numero de aprobacion
   texto     text not null,
   -- preparando (la respuesta ya se tomo, falta su confirmacion) | pendiente | enviado |
+  -- contestando (una respuesta lo tomo y se esta aplicando) |
   -- contestado (el dueno ya contesto ese aviso) | fallido (wa-send lo nego: `motivo`)
   estado    text not null default 'pendiente',
   motivo    text,
@@ -5806,14 +5807,16 @@ def atiende_respuesta(con, m):
         con.commit()
         return True
     if r["caso"] is None:
-        vivos = avisos_vigentes(con)
+        vivos = [f for f in avisos_vigentes(con) if f["chat_jid"] == m.get("chat_jid")]
         if len(vivos) != 1:
             return False
         aviso = vivos[0]
     else:
+        # El aviso es de quien lo recibio: el que salio a otro numero no se contesta desde
+        # este.
         aviso = con.execute("select * from aviso where tipo='aprobacion' and account=? and "
-                            "case_id=? order by at desc, rowid desc limit 1",
-                            (cuenta_activa(), r["caso"])).fetchone()
+                            "case_id=? and chat_jid=? order by at desc, rowid desc limit 1",
+                            (cuenta_activa(), r["caso"], m.get("chat_jid"))).fetchone()
         if aviso is None:
             return False
     n = aviso["case_id"]
@@ -5827,6 +5830,13 @@ def atiende_respuesta(con, m):
     texto = tx["sin_confirmar"].format(n=n)
     try:
         porque = aviso_estado(con, aviso, horas_aprobacion(con))
+        # Despues se toma el aviso: dos respuestas distintas (si en un proceso, no en otro)
+        # pueden haberlo visto vigente las dos, y decide solo la primera que lo toma.
+        if not porque:
+            cur = con.execute("update aviso set estado='contestando', updated_at=? where "
+                              "req_id=? and estado='enviado'", (ahora_caso(), aviso["req_id"]))
+            con.commit()
+            porque = None if cur.rowcount == 1 else "cambio"
         if porque:
             texto = tx[porque].format(n=n)
         else:
@@ -5841,6 +5851,10 @@ def atiende_respuesta(con, m):
         # error a mitad la dejaba `preparando` y el dueno no sabia nada.
         if con.in_transaction:
             con.rollback()
+        # Lo que no decidio el caso (un error, una credencial, una correccion sobre un
+        # resultado) devuelve el aviso: se puede contestar otra vez.
+        con.execute("update aviso set estado='enviado', updated_at=? where req_id=? and "
+                    "estado='contestando'", (ahora_caso(), aviso["req_id"]))
         con.execute("update aviso set texto=?, estado='pendiente', updated_at=? where req_id=?",
                     (texto, ahora_caso(), req))
         con.commit()
