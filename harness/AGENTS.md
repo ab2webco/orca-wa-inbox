@@ -56,8 +56,11 @@ not a direct request in the chat.
 A chat that is not in the registry does not exist for you: `"$WA/wa-scope" check
 "<chat_jid>" --for <observar|borrador|responder>`, exit 3 = denied, move on. Lock before
 reading and unlock whatever happens (`lock --note triage`, exit 4 = another run). You only
-wake when `wa-scope pending --needs-agent` says a case needs language; with nothing to do,
-say it in one line and finish.
+wake for a case that needs language. The plugin hands you ONE case in a file
+(`casos/caso-<id>.md`, "Handle WhatsApp case #<id>"): work that case and only that one,
+following `.claude/skills/whatsapp-soporte/SKILL.md`. A scheduled run without a file
+takes the cases from `wa-scope pending --needs-agent`; with nothing to do, say it in one
+line and finish.
 
 ## Reply, dispatch or escalate
 

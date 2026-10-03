@@ -14,6 +14,10 @@ This folder is the workspace of the WhatsApp Inbox plugin's case agent. Read `AG
 first: it holds the rules that beat everything else. You propose on a case and never send
 anything on WhatsApp.
 
+When you are told to handle a case, the plugin gives you ONE case in a file
+(`casos/caso-<id>.md` in the plugin's data folder): read it and follow the
+`whatsapp-soporte` skill, which holds how a case is worked, step by step.
+
 - `.claude/skills/whatsapp-soporte/SKILL.md`: the support playbook (tone, escalation,
   voice notes, attachments, how to write a brief).
 - `.claude/skills/whatsapp-cli/SKILL.md`: the real commands and flags.

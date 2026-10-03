@@ -27,7 +27,9 @@ After an update/re-approval the plugin's automations come back enabled without a
       Proof: check-casos agent+dispatch section 626/626 ("le da UNA linea: atiende el caso",
       "el brief del despacho lleva el caso y lo aprobado, y nada de otro caso"); panels
       `sin-prompt` text names the case file.
-- [ ] T3 Rules into the skill/CLAUDE.md, `prompts/triage.md` as a pointer; harness tests.
+- [x] T3 Rules into the skill/CLAUDE.md, `prompts/triage.md` as a pointer; harness tests.
+      Proof: check-harness 50 checks (rules in AGENTS.md + skill, pointer <= 30 lines, names
+      the skill, no steps); check-prompts 15; resolver 29/29; manifest 110/110.
 - [ ] T4 Worker enables the plugin automations found disabled; worker tests.
 - [ ] T5 Live E2E after deploy: a real case answered from the case file; automations
       enabled after re-approval without a click.
