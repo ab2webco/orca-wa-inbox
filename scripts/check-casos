@@ -5390,6 +5390,12 @@ def respuestas_a_terminal(carpeta):
     return [x for x in llamadas_orca(carpeta, "terminal send") if x not in lanzamientos(carpeta)]
 
 
+def salidas_a(carpeta, handle):
+    """Lo que se le escribio a la terminal para que Claude y el shell salgan."""
+    return [bandera(x, "--text") for x in llamadas_orca(carpeta, "terminal send")
+            if bandera(x, "--terminal") == handle and bandera(x, "--text") in ("/exit", "exit")]
+
+
 def cerradas(carpeta):
     return [bandera(x, "--terminal") for x in llamadas_orca(carpeta, "terminal close")]
 
@@ -5577,6 +5583,27 @@ if NODE:
            f"{motivo_bloqueo(home, cid)} {p.stderr[-300:]}")
         ok("y cierra la terminal del agente", cerradas(carpeta) == ["term_worker1"]
            and p.returncode == 0, f"{llamadas_orca(carpeta)}")
+
+    # Orca falla al cerrar la terminal de un Claude quieto (2026-10-02, despacho del caso 14:
+    # quedo abierta en el proyecto). Se le pide a Claude y al shell que salgan; las demas
+    # terminales del proyecto son del dueno y nunca se detienen.
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta)
+        cid = trabajo_firmado(home, "D2b")
+        tick_orca(home, carpeta)
+        con = db_de(home)
+        con.execute("update caso_despacho set created_at=datetime('now','localtime','-5 hours')")
+        con.commit()
+        con.close()
+        cambia_orca(carpeta, cierre_falla=True)
+        p, r = tick_orca(home, carpeta)
+        ok("si Orca no cierra la terminal del proyecto, Claude y el shell salen por si solos",
+           salidas_a(carpeta, "term_worker1") == ["/exit", "exit"] and p.returncode == 0,
+           f"{llamadas_orca(carpeta, 'terminal send')} {p.stderr[-300:]}")
+        ok("y nunca detiene las terminales del proyecto",
+           not llamadas_orca(carpeta, "terminal stop"), f"{llamadas_orca(carpeta, 'terminal stop')}")
 
     # Un lanzamiento que quedo a medias (el tick murio) no se relanza: va al dueno.
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
@@ -6597,7 +6624,10 @@ if NODE:
            cerradas(carpeta) == ["term_worker1"]
            and corridas_agente(home)[-1]["estado"] == "terminado", f"{corridas_agente(home)}")
         selector = corridas_agente(home)[-1]["workspace_selector"]
-        ok("y si Orca no la deja cerrar, detiene las terminales del espacio del plugin",
+        ok("y si Orca no la deja cerrar, le pide a Claude y al shell que salgan",
+           salidas_a(carpeta, "term_worker1") == ["/exit", "exit"],
+           f"{llamadas_orca(carpeta, 'terminal send')}")
+        ok("y si aun vive, detiene las terminales del espacio del plugin",
            [bandera(x, "--worktree") for x in llamadas_orca(carpeta, "terminal stop")]
            == [selector], f"{llamadas_orca(carpeta, 'terminal stop')} {selector}")
         ok("y su brief no queda en disco", not os.path.exists(ruta), ruta)
@@ -7008,7 +7038,16 @@ for texto, esperado in (
         ("Hacer el reembolso al cliente", ["payment"]),
         ("Rotar el token de la API y mandarlo", ["credential"]),
         ("Dejarlo listo para el viernes", ["commitment"]),
-        ("Cotizar el cambio en $300", ["money"])):
+        ("Cotizar el cambio en $300", ["money"]),
+        # Los mensajes del cliente que el trabajo cita, con su sello de hora, son lo que el
+        # cliente pidio, no lo que el trabajo compromete (caso #14 en vivo: "22:15" frenaba
+        # todo despacho que citara un mensaje).
+        ("Verbatim messages (arrival order):\n[2026-10-02 22:15] Persona Demo:\n"
+         "> Revisa cuantos incidentes hay\n\nReport the count from the tracker.", []),
+        ("[2026-10-02 09:30] Persona Demo:\n> lo necesito para el viernes, cuesta $300\n\n"
+         "Revisar el reporte y decir que falta.", []),
+        ("[2026-10-02 09:30] Persona Demo:\n> revisa el reporte\n\n"
+         "Dejarlo listo para el viernes", ["commitment"])):
     salio = reglas.trabajo_comprometido(texto)
     ok(f"trabajo: {texto!r} -> {esperado}", salio == esperado, f"salio {salio}")
 
