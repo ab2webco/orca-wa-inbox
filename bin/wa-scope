@@ -4450,10 +4450,11 @@ def cmd_ingest(con, a):
         if anterior_a(m, desde):
             total["anteriores"] += 1
             continue
-        # La respuesta del dueno a un aviso (T14), en el directo del numero de aprobacion y
-        # desde un numero suyo: no es un pedido nuevo y no pasa por Jev. Lo que no tiene
+        # La respuesta del dueno a un aviso (T14), en el directo del numero de aprobacion
+        # (en Automatico, el unico modo por el que el aviso pudo salir) y desde un numero
+        # suyo: no es un pedido nuevo y no pasa por Jev. Lo que no tiene
         # forma de respuesta sigue siendo una orden suya, como siempre.
-        if (numero and m.get("chat_jid") == numero
+        if (numero and m.get("chat_jid") == numero and entrada.get("mode") == "responder"
                 and wa_store.es_dueno(m.get("sender_jid"), ids_dueno)):
             if respuesta_vista(con, m["stanza_id"]):
                 continue
@@ -5382,6 +5383,10 @@ CORRECCION_WHATSAPP = "correccion del dueno por WhatsApp:"
 PREPARANDO_VENCE_S = 300
 # Lo que queda pendiente para un numero que ya no es el de aprobacion no sale (T14).
 AVISO_OTRO_NUMERO = "approval-number-changed"
+# Lo pendiente que espero mas de `approval_hours` (el chat sin autorizar, un error que se
+# reintenta) o el aviso de una version que ya no es la vigente: no sale, ya no es cierto.
+AVISO_VENCIDO = "approval-expired"
+AVISO_SUPERADO = "approval-superseded"
 LARGO_PIDE = 140
 LARGO_PROPUESTA = 300
 LARGO_CORRECCION = 1000
@@ -5683,6 +5688,15 @@ def envia_avisos(con, resumen=None, inicio=None):
     con.execute("update aviso set estado='fallido', motivo=?, updated_at=? where "
                 "estado='pendiente' and account=? and chat_jid<>?",
                 (AVISO_OTRO_NUMERO, momento, cuenta_activa(), numero or ""))
+    horas = horas_aprobacion(con)
+    for f in con.execute("select * from aviso where estado='pendiente' and account=?",
+                         (cuenta_activa(),)).fetchall():
+        motivo = (AVISO_VENCIDO if edad_de(f["at"]) > horas * 3600
+                  else AVISO_SUPERADO if f["tipo"] == "aprobacion" and version_superada(con, f)
+                  else None)
+        if motivo:
+            con.execute("update aviso set estado='fallido', motivo=?, updated_at=? where "
+                        "req_id=? and estado='pendiente'", (motivo, momento, f["req_id"]))
     # La respuesta tomada por un proceso que murio a mitad se confirma igual.
     tx = aviso_textos()
     for f in con.execute("select req_id, case_id, at from aviso where estado='preparando' and "
@@ -5743,12 +5757,18 @@ def aviso_estado(con, aviso, horas):
     """Por que ese aviso ya no vale (`vencido` | `cambio`), o None si vale."""
     if edad_de(aviso["enviado_at"] or aviso["at"]) > horas * 3600:
         return "vencido"
-    caso = con.execute("select * from caso where case_id=?", (aviso["case_id"],)).fetchone()
-    if (not caso or aviso["estado"] != "enviado" or caso["propuesta_version"] != aviso["version"]
-            or caso["etapa"] not in ETAPAS_APROBABLES
-            or caso["propuesta_aprobada"] == aviso["version"]):
+    if aviso["estado"] != "enviado" or version_superada(con, aviso):
         return "cambio"
     return None
+
+
+def version_superada(con, aviso):
+    """Si el caso del aviso ya no espera la decision sobre esa version: cambio la
+    propuesta, salio de decision o ya esta aprobada."""
+    caso = con.execute("select * from caso where case_id=?", (aviso["case_id"],)).fetchone()
+    return bool(not caso or caso["propuesta_version"] != aviso["version"]
+                or caso["etapa"] not in ETAPAS_APROBABLES
+                or caso["propuesta_aprobada"] == aviso["version"])
 
 
 def respuesta_vista(con, stanza):

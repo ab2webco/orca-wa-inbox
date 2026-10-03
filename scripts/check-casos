@@ -7569,11 +7569,54 @@ if NODE:
                al_dueno(home) == []
                and cuenta(home, "select count(*) from aviso where estado='pendiente'") == 1,
                f"{al_dueno(home)}")
+            # Mientras espera, una propuesta cambia y otro aviso envejece: ninguno de los
+            # dos dice ya la verdad, asi que no salen.
+            llegan(home, A, [msg(PERSONA, "W2", PEDIDO, 20)])
+            cambia, _ = propuesta_lista(home, "W2", texto="Listo, cuesta $60.")
+            llegan(home, A, [msg(PERSONA, "W3", PEDIDO, 15)])
+            vence, _ = propuesta_lista(home, "W3", texto="Listo, cuesta $70.")
+            tick(home)
+            js(home, "caso", "propuesta", cambia, "--tipo", "responder", "--respuesta",
+               "Listo, cuesta $65.", "--actor", "agente")
+            con = db_de(home)
+            con.execute("update aviso set at=datetime('now','localtime','-30 hours') where "
+                        "case_id=?", (int(vence),))
+            con.commit()
+            con.close()
             js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
             tick(home)
             avisos = al_dueno(home)
-            ok("y sale en cuanto el dueno lo autoriza", len(avisos) == 1
-               and f"Caso {espera}" in avisos[0]["body"], f"{avisos}")
+            ok("y sale en cuanto el dueno lo autoriza",
+               len([a for a in avisos if f"Caso {espera}" in a["body"]]) == 1, f"{avisos}")
+            de_cambia = [a for a in avisos if f"Caso {cambia}" in a["body"]]
+            ok("un aviso de una propuesta que ya cambio no sale: sale el de la nueva",
+               len(de_cambia) == 1 and "$65" in de_cambia[0]["body"], f"{de_cambia}")
+            ok("un aviso que espero mas de approval_hours no sale",
+               not any(f"Caso {vence}" in a["body"] for a in avisos)
+               and cuenta(home, f"select count(*) from aviso where case_id={int(vence)} "
+                                "and estado='fallido'") == 1, f"{avisos}")
+
+            # Un error que se reintenta tampoco insiste para siempre: vence igual.
+            con = db_de(home)
+            con.execute("insert into aviso (req_id, tipo, case_id, account, chat_jid, texto, "
+                        "estado, at, updated_at) values ('aviso-b-98-1', 'bloqueo', null, ?, "
+                        "?, 'Caso 98 se bloqueo: viejo', 'pendiente', "
+                        "datetime('now','localtime','-30 hours'), "
+                        "datetime('now','localtime','-30 hours'))", (A, DUENO_LID))
+            con.commit()
+            con.close()
+            tick(home)
+            ok("un aviso pendiente de hace mas de approval_hours no sale",
+               not any(f["req_id"] == "aviso-b-98-1" for f in envios(home)))
+
+            # Solo el directo en Automatico contesta avisos: en otro modo un `si N` no
+            # aprueba nada.
+            js(home, "mode", DUENO_DM, "borrador")
+            llegan(home, A, [msg(DUENO_DM, "W9", f"si {espera}", 1, de=DUENO_LID)])
+            ingiere(home)
+            ver = js(home, "caso", "ver", espera)[0]
+            ok("con el directo fuera de Automatico, `si N` no aprueba",
+               not ver["aprobada"], f"{ver['etapa']} {ver['eventos'][-3:]}")
         finally:
             sidecar.cerrar()
 

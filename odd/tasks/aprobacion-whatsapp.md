@@ -64,6 +64,11 @@ no approval number set, the feature is off and everything behaves as today.
   `pendiente`. If `wa-send` refuses it because the approval chat is not authorized
   (`send-denied`, `send-line-not-linked`), it stays `pendiente` and goes out once the
   owner authorizes the chat.
+- Nothing pending goes out after `approval_hours` (a chat still unauthorized, an error
+  that keeps retrying), and an approval report whose version is no longer the current
+  one does not go out either (`approval-expired`, `approval-superseded`).
+- Answers are read only while the approval DM is in `responder`: in any other mode a
+  `si N` there is an owner order like any other.
 - "Waits for the owner" = a hold event for the current version: `trabajo espera al dueno`,
   a new `respuesta espera al dueno` (the rule refused to sign a reply, E_EXCEPTION), a
   `wa-send` hold (`envio frenado`), or the revision rounds that end in "lo decide el dueno".
