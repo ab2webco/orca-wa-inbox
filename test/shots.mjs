@@ -382,7 +382,10 @@ const TABLERO_CASOS = [
       { de: 'decision', a: 'decision', actor: 'regla', que: 'rule', args: ['money'],
         at: minutos(3) },
       { de: 'decision', a: 'decision', actor: 'automatizacion', que: 'held',
-        args: ['money', 'states_status_not_verified'], at: minutos(2) }] }),
+        args: ['money', 'states_status_not_verified'], at: minutos(2) },
+      // T14: el aviso al numero de aprobacion del dueno.
+      { de: 'decision', a: 'decision', actor: 'automatizacion', que: 'wa_notice',
+        at: minutos(2) }] }),
   caso(2, 'decision', {
     title: 'Pide el acceso al tablero de Andes', clase: 'alert', prioridad: 'urgent',
     chat_name: 'Operaciones internas', updated_at: minutos(22),
@@ -575,6 +578,15 @@ const PANELES = [
     enTodosLosAnchos: true, espera: 300, datos: CON_LINEA, pestana: 'aprobacion',
     guion: "document.getElementById('owners-card').scrollIntoView();" +
       escribirEn('owner-search', '') },
+  // T14: el numero de aprobacion, elegido entre los de confianza, con el aviso de que su
+  // chat todavia no esta en Automatico.
+  { nombre: 'config-numero-aprobacion', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 300, pestana: 'aprobacion',
+    datos: Object.assign({}, CON_LINEA, {
+      owners: [{ id: '100000000000001@lid', name: 'Ana Restrepo' },
+        { id: '100000000000002@lid', name: 'Beto Socio' }],
+      approvalNumber: '100000000000001@lid' }),
+    guion: "document.getElementById('approval-number').scrollIntoView()" },
   {
     nombre: 'actividad',
     archivo: 'activity.html',

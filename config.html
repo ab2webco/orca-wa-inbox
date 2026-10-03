@@ -397,6 +397,10 @@
          apretar, no despues. */
       .pairing-warn { color: var(--destructive, var(--fb-destructive));
                       margin: 0 0 8px; max-width: 52ch; }
+      /* Un numero de aprobacion cuyo chat no esta en Automatico no recibe nada (T14): se
+         dice antes de guardar, en el mismo color que lo que hay que leer antes de apretar. */
+      .approval-warn { color: var(--destructive, var(--fb-destructive)); }
+      .approval-warn[hidden] { display: none; }
       /* El boton que confirma el borrado se ve distinto del que lo ofrece: son dos
          clics del mismo boton y sin la diferencia visual el segundo se da sin mirar. */
       #pairing-unlink.confirmar {
@@ -698,6 +702,13 @@
                  data-t-label="ownersAddLabel"></div>
           </div>
           <p class="hint" data-t="ownersHelp"></p>
+          <!-- El numero de aprobacion (T14): uno de los de arriba, o ninguno. Grupo de
+               botones y no un select: la lista nativa no se abre en el panel de Orca. -->
+          <span class="label" id="approval-number-label" data-t="approvalNumberLabel"></span>
+          <div class="seg" id="approval-number" role="group"
+               aria-labelledby="approval-number-label"></div>
+          <p class="hint approval-warn" id="approval-warn" hidden></p>
+          <p class="hint" data-t="approvalNumberHelp"></p>
           <div class="actions">
             <button class="primary" id="save-owners" data-t="saveCard"></button>
             <span class="said" id="said-owners"></span>
@@ -1163,6 +1174,15 @@
           ownersSeenIn: 'escribio en {chats}',
           ownersDirect: 'chat directo',
           ownersSaved: 'Numeros guardados',
+          // --- El numero de aprobacion (T14) ---
+          approvalNumberLabel: 'Numero de aprobacion',
+          approvalNumberOff: 'No avisar',
+          approvalNumberHelp: 'Cuando un caso espera su decision, el plugin le escribe a ese ' +
+            'numero. Conteste si 18 para aprobar, no 18 para cerrar, o 18 y su correccion para ' +
+            'que el agente la rehaga; estado le lista los casos abiertos. Solo cuenta lo que ' +
+            'escribe desde ese numero, y nunca viaja una credencial: esa se aprueba aqui.',
+          approvalWarn: 'El chat con este numero no esta en Automatico: los avisos no salen y ' +
+            'sus respuestas no llegan. Autoricelo en sus conversaciones con el modo Automatico.',
           // --- Los niveles por conversacion (T22.3) ---
           chatApLabel: 'Aprobacion en esta conversacion',
           apRuleMoney: 'Dinero', apRuleCredential: 'Credenciales', apRuleCommitment: 'Compromisos',
@@ -1556,6 +1576,14 @@
           ownersSeenIn: 'wrote in {chats}',
           ownersDirect: 'direct chat',
           ownersSaved: 'Numbers saved',
+          approvalNumberLabel: 'Approval number',
+          approvalNumberOff: 'Off',
+          approvalNumberHelp: 'When a case waits for your decision, the plugin writes to that ' +
+            'number. Answer yes 18 (or si 18) to approve, no 18 to close, or 18 and your ' +
+            'correction for the agent to redo it; status lists the open cases. Only what you ' +
+            'write from that number counts, and a credential never travels: approve that one here.',
+          approvalWarn: 'The chat with this number is not on Automatic: notices do not go out and ' +
+            'your answers do not arrive. Authorize it in your conversations on Automatic.',
           chatApLabel: 'Approval in this conversation',
           apRuleMoney: 'Money', apRuleCredential: 'Credentials', apRuleCommitment: 'Commitments',
           apRuleQuality: 'Quality of the reply (Jev)',
@@ -1975,6 +2003,15 @@
         ownersSeenIn: 'escreveu em {chats}',
         ownersDirect: 'chat direto',
         ownersSaved: 'Numeros salvos',
+        approvalNumberLabel: 'Numero de aprovacao',
+        approvalNumberOff: 'Nao avisar',
+        approvalNumberHelp: 'Quando um caso espera a sua decisao, o plugin escreve para esse ' +
+          'numero. Responda yes 18 (ou si 18) para aprovar, no 18 para fechar, ou 18 e a sua ' +
+          'correcao para o agente refazer; status lista os casos abertos. So conta o que voce ' +
+          'escreve desse numero, e uma credencial nunca viaja: essa se aprova aqui. Os avisos ' +
+          'saem em ingles.',
+        approvalWarn: 'O chat com este numero nao esta em Automatico: os avisos nao saem e as ' +
+          'suas respostas nao chegam. Autorize-o nas suas conversas no modo Automatico.',
         chatApLabel: 'Aprovacao nesta conversa',
         apRuleMoney: 'Dinheiro', apRuleCredential: 'Credenciais', apRuleCommitment: 'Compromissos',
         apRuleQuality: 'Qualidade da resposta (Jev)',
@@ -3337,6 +3374,9 @@
         })
         alcancePorJid = entries
         pintarChats()
+        if (typeof pintarAvisoNumero === 'function' && el('approval-number').childElementCount) {
+          pintarAvisoNumero()
+        }
         var keys = Object.keys(entries)
         if (!keys.length) {
           el('scope-wrap').innerHTML = '<p class="empty">' + t('empty') + '</p>'
@@ -3578,6 +3618,7 @@
       function pintarDuenos() {
         var lista = duenosVisibles()
         var caja = el('owners-wrap')
+        pintarNumero()
         if (!lista.length) {
           caja.innerHTML = '<p class="empty">' + esc(t('ownersEmpty')) + '</p>'
           return
@@ -3639,12 +3680,63 @@
           pintarDuenos()
         }
       })
+      // ---------- el numero de aprobacion (T14) ----------
+      // Uno de los numeros de confianza, o ninguno: ahi escribe el plugin cuando un caso
+      // espera al dueno, y de ahi lee lo que contesta. Nunca se escribe a mano. Si sale de
+      // la lista de confianza, el selector vuelve a "No avisar" y guardar lo apaga.
+      var numeroGuardado = ''
+      var numeroEnEdicion = null
+      function numeroVisible() {
+        var v = numeroEnEdicion !== null ? numeroEnEdicion : numeroGuardado
+        return duenosVisibles().some(function (d) { return d.id === v }) ? v : ''
+      }
+      function renderApproval(valor) {
+        numeroGuardado = typeof valor === 'string' ? idSinDispositivo(valor) : ''
+        if (numeroEnEdicion === null) pintarNumero()
+      }
+      function pintarNumero() {
+        var grupo = el('approval-number')
+        var actual = numeroVisible()
+        var opciones = [{ id: '', name: t('approvalNumberOff') }].concat(duenosVisibles())
+        grupo.innerHTML = opciones.map(function (d) {
+          return '<button type="button" data-value="' + escAttr(d.id) + '">' +
+            esc(d.name || d.id) + '</button>'
+        }).join('')
+        Array.prototype.forEach.call(grupo.querySelectorAll('button'), function (b) {
+          apretar(b, b.getAttribute('data-value') === actual)
+          cablearBoton(grupo, b)
+        })
+        pintarAvisoNumero()
+      }
+      /** Un numero cuyo chat no esta en Automatico no recibe los avisos ni manda las
+       *  respuestas: `wa-send` solo escribe ahi, y el almacen solo guarda lo de ahi. */
+      function pintarAvisoNumero() {
+        var v = numeroVisible()
+        var entrada = v && alcancePorJid ? alcancePorJid[v] : null
+        var aviso = el('approval-warn')
+        aviso.textContent = t('approvalWarn')
+        aviso.hidden = !v || !!(entrada && entrada.mode === 'responder')
+      }
+      el('approval-number').addEventListener('change', function () {
+        numeroEnEdicion = valorSeg('approval-number')
+        pintarAvisoNumero()
+      })
       el('save-owners').addEventListener('click', function (event) {
         var lista = duenosVisibles().slice()
+        var numero = numeroVisible()
         busy(event.currentTarget, write('owners', lista).then(function (r) {
+          if (r && r.ok === false) return r
+          // El idioma del panel viaja con el numero: es en el que salen los avisos.
+          return write('approvalNumber', numero).then(function (r2) {
+            if (r2 && r2.ok === false) return r2
+            return write('approvalLang', LANG)
+          })
+        }).then(function (r) {
           if (r && r.ok === false) { said('said-owners', t('saveFail'), true); return }
           duenosGuardados = lista
           duenosEnEdicion = null
+          numeroGuardado = numero
+          numeroEnEdicion = null
           pintarDuenos()
           said('said-owners', '✓ ' + t('ownersSaved'))
         }))
@@ -4474,7 +4566,7 @@
                     'chatsAccount', 'transcribeQuality', 'inboxDays', 'ownerName',
                     'transcribe', 'transcribeLang', 'syncStatus', 'syncMinutes',
                     'workerBeat', 'sidecar', 'jevStatus', 'projects', 'projectsStatus',
-                    'owners', 'senders']
+                    'owners', 'senders', 'approvalNumber']
       var CLAVES_VIVAS = ['chats', 'chatsAccount', 'health', 'syncStatus', 'workerBeat',
                           'sidecar']
 
@@ -4530,6 +4622,7 @@
             if (hayRespuesta(v('chats'))) renderChats(v('chats'))
             if (hayRespuesta(v('senders'))) renderSenders(v('senders'))
             if (hayRespuesta(v('owners'))) renderOwners(v('owners'))
+            if (hayRespuesta(v('approvalNumber'))) renderApproval(v('approvalNumber'))
             pintarClave('agentName', v('agentName'), sello)
             // El latido manda sobre todo lo demas: si nadie esta corriendo, el health
             // que haya es de otra sesion y "todo bien" seria mentira. Un rechazo del

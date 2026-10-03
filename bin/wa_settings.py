@@ -294,10 +294,11 @@ CONFIG_OPCIONES = {
     "greeting": ("on", "off"),
 }
 CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s", "sync_minutes",
-                    "capture_max", "capture_days", "case_window_hours")
+                    "capture_max", "capture_days", "case_window_hours", "approval_hours")
 # Los numericos que ademas tienen que ser mayores que cero. Una ventana de agrupacion de
-# cero horas no agrupa nunca: abre una tarjeta por mensaje sin decir por que.
-CONFIG_POSITIVOS = ("case_window_hours",)
+# cero horas no agrupa nunca: abre una tarjeta por mensaje sin decir por que. Un aviso de
+# aprobacion que vence a las cero horas no se podria contestar nunca (T14).
+CONFIG_POSITIVOS = ("case_window_hours", "approval_hours")
 
 
 # Un id (o correo) de cuenta de `orca account list`: viaja como argumento a la CLI de Orca.
@@ -413,3 +414,28 @@ def duenos():
         if usuario and servidor and f"{usuario}@{servidor}" not in salida:
             salida.append(f"{usuario}@{servidor}")
     return salida
+
+
+# Los idiomas en que sale un aviso por WhatsApp (T14). El panel guarda el suyo al elegir el
+# numero: el motor no tiene otra forma de saber en que idioma trabaja el usuario.
+IDIOMAS_AVISO = ("es", "en")
+
+
+def numero_aprobacion():
+    """El numero al que el plugin le escribe cuando un caso espera al dueno (T14), o None.
+
+    Lo elige el usuario en ajustes entre SUS numeros de confianza: vale solo mientras siga
+    en `duenos()`. Sacarlo de la lista apaga los avisos; nunca se adivina ni se escribe a
+    mano. Sin numero elegido, el plugin se porta como antes."""
+    jid = plugin_store_raw().get("approvalNumber")
+    if not isinstance(jid, str) or "@" not in jid:
+        return None
+    usuario, _, servidor = jid.strip().partition("@")
+    propio = f"{usuario.split(':')[0]}@{servidor}"
+    return propio if propio in duenos() else None
+
+
+def idioma_aprobacion():
+    """`es` o `en`: el idioma del panel cuando se eligio el numero. Ingles si no se sabe."""
+    idioma = plugin_store_raw().get("approvalLang")
+    return idioma if idioma in IDIOMAS_AVISO else "en"

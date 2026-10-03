@@ -664,11 +664,9 @@ console.log('\nconfig.html — T17: Su aprobacion explica las excepciones fijas'
     /dinero/i.test(texto) && /credencial/i.test(texto) && /fecha|compromiso/i.test(texto) &&
     /Jev/.test(texto) && /Le pregunto antes/.test(texto), texto)
   ok('y dice que Jev solo puede detener, nunca habilitar', /nunca/i.test(texto), texto)
-  // Aprobar desde el chat propio de WhatsApp es trabajo futuro: no se anuncia.
+  // Aprobar por WhatsApp ya existe (T14): se dice como algo que funciona, no se anuncia.
   const vista = doc.getElementById('view-aprobacion').textContent
-  ok('sin nada que todavia no existe: ni WhatsApp como canal de aprobacion',
-    !/proximamente|pronto|coming soon/i.test(vista) &&
-    !/(por|desde|en) (su )?(chat propio|WhatsApp)/i.test(vista), vista)
+  ok('sin nada que todavia no existe', !/proximamente|pronto|coming soon/i.test(vista), vista)
 }
 
 console.log('\nconfig.html — T22: las reglas como son, por conversacion y con niveles')
@@ -728,6 +726,63 @@ console.log('\nconfig.html — T22: los numeros del dueno se eligen de los que e
   await espera()
   ok('quitar uno y guardar lo saca', JSON.stringify(storage.owners) ===
     JSON.stringify([{ id: '100000000000001@lid', name: 'Ana Duena' }]), JSON.stringify(storage.owners))
+}
+
+console.log('\nconfig.html — T14: el numero de aprobacion se elige entre los de confianza')
+{
+  const ANA = '100000000000001@lid'
+  const BETO = '100000000000002@lid'
+  const { doc, storage } = await montar('config.html', {
+    owners: [{ id: ANA, name: 'Ana Duena' }, { id: BETO, name: 'Beto Socio' }],
+    scope: { [ANA]: { chatName: 'Ana Duena', mode: 'observar' } }
+  }, 'es-419')
+  await espera()
+  const grupo = doc.getElementById('approval-number')
+  ok('el selector esta en la tarjeta de numeros de confianza',
+    !!doc.querySelector('#owners-card #approval-number'), 'falta #approval-number')
+  ok('es un grupo de botones, no un select nativo',
+    grupo && grupo.classList.contains('seg') && !doc.querySelector('#owners-card select'))
+  const botones = () => [...grupo.querySelectorAll('button')]
+  ok('ofrece apagarlo y cada numero de confianza por su nombre',
+    JSON.stringify(botones().map((b) => b.dataset.value)) === JSON.stringify(['', ANA, BETO]) &&
+    /Ana Duena/.test(grupo.textContent) && /Beto Socio/.test(grupo.textContent),
+    botones().map((b) => `${b.dataset.value}=${b.textContent}`).join(' | '))
+  ok('sin numero elegido esta apagado',
+    botones()[0].getAttribute('aria-pressed') === 'true', grupo.innerHTML.slice(0, 200))
+  ok('apagado no hay aviso de chat sin autorizar', doc.getElementById('approval-warn').hidden)
+  botones()[1].click()
+  ok('elegir un numero cuyo chat no responde solo lo dice antes de guardar',
+    !doc.getElementById('approval-warn').hidden &&
+    /Automatico/.test(doc.getElementById('approval-warn').textContent),
+    doc.getElementById('approval-warn').textContent)
+  doc.getElementById('save-owners').click()
+  await espera()
+  ok('guardar deja el numero elegido y el idioma de los avisos',
+    storage.approvalNumber === ANA && storage.approvalLang === 'es',
+    `${storage.approvalNumber} ${storage.approvalLang}`)
+  ok('la ayuda dice como contestar', /si 18/.test(doc.getElementById('owners-card').textContent),
+    doc.getElementById('owners-card').textContent)
+  doc.querySelector(`#owners-wrap [data-orm="${ANA}"]`).click()
+  ok('quitar el numero de confianza lo saca del selector',
+    !botones().some((b) => b.dataset.value === ANA) &&
+    botones()[0].getAttribute('aria-pressed') === 'true')
+  doc.getElementById('save-owners').click()
+  await espera()
+  ok('y guardar apaga los avisos', storage.approvalNumber === '', String(storage.approvalNumber))
+}
+{
+  const ANA = '100000000000001@lid'
+  const { doc } = await montar('config.html', {
+    owners: [{ id: ANA, name: 'Ana Duena' }], approvalNumber: ANA,
+    scope: { [ANA]: { chatName: 'Ana Duena', mode: 'responder' } }
+  }, 'en-US')
+  await espera()
+  const grupo = doc.getElementById('approval-number')
+  ok('lo guardado se muestra elegido',
+    grupo.querySelector('button[aria-pressed="true"]')?.dataset.value === ANA, grupo.innerHTML.slice(0, 300))
+  ok('con el chat en Responder no hay aviso', doc.getElementById('approval-warn').hidden)
+  ok('en ingles tambien', /Approval number/i.test(doc.getElementById('owners-card').textContent) &&
+    /Off/.test(grupo.textContent), doc.getElementById('owners-card').textContent)
 }
 
 console.log('\nconfig.html — T22: cada conversacion con sus niveles de aprobacion')
@@ -4995,6 +5050,28 @@ console.log('\nactivity.html — tablero: lo que hizo el agente, en la historia 
   ok('lo que no movio la etapa se dice como actualizado', /actualizado/.test(filas[3]), filas[3])
   ok('un actor que el panel no conoce no sale crudo', !/actor_nuevo/.test(h.textContent) &&
     /otro/.test(filas[4]), filas[4])
+}
+
+console.log('\nactivity.html — T14: la historia dice lo que paso por WhatsApp')
+{
+  const caso = tarjeta({ case_id: 5, events: [
+    { de: null, a: 'recibido', actor: 'automatizacion', que: 'message', at: hace(50 * 60000) },
+    { de: 'decision', a: 'decision', actor: 'regla', que: 'reply_waits', args: ['money'],
+      at: hace(45 * 60000) },
+    { de: 'decision', a: 'decision', actor: 'automatizacion', que: 'wa_notice', at: hace(44 * 60000) },
+    { de: 'decision', a: 'clasificado', actor: 'dueno', que: 'wa_correction', at: hace(43 * 60000) },
+    { de: 'decision', a: 'decision', actor: 'dueno', que: 'wa_approved', at: hace(42 * 60000) },
+    { de: 'decision', a: 'cerrado', actor: 'dueno', que: 'wa_rejected', at: hace(41 * 60000) }] })
+  for (const [idioma, re] of [['es-419', [/la respuesta espera su firma: dinero/, /aviso enviado por WhatsApp/,
+    /correccion por WhatsApp/, /aprobada por WhatsApp/, /rechazada por WhatsApp/]],
+  ['en-US', [/the reply waits for your signature: money/, /notice sent on WhatsApp/,
+    /correction on WhatsApp/, /approved on WhatsApp/, /rejected on WhatsApp/]]]) {
+    const { doc } = await abrirTablero({ board: tablero([caso]) }, idioma)
+    const h = abrirDetalle(doc, 5).querySelector('.det-hist')
+    const filas = [...h.querySelectorAll('li')].map((li) => li.textContent)
+    ok(`${idioma}: cada paso por WhatsApp en palabras`, re.every((r) => filas.some((f) => r.test(f))) &&
+      !/actualizado|updated/.test(filas.slice(1).join(' ')), JSON.stringify(filas))
+  }
 }
 
 console.log('\nactivity.html — T22: la historia dice que paso, y agrupa lo repetido')
