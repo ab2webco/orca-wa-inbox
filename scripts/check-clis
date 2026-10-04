@@ -89,7 +89,26 @@ AJUSTES = [
     (["config", "case_window_hours", "0"], False, "24"),
     (["config", "case_window_hours", "-3"], False, "24"),
     (["config", "case_window_hours", "medio dia"], False, "24"),
+    # El primer mensaje (Beta): quien lo escribe y el ritmo de los avances. Un modo que no
+    # existe dejaria al cliente sin acuse y sin agente; un plazo fuera de rango tambien.
+    (["config", "first_reply_mode", "model_with_ack_fallback"], True, "model_with_ack_fallback"),
+    (["config", "first_reply_mode", "a veces"], False, "model_with_ack_fallback"),
+    (["config", "ack_fallback_minutes", "15"], True, "15"),
+    (["config", "ack_fallback_minutes", "0"], False, "15"),
+    (["config", "ack_fallback_minutes", "61"], False, "15"),
+    (["config", "ack_fallback_minutes", "cinco"], False, "15"),
+    (["config", "update_every_minutes", "30"], True, "30"),
+    (["config", "update_every_minutes", "0"], False, "30"),
+    (["config", "update_every_minutes", "121"], False, "30"),
+    (["config", "updates_max", "5"], True, "5"),
+    (["config", "updates_max", "0"], False, "5"),
+    (["config", "updates_max", "11"], False, "5"),
 ]
+
+# Con que arranca el primer mensaje en una instalacion nueva: el acuse fijo de siempre.
+# Los modos del agente son Beta y nadie entra a ellos sin elegirlos.
+DEFAULTS_PRIMER = {"first_reply_mode": "ack", "ack_fallback_minutes": "5",
+                   "update_every_minutes": "10", "updates_max": "3"}
 
 # Con que arranca cada ajuste de la via web en una instalacion nueva. Van aca y no en un
 # comentario porque son el trato entero del almacen — cuanto texto ajeno se guarda y por
@@ -1309,7 +1328,7 @@ def revisa_ajustes(fallos: list) -> int:
         home = pathlib.Path(tmp)
         env = entorno(home)
         # Los arranques, ANTES de tocar nada: despues del bucle ya no son defaults.
-        for clave, esperado in sorted(DEFAULTS_RETENCION.items()):
+        for clave, esperado in sorted({**DEFAULTS_RETENCION, **DEFAULTS_PRIMER}.items()):
             hechas += 1
             quedo = valor(env, clave)
             if quedo != esperado:
@@ -1352,24 +1371,42 @@ def revisa_ajustes(fallos: list) -> int:
             if espejo.get(flat) != esperado:
                 fallos.append(f"sync no le devolvio {flat} al panel: quedo "
                               f"{espejo.get(flat)!r} en vez de {esperado!r}")
+        # El primer mensaje viaja en UNA clave del panel, con sus cuatro valores: cada
+        # clave mas es una lectura mas contra el cupo de mensajes del host.
+        hechas += 1
+        primer = {"mode": "model_with_ack_fallback", "fallbackMinutes": "15",
+                  "everyMinutes": "30", "max": "5"}
+        if espejo.get("firstReply") != primer:
+            fallos.append(f"sync no le devolvio firstReply al panel: quedo "
+                          f"{espejo.get('firstReply')!r} en vez de {primer!r}")
 
         # El panel escribe en el store del host sin pasar por el CLI, asi que un valor
         # sucio de ahi es lo unico que la validacion de escritura no puede atajar.
         store.write_text(json.dumps({"inboxDays": "nunca", "transcribe": "magia",
-                                     "transcribeLang": "klingon"}), encoding="utf-8")
-        hechas += 3
+                                     "transcribeLang": "klingon",
+                                     "firstReply": {"mode": "magia", "fallbackMinutes": "99",
+                                                    "everyMinutes": "-1", "max": "mil"}}),
+                         encoding="utf-8")
+        hechas += 7
         for clave, esperado in (("inbox_days", "30"), ("transcribe", "off"),
-                                ("transcribe_lang", "pt")):
+                                ("transcribe_lang", "pt"),
+                                ("first_reply_mode", "model_with_ack_fallback"),
+                                ("ack_fallback_minutes", "15"),
+                                ("update_every_minutes", "30"), ("updates_max", "5")):
             quedo = valor(env, clave)
             if quedo != esperado:
                 fallos.append(f"basura del panel en {clave}: llego {quedo!r} en vez de "
                               f"{esperado!r}, el valor del CLI")
 
         # Y lo valido del panel SI tiene que ganarle al CLI, como el tono.
-        store.write_text(json.dumps({"inboxDays": "0", "transcribe": "local"}),
+        store.write_text(json.dumps({"inboxDays": "0", "transcribe": "local",
+                                     "firstReply": {"mode": "model", "fallbackMinutes": 7,
+                                                    "everyMinutes": "12", "max": "2"}}),
                          encoding="utf-8")
-        hechas += 2
-        for clave, esperado in (("inbox_days", "0"), ("transcribe", "local")):
+        hechas += 6
+        for clave, esperado in (("inbox_days", "0"), ("transcribe", "local"),
+                                ("first_reply_mode", "model"), ("ack_fallback_minutes", "7"),
+                                ("update_every_minutes", "12"), ("updates_max", "2")):
             quedo = valor(env, clave)
             if quedo != esperado:
                 fallos.append(f"el panel no le gano al CLI en {clave}: quedo {quedo!r}")

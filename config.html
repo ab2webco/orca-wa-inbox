@@ -400,6 +400,16 @@
       /* Un numero de aprobacion cuyo chat no esta en Automatico no recibe nada (T14): se
          dice antes de guardar, en el mismo color que lo que hay que leer antes de apretar. */
       .approval-warn { color: var(--destructive, var(--fb-destructive)); }
+      /* El primer mensaje (Beta): la marca en los dos modos del agente, y sus numeros. */
+      .seg button .beta { display: inline-block; margin-left: 6px; padding: 0 6px;
+                          border-radius: 999px; font-size: 10px; font-weight: 600;
+                          letter-spacing: 0.04em; line-height: 16px; vertical-align: 1px;
+                          border: 1px solid currentColor; opacity: 0.85; }
+      .fr-nums { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+                 gap: 8px 12px; margin-top: 8px; }
+      .fr-nums[hidden], .fr-num[hidden] { display: none; }
+      .fr-num { display: flex; flex-direction: column; min-width: 0; }
+      .fr-num input { width: 100%; max-width: 120px; }
       .approval-warn[hidden] { display: none; }
       /* El boton que confirma el borrado se ve distinto del que lo ofrece: son dos
          clics del mismo boton y sin la diferencia visual el segundo se da sin mirar. */
@@ -572,6 +582,17 @@
             <button type="button" data-value="off" data-t="autoOff"></button>
           </div>
           <input id="chat-greeting-text" data-t-ph="greetingPh" />
+          <span class="label" id="chat-first-reply-label" data-t="firstReplyLabel"></span>
+          <div class="seg" id="chat-first-reply" role="group"
+               aria-labelledby="chat-first-reply-label">
+            <button type="button" data-value="default" data-t="autoDefault"></button>
+            <button type="button" data-value="ack" data-t="frAck"></button>
+            <button type="button" data-value="model"><span data-t="frModel"></span><span
+                    class="beta">Beta</span></button>
+            <button type="button" data-value="model_with_ack_fallback"><span
+                    data-t="frFallback"></span><span class="beta">Beta</span></button>
+          </div>
+          <p class="hint approval-warn" id="chat-first-reply-warn" data-t="frWarn" hidden></p>
           <p class="hint" data-t="chatAutoHelp"></p>
           <!-- T22.3: cada regla de aprobacion con su nivel en ESTA conversacion. Grupos de
                botones como el modo: un select nativo no se abre en el panel de Orca. -->
@@ -725,6 +746,35 @@
             <button type="button" data-value="off" data-t="autoOff"></button>
           </div>
           <input id="ack-text" data-t-ph="ackPh" />
+          <!-- Quien escribe el primer mensaje (Beta). Botones y no un select: la lista nativa
+               no se abre en el panel de Orca. Los cuatro valores viajan en UNA clave,
+               `firstReply`: cada clave es un mensaje mas contra el cupo del host. -->
+          <span class="label" id="first-reply-label" data-t="firstReplyLabel"></span>
+          <div class="seg" id="first-reply" role="group" aria-labelledby="first-reply-label">
+            <button type="button" data-value="ack" data-t="frAck"></button>
+            <button type="button" data-value="model"><span data-t="frModel"></span><span
+                    class="beta">Beta</span></button>
+            <button type="button" data-value="model_with_ack_fallback"><span
+                    data-t="frFallback"></span><span class="beta">Beta</span></button>
+          </div>
+          <p class="hint" data-t="firstReplyHelp"></p>
+          <p class="hint approval-warn" id="first-reply-warn" data-t="frWarn" hidden></p>
+          <div class="fr-nums" id="fr-nums" hidden>
+            <div class="fr-num" id="fr-fallback-row">
+              <label for="fr-fallback" id="fr-fallback-label" data-t="frFallbackLabel"></label>
+              <input id="fr-fallback" type="number" min="1" max="60" step="1"
+                     inputmode="numeric" />
+            </div>
+            <div class="fr-num" id="fr-every-row">
+              <label for="fr-every" id="fr-every-label" data-t="frEveryLabel"></label>
+              <input id="fr-every" type="number" min="1" max="120" step="1"
+                     inputmode="numeric" />
+            </div>
+            <div class="fr-num" id="fr-max-row">
+              <label for="fr-max" id="fr-max-label" data-t="frMaxLabel"></label>
+              <input id="fr-max" type="number" min="1" max="10" step="1" inputmode="numeric" />
+            </div>
+          </div>
           <span class="label" id="greeting-mode-label" data-t="greetingLabel"></span>
           <div class="seg" id="greeting-mode" role="group" aria-labelledby="greeting-mode-label">
             <button type="button" data-value="on" data-t="autoOn"></button>
@@ -984,6 +1034,17 @@
             'es lo que el acuse nunca debe hacer.',
           chatAutoHelp: 'Solo se envia si la conversacion esta en Automatico. Segun el general usa ' +
             'lo de la tarjeta Respuestas automaticas, en Su aprobacion.',
+          firstReplyLabel: 'Quien escribe el primer mensaje',
+          frAck: 'Acuse de recibo', frModel: 'El agente', frFallback: 'El agente, con acuse de respaldo',
+          firstReplyHelp: 'Con el agente, el primer mensaje habla de lo que el cliente pidio y el ' +
+            'agente envia avances cortos mientras trabaja. Con respaldo, si el agente no escribio ' +
+            'a tiempo, sale el acuse de recibo.',
+          frWarn: 'Sin respaldo, mientras Orca o el agente de casos esten caidos el cliente no ' +
+            'recibe nada hasta que vuelvan.',
+          frFallbackLabel: 'Acuse de respaldo a los (minutos)',
+          frEveryLabel: 'Un avance cada (minutos)',
+          frMaxLabel: 'Mensajes por caso, como maximo',
+          frRange: 'Revise los numeros: respaldo de 1 a 60, avances de 1 a 120 y de 1 a 10 mensajes.',
           voiceLegend: 'Notas de voz',
           readingLegend: 'Lectura de WhatsApp',
           transcribeLabel: "Transcribir las notas de voz",
@@ -1400,6 +1461,17 @@
             'dates: that is what an acknowledgement must never do.',
           chatAutoHelp: 'Only sent if the conversation is on Automatic. Use the default takes ' +
             'the Automatic replies card, under Your approval.',
+          firstReplyLabel: 'Who writes the first message',
+          frAck: 'Acknowledgement', frModel: 'The agent', frFallback: 'The agent, with a fallback acknowledgement',
+          firstReplyHelp: 'With the agent, the first message is about what the customer asked, ' +
+            'and the agent sends short updates while it works. With the fallback, if the agent ' +
+            'did not write in time, the acknowledgement goes out.',
+          frWarn: 'Without a fallback, while Orca or the case agent is down the customer gets ' +
+            'nothing until they are back.',
+          frFallbackLabel: 'Fallback acknowledgement after (minutes)',
+          frEveryLabel: 'One update every (minutes)',
+          frMaxLabel: 'Messages per case, at most',
+          frRange: 'Check the numbers: fallback 1 to 60, updates 1 to 120, and 1 to 10 messages.',
           voiceLegend: 'Voice notes',
           readingLegend: 'Reading WhatsApp',
           transcribeLabel: "Transcribe voice notes",
@@ -1838,6 +1910,17 @@
           'datas: e o que o aviso nunca deve fazer.',
         chatAutoHelp: 'So e enviado se a conversa estiver em Automatico. Conforme o geral usa o ' +
           'cartao Respostas automaticas, em Sua aprovacao.',
+        firstReplyLabel: 'Quem escreve a primeira mensagem',
+        frAck: 'Aviso de recebimento', frModel: 'O agente', frFallback: 'O agente, com aviso de reserva',
+        firstReplyHelp: 'Com o agente, a primeira mensagem fala do que o cliente pediu e o ' +
+          'agente envia atualizacoes curtas enquanto trabalha. Com reserva, se o agente nao ' +
+          'escreveu a tempo, sai o aviso de recebimento.',
+        frWarn: 'Sem reserva, enquanto o Orca ou o agente de casos estiverem fora do ar o ' +
+          'cliente nao recebe nada ate que voltem.',
+        frFallbackLabel: 'Aviso de reserva apos (minutos)',
+        frEveryLabel: 'Uma atualizacao a cada (minutos)',
+        frMaxLabel: 'Mensagens por caso, no maximo',
+        frRange: 'Revise os numeros: reserva de 1 a 60, atualizacoes de 1 a 120 e de 1 a 10 mensagens.',
         voiceLegend: 'Notas de voz',
         readingLegend: 'Leitura do WhatsApp',
         transcribeLabel: 'Transcrever as notas de voz',
@@ -2588,7 +2671,56 @@
         linea.hidden = false
       }
 
+      // ---------- el primer mensaje (Beta) ----------
+      // UNA clave, `firstReply`: { mode, fallbackMinutes, everyMinutes, max }, en texto como
+      // el resto de los ajustes. Lo que falta o no sirve se pinta con el de fabrica.
+      var PRIMER_DEFECTO = { mode: 'ack', fallbackMinutes: '5', everyMinutes: '10', max: '3' }
+      var PRIMER_MODOS = ['ack', 'model', 'model_with_ack_fallback']
+      var PRIMER_NUMEROS = [['fallbackMinutes', 'fr-fallback', 1, 60],
+        ['everyMinutes', 'fr-every', 1, 120], ['max', 'fr-max', 1, 10]]
+      var PRIMER_IDS = ['first-reply', 'fr-fallback', 'fr-every', 'fr-max']
+      PRIMER_IDS.forEach(ensuciar)
+      function pintarPrimer (valor, s) {
+        if (!hayRespuesta(valor) || !vigente(s)) return
+        var v = valor && typeof valor === 'object' ? valor : {}
+        if (!sucios['first-reply'] && !el('first-reply').contains(document.activeElement)) {
+          ponerSeg('first-reply', PRIMER_MODOS.indexOf(v.mode) !== -1 ? v.mode : 'ack', 'ack')
+        }
+        PRIMER_NUMEROS.forEach(function (n) {
+          if (sucios[n[1]] || document.activeElement === el(n[1])) return
+          var x = v[n[0]]
+          el(n[1]).value = x !== undefined && x !== null && String(x).trim() !== ''
+            ? String(x) : PRIMER_DEFECTO[n[0]]
+        })
+        pintarPrimerVista()
+      }
+      /** Lo que la tarjeta guardaria, o null si un numero esta fuera de su rango. */
+      function primerDelFormulario () {
+        var salida = { mode: valorSeg('first-reply') || 'ack' }
+        var bien = true
+        PRIMER_NUMEROS.forEach(function (n) {
+          var texto = el(n[1]).value.trim() || PRIMER_DEFECTO[n[0]]
+          var x = Number(texto)
+          if (!/^\d+$/.test(texto) || x < n[2] || x > n[3]) bien = false
+          salida[n[0]] = String(x)
+        })
+        return bien ? salida : null
+      }
+      /** Los numeros solo cuando cuentan, y el aviso solo en `model` (sin respaldo). */
+      function pintarPrimerVista () {
+        var modo = valorSeg('first-reply') || 'ack'
+        el('fr-nums').hidden = modo === 'ack'
+        el('fr-fallback-row').hidden = modo !== 'model_with_ack_fallback'
+        el('first-reply-warn').hidden = modo !== 'model'
+        el('chat-first-reply-warn').hidden = valorSeg('chat-first-reply') !== 'model'
+      }
+      el('first-reply').addEventListener('change', pintarPrimerVista)
+      el('chat-first-reply').addEventListener('change', pintarPrimerVista)
+      ponerSeg('first-reply', 'ack', 'ack')
+      PRIMER_NUMEROS.forEach(function (n) { el(n[1]).value = PRIMER_DEFECTO[n[0]] })
+
       function pintarClave (key, valor, s) {
+        if (key === 'firstReply') return pintarPrimer(valor, s)
         var c = CONTROLES[key]
         if (!c || !hayRespuesta(valor) || !vigente(s) || sucios[c[0]]) return
         var n = el(c[0])
@@ -2733,8 +2865,18 @@
           ['transcribe', 'transcribeLang', 'transcribeQuality'])
       })
       el('save-auto').addEventListener('click', function (event) {
-        guardarTarjeta(event.currentTarget, 'said-auto',
-          ['ackMode', 'ackText', 'greetingMode', 'greetingText'])
+        var primer = primerDelFormulario()
+        if (!primer) { said('said-auto', t('frRange'), true); return }
+        var claves = ['ackMode', 'ackText', 'greetingMode', 'greetingText']
+        var pares = claves.map(function (k) { return [k, valorDe(CONTROLES[k][0])] })
+        pares.push(['firstReply', primer])
+        busy(event.currentTarget, guardar(pares).then(function (mal) {
+          if (mal.indexOf('firstReply') === -1) {
+            PRIMER_IDS.forEach(function (id) { delete sucios[id] })
+          }
+          said('said-auto', mal.length ? t('saveFailed') : '✓ ' + t('savedOk'), !!mal.length)
+          pintarChecklist()
+        }))
       })
       el('save-reading').addEventListener('click', function (event) {
         guardarTarjeta(event.currentTarget, 'said-reading', ['inboxDays', 'syncMinutes'])
@@ -3553,6 +3695,9 @@
         el('chat-ack-text').value = entry.ackText || ''
         ponerSeg('chat-greeting', entry.greeting, 'default')
         el('chat-greeting-text').value = entry.greetingText || ''
+        ponerSeg('chat-first-reply', PRIMER_MODOS.indexOf(entry.firstReply) !== -1
+          ? entry.firstReply : 'default', 'default')
+        pintarPrimerVista()
         ponerNiveles(entry.approval)
         ponerSeg('mode', entry.mode, 'off')
         pintarModo()
@@ -3578,6 +3723,8 @@
         el('chat-ack-text').value = ''
         ponerSeg('chat-greeting', 'default', 'default')
         el('chat-greeting-text').value = ''
+        ponerSeg('chat-first-reply', 'default', 'default')
+        pintarPrimerVista()
         ponerNiveles(null)
         // Una conversacion nueva arranca sin proyecto: la mayoria de los 1 a 1 solo piden
         // que el agente lea y conteste, y elegir uno por inercia mandaria su trabajo a un
@@ -3663,6 +3810,8 @@
             ackText: el('chat-ack-text').value.trim() || null,
             greeting: valorSeg('chat-greeting') === 'default' ? null : valorSeg('chat-greeting'),
             greetingText: el('chat-greeting-text').value.trim() || null,
+            firstReply: valorSeg('chat-first-reply') === 'default' ? null
+              : valorSeg('chat-first-reply') || null,
             approval: nivelesDelFormulario(),
             updatedAt: new Date().toISOString() })
           // Autorizar es autorizar para ESTE numero (T9): el mismo grupo visto desde
@@ -4575,7 +4724,7 @@
       function activaAuto (cual) { return cual === 'aprobacion' }
       function leerAuto () {
         var sello = guardadoSeq
-        ;['ackMode', 'ackText', 'greetingMode', 'greetingText'].forEach(function (k) {
+        ;['ackMode', 'ackText', 'greetingMode', 'greetingText', 'firstReply'].forEach(function (k) {
           read(k, true).then(function (v) { pintarClave(k, v, sello) })
         })
       }

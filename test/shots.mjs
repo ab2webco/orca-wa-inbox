@@ -606,6 +606,27 @@ const PANELES = [
         { id: '100000000000002@lid', name: 'Beto Socio' }],
       approvalNumber: '100000000000001@lid' }),
     guion: "document.getElementById('approval-number').scrollIntoView()" },
+  // primer-mensaje-beta: quien escribe el primer mensaje. El acuse de siempre, el agente sin
+  // respaldo (con el aviso de que sin el el cliente puede no recibir nada), el agente con
+  // respaldo (con sus tres numeros) y lo propio de una conversacion.
+  { nombre: 'config-primer-acuse', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 300, pestana: 'aprobacion', datos: DATOS,
+    guion: "document.getElementById('first-reply').scrollIntoView()" },
+  { nombre: 'config-primer-agente', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 300, pestana: 'aprobacion',
+    datos: Object.assign({}, DATOS, { firstReply: { mode: 'model', fallbackMinutes: '5',
+      everyMinutes: '10', max: '3' } }),
+    guion: "document.getElementById('first-reply').scrollIntoView()" },
+  { nombre: 'config-primer-respaldo', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 300, pestana: 'aprobacion',
+    datos: Object.assign({}, DATOS, { firstReply: { mode: 'model_with_ack_fallback',
+      fallbackMinutes: '5', everyMinutes: '10', max: '3' } }),
+    guion: "document.getElementById('first-reply').scrollIntoView()" },
+  { nombre: 'config-primer-conversacion', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: CON_LINEA, pestana: 'chats',
+    guion: EDITAR_CONVERSACION + ";document.querySelector('#chat-first-reply " +
+      "button[data-value=\"model\"]').click();" +
+      "document.getElementById('chat-first-reply').scrollIntoView()" },
   // ritmo-triage: bajo el selector, a que ritmo corre el triage en Orca, o que no se pudo.
   { nombre: 'config-ritmo-triage', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, espera: 300, pestana: 'avanzado',

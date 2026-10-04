@@ -249,11 +249,21 @@ def main() -> int:
             if not js.stdout or js.stdout.strip() != py.stdout.strip():
                 fallos.append(f"harness.mjs  deja `bin-path` en {js.stdout.strip()!r} y las "
                               f"CLIs leen su estado de {py.stdout.strip()!r}")
-    # Y lo nuevo del CLI esta dicho donde el agente lo lee (cli-huecos, C6).
-    for rel, frases in (("harness/COMMANDS.md", ("bin-path", "wa-read wait")),
-                        ("harness/skills/whatsapp-cli/SKILL.md", ("bin-path", "wa-read\" wait"))):
+    # Y lo nuevo del CLI esta dicho donde el agente lo lee (cli-huecos, C6). El primer
+    # mensaje del agente (Beta) solo en los modos del agente, y en `ack` la regla de siempre;
+    # y el `necesita` del agente del proyecto: una pregunta concreta, y esperar en la
+    # terminal sin sondear (primer-mensaje-beta, P4).
+    for rel, frases in (("harness/COMMANDS.md", ("bin-path", "wa-read wait", "caso avance",
+                                                 "first_reply_mode")),
+                        ("harness/skills/whatsapp-cli/SKILL.md", ("bin-path", "wa-read\" wait",
+                                                                  "caso avance")),
+                        (SKILL_SOPORTE, ("caso avance", "first_reply_mode",
+                                         "Never write either one yourself", "Never filler",
+                                         "Never repeat", "one concrete question",
+                                         "wait idle in the same terminal", "Do not poll")),
+                        ("prompts/triage.md", ("caso avance", "first_reply_mode"))):
         comprobaciones += 1
-        texto = (RAIZ / rel).read_text(encoding="utf-8") if (RAIZ / rel).exists() else ""
+        texto = plano((RAIZ / rel).read_text(encoding="utf-8")) if (RAIZ / rel).exists() else ""
         faltan = [f for f in frases if f not in texto]
         if faltan:
             fallos.append(f"{rel}  no dice {', '.join(faltan)}")

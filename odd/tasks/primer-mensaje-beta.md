@@ -1,0 +1,124 @@
+# First message by the agent (Beta): acknowledgement, progress updates and a personal closing
+
+## Objective
+
+Today a new case in a `responder` chat gets the same fixed acknowledgement ("Recibimos su
+mensaje...") from the tick, and then one reply. To the customer it reads like a canned bot.
+The owner wants, as an opt-in Beta, the agent working the case to write the first message
+itself, send short progress updates while it works, and close by saying what was done and
+asking the customer to check. The fixed acknowledgement stays the default.
+
+## Scope
+
+1. A setting `first_reply_mode`, global with a per-chat override (`chat_scope`, null = use
+   the global value), with three values:
+   - `ack` (default, today's behavior, untouched): fixed acknowledgement from the tick.
+   - `model` (Beta): no fixed acknowledgement; the agent writes the first message.
+   - `model_with_ack_fallback` (Beta): the agent writes it; if no message went out for the
+     case within `ack_fallback_minutes` (default 5, configurable), the tick sends the fixed
+     acknowledgement.
+2. In both model modes, every case that would have received an acknowledgement under `ack`
+   is guaranteed to reach the agent (needs-agent), so the customer is never left without a
+   first message by a case the triage skips.
+3. A new command `caso avance <id> "<text>"` for the triage and project agents:
+   - Only when the chat's mode is a model mode and the chat sends (`responder`).
+   - Does not change the case's stage.
+   - Goes through the same review as any reply (fixed floor + Jev). A held update is
+     dropped with a case event; it never goes to the owner (updates are optional).
+   - Its own send id per update (`caso-<id>-avance-<n>`), so several can be delivered.
+   - Pacing: at most one every `update_every_minutes` (default 10) and `updates_max`
+     (default 3) per case; the first message counts as update 1 and is exempt from the
+     pacing wait. Rejections are explicit, machine-readable errors.
+   - Signed like every other message (`agent_name`).
+4. Closing: unchanged mechanics (`caso resultado --estado resuelto|necesita|bloqueado`);
+   the instructions ask for a personal closing that says what was fixed and asks the
+   customer to check it.
+5. Instructions: `harness/skills/whatsapp-soporte/SKILL.md`, `harness/COMMANDS.md`,
+   `prompts/triage.md` and the dispatch brief (`brief_de_despacho`) explain, only when the
+   chat is in a model mode: write the first message about what the customer asked; when an
+   update is worth sending (start, a real milestone, before a long step); never repeat
+   phrasing; follow the chat's tone; never promise times, dates or prices; never state an
+   unverified status.
+6. Panel: in "Respuestas automaticas", the three modes as buttons (not a select) with a
+   Beta badge on the two model modes, the fallback minutes, the update pacing, and the
+   per-chat override. The `model` mode shows a warning that without fallback a customer gets
+   nothing while Orca or the triage is down. ES/EN/PT. Screenshots at 1440/768/390/320,
+   light and dark.
+
+## Checklist
+
+- [x] P1 Settings and storage: `first_reply_mode`, `ack_fallback_minutes`,
+      `update_every_minutes`, `updates_max` (global, panel keys, validation, defaults) and
+      the per-chat column; resolution chat > global > default. The four values travel in
+      ONE panel key, `firstReply` ({mode, fallbackMinutes, everyMinutes, max}), and the chat's
+      in its scope entry (`firstReply`); `voice` returns the resolved `first_reply`
+      (scripts/check-clis, scripts/check-casos "ajustes"). RED: defaults None, invalid values
+      accepted, `KeyError: first_reply`; GREEN: check-clis 273 settings checks, section 10/10.
+- [x] P2 Tick: no acknowledgement at ingest in model modes; fallback acknowledgement after
+      N minutes without an outgoing message in `model_with_ack_fallback`; never in `model`;
+      model-mode cases marked for the agent. The fallback row is registered at ingest and
+      waits `pendiente`; before sending, the tick takes the first-message slot (`enviando`)
+      with the database locked, so an agent message and the fallback can never both be the
+      first. The mode is re-read at send time (scripts/check-casos "el acuse y su respaldo").
+      RED 7 failures (acuse sent in model and at once in fallback); GREEN 18/18, acuse
+      section 24/24 unchanged.
+  - [x] P2.1 Never both within one tick: the fallback pass runs after the tick's sends, and
+        an approved reply not yet sent also blocks it. RED: reply and acknowledgement both
+        delivered in the same tick; GREEN 19/19.
+- [x] P3 `caso avance`: guards, review, unique ids, pacing, max, events, no stage change.
+      Send path: immediately, like `caso resultado` (`envia_resultado`): under the tick's lock,
+      `wa-send --send --id=caso-<id>-avance-<n>`; if the lock is taken or the line is down
+      the row stays `pendiente` in `caso_avance` and the next tick sends it with the same id.
+      A hold by the floor or Jev cancels the draft (`wa-send --cancel`), leaves a case event
+      with the codes and never reaches the owner. `n` is never reused (held ones keep theirs);
+      held updates do not count toward `updates_max`. In `model_with_ack_fallback` a fallback
+      acknowledgement that went out takes the first-message slot, so a later update is paced
+      from it. Refusals exit 2 with E_FIRST_REPLY_MODE, E_CHAT_MODE, E_STAGE, E_EXCEPTION,
+      E_PACING, E_MAX_UPDATES. `--actor` is optional (agente | trabajador, default agente).
+      RED: `invalid choice: 'avance'`; GREEN 24/24 (scripts/check-casos "caso avance"), tick
+      87/87 and acknowledgement 24/24 unchanged.
+- [x] P4 Instructions: skill, COMMANDS, triage prompt, dispatch brief. The case file and the
+      brief carry `first_reply_mode` in the case head and, only in a Beta mode, a "First
+      message and updates" section with the exact `caso avance` command; in `ack` they say the
+      plugin sends the acknowledgement and never offer `caso avance`. `caso ver` returns
+      `primer_mensaje` (mode, ack, updates_sent, updates_left, next_update_in_s). Also
+      AGENTS.md and the whatsapp-cli skill. RED 0/18 (scripts/check-casos "instrucciones")
+      and check-harness missing phrases; GREEN 18/18, check-harness 56, check-prompts 15.
+  - [x] P4.1 (owner's addition, all modes) The project agent asks the customer with
+        `caso resultado --estado necesita` when a real doubt would make the work wrong or a
+        guess: one concrete question, in the chat's tone, to the person who asked, never what
+        it can find out itself; after `necesita` it waits idle in the same terminal (the
+        plugin types the answer there every minute; no polling, monitors, loops or sleeps,
+        never closing the terminal) and continues the same work; `resuelto` says concretely
+        what was done, asks the customer to try it, and claims only what was done and
+        verified. In `brief_de_despacho` and the whatsapp-soporte skill; pinned by the same
+        brief tests (RED with the rest of P4).
+- [x] P5 Panel: mode buttons, Beta badges, warning, numbers, per-chat override, ES/EN/PT,
+      screenshots looked at. The four values are read once when "Su aprobacion" opens and
+      saved with the card as ONE key (`firstReply`); an out-of-range number is refused with
+      a message. RED: `#first-reply no ofrece model` (3 failures, then abort); GREEN panels
+      1039/1039 (first-click test included). Shots `config-primer-acuse`, `-agente`,
+      `-respaldo`, `-conversacion` (64, no overflow, no JS errors, no selects); looked at
+      respaldo ES dark 1440 and 320, agente ES light 320 and EN dark 768, acuse ES light
+      1440, conversacion ES light 390.
+- [x] P6 `npm run check` green: exit 0 (casos 1115, panels 1039, worker 410, almacen 270,
+      envio 93, check-clis 273 settings checks, check-harness 56, 1272 screenshots without
+      overflow, JS errors or selects).
+- [ ] P7 Live: one chat in `model_with_ack_fallback` gets an agent-written first message,
+      an update and a personal closing; the fallback fires when the agent is late. And one
+      `necesita` round trip: a project agent asks one question with `--estado necesita`,
+      waits idle in its terminal, receives the customer's answer there and finishes with
+      `resuelto`.
+
+## Acceptance
+
+- With `ack` (default) nothing changes: every existing acknowledgement test still passes.
+- In `model_with_ack_fallback`, a case gets the agent's first message, or the fixed
+  acknowledgement after N minutes, never both.
+- In `model`, a case never gets the fixed acknowledgement.
+- Updates are delivered with distinct ids, respect pacing and the max, never move the
+  stage, and a held update never reaches the customer or the owner.
+
+## Checks
+
+- `scripts/check-casos`, `test/panels.test.mjs`, `test/worker.test.mjs`, `npm run check`.

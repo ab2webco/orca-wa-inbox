@@ -4255,6 +4255,507 @@ if NODE:
 
 
 
+# ── El primer mensaje del agente (Beta, odd/tasks/primer-mensaje-beta.md) ──────────────
+# `first_reply_mode`: `ack` (el acuse fijo de siempre), `model` (lo escribe el agente) o
+# `model_with_ack_fallback` (lo escribe el agente y, si no salio nada en N minutos, el
+# acuse fijo). Global, con lo de cada chat encima; null en el chat es "usar el general".
+print("\nel primer mensaje del agente (beta): ajustes")
+
+
+def primer_de(home, chat):
+    return js(home, "voice", chat)[0]["first_reply"]
+
+
+with tempfile.TemporaryDirectory() as home:
+    js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+    js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "responder")
+    v = primer_de(home, PERSONA)
+    ok("de fabrica el primer mensaje es el acuse fijo, con sus numeros por defecto",
+       v == {"mode": "ack", "beta": False, "source": "global", "fallback_minutes": 5,
+             "update_every_minutes": 10, "updates_max": 3}, f"{v}")
+    js(home, "config", "first_reply_mode", "model_with_ack_fallback")
+    js(home, "set", PERSONA, "--first-reply", "model")
+    v = primer_de(home, PERSONA)
+    ok("lo de un chat pisa lo global", v["mode"] == "model" and v["beta"] is True
+       and v["source"] == "conversacion", f"{v}")
+    v = primer_de(home, SOPORTE)
+    ok("y el chat sin lo suyo usa el global", v["mode"] == "model_with_ack_fallback"
+       and v["source"] == "global" and v["beta"] is True, f"{v}")
+    fila = next(r for r in js(home, "list") if r["chat_jid"] == PERSONA)
+    ok("el registro guarda el modo del chat", fila.get("primer_mensaje") == "model", f"{fila}")
+    p = corre(home, "set", PERSONA, "--first-reply", "a veces")
+    ok("un modo que no existe no se guarda", p.returncode != 0
+       and primer_de(home, PERSONA)["mode"] == "model")
+    js(home, "set", PERSONA, "--first-reply", "default")
+    v = primer_de(home, PERSONA)
+    ok("default vuelve al general", v["mode"] == "model_with_ack_fallback"
+       and v["source"] == "global", f"{v}")
+
+    ruta = storage_de(home)
+    datos = json.loads(ruta.read_text(encoding="utf-8")) if ruta.exists() else {}
+    datos["scope"] = {
+        PERSONA: {"chatName": "Cliente Uno", "provider": "ninguno", "mode": "responder",
+                  "firstReply": "ack"},
+        SOPORTE: {"chatName": "Soporte Norte", "provider": "ninguno", "mode": "responder",
+                  "firstReply": "magia"}}
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    ruta.write_text(json.dumps(datos), encoding="utf-8")
+    v = primer_de(home, PERSONA)
+    ok("lo que el panel guardo en el chat manda", v["mode"] == "ack"
+       and v["source"] == "conversacion", f"{v}")
+    v = primer_de(home, SOPORTE)
+    ok("y un valor sucio del panel no es una eleccion: vale el general",
+       v["mode"] == "model_with_ack_fallback" and v["source"] == "global", f"{v}")
+    js(home, "set", SOPORTE, "--first-reply", "model")
+    entrada = json.loads(ruta.read_text(encoding="utf-8"))["scope"].get(SOPORTE) or {}
+    ok("lo dicho por terminal corrige la entrada del panel", entrada.get("firstReply") == "model",
+       f"{entrada}")
+    ok("y el panel lo vuelve a leer igual", primer_de(home, SOPORTE)["mode"] == "model")
+
+
+print("\nel primer mensaje del agente (beta): el acuse y su respaldo")
+
+
+def envejece_caso(home, cid, minutos):
+    """El caso nacio `minutos` antes: el respaldo cuenta desde que se abrio."""
+    con = db_de(home)
+    con.execute("update caso set created_at=strftime('%Y-%m-%d %H:%M:%S', created_at, ?) "
+                "where case_id=?", (f"-{minutos} minutes", int(cid)))
+    con.commit()
+    con.close()
+
+
+def auto_de(home, cid, tipo="acuse"):
+    con = db_de(home)
+    fila = con.execute("select estado, razon from respuesta_auto where case_id=? and tipo=?",
+                       (int(cid), tipo)).fetchone()
+    con.close()
+    return dict(fila) if fila else None
+
+
+def necesita_agente(home, cid):
+    return cuenta(home, "select necesita_agente from caso where case_id=?", int(cid))
+
+
+if NODE:
+    falso = JevFalso(jev_y_borradores)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        # `model`: el acuse fijo no sale nunca, y el caso queda para el agente. Al lado, un
+        # chat en `ack` sigue como siempre.
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "M1", "revisa este caso por favor", 5),
+                             msg(OPERACIONES, "M2", "@duenio revisa este caso", 5, mencion=True),
+                             msg(FACTURACION, "M3", "@duenio buen dia", 5, mencion=True)])
+            js(home, "agent", "Agente De Ejemplo")
+            for chat in (PERSONA, OPERACIONES, FACTURACION):
+                js(home, "set", chat, "--provider", "ninguno", "--mode", "responder")
+            js(home, "set", PERSONA, "--first-reply", "model")
+            js(home, "set", FACTURACION, "--first-reply", "model")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                m1, m2, m3 = (caso_de_stanza(home, x) for x in ("M1", "M2", "M3"))
+                tick(home)
+                ok("en model el pedido nuevo no recibe el acuse fijo",
+                   f"caso-{m1['case_id']}-acuse" not in sidecar.entregados
+                   and auto_de(home, m1["case_id"]) is None, f"{sidecar.entregados}")
+                ok("y el caso queda marcado para el agente", necesita_agente(home, m1["case_id"]) == 1)
+                ok("con un evento que dice por que",
+                   any("primer mensaje" in e["detalle"] for e in
+                       js(home, "caso", "ver", str(m1["case_id"]))[0]["eventos"]))
+                p = corre(home, "pending", "--needs-agent")
+                ok("el agente lo ve en su cola", p.returncode == 0
+                   and m1["case_id"] in json.loads(p.stdout)["cases"], f"{p.stdout}")
+                ok("el chat en ack sigue recibiendo su acuse al instante",
+                   f"caso-{m2['case_id']}-acuse" in sidecar.entregados, f"{sidecar.entregados}")
+                ok("un saludo en model sigue recibiendo su saludo",
+                   f"caso-{m3['case_id']}-saludo" in sidecar.entregados, f"{sidecar.entregados}")
+                envejece_caso(home, m1["case_id"], 30)
+                tick(home)
+                ok("ni media hora despues: en model el acuse fijo no sale nunca",
+                   not any(r == f"caso-{m1['case_id']}-acuse" for r in sidecar.entregados))
+            finally:
+                sidecar.cerrar()
+
+        # `model_with_ack_fallback`: el acuse sale solo si pasaron los minutos sin que saliera
+        # nada del caso. Aca nada sale: el acuse llega a los N minutos, una vez.
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "F1", "revisa este caso por favor", 1)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+            js(home, "config", "first_reply_mode", "model_with_ack_fallback")
+            js(home, "config", "ack_fallback_minutes", "10")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                f1 = caso_de_stanza(home, "F1")
+                req = f"caso-{f1['case_id']}-acuse"
+                tick(home)
+                ok("con respaldo, el acuse no sale al instante", req not in sidecar.entregados
+                   and (auto_de(home, f1["case_id"]) or {}).get("estado") == "pendiente",
+                   f"{sidecar.entregados} {auto_de(home, f1['case_id'])}")
+                ok("y el caso queda marcado para el agente", necesita_agente(home, f1["case_id"]) == 1)
+                envejece_caso(home, f1["case_id"], 6)
+                tick(home)
+                ok("antes de los minutos del respaldo tampoco (10 en este equipo)",
+                   req not in sidecar.entregados)
+                envejece_caso(home, f1["case_id"], 5)
+                tick(home)
+                ok("pasados los minutos sin nada del agente, sale el acuse fijo con su id",
+                   sidecar.entregados.count(req) == 1, f"{sidecar.entregados}")
+                ok("con el texto del acuse", js(home, "config", "ack_text")[0]["value"]
+                   in (cuerpo_de(home, req) or ""), f"{cuerpo_de(home, req)!r}")
+                ok("y el caso sigue su camino", js(home, "caso", "ver", str(f1["case_id"]))[0]
+                   ["etapa"] in ("recibido", "clasificado"))
+                tick(home)
+                ok("repetir el tick no lo repite", sidecar.entregados.count(req) == 1)
+            finally:
+                sidecar.cerrar()
+
+        # Y si del caso ya salio una respuesta antes de los minutos, el acuse no sale: nunca
+        # los dos.
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "F2", "revisa este caso por favor", 1)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder",
+               "--first-reply", "model_with_ack_fallback")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                f2 = caso_de_stanza(home, "F2")
+                cid = str(f2["case_id"])
+                if f2["etapa"] == "recibido":
+                    js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+                       "--actor", "agente")
+                js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta", LIMPIA,
+                   "--actor", "agente")
+                tick(home)
+                ok("la respuesta del agente sale antes del respaldo",
+                   js(home, "caso", "ver", cid)[0]["etapa"] == "respondido", f"{sidecar.entregados}")
+                envejece_caso(home, cid, 30)
+                tick(home)
+                ok("y el acuse de respaldo ya no sale: nunca los dos",
+                   f"caso-{cid}-acuse" not in sidecar.entregados
+                   and (auto_de(home, cid) or {}).get("estado") == "omitido",
+                   f"{sidecar.entregados} {auto_de(home, cid)}")
+            finally:
+                sidecar.cerrar()
+
+        # En la MISMA vuelta del tick: la respuesta del agente que la regla firma y manda, y el
+        # respaldo que vencio. Sale solo la respuesta: el respaldo se decide despues de los
+        # envios del caso, nunca antes.
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "F4", "revisa este caso por favor", 1)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder",
+               "--first-reply", "model_with_ack_fallback")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                f4 = caso_de_stanza(home, "F4")
+                cid = str(f4["case_id"])
+                if f4["etapa"] == "recibido":
+                    js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+                       "--actor", "agente")
+                js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta", LIMPIA,
+                   "--actor", "agente")
+                envejece_caso(home, cid, 30)
+                tick(home)
+                ok("respuesta lista y respaldo vencido en la misma vuelta: sale solo la respuesta",
+                   f"caso-{cid}-acuse" not in sidecar.entregados
+                   and js(home, "caso", "ver", cid)[0]["etapa"] == "respondido"
+                   and (auto_de(home, cid) or {}).get("estado") == "omitido",
+                   f"{sidecar.entregados} {auto_de(home, cid)}")
+            finally:
+                sidecar.cerrar()
+
+        # El modo se mira de nuevo al mandar: un acuse que quedo pendiente en `ack` no sale si
+        # el dueno paso el chat a `model` antes del tick.
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "F3", "revisa este caso por favor", 1)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                f3 = caso_de_stanza(home, "F3")
+                js(home, "set", PERSONA, "--first-reply", "model")
+                tick(home)
+                ok("un acuse pendiente no sale si el chat paso a model",
+                   f"caso-{f3['case_id']}-acuse" not in sidecar.entregados
+                   and (auto_de(home, f3["case_id"]) or {}).get("estado") == "omitido",
+                   f"{sidecar.entregados} {auto_de(home, f3['case_id'])}")
+                ok("y el caso queda para el agente", necesita_agente(home, f3["case_id"]) == 1)
+            finally:
+                sidecar.cerrar()
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
+# `caso avance`: el primer mensaje y los avances del agente, solo en los modos Beta y en un
+# chat `responder`. Pasan por la misma revision que una respuesta; lo retenido se descarta
+# con un evento y nunca llega al dueno. Cada uno con su id, con ritmo y con tope.
+print("\nel primer mensaje del agente (beta): caso avance")
+
+
+def avance(home, cid, texto, *extra):
+    return corre(home, "caso", "avance", str(cid), texto, *extra)
+
+
+def envio_de_avance(p):
+    try:
+        return json.loads(p.stdout)[0]["avance"]
+    except (ValueError, IndexError, KeyError, TypeError):
+        return None
+
+
+def avances_atras(home, cid, minutos):
+    """Los avances del caso salieron `minutos` antes: el ritmo cuenta desde el ultimo."""
+    con = db_de(home)
+    con.execute("update caso_avance set at=strftime('%Y-%m-%d %H:%M:%S', at, ?), "
+                "enviado_at=strftime('%Y-%m-%d %H:%M:%S', enviado_at, ?) where case_id=?",
+                (f"-{minutos} minutes", f"-{minutos} minutes", int(cid)))
+    con.commit()
+    con.close()
+
+
+def borradores_de(home):
+    return [e for e in envios(home) if e["estado"] in ("borrador", "pendiente")]
+
+
+PRIMERO = "Hola, ya estoy revisando el error del reporte que nos envio."
+SEGUNDO = "Encontre la causa en la configuracion del reporte y la estoy corrigiendo."
+
+if NODE:
+    falso = JevFalso(jev_y_borradores)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "V1", "revisa este caso por favor", 3),
+                             msg(OPERACIONES, "V2", "@duenio revisa este caso", 3, mencion=True),
+                             msg(SOPORTE, "V3", "@duenio revisa este caso", 3, mencion=True)])
+            js(home, "agent", "Agente De Ejemplo")
+            for chat in (PERSONA, OPERACIONES):
+                js(home, "set", chat, "--provider", "ninguno", "--mode", "responder")
+            js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+            js(home, "set", PERSONA, "--first-reply", "model")
+            js(home, "set", SOPORTE, "--first-reply", "model")
+            js(home, "config", "updates_max", "2")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                v1, v2, v3 = (caso_de_stanza(home, x) for x in ("V1", "V2", "V3"))
+                cid = v1["case_id"]
+                etapa = v1["etapa"]
+                p = avance(home, v2["case_id"], PRIMERO)
+                ok("en un chat en ack no hay avance: el primer mensaje es el acuse fijo",
+                   error_de(p) == "E_FIRST_REPLY_MODE", f"{error_de(p)}")
+                p = avance(home, v3["case_id"], PRIMERO)
+                ok("en un chat que no esta en responder tampoco", error_de(p) == "E_CHAT_MODE",
+                   f"{error_de(p)}")
+                ok("y ninguno de los dos manda nada", not any("avance" in r for r in sidecar.entregados))
+
+                p = avance(home, cid, PRIMERO)
+                e = envio_de_avance(p)
+                req1 = f"caso-{cid}-avance-1"
+                ok("el primer mensaje del agente sale ya, con su id caso-<id>-avance-1",
+                   p.returncode == 0 and e and e["estado"] == "enviado" and e["req_id"] == req1
+                   and sidecar.entregados.count(req1) == 1, f"{p.stdout[-300:]} {p.stderr[-300:]}")
+                ok("firmado como cualquier otro mensaje",
+                   "-- Agente De Ejemplo" in (cuerpo_de(home, req1) or ""), f"{cuerpo_de(home, req1)!r}")
+                ver = js(home, "caso", "ver", str(cid))[0]
+                ok("no cambia la etapa del caso", ver["etapa"] == etapa, f"{etapa} -> {ver['etapa']}")
+                ok("y deja un evento", any("avance 1" in ev["detalle"] for ev in ver["eventos"]))
+                p = avance(home, cid, PRIMERO)
+                ok("el mismo texto otra vez no manda otro",
+                   p.returncode == 0 and (envio_de_avance(p) or {}).get("req_id") == req1
+                   and sidecar.entregados.count(req1) == 1
+                   and not any(r.endswith("avance-2") for r in sidecar.entregados),
+                   f"{p.stdout[-200:]} {sidecar.entregados}")
+                p = avance(home, cid, SEGUNDO)
+                ok("el segundo antes de update_every_minutes se rechaza con su codigo",
+                   error_de(p) == "E_PACING" and not any(r.endswith("avance-2")
+                                                        for r in sidecar.entregados),
+                   f"{error_de(p)}")
+
+                avances_atras(home, cid, 11)
+                p = avance(home, cid, "Le queda listo manana a las 3pm, se lo aseguro.")
+                e = envio_de_avance(p) or {}
+                ok("un avance que el piso fijo frena no sale: queda retenido",
+                   p.returncode == 0 and e.get("estado") == "retenido"
+                   and not any(r.endswith("avance-2") for r in sidecar.entregados),
+                   f"{p.stdout[-300:]} {p.stderr[-200:]}")
+                ok("ni queda esperando al dueno: no hay borrador ni aviso",
+                   not borradores_de(home)
+                   and cuenta(home, "select count(*) from agent_action where action='draft'") == 0,
+                   f"{borradores_de(home)}")
+                ok("y queda dicho en el caso",
+                   any("retenido" in ev["detalle"] for ev in
+                       js(home, "caso", "ver", str(cid))[0]["eventos"]))
+                p = avance(home, cid, "Ya fue escuchado su audio y esta todo resuelto.")
+                e = envio_de_avance(p) or {}
+                ok("lo que Jev frena tampoco sale, y su borrador se retira",
+                   p.returncode == 0 and e.get("estado") == "retenido" and not borradores_de(home)
+                   and cuenta(home, "select count(*) from agent_action where action='draft'") == 0,
+                   f"{p.stdout[-300:]} {envios(home)}")
+
+                p = avance(home, cid, SEGUNDO)
+                e = envio_de_avance(p) or {}
+                ok("con el ritmo cumplido el siguiente sale con un id nuevo",
+                   e.get("estado") == "enviado" and e.get("req_id", "").startswith(f"caso-{cid}-avance-")
+                   and e.get("req_id") != req1 and e.get("req_id") in sidecar.entregados,
+                   f"{p.stdout[-300:]} {sidecar.entregados}")
+                avances_atras(home, cid, 30)
+                p = avance(home, cid, "Ya aplique la correccion y estoy verificando el reporte.")
+                ok("pasado updates_max se rechaza con su codigo", error_de(p) == "E_MAX_UPDATES",
+                   f"{error_de(p)}")
+                ok("los retenidos no cuentan para el tope, los enviados si",
+                   len([r for r in sidecar.entregados if "-avance-" in r]) == 2, f"{sidecar.entregados}")
+                js(home, "caso", "mover", str(cid), "cerrado", "--motivo", "listo", "--actor", "agente")
+                js(home, "config", "updates_max", "5")
+                p = avance(home, cid, "Una cosa mas sobre su reporte.")
+                ok("un caso cerrado no recibe avances", error_de(p) == "E_STAGE", f"{error_de(p)}")
+            finally:
+                sidecar.cerrar()
+
+        # Sin la linea, el avance queda pendiente y lo manda el tick cuando vuelve.
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "V4", "revisa este caso por favor", 3)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder",
+               "--first-reply", "model")
+            ingiere(home)
+            cid = caso_de_stanza(home, "V4")["case_id"]
+            p = avance(home, cid, PRIMERO)
+            ok("sin la linea queda pendiente, no perdido",
+               p.returncode == 0 and (envio_de_avance(p) or {}).get("estado") == "pendiente",
+               f"{p.stdout[-300:]} {p.stderr[-300:]}")
+            sidecar = SidecarFalso(home)
+            try:
+                tick(home)
+                ok("y el tick lo manda cuando la linea vuelve, una vez",
+                   sidecar.entregados.count(f"caso-{cid}-avance-1") == 1, f"{sidecar.entregados}")
+                tick(home)
+                ok("repetir el tick no lo repite", sidecar.entregados.count(f"caso-{cid}-avance-1") == 1)
+            finally:
+                sidecar.cerrar()
+
+        # Con respaldo: el primer mensaje es uno solo. Si el agente escribio, el acuse no sale;
+        # si el acuse salio primero, ocupa el lugar del primer mensaje.
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "R1", "revisa este caso por favor", 3),
+                             msg(OPERACIONES, "R2", "@duenio revisa este caso", 3, mencion=True)])
+            js(home, "agent", "Agente De Ejemplo")
+            for chat in (PERSONA, OPERACIONES):
+                js(home, "set", chat, "--provider", "ninguno", "--mode", "responder",
+                   "--first-reply", "model_with_ack_fallback")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                r1, r2 = (caso_de_stanza(home, x)["case_id"] for x in ("R1", "R2"))
+                p = avance(home, r1, PRIMERO)
+                ok("con respaldo el agente escribe el primero",
+                   (envio_de_avance(p) or {}).get("estado") == "enviado", f"{p.stdout[-200:]} {p.stderr[-200:]}")
+                envejece_caso(home, r1, 30)
+                envejece_caso(home, r2, 30)
+                tick(home)
+                ok("y el acuse de respaldo ya no sale: nunca los dos",
+                   f"caso-{r1}-acuse" not in sidecar.entregados
+                   and (auto_de(home, r1) or {}).get("estado") == "omitido", f"{sidecar.entregados}")
+                ok("el agente que no escribio a tiempo deja salir el acuse",
+                   f"caso-{r2}-acuse" in sidecar.entregados, f"{sidecar.entregados}")
+                p = avance(home, r2, PRIMERO)
+                ok("y su avance despues cuenta como el segundo: espera el ritmo",
+                   error_de(p) == "E_PACING", f"{error_de(p)} {p.stdout[-200:]}")
+            finally:
+                sidecar.cerrar()
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
+# Lo que lee el agente: el archivo del caso (agente de casos), el brief del despacho (agente
+# del proyecto) y `caso ver`. En los modos Beta le dicen que el primer mensaje es suyo y como
+# escribirlo; en `ack`, la regla de siempre: el acuse no lo escribe el agente. Y en todos los
+# modos, el brief le dice al agente del proyecto como preguntarle al cliente y esperar.
+print("\nel primer mensaje del agente (beta): instrucciones")
+with tempfile.TemporaryDirectory() as home:
+    env_antes = dict(os.environ)
+    try:
+        js(home, "agent", "Agente De Ejemplo")
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder",
+           "--first-reply", "model")
+        js(home, "set", OPERACIONES, "--provider", "ninguno", "--mode", "responder")
+        cm = js(home, "caso", "crear", "--chat", PERSONA, "--stanza", "I1",
+                "--actor", "automatizacion")[0]["case_id"]
+        ca = js(home, "caso", "crear", "--chat", OPERACIONES, "--stanza", "I2",
+                "--actor", "automatizacion")[0]["case_id"]
+        ver = js(home, "caso", "ver", str(cm))[0]
+        pm = ver.get("primer_mensaje") or {}
+        ok("caso ver dice quien escribe el primer mensaje y cuanto queda",
+           pm.get("mode") == "model" and pm.get("beta") is True and pm.get("updates_sent") == 0
+           and pm.get("updates_left") == 3 and pm.get("next_update_in_s") == 0, f"{pm}")
+        pa = js(home, "caso", "ver", str(ca))[0].get("primer_mensaje") or {}
+        ok("y en un chat en ack lo dice tambien", pa.get("mode") == "ack"
+           and pa.get("beta") is False, f"{pa}")
+
+        wsa = carga_wa_scope(home)
+        con = wsa.db()
+        proyecto = {"name": "Alfa Demo", "path": "/tmp/alfa-demo"}
+        archivo_m = wsa.archivo_de_caso(con, wsa.caso_de(con, cm))
+        archivo_a = wsa.archivo_de_caso(con, wsa.caso_de(con, ca))
+        brief_m = wsa.brief_de_despacho(con, wsa.caso_de(con, cm), proyecto, "Corregir el reporte.")
+        brief_a = wsa.brief_de_despacho(con, wsa.caso_de(con, ca), proyecto, "Corregir el reporte.")
+        con.close()
+        plano_ = lambda t: " ".join(t.split())
+        for nombre, texto, quien in (("el archivo del caso", archivo_m, "agente"),
+                                     ("el brief del proyecto", brief_m, "trabajador")):
+            t = plano_(texto)
+            ok(f"{nombre} en model dice que el primer mensaje es del agente",
+               "first_reply_mode model (Beta)" in t, t[:600])
+            ok(f"{nombre} en model trae el comando exacto del avance",
+               f"caso avance {cm} " in t and f"--actor {quien}" in t.split(f"caso avance {cm} ")[1][:120],
+               t[-1500:])
+            ok(f"{nombre} en model pide escribir ya, sin relleno, sin repetir y sin prometer",
+               all(f in t for f in ("right away", "never filler", "Never repeat",
+                                    "never promise a time, a date or a price")), t[-1500:])
+            ok(f"{nombre} en model pide cerrar diciendo que se arreglo y pidiendo revisarlo",
+               "--estado resuelto" in t and "ask the customer to check" in t, t[-1500:])
+        for nombre, texto in (("el archivo del caso", archivo_a), ("el brief del proyecto", brief_a)):
+            t = plano_(texto)
+            ok(f"{nombre} en ack no ofrece caso avance y mantiene la regla del acuse",
+               "caso avance" not in t and "never write it yourself" in t
+               and "first_reply_mode ack" in t, t[-1200:])
+        for nombre, texto in (("model", brief_m), ("ack", brief_a)):
+            t = plano_(texto)
+            ok(f"el brief ({nombre}) pide preguntarle al cliente con necesita ante una duda real",
+               "--estado necesita" in t and "one concrete question" in t
+               and "do not ask what you can find out yourself" in t, t[-2000:])
+            ok(f"el brief ({nombre}) pide esperar en la terminal tras necesita, sin sondear",
+               all(f in t for f in ("wait idle in this same terminal", "do not poll",
+                                    "no monitors, loops or sleeps", "do not close the terminal",
+                                    "continue the same work")), t[-2000:])
+            ok(f"el brief ({nombre}) pide decir listo solo por lo hecho y verificado",
+               "only for what was actually done and verified" in t, t[-2000:])
+    finally:
+        os.environ.clear()
+        os.environ.update(env_antes)
+
+
 # ── Un mensaje nuevo invalida la propuesta que ya no responde a lo ultimo ───────────────
 # Caso vivo: una propuesta inventada ("su audio fue escuchado") quedo frenada como
 # borrador; 22 minutos despues llego un pedido nuevo al MISMO caso, que se quedo en
