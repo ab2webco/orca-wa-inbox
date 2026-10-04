@@ -2971,21 +2971,62 @@
         return usuario.length > 5 ? '\u2026' + usuario.slice(-5) : usuario
       }
 
+      // Los codigos de pais de la UIT (E.164) no se pisan entre si: ninguno es el
+      // comienzo de otro. Los de uno y dos digitos son estos; todos los demas tienen
+      // tres. Con eso alcanza para separar el codigo del numero de cualquier pais, sin
+      // cargar una tabla de formatos nacionales.
+      var CODIGOS_PAIS_1 = ['1', '7']
+      var CODIGOS_PAIS_2 = ['20', '27', '30', '31', '32', '33', '34', '36', '39', '40', '41',
+        '43', '44', '45', '46', '47', '48', '49', '51', '52', '53', '54', '55', '56', '57',
+        '58', '60', '61', '62', '63', '64', '65', '66', '81', '82', '84', '86', '90', '91',
+        '92', '93', '94', '95', '98']
+
+      /** Un telefono E.164 (`+573000000000`) como se lee: `+57 300 000 0000`. El codigo
+       *  de pais aparte y el resto en grupos de tres, con el ultimo de cuatro. Lo que no
+       *  tiene forma de telefono vuelve tal cual: mejor crudo que inventado. */
+      function formatearTelefono (e164) {
+        var digitos = String(e164 == null ? '' : e164).replace(/^\+/, '')
+        if (!/^\d{8,15}$/.test(digitos)) return String(e164 == null ? '' : e164)
+        var largo = CODIGOS_PAIS_1.indexOf(digitos.slice(0, 1)) !== -1 ? 1
+          : CODIGOS_PAIS_2.indexOf(digitos.slice(0, 2)) !== -1 ? 2 : 3
+        var resto = digitos.slice(largo)
+        var grupos = []
+        while (resto.length > 4 && resto.length !== 8) {
+          grupos.push(resto.slice(0, 3))
+          resto = resto.slice(3)
+        }
+        if (resto.length === 8) grupos.push(resto.slice(0, 4), resto.slice(4))
+        else if (resto) grupos.push(resto)
+        return '+' + digitos.slice(0, largo) + ' ' + grupos.join(' ')
+      }
+
+      /** El telefono de un directo, ya formateado, o ''. WhatsApp guarda los directos con
+       *  un id interno (`@lid`) y ya no muestra el numero: sin esto el dueno no distingue
+       *  uno de otro. El propio no lo lleva: es el de la linea. */
+      function telefonoVisible (c) {
+        return c && c.kind === 'directo' && !c.own && c.phone ? formatearTelefono(c.phone) : ''
+      }
+
       /** Como se llama una conversacion en pantalla. El chat de la linea consigo misma
        *  (`own`, T10) se nombra como en WhatsApp —"<nombre> (tu)"— y nunca con su jid
-       *  pelado: sin nombre de linea conocido es "Su propio chat". */
+       *  pelado: sin nombre de linea conocido es "Su propio chat". Un directo sin nombre
+       *  se llama como su telefono, si se sabe, y no como su id interno. */
       function nombreVisible (c) {
         if (!c) return ''
         if (c.own) {
           var propio = c.name && String(c.name).indexOf('@') === -1 ? c.name : ''
           return propio ? propio + ' ' + t('chatOwnTag') : t('chatOwnNoName')
         }
+        if ((!c.name || c.name === c.jid) && telefonoVisible(c)) return telefonoVisible(c)
         return c.name || c.jid
       }
 
-      /** Lo que acompana el nombre en la lista: con que modo quedo, y el desempate. */
+      /** Lo que acompana el nombre en la lista: el telefono, con que modo quedo, y el
+       *  desempate. */
       function detalleChat (c, repetido) {
         var partes = []
+        var telefono = telefonoVisible(c)
+        if (telefono && telefono !== nombreVisible(c)) partes.push(telefono)
         var modo = modoDe(c.jid)
         // El modo va EN la opcion y no solo en la tabla: quien busca una conversacion
         // para cambiarla necesita saber como quedo sin cambiar de seccion.
@@ -3017,8 +3058,11 @@
         chatsTodos.forEach(function (c) {
           chatsPorJid[c.jid] = c
           // El jid entra al indice: hay grupos que comparten nombre y la llave es lo
-          // unico que los distingue.
-          buscaPorJid[c.jid] = aplanar(nombreVisible(c)) + ' ' + aplanar(c.jid)
+          // unico que los distingue. El telefono entra formateado y en digitos seguidos:
+          // "300 777" y "3007776655" son las dos formas en que se copia de la agenda.
+          buscaPorJid[c.jid] = aplanar(nombreVisible(c)) + ' ' + aplanar(c.jid) +
+            (telefonoVisible(c) ? ' ' + aplanar(telefonoVisible(c)) + ' ' +
+              String(c.phone).replace(/\D/g, '') : '')
         })
         pintarChats()
       }
@@ -3113,6 +3157,7 @@
         var c = chatsPorJid[jid]
         // El propio no muestra su jid: es el chat de la linea consigo misma (T10).
         var partes = [c && c.own ? nombreVisible(c) : jid]
+        if (telefonoVisible(c)) partes.push(telefonoVisible(c))
         if (c && c.last) partes.push(c.last)
         var modo = modoDe(jid)
         if (modo) partes.push(fmt('chatAlready', { m: porCodigo(MODE_KEY, modo, modo) }))

@@ -505,6 +505,19 @@ const elegirEn = (id, lista, texto, valor) => escribirEn(id, texto) +
 // Todo listo (linea, nombre y una conversacion): la pestana de entrada es Conversaciones.
 const CON_LINEA = Object.assign({}, DATOS,
   { sidecar: { connection: 'open', qr: null, exited: false, latido: LATIDO_FRESCO } })
+// Con directos guardados con su LID (ids y telefonos de prueba): el sidecar anota el
+// telefono de cada uno y la lista lo trae en `phone`.
+const CON_TELEFONOS = Object.assign({}, CON_LINEA, {
+  chats: CON_LINEA.chats.map((c) => c.kind === 'directo'
+    ? Object.assign({}, c, { phone: '+' + c.jid.split('@')[0] }) : c).concat([
+    { jid: '111122223333@lid', name: 'Persona Guardada', kind: 'directo',
+      last: '2026-09-17 12:40', unread: 1, phone: '+573007776655' },
+    { jid: '111122224444@lid', name: '111122224444@lid', kind: 'directo',
+      last: '2026-09-16 10:05', unread: 0, phone: '+573000000002' },
+    { jid: '111122226666@lid', name: 'Socio Norte', kind: 'directo',
+      last: '2026-09-12 08:15', unread: 0, phone: '+14155550100' }
+  ])
+})
 
 // Las cuentas de Claude que el worker lee de `orca account list` (de ejemplo).
 const CUENTAS_CLAUDE = [
@@ -546,6 +559,12 @@ const PANELES = [
     guion: escribirEn('chat-search', 'o') +
       "c.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))",
     espera: 300 },
+  // Los directos guardados con su LID, con su telefono al lado y buscados por el numero:
+  // "+57 300" trae los que lo tienen, con nombre y sin el (ese se llama como su
+  // telefono). Solo "300" traeria tambien los grupos: sus ids de prueba lo contienen.
+  { nombre: 'config-combo-telefono', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: CON_TELEFONOS, pestana: 'chats',
+    guion: escribirEn('chat-search', '+57 300'), espera: 300 },
   { nombre: 'config-combo-sin-coincidencias', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, datos: CON_LINEA, pestana: 'chats',
     guion: escribirEn('chat-search', 'zzzz'), espera: 300 },

@@ -870,6 +870,77 @@ def revisa_linea_por_numero(fallos: list) -> int:
     return hechas
 
 
+def revisa_telefono_de_lid(fallos: list) -> int:
+    """WhatsApp guarda los directos con un id interno (`<digitos>@lid`) y ya no muestra el
+    numero. El sidecar anota el telefono de cada LID (`lid_telefono`); `wa-read chats` lo
+    publica como `phone` y `wa-scope sync` lo lleva al panel, que lo muestra y lo busca.
+    Un directo por telefono lo trae en su propio jid; un grupo, o un LID sin par, null.
+
+    Y un almacen que todavia no tiene la tabla (el sidecar de antes sigue corriendo) se
+    sigue leyendo: el telefono es un dato de mas, no una condicion para listar."""
+    hechas = 0
+    if not shutil.which("node"):
+        print("  aviso: sin node, no se armo el almacen con telefonos", file=sys.stderr)
+        return hechas
+    lid, tel = "111122223333@lid", "573007776655@s.whatsapp.net"
+    sin_par, directo, grupo = "111122224444@lid", "573000000002@s.whatsapp.net", "300@g.us"
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+        js = (
+            "import { abrirAlmacen, rutaAlmacen } from %r;"
+            "const a = abrirAlmacen(rutaAlmacen({ HOME: process.env.HOME }));"
+            "a.registrarLinea({ cuenta: %r, pn: '573000000012:7@s.whatsapp.net', nombre: 'L' });"
+            "for (const [j, n, g] of [[%r, 'Persona', 0], [%r, '', 0], [%r, 'Otra', 0],"
+            " [%r, 'Grupo', 1]]) a.anotarChat({ cuenta: %r, chatJid: j, nombre: n, esGrupo: g });"
+            "a.anotarTelefono({ cuenta: %r, lid: %r, pn: %r });"
+            "a.activarLinea(%r); a.latir(); a.cerrar();"
+            % ((RAIZ / "sidecar" / "src" / "almacen.js").as_uri(), NUEVA, lid, sin_par,
+               directo, grupo, NUEVA, NUEVA, lid, tel, NUEVA))
+        subprocess.run([shutil.which("node") or "node", "--input-type=module", "-e", js],
+                       env=env, check=True, capture_output=True, timeout=120)
+
+        def leer():
+            p = subprocess.run([str(BIN / "wa-read"), "chats", "--json"], capture_output=True,
+                               text=True, env=env, timeout=120)
+            try:
+                return {c.get("jid"): c for c in json.loads(p.stdout or "[]")}, p.stderr
+            except ValueError:
+                return {}, p.stderr
+
+        chats, err = leer()
+        esperado = {lid: "+573007776655", sin_par: None, directo: "+573000000002", grupo: None}
+        hechas += 1
+        visto = {j: (chats.get(j) or {}).get("phone", "falta") for j in esperado}
+        if visto != esperado:
+            fallos.append(f"`wa-read chats --json` publica los telefonos {visto!r}, se "
+                          f"esperaba {esperado!r} {err.strip()[-200:]}")
+
+        man = json.loads((RAIZ / "orca-plugin.json").read_text(encoding="utf-8"))
+        base = (home / ".config" if sys.platform != "darwin"
+                else home / "Library" / "Application Support")
+        store = base / "orca" / "plugins-data" / f"{man['publisher']}.{man['id']}" / "storage.json"
+        subprocess.run([str(BIN / "wa-scope"), "sync"], capture_output=True, text=True,
+                       env=env, timeout=180)
+        datos = json.loads(store.read_text(encoding="utf-8")) if store.exists() else {}
+        hechas += 1
+        al_panel = {c.get("jid"): c.get("phone", "falta") for c in datos.get("chats") or []}
+        if al_panel.get(lid) != "+573007776655" or al_panel.get(grupo) is not None:
+            fallos.append(f"`wa-scope sync` no lleva el telefono al panel: {al_panel!r}")
+
+        con = sqlite3.connect(home / ".wa-inbox" / "capture.db")
+        con.execute("drop table lid_telefono")
+        con.commit()
+        con.close()
+        chats, err = leer()
+        hechas += 1
+        if (chats.get(directo) or {}).get("phone") != "+573000000002" or \
+                (chats.get(lid) or {}).get("phone") is not None:
+            fallos.append(f"sin la tabla de telefonos, `wa-read chats` contesta "
+                          f"{list(chats.values())!r} {err.strip()[-200:]}")
+    return hechas
+
+
 def revisa_reclave_local(fallos: list) -> int:
     """T9f: lo que colgaba de `local` en scope.db pasa al numero de su linea, al MISMO
     numero que anoto el sidecar en capture.db. Explicito: ningun comando de todos los
@@ -1927,6 +1998,7 @@ def main() -> int:
                       + revisa_juicio(fallos)
                       + revisa_linea_por_numero(fallos)
                       + revisa_reclave_local(fallos)
+                      + revisa_telefono_de_lid(fallos)
                       + revisa_proyectos(fallos)
                       + revisa_espera(fallos))
     aislado.cleanup()
