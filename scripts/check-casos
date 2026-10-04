@@ -175,7 +175,7 @@ PERMITIDAS = {
     "clasificado": {"decision", "bloqueado", "cerrado"},
     "decision":    {"trabajo", "respondido", "clasificado", "bloqueado", "cerrado"},
     "trabajo":     {"listo", "bloqueado", "cerrado"},
-    "listo":       {"respondido", "trabajo", "bloqueado", "cerrado"},
+    "listo":       {"respondido", "trabajo", "decision", "bloqueado", "cerrado"},
     "respondido":  {"cerrado", "recibido"},
     "cerrado":     {"recibido"},
     "bloqueado":   {"recibido", "clasificado", "decision", "cerrado"},
@@ -589,6 +589,91 @@ with tempfile.TemporaryDirectory() as home:
     ok("un caso que no esta en trabajo no recibe resultado, y nada se escribe",
        p.returncode != 0 and "clasificado" in p.stderr
        and cuenta(home, "select count(*) from caso_evento") == eventos, p.stderr.strip())
+
+
+# ── 4b. Editar la propuesta en listo (cli-huecos, C1) ────────────────────────────
+# La respuesta que dejo el trabajador es una propuesta como cualquier otra: el dueno (o
+# el agente) puede cambiarla. Cambiada es otra decision: vuelve a `decision` con su
+# version nueva y sin la firma de la de antes, y eso deja su evento.
+print("\neditar la propuesta en listo")
+with tempfile.TemporaryDirectory() as home:
+    cid, _ = caso_en_trabajo(home)
+    r = js(home, "caso", "resultado", cid, "--respuesta", "Ya quedo el login.",
+           "--resumen", "Se corrigio la validacion del formulario.",
+           "--actor", "trabajador")[0]
+    v_listo = r["propuesta_version"]
+    js(home, "caso", "aprobar", cid, "--version", v_listo, "--actor", "dueno")
+    antes = cuenta(home, "select count(*) from caso_evento")
+    p = corre(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+              "Ya quedo el login: pruebe de nuevo, por favor.", "--actor", "dueno")
+    e = json.loads(p.stdout or "[{}]")[0] if p.returncode == 0 else {}
+    ok("proponer sobre un caso en listo se acepta", p.returncode == 0, p.stderr.strip())
+    ok("y lo devuelve a decision", e.get("etapa") == "decision", f"quedo {e}")
+    ok("con la propuesta y la version nuevas",
+       e.get("propuesta") == {"tipo": "responder",
+                              "respuesta": "Ya quedo el login: pruebe de nuevo, por favor."}
+       and e.get("propuesta_version") not in (None, v_listo), f"quedo {e}")
+    ok("y sin la firma de la version de listo",
+       e.get("aprobada") is False and e.get("propuesta_aprobada") is None, f"quedo {e}")
+    ev = js(home, "caso", "ver", cid)[0]["eventos"][-1]
+    ok("deja UN evento listo -> decision con el actor y la version nueva",
+       cuenta(home, "select count(*) from caso_evento") == antes + 1
+       and ev["de"] == "listo" and ev["a"] == "decision" and ev["actor"] == "dueno"
+       and (e.get("propuesta_version") or "-") in ev["detalle"], f"evento {ev}")
+    p = corre(home, "caso", "aprobar", cid, "--version", e.get("propuesta_version") or "-",
+              "--actor", "dueno")
+    a = json.loads(p.stdout or "[{}]")[0] if p.returncode == 0 else {}
+    ok("la version editada se aprueba en decision",
+       a.get("etapa") == "decision" and a.get("aprobada") is True, p.stderr.strip() or f"quedo {a}")
+
+    # Repetir en listo la MISMA propuesta que ya tiene no es un cambio: ni mueve la
+    # tarjeta ni le quita la firma (el agente repasa lo que ya dejo).
+    cid2, _ = caso_en_trabajo(home, "S2")
+    r2 = js(home, "caso", "resultado", cid2, "--respuesta", "Listo, ya funciona.",
+            "--resumen", "Se reinicio el servicio.", "--actor", "trabajador")[0]
+    js(home, "caso", "aprobar", cid2, "--version", r2["propuesta_version"],
+       "--actor", "dueno")
+    antes = cuenta(home, "select count(*) from caso_evento")
+    igual = js(home, "caso", "propuesta", cid2, "--tipo", "responder", "--respuesta",
+               "Listo, ya funciona.", "--actor", "agente")[0]
+    ok("la misma propuesta en listo no mueve ni escribe nada",
+       igual["etapa"] == "listo" and igual["aprobada"] is True
+       and cuenta(home, "select count(*) from caso_evento") == antes, f"quedo {igual}")
+
+
+# ── 4c. Reclasificar (cli-huecos, C2) ────────────────────────────────────────────
+# Clasificar no es solo la primera vez: desde clasificado se corrige en el lugar, y desde
+# decision vuelve a clasificado (la propuesta de antes ya no vale como firmada). Cada
+# vez deja su evento con la clase y la prioridad nuevas.
+print("\nreclasificar")
+with tempfile.TemporaryDirectory() as home:
+    cid = caso_clasificado(home)
+    antes = cuenta(home, "select count(*) from caso_evento")
+    r = js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "low",
+           "--actor", "dueno")[0]
+    ev = js(home, "caso", "ver", cid)[0]["eventos"][-1]
+    ok("reclasificar en clasificado cambia la clase y la prioridad",
+       r["etapa"] == "clasificado" and r["clase"] == "card" and r["prioridad"] == "low",
+       f"quedo {r}")
+    ok("y deja su evento clasificado -> clasificado con lo nuevo",
+       cuenta(home, "select count(*) from caso_evento") == antes + 1
+       and ev["de"] == "clasificado" and ev["a"] == "clasificado"
+       and ev["actor"] == "dueno" and ev["detalle"] == "card · low", f"evento {ev}")
+
+    v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+           "Ya lo revisamos.", "--actor", "agente")[0]["propuesta_version"]
+    js(home, "caso", "aprobar", cid, "--version", v, "--actor", "dueno")
+    antes = cuenta(home, "select count(*) from caso_evento")
+    r = js(home, "caso", "clasificar", cid, "--clase", "alert", "--prioridad", "high",
+           "--actor", "dueno")[0]
+    ev = js(home, "caso", "ver", cid)[0]["eventos"][-1]
+    ok("reclasificar en decision vuelve a clasificado sin la firma",
+       r["etapa"] == "clasificado" and r["clase"] == "alert" and r["aprobada"] is False,
+       f"quedo {r}")
+    ok("y deja su evento decision -> clasificado",
+       cuenta(home, "select count(*) from caso_evento") == antes + 1
+       and ev["de"] == "decision" and ev["a"] == "clasificado"
+       and ev["detalle"] == "alert · high", f"evento {ev}")
 
 
 # ── 5. Listar y ver ──────────────────────────────────────────────────────────────
@@ -7165,6 +7250,576 @@ if NODE:
         ok("y el dueno lo puede aprobar como siempre",
            js(home, "caso", "aprobar", dueno, "--version", v, "--actor", "dueno")[0]["etapa"]
            == "trabajo")
+
+# ── T14: la aprobacion por WhatsApp ──────────────────────────────────────────────────────
+# Cuando un caso espera al dueno, el plugin le escribe un aviso corto al numero de
+# aprobacion que el usuario eligio en ajustes (uno de sus numeros de confianza, nunca uno
+# fijo), y el dueno contesta por WhatsApp: `si N` aprueba, `no N` cierra, `N <texto>`
+# corrige. Sin numero elegido, nada cambia. El aviso sale una vez por version, nunca lleva
+# una credencial, y lo que no es una respuesta sigue siendo una orden del dueno.
+print("\nT14: la aprobacion por WhatsApp")
+
+
+def pon_aprobacion(home, jid, idioma="es"):
+    """Lo que el panel deja al elegir el numero de aprobacion."""
+    ruta = storage_de(home)
+    datos = json.loads(ruta.read_text(encoding="utf-8")) if ruta.exists() else {}
+    datos["approvalNumber"] = jid
+    datos["approvalLang"] = idioma
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    ruta.write_text(json.dumps(datos), encoding="utf-8")
+
+
+def al_dueno(home):
+    """Lo que salio por la bandeja hacia el directo del dueno, en orden."""
+    ruta = pathlib.Path(home) / ".wa-inbox" / "capture.db"
+    con = sqlite3.connect(ruta)
+    con.row_factory = sqlite3.Row
+    filas = [dict(r) for r in con.execute(
+        "select req_id, estado, body from envio where chat_jid=? order by rowid", (DUENO_DM,))]
+    con.close()
+    return filas
+
+
+def a_otro(home):
+    ruta = pathlib.Path(home) / ".wa-inbox" / "capture.db"
+    con = sqlite3.connect(ruta)
+    n = con.execute("select count(*) from envio where chat_jid<>? and req_id like 'aviso-%'",
+                    (DUENO_DM,)).fetchone()[0]
+    con.close()
+    return n
+
+
+with tempfile.TemporaryDirectory() as home:
+    ws = carga_wa_scope(home)
+    for texto, esperado in (
+            ("si 18", {"accion": "si", "caso": 18}),
+            ("Sí #18", {"accion": "si", "caso": 18}),
+            ("  ok 7 ", {"accion": "si", "caso": 7}),
+            ("dale 3", {"accion": "si", "caso": 3}),
+            ("yes 4", {"accion": "si", "caso": 4}),
+            ("NO 18", {"accion": "no", "caso": 18}),
+            ("si", {"accion": "si", "caso": None}),
+            ("yes", {"accion": "si", "caso": None}),
+            ("no.", {"accion": "no", "caso": None}),
+            # ok y dale se escriben de pasada: sin el numero no aprueban nada.
+            ("ok", None),
+            ("Dale!", None),
+            ("18 mas corto y sin el precio", {"accion": "corregir", "caso": 18,
+                                              "texto": "mas corto y sin el precio"}),
+            ("#9 cambie el saludo", {"accion": "corregir", "caso": 9, "texto": "cambie el saludo"}),
+            ("estado", {"accion": "estado", "caso": None}),
+            ("Estado.", {"accion": "estado", "caso": None}),
+            ("revisa el reporte de ventas", None),
+            ("si, revisa el reporte 18", None),
+            ("", None)):
+        salio = ws.lee_respuesta(texto)
+        if salio is not None and esperado is not None:
+            salio = {k: salio.get(k) for k in esperado}
+        ok(f"respuesta: {texto!r} -> {esperado}", salio == esperado, f"salio {salio}")
+
+if NODE:
+    if not any(c["jid"] == DUENO_DM for c in CHATS):
+        CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        sidecar = SidecarFalso(home)
+        try:
+            llegan(home, A, [msg(PERSONA, "T1", PEDIDO, 30)])
+            dinero, v1 = propuesta_lista(home, "T1", texto="Listo, el arreglo cuesta $50.")
+            tick(home)
+            ok("sin numero de aprobacion no sale ningun aviso: todo queda como hoy",
+               al_dueno(home) == [] and cuenta(home, "select count(*) from aviso") == 0,
+               f"{al_dueno(home)}")
+            ok("y el caso retenido sigue esperando en el tablero",
+               js(home, "caso", "ver", dinero)[0]["etapa"] == "decision")
+            ok("la regla deja dicho por que espera la respuesta, una vez por version",
+               sum(1 for e in js(home, "caso", "ver", dinero)[0]["eventos"]
+                   if e["detalle"].startswith("respuesta espera al dueno: money")) == 1,
+               f"{[e['detalle'] for e in js(home, 'caso', 'ver', dinero)[0]['eventos']]}")
+
+            pon_aprobacion(home, OTRO_LID)
+            tick(home)
+            ok("un numero de aprobacion que no es de confianza no se usa", al_dueno(home) == [])
+
+            pon_aprobacion(home, DUENO_LID)
+            tick(home)
+            avisos = al_dueno(home)
+            ok("con el numero elegido, el caso retenido produce UN aviso a ese numero",
+               len(avisos) == 1 and avisos[0]["estado"] == "enviado", f"{avisos}")
+            cuerpo = avisos[0]["body"] if avisos else ""
+            ok("el aviso dice el caso, la conversacion, lo que pide, por que espera y que se "
+               "propone", f"Caso {dinero}" in cuerpo and "Cliente Uno" in cuerpo
+               and "reporte de ventas" in cuerpo and "dinero" in cuerpo
+               and "cuesta $50" in cuerpo, cuerpo)
+            ok("y como contestar", f"si {dinero}" in cuerpo and f"no {dinero}" in cuerpo, cuerpo)
+            ok("a ningun otro chat", a_otro(home) == 0)
+            tick(home)
+            ok("otro tick no lo repite", len(al_dueno(home)) == 1, f"{al_dueno(home)}")
+            ok("y el caso dice que se aviso por WhatsApp",
+               any(e["detalle"].startswith("aviso por WhatsApp") for e in
+                   js(home, "caso", "ver", dinero)[0]["eventos"]))
+            hist = (tarjeta(home, int(dinero)) or {}).get("events", [])
+            ok("el tablero lo nombra con su codigo",
+               any(e.get("que") == "wa_notice" for e in hist)
+               and any(e.get("que") == "reply_waits" for e in hist), f"{hist}")
+
+            # Una credencial nunca viaja en el aviso: se dice que la hay y que va al tablero.
+            llegan(home, A, [msg(PERSONA, "T2", "la clave del panel es Abc12345", 25)])
+            clave, _ = propuesta_lista(home, "T2", texto="Listo, la clave es: Abc12345")
+            con = db_de(home)
+            con.execute("update caso set excepciones='[\"credential\"]' where case_id=?",
+                        (int(clave),))
+            con.commit()
+            con.close()
+            tick(home)
+            del_caso = [a for a in al_dueno(home) if f"Caso {clave}" in a["body"]]
+            ok("un caso con una credencial avisa sin el valor", len(del_caso) == 1
+               and "Abc12345" not in del_caso[0]["body"]
+               and "credencial" in del_caso[0]["body"]
+               and "tablero" in del_caso[0]["body"], f"{del_caso}")
+            # Y como el aviso lo dice, se aprueba en el tablero: un `si N` no lo aprueba.
+            llegan(home, A, [msg(DUENO_DM, "R0", f"si {clave}", 1, de=DUENO_LID)])
+            ingiere(home)
+            ver = js(home, "caso", "ver", clave)[0]
+            ok("un caso con una credencial no se aprueba por WhatsApp",
+               not ver["aprobada"] and ver["etapa"] == "decision", f"{ver['eventos'][-2:]}")
+            tick(home)
+            ok("y la confirmacion manda al tablero", any(
+                f"Caso {clave}" in a["body"] and "tablero" in a["body"]
+                and "credencial" in a["body"] for a in al_dueno(home)[-1:]),
+               f"{al_dueno(home)[-1:]}")
+
+            # si N: la respuesta retenida sale como si el dueno la mandara en el tablero.
+            llegan(home, A, [msg(DUENO_DM, "R1", f"si {dinero}", 1, de=DUENO_LID,
+                                 nombre="Dueno Real")])
+            casos_antes = cuenta(home, "select count(*) from caso")
+            ingiere(home)
+            ver = js(home, "caso", "ver", dinero)[0]
+            ok("`si N` aprueba la version avisada y la respuesta sale",
+               ver["etapa"] == "respondido"
+               and any(e["actor"] == "dueno" and "por WhatsApp" in e["detalle"]
+                       for e in ver["eventos"]), f"{ver['etapa']} {ver['eventos'][-3:]}")
+            ok("por la misma peticion del caso", any(
+                f["req_id"] == f"caso-{dinero}-{v1[:12]}" and f["estado"] == "enviado"
+                for f in envios(home)), f"{envios(home)}")
+            ok("la respuesta del dueno no abre un caso", cuenta(home, "select count(*) from caso")
+               == casos_antes and cuenta(home, "select count(*) from caso_mensaje where "
+                                               "stanza_id='R1'") == 0)
+            ok("y le confirma en una linea", any(
+                f"Caso {dinero} aprobado" in a["body"] for a in al_dueno(home)), f"{al_dueno(home)}")
+            n = len(al_dueno(home))
+            ingiere(home)
+            tick(home)
+            ok("la misma respuesta no se aplica ni se confirma dos veces", len(al_dueno(home)) == n,
+               f"{al_dueno(home)}")
+
+            # no N: cierra.
+            llegan(home, A, [msg(PERSONA, "T3", PEDIDO, 20)])
+            cierra, _ = propuesta_lista(home, "T3", texto="Listo, cuesta $90 el arreglo.")
+            tick(home)
+            llegan(home, A, [msg(DUENO_DM, "R2", f"no {cierra}", 1, de=DUENO_LID)])
+            ingiere(home)
+            ver = js(home, "caso", "ver", cierra)[0]
+            ok("`no N` cierra el caso como el dueno, rechazado por WhatsApp",
+               ver["etapa"] == "cerrado" and ver["eventos"][-1]["actor"] == "dueno"
+               and "rechazado por WhatsApp" in ver["eventos"][-1]["detalle"], f"{ver['eventos'][-1]}")
+
+            # N texto: la correccion vuelve al agente y la lee en el archivo del caso.
+            llegan(home, A, [msg(PERSONA, "T4", PEDIDO, 18)])
+            corrige, _ = propuesta_lista(home, "T4", texto="Listo, son $70 y queda hoy.")
+            tick(home)
+            llegan(home, A, [msg(DUENO_DM, "R3", f"{corrige} sin precio, que lo cotizo yo", 1,
+                                 de=DUENO_LID)])
+            ingiere(home)
+            ver = js(home, "caso", "ver", corrige)[0]
+            ok("`N texto` devuelve el caso al agente con la correccion del dueno",
+               ver["etapa"] == "clasificado" and any(
+                   e["actor"] == "dueno" and "sin precio, que lo cotizo yo" in e["detalle"]
+                   for e in ver["eventos"]), f"{ver['etapa']} {ver['eventos'][-2:]}")
+            p = necesita(home)
+            ok("y el agente lo vuelve a tomar", p.returncode == 0
+               and int(corrige) in json.loads(p.stdout or "{}").get("cases", []), p.stdout)
+            wsa = carga_wa_scope(home)
+            con = wsa.db()
+            archivo = wsa.archivo_de_caso(con, wsa.caso_de(con, int(corrige)))
+            con.close()
+            ok("el archivo del caso le muestra la correccion al agente",
+               "sin precio, que lo cotizo yo" in archivo and "owner" in archivo.lower(),
+               archivo[-600:])
+            tick(home)
+            codigos = {cid: {e.get("que") for e in (tarjeta(home, int(cid)) or {}).get("events", [])}
+                       for cid in (dinero, cierra, corrige)}
+            ok("la historia del tablero dice aprobado, rechazado y corregido por WhatsApp",
+               "wa_approved" in codigos[dinero] and "wa_rejected" in codigos[cierra]
+               and "wa_correction" in codigos[corrige], f"{codigos}")
+
+            # Vencido y superado: no hacen nada, salvo decirlo en una linea.
+            llegan(home, A, [msg(PERSONA, "T5", PEDIDO, 16)])
+            viejo, _ = propuesta_lista(home, "T5", texto="Listo, son $10.")
+            tick(home)
+            con = db_de(home)
+            con.execute("update aviso set at=datetime('now','localtime','-30 hours'), "
+                        "enviado_at=datetime('now','localtime','-30 hours') where case_id=?",
+                        (int(viejo),))
+            con.commit()
+            con.close()
+            llegan(home, A, [msg(DUENO_DM, "R4", f"si {viejo}", 1, de=DUENO_LID)])
+            ingiere(home)
+            ok("un aviso vencido no aprueba nada",
+               js(home, "caso", "ver", viejo)[0]["etapa"] == "decision"
+               and not js(home, "caso", "ver", viejo)[0]["aprobada"])
+            ok("y se dice en una linea", any(f"caso {viejo}" in a["body"].lower()
+                                             and "venci" in a["body"].lower()
+                                             for a in al_dueno(home)), f"{al_dueno(home)[-1:]}")
+
+            llegan(home, A, [msg(PERSONA, "T6", PEDIDO, 14)])
+            superado, _ = propuesta_lista(home, "T6", texto="Listo, son $20.")
+            tick(home)
+            js(home, "caso", "propuesta", superado, "--tipo", "responder", "--respuesta",
+               "Listo, son $25.", "--actor", "agente")
+            llegan(home, A, [msg(DUENO_DM, "R5", f"si {superado}", 1, de=DUENO_LID)])
+            ingiere(home)
+            ok("una version superada no se aprueba",
+               not js(home, "caso", "ver", superado)[0]["aprobada"])
+            ok("y se dice que cambio", any(f"caso {superado}" in a["body"].lower()
+                                           and "cambi" in a["body"].lower()
+                                           for a in al_dueno(home)), f"{al_dueno(home)[-1:]}")
+
+            # Una orden que no es respuesta sigue abriendo un caso, como hoy.
+            llegan(home, A, [msg(DUENO_DM, "R6", "revisa el reporte de ventas de ayer", 1,
+                                 de=DUENO_LID),
+                             msg(DUENO_DM, "R7", "999 cosas que revisar en el reporte", 1,
+                                 de=DUENO_LID)])
+            ingiere(home)
+            ok("una orden del dueno que no es respuesta abre su caso",
+               caso_de_stanza(home, "R6") is not None)
+            ok("y un numero que no tiene aviso tampoco es respuesta",
+               caso_de_stanza(home, "R7") is not None)
+            # Lo mismo escrito por el cliente en su chat no aprueba nada.
+            llegan(home, A, [msg(PERSONA, "R8", f"si {superado}", 1)])
+            ingiere(home)
+            ok("`si N` del cliente en su chat no es una aprobacion",
+               not js(home, "caso", "ver", superado)[0]["aprobada"])
+
+            # Un trabajo retenido: si N lo firma y entra a trabajo.
+            llegan(home, A, [msg(PERSONA, "T7", PEDIDO, 12)])
+            trabajo, _ = propuesta_lista(home, "T7", texto="Borrar la tabla de pedidos viejos",
+                                         tipo="trabajar")
+            tick(home)
+            del_trabajo = [a for a in al_dueno(home) if f"Caso {trabajo}" in a["body"]]
+            ok("un trabajo que espera al dueno tambien avisa, con el trabajo propuesto",
+               len(del_trabajo) == 1 and "Borrar la tabla" in del_trabajo[0]["body"]
+               and "borra" in del_trabajo[0]["body"].lower(), f"{del_trabajo}")
+            llegan(home, A, [msg(DUENO_DM, "R9", f"si {trabajo}", 1, de=DUENO_LID)])
+            ingiere(home)
+            ok("`si N` sobre un trabajo lo firma como el dueno",
+               any(e["a"] == "trabajo" and e["actor"] == "dueno"
+                   for e in js(home, "caso", "ver", trabajo)[0]["eventos"]))
+
+            # Bloqueado: una linea con el caso y el motivo.
+            llegan(home, A, [msg(PERSONA, "T8", PEDIDO, 10)])
+            bloq, _ = propuesta_lista(home, "T8", texto="Recibido, lo revisamos.",
+                                      tipo="trabajar")
+            js(home, "caso", "mover", bloq, "bloqueado", "--motivo", "el proyecto no responde",
+               "--actor", "automatizacion")
+            tick(home)
+            del_bloq = [a for a in al_dueno(home) if f"Caso {bloq}" in a["body"]
+                        and "bloque" in a["body"].lower()]
+            ok("un caso que se bloquea avisa una vez con el motivo",
+               len(del_bloq) == 1 and "el proyecto no responde" in del_bloq[0]["body"],
+               f"{del_bloq}")
+            tick(home)
+            ok("y no lo repite", len([a for a in al_dueno(home) if f"Caso {bloq}" in a["body"]
+                                      and "bloque" in a["body"].lower()]) == 1)
+
+            # estado: los casos abiertos, uno por linea.
+            llegan(home, A, [msg(DUENO_DM, "R10", "estado", 1, de=DUENO_LID)])
+            ingiere(home)
+            ultimo = al_dueno(home)[-1]["body"] if al_dueno(home) else ""
+            ok("`estado` contesta los casos abiertos por etapa",
+               f"{viejo}" in ultimo and f"{bloq}" in ultimo and "Cliente Uno" in ultimo
+               and cuenta(home, "select count(*) from caso_mensaje where stanza_id='R10'") == 0,
+               ultimo)
+            # Abierto es lo que el tablero muestra abierto: respondido espera al cliente.
+            ok("`estado` tambien lista un caso respondido, que sigue abierto",
+               any(l.startswith(f"{dinero} · ") and "respondido" in l
+                   for l in ultimo.splitlines()), ultimo)
+            ok("nada de esto salio a otro chat", a_otro(home) == 0)
+
+            # Revision del PR (Copilot): credencial, destinatario viejo, carrera y
+            # recuperacion.
+            llegan(home, A, [msg(PERSONA, "T9", PEDIDO, 8)])
+            titulo, _ = propuesta_lista(home, "T9", texto="Listo, cuesta $40.")
+            con = db_de(home)
+            con.execute("update caso set titulo='la clave es: Xyz98765' where case_id=?",
+                        (int(titulo),))
+            con.commit()
+            con.close()
+            tick(home)
+            del_titulo = [a for a in al_dueno(home) if f"Caso {titulo}" in a["body"]]
+            ok("un secreto en lo que pide el cliente tampoco viaja en el aviso",
+               len(del_titulo) == 1 and "Xyz98765" not in del_titulo[0]["body"]
+               and "credencial" in del_titulo[0]["body"], f"{del_titulo}")
+            llegan(home, A, [msg(PERSONA, "T10", PEDIDO, 7)])
+            secreto_b, _ = propuesta_lista(home, "T10", texto="Recibido.", tipo="trabajar")
+            js(home, "caso", "mover", secreto_b, "bloqueado", "--motivo",
+               "falta acceso, la clave es: Abc12345", "--actor", "automatizacion")
+            tick(home)
+            del_b = [a for a in al_dueno(home) if f"Caso {secreto_b}" in a["body"]]
+            ok("ni en el motivo de un bloqueo", len(del_b) == 1
+               and "Abc12345" not in del_b[0]["body"], f"{del_b}")
+
+            # El numero viejo sigue autorizado: lo unico que lo frena es que ya no es el
+            # de aprobacion.
+            js(home, "set", OTRO_LID, "--provider", "ninguno", "--mode", "responder")
+            con = db_de(home)
+            con.execute("insert into aviso (req_id, tipo, case_id, account, chat_jid, texto, "
+                        "estado, at, updated_at) values ('aviso-b-99-1', 'bloqueo', null, ?, "
+                        "?, 'Caso 99 se bloqueo: viejo', 'pendiente', "
+                        "datetime('now','localtime'), datetime('now','localtime'))",
+                        (A, OTRO_LID))
+            con.execute("insert into aviso (req_id, tipo, case_id, account, chat_jid, texto, "
+                        "estado, stanza_id, at, updated_at) values ('aviso-r-colgado', "
+                        "'respuesta', ?, ?, ?, '', 'preparando', 'R-COLGADO', "
+                        "datetime('now','localtime','-20 minutes'), "
+                        "datetime('now','localtime','-20 minutes'))",
+                        (int(viejo), A, DUENO_LID))
+            con.commit()
+            con.close()
+            tick(home)
+            ok("un aviso pendiente para un numero que ya no es el de aprobacion no sale",
+               not any(f["req_id"] == "aviso-b-99-1" for f in envios(home))
+               and cuenta(home, "select count(*) from aviso where req_id='aviso-b-99-1' "
+                                "and estado='fallido'") == 1)
+            colgado = [f for f in envios(home) if f["req_id"] == "aviso-r-colgado"]
+            ok("una respuesta tomada que quedo a medias se confirma igual, mandando al tablero",
+               len(colgado) == 1 and "tablero" in colgado[0]["body"], f"{colgado}")
+
+            # La carrera: el worker y el tick leen la misma respuesta. Quien no la tomo
+            # primero no la aplica.
+            llegan(home, A, [msg(PERSONA, "T11", PEDIDO, 6)])
+            carrera, _ = propuesta_lista(home, "T11", texto="Listo, cuesta $15.")
+            tick(home)
+            wsc = carga_wa_scope(home)
+            wsc.respuesta_vista = lambda *_: False
+            con = wsc.db()
+            req = "aviso-r-" + hashlib.sha256(b"R-CARRERA").hexdigest()[:16]
+            con.execute("insert into aviso (req_id, tipo, case_id, account, chat_jid, texto, "
+                        "estado, stanza_id, at, updated_at) values (?, 'respuesta', ?, ?, ?, "
+                        "'', 'preparando', 'R-CARRERA', datetime('now','localtime'), "
+                        "datetime('now','localtime'))", (req, int(carrera), A, DUENO_LID))
+            con.commit()
+            tomada = wsc.atiende_respuesta(con, {"stanza_id": "R-CARRERA", "chat_jid": DUENO_DM,
+                                                 "text": f"no {carrera}"})
+            con.close()
+            ok("una respuesta que otro proceso ya tomo no se aplica dos veces",
+               tomada and js(home, "caso", "ver", carrera)[0]["etapa"] == "decision",
+               f"{js(home, 'caso', 'ver', carrera)[0]['etapa']}")
+
+            # Dos respuestas distintas al mismo aviso, cada una en su proceso: las dos lo
+            # vieron vigente, pero solo la primera que lo toma decide.
+            wsd = carga_wa_scope(home)
+            con = wsd.db()
+            aplicada = wsd.atiende_respuesta(con, {"stanza_id": "R-SI", "chat_jid": DUENO_DM,
+                                                   "text": f"si {carrera}"})
+            wsd.aviso_estado = lambda *_: None
+            wsd.atiende_respuesta(con, {"stanza_id": "R-NO", "chat_jid": DUENO_DM,
+                                        "text": f"no {carrera}"})
+            con.close()
+            ok("de dos respuestas contrarias al mismo aviso solo vale la primera",
+               aplicada and js(home, "caso", "ver", carrera)[0]["etapa"] == "respondido",
+               f"{js(home, 'caso', 'ver', carrera)[0]['etapa']}")
+
+            # El aviso es de quien lo recibio: el que salio al numero de antes no se contesta
+            # desde el de ahora.
+            llegan(home, A, [msg(PERSONA, "T12", PEDIDO, 5)])
+            ajeno, _ = propuesta_lista(home, "T12", texto="Listo, cuesta $35.")
+            tick(home)
+            con = db_de(home)
+            con.execute("update aviso set chat_jid=? where case_id=? and tipo='aprobacion'",
+                        (OTRO_LID, int(ajeno)))
+            con.commit()
+            con.close()
+            llegan(home, A, [msg(DUENO_DM, "R11", f"si {ajeno}", 1, de=DUENO_LID)])
+            ingiere(home)
+            ok("un aviso que salio a otro numero no se aprueba desde el de aprobacion",
+               not js(home, "caso", "ver", ajeno)[0]["aprobada"])
+
+            # La que pierde la carrera no suelta el aviso que la otra esta aplicando.
+            llegan(home, A, [msg(PERSONA, "T13", PEDIDO, 4)])
+            tomado, _ = propuesta_lista(home, "T13", texto="Listo, cuesta $45.")
+            tick(home)
+            con = db_de(home)
+            con.execute("update aviso set estado='contestando' where case_id=? and "
+                        "tipo='aprobacion'", (int(tomado),))
+            con.commit()
+            con.close()
+            wse = carga_wa_scope(home)
+            wse.aviso_estado = lambda *_: None
+            con = wse.db()
+            wse.atiende_respuesta(con, {"stanza_id": "R-PIERDE", "chat_jid": DUENO_DM,
+                                        "text": f"no {tomado}"})
+            con.close()
+            ok("la respuesta que no tomo el aviso no lo devuelve",
+               cuenta(home, f"select count(*) from aviso where case_id={int(tomado)} and "
+                            "tipo='aprobacion' and estado='contestando'") == 1
+               and js(home, "caso", "ver", tomado)[0]["etapa"] == "decision")
+
+            # El agente propone otra cosa entre que la respuesta mira el aviso y lo aplica:
+            # el `no` del aviso viejo no cierra la propuesta nueva.
+            llegan(home, A, [msg(PERSONA, "T14", PEDIDO, 3)])
+            nuevo, _ = propuesta_lista(home, "T14", texto="Listo, cuesta $55.")
+            tick(home)
+            js(home, "caso", "propuesta", nuevo, "--tipo", "responder", "--respuesta",
+               "Listo, cuesta $58.", "--actor", "agente")
+            wsf = carga_wa_scope(home)
+            wsf.aviso_estado = lambda *_: None
+            con = wsf.db()
+            wsf.atiende_respuesta(con, {"stanza_id": "R-VIEJO", "chat_jid": DUENO_DM,
+                                        "text": f"no {nuevo}"})
+            con.close()
+            ok("un `no` a un aviso viejo no cierra la propuesta nueva",
+               js(home, "caso", "ver", nuevo)[0]["etapa"] == "decision")
+
+            # `estado` dice desde cuando espera el caso en su etapa, no su ultimo evento.
+            con = db_de(home)
+            con.execute("update caso_evento set at='2026-01-02 03:04:00' where case_id=? and "
+                        "a='decision' and de<>'decision'", (int(tomado),))
+            con.commit()
+            con.close()
+            llegan(home, A, [msg(DUENO_DM, "R12", "estado", 1, de=DUENO_LID)])
+            ingiere(home)
+            lineas = [l for l in (al_dueno(home)[-1]["body"] if al_dueno(home) else "")
+                      .splitlines() if l.startswith(f"{tomado} · ")]
+            ok("`estado` dice desde cuando el caso esta en su etapa",
+               len(lineas) == 1 and "2026-01-02 03:04" in lineas[0], f"{lineas}")
+        finally:
+            sidecar.cerrar()
+
+    # Una respuesta pelada con un solo aviso pendiente, y el aviso en ingles.
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        pon_aprobacion(home, DUENO_LID, "en")
+        sidecar = SidecarFalso(home)
+        try:
+            llegan(home, A, [msg(PERSONA, "U1", PEDIDO, 30)])
+            uno, _ = propuesta_lista(home, "U1", texto="Done, it costs $50.")
+            tick(home)
+            cuerpo = al_dueno(home)[0]["body"] if al_dueno(home) else ""
+            ok("el aviso sale en el idioma del panel", f"Case {uno}" in cuerpo
+               and f"yes {uno}" in cuerpo and "money" in cuerpo, cuerpo)
+            llegan(home, A, [msg(DUENO_DM, "V1", "si", 1, de=DUENO_LID)])
+            ingiere(home)
+            ok("un `si` pelado con un solo aviso pendiente aplica a ese",
+               js(home, "caso", "ver", uno)[0]["etapa"] == "respondido")
+            llegan(home, A, [msg(PERSONA, "U2", PEDIDO, 20), msg(PERSONA, "U3", PEDIDO, 19)])
+            dos, _ = propuesta_lista(home, "U2", texto="Done, it costs $60.")
+            tres, _ = propuesta_lista(home, "U3", texto="Done, it costs $70.")
+            tick(home)
+            llegan(home, A, [msg(DUENO_DM, "V2", "si", 1, de=DUENO_LID)])
+            ingiere(home)
+            ok("con dos pendientes, un `si` pelado no aprueba ninguno",
+               not js(home, "caso", "ver", dos)[0]["aprobada"]
+               and not js(home, "caso", "ver", tres)[0]["aprobada"])
+        finally:
+            sidecar.cerrar()
+
+    # El numero elegido antes de autorizar su chat: wa-send lo niega, y el aviso espera a
+    # que el dueno lo autorice en vez de perderse.
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        pon_duenos(home, DUENO_LID)
+        pon_aprobacion(home, DUENO_LID)
+        sidecar = SidecarFalso(home)
+        try:
+            llegan(home, A, [msg(PERSONA, "W1", PEDIDO, 30)])
+            espera, _ = propuesta_lista(home, "W1", texto="Listo, cuesta $50.")
+            tick(home)
+            ok("con el chat del numero sin autorizar el aviso no sale y queda pendiente",
+               al_dueno(home) == []
+               and cuenta(home, "select count(*) from aviso where estado='pendiente'") == 1,
+               f"{al_dueno(home)}")
+            # Mientras espera, una propuesta cambia y otro aviso envejece: ninguno de los
+            # dos dice ya la verdad, asi que no salen.
+            llegan(home, A, [msg(PERSONA, "W2", PEDIDO, 20)])
+            cambia, _ = propuesta_lista(home, "W2", texto="Listo, cuesta $60.")
+            llegan(home, A, [msg(PERSONA, "W3", PEDIDO, 15)])
+            vence, _ = propuesta_lista(home, "W3", texto="Listo, cuesta $70.")
+            tick(home)
+            js(home, "caso", "propuesta", cambia, "--tipo", "responder", "--respuesta",
+               "Listo, cuesta $65.", "--actor", "agente")
+            con = db_de(home)
+            con.execute("update aviso set at=datetime('now','localtime','-30 hours') where "
+                        "case_id=?", (int(vence),))
+            con.commit()
+            con.close()
+            js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+            tick(home)
+            avisos = al_dueno(home)
+            ok("y sale en cuanto el dueno lo autoriza",
+               len([a for a in avisos if f"Caso {espera}" in a["body"]]) == 1, f"{avisos}")
+            de_cambia = [a for a in avisos if f"Caso {cambia}" in a["body"]]
+            ok("un aviso de una propuesta que ya cambio no sale: sale el de la nueva",
+               len(de_cambia) == 1 and "$65" in de_cambia[0]["body"], f"{de_cambia}")
+            ok("un aviso que espero mas de approval_hours no sale",
+               not any(f"Caso {vence}" in a["body"] for a in avisos)
+               and cuenta(home, f"select count(*) from aviso where case_id={int(vence)} "
+                                "and estado='fallido'") == 1, f"{avisos}")
+
+            # Un error que se reintenta tampoco insiste para siempre: vence igual.
+            con = db_de(home)
+            con.execute("insert into aviso (req_id, tipo, case_id, account, chat_jid, texto, "
+                        "estado, at, updated_at) values ('aviso-b-98-1', 'bloqueo', null, ?, "
+                        "?, 'Caso 98 se bloqueo: viejo', 'pendiente', "
+                        "datetime('now','localtime','-30 hours'), "
+                        "datetime('now','localtime','-30 hours'))", (A, DUENO_LID))
+            con.commit()
+            con.close()
+            tick(home)
+            ok("un aviso pendiente de hace mas de approval_hours no sale",
+               not any(f["req_id"] == "aviso-b-98-1" for f in envios(home)))
+
+            # Solo el directo en Automatico contesta avisos: en otro modo un `si N` no
+            # aprueba nada.
+            js(home, "mode", DUENO_DM, "borrador")
+            llegan(home, A, [msg(DUENO_DM, "W9", f"si {espera}", 1, de=DUENO_LID)])
+            ingiere(home)
+            ver = js(home, "caso", "ver", espera)[0]
+            ok("con el directo fuera de Automatico, `si N` no aprueba",
+               not ver["aprobada"], f"{ver['etapa']} {ver['eventos'][-3:]}")
+        finally:
+            sidecar.cerrar()
+
+    # Un chat en Borrador: toda respuesta espera el visto del dueno, aunque ninguna regla
+    # la frene, asi que tambien avisa y `si N` la manda.
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home, modo_persona="borrador")
+        js(home, "config", "ack", "off")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        pon_aprobacion(home, DUENO_LID)
+        sidecar = SidecarFalso(home)
+        try:
+            llegan(home, A, [msg(PERSONA, "X1", PEDIDO, 30)])
+            visto, _ = propuesta_lista(home, "X1")
+            tick(home)
+            del_visto = [a for a in al_dueno(home) if f"Caso {visto}" in a["body"]]
+            ok("una respuesta de un chat en Borrador avisa al dueno",
+               len(del_visto) == 1 and "visto" in del_visto[0]["body"], f"{al_dueno(home)}")
+            llegan(home, A, [msg(DUENO_DM, "X2", f"si {visto}", 1, de=DUENO_LID)])
+            ingiere(home)
+            ver = js(home, "caso", "ver", visto)[0]
+            ok("y `si N` la manda", ver["etapa"] == "respondido", f"{ver['eventos'][-2:]}")
+        finally:
+            sidecar.cerrar()
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:

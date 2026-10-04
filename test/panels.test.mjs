@@ -664,11 +664,9 @@ console.log('\nconfig.html — T17: Su aprobacion explica las excepciones fijas'
     /dinero/i.test(texto) && /credencial/i.test(texto) && /fecha|compromiso/i.test(texto) &&
     /Jev/.test(texto) && /Le pregunto antes/.test(texto), texto)
   ok('y dice que Jev solo puede detener, nunca habilitar', /nunca/i.test(texto), texto)
-  // Aprobar desde el chat propio de WhatsApp es trabajo futuro: no se anuncia.
+  // Aprobar por WhatsApp ya existe (T14): se dice como algo que funciona, no se anuncia.
   const vista = doc.getElementById('view-aprobacion').textContent
-  ok('sin nada que todavia no existe: ni WhatsApp como canal de aprobacion',
-    !/proximamente|pronto|coming soon/i.test(vista) &&
-    !/(por|desde|en) (su )?(chat propio|WhatsApp)/i.test(vista), vista)
+  ok('sin nada que todavia no existe', !/proximamente|pronto|coming soon/i.test(vista), vista)
 }
 
 console.log('\nconfig.html — T22: las reglas como son, por conversacion y con niveles')
@@ -728,6 +726,63 @@ console.log('\nconfig.html — T22: los numeros del dueno se eligen de los que e
   await espera()
   ok('quitar uno y guardar lo saca', JSON.stringify(storage.owners) ===
     JSON.stringify([{ id: '100000000000001@lid', name: 'Ana Duena' }]), JSON.stringify(storage.owners))
+}
+
+console.log('\nconfig.html — T14: el numero de aprobacion se elige entre los de confianza')
+{
+  const ANA = '100000000000001@lid'
+  const BETO = '100000000000002@lid'
+  const { doc, storage } = await montar('config.html', {
+    owners: [{ id: ANA, name: 'Ana Duena' }, { id: BETO, name: 'Beto Socio' }],
+    scope: { [ANA]: { chatName: 'Ana Duena', mode: 'observar' } }
+  }, 'es-419')
+  await espera()
+  const grupo = doc.getElementById('approval-number')
+  ok('el selector esta en la tarjeta de numeros de confianza',
+    !!doc.querySelector('#owners-card #approval-number'), 'falta #approval-number')
+  ok('es un grupo de botones, no un select nativo',
+    grupo && grupo.classList.contains('seg') && !doc.querySelector('#owners-card select'))
+  const botones = () => [...grupo.querySelectorAll('button')]
+  ok('ofrece apagarlo y cada numero de confianza por su nombre',
+    JSON.stringify(botones().map((b) => b.dataset.value)) === JSON.stringify(['', ANA, BETO]) &&
+    /Ana Duena/.test(grupo.textContent) && /Beto Socio/.test(grupo.textContent),
+    botones().map((b) => `${b.dataset.value}=${b.textContent}`).join(' | '))
+  ok('sin numero elegido esta apagado',
+    botones()[0].getAttribute('aria-pressed') === 'true', grupo.innerHTML.slice(0, 200))
+  ok('apagado no hay aviso de chat sin autorizar', doc.getElementById('approval-warn').hidden)
+  botones()[1].click()
+  ok('elegir un numero cuyo chat no responde solo lo dice antes de guardar',
+    !doc.getElementById('approval-warn').hidden &&
+    /Automatico/.test(doc.getElementById('approval-warn').textContent),
+    doc.getElementById('approval-warn').textContent)
+  doc.getElementById('save-owners').click()
+  await espera()
+  ok('guardar deja el numero elegido y el idioma de los avisos',
+    storage.approvalNumber === ANA && storage.approvalLang === 'es',
+    `${storage.approvalNumber} ${storage.approvalLang}`)
+  ok('la ayuda dice como contestar', /si 18/.test(doc.getElementById('owners-card').textContent),
+    doc.getElementById('owners-card').textContent)
+  doc.querySelector(`#owners-wrap [data-orm="${ANA}"]`).click()
+  ok('quitar el numero de confianza lo saca del selector',
+    !botones().some((b) => b.dataset.value === ANA) &&
+    botones()[0].getAttribute('aria-pressed') === 'true')
+  doc.getElementById('save-owners').click()
+  await espera()
+  ok('y guardar apaga los avisos', storage.approvalNumber === '', String(storage.approvalNumber))
+}
+{
+  const ANA = '100000000000001@lid'
+  const { doc } = await montar('config.html', {
+    owners: [{ id: ANA, name: 'Ana Duena' }], approvalNumber: ANA,
+    scope: { [ANA]: { chatName: 'Ana Duena', mode: 'responder' } }
+  }, 'en-US')
+  await espera()
+  const grupo = doc.getElementById('approval-number')
+  ok('lo guardado se muestra elegido',
+    grupo.querySelector('button[aria-pressed="true"]')?.dataset.value === ANA, grupo.innerHTML.slice(0, 300))
+  ok('con el chat en Responder no hay aviso', doc.getElementById('approval-warn').hidden)
+  ok('en ingles tambien', /Approval number/i.test(doc.getElementById('owners-card').textContent) &&
+    /Off/.test(grupo.textContent), doc.getElementById('owners-card').textContent)
 }
 
 console.log('\nconfig.html — T22: cada conversacion con sus niveles de aprobacion')
@@ -2857,6 +2912,69 @@ console.log('\nconfig.html — buscar una conversacion como la gente la escribe 
     doc.getElementById('chat-count').textContent)
 }
 
+// WhatsApp guarda los directos con un id interno (`<digitos>@lid`) y ya no muestra el
+// numero: el dueno no distinguia un chat de otro ni lo encontraba por el telefono de su
+// agenda. El sidecar anota el telefono de cada LID y la lista lo trae en `phone`.
+const CHATS_CON_TELEFONO = [
+  { jid: '111122223333@lid', name: 'Persona Guardada', kind: 'directo', phone: '+573007776655' },
+  { jid: '111122224444@lid', name: '111122224444@lid', kind: 'directo', phone: '+573000000002' },
+  { jid: '111122225555@lid', name: 'Sin Telefono', kind: 'directo', phone: null },
+  { jid: '573000000001@s.whatsapp.net', name: 'Laura Mendez', kind: 'directo',
+    phone: '+573000000001' },
+  { jid: '111122226666@lid', name: 'Socio Norte', kind: 'directo', phone: '+14155550100' },
+  { jid: '111122227777@lid', name: 'Socio Sur', kind: 'directo', phone: '+50688888888' },
+  { jid: '120363000000000001@g.us', name: 'Soporte Norte', kind: 'grupo', phone: null }
+]
+
+for (const idioma of ['es-419', 'en-US']) {
+  console.log(`\nconfig.html — el telefono de un directo guardado con su LID (${idioma})`)
+  const { doc } = await montar('config.html', { chats: CHATS_CON_TELEFONO }, idioma)
+  await espera()
+  const buscar = (texto) => {
+    escribir(doc, 'chat-search', texto)
+    return opcionesCombo(doc, 'chat-list').map((o) => o.textContent)
+  }
+  const opcion = (jid) => {
+    escribir(doc, 'chat-search', '')
+    return doc.querySelector(`#chat-list [role="option"][data-value="${jid}"]`)
+      ?.textContent || ''
+  }
+
+  ok('el telefono va al lado del nombre, con el codigo de pais aparte',
+    opcion('111122223333@lid').includes('Persona Guardada') &&
+    opcion('111122223333@lid').includes('+57 300 777 6655'), opcion('111122223333@lid'))
+  ok('sin nombre, el directo se llama como su telefono y no como su id interno',
+    opcion('111122224444@lid').includes('+57 300 000 0002') &&
+    !opcion('111122224444@lid').includes('@lid'), opcion('111122224444@lid'))
+  ok('y el telefono no se repite cuando ya es el nombre',
+    opcion('111122224444@lid').split('+57').length === 2, opcion('111122224444@lid'))
+  ok('un directo por telefono tambien lo muestra',
+    opcion('573000000001@s.whatsapp.net').includes('+57 300 000 0001'),
+    opcion('573000000001@s.whatsapp.net'))
+  ok('el formato sirve para cualquier codigo de pais',
+    opcion('111122226666@lid').includes('+1 415 555 0100') &&
+    opcion('111122227777@lid').includes('+506 8888 8888'),
+    `${opcion('111122226666@lid')} | ${opcion('111122227777@lid')}`)
+  ok('sin telefono conocido no se inventa ninguno, ni en un grupo',
+    !opcion('111122225555@lid').includes('+') &&
+    !opcion('120363000000000001@g.us').includes('+'),
+    `${opcion('111122225555@lid')} | ${opcion('120363000000000001@g.us')}`)
+
+  // Lo que la gente escribe: el numero como lo tiene en la agenda, con o sin espacios.
+  ok('buscar un pedazo del numero con espacios lo encuentra',
+    buscar('300 777').some((t) => t.includes('Persona Guardada')), JSON.stringify(buscar('300 777')))
+  ok('y los digitos seguidos tambien',
+    buscar('3007776655').some((t) => t.includes('Persona Guardada')),
+    JSON.stringify(buscar('3007776655')))
+  ok('el numero completo, con el +, trae solo esa conversacion',
+    buscar('+57 300 777 6655').length === 1, JSON.stringify(buscar('+57 300 777 6655')))
+
+  elegirChat(doc, '111122223333@lid', 'persona')
+  ok('elegida, la identidad de abajo dice tambien el telefono',
+    doc.getElementById('chat-id').textContent.includes('+57 300 777 6655'),
+    doc.getElementById('chat-id').textContent)
+}
+
 console.log('\nconfig.html — las tres que importan no se pierden entre las 296')
 {
   const { doc } = await montar('config.html', {
@@ -4022,8 +4140,10 @@ console.log('\nactivity.html — tablero: que botones ofrece cada caso (T6)')
     igual(r.detalle, ['ejecutar', 'reclasificar', 'cerrar']), JSON.stringify(r))
   ok('y la tarjeta lleva solo Ejecutar', igual(r.tarjeta, ['ejecutar']), JSON.stringify(r))
   r = await botonesDe(tarjeta({ stage: 'listo', actions: ['enviar', 'editar', 'cerrar'] }))
-  ok('en listo: enviar y cerrar (editar ahi no tiene camino en el CLI)',
-    igual(r.detalle, ['enviar', 'cerrar']) && igual(r.tarjeta, ['enviar']), JSON.stringify(r))
+  // Editar la respuesta del trabajador la devuelve a "Tu decision" con la version nueva
+  // (cli-huecos, C1): ya tiene camino en el CLI.
+  ok('en listo: enviar, editar y cerrar',
+    igual(r.detalle, ['enviar', 'editar', 'cerrar']) && igual(r.tarjeta, ['enviar']), JSON.stringify(r))
   r = await botonesDe(tarjeta({ stage: 'cerrado', actions: ['reabrir'] }))
   ok('cerrado: solo reabrir, y en el detalle', igual(r.detalle, ['reabrir']) && r.tarjeta.length === 0,
     JSON.stringify(r))
@@ -4995,6 +5115,28 @@ console.log('\nactivity.html — tablero: lo que hizo el agente, en la historia 
   ok('lo que no movio la etapa se dice como actualizado', /actualizado/.test(filas[3]), filas[3])
   ok('un actor que el panel no conoce no sale crudo', !/actor_nuevo/.test(h.textContent) &&
     /otro/.test(filas[4]), filas[4])
+}
+
+console.log('\nactivity.html — T14: la historia dice lo que paso por WhatsApp')
+{
+  const caso = tarjeta({ case_id: 5, events: [
+    { de: null, a: 'recibido', actor: 'automatizacion', que: 'message', at: hace(50 * 60000) },
+    { de: 'decision', a: 'decision', actor: 'regla', que: 'reply_waits', args: ['money'],
+      at: hace(45 * 60000) },
+    { de: 'decision', a: 'decision', actor: 'automatizacion', que: 'wa_notice', at: hace(44 * 60000) },
+    { de: 'decision', a: 'clasificado', actor: 'dueno', que: 'wa_correction', at: hace(43 * 60000) },
+    { de: 'decision', a: 'decision', actor: 'dueno', que: 'wa_approved', at: hace(42 * 60000) },
+    { de: 'decision', a: 'cerrado', actor: 'dueno', que: 'wa_rejected', at: hace(41 * 60000) }] })
+  for (const [idioma, re] of [['es-419', [/la respuesta espera su firma: dinero/, /aviso enviado por WhatsApp/,
+    /correccion por WhatsApp/, /aprobada por WhatsApp/, /rechazada por WhatsApp/]],
+  ['en-US', [/the reply waits for your signature: money/, /notice sent on WhatsApp/,
+    /correction on WhatsApp/, /approved on WhatsApp/, /rejected on WhatsApp/]]]) {
+    const { doc } = await abrirTablero({ board: tablero([caso]) }, idioma)
+    const h = abrirDetalle(doc, 5).querySelector('.det-hist')
+    const filas = [...h.querySelectorAll('li')].map((li) => li.textContent)
+    ok(`${idioma}: cada paso por WhatsApp en palabras`, re.every((r) => filas.some((f) => r.test(f))) &&
+      !/actualizado|updated/.test(filas.slice(1).join(' ')), JSON.stringify(filas))
+  }
 }
 
 console.log('\nactivity.html — T22: la historia dice que paso, y agrupa lo repetido')

@@ -44,7 +44,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from wa_settings import (  # noqa: E402
     CONFIG_NUMERICOS, CONFIG_OPCIONES, PANEL_SETTINGS, PLUGIN_ID,
-    PLUGIN_ID_ANTERIOR, duenos, orca_cli_path, orca_env, orca_runtime_home, plugin_store_path,
+    PLUGIN_ID_ANTERIOR, duenos, idioma_aprobacion, numero_aprobacion, orca_cli_path, orca_env, orca_runtime_home, plugin_store_path,
     plugin_store_raw,
     plugin_store_targets, settings_from_plugin, user_data_roots, valida_ajuste)
 import wa_store  # noqa: E402  (solo lectura: de capture.db se lee la linea activa)
@@ -107,7 +107,9 @@ TRANSICIONES_CASO = {
     "clasificado": ("decision", "bloqueado", "cerrado"),
     "decision":    ("trabajo", "respondido", "clasificado", "bloqueado", "cerrado"),
     "trabajo":     ("listo", "bloqueado", "cerrado"),
-    "listo":       ("respondido", "trabajo", "bloqueado", "cerrado"),
+    # A decision vuelve un resultado cuya respuesta alguien cambio: es otra propuesta, que
+    # se firma de nuevo (cli-huecos, C1).
+    "listo":       ("respondido", "trabajo", "decision", "bloqueado", "cerrado"),
     # A trabajo solo vuelve un caso que espera al cliente por una pregunta del agente del
     # proyecto (T8), cuando el cliente contesta: lo mueve el motor, nunca `caso mover`.
     "respondido":  ("cerrado", "recibido", "trabajo"),
@@ -500,6 +502,29 @@ create table if not exists agente_corrida (
   created_at text not null,
   updated_at text not null
 );
+-- Lo que el plugin le escribe al numero de aprobacion del dueno (T14), y lo que el dueno
+-- contesto. Una fila por mensaje: `req_id` es el id de `wa-send`, y es lo que hace que un
+-- aviso salga UNA vez aunque el tick lo intente cada minuto.
+create table if not exists aviso (
+  req_id    text primary key,     -- aviso-<caso>-<version> | aviso-b-<caso>-<evento> | aviso-r-<hash>
+  tipo      text not null,        -- aprobacion | bloqueo | respuesta
+  case_id   integer,
+  version   text,                 -- la propuesta_version que el aviso pide aprobar
+  account   text not null,        -- la linea desde la que sale
+  chat_jid  text not null,        -- el directo del numero de aprobacion
+  texto     text not null,
+  -- preparando (la respuesta ya se tomo, falta su confirmacion) | pendiente | enviado |
+  -- contestando (una respuesta lo tomo y se esta aplicando) |
+  -- contestado (el dueno ya contesto ese aviso) | fallido (wa-send lo nego: `motivo`)
+  estado    text not null default 'pendiente',
+  motivo    text,
+  stanza_id text,                 -- la respuesta del dueno que esta fila contesta
+  at        text not null,
+  enviado_at text,
+  updated_at text not null
+);
+create index if not exists ix_aviso_caso on aviso(case_id, tipo);
+create index if not exists ix_aviso_stanza on aviso(stanza_id);
 """
 
 
@@ -974,8 +999,11 @@ def build_chats():
         return []
     # `own` marca el chat de la linea consigo misma (T10): el panel lo nombra como
     # WhatsApp ("<nombre> (tu)") y lo pone primero, en vez de mostrar su jid pelado.
+    # `phone` es el telefono de un directo (E.164), tambien el de uno guardado con su
+    # LID: el panel lo muestra al lado del nombre y lo busca.
     return [dict({"jid": c.get("jid"), "name": c.get("name"), "kind": c.get("kind"),
-                  "unread": c.get("unread"), "last": c.get("last")},
+                  "unread": c.get("unread"), "last": c.get("last"),
+                  "phone": c.get("phone")},
                  **({"own": True} if c.get("own") else {}))
             for c in chats if c.get("jid")][:400]
 
@@ -1727,6 +1755,9 @@ DEFAULT_CONFIG = {
     # de su conversacion si ese caso se movio en las ultimas N horas. No sale al panel,
     # como lock_ttl_s.
     "case_window_hours": "12",
+    # Cuanto vale un aviso de aprobacion por WhatsApp (T14): despues, contestarlo no hace
+    # nada y el caso se decide en el tablero. No sale al panel, como case_window_hours.
+    "approval_hours": "24",
     # Lo que el motor contesta solo (tick, por wa-send, en chats `responder`): el acuse a un
     # pedido nuevo dirigido al asistente y el saludo a un saludo dirigido. Cada conversacion
     # puede pisar el interruptor y el texto. Sin hora ni fecha: lo que promete tiene que ser
@@ -2588,6 +2619,9 @@ def caso_mover(con, caso, hacia, actor, detalle="", **campos):
     con.execute(f"update caso set {', '.join(f'{k}=?' for k in sets)} where case_id=?",
                 (*sets.values(), caso["case_id"]))
     caso_evento(con, caso["case_id"], caso["etapa"], hacia, actor, detalle, momento)
+    if hacia == "bloqueado" and caso["etapa"] != "bloqueado":
+        # Un caso bloqueado se le dice al dueno por WhatsApp, si eligio un numero (T14).
+        aviso_de_bloqueo(con, caso, detalle)
 
 
 def caso_tocar(con, caso, actor, detalle, **campos):
@@ -2790,8 +2824,9 @@ def cmd_caso_propuesta(con, a):
         if adjuntos and adjuntos not in propuesta["instrucciones"]:
             propuesta["instrucciones"] += "\n\n" + adjuntos
     texto, version = propuesta_canonica(propuesta)
-    if caso["etapa"] == "decision" and caso["propuesta_version"] == version:
-        # Triage repasa cada cinco minutos: lo mismo no es un cambio ni deja evento.
+    if caso["etapa"] in ("decision", "listo") and caso["propuesta_version"] == version:
+        # Triage repasa cada cinco minutos: lo mismo no es un cambio ni deja evento. En
+        # listo tampoco: repetir la respuesta del trabajador no le quita la firma.
         return [caso_fila(con, caso)]
     detalle = f"{a.tipo} {version}"
     if caso["etapa"] == "decision":
@@ -2991,6 +3026,8 @@ def cmd_caso_aprobar(con, a):
         caso_falla("E_STAGE", f"case #{a.id} is in {caso['etapa']}: only a case in "
                               f"{' or '.join(ETAPAS_APROBABLES)} can be approved")
     detalle = f"aprobada {a.version}"
+    if getattr(a, "via", None):
+        detalle = f"{detalle} {a.via}"
     campos = {"propuesta_aprobada": a.version}
     # Solo desde decision: en listo el trabajo ya corrio, y firmar ahi no lanza otro.
     if caso["etapa"] == "decision" and json.loads(caso["propuesta"])["tipo"] == "trabajar":
@@ -3416,7 +3453,7 @@ def cmd_caso_ver(con, a):
 EXTENSIONES_AUDIO = (".opus", ".ogg", ".oga", ".mp3", ".m4a", ".aac", ".wav", ".amr")
 # Lo que ingest reporta, en este orden. `casos` va aparte: son los ids tocados.
 CONTEOS_INGEST = ("vistos", "nuevos", "casos_creados", "unidos", "cerrados", "dudosos",
-                  "sin_caso", "ignorados", "anteriores", "audios_diferidos")
+                  "sin_caso", "ignorados", "anteriores", "audios_diferidos", "respuestas")
 # La prioridad de un caso que ingest clasifica. No la inventa: ni el dueno ni un veredicto
 # cacheado dicen cuan urgente es, y `none` es la unica que no afirma nada.
 PRIORIDAD_INGEST = "none"
@@ -4404,6 +4441,7 @@ def cmd_ingest(con, a):
     ajustes_auto = merged_settings(con)
     # Los numeros del dueno (T22.1), leidos una vez: lo que escriben es una orden suya.
     ids_dueno = duenos()
+    numero = numero_aprobacion()
     tono_global = ajustes_auto.get("tone") or DEFAULT_CONFIG["tone"]
     abren, sueltos = [], []
     # Del mas viejo al mas nuevo: el inbox viene al reves, y el primero de un pedido es
@@ -4419,6 +4457,17 @@ def cmd_ingest(con, a):
         if anterior_a(m, desde):
             total["anteriores"] += 1
             continue
+        # La respuesta del dueno a un aviso (T14), en el directo del numero de aprobacion
+        # (en Automatico, el unico modo por el que el aviso pudo salir) y desde un numero
+        # suyo: no es un pedido nuevo y no pasa por Jev. Lo que no tiene
+        # forma de respuesta sigue siendo una orden suya, como siempre.
+        if (numero and m.get("chat_jid") == numero and entrada.get("mode") == "responder"
+                and wa_store.es_dueno(m.get("sender_jid"), ids_dueno)):
+            if respuesta_vista(con, m["stanza_id"]):
+                continue
+            if atiende_respuesta(con, m):
+                total["respuestas"] += 1
+                continue
         nuevos.append(dict(
             m, modo=entrada.get("mode"),
             de_dueno=wa_store.es_dueno(m.get("sender_jid"), ids_dueno),
@@ -4466,6 +4515,10 @@ def cmd_ingest(con, a):
                 veredicto.setdefault("al_caso", case_id)
     # Lo que Jev dejo con una credencial no pasa por el agente: va al dueno ya.
     casos_credencial_a_decision(con)
+    # La confirmacion de lo que el dueno contesto sale ya, no al minuto siguiente: esta
+    # mirando el telefono. Lo que no salga aca lo intenta el tick con el mismo id.
+    if total["respuestas"]:
+        envia_avisos(con)
     return [dict(total, casos=sorted(casos))]
 
 
@@ -4679,6 +4732,16 @@ def que_del_evento(detalle, medios=None):
         return "revision", _codigos(d[len(prefijo):].split("·")[0])
     if d.startswith(ESPERA_DUENO):
         return "work_waits", _codigos(d[len(ESPERA_DUENO):].split("·")[0])
+    if d.startswith(RESPUESTA_ESPERA):
+        return "reply_waits", _codigos(d[len(RESPUESTA_ESPERA):].split("·")[0])
+    if d.startswith((AVISO_ENVIADO, AVISO_BLOQUEO)):
+        return "wa_notice", []
+    if d.startswith("aprobada ") and d.endswith(POR_WHATSAPP):
+        return "wa_approved", []
+    if d == RECHAZO_WHATSAPP:
+        return "wa_rejected", []
+    if d.startswith(CORRECCION_WHATSAPP):
+        return "wa_correction", []
     if "propuesta anterior, no enviada" in d:
         return "withdrawn", []
     if d.startswith("aprobada "):
@@ -4887,7 +4950,8 @@ CONTEOS_TICK = ("enviados", "excepciones", "frenados", "esperando", "bloqueados"
                 "errores", "pospuestos", "limpiados", "limpieza_error", "automaticas",
                 "revisiones", "transcritos", "rancias", "despachados",
                 "bloqueados_por_despacho", "respuestas_al_proyecto", "agente_lanzado",
-                "agente_error", "trabajos_sin_clic", "limpieza_atascados")
+                "agente_error", "trabajos_sin_clic", "limpieza_atascados", "avisos",
+                "avisos_error")
 
 # La limpieza de los espacios que dejan las corridas del plugin. Orca fuerza `new_per_run`
 # en las automatizaciones de un plugin: cada corrida crea un hijo `::workspace:<uuid>` de
@@ -5297,6 +5361,634 @@ def tick_envia(caso, texto, req):
     return "fallo", primera[:200]
 
 
+# ── La aprobacion por WhatsApp (T14) ─────────────────────────────────────────────────────
+# Cuando un caso espera al dueno, el tick le escribe un aviso corto al numero de aprobacion
+# que el usuario eligio en ajustes (`numero_aprobacion`, uno de sus numeros de confianza), y
+# el dueno contesta en ese mismo directo: `si N` aprueba la version avisada, `no N` cierra el
+# caso y `N <texto>` se lo devuelve al agente con su correccion. Sin numero elegido no se
+# escribe nada y todo sigue como antes: el tablero es la via de siempre.
+#
+# Todo sale por `wa-send`, con un id por aviso (`aviso-...`): un reintento no entrega dos
+# veces. Por eso el directo tiene que estar autorizado en `responder`, como cualquier chat al
+# que el plugin le escribe; el panel lo dice al lado del numero. Nunca viaja una credencial:
+# si el caso trae una, el aviso dice que la hay y que se aprueba en el tablero.
+# Lo que `wa-send` contesta y se arregla solo: el minuto siguiente lo intenta con el mismo id.
+AVISO_REINTENTA = (ENVIO_SIN_LINEA, "send-no-signature", "send-timeout", "fallo")
+# El chat del numero de aprobacion sin autorizar (o autorizado para otra linea): lo
+# arregla el dueno en el panel, asi que el aviso espera en vez de perderse.
+AVISO_ESPERA_PERMISO = ("send-denied", "send-line-not-linked")
+# Lo que la regla deja cuando no firma una respuesta (E_EXCEPTION): el gemelo de
+# ESPERA_DUENO para lo que sale al chat. Una vez por version.
+RESPUESTA_ESPERA = "respuesta espera al dueno:"
+AVISO_ENVIADO = "aviso por WhatsApp"
+AVISO_BLOQUEO = "aviso de bloqueo por WhatsApp"
+POR_WHATSAPP = "por WhatsApp"
+RECHAZO_WHATSAPP = "rechazado por WhatsApp"
+CORRECCION_WHATSAPP = "correccion del dueno por WhatsApp:"
+# Una respuesta tomada (`preparando`) que no llego a su confirmacion en este tiempo es de un
+# proceso que murio a mitad: se confirma igual, mandando al tablero, y no se aplica de nuevo.
+PREPARANDO_VENCE_S = 300
+# Lo que queda pendiente para un numero que ya no es el de aprobacion no sale (T14).
+AVISO_OTRO_NUMERO = "approval-number-changed"
+# Lo pendiente que espero mas de `approval_hours` (el chat sin autorizar, un error que se
+# reintenta) o el aviso de una version que ya no es la vigente: no sale, ya no es cierto.
+AVISO_VENCIDO = "approval-expired"
+AVISO_SUPERADO = "approval-superseded"
+LARGO_PIDE = 140
+LARGO_PROPUESTA = 300
+LARGO_CORRECCION = 1000
+TOPE_ESTADO = 15
+ETAPAS_ESTADO = ("recibido", "clasificado", "decision", "trabajo", "listo", "respondido",
+                 "bloqueado")
+SI_NO = re.compile(r"^(si|sí|yes|ok|dale|no)(?:\s+#?(\d+))?$", re.I)
+SOLO_CON_NUMERO = ("ok", "dale")
+CORRIGE = re.compile(r"^#?(\d+)\s+(.+)$", re.S)
+ESTADO = re.compile(r"^(estado|status)$", re.I)
+
+# Los motivos de una espera, en palabras del chat. Lo que no esta aca sale con su codigo.
+MOTIVOS_AVISO = {
+    "es": {"money": "menciona dinero", "credential": "hay una credencial",
+           "commitment": "compromete una fecha", "jev": "Jev lo freno",
+           "jev-unavailable": "Jev no contesto", "secret": "lleva un secreto",
+           "borrador": "el chat pide su visto antes de enviar",
+           "promises_a_date": "promete una fecha",
+           "states_status_not_verified": "afirma un estado sin verificarlo",
+           "contains_credential": "lleva una credencial", "delete": "borra algo",
+           "deploy": "despliega a produccion", "force_push": "fuerza un push",
+           "payment": "mueve un pago", "outside_project": "queda fuera del proyecto del chat",
+           "mode": "el chat no responde solo", "stale": "la propuesta tiene mas de un dia",
+           "exceptions": "el caso trae excepciones", "no_instructions": "no trae instrucciones"},
+    "en": {"money": "it mentions money", "credential": "a credential is involved",
+           "commitment": "it commits to a date", "jev": "Jev held it",
+           "jev-unavailable": "Jev did not answer", "secret": "it carries a secret",
+           "borrador": "the chat asks for your OK before sending",
+           "promises_a_date": "it promises a date",
+           "states_status_not_verified": "it states a status it did not verify",
+           "contains_credential": "it carries a credential", "delete": "it deletes something",
+           "deploy": "it deploys to production", "force_push": "it forces a push",
+           "payment": "it moves a payment", "outside_project": "it is outside the chat's project",
+           "mode": "the chat does not answer on its own",
+           "stale": "the proposal is more than a day old",
+           "exceptions": "the case carries exceptions", "no_instructions": "it has no instructions"},
+}
+# Lo que dice cada aviso, en el tono del panel (de usted). `{n}` es el numero del caso.
+TEXTOS_AVISO = {
+    "es": {"caso": "Caso {n}", "pide": "Pide: {x}", "espera": "Espera porque: {x}",
+           "respuesta": "Respuesta propuesta: {x}", "trabajo": "Trabajo propuesto: {x}",
+           "credencial": "Hay una credencial en el caso: apruebelo en el tablero, no por aqui.",
+           "credencial_si": "Caso {n} lleva una credencial: apruebelo en el tablero, no por aqui.",
+           "como": "Responda si {n} para aprobar, no {n} para cerrar, o {n} y su correccion.",
+           "bloqueado": "Caso {n} · {chat} se bloqueo: {x}",
+           "aprobado_sale": "Caso {n} aprobado: la respuesta salio.",
+           "aprobado_linea": "Caso {n} aprobado: sale cuando la linea vuelva.",
+           "aprobado_falla": "Caso {n} aprobado, pero la respuesta no salio ({x}): mirelo en el tablero.",
+           "aprobado_trabajo": "Caso {n} aprobado: el trabajo sale ahora.",
+           "cerrado": "Caso {n} cerrado.",
+           "corregido": "Caso {n}: su correccion va al agente, que propone de nuevo.",
+           "corrige_listo": "Caso {n} ya trae el resultado del proyecto: conteste si {n} o no {n}, "
+                            "o corrijalo en el tablero.",
+           "vencido": "El aviso del caso {n} se vencio: decidalo en el tablero.",
+           "cambio": "El caso {n} cambio desde el aviso: le llega uno nuevo si sigue esperando.",
+           "no_se_pudo": "Caso {n}: no se pudo ({x}). Mirelo en el tablero.",
+           "sin_confirmar": "Caso {n}: no pude confirmar su respuesta; mirelo en el tablero.",
+           "motivo_oculto": "el motivo lleva una credencial: mirelo en el tablero.",
+           "estado_vacio": "No hay casos abiertos.",
+           "estado_mas": "y {x} mas en el tablero.",
+           "desde": "desde {x}",
+           "etapas": {"recibido": "recibido", "clasificado": "clasificado",
+                      "decision": "espera su decision", "trabajo": "en trabajo",
+                      "listo": "resultado listo", "respondido": "respondido, espera al cliente",
+                      "bloqueado": "bloqueado"}},
+    "en": {"caso": "Case {n}", "pide": "Asks: {x}", "espera": "Waiting because: {x}",
+           "respuesta": "Proposed reply: {x}", "trabajo": "Proposed work: {x}",
+           "credencial": "A credential is involved: approve it on the board, not here.",
+           "credencial_si": "Case {n} involves a credential: approve it on the board, not here.",
+           "como": "Answer yes {n} to approve, no {n} to close, or {n} and your correction.",
+           "bloqueado": "Case {n} · {chat} got blocked: {x}",
+           "aprobado_sale": "Case {n} approved: the reply went out.",
+           "aprobado_linea": "Case {n} approved: it goes out when the line is back.",
+           "aprobado_falla": "Case {n} approved, but the reply did not go out ({x}): check the board.",
+           "aprobado_trabajo": "Case {n} approved: the work starts now.",
+           "cerrado": "Case {n} closed.",
+           "corregido": "Case {n}: your correction goes to the agent, which proposes again.",
+           "corrige_listo": "Case {n} already has the project's result: answer yes {n} or no {n}, "
+                            "or correct it on the board.",
+           "vencido": "The notice for case {n} expired: decide it on the board.",
+           "cambio": "Case {n} changed since the notice: you get a new one if it still waits.",
+           "no_se_pudo": "Case {n}: it could not be done ({x}). Check the board.",
+           "sin_confirmar": "Case {n}: I could not confirm your answer; check the board.",
+           "motivo_oculto": "the reason carries a credential: check the board.",
+           "estado_vacio": "No open cases.",
+           "estado_mas": "and {x} more on the board.",
+           "desde": "since {x}",
+           "etapas": {"recibido": "received", "clasificado": "classified",
+                      "decision": "waits for you", "trabajo": "in progress",
+                      "listo": "result ready", "respondido": "answered, waits for the client",
+                      "bloqueado": "blocked"}},
+}
+
+
+def lee_respuesta(texto):
+    """Lo que el dueno contesto en el directo de aprobacion, o None si no es una respuesta:
+    {accion: si | no | corregir | estado, caso: int | None, texto}. Solo la forma; si nombra
+    un caso con aviso lo decide `atiende_respuesta`."""
+    t = " ".join(str(texto or "").split())
+    if not t:
+        return None
+    pelado = t.rstrip(".!¡ ")
+    if ESTADO.match(pelado):
+        return {"accion": "estado", "caso": None, "texto": ""}
+    m = SI_NO.match(pelado)
+    # `ok` y `dale` se escriben de pasada: solos no aprueban, necesitan el numero. Solo si,
+    # yes y no valen sin el (el unico aviso pendiente).
+    if m and (m.group(2) or m.group(1).lower() not in SOLO_CON_NUMERO):
+        return {"accion": "no" if m.group(1).lower() == "no" else "si",
+                "caso": int(m.group(2)) if m.group(2) else None, "texto": ""}
+    m = CORRIGE.match(t)
+    if m:
+        return {"accion": "corregir", "caso": int(m.group(1)), "texto": m.group(2).strip()}
+    return None
+
+
+def horas_aprobacion(con):
+    valor = merged_settings(con).get("approval_hours")
+    if valida_ajuste("approval_hours", valor):
+        valor = DEFAULT_CONFIG["approval_hours"]
+    return int(str(valor).strip())
+
+
+def aviso_textos():
+    return TEXTOS_AVISO[idioma_aprobacion()]
+
+
+def recorta(texto, largo):
+    t = " ".join(str(texto or "").split())
+    return t if len(t) <= largo else t[:largo - 1].rstrip() + "…"
+
+
+def nombre_del_chat(con, jid):
+    """Como se llama la conversacion: el nombre del alcance, o el del almacen, o el jid."""
+    nombre = (merged_scope(con).get(jid) or {}).get("chat_name")
+    if nombre and nombre != jid:
+        return nombre
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return nombre or jid
+    try:
+        fila = fuente.execute("select chat_name from chat where account=? and chat_jid=?",
+                              (cuenta_activa(), jid)).fetchone()
+        return (fila["chat_name"] if fila and fila["chat_name"] else None) or nombre or jid
+    except sqlite3.Error:
+        return nombre or jid
+    finally:
+        fuente.close()
+
+
+def que_pide(con, caso):
+    """Lo que pide el cliente, en una linea: el titulo, el resumen o el primer mensaje."""
+    texto = caso.get("titulo") or caso.get("resumen")
+    if not texto:
+        texto = titulos_de_mensajes(con, [caso["case_id"]]).get(caso["case_id"])
+    return recorta(texto or "-", LARGO_PIDE)
+
+
+def motivos_en_palabras(motivos):
+    palabras = MOTIVOS_AVISO[idioma_aprobacion()]
+    return ", ".join(dict.fromkeys(palabras.get(m, m) for m in motivos)) or "-"
+
+
+def espera_del_dueno(con, caso):
+    """Los codigos por los que la version vigente del caso espera al dueno, o None.
+
+    Solo cuenta lo que las reglas ya dijeron sobre ESTA version: el trabajo que la regla no
+    firmo, la respuesta que no firmo, la que `wa-send` dejo de borrador, o las rondas de
+    revision que terminan en "lo decide el dueno". Sin eso, el caso todavia no espera a
+    nadie: esta en camino."""
+    version = caso.get("propuesta_version")
+    if (caso["etapa"] not in ETAPAS_APROBABLES or not version
+            or caso.get("propuesta_aprobada") == version):
+        return None
+    marca, req = f"· {version[:12]}", id_envio_caso(caso["case_id"], version)
+    for (d,) in con.execute("select detalle from caso_evento where case_id=? order by id desc",
+                            (caso["case_id"],)).fetchall():
+        d = (d or "").strip()
+        if d.startswith((ESPERA_DUENO, RESPUESTA_ESPERA)) and d.endswith(marca):
+            prefijo = ESPERA_DUENO if d.startswith(ESPERA_DUENO) else RESPUESTA_ESPERA
+            return _codigos(d[len(prefijo):].split("·")[0]) or ["exceptions"]
+        if d.startswith("envio frenado:") and req in d:
+            return list(dict.fromkeys(c for _, c in motivos_del_freno(d))) or ["jev"]
+        if " veces (" in d and "lo decide el dueno" in d and d.endswith(marca):
+            return _codigos(d.split("(", 1)[1].split(")", 1)[0])
+    # En un chat `borrador` toda respuesta espera el visto del dueno: el tick no la intenta
+    # (`candidatos_tick` solo toma `responder`), asi que no queda freno que lo anote.
+    if (propuesta_tipo(caso) == "responder"
+            and (merged_scope(con).get(caso["chat_jid"]) or {}).get("mode") == "borrador"):
+        return ["borrador"]
+    return None
+
+
+def lleva_credencial(con, caso, motivos):
+    """Si el caso lleva una credencial: su aviso no la muestra y se aprueba en el tablero,
+    nunca por WhatsApp. Un valor con forma de secreto cuenta, venga de la propuesta o de lo
+    que pidio el cliente (el titulo o su primer mensaje)."""
+    try:
+        propuesta = json.loads(caso.get("propuesta") or "null") or {}
+    except (TypeError, ValueError):
+        propuesta = {}
+    cuerpo = str(propuesta.get(CAMPO_DE_TIPO.get(propuesta.get("tipo"), "respuesta")) or "")
+    return bool("credential" in _lista_json(caso.get("excepciones"))
+                or wa_reglas.secreto(cuerpo) or wa_reglas.secreto(que_pide(con, caso))
+                or "credential" in (motivos or []))
+
+
+def texto_de_aviso(con, caso, motivos):
+    """El aviso de un caso que espera al dueno. Nunca el valor de una credencial."""
+    tx = aviso_textos()
+    n = caso["case_id"]
+    try:
+        propuesta = json.loads(caso.get("propuesta") or "null") or {}
+    except (TypeError, ValueError):
+        propuesta = {}
+    tipo = propuesta.get("tipo")
+    cuerpo = str(propuesta.get(CAMPO_DE_TIPO.get(tipo, "respuesta")) or "")
+    pide = que_pide(con, caso)
+    credencial = lleva_credencial(con, caso, motivos)
+    lineas = [f"{tx['caso'].format(n=n)} · {nombre_del_chat(con, caso['chat_jid'])}",
+              tx["pide"].format(x=pide if not credencial else "-"),
+              tx["espera"].format(x=motivos_en_palabras(motivos))]
+    if credencial:
+        lineas.append(tx["credencial"])
+        return "\n".join(lineas)
+    if cuerpo:
+        lineas.append(tx["trabajo" if tipo == "trabajar" else "respuesta"]
+                      .format(x=recorta(cuerpo, LARGO_PROPUESTA)))
+    lineas.append(tx["como"].format(n=n))
+    return "\n".join(lineas)
+
+
+def aviso_encola(con, req_id, tipo, texto, case_id=None, version=None, stanza=None,
+                 estado="pendiente"):
+    """Deja el aviso para el tick. El mismo id no se repite: es lo que lo hace UNA vez.
+    Sin commit. Devuelve si quedo una fila nueva."""
+    numero = numero_aprobacion()
+    if not numero:
+        return False
+    momento = ahora_caso()
+    cur = con.execute(
+        "insert into aviso (req_id, tipo, case_id, version, account, chat_jid, texto, estado, "
+        "stanza_id, at, updated_at) values (?,?,?,?,?,?,?,?,?,?,?) on conflict(req_id) do nothing",
+        (req_id, tipo, case_id, version, cuenta_activa(), numero, texto, estado, stanza,
+         momento, momento))
+    return cur.rowcount == 1
+
+
+def aviso_de_bloqueo(con, caso, motivo):
+    """Un caso que va a bloqueado: una linea al numero de aprobacion, una vez por evento.
+    Lo llama `caso_mover`, dentro de su transaccion. Sin numero elegido, nada."""
+    if not numero_aprobacion() or caso.get("account") != cuenta_activa():
+        return
+    evento = con.execute("select max(id) from caso_evento where case_id=?",
+                         (caso["case_id"],)).fetchone()[0]
+    tx = aviso_textos()
+    motivo = tx["motivo_oculto"] if wa_reglas.secreto(motivo or "") \
+        else recorta(motivo, LARGO_PROPUESTA)
+    texto = tx["bloqueado"].format(n=caso["case_id"], chat=nombre_del_chat(con, caso["chat_jid"]),
+                                   x=motivo)
+    aviso_encola(con, f"aviso-b-{caso['case_id']}-{evento}", "bloqueo", texto,
+                 case_id=caso["case_id"])
+
+
+def anota_espera_respuesta(con, caso, motivos):
+    """La regla no firmo la respuesta (E_EXCEPTION): el caso lo dice una vez por version, y
+    es lo que hace que el aviso salga. En su propia transaccion."""
+    marca = f"· {caso['propuesta_version'][:12]}"
+    if con.execute("select 1 from caso_evento where case_id=? and detalle like ? limit 1",
+                   (caso["case_id"], f"{RESPUESTA_ESPERA}%{marca}")).fetchone():
+        return
+    caso_toma(con)
+    try:
+        actual = caso_de(con, caso["case_id"])
+        if actual["propuesta_version"] != caso["propuesta_version"]:
+            con.rollback()
+            return
+        caso_tocar(con, actual, "regla",
+                   f"{RESPUESTA_ESPERA} {', '.join(motivos) or 'exceptions'} {marca}")
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+
+
+def tick_avisos(con, resumen, inicio=None):
+    """Los avisos de esta vuelta: uno por cada caso que espera al dueno (por version), y
+    despues lo que este pendiente de salir. Sin numero elegido, nada."""
+    if not numero_aprobacion():
+        return
+    for row in con.execute("select * from caso where account=? and etapa in ('decision','listo') "
+                           "and propuesta_version is not null order by updated_at, case_id",
+                           (cuenta_activa(),)).fetchall():
+        caso = dict(row)
+        motivos = espera_del_dueno(con, caso)
+        if motivos is None:
+            continue
+        version = caso["propuesta_version"]
+        if con.execute("select 1 from aviso where tipo='aprobacion' and case_id=? and version=?",
+                       (caso["case_id"], version)).fetchone():
+            continue
+        aviso_encola(con, f"aviso-{caso['case_id']}-{version[:12]}", "aprobacion",
+                     texto_de_aviso(con, caso, motivos), case_id=caso["case_id"],
+                     version=version)
+        con.commit()
+    envia_avisos(con, resumen, inicio)
+
+
+def envia_avisos(con, resumen=None, inicio=None):
+    """Lo pendiente de la linea activa sale por `wa-send --send`, con su id. Lo que la linea
+    no puede mandar ahora queda para el minuto siguiente; lo que `wa-send` niega queda
+    `fallido` con su codigo y no se insiste."""
+    resumen = resumen if resumen is not None else dict.fromkeys(CONTEOS_TICK, 0)
+    numero = numero_aprobacion()
+    momento = ahora_caso()
+    # Lo que quedo para un numero que ya no es el de aprobacion (lo cambio o lo apago) no
+    # sale: el aviso era para quien lo era.
+    con.execute("update aviso set estado='fallido', motivo=?, updated_at=? where "
+                "estado='pendiente' and account=? and chat_jid<>?",
+                (AVISO_OTRO_NUMERO, momento, cuenta_activa(), numero or ""))
+    horas = horas_aprobacion(con)
+    for f in con.execute("select * from aviso where estado='pendiente' and account=?",
+                         (cuenta_activa(),)).fetchall():
+        motivo = (AVISO_VENCIDO if edad_de(f["at"]) > horas * 3600
+                  else AVISO_SUPERADO if f["tipo"] == "aprobacion" and version_superada(con, f)
+                  else None)
+        if motivo:
+            con.execute("update aviso set estado='fallido', motivo=?, updated_at=? where "
+                        "req_id=? and estado='pendiente'", (motivo, momento, f["req_id"]))
+    # La respuesta tomada por un proceso que murio a mitad se confirma igual.
+    tx = aviso_textos()
+    for f in con.execute("select req_id, case_id, at from aviso where estado='preparando' and "
+                         "account=?", (cuenta_activa(),)).fetchall():
+        if edad_de(f["at"]) > PREPARANDO_VENCE_S:
+            con.execute("update aviso set texto=?, estado='pendiente', updated_at=? where "
+                        "req_id=? and estado='preparando'",
+                        (tx["sin_confirmar"].format(n=f["case_id"] or "-"), momento,
+                         f["req_id"]))
+    con.commit()
+    filas = con.execute("select * from aviso where estado='pendiente' and account=? and "
+                        "chat_jid=? order by at, rowid", (cuenta_activa(), numero or "")).fetchall()
+    for f in filas:
+        if inicio is not None and time.time() - inicio > PRESUPUESTO_TICK_S:
+            resumen["pospuestos"] += 1
+            continue
+        codigo, detalle = tick_envia({"account": f["account"], "chat_jid": f["chat_jid"]},
+                                     f["texto"], f["req_id"])
+        if codigo in AVISO_REINTENTA + AVISO_ESPERA_PERMISO:
+            if codigo in (ENVIO_SIN_LINEA, "send-no-signature") + AVISO_ESPERA_PERMISO:
+                break
+            continue
+        momento = ahora_caso()
+        if codigo is None:
+            cur = con.execute("update aviso set estado='enviado', enviado_at=?, updated_at=? "
+                              "where req_id=? and estado='pendiente'",
+                              (momento, momento, f["req_id"]))
+            # Otro proceso pudo marcarlo primero: el evento lo deja quien lo marco.
+            if (cur.rowcount == 1 and f["case_id"] is not None
+                    and f["tipo"] in ("aprobacion", "bloqueo")):
+                caso = caso_de(con, f["case_id"])
+                caso_tocar(con, caso, "automatizacion",
+                           f"{AVISO_ENVIADO} · {f['version'][:12]}" if f["tipo"] == "aprobacion"
+                           else AVISO_BLOQUEO)
+            resumen["avisos"] += 1
+        else:
+            con.execute("update aviso set estado='fallido', motivo=?, updated_at=? where "
+                        "req_id=? and estado='pendiente'",
+                        (f"{codigo} {detalle}".strip()[:LARGO_MOTIVO], momento, f["req_id"]))
+            resumen["avisos_error"] += 1
+            print(f"wa-scope: notice {f['req_id']} not sent: {codigo}", file=sys.stderr)
+        con.commit()
+
+
+def avisos_vigentes(con):
+    """Los avisos de aprobacion que todavia se pueden contestar: enviados, sin contestar,
+    dentro de `approval_hours`, y con el caso todavia en la version que avisaron."""
+    horas = horas_aprobacion(con)
+    salida = []
+    for f in con.execute("select * from aviso where tipo='aprobacion' and account=? and "
+                         "estado='enviado' order by at", (cuenta_activa(),)).fetchall():
+        if aviso_estado(con, f, horas) is None:
+            salida.append(f)
+    return salida
+
+
+def aviso_estado(con, aviso, horas):
+    """Por que ese aviso ya no vale (`vencido` | `cambio`), o None si vale."""
+    if edad_de(aviso["enviado_at"] or aviso["at"]) > horas * 3600:
+        return "vencido"
+    if aviso["estado"] != "enviado" or version_superada(con, aviso):
+        return "cambio"
+    return None
+
+
+def version_superada(con, aviso):
+    """Si el caso del aviso ya no espera la decision sobre esa version: cambio la
+    propuesta, salio de decision o ya esta aprobada."""
+    caso = con.execute("select * from caso where case_id=?", (aviso["case_id"],)).fetchone()
+    return bool(not caso or caso["propuesta_version"] != aviso["version"]
+                or caso["etapa"] not in ETAPAS_APROBABLES
+                or caso["propuesta_aprobada"] == aviso["version"])
+
+
+def respuesta_vista(con, stanza):
+    return con.execute("select 1 from aviso where tipo='respuesta' and stanza_id=? and account=?",
+                       (stanza, cuenta_activa())).fetchone() is not None
+
+
+def atiende_respuesta(con, m):
+    """El mensaje del dueno en el directo de aprobacion, si es una respuesta: lo aplica y
+    deja su confirmacion para el tick. Devuelve si lo era; lo que no, sigue siendo una
+    orden del dueno y abre su caso como siempre."""
+    r = lee_respuesta(m.get("text"))
+    if r is None:
+        return False
+    stanza = m["stanza_id"]
+    req = "aviso-r-" + hashlib.sha256(stanza.encode()).hexdigest()[:16]
+    tx = aviso_textos()
+    if r["accion"] == "estado":
+        aviso_encola(con, req, "respuesta", texto_de_estado(con), stanza=stanza)
+        con.commit()
+        return True
+    if r["caso"] is None:
+        vivos = [f for f in avisos_vigentes(con) if f["chat_jid"] == m.get("chat_jid")]
+        if len(vivos) != 1:
+            return False
+        aviso = vivos[0]
+    else:
+        # El aviso es de quien lo recibio: el que salio a otro numero no se contesta desde
+        # este.
+        aviso = con.execute("select * from aviso where tipo='aprobacion' and account=? and "
+                            "case_id=? and chat_jid=? order by at desc, rowid desc limit 1",
+                            (cuenta_activa(), r["caso"], m.get("chat_jid"))).fetchone()
+        if aviso is None:
+            return False
+    n = aviso["case_id"]
+    # Primero se toma el mensaje: la fila es la llave. Si otro proceso (el worker y el tick
+    # leen la misma bandeja) ya la tomo, este no la aplica: es suya.
+    tomada = aviso_encola(con, req, "respuesta", "", case_id=n, stanza=stanza,
+                          estado="preparando")
+    con.commit()
+    if not tomada:
+        return True
+    texto = tx["sin_confirmar"].format(n=n)
+    tomo_aviso = False
+    try:
+        porque = aviso_estado(con, aviso, horas_aprobacion(con))
+        # Despues se toma el aviso: dos respuestas distintas (si en un proceso, no en otro)
+        # pueden haberlo visto vigente las dos, y decide solo la primera que lo toma.
+        if not porque:
+            cur = con.execute("update aviso set estado='contestando', updated_at=? where "
+                              "req_id=? and estado='enviado'", (ahora_caso(), aviso["req_id"]))
+            con.commit()
+            tomo_aviso = cur.rowcount == 1
+            porque = None if tomo_aviso else "cambio"
+        if porque:
+            texto = tx[porque].format(n=n)
+        else:
+            try:
+                texto = aplica_respuesta(con, aviso, r, tx)
+            except CasoFalla as falla:
+                if con.in_transaction:
+                    con.rollback()
+                texto = tx["no_se_pudo"].format(n=n, x=falla.error)
+    finally:
+        # Pase lo que pase, la respuesta tomada queda con su confirmacion: sin esto un
+        # error a mitad la dejaba `preparando` y el dueno no sabia nada.
+        if con.in_transaction:
+            con.rollback()
+        # Lo que no decidio el caso (un error, una credencial, una correccion sobre un
+        # resultado) devuelve el aviso: se puede contestar otra vez. Solo lo devuelve quien
+        # lo tomo; la que perdio no suelta el de la otra.
+        if tomo_aviso:
+            con.execute("update aviso set estado='enviado', updated_at=? where req_id=? and "
+                        "estado='contestando'", (ahora_caso(), aviso["req_id"]))
+        con.execute("update aviso set texto=?, estado='pendiente', updated_at=? where req_id=?",
+                    (texto, ahora_caso(), req))
+        con.commit()
+    return True
+
+
+def aplica_respuesta(con, aviso, r, tx):
+    """si, no o la correccion sobre el caso del aviso, por los mismos caminos que el
+    tablero. Devuelve la linea de confirmacion."""
+    n, version = aviso["case_id"], aviso["version"]
+    if r["accion"] == "si":
+        # El aviso de un caso con credencial manda al tablero: por aca no se aprueba.
+        caso = caso_de(con, n)
+        if lleva_credencial(con, caso, espera_del_dueno(con, caso)):
+            return tx["credencial_si"].format(n=n)
+        cmd_caso_aprobar(con, argparse.Namespace(id=n, version=version, actor="dueno",
+                                                 via=POR_WHATSAPP))
+        aviso_contestado(con, aviso)
+        caso = caso_de(con, n)
+        if propuesta_tipo(caso) != "responder":
+            return tx["aprobado_trabajo"].format(n=n)
+        return entrega_del_dueno(con, caso, tx)
+    caso_toma(con)
+    caso = caso_de(con, n)
+    # Con la base tomada se mira otra vez la version: el agente pudo proponer otra cosa
+    # despues de que se miro el aviso, y el `no` o la correccion de la vieja no la tocan.
+    if caso["propuesta_version"] != version:
+        con.rollback()
+        return tx["cambio"].format(n=n)
+    if r["accion"] == "no":
+        caso_valida(caso, "cerrado", RECHAZO_WHATSAPP)
+        caso_mover(con, caso, "cerrado", "dueno", RECHAZO_WHATSAPP)
+        con.commit()
+        aviso_contestado(con, aviso)
+        return tx["cerrado"].format(n=n)
+    if caso["etapa"] != "decision":
+        con.rollback()
+        return tx["corrige_listo"].format(n=n)
+    nota = recorta(r["texto"], LARGO_CORRECCION)
+    caso_valida(caso, "clasificado")
+    # El camino de Reclasificar del tablero, con la nota: la propuesta queda y el agente la
+    # rehace leyendo la correccion en el archivo del caso.
+    caso_mover(con, caso, "clasificado", "dueno", f"{CORRECCION_WHATSAPP} {nota}",
+               necesita_agente=1)
+    con.commit()
+    aviso_contestado(con, aviso)
+    return tx["corregido"].format(n=n)
+
+
+def aviso_contestado(con, aviso):
+    con.execute("update aviso set estado='contestado', updated_at=? where req_id=?",
+                (ahora_caso(), aviso["req_id"]))
+    con.commit()
+
+
+def entrega_del_dueno(con, caso, tx):
+    """La respuesta aprobada por el dueno sale como la del tablero (`entregar` en
+    acciones.mjs): el borrador con el id del caso y `--approve`, que es la firma del dueno y
+    no vuelve a pasar por el piso ni por Jev. Devuelve la confirmacion."""
+    n, version = caso["case_id"], caso["propuesta_version"]
+    req = id_envio_caso(n, version)
+    texto = respuesta_de_propuesta(caso)
+    args = [WA_SEND, f"--id={req}"] + ([f"--line={caso['account']}"] if caso.get("account") else [])
+    pasos = (args + [f"--timeout={PLAZO_ENVIO_TICK_S}", "--json", "--", caso["chat_jid"], texto],
+             [WA_SEND, "--approve", req, f"--timeout={PLAZO_ENVIO_TICK_S}", "--json"])
+    for paso in pasos:
+        try:
+            p = subprocess.run(paso, capture_output=True, text=True,
+                               timeout=PLAZO_ENVIO_TICK_S + 30)
+        except (OSError, subprocess.SubprocessError):
+            return tx["aprobado_linea"].format(n=n)
+        if p.returncode != 0:
+            primera = next((l.strip() for l in (p.stderr or "").splitlines() if l.strip()), "")
+            codigo = primera[len("wa-send: "):].split()[0] if primera.startswith("wa-send: ") \
+                else "fallo"
+            if codigo in (ENVIO_SIN_LINEA, "send-timeout"):
+                return tx["aprobado_linea"].format(n=n)
+            return tx["aprobado_falla"].format(n=n, x=codigo)
+    caso_toma(con)
+    try:
+        actual = caso_de(con, n)
+        if actual["etapa"] in ETAPAS_TICK:
+            caso_valida(actual, "respondido")
+            caso_mover(con, actual, "respondido", "dueno", f"enviado {req}")
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+    return tx["aprobado_sale"].format(n=n)
+
+
+def desde_la_etapa(con, caso):
+    """Cuando entro el caso a la etapa en que esta: el ultimo evento que lo movio ahi. Su
+    `updated_at` no sirve, cambia con cualquier evento (un aviso, una nota)."""
+    fila = con.execute("select at from caso_evento where case_id=? and a=? and "
+                       "(de is null or de<>a) order by id desc limit 1",
+                       (caso["case_id"], caso["etapa"])).fetchone()
+    return fila["at"] if fila else caso["created_at"]
+
+
+def texto_de_estado(con):
+    """`estado`: los casos abiertos de la linea activa, uno por linea y por etapa."""
+    tx = aviso_textos()
+    marcas = ",".join("?" * len(ETAPAS_ESTADO))
+    filas = con.execute(f"select * from caso where account=? and etapa in ({marcas}) "
+                        f"order by case_id", (cuenta_activa(), *ETAPAS_ESTADO)).fetchall()
+    if not filas:
+        return tx["estado_vacio"]
+    orden = {e: i for i, e in enumerate(ETAPAS_ESTADO)}
+    filas = sorted(filas, key=lambda f: (orden[f["etapa"]], f["case_id"]))
+    lineas = [f"{f['case_id']} · {nombre_del_chat(con, f['chat_jid'])} · "
+              f"{tx['etapas'][f['etapa']]} · "
+              f"{tx['desde'].format(x=str(desde_la_etapa(con, f))[:16])}"
+              for f in filas[:TOPE_ESTADO]]
+    if len(filas) > TOPE_ESTADO:
+        lineas.append(tx["estado_mas"].format(x=len(filas) - TOPE_ESTADO))
+    return "\n".join(lineas)
+
+
 def cmd_tick(con, a):
     """Una vuelta del minuto. Idempotente: correrlo dos veces seguidas no manda ni anota
     nada la segunda. Imprime UNA linea JSON con los conteos y nunca el texto de un
@@ -5390,6 +6082,15 @@ def cmd_tick(con, a):
             if con.in_transaction:
                 con.rollback()
             resumen["agente_error"] += 1
+        # Los avisos al numero de aprobacion (T14): despues de todo lo que pudo dejar un caso
+        # esperando al dueno o bloqueado en esta vuelta.
+        try:
+            tick_avisos(con, resumen, inicio)
+        except (sqlite3.Error, CasoFalla) as exc:
+            if con.in_transaction:
+                con.rollback()
+            resumen["avisos_error"] += 1
+            print(f"wa-scope: approval notices skipped: {exc}", file=sys.stderr)
         try:
             publica_tablero(con)
         except (OSError, sqlite3.Error) as exc:
@@ -5695,6 +6396,9 @@ def tick_caso(con, caso, texto, estados, resumen):
         if falla.error != "E_EXCEPTION":
             raise
         resumen["excepciones"] += 1
+        # El caso dice por que espera, una vez por version: es lo que el aviso por WhatsApp
+        # le cuenta al dueno (T14).
+        anota_espera_respuesta(con, caso, frenos_de_regla(con, caso_de(con, cid))[0])
         return
     codigo, detalle = tick_envia(caso, texto, req)
     if codigo is None:
@@ -5713,7 +6417,8 @@ def tick_caso(con, caso, texto, estados, resumen):
                 return
             todos = "; ".join(dict.fromkeys(
                 f"{c}" for _, c in motivos))
-            tick_frena(con, cid, f"{REVISION[:-1]} {rondas + 1} veces ({todos}): lo decide el dueno")
+            tick_frena(con, cid, f"{REVISION[:-1]} {rondas + 1} veces ({todos}): lo decide el "
+                                 f"dueno · {version[:12]}")
             resumen["frenados"] += 1
             return
         tick_frena(con, cid, f"envio frenado: {codigo} {req} {detalle}".strip()[:300])
@@ -6639,8 +7344,17 @@ def historia_del_caso(con, caso):
             if propuesta.get(campo):
                 lineas.append(cita(propuesta[campo]))
     eventos = [dict(r) for r in con.execute(
-        "select de, a, detalle, at from caso_evento where case_id=? order by id",
+        "select de, a, actor, detalle, at from caso_evento where case_id=? order by id",
         (caso["case_id"],))]
+    # Lo que el dueno pidio al devolver la propuesta (Reclasificar con una nota en el
+    # tablero, o `N <correccion>` por WhatsApp, T14): es SU instruccion para la propuesta
+    # nueva, no texto del cliente.
+    notas = [e for e in eventos if e["actor"] == "dueno" and e["a"] == "clasificado"
+             and e["de"] in ("decision", "bloqueado") and (e["detalle"] or "").strip()]
+    if notas:
+        lineas += ["", "## The owner's corrections (follow the newest one in the new proposal)"]
+        lineas += [f"- [{e['at']}] {e['detalle'].strip().removeprefix(CORRECCION_WHATSAPP).strip()}"
+                   for e in notas[-3:]]
     frenos = [e for e in eventos if (e["detalle"] or "").startswith(REVISIONES)
               or FRENO.search(e["detalle"] or "")
               or "propuesta anterior, no enviada" in (e["detalle"] or "")]
@@ -7802,7 +8516,8 @@ def main():
     c.add_argument("--prioridad", required=True, choices=list(PRIORIDADES_CASO))
     c.set_defaults(fn=cmd_caso_clasificar)
 
-    c = muta("propuesta", help="stores the proposal and moves the case to decision; "
+    c = muta("propuesta", help="stores the proposal and moves the case to decision (from "
+                               "clasificado, or from listo when the reply changes); "
                                "prints its version (sha256 of the canonical JSON)")
     c.add_argument("id", type=int)
     c.add_argument("--tipo", required=True, choices=list(TIPOS_PROPUESTA))

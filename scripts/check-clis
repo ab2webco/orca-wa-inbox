@@ -870,6 +870,77 @@ def revisa_linea_por_numero(fallos: list) -> int:
     return hechas
 
 
+def revisa_telefono_de_lid(fallos: list) -> int:
+    """WhatsApp guarda los directos con un id interno (`<digitos>@lid`) y ya no muestra el
+    numero. El sidecar anota el telefono de cada LID (`lid_telefono`); `wa-read chats` lo
+    publica como `phone` y `wa-scope sync` lo lleva al panel, que lo muestra y lo busca.
+    Un directo por telefono lo trae en su propio jid; un grupo, o un LID sin par, null.
+
+    Y un almacen que todavia no tiene la tabla (el sidecar de antes sigue corriendo) se
+    sigue leyendo: el telefono es un dato de mas, no una condicion para listar."""
+    hechas = 0
+    if not shutil.which("node"):
+        print("  aviso: sin node, no se armo el almacen con telefonos", file=sys.stderr)
+        return hechas
+    lid, tel = "111122223333@lid", "573007776655@s.whatsapp.net"
+    sin_par, directo, grupo = "111122224444@lid", "573000000002@s.whatsapp.net", "300@g.us"
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+        js = (
+            "import { abrirAlmacen, rutaAlmacen } from %r;"
+            "const a = abrirAlmacen(rutaAlmacen({ HOME: process.env.HOME }));"
+            "a.registrarLinea({ cuenta: %r, pn: '573000000012:7@s.whatsapp.net', nombre: 'L' });"
+            "for (const [j, n, g] of [[%r, 'Persona', 0], [%r, '', 0], [%r, 'Otra', 0],"
+            " [%r, 'Grupo', 1]]) a.anotarChat({ cuenta: %r, chatJid: j, nombre: n, esGrupo: g });"
+            "a.anotarTelefono({ cuenta: %r, lid: %r, pn: %r });"
+            "a.activarLinea(%r); a.latir(); a.cerrar();"
+            % ((RAIZ / "sidecar" / "src" / "almacen.js").as_uri(), NUEVA, lid, sin_par,
+               directo, grupo, NUEVA, NUEVA, lid, tel, NUEVA))
+        subprocess.run([shutil.which("node") or "node", "--input-type=module", "-e", js],
+                       env=env, check=True, capture_output=True, timeout=120)
+
+        def leer():
+            p = subprocess.run([str(BIN / "wa-read"), "chats", "--json"], capture_output=True,
+                               text=True, env=env, timeout=120)
+            try:
+                return {c.get("jid"): c for c in json.loads(p.stdout or "[]")}, p.stderr
+            except ValueError:
+                return {}, p.stderr
+
+        chats, err = leer()
+        esperado = {lid: "+573007776655", sin_par: None, directo: "+573000000002", grupo: None}
+        hechas += 1
+        visto = {j: (chats.get(j) or {}).get("phone", "falta") for j in esperado}
+        if visto != esperado:
+            fallos.append(f"`wa-read chats --json` publica los telefonos {visto!r}, se "
+                          f"esperaba {esperado!r} {err.strip()[-200:]}")
+
+        man = json.loads((RAIZ / "orca-plugin.json").read_text(encoding="utf-8"))
+        base = (home / ".config" if sys.platform != "darwin"
+                else home / "Library" / "Application Support")
+        store = base / "orca" / "plugins-data" / f"{man['publisher']}.{man['id']}" / "storage.json"
+        subprocess.run([str(BIN / "wa-scope"), "sync"], capture_output=True, text=True,
+                       env=env, timeout=180)
+        datos = json.loads(store.read_text(encoding="utf-8")) if store.exists() else {}
+        hechas += 1
+        al_panel = {c.get("jid"): c.get("phone", "falta") for c in datos.get("chats") or []}
+        if al_panel.get(lid) != "+573007776655" or al_panel.get(grupo) is not None:
+            fallos.append(f"`wa-scope sync` no lleva el telefono al panel: {al_panel!r}")
+
+        con = sqlite3.connect(home / ".wa-inbox" / "capture.db")
+        con.execute("drop table lid_telefono")
+        con.commit()
+        con.close()
+        chats, err = leer()
+        hechas += 1
+        if (chats.get(directo) or {}).get("phone") != "+573000000002" or \
+                (chats.get(lid) or {}).get("phone") is not None:
+            fallos.append(f"sin la tabla de telefonos, `wa-read chats` contesta "
+                          f"{list(chats.values())!r} {err.strip()[-200:]}")
+    return hechas
+
+
 def revisa_reclave_local(fallos: list) -> int:
     """T9f: lo que colgaba de `local` en scope.db pasa al numero de su linea, al MISMO
     numero que anoto el sidecar en capture.db. Explicito: ningun comando de todos los
@@ -1489,7 +1560,8 @@ def revisa_casa_del_runtime(fallos: list) -> int:
 # que de verdad no hubo nada— se recorre en test/almacen.test.mjs, que ingiere mensajes
 # fabricados con el codigo del sidecar y despues le pregunta a este mismo ejecutable.
 SIN_TRANSPORTE_COMANDOS = [["inbox"], ["chats"], ["whoami"], ["state"],
-                           ["chat", "algo"], ["media", "algo"]]
+                           ["chat", "algo"], ["media", "algo"],
+                           ["wait", "algo", "--timeout", "0"]]
 SIN_TRANSPORTE = "no-transport"
 # Lo que contesta `wa-send` cuando no hay sidecar vivo del otro lado. Es un motivo
 # PROPIO y no el rechazo de WhatsApp: la accion del dueno es distinta —abrir Orca, no
@@ -1753,6 +1825,146 @@ def revisa_sin_transporte(fallos: list) -> int:
                           f"dijo {(p.stderr or '').strip()[:120]!r}")
     return hechas
 
+def revisa_espera(fallos: list) -> int:
+    """`wa-read wait` (cli-huecos, C4): bloquea hasta que llega un mensaje nuevo de OTRO
+    en una conversacion autorizada, o hasta el plazo. Lee el almacen, nunca el socket.
+
+    Los mensajes los escribe el escritor de verdad (el sidecar) MIENTRAS `wait` espera:
+    es la unica forma de ver que despierta por lo que llega y no por lo que ya estaba.
+    HOME temporal: nunca contra ~/.wa-inbox."""
+    hechas = 0
+    nodo = shutil.which("node")
+    if not nodo:
+        print("  aviso: sin node, no se armo el almacen para `wa-read wait`", file=sys.stderr)
+        return hechas
+    almacen_js = (RAIZ / "sidecar" / "src" / "almacen.js").as_uri()
+    t0 = int(time.time()) - 600
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+
+        def escribe(cuerpo):
+            js = ("import { abrirAlmacen, rutaAlmacen } from %r;"
+                  "const a = abrirAlmacen(rutaAlmacen({ HOME: process.env.HOME }));"
+                  "%s; a.cerrar();" % (almacen_js, cuerpo))
+            subprocess.run([nodo, "--input-type=module", "-e", js], env=env, check=True,
+                           capture_output=True, timeout=120)
+
+        def mensaje(chat, stanza, ts, mio=0):
+            return ("a.guardarMensaje({ cuenta: %r, chatJid: %r, stanzaId: %r, ts: %d, "
+                    "fromMe: %d, senderJid: %r, senderName: 'Laura', body: 'hola %s', "
+                    "mediaTipo: null, mediaBytes: null, mencionaMe: 0, citaMe: 0 })"
+                    % (NUEVA, chat, stanza, ts, mio,
+                       "573000000012@s.whatsapp.net" if mio else "573009998877@s.whatsapp.net",
+                       stanza))
+
+        escribe(
+            "a.registrarLinea({ cuenta: %r, pn: '573000000012:7@s.whatsapp.net', "
+            "nombre: 'Nueva' });"
+            "a.anotarChat({ cuenta: %r, chatJid: '200@g.us', nombre: 'Grupo Espera', esGrupo: 1 });"
+            "a.anotarChat({ cuenta: %r, chatJid: '201@g.us', nombre: 'Grupo Cerrado', esGrupo: 1 });"
+            "a.anotarChat({ cuenta: %r, chatJid: '202@g.us', nombre: 'Grupo Doble', esGrupo: 1 });"
+            "a.anotarChat({ cuenta: %r, chatJid: '203@g.us', nombre: 'Grupo Doble', esGrupo: 1 });"
+            "%s; a.activarLinea(%r); a.latir()"
+            % (NUEVA, NUEVA, NUEVA, NUEVA, NUEVA, mensaje("200@g.us", "E1", t0), NUEVA))
+        subprocess.run([str(BIN / "wa-scope"), "set", "200@g.us", "--mode", "observar"],
+                       env=env, capture_output=True, timeout=120)
+
+        def espera(*args):
+            inicio = time.time()
+            p = subprocess.run([str(BIN / "wa-read"), "wait", *args, "--poll", "0.2",
+                                "--json"], capture_output=True, text=True, env=env,
+                               timeout=120)
+            return p, time.time() - inicio
+
+        def primera(p):
+            return (p.stderr.strip().splitlines() or [""])[0]
+
+        hechas += 1
+        p, _ = espera("Grupo Cerrado", "--timeout", "1")
+        if p.returncode != 3 or primera(p) != "wa-read: chat-not-authorized" or p.stdout.strip():
+            fallos.append(f"wa-read wait sobre un chat no autorizado salio {p.returncode} "
+                          f"({primera(p)!r}) y tenia que negarse con 3 y "
+                          "'wa-read: chat-not-authorized', sin stdout")
+
+        hechas += 1
+        p, _ = espera("Grupo Doble", "--timeout", "1")
+        if p.returncode != 2:
+            fallos.append(f"wa-read wait sobre un nombre de dos chats salio {p.returncode} "
+                          "y tenia que salir 2 (ambiguo), como `wa-read chat`")
+
+        hechas += 1
+        p, tardo = espera("Grupo Espera", "--timeout", "1")
+        if p.returncode != 5 or primera(p) != "wa-read: wait-timeout" or p.stdout.strip():
+            fallos.append(f"wa-read wait sin nada nuevo salio {p.returncode} ({primera(p)!r}) "
+                          "y tenia que salir 5 con 'wa-read: wait-timeout', sin stdout: lo "
+                          "que ya estaba en el chat no es un mensaje nuevo")
+        elif not 0.9 <= tardo < 15:
+            fallos.append(f"wa-read wait --timeout 1 tardo {tardo:.1f}s")
+
+        # Lo que llega MIENTRAS espera: primero un mensaje propio (no despierta) y despues
+        # uno de la otra persona, que es el que se devuelve.
+        hechas += 1
+        proc = subprocess.Popen([str(BIN / "wa-read"), "wait", "Grupo Espera",
+                                 "--timeout", "30", "--poll", "0.2", "--json"],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                env=env)
+        time.sleep(1.0)
+        escribe(mensaje("200@g.us", "E2", t0 + 60, mio=1))
+        time.sleep(1.0)
+        vivo_tras_el_propio = proc.poll() is None
+        escribe(mensaje("200@g.us", "E3", t0 + 120))
+        try:
+            salida, error = proc.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            salida, error = proc.communicate()
+        try:
+            filas = json.loads(salida or "null")
+        except ValueError:
+            filas = None
+        if not vivo_tras_el_propio:
+            fallos.append("wa-read wait desperto con un mensaje propio: espera a la otra "
+                          "persona")
+        if proc.returncode != 0 or not isinstance(filas, list) or \
+                [f.get("stanza_id") for f in filas] != ["E3"]:
+            fallos.append(f"wa-read wait con un mensaje que llega salio {proc.returncode} "
+                          f"con {salida.strip()[:200]!r} {error.strip()[:200]!r}; tenia que "
+                          "salir 0 con SOLO el mensaje nuevo de la otra persona (E3)")
+
+        hechas += 1
+        p, tardo = espera("Grupo Espera", "--after", "E1", "--timeout", "5")
+        filas = json.loads(p.stdout or "null") if p.returncode == 0 else None
+        if not isinstance(filas, list) or [f.get("stanza_id") for f in filas] != ["E3"] \
+                or tardo > 4:
+            fallos.append(f"wa-read wait --after E1 salio {p.returncode} con "
+                          f"{p.stdout.strip()[:200]!r}: tenia que contestar ya con lo que "
+                          "llego despues de E1 (E3), sin esperar")
+
+        hechas += 1
+        p, _ = espera("Grupo Espera", "--after", str(t0 + 90), "--timeout", "5")
+        filas = json.loads(p.stdout or "null") if p.returncode == 0 else None
+        if not isinstance(filas, list) or [f.get("stanza_id") for f in filas] != ["E3"]:
+            fallos.append(f"wa-read wait --after <epoch> salio {p.returncode} con "
+                          f"{p.stdout.strip()[:200]!r}: tenia que contestar con E3")
+
+        hechas += 1
+        p, _ = espera("Grupo Espera", "--after", "NO-EXISTE", "--timeout", "1")
+        if p.returncode in (0, 5) or "NO-EXISTE" not in p.stderr:
+            fallos.append(f"wa-read wait --after con un mensaje que no es de ese chat salio "
+                          f"{p.returncode} ({p.stderr.strip()[:200]!r}): tenia que negarse "
+                          "nombrandolo, no esperar")
+
+        hechas += 1
+        ayuda = subprocess.run([str(BIN / "wa-read"), "wait", "--help"], capture_output=True,
+                               text=True, env=env, timeout=60).stdout
+        if not all(x in ayuda for x in ("--after", "--timeout", "--poll", "exit", "5",
+                                        "chat-not-authorized", "wait-timeout")):
+            fallos.append("wa-read wait --help no documenta --after, --timeout, --poll y "
+                          "los codigos de salida (5 timeout, chat-not-authorized)")
+    return hechas
+
+
 def main() -> int:
     fallos = []
     aislado = tempfile.TemporaryDirectory()
@@ -1786,7 +1998,9 @@ def main() -> int:
                       + revisa_juicio(fallos)
                       + revisa_linea_por_numero(fallos)
                       + revisa_reclave_local(fallos)
-                      + revisa_proyectos(fallos))
+                      + revisa_telefono_de_lid(fallos)
+                      + revisa_proyectos(fallos)
+                      + revisa_espera(fallos))
     aislado.cleanup()
 
     if fallos:

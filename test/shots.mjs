@@ -382,7 +382,10 @@ const TABLERO_CASOS = [
       { de: 'decision', a: 'decision', actor: 'regla', que: 'rule', args: ['money'],
         at: minutos(3) },
       { de: 'decision', a: 'decision', actor: 'automatizacion', que: 'held',
-        args: ['money', 'states_status_not_verified'], at: minutos(2) }] }),
+        args: ['money', 'states_status_not_verified'], at: minutos(2) },
+      // T14: el aviso al numero de aprobacion del dueno.
+      { de: 'decision', a: 'decision', actor: 'automatizacion', que: 'wa_notice',
+        at: minutos(2) }] }),
   caso(2, 'decision', {
     title: 'Pide el acceso al tablero de Andes', clase: 'alert', prioridad: 'urgent',
     chat_name: 'Operaciones internas', updated_at: minutos(22),
@@ -502,6 +505,19 @@ const elegirEn = (id, lista, texto, valor) => escribirEn(id, texto) +
 // Todo listo (linea, nombre y una conversacion): la pestana de entrada es Conversaciones.
 const CON_LINEA = Object.assign({}, DATOS,
   { sidecar: { connection: 'open', qr: null, exited: false, latido: LATIDO_FRESCO } })
+// Con directos guardados con su LID (ids y telefonos de prueba): el sidecar anota el
+// telefono de cada uno y la lista lo trae en `phone`.
+const CON_TELEFONOS = Object.assign({}, CON_LINEA, {
+  chats: CON_LINEA.chats.map((c) => c.kind === 'directo'
+    ? Object.assign({}, c, { phone: '+' + c.jid.split('@')[0] }) : c).concat([
+    { jid: '111122223333@lid', name: 'Persona Guardada', kind: 'directo',
+      last: '2026-09-17 12:40', unread: 1, phone: '+573007776655' },
+    { jid: '111122224444@lid', name: '111122224444@lid', kind: 'directo',
+      last: '2026-09-16 10:05', unread: 0, phone: '+573000000002' },
+    { jid: '111122226666@lid', name: 'Socio Norte', kind: 'directo',
+      last: '2026-09-12 08:15', unread: 0, phone: '+14155550100' }
+  ])
+})
 
 // Las cuentas de Claude que el worker lee de `orca account list` (de ejemplo).
 const CUENTAS_CLAUDE = [
@@ -543,6 +559,12 @@ const PANELES = [
     guion: escribirEn('chat-search', 'o') +
       "c.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))",
     espera: 300 },
+  // Los directos guardados con su LID, con su telefono al lado y buscados por el numero:
+  // "+57 300" trae los que lo tienen, con nombre y sin el (ese se llama como su
+  // telefono). Solo "300" traeria tambien los grupos: sus ids de prueba lo contienen.
+  { nombre: 'config-combo-telefono', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: CON_TELEFONOS, pestana: 'chats',
+    guion: escribirEn('chat-search', '+57 300'), espera: 300 },
   { nombre: 'config-combo-sin-coincidencias', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, datos: CON_LINEA, pestana: 'chats',
     guion: escribirEn('chat-search', 'zzzz'), espera: 300 },
@@ -575,6 +597,15 @@ const PANELES = [
     enTodosLosAnchos: true, espera: 300, datos: CON_LINEA, pestana: 'aprobacion',
     guion: "document.getElementById('owners-card').scrollIntoView();" +
       escribirEn('owner-search', '') },
+  // T14: el numero de aprobacion, elegido entre los de confianza, con el aviso de que su
+  // chat todavia no esta en Automatico.
+  { nombre: 'config-numero-aprobacion', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 300, pestana: 'aprobacion',
+    datos: Object.assign({}, CON_LINEA, {
+      owners: [{ id: '100000000000001@lid', name: 'Ana Restrepo' },
+        { id: '100000000000002@lid', name: 'Beto Socio' }],
+      approvalNumber: '100000000000001@lid' }),
+    guion: "document.getElementById('approval-number').scrollIntoView()" },
   {
     nombre: 'actividad',
     archivo: 'activity.html',
@@ -630,6 +661,13 @@ const PANELES = [
     enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS)),
     guion: ABRIR_TABLERO + `;
       document.querySelector('.card[data-case="1"]').click()`
+  },
+  {
+    // Un caso en "Listo para responder": Enviar, Editar (cli-huecos, C1) y Cerrar.
+    nombre: 'tablero-detalle-listo', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="8"]').click()`
   },
   {
     // T8: el despacho al agente del proyecto en cada estado.

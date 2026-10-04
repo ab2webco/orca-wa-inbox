@@ -690,6 +690,11 @@
               "histRevision": "volvio al agente, el agente lo reescribe: {que}",
               "histOwnerDecides": "lo decide usted: {que}",
               "histWorkWaits": "el trabajo espera su firma: {que}",
+              "histReplyWaits": "la respuesta espera su firma: {que}",
+              "histWaNotice": "aviso enviado por WhatsApp",
+              "histWaApproved": "aprobada por WhatsApp",
+              "histWaRejected": "rechazada por WhatsApp",
+              "histWaCorrection": "su correccion por WhatsApp: vuelve al agente",
               "histProposal": "propuesta: {que}", "histApproved": "aprobada",
               "histSent": "enviado", "histRoute": "destino del caso",
               "histProject": "proyecto cambiado", "histClassified": "clasificado: {que}",
@@ -914,6 +919,11 @@
               "histRevision": "back to the agent, the agent rewrites it: {que}",
               "histOwnerDecides": "you decide: {que}",
               "histWorkWaits": "the work waits for your signature: {que}",
+              "histReplyWaits": "the reply waits for your signature: {que}",
+              "histWaNotice": "notice sent on WhatsApp",
+              "histWaApproved": "approved on WhatsApp",
+              "histWaRejected": "rejected on WhatsApp",
+              "histWaCorrection": "your correction on WhatsApp: back to the agent",
               "histProposal": "proposal: {que}", "histApproved": "approved",
               "histSent": "sent", "histRoute": "case destination",
               "histProject": "project changed", "histClassified": "classified: {que}",
@@ -1138,6 +1148,11 @@
               "histRevision": "voltou ao agente, o agente reescreve: {que}",
               "histOwnerDecides": "voce decide: {que}",
               "histWorkWaits": "o trabalho espera a sua assinatura: {que}",
+              "histReplyWaits": "a resposta espera a sua assinatura: {que}",
+              "histWaNotice": "aviso enviado pelo WhatsApp",
+              "histWaApproved": "aprovada pelo WhatsApp",
+              "histWaRejected": "recusada pelo WhatsApp",
+              "histWaCorrection": "a sua correcao pelo WhatsApp: volta ao agente",
               "histProposal": "proposta: {que}", "histApproved": "aprovada",
               "histSent": "enviado", "histRoute": "destino do caso",
               "histProject": "projeto alterado", "histClassified": "classificado: {que}",
@@ -1563,6 +1578,8 @@
       var HIST_KEY = { message: 'histMessage', sticker: 'histSticker', audio: 'histAudio',
         jev: 'histJev', rule: 'histRule', held: 'histHeld', revision: 'histRevision',
         owner_decides: 'histOwnerDecides', work_waits: 'histWorkWaits',
+        reply_waits: 'histReplyWaits', wa_notice: 'histWaNotice', wa_approved: 'histWaApproved',
+        wa_rejected: 'histWaRejected', wa_correction: 'histWaCorrection',
         proposal: 'histProposal', approved: 'histApproved', sent: 'histSent',
         route: 'histRoute', project: 'histProject', classified: 'histClassified',
         retitled: 'histRetitled', withdrawn: 'histWithdrawn', authorized: 'histAuthorized',
@@ -1706,12 +1723,13 @@
       var ACCIONES = ['atender', 'ignorar', 'enviar', 'editar', 'ejecutar', 'autorizar', 'reclasificar',
         'cerrar', 'reabrir', 'proyecto']
       // Donde vale cada accion. `actions` de la tarjeta dice lo que el CLI ofrece; esto
-      // saca lo que el worker rechazaria siempre: editar desde "Listo para responder" y
-      // reclasificar lo que ya esta clasificado no tienen camino en el CLI, y un boton que
-      // siempre falla es un boton que no hace nada.
+      // saca lo que el worker rechazaria siempre: reclasificar lo que ya esta clasificado
+      // no tiene camino en el CLI, y un boton que siempre falla es un boton que no hace
+      // nada. Editar en "Listo para responder" devuelve la tarjeta a "Tu decision" con la
+      // respuesta nueva, que es la que se firma y sale.
       var ACCION_REGLA = {
         enviar: { etapas: ['decision', 'listo'], tipo: 'responder', version: true },
-        editar: { etapas: ['decision'], tipos: ['responder', 'escalar'], version: true },
+        editar: { etapas: ['decision', 'listo'], tipos: ['responder', 'escalar'], version: true },
         ejecutar: { etapas: ['decision'], tipo: 'trabajar', version: true },
         // Soltar las excepciones de ENTRADA: solo con excepciones y sin una respuesta lista.
         autorizar: { etapas: ['decision'], conExcepciones: true, sinTexto: true },

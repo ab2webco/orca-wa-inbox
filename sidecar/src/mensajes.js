@@ -79,6 +79,30 @@ export function jidDeChat (valor) {
   return m ? `${m[1]}@${m[2]}` : jid
 }
 
+/** El par `{ lid, pn }` de una misma persona, sin dispositivo, o `null` si `lid` no es
+ *  un `@lid` y `pn` no es un telefono (`@s.whatsapp.net`). En ese orden y en ningun
+ *  otro: dar vuelta los dos le pondria a alguien el numero de un id interno. */
+export function parLidTelefono (lid, pn) {
+  const l = jidDeChat(lid)
+  const p = jidDeChat(pn)
+  return /^\d+@lid$/.test(l) && /^\d+@s\.whatsapp\.net$/.test(p) ? { lid: l, pn: p } : null
+}
+
+/** El par LID-telefono de quien MANDA un mensaje, o `null`. Baileys lo trae en la llave
+ *  (`senderPn`/`senderLid` del stanza, `participantPn`/`participantLid` en un grupo) y
+ *  es del remitente: en un directo recibido el remitente es la conversacion, pero en
+ *  uno PROPIO es el dueno, y anotarlo le pondria el telefono del dueno al cliente. */
+export function parDeMensaje (wa) {
+  const key = wa?.key
+  if (!key || key.fromMe) return null
+  const chat = jidDeChat(key.remoteJid)
+  if (esGrupo(chat)) {
+    return parLidTelefono(key.participant, key.participantPn) ||
+      parLidTelefono(key.participantLid, key.participant)
+  }
+  return parLidTelefono(chat, key.senderPn) || parLidTelefono(key.senderLid, chat)
+}
+
 /** La identidad de alguien, CON su tipo. Dos numeros iguales en universos distintos no
  *  son la misma persona: el LID que WhatsApp le asigna a un tercero puede coincidir,
  *  digito por digito, con el telefono del propietario. Comparar solo el numero

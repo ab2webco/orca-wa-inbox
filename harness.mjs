@@ -38,6 +38,11 @@ export const ARCHIVO_PROYECTOS = 'PROJECTS.md'
  *  los comandos de las automatizaciones, que corren en esta misma carpeta: es la unica
  *  fuente de la ruta, en vez de un resolvedor copiado en cinco sitios. */
 export const ARCHIVO_BIN = '.wa-bin'
+/** La misma ruta, en un lugar fijo del usuario y no en la carpeta de trabajo del plugin:
+ *  un agente de CUALQUIER proyecto la lee para correr las herramientas del plugin que
+ *  esta instalado, sin saber donde guarda Orca su userData (cli-huecos, C5). Vive en la
+ *  carpeta de estado de las herramientas (`dirEstado`). */
+export const ARCHIVO_BIN_ESTABLE = 'bin-path'
 /** Donde viven las skills del agente dentro de la carpeta de trabajo: Claude Code las lee
  *  de `.claude/skills/<nombre>/SKILL.md`. En el repo salen de `harness/skills/`. */
 const SKILLS_REPO = 'skills'
@@ -70,6 +75,17 @@ export function userDataBase(env = process.env, plataforma = process.platform) {
   if (plataforma === 'darwin') return join(home, 'Library', 'Application Support')
   if (plataforma === 'win32') return env.APPDATA || join(home, 'AppData', 'Roaming')
   return env.XDG_CONFIG_HOME || join(home, '.config')
+}
+
+/** La carpeta de estado de las herramientas (`~/.wa-inbox`, o `%APPDATA%\wa-inbox` en
+ *  Windows). La MISMA tabla que `inbox_dir()` de bin/wa_store.py y `rutaInbox()` del
+ *  sidecar: scripts/check-harness las compara. */
+export function dirEstado(env = process.env, plataforma = process.platform) {
+  if (plataforma === 'win32') {
+    return join(env.APPDATA || join(env.USERPROFILE || homedir(), 'AppData', 'Roaming'),
+      'wa-inbox')
+  }
+  return join(env.HOME || homedir(), '.wa-inbox')
 }
 
 /**
@@ -361,21 +377,25 @@ export async function sembrar(pluginDir, toolsDir, proyectos = null) {
       detail: 'this process runs behind Node\'s permission fence and cannot write: ' +
               'the seeding has to run in a subprocess' }
   }
+  // El puntero estable va antes que la carpeta de trabajo y no depende de ella: un
+  // agente de otro proyecto necesita las herramientas aunque Orca no le de carpeta al
+  // plugin en esta maquina.
+  const binPath = sembrarBinEstable(toolsDir || join(pluginDir, 'bin'))
   try {
     version = manifiesto(pluginDir).version
     dir = workspaceDir(pluginDir)
     if (!dir) {
       return { ok: false, at, reason: 'sin-userdata',
-        detail: 'no userData directory was found for Orca on this machine' }
+        detail: 'no userData directory was found for Orca on this machine', binPath }
     }
     mkdirSync(dir, { recursive: true })
   } catch (error) {
     if (error?.code === 'ERR_ACCESS_DENIED') {
       return { ok: false, at, dir, reason: 'sin-acceso',
-        detail: String(error?.message ?? error).slice(0, 300) }
+        detail: String(error?.message ?? error).slice(0, 300), binPath }
     }
     return { ok: false, at, dir, reason: 'sin-carpeta',
-      detail: String(error?.message ?? error).slice(0, 300) }
+      detail: String(error?.message ?? error).slice(0, 300), binPath }
   }
 
   // La referencia sale del `--help` de verdad. Si las herramientas no corren, se
@@ -401,9 +421,9 @@ export async function sembrar(pluginDir, toolsDir, proyectos = null) {
       'utf8')
   } catch (error) {
     return { ok: false, at, dir, reason: 'fallo',
-      detail: String(error?.message ?? error).slice(0, 300) }
+      detail: String(error?.message ?? error).slice(0, 300), binPath }
   }
-  return { ok: true, at, dir, version, files: archivos }
+  return { ok: true, at, dir, version, files: archivos, binPath }
 }
 
 /** El grueso de la siembra, aparte para que `sembrar` pueda devolver el motivo en vez
@@ -495,6 +515,27 @@ function sembrarBin({ dir, toolsDir, archivos, nuevoManifiesto }) {
   nuevoManifiesto[ARCHIVO_BIN] = { generated: true, hash: huella(texto) }
   archivos.push({ name: ARCHIVO_BIN, bytes: Buffer.byteLength(texto, 'utf8'), action,
     yours: [], refreshed: [] })
+}
+
+/** `bin-path` en la carpeta de estado: la ruta absoluta del `bin/` de este plugin, una
+ *  linea, reescrita en cada arranque si cambio (una actualizacion mueve el plugin a otra
+ *  carpeta). Devuelve donde quedo y como, o el motivo: no puede tumbar la siembra. */
+export function sembrarBinEstable(toolsDir, env = process.env, plataforma = process.platform) {
+  const path = join(dirEstado(env, plataforma), ARCHIVO_BIN_ESTABLE)
+  try {
+    const texto = `${resolve(toolsDir)}\n`
+    const previo = existsSync(path) ? readFileSync(path, 'utf8') : null
+    let action = 'igual'
+    if (previo === null) action = 'creado'
+    else if (previo !== texto) action = 'actualizado'
+    if (action !== 'igual') {
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, texto, 'utf8')
+    }
+    return { path, action }
+  } catch (error) {
+    return { path, action: 'fallo', detail: String(error?.message ?? error).slice(0, 300) }
+  }
 }
 
 // Y como subproceso: `node harness.mjs <pluginDir> <toolsDir>` imprime el mismo estado

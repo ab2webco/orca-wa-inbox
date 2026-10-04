@@ -142,6 +142,16 @@ function filasEnvio (home) {
   return filas
 }
 
+/** Las filas `draft` de la actividad que nombran un pedido: lo que el panel muestra como
+ *  "approve with `wa-send --approve <id>`". */
+function borradoresEnActividad (home, reqId) {
+  const con = new DatabaseSync(join(home, '.wa-inbox', 'scope.db'))
+  const filas = con.prepare("select detail from agent_action where action='draft'").all()
+    .filter((f) => String(f.detail ?? '').includes(reqId))
+  con.close()
+  return filas
+}
+
 // ── El lado del sidecar ─────────────────────────────────────────────────────────────
 console.log('\nsidecar: la bandeja de salida se toma UNA vez')
 {
@@ -351,12 +361,30 @@ console.log('\nwa-send: borrador deja un borrador y NO envia, y se aprueba a man
     listado.stdout.includes('REQ-BORRADOR') && listado.stdout.includes('Cliente Alfa'),
   listado.stdout + listado.stderr)
 
+  ok('la actividad anota el borrador con el comando para aprobarlo',
+    borradoresEnActividad(home, 'REQ-BORRADOR').length === 1,
+  JSON.stringify(borradoresEnActividad(home, 'REQ-BORRADOR')))
+
   // Y recien con la aprobacion explicita sale.
   const aprobado = await correrEnvio(home, ['--approve', 'REQ-BORRADOR'],
     { almacen, socket })
   ok('aprobado sale 0', aprobado.code === 0, aprobado.stderr)
   ok('y recien ahi se envia, una sola vez', socket.enviados.length === 1,
     JSON.stringify(socket.enviados))
+  // Aprobado ya no espera a nadie: una fila que sigue diciendo "approve with" le pide al
+  // dueno algo que ya hizo (cli-huecos, C3).
+  ok('aprobado no deja la fila de borrador en la actividad',
+    borradoresEnActividad(home, 'REQ-BORRADOR').length === 0,
+  JSON.stringify(borradoresEnActividad(home, 'REQ-BORRADOR')))
+
+  // Un borrador retirado tampoco: ya no se puede aprobar.
+  await correrEnvio(home, ['Cliente Alfa', 'otro texto', '--id', 'REQ-RETIRADO'],
+    { almacen, socket })
+  const antesDeRetirar = borradoresEnActividad(home, 'REQ-RETIRADO').length
+  const retirado = await correrEnvio(home, ['--cancel', 'REQ-RETIRADO'], {})
+  ok('retirar un borrador quita su fila de la actividad', retirado.code === 0 &&
+    antesDeRetirar === 1 && borradoresEnActividad(home, 'REQ-RETIRADO').length === 0,
+  `${antesDeRetirar} antes; ${retirado.stderr}`)
 
   // Aprobar dos veces no entrega dos veces.
   const otra = await correrEnvio(home, ['--approve', 'REQ-BORRADOR'], { almacen, socket })

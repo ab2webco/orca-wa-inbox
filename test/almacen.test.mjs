@@ -1669,6 +1669,109 @@ console.log('\nT16b: la migracion junta los directos con dispositivo que ya esta
   tercera.cerrar()
 }
 
+// WhatsApp guarda los directos con un id interno (`<digitos>@lid`) y ya no muestra el
+// numero: el dueno no distingue un chat de otro ni lo encuentra por el telefono que
+// tiene en la agenda. Baileys trae el par LID-telefono por tres caminos, y los tres se
+// anotan como CONTABILIDAD: un jid y un numero, nunca un cuerpo.
+console.log('\ningesta: el telefono de cada LID')
+{
+  const casa = nueva()
+  const alm = abrirAlmacen(rutaAlmacen({ HOME: casa }))
+  const esPropio = (jid) => YO.has(identidadPropia(jid))
+  const LID = '100000000000002@lid'
+  const TEL = '573007776655@s.whatsapp.net'
+  const LID_B = '111122223333@lid'
+  const TEL_B = '573000000002@s.whatsapp.net'
+  const LID_C = '111122224444@lid'
+  const TEL_C = '573009999999@s.whatsapp.net'
+  const LID_D = '111122225555@lid'
+  const TEL_D = '573000000011@s.whatsapp.net'
+  const GRUPO = '120363000000000077@g.us'
+  const pares = (cuenta = CUENTA) => Object.fromEntries(alm.con.prepare(
+    'select lid, pn from lid_telefono where account=? order by lid').all(cuenta)
+    .map((f) => [f.lid, f.pn]))
+
+  // 1. La libreta: `{ id: <telefono>, name, lid }`, la forma que emite `contactAction`.
+  //    El par se guarda AUNQUE el contacto no tenga nombre, y sin el dispositivo.
+  ingerirContactos({ almacen: alm, cuenta: CUENTA, esPropio,
+    contactos: [
+      { id: TEL, name: 'Persona Guardada', lid: '100000000000002:7@lid' },
+      { id: TEL_B, lid: LID_B },
+      { id: '573000000012@s.whatsapp.net', name: 'Sin Lid' },
+      { id: MI_TEL, name: 'Yo', lid: MI_LID }
+    ] })
+  let p = pares()
+  ok('la libreta anota el telefono de cada LID, sin dispositivo',
+    p[LID] === TEL && p[LID_B] === TEL_B, JSON.stringify(p))
+  ok('un contacto sin LID no anota nada, y el dueno tampoco',
+    Object.keys(p).length === 2 && !p[MI_LID], JSON.stringify(p))
+
+  // 2. Los mensajes: `key.senderPn` es del que MANDA. En un directo recibido el que
+  //    manda es la conversacion; en uno propio es el dueno, y ese par seria mentira.
+  const alcanceCerrado = () => 'off'
+  const wa = (key) => ({ key: { fromMe: false, ...key }, messageTimestamp: T0,
+    message: { conversation: 'hola' } })
+  await ingerirMensaje({ almacen: alm, alcance: alcanceCerrado, cuenta: CUENTA,
+    identidades: YO, mediaDir, wa: wa({ remoteJid: LID_C, id: 'P1', senderPn: TEL_C }) })
+  await ingerirMensaje({ almacen: alm, alcance: alcanceCerrado, cuenta: CUENTA,
+    identidades: YO, mediaDir,
+    wa: wa({ remoteJid: '111122226666@lid', id: 'P2', fromMe: true, senderPn: MI_TEL }) })
+  await ingerirMensaje({ almacen: alm, alcance: alcanceCerrado, cuenta: CUENTA,
+    identidades: YO, mediaDir,
+    wa: wa({ remoteJid: GRUPO, id: 'P3', participant: LID_D, participantPn: TEL_D }) })
+  await ingerirMensaje({ almacen: alm, alcance: alcanceCerrado, cuenta: CUENTA,
+    identidades: YO, mediaDir,
+    wa: wa({ remoteJid: '573000000013@s.whatsapp.net', id: 'P4',
+      senderLid: '111122227777@lid' }) })
+  p = pares()
+  ok('un directo recibido anota el telefono de quien escribe, aunque este en off',
+    p[LID_C] === TEL_C, JSON.stringify(p))
+  ok('en un grupo, el del participante', p[LID_D] === TEL_D, JSON.stringify(p))
+  ok('un directo por telefono anota su LID',
+    p['111122227777@lid'] === '573000000013@s.whatsapp.net', JSON.stringify(p))
+  ok('un mensaje PROPIO no le pone el telefono del dueno a la conversacion',
+    !p['111122226666@lid'], JSON.stringify(p))
+  ok('y ningun cuerpo se guardo: el chat estaba en off',
+    alm.con.prepare('select count(*) n from mensaje').get().n === 0)
+
+  // 3. La lista de conversaciones del historial: `IConversation` trae `pnJid`/`lidJid`.
+  ingerirChats({ almacen: alm, cuenta: CUENTA, esPropio,
+    chats: [{ id: '111122228888@lid', pnJid: '573000000001@s.whatsapp.net',
+      conversationTimestamp: T0 },
+    { id: '573000000000@s.whatsapp.net', lidJid: '111122229999@lid',
+      conversationTimestamp: T0 }] })
+  p = pares()
+  ok('el historial anota el par de cada conversacion',
+    p['111122228888@lid'] === '573000000001@s.whatsapp.net' &&
+    p['111122229999@lid'] === '573000000000@s.whatsapp.net', JSON.stringify(p))
+
+  // Un par nuevo para el mismo LID manda: el numero de una persona puede cambiar.
+  ok('anotar el mismo par otra vez no cambia nada',
+    alm.anotarTelefono({ cuenta: CUENTA, lid: LID, pn: TEL }) === false)
+  ok('un telefono nuevo para el mismo LID lo reemplaza',
+    alm.anotarTelefono({ cuenta: CUENTA, lid: LID, pn: TEL_B }) === true &&
+    pares()[LID] === TEL_B)
+  ok('lo que no es un LID y un telefono no se anota',
+    alm.anotarTelefono({ cuenta: CUENTA, lid: TEL, pn: LID }) === false &&
+    alm.anotarTelefono({ cuenta: CUENTA, lid: GRUPO, pn: TEL }) === false)
+  ok('cada linea guarda los suyos',
+    Object.keys(pares('pn:573000000012')).length === 0)
+  const columnas = alm.con.prepare('pragma table_info(lid_telefono)').all()
+    .map((c) => c.name).sort().join(',')
+  ok('la tabla es contabilidad: cuenta, LID, telefono y cuando',
+    columnas === 'account,lid,pn,updated_at', columnas)
+  alm.cerrar()
+
+  // Un almacen de antes de esta tabla la recibe al abrirse, sin perder nada.
+  const viejo = new DatabaseSync(rutaAlmacen({ HOME: casa }))
+  viejo.exec('drop table lid_telefono')
+  viejo.close()
+  const reabierto = abrirAlmacen(rutaAlmacen({ HOME: casa }))
+  ok('un almacen sin la tabla la recibe al abrirse',
+    reabierto.anotarTelefono({ cuenta: CUENTA, lid: LID, pn: TEL }) === true)
+  reabierto.cerrar()
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 if (fallos) {
   console.error(`\n${fallos} fallas`)
