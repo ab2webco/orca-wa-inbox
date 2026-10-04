@@ -62,6 +62,9 @@ asking the customer to check. The fixed acknowledgement stays the default.
       first. The mode is re-read at send time (scripts/check-casos "el acuse y su respaldo").
       RED 7 failures (acuse sent in model and at once in fallback); GREEN 18/18, acuse
       section 24/24 unchanged.
+  - [x] P2.1 Never both within one tick: the fallback pass runs after the tick's sends, and
+        an approved reply not yet sent also blocks it. RED: reply and acknowledgement both
+        delivered in the same tick; GREEN 19/19.
 - [x] P3 `caso avance`: guards, review, unique ids, pacing, max, events, no stage change.
       Send path: immediately, like `caso resultado` (`envia_resultado`): under the tick's lock,
       `wa-send --send --id=caso-<id>-avance-<n>`; if the lock is taken or the line is down

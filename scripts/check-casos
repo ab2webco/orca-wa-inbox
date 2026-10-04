@@ -4446,6 +4446,35 @@ if NODE:
             finally:
                 sidecar.cerrar()
 
+        # En la MISMA vuelta del tick: la respuesta del agente que la regla firma y manda, y el
+        # respaldo que vencio. Sale solo la respuesta: el respaldo se decide despues de los
+        # envios del caso, nunca antes.
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(PERSONA, "F4", "revisa este caso por favor", 1)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder",
+               "--first-reply", "model_with_ack_fallback")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                f4 = caso_de_stanza(home, "F4")
+                cid = str(f4["case_id"])
+                if f4["etapa"] == "recibido":
+                    js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+                       "--actor", "agente")
+                js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta", LIMPIA,
+                   "--actor", "agente")
+                envejece_caso(home, cid, 30)
+                tick(home)
+                ok("respuesta lista y respaldo vencido en la misma vuelta: sale solo la respuesta",
+                   f"caso-{cid}-acuse" not in sidecar.entregados
+                   and js(home, "caso", "ver", cid)[0]["etapa"] == "respondido"
+                   and (auto_de(home, cid) or {}).get("estado") == "omitido",
+                   f"{sidecar.entregados} {auto_de(home, cid)}")
+            finally:
+                sidecar.cerrar()
+
         # El modo se mira de nuevo al mandar: un acuse que quedo pendiente en `ack` no sale si
         # el dueno paso el chat a `model` antes del tick.
         with tempfile.TemporaryDirectory() as home:

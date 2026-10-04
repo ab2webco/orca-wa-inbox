@@ -3962,6 +3962,10 @@ def caso_ya_escribio(con, caso, estados):
     if version and estados.get(id_envio_caso(cid, version)) in ("pendiente", "enviando",
                                                                 "enviado"):
         return True
+    # Una respuesta firmada que todavia no salio (la del agente, o el resultado del proyecto)
+    # tambien es un mensaje del agente en camino.
+    if version and caso.get("propuesta_aprobada") == version and respuesta_de_propuesta(caso):
+        return True
     return False
 
 
@@ -3994,8 +3998,12 @@ def respaldo_toma(con, fila):
         raise
 
 
-def tick_automaticas(con, resumen):
-    """Manda los acuses y saludos pendientes, antes que cualquier propuesta: son lo que el
+def tick_automaticas(con, resumen, respaldo=False):
+    """Con `respaldo` solo los acuses de respaldo (Beta), y sin el, todo lo demas: el tick
+    decide el respaldo DESPUES de mandar las respuestas del caso, para que una respuesta que
+    sale en la misma vuelta nunca tenga un acuse adelante.
+
+Manda los acuses y saludos pendientes, antes que cualquier propuesta: son lo que el
     cliente espera ya. Cada uno sale por `wa-send` con su id fijo, asi que un reintento no
     entrega dos."""
     filas = [dict(r) for r in con.execute(
@@ -4016,6 +4024,8 @@ def tick_automaticas(con, resumen):
     for fila in filas:
         caso = casos[fila["case_id"]]
         modo = primer_modo(scope.get(caso["chat_jid"]), ajustes)[0]
+        if (fila["tipo"] == "acuse" and modo == "model_with_ack_fallback") != respaldo:
+            continue
         if fila["tipo"] == "acuse" and modo == "model":
             # El primer mensaje es del agente: el acuse que quedo de antes no sale.
             tick_auto_cierra(con, fila, "omitido", RAZON_PRIMER_AGENTE,
@@ -6491,6 +6501,14 @@ def cmd_tick(con, a):
                 print(f"wa-scope: tick case #{caso['case_id']}: {exc}", file=sys.stderr)
             if resumen["sin_transporte"] or resumen["sin_firma"]:
                 break
+        # Los acuses de respaldo (Beta), despues de los envios: si la respuesta del agente
+        # salio en esta vuelta, el respaldo ya no sale.
+        try:
+            tick_automaticas(con, resumen, respaldo=True)
+        except (sqlite3.Error, CasoFalla) as exc:
+            if con.in_transaction:
+                con.rollback()
+            print(f"wa-scope: fallback acknowledgements skipped: {exc}", file=sys.stderr)
         # T22.9: el trabajo que no destruye ni compromete lo firma la regla, y el despacho
         # que sigue lo toma en esta misma vuelta.
         try:
