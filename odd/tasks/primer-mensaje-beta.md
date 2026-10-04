@@ -90,8 +90,14 @@ asking the customer to check. The fixed acknowledgement stays the default.
         what was done, asks the customer to try it, and claims only what was done and
         verified. In `brief_de_despacho` and the whatsapp-soporte skill; pinned by the same
         brief tests (RED with the rest of P4).
-- [ ] P5 Panel: mode buttons, Beta badges, warning, numbers, per-chat override, ES/EN/PT,
-      screenshots looked at.
+- [x] P5 Panel: mode buttons, Beta badges, warning, numbers, per-chat override, ES/EN/PT,
+      screenshots looked at. The four values are read once when "Su aprobacion" opens and
+      saved with the card as ONE key (`firstReply`); an out-of-range number is refused with
+      a message. RED: `#first-reply no ofrece model` (3 failures, then abort); GREEN panels
+      1039/1039 (first-click test included). Shots `config-primer-acuse`, `-agente`,
+      `-respaldo`, `-conversacion` (64, no overflow, no JS errors, no selects); looked at
+      respaldo ES dark 1440 and 320, agente ES light 320 and EN dark 768, acuse ES light
+      1440, conversacion ES light 390.
 - [ ] P6 `npm run check` green.
 - [ ] P7 Live: one chat in `model_with_ack_fallback` gets an agent-written first message,
       an update and a personal closing; the fallback fires when the agent is late. And one

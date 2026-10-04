@@ -5567,6 +5567,97 @@ console.log('\nconfig.html — respuestas automaticas: acuse de recibo y saludo'
     doc.getElementById('chat-ack-text').value === 'Recibido, lo vemos.' &&
     valorSeg(doc, 'chat-greeting') === 'off', `${valorSeg(doc, 'chat-ack')}`)
 }
+console.log('\nconfig.html — el primer mensaje (beta): modos, respaldo y ritmo')
+{
+  const { doc, storage } = await montar('config.html', {
+    chats: [{ jid: '1@g.us', name: 'Soporte Norte', kind: 'grupo' }] }, 'es-419')
+  await espera()
+  doc.getElementById('tab-aprobacion').click()
+  await espera()
+  const visible = (id) => !doc.getElementById(id).hidden &&
+    !doc.getElementById(id).closest('[hidden]')
+  const botones = [...doc.querySelectorAll('#first-reply button')]
+  ok('los tres modos del primer mensaje son botones, no un select',
+    !doc.querySelector('select') &&
+    botones.map((b) => b.dataset.value).join() === 'ack,model,model_with_ack_fallback',
+    botones.map((b) => b.dataset.value).join())
+  ok('los dos del agente llevan la marca Beta y el acuse no',
+    botones.filter((b) => b.querySelector('.beta')).map((b) => b.dataset.value).join() ===
+      'model,model_with_ack_fallback' && /Beta/.test(botones[1].textContent) &&
+      !/Beta/.test(botones[0].textContent), botones.map((b) => b.textContent).join(' | '))
+  ok('por defecto es el acuse, sin numeros ni aviso', valorSeg(doc, 'first-reply') === 'ack' &&
+    !visible('fr-nums') && !visible('first-reply-warn'), valorSeg(doc, 'first-reply'))
+  elegirSeg(doc, 'first-reply', 'model')
+  ok('en model avisa que sin respaldo el cliente no recibe nada si Orca o el triage caen',
+    visible('first-reply-warn') &&
+    /no recibe nada/.test(doc.getElementById('first-reply-warn').textContent),
+    doc.getElementById('first-reply-warn').textContent)
+  ok('y muestra el ritmo y el tope de los avances, sin los minutos del respaldo',
+    visible('fr-every-row') && visible('fr-max-row') && !visible('fr-fallback-row'))
+  elegirSeg(doc, 'first-reply', 'model_with_ack_fallback')
+  ok('con respaldo: los minutos del respaldo, el ritmo y el tope, y sin el aviso',
+    visible('fr-fallback-row') && visible('fr-every-row') && visible('fr-max-row') &&
+    !visible('first-reply-warn'))
+  ok('cada numero dice su rango', doc.getElementById('fr-fallback').max === '60' &&
+    doc.getElementById('fr-every').max === '120' && doc.getElementById('fr-max').max === '10')
+  escribir(doc, 'fr-fallback', '8')
+  escribir(doc, 'fr-every', '15')
+  escribir(doc, 'fr-max', '4')
+  doc.getElementById('save-auto').click()
+  await espera(); await espera()
+  ok('la tarjeta guarda los cuatro valores en UNA clave',
+    JSON.stringify(storage.firstReply) === JSON.stringify({ mode: 'model_with_ack_fallback',
+      fallbackMinutes: '8', everyMinutes: '15', max: '4' }), JSON.stringify(storage.firstReply))
+  ok('y el acuse de siempre se guarda igual que antes', storage.ackMode === 'on' &&
+    /✓/.test(doc.getElementById('said-auto').textContent))
+  escribir(doc, 'fr-max', '40')
+  doc.getElementById('save-auto').click()
+  await espera(); await espera()
+  ok('un numero fuera de rango no se guarda, y lo dice',
+    storage.firstReply.max === '4' && doc.getElementById('said-auto').className.includes('bad'),
+    `${JSON.stringify(storage.firstReply)} ${doc.getElementById('said-auto').textContent}`)
+
+  doc.getElementById('tab-chats').click()
+  elegirChat(doc, '1@g.us')
+  await espera()
+  ok('en la conversacion: usar el general y los tres modos',
+    [...doc.querySelectorAll('#chat-first-reply button')].map((b) => b.dataset.value).join() ===
+      'default,ack,model,model_with_ack_fallback' &&
+    valorSeg(doc, 'chat-first-reply') === 'default')
+  elegirSeg(doc, 'chat-first-reply', 'model')
+  ok('el aviso de model tambien en la conversacion', visible('chat-first-reply-warn'))
+  doc.getElementById('save-scope').click()
+  await espera(); await espera()
+  const e = (storage.scope || {})['1@g.us']
+  ok('la conversacion guarda su modo', e && e.firstReply === 'model', JSON.stringify(e))
+  doc.querySelector('#scope-wrap [data-edit]')?.click()
+  await espera()
+  ok('al editarla vuelve a mostrarlo', valorSeg(doc, 'chat-first-reply') === 'model')
+}
+{
+  const { doc } = await montar('config.html', {
+    firstReply: { mode: 'model', fallbackMinutes: '7', everyMinutes: '12', max: '2' } }, 'es-419')
+  await espera()
+  doc.getElementById('tab-aprobacion').click()
+  await espera(); await espera()
+  ok('al abrir la pestana pinta lo guardado', valorSeg(doc, 'first-reply') === 'model' &&
+    doc.getElementById('fr-fallback').value === '7' && doc.getElementById('fr-every').value === '12' &&
+    doc.getElementById('fr-max').value === '2', `${valorSeg(doc, 'first-reply')}`)
+}
+for (const [idioma, nombre, aviso] of [['es-419', 'ES', /no recibe nada/],
+  ['en', 'EN', /gets nothing/], ['pt-BR', 'PT', /nao recebe nada/]]) {
+  const { doc } = await montar('config.html', {}, idioma)
+  await espera()
+  const ids = ['first-reply-label', 'chat-first-reply-label', 'fr-fallback-label',
+    'fr-every-label', 'fr-max-label']
+  ok(`${nombre}: los textos del primer mensaje existen y estan pintados`,
+    ids.every((i) => (doc.getElementById(i)?.textContent || '').trim().length > 3) &&
+    [...doc.querySelectorAll('#first-reply button')].every((b) => b.textContent.trim().length > 3),
+    ids.map((i) => doc.getElementById(i)?.textContent).join('|'))
+  ok(`${nombre}: el aviso de model dice que el cliente no recibe nada`,
+    aviso.test(doc.getElementById('first-reply-warn')?.textContent || ''),
+    doc.getElementById('first-reply-warn')?.textContent)
+}
 for (const [idioma, nombre] of [['es-419', 'ES'], ['en', 'EN'], ['pt-BR', 'PT']]) {
   const { doc } = await montar('config.html', {}, idioma)
   await espera()
