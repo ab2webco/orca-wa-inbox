@@ -17,18 +17,22 @@ can be adjusted when needed.
    manifest's cron after a re-approval), and within seconds of a change saved in the panel.
 3. Only `orca automations edit <id> --trigger <cron>`; never another plugin's or the
    owner's automations; nothing when it already matches.
-4. The worker writes the outcome to storage (`triageSchedule`: minutes, cron, ok, code, at)
-   and the panel shows it under the selector (ES/EN/PT): the pace Orca runs, or that it
+4. The worker writes the outcome in its heartbeat (`workerBeat.triage`: minutes, cron, ok,
+   code), which the panel already polls (a separate key cost the host's message budget and
+   broke the first-click test), and the panel shows it under the selector (ES/EN/PT): the pace Orca runs, or that it
    could not be set and is retried.
 5. The selector's hint says it paces both the WhatsApp read and the triage.
 
 ## Checklist
 
-- [ ] R1 `cronDeMinutos` + retiming in the enabler (test/worker.test.mjs).
-- [ ] R2 Worker wiring: start, health round, change in storage; `triageSchedule` written
-      (test/worker.test.mjs).
-- [ ] R3 Panel line and hint copy (test/panels.test.mjs) + screenshots 1440/768/390/320,
-      light and dark.
+- [x] R1 `cronDeMinutos` + `crearAjustadorRitmo` (test/worker.test.mjs). RED: missing
+      export; GREEN 406/406.
+- [x] R2 Worker wiring: start, health round, change in storage; pace in the heartbeat
+      (test/worker.test.mjs). RED 4 failures; GREEN 410/410.
+- [x] R3 Panel line and hint copy (test/panels.test.mjs) + screenshots 1440/768/390/320,
+      light and dark. RED: no #triage-pace; GREEN 1018/1018. Shots `config-ritmo-triage` and
+      `config-ritmo-triage-fallo` (32, no overflow); looked at ES dark 1440, ES light 320,
+      failure ES dark 390 and EN light 768.
 - [ ] R4 `npm run check` green.
 
 ## Acceptance

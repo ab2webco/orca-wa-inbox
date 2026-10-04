@@ -858,6 +858,7 @@
             <button type="button" data-value="60" data-t="sync60"></button>
           </div>
           <p class="hint" data-t="syncHelp"></p>
+          <p class="hint" id="triage-pace" aria-live="polite" hidden></p>
           <div class="actions">
             <button class="primary" id="save-reading" data-t="saveCard"></button>
             <span class="said" id="said-reading"></span>
@@ -1071,9 +1072,16 @@
           sync10: '10 min', sync15: '15 min',
           sync30: '30 min', sync60: '1 hora',
           syncHelp: 'Recomendado: 5 min. Es cada cuanto se vuelve a leer WhatsApp para ' +
-            'actualizar la lista de conversaciones y el tablero. Los mensajes nuevos se ' +
-            'procesan cada minuto, sin importar este valor. Mas seguido cuesta mas ' +
-            'lectura; mas espaciado, mas espera.',
+            'actualizar la lista de conversaciones y el tablero, y cada cuanto Orca revisa ' +
+            'los casos que necesitan un agente (la automatizacion WhatsApp: triage). Los ' +
+            'mensajes nuevos se procesan cada minuto, sin importar este valor. Mas seguido ' +
+            'cuesta mas lectura; mas espaciado, mas espera.',
+          triagePace: 'En Orca, la automatizacion WhatsApp: triage corre cada {ritmo}.',
+          triagePacing: 'Ajustando la automatizacion WhatsApp: triage al ritmo guardado\u2026',
+          triagePaceFail: 'No se pudo poner la automatizacion WhatsApp: triage a este ritmo ' +
+            'en Orca. Se reintenta cada 5 min.',
+          triagePaceMissing: 'No encuentro la automatizacion WhatsApp: triage en Orca. Revise ' +
+            'que el plugin este aprobado en Ajustes > Plugins.',
           workerGone: 'El plugin no responde',
           workerGoneHow: 'Lo mas probable es que falte aprobarlo: abra Ajustes > Plugins y ' +
             'pulse "Review & enable" en WhatsApp Inbox. Hasta que lo apruebe, Orca no lo ' +
@@ -1477,9 +1485,16 @@
           sync10: '10 min', sync15: '15 min',
           sync30: '30 min', sync60: '1 hour',
           syncHelp: 'Recommended: 5 min. It is how often WhatsApp is re-read to refresh the ' +
-            'chat lists and the board. New messages are processed every minute, ' +
-            'whatever this value is. More often costs more reading; less often costs ' +
-            'more waiting.',
+            'chat lists and the board, and how often Orca checks the cases that need an ' +
+            'agent (the WhatsApp: triage automation). New messages are processed every ' +
+            'minute, whatever this value is. More often costs more reading; less often ' +
+            'costs more waiting.',
+          triagePace: 'In Orca, the WhatsApp: triage automation runs every {ritmo}.',
+          triagePacing: 'Setting the WhatsApp: triage automation to the saved pace\u2026',
+          triagePaceFail: 'Could not set the WhatsApp: triage automation to this pace in ' +
+            'Orca. It is retried every 5 min.',
+          triagePaceMissing: 'Cannot find the WhatsApp: triage automation in Orca. Check ' +
+            'that the plugin is approved in Settings > Plugins.',
           workerGone: 'The plugin is not responding',
           workerGoneHow: 'Most likely it still needs approving: open Settings > Plugins ' +
             'and press "Review & enable" on WhatsApp Inbox. Until you do, Orca does not ' +
@@ -1848,9 +1863,16 @@
         sync10: '10 min', sync15: '15 min',
         sync30: '30 min', sync60: '1 hora',
         syncHelp: 'Recomendado: 5 min. E de quanto em quanto tempo o WhatsApp e relido para ' +
-          'atualizar a lista de conversas e o quadro. As mensagens novas sao processadas ' +
-          'a cada minuto, seja qual for este valor. Mais seguido custa mais leitura; mais ' +
-          'espacado, mais espera.',
+          'atualizar a lista de conversas e o quadro, e de quanto em quanto tempo o Orca ' +
+          'revisa os casos que precisam de um agente (a automacao WhatsApp: triage). As ' +
+          'mensagens novas sao processadas a cada minuto, seja qual for este valor. Mais ' +
+          'seguido custa mais leitura; mais espacado, mais espera.',
+        triagePace: 'No Orca, a automacao WhatsApp: triage roda a cada {ritmo}.',
+        triagePacing: 'Ajustando a automacao WhatsApp: triage ao ritmo salvo\u2026',
+        triagePaceFail: 'Nao foi possivel colocar a automacao WhatsApp: triage neste ritmo ' +
+          'no Orca. Tenta-se de novo a cada 5 min.',
+        triagePaceMissing: 'Nao encontro a automacao WhatsApp: triage no Orca. Verifique ' +
+          'se o plugin esta aprovado em Ajustes > Plugins.',
         optionalTitle: 'Opcional \u2014 nada disso bloqueia o agente:',
         workerGone: 'O plugin nao responde',
         workerGoneHow: 'O mais provavel e que falte aprova-lo: abra Ajustes > Plugins e ' +
@@ -2533,6 +2555,37 @@
       function valorDe (id) {
         var n = el(id)
         return n.classList.contains('seg') ? valorSeg(id) : n.value.trim()
+      }
+
+      // ---------- el ritmo del triage en Orca (ritmo-triage) ----------
+      var minutosGuardados = null
+      var ritmoTriage = null
+      var ETIQUETA_RITMO = { 2: 'sync2', 5: 'sync5', 10: 'sync10', 15: 'sync15', 30: 'sync30',
+                             60: 'sync60' }
+      /** Lo que el worker dijo que dejo en Orca, frente a lo guardado en el selector. Sin
+       *  lo que dijo el worker no se afirma nada. */
+      function pintarRitmo () {
+        var linea = el('triage-pace')
+        var r = ritmoTriage
+        if (!r || typeof r !== 'object' || typeof r.minutes !== 'number') {
+          linea.hidden = true
+          return
+        }
+        var guardado = parseInt(String(minutosGuardados || '5'), 10)
+        var texto
+        var mal = false
+        if (!r.ok) {
+          mal = true
+          texto = t(r.code === 'sin-triage' ? 'triagePaceMissing' : 'triagePaceFail')
+        } else if (guardado !== r.minutes) {
+          texto = t('triagePacing')
+        } else {
+          var etiqueta = ETIQUETA_RITMO[r.minutes] ? t(ETIQUETA_RITMO[r.minutes]) : r.minutes + ' min'
+          texto = t('triagePace').replace('{ritmo}', etiqueta)
+        }
+        linea.textContent = texto
+        linea.className = mal ? 'hint mal' : 'hint'
+        linea.hidden = false
       }
 
       function pintarClave (key, valor, s) {
@@ -4655,6 +4708,11 @@
             pintarClave('transcribe', v('transcribe'), sello)
             pintarClave('transcribeLang', v('transcribeLang'), sello)
             pintarClave('syncMinutes', v('syncMinutes'), sello)
+            if (hayRespuesta(v('syncMinutes'))) minutosGuardados = v('syncMinutes')
+            // El ritmo del triage viaja en el latido: el worker lo escribe ahi.
+            var latido = v('workerBeat')
+            if (hayRespuesta(latido)) ritmoTriage = latido && typeof latido === 'object' ? latido.triage : null
+            pintarRitmo()
             if (hayRespuesta(v('jevStatus'))) renderJev(v('jevStatus'))
             // Sin guardia de foco: renderChats no toca el buscador — reconstruye el
             // select y pintarChats ya conserva el texto filtrado y lo elegido. La

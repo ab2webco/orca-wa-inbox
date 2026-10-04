@@ -86,8 +86,6 @@ const JEV_STATUS_KEY = 'jevStatus'
 // El interruptor. Apagado de fabrica: encenderlo es lo que manda el texto de los clientes
 // a api.typesafe.ai, y lo decide el dueno con el aviso a la vista.
 const JEV_ENABLED_KEY = 'jevEnabled'
-// A que ritmo corre de verdad la automatizacion `triage` en Orca: { minutes, cron, ok, code, at }.
-const TRIAGE_SCHEDULE_KEY = 'triageSchedule'
 const JEV_SECRET_NAME = 'jevKey'
 const JEV_ACCION = Object.freeze({
   GUARDAR: 'guardar-llave', QUITAR: 'quitar-llave', ACTIVAR: 'activar'
@@ -1177,8 +1175,11 @@ export default function activate(orca) {
   // LO PRIMERO, y sin depender de nada: si el worker no arranca no hay quien escriba
   // ninguna otra clave, y "el plugin no contesto" se veia igual que "el plugin no esta
   // aprobado y no existe". El latido es lo que separa esas dos cosas.
+  // El latido lleva tambien a que ritmo quedo el triage en Orca (ritmo-triage): el panel
+  // ya lo sondea, y una clave aparte le gastaria cupo de mensajes al host.
+  let ritmoTriage = null
   const latir = () => guardar(orca, BEAT_KEY,
-    { at: new Date().toISOString() })
+    ritmoTriage ? { at: new Date().toISOString(), triage: ritmoTriage } : { at: new Date().toISOString() })
     .catch((error) => orca.log(`heartbeat failed: ${error.message}`))
   latir()
   const latidoTimer = setInterval(latir, LATIDO_MS)
@@ -1742,7 +1743,7 @@ export default function activate(orca) {
   // El ritmo de la atencion (ritmo-triage): el selector del panel (`syncMinutes`) fija
   // tambien el cron de la automatizacion `triage`. Orca la recrea con el cron del
   // manifiesto en cada aprobacion, asi que se vuelve a poner al arrancar y en cada vuelta
-  // de la salud; un cambio en el panel vale en segundos. El panel lee `triageSchedule`.
+  // de la salud; un cambio en el panel vale en segundos. El panel lo lee en el latido.
   const ajustarRitmo = crearAjustadorRitmo({ correr: correrOrca, manifiesto })
   let ritmoEnVuelo = false
   let ritmoPedido = null
@@ -1761,9 +1762,8 @@ export default function activate(orca) {
       }
       if (dicho === ritmoDicho) return
       ritmoDicho = dicho
-      await guardar(orca, TRIAGE_SCHEDULE_KEY, {
-        minutes: r.minutes, cron: r.cron, ok: r.ok, code: r.code, at: new Date().toISOString()
-      })
+      ritmoTriage = { minutes: r.minutes, cron: r.cron, ok: r.ok, code: r.code }
+      await latir()
     } finally {
       ritmoEnVuelo = false
     }

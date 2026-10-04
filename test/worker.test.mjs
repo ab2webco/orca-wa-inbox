@@ -3308,19 +3308,19 @@ console.log('\nworker: el catalogo de proyectos se refresca, se acepta y llega a
     // Sin `syncMinutes` el ritmo es el de fabrica (5 min), el mismo del manifiesto: el
     // triage no se toca y el panel recibe a que ritmo corre.
     ok('al arrancar deja dicho a que ritmo corre el triage',
-      await hasta(() => orca.store.triageSchedule?.ok === true, 15000) &&
-      orca.store.triageSchedule.minutes === 5 && orca.store.triageSchedule.cron === '*/5 * * * *' &&
-      typeof orca.store.triageSchedule.at === 'string',
-      JSON.stringify(orca.store.triageSchedule))
+      await hasta(() => orca.store.workerBeat?.triage?.ok === true, 15000) &&
+      orca.store.workerBeat?.triage.minutes === 5 && orca.store.workerBeat?.triage.cron === '*/5 * * * *' &&
+      typeof orca.store.workerBeat?.at === 'string',
+      JSON.stringify(orca.store.workerBeat?.triage))
     // El dueno cambia el selector: en segundos, no en la proxima vuelta de la salud.
     orca.store.syncMinutes = '2'
     ok('cambiar el selector pone el triage a ese ritmo en segundos',
       await hasta(() => llamadasOrca().includes('automations edit auto-triage-2 --trigger */2 * * * * --json'), 15000),
       JSON.stringify(llamadasOrca()))
     ok('y el panel recibe el ritmo nuevo',
-      await hasta(() => orca.store.triageSchedule?.minutes === 2, 15000) &&
-      orca.store.triageSchedule.ok === true && orca.store.triageSchedule.cron === '*/2 * * * *',
-      JSON.stringify(orca.store.triageSchedule))
+      await hasta(() => orca.store.workerBeat?.triage?.minutes === 2, 15000) &&
+      orca.store.workerBeat?.triage.ok === true && orca.store.workerBeat?.triage.cron === '*/2 * * * *',
+      JSON.stringify(orca.store.workerBeat?.triage))
     ok('y ninguna otra automatizacion cambia de ritmo',
       llamadasOrca().filter((l) => l.includes('--trigger')).length === 1, JSON.stringify(llamadasOrca()))
     apagar()

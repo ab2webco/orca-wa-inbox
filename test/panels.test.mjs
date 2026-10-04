@@ -1284,6 +1284,57 @@ console.log('\nconfig.html')
     valorSeg(porDefecto.doc, 'sync-minutes') === '5',
     `sync-minutes = ${valorSeg(porDefecto.doc, 'sync-minutes')}`)
 
+  // ritmo-triage: el selector tambien fija el cron de `WhatsApp: triage`, y el panel dice
+  // a que ritmo corre de verdad en Orca (lo escribe el worker en su latido).
+  const latidoCon = (extra) => ({ at: new Date().toISOString(), triage: Object.assign(
+    { minutes: 2, cron: '*/2 * * * *', ok: true, code: 'ajustado' }, extra) })
+  const lineaRitmo = (doc) => doc.getElementById('triage-pace')
+  {
+    const sinDato = await montar('config.html', { syncMinutes: '5' }, 'es-419')
+    await espera()
+    ok('ritmo: sin lo que dijo el worker no se afirma nada', lineaRitmo(sinDato.doc).hidden === true,
+      lineaRitmo(sinDato.doc).outerHTML)
+    ok('ritmo: la ayuda dice que el selector tambien marca el triage',
+      /WhatsApp: triage/.test(sinDato.doc.body.textContent))
+    const alDia = await montar('config.html', { syncMinutes: '2', workerBeat: latidoCon() }, 'es-419')
+    await espera()
+    ok('ritmo: dice cada cuanto corre el triage en Orca',
+      !lineaRitmo(alDia.doc).hidden && /WhatsApp: triage/.test(lineaRitmo(alDia.doc).textContent) &&
+      /cada 2 min/.test(lineaRitmo(alDia.doc).textContent) &&
+      !lineaRitmo(alDia.doc).classList.contains('mal'), lineaRitmo(alDia.doc).textContent)
+    const hora = await montar('config.html', { syncMinutes: '60',
+      workerBeat: latidoCon({ minutes: 60, cron: '0 * * * *' }) }, 'es-419')
+    await espera()
+    ok('ritmo: una hora se dice como en el selector', /cada 1 hora/.test(lineaRitmo(hora.doc).textContent),
+      lineaRitmo(hora.doc).textContent)
+    const ajustando = await montar('config.html', { syncMinutes: '10', workerBeat: latidoCon() }, 'es-419')
+    await espera()
+    ok('ritmo: guardado otro valor, dice que lo esta ajustando',
+      /Ajustando/.test(lineaRitmo(ajustando.doc).textContent) &&
+      !/cada 2 min/.test(lineaRitmo(ajustando.doc).textContent), lineaRitmo(ajustando.doc).textContent)
+    const fallo = await montar('config.html', { syncMinutes: '2',
+      workerBeat: latidoCon({ ok: false, code: 'ajustar-fallo' }) }, 'es-419')
+    await espera()
+    ok('ritmo: si Orca no lo cambio, lo dice en rojo y que se reintenta',
+      lineaRitmo(fallo.doc).classList.contains('mal') &&
+      /No se pudo/.test(lineaRitmo(fallo.doc).textContent) &&
+      /reintenta/.test(lineaRitmo(fallo.doc).textContent), lineaRitmo(fallo.doc).textContent)
+    const sinTriage = await montar('config.html', { syncMinutes: '2',
+      workerBeat: latidoCon({ ok: false, code: 'sin-triage', id: null }) }, 'es-419')
+    await espera()
+    ok('ritmo: sin la automatizacion en Orca, dice que la falta',
+      lineaRitmo(sinTriage.doc).classList.contains('mal') &&
+      /No encuentro/.test(lineaRitmo(sinTriage.doc).textContent), lineaRitmo(sinTriage.doc).textContent)
+    const en = await montar('config.html', { syncMinutes: '2', workerBeat: latidoCon() }, 'en-US')
+    await espera()
+    ok('ritmo: en ingles', /runs every 2 min/.test(lineaRitmo(en.doc).textContent),
+      lineaRitmo(en.doc).textContent)
+    const pt = await montar('config.html', { syncMinutes: '2', workerBeat: latidoCon() }, 'pt-BR')
+    await espera()
+    ok('ritmo: en portugues', /a cada 2 min/.test(lineaRitmo(pt.doc).textContent),
+      lineaRitmo(pt.doc).textContent)
+  }
+
   // La terminal puede fijar un valor que el select no ofrece (`config inbox_days 45`).
   // Si el select lo ignora queda en blanco y el panel miente sobre lo que rige: peor
   // que mostrar un valor raro es mostrar ninguno.
