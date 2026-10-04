@@ -4077,8 +4077,10 @@ console.log('\nactivity.html — tablero: que botones ofrece cada caso (T6)')
     igual(r.detalle, ['ejecutar', 'reclasificar', 'cerrar']), JSON.stringify(r))
   ok('y la tarjeta lleva solo Ejecutar', igual(r.tarjeta, ['ejecutar']), JSON.stringify(r))
   r = await botonesDe(tarjeta({ stage: 'listo', actions: ['enviar', 'editar', 'cerrar'] }))
-  ok('en listo: enviar y cerrar (editar ahi no tiene camino en el CLI)',
-    igual(r.detalle, ['enviar', 'cerrar']) && igual(r.tarjeta, ['enviar']), JSON.stringify(r))
+  // Editar la respuesta del trabajador la devuelve a "Tu decision" con la version nueva
+  // (cli-huecos, C1): ya tiene camino en el CLI.
+  ok('en listo: enviar, editar y cerrar',
+    igual(r.detalle, ['enviar', 'editar', 'cerrar']) && igual(r.tarjeta, ['enviar']), JSON.stringify(r))
   r = await botonesDe(tarjeta({ stage: 'cerrado', actions: ['reabrir'] }))
   ok('cerrado: solo reabrir, y en el detalle', igual(r.detalle, ['reabrir']) && r.tarjeta.length === 0,
     JSON.stringify(r))

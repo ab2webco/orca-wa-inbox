@@ -239,9 +239,13 @@ El panel emite comandos sin ruta (`wa-scope list`), asi que `wa-read`, `wa-send`
 
 ```
 mkdir -p ~/.local/bin
-WA=<la carpeta bin/ del plugin instalado>
+WA="$(cat ~/.wa-inbox/bin-path)"
 for t in wa-read wa-send wa-scope; do ln -sf "$WA/$t" ~/.local/bin/$t; done
 ```
+
+`bin-path` lo reescribe el plugin cada vez que arranca, con la ruta del `bin/` del plugin
+instalado (en Windows, `%APPDATA%\wa-inbox\bin-path`). Un agente de cualquier proyecto lo
+lee igual para correr las herramientas sin depender del PATH.
 
 ## Elija la terminal destino
 

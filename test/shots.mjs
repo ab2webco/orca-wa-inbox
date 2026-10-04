@@ -644,6 +644,13 @@ const PANELES = [
       document.querySelector('.card[data-case="1"]').click()`
   },
   {
+    // Un caso en "Listo para responder": Enviar, Editar (cli-huecos, C1) y Cerrar.
+    nombre: 'tablero-detalle-listo', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS)),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="8"]').click()`
+  },
+  {
     // T8: el despacho al agente del proyecto en cada estado.
     nombre: 'tablero-despacho', archivo: 'activity.html', anchos: ANCHOS,
     enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,

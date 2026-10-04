@@ -631,6 +631,53 @@ def chat(con, fila, limite, dias=None):
             for r in reversed(filas)]
 
 
+def desde_donde(con, fila, despues=None):
+    """El punto de partida de `wa-read wait` en una conversacion: lo que llegue despues de
+    esto es nuevo. Sin `despues`, lo ultimo que ya esta guardado: se espera lo que llegue
+    a partir de ahora. Con el id de un mensaje de ESTE chat, lo posterior a ese mensaje.
+    Con un numero, lo posterior a ese instante (segundos de epoch). Otra cosa sale con el
+    motivo: esperar desde un mensaje que no es de este chat es esperar desde nada."""
+    if despues is None:
+        fila_max = con.execute(
+            "select max(rowid) from mensaje where account = ? and chat_jid = ?",
+            (fila["account"], fila["chat_jid"])).fetchone()
+        return {"rowid": fila_max[0] or 0}
+    propio = con.execute(
+        "select rowid, ts from mensaje where account = ? and chat_jid = ? and stanza_id = ?",
+        (fila["account"], fila["chat_jid"], despues)).fetchone()
+    if propio:
+        return {"ts": propio["ts"], "rowid": propio["rowid"]}
+    if str(despues).isdigit():
+        return {"ts": int(despues)}
+    sys.exit(f"no message {despues!r} in {nombre_de(fila)!r}: --after takes the stanza_id "
+             f"of a message of that chat, or a time in epoch seconds")
+
+
+def nuevos(con, fila, base):
+    """Los mensajes de la OTRA persona que llegaron despues de `base` (`desde_donde`), del
+    mas viejo al mas nuevo. Lo propio no cuenta: quien espera una respuesta no la recibe
+    en lo que acaba de mandar. Lo borrado tampoco."""
+    if "ts" in base:
+        corte = "and (m.ts > ? or (m.ts = ? and m.rowid > ?))"
+        args = [base["ts"], base["ts"], base.get("rowid", 1 << 62)]
+    else:
+        corte = "and m.rowid > ?"
+        args = [base["rowid"]]
+    filas = con.execute(
+        f"""select m.stanza_id, m.ts, m.from_me, m.sender_name, m.sender_jid, m.body,
+                   m.media_path
+            from mensaje m
+            where m.account = ? and m.chat_jid = ? and m.revocado = 0 and m.from_me = 0
+                  {corte}
+            order by m.ts, m.rowid""",
+        [fila["account"], fila["chat_jid"]] + args).fetchall()
+    return [{"date": ts(r["ts"]), "ts": r["ts"], "stanza_id": r["stanza_id"],
+             "chat": nombre_de(fila), "chat_id": fila["id"], "chat_jid": fila["chat_jid"],
+             "account": fila["account"], "sender": quien(r),
+             "text": (r["body"] or "").replace("\n", " "), "media": r["media_path"] or None}
+            for r in filas]
+
+
 def media(con, fila, limite):
     """Los adjuntos de una conversacion, con la ruta en disco.
 

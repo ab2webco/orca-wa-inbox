@@ -20,6 +20,7 @@ import os
 import pathlib
 import re
 import subprocess
+import tempfile
 import sys
 
 RAIZ = pathlib.Path(__file__).resolve().parent.parent
@@ -225,6 +226,37 @@ def main() -> int:
     comprobaciones += 1
     if "plantillasDelArnes" not in siembra or "sembrarBin(" not in siembra:
         fallos.append("harness.mjs  ya no siembra las skills o `.wa-bin`")
+
+    # El puntero estable al bin (cli-huecos, C5) vive en la carpeta de estado de las
+    # herramientas. La escribe harness.mjs y la leen las CLIs y quien siga la skill: las
+    # dos tablas se corren contra el MISMO HOME y se comparan, como las del almacen.
+    comprobaciones += 1
+    if "ARCHIVO_BIN_ESTABLE = 'bin-path'" not in siembra or "sembrarBinEstable(" not in siembra:
+        fallos.append("harness.mjs  ya no deja `bin-path` en la carpeta de estado")
+    else:
+        with tempfile.TemporaryDirectory() as casa:
+            env = dict(os.environ, HOME=casa, APPDATA=os.path.join(casa, "AppData"))
+            js = subprocess.run(
+                ["node", "--input-type=module", "-e",
+                 "import { dirEstado } from %r; process.stdout.write(dirEstado())"
+                 % (RAIZ / "harness.mjs").as_uri()],
+                capture_output=True, text=True, env=env, timeout=60)
+            py = subprocess.run(
+                [sys.executable, "-c", "import sys; sys.dont_write_bytecode = True; "
+                 "sys.path.insert(0, %r); import wa_store; print(wa_store.inbox_dir())"
+                 % str(RAIZ / "bin")],
+                capture_output=True, text=True, env=env, timeout=60)
+            if not js.stdout or js.stdout.strip() != py.stdout.strip():
+                fallos.append(f"harness.mjs  deja `bin-path` en {js.stdout.strip()!r} y las "
+                              f"CLIs leen su estado de {py.stdout.strip()!r}")
+    # Y lo nuevo del CLI esta dicho donde el agente lo lee (cli-huecos, C6).
+    for rel, frases in (("harness/COMMANDS.md", ("bin-path", "wa-read wait")),
+                        ("harness/skills/whatsapp-cli/SKILL.md", ("bin-path", "wa-read\" wait"))):
+        comprobaciones += 1
+        texto = (RAIZ / rel).read_text(encoding="utf-8") if (RAIZ / rel).exists() else ""
+        faltan = [f for f in frases if f not in texto]
+        if faltan:
+            fallos.append(f"{rel}  no dice {', '.join(faltan)}")
 
     # Y cada archivo del arnes tiene que decir en el propio archivo que pasa con una
     # edicion a mano: saberlo no puede exigir leer el codigo del plugin.

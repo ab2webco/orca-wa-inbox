@@ -416,6 +416,16 @@ console.log('\nworker: el arnes de la carpeta del plugin')
   // el prompt y las dos automations.
   ok('siembra `.wa-bin` con la ruta de las herramientas que usa el worker',
     lee('.wa-bin') === `${dir}\n`, JSON.stringify(lee('.wa-bin')))
+  // Y la misma ruta en un lugar fijo del usuario, fuera de la carpeta de trabajo: un agente
+  // de cualquier proyecto llega a las herramientas del plugin instalado sin saber donde
+  // esta su userData (cli-huecos, C5).
+  const puntero = process.platform === 'win32'
+    ? join(process.env.APPDATA, 'wa-inbox', 'bin-path')
+    : join(process.env.HOME, '.wa-inbox', 'bin-path')
+  ok('deja `bin-path` en la carpeta de estado de las herramientas, con la misma ruta',
+    existsSync(puntero) && readFileSync(puntero, 'utf8') === `${dir}\n`,
+    existsSync(puntero) ? JSON.stringify(readFileSync(puntero, 'utf8')) : 'no existe')
+  ok('y la siembra dice donde lo dejo', e?.binPath?.path === puntero, JSON.stringify(e?.binPath))
   // Las skills van donde Claude Code las lee, con un frontmatter valido.
   for (const nombre of ['whatsapp-soporte', 'whatsapp-cli']) {
     const skill = lee(`.claude/skills/${nombre}/SKILL.md`)
@@ -523,6 +533,13 @@ console.log('\nworker: el arnes de la carpeta del plugin')
   apagar()
   ok('sin carpeta el arnes falla callado y dice por que',
     !!e && e.ok === false && e.reason === 'sin-userdata', JSON.stringify(e))
+  // El puntero no depende de la carpeta que Orca le da al plugin: se deja igual.
+  const puntero = process.platform === 'win32'
+    ? join(process.env.APPDATA, 'wa-inbox', 'bin-path')
+    : join(vacio, '.wa-inbox', 'bin-path')
+  ok('sin carpeta de trabajo igual deja `bin-path`', existsSync(puntero) &&
+    readFileSync(puntero, 'utf8').trim() === herramientas('bueno-2', BUENO),
+  existsSync(puntero) ? readFileSync(puntero, 'utf8') : 'no existe')
   ok('y el sync sigue andando igual que siempre',
     listo && orca.store.syncStatus.ok === true, JSON.stringify(orca.store.syncStatus))
 

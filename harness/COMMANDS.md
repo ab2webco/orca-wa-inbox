@@ -38,6 +38,14 @@ so in one line.
     "$WA/wa-scope" caso mover <id> cerrado --motivo "<why>" --actor agente
     "$WA/wa-read" chat "<chat_jid>" --json      # anything else in the conversation
 
+A different proposal on a case in `listo` (the result of a job) sends the case back to
+`decision`: the owner approves the new version, never the old one.
+
+To wait for an answer, `"$WA/wa-read" wait "<chat_jid>" --after <stanza_id> --timeout <S>
+--json` blocks until the other side writes in that chat, and prints what arrived (each
+message with its `stanza_id`, for the next `--after`). A case run never needs it: a new
+message reaches its case on its own.
+
 `caso ver` brings the case's messages and the replies already sent (`from_me`) in strict
 arrival order in `hilo`. Every message before the last reply sent is marked `respondido`:
 it is context, never answer it again. A voice note shows its transcript as `text`, with
@@ -63,7 +71,9 @@ chat and the client cannot see it. Say it is a proposal waiting for approval.
 | `3` | `wa-scope check` | denied. Note it and move on. |
 | `4` | `wa-scope lock` | another run is going. Stop there, read nothing. |
 | `4` | `wa-read` (any read) | `no-transport` on the first stderr line: no WhatsApp line is linked yet. A normal state, not a broken tool: stop and say so in one line. |
-| `2` | `wa-read chat` / `media` | that chat reference matches more than one conversation; the candidates are on stderr. Pick one with its JID, or add `--line`. |
+| `2` | `wa-read chat` / `media` / `wait` | that chat reference matches more than one conversation; the candidates are on stderr. Pick one with its JID, or add `--line`. |
+| `3` | `wa-read wait` | `chat-not-authorized` on the first stderr line: the owner has not enabled that chat, so nothing from it ever arrives. |
+| `5` | `wa-read wait` | `wait-timeout` on the first stderr line: nobody wrote before `--timeout`. |
 
 An **empty list is not `no-transport`**: once a line is linked, every read answers with
 exit 0 and `[]` means the inbox really is quiet.
@@ -79,6 +89,12 @@ the automation in this workspace, where no `./bin/` exists. The plugin writes th
 path of its own `bin/` into `.wa-bin`, one line, every time it starts and every time it
 seeds this folder: `WA="$(cat .wa-bin 2>/dev/null)"`. `PATH` is never trusted. If `.wa-bin`
 is missing or `"$WA/wa-scope"` is not executable, stop and say so in one line.
+
+An agent outside this folder (in any project) reads the same path from `bin-path`, which
+the plugin also rewrites every time it starts, in the tools' state folder:
+`WA="$(cat ~/.wa-inbox/bin-path 2>/dev/null)"` on macOS and Linux, and
+`%APPDATA%\wa-inbox\bin-path` on Windows. It always names the plugin that is installed
+and running, never a copy.
 
 ## Reference
 

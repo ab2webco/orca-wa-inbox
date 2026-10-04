@@ -107,7 +107,9 @@ TRANSICIONES_CASO = {
     "clasificado": ("decision", "bloqueado", "cerrado"),
     "decision":    ("trabajo", "respondido", "clasificado", "bloqueado", "cerrado"),
     "trabajo":     ("listo", "bloqueado", "cerrado"),
-    "listo":       ("respondido", "trabajo", "bloqueado", "cerrado"),
+    # A decision vuelve un resultado cuya respuesta alguien cambio: es otra propuesta, que
+    # se firma de nuevo (cli-huecos, C1).
+    "listo":       ("respondido", "trabajo", "decision", "bloqueado", "cerrado"),
     # A trabajo solo vuelve un caso que espera al cliente por una pregunta del agente del
     # proyecto (T8), cuando el cliente contesta: lo mueve el motor, nunca `caso mover`.
     "respondido":  ("cerrado", "recibido", "trabajo"),
@@ -2819,8 +2821,9 @@ def cmd_caso_propuesta(con, a):
         if adjuntos and adjuntos not in propuesta["instrucciones"]:
             propuesta["instrucciones"] += "\n\n" + adjuntos
     texto, version = propuesta_canonica(propuesta)
-    if caso["etapa"] == "decision" and caso["propuesta_version"] == version:
-        # Triage repasa cada cinco minutos: lo mismo no es un cambio ni deja evento.
+    if caso["etapa"] in ("decision", "listo") and caso["propuesta_version"] == version:
+        # Triage repasa cada cinco minutos: lo mismo no es un cambio ni deja evento. En
+        # listo tampoco: repetir la respuesta del trabajador no le quita la firma.
         return [caso_fila(con, caso)]
     detalle = f"{a.tipo} {version}"
     if caso["etapa"] == "decision":
@@ -8510,7 +8513,8 @@ def main():
     c.add_argument("--prioridad", required=True, choices=list(PRIORIDADES_CASO))
     c.set_defaults(fn=cmd_caso_clasificar)
 
-    c = muta("propuesta", help="stores the proposal and moves the case to decision; "
+    c = muta("propuesta", help="stores the proposal and moves the case to decision (from "
+                               "clasificado, or from listo when the reply changes); "
                                "prints its version (sha256 of the canonical JSON)")
     c.add_argument("id", type=int)
     c.add_argument("--tipo", required=True, choices=list(TIPOS_PROPUESTA))

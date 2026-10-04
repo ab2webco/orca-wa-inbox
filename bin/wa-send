@@ -465,6 +465,22 @@ def anotar_borrador(fila, req_id, frenado=None):
         pass
 
 
+def retirar_de_actividad(req_id):
+    """Quita de la bitacora la fila `draft` de un pedido que ya no espera al dueno
+    (aprobado o retirado): seguiria pidiendo "approve with" algo que ya se hizo o que ya
+    no se puede hacer. Se reconoce por el final que le puso `anotar_borrador`. Si falla,
+    queda la fila: es una nota, no el estado del envio."""
+    cola = f"`wa-send --approve {req_id}`"
+    try:
+        con = sqlite3.connect(SCOPE_DB, timeout=10)
+        con.execute("delete from agent_action where action='draft' "
+                    "and substr(detail, -?) = ?", (len(cola), cola))
+        con.commit()
+        con.close()
+    except sqlite3.Error:
+        pass
+
+
 def deja_borrador(con, fila, texto, req_id, salida_json, pedia_envio, frenado=None,
                   reescribir=False):
     """Escribe el borrador y dice como se aprueba. No manda nada."""
@@ -534,6 +550,8 @@ def aprobar(req_id, plazo_s, salida_json):
     if fila is None:
         niega(SIN_BORRADOR, f"there is no request with the id {req_id!r}. "
                             "`wa-send --drafts` lists what is waiting.")
+    # Desde aca ya no espera la aprobacion: sale, ya salio, o ya no se puede aprobar.
+    retirar_de_actividad(req_id)
     if fila["estado"] == ENVIADO:
         informa(salida_json, {"req_id": req_id, "estado": ENVIADO,
                               "chat": fila["chat_name"], "stanza_id": fila["stanza_id"]},
@@ -563,6 +581,8 @@ def cancelar(req_id, motivo, salida_json):
                       "and estado=?", (CANCELADO_, (motivo or "cancelled")[:200],
                                        int(time.time()), req_id, BORRADOR))
     con.commit()
+    if cur.rowcount == 1:
+        retirar_de_actividad(req_id)
     fila = con.execute("select estado from envio where req_id=?", (req_id,)).fetchone()
     informa(salida_json, {"req_id": req_id, "estado": fila["estado"] if fila else None,
                           "cancelled": cur.rowcount == 1},
