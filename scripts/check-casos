@@ -5702,13 +5702,20 @@ if NODE:
         cid = trabajo_firmado(home, "D2c")
         tick_orca(home, carpeta)
         did = despachos(home, cid)[-1]["id"]
+        # Claude tambien titula la pestana solo con el nombre del brief (2026-10-03,
+        # "◑ caso-20-10"): sin "Despacho" delante sigue siendo del plugin, pero una del dueno
+        # que solo menciona un caso no lo es.
         cambia_orca(carpeta, vivos=["term_worker1", "term_vuelta", "term_vieja", "term_agente",
-                                    "term_dueno"],
+                                    "term_dueno", "term_corta", "term_corta_viva",
+                                    "term_dueno_caso"],
                     titulos={"term_worker1": f"WhatsApp case #{cid}",
                              "term_vuelta": f"✳ Despacho caso-{cid}-{did}",
                              "term_vieja": "✳ Despacho caso-990-77",
                              "term_agente": "◐ WhatsApp: case agent",
-                             "term_dueno": "◐ Guardia de bots"})
+                             "term_dueno": "◐ Guardia de bots",
+                             "term_corta": "◑ caso-990-78",
+                             "term_corta_viva": f"◑ caso-{cid}-{did}",
+                             "term_dueno_caso": "◐ Revisar caso-990-78"})
         antes = len(cerradas(carpeta))
         con = db_de(home)
         con.execute("delete from settings where key='limpieza_at'")
@@ -5717,10 +5724,11 @@ if NODE:
         p, r = tick_orca(home, carpeta)
         nuevas = cerradas(carpeta)[antes:]
         ok("el tick cierra las terminales del plugin que no son de nada en curso",
-           sorted(nuevas) == ["term_agente", "term_vieja"] and p.returncode == 0,
+           sorted(nuevas) == ["term_agente", "term_corta", "term_vieja"] and p.returncode == 0,
            f"{nuevas} {p.stderr[-300:]}")
         ok("y no toca las del dueno ni las de un despacho en curso",
-           not {"term_dueno", "term_vuelta", "term_worker1"} & set(nuevas), f"{nuevas}")
+           not {"term_dueno", "term_vuelta", "term_worker1", "term_corta_viva",
+                "term_dueno_caso"} & set(nuevas), f"{nuevas}")
 
     # Un lanzamiento que quedo a medias (el tick murio) no se relanza: va al dueno.
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
