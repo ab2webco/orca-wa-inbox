@@ -98,7 +98,9 @@ asking the customer to check. The fixed acknowledgement stays the default.
       `-respaldo`, `-conversacion` (64, no overflow, no JS errors, no selects); looked at
       respaldo ES dark 1440 and 320, agente ES light 320 and EN dark 768, acuse ES light
       1440, conversacion ES light 390.
-- [ ] P6 `npm run check` green.
+- [x] P6 `npm run check` green: exit 0 (casos 1115, panels 1039, worker 410, almacen 270,
+      envio 93, check-clis 273 settings checks, check-harness 56, 1272 screenshots without
+      overflow, JS errors or selects).
 - [ ] P7 Live: one chat in `model_with_ack_fallback` gets an agent-written first message,
       an update and a personal closing; the fallback fires when the agent is late. And one
       `necesita` round trip: a project agent asks one question with `--estado necesita`,
