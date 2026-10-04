@@ -4255,6 +4255,64 @@ if NODE:
 
 
 
+# ── El primer mensaje del agente (Beta, odd/tasks/primer-mensaje-beta.md) ──────────────
+# `first_reply_mode`: `ack` (el acuse fijo de siempre), `model` (lo escribe el agente) o
+# `model_with_ack_fallback` (lo escribe el agente y, si no salio nada en N minutos, el
+# acuse fijo). Global, con lo de cada chat encima; null en el chat es "usar el general".
+print("\nel primer mensaje del agente (beta): ajustes")
+
+
+def primer_de(home, chat):
+    return js(home, "voice", chat)[0]["first_reply"]
+
+
+with tempfile.TemporaryDirectory() as home:
+    js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+    js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "responder")
+    v = primer_de(home, PERSONA)
+    ok("de fabrica el primer mensaje es el acuse fijo, con sus numeros por defecto",
+       v == {"mode": "ack", "beta": False, "source": "global", "fallback_minutes": 5,
+             "update_every_minutes": 10, "updates_max": 3}, f"{v}")
+    js(home, "config", "first_reply_mode", "model_with_ack_fallback")
+    js(home, "set", PERSONA, "--first-reply", "model")
+    v = primer_de(home, PERSONA)
+    ok("lo de un chat pisa lo global", v["mode"] == "model" and v["beta"] is True
+       and v["source"] == "conversacion", f"{v}")
+    v = primer_de(home, SOPORTE)
+    ok("y el chat sin lo suyo usa el global", v["mode"] == "model_with_ack_fallback"
+       and v["source"] == "global" and v["beta"] is True, f"{v}")
+    fila = next(r for r in js(home, "list") if r["chat_jid"] == PERSONA)
+    ok("el registro guarda el modo del chat", fila.get("primer_mensaje") == "model", f"{fila}")
+    p = corre(home, "set", PERSONA, "--first-reply", "a veces")
+    ok("un modo que no existe no se guarda", p.returncode != 0
+       and primer_de(home, PERSONA)["mode"] == "model")
+    js(home, "set", PERSONA, "--first-reply", "default")
+    v = primer_de(home, PERSONA)
+    ok("default vuelve al general", v["mode"] == "model_with_ack_fallback"
+       and v["source"] == "global", f"{v}")
+
+    ruta = storage_de(home)
+    datos = json.loads(ruta.read_text(encoding="utf-8")) if ruta.exists() else {}
+    datos["scope"] = {
+        PERSONA: {"chatName": "Cliente Uno", "provider": "ninguno", "mode": "responder",
+                  "firstReply": "ack"},
+        SOPORTE: {"chatName": "Soporte Norte", "provider": "ninguno", "mode": "responder",
+                  "firstReply": "magia"}}
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    ruta.write_text(json.dumps(datos), encoding="utf-8")
+    v = primer_de(home, PERSONA)
+    ok("lo que el panel guardo en el chat manda", v["mode"] == "ack"
+       and v["source"] == "conversacion", f"{v}")
+    v = primer_de(home, SOPORTE)
+    ok("y un valor sucio del panel no es una eleccion: vale el general",
+       v["mode"] == "model_with_ack_fallback" and v["source"] == "global", f"{v}")
+    js(home, "set", SOPORTE, "--first-reply", "model")
+    entrada = json.loads(ruta.read_text(encoding="utf-8"))["scope"].get(SOPORTE) or {}
+    ok("lo dicho por terminal corrige la entrada del panel", entrada.get("firstReply") == "model",
+       f"{entrada}")
+    ok("y el panel lo vuelve a leer igual", primer_de(home, SOPORTE)["mode"] == "model")
+
+
 # ── Un mensaje nuevo invalida la propuesta que ya no responde a lo ultimo ───────────────
 # Caso vivo: una propuesta inventada ("su audio fue escuchado") quedo frenada como
 # borrador; 22 minutos despues llego un pedido nuevo al MISMO caso, que se quedo en

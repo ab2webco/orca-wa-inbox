@@ -47,9 +47,13 @@ asking the customer to check. The fixed acknowledgement stays the default.
 
 ## Checklist
 
-- [ ] P1 Settings and storage: `first_reply_mode`, `ack_fallback_minutes`,
+- [x] P1 Settings and storage: `first_reply_mode`, `ack_fallback_minutes`,
       `update_every_minutes`, `updates_max` (global, panel keys, validation, defaults) and
-      the per-chat column; resolution chat > global > default.
+      the per-chat column; resolution chat > global > default. The four values travel in
+      ONE panel key, `firstReply` ({mode, fallbackMinutes, everyMinutes, max}), and the chat's
+      in its scope entry (`firstReply`); `voice` returns the resolved `first_reply`
+      (scripts/check-clis, scripts/check-casos "ajustes"). RED: defaults None, invalid values
+      accepted, `KeyError: first_reply`; GREEN: check-clis 273 settings checks, section 10/10.
 - [ ] P2 Tick: no acknowledgement at ingest in model modes; fallback acknowledgement after
       N minutes without an outgoing message in `model_with_ack_fallback`; never in `model`;
       model-mode cases marked for the agent.

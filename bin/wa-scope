@@ -43,7 +43,8 @@ import argparse, datetime, hashlib, json, os, re, shlex, sqlite3, subprocess, sy
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from wa_settings import (  # noqa: E402
-    CONFIG_NUMERICOS, CONFIG_OPCIONES, PANEL_SETTINGS, PLUGIN_ID,
+    CONFIG_NUMERICOS, CONFIG_OPCIONES, MODOS_PRIMER, PANEL_PRIMER, PANEL_PRIMER_CAMPOS,
+    PANEL_SETTINGS, PLUGIN_ID,
     PLUGIN_ID_ANTERIOR, duenos, idioma_aprobacion, numero_aprobacion, orca_cli_path, orca_env, orca_runtime_home, plugin_store_path,
     plugin_store_raw,
     plugin_store_targets, settings_from_plugin, user_data_roots, valida_ajuste)
@@ -240,6 +241,9 @@ create table if not exists chat_scope (
   acuse_texto   text,                -- el texto del acuse en ESTA conversacion
   saludo        text,                -- on | off | null (= el ajuste global `greeting`)
   saludo_texto  text,
+  -- quien escribe el primer mensaje en ESTA conversacion (Beta): ack | model |
+  -- model_with_ack_fallback | null (= el ajuste global `first_reply_mode`)
+  primer_mensaje text,
   aprobacion    text,                -- los niveles de cada regla en ESTE chat (T22.3), JSON
   timezone      text default 'America/Bogota',
   notes         text,
@@ -742,6 +746,12 @@ def plugin_store_patch_run(trace):
 def mirror_to_panel(key, value):
     """Un ajuste que el panel tambien guarda tiene que viajar en las dos direcciones:
     si solo bajara del panel, un valor viejo del panel ganaria para siempre."""
+    campo = next((c for c, name in PANEL_PRIMER_CAMPOS.items() if name == key), None)
+    if campo:
+        primer = plugin_store_raw().get(PANEL_PRIMER)
+        primer = dict(primer) if isinstance(primer, dict) else {}
+        primer[campo] = value
+        return plugin_store_write(None, extra={PANEL_PRIMER: primer})
     flat = next((f for f, name in PANEL_SETTINGS.items() if name == key), None)
     if not flat:
         return False
@@ -790,12 +800,8 @@ def persistir_panel(con):
             (cuenta_de_entrada(e), jid, *(fila[c] for c in cols)))
         for flat, columna in AUTO_PANEL:
             if flat in e:
-                valor = e.get(flat)
-                valor = (valor.strip() if isinstance(valor, str) and valor.strip()
-                         and (columna not in ("acuse", "saludo")
-                              or valor.strip() in ("on", "off")) else None)
                 con.execute(f"update chat_scope set {columna}=? where account=? and chat_jid=?",
-                            (valor, cuenta_de_entrada(e), jid))
+                            (auto_del_panel(columna, e.get(flat)), cuenta_de_entrada(e), jid))
         if isinstance(e.get("approval"), dict):
             con.execute("update chat_scope set aprobacion=? where account=? and chat_jid=?",
                         (json.dumps(wa_reglas.niveles(e["approval"]), sort_keys=True),
@@ -825,6 +831,7 @@ def push_to_plugin(con, with_activity=False):
                       "tone": r.get("tone"), "instructions": r.get("instructions"),
                       "ack": r.get("acuse"), "ackText": r.get("acuse_texto"),
                       "greeting": r.get("saludo"), "greetingText": r.get("saludo_texto"),
+                      "firstReply": r.get("primer_mensaje"),
                       "approval": r["niveles"],
                       "updatedAt": r.get("updated_at"), "account": cuenta}
     activity = health = None
@@ -866,6 +873,8 @@ def push_to_plugin(con, with_activity=False):
             valor = efectivos.get(name)
             if valor is not None:
                 extra[flat] = str(valor)
+        extra[PANEL_PRIMER] = {campo: str(efectivos.get(name) or DEFAULT_CONFIG[name])
+                               for campo, name in PANEL_PRIMER_CAMPOS.items()}
     return plugin_store_write(scope, agent_name_of(con), activity, health, routes, extra)
 
 
@@ -1066,7 +1075,20 @@ def build_health():
 
 # Lo que el panel guarda por conversacion para las respuestas automaticas, y la columna.
 AUTO_PANEL = (("ack", "acuse"), ("ackText", "acuse_texto"),
-              ("greeting", "saludo"), ("greetingText", "saludo_texto"))
+              ("greeting", "saludo"), ("greetingText", "saludo_texto"),
+              ("firstReply", "primer_mensaje"))
+# Las columnas de AUTO_PANEL que son una eleccion entre valores fijos: lo demas es null.
+AUTO_VALORES = {"acuse": ("on", "off"), "saludo": ("on", "off"),
+                "primer_mensaje": MODOS_PRIMER}
+
+
+def auto_del_panel(columna, valor):
+    """El valor que el panel guardo para una columna de AUTO_PANEL, o None (= el global).
+    Una cadena vacia o un valor que no esta entre los permitidos no es una eleccion."""
+    if not isinstance(valor, str) or not valor.strip():
+        return None
+    valor = valor.strip()
+    return valor if valor in AUTO_VALORES.get(columna, (valor,)) else None
 
 
 def merged_scope(con):
@@ -1078,7 +1100,7 @@ def merged_scope(con):
     rows = {r["chat_jid"]: dict(r) for r in con.execute(
         "select account, chat_jid, chat_name, provider, target, workspace, mode, "
         "initial_state, hours, tone, instructions, acuse, acuse_texto, saludo, "
-        "saludo_texto, aprobacion, timezone, notes, updated_at "
+        "saludo_texto, primer_mensaje, aprobacion, timezone, notes, updated_at "
         "from chat_scope "
         "where account=?", (cuenta,))}
     for jid, e in plugin_store_read().items():
@@ -1109,10 +1131,7 @@ def merged_scope(con):
         # el global"); una entrada de un panel anterior no la trae y vale lo de la base.
         for flat, columna in AUTO_PANEL:
             if flat in e:
-                valor = e.get(flat)
-                row[columna] = (valor.strip() if isinstance(valor, str) and valor.strip()
-                                and (columna not in ("acuse", "saludo")
-                                     or valor.strip() in ("on", "off")) else None)
+                row[columna] = auto_del_panel(columna, e.get(flat))
         # Los niveles del panel mandan cuando el panel los dice (T22.3); lo que no nombra
         # queda por defecto. Una entrada de un panel anterior no trae la clave.
         if isinstance(e.get("approval"), dict):
@@ -1241,7 +1260,8 @@ def migrate(con):
         con.execute("alter table chat_scope add column tone text")
     if "instructions" not in cols:
         con.execute("alter table chat_scope add column instructions text")
-    for columna in ("acuse", "acuse_texto", "saludo", "saludo_texto", "aprobacion"):
+    for columna in ("acuse", "acuse_texto", "saludo", "saludo_texto", "aprobacion",
+                    "primer_mensaje"):
         if columna not in cols:
             con.execute(f"alter table chat_scope add column {columna} text")
     if "target" not in cols:
@@ -1533,6 +1553,7 @@ def cmd_set(con, a):
         "acuse_texto": auto_texto(a.ack_text, cur.get("acuse_texto")),
         "saludo": auto_valor(a.greeting, cur.get("saludo")),
         "saludo_texto": auto_texto(a.greeting_text, cur.get("saludo_texto")),
+        "primer_mensaje": auto_valor(a.first_reply, cur.get("primer_mensaje")),
         "aprobacion": niveles_pedidos(a.approval, cur.get("aprobacion")),
         "timezone": a.timezone or cur.get("timezone") or "America/Bogota",
         "notes": a.notes or cur.get("notes"),
@@ -1566,7 +1587,8 @@ def cmd_set(con, a):
             cambios["approval"] = json.loads(vals["aprobacion"])
         for flat, columna in AUTO_PANEL:
             if getattr(a, {"ack": "ack", "ackText": "ack_text", "greeting": "greeting",
-                           "greetingText": "greeting_text"}[flat]) is not None:
+                           "greetingText": "greeting_text",
+                           "firstReply": "first_reply"}[flat]) is not None:
                 cambios[flat] = vals[columna]
         if cambios:
             store[jid] = dict(store[jid], **cambios)
@@ -1766,6 +1788,15 @@ DEFAULT_CONFIG = {
     "ack_text": "Recibimos su mensaje. Ya lo estamos revisando y le respondemos por aquí.",
     "greeting": "on",
     "greeting_text": "Hola, ¿en qué le puedo ayudar?",
+    # Quien escribe el primer mensaje a un pedido nuevo (Beta, odd/tasks/primer-mensaje-beta.md):
+    # `ack` es el acuse de arriba, como siempre; `model` lo deja al agente y
+    # `model_with_ack_fallback` tambien, con el acuse si en `ack_fallback_minutes` no salio
+    # nada. Los avances del agente (`caso avance`): uno cada `update_every_minutes` como
+    # mucho, y `updates_max` por caso, el primer mensaje incluido.
+    "first_reply_mode": "ack",
+    "ack_fallback_minutes": "5",
+    "update_every_minutes": "10",
+    "updates_max": "3",
     # La cuenta de Claude con que se abren el agente de casos y el del proyecto: el id de
     # una cuenta de `orca account list`, o `auto` (la regla automatica de `abre_agente`).
     "bot_claude_account": "auto",
@@ -2246,7 +2277,9 @@ def cmd_voice(con, a):
              "mode": row.get("mode") or "off",
              # Los niveles de aprobacion de este chat (T22.3): lo que el agente puede
              # mandar solo, lo que vuelve a el para reescribir y lo que espera al dueno.
-             "approval": row.get("niveles") or wa_reglas.niveles(None)}]
+             "approval": row.get("niveles") or wa_reglas.niveles(None),
+             # Quien escribe el primer mensaje aca (Beta), resuelto: chat > global > fabrica.
+             "first_reply": primer_mensaje_de(row, merged_settings(con))}]
 
 
 def cmd_config(con, a):
@@ -3519,6 +3552,37 @@ BANDERAS_SIN_RIESGO = ("asks_owner_to_act", "client_waiting_or_service_down")
 SALUDO = re.compile(r"\b(hola|ola|hello|hi|hey|buen(?:os|as)?\s+(?:dias?|tardes?|noches?)|"
                     r"bom\s+dia|boa\s+(?:tarde|noite)|saludos)\b")
 TIPOS_AUTO = ("acuse", "saludo")
+
+
+# Los modos en que el primer mensaje lo escribe el agente (Beta).
+MODOS_AGENTE_PRIMERO = ("model", "model_with_ack_fallback")
+
+
+def primer_modo(fila, ajustes):
+    """(modo, origen) del primer mensaje en una conversacion: lo del chat pisa lo global, y
+    lo que no es un modo cae al de fabrica (`ack`)."""
+    propio = (fila or {}).get("primer_mensaje")
+    if propio in MODOS_PRIMER:
+        return propio, "conversacion"
+    general = (ajustes or {}).get("first_reply_mode")
+    return (general if general in MODOS_PRIMER else DEFAULT_CONFIG["first_reply_mode"]), "global"
+
+
+def primer_numero(ajustes, clave):
+    """Un numero del primer mensaje, dentro de su rango; el de fabrica si no sirve."""
+    valor = (ajustes or {}).get(clave)
+    if valor is not None and not valida_ajuste(clave, valor):
+        return int(str(valor).strip())
+    return int(DEFAULT_CONFIG[clave])
+
+
+def primer_mensaje_de(fila, ajustes):
+    """Lo que el agente necesita saber del primer mensaje en una conversacion."""
+    modo, origen = primer_modo(fila, ajustes)
+    return {"mode": modo, "beta": modo in MODOS_AGENTE_PRIMERO, "source": origen,
+            "fallback_minutes": primer_numero(ajustes, "ack_fallback_minutes"),
+            "update_every_minutes": primer_numero(ajustes, "update_every_minutes"),
+            "updates_max": primer_numero(ajustes, "updates_max")}
 
 
 def auto_ajuste(fila, ajustes, tipo):
@@ -8306,6 +8370,11 @@ def main():
                    help="the reply to a greeting addressed to the assistant here; default = "
                         "the global `greeting` setting")
     s.add_argument("--greeting-text", help="the greeting text here; empty = the global one")
+    s.add_argument("--first-reply", choices=[*MODOS_PRIMER, "default"],
+                   help="who writes the first message to a new request here (Beta): ack = the "
+                        "fixed acknowledgement; model = the agent; model_with_ack_fallback = "
+                        "the agent, and the fixed acknowledgement if nothing went out in "
+                        "ack_fallback_minutes; default = the global first_reply_mode")
     s.add_argument("--approval", action="append", metavar="RULE=LEVEL",
                    help="the level of one approval rule here (T22.3): rule money, credential, "
                         "commitment or quality; level ask, agent or allow. Repeatable")

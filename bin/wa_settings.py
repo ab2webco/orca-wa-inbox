@@ -278,6 +278,15 @@ PANEL_SETTINGS = {"tone": "tone", "agentName": "agent_name",
                   # cada proyecto): un id de `orca account list`, o `auto`.
                   "botClaudeAccount": "bot_claude_account"}
 
+# El primer mensaje (Beta): quien lo escribe y el ritmo de los avances del agente. Viaja en
+# UNA clave del panel con sus cuatro valores, y no en cuatro claves planas: el host admite
+# 30 mensajes por 10 s y cada clave es una lectura y una escritura mas contra ese cupo.
+PANEL_PRIMER = "firstReply"
+PANEL_PRIMER_CAMPOS = {"mode": "first_reply_mode", "fallbackMinutes": "ack_fallback_minutes",
+                       "everyMinutes": "update_every_minutes", "max": "updates_max"}
+# `ack` es el acuse fijo de siempre; los otros dos los escribe el agente (Beta).
+MODOS_PRIMER = ("ack", "model", "model_with_ack_fallback")
+
 # Lo que cada ajuste acepta. Un valor invalido no revienta al guardarse: revienta
 # despues, en la corrida del agente, lejos de donde se tipeo — o peor, no revienta y
 # transcribe en el idioma equivocado sin decirlo.
@@ -292,9 +301,16 @@ CONFIG_OPCIONES = {
     "transcribe_lang": ("auto", "es", "en", "pt"),
     "ack": ("on", "off"),
     "greeting": ("on", "off"),
+    "first_reply_mode": MODOS_PRIMER,
 }
 CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s", "sync_minutes",
-                    "capture_max", "capture_days", "case_window_hours", "approval_hours")
+                    "capture_max", "capture_days", "case_window_hours", "approval_hours",
+                    "ack_fallback_minutes", "update_every_minutes", "updates_max")
+# Los numericos con un rango cerrado. Un respaldo de cero minutos es el acuse fijo de
+# siempre con otro nombre, y uno de un dia deja al cliente sin nada; un tope de avances
+# de cien es un cliente con el telefono sonando.
+CONFIG_RANGOS = {"ack_fallback_minutes": (1, 60), "update_every_minutes": (1, 120),
+                 "updates_max": (1, 10)}
 # Los numericos que ademas tienen que ser mayores que cero. Una ventana de agrupacion de
 # cero horas no agrupa nunca: abre una tarjeta por mensaje sin decir por que. Un aviso de
 # aprobacion que vence a las cero horas no se podria contestar nunca (T14).
@@ -318,6 +334,10 @@ def valida_ajuste(key, value):
             return f"{key} has to be a whole number, not {value!r}"
         if key in CONFIG_POSITIVOS and numero <= 0:
             return f"{key} has to be greater than zero, not {value!r}"
+        if key in CONFIG_RANGOS and not (CONFIG_RANGOS[key][0] <= numero
+                                         <= CONFIG_RANGOS[key][1]):
+            return (f"{key} has to be between {CONFIG_RANGOS[key][0]} and "
+                    f"{CONFIG_RANGOS[key][1]}, not {value!r}")
     return None
 
 
@@ -333,6 +353,15 @@ def settings_from_plugin():
     for flat, name in PANEL_SETTINGS.items():
         value = raw.get(flat)
         if isinstance(value, str) and value.strip() and not valida_ajuste(name, value):
+            out[name] = value
+    # El primer mensaje viene agrupado; cada valor se valida solo, igual que los planos.
+    primer = raw.get(PANEL_PRIMER)
+    for campo, name in (PANEL_PRIMER_CAMPOS.items() if isinstance(primer, dict) else ()):
+        value = primer.get(campo)
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            continue
+        value = str(value).strip()
+        if value and not valida_ajuste(name, value):
             out[name] = value
     return out
 
