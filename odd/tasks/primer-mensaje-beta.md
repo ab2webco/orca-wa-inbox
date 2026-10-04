@@ -54,9 +54,14 @@ asking the customer to check. The fixed acknowledgement stays the default.
       in its scope entry (`firstReply`); `voice` returns the resolved `first_reply`
       (scripts/check-clis, scripts/check-casos "ajustes"). RED: defaults None, invalid values
       accepted, `KeyError: first_reply`; GREEN: check-clis 273 settings checks, section 10/10.
-- [ ] P2 Tick: no acknowledgement at ingest in model modes; fallback acknowledgement after
+- [x] P2 Tick: no acknowledgement at ingest in model modes; fallback acknowledgement after
       N minutes without an outgoing message in `model_with_ack_fallback`; never in `model`;
-      model-mode cases marked for the agent.
+      model-mode cases marked for the agent. The fallback row is registered at ingest and
+      waits `pendiente`; before sending, the tick takes the first-message slot (`enviando`)
+      with the database locked, so an agent message and the fallback can never both be the
+      first. The mode is re-read at send time (scripts/check-casos "el acuse y su respaldo").
+      RED 7 failures (acuse sent in model and at once in fallback); GREEN 18/18, acuse
+      section 24/24 unchanged.
 - [ ] P3 `caso avance`: guards, review, unique ids, pacing, max, events, no stage change.
 - [ ] P4 Instructions: skill, COMMANDS, triage prompt, dispatch brief.
 - [ ] P5 Panel: mode buttons, Beta badges, warning, numbers, per-chat override, ES/EN/PT,

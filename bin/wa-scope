@@ -3613,6 +3613,16 @@ def auto_de_jev(m, juicio):
     return None
 
 
+def primer_mensaje_al_agente(con, case_id, modo):
+    """En los modos del agente (Beta) el primer mensaje lo escribe el agente: el caso queda
+    marcado para el, y con respaldo queda tambien el acuse pendiente, que el tick manda solo
+    si en `ack_fallback_minutes` no salio nada. Sin commit: va en la transaccion del mensaje."""
+    caso_tocar(con, caso_de(con, case_id), "automatizacion",
+               f"primer mensaje del agente ({modo})", necesita_agente=1)
+    if modo == "model_with_ack_fallback":
+        auto_registra(con, case_id, "acuse")
+
+
 def auto_registra(con, case_id, tipo):
     """Deja pendiente la respuesta automatica del caso, una sola vez. Sin commit: va en la
     transaccion del mensaje."""
@@ -3626,9 +3636,10 @@ def tick_auto_marca(con, case_id, tipo, estado, razon=None):
                 (estado, razon, case_id, tipo))
 
 
-def tick_auto_cierra(con, fila, estado, razon, detalle):
+def tick_auto_cierra(con, fila, estado, razon, detalle, **campos):
     """Cierra una respuesta automatica en su propia transaccion: la marca, el evento y, si
-    era un saludo, el caso (respondido si salio, cerrado con motivo si no)."""
+    era un saludo, el caso (respondido si salio, cerrado con motivo si no). `campos` van al
+    caso con el evento (un acuse que deja el primer mensaje al agente lo marca para el)."""
     caso_toma(con)
     try:
         caso = caso_de(con, fila["case_id"])
@@ -3639,7 +3650,7 @@ def tick_auto_cierra(con, fila, estado, razon, detalle):
             else:
                 caso_mover(con, caso, "cerrado", "automatizacion", detalle)
         else:
-            caso_tocar(con, caso, "automatizacion", detalle)
+            caso_tocar(con, caso, "automatizacion", detalle, **campos)
         con.commit()
     except BaseException:
         con.rollback()
@@ -3666,26 +3677,98 @@ def auto_omite(caso, scope, ajustes, tipo):
     return None
 
 
+# Por que un acuse de los modos del agente (Beta) no sale: el chat esta en `model` (el
+# primer mensaje es del agente), o del caso ya salio (o esta saliendo) otro mensaje.
+RAZON_PRIMER_AGENTE = "primer-mensaje-del-agente"
+RAZON_YA_SALIO = "ya-salio-un-mensaje"
+
+
+def caso_ya_escribio(con, caso, estados):
+    """Si del caso ya salio, o esta en la bandeja para salir, un mensaje del agente: un
+    avance, su respuesta, o el caso ya estuvo respondido."""
+    cid = caso["case_id"]
+    if con.execute("select 1 from caso_evento where case_id=? and a='respondido' limit 1",
+                   (cid,)).fetchone():
+        return True
+    version = caso.get("propuesta_version")
+    if version and estados.get(id_envio_caso(cid, version)) in ("pendiente", "enviando",
+                                                                "enviado"):
+        return True
+    return False
+
+
+def respaldo_espera(con, caso, fila, ajustes, estados):
+    """`salio` (el acuse de respaldo ya no hace falta), `temprano` (todavia no pasaron los
+    minutos) o None (le toca salir). Uno que ya se estaba mandando (`enviando`) sigue."""
+    if fila.get("estado") == "enviando":
+        return None
+    if caso_ya_escribio(con, caso, estados):
+        return "salio"
+    if edad_de(caso.get("created_at")) < primer_numero(ajustes, "ack_fallback_minutes") * 60:
+        return "temprano"
+    return None
+
+
+def respaldo_toma(con, fila):
+    """Toma el lugar del primer mensaje para el acuse de respaldo, con la base tomada: lo
+    que el agente escriba despues ya no es el primero. False si el agente se adelanto."""
+    caso_toma(con)
+    try:
+        if caso_ya_escribio(con, caso_de(con, fila["case_id"]), {}):
+            con.rollback()
+            return False
+        con.execute("update respuesta_auto set estado='enviando' where case_id=? and tipo=? "
+                    "and estado in ('pendiente', 'enviando')", (fila["case_id"], fila["tipo"]))
+        con.commit()
+        return True
+    except BaseException:
+        con.rollback()
+        raise
+
+
 def tick_automaticas(con, resumen):
     """Manda los acuses y saludos pendientes, antes que cualquier propuesta: son lo que el
     cliente espera ya. Cada uno sale por `wa-send` con su id fijo, asi que un reintento no
     entrega dos."""
     filas = [dict(r) for r in con.execute(
-        "select ra.case_id, ra.tipo, ra.req_id from respuesta_auto ra join caso c on "
-        "c.case_id=ra.case_id where ra.estado='pendiente' and c.account=? order by ra.at, "
-        "ra.case_id", (cuenta_activa(),))]
+        "select ra.case_id, ra.tipo, ra.req_id, ra.estado from respuesta_auto ra join caso c "
+        "on c.case_id=ra.case_id where ra.estado in ('pendiente', 'enviando') and c.account=? "
+        "order by ra.at, ra.case_id", (cuenta_activa(),))]
     if not filas:
         return
-    estados, vivo = envios_del_almacen([f["req_id"] for f in filas])
+    scope, ajustes = merged_scope(con), merged_settings(con)
+    casos = {f["case_id"]: caso_de(con, f["case_id"]) for f in filas}
+    # Con respaldo, lo que ya salio del caso por la bandeja (su respuesta) tambien cuenta.
+    propias = [id_envio_caso(c["case_id"], c["propuesta_version"])
+               for c in casos.values() if c.get("propuesta_version")]
+    estados, vivo = envios_del_almacen([f["req_id"] for f in filas] + propias)
     if not vivo:
         resumen["sin_transporte"] = True
         return
-    scope, ajustes = merged_scope(con), merged_settings(con)
     for fila in filas:
-        caso = caso_de(con, fila["case_id"])
+        caso = casos[fila["case_id"]]
+        modo = primer_modo(scope.get(caso["chat_jid"]), ajustes)[0]
+        if fila["tipo"] == "acuse" and modo == "model":
+            # El primer mensaje es del agente: el acuse que quedo de antes no sale.
+            tick_auto_cierra(con, fila, "omitido", RAZON_PRIMER_AGENTE,
+                             f"acuse omitido: {RAZON_PRIMER_AGENTE}", necesita_agente=1)
+            continue
+        if fila["tipo"] == "acuse" and modo == "model_with_ack_fallback":
+            espera = respaldo_espera(con, caso, fila, ajustes, estados)
+            if espera == "salio":
+                tick_auto_cierra(con, fila, "omitido", RAZON_YA_SALIO,
+                                 f"acuse omitido: {RAZON_YA_SALIO}")
+                continue
+            if espera == "temprano":
+                continue
         razon = auto_omite(caso, scope, ajustes, fila["tipo"])
         if razon:
             tick_auto_cierra(con, fila, "omitido", razon, f"{fila['tipo']} omitido: {razon}")
+            continue
+        if (fila["tipo"] == "acuse" and modo == "model_with_ack_fallback"
+                and not respaldo_toma(con, fila)):
+            tick_auto_cierra(con, fila, "omitido", RAZON_YA_SALIO,
+                             f"acuse omitido: {RAZON_YA_SALIO}")
             continue
         if estados.get(fila["req_id"]) == "enviado":
             tick_auto_cierra(con, fila, "enviado", None, f"{fila['tipo']} enviado {fila['req_id']}")
@@ -4421,7 +4504,11 @@ def ingest_mensaje(con, m, veredicto, horas):
             if que == "nuevo" and veredicto and veredicto.get("auto") and not piso:
                 # La respuesta que el motor manda solo: una por caso nuevo, y nunca con el
                 # piso fijo avisando de dinero o de una credencial.
-                auto_registra(con, case_id, veredicto["auto"])
+                primero = m.get("primer") or DEFAULT_CONFIG["first_reply_mode"]
+                if veredicto["auto"] == "acuse" and primero in MODOS_AGENTE_PRIMERO:
+                    primer_mensaje_al_agente(con, case_id, primero)
+                else:
+                    auto_registra(con, case_id, veredicto["auto"])
             if (que == "unido" and previo and previo["case_id"] == case_id
                     and previo["etapa"] in ETAPAS_QUE_VUELVEN
                     and veredicto and es_charla_ajena(veredicto.get("jev"))):
@@ -4539,7 +4626,11 @@ def cmd_ingest(con, a):
             # ahi y que hace, tal como el dueno lo configuro.
             tono=(entrada.get("tone") or "").strip() or tono_global,
             instrucciones=(entrada.get("instructions") or "").strip() or None,
-            auto_acuse=auto_ajuste(entrada, ajustes_auto, "acuse")[0],
+            # En los modos del agente (Beta) el pedido nuevo tambien se reconoce: el primer
+            # mensaje lo escribe el agente aunque el acuse fijo este apagado.
+            primer=primer_modo(entrada, ajustes_auto)[0],
+            auto_acuse=(auto_ajuste(entrada, ajustes_auto, "acuse")[0]
+                        or primer_modo(entrada, ajustes_auto)[0] in MODOS_AGENTE_PRIMERO),
             auto_saludo=auto_ajuste(entrada, ajustes_auto, "saludo")[0],
             sticker_suelto=(m.get("media_type") == "sticker" and not (m.get("text") or "").strip())))
     nuevos = transcribe_nuevos(con, nuevos, horas, total)
