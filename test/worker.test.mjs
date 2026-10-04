@@ -3154,7 +3154,8 @@ console.log('\nworker: el catalogo de proyectos se refresca, se acepta y llega a
   const origen = (pluginKey, automationId) => ({ pluginKey, automationId })
   const LISTA = { ok: true, result: { automations: [
     { id: 'auto-tick-2', enabled: false, pluginOrigin: origen('ab2web.orca-wa-inbox', 'tick') },
-    { id: 'auto-triage-2', enabled: true, pluginOrigin: origen('ab2web.orca-wa-inbox', 'triage') },
+    { id: 'auto-triage-2', enabled: true, rrule: '*/5 * * * *',
+      pluginOrigin: origen('ab2web.orca-wa-inbox', 'triage') },
     { id: 'auto-otro', enabled: false, pluginOrigin: origen('otro.plugin', 'triage') },
     { id: 'auto-dueno', enabled: false, name: 'WhatsApp: triage' },
     { id: 'auto-vieja', enabled: false, pluginOrigin: origen('ab2web.orca-wa-inbox', 'take') },
@@ -3304,6 +3305,24 @@ console.log('\nworker: el catalogo de proyectos se refresca, se acepta y llega a
       JSON.stringify(llamadasOrca()))
     ok('y ninguna otra', llamadasOrca().filter((l) => l.startsWith('automations edit')).length === 1,
       JSON.stringify(llamadasOrca()))
+    // Sin `syncMinutes` el ritmo es el de fabrica (5 min), el mismo del manifiesto: el
+    // triage no se toca y el panel recibe a que ritmo corre.
+    ok('al arrancar deja dicho a que ritmo corre el triage',
+      await hasta(() => orca.store.triageSchedule?.ok === true, 15000) &&
+      orca.store.triageSchedule.minutes === 5 && orca.store.triageSchedule.cron === '*/5 * * * *' &&
+      typeof orca.store.triageSchedule.at === 'string',
+      JSON.stringify(orca.store.triageSchedule))
+    // El dueno cambia el selector: en segundos, no en la proxima vuelta de la salud.
+    orca.store.syncMinutes = '2'
+    ok('cambiar el selector pone el triage a ese ritmo en segundos',
+      await hasta(() => llamadasOrca().includes('automations edit auto-triage-2 --trigger */2 * * * * --json'), 15000),
+      JSON.stringify(llamadasOrca()))
+    ok('y el panel recibe el ritmo nuevo',
+      await hasta(() => orca.store.triageSchedule?.minutes === 2, 15000) &&
+      orca.store.triageSchedule.ok === true && orca.store.triageSchedule.cron === '*/2 * * * *',
+      JSON.stringify(orca.store.triageSchedule))
+    ok('y ninguna otra automatizacion cambia de ritmo',
+      llamadasOrca().filter((l) => l.includes('--trigger')).length === 1, JSON.stringify(llamadasOrca()))
     apagar()
   } finally {
     delete process.env.ORCA_CLI_COMMAND

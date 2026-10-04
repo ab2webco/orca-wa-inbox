@@ -21,7 +21,9 @@ import { dirname, join } from 'node:path'
 import { HARNESS_KEY } from './harness.mjs'
 import { llaveValida } from './jev-espejo.mjs'
 import { crearAccionesCaso } from './acciones.mjs'
-import { CUENTAS_ACCION, crearEncendedor, crearLanzadorTriage, crearListaCuentas } from './agente.mjs'
+import {
+  CUENTAS_ACCION, crearAjustadorRitmo, crearEncendedor, crearLanzadorTriage, crearListaCuentas
+} from './agente.mjs'
 import { crearCatalogo, leerCatalogo, PROJECTS_KEY } from './catalogo.mjs'
 
 // Las herramientas viajan dentro del plugin. Antes se buscaban en el PATH del usuario,
@@ -84,6 +86,8 @@ const JEV_STATUS_KEY = 'jevStatus'
 // El interruptor. Apagado de fabrica: encenderlo es lo que manda el texto de los clientes
 // a api.typesafe.ai, y lo decide el dueno con el aviso a la vista.
 const JEV_ENABLED_KEY = 'jevEnabled'
+// A que ritmo corre de verdad la automatizacion `triage` en Orca: { minutes, cron, ok, code, at }.
+const TRIAGE_SCHEDULE_KEY = 'triageSchedule'
 const JEV_SECRET_NAME = 'jevKey'
 const JEV_ACCION = Object.freeze({
   GUARDAR: 'guardar-llave', QUITAR: 'quitar-llave', ACTIVAR: 'activar'
@@ -1457,6 +1461,8 @@ export default function activate(orca) {
     if (detenido) return
     const ms = await intervaloSync(orca).catch(() => SYNC_MS)
     if (detenido) return
+    // Un cambio del selector reprograma mientras una lectura sigue en curso: una sola cadena.
+    if (syncTimer) clearTimeout(syncTimer)
     syncTimer = setTimeout(() => {
       sincronizar('timer')
         .catch((error) => orca.log(`sync failed: ${error.message}`))
@@ -1733,8 +1739,49 @@ export default function activate(orca) {
     }
   }).catch((error) => orca.log(`automations failed: ${error.message}`))
   // Despues de resolver la casa de Orca: sin ella la CLI le preguntaria a otro runtime.
-  casaResuelta.then(encenderAutomatizaciones)
-  const pararAutomatizaciones = programarSalud(encenderAutomatizaciones)
+  // El ritmo de la atencion (ritmo-triage): el selector del panel (`syncMinutes`) fija
+  // tambien el cron de la automatizacion `triage`. Orca la recrea con el cron del
+  // manifiesto en cada aprobacion, asi que se vuelve a poner al arrancar y en cada vuelta
+  // de la salud; un cambio en el panel vale en segundos. El panel lee `triageSchedule`.
+  const ajustarRitmo = crearAjustadorRitmo({ correr: correrOrca, manifiesto })
+  let ritmoEnVuelo = false
+  let ritmoPedido = null
+  let ritmoDicho = ''
+  async function ajustarTriage () {
+    if (detenido || ritmoEnVuelo) return
+    ritmoEnVuelo = true
+    try {
+      const minutos = Math.round((await intervaloSync(orca).catch(() => SYNC_MS)) / 60000)
+      ritmoPedido = minutos
+      const r = await ajustarRitmo(minutos)
+      if (detenido) return
+      const dicho = JSON.stringify([r.minutes, r.cron, r.ok, r.ok ? 'ok' : r.code])
+      if (r.code === 'ajustado' || !r.ok) {
+        orca.log(`automations: triage ${r.code}; ${r.cron ?? 'no cron'}`)
+      }
+      if (dicho === ritmoDicho) return
+      ritmoDicho = dicho
+      await guardar(orca, TRIAGE_SCHEDULE_KEY, {
+        minutes: r.minutes, cron: r.cron, ok: r.ok, code: r.code, at: new Date().toISOString()
+      })
+    } finally {
+      ritmoEnVuelo = false
+    }
+  }
+  const automatizacionesAlDia = () => Promise.resolve(encenderAutomatizaciones())
+    .then(() => ajustarTriage())
+    .catch((error) => orca.log(`automations pace failed: ${error.message}`))
+  // Un cambio del selector: se mira con los pedidos del panel, y tambien se reprograma la
+  // lectura de WhatsApp para que no espere el intervalo viejo.
+  async function vigilarRitmo () {
+    if (detenido || ritmoPedido === null || ritmoEnVuelo) return
+    const minutos = Math.round((await intervaloSync(orca).catch(() => SYNC_MS)) / 60000)
+    if (minutos === ritmoPedido) return
+    programarSync().catch((error) => orca.log(`sync scheduling failed: ${error.message}`))
+    await ajustarTriage()
+  }
+  casaResuelta.then(automatizacionesAlDia)
+  const pararAutomatizaciones = programarSalud(automatizacionesAlDia)
 
   const atenderPedidoScope = crearVigia({
     nombre: 'scope',
@@ -1828,6 +1875,7 @@ export default function activate(orca) {
       .catch((error) => orca.log(`scope request failed: ${error.message}`))
     atenderPedidoJev()
       .catch((error) => orca.log(`jev request failed: ${error.message}`))
+    vigilarRitmo().catch((error) => orca.log(`automations pace failed: ${error.message}`))
   }, PETICION_MS)
   if (typeof pedidoTimer.unref === 'function') pedidoTimer.unref()
 
