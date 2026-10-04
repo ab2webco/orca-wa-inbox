@@ -62,7 +62,18 @@ asking the customer to check. The fixed acknowledgement stays the default.
       first. The mode is re-read at send time (scripts/check-casos "el acuse y su respaldo").
       RED 7 failures (acuse sent in model and at once in fallback); GREEN 18/18, acuse
       section 24/24 unchanged.
-- [ ] P3 `caso avance`: guards, review, unique ids, pacing, max, events, no stage change.
+- [x] P3 `caso avance`: guards, review, unique ids, pacing, max, events, no stage change.
+      Send path: immediately, like `caso resultado` (`envia_resultado`): under the tick's lock,
+      `wa-send --send --id=caso-<id>-avance-<n>`; if the lock is taken or the line is down
+      the row stays `pendiente` in `caso_avance` and the next tick sends it with the same id.
+      A hold by the floor or Jev cancels the draft (`wa-send --cancel`), leaves a case event
+      with the codes and never reaches the owner. `n` is never reused (held ones keep theirs);
+      held updates do not count toward `updates_max`. In `model_with_ack_fallback` a fallback
+      acknowledgement that went out takes the first-message slot, so a later update is paced
+      from it. Refusals exit 2 with E_FIRST_REPLY_MODE, E_CHAT_MODE, E_STAGE, E_EXCEPTION,
+      E_PACING, E_MAX_UPDATES. `--actor` is optional (agente | trabajador, default agente).
+      RED: `invalid choice: 'avance'`; GREEN 24/24 (scripts/check-casos "caso avance"), tick
+      87/87 and acknowledgement 24/24 unchanged.
 - [ ] P4 Instructions: skill, COMMANDS, triage prompt, dispatch brief.
 - [ ] P5 Panel: mode buttons, Beta badges, warning, numbers, per-chat override, ES/EN/PT,
       screenshots looked at.

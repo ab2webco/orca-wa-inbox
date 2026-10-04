@@ -368,6 +368,24 @@ create table if not exists respuesta_auto (
   at      text not null,
   primary key (case_id, tipo)
 );
+-- El primer mensaje y los avances que el agente le escribe al cliente mientras trabaja
+-- (Beta, odd/tasks/primer-mensaje-beta.md). Una fila por avance: `n` es su numero en el caso
+-- y `req_id` (`caso-<id>-avance-<n>`) su id de wa-send, que nunca se reusa — uno retenido
+-- tambien ocupa su numero. pendiente (lo manda el tick si no salio en el acto) | enviado |
+-- retenido (la revision lo freno: se descarta, nunca va al dueno) | omitido (el chat o el
+-- caso ya no lo admiten cuando le toco salir).
+create table if not exists caso_avance (
+  case_id    integer not null,
+  n          integer not null,
+  req_id     text not null unique,
+  texto      text not null,
+  actor      text not null,
+  estado     text not null default 'pendiente',
+  motivo     text,
+  at         text not null,
+  enviado_at text,
+  primary key (case_id, n)
+);
 -- La transcripcion de una nota de voz, calculada UNA vez por mensaje: lo que juzga Jev, lo
 -- que mira el piso fijo y lo que lee el agente en el hilo salen de aca. Guarda tambien el
 -- fallo (`ok` 0 y el codigo en `razon`): un audio que no se pudo transcribir se dice, no
@@ -3179,6 +3197,200 @@ def envia_resultado(con, case_id):
         candado.close()
 
 
+# ── El primer mensaje y los avances del agente (Beta) ────────────────────────────────────
+# `caso avance <id> "<texto>"`: el agente (el de casos o el del proyecto) le escribe al
+# cliente sin mover el caso, solo en un chat `responder` cuyo primer mensaje es del agente.
+# Sale en el acto, como el resultado (`envia_resultado`): con el candado del tick, por
+# `wa-send --send` con su propio id, y con la misma revision que una respuesta (el piso fijo
+# y Jev, en `wa-send`). Lo que la revision frena se descarta: el borrador se retira, queda un
+# evento y el dueno no recibe nada — un avance es opcional. Si no puede salir ya (otro tick
+# en curso, la linea caida) queda pendiente y lo manda el tick. El primero no espera; los
+# demas, `update_every_minutes` desde el anterior, y `updates_max` por caso con el primero.
+# Con respaldo, un acuse fijo que ya salio ocupa el lugar del primero.
+ETAPAS_AVANCE = ("recibido", "clasificado", "decision", "trabajo")
+ESTADOS_AVANCE_CUENTAN = ("pendiente", "enviado")
+
+
+def avance_frena(con, caso):
+    """El codigo de error por el que el caso no admite un avance ahora, con su detalle, o
+    None. Se mira al pedirlo y otra vez al mandarlo: entre los dos el dueno pudo cambiar el
+    chat o el caso pudo moverse."""
+    cid = caso["case_id"]
+    fila = merged_scope(con).get(caso["chat_jid"]) or {}
+    modo = primer_modo(fila, merged_settings(con))[0]
+    if modo not in MODOS_AGENTE_PRIMERO:
+        return ("E_FIRST_REPLY_MODE", f"case #{cid}: its chat is on first_reply_mode {modo}: the "
+                                      f"fixed acknowledgement is the first message there, and the "
+                                      f"agent does not send updates")
+    if fila.get("mode") != "responder":
+        return ("E_CHAT_MODE", f"case #{cid}: its chat is on {fila.get('mode') or 'off'}: updates "
+                               f"only go out in a responder chat")
+    if caso["etapa"] not in ETAPAS_AVANCE:
+        return ("E_STAGE", f"case #{cid} is in {caso['etapa']}: updates only go out while the case "
+                           f"is in {', '.join(ETAPAS_AVANCE)}")
+    excepciones = _lista_json(caso.get("excepciones"))
+    try:
+        resumen = json.loads(caso.get("jev") or "{}")
+    except (TypeError, ValueError):
+        resumen = {}
+    riesgo = [f for f in (resumen.get("flags") if isinstance(resumen, dict) else None) or []
+              if f not in BANDERAS_SIN_RIESGO]
+    if excepciones or riesgo:
+        return ("E_EXCEPTION", f"case #{cid} waits for the owner ({', '.join(excepciones + riesgo)}): "
+                               f"no updates go to the customer")
+    return None
+
+
+def avance_sello_acuse(con, cid):
+    """Cuando ocupo el acuse fijo el lugar del primer mensaje, o None si no lo ocupo."""
+    fila = con.execute("select estado, req_id from respuesta_auto where case_id=? and "
+                       "tipo='acuse'", (cid,)).fetchone()
+    if not fila or fila["estado"] not in ("enviando", "enviado"):
+        return None
+    evento = con.execute("select at from caso_evento where case_id=? and detalle=? "
+                         "order by id desc limit 1",
+                         (cid, f"acuse enviado {fila['req_id']}")).fetchone()
+    return evento["at"] if evento else ahora_caso()
+
+
+def avance_cupo(con, cid, ajustes):
+    """(usados, sello del ultimo): los mensajes que ya ocupan lugar en el caso —los avances
+    que salieron o van a salir, y el acuse de respaldo que salio— y cuando salio el ultimo."""
+    filas = con.execute("select coalesce(enviado_at, at) as sello from caso_avance where "
+                        "case_id=? and estado in ('pendiente', 'enviado')", (cid,)).fetchall()
+    sellos = [f["sello"] for f in filas]
+    acuse = avance_sello_acuse(con, cid)
+    if acuse:
+        sellos.append(acuse)
+    return len(sellos), (max(sellos) if sellos else None)
+
+
+def avance_marca(con, cid, n, estado, motivo, detalle):
+    """El desenlace de un avance, con su evento, en su propia transaccion. No mueve el caso."""
+    caso_toma(con)
+    try:
+        caso = caso_de(con, cid)
+        con.execute("update caso_avance set estado=?, motivo=?, enviado_at=? where case_id=? "
+                    "and n=?", (estado, motivo, ahora_caso() if estado == "enviado" else None,
+                                cid, n))
+        caso_tocar(con, caso, "automatizacion", detalle)
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+
+
+def avance_retira(req):
+    """Retira el borrador que `wa-send` dejo al frenar un avance: no espera al dueno."""
+    try:
+        subprocess.run([WA_SEND, "--cancel", req, "--reason", "avance retenido", "--json"],
+                       capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def avance_manda(con, fila):
+    """Manda un avance pendiente; el que llama tiene el candado del tick. Devuelve su envio:
+    {estado: enviado | retenido | omitido | pendiente, motivo, req_id}."""
+    cid, n, req = fila["case_id"], fila["n"], fila["req_id"]
+    caso = caso_de(con, cid)
+    frena = avance_frena(con, caso)
+    if frena:
+        avance_marca(con, cid, n, "omitido", frena[0], f"avance {n} omitido: {frena[0]}")
+        return {"estado": "omitido", "motivo": frena[0], "req_id": req}
+    estados, vivo = envios_del_almacen([req])
+    if estados.get(req) == "enviado":
+        avance_marca(con, cid, n, "enviado", None, f"avance {n} enviado {req}")
+        return {"estado": "enviado", "req_id": req}
+    if not vivo:
+        return {"estado": "pendiente", "motivo": ENVIO_SIN_LINEA, "req_id": req}
+    codigo, detalle = tick_envia(caso, fila["texto"], req)
+    if codigo is None:
+        avance_marca(con, cid, n, "enviado", None, f"avance {n} enviado {req}")
+        return {"estado": "enviado", "req_id": req}
+    if codigo == ENVIO_FRENADO:
+        # La revision lo freno: se descarta. Solo los codigos, nunca el texto.
+        avance_retira(req)
+        motivos = "; ".join(f"{q}: {c}" for q, c in motivos_del_freno(detalle)) or codigo
+        avance_marca(con, cid, n, "retenido", motivos[:LARGO_MOTIVO],
+                     f"avance {n} retenido, no enviado: {motivos}"[:LARGO_MOTIVO])
+        return {"estado": "retenido", "motivo": motivos, "req_id": req}
+    if codigo in ENVIO_BLOQUEA or codigo == "send-denied":
+        avance_marca(con, cid, n, "omitido", codigo, f"avance {n} omitido: {codigo}")
+        return {"estado": "omitido", "motivo": codigo, "req_id": req}
+    # La linea caida, sin firma, sin veredicto a tiempo: el tick pregunta con el mismo id.
+    return {"estado": "pendiente", "motivo": codigo, "req_id": req}
+
+
+def avance_intenta(con, fila):
+    """El envio en el acto, si el tick no esta corriendo; si no, queda para el tick."""
+    candado = tick_toma()
+    if candado is None:
+        return {"estado": "pendiente", "motivo": "tick-busy", "req_id": fila["req_id"]}
+    try:
+        return avance_manda(con, fila)
+    finally:
+        candado.close()
+
+
+def cmd_caso_avance(con, a):
+    caso_toma(con)
+    caso = caso_de(con, a.id)
+    cid = caso["case_id"]
+    texto = texto_caso((a.texto or "").strip())
+    if not texto:
+        caso_falla("E_ARGS", "an update needs its text: what the customer reads")
+    ya = con.execute("select * from caso_avance where case_id=? and texto=? order by n desc "
+                     "limit 1", (cid, texto)).fetchone()
+    if ya:
+        # El mismo texto otra vez (el agente reintenta): no es otro avance.
+        con.rollback()
+        ya = dict(ya)
+        envio = ({"estado": ya["estado"], "motivo": ya["motivo"], "req_id": ya["req_id"]}
+                 if ya["estado"] != "pendiente" else avance_intenta(con, ya))
+        return [dict(caso_fila(con, caso_de(con, cid)), avance=dict(envio, n=ya["n"]))]
+    frena = avance_frena(con, caso)
+    if frena:
+        caso_falla(*frena)
+    ajustes = merged_settings(con)
+    tope = primer_numero(ajustes, "updates_max")
+    usados, ultimo = avance_cupo(con, cid, ajustes)
+    if usados >= tope:
+        caso_falla("E_MAX_UPDATES", f"case #{cid} already has {usados} of its {tope} messages "
+                                    f"before the result (updates_max): report the result instead")
+    ritmo = primer_numero(ajustes, "update_every_minutes") * 60
+    if ultimo and edad_de(ultimo) < ritmo:
+        falta = int(ritmo - edad_de(ultimo)) + 1
+        caso_falla("E_PACING", f"case #{cid}: the last message went out less than "
+                               f"{ritmo // 60} minutes ago (update_every_minutes); the next update "
+                               f"can go in {falta} s, only if there is real news")
+    n = con.execute("select coalesce(max(n), 0) + 1 from caso_avance where case_id=?",
+                    (cid,)).fetchone()[0]
+    fila = {"case_id": cid, "n": n, "req_id": f"caso-{cid}-avance-{n}", "texto": texto,
+            "actor": a.actor}
+    con.execute("insert into caso_avance (case_id, n, req_id, texto, actor, at) values "
+                "(?,?,?,?,?,?)", (cid, n, fila["req_id"], texto, a.actor, ahora_caso()))
+    caso_tocar(con, caso, a.actor, f"avance {n} {fila['req_id']}")
+    con.commit()
+    envio = avance_intenta(con, fila)
+    return [dict(caso_fila(con, caso_de(con, cid)), avance=dict(envio, n=n))]
+
+
+def tick_avances(con, resumen):
+    """Los avances que no pudieron salir en el acto: el tick los manda con su mismo id."""
+    filas = [dict(r) for r in con.execute(
+        "select av.* from caso_avance av join caso c on c.case_id=av.case_id where "
+        "av.estado='pendiente' and c.account=? order by av.at, av.case_id, av.n",
+        (cuenta_activa(),))]
+    for fila in filas:
+        envio = avance_manda(con, fila)
+        if envio["estado"] == "enviado":
+            resumen["automaticas"] += 1
+        elif envio.get("motivo") == ENVIO_SIN_LINEA:
+            resumen["sin_transporte"] = True
+            return
+
+
 def cmd_caso_unir(con, a):
     """Junta dos casos que son el mismo pedido: los mensajes (y el trabajo que colgaba)
     del origen pasan al destino, y el origen se cierra diciendo a donde fue. Los dos
@@ -3687,6 +3899,9 @@ def caso_ya_escribio(con, caso, estados):
     """Si del caso ya salio, o esta en la bandeja para salir, un mensaje del agente: un
     avance, su respuesta, o el caso ya estuvo respondido."""
     cid = caso["case_id"]
+    if con.execute("select 1 from caso_avance where case_id=? and estado in "
+                   "('pendiente', 'enviado') limit 1", (cid,)).fetchone():
+        return True
     if con.execute("select 1 from caso_evento where case_id=? and a='respondido' limit 1",
                    (cid,)).fetchone():
         return True
@@ -6195,6 +6410,12 @@ def cmd_tick(con, a):
             if con.in_transaction:
                 con.rollback()
             print(f"wa-scope: automatic replies skipped: {exc}", file=sys.stderr)
+        try:
+            tick_avances(con, resumen)
+        except (sqlite3.Error, CasoFalla) as exc:
+            if con.in_transaction:
+                con.rollback()
+            print(f"wa-scope: agent updates skipped: {exc}", file=sys.stderr)
         candidatos = candidatos_tick(con)
         estados, vivo = envios_del_almacen(
             [id_envio_caso(c["case_id"], c["propuesta_version"]) for c, _ in candidatos])
@@ -8721,6 +8942,22 @@ def main():
     # de un trabajo que no hizo.
     c.add_argument("--actor", required=True, choices=["trabajador"])
     c.set_defaults(fn=cmd_caso_resultado)
+
+    c = caso("avance", help="Beta: the agent's first message or a progress update to the "
+                            "customer, without moving the case. Only when the chat's "
+                            "first_reply_mode is model or model_with_ack_fallback and the chat "
+                            "is responder. Sent at once through the same review as a reply (the "
+                            "fixed floor and Jev); a held update is dropped with a case event and "
+                            "never goes to the owner. Each has its own id (caso-<id>-avance-<n>); "
+                            "the first is not paced, the next wait update_every_minutes, at most "
+                            "updates_max per case. The same text twice sends once. Refusals: "
+                            "E_FIRST_REPLY_MODE, E_CHAT_MODE, E_STAGE, E_EXCEPTION, E_PACING, "
+                            "E_MAX_UPDATES")
+    c.add_argument("id", type=int)
+    c.add_argument("texto", help="what the customer reads; signed like every message")
+    c.add_argument("--actor", default="agente", choices=["agente", "trabajador"],
+                   help="agente (the cases agent) or trabajador (the project agent)")
+    c.set_defaults(fn=cmd_caso_avance)
 
     c = muta("unir", help="joins two cases of the same chat: the origin's messages go to "
                           "the destination and the origin is closed")
