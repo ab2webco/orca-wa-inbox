@@ -3154,7 +3154,8 @@ console.log('\nworker: el catalogo de proyectos se refresca, se acepta y llega a
   const origen = (pluginKey, automationId) => ({ pluginKey, automationId })
   const LISTA = { ok: true, result: { automations: [
     { id: 'auto-tick-2', enabled: false, pluginOrigin: origen('ab2web.orca-wa-inbox', 'tick') },
-    { id: 'auto-triage-2', enabled: true, pluginOrigin: origen('ab2web.orca-wa-inbox', 'triage') },
+    { id: 'auto-triage-2', enabled: true, rrule: '*/5 * * * *',
+      pluginOrigin: origen('ab2web.orca-wa-inbox', 'triage') },
     { id: 'auto-otro', enabled: false, pluginOrigin: origen('otro.plugin', 'triage') },
     { id: 'auto-dueno', enabled: false, name: 'WhatsApp: triage' },
     { id: 'auto-vieja', enabled: false, pluginOrigin: origen('ab2web.orca-wa-inbox', 'take') },
@@ -3223,6 +3224,63 @@ console.log('\nworker: el catalogo de proyectos se refresca, se acepta y llega a
       JSON.stringify([llamadas, r]))
   }
 
+  // El ritmo de la atencion (ritmo-triage): el selector del panel tambien fija el cron de
+  // la automatizacion `triage` del plugin. Se reconoce por el manifiesto, nunca por un id.
+  const { crearAjustadorRitmo, cronDeMinutos } = await import('../agente.mjs')
+  ok('cada N minutos es */N, y una hora es al minuto cero',
+    cronDeMinutos(2) === '*/2 * * * *' && cronDeMinutos(5) === '*/5 * * * *' &&
+    cronDeMinutos(30) === '*/30 * * * *' && cronDeMinutos(60) === '0 * * * *',
+    JSON.stringify([2, 5, 30, 60].map(cronDeMinutos)))
+  ok('fuera de 1 a 60 minutos no hay cron', cronDeMinutos(0) === null &&
+    cronDeMinutos(61) === null && cronDeMinutos(Number.NaN) === null && cronDeMinutos(1.5) === null)
+  const conRitmo = (rrule) => ({ ok: true, result: { automations: [
+    { id: 'auto-tick-2', enabled: true, rrule: '* * * * *',
+      pluginOrigin: origen('ab2web.orca-wa-inbox', 'tick') },
+    { id: 'auto-triage-2', enabled: true, rrule, pluginOrigin: origen('ab2web.orca-wa-inbox', 'triage') },
+    { id: 'auto-otro', enabled: true, rrule: '*/5 * * * *', pluginOrigin: origen('otro.plugin', 'triage') },
+    { id: 'auto-dueno', enabled: true, rrule: '*/5 * * * *', name: 'WhatsApp: triage' }] } })
+  {
+    const { correr, llamadas } = correrFalso({ 'automations list': conRitmo('*/5 * * * *') })
+    const r = await crearAjustadorRitmo({ correr, manifiesto, plataforma: 'darwin', env: {} })(2)
+    ok('el triage del plugin pasa al cron del selector con `automations edit --trigger`, y nada mas',
+      JSON.stringify(llamadas) === JSON.stringify(['orca automations list --json',
+        'orca automations edit auto-triage-2 --trigger */2 * * * * --json']) &&
+      r.ok === true && r.code === 'ajustado' && r.cron === '*/2 * * * *' && r.minutes === 2,
+      JSON.stringify([llamadas, r]))
+  }
+  {
+    const { correr, llamadas } = correrFalso({ 'automations list': conRitmo('*/2 * * * *') })
+    const r = await crearAjustadorRitmo({ correr, manifiesto, plataforma: 'darwin', env: {} })(2)
+    ok('si ya corre a ese ritmo solo pregunta', llamadas.length === 1 && r.ok === true &&
+      r.code === 'al-dia' && r.cron === '*/2 * * * *', JSON.stringify([llamadas, r]))
+  }
+  {
+    const { correr, llamadas } = correrFalso({ 'automations list': {
+      ok: true, result: { automations: [conRitmo('*/5 * * * *').result.automations[0]] } } })
+    const r = await crearAjustadorRitmo({ correr, manifiesto, plataforma: 'darwin', env: {} })(2)
+    ok('sin la automatizacion del triage no toca nada y lo dice',
+      llamadas.length === 1 && r.ok === false && r.code === 'sin-triage', JSON.stringify([llamadas, r]))
+  }
+  {
+    const { correr, llamadas } = correrFalso({ 'automations list': Object.assign(new Error('x'), { exitCode: 1 }) })
+    const r = await crearAjustadorRitmo({ correr, manifiesto, plataforma: 'darwin', env: {} })(2)
+    ok('si Orca no da la lista no cambia nada', llamadas.length === 1 && r.ok === false &&
+      r.code === 'automatizaciones-fallo', JSON.stringify([llamadas, r]))
+  }
+  {
+    const { correr } = correrFalso({ 'automations list': conRitmo('*/5 * * * *'),
+      'automations edit': { ok: false, error: { code: 'invalid' } } })
+    const r = await crearAjustadorRitmo({ correr, manifiesto, plataforma: 'darwin', env: {} })(2)
+    ok('si Orca contesta que no, se dice', r.ok === false && r.code === 'ajustar-fallo' &&
+      r.cron === '*/2 * * * *', JSON.stringify(r))
+  }
+  {
+    const { correr, llamadas } = correrFalso({ 'automations list': conRitmo('*/5 * * * *') })
+    const r = await crearAjustadorRitmo({ correr, manifiesto, plataforma: 'darwin', env: {} })(0)
+    ok('un ritmo fuera de rango no llama a Orca', llamadas.length === 0 && r.ok === false &&
+      r.code === 'ritmo-invalido', JSON.stringify([llamadas, r]))
+  }
+
   // Y el worker lo hace solo al arrancar, por la CLI de Orca sin la valla.
   const { comandoOrca } = await import('../catalogo.mjs')
   const bin = join(RAIZ, 'orca-automatizaciones')
@@ -3247,6 +3305,24 @@ console.log('\nworker: el catalogo de proyectos se refresca, se acepta y llega a
       JSON.stringify(llamadasOrca()))
     ok('y ninguna otra', llamadasOrca().filter((l) => l.startsWith('automations edit')).length === 1,
       JSON.stringify(llamadasOrca()))
+    // Sin `syncMinutes` el ritmo es el de fabrica (5 min), el mismo del manifiesto: el
+    // triage no se toca y el panel recibe a que ritmo corre.
+    ok('al arrancar deja dicho a que ritmo corre el triage',
+      await hasta(() => orca.store.workerBeat?.triage?.ok === true, 15000) &&
+      orca.store.workerBeat?.triage.minutes === 5 && orca.store.workerBeat?.triage.cron === '*/5 * * * *' &&
+      typeof orca.store.workerBeat?.at === 'string',
+      JSON.stringify(orca.store.workerBeat?.triage))
+    // El dueno cambia el selector: en segundos, no en la proxima vuelta de la salud.
+    orca.store.syncMinutes = '2'
+    ok('cambiar el selector pone el triage a ese ritmo en segundos',
+      await hasta(() => llamadasOrca().includes('automations edit auto-triage-2 --trigger */2 * * * * --json'), 15000),
+      JSON.stringify(llamadasOrca()))
+    ok('y el panel recibe el ritmo nuevo',
+      await hasta(() => orca.store.workerBeat?.triage?.minutes === 2, 15000) &&
+      orca.store.workerBeat?.triage.ok === true && orca.store.workerBeat?.triage.cron === '*/2 * * * *',
+      JSON.stringify(orca.store.workerBeat?.triage))
+    ok('y ninguna otra automatizacion cambia de ritmo',
+      llamadasOrca().filter((l) => l.includes('--trigger')).length === 1, JSON.stringify(llamadasOrca()))
     apagar()
   } finally {
     delete process.env.ORCA_CLI_COMMAND

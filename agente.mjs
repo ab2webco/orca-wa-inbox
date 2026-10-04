@@ -164,6 +164,60 @@ export function apagadasDelPlugin (payload, propias) {
   return listaDe(payload).filter((a) => delPlugin(a, propias) && a.enabled === false).map((a) => a.id)
 }
 
+// La automatizacion del manifiesto que sigue el ritmo del selector del panel
+// (`syncMinutes`): la que lanza el agente cuando un caso lo necesita.
+export const AUTOMATIZACION_CON_RITMO = 'triage'
+
+/** El cron de "cada N minutos", o null fuera de 1 a 60 minutos enteros. */
+export function cronDeMinutos (minutos) {
+  if (!Number.isInteger(minutos) || minutos < 1 || minutos > 60) return null
+  return minutos === 60 ? '0 * * * *' : `*/${minutos} * * * *`
+}
+
+/**
+ * Pone la automatizacion `triage` del plugin al ritmo del selector. Solo la del plugin,
+ * reconocida por el manifiesto; nada si ya corre a ese ritmo.
+ * @param {{ correr: (cmd: string, args: readonly string[], opts?: { timeoutMs: number }) =>
+ *             Promise<{ stdout: string }>, manifiesto: unknown, plataforma?: string,
+ *           env?: Record<string, string | undefined> }} deps
+ * @returns {(minutos: number) => Promise<{ ok: boolean, code: string, minutes: number,
+ *            cron: string | null, id: string | null }>}
+ */
+export function crearAjustadorRitmo ({ correr, manifiesto, plataforma = process.platform, env = process.env }) {
+  const propias = automatizacionesDelManifiesto(manifiesto)
+  const triage = { pluginKey: propias.pluginKey, ids: propias.ids.filter((id) => id === AUTOMATIZACION_CON_RITMO) }
+  return async function ajustar (minutos) {
+    const cron = cronDeMinutos(minutos)
+    const fuera = (code, id = null) => ({ ok: false, code, minutes: minutos, cron, id })
+    if (!cron) return fuera('ritmo-invalido')
+    const cmd = comandoOrca(plataforma, env)
+    let sobre = null
+    try {
+      const salida = await correr(cmd, ['automations', 'list', '--json'], { timeoutMs: 15000 })
+      sobre = JSON.parse(String(salida?.stdout ?? '') || 'null')
+    } catch {
+      sobre = null
+    }
+    if (!esRegistro(sobre) || sobre.ok === false || !esRegistro(sobre.result)) {
+      return fuera('automatizaciones-fallo')
+    }
+    const a = triage.pluginKey ? listaDe(sobre).find((x) => delPlugin(x, triage)) : undefined
+    if (!a) return fuera('sin-triage')
+    if (a.rrule === cron) return { ok: true, code: 'al-dia', minutes: minutos, cron, id: a.id }
+    let respuesta = null
+    try {
+      const salida = await correr(cmd, ['automations', 'edit', a.id, '--trigger', cron, '--json'],
+        { timeoutMs: 15000 })
+      try { respuesta = JSON.parse(String(salida?.stdout ?? '') || 'null') } catch { /* sin sobre */ }
+    } catch {
+      return fuera('ajustar-fallo', a.id)
+    }
+    // Orca puede contestar `ok: false` con salida 0: eso no lo cambio.
+    if (esRegistro(respuesta) && respuesta.ok === false) return fuera('ajustar-fallo', a.id)
+    return { ok: true, code: 'ajustado', minutes: minutos, cron, id: a.id }
+  }
+}
+
 /**
  * @param {{ correr: (cmd: string, args: readonly string[], opts?: { timeoutMs: number }) =>
  *             Promise<{ stdout: string }>, manifiesto: unknown, plataforma?: string,
