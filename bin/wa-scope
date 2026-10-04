@@ -5117,9 +5117,12 @@ def tick_limpia(con, resumen):
 
 # Los titulos de las terminales de los agentes del plugin: el que les pone el plugin al
 # abrirlas, o el que Claude les pone por el brief (`despachos/caso-<caso>-<fila>.md`,
-# `despachos/agente-casos-<fila>.md`). Delante va el icono de estado de Claude.
+# `despachos/agente-casos-<fila>.md`). Delante va el icono de estado de Claude. Claude a
+# veces deja solo el nombre del brief ("caso-20-10"): ese cuenta solo si es todo el titulo,
+# para no tomar una terminal del dueno que nombra un caso.
 TITULO_DE_AGENTE = re.compile(
     r"(?:Despacho caso-(?P<caso>\d+)-(?P<despacho>\d+)|Despacho agente-casos-(?P<corrida>\d+)"
+    r"|^\W*caso-(?P<caso_solo>\d+)-(?P<despacho_solo>\d+)|^\W*agente-casos-(?P<corrida_sola>\d+)"
     r"|WhatsApp case #(?P<del_caso>\d+)|(?P<agente>WhatsApp: case agent))\s*$")
 
 
@@ -5143,11 +5146,12 @@ def cierra_huerfanas(con, cli, resumen):
         handle, m = t.get("handle"), TITULO_DE_AGENTE.search(str(t.get("title") or ""))
         if not m or not isinstance(handle, str) or not handle or handle in en_curso:
             continue
-        if m["despacho"] and any(d["id"] == int(m["despacho"]) for d in despachos):
+        despacho = m["despacho"] or m["despacho_solo"]
+        if despacho and any(d["id"] == int(despacho) for d in despachos):
             continue
         if m["del_caso"] and any(d["case_id"] == int(m["del_caso"]) for d in despachos):
             continue
-        if (m["corrida"] or m["agente"]) and corridas:
+        if (m["corrida"] or m["corrida_sola"] or m["agente"]) and corridas:
             continue
         cierra_terminal(cli, handle)
         resumen["limpiados"] += 1
