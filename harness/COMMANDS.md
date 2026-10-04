@@ -41,6 +41,18 @@ so in one line.
 A different proposal on a case in `listo` (the result of a job) sends the case back to
 `decision`: the owner approves the new version, never the old one.
 
+Beta, only where the chat's `first_reply_mode` (in `voice`, and `primer_mensaje` in
+`caso ver`) is `model` or `model_with_ack_fallback` and the chat is `responder`: the first
+message and the progress updates are yours, and the plugin sends them at once through the
+same review as a reply. In `ack` the plugin sends the fixed acknowledgement; never write it.
+
+    "$WA/wa-scope" caso avance <id> "<text>" --actor agente   # --actor trabajador from a project
+
+It never moves the case, the same text twice sends once, and a held update is dropped (the
+owner never sees it). It answers exit 2 with `E_FIRST_REPLY_MODE`, `E_CHAT_MODE`,
+`E_STAGE`, `E_EXCEPTION`, `E_PACING` (the last message was less than
+`update_every_minutes` ago) or `E_MAX_UPDATES` (`updates_max` reached): then do not send it.
+
 To wait for an answer, `"$WA/wa-read" wait "<chat_jid>" --after <stanza_id> --timeout <S>
 --json` blocks until the other side writes in that chat, and prints what arrived (each
 message with its `stanza_id`, for the next `--after`). A case run never needs it: a new

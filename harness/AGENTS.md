@@ -24,7 +24,8 @@ costs more than one too few. When in doubt, do not act, and say so.
 The plugin's code, with no model, takes in each message, groups a request into a **case**,
 transcribes voice notes, asks Jev (the classifier and security brake), applies the fixed
 floor (money, credentials, commitments), acknowledges a new request and greets a greeting
-in `responder` chats, and sends what is approved. You only wake for a case that needs
+in `responder` chats (except where the chat's `first_reply_mode` is a Beta mode: then the
+first message is yours, with `caso avance`, as the skill says), and sends what is approved. You only wake for a case that needs
 language. A case goes `recibido` → `clasificado` → `decision` (a proposal waits for the
 owner) → `trabajo` → `listo` → `respondido`, or `cerrado` / `bloqueado`.
 

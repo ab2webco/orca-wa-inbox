@@ -74,12 +74,30 @@ asking the customer to check. The fixed acknowledgement stays the default.
       E_PACING, E_MAX_UPDATES. `--actor` is optional (agente | trabajador, default agente).
       RED: `invalid choice: 'avance'`; GREEN 24/24 (scripts/check-casos "caso avance"), tick
       87/87 and acknowledgement 24/24 unchanged.
-- [ ] P4 Instructions: skill, COMMANDS, triage prompt, dispatch brief.
+- [x] P4 Instructions: skill, COMMANDS, triage prompt, dispatch brief. The case file and the
+      brief carry `first_reply_mode` in the case head and, only in a Beta mode, a "First
+      message and updates" section with the exact `caso avance` command; in `ack` they say the
+      plugin sends the acknowledgement and never offer `caso avance`. `caso ver` returns
+      `primer_mensaje` (mode, ack, updates_sent, updates_left, next_update_in_s). Also
+      AGENTS.md and the whatsapp-cli skill. RED 0/18 (scripts/check-casos "instrucciones")
+      and check-harness missing phrases; GREEN 18/18, check-harness 56, check-prompts 15.
+  - [x] P4.1 (owner's addition, all modes) The project agent asks the customer with
+        `caso resultado --estado necesita` when a real doubt would make the work wrong or a
+        guess: one concrete question, in the chat's tone, to the person who asked, never what
+        it can find out itself; after `necesita` it waits idle in the same terminal (the
+        plugin types the answer there every minute; no polling, monitors, loops or sleeps,
+        never closing the terminal) and continues the same work; `resuelto` says concretely
+        what was done, asks the customer to try it, and claims only what was done and
+        verified. In `brief_de_despacho` and the whatsapp-soporte skill; pinned by the same
+        brief tests (RED with the rest of P4).
 - [ ] P5 Panel: mode buttons, Beta badges, warning, numbers, per-chat override, ES/EN/PT,
       screenshots looked at.
 - [ ] P6 `npm run check` green.
 - [ ] P7 Live: one chat in `model_with_ack_fallback` gets an agent-written first message,
-      an update and a personal closing; the fallback fires when the agent is late.
+      an update and a personal closing; the fallback fires when the agent is late. And one
+      `necesita` round trip: a project agent asks one question with `--estado necesita`,
+      waits idle in its terminal, receives the customer's answer there and finishes with
+      `resuelto`.
 
 ## Acceptance
 

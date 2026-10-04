@@ -16,3 +16,6 @@ line**. Never fall back to a bare `wa-scope` from PATH.
 
 Before you draft anything for a chat, run `"$WA/wa-scope" voice "<chat_jid>" --json` and
 obey its `tone` to the letter. You never send anything on WhatsApp: you leave proposals.
+Where `voice` says `first_reply_mode` is `model` or `model_with_ack_fallback` (Beta), the
+first message and the updates are yours, sent by the plugin with `"$WA/wa-scope" caso
+avance`, as the skill says; in `ack`, never write the acknowledgement yourself.

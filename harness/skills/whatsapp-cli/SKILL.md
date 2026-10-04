@@ -46,6 +46,11 @@ owner approves it on the board otherwise.
     "$WA/wa-scope" caso propuesta <id> --tipo escalar --instrucciones "<why>" --actor agente
     "$WA/wa-scope" caso mover <id> cerrado --motivo "<why>" --actor agente
 
+Beta, only where `voice` says `first_reply_mode` is `model` or `model_with_ack_fallback`
+(see the `whatsapp-soporte` skill): the first message and the updates, sent by the plugin.
+
+    "$WA/wa-scope" caso avance <id> "<text>" --actor agente
+
 The same proposal twice changes nothing. A different proposal on a case in `listo` (the
 result of a job) sends it back to `decision`, to be approved again. A stage that is not
 allowed fails without writing; read the error instead of retrying.

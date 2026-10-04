@@ -4659,6 +4659,74 @@ if NODE:
         os.environ.update(antes)
 
 
+# Lo que lee el agente: el archivo del caso (agente de casos), el brief del despacho (agente
+# del proyecto) y `caso ver`. En los modos Beta le dicen que el primer mensaje es suyo y como
+# escribirlo; en `ack`, la regla de siempre: el acuse no lo escribe el agente. Y en todos los
+# modos, el brief le dice al agente del proyecto como preguntarle al cliente y esperar.
+print("\nel primer mensaje del agente (beta): instrucciones")
+with tempfile.TemporaryDirectory() as home:
+    env_antes = dict(os.environ)
+    try:
+        js(home, "agent", "Agente De Ejemplo")
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder",
+           "--first-reply", "model")
+        js(home, "set", OPERACIONES, "--provider", "ninguno", "--mode", "responder")
+        cm = js(home, "caso", "crear", "--chat", PERSONA, "--stanza", "I1",
+                "--actor", "automatizacion")[0]["case_id"]
+        ca = js(home, "caso", "crear", "--chat", OPERACIONES, "--stanza", "I2",
+                "--actor", "automatizacion")[0]["case_id"]
+        ver = js(home, "caso", "ver", str(cm))[0]
+        pm = ver.get("primer_mensaje") or {}
+        ok("caso ver dice quien escribe el primer mensaje y cuanto queda",
+           pm.get("mode") == "model" and pm.get("beta") is True and pm.get("updates_sent") == 0
+           and pm.get("updates_left") == 3 and pm.get("next_update_in_s") == 0, f"{pm}")
+        pa = js(home, "caso", "ver", str(ca))[0].get("primer_mensaje") or {}
+        ok("y en un chat en ack lo dice tambien", pa.get("mode") == "ack"
+           and pa.get("beta") is False, f"{pa}")
+
+        wsa = carga_wa_scope(home)
+        con = wsa.db()
+        proyecto = {"name": "Alfa Demo", "path": "/tmp/alfa-demo"}
+        archivo_m = wsa.archivo_de_caso(con, wsa.caso_de(con, cm))
+        archivo_a = wsa.archivo_de_caso(con, wsa.caso_de(con, ca))
+        brief_m = wsa.brief_de_despacho(con, wsa.caso_de(con, cm), proyecto, "Corregir el reporte.")
+        brief_a = wsa.brief_de_despacho(con, wsa.caso_de(con, ca), proyecto, "Corregir el reporte.")
+        con.close()
+        plano_ = lambda t: " ".join(t.split())
+        for nombre, texto, quien in (("el archivo del caso", archivo_m, "agente"),
+                                     ("el brief del proyecto", brief_m, "trabajador")):
+            t = plano_(texto)
+            ok(f"{nombre} en model dice que el primer mensaje es del agente",
+               "first_reply_mode model (Beta)" in t, t[:600])
+            ok(f"{nombre} en model trae el comando exacto del avance",
+               f"caso avance {cm} " in t and f"--actor {quien}" in t.split(f"caso avance {cm} ")[1][:120],
+               t[-1500:])
+            ok(f"{nombre} en model pide escribir ya, sin relleno, sin repetir y sin prometer",
+               all(f in t for f in ("right away", "never filler", "Never repeat",
+                                    "never promise a time, a date or a price")), t[-1500:])
+            ok(f"{nombre} en model pide cerrar diciendo que se arreglo y pidiendo revisarlo",
+               "--estado resuelto" in t and "ask the customer to check" in t, t[-1500:])
+        for nombre, texto in (("el archivo del caso", archivo_a), ("el brief del proyecto", brief_a)):
+            t = plano_(texto)
+            ok(f"{nombre} en ack no ofrece caso avance y mantiene la regla del acuse",
+               "caso avance" not in t and "never write it yourself" in t
+               and "first_reply_mode ack" in t, t[-1200:])
+        for nombre, texto in (("model", brief_m), ("ack", brief_a)):
+            t = plano_(texto)
+            ok(f"el brief ({nombre}) pide preguntarle al cliente con necesita ante una duda real",
+               "--estado necesita" in t and "one concrete question" in t
+               and "do not ask what you can find out yourself" in t, t[-2000:])
+            ok(f"el brief ({nombre}) pide esperar en la terminal tras necesita, sin sondear",
+               all(f in t for f in ("wait idle in this same terminal", "do not poll",
+                                    "no monitors, loops or sleeps", "do not close the terminal",
+                                    "continue the same work")), t[-2000:])
+            ok(f"el brief ({nombre}) pide decir listo solo por lo hecho y verificado",
+               "only for what was actually done and verified" in t, t[-2000:])
+    finally:
+        os.environ.clear()
+        os.environ.update(env_antes)
+
+
 # ── Un mensaje nuevo invalida la propuesta que ya no responde a lo ultimo ───────────────
 # Caso vivo: una propuesta inventada ("su audio fue escuchado") quedo frenada como
 # borrador; 22 minutos despues llego un pedido nuevo al MISMO caso, que se quedo en
