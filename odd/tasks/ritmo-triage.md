@@ -33,7 +33,8 @@ can be adjusted when needed.
       light and dark. RED: no #triage-pace; GREEN 1018/1018. Shots `config-ritmo-triage` and
       `config-ritmo-triage-fallo` (32, no overflow); looked at ES dark 1440, ES light 320,
       failure ES dark 390 and EN light 768.
-- [ ] R4 `npm run check` green.
+- [x] R4 `npm run check` green: exit 0 (casos 1045, panels 1018, worker 410, almacen 270,
+      envio 93, 1208 screenshots without overflow or JS errors).
 
 ## Acceptance
 
