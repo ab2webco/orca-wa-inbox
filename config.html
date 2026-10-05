@@ -839,6 +839,15 @@
             <button type="button" data-value="off" data-t="autoOff"></button>
           </div>
           <input id="ack-text" data-t-ph="ackPh" />
+          <!-- El silencio del acuse (decision c del dueno, 2026-10-05): si la linea escribio en
+               el chat en estos minutos, el acuse y su respaldo no salen. Global, en la clave
+               plana `ackQuietMinutes`; 0 lo apaga. -->
+          <div class="fr-num">
+            <label for="ack-quiet" data-t="ackQuietLabel"></label>
+            <input id="ack-quiet" type="number" min="0" max="240" step="1" inputmode="numeric"
+                   aria-describedby="ack-quiet-help" />
+          </div>
+          <p class="hint" id="ack-quiet-help" data-t="ackQuietHelp"></p>
           <!-- Quien escribe el primer mensaje (Beta). Botones y no un select: la lista nativa
                no se abre en el panel de Orca. Los cuatro valores viajan en UNA clave,
                `firstReply`: cada clave es un mensaje mas contra el cupo del host. -->
@@ -1172,6 +1181,12 @@
           frEveryLabel: 'Un avance cada (minutos)',
           frMaxLabel: 'Mensajes por caso, como maximo',
           frRange: 'Revise los numeros: respaldo de 1 a 60, avances de 1 a 120 y de 1 a 10 mensajes.',
+          ackQuietLabel: 'Sin acuse si la linea escribio en el chat hace menos de (minutos)',
+          ackQuietHelp: 'El acuse no cae en medio de una conversacion: si la linea escribio en ' +
+            'ese chat dentro de estos minutos (una respuesta, un avance o un mensaje suyo desde ' +
+            'el telefono), no salen ni el acuse ni su respaldo. En 0 el acuse sale siempre, como ' +
+            'antes. En su propio chat no sale nunca.',
+          ackQuietRange: 'El silencio del acuse es un numero entero de minutos, de 0 a 240.',
           // --- la meta del primer contacto (informes-tablero, I4) ---
           slaLegend: 'Informes',
           slaLabel: 'Meta del primer contacto (minutos)',
@@ -1650,6 +1665,12 @@
           frEveryLabel: 'One update every (minutes)',
           frMaxLabel: 'Messages per case, at most',
           frRange: 'Check the numbers: fallback 1 to 60, updates 1 to 120, and 1 to 10 messages.',
+          ackQuietLabel: 'No acknowledgement if the line wrote in the chat less than (minutes) ago',
+          ackQuietHelp: 'The acknowledgement never lands in the middle of a conversation: if the ' +
+            'line wrote in that chat within these minutes (a reply, an update or a message of ' +
+            'yours from the phone), neither the acknowledgement nor its fallback goes out. At 0 ' +
+            'it always goes out, as before. It never goes out in your own chat.',
+          ackQuietRange: 'The quiet time is a whole number of minutes, from 0 to 240.',
           slaLegend: 'Reports',
           slaLabel: 'First contact target (minutes)',
           slaHelp: 'A case meets the target when its first response goes out within this time, ' +
@@ -2148,6 +2169,12 @@
         frEveryLabel: 'Uma atualizacao a cada (minutos)',
         frMaxLabel: 'Mensagens por caso, no maximo',
         frRange: 'Revise os numeros: reserva de 1 a 60, atualizacoes de 1 a 120 e de 1 a 10 mensagens.',
+        ackQuietLabel: 'Sem aviso se a linha escreveu na conversa ha menos de (minutos)',
+        ackQuietHelp: 'O aviso nao cai no meio de uma conversa: se a linha escreveu nessa ' +
+          'conversa dentro destes minutos (uma resposta, uma atualizacao ou uma mensagem sua ' +
+          'pelo telefone), nao saem nem o aviso nem a sua reserva. Em 0 o aviso sai sempre, ' +
+          'como antes. Na sua propria conversa nunca sai.',
+        ackQuietRange: 'O silencio do aviso e um numero inteiro de minutos, de 0 a 240.',
         slaLegend: 'Relatorios',
         slaLabel: 'Meta do primeiro contato (minutos)',
         slaHelp: 'Um caso cumpre a meta quando a primeira resposta sai dentro deste prazo, ' +
@@ -2904,6 +2931,8 @@
         syncMinutes: ['sync-minutes', '5'],
         ackMode: ['ack-mode', 'on'],
         ackText: ['ack-text', ''],
+        // Los minutos sin acuse despues de que la linea escribio en el chat (0 = siempre sale).
+        ackQuietMinutes: ['ack-quiet', '30'],
         greetingMode: ['greeting-mode', 'on'],
         greetingText: ['greeting-text', ''],
         botClaudeAccount: ['bot-account', 'auto'],
@@ -3144,10 +3173,21 @@
         guardarTarjeta(event.currentTarget, 'said-voice',
           ['transcribe', 'transcribeLang', 'transcribeQuality'])
       })
+      // El silencio del acuse: un entero de 0 a 240, el mismo rango que valida wa-scope. Fuera
+      // de rango no se guarda nada de la tarjeta y se dice.
+      var SILENCIO_MIN = 0, SILENCIO_MAX = 240
+      el('ack-quiet').value = CONTROLES.ackQuietMinutes[1]
       el('save-auto').addEventListener('click', function (event) {
         var primer = primerDelFormulario()
         if (!primer) { said('said-auto', t('frRange'), true); return }
-        var claves = ['ackMode', 'ackText', 'greetingMode', 'greetingText']
+        var silencio = el('ack-quiet').value.trim()
+        if (!/^\d+$/.test(silencio) || Number(silencio) < SILENCIO_MIN ||
+            Number(silencio) > SILENCIO_MAX) {
+          said('said-auto', t('ackQuietRange'), true)
+          return
+        }
+        el('ack-quiet').value = String(Number(silencio))
+        var claves = ['ackMode', 'ackText', 'ackQuietMinutes', 'greetingMode', 'greetingText']
         var pares = claves.map(function (k) { return [k, valorDe(CONTROLES[k][0])] })
         pares.push(['firstReply', primer])
         busy(event.currentTarget, guardar(pares).then(function (mal) {
@@ -5482,8 +5522,8 @@
       function activaAuto (cual) { return cual === 'aprobacion' }
       function leerAuto () {
         var sello = guardadoSeq
-        ;['ackMode', 'ackText', 'greetingMode', 'greetingText', 'firstReply', 'slaMinutes',
-          'projectQuestionHours'].forEach(function (k) {
+        ;['ackMode', 'ackText', 'ackQuietMinutes', 'greetingMode', 'greetingText', 'firstReply',
+          'slaMinutes', 'projectQuestionHours'].forEach(function (k) {
           read(k, true).then(function (v) { pintarClave(k, v, sello) })
         })
       }

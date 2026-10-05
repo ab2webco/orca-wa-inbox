@@ -11170,6 +11170,212 @@ if NODE:
             os.environ.clear()
             os.environ.update(env_antes)
 
+
+# ── acuse-inteligente: el acuse no cae en medio de una conversacion ─────────────────────
+# Caso vivo (2026-10-05, decision c del dueno): en su propio chat le llego "Recibimos su
+# mensaje" a los 5 minutos, y en otro caso otra vez a mitad de la conversacion, con el caso
+# ya esperando su clic y 6 minutos despues de que el bot le habia contestado. El acuse (y su
+# respaldo) no sale en el caso del dueno, el respaldo no sale si el caso ya espera al dueno o
+# ya esta en trabajo, listo o respondido, y ninguno sale si la linea escribio en ese chat en
+# los ultimos `ack_quiet_minutes` (30 de fabrica, 0 lo apaga). Un caso nuevo de un cliente
+# sin nada antes recibe su acuse como siempre, y el saludo no cambia. Datos de mentira.
+print("\nacuse-inteligente: el acuse no cae en medio de una conversacion")
+BANDEJA = "120363000000000012@g.us"
+
+
+def envio_de_la_linea(home, chat, minutos, req):
+    """Lo que la linea mando a `chat` hace `minutos`, visto solo en la bandeja de salida."""
+    con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+    t = int(time.time() - minutos * 60)
+    con.execute("insert into envio (req_id, account, chat_jid, body, estado, created_at, "
+                "settled_at) values (?,?,?,?,'enviado',?,?)",
+                (req, A, chat, "Listo, ya quedo revisado.", t, t))
+    con.commit()
+    con.close()
+
+
+if NODE:
+    for c in ({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False},
+              {"jid": BANDEJA, "nombre": "Solo Bandeja", "grupo": True}):
+        if not any(x["jid"] == c["jid"] for x in CHATS):
+            CHATS.append(c)
+    falso = JevFalso(jev_y_borradores)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        ajustes_acuse = {r["key"]: r["value"] for r in js(pathlib.Path(tempfile.mkdtemp()),
+                                                           "config")}
+        ok("ack_quiet_minutes arranca en 30", ajustes_acuse.get("ack_quiet_minutes") == "30",
+           f"{ajustes_acuse.get('ack_quiet_minutes')!r}")
+
+        # En `ack` (el de fabrica): el dueno, la linea que acaba de escribir, la que escribio
+        # hace dos horas, lo que solo esta en la bandeja, un cliente nuevo y un saludo.
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [
+                msg(DUENO_DM, "AI1", "revisa este caso por favor", 1, de=DUENO_LID),
+                msg(PERSONA, "AI2", "revisa este caso por favor", 1),
+                msg(FACTURACION, "AI3y", "Listo, ya quedo revisado.", 6, yo=True),
+                msg(FACTURACION, "AI3", "@duenio revisa este caso", 1, mencion=True),
+                msg(OPERACIONES, "AI4y", "Listo, ya quedo revisado.", 120, yo=True),
+                msg(OPERACIONES, "AI4", "@duenio revisa este caso", 1, mencion=True),
+                msg(SOPORTE, "AI5y", "Listo, ya quedo revisado.", 4, yo=True),
+                msg(SOPORTE, "AI5", "@duenio buen dia", 1, mencion=True),
+                msg(BANDEJA, "AI6", "@duenio revisa este caso", 1, mencion=True)])
+            # Lo que la linea mando a BANDEJA hace 5 minutos y solo esta en la bandeja de
+            # salida (todavia sin su eco en el almacen) tambien es la linea escribiendo.
+            envio_de_la_linea(home, BANDEJA, 5, "manual-demo-ai6")
+            js(home, "agent", "Agente De Ejemplo")
+            for chat in (DUENO_DM, PERSONA, FACTURACION, OPERACIONES, SOPORTE, BANDEJA):
+                js(home, "set", chat, "--provider", "ninguno", "--mode", "responder")
+            pon_duenos(home, DUENO_LID)
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                d1, p2, f3, o4, s5, b6 = (caso_de_stanza(home, x)
+                                          for x in ("AI1", "AI2", "AI3", "AI4", "AI5", "AI6"))
+                tick(home)
+                ok("el caso del dueno no recibe acuse",
+                   f"caso-{d1['case_id']}-acuse" not in sidecar.entregados
+                   and auto_de(home, d1["case_id"]) == {"estado": "omitido",
+                                                        "razon": "caso-del-dueno"},
+                   f"{sidecar.entregados} {auto_de(home, d1['case_id'])}")
+                ok("un cliente nuevo, sin nada antes, recibe su acuse como siempre",
+                   f"caso-{p2['case_id']}-acuse" in sidecar.entregados, f"{sidecar.entregados}")
+                ok("la linea escribio hace 6 minutos en ese chat: no hay acuse",
+                   f"caso-{f3['case_id']}-acuse" not in sidecar.entregados
+                   and auto_de(home, f3["case_id"]) == {"estado": "omitido",
+                                                        "razon": "conversacion-en-curso"},
+                   f"{sidecar.entregados} {auto_de(home, f3['case_id'])}")
+                ok("la linea escribio hace dos horas: el acuse sale (30 minutos de fabrica)",
+                   f"caso-{o4['case_id']}-acuse" in sidecar.entregados, f"{sidecar.entregados}")
+                ok("el saludo no cambia: sale aunque la linea acabe de escribir",
+                   f"caso-{s5['case_id']}-saludo" in sidecar.entregados, f"{sidecar.entregados}")
+                ok("lo que la linea mando hace 5 minutos y solo esta en la bandeja tambien cuenta",
+                   f"caso-{b6['case_id']}-acuse" not in sidecar.entregados
+                   and (auto_de(home, b6["case_id"]) or {}).get("razon") == "conversacion-en-curso",
+                   f"{sidecar.entregados} {auto_de(home, b6['case_id'])}")
+                antes_n = len(sidecar.entregados)
+                tick(home)
+                ok("repetir el tick no cambia nada: lo omitido queda omitido",
+                   len(sidecar.entregados) == antes_n, f"{sidecar.entregados}")
+            finally:
+                sidecar.cerrar()
+
+        # Con 0 vuelve lo de hoy: la linea que acaba de escribir no frena el acuse.
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(FACTURACION, "AZ1y", "Listo, ya quedo revisado.", 5, yo=True),
+                             msg(FACTURACION, "AZ1", "@duenio revisa este caso", 1, mencion=True)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", FACTURACION, "--provider", "ninguno", "--mode", "responder")
+            js(home, "config", "ack_quiet_minutes", "0")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                z1 = caso_de_stanza(home, "AZ1")
+                tick(home)
+                ok("con ack_quiet_minutes en 0 el acuse sale como hoy",
+                   f"caso-{z1['case_id']}-acuse" in sidecar.entregados, f"{sidecar.entregados}")
+            finally:
+                sidecar.cerrar()
+
+        # Con respaldo (Beta): el caso del dueno, el que ya espera al dueno, el que ya esta en
+        # trabajo y la linea que escribio hace poco no reciben el respaldo; un cliente nuevo
+        # si, a sus minutos.
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [
+                msg(DUENO_DM, "AR1", "revisa este caso por favor", 1, de=DUENO_LID),
+                msg(PERSONA, "AR2", "revisa este caso por favor", 1),
+                msg(OPERACIONES, "AR3", "@duenio revisa este caso", 1, mencion=True),
+                msg(FACTURACION, "AR4", "@duenio revisa este caso", 1, mencion=True),
+                msg(SOPORTE, "AR5", "@duenio revisa este caso", 1, mencion=True)])
+            js(home, "agent", "Agente De Ejemplo")
+            for chat in (DUENO_DM, PERSONA, OPERACIONES, FACTURACION, SOPORTE):
+                js(home, "set", chat, "--provider", "ninguno", "--mode", "responder")
+            js(home, "config", "first_reply_mode", "model_with_ack_fallback")
+            pon_duenos(home, DUENO_LID)
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                r1, r2, r3, r4, r5 = (caso_de_stanza(home, x)
+                                      for x in ("AR1", "AR2", "AR3", "AR4", "AR5"))
+                for caso in (r3, r4):
+                    cid = str(caso["case_id"])
+                    if caso["etapa"] == "recibido":
+                        js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad",
+                           "none", "--actor", "agente")
+                # r3 espera al dueno: un trabajo que despliega a produccion, que el tick anota.
+                js(home, "caso", "propuesta", str(r3["case_id"]), "--tipo", "trabajar",
+                   "--instrucciones", "Despliega a produccion el arreglo", "--actor", "agente")
+                tick(home)
+                ok("el trabajo que despliega quedo esperando al dueno, anotado en el caso",
+                   any(e["detalle"].startswith("trabajo espera al dueno:")
+                       for e in js(home, "caso", "ver", str(r3["case_id"]))[0]["eventos"]))
+                # r4 entra a trabajo con la firma del dueno. El respaldo se decide en la vuelta
+                # antes que el despacho, asi que en la siguiente todavia esta en trabajo.
+                v4 = js(home, "caso", "propuesta", str(r4["case_id"]), "--tipo", "trabajar",
+                        "--instrucciones", "Revisa el reporte de ventas",
+                        "--actor", "agente")[0]["propuesta_version"]
+                js(home, "caso", "aprobar", str(r4["case_id"]), "--version", v4,
+                   "--actor", "dueno")
+                ok("y el otro esta en trabajo",
+                   js(home, "caso", "ver", str(r4["case_id"]))[0]["etapa"] == "trabajo",
+                   js(home, "caso", "ver", str(r4["case_id"]))[0]["etapa"])
+                # La linea escribe en SOPORTE despues de que el caso abrio.
+                llegan(home, A, [msg(SOPORTE, "AR5y", "Ya lo estamos viendo.", 0, yo=True)])
+                for caso in (r1, r2, r3, r4, r5):
+                    envejece_caso(home, caso["case_id"], 30)
+                tick(home)
+                ok("respaldo: el caso del dueno no lo recibe",
+                   f"caso-{r1['case_id']}-acuse" not in sidecar.entregados
+                   and (auto_de(home, r1["case_id"]) or {}).get("razon") == "caso-del-dueno",
+                   f"{sidecar.entregados} {auto_de(home, r1['case_id'])}")
+                ok("respaldo: un cliente nuevo lo recibe a sus minutos, como hoy",
+                   f"caso-{r2['case_id']}-acuse" in sidecar.entregados, f"{sidecar.entregados}")
+                ok("respaldo: el caso que ya espera al dueno no lo recibe",
+                   f"caso-{r3['case_id']}-acuse" not in sidecar.entregados
+                   and (auto_de(home, r3["case_id"]) or {}).get("razon") == "espera-al-dueno",
+                   f"{sidecar.entregados} {auto_de(home, r3['case_id'])}")
+                ok("respaldo: el caso en trabajo no lo recibe",
+                   f"caso-{r4['case_id']}-acuse" not in sidecar.entregados
+                   and (auto_de(home, r4["case_id"]) or {}).get("razon") == "caso-en-curso",
+                   f"{sidecar.entregados} {auto_de(home, r4['case_id'])}")
+                ok("respaldo: la linea escribio en el chat despues del mensaje, no lo recibe",
+                   f"caso-{r5['case_id']}-acuse" not in sidecar.entregados
+                   and (auto_de(home, r5["case_id"]) or {}).get("razon") == "conversacion-en-curso",
+                   f"{sidecar.entregados} {auto_de(home, r5['case_id'])}")
+            finally:
+                sidecar.cerrar()
+
+        # Lo que decide, sin el tick: el aviso pendiente al dueno tambien es esperar al dueno.
+        with tempfile.TemporaryDirectory() as home:
+            linea_lista(home)
+            cid, v = propuesta_lista(home, "AW1")
+            con = db_de(home)
+            con.execute("insert into aviso (req_id, tipo, case_id, version, account, chat_jid, "
+                        "texto, estado, at, updated_at) values (?, 'aprobacion', ?, ?, ?, ?, "
+                        "'Caso de prueba', 'enviado', '2026-10-05 10:00:00', "
+                        "'2026-10-05 10:00:00')",
+                        (f"aviso-{cid}-{v[:12]}", int(cid), v, A, DUENO_DM))
+            con.commit()
+            con.close()
+            ws = carga_wa_scope(home)
+            con = ws.db()
+            try:
+                caso = ws.caso_de(con, int(cid))
+                ok("un caso en decision con un aviso al dueno sin contestar espera al dueno",
+                   caso["etapa"] == "decision" and ws.acuse_sobra(
+                       con, caso, ws.merged_settings(con), f"caso-{cid}-acuse", True)
+                   == "espera-al-dueno", f"{caso['etapa']}")
+            finally:
+                con.close()
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

@@ -715,6 +715,12 @@ const PANELES = [
         { id: '100000000000002@lid', name: 'Beto Socio' }],
       approvalNumber: '100000000000001@lid' }),
     guion: "document.getElementById('approval-number').scrollIntoView()" },
+  // acuse-inteligente: los minutos sin acuse despues de que la linea escribio en el chat,
+  // junto al acuse, con su pista. En portugues tambien: la etiqueta es la mas larga.
+  { nombre: 'config-acuse-silencio', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, idiomas: ['pt'], espera: 300, pestana: 'aprobacion',
+    datos: Object.assign({}, DATOS, { ackQuietMinutes: '45' }),
+    guion: "document.getElementById('ack-mode').scrollIntoView()" },
   // primer-mensaje-beta: quien escribe el primer mensaje. El acuse de siempre, el agente sin
   // respaldo (con el aviso de que sin el el cliente puede no recibir nada), el agente con
   // respaldo (con sus tres numeros) y lo propio de una conversacion.

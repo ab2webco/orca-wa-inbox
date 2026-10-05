@@ -5676,6 +5676,87 @@ for (const [idioma, nombre] of [['es-419', 'ES'], ['en', 'EN'], ['pt-BR', 'PT']]
   const texto = doc.getElementById('view-aprobacion').textContent
 }
 
+// ── acuse-inteligente: el silencio del acuse despues de que la linea escribio ──
+// Decision c del dueno (2026-10-05): el acuse no cae en medio de una conversacion. Un ajuste
+// global en minutos (0..240, 30 de fabrica, 0 lo apaga) en la clave plana `ackQuietMinutes`,
+// en texto como el resto, junto al acuse en la tarjeta de las respuestas automaticas.
+console.log('\nconfig.html — acuse-inteligente: el silencio del acuse')
+{
+  const { doc, storage } = await montar('config.html', {}, 'es-419')
+  await espera()
+  doc.getElementById('tab-aprobacion').click()
+  await espera(); await espera()
+  const campo = doc.getElementById('ack-quiet')
+  ok('el campo esta en la tarjeta de las respuestas automaticas, junto al acuse',
+    !!campo && campo.closest('section') === doc.getElementById('ack-mode').closest('section'),
+    String(!!campo))
+  ok('es un numero entero de 0 a 240 minutos, sin select',
+    campo?.type === 'number' && campo.min === '0' && campo.max === '240' && campo.step === '1' &&
+    !doc.querySelector('select'))
+  ok('sin nada guardado muestra 30', campo?.value === '30', campo?.value)
+  ok('tiene etiqueta y una pista que dice que hace y que 0 lo apaga',
+    (doc.querySelector('label[for="ack-quiet"]')?.textContent || '').trim().length > 3 &&
+    /acuse/i.test(doc.getElementById('ack-quiet-help')?.textContent || '') &&
+    /\b0\b/.test(doc.getElementById('ack-quiet-help')?.textContent || ''),
+    doc.getElementById('ack-quiet-help')?.textContent)
+  escribir(doc, 'ack-quiet', '45')
+  doc.getElementById('save-auto').click()
+  await espera(); await espera()
+  ok('guardar escribe la clave plana en texto', storage.ackQuietMinutes === '45',
+    String(storage.ackQuietMinutes))
+  ok('y lo confirma', /✓/.test(doc.getElementById('said-auto').textContent))
+  escribir(doc, 'ack-quiet', '0')
+  doc.getElementById('save-auto').click()
+  await espera(); await espera()
+  ok('0 se guarda: apaga el silencio', storage.ackQuietMinutes === '0',
+    String(storage.ackQuietMinutes))
+  for (const malo of ['241', '-1', '7.5', 'media hora', '']) {
+    escribir(doc, 'ack-quiet', malo)
+    doc.getElementById('save-auto').click()
+    await espera(); await espera()
+    ok(`"${malo}" no se guarda y lo dice`, storage.ackQuietMinutes === '0' &&
+      doc.getElementById('said-auto').className.includes('bad') &&
+      /240/.test(doc.getElementById('said-auto').textContent),
+    `${storage.ackQuietMinutes} ${doc.getElementById('said-auto').textContent}`)
+  }
+}
+for (const [guardado, esperado] of [['10', '10'], ['0', '0'], [null, '30']]) {
+  const { doc } = await montar('config.html', guardado === null ? {} : { ackQuietMinutes: guardado },
+    'es-419')
+  await espera()
+  doc.getElementById('tab-aprobacion').click()
+  await espera(); await espera()
+  ok(`al abrir la pestana pinta ${esperado} con ${guardado} guardado`,
+    doc.getElementById('ack-quiet').value === esperado, doc.getElementById('ack-quiet').value)
+}
+{
+  // Un host que rechaza la escritura: no dice guardado.
+  const { doc } = await montar('config.html', {}, 'es-419',
+    (d) => d.action === 'storage.set' && d.params.key === 'ackQuietMinutes' ? { ok: false } : undefined)
+  await espera()
+  doc.getElementById('tab-aprobacion').click()
+  await espera()
+  escribir(doc, 'ack-quiet', '20')
+  doc.getElementById('save-auto').click()
+  await espera(); await espera()
+  ok('si el host no guarda el silencio, no dice guardado',
+    doc.getElementById('said-auto').className.includes('bad'),
+    doc.getElementById('said-auto').textContent)
+}
+for (const [idioma, nombre, etiqueta, pista] of [
+  ['es-419', 'ES', /acuse/i, /conversaci[oó]n/i],
+  ['en', 'EN', /acknowledg/i, /conversation/i],
+  ['pt-BR', 'PT', /aviso/i, /conversa/i]]) {
+  const { doc } = await montar('config.html', {}, idioma)
+  await espera()
+  const label = doc.querySelector('label[for="ack-quiet"]')?.textContent || ''
+  const ayuda = doc.getElementById('ack-quiet-help')?.textContent || ''
+  ok(`${nombre}: el silencio del acuse en su idioma`,
+    etiqueta.test(label) && pista.test(ayuda) && ayuda.trim().length > 40, `${label} | ${ayuda}`)
+  ok(`${nombre}: sin voseo y tratando de usted`,
+    !/\b(ten[eé]s|pod[eé]s|escrib[ií]s|quer[eé]s)\b/i.test(label + ayuda), `${label} | ${ayuda}`)
+}
+
 console.log('\nactivity.html — un caso cerrado sin agente dice por que regla')
 for (const [idioma, nombre, lead, regla] of [
   ['es-419', 'ES', /No requiere agente/, /grupo que no es para el asistente/],

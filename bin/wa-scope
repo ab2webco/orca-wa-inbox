@@ -2043,6 +2043,10 @@ DEFAULT_CONFIG = {
     # mucho, y `updates_max` por caso, el primer mensaje incluido.
     "first_reply_mode": "ack",
     "ack_fallback_minutes": "5",
+    # El acuse (y su respaldo) no sale en un chat donde la linea escribio en los ultimos
+    # `ack_quiet_minutes` antes del caso o despues: no cae en medio de una conversacion
+    # (decision c del dueno, 2026-10-05). 0 lo apaga. Sale al panel (`ackQuietMinutes`).
+    "ack_quiet_minutes": "30",
     "update_every_minutes": "10",
     "updates_max": "3",
     # La cuenta de Claude con que se abren el agente de casos y el del proyecto: el id de
@@ -4623,7 +4627,7 @@ def tick_auto_cierra(con, fila, estado, razon, detalle, **campos):
         raise
 
 
-def auto_omite(caso, scope, ajustes, tipo):
+def auto_omite(con, caso, scope, ajustes, tipo):
     """La razon por la que NO se manda, o None si se manda. Se mira de nuevo al mandar:
     entre el ingest y el tick el dueno pudo cambiar el chat, o el caso pudo marcarse."""
     if caso["etapa"] == "cerrado" and tipo == "acuse":
@@ -4632,6 +4636,10 @@ def auto_omite(caso, scope, ajustes, tipo):
         return "modo"
     if not auto_ajuste(scope.get(caso["chat_jid"]), ajustes, tipo)[0]:
         return "apagado"
+    # Decision c del dueno: el dueno no espera un "Recibimos su mensaje" de su propia linea.
+    # Solo lo decide su id de WhatsApp (`caso_del_dueno`); el saludo sigue como siempre.
+    if tipo == "acuse" and caso_del_dueno(con, caso):
+        return RAZON_DUENO
     if _lista_json(caso.get("excepciones")):
         return "excepcion"
     try:
@@ -4647,6 +4655,80 @@ def auto_omite(caso, scope, ajustes, tipo):
 # primer mensaje es del agente), o del caso ya salio (o esta saliendo) otro mensaje.
 RAZON_PRIMER_AGENTE = "primer-mensaje-del-agente"
 RAZON_YA_SALIO = "ya-salio-un-mensaje"
+
+# Decision c del dueno (2026-10-05): el acuse no cae en medio de una conversacion. No sale en
+# el caso del dueno (`auto_omite`); el de respaldo no sale si el caso ya espera al dueno o ya
+# esta en marcha; y ninguno sale si la linea escribio en ese chat en los ultimos
+# `ack_quiet_minutes` antes del caso, o despues: quien escribio no esta esperando en silencio.
+RAZON_DUENO = "caso-del-dueno"
+RAZON_ESPERA_DUENO = "espera-al-dueno"
+RAZON_EN_CURSO = "caso-en-curso"
+RAZON_CONVERSACION = "conversacion-en-curso"
+# Las etapas en que el caso ya tiene quien lo mueve: un respaldo ahi llega tarde y fuera de
+# lugar.
+ETAPAS_SIN_RESPALDO = ("trabajo", "listo", "respondido")
+# Un aviso al dueno que sigue abierto: el caso esta en sus manos.
+ESTADOS_AVISO_ABIERTO = ("preparando", "pendiente", "enviado", "contestando")
+# Lo de la bandeja que ya es la linea escribiendo: lo que sale, esta saliendo o salio.
+ESTADOS_ENVIO_DE_LA_LINEA = ("pendiente", "enviando", "enviado")
+
+
+def caso_espera_al_dueno(con, caso):
+    """Si el caso en decision ya esta en manos del dueno: lo que las reglas anotaron sobre
+    su version (`espera_del_dueno`, que es lo que dispara el aviso), o un aviso suyo que
+    sigue abierto."""
+    if caso["etapa"] != "decision":
+        return False
+    if espera_del_dueno(con, caso) is not None:
+        return True
+    marcas = ",".join("?" * len(ESTADOS_AVISO_ABIERTO))
+    return bool(con.execute(
+        f"select 1 from aviso where case_id=? and tipo in ('aprobacion', 'bloqueo') and "
+        f"estado in ({marcas}) limit 1", (caso["case_id"], *ESTADOS_AVISO_ABIERTO)).fetchone())
+
+
+def linea_escribio(caso, desde, excepto):
+    """Si la linea escribio en el chat del caso desde `desde` (epoch): un mensaje suyo en el
+    almacen (lo que mando el bot, o el dueno desde su telefono) o algo suyo en la bandeja de
+    salida que todavia no tiene su eco. `excepto` es el id de wa-send del propio acuse: lo
+    suyo no cuenta. Sin almacen no se sabe, y no frena (sin almacen tampoco hay linea)."""
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return False
+    try:
+        marcas = ",".join("?" * len(ESTADOS_ENVIO_DE_LA_LINEA))
+        if fuente.execute(
+                f"select 1 from envio where account=? and chat_jid=? and req_id<>? and "
+                f"estado in ({marcas}) and coalesce(settled_at, claimed_at, created_at) >= ? "
+                f"limit 1", (caso["account"], caso["chat_jid"], excepto,
+                             *ESTADOS_ENVIO_DE_LA_LINEA, int(desde))).fetchone():
+            return True
+        return bool(fuente.execute(
+            "select 1 from mensaje where account=? and chat_jid=? and from_me=1 and revocado=0 "
+            "and ts >= ? and stanza_id not in (select stanza_id from envio where req_id=? and "
+            "stanza_id is not null) limit 1",
+            (caso["account"], caso["chat_jid"], int(desde), excepto)).fetchone())
+    except sqlite3.Error:
+        return False
+    finally:
+        fuente.close()
+
+
+def acuse_sobra(con, caso, ajustes, req_id, respaldo):
+    """La razon por la que este acuse ya no hace falta (decision c del dueno), o None. Con
+    `respaldo` (Beta) tambien cuenta que el caso ya espere al dueno o ya este en marcha."""
+    if respaldo:
+        if caso["etapa"] in ETAPAS_SIN_RESPALDO:
+            return RAZON_EN_CURSO
+        if caso_espera_al_dueno(con, caso):
+            return RAZON_ESPERA_DUENO
+    minutos = primer_numero(ajustes, "ack_quiet_minutes")
+    if minutos > 0:
+        desde = (sello_a_epoch(caso.get("created_at")) or time.time()) - minutos * 60
+        if linea_escribio(caso, desde, req_id):
+            return RAZON_CONVERSACION
+    return None
 
 
 def caso_ya_escribio(con, caso, estados):
@@ -4740,10 +4822,19 @@ Manda los acuses y saludos pendientes, antes que cualquier propuesta: son lo que
                 continue
             if espera == "temprano":
                 continue
-        razon = auto_omite(caso, scope, ajustes, fila["tipo"])
+        razon = auto_omite(con, caso, scope, ajustes, fila["tipo"])
         if razon:
             tick_auto_cierra(con, fila, "omitido", razon, f"{fila['tipo']} omitido: {razon}")
             continue
+        # Lo que ya esta en la bandeja (o un respaldo que ya tomo su lugar) no se juzga de
+        # nuevo: sigue su camino con su id, y un reintento no lo duplica.
+        if (fila["tipo"] == "acuse" and fila.get("estado") != "enviando"
+                and estados.get(fila["req_id"]) is None):
+            razon = acuse_sobra(con, caso, ajustes, fila["req_id"],
+                                modo == "model_with_ack_fallback")
+            if razon:
+                tick_auto_cierra(con, fila, "omitido", razon, f"acuse omitido: {razon}")
+                continue
         if (fila["tipo"] == "acuse" and modo == "model_with_ack_fallback"
                 and not respaldo_toma(con, fila)):
             tick_auto_cierra(con, fila, "omitido", RAZON_YA_SALIO,
