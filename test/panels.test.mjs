@@ -7142,5 +7142,268 @@ await seccion(async () => {
     `${S.es.pqHelp} | ${S.en.pqHelp} | ${S.pt.pqHelp}`)
 })
 
+
+// ───────── roles-por-numero (M11): las personas de una conversacion y su rol ─────────
+// El rol sale del numero que el dueno marca aqui, por conversacion: `scope[jid].members`
+// ([{id, name, role}], sin los clientes). En un grupo la lista viene de `groupMembers`
+// (la deja wa-scope sync); los numeros de confianza (`owners`) son Super admin en todas
+// partes y aqui solo se muestran (odd/tasks/proyectos-por-chat.md, "Part B data contract").
+const DIRECTO_ROL = '573000000001@s.whatsapp.net'
+const GRUPO_ROL = '120363000000000001@g.us'
+const DUENO_ROL = { id: '100000000000001@lid', name: 'Ana Restrepo' }
+const MIEMBROS_ROL = [
+  { id: '100000000000001@lid', name: 'Ana Restrepo', phone: '+573000000011' },
+  { id: '111122223333@lid', name: 'Beto Operador', phone: '+573000000012' },
+  { id: '573000000013@s.whatsapp.net', name: '', phone: '+573000000013' },
+  { id: '111122225555@lid', name: 'Diana Cliente', phone: null }
+]
+const personas = (doc) => [...doc.querySelectorAll('#people-list .persona')]
+const personasVisibles = (doc) => personas(doc).filter((n) => !n.hidden)
+const persona = (doc, id) => doc.querySelector(`#people-list .persona[data-id="${id}"]`)
+const rolDe = (doc, id) =>
+  persona(doc, id)?.querySelector('.seg button[aria-pressed="true"]')?.dataset.value ?? null
+function elegirRol (doc, id, rol) {
+  const b = persona(doc, id)?.querySelector(`.seg button[data-value="${rol}"]`)
+  if (!b) throw new Error(`${id} no ofrece ${rol}`)
+  b.click()
+}
+const filaDeChat = (doc, txt) =>
+  [...doc.querySelectorAll('#scope-wrap tbody tr')].find((f) => f.textContent.includes(txt))
+
+console.log('\nconfig.html — roles-por-numero (M11): la persona de un chat directo')
+await seccion(async () => {
+  const storage = { owners: [DUENO_ROL],
+    chats: [{ jid: DIRECTO_ROL, name: 'Camila Restrepo', kind: 'directo', phone: '+573000000001' }] }
+  const { doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  const caja = doc.getElementById('people-wrap')
+  ok('sin conversacion elegida no hay tarjeta de personas', !!caja && caja.hidden, String(caja?.outerHTML).slice(0, 120))
+  elegirChat(doc, DIRECTO_ROL)
+  ok('al elegir un directo aparece, con un titulo', !caja.hidden &&
+    (doc.getElementById('people-legend')?.textContent || '').trim().length > 3)
+  ok('una sola persona: la del chat', personas(doc).length === 1 && !!persona(doc, DIRECTO_ROL),
+    JSON.stringify(personas(doc).map((n) => n.dataset.id)))
+  ok('con su nombre y su telefono', /Camila Restrepo/.test(persona(doc, DIRECTO_ROL)?.textContent || '') &&
+    /\+57 300/.test(persona(doc, DIRECTO_ROL)?.textContent || ''), persona(doc, DIRECTO_ROL)?.textContent)
+  const grupo = persona(doc, DIRECTO_ROL)?.querySelector('.seg')
+  ok('un grupo de botones Cliente / Operador / Super admin, con nombre accesible',
+    grupo?.getAttribute('role') === 'group' &&
+    /Camila Restrepo/.test(grupo?.getAttribute('aria-label') || '') &&
+    JSON.stringify([...grupo.querySelectorAll('button')].map((b) => b.dataset.value)) ===
+      JSON.stringify(['client', 'operator', 'admin']) &&
+    JSON.stringify([...grupo.querySelectorAll('button')].map((b) => b.textContent.trim())) ===
+      JSON.stringify(['Cliente', 'Operador', 'Super admin']), grupo?.outerHTML.slice(0, 300))
+  ok('botones nativos con aria-pressed, Cliente por defecto',
+    [...grupo.querySelectorAll('button')].every((b) => b.tagName === 'BUTTON' && b.type === 'button' &&
+      b.hasAttribute('aria-pressed')) && rolDe(doc, DIRECTO_ROL) === 'client')
+  ok('un directo no lleva buscador', doc.getElementById('people-search-wrap')?.hidden === true)
+  ok('la ayuda del directo dice que no pasa por las reglas de cliente',
+    /reglas de cliente/i.test(doc.getElementById('people-help')?.textContent || ''),
+    doc.getElementById('people-help')?.textContent)
+  ok('y en todo el formulario no hay un <select>', doc.querySelectorAll('select').length === 0)
+  elegirRol(doc, DIRECTO_ROL, 'operator')
+  ok('apretar Operador lo deja apretado', rolDe(doc, DIRECTO_ROL) === 'operator')
+  doc.getElementById('save-scope').click()
+  await espera()
+  const e = (storage.scope || {})[DIRECTO_ROL] || {}
+  ok('guardar escribe members con el operador', JSON.stringify(e.members) ===
+    JSON.stringify([{ id: DIRECTO_ROL, name: 'Camila Restrepo', role: 'operator' }]), JSON.stringify(e))
+  ok('al guardar el formulario vuelve a nuevo, sin tarjeta de personas', caja.hidden)
+
+  filaDeChat(doc, 'Camila Restrepo').querySelector('[data-edit]').click()
+  await espera()
+  ok('Editar carga el rol guardado', !caja.hidden && rolDe(doc, DIRECTO_ROL) === 'operator')
+  elegirRol(doc, DIRECTO_ROL, 'client')
+  doc.getElementById('save-scope').click()
+  await espera()
+  ok('volver a Cliente guarda la lista vacia (Cliente nunca se guarda)',
+    JSON.stringify(storage.scope[DIRECTO_ROL].members) === '[]', JSON.stringify(storage.scope[DIRECTO_ROL]))
+
+  filaDeChat(doc, 'Camila Restrepo').querySelector('[data-edit]').click()
+  await espera()
+  elegirRol(doc, DIRECTO_ROL, 'admin')
+  doc.getElementById('cancel-edit').click()
+  await espera()
+  ok('Cancelar descarta lo apretado y esconde la tarjeta', caja.hidden &&
+    JSON.stringify(storage.scope[DIRECTO_ROL].members) === '[]')
+  filaDeChat(doc, 'Camila Restrepo').querySelector('[data-edit]').click()
+  await espera()
+  ok('y al volver a editar sigue en Cliente', rolDe(doc, DIRECTO_ROL) === 'client')
+  doc.getElementById('cancel-edit').click()
+
+  // Elegir en el formulario nuevo una conversacion que ya tiene roles: se cargan, para que
+  // guardar encima no los borre callado.
+  storage.scope[DIRECTO_ROL].members = [{ id: DIRECTO_ROL, name: 'Camila Restrepo', role: 'admin' }]
+  doc.defaultView.dispatchEvent(new doc.defaultView.Event('focus'))
+  await espera()
+  elegirChat(doc, DIRECTO_ROL)
+  ok('el formulario nuevo carga los roles de una conversacion ya guardada',
+    rolDe(doc, DIRECTO_ROL) === 'admin', String(rolDe(doc, DIRECTO_ROL)))
+})
+
+console.log('\nconfig.html — roles-por-numero (M11): el directo de un numero de confianza')
+await seccion(async () => {
+  const storage = { owners: [DUENO_ROL],
+    chats: [{ jid: DUENO_ROL.id, name: 'Ana Restrepo', kind: 'directo', phone: '+573000000011' }] }
+  const { doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  elegirChat(doc, DUENO_ROL.id)
+  const fila = persona(doc, DUENO_ROL.id)
+  ok('se ve como Super admin y sin botones', !!fila && !fila.querySelector('.seg button') &&
+    /Super admin/.test(fila.textContent), fila?.outerHTML)
+  const ir = fila?.querySelector('button[data-ir="aprobacion"]')
+  ok('con un boton que lleva a Su aprobacion', !!ir && /Su aprobacion/.test(ir.textContent), fila?.innerHTML)
+  ir.click()
+  await espera()
+  ok('y el boton abre esa pestana', doc.getElementById('view-aprobacion').hidden === false &&
+    doc.getElementById('tab-aprobacion').getAttribute('aria-selected') === 'true')
+  doc.getElementById('tab-chats').click()
+  doc.getElementById('save-scope').click()
+  await espera()
+  ok('guardar no escribe al dueno en members', JSON.stringify(storage.scope[DUENO_ROL.id].members) === '[]',
+    JSON.stringify(storage.scope[DUENO_ROL.id]))
+})
+
+console.log('\nconfig.html — roles-por-numero (M11): los participantes de un grupo')
+await seccion(async () => {
+  const storage = { owners: [DUENO_ROL],
+    chats: [{ jid: GRUPO_ROL, name: 'Soporte Norte', kind: 'grupo' }],
+    groupMembers: { [GRUPO_ROL]: MIEMBROS_ROL },
+    scope: { [GRUPO_ROL]: { chatName: 'Soporte Norte', mode: 'responder',
+      members: [{ id: '111122223333@lid', name: 'Beto Operador', role: 'operator' },
+        // Alguien con rol que ya no esta en la lista del grupo: se ve y no se pierde.
+        { id: '111122229999@lid', name: 'Ex Miembro', role: 'admin' }] } } }
+  const { doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  filaDeChat(doc, 'Soporte Norte').querySelector('[data-edit]').click()
+  await espera()
+  ok('una fila por participante, y la de quien ya no esta al final',
+    JSON.stringify(personas(doc).map((n) => n.dataset.id)) === JSON.stringify(
+      MIEMBROS_ROL.map((m) => m.id).concat(['111122229999@lid'])),
+    JSON.stringify(personas(doc).map((n) => n.dataset.id)))
+  const dueno = persona(doc, DUENO_ROL.id)
+  ok('el numero de confianza: Super admin, solo lectura, con el boton a Su aprobacion',
+    !!dueno && !dueno.querySelector('.seg button') && /Super admin/.test(dueno.textContent) &&
+    !!dueno.querySelector('button[data-ir="aprobacion"]'), dueno?.outerHTML)
+  ok('el operador guardado sale apretado', rolDe(doc, '111122223333@lid') === 'operator')
+  ok('los demas, en Cliente', rolDe(doc, '111122225555@lid') === 'client' &&
+    rolDe(doc, '573000000013@s.whatsapp.net') === 'client')
+  ok('cada fila con su nombre y su telefono', /Beto Operador/.test(persona(doc, '111122223333@lid').textContent) &&
+    /\+57 300 000 0012/.test(persona(doc, '111122223333@lid').textContent),
+    persona(doc, '111122223333@lid').textContent)
+  ok('sin nombre, se nombra por su telefono', /\+57 300 000 0013/.test(
+    persona(doc, '573000000013@s.whatsapp.net').querySelector('.persona-nombre')?.textContent || ''),
+    persona(doc, '573000000013@s.whatsapp.net').innerHTML)
+  ok('quien ya no esta en el grupo lo dice y conserva su rol',
+    /ya no esta/.test(persona(doc, '111122229999@lid')?.textContent || '') &&
+    rolDe(doc, '111122229999@lid') === 'admin', persona(doc, '111122229999@lid')?.textContent)
+  ok('la ayuda del grupo dice que los clientes leen todo',
+    /clientes leen/i.test(doc.getElementById('people-help')?.textContent || ''),
+    doc.getElementById('people-help')?.textContent)
+
+  // El buscador: por nombre, por telefono, y lo que no coincide lo dice.
+  const buscador = doc.getElementById('people-search')
+  ok('un grupo lleva buscador con etiqueta', doc.getElementById('people-search-wrap')?.hidden === false &&
+    !!buscador && (doc.querySelector('label[for="people-search"]')?.textContent || '').trim().length > 3)
+  escribir(doc, 'people-search', 'beto')
+  ok('buscar "beto" deja solo a Beto', JSON.stringify(personasVisibles(doc).map((n) => n.dataset.id)) ===
+    JSON.stringify(['111122223333@lid']), JSON.stringify(personasVisibles(doc).map((n) => n.dataset.id)))
+  ok('y dice cuantos de cuantos', /1 de 5/.test(doc.getElementById('people-count')?.textContent || ''),
+    doc.getElementById('people-count')?.textContent)
+  escribir(doc, 'people-search', '0013')
+  ok('buscar por telefono', JSON.stringify(personasVisibles(doc).map((n) => n.dataset.id)) ===
+    JSON.stringify(['573000000013@s.whatsapp.net']), JSON.stringify(personasVisibles(doc).map((n) => n.dataset.id)))
+  escribir(doc, 'people-search', 'zzzz')
+  ok('sin coincidencias lo dice', personasVisibles(doc).length === 0 &&
+    !doc.getElementById('people-empty').hidden && /coincide/.test(doc.getElementById('people-empty').textContent),
+    doc.getElementById('people-empty')?.textContent)
+  escribir(doc, 'people-search', '')
+  ok('vacio vuelve a mostrarlos todos', personasVisibles(doc).length === 5)
+
+  elegirRol(doc, '111122225555@lid', 'admin')
+  // Filtrar no cambia lo elegido: lo escondido tambien se guarda.
+  escribir(doc, 'people-search', 'diana')
+  doc.getElementById('save-scope').click()
+  await espera()
+  ok('guardar escribe los roles en el orden de la lista, sin el dueno ni los clientes',
+    JSON.stringify(storage.scope[GRUPO_ROL].members) === JSON.stringify([
+      { id: '111122223333@lid', name: 'Beto Operador', role: 'operator' },
+      { id: '111122225555@lid', name: 'Diana Cliente', role: 'admin' },
+      { id: '111122229999@lid', name: 'Ex Miembro', role: 'admin' }]),
+    JSON.stringify(storage.scope[GRUPO_ROL].members))
+  ok('y el resto de la entrada sigue', storage.scope[GRUPO_ROL].mode === 'responder')
+  filaDeChat(doc, 'Soporte Norte').querySelector('[data-edit]').click()
+  await espera()
+  ok('editar de nuevo limpia el buscador', doc.getElementById('people-search').value === '' &&
+    personasVisibles(doc).length === 5)
+})
+
+console.log('\nconfig.html — roles-por-numero (M11): un grupo sin lista de participantes')
+for (const [nombre, gm] of [['sin la clave', undefined], ['con la lista vacia', []]]) {
+  await seccion(async () => {
+    const storage = { owners: [DUENO_ROL], chats: [{ jid: GRUPO_ROL, name: 'Soporte Norte', kind: 'grupo' }] }
+    if (gm) storage.groupMembers = { [GRUPO_ROL]: gm }
+    const { doc } = await montar('config.html', storage, 'es-419')
+    await espera()
+    elegirChat(doc, GRUPO_ROL)
+    const vacio = doc.getElementById('people-empty')
+    ok(`${nombre}: lo dice claro, sin filas ni buscador`, personas(doc).length === 0 &&
+      !vacio.hidden && /sincroniza/i.test(vacio.textContent) &&
+      doc.getElementById('people-search-wrap').hidden, vacio?.textContent)
+    doc.getElementById('save-scope').click()
+    await espera()
+    ok(`${nombre}: guardar escribe members vacio`, JSON.stringify(storage.scope[GRUPO_ROL].members) === '[]',
+      JSON.stringify(storage.scope[GRUPO_ROL]))
+  })
+}
+
+console.log('\nconfig.html — roles-por-numero (M11): la lista del grupo llega despues de abrirlo')
+await seccion(async () => {
+  const storage = { owners: [DUENO_ROL], chats: [{ jid: GRUPO_ROL, name: 'Soporte Norte', kind: 'grupo' }],
+    scope: { [GRUPO_ROL]: { chatName: 'Soporte Norte', mode: 'observar' } } }
+  const { doc, window } = await montar('config.html', storage, 'es-419')
+  await espera()
+  filaDeChat(doc, 'Soporte Norte').querySelector('[data-edit]').click()
+  await espera()
+  ok('una entrada de antes, sin members, abre sin roles', personas(doc).length === 0)
+  storage.groupMembers = { [GRUPO_ROL]: MIEMBROS_ROL }
+  window.dispatchEvent(new window.Event('focus'))
+  await espera(); await espera()
+  ok('al llegar la lista se pinta sin perder la edicion', personas(doc).length === 4 &&
+    doc.getElementById('cancel-edit').hidden === false, String(personas(doc).length))
+})
+
+console.log('\nconfig.html — roles-por-numero (M11): los textos en los tres idiomas')
+await seccion(async () => {
+  const { window } = await montar('config.html')
+  const S = window.STRINGS
+  const nuevas = ['peopleLegend', 'peopleHelp', 'peopleHelpDirect', 'peopleHelpGroup', 'peopleSearchLabel',
+    'peopleSearchPh', 'peopleCount', 'peopleNoMatch', 'peopleGroupEmpty', 'peopleRoleOf', 'peopleGone',
+    'peopleOwner', 'peopleOwnLine', 'peopleOwnersGo', 'roleClient', 'roleOperator', 'roleAdmin']
+  const faltan = nuevas.filter((k) => !S.es[k] || !S.en[k])
+  ok('cada texto existe en espanol y en ingles', faltan.length === 0, `faltan = ${JSON.stringify(faltan)}`)
+  const sinPt = nuevas.filter((k) => !S.pt[k] || (S.pt[k] === S.en[k] && k !== 'roleAdmin'))
+  ok('y en portugues propio, no heredado del ingles', sinPt.length === 0, `sin portugues = ${JSON.stringify(sinPt)}`)
+  ok('Super admin se llama igual en los tres', S.es.roleAdmin === 'Super admin' &&
+    S.en.roleAdmin === 'Super admin' && S.pt.roleAdmin === 'Super admin' && 'roleAdmin' in S.pt)
+  ok('la ayuda dice que el rol sale del numero, nunca del mensaje',
+    /numero/i.test(S.es.peopleHelp) && /mensaje/i.test(S.es.peopleHelp) &&
+    /number/i.test(S.en.peopleHelp) && /message/i.test(S.en.peopleHelp) &&
+    /numero/i.test(S.pt.peopleHelp) && /mensagem/i.test(S.pt.peopleHelp), S.es.peopleHelp)
+  ok('pqHelp dice que en el directo de un Operador se le pregunta a el',
+    /Operador/.test(S.es.pqHelp) && /Operator/.test(S.en.pqHelp) && /Operador/.test(S.pt.pqHelp), S.es.pqHelp)
+})
+for (const [idioma, re] of [['en-US', /Operator/], ['pt-BR', /Operador/]]) {
+  await seccion(async () => {
+    const { doc } = await montar('config.html', { owners: [DUENO_ROL],
+      chats: [{ jid: DIRECTO_ROL, name: 'Camila Restrepo', kind: 'directo' }] }, idioma)
+    await espera()
+    elegirChat(doc, DIRECTO_ROL)
+    ok(`${idioma}: los roles se dicen en su idioma`, re.test(persona(doc, DIRECTO_ROL)?.textContent || '') &&
+      doc.getElementById('people-legend').textContent !== 'peopleLegend',
+      persona(doc, DIRECTO_ROL)?.textContent)
+  })
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)

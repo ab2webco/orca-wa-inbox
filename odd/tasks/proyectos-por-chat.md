@@ -587,9 +587,76 @@ Everything must be configurable and wired end to end (panel and logic), in ES, E
       dueno-en-el-caso section. All 1324 existing checks had passed before that. The
       section now reads the launched brief through `brief_lanzado`. No panel file changed,
       so no new screenshot applies to M10.
-- [ ] **M11** — The panel "People" card for direct chats and groups, with the read-only global owners, in ES/EN/PT.
+- [x] **M11** — The panel "People" card for direct chats and groups, with the read-only global owners, in ES/EN/PT.
   - `panels.test.mjs`: save and load of `members`, no `<select>`.
   - Screenshots at the four widths, both themes.
+  - What was built (`config.html`, the per-chat editor):
+    - A "Personas y roles" block (`#people-wrap`) after the projects. It is hidden until a
+      chat is chosen and shows only for a chat of people.
+    - **Direct chat:** one row for the chat's person (name, and phone when known), with a
+      Cliente / Operador / Super admin button group: `role=group`, an `aria-label` "Rol de
+      <name>", native buttons with `aria-pressed`, and the existing `focus-visible` ring.
+    - **Group:** one row per participant from `groupMembers[jid]`. A row has the name, or the
+      phone when there is no name, and the phone below. A search field (`#people-search`, with
+      a label) filters by name, phone digits or id and says "N de M". "Nadie del grupo coincide
+      con eso" when nothing matches. A saved role whose id is no longer in the list stays as a
+      row, marked "ya no esta en esta conversacion", so saving never drops it silently.
+    - **Empty or missing list:** "Todavia no hay lista de participantes de este grupo. Llega
+      cuando el plugin sincroniza ..." (`#people-empty`). Roles already saved still show.
+    - **Global owners** (`owners`, by id, or by the phone the list carries, which comes from
+      the id or a `lid_telefono` pair): a read-only "Super admin" badge, "Numero de
+      confianza: Super admin en todas las conversaciones", and a "Se cambia en Su aprobacion"
+      button that opens that tab at the owners card. The line's own chat is also read-only.
+    - **Help text:** the role comes from the number and never from a message, and it holds
+      only in this chat. It says what Operador and Super admin mean, that a direct chat skips
+      the customer rules (a secret is still held), and that in a group customers read
+      everything, so the customer rules and Jev stay.
+    - **Save** writes `members: [{id, name, role}]` on every save, in list order. Client
+      entries are omitted, and so are global owners unless the CLI stored a role for them, in
+      which case it is kept unchanged. A chat with no roles writes `[]`, which the CLI treats
+      as no roles, exactly like v4.16.0. Edit loads `scope[jid].members`, Cancel and a new
+      form reset it, and picking a chat that already has roles in the new form loads them,
+      so saving over it does not wipe them.
+    - `pqHelp` (ES/EN/PT) now also says that `auto` asks the writer in the direct chat of an
+      Operador or Super admin (the M9 rule). Its existing assertions still pass unchanged.
+    - New strings `people*` and `role*` in ES, EN and PT. PT is explicit; "Super admin" is the
+      same word in all three.
+  - Deviation, on purpose: `groupMembers` is NOT in the full reload (`CLAVES`). Adding it
+    broke the existing "el clic contra el cupo del host" check: one more read in the full
+    reload pushed the user's click over the host's 30-messages-per-10-s budget. It is read
+    instead when a group is open in the editor, and again on each reload while it stays
+    open: one read, and only then. That is also how a just-authorised group's list shows up
+    without reopening. The rows repaint only when what they show changes, so the poll never
+    takes focus away from a role button.
+  - Evidence: `test/panels.test.mjs`, seven "roles-por-numero (M11)" sections. They cover the
+    direct chat, the owner's direct chat, a group with search and save order, an empty group
+    with and without the key, a list that arrives after opening, the strings in ES/EN/PT, and
+    the EN and PT role labels.
+    - RED: 1279/1299. All 20 failures were in the new sections (no `#people-wrap`, no
+      strings, `pqHelp` without Operador). The 1278 existing checks passed.
+    - GREEN: 1329/1329, of which 51 checks are new. On the way, two existing checks failed
+      and were fixed in the code, not in the tests. A code comment contained the literal
+      `<select`, which the T17 file guard caught. `groupMembers` in `CLAVES` broke the budget
+      check; it is now read lazily, as described above.
+    - Screenshots (`test/shots.mjs`, fake data): `config-personas-directo` (Laura Mendez marked
+      Operador), `config-personas-grupo` (six participants: the owner read-only, one
+      Operador, one Super admin with a long name, one with no name shown by phone, one with an
+      emoji, and one saved role no longer in the group), and `config-personas-vacio` (a group
+      with no list yet).
+    - Fixes that came from looking at the screenshots:
+      - the owner row's three right-aligned lines were cramped, so the note moved under the
+        name;
+      - "Modo" sat right under the last row, so the block got a bottom rule;
+      - at 390 and 320 the scroll area cut a row with no frame and looked broken, so the
+        list got a frame;
+      - in dark mode that frame (`--border`, 7% white) was invisible, so it uses `--input`.
+    - Looked at, after the last fix, in the captures of the full `npm run check`
+      (`WA_INBOX_CAPTURAS`, cropped around the card, light and dark side by side): the three
+      states `config-personas-{directo,grupo,vacio}` in ES and EN at 1440, 768, 390 and 320,
+      and in PT at 1440 and 320, all in light and dark. That is 60 PNGs, named
+      `config-personas-<state>-<es|en|pt>-<light|dark>-<width>.png`. One leftover cosmetic
+      detail: at 320 and 390 in EN, the "Change it in Your approval" link wraps to its own line
+      with a 4 px indent.
 - [ ] **M12** — Harness text for roles; `npm run check` green; screenshots looked at and listed; live check on the real line:
   - a two-project group: a rule case, an agent-chosen case with its reason, an A/B question answered;
   - an operator request dispatched and the result back in his chat;

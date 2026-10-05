@@ -200,6 +200,46 @@
       button.link.ws-agregar { display: block; margin: 8px 0 0; font-size: 12px; }
       #project-question-wrap .seg + .hint { margin-top: 6px; }
       .ws-mas { font-size: 11px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      /* Las personas de la conversacion (roles-por-numero): un bloque del formulario con su
+         titulo meta, como una seccion, y una fila por persona con su rol a la derecha. Un
+         grupo grande no empuja Guardar fuera de la vista: la lista se desplaza sola. */
+      .people { margin: 16px 0 4px; padding: 12px 0 10px;
+                border-top: 1px solid var(--border, var(--fb-border));
+                border-bottom: 1px solid var(--border, var(--fb-border)); }
+      .people-titulo { display: block; font-size: 11px; font-weight: 600;
+                       text-transform: uppercase; letter-spacing: 0.05em;
+                       color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .people > .hint { margin: 4px 0 0; }
+      #people-search-wrap label { margin-top: 10px; }
+      #people-count:empty { display: none; }
+      /* Con filete y radio, como la lista del autocompletar: una fila cortada abajo se lee
+         como "hay mas" y no como algo roto, que es como se veia sin marco a 390 px. */
+      #people-list { margin-top: 8px; max-height: 420px; overflow-y: auto; padding: 0 10px;
+                     border: 1px solid var(--input, var(--fb-input));
+                     border-radius: var(--radius-md); }
+      #people-list:empty { display: none; }
+      .persona { display: flex; gap: 8px 12px; align-items: center; justify-content: space-between;
+                 padding: 8px 0; border-top: 1px solid var(--border, var(--fb-border)); }
+      .persona:first-child { border-top: 0; }
+      .persona-quien { flex: 1 1 160px; min-width: 0; }
+      .persona-nombre { display: block; font-size: 13px; overflow-wrap: anywhere;
+                        color: var(--foreground, var(--fb-foreground)); }
+      .persona-sub { display: block; font-size: 11px; overflow-wrap: anywhere;
+                     color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .persona .seg { flex: none; padding: 2px 0; }
+      .persona-nota { margin-top: 2px; }
+      .persona-nota button.link { margin-left: 4px; font-size: 11px; white-space: nowrap; }
+      .persona > .rol-fijo { flex: none; }
+      /* Super admin fijo: una pastilla con filete, sin color propio (la allowlist no trae
+         uno), y el texto pleno para que no se lea como apagado. */
+      .rol-fijo { display: inline-block; padding: 1px 8px; border-radius: 9999px; font-size: 11px;
+                  font-weight: 500; border: 1px solid var(--ring, var(--fb-ring));
+                  color: var(--foreground, var(--fb-foreground)); }
+      #people-empty { padding: 8px 0 0; }
+      @media (max-width: 520px) {
+        .persona { flex-wrap: wrap; align-items: flex-start; }
+        .persona-quien { flex-basis: 100%; }
+      }
       .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
                  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
       #chat-count { margin-top: 4px; }
@@ -585,6 +625,24 @@
               <button type="button" data-value="owner" data-t="pqOwner"></button>
             </div>
             <p class="hint" data-t="pqHelp"></p>
+          </div>
+
+          <!-- Las personas de la conversacion y su rol (roles-por-numero, M11). El rol sale
+               del NUMERO que el dueno marca aqui, nunca de lo que diga un mensaje, y vale solo
+               en esta conversacion. En un directo, la persona del chat; en un grupo, la lista
+               que deja wa-scope sync en `groupMembers`. Los numeros de confianza son Super
+               admin en todas partes: aqui solo se muestran. Grupos de botones, como el modo. -->
+          <div class="people" id="people-wrap" hidden>
+            <span class="people-titulo" id="people-legend" data-t="peopleLegend"></span>
+            <p class="hint" id="people-help"></p>
+            <div id="people-search-wrap" hidden>
+              <label for="people-search" data-t="peopleSearchLabel"></label>
+              <input id="people-search" type="search" autocomplete="off" spellcheck="false"
+                     aria-describedby="people-count" data-t-ph="peopleSearchPh" />
+              <p class="hint" id="people-count" aria-live="polite"></p>
+            </div>
+            <div id="people-list" role="list" aria-labelledby="people-legend"></div>
+            <p class="empty" id="people-empty" hidden></p>
           </div>
 
           <span class="label" id="mode-label" data-t="permLabel"></span>
@@ -1245,7 +1303,8 @@
           workspaceMore: 'y tambien {list}',
           pqLabel: 'Si el agente duda entre proyectos, pregunta a',
           pqAuto: 'Automatico', pqWriter: 'Quien escribio', pqOwner: 'Usted',
-          pqHelp: 'Automatico: a quien escribio solo en su propia conversacion; en las demas, a ' +
+          pqHelp: 'Automatico: a quien escribio solo en su propia conversacion o en el chat ' +
+            'directo de un Operador o Super admin de esta conversacion; en las demas, a ' +
             'usted, tambien en un grupo donde usted escribe, porque los clientes que lo leen ' +
             'verian los nombres de los proyectos. La respuesta vuelve al caso y el agente elige.',
           pqHoursLegend: 'La pregunta de proyecto',
@@ -1253,6 +1312,30 @@
           pqHoursHelp: 'Si quien escribio no contesta "¿A o B?" en este plazo, la pregunta pasa ' +
             'a usted.',
           pqHoursRange: 'Son horas enteras, desde 1.',
+          // --- Las personas de una conversacion y su rol (roles-por-numero, M11) ---
+          peopleLegend: 'Personas y roles',
+          peopleHelp: 'El rol sale del numero de cada persona, nunca de lo que diga un mensaje, y ' +
+            'vale solo en esta conversacion. Operador: lo que pide dentro de los proyectos de ' +
+            'esta conversacion va al agente del proyecto y el resultado vuelve aqui; lo ' +
+            'destructivo o de fuera de esos proyectos espera su decision. Super admin: cuenta ' +
+            'como usted aqui, pero aprobar por WhatsApp sigue siendo solo de sus numeros de ' +
+            'confianza.',
+          peopleHelpDirect: 'En este chat directo, a un Operador o Super admin se le responde sin ' +
+            'las reglas de cliente; un secreto se retiene igual.',
+          peopleHelpGroup: 'En un grupo los clientes leen todo: las reglas de cliente y Jev siguen ' +
+            'revisando cada respuesta.',
+          peopleSearchLabel: 'Buscar una persona',
+          peopleSearchPh: 'Nombre o telefono…',
+          peopleCount: '{n} de {total}',
+          peopleNoMatch: 'Nadie del grupo coincide con eso.',
+          peopleGroupEmpty: 'Todavia no hay lista de participantes de este grupo. Llega cuando el ' +
+            'plugin sincroniza con el grupo ya guardado aqui: guardelo y vuelva en unos minutos.',
+          peopleRoleOf: 'Rol de {name}',
+          peopleGone: 'ya no esta en esta conversacion',
+          peopleOwner: 'Numero de confianza: Super admin en todas las conversaciones.',
+          peopleOwnLine: 'El chat de esta linea consigo misma: lo que se escribe aqui es suyo.',
+          peopleOwnersGo: 'Se cambia en {tab}',
+          roleClient: 'Cliente', roleOperator: 'Operador', roleAdmin: 'Super admin',
           workspaceHintNoProjects: 'Todavia no hay proyectos: agregue uno en la pestana Proyectos.',
           // --- Proyectos: el catalogo que reparte el agente que atiende los casos ---
           projectsLegend: 'Proyectos',
@@ -1692,7 +1775,8 @@
           workspaceMore: 'and also {list}',
           pqLabel: 'If the agent is unsure between projects, it asks',
           pqAuto: 'Automatic', pqWriter: 'Whoever wrote', pqOwner: 'You',
-          pqHelp: 'Automatic: whoever wrote, only in your own chat; anywhere else, you, also in a ' +
+          pqHelp: 'Automatic: whoever wrote, only in your own chat or in the direct chat of an ' +
+            'Operator or Super admin of this chat; anywhere else, you, also in a ' +
             'group where you write, because the customers who read it would see the project ' +
             'names. The answer goes back to the case and the agent chooses.',
           pqHoursLegend: 'The project question',
@@ -1700,6 +1784,29 @@
           pqHoursHelp: 'If whoever wrote does not answer "A or B?" within this time, the ' +
             'question goes to you.',
           pqHoursRange: 'Whole hours, from 1.',
+          // --- The people of a chat and their role (roles-por-numero, M11) ---
+          peopleLegend: 'People and roles',
+          peopleHelp: "The role comes from each person's number, never from what a message " +
+            'says, and it holds only in this chat. Operator: what they ask within this chat\'s ' +
+            'projects goes to the project agent and the result comes back here; anything ' +
+            'destructive or outside those projects waits for your decision. Super admin: counts ' +
+            'as you here, but approving over WhatsApp stays with your trusted numbers only.',
+          peopleHelpDirect: 'In this direct chat, an Operator or Super admin is answered without ' +
+            'the customer rules; a secret is still held.',
+          peopleHelpGroup: 'In a group, customers read everything: the customer rules and Jev ' +
+            'still review every reply.',
+          peopleSearchLabel: 'Find a person',
+          peopleSearchPh: 'Name or phone…',
+          peopleCount: '{n} of {total}',
+          peopleNoMatch: 'Nobody in the group matches that.',
+          peopleGroupEmpty: 'No participant list for this group yet. It arrives when the plugin ' +
+            'syncs with the group already saved here: save it and check back in a few minutes.',
+          peopleRoleOf: 'Role of {name}',
+          peopleGone: 'no longer in this chat',
+          peopleOwner: 'Trusted number: Super admin in every chat.',
+          peopleOwnLine: "This line's chat with itself: what is written here is yours.",
+          peopleOwnersGo: 'Change it in {tab}',
+          roleClient: 'Customer', roleOperator: 'Operator', roleAdmin: 'Super admin',
           workspaceHintNoProjects: 'There are no projects yet: add one in the Projects tab.',
           // --- Projects: the catalog the case agent hands work out from ---
           projectsLegend: 'Projects',
@@ -2152,7 +2259,8 @@
         workspaceMore: 'e tambem {list}',
         pqLabel: 'Se o agente tiver duvida entre projetos, pergunta a',
         pqAuto: 'Automatico', pqWriter: 'Quem escreveu', pqOwner: 'Voce',
-        pqHelp: 'Automatico: a quem escreveu so na sua propria conversa; nas demais, a voce, ' +
+        pqHelp: 'Automatico: a quem escreveu so na sua propria conversa ou no chat direto de ' +
+          'um Operador ou Super admin desta conversa; nas demais, a voce, ' +
           'tambem num grupo onde voce escreve, porque os clientes que o leem veriam os nomes ' +
           'dos projetos. A resposta volta ao caso e o agente escolhe.',
         pqHoursLegend: 'A pergunta de projeto',
@@ -2160,6 +2268,29 @@
         pqHoursHelp: 'Se quem escreveu nao responder "A ou B?" neste prazo, a pergunta passa ' +
           'para voce.',
         pqHoursRange: 'Sao horas inteiras, a partir de 1.',
+        // --- As pessoas de uma conversa e o seu papel (roles-por-numero, M11) ---
+        peopleLegend: 'Pessoas e papeis',
+        peopleHelp: 'O papel vem do numero de cada pessoa, nunca do que diz uma mensagem, e vale ' +
+          'so nesta conversa. Operador: o que pede dentro dos projetos desta conversa vai para o ' +
+          'agente do projeto e o resultado volta aqui; o destrutivo ou fora desses projetos ' +
+          'espera a sua decisao. Super admin: conta como voce aqui, mas aprovar pelo WhatsApp ' +
+          'continua sendo so dos seus numeros de confianca.',
+        peopleHelpDirect: 'Neste chat direto, um Operador ou Super admin recebe a resposta sem as ' +
+          'regras de cliente; um segredo continua retido.',
+        peopleHelpGroup: 'Num grupo os clientes leem tudo: as regras de cliente e o Jev continuam ' +
+          'revisando cada resposta.',
+        peopleSearchLabel: 'Buscar uma pessoa',
+        peopleSearchPh: 'Nome ou telefone…',
+        peopleCount: '{n} de {total}',
+        peopleNoMatch: 'Ninguem do grupo corresponde a isso.',
+        peopleGroupEmpty: 'Ainda nao ha lista de participantes deste grupo. Ela chega quando o ' +
+          'plugin sincroniza com o grupo ja salvo aqui: salve-o e volte em alguns minutos.',
+        peopleRoleOf: 'Papel de {name}',
+        peopleGone: 'ja nao esta nesta conversa',
+        peopleOwner: 'Numero de confianca: Super admin em todas as conversas.',
+        peopleOwnLine: 'O chat desta linha consigo mesma: o que se escreve aqui e seu.',
+        peopleOwnersGo: 'Altere em {tab}',
+        roleClient: 'Cliente', roleOperator: 'Operador', roleAdmin: 'Super admin',
         workspaceHintNoProjects: 'Ainda nao ha projetos: adicione um na aba Projetos.',
         // --- Projetos: o catalogo que o agente dos casos distribui ---
         projectsLegend: 'Projetos',
@@ -3514,6 +3645,8 @@
        *  tenia permiso, tambien: guardar encima de una autorizacion sin saberlo es la
        *  otra mitad del mismo error. */
       function pintarIdentidad () {
+        // Las personas de la conversacion siguen a la que quedo elegida (roles-por-numero).
+        pintarPersonas()
         var jid = editandoJid || chatElegido
         var n = el('chat-id')
         if (!jid) { n.textContent = ''; return }
@@ -4042,8 +4175,246 @@
         return salida
       }
 
+      // ---------- las personas de la conversacion y su rol (roles-por-numero, M11) ----------
+      // `scope[jid].members` ([{id, name, role}]) guarda solo Operador y Super admin: Cliente
+      // es no tener rol y nunca se escribe. El rol sale del NUMERO que el dueno marca aqui y
+      // vale solo en esta conversacion; los numeros de confianza (`owners`) son Super admin
+      // en todas y aqui solo se muestran. WhatsApp aprueba solo desde esos numeros.
+      var ROLES = ['client', 'operator', 'admin']
+      var ROLES_GUARDADOS = ['operator', 'admin']
+      var ROL_TEXTO = { client: 'roleClient', operator: 'roleOperator', admin: 'roleAdmin' }
+      // `groupMembers` de wa-scope sync: {jid: [{id, name, phone}]}, solo de los grupos del
+      // alcance de la linea vinculada. Un directo no tiene entrada: su persona es el chat.
+      var miembrosDeGrupos = {}
+      // Los roles en edicion son de UNA conversacion (`rolesJid`); cambiarla los recarga.
+      var rolesJid = null
+      var rolesEnEdicion = {}
+      var rolesOrden = []
+      // Las filas pintadas, en orden: guardar escribe los roles en ese orden.
+      var personasPintadas = []
+      var firmaPersonas = ''
+
+      function esIdDePersona (id) { return /^\d+@(lid|s\.whatsapp\.net)$/.test(id) }
+      function esGrupo (jid) {
+        var c = chatsPorJid[jid]
+        return /@g\.us$/.test(jid) || !!(c && c.kind === 'grupo')
+      }
+      function renderGroupMembers (valor) {
+        miembrosDeGrupos = valor && typeof valor === 'object' && !Array.isArray(valor) ? valor : {}
+        pintarPersonas()
+      }
+      /** `groupMembers` no entra en la vuelta entera (CLAVES): el host admite 30 mensajes por
+       *  10 s y esa vuelta ya gasta casi todos. Se lee al abrir un grupo en el formulario, y
+       *  otra vez en cada vuelta mientras siga abierto, que es cuando puede llegar la lista
+       *  de un grupo recien autorizado. Una sola lectura en vuelo a la vez. */
+      var leyendoMiembros = false
+      function leerMiembros () {
+        if (leyendoMiembros) return
+        leyendoMiembros = true
+        read('groupMembers', true).then(function (v) {
+          leyendoMiembros = false
+          if (hayRespuesta(v)) renderGroupMembers(v)
+        }, function () { leyendoMiembros = false })
+      }
+      function leerMiembrosSiHaceFalta () {
+        var jid = editandoJid || chatElegido
+        if (jid && esGrupo(jid)) leerMiembros()
+      }
+      /** Los roles guardados de la conversacion, como los lee el CLI (`miembros_del_panel`):
+       *  un id de persona y un rol que se guarda; lo demas se descarta. */
+      function cargarRoles (jid) {
+        rolesJid = jid
+        rolesEnEdicion = {}
+        rolesOrden = []
+        var entrada = jid && alcancePorJid ? alcancePorJid[jid] : null
+        var lista = entrada && Array.isArray(entrada.members) ? entrada.members : []
+        lista.forEach(function (m) {
+          var id = m && idSinDispositivo(m.id)
+          if (!id || !esIdDePersona(id) || ROLES_GUARDADOS.indexOf(m.role) === -1) return
+          if (!rolesEnEdicion[id]) rolesOrden.push(id)
+          rolesEnEdicion[id] = { role: m.role, name: typeof m.name === 'string' ? m.name : '' }
+        })
+      }
+      /** Un numero de confianza. Por su id, o por el telefono que trae la lista: ese sale del
+       *  propio id o del par LID-telefono que anoto el sidecar, nunca de un texto. */
+      function esDuenoGuardado (id, telefono) {
+        var digitos = String(telefono || '').replace(/\D/g, '')
+        return duenosGuardados.some(function (d) {
+          return d.id === id || (!!digitos && d.id === digitos + '@s.whatsapp.net')
+        })
+      }
+      /** Las personas de la conversacion: la del directo, o los participantes del grupo.
+       *  null cuando la conversacion no es de personas (no hay a quien darle un rol). */
+      function personasDelChat (jid) {
+        var c = chatsPorJid[jid]
+        if (!esGrupo(jid)) {
+          var id = idSinDispositivo(jid)
+          if (!esIdDePersona(id)) return null
+          var tel = c && c.phone ? c.phone
+            : /@s\.whatsapp\.net$/.test(id) ? '+' + id.split('@')[0] : ''
+          return [{ id: id, name: c && c.name && c.name !== c.jid ? c.name : '',
+            phone: c && c.own ? '' : tel, own: !!(c && c.own) }]
+        }
+        var lista = Array.isArray(miembrosDeGrupos[jid]) ? miembrosDeGrupos[jid] : []
+        var vistos = {}
+        var filas = []
+        lista.forEach(function (m) {
+          var id = m && idSinDispositivo(m.id)
+          if (!id || vistos[id] || !esIdDePersona(id)) return
+          vistos[id] = true
+          filas.push({ id: id, name: typeof m.name === 'string' ? m.name : '',
+            phone: typeof m.phone === 'string' ? m.phone : '' })
+        })
+        return filas
+      }
+      function filaDePersona (f) {
+        var tel = f.phone ? formatearTelefono(f.phone) : ''
+        var nombre = f.name || tel || f.id
+        var subs = []
+        if (tel && f.name) subs.push(tel)
+        if (f.gone) subs.push(t('peopleGone'))
+        var fijo = f.own ? 'own' : esDuenoGuardado(f.id, f.phone) ? 'owner' : ''
+        var rol = (rolesEnEdicion[f.id] || {}).role || 'client'
+        var busca = aplanar([nombre, f.name, tel, String(f.phone || '').replace(/\D/g, ''), f.id].join(' '))
+        var html = '<div class="persona" role="listitem" data-id="' + escAttr(f.id) +
+          '" data-busca="' + escAttr(busca) + '"><div class="persona-quien">' +
+          '<span class="persona-nombre">' + esc(nombre) + '</span>' +
+          (subs.length ? '<span class="persona-sub">' + esc(subs.join(' · ')) + '</span>' : '')
+        // Un numero de confianza (o el chat de la linea consigo misma): Super admin fijo, con
+        // el porque debajo del nombre y, para cambiarlo, el boton a Su aprobacion.
+        if (fijo) {
+          return html + '<span class="persona-sub persona-nota">' +
+            esc(t(fijo === 'own' ? 'peopleOwnLine' : 'peopleOwner')) +
+            (fijo === 'owner' ? ' <button type="button" class="link" data-ir="aprobacion">' +
+              esc(fmt('peopleOwnersGo', { tab: t('tabAprobacion') })) + '</button>' : '') +
+            '</span></div><span class="rol-fijo">' + esc(t('roleAdmin')) + '</span></div>'
+        }
+        html += '</div>'
+        return html + '<div class="seg" role="group" aria-label="' +
+          escAttr(fmt('peopleRoleOf', { name: nombre })) + '">' + ROLES.map(function (r) {
+            return '<button type="button" data-value="' + r + '" aria-pressed="' +
+              (r === rol ? 'true' : 'false') + '">' + esc(t(ROL_TEXTO[r])) + '</button>'
+          }).join('') + '</div></div>'
+      }
+      /** La tarjeta de personas de la conversacion elegida. Se repinta solo si cambio lo que
+       *  muestra: el sondeo repinta los chats cada pocos segundos, y rehacer las filas le
+       *  quitaria el foco a quien esta eligiendo un rol con el teclado. */
+      function pintarPersonas () {
+        var caja = el('people-wrap')
+        var jid = editandoJid || chatElegido
+        var filas = jid ? personasDelChat(jid) : null
+        if (!filas) {
+          caja.hidden = true
+          el('people-list').innerHTML = ''
+          personasPintadas = []
+          firmaPersonas = ''
+          return
+        }
+        if (rolesJid !== jid) {
+          cargarRoles(jid)
+          if (esGrupo(jid)) leerMiembros()
+        }
+        var grupo = esGrupo(jid)
+        // Sin la lista del grupo todavia (recien autorizado, o antes del primer sync), los
+        // que ya tienen rol se ven igual: no se pierden al guardar.
+        var pendiente = grupo && !filas.length
+        var ids = {}
+        filas.forEach(function (f) { ids[f.id] = true })
+        rolesOrden.forEach(function (id) {
+          if (ids[id] || !rolesEnEdicion[id]) return
+          ids[id] = true
+          filas.push({ id: id, name: rolesEnEdicion[id].name, phone: '', gone: !pendiente })
+        })
+        var firma = JSON.stringify([jid, filas, rolesEnEdicion, duenosGuardados, pendiente])
+        caja.hidden = false
+        if (firma === firmaPersonas) return
+        firmaPersonas = firma
+        personasPintadas = filas.map(function (f) {
+          return { id: f.id, name: f.name || (rolesEnEdicion[f.id] || {}).name || '' }
+        })
+        el('people-help').textContent = t('peopleHelp') + ' ' +
+          t(grupo ? 'peopleHelpGroup' : 'peopleHelpDirect')
+        el('people-search-wrap').hidden = !grupo || !filas.length
+        var lista = el('people-list')
+        lista.dataset.pendiente = pendiente ? '1' : ''
+        lista.innerHTML = filas.map(filaDePersona).join('')
+        Array.prototype.forEach.call(lista.querySelectorAll('.persona'), function (fila) {
+          var id = fila.getAttribute('data-id')
+          Array.prototype.forEach.call(fila.querySelectorAll('.seg button'), function (b) {
+            b.addEventListener('click', function () {
+              Array.prototype.forEach.call(fila.querySelectorAll('.seg button'), function (x) {
+                apretar(x, x === b)
+              })
+              var rol = b.getAttribute('data-value')
+              if (ROLES_GUARDADOS.indexOf(rol) === -1) {
+                delete rolesEnEdicion[id]
+              } else {
+                var antes = rolesEnEdicion[id]
+                rolesEnEdicion[id] = { role: rol, name: (antes && antes.name) ||
+                  (personasPintadas.filter(function (p) { return p.id === id })[0] || {}).name || '' }
+                if (rolesOrden.indexOf(id) === -1) rolesOrden.push(id)
+              }
+              // La firma sigue lo apretado: el proximo repintado no lo deshace ni lo repite.
+              firmaPersonas = JSON.stringify([jid, filas, rolesEnEdicion, duenosGuardados, pendiente])
+            })
+          })
+          var ir = fila.querySelector('button[data-ir]')
+          if (ir) {
+            ir.addEventListener('click', function () {
+              pestanaElegida = true
+              mostrarPestana(ir.getAttribute('data-ir'))
+              var tarjeta = el('owners-card')
+              if (tarjeta && tarjeta.scrollIntoView) tarjeta.scrollIntoView({ block: 'start' })
+            })
+          }
+        })
+        filtrarPersonas()
+      }
+      function filtrarPersonas () {
+        var terminos = aplanar(el('people-search').value).split(' ').filter(Boolean)
+        var filas = el('people-list').querySelectorAll('.persona')
+        var vistas = 0
+        Array.prototype.forEach.call(filas, function (f) {
+          var texto = f.getAttribute('data-busca') || ''
+          var si = terminos.every(function (x) { return texto.indexOf(x) !== -1 })
+          f.hidden = !si
+          if (si) vistas += 1
+        })
+        el('people-count').textContent = terminos.length && filas.length
+          ? fmt('peopleCount', { n: vistas, total: filas.length }) : ''
+        var vacio = el('people-empty')
+        var mensaje = el('people-list').dataset.pendiente ? t('peopleGroupEmpty')
+          : filas.length && !vistas ? t('peopleNoMatch') : ''
+        vacio.textContent = mensaje
+        vacio.hidden = !mensaje
+      }
+      el('people-search').addEventListener('input', filtrarPersonas)
+      /** Lo que se guarda en `members`: los de rol Operador o Super admin, en el orden de la
+       *  lista. Los numeros de confianza no se agregan; si el CLI les guardo un rol, se
+       *  conserva tal cual, porque aqui no se pueden tocar. */
+      function miembrosDelFormulario (jid) {
+        if (rolesJid !== jid) cargarRoles(jid)
+        var orden = personasPintadas.map(function (p) { return p.id })
+        rolesOrden.forEach(function (id) { if (orden.indexOf(id) === -1) orden.push(id) })
+        return orden.filter(function (id) {
+          return rolesEnEdicion[id] && ROLES_GUARDADOS.indexOf(rolesEnEdicion[id].role) !== -1
+        }).map(function (id) {
+          var pintada = personasPintadas.filter(function (p) { return p.id === id })[0]
+          return { id: id, name: (pintada && pintada.name) || rolesEnEdicion[id].name || '',
+            role: rolesEnEdicion[id].role }
+        })
+      }
+      function olvidarPersonas () {
+        rolesJid = null
+        rolesEnEdicion = {}
+        rolesOrden = []
+        firmaPersonas = ''
+        el('people-search').value = ''
+      }
+
       function startEdit(entry, key) {
         if (!entry) return
+        olvidarPersonas()
         editandoJid = key
         pickChat(key, entry.chatName || key)
         el('chat').value = entry.chatName || key
@@ -4097,6 +4468,7 @@
         // repo que nada tiene que ver.
         pintarSelectoresDeProyecto([])
         ponerSeg('chat-project-question', 'auto', 'auto')
+        olvidarPersonas()
         pintarIdentidad()
         pintarCuenta()
         el('scope-form-title').textContent = t('formLegend')
@@ -4183,6 +4555,9 @@
             firstReply: valorSeg('chat-first-reply') === 'default' ? null
               : valorSeg('chat-first-reply') || null,
             approval: nivelesDelFormulario(),
+            // Los roles de esta conversacion (roles-por-numero): siempre una lista, vacia
+            // cuando nadie tiene rol, que es lo mismo que no tener la clave.
+            members: miembrosDelFormulario(jid),
             updatedAt: new Date().toISOString() })
           // Autorizar es autorizar para ESTE numero (T9): el mismo grupo visto desde
           // otro numero propio es otra autorizacion.
@@ -4225,6 +4600,8 @@
       function renderOwners(lista) {
         duenosGuardados = listaDeDuenos(lista)
         if (!duenosEnEdicion) pintarDuenos()
+        // Un numero de confianza se ve fijo en las personas de cada conversacion.
+        pintarPersonas()
       }
       function renderSenders(lista) {
         remitentes = Array.isArray(lista) ? lista.filter(function (r) {
@@ -5246,6 +5623,10 @@
             if (hayRespuesta(v('chats'))) renderChats(v('chats'))
             if (hayRespuesta(v('senders'))) renderSenders(v('senders'))
             if (hayRespuesta(v('owners'))) renderOwners(v('owners'))
+            // Los participantes de los grupos se leen solo con un grupo en el formulario, en
+            // cada vuelta mientras siga abierto: una lectura, y la lista de un grupo recien
+            // autorizado aparece sola. Fuera de eso no gastan el cupo del host (ver CLAVES).
+            leerMiembrosSiHaceFalta()
             if (hayRespuesta(v('approvalNumber'))) renderApproval(v('approvalNumber'))
             pintarClave('agentName', v('agentName'), sello)
             // El latido manda sobre todo lo demas: si nadie esta corriendo, el health
