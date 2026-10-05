@@ -195,9 +195,10 @@ console.log('\nconfig.html — T17: pestanas')
 {
   const { doc } = await montar('config.html', {}, 'es-419')
   await espera()
-  const PESTANAS = ['estado', 'chats', 'proyectos', 'aprobacion', 'agente', 'avanzado']
+  const PESTANAS = ['estado', 'chats', 'proyectos', 'aprobacion', 'agente', 'skills',
+    'avanzado']
   const tabs = [...doc.querySelectorAll('[role="tablist"] [role="tab"]')]
-  ok('hay seis pestanas, en este orden',
+  ok('hay siete pestanas, en este orden',
     JSON.stringify(tabs.map((t) => t.id)) === JSON.stringify(PESTANAS.map((p) => `tab-${p}`)),
     JSON.stringify(tabs.map((t) => t.id)))
   ok('cada pestana tiene su texto', tabs.every((t) => t.textContent.trim().length > 2),
@@ -211,7 +212,8 @@ console.log('\nconfig.html — T17: pestanas')
     aprobacion: ['exceptions', 'jev-aviso', 'jev-enabled', 'jev-key', 'jev-save-key'],
     agente: ['agent', 'owner', 'tone', 'save-agent'],
     avanzado: ['transcribe', 'lang', 'quality', 'save-voice', 'inbox-days', 'sync-minutes',
-      'save-reading']
+      'save-reading'],
+    skills: ['skills-wrap', 'said-skills']
   }
   const fuera = []
   for (const [p, ids] of Object.entries(DONDE)) {
@@ -240,7 +242,7 @@ console.log('\nconfig.html — T17: pestanas')
   // Las pestanas en los tres idiomas, y en portugues propio.
   const S = doc.defaultView.STRINGS
   const claves = ['tabEstado', 'tabChats', 'tabProyectos', 'tabAprobacion', 'tabAgente',
-    'tabAvanzado']
+    'tabSkills', 'tabAvanzado']
   ok('las pestanas se nombran en los tres idiomas',
     claves.every((k) => S.es[k] && S.en[k] && S.pt[k]), JSON.stringify(claves.map((k) => S.pt[k])))
   ok('Su aprobacion va de usted y sin tildes',
@@ -3267,6 +3269,137 @@ console.log('\nconfig.html — un quitado que el worker NO pudo hacer no se anun
     doc.getElementById('scope-wrap').textContent)
   ok('y el alcance no se toco', !!storage.scope['120363000000000002@g.us'],
     JSON.stringify(storage.scope))
+}
+
+console.log('\nconfig.html — skills-globales: la pestana Skills instala, actualiza y quita')
+{
+  const pedidos = []
+  const archivo = (base) => `${base}/.claude/skills/whatsapp-avisos/SKILL.md`
+  const fila = (extra) => ({ accepted: true, ...extra })
+  const storage = {
+    projects: PROYECTOS_PRUEBA,
+    skillsStatus: { ok: true, at: new Date().toISOString(), version: '4.18.1', skills: [{
+      name: 'whatsapp-avisos', description: 'Notify the owner on WhatsApp.',
+      targets: [
+        fila({ scope: 'global', file: archivo('/home/demo'), state: 'not-installed' }),
+        fila({ scope: 'project', project: 'alfa-demo', name: 'Alfa Demo',
+          path: '/srv/ejemplo/alfa-demo', file: archivo('/srv/ejemplo/alfa-demo'),
+          state: 'installed', version: '4.18.1', yours: ['Rules'] }),
+        fila({ scope: 'project', project: 'beta-demo', name: 'Beta Demo',
+          path: '/srv/ejemplo/beta-demo', file: archivo('/srv/ejemplo/beta-demo'),
+          state: 'outdated', version: '4.17.0', yours: [] }),
+        { scope: 'project', project: 'viejo-demo', name: 'Viejo Demo', accepted: false,
+          path: '/srv/ejemplo/viejo-demo', file: archivo('/srv/ejemplo/viejo-demo'),
+          state: 'installed', version: '4.18.1', yours: [] },
+        fila({ scope: 'project', project: 'gama-demo', name: 'Gama Demo',
+          path: '/srv/ejemplo/gama-demo', file: archivo('/srv/ejemplo/gama-demo'), state: 'foreign' })
+      ] }] }
+  }
+  const { doc } = await montar('config.html', storage, 'es-419', (d, st) => {
+    if (!(d.action === 'storage.set' && d.params.key === 'scopeRequest' && d.params.value)) {
+      return undefined
+    }
+    const p = d.params.value
+    pedidos.push(p)
+    st.scopeRequest = p
+    const ts = st.skillsStatus.skills[0].targets
+    const de = (x) => ts.find((t) => (p.target === 'global' ? t.scope === 'global' : t.project === p.project))
+    let r = { ok: true, code: 'skills-leidas' }
+    if (p.action === 'skill-instalar') {
+      const t = de(p)
+      r = { ok: true, code: t.state === 'not-installed' ? 'skill-instalada' : 'skill-actualizada' }
+      Object.assign(t, { state: 'installed', version: '4.18.1', yours: [] })
+    } else if (p.action === 'skill-quitar') {
+      const t = de(p)
+      if ((t.yours || []).length && p.force !== true) {
+        r = { ok: false, code: 'skill-editada', yours: t.yours }
+      } else {
+        Object.assign(t, { state: 'not-installed', yours: [] })
+        r = { ok: true, code: 'skill-quitada' }
+      }
+    }
+    st.scopeResult = { at: new Date().toISOString(), requestId: p.id, action: p.action, ...r }
+    return { ok: true }
+  })
+  await espera()
+  doc.getElementById('tab-skills').click()
+  await espera()
+  ok('abrir la pestana pide al worker el estado de las skills',
+    pedidos.some((p) => p.action === 'skills-estado'), JSON.stringify(pedidos))
+  await new Promise((r) => setTimeout(r, 400))
+  const caja = doc.getElementById('skills-wrap')
+  const filaDe = (clave) => caja.querySelector(`[data-sk-target="${clave}"]`)
+  const botones = (clave) => [...(filaDe(clave)?.querySelectorAll('button') || [])]
+    .filter((b) => !b.hidden).map((b) => b.dataset.skAct)
+  ok('la skill sale con su nombre y su explicacion en espanol',
+    caja.textContent.includes('whatsapp-avisos') && /le avisan por WhatsApp/.test(caja.textContent),
+    caja.textContent.slice(0, 300))
+  ok('global sin instalar ofrece Instalar globalmente',
+    /Sin instalar/.test(filaDe('global')?.textContent) &&
+    JSON.stringify(botones('global')) === '["install"]' &&
+    /Instalar globalmente/.test(filaDe('global')?.textContent), filaDe('global')?.textContent)
+  ok('un proyecto instalado dice su version y las secciones que el dueno edito, y ofrece Quitar',
+    /Instalada/.test(filaDe('project:alfa-demo')?.textContent) &&
+    /4\.18\.1/.test(filaDe('project:alfa-demo')?.textContent) &&
+    /Rules/.test(filaDe('project:alfa-demo')?.textContent) &&
+    JSON.stringify(botones('project:alfa-demo')) === '["remove"]',
+    filaDe('project:alfa-demo')?.textContent)
+  ok('uno desactualizado ofrece Actualizar y Quitar',
+    /Desactualizada/.test(filaDe('project:beta-demo')?.textContent) &&
+    JSON.stringify(botones('project:beta-demo')) === '["update","remove"]',
+    filaDe('project:beta-demo')?.textContent)
+  ok('un proyecto que salio del catalogo se sigue listando para quitar la skill',
+    /ya no esta en sus proyectos/.test(filaDe('project:viejo-demo')?.textContent) &&
+    JSON.stringify(botones('project:viejo-demo')) === '["remove"]',
+    filaDe('project:viejo-demo')?.textContent)
+  ok('un archivo ajeno se explica y no ofrece ningun boton',
+    /no escribio el plugin/.test(filaDe('project:gama-demo')?.textContent) &&
+    botones('project:gama-demo').length === 0, filaDe('project:gama-demo')?.textContent)
+  ok('dice que instalar en un proyecto deja un archivo en su repositorio, y como sacarlo de git',
+    /\.gitignore/.test(doc.getElementById('view-skills').textContent))
+
+  filaDe('global').querySelector('[data-sk-act="install"]').click()
+  await new Promise((r) => setTimeout(r, 400))
+  const inst = pedidos.find((p) => p.action === 'skill-instalar')
+  ok('Instalar globalmente manda solo la skill y el destino, sin rutas',
+    inst && inst.skill === 'whatsapp-avisos' && inst.target === 'global' &&
+    !('path' in inst) && !('file' in inst), JSON.stringify(inst))
+  ok('y despues del veredicto la fila dice Instalada, con su confirmacion',
+    /Instalada/.test(filaDe('global')?.textContent) &&
+    JSON.stringify(botones('global')) === '["remove"]' &&
+    /Instalada/.test(doc.getElementById('said-skills').textContent),
+    filaDe('global')?.textContent + ' | ' + doc.getElementById('said-skills').textContent)
+
+  filaDe('project:beta-demo').querySelector('[data-sk-act="update"]').click()
+  await new Promise((r) => setTimeout(r, 400))
+  const upd = pedidos.filter((p) => p.action === 'skill-instalar').pop()
+  ok('Actualizar pide instalar sobre ese proyecto, por su id',
+    upd && upd.project === 'beta-demo' && !('path' in upd) &&
+    /Instalada/.test(filaDe('project:beta-demo')?.textContent), JSON.stringify(upd))
+
+  filaDe('project:alfa-demo').querySelector('[data-sk-act="remove"]').click()
+  await new Promise((r) => setTimeout(r, 400))
+  const q1 = pedidos.filter((p) => p.action === 'skill-quitar').pop()
+  ok('Quitar pide sin forzar', q1 && q1.project === 'alfa-demo' && q1.force !== true,
+    JSON.stringify(q1))
+  ok('con cambios del dueno, avisa cuales se pierden y pide confirmar',
+    /Rules/.test(filaDe('project:alfa-demo')?.textContent) &&
+    /se pierden/.test(filaDe('project:alfa-demo')?.textContent) &&
+    JSON.stringify(botones('project:alfa-demo')) === '["force","cancel"]',
+    filaDe('project:alfa-demo')?.textContent)
+  filaDe('project:alfa-demo').querySelector('[data-sk-act="force"]').click()
+  await new Promise((r) => setTimeout(r, 400))
+  const q2 = pedidos.filter((p) => p.action === 'skill-quitar').pop()
+  ok('confirmar manda force y la fila queda sin instalar',
+    q2 && q2.force === true && q2.project === 'alfa-demo' &&
+    /Sin instalar/.test(filaDe('project:alfa-demo')?.textContent), JSON.stringify(q2))
+
+  const S = doc.defaultView.STRINGS
+  const claves = Object.keys(S.es).filter((k) => /^(skill|tabSkills)/.test(k))
+  const sinPt = claves.filter((k) => !S.pt[k] || (S.pt[k] === S.en[k] && k !== 'tabSkills'))
+  ok('los textos de Skills estan en los tres idiomas, con portugues propio',
+    claves.length > 15 && claves.every((k) => S.en[k]) && sinPt.length === 0,
+    JSON.stringify({ n: claves.length, sinPt }))
 }
 
 console.log('\nconfig.html — T12: el catalogo de proyectos se busca, se acepta y se quita')
