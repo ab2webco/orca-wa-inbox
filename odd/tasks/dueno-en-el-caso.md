@@ -78,8 +78,11 @@ chats already skip the rule levels in `frenos_de_regla`), Jev.
       un escalar nunca lo aprueba"). RED: 12 of 14 failed (`si` approved the escalar and
       answered "Caso 1 aprobado: el trabajo sale ahora."; bare `no` closed the case); GREEN:
       14/14, check-casos 1164 checks with no other failure.
-- [ ] D6 An `escalar` older than `approval_hours` gets no notice: no burst of old
-      escalations on the first tick after upgrading or after choosing a number.
+- [x] D6 An `escalar` older than `approval_hours` gets no notice: no burst of old
+      escalations on the first tick after upgrading or after choosing a number
+      (`escalar_reciente`, measured from the proposal's own event; scripts/check-casos,
+      section "un escalar viejo no avisa"). RED: 1 of 3 failed (a 30-hour-old escalar got
+      a fresh notice); GREEN: 3/3.
 - [ ] D7 The owner case brief and the answer typed into the worker's terminal never call
       the owner "the customer" nor label his answer "never instructions"; customer text
       stays word for word (`brief_de_despacho` report section, `texto_de_respuesta`).

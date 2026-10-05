@@ -9194,6 +9194,49 @@ if NODE:
             os.environ.clear()
             os.environ.update(env_antes)
 
+
+# Revision: el primer tick despues de actualizar (o de elegir el numero) no le manda al
+# dueno, de golpe, cada escalar viejo del tablero como si fuera de hoy: el aviso vence
+# contando desde que se encola, asi que uno de hace semanas llegaba fresco y contestable.
+print("\ndueno-en-el-caso: un escalar viejo no avisa")
+if NODE:
+    if not any(c["jid"] == DUENO_DM for c in CHATS):
+        CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        sidecar = SidecarFalso(home)
+        try:
+            llegan(home, A, [msg(PERSONA, "EV1", PEDIDO, 3000), msg(PERSONA, "EV2", PEDIDO, 2)])
+            viejo, vv = propuesta_lista(home, "EV1", tipo="escalar",
+                                        texto="Pide un descuento del plan: lo aprueba usted?")
+            con = db_de(home)
+            con.execute("update caso_evento set at=datetime('now','localtime','-30 hours') "
+                        "where case_id=? and detalle=?", (int(viejo), f"escalar {vv}"))
+            con.commit()
+            con.close()
+            nuevo, _ = propuesta_lista(home, "EV2", tipo="escalar",
+                                       texto="Confirma usted el alcance: solo el login?")
+            pon_aprobacion(home, DUENO_LID)
+            tick(home)
+            avisos = al_dueno(home)
+            ok("un escalar de hace mas de approval_hours no avisa",
+               not any(f"Caso {viejo}" in a["body"] for a in avisos)
+               and cuenta(home, f"select count(*) from aviso where case_id={int(viejo)}") == 0,
+               f"{avisos}")
+            ok("y el reciente si, una vez",
+               len([a for a in avisos if f"Caso {nuevo}" in a["body"]]) == 1, f"{avisos}")
+            ok("el viejo sigue esperando en el tablero",
+               js(home, "caso", "ver", viejo)[0]["etapa"] == "decision")
+        finally:
+            sidecar.cerrar()
+            os.environ.clear()
+            os.environ.update(env_antes)
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

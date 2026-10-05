@@ -6686,6 +6686,17 @@ def escala_al_dueno(caso):
                 and propuesta_tipo(caso) == "escalar")
 
 
+def escalar_reciente(con, caso):
+    """Si el `escalar` vigente se propuso dentro de `approval_hours`. El aviso vence
+    contando desde que se encola: sin esto, el primer tick despues de actualizar (o de
+    elegir el numero) mandaba de golpe cada escalar viejo del tablero como si fuera de hoy.
+    Uno viejo sigue esperando en el tablero."""
+    fila = con.execute("select at from caso_evento where case_id=? and detalle=? "
+                       "order by id desc limit 1",
+                       (caso["case_id"], f"escalar {caso['propuesta_version']}")).fetchone()
+    return bool(fila) and edad_de(fila["at"]) <= horas_aprobacion(con) * 3600
+
+
 def texto_de_escalado(con, caso):
     """El aviso de un `escalar`: el caso, su chat y la pregunta del agente, y como
     contestarla. Nunca el valor de una credencial: con una, solo el tablero."""
@@ -6768,7 +6779,7 @@ def tick_avisos(con, resumen, inicio=None):
                            (cuenta_activa(),)).fetchall():
         caso = dict(row)
         motivos = espera_del_dueno(con, caso)
-        escala = motivos is None and escala_al_dueno(caso)
+        escala = motivos is None and escala_al_dueno(caso) and escalar_reciente(con, caso)
         if motivos is None and not escala:
             continue
         version = caso["propuesta_version"]
