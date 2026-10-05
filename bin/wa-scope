@@ -7667,9 +7667,11 @@ def lleva_credencial(con, caso, motivos):
     tablero, nunca por WhatsApp. Cuenta una credencial que entro con el caso
     (`credencial_que_entro`), el valor de una en la propuesta o en lo que pidio el cliente
     (`detector_de_valor`), un motivo que lo dice (`MOTIVOS_CON_SECRETO`), o el motivo
-    "credential" cuando la respuesta que se mostraria nombra una. Nombrarla en un brief no
-    cuenta: el caso vivo pedia el tablero porque el brief decia "nunca incluyas una
-    credencial"."""
+    "credential": en una respuesta, cuando la que se mostraria nombra una; en cualquier otra
+    propuesta de un cliente, siempre (segunda revision de orden-del-dueno: un valor en
+    minusculas y sin cifra, "a perroazul", no lo ve ningun detector y no puede salir por
+    WhatsApp). En el caso del dueno, nombrarla en su brief no cuenta: el caso vivo pedia el
+    tablero porque el brief decia "nunca incluyas una credencial"."""
     try:
         propuesta = json.loads(caso.get("propuesta") or "null") or {}
     except (TypeError, ValueError):
@@ -7677,12 +7679,15 @@ def lleva_credencial(con, caso, motivos):
     cuerpos = [str(propuesta.get(k) or "") for k in ("instrucciones", "respuesta")]
     motivos = set(motivos or [])
     valor = detector_de_valor(con, caso)
+    if propuesta.get("tipo") == "responder":
+        por_el_motivo = "credential" in wa_reglas.excepciones(cuerpos[1], wa_reglas.SALIDA)
+    else:
+        por_el_motivo = not caso_del_dueno(con, caso)
     return bool(credencial_que_entro(con, caso)
                 or any(valor(c) for c in cuerpos)
                 or valor(que_pide(con, caso))
                 or motivos & set(MOTIVOS_CON_SECRETO)
-                or ("credential" in motivos and propuesta.get("tipo") == "responder"
-                    and "credential" in wa_reglas.excepciones(cuerpos[1], wa_reglas.SALIDA)))
+                or ("credential" in motivos and por_el_motivo))
 
 
 def pide_del_aviso(con, caso):

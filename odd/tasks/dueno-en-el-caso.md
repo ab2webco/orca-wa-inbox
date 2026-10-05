@@ -169,3 +169,29 @@ Result of the follow-up: `npm run check` exit 0 with `ack_quiet_minutes` in plac
 captures with no overflow or JS errors (in `~/Projects/.capturas-orden`). The new
 `config-acuse-silencio` state was looked at in ES and EN at 1440, 768, 390 and 320, light and
 dark, and in PT at 1440 and 320, light and dark.
+
+### Second review of the follow-up (2026-10-05)
+
+A second review found seven real defects, all fixed on the safe side (when in doubt, a
+destructive or customer-facing exception counts):
+
+- [x] O4 Destructive work is no longer hidden: a pending status stops at a consequence ("is
+      still pending, so drop the table") and never covers a destructive verb that takes an
+      object ("what remains pending: drop the sessions table"); a path or branch ref that
+      names the order or its target stays visible to the destructive check
+      ("scripts/drop-legacy-tables.sh", "release/production"), and a negation that governs it
+      still discounts it; a dot inside a version, a file name or an abbreviation no longer
+      splits the sentence ("Deploy v2.3 to production"); Portuguese `producao`, `apagar`,
+      `deletar`, `excluir` and `remover` count.
+- [x] O5 What goes out to a customer: the credential word only stops counting right after a
+      negated ask/share verb ("nunca le pediremos su clave"); a negation in another clause,
+      another verb or a later list item no longer hides it, and a value next to the word
+      always counts. `valor_de_credencial` reads across a line break, up to 80 characters,
+      and also sees values without a digit (inner capitals or a symbol), but not an account
+      name after "de"/"of" ("la contrasena de GitHub").
+- [x] O6 The notice: a customer proposal that is not a reply and carries the `credential`
+      reason is never printed nor approved over WhatsApp (as on main); the owner's own brief
+      keeps the narrower check.
+
+RED: the new rule section failed 52 of its checks and the lowercase-value brief printed its
+value in the notice. GREEN: check-casos 1536/1536, check-clis 341 settings checks.

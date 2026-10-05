@@ -11291,8 +11291,9 @@ if NODE:
             os.environ.update(env_antes)
 
 # El aviso al dueno: "Pide" nunca es "-" si el caso tiene un mensaje, y "apruebelo en el
-# tablero" solo cuando de verdad hace falta: un valor con forma de secreto o una credencial
-# que entro con el caso, no una palabra del brief.
+# tablero" solo cuando de verdad hace falta: un valor (con forma de secreto o junto a su
+# palabra), una credencial que entro con el caso con su valor, o el motivo credential en una
+# propuesta de cliente que no es una respuesta. La palabra en el brief del dueno no.
 print("\norden-del-dueno: el aviso dice lo que se pide y solo manda al tablero lo secreto")
 if NODE:
     with tempfile.TemporaryDirectory() as home:
@@ -11342,10 +11343,13 @@ if NODE:
                 finally:
                     con.close()
 
+            # Segunda revision: el brief de un cliente con el motivo credential va al tablero
+            # (un valor en minusculas y sin cifra no lo ve ningun detector), pero Pide sigue
+            # trayendo el mensaje del cliente.
             t = aviso_de("AV1", PERSONA, None, PEDIDO, "Revisa la fuga de credenciales del login")
-            ok("una credencial nombrada en el brief: Pide trae el mensaje y no manda al tablero",
-               "Pide: El reporte de ventas" in t and TABLERO not in t and "Pide: -" not in t
-               and "Espera porque: nombra una credencial" in t and "si " in t, t)
+            ok("una credencial nombrada en el brief de un cliente: al tablero, Pide trae el mensaje",
+               "Pide: El reporte de ventas" in t and TABLERO in t and "Pide: -" not in t
+               and "Espera porque: nombra una credencial" in t and "Responda si" not in t, t)
             t = aviso_de("AV2", PERSONA, None, "la clave del panel es Abc12345",
                          "Revisar el acceso al panel", excepciones=["credential"])
             ok("una credencial que entro con el caso: manda al tablero, sin el valor y sin Pide -",
@@ -11391,6 +11395,25 @@ if NODE:
                          respuesta="Le enviamos el enlace para restablecer el acceso.")
             ok("si lo que entro lleva el valor, manda al tablero y no lo muestra",
                TABLERO in t and "Perro123" not in t, t)
+            # Segunda revision: el valor en la linea de abajo, lejos de la palabra o sin cifra
+            # tampoco se imprime ni se aprueba por WhatsApp.
+            t = aviso_de("AV10", PERSONA, None,
+                         "Te paso la contraseña del hosting, va en el siguiente renglón\nPerro2024",
+                         "", regla=["credential"],
+                         respuesta="Gracias, ya quedó configurado el acceso.")
+            ok("el valor en la linea de abajo del mensaje: al tablero, sin el valor",
+               TABLERO in t and "Perro2024" not in t and "Responda si" not in t, t)
+            for stanza, brief, valor_ in (
+                    ("AV11", "Cambia la contraseña del panel de administración del cliente a "
+                             "Perro2024 y avísale.", "Perro2024"),
+                    ("AV12", "Cambia la contraseña del cliente a PerroAzulMarino y avísale.",
+                     "PerroAzulMarino"),
+                    ("AV13", "Cambia la contraseña del cliente a perroazul y avísale.",
+                     "perroazul")):
+                t = aviso_de(stanza, PERSONA, None, "Hola, necesito que cambien el acceso del "
+                             "panel", brief)
+                ok(f"un brief de cliente con el valor {valor_}: al tablero, sin el valor",
+                   TABLERO in t and valor_ not in t and "Responda si" not in t, t)
         finally:
             os.environ.clear()
             os.environ.update(env_antes)
