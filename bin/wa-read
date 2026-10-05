@@ -9,6 +9,8 @@ that store — it never writes to it, and it never talks to WhatsApp.
   chats [--query TXT] [-n N]    list chats (groups and 1:1) with unread counts, and
                                 the phone of a 1:1 (`phone`, +E.164) when known
   senders [-n N]                who wrote in the authorized chats: ids and names, no text
+  members --chat <jid|id|name>  who is in a chat, to give each one a role: [{id, name,
+                                phone, wa_admin}], no text
   whoami                        your LID and how many groups
   chat <id|name> [-n N]         latest messages of a chat
   media <id|name> [-n N]        latest images/videos/audio, with the path on disk
@@ -306,6 +308,11 @@ def cmd_senders(con, a):
     return wa_store.remitentes(con, a.line, a.n)
 
 
+def cmd_members(con, a):
+    fila = wa_store.resolver_chat(con, a.chat, a.line)
+    return wa_store.miembros(con, fila["account"], fila["chat_jid"], bool(fila["is_group"]))
+
+
 def cmd_chat(con, a):
     return wa_store.chat(con, wa_store.resolver_chat(con, a.chat, a.line), a.n, a.days)
 
@@ -391,6 +398,12 @@ def main():
             help="who wrote in the authorized chats (ids and names, no text): the panel "
                  "offers them to pick the owner's numbers")
     s.add_argument("-n", type=int, default=400)
+
+    s = add("members", cmd_members,
+            help="who is in a chat (ids, names, phones; no text): the panel offers them to "
+                 "give each person a role")
+    s.add_argument("--chat", required=True,
+                   help="the chat: its JID, the id from `chats`, or part of its name")
 
     s = add("chat", cmd_chat, help="messages of a chat")
     s.add_argument("chat"); s.add_argument("-n", type=int, default=40)

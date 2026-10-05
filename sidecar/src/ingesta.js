@@ -14,8 +14,9 @@ import { chmodSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { asegurarDirectorio } from './almacen.js'
-import { aNumero, esConversacion, esGrupo, filaDeActualizacion, filaDeMensaje,
-  identidadPropia, jidDeChat, parDeMensaje, parLidTelefono } from './mensajes.js'
+import { aNumero, cambioDeMiembros, esConversacion, esGrupo, filaDeActualizacion,
+  filaDeMensaje, identidadPropia, jidDe, jidDeChat, miembrosDeGrupo, parDeMensaje,
+  parLidTelefono } from './mensajes.js'
 
 /** Lo que se contesta de cada mensaje. Son motivos, no booleanos: el sidecar los cuenta
  *  por separado para poder decir "llegaron 40, se guardaron 12" sin nombrar a nadie. */
@@ -213,6 +214,47 @@ export function ingerirContactos ({ almacen, cuenta, contactos, recordarNombre =
     }
   }
   return { nombrados }
+}
+
+/**
+ * Las listas ENTERAS de participantes (roles-por-numero, M8): el mapa de
+ * `groupFetchAllParticipating` hecho lista, un `groups.upsert` (un grupo al que entro la
+ * linea) o un `groups.update` que trae `participants` (el que emite el mismo fetch). Cada
+ * grupo queda con exactamente su lista; un `groups.update` parcial (un asunto nuevo) no
+ * trae la lista y no toca nada.
+ *
+ * CONTABILIDAD, como `ingerirChats`: ids y si es admin de WhatsApp, aunque el grupo este en
+ * `off`, y nunca un cuerpo. El par LID-telefono que trae la metadata va a `lid_telefono`,
+ * que es de donde `wa-read members` saca el telefono. La linea misma no se anota.
+ */
+export function ingerirMiembros ({ almacen, cuenta, grupos, esPropio = () => false,
+  ahora = Date.now() }) {
+  const listas = (Array.isArray(grupos) ? grupos : [])
+    .map((meta) => [jidDe(meta?.id), miembrosDeGrupo(meta, esPropio)])
+    .filter(([, lista]) => lista)
+  if (!listas.length) return { grupos: 0, miembros: 0 }
+  // Todo el lote en una transaccion: el fetch trae todos los grupos de la linea a la vez.
+  return almacen.lote(() => {
+    let miembros = 0
+    for (const [chatJid, lista] of listas) {
+      for (const m of lista) {
+        if (m.par && !esPropio(m.par.lid) && !esPropio(m.par.pn)) {
+          almacen.anotarTelefono({ cuenta, ...m.par, ahora })
+        }
+      }
+      miembros += almacen.reemplazarMiembros({ cuenta, chatJid, miembros: lista, ahora })
+    }
+    return { grupos: listas.length, miembros }
+  })
+}
+
+/** Un cambio de la lista, de `group-participants.update`: add, remove, promote y demote
+ *  (ver `cambioDeMiembros`). Devuelve cuantas filas cambio. */
+export function ingerirCambioDeMiembros ({ almacen, cuenta, evento, esPropio = () => false,
+  ahora = Date.now() }) {
+  const cambio = cambioDeMiembros(evento, esPropio)
+  if (!cambio) return { cambios: 0 }
+  return { cambios: almacen.cambiarMiembros({ cuenta, ...cambio, ahora }) }
 }
 
 /**

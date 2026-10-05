@@ -584,6 +584,34 @@ const CON_VARIOS = Object.assign({}, CON_LINEA, {
   })
 })
 
+// roles-por-numero (M11): las personas de una conversacion y su rol. Un directo marcado
+// Operador; un grupo con su lista de participantes (`groupMembers`, la deja wa-scope sync)
+// con el numero de confianza fijo, un Operador, un Super admin de nombre largo, uno sin
+// nombre (se ve su telefono) y uno con rol que ya no esta en el grupo; y un grupo cuya lista
+// todavia no llego. Ids, telefonos y nombres de prueba.
+const MIEMBROS_SOPORTE = [
+  { id: '100000000000001@lid', name: 'Ana Restrepo', phone: '+573000000011' },
+  { id: '100000000000002@lid', name: 'Beto Socio', phone: '+573000000012' },
+  { id: '111122223333@lid', name: 'Carolina Fern\u00e1ndez de la Torre Villalobos',
+    phone: '+573007776655' },
+  { id: '573000000013@s.whatsapp.net', name: '', phone: '+573000000013' },
+  { id: '111122224444@lid', name: 'Diego Ram\u00edrez', phone: null },
+  { id: '111122225555@lid', name: 'Elena Soto \u{1F33B}', phone: '+573009998877' }
+]
+const CON_PERSONAS = Object.assign({}, CON_LINEA, {
+  groupMembers: { '120363000000000001@g.us': MIEMBROS_SOPORTE },
+  scope: Object.assign({}, CON_LINEA.scope, {
+    '120363000000000001@g.us': Object.assign({}, CON_LINEA.scope['120363000000000001@g.us'], {
+      members: [{ id: '100000000000002@lid', name: 'Beto Socio', role: 'operator' },
+        { id: '111122223333@lid', name: 'Carolina Fern\u00e1ndez de la Torre Villalobos', role: 'admin' },
+        { id: '111122226666@lid', name: 'Fabio Antiguo', role: 'operator' }] }),
+    '573000000000@s.whatsapp.net': Object.assign({}, CON_LINEA.scope['573000000000@s.whatsapp.net'], {
+      members: [{ id: '573000000000@s.whatsapp.net', name: 'Laura M\u00e9ndez', role: 'operator' }] })
+  })
+})
+const EDITAR_CHAT = (jid) => `document.querySelector('[data-edit="${jid}"]').click();` +
+  "setTimeout(function () { document.getElementById('people-wrap').scrollIntoView() }, 150)"
+
 // Las cuentas de Claude que el worker lee de `orca account list` (de ejemplo).
 const CUENTAS_CLAUDE = [
   { id: 'cuenta-bot', email: 'bot.whatsapp@example.invalid', authenticated: true, active: false, used: 12 },
@@ -662,6 +690,17 @@ const PANELES = [
   { nombre: 'config-proyectos-varios', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, idiomas: ['pt'], espera: 400, datos: CON_VARIOS, pestana: 'chats',
     guion: EDITAR_CONVERSACION + ";document.getElementById('workspace-search').scrollIntoView()" },
+  // roles-por-numero (M11): la tarjeta de personas en un directo, en un grupo con varios
+  // participantes y en un grupo cuya lista todavia no llego.
+  { nombre: 'config-personas-directo', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, idiomas: ['pt'], espera: 500, datos: CON_PERSONAS, pestana: 'chats',
+    guion: EDITAR_CHAT('573000000000@s.whatsapp.net') },
+  { nombre: 'config-personas-grupo', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, idiomas: ['pt'], espera: 500, datos: CON_PERSONAS, pestana: 'chats',
+    guion: EDITAR_CHAT('120363000000000001@g.us') },
+  { nombre: 'config-personas-vacio', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, idiomas: ['pt'], espera: 500, datos: CON_PERSONAS, pestana: 'chats',
+    guion: EDITAR_CHAT('120363000000000002@g.us') },
   // T22.1: elegir los numeros del dueno de quienes escribieron.
   { nombre: 'config-duenos-combo', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, espera: 300, datos: CON_LINEA, pestana: 'aprobacion',

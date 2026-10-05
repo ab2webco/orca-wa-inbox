@@ -22,10 +22,10 @@
 // reservo, con los topes que el panel ya sabe guardar.
 //
 // QUIEN ESCRIBE. El sidecar, y solo el, en todo lo que es CONTENIDO RECIBIDO: `linea`,
-// `chat`, `mensaje`, `desalojo`, `migracion`. El worker corre tras la valla de permisos
-// de Node y NO tiene `--allow-fs-write` (no existe en todo orca-oss, §1): no puede
-// escribir aca ni debe intentarlo. `wa-read`, que es Python y por eso no hereda la
-// valla, solo lee.
+// `chat`, `grupo_miembro`, `mensaje`, `desalojo`, `migracion`. El worker corre tras la
+// valla de permisos de Node y NO tiene `--allow-fs-write` (no existe en todo orca-oss,
+// §1): no puede escribir aca ni debe intentarlo. `wa-read`, que es Python y por eso no
+// hereda la valla, solo lee.
 //
 // La UNICA excepcion es `envio`, la bandeja de salida, donde `bin/wa-send` inserta su
 // peticion y el sidecar escribe el veredicto. Son dos escritores sobre una tabla, que
@@ -96,6 +96,21 @@ create table if not exists lid_telefono (
   pn         text not null,
   updated_at integer not null,
   primary key (account, lid)
+);
+
+-- CONTABILIDAD. Quien esta en cada grupo (roles-por-numero, M8): el dueno marca desde el
+-- panel a cada persona Operador o Super admin de ESE grupo, y sin la lista no tiene a quien
+-- marcar. Ids y si es admin de WhatsApp, nunca un cuerpo; se anota aunque el grupo este en
+-- 'off', como chat. La linea misma no se guarda: no es nadie a quien darle un rol.
+-- admin es 1 para admin y superadmin de WhatsApp. No es el rol del plugin: ese lo pone
+-- el dueno (chat_scope.miembros, en scope.db), nunca WhatsApp ni el texto de un mensaje.
+create table if not exists grupo_miembro (
+  account    text not null,
+  chat_jid   text not null,
+  member_jid text not null,
+  admin      integer not null default 0,
+  updated_at integer not null,
+  primary key (account, chat_jid, member_jid)
 );
 
 -- CONTENIDO. Solo de conversaciones autorizadas. La llave lleva la CUENTA adelante
@@ -730,6 +745,74 @@ class Almacen {
         where lid_telefono.pn <> excluded.pn`)
       .run(cuenta, par.lid, par.pn, Math.floor(ahora / 1000))
     return (r.changes || 0) > 0
+  }
+
+  /** Corre `fn` en UNA transaccion (un savepoint, que tambien anida): el fetch de los
+   *  grupos trae cientos de una vez, y una confirmacion por grupo es un fsync por grupo
+   *  con la ingesta esperando. Si `fn` lanza, no queda nada a medias. */
+  lote (fn) {
+    this.con.exec('savepoint lote')
+    try {
+      const r = fn()
+      this.con.exec('release lote')
+      return r
+    } catch (error) {
+      try { this.con.exec('rollback to lote'); this.con.exec('release lote') } catch {
+        /* nada abierto */
+      }
+      throw error
+    }
+  }
+
+  /** La lista ENTERA de un grupo, de un fetch: queda exactamente esa, y el que ya no esta
+   *  se va. `miembros` es `[{ jid, admin }]` (ver `miembrosDeGrupo`). Atomica: una lista a
+   *  medias es un grupo con gente que no esta o sin gente que si. Devuelve cuantos quedaron. */
+  reemplazarMiembros ({ cuenta, chatJid, miembros, ahora = Date.now() }) {
+    if (!cuenta || !chatJid || !Array.isArray(miembros)) return 0
+    const segundos = Math.floor(ahora / 1000)
+    return this.lote(() => {
+      this.con.prepare('delete from grupo_miembro where account=? and chat_jid=?')
+        .run(cuenta, chatJid)
+      const poner = this.con.prepare('insert or replace into grupo_miembro ' +
+        '(account, chat_jid, member_jid, admin, updated_at) values (?,?,?,?,?)')
+      for (const m of miembros) poner.run(cuenta, chatJid, m.jid, m.admin ? 1 : 0, segundos)
+      return miembros.length
+    })
+  }
+
+  /** Un cambio de la lista (`cambioDeMiembros`): add suma sin admin, remove saca, promote y
+   *  demote ponen o quitan el admin de WhatsApp (sumando al que no estaba: el aviso dice que
+   *  esta). Si sacaron a la linea misma, la lista del grupo entera se va: ya no se puede
+   *  mantener. Devuelve cuantas filas cambio. */
+  cambiarMiembros ({ cuenta, chatJid, accion, miembros = [], salioLaLinea = false,
+    ahora = Date.now() }) {
+    if (!cuenta || !chatJid) return 0
+    if (salioLaLinea) {
+      return Number(this.con.prepare(
+        'delete from grupo_miembro where account=? and chat_jid=?')
+        .run(cuenta, chatJid).changes) || 0
+    }
+    const segundos = Math.floor(ahora / 1000)
+    const sql = {
+      remove: 'delete from grupo_miembro where account=? and chat_jid=? and member_jid=?',
+      add: 'insert into grupo_miembro (account, chat_jid, member_jid, admin, updated_at) ' +
+        'values (?,?,?,0,?) on conflict(account, chat_jid, member_jid) do update set ' +
+        'admin=0, updated_at=excluded.updated_at',
+      promote: 'insert into grupo_miembro (account, chat_jid, member_jid, admin, updated_at) ' +
+        'values (?,?,?,1,?) on conflict(account, chat_jid, member_jid) do update set ' +
+        'admin=1, updated_at=excluded.updated_at',
+      demote: 'insert into grupo_miembro (account, chat_jid, member_jid, admin, updated_at) ' +
+        'values (?,?,?,0,?) on conflict(account, chat_jid, member_jid) do update set ' +
+        'admin=0, updated_at=excluded.updated_at'
+    }[accion]
+    if (!sql) return 0
+    const paso = this.con.prepare(sql)
+    let cambios = 0
+    for (const jid of miembros) {
+      const args = accion === 'remove' ? [cuenta, chatJid, jid] : [cuenta, chatJid, jid, segundos]
+      cambios += Number(paso.run(...args).changes) || 0
+    }
+    return cambios
   }
 
   /** Que esta conversacion existe. Contabilidad, no contenido: se anota aunque el chat

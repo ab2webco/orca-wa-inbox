@@ -37,8 +37,8 @@ import { fileURLToPath } from 'node:url'
 import { identidadesPropias, identidadPropia } from '../sidecar/src/mensajes.js'
 import { abrirAlmacen, ESQUEMA_VERSION, rutaAlmacen, rutaMedia } from '../sidecar/src/almacen.js'
 import { reclaveDecididaDe } from '../sidecar/src/alcance.js'
-import { ingerirActualizacion, ingerirChats, ingerirContactos, ingerirMensaje,
-  nombreDeContacto } from '../sidecar/src/ingesta.js'
+import { ingerirActualizacion, ingerirCambioDeMiembros, ingerirChats, ingerirContactos,
+  ingerirMensaje, ingerirMiembros, nombreDeContacto } from '../sidecar/src/ingesta.js'
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..')
 const WA_READ = join(RAIZ, 'bin', 'wa-read')
@@ -1770,6 +1770,158 @@ console.log('\ningesta: el telefono de cada LID')
   ok('un almacen sin la tabla la recibe al abrirse',
     reabierto.anotarTelefono({ cuenta: CUENTA, lid: LID, pn: TEL }) === true)
   reabierto.cerrar()
+}
+
+// roles-por-numero (M8): la lista de participantes de cada grupo se GUARDA, para que el
+// dueno pueda marcar a cada persona Operador o Super admin desde el panel. Es contabilidad
+// como `lid_telefono`: ids, si es admin de WhatsApp y cuando, nunca un cuerpo. Llega por
+// `groupFetchAllParticipating` (la lista entera) y cambia por `group-participants.update`.
+console.log('\nroles-por-numero (M8): los miembros de cada grupo')
+{
+  const casa = casaNueva()
+  const ruta = rutaAlmacen({ HOME: casa })
+  const alm = abrirAlmacen(ruta)
+  alm.registrarLinea({ cuenta: CUENTA, lid: MI_LID, pn: MI_TEL, nombre: 'Mi Linea' })
+  alm.activarLinea(CUENTA)
+  alm.latir()
+  const esPropio = (jid) => YO.has(identidadPropia(jid))
+  const GRUPO = '120363000000000077@g.us'
+  const OTRO = '120363000000000078@g.us'
+  const UNO = '100000000000002@lid'
+  const UNO_TEL = '573007776655@s.whatsapp.net'
+  const DOS = '573000000002@s.whatsapp.net'
+  const TRES = '111122224444@lid'
+  const CUATRO = '111122225555@lid'
+  const miembros = (chat = GRUPO, cuenta = CUENTA) => Object.fromEntries(alm.con.prepare(
+    'select member_jid, admin from grupo_miembro where account=? and chat_jid=? ' +
+    'order by member_jid').all(cuenta, chat).map((f) => [f.member_jid, f.admin]))
+
+  const columnas = alm.con.prepare('pragma table_info(grupo_miembro)').all()
+    .map((c) => c.name).sort().join(',')
+  ok('la tabla es contabilidad: cuenta, grupo, miembro, si es admin y cuando',
+    columnas === 'account,admin,chat_jid,member_jid,updated_at', columnas)
+
+  // 1. La lista entera, con la forma de `groupFetchAllParticipating` (jid -> metadata).
+  alm.anotarChat({ cuenta: CUENTA, chatJid: GRUPO, nombre: 'Grupo Demo', esGrupo: 1 })
+  const r1 = ingerirMiembros({ almacen: alm, cuenta: CUENTA, esPropio, grupos: [
+    { id: GRUPO, subject: 'Grupo Demo', participants: [
+      { id: UNO, jid: UNO_TEL, lid: UNO, admin: 'admin' },
+      { id: DOS, jid: DOS, admin: null },
+      { id: `${TRES.split('@')[0]}:4@lid`, admin: null },
+      { id: MI_LID, jid: MI_TEL, lid: MI_LID, admin: 'superadmin' }] },
+    { id: OTRO, subject: 'Otro', participants: [{ id: DOS, admin: 'superadmin' }] },
+    { id: LAURA, participants: [{ id: DOS }] }] })
+  let m = miembros()
+  ok('la lista de un fetch queda guardada, un miembro por participante y sin dispositivo',
+    JSON.stringify(m) === JSON.stringify({ [UNO]: 1, [TRES]: 0, [DOS]: 0 }), JSON.stringify(m))
+  ok('la linea misma no es miembro de nada', !m[MI_LID] && !m[MI_TEL])
+  ok('cada grupo guarda los suyos', JSON.stringify(miembros(OTRO)) ===
+    JSON.stringify({ [DOS]: 1 }) && r1.grupos === 2, JSON.stringify(r1))
+  ok('el telefono de un LID que trae la metadata queda en lid_telefono',
+    alm.con.prepare('select pn from lid_telefono where account=? and lid=?')
+      .get(CUENTA, UNO)?.pn === UNO_TEL)
+  ok('y ningun cuerpo se guardo', alm.con.prepare('select count(*) n from mensaje').get().n === 0)
+
+  // 2. Los cambios, con la forma de `group-participants.update`.
+  const cambio = (action, participants) => ingerirCambioDeMiembros({ almacen: alm,
+    cuenta: CUENTA, esPropio, evento: { id: GRUPO, author: UNO, participants, action } })
+  cambio('add', [CUATRO])
+  ok('add suma al miembro, sin admin', miembros()[CUATRO] === 0, JSON.stringify(miembros()))
+  cambio('promote', [CUATRO])
+  ok('promote lo hace admin', miembros()[CUATRO] === 1)
+  cambio('demote', [CUATRO, UNO])
+  ok('demote se lo quita', miembros()[CUATRO] === 0 && miembros()[UNO] === 0)
+  cambio('remove', [TRES])
+  ok('remove lo saca', !(TRES in miembros()) && Object.keys(miembros()).length === 3,
+    JSON.stringify(miembros()))
+  cambio('promote', [TRES])
+  ok('promote de alguien que no estaba lo suma como admin', miembros()[TRES] === 1)
+  cambio('modify', [DOS])
+  ok('modify no toca nada', miembros()[DOS] === 0)
+
+  // 3. Un fetch nuevo REEMPLAZA: el que ya no esta, se va.
+  ingerirMiembros({ almacen: alm, cuenta: CUENTA, esPropio, grupos: [
+    { id: GRUPO, participants: [{ id: UNO, admin: 'admin' }, { id: DOS, admin: null }] }] })
+  ok('un fetch nuevo reemplaza la lista del grupo',
+    JSON.stringify(miembros()) === JSON.stringify({ [UNO]: 1, [DOS]: 0 }),
+    JSON.stringify(miembros()))
+  ok('y no toca la de otro grupo', JSON.stringify(miembros(OTRO)) === JSON.stringify({ [DOS]: 1 }))
+  ok('ni la de otra linea', Object.keys(miembros(GRUPO, 'pn:573000000012')).length === 0)
+
+  // 4. wa-read members: [{id, name, phone, wa_admin}], el nombre del ultimo mensaje o de
+  //    la libreta, el telefono por el par o por el propio jid.
+  alm.anotarChat({ cuenta: CUENTA, chatJid: DOS, nombre: 'Persona Dos Libreta', esGrupo: 0 })
+  const sinMedia = { mediaTipo: null, mediaBytes: null, mencionaMe: 0, citaMe: 0 }
+  alm.guardarMensaje({ cuenta: CUENTA, chatJid: GRUPO, stanzaId: 'GM1', ts: T0, fromMe: 0,
+    senderJid: `${UNO.split('@')[0]}:7@lid`, senderName: 'Uno Viejo', body: 'hola',
+    ...sinMedia })
+  alm.guardarMensaje({ cuenta: CUENTA, chatJid: GRUPO, stanzaId: 'GM2', ts: T0 + 60,
+    fromMe: 0, senderJid: UNO, senderName: 'Uno Nuevo', body: 'otra cosa', ...sinMedia })
+  cambio('add', [CUATRO])
+  alm.cerrar()
+  const r = leerJson(casa, ['members', '--chat', GRUPO])
+  const por = Object.fromEntries((r.filas || []).map((f) => [f.id, f]))
+  ok('`wa-read members --chat` sale 0 con una lista', r.code === 0 && Array.isArray(r.filas),
+    r.stderr)
+  ok('cada fila trae exactamente id, name, phone y wa_admin',
+    (r.filas || []).length > 0 && r.filas.every((f) => Object.keys(f).sort().join(',') === 'id,name,phone,wa_admin'),
+    r.stdout)
+  ok('los miembros del grupo, sin la linea', Object.keys(por).sort().join(',') ===
+    [UNO, DOS, CUATRO].sort().join(',') && !por[MI_LID], r.stdout)
+  ok('el nombre es el del ultimo mensaje que mando', por[UNO]?.name === 'Uno Nuevo', r.stdout)
+  ok('sin mensajes, el de la libreta (su directo)', por[DOS]?.name === 'Persona Dos Libreta',
+    r.stdout)
+  ok('sin ninguno, vacio', por[CUATRO]?.name === '', r.stdout)
+  ok('el telefono: el de su jid, o el del par LID-telefono; sin par, null',
+    por[UNO]?.phone === '+573007776655' && por[DOS]?.phone === '+573000000002' &&
+    por[CUATRO]?.phone === null, r.stdout)
+  ok('wa_admin es un booleano', por[UNO]?.wa_admin === true && por[DOS]?.wa_admin === false,
+    r.stdout)
+  const directo = leerJson(casa, ['members', '--chat', DOS])
+  ok('en un directo, la persona del otro lado',
+    JSON.stringify(directo.filas) === JSON.stringify([{ id: DOS, name: 'Persona Dos Libreta',
+      phone: '+573000000002', wa_admin: false }]), directo.stdout)
+  // Una fila de la linea misma que dejo un escritor anterior tampoco sale.
+  const crudo = new DatabaseSync(ruta)
+  crudo.prepare('insert into grupo_miembro values (?,?,?,0,?)').run(CUENTA, GRUPO, MI_LID, T0)
+  crudo.close()
+  ok('la linea misma no sale aunque este en la tabla',
+    !(leerJson(casa, ['members', '--chat', GRUPO]).filas || []).some((f) => f.id === MI_LID))
+  const nadie = leerJson(casa, ['members', '--chat', '120363000000000079@g.us'])
+  ok('un chat que no existe sale 1, sin escribir en stdout',
+    nadie.code === 1 && nadie.stdout.trim() === '', `${nadie.code} ${nadie.stdout}`)
+  ok('un grupo sin miembros guardados: lista vacia', (() => {
+    const a = abrirAlmacen(ruta)
+    a.anotarChat({ cuenta: CUENTA, chatJid: '120363000000000079@g.us', nombre: 'Vacio',
+      esGrupo: 1 })
+    a.cerrar()
+    const v = leerJson(casa, ['members', '--chat', '120363000000000079@g.us'])
+    return v.code === 0 && JSON.stringify(v.filas) === '[]'
+  })())
+
+  // 5. Un almacen de antes de la tabla la recibe al abrirse, y wa-read lo lee igual.
+  const viejo = new DatabaseSync(ruta)
+  viejo.exec('drop table grupo_miembro')
+  viejo.close()
+  const sinTabla = leerJson(casa, ['members', '--chat', GRUPO])
+  ok('sin la tabla (el sidecar de antes), `members` contesta vacio y no revienta',
+    sinTabla.code === 0 && JSON.stringify(sinTabla.filas) === '[]', sinTabla.stderr)
+  const reabierto = abrirAlmacen(ruta)
+  ok('un almacen sin la tabla la recibe al abrirse',
+    reabierto.con.prepare("select count(*) n from sqlite_master where name='grupo_miembro'")
+      .get().n === 1)
+  reabierto.cerrar()
+
+  // 6. La linea sale del grupo: lo que se sabia de el ya no se puede mantener, se va.
+  const otra = abrirAlmacen(ruta)
+  ingerirMiembros({ almacen: otra, cuenta: CUENTA, esPropio, grupos: [
+    { id: GRUPO, participants: [{ id: UNO, admin: null }, { id: DOS, admin: null }] }] })
+  ingerirCambioDeMiembros({ almacen: otra, cuenta: CUENTA, esPropio,
+    evento: { id: GRUPO, author: UNO, participants: [MI_LID], action: 'remove' } })
+  ok('la linea sale del grupo: su lista se borra',
+    otra.con.prepare('select count(*) n from grupo_miembro where chat_jid=?').get(GRUPO).n === 0)
+  otra.cerrar()
+  rmSync(casa, { recursive: true, force: true })
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

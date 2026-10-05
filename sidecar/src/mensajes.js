@@ -379,3 +379,66 @@ export function filaDeActualizacion (evento) {
   if (!revocado) return null
   return { chatJid, stanzaId, revocado: 1, editado: 0, body: null, ts: null }
 }
+
+/** Un id de PERSONA sin el dispositivo (`<digitos>@lid` o `<digitos>@s.whatsapp.net`), o
+ *  ''. Un grupo, un canal o algo sin forma de id no es un miembro de nadie. */
+function idDePersona (valor) {
+  const jid = jidDeChat(valor)
+  return /^\d+@(lid|s\.whatsapp\.net)$/.test(jid) ? jid : ''
+}
+
+/**
+ * Los miembros de un grupo, de su `GroupMetadata`, o `null` si eso no trae la lista (un
+ * `groups.update` parcial, o algo que no es un grupo).
+ *
+ * La forma sale de Baileys 6.7.24, `extractGroupMetadata` (lib/Socket/groups.js:312-319):
+ * cada participante es `{ id, jid, lid, admin }`. `id` es el jid con que el grupo lo
+ * direcciona (LID o telefono, segun `addressingMode`), `jid` su telefono y `lid` su LID
+ * cuando WhatsApp los manda, y `admin` es 'admin', 'superadmin' o null. Los dos niveles de
+ * WhatsApp son admin aca: el rol del plugin lo pone el dueno, y esto es solo lo que se ve.
+ *
+ * La linea misma no es un miembro: no es nadie a quien darle un rol. Devuelve
+ * `[{ jid, admin: 0|1, par }]`, con `par` el `{ lid, pn }` que trae la metadata, o null.
+ * Solo ids: nunca un cuerpo.
+ */
+export function miembrosDeGrupo (meta, esPropio = () => false) {
+  if (!esGrupo(jidDe(meta?.id)) || !Array.isArray(meta?.participants)) return null
+  const vistos = new Map()
+  for (const p of meta.participants) {
+    const jid = idDePersona(p?.id)
+    if (!jid) continue
+    if ([p.id, p.jid, p.lid].some((j) => j && esPropio(j))) continue
+    const admin = p.admin === 'admin' || p.admin === 'superadmin' || p.isAdmin === true ||
+      p.isSuperAdmin === true ? 1 : 0
+    const par = parLidTelefono(p.lid, p.jid) || parLidTelefono(p.id, p.jid) ||
+      parLidTelefono(p.lid, p.id)
+    vistos.set(jid, { jid, admin, par })
+  }
+  return [...vistos.values()]
+}
+
+/** Las acciones de `group-participants.update` que cambian la lista guardada. `modify` (un
+ *  cambio de numero) trae solo el numero VIEJO (lib/Socket/messages-recv.js:211-214): se
+ *  deja para el proximo fetch, que trae la lista entera. */
+const ACCIONES_DE_MIEMBROS = new Set(['add', 'remove', 'promote', 'demote'])
+
+/**
+ * Un cambio de la lista de un grupo, de `group-participants.update`, o `null`.
+ *
+ * La forma sale de Baileys 6.7.24 (lib/Types/Events.d.ts:80-85, lib/Utils/
+ * process-message.js:271): `{ id, author, participants, action }`, con `participants` los
+ * jids que vienen en el aviso (`p.attrs.jid`). Se leen tambien como objeto `{ id }`: es la
+ * forma de versiones mas nuevas de la libreria, y no avisar de un cambio de forma es el
+ * cero silencioso de siempre. `salioLaLinea` dice que sacaron a la linea misma: su lista ya
+ * no se puede mantener.
+ */
+export function cambioDeMiembros (evento, esPropio = () => false) {
+  const chatJid = jidDe(evento?.id)
+  if (!esGrupo(chatJid) || !ACCIONES_DE_MIEMBROS.has(evento?.action)) return null
+  const todos = Array.isArray(evento.participants) ? evento.participants : []
+  const salioLaLinea = evento.action === 'remove' && todos.some((p) => esPropio(jidDe(p)))
+  const miembros = [...new Set(todos.filter((p) => !esPropio(jidDe(p)))
+    .map(idDePersona).filter(Boolean))]
+  if (!miembros.length && !salioLaLinea) return null
+  return { chatJid, accion: evento.action, miembros, salioLaLinea }
+}

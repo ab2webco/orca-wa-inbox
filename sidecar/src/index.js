@@ -19,8 +19,8 @@ import { isAbsolute } from 'node:path'
 import { abrirAlmacen, rutaAlmacen, rutaMedia } from './almacen.js'
 import { crearAlcance } from './alcance.js'
 import { atenderSalida, ENVIO_LATIDO_MS } from './envio.js'
-import { INGESTA, ingerirActualizacion, ingerirChats, ingerirContactos,
-  ingerirMensaje } from './ingesta.js'
+import { INGESTA, ingerirActualizacion, ingerirCambioDeMiembros, ingerirChats,
+  ingerirContactos, ingerirMensaje, ingerirMiembros } from './ingesta.js'
 import { cuentaDeIdentidad, identidadDeSesion, identidadesPropias,
   identidadPropia } from './mensajes.js'
 
@@ -595,8 +595,12 @@ async function iniciar () {
             // Por el mismo camino que todo lo demas: `groupFetchAllParticipating`
             // devuelve un mapa jid -> metadata, asi que se le pone el `id` adentro y ya
             // es la misma forma que leen los otros tres eventos.
-            anotarChats(Object.entries(grupos || {})
-              .map(([jid, meta]) => ({ ...meta, id: jid })))
+            const metas = Object.entries(grupos || {})
+              .map(([jid, meta]) => ({ ...meta, id: jid }))
+            anotarChats(metas)
+            // Y quien esta en cada uno (roles-por-numero, M8): la misma metadata trae la
+            // lista de participantes, que hasta aca se tiraba.
+            anotarMiembros(metas)
             if (cuenta) almacen.registrarLinea({ cuenta, grupos: Object.keys(grupos || {}).length })
           })
           .catch((error) => emitirError('grupos-sin-leer', error?.message || error))
@@ -792,6 +796,34 @@ async function iniciar () {
     sock.ev.on('groups.update', (grupos) => {
       for (const g of grupos || []) {
         if (g?.id && g?.subject) nombresDeChat.set(g.id, g.subject)
+      }
+      // `groupFetchAllParticipating` tambien emite la metadata entera por aca, y Baileys lo
+      // vuelve a correr solo cuando WhatsApp avisa que los grupos cambiaron (`CB:ib,,dirty`,
+      // lib/Socket/groups.js:57-64). Un cambio parcial (un asunto nuevo) no trae
+      // `participants` y no toca la lista.
+      anotarMiembros(grupos)
+    })
+
+    // ── Quien esta en cada grupo (roles-por-numero, M8) ─────────────────────────────
+    // CONTABILIDAD, como los chats: ids y si es admin de WhatsApp, nunca un cuerpo, y
+    // aunque el grupo este en `off`. Sin la lista el dueno no tiene a quien darle un rol.
+    // Un grupo al que entra la linea llega por `groups.upsert` con su metadata entera; los
+    // que entran, salen, suben o bajan, por `group-participants.update`.
+    function anotarMiembros (grupos) {
+      if (!cuenta) return
+      try {
+        ingerirMiembros({ almacen, cuenta, grupos, esPropio })
+      } catch (error) {
+        avisarFallo('miembros-sin-anotar', error)
+      }
+    }
+    sock.ev.on('groups.upsert', anotarMiembros)
+    sock.ev.on('group-participants.update', (evento) => {
+      if (!cuenta) return
+      try {
+        ingerirCambioDeMiembros({ almacen, cuenta, evento, esPropio })
+      } catch (error) {
+        avisarFallo('miembros-sin-anotar', error)
       }
     })
   }

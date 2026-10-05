@@ -793,6 +793,50 @@ def revisa_varios_proyectos(fallos: list) -> int:
     return hechas
 
 
+def revisa_rol_del_juicio(fallos: list) -> int:
+    """El veredicto de Jev guarda el rol con que se juzgo (roles-por-numero, M10): una base
+    con la tabla `juicio` de antes gana la columna `rol` sin perder sus veredictos, que
+    quedan con `rol` null (juzgados con el binario dueno / participante de entonces)."""
+    hechas = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+        db = home / ".wa-inbox" / "scope.db"
+        db.parent.mkdir(parents=True, exist_ok=True)
+        con = sqlite3.connect(db)
+        con.executescript("""
+            create table juicio (
+              account text not null default 'local', chat_jid text not null,
+              stanza_id text not null, clase text not null,
+              origen text not null default 'agente', at text not null, jev text,
+              primary key (account, chat_jid, stanza_id));
+            insert into juicio (account, chat_jid, stanza_id, clase, origen, at, jev)
+              values ('local', '100@g.us', 'J1', 'card', 'jev', '2026-10-01 09:00',
+                      '{"flags": []}');""")
+        con.commit()
+        con.close()
+        p = subprocess.run([str(BIN / "wa-scope"), "list", "--json"],
+                           capture_output=True, text=True, env=env, timeout=120)
+        hechas += 1
+        if p.returncode != 0:
+            fallos.append("wa-scope list se rompio migrando una tabla juicio sin rol: "
+                          f"{(p.stderr or '').strip()[:200]}")
+        con = sqlite3.connect(db)
+        con.row_factory = sqlite3.Row
+        hechas += 2
+        if "rol" not in {r["name"] for r in con.execute("pragma table_info(juicio)")}:
+            fallos.append("la migracion no le agrego la columna rol a juicio")
+        else:
+            fila = con.execute("select clase, jev, rol from juicio where stanza_id='J1'"
+                               ).fetchone()
+            if not fila or fila["clase"] != "card" or fila["jev"] != '{"flags": []}' \
+                    or fila["rol"] is not None:
+                fallos.append("agregar juicio.rol perdio o cambio un veredicto de antes: "
+                              f"{dict(fila) if fila else None}")
+        con.close()
+    return hechas
+
+
 def revisa_juicio(fallos: list) -> int:
     """La tabla `juicio` se agrega sola sobre una base vieja, y el veredicto se guarda
     una vez por llave (odd/tasks/juicio-cacheado.md, T1/T2).
@@ -1284,6 +1328,326 @@ def revisa_telefono_de_lid(fallos: list) -> int:
                 (chats.get(lid) or {}).get("phone") is not None:
             fallos.append(f"sin la tabla de telefonos, `wa-read chats` contesta "
                           f"{list(chats.values())!r} {err.strip()[-200:]}")
+    return hechas
+
+
+def revisa_miembros(fallos: list) -> int:
+    """`wa-read members --chat <jid> --json` (roles-por-numero, M8): quien esta en un grupo,
+    para que el dueno le de un rol desde el panel. El contrato que lee el panel es
+    `[{id, name, phone, wa_admin}]`: el id sin dispositivo, el nombre del ultimo mensaje o
+    de la libreta, el telefono por el propio jid o por el par LID-telefono (si no, null), y
+    lo que dice WhatsApp de admin. La linea misma no sale. Sin `--chat` no hay respuesta."""
+    hechas = 0
+    if not shutil.which("node"):
+        print("  aviso: sin node, no se armo el almacen con miembros", file=sys.stderr)
+        return hechas
+    grupo, lid, tel, directo = ("120363000000000077@g.us", "111122223333@lid",
+                                "573007776655@s.whatsapp.net", "573000000002@s.whatsapp.net")
+    propio = "100000000000002@lid"
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+        js = (
+            "import { abrirAlmacen, rutaAlmacen } from %r;"
+            "import { ingerirMiembros } from %r;"
+            "const a = abrirAlmacen(rutaAlmacen({ HOME: process.env.HOME }));"
+            "a.registrarLinea({ cuenta: %r, lid: %r, pn: '573000000012:7@s.whatsapp.net', "
+            "nombre: 'L' });"
+            "a.anotarChat({ cuenta: %r, chatJid: %r, nombre: 'Grupo Demo', esGrupo: 1 });"
+            "a.anotarChat({ cuenta: %r, chatJid: %r, nombre: 'Persona Dos', esGrupo: 0 });"
+            "const yo = new Set([%r, '573000000012@s.whatsapp.net']);"
+            "ingerirMiembros({ almacen: a, cuenta: %r, esPropio: (j) => yo.has(j), grupos: ["
+            "{ id: %r, participants: [{ id: %r, jid: %r, lid: %r, admin: 'superadmin' },"
+            " { id: %r, admin: null }, { id: %r, admin: 'admin' }] }] });"
+            "a.activarLinea(%r); a.latir(); a.cerrar();"
+            % ((RAIZ / "sidecar" / "src" / "almacen.js").as_uri(),
+               (RAIZ / "sidecar" / "src" / "ingesta.js").as_uri(), NUEVA, propio + ":1",
+               NUEVA, grupo, NUEVA, directo, propio, NUEVA, grupo, "111122223333:3@lid", tel, lid,
+               directo, propio, NUEVA))
+        subprocess.run([shutil.which("node") or "node", "--input-type=module", "-e", js],
+                       env=env, check=True, capture_output=True, timeout=120)
+
+        p = subprocess.run([str(BIN / "wa-read"), "members", "--chat", grupo, "--json"],
+                           capture_output=True, text=True, env=env, timeout=120)
+        try:
+            filas = json.loads(p.stdout or "null")
+        except ValueError:
+            filas = None
+        esperado = [{"id": directo, "name": "Persona Dos", "phone": "+573000000002",
+                     "wa_admin": False},
+                    {"id": lid, "name": "", "phone": "+573007776655", "wa_admin": True}]
+        hechas += 1
+        if p.returncode != 0 or filas != esperado:
+            fallos.append(f"`wa-read members --chat` contesta {filas!r} (salio "
+                          f"{p.returncode}), se esperaba {esperado!r} {p.stderr.strip()[-200:]}")
+        p = subprocess.run([str(BIN / "wa-read"), "members", "--json"], capture_output=True,
+                           text=True, env=env, timeout=120)
+        hechas += 1
+        if p.returncode == 0 or p.stdout.strip():
+            fallos.append(f"`wa-read members` sin --chat contesta {p.stdout!r} (salio "
+                          f"{p.returncode}): tiene que negarse")
+    return hechas
+
+
+def revisa_roles(fallos: list) -> int:
+    """Los roles por numero (roles-por-numero, M9). El dueno marca a una persona Operador o
+    Super admin de UNA conversacion; Cliente es lo de siempre y no se guarda.
+
+    - `chat_scope.miembros` es un JSON `{id: operator|admin}`; una base de antes recibe la
+      columna y sigue igual (nadie tiene rol).
+    - El panel guarda `scope[jid].members: [{id, name, role}]`, que se fusiona, se persiste
+      y se empuja como `approval`; una entrada de un panel anterior no trae la clave y vale
+      la base. `role: client` y un id sin forma de id no se guardan.
+    - `wa-scope set --member <id>=operator|admin|client` (client lo quita), y el id tiene
+      que tener forma de id de persona.
+    - `wa-scope sync` empuja `groupMembers: {jid: [{id, name, phone}]}` de los grupos del
+      alcance, al lado de `senders`.
+    - `wa_store.rol_de`: un dueno global es admin en todos lados; si no, el rol guardado en
+      ESA conversacion; un LID y un telefono son la misma persona solo por un par de
+      `lid_telefono`, nunca por los digitos."""
+    hechas = 0
+    GRUPO, OTRO, DIRECTO = "300@g.us", "500@g.us", "573000000002@s.whatsapp.net"
+    OPER, JEFA, NADIE = "111122223333@lid", "111122224444@lid", "111122225555@lid"
+    OPER_TEL = "573007776655@s.whatsapp.net"
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+
+        def scope(*args):
+            return subprocess.run([str(BIN / "wa-scope"), *args, "--json"],
+                                  capture_output=True, text=True, env=env, timeout=180)
+
+        man = json.loads((RAIZ / "orca-plugin.json").read_text(encoding="utf-8"))
+        base = ((home / "Library" / "Application Support" / "orca") if sys.platform == "darwin"
+                else (home / ".config" / "orca"))
+        store = base / "plugins-data" / f"{man['publisher']}.{man['id']}" / "storage.json"
+        store.parent.mkdir(parents=True, exist_ok=True)
+
+        def storage():
+            return json.loads(store.read_text(encoding="utf-8")) if store.exists() else {}
+
+        def escribe(datos):
+            store.write_text(json.dumps(datos), encoding="utf-8")
+
+        db = home / ".wa-inbox" / "scope.db"
+
+        def columna(jid):
+            con = sqlite3.connect(db)
+            try:
+                r = con.execute("select miembros from chat_scope where chat_jid=?",
+                                (jid,)).fetchone()
+            except sqlite3.OperationalError:
+                return "sin columna"
+            finally:
+                con.close()
+            return json.loads(r[0]) if r and r[0] else {}
+
+        def miembros_de(jid):
+            p = scope("list")
+            filas = json.loads(p.stdout or "[]") if p.returncode == 0 else []
+            return next((r.get("miembros") for r in filas if r.get("chat_jid") == jid),
+                        "sin fila")
+
+        # ── Una base de antes: sin la columna.
+        scope("set", GRUPO, "--provider", "ninguno", "--mode", "borrador")
+        scope("set", DIRECTO, "--provider", "ninguno", "--mode", "borrador")
+        con = sqlite3.connect(db)
+        if "miembros" in {r[1] for r in con.execute("pragma table_info(chat_scope)")}:
+            con.execute("alter table chat_scope drop column miembros")
+        con.commit()
+        con.close()
+        escribe({k: v for k, v in storage().items() if k != "scope"})
+        hechas += 1
+        if miembros_de(GRUPO) != {} or columna(GRUPO) != {}:
+            fallos.append(f"una base de antes no queda sin roles: list {miembros_de(GRUPO)!r}, "
+                          f"columna {columna(GRUPO)!r}")
+
+        # ── set --member: operator, admin; client lo quita; un id o un rol que no existe no.
+        scope("set", GRUPO, "--member", f"{OPER.split('@')[0]}:4@lid=operator",
+              "--member", f"{JEFA}=admin")
+        hechas += 1
+        if columna(GRUPO) != {OPER: "operator", JEFA: "admin"}:
+            fallos.append(f"`set --member` no guardo los roles sin dispositivo: "
+                          f"{columna(GRUPO)!r}")
+        scope("set", GRUPO, "--member", f"{JEFA}=client")
+        hechas += 1
+        if columna(GRUPO) != {OPER: "operator"}:
+            fallos.append(f"`--member <id>=client` no quito el rol: {columna(GRUPO)!r}")
+        for malo in (f"{OTRO}=operator", "alguien=operator", f"{NADIE}=jefe", NADIE):
+            p = scope("set", GRUPO, "--member", malo)
+            hechas += 1
+            if p.returncode == 0 or columna(GRUPO) != {OPER: "operator"}:
+                fallos.append(f"`--member {malo}` se acepto: salio {p.returncode}, quedo "
+                              f"{columna(GRUPO)!r}")
+        hechas += 1
+        if miembros_de(OTRO) not in ("sin fila", {}) or columna(DIRECTO) != {}:
+            fallos.append("un rol de un chat aparecio en otro")
+
+        # ── El panel: members [{id, name, role}] manda, se persiste y vuelve con nombre.
+        datos = storage()
+        datos.setdefault("scope", {})[GRUPO] = {
+            "chatName": "Grupo Demo", "provider": "ninguno", "target": None,
+            "mode": "borrador", "members": [
+                {"id": OPER, "name": "Persona Operadora", "role": "operator"},
+                {"id": JEFA, "name": "Persona Jefa", "role": "admin"},
+                {"id": NADIE, "name": "Persona Cliente", "role": "client"},
+                {"id": "basura", "name": "X", "role": "admin"},
+                {"id": OTRO, "name": "Grupo", "role": "operator"},
+                {"id": OPER_TEL, "name": "Rol Raro", "role": "jefe"}]}
+        escribe(datos)
+        hechas += 1
+        if miembros_de(GRUPO) != {OPER: "operator", JEFA: "admin"}:
+            fallos.append(f"`members` del panel no manda: {miembros_de(GRUPO)!r}")
+        scope("sync")
+        hechas += 1
+        if columna(GRUPO) != {OPER: "operator", JEFA: "admin"}:
+            fallos.append(f"el sync no guardo `members` del panel: {columna(GRUPO)!r}")
+        empujados = ((storage().get("scope") or {}).get(GRUPO) or {}).get("members")
+        hechas += 1
+        if empujados != [{"id": OPER, "name": "Persona Operadora", "role": "operator"},
+                         {"id": JEFA, "name": "Persona Jefa", "role": "admin"}]:
+            fallos.append(f"el panel no recibe `members` con su nombre: {empujados!r}")
+        directo = ((storage().get("scope") or {}).get(DIRECTO) or {}).get("members")
+        hechas += 1
+        if directo != []:
+            fallos.append(f"un chat sin roles no recibe `members: []`: {directo!r}")
+
+        # Una entrada de un panel anterior (sin `members`) no borra lo de la base.
+        datos = storage()
+        datos["scope"][GRUPO].pop("members", None)
+        escribe(datos)
+        scope("sync")
+        hechas += 1
+        if columna(GRUPO) != {OPER: "operator", JEFA: "admin"} or \
+                miembros_de(GRUPO) != {OPER: "operator", JEFA: "admin"}:
+            fallos.append(f"un panel anterior borro los roles: {columna(GRUPO)!r}")
+        # `set --member` corrige tambien la entrada del panel, que si no lo pisaria.
+        scope("set", GRUPO, "--member", f"{JEFA}=client")
+        hechas += 1
+        if miembros_de(GRUPO) != {OPER: "operator"} or columna(GRUPO) != {OPER: "operator"}:
+            fallos.append(f"`set --member` no gano sobre la entrada del panel: "
+                          f"{miembros_de(GRUPO)!r} {columna(GRUPO)!r}")
+        # Y el panel que vacia la lista la vacia.
+        datos = storage()
+        datos["scope"][GRUPO]["members"] = []
+        escribe(datos)
+        scope("sync")
+        hechas += 1
+        if columna(GRUPO) != {}:
+            fallos.append(f"`members: []` del panel no vacio los roles: {columna(GRUPO)!r}")
+        # El panel quita un rol y, antes del proximo sync, alguien corre `set --member` con
+        # otra persona: el rol quitado no vuelve. `set` parte de lo fusionado (lo del panel
+        # manda, como en `merged_scope`), no de la columna que el sync todavia no corrigio.
+        scope("set", GRUPO, "--member", f"{OPER}=operator")
+        scope("sync")
+        datos = storage()
+        datos["scope"][GRUPO]["members"] = []
+        escribe(datos)
+        p = scope("set", GRUPO, "--member", f"{JEFA}=operator")
+        empujados = [m.get("id") for m in (((storage().get("scope") or {}).get(GRUPO) or {})
+                                           .get("members") or [])]
+        hechas += 1
+        if p.returncode != 0 or columna(GRUPO) != {JEFA: "operator"} or \
+                miembros_de(GRUPO) != {JEFA: "operator"} or empujados != [JEFA]:
+            fallos.append(f"`set --member` devolvio un rol que el panel quito: salio "
+                          f"{p.returncode}, columna {columna(GRUPO)!r}, list "
+                          f"{miembros_de(GRUPO)!r}, panel {empujados!r}")
+        scope("set", GRUPO, "--member", f"{JEFA}=client")
+
+        # ── groupMembers: los miembros de los grupos del alcance, al lado de senders.
+        if shutil.which("node"):
+            js = (
+                "import { abrirAlmacen, rutaAlmacen } from %r;"
+                "const a = abrirAlmacen(rutaAlmacen({ HOME: process.env.HOME }));"
+                "a.registrarLinea({ cuenta: %r, pn: '573000000012:7@s.whatsapp.net', "
+                "nombre: 'L' });"
+                "a.anotarChat({ cuenta: %r, chatJid: %r, nombre: 'Grupo Demo', esGrupo: 1 });"
+                "a.anotarChat({ cuenta: %r, chatJid: %r, nombre: 'Fuera', esGrupo: 1 });"
+                "a.reemplazarMiembros({ cuenta: %r, chatJid: %r, miembros: ["
+                "{ jid: %r, admin: 1 }, { jid: %r, admin: 0 }] });"
+                "a.reemplazarMiembros({ cuenta: %r, chatJid: %r, miembros: [{ jid: %r }] });"
+                "a.anotarTelefono({ cuenta: %r, lid: %r, pn: %r });"
+                "a.activarLinea(%r); a.latir(); a.cerrar();"
+                % ((RAIZ / "sidecar" / "src" / "almacen.js").as_uri(), NUEVA, NUEVA, GRUPO,
+                   NUEVA, OTRO, NUEVA, GRUPO, OPER, NADIE, NUEVA, OTRO, JEFA, NUEVA, OPER,
+                   OPER_TEL, NUEVA))
+            subprocess.run([shutil.which("node") or "node", "--input-type=module", "-e", js],
+                           env=env, check=True, capture_output=True, timeout=120)
+            # El alcance de la linea vinculada: los chats de antes eran de `local`.
+            datos = storage()
+            for e in (datos.get("scope") or {}).values():
+                e["account"] = NUEVA
+            escribe(datos)
+            con = sqlite3.connect(db)
+            con.execute("update chat_scope set account=?", (NUEVA,))
+            con.commit()
+            con.close()
+            scope("sync")
+            grupos = storage().get("groupMembers")
+            hechas += 1
+            if grupos != {GRUPO: [{"id": OPER, "name": "", "phone": "+573007776655"},
+                                  {"id": NADIE, "name": "", "phone": None}]}:
+                fallos.append(f"`sync` no empuja groupMembers de los grupos del alcance: "
+                              f"{grupos!r}")
+
+    # ── rol_de, la regla, con un almacen de verdad para los pares LID-telefono.
+    wa_store = cargar_modulo("wa_store_roles", BIN / "wa_store.py")
+    con = sqlite3.connect(":memory:")
+    con.row_factory = sqlite3.Row
+    con.execute("create table lid_telefono (account text, lid text, pn text, updated_at "
+                "integer)")
+    DUENO_LID, DUENO_TEL = "100000000000001@lid", "573000000001@s.whatsapp.net"
+    con.executemany("insert into lid_telefono values (?,?,?,0)", [
+        (NUEVA, DUENO_LID, DUENO_TEL), (NUEVA, OPER, OPER_TEL)])
+    roles = {GRUPO: {OPER: "operator", JEFA: "admin"}, OTRO: {}}
+    casos = [
+        ("un dueno global es admin en un chat sin roles",
+         (con, NUEVA, OTRO, DUENO_LID, [DUENO_LID], roles), "admin"),
+        ("y en uno donde lo marcaron operador",
+         (con, NUEVA, GRUPO, DUENO_LID, [DUENO_LID], {GRUPO: {DUENO_LID: "operator"}}), "admin"),
+        ("y con el dispositivo en el id", (con, NUEVA, GRUPO, "100000000000001:9@lid",
+                                           [DUENO_LID], roles), "admin"),
+        ("el operador de un grupo es operador ahi", (con, NUEVA, GRUPO, OPER, [], roles),
+         "operator"),
+        ("y cliente en otro chat", (con, NUEVA, OTRO, OPER, [], roles), "client"),
+        ("y cliente en un chat que no tiene entrada", (con, NUEVA, "600@g.us", OPER, [], roles),
+         "client"),
+        ("un admin de un grupo es admin ahi", (con, NUEVA, GRUPO, JEFA, [], roles), "admin"),
+        ("quien no esta es cliente", (con, NUEVA, GRUPO, NADIE, [], roles), "client"),
+        # El dueno global es su id EXACTO, como `es_dueno`, `chat_del_dueno` y
+        # `caso_del_dueno` (v4.16.0): el par no lo vuelve dueno por el otro id. Cambiado en la
+        # verificacion: decia "admin", y eso partia al dueno en dos (roles-por-numero).
+        ("el dueno guardado por telefono escribe con su LID: sin roles, como en v4.16.0",
+         (con, NUEVA, OTRO, DUENO_LID, [DUENO_TEL], roles), "client"),
+        ("ni en su directo por LID", (con, NUEVA, DUENO_LID, None, [DUENO_TEL], {}), "client"),
+        ("el par si une a quien el dueno le dio un rol en ESE chat",
+         (con, NUEVA, GRUPO, DUENO_LID, [DUENO_TEL], {GRUPO: {DUENO_TEL: "operator"}}),
+         "operator"),
+        ("el operador guardado por LID escribe con su telefono: el par lo une",
+         (con, NUEVA, GRUPO, OPER_TEL, [], roles), "operator"),
+        ("sin el par no se une: el LID de otra persona con el mismo numero no es el dueno",
+         (con, NUEVA, OTRO, "573000000001@lid", [DUENO_TEL], roles), "client"),
+        ("ni el par de otra linea", (con, VIEJA, GRUPO, OPER_TEL, [], roles), "client"),
+        ("sin almacen no hay pares", (None, NUEVA, GRUPO, OPER_TEL, [], roles), "client"),
+        ("en un directo sin remitente, el que escribe es la conversacion",
+         (con, NUEVA, DIRECTO, None, [], {DIRECTO: {DIRECTO: "operator"}}), "operator"),
+        ("en un grupo sin remitente, nadie: cliente",
+         (con, NUEVA, GRUPO, None, [], roles), "client"),
+        ("un rol que no existe guardado a mano no da nada",
+         (con, NUEVA, GRUPO, NADIE, [], {GRUPO: {NADIE: "jefe"}}), "client"),
+        ("sin roles guardados (una base de antes) solo el dueno es admin",
+         (con, NUEVA, GRUPO, OPER, [DUENO_LID], {}), "client"),
+    ]
+    rol_de = getattr(wa_store, "rol_de", None)
+    for nombre, args, esperado in casos:
+        hechas += 1
+        try:
+            visto = rol_de(*args) if rol_de else "no existe wa_store.rol_de"
+        except Exception as error:  # noqa: BLE001 - lo que se reporta es el fallo
+            visto = f"revento: {error}"
+        if visto != esperado:
+            fallos.append(f"rol_de: {nombre}: {visto!r}, se esperaba {esperado!r}")
+    con.close()
     return hechas
 
 
@@ -2363,9 +2727,12 @@ def main() -> int:
                       + revisa_firma_del_panel(fallos)
                       + revisa_casa_del_runtime(fallos)
                       + revisa_juicio(fallos)
+                      + revisa_rol_del_juicio(fallos)
                       + revisa_linea_por_numero(fallos)
                       + revisa_reclave_local(fallos)
                       + revisa_telefono_de_lid(fallos)
+                      + revisa_miembros(fallos)
+                      + revisa_roles(fallos)
                       + revisa_proyectos(fallos)
                       + revisa_varios_proyectos(fallos)
                       + revisa_espera(fallos))

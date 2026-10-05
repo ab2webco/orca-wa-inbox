@@ -23,7 +23,7 @@ import {
   esConversacion, esGrupo, jidDeChat, usuarioDe, identidadPropia, identidadesPropias,
   identidadDeSesion, cuentaDeIdentidad,
   mencionaA, citaA, textoDe, mediaDe, filaDeMensaje, filaDeActualizacion,
-  TIPO_MEDIA
+  miembrosDeGrupo, cambioDeMiembros, TIPO_MEDIA
 } from '../sidecar/src/mensajes.js'
 import { filaDeChat } from '../sidecar/src/ingesta.js'
 
@@ -377,6 +377,81 @@ console.log('\nT16b: un chat directo nunca lleva el dispositivo (`:N`) en su jid
   ok('chats.upsert / chats.update: la fila de chat sin dispositivo',
     chat?.chatJid === LID, String(chat?.chatJid))
   ok('un grupo en chats.upsert no se toca', filaDeChat({ id: GRUPO, name: 'G' })?.chatJid === GRUPO)
+}
+
+// roles-por-numero (M8): la lista de participantes de un grupo, que hasta aca se tiraba.
+// Las formas salen de Baileys 6.7.24: `extractGroupMetadata` (lib/Socket/groups.js:312-319)
+// arma cada participante como `{ id, jid, lid, admin }`, con `admin` 'admin', 'superadmin'
+// o null; y `group-participants.update` (lib/Utils/process-message.js:271, lib/Types/
+// Events.d.ts:80-85) trae `{ id, author, participants: string[], action }`, con `action`
+// add, remove, promote, demote o modify. Solo ids: nunca un cuerpo.
+console.log('\nroles-por-numero (M8): los participantes de un grupo')
+{
+  const GRUPO = '120363000000000077@g.us'
+  const esPropio = (jid) => YO.has(identidadPropia(jid))
+  const meta = {
+    id: GRUPO,
+    subject: 'Grupo Demo',
+    addressingMode: 'lid',
+    participants: [
+      { id: '100000000000002@lid', jid: '573007776655@s.whatsapp.net',
+        lid: '100000000000002@lid', admin: 'admin' },
+      { id: '573000000002@s.whatsapp.net', jid: '573000000002@s.whatsapp.net',
+        lid: '111122223333@lid', admin: null },
+      { id: '111122224444:5@lid', admin: 'superadmin' },
+      { id: MI_LID, jid: MI_TEL, lid: MI_LID, admin: 'superadmin' },
+      { id: '120363000000000078@g.us', admin: null },
+      { admin: 'admin' }
+    ]
+  }
+  const miembros = miembrosDeGrupo(meta, esPropio)
+  const por = Object.fromEntries((miembros || []).map((m) => [m.jid, m]))
+  ok('la metadata da un miembro por participante, sin el dispositivo',
+    Array.isArray(miembros) && miembros.length === 3 &&
+    por['100000000000002@lid'] && por['573000000002@s.whatsapp.net'] &&
+    por['111122224444@lid'], JSON.stringify(miembros))
+  ok('la linea misma no es un miembro, ni por su LID ni por su telefono',
+    !por[MI_LID] && !por[MI_TEL], JSON.stringify(miembros))
+  ok('lo que no es una persona (otro grupo, sin id) no entra',
+    !por['120363000000000078@g.us'], JSON.stringify(miembros))
+  ok('admin y superadmin de WhatsApp son admin; el resto no',
+    por['100000000000002@lid']?.admin === 1 && por['111122224444@lid']?.admin === 1 &&
+    por['573000000002@s.whatsapp.net']?.admin === 0, JSON.stringify(miembros))
+  ok('el par LID-telefono que trae la metadata viaja con el miembro',
+    por['100000000000002@lid']?.par?.pn === '573007776655@s.whatsapp.net' &&
+    por['573000000002@s.whatsapp.net']?.par?.lid === '111122223333@lid' &&
+    por['111122224444@lid']?.par === null, JSON.stringify(miembros))
+  ok('sin lista de participantes no hay nada que reemplazar (un groups.update parcial)',
+    miembrosDeGrupo({ id: GRUPO, subject: 'Otro nombre' }, esPropio) === null &&
+    miembrosDeGrupo({ id: '573000000002@s.whatsapp.net', participants: [] }, esPropio) === null)
+  ok('una lista vacia de un grupo si es una respuesta: nadie mas',
+    JSON.stringify(miembrosDeGrupo({ id: GRUPO, participants: [] }, esPropio)) === '[]')
+
+  const evento = (action, participants) => ({ id: GRUPO, author: '100000000000002@lid',
+    participants, action })
+  const alta = cambioDeMiembros(evento('add', ['111122225555@lid', '111122226666:3@lid']),
+    esPropio)
+  ok('group-participants.update add: el grupo, la accion y los ids sin dispositivo',
+    alta?.chatJid === GRUPO && alta?.accion === 'add' &&
+    JSON.stringify(alta?.miembros) === '["111122225555@lid","111122226666@lid"]' &&
+    alta?.salioLaLinea === false, JSON.stringify(alta))
+  const baja = cambioDeMiembros(evento('remove', ['111122225555@lid', MI_LID]), esPropio)
+  ok('remove con la linea adentro: la linea salio del grupo, y no es un miembro',
+    baja?.accion === 'remove' && baja?.salioLaLinea === true &&
+    JSON.stringify(baja?.miembros) === '["111122225555@lid"]', JSON.stringify(baja))
+  ok('promote y demote pasan tal cual',
+    cambioDeMiembros(evento('promote', ['111122225555@lid']), esPropio)?.accion === 'promote' &&
+    cambioDeMiembros(evento('demote', ['111122225555@lid']), esPropio)?.accion === 'demote')
+  ok('los participantes como objeto `{ id }` tambien se leen',
+    cambioDeMiembros(evento('add', [{ id: '111122227777@lid' }]), esPropio)
+      ?.miembros?.[0] === '111122227777@lid')
+  ok('modify (cambio de numero) no se aplica: trae el numero viejo y no el nuevo',
+    cambioDeMiembros(evento('modify', ['111122225555@lid']), esPropio) === null)
+  ok('un evento que no es de un grupo, o sin participantes, no cambia nada',
+    cambioDeMiembros({ id: '573000000002@s.whatsapp.net', participants: ['111122225555@lid'],
+      action: 'add' }, esPropio) === null &&
+    cambioDeMiembros(evento('add', []), esPropio) === null &&
+    cambioDeMiembros(evento('add', [MI_TEL]), esPropio) === null)
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

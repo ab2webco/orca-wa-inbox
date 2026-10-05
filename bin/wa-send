@@ -39,7 +39,9 @@ wrong with what it asked and not a generic failure at the end:
   the transport   and only then, whether there is anything to send through.
   the owner       a send to the owner's own chat (one of the numbers picked in the
                   settings, or the line's chat with itself) skips the rules and Jev:
-                  only a secret-shaped value is still held.
+                  only a secret-shaped value is still held. So does a send to the
+                  direct chat of a person the owner marked operator or admin of that
+                  chat; a group with an operator keeps its rules, customers read it.
   the review      a reply that is about to go out on `responder` goes through the
                   fixed floor first, with or without Jev: money, a credential or a
                   promised date or delivery keeps it as a DRAFT for the owner. With the
@@ -194,7 +196,10 @@ def conversaciones_registradas(ref):
                 "account": cuenta, "chat_jid": jid,
                 "chat_name": r.get("chat_name") or jid, "mode": r.get("mode") or "off",
                 "niveles": wa_reglas.niveles(r.get("aprobacion")),
-                "tone": r.get("tone")}
+                "tone": r.get("tone"),
+                # Los roles de esta conversacion (roles-por-numero); una base de antes no
+                # tiene la columna y nadie tiene rol.
+                "miembros": wa_store.miembros_de_columna(r.get("miembros"))}
         con.close()
     except Exception:                     # noqa: BLE001 - sin registro no hay permiso
         pass
@@ -235,7 +240,11 @@ def conversaciones_registradas(ref):
             "niveles": (wa_reglas.niveles(entrada["approval"])
                         if isinstance(entrada.get("approval"), dict)
                         else previa.get("niveles") or wa_reglas.niveles(None)),
-            "tone": tono if isinstance(tono, str) and tono.strip() else previa.get("tone")}
+            "tone": tono if isinstance(tono, str) and tono.strip() else previa.get("tone"),
+            # Los roles del panel mandan cuando los dice, como `approval`.
+            "miembros": (wa_store.miembros_del_panel(entrada["members"])
+                         if isinstance(entrada.get("members"), list)
+                         else previa.get("miembros") or {})}
     return sorted(filas.values(), key=lambda f: (f["account"], f["chat_jid"]))
 
 
@@ -675,11 +684,16 @@ def main():
     # Con los niveles del chat (T22.3): lo que esta en Permitir no frena, y lo que esta en
     # "Que el agente lo revise" frena para que quien lo escribio lo reescriba.
     niv = fila.get("niveles") or wa_reglas.niveles(None)
-    if wa_store.chat_del_dueno(con, fila["account"], fila["chat_jid"]):
+    if wa_store.chat_del_dueno(con, fila["account"], fila["chat_jid"]) \
+            or wa_store.directo_sin_reglas(con, fila["account"], fila["chat_jid"],
+                                           wa_store.duenos(),
+                                           {fila["chat_jid"]: fila.get("miembros") or {}}):
         # El chat del dueno (T22.1): un numero suyo o la linea consigo misma. Lo que se le
         # manda no protege a ningun tercero, asi que no pasa por las reglas ni por Jev (un
-        # aviso de la sesion de otro proyecto, por ejemplo). Solo queda el control
-        # destructivo: nunca repetir un secreto.
+        # aviso de la sesion de otro proyecto, por ejemplo). Lo mismo en el directo con un
+        # operador o un admin de ese chat (roles-por-numero, M10): ahi no lee ningun
+        # cliente; en un grupo con un operador, si, y las reglas quedan. Solo queda el
+        # control destructivo: nunca repetir un secreto.
         piso = [wa_reglas.SECRETO] if wa_reglas.secreto(sin_firma) else []
         jev = None
     else:
