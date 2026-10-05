@@ -28,7 +28,7 @@
 ## Tareas
 
 - [x] T1 `workspaceDir` sale del userData donde esta instalado; `dataDir` igual (test/userdata.test.mjs).
-- [ ] T2 Comandos con respaldo en `bin-path` y motivo en stderr (test/resolver.test.mjs, manifest, check-resolver).
+- [x] T2 Comandos con respaldo en `bin-path` y motivo en stderr (test/resolver.test.mjs, manifest, check-resolver).
 - [ ] T3 Docs y skills dicen lo mismo; version 4.16.1; `npm run check` en 0.
 
 ## Criterios de aceptacion

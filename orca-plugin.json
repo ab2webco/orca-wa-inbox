@@ -64,7 +64,7 @@
         "title": "WhatsApp: every minute (no agent)",
         "trigger": "* * * * *",
         "timezone": "America/Bogota",
-        "command": "WA=\"$(cat .wa-bin 2>/dev/null)\"; [ -x \"$WA/wa-scope\" ] || exit 1; \"$WA/wa-scope\" tick --json",
+        "command": "WA=\"$(cat .wa-bin 2>/dev/null)\"; [ -x \"$WA/wa-scope\" ] || WA=\"$(cat \"$HOME/.wa-inbox/bin-path\" 2>/dev/null)\"; [ -x \"$WA/wa-scope\" ] || [ -z \"$APPDATA\" ] || WA=\"$(cat \"$APPDATA/wa-inbox/bin-path\" 2>/dev/null)\"; [ -x \"$WA/wa-scope\" ] || { echo \"wa-scope not found: neither .wa-bin in $PWD nor bin-path in ~/.wa-inbox or %APPDATA%/wa-inbox names an executable wa-scope; enable the plugin in Orca so it writes them\" >&2; exit 1; }; \"$WA/wa-scope\" tick --json",
         "workspace": "plugin-owned"
       },
       {
@@ -73,7 +73,7 @@
         "provider": "claude",
         "trigger": "*/5 * * * *",
         "timezone": "America/Bogota",
-        "precheck": "WA=\"$(cat .wa-bin 2>/dev/null)\"; [ -x \"$WA/wa-scope\" ] || exit 1; \"$WA/wa-scope\" pending --needs-agent --precheck",
+        "precheck": "WA=\"$(cat .wa-bin 2>/dev/null)\"; [ -x \"$WA/wa-scope\" ] || WA=\"$(cat \"$HOME/.wa-inbox/bin-path\" 2>/dev/null)\"; [ -x \"$WA/wa-scope\" ] || [ -z \"$APPDATA\" ] || WA=\"$(cat \"$APPDATA/wa-inbox/bin-path\" 2>/dev/null)\"; [ -x \"$WA/wa-scope\" ] || { echo \"wa-scope not found: neither .wa-bin in $PWD nor bin-path in ~/.wa-inbox or %APPDATA%/wa-inbox names an executable wa-scope; enable the plugin in Orca so it writes them\" >&2; exit 1; }; \"$WA/wa-scope\" pending --needs-agent --precheck",
         "prompt": "prompts/triage.md",
         "workspace": "plugin-owned"
       }

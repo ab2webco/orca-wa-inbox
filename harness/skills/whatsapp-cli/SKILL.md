@@ -15,10 +15,10 @@ description: How to use the plugin's command line tools (wa-scope, wa-read, wa-t
 # The WhatsApp tools
 
 Run every tool as `"$WA/<tool>"`, with `WA` read from `.wa-bin` (never a bare name from
-`PATH`). `COMMANDS.md` has the full `--help` of each one. Outside this folder, the plugin
-keeps the same path in `bin-path` in the tools' state folder:
-`WA="$(cat ~/.wa-inbox/bin-path)"` on macOS and Linux, `%APPDATA%\wa-inbox\bin-path` on
-Windows.
+`PATH`). `COMMANDS.md` has the full `--help` of each one. The plugin keeps the same path
+in `bin-path` in the tools' state folder: `WA="$(cat ~/.wa-inbox/bin-path)"` on macOS and
+Linux, `%APPDATA%\wa-inbox\bin-path` on Windows. Use it when `.wa-bin` is missing or does
+not name an executable `wa-scope`, and outside this folder.
 
 ## You propose; only the plugin sends
 
