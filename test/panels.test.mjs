@@ -7405,5 +7405,66 @@ for (const [idioma, re] of [['en-US', /Operator/], ['pt-BR', /Operador/]]) {
   })
 }
 
+// ───────── roles-por-numero: lo que encontro la verificacion ─────────
+// El dueno global es su id EXACTO, como en el motor (`es_dueno`): un participante que solo
+// comparte su telefono por el par LID-telefono no es el dueno, y la tarjeta no lo muestra
+// fijo como Super admin. El contador del buscador es una region viva que existe antes de
+// la primera busqueda. Y un grupo ya guardado sin lista no pide guardarlo otra vez.
+console.log('\nconfig.html — roles-por-numero: lo que encontro la verificacion')
+await seccion(async () => {
+  const LID_DEL_DUENO = '100000000000002@lid'
+  const storage = { owners: [{ id: '573000000011@s.whatsapp.net', name: 'Ana Restrepo' }],
+    chats: [{ jid: GRUPO_ROL, name: 'Soporte Norte', kind: 'grupo' }],
+    groupMembers: { [GRUPO_ROL]: [
+      { id: LID_DEL_DUENO, name: 'Ana Restrepo', phone: '+573000000011' },
+      { id: '111122223333@lid', name: 'Beto Operador', phone: '+573000000012' }] } }
+  const { doc, window } = await montar('config.html', storage, 'es-419')
+  await espera()
+  elegirChat(doc, GRUPO_ROL)
+  await espera()
+  const fila = persona(doc, LID_DEL_DUENO)
+  ok('el LID del dueno guardado por telefono no sale fijo: el motor no lo une por el par',
+    !!fila && !!fila.querySelector('.seg button') && !fila.querySelector('.rol-fijo') &&
+    rolDe(doc, LID_DEL_DUENO) === 'client', fila?.outerHTML.slice(0, 300))
+  const cuenta = doc.getElementById('people-count')
+  ok('el contador del buscador es una region viva ya pintada antes de buscar',
+    cuenta?.getAttribute('aria-live') === 'polite' && cuenta.textContent === '' &&
+    window.getComputedStyle(cuenta).display !== 'none', window.getComputedStyle(cuenta).display)
+  escribir(doc, 'people-search', 'beto')
+  ok('y al buscar dice cuantos de cuantos', /1 de 2/.test(cuenta.textContent), cuenta.textContent)
+})
+
+for (const [idioma, guarde] of [['es-419', /gu[aá]rdelo/i], ['en-US', /save it/i],
+  ['pt-BR', /salve-o/i]]) {
+  await seccion(async () => {
+    const storage = { owners: [DUENO_ROL], chats: [{ jid: GRUPO_ROL, name: 'Soporte Norte', kind: 'grupo' }],
+      groupMembers: { [GRUPO_ROL]: [] },
+      scope: { [GRUPO_ROL]: { chatName: 'Soporte Norte', mode: 'observar', members: [] } } }
+    const { doc, window } = await montar('config.html', storage, idioma)
+    await espera()
+    const S = window.STRINGS
+    const lengua = idioma.slice(0, 2)
+    filaDeChat(doc, 'Soporte Norte').querySelector('[data-edit]').click()
+    await espera()
+    const vacio = doc.getElementById('people-empty')
+    ok(`${idioma}: editando un grupo ya guardado sin lista, no pide guardarlo otra vez`,
+      !vacio.hidden && vacio.textContent === S[lengua].peopleGroupPending &&
+      !guarde.test(vacio.textContent), vacio.textContent)
+    doc.getElementById('cancel-edit').click()
+    await espera()
+    elegirChat(doc, GRUPO_ROL)
+    ok(`${idioma}: elegirlo en el formulario nuevo, ya guardado, tampoco`,
+      !vacio.hidden && vacio.textContent === S[lengua].peopleGroupPending, vacio.textContent)
+  })
+}
+await seccion(async () => {
+  const { window } = await montar('config.html')
+  const S = window.STRINGS
+  ok('el texto del grupo guardado existe en los tres idiomas, el portugues propio',
+    !!S.es.peopleGroupPending && !!S.en.peopleGroupPending && !!S.pt.peopleGroupPending &&
+    S.pt.peopleGroupPending !== S.en.peopleGroupPending,
+    JSON.stringify([S.es.peopleGroupPending, S.pt.peopleGroupPending]))
+})
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)

@@ -211,7 +211,9 @@
                        color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .people > .hint { margin: 4px 0 0; }
       #people-search-wrap label { margin-top: 10px; }
-      #people-count:empty { display: none; }
+      /* El contador es una region viva: tiene que estar pintado ANTES de cambiar, o el
+         lector de pantalla no dice la primera busqueda. Vacio no ocupa lugar. */
+      #people-count:empty { margin: 0; }
       /* Con filete y radio, como la lista del autocompletar: una fila cortada abajo se lee
          como "hay mas" y no como algo roto, que es como se veia sin marco a 390 px. */
       #people-list { margin-top: 8px; max-height: 420px; overflow-y: auto; padding: 0 10px;
@@ -1330,6 +1332,8 @@
           peopleNoMatch: 'Nadie del grupo coincide con eso.',
           peopleGroupEmpty: 'Todavia no hay lista de participantes de este grupo. Llega cuando el ' +
             'plugin sincroniza con el grupo ya guardado aqui: guardelo y vuelva en unos minutos.',
+          peopleGroupPending: 'Todavia no hay lista de participantes de este grupo. Aparece sola ' +
+            'cuando el plugin la recibe de WhatsApp y sincroniza: no hace falta guardar de nuevo.',
           peopleRoleOf: 'Rol de {name}',
           peopleGone: 'ya no esta en esta conversacion',
           peopleOwner: 'Numero de confianza: Super admin en todas las conversaciones.',
@@ -1801,6 +1805,8 @@
           peopleNoMatch: 'Nobody in the group matches that.',
           peopleGroupEmpty: 'No participant list for this group yet. It arrives when the plugin ' +
             'syncs with the group already saved here: save it and check back in a few minutes.',
+          peopleGroupPending: 'No participant list for this group yet. It shows up on its own ' +
+            'once the plugin receives it from WhatsApp and syncs: there is no need to save again.',
           peopleRoleOf: 'Role of {name}',
           peopleGone: 'no longer in this chat',
           peopleOwner: 'Trusted number: Super admin in every chat.',
@@ -2285,6 +2291,8 @@
         peopleNoMatch: 'Ninguem do grupo corresponde a isso.',
         peopleGroupEmpty: 'Ainda nao ha lista de participantes deste grupo. Ela chega quando o ' +
           'plugin sincroniza com o grupo ja salvo aqui: salve-o e volte em alguns minutos.',
+        peopleGroupPending: 'Ainda nao ha lista de participantes deste grupo. Ela aparece sozinha ' +
+          'quando o plugin a recebe do WhatsApp e sincroniza: nao e preciso salvar de novo.',
         peopleRoleOf: 'Papel de {name}',
         peopleGone: 'ja nao esta nesta conversa',
         peopleOwner: 'Numero de confianca: Super admin em todas as conversas.',
@@ -4235,13 +4243,11 @@
           rolesEnEdicion[id] = { role: m.role, name: typeof m.name === 'string' ? m.name : '' }
         })
       }
-      /** Un numero de confianza. Por su id, o por el telefono que trae la lista: ese sale del
-       *  propio id o del par LID-telefono que anoto el sidecar, nunca de un texto. */
-      function esDuenoGuardado (id, telefono) {
-        var digitos = String(telefono || '').replace(/\D/g, '')
-        return duenosGuardados.some(function (d) {
-          return d.id === id || (!!digitos && d.id === digitos + '@s.whatsapp.net')
-        })
+      /** Un numero de confianza: por su id EXACTO, como lo decide el motor (`es_dueno`). El
+       *  telefono que trae la lista (del par LID-telefono) no lo vuelve dueno por el otro id:
+       *  esa persona se ve como cualquier otra, y el dueno le puede dar un rol aqui. */
+      function esDuenoGuardado (id) {
+        return duenosGuardados.some(function (d) { return d.id === id })
       }
       /** Las personas de la conversacion: la del directo, o los participantes del grupo.
        *  null cuando la conversacion no es de personas (no hay a quien darle un rol). */
@@ -4273,7 +4279,7 @@
         var subs = []
         if (tel && f.name) subs.push(tel)
         if (f.gone) subs.push(t('peopleGone'))
-        var fijo = f.own ? 'own' : esDuenoGuardado(f.id, f.phone) ? 'owner' : ''
+        var fijo = f.own ? 'own' : esDuenoGuardado(f.id) ? 'owner' : ''
         var rol = (rolesEnEdicion[f.id] || {}).role || 'client'
         var busca = aplanar([nombre, f.name, tel, String(f.phone || '').replace(/\D/g, ''), f.id].join(' '))
         var html = '<div class="persona" role="listitem" data-id="' + escAttr(f.id) +
@@ -4318,6 +4324,8 @@
         // Sin la lista del grupo todavia (recien autorizado, o antes del primer sync), los
         // que ya tienen rol se ven igual: no se pierden al guardar.
         var pendiente = grupo && !filas.length
+          ? (editandoJid === jid || (alcancePorJid && alcancePorJid[jid]) ? 'guardado' : 'nuevo')
+          : ''
         var ids = {}
         filas.forEach(function (f) { ids[f.id] = true })
         rolesOrden.forEach(function (id) {
@@ -4336,7 +4344,7 @@
           t(grupo ? 'peopleHelpGroup' : 'peopleHelpDirect')
         el('people-search-wrap').hidden = !grupo || !filas.length
         var lista = el('people-list')
-        lista.dataset.pendiente = pendiente ? '1' : ''
+        lista.dataset.pendiente = pendiente
         lista.innerHTML = filas.map(filaDePersona).join('')
         Array.prototype.forEach.call(lista.querySelectorAll('.persona'), function (fila) {
           var id = fila.getAttribute('data-id')
@@ -4383,7 +4391,9 @@
         el('people-count').textContent = terminos.length && filas.length
           ? fmt('peopleCount', { n: vistas, total: filas.length }) : ''
         var vacio = el('people-empty')
-        var mensaje = el('people-list').dataset.pendiente ? t('peopleGroupEmpty')
+        // Sin la lista del grupo: uno ya guardado no se guarda de nuevo, la lista llega sola.
+        var pendiente = el('people-list').dataset.pendiente
+        var mensaje = pendiente ? t(pendiente === 'guardado' ? 'peopleGroupPending' : 'peopleGroupEmpty')
           : filas.length && !vistas ? t('peopleNoMatch') : ''
         vacio.textContent = mensaje
         vacio.hidden = !mensaje
