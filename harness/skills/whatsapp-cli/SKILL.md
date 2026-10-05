@@ -26,6 +26,11 @@ You never run `wa-send`. A reply is a proposal on a case; the plugin's minute (`
 tick`) sends it when the conversation's permission and the fixed floor allow it, and the
 owner approves it on the board otherwise.
 
+You cannot approve anything either. A held message goes out only with the owner's
+approval, from the board or his answer to the plugin's notice on WhatsApp; `wa-send
+--approve` refuses any other caller with `send-approve-not-owner` (exit 3). Never try to
+get around it: tell the owner what is waiting instead.
+
 ## Read
 
     "$WA/wa-scope" pending --needs-agent        # exit 1 = nothing needs you
@@ -34,7 +39,7 @@ owner approves it on the board otherwise.
     "$WA/wa-scope" check "<chat_jid>" --for responder   # exit 3 = denied
     "$WA/wa-scope" where "<text>" --chat "<chat_jid>" --json
     "$WA/wa-read" chat "<chat_jid>" --json      # more of the conversation
-    "$WA/wa-read" wait "<chat_jid>" --after <stanza_id> --timeout 600 --json   # block until the other side writes
+    "$WA/wa-read" wait --chat "<chat_jid>" --after <stanza_id> --timeout 600 --json   # block until the other side writes
 
 `hilo` marks every message before the last reply sent as `respondido`: context only.
 

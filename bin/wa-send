@@ -70,9 +70,9 @@ approval is what puts it on the wire.
 
 WHO APPROVES. `--approve <id> --by board|whatsapp-reply` is how the PLUGIN delivers the
 owner's approval, and nobody else's: the worker calls it when the owner clicks on the
-board, and `wa-scope tick` when the owner answers the notice on WhatsApp. Both pass the
-plugin's approver key in WA_INBOX_APPROVER to that one call; no agent, automation or
-prompt ever receives it, and without the matching key the call is refused with
+board, and `wa-scope tick` when the owner answers the notice on WhatsApp. Both hand the
+plugin's approver key to that one call only; no agent, automation or prompt ever
+receives it, and without the matching key the call is refused with
 `send-approve-not-owner` (exit 3) and nothing is sent. Each approval is written to the
 activity log with who gave it. Honest limit: this stops a mistaken or misdirected agent,
 not code of the same user that reads the plugin's key file on purpose.

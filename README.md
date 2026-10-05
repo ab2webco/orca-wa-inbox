@@ -115,8 +115,21 @@ está mal con lo que pidió, no de un fallo genérico al final.
 **`borrador` ya no deja el texto escrito en el chat**, y no puede: el protocolo de
 WhatsApp no tiene borradores del lado del servidor. Esa escalera solo existía mientras
 el agente conducía una pantalla. Hoy el texto se guarda y espera: `wa-send --drafts`
-lista lo que hay y `wa-send --approve <id>` —un acto explícito del dueño— es lo único
-que lo pone en la línea.
+lista lo que hay, y lo único que lo pone en la línea es la aprobación del dueño.
+
+**Solo el dueño aprueba.** Un mensaje retenido sale cuando el dueño lo aprueba en el
+tablero o contesta el aviso del plugin por WhatsApp, y por ningún otro camino. Antes,
+cualquier sesión que pudiera correr la CLI podía aprobarlo con `wa-send --approve` (el
+2026-10-02 la sesión de un proyecto aprobó sus propios avisos). Ahora el plugin guarda una
+llave al azar, legible solo por su usuario, y se la pasa únicamente a esas dos llamadas;
+sin ella `--approve` se niega con `send-approve-not-owner` y no sale nada. Cada aprobación
+queda en la actividad con quién la dio (el tablero o la respuesta por WhatsApp). Es una
+barrera contra un agente equivocado o mal dirigido, no contra código del mismo usuario que
+lea esa llave a propósito.
+
+Lo que se le manda al chat del propio dueño, o al directo de un Operador o un Super admin,
+no se retiene y no necesita aprobación: una sesión de un proyecto puede preguntarle algo al
+dueño y esperar su respuesta con `wa-read wait --chat <jid> --after <stanza_id>`.
 
 ## Otros sistemas operativos
 
