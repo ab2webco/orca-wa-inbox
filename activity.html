@@ -1965,7 +1965,9 @@
           // El tablero se relee tras cualquier veredicto: `wa-scope` lo reescribe en cada
           // cambio, y tras E_VERSION o E_STAGE lo que hay en pantalla ya es viejo.
           return reload()
-        }).then(repintar, function () { enCurso = null; repintar() })
+          // El veredicto llega cuando quiere: si el dueno tiene el puntero apretado en otra
+          // tarjeta, repintar ahi le robaria el clic (ver `alSoltar`).
+        }).then(repintarAlSoltar, function () { enCurso = null; repintarAlSoltar() })
       }
 
       function mensajeVivo (id) {
@@ -2964,22 +2966,32 @@
       // suelte. Apretar en el panel desde otra parte de Orca le da foco a la ventana y el
       // foco relee: si el tablero se repinta entre el `pointerdown` y el `pointerup`, el
       // elemento apretado ya no es el que se suelta y el navegador no manda el `click`.
-      // Solo se guarda la ultima pintura (es la mas nueva) y nunca se descarta.
+      // Solo se guarda la ultima pintura (es la mas nueva) y nunca se descarta. Un repintado
+      // forzado que llega en el medio (el veredicto de una accion) va despues de ella, para
+      // que pinte el tablero nuevo y no el que habia.
       var apretado = false
       var pintarAlSoltar = null
+      var repintarPendiente = false
       function alSoltar (pintar) {
         if (apretado) { pintarAlSoltar = pintar; return }
         pintar()
+      }
+      function repintarAlSoltar () {
+        if (apretado) { repintarPendiente = true; return }
+        repintar()
       }
       function soltar () {
         if (!apretado) return
         apretado = false
         // Despues del `click`, que el navegador manda en la misma tanda que el `pointerup`.
         setTimeout(function () {
+          if (apretado) return
           var pintar = pintarAlSoltar
+          var forzar = repintarPendiente
           pintarAlSoltar = null
-          if (pintar && !apretado) pintar()
-          else if (pintar) pintarAlSoltar = pintar
+          repintarPendiente = false
+          if (pintar) pintar()
+          if (forzar) repintar()
         }, 0)
       }
       window.addEventListener('pointerdown', function () { apretado = true }, true)
