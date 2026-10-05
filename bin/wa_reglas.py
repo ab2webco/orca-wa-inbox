@@ -106,11 +106,12 @@ CREDENCIAL_PALABRA = _palabras(
     r"senhas?", r"pin", r"tokens?", r"credencial(?:es)?", r"credentials?", r"credenciais",
     r"otp", r"2fa", r"api[ _-]?keys?", r"apikey", r"secret", r"codigo de (?:verificacion|"
     r"verificacao|acceso|acesso|seguridad|seguranca)", r"verification code", r"access code",
-    r"user(?:name)? and password")
-
-
-def _credencial(original, t):
-    return _secreto(original, t) or bool(CREDENCIAL_PALABRA.search(t))
+    r"user(?:name)? and password",
+    # orden-del-dueno: "rota las llaves", "las llaves filtradas", "rotate the keys". Una
+    # llave sola (la de la casa) no lo es: solo la que se rota o la de la API, SSH o acceso.
+    r"(?:rot\w*|regener\w*|revoc\w*|revok\w*) (?:(?:las|los|la|el|the|all|todas las|as|os|a|o) )?"
+    r"(?:llaves|keys|claves|chaves|secrets?|secretos|credenciales|credentials)",
+    r"llaves? (?:de (?:la )?api|de acceso|privadas?|secretas?|ssh|filtradas?)")
 
 
 def _secreto(original, t):
@@ -170,6 +171,120 @@ def _compromiso(original):
     return False
 
 
+# ── Lo que se menciona sin pedirlo (orden-del-dueno) ─────────────────────────────────
+# Las reglas juzgan hechos, no palabras. Caso vivo: el brief de "que hay pendiente" decia
+# "nunca incluyas una credencial" y el trabajo espero el clic del dueno por "hay una
+# credencial"; otro decia "no deploy", nombraba la rama fix/...-secret-leak y listaba lo
+# pendiente ("production audit, deploy"), y espero por desplegar. Antes de buscar palabras,
+# `sin_menciones` tapa con espacios (el largo no cambia) lo que no es una orden:
+#   - lo negado o prohibido en su clausula: "never include a credential", "no deploy",
+#     "da sin fecha ni precio", "nao inclua a senha";
+#   - "si aparece una, solo di que existe";
+#   - los identificadores: una rama, una ruta o una URL (fix/demo-secret-leak, /api/x);
+#   - la lista de lo que falta: "pending: production audit, deploy".
+# Lo afirmativo sigue contando ("no dudes en borrar la rama" es borrar). Un valor con forma
+# de secreto NO pasa por aca: `_secreto` mira el texto entero, negado o no.
+
+# "No dudes en X" es hacer X: se quita antes de buscar la negacion.
+AFIRMATIVAS = re.compile(
+    r"\b(?:no (?:dudes?|duden|dudar) (?:en|de)|no (?:te )?olvides? de|no (?:se )?olvide de|"
+    r"no dejes? de|no solo|no solamente|"
+    r"(?:don[\u2019']?t|do not) (?:hesitate|forget) to|not only|not just|feel free to|"
+    r"nao (?:hesite|deixe|esqueca) (?:em|de)|nao so|nao apenas)\b")
+NEGACION = re.compile(
+    r"\b(?:no|nunca|jamas|sin|ni|nada|ningun[oa]?|tampoco|evit\w*|prohib\w*|"
+    r"never|not|cannot|without|nor|nothing|none|neither|avoid\w*|forbid\w*|"
+    r"(?:don|doesn|didn|won|mustn|shouldn|can|isn|aren)[\u2019']?t|"
+    r"nao|nem|sem|nenhum[a]?)\b")
+# Una lista que sigue a la negacion por comas ("a credential, token or secret value") la
+# hereda hasta su disyuncion; sin una, la coma corta ("hoy no puedo, manana lo tienes").
+DISYUNCION = re.compile(r"\b(?:o|u|or|ni|nor|ou|nem|neither)\b")
+# Lo que corta una clausula: un ": ", un "y"/"and"/"e", o un "pero", "luego", "then".
+CORTE = re.compile(
+    r":\s|\b(?:y|e|and|pero|but|sino|however|instead|aunque|although|though|luego|then|"
+    r"despues|afterwards|porque|because|mientras|while)\b")
+SOLO_EXISTE = re.compile(
+    r"\b(?:only|just|solo|solamente|unicamente|apenas|so)\s+(?:say|mention|note|report|state|"
+    r"indicate|tell|di|diga|digas|decir|menciona|mencione|indica|indique|avisa|avise|dizer|"
+    r"mencionar|informa|informe)\b.{0,40}?\b(?:exists?|existen?|existem|there is|hay)\b")
+# "todo" no: en espanol es "all" ("despliega todo a produccion" es desplegar).
+PENDIENTE = re.compile(
+    r"\b(?:(?:still )?pending|pendientes?|pendentes?|lo que (?:falta|queda)|"
+    r"what(?:'s| is| was)? (?:still )?(?:left|missing|remaining|pending)|remaining|"
+    r"por hacer|next steps?|proximos pasos)\b")
+# Una rama, una ruta o una URL: con una barra y alguna letra, o con dos guiones o mas
+# (demo-api-secret-leak). Una fecha 15/10 no tiene letras y sigue siendo una fecha; una
+# bandera (--force-with-lease) empieza con guion y no se toca.
+IDENTIFICADOR = re.compile(
+    r"(?<![\w-])(?:[a-z]+://\S+|(?=[\w.@~:/\\-]*[a-z])[\w.@~-]*[/\\][\w.@~:/\\-]*|"
+    r"[a-z0-9]+(?:-[a-z0-9]+){2,})")
+UNIDADES = re.compile(r"[^.!?;\n]+")
+
+
+def _tapa(chars, desde, hasta):
+    for i in range(desde, hasta):
+        chars[i] = " "
+
+
+def _empieza_con_orden(segmento):
+    """Si el segmento abre con una orden destructiva: no hereda la negacion de antes."""
+    s = segmento.lstrip(" ,")
+    return bool(s) and any(r.match(s) for r in (TRABAJO_BORRA, TRABAJO_VERBO_DESPLIEGUE,
+                                                  TRABAJO_FUERZA, TRABAJO_PAGO))
+
+
+def _tapa_negacion(chars, texto, desde, hasta):
+    """Dentro de una clausula: desde cada negacion hasta el fin de su segmento (entre
+    comas), mas los segmentos de la lista que la siguen hasta su disyuncion."""
+    cortes = [desde] + [desde + m.end() for m in re.finditer(",", texto[desde:hasta])]
+    segmentos = [(a, (cortes[i + 1] if i + 1 < len(cortes) else hasta))
+                 for i, a in enumerate(cortes)]
+    i = 0
+    while i < len(segmentos):
+        a, b = segmentos[i]
+        neg = NEGACION.search(texto, a, b)
+        if not neg:
+            i += 1
+            continue
+        _tapa(chars, neg.start(), b)
+        siguiente = i + 1
+        for j in range(i + 1, len(segmentos)):
+            x, y = segmentos[j]
+            if _empieza_con_orden(texto[x:y]):
+                break
+            if DISYUNCION.search(texto, x, y):
+                for k in range(i + 1, j + 1):
+                    _tapa(chars, *segmentos[k])
+                siguiente = j + 1
+                break
+        i = siguiente
+
+
+def sin_menciones(texto):
+    """El texto normalizado, con lo que no es una orden tapado con espacios (mismo largo):
+    lo negado o prohibido, "solo di que existe", los identificadores y lo pendiente. Lo
+    usan `excepciones` (lo que sale) y `trabajo_comprometido`: una sola regla."""
+    t = normaliza(texto)
+    t = AFIRMATIVAS.sub(lambda m: " " * len(m.group()), t)
+    t = IDENTIFICADOR.sub(lambda m: " " * len(m.group()), t)
+    chars = list(t)
+    for unidad in UNIDADES.finditer(t):
+        a, b = unidad.span()
+        if SOLO_EXISTE.search(t, a, b):
+            _tapa(chars, a, b)
+            continue
+        # Lo pendiente: desde la marca hasta el proximo "y"/"and" o el fin de la frase; un
+        # ": " no lo corta ("pending: production audit, deploy").
+        for m in PENDIENTE.finditer(t, a, b):
+            corte = next((c.start() for c in CORTE.finditer(t, m.end(), b)
+                          if not c.group().startswith(":")), b)
+            _tapa(chars, m.start(), corte)
+        limites = [a] + [c.start() for c in CORTE.finditer(t, a, b)] + [b]
+        for desde, hasta in zip(limites, limites[1:]):
+            _tapa_negacion(chars, t, desde, hasta)
+    return "".join(chars)
+
+
 def excepciones(texto, direccion):
     """The exception names that `texto` raises, in `wa_jev.ORDEN_EXCEPCIONES` order.
 
@@ -183,11 +298,15 @@ def excepciones(texto, direccion):
         return []
     t = normaliza(original)
     halladas = set()
-    if direccion == SALIDA and _dinero(t):
+    # Lo que sale se juzga sin lo negado, lo pendiente ni los identificadores
+    # (orden-del-dueno); lo que entra, entero: un cliente que dice que no tiene la clave
+    # sigue siendo una credencial para el dueno. El secreto mira siempre el texto entero.
+    palabras = sin_menciones(original) if direccion == SALIDA else t
+    if direccion == SALIDA and _dinero(palabras):
         halladas.add("money")
-    if _credencial(original, t):
+    if _secreto(original, t) or CREDENCIAL_PALABRA.search(palabras):
         halladas.add("credential")
-    if direccion == SALIDA and _compromiso(original):
+    if direccion == SALIDA and _compromiso(palabras):
         halladas.add("commitment")
     return [e for e in wa_jev.ORDEN_EXCEPCIONES if e in halladas]
 
@@ -278,7 +397,8 @@ def trabajo_comprometido(texto):
     original = texto or ""
     if not original.strip():
         return []
-    t = normaliza(original)
+    # Lo negado, lo pendiente y los identificadores no son la orden (orden-del-dueno).
+    t = sin_menciones(original)
     halladas = set()
     if TRABAJO_BORRA.search(t):
         halladas.add("delete")

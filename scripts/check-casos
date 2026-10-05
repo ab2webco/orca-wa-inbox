@@ -10907,6 +10907,72 @@ if NODE:
            ((ruta_de(home, explicito) or {}).get("pregunta") or {}).get("a") == "writer"
            and p.returncode == 0, f"{p.returncode} {p.stderr[-300:]}")
 
+
+# ── orden-del-dueno: las reglas juzgan hechos, no palabras ──────────────────────────────
+# Caso vivo (2026-10-05): el dueno pregunto "que hay pendiente" en su propio chat y el
+# trabajo espero su clic por "hay una credencial": el brief decia "nunca incluyas una
+# credencial". Otro esperaba por "despliega a produccion" porque decia "no deploy" y
+# nombraba la rama de la fuga. Una mencion negada o prohibida, un identificador (rama,
+# ruta, URL) o una lista de lo pendiente no cuentan; una orden afirmativa si, y un valor
+# con forma de secreto cuenta siempre. Los briefs son de mentira, parafraseados.
+print("\norden-del-dueno: las reglas juzgan hechos, no palabras")
+reglas = carga_reglas()
+BRIEF_ESTADO = (
+    "The owner asks what is pending in Proyecto Demo. Read the repo at /tmp/proyecto-demo, "
+    "its open branches and the last merged PRs, and report the pending work in Spanish. "
+    "Never include a credential, token or secret value; if one shows up in the files, only "
+    "say that it exists.")
+BRIEF_PR = (
+    "The owner approved opening the PR. In /tmp/proyecto-demo run the full test suite and "
+    "the linter, then push that branch fix/demo-api-secret-leak, open the PR against main "
+    "for /api/demo and report its link. Nothing else: no merge, no deploy, no production "
+    "database access. In the reply say what is still pending (production audit, deploy).")
+BRIEF_CRM = (
+    "Look up the contact Ana Demo in the CRM and summarise her last three deals. Do not "
+    "create, edit or delete anything in the CRM. Do not copy any credential, token or key "
+    "into the reply. Give no date and no price, such as el viernes or $300.")
+BRIEF_NOTA = (
+    "Draft the weekly status note for Cliente Demo from the tracker; include no dates or "
+    "promises like tomorrow or next week.")
+for texto, esperado in (
+        (BRIEF_ESTADO, []), (BRIEF_PR, []), (BRIEF_CRM, []), (BRIEF_NOTA, []),
+        # Una orden afirmativa sigue contando.
+        ("Despliega a produccion el arreglo del reporte", ["deploy"]),
+        ("deploy the fix to production", ["deploy"]),
+        ("Borra la rama vieja del reporte", ["delete"]),
+        ("no dudes en borrar la rama vieja", ["delete"]),
+        ("don't hesitate to delete the old branch", ["delete"]),
+        ("git push --force origin main", ["force_push"]),
+        ("Paga la factura del hosting", ["payment"]),
+        ("rota las llaves de la API", ["credential"]),
+        ("send me the token", ["credential"]),
+        ("Revisa la fuga de credenciales", ["credential"]),
+        ("el lunes a las 3 le entregamos", ["commitment"]),
+        # Lo negado en una parte no tapa la orden de la otra.
+        ("No despliegues todavia y borra la rama vieja", ["delete"]),
+        ("Do not deploy yet, delete the old branch", ["delete"]),
+        ("Revisa sin borrar nada y despliega a produccion", ["deploy"]),
+        ("Despliega todo a produccion", ["deploy"]),
+        # Lo pendiente es un informe, no una orden.
+        ("Lo pendiente: auditoria en produccion, desplegar", []),
+        # Un valor con forma de secreto cuenta aunque se niegue.
+        ("Nunca compartas esto: ghp_abcdefghijklmnop1234", ["credential"])):
+    salio = reglas.trabajo_comprometido(texto)
+    ok(f"orden: trabajo {texto[:60]!r} -> {esperado}", salio == esperado, f"salio {salio}")
+for texto, direccion, esperado in (
+        ("Nunca le pediremos su contrasena por aqui", "salida", []),
+        ("No prometemos nada para el viernes", "salida", []),
+        ("Hoy no puedo, manana lo tienes", "salida", ["commitment"]),
+        ("Subimos el arreglo a la rama fix/demo-token-leak", "salida", []),
+        ("Le paso el token por otro medio", "salida", ["credential"]),
+        ("Nunca le pediremos la clave: Abc12345", "salida", ["credential"]),
+        # Lo que entra no cambia: un cliente que dice que no tiene la clave sigue siendo
+        # una credencial para el dueno.
+        ("no tengo la contrasena del panel", "entrada", ["credential"])):
+    salio = reglas.excepciones(texto, direccion)
+    ok(f"orden: {direccion} {texto!r} -> {esperado}", salio == esperado, f"salio {salio}")
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
