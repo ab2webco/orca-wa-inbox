@@ -57,8 +57,25 @@ stores (capture.db messages, scope.db cases, case events and dispatches). Owner-
 
 ## Checklist
 
-- [ ] I1 Period selector shared by board and Reports, remembered; board filters Respondido
+- [x] I1 Period selector shared by board and Reports, remembered; board filters Respondido
       and Cerrado by stage-entry time; chips and counts follow it.
+      Panel: `#period` (Hoy · 7 dias · 30 dias · Todo, 7 dias de fabrica) above the board,
+      remembered in the plugin storage key `boardPeriod` (read once on open, written on
+      click; the sandboxed iframe has no storage of its own, and the poll never overrides
+      a choice). Open stages always show every card; Respondido and Cerrado keep the cards
+      whose `stage_at` (fallback `updated_at`) is at or after the period's local midnight,
+      newest entry first. Their counts come from `period_counts[period]` (fallback: what the
+      period shows); "Todo" uses `counts`. The period, its start and the show-more state are
+      in `firmaTablero`, so a repaint only happens when they change.
+      Board key additions (`build_board(con, ahora=None)` in `bin/wa-scope`): every card
+      carries `stage_at` (its LAST entry into its current stage, from the whole history,
+      before the 20-event trim); `period_counts` = `{today|7d|30d|all: {respondido,
+      cerrado}}` counted by that time with the report periods' limits; closed cards travel
+      for 30 days instead of 7 (the 50-card cap stays). RED: check-casos `TypeError:
+      build_board() got an unexpected keyword argument 'ahora'`; panels: `#period` missing
+      (`TypeError ... reading 'click'` after 4 FALLA). GREEN: check-casos 1169/1169 (4 new
+      board checks; the card contract keys now include `stage_at`); panels 1068/1068 (21 new
+      in "I1", and the old "counts" check now reads Cerrado from `period_counts`).
 - [ ] I2 Board columns bounded to the viewport with inner scroll; "Show N more" in
       Respondido and Cerrado (20 at a time).
 - [x] I3 Stats computation in wa-scope: the four periods plus previous periods, the

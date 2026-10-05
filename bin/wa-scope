@@ -4969,7 +4969,9 @@ def cmd_ingest(con, a):
 # trabajan; de las cerradas basta lo reciente para ver que paso.
 TOPE_ABIERTAS = 200
 TOPE_CERRADAS = 50
-DIAS_CERRADAS = 7
+# Treinta dias: el periodo mas largo del tablero antes de "Todo" (informes-tablero, I1). El
+# tope de arriba sigue mandando; lo que el periodo cuenta y no viaja lo dice `period_counts`.
+DIAS_CERRADAS = 30
 # El titulo que falta sale del primer mensaje: una linea que se lee de un vistazo.
 LARGO_TITULO = 80
 # Lo que el dueno puede hacer con la tarjeta en cada etapa. El panel pinta los botones;
@@ -5236,10 +5238,40 @@ def medios_de_eventos(eventos):
     return salida
 
 
-def build_board(con):
+def entrada_a_etapa(eventos, caso):
+    """Cuando entro el caso a la etapa en que esta: su ULTIMA entrada (un caso reabierto y
+    vuelto a cerrar esta cerrado desde la segunda). Un evento sin cambio de etapa no cuenta;
+    sin ninguno que la diga, su ultima actualizacion."""
+    for e in reversed(eventos or []):
+        if e["a"] == caso["etapa"] and e["de"] != e["a"]:
+            return e["at"]
+    return caso["updated_at"]
+
+
+def cuentas_por_periodo(con, cuenta, ahora):
+    """Respondido y Cerrado de la linea activa por periodo del tablero, contados por la hora
+    en que el caso entro a esa etapa, con los mismos limites que los informes."""
+    entradas = []
+    for r in con.execute(
+            "select c.etapa, coalesce((select max(e.at) from caso_evento e where "
+            "e.case_id = c.case_id and e.a = c.etapa and e.de is not e.a), c.updated_at) desde "
+            "from caso c where c.account=? and c.etapa in ('respondido', 'cerrado')", (cuenta,)):
+        entradas.append((r["etapa"], _epoch_local(r["desde"])))
+    salida = {}
+    for clave, p in periodos_del_informe(ahora).items():
+        salida[clave] = {e: sum(1 for etapa, t in entradas
+                                if etapa == e and (p["desde"] is None or
+                                                   (t is not None and t >= p["desde"])))
+                         for e in ("respondido", "cerrado")}
+    return salida
+
+
+def build_board(con, ahora=None):
     """El tablero de la linea activa, con la forma del contrato `board`: hasta 200
-    abiertas (las mas recientes) mas las cerradas de los ultimos 7 dias hasta 50, y
-    `counts` sobre TODO, no solo sobre lo que se manda."""
+    abiertas (las mas recientes) mas las cerradas de los ultimos 30 dias hasta 50, y
+    `counts` sobre TODO, no solo sobre lo que se manda. Cada tarjeta dice desde cuando esta
+    en su etapa (`stage_at`) y `period_counts` cuenta Respondido y Cerrado por periodo."""
+    ahora = time.time() if ahora is None else ahora
     cuenta = cuenta_activa()
     counts = dict.fromkeys(ETAPAS_CASO, 0)
     for r in con.execute("select etapa, count(*) n from caso where account=? "
@@ -5251,7 +5283,7 @@ def build_board(con):
         "order by updated_at desc, case_id desc limit ?",
         (cuenta, TOPE_ABIERTAS + 1)).fetchall()
     desde = time.strftime("%Y-%m-%d %H:%M:%S",
-                          time.localtime(time.time() - DIAS_CERRADAS * 86400))
+                          time.localtime(ahora - DIAS_CERRADAS * 86400))
     cerradas = con.execute(
         "select * from caso where account=? and etapa = 'cerrado' and updated_at >= ? "
         "order by updated_at desc, case_id desc limit ?",
@@ -5290,6 +5322,9 @@ def build_board(con):
                 f"select case_id, de, a, actor, detalle, at from caso_evento where case_id in "
                 f"({','.join('?' * len(parte))}) order by id", parte):
             eventos.setdefault(r["case_id"], []).append(dict(r))
+    # Con la historia ENTERA, antes de recortarla: la entrada a la etapa puede ser vieja.
+    entradas = {c["case_id"]: iso_caso(entrada_a_etapa(eventos.get(c["case_id"]), c))
+                for c in casos}
     eventos = {k: v[-EVENTOS_EN_TARJETA:] for k, v in eventos.items()}
     # Lo que paso en cada evento, en un codigo que el panel traduce (T22): el detalle es
     # texto de maquina y no viaja. Un mensaje dice si fue un sticker o un audio.
@@ -5318,6 +5353,9 @@ def build_board(con):
     return {"v": 1,
             "updated_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
             "truncated": truncado, "counts": counts,
+            # Respondido y Cerrado por periodo (informes-tablero, I1): las cuentas que el
+            # panel muestra con un periodo elegido, sobre TODO y no solo sobre lo que viaja.
+            "period_counts": cuentas_por_periodo(con, cuenta, ahora),
             # Los casos que esperan al agente: los mismos que `pending --needs-agent`.
             "agent_waiting": len(esperan),
             # La ultima vez que se lanzo al agente de casos: si fallo, el panel lo dice en
@@ -5330,7 +5368,10 @@ def build_board(con):
                                       solo_leer, despachos),
                            # Lo cuenta `agent_waiting`: el panel le pone la falla de
                            # `agent_launch` a estas tarjetas.
-                           waits_agent=c["case_id"] in esperan)
+                           waits_agent=c["case_id"] in esperan,
+                           # Desde cuando esta en su etapa: el periodo acota lo terminado
+                           # por esta hora.
+                           stage_at=entradas.get(c["case_id"]))
                       for c in casos]}
 
 

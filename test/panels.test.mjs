@@ -3840,8 +3840,10 @@ console.log('\nactivity.html — tablero: columnas')
     tarjeta({ case_id: 3, stage: 'bloqueado', blocked_reason: 'El envio fue rechazado',
       exceptions: [] })
   ]
+  // Lo terminado se cuenta por periodo (I1): con 7 dias, la cuenta de Cerrado es la de
+  // `period_counts`, que tambien viene de la clave y no de las tarjetas.
   const board = tablero(cards, { counts: cuentas({ decision: 4, trabajo: 1, bloqueado: 1,
-    cerrado: 9 }) })
+    cerrado: 12 }), period_counts: { '7d': { respondido: 0, cerrado: 9 } } })
   const { doc } = await abrirTablero({ board })
   const cols = [...doc.querySelectorAll('#board-cols .col')]
   ok('son las ocho etapas, en el orden del flujo y el carril aparte',
@@ -5887,6 +5889,144 @@ const adelantarReloj = (window, ms) => {
   await espera()
   ok('el aviso de una accion se va al vencer aunque el tablero no cambie',
     dicho && !mensajeDe(doc, 4), mensajeDe(doc, 4)?.outerHTML)
+}
+
+// ── El periodo del tablero (informes-tablero, I1) ──
+// Hoy · 7 dias · 30 dias · Todo, 7 dias de fabrica. Lo abierto se ve SIEMPRE; el periodo
+// solo acota Respondido y Cerrado, por la hora en que el caso entro a esa etapa
+// (`stage_at`). Las cuentas de esas dos etapas salen de `period_counts`, que cuenta todo y
+// no solo lo que viaja en `cards`.
+const DIA_MS = 86400000
+/** Hace `dias` dias a las 12:00 locales: lejos de la medianoche, que es el borde. */
+const diasAtras = (dias) => {
+  const d = new Date()
+  d.setHours(12, 0, 0, 0)
+  d.setDate(d.getDate() - dias)
+  return d.toISOString()
+}
+/** Hoy, `min` minutos despues de la medianoche local. */
+const hoyA = (min) => {
+  const d = new Date()
+  d.setHours(0, min, 0, 0)
+  return d.toISOString()
+}
+const terminada = (id, etapa, stageAt, extra = {}) => tarjeta(Object.assign({
+  case_id: id, stage: etapa, proposal: null, exceptions: [], title: `Caso ${id}`,
+  stage_at: stageAt, updated_at: stageAt, actions: ['reabrir']
+}, extra))
+const periodoApretado = (doc) =>
+  doc.querySelector('#period button[aria-pressed="true"]')?.dataset.periodo ?? null
+const apretarPeriodo = (doc, p) => doc.querySelector(`#period button[data-periodo="${p}"]`).click()
+const cuentaChip = (doc, etapa) =>
+  doc.querySelector(`#board-chips [data-etapa="${etapa}"] .chip-count`)?.textContent
+const TARJETAS_PERIODO = () => [
+  // Abierta y vieja: se ve en cualquier periodo.
+  tarjeta({ case_id: 1, stage: 'decision', updated_at: diasAtras(60), stage_at: diasAtras(60) }),
+  terminada(2, 'respondido', hoyA(1)),
+  terminada(3, 'respondido', diasAtras(3)),
+  terminada(4, 'respondido', diasAtras(20)),
+  terminada(5, 'cerrado', diasAtras(1)),
+  terminada(6, 'cerrado', diasAtras(45)),
+  // Sin `stage_at` (un CLI de antes): vale su ultima actualizacion.
+  terminada(7, 'cerrado', undefined, { updated_at: diasAtras(10) })
+]
+
+console.log('\nactivity.html — I1: el periodo acota Respondido y Cerrado, nunca lo abierto')
+{
+  const { doc } = await abrirTablero({ board: tablero(TARJETAS_PERIODO()) })
+  ok('el periodo de fabrica es 7 dias', periodoApretado(doc) === '7d', periodoApretado(doc))
+  ok('en 7 dias: lo abierto, y lo terminado de los ultimos 7 dias por su entrada a la etapa',
+    visibles(doc).sort().join() === '1,2,3,5', visibles(doc).join())
+  ok('los cuatro periodos, en palabras', ['today', '7d', '30d', 'all'].every((p) =>
+    (doc.querySelector(`#period button[data-periodo="${p}"]`)?.textContent || '').trim()),
+  doc.getElementById('period')?.textContent)
+  ok('el grupo del periodo tiene nombre', !!doc.getElementById('period')?.getAttribute('aria-label'))
+  apretarPeriodo(doc, 'today')
+  await espera()
+  ok('Hoy: lo abierto y lo que entro hoy', visibles(doc).sort().join() === '1,2', visibles(doc).join())
+  ok('el boton apretado es el elegido', periodoApretado(doc) === 'today')
+  apretarPeriodo(doc, '30d')
+  await espera()
+  ok('30 dias suma lo de hace 20 y lo que solo trae updated_at',
+    visibles(doc).sort().join() === '1,2,3,4,5,7', visibles(doc).join())
+  apretarPeriodo(doc, 'all')
+  await espera()
+  ok('Todo: todo', visibles(doc).sort().join() === '1,2,3,4,5,6,7', visibles(doc).join())
+}
+{
+  // El caso abierto se ve aunque su etapa sea vieja, en el periodo mas corto.
+  const { doc } = await abrirTablero({ board: tablero(TARJETAS_PERIODO()), boardPeriod: 'today' })
+  ok('el periodo guardado manda al abrir', periodoApretado(doc) === 'today', periodoApretado(doc))
+  ok('y con Hoy lo abierto de hace 60 dias sigue ahi', visibles(doc).includes('1'), visibles(doc).join())
+}
+{
+  const storage = { board: tablero(TARJETAS_PERIODO()) }
+  const { doc } = await abrirTablero(storage)
+  apretarPeriodo(doc, '30d')
+  await espera()
+  ok('elegir un periodo lo recuerda en el storage del plugin', storage.boardPeriod === '30d',
+    String(storage.boardPeriod))
+  storage.boardPeriod = 'today'   // otra ventana guarda otro; esta no se pisa sola
+  doc.defaultView.dispatchEvent(new doc.defaultView.Event('focus'))
+  await espera()
+  ok('el sondeo no le cambia el periodo a quien lo eligio', periodoApretado(doc) === '30d')
+}
+{
+  const { doc } = await abrirTablero({ board: tablero(TARJETAS_PERIODO()), boardPeriod: 'semana' })
+  ok('un periodo guardado que no existe deja el de fabrica', periodoApretado(doc) === '7d')
+}
+
+console.log('\nactivity.html — I1: las cuentas siguen al periodo')
+{
+  const board = tablero(TARJETAS_PERIODO(), {
+    counts: cuentas({ decision: 1, respondido: 3, cerrado: 40 }),
+    period_counts: { today: { respondido: 1, cerrado: 0 }, '7d': { respondido: 2, cerrado: 9 },
+      '30d': { respondido: 3, cerrado: 25 }, all: { respondido: 3, cerrado: 40 } }
+  })
+  const { doc } = await abrirTablero({ board })
+  ok('7 dias: las fichas de Respondido y Cerrado dicen lo del periodo',
+    cuentaChip(doc, 'respondido') === '2' && cuentaChip(doc, 'cerrado') === '9',
+    `${cuentaChip(doc, 'respondido')} ${cuentaChip(doc, 'cerrado')}`)
+  ok('y Todos suma lo del periodo', cuentaChip(doc, 'todos') === String(1 + 2 + 9),
+    cuentaChip(doc, 'todos'))
+  ok('lo que el periodo cuenta y no viajo se dice en la columna',
+    /8/.test(doc.querySelector('.col[data-stage="cerrado"] .col-more')?.textContent || ''),
+    doc.querySelector('.col[data-stage="cerrado"]')?.textContent)
+  apretarPeriodo(doc, 'today')
+  await espera()
+  ok('Hoy: las cuentas cambian con el periodo',
+    cuentaChip(doc, 'respondido') === '1' && cuentaChip(doc, 'cerrado') === '0',
+    `${cuentaChip(doc, 'respondido')} ${cuentaChip(doc, 'cerrado')}`)
+  apretarPeriodo(doc, 'all')
+  await espera()
+  ok('Todo: las de siempre', cuentaChip(doc, 'cerrado') === '40', cuentaChip(doc, 'cerrado'))
+}
+{
+  // Sin `period_counts` (CLI de antes): se cuenta lo que se ve del periodo.
+  const { doc } = await abrirTablero({ board: tablero(TARJETAS_PERIODO()) })
+  ok('sin period_counts se cuenta lo visible del periodo',
+    cuentaChip(doc, 'respondido') === '2' && cuentaChip(doc, 'cerrado') === '1',
+    `${cuentaChip(doc, 'respondido')} ${cuentaChip(doc, 'cerrado')}`)
+}
+{
+  // El periodo en la lista (lo angosto) tambien.
+  const { doc } = await abrirTablero({ board: tablero(TARJETAS_PERIODO()) })
+  doc.querySelector('#board-view button[data-vista="list"]').click()
+  await espera()
+  ok('en la lista el periodo acota igual', visibles(doc).sort().join() === '1,2,3,5',
+    visibles(doc).join())
+}
+console.log('\nactivity.html — I1: el periodo no pierde el primer clic')
+{
+  const { window, doc } = await abrirTablero({ board: tablero(TARJETAS_PERIODO()) })
+  const boton = doc.querySelector('#period button[data-periodo="all"]')
+  await clicReal(window, boton, async () => {
+    window.dispatchEvent(new window.Event('focus'))
+    await espera()
+  })
+  await espera()
+  ok('el primer clic en un periodo, con una relectura en el medio, lo elige',
+    periodoApretado(doc) === 'all' && visibles(doc).length === 7, visibles(doc).join())
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

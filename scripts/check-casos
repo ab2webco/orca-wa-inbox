@@ -2347,7 +2347,7 @@ import re  # noqa: E402
 LLAVES_TARJETA = {"case_id", "account", "chat_jid", "chat_name", "stage", "title",
                   "summary", "clase", "prioridad", "jev", "proposal", "exceptions",
                   "blocked_reason", "no_agent_rule", "read_only", "ticket", "updated_at", "actions", "project",
-                  "needs_agent", "events", "related_case", "dispatch", "waits_agent"}
+                  "needs_agent", "events", "related_case", "dispatch", "waits_agent", "stage_at"}
 ISO = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$")
 
 
@@ -8372,6 +8372,22 @@ def informe(home, ahora):
                 os.environ[k] = v
 
 
+def tablero_en(home, ahora):
+    """build_board corrido en este proceso, con la zona y el ahora del escenario."""
+    antes = {k: os.environ.get(k) for k in ("HOME", "XDG_CONFIG_HOME", "APPDATA")}
+    ws = carga_wa_scope(home)
+    con = ws.db()
+    try:
+        return ws.build_board(con, ahora=local(ahora))
+    finally:
+        con.close()
+        for k, v in antes.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 def siembra_casos(home, casos, eventos, despachos=()):
     con = db_de(home)
     for c in casos:
@@ -8723,6 +8739,33 @@ else:
         ok("sla: la meta sale del ajuste", r.get("sla_minutes") == 30
            and sla(r["periods"]["today"])[:4] == (2, 2, 1, 50.0),
            f"{r.get('sla_minutes')} {sla(r['periods']['today'])}")
+
+        # ── El tablero con periodo (I1): cada tarjeta dice desde cuando esta en su etapa
+        # (su ULTIMA entrada: el 8 se reabrio y volvio a cerrarse a las 11:00), y
+        # `period_counts` cuenta Respondido y Cerrado por esa hora en cada periodo, con
+        # los mismos limites que los informes. Las cerradas viajan 30 dias, no 7.
+        b = tablero_en(home, AHORA)
+        por_caso = {c["case_id"]: c for c in b.get("cards", [])}
+        ok("tablero: cada tarjeta lleva la hora en que entro a su etapa",
+           {i: por_caso.get(i, {}).get("stage_at") for i in (1, 4, 5, 6, 8, 9)}
+           == {1: iso_local("2026-03-18 09:12:00"), 4: iso_local("2026-03-17 08:30:20"),
+               5: iso_local("2026-03-10 11:00:10"), 6: iso_local("2026-03-17 14:59:00"),
+               8: iso_local("2026-03-18 11:00:00"), 9: iso_local("2026-03-18 14:01:00")},
+           f"{ {i: por_caso.get(i, {}).get('stage_at') for i in (1, 4, 5, 6, 8, 9)} }")
+        ok("tablero: las abiertas tambien (el 2 entro a En trabajo a las 11:50)",
+           por_caso.get(11, {}).get("stage_at") == iso_local("2026-03-18 14:20:05")
+           and por_caso.get(2, {}).get("stage_at") == iso_local("2026-03-18 11:50:00"),
+           f"{por_caso.get(11, {}).get('stage_at')} {por_caso.get(2, {}).get('stage_at')}")
+        ok("tablero: Respondido y Cerrado contados por periodo, sin la otra linea",
+           b.get("period_counts") == {
+               "today": {"respondido": 1, "cerrado": 2},
+               "7d": {"respondido": 1, "cerrado": 4},
+               "30d": {"respondido": 2, "cerrado": 4},
+               "all": {"respondido": 2, "cerrado": 4}}, f"{b.get('period_counts')}")
+        b_mes = tablero_en(home, "2026-04-14 12:00:00")
+        ok("tablero: una cerrada de hace 4 semanas sigue viajando",
+           {4, 6, 8, 9} <= {c["case_id"] for c in b_mes.get("cards", [])},
+           f"{sorted(c['case_id'] for c in b_mes.get('cards', []))}")
 
     # ── El limite de medianoche: 23:59:59 es de ayer y 00:00:00 es de hoy.
     with tempfile.TemporaryDirectory() as home:

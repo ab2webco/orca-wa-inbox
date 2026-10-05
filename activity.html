@@ -203,6 +203,10 @@
       .seg button:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: -2px; }
       .seg svg { width: 14px; height: 14px; }
       #board-shown { white-space: nowrap; }
+      /* La fila de arriba del tablero y los informes: el periodo, que comparten. */
+      .vistas { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+                margin: 0 12px 8px; }
+      .seg.periodo { margin-left: auto; }
 
       /* Un solo estado vacio y en calma, como el de Plane: `px-4 py-10 text-center`. */
       .board-empty { margin: 8px 12px; padding: 40px 16px; text-align: center; }
@@ -496,6 +500,17 @@
     <!-- La barra copia la de Plane en Orca (TaskPage.tsx): las etapas con su cuenta, que
          filtran; el buscador; Lista/Tablero y cuantos se muestran. Los iconos son los de
          lucide que usa la app, en linea porque el panel no puede pedir nada afuera. -->
+    <!-- El periodo (informes-tablero, I1): uno solo para el tablero y los informes. En el
+         tablero acota Respondido y Cerrado por la hora en que el caso entro a la etapa; lo
+         abierto se ve siempre. -->
+    <div class="vistas" id="vistas">
+      <div class="seg periodo" id="period" role="group" data-t-aria="periodLabel">
+        <button type="button" data-periodo="today" aria-pressed="false" data-t="periodToday"></button>
+        <button type="button" data-periodo="7d" aria-pressed="true" data-t="period7d"></button>
+        <button type="button" data-periodo="30d" aria-pressed="false" data-t="period30d"></button>
+        <button type="button" data-periodo="all" aria-pressed="false" data-t="periodAll"></button>
+      </div>
+    </div>
     <div id="view-board">
       <div class="board-bar" id="board-bar" hidden>
         <div class="chips" id="board-chips" role="group" data-t-aria="boardStagesLabel"></div>
@@ -559,6 +574,7 @@
               "boardViewLabel": "Vista",
               "boardViewList": "Lista",
               "boardViewBoard": "Tablero",
+              "periodLabel": "Periodo", "periodToday": "Hoy", "period7d": "7 dias", "period30d": "30 dias", "periodAll": "Todo",
               "boardShown": "{n} mostrados",
               "boardShown1": "1 mostrado",
               "boardNoMatch": "Ningun caso coincide con la busqueda.",
@@ -788,6 +804,7 @@
               "boardViewLabel": "View",
               "boardViewList": "List",
               "boardViewBoard": "Board",
+              "periodLabel": "Period", "periodToday": "Today", "period7d": "7 days", "period30d": "30 days", "periodAll": "All",
               "boardShown": "{n} shown",
               "boardShown1": "1 shown",
               "boardNoMatch": "No case matches the search.",
@@ -1017,6 +1034,7 @@
               "boardViewLabel": "Visualizacao",
               "boardViewList": "Lista",
               "boardViewBoard": "Quadro",
+              "periodLabel": "Periodo", "periodToday": "Hoje", "period7d": "7 dias", "period30d": "30 dias", "periodAll": "Tudo",
               "boardShown": "{n} exibidos",
               "boardShown1": "1 exibido",
               "boardNoMatch": "Nenhum caso corresponde a busca.",
@@ -1632,6 +1650,12 @@
       // en cada sondeo, y el iframe del panel no tiene almacenamiento propio.
       var filtroEtapa = 'todos'
       var busqueda = ''
+      // El periodo SI se recuerda (I1): una lectura al abrir y una escritura al elegir, en el
+      // storage del plugin (el iframe no tiene almacenamiento propio). El sondeo no lo pisa.
+      var PERIODOS = ['today', '7d', '30d', 'all']
+      var DIAS_PERIODO = { today: 1, '7d': 7, '30d': 30, all: null }
+      var periodo = '7d'
+      var periodoLeido = false
       var vistaElegida = null   // null = la natural del ancho: lista hasta 768 px
       var seleccion = null      // el caso cuyo detalle esta abierto
       var proyectosAceptados = []  // el catalogo (`projects`): lo que ofrece Cambiar proyecto
@@ -1702,10 +1726,22 @@
             return (Date.parse(b.updated_at) || 0) - (Date.parse(a.updated_at) || 0)
           })
         })
+        // El periodo acota lo terminado, por la hora en que entro a la etapa, y lo ordena
+        // por esa hora: lo ultimo que se respondio o cerro, primero. Lo abierto no se toca.
+        var desde = desdePeriodo(periodo)
+        FINALES.forEach(function (e) {
+          porEtapa[e] = porEtapa[e].filter(function (c) { return desde === null || entradaDe(c) >= desde })
+          porEtapa[e].sort(function (a, b) { return entradaDe(b) - entradaDe(a) })
+        })
+        // Las cuentas de lo terminado son las del periodo (`period_counts`, que cuenta todo);
+        // sin ellas, lo que se ve. En "Todo" valen las de siempre.
+        var delPeriodo = periodo !== 'all' && esObjeto(board.period_counts) &&
+          esObjeto(board.period_counts[periodo]) ? board.period_counts[periodo] : null
         var counts = {}
         var total = 0
         ETAPAS.forEach(function (e) {
-          var dicho = esObjeto(board.counts) ? Number(board.counts[e]) : NaN
+          var fuente = FINALES.indexOf(e) >= 0 && periodo !== 'all' ? delPeriodo : board.counts
+          var dicho = esObjeto(fuente) ? Number(fuente[e]) : NaN
           var n = (!descartadas && isFinite(dicho) && dicho >= 0) ? Math.floor(dicho) : 0
           counts[e] = Math.max(n, porEtapa[e].length)
           total += counts[e]
@@ -1713,6 +1749,43 @@
         return { estado: total === 0 ? 'vacio' : 'ok', porEtapa: porEtapa, counts: counts,
           total: total, desconocidas: desconocidas, truncado: board.truncated === true,
           actualizado: board.updated_at }
+      }
+
+      // Las etapas que el periodo acota: lo que ya termino.
+      var FINALES = ['respondido', 'cerrado']
+
+      /** Desde cuando cuenta el periodo, en ms: la medianoche local de hace dias-1 dias
+       *  (Hoy = desde las 00:00), los mismos limites que los informes. null = Todo. */
+      function desdePeriodo (p) {
+        var dias = DIAS_PERIODO[p]
+        if (!dias) return null
+        var d = new Date()
+        d.setHours(0, 0, 0, 0)
+        d.setDate(d.getDate() - (dias - 1))
+        return d.getTime()
+      }
+
+      /** Cuando entro el caso a su etapa. Un CLI de antes no manda `stage_at`: vale su
+       *  ultima actualizacion. */
+      function entradaDe (c) {
+        return Date.parse(c.stage_at) || Date.parse(c.updated_at) || 0
+      }
+
+      function pintarPeriodo () {
+        Array.prototype.forEach.call(el('period').querySelectorAll('button[data-periodo]'), function (b) {
+          b.setAttribute('aria-pressed', b.dataset.periodo === periodo ? 'true' : 'false')
+        })
+      }
+
+      function elegirPeriodo (p) {
+        if (PERIODOS.indexOf(p) < 0) return
+        periodoLeido = true
+        if (p === periodo) return
+        periodo = p
+        pintarPeriodo()
+        // Se guarda y se sigue: si el host no lo guarda, este panel igual lo usa ahora.
+        call('storage.set', { key: 'boardPeriod', value: p })
+        repintar()
       }
 
       /** Sin tildes ni mayusculas: "renovacion" encuentra "Renovación". */
@@ -2781,7 +2854,7 @@
         try {
           return JSON.stringify([board, cuentaVinculada, vacioPorConfig(actividadActual),
             proyectosAceptados, filtroEtapa, busqueda, vistaEfectiva(), estrecho(), seleccion,
-            formularios, mensajes, enCurso])
+            formularios, mensajes, enCurso, periodo, desdePeriodo(periodo)])
         } catch (e) {
           return null
         }
@@ -2915,6 +2988,9 @@
           repintar()
         })
       })
+      Array.prototype.forEach.call(el('period').querySelectorAll('button[data-periodo]'), function (b) {
+        b.addEventListener('click', function () { elegirPeriodo(b.dataset.periodo) })
+      })
       document.addEventListener('keydown', function (event) {
         if (event.key === 'Escape' && seleccion) cerrarDetalle()
       })
@@ -2934,7 +3010,9 @@
           call('storage.get', { key: 'sidecar' }),
           call('storage.get', { key: 'chats' }),
           call('storage.get', { key: 'chatsAccount' }),
-          call('storage.get', { key: 'board' })
+          call('storage.get', { key: 'board' }),
+          // El periodo guardado, solo hasta tenerlo: despues manda lo que se elige aca.
+          periodoLeido ? Promise.resolve(null) : call('storage.get', { key: 'boardPeriod' })
         ]).then(function (results) {
           var sc = stored(results[2])
           if (sc && typeof sc.cuenta === 'string' && sc.cuenta) cuentaVinculada = sc.cuenta
@@ -2951,7 +3029,14 @@
             return esObjeto(p) && typeof p.id === 'string' && p.id
           }) : []
           var tablero = stored(results[5])
+          var guardado = periodoLeido ? null : stored(results[6])
           alSoltar(function () {
+            // Un rechazo del host no es "no hay nada guardado": se vuelve a pedir.
+            if (!periodoLeido && results[6] && results[6].ok) {
+              periodoLeido = true
+              if (PERIODOS.indexOf(guardado) >= 0) periodo = guardado
+              pintarPeriodo()
+            }
             actividadActual = a
             renderSynced(a)
             renderLinea(sc)
