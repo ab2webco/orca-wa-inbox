@@ -25,6 +25,7 @@ import {
   CUENTAS_ACCION, crearAjustadorRitmo, crearEncendedor, crearLanzadorTriage, crearListaCuentas
 } from './agente.mjs'
 import { crearCatalogo, leerCatalogo, PROJECTS_KEY } from './catalogo.mjs'
+import { SKILLS_ACCION, SKILLS_STATUS_KEY, SKILLS_VEREDICTO } from './skills.mjs'
 
 // Las herramientas viajan dentro del plugin. Antes se buscaban en el PATH del usuario,
 // lo que solo funcionaba en la maquina donde alguien las habia enlazado a mano.
@@ -644,6 +645,29 @@ function sembrarFuera(toolsDir, proyectos = null) {
           // distinto de cero, y el detalle tiene que decir cual de los dos fue.
         }
         resolve({ ok: false, at, reason: error ? motivoDe(error) : 'fallo',
+          detail: String(error?.message ?? stdout ?? '').slice(0, 300) })
+      })
+  })
+}
+
+/** Las skills que el dueno instala fuera del plugin (skills-globales), en un SUBPROCESO por
+ *  la misma razon que la siembra: dentro de la valla no se escribe nada. El pedido viaja por
+ *  argv, ya validado y con la ruta del proyecto sacada del catalogo, nunca del panel. */
+function skillsFuera(pedido) {
+  const guion = join(PLUGIN_DIR, 'skills.mjs')
+  return new Promise((resolve) => {
+    const m = mandoSinValla(process.execPath, [guion, PLUGIN_DIR, JSON.stringify(pedido)])
+    execFile(m.cmd, m.args,
+      { timeout: 60000, maxBuffer: 4 * 1024 * 1024,
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } },
+      (error, stdout) => {
+        try {
+          const r = JSON.parse(stdout || 'null')
+          if (r && typeof r === 'object') { resolve(r); return }
+        } catch {
+          // Cae al motivo de abajo, como en `sembrarFuera`.
+        }
+        resolve({ ok: false, code: SKILLS_VEREDICTO.FALLO,
           detail: String(error?.message ?? stdout ?? '').slice(0, 300) })
       })
   })
@@ -1288,9 +1312,21 @@ export default function activate(orca) {
       orca.log(estado.ok
         ? `harness: ${estado.files.map((f) => `${f.name} ${f.action}`).join(', ')} in ${estado.dir}`
         : `harness not seeded (${estado.reason}): ${estado.detail}`)
+      // Las skills que el dueno instalo fuera del plugin (skills-globales): en la primera
+      // siembra de cada activacion se ponen al dia con las reglas de secciones, y en cada
+      // cambio del catalogo se relee su estado, que lista un destino por proyecto aceptado.
+      const r = await skillsFuera({ op: primeraSiembra ? 'actualizar' : 'estado', proyectos })
+      primeraSiembra = false
+      if (r.estado) await guardar(orca, SKILLS_STATUS_KEY, r.estado)
+      const cambiadas = (r.files || []).filter((f) => f.action !== 'igual')
+      if (!r.ok || cambiadas.length) {
+        orca.log(`skills: ${r.code}; ${cambiadas.map((f) => f.action).join(', ') || 'none'}` +
+          (r.detail ? ` (${r.detail})` : ''))
+      }
     }).catch((error) => orca.log(`harness failed: ${error.message}`))
     return siembra
   }
+  let primeraSiembra = true
   resembrar()
 
   // El sidecar de Baileys (T3): el UNICO transporte de esta rebanada. El directorio de
@@ -1832,9 +1868,49 @@ export default function activate(orca) {
       ...crearAccionesCaso({ run, motivoDe, lanzarTriage, llaveAprobador,
         herramienta: (nombre) => tool(nombre) }),
       [CUENTAS_ACCION]: () => listarCuentas(),
-      ...catalogo.acciones
+      ...catalogo.acciones,
+      [SKILLS_ACCION.ESTADO]: () => pedirSkills({ op: 'estado' }),
+      [SKILLS_ACCION.INSTALAR]: (pedido) => pedirSkills({ op: 'instalar' }, pedido),
+      [SKILLS_ACCION.QUITAR]: (pedido) => pedirSkills({ op: 'quitar' }, pedido)
     }
   })
+
+  /** Lo que la pestana Skills pide. El destino es `target: 'global'` o el id de un proyecto:
+   *  la ruta sale del catalogo aceptado y nunca del pedido, asi que el panel no puede hacer
+   *  escribir en una carpeta que el dueno no eligio. Un proyecto que ya salio del catalogo
+   *  se busca en el estado que dejo el worker, solo para quitar: `skills.mjs` borra
+   *  unicamente lo que el plugin anoto que escribio. */
+  async function pedirSkills (base, pedido = {}) {
+    const proyectos = leerCatalogo(await leer(orca, PROJECTS_KEY))
+    const op = { ...base, proyectos }
+    if (base.op !== 'estado') {
+      if (typeof pedido.skill !== 'string' || pedido.skill.length > 64) {
+        return { ok: false, code: SKILLS_VEREDICTO.ARGUMENTOS }
+      }
+      op.skill = pedido.skill
+      if (pedido.target === 'global') {
+        op.target = { scope: 'global' }
+      } else {
+        let p = proyectos.find((x) => x.id === pedido.project)
+        if (!p && base.op === 'quitar') {
+          const estado = await leer(orca, SKILLS_STATUS_KEY)
+          const t = (estado?.skills || []).flatMap((s) => s?.targets || [])
+            .find((x) => x?.scope === 'project' && x.project === pedido.project)
+          if (t && typeof t.path === 'string') p = { id: t.project, name: t.name, path: t.path }
+        }
+        if (!p || typeof pedido.project !== 'string') {
+          return { ok: false, code: SKILLS_VEREDICTO.PROYECTO_NO_EXISTE }
+        }
+        op.target = { scope: 'project', project: p.id, path: p.path, name: p.name }
+      }
+      if (base.op === 'quitar') op.force = pedido.force === true
+    }
+    const r = await skillsFuera(op)
+    if (r.estado) await guardar(orca, SKILLS_STATUS_KEY, r.estado)
+    if (base.op !== 'estado') orca.log(`skills: ${base.op} ${op.skill} -> ${r.code}`)
+    const { estado, ...veredicto } = r
+    return veredicto
+  }
 
   /** Lo que el panel pide sobre la llave de Jev. La llave llega en el pedido y nada mas:
    *  el vigia lo borra de storage ANTES de actuar, asi que en disco vive solo el rato

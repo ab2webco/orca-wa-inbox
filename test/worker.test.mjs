@@ -3545,6 +3545,88 @@ console.log('\nworker: las skills instalables (whatsapp-avisos)')
 }
 
 
+// ───────── el worker instala lo que pide el panel y mantiene al dia lo instalado (S4) ─────────
+console.log('\nworker: la pestana Skills pide, el worker escribe')
+{
+  mkdirSync(RAIZ, { recursive: true })
+  const skills = await import('../skills.mjs')
+  const { huella, secciones } = await import('../harness.mjs')
+  const env = { HOME: process.env.HOME }
+  const archivoGlobal = join(process.env.HOME, '.claude', 'skills', 'whatsapp-avisos', 'SKILL.md')
+  rmSync(dirname(archivoGlobal), { recursive: true, force: true })
+  const proyecto = join(RAIZ, 'skills-worker-proyecto')
+  const otraRuta = join(RAIZ, 'skills-worker-otra')
+  mkdirSync(proyecto, { recursive: true })
+  mkdirSync(otraRuta, { recursive: true })
+  const archivoProyecto = join(proyecto, '.claude', 'skills', 'whatsapp-avisos', 'SKILL.md')
+
+  // Una copia que escribio una version VIEJA del plugin: la seccion "Notify him" tiene otro
+  // texto, y la huella anotada es la de ese texto (la escribio el plugin, no el dueno).
+  skills.instalar(PLUGIN_DIR, { skill: 'whatsapp-avisos', target: { scope: 'global' } }, env)
+  const actual = readFileSync(archivoGlobal, 'utf8')
+  const seccion = secciones(actual).find((s) => s.nombre === 'Notify him')
+  const vieja = '## Notify him\n\nOLD NOTIFY TEXT.\n'
+  writeFileSync(archivoGlobal, actual.replace(seccion.texto, vieja))
+  const rutaMan = join(process.env.HOME, '.wa-inbox', 'skills.json')
+  const man = JSON.parse(readFileSync(rutaMan, 'utf8'))
+  man.installs[0].sections['Notify him'] = huella(vieja)
+  man.installs[0].version = '0.0.1'
+  writeFileSync(rutaMan, JSON.stringify(man))
+
+  const orca = hostFalso(herramientas('skills-worker', '#!/bin/sh\necho "[]"\n'), {
+    chats: [], projects: [{ id: 'demo', name: 'Demo', path: proyecto, note: '' }] })
+  const { apagar } = await arranca(orca)
+  ok('al activarse, el worker pone al dia la copia instalada',
+    await hasta(() => !readFileSync(archivoGlobal, 'utf8').includes('OLD NOTIFY TEXT.'), 20000) &&
+    readFileSync(archivoGlobal, 'utf8') === actual, readFileSync(archivoGlobal, 'utf8').slice(0, 200))
+  ok('y deja el estado para el panel, con la version de ahora',
+    await hasta(() => orca.store.skillsStatus?.skills?.[0]?.targets?.[0]?.version ===
+      orca.store.skillsStatus?.version, 20000),
+    JSON.stringify(orca.store.skillsStatus).slice(0, 300))
+
+  let v = await pideCaso(orca, { action: 'skills-estado' })
+  const avisos = orca.store.skillsStatus?.skills?.find((s) => s.name === 'whatsapp-avisos')
+  ok('skills-estado contesta y lista global y cada proyecto aceptado',
+    v && v.ok === true && v.code === 'skills-leidas' && avisos &&
+    avisos.targets.some((t) => t.scope === 'global' && t.state === 'installed') &&
+    avisos.targets.some((t) => t.scope === 'project' && t.project === 'demo' &&
+      t.state === 'not-installed'), JSON.stringify([v, avisos]))
+
+  // La ruta la pone el catalogo, nunca el panel.
+  v = await pideCaso(orca, { action: 'skill-instalar', skill: 'whatsapp-avisos',
+    project: 'demo', path: otraRuta })
+  ok('instalar en un proyecto escribe en la ruta del catalogo e ignora la del pedido',
+    v && v.ok === true && v.code === 'skill-instalada' && existsSync(archivoProyecto) &&
+    !existsSync(join(otraRuta, '.claude')), JSON.stringify(v))
+  ok('y el estado del panel ya lo dice',
+    orca.store.skillsStatus?.skills?.[0]?.targets?.some((t) => t.project === 'demo' &&
+      t.state === 'installed'), JSON.stringify(orca.store.skillsStatus?.skills))
+
+  v = await pideCaso(orca, { action: 'skill-instalar', skill: 'whatsapp-avisos', project: 'nadie' })
+  ok('un proyecto que no esta en el catalogo se niega', v && v.ok === false &&
+    v.code === 'proyecto-no-existe', JSON.stringify(v))
+
+  writeFileSync(archivoProyecto, readFileSync(archivoProyecto, 'utf8')
+    .replace('## Rules\n', '## Rules\n\n- Regla demo del dueno.\n'))
+  v = await pideCaso(orca, { action: 'skill-quitar', skill: 'whatsapp-avisos', project: 'demo' })
+  ok('quitar una copia con ediciones pide confirmar y no borra',
+    v && v.ok === false && v.code === 'skill-editada' && JSON.stringify(v.yours) === '["Rules"]' &&
+    existsSync(archivoProyecto), JSON.stringify(v))
+  v = await pideCaso(orca, { action: 'skill-quitar', skill: 'whatsapp-avisos', project: 'demo',
+    force: true })
+  ok('confirmado, la quita', v && v.ok === true && v.code === 'skill-quitada' &&
+    !existsSync(archivoProyecto), JSON.stringify(v))
+
+  v = await pideCaso(orca, { action: 'skill-instalar', skill: 'whatsapp-avisos', target: 'global' })
+  ok('instalar global sobre la copia al dia no cambia nada y contesta actualizada',
+    v && v.ok === true && v.code === 'skill-actualizada' &&
+    readFileSync(archivoGlobal, 'utf8') === actual, JSON.stringify(v))
+  v = await pideCaso(orca, { action: 'skill-quitar', skill: 'whatsapp-avisos', target: 'global' })
+  ok('y quitarla global la borra', v && v.ok === true && !existsSync(archivoGlobal), JSON.stringify(v))
+  apagar()
+}
+
+
 rmSync(RAIZ, { recursive: true, force: true })
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
