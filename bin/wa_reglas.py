@@ -83,13 +83,31 @@ DINERO_PALABRA = _palabras(
     r"precos?", r"custa", r"custos?", r"orcamentos?", r"faturas?", r"descontos?",
     r"pagamentos?", r"boletos?", r"cobranca")
 CIFRA = re.compile(r"\d")
-FRASES = re.compile(r"[^.!?\n]+[.!?]*")
+# Donde termina una frase: un salto de linea, o un punto, "!" o "?" seguido de un espacio o
+# del fin del texto. Un punto entre dos caracteres ("v2.3", "1.4.2", "app.py") no la corta, ni
+# el de una abreviatura ("approx. 3 files"): "Deploy v2.3 to production" es una sola frase.
+FIN_DE_FRASE = re.compile(r"[.!?]+(?=\s|$)|\n")
+ABREVIATURA = re.compile(
+    r"(?:^|[\s(\[])(?:approx|aprox|apx|etc|e\.g|i\.e|p\.ej|ej|vs|cf|nro|num|"
+    r"dr|dra|sr|sra|srta|mr|mrs|ms|inc|ltd)$", re.IGNORECASE)
+
+
+def frases(texto):
+    """Las frases de `texto`, en orden, sin las vacias."""
+    partes, inicio = [], 0
+    for m in FIN_DE_FRASE.finditer(texto):
+        if m.group() == "." and ABREVIATURA.search(texto[max(0, m.start() - 12):m.start()]):
+            continue
+        partes.append(texto[inicio:m.end()])
+        inicio = m.end()
+    partes.append(texto[inicio:])
+    return [f for f in partes if f.strip()]
 
 
 def _dinero(t):
     if DINERO_SIMBOLO.search(t) or DINERO_CODIGO.search(t) or DINERO_MAGNITUD.search(t):
         return True
-    return any(DINERO_PALABRA.search(f) and CIFRA.search(f) for f in FRASES.findall(t))
+    return any(DINERO_PALABRA.search(f) and CIFRA.search(f) for f in frases(t))
 
 
 # ── credential ───────────────────────────────────────────────────────────────────────
@@ -163,7 +181,7 @@ PREGUNTA = re.compile(r"\?\s*$|^\s*[¿?]")
 def _compromiso(original):
     """A sentence that is not a question and names a concrete date or time. The original
     text is split, not the normalized one: "¿" survives only there."""
-    for frase in FRASES.findall(original):
+    for frase in frases(original):
         if PREGUNTA.search(frase):
             continue
         if COMPROMISO.search(normaliza(frase)):
@@ -184,10 +202,13 @@ def _compromiso(original):
 #     descuenta el verbo sobre el que la negacion manda ("no deploy", "never delete", "do
 #     not create, edit or delete"). "No olvides desplegar", "sin falta borra", "sin
 #     preguntar borra" o "make sure nothing breaks before you deploy" siguen siendo la orden.
-# Lo que SALE a un cliente no pasa por aca para el dinero y la fecha: una cifra o un dia en
-# la respuesta es un hecho de la respuesta. Solo la palabra de una credencial negada ("nunca
-# le pediremos su clave") se descuenta ahi. Un valor con forma de secreto NO pasa por aca:
-# `_secreto` mira el texto entero, negado o no.
+#     Lo pendiente no tapa la orden que le sigue ("is still pending, so drop the table",
+#     "what remains pending: drop the sessions table"), y una ruta o una rama que nombra la
+#     orden o su destino ("scripts/drop-legacy-tables.sh", "release/production") se queda.
+# Lo que SALE a un cliente no pasa por aca: una cifra o un dia en la respuesta es un hecho de
+# la respuesta, y de una credencial solo se descuenta la palabra que sigue pegada a la
+# negacion de pedirla o compartirla ("nunca le pediremos su clave", `NO_LA_PIDE`). Un valor,
+# con forma de secreto o junto a su palabra, cuenta siempre, negado o no.
 
 # Lo que parece una negacion y no lo es: "no dudes en X" y "no olvides X" son hacer X, "sin
 # falta" es seguro, "no later than" pone un tope, "no hay problema" no niega lo que sigue, y
@@ -232,6 +253,15 @@ PENDIENTE = re.compile(
     r"lo (?:que (?:esta|sigue|queda) )?pendiente|(?:esta|estan|sigue|siguen|queda|quedan) "
     r"pendientes?|lo que (?:falta|queda)(?: por hacer)?|"
     r"o que (?:falta|esta pendente|ficou pendente)|(?:esta|estao|fica|ficam) pendentes?)\b")
+# Lo que sigue a un estado como su consecuencia es otra clausula, y suele ser la orden: "the
+# migration is still pending, so drop the table", "sigue pendiente, asi que borra la tabla".
+CONSECUENCIA = re.compile(
+    r"\b(?:so|therefore|thus|hence|meanwhile|asi que|entonces|por eso|por lo tanto|"
+    r"de modo que|de manera que|mientras tanto|entao|portanto|por isso|enquanto isso)\b")
+# Un verbo destructivo con algo detras ("delete the stale buckets", "despliega a produccion",
+# "deploy it") es una orden aunque caiga en lo pendiente; solo, al final de un item ("production
+# audit, deploy)"), es un informe.
+SIGUE_OBJETO = re.compile(r"[ \t]+(?!(?:y|e|and|or|u|ni|nor|ou|nem)\b)[\w$€£\"'/.~-]")
 # Un identificador: una URL, una ruta que empieza con "/", una rama con su prefijo
 # (fix/demo-secret-leak, origin/main), una ruta de tres partes o un archivo (src/app.py), o
 # un nombre con dos guiones o mas (demo-api-secret-leak). No lo es lo que se parece: "$50/mes",
@@ -256,9 +286,12 @@ def _tapa(chars, desde, hasta):
         chars[i] = " "
 
 
-def _tapa_identificadores(t):
+def _tapa_identificadores(t, ordenes=False):
+    """Tapa los identificadores. Uno con guiones que nombra un destino o un verbo destructivo
+    se queda; con `ordenes` (lo destructivo), tambien una ruta o una rama que lo nombra
+    ("scripts/drop-legacy-tables.sh", "release/production"): es la orden o su destino."""
     def tapa(m):
-        if m.group("guiones") and _destructivo_o_destino(m.group()):
+        if (ordenes or m.group("guiones")) and _destructivo_o_destino(m.group()):
             return m.group()
         return " " * len(m.group())
     return IDENTIFICADOR.sub(tapa, t)
@@ -298,31 +331,39 @@ def _tapa_negacion(chars, texto, desde, hasta):
         i = siguiente
 
 
-def _tapa_pendiente(chars, t, a, b):
-    """Lo que se informa como pendiente: desde la marca hasta el proximo "y"/"and" o el fin
-    de la frase; un ": " no lo corta ("lo pendiente: auditoria, desplegar")."""
+def _tapa_pendiente(chars, t, a, b, ordenes=False):
+    """Lo que se informa como pendiente: desde la marca hasta el proximo "y"/"and", una
+    consecuencia ("so", "asi que") o el fin de la frase; un ": " no lo corta ("lo pendiente:
+    auditoria, desplegar"). Con `ordenes` (lo destructivo), tampoco tapa desde un verbo
+    destructivo con algo detras: "what remains pending: drop the sessions table" es la orden."""
     for m in PENDIENTE.finditer(t, a, b):
         corte = next((c.start() for c in CORTE.finditer(t, m.end(), b)
                       if not c.group().startswith(":")), b)
+        consecuencia = CONSECUENCIA.search(t, m.end(), corte)
+        if consecuencia:
+            corte = consecuencia.start()
+        if ordenes:
+            corte = min([corte] + [v.start() for r in (TRABAJO_BORRA, TRABAJO_FUERZA,
+                                                       TRABAJO_VERBO_DESPLIEGUE, TRABAJO_PAGO)
+                                   for v in r.finditer(t, m.end(), corte)
+                                   if SIGUE_OBJETO.match(t, v.end())])
         _tapa(chars, m.start(), corte)
 
 
-def sin_menciones(texto, informe=True):
+def sin_menciones(texto):
     """El texto normalizado, con lo que no es una orden tapado con espacios (mismo largo):
-    lo negado o prohibido y los identificadores; con `informe` (un brief), tambien "solo di
-    que existe" y lo que se informa como pendiente. Lo usan las menciones de un brief
-    (`trabajo_comprometido`) y, sin `informe`, la palabra de una credencial en lo que sale."""
+    lo negado o prohibido, los identificadores, "solo di que existe" y lo que se informa como
+    pendiente. Lo usan las menciones de un brief (`trabajo_comprometido`)."""
     t = normaliza(texto)
     t = AFIRMATIVAS.sub(lambda m: " " * len(m.group()), t)
     t = _tapa_identificadores(t)
     chars = list(t)
     for unidad in UNIDADES.finditer(t):
         a, b = unidad.span()
-        if informe and SOLO_EXISTE.search(t, a, b):
+        if SOLO_EXISTE.search(t, a, b):
             _tapa(chars, a, b)
             continue
-        if informe:
-            _tapa_pendiente(chars, t, a, b)
+        _tapa_pendiente(chars, t, a, b)
         limites = [a] + [c.start() for c in CORTE.finditer(t, a, b)] + [b]
         for desde, hasta in zip(limites, limites[1:]):
             _tapa_negacion(chars, t, desde, hasta)
@@ -343,18 +384,33 @@ def excepciones(texto, direccion):
     t = normaliza(original)
     halladas = set()
     # Una cifra o un dia en lo que sale es un hecho de la respuesta, la preceda lo que la
-    # preceda: el dinero y la fecha se juzgan en el texto entero. Solo la palabra de una
-    # credencial negada no cuenta ("nunca le pediremos su clave", orden-del-dueno); lo que
-    # entra, entero: un cliente que dice que no tiene la clave sigue siendo una credencial
-    # para el dueno. El secreto mira siempre el texto entero.
+    # preceda: el dinero y la fecha se juzgan en el texto entero. De la credencial solo no
+    # cuenta la palabra que sigue a "nunca le pediremos" o "never share" (`_credencial_que_sale`);
+    # lo que entra, entero: un cliente que dice que no tiene la clave sigue siendo una
+    # credencial para el dueno. El secreto mira siempre el texto entero.
     if direccion == SALIDA and _dinero(t):
         halladas.add("money")
-    palabras = sin_menciones(original, informe=False) if direccion == SALIDA else t
-    if _secreto(original, t) or CREDENCIAL_PALABRA.search(palabras):
+    if direccion == SALIDA:
+        credencial = _credencial_que_sale(original, t)
+    else:
+        credencial = _secreto(original, t) or CREDENCIAL_PALABRA.search(t)
+    if credencial:
         halladas.add("credential")
     if direccion == SALIDA and _compromiso(original):
         halladas.add("commitment")
     return [e for e in wa_jev.ORDEN_EXCEPCIONES if e in halladas]
+
+
+def _credencial_que_sale(original, t):
+    """Si lo que sale lleva una credencial: un valor (con forma de secreto o junto a su
+    palabra) o la palabra de una que no sigue a la negacion de pedirla o compartirla
+    (`NO_LA_PIDE`)."""
+    if valor_de_credencial(original):
+        return True
+    # La palabra dentro de una rama o una ruta ("fix/demo-token-leak") no es una credencial.
+    t = _tapa_identificadores(t)
+    return any(not NO_LA_PIDE.search(t[max(0, m.start() - ALCANCE_NEGACION):m.start()])
+               for m in CREDENCIAL_PALABRA.finditer(t))
 
 
 def _menciones(texto):
@@ -374,25 +430,57 @@ def _menciones(texto):
     return [e for e in wa_jev.ORDEN_EXCEPCIONES if e in halladas]
 
 
-# Un valor junto a la palabra de una credencial: "contrasena nueva Perro123", "pin 4821". No
-# tiene la forma de un secreto (`secreto` no lo ve) y aun asi no se puede mostrar.
-VALOR_CERCA = re.compile(r"[^\s.,;:!?()\[\]\"'<>]*\d[^\s.,;:!?()\[\]\"'<>]*")
-VENTANA_VALOR = 40
+# Un valor junto a la palabra de una credencial: "contrasena nueva Perro123", "pin 4821", "a
+# PerroAzulMarino", o en la linea de abajo. No tiene la forma de un secreto (`secreto` no lo
+# ve) y aun asi no se puede mostrar. Se mira hasta el fin de la frase (un salto de linea no la
+# corta: el valor suele ir en la linea siguiente) y a lo sumo VENTANA_VALOR caracteres.
+TOKEN = re.compile(r"[^\s.,;:!?()\[\]\"'<>]+")
+FIN_DEL_TRAMO = re.compile(r"[.!?]+(?=[ \t]|$)")
+SIMBOLO_DE_VALOR = re.compile(r"[@#$%&*=+~^]")
+# "la contrasena de GitHub", "del iPhone": el nombre de la cuenta, no su valor.
+ANTES_DEL_NOMBRE = re.compile(r"\b(?:de|del|of|for|para|do|da|dos|das|en|in|on|no|na|con|"
+                              r"with|com)\s+$")
+VENTANA_VALOR = 80
+
+
+def _sin_acentos(texto):
+    descompuesto = unicodedata.normalize("NFKD", texto or "")
+    return "".join(c for c in descompuesto if not unicodedata.combining(c))
+
+
+def _parece_valor(t, plano, v):
+    """Si el token `v` (hallado en `t`; su forma con mayusculas en `plano`) parece un valor:
+    cuatro caracteres o mas con una cifra, o con mayusculas por dentro o un simbolo y que no
+    sea el nombre de la cuenta ("la contrasena de GitHub")."""
+    if len(v.group()) < 4:
+        return False
+    if CIFRA.search(v.group()):
+        return True
+    if ANTES_DEL_NOMBRE.search(t[max(0, v.start() - 8):v.start()]):
+        return False
+    forma = plano[v.start():v.end()]
+    return bool(any(c.isupper() for c in forma[1:]) or SIMBOLO_DE_VALOR.search(forma))
 
 
 def valor_de_credencial(texto):
     """Si `texto` lleva el VALOR de una credencial, no solo su nombre: un valor con forma de
-    secreto, o una palabra de credencial seguida (en la misma frase, a pocas palabras) de algo
-    con una cifra de cuatro caracteres o mas. Nunca devuelve el valor."""
+    secreto, o una palabra de credencial seguida (en la misma frase, aunque sea en la linea de
+    abajo) de algo que parece un valor (`_parece_valor`). Ante la duda, cuenta. Nunca devuelve
+    el valor."""
     original = texto or ""
     if not original.strip():
         return False
     if secreto(original):
         return True
-    t = normaliza(original)
+    plano = _sin_acentos(original)
+    t = plano.lower()
+    if len(t) != len(plano):
+        plano = t
     for m in CREDENCIAL_PALABRA.finditer(t):
-        tramo = re.split(r"[.!?\n]", t[m.end():m.end() + VENTANA_VALOR])[0]
-        if any(len(v.group()) >= 4 for v in VALOR_CERCA.finditer(tramo)):
+        fin = min(len(t), m.end() + VENTANA_VALOR)
+        corte = FIN_DEL_TRAMO.search(t, m.end(), fin)
+        fin = corte.start() if corte else fin
+        if any(_parece_valor(t, plano, v) for v in TOKEN.finditer(t, m.end(), fin)):
             return True
     return False
 
@@ -445,9 +533,12 @@ def nivel_de_motivo(quien, codigo, niv):
 TRABAJO_BORRA = _palabras(
     r"borr(?:ar|a|en|e|o|amos|ando)", r"elimin\w*", r"suprim\w*", r"purg\w*", r"vaci(?:ar|a)",
     r"dar de baja", r"delete\w*", r"remove", r"drop", r"truncate", r"wipe", r"purge",
-    r"rm -rf", r"apag(?:ar|a) (?:el|la) (?:servidor|servicio|base)")
+    r"rm -rf",
+    # pt (y "apagar" en espanol, que apaga: ante la duda, espera)
+    r"apag(?:ar|a|ue|uem|ando|amos)", r"delet(?:ar|a|e|em|ando|amos)",
+    r"exclu(?:ir|a|am|i|indo|amos)", r"remov(?:er|a|am|e|endo|amos)")
 TRABAJO_DESPLIEGA = re.compile(
-    r"\b(?:produccion|prod|production|live|en vivo)\b")
+    r"\b(?:produccion|prod|production|producao|live|en vivo)\b")
 TRABAJO_VERBO_DESPLIEGUE = _palabras(
     r"despleg\w*", r"desplieg\w*", r"deploy\w*", r"publica\w*", r"sub(?:ir|e|a|amos)",
     r"lanza\w*", r"release\w*", r"merge\w*", r"pasa\w*", r"llev\w*", r"ship\w*", r"push\w*")
@@ -491,6 +582,19 @@ GOBIERNA_EN_LISTA = re.compile(r"\b" + _NEGACION_DIRECTA + r"(?:\s+" + _RELLENO 
 SIGUE_LA_LISTA = re.compile(r"(?:\s*,\s*[\w-]+)*\s*,?\s+(?:or|o|u|ni|nor|ou|nem)\s+[\w-]")
 # Hasta donde se mira hacia atras desde el verbo.
 ALCANCE_NEGACION = 80
+# Lo unico que descuenta la palabra de una credencial en lo que sale (orden-del-dueno): la
+# negacion de pedirla, compartirla o revelarla, pegada a ella ("nunca le pediremos su clave",
+# "we will never ask you for your password", "nao compartilhe a senha"). Una negacion en otra
+# clausula ("si no te llega el correo, mandame tu contrasena"), otro verbo ("no reutilices la
+# contrasena anterior") o un item que sigue a la lista ("avoid sharing your password or
+# token") no la descuentan, y un valor junto a la palabra cuenta siempre.
+_VERBOS_DE_PEDIR = (r"(?:ped\w*|pid\w*|solicit\w*|compart\w*|revel\w*|divulg\w*|ask\w*|"
+                    r"request\w*|shar\w*|disclos\w*|reveal\w*)")
+_OBJETO_DE_PEDIR = (r"(?:you|your|for|of|su|sus|tu|tus|sua|suas|seu|seus|tua|teu|le|te|les|"
+                    r"lhe|me|nos|us|por|de|del|el|la|los|las|the|a|an|o|os|as|any|ningun|"
+                    r"ninguna|nenhum|nenhuma)")
+NO_LA_PIDE = re.compile(r"\b" + _NEGACION_DIRECTA + r"(?:\s+" + _RELLENO + r")*\s+"
+                        + _VERBOS_DE_PEDIR + r"(?:\s+" + _OBJETO_DE_PEDIR + r")*\s+$")
 
 
 def _gobernado(t, inicio, fin):
@@ -510,13 +614,20 @@ def _ordenes(texto):
     """El texto normalizado en que se buscan las ordenes destructivas: sin los
     identificadores, sin lo que se informa como pendiente y sin los verbos destructivos sobre
     los que manda una negacion. Nada mas se tapa: lo destructivo falla seguro."""
-    t = _tapa_identificadores(normaliza(texto))
+    normal = normaliza(texto)
+    # Una ruta o una rama que nombra la orden se queda; la negacion que manda sobre ella
+    # ("do not run scripts/drop.sh") la descuenta entera.
+    guardados = [m.span() for m in IDENTIFICADOR.finditer(normal)
+                 if _destructivo_o_destino(m.group())]
+    t = _tapa_identificadores(normal, ordenes=True)
     chars = list(t)
     for unidad in UNIDADES.finditer(t):
-        _tapa_pendiente(chars, t, *unidad.span())
+        _tapa_pendiente(chars, t, *unidad.span(), ordenes=True)
     for patron in (TRABAJO_BORRA, TRABAJO_FUERZA, TRABAJO_VERBO_DESPLIEGUE, TRABAJO_PAGO):
         for m in patron.finditer(t):
-            if _gobernado(t, m.start(), m.end()):
+            inicio, fin = next(((a, b) for a, b in guardados if a <= m.start() < b),
+                               m.span())
+            if _gobernado(t, inicio, fin):
                 _tapa(chars, m.start(), m.end())
     return "".join(chars)
 
@@ -550,7 +661,7 @@ def trabajo_comprometido(texto):
     if TRABAJO_FUERZA.search(t):
         halladas.add("force_push")
     if any(TRABAJO_DESPLIEGA.search(f) and TRABAJO_VERBO_DESPLIEGUE.search(f)
-           for f in FRASES.findall(t)):
+           for f in frases(t)):
         halladas.add("deploy")
     if TRABAJO_PAGO.search(t):
         halladas.add("payment")

@@ -11073,6 +11073,111 @@ for texto, esperado in (
     salio = reglas.valor_de_credencial(texto)
     ok(f"valor de credencial: {texto!r} -> {esperado}", salio is esperado, f"salio {salio}")
 
+# ── orden-del-dueno: segunda revision ────────────────────────────────────────────────────
+# Lo que la segunda revision encontro tapado: una orden que sigue a un estado pendiente ("is
+# still pending, so drop the table"), un script o un destino que va dentro de una ruta o una
+# rama ("scripts/drop-legacy-tables.sh", "release/production"), un despliegue con una version
+# o un archivo ("Deploy v2.3 to production"), el portugues ("producao", "apague") y, en lo
+# que sale a un cliente, una credencial pedida o dada despues de una clausula negada.
+print("\norden-del-dueno: segunda revision, lo destructivo y la credencial no se tapan")
+reglas = carga_reglas()
+for texto, motivo in (
+        # Lo pendiente informa un estado; la orden que le sigue sigue siendo la orden.
+        ("The migration is still pending, so drop the old users_v1 table now.", "delete"),
+        ("La migracion sigue pendiente, asi que borra la tabla vieja ahora.", "delete"),
+        ("Ainda esta pendente a migracao, entao drop a tabela antiga agora.", "delete"),
+        ("The hotfix is still pending, so deploy it to production right after lunch.",
+         "deploy"),
+        ("Queda pendiente la auditoria, asi que despliega a produccion el parche ya.", "deploy"),
+        ("The refund is still pending, so issue the refund of the duplicate charge today.",
+         "payment"),
+        ("The refund is still pending, so issue the refund of the duplicate charge today.",
+         "commitment"),
+        ("Tasks still pending: delete the stale S3 buckets and redeploy.", "delete"),
+        ("What remains pending: drop the sessions table and deploy to production.", "delete"),
+        ("What remains pending: drop the sessions table and deploy to production.", "deploy"),
+        ("Lo que falta por hacer: borrar los registros duplicados de clientes.", "delete"),
+        # Un script o un destino dentro de una ruta o una rama es la orden.
+        ("Run scripts/drop-legacy-tables.sh on the production DB.", "delete"),
+        ("Run bin/delete_inactive_users.py --confirm against the live database.", "delete"),
+        ("Corre scripts/borrar-clientes-inactivos.sh en el servidor de produccion.", "delete"),
+        ("Ejecuta db/purge_sessions.sql en la base de produccion.", "delete"),
+        ("Execute db/scripts/delete-inactive-accounts.sql on the production database.",
+         "delete"),
+        ("Run ./bin/purge-cache.sh on prod.", "delete"),
+        ("Run the cleanup script scripts/purge-old-users.sh against production.", "delete"),
+        ("Deploy with kubectl apply -k k8s/overlays/production once the image is built.",
+         "deploy"),
+        ("Merge hotfix/login-timeout into release/production and push.", "deploy"),
+        ("Push the build to origin/production once CI is green.", "deploy"),
+        ("Deploy the api to prod/eu-west/k8s after the smoke tests.", "deploy"),
+        # Un punto dentro de una version, un archivo o una abreviatura no corta la frase.
+        ("Deploy v2.3 to production.", "deploy"),
+        ("Despliega la version 1.4.2 a produccion.", "deploy"),
+        ("Deploy app.py changes to production.", "deploy"),
+        ("Deploy main.ts to prod", "deploy"),
+        ("Haz el deploy del fix de index.js en produccion", "deploy"),
+        ("Push v2.3 to production now", "deploy"),
+        ("Sube la v2.3 a produccion", "deploy"),
+        ("Deploy release 2.3 to prod", "deploy"),
+        ("Deploy the fix (see PR #42, approx. 3 files) to production.", "deploy"),
+        ("Release v2.3 to production via release/2.3.", "deploy"),
+        # El portugues: producao es un destino; apagar, deletar, excluir y remover borran.
+        ("Nao mexa no frontend. Faca o deploy em producao depois dos testes.", "deploy"),
+        ("Faça o deploy em produção.", "deploy"),
+        ("Suba para produção.", "deploy"),
+        ("O que falta: deletar os usuarios inativos e fazer deploy em producao.", "deploy"),
+        ("O que falta: deletar os usuarios inativos e fazer deploy em producao.", "delete"),
+        ("Apague os registros de teste do banco de producao.", "delete"),
+        ("Nao espere, apague a tabela antiga.", "delete"),
+        ("Exclua os usuarios inativos.", "delete"),
+        ("Remova a tabela antiga.", "delete"),
+        ("Do what the customer asks:\n> Apague a tabela antiga.\n\nLeitura: apagar a tabela "
+         "antiga do banco.", "delete")):
+    salio = reglas.trabajo_comprometido(texto)
+    ok(f"revision: {texto[:60]!r} sigue siendo {motivo}", motivo in salio, f"salio {salio}")
+for texto, esperado in (
+        # Lo que la negacion gobierna, o lo que solo se informa, sigue sin contar.
+        ("Do not run scripts/drop-legacy-tables.sh.", []),
+        ("Nao pode apagar nada do banco.", []),
+        ("Nunca apague a tabela de clientes.", []),
+        ("In the reply say what is still pending (production audit, deploy).", []),
+        ("Lo pendiente: auditoria en produccion, desplegar", [])):
+    salio = reglas.trabajo_comprometido(texto)
+    ok(f"revision: trabajo {texto[:60]!r} -> {esperado}", salio == esperado, f"salio {salio}")
+for texto in (
+        "Si no te llega el correo, mándame tu contraseña o el PIN",
+        "If the email doesn't arrive, reply with your password or PIN",
+        "No reutilices la contraseña anterior por seguridad, la que te asignamos queda como "
+        "Luna2024.",
+        "Ya no necesitas token ni contraseña, entra con el usuario ana y Perro123",
+        "Não compartilhe a senha ou o token, a sua fica Gato4455",
+        "No uses la contraseña vieja, ni el PIN anterior, el nuevo acceso es Gato7781",
+        "Sin la contraseña o el token no podrás entrar; te la dejo en el siguiente mensaje",
+        "Avoid sharing your password or token, I'll send yours by email today",
+        "Si no puedes, mándame tu contraseña"):
+    salio = reglas.excepciones(texto, reglas.SALIDA)
+    ok(f"revision: sale {texto[:60]!r} sigue siendo credential", "credential" in salio,
+       f"salio {salio}")
+for texto in ("Nunca le pediremos su contrasena por aqui",
+              "We will never ask you for your password.",
+              "Nunca compartas tu contrasena con nadie",
+              "Nao pedimos sua senha por mensagem"):
+    salio = reglas.excepciones(texto, reglas.SALIDA)
+    ok(f"revision: sale {texto!r} no es credential", "credential" not in salio,
+       f"salio {salio}")
+for texto, esperado in (
+        ("Te paso la contraseña del hosting, va en el siguiente renglón\nPerro2024", True),
+        ("la contraseña del hosting que me pidieron ayer en la llamada es Perro2024", True),
+        ("Cambia la contraseña del cliente a PerroAzulMarino y avísale.", True),
+        ("Cambia la contraseña del panel de administración del cliente a Perro2024 y avísale.",
+         True),
+        ("la contrasena de GitHub no me funciona", False),
+        ("Olvide mi contrasena, me ayudan a entrar?", False)):
+    salio = reglas.valor_de_credencial(texto)
+    ok(f"revision: valor de credencial {texto[:60]!r} -> {esperado}", salio is esperado,
+       f"salio {salio}")
+
 # El caso del dueno (solo por su id de WhatsApp): su orden de trabajo sale sin su clic,
 # salvo lo destructivo (decision a, 2026-10-05). Una credencial nombrada, dinero o una
 # fecha en el brief no lo frenan; borrar, desplegar a produccion, forzar un push, un pago
