@@ -3406,6 +3406,145 @@ console.log('\nworker: el catalogo de proyectos se refresca, se acepta y llega a
   }
 }
 
+// ───────── las skills que el dueno instala fuera del plugin (skills-globales, S3) ─────────
+// `skills.mjs` escribe `SKILL.md` en ~/.claude/skills o en un proyecto aceptado, con la
+// misma regla de secciones que el arnes: lo que el dueno edito es suyo. Todo con un HOME
+// temporal: nunca contra el ~/.claude de verdad.
+console.log('\nworker: las skills instalables (whatsapp-avisos)')
+{
+  mkdirSync(RAIZ, { recursive: true })
+  const skills = await import('../skills.mjs')
+  const casa = join(RAIZ, 'skills-home')
+  mkdirSync(casa, { recursive: true })
+  const env = { HOME: casa }
+  const proyecto = join(RAIZ, 'skills-proyecto-demo')
+  mkdirSync(proyecto, { recursive: true })
+  const PROY = { id: 'demo', name: 'Demo', path: proyecto, note: '' }
+  const global = { scope: 'global' }
+  const enProyecto = { scope: 'project', project: 'demo', path: proyecto, name: 'Demo' }
+  const archivoGlobal = join(casa, '.claude', 'skills', 'whatsapp-avisos', 'SKILL.md')
+  const archivoProyecto = join(proyecto, '.claude', 'skills', 'whatsapp-avisos', 'SKILL.md')
+  const plantilla = readFileSync(join(PLUGIN_DIR, 'harness', 'skills-globales',
+    'whatsapp-avisos', 'SKILL.md'), 'utf8')
+  const de = (estado, objetivo) => {
+    const s = (estado.skills || []).find((x) => x.name === 'whatsapp-avisos')
+    return s && s.targets.find((t) => t.scope === objetivo.scope &&
+      (objetivo.scope === 'global' || t.project === objetivo.project))
+  }
+
+  const cat = skills.catalogoSkills(PLUGIN_DIR)
+  ok('el catalogo trae whatsapp-avisos con su descripcion, y nada del arnes interno',
+    cat.length === 1 && cat[0].name === 'whatsapp-avisos' && /owner/.test(cat[0].description),
+    JSON.stringify(cat))
+
+  let e = skills.estadoSkills(PLUGIN_DIR, [PROY], env)
+  ok('sin nada escrito: global y proyecto sin instalar',
+    e.ok && de(e, global)?.state === 'not-installed' && de(e, enProyecto)?.state === 'not-installed',
+    JSON.stringify(e))
+
+  let r = skills.instalar(PLUGIN_DIR, { skill: 'whatsapp-avisos', target: global }, env)
+  ok('instalar global escribe ~/.claude/skills/whatsapp-avisos/SKILL.md tal cual la plantilla',
+    r.ok && r.code === 'skill-instalada' && existsSync(archivoGlobal) &&
+    readFileSync(archivoGlobal, 'utf8') === plantilla, JSON.stringify(r))
+  e = skills.estadoSkills(PLUGIN_DIR, [PROY], env)
+  ok('y el estado dice instalada, con la version del plugin',
+    de(e, global)?.state === 'installed' && de(e, global)?.version === e.version &&
+    de(e, enProyecto)?.state === 'not-installed', JSON.stringify(de(e, global)))
+
+  // El dueno edita una seccion: sigue instalada, y la seccion es suya.
+  const editado = readFileSync(archivoGlobal, 'utf8').replace('## Rules\n', '## Rules\n\n- Mi regla demo.\n')
+  writeFileSync(archivoGlobal, editado)
+  e = skills.estadoSkills(PLUGIN_DIR, [PROY], env)
+  ok('una seccion editada no la vuelve desactualizada, y se nombra como suya',
+    de(e, global)?.state === 'installed' && JSON.stringify(de(e, global)?.yours) === '["Rules"]',
+    JSON.stringify(de(e, global)))
+
+  // Una version nueva del plugin con otra seccion "Notify him".
+  const nuevo = join(RAIZ, 'skills-plugin-nuevo')
+  mkdirSync(join(nuevo, 'harness', 'skills-globales', 'whatsapp-avisos'), { recursive: true })
+  const man = JSON.parse(readFileSync(join(PLUGIN_DIR, 'orca-plugin.json'), 'utf8'))
+  writeFileSync(join(nuevo, 'orca-plugin.json'), JSON.stringify({ ...man, version: '99.0.0' }))
+  writeFileSync(join(nuevo, 'harness', 'skills-globales', 'whatsapp-avisos', 'SKILL.md'),
+    plantilla.replace('## Notify him\n', '## Notify him\n\nNEW NOTIFY TEXT.\n'))
+  e = skills.estadoSkills(nuevo, [PROY], env)
+  ok('con la plantilla nueva, la instalada sale desactualizada',
+    de(e, global)?.state === 'outdated' && e.version === '99.0.0', JSON.stringify(de(e, global)))
+  const act = skills.actualizarTodas(nuevo, env)
+  const tras = readFileSync(archivoGlobal, 'utf8')
+  ok('actualizar trae la seccion nueva y conserva la que edito el dueno',
+    act.ok && tras.includes('NEW NOTIFY TEXT.') && tras.includes('- Mi regla demo.'),
+    JSON.stringify(act))
+  e = skills.estadoSkills(nuevo, [PROY], env)
+  ok('y queda al dia, en la version nueva',
+    de(e, global)?.state === 'installed' && de(e, global)?.version === '99.0.0',
+    JSON.stringify(de(e, global)))
+
+  r = skills.quitar(nuevo, { skill: 'whatsapp-avisos', target: global }, env)
+  ok('quitar un archivo con ediciones del dueno NO lo borra sin confirmar, y dice cuales',
+    !r.ok && r.code === 'skill-editada' && JSON.stringify(r.yours) === '["Rules"]' &&
+    existsSync(archivoGlobal), JSON.stringify(r))
+  r = skills.quitar(nuevo, { skill: 'whatsapp-avisos', target: global, force: true }, env)
+  ok('confirmado, lo borra con su carpeta, y deja ~/.claude/skills',
+    r.ok && r.code === 'skill-quitada' && !existsSync(archivoGlobal) &&
+    !existsSync(dirname(archivoGlobal)) && existsSync(join(casa, '.claude', 'skills')),
+    JSON.stringify(r))
+
+  r = skills.instalar(PLUGIN_DIR, { skill: 'whatsapp-avisos', target: enProyecto }, env)
+  ok('instalar en un proyecto escribe <proyecto>/.claude/skills/whatsapp-avisos/SKILL.md',
+    r.ok && existsSync(archivoProyecto) && !existsSync(archivoGlobal), JSON.stringify(r))
+  e = skills.estadoSkills(PLUGIN_DIR, [PROY], env)
+  ok('el estado lo dice por proyecto', de(e, enProyecto)?.state === 'installed' &&
+    de(e, global)?.state === 'not-installed', JSON.stringify(e.skills))
+  // Un proyecto que el dueno ya quito del catalogo sigue apareciendo mientras tenga la skill.
+  e = skills.estadoSkills(PLUGIN_DIR, [], env)
+  ok('una instalacion en un proyecto que salio del catalogo se sigue listando para quitarla',
+    de(e, enProyecto)?.state === 'installed', JSON.stringify(e.skills))
+  r = skills.quitar(PLUGIN_DIR, { skill: 'whatsapp-avisos', target: enProyecto }, env)
+  ok('sin ediciones, quitar lo borra sin preguntar',
+    r.ok && r.code === 'skill-quitada' && !existsSync(archivoProyecto), JSON.stringify(r))
+
+  // Un archivo que el plugin no escribio: no se pisa ni se borra.
+  mkdirSync(dirname(archivoGlobal), { recursive: true })
+  writeFileSync(archivoGlobal, '---\nname: whatsapp-avisos\n---\nAjeno demo.\n')
+  e = skills.estadoSkills(PLUGIN_DIR, [PROY], env)
+  ok('un SKILL.md que no escribio el plugin sale como ajeno', de(e, global)?.state === 'foreign',
+    JSON.stringify(de(e, global)))
+  r = skills.instalar(PLUGIN_DIR, { skill: 'whatsapp-avisos', target: global }, env)
+  const r2 = skills.quitar(PLUGIN_DIR, { skill: 'whatsapp-avisos', target: global, force: true }, env)
+  ok('y ni instalar ni quitar lo tocan',
+    !r.ok && r.code === 'skill-ajena' && !r2.ok && r2.code === 'skill-ajena' &&
+    readFileSync(archivoGlobal, 'utf8').includes('Ajeno demo.'), JSON.stringify([r, r2]))
+  rmSync(dirname(archivoGlobal), { recursive: true, force: true })
+
+  // Borrada a mano: se toma como quitada y no se vuelve a escribir.
+  skills.instalar(PLUGIN_DIR, { skill: 'whatsapp-avisos', target: global }, env)
+  rmSync(archivoGlobal)
+  const tras2 = skills.actualizarTodas(nuevo, env)
+  e = skills.estadoSkills(nuevo, [PROY], env)
+  ok('borrada a mano, actualizar no la vuelve a escribir y deja de figurar',
+    tras2.ok && !existsSync(archivoGlobal) && de(e, global)?.state === 'not-installed',
+    JSON.stringify([tras2, de(e, global)]))
+
+  r = skills.instalar(PLUGIN_DIR, { skill: '../fuera', target: global }, env)
+  const r3 = skills.instalar(PLUGIN_DIR, { skill: 'whatsapp-avisos',
+    target: { scope: 'project', project: 'demo', path: 'relativo/demo' } }, env)
+  ok('una skill que no esta en el catalogo, o un proyecto sin ruta absoluta, se niegan',
+    !r.ok && r.code === 'skill-no-existe' && !r3.ok && r3.code === 'argumentos-invalidos',
+    JSON.stringify([r, r3]))
+
+  // Y como subproceso, que es como lo corre el worker (la valla no deja escribir).
+  const salida = await new Promise((resolve) => execFileNode(process.execPath,
+    [join(PLUGIN_DIR, 'skills.mjs'), PLUGIN_DIR, JSON.stringify({ op: 'instalar',
+      skill: 'whatsapp-avisos', target: global, proyectos: [PROY] })],
+    { env: { ...process.env, HOME: casa } }, (error, stdout) => resolve({ error, stdout })))
+  let dato = null
+  try { dato = JSON.parse(salida.stdout) } catch { dato = null }
+  ok('`node skills.mjs` contesta el veredicto y el estado nuevo, en JSON',
+    dato && dato.ok && dato.code === 'skill-instalada' && de(dato.estado, global)?.state === 'installed' &&
+    existsSync(archivoGlobal), String(salida.stdout).slice(0, 300))
+}
+
+
 rmSync(RAIZ, { recursive: true, force: true })
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

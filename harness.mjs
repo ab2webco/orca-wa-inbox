@@ -235,7 +235,7 @@ export function dataDir(pluginDir, ...sub) {
 
 /** sha256 en hex, sobre los bytes que de verdad quedan en el archivo. Es la misma
  *  huella que usa Orca para los campos de una automatizacion del plugin. */
-function huella(texto) {
+export function huella(texto) {
   return createHash('sha256').update(texto, 'utf8').digest('hex')
 }
 
