@@ -6486,5 +6486,110 @@ for (const [idioma, enc, si] of [['en', 'Case,Chat,Created,First response (s),Re
   ok('el primer clic en Copiar CSV, con una relectura en el medio, copia', copias.length === 1)
 }
 
+// ── Lo que encontro la revision de Informes y del tablero con periodo ──
+// Cada uno se vio de verdad (jsdom o captura) antes de arreglarlo.
+console.log('\nactivity.html — revision: un periodo sin nada no es un tablero vacio')
+{
+  // Todo cerrado hace 3 dias, nada abierto y "Hoy" guardado: hay casos, solo que ninguno
+  // en el periodo. Decir "Todavia no hay casos" es falso, y la barra no puede irse.
+  const viejas = [1, 2, 3].map((i) => terminada(i, 'cerrado', diasAtras(3)))
+  const board = tablero(viejas, { period_counts: { today: { respondido: 0, cerrado: 0 },
+    '7d': { respondido: 0, cerrado: 3 }, '30d': { respondido: 0, cerrado: 3 }, all: { respondido: 0, cerrado: 3 } } })
+  const { doc } = await abrirTablero({ board, boardPeriod: 'today' })
+  ok('con casos fuera del periodo no dice que no hay casos',
+    doc.getElementById('board-empty').hidden, txt(doc, '#board-empty'))
+  ok('la barra del tablero sigue a la vista', !doc.getElementById('board-bar').hidden &&
+    !doc.getElementById('board-body').hidden)
+  ok('y dice que en este periodo no hay nada', !doc.getElementById('board-nada').hidden &&
+    /este periodo/.test(txt(doc, '#board-nada')), txt(doc, '#board-nada'))
+  apretarPeriodo(doc, '7d')
+  await espera()
+  ok('con 7 dias vuelven las tres', visibles(doc).sort().join() === '1,2,3', visibles(doc).join())
+}
+{
+  const { doc } = await abrirTablero({ board: tablero([]) })
+  ok('sin ningun caso sigue diciendo que todavia no hay casos', !doc.getElementById('board-empty').hidden &&
+    /Todavia no hay casos/.test(txt(doc, '#board-empty')) && doc.getElementById('board-bar').hidden)
+}
+
+console.log('\nactivity.html — revision: Informes tolera una clave rara y la de otra linea')
+{
+  const r = informeDeEjemplo()
+  r.cases.push(null)
+  const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: r })
+  ok('un null al final de cases no deja la pestana a medias', !!bloque(doc, 'csv') && !!botonCsv(doc),
+    [...doc.querySelectorAll('#reports-body [data-bloque]')].map((n) => n.dataset.bloque).join())
+}
+{
+  const linea = 'pn:573000000012'
+  const storage = { board: tablero([tarjeta({ account: linea })]), sidecar: { cuenta: linea },
+    reports: Object.assign(informeDeEjemplo(), { account: 'pn:573000000011' }) }
+  const { doc } = await abrirInformes(storage)
+  ok('el informe de otra linea no se pinta como de esta', !bloque(doc, 'ahora') &&
+    /Todavia no hay informes/.test(txt(doc, '#reports-empty')), txt(doc, '#view-reports').slice(0, 120))
+  storage.reports = Object.assign(informeDeEjemplo(), { account: linea })
+  doc.defaultView.dispatchEvent(new doc.defaultView.Event('focus'))
+  await espera(); await espera()
+  ok('el de esta linea si', !!bloque(doc, 'ahora') && doc.getElementById('reports-empty').hidden)
+}
+
+console.log('\nactivity.html — revision: el aviso de Copiar CSV se anuncia')
+{
+  const { window, doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeDeEjemplo() })
+  const region = doc.getElementById('reports-csv-msg')
+  ok('la region del aviso ya esta, vacia, antes de copiar',
+    !!region && region.getAttribute('role') === 'status' && !region.textContent.trim(), region?.outerHTML)
+  conPortapapeles(window)
+  botonCsv(doc).click()
+  await espera()
+  ok('copiar cambia el texto de ESA region, no crea otra ya llena',
+    doc.getElementById('reports-csv-msg') === region && /Copiado: 3 casos/.test(region.textContent),
+    doc.getElementById('reports-csv-msg')?.outerHTML)
+  ok('y el foco sigue en el boton', doc.activeElement === botonCsv(doc))
+}
+{
+  const { window, doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeDeEjemplo() })
+  conPortapapeles(window, false)
+  botonCsv(doc).click()
+  await espera()
+  const msg = doc.getElementById('reports-csv-msg')
+  ok('si no copia, el aviso es una alerta, como los demas avisos que fallan',
+    msg.getAttribute('role') === 'alert' && msg.classList.contains('mala'), msg.outerHTML)
+}
+
+console.log('\nactivity.html — revision: los ejes y los mapas caben')
+{
+  const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeDeEjemplo() })
+  apretarPeriodo(doc, 'all')
+  await espera()
+  const t0 = tiempo(doc, 'first_response')
+  const eje = t0.querySelector('.rep-eje')
+  ok('Todo: el eje dice la fecha corta y el titulo de cada barra, la semana',
+    eje && eje.children.length === 3 && !/Semana/.test(eje.textContent) &&
+    /Semana/.test(t0.querySelector('.rep-grupo').getAttribute('title') || ''), eje?.textContent)
+  ok('el nombre del grafico sigue diciendo las semanas',
+    /Semana/.test(t0.querySelector('.rep-barras').getAttribute('aria-label') || ''))
+}
+{
+  const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeDeEjemplo() })
+  ok('volumen: los graficos de dos series separan cada cubeta de la siguiente',
+    [...bloque(doc, 'volumen').querySelectorAll('.rep-plot')].every((p) => p.classList.contains('dos')) &&
+    !tiempo(doc, 'first_response').querySelector('.rep-plot.dos'))
+}
+{
+  const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeDeEjemplo() }, 'pt-BR')
+  const filas = [...bloque(doc, 'trafico').querySelector('.rep-mapa').querySelectorAll('.rep-fila .rep-fila-k')]
+    .map((n) => n.textContent)
+  ok('PT: cada fila del mapa dice el dia y su numero, sin coma, en lo que cabe',
+    filas.length === 7 && filas.every((x) => /^\D+ \d{1,2}$/.test(x) && !/,/.test(x) && x.length <= 7),
+    JSON.stringify(filas))
+}
+{
+  const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeDeEjemplo() }, 'en')
+  const filas = [...bloque(doc, 'trafico').querySelector('.rep-mapa').querySelectorAll('.rep-fila .rep-fila-k')]
+    .map((n) => n.textContent)
+  ok('EN: tambien', filas.every((x) => /^\D+ \d{1,2}$/.test(x)), JSON.stringify(filas))
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)

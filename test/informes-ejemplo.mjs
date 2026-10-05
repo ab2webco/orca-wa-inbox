@@ -105,7 +105,9 @@ function sinComparar (p) {
   })
 }
 
-/** Las filas del CSV: creadas hoy, hace 3 dias y hace 20, con lo que hay que escapar. */
+/** Las filas del CSV: creadas hoy, hace 3 dias y hace 20, con lo que hay que escapar. Las
+ *  filas no traen titulo (`wa-scope` ya no lo manda); la 50 lo trae como una clave de antes,
+ *  y el CSV no lo copia igual. */
 function casos (ahora) {
   const a = (dias, h) => {
     const d = medianoche(ahora, dias)
@@ -113,13 +115,13 @@ function casos (ahora) {
     return d.toISOString()
   }
   return [
-    { case_id: 52, chat: 'Soporte, "Norte"', title: 'Pedido con coma', created: new Date(ahora.getTime() - 60000).toISOString(),
+    { case_id: 52, chat: 'Soporte, "Norte"', created: new Date(ahora.getTime() - 60000).toISOString(),
       first_response_s: 300, resolution_s: null, stage: 'decision', project: 'Alfa Demo', sla: 'met' },
-    { case_id: 51, chat: '=Cliente Uno', title: 'Formula', created: a(3, 10),
+    { case_id: 51, chat: '=Cliente Uno', created: a(3, 10),
       first_response_s: 2400, resolution_s: 7200, stage: 'respondido', project: null, sla: 'missed' },
     { case_id: 50, chat: 'Soporte Norte', title: 'Otra linea\ncon salto', created: a(3, 9),
       first_response_s: null, resolution_s: null, stage: 'recibido', project: 'Beta Demo', sla: 'pending' },
-    { case_id: 49, chat: 'Cliente Uno', title: 'Viejo', created: a(20, 11),
+    { case_id: 49, chat: 'Cliente Uno', created: a(20, 11),
       first_response_s: 60, resolution_s: 600, stage: 'cerrado', project: 'Alfa Demo', sla: null }
   ]
 }
@@ -127,6 +129,7 @@ function casos (ahora) {
 export function informeDeEjemplo (ahora = new Date()) {
   return {
     v: 1,
+    account: 'local',
     updated_at: new Date(ahora.getTime() - 60000).toISOString(),
     sla_minutes: 15,
     live: { open: 7, decision: 3, waiting_customer: 2, blocked: 1, conversations: 14 },
@@ -164,6 +167,7 @@ export function informeVacio (ahora = new Date()) {
   }
   return {
     v: 1,
+    account: 'local',
     updated_at: new Date(ahora.getTime() - 60000).toISOString(),
     sla_minutes: 15,
     live: { open: 0, decision: 0, waiting_customer: 0, blocked: 0, conversations: 0 },

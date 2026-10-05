@@ -551,12 +551,23 @@
       .rep-grupo .b { flex: 1 1 0; max-width: 16px; border-radius: 3px 3px 0 0;
              background: var(--rep-serie-1); }
       .rep-grupo .b.s2 { background: var(--rep-serie-2); }
+      /* Dos series: con 24 o 30 cubetas las barras llenan la cubeta, y 1 px adentro contra
+         2 px afuera no se ve: las barras quedaban parejas y no se sabia de que hora era
+         cada una. Las dos barras de una cubeta van pegadas (un solo bloque de dos colores)
+         y cada una llega a lo sumo al 38 % de la cubeta: entre una cubeta y la siguiente
+         queda un cuarto de su ancho, que se ve aun con 30 cubetas a 320 px. */
+      .rep-plot.dos .rep-grupo { gap: 0; }
+      .rep-plot.dos .rep-grupo .b { max-width: min(16px, 38%); }
       .rep-max { position: absolute; top: 0; left: 0; font-size: 10px;
              line-height: 1; pointer-events: none;
              color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .rep-eje { display: flex; justify-content: space-between; gap: 8px; margin-top: 3px;
              font-size: 10px; white-space: nowrap;
              color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      /* Una marca que no cabe se corta con puntos suspensivos, nunca sale de la tarjeta. */
+      .rep-eje span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+      .rep-eje span:nth-child(2) { text-align: center; }
+      .rep-eje span:last-child { text-align: right; }
       .rep-leyenda { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; font-size: 11px;
              color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .rep-leyenda span { display: inline-flex; align-items: center; gap: 5px; }
@@ -800,7 +811,7 @@
               "repHeatCell": "{dia} {hora}: {n}",
               "repTimesTitle": "Tiempos",
               "repFirst": "Primera respuesta",
-              "repFirstDef": "Del primer mensaje del cliente en el caso a la primera salida en ese chat despues de el (acuse, primer mensaje del agente o respuesta). Mediana de los casos creados en el periodo.",
+              "repFirstDef": "Del primer mensaje del cliente en el caso a la primera salida en ese chat despues de el y antes del caso siguiente (acuse, primer mensaje del agente o respuesta). Mediana de los casos creados en el periodo.",
               "repResolution": "Resolucion",
               "repResolutionDef": "De la creacion del caso a su primera entrada en {respondido} o {cerrado}. Mediana de los casos resueltos en el periodo.",
               "repWait": "Espera del cliente",
@@ -854,6 +865,7 @@
               "boardShown1": "1 mostrado",
               "boardNoMatch": "Ningun caso coincide con la busqueda.",
               "boardStageNone": "Ningun caso en esta etapa.",
+              "boardPeriodNone": "Ningun caso abierto ni terminado en este periodo. Elija un periodo mas largo para ver los anteriores.",
               "boardEmptyTitle": "Todavia no hay casos",
               "boardEmptyBody": "Cada pedido que llegue por WhatsApp aparecera aqui.",
               "boardNoDataTitle": "El tablero todavia no tiene datos",
@@ -1124,7 +1136,7 @@
               "repHeatCell": "{dia} {hora}: {n}",
               "repTimesTitle": "Times",
               "repFirst": "First response",
-              "repFirstDef": "From the case's first customer message to the first outgoing message in that chat after it (acknowledgement, the agent's first message or a reply). Median of the cases created in the period.",
+              "repFirstDef": "From the case's first customer message to the first outgoing message in that chat after it and before the chat's next case (acknowledgement, the agent's first message or a reply). Median of the cases created in the period.",
               "repResolution": "Resolution",
               "repResolutionDef": "From case creation to its first entry into {respondido} or {cerrado}. Median of the cases resolved in the period.",
               "repWait": "Customer wait",
@@ -1178,6 +1190,7 @@
               "boardShown1": "1 shown",
               "boardNoMatch": "No case matches the search.",
               "boardStageNone": "No case in this stage.",
+              "boardPeriodNone": "No open cases and nothing finished in this period. Pick a longer period to see earlier ones.",
               "boardEmptyTitle": "No cases yet",
               "boardEmptyBody": "Every request that arrives on WhatsApp will show up here.",
               "boardNoDataTitle": "The board has no data yet",
@@ -1448,7 +1461,7 @@
               "repHeatCell": "{dia} {hora}: {n}",
               "repTimesTitle": "Tempos",
               "repFirst": "Primeira resposta",
-              "repFirstDef": "Da primeira mensagem do cliente no caso ate a primeira saida nesse chat depois dela (confirmacao, primeira mensagem do agente ou resposta). Mediana dos casos criados no periodo.",
+              "repFirstDef": "Da primeira mensagem do cliente no caso ate a primeira saida nesse chat depois dela e antes do proximo caso (confirmacao, primeira mensagem do agente ou resposta). Mediana dos casos criados no periodo.",
               "repResolution": "Resolucao",
               "repResolutionDef": "Da criacao do caso ate sua primeira entrada em {respondido} ou {cerrado}. Mediana dos casos resolvidos no periodo.",
               "repWait": "Espera do cliente",
@@ -1502,6 +1515,7 @@
               "boardShown1": "1 exibido",
               "boardNoMatch": "Nenhum caso corresponde a busca.",
               "boardStageNone": "Nenhum caso nesta etapa.",
+              "boardPeriodNone": "Nenhum caso aberto nem concluido neste periodo. Escolha um periodo mais longo para ver os anteriores.",
               "boardEmptyTitle": "Ainda nao ha casos",
               "boardEmptyBody": "Cada pedido que chegar pelo WhatsApp aparecera aqui.",
               "boardNoDataTitle": "O quadro ainda nao tem dados",
@@ -2192,6 +2206,14 @@
             return (Date.parse(b.updated_at) || 0) - (Date.parse(a.updated_at) || 0)
           })
         })
+        // Cuantos casos hay de verdad, sin periodo: un periodo sin nada terminado no es un
+        // tablero vacio. "Todavia no hay casos" es solo para cuando no hay ninguno.
+        var siempre = 0
+        ETAPAS.forEach(function (e) {
+          var dicho = esObjeto(board.counts) ? Number(board.counts[e]) : NaN
+          var n = (!descartadas && isFinite(dicho) && dicho >= 0) ? Math.floor(dicho) : 0
+          siempre += Math.max(n, porEtapa[e].length)
+        })
         // El periodo acota lo terminado, por la hora en que entro a la etapa, y lo ordena
         // por esa hora: lo ultimo que se respondio o cerro, primero. Lo abierto no se toca.
         var desde = desdePeriodo(periodo)
@@ -2212,7 +2234,7 @@
           counts[e] = Math.max(n, porEtapa[e].length)
           total += counts[e]
         })
-        return { estado: total === 0 ? 'vacio' : 'ok', porEtapa: porEtapa, counts: counts,
+        return { estado: siempre + total === 0 ? 'vacio' : 'ok', porEtapa: porEtapa, counts: counts,
           total: total, desconocidas: desconocidas, truncado: board.truncated === true,
           actualizado: board.updated_at }
       }
@@ -3406,7 +3428,12 @@
           el('board-shown').textContent = mostrados === 1 ? t('boardShown1') : fmt('boardShown', mostrados)
           cols.hidden = vista !== 'board'
           lista.hidden = vista !== 'list'
-          if (q && !mostrados) {
+          if (!m.total) {
+            // Hay casos, pero ninguno abierto y nada terminado en el periodo: se dice eso, y
+            // la barra queda para buscar o cambiar de vista.
+            nada.textContent = t('boardPeriodNone')
+            nada.hidden = false
+          } else if (q && !mostrados) {
             nada.textContent = t('boardNoMatch')
             nada.hidden = false
           } else if (vista === 'board') {
@@ -3556,15 +3583,18 @@
       function fechaCorta (f) {
         return f.toLocaleDateString(LOCALE, { day: 'numeric', month: 'short' })
       }
-      /** El nombre de una cubeta de las barras: la hora, la fecha o la semana. */
-      function nombreCubeta (k, cubeta) {
+      /** El nombre de una cubeta de las barras: la hora, la fecha o la semana. `corto`, para
+       *  el eje: la semana es solo su lunes ("13 jul"); "Semana del 13 jul" queda en el
+       *  titulo de cada barra y en el nombre del grafico. Tres de esos no caben en un eje
+       *  de 200 px. */
+      function nombreCubeta (k, cubeta, corto) {
         if (cubeta === 'hour') {
           var m = / (\d{2})$/.exec(String(k || ''))
           return m ? m[1] + ':00' : String(k)
         }
         var f = fechaLocal(k)
         if (!f) return String(k)
-        return cubeta === 'week' ? fmt('repWeekOf', { d: fechaCorta(f) }) : fechaCorta(f)
+        return cubeta === 'week' && !corto ? fmt('repWeekOf', { d: fechaCorta(f) }) : fechaCorta(f)
       }
       /** El nombre de una fila del mapa: la fecha con su dia, o el dia de la semana (1 = lunes). */
       function nombreFila (k, filas) {
@@ -3574,8 +3604,12 @@
           // 2024-01-01 fue lunes.
           return new Date(2024, 0, n).toLocaleDateString(LOCALE, { weekday: 'short' })
         }
+        // "lun 28", "Mon 28", "seg 28": el dia y su numero, armados por partes. pt-BR
+        // escribe "seg., 28", que en la columna de 44 px quedaba "seg., …" y sin el numero.
         var f = fechaLocal(k)
-        return f ? f.toLocaleDateString(LOCALE, { weekday: 'short', day: 'numeric' }) : String(k)
+        if (!f) return String(k)
+        var dia = f.toLocaleDateString(LOCALE, { weekday: 'short' }).replace(/[.,]/g, '').trim()
+        return dia + ' ' + f.getDate()
       }
 
       /** La comparacion con el periodo anterior: flecha, porcentaje (o puntos) y "vs.
@@ -3637,7 +3671,7 @@
           })
           caja.appendChild(ley)
         }
-        var plot = crear('div', 'rep-plot')
+        var plot = crear('div', 'rep-plot' + (series.length > 1 ? ' dos' : ''))
         plot.setAttribute('aria-hidden', 'true')
         barras.forEach(function (b) {
           var g = crear('div', 'rep-grupo')
@@ -3660,7 +3694,7 @@
         eje.setAttribute('aria-hidden', 'true')
         var marcas = barras.length > 2 ? [0, Math.floor((barras.length - 1) / 2), barras.length - 1]
           : barras.map(function (_, i) { return i })
-        marcas.forEach(function (i) { eje.appendChild(crear('span', null, nombreCubeta(barras[i].k, cubeta))) })
+        marcas.forEach(function (i) { eje.appendChild(crear('span', null, nombreCubeta(barras[i].k, cubeta, true))) })
         caja.appendChild(eje)
         return caja
       }
@@ -3986,23 +4020,35 @@
         var b = crear('button', 'btn', t('repCsvButton'))
         b.type = 'button'
         b.id = 'reports-csv'
+        // El aviso vive en una region que ya esta en la pagina antes de copiar, y el clic
+        // solo le cambia el texto: un lector de pantalla anuncia el cambio de una region
+        // viva, no una que llega ya llena (que es lo que pasaba al repintar el bloque).
+        // Si no copio es una alerta, como los demas avisos que fallan (mensajeNodo).
+        var msg = crear('span', 'card-msg')
+        msg.id = 'reports-csv-msg'
+        var avisar = function (m) {
+          msg.className = 'card-msg' + (m && m.mala ? ' mala' : '')
+          msg.setAttribute('role', m && m.mala ? 'alert' : 'status')
+          msg.textContent = m ? m.texto : ''
+        }
+        avisar(csvMensaje)
         b.addEventListener('click', function () {
           var ok = copiar(textoCsv(filas), b)
           csvMensaje = ok
             ? { texto: filas.length === 1 ? t('repCsvOk1') : fmt('repCsvOk', num(filas.length)), mala: false }
             : { texto: t('repCsvFail'), mala: true }
-          renderInformes(true)
-          if (el('reports-csv')) el('reports-csv').focus()
+          // Vaciar primero: copiar dos veces con el mismo resultado tambien se anuncia.
+          avisar(null)
+          avisar(csvMensaje)
         })
         fila.appendChild(b)
         fila.appendChild(crear('span', 'rep-n', filas.length === 1 ? t('repCsvCount1') : fmt('repCsvCount', num(filas.length))))
-        var msg = crear('span', 'card-msg' + (csvMensaje && csvMensaje.mala ? ' mala' : ''), csvMensaje ? csvMensaje.texto : '')
-        msg.id = 'reports-csv-msg'
-        msg.setAttribute('role', 'status')
         fila.appendChild(msg)
         s.appendChild(fila)
-        // Con el tope de 500 filas, lo que el periodo pide y no viajo se dice.
-        var viejo = r.cases.length ? Date.parse(r.cases[r.cases.length - 1].created) : null
+        // Con el tope de 500 filas, lo que el periodo pide y no viajo se dice. Lo mas viejo
+        // que viajo es la ultima fila que es un objeto: una entrada rara no rompe el bloque.
+        var validas = r.cases.filter(esObjeto)
+        var viejo = validas.length ? Date.parse(validas[validas.length - 1].created) : null
         var desde = Date.parse(p.from)
         if (Number(r.cases_more) > 0 && (!desde || (viejo && desde < viejo))) {
           s.appendChild(crear('p', 'rep-mas', fmt('repCsvCut', num(r.cases_more))))
@@ -4022,6 +4068,9 @@
        *  el DOM se queda, para que un clic no caiga en un nodo que ya no esta. */
       function renderInformes (forzar) {
         var r = informesActual
+        // Cada numero, su linea (T9): el informe de la linea anterior, hasta que el sync
+        // escriba el de la vinculada, no se pinta como de esta. Se ve como que no hay.
+        if (esObjeto(r) && !deEstaLinea(r.account)) r = null
         var sello = el('reports-synced')
         sello.textContent = ''
         if (esObjeto(r) && r.updated_at) {
@@ -4033,9 +4082,17 @@
           }
         }
         var firma
-        try { firma = JSON.stringify([r, informesLeidos, periodo, desdePeriodo(periodo), csvMensaje]) } catch (e) { firma = null }
+        // El aviso de Copiar CSV no esta en la firma: el clic lo escribe en su lugar, y
+        // repintar por el se llevaria el foco del boton.
+        try { firma = JSON.stringify([r, cuentaVinculada, informesLeidos, periodo, desdePeriodo(periodo)]) } catch (e) { firma = null }
         if (!forzar && firma !== null && firma === firmaInformes) return
+        pintarInformes(r)
+        // La firma se anota DESPUES de pintar: si algo fallara a mitad, la proxima lectura
+        // vuelve a intentarlo en vez de dejar la pestana a medias.
         firmaInformes = firma
+      }
+
+      function pintarInformes (r) {
         var cuerpo = el('reports-body')
         cuerpo.textContent = ''
         el('reports-empty').hidden = true
