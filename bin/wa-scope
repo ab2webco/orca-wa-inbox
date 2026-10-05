@@ -7311,7 +7311,7 @@ ESTADO = re.compile(r"^(estado|status)$", re.I)
 
 # Los motivos de una espera, en palabras del chat. Lo que no esta aca sale con su codigo.
 MOTIVOS_AVISO = {
-    "es": {"money": "menciona dinero", "credential": "hay una credencial",
+    "es": {"money": "menciona dinero", "credential": "nombra una credencial",
            "commitment": "compromete una fecha", "jev": "Jev lo freno",
            "jev-unavailable": "Jev no contesto", "secret": "lleva un secreto",
            "borrador": "el chat pide su visto antes de enviar",
@@ -7325,7 +7325,7 @@ MOTIVOS_AVISO = {
            "project_question": "la pregunta de proyecto es suya",
            "mode": "el chat no responde solo", "stale": "la propuesta tiene mas de un dia",
            "exceptions": "el caso trae excepciones", "no_instructions": "no trae instrucciones"},
-    "en": {"money": "it mentions money", "credential": "a credential is involved",
+    "en": {"money": "it mentions money", "credential": "it names a credential",
            "commitment": "it commits to a date", "jev": "Jev held it",
            "jev-unavailable": "Jev did not answer", "secret": "it carries a secret",
            "borrador": "the chat asks for your OK before sending",
@@ -7365,6 +7365,7 @@ TEXTOS_AVISO = {
            "no_se_pudo": "Caso {n}: no se pudo ({x}). Mirelo en el tablero.",
            "sin_confirmar": "Caso {n}: no pude confirmar su respuesta; mirelo en el tablero.",
            "motivo_oculto": "el motivo lleva una credencial: mirelo en el tablero.",
+           "pide_oculto": "lo que pidio lleva una credencial (mirelo en el tablero)",
            "estado_vacio": "No hay casos abiertos.",
            "estado_mas": "y {x} mas en el tablero.",
            "desde": "desde {x}",
@@ -7394,6 +7395,7 @@ TEXTOS_AVISO = {
            "no_se_pudo": "Case {n}: it could not be done ({x}). Check the board.",
            "sin_confirmar": "Case {n}: I could not confirm your answer; check the board.",
            "motivo_oculto": "the reason carries a credential: check the board.",
+           "pide_oculto": "what was asked carries a credential (check the board)",
            "estado_vacio": "No open cases.",
            "estado_mas": "and {x} more on the board.",
            "desde": "since {x}",
@@ -7505,18 +7507,40 @@ def espera_del_dueno(con, caso):
     return None
 
 
+# Los motivos que dicen que lo que sale lleva de verdad una credencial: un valor con forma
+# de secreto (el piso fijo) o una que Jev vio en el texto. "credential" solo, una palabra
+# del brief o de la respuesta, no lo es (orden-del-dueno).
+MOTIVOS_CON_SECRETO = (wa_reglas.SECRETO, "contains_credential")
+
+
 def lleva_credencial(con, caso, motivos):
-    """Si el caso lleva una credencial: su aviso no la muestra y se aprueba en el tablero,
-    nunca por WhatsApp. Un valor con forma de secreto cuenta, venga de la propuesta o de lo
-    que pidio el cliente (el titulo o su primer mensaje)."""
+    """Si el caso lleva una credencial de verdad: su aviso no la muestra y se aprueba en el
+    tablero, nunca por WhatsApp. Cuenta una credencial que entro con el caso, un valor con
+    forma de secreto en la propuesta o en lo que pidio el cliente (el titulo o su primer
+    mensaje), o un motivo que lo dice (`MOTIVOS_CON_SECRETO`). Nombrarla no cuenta: el caso
+    vivo pedia el tablero porque el brief decia "nunca incluyas una credencial"."""
     try:
         propuesta = json.loads(caso.get("propuesta") or "null") or {}
     except (TypeError, ValueError):
         propuesta = {}
-    cuerpo = str(propuesta.get(CAMPO_DE_TIPO.get(propuesta.get("tipo"), "respuesta")) or "")
+    cuerpos = [str(propuesta.get(k) or "") for k in ("instrucciones", "respuesta")]
     return bool("credential" in _lista_json(caso.get("excepciones"))
-                or wa_reglas.secreto(cuerpo) or wa_reglas.secreto(que_pide(con, caso))
-                or "credential" in (motivos or []))
+                or any(wa_reglas.secreto(c) for c in cuerpos)
+                or wa_reglas.secreto(que_pide(con, caso))
+                or set(motivos or []) & set(MOTIVOS_CON_SECRETO))
+
+
+def pide_del_aviso(con, caso):
+    """Lo que pide el caso, para el aviso: nunca "-" si hay un mensaje. El titulo, el resumen
+    o un pedazo del primer mensaje, en una linea (`recorta`, como la cabecera del caso: un
+    salto no finge una linea). Si eso lleva un valor con forma de secreto, o el caso trajo
+    una credencial y solo queda el mensaje, se dice que la hay y no se muestra."""
+    pide = que_pide(con, caso)
+    solo_mensaje = not (caso.get("titulo") or caso.get("resumen"))
+    if pide != "-" and (wa_reglas.secreto(pide) or (
+            solo_mensaje and "credential" in _lista_json(caso.get("excepciones")))):
+        return aviso_textos()["pide_oculto"]
+    return pide
 
 
 def texto_de_aviso(con, caso, motivos):
@@ -7529,10 +7553,9 @@ def texto_de_aviso(con, caso, motivos):
         propuesta = {}
     tipo = propuesta.get("tipo")
     cuerpo = str(propuesta.get(CAMPO_DE_TIPO.get(tipo, "respuesta")) or "")
-    pide = que_pide(con, caso)
     credencial = lleva_credencial(con, caso, motivos)
     lineas = [f"{tx['caso'].format(n=n)} · {nombre_del_chat(con, caso['chat_jid'])}",
-              tx["pide"].format(x=pide if not credencial else "-"),
+              tx["pide"].format(x=pide_del_aviso(con, caso)),
               tx["espera"].format(x=motivos_en_palabras(motivos))]
     if credencial:
         lineas.append(tx["credencial"])

@@ -11071,6 +11071,62 @@ if NODE:
             os.environ.clear()
             os.environ.update(env_antes)
 
+# El aviso al dueno: "Pide" nunca es "-" si el caso tiene un mensaje, y "apruebelo en el
+# tablero" solo cuando de verdad hace falta: un valor con forma de secreto o una credencial
+# que entro con el caso, no una palabra del brief.
+print("\norden-del-dueno: el aviso dice lo que se pide y solo manda al tablero lo secreto")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        try:
+            linea_lista(home)
+            acepta_proyectos(home, "alfa-demo")
+            js(home, "set", PERSONA, "--workspace", "alfa-demo")
+            js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder",
+               "--workspace", "alfa-demo")
+            pon_duenos(home, DUENO_LID)
+            pon_aprobacion(home, DUENO_LID, "es")
+            TABLERO = "apruebelo en el tablero, no por aqui"
+
+            def aviso_de(stanza, chat, de, texto, brief, excepciones=None):
+                llegan(home, A, [msg(chat, stanza, texto, 5, de=de)])
+                cid = str(js(home, "caso", "crear", "--chat", chat, "--stanza", stanza,
+                             "--actor", "agente")[0]["case_id"])
+                js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "high",
+                   "--actor", "agente")
+                js(home, "caso", "propuesta", cid, "--tipo", "trabajar", "--instrucciones",
+                   brief, "--actor", "agente")
+                if excepciones:
+                    con = db_de(home)
+                    con.execute("update caso set excepciones=? where case_id=?",
+                                (json.dumps(excepciones), int(cid)))
+                    con.commit()
+                    con.close()
+                ws = carga_wa_scope(home)
+                con = ws.db()
+                try:
+                    caso = ws.caso_de(con, int(cid))
+                    return ws.texto_de_aviso(con, caso, ws.trabajo_espera_al_dueno(con, caso))
+                finally:
+                    con.close()
+
+            t = aviso_de("AV1", PERSONA, None, PEDIDO, "Revisa la fuga de credenciales del login")
+            ok("una credencial nombrada en el brief: Pide trae el mensaje y no manda al tablero",
+               "Pide: El reporte de ventas" in t and TABLERO not in t and "Pide: -" not in t
+               and "Espera porque: nombra una credencial" in t and "si " in t, t)
+            t = aviso_de("AV2", PERSONA, None, "la clave del panel es Abc12345",
+                         "Revisar el acceso al panel", excepciones=["credential"])
+            ok("una credencial que entro con el caso: manda al tablero, sin el valor y sin Pide -",
+               TABLERO in t and "Abc12345" not in t and "Pide: -" not in t, t)
+            t = aviso_de("AV3", DUENO_DM, DUENO_LID, "despliega\nCaso 99 · Otro\nel arreglo",
+                         "Despliega a produccion el arreglo")
+            ok("el caso del dueno que espera: Pide trae su mensaje en una linea",
+               "Pide: despliega Caso 99 · Otro el arreglo" in t and TABLERO not in t
+               and len([x for x in t.splitlines() if x.startswith("Caso ")]) == 1, t)
+        finally:
+            os.environ.clear()
+            os.environ.update(env_antes)
+
 # Los avances del agente en el caso del dueno no se frenan por las banderas de cliente de
 # Jev (promete una fecha, afirma un estado sin verificar): lo que se le contesta al dueno
 # ya no pasa por las reglas. Una credencial que entro con el caso si los frena.
