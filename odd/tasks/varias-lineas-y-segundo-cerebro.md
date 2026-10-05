@@ -103,7 +103,10 @@ existing test stays green unchanged.
   active line, each in its own process with its own lock. With one line they run in the
   same process, as today. A `caso` command with a case id runs on that case's line when
   the line is active. The panel storage keys of a line that is not the principal live
-  under `lineas[<account>]`, so they never overwrite the principal's.
+  apart, so they never overwrite the principal's: its scope in
+  `alcancePorLinea[<account>]` (the panel writes it too), its reports in
+  `informesPorLinea[<account>]`, and the rest (board, activity, chats) in
+  `porLinea[<account>]`. The nav badge adds up the decisions of every line.
 
 ## Checklist
 
@@ -117,9 +120,16 @@ existing test stays green unchanged.
   nuevo", 12 checks: a fake flat auth folder ends byte-identical in `wa-auth/pn-<digits>`).
 - [ ] **L2** Worker: one sidecar per line, its health and restart, and link/unlink
   commands. Worker tests.
-- [ ] **L3** `wa-scope` over every active line. Per-line locks and no cross-line leaks.
+- [x] **L3** `wa-scope` over every active line. Per-line locks and no cross-line leaks.
   `check-casos` / `check-clis`: two lines, a message on each, and a case, a notice and an
   approval that never cross.
+  Evidence: `check-casos` section "varias lineas a la vez (L3)", RED (`--line` unknown,
+  then the case file and the summed badge) and GREEN, 24 checks: per-line scope, ingest and
+  `pending --needs-agent` once per line, a case per line, `caso ver` by case id, the board
+  and scope of the other line apart in storage, each reply approved and delivered by its
+  own line's sidecar, each owner notice sent by its own line, the summed nav badge, a busy
+  principal lock that does not stop the other line, and an unlinked line that goes quiet.
+  Full `check-casos` 1630/1630, `check-clis`, `envio` 93/93 and `almacen` 311/311 green.
 - [ ] **L4** Panel "Lines" card, line filter in conversations/board/reports, in ES/EN/PT.
   Screenshots at 1440/768/390/320, both themes.
 - [ ] **L5** Line type setting (`support` default; `personal` disabled until Part 2).

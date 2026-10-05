@@ -48,7 +48,8 @@ from wa_settings import (  # noqa: E402
     PANEL_PRIMER, PANEL_PRIMER_CAMPOS,
     PANEL_SETTINGS, PLUGIN_ID, VARIABLE_APROBADOR,
     PLUGIN_ID_ANTERIOR, duenos, llave_aprobador, trae_llave_aprobador, idioma_aprobacion, numero_aprobacion, orca_cli_path, orca_env, orca_runtime_home, plugin_store_path,
-    plugin_store_raw,
+    plugin_store_raw as plugin_store_crudo, vista_de_linea, escribir_en_linea, de_otra_linea,
+    tableros_de_lineas,
     plugin_store_targets, settings_from_plugin, user_data_roots, valida_ajuste)
 import wa_store  # noqa: E402  (solo lectura: de capture.db se lee la linea activa)
 import wa_jev  # noqa: E402  (el cliente de Jev: falla cerrado, nunca habilita)
@@ -212,10 +213,37 @@ def cuenta_activa():
     cuando ese numero se vuelva a vincular.
 
     Sin linea anotada —un equipo de antes de esto, o sin almacen— es `local`, la cuenta
-    de siempre. Se calcula una vez por proceso: una corrida no cambia de linea a mitad."""
+    de siempre. Se calcula una vez por proceso: una corrida no cambia de linea a mitad.
+
+    Con varias lineas vinculadas, la corrida de cada una la nombra (`WA_INBOX_LINEA`, o
+    `--line`); sin nombre es la principal, la de siempre."""
     if not _CUENTA:
-        _CUENTA.append(wa_store.linea_activa_en_disco() or CUENTA_LOCAL)
+        _CUENTA.append(wa_store.linea_pedida() or wa_store.linea_activa_en_disco()
+                       or CUENTA_LOCAL)
     return _CUENTA[0]
+
+
+_PRINCIPAL = []
+
+
+def linea_principal():
+    """La linea principal (`store_meta.linea_activa`): la que tiene el storage del panel en
+    la raiz. Una vez por proceso, como `cuenta_activa`."""
+    if not _PRINCIPAL:
+        _PRINCIPAL.append(wa_store.linea_activa_en_disco())
+    return _PRINCIPAL[0]
+
+
+def es_linea_principal():
+    """Si esta corrida es la de la linea principal (con una sola linea, siempre)."""
+    return not de_otra_linea(cuenta_activa(), linea_principal())
+
+
+def plugin_store_raw():
+    """El storage del panel como lo ve la linea de esta corrida: la principal lo lee en la
+    raiz, como siempre; otra linea, sus propias claves (`porLinea` y compania) encima de las
+    globales. Asi el alcance de una nunca autoriza nada en otra."""
+    return vista_de_linea(plugin_store_crudo(), cuenta_activa(), linea_principal())
 
 
 def cuenta_de_entrada(e):
@@ -730,34 +758,47 @@ def plugin_store_modifica(cambia, crear=True):
 
 def plugin_store_write(scope, agent_name=None, activity=None, health=None,
                        routes=None, extra=None):
-    """Escritura atomica: el host lee este archivo en cualquier momento."""
+    """Escritura atomica: el host lee este archivo en cualquier momento. Va por
+    `plugin_store_modifica` (candado, temporal unico, sin pisar un store ilegible).
+
+    Con varias lineas, lo que es de una linea que no es la principal va a su lugar
+    (`escribir_en_linea`, en wa_settings): el tick de cada linea corre en su propio
+    proceso, a la vez, y el candado de `plugin_store_modifica` es lo que evita que uno
+    pise lo que el otro acaba de escribir."""
+    cuenta, principal = cuenta_activa(), linea_principal()
+
     def cambia(data):
+        cambios = {}
         # scope en None = no se toca. Escribir {} borraria la lista blanca entera,
         # y quien solo viene a guardar un ajuste no tiene por que cargar con ella.
         if scope is not None:
-            data["scope"] = scope
+            cambios["scope"] = scope
         if agent_name:
-            data["agentName"] = agent_name
+            cambios["agentName"] = agent_name
         if activity is not None:
-            data["activity"] = activity
+            cambios["activity"] = activity
         if health is not None:
-            data["health"] = health
+            cambios["health"] = health
         if routes is not None:
-            data["routes"] = routes
+            cambios["routes"] = routes
         if extra:
-            data.update(extra)
-            if "board" in extra:
-                # La insignia del nav, que Orca lee de esta MISMA clave reservada
-                # (`navBadge`, plugin-nav-badge.ts): el host la lee y nunca la
-                # escribe. Es `board.counts.decision` y nada mas (T10), en la
-                # misma escritura que el tablero: dos fuentes para el mismo numero
-                # es como la insignia se quedaba pegada contando avisos ya
-                # atendidos. Sin un tablero valido no hay insignia.
-                cuenta = insignia_de(extra["board"])
-                if cuenta is None:
-                    data.pop("navBadge", None)
-                else:
-                    data["navBadge"] = {"count": cuenta}
+            cambios.update(extra)
+        escribir_en_linea(data, cambios, cuenta, principal)
+        if extra and "board" in extra:
+            # La insignia del nav, que Orca lee de esta MISMA clave reservada
+            # (`navBadge`, plugin-nav-badge.ts): el host la lee y nunca la
+            # escribe. Es `board.counts.decision` y nada mas (T10), en la
+            # misma escritura que el tablero: dos fuentes para el mismo numero
+            # es como la insignia se quedaba pegada contando avisos ya
+            # atendidos. Sin un tablero valido no hay insignia. Con varias lineas
+            # es la suma de los tableros de todas: lo que espera al dueno espera en
+            # cualquiera de sus numeros.
+            cuentas = [c for c in [insignia_de(data.get("board"))]
+                       + [insignia_de(b) for b in tableros_de_lineas(data)] if c is not None]
+            if not cuentas:
+                data.pop("navBadge", None)
+            else:
+                data["navBadge"] = {"count": sum(cuentas)}
         return True
     return plugin_store_modifica(cambia) > 0
 
@@ -5423,7 +5464,7 @@ def ingest_lee():
     try:
         dias = wa_store.entero(wa_store.ajustes(), "inbox_days")
         return wa_store.inbox(fuente, dias, 500, 5, "todos",
-                              wa_store.linea_activa(fuente))
+                              wa_store.linea_pedida() or wa_store.linea_activa(fuente))
     finally:
         fuente.close()
 
@@ -6281,7 +6322,7 @@ def sigue_lid(con):
         return 0
     try:
         # Un almacen que no habla de esta linea no dice nada de sus conversaciones.
-        if wa_store.linea_activa(fuente) != cuenta:
+        if cuenta not in wa_store.lineas_activas(fuente):
             return 0
         foto = foto_lid(fuente, cuenta)
         movidas = termina_movida_del_panel(con, foto, cuenta)
@@ -6358,7 +6399,7 @@ def cmd_doctor(con, a):
         salida["store"] = exc.reason
         fuente = None
     try:
-        if fuente is not None and wa_store.linea_activa(fuente) == cuenta:
+        if fuente is not None and cuenta in wa_store.lineas_activas(fuente):
             foto = foto_lid(fuente, cuenta)
             for fila in estados_lid(con, foto, merged_scope(con), historial):
                 formas = [fila["jid"], *fila["paired"]]
@@ -7899,8 +7940,13 @@ def limpia_espacios(con, resumen):
 
 def tick_toma():
     """El candado del tick, o None si otro tick lo tiene. No espera: un tick que llega
-    mientras otro envia no tiene nada que hacer que el otro no este haciendo."""
-    ruta = os.path.join(os.path.dirname(DB), CANDADO_TICK)
+    mientras otro envia no tiene nada que hacer que el otro no este haciendo.
+
+    Con varias lineas el candado es de cada una: la principal conserva el de siempre y
+    otra linea tiene el suyo, asi un tick ocupado (o colgado) en una no frena a otra."""
+    nombre = (CANDADO_TICK if es_linea_principal()
+              else f"tick-{re.sub(r'[^A-Za-z0-9]', '-', cuenta_activa())}.lock")
+    ruta = os.path.join(os.path.dirname(DB), nombre)
     os.makedirs(os.path.dirname(ruta), exist_ok=True)
     fh = open(ruta, "a+")
     try:
@@ -9342,10 +9388,12 @@ def cmd_tick(con, a):
             publica_tablero(con)
         except (OSError, sqlite3.Error) as exc:
             print(f"wa-scope: board not published: {exc}", file=sys.stderr)
-        # Lo ultimo y sin que pueda tumbar el tick: lo que importa ya salio.
+        # Lo ultimo y sin que pueda tumbar el tick: lo que importa ya salio. La limpieza
+        # es de los espacios del plugin, no de una linea: la hace solo la principal.
         try:
             atascados = espacios_atascados(con)
-            tick_limpia(con, resumen)
+            if es_linea_principal():
+                tick_limpia(con, resumen)
             # El tablero ya salio: si cambio lo que no se pudo quitar, sale otra vez.
             if resumen["limpieza_atascados"] != atascados:
                 publica_tablero(con)
@@ -10768,10 +10816,25 @@ def mensajes_con_tope(cabeza, bloques, cola, titulo):
         omitidos += 1
 
 
+def seccion_de_linea(caso):
+    """Con varias lineas, el caso de una que no es la principal le dice al agente cual es:
+    sus `caso` con el id ya corren en ella, pero lo demas sobre su chat (`voice`, `wa-read`)
+    sin `--line` contestaria por la principal, que puede tener la misma conversacion con
+    otro permiso y otro tono."""
+    cuenta = caso.get("account") if isinstance(caso, dict) else caso["account"]
+    if not de_otra_linea(cuenta, linea_principal()):
+        return []
+    return ["", "## The line of this case",
+            f"This case is on the line {cuenta}, not on the principal one. Add `--line {cuenta}` "
+            f"to every `{ruta_wa_scope()}` command about its chat (`voice`, `where`) and to every "
+            "`wa-read` command; the `caso` commands with its id already work on its line."]
+
+
 def archivo_de_caso(con, caso):
     """El archivo del caso para el agente de casos, en ingles."""
     cid = caso["case_id"]
-    cola = (seccion_de_pregunta(con, caso) + historia_del_caso(con, caso)
+    cola = (seccion_de_linea(caso) + seccion_de_pregunta(con, caso)
+            + historia_del_caso(con, caso)
             + instrucciones_primer_mensaje(con, caso, "agente")) + [
         "", "## The whole record, if you need it",
         f"{ruta_wa_scope()} caso ver {cid} --json",
@@ -11651,6 +11714,116 @@ def pendiente_agente(con, precheck=False):
     sys.exit(0)
 
 
+# ── Varias lineas a la vez (odd/tasks/varias-lineas-y-segundo-cerebro.md, L3) ─────────
+AYUDA_LINEA = ("the line to work on (pn:<digits>), when several are linked; without it, the "
+               "principal line")
+# Lo que corre una vez por linea cuando nadie nombra una: cada linea en su propio proceso,
+# con su propio candado, y la falla de una no frena a la otra.
+POR_LINEA = ("tick", "ingest", "sync")
+
+
+def fija_linea(a):
+    """La linea de esta corrida, antes de abrir nada: `--line`, o la del caso que se nombra.
+
+    `--line` se pasa a `WA_INBOX_LINEA` para que los hijos (`wa-send`, `wa-read`) hereden la
+    misma linea. Un comando `caso` con un id corre en la linea de ESE caso, si esa linea
+    esta vinculada: asi el agente de un caso de otra linea lo ve y lo mueve sin nombrarla.
+    Una linea desvinculada sigue quieta: su caso no se ve."""
+    if getattr(a, "linea", None):
+        os.environ[wa_store.LINEA_ENV] = wa_store.linea_valida(a.linea)
+        return
+    if wa_store.linea_pedida() or a.cmd != "caso" or not isinstance(getattr(a, "id", None), int):
+        return
+    if not os.path.exists(DB):
+        return
+    try:
+        con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=5)
+        try:
+            fila = con.execute("select account from caso where case_id=?", (a.id,)).fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return
+    if fila and fila[0] in wa_store.lineas_activas_en_disco():
+        os.environ[wa_store.LINEA_ENV] = fila[0]
+
+
+def por_cada_linea(a):
+    """Corre este mismo comando una vez por linea activa, cada una en su proceso, si
+    nadie nombro una y hay mas de una. True si lo hizo (y ya escribio la salida).
+
+    Con una sola linea no hace nada: el comando corre aca mismo, como siempre. Los
+    procesos van a la vez y no uno tras otro: el tick de una linea puede gastar minutos
+    enviando, y Orca corta la corrida a los 300 s."""
+    agente = a.cmd == "pending" and getattr(a, "needs_agent", False)
+    if (a.cmd not in POR_LINEA and not agente) or wa_store.linea_pedida():
+        return False
+    lineas = wa_store.lineas_activas_en_disco()
+    if len(lineas) < 2:
+        return False
+    hijos = {}
+    for linea in lineas:
+        env = dict(os.environ, **{wa_store.LINEA_ENV: linea})
+        hijos[linea] = subprocess.Popen([sys.executable, os.path.abspath(__file__),
+                                         *sys.argv[1:]], env=env, stdout=subprocess.PIPE,
+                                        text=True)
+    salidas = {linea: (h.communicate()[0], h.returncode) for linea, h in hijos.items()}
+    if agente:
+        # Hay trabajo para el agente si lo hay en alguna linea; cada caso es de su linea, y
+        # `caso` con su id corre en ella (`fija_linea`).
+        casos = []
+        for texto, codigo in salidas.values():
+            leido = _json_o_nada(texto) if codigo == 0 else None
+            casos += (leido or {}).get("cases") or [] if isinstance(leido, dict) else []
+        if not casos:
+            sys.exit(1)
+        print(json.dumps({"needs_agent": len(casos), "cases": casos}, ensure_ascii=False))
+        return True
+    if a.cmd == "tick":
+        print(json.dumps(junta_ticks({linea: _json_o_nada(texto)
+                                      for linea, (texto, _) in salidas.items()}),
+                         ensure_ascii=False))
+    else:
+        filas = []
+        for linea, (texto, _) in salidas.items():
+            leido = _json_o_nada(texto)
+            for fila in leido if isinstance(leido, list) else []:
+                filas.append(dict(fila, account=linea) if isinstance(fila, dict) else fila)
+        if a.json:
+            print(json.dumps(filas, ensure_ascii=False, indent=2))
+        else:
+            for f in filas:
+                print(" | ".join(f"{v}" for v in f.values() if v not in (None, "")))
+    peor = max(codigo for _, codigo in salidas.values())
+    if peor:
+        sys.exit(peor)
+    return True
+
+
+def _json_o_nada(texto):
+    try:
+        return json.loads(texto) if texto and texto.strip() else None
+    except ValueError:
+        return None
+
+
+def junta_ticks(por_linea):
+    """UNA linea JSON para el tick de todas las lineas: los conteos sumados, las banderas
+    de cualquiera, y el resumen de cada una bajo `lineas`. `busy` es que TODAS estaban
+    ocupadas: con una libre, el minuto corrio."""
+    junto = {}
+    for r in por_linea.values():
+        for clave, valor in (r if isinstance(r, dict) else {}).items():
+            if isinstance(valor, bool):
+                junto[clave] = junto.get(clave, False) or valor
+            elif isinstance(valor, int):
+                junto[clave] = junto.get(clave, 0) + valor
+    junto["busy"] = all(isinstance(r, dict) and r.get("busy") is True
+                        for r in por_linea.values())
+    junto["lineas"] = por_linea
+    return junto
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -11660,6 +11833,7 @@ def main():
     def add(name, **kw):                 # --json vale antes o despues del subcomando
         sp = sub.add_parser(name, **kw)
         sp.add_argument("--json", dest="json_sub", action="store_true")
+        sp.add_argument("--line", dest="linea", metavar="ACCOUNT", help=AYUDA_LINEA)
         return sp
 
     add("list").set_defaults(fn=cmd_list)
@@ -11905,6 +12079,7 @@ def main():
         sp.error = caso_args_falla
         sp.add_argument("--json", dest="json_sub", action="store_true",
                         default=argparse.SUPPRESS)
+        sp.add_argument("--line", dest="linea", metavar="ACCOUNT", help=AYUDA_LINEA)
         return sp
 
     def muta(name, **kw):
@@ -12042,6 +12217,12 @@ def main():
         a = ap.parse_args()
         if getattr(a, "json_sub", False):
             a.json = True
+        try:
+            fija_linea(a)
+        except wa_store.LineaInvalida as exc:
+            sys.exit(f"wa-scope: {exc}")
+        if por_cada_linea(a):
+            return
         try:
             con = db()
             try:

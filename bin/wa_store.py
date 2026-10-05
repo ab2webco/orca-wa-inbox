@@ -22,6 +22,7 @@ lee como "no hay nada que atender", que es lo contrario de "no puedo leer nada"
 """
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -227,6 +228,68 @@ def linea_activa(con):
         return fila[0] if fila and fila[0] else None
     except sqlite3.Error:
         return None
+
+
+# Varias lineas a la vez (odd/tasks/varias-lineas-y-segundo-cerebro.md). La variable con
+# que se nombra la linea de una corrida: la pone el proceso de cada linea (el tick, la
+# entrada) y la heredan sus hijos (`wa-send`, `wa-read`). Es contrato con
+# `sidecar/src/alcance.js` (`LINEA_ENV`), que la usa para preguntar el alcance de SU linea.
+LINEA_ENV = "WA_INBOX_LINEA"
+# Una linea es un telefono (`pn:<digitos>`) o la de siempre, `local`.
+_LINEA_RE = re.compile(r"^(pn:\d{6,}|local)$")
+
+
+class LineaInvalida(ValueError):
+    """`WA_INBOX_LINEA` (o `--line`) no nombra una linea. Es un error y no un "sin linea":
+    caer a la principal seria leer y escribir en la linea equivocada."""
+
+
+def linea_valida(valor):
+    """`valor` si nombra una linea; si no, `LineaInvalida`."""
+    texto = (valor or "").strip()
+    if not _LINEA_RE.match(texto):
+        raise LineaInvalida(f"{valor!r} is not a line (use pn:<digits>)")
+    return texto
+
+
+def linea_pedida():
+    """La linea que nombra `WA_INBOX_LINEA`, o None si no nombra ninguna."""
+    valor = os.environ.get(LINEA_ENV)
+    return linea_valida(valor) if valor is not None and valor.strip() else None
+
+
+def lineas_activas(con):
+    """Las lineas vinculadas AHORA, en orden (la primera es la principal), de
+    `store_meta.lineas_activas`, que anota cada sidecar. Un almacen de antes de esto solo
+    anoto `linea_activa`: entonces es esa sola."""
+    try:
+        fila = con.execute(
+            "select value from store_meta where key='lineas_activas'").fetchone()
+    except sqlite3.Error:
+        fila = None
+    if fila is None:
+        principal = linea_activa(con)
+        return [principal] if principal else []
+    try:
+        lista = json.loads(fila[0])
+    except (TypeError, ValueError):
+        return []
+    return [c for c in lista if isinstance(c, str) and c] if isinstance(lista, list) else []
+
+
+def lineas_activas_en_disco():
+    """`lineas_activas` sin pedir un almacen valido, como `linea_activa_en_disco`."""
+    ruta = store_db_path()
+    if not os.path.exists(ruta):
+        return []
+    try:
+        con = sqlite3.connect(f"file:{ruta}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error:
+        return []
+    try:
+        return lineas_activas(con)
+    finally:
+        con.close()
 
 
 def linea_activa_en_disco():

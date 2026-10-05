@@ -12241,6 +12241,248 @@ finally:
     os.environ.clear()
     os.environ.update(env_orca)
 
+
+# ── L3. Varias lineas a la vez (odd/tasks/varias-lineas-y-segundo-cerebro.md) ────────────
+# Dos lineas vinculadas a la vez, la misma conversacion en las dos y un mensaje en cada una.
+# Sin `WA_INBOX_LINEA`, la entrada y el tick corren una vez por linea, cada una en su proceso
+# y con su candado; nada cruza: ni el permiso, ni el caso, ni la aprobacion, ni el envio,
+# ni el tablero que lee el panel.
+SUMA_LINEA_JS = """
+import { abrirAlmacen, rutaAlmacen } from %r;
+const a = abrirAlmacen(rutaAlmacen({ HOME: process.env.HOME }));
+const d = JSON.parse(process.env.DATOS);
+if (d.retirar) a.retirarLinea(d.cuenta); else a.sumarLinea(d.cuenta);
+a.cerrar();
+""" % (RAIZ / "sidecar" / "src" / "almacen.js").as_uri()
+
+
+def suma_linea(home, cuenta, retirar=False):
+    """Lo que hace el sidecar de una linea que no es la principal (o desvincularla)."""
+    env = dict(os.environ, HOME=str(home), DATOS=json.dumps({"cuenta": cuenta,
+                                                             "retirar": retirar}))
+    subprocess.run([NODE, "--input-type=module", "-e", SUMA_LINEA_JS], env=env, check=True,
+                   capture_output=True, timeout=120)
+
+
+def jsl(home, linea, *args):
+    """`js` en una linea nombrada, como la corre el proceso de esa linea."""
+    p = corre(home, *args, extra={"WA_INBOX_LINEA": linea})
+    if p.returncode != 0:
+        raise AssertionError(f"wa-scope {' '.join(args)} en {linea} salio {p.returncode}: "
+                             f"{p.stderr.strip() or p.stdout.strip()}")
+    return json.loads(p.stdout or "[]")
+
+
+class SidecarDeLinea(SidecarFalso):
+    """El sidecar de UNA linea: late y entrega solo lo encolado para su numero, como
+    `atenderSalida` con `cuenta`."""
+
+    def __init__(self, home, linea):
+        self.linea = linea
+        super().__init__(home)
+
+    def _vuelta(self):
+        con = sqlite3.connect(self.ruta, timeout=10)
+        while not self.parar.is_set():
+            ahora = int(time.time())
+            con.execute("insert into store_meta (key, value) values ('sidecar_beat', ?) "
+                        "on conflict(key) do update set value=excluded.value", (str(ahora),))
+            con.commit()
+            for (req,) in con.execute("select req_id from envio where estado='pendiente' "
+                                      "and account=?", (self.linea,)).fetchall():
+                cur = con.execute("update envio set estado='enviado', stanza_id=?, "
+                                  "settled_at=? where req_id=? and estado='pendiente'",
+                                  (f"STANZA-{req}", ahora, req))
+                con.commit()
+                if cur.rowcount == 1:
+                    self.entregados.append(req)
+            time.sleep(0.05)
+        con.close()
+
+
+def modos(filas):
+    return {f["chat_jid"]: f["mode"] for f in filas}
+
+
+print("\nvarias lineas a la vez (L3)")
+# La segunda linea no es PERSONA: el directo con el propio numero de una linea es su dueno.
+SEGUNDA = "pn:573000000011"
+PN[SEGUNDA] = "573000000011:7@s.whatsapp.net"
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "LA1", "@duenio no abre el login en la principal", 5,
+                             mencion=True)])
+        llegan(home, SEGUNDA, [msg(SOPORTE, "LB1", "@duenio no llega la factura en la otra linea", 5,
+                             mencion=True)],
+               activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "agent", "Agente De Ejemplo")
+        js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+        jsl(home, SEGUNDA, "set", SOPORTE, "--provider", "ninguno", "--mode", "observar")
+        ok("cada linea autoriza la misma conversacion con su propio modo",
+           modos(js(home, "list")) == {SOPORTE: "borrador"}
+           and modos(jsl(home, SEGUNDA, "list")) == {SOPORTE: "observar"},
+           f"{js(home, 'list')} / {jsl(home, SEGUNDA, 'list')}")
+        ok("--line nombra la linea igual que la variable",
+           modos(js(home, "list", "--line", SEGUNDA)) == {SOPORTE: "observar"},
+           f"{js(home, 'list', '--line', SEGUNDA)}")
+        p = corre(home, "list", extra={"WA_INBOX_LINEA": "pn:no-es-un-numero"})
+        ok("una linea mal escrita no cae a la principal: falla", p.returncode != 0
+           and SOPORTE not in p.stdout, f"{p.returncode} {p.stdout[:200]}")
+
+        r = js(home, "ingest")
+        ok("sin linea, la entrada corre una vez por linea: una fila por cada una",
+           sorted(x.get("account") for x in r) == [A, SEGUNDA], f"{r}")
+        casos_a = js(home, "caso", "listar")
+        casos_b = jsl(home, SEGUNDA, "caso", "listar")
+        ok("cada linea abre su caso con su mensaje, y ninguna ve el de la otra",
+           len(casos_a) == 1 and len(casos_b) == 1 and casos_a[0]["account"] == A
+           and casos_b[0]["account"] == SEGUNDA, f"{casos_a} / {casos_b}")
+        id_b = str(casos_b[0]["case_id"])
+        ok("un caso de la otra linea se ve por su numero de caso, sin nombrar la linea",
+           js(home, "caso", "ver", id_b)[0]["account"] == SEGUNDA)
+        def para_el_agente_todas():
+            p = corre(home, "pending", "--needs-agent")
+            return (sorted(json.loads(p.stdout or "{}").get("cases") or [])
+                    if p.returncode == 0 else p.returncode)
+        ok("el agente ve el trabajo de la principal, y no el de la misma conversacion que en "
+           "la otra linea solo se observa", para_el_agente_todas() == [casos_a[0]["case_id"]],
+           f"{para_el_agente_todas()}")
+        jsl(home, SEGUNDA, "mode", SOPORTE, "borrador")
+        ok("con la otra linea en borrador, la misma pregunta trae el trabajo de las dos",
+           para_el_agente_todas() == sorted([casos_a[0]["case_id"], casos_b[0]["case_id"]]),
+           f"{para_el_agente_todas()}")
+        jsl(home, SEGUNDA, "mode", SOPORTE, "observar")
+
+        # El archivo del caso que lee el agente: el de otra linea le dice cual es, para que
+        # `voice` y `wa-read` no contesten por la principal.
+        def archivo(cid, linea=None):
+            antes = dict(os.environ)
+            try:
+                if linea:
+                    os.environ["WA_INBOX_LINEA"] = linea
+                ws = carga_wa_scope(home)
+                con = ws.db()
+                try:
+                    return ws.archivo_de_caso(con, ws.caso_de(con, int(cid)))
+                finally:
+                    con.close()
+            finally:
+                os.environ.clear()
+                os.environ.update(antes)
+        texto_b, texto_a = archivo(id_b, SEGUNDA), archivo(casos_a[0]["case_id"])
+        ok("el archivo de un caso de otra linea le pide al agente nombrarla",
+           f"--line {SEGUNDA}" in texto_b and "--line" not in texto_a, texto_b[-600:])
+
+        datos = json.loads(storage_de(home).read_text(encoding="utf-8"))
+        tarjetas = lambda b: sorted(c["case_id"] for c in (b or {}).get("cards", []))  # noqa: E731
+        propio_b = (datos.get("porLinea") or {}).get(SEGUNDA) or {}
+        alcance_b = (datos.get("alcancePorLinea") or {}).get(SEGUNDA) or {}
+        ok("el tablero de la principal sigue en la raiz, solo con lo suyo",
+           tarjetas(datos.get("board")) == [casos_a[0]["case_id"]], f"{datos.get('board')}")
+        ok("el de la otra linea va aparte, bajo porLinea[<numero>]",
+           tarjetas(propio_b.get("board")) == [casos_b[0]["case_id"]], f"{propio_b.keys()}")
+        ok("y el permiso de una no pisa el de la otra: el suyo va en alcancePorLinea",
+           (datos.get("scope") or {}).get(SOPORTE, {}).get("mode") == "borrador"
+           and alcance_b.get(SOPORTE, {}).get("mode") == "observar"
+           and "scope" not in propio_b and "lineas" not in datos,
+           f"{datos.get('scope')} / {alcance_b}")
+
+        # La aprobacion y el envio: un chat `responder` en cada linea, una respuesta limpia en
+        # cada una, y cada sidecar entrega solo lo suyo.
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        jsl(home, SEGUNDA, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        cid_a, v_a = propuesta_lista(home, "LA2")
+        cid_b = str(jsl(home, SEGUNDA, "caso", "crear", "--chat", PERSONA, "--stanza", "LB2",
+                        "--actor", "agente")[0]["case_id"])
+        jsl(home, SEGUNDA, "caso", "clasificar", cid_b, "--clase", "card", "--prioridad", "none",
+            "--actor", "agente")
+        v_b = jsl(home, SEGUNDA, "caso", "propuesta", cid_b, "--tipo", "responder", "--respuesta",
+                  LIMPIA, "--actor", "agente")[0]["propuesta_version"]
+        sidecar_a, sidecar_b = SidecarDeLinea(home, A), SidecarDeLinea(home, SEGUNDA)
+        try:
+            p, r = tick(home)
+        finally:
+            sidecar_a.cerrar()
+            sidecar_b.cerrar()
+        ok("el tick corre en las dos lineas y lo dice en UNA linea JSON, por linea",
+           isinstance(r, dict) and sorted((r.get("lineas") or {}).keys()) == [A, SEGUNDA]
+           and r.get("enviados") == 2, f"{p.stdout[:400]} {p.stderr[-300:]}")
+        ok("cada respuesta sale por SU linea: la aprueba y la entrega el sidecar de su numero",
+           sidecar_a.entregados == [f"caso-{cid_a}-{v_a[:12]}"]
+           and sidecar_b.entregados == [f"caso-{cid_b}-{v_b[:12]}"],
+           f"{sidecar_a.entregados} / {sidecar_b.entregados}")
+        ok("y cada caso queda respondido en su linea",
+           js(home, "caso", "ver", cid_a)[0]["etapa"] == "respondido"
+           and js(home, "caso", "ver", cid_b)[0]["etapa"] == "respondido")
+
+        # Los avisos al numero de aprobacion: cada linea avisa al dueno de SUS casos, y por
+        # SU linea. El dueno contesta en la linea que le aviso.
+        if not any(c["jid"] == DUENO_DM for c in CHATS):
+            CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+        js(home, "config", "ack", "off")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        jsl(home, SEGUNDA, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        pon_aprobacion(home, DUENO_LID)
+        llegan(home, A, [msg(PERSONA, "LA3", PEDIDO, 30)])
+        llegan(home, SEGUNDA, [msg(PERSONA, "LB3", PEDIDO, 30)], activar=False)
+        dinero_a, _ = propuesta_lista(home, "LA3", texto="Listo, el arreglo cuesta $50.")
+        dinero_b = str(jsl(home, SEGUNDA, "caso", "crear", "--chat", PERSONA, "--stanza", "LB3",
+                           "--actor", "agente")[0]["case_id"])
+        jsl(home, SEGUNDA, "caso", "clasificar", dinero_b, "--clase", "card", "--prioridad", "none",
+            "--actor", "agente")
+        jsl(home, SEGUNDA, "caso", "propuesta", dinero_b, "--tipo", "responder", "--respuesta",
+            "Listo, el arreglo cuesta $80.", "--actor", "agente")
+        sidecar_a, sidecar_b = SidecarDeLinea(home, A), SidecarDeLinea(home, SEGUNDA)
+        try:
+            p, r = tick(home)
+        finally:
+            sidecar_a.cerrar()
+            sidecar_b.cerrar()
+        con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+        avisos = con.execute("select account, body from envio where chat_jid=? and "
+                             "req_id like 'aviso-%'", (DUENO_DM,)).fetchall()
+        con.close()
+        de_a = [b for c, b in avisos if c == A]
+        de_b = [b for c, b in avisos if c == SEGUNDA]
+        ok("cada linea avisa al dueno de SU caso retenido, y por SU linea",
+           len(de_a) == 1 and len(de_b) == 1 and f"Caso {dinero_a} " in de_a[0]
+           and f"Caso {dinero_b} " in de_b[0] and f"Caso {dinero_b} " not in de_a[0]
+           and f"Caso {dinero_a} " not in de_b[0],
+           f"{avisos} {(r or {}).get('lineas', {}).get(SEGUNDA)} "
+           f"{jsl(home, SEGUNDA, 'caso', 'ver', dinero_b)[0]['etapa']} {p.stderr[-600:]}")
+        datos = json.loads(storage_de(home).read_text(encoding="utf-8"))
+        ok("la insignia del panel suma lo que espera al dueno en las dos lineas",
+           datos.get("navBadge") == {"count": 2}
+           and datos["board"]["counts"]["decision"] == 1, f"{datos.get('navBadge')}")
+        ok("y un caso de cada linea espera al dueno en su propio tablero",
+           datos["porLinea"][SEGUNDA]["board"]["counts"]["decision"] == 1,
+           f"{avisos} {(r or {}).get('lineas', {}).get(SEGUNDA)} "
+           f"{jsl(home, SEGUNDA, 'caso', 'ver', dinero_b)[0]['etapa']} {p.stderr[-600:]}")
+
+        # El candado es de cada linea: la principal ocupada no frena a la otra.
+        import fcntl
+        candado = open(pathlib.Path(home) / ".wa-inbox" / "tick.lock", "a+")
+        fcntl.flock(candado.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            p, r = tick(home)
+        finally:
+            candado.close()
+        por_linea = (r or {}).get("lineas") or {}
+        ok("con el tick de la principal ocupado, el de la otra linea corre igual",
+           por_linea.get(A, {}).get("busy") is True and por_linea.get(SEGUNDA, {}).get("busy") is False,
+           f"{p.stdout[:400]}")
+
+        # Desvincular la otra linea la deja guardada y quieta.
+        suma_linea(home, SEGUNDA, retirar=True)
+        ok("una linea desvinculada ya no se ve por su numero de caso",
+           corre(home, "caso", "ver", id_b).returncode != 0)
+        p, r = tick(home)
+        ok("y el tick vuelve a correr solo en la que queda, como siempre",
+           isinstance(r, dict) and "lineas" not in r and r.get("busy") is False,
+           f"{p.stdout[:300]}")
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

@@ -102,7 +102,10 @@ exit 0 and `[]` means the inbox really is quiet.
 
 The owner can have more than one line linked. Every read takes `--line <account>`, and
 every row carries its `account`: a chat is identified by `(account, jid)`, never by the
-JID alone.
+JID alone. `pending --needs-agent` lists the work of every linked line, and a `caso`
+command with an id works on that case's own line. For anything else about the chat of a
+case on another line (`voice`, `where`, any `wa-read`), add `--line <account>` with the
+case's `account`: the case file says so when it applies.
 
 ## Where the tools are
 

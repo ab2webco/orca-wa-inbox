@@ -282,6 +282,94 @@ def plugin_store_raw():
         return {}
 
 
+# Varias lineas a la vez: las claves del storage que son de UNA linea. La principal las
+# tiene en la raiz, como siempre; cada otra linea, aparte, para que nunca pise las de la
+# principal (el alcance es un permiso: pisarlo es abrir o cerrar la conversacion
+# equivocada). Las demas claves —ajustes, nombre del agente, decisiones, que ya dicen su
+# `account`— son de todas.
+#
+# Aparte quiere decir tres lugares y no uno: el alcance de cada linea en
+# `alcancePorLinea[<cuenta>]` (lo escribe tambien el panel, y asi no pisa nada mas), los
+# informes en `informesPorLinea[<cuenta>]` (son la clave mas grande y el panel los lee solo
+# con su pestana), y lo demas en `porLinea[<cuenta>][<clave>]`. `lineas` no: esa es la
+# lista de lineas que escribe el worker.
+CLAVES_DE_LINEA = ("scope", "activity", "health", "board", "reports", "chats",
+                   "chatsAccount", "senders", "groupMembers")
+CONTENEDOR_PROPIO = {"scope": "alcancePorLinea", "reports": "informesPorLinea"}
+CONTENEDOR_DE_LINEA = "porLinea"
+CONTENEDORES = (CONTENEDOR_DE_LINEA, *CONTENEDOR_PROPIO.values())
+
+
+def de_otra_linea(cuenta, principal):
+    """Si `cuenta` es una linea que NO es la principal (con una sola linea, nunca)."""
+    return bool(cuenta) and bool(principal) and cuenta != principal
+
+
+def _contenedor(datos, nombre, crear=False):
+    valor = datos.get(nombre)
+    if isinstance(valor, dict):
+        return valor
+    if crear:
+        datos[nombre] = {}
+        return datos[nombre]
+    return {}
+
+
+def valor_de_linea(datos, cuenta, clave):
+    """(hay, valor) de una clave de linea de otra linea, en el lugar que le toca."""
+    if clave in CONTENEDOR_PROPIO:
+        contenedor = _contenedor(datos, CONTENEDOR_PROPIO[clave])
+        return cuenta in contenedor, contenedor.get(cuenta)
+    propio = _contenedor(datos, CONTENEDOR_DE_LINEA).get(cuenta)
+    propio = propio if isinstance(propio, dict) else {}
+    return clave in propio, propio.get(clave)
+
+
+def vista_de_linea(datos, cuenta, principal):
+    """El storage como lo ve la linea `cuenta`: la raiz para la principal; para otra, las
+    claves globales de la raiz con las suyas encima."""
+    if not de_otra_linea(cuenta, principal):
+        return datos
+    vista = {k: v for k, v in datos.items() if k not in CLAVES_DE_LINEA and k not in CONTENEDORES}
+    for clave in CLAVES_DE_LINEA:
+        hay, valor = valor_de_linea(datos, cuenta, clave)
+        if hay:
+            vista[clave] = valor
+    return vista
+
+
+def escribir_en_linea(datos, cambios, cuenta, principal):
+    """Aplica `cambios` al storage de la linea `cuenta`: las claves de linea de otra linea
+    van a su lugar aparte, y lo demas a la raiz."""
+    if not de_otra_linea(cuenta, principal):
+        datos.update(cambios)
+        return datos
+    for clave, valor in cambios.items():
+        if clave not in CLAVES_DE_LINEA:
+            datos[clave] = valor
+        elif clave in CONTENEDOR_PROPIO:
+            _contenedor(datos, CONTENEDOR_PROPIO[clave], crear=True)[cuenta] = valor
+        else:
+            de_lineas = _contenedor(datos, CONTENEDOR_DE_LINEA, crear=True)
+            if not isinstance(de_lineas.get(cuenta), dict):
+                de_lineas[cuenta] = {}
+            de_lineas[cuenta][clave] = valor
+    return datos
+
+
+def tableros_de_lineas(datos):
+    """Los tableros de las lineas que no son la principal, para la insignia de todas."""
+    return [propio.get("board") for propio in _contenedor(datos, CONTENEDOR_DE_LINEA).values()
+            if isinstance(propio, dict)]
+
+
+def alcances_de_lineas(datos):
+    """Los alcances del panel de las lineas que no son la principal: `[(cuenta, {jid:
+    entrada})]`. Quien escribe (`wa-send`) los cruza todos, cada uno con su cuenta."""
+    return [(cuenta, alcance) for cuenta, alcance
+            in _contenedor(datos, CONTENEDOR_PROPIO["scope"]).items() if isinstance(alcance, dict)]
+
+
 # El panel solo sabe escribir storage, y lo hace con claves planas. Traducirlas a
 # los nombres de settings es lo que evita que un tono guardado ahi no llegue nunca.
 PANEL_SETTINGS = {"tone": "tone", "agentName": "agent_name",
