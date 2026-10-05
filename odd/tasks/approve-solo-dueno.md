@@ -141,7 +141,9 @@
       - Docs: COMMANDS.md, whatsapp-cli skill, `caso aprobar --help`, README.
         check-harness RED (both docs lacked `E_NOT_OWNER` / `--actor dueno`), GREEN 74.
       - Panel maps E_NOT_OWNER (panels.test list of codes).
-- [ ] F2 Final check, once, smoke flags.
+- [x] F2 Final check, once, smoke flags. Exit 0: check-casos 1620/1620, envio 109/109,
+      panels 1410/1410, worker 422/422, check-clis 391, check-harness 74, 93 shots in
+      ~/Projects/.capturas-approve-smoke.
 
 ## Open (after round 2)
 
