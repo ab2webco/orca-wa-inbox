@@ -3478,6 +3478,14 @@ def propuesta_tipo(caso):
 # agente no hace nada ahi por su cuenta.
 MODOS_SIN_CLIC = ("responder", "borrador")
 
+# Decision (a) del dueno (2026-10-05): una orden de trabajo del dueno sale sin su clic,
+# salvo lo destructivo, que sigue preguntando: borrar, desplegar a produccion, forzar un
+# push y un pago. Nombrar una credencial, el dinero o una fecha en el brief de SU caso no lo
+# frena: es lo que el pidio. Un valor con forma de secreto, una credencial que entro con el
+# caso, el proyecto, el modo y lo viejo si. Solo para el caso del dueno (`caso_del_dueno`,
+# por su id de WhatsApp); la parte B (roles) lo extiende al Super admin con `rol_del_caso`.
+MOTIVOS_QUE_NO_FRENAN_AL_DUENO = ("credential", "money", "commitment")
+
 
 def trabajo_espera_al_dueno(con, caso):
     """Por que un `trabajar` no puede ir al agente del proyecto sin el clic del dueno, o []
@@ -3499,8 +3507,13 @@ def trabajo_espera_al_dueno(con, caso):
         propuesta = None
     if not isinstance(propuesta, dict) or not propuesta.get("instrucciones"):
         return ["no_instructions"]
-    motivos = list(wa_reglas.trabajo_comprometido(
-        " \n".join(str(propuesta.get(k) or "") for k in ("instrucciones", "respuesta"))))
+    texto = " \n".join(str(propuesta.get(k) or "") for k in ("instrucciones", "respuesta"))
+    motivos = list(wa_reglas.trabajo_comprometido(texto))
+    del_dueno = caso_del_dueno(con, caso)
+    if del_dueno:
+        # Su orden (decision a): lo nombrado no frena; un valor con forma de secreto si.
+        motivos = [m for m in motivos if m not in MOTIVOS_QUE_NO_FRENAN_AL_DUENO
+                   or (m == "credential" and wa_reglas.secreto(texto))]
     scope = merged_scope(con).get(caso["chat_jid"]) or {}
     if scope.get("mode") not in MODOS_SIN_CLIC:
         motivos.append("mode")
@@ -3517,7 +3530,10 @@ def trabajo_espera_al_dueno(con, caso):
     elif (not proyecto or (repo and repo not in (proyecto["id"], proyecto.get("path"),
                                                  proyecto.get("name")))):
         motivos.append("outside_project")
-    if _lista_json(caso.get("excepciones")):
+    excepciones = _lista_json(caso.get("excepciones"))
+    # En el caso del dueno, de lo que entro solo frena una credencial: lo demas que Jev le
+    # marca a su mensaje (una fecha, un estado) son banderas de cliente.
+    if excepciones and (not del_dueno or "credential" in excepciones):
         motivos.append("exceptions")
     hecha = con.execute("select at from caso_evento where case_id=? and detalle=? "
                         "order by id desc limit 1",
@@ -3909,6 +3925,12 @@ def avance_frena(con, caso):
         resumen = {}
     riesgo = [f for f in (resumen.get("flags") if isinstance(resumen, dict) else None) or []
               if f not in BANDERAS_SIN_RIESGO]
+    if (excepciones or riesgo) and caso_del_dueno(con, caso):
+        # Al dueno no se le cuidan las banderas de cliente de Jev (promete una fecha, afirma
+        # un estado sin verificar), igual que su respuesta (T22.1): solo frena una credencial
+        # que entro con el caso, y el secreto lo sigue frenando `wa-send` en el texto.
+        excepciones = [e for e in excepciones if e == "credential"]
+        riesgo = []
     if excepciones or riesgo:
         return ("E_EXCEPTION", f"case #{cid} waits for the owner ({', '.join(excepciones + riesgo)}): "
                                f"no updates go to the customer")

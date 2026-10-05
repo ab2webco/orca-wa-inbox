@@ -10973,6 +10973,147 @@ for texto, direccion, esperado in (
     ok(f"orden: {direccion} {texto!r} -> {esperado}", salio == esperado, f"salio {salio}")
 
 
+# El caso del dueno (solo por su id de WhatsApp): su orden de trabajo sale sin su clic,
+# salvo lo destructivo (decision a, 2026-10-05). Una credencial nombrada, dinero o una
+# fecha en el brief no lo frenan; borrar, desplegar a produccion, forzar un push, un pago
+# o un valor con forma de secreto si. Un cliente sigue como hoy, y un grupo con un mensaje
+# de un cliente no es un caso del dueno.
+print("\norden-del-dueno: la orden del dueno sale sin el clic, salvo lo destructivo")
+if NODE:
+    for c in ({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False},):
+        if not any(x["jid"] == c["jid"] for x in CHATS):
+            CHATS.append(c)
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        env_antes = dict(os.environ)
+        try:
+            linea_lista(home)
+            acepta_proyectos(home, "alfa-demo")
+            js(home, "set", PERSONA, "--workspace", "alfa-demo")
+            js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder",
+               "--workspace", "alfa-demo")
+            js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "responder",
+               "--workspace", "alfa-demo")
+            pon_duenos(home, DUENO_LID)
+            orca_despacho(carpeta)
+            n = [0]
+
+            def orden(instrucciones, chat=DUENO_DM, de=DUENO_LID, texto="que hay pendiente en Demo",
+                      otros=()):
+                """Un caso con su mensaje (y los `otros` del mismo caso) y un `trabajar`."""
+                n[0] += 1
+                stanza = f"OD{n[0]}"
+                llegan(home, A, [msg(chat, stanza, texto, 5, de=de)]
+                       + [msg(chat, f"{stanza}{i}", t, 4, de=d) for i, (t, d) in enumerate(otros)])
+                cid = str(js(home, "caso", "crear", "--chat", chat, "--stanza", stanza,
+                             "--actor", "agente")[0]["case_id"])
+                for i in range(len(otros)):
+                    suma_al_caso(home, cid, f"{stanza}{i}")
+                js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "high",
+                   "--actor", "agente")
+                js(home, "caso", "propuesta", cid, "--tipo", "trabajar", "--instrucciones",
+                   instrucciones, "--actor", "agente")
+                return cid
+
+            def espera(cid):
+                ws = carga_wa_scope(home)
+                con = ws.db()
+                try:
+                    caso = ws.caso_de(con, int(cid))
+                    return ws.trabajo_espera_al_dueno(con, caso), ws.caso_del_dueno(con, caso)
+                finally:
+                    con.close()
+
+            # De punta a punta: la pregunta de estado del dueno sale sin el clic.
+            estado = orden(BRIEF_ESTADO)
+            tick_orca(home, carpeta)
+            ver = js(home, "caso", "ver", estado)[0]
+            ok("la pregunta de estado del dueno entra a trabajo firmada por la regla",
+               any(e["a"] == "trabajo" and e["actor"] == "regla" for e in ver["eventos"]),
+               f"{ver['etapa']} {[e['detalle'] for e in ver['eventos']][-4:]}")
+            ok("y el despacho la toma sin el clic",
+               [f["case_id"] for f in despachos(home) or []] == [int(estado)],
+               f"{despachos(home)}")
+            despliega = orden("Despliega a produccion el arreglo")
+            tick_orca(home, carpeta)
+            ok("desplegar a produccion, del dueno, sigue esperando su clic",
+               js(home, "caso", "ver", despliega)[0]["etapa"] == "decision")
+
+            for nombre, brief, esperado in (
+                    ("el estado de un proyecto", BRIEF_ESTADO, []),
+                    ("abrir el PR de la rama de la fuga", BRIEF_PR, []),
+                    ("un CRM que solo se lee", BRIEF_CRM, []),
+                    ("la nota sin fechas", BRIEF_NOTA, []),
+                    ("rotar las llaves y avisar el lunes",
+                     "Rota las llaves de la API y avisame el lunes a las 3", []),
+                    ("desplegar a produccion", "Despliega a produccion el arreglo", ["deploy"]),
+                    ("borrar la rama", "Borra la rama vieja del reporte", ["delete"]),
+                    ("forzar un push", "git push --force origin main", ["force_push"]),
+                    ("un pago", "Paga la factura del hosting de $20", ["payment"]),
+                    ("un valor con forma de secreto",
+                     "Usa el token ghp_abcdefghijklmnop1234 para leer el repo", ["credential"])):
+                motivos, suyo = espera(orden(brief))
+                ok(f"orden del dueno: {nombre} -> {esperado}", suyo and motivos == esperado,
+                   f"{suyo} {motivos}")
+
+            # Un cliente, como hoy: nombrar la fuga de credenciales o rotar llaves espera.
+            for brief in ("Revisa la fuga de credenciales del login", "rota las llaves de la API"):
+                motivos, suyo = espera(orden(brief, chat=PERSONA, de=None, texto=PEDIDO))
+                ok(f"orden de un cliente: {brief!r} sigue esperando (credential)",
+                   not suyo and "credential" in motivos, f"{suyo} {motivos}")
+            # Un grupo con un mensaje del dueno y otro de un cliente no es del dueno.
+            motivos, suyo = espera(orden("Revisa la fuga de credenciales del login", chat=SOPORTE,
+                                         de=DUENO_LID, texto="revisen el login",
+                                         otros=(("y la clave del panel", OTRO_LID),)))
+            ok("un grupo con un cliente y el dueno no es caso del dueno: espera (credential)",
+               not suyo and "credential" in motivos, f"{suyo} {motivos}")
+
+        finally:
+            os.environ.clear()
+            os.environ.update(env_antes)
+
+# Los avances del agente en el caso del dueno no se frenan por las banderas de cliente de
+# Jev (promete una fecha, afirma un estado sin verificar): lo que se le contesta al dueno
+# ya no pasa por las reglas. Una credencial que entro con el caso si los frena.
+print("\norden-del-dueno: los avances al dueno no se frenan por las banderas de cliente")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        try:
+            linea_lista(home)
+            js(home, "config", "first_reply_mode", "model")
+            js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+            pon_duenos(home, DUENO_LID)
+            BANDERAS = json.dumps({"attention_class": "support_request", "skip": False,
+                                   "flags": ["promises_a_date", "states_status_not_verified"]})
+
+            def frena(stanza, chat, de, excepciones):
+                llegan(home, A, [msg(chat, stanza, "revisa el informe", 5, de=de)])
+                cid = int(js(home, "caso", "crear", "--chat", chat, "--stanza", stanza,
+                             "--actor", "agente")[0]["case_id"])
+                con = db_de(home)
+                con.execute("update caso set jev=?, excepciones=? where case_id=?",
+                            (BANDERAS, json.dumps(excepciones), cid))
+                con.commit()
+                con.close()
+                ws = carga_wa_scope(home)
+                con = ws.db()
+                try:
+                    return ws.avance_frena(con, ws.caso_de(con, cid))
+                finally:
+                    con.close()
+
+            r = frena("AF1", DUENO_DM, DUENO_LID, ["jev"])
+            ok("el avance al dueno no se frena por promises_a_date ni states_status_not_verified",
+               r is None, f"{r}")
+            r = frena("AF2", PERSONA, None, ["jev"])
+            ok("el de un cliente si, como hoy", r and r[0] == "E_EXCEPTION", f"{r}")
+            r = frena("AF3", DUENO_DM, DUENO_LID, ["credential"])
+            ok("y una credencial que entro con el caso del dueno tambien lo frena",
+               r and r[0] == "E_EXCEPTION" and "credential" in r[1], f"{r}")
+        finally:
+            os.environ.clear()
+            os.environ.update(env_antes)
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
