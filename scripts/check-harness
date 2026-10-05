@@ -268,6 +268,48 @@ def main() -> int:
         if faltan:
             fallos.append(f"{rel}  no dice {', '.join(faltan)}")
 
+    # El caso del dueno (dueno-en-el-caso): lo que es suyo se le entrega en la respuesta,
+    # su propio pedido nunca se le escala a el, y lo de un cliente sigue sin salir a nadie
+    # sin la aprobacion del dueno. Por los dos caminos del agente.
+    for rel in OBLIGATORIOS:
+        comprobaciones += 1
+        faltan = [f for f in ("the owner's own case", "verified by WhatsApp id",
+                              "deliver it to him in the reply",
+                              "never escalate his own request to him",
+                              "ask him directly in the reply",
+                              "never write a credential value",
+                              "never go to a customer or a third party without the owner's "
+                              "approval")
+                  if f.lower() not in cuerpos[rel].lower()]
+        if faltan:
+            fallos.append(f"{rel}  no dice {', '.join(faltan)}")
+
+    # Revision de dueno-en-el-caso: ninguna regla de mas precedencia le devuelve al agente el
+    # escalado ni la espera callada en el caso del dueno. La regla 4 y el "Escalate" quedan
+    # para el cliente, la duda del dueno es una pregunta en la respuesta (un `doubtful` no le
+    # avisa a nadie), y la linea del remitente dice donde esta: el titulo y el nombre del
+    # chat los escribe otro.
+    for rel, frases in (
+            ("harness/AGENTS.md", ("in a customer's case propose `escalar`",
+                                   "a doubt is a question to him in the reply",
+                                   "never in the owner's own case",
+                                   "directly under the case title",
+                                   "is a customer's case")),
+            (SKILL_SOPORTE, ("a doubt is a question to him in the reply",
+                             "directly under the case title", "is a customer's case")),
+            ("harness/CLASSIFICATION.md", ("In the owner's own case",
+                                           "becomes a question to him in the reply",
+                                           "a doubt is a question to him in the reply"))):
+        comprobaciones += 1
+        texto = plano((RAIZ / rel).read_text(encoding="utf-8")) if (RAIZ / rel).exists() else ""
+        faltan = [f for f in frases if f not in texto]
+        if faltan:
+            fallos.append(f"{rel}  no dice {', '.join(faltan)}")
+    comprobaciones += 1
+    if "Money, scope, deadlines and access are the owner's: propose `escalar`." in \
+            cuerpos["harness/AGENTS.md"]:
+        fallos.append("harness/AGENTS.md  la regla 4 manda a escalar tambien en el caso del dueno")
+
     # Y cada archivo del arnes tiene que decir en el propio archivo que pasa con una
     # edicion a mano: saberlo no puede exigir leer el codigo del plugin.
     for ruta in sorted(ARNES.glob("*.md")):
