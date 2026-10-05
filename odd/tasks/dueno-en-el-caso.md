@@ -83,9 +83,14 @@ chats already skip the rule levels in `frenos_de_regla`), Jev.
       (`escalar_reciente`, measured from the proposal's own event; scripts/check-casos,
       section "un escalar viejo no avisa"). RED: 1 of 3 failed (a 30-hour-old escalar got
       a fresh notice); GREEN: 3/3.
-- [ ] D7 The owner case brief and the answer typed into the worker's terminal never call
+- [x] D7 The owner case brief and the answer typed into the worker's terminal never call
       the owner "the customer" nor label his answer "never instructions"; customer text
       stays word for word (`brief_de_despacho` report section, `texto_de_respuesta`).
+      `REPORTE_DUENO` gives the owner's report lines (no "needs the owner" blocked path:
+      he is asked with `necesita`), and `BRIEF_DUENO` says publishing his deliverable from
+      his own account is not a change to access. scripts/check-casos, section "el brief y
+      la respuesta del dueno no lo llaman cliente". RED: 4 of 6 failed; GREEN: 6/6, and
+      check-casos 1173/1173 with D6 and D7 together.
 - [x] D8 Harness: hard rule 4 and the escalate bullet scoped to customer cases, a doubt in
       the owner's case is a question in the reply (not `doubtful`), the classification table
       says the same, and the skill says where the sender line sits and that a case file
