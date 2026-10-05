@@ -150,7 +150,30 @@ stores (capture.db messages, scope.db cases, case events and dispatches). Owner-
       RED: no tabs (`FALLA dos pestanas`, then `TypeError ... reading 'getAttribute'`).
       GREEN: panels 1148/1148 (43 new in "I5"; the old "no tabs" check now pins that the
       only tabs are Tablero and Informes).
-- [ ] I6 CSV download (or a report of why the host blocks it).
+- [x] I6 CSV download (or a report of why the host blocks it).
+      The host blocks downloads: the panel is a srcdoc iframe with `sandbox="allow-scripts"`
+      only (orca-oss v1.4.160-lab.91.rc, `src/renderer/src/components/right-sidebar/
+      PluginPanel.tsx:296`, pinned by `PluginPanel.test.tsx:202`), no `allow-downloads`,
+      and the bridge has no download or clipboard method (`plugin-host-method-bindings.ts`).
+      Probed in Playwright Chromium with that exact sandbox and the host CSP: a Blob
+      `<a download>` produced 0 downloads, and `navigator.clipboard.writeText` failed with
+      "blocked because of a permissions policy"; `document.execCommand('copy')` on a
+      selected field, inside the owner's click, did copy. So there is no download button:
+      the Reports tab has a 7th block, "Casos del periodo", with **Copiar CSV**. It copies
+      the period's rows (`cases` created in [from, to]; Todo = all) with the spec's columns
+      (id, chat, created, first response s, resolution s, stage, project, met target),
+      header and values in the panel's language, fields quoted when they carry a comma,
+      quote or line break, and a leading `'` on anything that starts like a formula (`= + -
+      @`, the text is from customers). Lines end in LF: a `<textarea>` normalizes line breaks
+      to LF, and spreadsheets read it the same. It says "Copiado: N casos", or "No se pudo
+      copiar" when the browser refuses (never claims success), keeps the focus on the
+      button, and says how many old cases the 500-row cap left out. With no cases in the
+      period there is no button, only the sentence. Verified end to end in Chromium: the
+      real `activity.html` inside a scripts-only sandboxed srcdoc iframe with the host CSP,
+      a real click, and the clipboard read back from the parent page: header plus the 3
+      rows of the period. Not verified inside the Orca app itself (Electron), which I did
+      not run. RED: no `#reports-csv` (`TypeError ... reading 'click'`). GREEN: panels
+      1167/1167 (19 new in "I6").
 - [ ] I7 Screenshots of the board and Reports at 1440/768/390/320, light and dark, ES and EN,
       looked at; `npm run check` green.
 

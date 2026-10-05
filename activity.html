@@ -598,6 +598,10 @@
       .rep-tabla .rep-caso-id { font-family: var(--font-mono, ui-monospace, Menlo, monospace);
              font-size: 11px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .rep-tabla .rep-caso-t { display: block; min-width: 140px; max-width: 320px; overflow-wrap: anywhere; }
+      .rep-csv { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+      .rep-csv .card-msg { margin: 0; }
+      /* El campo que lleva el CSV al portapapeles: fuera de la vista, nunca visible. */
+      .rep-csv-aux { position: fixed; top: 0; left: -9999px; width: 1px; height: 1px; opacity: 0; }
       .rep-mas { margin: 6px 0 0; font-size: 11px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
 
       /* Hasta 768 px la lista es la vista natural y el detalle se abre en el lugar, debajo
@@ -732,6 +736,20 @@
               "boardViewBoard": "Tablero",
               "boardShowMore": "Mostrar {n} mas", "boardShowMoreAria": "Mostrar {n} casos mas de {etapa}",
               "periodLabel": "Periodo", "periodToday": "Hoy", "period7d": "7 dias", "period30d": "30 dias", "periodAll": "Todo",
+              "repCsvTitle": "Casos del periodo",
+              "repCsvDef": "Una fila por caso creado en el periodo: numero, chat, creado, primera respuesta y resolucion en segundos, etapa, proyecto y si cumplio la meta. Orca no deja descargar archivos desde este panel, asi que se copia: peguelo en una planilla o en un archivo .csv.",
+              "repCsvCount1": "1 caso creado en el periodo",
+              "repCsvCount": "{n} casos creados en el periodo",
+              "repCsvNone": "Ningun caso creado en este periodo.",
+              "repCsvButton": "Copiar CSV",
+              "repCsvOk1": "Copiado: 1 caso",
+              "repCsvOk": "Copiado: {n} casos",
+              "repCsvFail": "No se pudo copiar. Vuelva a intentarlo.",
+              "repCsvCut": "Van los casos mas recientes: {n} mas viejos quedan afuera.",
+              "repCsvCols": "Caso|Chat|Creado|Primera respuesta (s)|Resolucion (s)|Etapa|Proyecto|Cumple la meta",
+              "repCsvMet": "si",
+              "repCsvMissed": "no",
+              "repCsvPending": "pendiente",
               "tabBoard": "Tablero",
               "tabReports": "Informes",
               "viewsLabel": "Vistas",
@@ -1042,6 +1060,20 @@
               "boardViewBoard": "Board",
               "boardShowMore": "Show {n} more", "boardShowMoreAria": "Show {n} more cases in {etapa}",
               "periodLabel": "Period", "periodToday": "Today", "period7d": "7 days", "period30d": "30 days", "periodAll": "All",
+              "repCsvTitle": "Cases in the period",
+              "repCsvDef": "One row per case created in the period: number, chat, created, first response and resolution in seconds, stage, project and whether it met the target. Orca does not let this panel download files, so it is copied: paste it into a spreadsheet or a .csv file.",
+              "repCsvCount1": "1 case created in the period",
+              "repCsvCount": "{n} cases created in the period",
+              "repCsvNone": "No case created in this period.",
+              "repCsvButton": "Copy CSV",
+              "repCsvOk1": "Copied: 1 case",
+              "repCsvOk": "Copied: {n} cases",
+              "repCsvFail": "Could not copy. Try again.",
+              "repCsvCut": "The most recent cases go in: {n} older ones are left out.",
+              "repCsvCols": "Case|Chat|Created|First response (s)|Resolution (s)|Stage|Project|Met target",
+              "repCsvMet": "yes",
+              "repCsvMissed": "no",
+              "repCsvPending": "pending",
               "tabBoard": "Board",
               "tabReports": "Reports",
               "viewsLabel": "Views",
@@ -1352,6 +1384,20 @@
               "boardViewBoard": "Quadro",
               "boardShowMore": "Mostrar mais {n}", "boardShowMoreAria": "Mostrar mais {n} casos em {etapa}",
               "periodLabel": "Periodo", "periodToday": "Hoje", "period7d": "7 dias", "period30d": "30 dias", "periodAll": "Tudo",
+              "repCsvTitle": "Casos do periodo",
+              "repCsvDef": "Uma linha por caso criado no periodo: numero, chat, criado, primeira resposta e resolucao em segundos, etapa, projeto e se cumpriu a meta. O Orca nao deixa este painel baixar arquivos, entao ele e copiado: cole em uma planilha ou em um arquivo .csv.",
+              "repCsvCount1": "1 caso criado no periodo",
+              "repCsvCount": "{n} casos criados no periodo",
+              "repCsvNone": "Nenhum caso criado neste periodo.",
+              "repCsvButton": "Copiar CSV",
+              "repCsvOk1": "Copiado: 1 caso",
+              "repCsvOk": "Copiado: {n} casos",
+              "repCsvFail": "Nao foi possivel copiar. Tente de novo.",
+              "repCsvCut": "Vao os casos mais recentes: {n} mais antigos ficam de fora.",
+              "repCsvCols": "Caso|Chat|Criado|Primeira resposta (s)|Resolucao (s)|Etapa|Projeto|Cumpre a meta",
+              "repCsvMet": "sim",
+              "repCsvMissed": "nao",
+              "repCsvPending": "pendente",
               "tabBoard": "Quadro",
               "tabReports": "Relatorios",
               "viewsLabel": "Visoes",
@@ -2185,6 +2231,7 @@
         pintarPeriodo()
         // Se guarda y se sigue: si el host no lo guarda, este panel igual lo usa ahora.
         call('storage.set', { key: 'boardPeriod', value: p })
+        csvMensaje = null
         repintar()
         renderInformes(true)
       }
@@ -3452,6 +3499,7 @@
       var informesActual = null
       var informesLeidos = false
       var firmaInformes = null
+      var csvMensaje = null   // { texto, mala }: lo que dijo el ultimo Copiar CSV
       var LOCALE = (function () {
         var tag = String(navigator.language || LANG)
         try { new Intl.NumberFormat(tag); return tag } catch (e) { return LANG }
@@ -3844,6 +3892,102 @@
         return s
       }
 
+      // ── Los casos del periodo en CSV (I6) ──
+      // El panel vive en un iframe `sandbox="allow-scripts"` (orca-oss, PluginPanel.tsx): sin
+      // allow-downloads el navegador no baja nada, y `navigator.clipboard` lo frena la
+      // politica de permisos del iframe. Lo que si pasa, con el clic del dueno, es
+      // `execCommand('copy')` sobre un campo seleccionado (probado en Chromium con el mismo
+      // sandbox y la misma CSP del host). Por eso el boton COPIA, y dice si lo logro.
+      var SLA_CSV = { met: 'repCsvMet', missed: 'repCsvMissed', pending: 'repCsvPending' }
+
+      /** Un campo de CSV: entre comillas si lleva coma, comillas o salto, y con un apostrofo
+       *  delante si empieza como una formula (el texto es de clientes y va a una planilla). */
+      function campoCsv (x) {
+        var v = x == null ? '' : String(x)
+        if (/^[=+\-@\t\r]/.test(v)) v = "'" + v
+        return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v
+      }
+
+      /** Las filas del periodo: los casos creados entre `from` y `to` (Todo: todos). */
+      function filasCsv (p, r) {
+        var desde = Date.parse(p.from), hasta = Date.parse(p.to)
+        return (Array.isArray(r.cases) ? r.cases.filter(esObjeto) : []).filter(function (c) {
+          var t0 = Date.parse(c.created)
+          if (!t0) return false
+          return (!desde || t0 >= desde) && (!hasta || t0 <= hasta)
+        })
+      }
+
+      function textoCsv (filas) {
+        var lineas = [t('repCsvCols').split('|').map(campoCsv).join(',')]
+        filas.forEach(function (c) {
+          lineas.push([c.case_id, c.chat, c.created,
+            esNumero(c.first_response_s) ? c.first_response_s : '',
+            esNumero(c.resolution_s) ? c.resolution_s : '',
+            ETAPA_KEY[c.stage] ? t(ETAPA_KEY[c.stage]) : c.stage,
+            c.project, SLA_CSV[c.sla] ? t(SLA_CSV[c.sla]) : ''].map(campoCsv).join(','))
+        })
+        // Salto LF: el campo que lleva el texto al portapapeles normaliza todo salto a LF
+        // (la API de <textarea> lo hace asi), y las planillas lo leen igual.
+        return lineas.join('\n')
+      }
+
+      /** Copia con el gesto del dueno. true solo si el navegador dijo que copio. */
+      function copiar (texto, volver) {
+        var aux = crear('textarea', 'rep-csv-aux')
+        aux.value = texto
+        aux.setAttribute('readonly', '')
+        aux.setAttribute('aria-hidden', 'true')
+        document.body.appendChild(aux)
+        var bien = false
+        try {
+          aux.focus()
+          aux.select()
+          aux.setSelectionRange(0, texto.length)
+          bien = typeof document.execCommand === 'function' && document.execCommand('copy') === true
+        } catch (e) {
+          bien = false
+        }
+        aux.remove()
+        if (volver) volver.focus()
+        return bien
+      }
+
+      function bloqueCsv (p, r) {
+        var s = seccionInforme('csv', t('repCsvTitle'), t('repCsvDef'))
+        var filas = filasCsv(p, r)
+        if (!filas.length) {
+          s.appendChild(crear('p', 'rep-nada', t('repCsvNone')))
+          return s
+        }
+        var fila = crear('div', 'rep-csv')
+        var b = crear('button', 'btn', t('repCsvButton'))
+        b.type = 'button'
+        b.id = 'reports-csv'
+        b.addEventListener('click', function () {
+          var ok = copiar(textoCsv(filas), b)
+          csvMensaje = ok
+            ? { texto: filas.length === 1 ? t('repCsvOk1') : fmt('repCsvOk', num(filas.length)), mala: false }
+            : { texto: t('repCsvFail'), mala: true }
+          renderInformes(true)
+          if (el('reports-csv')) el('reports-csv').focus()
+        })
+        fila.appendChild(b)
+        fila.appendChild(crear('span', 'rep-n', filas.length === 1 ? t('repCsvCount1') : fmt('repCsvCount', num(filas.length))))
+        var msg = crear('span', 'card-msg' + (csvMensaje && csvMensaje.mala ? ' mala' : ''), csvMensaje ? csvMensaje.texto : '')
+        msg.id = 'reports-csv-msg'
+        msg.setAttribute('role', 'status')
+        fila.appendChild(msg)
+        s.appendChild(fila)
+        // Con el tope de 500 filas, lo que el periodo pide y no viajo se dice.
+        var viejo = r.cases.length ? Date.parse(r.cases[r.cases.length - 1].created) : null
+        var desde = Date.parse(p.from)
+        if (Number(r.cases_more) > 0 && (!desde || (viejo && desde < viejo))) {
+          s.appendChild(crear('p', 'rep-mas', fmt('repCsvCut', num(r.cases_more))))
+        }
+        return s
+      }
+
       function mostrarVacioInformes (titulo, cuerpo, error) {
         var caja = el('reports-empty')
         caja.hidden = false
@@ -3867,7 +4011,7 @@
           }
         }
         var firma
-        try { firma = JSON.stringify([r, informesLeidos, periodo, desdePeriodo(periodo)]) } catch (e) { firma = null }
+        try { firma = JSON.stringify([r, informesLeidos, periodo, desdePeriodo(periodo), csvMensaje]) } catch (e) { firma = null }
         if (!forzar && firma !== null && firma === firmaInformes) return
         firmaInformes = firma
         var cuerpo = el('reports-body')
@@ -3892,6 +4036,7 @@
         cuerpo.appendChild(bloqueVolumen(p))
         cuerpo.appendChild(bloqueSla(p, r.sla_minutes))
         cuerpo.appendChild(bloqueProyectos(p))
+        cuerpo.appendChild(bloqueCsv(p, r))
       }
 
       function mostrarPestana (cual) {

@@ -6383,5 +6383,108 @@ console.log('\nactivity.html — I5: los informes no le roban el clic a nadie')
     !doc.getElementById('view-board').hidden)
 }
 
+// ── Los casos del periodo en CSV (informes-tablero, I6) ──
+// El panel vive en un iframe `sandbox="allow-scripts"` (orca-oss PluginPanel.tsx): sin
+// allow-downloads el navegador no baja nada, y la API del portapapeles la frena la politica
+// de permisos. Lo que si pasa es `execCommand('copy')` con el clic del dueno, asi que el
+// CSV se COPIA. Aca el portapapeles es un doble: jsdom no trae execCommand.
+const conPortapapeles = (window, resultado = true) => {
+  const copias = []
+  window.document.execCommand = (cmd) => {
+    const n = window.document.activeElement
+    if (cmd === 'copy' && n && 'value' in n) copias.push(n.value.slice(n.selectionStart, n.selectionEnd))
+    return resultado
+  }
+  return copias
+}
+const botonCsv = (doc) => doc.getElementById('reports-csv')
+
+console.log('\nactivity.html — I6: copiar los casos del periodo como CSV')
+{
+  const informe = informeDeEjemplo()
+  const { window, doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informe })
+  ok('el bloque de los casos, con su boton y cuantos son', !!bloque(doc, 'csv') &&
+    /Copiar CSV/.test(botonCsv(doc)?.textContent || '') && /3 casos/.test(txt(doc, '[data-bloque="csv"]')),
+  txt(doc, '[data-bloque="csv"]'))
+  ok('y dice por que se copia y no se descarga', /descargar/.test(txt(doc, '[data-bloque="csv"] .rep-def')))
+  const copias = conPortapapeles(window)
+  botonCsv(doc).click()
+  await espera()
+  const csv = copias[0] || ''
+  const lineas = csv.split('\n')
+  ok('copia una vez, con el encabezado en su idioma', copias.length === 1 &&
+    lineas[0] === 'Caso,Chat,Creado,Primera respuesta (s),Resolucion (s),Etapa,Proyecto,Cumple la meta',
+  lineas[0])
+  ok('las filas del periodo: las creadas en los ultimos 7 dias, de la mas nueva a la mas vieja',
+    lineas.length === 4 && lineas.slice(1).map((l) => l.split(',')[0]).join() === '52,51,50', JSON.stringify(lineas))
+  const ej = informe.cases
+  ok('una fila entera: comillas y comas escapadas, etapa y meta en palabras',
+    lineas[1] === `52,"Soporte, ""Norte""",${ej[0].created},300,,Su decision,Alfa Demo,si`, lineas[1])
+  ok('lo que empieza con = no se vuelve una formula en la planilla',
+    lineas[2] === `51,'=Cliente Uno,${ej[1].created},2400,7200,Respondido,,no`, lineas[2])
+  ok('sin respuesta todavia: vacio y pendiente', lineas[3] === `50,Soporte Norte,${ej[2].created},,,Recibido,Beta Demo,pendiente`,
+    lineas[3])
+  ok('el titulo del cliente no viaja (no es una columna del pedido)', !/Pedido con coma|Otra linea/.test(csv))
+  ok('y dice que lo copio', /Copiado: 3 casos/.test(txt(doc, '#reports-csv-msg')) &&
+    !doc.getElementById('reports-csv-msg').classList.contains('mala'), txt(doc, '#reports-csv-msg'))
+  ok('el foco vuelve al boton', doc.activeElement === botonCsv(doc))
+  ok('no deja el campo auxiliar en la pagina', !doc.querySelector('textarea.rep-csv-aux'))
+  apretarPeriodo(doc, 'all')
+  await espera()
+  botonCsv(doc).click()
+  await espera()
+  ok('Todo: todas las filas', (copias[1] || '').split('\n').length === 5, copias[1])
+}
+{
+  const { window, doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeDeEjemplo() })
+  conPortapapeles(window, false)
+  botonCsv(doc).click()
+  await espera()
+  ok('si el navegador no copia, lo dice y no dice copiado',
+    doc.getElementById('reports-csv-msg').classList.contains('mala') &&
+    /No se pudo copiar/.test(txt(doc, '#reports-csv-msg')), txt(doc, '#reports-csv-msg'))
+}
+{
+  const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeDeEjemplo() })
+  botonCsv(doc).click()
+  await espera()
+  ok('sin execCommand tampoco miente', /No se pudo copiar/.test(txt(doc, '#reports-csv-msg')))
+}
+{
+  const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeVacio() })
+  ok('sin casos en el periodo no hay boton muerto', !botonCsv(doc) &&
+    /Ningun caso creado en este periodo/.test(txt(doc, '[data-bloque="csv"]')), txt(doc, '[data-bloque="csv"]'))
+}
+{
+  const r = Object.assign(informeDeEjemplo(), { cases_more: 120 })
+  const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: r })
+  apretarPeriodo(doc, 'all')
+  await espera()
+  ok('con el tope, dice que quedan casos viejos afuera', /120/.test(txt(doc, '[data-bloque="csv"]')),
+    txt(doc, '[data-bloque="csv"]'))
+}
+for (const [idioma, enc, si] of [['en', 'Case,Chat,Created,First response (s),Resolution (s),Stage,Project,Met target', 'yes'],
+  ['pt-BR', 'Caso,Chat,Criado,Primeira resposta (s),Resolucao (s),Etapa,Projeto,Cumpre a meta', 'sim']]) {
+  const { window, doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeDeEjemplo() }, idioma)
+  const copias = conPortapapeles(window)
+  botonCsv(doc).click()
+  await espera()
+  const l = (copias[0] || '').split('\n')
+  ok(`${idioma}: encabezado y valores en su idioma`, l[0] === enc && l[1].endsWith(',' + si), `${l[0]} | ${l[1]}`)
+}
+{
+  const storage = { board: tablero([tarjeta()]), reports: informeDeEjemplo() }
+  const { window, doc } = await abrirInformes(storage)
+  const copias = conPortapapeles(window)
+  const boton = botonCsv(doc)
+  await clicReal(window, boton, async () => {
+    storage.reports = Object.assign(informeDeEjemplo(), { cases_more: 7 })
+    window.dispatchEvent(new window.Event('focus'))
+    await espera()
+  })
+  await espera()
+  ok('el primer clic en Copiar CSV, con una relectura en el medio, copia', copias.length === 1)
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)
