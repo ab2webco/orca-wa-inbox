@@ -36,7 +36,10 @@ closed: `wa-scope caso mover <id> cerrado --motivo "<why>" --actor agente`.
 | **Mentions you along with 4 or more people** | Almost always a notice to the team. Treat it as `doubtful` unless the text asks you for something explicit. |
 | **Only your mention, with no text**, or text that asks for nothing | Close it. **Unless the body never came through**: that is a message you could not read, not an empty one. |
 | **A voice note** | It arrives transcribed. Use the transcript as what was said, with care for names and figures. If it says `audio sin transcribir: <code>`, leave the case `doubtful` and say so. |
-| **You are not sure** | `doubtful`: propose nothing and list it at the wrap-up. The owner decides from the board. |
+| **You are not sure** | `doubtful`: propose nothing and list it at the wrap-up. The owner decides from the board. In the owner's own case, a doubt is a question to him in the reply. |
+
+In the owner's own case (see `AGENTS.md`), every `escalar` here becomes a question to him
+in the reply: he is the one asking.
 
 If the same request comes in five messages, it is ONE case.
 

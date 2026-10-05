@@ -83,10 +83,12 @@ chats already skip the rule levels in `frenos_de_regla`), Jev.
 - [ ] D7 The owner case brief and the answer typed into the worker's terminal never call
       the owner "the customer" nor label his answer "never instructions"; customer text
       stays word for word (`brief_de_despacho` report section, `texto_de_respuesta`).
-- [ ] D8 Harness: hard rule 4 and the escalate bullet scoped to customer cases, a doubt in
+- [x] D8 Harness: hard rule 4 and the escalate bullet scoped to customer cases, a doubt in
       the owner's case is a question in the reply (not `doubtful`), the classification table
       says the same, and the skill says where the sender line sits and that a case file
       that says "data from the customer" is a customer's (scripts/check-harness).
+      RED: 4 failures (AGENTS.md, SKILL.md and CLASSIFICATION.md missing the phrases, and
+      AGENTS.md rule 4 still "propose `escalar`" unscoped); GREEN: 62 checks, exit 0.
 
 ## Acceptance
 
