@@ -5384,12 +5384,14 @@ def publica_tablero(con):
 # ── Los informes (odd/tasks/informes-tablero.md, I3) ──────────────────────────────────
 # El panel no puede leer las bases: los numeros de la pestana Informes salen de aca, en el
 # mismo sync que el tablero, a UNA clave del storage (`reports`). Solo agregados, ids de
-# caso, titulos y nombres de chat que el tablero ya muestra: nunca el texto de un mensaje.
+# caso y nombres de chat; el titulo del caso (que sale del texto del cliente) solo en la
+# lista corta de fallas de la meta, que el panel muestra. Nunca el texto de un mensaje.
 #
 # Las definiciones (las mismas que dice la pestana):
 # - Primera respuesta: del primer mensaje del cliente del caso a la primera salida en ese
-#   chat despues de el (acuse, primer mensaje del agente o respuesta). Una salida ANTERIOR
-#   (el reloj de un telefono) no es su respuesta. Cuenta en el periodo en que se creo el caso.
+#   chat despues de el y antes del caso siguiente del chat (acuse, primer mensaje del
+#   agente o respuesta). Una salida ANTERIOR (el reloj de un telefono) no es su respuesta,
+#   ni la que contesta al caso siguiente. Cuenta en el periodo en que se creo el caso.
 # - Resolucion: de la creacion del caso a su PRIMERA entrada en respondido o cerrado; nunca
 #   negativa (un evento antes de la creacion, por el reloj, es cero).
 # - Resuelto: un caso cuya primera entrada en respondido o cerrado cae en el periodo.
@@ -5573,7 +5575,12 @@ def informe_mensajes(cuenta, chats, periodos):
 
 def primeras_respuestas(cuenta):
     """{case_id: (primer mensaje del cliente, primera salida despues | None)} en epoch, con
-    scope.db adjunta en solo lectura al almacen: una busqueda por indice por caso."""
+    scope.db adjunta en solo lectura al almacen: una busqueda por indice por caso.
+
+    La salida que cuenta es la de ANTES del primer mensaje del caso siguiente del mismo
+    chat: la que sale despues contesta a ese otro pedido. Sin el tope, un caso cerrado
+    sin respuesta (un "gracias", un sticker) tomaba la respuesta de un caso de horas
+    despues y salia como una falla de la meta."""
     try:
         fuente = wa_store.abrir()
     except wa_store.SinFuente:
@@ -5582,21 +5589,33 @@ def primeras_respuestas(cuenta):
         fuente.execute("attach database ? as s",
                        (pathlib.Path(DB).resolve().as_uri() + "?mode=ro",))
         return {r[0]: (r[1], r[2]) for r in fuente.execute(
-            "select x.case_id, x.primero, (select min(o.ts) from mensaje o where "
-            "o.account = x.account and o.chat_jid = x.chat_jid and o.from_me = 1 and "
-            "o.revocado = 0 and o.ts >= x.primero) from (select c.case_id, c.account, "
-            "c.chat_jid, (select min(m.ts) from s.caso_mensaje cm join mensaje m on "
-            "m.account = cm.account and m.chat_jid = c.chat_jid and m.stanza_id = cm.stanza_id "
-            "where cm.case_id = c.case_id and m.from_me = 0 and m.revocado = 0) primero "
-            "from s.caso c where c.account = ?) x where x.primero is not null", (cuenta,))}
+            "with x as (select c.case_id, c.account, c.chat_jid, (select min(m.ts) from "
+            "s.caso_mensaje cm join mensaje m on m.account = cm.account and "
+            "m.chat_jid = c.chat_jid and m.stanza_id = cm.stanza_id where "
+            "cm.case_id = c.case_id and m.from_me = 0 and m.revocado = 0) primero "
+            "from s.caso c where c.account = ?), "
+            "y as (select x.*, lead(primero) over (partition by chat_jid order by primero, "
+            "case_id) siguiente from x where primero is not null) "
+            "select y.case_id, y.primero, (select min(o.ts) from mensaje o where "
+            "o.account = y.account and o.chat_jid = y.chat_jid and o.from_me = 1 and "
+            "o.revocado = 0 and o.ts >= y.primero and (y.siguiente is null or "
+            "y.siguiente <= y.primero or o.ts < y.siguiente)) from y", (cuenta,))}
     except sqlite3.Error:
         return {}
     finally:
         fuente.close()
 
 
-def casos_del_informe(con, cuenta, nombres, meta, ahora):
-    """Cada caso de la linea con lo que el informe necesita, en epoch."""
+def casos_del_informe(con, cuenta, nombres, meta, ahora, chat_proyecto=None, catalogo=None):
+    """Cada caso de la linea con lo que el informe necesita, en epoch.
+
+    El proyecto se resuelve como lo despacha el tick (proyecto_del_caso): el de la ruta
+    del caso, si no el de su chat; el nombre es el del catalogo aceptado. Solo sin ninguno
+    de los dos vale el nombre que anoto el despacho (y su id, si el catalogo lo conoce).
+    Asi un mismo proyecto es una sola fila de "Por proyecto"."""
+    chat_proyecto = chat_proyecto or {}
+    por_id = {p["id"]: p["name"] for p in catalogo or () if p.get("id")}
+    por_nombre = {p["name"]: p["id"] for p in catalogo or () if p.get("id") and p.get("name")}
     casos = {r["case_id"]: dict(r) for r in con.execute(
         "select case_id, chat_jid, etapa, titulo, ruta, created_at from caso where account=?",
         (cuenta,))}
@@ -5604,10 +5623,13 @@ def casos_del_informe(con, cuenta, nombres, meta, ahora):
         "select e.case_id, min(e.at) from caso_evento e join caso c on c.case_id = e.case_id "
         "where c.account = ? and e.a in ('respondido', 'cerrado') and "
         "(e.de is null or e.de <> e.a) group by e.case_id", (cuenta,))}
+    # La decision del dueno: lo saco de decision con su mano, o lo firmo ahi ('aprobada
+    # <ver>'). La firma basta: si la entrega del panel no llega a mover el caso, el tick
+    # completa el envio y lo cierra como automatizacion, pero lo decidio el dueno.
     del_dueno = {r[0] for r in con.execute(
         "select distinct e.case_id from caso_evento e join caso c on c.case_id = e.case_id "
-        "where c.account = ? and e.de = 'decision' and e.a <> 'decision' and "
-        "e.actor = 'dueno'", (cuenta,))}
+        "where c.account = ? and e.de = 'decision' and e.actor = 'dueno' and "
+        "(e.a <> 'decision' or e.detalle like 'aprobada %')", (cuenta,))}
     frenados = set()
     for r in con.execute(
             "select e.case_id, e.detalle from caso_evento e join caso c on "
@@ -5642,10 +5664,13 @@ def casos_del_informe(con, cuenta, nombres, meta, ahora):
         except ValueError:
             ruta = {}
         proyecto, resultado = despachos.get(cid, (None, None))
-        if isinstance(ruta, dict) and ruta.get("workspace"):
-            pid, pnombre = ruta["workspace"], ruta.get("workspace_name") or ruta["workspace"]
+        ruta = ruta if isinstance(ruta, dict) else {}
+        pid = ruta.get("workspace") or chat_proyecto.get(c["chat_jid"])
+        if pid:
+            pnombre = (por_id.get(pid) or (ruta.get("workspace") == pid
+                                           and ruta.get("workspace_name")) or proyecto or pid)
         else:
-            pid, pnombre = None, proyecto or None
+            pid, pnombre = por_nombre.get(proyecto), proyecto or None
         salida.append({
             "case_id": cid, "chat": nombres.get(c["chat_jid"]) or c["chat_jid"],
             "title": c["titulo"] or nombres.get(c["chat_jid"]) or c["chat_jid"],
@@ -5731,7 +5756,11 @@ def build_reports(con, ahora=None):
     periodos = periodos_del_informe(ahora)
     msj = informe_mensajes(cuenta, chats, periodos) or {
         "por_hora": {}, "chats_dia": {}, "chats_hora": {}, "totales": {}, "rafagas": []}
-    casos = casos_del_informe(con, cuenta, nombres, meta, ahora)
+    casos = casos_del_informe(
+        con, cuenta, nombres, meta, ahora,
+        chat_proyecto={jid: r.get("workspace") for jid, r in alcance.items()
+                       if r.get("workspace")},
+        catalogo=proyectos_del_dueno(con))
 
     etapas = dict.fromkeys(ETAPAS_CASO, 0)
     for r in con.execute("select etapa, count(*) from caso where account=? group by etapa",
@@ -5827,7 +5856,8 @@ def build_reports(con, ahora=None):
         for c in casos:
             if not _en(c["creado"], desde, hasta):
                 continue
-            g = grupos.setdefault((c["project_id"], c["project"]), {
+            llave = ("id", c["project_id"]) if c["project_id"] else ("nombre", c["project"])
+            g = grupos.setdefault(llave, {
                 "id": c["project_id"], "name": c["project"], "cases": 0, "resuelto": 0,
                 "necesita": 0, "bloqueado": 0, "jev_held": 0, "owner_decision": 0})
             g["cases"] += 1
@@ -5866,9 +5896,13 @@ def build_reports(con, ahora=None):
                     "misses_more": max(0, len(fallas) - TOPE_FALLAS_SLA)},
             "projects": proyectos[:TOPE_PROYECTOS_INFORME],
         }
-    return {"v": 1, "updated_at": _iso_epoch(ahora), "sla_minutes": meta_min, "live": vivo,
-            "periods": salida,
-            "cases": [{"case_id": c["case_id"], "chat": c["chat"], "title": c["title"],
+    # `account`: la linea del informe. Tras vincular otro numero, el panel no pinta el
+    # informe de la linea anterior como si fuera de esta (como las tarjetas del tablero).
+    # Las filas de `cases` no llevan titulo: sale del texto del cliente, el panel no lo
+    # usa, y viajaria por casos que el tablero ya no muestra.
+    return {"v": 1, "account": cuenta, "updated_at": _iso_epoch(ahora),
+            "sla_minutes": meta_min, "live": vivo, "periods": salida,
+            "cases": [{"case_id": c["case_id"], "chat": c["chat"],
                        "created": _iso_epoch(c["creado"]), "first_response_s": c["primera"],
                        "resolution_s": c["resolucion"], "stage": c["stage"],
                        "project": c["project"], "sla": c["sla"]}

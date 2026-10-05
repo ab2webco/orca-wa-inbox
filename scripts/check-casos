@@ -8718,7 +8718,7 @@ else:
            [f.get("case_id") for f in filas] == [7, 11, 9, 3, 2, 8, 1, 6, 4, 5]
            and r.get("cases_more") == 0, f"{[f.get('case_id') for f in filas]}")
         ok("csv: una fila con todo lo que pide la descarga",
-           por_id.get(2) == {"case_id": 2, "chat": "Cliente Uno", "title": "Pedido dos",
+           por_id.get(2) == {"case_id": 2, "chat": "Cliente Uno",
                              "created": iso_local("2026-03-18 11:00:10"),
                              "first_response_s": 2400, "resolution_s": None,
                              "stage": "trabajo", "project": "Beta Demo", "sla": "missed"},
@@ -8732,6 +8732,13 @@ else:
            f"{[por_id.get(i) for i in (6, 11, 9, 7)]}")
         ok("el informe no lleva cuerpos de mensajes",
            '"x"' not in json.dumps(r) and "body" not in json.dumps(r))
+        # Las filas del CSV no llevan titulo: el titulo sale del texto del cliente, el
+        # panel no lo usa, y viajaria por 500 casos que el tablero ya no muestra. Solo las
+        # fallas de la meta, que si se listan, lo traen.
+        ok("csv: las filas no llevan el titulo del caso (sale del texto del cliente)",
+           filas and all("title" not in f for f in filas), f"{filas[:1]}")
+        # La linea del informe: tras vincular otro numero el panel no pinta el de antes.
+        ok("el informe dice de que linea es", r.get("account") == A, f"{r.get('account')}")
 
         # La meta es un ajuste: con 30 minutos, el caso 8 (1800 s) cumple.
         js(home, "config", "sla_first_reply_minutes", "30")
@@ -8766,6 +8773,87 @@ else:
         ok("tablero: una cerrada de hace 4 semanas sigue viajando",
            {4, 6, 8, 9} <= {c["case_id"] for c in b_mes.get("cards", [])},
            f"{sorted(c['case_id'] for c in b_mes.get('cards', []))}")
+
+    # ── Un caso cerrado sin respuesta no toma la del caso siguiente del chat. La salida
+    # de las 11:05 contesta al caso 2 (el pedido de las 11:00); el caso 1 se cerro a las
+    # 09:01 sin que saliera nada, asi que no tiene primera respuesta y queda fuera de la
+    # meta. Antes contaba 7500 s y una falla.
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [m_(SOPORTE, "k1", "2026-03-18 09:00:00"),
+                         m_(SOPORTE, "k2", "2026-03-18 11:00:00"),
+                         m_(SOPORTE, "k3", "2026-03-18 11:05:00", True)])
+        js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "responder")
+        siembra_casos(home, [
+            dict(id=1, chat=SOPORTE, etapa="cerrado", creado="2026-03-18 09:00:10",
+                 mensajes=("k1",)),
+            dict(id=2, chat=SOPORTE, etapa="respondido", creado="2026-03-18 11:00:10",
+                 mensajes=("k2",)),
+        ], [
+            (1, None, "recibido", "automatizacion", "2026-03-18 09:00:10", ""),
+            (1, "recibido", "cerrado", "automatizacion", "2026-03-18 09:01:00", ""),
+            (2, None, "recibido", "automatizacion", "2026-03-18 11:00:10", ""),
+            (2, "recibido", "respondido", "agente", "2026-03-18 11:05:10", ""),
+        ])
+        r = informe(home, AHORA)
+        hoy = r["periods"]["today"]
+        por_id = {f["case_id"]: f for f in r["cases"]}
+        ok("cerrado sin respuesta: la salida del caso siguiente no es la suya",
+           (por_id[1]["first_response_s"], por_id[1]["sla"]) == (None, None)
+           and (por_id[2]["first_response_s"], por_id[2]["sla"]) == (300, "met"),
+           f"{[(f['case_id'], f['first_response_s'], f['sla']) for f in r['cases']]}")
+        ok("cerrado sin respuesta: la meta y la mediana no lo cuentan",
+           (hoy["sla"]["met"], hoy["sla"]["missed"], hoy["sla"]["rate"], hoy["sla"]["misses"])
+           == (1, 0, 100.0, [])
+           and (hoy["first_response"]["value"], hoy["first_response"]["n"]) == (300, 1),
+           f"{hoy['sla']} {hoy['first_response']['value']} {hoy['first_response']['n']}")
+
+    # ── La decision del dueno cuenta aunque el tick complete el envio. El dueno firma
+    # ('aprobada <ver>', de decision a decision) y, si la entrega del panel no llega a
+    # mover el caso, el tick lo cierra como automatizacion: lo firmo el dueno igual. Una
+    # firma de la regla del dueno no es una decision suya.
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [m_(SOPORTE, "z1", "2026-03-18 09:00:00")])
+        js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "responder")
+        eventos = []
+        for cid, firma, cierra in ((1, "dueno", "automatizacion"), (2, "dueno", "dueno"),
+                                   (3, "regla", "automatizacion")):
+            eventos += [
+                (cid, None, "recibido", "automatizacion", "2026-03-18 09:00:10", ""),
+                (cid, "recibido", "decision", "agente", "2026-03-18 09:01:00", ""),
+                (cid, "decision", "decision", firma, "2026-03-18 09:02:00", "aprobada abc"),
+                (cid, "decision", "respondido", cierra, "2026-03-18 09:03:00",
+                 f"enviado caso-{cid}-abc")]
+        siembra_casos(home, [dict(id=i, chat=SOPORTE, etapa="respondido",
+                                  creado="2026-03-18 09:00:10") for i in (1, 2, 3)], eventos)
+        r = informe(home, AHORA)
+        filas = [(f["cases"], f["owner_decision"]) for f in r["periods"]["7d"]["projects"]]
+        ok("decision del dueno: su firma cuenta aunque el tick cierre el envio",
+           filas == [(3, 2)], f"{r['periods']['7d']['projects']}")
+
+    # ── El mismo proyecto es UNA fila. El caso 2 no trae proyecto en su ruta, pero su
+    # chat si: el despacho usa el del chat (proyecto_del_caso), y el informe tambien. El
+    # caso 3 solo tiene el nombre en su despacho: si el catalogo lo conoce, es el mismo.
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [m_(SOPORTE, "j1", "2026-03-18 09:00:00"),
+                         m_(PERSONA, "j2", "2026-03-18 10:00:00")])
+        acepta_proyectos(home, "alfa-demo")
+        js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "responder")
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder",
+           "--workspace", "alfa-demo")
+        siembra_casos(home, [
+            dict(id=1, chat=SOPORTE, etapa="respondido", ruta=ALFA,
+                 creado="2026-03-18 09:00:10"),
+            dict(id=2, chat=PERSONA, etapa="respondido", ruta={"workspace": None},
+                 creado="2026-03-18 10:00:10"),
+            dict(id=3, chat=SOPORTE, etapa="respondido", creado="2026-03-18 11:00:10"),
+        ], [], [(1, "Alfa Demo", "reportado", "resuelto"),
+                (2, "Alfa Demo", "reportado", "resuelto"),
+                (3, "Alfa Demo", "reportado", "resuelto")])
+        r = informe(home, AHORA)
+        filas = [(f["id"], f["name"], f["cases"], f["resuelto"])
+                 for f in r["periods"]["today"]["projects"]]
+        ok("por proyecto: el mismo proyecto es una sola fila, como lo despacha el tick",
+           filas == [("alfa-demo", "Alfa Demo", 3, 3)], f"{filas}")
 
     # ── El limite de medianoche: 23:59:59 es de ayer y 00:00:00 es de hoy.
     with tempfile.TemporaryDirectory() as home:
