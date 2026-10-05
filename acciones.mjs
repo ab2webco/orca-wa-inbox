@@ -147,9 +147,10 @@ const opcional = (valor, campo) => {
  *
  * `run` y `motivoDe` son los del worker (mismo env, mismo tope de salida, mismos motivos
  * estables); `herramienta(nombre)` resuelve la ruta de un CLI en el directorio de
- * herramientas vigente. `llaveAprobador()` da la llave del plugin (aprobador.mjs), que
- * viaja SOLO al hijo `wa-send --approve`: sin ella `wa-send` niega la aprobacion. `lanzarTriage` (opcional) lanza la automatizacion del agente
- * (`agente.mjs`); sin el, "Atender ahora" solo marca el caso.
+ * herramientas vigente. `lanzarTriage` (opcional) lanza la automatizacion del agente
+ * (`agente.mjs`); sin el, "Atender ahora" solo marca el caso. `llaveAprobador()` da la
+ * llave del plugin (aprobador.mjs), que viaja SOLO al hijo `wa-send --approve`: sin ella
+ * `wa-send` niega la aprobacion.
  */
 export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage, llaveAprobador }) {
   /** `wa-scope caso <sub> ...`: devuelve las filas del JSON o lanza el rechazo. */
