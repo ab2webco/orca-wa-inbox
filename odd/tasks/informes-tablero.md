@@ -112,13 +112,21 @@ stores (capture.db messages, scope.db cases, case events and dispatches). Owner-
       default retention (`capture_max` 20,000) keeps real stores below that. Key size in
       that worst case: ~240 KB as stored (indented), ~150 KB compact; half of it is the
       500 case rows.
-- [ ] I4 SLA target setting (global, panel key, validation, default 15) in Settings.
+- [x] I4 SLA target setting (global, panel key, validation, default 15) in Settings.
   - [x] I4.1 Backend: `sla_first_reply_minutes` (global, default 15, whole minutes 1..1440)
         in `bin/wa_settings.py`, flat panel key `slaMinutes` (sync mirrors it back; a dirty
         panel value is ignored, a valid one wins over the CLI). RED: default `None` and 0,
         1441 and "media hora" accepted, `slaMinutes` missing after sync (10 failures in
         `revisa_ajustes`); GREEN: check-clis 285 settings checks.
-  - [ ] I4.2 UI: the field in config.html (pending, UI stage).
+  - [x] I4.2 UI: a "Informes" card in Settings > Su aprobacion, right after the automatic
+        replies (the first contact it measures): `#sla-minutes` (number, 1..1440, step 1,
+        15 when nothing is saved), its hint, and its own Guardar (`#save-sla`) through the
+        same `guardarTarjeta` path as its siblings (flat key `slaMinutes`, as text, re-read
+        after writing). It is read with the other keys of that tab when the tab opens, not
+        on every poll. Out of range, decimals or text are not saved and the card says the
+        range; a host that rejects the write does not say saved. ES/EN/PT. RED: `#sla-minutes`
+        missing (4 FALLA, then `TypeError ... reading 'focus'`). GREEN: panels 1104/1104
+        (16 new in "I4").
 - [ ] I5 Reports tab: blocks 1–6 with comparisons, empty states, info texts, ES/EN/PT.
 - [ ] I6 CSV download (or a report of why the host blocks it).
 - [ ] I7 Screenshots of the board and Reports at 1440/768/390/320, light and dark, ES and EN,

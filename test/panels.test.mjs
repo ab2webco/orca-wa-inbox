@@ -6112,5 +6112,71 @@ console.log('\nactivity.html — I2: cada columna se desplaza sola')
   ok('una columna vacia sigue plegada', !!doc.querySelector('.col.vacia[data-stage="trabajo"]'))
 }
 
+// ── La meta del primer contacto (informes-tablero, I4) ──
+// Un ajuste global en minutos (1..1440, 15 de fabrica) en la clave plana `slaMinutes`, en
+// texto como el resto: wa-scope la valida y la manda de vuelta en cada sync. Vive junto a las
+// respuestas automaticas, que son el primer contacto que mide.
+console.log('\nconfig.html — I4: la meta del primer contacto')
+{
+  const { doc, storage } = await montar('config.html', {}, 'es-419')
+  await espera()
+  doc.getElementById('tab-aprobacion').click()
+  await espera(); await espera()
+  const campo = doc.getElementById('sla-minutes')
+  ok('el campo existe en la pestana de las respuestas automaticas',
+    !!campo && !!campo.closest('#view-aprobacion'), String(!!campo))
+  ok('es un numero entero de 1 a 1440 minutos', campo?.type === 'number' && campo.min === '1' &&
+    campo.max === '1440' && campo.step === '1')
+  ok('sin nada guardado muestra 15', campo?.value === '15', campo?.value)
+  ok('tiene etiqueta y una pista que dice que mide',
+    (doc.querySelector('label[for="sla-minutes"]')?.textContent || '').trim().length > 3 &&
+    /primera respuesta/i.test(doc.getElementById('sla-help')?.textContent || ''),
+    doc.getElementById('sla-help')?.textContent)
+  escribir(doc, 'sla-minutes', '30')
+  doc.getElementById('save-sla').click()
+  await espera(); await espera()
+  ok('guardar escribe la clave plana en texto', storage.slaMinutes === '30', String(storage.slaMinutes))
+  ok('y dice guardado', /✓/.test(doc.getElementById('said-sla').textContent))
+  for (const malo of ['0', '1441', '7.5', 'media hora', '']) {
+    escribir(doc, 'sla-minutes', malo)
+    doc.getElementById('save-sla').click()
+    await espera(); await espera()
+    ok(`"${malo}" no se guarda y lo dice`, storage.slaMinutes === '30' &&
+      doc.getElementById('said-sla').className.includes('bad') &&
+      /1440/.test(doc.getElementById('said-sla').textContent),
+    `${storage.slaMinutes} ${doc.getElementById('said-sla').textContent}`)
+  }
+}
+{
+  const { doc } = await montar('config.html', { slaMinutes: '45' }, 'es-419')
+  await espera()
+  doc.getElementById('tab-aprobacion').click()
+  await espera(); await espera()
+  ok('al abrir la pestana pinta la meta guardada', doc.getElementById('sla-minutes').value === '45',
+    doc.getElementById('sla-minutes').value)
+}
+{
+  // Un host que rechaza la escritura: no dice guardado.
+  const { doc } = await montar('config.html', {}, 'es-419',
+    (d) => d.action === 'storage.set' && d.params.key === 'slaMinutes' ? { ok: false } : undefined)
+  await espera()
+  doc.getElementById('tab-aprobacion').click()
+  await espera()
+  escribir(doc, 'sla-minutes', '20')
+  doc.getElementById('save-sla').click()
+  await espera(); await espera()
+  ok('si el host no guarda, no dice guardado', doc.getElementById('said-sla').className.includes('bad'),
+    doc.getElementById('said-sla').textContent)
+}
+for (const [idioma, nombre, re] of [['es-419', 'ES', /Meta/], ['en', 'EN', /target/i], ['pt-BR', 'PT', /Meta/]]) {
+  const { doc } = await montar('config.html', {}, idioma)
+  await espera()
+  ok(`${nombre}: la meta en su idioma`,
+    re.test(doc.querySelector('label[for="sla-minutes"]')?.textContent || '') &&
+    (doc.getElementById('sla-help')?.textContent || '').trim().length > 20 &&
+    (doc.getElementById('sla-legend')?.textContent || '').trim().length > 3,
+    doc.querySelector('label[for="sla-minutes"]')?.textContent)
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)
