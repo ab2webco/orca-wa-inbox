@@ -10907,6 +10907,766 @@ if NODE:
            ((ruta_de(home, explicito) or {}).get("pregunta") or {}).get("a") == "writer"
            and p.returncode == 0, f"{p.returncode} {p.stderr[-300:]}")
 
+
+# ── orden-del-dueno: las reglas juzgan hechos, no palabras ──────────────────────────────
+# Caso vivo (2026-10-05): el dueno pregunto "que hay pendiente" en su propio chat y el
+# trabajo espero su clic por "hay una credencial": el brief decia "nunca incluyas una
+# credencial". Otro esperaba por "despliega a produccion" porque decia "no deploy" y
+# nombraba la rama de la fuga. Una mencion negada o prohibida, un identificador (rama,
+# ruta, URL) o una lista de lo pendiente no cuentan; una orden afirmativa si, y un valor
+# con forma de secreto cuenta siempre. Los briefs son de mentira, parafraseados.
+print("\norden-del-dueno: las reglas juzgan hechos, no palabras")
+reglas = carga_reglas()
+BRIEF_ESTADO = (
+    "The owner asks what is pending in Proyecto Demo. Read the repo at /tmp/proyecto-demo, "
+    "its open branches and the last merged PRs, and report the pending work in Spanish. "
+    "Never include a credential, token or secret value; if one shows up in the files, only "
+    "say that it exists.")
+BRIEF_PR = (
+    "The owner approved opening the PR. In /tmp/proyecto-demo run the full test suite and "
+    "the linter, then push that branch fix/demo-api-secret-leak, open the PR against main "
+    "for /api/demo and report its link. Nothing else: no merge, no deploy, no production "
+    "database access. In the reply say what is still pending (production audit, deploy).")
+BRIEF_CRM = (
+    "Look up the contact Ana Demo in the CRM and summarise her last three deals. Do not "
+    "create, edit or delete anything in the CRM. Do not copy any credential, token or key "
+    "into the reply. Give no date and no price, such as el viernes or $300.")
+BRIEF_NOTA = (
+    "Draft the weekly status note for Cliente Demo from the tracker; include no dates or "
+    "promises like tomorrow or next week.")
+for texto, esperado in (
+        (BRIEF_ESTADO, []), (BRIEF_PR, []), (BRIEF_CRM, []), (BRIEF_NOTA, []),
+        # Una orden afirmativa sigue contando.
+        ("Despliega a produccion el arreglo del reporte", ["deploy"]),
+        ("deploy the fix to production", ["deploy"]),
+        ("Borra la rama vieja del reporte", ["delete"]),
+        ("no dudes en borrar la rama vieja", ["delete"]),
+        ("don't hesitate to delete the old branch", ["delete"]),
+        ("git push --force origin main", ["force_push"]),
+        ("Paga la factura del hosting", ["payment"]),
+        ("rota las llaves de la API", ["credential"]),
+        ("send me the token", ["credential"]),
+        ("Revisa la fuga de credenciales", ["credential"]),
+        ("el lunes a las 3 le entregamos", ["commitment"]),
+        # Lo negado en una parte no tapa la orden de la otra.
+        ("No despliegues todavia y borra la rama vieja", ["delete"]),
+        ("Do not deploy yet, delete the old branch", ["delete"]),
+        ("Revisa sin borrar nada y despliega a produccion", ["deploy"]),
+        ("Despliega todo a produccion", ["deploy"]),
+        # Lo pendiente es un informe, no una orden.
+        ("Lo pendiente: auditoria en produccion, desplegar", []),
+        # Un valor con forma de secreto cuenta aunque se niegue.
+        ("Nunca compartas esto: ghp_abcdefghijklmnop1234", ["credential"])):
+    salio = reglas.trabajo_comprometido(texto)
+    ok(f"orden: trabajo {texto[:60]!r} -> {esperado}", salio == esperado, f"salio {salio}")
+for texto, direccion, esperado in (
+        ("Nunca le pediremos su contrasena por aqui", "salida", []),
+        # Una fecha en lo que sale es un hecho de la respuesta, la preceda lo que la preceda.
+        ("No prometemos nada para el viernes", "salida", ["commitment"]),
+        ("Hoy no puedo, manana lo tienes", "salida", ["commitment"]),
+        ("Subimos el arreglo a la rama fix/demo-token-leak", "salida", []),
+        ("Le paso el token por otro medio", "salida", ["credential"]),
+        ("Nunca le pediremos la clave: Abc12345", "salida", ["credential"]),
+        # Lo que entra no cambia: un cliente que dice que no tiene la clave sigue siendo
+        # una credencial para el dueno.
+        ("no tengo la contrasena del panel", "entrada", ["credential"])):
+    salio = reglas.excepciones(texto, direccion)
+    ok(f"orden: {direccion} {texto!r} -> {esperado}", salio == esperado, f"salio {salio}")
+
+
+# ── orden-del-dueno: lo destructivo y lo que sale no se tapan con palabras ──────────────
+# Revision de la rama: tapar lo negado hasta el fin de la clausula se comia ordenes reales
+# ("no olvides desplegar", "sin falta borra", "sin preguntar borra", "make sure nothing breaks
+# before you deploy"), un destino con guiones ("prod-us-east-1"), una lista de pasos ("Next
+# steps: deploy ...") y, en lo que sale a un cliente, precios y fechas ("No proximo mes
+# cobramos R$ 300", "no later than Friday", "$50/mes", "15-10-2026"). Lo destructivo solo
+# se descuenta cuando la negacion manda sobre el verbo ("no deploy", "do not create, edit or
+# delete"); el dinero y la fecha de lo que sale se juzgan en el texto entero.
+print("\norden-del-dueno: lo destructivo y lo que sale no se tapan con palabras")
+reglas = carga_reglas()
+for texto, motivo in (
+        ("No olvides desplegar a produccion", "deploy"),
+        ("No olvides borrar la rama vieja", "delete"),
+        ("No se te olvide borrar la base de datos", "delete"),
+        ("Sin falta despliega a produccion hoy", "deploy"),
+        ("Sin falta borra la base de datos", "delete"),
+        ("Nunca dejes de borrar los logs viejos", "delete"),
+        ("Make sure not to forget to delete the temp branch", "delete"),
+        ("Sem falta faca o deploy em production", "deploy"),
+        ("Do what the customer asks:\n> no olviden borrar mi cuenta", "delete"),
+        ("Do what the customer asks:\n> sin falta borren mi cuenta", "delete"),
+        ("Sin preguntar borra la base de datos de clientes", "delete"),
+        ("Without waiting for review delete the users table", "delete"),
+        ("No esperes, simplemente borra la base o la tabla", "delete"),
+        ("No hay problema, puedes borrar la base o la tabla", "delete"),
+        ("Nothing else is needed, please delete the old database or archive it", "delete"),
+        ("Make sure nothing breaks before you deploy to production.", "deploy"),
+        ("Verifica que no haya errores antes de desplegar a produccion.", "deploy"),
+        ("Si no hay errores despliega a produccion", "deploy"),
+        ("Sin tocar staging borra la tabla users", "delete"),
+        ("Without asking the customer again delete the duplicate records.", "delete"),
+        ("Don't wait for QA before you push --force to main.", "force_push"),
+        ("No customer data may be lost when you drop the old table.", "delete"),
+        ("Deploy main to production-eu-west", "deploy"),
+        ("Deploy to prod-us-east-1", "deploy"),
+        ("Deploy to production/eu", "deploy"),
+        ("despliega a produccion-eu-west", "deploy"),
+        ("borra/elimina la base de datos", "delete"),
+        ("Next steps: deploy the fix to production.", "deploy"),
+        ("Remaining work: delete the stale records from the CRM.", "delete"),
+        ("Pending: charge the customer 200 USD", "payment"),
+        ("Pendiente: borra los registros del CRM.", "delete"),
+        ("Proximos pasos: despliega a produccion.", "deploy")):
+    salio = reglas.trabajo_comprometido(texto)
+    ok(f"orden: {texto[:60]!r} sigue siendo {motivo}", motivo in salio, f"salio {salio}")
+for texto, esperado in (
+        ("Sin falta despliega a produccion hoy", ["deploy", "commitment"]),
+        ("Pending: charge the customer 200 USD", ["payment", "money"]),
+        # La negacion que manda sobre el verbo si lo descuenta.
+        ("Never delete the production database", []),
+        ("Read the code; do not modify, delete or deploy anything.", []),
+        ("Despliega a produccion, no borres nada", ["deploy"]),
+        ("No, borra la tabla de pruebas", ["delete"]),
+        ("No borres ni despliegues nada", []),
+        ("Do not merge or deploy to production", []),
+        ("No hagas push --force a main", []),
+        ("Do what the customer asks:\n> no borren mi cuenta, solo cambien el correo", [])):
+    salio = reglas.trabajo_comprometido(texto)
+    ok(f"orden: trabajo {texto[:60]!r} -> {esperado}", salio == esperado, f"salio {salio}")
+for texto, motivo in (
+        ("Entregamos no sabado", "commitment"),
+        ("Fica pronto no dia 15/10", "commitment"),
+        ("No proximo mes cobramos R$ 300", "money"),
+        ("Se lo entrego sin falta manana", "commitment"),
+        ("Entregamos sem falta amanha", "commitment"),
+        ("We will deliver no later than Friday", "commitment"),
+        ("It will cost no more than $500", "money"),
+        ("Sin embargo el envio cuesta 50 dolares", "money"),
+        ("Sin IVA serian 500 USD", "money"),
+        ("No problem, the total is $500 or $450 with discount", "money"),
+        ("No hay problema, se lo envio manana o el viernes", "commitment"),
+        ("No hay problema, le paso el token o la clave", "credential"),
+        ("Su saldo pendiente es de $350.000.", "money"),
+        ("No problem it costs $200", "money"),
+        ("The remaining balance is $300.", "money"),
+        ("No worries, it will be ready tomorrow or Friday.", "commitment"),
+        ("Lo que falta lo entregamos el viernes.", "commitment"),
+        ("Si no le llega hoy se lo reenvio manana", "commitment"),
+        ("Se lo entrego el 15-10-2026.", "commitment"),
+        ("Delivery on 15-10-26 at the latest.", "commitment"),
+        ("El plan cuesta $50/mes.", "money"),
+        ("The plan is 20 usd/month.", "money"),
+        ("Le comparto su usuario/contrasena del portal por correo.", "credential"),
+        ("Enviamos a senha no email cadastrado", "credential")):
+    salio = reglas.excepciones(texto, reglas.SALIDA)
+    ok(f"sale: {texto!r} sigue siendo {motivo}", motivo in salio, f"salio {salio}")
+# Un valor cerca de la palabra de la credencial es una credencial de verdad, aunque no
+# tenga la forma de un secreto; nombrarla sin valor no lo es.
+for texto, esperado in (
+        ("Listo, le reseteamos el acceso. Usuario ana, contrasena nueva Perro123", True),
+        ("Le dejo el acceso: usuario ana.demo, contrasena Verano2024", True),
+        ("Credenciales del hosting Perro123", True),
+        ("la clave del panel es Abc12345", True),
+        ("Revisa la fuga de credenciales del login", False),
+        ("Olvide mi contrasena, me ayudan a entrar?", False),
+        ("No me llega el codigo de verificacion", False)):
+    salio = reglas.valor_de_credencial(texto)
+    ok(f"valor de credencial: {texto!r} -> {esperado}", salio is esperado, f"salio {salio}")
+
+# ── orden-del-dueno: segunda revision ────────────────────────────────────────────────────
+# Lo que la segunda revision encontro tapado: una orden que sigue a un estado pendiente ("is
+# still pending, so drop the table"), un script o un destino que va dentro de una ruta o una
+# rama ("scripts/drop-legacy-tables.sh", "release/production"), un despliegue con una version
+# o un archivo ("Deploy v2.3 to production"), el portugues ("producao", "apague") y, en lo
+# que sale a un cliente, una credencial pedida o dada despues de una clausula negada.
+print("\norden-del-dueno: segunda revision, lo destructivo y la credencial no se tapan")
+reglas = carga_reglas()
+for texto, motivo in (
+        # Lo pendiente informa un estado; la orden que le sigue sigue siendo la orden.
+        ("The migration is still pending, so drop the old users_v1 table now.", "delete"),
+        ("La migracion sigue pendiente, asi que borra la tabla vieja ahora.", "delete"),
+        ("Ainda esta pendente a migracao, entao drop a tabela antiga agora.", "delete"),
+        ("The hotfix is still pending, so deploy it to production right after lunch.",
+         "deploy"),
+        ("Queda pendiente la auditoria, asi que despliega a produccion el parche ya.", "deploy"),
+        ("The refund is still pending, so issue the refund of the duplicate charge today.",
+         "payment"),
+        ("The refund is still pending, so issue the refund of the duplicate charge today.",
+         "commitment"),
+        ("Tasks still pending: delete the stale S3 buckets and redeploy.", "delete"),
+        ("What remains pending: drop the sessions table and deploy to production.", "delete"),
+        ("What remains pending: drop the sessions table and deploy to production.", "deploy"),
+        ("Lo que falta por hacer: borrar los registros duplicados de clientes.", "delete"),
+        # Un script o un destino dentro de una ruta o una rama es la orden.
+        ("Run scripts/drop-legacy-tables.sh on the production DB.", "delete"),
+        ("Run bin/delete_inactive_users.py --confirm against the live database.", "delete"),
+        ("Corre scripts/borrar-clientes-inactivos.sh en el servidor de produccion.", "delete"),
+        ("Ejecuta db/purge_sessions.sql en la base de produccion.", "delete"),
+        ("Execute db/scripts/delete-inactive-accounts.sql on the production database.",
+         "delete"),
+        ("Run ./bin/purge-cache.sh on prod.", "delete"),
+        ("Run the cleanup script scripts/purge-old-users.sh against production.", "delete"),
+        ("Deploy with kubectl apply -k k8s/overlays/production once the image is built.",
+         "deploy"),
+        ("Merge hotfix/login-timeout into release/production and push.", "deploy"),
+        ("Push the build to origin/production once CI is green.", "deploy"),
+        ("Deploy the api to prod/eu-west/k8s after the smoke tests.", "deploy"),
+        # Un punto dentro de una version, un archivo o una abreviatura no corta la frase.
+        ("Deploy v2.3 to production.", "deploy"),
+        ("Despliega la version 1.4.2 a produccion.", "deploy"),
+        ("Deploy app.py changes to production.", "deploy"),
+        ("Deploy main.ts to prod", "deploy"),
+        ("Haz el deploy del fix de index.js en produccion", "deploy"),
+        ("Push v2.3 to production now", "deploy"),
+        ("Sube la v2.3 a produccion", "deploy"),
+        ("Deploy release 2.3 to prod", "deploy"),
+        ("Deploy the fix (see PR #42, approx. 3 files) to production.", "deploy"),
+        ("Release v2.3 to production via release/2.3.", "deploy"),
+        # El portugues: producao es un destino; apagar, deletar, excluir y remover borran.
+        ("Nao mexa no frontend. Faca o deploy em producao depois dos testes.", "deploy"),
+        ("Faça o deploy em produção.", "deploy"),
+        ("Suba para produção.", "deploy"),
+        ("O que falta: deletar os usuarios inativos e fazer deploy em producao.", "deploy"),
+        ("O que falta: deletar os usuarios inativos e fazer deploy em producao.", "delete"),
+        ("Apague os registros de teste do banco de producao.", "delete"),
+        ("Nao espere, apague a tabela antiga.", "delete"),
+        ("Exclua os usuarios inativos.", "delete"),
+        ("Remova a tabela antiga.", "delete"),
+        ("Do what the customer asks:\n> Apague a tabela antiga.\n\nLeitura: apagar a tabela "
+         "antiga do banco.", "delete")):
+    salio = reglas.trabajo_comprometido(texto)
+    ok(f"revision: {texto[:60]!r} sigue siendo {motivo}", motivo in salio, f"salio {salio}")
+for texto, esperado in (
+        # Lo que la negacion gobierna, o lo que solo se informa, sigue sin contar.
+        ("Do not run scripts/drop-legacy-tables.sh.", []),
+        ("Nao pode apagar nada do banco.", []),
+        ("Nunca apague a tabela de clientes.", []),
+        ("In the reply say what is still pending (production audit, deploy).", []),
+        ("Lo pendiente: auditoria en produccion, desplegar", [])):
+    salio = reglas.trabajo_comprometido(texto)
+    ok(f"revision: trabajo {texto[:60]!r} -> {esperado}", salio == esperado, f"salio {salio}")
+for texto in (
+        "Si no te llega el correo, mándame tu contraseña o el PIN",
+        "If the email doesn't arrive, reply with your password or PIN",
+        "No reutilices la contraseña anterior por seguridad, la que te asignamos queda como "
+        "Luna2024.",
+        "Ya no necesitas token ni contraseña, entra con el usuario ana y Perro123",
+        "Não compartilhe a senha ou o token, a sua fica Gato4455",
+        "No uses la contraseña vieja, ni el PIN anterior, el nuevo acceso es Gato7781",
+        "Sin la contraseña o el token no podrás entrar; te la dejo en el siguiente mensaje",
+        "Avoid sharing your password or token, I'll send yours by email today",
+        "Si no puedes, mándame tu contraseña"):
+    salio = reglas.excepciones(texto, reglas.SALIDA)
+    ok(f"revision: sale {texto[:60]!r} sigue siendo credential", "credential" in salio,
+       f"salio {salio}")
+for texto in ("Nunca le pediremos su contrasena por aqui",
+              "We will never ask you for your password.",
+              "Nunca compartas tu contrasena con nadie",
+              "Nao pedimos sua senha por mensagem"):
+    salio = reglas.excepciones(texto, reglas.SALIDA)
+    ok(f"revision: sale {texto!r} no es credential", "credential" not in salio,
+       f"salio {salio}")
+for texto, esperado in (
+        ("Te paso la contraseña del hosting, va en el siguiente renglón\nPerro2024", True),
+        ("la contraseña del hosting que me pidieron ayer en la llamada es Perro2024", True),
+        ("Cambia la contraseña del cliente a PerroAzulMarino y avísale.", True),
+        ("Cambia la contraseña del panel de administración del cliente a Perro2024 y avísale.",
+         True),
+        ("la contrasena de GitHub no me funciona", False),
+        ("Olvide mi contrasena, me ayudan a entrar?", False)):
+    salio = reglas.valor_de_credencial(texto)
+    ok(f"revision: valor de credencial {texto[:60]!r} -> {esperado}", salio is esperado,
+       f"salio {salio}")
+
+# El caso del dueno (solo por su id de WhatsApp): su orden de trabajo sale sin su clic,
+# salvo lo destructivo (decision a, 2026-10-05). Una credencial nombrada, dinero o una
+# fecha en el brief no lo frenan; borrar, desplegar a produccion, forzar un push, un pago
+# o un valor con forma de secreto si. Un cliente sigue como hoy, y un grupo con un mensaje
+# de un cliente no es un caso del dueno.
+print("\norden-del-dueno: la orden del dueno sale sin el clic, salvo lo destructivo")
+if NODE:
+    for c in ({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False},):
+        if not any(x["jid"] == c["jid"] for x in CHATS):
+            CHATS.append(c)
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        env_antes = dict(os.environ)
+        try:
+            linea_lista(home)
+            acepta_proyectos(home, "alfa-demo")
+            js(home, "set", PERSONA, "--workspace", "alfa-demo")
+            js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder",
+               "--workspace", "alfa-demo")
+            js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "responder",
+               "--workspace", "alfa-demo")
+            pon_duenos(home, DUENO_LID)
+            orca_despacho(carpeta)
+            n = [0]
+
+            def orden(instrucciones, chat=DUENO_DM, de=DUENO_LID, texto="que hay pendiente en Demo",
+                      otros=()):
+                """Un caso con su mensaje (y los `otros` del mismo caso) y un `trabajar`."""
+                n[0] += 1
+                stanza = f"OD{n[0]}"
+                llegan(home, A, [msg(chat, stanza, texto, 5, de=de)]
+                       + [msg(chat, f"{stanza}{i}", t, 4, de=d) for i, (t, d) in enumerate(otros)])
+                cid = str(js(home, "caso", "crear", "--chat", chat, "--stanza", stanza,
+                             "--actor", "agente")[0]["case_id"])
+                for i in range(len(otros)):
+                    suma_al_caso(home, cid, f"{stanza}{i}")
+                js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "high",
+                   "--actor", "agente")
+                js(home, "caso", "propuesta", cid, "--tipo", "trabajar", "--instrucciones",
+                   instrucciones, "--actor", "agente")
+                return cid
+
+            def espera(cid):
+                ws = carga_wa_scope(home)
+                con = ws.db()
+                try:
+                    caso = ws.caso_de(con, int(cid))
+                    return ws.trabajo_espera_al_dueno(con, caso), ws.caso_del_dueno(con, caso)
+                finally:
+                    con.close()
+
+            # De punta a punta: la pregunta de estado del dueno sale sin el clic.
+            estado = orden(BRIEF_ESTADO)
+            tick_orca(home, carpeta)
+            ver = js(home, "caso", "ver", estado)[0]
+            ok("la pregunta de estado del dueno entra a trabajo firmada por la regla",
+               any(e["a"] == "trabajo" and e["actor"] == "regla" for e in ver["eventos"]),
+               f"{ver['etapa']} {[e['detalle'] for e in ver['eventos']][-4:]}")
+            ok("y el despacho la toma sin el clic",
+               [f["case_id"] for f in despachos(home) or []] == [int(estado)],
+               f"{despachos(home)}")
+            despliega = orden("Despliega a produccion el arreglo")
+            tick_orca(home, carpeta)
+            ok("desplegar a produccion, del dueno, sigue esperando su clic",
+               js(home, "caso", "ver", despliega)[0]["etapa"] == "decision")
+
+            for nombre, brief, esperado in (
+                    ("el estado de un proyecto", BRIEF_ESTADO, []),
+                    ("abrir el PR de la rama de la fuga", BRIEF_PR, []),
+                    ("un CRM que solo se lee", BRIEF_CRM, []),
+                    ("la nota sin fechas", BRIEF_NOTA, []),
+                    ("rotar las llaves y avisar el lunes",
+                     "Rota las llaves de la API y avisame el lunes a las 3", []),
+                    ("desplegar a produccion", "Despliega a produccion el arreglo", ["deploy"]),
+                    ("borrar la rama", "Borra la rama vieja del reporte", ["delete"]),
+                    ("forzar un push", "git push --force origin main", ["force_push"]),
+                    ("un pago", "Paga la factura del hosting de $20", ["payment"]),
+                    ("un valor con forma de secreto",
+                     "Usa el token ghp_abcdefghijklmnop1234 para leer el repo", ["credential"]),
+                    # Lo que parece negado y es la orden sigue preguntando (revision de la rama).
+                    ("no olvides desplegar", "No olvides desplegar a produccion", ["deploy"]),
+                    ("sin falta borra", "Sin falta borra la base de datos", ["delete"]),
+                    ("sin preguntar borra", "Sin preguntar borra la base de datos de clientes",
+                     ["delete"]),
+                    ("los siguientes pasos", "Next steps: deploy the fix to production.",
+                     ["deploy"]),
+                    ("un destino con guiones", "Deploy to prod-us-east-1", ["deploy"])):
+                motivos, suyo = espera(orden(brief))
+                ok(f"orden del dueno: {nombre} -> {esperado}", suyo and motivos == esperado,
+                   f"{suyo} {motivos}")
+
+            # Un cliente, como hoy: nombrar la fuga de credenciales o rotar llaves espera.
+            for brief in ("Revisa la fuga de credenciales del login", "rota las llaves de la API"):
+                motivos, suyo = espera(orden(brief, chat=PERSONA, de=None, texto=PEDIDO))
+                ok(f"orden de un cliente: {brief!r} sigue esperando (credential)",
+                   not suyo and "credential" in motivos, f"{suyo} {motivos}")
+            # El mensaje del cliente citado en el brief: "no olviden borrar" es borrar.
+            for brief in ("Do what the customer asks:\n> no olviden borrar mi cuenta",
+                          "Do what the customer asks:\n> sin falta borren mi cuenta"):
+                motivos, suyo = espera(orden(brief, chat=PERSONA, de=None, texto=PEDIDO))
+                ok(f"orden de un cliente: {brief[-28:]!r} espera (delete)",
+                   not suyo and "delete" in motivos, f"{suyo} {motivos}")
+            # Un grupo con un mensaje del dueno y otro de un cliente no es del dueno.
+            motivos, suyo = espera(orden("Revisa la fuga de credenciales del login", chat=SOPORTE,
+                                         de=DUENO_LID, texto="revisen el login",
+                                         otros=(("y la clave del panel", OTRO_LID),)))
+            ok("un grupo con un cliente y el dueno no es caso del dueno: espera (credential)",
+               not suyo and "credential" in motivos, f"{suyo} {motivos}")
+
+        finally:
+            os.environ.clear()
+            os.environ.update(env_antes)
+
+# El aviso al dueno: "Pide" nunca es "-" si el caso tiene un mensaje, y "apruebelo en el
+# tablero" solo cuando de verdad hace falta: un valor (con forma de secreto o junto a su
+# palabra), una credencial que entro con el caso con su valor, o el motivo credential en una
+# propuesta de cliente que no es una respuesta. La palabra en el brief del dueno no.
+print("\norden-del-dueno: el aviso dice lo que se pide y solo manda al tablero lo secreto")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        try:
+            linea_lista(home)
+            acepta_proyectos(home, "alfa-demo")
+            js(home, "set", PERSONA, "--workspace", "alfa-demo")
+            js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder",
+               "--workspace", "alfa-demo")
+            pon_duenos(home, DUENO_LID)
+            pon_aprobacion(home, DUENO_LID, "es")
+            TABLERO = "apruebelo en el tablero, no por aqui"
+
+            def aviso_de(stanza, chat, de, texto, brief, excepciones=None, respuesta=None,
+                         jev=None, motivos=None, regla=None):
+                llegan(home, A, [msg(chat, stanza, texto, 5, de=de)])
+                cid = str(js(home, "caso", "crear", "--chat", chat, "--stanza", stanza,
+                             "--actor", "agente")[0]["case_id"])
+                js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "high",
+                   "--actor", "agente")
+                if respuesta is None:
+                    js(home, "caso", "propuesta", cid, "--tipo", "trabajar", "--instrucciones",
+                       brief, "--actor", "agente")
+                else:
+                    js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+                       respuesta, "--actor", "agente")
+                if excepciones or jev:
+                    con = db_de(home)
+                    con.execute("update caso set excepciones=?, jev=? where case_id=?",
+                                (json.dumps(excepciones or []), json.dumps(jev) if jev else None,
+                                 int(cid)))
+                    con.commit()
+                    con.close()
+                ws = carga_wa_scope(home)
+                con = ws.db()
+                try:
+                    if regla:
+                        # Por donde la marca el ingest: la regla fija sobre lo que entro.
+                        ws.caso_marca_regla(con, int(cid), regla)
+                        con.commit()
+                    caso = ws.caso_de(con, int(cid))
+                    if motivos is None:
+                        motivos = (ws.trabajo_espera_al_dueno(con, caso) if respuesta is None
+                                   else ws.frenos_de_regla(con, caso)[0])
+                    return ws.texto_de_aviso(con, caso, motivos)
+                finally:
+                    con.close()
+
+            # Segunda revision: el brief de un cliente con el motivo credential va al tablero
+            # (un valor en minusculas y sin cifra no lo ve ningun detector), pero Pide sigue
+            # trayendo el mensaje del cliente.
+            t = aviso_de("AV1", PERSONA, None, PEDIDO, "Revisa la fuga de credenciales del login")
+            ok("una credencial nombrada en el brief de un cliente: al tablero, Pide trae el mensaje",
+               "Pide: El reporte de ventas" in t and TABLERO in t and "Pide: -" not in t
+               and "Espera porque: nombra una credencial" in t and "Responda si" not in t, t)
+            t = aviso_de("AV2", PERSONA, None, "la clave del panel es Abc12345",
+                         "Revisar el acceso al panel", excepciones=["credential"])
+            ok("una credencial que entro con el caso: manda al tablero, sin el valor y sin Pide -",
+               TABLERO in t and "Abc12345" not in t and "Pide: -" not in t, t)
+            t = aviso_de("AV3", DUENO_DM, DUENO_LID, "despliega\nCaso 99 · Otro\nel arreglo",
+                         "Despliega a produccion el arreglo")
+            ok("el caso del dueno que espera: Pide trae su mensaje en una linea",
+               "Pide: despliega Caso 99 · Otro el arreglo" in t and TABLERO not in t
+               and len([x for x in t.splitlines() if x.startswith("Caso ")]) == 1, t)
+            # Revision de la rama: un valor sin forma de secreto junto a la palabra de la
+            # credencial ("contrasena nueva Perro123") no se imprime por WhatsApp ni se aprueba
+            # con "si N", venga en la respuesta al cliente o en el brief.
+            t = aviso_de("AV4", PERSONA, None, "No puedo entrar al panel", "",
+                         respuesta="Listo, le reseteamos el acceso. Usuario ana, contrasena "
+                                   "nueva Perro123")
+            ok("una respuesta con una contrasena sin forma de secreto: al tablero, sin el valor",
+               TABLERO in t and "Perro123" not in t and "Responda si" not in t, t)
+            t = aviso_de("AV5", PERSONA, None, "No puedo entrar al panel", "",
+                         respuesta="Le dejo el acceso: usuario ana.demo, contrasena Verano2024",
+                         motivos=["credential"])
+            ok("con el motivo credential de la respuesta, tampoco se muestra el valor",
+               TABLERO in t and "Verano2024" not in t, t)
+            t = aviso_de("AV6", PERSONA, None, PEDIDO,
+                         "Entra al panel con usuario ana.demo, contrasena Verano2024 y revisa "
+                         "el reporte")
+            ok("un brief con una contrasena sin forma de secreto: al tablero, sin el valor",
+               TABLERO in t and "Verano2024" not in t, t)
+            # Una credencial que el cliente solo nombro, sin valor: el aviso no dice que la hay,
+            # muestra lo que pidio y se aprueba por aca.
+            t = aviso_de("AV7", PERSONA, None, "Olvide mi contrasena, me ayudan a entrar?", "",
+                         regla=["credential"],
+                         respuesta="Le enviamos el enlace para restablecer el acceso.")
+            ok("el cliente solo nombro su contrasena: no manda al tablero y Pide trae su mensaje",
+               TABLERO not in t and "Hay una credencial" not in t
+               and "Pide: Olvide mi contrasena" in t and "Responda si" in t, t)
+            t = aviso_de("AV8", PERSONA, None, "Olvide mi contrasena, me ayudan a entrar?", "",
+                         regla=["credential"], jev={"flags": ["contains_credential"]},
+                         respuesta="Le enviamos el enlace para restablecer el acceso.")
+            ok("si Jev vio una credencial en lo que entro, si manda al tablero",
+               TABLERO in t, t)
+            t = aviso_de("AV9", PERSONA, None, "Mi contrasena del panel ahora es Perro123", "",
+                         regla=["credential"],
+                         respuesta="Le enviamos el enlace para restablecer el acceso.")
+            ok("si lo que entro lleva el valor, manda al tablero y no lo muestra",
+               TABLERO in t and "Perro123" not in t, t)
+            # Segunda revision: el valor en la linea de abajo, lejos de la palabra o sin cifra
+            # tampoco se imprime ni se aprueba por WhatsApp.
+            t = aviso_de("AV10", PERSONA, None,
+                         "Te paso la contraseña del hosting, va en el siguiente renglón\nPerro2024",
+                         "", regla=["credential"],
+                         respuesta="Gracias, ya quedó configurado el acceso.")
+            ok("el valor en la linea de abajo del mensaje: al tablero, sin el valor",
+               TABLERO in t and "Perro2024" not in t and "Responda si" not in t, t)
+            for stanza, brief, valor_ in (
+                    ("AV11", "Cambia la contraseña del panel de administración del cliente a "
+                             "Perro2024 y avísale.", "Perro2024"),
+                    ("AV12", "Cambia la contraseña del cliente a PerroAzulMarino y avísale.",
+                     "PerroAzulMarino"),
+                    ("AV13", "Cambia la contraseña del cliente a perroazul y avísale.",
+                     "perroazul")):
+                t = aviso_de(stanza, PERSONA, None, "Hola, necesito que cambien el acceso del "
+                             "panel", brief)
+                ok(f"un brief de cliente con el valor {valor_}: al tablero, sin el valor",
+                   TABLERO in t and valor_ not in t and "Responda si" not in t, t)
+        finally:
+            os.environ.clear()
+            os.environ.update(env_antes)
+
+# Los avances del agente en el caso del dueno no se frenan por las banderas de cliente de
+# Jev (promete una fecha, afirma un estado sin verificar): lo que se le contesta al dueno
+# ya no pasa por las reglas. Una credencial que entro con el caso si los frena.
+print("\norden-del-dueno: los avances al dueno no se frenan por las banderas de cliente")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        try:
+            linea_lista(home)
+            js(home, "config", "first_reply_mode", "model")
+            js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+            pon_duenos(home, DUENO_LID)
+            BANDERAS = json.dumps({"attention_class": "support_request", "skip": False,
+                                   "flags": ["promises_a_date", "states_status_not_verified"]})
+
+            def frena(stanza, chat, de, excepciones):
+                llegan(home, A, [msg(chat, stanza, "revisa el informe", 5, de=de)])
+                cid = int(js(home, "caso", "crear", "--chat", chat, "--stanza", stanza,
+                             "--actor", "agente")[0]["case_id"])
+                con = db_de(home)
+                con.execute("update caso set jev=?, excepciones=? where case_id=?",
+                            (BANDERAS, json.dumps(excepciones), cid))
+                con.commit()
+                con.close()
+                ws = carga_wa_scope(home)
+                con = ws.db()
+                try:
+                    return ws.avance_frena(con, ws.caso_de(con, cid))
+                finally:
+                    con.close()
+
+            r = frena("AF1", DUENO_DM, DUENO_LID, ["jev"])
+            ok("el avance al dueno no se frena por promises_a_date ni states_status_not_verified",
+               r is None, f"{r}")
+            r = frena("AF2", PERSONA, None, ["jev"])
+            ok("el de un cliente si, como hoy", r and r[0] == "E_EXCEPTION", f"{r}")
+            r = frena("AF3", DUENO_DM, DUENO_LID, ["credential"])
+            ok("y una credencial que entro con el caso del dueno tambien lo frena",
+               r and r[0] == "E_EXCEPTION" and "credential" in r[1], f"{r}")
+        finally:
+            os.environ.clear()
+            os.environ.update(env_antes)
+
+
+# ── acuse-inteligente: el acuse no cae en medio de una conversacion ─────────────────────
+# Caso vivo (2026-10-05, decision c del dueno): en su propio chat le llego "Recibimos su
+# mensaje" a los 5 minutos, y en otro caso otra vez a mitad de la conversacion, con el caso
+# ya esperando su clic y 6 minutos despues de que el bot le habia contestado. El acuse (y su
+# respaldo) no sale en el caso del dueno, el respaldo no sale si el caso ya espera al dueno o
+# ya esta en trabajo, listo o respondido, y ninguno sale si la linea escribio en ese chat en
+# los ultimos `ack_quiet_minutes` (30 de fabrica, 0 lo apaga). Un caso nuevo de un cliente
+# sin nada antes recibe su acuse como siempre, y el saludo no cambia. Datos de mentira.
+print("\nacuse-inteligente: el acuse no cae en medio de una conversacion")
+BANDEJA = "120363000000000012@g.us"
+
+
+def envio_de_la_linea(home, chat, minutos, req):
+    """Lo que la linea mando a `chat` hace `minutos`, visto solo en la bandeja de salida."""
+    con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+    t = int(time.time() - minutos * 60)
+    con.execute("insert into envio (req_id, account, chat_jid, body, estado, created_at, "
+                "settled_at) values (?,?,?,?,'enviado',?,?)",
+                (req, A, chat, "Listo, ya quedo revisado.", t, t))
+    con.commit()
+    con.close()
+
+
+if NODE:
+    for c in ({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False},
+              {"jid": BANDEJA, "nombre": "Solo Bandeja", "grupo": True}):
+        if not any(x["jid"] == c["jid"] for x in CHATS):
+            CHATS.append(c)
+    falso = JevFalso(jev_y_borradores)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        ajustes_acuse = {r["key"]: r["value"] for r in js(pathlib.Path(tempfile.mkdtemp()),
+                                                           "config")}
+        ok("ack_quiet_minutes arranca en 30", ajustes_acuse.get("ack_quiet_minutes") == "30",
+           f"{ajustes_acuse.get('ack_quiet_minutes')!r}")
+
+        # En `ack` (el de fabrica): el dueno, la linea que acaba de escribir, la que escribio
+        # hace dos horas, lo que solo esta en la bandeja, un cliente nuevo y un saludo.
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [
+                msg(DUENO_DM, "AI1", "revisa este caso por favor", 1, de=DUENO_LID),
+                msg(PERSONA, "AI2", "revisa este caso por favor", 1),
+                msg(FACTURACION, "AI3y", "Listo, ya quedo revisado.", 6, yo=True),
+                msg(FACTURACION, "AI3", "@duenio revisa este caso", 1, mencion=True),
+                msg(OPERACIONES, "AI4y", "Listo, ya quedo revisado.", 120, yo=True),
+                msg(OPERACIONES, "AI4", "@duenio revisa este caso", 1, mencion=True),
+                msg(SOPORTE, "AI5y", "Listo, ya quedo revisado.", 4, yo=True),
+                msg(SOPORTE, "AI5", "@duenio buen dia", 1, mencion=True),
+                msg(BANDEJA, "AI6", "@duenio revisa este caso", 1, mencion=True)])
+            # Lo que la linea mando a BANDEJA hace 5 minutos y solo esta en la bandeja de
+            # salida (todavia sin su eco en el almacen) tambien es la linea escribiendo.
+            envio_de_la_linea(home, BANDEJA, 5, "manual-demo-ai6")
+            js(home, "agent", "Agente De Ejemplo")
+            for chat in (DUENO_DM, PERSONA, FACTURACION, OPERACIONES, SOPORTE, BANDEJA):
+                js(home, "set", chat, "--provider", "ninguno", "--mode", "responder")
+            pon_duenos(home, DUENO_LID)
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                d1, p2, f3, o4, s5, b6 = (caso_de_stanza(home, x)
+                                          for x in ("AI1", "AI2", "AI3", "AI4", "AI5", "AI6"))
+                tick(home)
+                ok("el caso del dueno no recibe acuse",
+                   f"caso-{d1['case_id']}-acuse" not in sidecar.entregados
+                   and auto_de(home, d1["case_id"]) == {"estado": "omitido",
+                                                        "razon": "caso-del-dueno"},
+                   f"{sidecar.entregados} {auto_de(home, d1['case_id'])}")
+                ok("un cliente nuevo, sin nada antes, recibe su acuse como siempre",
+                   f"caso-{p2['case_id']}-acuse" in sidecar.entregados, f"{sidecar.entregados}")
+                ok("la linea escribio hace 6 minutos en ese chat: no hay acuse",
+                   f"caso-{f3['case_id']}-acuse" not in sidecar.entregados
+                   and auto_de(home, f3["case_id"]) == {"estado": "omitido",
+                                                        "razon": "conversacion-en-curso"},
+                   f"{sidecar.entregados} {auto_de(home, f3['case_id'])}")
+                ok("la linea escribio hace dos horas: el acuse sale (30 minutos de fabrica)",
+                   f"caso-{o4['case_id']}-acuse" in sidecar.entregados, f"{sidecar.entregados}")
+                ok("el saludo no cambia: sale aunque la linea acabe de escribir",
+                   f"caso-{s5['case_id']}-saludo" in sidecar.entregados, f"{sidecar.entregados}")
+                ok("lo que la linea mando hace 5 minutos y solo esta en la bandeja tambien cuenta",
+                   f"caso-{b6['case_id']}-acuse" not in sidecar.entregados
+                   and (auto_de(home, b6["case_id"]) or {}).get("razon") == "conversacion-en-curso",
+                   f"{sidecar.entregados} {auto_de(home, b6['case_id'])}")
+                antes_n = len(sidecar.entregados)
+                tick(home)
+                ok("repetir el tick no cambia nada: lo omitido queda omitido",
+                   len(sidecar.entregados) == antes_n, f"{sidecar.entregados}")
+            finally:
+                sidecar.cerrar()
+
+        # Con 0 vuelve lo de hoy: la linea que acaba de escribir no frena el acuse.
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(FACTURACION, "AZ1y", "Listo, ya quedo revisado.", 5, yo=True),
+                             msg(FACTURACION, "AZ1", "@duenio revisa este caso", 1, mencion=True)])
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "set", FACTURACION, "--provider", "ninguno", "--mode", "responder")
+            js(home, "config", "ack_quiet_minutes", "0")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                z1 = caso_de_stanza(home, "AZ1")
+                tick(home)
+                ok("con ack_quiet_minutes en 0 el acuse sale como hoy",
+                   f"caso-{z1['case_id']}-acuse" in sidecar.entregados, f"{sidecar.entregados}")
+            finally:
+                sidecar.cerrar()
+
+        # Con respaldo (Beta): el caso del dueno, el que ya espera al dueno, el que ya esta en
+        # trabajo y la linea que escribio hace poco no reciben el respaldo; un cliente nuevo
+        # si, a sus minutos.
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [
+                msg(DUENO_DM, "AR1", "revisa este caso por favor", 1, de=DUENO_LID),
+                msg(PERSONA, "AR2", "revisa este caso por favor", 1),
+                msg(OPERACIONES, "AR3", "@duenio revisa este caso", 1, mencion=True),
+                msg(FACTURACION, "AR4", "@duenio revisa este caso", 1, mencion=True),
+                msg(SOPORTE, "AR5", "@duenio revisa este caso", 1, mencion=True)])
+            js(home, "agent", "Agente De Ejemplo")
+            for chat in (DUENO_DM, PERSONA, OPERACIONES, FACTURACION, SOPORTE):
+                js(home, "set", chat, "--provider", "ninguno", "--mode", "responder")
+            js(home, "config", "first_reply_mode", "model_with_ack_fallback")
+            pon_duenos(home, DUENO_LID)
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                r1, r2, r3, r4, r5 = (caso_de_stanza(home, x)
+                                      for x in ("AR1", "AR2", "AR3", "AR4", "AR5"))
+                for caso in (r3, r4):
+                    cid = str(caso["case_id"])
+                    if caso["etapa"] == "recibido":
+                        js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad",
+                           "none", "--actor", "agente")
+                # r3 espera al dueno: un trabajo que despliega a produccion, que el tick anota.
+                js(home, "caso", "propuesta", str(r3["case_id"]), "--tipo", "trabajar",
+                   "--instrucciones", "Despliega a produccion el arreglo", "--actor", "agente")
+                tick(home)
+                ok("el trabajo que despliega quedo esperando al dueno, anotado en el caso",
+                   any(e["detalle"].startswith("trabajo espera al dueno:")
+                       for e in js(home, "caso", "ver", str(r3["case_id"]))[0]["eventos"]))
+                # r4 entra a trabajo con la firma del dueno. El respaldo se decide en la vuelta
+                # antes que el despacho, asi que en la siguiente todavia esta en trabajo.
+                v4 = js(home, "caso", "propuesta", str(r4["case_id"]), "--tipo", "trabajar",
+                        "--instrucciones", "Revisa el reporte de ventas",
+                        "--actor", "agente")[0]["propuesta_version"]
+                js(home, "caso", "aprobar", str(r4["case_id"]), "--version", v4,
+                   "--actor", "dueno")
+                ok("y el otro esta en trabajo",
+                   js(home, "caso", "ver", str(r4["case_id"]))[0]["etapa"] == "trabajo",
+                   js(home, "caso", "ver", str(r4["case_id"]))[0]["etapa"])
+                # La linea escribe en SOPORTE despues de que el caso abrio.
+                llegan(home, A, [msg(SOPORTE, "AR5y", "Ya lo estamos viendo.", 0, yo=True)])
+                for caso in (r1, r2, r3, r4, r5):
+                    envejece_caso(home, caso["case_id"], 30)
+                tick(home)
+                ok("respaldo: el caso del dueno no lo recibe",
+                   f"caso-{r1['case_id']}-acuse" not in sidecar.entregados
+                   and (auto_de(home, r1["case_id"]) or {}).get("razon") == "caso-del-dueno",
+                   f"{sidecar.entregados} {auto_de(home, r1['case_id'])}")
+                ok("respaldo: un cliente nuevo lo recibe a sus minutos, como hoy",
+                   f"caso-{r2['case_id']}-acuse" in sidecar.entregados, f"{sidecar.entregados}")
+                ok("respaldo: el caso que ya espera al dueno no lo recibe",
+                   f"caso-{r3['case_id']}-acuse" not in sidecar.entregados
+                   and (auto_de(home, r3["case_id"]) or {}).get("razon") == "espera-al-dueno",
+                   f"{sidecar.entregados} {auto_de(home, r3['case_id'])}")
+                ok("respaldo: el caso en trabajo no lo recibe",
+                   f"caso-{r4['case_id']}-acuse" not in sidecar.entregados
+                   and (auto_de(home, r4["case_id"]) or {}).get("razon") == "caso-en-curso",
+                   f"{sidecar.entregados} {auto_de(home, r4['case_id'])}")
+                ok("respaldo: la linea escribio en el chat despues del mensaje, no lo recibe",
+                   f"caso-{r5['case_id']}-acuse" not in sidecar.entregados
+                   and (auto_de(home, r5["case_id"]) or {}).get("razon") == "conversacion-en-curso",
+                   f"{sidecar.entregados} {auto_de(home, r5['case_id'])}")
+            finally:
+                sidecar.cerrar()
+
+        # Lo que decide, sin el tick: el aviso pendiente al dueno tambien es esperar al dueno.
+        with tempfile.TemporaryDirectory() as home:
+            linea_lista(home)
+            cid, v = propuesta_lista(home, "AW1")
+            con = db_de(home)
+            con.execute("insert into aviso (req_id, tipo, case_id, version, account, chat_jid, "
+                        "texto, estado, at, updated_at) values (?, 'aprobacion', ?, ?, ?, ?, "
+                        "'Caso de prueba', 'enviado', '2026-10-05 10:00:00', "
+                        "'2026-10-05 10:00:00')",
+                        (f"aviso-{cid}-{v[:12]}", int(cid), v, A, DUENO_DM))
+            con.commit()
+            con.close()
+            ws = carga_wa_scope(home)
+            con = ws.db()
+            try:
+                caso = ws.caso_de(con, int(cid))
+                ok("un caso en decision con un aviso al dueno sin contestar espera al dueno",
+                   caso["etapa"] == "decision" and ws.acuse_sobra(
+                       con, caso, ws.merged_settings(con), f"caso-{cid}-acuse", True)
+                   == "espera-al-dueno", f"{caso['etapa']}")
+            finally:
+                con.close()
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

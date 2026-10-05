@@ -2043,6 +2043,10 @@ DEFAULT_CONFIG = {
     # mucho, y `updates_max` por caso, el primer mensaje incluido.
     "first_reply_mode": "ack",
     "ack_fallback_minutes": "5",
+    # El acuse (y su respaldo) no sale en un chat donde la linea escribio en los ultimos
+    # `ack_quiet_minutes` antes del caso o despues: no cae en medio de una conversacion
+    # (decision c del dueno, 2026-10-05). 0 lo apaga. Sale al panel (`ackQuietMinutes`).
+    "ack_quiet_minutes": "30",
     "update_every_minutes": "10",
     "updates_max": "3",
     # La cuenta de Claude con que se abren el agente de casos y el del proyecto: el id de
@@ -3478,6 +3482,14 @@ def propuesta_tipo(caso):
 # agente no hace nada ahi por su cuenta.
 MODOS_SIN_CLIC = ("responder", "borrador")
 
+# Decision (a) del dueno (2026-10-05): una orden de trabajo del dueno sale sin su clic,
+# salvo lo destructivo, que sigue preguntando: borrar, desplegar a produccion, forzar un
+# push y un pago. Nombrar una credencial, el dinero o una fecha en el brief de SU caso no lo
+# frena: es lo que el pidio. Un valor con forma de secreto, una credencial que entro con el
+# caso, el proyecto, el modo y lo viejo si. Solo para el caso del dueno (`caso_del_dueno`,
+# por su id de WhatsApp); la parte B (roles) lo extiende al Super admin con `rol_del_caso`.
+MOTIVOS_QUE_NO_FRENAN_AL_DUENO = ("credential", "money", "commitment")
+
 
 def trabajo_espera_al_dueno(con, caso):
     """Por que un `trabajar` no puede ir al agente del proyecto sin el clic del dueno, o []
@@ -3499,8 +3511,13 @@ def trabajo_espera_al_dueno(con, caso):
         propuesta = None
     if not isinstance(propuesta, dict) or not propuesta.get("instrucciones"):
         return ["no_instructions"]
-    motivos = list(wa_reglas.trabajo_comprometido(
-        " \n".join(str(propuesta.get(k) or "") for k in ("instrucciones", "respuesta"))))
+    texto = " \n".join(str(propuesta.get(k) or "") for k in ("instrucciones", "respuesta"))
+    motivos = list(wa_reglas.trabajo_comprometido(texto))
+    del_dueno = caso_del_dueno(con, caso)
+    if del_dueno:
+        # Su orden (decision a): lo nombrado no frena; un valor con forma de secreto si.
+        motivos = [m for m in motivos if m not in MOTIVOS_QUE_NO_FRENAN_AL_DUENO
+                   or (m == "credential" and wa_reglas.secreto(texto))]
     scope = merged_scope(con).get(caso["chat_jid"]) or {}
     if scope.get("mode") not in MODOS_SIN_CLIC:
         motivos.append("mode")
@@ -3517,7 +3534,10 @@ def trabajo_espera_al_dueno(con, caso):
     elif (not proyecto or (repo and repo not in (proyecto["id"], proyecto.get("path"),
                                                  proyecto.get("name")))):
         motivos.append("outside_project")
-    if _lista_json(caso.get("excepciones")):
+    excepciones = _lista_json(caso.get("excepciones"))
+    # En el caso del dueno, de lo que entro solo frena una credencial: lo demas que Jev le
+    # marca a su mensaje (una fecha, un estado) son banderas de cliente.
+    if excepciones and (not del_dueno or "credential" in excepciones):
         motivos.append("exceptions")
     hecha = con.execute("select at from caso_evento where case_id=? and detalle=? "
                         "order by id desc limit 1",
@@ -3909,6 +3929,12 @@ def avance_frena(con, caso):
         resumen = {}
     riesgo = [f for f in (resumen.get("flags") if isinstance(resumen, dict) else None) or []
               if f not in BANDERAS_SIN_RIESGO]
+    if (excepciones or riesgo) and caso_del_dueno(con, caso):
+        # Al dueno no se le cuidan las banderas de cliente de Jev (promete una fecha, afirma
+        # un estado sin verificar), igual que su respuesta (T22.1): solo frena una credencial
+        # que entro con el caso, y el secreto lo sigue frenando `wa-send` en el texto.
+        excepciones = [e for e in excepciones if e == "credential"]
+        riesgo = []
     if excepciones or riesgo:
         return ("E_EXCEPTION", f"case #{cid} waits for the owner ({', '.join(excepciones + riesgo)}): "
                                f"no updates go to the customer")
@@ -4601,7 +4627,7 @@ def tick_auto_cierra(con, fila, estado, razon, detalle, **campos):
         raise
 
 
-def auto_omite(caso, scope, ajustes, tipo):
+def auto_omite(con, caso, scope, ajustes, tipo):
     """La razon por la que NO se manda, o None si se manda. Se mira de nuevo al mandar:
     entre el ingest y el tick el dueno pudo cambiar el chat, o el caso pudo marcarse."""
     if caso["etapa"] == "cerrado" and tipo == "acuse":
@@ -4610,6 +4636,10 @@ def auto_omite(caso, scope, ajustes, tipo):
         return "modo"
     if not auto_ajuste(scope.get(caso["chat_jid"]), ajustes, tipo)[0]:
         return "apagado"
+    # Decision c del dueno: el dueno no espera un "Recibimos su mensaje" de su propia linea.
+    # Solo lo decide su id de WhatsApp (`caso_del_dueno`); el saludo sigue como siempre.
+    if tipo == "acuse" and caso_del_dueno(con, caso):
+        return RAZON_DUENO
     if _lista_json(caso.get("excepciones")):
         return "excepcion"
     try:
@@ -4625,6 +4655,80 @@ def auto_omite(caso, scope, ajustes, tipo):
 # primer mensaje es del agente), o del caso ya salio (o esta saliendo) otro mensaje.
 RAZON_PRIMER_AGENTE = "primer-mensaje-del-agente"
 RAZON_YA_SALIO = "ya-salio-un-mensaje"
+
+# Decision c del dueno (2026-10-05): el acuse no cae en medio de una conversacion. No sale en
+# el caso del dueno (`auto_omite`); el de respaldo no sale si el caso ya espera al dueno o ya
+# esta en marcha; y ninguno sale si la linea escribio en ese chat en los ultimos
+# `ack_quiet_minutes` antes del caso, o despues: quien escribio no esta esperando en silencio.
+RAZON_DUENO = "caso-del-dueno"
+RAZON_ESPERA_DUENO = "espera-al-dueno"
+RAZON_EN_CURSO = "caso-en-curso"
+RAZON_CONVERSACION = "conversacion-en-curso"
+# Las etapas en que el caso ya tiene quien lo mueve: un respaldo ahi llega tarde y fuera de
+# lugar.
+ETAPAS_SIN_RESPALDO = ("trabajo", "listo", "respondido")
+# Un aviso al dueno que sigue abierto: el caso esta en sus manos.
+ESTADOS_AVISO_ABIERTO = ("preparando", "pendiente", "enviado", "contestando")
+# Lo de la bandeja que ya es la linea escribiendo: lo que sale, esta saliendo o salio.
+ESTADOS_ENVIO_DE_LA_LINEA = ("pendiente", "enviando", "enviado")
+
+
+def caso_espera_al_dueno(con, caso):
+    """Si el caso en decision ya esta en manos del dueno: lo que las reglas anotaron sobre
+    su version (`espera_del_dueno`, que es lo que dispara el aviso), o un aviso suyo que
+    sigue abierto."""
+    if caso["etapa"] != "decision":
+        return False
+    if espera_del_dueno(con, caso) is not None:
+        return True
+    marcas = ",".join("?" * len(ESTADOS_AVISO_ABIERTO))
+    return bool(con.execute(
+        f"select 1 from aviso where case_id=? and tipo in ('aprobacion', 'bloqueo') and "
+        f"estado in ({marcas}) limit 1", (caso["case_id"], *ESTADOS_AVISO_ABIERTO)).fetchone())
+
+
+def linea_escribio(caso, desde, excepto):
+    """Si la linea escribio en el chat del caso desde `desde` (epoch): un mensaje suyo en el
+    almacen (lo que mando el bot, o el dueno desde su telefono) o algo suyo en la bandeja de
+    salida que todavia no tiene su eco. `excepto` es el id de wa-send del propio acuse: lo
+    suyo no cuenta. Sin almacen no se sabe, y no frena (sin almacen tampoco hay linea)."""
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return False
+    try:
+        marcas = ",".join("?" * len(ESTADOS_ENVIO_DE_LA_LINEA))
+        if fuente.execute(
+                f"select 1 from envio where account=? and chat_jid=? and req_id<>? and "
+                f"estado in ({marcas}) and coalesce(settled_at, claimed_at, created_at) >= ? "
+                f"limit 1", (caso["account"], caso["chat_jid"], excepto,
+                             *ESTADOS_ENVIO_DE_LA_LINEA, int(desde))).fetchone():
+            return True
+        return bool(fuente.execute(
+            "select 1 from mensaje where account=? and chat_jid=? and from_me=1 and revocado=0 "
+            "and ts >= ? and stanza_id not in (select stanza_id from envio where req_id=? and "
+            "stanza_id is not null) limit 1",
+            (caso["account"], caso["chat_jid"], int(desde), excepto)).fetchone())
+    except sqlite3.Error:
+        return False
+    finally:
+        fuente.close()
+
+
+def acuse_sobra(con, caso, ajustes, req_id, respaldo):
+    """La razon por la que este acuse ya no hace falta (decision c del dueno), o None. Con
+    `respaldo` (Beta) tambien cuenta que el caso ya espere al dueno o ya este en marcha."""
+    if respaldo:
+        if caso["etapa"] in ETAPAS_SIN_RESPALDO:
+            return RAZON_EN_CURSO
+        if caso_espera_al_dueno(con, caso):
+            return RAZON_ESPERA_DUENO
+    minutos = primer_numero(ajustes, "ack_quiet_minutes")
+    if minutos > 0:
+        desde = (sello_a_epoch(caso.get("created_at")) or time.time()) - minutos * 60
+        if linea_escribio(caso, desde, req_id):
+            return RAZON_CONVERSACION
+    return None
 
 
 def caso_ya_escribio(con, caso, estados):
@@ -4718,10 +4822,19 @@ Manda los acuses y saludos pendientes, antes que cualquier propuesta: son lo que
                 continue
             if espera == "temprano":
                 continue
-        razon = auto_omite(caso, scope, ajustes, fila["tipo"])
+        razon = auto_omite(con, caso, scope, ajustes, fila["tipo"])
         if razon:
             tick_auto_cierra(con, fila, "omitido", razon, f"{fila['tipo']} omitido: {razon}")
             continue
+        # Lo que ya esta en la bandeja (o un respaldo que ya tomo su lugar) no se juzga de
+        # nuevo: sigue su camino con su id, y un reintento no lo duplica.
+        if (fila["tipo"] == "acuse" and fila.get("estado") != "enviando"
+                and estados.get(fila["req_id"]) is None):
+            razon = acuse_sobra(con, caso, ajustes, fila["req_id"],
+                                modo == "model_with_ack_fallback")
+            if razon:
+                tick_auto_cierra(con, fila, "omitido", razon, f"acuse omitido: {razon}")
+                continue
         if (fila["tipo"] == "acuse" and modo == "model_with_ack_fallback"
                 and not respaldo_toma(con, fila)):
             tick_auto_cierra(con, fila, "omitido", RAZON_YA_SALIO,
@@ -5283,6 +5396,10 @@ def caso_marca_jev(con, case_id, juicio, stanza=None):
         con.execute("update caso set jev=? where case_id=?", (resumen, case_id))
 
 
+# El evento con que la regla fija anota en el caso lo que entro (sus NOMBRES).
+REGLA_FIJA_EXCEPCIONES = "regla fija: excepciones "
+
+
 def caso_marca_regla(con, case_id, excepciones, stanza=None):
     """El piso fijo (T19), en el caso: las excepciones que dio `wa_reglas` se suman a las
     que ya tenia (las de Jev o las de antes) y nunca se borran, igual que en
@@ -5299,7 +5416,7 @@ def caso_marca_regla(con, case_id, excepciones, stanza=None):
     if unidas == previas:
         return False
     nuevas = [e for e in unidas if e not in previas]
-    caso_tocar(con, caso, "regla", "regla fija: excepciones " + ", ".join(nuevas),
+    caso_tocar(con, caso, "regla", REGLA_FIJA_EXCEPCIONES + ", ".join(nuevas),
                excepciones=json.dumps(unidas))
     return True
 
@@ -7289,7 +7406,7 @@ ESTADO = re.compile(r"^(estado|status)$", re.I)
 
 # Los motivos de una espera, en palabras del chat. Lo que no esta aca sale con su codigo.
 MOTIVOS_AVISO = {
-    "es": {"money": "menciona dinero", "credential": "hay una credencial",
+    "es": {"money": "menciona dinero", "credential": "nombra una credencial",
            "commitment": "compromete una fecha", "jev": "Jev lo freno",
            "jev-unavailable": "Jev no contesto", "secret": "lleva un secreto",
            "borrador": "el chat pide su visto antes de enviar",
@@ -7303,7 +7420,7 @@ MOTIVOS_AVISO = {
            "project_question": "la pregunta de proyecto es suya",
            "mode": "el chat no responde solo", "stale": "la propuesta tiene mas de un dia",
            "exceptions": "el caso trae excepciones", "no_instructions": "no trae instrucciones"},
-    "en": {"money": "it mentions money", "credential": "a credential is involved",
+    "en": {"money": "it mentions money", "credential": "it names a credential",
            "commitment": "it commits to a date", "jev": "Jev held it",
            "jev-unavailable": "Jev did not answer", "secret": "it carries a secret",
            "borrador": "the chat asks for your OK before sending",
@@ -7343,6 +7460,7 @@ TEXTOS_AVISO = {
            "no_se_pudo": "Caso {n}: no se pudo ({x}). Mirelo en el tablero.",
            "sin_confirmar": "Caso {n}: no pude confirmar su respuesta; mirelo en el tablero.",
            "motivo_oculto": "el motivo lleva una credencial: mirelo en el tablero.",
+           "pide_oculto": "lo que pidio lleva una credencial (mirelo en el tablero)",
            "estado_vacio": "No hay casos abiertos.",
            "estado_mas": "y {x} mas en el tablero.",
            "desde": "desde {x}",
@@ -7372,6 +7490,7 @@ TEXTOS_AVISO = {
            "no_se_pudo": "Case {n}: it could not be done ({x}). Check the board.",
            "sin_confirmar": "Case {n}: I could not confirm your answer; check the board.",
            "motivo_oculto": "the reason carries a credential: check the board.",
+           "pide_oculto": "what was asked carries a credential (check the board)",
            "estado_vacio": "No open cases.",
            "estado_mas": "and {x} more on the board.",
            "desde": "since {x}",
@@ -7483,18 +7602,105 @@ def espera_del_dueno(con, caso):
     return None
 
 
+# Los motivos que dicen que lo que sale lleva de verdad una credencial: un valor con forma
+# de secreto (el piso fijo) o una que Jev vio en el texto. "credential" solo es la palabra:
+# cuenta cuando la respuesta que se mostraria la nombra (orden-del-dueno).
+MOTIVOS_CON_SECRETO = (wa_reglas.SECRETO, "contains_credential")
+
+
+def textos_del_caso(con, caso):
+    """Los textos de los mensajes del caso, del almacen en solo lectura, o None si no se
+    pueden leer (sin almacen no se sabe que dicen)."""
+    stanzas = stanzas_de_caso(con, caso["case_id"])
+    if not stanzas:
+        return []
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return None
+    try:
+        textos = []
+        for i in range(0, len(stanzas), 500):
+            parte = stanzas[i:i + 500]
+            textos += [r[0] or "" for r in fuente.execute(
+                f"select body from mensaje where account=? and stanza_id in "
+                f"({','.join('?' * len(parte))})", (caso["account"], *parte))]
+        return textos
+    except sqlite3.Error:
+        return None
+    finally:
+        fuente.close()
+
+
+def credencial_que_entro(con, caso):
+    """Si lo que entro con el caso lleva de verdad una credencial. Una que puso Jev (o que no
+    se sabe de donde vino) si; una que la regla fija puso por la palabra ("olvide mi
+    contrasena") solo si Jev la vio despues o algun mensaje del caso trae el valor. Sin
+    almacen, se cuida: cuenta."""
+    if "credential" not in _lista_json(caso.get("excepciones")):
+        return False
+    try:
+        jev = json.loads(caso.get("jev") or "null")
+    except (TypeError, ValueError):
+        jev = None
+    if isinstance(jev, dict) and "contains_credential" in (jev.get("flags") or []):
+        return True
+    eventos = con.execute("select detalle from caso_evento where case_id=? and detalle like ?",
+                          (caso["case_id"], REGLA_FIJA_EXCEPCIONES + "%")).fetchall()
+    por_la_regla = any("credential" in _codigos(d[len(REGLA_FIJA_EXCEPCIONES):])
+                       for (d,) in eventos)
+    if not por_la_regla:
+        return True
+    textos = textos_del_caso(con, caso)
+    return textos is None or any(wa_reglas.valor_de_credencial(x) for x in textos)
+
+
+def detector_de_valor(con, caso):
+    """Con que se mira si un texto del caso lleva el valor de una credencial. En el de un
+    cliente, tambien un valor junto a su palabra ("contrasena nueva Perro123"); en el del
+    dueno solo uno con forma de secreto: lo demas lo escribio el y es su orden (decision a)."""
+    return wa_reglas.secreto if caso_del_dueno(con, caso) else wa_reglas.valor_de_credencial
+
+
 def lleva_credencial(con, caso, motivos):
-    """Si el caso lleva una credencial: su aviso no la muestra y se aprueba en el tablero,
-    nunca por WhatsApp. Un valor con forma de secreto cuenta, venga de la propuesta o de lo
-    que pidio el cliente (el titulo o su primer mensaje)."""
+    """Si el caso lleva una credencial de verdad: su aviso no la muestra y se aprueba en el
+    tablero, nunca por WhatsApp. Cuenta una credencial que entro con el caso
+    (`credencial_que_entro`), el valor de una en la propuesta o en lo que pidio el cliente
+    (`detector_de_valor`), un motivo que lo dice (`MOTIVOS_CON_SECRETO`), o el motivo
+    "credential": en una respuesta, cuando la que se mostraria nombra una; en cualquier otra
+    propuesta de un cliente, siempre (segunda revision de orden-del-dueno: un valor en
+    minusculas y sin cifra, "a perroazul", no lo ve ningun detector y no puede salir por
+    WhatsApp). En el caso del dueno, nombrarla en su brief no cuenta: el caso vivo pedia el
+    tablero porque el brief decia "nunca incluyas una credencial"."""
     try:
         propuesta = json.loads(caso.get("propuesta") or "null") or {}
     except (TypeError, ValueError):
         propuesta = {}
-    cuerpo = str(propuesta.get(CAMPO_DE_TIPO.get(propuesta.get("tipo"), "respuesta")) or "")
-    return bool("credential" in _lista_json(caso.get("excepciones"))
-                or wa_reglas.secreto(cuerpo) or wa_reglas.secreto(que_pide(con, caso))
-                or "credential" in (motivos or []))
+    cuerpos = [str(propuesta.get(k) or "") for k in ("instrucciones", "respuesta")]
+    motivos = set(motivos or [])
+    valor = detector_de_valor(con, caso)
+    if propuesta.get("tipo") == "responder":
+        por_el_motivo = "credential" in wa_reglas.excepciones(cuerpos[1], wa_reglas.SALIDA)
+    else:
+        por_el_motivo = not caso_del_dueno(con, caso)
+    return bool(credencial_que_entro(con, caso)
+                or any(valor(c) for c in cuerpos)
+                or valor(que_pide(con, caso))
+                or motivos & set(MOTIVOS_CON_SECRETO)
+                or ("credential" in motivos and por_el_motivo))
+
+
+def pide_del_aviso(con, caso):
+    """Lo que pide el caso, para el aviso: nunca "-" si hay un mensaje. El titulo, el resumen
+    o un pedazo del primer mensaje, en una linea (`recorta`, como la cabecera del caso: un
+    salto no finge una linea). Si eso lleva el valor de una credencial, o el caso trajo una
+    de verdad y solo queda el mensaje, se dice que la hay y no se muestra."""
+    pide = que_pide(con, caso)
+    solo_mensaje = not (caso.get("titulo") or caso.get("resumen"))
+    if pide != "-" and (detector_de_valor(con, caso)(pide) or (
+            solo_mensaje and credencial_que_entro(con, caso))):
+        return aviso_textos()["pide_oculto"]
+    return pide
 
 
 def texto_de_aviso(con, caso, motivos):
@@ -7507,10 +7713,9 @@ def texto_de_aviso(con, caso, motivos):
         propuesta = {}
     tipo = propuesta.get("tipo")
     cuerpo = str(propuesta.get(CAMPO_DE_TIPO.get(tipo, "respuesta")) or "")
-    pide = que_pide(con, caso)
     credencial = lleva_credencial(con, caso, motivos)
     lineas = [f"{tx['caso'].format(n=n)} · {nombre_del_chat(con, caso['chat_jid'])}",
-              tx["pide"].format(x=pide if not credencial else "-"),
+              tx["pide"].format(x=pide_del_aviso(con, caso)),
               tx["espera"].format(x=motivos_en_palabras(motivos))]
     if credencial:
         lineas.append(tx["credencial"])

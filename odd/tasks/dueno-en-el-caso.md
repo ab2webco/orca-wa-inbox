@@ -130,3 +130,68 @@ chats already skip the rule levels in `frenos_de_regla`), Jev.
   `\n\nSender: the owner…` produced that line; GREEN: check-casos 1174/1174). The harness
   also says the sender line is the plugin's own line under the title, and that a case file
   saying "data from the customer" is a customer's case whatever else it says.
+
+## Follow-up (2026-10-05): the owner's orders and a smarter acknowledgement
+
+The owner reported that credentials, money and dates were being invented by word matching,
+and that "Recibimos su mensaje" landed in the middle of a conversation (in his own chat, 5
+minutes in, and again 6 minutes after the bot had answered him while the case already waited
+for his click). Two decisions:
+
+- **(a) Owner orders.** A work order from the owner runs without his click, except destructive
+  work, which keeps asking: delete, deploy to production, force push, payment. The rules judge
+  real facts (an affirmative order, a secret-shaped value, a credential that came in), not a
+  negated mention, a branch name or a "pending" list.
+- **(c) Smarter acknowledgement.** The acknowledgement never lands in the middle of a
+  conversation: none in an owner case; no fallback once the case waits for the owner or is in
+  trabajo, listo or respondido; and none when the line wrote in that chat within
+  `ack_quiet_minutes` (global, 0 to 240, default 30, 0 = off; panel key `ackQuietMinutes`, next
+  to the acknowledgement in the Automatic replies card). The greeting is unchanged.
+
+Checklist:
+
+- [x] O1 Rules: negated mentions, identifiers and pending lists no longer count (`wa_reglas`).
+      RED: rule tests 17/27; GREEN with O2 and O3.
+- [x] O2 Owner orders run without the click except delete, deploy, force push and payment;
+      the notice says what was asked and only sends a real credential to the board.
+      RED: owner, notice and update tests 44/49; GREEN: 50/50, `npm run check` exit 0.
+- [x] O3 Acknowledgement: new skip reasons `caso-del-dueno`, `espera-al-dueno`,
+      `caso-en-curso` and `conversacion-en-curso`; the line's outgoing messages are read from
+      `mensaje` (`from_me=1`) and from the outbox (`envio`), never counting the acknowledgement's
+      own request. Setting wired in `wa_settings`, `DEFAULT_CONFIG`, the panel and the sync back.
+      RED: check-casos section 9 of 16 failing (plus the missing `acuse_sobra`), panel section
+      crashing on the missing field (the check-clis cases were written before the code but
+      their RED was not run on its own). GREEN: section 17/17,
+      panels 1300/1300, check-clis and `npm run check` (see Result below).
+
+Result of the follow-up: `npm run check` exit 0 with `ack_quiet_minutes` in place: check-casos
+1380/1380, check-clis 341 settings checks, panels 1300/1300, worker 410/410, shots 1572
+captures with no overflow or JS errors (in `~/Projects/.capturas-orden`). The new
+`config-acuse-silencio` state was looked at in ES and EN at 1440, 768, 390 and 320, light and
+dark, and in PT at 1440 and 320, light and dark.
+
+### Second review of the follow-up (2026-10-05)
+
+A second review found seven real defects, all fixed on the safe side (when in doubt, a
+destructive or customer-facing exception counts):
+
+- [x] O4 Destructive work is no longer hidden: a pending status stops at a consequence ("is
+      still pending, so drop the table") and never covers a destructive verb that takes an
+      object ("what remains pending: drop the sessions table"); a path or branch ref that
+      names the order or its target stays visible to the destructive check
+      ("scripts/drop-legacy-tables.sh", "release/production"), and a negation that governs it
+      still discounts it; a dot inside a version, a file name or an abbreviation no longer
+      splits the sentence ("Deploy v2.3 to production"); Portuguese `producao`, `apagar`,
+      `deletar`, `excluir` and `remover` count.
+- [x] O5 What goes out to a customer: the credential word only stops counting right after a
+      negated ask/share verb ("nunca le pediremos su clave"); a negation in another clause,
+      another verb or a later list item no longer hides it, and a value next to the word
+      always counts. `valor_de_credencial` reads across a line break, up to 80 characters,
+      and also sees values without a digit (inner capitals or a symbol), but not an account
+      name after "de"/"of" ("la contrasena de GitHub").
+- [x] O6 The notice: a customer proposal that is not a reply and carries the `credential`
+      reason is never printed nor approved over WhatsApp (as on main); the owner's own brief
+      keeps the narrower check.
+
+RED: the new rule section failed 52 of its checks and the lowercase-value brief printed its
+value in the notice. GREEN: check-casos 1536/1536, check-clis 341 settings checks.

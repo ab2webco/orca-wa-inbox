@@ -273,6 +273,9 @@ PANEL_SETTINGS = {"tone": "tone", "agentName": "agent_name",
                   # Respuestas automaticas del motor: el acuse de recibo a un pedido nuevo
                   # y el saludo a un saludo. El valor de una conversacion pisa estos.
                   "ackMode": "ack", "ackText": "ack_text",
+                  # Cuantos minutos despues de que la linea escribio en un chat el acuse ya
+                  # no sale ahi: no cae en medio de una conversacion (decision c del dueno).
+                  "ackQuietMinutes": "ack_quiet_minutes",
                   "greetingMode": "greeting", "greetingText": "greeting_text",
                   # Con que cuenta de Claude abre el bot sus agentes (el de casos y el de
                   # cada proyecto): un id de `orca account list`, o `auto`.
@@ -312,7 +315,8 @@ CONFIG_OPCIONES = {
 CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s", "sync_minutes",
                     "capture_max", "capture_days", "case_window_hours", "approval_hours",
                     "ack_fallback_minutes", "update_every_minutes", "updates_max",
-                    "sla_first_reply_minutes", "project_question_hours")
+                    "sla_first_reply_minutes", "project_question_hours",
+                    "ack_quiet_minutes")
 # Los numericos con un rango cerrado. Un respaldo de cero minutos es el acuse fijo de
 # siempre con otro nombre, y uno de un dia deja al cliente sin nada; un tope de avances
 # de cien es un cliente con el telefono sonando.
@@ -320,7 +324,10 @@ CONFIG_RANGOS = {"ack_fallback_minutes": (1, 60), "update_every_minutes": (1, 12
                  "updates_max": (1, 10),
                  # Una meta de cero minutos la incumple todo caso; una de mas de un dia ya no
                  # es una meta de primer contacto.
-                 "sla_first_reply_minutes": (1, 1440)}
+                 "sla_first_reply_minutes": (1, 1440),
+                 # Cero apaga el silencio del acuse (no se mira lo que la linea escribio); mas
+                 # de cuatro horas ya no es una conversacion en curso, es un cliente que vuelve.
+                 "ack_quiet_minutes": (0, 240)}
 # Los numericos que ademas tienen que ser mayores que cero. Una ventana de agrupacion de
 # cero horas no agrupa nunca: abre una tarjeta por mensaje sin decir por que. Un aviso de
 # aprobacion que vence a las cero horas no se podria contestar nunca (T14).
