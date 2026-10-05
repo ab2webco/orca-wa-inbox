@@ -9129,6 +9129,71 @@ if NODE:
             os.environ.clear()
             os.environ.update(env_antes)
 
+
+# Revision: el aviso de un `escalar` lleva una pregunta, y la respuesta natural a una
+# pregunta es "si" o "no". Un `si` nunca aprueba un escalar (nada lo ejecutaria: el caso
+# quedaba en decision, callado, con "el trabajo sale ahora"), y un `no` suelto no cierra el
+# caso del cliente: los dos vuelven al agente como la respuesta del dueno. Solo `no N`
+# cierra, como dice el aviso.
+print("\ndueno-en-el-caso: contestar un escalar nunca lo aprueba")
+if NODE:
+    if not any(c["jid"] == DUENO_DM for c in CHATS):
+        CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        pon_aprobacion(home, DUENO_LID)
+        sidecar = SidecarFalso(home)
+        try:
+            for i, (contesta, nota) in enumerate((("si", "si"), ("si {n}", "si"),
+                                                   ("yes", "yes"), ("ok {n}", "ok"),
+                                                   ("dale {n}", "dale"), ("no", "no"))):
+                llegan(home, A, [msg(PERSONA, f"EA{i}", PEDIDO, 30 - i)])
+                esc, v = propuesta_lista(home, f"EA{i}", tipo="escalar",
+                                         texto="Pide un descuento del plan: lo aprueba usted?")
+                tick(home)
+                texto = contesta.format(n=esc)
+                llegan(home, A, [msg(DUENO_DM, f"EB{i}", texto, 1, de=DUENO_LID)])
+                ingiere(home)
+                tick(home)
+                ver = js(home, "caso", "ver", esc)[0]
+                ok(f"`{contesta}` a un escalar no lo aprueba: vuelve al agente con la respuesta",
+                   not ver["aprobada"] and ver["etapa"] == "clasificado" and any(
+                       e["actor"] == "dueno" and e["detalle"].endswith(f"WhatsApp: {nota}")
+                       for e in ver["eventos"]), f"{ver['etapa']} {ver['eventos'][-3:]}")
+                ultimo = (al_dueno(home) or [{"body": ""}])[-1]["body"]
+                ok(f"y la confirmacion de `{contesta}` dice que va al agente, no que sale trabajo",
+                   f"Caso {esc}" in ultimo and "agente" in ultimo and "aprobado" not in ultimo,
+                   ultimo)
+
+            # `no N` cierra, como dice el aviso.
+            llegan(home, A, [msg(PERSONA, "EC1", PEDIDO, 10)])
+            esc, _ = propuesta_lista(home, "EC1", tipo="escalar",
+                                     texto="Pide un descuento del plan: lo aprueba usted?")
+            tick(home)
+            llegan(home, A, [msg(DUENO_DM, "EC2", f"no {esc}", 1, de=DUENO_LID)])
+            ingiere(home)
+            ver = js(home, "caso", "ver", esc)[0]
+            ok("`no N` a un escalar cierra el caso, como dice el aviso",
+               ver["etapa"] == "cerrado", f"{ver['etapa']} {ver['eventos'][-2:]}")
+
+            # Un `si` a un aviso de regla sigue aprobando: solo el escalar cambia.
+            llegan(home, A, [msg(PERSONA, "EC3", PEDIDO, 9)])
+            dinero, _ = propuesta_lista(home, "EC3", texto="Listo, el arreglo cuesta $50.")
+            tick(home)
+            llegan(home, A, [msg(DUENO_DM, "EC4", f"si {dinero}", 1, de=DUENO_LID)])
+            ingiere(home)
+            ver = js(home, "caso", "ver", dinero)[0]
+            ok("`si N` a un aviso de regla sigue aprobando", ver["aprobada"]
+               and ver["etapa"] == "respondido", f"{ver['etapa']} {ver['eventos'][-2:]}")
+        finally:
+            sidecar.cerrar()
+            os.environ.clear()
+            os.environ.update(env_antes)
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

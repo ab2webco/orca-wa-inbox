@@ -6484,6 +6484,7 @@ TEXTOS_AVISO = {
            "bloqueado": "Caso {n} · {chat} se bloqueo: {x}",
            "escala": "Caso {n} · {chat}: el agente le pregunta: {x}",
            "escala_como": "Contestele con {n} y su respuesta, o no {n} para cerrar.",
+           "escala_contestada": "Caso {n}: su respuesta va al agente, que sigue con el caso.",
            "aprobado_sale": "Caso {n} aprobado: la respuesta salio.",
            "aprobado_linea": "Caso {n} aprobado: sale cuando la linea vuelva.",
            "aprobado_falla": "Caso {n} aprobado, pero la respuesta no salio ({x}): mirelo en el tablero.",
@@ -6512,6 +6513,7 @@ TEXTOS_AVISO = {
            "bloqueado": "Case {n} · {chat} got blocked: {x}",
            "escala": "Case {n} · {chat}: the agent asks you: {x}",
            "escala_como": "Answer with {n} and your answer, or no {n} to close.",
+           "escala_contestada": "Case {n}: your answer goes to the agent, which continues the case.",
            "aprobado_sale": "Case {n} approved: the reply went out.",
            "aprobado_linea": "Case {n} approved: it goes out when the line is back.",
            "aprobado_falla": "Case {n} approved, but the reply did not go out ({x}): check the board.",
@@ -6550,7 +6552,8 @@ def lee_respuesta(texto):
     # yes y no valen sin el (el unico aviso pendiente).
     if m and (m.group(2) or m.group(1).lower() not in SOLO_CON_NUMERO):
         return {"accion": "no" if m.group(1).lower() == "no" else "si",
-                "caso": int(m.group(2)) if m.group(2) else None, "texto": ""}
+                "caso": int(m.group(2)) if m.group(2) else None, "texto": "",
+                "palabra": m.group(1).lower()}
     m = CORRIGE.match(t)
     if m:
         return {"accion": "corregir", "caso": int(m.group(1)), "texto": m.group(2).strip()}
@@ -6959,6 +6962,13 @@ def aplica_respuesta(con, aviso, r, tx):
     """si, no o la correccion sobre el caso del aviso, por los mismos caminos que el
     tablero. Devuelve la linea de confirmacion."""
     n, version = aviso["case_id"], aviso["version"]
+    # El aviso de un `escalar` es una pregunta del agente, y su respuesta natural es si o
+    # no: nunca una aprobacion (nada ejecuta un escalar aprobado: el caso quedaba callado en
+    # decision) ni, sin el numero, un cierre. Vuelve al agente como la respuesta del dueno;
+    # solo `no N`, lo que el aviso ofrece para cerrar, cierra.
+    pregunta = es_pregunta_del_agente(con, aviso)
+    if pregunta and (r["accion"] == "si" or (r["accion"] == "no" and r["caso"] is None)):
+        r = {**r, "accion": "corregir", "texto": r.get("palabra") or r["accion"]}
     if r["accion"] == "si":
         # El aviso de un caso con credencial manda al tablero: por aca no se aprueba.
         caso = caso_de(con, n)
@@ -6995,7 +7005,15 @@ def aplica_respuesta(con, aviso, r, tx):
                necesita_agente=1)
     con.commit()
     aviso_contestado(con, aviso)
-    return tx["corregido"].format(n=n)
+    return tx["escala_contestada" if pregunta else "corregido"].format(n=n)
+
+
+def es_pregunta_del_agente(con, aviso):
+    """Si el aviso es el de un `escalar` (la pregunta del agente) y el caso sigue en esa
+    version."""
+    caso = caso_de(con, aviso["case_id"])
+    return bool(caso and caso.get("propuesta_version") == aviso["version"]
+                and propuesta_tipo(caso) == "escalar")
 
 
 def aviso_contestado(con, aviso):

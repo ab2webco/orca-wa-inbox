@@ -72,9 +72,12 @@ chats already skip the rule levels in `frenos_de_regla`), Jev.
 
 ### Review follow-ups (verified against the branch before changing)
 
-- [ ] D5 An answer to an `escalar` notice is never an approval: `si`, `yes`, `si N`, `ok N`,
+- [x] D5 An answer to an `escalar` notice is never an approval: `si`, `yes`, `si N`, `ok N`,
       `dale N` and a bare `no` go back to the agent as the owner's answer (the correction
-      path); only `no N` closes, as the notice says (scripts/check-casos).
+      path); only `no N` closes, as the notice says (scripts/check-casos, section "contestar
+      un escalar nunca lo aprueba"). RED: 12 of 14 failed (`si` approved the escalar and
+      answered "Caso 1 aprobado: el trabajo sale ahora."; bare `no` closed the case); GREEN:
+      14/14, check-casos 1164 checks with no other failure.
 - [ ] D6 An `escalar` older than `approval_hours` gets no notice: no burst of old
       escalations on the first tick after upgrading or after choosing a number.
 - [ ] D7 The owner case brief and the answer typed into the worker's terminal never call
