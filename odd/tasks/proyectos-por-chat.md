@@ -176,10 +176,26 @@ Everything must be configurable and wired end to end (panel and logic), in ES, E
     exit 0, on the committed tree. `where` also returns `missing` (the ids of the list that
     the owner removed from the catalog), and a list of two with one removed id has one
     accepted project, which is then the chat's project.
-- [ ] **M3** — `caso proyecto --actor agente --porque`: it validates against the candidates, is refused on `por_dueno`, does not freeze routing, and records the history `que`.
+- [x] **M3** — `caso proyecto --actor agente --porque`: it validates against the candidates, is refused on `por_dueno`, does not freeze routing, and records the history `que`.
   - Card JSON `project.{why,by,candidates}`.
   - `proyecto_efectivo` used by `proyecto_del_caso`, the card, the reports and `cabeza_del_caso`. Fix the owner's "Sin proyecto" that fell back to the chat's project.
   - Tests in `check-casos` (near `:3419-3437`, `:4720`).
+  - Evidence: `scripts/check-casos`, "proyectos-por-chat: el agente elige el proyecto, y el
+    proyecto efectivo (M3)". RED: 18 of 19 failed. `--porque` was unknown, the agent's
+    call froze the route as the owner's, the card had no reason or candidates, the case
+    file said only `- Project: Alfa Demo`, and the owner's "Sin proyecto" in a one-project
+    chat counted as that project in the reports. GREEN: 19/19; check-casos 1255/1255 and
+    check-clis 314 checks, both exit 0, on the committed tree.
+  - Deviation, on purpose: `why`, `by` and `candidates` travel on the board, in
+    `board.project_routes[<case_id>]`, and not on the card. Two existing assertions pin
+    the card's key set (`LLAVES_TARJETA`, "la tarjeta trae exactamente las llaves del
+    contrato") and `project == {"id", "name"}` ("la tarjeta lo trae con su nombre"), and
+    both stay unchanged. A first try with a card key `project_route` broke the first one
+    in the full run (1254/1255) and was moved to the board. See "Part A backend contract".
+  - The one rule is `proyecto_de_ruta`, a pure function of the route, the chat entry and
+    the catalog. `proyecto_efectivo` wraps it, and the card, `proyecto_del_caso`
+    (dispatch), `cabeza_del_caso` and the reports use it. The reports run the same rule
+    over `chat_proyecto`, which holds only one-project chats, plus `por_dueno`.
 - [ ] **M4** — `trabajo_espera_al_dueno` uses the chat's project set and the new `no_project` reason; notice texts at `:6461` in every language of that table.
   - Tests:
     - T22.9 no-click dispatches for a project in the chat's list;

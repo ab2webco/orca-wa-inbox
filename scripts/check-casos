@@ -9362,6 +9362,209 @@ if NODE:
            and regla.get("matched") == "reservas"
            and regla.get("workspace_why") == "the message says 'reservas'", f"{regla}")
 
+
+def tarjeta_con_ruta(home, cid):
+    """La tarjeta del tablero publicado (el tick lo deja al dia) con, en `project_route`, lo
+    que el tablero dice de su proyecto: `board.project_routes[<case_id>]`."""
+    t = tablero_de(home, cid)
+    if t is None:
+        return None
+    rutas = tablero(home).get("board", {}).get("project_routes") or {}
+    return dict(t, project_route=rutas.get(str(cid)))
+
+
+def eleccion(home, cid, proyecto, actor="agente", porque=None):
+    args = ["caso", "proyecto", str(cid), "--proyecto", proyecto, "--actor", actor]
+    if porque is not None:
+        args += ["--porque", porque]
+    return corre(home, *args)
+
+
+def cabeza_de(home, cid):
+    """Las lineas de cabeza del archivo del caso, corridas en este proceso."""
+    antes = dict(os.environ)
+    try:
+        ws = carga_wa_scope(home)
+        con = ws.db()
+        try:
+            return ws.cabeza_del_caso(con, ws.caso_de(con, int(cid)))
+        finally:
+            con.close()
+    finally:
+        os.environ.clear()
+        os.environ.update(antes)
+
+
+print("\nproyectos-por-chat: el agente elige el proyecto, y el proyecto efectivo (M3)")
+if NODE:
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo", "beta-demo", "gama-demo")
+        ruta_cat = storage_de(home)
+        datos = json.loads(ruta_cat.read_text(encoding="utf-8"))
+        for p in datos["projects"]:
+            p["note"] = {"alfa-demo": "Tienda en linea", "beta-demo": "Sitio de reservas"}.get(
+                p["id"], "")
+        ruta_cat.write_text(json.dumps(datos), encoding="utf-8")
+        js(home, "set", SOPORTE, "--workspaces", "alfa-demo,beta-demo")
+        js(home, "set", PERSONA, "--workspace", "alfa-demo")
+        js(home, "route", "--match", "reservas", "--workspace", "gama-demo")
+        orca_despacho(carpeta)
+        llegan(home, A, [msg(SOPORTE, "PE1", "@duenio el carrito no suma el envio", 30,
+                             mencion=True)])
+        ingiere(home)
+        cid = caso_de_stanza(home, "PE1")["case_id"]
+        js(home, "caso", "clasificar", str(cid), "--clase", "card", "--prioridad", "high",
+           "--actor", "agente")
+        t = tarjeta_con_ruta(home, cid)
+        ok("la tarjeta de un caso de dos proyectos sin regla: sin proyecto y con los candidatos",
+           t and t["project"] is None
+           and [c["id"] for c in (t.get("project_route") or {}).get("candidates", [])]
+           == ["alfa-demo", "beta-demo"]
+           and (t.get("project_route") or {}).get("by") is None
+           and (t.get("project_route") or {}).get("why")
+           == "the chat has 2 projects: the agent chooses by content", f"{t and t.get('project_route')}")
+        cab = cabeza_de(home, cid)
+        ok("el archivo del caso dice que no tiene proyecto y cuales son los del chat",
+           "- Project: none — the chat has 2 projects: the agent chooses by content" in cab
+           and "- Chat projects: alfa-demo (Tienda en linea), beta-demo (Sitio de reservas)" in cab,
+           f"{[l for l in cab if 'roject' in l]}")
+
+        # Nada se despacha mientras no se elige: aprobado por el dueno sin proyecto se bloquea.
+        sin = str(js(home, "caso", "crear", "--chat", SOPORTE, "--stanza", "PE9",
+                     "--actor", "agente")[0]["case_id"])
+        llegan(home, A, [msg(SOPORTE, "PE9", "@duenio revisen el inventario", 25, mencion=True)])
+        js(home, "caso", "clasificar", sin, "--clase", "card", "--prioridad", "high",
+           "--actor", "agente")
+        v = js(home, "caso", "propuesta", sin, "--tipo", "trabajar", "--instrucciones", TRABAJO,
+               "--actor", "agente")[0]["propuesta_version"]
+        js(home, "caso", "aprobar", sin, "--version", v, "--actor", "dueno")
+        tick_orca(home, carpeta)
+        ok("dos proyectos y nadie eligio: el trabajo no se despacha a ninguno",
+           js(home, "caso", "ver", sin)[0]["etapa"] == "bloqueado"
+           and "no tiene proyecto" in motivo_bloqueo(home, sin)
+           and not llamadas_orca(carpeta, "terminal create"), motivo_bloqueo(home, sin))
+        # Cerrado, para que lo que llegue despues al chat vaya al caso de arriba.
+        js(home, "caso", "mover", sin, "cerrado", "--motivo", "prueba", "--actor", "dueno")
+
+        p = eleccion(home, cid, "alfa-demo")
+        ok("el agente sin --porque: E_ARGS y no toca nada",
+           p.returncode != 0 and "E_ARGS" in p.stderr and ruta_de(home, cid).get("workspace") is None,
+           p.stderr)
+        p = eleccion(home, cid, "gama-demo", porque="habla de reservas")
+        ok("el agente fuera de los candidatos del chat: E_ARGS y no toca nada",
+           p.returncode != 0 and "E_ARGS" in p.stderr and "alfa-demo" in p.stderr
+           and ruta_de(home, cid).get("workspace") is None, p.stderr)
+        p = eleccion(home, cid, "", porque="ninguno")
+        ok("el agente no deja un caso sin proyecto: E_ARGS",
+           p.returncode != 0 and "E_ARGS" in p.stderr, p.stderr)
+        p = eleccion(home, cid, "alfa-demo", porque="habla del carrito de la tienda")
+        r = ruta_de(home, cid)
+        ok("el agente elige entre los candidatos: el proyecto, su porque y `agent`, sin congelar",
+           p.returncode == 0 and r.get("workspace") == "alfa-demo"
+           and r.get("workspace_name") == "Alfa Demo" and r.get("by") == "agent"
+           and r.get("workspace_why") == "habla del carrito de la tienda"
+           and not r.get("por_dueno"), f"{p.stderr} {r}")
+        ev = [e for e in js(home, "caso", "ver", str(cid))[0]["eventos"]
+              if (e["detalle"] or "").startswith("proyecto ")]
+        ok("deja su evento con la eleccion y el porque",
+           ev and ev[-1]["actor"] == "agente"
+           and ev[-1]["detalle"] == "proyecto alfa-demo · agente: habla del carrito de la tienda",
+           f"{ev}")
+        t = tarjeta_con_ruta(home, cid)
+        ok("la tarjeta muestra el proyecto, por que y quien lo eligio",
+           t and t["project"] == {"id": "alfa-demo", "name": "Alfa Demo"}
+           and (t.get("project_route") or {}).get("by") == "agent"
+           and (t.get("project_route") or {}).get("why") == "habla del carrito de la tienda",
+           f"{t and (t['project'], t.get('project_route'))}")
+        ok("y la historia lo dice con un codigo: la eleccion y quien",
+           t and any(e.get("que") == "project" and e.get("args") == ["alfa-demo", "agent"]
+                     for e in t["events"]), f"{t and t['events']}")
+        cab = cabeza_de(home, cid)
+        ok("el archivo del caso dice el proyecto, su porque y quien",
+           "- Project: Alfa Demo (alfa-demo) — habla del carrito de la tienda [agent]" in cab,
+           f"{[l for l in cab if 'roject' in l]}")
+
+        # Lo del agente no congela: un mensaje despues que dice una regla gana.
+        llegan(home, A, [msg(SOPORTE, "PE2", "y tambien el modulo de reservas", 20, cita=True)])
+        ingiere(home)
+        r = ruta_de(home, cid)
+        ok("una regla de contenido despues gana sobre lo que eligio el agente",
+           caso_de_stanza(home, "PE2")["case_id"] == cid and r.get("workspace") == "gama-demo"
+           and r.get("by") == "rule", f"{r}")
+        # Lo del dueno si congela, y el agente ya no lo cambia.
+        js(home, "caso", "proyecto", str(cid), "--proyecto", "beta-demo", "--actor", "dueno")
+        r = ruta_de(home, cid)
+        ok("el dueno elige: by owner y queda congelado",
+           r.get("workspace") == "beta-demo" and r.get("by") == "owner" and r.get("por_dueno")
+           and r.get("workspace_why") == "set by the owner", f"{r}")
+        p = eleccion(home, cid, "alfa-demo", porque="otra vez el carrito")
+        ok("el agente despues del dueno: E_OWNER y no toca nada",
+           p.returncode != 0 and "E_OWNER" in p.stderr
+           and ruta_de(home, cid).get("workspace") == "beta-demo", p.stderr)
+
+        # El "Sin proyecto" del dueno en un chat de UN proyecto: la tarjeta no muestra el del
+        # chat y el trabajo no se despacha ahi.
+        llegan(home, A, [msg(PERSONA, "PE3", "pueden revisar el formulario?", 15)])
+        ingiere(home)
+        uno = str(caso_de_stanza(home, "PE3")["case_id"])
+        t = tarjeta_con_ruta(home, uno)
+        ok("un chat de un proyecto: la tarjeta trae el del chat, by chat, como lo despacha el tick",
+           t and t["project"] == {"id": "alfa-demo", "name": "Alfa Demo"}
+           and (t.get("project_route") or {}).get("by") == "chat", f"{t and t.get('project_route')}")
+        js(home, "caso", "clasificar", uno, "--clase", "card", "--prioridad", "high",
+           "--actor", "agente")
+        js(home, "caso", "proyecto", uno, "--proyecto", "", "--actor", "dueno")
+        t = tarjeta_con_ruta(home, uno)
+        ok("Sin proyecto del dueno: la tarjeta queda sin proyecto, no cae en el del chat",
+           t and t["project"] is None and (t.get("project_route") or {}).get("by") == "owner",
+           f"{t and (t['project'], t.get('project_route'))}")
+        v = js(home, "caso", "propuesta", uno, "--tipo", "trabajar", "--instrucciones", TRABAJO,
+               "--actor", "agente")[0]["propuesta_version"]
+        js(home, "caso", "aprobar", uno, "--version", v, "--actor", "dueno")
+        tick_orca(home, carpeta)
+        ok("y el trabajo aprobado no se despacha al proyecto del chat: se bloquea",
+           js(home, "caso", "ver", uno)[0]["etapa"] == "bloqueado"
+           and "no tiene proyecto" in motivo_bloqueo(home, uno)
+           and not llamadas_orca(carpeta, "terminal create"), motivo_bloqueo(home, uno))
+
+        # Un id que el dueno quito del catalogo no es candidato.
+        acepta_proyectos(home, "alfa-demo", "gama-demo")
+        llegan(home, A, [msg(SOPORTE, "PE4", "@duenio otra cosa", 10, mencion=True)])
+        ingiere(home)
+        quitado = caso_de_stanza(home, "PE4")["case_id"]
+        t = tarjeta_con_ruta(home, quitado)
+        ok("un proyecto quitado del catalogo no es candidato, y queda dicho",
+           t and [c["id"] for c in (t.get("project_route") or {}).get("candidates", [])]
+           == ["alfa-demo"] and (t.get("project_route") or {}).get("missing") == ["beta-demo"],
+           f"{t and t.get('project_route')}")
+
+    # Los informes cuentan el proyecto efectivo: el "Sin proyecto" del dueno no es el del chat.
+    zona_previa = os.environ.get("TZ")
+    con_zona("America/Bogota")
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [m_(PERSONA, "pq1", "2026-03-18 09:00:00"),
+                         m_(PERSONA, "pq2", "2026-03-18 10:00:00")])
+        acepta_proyectos(home, "alfa-demo")
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder",
+           "--workspace", "alfa-demo")
+        siembra_casos(home, [
+            dict(id=1, chat=PERSONA, etapa="respondido", ruta={"workspace": None},
+                 creado="2026-03-18 09:00:10"),
+            dict(id=2, chat=PERSONA, etapa="respondido",
+                 ruta={"workspace": None, "por_dueno": True}, creado="2026-03-18 10:00:10"),
+        ], [])
+        r = informe(home, "2026-03-18 14:30:00")
+        filas = [(f["id"], f["cases"]) for f in r["periods"]["today"]["projects"]]
+        ok("los informes: el del chat para un caso sin ruta, ninguno para el Sin proyecto del dueno",
+           sorted(filas, key=str) == sorted([(None, 1), ("alfa-demo", 1)], key=str),
+           f"{r['periods']['today']['projects']}")
+    if zona_previa is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = zona_previa
+    time.tzset()
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
