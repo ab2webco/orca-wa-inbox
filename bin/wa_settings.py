@@ -428,6 +428,17 @@ def llave_aprobador():
     return texto if _LLAVE_APROBADOR.match(texto) else None
 
 
+def trae_llave_aprobador(env=None):
+    """Si este proceso recibio la llave del plugin en su env: lo pide el tablero o la
+    respuesta del dueno por WhatsApp, no un agente. Sin archivo no hay con que comparar, y
+    eso es un no: la llave la crea el plugin, no las CLIs."""
+    import hmac
+    env = os.environ if env is None else env
+    dada = env.get(VARIABLE_APROBADOR) or ""
+    propia = llave_aprobador()
+    return bool(dada and propia) and hmac.compare_digest(dada.encode(), propia.encode())
+
+
 def ajuste(key, fallback=None):
     """El valor efectivo de un ajuste: el panel y la base del CLI, en ese orden.
 

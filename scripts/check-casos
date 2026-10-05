@@ -51,11 +51,23 @@ def ok(nombre, condicion, detalle=""):
 SIN_ORCA = "/nonexistent/orca-no-existe"
 
 
+def firma_como_dueno(args):
+    """`caso aprobar ... --actor dueno`: la firma del dueno, que el worker lanza con la llave
+    del aprobador en el env de ESE proceso (approve-solo-dueno). Cualquier otro actor no la
+    lleva, como en el plugin."""
+    args = list(args)
+    return args[:2] == ["caso", "aprobar"] and "--actor" in args \
+        and args[args.index("--actor") + 1:args.index("--actor") + 2] == ["dueno"]
+
+
 def corre(home, *args, extra=None):
     env = dict(os.environ, HOME=str(home),
                XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
                APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"),
                ORCA_CLI_COMMAND=os.environ.get("ORCA_CLI_COMMAND", SIN_ORCA))
+    env.pop("WA_INBOX_APPROVER", None)
+    if firma_como_dueno(args):
+        env["WA_INBOX_APPROVER"] = llave_del_plugin(home) or ""
     env.update(extra or {})
     return subprocess.run([str(WA_SCOPE), *args, "--json"], capture_output=True,
                           text=True, env=env, timeout=120)
@@ -431,6 +443,24 @@ with tempfile.TemporaryDirectory() as home:
     ok("aprobar solo lo puede firmar el dueno",
        corre(home, "caso", "aprobar", cid, "--version", v2, "--actor", "agente"
              ).returncode != 0)
+
+    # approve-solo-dueno: `--actor dueno` es una bandera que cualquiera escribe. Firmar como
+    # el dueno exige la llave del plugin, que el worker pasa solo al clic del tablero.
+    eventos = cuenta(home, "select count(*) from caso_evento")
+    for nombre, llave in (("sin la llave", ""), ("con una llave ajena", "f" * 64)):
+        p = corre(home, "caso", "aprobar", cid, "--version", v2, "--actor", "dueno",
+                  extra={"WA_INBOX_APPROVER": llave})
+        try:
+            dicho = json.loads(p.stderr.strip() or "{}").get("error")
+        except ValueError:
+            dicho = None
+        ok(f"firmar como dueno {nombre} se niega con E_NOT_OWNER y una razon de una linea",
+           p.returncode == 2 and dicho == "E_NOT_OWNER"
+           and "board" in p.stderr and len(p.stderr.strip().splitlines()) == 1,
+           f"salio {p.returncode}: {p.stderr.strip()}")
+    caso = js(home, "caso", "ver", cid)[0]
+    ok("y no escribe nada: ni evento ni firma", caso["aprobada"] is False
+       and cuenta(home, "select count(*) from caso_evento") == eventos, f"quedo {caso}")
 
     p = js(home, "caso", "aprobar", cid, "--version", v2, "--actor", "dueno")[0]
     ok("aprobar la vigente de un trabajo pasa decision -> trabajo",
@@ -11787,6 +11817,61 @@ if NODE:
         finally:
             os.environ.clear()
             os.environ.update(env_antes)
+
+
+# ── approve-solo-dueno: lo retenido fuera de un caso, en el tablero ──────────────────────
+# El aviso de la sesion de un proyecto que el piso freno no es de ningun caso: sin esto,
+# despues de quitarle `--approve` a los agentes, nadie podia aprobarlo. El tablero lo lista
+# con su texto, su chat y por que se freno, y el dueno lo aprueba desde ahi.
+print("\napprove-solo-dueno: lo retenido fuera de un caso, en el tablero")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        sidecar = SidecarFalso(home)
+        try:
+            env = dict(os.environ, HOME=str(home),
+                       XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+                       APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"),
+                       ORCA_CLI_COMMAND=SIN_ORCA)
+            env.pop("WA_INBOX_APPROVER", None)
+            p = subprocess.run([str(RAIZ / "bin" / "wa-send"), PERSONA,
+                                "Aviso del proyecto: el precio es $1.400", "--send",
+                                "--id", "nota-proyecto-1", "--json", "--timeout=3"],
+                               capture_output=True, text=True, env=env, timeout=60)
+            ok("el aviso de un proyecto con un precio queda retenido",
+               p.returncode == 3 and "send-needs-approval" in p.stderr, p.stderr[:200])
+            con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+            cuenta_linea = con.execute("select account from envio where req_id=?",
+                                       ("nota-proyecto-1",)).fetchone()[0]
+            for req in ("caso-99-a1b2c3d4e5f6", "aviso-99-a1b2c3d4e5f6"):
+                con.execute("insert into envio (req_id, account, chat_jid, chat_name, body, "
+                            "estado, created_at) values (?,?,?,?,?,?,?)",
+                            (req, cuenta_linea, PERSONA, "Cliente Uno", "otro texto",
+                             "borrador", int(time.time())))
+            con.commit()
+            con.close()
+            tick(home)
+            retenidos = tablero(home).get("board", {}).get("held_drafts")
+            uno = (retenidos or [{}])[0]
+            ok("el tablero lista el retenido fuera de un caso, con su chat, su texto y su motivo",
+               isinstance(retenidos, list) and len(retenidos) == 1
+               and uno.get("req_id") == "nota-proyecto-1" and uno.get("chat_jid") == PERSONA
+               and uno.get("chat") and "$1.400" in (uno.get("text") or "")
+               and uno.get("reasons") == ["money"] and ISO.match(uno.get("at") or ""),
+               f"{retenidos}")
+            ok("y no lista lo que es de un caso ni un aviso del plugin",
+               not any(str(r.get("req_id")).startswith(("caso-", "aviso-"))
+                       for r in retenidos or []), f"{retenidos}")
+            a = aprobar_borrador(home, "nota-proyecto-1")
+            ok("el dueno lo aprueba desde el tablero y sale",
+               a.returncode == 0 and "nota-proyecto-1" in sidecar.entregados, a.stderr[:200])
+            tick(home)
+            ok("y deja de figurar entre los retenidos",
+               tablero(home).get("board", {}).get("held_drafts") == [],
+               f"{tablero(home).get('board', {}).get('held_drafts')}")
+        finally:
+            sidecar.cerrar()
 
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")

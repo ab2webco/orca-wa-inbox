@@ -4505,10 +4505,77 @@ console.log('\nactivity.html — tablero: Enviar, de punta a punta')
     /Enviado/.test(n.doc.querySelector('#board-detail .card-msg')?.textContent || '')))
 }
 
+console.log('\nactivity.html — retenidos fuera de un caso: el dueno los aprueba o los cancela')
+{
+  // approve-solo-dueno: el aviso de la sesion de un proyecto que el piso freno no es de
+  // ningun caso. El tablero lo lista con su texto y su motivo, y el dueno lo aprueba (por el
+  // worker, con la llave del plugin) o lo cancela.
+  const retenido = { req_id: 'nota-proyecto-1', chat_jid: '573000000001@s.whatsapp.net',
+    chat: 'Laura Ejemplo', text: 'Aviso del proyecto: el precio es $1.400', at: hace(10 * 60000),
+    reasons: ['money'] }
+  const conRetenido = (cards, lista = [retenido]) => ({ board: tablero(cards, { held_drafts: lista }) })
+  const responde = (p) => ({ ok: true, code: p.action === 'aprobar-retenido' ? 'enviado' : 'cancelado',
+    reqId: p.reqId })
+
+  const w = conWorker(responde)
+  const m = await abrirConWorker([tarjeta()], w, conRetenido([tarjeta()]))
+  const seccion = m.doc.getElementById('board-held')
+  const item = m.doc.querySelector('#board-held [data-req="nota-proyecto-1"]')
+  ok('el tablero muestra la seccion de mensajes retenidos', seccion && !seccion.hidden &&
+    /Mensajes retenidos/.test(seccion.textContent), seccion && seccion.textContent.slice(0, 200))
+  ok('con el chat, el texto entero y el motivo traducido', item &&
+    /Laura Ejemplo/.test(item.textContent) && /\$1\.400/.test(item.textContent) &&
+    /Retenido por: dinero/.test(item.textContent), item && item.textContent)
+  const aprobar = item && item.querySelector('button[data-held="aprobar"]')
+  const cancelar = item && item.querySelector('button[data-held="cancelar"]')
+  ok('con Aprobar (el principal) y Cancelar', aprobar && aprobar.textContent === 'Aprobar' &&
+    aprobar.classList.contains('primario') && cancelar && cancelar.textContent === 'Cancelar')
+  aprobar.click()
+  await hastaPanel(() => w.pedidos.length === 1)
+  ok('Aprobar deja un pedido aprobar-retenido con el id y nada mas que decida el panel',
+    w.pedidos[0] && w.pedidos[0].action === 'aprobar-retenido' && w.pedidos[0].reqId === 'nota-proyecto-1' &&
+    w.pedidos[0].texto === undefined && w.pedidos[0].caseId === undefined, JSON.stringify(w.pedidos))
+  ok('con el veredicto, el retenido sale de la lista y se dice que se envio',
+    await hastaPanel(() => !m.doc.querySelector('#board-held [data-req="nota-proyecto-1"]') &&
+      /Enviado/.test(m.doc.getElementById('board-held-msg')?.textContent || '')),
+    m.doc.getElementById('board-held')?.textContent)
+
+  const w2 = conWorker(responde)
+  const n = await abrirConWorker([], w2, conRetenido([]))
+  ok('sin casos en el tablero, el retenido igual se ve', !n.doc.getElementById('board-held').hidden &&
+    !!n.doc.querySelector('#board-held [data-req="nota-proyecto-1"]'))
+  n.doc.querySelector('#board-held button[data-held="cancelar"]').click()
+  await hastaPanel(() => w2.pedidos.length === 1)
+  ok('Cancelar deja un pedido cancelar-retenido', w2.pedidos[0] &&
+    w2.pedidos[0].action === 'cancelar-retenido' && w2.pedidos[0].reqId === 'nota-proyecto-1',
+    JSON.stringify(w2.pedidos))
+  ok('y dice que no se envio', await hastaPanel(() =>
+    /no se envio/i.test(n.doc.getElementById('board-held-msg')?.textContent || '')))
+
+  const w3 = conWorker({ ok: false, code: 'send-approve-not-owner' })
+  const e = await abrirConWorker([tarjeta()], w3, conRetenido([tarjeta()]))
+  e.doc.querySelector('#board-held button[data-held="aprobar"]').click()
+  ok('un error se dice en su lugar y el retenido sigue ahi', await hastaPanel(() =>
+    /tablero/.test(e.doc.querySelector('#board-held [data-req="nota-proyecto-1"] .card-msg.mala')?.textContent || '')),
+  e.doc.getElementById('board-held')?.textContent)
+
+  const vacio = await abrirConWorker([tarjeta()], conWorker(responde), conRetenido([tarjeta()], []))
+  ok('sin retenidos no hay seccion', vacio.doc.getElementById('board-held').hidden)
+
+  for (const [idioma, titulo, boton, motivo] of [['en-US', /Held messages/, 'Approve', /Held for: money/],
+    ['pt-BR', /Mensagens retidas/, 'Aprovar', /Retida por: dinheiro/]]) {
+    const x = await abrirConWorker([tarjeta()], conWorker(responde), conRetenido([tarjeta()]), idioma)
+    const h = x.doc.getElementById('board-held')
+    ok(`${idioma}: la seccion, el boton y el motivo en su idioma`, titulo.test(h.textContent) &&
+      motivo.test(h.textContent) &&
+      h.querySelector('button[data-held="aprobar"]').textContent === boton, h.textContent.slice(0, 300))
+  }
+}
+
 console.log('\nactivity.html — tablero: cada error se dice, en su idioma')
 {
   const CODIGOS = ['E_ARGS', 'E_NOT_FOUND', 'E_STAGE', 'E_NOT_APPROVED', 'E_VERSION', 'E_EXCEPTION',
-    'E_BUSY', 'accion-invalida', 'send-denied', 'send-needs-approval', 'send-no-transport',
+    'E_BUSY', 'E_NOT_OWNER', 'accion-invalida', 'send-denied', 'send-needs-approval', 'send-no-transport',
     'send-rejected', 'send-timeout', 'send-no-draft', 'send-id-conflict', 'send-wrong-line',
     'send-line-not-linked', 'send-ambiguous-line', 'send-no-signature', 'jev-unavailable',
     'send-approve-not-owner', 'accion-desconocida', 'vencido', 'sin-herramientas', 'sin-permiso', 'demoro', 'fallo']

@@ -359,6 +359,15 @@ const caso = (id, etapa, extra) => Object.assign({
   exceptions: [], blocked_reason: null, ticket: null, updated_at: minutos(5),
   actions: ACCIONES
 }, extra)
+// Los retenidos fuera de un caso que el tablero lista (approve-solo-dueno). Datos de
+// mentira: ningun numero ni nombre real.
+const RETENIDOS = [
+  { req_id: 'nota-proyecto-1', chat_jid: '573000000001@s.whatsapp.net', chat: 'Laura Ejemplo',
+    text: 'Aviso del proyecto Alfa Demo: la renovacion queda en $1.400 y la publicamos el viernes a las 10:00.',
+    at: minutos(25), reasons: ['money', 'commitment'] },
+  { req_id: 'b7c1e0aa42', chat_jid: '120363000000000009@g.us', chat: 'Comite - Cliente - Sur',
+    text: 'Listo: el informe quedo publicado.', at: minutos(7), reasons: ['jev'] }
+]
 const TABLERO_CASOS = [
   caso(1, 'decision', {
     title: 'Piden descuento del 30% en la renovación', prioridad: 'high',
@@ -806,6 +815,22 @@ const PANELES = [
       counts: Object.assign({}, CUENTAS_VACIAS, { recibido: 1, clasificado: 2, decision: 3,
         trabajo: 1, listo: 1, respondido: 1, cerrado: 12, bloqueado: 1 })
     }))
+  },
+  {
+    // Lo retenido que no es de ningun caso (approve-solo-dueno): el aviso de la sesion de un
+    // proyecto que el piso freno, arriba del tablero, con Aprobar y Cancelar.
+    nombre: 'tablero-retenidos', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
+    datos: conTablero(tableroDe(TABLERO_CASOS, { held_drafts: RETENIDOS }))
+  },
+  {
+    // Aprobar no pudo confirmar que viene del tablero: el error en su tarjeta.
+    nombre: 'tablero-retenidos-error', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 1500,
+    datos: conTablero(tableroDe(TABLERO_CASOS, { held_drafts: RETENIDOS })),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('#board-held button[data-held="aprobar"]').click()`,
+    stub: { veredictoAccion: { ok: false, code: 'send-approve-not-owner' }, demoraVeredicto: 0 }
   },
   {
     // Una etapa elegida en la fila de arriba: queda solo "Su decision".

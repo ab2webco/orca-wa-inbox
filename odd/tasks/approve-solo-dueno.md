@@ -112,7 +112,44 @@
       layout; the new string uses the same card-error slot. No panel screen changed, so no
       `npm run shots` at 1440/390 in both themes was needed.
 
-## Open
+## Round 2 (coordinator, 2026-10-05): close the two open items
+
+- [x] C1 RED/GREEN: held drafts outside a case are approvable by the owner from the panel.
+      There was no listing nor cancel for them anywhere in the panel, so this adds both.
+      - Board contract: `held_drafts` (wa-scope `retenidos_del_tablero`): `borrador` rows of
+        the active line whose id is not `caso-...`/`aviso-...`, with chat, full text, time
+        and reasons mapped to the panel's exception codes (secret -> credential, Jev -> jev).
+        check-casos RED: "el tablero lista el retenido ... — None"; GREEN 844/844 (fast copy).
+      - Worker: `aprobar-retenido` (`--approve <id> --by board`, key only to that child) and
+        `cancelar-retenido` (`--cancel`, no key); ids of the case engine or flag-shaped are
+        refused with E_ARGS. worker.test RED 413/422 (`accion-desconocida`), GREEN 422/422.
+      - Panel: "Mensajes retenidos" above the board, Aprobar (primary) and Cancelar, ES/EN/PT,
+        Spanish with "usted". panels.test RED (section missing, crash on click), GREEN
+        1410/1410.
+      - Shots: `tablero-retenidos` and `tablero-retenidos-error` (new) in
+        ~/Projects/.capturas-approve. First pass showed the section without the 12px side
+        gutter and "hace 18 d" from fixed timestamps; fixed and retaken.
+- [x] C2 RED/GREEN: `wa-scope caso aprobar --actor dueno` needs the approver key.
+      - CLI only (`cmd_caso_aprobar_cli`): `E_NOT_OWNER`, exit 2, one-line reason. Internal
+        calls of `cmd_caso_aprobar` (the WhatsApp-reply path as dueno, the two `regla` paths
+        of the tick) do not go through it; `--actor regla` is unchanged.
+      - check-casos RED: "firmar como dueno sin la llave ... — salio 0" (and with a foreign
+        key); GREEN 839/839 (fast copy). Tests pass the key only to `caso aprobar --actor
+        dueno` (`corre`), the way the worker does.
+      - Worker: the board's `caso aprobar` gets the key in its own env only. worker.test RED
+        "la firma del dueno (caso aprobar) lleva la llave ... — conLlave: []", GREEN.
+      - Docs: COMMANDS.md, whatsapp-cli skill, `caso aprobar --help`, README.
+        check-harness RED (both docs lacked `E_NOT_OWNER` / `--actor dueno`), GREEN 74.
+      - Panel maps E_NOT_OWNER (panels.test list of codes).
+- [ ] F2 Final check, once, smoke flags.
+
+## Open (after round 2)
+
+- Other `--actor dueno` mutations (`caso mover`, `propuesta`, `atender`, `autorizar`,
+  `proyecto`) are still a flag anyone can write; only the signature (`aprobar`) is gated.
+- Same-user code can read `approver.key` on purpose; documented as the honest limit.
+
+## Open (round 1, superseded by round 2)
 
 - Held drafts that are NOT tied to a case (e.g. a project session's message held by the
   floor) have no approval path left except cancel: the board only approves cases, and the

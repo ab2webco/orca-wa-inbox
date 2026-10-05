@@ -431,6 +431,10 @@ def main() -> int:
         if "cannot approve" not in texto or "send-approve-not-owner" not in texto:
             fallos.append(f"{rel}  no dice que el agente no puede aprobar un envio retenido "
                           "(`cannot approve`, `send-approve-not-owner`)")
+        # Ni firmar un caso como el dueno: `caso aprobar --actor dueno` sin la llave.
+        if "e_not_owner" not in texto or "--actor dueno" not in texto:
+            fallos.append(f"{rel}  no dice que el agente no puede firmar como el dueno "
+                          "(`caso aprobar --actor dueno`, `E_NOT_OWNER`)")
 
     if fallos:
         print("Se perdio una regla al mudar la doctrina al arnes:", file=sys.stderr)

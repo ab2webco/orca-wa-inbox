@@ -28,8 +28,10 @@ owner approves it on the board otherwise.
 
 You cannot approve anything either. A held message goes out only with the owner's
 approval, from the board or his answer to the plugin's notice on WhatsApp; `wa-send
---approve` refuses any other caller with `send-approve-not-owner` (exit 3). Never try to
-get around it: tell the owner what is waiting instead.
+--approve` refuses any other caller with `send-approve-not-owner` (exit 3). The same goes
+for signing a case as the owner: `caso aprobar --actor dueno` only comes from his click on
+the board and refuses anyone else with `E_NOT_OWNER`. Never try to get around either: tell
+the owner what is waiting instead.
 
 ## Read
 

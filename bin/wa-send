@@ -77,7 +77,7 @@ receives it, and without the matching key the call is refused with
 activity log with who gave it. Honest limit: this stops a mistaken or misdirected agent,
 not code of the same user that reads the plugin's key file on purpose.
 """
-import argparse, hmac, os, sqlite3, sys, time, uuid
+import argparse, os, sqlite3, sys, time, uuid
 
 # Sin esto Python deja un __pycache__ DENTRO de bin/, y el directorio del plugin
 # instalado esta direccionado por hash.
@@ -86,8 +86,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import wa_store  # noqa: E402
 import wa_jev  # noqa: E402
 import wa_reglas  # noqa: E402
-from wa_settings import (VARIABLE_APROBADOR, ajuste, llave_aprobador, scope_db,  # noqa: E402
-                         scope_from_plugin)
+from wa_settings import (ajuste, scope_db, scope_from_plugin,  # noqa: E402
+                         trae_llave_aprobador)
 
 SCOPE_DB = scope_db()
 
@@ -609,14 +609,6 @@ def listar_borradores(salida_json):
     sys.exit(0)
 
 
-def es_el_dueno():
-    """Si quien pide `--approve` trae la llave del plugin (approve-solo-dueno). Sin archivo
-    no hay con que comparar, y eso es un no: la llave la crea el plugin, no esta CLI."""
-    dada = os.environ.get(VARIABLE_APROBADOR) or ""
-    propia = llave_aprobador()
-    return bool(dada and propia) and hmac.compare_digest(dada.encode(), propia.encode())
-
-
 def aprobar(req_id, plazo_s, salida_json, por):
     """El visto del dueno: lo unico que pone un borrador en la linea.
 
@@ -627,7 +619,7 @@ def aprobar(req_id, plazo_s, salida_json, por):
     Aprobar dos veces no entrega dos veces: el estado solo pasa de `borrador` a
     `pendiente` si todavia era borrador, y lo que ya tiene veredicto contesta ese
     veredicto."""
-    if not es_el_dueno():
+    if not trae_llave_aprobador():
         niega(NO_ES_EL_DUENO, NO_ES_EL_DUENO_DETALLE)
     if por not in APRUEBA:
         # Solo lo ve el plugin (ya paso la llave): es un error de quien llama, no del dueno.

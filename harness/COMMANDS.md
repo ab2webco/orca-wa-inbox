@@ -30,7 +30,9 @@ so in one line.
 
 You cannot approve a held message either: only the owner does, on the board or by answering
 the plugin's notice on WhatsApp. `wa-send --approve` refuses anyone else with
-`send-approve-not-owner` (exit 3), and that is not something to work around.
+`send-approve-not-owner` (exit 3), and that is not something to work around. Nor can you
+sign a case as the owner: `caso aprobar --actor dueno` only comes from his click on the
+board, and anyone else gets `E_NOT_OWNER`.
 
 ## What you run on a case
 
@@ -93,6 +95,7 @@ chat and the client cannot see it. Say it is a proposal waiting for approval.
 | `3` | `wa-read wait` | `chat-not-authorized` on the first stderr line: the owner has not enabled that chat, so nothing from it ever arrives. |
 | `5` | `wa-read wait` | `wait-timeout` on the first stderr line: nobody wrote before `--timeout`. |
 | `3` | `wa-send --approve` | `send-approve-not-owner`: only the owner approves a held message. Never retry it. |
+| `2` | `wa-scope caso aprobar --actor dueno` | `E_NOT_OWNER`: only the owner signs as `dueno`, from the board. Never retry it. |
 
 An **empty list is not `no-transport`**: once a line is linked, every read answers with
 exit 0 and `[]` means the inbox really is quiet.

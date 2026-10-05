@@ -36,7 +36,12 @@ export const CASO_ACCION = Object.freeze({
   ATENDER: 'atender',
   AUTORIZAR: 'autorizar',
   IGNORAR: 'ignorar',
-  PROYECTO: 'proyecto'
+  PROYECTO: 'proyecto',
+  // Un mensaje retenido que NO es de un caso (approve-solo-dueno): el aviso de la sesion de
+  // un proyecto que el piso freno. El dueno lo aprueba o lo retira desde el panel; un
+  // agente no puede aprobarlo.
+  APROBAR_RETENIDO: 'aprobar-retenido',
+  CANCELAR_RETENIDO: 'cancelar-retenido'
 })
 
 /** Los veredictos buenos y los malos propios de este canal. Los errores de `wa-scope
@@ -51,6 +56,7 @@ export const CASO_VEREDICTO = Object.freeze({
   AUTORIZADO: 'autorizado',
   IGNORADO: 'ignorado',
   PROYECTO_CAMBIADO: 'proyecto-cambiado',
+  CANCELADO: 'cancelado',
   ARGS: 'E_ARGS',
   VERSION: 'E_VERSION',
   // La accion no corresponde a lo que el caso propone (enviar un trabajo, ejecutar una
@@ -63,7 +69,7 @@ export const CASO_VEREDICTO = Object.freeze({
 
 // Los codigos estables de `wa-scope caso` (bin/wa-scope, ERRORES_CASO).
 const CODIGOS_CASO = new Set(['E_ARGS', 'E_NOT_FOUND', 'E_STAGE', 'E_NOT_APPROVED',
-  'E_VERSION', 'E_EXCEPTION', 'E_REVISION', 'E_BUSY'])
+  'E_VERSION', 'E_EXCEPTION', 'E_REVISION', 'E_BUSY', 'E_NOT_OWNER'])
 // Los motivos estables de `wa-send` (y el de Jev) que el panel sabe decir.
 const CODIGO_SEND = /^(send-[a-z-]+|jev-unavailable)$/
 
@@ -78,6 +84,11 @@ const MOTIVO_IGNORADO = 'ignored by the owner'
 // La forma de un id de proyecto, la misma que valida `wa-scope` (ID_PROYECTO). Lo que no
 // la tiene no llega al CLI: un valor con guion al principio seria otra bandera.
 const ID_PROYECTO = /^[a-z0-9][a-z0-9-]*$/
+// El id de un envio retenido fuera de los casos: lo eligio quien escribio (`--id`) o es un
+// uuid. Sin espacios ni guion inicial (seria otra bandera), y nunca uno de los del motor:
+// `caso-...` se aprueba en su tarjeta, con su version, y `aviso-...` es del plugin.
+const ID_RETENIDO = /^(?!caso-|aviso-)[A-Za-z0-9_][^\s]{0,199}$/
+const MOTIVO_RETIRO = 'cancelled by the owner'
 // Cuanto espera `wa-send` el veredicto del sidecar, y cuanto el proceso en total. Va por
 // debajo del tiempo que el panel espera su respuesta: un envio que tarda mas queda en
 // cola con su id, y volver a apretar pregunta por el mismo.
@@ -153,12 +164,13 @@ const opcional = (valor, campo) => {
  * `wa-send` niega la aprobacion.
  */
 export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage, llaveAprobador }) {
-  /** `wa-scope caso <sub> ...`: devuelve las filas del JSON o lanza el rechazo. */
-  async function caso (args) {
+  /** `wa-scope caso <sub> ...`: devuelve las filas del JSON o lanza el rechazo. `env` va
+   *  solo a ese hijo (la llave del aprobador, en la firma del dueno). */
+  async function caso (args, env = null) {
     const cmd = await herramienta('wa-scope')
     let salida
     try {
-      salida = await run(cmd, ['caso', ...args, '--json'])
+      salida = await run(cmd, ['caso', ...args, '--json'], env ? { env } : {})
     } catch (error) {
       throw aRechazo(error, motivoDe)
     }
@@ -180,12 +192,28 @@ export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage, l
       throw aRechazo(error, motivoDe)
     }
     if (r.code !== 0) throw aRechazo(new Error(primeraLinea(r.stderr)), motivoDe)
+    return r
+  }
+
+  /** La llave del plugin para el env de UN hijo, o null si no se pudo obtener (entonces
+   *  quien la exige niega, y el panel lo dice). */
+  async function conLlave () {
+    const llave = llaveAprobador ? await llaveAprobador() : null
+    return llave ? { [VARIABLE_APROBADOR]: llave } : null
+  }
+
+  const idRetenido = (pedido) => {
+    const id = pedido?.reqId
+    if (typeof id !== 'string' || !ID_RETENIDO.test(id)) throw new Rechazo(CASO_VEREDICTO.ARGS, 'reqId')
+    return id
   }
 
   const ver = (id) => caso(['ver', String(id)])
 
-  const aprobar = (id, version) =>
-    caso(['aprobar', String(id), '--version', version, '--actor', ACTOR])
+  // La firma del dueno: `--actor dueno` exige la llave del plugin (approve-solo-dueno), que
+  // va solo a este proceso.
+  const aprobar = async (id, version) =>
+    caso(['aprobar', String(id), '--version', version, '--actor', ACTOR], await conLlave())
 
   const mover = (id, etapa, motivo = '') =>
     caso(['mover', String(id), etapa, ...(motivo ? [`--motivo=${motivo}`] : []),
@@ -210,9 +238,8 @@ export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage, l
       `--timeout=${ENVIO_PLAZO_S}`, '--json', '--', c.chat_jid, texto])
     // La aprobacion es del dueno y la dice el tablero: la llave del plugin va SOLO a este
     // hijo. Sin llave `wa-send` la niega (`send-approve-not-owner`) y el panel lo dice.
-    const llave = llaveAprobador ? await llaveAprobador() : null
     await enviar(['--approve', id, '--by', 'board', `--timeout=${ENVIO_PLAZO_S}`, '--json'],
-      llave ? { [VARIABLE_APROBADOR]: llave } : null)
+      await conLlave())
     // Salio. Si dar el caso por respondido falla, el mensaje ya esta en la linea: se
     // dice que salio y que el tablero quedo atras. Apretar de nuevo es seguro: el id es
     // el mismo y no se entrega dos veces.
@@ -327,6 +354,27 @@ export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage, l
       const id = idDeCaso(pedido)
       await mover(id, 'cerrado', MOTIVO_IGNORADO)
       return { ok: true, code: CASO_VEREDICTO.IGNORADO, caseId: id }
+    }),
+
+    // Un retenido fuera de los casos: el dueno lo vio en el panel y lo aprueba. Va como la
+    // tarjeta: `--approve` con la llave y `--by board`. El texto no se puede cambiar bajo el
+    // mismo id (`send-id-conflict`), asi que lo que sale es lo que el dueno leyo.
+    [CASO_ACCION.APROBAR_RETENIDO]: aceptarRechazo(async (pedido) => {
+      const id = idRetenido(pedido)
+      await enviar(['--approve', id, '--by', 'board', `--timeout=${ENVIO_PLAZO_S}`, '--json'],
+        await conLlave())
+      return { ok: true, code: CASO_VEREDICTO.ENVIADO, reqId: id }
+    }),
+
+    // Y lo retira: pasa a `cancelado`, con su fila. Lo que ya no era un borrador (salio, o
+    // ya se retiro) no se toca y se dice.
+    [CASO_ACCION.CANCELAR_RETENIDO]: aceptarRechazo(async (pedido) => {
+      const id = idRetenido(pedido)
+      const r = await enviar(['--cancel', id, '--reason', MOTIVO_RETIRO, '--json'])
+      let hecho = false
+      try { hecho = JSON.parse(r.stdout || 'null')?.cancelled === true } catch { /* no */ }
+      if (!hecho) throw new Rechazo('send-no-draft', `${id} was not waiting any more`)
+      return { ok: true, code: CASO_VEREDICTO.CANCELADO, reqId: id }
     }),
 
     // El proyecto en UNA bandera `--proyecto=`: vacio es "sin proyecto". Que este en el
