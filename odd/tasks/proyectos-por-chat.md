@@ -196,11 +196,18 @@ Everything must be configurable and wired end to end (panel and logic), in ES, E
     the catalog. `proyecto_efectivo` wraps it, and the card, `proyecto_del_caso`
     (dispatch), `cabeza_del_caso` and the reports use it. The reports run the same rule
     over `chat_proyecto`, which holds only one-project chats, plus `por_dueno`.
-- [ ] **M4** — `trabajo_espera_al_dueno` uses the chat's project set and the new `no_project` reason; notice texts at `:6461` in every language of that table.
+- [x] **M4** — `trabajo_espera_al_dueno` uses the chat's project set and the new `no_project` reason; notice texts at `:6461` in every language of that table.
   - Tests:
     - T22.9 no-click dispatches for a project in the chat's list;
     - it waits for a project outside the list, or with no project;
     - the existing single-project T22.9 tests are unchanged.
+  - Evidence: `scripts/check-casos`, "proyectos-por-chat: el trabajo sin el clic con los
+    proyectos del chat (M4)". RED: 8 of 9 failed. The table had no `no_project` and still
+    said "del proyecto del chat"; two projects with no choice waited as `outside_project`;
+    the agent's choice from the list did not leave without a click. Worst, the owner's
+    "Sin proyecto" in a one-project chat was signed by the rule and dispatched to the
+    chat's project. GREEN: 9/9; check-casos 1264/1264 and check-clis 314 checks, both
+    exit 0, on the committed tree. The existing T22.9 section is unchanged and green.
 - [ ] **M5** — `projectQuestion` setting (column, panel key, `set --project-question`), `projectQuestionHours`, `caso pregunta-proyecto`, `caso_espera_proyecto` at ingest, the timeout to the owner in the tick, the case-file section, the question closed on a project choice.
   - Tests:
     - the writer's answer joins the case and reopens it;

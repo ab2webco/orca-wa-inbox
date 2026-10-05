@@ -9565,6 +9565,84 @@ if NODE:
         os.environ["TZ"] = zona_previa
     time.tzset()
 
+
+print("\nproyectos-por-chat: el trabajo sin el clic con los proyectos del chat (M4)")
+with tempfile.TemporaryDirectory() as home:
+    antes = dict(os.environ)
+    try:
+        ws = carga_wa_scope(home)
+        for idioma, fuera, sin in (("es", "queda fuera de los proyectos del chat", "no tiene proyecto"),
+                                   ("en", "it is outside the chat's projects", "it has no project")):
+            tabla = ws.MOTIVOS_AVISO[idioma]
+            ok(f"el aviso dice fuera de los proyectos del chat, y sin proyecto ({idioma})",
+               tabla.get("outside_project") == fuera and tabla.get("no_project") == sin,
+               f"{tabla.get('outside_project')!r} {tabla.get('no_project')!r}")
+        ok("y cada idioma de la tabla tiene los dos",
+           all({"outside_project", "no_project"} <= set(t) for t in ws.MOTIVOS_AVISO.values()))
+    finally:
+        os.environ.clear()
+        os.environ.update(antes)
+if NODE:
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo", "beta-demo", "gama-demo")
+        js(home, "set", SOPORTE, "--workspaces", "beta-demo,alfa-demo")
+        orca_despacho(carpeta)
+
+        def trabajar_en(stanza, chat=SOPORTE):
+            llegan(home, A, [msg(chat, stanza, PEDIDO, 5)])
+            cid = str(js(home, "caso", "crear", "--chat", chat, "--stanza", stanza,
+                         "--actor", "agente")[0]["case_id"])
+            js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "high",
+               "--actor", "agente")
+            js(home, "caso", "propuesta", cid, "--tipo", "trabajar", "--instrucciones", TRABAJO,
+               "--actor", "agente")
+            return cid
+
+        def espera_de(cid):
+            return [e["detalle"] for e in js(home, "caso", "ver", cid)[0]["eventos"]
+                    if e["detalle"].startswith("trabajo espera al dueno:")]
+
+        sin = trabajar_en("PT1")
+        tick_orca(home, carpeta)
+        ok("dos proyectos y ninguno elegido: el trabajo espera al dueno, por no_project",
+           js(home, "caso", "ver", sin)[0]["etapa"] == "decision"
+           and espera_de(sin) and "no_project" in espera_de(sin)[0]
+           and "outside_project" not in espera_de(sin)[0]
+           and not llamadas_orca(carpeta, "terminal create"), f"{espera_de(sin)}")
+        js(home, "caso", "proyecto", sin, "--proyecto", "alfa-demo", "--actor", "agente",
+           "--porque", "es el reporte de la tienda")
+        tick_orca(home, carpeta)
+        entrada = next((e for e in js(home, "caso", "ver", sin)[0]["eventos"]
+                        if e["a"] == "trabajo" and e["de"] == "decision"), None)
+        ok("el agente elige uno de la lista: sale sin el clic, firmado por la regla",
+           entrada is not None and entrada["actor"] == "regla", f"{entrada}")
+        ok("y el despacho lo lleva a ese proyecto",
+           [(f["case_id"], f["proyecto"]) for f in despachos(home) or []]
+           == [(int(sin), "Alfa Demo")], f"{despachos(home)}")
+
+        fuera = trabajar_en("PT2")
+        js(home, "caso", "proyecto", fuera, "--proyecto", "gama-demo", "--actor", "dueno")
+        tick_orca(home, carpeta)
+        ok("un proyecto fuera de la lista del chat espera al dueno, por outside_project",
+           js(home, "caso", "ver", fuera)[0]["etapa"] == "decision"
+           and espera_de(fuera) and "outside_project" in espera_de(fuera)[0], f"{espera_de(fuera)}")
+
+        js(home, "set", PERSONA, "--workspaces", "")
+        nada = trabajar_en("PT3", chat=PERSONA)
+        tick_orca(home, carpeta)
+        ok("un chat sin proyectos espera al dueno, por no_project",
+           js(home, "caso", "ver", nada)[0]["etapa"] == "decision"
+           and espera_de(nada) and "no_project" in espera_de(nada)[0], f"{espera_de(nada)}")
+
+        js(home, "set", PERSONA, "--workspace", "alfa-demo")
+        uno = trabajar_en("PT4", chat=PERSONA)
+        js(home, "caso", "proyecto", uno, "--proyecto", "", "--actor", "dueno")
+        tick_orca(home, carpeta)
+        ok("el Sin proyecto del dueno en un chat de un proyecto tambien espera, por no_project",
+           js(home, "caso", "ver", uno)[0]["etapa"] == "decision"
+           and espera_de(uno) and "no_project" in espera_de(uno)[0], f"{espera_de(uno)}")
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

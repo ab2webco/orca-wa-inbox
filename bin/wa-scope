@@ -3069,8 +3069,11 @@ def trabajo_espera_al_dueno(con, caso):
 
     - lo que destruye o compromete (`wa_reglas.trabajo_comprometido`): borrar, desplegar a
       produccion, forzar un push, pagos, credenciales, una fecha o plata;
-    - lo que no queda dentro del proyecto del chat: un chat sin proyecto aceptado, un caso
-      que una regla o el dueno mando a otro proyecto, o un `repo` que no es el del chat;
+    - un caso sin proyecto efectivo (`no_project`): un chat sin proyecto aceptado, uno de
+      varios donde nadie eligio todavia, o el "Sin proyecto" del dueno;
+    - lo que no queda dentro de los proyectos del chat (`outside_project`): un caso que una
+      regla o el dueno mando a un proyecto que no es de la lista del chat, o un `repo` que no
+      nombra el proyecto del caso;
     - una credencial que entro con el caso, un chat que solo observa, y una propuesta de
       hace mas de APROBACION_VIGENTE_S: la ve el dueno.
     Ante la duda, espera."""
@@ -3085,17 +3088,18 @@ def trabajo_espera_al_dueno(con, caso):
     scope = merged_scope(con).get(caso["chat_jid"]) or {}
     if scope.get("mode") not in MODOS_SIN_CLIC:
         motivos.append("mode")
-    del_chat = scope.get("workspace")
-    try:
-        ruta = json.loads(caso.get("ruta") or "null") or {}
-    except (TypeError, ValueError):
-        ruta = {}
-    proyecto = next((x for x in proyectos_del_dueno(con) if x["id"] == del_chat), None) \
-        if del_chat else None
+    # El proyecto efectivo del caso, el mismo que usaria el despacho (proyectos-por-chat,
+    # M4): sin ninguno espera (`no_project`); fuera de los proyectos aceptados del chat, o
+    # con un `repo` que no lo nombra, tambien (`outside_project`).
+    catalogo = proyectos_del_dueno(con)
+    elegido = proyecto_de_ruta(ruta_del_caso(caso), scope, catalogo)["id"]
+    aceptados, _ = proyectos_del_chat(scope, catalogo)
+    proyecto = next((x for x in aceptados if x["id"] == elegido), None) if elegido else None
     repo = str(propuesta.get("repo") or "").strip()
-    if (not proyecto or (ruta.get("workspace") and ruta["workspace"] != del_chat)
-            or (repo and repo not in (proyecto["id"], proyecto.get("path"),
-                                      proyecto.get("name")))):
+    if not elegido:
+        motivos.append("no_project")
+    elif (not proyecto or (repo and repo not in (proyecto["id"], proyecto.get("path"),
+                                                 proyecto.get("name")))):
         motivos.append("outside_project")
     if _lista_json(caso.get("excepciones")):
         motivos.append("exceptions")
@@ -6689,7 +6693,9 @@ MOTIVOS_AVISO = {
            "states_status_not_verified": "afirma un estado sin verificarlo",
            "contains_credential": "lleva una credencial", "delete": "borra algo",
            "deploy": "despliega a produccion", "force_push": "fuerza un push",
-           "payment": "mueve un pago", "outside_project": "queda fuera del proyecto del chat",
+           "payment": "mueve un pago",
+           "outside_project": "queda fuera de los proyectos del chat",
+           "no_project": "no tiene proyecto",
            "mode": "el chat no responde solo", "stale": "la propuesta tiene mas de un dia",
            "exceptions": "el caso trae excepciones", "no_instructions": "no trae instrucciones"},
     "en": {"money": "it mentions money", "credential": "a credential is involved",
@@ -6700,7 +6706,9 @@ MOTIVOS_AVISO = {
            "states_status_not_verified": "it states a status it did not verify",
            "contains_credential": "it carries a credential", "delete": "it deletes something",
            "deploy": "it deploys to production", "force_push": "it forces a push",
-           "payment": "it moves a payment", "outside_project": "it is outside the chat's project",
+           "payment": "it moves a payment",
+           "outside_project": "it is outside the chat's projects",
+           "no_project": "it has no project",
            "mode": "the chat does not answer on its own",
            "stale": "the proposal is more than a day old",
            "exceptions": "the case carries exceptions", "no_instructions": "it has no instructions"},
