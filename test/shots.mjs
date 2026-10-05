@@ -646,6 +646,27 @@ const CUENTAS_CLAUDE = [
   { id: 'cuenta-vieja', email: 'vieja@example.invalid', authenticated: false, active: false, used: null }
 ]
 
+// Lo que deja el worker en `skillsStatus` (skills-globales), con rutas de ejemplo.
+const SKILL_EN = (base) => `${base}/.claude/skills/whatsapp-avisos/SKILL.md`
+const SKILLS_EJEMPLO = { ok: true, at: new Date().toISOString(), version: '4.18.1', skills: [{
+  name: 'whatsapp-avisos', description: 'Notify the owner on WhatsApp.',
+  targets: [
+    { scope: 'global', accepted: true, file: SKILL_EN('/home/demo'), state: 'installed',
+      version: '4.18.1', yours: ['Rules'] },
+    { scope: 'project', project: 'alfa-demo', name: 'Alfa Demo', accepted: true,
+      path: '/srv/ejemplo/alfa-demo', file: SKILL_EN('/srv/ejemplo/alfa-demo'),
+      state: 'outdated', version: '4.17.0', yours: [] },
+    { scope: 'project', project: 'beta-demo', name: 'Beta Demo', accepted: true,
+      path: '/srv/ejemplo/beta-demo', file: SKILL_EN('/srv/ejemplo/beta-demo'),
+      state: 'not-installed' },
+    { scope: 'project', project: 'viejo-demo', name: 'Viejo Demo', accepted: false,
+      path: '/srv/ejemplo/viejo-demo', file: SKILL_EN('/srv/ejemplo/viejo-demo'),
+      state: 'installed', version: '4.18.1', yours: [] },
+    { scope: 'project', project: 'gama-demo', name: 'Gama Demo', accepted: true,
+      path: '/srv/ejemplo/gama-demo', file: SKILL_EN('/srv/ejemplo/gama-demo'),
+      state: 'foreign' }
+  ] }] }
+
 const PANELES = [
   // Las seis pestanas, a los cuatro anchos, en los dos idiomas y los dos temas.
   { nombre: 'config-tab-estado', archivo: 'config.html', anchos: ANCHOS,
@@ -669,6 +690,19 @@ const PANELES = [
     stub: { veredictoAccion: { ok: false, code: 'cuentas-fallo' } } },
   { nombre: 'config-tab-avanzado', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, datos: DATOS, pestana: 'avanzado' },
+  // Skills (skills-globales): global instalada con una seccion editada, un proyecto
+  // desactualizado, otro sin instalar, uno que salio del catalogo y un archivo ajeno.
+  { nombre: 'config-tab-skills', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, pestana: 'skills', guion: 'void 0', espera: 1500,
+    datos: Object.assign({}, DATOS, { skillsStatus: SKILLS_EJEMPLO }),
+    stub: { veredictoAccion: { ok: true, code: 'skills-leidas' } } },
+  // Quitar una copia con cambios del dueno: avisa que se pierden y pide confirmar.
+  { nombre: 'config-skills-confirmar', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, pestana: 'skills', espera: 1500,
+    datos: Object.assign({}, DATOS, { skillsStatus: SKILLS_EJEMPLO }),
+    guion: "setTimeout(function () { document.querySelector('[data-sk-target=\"global\"] " +
+      "[data-sk-act=\"remove\"]').click() }, 600)",
+    stub: { veredictoAccion: { ok: false, code: 'skill-editada', yours: ['Rules'] } } },
   // La pestana de entrada sin tocar nada: con todo listo, Conversaciones.
   { nombre: 'config-entrada-lista', archivo: 'config.html', anchos: ANCHOS_ESTADO,
     datos: CON_LINEA, pestana: null },
