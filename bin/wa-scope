@@ -5396,6 +5396,10 @@ def caso_marca_jev(con, case_id, juicio, stanza=None):
         con.execute("update caso set jev=? where case_id=?", (resumen, case_id))
 
 
+# El evento con que la regla fija anota en el caso lo que entro (sus NOMBRES).
+REGLA_FIJA_EXCEPCIONES = "regla fija: excepciones "
+
+
 def caso_marca_regla(con, case_id, excepciones, stanza=None):
     """El piso fijo (T19), en el caso: las excepciones que dio `wa_reglas` se suman a las
     que ya tenia (las de Jev o las de antes) y nunca se borran, igual que en
@@ -5412,7 +5416,7 @@ def caso_marca_regla(con, case_id, excepciones, stanza=None):
     if unidas == previas:
         return False
     nuevas = [e for e in unidas if e not in previas]
-    caso_tocar(con, caso, "regla", "regla fija: excepciones " + ", ".join(nuevas),
+    caso_tocar(con, caso, "regla", REGLA_FIJA_EXCEPCIONES + ", ".join(nuevas),
                excepciones=json.dumps(unidas))
     return True
 
@@ -7599,37 +7603,97 @@ def espera_del_dueno(con, caso):
 
 
 # Los motivos que dicen que lo que sale lleva de verdad una credencial: un valor con forma
-# de secreto (el piso fijo) o una que Jev vio en el texto. "credential" solo, una palabra
-# del brief o de la respuesta, no lo es (orden-del-dueno).
+# de secreto (el piso fijo) o una que Jev vio en el texto. "credential" solo es la palabra:
+# cuenta cuando la respuesta que se mostraria la nombra (orden-del-dueno).
 MOTIVOS_CON_SECRETO = (wa_reglas.SECRETO, "contains_credential")
+
+
+def textos_del_caso(con, caso):
+    """Los textos de los mensajes del caso, del almacen en solo lectura, o None si no se
+    pueden leer (sin almacen no se sabe que dicen)."""
+    stanzas = stanzas_de_caso(con, caso["case_id"])
+    if not stanzas:
+        return []
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return None
+    try:
+        textos = []
+        for i in range(0, len(stanzas), 500):
+            parte = stanzas[i:i + 500]
+            textos += [r[0] or "" for r in fuente.execute(
+                f"select body from mensaje where account=? and stanza_id in "
+                f"({','.join('?' * len(parte))})", (caso["account"], *parte))]
+        return textos
+    except sqlite3.Error:
+        return None
+    finally:
+        fuente.close()
+
+
+def credencial_que_entro(con, caso):
+    """Si lo que entro con el caso lleva de verdad una credencial. Una que puso Jev (o que no
+    se sabe de donde vino) si; una que la regla fija puso por la palabra ("olvide mi
+    contrasena") solo si Jev la vio despues o algun mensaje del caso trae el valor. Sin
+    almacen, se cuida: cuenta."""
+    if "credential" not in _lista_json(caso.get("excepciones")):
+        return False
+    try:
+        jev = json.loads(caso.get("jev") or "null")
+    except (TypeError, ValueError):
+        jev = None
+    if isinstance(jev, dict) and "contains_credential" in (jev.get("flags") or []):
+        return True
+    eventos = con.execute("select detalle from caso_evento where case_id=? and detalle like ?",
+                          (caso["case_id"], REGLA_FIJA_EXCEPCIONES + "%")).fetchall()
+    por_la_regla = any("credential" in _codigos(d[len(REGLA_FIJA_EXCEPCIONES):])
+                       for (d,) in eventos)
+    if not por_la_regla:
+        return True
+    textos = textos_del_caso(con, caso)
+    return textos is None or any(wa_reglas.valor_de_credencial(x) for x in textos)
+
+
+def detector_de_valor(con, caso):
+    """Con que se mira si un texto del caso lleva el valor de una credencial. En el de un
+    cliente, tambien un valor junto a su palabra ("contrasena nueva Perro123"); en el del
+    dueno solo uno con forma de secreto: lo demas lo escribio el y es su orden (decision a)."""
+    return wa_reglas.secreto if caso_del_dueno(con, caso) else wa_reglas.valor_de_credencial
 
 
 def lleva_credencial(con, caso, motivos):
     """Si el caso lleva una credencial de verdad: su aviso no la muestra y se aprueba en el
-    tablero, nunca por WhatsApp. Cuenta una credencial que entro con el caso, un valor con
-    forma de secreto en la propuesta o en lo que pidio el cliente (el titulo o su primer
-    mensaje), o un motivo que lo dice (`MOTIVOS_CON_SECRETO`). Nombrarla no cuenta: el caso
-    vivo pedia el tablero porque el brief decia "nunca incluyas una credencial"."""
+    tablero, nunca por WhatsApp. Cuenta una credencial que entro con el caso
+    (`credencial_que_entro`), el valor de una en la propuesta o en lo que pidio el cliente
+    (`detector_de_valor`), un motivo que lo dice (`MOTIVOS_CON_SECRETO`), o el motivo
+    "credential" cuando la respuesta que se mostraria nombra una. Nombrarla en un brief no
+    cuenta: el caso vivo pedia el tablero porque el brief decia "nunca incluyas una
+    credencial"."""
     try:
         propuesta = json.loads(caso.get("propuesta") or "null") or {}
     except (TypeError, ValueError):
         propuesta = {}
     cuerpos = [str(propuesta.get(k) or "") for k in ("instrucciones", "respuesta")]
-    return bool("credential" in _lista_json(caso.get("excepciones"))
-                or any(wa_reglas.secreto(c) for c in cuerpos)
-                or wa_reglas.secreto(que_pide(con, caso))
-                or set(motivos or []) & set(MOTIVOS_CON_SECRETO))
+    motivos = set(motivos or [])
+    valor = detector_de_valor(con, caso)
+    return bool(credencial_que_entro(con, caso)
+                or any(valor(c) for c in cuerpos)
+                or valor(que_pide(con, caso))
+                or motivos & set(MOTIVOS_CON_SECRETO)
+                or ("credential" in motivos and propuesta.get("tipo") == "responder"
+                    and "credential" in wa_reglas.excepciones(cuerpos[1], wa_reglas.SALIDA)))
 
 
 def pide_del_aviso(con, caso):
     """Lo que pide el caso, para el aviso: nunca "-" si hay un mensaje. El titulo, el resumen
     o un pedazo del primer mensaje, en una linea (`recorta`, como la cabecera del caso: un
-    salto no finge una linea). Si eso lleva un valor con forma de secreto, o el caso trajo
-    una credencial y solo queda el mensaje, se dice que la hay y no se muestra."""
+    salto no finge una linea). Si eso lleva el valor de una credencial, o el caso trajo una
+    de verdad y solo queda el mensaje, se dice que la hay y no se muestra."""
     pide = que_pide(con, caso)
     solo_mensaje = not (caso.get("titulo") or caso.get("resumen"))
-    if pide != "-" and (wa_reglas.secreto(pide) or (
-            solo_mensaje and "credential" in _lista_json(caso.get("excepciones")))):
+    if pide != "-" and (detector_de_valor(con, caso)(pide) or (
+            solo_mensaje and credencial_que_entro(con, caso))):
         return aviso_textos()["pide_oculto"]
     return pide
 

@@ -11202,25 +11202,38 @@ if NODE:
             pon_aprobacion(home, DUENO_LID, "es")
             TABLERO = "apruebelo en el tablero, no por aqui"
 
-            def aviso_de(stanza, chat, de, texto, brief, excepciones=None):
+            def aviso_de(stanza, chat, de, texto, brief, excepciones=None, respuesta=None,
+                         jev=None, motivos=None, regla=None):
                 llegan(home, A, [msg(chat, stanza, texto, 5, de=de)])
                 cid = str(js(home, "caso", "crear", "--chat", chat, "--stanza", stanza,
                              "--actor", "agente")[0]["case_id"])
                 js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "high",
                    "--actor", "agente")
-                js(home, "caso", "propuesta", cid, "--tipo", "trabajar", "--instrucciones",
-                   brief, "--actor", "agente")
-                if excepciones:
+                if respuesta is None:
+                    js(home, "caso", "propuesta", cid, "--tipo", "trabajar", "--instrucciones",
+                       brief, "--actor", "agente")
+                else:
+                    js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+                       respuesta, "--actor", "agente")
+                if excepciones or jev:
                     con = db_de(home)
-                    con.execute("update caso set excepciones=? where case_id=?",
-                                (json.dumps(excepciones), int(cid)))
+                    con.execute("update caso set excepciones=?, jev=? where case_id=?",
+                                (json.dumps(excepciones or []), json.dumps(jev) if jev else None,
+                                 int(cid)))
                     con.commit()
                     con.close()
                 ws = carga_wa_scope(home)
                 con = ws.db()
                 try:
+                    if regla:
+                        # Por donde la marca el ingest: la regla fija sobre lo que entro.
+                        ws.caso_marca_regla(con, int(cid), regla)
+                        con.commit()
                     caso = ws.caso_de(con, int(cid))
-                    return ws.texto_de_aviso(con, caso, ws.trabajo_espera_al_dueno(con, caso))
+                    if motivos is None:
+                        motivos = (ws.trabajo_espera_al_dueno(con, caso) if respuesta is None
+                                   else ws.frenos_de_regla(con, caso)[0])
+                    return ws.texto_de_aviso(con, caso, motivos)
                 finally:
                     con.close()
 
@@ -11237,6 +11250,42 @@ if NODE:
             ok("el caso del dueno que espera: Pide trae su mensaje en una linea",
                "Pide: despliega Caso 99 · Otro el arreglo" in t and TABLERO not in t
                and len([x for x in t.splitlines() if x.startswith("Caso ")]) == 1, t)
+            # Revision de la rama: un valor sin forma de secreto junto a la palabra de la
+            # credencial ("contrasena nueva Perro123") no se imprime por WhatsApp ni se aprueba
+            # con "si N", venga en la respuesta al cliente o en el brief.
+            t = aviso_de("AV4", PERSONA, None, "No puedo entrar al panel", "",
+                         respuesta="Listo, le reseteamos el acceso. Usuario ana, contrasena "
+                                   "nueva Perro123")
+            ok("una respuesta con una contrasena sin forma de secreto: al tablero, sin el valor",
+               TABLERO in t and "Perro123" not in t and "Responda si" not in t, t)
+            t = aviso_de("AV5", PERSONA, None, "No puedo entrar al panel", "",
+                         respuesta="Le dejo el acceso: usuario ana.demo, contrasena Verano2024",
+                         motivos=["credential"])
+            ok("con el motivo credential de la respuesta, tampoco se muestra el valor",
+               TABLERO in t and "Verano2024" not in t, t)
+            t = aviso_de("AV6", PERSONA, None, PEDIDO,
+                         "Entra al panel con usuario ana.demo, contrasena Verano2024 y revisa "
+                         "el reporte")
+            ok("un brief con una contrasena sin forma de secreto: al tablero, sin el valor",
+               TABLERO in t and "Verano2024" not in t, t)
+            # Una credencial que el cliente solo nombro, sin valor: el aviso no dice que la hay,
+            # muestra lo que pidio y se aprueba por aca.
+            t = aviso_de("AV7", PERSONA, None, "Olvide mi contrasena, me ayudan a entrar?", "",
+                         regla=["credential"],
+                         respuesta="Le enviamos el enlace para restablecer el acceso.")
+            ok("el cliente solo nombro su contrasena: no manda al tablero y Pide trae su mensaje",
+               TABLERO not in t and "Hay una credencial" not in t
+               and "Pide: Olvide mi contrasena" in t and "Responda si" in t, t)
+            t = aviso_de("AV8", PERSONA, None, "Olvide mi contrasena, me ayudan a entrar?", "",
+                         regla=["credential"], jev={"flags": ["contains_credential"]},
+                         respuesta="Le enviamos el enlace para restablecer el acceso.")
+            ok("si Jev vio una credencial en lo que entro, si manda al tablero",
+               TABLERO in t, t)
+            t = aviso_de("AV9", PERSONA, None, "Mi contrasena del panel ahora es Perro123", "",
+                         regla=["credential"],
+                         respuesta="Le enviamos el enlace para restablecer el acceso.")
+            ok("si lo que entro lleva el valor, manda al tablero y no lo muestra",
+               TABLERO in t and "Perro123" not in t, t)
         finally:
             os.environ.clear()
             os.environ.update(env_antes)
