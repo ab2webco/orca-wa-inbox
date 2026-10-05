@@ -152,6 +152,20 @@ existing test stays green unchanged.
 - [ ] **L6** `npm run check` green. Live check: the bot line and a second test line linked
   together, each answering only its own chats.
 
+  Live check, for the owner (not done: it needs the bot line and a spare phone):
+  1. Install this branch's build over the live plugin and restart Orca. On first start the
+     bot line's flat `wa-auth` moves to `wa-auth/pn-<digits>`: the panel shows it connected
+     with NO new QR, and the Lines card lists it as Main.
+  2. Settings > Status > Lines > "Link another line", and scan the new code with the spare
+     test phone. Its row turns Connected with its number.
+  3. Settings > Conversations: pick the test line in the Line picker and authorize one test
+     chat there (Automatic or Ask me first). The bot line's list must not change.
+  4. Write from a third phone to the bot line and to the test line. Each case appears only on
+     its own line's board (Dashboard > Line picker), each reply goes out from its own number,
+     and the nav badge counts both.
+  5. Unlink the test line from its row: the bot line keeps working with no QR, and
+     `wa-scope tick --json` reports no `lineas` key again.
+
 ### Part 2: personal line
 
 - [ ] **S1** Opt-in conversation list for a personal line. Nothing else is read.
