@@ -100,6 +100,10 @@ export function repetidosTrasCierre (previo, statusCode, ahoraMs = Date.now()) {
  *  linea nada cambia. */
 export const LINEA_SECUNDARIA_ENV = 'WA_SIDECAR_LINEA_SECUNDARIA'
 
+/** El numero que la linea tenia, segun el worker. Un sidecar nuevo no lo sabe, y si la
+ *  linea se re-vincula con otro numero el viejo tiene que salir de las activas. */
+export const CUENTA_PREVIA_ENV = 'WA_SIDECAR_CUENTA_PREVIA'
+
 /** Anota en el almacen que esta linea esta vinculada. La principal fija `linea_activa`
  *  —lo que leen los CLI sin `--line`— y las demas se suman al conjunto de activas sin
  *  tocarla: dos sidecars que se la pisaran la harian cambiar en cada arranque. `antes` es
@@ -107,7 +111,7 @@ export const LINEA_SECUNDARIA_ENV = 'WA_SIDECAR_LINEA_SECUNDARIA'
  *  cambio y cual era la principal antes. */
 export function anotarLinea ({ almacen, cuenta, env = process.env, antes = null }) {
   if (env?.[LINEA_SECUNDARIA_ENV] === '1') {
-    const { nueva } = almacen.sumarLinea(cuenta, { antes })
+    const { nueva } = almacen.sumarLinea(cuenta, { antes: antes ?? env[CUENTA_PREVIA_ENV] ?? null })
     return { cambio: nueva, antes: null }
   }
   return almacen.activarLinea(cuenta)

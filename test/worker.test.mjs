@@ -1061,9 +1061,12 @@ console.log('\nworker: el directorio de auth del sidecar se resuelve fuera de la
   await hasta(() => existsSync(marcador), 10000)
   const visto = readFileSync(marcador, 'utf8')
   apagar()
+  // Con varias lineas (L1), cada una tiene su carpeta DENTRO de wa-auth: sin ninguna
+  // vinculada, la que espera su QR es `wa-auth/nueva-<id>`.
   ok('WA_SIDECAR_AUTH_DIR le llega absoluto y FUERA del arbol del plugin, bajo ' +
-    'plugins-data/<publisher>.<id>/wa-auth (docs/ENCARGO...§7)',
-    visto.length > 0 && isAbsolute(visto) && visto === esperado, `${visto} != ${esperado}`)
+    'plugins-data/<publisher>.<id>/wa-auth/<linea> (docs/ENCARGO...§7)',
+    visto.length > 0 && isAbsolute(visto) && dirname(visto) === esperado &&
+    /^nueva-/.test(visto.slice(esperado.length + 1)), `${visto} no esta en ${esperado}/nueva-...`)
 }
 
 // ───────── sin userData de Orca, el sidecar no arranca a ciegas ─────────
@@ -1716,6 +1719,142 @@ console.log('\nworker: L1 — cada linea en su carpeta, y la de siempre se muda 
     readFileSync(join(base2, pendiente.carpeta, 'creds.json'), 'utf8') ===
       '{"noiseKey":{"private":"CCCC"}}' && !existsSync(join(base2, 'creds.json')),
     JSON.stringify(d))
+}
+
+// ───────── L2: un sidecar por linea, cada uno con su salud y su reinicio ─────────
+// De punta a punta con el resolvedor de verdad: la linea de siempre (auth plano) se muda a
+// su carpeta y arranca como la principal, la otra arranca a su lado como secundaria, una
+// caida reinicia solo a la que se cayo, y vincular y desvincular tocan una sola linea.
+console.log('\nworker: L2 — un sidecar por linea, y cada pedido toca solo la suya')
+{
+  const homeAntes = process.env.HOME
+  const xdgAntes = process.env.XDG_CONFIG_HOME
+  const appAntes = process.env.APPDATA
+  const casa = join(RAIZ, 'home-varias')
+  process.env.HOME = casa
+  process.env.XDG_CONFIG_HOME = join(casa, '.config')
+  process.env.APPDATA = join(casa, 'AppData', 'Roaming')
+  for (const b of [join(casa, 'Library', 'Application Support'), process.env.XDG_CONFIG_HOME,
+    process.env.APPDATA]) mkdirSync(join(b, 'orca'), { recursive: true })
+  try {
+    const base = dataDir(PLUGIN_DIR, 'wa-auth')
+    mkdirSync(join(base, 'pn-573000000001'), { recursive: true })
+    // La de siempre es la ...0002 y esta PLANA: aunque por nombre iria segunda, es la
+    // principal porque era la unica que habia.
+    writeFileSync(join(base, 'creds.json'), JSON.stringify({ me: { id: '573000000002:4@s.whatsapp.net' } }))
+    writeFileSync(join(base, 'pre-key-9.json'), '{"llave":"de-prueba"}')
+    writeFileSync(join(base, 'pn-573000000001', 'creds.json'),
+      JSON.stringify({ me: { id: '573000000001:2@s.whatsapp.net' } }))
+
+    const vidas = join(RAIZ, 'vidas-varias.txt')
+    const guion = join(RAIZ, 'sidecar-varias.cjs')
+    // Se porta como el de verdad en lo que importa aca: con `me` en su creds conecta y dice
+    // su cuenta; sin creds pide QR. La ...0001 se cae en su primera vida.
+    writeFileSync(guion,
+      '#!/usr/bin/env node\n' +
+      'const fs = require("node:fs")\n' +
+      'const path = require("node:path")\n' +
+      'const dir = process.env.WA_SIDECAR_AUTH_DIR\n' +
+      'const sec = process.env.WA_SIDECAR_LINEA_SECUNDARIA || ""\n' +
+      'fs.appendFileSync(' + JSON.stringify(vidas) + ', JSON.stringify({ dir, sec }) + "\\n")\n' +
+      'function emit (m) { process.stdout.write(JSON.stringify(m) + "\\n") }\n' +
+      'let me = null\n' +
+      'try { me = JSON.parse(fs.readFileSync(path.join(dir, "creds.json"), "utf8")).me.id } catch {}\n' +
+      'const marca = path.join(dir, "ya-cayo")\n' +
+      'if (me && me.startsWith("573000000001") && !fs.existsSync(marca)) {\n' +
+      '  fs.writeFileSync(marca, "x"); process.exit(1)\n' +
+      '}\n' +
+      'if (me) {\n' +
+      '  const cuenta = "pn:" + me.split(":")[0]\n' +
+      '  emit({ type: "connection", state: "open" })\n' +
+      '  emit({ type: "linea", cuenta, cambio: false, ts: Date.now() })\n' +
+      '} else {\n' +
+      '  fs.mkdirSync(dir, { recursive: true })\n' +
+      '  emit({ type: "qr", qr: "QR-" + path.basename(dir), ts: Date.now(), rotation: 1, ttlMs: 75000 })\n' +
+      '}\n' +
+      'setInterval(() => {}, 1000)\n', { mode: 0o755 })
+    const leerVidas = () => existsSync(vidas)
+      ? readFileSync(vidas, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []
+    const vidasDe = (carpeta) => carpeta
+      ? leerVidas().filter((v) => v.dir === join(base, carpeta)) : []
+
+    const orca = hostFalso(herramientas('varias', '#!/bin/sh\necho \'[]\'\n'), {}, guion)
+    const { apagar } = await arranca(orca)
+    await hasta(() => vidasDe('pn-573000000001').length >= 2 && vidasDe('pn-573000000002').length >= 1 &&
+      orca.store.sidecars?.['pn-573000000001']?.connection === 'open', 20000)
+
+    const principal = vidasDe('pn-573000000002')
+    ok('la linea de siempre arranca desde SU carpeta, con la misma credencial: sin QR nuevo',
+      principal.length === 1 && readFileSync(join(base, 'pn-573000000002', 'pre-key-9.json'), 'utf8') ===
+        '{"llave":"de-prueba"}' && orca.store.sidecar?.connection === 'open' && !orca.store.sidecar?.qr,
+      JSON.stringify({ vidas: leerVidas(), sidecar: orca.store.sidecar }))
+    ok('y es la principal: su estado sigue en la clave de siempre y su sidecar no es secundario',
+      orca.store.sidecar?.cuenta === 'pn:573000000002' && principal[0]?.sec === '',
+      JSON.stringify({ sidecar: orca.store.sidecar, principal }))
+    ok('la otra arranca a su lado, como secundaria, con su estado aparte',
+      vidasDe('pn-573000000001').every((v) => v.sec === '1') &&
+      orca.store.sidecars?.['pn-573000000001']?.cuenta === 'pn:573000000001',
+      JSON.stringify({ vidas: leerVidas(), sidecars: orca.store.sidecars }))
+    ok('la que se cayo se reinicio sola, y la otra no se toco',
+      vidasDe('pn-573000000001').length === 2 && vidasDe('pn-573000000002').length === 1,
+      JSON.stringify(leerVidas()))
+    const registro = orca.store.lineas
+    ok('las lineas quedan anotadas en orden, la principal primero, de tipo soporte',
+      Array.isArray(registro) && registro.length === 2 &&
+      registro[0].carpeta === 'pn-573000000002' && registro[1].carpeta === 'pn-573000000001' &&
+      registro.every((l) => l.tipo === 'support'), JSON.stringify(registro))
+
+    // Vincular una linea nueva: su propia carpeta y su propio QR, al lado de las otras.
+    orca.store.sidecarRequest = { id: 'pedido-vincular', action: 'vincular', at: new Date().toISOString() }
+    await hasta(() => orca.store.sidecarResult?.requestId === 'pedido-vincular', 15000)
+    const v = orca.store.sidecarResult
+    const nueva = v?.carpeta
+    await hasta(() => nueva && orca.store.sidecars?.[nueva]?.qr, 10000)
+    ok('vincular abre una linea nueva en su propia carpeta', v?.ok === true &&
+      v.code === 'vinculando' && /^nueva-/.test(String(nueva)) && vidasDe(nueva).length === 1 &&
+      vidasDe(nueva)[0].sec === '1', JSON.stringify({ v, vidas: leerVidas() }))
+    ok('con su propio QR, sin tocar el estado de la principal',
+      orca.store.sidecars?.[nueva]?.qr?.qr === `QR-${nueva}` && orca.store.sidecar?.connection === 'open',
+      JSON.stringify({ sidecars: orca.store.sidecars, sidecar: orca.store.sidecar }))
+    orca.store.sidecarRequest = { id: 'pedido-vincular-2', action: 'vincular', at: new Date().toISOString() }
+    await hasta(() => orca.store.sidecarResult?.requestId === 'pedido-vincular-2', 15000)
+    ok('pedir otra mientras una espera su QR devuelve la misma: nunca dos QR a la vez',
+      orca.store.sidecarResult?.carpeta === nueva && vidasDe(nueva).length === 1,
+      JSON.stringify(orca.store.sidecarResult))
+
+    // Desvincular UNA linea: la suya y nada mas.
+    const antesOtra = vidasDe('pn-573000000002').length
+    orca.store.sidecarRequest = { id: 'pedido-desv-1', action: 'desvincular',
+      carpeta: 'pn-573000000001', at: new Date().toISOString() }
+    await hasta(() => orca.store.sidecarResult?.requestId === 'pedido-desv-1', 15000)
+    await dormir(1000)
+    ok('desvincular una linea borra solo su carpeta', orca.store.sidecarResult?.ok === true &&
+      orca.store.sidecarResult.code === 'desvinculado' && !existsSync(join(base, 'pn-573000000001')) &&
+      existsSync(join(base, 'pn-573000000002', 'creds.json')), JSON.stringify(orca.store.sidecarResult))
+    ok('no relanza esa linea ni toca la otra',
+      vidasDe('pn-573000000001').length === 2 && vidasDe('pn-573000000002').length === antesOtra,
+      JSON.stringify(leerVidas()))
+    ok('y sale del registro y de los estados que lee el panel',
+      !(orca.store.lineas || []).some((l) => l.carpeta === 'pn-573000000001') &&
+      !orca.store.sidecars?.['pn-573000000001'], JSON.stringify({ l: orca.store.lineas, s: orca.store.sidecars }))
+
+    // Desvincular la principal con otra todavia vinculada: la otra pasa a ser la principal.
+    orca.store.sidecarRequest = { id: 'pedido-desv-2', action: 'desvincular', at: new Date().toISOString() }
+    await hasta(() => orca.store.sidecarResult?.requestId === 'pedido-desv-2', 15000)
+    await dormir(1000)
+    ok('sin carpeta, desvincular es sobre la principal, como siempre',
+      orca.store.sidecarResult?.code === 'desvinculado' && !existsSync(join(base, 'pn-573000000002')),
+      JSON.stringify(orca.store.sidecarResult))
+    ok('y la que queda pasa a ser la principal: su QR ahora en la clave de siempre',
+      (orca.store.lineas || [])[0]?.carpeta === nueva && orca.store.sidecar?.qr?.qr === `QR-${nueva}` &&
+      !orca.store.sidecars?.[nueva], JSON.stringify({ l: orca.store.lineas, s: orca.store.sidecar }))
+    apagar()
+    await dormir(500)
+  } finally {
+    process.env.HOME = homeAntes
+    process.env.XDG_CONFIG_HOME = xdgAntes
+    process.env.APPDATA = appAntes
+  }
 }
 
 // El hijo que resuelve el auth dir y el sidecar mismo tienen que correr SIN la valla

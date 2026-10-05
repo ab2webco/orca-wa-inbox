@@ -98,25 +98,32 @@ function mudarPlano (base) {
   return destino
 }
 
-/** Las lineas en disco, con el disco ya ordenado. */
+/** Las lineas en disco, con el disco ya ordenado, y cual se acaba de mudar del auth state
+ *  plano (`mudada`): esa era la unica linea, y el worker la deja como la principal. */
 function lineasEnDisco (base) {
-  if (!existsSync(base)) return []
-  mudarPlano(base)
+  if (!existsSync(base)) return { lineas: [], mudada: null }
+  let mudada = mudarPlano(base)
   for (const nombre of readdirSync(base)) {
-    if (!nombre.startsWith(PREFIJO_NUEVA) || !CARPETA_RE.test(nombre)) continue
+    if (!CARPETA_RE.test(nombre) || !esCarpeta(join(base, nombre))) continue
     const cuenta = cuentaDeCreds(join(base, nombre, 'creds.json'))
     if (!cuenta) continue
-    const destino = join(base, carpetaDeCuenta(cuenta))
-    // El mismo numero vinculado otra vez: la sesion que el dueno acaba de escanear es la
-    // que vale, y la vieja se reemplaza en vez de dejar dos sidecars sobre una cuenta.
-    rmSync(destino, { recursive: true, force: true })
-    renameSync(join(base, nombre), destino)
+    const destino = carpetaDeCuenta(cuenta)
+    if (nombre === destino) continue
+    // Una carpeta con otro nombre que su numero solo se mueve si es una `nueva-...` (o si
+    // la de su numero no existe): el mismo numero vinculado otra vez reemplaza a la vieja,
+    // que es la sesion que el dueno acaba de escanear, en vez de dejar dos sidecars sobre
+    // una cuenta.
+    if (!nombre.startsWith(PREFIJO_NUEVA) && existsSync(join(base, destino))) continue
+    rmSync(join(base, destino), { recursive: true, force: true })
+    renameSync(join(base, nombre), join(base, destino))
+    if (mudada === nombre) mudada = destino
   }
-  return readdirSync(base)
+  const lineas = readdirSync(base)
     .filter((nombre) => CARPETA_RE.test(nombre) && esCarpeta(join(base, nombre)))
     .sort()
     .map((nombre) => ({ carpeta: nombre, dir: join(base, nombre),
       cuenta: cuentaDeCreds(join(base, nombre, 'creds.json')) }))
+  return { lineas, mudada }
 }
 
 /** Saca la linea de las activas del almacen al desvincularla. Solo si el almacen existe:
@@ -168,7 +175,7 @@ if (!dir) {
   }
 } else if (lineas) {
   try {
-    responder({ ok: true, dir, lineas: lineasEnDisco(dir) })
+    responder({ ok: true, dir, ...lineasEnDisco(dir) })
   } catch (error) {
     responder({ ok: false, dir, reason: 'lineas-fallo',
       detail: String(error?.message ?? error).slice(0, 300) })

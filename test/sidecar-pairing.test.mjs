@@ -16,7 +16,7 @@ import { decidirTrasCierre, calcularEsperaMs, intentoTrasEvento, mensajeQr, qrVe
   tocaEmitirAlmacen, opcionesDeSocket, salidaTrasCierre, repetidosTrasCierre, MOTIVO,
   PARCHES_DE_LIBRETA, CIERRES_REPETIDOS_TOPE, CIERRES_VENTANA_MS,
   QR_ROTACION_MS, QR_VIGENCIA_MS, SALIDA, LATIDO_LINEA_MS, mensajeLatido,
-  ALMACEN_LATIDO_MS, anotarLinea, LINEA_SECUNDARIA_ENV
+  ALMACEN_LATIDO_MS, anotarLinea, LINEA_SECUNDARIA_ENV, CUENTA_PREVIA_ENV
 } from '../sidecar/src/index.js'
 import { crearAlcance, LINEA_ENV } from '../sidecar/src/alcance.js'
 import { abrirAlmacen, rutaAlmacen } from '../sidecar/src/almacen.js'
@@ -443,6 +443,15 @@ console.log('\nsidecar: L1 — cada linea anota la suya y pregunta por su alcanc
     JSON.stringify({ segunda, l: almacen.lineasActivas() }))
   ok('volver a anotarla no es un cambio',
     anotarLinea({ almacen, cuenta: B, env: { [LINEA_SECUNDARIA_ENV]: '1' } }).cambio === false)
+  // La secundaria se re-vincula con OTRO numero tras un QR nuevo: el sidecar nuevo no lo
+  // sabe, el worker si, y se lo dice para que el numero viejo salga de las activas.
+  const C = 'pn:573000000011'
+  anotarLinea({ almacen, cuenta: C,
+    env: { [LINEA_SECUNDARIA_ENV]: '1', [CUENTA_PREVIA_ENV]: B } })
+  ok('con el numero que tenia, la secundaria reemplaza al suyo y no deja uno muerto',
+    CUENTA_PREVIA_ENV === 'WA_SIDECAR_CUENTA_PREVIA' &&
+    JSON.stringify(almacen.lineasActivas()) === JSON.stringify([A, C]),
+    JSON.stringify(almacen.lineasActivas()))
   almacen.cerrar()
   rmSync(home, { recursive: true, force: true })
 
