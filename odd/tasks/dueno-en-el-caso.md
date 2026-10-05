@@ -50,7 +50,9 @@ chats already skip the rule levels in `frenos_de_regla`), Jev.
       "dueno-en-el-caso: el caso dice cuando escribe el dueno"). `caso_del_dueno` decides it:
       `chat_es_del_dueno`, or every incoming message of the case with an owner `sender_jid`.
       RED: 9 of 16 failed (owner DM, owner-only group, line's own chat still said "data from
-      the customer"); GREEN: 16/16.
+      the customer"); GREEN: 16/16. Follow-up: an owner case in a group also says that others read the
+      group and only what he asked for there is delivered there (`GRUPO_DUENO`). RED: 1 of 25
+      failed; GREEN: 25/25.
 - [x] D2 Owner case rules in `harness/AGENTS.md` and the `whatsapp-soporte` skill, customer
       rules unchanged (scripts/check-harness). New `## The owner's own case` section in both;
       the skill's escalation section says the reason is the one question for the owner and

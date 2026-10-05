@@ -9027,6 +9027,9 @@ if NODE:
                                               "ask him directly in the reply",
                                               "never write a credential value")),
                    archivo[:1500])
+                # En un grupo leen otros: se le entrega ahi lo que pidio ahi, nada mas.
+                ok(f"el archivo del caso avisa que en un grupo leen otros solo si es grupo: {nombre}",
+                   ("others read this group" in archivo) == (s == "O2"), archivo[:1500])
                 # Caso vivo: el agente del proyecto publico el informe y anoto "enlace no
                 # enviado al cliente". Al dueno, el enlace va en la respuesta.
                 ok(f"el brief pide que la respuesta al dueno lleve el enlace: {nombre}",

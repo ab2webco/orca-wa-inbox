@@ -8435,6 +8435,10 @@ REGLAS_DUENO = (
     "give it to him; never escalate his own request to him (no `escalar` to the owner about "
     "his own request): if something is unclear, ask him directly in the reply. You still "
     "never write a credential value in any chat.")
+# En un grupo del dueno leen otros: se le entrega ahi lo que pidio ahi, y el piso del chat
+# (que en un grupo no se salta) sigue revisando lo que sale.
+GRUPO_DUENO = ("This chat is a group: others read this group too. Deliver here only what he "
+               "asked for here; anything else for him alone is not for this chat.")
 
 
 def cabeza_del_caso(con, caso, del_dueno=None):
@@ -8456,6 +8460,7 @@ def cabeza_del_caso(con, caso, del_dueno=None):
         f"# WhatsApp case #{cid}: {caso.get('titulo') or 'untitled'}",
         "",
         *([DICE_DUENO, "", REGLAS_DUENO] if del_dueno else [DICE_CLIENTE]),
+        *(["", GRUPO_DUENO] if del_dueno and caso["chat_jid"].endswith("@g.us") else []),
         "",
         f"- Chat: {chat.get('chat_name') or '-'} ({caso['chat_jid']}), mode "
         f"{chat.get('mode') or 'off'}",
