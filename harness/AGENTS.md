@@ -73,6 +73,16 @@ line and finish.
   `PROJECTS.md` has its path. Once approved, the plugin dispatches it to the project's
   agent by itself; never start that agent yourself. The project agent reports with
   `wa-scope caso resultado` (resuelto, necesita or bloqueado).
+- **Which project.** A chat can have several projects. A matching text rule decides first;
+  a chat with one project uses it. With two or more and no rule, `where` returns
+  `workspace` null and the chat's projects in `candidates`: choose one by the content with
+  `wa-scope caso proyecto <id> --proyecto <pid> --actor agente --porque "<why>"` (the
+  reason shows on the card). If the content does not decide it, ask "A or B?" with
+  `wa-scope caso pregunta-proyecto <id> --candidatos <a>,<b> --texto "<question>" --actor
+  agente` and propose what its `next` says; the chat's setting decides who is asked, not
+  you. Never tell a customer the names of the projects, unless the chat's setting sends the
+  question to them. Once the owner chose the project, or his text rule chose it, it is his
+  (`E_OWNER`).
 - **Escalate** (`--tipo escalar`) when it needs the owner, never in the owner's own case:
   there you ask him in the reply.
 

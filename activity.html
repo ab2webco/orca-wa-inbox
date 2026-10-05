@@ -462,6 +462,27 @@
       .combo-name { min-width: 0; overflow-wrap: anywhere; }
       .combo-sub { flex: none; margin-left: auto; font-size: 11px; white-space: nowrap;
               color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      /* Angosto, el id va debajo del nombre: al lado, un nombre largo quedaba en una columna
+         de una palabra por renglon (como en config.html). */
+      @media (max-width: 420px) {
+        .combo-opt { flex-wrap: wrap; }
+        .combo-sub { margin-left: 0; white-space: normal; flex: 1 1 100%; min-width: 0;
+              overflow-wrap: anywhere; }
+      }
+      .combo-group { padding: 6px 8px 2px; font-size: 11px; font-weight: 600;
+              text-transform: uppercase; letter-spacing: 0.05em;
+              color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      /* El proyecto del caso: por que y quien lo eligio, mas tenue que el nombre; y la
+         pregunta "A o B?" que espera respuesta, con un filete como lo que espera algo. */
+      .det-porque { color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .det-pregunta { margin-top: 8px; padding: 8px 10px; font-size: 12px;
+              border: 1px solid var(--border, var(--fb-border)); border-radius: var(--radius-md);
+              overflow-wrap: anywhere; }
+      .det-pregunta .det-text + .det-text { margin-top: 4px; }
+      .det-pregunta-lead { margin: 0 0 4px; font-weight: 600; }
+      .det-pregunta .det-k { color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .card-pregunta { font-size: 11px; font-weight: 500; overflow-wrap: anywhere;
+              color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .combo-empty { padding: 8px; font-size: 12px;
               color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .card-form label { display: block; margin-bottom: 4px; font-size: 11px; font-weight: 500;
@@ -962,6 +983,23 @@
               "acOkIgnorado": "Caso ignorado",
               "acOkProyecto": "Proyecto actualizado",
               "detProject": "Proyecto", "detPrevCase": "Caso anterior",
+              "acProyectoDelChat": "Proyectos de esta conversacion", "acProyectoOtros": "Otros proyectos",
+              "projByAgent": "lo eligio el agente", "projByRule": "por una regla de texto",
+              "projByRuleSays": "por una regla de texto: el mensaje dice {p}",
+              "projByChat": "es el proyecto de la conversacion", "projByOwner": "lo eligio usted",
+              "projNoneByOwner": "asi lo dejo usted",
+              "projAgentChooses": "la conversacion tiene {n} proyectos: el agente elige por el contenido",
+              "pqWaitingLead": "Esperando respuesta: ¿{list}?", "pqOr": " o ",
+              "pqToWriter": "Se le pregunto a quien escribio. Su respuesta vuelve a este caso; si usted ya lo sabe, elija el proyecto aqui.",
+              "pqToOwner": "Le toca a usted: conteste el aviso por WhatsApp o elija el proyecto aqui.",
+              "pqToOwnerLate": "Quien escribio no contesto a tiempo y le toca a usted: conteste el aviso por WhatsApp o elija el proyecto aqui.",
+              "pqQuestion": "Pregunta",
+              "pqAnswered": "Quien escribio respondio la pregunta de proyecto: el agente elige ahora.",
+              "histProjectAgent": "proyecto elegido por el agente",
+              "histProjectQuestion": "pregunta de proyecto: {que}",
+              "histProjectAnswer": "quien escribio respondio la pregunta de proyecto",
+              "motNoProject": "no tiene proyecto", "motProjectQuestion": "la pregunta de proyecto es suya",
+              "motToWriter": "a quien escribio", "motToOwner": "a usted",
               "boardNeedsAgent": "Para el agente en su proxima corrida",
               "botFallback": "Cuenta de respaldo: {account} ({reason})",
               "agentFallback": "Agente de casos con la cuenta de respaldo {account} ({reason})",
@@ -1006,7 +1044,7 @@
               "motSecret": "un secreto", "motJevDown": "Jev no contesto",
               "motDelete": "borrar", "motDeploy": "desplegar a produccion",
               "motForcePush": "push forzado", "motPayment": "pagos",
-              "motOutside": "fuera del proyecto del chat", "motMode": "el chat solo observa",
+              "motOutside": "fuera de los proyectos del chat", "motMode": "el chat solo observa",
               "motStale": "propuesta de hace mas de un dia",
               "motExceptions": "excepciones del caso", "motNoInstr": "sin instrucciones",
               "claseCard": "para el agente", "claseAlert": "para usted",
@@ -1287,6 +1325,23 @@
               "acOkIgnorado": "Case ignored",
               "acOkProyecto": "Project updated",
               "detProject": "Project", "detPrevCase": "Previous case",
+              "acProyectoDelChat": "This conversation's projects", "acProyectoOtros": "Other projects",
+              "projByAgent": "chosen by the agent", "projByRule": "by a text rule",
+              "projByRuleSays": "by a text rule: the message says {p}",
+              "projByChat": "it is the conversation's project", "projByOwner": "chosen by you",
+              "projNoneByOwner": "you left it like this",
+              "projAgentChooses": "the conversation has {n} projects: the agent chooses by content",
+              "pqWaitingLead": "Waiting for an answer: {list}?", "pqOr": " or ",
+              "pqToWriter": "The person who wrote was asked. Their answer comes back to this case; if you already know, choose the project here.",
+              "pqToOwner": "It is up to you: answer the WhatsApp notice or pick the project here.",
+              "pqToOwnerLate": "The person who wrote did not answer in time, so it is up to you: answer the WhatsApp notice or pick the project here.",
+              "pqQuestion": "Question",
+              "pqAnswered": "The person who wrote answered the project question: the agent chooses now.",
+              "histProjectAgent": "project chosen by the agent",
+              "histProjectQuestion": "project question: {que}",
+              "histProjectAnswer": "the writer answered the project question",
+              "motNoProject": "it has no project", "motProjectQuestion": "the project question is yours",
+              "motToWriter": "to the writer", "motToOwner": "to you",
               "boardNeedsAgent": "For your agent on its next run",
               "botFallback": "Fallback account: {account} ({reason})",
               "agentFallback": "Case agent on the fallback account {account} ({reason})",
@@ -1331,7 +1386,7 @@
               "motSecret": "a secret", "motJevDown": "Jev did not answer",
               "motDelete": "deleting", "motDeploy": "deploying to production",
               "motForcePush": "force push", "motPayment": "payments",
-              "motOutside": "outside the chat's project", "motMode": "the chat only observes",
+              "motOutside": "outside the chat's projects", "motMode": "the chat only observes",
               "motStale": "a proposal older than a day",
               "motExceptions": "the case's exceptions", "motNoInstr": "no instructions",
               "claseCard": "for the agent", "claseAlert": "for you",
@@ -1612,6 +1667,23 @@
               "acOkIgnorado": "Caso ignorado",
               "acOkProyecto": "Projeto atualizado",
               "detProject": "Projeto", "detPrevCase": "Caso anterior",
+              "acProyectoDelChat": "Projetos desta conversa", "acProyectoOtros": "Outros projetos",
+              "projByAgent": "escolhido pelo agente", "projByRule": "por uma regra de texto",
+              "projByRuleSays": "por uma regra de texto: a mensagem diz {p}",
+              "projByChat": "e o projeto da conversa", "projByOwner": "escolhido por voce",
+              "projNoneByOwner": "voce deixou assim",
+              "projAgentChooses": "a conversa tem {n} projetos: o agente escolhe pelo conteudo",
+              "pqWaitingLead": "Aguardando resposta: {list}?", "pqOr": " ou ",
+              "pqToWriter": "Perguntou-se a quem escreveu. A resposta volta a este caso; se voce ja sabe, escolha o projeto aqui.",
+              "pqToOwner": "Cabe a voce: responda o aviso pelo WhatsApp ou escolha o projeto aqui.",
+              "pqToOwnerLate": "Quem escreveu nao respondeu a tempo e cabe a voce: responda o aviso pelo WhatsApp ou escolha o projeto aqui.",
+              "pqQuestion": "Pergunta",
+              "pqAnswered": "Quem escreveu respondeu a pergunta de projeto: o agente escolhe agora.",
+              "histProjectAgent": "projeto escolhido pelo agente",
+              "histProjectQuestion": "pergunta de projeto: {que}",
+              "histProjectAnswer": "quem escreveu respondeu a pergunta de projeto",
+              "motNoProject": "nao tem projeto", "motProjectQuestion": "a pergunta de projeto e sua",
+              "motToWriter": "a quem escreveu", "motToOwner": "a voce",
               "boardNeedsAgent": "Para o agente na proxima rodada",
               "botFallback": "Conta de reserva: {account} ({reason})",
               "agentFallback": "Agente de casos com a conta de reserva {account} ({reason})",
@@ -1656,7 +1728,7 @@
               "motSecret": "um segredo", "motJevDown": "o Jev nao respondeu",
               "motDelete": "apagar", "motDeploy": "publicar em producao",
               "motForcePush": "push forcado", "motPayment": "pagamentos",
-              "motOutside": "fora do projeto do chat", "motMode": "o chat so observa",
+              "motOutside": "fora dos projetos do chat", "motMode": "o chat so observa",
               "motStale": "proposta de mais de um dia",
               "motExceptions": "excecoes do caso", "motNoInstr": "sem instrucoes",
               "claseCard": "para o agente", "claseAlert": "para voce",
@@ -2096,7 +2168,8 @@
         proposal: 'histProposal', approved: 'histApproved', sent: 'histSent',
         route: 'histRoute', project: 'histProject', classified: 'histClassified',
         retitled: 'histRetitled', withdrawn: 'histWithdrawn', authorized: 'histAuthorized',
-        attend: 'histAttend' }
+        attend: 'histAttend', project_question: 'histProjectQuestion',
+        project_answer: 'histProjectAnswer' }
       // Los motivos y excepciones que viajan en `args`, en palabras.
       var MOTIVO_KEY = { money: 'excMoney', credential: 'excCredential',
         commitment: 'excCommitment', jev: 'excJev', secret: 'motSecret',
@@ -2105,6 +2178,8 @@
         contains_credential: 'flagContainsCredential', delete: 'motDelete',
         deploy: 'motDeploy', force_push: 'motForcePush', payment: 'motPayment',
         outside_project: 'motOutside', mode: 'motMode', stale: 'motStale',
+        no_project: 'motNoProject', project_question: 'motProjectQuestion',
+        writer: 'motToWriter', owner: 'motToOwner',
         exceptions: 'motExceptions', no_instructions: 'motNoInstr',
         responder: 'propResponder', trabajar: 'propTrabajar', escalar: 'propEscalar',
         descartar: 'propDescartar', card: 'claseCard', alert: 'claseAlert',
@@ -2115,6 +2190,8 @@
           ? HIST_KEY[ev.que] : null
         if (!key) return ''
         var args = Array.isArray(ev.args) ? ev.args.filter(function (x) { return typeof x === 'string' }) : []
+        // El proyecto que eligio el agente trae `[id, "agent"]`; el del dueno, nada.
+        if (ev.que === 'project' && args.indexOf('agent') >= 0) return t('histProjectAgent')
         var detalle = frases(MOTIVO_KEY, args, t('excOther'))
         return detalle ? t(key).replace('{que}', detalle) : t(key).replace(/:?\s*\{que\}/, '')
       }
@@ -2326,7 +2403,9 @@
         // para ese caso, "Ignorar" lo cierra. Solo antes de que haya una propuesta.
         atender: { etapas: ['recibido', 'clasificado'] },
         ignorar: { etapas: ['recibido', 'clasificado'] },
-        proyecto: { etapas: ['recibido', 'clasificado', 'decision', 'bloqueado'] }
+        // En respondido solo cuando la tarjeta la ofrece: la pregunta "A o B?" espera al que
+        // escribio, y elegir el proyecto la contesta (proyectos-por-chat).
+        proyecto: { etapas: ['recibido', 'clasificado', 'decision', 'bloqueado', 'respondido'] }
       }
       var ACC_KEY = { enviar: 'acEnviar', editar: 'acEditar', ejecutar: 'acEjecutar',
         reclasificar: 'acReclasificar', cerrar: 'acCerrar', reabrir: 'acReabrir',
@@ -2593,10 +2672,22 @@
 
         function opciones () {
           var q = f.escrito ? plano(input.value).trim() : ''
-          var todas = [{ value: '', nombre: t('acProyectoNinguno') }].concat(
-            proyectosAceptados.map(function (p) {
-              return { value: p.id, nombre: typeof p.name === 'string' && p.name ? p.name : p.id, sub: p.id }
-            }))
+          var opcion = function (p, grupo) {
+            return { value: p.id, nombre: typeof p.name === 'string' && p.name ? p.name : p.id, sub: p.id,
+              grupo: grupo }
+          }
+          // Los proyectos de la conversacion primero, en su orden, y despues el resto del
+          // catalogo (proyectos-por-chat, M6). Sin la ruta en el tablero, la lista de siempre.
+          var delChat = candidatosDe(rutaDe({ case_id: id }))
+          var ids = delChat.map(function (p) { return p.id })
+          var todas = [{ value: '', nombre: t('acProyectoNinguno') }]
+          if (delChat.length) {
+            todas = todas.concat(delChat.map(function (p) { return opcion(p, t('acProyectoDelChat')) }),
+              proyectosAceptados.filter(function (p) { return ids.indexOf(p.id) === -1 })
+                .map(function (p) { return opcion(p, t('acProyectoOtros')) }))
+          } else {
+            todas = todas.concat(proyectosAceptados.map(function (p) { return opcion(p, null) }))
+          }
           return todas.filter(function (i) {
             return !q || plano(i.nombre).indexOf(q) >= 0 || plano(i.value).indexOf(q) >= 0
           })
@@ -2613,14 +2704,29 @@
           lista.textContent = ''
           if (!proyectosAceptados.length) lista.appendChild(crear('div', 'combo-empty', t('acProyectoSinCatalogo')))
           if (!estado.items.length) lista.appendChild(crear('div', 'combo-empty', t('acProyectoVacioLista')))
+          var grupo = null, destino = lista
           estado.items.forEach(function (i) {
+            // Cada grupo con su nombre, para la vista y para el lector de pantalla.
+            if ((i.grupo || null) !== grupo) {
+              grupo = i.grupo || null
+              destino = lista
+              if (grupo) {
+                destino = crear('div')
+                destino.setAttribute('role', 'group')
+                destino.setAttribute('aria-label', grupo)
+                var rotulo = crear('div', 'combo-group', grupo)
+                rotulo.setAttribute('role', 'presentation')
+                destino.appendChild(rotulo)
+                lista.appendChild(destino)
+              }
+            }
             var o = crear('div', 'combo-opt')
             o.id = idOpcion(i.value)
             o.setAttribute('role', 'option')
             o.dataset.value = i.value
             o.appendChild(crear('span', 'combo-name', i.nombre))
             if (i.sub && i.sub !== i.nombre) o.appendChild(crear('span', 'combo-sub', i.sub))
-            lista.appendChild(o)
+            destino.appendChild(o)
           })
           marcar()
         }
@@ -2799,6 +2905,85 @@
         return m ? fmt('agentFail', { reason: m }) : t('agentFailGeneric')
       }
 
+      // ---------- el proyecto del caso: su porque, quien y la pregunta (proyectos-por-chat) ----------
+      // `board.project_routes[<case_id>]` = {why, by, candidates, missing, question}. Vive en el
+      // tablero y no en la tarjeta (su juego de llaves es contrato), y viaja dentro de `board`,
+      // asi que la firma del tablero ya la cubre.
+      function rutaDe (c) {
+        var rutas = tableroActual && esObjeto(tableroActual.project_routes) ? tableroActual.project_routes : null
+        var r = rutas ? rutas[String(c.case_id)] : null
+        return esObjeto(r) ? r : null
+      }
+      function candidatosDe (ruta) {
+        return ruta && Array.isArray(ruta.candidates) ? ruta.candidates.filter(function (p) {
+          return esObjeto(p) && typeof p.id === 'string' && p.id
+        }) : []
+      }
+      function nombreDeCandidato (p) { return typeof p.name === 'string' && p.name ? p.name : p.id }
+      /** "A o B", "A, B o C": los proyectos de la pregunta. */
+      function listaConO (nombres) {
+        if (nombres.length < 2) return nombres.join('')
+        return nombres.slice(0, -1).join(', ') + t('pqOr') + nombres[nombres.length - 1]
+      }
+      /** Por que el caso tiene ese proyecto y quien lo eligio, en el idioma del usuario, o ''.
+       *  Lo que wa-scope dice en ingles (la regla, el del chat, el del dueno) se dice con la
+       *  frase del panel; el porque del agente es texto suyo y va tal cual. */
+      function porQueDelProyecto (ruta, proyecto) {
+        if (!ruta) return ''
+        var why = typeof ruta.why === 'string' ? ruta.why.trim() : ''
+        if (ruta.by === 'agent') return t('projByAgent') + (why ? ': ' + why : '')
+        if (ruta.by === 'rule') {
+          var m = /^the message says (['"])(.+)\1$/.exec(why)
+          return m ? fmt('projByRuleSays', { p: m[2] }) : t('projByRule')
+        }
+        // Sin proyecto no es "el de la conversacion": el unico del chat que el dueno quito del
+        // catalogo se ve sin proyecto, como antes.
+        if (ruta.by === 'chat') return proyecto ? t('projByChat') : ''
+        if (ruta.by === 'owner') return t(proyecto ? 'projByOwner' : 'projNoneByOwner')
+        var n = candidatosDe(ruta).length
+        if (!proyecto && n > 1) return fmt('projAgentChooses', { n: n })
+        return ''
+      }
+      /** La pregunta "A o B?" del caso si sigue abierta o ya se contesto; null si no hay o se
+       *  cerro (el proyecto ya se eligio). */
+      function preguntaDe (c) {
+        var ruta = rutaDe(c)
+        var p = ruta && esObjeto(ruta.question) ? ruta.question : null
+        if (!p || (p.state !== 'open' && p.state !== 'answered')) return null
+        return p
+      }
+      function nombresDePregunta (p) {
+        return (Array.isArray(p.candidates) ? p.candidates : []).filter(function (x) {
+          return esObjeto(x) && typeof x.id === 'string' && x.id
+        }).map(nombreDeCandidato)
+      }
+      /** En la tarjeta: la pregunta abierta, en una linea. */
+      function preguntaTarjetaNodo (c) {
+        var p = preguntaDe(c)
+        if (!p || p.state !== 'open') return null
+        return crear('div', 'card-pregunta clamp2', fmt('pqWaitingLead', { list: listaConO(nombresDePregunta(p)) }))
+      }
+      /** En el detalle: a quien se pregunto, que, o que ya contesto. */
+      function preguntaDetalleNodo (c) {
+        var p = preguntaDe(c)
+        if (!p) return null
+        var caja = crear('div', 'det-pregunta')
+        if (p.state === 'answered') {
+          caja.appendChild(crear('p', 'det-text', t('pqAnswered')))
+          return caja
+        }
+        caja.appendChild(crear('p', 'det-pregunta-lead', fmt('pqWaitingLead', { list: listaConO(nombresDePregunta(p)) })))
+        var a = p.to === 'owner' ? (p.escalated === true ? 'pqToOwnerLate' : 'pqToOwner') : 'pqToWriter'
+        caja.appendChild(crear('p', 'det-text', t(a)))
+        if (typeof p.text === 'string' && p.text.trim()) {
+          var q = crear('p', 'det-text')
+          q.appendChild(crear('span', 'det-k', t('pqQuestion') + ': '))
+          q.appendChild(crear('span', null, p.text.trim()))
+          caja.appendChild(q)
+        }
+        return caja
+      }
+
       /** "Para el agente en su proxima corrida": el caso que el dueno o Jev le pasaron. Si el
        *  ultimo lanzamiento del agente fallo, eso es lo que se dice, en todas las que lo
        *  esperan: prometer la proxima corrida mientras cada una falla es esconderlo. */
@@ -2878,6 +3063,8 @@
         if (aprobada) nodos.push(aprobada)
         var agente = agenteNodo(c)
         if (agente) nodos.push(agente)
+        var pregunta = preguntaTarjetaNodo(c)
+        if (pregunta) nodos.push(pregunta)
         if (c.read_only === true) nodos.push(crear('div', 'card-solo-leer', t('boardReadOnly')))
         var primaria = primariaDe(accionesDe(c))
         var aviso = formularios[id] ? null : mensajeNodo(id)
@@ -3225,8 +3412,13 @@
           fp.appendChild(crear('span', null, proyecto
             ? (typeof proyecto.name === 'string' && proyecto.name ? proyecto.name : proyecto.id)
             : t('acProyectoNinguno')))
+          // Por que ese proyecto y quien lo eligio (proyectos-por-chat, M6).
+          var porQue = porQueDelProyecto(rutaDe(c), proyecto)
+          if (porQue) fp.appendChild(crear('span', 'det-porque', ' · ' + porQue))
           caja.appendChild(fp)
         }
+        var preguntaNodo = preguntaDetalleNodo(c)
+        if (preguntaNodo) caja.appendChild(preguntaNodo)
 
         // Un caso es un pedido: si este abrio aparte de uno que ya estaba, se dice cual.
         if (Number.isInteger(c.related_case) && c.related_case > 0) {

@@ -475,6 +475,324 @@ def revisa_proyectos(fallos: list) -> int:
     return hechas
 
 
+def revisa_varios_proyectos(fallos: list) -> int:
+    """Una conversacion con VARIOS proyectos (proyectos-por-chat, M1 y M2).
+
+    La lista vive en `chat_scope.workspaces` y en `scope[jid].workspaces` del panel; la
+    columna y la clave `workspace` de siempre quedan derivadas (el unico id cuando la lista
+    tiene uno, si no null), y asi cada lector de un solo proyecto sigue igual. Lo que se
+    prueba es lo que no se ve en el codigo: una base y un panel de antes dan la lista de
+    un proyecto, un panel que vacia la lista la vacia, un id que el dueno quito del
+    catalogo se conserva y se dice, y lo que escribe el codigo anterior no queda pisado
+    por una lista vieja."""
+    hechas = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+
+        def scope(*args):
+            return subprocess.run([str(BIN / "wa-scope"), *args, "--json"],
+                                  capture_output=True, text=True, env=env, timeout=180)
+
+        def filas(*args):
+            p = scope(*args)
+            return json.loads(p.stdout or "[]") if p.returncode == 0 else []
+
+        man = json.loads((RAIZ / "orca-plugin.json").read_text(encoding="utf-8"))
+        base = ((home / "Library" / "Application Support" / "orca") if sys.platform == "darwin"
+                else (home / ".config" / "orca"))
+        store = base / "plugins-data" / f"{man['publisher']}.{man['id']}" / "storage.json"
+        store.parent.mkdir(parents=True, exist_ok=True)
+
+        def storage():
+            return json.loads(store.read_text(encoding="utf-8")) if store.exists() else {}
+
+        def guarda(**claves):
+            datos = storage()
+            datos.update(claves)
+            store.write_text(json.dumps(datos), encoding="utf-8")
+
+        def entrada(jid, **campos):
+            datos = storage()
+            datos.setdefault("scope", {})[jid] = dict(
+                {"chatName": "Grupo Demo", "provider": "ninguno", "target": None,
+                 "mode": "borrador"}, **campos)
+            store.write_text(json.dumps(datos), encoding="utf-8")
+
+        def fila(jid):
+            return next((r for r in filas("list") if r.get("chat_jid") == jid), {})
+
+        def columnas(jid):
+            con = sqlite3.connect(db)
+            try:
+                r = con.execute("select workspace, workspaces from chat_scope where chat_jid=?",
+                                (jid,)).fetchone()
+            except sqlite3.OperationalError:
+                return None
+            finally:
+                con.close()
+            return (r[0], json.loads(r[1]) if r and r[1] else None) if r else None
+
+        GRUPO, DIRECTO, OTRO = "300@g.us", "400@s.whatsapp.net", "500@g.us"
+        PROYECTOS = [
+            {"id": "alfa-demo", "name": "Alfa Demo", "path": "/srv/ejemplo/alfa-demo",
+             "note": "Tienda en linea"},
+            {"id": "beta-demo", "name": "Beta Demo", "path": "/srv/ejemplo/beta-demo",
+             "note": "Sitio de reservas"},
+            {"id": "gama-demo", "name": "Gama Demo", "path": "/srv/ejemplo/gama-demo",
+             "note": ""}]
+        guarda(projects=PROYECTOS)
+        db = home / ".wa-inbox" / "scope.db"
+
+        # ── Una base de antes: con `workspace` y sin la columna nueva.
+        scope("set", GRUPO, "--provider", "ninguno", "--mode", "responder",
+              "--workspace", "alfa-demo")
+        scope("set", DIRECTO, "--provider", "ninguno", "--mode", "borrador")
+        con = sqlite3.connect(db)
+        if "workspaces" in {r[1] for r in con.execute("pragma table_info(chat_scope)")}:
+            con.execute("alter table chat_scope drop column workspaces")
+        con.commit()
+        con.close()
+        datos = storage()
+        datos.pop("scope", None)
+        store.write_text(json.dumps(datos), encoding="utf-8")
+        scope("list")
+        hechas += 3
+        con = sqlite3.connect(db)
+        cs = {r[1] for r in con.execute("pragma table_info(chat_scope)")}
+        con.close()
+        if "workspaces" not in cs:
+            fallos.append("la migracion no agrego chat_scope.workspaces")
+        if columnas(GRUPO) != ("alfa-demo", ["alfa-demo"]) or columnas(DIRECTO) != (None, []):
+            fallos.append(f"la migracion no lleno la lista con el proyecto de antes: "
+                          f"{columnas(GRUPO)!r} {columnas(DIRECTO)!r}")
+        g = fila(GRUPO)
+        if g.get("workspaces") != ["alfa-demo"] or g.get("workspace") != "alfa-demo":
+            fallos.append(f"list no da la lista de un proyecto de una base de antes: {g!r}")
+
+        # ── Un panel de antes: la entrada solo trae `workspace`.
+        entrada(OTRO, workspace="beta-demo")
+        hechas += 2
+        o = fila(OTRO)
+        if o.get("workspaces") != ["beta-demo"] or o.get("workspace") != "beta-demo":
+            fallos.append(f"una entrada de un panel de antes no da [su proyecto]: {o!r}")
+        scope("sync")
+        if columnas(OTRO) != ("beta-demo", ["beta-demo"]) \
+                or (storage().get("scope") or {}).get(OTRO, {}).get("workspaces") != ["beta-demo"]:
+            fallos.append(f"el sync no guardo ni empujo la lista de un panel de antes: "
+                          f"{columnas(OTRO)!r} {(storage().get('scope') or {}).get(OTRO)!r}")
+
+        # ── set --workspaces: la lista, en orden, validada contra el catalogo.
+        p = scope("set", GRUPO, "--workspaces", "beta-demo,no-existe")
+        hechas += 2
+        if p.returncode == 0 or "no-existe" not in (p.stderr + p.stdout):
+            fallos.append(f"set --workspaces con un id fuera del catalogo no se rechaza: "
+                          f"rc={p.returncode} {p.stderr.strip()[:160]}")
+        if columnas(GRUPO) != ("alfa-demo", ["alfa-demo"]):
+            fallos.append(f"un set rechazado igual toco la lista: {columnas(GRUPO)!r}")
+        p = scope("set", GRUPO, "--workspaces", "beta-demo, alfa-demo")
+        hechas += 5
+        if p.returncode != 0:
+            fallos.append(f"set --workspaces con dos proyectos falla: {p.stderr.strip()[:200]}")
+        g = fila(GRUPO)
+        if g.get("workspaces") != ["beta-demo", "alfa-demo"] or g.get("workspace") is not None:
+            fallos.append(f"una lista de dos no da workspace=null y su orden: {g!r}")
+        if columnas(GRUPO) != (None, ["beta-demo", "alfa-demo"]):
+            fallos.append(f"la base no guarda la lista ni deriva workspace: {columnas(GRUPO)!r}")
+        e = (storage().get("scope") or {}).get(GRUPO, {})
+        if e.get("workspaces") != ["beta-demo", "alfa-demo"] or e.get("workspace") is not None:
+            fallos.append(f"el panel no recibe la lista y el workspace derivado: {e!r}")
+        p = scope("check", GRUPO, "--for", "observar")
+        voz = filas("voice", GRUPO)
+        chequeo = json.loads(p.stdout or "{}") if p.stdout.strip().startswith("{") else {}
+        if chequeo.get("workspaces") != ["beta-demo", "alfa-demo"] or not voz \
+                or voz[0].get("workspaces") != ["beta-demo", "alfa-demo"]:
+            fallos.append(f"check y voice no devuelven la lista: {chequeo!r} {voz!r}")
+
+        # --workspace sigue valiendo: una lista de un proyecto.
+        scope("set", DIRECTO, "--workspace", "gama-demo")
+        hechas += 1
+        if columnas(DIRECTO) != ("gama-demo", ["gama-demo"]) \
+                or fila(DIRECTO).get("workspaces") != ["gama-demo"]:
+            fallos.append(f"set --workspace no deja una lista de uno: {columnas(DIRECTO)!r}")
+        scope("set", DIRECTO, "--workspaces", "")
+        hechas += 1
+        if columnas(DIRECTO) != (None, []) or fila(DIRECTO).get("workspaces") != []:
+            fallos.append(f"set --workspaces '' no vacia la lista: {columnas(DIRECTO)!r}")
+
+        # ── El panel vacia la lista: `workspaces: []` manda.
+        datos = storage()
+        datos["scope"][GRUPO]["workspaces"] = []
+        datos["scope"][GRUPO]["workspace"] = None
+        store.write_text(json.dumps(datos), encoding="utf-8")
+        hechas += 2
+        if fila(GRUPO).get("workspaces") != []:
+            fallos.append(f"workspaces: [] en el panel no vacia la lista: {fila(GRUPO)!r}")
+        scope("sync")
+        if columnas(GRUPO) != (None, []):
+            fallos.append(f"el sync no vacio la lista en la base: {columnas(GRUPO)!r}")
+        # Un panel nuevo que no escribe `workspace`: la lista sola manda.
+        datos = storage()
+        datos["scope"][GRUPO].pop("workspace", None)
+        datos["scope"][GRUPO]["workspaces"] = ["alfa-demo", "gama-demo"]
+        store.write_text(json.dumps(datos), encoding="utf-8")
+        hechas += 1
+        if fila(GRUPO).get("workspaces") != ["alfa-demo", "gama-demo"]:
+            fallos.append(f"la lista del panel sin workspace no manda: {fila(GRUPO)!r}")
+        # Un id que no tiene forma de id no pasa (id_proyecto).
+        datos["scope"][GRUPO]["workspaces"] = ["alfa-demo", "../otro", 7, "alfa-demo"]
+        store.write_text(json.dumps(datos), encoding="utf-8")
+        hechas += 1
+        if fila(GRUPO).get("workspaces") != ["alfa-demo"]:
+            fallos.append(f"un id sin forma de id o repetido entra a la lista: {fila(GRUPO)!r}")
+
+        # ── Un panel de antes que edito `workspace` con una lista vieja al lado: lo que
+        # acaba de tocar el dueno es `workspace`, y la lista vieja no lo pisa.
+        datos["scope"][GRUPO]["workspaces"] = ["alfa-demo"]
+        datos["scope"][GRUPO]["workspace"] = "beta-demo"
+        store.write_text(json.dumps(datos), encoding="utf-8")
+        hechas += 1
+        if fila(GRUPO).get("workspaces") != ["beta-demo"]:
+            fallos.append(f"una lista vieja pisa el proyecto que edito un panel de antes: "
+                          f"{fila(GRUPO)!r}")
+        # Y lo mismo en la base: el codigo anterior escribe solo `workspace`.
+        datos = storage()
+        datos.pop("scope", None)
+        store.write_text(json.dumps(datos), encoding="utf-8")
+        scope("set", DIRECTO, "--workspaces", "alfa-demo,beta-demo")
+        datos = storage()
+        datos.pop("scope", None)
+        store.write_text(json.dumps(datos), encoding="utf-8")
+        con = sqlite3.connect(db)
+        con.execute("update chat_scope set workspace='gama-demo' where chat_jid=?", (DIRECTO,))
+        con.commit()
+        con.close()
+        hechas += 1
+        if fila(DIRECTO).get("workspaces") != ["gama-demo"]:
+            fallos.append(f"el proyecto que escribio el codigo anterior no se ve: "
+                          f"{fila(DIRECTO)!r}")
+
+        # ── Un id que el dueno quito del catalogo: se conserva en la lista y se dice.
+        scope("set", DIRECTO, "--workspaces", "alfa-demo,beta-demo")
+        guarda(projects=PROYECTOS[1:])
+        scope("sync")
+        hechas += 2
+        if columnas(DIRECTO) != (None, ["alfa-demo", "beta-demo"]) \
+                or fila(DIRECTO).get("workspaces") != ["alfa-demo", "beta-demo"]:
+            fallos.append(f"un proyecto quitado del catalogo se borro de la lista: "
+                          f"{columnas(DIRECTO)!r}")
+        d = (filas("where", "hola", "--chat", DIRECTO) or [{}])[0]
+        hechas += 1
+        if d.get("missing") != ["alfa-demo"]:
+            fallos.append(f"where no dice que un proyecto de la lista ya no esta: {d!r}")
+        guarda(projects=PROYECTOS)
+
+        # ── where (M2): la regla gana sobre la lista; sin regla, con dos proyectos no
+        # elige nadie mas que el agente, y los candidatos van en orden.
+        scope("set", DIRECTO, "--workspaces", "beta-demo,alfa-demo")
+        scope("route", "--match", "reservas", "--workspace", "gama-demo")
+        d = (filas("where", "una duda de reservas", "--chat", DIRECTO) or [{}])[0]
+        hechas += 3
+        if d.get("workspace") != "gama-demo" or d.get("matched") != "reservas" \
+                or d.get("by") != "rule":
+            fallos.append(f"la regla no gana sobre la lista del chat: {d!r}")
+        d = (filas("where", "hola", "--chat", DIRECTO) or [{}])[0]
+        if d.get("workspace") is not None or d.get("by") is not None \
+                or d.get("workspace_why") != "the chat has 2 projects: the agent chooses by content":
+            fallos.append(f"dos proyectos sin regla no dan null con su motivo: {d!r}")
+        if [c.get("id") for c in d.get("candidates") or []] != ["beta-demo", "alfa-demo"] \
+                or (d.get("candidates") or [{}])[0].get("note") != "Sitio de reservas" \
+                or (d.get("candidates") or [{}])[0].get("name") != "Beta Demo":
+            fallos.append(f"where no lista los candidatos del chat en orden: {d!r}")
+        scope("set", DIRECTO, "--workspaces", "beta-demo")
+        d = (filas("where", "hola", "--chat", DIRECTO) or [{}])[0]
+        hechas += 1
+        if d.get("workspace") != "beta-demo" or d.get("workspace_why") != "the chat's project" \
+                or d.get("by") != "chat" or [c["id"] for c in d.get("candidates") or []] \
+                != ["beta-demo"]:
+            fallos.append(f"un chat de un proyecto no resuelve como siempre: {d!r}")
+        # Con dos ids y uno quitado del catalogo queda un solo aceptado: ese es el del chat.
+        scope("set", DIRECTO, "--workspaces", "alfa-demo,beta-demo")
+        guarda(projects=PROYECTOS[1:])
+        d = (filas("where", "hola", "--chat", DIRECTO) or [{}])[0]
+        hechas += 1
+        if d.get("workspace") != "beta-demo" or d.get("missing") != ["alfa-demo"]:
+            fallos.append(f"con un solo proyecto aceptado en la lista no cae en ese: {d!r}")
+        guarda(projects=PROYECTOS)
+        # Un chat sin proyectos: sin candidatos, y nada que elegir.
+        scope("set", DIRECTO, "--workspaces", "")
+        d = (filas("where", "hola", "--chat", DIRECTO) or [{}])[0]
+        hechas += 1
+        if d.get("workspace") is not None or d.get("candidates") != [] or d.get("missing") != []:
+            fallos.append(f"un chat sin proyectos no da candidatos vacios: {d!r}")
+
+        # ── A quien se le pregunta "A o B?" (M5): `projectQuestion` por chat, auto de
+        # fabrica, y `projectQuestionHours` global, 24 de fabrica.
+        con = sqlite3.connect(db)
+        cs = {r[1] for r in con.execute("pragma table_info(chat_scope)")}
+        con.close()
+        hechas += 1
+        if "pregunta_proyecto" not in cs:
+            fallos.append("la migracion no agrego chat_scope.pregunta_proyecto")
+        voz = filas("voice", GRUPO)
+        hechas += 1
+        if not voz or voz[0].get("project_question") != "auto":
+            fallos.append(f"voice no dice auto de fabrica: {voz!r}")
+        p = scope("set", GRUPO, "--project-question", "nadie")
+        hechas += 1
+        if p.returncode == 0:
+            fallos.append("set --project-question con un valor que no existe se acepta")
+        p = scope("set", GRUPO, "--project-question", "writer")
+        voz = filas("voice", GRUPO)
+        hechas += 3
+        if p.returncode != 0 or not voz or voz[0].get("project_question") != "writer":
+            fallos.append(f"set --project-question writer no queda: {p.stderr.strip()[:160]} {voz!r}")
+        if fila(GRUPO).get("pregunta_proyecto") != "writer":
+            fallos.append(f"list no trae pregunta_proyecto: {fila(GRUPO)!r}")
+        if (storage().get("scope") or {}).get(GRUPO, {}).get("projectQuestion") != "writer":
+            fallos.append(f"el panel no recibe projectQuestion: {(storage().get('scope') or {}).get(GRUPO)!r}")
+        datos = storage()
+        datos["scope"][GRUPO]["projectQuestion"] = "owner"
+        store.write_text(json.dumps(datos), encoding="utf-8")
+        voz = filas("voice", GRUPO)
+        hechas += 1
+        if not voz or voz[0].get("project_question") != "owner":
+            fallos.append(f"projectQuestion del panel no manda: {voz!r}")
+        scope("sync")
+        con = sqlite3.connect(db)
+        guardado = con.execute("select pregunta_proyecto from chat_scope where chat_jid=?",
+                               (GRUPO,)).fetchone()
+        con.close()
+        hechas += 1
+        if guardado != ("owner",):
+            fallos.append(f"el sync no guardo projectQuestion del panel: {guardado!r}")
+        datos = storage()
+        datos["scope"][GRUPO]["projectQuestion"] = "basura"
+        store.write_text(json.dumps(datos), encoding="utf-8")
+        voz = filas("voice", GRUPO)
+        hechas += 1
+        if not voz or voz[0].get("project_question") != "auto":
+            fallos.append(f"un projectQuestion que no existe no vuelve a auto: {voz!r}")
+
+        hechas += 4
+        if valor(env, "project_question_hours") != "24":
+            fallos.append(f"project_question_hours no es 24 de fabrica: "
+                          f"{valor(env, 'project_question_hours')!r}")
+        p = scope("config", "project_question_hours", "0")
+        if p.returncode == 0 or valor(env, "project_question_hours") != "24":
+            fallos.append("project_question_hours acepta cero")
+        scope("config", "project_question_hours", "6")
+        scope("sync")
+        if storage().get("projectQuestionHours") != "6":
+            fallos.append(f"el panel no recibe projectQuestionHours: "
+                          f"{storage().get('projectQuestionHours')!r}")
+        guarda(projectQuestionHours="3")
+        if valor(env, "project_question_hours") != "3":
+            fallos.append(f"projectQuestionHours del panel no manda: "
+                          f"{valor(env, 'project_question_hours')!r}")
+    return hechas
+
+
 def revisa_juicio(fallos: list) -> int:
     """La tabla `juicio` se agrega sola sobre una base vieja, y el veredicto se guarda
     una vez por llave (odd/tasks/juicio-cacheado.md, T1/T2).
@@ -2049,6 +2367,7 @@ def main() -> int:
                       + revisa_reclave_local(fallos)
                       + revisa_telefono_de_lid(fallos)
                       + revisa_proyectos(fallos)
+                      + revisa_varios_proyectos(fallos)
                       + revisa_espera(fallos))
     aislado.cleanup()
 

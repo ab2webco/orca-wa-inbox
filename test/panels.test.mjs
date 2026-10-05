@@ -6591,5 +6591,556 @@ console.log('\nactivity.html — revision: los ejes y los mapas caben')
   ok('EN: tambien', filas.every((x) => /^\D+ \d{1,2}$/.test(x)), JSON.stringify(filas))
 }
 
+// ───────── proyectos-por-chat (M6): varios proyectos por conversacion ─────────
+// La conversacion guarda una LISTA ordenada (`workspaces`) y, al lado, `workspace`
+// derivado: el unico id con uno, null con cero o con dos o mas. El CLI confia en la lista
+// solo si el `workspace` de al lado es su derivado (odd/tasks/proyectos-por-chat.md,
+// "Part A backend contract"), asi que el panel escribe las dos en cada guardado.
+/** Una seccion que tira una excepcion cuenta como una falla y deja correr las demas. */
+async function seccion (fn) {
+  try { await fn() } catch (e) {
+    ok('la seccion corre sin excepciones', false, String((e && e.stack) || e).split('\n').slice(0, 2).join(' '))
+  }
+}
+const PROYECTOS_TRES = PROYECTOS_PRUEBA.concat([
+  { id: 'gama-demo', name: 'Gama Demo', path: '/srv/ejemplo/gama-demo', note: '' }])
+/** Los valores de cada fila de proyecto del formulario, en orden: la primera vive en
+ *  `#workspace`, las demas en las filas de `#workspace-more`. */
+const filasProyecto = (doc) => [doc.getElementById('workspace').value].concat(
+  [...doc.querySelectorAll('#workspace-more input[type="hidden"]')].map((n) => n.value))
+/** Lo que se VE de una celda: sin el texto que solo lee el lector de pantalla. */
+const aLaVista = (n) => {
+  if (!n) return ''
+  const copia = n.cloneNode(true)
+  copia.querySelectorAll('.sr-only').forEach((x) => x.remove())
+  return copia.textContent.replace(/\s+/g, ' ').trim()
+}
+const camposProyecto = (doc) => [doc.getElementById('workspace-search')].concat(
+  [...doc.querySelectorAll('#workspace-more input[role="combobox"]')])
+
+console.log('\nconfig.html — proyectos-por-chat (M6): una conversacion con varios proyectos')
+await seccion(async () => {
+  const storage = { projects: PROYECTOS_TRES,
+    chats: [{ jid: '1@g.us', name: 'Soporte Norte', kind: 'grupo' }] }
+  const { doc, window } = await montar('config.html', storage, 'es-419')
+  await espera()
+  const agregar = doc.getElementById('workspace-add')
+  ok('con ningun proyecto elegido no se ofrece agregar otro', !!agregar && agregar.hidden)
+  ok('ni a quien preguntar', doc.getElementById('project-question-wrap')?.hidden === true)
+  elegirChat(doc, '1@g.us')
+  elegirProyecto(doc, 'workspace', 'alfa-demo')
+  ok('con uno elegido se ofrece agregar otro, con un boton', !agregar.hidden &&
+    agregar.tagName === 'BUTTON' && agregar.type === 'button' && agregar.textContent.trim().length > 3,
+    agregar.outerHTML)
+  agregar.click()
+  const segundo = doc.getElementById('workspace-search-2')
+  ok('agregar abre una segunda fila con el mismo autocompletar, con el foco',
+    !!segundo && segundo.getAttribute('role') === 'combobox' &&
+    doc.getElementById('workspace-list-2')?.getAttribute('role') === 'listbox' &&
+    doc.activeElement === segundo, segundo?.outerHTML)
+  ok('la fila nueva tiene nombre propio para el lector de pantalla',
+    /2/.test(segundo?.getAttribute('aria-label') || ''), segundo?.getAttribute('aria-label'))
+  escribir(doc, 'workspace-search-2', '')
+  const ofrecidos2 = opcionesCombo(doc, 'workspace-list-2').map((o) => o.dataset.value)
+  ok('la segunda fila no ofrece lo ya elegido ni Sin proyecto',
+    JSON.stringify(ofrecidos2) === JSON.stringify(['beta-demo', 'gama-demo']), JSON.stringify(ofrecidos2))
+  // Con el teclado: flecha abajo y Enter eligen, como en el de siempre.
+  segundo.dispatchEvent(tecla(doc, 'ArrowDown'))
+  segundo.dispatchEvent(tecla(doc, 'Enter'))
+  ok('flecha y Enter eligen el proyecto de la segunda fila',
+    JSON.stringify(filasProyecto(doc)) === JSON.stringify(['alfa-demo', 'beta-demo']) &&
+    segundo.value === 'Beta Demo', JSON.stringify(filasProyecto(doc)) + ' ' + segundo.value)
+  escribir(doc, 'workspace-search', '')
+  ok('la primera fila tampoco ofrece lo que eligio otra, ni Sin proyecto con dos',
+    JSON.stringify(opcionesCombo(doc, 'workspace-list').map((o) => o.dataset.value)) ===
+    JSON.stringify(['alfa-demo', 'gama-demo']),
+    JSON.stringify(opcionesCombo(doc, 'workspace-list').map((o) => o.dataset.value)))
+  doc.getElementById('workspace-search').dispatchEvent(tecla(doc, 'Escape'))
+  // Una tercera fila que queda vacia se quita con Retroceso, y el foco vuelve a la de arriba.
+  agregar.click()
+  const tercero = doc.getElementById('workspace-search-3')
+  ok('una tercera fila', !!tercero && doc.activeElement === tercero)
+  tercero.dispatchEvent(tecla(doc, 'Backspace'))
+  ok('Retroceso en una fila vacia la quita y devuelve el foco a la anterior',
+    !doc.getElementById('workspace-search-3') &&
+    doc.activeElement === doc.getElementById('workspace-search-2'),
+    String(doc.activeElement?.id))
+  ok('cada fila se puede quitar con su boton cuando hay dos o mas',
+    !doc.getElementById('workspace-rm').hidden &&
+    !!doc.querySelector('#workspace-more button[data-wsrm="2"]') &&
+    /Alfa Demo/.test(doc.getElementById('workspace-rm').getAttribute('aria-label') || ''),
+    doc.getElementById('workspace-rm').outerHTML)
+  // A quien se pregunta "A o B?": solo tiene sentido con dos o mas.
+  const pq = doc.getElementById('project-question-wrap')
+  ok('con dos proyectos aparece a quien preguntar, como grupo de botones',
+    !pq.hidden && !!doc.querySelector('#chat-project-question[role="group"]') &&
+    JSON.stringify([...doc.querySelectorAll('#chat-project-question button')].map((b) => b.dataset.value)) ===
+    JSON.stringify(['auto', 'writer', 'owner']) && valorSeg(doc, 'chat-project-question') === 'auto',
+    pq.outerHTML.slice(0, 300))
+  ok('y no es un <select>', doc.querySelectorAll('select').length === 0)
+  elegirSeg(doc, 'chat-project-question', 'owner')
+  doc.getElementById('save-scope').click()
+  await espera()
+  const e = (storage.scope || {})['1@g.us'] || {}
+  ok('guardar escribe la lista en orden y workspace derivado null',
+    JSON.stringify(e.workspaces) === JSON.stringify(['alfa-demo', 'beta-demo']) &&
+    'workspace' in e && e.workspace === null, JSON.stringify(e))
+  ok('y a quien se pregunta', e.projectQuestion === 'owner', JSON.stringify(e))
+  const fila = [...doc.querySelectorAll('#scope-wrap tbody tr')].find((f) => f.textContent.includes('Soporte Norte'))
+  const celda = fila && fila.children[1]
+  ok('la tabla dice el primero y cuantos mas: "A +N"', aLaVista(celda) === 'Alfa Demo +1',
+    celda?.innerHTML)
+  ok('con la lista entera en el title y para el lector de pantalla',
+    celda?.querySelector('[title]')?.getAttribute('title') === 'Alfa Demo, Beta Demo' &&
+    /Beta Demo/.test(celda?.querySelector('.sr-only')?.textContent || ''), celda?.innerHTML)
+  ok('al guardar el formulario vuelve a una sola fila vacia',
+    JSON.stringify(filasProyecto(doc)) === JSON.stringify(['']) && agregar.hidden && pq.hidden,
+    JSON.stringify(filasProyecto(doc)))
+
+  // Editar carga la lista entera y a quien se pregunta.
+  fila.querySelector('[data-edit]').click()
+  await espera()
+  ok('Editar carga las dos filas en orden',
+    JSON.stringify(filasProyecto(doc)) === JSON.stringify(['alfa-demo', 'beta-demo']) &&
+    JSON.stringify(camposProyecto(doc).map((c) => c.value)) === JSON.stringify(['Alfa Demo', 'Beta Demo']),
+    JSON.stringify(camposProyecto(doc).map((c) => c.value)))
+  ok('y a quien se pregunta', valorSeg(doc, 'chat-project-question') === 'owner')
+  // Quitar la primera: la segunda pasa a ser la primera.
+  doc.getElementById('workspace-rm').click()
+  ok('quitar la primera deja la otra arriba',
+    JSON.stringify(filasProyecto(doc)) === JSON.stringify(['beta-demo']) &&
+    doc.getElementById('workspace-search').value === 'Beta Demo' &&
+    doc.getElementById('workspace-rm').hidden && pq.hidden,
+    JSON.stringify(filasProyecto(doc)))
+  doc.getElementById('save-scope').click()
+  await espera()
+  const e2 = storage.scope['1@g.us']
+  ok('guardar con uno escribe la lista de uno y workspace ese id',
+    JSON.stringify(e2.workspaces) === JSON.stringify(['beta-demo']) && e2.workspace === 'beta-demo' &&
+    e2.projectQuestion === 'owner', JSON.stringify(e2))
+
+  // Cancelar una edicion de dos vuelve al formulario nuevo.
+  storage.scope['1@g.us'] = Object.assign({}, e2, { workspaces: ['alfa-demo', 'gama-demo'], workspace: null })
+  window.dispatchEvent(new window.Event('focus'))
+  await espera()
+  doc.querySelector('#scope-wrap [data-edit]').click()
+  await espera()
+  ok('una lista guardada por otro lado tambien se carga',
+    JSON.stringify(filasProyecto(doc)) === JSON.stringify(['alfa-demo', 'gama-demo']),
+    JSON.stringify(filasProyecto(doc)))
+  doc.getElementById('cancel-edit').click()
+  await espera()
+  ok('Cancelar deja una sola fila vacia, sin agregar ni a quien preguntar',
+    JSON.stringify(filasProyecto(doc)) === JSON.stringify(['']) &&
+    !doc.getElementById('workspace-search-2') && agregar.hidden && pq.hidden &&
+    valorSeg(doc, 'chat-project-question') === 'auto', JSON.stringify(filasProyecto(doc)))
+})
+
+console.log('\nconfig.html — proyectos-por-chat (M6): las entradas de antes se leen como el CLI')
+await seccion(async () => {
+  const storage = {
+    projects: PROYECTOS_TRES,
+    scope: {
+      // De antes: solo `workspace`. Es una lista de uno.
+      '30@g.us': { chatName: 'Legado Uno', workspace: 'alfa-demo', mode: 'responder' },
+      // Un panel viejo edito `workspace` y dejo una lista vieja al lado: gana `workspace`.
+      '31@g.us': { chatName: 'Lista Vieja', workspace: 'beta-demo',
+        workspaces: ['alfa-demo', 'gama-demo'], mode: 'observar' },
+      // Solo la lista, sin `workspace`: vale la lista.
+      '32@g.us': { chatName: 'Solo Lista', workspaces: ['gama-demo', 'alfa-demo'], mode: 'observar' },
+      // Un id que el dueno quito del catalogo se conserva, marcado.
+      '33@g.us': { chatName: 'Con Quitado', workspaces: ['alfa-demo', 'viejo-demo'],
+        workspace: null, mode: 'observar' }
+    }
+  }
+  const { doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  const fila = (txt) => [...doc.querySelectorAll('#scope-wrap tbody tr')].find((f) => f.textContent.includes(txt))
+  ok('la de antes se ve con su proyecto, sin "+N"',
+    /Alfa Demo/.test(fila('Legado Uno')?.children[1].textContent || '') &&
+    !/\+\d/.test(fila('Legado Uno')?.children[1].textContent || ''), fila('Legado Uno')?.innerHTML)
+  ok('la de la lista vieja se ve con su workspace', /Beta Demo/.test(fila('Lista Vieja')?.children[1].textContent || '') &&
+    !/\+\d/.test(fila('Lista Vieja')?.children[1].textContent || ''), fila('Lista Vieja')?.innerHTML)
+  ok('la de solo lista dice el primero y +1', aLaVista(fila('Solo Lista')?.children[1]) === 'Gama Demo +1',
+    fila('Solo Lista')?.innerHTML)
+  ok('la que tiene uno quitado lo cuenta y lo nombra marcado en el title',
+    /ya no esta/.test(fila('Con Quitado')?.children[1].querySelector('[title]')?.getAttribute('title') || ''),
+    fila('Con Quitado')?.innerHTML)
+
+  fila('Legado Uno').querySelector('[data-edit]').click()
+  await espera()
+  ok('editar la de antes carga una sola fila con su proyecto',
+    JSON.stringify(filasProyecto(doc)) === JSON.stringify(['alfa-demo']), JSON.stringify(filasProyecto(doc)))
+  doc.getElementById('save-scope').click()
+  await espera()
+  ok('y guardarla escribe las dos claves: la lista de uno y su workspace',
+    JSON.stringify(storage.scope['30@g.us'].workspaces) === JSON.stringify(['alfa-demo']) &&
+    storage.scope['30@g.us'].workspace === 'alfa-demo' &&
+    storage.scope['30@g.us'].projectQuestion === 'auto', JSON.stringify(storage.scope['30@g.us']))
+
+  fila('Lista Vieja').querySelector('[data-edit]').click()
+  await espera()
+  ok('la lista vieja al lado de otro workspace no se carga: vale el workspace',
+    JSON.stringify(filasProyecto(doc)) === JSON.stringify(['beta-demo']), JSON.stringify(filasProyecto(doc)))
+  doc.getElementById('cancel-edit').click()
+
+  fila('Solo Lista').querySelector('[data-edit]').click()
+  await espera()
+  ok('la de solo lista carga sus dos filas', JSON.stringify(filasProyecto(doc)) ===
+    JSON.stringify(['gama-demo', 'alfa-demo']), JSON.stringify(filasProyecto(doc)))
+  doc.getElementById('cancel-edit').click()
+
+  fila('Con Quitado').querySelector('[data-edit]').click()
+  await espera()
+  ok('el quitado queda en su fila, marcado', JSON.stringify(filasProyecto(doc)) ===
+    JSON.stringify(['alfa-demo', 'viejo-demo']) &&
+    /viejo-demo.*ya no esta/.test(doc.getElementById('workspace-search-2')?.value || ''),
+    doc.getElementById('workspace-search-2')?.value)
+  doc.getElementById('save-scope').click()
+  await espera()
+  ok('y guardar sin tocarlo no lo borra',
+    JSON.stringify(storage.scope['33@g.us'].workspaces) === JSON.stringify(['alfa-demo', 'viejo-demo']) &&
+    storage.scope['33@g.us'].workspace === null, JSON.stringify(storage.scope['33@g.us']))
+})
+
+console.log('\nconfig.html — proyectos-por-chat (M6): cuantas horas espera la pregunta de proyecto')
+await seccion(async () => {
+  const { doc, storage } = await montar('config.html', {}, 'es-419')
+  await espera()
+  doc.getElementById('tab-aprobacion').click()
+  await espera(); await espera()
+  const campo = doc.getElementById('pq-hours')
+  ok('el campo existe en Su aprobacion, entero y desde 1', !!campo && !!campo.closest('#view-aprobacion') &&
+    campo.type === 'number' && campo.min === '1' && campo.step === '1', String(!!campo))
+  ok('sin nada guardado muestra 24', campo?.value === '24', campo?.value)
+  ok('con etiqueta y una pista que dice que pasa al vencer',
+    (doc.querySelector('label[for="pq-hours"]')?.textContent || '').trim().length > 3 &&
+    /usted/i.test(doc.getElementById('pq-hours-help')?.textContent || ''),
+    doc.getElementById('pq-hours-help')?.textContent)
+  escribir(doc, 'pq-hours', '36')
+  doc.getElementById('save-pq-hours').click()
+  await espera(); await espera()
+  ok('guardar escribe la clave plana en texto', storage.projectQuestionHours === '36',
+    String(storage.projectQuestionHours))
+  for (const malo of ['0', '2.5', 'un dia', '']) {
+    escribir(doc, 'pq-hours', malo)
+    doc.getElementById('save-pq-hours').click()
+    await espera(); await espera()
+    ok(`"${malo}" no se guarda y lo dice`, storage.projectQuestionHours === '36' &&
+      doc.getElementById('said-pq-hours').className.includes('bad'),
+      `${storage.projectQuestionHours} ${doc.getElementById('said-pq-hours').textContent}`)
+  }
+  const guardada = await montar('config.html', { projectQuestionHours: '48' }, 'es-419')
+  await espera()
+  guardada.doc.getElementById('tab-aprobacion').click()
+  await espera(); await espera()
+  ok('al abrir la pestana pinta la guardada', guardada.doc.getElementById('pq-hours').value === '48',
+    guardada.doc.getElementById('pq-hours').value)
+})
+
+console.log('\nconfig.html — proyectos-por-chat (M6): los textos nuevos en los tres idiomas')
+await seccion(async () => {
+  const { window } = await montar('config.html')
+  const S = window.STRINGS
+  const nuevas = ['workspaceLabel', 'workspaceHint', 'scopeHelp', 'workspaceAdd', 'workspaceRow',
+    'workspaceRemove', 'workspaceMore', 'pqLabel', 'pqAuto', 'pqWriter', 'pqOwner', 'pqHelp',
+    'pqHoursLegend', 'pqHoursLabel', 'pqHoursHelp', 'pqHoursRange', 'colProject']
+  const faltan = nuevas.filter((k) => !S.es[k] || !S.en[k])
+  ok('cada texto existe en espanol y en ingles', faltan.length === 0, `faltan = ${JSON.stringify(faltan)}`)
+  const sinPt = nuevas.filter((k) => !S.pt[k] || S.pt[k] === S.en[k])
+  ok('y en portugues propio, no heredado del ingles', sinPt.length === 0,
+    `sin portugues = ${JSON.stringify(sinPt)}`)
+  ok('la ayuda de las conversaciones habla de varios proyectos',
+    /proyectos/i.test(S.es.scopeHelp) && /projects/i.test(S.en.scopeHelp) && /projetos/i.test(S.pt.scopeHelp),
+    S.es.scopeHelp)
+  ok('la pista dice que el agente elige y que pregunta',
+    /elige/i.test(S.es.workspaceHint) && /pregunta/i.test(S.es.workspaceHint), S.es.workspaceHint)
+})
+for (const [idioma, re] of [['en-US', /Add another project/], ['pt-BR', /Adicionar outro projeto/]]) {
+  await seccion(async () => {
+    const { doc } = await montar('config.html', { projects: PROYECTOS_TRES,
+      chats: [{ jid: '1@g.us', name: 'Soporte Norte', kind: 'grupo' }] }, idioma)
+    await espera()
+    elegirChat(doc, '1@g.us')
+    elegirProyecto(doc, 'workspace', 'alfa-demo')
+    ok(`${idioma}: agregar otro se dice en su idioma`, re.test(doc.getElementById('workspace-add').textContent),
+      doc.getElementById('workspace-add').textContent)
+  })
+}
+
+// ── El tablero: el proyecto del caso con su porque, quien lo eligio y la pregunta ──
+// `board.project_routes[<case_id>]` = {why, by, candidates, missing, question} (M3/M5).
+const RUTAS_PRUEBA = (extra = {}) => ({
+  why: 'Pide cambios en la tienda en linea', by: 'agent',
+  candidates: [{ id: 'beta-demo', name: 'Beta Demo', note: '' },
+    { id: 'alfa-demo', name: 'Alfa Demo', note: 'Tienda en linea' }],
+  missing: [], question: null, ...extra })
+const casoProyecto = (extra = {}) => tarjeta({ case_id: 7, stage: 'clasificado', proposal: null,
+  exceptions: [], project: { id: 'beta-demo', name: 'Beta Demo' },
+  actions: ['atender', 'ignorar', 'reclasificar', 'cerrar', 'proyecto'], ...extra })
+
+console.log('\nactivity.html — proyectos-por-chat (M6): el proyecto del caso, su porque y quien lo eligio')
+await seccion(async () => {
+  const w = conWorker({ ok: true, code: 'proyecto-cambiado' })
+  const { doc, window } = await abrirConWorker([casoProyecto()], w, { projects: PROYECTOS_TRES,
+    board: tablero([casoProyecto()], { project_routes: { 7: RUTAS_PRUEBA() } }) }, 'es-419')
+  doc.querySelector('.card[data-case="7"]').click()
+  const d = detalle(doc)
+  const linea = d.querySelector('.det-proyecto')?.textContent || ''
+  ok('el detalle dice el proyecto, que lo eligio el agente y por que',
+    /Beta Demo/.test(linea) && /el agente/i.test(linea) && /Pide cambios en la tienda en linea/.test(linea), linea)
+  botonDe(doc, 7, 'proyecto').click()
+  const campo = doc.querySelector('#board-detail .card-form input[role="combobox"]')
+  campo.focus()
+  campo.dispatchEvent(new window.Event('click', { bubbles: true }))
+  const lista = doc.querySelector('#board-detail [role="listbox"]')
+  const valores = [...lista.querySelectorAll('[role="option"]')].map((o) => o.dataset.value)
+  ok('la lista trae Sin proyecto, luego los del chat en su orden, luego el resto',
+    JSON.stringify(valores) === JSON.stringify(['', 'beta-demo', 'alfa-demo', 'gama-demo']), JSON.stringify(valores))
+  const grupos = [...lista.querySelectorAll('[role="group"]')]
+  ok('en dos grupos con nombre',
+    grupos.length === 2 && /conversacion/i.test(grupos[0].getAttribute('aria-label') || '') &&
+    JSON.stringify([...grupos[0].querySelectorAll('[role="option"]')].map((o) => o.dataset.value)) ===
+      JSON.stringify(['beta-demo', 'alfa-demo']) &&
+    JSON.stringify([...grupos[1].querySelectorAll('[role="option"]')].map((o) => o.dataset.value)) ===
+      JSON.stringify(['gama-demo']) && /otros/i.test(grupos[1].getAttribute('aria-label') || ''),
+    lista.innerHTML.slice(0, 400))
+  ok('cada grupo tiene su rotulo a la vista', grupos.every((g) => g.querySelector('.combo-group')?.textContent.trim()))
+  // Las flechas recorren los grupos de corrido.
+  campo.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+  campo.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+  campo.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+  campo.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+  campo.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  ok('flechas y Enter pasan de un grupo al otro', campo.value === 'Gama Demo', campo.value)
+  campo.value = 'alf'
+  campo.dispatchEvent(new window.Event('input', { bubbles: true }))
+  const filtrados = [...doc.querySelectorAll('#board-detail [role="listbox"] [role="option"]')].map((o) => o.dataset.value)
+  ok('escribir filtra en los dos grupos', JSON.stringify(filtrados) === JSON.stringify(['alfa-demo']),
+    JSON.stringify(filtrados))
+  doc.querySelector('#board-detail .card-form input[role="combobox"]')
+    .dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+  doc.querySelector('#board-detail .card-form input[role="combobox"]')
+    .dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  doc.querySelector('#board-detail .card-form button[data-confirma]').click()
+  await hastaPanel(() => w.pedidos.length === 1)
+  ok('el pedido sigue siendo un solo proyecto', w.pedidos[0]?.proyecto === 'alfa-demo' &&
+    Object.keys(w.pedidos[0] || {}).sort().join() === 'action,at,caseId,id,proyecto', JSON.stringify(w.pedidos))
+})
+await seccion(async () => {
+  // Sin la ruta en el tablero (un wa-scope de antes) la lista es la de siempre, sin grupos.
+  const { doc, window } = await abrirConWorker([casoProyecto()], conWorker(null), { projects: PROYECTOS_TRES })
+  botonDe(doc, 7, 'proyecto').click()
+  const campo = doc.querySelector('#board-detail .card-form input[role="combobox"]')
+  campo.focus()
+  campo.dispatchEvent(new window.Event('click', { bubbles: true }))
+  ok('sin project_routes la lista no trae grupos',
+    !doc.querySelector('#board-detail [role="listbox"] [role="group"]') &&
+    [...doc.querySelectorAll('#board-detail [role="listbox"] [role="option"]')].map((o) => o.dataset.value).join() ===
+      ',alfa-demo,beta-demo,gama-demo')
+  ok('y el detalle no inventa quien lo eligio',
+    !/eligi/i.test(detalle(doc).querySelector('.det-proyecto')?.textContent || ''),
+    detalle(doc).querySelector('.det-proyecto')?.textContent)
+})
+await seccion(async () => {
+  const caso = (id, ruta, extra = {}) => casoProyecto({ case_id: id, ...extra })
+  const board = tablero([
+    caso(11, null, { project: { id: 'alfa-demo', name: 'Alfa Demo' } }),
+    caso(12, null, { project: { id: 'alfa-demo', name: 'Alfa Demo' } }),
+    caso(13, null, { project: null }),
+    caso(14, null, { project: null }),
+    caso(15, null, { project: { id: 'beta-demo', name: 'Beta Demo' } })], {
+    project_routes: {
+      11: RUTAS_PRUEBA({ by: 'rule', why: "the message says 'facturacion'" }),
+      12: RUTAS_PRUEBA({ by: 'chat', why: "the chat's project", candidates: [{ id: 'alfa-demo', name: 'Alfa Demo', note: '' }] }),
+      13: RUTAS_PRUEBA({ by: null, why: 'the chat has 2 projects: the agent chooses by content' }),
+      14: RUTAS_PRUEBA({ by: 'owner', why: 'set by the owner' }),
+      15: RUTAS_PRUEBA({ by: 'owner', why: 'set by the owner' })
+    } })
+  const textoDe = async (idioma, id) => {
+    const { doc } = await abrirTablero({ board, projects: PROYECTOS_TRES }, idioma)
+    doc.querySelector(`.card[data-case="${id}"]`).click()
+    return detalle(doc).querySelector('.det-proyecto')?.textContent || ''
+  }
+  const regla = await textoDe('es-419', 11)
+  ok('por una regla: lo dice con la palabra del mensaje, en espanol',
+    /regla/i.test(regla) && /facturacion/.test(regla) && !/the message says/.test(regla), regla)
+  const chat = await textoDe('es-419', 12)
+  ok('el de la conversacion lo dice asi', /de la conversacion/i.test(chat) && !/the chat/.test(chat), chat)
+  const elige = await textoDe('es-419', 13)
+  ok('sin proyecto con dos en el chat: el agente elige por el contenido',
+    /Sin proyecto/.test(elige) && /2 proyectos/.test(elige) && /elige/.test(elige), elige)
+  const dueno = await textoDe('es-419', 14)
+  ok('el "Sin proyecto" del dueno dice que lo dejo usted', /Sin proyecto/.test(dueno) && /usted/i.test(dueno), dueno)
+  const en = await textoDe('en', 15)
+  ok('en ingles', /Beta Demo/.test(en) && /you/i.test(en), en)
+  const pt = await textoDe('pt-BR', 11)
+  ok('en portugues', /regra/i.test(pt) && /facturacion/.test(pt), pt)
+})
+
+console.log('\nactivity.html — proyectos-por-chat (M6): la pregunta "A o B?" abierta')
+await seccion(async () => {
+  const pregunta = (extra = {}) => ({ candidates: [{ id: 'alfa-demo', name: 'Alfa Demo' },
+    { id: 'beta-demo', name: 'Beta Demo' }], to: 'writer', text: 'Es sobre la tienda o sobre el portal?',
+    at: hace(30 * 60000), state: 'open', escalated: false, ...extra })
+  const board = tablero([casoProyecto({ case_id: 21, project: null, stage: 'respondido',
+      actions: ['cerrar', 'reabrir'] }),
+    casoProyecto({ case_id: 22, project: null, stage: 'decision', actions: ['cerrar', 'proyecto'] }),
+    casoProyecto({ case_id: 23, project: null }),
+    casoProyecto({ case_id: 24, project: { id: 'alfa-demo', name: 'Alfa Demo' } })], {
+    project_routes: {
+      21: RUTAS_PRUEBA({ by: null, why: null, question: pregunta() }),
+      22: RUTAS_PRUEBA({ by: null, why: null, question: pregunta({ to: 'owner', escalated: true }) }),
+      23: RUTAS_PRUEBA({ by: null, why: null, question: pregunta({ state: 'answered' }) }),
+      24: RUTAS_PRUEBA({ by: 'agent', question: pregunta({ state: 'closed' }) })
+    } })
+  const { doc } = await abrirTablero({ board, projects: PROYECTOS_TRES })
+  const de = (id) => { doc.querySelector(`.card[data-case="${id}"]`).click(); return detalle(doc) }
+  const abierta = de(21).querySelector('.det-pregunta')
+  ok('una pregunta abierta se ve esperando respuesta, con los candidatos',
+    !!abierta && /Esperando respuesta/i.test(abierta.textContent) &&
+    /Alfa Demo o Beta Demo/.test(abierta.textContent), abierta?.textContent)
+  ok('y dice a quien se le pregunto y lo que se pregunto',
+    /quien escribio/i.test(abierta?.textContent || '') &&
+    /Es sobre la tienda o sobre el portal\?/.test(abierta?.textContent || ''), abierta?.textContent)
+  const suya = de(22).querySelector('.det-pregunta')
+  ok('la que paso al dueno dice que es suya', !!suya && /usted/i.test(suya.textContent) &&
+    /Alfa Demo o Beta Demo/.test(suya.textContent), suya?.textContent)
+  const contestada = de(23).querySelector('.det-pregunta')
+  ok('la contestada dice que el agente elige ahora', !!contestada && /respondi/i.test(contestada.textContent) &&
+    !/Esperando/.test(contestada.textContent), contestada?.textContent)
+  ok('la cerrada no se muestra', !de(24).querySelector('.det-pregunta'))
+  const tarjetaAbierta = doc.querySelector('.card[data-case="21"]')
+  ok('la tarjeta tambien avisa que espera la respuesta', /Esperando respuesta/i.test(tarjetaAbierta.textContent),
+    tarjetaAbierta.textContent)
+  const en = await abrirTablero({ board, projects: PROYECTOS_TRES }, 'en')
+  en.doc.querySelector('.card[data-case="21"]').click()
+  ok('en ingles', /Waiting for an answer/i.test(detalle(en.doc).querySelector('.det-pregunta')?.textContent || '') &&
+    /Alfa Demo or Beta Demo/.test(detalle(en.doc).querySelector('.det-pregunta')?.textContent || ''),
+    detalle(en.doc).querySelector('.det-pregunta')?.textContent)
+  const pt = await abrirTablero({ board, projects: PROYECTOS_TRES }, 'pt-BR')
+  pt.doc.querySelector('.card[data-case="21"]').click()
+  ok('en portugues', /Aguardando resposta/i.test(detalle(pt.doc).querySelector('.det-pregunta')?.textContent || '') &&
+    /Alfa Demo ou Beta Demo/.test(detalle(pt.doc).querySelector('.det-pregunta')?.textContent || ''),
+    detalle(pt.doc).querySelector('.det-pregunta')?.textContent)
+})
+
+console.log('\nactivity.html — proyectos-por-chat (M6): los motivos y eventos nuevos en palabras')
+await seccion(async () => {
+  const caso = casoProyecto({ case_id: 31, events: [
+    { de: 'decision', a: 'decision', actor: 'automatizacion', que: 'work_waits', args: ['no_project'], at: hace(9 * 60000) },
+    { de: 'decision', a: 'decision', actor: 'automatizacion', que: 'reply_waits', args: ['project_question'], at: hace(8 * 60000) },
+    { de: 'decision', a: 'decision', actor: 'automatizacion', que: 'work_waits', args: ['outside_project'], at: hace(7 * 60000) },
+    { de: 'clasificado', a: 'clasificado', actor: 'agente', que: 'project', args: ['beta-demo', 'agent'], at: hace(6 * 60000) },
+    { de: 'clasificado', a: 'respondido', actor: 'agente', que: 'project_question', args: ['writer'], at: hace(5 * 60000) },
+    { de: 'respondido', a: 'recibido', actor: 'automatizacion', que: 'project_answer', at: hace(4 * 60000) },
+    { de: 'recibido', a: 'decision', actor: 'automatizacion', que: 'project_question', args: ['owner'], at: hace(3 * 60000) }] })
+  const filas = async (idioma) => {
+    const { doc } = await abrirTablero({ board: tablero([caso]), projects: PROYECTOS_TRES }, idioma)
+    doc.querySelector('.card[data-case="31"]').click()
+    return [...detalle(doc).querySelectorAll('.det-hist li')].map((li) => li.textContent)
+  }
+  const es = (await filas('es-419')).join(' | ')
+  ok('ES: sin proyecto, la pregunta suya y fuera de los proyectos del chat',
+    /no tiene proyecto/.test(es) && /la pregunta de proyecto es suya/.test(es) &&
+    /fuera de los proyectos del chat/.test(es), es)
+  ok('ES: el agente eligio el proyecto, pregunto a quien escribio, la respuesta volvio y paso a usted',
+    /proyecto elegido por el agente/.test(es) && /pregunta de proyecto: a quien escribio/.test(es) &&
+    /respondio la pregunta de proyecto/.test(es) && /pregunta de proyecto: a usted/.test(es), es)
+  const en = (await filas('en')).join(' | ')
+  ok('EN', /it has no project/.test(en) && /the project question is yours/.test(en) &&
+    /outside the chat's projects/.test(en) && /project chosen by the agent/.test(en) &&
+    /project question: to the writer/.test(en) && /answered the project question/.test(en), en)
+  const pt = (await filas('pt-BR')).join(' | ')
+  ok('PT', /nao tem projeto/.test(pt) && /a pergunta de projeto e sua/.test(pt) &&
+    /fora dos projetos do chat/.test(pt) && /projeto escolhido pelo agente/.test(pt) &&
+    /pergunta de projeto: a quem escreveu/.test(pt) && /respondeu a pergunta de projeto/.test(pt), pt)
+})
+
+console.log('\nactivity.html — proyectos-por-chat (M6): el primer clic con la ruta del proyecto')
+await seccion(async () => {
+  // La ruta viaja dentro del tablero: el mismo tablero no reconstruye nada, y una ruta que
+  // cambia con el puntero apretado se pinta al soltar, no debajo del dedo.
+  const storage = { board: tablero([casoProyecto()], { project_routes: { 7: RUTAS_PRUEBA() } }),
+    projects: PROYECTOS_TRES }
+  const { window, doc } = await abrirTablero(storage)
+  const card = doc.querySelector('.card[data-case="7"]')
+  window.dispatchEvent(new window.Event('focus'))
+  await espera()
+  ok('el foco con la misma ruta no reconstruye la tarjeta', doc.querySelector('.card[data-case="7"]') === card)
+  let durante = null
+  await clicReal(window, card, async () => {
+    storage.board = tablero([casoProyecto({ project: null })], { project_routes: { 7: RUTAS_PRUEBA({
+      by: null, why: null, question: { candidates: [{ id: 'alfa-demo', name: 'Alfa Demo' },
+        { id: 'beta-demo', name: 'Beta Demo' }], to: 'writer', text: 'A o B?', at: hace(60000),
+      state: 'open', escalated: false } }) } })
+    window.dispatchEvent(new window.Event('focus'))
+    await espera()
+    durante = doc.querySelector('.card[data-case="7"]') === card
+  })
+  ok('con el puntero apretado la ruta nueva no reconstruye la tarjeta', durante === true)
+  ok('y el clic abre el detalle', !!doc.querySelector('#board-detail[data-case="7"]:not([hidden])'))
+  await espera()
+  ok('al soltar se pinta la pregunta que llego',
+    !!detalle(doc).querySelector('.det-pregunta') && /Esperando respuesta/.test(detalle(doc).textContent),
+    detalle(doc).textContent.slice(0, 300))
+})
+
+// ── Lo que encontro la verificacion: el proyecto quitado, la pregunta en respondido y el "¿" ──
+console.log('\nactivity.html — proyectos-por-chat: el unico proyecto del chat, quitado del catalogo')
+await seccion(async () => {
+  const quitado = { why: 'project alfa-demo is no longer in the accepted list', candidates: [],
+    missing: ['alfa-demo'], question: null }
+  const board = tablero([casoProyecto({ case_id: 41, project: null }),
+    casoProyecto({ case_id: 42, project: null })], {
+    project_routes: { 41: { ...quitado, by: null }, 42: { ...quitado, by: 'chat' } } })
+  const { doc } = await abrirTablero({ board, projects: PROYECTOS_TRES }, 'es-419')
+  const de = (id) => {
+    doc.querySelector(`.card[data-case="${id}"]`).click()
+    return detalle(doc).querySelector('.det-proyecto')?.textContent || ''
+  }
+  const linea = de(41)
+  ok('sin proyecto, como antes: no dice que es el de la conversacion',
+    /Sin proyecto/.test(linea) && !/conversacion/i.test(linea), linea)
+  const vieja = de(42)
+  ok('aunque la ruta diga by chat, sin proyecto no dice que es el de la conversacion',
+    /Sin proyecto/.test(vieja) && !/conversacion/i.test(vieja), vieja)
+})
+
+console.log('\nactivity.html — proyectos-por-chat: el dueno elige con la pregunta esperando al que escribio')
+await seccion(async () => {
+  const pregunta = { candidates: [{ id: 'alfa-demo', name: 'Alfa Demo' }, { id: 'beta-demo', name: 'Beta Demo' }],
+    to: 'writer', text: 'Es sobre la tienda o sobre el portal?', at: hace(30 * 60000), state: 'open',
+    escalated: false }
+  const caso = casoProyecto({ case_id: 43, project: null, stage: 'respondido',
+    actions: ['cerrar', 'reabrir', 'proyecto'] })
+  const w = conWorker({ ok: true, code: 'proyecto-cambiado' })
+  const { doc } = await abrirConWorker([caso], w, { projects: PROYECTOS_TRES,
+    board: tablero([caso], { project_routes: { 43: RUTAS_PRUEBA({ by: null, why: null, question: pregunta }) } }) },
+    'es-419')
+  doc.querySelector('.card[data-case="43"]').click()
+  const caja = detalle(doc).querySelector('.det-pregunta')?.textContent || ''
+  ok('la pregunta al que escribio dice que usted tambien puede elegir aqui',
+    /quien escribio/i.test(caja) && /elija el proyecto aqui/i.test(caja), caja)
+  ok('y la tarjeta en respondido trae Cambiar proyecto', !!botonDe(doc, 43, 'proyecto'))
+  const S = (await montar('activity.html')).window.STRINGS
+  ok('en los tres idiomas', /choose the project here/i.test(S.en.pqToWriter) &&
+    /escolha o projeto aqui/i.test(S.pt.pqToWriter), `${S.en.pqToWriter} | ${S.pt.pqToWriter}`)
+})
+
+console.log('\nconfig.html — proyectos-por-chat: la ayuda del plazo escribe la pregunta con "¿"')
+await seccion(async () => {
+  const { window } = await montar('config.html')
+  const S = window.STRINGS
+  ok('ES abre la pregunta con ¿, como el tablero', S.es.pqHoursHelp.includes('"¿A o B?"'), S.es.pqHoursHelp)
+  // Con Automatico, en un grupo la pregunta va al dueno aunque escriba el dueno: lo leen
+  // tambien los clientes. La ayuda lo dice en los tres idiomas.
+  ok('Automatico: la ayuda dice que en un grupo la pregunta va a usted',
+    /grupo/i.test(S.es.pqHelp) && /su propia conversacion/i.test(S.es.pqHelp) &&
+    /group/i.test(S.en.pqHelp) && /your own chat/i.test(S.en.pqHelp) &&
+    /grupo/i.test(S.pt.pqHelp) && /sua propria conversa/i.test(S.pt.pqHelp),
+    `${S.es.pqHelp} | ${S.en.pqHelp} | ${S.pt.pqHelp}`)
+})
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)
