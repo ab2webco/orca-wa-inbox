@@ -478,7 +478,8 @@
          que el de la vinculacion principal. */
       .lineas { list-style: none; margin: 0; padding: 0; }
       .linea { padding: 10px 0; border-top: 1px solid var(--border, var(--fb-border)); }
-      .linea:first-child { border-top: 0; padding-top: 2px; }
+      .linea-principal { border-top: 0; padding-top: 2px; }
+      .linea-cab[hidden] { display: none; }
       .linea-cab { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
       .linea-num { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
       .linea-marca { font-size: 11px; padding: 1px 6px; border-radius: 999px;
@@ -567,48 +568,52 @@
 
       <!-- ───────── Estado ───────── -->
       <div id="view-estado" role="tabpanel" aria-labelledby="tab-estado">
-        <!-- El transporte unico (T3/T4, docs/ENCARGO-TRANSPORTE-UNICO.md). Primera
-             seccion a proposito: sin sesion nada mas de este panel importa todavia. -->
-        <section>
-          <h2 data-t="pairingLegend"></h2>
-          <p class="pairing-msg" id="pairing-msg"></p>
-          <p class="hint" id="pairing-detail" hidden></p>
-          <!-- Lo que el panel de verdad leyo del worker y del sidecar, en frase y no en
-               nombre de campo. Solo aparece cuando la espera ya deja de ser normal
-               (`pairingDiagnostico`): antes de eso no hay nada raro que contar. -->
-          <p class="hint" id="pairing-diag" hidden></p>
-          <div id="qr-wrap" hidden>
-            <canvas id="qr-canvas"></canvas>
+        <!-- Las lineas: el transporte unico (T3/T4, docs/ENCARGO-TRANSPORTE-UNICO.md) de cada
+             numero vinculado (odd/tasks/varias-lineas-y-segundo-cerebro.md, L4/L5). Primera
+             seccion a proposito: sin sesion nada mas de este panel importa todavia.
+             UNA tarjeta y no dos: la vinculacion de siempre es la fila de la principal, y
+             cada otra linea tiene la suya debajo. Cada linea se suelta desde su fila, y
+             "Comprobar ahora" vale para toda la tarjeta. Sin ninguna linea vinculada, la fila
+             principal es el codigo QR que hay que escanear, como siempre. -->
+        <section id="lineas-card">
+          <h2 data-t="linesLegend"></h2>
+          <p class="hint lead" data-t="linesHelp"></p>
+          <div class="linea linea-principal" id="linea-principal">
+            <div class="linea-cab" id="linea-principal-cab" hidden>
+              <span class="linea-num" id="linea-principal-num"></span>
+              <span class="linea-marca" id="linea-principal-marca" hidden
+                    data-t="linesPrincipal"></span>
+            </div>
+            <p class="pairing-msg" id="pairing-msg"></p>
+            <p class="hint" id="pairing-detail" hidden></p>
+            <!-- Lo que el panel de verdad leyo del worker y del sidecar, en frase y no en
+                 nombre de campo. Solo aparece cuando la espera ya deja de ser normal
+                 (`pairingDiagnostico`): antes de eso no hay nada raro que contar. -->
+            <p class="hint" id="pairing-diag" hidden></p>
+            <div id="qr-wrap" hidden>
+              <canvas id="qr-canvas"></canvas>
+            </div>
+            <div id="linea-principal-tipo"></div>
+            <!-- Desvincular es irreversible desde aca y no hay modal donde preguntar
+                 (`surface` es un enum cerrado y `window.open` esta anulado, §6), asi que
+                 la confirmacion vive en el boton mismo. -->
+            <p class="hint pairing-warn" id="pairing-warn" hidden></p>
+            <div class="actions" id="pairing-actions" hidden>
+              <button id="pairing-retry" hidden data-t="pairingRetry"></button>
+              <button id="pairing-unlink" hidden data-t="pairingUnlink"></button>
+              <button id="pairing-cancel" hidden data-t="pairingUnlinkCancel"></button>
+              <span class="said" id="said-pairing"></span>
+            </div>
           </div>
+          <ul class="lineas" id="lineas-lista"></ul>
+          <p class="hint" data-t="linesPersonalLater"></p>
+          <p class="hint" id="lineas-espera" hidden data-t="linesWaitingOne"></p>
           <!-- "Me toca refrescar?" tenia que tener una respuesta en la pantalla. Va por
                el carril de USUARIO (`call(..., true)`), no por el del sondeo. -->
           <div class="actions">
             <button id="pairing-refresh" data-t="pairingRefresh"></button>
-            <span class="said" id="said-pairing-refresh"></span>
-          </div>
-          <!-- Desvincular es irreversible desde aca y no hay modal donde preguntar
-               (`surface` es un enum cerrado y `window.open` esta anulado, §6), asi que
-               la confirmacion vive en el boton mismo. -->
-          <p class="hint pairing-warn" id="pairing-warn" hidden></p>
-          <div class="actions" id="pairing-actions" hidden>
-            <button id="pairing-retry" hidden data-t="pairingRetry"></button>
-            <button id="pairing-unlink" hidden data-t="pairingUnlink"></button>
-            <button id="pairing-cancel" hidden data-t="pairingUnlinkCancel"></button>
-            <span class="said" id="said-pairing"></span>
-          </div>
-        </section>
-
-        <!-- Varias lineas a la vez (odd/tasks/varias-lineas-y-segundo-cerebro.md, L4/L5):
-             cada numero vinculado, con su estado, su tipo y como soltarlo, y la forma de
-             vincular otro al lado. La primera es la principal, la de la seccion de arriba. -->
-        <section id="lineas-card">
-          <h2 data-t="linesLegend"></h2>
-          <p class="hint lead" data-t="linesHelp"></p>
-          <ul class="lineas" id="lineas-lista"></ul>
-          <p class="hint" data-t="linesPersonalLater"></p>
-          <p class="hint" id="lineas-espera" hidden data-t="linesWaitingOne"></p>
-          <div class="actions">
             <button id="linea-vincular" data-t="linesLink"></button>
+            <span class="said" id="said-pairing-refresh"></span>
             <span class="said" id="said-lineas"></span>
           </div>
         </section>
@@ -1302,7 +1307,7 @@
             'asi que la sesion sigue en pie. Reintente aca abajo; si vuelve a fallar, ' +
             'revise el registro del plugin.',
           // --- desvincular y reintentar (§8.1) ---
-          pairingUnlink: 'Desvincular esta linea',
+          pairingUnlink: 'Desvincular',
           pairingUnlinkConfirm: 'Si, desvincular',
           pairingUnlinkCancel: 'Cancelar',
           pairingUnlinkWarn: 'Se termina la sesion de WhatsApp en este equipo y se ' +
@@ -1876,7 +1881,7 @@
             'session is still live. Try again below; if it fails again, check the ' +
             'plugin log.',
           // --- unlink and retry (§8.1) ---
-          pairingUnlink: 'Unlink this line',
+          pairingUnlink: 'Unlink',
           pairingUnlinkConfirm: 'Yes, unlink',
           pairingUnlinkCancel: 'Cancel',
           pairingUnlinkWarn: 'This ends the WhatsApp session on this machine and ' +
@@ -2429,7 +2434,7 @@
           'entao a sessao continua de pe. Tente de novo aqui embaixo; se falhar outra ' +
           'vez, veja o registro do plugin.',
         // --- desvincular e tentar de novo (§8.1) ---
-        pairingUnlink: 'Desvincular esta linha',
+        pairingUnlink: 'Desvincular',
         pairingUnlinkConfirm: 'Sim, desvincular',
         pairingUnlinkCancel: 'Cancelar',
         pairingUnlinkWarn: 'A sessao do WhatsApp nesta maquina termina e as ' +
@@ -5654,6 +5659,9 @@
       function renderPairing (d) {
         if (hayRespuesta(d)) sidecarUlt = d
         else d = sidecarUlt
+        // La lista de lineas viaja dentro del estado de la principal, y esta es su fila.
+        if (d && typeof d === 'object' && Array.isArray(d.lineas)) registroLineas = leerLineas(d.lineas)
+        renderPrincipal()
         var estado = estadoSidecar(d, edadLectura('sidecar'))
         estadoLinea = estado
         var msg = el('pairing-msg')
@@ -5913,14 +5921,18 @@
       // el carril de USUARIO, el mismo que abrir el panel — para no gastar el cupo del
       // sondeo (docs/ENCARGO...§H2-H3) ni quedar atras de el en la cola. `busy()` lo
       // apaga mientras esta en vuelo, igual que cualquier otro boton de esta pantalla.
+      // Vale para toda la tarjeta de lineas: con mas de una, relee tambien las demas.
       el('pairing-refresh').addEventListener('click', function (event) {
         busy(event.currentTarget, Promise.all([
           read('sidecar', true),
-          read('workerBeat', true)
+          read('workerBeat', true),
+          registroLineas.length > 1 ? read('sidecars', true) : Promise.resolve(SIN_RESPUESTA)
         ]).then(function (rs) {
           var sinWorker = pintarLatido(rs[1])
           apagarLoQueNecesitaWorker(sinWorker)
+          if (hayRespuesta(rs[2]) && rs[2] && typeof rs[2] === 'object') estadosLineas = rs[2]
           renderPairing(rs[0])
+          renderLineas()
           said('said-pairing-refresh', t('pairingChecked'))
         }))
       })
@@ -6406,7 +6418,7 @@
       }
 
       function renderLineas () {
-        el('lineas-card').hidden = !registroLineas.length
+        renderPrincipal()
         var tam = Math.min(tamanoQrPx(), 220)
         var estados = registroLineas.map(function (l) {
           var d = estadoDeLinea(l)
@@ -6421,7 +6433,10 @@
           firmaLineas = firma
           var lista = el('lineas-lista')
           lista.textContent = ''
-          registroLineas.forEach(function (l, i) { lista.appendChild(filaDeLinea(l, i, estados[i], tam)) })
+          // La principal es la fila fija de arriba (la vinculacion de siempre); aca van las demas.
+          registroLineas.forEach(function (l, i) {
+            if (i > 0) lista.appendChild(filaDeLinea(l, i, estados[i], tam))
+          })
         }
         var esperando = registroLineas.some(function (l) { return !l.cuenta })
         el('linea-vincular').disabled = esperando || !liveStorage
@@ -6429,24 +6444,28 @@
         renderVistaLineas()
       }
 
-      function filaDeLinea (l, i, estado, tam) {
-        var d = estadoDeLinea(l)
-        var li = nodo('li', 'linea')
-        li.setAttribute('data-carpeta', l.carpeta)
-        var cab = nodo('div', 'linea-cab')
-        cab.appendChild(nodo('span', 'linea-num', numeroDeLinea(l, d)))
-        if (i === 0) cab.appendChild(nodo('span', 'linea-marca', t('linesPrincipal')))
-        cab.appendChild(nodo('span', 'linea-estado' + (estado === 'connected' ? ' ok'
-          : estado === 'down' || estado === 'silent' ? ' bad' : ''), textoEstadoLinea(estado, d)))
-        li.appendChild(cab)
-        // El QR de la principal ya esta en la seccion de arriba; el de otra, en su fila.
-        if (i > 0 && d && d.qr && (estado === 'live' || estado === 'expired' || estado === 'stale')) {
-          var caja = nodo('div', 'linea-qr' + (estado === 'live' ? '' : ' vencido'))
-          var canvas = document.createElement('canvas')
-          caja.appendChild(canvas)
-          li.appendChild(caja)
-          dibujarQrEn(canvas, d.qr.qr, tam)
-        }
+      /** La fila de la principal: la vinculacion de siempre (su estado, su QR, Reintentar y
+       *  Desvincular los pinta `renderPairing`), con su numero arriba y su tipo. La marca
+       *  "Principal" solo con otra linea al lado: con una sola no hay de que distinguirla. */
+      var firmaPrincipal = null
+      function renderPrincipal () {
+        var l = registroLineas[0] || null
+        var d = sidecarUlt && hayRespuesta(sidecarUlt) ? sidecarUlt : null
+        var numero = (d && typeof d.me === 'string' && d.me) ||
+          (l && l.cuenta ? '+' + String(l.cuenta).replace(/^pn:/, '') : '')
+        el('linea-principal-cab').hidden = !numero
+        el('linea-principal-num').textContent = numero
+        el('linea-principal-marca').hidden = registroLineas.length < 2
+        var caja = el('linea-principal-tipo')
+        if (l) el('linea-principal').setAttribute('data-carpeta', l.carpeta)
+        var firma = JSON.stringify([LANG, l, liveStorage])
+        if (firma === firmaPrincipal) return
+        firmaPrincipal = firma
+        caja.textContent = ''
+        if (l) caja.appendChild(controlDeTipo(l, 0))
+      }
+
+      function controlDeTipo (l, i) {
         var tipo = nodo('div', 'linea-tipo')
         var etiqueta = nodo('span', '', t('linesType'))
         etiqueta.id = 'linea-tipo-' + i
@@ -6464,11 +6483,31 @@
         })
         tipo.appendChild(etiqueta)
         tipo.appendChild(seg)
-        li.appendChild(tipo)
+        return tipo
+      }
+
+      function filaDeLinea (l, i, estado, tam) {
+        var d = estadoDeLinea(l)
+        var li = nodo('li', 'linea')
+        li.setAttribute('data-carpeta', l.carpeta)
+        var cab = nodo('div', 'linea-cab')
+        cab.appendChild(nodo('span', 'linea-num', numeroDeLinea(l, d)))
+        cab.appendChild(nodo('span', 'linea-estado' + (estado === 'connected' ? ' ok'
+          : estado === 'down' || estado === 'silent' ? ' bad' : ''), textoEstadoLinea(estado, d)))
+        li.appendChild(cab)
+        // El QR de la principal esta en su fila fija, arriba; el de otra, en la suya.
+        if (d && d.qr && (estado === 'live' || estado === 'expired' || estado === 'stale')) {
+          var caja = nodo('div', 'linea-qr' + (estado === 'live' ? '' : ' vencido'))
+          var canvas = document.createElement('canvas')
+          caja.appendChild(canvas)
+          li.appendChild(caja)
+          dibujarQrEn(canvas, d.qr.qr, tam)
+        }
+        li.appendChild(controlDeTipo(l, i))
         var confirmando = confirmandoLinea === l.carpeta
         // Una linea nueva que todavia espera su codigo no tiene sesion que soltar:
         // cancelarla es un clic y no pide confirmacion.
-        var pendiente = i > 0 && !l.cuenta
+        var pendiente = !l.cuenta
         if (confirmando) li.appendChild(nodo('p', 'hint linea-aviso', t('linesUnlinkWarn')))
         var acciones = nodo('div', 'actions')
         var quitar = nodo('button', 'linea-desvincular' + (confirmando ? ' confirmar' : ''),
@@ -6486,9 +6525,7 @@
           })
           acciones.appendChild(cancelar)
         }
-        // La principal que todavia espera su codigo no tiene nada que soltar: su QR esta en
-        // la seccion de arriba, y cancelarla solo abriria otra igual.
-        if (i > 0 || l.cuenta) li.appendChild(acciones)
+        li.appendChild(acciones)
         return li
       }
 

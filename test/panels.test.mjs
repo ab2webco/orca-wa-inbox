@@ -8041,15 +8041,25 @@ console.log('\nconfig.html — L4: la tarjeta de lineas, con una sola')
 {
   const { doc } = await montar('config.html', { sidecar: conLineas([lineaA]) }, 'es-419')
   await espera()
-  const filas = doc.querySelectorAll('#lineas-lista .linea')
-  const fila = textoDe(doc, '#lineas-lista .linea')
-  ok('lista la linea con su numero, como principal y conectada', filas.length === 1 &&
-    fila.includes('+573000000001') && /Principal/.test(fila) && /Conectada/.test(fila), fila)
+  // Una sola tarjeta: la vinculacion de siempre es la fila de la principal, dentro de Lineas.
+  const fila = textoDe(doc, '#linea-principal')
+  ok('la linea es la fila principal de la tarjeta de lineas, con su numero y conectada',
+    !!doc.querySelector('#lineas-card #linea-principal') && fila.includes('+573000000001') &&
+    /conectad/i.test(fila) && doc.querySelectorAll('#lineas-lista .linea').length === 0, fila)
+  ok('con una sola linea no se la llama Principal: no hay otra',
+    doc.getElementById('linea-principal-marca').hidden)
+  ok('ya no hay una tarjeta de vinculacion aparte: un solo lugar para la linea',
+    [...doc.querySelectorAll('#view-estado h2')].filter((h) =>
+      /Vinculacion de WhatsApp/.test(h.textContent)).length === 0 &&
+    doc.getElementById('pairing-msg').closest('#lineas-card') !== null)
+  ok('su Desvincular dice solo Desvincular, en su fila',
+    doc.getElementById('pairing-unlink').textContent === 'Desvincular' &&
+    doc.getElementById('pairing-unlink').closest('#linea-principal') !== null)
   ok('ofrece vincular otra linea', !doc.getElementById('linea-vincular').disabled &&
     /Vincular otra linea/.test(doc.getElementById('linea-vincular').textContent))
   ok('con una sola linea no hay selector de linea en Conversaciones',
     doc.getElementById('linea-vista-fila').hidden)
-  const tipo = doc.querySelector('#lineas-lista .linea .linea-tipo')
+  const tipo = doc.querySelector('#linea-principal .linea-tipo')
   ok('el tipo dice Soporte, y Personal esta apagado hasta que exista',
     tipo?.querySelector('button[data-value="support"]')?.getAttribute('aria-pressed') === 'true' &&
     tipo.querySelector('button[data-value="personal"]')?.disabled === true, tipo?.outerHTML)
@@ -8062,8 +8072,11 @@ console.log('\nconfig.html — L4: la unica linea, esperando su codigo, no ofrec
     exited: false, lineas: [sola] } }, 'es-419')
   await espera()
   ok('sin numero todavia no hay Desvincular en su fila: no hay sesion que soltar',
-    !!doc.querySelector('.linea[data-carpeta="nueva-prueba"]') &&
-    !doc.querySelector('.linea[data-carpeta="nueva-prueba"] .linea-desvincular'))
+    doc.getElementById('pairing-unlink').hidden &&
+    !doc.querySelector('#lineas-card .linea-desvincular'))
+  ok('y la vinculacion de siempre sigue ahi: espera el codigo en la tarjeta de lineas',
+    /esperando/i.test(textoDe(doc, '#pairing-msg')) &&
+    doc.getElementById('pairing-msg').closest('#lineas-card') !== null, textoDe(doc, '#pairing-msg'))
 }
 
 console.log('\nconfig.html — L4: vincular otra linea le pide al worker una linea nueva')
@@ -8114,6 +8127,14 @@ console.log('\nconfig.html — L4: desvincular una linea pide confirmacion y nom
   await espera()
   const boton = () => doc.querySelector('.linea[data-carpeta="pn-573000000011"] .linea-desvincular')
   ok('cada linea tiene su Desvincular', !!boton())
+  ok('un solo Desvincular por linea: la principal el suyo, la otra el suyo',
+    doc.querySelectorAll('#lineas-card .linea-desvincular').length === 1 &&
+    !doc.getElementById('pairing-unlink').hidden &&
+    /Principal/.test(textoDe(doc, '#linea-principal')) &&
+    textoDe(doc, '#linea-principal').includes('+573000000001'), textoDe(doc, '#lineas-card'))
+  ok('y un solo Comprobar ahora, para toda la tarjeta',
+    doc.querySelectorAll('#lineas-card #pairing-refresh').length === 1 &&
+    doc.getElementById('pairing-refresh').closest('#linea-principal') === null)
   boton().click()
   await espera()
   ok('el primer clic solo pide confirmacion', !storage.sidecarRequest &&

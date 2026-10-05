@@ -108,6 +108,19 @@ existing test stays green unchanged.
   `informesPorLinea[<account>]`, and the rest (board, activity, chats) in
   `porLinea[<account>]`. The nav badge adds up the decisions of every line.
 
+- **One card for the lines.** Settings has no separate pairing card any more: the usual
+  pairing (status, QR, Retry, Unlink) is the principal's row inside "Lines", with its
+  number on top ("Main" only when there is another line). Each other line has its own row.
+  Each line is unlinked only from its own row, and "Check now" is one action for the
+  whole card. With no linked line, the principal row is the QR flow, as before.
+
+Decisions accepted by the owner (2026-10-05):
+
+- "Attend now" on a case of another line marks the case; the agent is launched by that
+  line's tick, not immediately.
+- Relinking a number that was already linked replaces its old folder on the next start
+  (the phone may keep a ghost linked device).
+
 ## Checklist
 
 ### Part 1: several lines
