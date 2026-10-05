@@ -58,11 +58,25 @@ owner's approval number by WhatsApp. Owner-approved on 2026-10-04.
       failing (nothing in `orcaPanes`, no spawn). GREEN: 439/439 (27 new: transitions, repeat
       waiting, own workspace incl. `::workspace:` and Windows paths, sessionBoundary, done
       from waiting, pruning by age and cap, switch off = no spawn, exact argv, restart).
-- [ ] O3 `wa-scope orca-aviso`: opt-in, quiet hours, cap, name resolution, template ES/EN/PT,
+- [x] O3 `wa-scope orca-aviso`: opt-in, quiet hours, cap, name resolution, template ES/EN/PT,
       enqueue and send; tests on fake data.
-- [ ] O4 Finished notice with debounce in the tick.
-- [ ] O5 Failed automations polled from the tick with a watermark.
-- [ ] O6 Quiet-hours summary and the over-cap grouped message.
+      RED: the new `scripts/check-casos` section stopped at its first call, `invalid choice:
+      'orca-aviso'`. GREEN: the section's 46 checks green (off by default and no number by the
+      real CLI; text with repo, display name and agent type, no path or comment; dedupe per
+      5-minute window; no names when unknown; a secret-shaped name dropped; EN and PT; no
+      `approve` in any of these paths). `orca worktree ps` and `wa-send` are fakes
+      (`orca_json`, `tick_envia` replaced in the loaded module).
+- [x] O4 Finished notice with debounce in the tick. `orca_terminados` reads `orcaPanes`:
+      sent only for `done` + `finished` older than the delay and newer than 15 min; not for a
+      `done` without work, a pane back to `working`, or with the switch off; no repeat.
+- [x] O5 Failed automations polled from the tick with a watermark. First poll only sets
+      `orca_runs_desde`; `dispatch_failed` with its error (path removed), a command failure
+      with its exit code only, a timeout; completed and skipped runs ignored; watermark
+      deleted when the switch is off; no Orca call at all with everything off.
+- [x] O6 Quiet-hours summary and the over-cap grouped message. `retenido` rows inside the
+      window (crossing midnight covered), ONE summary after it ends (`resumido`); past the cap
+      `excedido`, ONE grouped message once the hour has room (`agrupado`); neither repeats.
+      O3-O6 share one commit: one test section and one code block in `wa-scope`.
 - [ ] O7 Regression: every existing flow still green (cases, approvals, owner notices,
       triage, first message, board, reports); `npm run check` green; screenshots of
       config.html at 1440/768/390/320, light and dark, ES and EN, looked at.
