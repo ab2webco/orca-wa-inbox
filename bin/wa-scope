@@ -232,6 +232,10 @@ create table if not exists chat_scope (
   provider      text default 'plane',  -- plane | linear | github | ninguno
   target        text,                  -- proyecto (plane), team (linear), owner/repo (github)
   workspace     text,                  -- el PROYECTO del catalogo (`project.id`); null = sin proyecto
+  -- Los proyectos de la conversacion (proyectos-por-chat, M1): un arreglo JSON de
+  -- `project.id`, en orden. `workspace` queda derivado: el unico id cuando la lista tiene
+  -- uno, si no null; asi cada lector de un solo proyecto sigue igual.
+  workspaces    text,
   mode          text not null default 'off',
   initial_state text,                  -- columna del board donde cae el issue nuevo
   hours         text default 'L-V 08:00-18:00',
@@ -824,11 +828,14 @@ def persistir_panel(con):
             con.execute("update chat_scope set aprobacion=? where account=? and chat_jid=?",
                         (json.dumps(wa_reglas.niveles(e["approval"]), sort_keys=True),
                          cuenta_de_entrada(e), jid))
-        # El proyecto solo se toca si el panel lo dijo: una entrada de un panel anterior
-        # no trae la clave y no puede borrar el que se puso por terminal.
-        if "workspace" in e:
-            con.execute("update chat_scope set workspace=? where account=? and chat_jid=?",
-                        (id_proyecto(e.get("workspace")), cuenta_de_entrada(e), jid))
+        # Los proyectos solo se tocan si el panel los dijo: una entrada de un panel anterior
+        # no trae las claves y no puede borrar los que se pusieron por terminal. Van las dos
+        # columnas: la lista y el `workspace` derivado que leen los de un solo proyecto.
+        if "workspaces" in e or "workspace" in e:
+            lista = lista_del_panel(e, [])
+            con.execute("update chat_scope set workspaces=?, workspace=? where account=? "
+                        "and chat_jid=?", (json.dumps(lista), proyecto_derivado(lista),
+                                           cuenta_de_entrada(e), jid))
     con.commit()
 
 
@@ -845,6 +852,7 @@ def push_to_plugin(con, with_activity=False):
         scope[jid] = {"chatName": r.get("chat_name") or jid,
                       "provider": r.get("provider") or "plane",
                       "target": r.get("target"), "workspace": r.get("workspace"),
+                      "workspaces": r.get("workspaces") or [],
                       "mode": r.get("mode") or "off",
                       "tone": r.get("tone"), "instructions": r.get("instructions"),
                       "ack": r.get("acuse"), "ackText": r.get("acuse_texto"),
@@ -1122,11 +1130,15 @@ def merged_scope(con):
     # pero no autoriza nada aca: heredarlo fue la fuga de permisos que motivo esto.
     cuenta = cuenta_activa()
     rows = {r["chat_jid"]: dict(r) for r in con.execute(
-        "select account, chat_jid, chat_name, provider, target, workspace, mode, "
+        "select account, chat_jid, chat_name, provider, target, workspace, workspaces, mode, "
         "initial_state, hours, tone, instructions, acuse, acuse_texto, saludo, "
         "saludo_texto, primer_mensaje, aprobacion, timezone, notes, updated_at "
         "from chat_scope "
         "where account=?", (cuenta,))}
+    for row in rows.values():
+        row["workspaces"] = lista_de_proyectos(lista_de_columna(row.get("workspaces")),
+                                               row.get("workspace"))
+        row["workspace"] = proyecto_derivado(row["workspaces"])
     for jid, e in plugin_store_read().items():
         # El panel guarda por jid, y cada entrada dice de que linea es (`account`; las
         # de antes de T9 no lo dicen y son `local`). Solo entran las de esta linea: el
@@ -1137,13 +1149,13 @@ def merged_scope(con):
                "chat_name": e.get("chatName") or jid,
                "provider": e.get("provider") or "plane",
                "target": e.get("target"),
-               # El proyecto del panel manda, null incluido: el dueno que lo quita ahi
-               # lo quiere sin proyecto. Una entrada que no trae la clave es de un panel
-               # anterior, y ahi vale lo que la base ya sabia.
-               "workspace": (id_proyecto(e.get("workspace")) if "workspace" in e
-                             else rows.get(jid, {}).get("workspace")),
+               # Los proyectos del panel mandan, la lista vacia incluida: el dueno que los
+               # quita ahi la quiere sin proyecto. Una entrada que no trae ni la lista ni
+               # `workspace` es de un panel anterior, y ahi vale lo que la base ya sabia.
+               "workspaces": lista_del_panel(e, rows.get(jid, {}).get("workspaces") or []),
                "mode": e.get("mode") or "off",
                "updated_at": e.get("updatedAt")}
+        row["workspace"] = proyecto_derivado(row["workspaces"])
         # Misma regla que settings_from_plugin: una cadena vacia no es una eleccion.
         # Guardar la conversacion en el panel sin tocar el tono no puede borrar el que
         # se puso por terminal.
@@ -1189,6 +1201,59 @@ def id_proyecto(valor):
     """El id de un proyecto, o None. Lo que no tiene la forma de un id no es un proyecto:
     el panel lo escribe en storage y nadie mas lo valida antes de que lo lea un CLI."""
     return valor if isinstance(valor, str) and ID_PROYECTO.match(valor) else None
+
+
+def ids_de_proyecto(lista):
+    """Los ids validos de una lista, en orden y sin repetidos; [] si no es una lista."""
+    if not isinstance(lista, list):
+        return []
+    return list(dict.fromkeys(i for i in (id_proyecto(x) for x in lista) if i))
+
+
+def proyecto_derivado(ids):
+    """El `workspace` de siempre que sale de una lista: su unico id, o None con cero o con
+    varios. Es lo que leen los lectores de un solo proyecto (proyectos-por-chat, M1)."""
+    return ids[0] if len(ids) == 1 else None
+
+
+def lista_de_proyectos(lista, unico):
+    """La lista de proyectos de una conversacion, de lo que guardan la base o el panel: la
+    lista y el `workspace` de siempre al lado.
+
+    La lista vale solo si ese `workspace` es el suyo (el derivado). Si no, a `workspace` lo
+    escribio alguien que no sabe de listas —el codigo anterior en la base, un panel anterior
+    que edito el proyecto y dejo la lista vieja en la entrada— y lo ultimo que se toco es
+    ese: vale como una lista de uno. Sin lista, tambien."""
+    unico = id_proyecto(unico)
+    ids = ids_de_proyecto(lista)
+    if not isinstance(lista, list) or proyecto_derivado(ids) != unico:
+        return [unico] if unico else []
+    return ids
+
+
+def lista_de_columna(texto):
+    """La columna `workspaces`, parseada: una lista, o None si no hay nada que leer."""
+    if not isinstance(texto, str) or not texto.strip():
+        return None
+    try:
+        valor = json.loads(texto)
+    except ValueError:
+        return None
+    return valor if isinstance(valor, list) else None
+
+
+def lista_del_panel(e, previa):
+    """La lista de proyectos que dice una entrada del panel, o `previa` (la de la base) si
+    no dice nada: `workspaces` cuando la trae; si no, `workspace` como una lista de uno (un
+    panel anterior); si no, lo que ya se sabia. Una entrada con `workspaces` y sin
+    `workspace` es de un panel que solo escribe la lista: vale la lista."""
+    if "workspaces" in e and isinstance(e["workspaces"], list):
+        unico = (e.get("workspace") if "workspace" in e
+                 else proyecto_derivado(ids_de_proyecto(e["workspaces"])))
+        return lista_de_proyectos(e["workspaces"], unico)
+    if "workspace" in e:
+        return lista_de_proyectos(None, e.get("workspace"))
+    return previa
 
 
 def proyectos_de_storage():
@@ -1299,6 +1364,14 @@ def migrate(con):
         con.execute("alter table chat_scope add column workspace text")
     if "workspace" not in {r["name"] for r in con.execute("pragma table_info(route)")}:
         con.execute("alter table route add column workspace text")
+    # Varios proyectos por conversacion (proyectos-por-chat, M1). La lista nace con el
+    # proyecto que ya tenia: `[workspace]`, o vacia. Una sola vez, al agregar la columna.
+    if "workspaces" not in {r["name"] for r in con.execute("pragma table_info(chat_scope)")}:
+        con.execute("alter table chat_scope add column workspaces text")
+        for r in con.execute("select rowid, workspace from chat_scope").fetchall():
+            unico = id_proyecto(r["workspace"])
+            con.execute("update chat_scope set workspaces=? where rowid=?",
+                        (json.dumps([unico] if unico else []), r["rowid"]))
     # Una base creada por el primer commit del tablero ya tiene `caso` sin esta columna.
     caso_cols = {r["name"] for r in con.execute("pragma table_info(caso)")}
     if "propuesta_aprobada" not in caso_cols:
@@ -1360,8 +1433,8 @@ def migrate(con):
 # Las columnas que se copian al reconstruir chat_scope. Se nombran y no se hace
 # `select *`: con * el orden lo decide la tabla vieja y una version futura insertaria
 # el tono en la columna de las notas sin que nada avise.
-CHAT_SCOPE_COLS = ("chat_jid", "chat_name", "provider", "target", "workspace", "mode",
-                   "initial_state", "hours", "tone", "instructions", "timezone",
+CHAT_SCOPE_COLS = ("chat_jid", "chat_name", "provider", "target", "workspace", "workspaces",
+                   "mode", "initial_state", "hours", "tone", "instructions", "timezone",
                    "notes", "updated_at")
 
 
@@ -1544,16 +1617,24 @@ def cmd_set(con, a):
     cur = con.execute("select * from chat_scope where chat_jid=? and account=?",
                       (jid, cuenta_activa())).fetchone()
     cur = dict(cur) if cur else {}
-    # El proyecto: `--workspace <id>` lo pone, `--workspace ''` lo quita. Solo vale uno de
+    # Los proyectos: `--workspaces a,b` pone la lista, en orden, y `--workspaces ''` la
+    # vacia; `--workspace <id>` es una lista de uno y `--workspace ''` la vacia. Solo valen
     # los que el dueno acepto: un id inventado deja a la conversacion apuntando a nada.
-    workspace = cur.get("workspace")
-    if a.workspace is not None:
-        workspace = a.workspace.strip() or None
+    lista = lista_de_proyectos(lista_de_columna(cur.get("workspaces")), cur.get("workspace"))
+    pedida = None
+    if a.workspaces is not None:
+        pedida = list(dict.fromkeys(x.strip() for x in a.workspaces.split(",") if x.strip()))
+    elif a.workspace is not None:
+        pedida = [a.workspace.strip()] if a.workspace.strip() else []
+    if pedida is not None:
         conocidos = [p["id"] for p in proyectos_del_dueno(con)]
-        if workspace and workspace not in conocidos:
-            sys.exit(f"unknown project: {workspace} (accepted: "
+        fuera = [x for x in pedida if x not in conocidos]
+        if fuera:
+            sys.exit(f"unknown project: {', '.join(fuera)} (accepted: "
                      f"{', '.join(conocidos) or 'none'}; the owner accepts projects in the "
                      f"plugin settings)")
+        lista = pedida
+    workspace = proyecto_derivado(lista)
     vals = {
         # La linea vinculada AHORA (T9): autorizar es autorizar para este numero, y el
         # mismo grupo visto desde otro numero propio es otra autorizacion.
@@ -1567,6 +1648,7 @@ def cmd_set(con, a):
                     or ("plane" if (a.target or a.project) else SIN_TARJETA),
         "target": a.target or a.project or cur.get("target"),
         "workspace": workspace,
+        "workspaces": json.dumps(lista),
         "mode": a.mode or cur.get("mode") or "off",
         "initial_state": a.state or cur.get("initial_state"),
         "hours": a.hours or cur.get("hours") or "L-V 08:00-18:00",
@@ -1605,8 +1687,8 @@ def cmd_set(con, a):
     store = plugin_store_read()
     if jid in store and cuenta_de_entrada(store[jid]) == cuenta_activa():
         cambios = {}
-        if a.workspace is not None:
-            cambios["workspace"] = workspace
+        if pedida is not None:
+            cambios.update(workspace=workspace, workspaces=lista)
         if a.approval:
             cambios["approval"] = json.loads(vals["aprobacion"])
         for flat, columna in AUTO_PANEL:
@@ -1668,6 +1750,7 @@ def cmd_check(con, a):
            "provider": row["provider"] if row else None,
            "target": row["target"] if row else None,
            "workspace": row.get("workspace") if row else None,
+           "workspaces": (row.get("workspaces") or []) if row else [],
            "reason": ("ok" if allowed else
                       "not in the registry" if not row else
                       f"mode {mode} is not enough for {a.for_}")}
@@ -2301,6 +2384,7 @@ def cmd_voice(con, a):
              "opens_card": provider != SIN_TARJETA,
              "target": row.get("target") or None,
              "workspace": row.get("workspace") or None,
+             "workspaces": row.get("workspaces") or [],
              "mode": row.get("mode") or "off",
              # Los niveles de aprobacion de este chat (T22.3): lo que el agente puede
              # mandar solo, lo que vuelve a el para reescribir y lo que espera al dueno.
@@ -9507,6 +9591,10 @@ def main():
     s.add_argument("--workspace", metavar="PROJECT",
                    help="the project the work of this chat goes to: an id from "
                         "`wa-scope projects`; an empty value clears it")
+    s.add_argument("--workspaces", metavar="PROJECTS",
+                   help="the projects of this chat, in order: ids from `wa-scope projects` "
+                        "separated by commas; an empty value clears the list. --workspace X "
+                        "is the same as a list of one")
     s.add_argument("--mode")
     s.add_argument("--state"); s.add_argument("--hours"); s.add_argument("--timezone")
     s.add_argument("--notes")

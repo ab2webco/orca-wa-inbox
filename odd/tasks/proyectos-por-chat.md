@@ -148,12 +148,21 @@ Everything must be configurable and wired end to end (panel and logic), in ES, E
 
 ### A. Several projects per chat
 
-- [ ] **M1** — `chat_scope.workspaces` column, migration that backfills one-item lists, `CHAT_SCOPE_COLS`, `merged_scope`/`persistir_panel`/`push_to_plugin` handling of `workspaces`, derived `workspace`, `set --workspaces`, `check`/`voice` returning `workspaces`.
+- [x] **M1** — `chat_scope.workspaces` column, migration that backfills one-item lists, `CHAT_SCOPE_COLS`, `merged_scope`/`persistir_panel`/`push_to_plugin` handling of `workspaces`, derived `workspace`, `set --workspaces`, `check`/`voice` returning `workspaces`.
   - Tests in `scripts/check-clis` (around `:377-386`) and `scripts/check-casos`:
     - an old database and an old panel entry (only `workspace`) give `[id]`;
     - a panel `workspaces: []` clears the list;
     - a removed catalog id is kept and reported;
     - a two-item list gives `workspace=null`.
+  - Evidence: `scripts/check-clis`, `revisa_varios_proyectos`. RED: 26 of 27 checks failed
+    (no `workspaces` column, no list in `list`/`check`/`voice`/storage, `--workspaces`
+    unknown to argparse). GREEN: its 22 M1 checks pass; `check-clis` 307 checks, exit 0;
+    `check-casos` 1233/1233 with no existing assertion touched. The "reported" half of the
+    removed id is `where`'s `missing` and lands with M2. Beyond the list above, the tests
+    also pin the backward-compatibility guard: a list is trusted only when the `workspace`
+    stored next to it is its derived value, so an older CLI that writes `workspace` in the
+    database, or an older panel that edits `workspace` and leaves a stale `workspaces` in the
+    entry, wins as a one-item list (`lista_de_proyectos`).
 - [ ] **M2** — `resolve_target`/`where` return `candidates`; the chat fallback applies only to single-project chats; `caso_enruta` stores `workspace_name/path/why/by`.
   - Tests:
     - the rule wins over the list;
