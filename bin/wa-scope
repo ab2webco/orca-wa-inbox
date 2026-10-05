@@ -33,7 +33,7 @@ it written in the chat" about a message that is not there.
 Task service per conversation: plane, linear, github — or `ninguno` when that
 conversation opens no cards and the agent only reads, summarizes or replies.
 """
-import argparse, datetime, hashlib, json, os, re, shlex, sqlite3, subprocess, sys, time, unicodedata
+import argparse, datetime, hashlib, json, os, pathlib, re, shlex, sqlite3, subprocess, sys, time, unicodedata
 
 # El modulo vive al lado, y esto se carga tanto como script como importado
 # por ruta desde los chequeos: sin esto el segundo caso no lo encuentra.
@@ -876,6 +876,12 @@ def push_to_plugin(con, with_activity=False):
     # que es justo lo que no reusa nada (kanban-casos, T4).
     extra = {"board": build_board(con)}
     if with_activity:
+        # Los informes viajan con el tablero en el sync (informes-tablero, I3). Una falla
+        # aca no tumba el sync: se dice y queda el informe anterior.
+        try:
+            extra["reports"] = build_reports(con)
+        except (sqlite3.Error, OSError, ValueError) as exc:
+            print(f"wa-scope: reports not built: {exc}", file=sys.stderr)
         efectivos = merged_settings(con)
         # La lista de conversaciones es la TERCERA lectura de WhatsApp de este sync.
         # Sin cambios en la fuente no puede haber chats nuevos, asi que se deja la que
@@ -5332,6 +5338,501 @@ def publica_tablero(con):
     """El tablero (y su insignia) al storage del panel, despues de una mutacion."""
     _TABLERO_SUCIO.clear()
     return plugin_store_write(None, extra={"board": build_board(con)})
+
+
+# ── Los informes (odd/tasks/informes-tablero.md, I3) ──────────────────────────────────
+# El panel no puede leer las bases: los numeros de la pestana Informes salen de aca, en el
+# mismo sync que el tablero, a UNA clave del storage (`reports`). Solo agregados, ids de
+# caso, titulos y nombres de chat que el tablero ya muestra: nunca el texto de un mensaje.
+#
+# Las definiciones (las mismas que dice la pestana):
+# - Primera respuesta: del primer mensaje del cliente del caso a la primera salida en ese
+#   chat despues de el (acuse, primer mensaje del agente o respuesta). Una salida ANTERIOR
+#   (el reloj de un telefono) no es su respuesta. Cuenta en el periodo en que se creo el caso.
+# - Resolucion: de la creacion del caso a su PRIMERA entrada en respondido o cerrado; nunca
+#   negativa (un evento antes de la creacion, por el reloj, es cero).
+# - Resuelto: un caso cuya primera entrada en respondido o cerrado cae en el periodo.
+# - Espera del cliente: por cada rafaga de mensajes seguidos del cliente en un chat del
+#   alcance, el tiempo hasta la siguiente salida; la mediana del periodo en que empezo la
+#   rafaga. Las que siguen sin salida no entran a la mediana: se cuentan (`unanswered`).
+# - SLA: cumple el caso cuya primera respuesta llego dentro de la meta
+#   (`sla_first_reply_minutes`); falla el que llego despues, o el que sigue sin respuesta
+#   con la meta ya vencida (pendiente mientras no vence). Un caso cerrado sin respuesta, o
+#   sin mensajes del cliente en el almacen, no entra.
+# - Trafico y volumen de mensajes: solo los chats del alcance (modo distinto de off) de la
+#   linea activa, sin los mensajes revocados. Los casos son los de la linea activa.
+# La hora es la LOCAL del equipo: los periodos empiezan a la medianoche local, y el periodo
+# anterior es el de la misma duracion justo antes (hoy se compara con ayer hasta la misma
+# hora).
+PERIODOS_INFORME = (("today", 1), ("7d", 7), ("30d", 30), ("all", None))
+ETAPAS_RESUELTAS = ("respondido", "cerrado")
+# Los topes que acotan la clave: el storage se reescribe en cada sync y el panel lo lee
+# entero.
+TOPE_SEMANAS_INFORME = 104
+TOPE_FALLAS_SLA = 50
+TOPE_CASOS_INFORME = 500
+TOPE_PROYECTOS_INFORME = 50
+CLAVES_VOLUMEN = ("chats", "received", "sent", "created", "resolved")
+
+
+def _medianoche(dia):
+    return time.mktime((dia.year, dia.month, dia.day, 0, 0, 0, 0, 0, -1))
+
+
+def _iso_epoch(t):
+    return (datetime.datetime.fromtimestamp(t).astimezone().isoformat(timespec="seconds")
+            if t is not None else None)
+
+
+def _epoch_local(sello):
+    """Un sello de los casos (hora local, a segundos) en epoch, o None."""
+    try:
+        return time.mktime(time.strptime(str(sello), "%Y-%m-%d %H:%M:%S"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _dia(t):
+    return time.strftime("%Y-%m-%d", time.localtime(t))
+
+
+def _hora(t):
+    return time.strftime("%Y-%m-%d %H", time.localtime(t))
+
+
+def _lunes(fecha):
+    """El lunes de la semana de una fecha 'YYYY-MM-DD'."""
+    d = datetime.date.fromisoformat(fecha)
+    return (d - datetime.timedelta(days=d.weekday())).isoformat()
+
+
+def _mediana(valores):
+    if not valores:
+        return None
+    orden = sorted(valores)
+    mitad = len(orden) // 2
+    medio = orden[mitad] if len(orden) % 2 else (orden[mitad - 1] + orden[mitad]) / 2
+    return int(round(medio))
+
+
+def _delta_pct(actual, previo):
+    """El cambio contra el periodo anterior, en porcentaje entero; None sin base (nunca
+    se divide por cero)."""
+    if actual is None or previo is None or previo == 0:
+        return None
+    return int(round((actual - previo) * 100 / previo))
+
+
+def periodos_del_informe(ahora):
+    """{clave: {desde, hasta, previo (desde, hasta) | None, cubeta, filas, cubetas}}."""
+    lt = time.localtime(ahora)
+    hoy = datetime.date(lt.tm_year, lt.tm_mon, lt.tm_mday)
+    salida = {}
+    for clave, dias in PERIODOS_INFORME:
+        if dias is None:
+            salida[clave] = {"desde": None, "hasta": ahora, "previo": None,
+                             "cubeta": "week", "filas": "weekday", "fechas": None}
+            continue
+        inicio = hoy - datetime.timedelta(days=dias - 1)
+        antes = hoy - datetime.timedelta(days=dias)
+        fin_previo = time.mktime((antes.year, antes.month, antes.day, lt.tm_hour,
+                                  lt.tm_min, lt.tm_sec, 0, 0, -1))
+        salida[clave] = {
+            "desde": _medianoche(inicio), "hasta": ahora,
+            "previo": (_medianoche(inicio - datetime.timedelta(days=dias)), fin_previo),
+            "cubeta": "hour" if dias == 1 else "day",
+            "filas": "date" if dias <= 7 else "weekday",
+            "fechas": [(inicio + datetime.timedelta(days=i)).isoformat()
+                       for i in range(dias)]}
+    return salida
+
+
+def _en(t, desde, hasta, cerrado=True):
+    """Si t cae en [desde, hasta] (o [desde, hasta) con cerrado False). desde None = siempre."""
+    if t is None or (desde is not None and t < desde):
+        return False
+    return t <= hasta if cerrado else t < hasta
+
+
+def _cubeta(t, cubeta):
+    if cubeta == "hour":
+        return _hora(t)
+    if cubeta == "day":
+        return _dia(t)
+    return _lunes(_dia(t))
+
+
+def informe_mensajes(cuenta, chats, periodos):
+    """Lo que sale del almacen, agregado en SQL: recibidos y enviados por hora local, chats
+    con actividad por dia y por hora de hoy, los totales de cada periodo y su anterior, y
+    las rafagas del cliente con su respuesta. Sin almacen, None."""
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return None
+    alcance = json.dumps(sorted(chats))
+    filtro = ("account = ? and revocado = 0 and chat_jid in "
+              "(select value from json_each(?))")
+    try:
+        por_hora = {r[0]: (r[1], r[2]) for r in fuente.execute(
+            f"select strftime('%Y-%m-%d %H', ts, 'unixepoch', 'localtime') k, "
+            f"sum(from_me = 0), sum(from_me = 1) from mensaje where {filtro} group by k",
+            (cuenta, alcance))}
+        chats_dia = {}
+        for d, chat in fuente.execute(
+                f"select distinct date(ts, 'unixepoch', 'localtime'), chat_jid from mensaje "
+                f"where {filtro}", (cuenta, alcance)):
+            chats_dia.setdefault(d, set()).add(chat)
+        hoy0 = periodos["today"]["desde"]
+        chats_hora = {r[0]: r[1] for r in fuente.execute(
+            f"select strftime('%Y-%m-%d %H', ts, 'unixepoch', 'localtime') k, "
+            f"count(distinct chat_jid) from mensaje where {filtro} and ts >= ? group by k",
+            (cuenta, alcance, hoy0))}
+        # Los totales de los siete rangos (cuatro periodos y tres anteriores) en UNA pasada.
+        rangos, columnas, params = [], [], []
+        for clave, per in periodos.items():
+            rangos.append((clave, "actual"))
+            columnas.append("(ts >= ? and ts <= ?)")
+            params += [per["desde"] if per["desde"] is not None else -1, per["hasta"]]
+            if per["previo"]:
+                rangos.append((clave, "previo"))
+                columnas.append("(ts >= ? and ts < ?)")
+                params += list(per["previo"])
+        partes = []
+        for cond in columnas:
+            partes += [f"count(distinct case when {cond} then chat_jid end)",
+                       f"coalesce(sum({cond} and from_me = 0), 0)",
+                       f"coalesce(sum({cond} and from_me = 1), 0)"]
+        orden = []
+        for cond_params in zip(params[0::2], params[1::2]):
+            orden += list(cond_params) * 3
+        fila = fuente.execute(f"select {', '.join(partes)} from mensaje where {filtro}",
+                              (*orden, cuenta, alcance)).fetchone()
+        totales = {rango: {"chats": fila[3 * i], "received": fila[3 * i + 1],
+                           "sent": fila[3 * i + 2]} for i, rango in enumerate(rangos)}
+        # Las rafagas: el primer mensaje de cada tramo del mismo lado en un chat, y la ventana
+        # siguiente sobre esos tramos, que alterna, da la salida que contesta cada rafaga.
+        rafagas = fuente.execute(
+            f"with m as (select chat_jid, ts, from_me, lag(from_me) over "
+            f"(partition by chat_jid order by ts, stanza_id) previo from mensaje "
+            f"where {filtro}), "
+            f"tramo as (select chat_jid, ts, from_me from m where previo is null or "
+            f"previo <> from_me), "
+            f"sig as (select chat_jid, ts, from_me, lead(ts) over "
+            f"(partition by chat_jid order by ts) despues from tramo) "
+            f"select ts, despues from sig where from_me = 0",
+            (cuenta, alcance)).fetchall()
+    except sqlite3.Error:
+        return None
+    finally:
+        fuente.close()
+    return {"por_hora": por_hora, "chats_dia": chats_dia, "chats_hora": chats_hora,
+            "totales": totales, "rafagas": [(r[0], r[1]) for r in rafagas]}
+
+
+def primeras_respuestas(cuenta):
+    """{case_id: (primer mensaje del cliente, primera salida despues | None)} en epoch, con
+    scope.db adjunta en solo lectura al almacen: una busqueda por indice por caso."""
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return {}
+    try:
+        fuente.execute("attach database ? as s",
+                       (pathlib.Path(DB).resolve().as_uri() + "?mode=ro",))
+        return {r[0]: (r[1], r[2]) for r in fuente.execute(
+            "select x.case_id, x.primero, (select min(o.ts) from mensaje o where "
+            "o.account = x.account and o.chat_jid = x.chat_jid and o.from_me = 1 and "
+            "o.revocado = 0 and o.ts >= x.primero) from (select c.case_id, c.account, "
+            "c.chat_jid, (select min(m.ts) from s.caso_mensaje cm join mensaje m on "
+            "m.account = cm.account and m.chat_jid = c.chat_jid and m.stanza_id = cm.stanza_id "
+            "where cm.case_id = c.case_id and m.from_me = 0 and m.revocado = 0) primero "
+            "from s.caso c where c.account = ?) x where x.primero is not null", (cuenta,))}
+    except sqlite3.Error:
+        return {}
+    finally:
+        fuente.close()
+
+
+def casos_del_informe(con, cuenta, nombres, meta, ahora):
+    """Cada caso de la linea con lo que el informe necesita, en epoch."""
+    casos = {r["case_id"]: dict(r) for r in con.execute(
+        "select case_id, chat_jid, etapa, titulo, ruta, created_at from caso where account=?",
+        (cuenta,))}
+    resueltos = {r[0]: r[1] for r in con.execute(
+        "select e.case_id, min(e.at) from caso_evento e join caso c on c.case_id = e.case_id "
+        "where c.account = ? and e.a in ('respondido', 'cerrado') and "
+        "(e.de is null or e.de <> e.a) group by e.case_id", (cuenta,))}
+    del_dueno = {r[0] for r in con.execute(
+        "select distinct e.case_id from caso_evento e join caso c on c.case_id = e.case_id "
+        "where c.account = ? and e.de = 'decision' and e.a <> 'decision' and "
+        "e.actor = 'dueno'", (cuenta,))}
+    frenados = set()
+    for r in con.execute(
+            "select e.case_id, e.detalle from caso_evento e join caso c on "
+            "c.case_id = e.case_id where c.account = ? and (e.detalle like ? or "
+            "e.detalle like ?)", (cuenta, "envio frenado:%", f"{REVISION}%")):
+        detalle = r[1] or ""
+        if detalle.startswith(REVISION) or any(q == "jev" for q, _ in
+                                                motivos_del_freno(detalle)):
+            frenados.add(r[0])
+    despachos = {}
+    for r in con.execute(
+            "select d.case_id, d.proyecto, d.resultado from caso_despacho d join caso c on "
+            "c.case_id = d.case_id where c.account = ? order by d.id", (cuenta,)):
+        despachos[r[0]] = (r[1], r[2])
+    respuestas = primeras_respuestas(cuenta)
+    salida = []
+    for cid, c in casos.items():
+        creado = _epoch_local(c["created_at"])
+        if creado is None:
+            continue
+        resuelto = _epoch_local(resueltos.get(cid))
+        primero, salio = respuestas.get(cid, (None, None))
+        primera = max(0, int(salio - primero)) if salio is not None else None
+        if primera is not None:
+            sla = "met" if primera <= meta else "missed"
+        elif primero is None or c["etapa"] == "cerrado":
+            sla = None
+        else:
+            sla = "missed" if ahora - primero > meta else "pending"
+        try:
+            ruta = json.loads(c["ruta"]) if c["ruta"] else {}
+        except ValueError:
+            ruta = {}
+        proyecto, resultado = despachos.get(cid, (None, None))
+        if isinstance(ruta, dict) and ruta.get("workspace"):
+            pid, pnombre = ruta["workspace"], ruta.get("workspace_name") or ruta["workspace"]
+        else:
+            pid, pnombre = None, proyecto or None
+        salida.append({
+            "case_id": cid, "chat": nombres.get(c["chat_jid"]) or c["chat_jid"],
+            "title": c["titulo"] or nombres.get(c["chat_jid"]) or c["chat_jid"],
+            "stage": c["etapa"], "creado": creado, "resuelto": resuelto,
+            "resolucion": max(0, int(resuelto - creado)) if resuelto is not None else None,
+            "primera": primera, "sla": sla, "project_id": pid, "project": pnombre,
+            "resultado": resultado, "jev": cid in frenados,
+            "dueno": cid in del_dueno or c["etapa"] == "decision"})
+    salida.sort(key=lambda x: (x["creado"], x["case_id"]), reverse=True)
+    return salida
+
+
+def _claves_de(per, ahora, primera_fecha):
+    """Las cubetas de las barras de un periodo, en orden."""
+    if per["cubeta"] == "hour":
+        dia = per["fechas"][0]
+        return [f"{dia} {h:02d}" for h in range(time.localtime(ahora).tm_hour + 1)]
+    if per["cubeta"] == "day":
+        return list(per["fechas"])
+    actual = datetime.date.fromisoformat(_lunes(_dia(ahora)))
+    desde = datetime.date.fromisoformat(_lunes(primera_fecha or _dia(ahora)))
+    semanas = []
+    while actual >= desde and len(semanas) < TOPE_SEMANAS_INFORME:
+        semanas.append(actual.isoformat())
+        actual -= datetime.timedelta(days=7)
+    return semanas[::-1]
+
+
+def _tiempo(actuales, previos, claves, cubeta):
+    """{value, n, prev, prev_n, delta_pct, bars}: actuales y previos son [(epoch, segundos)];
+    previos None = el periodo no tiene anterior."""
+    valor = _mediana([v for _, v in actuales])
+    previo = _mediana([v for _, v in previos]) if previos is not None else None
+    por_cubeta = {}
+    for t, v in actuales:
+        por_cubeta.setdefault(_cubeta(t, cubeta), []).append(v)
+    return {"value": valor, "n": len(actuales), "prev": previo,
+            "prev_n": len(previos) if previos is not None else None,
+            "delta_pct": _delta_pct(valor, previo),
+            "bars": [{"k": k, "value": _mediana(por_cubeta.get(k, [])),
+                      "n": len(por_cubeta.get(k, []))} for k in claves]}
+
+
+def _fila_vacia():
+    return [0] * 24
+
+
+def _mapa(cuentas_hora, per):
+    """Mapa de calor desde {"YYYY-MM-DD HH": n}: una fila por fecha (hoy, 7 dias) o por dia
+    de la semana, 1 = lunes (30 dias, todo)."""
+    if per["filas"] == "date":
+        filas = {f: _fila_vacia() for f in per["fechas"]}
+    else:
+        filas = {d: _fila_vacia() for d in range(1, 8)}
+    desde = per["fechas"][0] if per["fechas"] else None
+    for clave, n in cuentas_hora.items():
+        fecha, hora = clave[:10], int(clave[11:13])
+        if desde is not None and fecha < desde:
+            continue
+        if per["filas"] == "date":
+            if fecha in filas:
+                filas[fecha][hora] += n
+        else:
+            filas[datetime.date.fromisoformat(fecha).isoweekday()][hora] += n
+    return [{"k": k, "h": h} for k, h in filas.items()]
+
+
+def build_reports(con, ahora=None):
+    """Los numeros de la pestana Informes para los cuatro periodos, con la forma del
+    contrato `reports` (v 1, documentado en odd/tasks/informes-tablero.md)."""
+    ahora = time.time() if ahora is None else ahora
+    cuenta = cuenta_activa()
+    ajustes = merged_settings(con)
+    try:
+        meta_min = int(ajustes.get("sla_first_reply_minutes")
+                       or DEFAULT_CONFIG["sla_first_reply_minutes"])
+    except (TypeError, ValueError):
+        meta_min = int(DEFAULT_CONFIG["sla_first_reply_minutes"])
+    meta = meta_min * 60
+    alcance = merged_scope(con)
+    nombres = {jid: r.get("chat_name") for jid, r in alcance.items()}
+    chats = [jid for jid, r in alcance.items() if (r.get("mode") or "off") != "off"]
+    periodos = periodos_del_informe(ahora)
+    msj = informe_mensajes(cuenta, chats, periodos) or {
+        "por_hora": {}, "chats_dia": {}, "chats_hora": {}, "totales": {}, "rafagas": []}
+    casos = casos_del_informe(con, cuenta, nombres, meta, ahora)
+
+    etapas = dict.fromkeys(ETAPAS_CASO, 0)
+    for r in con.execute("select etapa, count(*) from caso where account=? group by etapa",
+                         (cuenta,)):
+        if r[0] in etapas:
+            etapas[r[0]] = r[1]
+    espera_cliente = con.execute(
+        "select count(distinct c.case_id) from caso c join caso_despacho d on "
+        "d.case_id = c.case_id where c.account=? and c.etapa in ('respondido','trabajo') and "
+        "d.id = (select max(id) from caso_despacho where case_id = c.case_id) and "
+        "(d.estado='esperando' or (d.estado in ('lanzando','activo') and "
+        "d.resultado='necesita'))", (cuenta,)).fetchone()[0]
+    vivo = {"open": sum(n for e, n in etapas.items() if e not in ETAPAS_RESUELTAS),
+            "decision": etapas["decision"], "waiting_customer": espera_cliente,
+            "blocked": etapas["bloqueado"], "conversations": len(chats)}
+
+    momentos = ([c["creado"] for c in casos]
+                + [c["resuelto"] for c in casos if c["resuelto"] is not None])
+    primera_fecha = min([_dia(t) for t in momentos] + list(msj["chats_dia"]), default=None)
+    resueltos_hora = {}
+    for c in casos:
+        if c["resuelto"] is not None:
+            k = _hora(c["resuelto"])
+            resueltos_hora[k] = resueltos_hora.get(k, 0) + 1
+    recibidos_hora = {k: v[0] for k, v in msj["por_hora"].items()}
+    # Recibidos y enviados por dia, una vez: las barras de dia y de semana los suman.
+    por_dia = {}
+    for k, (recibidos, enviados) in msj["por_hora"].items():
+        r_s = por_dia.setdefault(k[:10], [0, 0])
+        r_s[0] += recibidos
+        r_s[1] += enviados
+
+    salida = {}
+    for clave, per in periodos.items():
+        desde, hasta, previo = per["desde"], per["hasta"], per["previo"]
+        claves = _claves_de(per, ahora, primera_fecha)
+
+        def del_periodo(pares, actual=True):
+            if actual:
+                return [(t, v) for t, v in pares if _en(t, desde, hasta)]
+            if previo is None:
+                return None
+            return [(t, v) for t, v in pares if _en(t, previo[0], previo[1], False)]
+
+        primeras = [(c["creado"], c["primera"]) for c in casos if c["primera"] is not None]
+        resoluciones = [(c["resuelto"], c["resolucion"]) for c in casos
+                        if c["resuelto"] is not None]
+        esperas = [(t, int(d - t)) for t, d in msj["rafagas"] if d is not None]
+        sin_respuesta = sum(1 for t, d in msj["rafagas"] if d is None and _en(t, desde, hasta))
+
+        def totales_de(cual, lo, hi, cerrado):
+            base = msj["totales"].get((clave, cual)) or {"chats": 0, "received": 0, "sent": 0}
+            return dict(base,
+                        created=sum(1 for c in casos if _en(c["creado"], lo, hi, cerrado)),
+                        resolved=sum(1 for c in casos if _en(c["resuelto"], lo, hi, cerrado)))
+        totales = totales_de("actual", desde, hasta, True)
+        previos = totales_de("previo", previo[0], previo[1], False) if previo else None
+        creados, cerrados = {}, {}
+        for c in casos:
+            if _en(c["creado"], desde, hasta):
+                k = _cubeta(c["creado"], per["cubeta"])
+                creados[k] = creados.get(k, 0) + 1
+            if _en(c["resuelto"], desde, hasta):
+                k = _cubeta(c["resuelto"], per["cubeta"])
+                cerrados[k] = cerrados.get(k, 0) + 1
+        barras = []
+        for k in claves:
+            if per["cubeta"] == "hour":
+                r_s = msj["por_hora"].get(k, (0, 0))
+                n_chats = msj["chats_hora"].get(k, 0)
+            else:
+                dias = ([k] if per["cubeta"] == "day" else
+                        [(datetime.date.fromisoformat(k) + datetime.timedelta(days=i)).isoformat()
+                         for i in range(7)])
+                r_s = (sum(por_dia.get(d, (0, 0))[0] for d in dias),
+                       sum(por_dia.get(d, (0, 0))[1] for d in dias))
+                n_chats = len(set().union(*(msj["chats_dia"].get(d, set()) for d in dias)))
+            barras.append({"k": k, "chats": n_chats, "received": r_s[0], "sent": r_s[1],
+                           "created": creados.get(k, 0), "resolved": cerrados.get(k, 0)})
+
+        def sla_de(lo, hi, cerrado):
+            del_rango = [c for c in casos if _en(c["creado"], lo, hi, cerrado)]
+            cumple = sum(1 for c in del_rango if c["sla"] == "met")
+            falla = [c for c in del_rango if c["sla"] == "missed"]
+            pendiente = sum(1 for c in del_rango if c["sla"] == "pending")
+            tasa = (round(cumple * 100 / (cumple + len(falla)), 1)
+                    if cumple + len(falla) else None)
+            return cumple, falla, pendiente, tasa
+        cumple, fallas, pendientes, tasa = sla_de(desde, hasta, True)
+        tasa_previa = sla_de(previo[0], previo[1], False)[3] if previo else None
+
+        grupos = {}
+        for c in casos:
+            if not _en(c["creado"], desde, hasta):
+                continue
+            g = grupos.setdefault((c["project_id"], c["project"]), {
+                "id": c["project_id"], "name": c["project"], "cases": 0, "resuelto": 0,
+                "necesita": 0, "bloqueado": 0, "jev_held": 0, "owner_decision": 0})
+            g["cases"] += 1
+            if c["resultado"] in ("resuelto", "necesita", "bloqueado"):
+                g[c["resultado"]] += 1
+            g["jev_held"] += c["jev"]
+            g["owner_decision"] += c["dueno"]
+        proyectos = sorted(grupos.values(),
+                           key=lambda g: (g["name"] is None and g["id"] is None, -g["cases"],
+                                          str(g["name"] or "")))
+
+        salida[clave] = {
+            "from": _iso_epoch(desde), "to": _iso_epoch(hasta),
+            "prev_from": _iso_epoch(previo[0]) if previo else None,
+            "prev_to": _iso_epoch(previo[1]) if previo else None,
+            "bucket": per["cubeta"], "rows": per["filas"],
+            "first_response": _tiempo(del_periodo(primeras), del_periodo(primeras, False),
+                                      claves, per["cubeta"]),
+            "resolution": _tiempo(del_periodo(resoluciones), del_periodo(resoluciones, False),
+                                  claves, per["cubeta"]),
+            "customer_wait": dict(_tiempo(del_periodo(esperas), del_periodo(esperas, False),
+                                          claves, per["cubeta"]), unanswered=sin_respuesta),
+            "volume": {"totals": totales, "prev": previos,
+                       "delta_pct": ({k: _delta_pct(totales[k], previos[k])
+                                      for k in CLAVES_VOLUMEN} if previos else None),
+                       "bars": barras},
+            "traffic": {"received": _mapa(recibidos_hora, per),
+                        "resolved": _mapa(resueltos_hora, per)},
+            "sla": {"met": cumple, "missed": len(fallas), "pending": pendientes, "rate": tasa,
+                    "prev_rate": tasa_previa,
+                    "delta_pts": (round(tasa - tasa_previa, 1)
+                                  if tasa is not None and tasa_previa is not None else None),
+                    "misses": [{"case_id": c["case_id"], "title": c["title"], "chat": c["chat"],
+                                "first_response_s": c["primera"], "project": c["project"]}
+                               for c in fallas[:TOPE_FALLAS_SLA]],
+                    "misses_more": max(0, len(fallas) - TOPE_FALLAS_SLA)},
+            "projects": proyectos[:TOPE_PROYECTOS_INFORME],
+        }
+    return {"v": 1, "updated_at": _iso_epoch(ahora), "sla_minutes": meta_min, "live": vivo,
+            "periods": salida,
+            "cases": [{"case_id": c["case_id"], "chat": c["chat"], "title": c["title"],
+                       "created": _iso_epoch(c["creado"]), "first_response_s": c["primera"],
+                       "resolution_s": c["resolucion"], "stage": c["stage"],
+                       "project": c["project"], "sla": c["sla"]}
+                      for c in casos[:TOPE_CASOS_INFORME]],
+            "cases_more": max(0, len(casos) - TOPE_CASOS_INFORME)}
 
 
 def cmd_sync(con, a):

@@ -61,8 +61,28 @@ stores (capture.db messages, scope.db cases, case events and dispatches). Owner-
       and Cerrado by stage-entry time; chips and counts follow it.
 - [ ] I2 Board columns bounded to the viewport with inner scroll; "Show N more" in
       Respondido and Cerrado (20 at a time).
-- [ ] I3 Stats computation in wa-scope: the four periods plus previous periods, the
+- [x] I3 Stats computation in wa-scope: the four periods plus previous periods, the
       definitions above, bounded storage key, written with the board.
+      `build_reports` in `bin/wa-scope`, written by `push_to_plugin` on every `sync` (the
+      worker's periodic run) in the same storage write as `board`, under the key `reports`
+      (shape below). A failure there is logged and keeps the previous value; the sync goes
+      on. Pinned in `scripts/check-casos` "los informes del tablero" on hand-built fake data
+      (Bogota and New York zones, fixed "now"): every metric, period limits and previous
+      periods, no data, a case never answered (miss after the target, pending before),
+      an outgoing message older than the request (not its response), a stage entry before
+      creation (resolution 0), reopened case counted once, bursts, revoked messages,
+      local-midnight boundaries, zero baseline (no percentage), DST (01:30 EST to 03:30 EDT
+      is one hour; heatmap hour 01), another line's messages and cases, chats off or not
+      registered, the SLA target read from the setting, the 500-row cap, and `sync`
+      writing the key. RED: `AttributeError: ... has no attribute 'build_reports'`; then
+      `reports` missing from storage after `sync`; GREEN: 49/49 in the section, whole
+      check-casos 1165/1165 (1116 before).
+      Performance (synthetic 50k messages in 60 in-scope chats over 90 days, 2,000 cases,
+      8,000 events, 500 dispatches; Apple Silicon): `build_reports` 300-330 ms (SQL ~200 ms:
+      hour buckets 46, day-chat pairs 41, bursts 76), against `build_board` 15 ms. The
+      default retention (`capture_max` 20,000) keeps real stores below that. Key size in
+      that worst case: ~240 KB as stored (indented), ~150 KB compact; half of it is the
+      500 case rows.
 - [ ] I4 SLA target setting (global, panel key, validation, default 15) in Settings.
   - [x] I4.1 Backend: `sla_first_reply_minutes` (global, default 15, whole minutes 1..1440)
         in `bin/wa_settings.py`, flat panel key `slaMinutes` (sync mirrors it back; a dirty
@@ -74,6 +94,84 @@ stores (capture.db messages, scope.db cases, case events and dispatches). Owner-
 - [ ] I6 CSV download (or a report of why the host blocks it).
 - [ ] I7 Screenshots of the board and Reports at 1440/768/390/320, light and dark, ES and EN,
       looked at; `npm run check` green.
+
+## Storage key `reports` (v 1), for the UI stage
+
+Written by `wa-scope sync` next to `board`. All times are seconds; all timestamps are ISO
+8601 with the machine's offset; hours are the machine's LOCAL hours. A metric with no data
+is `null` (never 0 seconds); a comparison without a base (no previous period, or a previous
+value of 0 or null) is `null`, so the panel shows no percentage.
+
+```
+{
+  "v": 1,
+  "updated_at": ISO,
+  "sla_minutes": int,                    // the target in force (setting sla_first_reply_minutes)
+  "live": {                              // now, not period-dependent
+    "open": int,                         // cases not in respondido or cerrado
+    "decision": int,                     // waiting for the owner's decision
+    "waiting_customer": int,             // latest dispatch waits for the customer (necesita)
+    "blocked": int,
+    "conversations": int                 // chats of the active line with mode != off
+  },
+  "periods": {
+    "today" | "7d" | "30d" | "all": {
+      "from": ISO | null,                // local midnight; null for "all"
+      "to": ISO,                         // now
+      "prev_from": ISO | null, "prev_to": ISO | null,   // same length just before; null for "all"
+                                         // (today compares with yesterday up to the same clock time)
+      "bucket": "hour" | "day" | "week", // bars: today by hour, 7d/30d by date, all by week
+      "rows": "date" | "weekday",        // heatmaps: today/7d one row per date, 30d/all per weekday
+      "first_response": T, "resolution": T,
+      "customer_wait": T + {"unanswered": int},   // bursts still without an outgoing message
+      "volume": {
+        "totals": V, "prev": V | null,
+        "delta_pct": {chats, received, sent, created, resolved: int | null} | null,
+        "bars": [V + {"k": bucket key}]
+      },
+      "traffic": {
+        "received": [{"k": "YYYY-MM-DD" | 1..7 (ISO weekday, 1 = Monday), "h": [24 ints]}],
+        "resolved": [same shape]          // cases by the hour of their first resolution
+      },
+      "sla": {
+        "met": int, "missed": int, "pending": int,
+        "rate": float | null,            // percent of met over met + missed, 1 decimal
+        "prev_rate": float | null,
+        "delta_pts": float | null,       // rate - prev_rate, in points (not a percentage)
+        "misses": [{"case_id", "title", "chat", "first_response_s": int | null, "project": str | null}],
+                                         // newest first, at most 50; null first response = never answered
+        "misses_more": int               // misses beyond the 50 listed
+      },
+      "projects": [{"id": str | null, "name": str | null, "cases": int,
+                    "resuelto": int, "necesita": int, "bloqueado": int,   // latest dispatch outcome
+                    "jev_held": int, "owner_decision": int}]
+                                         // cases created in the period; most cases first,
+                                         // "no project" (id and name null) last; at most 50
+    }
+  },
+  "cases": [{"case_id", "chat", "title", "created": ISO, "first_response_s": int | null,
+             "resolution_s": int | null, "stage", "project": str | null,
+             "sla": "met" | "missed" | "pending" | null}],
+                                         // every case of the active line, newest first, at most
+                                         // 500; the CSV of a period = rows with created in [from, to]
+  "cases_more": int                      // rows left out by the cap
+}
+T = {"value": median seconds | null, "n": int, "prev": seconds | null,
+     "prev_n": int | null (null = no previous period), "delta_pct": int | null,
+     "bars": [{"k": bucket key, "value": median | null, "n": int}]}
+V = {"chats": distinct chats with messages, "received": int, "sent": int,
+     "created": cases created, "resolved": cases first resolved}
+bucket keys: hour "YYYY-MM-DD HH" (00 to the current hour), day "YYYY-MM-DD",
+week = its Monday "YYYY-MM-DD" (from the first week with data, at most 104 weeks).
+```
+
+Membership: first response and SLA count the cases CREATED in the period; resolution and
+"resolved" count the cases FIRST resolved in it; customer wait counts the bursts that
+STARTED in it. Messages are those of the active line, in chats with mode != off, without
+revoked ones; cases are those of the active line. A case closed without any response, or
+without customer messages in the store, is outside the SLA. "Jev held" = a send held by
+Jev or a "Jev asked to revise" event; "owner decision" = left `decision` by the owner's
+hand, or still waiting there.
 
 ## Acceptance
 

@@ -11,6 +11,7 @@ Cada caso corre en su propio HOME temporal, como scripts/check-closing: la base 
 ~/.wa-inbox/scope.db y no hay variable para moverla.
 """
 import argparse
+import datetime
 import hashlib
 import importlib.machinery
 import importlib.util
@@ -8329,6 +8330,497 @@ if NODE:
             ok("y `si N` la manda", ver["etapa"] == "respondido", f"{ver['eventos'][-2:]}")
         finally:
             sidecar.cerrar()
+
+
+# ── Los informes del tablero (odd/tasks/informes-tablero.md, I3) ──────────────────────
+# `wa-scope sync` calcula los numeros de la pestana Informes y los deja en UNA clave del
+# storage (`reports`). Cada numero se fija aca sobre datos armados a mano, con el valor
+# esperado calculado a mano: un informe que nadie puede reproducir es un adorno.
+# La hora es la LOCAL del equipo, asi que cada escenario fija su zona (TZ) y su "ahora".
+def con_zona(zona):
+    os.environ["TZ"] = zona
+    time.tzset()
+
+
+def local(texto):
+    """Epoch de una hora local 'YYYY-MM-DD HH:MM:SS' en la zona fijada."""
+    return int(time.mktime(time.strptime(texto, "%Y-%m-%d %H:%M:%S")))
+
+
+def iso_local(texto):
+    return datetime.datetime.fromtimestamp(local(texto)).astimezone().isoformat(
+        timespec="seconds")
+
+
+def m_(chat, mid, cuando, yo=False):
+    return dict(chat=chat, id=mid, texto="x", ts=local(cuando), yo=yo)
+
+
+def informe(home, ahora):
+    """build_reports corrido en este proceso, con la zona y el ahora del escenario."""
+    antes = {k: os.environ.get(k) for k in ("HOME", "XDG_CONFIG_HOME", "APPDATA")}
+    ws = carga_wa_scope(home)
+    con = ws.db()
+    try:
+        return ws.build_reports(con, ahora=local(ahora))
+    finally:
+        con.close()
+        for k, v in antes.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def siembra_casos(home, casos, eventos, despachos=()):
+    con = db_de(home)
+    for c in casos:
+        con.execute("insert into caso (case_id, account, chat_jid, etapa, titulo, ruta, "
+                    "created_at, updated_at) values (?,?,?,?,?,?,?,?)",
+                    (c["id"], c.get("cuenta", A), c["chat"], c["etapa"], c.get("titulo"),
+                     json.dumps(c["ruta"]) if c.get("ruta") else None, c["creado"],
+                     c["creado"]))
+        for stanza in c.get("mensajes", ()):
+            con.execute("insert into caso_mensaje (account, stanza_id, case_id, at) "
+                        "values (?,?,?,?)", (c.get("cuenta", A), stanza, c["id"], c["creado"]))
+    for case_id, de, a, actor, at, detalle in eventos:
+        con.execute("insert into caso_evento (case_id, de, a, actor, detalle, at) "
+                    "values (?,?,?,?,?,?)", (case_id, de, a, actor, detalle, at))
+    for n, (case_id, proyecto, estado, resultado) in enumerate(despachos, 1):
+        con.execute("insert into caso_despacho (case_id, evento_id, proyecto, estado, "
+                    "resultado, created_at, updated_at) values (?,?,?,?,?,?,?)",
+                    (case_id, 900 + n, proyecto, estado, resultado, "2026-03-01 00:00:00",
+                     "2026-03-01 00:00:00"))
+    con.commit()
+    con.close()
+
+
+def ceros(n=24):
+    return [0] * n
+
+
+def fila_h(**horas):
+    h = ceros()
+    for k, v in horas.items():
+        h[int(k[1:])] = v
+    return h
+
+
+ALFA = {"workspace": "alfa-demo", "workspace_name": "Alfa Demo"}
+BETA = {"workspace": "beta-demo", "workspace_name": "Beta Demo"}
+HOLD_JEV = ("envio frenado: send-needs-approval caso-2-abc Held this reply to 'X' (rule: "
+            "money; jev: states_status_not_verified): it was written and is waiting")
+
+print("\nlos informes del tablero")
+ZONA_ANTES = os.environ.get("TZ")
+if not NODE:
+    ok("los informes necesitan node para armar el almacen", False, "sin node en el PATH")
+else:
+    # ── El escenario principal: Bogota (sin horario de verano), miercoles 18 de marzo
+    # de 2026 a las 14:30. Hoy es desde las 00:00; el periodo anterior de hoy es ayer
+    # de 00:00 a 14:30. 7 dias empieza el 12, y su anterior va del 5 al 11 a las 14:30.
+    con_zona("America/Bogota")
+    AHORA = "2026-03-18 14:30:00"
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [
+            # Soporte Norte (responder)
+            m_(SOPORTE, "o1", "2026-03-10 10:00:00"), m_(SOPORTE, "o2", "2026-03-10 10:20:00", True),
+            m_(SOPORTE, "y1", "2026-03-17 08:00:00"), m_(SOPORTE, "y2", "2026-03-17 08:05:00", True),
+            m_(SOPORTE, "y3", "2026-03-17 15:00:00"), m_(SOPORTE, "y4", "2026-03-17 15:10:00", True),
+            m_(SOPORTE, "s1", "2026-03-18 09:00:00"), m_(SOPORTE, "s2", "2026-03-18 09:02:00"),
+            m_(SOPORTE, "s3", "2026-03-18 09:10:00", True),
+            m_(SOPORTE, "s4", "2026-03-18 10:00:00"), m_(SOPORTE, "s5", "2026-03-18 10:30:00", True),
+            m_(SOPORTE, "r1", "2026-03-18 12:00:00"),          # se revoca abajo: no cuenta
+            # Cliente Uno (observar): la primera salida es ANTERIOR al pedido (reloj del
+            # telefono): no es su respuesta.
+            m_(PERSONA, "p0", "2026-03-18 10:59:50", True),
+            m_(PERSONA, "p1", "2026-03-18 11:00:00"), m_(PERSONA, "p2", "2026-03-18 11:40:00", True),
+            m_(PERSONA, "p3", "2026-03-18 13:00:00"), m_(PERSONA, "p4", "2026-03-18 14:00:00"),
+            m_(PERSONA, "p5", "2026-03-18 14:20:00"),
+            # Fuera del alcance: un chat sin registrar y uno en `off`.
+            m_(AJENO, "a1", "2026-03-18 09:30:00"), m_(AJENO, "a2", "2026-03-18 09:31:00", True),
+            m_(OPERACIONES, "q1", "2026-03-18 09:00:00")])
+        # La otra linea, sin activar: su trafico no es el de esta.
+        llegan(home, B, [m_(SOPORTE, "b1", "2026-03-18 09:45:00"),
+                         m_(SOPORTE, "b2", "2026-03-18 09:50:00", True)], activar=False)
+        cap = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+        cap.execute("update mensaje set revocado=1, body='' where stanza_id='r1'")
+        cap.commit()
+        cap.close()
+        js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "responder")
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "observar")
+        js(home, "set", OPERACIONES, "--provider", "ninguno", "--mode", "off")
+        # El nombre que muestra el tablero es el del registro: el mismo sale en el informe.
+        con = db_de(home)
+        con.executemany("update chat_scope set chat_name=? where chat_jid=?",
+                        [("Soporte Norte", SOPORTE), ("Cliente Uno", PERSONA)])
+        con.commit()
+        con.close()
+        guardado = json.loads(storage_de(home).read_text(encoding="utf-8"))
+        guardado["scope"][SOPORTE]["chatName"] = "Soporte Norte"
+        guardado["scope"][PERSONA]["chatName"] = "Cliente Uno"
+        storage_de(home).write_text(json.dumps(guardado), encoding="utf-8")
+        siembra_casos(home, [
+            dict(id=1, chat=SOPORTE, etapa="respondido", titulo="Pedido uno", ruta=ALFA,
+                 creado="2026-03-18 09:00:30", mensajes=("s1", "s2")),
+            dict(id=2, chat=PERSONA, etapa="trabajo", titulo="Pedido dos", ruta=BETA,
+                 creado="2026-03-18 11:00:10", mensajes=("p1",)),
+            dict(id=3, chat=PERSONA, etapa="decision", titulo="Pedido tres",
+                 creado="2026-03-18 13:00:05", mensajes=("p3",)),
+            dict(id=4, chat=SOPORTE, etapa="cerrado", titulo="Pedido cuatro",
+                 creado="2026-03-17 08:00:20", mensajes=("y1",)),
+            dict(id=5, chat=SOPORTE, etapa="respondido", titulo="Pedido cinco", ruta=ALFA,
+                 creado="2026-03-10 10:00:10", mensajes=("o1",)),
+            dict(id=6, chat=SOPORTE, etapa="cerrado", titulo="Pedido seis",
+                 creado="2026-03-17 15:00:30", mensajes=("y3",)),
+            dict(id=7, chat=SOPORTE, etapa="bloqueado", titulo="Pedido siete",
+                 creado="2026-03-18 14:25:00"),
+            dict(id=8, chat=SOPORTE, etapa="cerrado", titulo="Pedido ocho", ruta=ALFA,
+                 creado="2026-03-18 10:00:20", mensajes=("s4",)),
+            dict(id=9, chat=PERSONA, etapa="cerrado", titulo="Pedido nueve",
+                 creado="2026-03-18 14:00:10", mensajes=("p4",)),
+            dict(id=10, chat=SOPORTE, etapa="recibido", titulo="De la otra linea", cuenta=B,
+                 creado="2026-03-18 09:45:10", mensajes=("b1",)),
+            dict(id=11, chat=PERSONA, etapa="recibido", titulo="Pedido once",
+                 creado="2026-03-18 14:20:05", mensajes=("p5",)),
+        ], [
+            (1, None, "recibido", "automatizacion", "2026-03-18 09:00:30", ""),
+            (1, "recibido", "clasificado", "agente", "2026-03-18 09:01:00", ""),
+            (1, "clasificado", "decision", "agente", "2026-03-18 09:05:00", ""),
+            (1, "decision", "respondido", "dueno", "2026-03-18 09:12:00", ""),
+            (2, None, "recibido", "automatizacion", "2026-03-18 11:00:10", ""),
+            (2, "recibido", "recibido", "automatizacion", "2026-03-18 11:41:00", HOLD_JEV),
+            (2, "recibido", "trabajo", "regla", "2026-03-18 11:50:00", ""),
+            (3, None, "recibido", "automatizacion", "2026-03-18 13:00:05", ""),
+            (3, "recibido", "decision", "agente", "2026-03-18 13:01:00", ""),
+            (4, None, "recibido", "automatizacion", "2026-03-17 08:00:20", ""),
+            (4, "recibido", "cerrado", "automatizacion", "2026-03-17 08:30:20", ""),
+            (5, None, "recibido", "automatizacion", "2026-03-10 10:00:10", ""),
+            (5, "recibido", "respondido", "agente", "2026-03-10 11:00:10", ""),
+            (6, None, "recibido", "automatizacion", "2026-03-17 15:00:30", ""),
+            # El reloj: entro a cerrado ANTES de su creacion. No hay tiempos negativos.
+            (6, "recibido", "cerrado", "dueno", "2026-03-17 14:59:00", ""),
+            (7, None, "recibido", "automatizacion", "2026-03-18 14:25:00", ""),
+            (7, "recibido", "bloqueado", "agente", "2026-03-18 14:26:00", ""),
+            (8, None, "recibido", "automatizacion", "2026-03-18 10:00:20", ""),
+            (8, "recibido", "cerrado", "automatizacion", "2026-03-18 10:05:20", ""),
+            # Reabierto y cerrado otra vez: cuenta una vez, por su PRIMERA entrada.
+            (8, "cerrado", "recibido", "automatizacion", "2026-03-18 10:20:00", ""),
+            (8, "recibido", "cerrado", "automatizacion", "2026-03-18 11:00:00", ""),
+            (9, None, "recibido", "automatizacion", "2026-03-18 14:00:10", ""),
+            (9, "recibido", "cerrado", "automatizacion", "2026-03-18 14:01:00", ""),
+            (10, None, "recibido", "automatizacion", "2026-03-18 09:45:10", ""),
+            (10, "recibido", "cerrado", "automatizacion", "2026-03-18 09:50:00", ""),
+            (11, None, "recibido", "automatizacion", "2026-03-18 14:20:05", ""),
+        ], [(2, "Beta Demo", "esperando", "necesita"),
+            (5, "Alfa Demo", "activo", None), (5, "Alfa Demo", "reportado", "resuelto")])
+
+        r = informe(home, AHORA)
+        p = r.get("periods", {})
+        ok("informe: version 1, los cuatro periodos y la meta por defecto",
+           r.get("v") == 1 and set(p) == {"today", "7d", "30d", "all"}
+           and r.get("sla_minutes") == 15, f"{sorted(r)} {sorted(p)}")
+        hoy, d7, d30, todo = (p.get(k, {}) for k in ("today", "7d", "30d", "all"))
+        ok("informe: los limites de cada periodo y de su anterior, en hora local",
+           (hoy.get("from"), hoy.get("to"), hoy.get("prev_from"), hoy.get("prev_to")) ==
+           (iso_local("2026-03-18 00:00:00"), iso_local(AHORA),
+            iso_local("2026-03-17 00:00:00"), iso_local("2026-03-17 14:30:00"))
+           and (d7.get("from"), d7.get("prev_from"), d7.get("prev_to")) ==
+           (iso_local("2026-03-12 00:00:00"), iso_local("2026-03-05 00:00:00"),
+            iso_local("2026-03-11 14:30:00"))
+           and (d30.get("from"), d30.get("prev_from"), d30.get("prev_to")) ==
+           (iso_local("2026-02-17 00:00:00"), iso_local("2026-01-18 00:00:00"),
+            iso_local("2026-02-16 14:30:00"))
+           and (todo.get("from"), todo.get("prev_from"), todo.get("prev_to")) ==
+           (None, None, None),
+           f"{[(k, v.get('from'), v.get('prev_from'), v.get('prev_to')) for k, v in p.items()]}")
+        ok("informe: cubetas y filas segun el periodo",
+           [(x.get("bucket"), x.get("rows")) for x in (hoy, d7, d30, todo)] ==
+           [("hour", "date"), ("day", "date"), ("day", "weekday"), ("week", "weekday")])
+
+        ok("resumen en vivo: abiertos, decision, esperando al cliente, bloqueados, chats",
+           r.get("live") == {"open": 4, "decision": 1, "waiting_customer": 1, "blocked": 1,
+                             "conversations": 2}, f"{r.get('live')}")
+
+        # Primera respuesta: del primer mensaje del cliente a la primera salida del chat
+        # despues. Hoy: 1 = 600, 2 = 2400 (la salida de antes no cuenta), 8 = 1800.
+        def tiempo(x, clave):
+            t = x.get(clave) or {}
+            return (t.get("value"), t.get("n"), t.get("prev"), t.get("prev_n"),
+                    t.get("delta_pct"))
+        ok("primera respuesta: mediana, n y comparacion de hoy",
+           tiempo(hoy, "first_response") == (1800, 3, 300, 1, 500),
+           f"{tiempo(hoy, 'first_response')}")
+        ok("primera respuesta: 7 dias contra la semana anterior",
+           tiempo(d7, "first_response") == (600, 5, 1200, 1, -50),
+           f"{tiempo(d7, 'first_response')}")
+        ok("primera respuesta: 30 dias con un anterior vacio no tiene porcentaje",
+           tiempo(d30, "first_response") == (900, 6, None, 0, None),
+           f"{tiempo(d30, 'first_response')}")
+        ok("primera respuesta: todo no tiene periodo anterior",
+           tiempo(todo, "first_response") == (900, 6, None, None, None),
+           f"{tiempo(todo, 'first_response')}")
+        barras = (hoy.get("first_response") or {}).get("bars") or []
+        ok("primera respuesta: hoy en barras por hora, de las 00 a la hora actual",
+           [b.get("k") for b in barras] == [f"2026-03-18 {h:02d}" for h in range(15)]
+           and [(b["k"][-2:], b["value"], b["n"]) for b in barras if b.get("n")] ==
+           [("09", 600, 1), ("10", 1800, 1), ("11", 2400, 1)]
+           and all(b["value"] is None for b in barras if not b.get("n")), f"{barras}")
+
+        # Resolucion: de la creacion a la primera entrada en respondido o cerrado.
+        ok("resolucion: hoy (1 = 690, 8 = 300 por su primera entrada, 9 = 50)",
+           tiempo(hoy, "resolution") == (300, 3, 1800, 1, -83), f"{tiempo(hoy, 'resolution')}")
+        ok("resolucion: 7 dias, con la entrada antes de la creacion en cero",
+           tiempo(d7, "resolution") == (300, 5, 3600, 1, -92), f"{tiempo(d7, 'resolution')}")
+        ok("resolucion: 30 dias y todo",
+           tiempo(d30, "resolution") == (495, 6, None, 0, None)
+           and tiempo(todo, "resolution") == (495, 6, None, None, None),
+           f"{tiempo(d30, 'resolution')} {tiempo(todo, 'resolution')}")
+        barras = (todo.get("resolution") or {}).get("bars") or []
+        ok("resolucion: todo en barras por semana (lunes), de la primera a la actual",
+           [(b.get("k"), b.get("value"), b.get("n")) for b in barras] ==
+           [("2026-03-09", 3600, 1), ("2026-03-16", 300, 5)], f"{barras}")
+
+        # Espera del cliente: una rafaga cuenta una vez, hasta la siguiente salida.
+        espera = hoy.get("customer_wait") or {}
+        ok("espera del cliente: hoy, mediana de rafagas y las que siguen sin respuesta",
+           tiempo(hoy, "customer_wait") == (1800, 3, 300, 1, 500)
+           and espera.get("unanswered") == 1, f"{espera}")
+        ok("espera del cliente: 7 dias, 30 dias y todo",
+           tiempo(d7, "customer_wait") == (600, 5, 1200, 1, -50)
+           and tiempo(d30, "customer_wait") == (900, 6, None, 0, None)
+           and tiempo(todo, "customer_wait") == (900, 6, None, None, None),
+           f"{tiempo(d7, 'customer_wait')} {tiempo(d30, 'customer_wait')}")
+        barras = espera.get("bars") or []
+        ok("espera del cliente: barras por hora de hoy",
+           [(b["k"][-2:], b["value"]) for b in barras if b.get("n")] ==
+           [("09", 600), ("10", 1800), ("11", 2400)], f"{barras}")
+
+        # Volumen: solo chats del alcance de la linea activa, sin revocados.
+        def vol(x):
+            v = x.get("volume") or {}
+            return v.get("totals"), v.get("prev"), v.get("delta_pct")
+        CLAVES_VOL = ("chats", "received", "sent", "created", "resolved")
+        ok("volumen: hoy contra ayer a la misma hora",
+           vol(hoy) == (dict(zip(CLAVES_VOL, (2, 7, 4, 7, 3))),
+                        dict(zip(CLAVES_VOL, (1, 1, 1, 1, 1))),
+                        dict(zip(CLAVES_VOL, (100, 600, 300, 600, 200)))), f"{vol(hoy)}")
+        ok("volumen: 7 dias contra la semana anterior",
+           vol(d7) == (dict(zip(CLAVES_VOL, (2, 9, 6, 9, 5))),
+                       dict(zip(CLAVES_VOL, (1, 1, 1, 1, 1))),
+                       dict(zip(CLAVES_VOL, (100, 800, 500, 800, 400)))), f"{vol(d7)}")
+        ok("volumen: con base cero no hay porcentaje (ni division por cero)",
+           vol(d30) == (dict(zip(CLAVES_VOL, (2, 10, 7, 10, 6))),
+                        dict(zip(CLAVES_VOL, (0, 0, 0, 0, 0))),
+                        dict.fromkeys(CLAVES_VOL)), f"{vol(d30)}")
+        ok("volumen: todo no compara", vol(todo) == (dict(zip(CLAVES_VOL, (2, 10, 7, 10, 6))),
+                                                    None, None), f"{vol(todo)}")
+        barras = {b["k"][-2:]: tuple(b[c] for c in CLAVES_VOL)
+                  for b in (hoy.get("volume") or {}).get("bars") or []}
+        ok("volumen: barras de hoy por hora (el revocado de las 12 no cuenta)",
+           len(barras) == 15 and barras.get("09") == (1, 2, 1, 1, 1)
+           and barras.get("10") == (2, 1, 2, 1, 1) and barras.get("11") == (1, 1, 1, 1, 0)
+           and barras.get("12") == (0, 0, 0, 0, 0) and barras.get("13") == (1, 1, 0, 1, 0)
+           and barras.get("14") == (1, 2, 0, 3, 1), f"{barras}")
+        barras = {b["k"]: tuple(b[c] for c in CLAVES_VOL)
+                  for b in (d7.get("volume") or {}).get("bars") or []}
+        ok("volumen: 7 dias, una barra por fecha",
+           list(barras) == [f"2026-03-{d}" for d in range(12, 19)]
+           and barras["2026-03-17"] == (1, 2, 2, 2, 2)
+           and barras["2026-03-18"] == (2, 7, 4, 7, 3)
+           and barras["2026-03-12"] == (0, 0, 0, 0, 0), f"{barras}")
+        barras = {b["k"]: tuple(b[c] for c in CLAVES_VOL)
+                  for b in (todo.get("volume") or {}).get("bars") or []}
+        ok("volumen: todo, una barra por semana",
+           barras == {"2026-03-09": (1, 1, 1, 1, 1), "2026-03-16": (2, 9, 6, 9, 5)},
+           f"{barras}")
+
+        # El trafico: mapa de calor de mensajes recibidos y de casos resueltos.
+        tr = hoy.get("traffic") or {}
+        ok("trafico de hoy: una fila por fecha, en hora local",
+           tr.get("received") == [{"k": "2026-03-18",
+                                   "h": fila_h(h9=2, h10=1, h11=1, h13=1, h14=2)}]
+           and tr.get("resolved") == [{"k": "2026-03-18", "h": fila_h(h9=1, h10=1, h14=1)}],
+           f"{tr}")
+        tr = d7.get("traffic") or {}
+        filas = {f["k"]: f["h"] for f in tr.get("received") or []}
+        ok("trafico de 7 dias: siete fechas",
+           list(filas) == [f"2026-03-{d}" for d in range(12, 19)]
+           and filas["2026-03-17"] == fila_h(h8=1, h15=1) and filas["2026-03-12"] == ceros()
+           and {f["k"]: f["h"] for f in tr.get("resolved") or []}.get("2026-03-17") ==
+           fila_h(h8=1, h14=1), f"{tr}")
+        tr = d30.get("traffic") or {}
+        filas = {f["k"]: f["h"] for f in tr.get("received") or []}
+        ok("trafico de 30 dias: una fila por dia de la semana (1 = lunes), sumadas",
+           list(filas) == [1, 2, 3, 4, 5, 6, 7] and filas[2] == fila_h(h8=1, h10=1, h15=1)
+           and filas[3] == fila_h(h9=2, h10=1, h11=1, h13=1, h14=2) and filas[1] == ceros()
+           and {f["k"]: f["h"] for f in tr.get("resolved") or []}.get(2) ==
+           fila_h(h8=1, h11=1, h14=1), f"{tr}")
+
+        # SLA: la meta del ajuste (15 min). Un caso nunca contestado cuenta como falla
+        # cuando ya paso la meta; antes, pendiente. Cerrado sin respuesta no entra.
+        def sla(x):
+            s = x.get("sla") or {}
+            return (s.get("met"), s.get("missed"), s.get("pending"), s.get("rate"),
+                    s.get("prev_rate"), s.get("delta_pts"))
+        ok("sla de hoy: 1 cumple, 3 fallan (uno sin respuesta), 1 pendiente",
+           sla(hoy) == (1, 3, 1, 25.0, 100.0, -75.0), f"{sla(hoy)}")
+        ok("sla de 7 dias contra la semana anterior",
+           sla(d7) == (3, 3, 1, 50.0, 0.0, 50.0), f"{sla(d7)}")
+        ok("sla de 30 dias, sin anterior", sla(d30) == (3, 4, 1, 42.9, None, None)
+           and sla(todo) == (3, 4, 1, 42.9, None, None), f"{sla(d30)} {sla(todo)}")
+        ok("sla: la lista de fallas de hoy, la mas reciente primero",
+           (hoy.get("sla") or {}).get("misses") == [
+               {"case_id": 3, "title": "Pedido tres", "chat": "Cliente Uno",
+                "first_response_s": None, "project": None},
+               {"case_id": 2, "title": "Pedido dos", "chat": "Cliente Uno",
+                "first_response_s": 2400, "project": "Beta Demo"},
+               {"case_id": 8, "title": "Pedido ocho", "chat": "Soporte Norte",
+                "first_response_s": 1800, "project": "Alfa Demo"}]
+           and (hoy.get("sla") or {}).get("misses_more") == 0,
+           f"{(hoy.get('sla') or {}).get('misses')}")
+
+        # Por proyecto: los casos creados en el periodo, su desenlace (el ultimo despacho),
+        # cuantos freno Jev y cuantos necesitaron la decision del dueno.
+        def proy(x):
+            return [(f.get("id"), f.get("name"), f.get("cases"), f.get("resuelto"),
+                     f.get("necesita"), f.get("bloqueado"), f.get("jev_held"),
+                     f.get("owner_decision")) for f in x.get("projects") or []]
+        ok("por proyecto: hoy",
+           proy(hoy) == [("alfa-demo", "Alfa Demo", 2, 0, 0, 0, 0, 1),
+                         ("beta-demo", "Beta Demo", 1, 0, 1, 0, 1, 0),
+                         (None, None, 4, 0, 0, 0, 0, 1)], f"{proy(hoy)}")
+        ok("por proyecto: 30 dias, con el desenlace del ultimo despacho",
+           proy(d30) == [("alfa-demo", "Alfa Demo", 3, 1, 0, 0, 0, 1),
+                         ("beta-demo", "Beta Demo", 1, 0, 1, 0, 1, 0),
+                         (None, None, 6, 0, 0, 0, 0, 1)], f"{proy(d30)}")
+
+        # Las filas del CSV: todos los casos de la linea, el mas reciente primero.
+        filas = r.get("cases") or []
+        por_id = {f.get("case_id"): f for f in filas}
+        ok("csv: los casos de la linea activa, del mas reciente al mas viejo",
+           [f.get("case_id") for f in filas] == [7, 11, 9, 3, 2, 8, 1, 6, 4, 5]
+           and r.get("cases_more") == 0, f"{[f.get('case_id') for f in filas]}")
+        ok("csv: una fila con todo lo que pide la descarga",
+           por_id.get(2) == {"case_id": 2, "chat": "Cliente Uno", "title": "Pedido dos",
+                             "created": iso_local("2026-03-18 11:00:10"),
+                             "first_response_s": 2400, "resolution_s": None,
+                             "stage": "trabajo", "project": "Beta Demo", "sla": "missed"},
+           f"{por_id.get(2)}")
+        ok("csv: resolucion en cero con el reloj al reves, pendiente y fuera del sla",
+           (por_id.get(6) or {}).get("resolution_s") == 0
+           and (por_id.get(6) or {}).get("sla") == "met"
+           and (por_id.get(11) or {}).get("sla") == "pending"
+           and (por_id.get(9) or {}).get("sla") is None
+           and (por_id.get(7) or {}).get("first_response_s") is None,
+           f"{[por_id.get(i) for i in (6, 11, 9, 7)]}")
+        ok("el informe no lleva cuerpos de mensajes",
+           '"x"' not in json.dumps(r) and "body" not in json.dumps(r))
+
+        # La meta es un ajuste: con 30 minutos, el caso 8 (1800 s) cumple.
+        js(home, "config", "sla_first_reply_minutes", "30")
+        r = informe(home, AHORA)
+        ok("sla: la meta sale del ajuste", r.get("sla_minutes") == 30
+           and sla(r["periods"]["today"])[:4] == (2, 2, 1, 50.0),
+           f"{r.get('sla_minutes')} {sla(r['periods']['today'])}")
+
+    # ── El limite de medianoche: 23:59:59 es de ayer y 00:00:00 es de hoy.
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [m_(SOPORTE, "e1", "2026-03-17 23:59:59"),
+                         m_(SOPORTE, "e2", "2026-03-18 00:00:00"),
+                         m_(SOPORTE, "e3", "2026-03-18 00:10:00", True)])
+        js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "responder")
+        siembra_casos(home, [dict(id=1, chat=SOPORTE, etapa="recibido", creado="2026-03-17 23:59:59"),
+                             dict(id=2, chat=SOPORTE, etapa="recibido", creado="2026-03-18 00:00:00")],
+                      [])
+        r = informe(home, AHORA)
+        hoy, d7 = r["periods"]["today"], r["periods"]["7d"]
+        ok("medianoche: el mensaje de las 00:00:00 es de hoy y el de 23:59:59 de ayer",
+           hoy["volume"]["totals"]["received"] == 1 and d7["volume"]["totals"]["received"] == 2
+           and hoy["traffic"]["received"][0]["h"] == fila_h(h0=1)
+           and {f["k"]: f["h"] for f in d7["traffic"]["received"]}["2026-03-17"] == fila_h(h23=1),
+           f"{hoy['volume']['totals']} {d7['volume']['totals']}")
+        ok("medianoche: la rafaga es del dia en que empezo",
+           (hoy["customer_wait"]["n"], d7["customer_wait"]["n"], d7["customer_wait"]["value"])
+           == (0, 1, 601), f"{hoy['customer_wait']} {d7['customer_wait']}")
+        ok("medianoche: los casos tambien",
+           hoy["volume"]["totals"]["created"] == 1 and d7["volume"]["totals"]["created"] == 2)
+
+    # ── Sin datos: ni almacen ni casos. Todo en cero o vacio, sin reventar.
+    with tempfile.TemporaryDirectory() as home:
+        js(home, "config")
+        r = informe(home, AHORA)
+        hoy, todo = r["periods"]["today"], r["periods"]["all"]
+        ok("sin datos: resumen en cero",
+           r["live"] == {"open": 0, "decision": 0, "waiting_customer": 0, "blocked": 0,
+                         "conversations": 0}, f"{r['live']}")
+        ok("sin datos: tiempos sin valor y sin porcentaje",
+           all(hoy[k]["value"] is None and hoy[k]["n"] == 0 and hoy[k]["delta_pct"] is None
+               for k in ("first_response", "resolution", "customer_wait")), f"{hoy}")
+        ok("sin datos: volumen en cero, sla sin tasa, sin proyectos ni casos",
+           hoy["volume"]["totals"] == dict.fromkeys(CLAVES_VOL, 0)
+           and hoy["volume"]["delta_pct"] == dict.fromkeys(CLAVES_VOL)
+           and hoy["sla"]["rate"] is None and hoy["sla"]["misses"] == []
+           and hoy["projects"] == [] and r["cases"] == []
+           and hoy["traffic"]["received"] == [{"k": "2026-03-18", "h": ceros()}], f"{hoy}")
+        ok("sin datos: todo tiene la semana actual",
+           [b["k"] for b in todo["volume"]["bars"]] == ["2026-03-16"], f"{todo['volume']}")
+
+        # El tope: el CSV lleva los 500 casos mas recientes y dice cuantos quedaron afuera.
+        con = db_de(home)
+        cuenta_linea = "local"
+        for n in range(520):
+            creado = time.strftime("%Y-%m-%d %H:%M:%S",
+                                   time.localtime(local("2026-03-01 00:00:00") + n * 60))
+            con.execute("insert into caso (account, chat_jid, etapa, created_at, updated_at) "
+                        "values (?,?,'recibido',?,?)", (cuenta_linea, CHAT, creado, creado))
+        con.commit()
+        con.close()
+        r = informe(home, AHORA)
+        ok("tope: 500 filas de casos y cuantas quedaron afuera",
+           len(r["cases"]) == 500 and r["cases_more"] == 20
+           and r["cases"][0]["created"] == iso_local("2026-03-01 08:39:00"),
+           f"{len(r['cases'])} {r.get('cases_more')} {r['cases'][:1]}")
+
+    # ── El horario de verano: Nueva York adelanta el reloj el 8 de marzo de 2026 a las
+    # 02:00. De 01:30 a 03:30 hora local pasa UNA hora, y las horas son las locales.
+    con_zona("America/New_York")
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [m_(SOPORTE, "d1", "2026-03-08 01:30:00"),
+                         m_(SOPORTE, "d2", "2026-03-08 03:30:00", True)])
+        js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "responder")
+        siembra_casos(home, [dict(id=1, chat=SOPORTE, etapa="respondido",
+                                  creado="2026-03-08 01:30:10", mensajes=("d1",))],
+                      [(1, None, "recibido", "automatizacion", "2026-03-08 01:30:10", ""),
+                       (1, "recibido", "respondido", "agente", "2026-03-08 03:30:10", "")])
+        r = informe(home, "2026-03-08 12:00:00")
+        hoy = r["periods"]["today"]
+        ok("horario de verano: la espera, la primera respuesta y la resolucion son de una hora",
+           (hoy["customer_wait"]["value"], hoy["first_response"]["value"],
+            hoy["resolution"]["value"]) == (3600, 3600, 3600),
+           f"{hoy['customer_wait']} {hoy['first_response']} {hoy['resolution']}")
+        ok("horario de verano: el mapa usa la hora local (01 y no 02)",
+           hoy["traffic"]["received"] == [{"k": "2026-03-08", "h": fila_h(h1=1)}]
+           and hoy["traffic"]["resolved"] == [{"k": "2026-03-08", "h": fila_h(h3=1)}],
+           f"{hoy['traffic']}")
+        ok("horario de verano: hoy empieza a la medianoche local",
+           hoy["from"] == iso_local("2026-03-08 00:00:00") and hoy["from"].endswith("-05:00")
+           and hoy["to"].endswith("-04:00"), f"{hoy['from']} {hoy['to']}")
+
+    if ZONA_ANTES is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = ZONA_ANTES
+    time.tzset()
+
+    # ── `sync` deja el informe en el storage, junto al tablero, en la clave `reports`.
+    with tempfile.TemporaryDirectory() as home:
+        js(home, "sync")
+        s = tablero(home)
+        ok("sync escribe `reports` (version 1) junto al tablero",
+           isinstance(s.get("reports"), dict) and s["reports"].get("v") == 1
+           and set(s["reports"].get("periods", {})) == {"today", "7d", "30d", "all"}
+           and isinstance(s.get("board"), dict), f"{sorted(s)}")
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
