@@ -297,6 +297,12 @@ export function renderProyectos(proyectos) {
     '',
     'A project is a folder where the work of a conversation happens. `wa-scope where`',
     'prints the `workspace` of a chat, which is one of the ids below.',
+    '',
+    'A chat can have several projects; `where` lists them, in order, in `candidates`.',
+    'A matching text rule decides first, and a chat with one project uses it. With two or',
+    'more and no rule, `workspace` is null: choose one of `candidates` by the content with',
+    '`wa-scope caso proyecto <id> --proyecto <pid> --actor agente --porque "<why>"`, or,',
+    'if the content does not decide it, ask with `wa-scope caso pregunta-proyecto`.',
     ''
   ]
   const lista = leerCatalogo(proyectos)

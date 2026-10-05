@@ -68,7 +68,11 @@ without a `media` path has nothing to open: do not invent one and do not say you
 ## The content decides, not the chat
 
 An operations group carries work for several clients. `wa-scope where "<text>" --chat
-"<chat_jid>"` says which project the content points to. If the `workspace` comes back
-null and the `provider` is not `ninguno`, a rule is missing: do not guess a project,
-say so at the wrap-up and suggest which rule. With `ninguno` nothing is missing — that
-is how the conversation was configured.
+"<chat_jid>"` says which project the content points to: a matching text rule decides first,
+and a chat with one project uses it. With two or more projects and no rule, `workspace`
+comes back null with the chat's projects in `candidates`: the content decides among them
+(`caso proyecto --actor agente --porque`), and if it does not, `caso pregunta-proyecto`
+asks "A or B?". Never pick a project outside `candidates`. If the `workspace` comes back
+null with no `candidates` and the `provider` is not `ninguno`, a rule is missing: do not
+guess a project, say so at the wrap-up and suggest which rule. With `ninguno` nothing is
+missing — that is how the conversation was configured.

@@ -305,6 +305,33 @@ def main() -> int:
         faltan = [f for f in frases if f not in texto]
         if faltan:
             fallos.append(f"{rel}  no dice {', '.join(faltan)}")
+    # Varios proyectos por conversacion (proyectos-por-chat, M7): primero la regla por texto,
+    # despues el agente elige entre `candidates` con su porque, y si duda pregunta "A o B?"
+    # con `caso pregunta-proyecto`. Los nombres de los proyectos no le llegan a un cliente
+    # salvo que el ajuste del chat le mande la pregunta a el. Por los dos caminos del agente,
+    # en la tabla de clasificacion y en la cabecera de PROJECTS.md, que genera harness.mjs.
+    for rel, frases in (
+            ("harness/AGENTS.md", ("a matching text rule decides first", "`candidates`",
+                                   "caso proyecto <id> --proyecto <pid> --actor agente --porque",
+                                   "caso pregunta-proyecto",
+                                   "never tell a customer the names of the projects",
+                                   "unless the chat's setting sends the question to them")),
+            (SKILL_SOPORTE, ("a matching text rule decides first", "`candidates`",
+                             "caso proyecto <id> --proyecto <pid> --actor agente --porque",
+                             "caso pregunta-proyecto <id> --candidatos",
+                             "never tell a customer the names of the projects",
+                             "unless the chat's setting sends the question to them",
+                             "`next`")),
+            ("harness/CLASSIFICATION.md", ("a matching text rule decides first",
+                                           "`candidates`", "caso pregunta-proyecto")),
+            ("harness.mjs", ("`candidates`", "--actor agente --porque",
+                             "caso pregunta-proyecto"))):
+        comprobaciones += 1
+        texto = plano((RAIZ / rel).read_text(encoding="utf-8")) if (RAIZ / rel).exists() else ""
+        faltan = [f for f in frases if f.lower() not in texto.lower()]
+        if faltan:
+            fallos.append(f"{rel}  no dice {', '.join(faltan)}")
+
     comprobaciones += 1
     if "Money, scope, deadlines and access are the owner's: propose `escalar`." in \
             cuerpos["harness/AGENTS.md"]:

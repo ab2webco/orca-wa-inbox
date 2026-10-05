@@ -310,7 +310,29 @@ Everything must be configurable and wired end to end (panel and logic), in ES, E
     long project name in the board combo was squeezed to one word per line by its id, so
     under 420 px the id now goes below the name, as in `config.html`. A long name cut off
     by a row's field is readable in full in its `title`.
-- [ ] **M7** — Harness text (AGENTS.md, CLASSIFICATION.md, SKILL.md, the PROJECTS.md header) and the `check-harness` phrases.
+- [x] **M7** — Harness text (AGENTS.md, CLASSIFICATION.md, SKILL.md, the PROJECTS.md header) and the `check-harness` phrases.
+  - What changed:
+    - `harness/AGENTS.md`, "Reply, dispatch or escalate": a new "Which project" bullet. It
+      gives the order: a matching text rule first, then the chat's only project, then
+      choosing among `candidates` with `caso proyecto <id> --proyecto <pid> --actor agente
+      --porque`. If still in doubt, `caso pregunta-proyecto`, and propose what its `next`
+      says, because the chat's setting decides who is asked. It also says that project names
+      never go to a customer unless that setting sends the question to them, and that
+      `E_OWNER` means the owner's choice stands.
+    - `harness/CLASSIFICATION.md`, "The content decides, not the chat": the same order. The
+      agent never picks outside `candidates`, and "a rule is missing" now applies only when
+      there are no `candidates`.
+    - `harness/skills/whatsapp-soporte/SKILL.md`, "Handing work to a project agent": the
+      three steps with the exact commands, and the customer and `E_OWNER` rules.
+    - The `PROJECTS.md` header (`harness.mjs` `renderProyectos`): `candidates`, the order,
+      and the two commands.
+    - Only sections the plugin declares changed. The per-section fingerprint in
+      `harness.mjs` (`juntar`) still keeps any section the user edited (`AGENTS.md:5-7`).
+  - Evidence: `scripts/check-harness`, the new "proyectos-por-chat (M7)" block. RED: it
+    failed on all four files (AGENTS.md, SKILL.md, CLASSIFICATION.md and harness.mjs were
+    missing every phrase). GREEN: 66 checks (62 before), exit 0. The skill flag check also
+    confirms that `--porque` and `--candidatos` are real flags of `wa-scope caso`.
+    `check-voseo` and `check-prompts` pass.
 
 ### B. Roles by number
 

@@ -177,6 +177,24 @@ and purpose. Once a `trabajar` is approved, the plugin's tick dispatches it by i
 the agent of that project, in that project's Orca workspace, with the case's messages
 verbatim. Never start that agent yourself and never touch the owner's repositories.
 
+A chat can have several projects. The case file lists them under "Chat projects", and
+`where` returns them in `candidates`:
+
+1. A matching text rule decides first, and a chat with one project uses it. Nothing to do.
+2. With two or more and no rule, the project is null: choose one of `candidates` by the
+   content with `wa-scope caso proyecto <id> --proyecto <pid> --actor agente --porque
+   "<why, in one line>"`. The reason shows on the owner's card. Only ids from `candidates`.
+3. If the content does not decide it, ask: `wa-scope caso pregunta-proyecto <id>
+   --candidatos <a>,<b> --texto "<the question>" --actor agente`, then propose exactly
+   what its `next` says: a `responder` with the question when it goes to the writer, an
+   `escalar` when it goes to the owner. The chat's setting decides who is asked, not you.
+   The answer comes back to this case, and then you choose as in step 2.
+
+Never tell a customer the names of the projects, unless the chat's setting sends the
+question to them. A work proposal for a case with no project, or with one outside the
+chat's projects, waits for the owner. Once the owner chose the project (`E_OWNER`), it is
+his: do not change it.
+
 ## Reporting from a project agent
 
 The project agent reports with `wa-scope caso resultado <id> --actor trabajador` and
