@@ -3028,6 +3028,118 @@ for (const idioma of ['es-419', 'en-US']) {
     doc.getElementById('chat-id').textContent)
 }
 
+// WhatsApp mueve un uno a uno del telefono a su LID (lid-sigue-autorizacion): las dos
+// formas llegan en la lista con el MISMO telefono, que para el LID sale del par verificado
+// de `lid_telefono`. El dueno ve una sola fila, la viva, y lo que guarda va al jid vivo:
+// guardarlo en el viejo dejaba la autorizacion donde ya no llega nada.
+const LID_VIVO = '100000000000002@lid'
+const TEL_VIEJO = '573000000011@s.whatsapp.net'
+const CHATS_GEMELOS = [
+  // La vieja primero a proposito: la viva se elige por `last`, no por el orden.
+  { jid: TEL_VIEJO, name: 'Cliente Uno', kind: 'directo', phone: '+573000000011',
+    last: '2026-09-20 10:00' },
+  { jid: LID_VIVO, name: 'Cliente Uno', kind: 'directo', phone: '+573000000011',
+    last: '2026-10-05 09:00' },
+  { jid: '573000000013@s.whatsapp.net', name: 'Otra Persona', kind: 'directo',
+    phone: '+573000000013', last: '2026-10-04 10:00' },
+  { jid: '120363000000000001@g.us', name: 'Soporte Norte', kind: 'grupo', phone: null,
+    last: '2026-10-05 08:00' }
+]
+
+for (const idioma of ['es-419', 'en-US']) {
+  console.log(`\nconfig.html — la misma persona con su telefono y su LID es una sola fila (${idioma})`)
+  {
+    const { doc, storage } = await montar('config.html', { chats: CHATS_GEMELOS }, idioma)
+    await espera()
+    escribir(doc, 'chat-search', '')
+    const valores = opcionesCombo(doc, 'chat-list').map((o) => o.dataset.value)
+    ok('la lista no muestra a la misma persona dos veces',
+      valores.filter((v) => v === LID_VIVO || v === TEL_VIEJO).length === 1,
+      JSON.stringify(valores))
+    ok('la fila que queda es la viva, con su telefono',
+      valores.includes(LID_VIVO) &&
+      (doc.querySelector(`#chat-list [data-value="${LID_VIVO}"]`)?.textContent || '')
+        .includes('+57 300 000 0011'), JSON.stringify(valores))
+    escribir(doc, 'chat-search', '3000000011')
+    ok('buscarla por el numero trae una sola', opcionesCombo(doc, 'chat-list').length === 1,
+      JSON.stringify(opcionesCombo(doc, 'chat-list').map((o) => o.textContent)))
+    ok('las demas siguen en la lista', valores.includes('573000000013@s.whatsapp.net') &&
+      valores.includes('120363000000000001@g.us'), JSON.stringify(valores))
+
+    elegirChat(doc, LID_VIVO, '3000000011')
+    elegirSeg(doc, 'mode', 'observar')
+    doc.getElementById('save-scope').click()
+    await espera()
+    ok('elegida y guardada, queda en el jid vivo',
+      storage.scope?.[LID_VIVO]?.mode === 'observar' && !storage.scope?.[TEL_VIEJO],
+      JSON.stringify(storage.scope))
+  }
+
+  console.log(`\nconfig.html — editar la autorizacion que quedo en el jid viejo la pasa al vivo (${idioma})`)
+  {
+    const { doc, storage } = await montar('config.html', {
+      chats: CHATS_GEMELOS,
+      scope: { [TEL_VIEJO]: { chatName: 'Cliente Uno', provider: 'ninguno', target: null,
+        mode: 'responder', tone: 'Formal', notes: 'cliente antiguo' } }
+    }, idioma)
+    await espera()
+    const filas = listaChats(doc)
+    const grupos = [...doc.querySelectorAll('#chat-list [role="group"]')]
+    ok('la fila viva se ve autorizada, con el permiso que tiene la vieja',
+      grupos.length === 2 &&
+      [...grupos[0].querySelectorAll('[role="option"]')].map((o) => o.dataset.value)
+        .join() === LID_VIVO, JSON.stringify(filas))
+    doc.querySelector(`[data-edit="${TEL_VIEJO}"]`).click()
+    await espera()
+    doc.getElementById('chat-tone').value = 'Formal y breve'
+    doc.getElementById('save-scope').click()
+    await espera()
+    ok('guardar la edicion la deja en el jid vivo, una sola fila',
+      storage.scope?.[LID_VIVO]?.tone === 'Formal y breve' && !storage.scope?.[TEL_VIEJO],
+      JSON.stringify(storage.scope))
+    ok('con todo lo que traia: el permiso y lo que el panel no edita',
+      storage.scope?.[LID_VIVO]?.mode === 'responder' &&
+      storage.scope?.[LID_VIVO]?.notes === 'cliente antiguo', JSON.stringify(storage.scope))
+    ok('la tabla de autorizadas muestra una sola fila',
+      doc.querySelectorAll('#scope-wrap tbody tr').length === 1,
+      doc.getElementById('scope-wrap').textContent)
+  }
+
+  console.log(`\nconfig.html — con las dos formas autorizadas no se unen solas (${idioma})`)
+  {
+    const { doc, storage } = await montar('config.html', {
+      chats: CHATS_GEMELOS,
+      scope: {
+        [TEL_VIEJO]: { chatName: 'Cliente Uno', provider: 'ninguno', mode: 'responder',
+          tone: 'Uno' },
+        [LID_VIVO]: { chatName: 'Cliente Uno', provider: 'ninguno', mode: 'observar',
+          tone: 'Otro' }
+      }
+    }, idioma)
+    await espera()
+    doc.querySelector(`[data-edit="${TEL_VIEJO}"]`).click()
+    await espera()
+    doc.getElementById('chat-tone').value = 'Uno editado'
+    doc.getElementById('save-scope').click()
+    await espera()
+    ok('editar una guarda esa, sin pisar la otra',
+      storage.scope?.[TEL_VIEJO]?.tone === 'Uno editado' &&
+      storage.scope?.[LID_VIVO]?.tone === 'Otro', JSON.stringify(storage.scope))
+  }
+
+  console.log(`\nconfig.html — una conversacion sin gemela se guarda como siempre (${idioma})`)
+  {
+    const { doc, storage } = await montar('config.html', { chats: CHATS_GEMELOS }, idioma)
+    await espera()
+    elegirChat(doc, '573000000013@s.whatsapp.net', 'otra')
+    elegirSeg(doc, 'mode', 'borrador')
+    doc.getElementById('save-scope').click()
+    await espera()
+    ok('queda en su jid', storage.scope?.['573000000013@s.whatsapp.net']?.mode === 'borrador' &&
+      Object.keys(storage.scope || {}).length === 1, JSON.stringify(storage.scope))
+  }
+}
+
 console.log('\nconfig.html — las tres que importan no se pierden entre las 296')
 {
   const { doc } = await montar('config.html', {

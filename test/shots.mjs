@@ -564,6 +564,23 @@ const CON_TELEFONOS = Object.assign({}, CON_LINEA, {
   ])
 })
 
+// La misma persona con su telefono y su LID (lid-sigue-autorizacion): WhatsApp movio la
+// conversacion y la autorizacion quedo en la forma vieja. La lista ofrece una sola fila, la
+// viva, con el permiso que tiene la vieja; editarla la guarda en la viva.
+const TEL_GEMELO = '573000000011@s.whatsapp.net'
+const CON_GEMELOS = Object.assign({}, CON_TELEFONOS, {
+  chats: CON_TELEFONOS.chats.concat([
+    { jid: TEL_GEMELO, name: 'Cliente Uno', kind: 'directo', last: '2026-09-20 10:00',
+      unread: 0, phone: '+573000000011' },
+    { jid: '100000000000002@lid', name: 'Cliente Uno', kind: 'directo',
+      last: '2026-10-05 09:00', unread: 2, phone: '+573000000011' }
+  ]),
+  scope: Object.assign({}, CON_TELEFONOS.scope, {
+    [TEL_GEMELO]: { chatName: 'Cliente Uno', provider: 'ninguno', target: null,
+      mode: 'responder', tone: 'Formal y breve' }
+  })
+})
+
 // proyectos-por-chat (M6): conversaciones con varios proyectos. La primera con dos (uno de
 // nombre largo) y la segunda con tres: la tabla dice "A +N" y el formulario, una fila por
 // proyecto con a quien se pregunta "A o B?". Proyectos de ejemplo, ninguno existe.
@@ -658,6 +675,14 @@ const PANELES = [
   { nombre: 'config-combo-telefono', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, datos: CON_TELEFONOS, pestana: 'chats',
     guion: escribirEn('chat-search', '+57 300'), espera: 300 },
+  // lid-sigue-autorizacion: una sola fila por persona, la viva, con el permiso de la vieja;
+  // y la edicion de la vieja, que dice abajo la llave viva donde se va a guardar.
+  { nombre: 'config-combo-gemelos', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: CON_GEMELOS, pestana: 'chats',
+    guion: escribirEn('chat-search', 'cliente uno'), espera: 300 },
+  { nombre: 'config-conversacion-gemela', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: CON_GEMELOS, pestana: 'chats', espera: 400,
+    guion: `document.querySelector('[data-edit="${TEL_GEMELO}"]').click()` },
   { nombre: 'config-combo-sin-coincidencias', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, datos: CON_LINEA, pestana: 'chats',
     guion: escribirEn('chat-search', 'zzzz'), espera: 300 },

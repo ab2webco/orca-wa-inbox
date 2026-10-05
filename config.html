@@ -3506,10 +3506,34 @@
       var alcancePorJid = {}
 
       /** El permiso vigente de una conversacion, o '' si no tiene ninguno. */
-      function modoDe (jid) {
+      function modoPropio (jid) {
         var e = alcancePorJid[jid]
         var m = e && e.mode
         return m && m !== 'off' ? m : ''
+      }
+
+      /** El modo de una fila de la lista: el suyo o, si no tiene, el de su gemela (la misma
+       *  persona con su otra forma, lid-sigue-autorizacion), que es donde quedo autorizada. */
+      function modoDe (jid) {
+        var m = modoPropio(jid)
+        if (!m) (gemelosDe[jid] || []).some(function (g) { m = modoPropio(g); return !!m })
+        return m
+      }
+
+      // WhatsApp mueve un uno a uno de `<telefono>@s.whatsapp.net` a `<digitos>@lid` (o al
+      // reves), y la lista trae las dos formas con el MISMO telefono: el del LID sale del par
+      // verificado que anota el sidecar, nunca de los digitos. Se ofrece una sola fila, la
+      // viva, y lo que se guarda va a ella. `actualDeJid`: de la forma vieja a la viva;
+      // `gemelosDe`: de la viva a las viejas.
+      var actualDeJid = {}
+      var gemelosDe = {}
+      function jidActual (jid) { return actualDeJid[jid] || jid }
+
+      /** Donde se guarda lo que se edita o se elige: en la forma viva, salvo que esa ya
+       *  tenga su propia autorizacion — las dos formas autorizadas no se unen solas. */
+      function destinoDe (jid, alcance) {
+        var actual = jidActual(jid)
+        return actual !== jid && alcance[actual] ? jid : actual
       }
 
       /** El final de la llave, para desempatar dos nombres iguales. No el jid entero:
@@ -3597,6 +3621,12 @@
         return !cuentaVinculada || (cuenta || 'local') === cuentaVinculada
       }
 
+      /** Los digitos del telefono de un directo, o '': la llave que junta sus dos formas. */
+      function telefonoDeFila (c) {
+        return c && c.kind === 'directo' && !c.own && c.phone
+          ? String(c.phone).replace(/\D/g, '') : ''
+      }
+
       function renderChats (chats) {
         chatsTodos = Array.isArray(chats) && deEstaLinea(chatsCuenta) ? chats.slice() : []
         // El chat propio primero, como en WhatsApp (T10). `sort` estable: el resto
@@ -3604,12 +3634,31 @@
         chatsTodos.sort(function (a, b) { return (b.own ? 1 : 0) - (a.own ? 1 : 0) })
         chatsPorJid = {}
         buscaPorJid = {}
+        actualDeJid = {}
+        gemelosDe = {}
+        // Todas quedan en `chatsPorJid`: editar una autorizacion que quedo en la forma vieja
+        // la tiene que poder nombrar. La viva de cada telefono es la de `last` mas reciente.
+        var vivaDe = {}
         chatsTodos.forEach(function (c) {
           chatsPorJid[c.jid] = c
+          var tel = telefonoDeFila(c)
+          if (tel && (!vivaDe[tel] || String(c.last || '') > String(vivaDe[tel].last || ''))) {
+            vivaDe[tel] = c
+          }
+        })
+        chatsTodos = chatsTodos.filter(function (c) {
+          var tel = telefonoDeFila(c)
+          if (!tel || vivaDe[tel] === c) return true
+          actualDeJid[c.jid] = vivaDe[tel].jid
+          gemelosDe[vivaDe[tel].jid] = (gemelosDe[vivaDe[tel].jid] || []).concat(c.jid)
+          return false
+        })
+        chatsTodos.forEach(function (c) {
           // El jid entra al indice: hay grupos que comparten nombre y la llave es lo
           // unico que los distingue. El telefono entra formateado y en digitos seguidos:
           // "300 777" y "3007776655" son las dos formas en que se copia de la agenda.
           buscaPorJid[c.jid] = aplanar(nombreVisible(c)) + ' ' + aplanar(c.jid) +
+            (gemelosDe[c.jid] || []).map(function (g) { return ' ' + aplanar(g) }).join('') +
             (telefonoVisible(c) ? ' ' + aplanar(telefonoVisible(c)) + ' ' +
               String(c.phone).replace(/\D/g, '') : '')
         })
@@ -3703,6 +3752,8 @@
         // Las personas de la conversacion siguen a la que quedo elegida (roles-por-numero).
         pintarPersonas()
         var jid = editandoJid || chatElegido
+        // La llave que se va a guardar: la de la forma viva cuando la hay.
+        if (jid) jid = destinoDe(jid, alcancePorJid)
         var n = el('chat-id')
         if (!jid) { n.textContent = ''; return }
         var c = chatsPorJid[jid]
@@ -4586,7 +4637,8 @@
         // La llave es el jid, como la del registro del CLI. Guardando por nombre, lo
         // escrito aca quedaba en una entrada aparte que `wa-scope` no encontraba nunca:
         // el panel decia guardado y el agente seguia con el valor viejo.
-        var jid = editandoJid || chatElegido
+        var elegido = editandoJid || chatElegido
+        var jid = elegido
         var chat = el('chat').value.trim() || jid
         // La lista en el orden de las filas, y `workspace` su derivado (proyectos-por-chat).
         var workspaces = sinRepetir(filasProyecto)
@@ -4595,10 +4647,17 @@
         if (!jid) { said('said-scope', t('needChat'), true); return }
         busy(event.currentTarget, read('scope').then(function (next) {
           next = next || {}
+          // Se guarda en la forma viva de la conversacion (lid-sigue-autorizacion). Lo que
+          // ya estaba viene de la entrada editada o, al elegir la fila viva, de su gemela
+          // vieja de esta linea; esa se quita y `wa-scope` borra su fila de la base.
+          jid = destinoDe(elegido, next)
+          var origen = editandoJid || (next[jid] ? jid : (gemelosDe[jid] || []).filter(
+            function (g) { return next[g] && deEstaLinea(next[g].account) })[0]) || jid
           // Lo de antes se conserva: provider y target ya no se eligen aca, pero la fila
           // los trae de antes de este cambio y borrarlos seria perder lo que el dueno
           // configuro. Una conversacion nueva no abre tarjetas.
-          var previa = next[jid] && typeof next[jid] === 'object' ? next[jid] : null
+          var previa = next[origen] && typeof next[origen] === 'object' ? next[origen] : null
+          if (origen !== jid) delete next[origen]
           next[jid] = Object.assign({ provider: 'ninguno', target: null }, previa, {
             chatName: chat, workspaces: workspaces, workspace: workspace,
             projectQuestion: preguntaDe(valorSeg('chat-project-question')),
