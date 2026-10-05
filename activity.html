@@ -103,6 +103,11 @@
       /* Parrafos de servicio: mismo relleno horizontal que las filas. */
       .nota { margin: 0 0 8px; padding: 0 12px; }
       .nota:empty { display: none; }
+      /* Con dos lineas o mas: de cual es lo que se ve. Los botones se envuelven a 320 px:
+         un numero entero no cabe dos veces en un renglon tan angosto. */
+      #linea-vista-fila { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+      #linea-vista-fila[hidden] { display: none; }
+      #linea-vista { flex-wrap: wrap; max-width: 100%; }
       /* "corriendo" ya lo dice la palabra de al lado; el punto solo tiene que pesar,
          y --primary es el token de enfasis. La allowlist no tiene color de exito. */
       .dot { display: inline-block; width: 6px; height: 6px; border-radius: 9999px;
@@ -700,6 +705,13 @@
 
     <p class="meta nota" id="note"></p>
 
+    <!-- Varias lineas a la vez: con dos o mas, el tablero, la actividad y los informes son
+         los de la linea que se elige aca. Con una sola no aparece. -->
+    <div class="meta nota" id="linea-vista-fila" hidden>
+      <span id="linea-vista-label" data-t="linesView"></span>
+      <div class="seg" id="linea-vista" role="group" aria-labelledby="linea-vista-label"></div>
+    </div>
+
     <!-- Lo primero que hay que poder contestar de un vistazo: esta viva la linea, y
          sobre cuanto puede actuar el agente. Sin esto, "no hay nada pendiente" y "no
          estoy conectado" se leen igual. -->
@@ -831,7 +843,7 @@
               "repCsvMissed": "no",
               "repCsvPending": "pendiente",
               "tabBoard": "Tablero",
-              "tabReports": "Informes",
+              "tabReports": "Informes", "linesView": "Linea",
               "viewsLabel": "Vistas",
               "repNoDataTitle": "Todavia no hay informes",
               "repNoDataBody": "Su agente los calcula en cada revision, cada pocos minutos. Vuelva en un rato.",
@@ -1181,7 +1193,7 @@
               "repCsvMissed": "no",
               "repCsvPending": "pending",
               "tabBoard": "Board",
-              "tabReports": "Reports",
+              "tabReports": "Reports", "linesView": "Line",
               "viewsLabel": "Views",
               "repNoDataTitle": "No reports yet",
               "repNoDataBody": "Your agent works them out on every run, every few minutes. Check back shortly.",
@@ -1531,7 +1543,7 @@
               "repCsvMissed": "nao",
               "repCsvPending": "pendente",
               "tabBoard": "Quadro",
-              "tabReports": "Relatorios",
+              "tabReports": "Relatorios", "linesView": "Linha",
               "viewsLabel": "Visoes",
               "repNoDataTitle": "Ainda nao ha relatorios",
               "repNoDataBody": "Seu agente os calcula a cada revisao, a cada poucos minutos. Volte daqui a pouco.",
@@ -4487,19 +4499,112 @@
         })
       })
 
+      // ── Varias lineas a la vez (odd/tasks/varias-lineas-y-segundo-cerebro.md, L4) ──
+      // El worker deja las lineas dentro de `sidecar.lineas` (la primera es la principal) y
+      // el estado de cada una que no es la principal en `sidecars`. Lo que `wa-scope` sabe de ellas vive
+      // aparte: su tablero, su actividad y su lista en `porLinea`, y sus informes en
+      // `informesPorLinea`. Con una sola linea nada de esto se ve ni se lee de mas.
+      var registroLineas = []
+      var lineaVista = null
+      var firmaVista = null
+      function lineasVinculadas () {
+        return registroLineas.filter(function (l) { return typeof l.cuenta === 'string' && l.cuenta })
+      }
+      /** La linea que se mira, si NO es la principal; null si es la principal. */
+      function otraLineaVista () {
+        var vinc = lineasVinculadas()
+        if (!lineaVista || vinc.length < 2 || vinc[0].cuenta === lineaVista) return null
+        for (var i = 0; i < vinc.length; i++) if (vinc[i].cuenta === lineaVista) return vinc[i]
+        return null
+      }
+      function numeroDeLinea (l, sc) {
+        if (sc && typeof sc.me === 'string' && sc.me) return sc.me
+        return '+' + String(l.cuenta).replace(/^pn:/, '')
+      }
+      function renderVistaLineas (sc, estados) {
+        var vinc = lineasVinculadas()
+        var fila = el('linea-vista-fila')
+        if (vinc.length < 2) { fila.hidden = true; lineaVista = null; return }
+        var nombres = vinc.map(function (l, i) {
+          return numeroDeLinea(l, i === 0 ? sc : (estados || {})[l.carpeta])
+        })
+        var grupo = el('linea-vista')
+        var firma = JSON.stringify([vinc.map(function (l) { return l.cuenta }), nombres])
+        if (firma !== firmaVista) {
+          firmaVista = firma
+          grupo.textContent = ''
+          vinc.forEach(function (l, i) {
+            var b = document.createElement('button')
+            b.type = 'button'
+            b.setAttribute('data-value', l.cuenta)
+            b.textContent = nombres[i]
+            b.addEventListener('click', function () {
+              var nueva = vinc[0].cuenta === l.cuenta ? null : l.cuenta
+              if (nueva === lineaVista) return
+              lineaVista = nueva
+              renderVistaLineas(sc, estados)
+              reload()
+            })
+            grupo.appendChild(b)
+          })
+        }
+        var actual = otraLineaVista() ? lineaVista : vinc[0].cuenta
+        Array.prototype.forEach.call(grupo.querySelectorAll('button'), function (b) {
+          b.setAttribute('aria-pressed', b.getAttribute('data-value') === actual ? 'true' : 'false')
+        })
+        fila.hidden = false
+      }
+
       function reload() {
+        // Mirando otra linea, lo suyo sale de `porLinea` en una sola lectura y no de las
+        // claves de la principal.
+        var otra = otraLineaVista()
+        var lee = function (k) { return call('storage.get', { key: k }) }
+        var nada = Promise.resolve(null)
         return Promise.all([
-          call('storage.get', { key: 'activity' }),
-          call('storage.get', { key: 'projects' }),
-          call('storage.get', { key: 'sidecar' }),
-          call('storage.get', { key: 'chats' }),
-          call('storage.get', { key: 'chatsAccount' }),
-          call('storage.get', { key: 'board' }),
+          otra ? nada : lee('activity'),
+          lee('projects'),
+          lee('sidecar'),
+          otra ? nada : lee('chats'),
+          otra ? nada : lee('chatsAccount'),
+          otra ? nada : lee('board'),
           // El periodo guardado, solo hasta tenerlo: despues manda lo que se elige aca.
           periodoLeido ? Promise.resolve(null) : call('storage.get', { key: 'boardPeriod' }),
           // Los informes solo con su pestana a la vista: es la clave mas grande.
-          pestana === 'reports' ? call('storage.get', { key: 'reports' }) : Promise.resolve(null)
+          pestana === 'reports' ? lee(otra ? 'informesPorLinea' : 'reports') : nada,
+          nada,
+          // Con una sola linea no se pide: el sondeo no gasta cupo de mas.
+          registroLineas.length > 1 ? lee('sidecars') : nada,
+          otra ? lee('porLinea') : nada
         ]).then(function (results) {
+          var principalLeida = stored(results[2])
+          var lineasLeidas = principalLeida && principalLeida.lineas
+          if (Array.isArray(lineasLeidas)) {
+            registroLineas = lineasLeidas.filter(function (l) {
+              return esObjeto(l) && typeof l.carpeta === 'string'
+            })
+          }
+          var estados = esObjeto(stored(results[9])) ? stored(results[9]) : {}
+          renderVistaLineas(stored(results[2]), estados)
+          // La linea que se eligio pudo dejar de estar entre una vuelta y otra.
+          var sigue = otraLineaVista()
+          if (otra && (!sigue || sigue.cuenta !== otra.cuenta)) return reload()
+          if (otra) otra = sigue
+          if (otra) {
+            var propio = esObjeto(stored(results[10])) ? stored(results[10])[otra.cuenta] : null
+            propio = esObjeto(propio) ? propio : {}
+            var sobre = function (v) { return { ok: true, value: { value: v } } }
+            results[0] = sobre(propio.activity)
+            results[2] = sobre(estados[otra.carpeta] || null)
+            results[3] = sobre(propio.chats)
+            results[4] = sobre(propio.chatsAccount)
+            results[5] = sobre(propio.board)
+            if (results[7]) {
+              var informes = stored(results[7])
+              results[7] = sobre(esObjeto(informes) ? informes[otra.cuenta] : null)
+            }
+            cuentaVinculada = otra.cuenta
+          }
           var sc = stored(results[2])
           if (sc && typeof sc.cuenta === 'string' && sc.cuenta) cuentaVinculada = sc.cuenta
           var a = stored(results[0]) || {}

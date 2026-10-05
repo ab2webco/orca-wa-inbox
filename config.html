@@ -473,6 +473,32 @@
          esconde. */
       #qr-wrap.vencido { opacity: .4; }
       #pairing-actions[hidden], #pairing-warn[hidden] { display: none; }
+      /* Las lineas (varias lineas a la vez): una fila por numero, con su estado, su tipo y
+         sus acciones. La de una linea nueva lleva su propio QR, con el mismo fondo fijo
+         que el de la vinculacion principal. */
+      .lineas { list-style: none; margin: 0; padding: 0; }
+      .linea { padding: 10px 0; border-top: 1px solid var(--border, var(--fb-border)); }
+      .linea:first-child { border-top: 0; padding-top: 2px; }
+      .linea-cab { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+      .linea-num { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+      .linea-marca { font-size: 11px; padding: 1px 6px; border-radius: 999px;
+                     border: 1px solid var(--border, var(--fb-border));
+                     color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .linea-estado { font-size: 12px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .linea-estado.ok { color: var(--foreground, var(--fb-foreground)); }
+      .linea-estado.bad { color: var(--destructive, var(--fb-destructive)); }
+      .linea-tipo { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
+                    margin-top: 8px; font-size: 12px; }
+      .linea-tipo .hint { margin: 0; flex-basis: 100%; }
+      .linea-qr { display: inline-block; background: #fff; padding: 12px; margin: 8px 0 0;
+                  border-radius: var(--radius-md); line-height: 0;
+                  border: 1px solid var(--border, var(--fb-border)); }
+      .linea-qr.vencido { opacity: .4; }
+      .linea .actions { margin-top: 8px; }
+      .linea-aviso { color: var(--destructive, var(--fb-destructive)); margin: 6px 0 0; }
+      #linea-vista-fila { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
+                          margin: 0 0 12px; font-size: 12px; }
+      #linea-vista-fila[hidden] { display: none; }
       /* El aviso de lo que se pierde va en --destructive y no apagado como las demas
          pistas: es lo unico de esta seccion que el usuario tiene que leer ANTES de
          apretar, no despues. */
@@ -494,7 +520,7 @@
       .approval-warn[hidden] { display: none; }
       /* El boton que confirma el borrado se ve distinto del que lo ofrece: son dos
          clics del mismo boton y sin la diferencia visual el segundo se da sin mirar. */
-      #pairing-unlink.confirmar {
+      #pairing-unlink.confirmar, .linea-desvincular.confirmar {
         border-color: var(--destructive, var(--fb-destructive));
         color: var(--destructive, var(--fb-destructive)); }
       /* El aviso de Jev es lo que hay que leer ANTES de encender: tiene caja y filete,
@@ -572,6 +598,21 @@
           </div>
         </section>
 
+        <!-- Varias lineas a la vez (odd/tasks/varias-lineas-y-segundo-cerebro.md, L4/L5):
+             cada numero vinculado, con su estado, su tipo y como soltarlo, y la forma de
+             vincular otro al lado. La primera es la principal, la de la seccion de arriba. -->
+        <section id="lineas-card">
+          <h2 data-t="linesLegend"></h2>
+          <p class="hint lead" data-t="linesHelp"></p>
+          <ul class="lineas" id="lineas-lista"></ul>
+          <p class="hint" data-t="linesPersonalLater"></p>
+          <p class="hint" id="lineas-espera" hidden data-t="linesWaitingOne"></p>
+          <div class="actions">
+            <button id="linea-vincular" data-t="linesLink"></button>
+            <span class="said" id="said-lineas"></span>
+          </div>
+        </section>
+
         <!-- Lo que falta para que el agente trabaje, con un boton a la pestana donde se
              arregla cada cosa. Se arma con lo que el panel YA lee: no gasta cupo. -->
         <section>
@@ -587,6 +628,11 @@
         <section>
           <h2 data-t="scopeLegend"></h2>
           <p class="hint lead" data-t="scopeHelp"></p>
+          <!-- Con dos lineas o mas, de cual son las conversaciones que se ven y se guardan. -->
+          <div id="linea-vista-fila" hidden>
+            <span id="linea-vista-label" data-t="linesView"></span>
+            <div class="seg" id="linea-vista" role="group" aria-labelledby="linea-vista-label"></div>
+          </div>
           <div id="scope-wrap"></div>
           <span class="said" id="said-scope-rm"></span>
         </section>
@@ -1161,6 +1207,37 @@
       var STRINGS = {
         es: {
           title: 'WhatsApp Inbox',
+          // --- varias lineas a la vez (L4/L5) ---
+          linesLegend: 'Lineas',
+          linesHelp: 'Cada linea es un numero de WhatsApp vinculado a este equipo. La ' +
+            'principal es la de siempre; puede vincular otras a su lado.',
+          linesPrincipal: 'Principal',
+          linesNew: 'Linea nueva',
+          linesStConnected: 'Conectada',
+          linesStWaiting: 'Conectando…',
+          linesStDown: 'Desconectada',
+          linesType: 'Tipo',
+          linesTypeSupport: 'Soporte',
+          linesTypePersonal: 'Personal',
+          linesPersonalLater: 'El tipo Personal llega en una version proxima: por ahora ' +
+            'toda linea es de soporte.',
+          linesUnlink: 'Desvincular',
+          linesUnlinkWarn: 'Se termina la sesion de esta linea en este equipo. Para usarla ' +
+            'otra vez hay que escanear un codigo nuevo con su telefono. Las demas lineas ' +
+            'siguen igual.',
+          linesUnlinked: 'Linea desvinculada.',
+          linesLink: 'Vincular otra linea',
+          linesCancelLink: 'Cancelar',
+          linesLinking: 'Listo: el codigo de la linea nueva aparece en la lista. Escaneelo ' +
+            'con el telefono de esa linea.',
+          linesWaitingOne: 'Hay una linea esperando su codigo: escanee ese antes de abrir ' +
+            'otra.',
+          linesTypeSaved: 'Tipo guardado.',
+          linesView: 'Linea',
+          linesHowNoLines: 'Todavia no se sabe donde viven las lineas: espere a que el ' +
+            'plugin termine de arrancar y pruebe otra vez.',
+          linesHowUnknown: 'Esa linea ya no esta vinculada. Vuelva a mirar la lista.',
+          linesHowTypeLater: 'Ese tipo todavia no se puede elegir.',
           // --- vinculacion (T3/T4) ---
           pairingLegend: 'Vinculacion de WhatsApp',
           pairingWaiting: 'Esperando el codigo QR',
@@ -1717,6 +1794,36 @@
         },
         en: {
           title: 'WhatsApp Inbox',
+          // --- several lines at once (L4/L5) ---
+          linesLegend: 'Lines',
+          linesHelp: 'Each line is a WhatsApp number linked to this machine. The main one ' +
+            'is the usual one; you can link others next to it.',
+          linesPrincipal: 'Main',
+          linesNew: 'New line',
+          linesStConnected: 'Connected',
+          linesStWaiting: 'Connecting…',
+          linesStDown: 'Disconnected',
+          linesType: 'Type',
+          linesTypeSupport: 'Support',
+          linesTypePersonal: 'Personal',
+          linesPersonalLater: 'The Personal type comes in an upcoming version: for now every ' +
+            'line is a support line.',
+          linesUnlink: 'Unlink',
+          linesUnlinkWarn: 'This ends this line\'s session on this machine. To use it again ' +
+            'you have to scan a new code with its phone. The other lines stay as they are.',
+          linesUnlinked: 'Line unlinked.',
+          linesLink: 'Link another line',
+          linesCancelLink: 'Cancel',
+          linesLinking: 'Done: the new line\'s code shows in the list. Scan it with that ' +
+            'line\'s phone.',
+          linesWaitingOne: 'A line is waiting for its code: scan that one before opening ' +
+            'another.',
+          linesTypeSaved: 'Type saved.',
+          linesView: 'Line',
+          linesHowNoLines: 'It is not known yet where the lines live: wait for the plugin ' +
+            'to finish starting and try again.',
+          linesHowUnknown: 'That line is no longer linked. Look at the list again.',
+          linesHowTypeLater: 'That type cannot be chosen yet.',
           // --- pairing (T3/T4) ---
           pairingLegend: 'WhatsApp pairing',
           pairingWaiting: 'Waiting for the QR code',
@@ -2240,6 +2347,36 @@
         }
       }
       STRINGS.pt = Object.assign({}, STRINGS.en, {
+        linesLegend: 'Linhas',
+        linesHelp: 'Cada linha e um numero de WhatsApp vinculado a esta maquina. A ' +
+          'principal e a de sempre; voce pode vincular outras ao lado dela.',
+        linesPrincipal: 'Principal',
+        linesNew: 'Linha nova',
+        linesStConnected: 'Conectada',
+        linesStWaiting: 'Conectando…',
+        linesStDown: 'Desconectada',
+        linesType: 'Tipo',
+        linesTypeSupport: 'Suporte',
+        linesTypePersonal: 'Pessoal',
+        linesPersonalLater: 'O tipo Pessoal chega numa versao proxima: por enquanto toda ' +
+          'linha e de suporte.',
+        linesUnlink: 'Desvincular',
+        linesUnlinkWarn: 'A sessao desta linha nesta maquina termina. Para usa-la de novo e ' +
+          'preciso escanear um codigo novo com o telefone dela. As outras linhas continuam ' +
+          'iguais.',
+        linesUnlinked: 'Linha desvinculada.',
+        linesLink: 'Vincular outra linha',
+        linesCancelLink: 'Cancelar',
+        linesLinking: 'Pronto: o codigo da linha nova aparece na lista. Escaneie com o ' +
+          'telefone dessa linha.',
+        linesWaitingOne: 'Ha uma linha esperando o seu codigo: escaneie esse antes de abrir ' +
+          'outra.',
+        linesTypeSaved: 'Tipo salvo.',
+        linesView: 'Linha',
+        linesHowNoLines: 'Ainda nao se sabe onde ficam as linhas: espere o plugin terminar ' +
+          'de iniciar e tente de novo.',
+        linesHowUnknown: 'Essa linha ja nao esta vinculada. Olhe a lista de novo.',
+        linesHowTypeLater: 'Esse tipo ainda nao pode ser escolhido.',
         pairingLegend: 'Vinculacao do WhatsApp',
         pairingWaiting: 'Aguardando o codigo QR',
         pairingWaitingHow: 'Conectando ao WhatsApp. Deixe este painel aberto ' +
@@ -3035,7 +3172,12 @@
         'sin-sesion': 'pairingHowNoAuthDir',
         'socket-caido': 'pairingHowSocketDown',
         'reinicio-requerido': 'pairingHowRestart',
-        desconocido: 'pairingHowUnknown'
+        desconocido: 'pairingHowUnknown',
+        // Varias lineas a la vez: lo que el worker contesta sobre una linea.
+        'sin-lineas': 'linesHowNoLines',
+        'linea-desconocida': 'linesHowUnknown',
+        'tipo-no-disponible': 'linesHowTypeLater',
+        'tipo-invalido': 'linesHowTypeLater'
       }
 
       // El permiso y el servicio se guardan con estos valores y no se traducen nunca en
@@ -4963,8 +5105,11 @@
        *  exactamente lo que mantuvo el defecto invisible: un veredicto que llega antes
        *  que el trabajo no es un veredicto. */
       function removeScope(key, name, boton) {
-        var pedir = pedirAlWorker('scopeRequest', 'scopeResult',
-          { action: 'quitar', jid: key }).then(function (v) {
+        // Con varias lineas, se quita en la linea que se esta mirando: el worker se la
+        // nombra al CLI, y el alcance de la principal no se toca.
+        var pedido = { action: 'quitar', jid: key }
+        if (otraLineaVista()) pedido.linea = otraLineaVista()
+        var pedir = pedirAlWorker('scopeRequest', 'scopeResult', pedido).then(function (v) {
           // El veredicto va al lado de la tabla, que es donde se apreto Quitar.
           if (!v) { said('said-scope-rm', t('pairingNoAnswer'), true); return }
           if (!v.ok) {
@@ -4978,7 +5123,7 @@
           // El alcance NO esta entre las claves que el sondeo refresca, asi que se relee
           // esta sola: repintar con la copia de antes dejaria la fila en pantalla sobre
           // una autorizacion que ya no existe. Un mensaje, por el carril del usuario.
-          return read('scope', true).then(function (v2) {
+          return leerAlcanceVisto(true).then(function (v2) {
             if (hayRespuesta(v2)) renderScope(v2 || {})
           })
         })
@@ -4997,7 +5142,7 @@
         var workspace = derivadoDe(workspaces)
         var mode = valorSeg('mode') || 'off'
         if (!jid) { said('said-scope', t('needChat'), true); return }
-        busy(event.currentTarget, read('scope').then(function (next) {
+        busy(event.currentTarget, leerAlcanceVisto().then(function (next) {
           next = next || {}
           // Se guarda en la forma viva de la conversacion (lid-sigue-autorizacion). Lo que
           // ya estaba viene de la entrada editada o, al elegir la fila viva, de su gemela
@@ -5030,7 +5175,7 @@
           // Autorizar es autorizar para ESTE numero (T9): el mismo grupo visto desde
           // otro numero propio es otra autorizacion.
           if (cuentaVinculada) next[jid].account = cuentaVinculada
-          return write('scope', next).then(function () {
+          return escribirAlcanceVisto(next).then(function () {
             renderScope(next)
             resetScopeForm()
             pintarChecklist()
@@ -5360,7 +5505,10 @@
        *  -jsdom sin el paquete `canvas`, por ejemplo- no dibuja nada: el estado ya
        *  quedo dicho en el texto, aparte. */
       function dibujarQr (texto, tamanoPx) {
-        var canvas = el('qr-canvas')
+        dibujarQrEn(el('qr-canvas'), texto, tamanoPx)
+      }
+      /** Lo mismo sobre otro canvas: el de una linea nueva en la lista de lineas. */
+      function dibujarQrEn (canvas, texto, tamanoPx) {
         canvas.width = tamanoPx
         canvas.height = tamanoPx
         var ctx = canvas.getContext && canvas.getContext('2d')
@@ -6159,6 +6307,266 @@
         mostrarPestana(configuracionLista() ? 'chats' : 'estado')
       }
 
+      // ---------- varias lineas a la vez (odd/tasks/varias-lineas-y-segundo-cerebro.md) ----------
+      // El worker deja las lineas dentro de `sidecar.lineas`, en orden: la primera es la principal, la de
+      // la seccion de vinculacion de arriba, con su estado en `sidecar`; el de cada una de
+      // las demas va en `sidecars`, por carpeta. Lo que `wa-scope` sabe de una linea que no
+      // es la principal vive aparte: su alcance en `alcancePorLinea`, y su lista de
+      // conversaciones en `porLinea`.
+      var registroLineas = []
+      var estadosLineas = {}
+      // La linea que mira la pestana Conversaciones: null es la principal.
+      var lineaVista = null
+      // La carpeta cuyo Desvincular espera el segundo clic.
+      var confirmandoLinea = null
+      // Lo ultimo que se pinto: el sondeo repinta solo si algo cambio, asi un clic no cae
+      // sobre un boton que se reemplazo entre el `pointerdown` y el `click`.
+      var firmaLineas = null
+      var firmaVista = null
+      // Los tipos que se pueden elegir hoy. `personal` existe pero espera a la parte 2: el
+      // worker lo rechaza igual (`TIPOS_HABILITADOS` en main.mjs).
+      var TIPOS_LINEA = ['support', 'personal']
+      var TIPOS_HABILITADOS = ['support']
+      var TIPO_TEXTO = { support: 'linesTypeSupport', personal: 'linesTypePersonal' }
+      var LINEA_ESTADO = { connected: 'linesStConnected', waiting: 'linesStWaiting',
+        down: 'linesStDown', live: 'pairingLive', expired: 'pairingExpired',
+        stale: 'pairingStale' }
+
+      function leerLineas (v) {
+        return Array.isArray(v) ? v.filter(function (l) {
+          return l && typeof l === 'object' && typeof l.carpeta === 'string'
+        }) : []
+      }
+      function lineasVinculadas () {
+        return registroLineas.filter(function (l) { return typeof l.cuenta === 'string' && l.cuenta })
+      }
+      /** La cuenta de la linea que mira Conversaciones si NO es la principal, o null. */
+      function otraLineaVista () {
+        var vinc = lineasVinculadas()
+        if (!lineaVista || vinc.length < 2 || vinc[0].cuenta === lineaVista) return null
+        return vinc.some(function (l) { return l.cuenta === lineaVista }) ? lineaVista : null
+      }
+      function estadoDeLinea (l) {
+        return registroLineas[0] === l ? sidecarUlt : (estadosLineas[l.carpeta] || null)
+      }
+      function numeroDeLinea (l, d) {
+        if (d && typeof d.me === 'string' && d.me) return d.me
+        return l.cuenta ? '+' + String(l.cuenta).replace(/^pn:/, '') : t('linesNew')
+      }
+      function textoEstadoLinea (estado, d) {
+        if (estado === 'silent') return fmt('pairingSilent', { hora: horaUltimaSenal(d) })
+        return t(LINEA_ESTADO[estado] || 'linesStWaiting')
+      }
+      function nodo (tag, clase, texto) {
+        var n = document.createElement(tag)
+        if (clase) n.className = clase
+        if (texto != null) n.textContent = texto
+        return n
+      }
+
+      /** El alcance de la linea que se mira: el de siempre para la principal, o el suyo. */
+      function leerAlcanceVisto (usuario) {
+        var otra = otraLineaVista()
+        if (!otra) return read('scope', usuario)
+        return read('alcancePorLinea', usuario).then(function (v) {
+          return hayRespuesta(v) ? ((v && v[otra]) || {}) : v
+        })
+      }
+      /** Guarda el alcance de la linea que se mira. El de otra linea va en SU lugar de
+       *  `alcancePorLinea`: el de la principal no se toca aunque tenga el mismo grupo. Sin
+       *  poder leer lo que hay no se escribe, porque se perderian las demas lineas. */
+      function escribirAlcanceVisto (next) {
+        var otra = otraLineaVista()
+        if (!otra) return write('scope', next)
+        return read('alcancePorLinea', true).then(function (v) {
+          if (!hayRespuesta(v)) return { ok: false }
+          var todo = v && typeof v === 'object' ? Object.assign({}, v) : {}
+          todo[otra] = next
+          return write('alcancePorLinea', todo)
+        })
+      }
+      function delOtraLinea (valor, cuenta, clave) {
+        if (!hayRespuesta(valor)) return SIN_RESPUESTA
+        var propio = valor && typeof valor === 'object' ? valor[cuenta] : null
+        if (!clave) return propio || {}
+        return propio && typeof propio === 'object' && clave in propio ? propio[clave] : null
+      }
+
+      function contarLinea (v, claveOk) {
+        if (!v) { said('said-lineas', t('pairingNoAnswer'), true); return }
+        if (!v.ok) {
+          said('said-lineas', porCodigo(SIDECAR_HOW_KEY, v.code, v.detail || v.code || ''), true)
+          return
+        }
+        said('said-lineas', t(claveOk))
+      }
+      function repintarLineas () {
+        firmaLineas = null
+        renderLineas()
+      }
+
+      function renderLineas () {
+        el('lineas-card').hidden = !registroLineas.length
+        var tam = Math.min(tamanoQrPx(), 220)
+        var estados = registroLineas.map(function (l) {
+          var d = estadoDeLinea(l)
+          return estadoSidecar(d, edadLectura(registroLineas[0] === l ? 'sidecar' : 'sidecars'))
+        })
+        var firma = JSON.stringify([LANG, tam, confirmandoLinea, estados, registroLineas,
+          registroLineas.map(function (l) {
+            var d = estadoDeLinea(l)
+            return d ? [d.me, d.qr && d.qr.ts, d.latido && d.latido.ts] : null
+          })])
+        if (firma !== firmaLineas) {
+          firmaLineas = firma
+          var lista = el('lineas-lista')
+          lista.textContent = ''
+          registroLineas.forEach(function (l, i) { lista.appendChild(filaDeLinea(l, i, estados[i], tam)) })
+        }
+        var esperando = registroLineas.some(function (l) { return !l.cuenta })
+        el('linea-vincular').disabled = esperando || !liveStorage
+        el('lineas-espera').hidden = !esperando
+        renderVistaLineas()
+      }
+
+      function filaDeLinea (l, i, estado, tam) {
+        var d = estadoDeLinea(l)
+        var li = nodo('li', 'linea')
+        li.setAttribute('data-carpeta', l.carpeta)
+        var cab = nodo('div', 'linea-cab')
+        cab.appendChild(nodo('span', 'linea-num', numeroDeLinea(l, d)))
+        if (i === 0) cab.appendChild(nodo('span', 'linea-marca', t('linesPrincipal')))
+        cab.appendChild(nodo('span', 'linea-estado' + (estado === 'connected' ? ' ok'
+          : estado === 'down' || estado === 'silent' ? ' bad' : ''), textoEstadoLinea(estado, d)))
+        li.appendChild(cab)
+        // El QR de la principal ya esta en la seccion de arriba; el de otra, en su fila.
+        if (i > 0 && d && d.qr && (estado === 'live' || estado === 'expired' || estado === 'stale')) {
+          var caja = nodo('div', 'linea-qr' + (estado === 'live' ? '' : ' vencido'))
+          var canvas = document.createElement('canvas')
+          caja.appendChild(canvas)
+          li.appendChild(caja)
+          dibujarQrEn(canvas, d.qr.qr, tam)
+        }
+        var tipo = nodo('div', 'linea-tipo')
+        var etiqueta = nodo('span', '', t('linesType'))
+        etiqueta.id = 'linea-tipo-' + i
+        var seg = nodo('div', 'seg')
+        seg.setAttribute('role', 'group')
+        seg.setAttribute('aria-labelledby', etiqueta.id)
+        TIPOS_LINEA.forEach(function (valor) {
+          var b = nodo('button', '', t(TIPO_TEXTO[valor]))
+          b.type = 'button'
+          b.setAttribute('data-value', valor)
+          apretar(b, (l.tipo || 'support') === valor)
+          if (TIPOS_HABILITADOS.indexOf(valor) < 0) b.disabled = true
+          b.addEventListener('click', function () { cambiarTipoLinea(l, valor, b) })
+          seg.appendChild(b)
+        })
+        tipo.appendChild(etiqueta)
+        tipo.appendChild(seg)
+        li.appendChild(tipo)
+        var confirmando = confirmandoLinea === l.carpeta
+        // Una linea nueva que todavia espera su codigo no tiene sesion que soltar:
+        // cancelarla es un clic y no pide confirmacion.
+        var pendiente = i > 0 && !l.cuenta
+        if (confirmando) li.appendChild(nodo('p', 'hint linea-aviso', t('linesUnlinkWarn')))
+        var acciones = nodo('div', 'actions')
+        var quitar = nodo('button', 'linea-desvincular' + (confirmando ? ' confirmar' : ''),
+          t(pendiente ? 'linesCancelLink' : confirmando ? 'pairingUnlinkConfirm' : 'linesUnlink'))
+        quitar.type = 'button'
+        quitar.disabled = !liveStorage
+        quitar.addEventListener('click', function () { desvincularLinea(l, quitar) })
+        acciones.appendChild(quitar)
+        if (confirmando) {
+          var cancelar = nodo('button', '', t('pairingUnlinkCancel'))
+          cancelar.type = 'button'
+          cancelar.addEventListener('click', function () {
+            confirmandoLinea = null
+            repintarLineas()
+          })
+          acciones.appendChild(cancelar)
+        }
+        // La principal que todavia espera su codigo no tiene nada que soltar: su QR esta en
+        // la seccion de arriba, y cancelarla solo abriria otra igual.
+        if (i > 0 || l.cuenta) li.appendChild(acciones)
+        return li
+      }
+
+      /** El tipo de una linea se lo pide al worker, que es quien guarda el registro. */
+      function cambiarTipoLinea (l, tipo, boton) {
+        if ((l.tipo || 'support') === tipo) return
+        busy(boton, pedirAlWorker('sidecarRequest', 'sidecarResult',
+          { action: 'tipo', carpeta: l.carpeta, tipo: tipo }).then(function (v) {
+          contarLinea(v, 'linesTypeSaved')
+          return reload()
+        })).then(repintarLineas, repintarLineas)
+      }
+
+      /** Desvincular una linea es irreversible desde aca, como el de la principal: el
+       *  primer clic pide confirmacion en el mismo boton, y el pedido nombra la carpeta. */
+      function desvincularLinea (l, boton) {
+        var pendiente = registroLineas[0] !== l && !l.cuenta
+        if (!pendiente && confirmandoLinea !== l.carpeta) {
+          confirmandoLinea = l.carpeta
+          repintarLineas()
+          return
+        }
+        confirmandoLinea = null
+        busy(boton, pedirAlWorker('sidecarRequest', 'sidecarResult',
+          { action: 'desvincular', carpeta: l.carpeta }).then(function (v) {
+          contarLinea(v, 'linesUnlinked')
+          return reload()
+        })).then(repintarLineas, repintarLineas)
+      }
+
+      el('linea-vincular').addEventListener('click', function (event) {
+        busy(event.currentTarget, pedirAlWorker('sidecarRequest', 'sidecarResult',
+          { action: 'vincular' }).then(function (v) {
+          contarLinea(v, 'linesLinking')
+          return reload()
+        })).then(repintarLineas, repintarLineas)
+      })
+
+      /** El selector de linea de Conversaciones: solo con dos lineas vinculadas o mas. */
+      function renderVistaLineas () {
+        var vinc = lineasVinculadas()
+        var fila = el('linea-vista-fila')
+        if (vinc.length < 2) {
+          fila.hidden = true
+          lineaVista = null
+          return
+        }
+        var grupo = el('linea-vista')
+        var firma = JSON.stringify([LANG, vinc.map(function (l) {
+          return [l.cuenta, numeroDeLinea(l, estadoDeLinea(l))]
+        })])
+        if (firma !== firmaVista) {
+          firmaVista = firma
+          grupo.textContent = ''
+          vinc.forEach(function (l) {
+            var b = nodo('button', '', numeroDeLinea(l, estadoDeLinea(l)))
+            b.type = 'button'
+            b.setAttribute('data-value', l.cuenta)
+            b.addEventListener('click', function () { elegirLineaVista(l.cuenta) })
+            grupo.appendChild(b)
+          })
+        }
+        var actual = otraLineaVista() || vinc[0].cuenta
+        Array.prototype.forEach.call(grupo.querySelectorAll('button'), function (b) {
+          apretar(b, b.getAttribute('data-value') === actual)
+        })
+        fila.hidden = false
+      }
+      function elegirLineaVista (cuenta) {
+        var vinc = lineasVinculadas()
+        var nueva = vinc.length && vinc[0].cuenta === cuenta ? null : cuenta
+        if (nueva === lineaVista) return
+        lineaVista = nueva
+        resetScopeForm()
+        renderVistaLineas()
+        reload()
+      }
+
       // ---------- carga y refresco ----------
       var liveStorage = null
 
@@ -6175,6 +6583,18 @@
                     'owners', 'senders', 'approvalNumber']
       var CLAVES_VIVAS = ['chats', 'chatsAccount', 'health', 'syncStatus', 'workerBeat',
                           'sidecar']
+      // Varias lineas a la vez, sin gastar cupo con una sola: la lista de lineas viaja
+      // dentro de `sidecar` (el worker la pone ahi), y el estado de las demas, `sidecars`,
+      // se pide solo con dos lineas o mas. Con una sola el panel pide lo mismo que antes.
+      var CLAVES_VARIAS = ['sidecars']
+      // Lo de una linea que no es la principal: solo se pide mientras se la mira.
+      var CLAVES_OTRA_LINEA = ['alcancePorLinea', 'porLinea']
+      function clavesDeLaVuelta (soloVivas) {
+        var varias = registroLineas.length > 1
+        var claves = (soloVivas ? CLAVES_VIVAS : CLAVES).concat(varias ? CLAVES_VARIAS : [])
+        claves = claves.filter(function (k, i) { return claves.indexOf(k) === i })
+        return claves.concat(otraLineaVista() ? CLAVES_OTRA_LINEA : [])
+      }
 
       function reload(soloVivas) {
         if (!liveStorage) return Promise.resolve()
@@ -6182,7 +6602,7 @@
         // guardado posterior lo invalida. Sin esto el sondeo pintaba el valor de antes
         // encima del que el usuario acababa de guardar.
         var sello = guardadoSeq
-        var claves = soloVivas ? CLAVES_VIVAS : CLAVES
+        var claves = clavesDeLaVuelta(soloVivas)
         // La vuelta entera solo la dispara el usuario —abrir el panel, volver a el,
         // guardar algo—, asi que no se auto-frena: se manda y, si el host la rechaza,
         // se reintenta. Lo que si se frena es el sondeo, que no lo pidio nadie.
@@ -6202,13 +6622,36 @@
             if (hayRespuesta(sc0) && sc0 && typeof sc0.cuenta === 'string' && sc0.cuenta) {
               cuentaVinculada = sc0.cuenta
             }
-            if (hayRespuesta(v('chatsAccount'))) chatsCuenta = v('chatsAccount')
+            // Las lineas, antes que lo que depende de cual se mira.
+            if (hayRespuesta(sc0) && sc0 && Array.isArray(sc0.lineas)) {
+              registroLineas = leerLineas(sc0.lineas)
+            }
+            // La primera vez que aparecen dos lineas esta vuelta no pidio sus estados (con
+            // una sola no se piden): se piden aparte, una vez, y se repinta la lista.
+            if (registroLineas.length > 1 && claves.indexOf('sidecars') < 0) {
+              read('sidecars', !soloVivas).then(function (s) {
+                if (!hayRespuesta(s)) return
+                estadosLineas = s && typeof s === 'object' ? s : {}
+                renderLineas()
+              })
+            }
+            if (hayRespuesta(v('sidecars'))) {
+              estadosLineas = v('sidecars') && typeof v('sidecars') === 'object' ? v('sidecars') : {}
+            }
+            // Mirando otra linea, sus conversaciones y sus autorizaciones son las de ESA.
+            var otra = otraLineaVista()
+            if (otra) cuentaVinculada = otra
+            var chatsVistos = otra ? delOtraLinea(v('porLinea'), otra, 'chats') : v('chats')
+            var cuentaChats = otra ? delOtraLinea(v('porLinea'), otra, 'chatsAccount')
+              : v('chatsAccount')
+            if (hayRespuesta(cuentaChats)) chatsCuenta = cuentaChats
             // Los proyectos ANTES del alcance y de las reglas: sus tablas y selectores
             // nombran el proyecto, y pintarlos con el catalogo de antes mostraria un id
             // pelado donde el dueno ya agrego el proyecto.
             if (hayRespuesta(v('projects'))) renderProjects(v('projects'))
             if (hayRespuesta(v('projectsStatus'))) renderProposals(v('projectsStatus'))
-            if (hayRespuesta(v('scope'))) renderScope(v('scope'))
+            var alcanceVisto = otra ? delOtraLinea(v('alcancePorLinea'), otra) : v('scope')
+            if (hayRespuesta(alcanceVisto)) renderScope(alcanceVisto)
             pintarClave('tone', v('tone'), sello)
             pintarClave('transcribeQuality', v('transcribeQuality'), sello)
             pintarClave('inboxDays', v('inboxDays'), sello)
@@ -6230,7 +6673,7 @@
               estadoSync = v('syncStatus') && typeof v('syncStatus') === 'object'
                 ? v('syncStatus') : null
             }
-            if (hayRespuesta(v('chats'))) renderChats(v('chats'))
+            if (hayRespuesta(chatsVistos)) renderChats(chatsVistos)
             if (hayRespuesta(v('senders'))) renderSenders(v('senders'))
             if (hayRespuesta(v('owners'))) renderOwners(v('owners'))
             // Los participantes de los grupos se leen solo con un grupo en el formulario, en
@@ -6276,6 +6719,7 @@
             if (hayRespuesta(salud)) renderOpcionales(salud && salud.optional)
             if (hayRespuesta(v('routes'))) renderRoutes(v('routes'))
             renderPairing(v('sidecar'))
+            renderLineas()
             apagarLoQueNecesitaWorker(sinWorker)
             pintarChecklist()
             if (!soloVivas) decidirPestana()

@@ -118,8 +118,14 @@ existing test stays green unchanged.
   `sidecar-pairing.test.mjs` ("L1 — cada linea anota la suya", 7 checks) and
   `worker.test.mjs` ("L1 — cada linea en su carpeta, y la de siempre se muda sin QR
   nuevo", 12 checks: a fake flat auth folder ends byte-identical in `wa-auth/pn-<digits>`).
-- [ ] **L2** Worker: one sidecar per line, its health and restart, and link/unlink
+- [x] **L2** Worker: one sidecar per line, its health and restart, and link/unlink
   commands. Worker tests.
+  Evidence: `worker.test.mjs` "L2 — un sidecar por linea", RED (17 checks, 6 passing by
+  accident) then GREEN: the flat auth migrated by the real resolver starts as the principal
+  with the same credential, the second line starts as secondary, a crash restarts only that
+  line, `vincular` opens one `nueva-` line with its own QR (never two), `desvincular` with a
+  folder removes only that line, and unlinking the principal promotes the next one. The
+  registry also travels inside `sidecar.lineas`. Full worker suite 442/442.
 - [x] **L3** `wa-scope` over every active line. Per-line locks and no cross-line leaks.
   `check-casos` / `check-clis`: two lines, a message on each, and a case, a notice and an
   approval that never cross.
@@ -130,9 +136,19 @@ existing test stays green unchanged.
   own line's sidecar, each owner notice sent by its own line, the summed nav badge, a busy
   principal lock that does not stop the other line, and an unlinked line that goes quiet.
   Full `check-casos` 1630/1630, `check-clis`, `envio` 93/93 and `almacen` 311/311 green.
-- [ ] **L4** Panel "Lines" card, line filter in conversations/board/reports, in ES/EN/PT.
+- [x] **L4** Panel "Lines" card, line filter in conversations/board/reports, in ES/EN/PT.
   Screenshots at 1440/768/390/320, both themes.
-- [ ] **L5** Line type setting (`support` default; `personal` disabled until Part 2).
+  Evidence: `panels.test.mjs` "L4/L5" sections, RED then GREEN (30 checks): the Lines card
+  (number, main, status, own QR for a new line, link, unlink with confirmation, cancel for a
+  waiting line), the line picker in Conversations (reads and saves `alcancePorLinea`, removes
+  with `linea`) and in the board (board, activity, line status and reports of the chosen
+  line). `worker.test.mjs`: removing a chat on another line runs `wa-scope rm --line`. Full
+  panel suite 1422/1422. Screenshots: `config-lineas-*`, `tablero-lineas*` and
+  `config-tab-estado`.
+- [x] **L5** Line type setting (`support` default; `personal` disabled until Part 2).
+  Evidence: worker action `tipo` (`tipo-guardado`, `tipo-no-disponible` for `personal`,
+  `tipo-invalido`, `linea-desconocida`), RED then GREEN in `worker.test.mjs`; the type control
+  in each line row, with Personal disabled and one notice for the card.
 - [ ] **L6** `npm run check` green. Live check: the bot line and a second test line linked
   together, each answering only its own chats.
 

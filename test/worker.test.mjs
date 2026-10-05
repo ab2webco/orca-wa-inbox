@@ -320,6 +320,25 @@ console.log('\nworker: quitar una conversacion la saca de los DOS registros')
     orca.store.scopeResult.requestId === 'quita-2', 15000)
   ok('quitar dos veces no es un error', orca.store.scopeResult &&
     orca.store.scopeResult.ok === true, JSON.stringify(orca.store.scopeResult))
+
+  // L4: con varias lineas, el panel quita una conversacion de la linea que esta mirando.
+  // El CLI la quita de ESA linea (y de su lugar en el storage); el alcance de la principal
+  // no se toca aunque tenga el mismo jid.
+  orca.store.scopeRequest = { id: 'quita-3', action: 'quitar', jid: '2@g.us',
+    linea: 'pn:573000000011', at: new Date().toISOString() }
+  await hasta(() => orca.store.scopeResult?.requestId === 'quita-3', 15000)
+  const llamadas3 = readFileSync(join(dir, 'wa-scope.llamadas'), 'utf8')
+  ok('quitar en otra linea corre `wa-scope rm` con --line de esa linea',
+    orca.store.scopeResult?.ok === true && /^rm 2@g\.us --line pn:573000000011$/m.test(llamadas3),
+    JSON.stringify({ r: orca.store.scopeResult, llamadas3 }))
+  ok('y no toca el alcance de la principal', '2@g.us' in (orca.store.scope || {}),
+    JSON.stringify(orca.store.scope))
+  orca.store.scopeRequest = { id: 'quita-4', action: 'quitar', jid: '2@g.us',
+    linea: 'pn;rm -rf', at: new Date().toISOString() }
+  await hasta(() => orca.store.scopeResult?.requestId === 'quita-4', 15000)
+  ok('una linea que no tiene forma de linea no llega al CLI',
+    orca.store.scopeResult?.ok === false && orca.store.scopeResult.code === 'linea-invalida',
+    JSON.stringify(orca.store.scopeResult))
   apagar()
 }
 
@@ -1803,6 +1822,11 @@ console.log('\nworker: L2 — un sidecar por linea, y cada pedido toca solo la s
       Array.isArray(registro) && registro.length === 2 &&
       registro[0].carpeta === 'pn-573000000002' && registro[1].carpeta === 'pn-573000000001' &&
       registro.every((l) => l.tipo === 'support'), JSON.stringify(registro))
+    // Los paneles leen la lista dentro de `sidecar`, que ya leen en cada vuelta: una clave
+    // mas en el sondeo se come el cupo de mensajes del host que necesita el clic.
+    ok('y viajan tambien dentro del estado de la principal, que los paneles ya leen',
+      JSON.stringify(orca.store.sidecar?.lineas) === JSON.stringify(registro),
+      JSON.stringify(orca.store.sidecar?.lineas))
 
     // Vincular una linea nueva: su propia carpeta y su propio QR, al lado de las otras.
     orca.store.sidecarRequest = { id: 'pedido-vincular', action: 'vincular', at: new Date().toISOString() }
@@ -1821,6 +1845,29 @@ console.log('\nworker: L2 — un sidecar por linea, y cada pedido toca solo la s
     ok('pedir otra mientras una espera su QR devuelve la misma: nunca dos QR a la vez',
       orca.store.sidecarResult?.carpeta === nueva && vidasDe(nueva).length === 1,
       JSON.stringify(orca.store.sidecarResult))
+
+    // L5: el tipo de cada linea. `support` es el de siempre; `personal` existe pero esta
+    // apagado hasta la parte 2: se rechaza con su codigo y el registro no cambia.
+    const pideTipo = async (id, carpeta, tipo) => {
+      orca.store.sidecarRequest = { id, action: 'tipo', carpeta, tipo, at: new Date().toISOString() }
+      await hasta(() => orca.store.sidecarResult?.requestId === id, 15000)
+      return orca.store.sidecarResult
+    }
+    const tipoDe = (carpeta) => (orca.store.lineas || []).find((l) => l.carpeta === carpeta)?.tipo
+    const personal = await pideTipo('tipo-1', 'pn-573000000001', 'personal')
+    ok('el tipo personal todavia no se puede elegir: lo dice con su codigo',
+      personal?.ok === false && personal.code === 'tipo-no-disponible' &&
+      tipoDe('pn-573000000001') === 'support', JSON.stringify({ personal, l: orca.store.lineas }))
+    const soporte = await pideTipo('tipo-2', 'pn-573000000001', 'support')
+    ok('el tipo soporte se guarda en el registro de la linea',
+      soporte?.ok === true && soporte.code === 'tipo-guardado' && tipoDe('pn-573000000001') === 'support',
+      JSON.stringify(soporte))
+    const ajena = await pideTipo('tipo-3', 'pn-no-existe', 'support')
+    ok('una carpeta que no es de ninguna linea no cambia nada',
+      ajena?.ok === false && ajena.code === 'linea-desconocida', JSON.stringify(ajena))
+    const raro = await pideTipo('tipo-4', 'pn-573000000001', 'otro')
+    ok('un tipo que no existe tampoco', raro?.ok === false && raro.code === 'tipo-invalido',
+      JSON.stringify(raro))
 
     // Desvincular UNA linea: la suya y nada mas.
     const antesOtra = vidasDe('pn-573000000002').length

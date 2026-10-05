@@ -763,7 +763,9 @@ const SIDECAR_ACCION = Object.freeze({
   // caida, esto es para una lista a la que le faltan personas.
   LIBRETA: 'libreta',
   // Vincular una linea MAS, al lado de las que ya estan: su propia carpeta y su QR.
-  VINCULAR: 'vincular'
+  VINCULAR: 'vincular',
+  // El tipo de una linea (L5): `support` o, desde la parte 2, `personal`.
+  TIPO: 'tipo'
 })
 
 /** Codigos del veredicto que el worker deja para el panel. `vencido` no es un fallo
@@ -780,7 +782,11 @@ const SIDECAR_VEREDICTO = Object.freeze({
   LINEA_DESCONOCIDA: 'linea-desconocida',
   // Todavia no se sabe donde viven las lineas (el resolvedor no contesto): no hay donde
   // abrir otra.
-  SIN_LINEAS: 'sin-lineas'
+  SIN_LINEAS: 'sin-lineas',
+  TIPO_GUARDADO: 'tipo-guardado',
+  TIPO_INVALIDO: 'tipo-invalido',
+  // Un tipo que existe pero todavia no se puede elegir (`personal`, parte 2).
+  TIPO_NO_DISPONIBLE: 'tipo-no-disponible'
 })
 
 /** Lo que el panel puede pedirle al worker sobre el alcance, y como se contesta. Mismos
@@ -800,8 +806,13 @@ const SCOPE_VEREDICTO = Object.freeze({
   REGLA_QUITADA: 'regla-quitada',
   // Lo que llega como patron de una regla no es un texto acotado y legible: no llega a la
   // linea de comandos.
-  PATRON_INVALIDO: 'patron-invalido'
+  PATRON_INVALIDO: 'patron-invalido',
+  // La linea que nombra el pedido no tiene forma de cuenta (`pn:<digitos>`).
+  LINEA_INVALIDA: 'linea-invalida'
 })
+
+/** Una cuenta de linea: lo unico que llega a `--line`. */
+const LINEA_RE = /^pn:\d{6,}$/
 
 /** Lo mas largo que puede ser el patron de una regla de texto. Un texto que tiene que
  *  aparecer en un mensaje no pasa de unas palabras; sin tope seria un lugar donde dejar
@@ -1442,7 +1453,7 @@ export default function activate(orca) {
    *  `sidecars`. Se decide al escribir y no al lanzar: si la principal se desvincula, la
    *  que la reemplaza empieza a escribir en `sidecar` sin relanzarse. */
   function publicarEstado (linea, estado) {
-    if (linea.carpeta === principal()) return guardar(orca, SIDECAR_KEY, estado)
+    if (linea.carpeta === principal()) return publicarPrincipal(estado)
     estadosSecundarios[linea.carpeta] = estado
     return publicarSecundarios()
   }
@@ -1451,7 +1462,23 @@ export default function activate(orca) {
     cadenaSecundarios = cadenaSecundarios.then(() => guardar(orca, SIDECARS_KEY, copia))
     return cadenaSecundarios
   }
-  const publicarRegistro = () => guardar(orca, LINEAS_KEY, registro.map((r) => ({ ...r })))
+  /** El estado de la principal, con la lista de lineas adentro: los paneles ya leen
+   *  `sidecar` en cada vuelta, y una clave mas en su sondeo se come el cupo de mensajes del
+   *  host que necesita el clic del dueno. Todas las escrituras de `sidecar` van por UNA
+   *  cadena, en el orden en que se pidieron, sea el estado o la lista lo que cambio. */
+  let ultimoPrincipal = null
+  let cadenaPrincipal = Promise.resolve()
+  function publicarPrincipal (estado) {
+    if (estado) ultimoPrincipal = estado
+    if (!ultimoPrincipal) return cadenaPrincipal
+    const valor = { ...ultimoPrincipal, lineas: registro.map((r) => ({ ...r })) }
+    cadenaPrincipal = cadenaPrincipal.then(() => guardar(orca, SIDECAR_KEY, valor))
+    return cadenaPrincipal
+  }
+  const publicarRegistro = () => Promise.all([
+    guardar(orca, LINEAS_KEY, registro.map((r) => ({ ...r }))),
+    publicarPrincipal(null)
+  ])
 
   /** Una linea nueva esperando su QR, al final del registro. */
   function agregarLinea () {
@@ -1541,7 +1568,7 @@ export default function activate(orca) {
       if (detenido) return sinArrancar
       if (!resuelto.ok || !resuelto.dir) {
         const motivo = motivoAuthDir(resuelto)
-        await guardar(orca, SIDECAR_KEY, {
+        await publicarPrincipal({
           at: new Date().toISOString(), connection: null, qr: null,
           motivo, statusCode: null,
           error: { code: motivo,
@@ -1812,13 +1839,12 @@ export default function activate(orca) {
       registro = registro.filter((r) => r.carpeta !== linea.carpeta)
       delete estadosSecundarios[linea.carpeta]
       relanzar = registro.length ? null : agregarLinea()
-      await publicarRegistro()
       const nueva = principal()
-      if (eraPrincipal && nueva !== null && estadosSecundarios[nueva]) {
-        const estado = estadosSecundarios[nueva]
-        delete estadosSecundarios[nueva]
-        await guardar(orca, SIDECAR_KEY, estado)
+      if (eraPrincipal) {
+        ultimoPrincipal = (nueva !== null && estadosSecundarios[nueva]) || estadoLimpio()
+        if (nueva !== null) delete estadosSecundarios[nueva]
       }
+      await publicarRegistro()
       await publicarSecundarios()
     }
     if (!relanzar) return { ok: true, code: SIDECAR_VEREDICTO.DESVINCULADO }
@@ -1839,6 +1865,25 @@ export default function activate(orca) {
     return arranque.ok
       ? { ok: true, code: SIDECAR_VEREDICTO.REINTENTADO }
       : { ok: false, code: arranque.code, detail: arranque.detail || '' }
+  }
+
+  /** El tipo de una linea, en su entrada del registro. Solo los tipos habilitados: el
+   *  personal existe en el contrato y se rechaza con su codigo hasta la parte 2. */
+  async function cambiarTipo (pedido) {
+    const tipo = pedido?.tipo
+    if (!TIPOS_DE_LINEA.includes(tipo)) {
+      return { ok: false, code: SIDECAR_VEREDICTO.TIPO_INVALIDO,
+        detail: String(tipo ?? '').slice(0, 40) }
+    }
+    if (!TIPOS_HABILITADOS.includes(tipo)) {
+      return { ok: false, code: SIDECAR_VEREDICTO.TIPO_NO_DISPONIBLE }
+    }
+    const linea = lineasListas ? lineaDelPedido(pedido) : null
+    const entrada = linea ? entradaDe(linea) : null
+    if (!entrada) return lineaDesconocida(pedido)
+    entrada.tipo = tipo
+    await publicarRegistro()
+    return { ok: true, code: SIDECAR_VEREDICTO.TIPO_GUARDADO, carpeta: entrada.carpeta, tipo }
   }
 
   /** Vincular una linea MAS: su carpeta `nueva-...` y su sidecar, que pide su QR. Nunca
@@ -1945,6 +1990,7 @@ export default function activate(orca) {
       [SIDECAR_ACCION.DESVINCULAR]: pedidoDelPanel((pedido) => desvincularSidecar(pedido)),
       [SIDECAR_ACCION.REINTENTAR]: pedidoDelPanel((pedido) => reintentarSidecar(pedido)),
       [SIDECAR_ACCION.VINCULAR]: pedidoDelPanel(() => vincularLinea()),
+      [SIDECAR_ACCION.TIPO]: pedidoDelPanel((pedido) => cambiarTipo(pedido)),
       [SIDECAR_ACCION.LIBRETA]: pedidoDelPanel(async (pedido) => {
         const r = await reintentarSidecar(pedido)
         // Solo si la sesion se relanzo: sin sidecar nuevo no llega ninguna libreta.
@@ -1975,10 +2021,20 @@ export default function activate(orca) {
       return { ok: false, code: SCOPE_VEREDICTO.JID_INVALIDO,
         detail: String(jid ?? '').slice(0, 60) }
     }
+    // Con varias lineas el panel quita en la linea que esta mirando (`linea`). Solo una
+    // cuenta con forma de cuenta llega a la linea de comandos.
+    const linea = pedido?.linea
+    if (linea !== undefined && linea !== null &&
+      (typeof linea !== 'string' || !LINEA_RE.test(linea))) {
+      return { ok: false, code: SCOPE_VEREDICTO.LINEA_INVALIDA, detail: String(linea).slice(0, 40) }
+    }
     const s = await settings()
     // Quitar lo que ya no esta no es un error: `wa-scope rm` con un jid que no esta en
     // el registro borra cero filas y sale con 0. El usuario pidio que no estuviera.
-    await run(join(s.toolsDir || TOOLS, 'wa-scope'), ['rm', jid])
+    await run(join(s.toolsDir || TOOLS, 'wa-scope'), ['rm', jid, ...(linea ? ['--line', linea] : [])])
+    // El alcance de otra linea vive aparte en el storage, y el CLI ya lo quito de ahi: el
+    // de la principal (`scope`) no se toca aunque tenga el mismo jid.
+    if (linea) return { ok: true, code: SCOPE_VEREDICTO.QUITADO }
     const actual = await scope()
     // SOLO si la llave esta. Una lectura que el host rechazo devuelve `{}`, y guardar
     // eso borraria TODAS las autorizaciones por culpa de una lectura fallida.

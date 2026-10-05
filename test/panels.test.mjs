@@ -8009,5 +8009,226 @@ for (const [idioma, nombre, leyenda, nunca, bloqueado] of [['es-419', 'ES', /Orc
   }
 }
 
+// ───────── L4/L5: varias lineas a la vez (odd/tasks/varias-lineas-y-segundo-cerebro.md) ─────────
+// El worker deja las lineas en `lineas` (en orden: la primera es la principal), el estado de
+// la principal en `sidecar` y el de las demas en `sidecars`. Lo de cada linea que no es la
+// principal lo deja `wa-scope` aparte: su alcance en `alcancePorLinea`, y su tablero, su
+// actividad y su lista de conversaciones en `porLinea`.
+const L_A = 'pn:573000000001'
+const L_B = 'pn:573000000011'
+const ALTA = '2026-10-01T09:00:00.000Z'
+const vivaDe = (cuenta) => ({ connection: 'open', me: '+' + cuenta.slice(3), cuenta,
+  latido: { ts: Date.now(), conectado: true } })
+const lineaA = { carpeta: 'pn-573000000001', cuenta: L_A, tipo: 'support', alta: ALTA }
+const lineaB = { carpeta: 'pn-573000000011', cuenta: L_B, tipo: 'support', alta: ALTA }
+/** El worker, en lo que importa aca: contesta el pedido de la sesion y lo deja guardado. */
+function trabajadorLineas (d, st) {
+  if (!(d.action === 'storage.set' && d.params.key === 'sidecarRequest' && d.params.value)) {
+    return undefined
+  }
+  const p = d.params.value
+  st.sidecarRequest = p
+  const code = { vincular: 'vinculando', tipo: 'tipo-guardado', desvincular: 'desvinculado' }[p.action]
+  st.sidecarResult = { at: new Date().toISOString(), requestId: p.id, action: p.action,
+    ok: !!code, code: code || 'accion-desconocida', carpeta: p.carpeta || 'nueva-prueba' }
+  return { ok: true }
+}
+/** El estado de la principal con la lista de lineas adentro, como lo publica el worker. */
+const conLineas = (lineas) => Object.assign(vivaDe(L_A), { lineas })
+const textoDe = (doc, sel) => doc.querySelector(sel)?.textContent ?? ''
+
+console.log('\nconfig.html — L4: la tarjeta de lineas, con una sola')
+{
+  const { doc } = await montar('config.html', { sidecar: conLineas([lineaA]) }, 'es-419')
+  await espera()
+  const filas = doc.querySelectorAll('#lineas-lista .linea')
+  const fila = textoDe(doc, '#lineas-lista .linea')
+  ok('lista la linea con su numero, como principal y conectada', filas.length === 1 &&
+    fila.includes('+573000000001') && /Principal/.test(fila) && /Conectada/.test(fila), fila)
+  ok('ofrece vincular otra linea', !doc.getElementById('linea-vincular').disabled &&
+    /Vincular otra linea/.test(doc.getElementById('linea-vincular').textContent))
+  ok('con una sola linea no hay selector de linea en Conversaciones',
+    doc.getElementById('linea-vista-fila').hidden)
+  const tipo = doc.querySelector('#lineas-lista .linea .linea-tipo')
+  ok('el tipo dice Soporte, y Personal esta apagado hasta que exista',
+    tipo?.querySelector('button[data-value="support"]')?.getAttribute('aria-pressed') === 'true' &&
+    tipo.querySelector('button[data-value="personal"]')?.disabled === true, tipo?.outerHTML)
+}
+
+console.log('\nconfig.html — L4: la unica linea, esperando su codigo, no ofrece soltarla')
+{
+  const sola = { carpeta: 'nueva-prueba', cuenta: null, tipo: 'support', alta: ALTA }
+  const { doc } = await montar('config.html', { sidecar: { connection: null, qr: null,
+    exited: false, lineas: [sola] } }, 'es-419')
+  await espera()
+  ok('sin numero todavia no hay Desvincular en su fila: no hay sesion que soltar',
+    !!doc.querySelector('.linea[data-carpeta="nueva-prueba"]') &&
+    !doc.querySelector('.linea[data-carpeta="nueva-prueba"] .linea-desvincular'))
+}
+
+console.log('\nconfig.html — L4: vincular otra linea le pide al worker una linea nueva')
+{
+  const storage = { sidecar: conLineas([lineaA]) }
+  const { doc } = await montar('config.html', storage, 'es-419', trabajadorLineas)
+  await espera()
+  doc.getElementById('linea-vincular').click()
+  await new Promise((r) => setTimeout(r, 2500))
+  ok('el clic deja el pedido de vincular', storage.sidecarRequest?.action === 'vincular',
+    JSON.stringify(storage.sidecarRequest))
+  ok('y dice que el codigo aparece en la lista', /codigo/i.test(textoDe(doc, '#said-lineas')),
+    textoDe(doc, '#said-lineas'))
+}
+
+console.log('\nconfig.html — L4: la linea nueva espera su codigo en su propia fila')
+{
+  const nueva = { carpeta: 'nueva-prueba', cuenta: null, tipo: 'support', alta: ALTA }
+  const storage = { sidecar: conLineas([lineaA, nueva]),
+    sidecars: { 'nueva-prueba': { connection: 'connecting',
+      qr: { qr: 'QR-NUEVA', ts: Date.now(), rotation: 1, ttlMs: 75000 } } } }
+  const { doc } = await montar('config.html', storage, 'es-419', trabajadorLineas)
+  await espera()
+  const fila = doc.querySelector('#lineas-lista .linea[data-carpeta="nueva-prueba"]')
+  ok('su fila muestra su propio codigo QR, con la instruccion', !!fila?.querySelector('canvas') &&
+    /Escanee/.test(fila.textContent), fila?.textContent)
+  ok('mientras una espera su codigo no se ofrece abrir otra',
+    doc.getElementById('linea-vincular').disabled)
+  ok('la principal no repite su codigo en la lista',
+    !doc.querySelector('#lineas-lista .linea[data-carpeta="pn-573000000001"] canvas'))
+  ok('el aviso del tipo Personal se dice una vez, no en cada fila',
+    doc.getElementById('lineas-card').textContent.split('llega en una version proxima').length === 2)
+  const cancelar = fila.querySelector('.linea-desvincular')
+  ok('la que espera su codigo se cancela, no se desvincula', cancelar?.textContent === 'Cancelar',
+    cancelar?.textContent)
+  cancelar.click()
+  await new Promise((r) => setTimeout(r, 2500))
+  ok('y cancelarla es un clic que nombra su carpeta',
+    storage.sidecarRequest?.action === 'desvincular' &&
+    storage.sidecarRequest.carpeta === 'nueva-prueba', JSON.stringify(storage.sidecarRequest))
+}
+
+console.log('\nconfig.html — L4: desvincular una linea pide confirmacion y nombra la suya')
+{
+  const storage = { sidecar: conLineas([lineaA, lineaB]),
+    sidecars: { 'pn-573000000011': vivaDe(L_B) } }
+  const { doc } = await montar('config.html', storage, 'es-419', trabajadorLineas)
+  await espera()
+  const boton = () => doc.querySelector('.linea[data-carpeta="pn-573000000011"] .linea-desvincular')
+  ok('cada linea tiene su Desvincular', !!boton())
+  boton().click()
+  await espera()
+  ok('el primer clic solo pide confirmacion', !storage.sidecarRequest &&
+    /Si, desvincular/.test(boton().textContent), boton().textContent)
+  boton().click()
+  await new Promise((r) => setTimeout(r, 2500))
+  ok('el segundo pide desvincular ESA linea y no la principal',
+    storage.sidecarRequest?.action === 'desvincular' &&
+    storage.sidecarRequest.carpeta === 'pn-573000000011', JSON.stringify(storage.sidecarRequest))
+}
+
+console.log('\nconfig.html — L5: el tipo de linea viaja al worker con su carpeta')
+{
+  // Un registro que ya dice `personal` (la parte 2): volver a Soporte es un pedido al worker.
+  const storage = { sidecar: conLineas([Object.assign({}, lineaA, { tipo: 'personal' })]) }
+  const { doc } = await montar('config.html', storage, 'es-419', trabajadorLineas)
+  await espera()
+  doc.querySelector('.linea[data-carpeta="pn-573000000001"] .linea-tipo button[data-value="support"]').click()
+  await new Promise((r) => setTimeout(r, 2500))
+  ok('elegir Soporte le pide al worker ese tipo para esa linea',
+    storage.sidecarRequest?.action === 'tipo' && storage.sidecarRequest.tipo === 'support' &&
+    storage.sidecarRequest.carpeta === 'pn-573000000001', JSON.stringify(storage.sidecarRequest))
+  const S = doc.defaultView.STRINGS
+  const nuevas = ['linesLegend', 'linesLink', 'linesPrincipal', 'linesTypeSupport',
+    'linesTypePersonal', 'linesPersonalLater', 'linesView', 'linesLinking']
+  ok('los textos de las lineas existen en los tres idiomas, el portugues propio',
+    nuevas.every((k) => S.es[k] && S.en[k] && S.pt[k] && S.pt[k] !== S.en[k]),
+    JSON.stringify(nuevas.filter((k) => !S.es[k] || !S.en[k] || !S.pt[k] || S.pt[k] === S.en[k])))
+}
+
+console.log('\nconfig.html — L4: Conversaciones se ven y se guardan por linea')
+{
+  const G1 = '120363000000000001@g.us'
+  const storage = { sidecar: conLineas([lineaA, lineaB]),
+    sidecars: { 'pn-573000000011': vivaDe(L_B) }, chatsAccount: L_A, chats: [],
+    scope: { [G1]: { chatName: 'Soporte Principal', mode: 'responder', account: L_A } },
+    alcancePorLinea: { [L_B]: { [G1]: { chatName: 'Soporte Segunda', mode: 'observar',
+      account: L_B } } },
+    porLinea: { [L_B]: { chats: [], chatsAccount: L_B } } }
+  const gancho = (d, st) => {
+    if (d.action === 'storage.set' && d.params.key === 'scopeRequest' && d.params.value) {
+      st.scopeRequest = d.params.value
+      st.scopeResult = { at: new Date().toISOString(), requestId: d.params.value.id,
+        action: 'quitar', ok: true, code: 'quitado' }
+      return { ok: true }
+    }
+    return undefined
+  }
+  const { doc } = await montar('config.html', storage, 'es-419', gancho)
+  await espera()
+  doc.getElementById('tab-chats').click()
+  await espera()
+  const fila = doc.getElementById('linea-vista-fila')
+  const botones = [...doc.querySelectorAll('#linea-vista button')]
+  ok('con dos lineas aparece el selector, con la principal elegida', !fila.hidden &&
+    botones.length === 2 && valorSeg(doc, 'linea-vista') === L_A, fila.outerHTML.slice(0, 300))
+  const lista = () => doc.getElementById('scope-wrap').textContent
+  ok('muestra lo autorizado en la principal y nada de la otra',
+    /Soporte Principal/.test(lista()) && !/Soporte Segunda/.test(lista()), lista())
+  elegirSeg(doc, 'linea-vista', L_B)
+  await new Promise((r) => setTimeout(r, 300))
+  ok('elegir la otra linea muestra lo autorizado en ESA',
+    /Soporte Segunda/.test(lista()) && !/Soporte Principal/.test(lista()), lista())
+
+  doc.querySelector(`#scope-wrap [data-edit="${G1}"]`).click()
+  await espera()
+  elegirSeg(doc, 'mode', 'borrador')
+  doc.getElementById('save-scope').click()
+  await new Promise((r) => setTimeout(r, 500))
+  ok('guardar en la otra linea escribe en SU alcance',
+    storage.alcancePorLinea[L_B][G1].mode === 'borrador' &&
+    storage.alcancePorLinea[L_B][G1].account === L_B, JSON.stringify(storage.alcancePorLinea))
+  ok('y no toca el de la principal, aunque sea el mismo grupo',
+    storage.scope[G1].mode === 'responder' && storage.scope[G1].chatName === 'Soporte Principal',
+    JSON.stringify(storage.scope))
+
+  doc.querySelector(`#scope-wrap [data-rm="${G1}"]`).click()
+  await new Promise((r) => setTimeout(r, 2500))
+  ok('quitar en la otra linea le dice al worker de que linea es',
+    storage.scopeRequest?.action === 'quitar' && storage.scopeRequest.jid === G1 &&
+    storage.scopeRequest.linea === L_B, JSON.stringify(storage.scopeRequest))
+}
+
+console.log('\nactivity.html — L4: el tablero se filtra por linea')
+{
+  const storage = { sidecar: conLineas([lineaA, lineaB]),
+    sidecars: { 'pn-573000000011': vivaDe(L_B) },
+    board: tablero([tarjeta({ case_id: 1, account: L_A, title: 'Caso de la principal' })]),
+    porLinea: { [L_B]: { board: tablero([tarjeta({ case_id: 2, account: L_B,
+      title: 'Caso de la segunda' })]), activity: { account: L_B, pending: [], recent: [],
+      mapped: 1, authorized: 1, syncedAt: '2026-10-01 09:00' }, chatsAccount: L_B, chats: [] } } }
+  // El host contesta cada lectura con una copia nueva (sale de un archivo): comparar las
+  // lineas por identidad entre dos vueltas no sirve, y asi se probo en Playwright.
+  Object.defineProperty(storage, 'sidecar', { enumerable: true,
+    get: () => JSON.parse(JSON.stringify(conLineas([lineaA, lineaB]))) })
+  const { doc } = await abrirTablero(storage)
+  const selector = doc.getElementById('linea-vista')
+  ok('con dos lineas el tablero ofrece elegir la linea, con la principal elegida',
+    !doc.getElementById('linea-vista-fila').hidden && selector.querySelectorAll('button').length === 2 &&
+    selector.querySelector('button[aria-pressed="true"]')?.dataset.value === L_A,
+    doc.getElementById('linea-vista-fila').outerHTML.slice(0, 300))
+  ok('muestra solo los casos de la principal', visibles(doc).join() === '1', visibles(doc).join())
+  selector.querySelector(`button[data-value="${L_B}"]`).click()
+  await new Promise((r) => setTimeout(r, 300))
+  ok('elegir la otra muestra solo los suyos', visibles(doc).join() === '2', visibles(doc).join())
+  ok('y el estado de ESA linea, con su numero',
+    doc.getElementById('linea').textContent.includes('+573000000011'),
+    doc.getElementById('linea').textContent)
+  const una = await abrirTablero({ sidecar: conLineas([lineaA]),
+    board: tablero([tarjeta({ case_id: 1, account: L_A })]) })
+  ok('con una sola linea no hay selector', una.doc.getElementById('linea-vista-fila').hidden)
+  const S = doc.defaultView.STRINGS
+  ok('el nombre del selector existe en los tres idiomas, el portugues propio',
+    S.es.linesView && S.en.linesView && S.pt.linesView && S.pt.linesView !== S.en.linesView)
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)
