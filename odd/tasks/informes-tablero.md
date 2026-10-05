@@ -42,7 +42,8 @@ stores (capture.db messages, scope.db cases, case events and dispatches). Owner-
       stop and report.
 4. Definitions (write them in the code and in the Reports tab as a short info text):
    - First response: from the case's first customer message to the first outgoing message
-     in that chat after it (acknowledgement, agent first message or reply).
+     in that chat after it and before the chat's next case starts (acknowledgement, agent
+     first message or reply).
    - Resolution: from case creation to its first entry into Respondido or Cerrado.
    - Customer wait: for each customer message (a burst of consecutive customer messages
      counts once) in a chat in scope, the time until the next outgoing message; the median
@@ -193,6 +194,90 @@ stores (capture.db messages, scope.db cases, case events and dispatches). Owner-
       finished cards) and each scrolls on its own. `npm run check`: exit 0 (every suite,
       1376 screenshots, no overflow, no JS errors, no selects); after the last CSS fixes,
       panels 1167/1167 and shots 1376 again, exit 0.
+      Correction (review of c160deb): the tick above claimed more than was looked at. The
+      many-cards board had been read only at 1440 and 390, Cerrado-only only at 1440 light,
+      and the SLA card only at 390 light. They were read after the review fixes (R11 below).
+
+## Review fixes (after c160deb)
+
+Twelve defects confirmed by independent verifiers on c160deb. Each has its RED observed
+before its fix (check-casos and panels tests, or the screenshot harness) and its GREEN after.
+
+- [x] R1 A case closed without a reply took the reply to the chat's NEXT case as its first
+      response (7500 s, an SLA miss). `primeras_respuestas` now bounds the outgoing message
+      to before the first customer message of the chat's next case (`lead()` over the cases
+      of the chat); a closed case with nothing in that window has no first response and no
+      SLA status. The definition says so in the code, this spec and the Reports info text
+      (ES/EN/PT). RED (check-casos "cerrado sin respuesta"): `[(2, 300, 'met'), (1, 7500,
+      'missed')]`, sla `met 1 missed 1 rate 50.0`, first response `3900 n 2`. GREEN: case 1
+      `(None, None)`, rate 100.0, first response 300 with n 1.
+- [x] R2 "Su decision" missed cases the owner signed when the tick completed the send
+      (decision -> respondido by `automatizacion`). It now also counts an owner event in
+      decision with detail `aprobada <ver>`; a `regla` signature does not count. RED:
+      7d `[(3, 1)]` (cases, owner_decision); GREEN: `[(3, 2)]`.
+- [x] R3 The same project showed in two rows of "Por proyecto" (routed case vs. a case whose
+      route had no project but whose chat did). `casos_del_informe` resolves the project as
+      `proyecto_del_caso` dispatches it (route, then the chat's project), names it from the
+      accepted catalog, and groups by id; only without either does the dispatch's name
+      count (with its catalog id when the catalog has that name). RED: `[(None, 'Alfa Demo',
+      2, 2), ('alfa-demo', 'Alfa Demo', 1, 1)]`; GREEN: `[('alfa-demo', 'Alfa Demo', 3, 3)]`.
+- [x] R4 Week labels on the "Todo" axes overflowed the Tiempos charts and the page (807 >
+      768 ES, 848 > 768 and 361 > 320 PT). The axis now prints the short date ("13 jul"; the
+      week stays in each bar's title and the chart's name) and every mark ends in an
+      ellipsis instead of leaving the card. New harness states `informes-30d` and
+      `informes-todo` at every width, and pt-BR for the Reports states (`idiomas`). RED: the
+      new states against c160deb's panel reported exactly those six overflows; panels
+      "Todo: el eje dice la fecha corta" FALLA (`Semana del 13 jul...`). GREEN: no overflow
+      in 1452 shots; looked at `informes-todo` es light 768, pt dark 768, pt light 320.
+- [x] R5 Two-series bars could not be paired at 24/30 buckets (1 px inside a bucket, 2 px
+      between). The two bars of a bucket now touch (one two-colour block) and each takes at
+      most 38 % of the bucket, so a quarter of its width separates it from the next. RED:
+      panels "volumen: los graficos de dos series separan cada cubeta" FALLA (no `.dos`);
+      the verifiers read evenly spaced bars in the 1440 Hoy PNG. GREEN: looked at Volumen in
+      `informes-hoy` es light 1440 and `informes-30d` es light 1440 and es dark 320: each
+      blue/orange pair reads as one bucket.
+- [x] R6 PT heatmap rows read "seg., …" without the day number. Rows are now built from
+      parts, weekday without its dot or comma plus the day ("seg 28", "lun 28", "Mon 28").
+      RED: `["seg., 28", ...]` and EN `["28 Mon", ...]`; GREEN: `["seg 28", ...]`; looked at
+      `informes` pt light 1440 (the peak line, "qua 30 10:00", now matches a row).
+- [x] R7 A period with nothing finished and nothing open showed "Todavia no hay casos" and
+      hid the bar, and the saved period kept it that way. The empty state now follows the
+      all-time counts; a period with nothing says so ("Ningun caso abierto ni terminado en
+      este periodo...", ES/EN/PT) and keeps the bar. RED: `#board-empty` visible with the
+      false text, bar hidden (3 FALLA); GREEN; new state `tablero-periodo-vacio`, looked at
+      es light 1440 and en dark 320.
+- [x] R8 `reports.cases[]` carried the case title (from the customer's masked text) for up
+      to 500 cases, and the panel never used it. Dropped from `cases` (kept in the misses
+      list, which the panel shows); contract above updated. RED: check-casos "csv: las
+      filas no llevan el titulo" FALLA; GREEN.
+- [x] R9 A non-object last entry in `reports.cases` threw in `bloqueCsv` and left the tab
+      half drawn, and the signature was saved before painting so it stayed that way.
+      `bloqueCsv` reads the last OBJECT row, and `firmaInformes` is set only after
+      `pintarInformes` returns. RED: `TypeError: Cannot read properties of null (reading
+      'created') at bloqueCsv` (it killed the test run); GREEN: all 7 blocks.
+- [x] R10 The `reports` key had no line, so after a re-link the panel showed the previous
+      line's report. `build_reports` writes `account`, and `renderInformes` treats a key
+      that fails `deEstaLinea` as missing (no data), like the board's cards. RED:
+      check-casos `account None`; panels "el informe de otra linea no se pinta" FALLA (it
+      showed the blocks); GREEN.
+- [x] R11 I7 claimed screens that had not been read. Read after the fixes, from the final
+      `npm run check` run: board many-cards 1440 dark ES, 768 light and dark ES, 320 light
+      and dark ES; Cerrado-only 1440 dark ES, 768/390/320 light and dark ES; Settings SLA
+      card 1440 light and dark ES, 768 light and dark ES, 390 dark ES, 320 light and dark ES,
+      320 light EN; Reports 1440 dark ES, 390 light ES, 320 dark EN. Nothing broken in them.
+- [x] R12 The "Copiar CSV" result arrived in a live region created already filled, and a
+      failure used `role=status`. The region now exists, empty, with the block; the click
+      only changes its text (emptied first, so the same result twice is announced too) and
+      a failure is `role=alert`, like `mensajeNodo`. The message is no longer in the
+      repaint signature, so it does not rebuild the block or move the focus. RED: a new
+      node already filled, and `role=status` on failure (2 FALLA); GREEN. Not tried with a
+      real screen reader.
+
+Checks after the fixes: check-casos 1175/1175 (6 new), panels 1184/1184 (17 new), `npm run
+check` exit 0 with 1452 screenshots, no overflow, no JS errors. Before the fixes, one
+check-casos run also failed "y su avance despues cuenta como el segundo: espera el ritmo"
+(first-message Beta, not this feature) while `bin/wa-scope` was being edited under it; it
+passed in the full run.
 
 ## Storage key `reports` (v 1), for the UI stage
 
@@ -204,6 +289,8 @@ value of 0 or null) is `null`, so the panel shows no percentage.
 ```
 {
   "v": 1,
+  "account": str,                        // the line the report is for (cuenta_activa); the
+                                         // panel shows a key of another line as no data
   "updated_at": ISO,
   "sla_minutes": int,                    // the target in force (setting sla_first_reply_minutes)
   "live": {                              // now, not period-dependent
@@ -248,11 +335,13 @@ value of 0 or null) is `null`, so the panel shows no percentage.
                                          // "no project" (id and name null) last; at most 50
     }
   },
-  "cases": [{"case_id", "chat", "title", "created": ISO, "first_response_s": int | null,
+  "cases": [{"case_id", "chat", "created": ISO, "first_response_s": int | null,
              "resolution_s": int | null, "stage", "project": str | null,
              "sla": "met" | "missed" | "pending" | null}],
                                          // every case of the active line, newest first, at most
-                                         // 500; the CSV of a period = rows with created in [from, to]
+                                         // 500; the CSV of a period = rows with created in [from, to].
+                                         // No title: it comes from the customer's text and
+                                         // the panel never shows it here
   "cases_more": int                      // rows left out by the cap
 }
 T = {"value": median seconds | null, "n": int, "prev": seconds | null,
@@ -268,9 +357,13 @@ Membership: first response and SLA count the cases CREATED in the period; resolu
 "resolved" count the cases FIRST resolved in it; customer wait counts the bursts that
 STARTED in it. Messages are those of the active line, in chats with mode != off, without
 revoked ones; cases are those of the active line. A case closed without any response, or
-without customer messages in the store, is outside the SLA. "Jev held" = a send held by
-Jev or a "Jev asked to revise" event; "owner decision" = left `decision` by the owner's
-hand, or still waiting there.
+without customer messages in the store, is outside the SLA; the outgoing message that
+answers a case is the first one before the chat's next case starts. "Jev held" = a send
+held by Jev or a "Jev asked to revise" event; "owner decision" = left `decision` by the
+owner's hand, signed there by the owner (`aprobada <ver>`, even when the tick completes
+the send), or still waiting there. A case's project is resolved as the dispatch does it:
+the case's route, else its chat's project, named from the accepted catalog; only without
+either does the dispatch's recorded name count (with its catalog id when it has one).
 
 ## Acceptance
 
