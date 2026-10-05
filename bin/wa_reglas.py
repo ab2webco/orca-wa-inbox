@@ -585,7 +585,7 @@ ALCANCE_NEGACION = 80
 # Lo unico que descuenta la palabra de una credencial en lo que sale (orden-del-dueno): la
 # negacion de pedirla, compartirla o revelarla, pegada a ella ("nunca le pediremos su clave",
 # "we will never ask you for your password", "nao compartilhe a senha"). Una negacion en otra
-# clausula ("si no te llega el correo, mandame tu contrasena"), otro verbo ("no reutilices la
+# clausula ("si no le llega el correo, envienos su contrasena"), otro verbo ("no reutilice la
 # contrasena anterior") o un item que sigue a la lista ("avoid sharing your password or
 # token") no la descuentan, y un valor junto a la palabra cuenta siempre.
 _VERBOS_DE_PEDIR = (r"(?:ped\w*|pid\w*|solicit\w*|compart\w*|revel\w*|divulg\w*|ask\w*|"
