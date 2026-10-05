@@ -105,7 +105,25 @@
 - [x] B4 Docs: `wa-read wait` help and the agent-facing docs describe "ask the owner and wait
       for the reply". `wa-read wait --help` (checked in check-clis: `--chat`, `owner`),
       wa-send's help, harness COMMANDS.md and the whatsapp-cli skill use `--chat`.
-- [ ] F1 Final check, once: `npm run check` with reduced screenshots (dark, 390, es).
+- [x] F1 Final check, once: `npm run check` with reduced screenshots (dark, 390, es).
+      Exit 0: check-casos 1612/1612, envio 109/109, panels 1398/1398, worker 413/413,
+      check-clis 391, check-harness 74, 91 shots in ~/Projects/.capturas-approve-smoke.
+      Looked at `tablero-accion-error` and `tablero-poblado` (es, dark, 390): unchanged
+      layout; the new string uses the same card-error slot. No panel screen changed, so no
+      `npm run shots` at 1440/390 in both themes was needed.
+
+## Open
+
+- Held drafts that are NOT tied to a case (e.g. a project session's message held by the
+  floor) have no approval path left except cancel: the board only approves cases, and the
+  owner's own terminal is now refused like any agent. Owner decision needed: a board entry
+  for those drafts, or accept that they are rewritten or cancelled.
+- "Rule" sends do not go through `--approve`: the tick sends them with `--send` (floor and
+  Jev still review). Their trail is the case event by actor `regla`; no `approved` row.
+- `wa-scope caso aprobar --actor dueno` is still callable by any agent (it signs the
+  version; the tick then sends through `--send`, so the floor and Jev still apply). Same
+  class of problem as this task, outside its scope.
+- Same-user code can read `approver.key` on purpose; documented as the honest limit.
 
 ## Acceptance criteria
 
