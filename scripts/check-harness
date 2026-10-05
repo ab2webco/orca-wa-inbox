@@ -268,6 +268,22 @@ def main() -> int:
         if faltan:
             fallos.append(f"{rel}  no dice {', '.join(faltan)}")
 
+    # El caso del dueno (dueno-en-el-caso): lo que es suyo se le entrega en la respuesta,
+    # su propio pedido nunca se le escala a el, y lo de un cliente sigue sin salir a nadie
+    # sin la aprobacion del dueno. Por los dos caminos del agente.
+    for rel in OBLIGATORIOS:
+        comprobaciones += 1
+        faltan = [f for f in ("the owner's own case", "verified by WhatsApp id",
+                              "deliver it to him in the reply",
+                              "never escalate his own request to him",
+                              "ask him directly in the reply",
+                              "never write a credential value",
+                              "never go to a customer or a third party without the owner's "
+                              "approval")
+                  if f.lower() not in cuerpos[rel].lower()]
+        if faltan:
+            fallos.append(f"{rel}  no dice {', '.join(faltan)}")
+
     # Y cada archivo del arnes tiene que decir en el propio archivo que pasa con una
     # edicion a mano: saberlo no puede exigir leer el codigo del plugin.
     for ruta in sorted(ARNES.glob("*.md")):

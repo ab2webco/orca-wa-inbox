@@ -51,8 +51,11 @@ chats already skip the rule levels in `frenos_de_regla`), Jev.
       `chat_es_del_dueno`, or every incoming message of the case with an owner `sender_jid`.
       RED: 9 of 16 failed (owner DM, owner-only group, line's own chat still said "data from
       the customer"); GREEN: 16/16.
-- [ ] D2 Owner case rules in `harness/AGENTS.md` and the `whatsapp-soporte` skill, customer
-      rules unchanged (scripts/check-harness).
+- [x] D2 Owner case rules in `harness/AGENTS.md` and the `whatsapp-soporte` skill, customer
+      rules unchanged (scripts/check-harness). New `## The owner's own case` section in both;
+      the skill's escalation section says the reason is the one question for the owner and
+      never applies to the owner's own case. RED: check-harness exit 1, both files missing
+      the 7 phrases; GREEN: 58 checks, exit 0.
 - [ ] D3 An `escalar` proposal sends ONE notice per version to the approval number, with
       the case and the agent's question; none without a number; no credential value
       (scripts/check-casos, T14 section).
