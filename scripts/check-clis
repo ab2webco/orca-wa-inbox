@@ -793,6 +793,50 @@ def revisa_varios_proyectos(fallos: list) -> int:
     return hechas
 
 
+def revisa_rol_del_juicio(fallos: list) -> int:
+    """El veredicto de Jev guarda el rol con que se juzgo (roles-por-numero, M10): una base
+    con la tabla `juicio` de antes gana la columna `rol` sin perder sus veredictos, que
+    quedan con `rol` null (juzgados con el binario dueno / participante de entonces)."""
+    hechas = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+        db = home / ".wa-inbox" / "scope.db"
+        db.parent.mkdir(parents=True, exist_ok=True)
+        con = sqlite3.connect(db)
+        con.executescript("""
+            create table juicio (
+              account text not null default 'local', chat_jid text not null,
+              stanza_id text not null, clase text not null,
+              origen text not null default 'agente', at text not null, jev text,
+              primary key (account, chat_jid, stanza_id));
+            insert into juicio (account, chat_jid, stanza_id, clase, origen, at, jev)
+              values ('local', '100@g.us', 'J1', 'card', 'jev', '2026-10-01 09:00',
+                      '{"flags": []}');""")
+        con.commit()
+        con.close()
+        p = subprocess.run([str(BIN / "wa-scope"), "list", "--json"],
+                           capture_output=True, text=True, env=env, timeout=120)
+        hechas += 1
+        if p.returncode != 0:
+            fallos.append("wa-scope list se rompio migrando una tabla juicio sin rol: "
+                          f"{(p.stderr or '').strip()[:200]}")
+        con = sqlite3.connect(db)
+        con.row_factory = sqlite3.Row
+        hechas += 2
+        if "rol" not in {r["name"] for r in con.execute("pragma table_info(juicio)")}:
+            fallos.append("la migracion no le agrego la columna rol a juicio")
+        else:
+            fila = con.execute("select clase, jev, rol from juicio where stanza_id='J1'"
+                               ).fetchone()
+            if not fila or fila["clase"] != "card" or fila["jev"] != '{"flags": []}' \
+                    or fila["rol"] is not None:
+                fallos.append("agregar juicio.rol perdio o cambio un veredicto de antes: "
+                              f"{dict(fila) if fila else None}")
+        con.close()
+    return hechas
+
+
 def revisa_juicio(fallos: list) -> int:
     """La tabla `juicio` se agrega sola sobre una base vieja, y el veredicto se guarda
     una vez por llave (odd/tasks/juicio-cacheado.md, T1/T2).
@@ -2658,6 +2702,7 @@ def main() -> int:
                       + revisa_firma_del_panel(fallos)
                       + revisa_casa_del_runtime(fallos)
                       + revisa_juicio(fallos)
+                      + revisa_rol_del_juicio(fallos)
                       + revisa_linea_por_numero(fallos)
                       + revisa_reclave_local(fallos)
                       + revisa_telefono_de_lid(fallos)

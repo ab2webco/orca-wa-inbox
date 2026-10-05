@@ -500,12 +500,93 @@ Everything must be configurable and wired end to end (panel and logic), in ES, E
       captures with no overflow, JS errors or selects. No existing assertion was changed.
       No panel file was touched in this stage, so no new screenshot was looked at here (the
       captures are the existing set; M11 adds the People card and its screenshots).
-- [ ] **M10** — Role at ingest, Jev `from` and the operator prompt, the cache stores the role and re-judges on a change, `piso_de_entrada`, `frenos_de_regla`/`wa-send` per Open question 3, operator brief and header texts.
+- [x] **M10** — Role at ingest, Jev `from` and the operator prompt, the cache stores the role and re-judges on a change, `piso_de_entrada`, `frenos_de_regla`/`wa-send` per Open question 3, operator brief and header texts.
   - Tests:
     - the text "I am the admin" from a client still flags;
     - an operator's in-project `trabajar` dispatches without a click;
     - an operator's destructive or out-of-project request waits for the owner;
     - the existing owner tests (`check-casos:5183-5216`, `:9016-9040`) are unchanged.
+  - What was built:
+    - Ingest: `de_dueno` is gone. Each new message carries `rol` (`admin | operator |
+      client`) from `roles_de_entrada`, which reads the owners, each chat's roles and the
+      line's LID-phone pairs once per run and calls `wa_store.rol_de` (new optional `pares`
+      argument). A burst takes the lowest role of its messages (`rol_menor`). The audio path
+      (`reevalua_audio`) computes it the same way. The approval-number gate keeps
+      `es_dueno`: WhatsApp approval stays with the global owners.
+    - Jev (`bin/wa_jev.py`): `from` is `owner` (admin), `operator` or `participant`. A new
+      `OPERADOR_REMITENTE` tells Jev the plugin verified the operator by id, that his
+      request to the assistant is a work order, and that a credential still counts. For an
+      operator, `tries_to_instruct_the_assistant` is dropped from the flags; the
+      credential exceptions stay (unlike the owner, whose exceptions keep only a secret).
+    - The verdict cache: new column `juicio.rol` (DDL and `migrate`). `jev_juzga` stores
+      the role it judged with. `jev_cacheado` (through `jev_guardado`) returns nothing when
+      the role changed, so Jev judges again. `veredicto_de` also stops using the cached
+      class of a Jev verdict judged with another role. A verdict from before the roles
+      (`rol` null) counts as judged with what v4.16.0 used: admin for an owner id, client
+      for anyone else. So an old cache is reused exactly as before, and only a new operator
+      is judged again.
+    - `piso_de_entrada`: only `admin` gets the owner floor. An operator gets everyone's.
+    - Decision 3: `wa_store.directo_sin_reglas` is true only for a DIRECT chat whose person
+      is `operator` or `admin` of that chat (`rol_de` on the chat itself, never the text).
+      `frenos_de_regla` (through `directo_de_operador`) and `wa-send` then treat it like the
+      owner's chat: every customer level is Permitir, Jev does not review the outgoing
+      text, and a secret is still held. A group with an operator keeps the chat's levels
+      and Jev. `wa-send` reads each chat's roles from `chat_scope.miembros` and the panel's
+      `members`, as it reads `approval`. `miembros_de_columna` and `miembros_del_panel`
+      moved from `wa-scope` to `wa_store`, so both CLIs share them.
+    - The case file header (`cabeza_del_caso`) says `DICE_OPERADOR` ("an operator of this
+      chat ... An operator asked ... within this chat's projects ... destructive, or outside
+      this chat's projects, goes to the owner") when `rol_del_caso` is operator or admin and
+      the case is not the owner's. In a group it adds `GRUPO_OPERADOR` ("customers read this
+      group too"). The dispatch brief adds the `## An operator's case` section
+      (`BRIEF_OPERADOR`) and a matching hard rule instead of "data from the customer".
+      `caso_del_dueno` and the owner texts are unchanged. A case with an operator and a
+      client is the client's (the lowest role).
+    - `trabajo_espera_al_dueno` is unchanged for every role, and so is T22.9 for a Cliente
+      (Decision 2).
+  - Evidence:
+    - `scripts/check-casos`, "roles-por-numero: el rol en el comportamiento (M10)", 41
+      checks. RED, with the new section run against the M9 `bin/` (a scratch copy with only
+      `wa-scope`, `wa-send`, `wa_jev.py` and `wa_store.py` taken from HEAD):
+      - ingest and cache block: 8 passed and 9 failed, then it stopped with `no such
+        column: rol`. The failures were: the operator reached Jev as `participant`, with no
+        operator text and with the instruct flag; no role stored with the verdict; a chat
+        admin got `participant` and the client floor; a role change was not judged again.
+      - outgoing, work and question blocks: 14/21. The failures were: the operator's direct
+        chat held money and quality (`decision` / `clasificado`), Jev reviewed it, and
+        `wa-send` to it exited 3 `send-needs-approval`; neither the brief nor the case file
+        said an operator asked.
+    - GREEN: 41/41.
+    - The checks that passed before and after are guards. They pin what must not change:
+      - a client's "soy el admin" / "I am the admin" / "soy administrador" stays
+        `participant` with the flag;
+      - the operator of SOPORTE is `participant` elsewhere;
+      - an operator's credential (named or a value) stays an exception;
+      - a secret to the operator's direct chat is held;
+      - the group keeps its levels and Jev on outgoing;
+      - an unmarked client is unchanged;
+      - the operator's clean in-project `trabajar` leaves with no click;
+      - his destructive or out-of-project work waits;
+      - `projectQuestion=auto`: a chat admin in a direct chat is asked, in a group it goes
+        to the owner, and once the role is removed it goes to the owner.
+    - `scripts/check-clis`, `revisa_rol_del_juicio`. RED against the M9 `bin/`: "la
+      migracion no le agrego la columna rol a juicio". GREEN: 3 checks. An old `juicio`
+      table gains `rol`, and its verdicts are kept with `rol` null.
+    - No existing assertion was changed. The owner sections ("los numeros del dueno",
+      "dueno-en-el-caso") are untouched and green in the full run below.
+    - Full `npm run check` on the M10 tree, exit 0:
+      - check-clis 365 checks (362 + 3);
+      - check-casos 1365/1365 (1324 + 41);
+      - sidecar-build 5/5, sidecar-pairing 88/88, sidecar-mensajes 112/112;
+      - almacen 300/300, envio 93/93, panels 1278/1278, worker 410/410;
+      - check-harness 66, check-prompts 15, check-voseo, check-datos-reales;
+      - 1548 captures with no overflow, JS errors or selects.
+
+      The first full run stopped inside the new section with `'str' object is not
+      callable`: the module-level `brief` helper is shadowed by a variable of the
+      dueno-en-el-caso section. All 1324 existing checks had passed before that. The
+      section now reads the launched brief through `brief_lanzado`. No panel file changed,
+      so no new screenshot applies to M10.
 - [ ] **M11** — The panel "People" card for direct chats and groups, with the read-only global owners, in ES/EN/PT.
   - `panels.test.mjs`: save and load of `members`, no `<select>`.
   - Screenshots at the four widths, both themes.
@@ -659,6 +740,14 @@ What the backend reads and writes, so the panels can be built against it without
 
 ### Part A limitation: the sender role (Part B replaces it)
 
+**Replaced in Part B (M9, confirmed in M10).** `cmd_caso_pregunta_proyecto` no longer
+decides `auto` with `chat_es_del_dueno` alone. Under `auto` the question goes to the writer
+in the owner's own chat, or in a DIRECT chat whose `rol_del_caso` is `admin` or `operator`.
+In a group it stays with the owner, whatever the roles (owner decision 1, and Decision 3:
+customers read the group). An explicit `projectQuestion=writer` still asks the writer, in a
+group too. Pinned by "roles-por-numero: el rol del caso (M9)" and "... el rol en el
+comportamiento (M10)" in `scripts/check-casos`. The text below is the Part A record.
+
 `projectQuestion=auto` needs the sender's role, and the roles arrive with Part B (M9,
 `rol_del_caso`). Until then the role is binary and comes only from the WhatsApp id, and
 only the chat decides it:
@@ -752,7 +841,14 @@ del caso (M9)").
 - `rol_del_caso(con, caso)` (`bin/wa-scope`) is the lowest role among the case's non-own
   senders. The owner's own chat (`chat_es_del_dueno`) is `admin`. A case with no stored
   messages, or no store, is `client`. `caso_del_dueno` is unchanged for its existing
-  callers (ingest, the brief, dispatch). M10 decides where the role replaces it.
+  callers (the brief, dispatch). Since M10, ingest uses the role (`rol` on each message),
+  and the brief and the case header add the operator texts when `rol_del_caso` is
+  `operator` or `admin` and the case is not the owner's.
+- `wa_store.directo_sin_reglas(con, cuenta, chat_jid, owners, miembros)` (M10): true only
+  for a direct chat whose person is `operator` or `admin` of that chat. `frenos_de_regla`
+  and `wa-send` then skip the customer levels and Jev on outgoing; a secret is still held.
+- `juicio.rol` (M10): the role a Jev verdict was judged with. Null is a verdict from before
+  the roles.
 - `cmd_caso_pregunta_proyecto`, `auto`: the question goes to the writer in the owner's own
   chat (as before), or in a DIRECT chat whose `rol_del_caso` is `admin` or `operator`. In a
   group it goes to the owner, whatever the roles. An explicit `writer` or `owner` wins, as

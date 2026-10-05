@@ -585,7 +585,7 @@ def id_de_persona(valor):
     return None
 
 
-def rol_de(con, cuenta, chat_jid, sender_jid, owners, miembros):
+def rol_de(con, cuenta, chat_jid, sender_jid, owners, miembros, pares=None):
     """El rol de quien escribio en una conversacion: `admin`, `operator` o `client`.
 
     - Un dueno global (`owners`, los de `duenos()`) es admin en TODAS las conversaciones.
@@ -595,13 +595,15 @@ def rol_de(con, cuenta, chat_jid, sender_jid, owners, miembros):
       cualquier otro chat.
     - Un LID y un telefono son la misma persona SOLO por un par de `lid_telefono` de esa
       linea (`con` es el almacen, o None: sin almacen no hay pares). Nunca se adivina por
-      los digitos.
+      los digitos. `pares` son esos pares ya leidos (`telefonos_de_lid`), para quien juzga
+      muchos mensajes de una vez; sin ellos se leen de `con`.
 
     Sin remitente, en un directo escribe la conversacion; en un grupo, nadie: cliente. Si la
     persona tiene dos ids con roles distintos, vale el menor."""
     jid = sender_jid or (chat_jid if chat_jid and not str(chat_jid).endswith("@g.us")
                          else None)
-    pares = telefonos_de_lid(con) if con is not None else {}
+    if pares is None:
+        pares = telefonos_de_lid(con) if con is not None else {}
     ids = companeros_de(cuenta, jid, pares) if jid else []
     if not ids:
         return ROL_CLIENTE
@@ -614,6 +616,48 @@ def rol_de(con, cuenta, chat_jid, sender_jid, owners, miembros):
     guardados = {id_de_persona(k): v for k, v in del_chat.items() if id_de_persona(k)}
     roles = [guardados[i] for i in ids if guardados.get(i) in ROLES_GUARDADOS]
     return rol_menor(roles) if roles else ROL_CLIENTE
+
+
+def directo_sin_reglas(con, cuenta, chat_jid, owners, miembros):
+    """Si la conversacion es el directo con un operador o un admin de ELLA (roles-por-numero,
+    M10, decision 3 del dueno): lo que se le contesta ahi no lo lee ningun cliente, asi que
+    no pasa por los niveles del cliente ni por la revision de Jev. Un grupo nunca: ahi leen
+    los clientes. El rol sale de `rol_de` sobre la persona del directo (la conversacion
+    misma), nunca del texto. El secreto lo sigue frenando quien llama."""
+    if not chat_jid or str(chat_jid).endswith("@g.us"):
+        return False
+    return rol_de(con, cuenta, chat_jid, None, owners, miembros) in ROLES_GUARDADOS
+
+
+def miembros_de_columna(valor):
+    """Los roles guardados de una conversacion (`chat_scope.miembros`): `{id: operator|admin}`
+    con ids de persona sin dispositivo. Lo que no es un id o un rol guardable se ignora: un
+    valor sucio no le puede dar un rol a nadie. Una base de antes (null) no tiene ninguno."""
+    try:
+        datos = json.loads(valor) if isinstance(valor, str) else valor
+    except ValueError:
+        return {}
+    if not isinstance(datos, dict):
+        return {}
+    salida = {}
+    for clave, rol in datos.items():
+        jid = id_de_persona(clave)
+        if jid and rol in ROLES_GUARDADOS:
+            salida[jid] = rol
+    return salida
+
+
+def miembros_del_panel(lista):
+    """Los roles que dice `scope[jid].members` del panel (`[{id, name, role}]`), como se
+    guardan: `{id: operator|admin}`. `client` no se guarda (es no tener rol), y un id sin
+    forma de id de persona o un rol que no existe se descartan."""
+    salida = {}
+    for m in lista if isinstance(lista, list) else []:
+        if isinstance(m, dict):
+            jid = id_de_persona(m.get("id"))
+            if jid and m.get("role") in ROLES_GUARDADOS:
+                salida[jid] = m["role"]
+    return salida
 
 
 def chat_del_dueno(con, cuenta, chat_jid, ids=None):
