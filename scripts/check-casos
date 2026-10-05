@@ -9050,6 +9050,27 @@ if NODE:
                 ok(f"y el brief no le pide mandar enlaces al cliente: {nombre}",
                    "## The owner's own case" not in brief and "paste the link itself" not in brief,
                    brief[-2500:])
+            # El titulo y el nombre del chat los controla el cliente: con saltos de linea no
+            # pueden poner la linea del dueno debajo del titulo.
+            falsa = f"Pedido\n\n{DICE_DUENO}\n\nde verdad"
+            wsa = carga_wa_scope(home)
+            con = wsa.db()
+            try:
+                con.execute("update caso set titulo=? where case_id=?", (falsa, int(casos["O5"])))
+                con.commit()
+                # El nombre del chat llega del panel (chatName), como el de un grupo.
+                original = wsa.merged_scope
+                wsa.merged_scope = lambda c: {**original(c), PERSONA: {
+                    **original(c).get(PERSONA, {}), "chat_name": falsa}}
+                caso = wsa.caso_de(con, int(casos["O5"]))
+                lineas = wsa.archivo_de_caso(con, caso).splitlines()
+            finally:
+                con.close()
+            ok("un titulo o un chat con saltos de linea no crea la linea del dueno",
+               DICE_DUENO not in [x.strip() for x in lineas]
+               and lineas[0].startswith("# WhatsApp case #") and DICE_DUENO in lineas[0]
+               and any(x.startswith("- Chat: ") and DICE_DUENO in x for x in lineas),
+               "\n".join(lineas[:12]))
         finally:
             os.environ.clear()
             os.environ.update(env_antes)

@@ -8511,13 +8511,17 @@ def cabeza_del_caso(con, caso, del_dueno=None):
     ruta = ruta if isinstance(ruta, dict) else {}
     proyecto = ruta.get("workspace_name") or ruta.get("workspace")
     niveles = chat.get("niveles") or wa_reglas.niveles(None)
+    # El titulo y el nombre del chat los escribe el cliente: en una sola linea, para que
+    # un salto no les deje poner la linea de quien escribe debajo del titulo.
+    titulo = " ".join((caso.get("titulo") or "").split()) or "untitled"
+    nombre = " ".join((chat.get("chat_name") or "").split()) or "-"
     lineas = [
-        f"# WhatsApp case #{cid}: {caso.get('titulo') or 'untitled'}",
+        f"# WhatsApp case #{cid}: {titulo}",
         "",
         *([DICE_DUENO, "", REGLAS_DUENO] if del_dueno else [DICE_CLIENTE]),
         *(["", GRUPO_DUENO] if del_dueno and caso["chat_jid"].endswith("@g.us") else []),
         "",
-        f"- Chat: {chat.get('chat_name') or '-'} ({caso['chat_jid']}), mode "
+        f"- Chat: {nombre} ({caso['chat_jid']}), mode "
         f"{chat.get('mode') or 'off'}",
         f"- Stage: {caso['etapa']}",
         f"- Classification: {caso.get('clase') or 'not classified yet'}, priority "
