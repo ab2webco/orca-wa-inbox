@@ -1333,8 +1333,26 @@
       // nada, solo leer storage. Si el sello de tiempo esta viejo, decirlo es mas
       // honesto que mostrar una lista que parece viva y no lo esta.
       function viejo(stamp) {
+        return anotarReloj(viejoAhora, stamp)
+      }
+      function viejoAhora(stamp) {
         var ms = Date.parse(String(stamp || '').replace(' ', 'T'))
         return !ms || (Date.now() - ms) > 30 * 60000
+      }
+
+      // Lo que el reloj decide en el tablero pintado ("hace 5 min", "vieja", un aviso que
+      // ya vencio). El tablero no se reconstruye si nada cambio (ver `renderBoard`), y sin
+      // esto un "hace 5 min" se quedaria ahi para siempre: se anota cada respuesta del
+      // reloj al pintar y se repinta cuando alguna ya no es la misma.
+      var relojes = null        // [funcion, argumento, respuesta] mientras se pinta el tablero
+      var relojesPintados = []
+      function anotarReloj (fn, arg) {
+        var r = fn(arg)
+        if (relojes) relojes.push([fn, arg, r])
+        return r
+      }
+      function relojesIguales () {
+        return relojesPintados.every(function (x) { return x[0](x[1]) === x[2] })
       }
 
       // Pasada media hora la hora sola ya no ubica: "09:33" de anteayer se lee como de
@@ -1648,6 +1666,9 @@
       /** "hace 5 min": el sello de una tarjeta es de maquina y no dice nada de un
        *  vistazo. Una fecha que no se entiende se calla. */
       function hace (stamp) {
+        return anotarReloj(haceAhora, stamp)
+      }
+      function haceAhora (stamp) {
         var ms = Date.parse(String(stamp || ''))
         if (!ms) return ''
         var min = Math.floor((Date.now() - ms) / 60000)
@@ -1787,8 +1808,8 @@
       var TEXTO_MAX = 4096
       var NOTA_MAX = 500
 
-      // Lo que vive entre repintadas: el sondeo reconstruye el tablero cada 8 s, y sin esto
-      // se llevaria el texto que el dueno esta escribiendo y el "…" de lo que esta en vuelo.
+      // Lo que vive entre repintadas: el sondeo reconstruye el tablero si algo cambio, y sin esto se
+      // llevaria el texto que el dueno esta escribiendo y el "…" de lo que esta en vuelo.
       var enCurso = null        // { id, accion }: una sola accion a la vez
       var formularios = {}      // caseId -> { modo, texto, version }
       var mensajes = {}         // caseId -> { texto, mala, hasta }
@@ -1944,12 +1965,19 @@
           // El tablero se relee tras cualquier veredicto: `wa-scope` lo reescribe en cada
           // cambio, y tras E_VERSION o E_STAGE lo que hay en pantalla ya es viejo.
           return reload()
-        }).then(repintar, function () { enCurso = null; repintar() })
+          // El veredicto llega cuando quiere: si el dueno tiene el puntero apretado en otra
+          // tarjeta, repintar ahi le robaria el clic (ver `alSoltar`).
+        }).then(repintarAlSoltar, function () { enCurso = null; repintarAlSoltar() })
+      }
+
+      function mensajeVivo (id) {
+        var m = mensajes[id]
+        return !!m && (m.mala || Date.now() <= m.hasta)
       }
 
       function mensajeNodo (id) {
         var m = mensajes[id]
-        if (!m || (!m.mala && Date.now() > m.hasta)) return null
+        if (!anotarReloj(mensajeVivo, id)) return null
         var nodo = crear('div', 'card-msg' + (m.mala ? ' mala' : ''), m.texto)
         nodo.setAttribute('role', m.mala ? 'alert' : 'status')
         return nodo
@@ -2729,6 +2757,37 @@
         // se llevaria el texto y el foco del dueno. Lo que cambie se ve al cerrarlo o tras
         // cualquier accion.
         if (!forzar && seleccion && formularios[seleccion]) return
+        // Si nada de lo que se pinta cambio, el DOM se queda como esta. El foco de la
+        // ventana y el sondeo releen cada pocos segundos el mismo tablero, y reconstruirlo
+        // igual cambiaba la tarjeta bajo el puntero entre que el dueno apretaba y soltaba:
+        // el navegador no le mandaba el `click` y el primer clic no hacia nada.
+        var firma = firmaTablero(board)
+        if (!forzar && firma !== null && firma === firmaPintada && relojesIguales()) return
+        firmaPintada = null
+        relojes = []
+        try { pintarTablero(board) } finally {
+          relojesPintados = relojes
+          relojes = null
+        }
+        // Despues de pintar: pintar puede soltar la seleccion o un formulario de una
+        // tarjeta que ya no esta, y la firma tiene que ser la de lo que quedo en pantalla.
+        firmaPintada = firmaTablero(board)
+      }
+
+      /** Todo lo que `pintarTablero` lee, en un texto: igual texto, igual tablero. Lo que
+       *  depende de la hora lo cubren los relojes anotados. */
+      var firmaPintada = null
+      function firmaTablero (board) {
+        try {
+          return JSON.stringify([board, cuentaVinculada, vacioPorConfig(actividadActual),
+            proyectosAceptados, filtroEtapa, busqueda, vistaEfectiva(), estrecho(), seleccion,
+            formularios, mensajes, enCurso])
+        } catch (e) {
+          return null
+        }
+      }
+
+      function pintarTablero (board) {
         var m = modeloTablero(board)
         var cols = el('board-cols')
         var lista = el('board-list')
@@ -2891,15 +2950,56 @@
           proyectosAceptados = Array.isArray(cat) ? cat.filter(function (p) {
             return esObjeto(p) && typeof p.id === 'string' && p.id
           }) : []
-          actividadActual = a
-          renderSynced(a)
-          renderLinea(sc)
-          renderCobertura(a, chats)
           var tablero = stored(results[5])
-          renderRun(a, esObjeto(tablero) ? tablero : null)
-          renderBoard(tablero)
+          alSoltar(function () {
+            actividadActual = a
+            renderSynced(a)
+            renderLinea(sc)
+            renderCobertura(a, chats)
+            renderRun(a, esObjeto(tablero) ? tablero : null)
+            renderBoard(tablero)
+          })
         })
       }
+
+      // Con el puntero apretado dentro del panel, lo que trae una relectura espera a que se
+      // suelte. Apretar en el panel desde otra parte de Orca le da foco a la ventana y el
+      // foco relee: si el tablero se repinta entre el `pointerdown` y el `pointerup`, el
+      // elemento apretado ya no es el que se suelta y el navegador no manda el `click`.
+      // Solo se guarda la ultima pintura (es la mas nueva) y nunca se descarta. Un repintado
+      // forzado que llega en el medio (el veredicto de una accion) va despues de ella, para
+      // que pinte el tablero nuevo y no el que habia.
+      var apretado = false
+      var pintarAlSoltar = null
+      var repintarPendiente = false
+      function alSoltar (pintar) {
+        if (apretado) { pintarAlSoltar = pintar; return }
+        pintar()
+      }
+      function repintarAlSoltar () {
+        if (apretado) { repintarPendiente = true; return }
+        repintar()
+      }
+      function soltar () {
+        if (!apretado) return
+        apretado = false
+        // Despues del `click`, que el navegador manda en la misma tanda que el `pointerup`.
+        setTimeout(function () {
+          if (apretado) return
+          var pintar = pintarAlSoltar
+          var forzar = repintarPendiente
+          pintarAlSoltar = null
+          repintarPendiente = false
+          if (pintar) pintar()
+          if (forzar) repintar()
+        }, 0)
+      }
+      window.addEventListener('pointerdown', function () { apretado = true }, true)
+      window.addEventListener('pointerup', soltar, true)
+      window.addEventListener('pointercancel', soltar, true)
+      // Si el puntero se suelta fuera del panel no llega `pointerup`: perder el foco tambien
+      // suelta, o el tablero quedaria congelado.
+      window.addEventListener('blur', soltar)
 
       var timer = null
       function startPolling() {

@@ -4325,7 +4325,9 @@ console.log('\nactivity.html — tablero: Autorizar')
   ok('el clic pide `autorizar` sobre ese caso, y nada mas',
     p && p.action === 'autorizar' && p.caseId === 21 && !('texto' in p) && !('actor' in p),
     JSON.stringify(p))
-  await hastaPanel(() => /agente|proxima/i.test(abrirDetalle(doc, 21)?.textContent || ''))
+  // Se espera el mensaje mismo: el detalle ya dice "el agente podra atenderlo" antes del
+  // clic, y esperar esa palabra no esperaba nada.
+  await hastaPanel(() => !!doc.querySelector('#board-detail .card-msg'))
   ok('y dice que el agente salio', /lanz|salio|corrida|agente/i.test(
     doc.querySelector('#board-detail .card-msg')?.textContent || ''),
   doc.querySelector('#board-detail .card-msg')?.textContent)
@@ -5710,6 +5712,181 @@ for (const [idioma, nombre, re] of [['es-419', 'ES', /Solo leer/], ['en', 'EN', 
     read_only: false, actions: ['atender', 'ignorar'] })
   const { doc } = await abrirTablero({ board: tablero([c]) })
   ok('sin read_only no hay nota', !doc.querySelector('.card-solo-leer'))
+}
+
+// ── El primer clic en el tablero ──
+// Entrar al panel desde otra parte de Orca le da foco a la ventana, y el foco relee el
+// storage y repintaba el tablero entero. Si esa repintada cae entre que el dueno aprieta
+// y suelta, la tarjeta bajo el puntero ya no es la misma y el navegador no le manda el
+// `click`: el primer clic no hacia nada y habia que apretar dos veces.
+/** Un clic como lo da el navegador: aprieta, deja pasar lo que pase en el medio
+ *  (`entre`), suelta, y solo si el nodo apretado sigue en la pagina le llega el `click`.
+ *  Si lo reemplazaron, el navegador lo manda al ancestro comun, que no es la tarjeta. */
+async function clicReal (window, nodo, entre) {
+  const opc = { bubbles: true, cancelable: true, button: 0 }
+  const Puntero = window.PointerEvent || window.MouseEvent
+  nodo.dispatchEvent(new Puntero('pointerdown', opc))
+  nodo.dispatchEvent(new window.MouseEvent('mousedown', opc))
+  await entre()
+  nodo.dispatchEvent(new Puntero('pointerup', opc))
+  nodo.dispatchEvent(new window.MouseEvent('mouseup', opc))
+  if (nodo.isConnected) nodo.dispatchEvent(new window.MouseEvent('click', opc))
+}
+
+console.log('\nactivity.html — tablero: el primer clic no se pierde por la recarga al tomar foco')
+{
+  const { window, doc } = await abrirTablero({ board: tablero([tarjeta({ case_id: 3 })]) })
+  const card = doc.querySelector('.card[data-case="3"]')
+  window.dispatchEvent(new window.Event('focus'))
+  await espera()
+  ok('el foco con el mismo tablero no reconstruye las tarjetas',
+    doc.querySelector('.card[data-case="3"]') === card)
+  let seguia = null
+  await clicReal(window, card, async () => {
+    window.dispatchEvent(new window.Event('focus'))   // el clic que entra al panel
+    await espera()                                     // la relectura ya aterrizo
+    seguia = doc.querySelector('.card[data-case="3"]') === card
+  })
+  // Lo que se mira es el momento de soltar: despues del clic el detalle abierto repinta
+  // el tablero, y eso es legitimo (la seleccion cambio).
+  ok('y la tarjeta apretada es la que sigue en la pagina al soltar', seguia === true)
+  ok('el primer clic en la tarjeta abre su detalle',
+    !!doc.querySelector('#board-detail[data-case="3"]:not([hidden])'),
+    doc.getElementById('board-detail')?.outerHTML.slice(0, 120))
+}
+{
+  const recibido = tarjeta({ case_id: 4, stage: 'recibido', proposal: null, exceptions: [],
+    title: 'Nota de voz', actions: ['atender', 'ignorar', 'reclasificar', 'cerrar', 'proyecto'] })
+  const w = conWorker({ ok: true, code: 'atendido' })
+  const { window, doc } = await abrirConWorker([recibido], w)
+  const boton = botonTarjeta(doc, 4, 'atender')
+  await clicReal(window, boton, async () => {
+    window.dispatchEvent(new window.Event('focus'))
+    await espera()
+  })
+  ok('el primer clic en Atender ahora deja su pedido',
+    await hastaPanel(() => w.pedidos.length === 1, 2000), JSON.stringify(w.pedidos))
+}
+
+console.log('\nactivity.html — tablero: lo que llega con el puntero apretado se pinta al soltar')
+{
+  const storage = { board: tablero([tarjeta({ case_id: 3 })]) }
+  const { window, doc } = await abrirTablero(storage)
+  const card = doc.querySelector('.card[data-case="3"]')
+  let durante = null
+  await clicReal(window, card, async () => {
+    storage.board = tablero([tarjeta({ case_id: 3 }), tarjeta({ case_id: 6, title: 'Caso nuevo' })])
+    window.dispatchEvent(new window.Event('focus'))
+    await espera()
+    durante = { misma: doc.querySelector('.card[data-case="3"]') === card,
+      nueva: !!doc.querySelector('.card[data-case="6"]') }
+  })
+  ok('con el puntero apretado el tablero nuevo no se pinta todavia',
+    durante && durante.misma && !durante.nueva, JSON.stringify(durante))
+  ok('y el clic llega a la tarjeta apretada',
+    !!doc.querySelector('#board-detail[data-case="3"]:not([hidden])'))
+  await espera()
+  ok('al soltar se pinta lo que llego, no se pierde',
+    !!doc.querySelector('.card[data-case="6"]'), visibles(doc).join())
+}
+{
+  // Un puntero que nunca suelta (el arrastre sale del panel) no deja el tablero congelado.
+  const storage = { board: tablero([tarjeta({ case_id: 3 })]) }
+  const { window, doc } = await abrirTablero(storage)
+  const card = doc.querySelector('.card[data-case="3"]')
+  card.dispatchEvent(new (window.PointerEvent || window.MouseEvent)('pointerdown', { bubbles: true }))
+  storage.board = tablero([tarjeta({ case_id: 3 }), tarjeta({ case_id: 6 })])
+  window.dispatchEvent(new window.Event('focus'))
+  await espera()
+  window.dispatchEvent(new window.Event('blur'))
+  await espera()
+  ok('si la ventana pierde el foco con el puntero apretado, lo pendiente se pinta igual',
+    !!doc.querySelector('.card[data-case="6"]'), visibles(doc).join())
+}
+{
+  // Un gesto del sistema (o un toque que se vuelve desplazamiento) cancela el puntero:
+  // no llega `pointerup`, llega `pointercancel`, y eso tambien suelta.
+  const storage = { board: tablero([tarjeta({ case_id: 3 })]) }
+  const { window, doc } = await abrirTablero(storage)
+  const card = doc.querySelector('.card[data-case="3"]')
+  const Puntero = window.PointerEvent || window.MouseEvent
+  card.dispatchEvent(new Puntero('pointerdown', { bubbles: true }))
+  storage.board = tablero([tarjeta({ case_id: 3 }), tarjeta({ case_id: 6 })])
+  window.dispatchEvent(new window.Event('focus'))
+  await espera()
+  card.dispatchEvent(new Puntero('pointercancel', { bubbles: true }))
+  await espera()
+  ok('si el puntero se cancela, lo pendiente se pinta igual',
+    !!doc.querySelector('.card[data-case="6"]'), visibles(doc).join())
+}
+{
+  // El veredicto de una accion repinta el tablero a la fuerza. Si cae con el puntero
+  // apretado sobre otra tarjeta, esa tarjeta se reconstruia bajo el puntero y el primer
+  // clic se perdia igual que con el foco.
+  const recibido = tarjeta({ case_id: 4, stage: 'recibido', proposal: null, exceptions: [],
+    title: 'Nota de voz', actions: ['atender', 'ignorar', 'reclasificar', 'cerrar', 'proyecto'] })
+  const w = conWorker({ ok: true, code: 'atendido' }, { demoraMs: 200 })
+  const { window, doc, storage } = await abrirConWorker([recibido, tarjeta({ case_id: 3 })], w)
+  botonTarjeta(doc, 4, 'atender').click()
+  const card = doc.querySelector('.card[data-case="3"]')
+  let durante = null
+  await clicReal(window, card, async () => {
+    await hastaPanel(() => !!storage.scopeResult, 3000)
+    // El panel sondea el veredicto cada segundo: pasado uno y medio ya lo leyo.
+    await new Promise((r) => setTimeout(r, 1500))
+    durante = { misma: doc.querySelector('.card[data-case="3"]') === card,
+      veredicto: !!storage.scopeResult }
+  })
+  ok('un veredicto que llega con el puntero apretado no reconstruye la tarjeta apretada',
+    durante && durante.veredicto && durante.misma, JSON.stringify(durante))
+  ok('y el primer clic en esa tarjeta abre su detalle',
+    !!doc.querySelector('#board-detail[data-case="3"]:not([hidden])'),
+    doc.getElementById('board-detail')?.outerHTML.slice(0, 120))
+  ok('al soltar se pinta lo que dijo el veredicto, no se pierde',
+    await hastaPanel(() => /atendera/.test(mensajeDe(doc, 4)?.textContent || ''), 2000),
+    mensajeDe(doc, 4)?.textContent)
+}
+
+console.log('\nactivity.html — tablero: lo que depende del reloj se repinta aunque nada mas cambie')
+/** Corre el reloj del panel `ms` hacia adelante (solo `Date.now`, que es lo que lee). */
+const adelantarReloj = (window, ms) => {
+  const real = window.Date.now.bind(window.Date)
+  window.Date.now = () => real() + ms
+}
+{
+  const { window, doc } = await abrirTablero({ board: tablero([tarjeta({ case_id: 3 })]) })
+  const antes = doc.querySelector('.card[data-case="3"]').textContent
+  // 10 minutos: "hace 5 min" pasa a "hace 15 min" y el tablero sigue sin estar viejo.
+  adelantarReloj(window, 10 * 60000)
+  window.dispatchEvent(new window.Event('focus'))
+  await espera()
+  const despues = doc.querySelector('.card[data-case="3"]').textContent
+  ok('el "hace N min" de la tarjeta avanza con el reloj', /hace 5 min/.test(antes) &&
+    /hace 15 min/.test(despues), JSON.stringify({ antes, despues }))
+}
+{
+  const { window, doc } = await abrirTablero({ board: tablero([tarjeta({ case_id: 3 })]) })
+  const sello = () => doc.getElementById('board-synced')
+  const antes = !!sello().querySelector('.vieja')
+  adelantarReloj(window, 40 * 60000)
+  window.dispatchEvent(new window.Event('focus'))
+  await espera()
+  ok('el sello del tablero se marca viejo cuando pasa la media hora',
+    !antes && !!sello().querySelector('.vieja'), sello().outerHTML)
+}
+{
+  const recibido = tarjeta({ case_id: 4, stage: 'recibido', proposal: null, exceptions: [],
+    title: 'Nota de voz', actions: ['atender', 'ignorar', 'reclasificar', 'cerrar', 'proyecto'] })
+  const w = conWorker({ ok: true, code: 'atendido' })
+  const { window, doc } = await abrirConWorker([recibido], w)
+  botonTarjeta(doc, 4, 'atender').click()
+  const dicho = await hastaPanel(() => !!mensajeDe(doc, 4))
+  // El aviso de una accion que salio bien dura 12 s.
+  adelantarReloj(window, 13000)
+  window.dispatchEvent(new window.Event('focus'))
+  await espera()
+  ok('el aviso de una accion se va al vencer aunque el tablero no cambie',
+    dicho && !mensajeDe(doc, 4), mensajeDe(doc, 4)?.outerHTML)
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
