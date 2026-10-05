@@ -581,12 +581,12 @@ group.
 
 Until the verification fixes, `auto` used `caso_del_dueno` (every message from an owner id),
 so an owner writing in a group was asked in the group, where customers read the project
-names, and the reply was signed by the rule in `responder` mode. That is closed. One point
-stays open, noted here for the owner and for Part B:
+names, and the reply was signed by the rule in `responder` mode. That is closed.
 
-- **`caso avance` (Beta progress updates) is not held while a question is with the
-  owner.** Only `responder` proposals are held (`project_question`). An update goes out
-  through the fixed floor and Jev, which do not know project names.
+`caso avance` (Beta progress updates) is held as well while a question is with the owner:
+`avance_frena` refuses it with `E_EXCEPTION (project_question)`. RED: the update "Estamos
+revisando lo de Alfa Demo." went out to the customer's group (check-casos 1310/1313).
+GREEN: check-casos 1313/1313.
 
 ## Delivery
 

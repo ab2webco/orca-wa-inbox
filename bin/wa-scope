@@ -3711,6 +3711,12 @@ def avance_frena(con, caso):
     if excepciones or riesgo:
         return ("E_EXCEPTION", f"case #{cid} waits for the owner ({', '.join(excepciones + riesgo)}): "
                                f"no updates go to the customer")
+    # La pregunta "A o B?" en manos del dueno: un avance nombraria lo que el todavia no
+    # decidio, igual que una respuesta (frenos_de_regla, proyectos-por-chat M5).
+    p = pregunta_abierta(ruta_del_caso(caso))
+    if p and p.get("a") == "owner":
+        return ("E_EXCEPTION", f"case #{cid} waits for the owner (project_question): no updates "
+                               f"go to the customer")
     return None
 
 

@@ -9795,6 +9795,17 @@ if NODE:
             ok("con la pregunta en manos del dueno, una respuesta no sale sola al cliente",
                a_chat(home, FACTURACION) == [] and ver["etapa"] == "decision" and not ver["aprobada"],
                f"{a_chat(home, FACTURACION)} {ver['etapa']}")
+            # Un avance (Beta) tampoco: nombraria lo que el dueno todavia no decidio.
+            js(home, "set", FACTURACION, "--first-reply", "model")
+            js(home, "caso", "mover", str(cli), "clasificado", "--motivo", "prueba",
+               "--actor", "dueno")
+            p = avance(home, cli, "Estamos revisando lo de Alfa Demo.")
+            ok("con la pregunta en manos del dueno, un avance no sale al cliente",
+               p.returncode != 0 and "project_question" in p.stderr
+               and a_chat(home, FACTURACION) == [], f"{p.returncode} {p.stderr[-300:]}")
+            js(home, "set", FACTURACION, "--first-reply", "ack")
+            js(home, "caso", "mover", str(cli), "decision", "--motivo", "prueba",
+               "--actor", "dueno")
             js(home, "caso", "propuesta", str(cli), "--tipo", "escalar", "--instrucciones",
                "Es sobre Alfa Demo o sobre Beta Demo?", "--actor", "agente")
             tick(home)
