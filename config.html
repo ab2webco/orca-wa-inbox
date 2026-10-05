@@ -788,6 +788,23 @@
           </div>
         </section>
 
+        <!-- La meta del primer contacto (informes-tablero, I4): junto a las respuestas
+             automaticas, que son el primer contacto que mide. Un ajuste global en minutos; la
+             pestana Informes del tablero cuenta contra ella. -->
+        <section class="card">
+          <h2 id="sla-legend" data-t="slaLegend"></h2>
+          <div class="fr-num">
+            <label for="sla-minutes" data-t="slaLabel"></label>
+            <input id="sla-minutes" type="number" min="1" max="1440" step="1"
+                   inputmode="numeric" aria-describedby="sla-help" />
+          </div>
+          <p class="hint" id="sla-help" data-t="slaHelp"></p>
+          <div class="actions">
+            <button class="primary" id="save-sla" data-t="saveCard"></button>
+            <span class="said" id="said-sla"></span>
+          </div>
+        </section>
+
         <!-- Jev (opcional): lo unico del plugin que manda texto de clientes fuera del
              equipo. Apagado de fabrica, y el aviso va ARRIBA de los controles y siempre a
              la vista. La llave no se muestra nunca: el panel solo sabe "guardada" o "sin
@@ -1045,6 +1062,13 @@
           frEveryLabel: 'Un avance cada (minutos)',
           frMaxLabel: 'Mensajes por caso, como maximo',
           frRange: 'Revise los numeros: respaldo de 1 a 60, avances de 1 a 120 y de 1 a 10 mensajes.',
+          // --- la meta del primer contacto (informes-tablero, I4) ---
+          slaLegend: 'Informes',
+          slaLabel: 'Meta del primer contacto (minutos)',
+          slaHelp: 'Un caso cumple la meta si su primera respuesta sale dentro de este plazo, ' +
+            'contado desde el primer mensaje del cliente. La pestana Informes del tablero mide ' +
+            'contra esta meta.',
+          slaRange: 'La meta es un numero entero de minutos, de 1 a 1440.',
           voiceLegend: 'Notas de voz',
           readingLegend: 'Lectura de WhatsApp',
           transcribeLabel: "Transcribir las notas de voz",
@@ -1472,6 +1496,12 @@
           frEveryLabel: 'One update every (minutes)',
           frMaxLabel: 'Messages per case, at most',
           frRange: 'Check the numbers: fallback 1 to 60, updates 1 to 120, and 1 to 10 messages.',
+          slaLegend: 'Reports',
+          slaLabel: 'First contact target (minutes)',
+          slaHelp: 'A case meets the target when its first response goes out within this time, ' +
+            "counted from the customer's first message. The board's Reports tab measures " +
+            'against this target.',
+          slaRange: 'The target is a whole number of minutes, from 1 to 1440.',
           voiceLegend: 'Voice notes',
           readingLegend: 'Reading WhatsApp',
           transcribeLabel: "Transcribe voice notes",
@@ -1921,6 +1951,12 @@
         frEveryLabel: 'Uma atualizacao a cada (minutos)',
         frMaxLabel: 'Mensagens por caso, no maximo',
         frRange: 'Revise os numeros: reserva de 1 a 60, atualizacoes de 1 a 120 e de 1 a 10 mensagens.',
+        slaLegend: 'Relatorios',
+        slaLabel: 'Meta do primeiro contato (minutos)',
+        slaHelp: 'Um caso cumpre a meta quando a primeira resposta sai dentro deste prazo, ' +
+          'contado a partir da primeira mensagem do cliente. A aba Relatorios do quadro mede ' +
+          'contra esta meta.',
+        slaRange: 'A meta e um numero inteiro de minutos, de 1 a 1440.',
         voiceLegend: 'Notas de voz',
         readingLegend: 'Leitura do WhatsApp',
         transcribeLabel: 'Transcrever as notas de voz',
@@ -2630,7 +2666,9 @@
         ackText: ['ack-text', ''],
         greetingMode: ['greeting-mode', 'on'],
         greetingText: ['greeting-text', ''],
-        botClaudeAccount: ['bot-account', 'auto']
+        botClaudeAccount: ['bot-account', 'auto'],
+        // La meta del primer contacto, en minutos (informes-tablero, I4).
+        slaMinutes: ['sla-minutes', '15']
       }
       Object.keys(CONTROLES).forEach(function (k) { ensuciar(CONTROLES[k][0]) })
 
@@ -2877,6 +2915,20 @@
           said('said-auto', mal.length ? t('saveFailed') : '✓ ' + t('savedOk'), !!mal.length)
           pintarChecklist()
         }))
+      })
+      // La meta: un entero de 1 a 1440 (el mismo rango que valida wa-scope). Fuera de rango
+      // no se guarda: un valor que el CLI descarta en silencio dejaria al panel mintiendo.
+      var SLA_MIN = 1, SLA_MAX = 1440
+      el('sla-minutes').value = CONTROLES.slaMinutes[1]
+      el('save-sla').addEventListener('click', function (event) {
+        var texto = el('sla-minutes').value.trim()
+        var x = Number(texto)
+        if (!/^\d+$/.test(texto) || x < SLA_MIN || x > SLA_MAX) {
+          said('said-sla', t('slaRange'), true)
+          return
+        }
+        el('sla-minutes').value = String(x)
+        guardarTarjeta(event.currentTarget, 'said-sla', ['slaMinutes'])
       })
       el('save-reading').addEventListener('click', function (event) {
         guardarTarjeta(event.currentTarget, 'said-reading', ['inboxDays', 'syncMinutes'])
@@ -4718,13 +4770,13 @@
         if (activaAuto(cual)) leerAuto()
         if (cual === 'agente') leerCuentasBot()
       }
-      // Las cuatro claves de las respuestas automaticas se leen al abrir SU pestana y no en
-      // cada vuelta: el host admite 30 mensajes por 10 s y la vuelta entera ya gasta casi
+      // Las claves de las respuestas automaticas (y la meta del primer contacto) se leen al
+      // abrir SU pestana y no en cada vuelta: el host admite 30 mensajes por 10 s y la vuelta entera ya gasta casi
       // todo el cupo que le queda al clic.
       function activaAuto (cual) { return cual === 'aprobacion' }
       function leerAuto () {
         var sello = guardadoSeq
-        ;['ackMode', 'ackText', 'greetingMode', 'greetingText', 'firstReply'].forEach(function (k) {
+        ;['ackMode', 'ackText', 'greetingMode', 'greetingText', 'firstReply', 'slaMinutes'].forEach(function (k) {
           read(k, true).then(function (v) { pintarClave(k, v, sello) })
         })
       }

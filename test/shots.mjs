@@ -24,6 +24,7 @@ const { chromium } = req('playwright')
 import { mkdir, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { informeDeEjemplo, informeVacio } from './informes-ejemplo.mjs'
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..')
 // Las capturas viven FUERA de la raiz del plugin, igual que las dependencias del
@@ -55,9 +56,12 @@ const SOLO_IDIOMA = process.env.WA_INBOX_IDIOMA ?? ''
 // manda codigos, y si el panel no los traduce se ve — pero solo si alguien mira el
 // panel en el otro idioma. En ingles bastan los dos extremos: la composicion no cambia
 // con el idioma, lo que cambia es el texto.
+// En portugues solo los estados que lo piden (`idiomas`): los informes, donde las fechas
+// de pt-BR ("seg., 28", "Semana de 28 de set.") son las mas largas y ya desbordaron.
 const IDIOMAS = [
   { tag: 'es', locale: 'es-419', anchos: ANCHOS },
-  { tag: 'en', locale: 'en-US', anchos: [1440, 320] }
+  { tag: 'en', locale: 'en-US', anchos: [1440, 320] },
+  { tag: 'pt', locale: 'pt-BR', anchos: ANCHOS, soloSiLoPide: true }
 ]
 
 // El host no deja que el panel vea su documento: le inyecta esta lista corta de
@@ -458,6 +462,28 @@ const tableroDe = (cards, extra) => Object.assign({ v: 1, updated_at: minutos(1)
     Object.assign({}, CUENTAS_VACIAS)),
   cards }, extra)
 const conTablero = (board) => Object.assign({}, DATOS, { board })
+// I2: muchas terminadas. Las columnas no pasan del alto de la ventana y se desplazan solas;
+// Respondido y Cerrado muestran 20 y "Mostrar N mas".
+const TITULOS_TERMINADOS = ['Consulta por el horario', 'Cotización aprobada',
+  'Cambio de contraseña del portal', 'Factura del mes pasado', 'No llegan los correos',
+  'Agregar un usuario nuevo', 'Duda con el reporte semanal']
+const terminados = (etapa, n, desde) => Array.from({ length: n }, (_, i) => caso(desde + i, etapa, {
+  title: TITULOS_TERMINADOS[i % TITULOS_TERMINADOS.length],
+  chat_name: i % 2 ? 'Operaciones internas' : 'Soporte — Cliente Norte',
+  updated_at: minutos(40 + i * 95), stage_at: minutos(40 + i * 95),
+  actions: etapa === 'cerrado' ? ['reabrir'] : ['cerrar', 'reabrir'] }))
+const TABLERO_MUCHOS = tableroDe(TABLERO_CASOS.filter((c) => c.stage !== 'respondido' &&
+  c.stage !== 'cerrado').concat(terminados('respondido', 26, 200), terminados('cerrado', 34, 100)), {
+  period_counts: { today: { respondido: 8, cerrado: 11 }, '7d': { respondido: 26, cerrado: 34 },
+    '30d': { respondido: 41, cerrado: 77 }, all: { respondido: 41, cerrado: 130 } } })
+// I5: la pestana Informes, con datos de ejemplo (test/informes-ejemplo.mjs), vacia y sin clave.
+const ABRIR_INFORMES = "document.getElementById('tab-reports').click()"
+const ELEGIR_PERIODO = (p) => `; document.querySelector('#period button[data-periodo="${p}"]').click()`
+// Todo terminado hace 3 dias, nada abierto, y "Hoy" guardado: hay casos, ninguno del periodo.
+const TABLERO_PERIODO_VACIO = tableroDe(terminados('cerrado', 3, 300).map((c) =>
+  Object.assign(c, { updated_at: minutos(3 * 1440), stage_at: minutos(3 * 1440) })), {
+  period_counts: { today: { respondido: 0, cerrado: 0 }, '7d': { respondido: 0, cerrado: 3 },
+    '30d': { respondido: 0, cerrado: 3 }, all: { respondido: 0, cerrado: 3 } } })
 // El panel ES el tablero (la bandeja se fue): no hay pestana que apretar. Queda como
 // primer paso de los guiones para que cada uno diga desde donde arranca.
 const ABRIR_TABLERO = 'void 0'
@@ -1383,6 +1409,68 @@ const PANELES = [
       document.querySelector('.card[data-case="42"]').click()`
   },
   {
+    // Corrido hasta las terminadas: Respondido y Cerrado con 20 tarjetas cada una.
+    nombre: 'tablero-muchas', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: conTablero(TABLERO_MUCHOS),
+    guion: ABRIR_TABLERO + `; document.getElementById('board-cols').scrollLeft = 1e6`
+  },
+  {
+    // Solo Cerrado, con su cuerpo desplazado hasta el final: el "Mostrar 14 mas".
+    nombre: 'tablero-muchas-cerrado', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: conTablero(TABLERO_MUCHOS),
+    guion: ABRIR_TABLERO + `; document.querySelector('#board-chips [data-etapa="cerrado"]').click();
+      setTimeout(() => document.querySelectorAll('.col-body, #board-list').forEach((n) => { n.scrollTop = 1e6 }), 50)`
+  },
+  {
+    // El tablero elegido a mano en lo angosto: las columnas acotadas tambien ahi.
+    nombre: 'tablero-muchas-columnas', archivo: 'activity.html', anchos: [390, 320],
+    enTodosLosAnchos: true, espera: 400, datos: conTablero(TABLERO_MUCHOS),
+    guion: `document.querySelector('#board-view button[data-vista="board"]').click()`
+  },
+  {
+    nombre: 'informes', archivo: 'activity.html', anchos: ANCHOS, enTodosLosAnchos: true,
+    espera: 500, guion: ABRIR_INFORMES, idiomas: ['pt'],
+    datos: Object.assign(conTablero(tableroDe(TABLERO_CASOS)), { reports: informeDeEjemplo() })
+  },
+  {
+    nombre: 'informes-hoy', archivo: 'activity.html', anchos: ANCHOS_ESTADO, espera: 500,
+    guion: ABRIR_INFORMES + ELEGIR_PERIODO('today'), idiomas: ['pt'],
+    datos: Object.assign(conTablero(tableroDe(TABLERO_CASOS)), { reports: informeDeEjemplo() })
+  },
+  {
+    // 30 cubetas por dia y "Todo" por semana: las barras mas angostas y las marcas del eje
+    // mas largas ("Semana de 28 de set." desbordaba a 768 y a 320).
+    nombre: 'informes-30d', archivo: 'activity.html', anchos: ANCHOS, enTodosLosAnchos: true,
+    espera: 500, guion: ABRIR_INFORMES + ELEGIR_PERIODO('30d'), idiomas: ['pt'],
+    datos: Object.assign(conTablero(tableroDe(TABLERO_CASOS)), { reports: informeDeEjemplo() })
+  },
+  {
+    nombre: 'informes-todo', archivo: 'activity.html', anchos: ANCHOS, enTodosLosAnchos: true,
+    espera: 500, guion: ABRIR_INFORMES + ELEGIR_PERIODO('all'), idiomas: ['pt'],
+    datos: Object.assign(conTablero(tableroDe(TABLERO_CASOS)), { reports: informeDeEjemplo() })
+  },
+  {
+    // Un periodo sin nada: el tablero lo dice y la barra queda.
+    nombre: 'tablero-periodo-vacio', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, guion: ABRIR_TABLERO,
+    datos: Object.assign(conTablero(TABLERO_PERIODO_VACIO), { boardPeriod: 'today' })
+  },
+  {
+    nombre: 'informes-vacio', archivo: 'activity.html', anchos: ANCHOS, enTodosLosAnchos: true,
+    espera: 500, guion: ABRIR_INFORMES,
+    datos: Object.assign(conTablero(tableroDe(TABLERO_CASOS)), { reports: informeVacio() })
+  },
+  {
+    nombre: 'informes-sin-clave', archivo: 'activity.html', anchos: ANCHOS_ESTADO, espera: 500,
+    guion: ABRIR_INFORMES, datos: conTablero(tableroDe(TABLERO_CASOS))
+  },
+  {
+    // I4: la meta del primer contacto, en Su aprobacion.
+    nombre: 'config-sla', archivo: 'config.html', anchos: ANCHOS, enTodosLosAnchos: true,
+    datos: DATOS, pestana: 'aprobacion', espera: 300,
+    guion: "document.getElementById('sla-minutes').scrollIntoView({ block: 'center' })"
+  },
+  {
     nombre: 'config-sidecar-reintentar', archivo: 'config.html', anchos: ANCHOS,
     datos: Object.assign({}, DATOS, { sidecar: {
       connection: null, qr: null, exited: true, motivo: 'sidecar-no-arranco',
@@ -1414,6 +1502,7 @@ async function main() {
       for (const panel of PANELES) {
         if (SOLO.length && !SOLO.some((p) => panel.nombre.startsWith(p))) continue
         if (!panel.anchos.includes(ancho)) continue
+        if (idioma.soloSiLoPide && !(panel.idiomas || []).includes(idioma.tag)) continue
         // En ingles, por defecto, solo los extremos; los estados marcados van a todos.
         if (!panel.enTodosLosAnchos && !idioma.anchos.includes(ancho)) continue
         const pagina = await contexto.newPage()
