@@ -191,6 +191,17 @@
         .combo-opt { flex-wrap: wrap; }
         .combo-sub { margin-left: 0; white-space: normal; flex: 1 1 100%; min-width: 0; }
       }
+      /* Los proyectos de una conversacion (proyectos-por-chat): una fila por proyecto, el
+         autocompletar a lo ancho y su Quitar al lado; agregar va debajo, como un enlace. */
+      .ws-fila { display: flex; gap: 8px; align-items: center; }
+      .ws-fila + .ws-fila, #workspace-more .ws-fila { margin-top: 6px; }
+      .ws-fila .combo { flex: 1; }
+      .ws-fila button.link { margin-left: 0; white-space: nowrap; }
+      button.link.ws-agregar { display: block; margin: 8px 0 0; font-size: 12px; }
+      #project-question-wrap .seg + .hint { margin-top: 6px; }
+      .ws-mas { font-size: 11px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+                 overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
       #chat-count { margin-top: 4px; }
       #said-chat-fetch:not(:empty) { display: block; margin-top: 6px; }
 
@@ -543,16 +554,38 @@
           </div>
           <input id="chat" type="hidden" />
 
+          <!-- Los proyectos de la conversacion, en orden (proyectos-por-chat, M6): una fila por
+               proyecto, cada una con el mismo autocompletar. La primera es la de siempre
+               (`#workspace`); las demas se agregan con el boton y se quitan con el suyo o
+               con Retroceso en una fila vacia. -->
           <label for="workspace-search" data-t="workspaceLabel"></label>
-          <div class="combo">
-            <input id="workspace-search" type="text" autocomplete="off" spellcheck="false"
-                   role="combobox" aria-autocomplete="list" aria-expanded="false"
-                   aria-controls="workspace-list" data-t-ph="workspaceSearchPh" />
-            <div class="combo-list" id="workspace-list" role="listbox" hidden
-                 data-t-label="workspaceLabel"></div>
+          <div class="ws-fila">
+            <div class="combo">
+              <input id="workspace-search" type="text" autocomplete="off" spellcheck="false"
+                     role="combobox" aria-autocomplete="list" aria-expanded="false"
+                     aria-controls="workspace-list" data-t-ph="workspaceSearchPh" />
+              <div class="combo-list" id="workspace-list" role="listbox" hidden
+                   data-t-label="workspaceLabel"></div>
+            </div>
+            <button type="button" class="link ws-quitar" id="workspace-rm" hidden
+                    data-t="remove"></button>
           </div>
           <input id="workspace" type="hidden" />
+          <div id="workspace-more"></div>
+          <button type="button" class="link ws-agregar" id="workspace-add" hidden
+                  data-t="workspaceAdd"></button>
           <p class="hint" id="workspace-hint"></p>
+          <!-- A quien pregunta el agente "A o B?" cuando duda (M5): solo con dos o mas. -->
+          <div id="project-question-wrap" hidden>
+            <span class="label" id="chat-project-question-label" data-t="pqLabel"></span>
+            <div class="seg" id="chat-project-question" role="group"
+                 aria-labelledby="chat-project-question-label">
+              <button type="button" data-value="auto" data-t="pqAuto"></button>
+              <button type="button" data-value="writer" data-t="pqWriter"></button>
+              <button type="button" data-value="owner" data-t="pqOwner"></button>
+            </div>
+            <p class="hint" data-t="pqHelp"></p>
+          </div>
 
           <span class="label" id="mode-label" data-t="permLabel"></span>
           <div class="seg" id="mode" role="group" aria-labelledby="mode-label">
@@ -802,6 +835,23 @@
           <div class="actions">
             <button class="primary" id="save-sla" data-t="saveCard"></button>
             <span class="said" id="said-sla"></span>
+          </div>
+        </section>
+
+        <!-- Cuanto espera la pregunta "A o B?" a quien escribio antes de pasar al dueno
+             (proyectos-por-chat, M5): un ajuste global en horas, en la clave plana
+             `projectQuestionHours`. -->
+        <section class="card">
+          <h2 data-t="pqHoursLegend"></h2>
+          <div class="fr-num">
+            <label for="pq-hours" data-t="pqHoursLabel"></label>
+            <input id="pq-hours" type="number" min="1" step="1" inputmode="numeric"
+                   aria-describedby="pq-hours-help" />
+          </div>
+          <p class="hint" id="pq-hours-help" data-t="pqHoursHelp"></p>
+          <div class="actions">
+            <button class="primary" id="save-pq-hours" data-t="saveCard"></button>
+            <span class="said" id="said-pq-hours"></span>
           </div>
         </section>
 
@@ -1092,7 +1142,8 @@
           chatCount: "{n} de {total}", chatNoMatch: "Ninguna coincide con eso",
           kindGroup: 'Grupo', kindDirect: 'Directo',
           scopeLegend: 'Conversaciones autorizadas',
-          scopeHelp: 'Su agente solo ve las que estan aca. Cada una tiene su proyecto y su modo.',
+          scopeHelp: 'Su agente solo ve las que estan aca. Cada una tiene su modo y uno o varios ' +
+            'proyectos.',
           formLegend: 'Agregar una conversacion',
           formEditing: 'Cambiar una conversacion',
           chatGroupOn: "Ya autorizadas", chatGroupOff: "Sin autorizar",
@@ -1179,13 +1230,29 @@
             'dar senales hace {s} s.',
           chatLabel: 'Conversacion',
           permLabel: 'Modo',
-          workspaceLabel: 'Proyecto',
+          workspaceLabel: 'Proyectos',
           workspaceNone: 'Sin proyecto',
           workspaceMissing: '{id} (ya no esta en la lista)',
           workspaceSearchPh: 'Escriba para buscar un proyecto',
           workspaceNoMatch: 'Ningun proyecto coincide con eso',
-          workspaceHint: 'Es donde se hace el trabajo de esta conversacion. Sin proyecto, el ' +
-            'agente solo responde y lo que pida trabajo se lo deja a usted.',
+          workspaceHint: 'Es donde se hace el trabajo de esta conversacion. Con varios, una regla ' +
+            'por texto decide; si ninguna aplica, el agente elige por el contenido y anota por ' +
+            'que, y si duda, pregunta. Sin proyecto, el agente solo responde y lo que pida ' +
+            'trabajo se lo deja a usted.',
+          workspaceAdd: '+ Agregar otro proyecto',
+          workspaceRow: 'Proyecto {n}',
+          workspaceRemove: 'Quitar {name}',
+          workspaceMore: 'y tambien {list}',
+          pqLabel: 'Si el agente duda entre proyectos, pregunta a',
+          pqAuto: 'Automatico', pqWriter: 'Quien escribio', pqOwner: 'Usted',
+          pqHelp: 'Automatico: a usted cuando escribe un cliente, porque preguntarle le diria ' +
+            'los nombres de los proyectos; a quien escribio cuando es usted. La respuesta ' +
+            'vuelve al caso y el agente elige.',
+          pqHoursLegend: 'La pregunta de proyecto',
+          pqHoursLabel: 'Horas que espera la respuesta de quien escribio',
+          pqHoursHelp: 'Si quien escribio no contesta "A o B?" en este plazo, la pregunta pasa ' +
+            'a usted.',
+          pqHoursRange: 'Son horas enteras, desde 1.',
           workspaceHintNoProjects: 'Todavia no hay proyectos: agregue uno en la pestana Proyectos.',
           // --- Proyectos: el catalogo que reparte el agente que atiende los casos ---
           projectsLegend: 'Proyectos',
@@ -1217,7 +1284,7 @@
           projNoChange: 'Ese proyecto ya no esta entre los que Orca propone. Busque de nuevo.',
           projGone: 'Ese proyecto ya no esta en su lista.',
           projFull: 'La lista llego a su tope de proyectos. Quite alguno antes de agregar otro.',
-          colProject: 'Proyecto',
+          colProject: 'Proyectos',
           routesNeedProject: 'Agregue un proyecto en la pestana Proyectos para poder crear reglas.',
           save: 'Guardar conversacion', saveEdit: 'Guardar cambios', cancelEdit: 'Cancelar edicion',
           empty: 'Ninguna conversacion autorizada. Lo que no esta aca, su agente no lo ve.',
@@ -1525,7 +1592,8 @@
           chatCount: "{n} of {total}", chatNoMatch: "Nothing matches that",
           kindGroup: 'Group', kindDirect: 'Direct',
           scopeLegend: 'Allowed conversations',
-          scopeHelp: 'Your agent only sees the ones listed here. Each has its project and its mode.',
+          scopeHelp: 'Your agent only sees the ones listed here. Each has its mode and one or ' +
+            'more projects.',
           formLegend: 'Add a conversation',
           formEditing: 'Change a conversation',
           chatGroupOn: "Already authorised", chatGroupOff: "Not authorised",
@@ -1609,13 +1677,29 @@
             'Orca. It stopped signalling {s} s ago.',
           chatLabel: 'Conversation',
           permLabel: 'Mode',
-          workspaceLabel: 'Project',
+          workspaceLabel: 'Projects',
           workspaceNone: 'No project',
           workspaceMissing: '{id} (no longer in the list)',
           workspaceSearchPh: 'Type to find a project',
           workspaceNoMatch: 'No project matches that',
-          workspaceHint: 'This is where the work of this conversation happens. With no ' +
-            'project, the agent only replies and leaves anything that needs work to you.',
+          workspaceHint: 'This is where the work of this conversation happens. With several, a ' +
+            'text rule decides; if none applies, the agent chooses by content and notes why, ' +
+            'and if in doubt, it asks. With no project, the agent only replies and leaves ' +
+            'anything that needs work to you.',
+          workspaceAdd: '+ Add another project',
+          workspaceRow: 'Project {n}',
+          workspaceRemove: 'Remove {name}',
+          workspaceMore: 'and also {list}',
+          pqLabel: 'If the agent is unsure between projects, it asks',
+          pqAuto: 'Automatic', pqWriter: 'Whoever wrote', pqOwner: 'You',
+          pqHelp: 'Automatic: you, when a customer writes, because asking them would reveal the ' +
+            'project names; whoever wrote, when it is you. The answer goes back to the case ' +
+            'and the agent chooses.',
+          pqHoursLegend: 'The project question',
+          pqHoursLabel: "Hours to wait for the writer's answer",
+          pqHoursHelp: 'If whoever wrote does not answer "A or B?" within this time, the ' +
+            'question goes to you.',
+          pqHoursRange: 'Whole hours, from 1.',
           workspaceHintNoProjects: 'There are no projects yet: add one in the Projects tab.',
           // --- Projects: the catalog the case agent hands work out from ---
           projectsLegend: 'Projects',
@@ -1646,7 +1730,7 @@
           projNoChange: 'That project is no longer among the ones Orca proposes. Search again.',
           projGone: 'That project is no longer in your list.',
           projFull: 'The list reached its project limit. Remove one before adding another.',
-          colProject: 'Project',
+          colProject: 'Projects',
           routesNeedProject: 'Add a project in the Projects tab to be able to create rules.',
           save: 'Save conversation', saveEdit: 'Save changes', cancelEdit: 'Cancel editing',
           empty: 'No conversation allowed yet. What is not here, your agent cannot see.',
@@ -2047,18 +2131,35 @@
         routeRmBadPattern: 'Essa regra nao tem um texto valido, entao nao foi removida.',
         kindGroup: 'Grupo', kindDirect: 'Direto',
         scopeLegend: 'Conversas autorizadas',
-        scopeHelp: 'O seu agente so ve as que estao aqui. Cada uma tem o seu projeto e o seu modo.',
+        scopeHelp: 'O seu agente so ve as que estao aqui. Cada uma tem o seu modo e um ou mais ' +
+          'projetos.',
         formLegend: 'Adicionar uma conversa',
         formEditing: 'Mudar uma conversa',
         chatLabel: 'Conversa',
         permLabel: 'Modo',
-        workspaceLabel: 'Projeto',
+        workspaceLabel: 'Projetos',
         workspaceNone: 'Sem projeto',
         workspaceMissing: '{id} (nao esta mais na lista)',
         workspaceSearchPh: 'Digite para buscar um projeto',
         workspaceNoMatch: 'Nenhum projeto corresponde a isso',
-        workspaceHint: 'E onde se faz o trabalho desta conversa. Sem projeto, o agente so ' +
-          'responde e deixa para voce o que pedir trabalho.',
+        workspaceHint: 'E onde se faz o trabalho desta conversa. Com varios, uma regra por texto ' +
+          'decide; se nenhuma se aplica, o agente escolhe pelo conteudo e anota por que, e se ' +
+          'tiver duvida, pergunta. Sem projeto, o agente so responde e deixa para voce o que ' +
+          'pedir trabalho.',
+        workspaceAdd: '+ Adicionar outro projeto',
+        workspaceRow: 'Projeto {n}',
+        workspaceRemove: 'Remover {name}',
+        workspaceMore: 'e tambem {list}',
+        pqLabel: 'Se o agente tiver duvida entre projetos, pergunta a',
+        pqAuto: 'Automatico', pqWriter: 'Quem escreveu', pqOwner: 'Voce',
+        pqHelp: 'Automatico: a voce quando escreve um cliente, porque perguntar a ele revelaria ' +
+          'os nomes dos projetos; a quem escreveu quando e voce. A resposta volta ao caso e o ' +
+          'agente escolhe.',
+        pqHoursLegend: 'A pergunta de projeto',
+        pqHoursLabel: 'Horas que espera a resposta de quem escreveu',
+        pqHoursHelp: 'Se quem escreveu nao responder "A ou B?" neste prazo, a pergunta passa ' +
+          'para voce.',
+        pqHoursRange: 'Sao horas inteiras, a partir de 1.',
         workspaceHintNoProjects: 'Ainda nao ha projetos: adicione um na aba Projetos.',
         // --- Projetos: o catalogo que o agente dos casos distribui ---
         projectsLegend: 'Projetos',
@@ -2090,7 +2191,7 @@
         projNoChange: 'Esse projeto nao esta mais entre os que o Orca propoe. Busque de novo.',
         projGone: 'Esse projeto nao esta mais na sua lista.',
         projFull: 'A lista chegou ao limite de projetos. Remova algum antes de adicionar outro.',
-        colProject: 'Projeto',
+        colProject: 'Projetos',
         routesNeedProject: 'Adicione um projeto na aba Projetos para poder criar regras.',
         chatToneLabel: 'Como escreve aqui (opcional)',
         chatTonePh: 'vazio = usa o tom global',
@@ -2668,7 +2769,9 @@
         greetingText: ['greeting-text', ''],
         botClaudeAccount: ['bot-account', 'auto'],
         // La meta del primer contacto, en minutos (informes-tablero, I4).
-        slaMinutes: ['sla-minutes', '15']
+        slaMinutes: ['sla-minutes', '15'],
+        // Cuantas horas espera la pregunta "A o B?" a quien escribio (proyectos-por-chat, M5).
+        projectQuestionHours: ['pq-hours', '24']
       }
       Object.keys(CONTROLES).forEach(function (k) { ensuciar(CONTROLES[k][0]) })
 
@@ -2930,6 +3033,18 @@
         el('sla-minutes').value = String(x)
         guardarTarjeta(event.currentTarget, 'said-sla', ['slaMinutes'])
       })
+      // Las horas de la pregunta de proyecto: un entero desde 1, como lo valida wa-scope
+      // (`project_question_hours` es positivo). Otra cosa no se guarda y se dice.
+      el('pq-hours').value = CONTROLES.projectQuestionHours[1]
+      el('save-pq-hours').addEventListener('click', function (event) {
+        var texto = el('pq-hours').value.trim()
+        if (!/^\d+$/.test(texto) || Number(texto) < 1) {
+          said('said-pq-hours', t('pqHoursRange'), true)
+          return
+        }
+        el('pq-hours').value = String(Number(texto))
+        guardarTarjeta(event.currentTarget, 'said-pq-hours', ['projectQuestionHours'])
+      })
       el('save-reading').addEventListener('click', function (event) {
         guardarTarjeta(event.currentTarget, 'said-reading', ['inboxDays', 'syncMinutes'])
       })
@@ -3065,6 +3180,7 @@
 
         return {
           refrescar: function () { if (c.abierto) pintar() },
+          abrir: abrir,
           cerrar: cerrar,
           escribiendo: function () { return c.escrito || document.activeElement === input },
           olvidar: function () { c.escrito = false }
@@ -3472,8 +3588,8 @@
         return { items: items, vacio: t('workspaceNoMatch') }
       }
 
-      /** El autocompletar de proyecto de la conversacion y el de la regla: el mismo
-       *  control, y el valor elegido vive en un campo oculto (`#workspace`, `#r-workspace`). */
+      /** El autocompletar de proyecto de la regla: el valor elegido vive en un campo oculto
+       *  (`#r-workspace`). */
       function comboDeProyecto(prefijo, conNinguno) {
         // Escribir sin elegir no cambia el proyecto: al salir del campo vuelve a decir el
         // que de verdad quedo elegido, que es el que se guarda.
@@ -3495,22 +3611,213 @@
         })
         return combo
       }
-      var comboProyecto = comboDeProyecto('workspace', true)
+
+      // ---------- los proyectos de una conversacion (proyectos-por-chat, M6) ----------
+      // Una conversacion guarda una LISTA ordenada (`workspaces`) y, al lado, `workspace`
+      // derivado: el unico id con uno, null con cero o con dos o mas. Se guardan las dos en
+      // cada guardado, porque el CLI confia en la lista solo si el `workspace` de al lado
+      // es su derivado: si no, un panel o un CLI de antes cambio `workspace` y dejo la
+      // lista vieja, y gana `workspace` (`lista_de_proyectos`, bin/wa-scope).
+      function sinRepetir(xs) {
+        var vistos = {}
+        return xs.filter(function (x) {
+          if (typeof x !== 'string' || !x || vistos[x]) return false
+          vistos[x] = true
+          return true
+        })
+      }
+      function derivadoDe(lista) { return lista.length === 1 ? lista[0] : null }
+      /** La lista de proyectos de una entrada del alcance, con la misma regla que el CLI. */
+      function listaDeEntrada(entry) {
+        if (!entry || typeof entry !== 'object') return []
+        var uno = typeof entry.workspace === 'string' && entry.workspace ? entry.workspace : null
+        if (Array.isArray(entry.workspaces)) {
+          var lista = sinRepetir(entry.workspaces)
+          if (!('workspace' in entry) || derivadoDe(lista) === uno) return lista
+        }
+        return uno ? [uno] : []
+      }
+
+      // Las filas del formulario, en orden: '' es una fila sin elegir. La primera vive en
+      // los controles de siempre (`#workspace-search`, `#workspace`); las demas se arman en
+      // `#workspace-more` con el mismo autocompletar.
+      var filasProyecto = ['']
+      var combosExtra = []
+      function nombreDeFila(i) {
+        var v = filasProyecto[i]
+        if (v) return nombreDeProyectoPlano(v)
+        return i === 0 && filasProyecto.length === 1 ? t('workspaceNone') : ''
+      }
+      /** Lo que ofrece la fila `i`: el catalogo menos lo que eligieron las otras filas, su
+       *  propio proyecto aunque el dueno lo haya quitado (marcado: puede volver), y "Sin
+       *  proyecto" solo en la primera cuando es la unica — con dos o mas se quita con el
+       *  boton de la fila. */
+      function opcionesDeFila(terminos, i) {
+        var actual = filasProyecto[i]
+        var otros = filasProyecto.filter(function (v, j) { return j !== i && v })
+        var items = []
+        if (i === 0 && filasProyecto.length === 1) items.push({ value: '', nombre: t('workspaceNone') })
+        proyectos.forEach(function (p) {
+          if (otros.indexOf(p.id) === -1) items.push({ value: p.id, nombre: p.name || p.id, sub: p.path || '' })
+        })
+        if (actual && !proyectos.some(function (p) { return p.id === actual })) {
+          items.push({ value: actual, nombre: fmt('workspaceMissing', { id: actual }) })
+        }
+        if (terminos.length) {
+          items = items.filter(function (it) {
+            var texto = aplanar(it.nombre) + ' ' + aplanar(it.value)
+            return terminos.every(function (x) { return texto.indexOf(x) !== -1 })
+          })
+        }
+        return { items: items, vacio: t('workspaceNoMatch') }
+      }
+      /** La fila dice lo elegido; un nombre largo que el campo corta se lee entero en el
+       *  title. */
+      function mostrarFila(i) {
+        var campo = campoDeFila(i)
+        if (!campo) return
+        campo.value = nombreDeFila(i)
+        campo.title = filasProyecto[i] ? campo.value : ''
+      }
+      function campoDeFila(i) { return el(i === 0 ? 'workspace-search' : 'workspace-search-' + (i + 1)) }
+      function elegirEnFila(i, valor) {
+        if (i === 0 && !valor) filasProyecto = ['']
+        else filasProyecto[i] = valor
+        el('workspace').value = filasProyecto[0]
+        var oculto = i > 0 ? el('workspace-' + (i + 1)) : null
+        if (oculto) oculto.value = valor
+        mostrarFila(i)
+        pintarControlesDeFilas()
+      }
+      /** Quita la fila `i`; la de abajo sube. El foco va a la fila que queda en su lugar o a
+       *  la de arriba (`arriba`), nunca se pierde en la pagina. */
+      function quitarFila(i, arriba) {
+        filasProyecto.splice(i, 1)
+        if (!filasProyecto.length) filasProyecto = ['']
+        el('workspace').value = filasProyecto[0]
+        comboProyecto.olvidar()
+        mostrarFila(0)
+        pintarFilasExtra()
+        var destino = campoDeFila(Math.max(0, Math.min(arriba ? i - 1 : i, filasProyecto.length - 1)))
+        if (destino) destino.focus()
+      }
+      function agregarFila() {
+        filasProyecto.push('')
+        pintarFilasExtra()
+        var i = filasProyecto.length - 1
+        var campo = campoDeFila(i)
+        if (campo) campo.focus()
+        if (combosExtra[i - 1]) combosExtra[i - 1].abrir()
+      }
+      /** Lo que depende de cuantas filas hay: quitar la primera, agregar otra y a quien se
+       *  pregunta. No rehace las filas: el foco y lo escrito se quedan donde estan. */
+      function pintarControlesDeFilas() {
+        var varias = filasProyecto.length > 1
+        var rm = el('workspace-rm')
+        rm.hidden = !varias
+        rm.setAttribute('aria-label', fmt('workspaceRemove', { name: nombreDeFila(0) }))
+        Array.prototype.forEach.call(el('workspace-more').querySelectorAll('[data-wsrm]'), function (b) {
+          b.setAttribute('aria-label', fmt('workspaceRemove',
+            { name: nombreDeFila(Number(b.getAttribute('data-wsrm')) - 1) || t('workspaceNone') }))
+        })
+        var ultima = filasProyecto[filasProyecto.length - 1]
+        var quedan = proyectos.some(function (p) { return filasProyecto.indexOf(p.id) === -1 })
+        el('workspace-add').hidden = !ultima || !quedan
+        el('project-question-wrap').hidden = filasProyecto.filter(Boolean).length < 2
+      }
+      /** Rehace las filas 2..N con sus autocompletar. */
+      function pintarFilasExtra() {
+        var caja = el('workspace-more')
+        caja.textContent = ''
+        combosExtra = []
+        filasProyecto.slice(1).forEach(function (valor, k) {
+          var i = k + 1, n = i + 1
+          var fila = document.createElement('div')
+          fila.className = 'ws-fila'
+          fila.innerHTML = '<div class="combo"><input id="workspace-search-' + n + '" type="text" ' +
+            'autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" ' +
+            'aria-expanded="false" aria-controls="workspace-list-' + n + '" /><div ' +
+            'class="combo-list" id="workspace-list-' + n + '" role="listbox" hidden></div></div>' +
+            '<input type="hidden" id="workspace-' + n + '" /><button type="button" ' +
+            'class="link ws-quitar" data-wsrm="' + n + '"></button>'
+          caja.appendChild(fila)
+          var campo = el('workspace-search-' + n)
+          var rotulo = fmt('workspaceRow', { n: n })
+          campo.setAttribute('aria-label', rotulo)
+          campo.placeholder = t('workspaceSearchPh')
+          el('workspace-list-' + n).setAttribute('aria-label', rotulo)
+          el('workspace-' + n).value = valor
+          mostrarFila(i)
+          var boton = fila.querySelector('[data-wsrm]')
+          boton.textContent = t('remove')
+          boton.addEventListener('click', function () { quitarFila(i, false) })
+          var combo = crearCombo({
+            input: 'workspace-search-' + n, lista: 'workspace-list-' + n,
+            opciones: function (terminos) { return opcionesDeFila(terminos, i) },
+            elegir: function (item) { elegirEnFila(i, item.value) }
+          })
+          campo.addEventListener('blur', function () {
+            combo.olvidar()
+            mostrarFila(i)
+          })
+          // Retroceso en una fila que no eligio nada la quita: lo que se agrego sin querer
+          // se saca con el teclado, sin buscar el boton.
+          campo.addEventListener('keydown', function (e) {
+            if (e.key === 'Backspace' && !campo.value && !filasProyecto[i]) {
+              e.preventDefault()
+              quitarFila(i, true)
+            }
+          })
+          combosExtra.push(combo)
+        })
+        pintarControlesDeFilas()
+      }
+      var comboProyecto = crearCombo({
+        input: 'workspace-search', lista: 'workspace-list',
+        opciones: function (terminos) { return opcionesDeFila(terminos, 0) },
+        elegir: function (item) { elegirEnFila(0, item.value) }
+      })
+      // Escribir sin elegir no cambia el proyecto: al salir del campo vuelve a decir el que
+      // de verdad quedo elegido, que es el que se guarda.
+      el('workspace-search').addEventListener('blur', function () {
+        comboProyecto.olvidar()
+        mostrarFila(0)
+      })
+      el('workspace-rm').addEventListener('click', function () { quitarFila(0, false) })
+      el('workspace-add').addEventListener('click', agregarFila)
       var comboRegla = comboDeProyecto('r-workspace', false)
 
-      /** Los dos autocompletar que ofrecen proyectos: el de cada conversacion y el de cada
-       *  regla. `valor` es lo que debe quedar elegido en el de la conversacion; sin el se
-       *  conserva lo que habia. Lo que el dueno esta escribiendo no se pisa. */
-      function pintarSelectoresDeProyecto(valor) {
-        var forzar = valor !== undefined
+      /** La celda de la tabla: el primero y cuantos mas ("A +N"), con la lista entera en el
+       *  title y para el lector de pantalla. Escapada. */
+      function celdaDeProyectos(lista) {
+        if (lista.length < 2) return nombreDeProyecto(lista[0])
+        var nombres = lista.map(nombreDeProyectoPlano)
+        return '<span class="ws-cel" title="' + escAttr(nombres.join(', ')) + '">' +
+          esc(nombres[0]) + ' <span class="ws-mas" aria-hidden="true">+' + (lista.length - 1) +
+          '</span><span class="sr-only"> ' + esc(fmt('workspaceMore',
+            { list: nombres.slice(1).join(', ') })) + '</span></span>'
+      }
+
+      /** Los autocompletar que ofrecen proyectos: los de la conversacion y el de cada regla.
+       *  `lista` es lo que debe quedar elegido en la conversacion; sin ella se conserva lo
+       *  que habia. Lo que el dueno esta escribiendo no se pisa. */
+      function pintarSelectoresDeProyecto(lista) {
+        var forzar = lista !== undefined
         if (forzar) {
-          el('workspace').value = valor || ''
+          filasProyecto = sinRepetir(lista || [])
+          if (!filasProyecto.length) filasProyecto = ['']
+          el('workspace').value = filasProyecto[0]
           comboProyecto.olvidar()
           comboProyecto.cerrar()
+          pintarFilasExtra()
+        } else {
+          combosExtra.forEach(function (c, k) {
+            if (!c.escribiendo()) mostrarFila(k + 1)
+            c.refrescar()
+          })
+          pintarControlesDeFilas()
         }
-        if (forzar || !comboProyecto.escribiendo()) {
-          el('workspace-search').value = nombreDeProyectoPlano(el('workspace').value)
-        }
+        if (forzar || !comboProyecto.escribiendo()) mostrarFila(0)
         comboProyecto.refrescar()
         el('workspace-hint').textContent = t(proyectos.length ? 'workspaceHint'
           : 'workspaceHintNoProjects')
@@ -3680,7 +3987,7 @@
           keys.map(function (key) {
             var e = entries[key]
             return '<tr><td>' + esc(e.chatName || key) + '</td><td>' +
-              nombreDeProyecto(e.workspace) + '</td><td>' +
+              celdaDeProyectos(listaDeEntrada(e)) + '</td><td>' +
               '<span class="pill ' + esc(e.mode || 'off') + '">' +
               esc(porCodigo(MODE_KEY, e.mode || 'off', e.mode)) +
               '</span></td><td class="acts">' +
@@ -3708,6 +4015,11 @@
         el('mode-desc').textContent = MODE_DESC[m] ? t(MODE_DESC[m]) : ''
       }
       el('mode').addEventListener('change', pintarModo)
+
+      // A quien pregunta el agente "A o B?" (proyectos-por-chat, M5): lo que no sea uno de
+      // los tres es `auto`, igual que en el CLI (`pregunta_del_panel`).
+      var PREGUNTAS = ['auto', 'writer', 'owner']
+      function preguntaDe(v) { return PREGUNTAS.indexOf(v) !== -1 ? v : 'auto' }
 
       // Los niveles de aprobacion de una conversacion (T22.3), con los mismos defectos que
       // bin/wa_reglas.py (NIVELES_DEFECTO): lo que no dice la entrada queda por defecto.
@@ -3738,9 +4050,11 @@
         // Mientras se edita, la conversacion no cambia: cambiarla seria otra autorizacion.
         el('chat-search').readOnly = true
         comboChats.cerrar()
-        // El proyecto de la conversacion, aunque ya no este en la lista: se ofrece como
-        // opcion propia para que guardar sin tocarlo no lo borre, que puede volver.
-        pintarSelectoresDeProyecto(entry.workspace || '')
+        // Los proyectos de la conversacion, aunque alguno ya no este en la lista: se ofrece
+        // como opcion propia de su fila para que guardar sin tocarlo no lo borre, que puede
+        // volver.
+        pintarSelectoresDeProyecto(listaDeEntrada(entry))
+        ponerSeg('chat-project-question', preguntaDe(entry.projectQuestion), 'auto')
         el('chat-tone').value = entry.tone || ''
         el('chat-instructions').value = entry.instructions || ''
         ponerSeg('chat-ack', entry.ack, 'default')
@@ -3781,7 +4095,8 @@
         // Una conversacion nueva arranca sin proyecto: la mayoria de los 1 a 1 solo piden
         // que el agente lea y conteste, y elegir uno por inercia mandaria su trabajo a un
         // repo que nada tiene que ver.
-        pintarSelectoresDeProyecto('')
+        pintarSelectoresDeProyecto([])
+        ponerSeg('chat-project-question', 'auto', 'auto')
         pintarIdentidad()
         pintarCuenta()
         el('scope-form-title').textContent = t('formLegend')
@@ -3844,7 +4159,9 @@
         // el panel decia guardado y el agente seguia con el valor viejo.
         var jid = editandoJid || chatElegido
         var chat = el('chat').value.trim() || jid
-        var workspace = el('workspace').value || null
+        // La lista en el orden de las filas, y `workspace` su derivado (proyectos-por-chat).
+        var workspaces = sinRepetir(filasProyecto)
+        var workspace = derivadoDe(workspaces)
         var mode = valorSeg('mode') || 'off'
         if (!jid) { said('said-scope', t('needChat'), true); return }
         busy(event.currentTarget, read('scope').then(function (next) {
@@ -3854,7 +4171,8 @@
           // configuro. Una conversacion nueva no abre tarjetas.
           var previa = next[jid] && typeof next[jid] === 'object' ? next[jid] : null
           next[jid] = Object.assign({ provider: 'ninguno', target: null }, previa, {
-            chatName: chat, workspace: workspace,
+            chatName: chat, workspaces: workspaces, workspace: workspace,
+            projectQuestion: preguntaDe(valorSeg('chat-project-question')),
             mode: mode, tone: el('chat-tone').value.trim() || null,
             instructions: el('chat-instructions').value.trim() || null,
             // `default` es null: vale lo de la tarjeta de respuestas automaticas.
@@ -4767,6 +5085,7 @@
         })
         // Una lista abierta en la pestana que se va quedaria flotando sobre la otra.
         comboChats.cerrar(); comboProyecto.cerrar(); comboRegla.cerrar()
+        combosExtra.forEach(function (c) { c.cerrar() })
         if (activaAuto(cual)) leerAuto()
         if (cual === 'agente') leerCuentasBot()
       }
@@ -4776,7 +5095,8 @@
       function activaAuto (cual) { return cual === 'aprobacion' }
       function leerAuto () {
         var sello = guardadoSeq
-        ;['ackMode', 'ackText', 'greetingMode', 'greetingText', 'firstReply', 'slaMinutes'].forEach(function (k) {
+        ;['ackMode', 'ackText', 'greetingMode', 'greetingText', 'firstReply', 'slaMinutes',
+          'projectQuestionHours'].forEach(function (k) {
           read(k, true).then(function (v) { pintarClave(k, v, sello) })
         })
       }

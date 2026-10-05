@@ -456,6 +456,23 @@ const TABLERO_DESPACHO = [
     blocked_reason: 'bloqueado por el agente del proyecto: hace falta borrar datos en producción',
     dispatch: despacho('bloqueado', 'bloqueado', 8) })
 ]
+// proyectos-por-chat (M6): el proyecto que eligio el agente con su porque, y una pregunta
+// "A o B?" abierta. `project_routes` tiene la forma de `ruta_de_tablero` (bin/wa-scope).
+const CANDIDATOS_NORTE = [{ id: 'beta-demo', name: 'Beta Demo', note: '' },
+  { id: 'alfa-demo', name: 'Alfa Demo', note: 'Tienda en linea: cobros, envios y facturas' }]
+const RUTAS_PROYECTO = {
+  5: { why: 'El reporte que falla es el del portal de clientes, que vive en Beta Demo.',
+    by: 'agent', candidates: CANDIDATOS_NORTE, missing: [], question: null },
+  12: { why: null, by: null, candidates: CANDIDATOS_NORTE, missing: [],
+    question: { candidates: [{ id: 'alfa-demo', name: 'Alfa Demo' }, { id: 'beta-demo', name: 'Beta Demo' }],
+      to: 'writer', text: '¿Es sobre la tienda en línea o sobre el portal de clientes?',
+      at: minutos(18), state: 'open', escalated: false } }
+}
+const TABLERO_PROYECTOS = TABLERO_CASOS.map((c) => c.case_id === 5
+  ? Object.assign({}, c, { project: { id: 'beta-demo', name: 'Beta Demo' } }) : c).concat([
+  caso(12, 'respondido', { title: 'Cambiar el formulario de pedidos', updated_at: minutos(18),
+    summary: 'Pide agregar un campo al formulario.', project: null,
+    actions: ['cerrar', 'reabrir'] })])
 const tableroDe = (cards, extra) => Object.assign({ v: 1, updated_at: minutos(1),
   truncated: false,
   counts: cards.reduce((acc, c) => Object.assign(acc, { [c.stage]: acc[c.stage] + 1 }),
@@ -519,6 +536,7 @@ const BUSQUEDA_FALLIDA = Object.assign({}, SIN_PROYECTOS, {
 // Editar la primera conversacion: el formulario por chat con su proyecto elegido.
 const EDITAR_CONVERSACION = "document.querySelector('[data-edit]').click()"
 
+
 // T17: los ajustes van en seis pestanas. Cada captura de config.html dice en cual se
 // fotografia (`pestana`); sin decirlo es Estado, que es donde viven la linea y los avisos.
 // Escribir en un autocompletar como lo hace el dueno: foco, texto y el evento `input`.
@@ -543,6 +561,26 @@ const CON_TELEFONOS = Object.assign({}, CON_LINEA, {
     { jid: '111122226666@lid', name: 'Socio Norte', kind: 'directo',
       last: '2026-09-12 08:15', unread: 0, phone: '+14155550100' }
   ])
+})
+
+// proyectos-por-chat (M6): conversaciones con varios proyectos. La primera con dos (uno de
+// nombre largo) y la segunda con tres: la tabla dice "A +N" y el formulario, una fila por
+// proyecto con a quien se pregunta "A o B?". Proyectos de ejemplo, ninguno existe.
+const PROYECTOS_VARIOS = DATOS.projects.concat([
+  { id: 'gama-demo', name: 'Gama Demo', path: '/srv/ejemplo/gama-demo', note: '' },
+  { id: 'delta-servicio-con-un-nombre-largo', name: 'Delta Servicio Con Un Nombre Largo De Verdad',
+    path: '/srv/ejemplo/clientes/region-andina/delta-servicio-con-un-nombre-largo', note: '' }])
+const CON_VARIOS = Object.assign({}, CON_LINEA, {
+  projects: PROYECTOS_VARIOS,
+  projectsStatus: Object.assign({}, DATOS.projectsStatus, { proposals: [] }),
+  scope: Object.assign({}, CON_LINEA.scope, {
+    '120363000000000001@g.us': Object.assign({}, CON_LINEA.scope['120363000000000001@g.us'], {
+      workspaces: ['alfa-demo', 'delta-servicio-con-un-nombre-largo'], workspace: null,
+      projectQuestion: 'auto' }),
+    '120363000000000002@g.us': Object.assign({}, CON_LINEA.scope['120363000000000002@g.us'], {
+      workspaces: ['beta-demo', 'alfa-demo', 'gama-demo'], workspace: null,
+      projectQuestion: 'owner' })
+  })
 })
 
 // Las cuentas de Claude que el worker lee de `orca account list` (de ejemplo).
@@ -618,6 +656,11 @@ const PANELES = [
   { nombre: 'config-conversacion-niveles', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, espera: 400, datos: CON_LINEA, pestana: 'chats',
     guion: EDITAR_CONVERSACION + ";document.getElementById('chat-ap-money').scrollIntoView()" },
+  // proyectos-por-chat (M6): la tabla con "A +N" y el formulario de una conversacion con dos
+  // proyectos, una fila por proyecto y a quien se pregunta "A o B?".
+  { nombre: 'config-proyectos-varios', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, idiomas: ['pt'], espera: 400, datos: CON_VARIOS, pestana: 'chats',
+    guion: EDITAR_CONVERSACION + ";document.getElementById('workspace-search').scrollIntoView()" },
   // T22.1: elegir los numeros del dueno de quienes escribieron.
   { nombre: 'config-duenos-combo', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, espera: 300, datos: CON_LINEA, pestana: 'aprobacion',
@@ -775,6 +818,28 @@ const PANELES = [
       document.querySelector('#board-detail button[data-accion="proyecto"]').click();
       const c = document.querySelector('#board-detail input[role="combobox"]');
       c.focus(); c.click()`
+  },
+  {
+    // proyectos-por-chat (M6): el detalle dice que el agente eligio el proyecto y por que, y
+    // Cambiar proyecto lista primero los de la conversacion y despues el resto.
+    nombre: 'tablero-proyecto-agente', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, idiomas: ['pt'],
+    datos: Object.assign({}, DATOS, { projects: PROYECTOS_VARIOS,
+      board: tableroDe(TABLERO_PROYECTOS, { project_routes: RUTAS_PROYECTO }) }),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="5"]').click();
+      document.querySelector('#board-detail button[data-accion="proyecto"]').click();
+      const c = document.querySelector('#board-detail input[role="combobox"]');
+      c.focus(); c.click()`
+  },
+  {
+    // La pregunta "A o B?" abierta: la tarjeta lo avisa y el detalle dice a quien y que.
+    nombre: 'tablero-pregunta-abierta', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, idiomas: ['pt'],
+    datos: Object.assign({}, DATOS, { projects: PROYECTOS_VARIOS,
+      board: tableroDe(TABLERO_PROYECTOS, { project_routes: RUTAS_PROYECTO }) }),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="12"]').click()`
   },
   {
     // Una tarjeta en cada etapa menos "Su decision": el estado sano y el mas comun.
@@ -1469,6 +1534,12 @@ const PANELES = [
     nombre: 'config-sla', archivo: 'config.html', anchos: ANCHOS, enTodosLosAnchos: true,
     datos: DATOS, pestana: 'aprobacion', espera: 300,
     guion: "document.getElementById('sla-minutes').scrollIntoView({ block: 'center' })"
+  },
+  {
+    // proyectos-por-chat (M5/M6): cuantas horas espera la pregunta "A o B?" a quien escribio.
+    nombre: 'config-pregunta-horas', archivo: 'config.html', anchos: ANCHOS, enTodosLosAnchos: true,
+    idiomas: ['pt'], datos: DATOS, pestana: 'aprobacion', espera: 300,
+    guion: "document.getElementById('pq-hours').scrollIntoView({ block: 'center' })"
   },
   {
     nombre: 'config-sidecar-reintentar', archivo: 'config.html', anchos: ANCHOS,

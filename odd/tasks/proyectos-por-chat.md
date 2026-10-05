@@ -247,10 +247,69 @@ Everything must be configurable and wired end to end (panel and logic), in ES, E
     `respondido → recibido → clasificado → decision` with an `escalar` that carries the
     question, written by the automation, and the existing notice path sends it once. A
     second tick does not escalate again.
-- [ ] **M6** — `config.html` chip list, table column, `projectQuestion` group and ES/EN/PT texts; `activity.html` grouped combo, reason and question state.
+- [x] **M6** — `config.html` chip list, table column, `projectQuestion` group and ES/EN/PT texts; `activity.html` grouped combo, reason and question state.
   - Tests in `test/panels.test.mjs`: save, edit-load and reset, the no-`<select>` guard, PT strings present.
   - Fake fixtures only, in `test/shots.mjs` (`:171-175`): a two-project chat and a chat with an open question.
   - Screenshots at 1440/768/390/320, light and dark, ES and EN, PT at 1440/320.
+  - Deviation, on purpose: the "chip list" is an ordered list of ROWS, each row the same
+    project autocomplete, with a Quitar button per row and "+ Agregar otro proyecto" below.
+    Existing assertions pin the single combobox and cannot change: after choosing, the field
+    `#workspace-search` shows the chosen name ("elegido, el campo muestra el nombre del
+    proyecto"); a new form shows "Sin proyecto" in that field; editing a chat whose project
+    was removed shows `viejo-demo` in it; `#workspace` holds the chosen id; and the empty
+    list offers `['', 'alfa-demo', 'beta-demo']`. A chip input empties its field after each
+    choice, so it would break the first three. With rows, row 1 is exactly the old control,
+    and every other row works the same way. Keyboard: arrows and Enter choose in each row,
+    the add and remove buttons are native buttons, and Backspace in an empty extra row
+    removes it and moves focus up. Each row offers the catalog minus the projects chosen in
+    the other rows, plus its own removed id (marked as today). "Sin proyecto" is offered only
+    in row 1 when it is the only row.
+  - What was built:
+    - `config.html`: rows `#workspace-search` / `#workspace` (row 1) and `#workspace-more`
+      (rows 2..N, `#workspace-search-N`, hidden `#workspace-N`, `[data-wsrm=N]`), with
+      `#workspace-add` and `#workspace-rm`. Save writes `workspaces` (in row order, no
+      repeats) and the derived `workspace`, every time. `listaDeEntrada` reads an entry with
+      the CLI's rule (`lista_de_proyectos`): the list counts only when no `workspace` key is
+      present or the `workspace` equals the list's derived value, else `workspace` becomes a
+      one-item list. Edit loads the rows and reset goes back to one empty row. The table
+      column shows `A` or `A +N` (`+N` is `aria-hidden`); the full list is in the `title`,
+      and an `.sr-only` "y tambien ..." carries it for screen readers. `projectQuestion`
+      (`#chat-project-question`: auto / writer / owner) is a button group, shown only with
+      two or more projects. Its value is kept and saved on every save (`auto` when unset or
+      invalid). New card in Su aprobacion: `projectQuestionHours` (`#pq-hours`, a whole
+      number of hours from 1, default 24), read when that tab opens, like `slaMinutes`. Texts
+      rewritten or added in ES/EN/PT: `scopeHelp`, `workspaceLabel`, `workspaceHint`,
+      `colProject`, `workspaceAdd/Row/Remove/More`, `pq*`.
+    - `activity.html`: `board.project_routes[case_id]` is read with `rutaDe`. The detail adds
+      to the project line who chose it and why: the agent's reason as written; a rule as
+      "el mensaje dice <pattern>", parsed from wa-scope's English `why`; and the chat's
+      project, the owner's choice, or "N proyectos: el agente elige". An open question shows
+      as a `.det-pregunta` box ("Esperando respuesta: ¿A o B?"), saying who was asked
+      (writer, owner, or owner after the timeout) and the question text. An answered
+      question says the agent chooses now; a closed one is not shown. A card with an open
+      question gets a `.card-pregunta` line. Cambiar proyecto lists "Sin proyecto", then the
+      chat's projects in order (group "Proyectos de esta conversacion"), then the rest of the
+      catalog (group "Otros proyectos"), with `role=group` and `aria-label`. Without
+      `project_routes` it is the old flat list. The request is still one `pedido.proyecto`.
+      New wait reasons `no_project` and `project_question`, events `project_question`
+      (writer / owner), `project_answer`, and `project [id, agent]`; `motOutside` now reads
+      "fuera de los proyectos del chat". All in ES/EN/PT. `project_routes` travels inside
+      `board`, so `firmaTablero` already covers it and every repaint goes through the
+      existing `repintar` / `alSoltar` path.
+  - Evidence: `test/panels.test.mjs`, the eight "proyectos-por-chat (M6)" sections (80
+    checks). RED: 15/80 passed. There were no extra rows, add button, project question
+    group, hours field or strings; the table showed `—` for list-only entries; the board
+    had no reason, groups, question or new reasons. GREEN: 80/80. Full `node
+    test/panels.test.mjs`: 1271/1271 (the 1191 existing checks unchanged). `check-panels`,
+    `check-voseo` and `check-datos-reales` pass.
+  - Screenshots (`test/shots.mjs`, fake data): `config-proyectos-varios` (the table with
+    `Alfa Demo +1` / `Beta Demo +2` and the editor with two rows, one long name, and the
+    project question group), `config-pregunta-horas`, `tablero-proyecto-agente` (agent's
+    reason plus the grouped combo open), and `tablero-pregunta-abierta`. Each was looked at
+    at 1440/768/390/320, light and dark, ES, EN and PT. One fix came from looking: at 320 a
+    long project name in the board combo was squeezed to one word per line by its id, so
+    under 420 px the id now goes below the name, as in `config.html`. A long name cut off
+    by a row's field is readable in full in its `title`.
 - [ ] **M7** — Harness text (AGENTS.md, CLASSIFICATION.md, SKILL.md, the PROJECTS.md header) and the `check-harness` phrases.
 
 ### B. Roles by number
