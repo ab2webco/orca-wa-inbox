@@ -13,6 +13,7 @@ agent. With hundreds of groups, permission has to be an explicit allowlist.
   wa-scope closing                    closed cards its conversation does not know about
   wa-scope ingest                     new messages -> cases, in code, no agent
   wa-scope run                        how the last run went, and over how many chats
+  wa-scope doctor                     each authorized chat: its LID/phone pair and status
   wa-scope log [-n 50]                what the agent did, and where
 
 Modes, from least to most permission (the values are stable, they are not translated):
@@ -565,6 +566,25 @@ create table if not exists aviso (
 );
 create index if not exists ix_aviso_caso on aviso(case_id, tipo);
 create index if not exists ix_aviso_stanza on aviso(stanza_id);
+-- La autorizacion de un directo que siguio a su otra forma (lid-sigue-autorizacion):
+-- WhatsApp mueve un uno a uno de `<telefono>@s.whatsapp.net` a `<digitos>@lid` (o al
+-- reves) y la entrada del alcance pasa a la forma viva. Una fila por movida: es el rastro
+-- que lee `wa-scope doctor`, lo que impide que un par rebote de ida y vuelta, y la linea
+-- base del chat nuevo (lo de antes de `ingest_desde` no se contesta solo).
+create table if not exists lid_migracion (
+  id          integer primary key autoincrement,
+  account     text not null,
+  desde       text not null,          -- el jid donde estaba la autorizacion
+  hacia       text not null,          -- el jid vivo, donde quedo
+  origen      text not null,          -- auto (el motor) | panel (el dueno la guardo ahi)
+  at          text not null,
+  ingest_desde real,                  -- epoch: lo anterior en `hacia` queda visto
+  dentro      integer not null default 0,  -- sin atender dentro de la ventana: abren caso
+  fuera       integer not null default 0,  -- sin atender de antes: no se contestan solos
+  fuera_desde text,                   -- desde cuando, el mas viejo de esos
+  aviso       text                    -- el req_id del aviso al dueno, o null si no salio
+);
+create index if not exists ix_lid_migracion on lid_migracion(account, hacia);
 """
 
 
@@ -5789,6 +5809,414 @@ def anterior_a(m, desde):
         return False
 
 
+# ── La autorizacion sigue al directo que WhatsApp movio (lid-sigue-autorizacion) ─────────
+# WhatsApp mueve los uno a uno de `<telefono>@s.whatsapp.net` a `<digitos>@lid` (y a veces
+# de vuelta). La autorizacion del dueno es por (cuenta, jid), asi que quedaba en la forma
+# vieja mientras los mensajes llegaban por la otra: la conversacion autorizada dejaba de
+# atenderse sin que nada lo dijera (visto en una instalacion real: doce dias). Decision del
+# dueno (2026-10-05): automatico y con aviso. Solo con un par verificado de `lid_telefono`
+# de ESTA linea —nunca se infiere de digitos ni de nombres—, solo en directos, y un par se
+# mueve una vez: un ida y vuelta entre las dos formas no rebota.
+ORIGEN_AUTO = "auto"
+ORIGEN_PANEL = "panel"
+TIPO_AVISO_LID = "alcance"
+LARGO_NOMBRE_LID = 60
+# Lo que dice cada aviso, de usted como los demas. `{quien}` es el nombre y el telefono.
+TEXTOS_LID = {
+    "es": {"movido": "WhatsApp movio la conversacion con {quien} a un id nuevo; su "
+                     "autorizacion paso sola.",
+           "dentro": "{n} mensajes recientes entran ahora como casos.",
+           "fuera": "{n} mensajes sin atender desde {fecha} no se contestan solos: "
+                    "reviselos en WhatsApp.",
+           "sin_copia": "Lo que llego al id nuevo desde {fecha} no quedo guardado: revise "
+                        "la conversacion en WhatsApp.",
+           "fantasma": "La conversacion autorizada con {quien} no recibe mensajes desde "
+                       "{fecha} y hay otra activa con la misma persona: revise sus "
+                       "conversaciones en Ajustes.",
+           "no_aparece": "La conversacion autorizada con {quien} no aparece en WhatsApp: "
+                         "revise sus conversaciones en Ajustes.",
+           "conflicto": "La conversacion con {quien} esta autorizada con sus dos ids de "
+                        "WhatsApp; no se unieron solas: deje una sola en Ajustes."},
+    "en": {"movido": "WhatsApp moved the conversation with {quien} to a new id; its "
+                     "authorization followed on its own.",
+           "dentro": "{n} recent messages come in now as cases.",
+           "fuera": "{n} unanswered messages since {fecha} are not answered automatically: "
+                    "check them in WhatsApp.",
+           "sin_copia": "What arrived under the new id since {fecha} was not stored: check "
+                        "the conversation in WhatsApp.",
+           "fantasma": "The authorized conversation with {quien} has had no messages since "
+                       "{fecha} and another one with the same person is active: check your "
+                       "conversations in Settings.",
+           "no_aparece": "The authorized conversation with {quien} does not show up in "
+                         "WhatsApp: check your conversations in Settings.",
+           "conflicto": "The conversation with {quien} is authorized under both of its "
+                        "WhatsApp ids; they were not merged: keep just one in Settings."},
+    "pt": {"movido": "O WhatsApp moveu a conversa com {quien} para um id novo; a "
+                     "autorizacao passou sozinha.",
+           "dentro": "{n} mensagens recentes entram agora como casos.",
+           "fuera": "{n} mensagens sem resposta desde {fecha} nao sao respondidas sozinhas: "
+                    "confira no WhatsApp.",
+           "sin_copia": "O que chegou no id novo desde {fecha} nao ficou guardado: confira a "
+                        "conversa no WhatsApp.",
+           "fantasma": "A conversa autorizada com {quien} nao recebe mensagens desde {fecha} "
+                       "e ha outra ativa com a mesma pessoa: confira suas conversas em "
+                       "Ajustes.",
+           "no_aparece": "A conversa autorizada com {quien} nao aparece no WhatsApp: confira "
+                         "suas conversas em Ajustes.",
+           "conflicto": "A conversa com {quien} esta autorizada com os dois ids do WhatsApp; "
+                        "nao foram unidas: deixe so uma em Ajustes."},
+}
+
+
+def textos_lid():
+    """El idioma del panel cuando se eligio el numero: aca tambien portugues, que el panel
+    tiene y los avisos de casos todavia no."""
+    crudo = plugin_store_raw().get("approvalLang")
+    return TEXTOS_LID[crudo if crudo in TEXTOS_LID else idioma_aprobacion()]
+
+
+def es_directo(jid):
+    """Un uno a uno: por telefono o por LID. Un grupo nunca cambia de jid."""
+    return str(jid or "").endswith(("@s.whatsapp.net", "@lid"))
+
+
+def telefono_lid(jid):
+    usuario, _, servidor = str(jid or "").partition("@")
+    return f"+{usuario}" if servidor == "s.whatsapp.net" and usuario.isdigit() else None
+
+
+def dias_fantasma(con):
+    """Cuanto puede callar una conversacion autorizada mientras su gemela habla: la misma
+    ventana de la bandeja (`inbox_days`). Lo que calla mas que eso ya no llega al agente."""
+    valor = merged_settings(con).get("inbox_days")
+    if valida_ajuste("inbox_days", valor):
+        valor = DEFAULT_CONFIG["inbox_days"]
+    return max(1, int(str(valor).strip()))
+
+
+def foto_lid(fuente, cuenta):
+    """Lo que hace falta del almacen, leido una vez: los pares de ESTA linea (jid -> las
+    otras formas) y cada chat con su ultima actividad. Una tabla que no existe es un
+    almacen de antes: sin pares no se mueve nada."""
+    pares = {}
+    try:
+        for f in fuente.execute("select lid, pn from lid_telefono where account=?", (cuenta,)):
+            pares.setdefault(f["lid"], set()).add(f["pn"])
+            pares.setdefault(f["pn"], set()).add(f["lid"])
+    except sqlite3.Error:
+        pares = {}
+    chats = {f["chat_jid"]: dict(f) for f in fuente.execute(
+        "select chat_jid, chat_name, is_group, last_ts, first_seen from chat where account=?",
+        (cuenta,))}
+    return {"pares": pares, "chats": chats, "fuente": fuente, "cuenta": cuenta, "entradas": {}}
+
+
+def ultima_entrada(foto, jid):
+    """El ultimo mensaje recibido y guardado de un chat (epoch), o None."""
+    if jid not in foto["entradas"]:
+        fila = foto["fuente"].execute(
+            "select max(ts) from mensaje where account=? and chat_jid=? and from_me=0 and "
+            "revocado=0", (foto["cuenta"], jid)).fetchone()
+        foto["entradas"][jid] = fila[0] if fila else None
+    return foto["entradas"][jid]
+
+
+def actividad(foto, jid):
+    """La ultima vez que se vio el chat: lo que anota el sidecar aunque este en `off`."""
+    return (foto["chats"].get(jid) or {}).get("last_ts")
+
+
+def movidas_lid(con, cuenta):
+    return [dict(r) for r in con.execute(
+        "select * from lid_migracion where account=? order by id", (cuenta,))]
+
+
+def par_ya_movido(movidas, a, b):
+    return any({m["desde"], m["hacia"]} == {a, b} for m in movidas)
+
+
+def dueno_o_aprobacion(jid, ids, numero):
+    """El directo de un numero del dueno, o el de aprobacion: moverlo dejaria al canal de
+    aprobacion apuntando a un jid que ya no esta en el alcance. Se dice, no se mueve."""
+    return jid == numero or wa_store.es_dueno(jid, ids)
+
+
+def estados_lid(con, foto, scope, movidas, ahora=None):
+    """El estado de cada entrada autorizada de la linea: ok | migrated | ghost | conflict,
+    con la forma pareada y, si toca, a donde se mueve (`mover`). No escribe nada."""
+    ahora = time.time() if ahora is None else ahora
+    corte = ahora - dias_fantasma(con) * 86400
+    ids, numero = duenos(), numero_aprobacion()
+    llegadas = {m["hacia"]: m for m in movidas}
+    salida = []
+    for jid in sorted(scope):
+        entrada = scope[jid]
+        if (entrada.get("mode") or "off") == "off":
+            continue
+        fila = {"jid": jid, "chat_name": entrada.get("chat_name") or jid,
+                "mode": entrada.get("mode"), "kind": "directo" if es_directo(jid) else "grupo",
+                "paired": [], "status": "ok", "mover": None}
+        if not es_directo(jid):
+            salida.append(fila)
+            continue
+        pareja = sorted(foto["pares"].get(jid, ()))
+        fila["paired"] = pareja
+        fila["phone"] = next((t for t in map(telefono_lid, [jid, *pareja]) if t), None)
+        if jid in llegadas:
+            fila["status"] = "migrated"
+            fila["migrated_from"] = llegadas[jid]["desde"]
+        autorizadas = [k for k in pareja if ((scope.get(k) or {}).get("mode") or "off") != "off"]
+        if autorizadas:
+            fila["status"] = "conflict"
+            fila["conflicto"] = autorizadas
+            salida.append(fila)
+            continue
+        propia = actividad(foto, jid)
+        vivas = [k for k in pareja if k not in scope and actividad(foto, k)
+                 and (jid not in foto["chats"] or not propia or actividad(foto, k) > propia)
+                 and not par_ya_movido(movidas, jid, k)
+                 and not dueno_o_aprobacion(jid, ids, numero)
+                 and not dueno_o_aprobacion(k, ids, numero)]
+        if vivas:
+            fila["mover"] = max(vivas, key=lambda k: actividad(foto, k))
+            salida.append(fila)
+            continue
+        if jid not in foto["chats"]:
+            fila["status"] = "ghost"
+            salida.append(fila)
+            continue
+        ultima = ultima_entrada(foto, jid) or propia or 0
+        if ultima < corte:
+            nombre = (foto["chats"][jid].get("chat_name") or "").strip().lower()
+            gemelas = [k for k in pareja if (actividad(foto, k) or 0) >= corte]
+            if nombre and "@" not in nombre:
+                gemelas += [j for j, c in foto["chats"].items()
+                            if j != jid and not c.get("is_group") and es_directo(j)
+                            and (c.get("chat_name") or "").strip().lower() == nombre
+                            and (c.get("last_ts") or 0) >= corte]
+            if gemelas:
+                fila["status"] = "ghost"
+                fila["desde_ts"] = ultima
+                fila["gemelas"] = sorted(set(gemelas))
+        salida.append(fila)
+    return salida
+
+
+def quien_lid(foto, entrada, *jids):
+    """El nombre y el telefono para un aviso, en una linea: un salto en el nombre no puede
+    fingir una linea aparte. Un nombre con forma de secreto no viaja."""
+    nombre = entrada.get("chat_name") or ""
+    if "@" in nombre or not nombre.strip():
+        nombre = next(((foto["chats"].get(j) or {}).get("chat_name") or "" for j in jids
+                       if "@" not in ((foto["chats"].get(j) or {}).get("chat_name") or "@")),
+                      "")
+    nombre = recorta(nombre, LARGO_NOMBRE_LID)
+    if wa_reglas.secreto(nombre):
+        nombre = ""
+    tel = next((t for t in map(telefono_lid, jids) if t), None)
+    if nombre and tel:
+        return f"{nombre} ({tel})"
+    return nombre or tel or str(jids[0]).partition("@")[0]
+
+
+def aviso_lid(con, req_id, texto):
+    """Un aviso de alcance al numero de aprobacion, una vez por id. Sin numero, nada."""
+    if con.execute("select 1 from aviso where req_id=?", (req_id,)).fetchone():
+        return False
+    return aviso_encola(con, req_id, TIPO_AVISO_LID, texto)
+
+
+def sello_lid(*partes):
+    return hashlib.sha256("|".join(partes).encode("utf-8")).hexdigest()[:16]
+
+
+def hueco_lid(con, foto, hacia):
+    """Lo recibido y sin contestar en el chat vivo: cuantos dentro de la ventana de casos
+    (esos abren caso en esta misma corrida) y cuantos antes, desde cuando. Solo lo que la
+    bandeja ve (`inbox_days`): lo de mas atras ya no es un pendiente de nadie."""
+    base = time.time() - ventana_casos(con) * 3600
+    piso = time.time() - dias_fantasma(con) * 86400
+    fuente = foto["fuente"]
+    mia = fuente.execute("select max(ts) from mensaje where account=? and chat_jid=? and "
+                         "from_me=1 and revocado=0", (foto["cuenta"], hacia)).fetchone()[0] or 0
+    filas = [r[0] for r in fuente.execute(
+        "select ts from mensaje where account=? and chat_jid=? and from_me=0 and revocado=0 "
+        "and ts > ? and ts >= ? order by ts", (foto["cuenta"], hacia, mia, piso))]
+    dentro = sum(1 for t in filas if t >= base)
+    fuera = [t for t in filas if t < base]
+    return base, dentro, len(fuera), (wa_store.ts(fuera[0]) if fuera else None)
+
+
+def mueve_entrada(con, cuenta, desde, hacia, nombre):
+    """La entrada ENTERA pasa al jid vivo: la fila de la base (todas sus columnas, las de
+    hoy y las que se agreguen) y la del panel, que queda con una sola fila."""
+    persistir_panel(con)
+    con.execute("update chat_scope set chat_jid=?, chat_name=?, updated_at=? where "
+                "account=? and chat_jid=?", (hacia, nombre, time.strftime("%Y-%m-%d %H:%M"),
+                                             cuenta, desde))
+    con.commit()
+    store = plugin_store_read()
+    if desde in store and cuenta_de_entrada(store[desde]) == cuenta:
+        store[hacia] = dict(store.pop(desde), chatName=nombre)
+        plugin_store_write(store, agent_name_of(con))
+
+
+def anota_movida(con, cuenta, desde, hacia, origen, base, dentro=0, fuera=0,
+                 fuera_desde=None):
+    return con.execute(
+        "insert into lid_migracion (account, desde, hacia, origen, at, ingest_desde, dentro, "
+        "fuera, fuera_desde) values (?,?,?,?,?,?,?,?,?)",
+        (cuenta, desde, hacia, origen, ahora_caso(), base, dentro, fuera, fuera_desde)).lastrowid
+
+
+def termina_movida_del_panel(con, foto, cuenta):
+    """El panel ya guardo la conversacion en su jid vivo y quito la vieja de SU storage; la
+    fila vieja sigue en la base, y la mezcla la volveria a autorizar. Se termina aca: la
+    fila vieja se va, con su rastro y sin aviso (lo hizo el dueno)."""
+    panel = {j for j, e in plugin_store_read().items()
+             if isinstance(e, dict) and cuenta_de_entrada(e) == cuenta}
+    if not panel:
+        return 0
+    hechas = 0
+    for r in con.execute("select chat_jid from chat_scope where account=?",
+                         (cuenta,)).fetchall():
+        viejo = r["chat_jid"]
+        if viejo in panel or not es_directo(viejo):
+            continue
+        nuevo = next((k for k in sorted(foto["pares"].get(viejo, ())) if k in panel), None)
+        if not nuevo:
+            continue
+        con.execute("delete from chat_scope where account=? and chat_jid=?", (cuenta, viejo))
+        anota_movida(con, cuenta, viejo, nuevo, ORIGEN_PANEL,
+                     time.time() - ventana_casos(con) * 3600)
+        con.commit()
+        hechas += 1
+    if hechas:
+        persistir_panel(con)
+    return hechas
+
+
+def sigue_lid(con):
+    """Una vez por corrida de ingest: la autorizacion de cada directo sigue a su forma viva,
+    con su rastro y UN aviso; los conflictos y los fantasmas se avisan una vez. Barato: una
+    lectura del almacen y nada que escribir cuando nada cambio. Devuelve cuantas movio."""
+    cuenta = cuenta_activa()
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return 0
+    try:
+        # Un almacen que no habla de esta linea no dice nada de sus conversaciones.
+        if wa_store.linea_activa(fuente) != cuenta:
+            return 0
+        foto = foto_lid(fuente, cuenta)
+        movidas = termina_movida_del_panel(con, foto, cuenta)
+        historial = movidas_lid(con, cuenta)
+        scope = merged_scope(con)
+        tx = textos_lid()
+        for fila in estados_lid(con, foto, scope, historial):
+            jid, hacia = fila["jid"], fila["mover"]
+            if hacia:
+                entrada = scope[jid]
+                nombre = entrada.get("chat_name") or ""
+                if not nombre.strip() or "@" in nombre:
+                    nombre = (foto["chats"].get(hacia) or {}).get("chat_name") or hacia
+                base, dentro, fuera, fuera_desde = hueco_lid(con, foto, hacia)
+                mueve_entrada(con, cuenta, jid, hacia, nombre)
+                mid = anota_movida(con, cuenta, jid, hacia, ORIGEN_AUTO, base, dentro, fuera,
+                                   fuera_desde)
+                # El nombre de la forma viva primero: es como WhatsApp la llama hoy.
+                partes = [tx["movido"].format(quien=quien_lid(foto, entrada, hacia, jid))]
+                if dentro:
+                    partes.append(tx["dentro"].format(n=dentro))
+                if fuera:
+                    partes.append(tx["fuera"].format(n=fuera, fecha=fuera_desde))
+                if not dentro and not fuera:
+                    vista = actividad(foto, jid) or (foto["chats"].get(hacia) or {}).get(
+                        "first_seen")
+                    partes.append(tx["sin_copia"].format(fecha=wa_store.ts(vista) or "-"))
+                req = f"aviso-lid-m-{sello_lid(cuenta, jid, hacia, str(mid))}"
+                if aviso_lid(con, req, " ".join(partes)):
+                    con.execute("update lid_migracion set aviso=? where id=?", (req, mid))
+                con.commit()
+                movidas += 1
+            elif fila["status"] == "conflict":
+                par = sorted([jid, *fila["conflicto"]])
+                aviso_lid(con, f"aviso-lid-c-{sello_lid(cuenta, *par)}",
+                          tx["conflicto"].format(quien=quien_lid(foto, scope[jid], *par)))
+                con.commit()
+            elif fila["status"] == "ghost":
+                texto = (tx["fantasma"].format(quien=quien_lid(foto, scope[jid], jid,
+                                                               *fila["paired"]),
+                                               fecha=wa_store.ts(fila["desde_ts"]) or "-")
+                         if fila.get("desde_ts") else
+                         tx["no_aparece"].format(quien=quien_lid(foto, scope[jid], jid,
+                                                                 *fila["paired"])))
+                aviso_lid(con, f"aviso-lid-f-{sello_lid(cuenta, jid)}", texto)
+                con.commit()
+        return movidas
+    finally:
+        fuente.close()
+
+
+def bases_lid(con):
+    """La linea base de cada chat al que llego una autorizacion: lo recibido antes de ella
+    ya no se contesta solo (el aviso dijo cuantos y desde cuando)."""
+    bases = {}
+    for m in movidas_lid(con, cuenta_activa()):
+        if m["ingest_desde"]:
+            bases[m["hacia"]] = max(bases.get(m["hacia"], 0), m["ingest_desde"])
+    return bases
+
+
+def cmd_doctor(con, a):
+    """Cada entrada autorizada de la linea activa: su jid, la forma pareada, la ultima
+    entrada y la ultima actividad de cada forma, el estado (ok | migrated | ghost |
+    conflict) y el rastro de lo que se movio. Solo lee."""
+    cuenta = cuenta_activa()
+    historial = movidas_lid(con, cuenta)
+    salida = {"account": cuenta, "entries": [], "migrations": [
+        {k: m[k] for k in ("desde", "hacia", "origen", "at", "dentro", "fuera", "fuera_desde",
+                           "aviso")} for m in historial]}
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente as exc:
+        salida["store"] = exc.reason
+        fuente = None
+    try:
+        if fuente is not None and wa_store.linea_activa(fuente) == cuenta:
+            foto = foto_lid(fuente, cuenta)
+            for fila in estados_lid(con, foto, merged_scope(con), historial):
+                formas = [fila["jid"], *fila["paired"]]
+                entrada = {k: fila.get(k) for k in ("jid", "chat_name", "mode", "kind",
+                                                    "phone", "paired", "status")}
+                if fila.get("migrated_from"):
+                    entrada["migrated_from"] = fila["migrated_from"]
+                if fila["mover"]:
+                    # Lo que la proxima corrida de ingest va a mover.
+                    entrada["moves_to"] = fila["mover"]
+                entrada["forms"] = [{"jid": j, "last_in": wa_store.ts(ultima_entrada(foto, j)),
+                                     "last_seen": wa_store.ts(actividad(foto, j)),
+                                     "in_store": j in foto["chats"]} for j in formas]
+                salida["entries"].append(entrada)
+        else:
+            for jid, e in sorted(merged_scope(con).items()):
+                if (e.get("mode") or "off") != "off":
+                    salida["entries"].append({"jid": jid, "chat_name": e.get("chat_name"),
+                                              "mode": e.get("mode"), "status": "unknown"})
+    finally:
+        if fuente is not None:
+            fuente.close()
+    if a.json:
+        return [salida]
+    for e in salida["entries"]:
+        print(f"{e['status']:<9} {e['jid']}  {e.get('chat_name') or ''}"
+              + (f"  <-> {', '.join(e['paired'])}" if e.get("paired") else ""))
+    for m in salida["migrations"]:
+        print(f"moved     {m['desde']} -> {m['hacia']}  ({m['origen']}, {m['at']})")
+    return None
+
+
 def cmd_ingest(con, a):
     """Los mensajes nuevos de las conversaciones autorizadas pasan a casos.
 
@@ -5813,10 +6241,21 @@ def cmd_ingest(con, a):
         mensajes = ingest_lee()
     except wa_store.SinFuente as exc:
         return [dict(total, casos=[], sin_fuente=exc.reason)]
+    # La autorizacion de un directo que WhatsApp movio a su otra forma la sigue ANTES de
+    # mirar el alcance: lo que llego por la forma nueva entra en esta misma corrida. Una
+    # falla aca no puede dejar sin ingest: se dice y se sigue.
+    try:
+        movidas = sigue_lid(con)
+    except (sqlite3.Error, OSError) as exc:
+        if con.in_transaction:
+            con.rollback()
+        movidas = 0
+        print(f"wa-scope: lid follow-up skipped: {exc}", file=sys.stderr)
     scope = merged_scope(con)
     decisiones = decisions_read()
     horas = ventana_casos(con)
     desde = linea_base_ingest(con, horas)
+    bases = bases_lid(con)
     ajustes_auto = merged_settings(con)
     # Los numeros del dueno (T22.1), leidos una vez: lo que escriben es una orden suya.
     ids_dueno = duenos()
@@ -5837,7 +6276,7 @@ def cmd_ingest(con, a):
         total["vistos"] += 1
         if caso_de_mensaje(con, m["stanza_id"]):
             continue
-        if anterior_a(m, desde):
+        if anterior_a(m, max(desde, bases.get(m.get("chat_jid"), 0))):
             total["anteriores"] += 1
             continue
         # La respuesta del dueno a un aviso (T14), en el directo del numero de aprobacion
@@ -5906,7 +6345,10 @@ def cmd_ingest(con, a):
     # mirando el telefono. Lo que no salga aca lo intenta el tick con el mismo id.
     if total["respuestas"]:
         envia_avisos(con)
-    return [dict(total, casos=sorted(casos))]
+    salida = dict(total, casos=sorted(casos))
+    if movidas:
+        salida["alcance_movido"] = movidas
+    return [salida]
 
 
 # ── El tablero en el storage del panel (kanban-casos, T4) ───────────────────────────
@@ -10781,6 +11223,12 @@ def main():
     s = add("sync", help="runs ingest, then pushes registry, name and activity to the "
                          "plugin panel")
     s.set_defaults(fn=cmd_sync)
+
+    s = add("doctor", help="each authorized chat of the active line: its jid, the paired "
+                           "LID/phone form, the last message of each form, its status "
+                           "(ok | migrated | ghost | conflict) and the trail of the "
+                           "authorizations that followed a chat WhatsApp moved")
+    s.set_defaults(fn=cmd_doctor)
 
     s = add("log"); s.add_argument("-n", type=int, default=50)
     s.set_defaults(fn=cmd_log)
