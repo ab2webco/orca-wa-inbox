@@ -44,9 +44,13 @@ chats already skip the rule levels in `frenos_de_regla`), Jev.
 
 ## Checklist
 
-- [ ] D0 This task file.
-- [ ] D1 Case file and brief say when the sender is the owner (by WhatsApp id only), with the
-      owner rules; customer cases keep today's wording (scripts/check-casos).
+- [x] D0 This task file.
+- [x] D1 Case file and brief say when the sender is the owner (by WhatsApp id only), with the
+      owner rules; customer cases keep today's wording (scripts/check-casos, section
+      "dueno-en-el-caso: el caso dice cuando escribe el dueno"). `caso_del_dueno` decides it:
+      `chat_es_del_dueno`, or every incoming message of the case with an owner `sender_jid`.
+      RED: 9 of 16 failed (owner DM, owner-only group, line's own chat still said "data from
+      the customer"); GREEN: 16/16.
 - [ ] D2 Owner case rules in `harness/AGENTS.md` and the `whatsapp-soporte` skill, customer
       rules unchanged (scripts/check-harness).
 - [ ] D3 An `escalar` proposal sends ONE notice per version to the approval number, with
