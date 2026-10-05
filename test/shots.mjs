@@ -56,9 +56,12 @@ const SOLO_IDIOMA = process.env.WA_INBOX_IDIOMA ?? ''
 // manda codigos, y si el panel no los traduce se ve — pero solo si alguien mira el
 // panel en el otro idioma. En ingles bastan los dos extremos: la composicion no cambia
 // con el idioma, lo que cambia es el texto.
+// En portugues solo los estados que lo piden (`idiomas`): los informes, donde las fechas
+// de pt-BR ("seg., 28", "Semana de 28 de set.") son las mas largas y ya desbordaron.
 const IDIOMAS = [
   { tag: 'es', locale: 'es-419', anchos: ANCHOS },
-  { tag: 'en', locale: 'en-US', anchos: [1440, 320] }
+  { tag: 'en', locale: 'en-US', anchos: [1440, 320] },
+  { tag: 'pt', locale: 'pt-BR', anchos: ANCHOS, soloSiLoPide: true }
 ]
 
 // El host no deja que el panel vea su documento: le inyecta esta lista corta de
@@ -475,6 +478,12 @@ const TABLERO_MUCHOS = tableroDe(TABLERO_CASOS.filter((c) => c.stage !== 'respon
     '30d': { respondido: 41, cerrado: 77 }, all: { respondido: 41, cerrado: 130 } } })
 // I5: la pestana Informes, con datos de ejemplo (test/informes-ejemplo.mjs), vacia y sin clave.
 const ABRIR_INFORMES = "document.getElementById('tab-reports').click()"
+const ELEGIR_PERIODO = (p) => `; document.querySelector('#period button[data-periodo="${p}"]').click()`
+// Todo terminado hace 3 dias, nada abierto, y "Hoy" guardado: hay casos, ninguno del periodo.
+const TABLERO_PERIODO_VACIO = tableroDe(terminados('cerrado', 3, 300).map((c) =>
+  Object.assign(c, { updated_at: minutos(3 * 1440), stage_at: minutos(3 * 1440) })), {
+  period_counts: { today: { respondido: 0, cerrado: 0 }, '7d': { respondido: 0, cerrado: 3 },
+    '30d': { respondido: 0, cerrado: 3 }, all: { respondido: 0, cerrado: 3 } } })
 // El panel ES el tablero (la bandeja se fue): no hay pestana que apretar. Queda como
 // primer paso de los guiones para que cada uno diga desde donde arranca.
 const ABRIR_TABLERO = 'void 0'
@@ -1420,13 +1429,31 @@ const PANELES = [
   },
   {
     nombre: 'informes', archivo: 'activity.html', anchos: ANCHOS, enTodosLosAnchos: true,
-    espera: 500, guion: ABRIR_INFORMES,
+    espera: 500, guion: ABRIR_INFORMES, idiomas: ['pt'],
     datos: Object.assign(conTablero(tableroDe(TABLERO_CASOS)), { reports: informeDeEjemplo() })
   },
   {
     nombre: 'informes-hoy', archivo: 'activity.html', anchos: ANCHOS_ESTADO, espera: 500,
-    guion: ABRIR_INFORMES + `; document.querySelector('#period button[data-periodo="today"]').click()`,
+    guion: ABRIR_INFORMES + ELEGIR_PERIODO('today'), idiomas: ['pt'],
     datos: Object.assign(conTablero(tableroDe(TABLERO_CASOS)), { reports: informeDeEjemplo() })
+  },
+  {
+    // 30 cubetas por dia y "Todo" por semana: las barras mas angostas y las marcas del eje
+    // mas largas ("Semana de 28 de set." desbordaba a 768 y a 320).
+    nombre: 'informes-30d', archivo: 'activity.html', anchos: ANCHOS, enTodosLosAnchos: true,
+    espera: 500, guion: ABRIR_INFORMES + ELEGIR_PERIODO('30d'), idiomas: ['pt'],
+    datos: Object.assign(conTablero(tableroDe(TABLERO_CASOS)), { reports: informeDeEjemplo() })
+  },
+  {
+    nombre: 'informes-todo', archivo: 'activity.html', anchos: ANCHOS, enTodosLosAnchos: true,
+    espera: 500, guion: ABRIR_INFORMES + ELEGIR_PERIODO('all'), idiomas: ['pt'],
+    datos: Object.assign(conTablero(tableroDe(TABLERO_CASOS)), { reports: informeDeEjemplo() })
+  },
+  {
+    // Un periodo sin nada: el tablero lo dice y la barra queda.
+    nombre: 'tablero-periodo-vacio', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, guion: ABRIR_TABLERO,
+    datos: Object.assign(conTablero(TABLERO_PERIODO_VACIO), { boardPeriod: 'today' })
   },
   {
     nombre: 'informes-vacio', archivo: 'activity.html', anchos: ANCHOS, enTodosLosAnchos: true,
@@ -1475,6 +1502,7 @@ async function main() {
       for (const panel of PANELES) {
         if (SOLO.length && !SOLO.some((p) => panel.nombre.startsWith(p))) continue
         if (!panel.anchos.includes(ancho)) continue
+        if (idioma.soloSiLoPide && !(panel.idiomas || []).includes(idioma.tag)) continue
         // En ingles, por defecto, solo los extremos; los estados marcados van a todos.
         if (!panel.enTodosLosAnchos && !idioma.anchos.includes(ancho)) continue
         const pagina = await contexto.newPage()
