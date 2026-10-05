@@ -103,6 +103,8 @@ const JEV_VEREDICTO = Object.freeze({
   ESPEJO_FALLO: 'espejo-fallo'
 })
 const JEV_ESPEJO_SCRIPT = join(PLUGIN_DIR, 'jev-espejo.mjs')
+// La llave del aprobador (approve-solo-dueno): la crea y la devuelve este script, sin valla.
+const APROBADOR_SCRIPT = join(PLUGIN_DIR, 'aprobador.mjs')
 // Cuantas veces se registra que la boveda no contesta: la revision corre cada 5 minutos
 // y cada registro es una llamada al host.
 const JEV_AVISOS_MAX = 3
@@ -240,11 +242,13 @@ function lineaUtil(stderr) {
 // tienen que volver a buscarla cada uno por su lado.
 let ENV_HERRAMIENTAS = null
 
-function run(cmd, args, { timeoutMs = 20000 } = {}) {
+/** `env` suma variables SOLO a este hijo: la llave del aprobador viaja asi, al
+ *  `wa-send --approve` del tablero y a nadie mas (approve-solo-dueno). */
+function run(cmd, args, { timeoutMs = 20000, env = null } = {}) {
   return new Promise((resolve, reject) => {
     execFile(cmd, args,
       { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024,
-        env: ENV_HERRAMIENTAS || process.env },
+        env: env ? { ...(ENV_HERRAMIENTAS || process.env), ...env } : (ENV_HERRAMIENTAS || process.env) },
       (error, stdout, stderr) => {
         // wa-scope check sale con 3 cuando deniega: es una respuesta, no una falla.
         if (error && error.code !== 3) {
@@ -442,6 +446,31 @@ function espejoJev(modo, llave) {
     } catch (error) {
       resolve({ ok: false, motivo: 'no-arranco',
         detalle: String(error?.code ?? error?.name ?? '').slice(0, 60) })
+    }
+  })
+}
+
+/** La llave del aprobador, o null. La pide a `aprobador.mjs` en un SUBPROCESO sin valla:
+ *  el worker no puede leer ni escribir `~/.wa-inbox`. La crea la primera vez y despues
+ *  devuelve siempre la misma, que es la que lee el tick. Nunca rechaza y nunca la registra:
+ *  solo viaja al env del hijo `wa-send --approve` (acciones.mjs). */
+function llaveAprobador() {
+  return new Promise((resolve) => {
+    try {
+      const m = mandoSinValla(process.execPath, [APROBADOR_SCRIPT])
+      execFile(m.cmd, m.args,
+        { timeout: 10000, maxBuffer: 64 * 1024,
+          env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } },
+        (_error, stdout) => {
+          try {
+            const r = JSON.parse(stdout || 'null')
+            resolve(r?.ok === true && typeof r.llave === 'string' ? r.llave : null)
+          } catch {
+            resolve(null)
+          }
+        })
+    } catch {
+      resolve(null)
     }
   })
 }
@@ -1453,6 +1482,11 @@ export default function activate(orca) {
   // Y traer las conversaciones ya: en una instalacion nueva el panel arranca vacio y
   // el usuario no tiene de donde sacarlas.
   sincronizar('activate').catch((error) => orca.log(`first sync failed: ${error.message}`))
+  // La llave del aprobador existe desde el arranque: el tick la lee para entregar lo que el
+  // dueno aprueba por WhatsApp, antes de que nadie apriete nada en el tablero.
+  llaveAprobador().then((llave) => {
+    if (!llave) orca.log('approver key unavailable: board approvals will be refused')
+  })
 
   // Se reprograma en cada vuelta en vez de fijar el intervalo una sola vez: es el
   // ajuste que acota cuanto tarda un mensaje en llegarle al precheck, y cambiarlo en
@@ -1795,7 +1829,8 @@ export default function activate(orca) {
     acciones: {
       [SCOPE_ACCION.QUITAR]: (pedido) => quitarAlcance(pedido),
       [SCOPE_ACCION.REGLA_QUITAR]: (pedido) => quitarRegla(pedido),
-      ...crearAccionesCaso({ run, motivoDe, lanzarTriage, herramienta: (nombre) => tool(nombre) }),
+      ...crearAccionesCaso({ run, motivoDe, lanzarTriage, llaveAprobador,
+        herramienta: (nombre) => tool(nombre) }),
       [CUENTAS_ACCION]: () => listarCuentas(),
       ...catalogo.acciones
     }

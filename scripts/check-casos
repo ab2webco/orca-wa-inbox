@@ -61,6 +61,15 @@ def corre(home, *args, extra=None):
                           text=True, env=env, timeout=120)
 
 
+def llave_del_plugin(home):
+    """La llave del aprobador como la deja el plugin al arrancar: el worker corre
+    `aprobador.mjs` (approve-solo-dueno). Es la unica forma en que una prueba la consigue."""
+    env = dict(os.environ, HOME=str(home))
+    p = subprocess.run([shutil.which("node") or "node", str(RAIZ / "aprobador.mjs")],
+                       capture_output=True, text=True, env=env, timeout=60)
+    return json.loads(p.stdout or "{}").get("llave")
+
+
 def js(home, *args):
     p = corre(home, *args)
     if p.returncode != 0:
@@ -2826,7 +2835,10 @@ def tick(home, *extra):
 
 
 def linea_lista(home, modo_persona="responder", modo_soporte="borrador"):
-    """Un almacen con la linea A activa, el nombre del agente y dos chats autorizados."""
+    """Un almacen con la linea A activa, el nombre del agente y dos chats autorizados. Y la
+    llave del aprobador, que el plugin crea al arrancar (approve-solo-dueno): sin ella el
+    tick no puede entregar lo que el dueno aprueba por WhatsApp."""
+    llave_del_plugin(home)
     llegan(home, A, [])
     js(home, "agent", "Agente De Ejemplo")
     js(home, "set", PERSONA, "--provider", "ninguno", "--mode", modo_persona)
@@ -4776,10 +4788,13 @@ def envejece_propuesta(home, cid, minutos=30):
 
 
 def aprobar_borrador(home, req):
+    """`--approve` como lo pide el tablero: la llave del plugin en el env del hijo."""
     env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
-               APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"))
-    return subprocess.run([str(RAIZ / "bin" / "wa-send"), "--approve", req, "--json",
-                           "--timeout=3"], capture_output=True, text=True, env=env, timeout=60)
+               APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"),
+               WA_INBOX_APPROVER=llave_del_plugin(home) or "")
+    return subprocess.run([str(RAIZ / "bin" / "wa-send"), "--approve", req, "--by", "board",
+                           "--json", "--timeout=3"], capture_output=True, text=True, env=env,
+                          timeout=60)
 
 
 if NODE:
@@ -4821,8 +4836,9 @@ if NODE:
                    [e["estado"] for e in envios(home) if e["req_id"] == req] == ["cancelado"],
                    f"{envios(home)}")
                 a = aprobar_borrador(home, req)
-                ok("wa-send --approve sobre el borrador cancelado se niega",
-                   a.returncode != 0 and not sidecar.entregados, f"{a.returncode} {a.stderr[:200]}")
+                ok("wa-send --approve sobre el borrador cancelado se niega por cancelado",
+                   a.returncode != 0 and a.stderr.startswith("wa-send: send-cancelled")
+                   and not sidecar.entregados, f"{a.returncode} {a.stderr[:200]}")
                 ok("el caso despierta al agente para el pedido nuevo", int(cid) in para_el_agente(home),
                    f"{para_el_agente(home)}")
                 t = tarjeta(home, cid)
@@ -7916,6 +7932,13 @@ if NODE:
             ok("por la misma peticion del caso", any(
                 f["req_id"] == f"caso-{dinero}-{v1[:12]}" and f["estado"] == "enviado"
                 for f in envios(home)), f"{envios(home)}")
+            con = db_de(home)
+            aprobadas = [r["detail"] for r in con.execute(
+                "select detail from agent_action where action='approved'")]
+            con.close()
+            ok("y la bitacora dice que lo aprobo la respuesta del dueno por WhatsApp",
+               any(d.startswith(f"caso-{dinero}-{v1[:12]}") and "WhatsApp reply" in d
+                   for d in aprobadas), f"{aprobadas}")
             ok("la respuesta del dueno no abre un caso", cuenta(home, "select count(*) from caso")
                == casos_antes and cuenta(home, "select count(*) from caso_mensaje where "
                                                "stanza_id='R1'") == 0)

@@ -46,11 +46,19 @@
       on later runs, and repairs a looser mode (test/envio.test.mjs).
       RED: the suite crashed with `Cannot find module .../aprobador.mjs`. GREEN: 5/5 in the
       `aprobador.mjs` block (also replaces a file that is not a key).
-- [ ] A3 RED/GREEN: the board path passes the key to the `--approve` child only, with
+- [x] A3 RED/GREEN: the board path passes the key to the `--approve` child only, with
       `--by board`; the draft call and other tools never get it (test/worker.test.mjs).
-- [ ] A4 RED/GREEN: the tick's WhatsApp-reply path passes the key and `--by whatsapp-reply`;
+      RED: 411/413, "la aprobacion dice que viene del tablero (--by board)" and "solo el
+      hijo --approve recibe la llave" (`{"llave":null,"env":[null,null]}`). GREEN: 413/413;
+      every `wa-scope` call the worker made carried no key.
+- [x] A4 RED/GREEN: the tick's WhatsApp-reply path passes the key and `--by whatsapp-reply`;
       `si N` still sends (scripts/check-casos), and existing `--approve` tests pass the key
       the way the plugin does.
+      RED (fast copy, 14 sections): 1065/1072, "`si N` aprueba la version avisada y la
+      respuesta sale — decision", "por la misma peticion del caso", the audit row, and four
+      more `si` cases. GREEN: 1072/1072. Tests get the key by running `aprobador.mjs` (in
+      `linea_lista`, as the plugin does at start); the cancelled-draft test now asserts
+      `send-cancelled` instead of any non-zero exit, so the gate cannot hide it.
 - [ ] A5 RED/GREEN: the panel translates `send-approve-not-owner` in ES/EN/PT
       (test/panels.test.mjs or check-panels).
 - [x] A6 RED/GREEN: audit row `approved` with who approved (test/envio.test.mjs).

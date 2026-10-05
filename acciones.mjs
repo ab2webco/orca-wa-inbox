@@ -20,6 +20,7 @@
  *     del pedido: dos clics sobre la misma tarjeta entregan una vez.
  */
 import { join } from 'node:path'
+import { VARIABLE_APROBADOR } from './aprobador.mjs'
 
 /** Lo que el panel puede pedir. Son codigos estables: el panel los escribe y el worker
  *  los lee, asi que renombrar uno rompe el canal en silencio. */
@@ -146,10 +147,11 @@ const opcional = (valor, campo) => {
  *
  * `run` y `motivoDe` son los del worker (mismo env, mismo tope de salida, mismos motivos
  * estables); `herramienta(nombre)` resuelve la ruta de un CLI en el directorio de
- * herramientas vigente. `lanzarTriage` (opcional) lanza la automatizacion del agente
+ * herramientas vigente. `llaveAprobador()` da la llave del plugin (aprobador.mjs), que
+ * viaja SOLO al hijo `wa-send --approve`: sin ella `wa-send` niega la aprobacion. `lanzarTriage` (opcional) lanza la automatizacion del agente
  * (`agente.mjs`); sin el, "Atender ahora" solo marca el caso.
  */
-export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage }) {
+export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage, llaveAprobador }) {
   /** `wa-scope caso <sub> ...`: devuelve las filas del JSON o lanza el rechazo. */
   async function caso (args) {
     const cmd = await herramienta('wa-scope')
@@ -168,11 +170,11 @@ export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage })
 
   /** `wa-send ...`. Sale 3 y 4 son negativas con motivo (`run` solo rechaza lo que no es
    *  3), asi que cualquier salida distinta de 0 es un fallo. */
-  async function enviar (args) {
+  async function enviar (args, env = null) {
     const cmd = await herramienta('wa-send')
     let r
     try {
-      r = await run(cmd, args, { timeoutMs: ENVIO_TOPE_MS })
+      r = await run(cmd, args, { timeoutMs: ENVIO_TOPE_MS, ...(env ? { env } : {}) })
     } catch (error) {
       throw aRechazo(error, motivoDe)
     }
@@ -205,7 +207,11 @@ export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage })
     const id = `caso-${c.case_id}-${version.slice(0, 12)}`
     await enviar([`--id=${id}`, ...(c.account ? [`--line=${c.account}`] : []),
       `--timeout=${ENVIO_PLAZO_S}`, '--json', '--', c.chat_jid, texto])
-    await enviar(['--approve', id, `--timeout=${ENVIO_PLAZO_S}`, '--json'])
+    // La aprobacion es del dueno y la dice el tablero: la llave del plugin va SOLO a este
+    // hijo. Sin llave `wa-send` la niega (`send-approve-not-owner`) y el panel lo dice.
+    const llave = llaveAprobador ? await llaveAprobador() : null
+    await enviar(['--approve', id, '--by', 'board', `--timeout=${ENVIO_PLAZO_S}`, '--json'],
+      llave ? { [VARIABLE_APROBADOR]: llave } : null)
     // Salio. Si dar el caso por respondido falla, el mensaje ya esta en la linea: se
     // dice que salio y que el tablero quedo atras. Apretar de nuevo es seguro: el id es
     // el mismo y no se entrega dos veces.

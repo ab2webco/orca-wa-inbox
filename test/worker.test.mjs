@@ -2204,6 +2204,10 @@ def guarda(e):
     with open(RUTA, 'w') as f: json.dump(e, f)
 def anota(nombre):
     with open(os.path.join(AQUI, nombre), 'a') as f: f.write(json.dumps(sys.argv[1:]) + '\\n')
+    # La llave del aprobador que trajo cada llamada (approve-solo-dueno): solo el hijo
+    # --approve la puede recibir.
+    with open(os.path.join(AQUI, nombre.replace('.jsonl', '-env.jsonl')), 'a') as f:
+        f.write(json.dumps(os.environ.get('WA_INBOX_APPROVER')) + '\\n')
 def opcion(argv, nombre):
     for i, a in enumerate(argv):
         if a == nombre and i + 1 < len(argv): return argv[i + 1]
@@ -2287,7 +2291,10 @@ function herramientasCaso (nombre, estado) {
     estado: () => JSON.parse(readFileSync(join(dir, 'estado.json'), 'utf8')),
     // Solo lo de `caso`: el sync que corre solo tambien pasa por aca.
     scope: () => leer('scope.jsonl').filter((a) => a[0] === 'caso'),
-    send: () => leer('send.jsonl')
+    send: () => leer('send.jsonl'),
+    // La llave que trajo cada llamada, en el mismo orden (null si no trajo).
+    scopeEnv: () => leer('scope-env.jsonl'),
+    sendEnv: () => leer('send-env.jsonl')
   }
 }
 
@@ -2331,6 +2338,15 @@ const verbo = (llamada) => llamada[1]
     JSON.stringify(borrador))
   ok('deja el borrador y despues lo aprueba: la aprobacion del dueno es la que lo manda',
     f.send().length === 2 && aprobacion && aprobacion.includes('--approve'), JSON.stringify(f.send()))
+  const llaveArchivo = join(process.env.HOME, '.wa-inbox', 'approver.key')
+  const llave = existsSync(llaveArchivo) ? readFileSync(llaveArchivo, 'utf8').trim() : null
+  ok('la aprobacion dice que viene del tablero (--by board)',
+    aprobacion && aprobacion[aprobacion.indexOf('--by') + 1] === 'board', JSON.stringify(aprobacion))
+  ok('solo el hijo --approve recibe la llave del plugin, y es la del archivo 0600',
+    /^[0-9a-f]{64}$/.test(llave ?? '') && JSON.stringify(f.sendEnv()) === JSON.stringify([null, llave]),
+    JSON.stringify({ llave, env: f.sendEnv() }))
+  ok('ningun wa-scope que corre el worker la recibe',
+    f.scopeEnv().length > 0 && f.scopeEnv().every((v) => v === null), JSON.stringify(f.scopeEnv()))
   ok('el borrador NO pide --send: un chat en responder no lo manda solo antes de la aprobacion',
     borrador && !borrador.includes('--send'), JSON.stringify(borrador))
   ok('el id de la peticion lo fija el caso y su version: un reintento es el mismo envio',

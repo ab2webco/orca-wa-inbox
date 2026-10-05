@@ -45,8 +45,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from wa_settings import (  # noqa: E402
     CONFIG_NUMERICOS, CONFIG_OPCIONES, MODOS_PRIMER, PANEL_PRIMER, PANEL_PRIMER_CAMPOS,
-    PANEL_SETTINGS, PLUGIN_ID,
-    PLUGIN_ID_ANTERIOR, duenos, idioma_aprobacion, numero_aprobacion, orca_cli_path, orca_env, orca_runtime_home, plugin_store_path,
+    PANEL_SETTINGS, PLUGIN_ID, VARIABLE_APROBADOR,
+    PLUGIN_ID_ANTERIOR, duenos, llave_aprobador, idioma_aprobacion, numero_aprobacion, orca_cli_path, orca_env, orca_runtime_home, plugin_store_path,
     plugin_store_raw,
     plugin_store_targets, settings_from_plugin, user_data_roots, valida_ajuste)
 import wa_store  # noqa: E402  (solo lectura: de capture.db se lee la linea activa)
@@ -8537,16 +8537,23 @@ def aviso_contestado(con, aviso):
 def entrega_del_dueno(con, caso, tx):
     """La respuesta aprobada por el dueno sale como la del tablero (`entregar` en
     acciones.mjs): el borrador con el id del caso y `--approve`, que es la firma del dueno y
-    no vuelve a pasar por el piso ni por Jev. Devuelve la confirmacion."""
+    no vuelve a pasar por el piso ni por Jev. Devuelve la confirmacion.
+
+    `--approve` lleva la llave del plugin (approve-solo-dueno) SOLO en el env de ese hijo, y
+    `--by whatsapp-reply` para la bitacora: el dueno contesto el aviso. Sin llave (el plugin
+    nunca arranco) `wa-send` lo niega y la confirmacion lo dice."""
     n, version = caso["case_id"], caso["propuesta_version"]
     req = id_envio_caso(n, version)
     texto = respuesta_de_propuesta(caso)
     args = [WA_SEND, f"--id={req}"] + ([f"--line={caso['account']}"] if caso.get("account") else [])
-    pasos = (args + [f"--timeout={PLAZO_ENVIO_TICK_S}", "--json", "--", caso["chat_jid"], texto],
-             [WA_SEND, "--approve", req, f"--timeout={PLAZO_ENVIO_TICK_S}", "--json"])
-    for paso in pasos:
+    con_llave = dict(os.environ, **{VARIABLE_APROBADOR: llave_aprobador() or ""})
+    pasos = ((args + [f"--timeout={PLAZO_ENVIO_TICK_S}", "--json", "--", caso["chat_jid"], texto],
+              None),
+             ([WA_SEND, "--approve", req, "--by", "whatsapp-reply",
+               f"--timeout={PLAZO_ENVIO_TICK_S}", "--json"], con_llave))
+    for paso, env in pasos:
         try:
-            p = subprocess.run(paso, capture_output=True, text=True,
+            p = subprocess.run(paso, capture_output=True, text=True, env=env,
                                timeout=PLAZO_ENVIO_TICK_S + 30)
         except (OSError, subprocess.SubprocessError):
             return tx["aprobado_linea"].format(n=n)
