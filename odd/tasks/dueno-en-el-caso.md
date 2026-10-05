@@ -195,3 +195,24 @@ destructive or customer-facing exception counts):
 
 RED: the new rule section failed 52 of its checks and the lowercase-value brief printed its
 value in the notice. GREEN: check-casos 1536/1536, check-clis 341 settings checks.
+
+## Super admin asks like the owner (2026-10-05, v4.18.1)
+
+The owner's decision: what a chat's Super admin asks counts as the owner's. The panel already promised "Super admin: counts as you here"; the code now keeps that promise.
+
+- [x] SA1 `caso_pide_como_dueno(con, caso)` in `bin/wa-scope` returns true when either holds:
+  - `caso_del_dueno` is true;
+  - `rol_del_caso` is `admin`, meaning every sender is a Super admin of that chat.
+
+  Three places use it:
+  - `trabajo_espera_al_dueno`: no click, except destructive actions and a secret-shaped value;
+  - `avance_frena`: Jev's customer flags do not hold updates;
+  - `auto_omite`: no acknowledgement.
+
+  The credential value in notices and the verbatim brief stay owner-only, through `caso_del_dueno`.
+
+  Evidence:
+  - RED: 3 of 10 failed in the `superadmin-ordena` section of `scripts/check-casos`.
+  - GREEN: 10 of 10 pass.
+  - An Operator, and a Super admin case with a customer message, behave as before.
+- [x] SA2 Release check with reduced screenshots: dark-390 smoke only, since no screen changed.
