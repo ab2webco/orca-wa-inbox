@@ -1940,6 +1940,25 @@ def cmd_route(con, a):
     return rutas_efectivas(con)
 
 
+def proyectos_del_chat(entry, catalogo):
+    """(aceptados, faltan): los proyectos de la conversacion que el dueno tiene aceptados,
+    en el orden de su lista y con lo que dice el catalogo; y los ids de la lista que ya no
+    estan en el catalogo. Esos no se borran: el dueno puede volver a aceptarlos."""
+    por_id = {p["id"]: p for p in catalogo}
+    ids = (entry or {}).get("workspaces") or []
+    return [por_id[i] for i in ids if i in por_id], [i for i in ids if i not in por_id]
+
+
+def proyecto_unico_del_chat(entry, aceptados):
+    """El id que vale como "el proyecto del chat" sin una regla: el unico aceptado de su
+    lista. Una lista de uno que el dueno quito del catalogo da ese id igual, para que el
+    motivo diga que ya no esta, como antes. Con dos o mas, ninguno: elige el agente."""
+    if len(aceptados) == 1:
+        return aceptados[0]["id"]
+    ids = (entry or {}).get("workspaces") or []
+    return ids[0] if len(ids) == 1 else None
+
+
 def resolve_target(con, text, chat_jid=None):
     """El contenido manda sobre el chat. Si el mensaje nombra a un cliente que tiene su
     propio proyecto, va ahi; el proyecto del chat es el fallback, no la regla.
@@ -1959,21 +1978,31 @@ def resolve_target(con, text, chat_jid=None):
         if patron and patron in low:
             regla = dict(r, pattern=patron)
             break
-    # El proyecto: el de la regla que dijo el mensaje, si no el de la conversacion. Solo
-    # cuenta si el dueno todavia lo tiene aceptado; uno que quito no resuelve, pero
-    # tampoco se borra de la conversacion (puede volver) y el motivo lo dice.
-    pedido = (regla or {}).get("workspace") or (entry or {}).get("workspace")
+    # El proyecto: el de la regla que dijo el mensaje; si no, el de la conversacion cuando
+    # tiene UNO solo aceptado (proyectos-por-chat, M2). Con dos o mas y sin regla no lo
+    # elige nadie aca: lo elige el agente por el contenido, entre `candidates`. Solo cuenta
+    # si el dueno todavia lo tiene aceptado; uno que quito no resuelve, pero tampoco se
+    # borra de la conversacion (puede volver) y el motivo y `missing` lo dicen.
+    catalogo = proyectos_del_dueno(con)
+    aceptados, faltan = proyectos_del_chat(entry, catalogo)
+    pedido = (regla or {}).get("workspace") or proyecto_unico_del_chat(entry, aceptados)
     del_regla = bool((regla or {}).get("workspace"))
-    proyecto = next((p for p in proyectos_del_dueno(con) if p["id"] == pedido), None) \
-        if pedido else None
+    proyecto = next((p for p in catalogo if p["id"] == pedido), None) if pedido else None
     ws = {"workspace": proyecto["id"] if proyecto else None,
           "workspace_name": proyecto["name"] if proyecto else None,
-          "workspace_path": proyecto["path"] if proyecto else None}
+          "workspace_path": proyecto["path"] if proyecto else None,
+          # Quien lo decidio: una regla de texto, o el unico proyecto del chat.
+          "by": ("rule" if del_regla else "chat") if proyecto else None,
+          "candidates": [{"id": p["id"], "name": p["name"], "note": p["note"]}
+                         for p in aceptados],
+          "missing": faltan}
     if pedido and not proyecto:
         ws["workspace_why"] = f"project {pedido} is no longer in the accepted list"
     elif proyecto:
         ws["workspace_why"] = (f"the message says {regla['pattern']!r}" if del_regla
                                else "the chat's project")
+    elif len(aceptados) > 1:
+        ws["workspace_why"] = f"the chat has {len(aceptados)} projects: the agent chooses by content"
     if entry and (entry.get("provider") or "plane") == SIN_TARJETA:
         return {"provider": SIN_TARJETA, "target": None, **ws,
                 "why": "the conversation is set to 'ninguno': it opens no cards",
@@ -4543,8 +4572,13 @@ def caso_enruta(con, case_id, texto, chat):
     if caso["etapa"] == "cerrado":
         return False
     destino = resolve_target(con, texto, chat)
+    # El proyecto va con su nombre, su ruta, por que y quien lo decidio (`rule` | `chat`):
+    # la tarjeta y el archivo del caso lo dicen sin volver a resolverlo (proyectos-por-chat).
     nueva = {"provider": destino["provider"], "target": destino["target"],
              "workspace": destino["workspace"],
+             "workspace_name": destino["workspace_name"],
+             "workspace_path": destino["workspace_path"],
+             "workspace_why": destino.get("workspace_why"), "by": destino["by"],
              "why": destino["why"], "matched": destino["matched"]}
     actual = json.loads(caso["ruta"]) if caso["ruta"] else None
     if actual is not None and actual.get("por_dueno"):

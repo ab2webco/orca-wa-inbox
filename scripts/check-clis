@@ -681,7 +681,50 @@ def revisa_varios_proyectos(fallos: list) -> int:
                 or fila(DIRECTO).get("workspaces") != ["alfa-demo", "beta-demo"]:
             fallos.append(f"un proyecto quitado del catalogo se borro de la lista: "
                           f"{columnas(DIRECTO)!r}")
+        d = (filas("where", "hola", "--chat", DIRECTO) or [{}])[0]
+        hechas += 1
+        if d.get("missing") != ["alfa-demo"]:
+            fallos.append(f"where no dice que un proyecto de la lista ya no esta: {d!r}")
         guarda(projects=PROYECTOS)
+
+        # ── where (M2): la regla gana sobre la lista; sin regla, con dos proyectos no
+        # elige nadie mas que el agente, y los candidatos van en orden.
+        scope("set", DIRECTO, "--workspaces", "beta-demo,alfa-demo")
+        scope("route", "--match", "reservas", "--workspace", "gama-demo")
+        d = (filas("where", "una duda de reservas", "--chat", DIRECTO) or [{}])[0]
+        hechas += 3
+        if d.get("workspace") != "gama-demo" or d.get("matched") != "reservas" \
+                or d.get("by") != "rule":
+            fallos.append(f"la regla no gana sobre la lista del chat: {d!r}")
+        d = (filas("where", "hola", "--chat", DIRECTO) or [{}])[0]
+        if d.get("workspace") is not None or d.get("by") is not None \
+                or d.get("workspace_why") != "the chat has 2 projects: the agent chooses by content":
+            fallos.append(f"dos proyectos sin regla no dan null con su motivo: {d!r}")
+        if [c.get("id") for c in d.get("candidates") or []] != ["beta-demo", "alfa-demo"] \
+                or (d.get("candidates") or [{}])[0].get("note") != "Sitio de reservas" \
+                or (d.get("candidates") or [{}])[0].get("name") != "Beta Demo":
+            fallos.append(f"where no lista los candidatos del chat en orden: {d!r}")
+        scope("set", DIRECTO, "--workspaces", "beta-demo")
+        d = (filas("where", "hola", "--chat", DIRECTO) or [{}])[0]
+        hechas += 1
+        if d.get("workspace") != "beta-demo" or d.get("workspace_why") != "the chat's project" \
+                or d.get("by") != "chat" or [c["id"] for c in d.get("candidates") or []] \
+                != ["beta-demo"]:
+            fallos.append(f"un chat de un proyecto no resuelve como siempre: {d!r}")
+        # Con dos ids y uno quitado del catalogo queda un solo aceptado: ese es el del chat.
+        scope("set", DIRECTO, "--workspaces", "alfa-demo,beta-demo")
+        guarda(projects=PROYECTOS[1:])
+        d = (filas("where", "hola", "--chat", DIRECTO) or [{}])[0]
+        hechas += 1
+        if d.get("workspace") != "beta-demo" or d.get("missing") != ["alfa-demo"]:
+            fallos.append(f"con un solo proyecto aceptado en la lista no cae en ese: {d!r}")
+        guarda(projects=PROYECTOS)
+        # Un chat sin proyectos: sin candidatos, y nada que elegir.
+        scope("set", DIRECTO, "--workspaces", "")
+        d = (filas("where", "hola", "--chat", DIRECTO) or [{}])[0]
+        hechas += 1
+        if d.get("workspace") is not None or d.get("candidates") != [] or d.get("missing") != []:
+            fallos.append(f"un chat sin proyectos no da candidatos vacios: {d!r}")
     return hechas
 
 

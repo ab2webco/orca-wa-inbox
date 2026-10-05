@@ -163,11 +163,19 @@ Everything must be configurable and wired end to end (panel and logic), in ES, E
     stored next to it is its derived value, so an older CLI that writes `workspace` in the
     database, or an older panel that edits `workspace` and leaves a stale `workspaces` in the
     entry, wins as a one-item list (`lista_de_proyectos`).
-- [ ] **M2** — `resolve_target`/`where` return `candidates`; the chat fallback applies only to single-project chats; `caso_enruta` stores `workspace_name/path/why/by`.
+- [x] **M2** — `resolve_target`/`where` return `candidates`; the chat fallback applies only to single-project chats; `caso_enruta` stores `workspace_name/path/why/by`.
   - Tests:
     - the rule wins over the list;
     - two projects without a rule give null with the reason;
     - a single project behaves exactly as today (the existing `where` and `caso_enruta` tests stay green).
+  - Evidence: `scripts/check-clis` (`revisa_varios_proyectos`, the `where` block) and
+    `scripts/check-casos` ("proyectos-por-chat: la ruta del caso con varios proyectos (M2)").
+    RED: 7 of 29 check-clis checks and 3 of 3 check-casos checks failed (no `candidates`,
+    `by` or `missing`; two projects fell back to nothing without the reason; the case route
+    kept only `workspace`). GREEN: check-clis 314 checks, exit 0; check-casos 1236/1236,
+    exit 0, on the committed tree. `where` also returns `missing` (the ids of the list that
+    the owner removed from the catalog), and a list of two with one removed id has one
+    accepted project, which is then the chat's project.
 - [ ] **M3** — `caso proyecto --actor agente --porque`: it validates against the candidates, is refused on `por_dueno`, does not freeze routing, and records the history `que`.
   - Card JSON `project.{why,by,candidates}`.
   - `proyecto_efectivo` used by `proyecto_del_caso`, the card, the reports and `cabeza_del_caso`. Fix the owner's "Sin proyecto" that fell back to the chat's project.

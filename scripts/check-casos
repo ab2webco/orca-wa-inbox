@@ -9319,6 +9319,49 @@ if NODE:
             os.environ.clear()
             os.environ.update(env_antes)
 
+
+# ── proyectos-por-chat: varios proyectos por conversacion (odd/tasks/proyectos-por-chat.md) ──
+# Una conversacion tiene una lista de proyectos. El caso toma el suyo de una regla de texto;
+# si no, el del chat cuando tiene uno solo; con dos o mas y sin regla, lo elige el agente
+# por el contenido (`caso proyecto --actor agente --porque`) o pregunta "A o B?". Un chat
+# de un proyecto queda exactamente como antes.
+def ruta_de(home, cid):
+    fila = db_de(home).execute("select ruta from caso where case_id=?", (int(cid),)).fetchone()
+    return json.loads(fila["ruta"]) if fila and fila["ruta"] else None
+
+
+print("\nproyectos-por-chat: la ruta del caso con varios proyectos (M2)")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo", "beta-demo", "gama-demo")
+        js(home, "set", SOPORTE, "--workspaces", "alfa-demo,beta-demo")
+        js(home, "set", FACTURACION, "--provider", "ninguno", "--mode", "borrador",
+           "--workspaces", "alfa-demo,beta-demo")
+        js(home, "set", PERSONA, "--workspace", "alfa-demo")
+        js(home, "route", "--match", "reservas", "--workspace", "gama-demo")
+        llegan(home, A, [msg(SOPORTE, "PC1", "@duenio el reporte sale en blanco", 30, mencion=True),
+                         msg(PERSONA, "PC2", "hola, el reporte sale en blanco", 29),
+                         msg(FACTURACION, "PC3", "@duenio falla el modulo de reservas", 28,
+                             mencion=True)])
+        ingiere(home)
+        dos = ruta_de(home, caso_de_stanza(home, "PC1")["case_id"])
+        ok("dos proyectos sin regla: el caso queda sin proyecto y dice por que",
+           dos and dos.get("workspace") is None and dos.get("by") is None
+           and dos.get("workspace_why") == "the chat has 2 projects: the agent chooses by content",
+           f"{dos}")
+        uno = ruta_de(home, caso_de_stanza(home, "PC2")["case_id"])
+        ok("un chat de un proyecto: el del chat, como siempre, ahora con nombre, ruta y quien",
+           uno and uno.get("workspace") == "alfa-demo" and uno.get("workspace_name") == "Alfa Demo"
+           and uno.get("workspace_path") == "/srv/ejemplo/alfa-demo"
+           and uno.get("workspace_why") == "the chat's project" and uno.get("by") == "chat",
+           f"{uno}")
+        regla = ruta_de(home, caso_de_stanza(home, "PC3")["case_id"])
+        ok("la regla de texto gana sobre la lista del chat",
+           regla and regla.get("workspace") == "gama-demo" and regla.get("by") == "rule"
+           and regla.get("matched") == "reservas"
+           and regla.get("workspace_why") == "the message says 'reservas'", f"{regla}")
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
