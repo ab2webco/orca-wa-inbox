@@ -26,8 +26,10 @@
 //   5. una build con un nombre que nadie contemplo se DESCUBRE por su runtime;
 //   6. sin ningun userData se sigue contestando null, para que el motivo SIN_AUTHDIR
 //      siga siendo cierto cuando de verdad no hay donde escribir.
+//   7. el plugin INSTALADO siembra el arnes en el userData donde esta instalado, que es
+//      donde Orca corre sus automatizaciones, y el auth state no se mueve de su sitio.
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -196,6 +198,56 @@ console.log('\nuserData: cuando de verdad no hay donde escribir')
   maquina('sin-nada', 'linux', [])
   ok('dataDir() devuelve null, y SIN_AUTHDIR sigue siendo una afirmacion cierta',
     dataDir(PLUGIN_DIR, 'wa-auth') === null, `${dataDir(PLUGIN_DIR, 'wa-auth')}`)
+}
+
+// ───────── 7. el plugin instalado siembra en el userData del Orca que lo corre ─────────
+// Medido en una Linux de un usuario: `orca` ya sembrada (de una instalacion vieja) y la
+// app publicada corriendo desde `orca-ide`. Orca crea la carpeta de las automatizaciones
+// en SU userData (orca-oss plugin-owned-workspace.ts), y el arnes, que preferia la raiz
+// "ya sembrada", sembraba en `orca`: el tick salia con 1 en una carpeta vacia cada minuto.
+// El plugin instalado vive en `<userData>/plugins/<llave>/<hash>` (plugin-discovery.ts),
+// asi que de su propia carpeta sale cual es ese userData. El auth state NO se mueve.
+console.log('\nuserData: el plugin instalado siembra donde Orca corre sus automatizaciones')
+
+/** Una instalacion de mentira con la forma de Orca: `<raiz>/plugins/<llave>/<hash>`, con
+ *  el manifiesto de verdad adentro (de ahi sale la llave). */
+function instalado (raiz, llave = CLAVE) {
+  const dir = join(raiz, 'plugins', llave, 'a'.repeat(64))
+  mkdirSync(dir, { recursive: true })
+  copyFileSync(join(PLUGIN_DIR, 'orca-plugin.json'), join(dir, 'orca-plugin.json'))
+  return dir
+}
+
+for (const [plataforma, nombre, vieja, corre] of [
+  ['linux', 'linux-ide', 'orca', 'orca-ide'],
+  ['darwin', 'mac-dev-sembrado', 'orca-dev', 'orca'],
+  ['win32', 'win-ide', 'orca', 'orca-ide']]) {
+  const base = maquina(nombre, plataforma, [
+    { nombre: vieja, atendido: 60 * 60 * 24, sembrado: true },
+    { nombre: corre, runtime: true, atendido: 5 }])
+  const plugin = instalado(join(base, corre))
+  ok(`${plataforma}: la carpeta de trabajo es la de '${corre}', donde corren las automatizaciones`,
+    workspaceDir(plugin) === join(base, corre, 'plugin-workspaces', CLAVE),
+    `${workspaceDir(plugin)}`)
+  ok(`${plataforma}: el auth state se queda en '${vieja}' — moverlo pide un QR nuevo sin avisar`,
+    dataDir(plugin, 'wa-auth') === join(base, vieja, 'plugins-data', CLAVE, 'wa-auth'),
+    `${dataDir(plugin, 'wa-auth')}`)
+  ok(`${plataforma}: un checkout de desarrollo resuelve como antes ('${vieja}', ya sembrada)`,
+    workspaceDir(PLUGIN_DIR) === join(base, vieja, 'plugin-workspaces', CLAVE),
+    `${workspaceDir(PLUGIN_DIR)}`)
+}
+{
+  // Una carpeta `plugins/<otra llave>/...` no es la instalacion de ESTE plugin: no se le
+  // cree la forma y se resuelve como siempre.
+  const base = maquina('otra-llave', 'linux', [
+    { nombre: 'orca', atendido: 60, sembrado: true },
+    { nombre: 'orca-ide', runtime: true, atendido: 5 }])
+  const ajena = join(base, 'orca-ide', 'plugins', 'otro.plugin', 'b'.repeat(64))
+  mkdirSync(ajena, { recursive: true })
+  copyFileSync(join(PLUGIN_DIR, 'orca-plugin.json'), join(ajena, 'orca-plugin.json'))
+  ok('con otra llave en la ruta no se deriva nada: gana la ya sembrada, como hoy',
+    workspaceDir(ajena) === join(base, 'orca', 'plugin-workspaces', CLAVE),
+    `${workspaceDir(ajena)}`)
 }
 
 process.env.HOME = HOME_REAL

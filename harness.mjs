@@ -16,7 +16,7 @@ import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { leerCatalogo, limpiarLinea } from './catalogo.mjs'
 
@@ -162,12 +162,10 @@ export function manifiesto(pluginDir) {
   return { key: `${man.publisher}.${man.id}`, version: String(man.version ?? '0.0.0') }
 }
 
-/** La raiz de userData elegida para ESTE plugin, y su llave. La comparten
- *  `workspaceDir` (el arnes) y `dataDir` (el auth state del sidecar, T3): dos
- *  carpetas del mismo plugin en raices de userData distintas -con el instalado y un
- *  build dev abiertos a la vez- serian la misma clase de bug de identidad que
- *  `bin/wa-scope` ya evito con `(cuenta, jid)`. Null si esta maquina no tiene ningun
- *  userData de Orca. */
+/** La raiz de userData elegida para ESTE plugin, y su llave. La usa `dataDir` (el auth
+ *  state del sidecar, T3) siempre, y `workspaceDir` solo cuando el plugin no corre desde
+ *  una instalacion de Orca (ver `raizDeLaInstalacion`). Null si esta maquina no tiene
+ *  ningun userData de Orca. */
 function raizDelPlugin(pluginDir) {
   const { key } = manifiesto(pluginDir)
   const raices = userDataRoots().filter(esDirectorio)
@@ -183,12 +181,37 @@ function raizDelPlugin(pluginDir) {
   return { raiz: yaSembrada ?? conDatos ?? raices[0], key }
 }
 
+/** El userData del Orca que instalo y corre este plugin, sacado de la carpeta del plugin,
+ *  o null si la carpeta no tiene la forma de una instalacion.
+ *
+ *  Orca instala en `<userData>/plugins/<llave>/<hash>` (orca-oss plugin-discovery.ts:
+ *  `getUserPluginsDir(userDataPath)` + el puntero `current`) y crea la carpeta de las
+ *  automatizaciones en `<userData>/plugin-workspaces/<llave>` del MISMO userData, el de
+ *  la app que corre (plugin-owned-workspace.ts). Es el unico dato que no se adivina: la
+ *  lista de nombres no sabe cual de dos userData presentes es el vivo, y en una Linux con
+ *  `orca` ya sembrada y la app publicada corriendo desde `orca-ide` el arnes quedaba donde
+ *  Orca no corre nada. La llave tiene que ser la del manifiesto: una carpeta
+ *  `plugins/<otra>/...` no es esta instalacion. */
+export function raizDeLaInstalacion(pluginDir, key) {
+  const llave = dirname(resolve(pluginDir))
+  const plugins = dirname(llave)
+  if (basename(llave) !== key || basename(plugins) !== 'plugins') return null
+  return dirname(plugins)
+}
+
 /**
  * La carpeta de trabajo del plugin, o null si en esta maquina no se puede decir cual
- * es. Se elige el userData donde el plugin YA vive: con el instalado y un build dev
- * abiertos, sembrar en el otro deja el arnes donde nadie lo lee.
+ * es. Instalado, es la del userData donde esta instalado: la misma que Orca crea y en la
+ * que corre las automatizaciones. Desde un checkout (build de desarrollo) no hay de
+ * donde sacarlo y se elige como siempre, el userData donde el plugin YA vive.
+ *
+ * Que esta carpeta y `dataDir` puedan quedar en userData distintos es a proposito: la
+ * carpeta de trabajo es de Orca y se mueve con el, el auth state no se mueve nunca solo.
  */
 export function workspaceDir(pluginDir) {
+  const { key } = manifiesto(pluginDir)
+  const instalada = raizDeLaInstalacion(pluginDir, key)
+  if (instalada) return join(instalada, 'plugin-workspaces', key)
   const elegida = raizDelPlugin(pluginDir)
   return elegida ? join(elegida.raiz, 'plugin-workspaces', elegida.key) : null
 }
@@ -198,7 +221,11 @@ export function workspaceDir(pluginDir) {
  *  Baileys: FUERA del arbol del plugin, que esta verificado por content-hash
  *  (docs/ENCARGO-TRANSPORTE-UNICO.md §7 — escribir adentro cambia el hash). `...sub`
  *  se une detras para pedir una subcarpeta -`wa-auth`- sin que quien llama arme la
- *  ruta a mano. Null en la misma condicion que `workspaceDir`. */
+ *  ruta a mano. Null si esta maquina no tiene ningun userData de Orca.
+ *
+ *  NO sigue a `raizDeLaInstalacion` como la carpeta de trabajo: la raiz sale siempre de
+ *  `raizDelPlugin`, la de antes. Mover el auth state de un plugin ya vinculado es pedirle
+ *  al usuario un QR nuevo sin avisarle. */
 export function dataDir(pluginDir, ...sub) {
   const elegida = raizDelPlugin(pluginDir)
   return elegida ? join(elegida.raiz, 'plugins-data', elegida.key, ...sub) : null
