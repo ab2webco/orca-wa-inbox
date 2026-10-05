@@ -1090,7 +1090,7 @@ def revisa_chat_del_dueno(fallos: list) -> int:
         print("  aviso: sin node, no se armo el almacen para `wa-scope owner`", file=sys.stderr)
         return hechas
     propio = "100000000000002@lid"
-    aprobacion = "573009990011@s.whatsapp.net"
+    aprobacion = "573009999999@s.whatsapp.net"
     with tempfile.TemporaryDirectory() as tmp:
         home = pathlib.Path(tmp)
         env = entorno(home)
