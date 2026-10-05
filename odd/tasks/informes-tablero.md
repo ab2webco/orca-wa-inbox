@@ -76,8 +76,20 @@ stores (capture.db messages, scope.db cases, case events and dispatches). Owner-
       (`TypeError ... reading 'click'` after 4 FALLA). GREEN: check-casos 1169/1169 (4 new
       board checks; the card contract keys now include `stage_at`); panels 1068/1068 (21 new
       in "I1", and the old "counts" check now reads Cerrado from `period_counts`).
-- [ ] I2 Board columns bounded to the viewport with inner scroll; "Show N more" in
+- [x] I2 Board columns bounded to the viewport with inner scroll; "Show N more" in
       Respondido and Cerrado (20 at a time).
+      `.board-cols` has `max-height: var(--alto-tablero)`, which `ajustarAlto` sets to the
+      window height left below the columns (minimum 320 px) on every paint and resize,
+      without touching the board DOM; columns stretch up to it and `.col-body` scrolls
+      inside (`flex: 1 1 auto; min-height: 0; overflow-y: auto`). Empty columns stay folded.
+      Respondido and Cerrado show the latest 20 (by stage entry) and a "Mostrar N mas"
+      button (`.col-mas`, with an aria-label naming the stage) adds 20; changing the period
+      goes back to 20. The list view (the natural one up to 768 px) applies the same 20 at a
+      time but keeps flowing with the page: at 390/320 a bounded list under the header,
+      tabs and bar would leave a few rows of space. The show-more state is in
+      `firmaTablero`, and the button keeps the first click (pinned with `clicReal`). RED:
+      "Cerrado muestra los 20 ultimos" got all 45, no button (`TypeError ... reading
+      'click'`). GREEN: panels 1088/1088 (20 new in "I2").
 - [x] I3 Stats computation in wa-scope: the four periods plus previous periods, the
       definitions above, bounded storage key, written with the board.
       `build_reports` in `bin/wa-scope`, written by `push_to_plugin` on every `sync` (the

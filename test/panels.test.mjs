@@ -6029,5 +6029,88 @@ console.log('\nactivity.html — I1: el periodo no pierde el primer clic')
     periodoApretado(doc) === 'all' && visibles(doc).length === 7, visibles(doc).join())
 }
 
+// ── El tablero acotado (informes-tablero, I2) ──
+// Respondido y Cerrado muestran los 20 ultimos (por su entrada a la etapa) y "Mostrar N
+// mas" suma 20 cada vez. Cada columna se desplaza sola: la pagina no crece con las tarjetas.
+const muchas = (etapa, n, desde = 1000) => Array.from({ length: n }, (_, i) =>
+  terminada(desde + i, etapa, new Date(Date.now() - (i + 1) * 60000).toISOString()))
+const enColumna = (doc, etapa) =>
+  [...doc.querySelectorAll(`.col[data-stage="${etapa}"] .card[data-case]`)].map((n) => n.dataset.case)
+const botonMas = (doc, etapa) => doc.querySelector(`[data-stage="${etapa}"] button.col-mas`)
+
+console.log('\nactivity.html — I2: Respondido y Cerrado, de 20 en 20')
+{
+  const cards = [tarjeta({ case_id: 1 }), ...muchas('cerrado', 45), ...muchas('respondido', 22, 2000)]
+  const { doc } = await abrirTablero({ board: tablero(cards) })
+  ok('Cerrado muestra los 20 ultimos', enColumna(doc, 'cerrado').length === 20 &&
+    enColumna(doc, 'cerrado')[0] === '1000' && enColumna(doc, 'cerrado')[19] === '1019',
+  enColumna(doc, 'cerrado').join())
+  ok('y ofrece mostrar 20 mas', /20/.test(botonMas(doc, 'cerrado')?.textContent || ''),
+    botonMas(doc, 'cerrado')?.textContent)
+  ok('la cuenta de la columna sigue siendo la del periodo',
+    doc.querySelector('.col[data-stage="cerrado"] .col-count')?.textContent === '45')
+  ok('Respondido ofrece los 2 que faltan', /\b2\b/.test(botonMas(doc, 'respondido')?.textContent || ''),
+    botonMas(doc, 'respondido')?.textContent)
+  ok('lo abierto no se acota', !botonMas(doc, 'decision'))
+  botonMas(doc, 'cerrado').click()
+  await espera()
+  ok('un clic suma 20', enColumna(doc, 'cerrado').length === 40, String(enColumna(doc, 'cerrado').length))
+  ok('y ahora ofrece los 5 que quedan', /\b5\b/.test(botonMas(doc, 'cerrado')?.textContent || ''),
+    botonMas(doc, 'cerrado')?.textContent)
+  ok('Respondido no se movio', enColumna(doc, 'respondido').length === 20)
+  botonMas(doc, 'cerrado').click()
+  await espera()
+  ok('al final se ven todas y el boton se va',
+    enColumna(doc, 'cerrado').length === 45 && !botonMas(doc, 'cerrado'))
+  apretarPeriodo(doc, '30d')
+  await espera()
+  ok('cambiar el periodo vuelve a los 20', enColumna(doc, 'cerrado').length === 20)
+  ok('el boton dice que agrega', !!botonMas(doc, 'cerrado')?.getAttribute('aria-label') ||
+    /Mostrar/.test(botonMas(doc, 'cerrado')?.textContent || ''))
+}
+{
+  const cards = [tarjeta({ case_id: 1 }), ...muchas('cerrado', 25)]
+  const { doc } = await abrirTablero({ board: tablero(cards) })
+  doc.querySelector('#board-view button[data-vista="list"]').click()
+  await espera()
+  ok('en la lista tambien de 20 en 20',
+    doc.querySelectorAll('.grupo[data-stage="cerrado"] .card[data-case]').length === 20 &&
+    /\b5\b/.test(botonMas(doc, 'cerrado')?.textContent || ''), botonMas(doc, 'cerrado')?.textContent)
+  botonMas(doc, 'cerrado').click()
+  await espera()
+  ok('y el boton suma en la lista', doc.querySelectorAll('.grupo[data-stage="cerrado"] .card[data-case]').length === 25)
+}
+for (const [idioma, re] of [['en', /Show 20 more/], ['pt-BR', /Mostrar mais 20/]]) {
+  const { doc } = await abrirTablero({ board: tablero(muchas('cerrado', 45)) }, idioma)
+  ok(`${idioma}: el boton en su idioma`, re.test(botonMas(doc, 'cerrado')?.textContent || ''),
+    botonMas(doc, 'cerrado')?.textContent)
+}
+{
+  // El primer clic en "Mostrar mas" con una relectura en el medio: el boton apretado tiene que
+  // seguir en la pagina al soltar.
+  const { window, doc } = await abrirTablero({ board: tablero(muchas('cerrado', 45)) })
+  await clicReal(window, botonMas(doc, 'cerrado'), async () => {
+    window.dispatchEvent(new window.Event('focus'))
+    await espera()
+  })
+  await espera()
+  ok('el primer clic en Mostrar mas no se pierde', enColumna(doc, 'cerrado').length === 40,
+    String(enColumna(doc, 'cerrado').length))
+}
+
+console.log('\nactivity.html — I2: cada columna se desplaza sola')
+{
+  const { doc, window } = await abrirTablero({ board: tablero([tarjeta({ case_id: 1 }), ...muchas('cerrado', 45)]) })
+  const cols = doc.getElementById('board-cols')
+  const alto = parseInt(cols.style.getPropertyValue('--alto-tablero'), 10)
+  ok('las columnas tienen un alto tope atado a la ventana', alto > 0 && alto <= Math.max(window.innerHeight, 320),
+    cols.getAttribute('style'))
+  const css = [...doc.querySelectorAll('style')].map((s) => s.textContent).join('\n')
+  ok('el tope esta en la fila de columnas', /\.board-cols\s*\{[^}]*max-height:\s*var\(--alto-tablero/.test(css))
+  ok('y el cuerpo de cada columna se desplaza adentro',
+    /\.col-body\s*\{[^}]*overflow-y:\s*auto/.test(css) && /\.col-body\s*\{[^}]*min-height:\s*0/.test(css))
+  ok('una columna vacia sigue plegada', !!doc.querySelector('.col.vacia[data-stage="trabajo"]'))
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)

@@ -224,7 +224,11 @@
       /* Las columnas: `flex gap-3 overflow-x-auto p-3`. Se desplazan DENTRO de su
          contenedor; la pagina nunca. Todas a la altura de la mas alta. */
       .board-cols { display: flex; gap: 12px; overflow-x: auto; align-items: stretch;
-              padding-bottom: 8px; scrollbar-width: thin; }
+              padding-bottom: 8px; scrollbar-width: thin;
+              /* El tope (I2): lo que queda de la ventana debajo de la fila de columnas, que
+                 `ajustarAlto` mide. Las columnas se estiran a la mas alta hasta ahi y cada una
+                 se desplaza adentro: la pagina ya no crece con las tarjetas. */
+              max-height: var(--alto-tablero, calc(100vh - 16px)); }
       /* La columna: `w-72 rounded-md border border-border/50 bg-muted/20`. */
       .col { flex: 0 0 272px; min-width: 0; min-height: 240px; display: flex;
              flex-direction: column; border: 1px solid var(--border, var(--fb-border));
@@ -239,7 +243,11 @@
       .col-count { flex: none; margin-left: auto; font-size: 11px; font-weight: 400;
              font-variant-numeric: tabular-nums;
              color: var(--muted-foreground, var(--fb-muted-foreground)); }
-      .col-body { display: flex; flex-direction: column; gap: 8px; padding: 8px; }
+      .col-body { display: flex; flex-direction: column; gap: 8px; padding: 8px;
+             flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+      /* "Mostrar 20 mas": el boton apagado de la casa, a lo ancho de la columna. */
+      .col-mas { flex: none; width: 100%; }
+      .grupo .col-mas { width: auto; margin: 6px 12px 8px; }
       /* La columna sin casos se pliega a su cabecera, en vertical: dice su nombre y su
          cero sin ocupar el ancho de una columna llena. */
       .col.vacia { flex: 0 0 40px; }
@@ -574,6 +582,7 @@
               "boardViewLabel": "Vista",
               "boardViewList": "Lista",
               "boardViewBoard": "Tablero",
+              "boardShowMore": "Mostrar {n} mas", "boardShowMoreAria": "Mostrar {n} casos mas de {etapa}",
               "periodLabel": "Periodo", "periodToday": "Hoy", "period7d": "7 dias", "period30d": "30 dias", "periodAll": "Todo",
               "boardShown": "{n} mostrados",
               "boardShown1": "1 mostrado",
@@ -804,6 +813,7 @@
               "boardViewLabel": "View",
               "boardViewList": "List",
               "boardViewBoard": "Board",
+              "boardShowMore": "Show {n} more", "boardShowMoreAria": "Show {n} more cases in {etapa}",
               "periodLabel": "Period", "periodToday": "Today", "period7d": "7 days", "period30d": "30 days", "periodAll": "All",
               "boardShown": "{n} shown",
               "boardShown1": "1 shown",
@@ -1034,6 +1044,7 @@
               "boardViewLabel": "Visualizacao",
               "boardViewList": "Lista",
               "boardViewBoard": "Quadro",
+              "boardShowMore": "Mostrar mais {n}", "boardShowMoreAria": "Mostrar mais {n} casos em {etapa}",
               "periodLabel": "Periodo", "periodToday": "Hoje", "period7d": "7 dias", "period30d": "30 dias", "periodAll": "Tudo",
               "boardShown": "{n} exibidos",
               "boardShown1": "1 exibido",
@@ -1656,6 +1667,9 @@
       var DIAS_PERIODO = { today: 1, '7d': 7, '30d': 30, all: null }
       var periodo = '7d'
       var periodoLeido = false
+      // Cuantas tarjetas terminadas se ven por etapa (I2): 20, y 20 mas por cada clic.
+      var PASO_FINALES = 20
+      var cuantosFinales = { respondido: PASO_FINALES, cerrado: PASO_FINALES }
       var vistaElegida = null   // null = la natural del ancho: lista hasta 768 px
       var seleccion = null      // el caso cuyo detalle esta abierto
       var proyectosAceptados = []  // el catalogo (`projects`): lo que ofrece Cambiar proyecto
@@ -1782,6 +1796,7 @@
         periodoLeido = true
         if (p === periodo) return
         periodo = p
+        cuantosFinales = { respondido: PASO_FINALES, cerrado: PASO_FINALES }
         pintarPeriodo()
         // Se guarda y se sigue: si el host no lo guarda, este panel igual lo usa ahora.
         call('storage.set', { key: 'boardPeriod', value: p })
@@ -1946,7 +1961,7 @@
         })
       }
 
-      function repintar () { renderBoard(tableroActual, true) }
+      function repintar () { renderBoard(tableroActual, true); ajustarAlto() }
 
       function cerrarFormulario (id) {
         delete formularios[id]
@@ -2492,7 +2507,21 @@
         return busqueda ? visibles + ' / ' + n : String(n)
       }
 
-      function columnaNodo (etapa, m, tarjetas, sola) {
+      /** "Mostrar N mas" de una etapa terminada, o null si ya se ve todo. */
+      function botonMasNodo (etapa, resto) {
+        if (!(resto > 0)) return null
+        var n = Math.min(PASO_FINALES, resto)
+        var b = crear('button', 'btn mute col-mas', fmt('boardShowMore', n))
+        b.type = 'button'
+        b.setAttribute('aria-label', fmt('boardShowMoreAria', { n: n, etapa: t(ETAPA_KEY[etapa]) }))
+        b.addEventListener('click', function () {
+          cuantosFinales[etapa] += PASO_FINALES
+          repintar()
+        })
+        return b
+      }
+
+      function columnaNodo (etapa, m, tarjetas, sola, resto) {
         var n = m.counts[etapa]
         // Antes una columna vacia era una caja con "Nada aqui": ocho de esas tapaban el
         // tablero. Ahora se encoge a su cabecera, como una columna plegada.
@@ -2506,29 +2535,33 @@
         var cab = crear('h3', 'col-head')
         cab.appendChild(puntoEtapa(etapa))
         cab.appendChild(crear('span', 'col-name', nombre))
-        cab.appendChild(crear('span', 'col-count', cuentaTexto(tarjetas.length, n)))
+        cab.appendChild(crear('span', 'col-count', cuentaTexto(tarjetas.length + (resto || 0), n)))
         col.appendChild(cab)
         if (vacia) return col
         var cuerpo = crear('div', 'col-body')
         tarjetas.forEach(function (c) { cuerpo.appendChild(tarjetaNodo(c)) })
         if (!tarjetas.length) cuerpo.appendChild(crear('p', 'col-nada', t('boardStageNone')))
-        if (!busqueda && n > m.porEtapa[etapa].length) {
+        var mas = botonMasNodo(etapa, resto)
+        if (mas) cuerpo.appendChild(mas)
+        else if (!busqueda && n > m.porEtapa[etapa].length) {
           cuerpo.appendChild(crear('p', 'col-more', fmt('boardMore', n - m.porEtapa[etapa].length)))
         }
         col.appendChild(cuerpo)
         return col
       }
 
-      function grupoNodo (etapa, m, tarjetas) {
+      function grupoNodo (etapa, m, tarjetas, resto) {
         var grupo = crear('section', 'grupo' + (etapa === 'bloqueado' ? ' lane' : ''))
         grupo.dataset.stage = etapa
         var cab = crear('h3', 'grupo-head')
         cab.appendChild(puntoEtapa(etapa))
         cab.appendChild(crear('span', 'col-name', t(ETAPA_KEY[etapa])))
-        cab.appendChild(crear('span', 'col-count', cuentaTexto(tarjetas.length, m.counts[etapa])))
+        cab.appendChild(crear('span', 'col-count', cuentaTexto(tarjetas.length + (resto || 0), m.counts[etapa])))
         grupo.appendChild(cab)
         tarjetas.forEach(function (c) { grupo.appendChild(filaNodo(c)) })
-        if (!busqueda && m.counts[etapa] > m.porEtapa[etapa].length) {
+        var mas = botonMasNodo(etapa, resto)
+        if (mas) grupo.appendChild(mas)
+        else if (!busqueda && m.counts[etapa] > m.porEtapa[etapa].length) {
           grupo.appendChild(crear('p', 'col-more', fmt('boardMore', m.counts[etapa] - m.porEtapa[etapa].length)))
         }
         return grupo
@@ -2854,7 +2887,7 @@
         try {
           return JSON.stringify([board, cuentaVinculada, vacioPorConfig(actividadActual),
             proyectosAceptados, filtroEtapa, busqueda, vistaEfectiva(), estrecho(), seleccion,
-            formularios, mensajes, enCurso, periodo, desdePeriodo(periodo)])
+            formularios, mensajes, enCurso, periodo, desdePeriodo(periodo), cuantosFinales])
         } catch (e) {
           return null
         }
@@ -2901,10 +2934,16 @@
           var q = plano(busqueda.trim())
           var etapas = filtroEtapa === 'todos' ? ETAPAS : [filtroEtapa]
           var vis = {}
+          var resto = {}
           var mostrados = 0
           ETAPAS.forEach(function (e) {
             vis[e] = etapas.indexOf(e) >= 0
               ? m.porEtapa[e].filter(function (c) { return coincide(c, q) }) : []
+            // Lo terminado, de 20 en 20: el resto espera su "Mostrar mas".
+            if (FINALES.indexOf(e) >= 0 && vis[e].length > cuantosFinales[e]) {
+              resto[e] = vis[e].length - cuantosFinales[e]
+              vis[e] = vis[e].slice(0, cuantosFinales[e])
+            }
             mostrados += vis[e].length
           })
           var vista = vistaEfectiva()
@@ -2918,14 +2957,14 @@
             nada.hidden = false
           } else if (vista === 'board') {
             etapas.forEach(function (e) {
-              cols.appendChild(columnaNodo(e, m, vis[e], filtroEtapa !== 'todos'))
+              cols.appendChild(columnaNodo(e, m, vis[e], filtroEtapa !== 'todos', resto[e]))
             })
           } else {
             var algun = false
             ORDEN_FILTRO.forEach(function (e) {
               if (!vis[e].length) return
               algun = true
-              lista.appendChild(grupoNodo(e, m, vis[e]))
+              lista.appendChild(grupoNodo(e, m, vis[e], resto[e]))
             })
             if (!algun) {
               nada.textContent = t('boardStageNone')
@@ -2951,6 +2990,17 @@
           }
         }
         nota.textContent = avisos.join(' ')
+      }
+
+      /** El tope de las columnas: lo que queda de la ventana debajo de ellas, con un minimo
+       *  para que en una ventana baja sigan sirviendo. Se mide al pintar y al cambiar el
+       *  tamano; no toca el DOM del tablero, asi que no le roba el clic a nadie. */
+      var ALTO_MINIMO_COLUMNAS = 320
+      function ajustarAlto () {
+        var cols = el('board-cols')
+        var arriba = cols.getBoundingClientRect().top + (window.scrollY || 0)
+        var alto = Math.max(ALTO_MINIMO_COLUMNAS, Math.floor((window.innerHeight || 0) - arriba - 24))
+        cols.style.setProperty('--alto-tablero', alto + 'px')
       }
 
       /** A lo ancho el detalle va al costado, como el panel de un elemento en Plane. En lo
@@ -2998,6 +3048,7 @@
       // Al cruzar los 768 px cambia la vista natural y el lugar del detalle.
       var eraEstrecho = estrecho()
       window.addEventListener('resize', function () {
+        ajustarAlto()
         if (estrecho() === eraEstrecho) return
         eraEstrecho = estrecho()
         repintar()
@@ -3043,6 +3094,7 @@
             renderCobertura(a, chats)
             renderRun(a, esObjeto(tablero) ? tablero : null)
             renderBoard(tablero)
+            ajustarAlto()
           })
         })
       }
