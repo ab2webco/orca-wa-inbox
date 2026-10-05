@@ -3506,8 +3506,8 @@ MODOS_SIN_CLIC = ("responder", "borrador")
 # salvo lo destructivo, que sigue preguntando: borrar, desplegar a produccion, forzar un
 # push y un pago. Nombrar una credencial, el dinero o una fecha en el brief de SU caso no lo
 # frena: es lo que el pidio. Un valor con forma de secreto, una credencial que entro con el
-# caso, el proyecto, el modo y lo viejo si. Solo para el caso del dueno (`caso_del_dueno`,
-# por su id de WhatsApp); la parte B (roles) lo extiende al Super admin con `rol_del_caso`.
+# caso, el proyecto, el modo y lo viejo si. Solo para lo que pide como el dueno
+# (`caso_pide_como_dueno`: el dueno o un Super admin de esa conversacion, por su id).
 MOTIVOS_QUE_NO_FRENAN_AL_DUENO = ("credential", "money", "commitment")
 
 
@@ -3533,7 +3533,7 @@ def trabajo_espera_al_dueno(con, caso):
         return ["no_instructions"]
     texto = " \n".join(str(propuesta.get(k) or "") for k in ("instrucciones", "respuesta"))
     motivos = list(wa_reglas.trabajo_comprometido(texto))
-    del_dueno = caso_del_dueno(con, caso)
+    del_dueno = caso_pide_como_dueno(con, caso)
     if del_dueno:
         # Su orden (decision a): lo nombrado no frena; un valor con forma de secreto si.
         motivos = [m for m in motivos if m not in MOTIVOS_QUE_NO_FRENAN_AL_DUENO
@@ -3697,6 +3697,14 @@ def rol_del_caso(con, caso):
         return wa_store.ROL_CLIENTE
     finally:
         fuente.close()
+
+
+def caso_pide_como_dueno(con, caso):
+    """Si lo que pide el caso cuenta como del dueno (superadmin-ordena): es del dueno
+    (`caso_del_dueno`) o TODOS los que escribieron son Super admin de ESTA conversacion
+    (`rol_del_caso`). Vale para el trabajo sin el clic, el acuse y los avances; ver el valor
+    de una credencial y el brief al pie de la letra siguen siendo solo del dueno."""
+    return caso_del_dueno(con, caso) or rol_del_caso(con, caso) == wa_store.ROL_ADMIN
 
 
 def caso_del_dueno(con, caso):
@@ -3949,7 +3957,7 @@ def avance_frena(con, caso):
         resumen = {}
     riesgo = [f for f in (resumen.get("flags") if isinstance(resumen, dict) else None) or []
               if f not in BANDERAS_SIN_RIESGO]
-    if (excepciones or riesgo) and caso_del_dueno(con, caso):
+    if (excepciones or riesgo) and caso_pide_como_dueno(con, caso):
         # Al dueno no se le cuidan las banderas de cliente de Jev (promete una fecha, afirma
         # un estado sin verificar), igual que su respuesta (T22.1): solo frena una credencial
         # que entro con el caso, y el secreto lo sigue frenando `wa-send` en el texto.
@@ -4657,8 +4665,9 @@ def auto_omite(con, caso, scope, ajustes, tipo):
     if not auto_ajuste(scope.get(caso["chat_jid"]), ajustes, tipo)[0]:
         return "apagado"
     # Decision c del dueno: el dueno no espera un "Recibimos su mensaje" de su propia linea.
-    # Solo lo decide su id de WhatsApp (`caso_del_dueno`); el saludo sigue como siempre.
-    if tipo == "acuse" and caso_del_dueno(con, caso):
+    # Solo lo decide su id de WhatsApp (`caso_pide_como_dueno`: el dueno o un Super admin de
+    # esa conversacion); el saludo sigue como siempre.
+    if tipo == "acuse" and caso_pide_como_dueno(con, caso):
         return RAZON_DUENO
     if _lista_json(caso.get("excepciones")):
         return "excepcion"

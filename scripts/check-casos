@@ -11667,6 +11667,105 @@ if NODE:
         os.environ.clear()
         os.environ.update(antes)
 
+
+# ── superadmin-ordena: el Super admin de una conversacion pide como el dueno ─────────────
+# Decision del dueno (2026-10-05): lo que pide un Super admin (rol `admin` de ESA
+# conversacion, guardado por el dueno) sale como lo del dueno: su trabajo no espera el clic
+# salvo lo destructivo, no recibe acuse y sus avances no se frenan por banderas de cliente.
+# Una credencial sigue siendo solo del dueno. Un Operador y un caso con un mensaje de un
+# cliente siguen como hoy. Solo lo decide el id de WhatsApp; datos de mentira.
+print("\nsuperadmin-ordena: el Super admin pide como el dueno, salvo lo destructivo")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        try:
+            JEFA_SA, OPER_SA = "111122224444@lid", "111122223333@lid"
+            linea_lista(home, modo_soporte="responder")
+            js(home, "config", "first_reply_mode", "model")
+            acepta_proyectos(home, "alfa-demo")
+            js(home, "set", SOPORTE, "--workspace", "alfa-demo")
+            js(home, "set", SOPORTE, "--member", f"{JEFA_SA}=admin",
+               "--member", f"{OPER_SA}=operator")
+            pon_duenos(home, DUENO_LID)
+            n_sa = [0]
+
+            def pide(de, brief, otros=()):
+                n_sa[0] += 1
+                stanza = f"SA{n_sa[0]}"
+                llegan(home, A, [msg(SOPORTE, stanza, "@duenio revisen esto", 5, mencion=True,
+                                     de=de)]
+                       + [msg(SOPORTE, f"{stanza}{i}", t, 4, mencion=True, de=d)
+                          for i, (t, d) in enumerate(otros)])
+                cid = str(js(home, "caso", "crear", "--chat", SOPORTE, "--stanza", stanza,
+                             "--actor", "agente")[0]["case_id"])
+                for i in range(len(otros)):
+                    suma_al_caso(home, cid, f"{stanza}{i}")
+                js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "high",
+                   "--actor", "agente")
+                js(home, "caso", "propuesta", cid, "--tipo", "trabajar", "--instrucciones",
+                   brief, "--actor", "agente")
+                return cid
+
+            def mira(cid):
+                ws = carga_wa_scope(home)
+                con = ws.db()
+                try:
+                    caso = ws.caso_de(con, int(cid))
+                    return (ws.trabajo_espera_al_dueno(con, caso),
+                            ws.auto_omite(con, caso, ws.merged_scope(con),
+                                          ws.merged_settings(con), "acuse"),
+                            ws.caso_del_dueno(con, caso))
+                finally:
+                    con.close()
+
+            ROTA = "Rota las llaves de la API y avisame el lunes a las 3"
+            espera, acuse, dueno = mira(pide(JEFA_SA, ROTA))
+            ok("la orden de un Super admin sale sin el clic aunque nombre una llave y una fecha",
+               espera == [] and not dueno, f"{espera} dueno={dueno}")
+            ok("y al Super admin no le cae el acuse", acuse == "caso-del-dueno", f"{acuse}")
+            espera, _, _ = mira(pide(JEFA_SA, "Despliega a produccion el arreglo"))
+            ok("desplegar a produccion, del Super admin, sigue esperando el clic del dueno",
+               espera == ["deploy"], f"{espera}")
+            espera, _, _ = mira(pide(JEFA_SA, "Usa el token ghp_abcdefghijklmnop1234 para leer"))
+            ok("un valor con forma de secreto del Super admin sigue esperando",
+               "credential" in espera, f"{espera}")
+            espera, acuse, _ = mira(pide(OPER_SA, ROTA))
+            ok("la misma orden de un Operador sigue esperando, como hoy",
+               "credential" in espera and "commitment" in espera, f"{espera}")
+            ok("y el Operador recibe su acuse como hoy", acuse != "caso-del-dueno", f"{acuse}")
+            espera, acuse, _ = mira(pide(JEFA_SA, ROTA,
+                                         otros=(("y lo mio tambien", CLIENTE_LID),)))
+            ok("un caso del Super admin con un mensaje de un cliente sigue esperando",
+               "credential" in espera, f"{espera}")
+            ok("y ese caso recibe su acuse", acuse != "caso-del-dueno", f"{acuse}")
+
+            BANDERAS_SA = json.dumps({"attention_class": "support_request", "skip": False,
+                                      "flags": ["promises_a_date", "states_status_not_verified"]})
+
+            def frena_sa(de):
+                cid = pide(de, "Revisa el reporte de ventas")
+                con = db_de(home)
+                con.execute("update caso set jev=?, excepciones='[\"jev\"]' where case_id=?",
+                            (BANDERAS_SA, int(cid)))
+                con.commit()
+                con.close()
+                ws = carga_wa_scope(home)
+                con = ws.db()
+                try:
+                    return ws.avance_frena(con, ws.caso_de(con, int(cid)))
+                finally:
+                    con.close()
+
+            r = frena_sa(JEFA_SA)
+            ok("el avance al Super admin no se frena por las banderas de cliente", r is None,
+               f"{r}")
+            r = frena_sa(OPER_SA)
+            ok("el de un Operador si, como hoy", r and r[0] == "E_EXCEPTION", f"{r}")
+        finally:
+            os.environ.clear()
+            os.environ.update(env_antes)
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
