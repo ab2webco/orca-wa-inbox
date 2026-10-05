@@ -10,10 +10,14 @@
 // imposible de plano: `--allow-fs-write` no existe en todo orca-oss, asi que el
 // borrado tampoco podia vivir del otro lado.
 //
-// Reusa `dataDir` de harness.mjs: es la MISMA tabla de raices de userData que ya usa
-// la siembra del arnes, asi que las dos carpetas de un mismo plugin -harness y auth
-// state- nunca terminan en raices distintas en una maquina con mas de un Orca
-// instalado (release + dev).
+// Reusa `dataDir` de harness.mjs, que conserva la eleccion de raiz de siempre (ya
+// sembrada, si no con datos, si no la primera de la tabla de userData): un auth state ya
+// vinculado nunca se mueve solo, porque moverlo es pedir un QR nuevo sin avisar. La
+// carpeta de trabajo del arnes NO sigue esa eleccion cuando el plugin esta instalado:
+// sale del userData donde esta instalado (`raizDeLaInstalacion`), el del Orca que corre
+// las automatizaciones. Asi que en una maquina con mas de un Orca (p. ej. `orca` vieja y
+// sembrada, y la app corriendo desde `orca-ide`) el arnes y el auth state pueden quedar
+// en raices distintas, y es a proposito.
 //
 // El borrado vive ACA y no en un guion hermano por la misma razon por la que la ruta
 // vive aca: una segunda copia de esa tabla de raices puede discrepar con esta, y

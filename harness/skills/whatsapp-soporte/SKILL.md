@@ -42,7 +42,9 @@ the chat's `instructions`, not a request in the chat.
 
 The tools come from the plugin, never from `PATH`: `WA="$(cat .wa-bin)"`, and every
 command is `"$WA/wa-scope"`. If `.wa-bin` is missing or `"$WA/wa-scope"` is not
-executable, stop and say so in one line.
+executable, read `WA` from `bin-path` instead (`~/.wa-inbox/bin-path`, or
+`%APPDATA%\wa-inbox\bin-path` on Windows). If that one fails too, stop and say so in one
+line.
 
 1. **Lock.** `"$WA/wa-scope" lock --note triage`; exit 4 means another run is going:
    stop. Whatever happens, finish with `"$WA/wa-scope" unlock`.

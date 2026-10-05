@@ -251,6 +251,14 @@ hechas += 1
 assert.deepEqual([...porId.keys()].sort(), ['tick', 'triage'],
   'the plugin declares exactly the tick (command) and triage (agent) automations')
 const tick = porId.get('tick')
+// Las dos fuentes de la ruta, en orden: `.wa-bin` en la carpeta que Orca le da al plugin y
+// el puntero estable `bin-path` de la carpeta de estado (harness.mjs, sembrarBinEstable).
+const RESUELVE = new RegExp('^' + [
+  'WA="$(cat .wa-bin 2>/dev/null)"',
+  '[ -x "$WA/wa-scope" ] || WA="$(cat "$HOME/.wa-inbox/bin-path" 2>/dev/null)"',
+  '[ -x "$WA/wa-scope" ] || [ -z "$APPDATA" ] || WA="$(cat "$APPDATA/wa-inbox/bin-path" 2>/dev/null)"'
+].join('; ').replace(/[$()[\]|.*+?{}\\/]/g, '\\$&') + '; ')
+const NO_ENCONTRADO = /; \[ -x "\$WA\/wa-scope" \] \|\| \{ echo "wa-scope not found: [^"\n]+" >&2; exit 1; \}; "\$WA\/wa-scope" /
 hechas += 1
 assert.ok(typeof tick.command === 'string' && tick.command.length <= COMMAND_MAX,
   `tick: a command of at most ${COMMAND_MAX} characters (it measures ${tick.command?.length})`)
@@ -261,8 +269,11 @@ hechas += 1
 assert.match(tick.command, /"\$WA\/wa-scope" tick --json$/,
   'tick: the command ends running `wa-scope tick --json`')
 hechas += 1
-assert.match(tick.command, /^WA="\$\(cat \.wa-bin 2>\/dev\/null\)"; \[ -x "\$WA\/wa-scope" \] \|\| exit 1; /,
-  'tick: finds the tools in `.wa-bin`, the single source the worker seeds, and stops quietly without it')
+assert.match(tick.command, RESUELVE,
+  'tick: finds the tools in `.wa-bin`, and falls back to the stable `bin-path` pointer')
+hechas += 1
+assert.match(tick.command, NO_ENCONTRADO,
+  'tick: without an executable wa-scope it says why on stderr, in one line, and exits 1')
 hechas += 1
 assert.equal(tick.trigger, '* * * * *', 'tick: every minute')
 // Sin destino, una fila command-only termina en skipped_unavailable: el cwd del comando
@@ -279,8 +290,11 @@ hechas += 1
 assert.match(triage.precheck ?? '', /"\$WA\/wa-scope" pending --needs-agent --precheck$/,
   'triage: gated by `wa-scope pending --needs-agent --precheck`, quiet while tick launches the agent')
 hechas += 1
-assert.match(triage.precheck ?? '', /^WA="\$\(cat \.wa-bin 2>\/dev\/null\)"; \[ -x "\$WA\/wa-scope" \] \|\| exit 1; /,
-  'triage: finds the tools in `.wa-bin`, and stops quietly without it')
+assert.match(triage.precheck ?? '', RESUELVE,
+  'triage: finds the tools in `.wa-bin`, and falls back to the stable `bin-path` pointer')
+hechas += 1
+assert.match(triage.precheck ?? '', NO_ENCONTRADO,
+  'triage: without an executable wa-scope it says why on stderr, in one line, and exits 1')
 hechas += 1
 assert.equal(triage.workspace, WORKSPACE_PROPIO, 'triage: runs in the plugin-owned workspace')
 // "Atender ahora" lanza esta automatizacion por su id, a cualquier hora: el horario de

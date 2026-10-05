@@ -82,11 +82,16 @@ La línea del tick cuenta `despachados`, `bloqueados_por_despacho`,
 
 Las dos encuentran las herramientas leyendo `.wa-bin`, en la carpeta de trabajo del
 plugin (`workspace: plugin-owned`): el worker escribe ahi la ruta de su propio `bin/` en
-cada activacion (`harness.mjs`, `sembrarBin`). No hay resolvedor por instalacion ni por
-`PATH`. Sin `.wa-bin` salen con 1, calladas, y la siguiente activacion lo siembra; el
-resolvedor viejo no cabe junto a esta forma en los 1024 caracteres del manifiesto. Con un
-build instalado y uno de desarrollo abiertos a la vez, comparten carpeta y gana el ultimo
-que sembro.
+cada activacion (`harness.mjs`, `sembrarBin`). Instalado, el worker siembra la carpeta del
+userData donde Orca lo instalo (`<userData>/plugins/<llave>/<hash>`), que es la misma que
+Orca crea para las automatizaciones; un build de desarrollo elige como antes. Si `.wa-bin`
+falta o no nombra un `wa-scope` ejecutable, leen el puntero estable `bin-path`
+(`$HOME/.wa-inbox/bin-path`, o `$APPDATA/wa-inbox/bin-path` si esa variable existe), que la
+misma siembra deja en cada arranque (`sembrarBinEstable`). Sin ninguno salen con 1 y dicen
+por que en una linea de stderr, con la carpeta donde miraron. Nunca de `PATH`. La forma
+sale de `scripts/resolver_formas.py` y `scripts/check-resolver` la mide contra los 1024
+caracteres del manifiesto. Con un build instalado y uno de desarrollo que eligen el mismo
+userData, comparten carpeta y gana el ultimo que sembro.
 
 ## Crearlas
 

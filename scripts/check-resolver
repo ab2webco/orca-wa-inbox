@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Las herramientas del plugin salen de UNA fuente, el archivo `.wa-bin`, y todo lo que
-la lee dice lo mismo.
+"""Las herramientas del plugin salen de UNA forma, `.wa-bin` con respaldo en el puntero
+estable `bin-path`, y todo lo que la lee dice lo mismo.
 
 El resolvedor de cinco copias (dos en `orca-plugin.json`, dos en `automations/` y el
 bloque del prompt) se fue: ver `scripts/resolver_formas.py`. Lo que se comprueba ahora es
@@ -71,12 +71,15 @@ def main() -> int:
         if "Never fall back to a bare `wa-scope` from PATH" not in cuerpo:
             fallos.append(f"{ruta.relative_to(RAIZ)}: ya no prohibe el `wa-scope` pelado de PATH")
 
-    # Y el worker de verdad escribe el archivo que todo esto lee.
-    n += 2
+    # Y el worker de verdad escribe los dos archivos que todo esto lee.
+    n += 3
     arnes = (RAIZ / "harness.mjs").read_text(encoding="utf-8")
     if "ARCHIVO_BIN = '.wa-bin'" not in arnes or "sembrarBin(" not in arnes:
         fallos.append("harness.mjs ya no siembra `.wa-bin`: nadie escribiria la ruta que "
                       "las automations leen")
+    if "ARCHIVO_BIN_ESTABLE = 'bin-path'" not in arnes or "sembrarBinEstable(" not in arnes:
+        fallos.append("harness.mjs ya no deja `bin-path`: el respaldo de las automations "
+                      "leeria un archivo que nadie escribe")
     if "ab2web.wa-inbox" in (RAIZ / "orca-plugin.json").read_text(encoding="utf-8"):
         fallos.append("orca-plugin.json nombra ab2web.wa-inbox: esa no es una version vieja, "
                       "es otro producto")
@@ -86,8 +89,8 @@ def main() -> int:
         for f in dict.fromkeys(fallos):
             print(f"  {f}", file=sys.stderr)
         return 1
-    print(f"{n} comprobaciones: las herramientas salen de `.wa-bin`, con una sola forma en "
-          f"el manifiesto, `automations/` y el prompt")
+    print(f"{n} comprobaciones: las herramientas salen de `.wa-bin` o de `bin-path`, con una "
+          f"sola forma en el manifiesto, `automations/` y el prompt")
     return 0
 
 

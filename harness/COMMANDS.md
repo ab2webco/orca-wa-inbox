@@ -100,10 +100,11 @@ The tools ship inside the plugin, but you are not standing in the plugin folder:
 the automation in this workspace, where no `./bin/` exists. The plugin writes the absolute
 path of its own `bin/` into `.wa-bin`, one line, every time it starts and every time it
 seeds this folder: `WA="$(cat .wa-bin 2>/dev/null)"`. `PATH` is never trusted. If `.wa-bin`
-is missing or `"$WA/wa-scope"` is not executable, stop and say so in one line.
+is missing or `"$WA/wa-scope"` is not executable, read the path from `bin-path` (below);
+if that one fails too, stop and say so in one line.
 
-An agent outside this folder (in any project) reads the same path from `bin-path`, which
-the plugin also rewrites every time it starts, in the tools' state folder:
+`bin-path` holds the same path, and the plugin also rewrites it every time it starts, in
+the tools' state folder. An agent outside this folder (in any project) reads only this one:
 `WA="$(cat ~/.wa-inbox/bin-path 2>/dev/null)"` on macOS and Linux, and
 `%APPDATA%\wa-inbox\bin-path` on Windows. It always names the plugin that is installed
 and running, never a copy.
