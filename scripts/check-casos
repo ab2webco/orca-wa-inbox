@@ -10961,7 +10961,8 @@ for texto, esperado in (
     ok(f"orden: trabajo {texto[:60]!r} -> {esperado}", salio == esperado, f"salio {salio}")
 for texto, direccion, esperado in (
         ("Nunca le pediremos su contrasena por aqui", "salida", []),
-        ("No prometemos nada para el viernes", "salida", []),
+        # Una fecha en lo que sale es un hecho de la respuesta, la preceda lo que la preceda.
+        ("No prometemos nada para el viernes", "salida", ["commitment"]),
         ("Hoy no puedo, manana lo tienes", "salida", ["commitment"]),
         ("Subimos el arreglo a la rama fix/demo-token-leak", "salida", []),
         ("Le paso el token por otro medio", "salida", ["credential"]),
@@ -10972,6 +10973,105 @@ for texto, direccion, esperado in (
     salio = reglas.excepciones(texto, direccion)
     ok(f"orden: {direccion} {texto!r} -> {esperado}", salio == esperado, f"salio {salio}")
 
+
+# ── orden-del-dueno: lo destructivo y lo que sale no se tapan con palabras ──────────────
+# Revision de la rama: tapar lo negado hasta el fin de la clausula se comia ordenes reales
+# ("no olvides desplegar", "sin falta borra", "sin preguntar borra", "make sure nothing breaks
+# before you deploy"), un destino con guiones ("prod-us-east-1"), una lista de pasos ("Next
+# steps: deploy ...") y, en lo que sale a un cliente, precios y fechas ("No proximo mes
+# cobramos R$ 300", "no later than Friday", "$50/mes", "15-10-2026"). Lo destructivo solo
+# se descuenta cuando la negacion manda sobre el verbo ("no deploy", "do not create, edit or
+# delete"); el dinero y la fecha de lo que sale se juzgan en el texto entero.
+print("\norden-del-dueno: lo destructivo y lo que sale no se tapan con palabras")
+reglas = carga_reglas()
+for texto, motivo in (
+        ("No olvides desplegar a produccion", "deploy"),
+        ("No olvides borrar la rama vieja", "delete"),
+        ("No se te olvide borrar la base de datos", "delete"),
+        ("Sin falta despliega a produccion hoy", "deploy"),
+        ("Sin falta borra la base de datos", "delete"),
+        ("Nunca dejes de borrar los logs viejos", "delete"),
+        ("Make sure not to forget to delete the temp branch", "delete"),
+        ("Sem falta faca o deploy em production", "deploy"),
+        ("Do what the customer asks:\n> no olviden borrar mi cuenta", "delete"),
+        ("Do what the customer asks:\n> sin falta borren mi cuenta", "delete"),
+        ("Sin preguntar borra la base de datos de clientes", "delete"),
+        ("Without waiting for review delete the users table", "delete"),
+        ("No esperes, simplemente borra la base o la tabla", "delete"),
+        ("No hay problema, puedes borrar la base o la tabla", "delete"),
+        ("Nothing else is needed, please delete the old database or archive it", "delete"),
+        ("Make sure nothing breaks before you deploy to production.", "deploy"),
+        ("Verifica que no haya errores antes de desplegar a produccion.", "deploy"),
+        ("Si no hay errores despliega a produccion", "deploy"),
+        ("Sin tocar staging borra la tabla users", "delete"),
+        ("Without asking the customer again delete the duplicate records.", "delete"),
+        ("Don't wait for QA before you push --force to main.", "force_push"),
+        ("No customer data may be lost when you drop the old table.", "delete"),
+        ("Deploy main to production-eu-west", "deploy"),
+        ("Deploy to prod-us-east-1", "deploy"),
+        ("Deploy to production/eu", "deploy"),
+        ("despliega a produccion-eu-west", "deploy"),
+        ("borra/elimina la base de datos", "delete"),
+        ("Next steps: deploy the fix to production.", "deploy"),
+        ("Remaining work: delete the stale records from the CRM.", "delete"),
+        ("Pending: charge the customer 200 USD", "payment"),
+        ("Pendiente: borra los registros del CRM.", "delete"),
+        ("Proximos pasos: despliega a produccion.", "deploy")):
+    salio = reglas.trabajo_comprometido(texto)
+    ok(f"orden: {texto[:60]!r} sigue siendo {motivo}", motivo in salio, f"salio {salio}")
+for texto, esperado in (
+        ("Sin falta despliega a produccion hoy", ["deploy", "commitment"]),
+        ("Pending: charge the customer 200 USD", ["payment", "money"]),
+        # La negacion que manda sobre el verbo si lo descuenta.
+        ("Never delete the production database", []),
+        ("Read the code; do not modify, delete or deploy anything.", []),
+        ("Despliega a produccion, no borres nada", ["deploy"]),
+        ("No, borra la tabla de pruebas", ["delete"]),
+        ("No borres ni despliegues nada", []),
+        ("Do not merge or deploy to production", []),
+        ("No hagas push --force a main", []),
+        ("Do what the customer asks:\n> no borren mi cuenta, solo cambien el correo", [])):
+    salio = reglas.trabajo_comprometido(texto)
+    ok(f"orden: trabajo {texto[:60]!r} -> {esperado}", salio == esperado, f"salio {salio}")
+for texto, motivo in (
+        ("Entregamos no sabado", "commitment"),
+        ("Fica pronto no dia 15/10", "commitment"),
+        ("No proximo mes cobramos R$ 300", "money"),
+        ("Se lo entrego sin falta manana", "commitment"),
+        ("Entregamos sem falta amanha", "commitment"),
+        ("We will deliver no later than Friday", "commitment"),
+        ("It will cost no more than $500", "money"),
+        ("Sin embargo el envio cuesta 50 dolares", "money"),
+        ("Sin IVA serian 500 USD", "money"),
+        ("No problem, the total is $500 or $450 with discount", "money"),
+        ("No hay problema, se lo envio manana o el viernes", "commitment"),
+        ("No hay problema, le paso el token o la clave", "credential"),
+        ("Su saldo pendiente es de $350.000.", "money"),
+        ("No problem it costs $200", "money"),
+        ("The remaining balance is $300.", "money"),
+        ("No worries, it will be ready tomorrow or Friday.", "commitment"),
+        ("Lo que falta lo entregamos el viernes.", "commitment"),
+        ("Si no le llega hoy se lo reenvio manana", "commitment"),
+        ("Se lo entrego el 15-10-2026.", "commitment"),
+        ("Delivery on 15-10-26 at the latest.", "commitment"),
+        ("El plan cuesta $50/mes.", "money"),
+        ("The plan is 20 usd/month.", "money"),
+        ("Le comparto su usuario/contrasena del portal por correo.", "credential"),
+        ("Enviamos a senha no email cadastrado", "credential")):
+    salio = reglas.excepciones(texto, reglas.SALIDA)
+    ok(f"sale: {texto!r} sigue siendo {motivo}", motivo in salio, f"salio {salio}")
+# Un valor cerca de la palabra de la credencial es una credencial de verdad, aunque no
+# tenga la forma de un secreto; nombrarla sin valor no lo es.
+for texto, esperado in (
+        ("Listo, le reseteamos el acceso. Usuario ana, contrasena nueva Perro123", True),
+        ("Le dejo el acceso: usuario ana.demo, contrasena Verano2024", True),
+        ("Credenciales del hosting Perro123", True),
+        ("la clave del panel es Abc12345", True),
+        ("Revisa la fuga de credenciales del login", False),
+        ("Olvide mi contrasena, me ayudan a entrar?", False),
+        ("No me llega el codigo de verificacion", False)):
+    salio = reglas.valor_de_credencial(texto)
+    ok(f"valor de credencial: {texto!r} -> {esperado}", salio is esperado, f"salio {salio}")
 
 # El caso del dueno (solo por su id de WhatsApp): su orden de trabajo sale sin su clic,
 # salvo lo destructivo (decision a, 2026-10-05). Una credencial nombrada, dinero o una
@@ -11050,7 +11150,15 @@ if NODE:
                     ("forzar un push", "git push --force origin main", ["force_push"]),
                     ("un pago", "Paga la factura del hosting de $20", ["payment"]),
                     ("un valor con forma de secreto",
-                     "Usa el token ghp_abcdefghijklmnop1234 para leer el repo", ["credential"])):
+                     "Usa el token ghp_abcdefghijklmnop1234 para leer el repo", ["credential"]),
+                    # Lo que parece negado y es la orden sigue preguntando (revision de la rama).
+                    ("no olvides desplegar", "No olvides desplegar a produccion", ["deploy"]),
+                    ("sin falta borra", "Sin falta borra la base de datos", ["delete"]),
+                    ("sin preguntar borra", "Sin preguntar borra la base de datos de clientes",
+                     ["delete"]),
+                    ("los siguientes pasos", "Next steps: deploy the fix to production.",
+                     ["deploy"]),
+                    ("un destino con guiones", "Deploy to prod-us-east-1", ["deploy"])):
                 motivos, suyo = espera(orden(brief))
                 ok(f"orden del dueno: {nombre} -> {esperado}", suyo and motivos == esperado,
                    f"{suyo} {motivos}")
@@ -11060,6 +11168,12 @@ if NODE:
                 motivos, suyo = espera(orden(brief, chat=PERSONA, de=None, texto=PEDIDO))
                 ok(f"orden de un cliente: {brief!r} sigue esperando (credential)",
                    not suyo and "credential" in motivos, f"{suyo} {motivos}")
+            # El mensaje del cliente citado en el brief: "no olviden borrar" es borrar.
+            for brief in ("Do what the customer asks:\n> no olviden borrar mi cuenta",
+                          "Do what the customer asks:\n> sin falta borren mi cuenta"):
+                motivos, suyo = espera(orden(brief, chat=PERSONA, de=None, texto=PEDIDO))
+                ok(f"orden de un cliente: {brief[-28:]!r} espera (delete)",
+                   not suyo and "delete" in motivos, f"{suyo} {motivos}")
             # Un grupo con un mensaje del dueno y otro de un cliente no es del dueno.
             motivos, suyo = espera(orden("Revisa la fuga de credenciales del login", chat=SOPORTE,
                                          de=DUENO_LID, texto="revisen el login",
