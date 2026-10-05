@@ -44,7 +44,8 @@ import argparse, datetime, hashlib, json, os, pathlib, re, shlex, sqlite3, subpr
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from wa_settings import (  # noqa: E402
-    CONFIG_NUMERICOS, CONFIG_OPCIONES, MODOS_PRIMER, PANEL_PRIMER, PANEL_PRIMER_CAMPOS,
+    CONFIG_HORAS, CONFIG_NUMERICOS, CONFIG_OPCIONES, MODOS_PRIMER, PANEL_ORCA, PANEL_ORCA_CAMPOS,
+    PANEL_PRIMER, PANEL_PRIMER_CAMPOS,
     PANEL_SETTINGS, PLUGIN_ID, VARIABLE_APROBADOR,
     PLUGIN_ID_ANTERIOR, duenos, llave_aprobador, trae_llave_aprobador, idioma_aprobacion, numero_aprobacion, orca_cli_path, orca_env, orca_runtime_home, plugin_store_path,
     plugin_store_raw,
@@ -804,6 +805,12 @@ def plugin_store_patch_run(trace):
 def mirror_to_panel(key, value):
     """Un ajuste que el panel tambien guarda tiene que viajar en las dos direcciones:
     si solo bajara del panel, un valor viejo del panel ganaria para siempre."""
+    campo = next((c for c, name in PANEL_ORCA_CAMPOS.items() if name == key), None)
+    if campo:
+        orca = plugin_store_raw().get(PANEL_ORCA)
+        orca = dict(orca) if isinstance(orca, dict) else {}
+        orca[campo] = value
+        return plugin_store_write(None, extra={PANEL_ORCA: orca})
     campo = next((c for c, name in PANEL_PRIMER_CAMPOS.items() if name == key), None)
     if campo:
         primer = plugin_store_raw().get(PANEL_PRIMER)
@@ -963,6 +970,8 @@ def push_to_plugin(con, with_activity=False):
                 extra[flat] = str(valor)
         extra[PANEL_PRIMER] = {campo: str(efectivos.get(name) or DEFAULT_CONFIG[name])
                                for campo, name in PANEL_PRIMER_CAMPOS.items()}
+        extra[PANEL_ORCA] = {campo: str(efectivos.get(name) or DEFAULT_CONFIG[name])
+                             for campo, name in PANEL_ORCA_CAMPOS.items()}
     return plugin_store_write(scope, agent_name_of(con), activity, health, routes, extra)
 
 
@@ -2077,6 +2086,17 @@ DEFAULT_CONFIG = {
     # La meta del primer contacto en los informes (odd/tasks/informes-tablero.md): minutos
     # entre el primer mensaje del cliente y la primera salida en ese chat. Sale al panel.
     "sla_first_reply_minutes": "15",
+    # Los avisos de Orca por WhatsApp (odd/tasks/avisos-orca.md), al numero de aprobacion:
+    # apagados de fabrica, uno por tipo. Las horas de silencio en hora local (vacias = sin
+    # silencio), el tope por hora y cuanto espera el aviso de "termino" por si el agente
+    # sigue. Salen al panel en la clave `orcaNotices`.
+    "orca_notice_waiting": "off",
+    "orca_notice_finished": "off",
+    "orca_notice_automation": "off",
+    "orca_quiet_start": "",
+    "orca_quiet_end": "",
+    "orca_notice_hourly_cap": "6",
+    "orca_finished_delay_s": "25",
     "transcribe": "local",    # local | off | api. Local no manda el audio a ningun lado.
     "transcribe_model": "",   # vacio = lo decide la calidad; fijarlo pisa la calidad
     "transcribe_lang": "auto",    # los audios mezclan espanol e ingles
