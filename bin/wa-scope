@@ -256,6 +256,9 @@ create table if not exists chat_scope (
   -- a quien se le pregunta "A o B?" cuando el caso no tiene proyecto (proyectos-por-chat,
   -- M5): auto | writer | owner; null = auto
   pregunta_proyecto text,
+  -- los roles por numero de ESTA conversacion (roles-por-numero, M9): JSON {id: operator |
+  -- admin}. Cliente no se guarda: un numero sin rol es un cliente. null = nadie tiene rol
+  miembros      text,
   timezone      text default 'America/Bogota',
   notes         text,
   updated_at    text,
@@ -839,6 +842,10 @@ def persistir_panel(con):
             con.execute("update chat_scope set aprobacion=? where account=? and chat_jid=?",
                         (json.dumps(wa_reglas.niveles(e["approval"]), sort_keys=True),
                          cuenta_de_entrada(e), jid))
+        if isinstance(e.get("members"), list):
+            con.execute("update chat_scope set miembros=? where account=? and chat_jid=?",
+                        (json.dumps(miembros_del_panel(e["members"]), sort_keys=True),
+                         cuenta_de_entrada(e), jid))
         # Los proyectos solo se tocan si el panel los dijo: una entrada de un panel anterior
         # no trae las claves y no puede borrar los que se pusieron por terminal. Van las dos
         # columnas: la lista y el `workspace` derivado que leen los de un solo proyecto.
@@ -856,7 +863,13 @@ def push_to_plugin(con, with_activity=False):
     persistir_panel(con)
     scope = {}
     cuenta = cuenta_activa()
-    for jid, r in merged_scope(con).items():
+    panel = plugin_store_read()
+    fusionado = merged_scope(con)
+    # Los miembros de los grupos del alcance (roles-por-numero, M9), en cada sync con la
+    # bandeja y no solo cuando cambio la fuente: un grupo recien autorizado tiene que poder
+    # repartir roles sin esperar a que alguien escriba.
+    grupos = build_group_members(fusionado) if with_activity else None
+    for jid, r in fusionado.items():
         # tone e instructions viajan de vuelta al panel. Sin ellos, cada sync
         # reescribia scope sin esas claves y borraba lo que el usuario acababa de
         # escribir ahi: el panel guardaba y la siguiente corrida lo perdia.
@@ -871,6 +884,10 @@ def push_to_plugin(con, with_activity=False):
                       "firstReply": r.get("primer_mensaje"),
                       "approval": r["niveles"],
                       "projectQuestion": r.get("pregunta_proyecto") or PREGUNTA_AUTO,
+                      "members": members_al_panel(
+                          r.get("miembros") or {}, panel.get(jid),
+                          {m["id"]: m["name"] for m in (grupos or {}).get(jid, [])
+                           if m.get("name")}),
                       "updatedAt": r.get("updated_at"), "account": cuenta}
     activity = health = None
     reusando = False
@@ -910,6 +927,7 @@ def push_to_plugin(con, with_activity=False):
         # las conversaciones del numero anterior como si fueran del vinculado (T9).
         if not reusando:
             extra.update(chats=build_chats(), chatsAccount=cuenta, senders=build_senders())
+        extra["groupMembers"] = grupos
         for flat, name in PANEL_SETTINGS.items():
             # agentName ya viaja en su propio parametro, mas arriba.
             if flat == "agentName":
@@ -1074,6 +1092,26 @@ def build_senders():
             for f in filas if isinstance(f, dict) and f.get("id")][:400]
 
 
+def build_group_members(alcance):
+    """`groupMembers` para el panel (roles-por-numero, M9): `{jid: [{id, name, phone}]}` de
+    los grupos del alcance de la linea vinculada, para que el dueno marque a cada persona
+    Operador o Super admin. Ids, nombres y telefonos, nunca texto. Se lee el almacen en
+    solo lectura, como `chat_es_del_dueno`; sin almacen, nada."""
+    jids = sorted(j for j in alcance if str(j).endswith("@g.us"))
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return {}
+    try:
+        por_grupo = wa_store.miembros_de_grupos(fuente, cuenta_activa(), jids)
+    except sqlite3.Error:
+        return {}
+    finally:
+        fuente.close()
+    return {jid: [{"id": m["id"], "name": m["name"], "phone": m["phone"]} for m in filas]
+            for jid, filas in por_grupo.items()}
+
+
 def build_health():
     """El panel no puede ejecutar nada, asi que el estado se lo dejamos masticado:
     un booleano y, si algo falla, QUE falla. El porque va en el README, no en la UI."""
@@ -1147,6 +1185,60 @@ def pregunta_del_panel(valor):
     return valor if isinstance(valor, str) and valor in PREGUNTA_VALORES else None
 
 
+def miembros_de_columna(valor):
+    """Los roles guardados de una conversacion (`chat_scope.miembros`): `{id: operator|admin}`
+    con ids de persona sin dispositivo. Lo que no es un id o un rol guardable se ignora: un
+    valor sucio no le puede dar un rol a nadie. Una base de antes (null) no tiene ninguno."""
+    try:
+        datos = json.loads(valor) if isinstance(valor, str) else valor
+    except ValueError:
+        return {}
+    if not isinstance(datos, dict):
+        return {}
+    salida = {}
+    for clave, rol in datos.items():
+        jid = wa_store.id_de_persona(clave)
+        if jid and rol in wa_store.ROLES_GUARDADOS:
+            salida[jid] = rol
+    return salida
+
+
+def miembros_del_panel(lista):
+    """Los roles que dice `scope[jid].members` del panel (`[{id, name, role}]`), como se
+    guardan: `{id: operator|admin}`. `client` no se guarda (es no tener rol), y un id sin
+    forma de id de persona o un rol que no existe se descartan."""
+    salida = {}
+    for m in lista if isinstance(lista, list) else []:
+        if isinstance(m, dict):
+            jid = wa_store.id_de_persona(m.get("id"))
+            if jid and m.get("role") in wa_store.ROLES_GUARDADOS:
+                salida[jid] = m["role"]
+    return salida
+
+
+def nombres_del_panel(lista):
+    """`{id: name}` de `scope[jid].members`: los nombres que el panel mostro al elegir."""
+    salida = {}
+    for m in lista if isinstance(lista, list) else []:
+        jid = wa_store.id_de_persona(m.get("id")) if isinstance(m, dict) else None
+        if jid and isinstance(m.get("name"), str) and m["name"].strip():
+            salida[jid] = m["name"].strip()
+    return salida
+
+
+def members_al_panel(miembros, entrada=None, nombres=None):
+    """`scope[jid].members` para el panel: `[{id, name, role}]`, en el orden en que el panel
+    los tenia y despues los demas por id. El nombre es el que el panel ya mostraba o, si no,
+    el de la lista del grupo (`nombres`)."""
+    previa = entrada.get("members") if isinstance(entrada, dict) else None
+    suyos = nombres_del_panel(previa)
+    orden = [j for j in (wa_store.id_de_persona(m.get("id")) for m in previa or ()
+                         if isinstance(m, dict)) if j in miembros]
+    orden = list(dict.fromkeys(orden + sorted(j for j in miembros if j not in orden)))
+    return [{"id": j, "name": suyos.get(j) or (nombres or {}).get(j) or "",
+             "role": miembros[j]} for j in orden]
+
+
 def merged_scope(con):
     """Lo del panel manda sobre lo del CLI cuando el mismo chat esta en los dos:
     el panel es lo que el usuario acaba de tocar."""
@@ -1156,13 +1248,14 @@ def merged_scope(con):
     rows = {r["chat_jid"]: dict(r) for r in con.execute(
         "select account, chat_jid, chat_name, provider, target, workspace, workspaces, mode, "
         "initial_state, hours, tone, instructions, acuse, acuse_texto, saludo, "
-        "saludo_texto, primer_mensaje, aprobacion, pregunta_proyecto, timezone, notes, "
-        "updated_at from chat_scope "
+        "saludo_texto, primer_mensaje, aprobacion, pregunta_proyecto, miembros, timezone, "
+        "notes, updated_at from chat_scope "
         "where account=?", (cuenta,))}
     for row in rows.values():
         row["workspaces"] = lista_de_proyectos(lista_de_columna(row.get("workspaces")),
                                                row.get("workspace"))
         row["workspace"] = proyecto_derivado(row["workspaces"])
+        row["miembros"] = miembros_de_columna(row.get("miembros"))
     for jid, e in plugin_store_read().items():
         # El panel guarda por jid, y cada entrada dice de que linea es (`account`; las
         # de antes de T9 no lo dicen y son `local`). Solo entran las de esta linea: el
@@ -1200,6 +1293,11 @@ def merged_scope(con):
         # de los tres es auto.
         if "projectQuestion" in e:
             row["pregunta_proyecto"] = pregunta_del_panel(e.get("projectQuestion"))
+        # Los roles de esta conversacion (roles-por-numero, M9): la lista del panel manda,
+        # vacia incluida; una entrada de un panel anterior no la trae y vale la base.
+        if isinstance(e.get("members"), list):
+            row["miembros"] = miembros_del_panel(e["members"])
+        row.setdefault("miembros", {})
         rows[jid] = row
     # En "ninguno" el destino no existe, aunque haya quedado uno guardado de antes.
     # Se apaga aca y no en cada comando para que ninguno — check, where, voice, el
@@ -1378,7 +1476,7 @@ def migrate(con):
     if "instructions" not in cols:
         con.execute("alter table chat_scope add column instructions text")
     for columna in ("acuse", "acuse_texto", "saludo", "saludo_texto", "aprobacion",
-                    "primer_mensaje", "pregunta_proyecto"):
+                    "primer_mensaje", "pregunta_proyecto", "miembros"):
         if columna not in cols:
             con.execute(f"alter table chat_scope add column {columna} text")
     if "target" not in cols:
@@ -1463,7 +1561,7 @@ def migrate(con):
 # el tono en la columna de las notas sin que nada avise.
 CHAT_SCOPE_COLS = ("chat_jid", "chat_name", "provider", "target", "workspace", "workspaces",
                    "mode", "initial_state", "hours", "tone", "instructions", "timezone",
-                   "notes", "updated_at", "pregunta_proyecto")
+                   "notes", "updated_at", "pregunta_proyecto", "miembros")
 
 
 def migrate_cuentas(con, cols):
@@ -1640,6 +1738,29 @@ def niveles_pedidos(pedidos, actual):
     return json.dumps(niv, sort_keys=True)
 
 
+def miembros_pedidos(pedidos, actual):
+    """Los roles del chat con los `id=rol` de `--member` encima (roles-por-numero, M9):
+    operator o admin lo pone, client lo quita (cliente es no tener rol). Un id sin forma de
+    id de persona, o un rol que no existe, sale sin guardar nada: un rol mal escrito no puede
+    quedar dandole permisos a nadie."""
+    roles = miembros_de_columna(actual)
+    for pedido in pedidos or ():
+        quien, _, rol = str(pedido).partition("=")
+        jid = wa_store.id_de_persona(quien.strip())
+        rol = rol.strip()
+        if not jid:
+            sys.exit(f"invalid id in --member: {quien.strip()!r} (use a person's WhatsApp id, "
+                     f"<digits>@lid or <digits>@s.whatsapp.net, as `wa-read members` lists it)")
+        if rol not in wa_store.ROLES:
+            sys.exit(f"invalid role in --member {jid}: {rol!r} (use "
+                     f"{', '.join(wa_store.ROLES)})")
+        if rol == wa_store.ROL_CLIENTE:
+            roles.pop(jid, None)
+        else:
+            roles[jid] = rol
+    return roles
+
+
 def cmd_set(con, a):
     jid, name = jid_of(con, a.chat)
     cur = con.execute("select * from chat_scope where chat_jid=? and account=?",
@@ -1691,6 +1812,8 @@ def cmd_set(con, a):
         "aprobacion": niveles_pedidos(a.approval, cur.get("aprobacion")),
         "pregunta_proyecto": (a.project_question if a.project_question is not None
                               else cur.get("pregunta_proyecto")),
+        "miembros": json.dumps(miembros_pedidos(a.member, cur.get("miembros")),
+                               sort_keys=True),
         "timezone": a.timezone or cur.get("timezone") or "America/Bogota",
         "notes": a.notes or cur.get("notes"),
         "updated_at": time.strftime("%Y-%m-%d %H:%M"),
@@ -1723,6 +1846,8 @@ def cmd_set(con, a):
             cambios["approval"] = json.loads(vals["aprobacion"])
         if a.project_question is not None:
             cambios["projectQuestion"] = a.project_question
+        if a.member:
+            cambios["members"] = members_al_panel(json.loads(vals["miembros"]), store[jid])
         for flat, columna in AUTO_PANEL:
             if getattr(a, {"ack": "ack", "ackText": "ack_text", "greeting": "greeting",
                            "greetingText": "greeting_text",
@@ -3094,8 +3219,8 @@ def cmd_caso_pregunta_proyecto(con, a):
     """El agente no sabe si el caso es de A o de B: deja anotada la pregunta, con los
     candidatos (dos o mas proyectos del chat) y su texto. A quien va lo decide el ajuste del
     chat (`projectQuestion`), nunca el agente: `auto` es al que escribio en la conversacion
-    del dueno (por su id de WhatsApp) y al dueno en cualquier otra, un grupo incluido aunque
-    escriba el dueno, porque preguntarle al chat le muestra los nombres de los proyectos a
+    del dueno o en un directo con un admin u operador de ese chat (por su id de WhatsApp,
+    `rol_del_caso`), y al dueno en cualquier otra, un grupo incluido aunque escriba el dueno, porque preguntarle al chat le muestra los nombres de los proyectos a
     los clientes que lo leen. Sin saber quien escribio, al dueno.
 
     Despues el agente propone: al que escribio, un `responder` con la pregunta, que sigue el
@@ -3123,11 +3248,16 @@ def cmd_caso_pregunta_proyecto(con, a):
                              f"{', '.join(ids) or 'none'} (not {', '.join(candidatos) or 'none'})")
     modo = entry.get("pregunta_proyecto") or PREGUNTA_AUTO
     quien = remitente_del_caso(con, caso)
-    # Con auto, al que escribio solo en la conversacion del dueno: un grupo lo leen tambien
-    # los clientes, y ahi la pregunta nombraria los proyectos aunque la hiciera el dueno. La
-    # Parte B suma el rol (Operador) sin abrir esa puerta: en un grupo, al dueno.
+    # Con auto, al que escribio en la conversacion del dueno o en un DIRECTO con un admin o
+    # un operador de ese chat (roles-por-numero): un grupo lo leen tambien los clientes, y
+    # ahi la pregunta nombraria los proyectos aunque la hiciera el dueno. En un grupo, al
+    # dueno, tenga el rol que tenga quien escribio.
+    directo = not str(caso["chat_jid"]).endswith("@g.us")
     para = modo if modo != PREGUNTA_AUTO else (
-        "writer" if chat_es_del_dueno(caso.get("account"), caso["chat_jid"]) else "owner")
+        "writer" if chat_es_del_dueno(caso.get("account"), caso["chat_jid"])
+        or (directo and rol_del_caso(con, caso) in (wa_store.ROL_ADMIN,
+                                                    wa_store.ROL_OPERADOR))
+        else "owner")
     if para == "writer" and not quien:
         para = "owner"
     ruta["pregunta"] = {"candidatos": candidatos, "a": para, "quien": quien, "texto": texto,
@@ -3455,6 +3585,54 @@ def chat_es_del_dueno(cuenta, chat_jid):
         fuente.close()
 
 
+def remitentes_en(fuente, caso, stanzas):
+    """Los `sender_jid` de los mensajes del caso que no son de la linea, del almacen ya
+    abierto: ids, nunca el texto."""
+    return [r["sender_jid"] for r in fuente.execute(
+        f"select sender_jid from mensaje where account=? and chat_jid=? and from_me=0 and "
+        f"revocado=0 and stanza_id in ({','.join('?' * len(stanzas))})",
+        (caso["account"], caso["chat_jid"], *stanzas)).fetchall()]
+
+
+def miembros_por_chat(con):
+    """`{chat_jid: {id: operator|admin}}`: los roles que el dueno guardo en cada conversacion
+    de la linea activa (roles-por-numero, M9), con la misma regla que el resto del alcance
+    (lo del panel manda)."""
+    return {jid: r.get("miembros") or {} for jid, r in merged_scope(con).items()}
+
+
+def rol_del_caso(con, caso):
+    """El rol del que pide en el caso (roles-por-numero, M9): el MAS BAJO entre los que
+    escribieron en el (sin la linea), con `wa_store.rol_de`. Es la regla de `caso_del_dueno`
+    ("todos los mensajes del dueno") llevada a tres roles: en un grupo, basta un mensaje de un
+    cliente para que el caso sea de un cliente. La conversacion del dueno es admin.
+
+    Sin mensajes guardados, o sin almacen, cliente: lo que no se sabe no da permisos. Solo
+    lo decide el id que dejo WhatsApp y lo que el dueno guardo para ESTA conversacion; nunca
+    el texto ni el nombre."""
+    if chat_es_del_dueno(caso.get("account"), caso["chat_jid"]):
+        return wa_store.ROL_ADMIN
+    stanzas = stanzas_de_caso(con, caso["case_id"])
+    if not stanzas:
+        return wa_store.ROL_CLIENTE
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return wa_store.ROL_CLIENTE
+    try:
+        remitentes = set(remitentes_en(fuente, caso, stanzas))
+        if not remitentes:
+            return wa_store.ROL_CLIENTE
+        owners, miembros = duenos(), miembros_por_chat(con)
+        return wa_store.rol_menor([wa_store.rol_de(fuente, caso["account"], caso["chat_jid"],
+                                                   jid, owners, miembros)
+                                   for jid in remitentes])
+    except sqlite3.Error:
+        return wa_store.ROL_CLIENTE
+    finally:
+        fuente.close()
+
+
 def caso_del_dueno(con, caso):
     """Si lo que pide el caso es del dueno (dueno-en-el-caso): su conversacion es del dueno,
     o TODOS los mensajes del caso los mando uno de sus numeros. Solo lo decide el id que
@@ -3471,15 +3649,12 @@ def caso_del_dueno(con, caso):
     except wa_store.SinFuente:
         return False
     try:
-        filas = fuente.execute(
-            f"select sender_jid from mensaje where account=? and chat_jid=? and from_me=0 and "
-            f"revocado=0 and stanza_id in ({','.join('?' * len(stanzas))})",
-            (caso["account"], caso["chat_jid"], *stanzas)).fetchall()
+        remitentes = remitentes_en(fuente, caso, stanzas)
     except sqlite3.Error:
         return False
     finally:
         fuente.close()
-    return bool(filas) and all(wa_store.es_dueno(r["sender_jid"], ids) for r in filas)
+    return bool(remitentes) and all(wa_store.es_dueno(j, ids) for j in remitentes)
 
 
 def respuesta_de_propuesta(caso):
@@ -10137,6 +10312,11 @@ def main():
     s.add_argument("--approval", action="append", metavar="RULE=LEVEL",
                    help="the level of one approval rule here (T22.3): rule money, credential, "
                         "commitment or quality; level ask, agent or allow. Repeatable")
+    s.add_argument("--member", action="append", metavar="ID=ROLE",
+                   help="the role of one person in this chat only (roles-por-numero): ID is "
+                        "the WhatsApp id `wa-read members` lists; ROLE operator, admin or "
+                        "client (client removes it). Repeatable. The global owners are admin "
+                        "everywhere")
     s.add_argument("--project-question", choices=list(PREGUNTA_VALORES),
                    help="who gets the \"A or B?\" question when a case of this chat has no "
                         "project: writer = whoever wrote; owner = the owner; auto (default) = "

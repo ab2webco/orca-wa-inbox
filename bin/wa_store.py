@@ -558,6 +558,64 @@ def es_dueno(jid, ids=None):
     return bool(propio) and propio in ids
 
 
+# Los roles por numero (roles-por-numero, M9), de menor a mayor. `client` es lo de siempre
+# y no se guarda nunca: un numero sin rol es un cliente. El rol sale del id que dejo
+# WhatsApp y de lo que el dueno guardo para ESA conversacion, nunca del texto.
+ROL_CLIENTE = "client"
+ROL_OPERADOR = "operator"
+ROL_ADMIN = "admin"
+ROLES = (ROL_CLIENTE, ROL_OPERADOR, ROL_ADMIN)
+# Lo que se guarda en `chat_scope.miembros`.
+ROLES_GUARDADOS = (ROL_OPERADOR, ROL_ADMIN)
+
+
+def rol_menor(roles):
+    """El rol mas bajo de una lista; cliente si esta vacia."""
+    return min(roles, key=ROLES.index, default=ROL_CLIENTE)
+
+
+def id_de_persona(valor):
+    """El id de una persona sin el dispositivo (`<digitos>@lid` o
+    `<digitos>@s.whatsapp.net`), o None. Un grupo, un nombre o un numero escrito a mano no
+    es una persona: no puede tener rol."""
+    jid = jid_sin_dispositivo(valor) if isinstance(valor, str) else None
+    usuario, _, servidor = (jid or "").partition("@")
+    if usuario.isdigit() and servidor in ("lid", "s.whatsapp.net"):
+        return jid
+    return None
+
+
+def rol_de(con, cuenta, chat_jid, sender_jid, owners, miembros):
+    """El rol de quien escribio en una conversacion: `admin`, `operator` o `client`.
+
+    - Un dueno global (`owners`, los de `duenos()`) es admin en TODAS las conversaciones.
+    - Si no, el rol que el dueno guardo para ESTA conversacion y para ninguna otra:
+      `miembros` es `{chat_jid: {id: operator|admin}}` (`chat_scope.miembros` de cada
+      chat), y solo se mira `miembros[chat_jid]`. Un operador de un grupo es un cliente en
+      cualquier otro chat.
+    - Un LID y un telefono son la misma persona SOLO por un par de `lid_telefono` de esa
+      linea (`con` es el almacen, o None: sin almacen no hay pares). Nunca se adivina por
+      los digitos.
+
+    Sin remitente, en un directo escribe la conversacion; en un grupo, nadie: cliente. Si la
+    persona tiene dos ids con roles distintos, vale el menor."""
+    jid = sender_jid or (chat_jid if chat_jid and not str(chat_jid).endswith("@g.us")
+                         else None)
+    pares = telefonos_de_lid(con) if con is not None else {}
+    ids = companeros_de(cuenta, jid, pares) if jid else []
+    if not ids:
+        return ROL_CLIENTE
+    duenos_ = {jid_sin_dispositivo(o) for o in owners or () if o}
+    if any(i in duenos_ for i in ids):
+        return ROL_ADMIN
+    del_chat = (miembros or {}).get(chat_jid) if isinstance(miembros, dict) else None
+    if not isinstance(del_chat, dict):
+        return ROL_CLIENTE
+    guardados = {id_de_persona(k): v for k, v in del_chat.items() if id_de_persona(k)}
+    roles = [guardados[i] for i in ids if guardados.get(i) in ROLES_GUARDADOS]
+    return rol_menor(roles) if roles else ROL_CLIENTE
+
+
 def chat_del_dueno(con, cuenta, chat_jid, ids=None):
     """Si la conversacion es del dueno: el directo con uno de sus numeros, o el chat de
     la linea consigo misma. Lo que se le manda ahi no protege a ningun tercero."""

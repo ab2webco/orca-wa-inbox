@@ -10236,6 +10236,125 @@ if NODE:
             os.environ.clear()
             os.environ.update(env_antes)
 
+# ── roles-por-numero: el rol del caso (M9) ──
+# `rol_del_caso` es el rol MAS BAJO entre los que escribieron en el caso (sin la linea): la
+# regla de `caso_del_dueno` ("todos los mensajes del dueno"), generalizada a los tres roles.
+# El rol sale del id que dejo WhatsApp y de lo que el dueno guardo para ESA conversacion.
+# `caso_del_dueno` queda como estaba para los que ya lo usan (la Parte B decide en M10).
+# Y `projectQuestion=auto` le pregunta "A o B?" al que escribio cuando es admin u operador
+# en un DIRECTO; en un grupo sigue siendo del dueno (los clientes leen el grupo).
+OPERADOR_LID = "111122223333@lid"
+
+
+def suma_al_caso(home, cid, *stanzas):
+    """Junta mensajes ya guardados al caso, como la continuidad de la ingesta."""
+    con = db_de(home)
+    for stanza in stanzas:
+        con.execute("insert into caso_mensaje (account, stanza_id, case_id, at) values "
+                    "(?,?,?,?)", (A, stanza, int(cid), time.strftime("%Y-%m-%d %H:%M:%S")))
+    con.commit()
+    con.close()
+
+
+def roles_de(home, *cids):
+    antes = dict(os.environ)
+    try:
+        ws = carga_wa_scope(home)
+        con = ws.db()
+        try:
+            return [(ws.rol_del_caso(con, ws.caso_de(con, int(c))),
+                     ws.caso_del_dueno(con, ws.caso_de(con, int(c)))) for c in cids]
+        finally:
+            con.close()
+    finally:
+        os.environ.clear()
+        os.environ.update(antes)
+
+
+print("\nroles-por-numero: el rol del caso (M9)")
+if NODE:
+    if not any(c["jid"] == DUENO_DM for c in CHATS):
+        CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo", "beta-demo")
+        js(home, "set", OPERACIONES, "--provider", "ninguno", "--mode", "borrador")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "borrador")
+        pon_duenos(home, DUENO_LID)
+        llegan(home, A, [
+            msg(SOPORTE, "RL1", "@duenio revisen el login", 40, mencion=True, de=OPERADOR_LID),
+            msg(SOPORTE, "RL2", "@duenio cambien el banner", 39, mencion=True, de=DUENO_LID),
+            msg(PERSONA, "RL3", "Hola, la factura no llega", 38),
+            msg(DUENO_DM, "RL4", "revisa el informe", 37, de=DUENO_LID),
+            msg(SOPORTE, "RL5", "@duenio revisen el login", 36, mencion=True, de=OPERADOR_LID),
+            msg(SOPORTE, "RL6", "@duenio y el boton", 35, mencion=True,
+                de="111122223333:5@lid"),
+            msg(SOPORTE, "RL7", "@duenio y el carrito", 34, mencion=True, de=CLIENTE_LID),
+            msg(SOPORTE, "RL8", "@duenio lo mismo", 33, mencion=True, de=OPERADOR_LID),
+            msg(SOPORTE, "RL9", "@duenio cambien el logo", 32, mencion=True, de=DUENO_LID),
+            msg(SOPORTE, "RL10", "@duenio el logo", 31, mencion=True, de=OPERADOR_LID),
+            msg(OPERACIONES, "RL11", "@duenio revisen el login", 30, mencion=True,
+                de=OPERADOR_LID),
+            msg(PERSONA, "RL12", "Hola, otra factura", 29),
+            msg(PERSONA, "RL13", "Hola, y la de marzo", 28)])
+
+        def nuevo(chat, stanza, *mas):
+            cid = str(js(home, "caso", "crear", "--chat", chat, "--stanza", stanza,
+                         "--actor", "agente")[0]["case_id"])
+            suma_al_caso(home, cid, *mas)
+            return cid
+
+        sin_roles = [nuevo(SOPORTE, "RL1"), nuevo(SOPORTE, "RL2"), nuevo(PERSONA, "RL3"),
+                     nuevo(DUENO_DM, "RL4")]
+        r = roles_de(home, *sin_roles)
+        ok("sin roles guardados: el dueno es admin, todos los demas clientes, como antes",
+           [x[0] for x in r] == ["client", "admin", "client", "admin"], f"{r}")
+        ok("y caso_del_dueno dice lo mismo que antes",
+           [x[1] for x in r] == [False, True, False, True], f"{r}")
+
+        js(home, "set", SOPORTE, "--member", f"{OPERADOR_LID}=operator")
+        solo_op = nuevo(SOPORTE, "RL5", "RL6")
+        mixto = nuevo(SOPORTE, "RL7", "RL8")
+        con_dueno = nuevo(SOPORTE, "RL9", "RL10")
+        otro_chat = nuevo(OPERACIONES, "RL11")
+        r = roles_de(home, solo_op, mixto, con_dueno, otro_chat)
+        ok("un caso solo del operador del grupo, aunque escriba desde otro dispositivo: operator",
+           r[0][0] == "operator", f"{r}")
+        ok("el operador y un cliente: el menor, client", r[1][0] == "client", f"{r}")
+        ok("el dueno y el operador: operator", r[2][0] == "operator", f"{r}")
+        ok("el operador de SOPORTE en otro grupo es un cliente", r[3][0] == "client", f"{r}")
+        ok("caso_del_dueno sigue igual para sus llamadores: ninguno de estos es del dueno",
+           [x[1] for x in r] == [False, False, False, False], f"{r}")
+
+        # projectQuestion=auto con roles.
+        js(home, "set", SOPORTE, "--workspaces", "alfa-demo,beta-demo")
+        js(home, "set", PERSONA, "--workspaces", "alfa-demo,beta-demo")
+        for cid in (solo_op,):
+            js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "high",
+               "--actor", "agente")
+        p = pregunta(home, solo_op)
+        q = (ruta_de(home, solo_op) or {}).get("pregunta") or {}
+        ok("auto en un grupo con un operador: la pregunta sigue siendo del dueno",
+           p.returncode == 0 and q.get("a") == "owner", f"{p.stderr} {q}")
+        cliente = nuevo(PERSONA, "RL12")
+        js(home, "caso", "clasificar", cliente, "--clase", "card", "--prioridad", "high",
+           "--actor", "agente")
+        pregunta(home, cliente)
+        ok("auto en el directo de un cliente: del dueno, como antes",
+           ((ruta_de(home, cliente) or {}).get("pregunta") or {}).get("a") == "owner",
+           f"{ruta_de(home, cliente)}")
+        js(home, "set", PERSONA, "--member", f"{PERSONA}=operator")
+        operador = nuevo(PERSONA, "RL13")
+        js(home, "caso", "clasificar", operador, "--clase", "card", "--prioridad", "high",
+           "--actor", "agente")
+        p = pregunta(home, operador)
+        q = (ruta_de(home, operador) or {}).get("pregunta") or {}
+        ok("auto en el directo de un operador: la pregunta es para el que escribio",
+           p.returncode == 0 and q.get("a") == "writer"
+           and q.get("quien") == PERSONA, f"{p.stderr} {q}")
+        ok("y la salida le dice al agente que la conteste en el chat",
+           "responder" in (json.loads(p.stdout or "[{}]")[0].get("next") or ""), p.stdout[-300:])
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

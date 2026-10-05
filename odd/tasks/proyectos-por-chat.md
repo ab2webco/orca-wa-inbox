@@ -440,12 +440,66 @@ Everything must be configurable and wired end to end (panel and logic), in ES, E
       table, the line excluded even when a row exists, a direct chat, an unknown chat exits
       1). `check-clis` 329 checks (327 + 2), exit 0. `sidecar-pairing` 88/88,
       `sidecar-build` 5/5, `check-datos-reales` pass.
-- [ ] **M9** — `chat_scope.miembros`, panel `members`, `set --member`, the `groupMembers` push, `wa_store.rol_de`, `rol_del_caso`.
+- [x] **M9** — `chat_scope.miembros`, panel `members`, `set --member`, the `groupMembers` push, `wa_store.rol_de`, `rol_del_caso`.
   - Tests:
     - a global owner is admin in every chat;
     - a group operator is client in another chat;
     - LID and phone match only through a `lid_telefono` pair;
     - mixed senders give the lowest role.
+  - What was built (the full contract is in "Part B data contract" below):
+    - `bin/wa_store.py`: `ROLES`, `id_de_persona`, `rol_menor`, `rol_de`, and the
+      `companeros_de` pair lookup (shared with `wa-read members`).
+    - `bin/wa-scope`: the `chat_scope.miembros` column (DDL, `migrate`, `CHAT_SCOPE_COLS`).
+      `merged_scope`, `persistir_panel` and `push_to_plugin` handle `members` as they handle
+      `approval`. Also `set --member` (`miembros_pedidos`), `build_group_members` (pushed as
+      `groupMembers` on every sync with activity), `miembros_por_chat`, `rol_del_caso`, and
+      `remitentes_en`, which `caso_del_dueno` now shares with `rol_del_caso` (same query,
+      same result).
+    - Owner decision (1), as the "Part A limitation" asked of Part B:
+      `cmd_caso_pregunta_proyecto` under `auto` asks the writer in the owner's own chat (as
+      before) or in a DIRECT chat whose `rol_del_caso` is `admin`/`operator`. In a group it
+      asks the owner, whatever the roles. An explicit `writer`/`owner` is unchanged.
+    - Not changed here (M10): ingest's `de_dueno`, Jev's `from`, `piso_de_entrada`,
+      `frenos_de_regla`, `wa-send`, the brief. `caso_del_dueno` keeps its behaviour for its
+      existing callers.
+  - Evidence:
+    - `scripts/check-clis`, `revisa_roles`. RED: 33 of 33 failed (`sin columna`, no
+      `members` merged or pushed, no `groupMembers`, `--member` unknown to argparse, no
+      `wa_store.rol_de`). GREEN: 33/33. The 17 `rol_de` cases:
+      - a global owner is admin in a chat with no roles, in one where he was marked
+        operator, and with a device suffix;
+      - a group operator is operator there and client in another chat, or in a chat with
+        no entry;
+      - an owner stored by phone who writes with his LID, and an operator stored by LID who
+        writes with his phone, match through the pair;
+      - with no pair, a LID with the same digits as the owner's phone is client;
+      - a pair from another line, or no store at all, matches nothing;
+      - in a direct chat with no sender, the writer is the chat; in a group with no sender,
+        client;
+      - an unknown stored role gives nothing;
+      - with no roles stored (an old database), only the owner is admin.
+    - `scripts/check-casos`, "roles-por-numero: el rol del caso (M9)". RED, in a full run:
+      the 1313 existing checks all passed (0 failures, the M9 storage already in place),
+      then the section stopped with `module 'wa_scope_carrera' has no attribute
+      'rol_del_caso'`. GREEN: 11/11. The checks:
+      - with no roles: the owner is admin, everyone else client, and `caso_del_dueno`
+        unchanged;
+      - an operator alone, from another device: operator;
+      - operator + client: client;
+      - owner + operator: operator;
+      - the same operator in another group: client;
+      - `auto` with a group operator: owner;
+      - `auto` with a customer's direct chat: owner, as before;
+      - `auto` with an operator's direct chat: writer, and `next` says `responder`.
+      A mutation run, with only the `projectQuestion` change reverted in a scratch copy of
+      `bin/`, failed exactly the last two checks (9/11).
+    - Full `npm run check` on the M8+M9 tree, exit 0 (35 min): check-clis 362 checks (327
+      before Part B, + 2 M8 + 33 M9), check-casos 1324/1324 (1313 + 11), sidecar-mensajes
+      112/112, almacen 300/300, panels 1278/1278, worker 410/410, sidecar-build 5/5,
+      sidecar-pairing 88/88, check-harness 66, check-voseo, check-datos-reales; 1548
+      captures with no overflow, JS errors or selects. No existing assertion was changed.
+      No panel file was touched in this stage, so no new screenshot was looked at here (the
+      captures are the existing set; M11 adds the People card and its screenshots).
 - [ ] **M10** — Role at ingest, Jev `from` and the operator prompt, the cache stores the role and re-judges on a change, `piso_de_entrada`, `frenos_de_regla`/`wa-send` per Open question 3, operator brief and header texts.
   - Tests:
     - the text "I am the admin" from a client still flags;
@@ -629,6 +683,91 @@ names, and the reply was signed by the rule in `responder` mode. That is closed.
 `avance_frena` refuses it with `E_EXCEPTION (project_question)`. RED: the update "Estamos
 revisando lo de Alfa Demo." went out to the customer's group (check-casos 1310/1313).
 GREEN: check-casos 1313/1313.
+
+## Part B data contract (M8–M9, for the Panels and Behaviour stages)
+
+What the data layer of Part B stores, reads and pushes. Everything here is covered by
+`test/almacen.test.mjs`, `test/sidecar-mensajes.test.mjs`, `scripts/check-clis`
+(`revisa_miembros`, `revisa_roles`) and `scripts/check-casos` ("roles-por-numero: el rol
+del caso (M9)").
+
+### Roles
+
+- Three values, lowest to highest: `client`, `operator`, `admin` (`wa_store.ROLES`). Only
+  `operator` and `admin` are ever stored. `client` means "no role" and is never written.
+- A global owner (`duenos()`, the panel's `owners`) is `admin` in every chat, whatever a
+  chat's list says. WhatsApp approval stays with them: `es_dueno` and `numero_aprobacion`
+  are unchanged.
+- Any other number has the role the owner saved for THAT chat, and only there.
+- WhatsApp's own group admin flag (`wa_admin`) is information only. It never gives a role.
+
+### Storage keys the panel writes and reads
+
+- `scope[jid].members: [{id, name, role}]`. These are the roles of that chat's people:
+  - `id` is a person's WhatsApp id without the device: `<digits>@lid` or
+    `<digits>@s.whatsapp.net`;
+  - `role` is `operator | admin | client`;
+  - `name` is only for display.
+
+  It is merged, persisted and pushed like `approval`:
+  - when the key is a list, it wins, and an empty list clears the roles;
+  - an entry without the key (an older panel) keeps the database value;
+  - `role: client`, an unknown role and an id that is not a person (a group, a name, a
+    typed number) are dropped when saving.
+
+  The sync always pushes it back as a list, `[]` when nobody has a role. The list keeps
+  the panel's order, then any others sorted by id. Each `name` is the one the panel had,
+  else the one from `groupMembers`, else `""`. The global owners are not added to it. The
+  panel shows them read-only from `owners`.
+- `groupMembers: {jid: [{id, name, phone}]}` is a global flat key that `wa-scope sync`
+  writes next to `senders`, on every sync with activity (not only when WhatsApp changed).
+  It covers the GROUPS in the active line's scope, and only those. It holds:
+  - `id`, without the device;
+  - `name`, from the member's latest `sender_name`, else the name of their direct chat (the
+    contacts), else `""`;
+  - `phone`, `+E.164` from the id itself or from a `lid_telefono` pair, else `null`.
+
+  The line itself is never listed. The list is sorted by name, with unnamed members last,
+  then by id. With no message store the value is `{}`. A direct chat has no entry: its
+  person is the chat itself (`chats[].jid`, `name`, `phone`).
+
+### Database and CLI
+
+- `chat_scope.miembros` holds JSON `{id: "operator" | "admin"}`. `migrate` adds the
+  column, and null means nobody has a role. It is in `CHAT_SCOPE_COLS`.
+- `wa-scope list` returns `miembros` as that object (`{}` when empty).
+- `wa-scope set <chat> --member <id>=operator|admin|client` is repeatable. `client` removes
+  the entry. An id that is not a person, or an unknown role, exits non-zero and saves
+  nothing. It also corrects the chat's panel entry, as `--approval` does.
+- `wa_store.rol_de(con, cuenta, chat_jid, sender_jid, owners, miembros)` returns
+  `admin | operator | client`. Its arguments:
+  - `con` is the open message store, or None;
+  - `owners` is `duenos()`;
+  - `miembros` is `{chat_jid: {id: role}}`, and only `miembros[chat_jid]` is read.
+
+  A LID and a phone are the same person only through that line's `lid_telefono` pair. They
+  are never matched by their digits. With no sender in a direct chat, the writer is the
+  chat itself; in a group, nobody (`client`). If one person has two ids with different
+  roles, the lower role wins.
+- `rol_del_caso(con, caso)` (`bin/wa-scope`) is the lowest role among the case's non-own
+  senders. The owner's own chat (`chat_es_del_dueno`) is `admin`. A case with no stored
+  messages, or no store, is `client`. `caso_del_dueno` is unchanged for its existing
+  callers (ingest, the brief, dispatch). M10 decides where the role replaces it.
+- `cmd_caso_pregunta_proyecto`, `auto`: the question goes to the writer in the owner's own
+  chat (as before), or in a DIRECT chat whose `rol_del_caso` is `admin` or `operator`. In a
+  group it goes to the owner, whatever the roles. An explicit `writer` or `owner` wins, as
+  before.
+
+### `wa-read members --chat <jid|id|name> --json`
+
+- `[{id, name, phone, wa_admin}]`, exactly these four keys:
+  - `id`, `name` and `phone` follow the `groupMembers` rules;
+  - `wa_admin` is a boolean (WhatsApp admin or superadmin).
+- For a group, the rows come from the sidecar's `grupo_miembro` list, without the line.
+  For a direct chat, the result is the single person on the other side.
+- A store from before the table answers `[]`. A chat reference that matches nothing exits
+  1 with stdout empty; an ambiguous one exits 2. Without `--chat` it is an argparse error.
+- `--line ACCOUNT` works as in every other command. The default is the active line.
 
 ## Delivery
 
