@@ -396,8 +396,50 @@ Everything must be configurable and wired end to end (panel and logic), in ES, E
 
 ### B. Roles by number
 
-- [ ] **M8** — Sidecar `grupo_miembro` table and `group-participants.update`; `wa-read members`.
+- [x] **M8** — Sidecar `grupo_miembro` table and `group-participants.update`; `wa-read members`.
   - Tests in `test/almacen.test.mjs` and `test/sidecar-mensajes.test.mjs`: metadata from a fetch, add and remove events, an old store gets the table, the line's own id is excluded.
+  - Baileys shapes, read in the installed 6.7.24 source (not guessed):
+    - `extractGroupMetadata` (`lib/Socket/groups.js:312-319`): each participant is
+      `{id, jid, lid, admin}`, `admin` = `admin | superadmin | null`.
+      `groupFetchAllParticipating` returns `{jid: metadata}` and also emits it as
+      `groups.update` (`:54`); Baileys refetches on the `CB:ib,,dirty` groups bit (`:57-64`).
+    - `group-participants.update` (`lib/Types/Events.d.ts:80-85`, emitted at
+      `lib/Utils/process-message.js:271`): `{id, author, participants: string[], action}`,
+      `action` = `add | remove | promote | demote | modify`. `modify` (a number change)
+      carries only the OLD number (`lib/Socket/messages-recv.js:211-214`).
+  - What was built:
+    - `sidecar/src/mensajes.js`: `miembrosDeGrupo(meta, esPropio)` (null when the metadata
+      has no `participants`, so a partial `groups.update` touches nothing; ids without the
+      device; the line's own LID/phone excluded; WhatsApp admin and superadmin are `admin=1`;
+      the `{lid, pn}` pair the metadata carries) and `cambioDeMiembros(evento, esPropio)`
+      (add/remove/promote/demote; `modify` ignored until the next fetch; participants read
+      as strings or `{id}`; `salioLaLinea` when the line itself is removed).
+    - `sidecar/src/almacen.js`: table `grupo_miembro(account, chat_jid, member_jid, admin,
+      updated_at)`, primary key `(account, chat_jid, member_jid)`, in `ESQUEMA` (`create table
+      if not exists`, so an old store gets it on open; `ESQUEMA_VERSION` unchanged, so an
+      older `wa-read` keeps reading). `reemplazarMiembros` (a fetch replaces the group's
+      list), `cambiarMiembros` (promote/demote of an unknown member adds it; the line
+      removed clears the group's list), and `lote` (one transaction per fetch batch).
+    - `sidecar/src/ingesta.js`: `ingerirMiembros` (also writes the metadata's LID-phone pair
+      to `lid_telefono`) and `ingerirCambioDeMiembros`.
+    - `sidecar/src/index.js`: the fetch result, `groups.upsert`, `groups.update` with
+      `participants`, and `group-participants.update` feed it, even for chats in `off`
+      (bookkeeping, like `chat`). Ids only, never a body. `sidecar/sidecar.cjs` rebuilt.
+    - `wa-read members --chat <jid|id|name> --json` (`wa_store.miembros`): see "Part B data
+      contract" below.
+  - Evidence:
+    - RED: `node test/sidecar-mensajes.test.mjs` and `node test/almacen.test.mjs` failed to
+      load (`does not provide an export named 'cambioDeMiembros'` / `'ingerirCambioDeMiembros'`).
+      With the sidecar side in place, `almacen.test.mjs` was 288/298: the 10 `wa-read
+      members` checks failed with `invalid choice: 'members'`. The new `check-clis`
+      `revisa_miembros`, run against an untouched HEAD worktree, failed (no
+      `ingerirMiembros`).
+    - GREEN: `sidecar-mensajes` 112/112 (13 new), `almacen` 300/300 (30 new: the table's
+      columns, a fetch, each event, a refetch replacing the list, other groups and other
+      lines untouched, an old store getting the table, `members` on a store without the
+      table, the line excluded even when a row exists, a direct chat, an unknown chat exits
+      1). `check-clis` 329 checks (327 + 2), exit 0. `sidecar-pairing` 88/88,
+      `sidecar-build` 5/5, `check-datos-reales` pass.
 - [ ] **M9** — `chat_scope.miembros`, panel `members`, `set --member`, the `groupMembers` push, `wa_store.rol_de`, `rol_del_caso`.
   - Tests:
     - a global owner is admin in every chat;

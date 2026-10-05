@@ -1287,6 +1287,64 @@ def revisa_telefono_de_lid(fallos: list) -> int:
     return hechas
 
 
+def revisa_miembros(fallos: list) -> int:
+    """`wa-read members --chat <jid> --json` (roles-por-numero, M8): quien esta en un grupo,
+    para que el dueno le de un rol desde el panel. El contrato que lee el panel es
+    `[{id, name, phone, wa_admin}]`: el id sin dispositivo, el nombre del ultimo mensaje o
+    de la libreta, el telefono por el propio jid o por el par LID-telefono (si no, null), y
+    lo que dice WhatsApp de admin. La linea misma no sale. Sin `--chat` no hay respuesta."""
+    hechas = 0
+    if not shutil.which("node"):
+        print("  aviso: sin node, no se armo el almacen con miembros", file=sys.stderr)
+        return hechas
+    grupo, lid, tel, directo = ("120363000000000077@g.us", "111122223333@lid",
+                                "573007776655@s.whatsapp.net", "573000000002@s.whatsapp.net")
+    propio = "100000000000002@lid"
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+        js = (
+            "import { abrirAlmacen, rutaAlmacen } from %r;"
+            "import { ingerirMiembros } from %r;"
+            "const a = abrirAlmacen(rutaAlmacen({ HOME: process.env.HOME }));"
+            "a.registrarLinea({ cuenta: %r, lid: %r, pn: '573000000012:7@s.whatsapp.net', "
+            "nombre: 'L' });"
+            "a.anotarChat({ cuenta: %r, chatJid: %r, nombre: 'Grupo Demo', esGrupo: 1 });"
+            "a.anotarChat({ cuenta: %r, chatJid: %r, nombre: 'Persona Dos', esGrupo: 0 });"
+            "const yo = new Set([%r, '573000000012@s.whatsapp.net']);"
+            "ingerirMiembros({ almacen: a, cuenta: %r, esPropio: (j) => yo.has(j), grupos: ["
+            "{ id: %r, participants: [{ id: %r, jid: %r, lid: %r, admin: 'superadmin' },"
+            " { id: %r, admin: null }, { id: %r, admin: 'admin' }] }] });"
+            "a.activarLinea(%r); a.latir(); a.cerrar();"
+            % ((RAIZ / "sidecar" / "src" / "almacen.js").as_uri(),
+               (RAIZ / "sidecar" / "src" / "ingesta.js").as_uri(), NUEVA, propio + ":1",
+               NUEVA, grupo, NUEVA, directo, propio, NUEVA, grupo, "111122223333:3@lid", tel, lid,
+               directo, propio, NUEVA))
+        subprocess.run([shutil.which("node") or "node", "--input-type=module", "-e", js],
+                       env=env, check=True, capture_output=True, timeout=120)
+
+        p = subprocess.run([str(BIN / "wa-read"), "members", "--chat", grupo, "--json"],
+                           capture_output=True, text=True, env=env, timeout=120)
+        try:
+            filas = json.loads(p.stdout or "null")
+        except ValueError:
+            filas = None
+        esperado = [{"id": directo, "name": "Persona Dos", "phone": "+573000000002",
+                     "wa_admin": False},
+                    {"id": lid, "name": "", "phone": "+573007776655", "wa_admin": True}]
+        hechas += 1
+        if p.returncode != 0 or filas != esperado:
+            fallos.append(f"`wa-read members --chat` contesta {filas!r} (salio "
+                          f"{p.returncode}), se esperaba {esperado!r} {p.stderr.strip()[-200:]}")
+        p = subprocess.run([str(BIN / "wa-read"), "members", "--json"], capture_output=True,
+                           text=True, env=env, timeout=120)
+        hechas += 1
+        if p.returncode == 0 or p.stdout.strip():
+            fallos.append(f"`wa-read members` sin --chat contesta {p.stdout!r} (salio "
+                          f"{p.returncode}): tiene que negarse")
+    return hechas
+
+
 def revisa_reclave_local(fallos: list) -> int:
     """T9f: lo que colgaba de `local` en scope.db pasa al numero de su linea, al MISMO
     numero que anoto el sidecar en capture.db. Explicito: ningun comando de todos los
@@ -2366,6 +2424,7 @@ def main() -> int:
                       + revisa_linea_por_numero(fallos)
                       + revisa_reclave_local(fallos)
                       + revisa_telefono_de_lid(fallos)
+                      + revisa_miembros(fallos)
                       + revisa_proyectos(fallos)
                       + revisa_varios_proyectos(fallos)
                       + revisa_espera(fallos))

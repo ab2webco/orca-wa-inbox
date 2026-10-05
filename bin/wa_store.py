@@ -597,6 +597,89 @@ def remitentes(con, linea=None, limite=400):
     return list(vistos.values())
 
 
+def companeros_de(cuenta, jid, pares, inversos=None):
+    """Los ids de la MISMA persona: el suyo y, solo si el sidecar anoto el par en
+    `lid_telefono`, el otro (su telefono para un LID, su LID para un telefono). Nunca se
+    adivina por los digitos: un LID y un telefono son numeros distintos (roles-por-numero).
+    `inversos` es `{(cuenta, pn): lid}`; sin el se arma de `pares`."""
+    propio = jid_sin_dispositivo(jid)
+    if not propio:
+        return []
+    if inversos is None:
+        inversos = {(c, pn): lid for (c, lid), pn in pares.items()}
+    otro = pares.get((cuenta, propio)) if propio.endswith("@lid") else \
+        inversos.get((cuenta, propio))
+    return [propio] + ([otro] if otro and otro != propio else [])
+
+
+class _Libreta:
+    """Lo que hace falta para nombrar a los miembros de los grupos de una linea, leido UNA
+    vez: los pares LID-telefono, el ultimo `sender_name` de cada remitente y el nombre de
+    cada directo (la libreta). Ids y nombres, nunca un cuerpo."""
+
+    def __init__(self, con, cuenta):
+        self.cuenta = cuenta
+        self.pares = telefonos_de_lid(con)
+        self.inversos = {(c, pn): lid for (c, lid), pn in self.pares.items()}
+        self.propios = chats_propios(con)
+        self.por_mensaje = {}
+        for r in con.execute(
+                "select sender_jid, sender_name from mensaje where account = ? and "
+                "from_me = 0 and sender_jid is not null and coalesce(sender_name, '') <> '' "
+                "order by ts desc", (cuenta,)):
+            jid = jid_sin_dispositivo(r["sender_jid"])
+            if jid and jid not in self.por_mensaje:
+                self.por_mensaje[jid] = r["sender_name"]
+        self.por_libreta = {}
+        for r in con.execute("select chat_jid, chat_name from chat where account = ? and "
+                             "is_group = 0", (cuenta,)):
+            nombre = r["chat_name"] or ""
+            jid = jid_sin_dispositivo(r["chat_jid"])
+            if jid and nombre and nombre != r["chat_jid"]:
+                self.por_libreta[jid] = nombre
+
+    def fila(self, jid, admin):
+        ids = companeros_de(self.cuenta, jid, self.pares, self.inversos)
+        nombre = next((self.por_mensaje[i] for i in ids if i in self.por_mensaje), "") or \
+            next((self.por_libreta[i] for i in ids if i in self.por_libreta), "")
+        telefono = next((t for t in (telefono_de(self.cuenta, i, self.pares) for i in ids)
+                         if t), None)
+        return {"id": ids[0], "name": nombre, "phone": telefono, "wa_admin": bool(admin)}
+
+    def propio(self, jid):
+        return (self.cuenta, usuario_de(jid)) in self.propios
+
+
+def miembros(con, cuenta, chat_jid, es_grupo, libreta=None):
+    """Quienes estan en una conversacion, para que el dueno les de un rol (roles-por-numero,
+    M8): `[{id, name, phone, wa_admin}]`, por nombre.
+
+    En un grupo, la lista que guardo el sidecar (`grupo_miembro`), sin la linea. En un
+    directo, la persona del otro lado. El nombre es el del ultimo mensaje que mando o, si
+    no mando ninguno, el de su directo; el telefono, el de su propio jid o el del par
+    LID-telefono, y si no hay par, null. `wa_admin` es lo que dice WhatsApp, no el rol del
+    plugin. Un almacen de antes de la tabla no tiene miembros, y eso no es un error."""
+    libreta = libreta or _Libreta(con, cuenta)
+    if not es_grupo:
+        jid = jid_sin_dispositivo(chat_jid)
+        return [] if not jid or libreta.propio(jid) else [libreta.fila(jid, False)]
+    try:
+        filas = con.execute("select member_jid, admin from grupo_miembro where account = ? "
+                            "and chat_jid = ?", (cuenta, chat_jid)).fetchall()
+    except sqlite3.Error:
+        return []
+    salida = [libreta.fila(r["member_jid"], r["admin"]) for r in filas
+              if not libreta.propio(r["member_jid"])]
+    return sorted(salida, key=lambda f: ((f["name"] or "").lower() or "\uffff", f["id"]))
+
+
+def miembros_de_grupos(con, cuenta, jids):
+    """`{jid: [{id, name, phone, wa_admin}]}` de varios grupos de una linea, con UNA lectura
+    de los nombres: es lo que `wa-scope sync` lleva al panel (`groupMembers`)."""
+    libreta = _Libreta(con, cuenta)
+    return {jid: miembros(con, cuenta, jid, True, libreta) for jid in jids}
+
+
 def chats_propios(con):
     """{(cuenta, (usuario, servidor)): nombre de la linea} con el LID y el telefono de
     cada linea: son los jids de su chat consigo misma."""
