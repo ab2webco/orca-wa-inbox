@@ -862,6 +862,19 @@ def desde_donde(con, fila, despues=None):
         (fila["account"], fila["chat_jid"], despues)).fetchone()
     if propio:
         return {"ts": propio["ts"], "rowid": propio["rowid"]}
+    # Lo que `wa-send` acaba de mandar y cuyo eco todavia no guardo el sidecar (T18): quien
+    # pregunta y enseguida espera la respuesta pasa el stanza que le devolvio el envio, y
+    # negarse ahi es una carrera que pierde siempre. Vale desde que salio, el mismo segundo
+    # incluido (`rowid` 0): una respuesta no llega antes que la pregunta.
+    try:
+        enviado = con.execute(
+            "select coalesce(settled_at, created_at) ts from envio where account = ? "
+            "and chat_jid = ? and stanza_id = ?",
+            (fila["account"], fila["chat_jid"], despues)).fetchone()
+    except sqlite3.Error:
+        enviado = None
+    if enviado and enviado["ts"] is not None:
+        return {"ts": enviado["ts"], "rowid": 0}
     if str(despues).isdigit():
         return {"ts": int(despues)}
     sys.exit(f"no message {despues!r} in {nombre_de(fila)!r}: --after takes the stanza_id "
@@ -871,18 +884,26 @@ def desde_donde(con, fila, despues=None):
 def nuevos(con, fila, base):
     """Los mensajes de la OTRA persona que llegaron despues de `base` (`desde_donde`), del
     mas viejo al mas nuevo. Lo propio no cuenta: quien espera una respuesta no la recibe
-    en lo que acaba de mandar. Lo borrado tampoco."""
+    en lo que acaba de mandar. Lo borrado tampoco.
+
+    En el chat de la linea consigo misma (el del dueno, T22.1) todo llega como propio,
+    tambien lo que el dueno escribe desde su telefono. Ahi "lo propio" es lo que mando la
+    linea, que esta en la bandeja de salida con su stanza; lo demas es la respuesta (T18)."""
     if "ts" in base:
         corte = "and (m.ts > ? or (m.ts = ? and m.rowid > ?))"
         args = [base["ts"], base["ts"], base.get("rowid", 1 << 62)]
     else:
         corte = "and m.rowid > ?"
         args = [base["rowid"]]
+    otro = "m.from_me = 0"
+    if (fila["account"], usuario_de(fila["chat_jid"])) in chats_propios(con):
+        otro = ("(m.from_me = 0 or m.stanza_id not in (select e.stanza_id from envio e "
+                "where e.account = m.account and e.stanza_id is not null))")
     filas = con.execute(
         f"""select m.stanza_id, m.ts, m.from_me, m.sender_name, m.sender_jid, m.body,
                    m.media_path
             from mensaje m
-            where m.account = ? and m.chat_jid = ? and m.revocado = 0 and m.from_me = 0
+            where m.account = ? and m.chat_jid = ? and m.revocado = 0 and {otro}
                   {corte}
             order by m.ts, m.rowid""",
         [fila["account"], fila["chat_jid"]] + args).fetchall()

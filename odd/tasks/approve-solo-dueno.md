@@ -68,23 +68,43 @@
 - [x] A6 RED/GREEN: audit row `approved` with who approved (test/envio.test.mjs).
       RED: "y la bitacora anota quien lo aprobo — []". GREEN: one `approved` row per real
       approval, `... approved on the board` / `... by the owner's WhatsApp reply`.
-- [ ] A7 RED/GREEN: no harness file, automation command, manifest command, prompt or
+- [x] A7 RED/GREEN: no harness file, automation command, manifest command, prompt or
       generated resolver carries `WA_INBOX_APPROVER` or the key file name
       (scripts/check-harness).
+      The guard scans harness/**, prompts/**, automations/*.json, orca-plugin.json,
+      harness.mjs, agente.mjs, catalogo.mjs, scripts/resolver_formas.py AND the tools'
+      `--help` (seeded into COMMANDS.md); it first proves it finds a planted file of each
+      kind. RED: "el --help de una herramienta nombra la llave del aprobador" (the first
+      wa-send docstring named the variable), plus the two doc checks below. GREEN: 74
+      checks.
 - [x] A8 Regression: an agent's send to the owner's chat goes out without any approval and
       without the key (test/envio.test.mjs). Guard test, green from its first run as
       expected: no key file, no `WA_INBOX_APPROVER`, both owner sends `enviado`.
-- [ ] A9 Docs: wa-send help/docstring, agent-facing harness docs and README say agents
+- [x] A9 Docs: wa-send help/docstring, agent-facing harness docs and README say agents
       cannot approve, and why it is not a defence against malicious same-user code.
-- [ ] B1 RED/GREEN: `wa-read wait --chat <jid>` works like the positional form; neither or
+      RED/GREEN in scripts/check-harness: COMMANDS.md and the whatsapp-cli skill must say
+      `cannot approve` and `send-approve-not-owner`. Held-message texts, `--drafts` and the
+      activity `draft` row no longer name `--approve`. README (owner, Spanish) explains the
+      gate and its honest limit; neither the help nor the README names the variable or
+      the key file.
+- [x] B1 RED/GREEN: `wa-read wait --chat <jid>` works like the positional form; neither or
       both is an argument error (scripts/check-clis).
-- [ ] B2 RED/GREEN: `--after <stanza_id>` returned by `wa-send` works even before the
+      Found: `wa-read wait <chat>` already existed (f0978b8, cli-huecos C4: authorization,
+      exit 5 `wait-timeout`, store polling). T18 added the `--chat` form. RED: "unrecognized
+      arguments: --chat", "sin chat salio 2 ... que nombre --chat", help without `--chat`.
+      GREEN after B1: only the B2/B3 failures left.
+- [x] B2 RED/GREEN: `--after <stanza_id>` returned by `wa-send` works even before the
       sidecar stored the echo of that message (scripts/check-clis).
-- [ ] B3 RED/GREEN: in the line's chat with itself (the owner's own chat), the owner's reply
+      RED: "salio 1 (no message 'S-PREG' in 'Yo Mismo' ...)". GREEN: falls back to the
+      `envio` row of that chat (settled time) and waits.
+- [x] B3 RED/GREEN: in the line's chat with itself (the owner's own chat), the owner's reply
       typed on the phone (`from_me`, not a send of the line) wakes `wait`; the line's own
       send does not (scripts/check-clis).
-- [ ] B4 Docs: `wa-read wait` help and the agent-facing docs describe "ask the owner and wait
-      for the reply".
+      RED: masked by B2 ("salio 1"). GREEN: woke on S-RESP only, not on the echo S-PREG.
+      scripts/check-clis exit 0, 391 checks.
+- [x] B4 Docs: `wa-read wait` help and the agent-facing docs describe "ask the owner and wait
+      for the reply". `wa-read wait --help` (checked in check-clis: `--chat`, `owner`),
+      wa-send's help, harness COMMANDS.md and the whatsapp-cli skill use `--chat`.
 - [ ] F1 Final check, once: `npm run check` with reduced screenshots (dark, 390, es).
 
 ## Acceptance criteria

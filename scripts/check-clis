@@ -2794,13 +2794,83 @@ def revisa_espera(fallos: list) -> int:
                           f"{p.returncode} ({p.stderr.strip()[:200]!r}): tenia que negarse "
                           "nombrandolo, no esperar")
 
+        # T18: la forma con bandera, `--chat <jid>`, es la misma espera que la posicional.
+        hechas += 1
+        p, _ = espera("--chat", "200@g.us", "--after", "E1", "--timeout", "5")
+        filas = json.loads(p.stdout or "null") if p.returncode == 0 else None
+        if not isinstance(filas, list) or [f.get("stanza_id") for f in filas] != ["E3"]:
+            fallos.append(f"wa-read wait --chat 200@g.us --after E1 salio {p.returncode} con "
+                          f"{(p.stdout + p.stderr).strip()[:200]!r}: tenia que contestar E3, "
+                          "como la forma posicional")
+        hechas += 1
+        p, _ = espera("--timeout", "1")
+        if p.returncode != 2 or "--chat" not in p.stderr:
+            fallos.append(f"wa-read wait sin chat salio {p.returncode}: tenia que ser un "
+                          "error de argumentos (2) que nombre --chat")
+        hechas += 1
+        p, _ = espera("Grupo Espera", "--chat", "200@g.us", "--timeout", "1")
+        if p.returncode != 2:
+            fallos.append(f"wa-read wait con el chat dos veces salio {p.returncode}: tenia "
+                          "que ser un error de argumentos (2)")
+
+        # T18: preguntarle al dueno y esperar. Su chat es el de la linea consigo misma: lo
+        # que el escribe desde su telefono llega como propio (`from_me`), igual que lo que
+        # manda la linea. Lo de la linea esta en la bandeja de salida (`envio`) con su
+        # stanza; lo del dueno no.
+        yo = "573000000012@s.whatsapp.net"
+        ahora = int(time.time())
+        escribe("a.anotarChat({ cuenta: %r, chatJid: %r, nombre: 'Yo Mismo', esGrupo: 0 });"
+                "a.encolarEnvio({ reqId: 'R-PREG', cuenta: %r, chatJid: %r, "
+                "cuerpo: 'pregunta al dueno' });"
+                "a.resolverEnvio('R-PREG', { estado: 'enviado', stanzaId: 'S-PREG' })"
+                % (NUEVA, yo, NUEVA, yo))
+        subprocess.run([str(BIN / "wa-scope"), "set", yo, "--mode", "responder"],
+                       env=env, capture_output=True, timeout=120)
+
+        hechas += 1
+        p, _ = espera("--chat", yo, "--after", "S-PREG", "--timeout", "1")
+        if p.returncode != 5 or primera(p) != "wa-read: wait-timeout":
+            fallos.append(f"wa-read wait --after <stanza que devolvio wa-send> salio "
+                          f"{p.returncode} ({primera(p)!r}) antes de que el almacen tuviera "
+                          "el eco: tenia que esperar (5 al vencer), no negarse")
+
+        hechas += 1
+        proc = subprocess.Popen([str(BIN / "wa-read"), "wait", "--chat", yo, "--after",
+                                 "S-PREG", "--timeout", "30", "--poll", "0.2", "--json"],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                env=env)
+        time.sleep(1.0)
+        escribe(mensaje(yo, "S-PREG", ahora, mio=1))
+        time.sleep(1.0)
+        vivo_tras_el_eco = proc.poll() is None
+        escribe(mensaje(yo, "S-RESP", ahora + 5, mio=1))
+        try:
+            salida, error = proc.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            salida, error = proc.communicate()
+        try:
+            filas = json.loads(salida or "null")
+        except ValueError:
+            filas = None
+        if not vivo_tras_el_eco:
+            fallos.append("wa-read wait en el chat del dueno desperto con el eco de lo que "
+                          "mando la linea")
+        if proc.returncode != 0 or not isinstance(filas, list) or \
+                [f.get("stanza_id") for f in filas] != ["S-RESP"]:
+            fallos.append(f"wa-read wait en el chat del dueno salio {proc.returncode} con "
+                          f"{salida.strip()[:200]!r} {error.strip()[:200]!r}; tenia que "
+                          "salir 0 con la respuesta que el dueno escribio (S-RESP)")
+
         hechas += 1
         ayuda = subprocess.run([str(BIN / "wa-read"), "wait", "--help"], capture_output=True,
                                text=True, env=env, timeout=60).stdout
         if not all(x in ayuda for x in ("--after", "--timeout", "--poll", "exit", "5",
-                                        "chat-not-authorized", "wait-timeout")):
-            fallos.append("wa-read wait --help no documenta --after, --timeout, --poll y "
-                          "los codigos de salida (5 timeout, chat-not-authorized)")
+                                        "chat-not-authorized", "wait-timeout", "--chat",
+                                        "owner")):
+            fallos.append("wa-read wait --help no documenta --chat, --after, --timeout, "
+                          "--poll, los codigos de salida (5 timeout, chat-not-authorized) y "
+                          "como esperar la respuesta del dueno")
     return hechas
 
 
