@@ -412,8 +412,8 @@ console.log('\nworker: el arnes de la carpeta del plugin')
       '.claude/skills/whatsapp-soporte/SKILL.md', '.wa-bin', 'AGENTS.md', 'CLASSIFICATION.md',
       'CLAUDE.md', 'COMMANDS.md', 'EXAMPLES.md', 'PROJECTS.md'].join(','),
     puestos.join(','))
-  // `.wa-bin`: la ruta del bin de ESTE plugin, una linea. Es la unica fuente de la que leen
-  // el prompt y las dos automations.
+  // `.wa-bin`: la ruta del bin de ESTE plugin, una linea. Es la que leen primero el prompt
+  // y las dos automations; `bin-path` (abajo) es su respaldo.
   ok('siembra `.wa-bin` con la ruta de las herramientas que usa el worker',
     lee('.wa-bin') === `${dir}\n`, JSON.stringify(lee('.wa-bin')))
   // Y la misma ruta en un lugar fijo del usuario, fuera de la carpeta de trabajo: un agente

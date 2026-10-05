@@ -35,8 +35,10 @@ const MARCA_HELP = '<!-- HARNESS:HELP -->'
 export const ARCHIVO_PROYECTOS = 'PROJECTS.md'
 /** El archivo con la ruta del `bin/` de ESTE plugin, una linea. Lo generan la siembra (que
  *  corre en cada activacion y en cada cambio del catalogo) y lo leen el prompt de triage y
- *  los comandos de las automatizaciones, que corren en esta misma carpeta: es la unica
- *  fuente de la ruta, en vez de un resolvedor copiado en cinco sitios. */
+ *  los comandos de las automatizaciones, que corren en esta misma carpeta: es la fuente
+ *  que se lee primero, en vez de un resolvedor copiado en cinco sitios. Si no da un
+ *  `wa-scope` ejecutable, los comandos caen en `bin-path` de `dirEstado`
+ *  (`ARCHIVO_BIN_ESTABLE`). */
 export const ARCHIVO_BIN = '.wa-bin'
 /** La misma ruta, en un lugar fijo del usuario y no en la carpeta de trabajo del plugin:
  *  un agente de CUALQUIER proyecto la lee para correr las herramientas del plugin que
