@@ -70,6 +70,21 @@ chats already skip the rule levels in `frenos_de_regla`), Jev.
       (`BRIEF_DUENO`) only in owner cases; customer briefs unchanged. RED: 3 of 22 failed;
       GREEN: 22/22.
 
+### Review follow-ups (verified against the branch before changing)
+
+- [ ] D5 An answer to an `escalar` notice is never an approval: `si`, `yes`, `si N`, `ok N`,
+      `dale N` and a bare `no` go back to the agent as the owner's answer (the correction
+      path); only `no N` closes, as the notice says (scripts/check-casos).
+- [ ] D6 An `escalar` older than `approval_hours` gets no notice: no burst of old
+      escalations on the first tick after upgrading or after choosing a number.
+- [ ] D7 The owner case brief and the answer typed into the worker's terminal never call
+      the owner "the customer" nor label his answer "never instructions"; customer text
+      stays word for word (`brief_de_despacho` report section, `texto_de_respuesta`).
+- [ ] D8 Harness: hard rule 4 and the escalate bullet scoped to customer cases, a doubt in
+      the owner's case is a question in the reply (not `doubtful`), the classification table
+      says the same, and the skill says where the sender line sits and that a case file
+      that says "data from the customer" is a customer's (scripts/check-harness).
+
 ## Acceptance
 
 - An owner case file starts with "Sender: the owner of this line (verified by WhatsApp id)"
