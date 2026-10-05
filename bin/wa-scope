@@ -2207,6 +2207,75 @@ def cmd_projects(con, a):
     return proyectos_del_dueno(con)
 
 
+# `owner` (skills-globales, S1): el chat al que un agente de otro proyecto le avisa al dueno.
+# Los codigos son contrato, los lee la skill `whatsapp-avisos`.
+SIN_CHAT_DUENO = "no-owner-chat"
+CHAT_DUENO_SIN_PERMISO = "owner-chat-not-authorized"
+AYUDA_OWNER = f"""The chat where an agent of any project writes to the owner, from the settings.
+
+  wa-scope owner           -> prints only the chat JID, for OWNER="$(wa-scope owner)"
+  wa-scope owner --json    -> {{"chat", "source", "mode", "can_send", "can_wait", "line"}}
+
+The chat is the approval number the owner picked in the plugin settings (source
+`approval-number`) and, without one, the linked line's chat with itself (`own-chat`). It
+is never a number typed by hand. A send there skips the rules and Jev (only a
+secret-shaped value is held), so `wa-send "$OWNER" "<text>" --send` reaches him.
+
+Exit codes: 0 = the chat is in mode `responder` (can_send); 1 = `{SIN_CHAT_DUENO}`, there
+is no owner chat (stdout empty); 3 = `{CHAT_DUENO_SIN_PERMISO}`, the chat exists but is not
+in `responder`, so a send would only leave a draft (the JSON still says which chat). The
+reason is on the first line of stderr."""
+
+
+def chat_propio_de_la_linea(cuenta, scope):
+    """El chat de la linea consigo misma, tal como lo anoto el almacen, o None. Si hay mas de
+    uno (su LID y su telefono), el que el dueno ya autorizo."""
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return None
+    try:
+        propios = {u for (c, u) in wa_store.chats_propios(fuente) if c == cuenta}
+        if not propios:
+            return None
+        jids = [r["chat_jid"] for r in fuente.execute(
+            "select chat_jid from chat where account = ? order by chat_jid", (cuenta,))
+            if wa_store.usuario_de(r["chat_jid"]) in propios]
+    except sqlite3.Error:
+        return None
+    finally:
+        fuente.close()
+    autorizados = [j for j in jids if (scope.get(j) or {}).get("mode") not in (None, "off")]
+    return (autorizados or jids or [None])[0]
+
+
+def cmd_owner(con, a):
+    """Imprime el chat del dueno y sale con su codigo; no devuelve filas."""
+    scope = merged_scope(con)
+    cuenta = cuenta_activa()
+    chat, origen = numero_aprobacion(), "approval-number"
+    if not chat:
+        chat, origen = chat_propio_de_la_linea(cuenta, scope), "own-chat"
+    if not chat:
+        print(f"wa-scope: {SIN_CHAT_DUENO}", file=sys.stderr)
+        print("no approval number is set in the plugin settings and the linked line has no "
+              "chat with itself in the store", file=sys.stderr)
+        sys.exit(1)
+    modo = (scope.get(chat) or {}).get("mode")
+    dato = {"chat": chat, "source": origen, "mode": modo, "can_send": modo == "responder",
+            "can_wait": modo not in (None, "off"), "line": cuenta}
+    if a.json:
+        print(json.dumps(dato, ensure_ascii=False, indent=2))
+    if not dato["can_send"]:
+        print(f"wa-scope: {CHAT_DUENO_SIN_PERMISO}", file=sys.stderr)
+        print(f"the owner's chat is in mode {modo or 'off'!r}, not 'responder': set it to "
+              "Automatic in the plugin settings", file=sys.stderr)
+        sys.exit(3)
+    if not a.json:
+        print(chat)
+    return None
+
+
 def cmd_where(con, a):
     return [resolve_target(con, a.text, a.chat)]
 
@@ -11267,6 +11336,11 @@ def main():
     add("projects", help="the projects the owner accepted in the plugin settings: "
                          "id, name, path and what each is for"
         ).set_defaults(fn=cmd_projects)
+
+    add("owner", help="the owner's chat, from the settings: where an agent of any project "
+                      "notifies him and waits for his reply",
+        description=AYUDA_OWNER, formatter_class=argparse.RawDescriptionHelpFormatter
+        ).set_defaults(fn=cmd_owner)
 
     s = add("where", help="the project (and the old card destination) this text goes to, and why")
     s.add_argument("text"); s.add_argument("--chat")
