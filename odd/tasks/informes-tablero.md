@@ -174,8 +174,25 @@ stores (capture.db messages, scope.db cases, case events and dispatches). Owner-
       rows of the period. Not verified inside the Orca app itself (Electron), which I did
       not run. RED: no `#reports-csv` (`TypeError ... reading 'click'`). GREEN: panels
       1167/1167 (19 new in "I6").
-- [ ] I7 Screenshots of the board and Reports at 1440/768/390/320, light and dark, ES and EN,
+- [x] I7 Screenshots of the board and Reports at 1440/768/390/320, light and dark, ES and EN,
       looked at; `npm run check` green.
+      New states in `test/shots.mjs`, every width, theme and language: `tablero-muchas`
+      (69 cases, 26 Respondido and 34 Cerrado, scrolled to the finished columns),
+      `tablero-muchas-cerrado` (only Cerrado, scrolled to its "Mostrar 14 mas"),
+      `tablero-muchas-columnas` (the board view chosen at 390/320), `informes`,
+      `informes-vacio` and `config-sla`; `informes-hoy` and `informes-sin-clave` at
+      1440/320. Looked at (read the PNG): Reports 1440 dark ES, 1440 light EN, 768 dark ES,
+      390 light ES, 320 dark EN, Hoy 1440 light ES, empty 1440 dark ES, no key 1440 light ES;
+      board many-cards 1440 dark ES (first and scrolled), Cerrado-only 1440 light ES, 390
+      light ES (list) and the board view at 390 light ES; Settings SLA card 390 light ES.
+      Fixed after looking: the three times wrapped 2 + 1 at 768 (now three columns from
+      200 px), the scale label sat on the tallest bar (now in its own strip), tables were cut
+      at 390/320 (now one card per row with the column names), tiles were one per row at
+      320 (now two). The heatmap ramp reads in both themes, including the zero cell.
+      Board columns stay inside the 900 px window (the page is the window's height with 60
+      finished cards) and each scrolls on its own. `npm run check`: exit 0 (every suite,
+      1376 screenshots, no overflow, no JS errors, no selects); after the last CSS fixes,
+      panels 1167/1167 and shots 1376 again, exit 0.
 
 ## Storage key `reports` (v 1), for the UI stage
 

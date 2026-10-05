@@ -510,7 +510,7 @@
              color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .rep-nada { margin: 0; font-size: 12px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .rep-azulejos { display: grid; gap: 8px;
-             grid-template-columns: repeat(auto-fill, minmax(min(100%, 132px), 1fr)); }
+             grid-template-columns: repeat(auto-fill, minmax(min(100%, 118px), 1fr)); }
       .rep-azulejo { min-width: 0; padding: 8px 10px; border-radius: var(--radius-md);
              background: color-mix(in srgb, var(--muted, var(--fb-muted)) 55%, transparent); }
       .rep-label { display: block; font-size: 11px; overflow-wrap: anywhere;
@@ -529,6 +529,10 @@
       .rep-delta.peor { color: var(--destructive, var(--fb-destructive)); }
       .rep-tiempos, .rep-mapas, .rep-graficos { display: grid; gap: 16px;
              grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); }
+      /* Los tres tiempos van juntos o uno debajo del otro: dos y uno suelto se lee como
+         que el tercero es de otra cosa. */
+      .rep-tiempos { margin-top: 8px;
+             grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); }
       .rep-graficos { margin-top: 14px; }
       .rep-tiempo { min-width: 0; }
       .rep-tiempo .rep-def { margin: 6px 0 0; }
@@ -536,7 +540,10 @@
          escala va arriba a la izquierda; la fecha de la primera, la del medio y la ultima
          abajo. Cada cubeta dice lo suyo al pasar el puntero. */
       .rep-barras { min-width: 0; margin-top: 8px; }
-      .rep-plot { position: relative; display: flex; align-items: flex-end; gap: 2px; height: 72px;
+      /* El tope de la escala vive en su propia franja de arriba (padding-top): encima de las
+         barras tapaba la mas alta. */
+      .rep-plot { position: relative; display: flex; align-items: flex-end; gap: 2px; height: 88px;
+             padding-top: 16px;
              border-bottom: 1px solid var(--border, var(--fb-border)); }
       .rep-grupo { flex: 1 1 0; min-width: 0; height: 100%; display: flex; align-items: flex-end;
              justify-content: center; gap: 1px; }
@@ -544,8 +551,8 @@
       .rep-grupo .b { flex: 1 1 0; max-width: 16px; border-radius: 3px 3px 0 0;
              background: var(--rep-serie-1); }
       .rep-grupo .b.s2 { background: var(--rep-serie-2); }
-      .rep-max { position: absolute; top: -2px; left: 0; padding-right: 4px; font-size: 10px;
-             line-height: 1; pointer-events: none; background: var(--card, var(--fb-card));
+      .rep-max { position: absolute; top: 0; left: 0; font-size: 10px;
+             line-height: 1; pointer-events: none;
              color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .rep-eje { display: flex; justify-content: space-between; gap: 8px; margin-top: 3px;
              font-size: 10px; white-space: nowrap;
@@ -602,6 +609,20 @@
       .rep-csv .card-msg { margin: 0; }
       /* El campo que lleva el CSV al portapapeles: fuera de la vista, nunca visible. */
       .rep-csv-aux { position: fixed; top: 0; left: -9999px; width: 1px; height: 1px; opacity: 0; }
+      /* En lo angosto cada fila de una tabla es una ficha: la primera celda arriba y cada
+         numero con el nombre de su columna. Una tabla cortada a 320 px no se lee. */
+      @media (max-width: 520px) {
+        .rep-tabla thead { display: none; }
+        .rep-tabla, .rep-tabla tbody, .rep-tabla tr, .rep-tabla td { display: block; width: auto; }
+        .rep-tabla tr { padding: 8px 0; border-top: 1px solid var(--border, var(--fb-border)); }
+        .rep-tabla tr:first-child { border-top: 0; padding-top: 0; }
+        .rep-tabla td { padding: 1px 0; border: 0; }
+        .rep-tabla td + td { display: flex; justify-content: space-between; gap: 12px; text-align: right; }
+        .rep-tabla td + td::before { content: attr(data-col); text-align: left;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+        .rep-tabla td:first-child { font-weight: 500; }
+        .rep-tabla .rep-caso-t { min-width: 0; max-width: none; }
+      }
       .rep-mas { margin: 6px 0 0; font-size: 11px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
 
       /* Hasta 768 px la lista es la vista natural y el detalle se abre en el lugar, debajo
@@ -3810,6 +3831,7 @@
           var fila = crear('tr')
           celdas.forEach(function (contenido, i) {
             var td = crear('td', columnas[i].num ? 'num' : null)
+            td.setAttribute('data-col', columnas[i].titulo)
             if (contenido && contenido.nodeType) td.appendChild(contenido)
             else td.textContent = contenido == null ? '' : String(contenido)
             fila.appendChild(td)
