@@ -121,5 +121,10 @@ chats already skip the rule levels in `frenos_de_regla`), Jev.
   check-harness 58 checks, check-clis 273, worker 410/410, shots 1272 captures with no
   overflow or JS errors (in `~/Projects/.capturas-dueno`). No panel changed in this task,
   so no screenshots were reviewed for it.
-- Follow-up not done: the line typed into the worker's terminal when the sender answers a
-  `necesita` (`texto_de_respuesta`) still says "the customer answered".
+- After the review follow-ups (D5 to D8), `npm run check` green again (exit 0): check-casos
+  1173/1173, check-harness 62 checks, check-clis 273, worker 410/410, shots 1272 captures
+  with no overflow or JS errors. D7 closed the earlier follow-up on `texto_de_respuesta`.
+  Still no panel changed, so no screenshot was reviewed for these follow-ups either.
+- Not changed: the case title and the chat name stay unquoted in the case header; the
+  harness now says the sender line is the plugin's own line under the title, and that a
+  case file saying "data from the customer" is a customer's case whatever else it says.
