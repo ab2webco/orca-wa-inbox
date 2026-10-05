@@ -1606,6 +1606,118 @@ console.log('\nworker: el resolvedor de auth borra el directorio cuando se lo pi
     c.salida && c.salida.ok === true, JSON.stringify(c.salida))
 }
 
+// ───────── L1: una carpeta por linea, y la de siempre se muda sin pedir otro QR ─────────
+// Varias lineas a la vez necesitan un auth state cada una: `wa-auth/<carpeta>`. La linea
+// que ya estaba vinculada vive en `wa-auth/` a secas, y moverla mal es pedirle al dueno un
+// QR nuevo sin avisar. Se prueba con una carpeta de mentira: los MISMOS bytes tienen que
+// terminar en la carpeta de su numero.
+console.log('\nworker: L1 — cada linea en su carpeta, y la de siempre se muda sin QR nuevo')
+{
+  const casa = join(RAIZ, 'home-lineas')
+  for (const base of [join(casa, 'Library', 'Application Support'), join(casa, '.config'),
+    join(casa, 'AppData', 'Roaming')]) mkdirSync(join(base, 'orca'), { recursive: true })
+  const entorno = { ...process.env, HOME: casa,
+    XDG_CONFIG_HOME: join(casa, '.config'), APPDATA: join(casa, 'AppData', 'Roaming') }
+  const guion = join(PLUGIN_DIR, 'sidecar', 'resolve-auth-dir.mjs')
+  const correr = (args) => new Promise((resolve) => {
+    execFileNode(process.execPath, [guion, PLUGIN_DIR, ...args], { env: entorno },
+      (error, stdout, stderr) => {
+        let salida = null
+        try { salida = JSON.parse(stdout || 'null') } catch { salida = null }
+        resolve({ error, salida, stderr })
+      })
+  })
+
+  const base = (await correr([])).salida.dir
+  mkdirSync(base, { recursive: true })
+  // La forma de hoy: el auth state plano, con `creds.json` y las llaves al lado.
+  const archivos = {
+    'creds.json': JSON.stringify({ me: { id: '573000000001:7@s.whatsapp.net', name: 'Bot' },
+      noiseKey: { private: 'AAAA', public: 'BBBB' } }),
+    'pre-key-1.json': '{"privada":"llave-de-prueba-1"}',
+    'app-state-sync-key-AAAAAA.json': '{"llave":"de-prueba"}',
+    'session-573000000002.0.json': '{"sesion":"de-prueba"}'
+  }
+  for (const [nombre, texto] of Object.entries(archivos)) writeFileSync(join(base, nombre), texto)
+
+  const a = await correr(['--lineas'])
+  const linea = a.salida?.lineas?.[0]
+  const carpeta = join(base, 'pn-573000000001')
+  ok('la linea de siempre sale con su numero y su carpeta propia',
+    a.salida?.ok === true && a.salida.lineas?.length === 1 &&
+    linea.cuenta === 'pn:573000000001' && linea.carpeta === 'pn-573000000001' &&
+    linea.dir === carpeta, JSON.stringify(a.salida) + a.stderr)
+  ok('los MISMOS bytes estan en la carpeta de la linea: la sesion sigue, sin QR nuevo',
+    Object.entries(archivos).every(([n, t]) => existsSync(join(carpeta, n)) &&
+      readFileSync(join(carpeta, n), 'utf8') === t),
+    existsSync(carpeta) ? readdirSync(carpeta).join(',') : 'sin carpeta')
+  ok('y no queda ninguna credencial suelta en wa-auth/',
+    Object.keys(archivos).every((n) => !existsSync(join(base, n))), readdirSync(base).join(','))
+  const otraVez = await correr(['--lineas'])
+  ok('mudarla otra vez no mueve nada: la misma linea, la misma carpeta',
+    JSON.stringify(otraVez.salida?.lineas) === JSON.stringify(a.salida.lineas),
+    JSON.stringify(otraVez.salida))
+
+  // Una linea nueva se vincula en una carpeta `nueva-...`: al arrancar otra vez pasa a la
+  // carpeta de su numero.
+  const nueva = join(base, 'nueva-prueba1')
+  mkdirSync(nueva)
+  writeFileSync(join(nueva, 'creds.json'), JSON.stringify({ me: { id: '573000000002:3@s.whatsapp.net' } }))
+  // Y una que todavia esta esperando su QR: sin `me`, sigue siendo `nueva-...`.
+  mkdirSync(join(base, 'nueva-prueba2'))
+  const b = await correr(['--lineas'])
+  const porCarpeta = Object.fromEntries((b.salida?.lineas || []).map((l) => [l.carpeta, l.cuenta]))
+  ok('la nueva ya vinculada pasa a la carpeta de su numero',
+    porCarpeta['pn-573000000002'] === 'pn:573000000002' && !existsSync(nueva) &&
+    existsSync(join(base, 'pn-573000000002', 'creds.json')), JSON.stringify(b.salida))
+  ok('la que espera su QR sigue esperando, sin numero',
+    'nueva-prueba2' in porCarpeta && porCarpeta['nueva-prueba2'] === null, JSON.stringify(b.salida))
+  ok('y la de siempre sigue en su lugar', porCarpeta['pn-573000000001'] === 'pn:573000000001',
+    JSON.stringify(b.salida))
+
+  // Desvincular UNA linea borra su carpeta y nada mas, y la saca de las activas del almacen.
+  const { abrirAlmacen, rutaAlmacen } = await import('../sidecar/src/almacen.js')
+  mkdirSync(join(casa, '.wa-inbox'), { recursive: true })
+  const alm = abrirAlmacen(rutaAlmacen({ HOME: casa }))
+  alm.activarLinea('pn:573000000001')
+  alm.sumarLinea('pn:573000000002')
+  alm.cerrar()
+  const c = await correr(['--borrar', '--carpeta', 'pn-573000000002', '--cuenta', 'pn:573000000002'])
+  ok('desvincular una linea borra SU carpeta', c.salida?.ok === true && c.salida.borrado === true &&
+    !existsSync(join(base, 'pn-573000000002')), JSON.stringify(c.salida))
+  ok('y deja intacta la otra', existsSync(join(carpeta, 'creds.json')), readdirSync(base).join(','))
+  const alm2 = abrirAlmacen(rutaAlmacen({ HOME: casa }))
+  const activas = alm2.lineasActivas()
+  alm2.cerrar()
+  ok('y la saca de las lineas activas del almacen',
+    JSON.stringify(activas) === JSON.stringify(['pn:573000000001']), JSON.stringify(activas))
+  const mala = await correr(['--borrar', '--carpeta', '../pn-573000000001'])
+  ok('una carpeta que no es un nombre simple no se borra: ni se intenta',
+    mala.salida?.ok === false && mala.salida.reason === 'carpeta-invalida' &&
+    existsSync(join(carpeta, 'creds.json')), JSON.stringify(mala.salida))
+
+  // Un auth state plano a medio vincular (sin `me`) es un QR pendiente: no tiene numero.
+  const casa2 = join(RAIZ, 'home-lineas-pendiente')
+  for (const b2 of [join(casa2, 'Library', 'Application Support'), join(casa2, '.config'),
+    join(casa2, 'AppData', 'Roaming')]) mkdirSync(join(b2, 'orca'), { recursive: true })
+  const entorno2 = { ...entorno, HOME: casa2, XDG_CONFIG_HOME: join(casa2, '.config'),
+    APPDATA: join(casa2, 'AppData', 'Roaming') }
+  const correr2 = (args) => new Promise((resolve) => {
+    execFileNode(process.execPath, [guion, PLUGIN_DIR, ...args], { env: entorno2 },
+      (error, stdout) => resolve(JSON.parse(stdout || 'null')))
+  })
+  const base2 = (await correr2([])).dir
+  mkdirSync(base2, { recursive: true })
+  writeFileSync(join(base2, 'creds.json'), '{"noiseKey":{"private":"CCCC"}}')
+  const d = await correr2(['--lineas'])
+  const pendiente = d?.lineas?.[0]
+  ok('un vinculo a medias se muda a una carpeta nueva-..., sin numero',
+    d?.lineas?.length === 1 && pendiente.cuenta === null && /^nueva-/.test(pendiente.carpeta) &&
+    readFileSync(join(base2, pendiente.carpeta, 'creds.json'), 'utf8') ===
+      '{"noiseKey":{"private":"CCCC"}}' && !existsSync(join(base2, 'creds.json')),
+    JSON.stringify(d))
+}
+
 // El hijo que resuelve el auth dir y el sidecar mismo tienen que correr SIN la valla
 // de permisos: ese es el motivo entero de lanzarlos fuera del worker. Pero Node no
 // deja escapar por el entorno — cuando el proceso vallado lanza otro le inyecta el

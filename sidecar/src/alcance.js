@@ -21,6 +21,11 @@ export const ALCANCE_TTL_MS = 30000
 
 const SEPARADOR = '\u0000'
 
+/** La variable con que se le dice a los CLI de que linea es una corrida (varias lineas a
+ *  la vez). Es contrato con `bin/wa_store.py` (`LINEA_ENV`): `wa-scope` contesta el alcance
+ *  de esa linea y no el de la principal. */
+export const LINEA_ENV = 'WA_INBOX_LINEA'
+
 export function llave (cuenta, jid) {
   return `${cuenta}${SEPARADOR}${jid}`
 }
@@ -77,7 +82,7 @@ export function reclaveDecididaDe (filas) {
  * (§11-E4).
  */
 export function crearAlcance ({ toolsDir, ejecutar = correr, ttlMs = ALCANCE_TTL_MS,
-  ahora = () => Date.now() }) {
+  ahora = () => Date.now(), linea = () => null }) {
   let mapa = new Map()
   let topes = { max: 20000, dias: 90 }
   let decidida = null
@@ -88,9 +93,13 @@ export function crearAlcance ({ toolsDir, ejecutar = correr, ttlMs = ALCANCE_TTL
     if (!toolsDir) return false
     if (!forzar && ahora() - cargadoEn < ttlMs) return cargoAlgunaVez
     cargadoEn = ahora()
+    // Con varias lineas, `wa-scope` contesta el alcance de la linea que se le nombra. Sin
+    // numero todavia (emparejando) no se nombra ninguna: en ese rato no se guarda nada.
+    const cuenta = linea()
+    const env = cuenta ? { ...process.env, [LINEA_ENV]: cuenta } : undefined
     try {
       const nuevo = mapaDeAlcance(JSON.parse(ejecutar(join(toolsDir, 'wa-scope'),
-        ['list', '--json']) || '[]'))
+        ['list', '--json'], env) || '[]'))
       // Solo se reemplaza con una respuesta que se pudo parsear. Un `wa-scope` que
       // fallo no puede vaciar el mapa: eso apagaria la captura de todo en silencio, y
       // un silencio se ve igual que una semana tranquila (§11-E5).
@@ -101,7 +110,7 @@ export function crearAlcance ({ toolsDir, ejecutar = correr, ttlMs = ALCANCE_TTL
     }
     try {
       const ajustes = JSON.parse(ejecutar(join(toolsDir, 'wa-scope'),
-        ['config', '--json']) || '[]')
+        ['config', '--json'], env) || '[]')
       topes = topesDe(ajustes, topes)
       decidida = reclaveDecididaDe(ajustes)
     } catch {
@@ -124,6 +133,7 @@ export function crearAlcance ({ toolsDir, ejecutar = correr, ttlMs = ALCANCE_TTL
   }
 }
 
-function correr (cmd, args) {
-  return execFileSync(cmd, args, { encoding: 'utf8', timeout: 30000, maxBuffer: 8 << 20 })
+function correr (cmd, args, env) {
+  return execFileSync(cmd, args, { encoding: 'utf8', timeout: 30000, maxBuffer: 8 << 20,
+    ...(env ? { env } : {}) })
 }

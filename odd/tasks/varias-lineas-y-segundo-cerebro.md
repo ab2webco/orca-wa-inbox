@@ -79,12 +79,42 @@ existing test stays green unchanged.
 - Group automation on the personal line (only direct chats in the first version).
 - Voice notes as replies.
 
+## Design of Part 1 (decided while building it)
+
+- **Auth folders.** `wa-auth/<folder>` per line. A linked line's folder is its account
+  with `-` for `:` (`pn-<digits>`), so it is valid on every OS. A line being linked lives
+  in `wa-auth/nueva-<id>` until its next start, when the resolver renames it to its
+  account. The resolver (`sidecar/resolve-auth-dir.mjs --lineas`) is the only place that
+  moves folders, and the worker calls it only before any sidecar runs.
+- **Migration.** A flat `wa-auth/creds.json` (today's layout) moves, file by file and
+  `creds.json` last, into the folder of the account its `me.id` names. The bytes do not
+  change, so the session keeps working with no new QR. A flat folder with no `me` is an
+  unfinished pairing and moves to a `nueva-` folder.
+- **Principal line.** The worker keeps the lines in order in the storage key `lineas`
+  (`[{carpeta, cuenta, tipo, alta}]`). The first one is the principal: its sidecar state
+  stays in the `sidecar` key, exactly as today, and its sidecar is the only one that sets
+  `store_meta.linea_activa`. Every other line writes its state to `sidecars[<folder>]`,
+  and its sidecar runs with `WA_SIDECAR_LINEA_SECUNDARIA=1`.
+- **Active lines.** `store_meta.lineas_activas` in capture.db (a JSON list) holds every
+  linked line. Each sidecar adds its own line, and unlinking removes it (the resolver,
+  through `almacen.js`). With no list, the active lines are `[linea_activa]`, as before.
+- **The CLIs.** `WA_INBOX_LINEA=<account>` (or `wa-scope --line`) names the line of a run.
+  Without it, `wa-scope tick`, `ingest`, `sync` and `pending --needs-agent` run once per
+  active line, each in its own process with its own lock. With one line they run in the
+  same process, as today. A `caso` command with a case id runs on that case's line when
+  the line is active. The panel storage keys of a line that is not the principal live
+  under `lineas[<account>]`, so they never overwrite the principal's.
+
 ## Checklist
 
 ### Part 1: several lines
 
-- [ ] **L1** Sidecar per line: `wa-auth/<account>`, migration of the current folder, with no
+- [x] **L1** Sidecar per line: `wa-auth/<account>`, migration of the current folder, with no
   new QR. Tests in `test/almacen.test.mjs` / the sidecar tests.
+  Evidence: RED then GREEN in `almacen.test.mjs` ("L1: varias lineas a la vez", 11 checks),
+  `sidecar-pairing.test.mjs` ("L1 — cada linea anota la suya", 7 checks) and
+  `worker.test.mjs` ("L1 — cada linea en su carpeta, y la de siempre se muda sin QR
+  nuevo", 12 checks: a fake flat auth folder ends byte-identical in `wa-auth/pn-<digits>`).
 - [ ] **L2** Worker: one sidecar per line, its health and restart, and link/unlink
   commands. Worker tests.
 - [ ] **L3** `wa-scope` over every active line. Per-line locks and no cross-line leaks.
