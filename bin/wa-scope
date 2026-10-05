@@ -1789,8 +1789,12 @@ def cmd_set(con, a):
         "aprobacion": niveles_pedidos(a.approval, cur.get("aprobacion")),
         "pregunta_proyecto": (a.project_question if a.project_question is not None
                               else cur.get("pregunta_proyecto")),
-        "miembros": json.dumps(miembros_pedidos(a.member, cur.get("miembros")),
-                               sort_keys=True),
+        # Los roles parten de lo fusionado, no de la columna: la lista del panel manda
+        # (`merged_scope`), y un rol que el dueno quito ahi antes del proximo sync no puede
+        # volver por un `--member` de otra persona.
+        "miembros": json.dumps(miembros_pedidos(
+            a.member, (merged_scope(con).get(jid) or {}).get("miembros", cur.get("miembros"))),
+            sort_keys=True),
         "timezone": a.timezone or cur.get("timezone") or "America/Bogota",
         "notes": a.notes or cur.get("notes"),
         "updated_at": time.strftime("%Y-%m-%d %H:%M"),
@@ -3195,10 +3199,12 @@ def horas_pregunta_proyecto(con):
 def cmd_caso_pregunta_proyecto(con, a):
     """El agente no sabe si el caso es de A o de B: deja anotada la pregunta, con los
     candidatos (dos o mas proyectos del chat) y su texto. A quien va lo decide el ajuste del
-    chat (`projectQuestion`), nunca el agente: `auto` es al que escribio en la conversacion
-    del dueno o en un directo con un admin u operador de ese chat (por su id de WhatsApp,
-    `rol_del_caso`), y al dueno en cualquier otra, un grupo incluido aunque escriba el dueno, porque preguntarle al chat le muestra los nombres de los proyectos a
-    los clientes que lo leen. Sin saber quien escribio, al dueno.
+    chat (`projectQuestion`), nunca el agente (`para_de_pregunta`): `auto` es al que escribio
+    en la conversacion del dueno o en un directo con un admin u operador de ese chat (por su
+    id de WhatsApp, `rol_del_caso`), y al dueno en cualquier otra, un grupo incluido aunque
+    escriba el dueno, porque preguntarle al chat le muestra los nombres de los proyectos a
+    los clientes que lo leen. Sin saber quien escribio, al dueno. Lo que se le conteste
+    despues lo vuelve a mirar `pregunta_del_dueno`.
 
     Despues el agente propone: al que escribio, un `responder` con la pregunta, que sigue el
     camino de aprobacion de siempre; al dueno, `escalar --instrucciones` con la pregunta, que
@@ -3223,18 +3229,8 @@ def cmd_caso_pregunta_proyecto(con, a):
     if len(candidatos) < 2 or any(c not in ids for c in candidatos):
         caso_falla("E_ARGS", f"a project question names two or more of the chat's projects: "
                              f"{', '.join(ids) or 'none'} (not {', '.join(candidatos) or 'none'})")
-    modo = entry.get("pregunta_proyecto") or PREGUNTA_AUTO
     quien = remitente_del_caso(con, caso)
-    # Con auto, al que escribio en la conversacion del dueno o en un DIRECTO con un admin o
-    # un operador de ese chat (roles-por-numero): un grupo lo leen tambien los clientes, y
-    # ahi la pregunta nombraria los proyectos aunque la hiciera el dueno. En un grupo, al
-    # dueno, tenga el rol que tenga quien escribio.
-    directo = not str(caso["chat_jid"]).endswith("@g.us")
-    para = modo if modo != PREGUNTA_AUTO else (
-        "writer" if chat_es_del_dueno(caso.get("account"), caso["chat_jid"])
-        or (directo and rol_del_caso(con, caso) in (wa_store.ROL_ADMIN,
-                                                    wa_store.ROL_OPERADOR))
-        else "owner")
+    para = para_de_pregunta(con, caso, entry)
     if para == "writer" and not quien:
         para = "owner"
     ruta["pregunta"] = {"candidatos": candidatos, "a": para, "quien": quien, "texto": texto,
@@ -3248,6 +3244,36 @@ def cmd_caso_pregunta_proyecto(con, a):
                     f"propose `caso propuesta {a.id} --tipo escalar --instrucciones` with the "
                     f"question: it goes to the owner, never to the customer")
     return [fila]
+
+
+def para_de_pregunta(con, caso, entry=None):
+    """A quien va HOY la pregunta "A o B?" del caso: `writer` o `owner`. Manda el ajuste del
+    chat (`projectQuestion`). Con auto, al que escribio en la conversacion del dueno o en un
+    DIRECTO con un admin o un operador de ese chat (roles-por-numero): un grupo lo leen
+    tambien los clientes, y ahi la pregunta nombraria los proyectos aunque la hiciera el
+    dueno. En un grupo, al dueno, tenga el rol que tenga quien escribio."""
+    if entry is None:
+        entry = merged_scope(con).get(caso["chat_jid"]) or {}
+    modo = entry.get("pregunta_proyecto") or PREGUNTA_AUTO
+    if modo != PREGUNTA_AUTO:
+        return modo
+    directo = not str(caso["chat_jid"]).endswith("@g.us")
+    return ("writer" if chat_es_del_dueno(caso.get("account"), caso["chat_jid"])
+            or (directo and rol_del_caso(con, caso) in (wa_store.ROL_ADMIN,
+                                                        wa_store.ROL_OPERADOR))
+            else "owner")
+
+
+def pregunta_del_dueno(con, caso):
+    """Si el caso tiene una pregunta "A o B?" sin proyecto elegido que HOY es del dueno: lo
+    que se le conteste al chat mientras tanto (una respuesta o un avance) lo ve el dueno,
+    porque nombraria los proyectos (proyectos-por-chat, M5). La que iba al que escribio se
+    vuelve a mirar ahora, no solo al anotarla: si el dueno le quito el rol, o cambio el
+    ajuste del chat, antes de que saliera, ya es del dueno (roles-por-numero)."""
+    p = pregunta_abierta(ruta_del_caso(caso))
+    if not p:
+        return False
+    return p.get("a") != "writer" or para_de_pregunta(con, caso) != "writer"
 
 
 def caso_espera_proyecto(con, chat, sender_jid):
@@ -3542,9 +3568,8 @@ def frenos_de_regla(con, caso):
         al_dueno.append("borrador")
     # La pregunta "A o B?" es del dueno (un cliente con auto, o el chat en owner): lo que se
     # le conteste al chat mientras tanto lo ve el dueno, porque nombraria los proyectos
-    # (proyectos-por-chat, M5).
-    p = pregunta_abierta(ruta_del_caso(caso))
-    if p and p.get("a") == "owner":
+    # (proyectos-por-chat, M5). La del que escribio se vuelve a mirar: sin su rol, del dueno.
+    if pregunta_del_dueno(con, caso):
         al_dueno.append("project_question")
     return al_dueno, al_agente
 
@@ -3889,8 +3914,7 @@ def avance_frena(con, caso):
                                f"no updates go to the customer")
     # La pregunta "A o B?" en manos del dueno: un avance nombraria lo que el todavia no
     # decidio, igual que una respuesta (frenos_de_regla, proyectos-por-chat M5).
-    p = pregunta_abierta(ruta_del_caso(caso))
-    if p and p.get("a") == "owner":
+    if pregunta_del_dueno(con, caso):
         return ("E_EXCEPTION", f"case #{cid} waits for the owner (project_question): no updates "
                                f"go to the customer")
     return None

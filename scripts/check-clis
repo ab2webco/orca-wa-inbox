@@ -1535,6 +1535,24 @@ def revisa_roles(fallos: list) -> int:
         hechas += 1
         if columna(GRUPO) != {}:
             fallos.append(f"`members: []` del panel no vacio los roles: {columna(GRUPO)!r}")
+        # El panel quita un rol y, antes del proximo sync, alguien corre `set --member` con
+        # otra persona: el rol quitado no vuelve. `set` parte de lo fusionado (lo del panel
+        # manda, como en `merged_scope`), no de la columna que el sync todavia no corrigio.
+        scope("set", GRUPO, "--member", f"{OPER}=operator")
+        scope("sync")
+        datos = storage()
+        datos["scope"][GRUPO]["members"] = []
+        escribe(datos)
+        p = scope("set", GRUPO, "--member", f"{JEFA}=operator")
+        empujados = [m.get("id") for m in (((storage().get("scope") or {}).get(GRUPO) or {})
+                                           .get("members") or [])]
+        hechas += 1
+        if p.returncode != 0 or columna(GRUPO) != {JEFA: "operator"} or \
+                miembros_de(GRUPO) != {JEFA: "operator"} or empujados != [JEFA]:
+            fallos.append(f"`set --member` devolvio un rol que el panel quito: salio "
+                          f"{p.returncode}, columna {columna(GRUPO)!r}, list "
+                          f"{miembros_de(GRUPO)!r}, panel {empujados!r}")
+        scope("set", GRUPO, "--member", f"{JEFA}=client")
 
         # ── groupMembers: los miembros de los grupos del alcance, al lado de senders.
         if shutil.which("node"):
@@ -1596,8 +1614,15 @@ def revisa_roles(fallos: list) -> int:
          "client"),
         ("un admin de un grupo es admin ahi", (con, NUEVA, GRUPO, JEFA, [], roles), "admin"),
         ("quien no esta es cliente", (con, NUEVA, GRUPO, NADIE, [], roles), "client"),
-        ("el dueno guardado por telefono escribe con su LID: el par lo une",
-         (con, NUEVA, OTRO, DUENO_LID, [DUENO_TEL], roles), "admin"),
+        # El dueno global es su id EXACTO, como `es_dueno`, `chat_del_dueno` y
+        # `caso_del_dueno` (v4.16.0): el par no lo vuelve dueno por el otro id. Cambiado en la
+        # verificacion: decia "admin", y eso partia al dueno en dos (roles-por-numero).
+        ("el dueno guardado por telefono escribe con su LID: sin roles, como en v4.16.0",
+         (con, NUEVA, OTRO, DUENO_LID, [DUENO_TEL], roles), "client"),
+        ("ni en su directo por LID", (con, NUEVA, DUENO_LID, None, [DUENO_TEL], {}), "client"),
+        ("el par si une a quien el dueno le dio un rol en ESE chat",
+         (con, NUEVA, GRUPO, DUENO_LID, [DUENO_TEL], {GRUPO: {DUENO_TEL: "operator"}}),
+         "operator"),
         ("el operador guardado por LID escribe con su telefono: el par lo une",
          (con, NUEVA, GRUPO, OPER_TEL, [], roles), "operator"),
         ("sin el par no se une: el LID de otra persona con el mismo numero no es el dueno",

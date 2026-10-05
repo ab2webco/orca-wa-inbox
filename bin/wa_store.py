@@ -588,28 +588,32 @@ def id_de_persona(valor):
 def rol_de(con, cuenta, chat_jid, sender_jid, owners, miembros, pares=None):
     """El rol de quien escribio en una conversacion: `admin`, `operator` o `client`.
 
-    - Un dueno global (`owners`, los de `duenos()`) es admin en TODAS las conversaciones.
+    - Un dueno global (`owners`, los de `duenos()`) es admin en TODAS las conversaciones,
+      por su id EXACTO, como `es_dueno`, `chat_del_dueno` y `caso_del_dueno`: el par
+      LID-telefono no lo vuelve dueno por el otro id. Asi una conversacion sin roles
+      guardados queda como en v4.16.0 (el dueno o cualquier otro) y el dueno es el mismo
+      para todas las reglas: su caso nunca se presenta como el de un operador.
     - Si no, el rol que el dueno guardo para ESTA conversacion y para ninguna otra:
       `miembros` es `{chat_jid: {id: operator|admin}}` (`chat_scope.miembros` de cada
       chat), y solo se mira `miembros[chat_jid]`. Un operador de un grupo es un cliente en
       cualquier otro chat.
-    - Un LID y un telefono son la misma persona SOLO por un par de `lid_telefono` de esa
-      linea (`con` es el almacen, o None: sin almacen no hay pares). Nunca se adivina por
-      los digitos. `pares` son esos pares ya leidos (`telefonos_de_lid`), para quien juzga
-      muchos mensajes de una vez; sin ellos se leen de `con`.
+    - Para ese rol guardado, un LID y un telefono son la misma persona SOLO por un par de
+      `lid_telefono` de esa linea (`con` es el almacen, o None: sin almacen no hay pares).
+      Nunca se adivina por los digitos. `pares` son esos pares ya leidos
+      (`telefonos_de_lid`), para quien juzga muchos mensajes de una vez; sin ellos se leen
+      de `con`.
 
     Sin remitente, en un directo escribe la conversacion; en un grupo, nadie: cliente. Si la
     persona tiene dos ids con roles distintos, vale el menor."""
     jid = sender_jid or (chat_jid if chat_jid and not str(chat_jid).endswith("@g.us")
                          else None)
+    if not jid_sin_dispositivo(jid):
+        return ROL_CLIENTE
+    if es_dueno(jid, {jid_sin_dispositivo(o) for o in owners or () if o}):
+        return ROL_ADMIN
     if pares is None:
         pares = telefonos_de_lid(con) if con is not None else {}
-    ids = companeros_de(cuenta, jid, pares) if jid else []
-    if not ids:
-        return ROL_CLIENTE
-    duenos_ = {jid_sin_dispositivo(o) for o in owners or () if o}
-    if any(i in duenos_ for i in ids):
-        return ROL_ADMIN
+    ids = companeros_de(cuenta, jid, pares)
     del_chat = (miembros or {}).get(chat_jid) if isinstance(miembros, dict) else None
     if not isinstance(del_chat, dict):
         return ROL_CLIENTE

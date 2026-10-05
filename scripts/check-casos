@@ -10739,6 +10739,174 @@ if NODE:
             os.environ.clear()
             os.environ.update(env_antes)
 
+# ── roles-por-numero: lo que encontro la verificacion ──
+# 1 y 2. El dueno global es el mismo para todas las reglas: su id EXACTO, como `es_dueno`,
+# `chat_del_dueno` y `caso_del_dueno` (v4.16.0). Un par LID-telefono (el sidecar lo anota de
+# cada participante de cada grupo) no lo vuelve dueno por el otro id: sin roles guardados,
+# todo queda como en v4.16.0, y el caso del dueno no se presenta como el de un operador.
+# 4. La pregunta "A o B?" que iba al que escribio se vuelve a mirar al contestarla: si el
+# dueno le quito el rol antes de que saliera, la respuesta y los avances esperan al dueno.
+DUENO_TEL = "573009999999@s.whatsapp.net"
+
+ANOTA_PAR_JS = """
+import { abrirAlmacen, rutaAlmacen } from %r;
+const d = JSON.parse(process.env.DATOS);
+const a = abrirAlmacen(rutaAlmacen({ HOME: process.env.HOME }));
+a.anotarTelefono({ cuenta: d.cuenta, lid: d.lid, pn: d.pn });
+a.cerrar();
+""" % (RAIZ / "sidecar" / "src" / "almacen.js").as_uri()
+
+
+def anota_par(home, cuenta, lid, pn):
+    """El par LID-telefono, como lo anota el sidecar (de la metadata de un grupo)."""
+    env = dict(os.environ, HOME=str(home), DATOS=json.dumps({"cuenta": cuenta, "lid": lid,
+                                                             "pn": pn}))
+    subprocess.run([NODE, "--input-type=module", "-e", ANOTA_PAR_JS], env=env, check=True,
+                   capture_output=True, timeout=120)
+
+
+def frenos_de(home, cid):
+    antes = dict(os.environ)
+    try:
+        ws = carga_wa_scope(home)
+        con = ws.db()
+        try:
+            return ws.frenos_de_regla(con, ws.caso_de(con, int(cid)))
+        finally:
+            con.close()
+    finally:
+        os.environ.clear()
+        os.environ.update(antes)
+
+
+print("\nroles-por-numero: lo que encontro la verificacion")
+if NODE:
+    for c in ({"jid": DUENO_TEL, "nombre": "Dueno Telefono", "grupo": False},
+              {"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False}):
+        if not any(x["jid"] == c["jid"] for x in CHATS):
+            CHATS.append(c)
+
+    # 1 y 2: el dueno guardado por su LID escribe desde su telefono, con el par anotado y
+    # sin roles en ningun chat. Todo como v4.16.0: para Jev es un participante, su directo
+    # por telefono tiene los niveles del cliente, el caso no dice "operador" y la pregunta
+    # con auto es del dueno.
+    falso = JevFalso(jev_de_roles)
+    env_antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            D1 = "Hola, revisen la factura de este mes"
+            G1 = "@duenio revisen la factura del grupo"
+            G2 = "@duenio y la del mes pasado"
+            C1 = "Hola, la factura no llega"
+            llegan(home, A, [
+                msg(DUENO_TEL, "VR1", D1, 30, de=DUENO_TEL),
+                msg(SOPORTE, "VR2", G1, 29, mencion=True, de=DUENO_TEL),
+                msg(PERSONA, "VR3", C1, 28, de=PERSONA),
+                msg(OPERACIONES, "VR4", G2, 27, mencion=True, de=DUENO_LID)])
+            anota_par(home, A, DUENO_LID, DUENO_TEL)
+            js(home, "agent", "Agente De Ejemplo")
+            js(home, "config", "ack", "off")
+            acepta_proyectos(home, "alfa-demo", "beta-demo")
+            for chat in (DUENO_TEL, SOPORTE, PERSONA, OPERACIONES):
+                js(home, "set", chat, "--provider", "ninguno", "--mode", "responder")
+            js(home, "set", DUENO_TEL, "--workspaces", "alfa-demo,beta-demo")
+            pon_duenos(home, DUENO_LID)
+            ingiere(home)
+            desde = {t: jev_de(falso, t)[0].get("from") for t in (D1, G1, C1, G2)}
+            ok("el dueno por LID que escribe desde su telefono (con el par, sin roles) llega a "
+               "Jev como `participant`, como en v4.16.0, en su directo y en un grupo",
+               desde[D1] == "participant" and desde[G1] == "participant", f"{desde}")
+            ok("y su id exacto sigue siendo `owner`; un cliente, `participant`",
+               desde[G2] == "owner" and desde[C1] == "participant", f"{desde}")
+            ok("el juicio se guarda con el rol de v4.16.0: cliente",
+               [(juicio_de(home, s) or {}).get("rol") for s in ("VR1", "VR2")]
+               == ["client", "client"],
+               f"{[juicio_de(home, s) for s in ('VR1', 'VR2')]}")
+            d1 = caso_de_stanza(home, "VR1")["case_id"]
+            g1 = caso_de_stanza(home, "VR2")["case_id"]
+            ok("rol_del_caso y caso_del_dueno dicen lo mismo: ninguno es del dueno",
+               roles_de(home, d1, g1) == [("client", False), ("client", False)],
+               f"{roles_de(home, d1, g1)}")
+            con = db_de(home)
+            con.execute("update caso set excepciones='[\"money\"]' where case_id=?", (int(d1),))
+            con.commit()
+            con.close()
+            ok("su directo por telefono conserva los niveles del cliente (v4.16.0)",
+               frenos_de(home, d1) == (["money"], []), f"{frenos_de(home, d1)}")
+            for nombre, cid in (("directo", d1), ("grupo", g1)):
+                archivo, del_brief = textos_de_roles(home, cid)
+                ok(f"el caso ({nombre}) no dice que el dueno lo nombro operador",
+                   DICE_CLIENTE in archivo and DICE_OPERADOR not in archivo
+                   and "## An operator's case" not in del_brief, archivo[:700])
+            pregunta(home, d1)
+            ok("auto en ese directo: la pregunta es del dueno, como en v4.16.0",
+               ((ruta_de(home, d1) or {}).get("pregunta") or {}).get("a") == "owner",
+               f"{ruta_de(home, d1)}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(env_antes)
+
+    # 4: la pregunta al que escribio, y el dueno le quita el rol antes de que salga.
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo", "beta-demo")
+        js(home, "set", PERSONA, "--workspaces", "alfa-demo,beta-demo",
+           "--member", f"{PERSONA}=operator")
+        pon_duenos(home, DUENO_LID)
+        llegan(home, A, [msg(PERSONA, "VQ1", PEDIDO, 20, de=PERSONA),
+                         msg(PERSONA, "VQ2", PEDIDO, 19, de=PERSONA),
+                         msg(PERSONA, "VQ3", PEDIDO, 18, de=PERSONA)])
+        PREGUNTA_AB = "Es sobre Alfa Demo o sobre Beta Demo?"
+
+        def con_pregunta(stanza):
+            cid = str(js(home, "caso", "crear", "--chat", PERSONA, "--stanza", stanza,
+                         "--actor", "agente")[0]["case_id"])
+            js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "high",
+               "--actor", "agente")
+            pregunta(home, cid)
+            return cid
+
+        def propone_pregunta(cid):
+            return js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+                      PREGUNTA_AB, "--actor", "agente")[0]["propuesta_version"]
+
+        sigue = con_pregunta("VQ1")
+        v = propone_pregunta(sigue)
+        p = corre(home, "caso", "aprobar", sigue, "--version", v, "--actor", "regla")
+        ok("con el rol vigente, la pregunta al operador la firma la regla de su directo",
+           ((ruta_de(home, sigue) or {}).get("pregunta") or {}).get("a") == "writer"
+           and p.returncode == 0, f"{p.returncode} {p.stderr[-300:]}")
+
+        quitado = con_pregunta("VQ2")
+        ok("la pregunta queda para el que escribio",
+           ((ruta_de(home, quitado) or {}).get("pregunta") or {}).get("a") == "writer",
+           f"{ruta_de(home, quitado)}")
+        js(home, "set", PERSONA, "--member", f"{PERSONA}=client")
+        js(home, "set", PERSONA, "--first-reply", "model")
+        p = avance(home, quitado, "Estamos revisando lo de Alfa Demo.")
+        ok("el dueno le quito el rol: un avance ya no sale a ese chat",
+           p.returncode != 0 and "project_question" in p.stderr,
+           f"{p.returncode} {p.stderr[-300:]}")
+        js(home, "set", PERSONA, "--first-reply", "ack")
+        v = propone_pregunta(quitado)
+        p = corre(home, "caso", "aprobar", quitado, "--version", v, "--actor", "regla")
+        ok("y la regla no firma la pregunta: los nombres de los proyectos esperan al dueno",
+           error_de(p) == "E_EXCEPTION" and "project_question" in p.stderr,
+           f"{p.returncode} {p.stderr[-300:]}")
+
+        # Lo que el dueno eligio en el chat sigue mandando: con `writer` explicito se le
+        # pregunta al que escribio, tenga el rol que tenga.
+        js(home, "set", PERSONA, "--project-question", "writer")
+        explicito = con_pregunta("VQ3")
+        v = propone_pregunta(explicito)
+        p = corre(home, "caso", "aprobar", explicito, "--version", v, "--actor", "regla")
+        ok("con `writer` elegido por el dueno, la pregunta sigue su camino de siempre",
+           ((ruta_de(home, explicito) or {}).get("pregunta") or {}).get("a") == "writer"
+           and p.returncode == 0, f"{p.returncode} {p.stderr[-300:]}")
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
