@@ -51,8 +51,13 @@ owner's approval number by WhatsApp. Owner-approved on 2026-10-04.
       (27 new: defaults off, ranges 1-60 and 10-600, quiet pair, no-number warning, saved
       values painted, host rejection, ES/EN/PT). check-panels, check-voseo, check-datos-reales
       green. Screenshots: see O7.
-- [ ] O2 Worker: `agent.status.changed` handler with persisted per-pane state, own-workspace
+- [x] O2 Worker: `agent.status.changed` handler with persisted per-pane state, own-workspace
       filter, spawn of `wa-scope orca-aviso`; tests in the worker suite.
+      `avisos-orca.mjs` (pure `registrarEstado`, `esEspacioDelPlugin`, `crearAvisosOrca`) wired
+      in `main.mjs`. RED: `test/worker.test.mjs` 431/439, the 8 checks through `activate()`
+      failing (nothing in `orcaPanes`, no spawn). GREEN: 439/439 (27 new: transitions, repeat
+      waiting, own workspace incl. `::workspace:` and Windows paths, sessionBoundary, done
+      from waiting, pruning by age and cap, switch off = no spawn, exact argv, restart).
 - [ ] O3 `wa-scope orca-aviso`: opt-in, quiet hours, cap, name resolution, template ES/EN/PT,
       enqueue and send; tests on fake data.
 - [ ] O4 Finished notice with debounce in the tick.

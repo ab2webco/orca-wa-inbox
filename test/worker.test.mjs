@@ -3627,6 +3627,133 @@ console.log('\nworker: la pestana Skills pide, el worker escribe')
 }
 
 
+// ───────── avisos-orca: el estado de cada agente, y el aviso cuando espera ─────────
+// odd/tasks/avisos-orca.md (O2). Orca emite `agent.status.changed` en cada emision, no solo
+// al cambiar: el worker guarda el ultimo estado por panel y lanza `wa-scope orca-aviso`
+// solo cuando un panel PASA a `waiting` y el dueno encendio ese aviso. Los agentes de la
+// carpeta del plugin no cuentan. Un `done` queda `finished` solo si venia de `working`.
+console.log('\nworker: avisos-orca, el estado de cada agente')
+{
+  const { registrarEstado, esEspacioDelPlugin, PANELES_TOPE } = await import('../avisos-orca.mjs')
+  const LLAVE = 'ab2web.orca-wa-inbox'
+  const PROPIO = `repo-plugin::/tmp/ejemplo/orca/plugin-workspaces/${LLAVE}`
+  ok('la carpeta del plugin es suya', esEspacioDelPlugin(PROPIO, LLAVE))
+  ok('y una sesion de esa carpeta tambien',
+    esEspacioDelPlugin(`${PROPIO}::workspace:12345678-1234-1234-1234-123456789abc`, LLAVE))
+  ok('en Windows tambien', esEspacioDelPlugin(`r::C:\\ejemplo\\plugin-workspaces\\${LLAVE}`, LLAVE))
+  ok('un proyecto cualquiera no', !esEspacioDelPlugin('repo-a::/srv/ejemplo/alfa-demo', LLAVE))
+  ok('ni la carpeta de otro plugin',
+    !esEspacioDelPlugin('r::/tmp/ejemplo/orca/plugin-workspaces/otro.plugin', LLAVE))
+  ok('ni un agente sin espacio', !esEspacioDelPlugin(null, LLAVE))
+
+  const ev = (state, at, extra = {}) => ({ paneKey: 'tab-1:panel-1', worktreeId: 'repo-a::/srv/ejemplo/alfa-demo',
+    state, receivedAt: at, agentType: 'claude', ...extra })
+  let r = registrarEstado({}, ev('working', 1000), LLAVE)
+  ok('el primer estado de un panel se guarda', r.cambio && r.paneles['tab-1:panel-1']?.state === 'working' &&
+    r.paneles['tab-1:panel-1'].workingAt === 1000 && r.avisar === null, JSON.stringify(r))
+  const p1 = r.paneles
+  r = registrarEstado(p1, ev('working', 2000), LLAVE)
+  ok('el mismo estado otra vez no es un cambio', !r.cambio && r.avisar === null)
+  r = registrarEstado(p1, ev('waiting', 3000), LLAVE)
+  ok('pasar a esperar es un cambio que avisa', r.cambio && r.avisar === 'waiting')
+  const p2 = r.paneles
+  r = registrarEstado(p2, ev('waiting', 3500), LLAVE)
+  ok('el mismo waiting emitido otra vez no avisa dos veces', !r.cambio && r.avisar === null)
+  r = registrarEstado(registrarEstado(p2, ev('working', 4000), LLAVE).paneles, ev('done', 5000), LLAVE)
+  ok('un done que viene de working queda terminado', r.paneles['tab-1:panel-1'].finished === true &&
+    r.paneles['tab-1:panel-1'].state === 'done' && r.avisar === null, JSON.stringify(r.paneles))
+  ok('y el panel no guarda nada que el agente escribio',
+    JSON.stringify(Object.keys(r.paneles['tab-1:panel-1']).sort()) ===
+    JSON.stringify(['agentType', 'at', 'finished', 'state', 'workingAt', 'worktreeId']))
+  r = registrarEstado({}, ev('done', 5000), LLAVE)
+  ok('un done sin trabajo antes (arranque, reanudar) no queda terminado',
+    r.paneles['tab-1:panel-1'].finished === false)
+  r = registrarEstado(p1, ev('done', 5000, { sessionBoundary: true }), LLAVE)
+  ok('un done marcado borde de sesion no queda terminado, aunque venga de working',
+    r.paneles['tab-1:panel-1'].finished === false)
+  r = registrarEstado(p2, ev('done', 5000), LLAVE)
+  ok('un done que viene de waiting no queda terminado', r.paneles['tab-1:panel-1'].finished === false)
+  r = registrarEstado({}, ev('waiting', 1000, { worktreeId: PROPIO }), LLAVE)
+  ok('un agente de la carpeta del plugin no se guarda ni avisa', !r.cambio && r.avisar === null &&
+    Object.keys(r.paneles).length === 0)
+  r = registrarEstado({ viejo: { state: 'done', at: 1 } }, ev('working', 1 + 25 * 3600 * 1000), LLAVE)
+  ok('un panel quieto mas de un dia se olvida', !('viejo' in r.paneles))
+  const muchos = {}
+  for (let i = 0; i < PANELES_TOPE + 5; i++) muchos[`p${i}`] = { state: 'done', at: 10000 + i }
+  r = registrarEstado(muchos, ev('working', 20000), LLAVE)
+  ok('nunca mas paneles que el tope, y se van los mas viejos',
+    Object.keys(r.paneles).length === PANELES_TOPE && !('p0' in r.paneles) &&
+    'tab-1:panel-1' in r.paneles, Object.keys(r.paneles).length)
+  ok('un evento sin panel o sin estado no cambia nada',
+    !registrarEstado({}, { state: 'waiting', receivedAt: 1 }, LLAVE).cambio &&
+    !registrarEstado({}, { paneKey: 'x', receivedAt: 1 }, LLAVE).cambio)
+}
+{
+  // El worker entero: los eventos llegan por `orca.events.on`, el estado va a `orcaPanes` y el
+  // aviso sale por un wa-scope de mentira que anota con que lo llamaron.
+  const dir = herramientas('avisos-orca', [
+    '#!/bin/sh',
+    'if [ "$1" = "orca-aviso" ]; then printf "%s\\n" "$*" >> "$(dirname "$0")/orca-aviso.txt"; fi',
+    "echo '[]'", ''].join('\n'))
+  const llamadas = () => existsSync(join(dir, 'orca-aviso.txt'))
+    ? readFileSync(join(dir, 'orca-aviso.txt'), 'utf8').trim().split('\n').filter(Boolean) : []
+  const orca = hostFalso(dir, { chats: [] })
+  const manejadores = {}
+  orca.events = { on: (nombre, f) => { manejadores[nombre] = f } }
+  const { apagar } = await arranca(orca)
+  const emite = (p) => manejadores['agent.status.changed']?.(p)
+  const PANEL = 'tab-9:panel-9'
+  const base = { paneKey: PANEL, worktreeId: 'repo-a::/srv/ejemplo/alfa-demo', agentType: 'codex' }
+  ok('el worker escucha el estado de los agentes', typeof manejadores['agent.status.changed'] === 'function')
+  emite({ ...base, state: 'working', receivedAt: Date.now() })
+  emite({ ...base, state: 'waiting', receivedAt: Date.now() })
+  ok('guarda el estado de cada panel en orcaPanes',
+    await hasta(() => orca.store.orcaPanes?.[PANEL]?.state === 'waiting', 8000),
+    JSON.stringify(orca.store.orcaPanes))
+  await dormir(500)
+  ok('con el aviso apagado (de fabrica) no lanza nada', llamadas().length === 0, JSON.stringify(llamadas()))
+
+  orca.store.orcaNotices = { waiting: 'on' }
+  emite({ ...base, state: 'working', receivedAt: Date.now() })
+  const at = Date.now()
+  emite({ ...base, state: 'waiting', receivedAt: at })
+  ok('encendido, un panel que pasa a esperar lanza wa-scope orca-aviso',
+    await hasta(() => llamadas().length === 1, 8000), JSON.stringify(llamadas()))
+  const l = llamadas()[0] || ''
+  ok('con el panel, el estado, el momento, el espacio y el tipo de agente, y nada mas',
+    l === `orca-aviso --state=waiting --pane=${PANEL} --at=${at} ` +
+      '--worktree=repo-a::/srv/ejemplo/alfa-demo --agent=codex --json', l)
+  emite({ ...base, state: 'waiting', receivedAt: Date.now() })
+  emite({ ...base, state: 'waiting', receivedAt: Date.now() })
+  await dormir(800)
+  ok('el mismo waiting emitido otra vez no lanza otro aviso', llamadas().length === 1,
+    JSON.stringify(llamadas()))
+  emite({ paneKey: 'tab-p:panel-p', state: 'waiting', receivedAt: Date.now(),
+    worktreeId: 'repo-p::/tmp/ejemplo/orca/plugin-workspaces/ab2web.orca-wa-inbox' })
+  await dormir(800)
+  ok('un agente del propio plugin (triage, casos) no avisa ni se guarda', llamadas().length === 1 &&
+    !('tab-p:panel-p' in (orca.store.orcaPanes || {})), JSON.stringify(llamadas()))
+  emite({ ...base, state: 'working', receivedAt: Date.now() })
+  emite({ ...base, state: 'done', receivedAt: Date.now() })
+  ok('un done despues de trabajar queda terminado para el tick',
+    await hasta(() => orca.store.orcaPanes?.[PANEL]?.state === 'done' &&
+      orca.store.orcaPanes[PANEL].finished === true, 8000), JSON.stringify(orca.store.orcaPanes))
+  ok('el done no lanza nada: lo manda el tick despues de la espera', llamadas().length === 1)
+  apagar()
+
+  // Al volver a arrancar, lo guardado manda: un waiting que ya estaba no avisa de nuevo.
+  const orca2 = hostFalso(dir, { chats: [], orcaNotices: { waiting: 'on' },
+    orcaPanes: { [PANEL]: { state: 'waiting', at: Date.now(), finished: false } } })
+  const manejadores2 = {}
+  orca2.events = { on: (nombre, f) => { manejadores2[nombre] = f } }
+  const otra = await arranca(orca2)
+  manejadores2['agent.status.changed']?.({ ...base, state: 'waiting', receivedAt: Date.now() })
+  await dormir(800)
+  ok('despues de reiniciar, el waiting ya guardado no avisa otra vez', llamadas().length === 1,
+    JSON.stringify(llamadas()))
+  otra.apagar()
+}
+
 rmSync(RAIZ, { recursive: true, force: true })
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
