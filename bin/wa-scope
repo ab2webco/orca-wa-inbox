@@ -2963,18 +2963,24 @@ def cmd_caso_proyecto(con, a):
 
     El agente (proyectos-por-chat, M3): uno de los proyectos del chat (`candidates`) y
     con `--porque`, que queda como el porque del proyecto (`by` agent). No congela la ruta:
-    un mensaje despues que dice una regla de contenido gana. Lo que ya eligio el dueno no
-    lo cambia (E_OWNER)."""
+    un mensaje despues que dice una regla de contenido gana. Lo que ya eligio el dueno, a
+    mano o con una regla de texto suya, no lo cambia (E_OWNER): la regla va primero.
+
+    Con la pregunta "A o B?" esperando al que escribio, el caso esta en respondido; ahi el
+    dueno tambien elige (desde la tarjeta): la pregunta se cierra y el caso vuelve al agente
+    (recibido), como si hubiera llegado la respuesta."""
     caso_toma(con)
     caso = caso_de(con, a.id)
-    if caso["etapa"] not in ETAPAS_PROYECTO:
+    ruta = ruta_del_caso(caso)
+    del_agente = a.actor == "agente"
+    con_pregunta = (not del_agente and caso["etapa"] == "respondido"
+                    and pregunta_al_que_escribio(ruta))
+    if caso["etapa"] not in ETAPAS_PROYECTO and not con_pregunta:
         caso_falla("E_STAGE", f"case #{a.id} is in {caso['etapa']}: its project can only "
                               f"change in {', '.join(ETAPAS_PROYECTO)}")
     pedido = (a.proyecto or "").strip()
     porque = " ".join((a.porque or "").split())[:LARGO_PORQUE]
-    ruta = ruta_del_caso(caso)
     catalogo = proyectos_del_dueno(con)
-    del_agente = a.actor == "agente"
     if del_agente:
         if not porque:
             caso_falla("E_ARGS", "the agent sets a project with --porque: the owner reads why "
@@ -2982,7 +2988,11 @@ def cmd_caso_proyecto(con, a):
         if ruta.get("por_dueno"):
             caso_falla("E_OWNER", f"case #{a.id} has the project the owner chose: only the "
                                   f"owner changes it")
-        aceptados, _ = proyectos_del_chat(merged_scope(con).get(caso["chat_jid"]), catalogo)
+        entry = merged_scope(con).get(caso["chat_jid"])
+        if proyecto_de_ruta(ruta, entry, catalogo)["by"] == "rule":
+            caso_falla("E_OWNER", f"case #{a.id} has the project of the owner's text rule "
+                                  f"{ruta.get('matched')!r}: only the owner changes it")
+        aceptados, _ = proyectos_del_chat(entry, catalogo)
         ids = [p["id"] for p in aceptados]
         if pedido not in ids:
             caso_falla("E_ARGS", f"the agent chooses one of the chat's projects: "
@@ -3002,8 +3012,14 @@ def cmd_caso_proyecto(con, a):
     else:
         ruta.update(workspace_why="set by the owner", by="owner", por_dueno=True)
         detalle = f"proyecto {proyecto['id'] if proyecto else 'none'}"
-    caso_tocar(con, caso, a.actor, detalle,
-               ruta=json.dumps(ruta, ensure_ascii=False, sort_keys=True))
+    if con_pregunta:
+        # La eleccion contesta la pregunta: el caso vuelve al agente, que sigue con el.
+        caso_valida(caso, "recibido")
+        caso_mover(con, caso, "recibido", a.actor, detalle,
+                   ruta=json.dumps(ruta, ensure_ascii=False, sort_keys=True), necesita_agente=1)
+    else:
+        caso_tocar(con, caso, a.actor, detalle,
+                   ruta=json.dumps(ruta, ensure_ascii=False, sort_keys=True))
     con.commit()
     return [caso_fila(con, caso_de(con, a.id))]
 
@@ -3053,6 +3069,12 @@ def pregunta_abierta(ruta):
     return p if isinstance(p, dict) and p.get("estado") in ("abierta", "contestada") else None
 
 
+def pregunta_al_que_escribio(ruta):
+    """Si la ruta tiene una pregunta abierta para el que escribio (sin contestar todavia)."""
+    p = ruta.get("pregunta")
+    return isinstance(p, dict) and p.get("estado") == "abierta" and p.get("a") == "writer"
+
+
 def cierra_pregunta(ruta, elegido):
     """Cierra la pregunta de la ruta (en el mismo dict) porque el caso ya tiene proyecto o el
     dueno decidio: elegir el proyecto la contesta."""
@@ -3071,10 +3093,10 @@ def horas_pregunta_proyecto(con):
 def cmd_caso_pregunta_proyecto(con, a):
     """El agente no sabe si el caso es de A o de B: deja anotada la pregunta, con los
     candidatos (dos o mas proyectos del chat) y su texto. A quien va lo decide el ajuste del
-    chat (`projectQuestion`), nunca el agente: `auto` es al que escribio si es el dueno (por
-    su id de WhatsApp; la Parte B suma Operador) y al dueno si es un cliente, porque
-    preguntarle a un cliente le muestra los nombres de los proyectos. Sin saber quien
-    escribio, al dueno.
+    chat (`projectQuestion`), nunca el agente: `auto` es al que escribio en la conversacion
+    del dueno (por su id de WhatsApp) y al dueno en cualquier otra, un grupo incluido aunque
+    escriba el dueno, porque preguntarle al chat le muestra los nombres de los proyectos a
+    los clientes que lo leen. Sin saber quien escribio, al dueno.
 
     Despues el agente propone: al que escribio, un `responder` con la pregunta, que sigue el
     camino de aprobacion de siempre; al dueno, `escalar --instrucciones` con la pregunta, que
@@ -3101,8 +3123,11 @@ def cmd_caso_pregunta_proyecto(con, a):
                              f"{', '.join(ids) or 'none'} (not {', '.join(candidatos) or 'none'})")
     modo = entry.get("pregunta_proyecto") or PREGUNTA_AUTO
     quien = remitente_del_caso(con, caso)
+    # Con auto, al que escribio solo en la conversacion del dueno: un grupo lo leen tambien
+    # los clientes, y ahi la pregunta nombraria los proyectos aunque la hiciera el dueno. La
+    # Parte B suma el rol (Operador) sin abrir esa puerta: en un grupo, al dueno.
     para = modo if modo != PREGUNTA_AUTO else (
-        "writer" if caso_del_dueno(con, caso) else "owner")
+        "writer" if chat_es_del_dueno(caso.get("account"), caso["chat_jid"]) else "owner")
     if para == "writer" and not quien:
         para = "owner"
     ruta["pregunta"] = {"candidatos": candidatos, "a": para, "quien": quien, "texto": texto,
@@ -3139,14 +3164,25 @@ def tick_preguntas_proyecto(con, resumen):
     """La pregunta al que escribio que no se contesto en `project_question_hours` pasa al
     dueno, una vez: el caso vuelve a decision con un `escalar` con la pregunta, y el aviso
     de siempre (`escala_al_dueno`) se la lleva. Su `N <respuesta>` vuelve al agente como la
-    correccion del dueno."""
+    correccion del dueno.
+
+    El plazo corre desde que la pregunta SALIO (la ultima entrada del caso a respondido), no
+    desde que se anoto: una aprobacion que tardo no le acorta el tiempo al que escribio, ni
+    lo escala en el mismo tick que la manda."""
     horas = horas_pregunta_proyecto(con)
     for fila in con.execute("select case_id, ruta from caso where account=? and "
                             "etapa='respondido' order by updated_at, case_id",
                             (cuenta_activa(),)).fetchall():
         p = ruta_del_caso(fila).get("pregunta")
-        if not (isinstance(p, dict) and p.get("estado") == "abierta" and p.get("a") == "writer"
-                and edad_de(p.get("at")) > horas * 3600):
+        if not (isinstance(p, dict) and p.get("estado") == "abierta" and p.get("a") == "writer"):
+            continue
+        salio = con.execute("select at from caso_evento where case_id=? and a='respondido' "
+                            "and (de is null or de <> 'respondido') order by id desc limit 1",
+                            (fila["case_id"],)).fetchone()
+        edad = edad_de(p.get("at"))
+        if salio:
+            edad = min(edad, edad_de(salio["at"]))
+        if edad <= horas * 3600:
             continue
         caso_toma(con)
         try:
@@ -4876,10 +4912,13 @@ def proyecto_de_ruta(ruta, entry, catalogo):
     - si no, el unico proyecto del chat (`proyecto_unico_del_chat`);
     - si no, ninguno: con dos o mas lo elige el agente.
 
-    Devuelve {id, name, why, by, candidates, missing}; `id` None es sin proyecto."""
+    Devuelve {id, name, why, by, candidates, missing, quitado}; `id` None es sin proyecto.
+    `quitado` es el unico proyecto del chat que el dueno ya quito del catalogo: el despacho lo
+    sigue nombrando para decir que no lo encuentra, como antes, pero la tarjeta no lo muestra
+    (antes la ruta lo dejaba sin proyecto) ni dice que es el de la conversacion."""
     aceptados, faltan = proyectos_del_chat(entry, catalogo)
     por_id = {p["id"]: p for p in catalogo}
-    pid, why, by = ruta.get("workspace"), None, None
+    pid, why, by, quitado = ruta.get("workspace"), None, None, False
     if pid:
         why = ruta.get("workspace_why")
         by = ruta.get("by") or ("owner" if ruta.get("por_dueno")
@@ -4888,9 +4927,11 @@ def proyecto_de_ruta(ruta, entry, catalogo):
         why, by = "set by the owner", "owner"
     else:
         pid = proyecto_unico_del_chat(entry, aceptados)
-        if pid:
-            why, by = ("the chat's project" if pid in por_id
-                       else f"project {pid} is no longer in the accepted list"), "chat"
+        quitado = bool(pid) and pid not in por_id
+        if quitado:
+            why = f"project {pid} is no longer in the accepted list"
+        elif pid:
+            why, by = "the chat's project", "chat"
         elif len(aceptados) > 1:
             why = f"the chat has {len(aceptados)} projects: the agent chooses by content"
     nombre = None
@@ -4900,7 +4941,7 @@ def proyecto_de_ruta(ruta, entry, catalogo):
     return {"id": pid, "name": nombre, "why": why, "by": by,
             "candidates": [{"id": p["id"], "name": p["name"], "note": p["note"]}
                            for p in aceptados],
-            "missing": faltan}
+            "missing": faltan, "quitado": quitado}
 
 
 def proyecto_efectivo(con, caso):
@@ -4932,6 +4973,12 @@ def caso_enruta(con, case_id, texto, chat):
     if actual is not None and (not nueva["matched"]
                                or nueva["matched"] == actual.get("matched")):
         return False
+    # Una regla que solo da un destino (sin proyecto) no decide el proyecto: el que eligio el
+    # agente queda, con su porque y quien, y solo cambian el destino y la regla.
+    if (actual is not None and nueva["by"] != "rule" and actual.get("by") == "agent"
+            and actual.get("workspace")):
+        nueva.update({k: actual.get(k) for k in ("workspace", "workspace_name",
+                                                  "workspace_path", "workspace_why", "by")})
     # La pregunta "A o B?" sigue con el caso; si una regla de contenido ya dio el proyecto,
     # queda contestada por ella.
     if isinstance((actual or {}).get("pregunta"), dict):
@@ -5238,6 +5285,10 @@ def ingest_mensaje(con, m, veredicto, horas):
             caso_tocar(con, caso, "automatizacion", f"{RESPUESTA_PREGUNTA} {stanza}",
                        ruta=json.dumps(ruta, ensure_ascii=False, sort_keys=True),
                        necesita_agente=1)
+            # Lo que Jev le marco a la respuesta queda en el caso, como en el camino de
+            # siempre: una excepcion no se pierde por llegar como respuesta.
+            if veredicto and veredicto.get("jev"):
+                caso_marca_jev(con, caso["case_id"], veredicto["jev"], stanza)
             caso_marca_regla(con, caso["case_id"], piso, stanza)
             hecho.update(nuevos=1, unidos=1)
             con.commit()
@@ -5539,8 +5590,12 @@ def iso_caso(sello):
     return cuando.astimezone().isoformat(timespec="seconds")
 
 
-def acciones_de(etapa, tipo, con_excepciones=False):
+def acciones_de(etapa, tipo, con_excepciones=False, con_pregunta=False):
     acciones = ACCIONES_DE_ETAPA.get(etapa, ())
+    if etapa == "respondido" and con_pregunta:
+        # La pregunta "A o B?" espera al que escribio: el dueno puede contestarla eligiendo
+        # el proyecto desde la tarjeta (proyectos-por-chat, M5).
+        acciones = acciones + ("proyecto",)
     if etapa == "decision":
         acciones = tuple(x for x in acciones
                          if x not in ACCION_DE_TIPO or ACCION_DE_TIPO[x] == tipo)
@@ -5646,8 +5701,10 @@ def tarjeta_de(caso, nombres, titulos, motivos, eventos=None, sin_agente=None,
         "read_only": caso["case_id"] in solo_leer,
         "ticket": caso["plane_issue"] or None,
         "updated_at": iso_caso(caso["updated_at"]),
-        "actions": acciones_de(caso["etapa"], tipo, bool(json.loads(caso["excepciones"] or "[]"))),
-        "project": ({"id": elegido["id"], "name": elegido["name"]} if elegido["id"] else None),
+        "actions": acciones_de(caso["etapa"], tipo, bool(json.loads(caso["excepciones"] or "[]")),
+                               pregunta_al_que_escribio(ruta_del_caso(caso))),
+        "project": ({"id": elegido["id"], "name": elegido["name"]}
+                    if elegido["id"] and not elegido["quitado"] else None),
         "needs_agent": bool(caso["necesita_agente"]),
         # El ultimo despacho del caso al agente del proyecto (T8), mientras dice algo de la
         # etapa en que esta: a que proyecto, desde cuando, su estado y lo que reporto el

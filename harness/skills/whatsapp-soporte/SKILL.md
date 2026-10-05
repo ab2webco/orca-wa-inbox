@@ -192,8 +192,8 @@ A chat can have several projects. The case file lists them under "Chat projects"
 
 Never tell a customer the names of the projects, unless the chat's setting sends the
 question to them. A work proposal for a case with no project, or with one outside the
-chat's projects, waits for the owner. Once the owner chose the project (`E_OWNER`), it is
-his: do not change it.
+chat's projects, waits for the owner. Once the owner chose the project, by hand or with a
+text rule (`E_OWNER`), it is his: do not change it.
 
 ## Reporting from a project agent
 

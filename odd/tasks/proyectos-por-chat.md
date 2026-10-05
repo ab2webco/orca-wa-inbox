@@ -232,8 +232,9 @@ Everything must be configurable and wired end to end (panel and logic), in ES, E
   - What the section pins, beyond the list above:
     - the refusals: one candidate, a project outside the chat, an empty text, and
       `E_OWNER` after the owner chose;
-    - `auto` with the owner writing goes to the writer, and `auto` with a customer goes to
-      the owner;
+    - `auto` with a customer goes to the owner (and, since the verification fixes below,
+      `auto` in a group goes to the owner even when the owner writes; only the owner's own
+      chat asks the writer);
     - `writer` and `owner` win over `auto` in both directions;
     - the output's `next` tells the agent what to propose;
     - the card's `question` and the `project_question` event code;
@@ -333,6 +334,65 @@ Everything must be configurable and wired end to end (panel and logic), in ES, E
     missing every phrase). GREEN: 66 checks (62 before), exit 0. The skill flag check also
     confirms that `--porque` and `--candidatos` are real flags of `wa-scope caso`.
     `check-voseo` and `check-prompts` pass.
+- [x] **Verification fixes (on 50be84a)** — nine defects found by independent verifiers, each
+  reproduced on fake data. One test per defect, in `scripts/check-casos` ("proyectos-por-chat:
+  lo que encontro la verificacion", 22 checks) and `test/panels.test.mjs` (three sections
+  after the M6 ones, 7 checks).
+  - RED: check-casos 5/22 passed. The 5 that passed are the controls (dispatch still says it
+    cannot find a removed project, a rule outside the list stays on the route, a question
+    escalates after the deadline counted from the send, `auto` in the owner's own chat asks the
+    writer, a `respondido` case with no question still gets `E_STAGE`). panels 1272/1277 at first,
+    then 1277/1278 after the `pqHelp` check was added.
+  - GREEN: check-casos section 22/22, all five proyectos-por-chat sections 79/79. panels
+    1278/1278. check-harness 66, check-voseo, check-panels and check-datos-reales pass.
+    Full `npm run check`, exit 0: check-casos 1312/1312 (1290 before, plus 22), panels
+    1278/1278, worker 410/410, 1548 captures with no overflow, JS errors or selects.
+  1. **A removed single project showed on the card** as "the conversation's project". Now
+     `proyecto_de_ruta` returns `quitado` for that case. The card's `project` is null and
+     `project_routes.by` is null, with the "no longer in the accepted list" reason and
+     `missing`. This is what origin/main showed ("Sin proyecto"). Dispatch still names the id
+     ("no encuentro el proyecto ..."), and T22.9 still waits with `outside_project`, as before.
+     `porQueDelProyecto` also says nothing for `by: chat` with no project.
+  2. and 8. **The agent could replace a text rule's project.** That let a later message with
+     the same rule keep the agent's choice, and it turned an `outside_project` wait into a
+     dispatch with no click. Now `caso proyecto --actor agente` fails with `E_OWNER` when the
+     effective project came from a rule (`by == "rule"`, also derived for older routes). The
+     rule is the owner's choice. AGENTS.md and SKILL.md say so, and check-harness checks the
+     wording.
+  3. **The A/B answer dropped Jev's exceptions.** The `pregunta` branch of `ingest_mensaje` now
+     calls `caso_marca_jev`, as the joined path does. The test checks that `excepciones` stays
+     `["jev"]` and that `trabajo_espera_al_dueno` then says `exceptions`.
+  4. **`projectQuestionHours` counted from when the question was recorded.** Now
+     `tick_preguntas_proyecto` measures from the later of `pregunta.at` and the case's last
+     entry to `respondido`, which is when the question went out. An approval that came 25 h
+     late sends the question, does not escalate in the same tick, and the customer's answer
+     still reaches it. The M5 timeout test now also backdates that entry event. It used to
+     backdate only `at`, which is the situation this defect describes.
+  5. **A destination-only rule erased the agent's project.** In `caso_enruta`, a new rule that
+     names no project (`by != "rule"`) keeps the agent's `workspace`, name, path, `why` and
+     `by`. Only the destination and `matched` change.
+  6. **The owner could not choose while a writer question waited.** In `respondido` with an
+     open question to the writer, the card offers `proyecto`
+     (`acciones_de(..., con_pregunta)`), and `activity.html` allows it in that stage.
+     `caso proyecto --actor dueno` closes the question and moves the case back to `recibido`
+     with `necesita_agente=1`. A `respondido` case without such a question is unchanged:
+     `['cerrar', 'reabrir']` and `E_STAGE`. `pqToWriter` now adds "si usted ya lo sabe, elija el
+     proyecto aqui" (ES/EN/PT).
+  7. **`auto` sent the question to a whole group when the owner wrote there.** Now, under
+     `auto`, the question goes to the writer only in the owner's own chat
+     (`chat_es_del_dueno`). Any other chat, groups included, goes to the owner. An explicit
+     `writer` is still the owner's choice. `pqHelp` says this in ES/EN/PT. **This changes the
+     M5 expectation added on this branch** ("auto y escribe el dueno: ... para el que
+     escribio", in a group). That M5 group now uses `--project-question writer` explicitly, and
+     the check is renamed "writer y escribe el dueno". The `auto` group case is now pinned in
+     the new section. It is not a pre-feature test, and nothing on origin/main is touched.
+  9. **The Spanish `pqHoursHelp` lacked the opening `¿`.** It now reads `"¿A o B?"`, like the
+     board.
+  - Screenshots looked at (in `/Volumes/Data/claude-tmp/claude-501/proyectos-por-chat/fix-shots`
+    and, after `npm run check`, in `WA_INBOX_CAPTURAS`): `config-pregunta-horas` ES light
+    1440 (the `¿`), `tablero-pregunta-abierta` ES light 390 (the new `pqToWriter` sentence and
+    Cambiar proyecto in respondido), `config-proyectos-varios` ES dark 1440 and EN light 320
+    (the editor rows and the new `pqHelp`).
 
 ### B. Roles by number
 
@@ -437,9 +497,13 @@ What the backend reads and writes, so the panels can be built against it without
 - `wa-scope caso proyecto <id> --proyecto <pid> --actor agente --porque "<why>"`:
   - `--porque` is required;
   - the id must be one of the chat's candidates;
-  - the call fails with `E_OWNER` when the owner already chose the project.
+  - the call fails with `E_OWNER` when the owner already chose the project, by hand or
+    with a text rule (the effective `by` is `rule`).
   It writes `by: "agent"` and the reason, and it does not freeze the route. With `--actor
   dueno` it works as before, plus `by: "owner"`. Either choice closes an open question.
+  In `respondido` with an open question to the writer, the owner (not the agent) can also
+  choose: the question closes and the case goes back to `recibido` for the agent. The card
+  then offers `proyecto` in `respondido`, and only then.
 - `wa-scope caso pregunta-proyecto <id> --candidatos a,b --texto "<question>" --actor
   agente` records the question. It fails with `E_ARGS` for fewer than two candidates, an
   id outside the chat's projects or an empty text, and with `E_OWNER` when the owner
@@ -454,7 +518,8 @@ What the backend reads and writes, so the panels can be built against it without
   the one dispatch uses (`proyecto_de_ruta`):
   - the case route's project;
   - else none, when the owner chose "Sin proyecto";
-  - else the chat's only project;
+  - else the chat's only project, when the owner still has it in the catalog (a removed one
+    shows none, as before; dispatch still says it cannot find it);
   - else none.
 
   A case of a one-project chat whose route has no project now shows the chat's project,
@@ -499,25 +564,26 @@ What the backend reads and writes, so the panels can be built against it without
 ### Part A limitation: the sender role (Part B replaces it)
 
 `projectQuestion=auto` needs the sender's role, and the roles arrive with Part B (M9,
-`rol_del_caso`). Until then the role is binary and comes only from the WhatsApp id:
+`rol_del_caso`). Until then the role is binary and comes only from the WhatsApp id, and
+only the chat decides it:
 
-- the case is the owner's (`caso_del_dueno`: his chat, or every message of the case comes
-  from an owner id) → `writer`;
-- anything else → `owner`.
+- the owner's own chat (`chat_es_del_dueno`: his direct chat or the line's chat with
+  itself) → `writer`;
+- anything else, a group included even when the owner wrote there → `owner`.
 
 So an Operador is treated as a Cliente: his "A or B?" goes to the owner. That is the safe
-side, because nothing goes to the chat. Part B replaces the `caso_del_dueno` call in
-`cmd_caso_pregunta_proyecto` with `rol_del_caso`, and `admin` or `operator` then means
-`writer`.
+side, because nothing goes to the chat. Part B replaces the `chat_es_del_dueno` call in
+`cmd_caso_pregunta_proyecto` with `rol_del_caso`: `admin` or `operator` then means `writer`
+in a direct chat. In a group the question stays with the owner under `auto` (customers read
+the group, Decision 3), unless Part B's Open question 3 decides otherwise with the owner.
+An explicit `projectQuestion=writer` is the owner's choice and still asks the writer in a
+group.
 
-Two points stay open and are noted here for the owner and for Part B:
+Until the verification fixes, `auto` used `caso_del_dueno` (every message from an owner id),
+so an owner writing in a group was asked in the group, where customers read the project
+names, and the reply was signed by the rule in `responder` mode. That is closed. One point
+stays open, noted here for the owner and for Part B:
 
-- **A question to the writer in a group is read by the whole group.** Under `auto`, the
-  owner writing in a group gets "A or B?" as a `responder` through the chat's normal
-  approval path, as Scope 7 says. That reply names projects in a group that customers may
-  also read. The `GRUPO_DUENO` rule ("others read this group too") still reaches the
-  agent. Part B, Open question 3, decides whether a group question should go to the owner
-  instead.
 - **`caso avance` (Beta progress updates) is not held while a question is with the
   owner.** Only `responder` proposals are held (`project_question`). An update goes out
   through the fixed floor and Jev, which do not know project names.

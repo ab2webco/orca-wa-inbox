@@ -472,7 +472,8 @@ const TABLERO_PROYECTOS = TABLERO_CASOS.map((c) => c.case_id === 5
   ? Object.assign({}, c, { project: { id: 'beta-demo', name: 'Beta Demo' } }) : c).concat([
   caso(12, 'respondido', { title: 'Cambiar el formulario de pedidos', updated_at: minutos(18),
     summary: 'Pide agregar un campo al formulario.', project: null,
-    actions: ['cerrar', 'reabrir'] })])
+    // Con la pregunta esperando al que escribio, el dueno tambien puede elegir el proyecto.
+    actions: ['cerrar', 'reabrir', 'proyecto'] })])
 const tableroDe = (cards, extra) => Object.assign({ v: 1, updated_at: minutos(1),
   truncated: false,
   counts: cards.reduce((acc, c) => Object.assign(acc, { [c.stage]: acc[c.stage] + 1 }),

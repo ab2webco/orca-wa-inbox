@@ -81,7 +81,8 @@ line and finish.
   `wa-scope caso pregunta-proyecto <id> --candidatos <a>,<b> --texto "<question>" --actor
   agente` and propose what its `next` says; the chat's setting decides who is asked, not
   you. Never tell a customer the names of the projects, unless the chat's setting sends the
-  question to them. Once the owner chose the project, it is his (`E_OWNER`).
+  question to them. Once the owner chose the project, or his text rule chose it, it is his
+  (`E_OWNER`).
 - **Escalate** (`--tipo escalar`) when it needs the owner, never in the owner's own case:
   there you ask him in the reply.
 

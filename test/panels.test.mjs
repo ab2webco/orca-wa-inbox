@@ -7086,5 +7086,61 @@ await seccion(async () => {
     detalle(doc).textContent.slice(0, 300))
 })
 
+// ── Lo que encontro la verificacion: el proyecto quitado, la pregunta en respondido y el "¿" ──
+console.log('\nactivity.html — proyectos-por-chat: el unico proyecto del chat, quitado del catalogo')
+await seccion(async () => {
+  const quitado = { why: 'project alfa-demo is no longer in the accepted list', candidates: [],
+    missing: ['alfa-demo'], question: null }
+  const board = tablero([casoProyecto({ case_id: 41, project: null }),
+    casoProyecto({ case_id: 42, project: null })], {
+    project_routes: { 41: { ...quitado, by: null }, 42: { ...quitado, by: 'chat' } } })
+  const { doc } = await abrirTablero({ board, projects: PROYECTOS_TRES }, 'es-419')
+  const de = (id) => {
+    doc.querySelector(`.card[data-case="${id}"]`).click()
+    return detalle(doc).querySelector('.det-proyecto')?.textContent || ''
+  }
+  const linea = de(41)
+  ok('sin proyecto, como antes: no dice que es el de la conversacion',
+    /Sin proyecto/.test(linea) && !/conversacion/i.test(linea), linea)
+  const vieja = de(42)
+  ok('aunque la ruta diga by chat, sin proyecto no dice que es el de la conversacion',
+    /Sin proyecto/.test(vieja) && !/conversacion/i.test(vieja), vieja)
+})
+
+console.log('\nactivity.html — proyectos-por-chat: el dueno elige con la pregunta esperando al que escribio')
+await seccion(async () => {
+  const pregunta = { candidates: [{ id: 'alfa-demo', name: 'Alfa Demo' }, { id: 'beta-demo', name: 'Beta Demo' }],
+    to: 'writer', text: 'Es sobre la tienda o sobre el portal?', at: hace(30 * 60000), state: 'open',
+    escalated: false }
+  const caso = casoProyecto({ case_id: 43, project: null, stage: 'respondido',
+    actions: ['cerrar', 'reabrir', 'proyecto'] })
+  const w = conWorker({ ok: true, code: 'proyecto-cambiado' })
+  const { doc } = await abrirConWorker([caso], w, { projects: PROYECTOS_TRES,
+    board: tablero([caso], { project_routes: { 43: RUTAS_PRUEBA({ by: null, why: null, question: pregunta }) } }) },
+    'es-419')
+  doc.querySelector('.card[data-case="43"]').click()
+  const caja = detalle(doc).querySelector('.det-pregunta')?.textContent || ''
+  ok('la pregunta al que escribio dice que usted tambien puede elegir aqui',
+    /quien escribio/i.test(caja) && /elija el proyecto aqui/i.test(caja), caja)
+  ok('y la tarjeta en respondido trae Cambiar proyecto', !!botonDe(doc, 43, 'proyecto'))
+  const S = (await montar('activity.html')).window.STRINGS
+  ok('en los tres idiomas', /choose the project here/i.test(S.en.pqToWriter) &&
+    /escolha o projeto aqui/i.test(S.pt.pqToWriter), `${S.en.pqToWriter} | ${S.pt.pqToWriter}`)
+})
+
+console.log('\nconfig.html — proyectos-por-chat: la ayuda del plazo escribe la pregunta con "¿"')
+await seccion(async () => {
+  const { window } = await montar('config.html')
+  const S = window.STRINGS
+  ok('ES abre la pregunta con ¿, como el tablero', S.es.pqHoursHelp.includes('"¿A o B?"'), S.es.pqHoursHelp)
+  // Con Automatico, en un grupo la pregunta va al dueno aunque escriba el dueno: lo leen
+  // tambien los clientes. La ayuda lo dice en los tres idiomas.
+  ok('Automatico: la ayuda dice que en un grupo la pregunta va a usted',
+    /grupo/i.test(S.es.pqHelp) && /su propia conversacion/i.test(S.es.pqHelp) &&
+    /group/i.test(S.en.pqHelp) && /your own chat/i.test(S.en.pqHelp) &&
+    /grupo/i.test(S.pt.pqHelp) && /sua propria conversa/i.test(S.pt.pqHelp),
+    `${S.es.pqHelp} | ${S.en.pqHelp} | ${S.pt.pqHelp}`)
+})
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)

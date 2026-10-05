@@ -990,7 +990,7 @@
               "projNoneByOwner": "asi lo dejo usted",
               "projAgentChooses": "la conversacion tiene {n} proyectos: el agente elige por el contenido",
               "pqWaitingLead": "Esperando respuesta: ¿{list}?", "pqOr": " o ",
-              "pqToWriter": "Se le pregunto a quien escribio. Su respuesta vuelve a este caso.",
+              "pqToWriter": "Se le pregunto a quien escribio. Su respuesta vuelve a este caso; si usted ya lo sabe, elija el proyecto aqui.",
               "pqToOwner": "Le toca a usted: conteste el aviso por WhatsApp o elija el proyecto aqui.",
               "pqToOwnerLate": "Quien escribio no contesto a tiempo y le toca a usted: conteste el aviso por WhatsApp o elija el proyecto aqui.",
               "pqQuestion": "Pregunta",
@@ -1332,7 +1332,7 @@
               "projNoneByOwner": "you left it like this",
               "projAgentChooses": "the conversation has {n} projects: the agent chooses by content",
               "pqWaitingLead": "Waiting for an answer: {list}?", "pqOr": " or ",
-              "pqToWriter": "The person who wrote was asked. Their answer comes back to this case.",
+              "pqToWriter": "The person who wrote was asked. Their answer comes back to this case; if you already know, choose the project here.",
               "pqToOwner": "It is up to you: answer the WhatsApp notice or pick the project here.",
               "pqToOwnerLate": "The person who wrote did not answer in time, so it is up to you: answer the WhatsApp notice or pick the project here.",
               "pqQuestion": "Question",
@@ -1674,7 +1674,7 @@
               "projNoneByOwner": "voce deixou assim",
               "projAgentChooses": "a conversa tem {n} projetos: o agente escolhe pelo conteudo",
               "pqWaitingLead": "Aguardando resposta: {list}?", "pqOr": " ou ",
-              "pqToWriter": "Perguntou-se a quem escreveu. A resposta volta a este caso.",
+              "pqToWriter": "Perguntou-se a quem escreveu. A resposta volta a este caso; se voce ja sabe, escolha o projeto aqui.",
               "pqToOwner": "Cabe a voce: responda o aviso pelo WhatsApp ou escolha o projeto aqui.",
               "pqToOwnerLate": "Quem escreveu nao respondeu a tempo e cabe a voce: responda o aviso pelo WhatsApp ou escolha o projeto aqui.",
               "pqQuestion": "Pergunta",
@@ -2403,7 +2403,9 @@
         // para ese caso, "Ignorar" lo cierra. Solo antes de que haya una propuesta.
         atender: { etapas: ['recibido', 'clasificado'] },
         ignorar: { etapas: ['recibido', 'clasificado'] },
-        proyecto: { etapas: ['recibido', 'clasificado', 'decision', 'bloqueado'] }
+        // En respondido solo cuando la tarjeta la ofrece: la pregunta "A o B?" espera al que
+        // escribio, y elegir el proyecto la contesta (proyectos-por-chat).
+        proyecto: { etapas: ['recibido', 'clasificado', 'decision', 'bloqueado', 'respondido'] }
       }
       var ACC_KEY = { enviar: 'acEnviar', editar: 'acEditar', ejecutar: 'acEjecutar',
         reclasificar: 'acReclasificar', cerrar: 'acCerrar', reabrir: 'acReabrir',
@@ -2934,7 +2936,9 @@
           var m = /^the message says (['"])(.+)\1$/.exec(why)
           return m ? fmt('projByRuleSays', { p: m[2] }) : t('projByRule')
         }
-        if (ruta.by === 'chat') return t('projByChat')
+        // Sin proyecto no es "el de la conversacion": el unico del chat que el dueno quito del
+        // catalogo se ve sin proyecto, como antes.
+        if (ruta.by === 'chat') return proyecto ? t('projByChat') : ''
         if (ruta.by === 'owner') return t(proyecto ? 'projByOwner' : 'projNoneByOwner')
         var n = candidatosDe(ruta).length
         if (!proyecto && n > 1) return fmt('projAgentChooses', { n: n })
