@@ -63,8 +63,10 @@ chats already skip the rule levels in `frenos_de_regla`), Jev.
       `aviso-<case>-<version>` id, so expiry, superseded versions, number changes and the
       `N <answer>` / `no N` replies are the existing ones. RED: 7 of 9 failed (no notice);
       GREEN: 9/9.
-- [ ] D4 Worker brief: in an owner case the `--respuesta` carries the deliverable link
-      (scripts/check-casos).
+- [x] D4 Worker brief: in an owner case the `--respuesta` carries the deliverable link
+      (scripts/check-casos, same section as D1): a `## The owner's own case` section
+      (`BRIEF_DUENO`) only in owner cases; customer briefs unchanged. RED: 3 of 22 failed;
+      GREEN: 22/22.
 
 ## Acceptance
 

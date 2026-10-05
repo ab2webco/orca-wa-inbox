@@ -8272,6 +8272,22 @@ def informes_del_caso(con, case_id):
     return salida
 
 
+# Lo que el agente del proyecto entrega cuando el caso es del dueno (dueno-en-el-caso): lo
+# que hizo para el, enlace incluido, va en la respuesta. Caso vivo: el informe quedo
+# publicado y la respuesta solo decia "esta listo", con el enlace "no enviado al cliente".
+BRIEF_DUENO = [
+    "",
+    "## The owner's own case",
+    "The owner of this line asked for this work himself (verified by WhatsApp id): what you "
+    "produce is his. When you produced a deliverable (a report, a plan, a document, an "
+    "artifact or a page published from his own account), your --respuesta carries it: paste "
+    "the link itself, never only \"it is ready\". Never hold it back as if he were a "
+    "customer, and never report bloqueado to ask his permission for his own deliverable: if "
+    "something is unclear, ask him with --estado necesita. You still never write a "
+    "credential value in any chat.",
+]
+
+
 def brief_de_despacho(con, caso, proyecto, instrucciones):
     """La tarea del agente del proyecto, en ingles: el caso, cada mensaje tal cual y en orden
     de llegada (con transcripciones, adjuntos y lo que ya se le contesto), lo aprobado, lo
@@ -8315,6 +8331,7 @@ def brief_de_despacho(con, caso, proyecto, instrucciones):
         "- Stay inside this project and this case.",
         "- Never state who a person is or what a name refers to unless the case or the "
         "project files say so; ask instead.",
+        *(BRIEF_DUENO if del_dueno else []),
         "",
         *primer,
         "",
@@ -8336,8 +8353,10 @@ def brief_de_despacho(con, caso, proyecto, instrucciones):
         "Blocked (destructive, outside the project, needs the owner, or you cannot do it): "
         "nothing goes to the customer, the owner sees --resumen.",
         f"{reporta} --estado bloqueado --actor trabajador --resumen \"<why, in one line>\"",
-        "Every --respuesta is for the customer: short, in the chat's language, with no "
-        "internal details and no date or amount you cannot keep.",
+        ("Every --respuesta is for the owner, who asked: short, in the chat's language, and "
+         "with no date or amount you cannot keep." if del_dueno else
+         "Every --respuesta is for the customer: short, in the chat's language, with no "
+         "internal details and no date or amount you cannot keep."),
         f"The whole case, if you need it: {wa} caso ver {cid} --json",
     ]
     return mensajes_con_tope(cabeza, bloques_del_caso(con, caso), cola,
