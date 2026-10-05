@@ -325,8 +325,8 @@ CONFIG_RANGOS = {"ack_fallback_minutes": (1, 60), "update_every_minutes": (1, 12
                  # Una meta de cero minutos la incumple todo caso; una de mas de un dia ya no
                  # es una meta de primer contacto.
                  "sla_first_reply_minutes": (1, 1440),
-                 # Cero apaga el silencio del acuse (sale como siempre); mas de cuatro horas
-                 # ya no es una conversacion en curso, es un cliente que vuelve.
+                 # Cero apaga el silencio del acuse (no se mira lo que la linea escribio); mas
+                 # de cuatro horas ya no es una conversacion en curso, es un cliente que vuelve.
                  "ack_quiet_minutes": (0, 240)}
 # Los numericos que ademas tienen que ser mayores que cero. Una ventana de agrupacion de
 # cero horas no agrupa nunca: abre una tarjeta por mensaje sin decir por que. Un aviso de

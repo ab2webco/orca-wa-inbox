@@ -1158,8 +1158,9 @@
           toneHelp: "Vale para todas las conversaciones. Cada una puede tener el suyo y pisa este.",
           autoLegend: 'Respuestas automaticas',
           autoIntro: 'Solo en las conversaciones donde su agente puede responder por si mismo. ' +
-            'Un pedido nuevo dirigido al asistente recibe un acuse de recibo al instante, y un ' +
-            'saludo recibe un saludo. Nada con dinero, credenciales o riesgo se contesta solo: ' +
+            'Un pedido nuevo dirigido al asistente recibe un acuse de recibo al instante, salvo ' +
+            'si la linea ya le escribio en ese chat hace poco, y un saludo recibe un saludo. ' +
+            'Nada con dinero, credenciales o riesgo se contesta solo: ' +
             'pasa a usted.',
           ackLabel: 'Acuse de recibo',
           greetingLabel: 'Saludo',
@@ -1184,8 +1185,9 @@
           ackQuietLabel: 'Sin acuse si la linea escribio en el chat hace menos de (minutos)',
           ackQuietHelp: 'El acuse no cae en medio de una conversacion: si la linea escribio en ' +
             'ese chat dentro de estos minutos (una respuesta, un avance o un mensaje suyo desde ' +
-            'el telefono), no salen ni el acuse ni su respaldo. En 0 el acuse sale siempre, como ' +
-            'antes. En su propio chat no sale nunca.',
+            'el telefono), no salen ni el acuse ni su respaldo. En 0 no se mira lo que la linea ' +
+            'escribio antes. Aparte de estos minutos, el acuse no sale en su propio chat, y el de ' +
+            'respaldo no sale si el caso ya espera su aprobacion o ya esta en marcha.',
           ackQuietRange: 'El silencio del acuse es un numero entero de minutos, de 0 a 240.',
           // --- la meta del primer contacto (informes-tablero, I4) ---
           slaLegend: 'Informes',
@@ -1642,8 +1644,9 @@
           toneHelp: "Applies to every conversation. Each one can override it.",
           autoLegend: 'Automatic replies',
           autoIntro: 'Only in conversations where your agent may reply on its own. A new ' +
-            'request addressed to the assistant gets an acknowledgement right away, and a ' +
-            'greeting gets a greeting. Anything with money, credentials or risk is never ' +
+            'request addressed to the assistant gets an acknowledgement right away, unless the ' +
+            'line wrote in that chat recently, and a greeting gets a greeting. Anything with ' +
+            'money, credentials or risk is never ' +
             'answered automatically: it goes to you.',
           ackLabel: 'Acknowledgement',
           greetingLabel: 'Greeting',
@@ -1669,7 +1672,9 @@
           ackQuietHelp: 'The acknowledgement never lands in the middle of a conversation: if the ' +
             'line wrote in that chat within these minutes (a reply, an update or a message of ' +
             'yours from the phone), neither the acknowledgement nor its fallback goes out. At 0 ' +
-            'it always goes out, as before. It never goes out in your own chat.',
+            'what the line wrote before is not checked. Apart from these minutes, the ' +
+            'acknowledgement does not go out in your own chat, and the fallback does not go out ' +
+            'once the case waits for your approval or is already under way.',
           ackQuietRange: 'The quiet time is a whole number of minutes, from 0 to 240.',
           slaLegend: 'Reports',
           slaLabel: 'First contact target (minutes)',
@@ -2146,8 +2151,9 @@
         toneLabel: 'Como escreve',
         autoLegend: 'Respostas automaticas',
         autoIntro: 'Somente nas conversas em que o seu agente pode responder sozinho. Um pedido ' +
-          'novo dirigido ao assistente recebe um aviso de recebimento na hora, e uma saudacao ' +
-          'recebe uma saudacao. Nada com dinheiro, credenciais ou risco e respondido sozinho: ' +
+          'novo dirigido ao assistente recebe um aviso de recebimento na hora, salvo se a linha ' +
+          'ja escreveu nessa conversa ha pouco, e uma saudacao recebe uma saudacao. Nada com ' +
+          'dinheiro, credenciais ou risco e respondido sozinho: ' +
           'passa para voce.',
         ackLabel: 'Aviso de recebimento',
         greetingLabel: 'Saudacao',
@@ -2172,8 +2178,9 @@
         ackQuietLabel: 'Sem aviso se a linha escreveu na conversa ha menos de (minutos)',
         ackQuietHelp: 'O aviso nao cai no meio de uma conversa: se a linha escreveu nessa ' +
           'conversa dentro destes minutos (uma resposta, uma atualizacao ou uma mensagem sua ' +
-          'pelo telefone), nao saem nem o aviso nem a sua reserva. Em 0 o aviso sai sempre, ' +
-          'como antes. Na sua propria conversa nunca sai.',
+          'pelo telefone), nao saem nem o aviso nem a sua reserva. Em 0 nao se olha o que a ' +
+          'linha escreveu antes. Alem destes minutos, o aviso nao sai na sua propria conversa, ' +
+          'e o de reserva nao sai se o caso ja espera a sua aprovacao ou ja esta em andamento.',
         ackQuietRange: 'O silencio do aviso e um numero inteiro de minutos, de 0 a 240.',
         slaLegend: 'Relatorios',
         slaLabel: 'Meta do primeiro contato (minutos)',
