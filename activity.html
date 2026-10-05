@@ -1099,6 +1099,7 @@
               "acErrSendConflict": "Ese envio ya existe con otro texto, asi que no se mando nada.",
               "acErrSendLine": "Esa conversacion no esta autorizada para el numero vinculado ahora. Revise sus Ajustes.",
               "acErrSendFirma": "Falta el nombre del agente y sin el no se envia. Defina el nombre en Ajustes.",
+              "acErrSendNoDueno": "No se pudo confirmar que la aprobacion viene del tablero y el mensaje no salio. Reinicie el plugin e intente de nuevo.",
               "acErrJev": "Jev no pudo revisar el mensaje: quedo como borrador y no salio.",
               "acErrDesconocida": "El plugin no entiende esa accion. Actualice el plugin.",
               "acErrVencido": "El pedido vencio antes de atenderse. Intente de nuevo.",
@@ -1441,6 +1442,7 @@
               "acErrSendConflict": "That send already exists with a different text, so nothing was sent.",
               "acErrSendLine": "That conversation is not authorized for the number linked now. Check your Settings.",
               "acErrSendFirma": "The agent name is missing and nothing is sent without it. Set the name in Settings.",
+              "acErrSendNoDueno": "The approval could not be confirmed as coming from the board, so the message was not sent. Restart the plugin and try again.",
               "acErrJev": "Jev could not review the message: it was left as a draft and was not sent.",
               "acErrDesconocida": "The plugin does not understand that action. Update the plugin.",
               "acErrVencido": "The request expired before it was handled. Try again.",
@@ -1783,6 +1785,7 @@
               "acErrSendConflict": "Esse envio ja existe com outro texto, entao nada foi enviado.",
               "acErrSendLine": "Essa conversa nao esta autorizada para o numero vinculado agora. Confira seus Ajustes.",
               "acErrSendFirma": "Falta o nome do agente e sem ele nada e enviado. Defina o nome em Ajustes.",
+              "acErrSendNoDueno": "Nao foi possivel confirmar que a aprovacao vem do quadro e a mensagem nao foi enviada. Reinicie o plugin e tente de novo.",
               "acErrJev": "O Jev nao conseguiu revisar a mensagem: ela ficou como rascunho e nao foi enviada.",
               "acErrDesconocida": "O plugin nao entende essa acao. Atualize o plugin.",
               "acErrVencido": "O pedido venceu antes de ser atendido. Tente de novo.",
@@ -2441,6 +2444,8 @@
         'send-id-conflict': 'acErrSendConflict', 'send-wrong-line': 'acErrSendLine',
         'send-line-not-linked': 'acErrSendLine', 'send-ambiguous-line': 'acErrSendLine',
         'send-no-signature': 'acErrSendFirma', 'jev-unavailable': 'acErrJev',
+        // `wa-send --approve` sin la llave del plugin (approve-solo-dueno).
+        'send-approve-not-owner': 'acErrSendNoDueno',
         'accion-desconocida': 'acErrDesconocida', vencido: 'acErrVencido',
         'sin-herramientas': 'acErrSinHerr', 'sin-permiso': 'acErrSinPermiso',
         demoro: 'acErrDemoro', fallo: 'acErrFallo', 'no-escritura': 'acErrNoWrite' }

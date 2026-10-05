@@ -4511,7 +4511,7 @@ console.log('\nactivity.html — tablero: cada error se dice, en su idioma')
     'E_BUSY', 'accion-invalida', 'send-denied', 'send-needs-approval', 'send-no-transport',
     'send-rejected', 'send-timeout', 'send-no-draft', 'send-id-conflict', 'send-wrong-line',
     'send-line-not-linked', 'send-ambiguous-line', 'send-no-signature', 'jev-unavailable',
-    'accion-desconocida', 'vencido', 'sin-herramientas', 'sin-permiso', 'demoro', 'fallo']
+    'send-approve-not-owner', 'accion-desconocida', 'vencido', 'sin-herramientas', 'sin-permiso', 'demoro', 'fallo']
   const { window } = await montar('activity.html')
   const S = window.STRINGS
   const claves = CODIGOS.map((c) => window.ERR_ACCION[c])
@@ -4528,7 +4528,11 @@ console.log('\nactivity.html — tablero: cada error se dice, en su idioma')
   for (const [codigo, idioma, patron] of [
     ['E_VERSION', 'es-419', /cambio/i], ['E_VERSION', 'en-US', /changed/i],
     ['send-timeout', 'es-419', /cola/i], ['send-denied', 'en-US', /not allowed|permission/i],
-    ['E_BUSY', 'pt-BR', /ocupad/i]
+    ['E_BUSY', 'pt-BR', /ocupad/i],
+    // La aprobacion sin la llave del plugin (approve-solo-dueno): se dice que no salio.
+    ['send-approve-not-owner', 'es-419', /tablero/i],
+    ['send-approve-not-owner', 'en-US', /board/i],
+    ['send-approve-not-owner', 'pt-BR', /quadro/i]
   ]) {
     const w = conWorker({ ok: false, code: codigo })
     const m = await abrirConWorker([tarjeta()], w, {}, idioma)

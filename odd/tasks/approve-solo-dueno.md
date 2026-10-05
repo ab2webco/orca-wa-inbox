@@ -59,8 +59,12 @@
       more `si` cases. GREEN: 1072/1072. Tests get the key by running `aprobador.mjs` (in
       `linea_lista`, as the plugin does at start); the cancelled-draft test now asserts
       `send-cancelled` instead of any non-zero exit, so the gate cannot hide it.
-- [ ] A5 RED/GREEN: the panel translates `send-approve-not-owner` in ES/EN/PT
+- [x] A5 RED/GREEN: the panel translates `send-approve-not-owner` in ES/EN/PT
       (test/panels.test.mjs or check-panels).
+      RED: 1390/1398 ("cada codigo estable tiene su texto — [send-approve-not-owner]", and
+      the card showed the raw code in es-419, en-US and pt-BR). GREEN: 1398/1398 (`tablero`,
+      `board`, `quadro`). Only an error string on an action that failed: no screen layout
+      changed, so no new shots.
 - [x] A6 RED/GREEN: audit row `approved` with who approved (test/envio.test.mjs).
       RED: "y la bitacora anota quien lo aprobo — []". GREEN: one `approved` row per real
       approval, `... approved on the board` / `... by the owner's WhatsApp reply`.
