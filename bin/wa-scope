@@ -1818,6 +1818,9 @@ DEFAULT_CONFIG = {
     # La cuenta de Claude con que se abren el agente de casos y el del proyecto: el id de
     # una cuenta de `orca account list`, o `auto` (la regla automatica de `abre_agente`).
     "bot_claude_account": "auto",
+    # La meta del primer contacto en los informes (odd/tasks/informes-tablero.md): minutos
+    # entre el primer mensaje del cliente y la primera salida en ese chat. Sale al panel.
+    "sla_first_reply_minutes": "15",
     "transcribe": "local",    # local | off | api. Local no manda el audio a ningun lado.
     "transcribe_model": "",   # vacio = lo decide la calidad; fijarlo pisa la calidad
     "transcribe_lang": "auto",    # los audios mezclan espanol e ingles

@@ -276,7 +276,10 @@ PANEL_SETTINGS = {"tone": "tone", "agentName": "agent_name",
                   "greetingMode": "greeting", "greetingText": "greeting_text",
                   # Con que cuenta de Claude abre el bot sus agentes (el de casos y el de
                   # cada proyecto): un id de `orca account list`, o `auto`.
-                  "botClaudeAccount": "bot_claude_account"}
+                  "botClaudeAccount": "bot_claude_account",
+                  # La meta del primer contacto de los informes, en minutos: un caso cumple
+                  # si su primera respuesta salio dentro de este plazo (informes-tablero, I4).
+                  "slaMinutes": "sla_first_reply_minutes"}
 
 # El primer mensaje (Beta): quien lo escribe y el ritmo de los avances del agente. Viaja en
 # UNA clave del panel con sus cuatro valores, y no en cuatro claves planas: el host admite
@@ -305,12 +308,16 @@ CONFIG_OPCIONES = {
 }
 CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s", "sync_minutes",
                     "capture_max", "capture_days", "case_window_hours", "approval_hours",
-                    "ack_fallback_minutes", "update_every_minutes", "updates_max")
+                    "ack_fallback_minutes", "update_every_minutes", "updates_max",
+                    "sla_first_reply_minutes")
 # Los numericos con un rango cerrado. Un respaldo de cero minutos es el acuse fijo de
 # siempre con otro nombre, y uno de un dia deja al cliente sin nada; un tope de avances
 # de cien es un cliente con el telefono sonando.
 CONFIG_RANGOS = {"ack_fallback_minutes": (1, 60), "update_every_minutes": (1, 120),
-                 "updates_max": (1, 10)}
+                 "updates_max": (1, 10),
+                 # Una meta de cero minutos la incumple todo caso; una de mas de un dia ya no
+                 # es una meta de primer contacto.
+                 "sla_first_reply_minutes": (1, 1440)}
 # Los numericos que ademas tienen que ser mayores que cero. Una ventana de agrupacion de
 # cero horas no agrupa nunca: abre una tarjeta por mensaje sin decir por que. Un aviso de
 # aprobacion que vence a las cero horas no se podria contestar nunca (T14).

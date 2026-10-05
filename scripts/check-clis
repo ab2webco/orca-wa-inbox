@@ -103,7 +103,16 @@ AJUSTES = [
     (["config", "updates_max", "5"], True, "5"),
     (["config", "updates_max", "0"], False, "5"),
     (["config", "updates_max", "11"], False, "5"),
+    # La meta del primer contacto de los informes (odd/tasks/informes-tablero.md, I4): en
+    # minutos, entre 1 y un dia. Cero haria fallar todo caso; mas de un dia no es una meta.
+    (["config", "sla_first_reply_minutes", "30"], True, "30"),
+    (["config", "sla_first_reply_minutes", "0"], False, "30"),
+    (["config", "sla_first_reply_minutes", "1441"], False, "30"),
+    (["config", "sla_first_reply_minutes", "media hora"], False, "30"),
 ]
+
+# Con que arranca la meta del primer contacto: 15 minutos, y se cambia en Ajustes.
+DEFAULTS_INFORMES = {"sla_first_reply_minutes": "15"}
 
 # Con que arranca el primer mensaje en una instalacion nueva: el acuse fijo de siempre.
 # Los modos del agente son Beta y nadie entra a ellos sin elegirlos.
@@ -1328,7 +1337,8 @@ def revisa_ajustes(fallos: list) -> int:
         home = pathlib.Path(tmp)
         env = entorno(home)
         # Los arranques, ANTES de tocar nada: despues del bucle ya no son defaults.
-        for clave, esperado in sorted({**DEFAULTS_RETENCION, **DEFAULTS_PRIMER}.items()):
+        for clave, esperado in sorted({**DEFAULTS_RETENCION, **DEFAULTS_PRIMER,
+                                       **DEFAULTS_INFORMES}.items()):
             hechas += 1
             quedo = valor(env, clave)
             if quedo != esperado:
@@ -1364,10 +1374,10 @@ def revisa_ajustes(fallos: list) -> int:
         subprocess.run([str(BIN / "wa-scope"), "sync", "--json"], capture_output=True,
                        text=True, env=env, timeout=180)
         espejo = json.loads(store.read_text(encoding="utf-8")) if store.exists() else {}
-        hechas += 5
+        hechas += 6
         for flat, esperado in (("inboxDays", "30"), ("transcribe", "off"),
                                ("transcribeLang", "pt"), ("transcribeQuality", "minima"),
-                               ("ownerName", "Nombre De Ejemplo")):
+                               ("ownerName", "Nombre De Ejemplo"), ("slaMinutes", "30")):
             if espejo.get(flat) != esperado:
                 fallos.append(f"sync no le devolvio {flat} al panel: quedo "
                               f"{espejo.get(flat)!r} en vez de {esperado!r}")
@@ -1383,13 +1393,13 @@ def revisa_ajustes(fallos: list) -> int:
         # El panel escribe en el store del host sin pasar por el CLI, asi que un valor
         # sucio de ahi es lo unico que la validacion de escritura no puede atajar.
         store.write_text(json.dumps({"inboxDays": "nunca", "transcribe": "magia",
-                                     "transcribeLang": "klingon",
+                                     "transcribeLang": "klingon", "slaMinutes": "0",
                                      "firstReply": {"mode": "magia", "fallbackMinutes": "99",
                                                     "everyMinutes": "-1", "max": "mil"}}),
                          encoding="utf-8")
-        hechas += 7
+        hechas += 8
         for clave, esperado in (("inbox_days", "30"), ("transcribe", "off"),
-                                ("transcribe_lang", "pt"),
+                                ("transcribe_lang", "pt"), ("sla_first_reply_minutes", "30"),
                                 ("first_reply_mode", "model_with_ack_fallback"),
                                 ("ack_fallback_minutes", "15"),
                                 ("update_every_minutes", "30"), ("updates_max", "5")):
@@ -1400,11 +1410,13 @@ def revisa_ajustes(fallos: list) -> int:
 
         # Y lo valido del panel SI tiene que ganarle al CLI, como el tono.
         store.write_text(json.dumps({"inboxDays": "0", "transcribe": "local",
+                                     "slaMinutes": "45",
                                      "firstReply": {"mode": "model", "fallbackMinutes": 7,
                                                     "everyMinutes": "12", "max": "2"}}),
                          encoding="utf-8")
-        hechas += 6
+        hechas += 7
         for clave, esperado in (("inbox_days", "0"), ("transcribe", "local"),
+                                ("sla_first_reply_minutes", "45"),
                                 ("first_reply_mode", "model"), ("ack_fallback_minutes", "7"),
                                 ("update_every_minutes", "12"), ("updates_max", "2")):
             quedo = valor(env, clave)
