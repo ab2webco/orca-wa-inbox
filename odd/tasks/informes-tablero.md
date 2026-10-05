@@ -127,7 +127,29 @@ stores (capture.db messages, scope.db cases, case events and dispatches). Owner-
         range; a host that rejects the write does not say saved. ES/EN/PT. RED: `#sla-minutes`
         missing (4 FALLA, then `TypeError ... reading 'focus'`). GREEN: panels 1104/1104
         (16 new in "I4").
-- [ ] I5 Reports tab: blocks 1–6 with comparisons, empty states, info texts, ES/EN/PT.
+- [x] I5 Reports tab: blocks 1–6 with comparisons, empty states, info texts, ES/EN/PT.
+      `activity.html`: tabs Tablero | Informes (tablist with arrow keys) and the shared
+      period on the same row. `reports` is read only while the Reports tab is visible (it
+      is the biggest key); a host rejection keeps what is shown. Blocks, in the spec's order,
+      each with its definition written under it: Ahora (5 tiles), Trafico (two heatmaps,
+      rows per date or per weekday, 24 local hours, five steps of ONE blue ramp from the
+      validated dataviz palette with a visible zero cell, a title per cell, the scale and
+      the peak hour in words), Tiempos (median, "de N casos/esperas", comparison, CSS bars per
+      hour/day/week with a title per bucket and an aria-label per chart; customer wait also
+      says how many are still unanswered), Volumen (5 tiles with comparison and two
+      two-series charts with legends), Meta del primer contacto (rate, points against the
+      previous period, met/missed/pending in words and in a 2 px-gapped bar, the misses table
+      and "y N mas"), Por proyecto (table; "Sin proyecto" last). A comparison shows only
+      when the key brings one: arrow + percent (or points) + "vs. periodo anterior"; better
+      and worse also get a readable text colour, never colour alone. Numbers use the
+      panel's locale (`Intl`, so es-419 writes 12,345 and pt-BR 12.345). Empty states: no
+      key, an unknown version, and a period with no data (each block says so; no 0 s, no
+      empty charts). The Reports DOM is rebuilt only when what it shows changes, and its
+      repaints go through `alSoltar`, so a click is never lost (pinned with `clicReal`).
+      Fake key for tests and screenshots: `test/informes-ejemplo.mjs`.
+      RED: no tabs (`FALLA dos pestanas`, then `TypeError ... reading 'getAttribute'`).
+      GREEN: panels 1148/1148 (43 new in "I5"; the old "no tabs" check now pins that the
+      only tabs are Tablero and Informes).
 - [ ] I6 CSV download (or a report of why the host blocks it).
 - [ ] I7 Screenshots of the board and Reports at 1440/768/390/320, light and dark, ES and EN,
       looked at; `npm run check` green.

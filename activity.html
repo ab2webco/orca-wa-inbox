@@ -28,6 +28,14 @@
            trae: emerald-500 y sky-500 de Tailwind. Y el texto de prioridad alta, el
            amber-700/amber-200 de los carriles de Orca (workspace-status.ts). */
         --tone-emerald: #10b981; --tone-sky: #0ea5e9; --tone-amber-text: #b45309;
+        /* Los informes (I5). El mapa de calor es UNA rampa azul de la paleta validada
+           (dataviz, references/palette.md: pasos 150/300/450/600 en claro y 650/500/350/200
+           en oscuro), y el cero es una celda visible, no el fondo. Las dos series de barras
+           son los dos primeros colores categoricos de esa paleta, cada tema con su paso. Lo
+           "mejor" de una comparacion va en un verde de texto legible (emerald-700/300). */
+        --rep-hm-0: #e8e8e6; --rep-hm-1: #b7d3f6; --rep-hm-2: #6da7ec; --rep-hm-3: #2a78d6;
+        --rep-hm-4: #184f95; --rep-serie-1: #2a78d6; --rep-serie-2: #eb6834;
+        --rep-mejor: #047857;
       }
       @media (prefers-color-scheme: dark) {
         :root {
@@ -40,10 +48,19 @@
           --fb-border: rgb(255 255 255 / 0.07); --fb-ring: #737373;
           --fb-card: #171717; --fb-muted: #262626;
           --tone-amber-text: #fde68a;
+          --rep-hm-0: #2a2a2a; --rep-hm-1: #104281; --rep-hm-2: #256abf; --rep-hm-3: #5598e7;
+          --rep-hm-4: #9ec5f4; --rep-serie-1: #3987e5; --rep-serie-2: #d95926;
+          --rep-mejor: #6ee7b7;
         }
       }
-      html.light { --tone-amber-text: #b45309; }
-      html.dark { --tone-amber-text: #fde68a; }
+      html.light { --tone-amber-text: #b45309;
+        --rep-hm-0: #e8e8e6; --rep-hm-1: #b7d3f6; --rep-hm-2: #6da7ec; --rep-hm-3: #2a78d6;
+        --rep-hm-4: #184f95; --rep-serie-1: #2a78d6; --rep-serie-2: #eb6834;
+        --rep-mejor: #047857; }
+      html.dark { --tone-amber-text: #fde68a;
+        --rep-hm-0: #2a2a2a; --rep-hm-1: #104281; --rep-hm-2: #256abf; --rep-hm-3: #5598e7;
+        --rep-hm-4: #9ec5f4; --rep-serie-1: #3987e5; --rep-serie-2: #d95926;
+        --rep-mejor: #6ee7b7; }
       /* Los widgets nativos siguen al tema real del host, no a la preferencia del
          sistema. */
       html.light { color-scheme: light; }
@@ -203,10 +220,6 @@
       .seg button:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: -2px; }
       .seg svg { width: 14px; height: 14px; }
       #board-shown { white-space: nowrap; }
-      /* La fila de arriba del tablero y los informes: el periodo, que comparten. */
-      .vistas { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
-                margin: 0 12px 8px; }
-      .seg.periodo { margin-left: auto; }
 
       /* Un solo estado vacio y en calma, como el de Plane: `px-4 py-10 text-center`. */
       .board-empty { margin: 8px 12px; padding: 40px 16px; text-align: center; }
@@ -466,6 +479,127 @@
       .card-form .card-msg { margin-top: 6px; }
       .card-form .det-acts { margin-top: 8px; }
 
+      /* ── Tablero | Informes (I5) ─────────────────────────────────────────────────
+         Las pestanas como las de los ajustes (config.html): subrayado en --primary. El
+         periodo va a la derecha; si no cabe sube a su propia linea (wrap-reverse) y las
+         pestanas quedan sobre el filete. */
+      .vistas { display: flex; flex-wrap: wrap-reverse; align-items: flex-end; gap: 0 12px;
+                margin: 0 0 8px; padding: 0 12px;
+                border-bottom: 1px solid var(--border, var(--fb-border)); }
+      .seg.periodo { margin: 4px 0 6px auto; }
+      .tabs { display: flex; gap: 0 2px; }
+      .tab { font: inherit; font-size: 13px; padding: 7px 8px; cursor: pointer;
+             border: 0; border-bottom: 2px solid transparent; border-radius: 0;
+             margin-bottom: -1px; background: none; white-space: nowrap;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .tab:hover { color: var(--foreground, var(--fb-foreground)); }
+      .tab[aria-selected="true"] { color: var(--foreground, var(--fb-foreground));
+             font-weight: 600; border-bottom-color: var(--primary, var(--fb-primary)); }
+      .tab:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: -2px; }
+
+      /* Los informes: un bloque por pregunta, en tarjetas como las columnas. */
+      .rep { display: grid; gap: 12px; padding: 0 12px; }
+      .rep-sec { min-width: 0; padding: 12px 14px 14px; border-radius: var(--radius-md);
+             border: 1px solid var(--border, var(--fb-border));
+             background: var(--card, var(--fb-card)); }
+      .rep-sec h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.01em;
+             color: var(--foreground, var(--fb-foreground)); }
+      .rep-sec h3 { margin: 0; font-size: 12px; font-weight: 500;
+             color: var(--foreground, var(--fb-foreground)); }
+      .rep-def { margin: 2px 0 10px; max-width: 80ch; font-size: 11px; line-height: 1.45;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .rep-nada { margin: 0; font-size: 12px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .rep-azulejos { display: grid; gap: 8px;
+             grid-template-columns: repeat(auto-fill, minmax(min(100%, 132px), 1fr)); }
+      .rep-azulejo { min-width: 0; padding: 8px 10px; border-radius: var(--radius-md);
+             background: color-mix(in srgb, var(--muted, var(--fb-muted)) 55%, transparent); }
+      .rep-label { display: block; font-size: 11px; overflow-wrap: anywhere;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .rep-num { display: block; margin-top: 2px; font-size: 20px; font-weight: 600; line-height: 1.2;
+             font-variant-numeric: tabular-nums; color: var(--foreground, var(--fb-foreground)); }
+      .rep-num.sin { font-size: 13px; font-weight: 500;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .rep-n, .rep-extra { display: block; font-size: 11px;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      /* La comparacion: flecha Y texto (nunca solo color). Mejor y peor tienen color de
+         texto legible; lo que no es ni mejor ni peor (el volumen) queda apagado. */
+      .rep-delta { display: block; margin-top: 2px; font-size: 11px; font-variant-numeric: tabular-nums;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .rep-delta.mejor { color: var(--rep-mejor); }
+      .rep-delta.peor { color: var(--destructive, var(--fb-destructive)); }
+      .rep-tiempos, .rep-mapas, .rep-graficos { display: grid; gap: 16px;
+             grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); }
+      .rep-graficos { margin-top: 14px; }
+      .rep-tiempo { min-width: 0; }
+      .rep-tiempo .rep-def { margin: 6px 0 0; }
+      /* Barras en CSS: una columna por cubeta, la serie 1 y la 2 lado a lado. El tope de la
+         escala va arriba a la izquierda; la fecha de la primera, la del medio y la ultima
+         abajo. Cada cubeta dice lo suyo al pasar el puntero. */
+      .rep-barras { min-width: 0; margin-top: 8px; }
+      .rep-plot { position: relative; display: flex; align-items: flex-end; gap: 2px; height: 72px;
+             border-bottom: 1px solid var(--border, var(--fb-border)); }
+      .rep-grupo { flex: 1 1 0; min-width: 0; height: 100%; display: flex; align-items: flex-end;
+             justify-content: center; gap: 1px; }
+      .rep-grupo:hover { background: color-mix(in srgb, var(--muted, var(--fb-muted)) 60%, transparent); }
+      .rep-grupo .b { flex: 1 1 0; max-width: 16px; border-radius: 3px 3px 0 0;
+             background: var(--rep-serie-1); }
+      .rep-grupo .b.s2 { background: var(--rep-serie-2); }
+      .rep-max { position: absolute; top: -2px; left: 0; padding-right: 4px; font-size: 10px;
+             line-height: 1; pointer-events: none; background: var(--card, var(--fb-card));
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .rep-eje { display: flex; justify-content: space-between; gap: 8px; margin-top: 3px;
+             font-size: 10px; white-space: nowrap;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .rep-leyenda { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 4px; font-size: 11px;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .rep-leyenda span { display: inline-flex; align-items: center; gap: 5px; }
+      .rep-leyenda i { width: 8px; height: 8px; border-radius: 2px; background: var(--rep-serie-1); }
+      .rep-leyenda i.s2 { background: var(--rep-serie-2); }
+      /* El mapa de calor: una fila por fecha o dia de la semana, 24 horas locales. */
+      .rep-mapa { display: grid; gap: 2px; margin-top: 6px; }
+      .rep-fila, .rep-horas { display: grid; grid-template-columns: 44px repeat(24, minmax(0, 1fr)); gap: 2px;
+             align-items: center; }
+      .rep-fila-k { padding-right: 4px; font-size: 10px; white-space: nowrap; overflow: hidden;
+             text-overflow: ellipsis; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .rep-celda { height: 14px; border-radius: 2px; background: var(--rep-hm-0); }
+      .rep-celda.n1 { background: var(--rep-hm-1); }
+      .rep-celda.n2 { background: var(--rep-hm-2); }
+      .rep-celda.n3 { background: var(--rep-hm-3); }
+      .rep-celda.n4 { background: var(--rep-hm-4); }
+      .rep-horas span + span { grid-column: span 6; font-size: 10px;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .rep-escala { display: flex; align-items: center; gap: 3px; margin-top: 6px; font-size: 10px;
+             color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .rep-escala .rep-celda { width: 12px; height: 10px; }
+      .rep-pico { margin: 4px 0 0; font-size: 11px; color: var(--foreground, var(--fb-foreground)); }
+      /* La meta: la tasa grande, y la proporcion en una barra con separaciones de 2 px. */
+      .rep-sla-cab { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 4px 24px; }
+      .rep-sla-barra { display: flex; gap: 2px; height: 10px; margin: 10px 0 6px; }
+      .rep-sla-barra span { min-width: 2px; border-radius: 2px; }
+      .rep-sla-barra .met, .rep-sla-cuentas .met i { background: var(--tone-emerald); }
+      .rep-sla-barra .missed, .rep-sla-cuentas .missed i { background: var(--destructive, var(--fb-destructive)); }
+      .rep-sla-barra .pending, .rep-sla-cuentas .pending i { background: var(--rep-hm-0);
+             box-shadow: inset 0 0 0 1px var(--muted-foreground, var(--fb-muted-foreground)); }
+      .rep-sla-cuentas { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px;
+             color: var(--foreground, var(--fb-foreground)); }
+      .rep-sla-cuentas span { display: inline-flex; align-items: center; gap: 6px; }
+      .rep-sla-cuentas i { width: 8px; height: 8px; border-radius: 2px; }
+      /* Las tablas: se desplazan dentro de su caja si no caben; la pagina nunca. */
+      .rep-tabla-caja { overflow-x: auto; margin-top: 10px; scrollbar-width: thin; }
+      .rep-tabla { width: 100%; border-collapse: collapse; font-size: 12px;
+             color: var(--foreground, var(--fb-foreground)); }
+      .rep-tabla th { padding: 0 10px 6px 0; text-align: left; font-size: 11px; font-weight: 500;
+             white-space: nowrap; color: var(--muted-foreground, var(--fb-muted-foreground));
+             border-bottom: 1px solid var(--border, var(--fb-border)); }
+      .rep-tabla td { padding: 6px 10px 6px 0; vertical-align: top;
+             border-top: 1px solid var(--border, var(--fb-border)); }
+      .rep-tabla tr:first-child td { border-top: 0; }
+      .rep-tabla .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+      .rep-tabla .rep-caso-id { font-family: var(--font-mono, ui-monospace, Menlo, monospace);
+             font-size: 11px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .rep-tabla .rep-caso-t { display: block; min-width: 140px; max-width: 320px; overflow-wrap: anywhere; }
+      .rep-mas { margin: 6px 0 0; font-size: 11px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+
       /* Hasta 768 px la lista es la vista natural y el detalle se abre en el lugar, debajo
          de lo elegido. El buscador toma la fila entera. */
       @media (max-width: 768px) {
@@ -512,6 +646,12 @@
          tablero acota Respondido y Cerrado por la hora en que el caso entro a la etapa; lo
          abierto se ve siempre. -->
     <div class="vistas" id="vistas">
+      <div class="tabs" role="tablist" data-t-aria="viewsLabel">
+        <button type="button" class="tab" role="tab" id="tab-board" aria-controls="view-board"
+                aria-selected="true" data-t="tabBoard"></button>
+        <button type="button" class="tab" role="tab" id="tab-reports" aria-controls="view-reports"
+                aria-selected="false" tabindex="-1" data-t="tabReports"></button>
+      </div>
       <div class="seg periodo" id="period" role="group" data-t-aria="periodLabel">
         <button type="button" data-periodo="today" aria-pressed="false" data-t="periodToday"></button>
         <button type="button" data-periodo="7d" aria-pressed="true" data-t="period7d"></button>
@@ -519,7 +659,7 @@
         <button type="button" data-periodo="all" aria-pressed="false" data-t="periodAll"></button>
       </div>
     </div>
-    <div id="view-board">
+    <div id="view-board" role="tabpanel" aria-labelledby="tab-board">
       <div class="board-bar" id="board-bar" hidden>
         <div class="chips" id="board-chips" role="group" data-t-aria="boardStagesLabel"></div>
         <div class="bar-row">
@@ -554,6 +694,14 @@
       </div>
     </div>
 
+    <!-- Los informes (informes-tablero, I5): la clave `reports` que escribe `wa-scope sync`.
+         Se lee solo con esta pestana a la vista: es grande y cambia cada pocos minutos. -->
+    <div id="view-reports" role="tabpanel" aria-labelledby="tab-reports" hidden>
+      <p class="meta nota" id="reports-synced"></p>
+      <div class="board-empty" id="reports-empty" hidden><p class="t"></p><p class="b"></p></div>
+      <div class="rep" id="reports-body"></div>
+    </div>
+
     <script>
       'use strict'
       // El shell del panel no inyecta el idioma, asi que sale de navigator.language,
@@ -584,6 +732,85 @@
               "boardViewBoard": "Tablero",
               "boardShowMore": "Mostrar {n} mas", "boardShowMoreAria": "Mostrar {n} casos mas de {etapa}",
               "periodLabel": "Periodo", "periodToday": "Hoy", "period7d": "7 dias", "period30d": "30 dias", "periodAll": "Todo",
+              "tabBoard": "Tablero",
+              "tabReports": "Informes",
+              "viewsLabel": "Vistas",
+              "repNoDataTitle": "Todavia no hay informes",
+              "repNoDataBody": "Su agente los calcula en cada revision, cada pocos minutos. Vuelva en un rato.",
+              "repVersion": "Este panel no entiende la version {v} de los informes. Actualice el plugin.",
+              "repUpdated": "Calculado {cuando}",
+              "repVsPrev": "vs. periodo anterior",
+              "repBetter": "mejor",
+              "repWorse": "peor",
+              "repLiveTitle": "Ahora",
+              "repLiveDef": "Lo que hay en este momento: no depende del periodo.",
+              "repLiveOpen": "Casos abiertos",
+              "repLiveDecision": "Esperan su decision",
+              "repLiveCustomer": "Esperan al cliente",
+              "repLiveBlocked": "Bloqueados",
+              "repLiveChats": "Conversaciones donde actua el agente",
+              "repTrafficTitle": "Trafico",
+              "repTrafficDefDate": "Por dia y hora local. Resuelto es la primera entrada del caso a {respondido} o {cerrado}.",
+              "repTrafficDefWeekday": "Por dia de la semana y hora local, sumado en el periodo. Resuelto es la primera entrada del caso a {respondido} o {cerrado}.",
+              "repHeatReceived": "Mensajes recibidos",
+              "repHeatResolved": "Casos resueltos",
+              "repHeatLess": "Menos",
+              "repHeatMore": "Mas",
+              "repHeatPeak": "Hora pico: {cuando} ({n})",
+              "repHeatNone": "Nada en este periodo.",
+              "repHeatCell": "{dia} {hora}: {n}",
+              "repTimesTitle": "Tiempos",
+              "repFirst": "Primera respuesta",
+              "repFirstDef": "Del primer mensaje del cliente en el caso a la primera salida en ese chat despues de el (acuse, primer mensaje del agente o respuesta). Mediana de los casos creados en el periodo.",
+              "repResolution": "Resolucion",
+              "repResolutionDef": "De la creacion del caso a su primera entrada en {respondido} o {cerrado}. Mediana de los casos resueltos en el periodo.",
+              "repWait": "Espera del cliente",
+              "repWaitDef": "Por cada mensaje del cliente (varios seguidos cuentan una vez), el tiempo hasta la siguiente salida en ese chat. Mediana de las esperas que empezaron en el periodo.",
+              "repWaitOpen1": "1 todavia sin respuesta",
+              "repWaitOpen": "{n} todavia sin respuesta",
+              "repOfCases1": "de 1 caso",
+              "repOfCases": "de {n} casos",
+              "repOfWaits1": "de 1 espera",
+              "repOfWaits": "de {n} esperas",
+              "repNoValue": "Sin datos en este periodo",
+              "repBarNone": "sin datos",
+              "repWeekOf": "Semana del {d}",
+              "repMax": "max. {v}",
+              "repVolumeTitle": "Volumen",
+              "repVolumeDef": "Mensajes de las conversaciones donde actua el agente, sin los borrados; casos de esta linea.",
+              "repVolChats": "Conversaciones con actividad",
+              "repVolReceived": "Recibidos",
+              "repVolSent": "Enviados",
+              "repVolCreated": "Casos creados",
+              "repVolResolved": "Casos resueltos",
+              "repChartMessages": "Mensajes",
+              "repChartCases": "Casos",
+              "repChartNone": "Sin actividad en este periodo.",
+              "repSlaTitle": "Meta del primer contacto",
+              "repSlaDef": "Un caso cumple si su primera respuesta salio en {m} min o menos. Cuentan los casos creados en el periodo; uno cerrado sin respuesta queda afuera. La meta se cambia en Ajustes, Su aprobacion.",
+              "repSlaRate": "cumplen la meta",
+              "repSlaMet": "Cumplen",
+              "repSlaMissed": "No cumplen",
+              "repSlaPending": "Pendientes",
+              "repSlaNone": "Ningun caso medible en este periodo.",
+              "repSlaMisses": "Los que no cumplieron",
+              "repSlaMore": "y {n} mas",
+              "repSlaNever": "sin respuesta",
+              "repPts": "pts",
+              "repColCase": "Caso",
+              "repColChat": "Chat",
+              "repColFirst": "Primera respuesta",
+              "repColProject": "Proyecto",
+              "repProjectsTitle": "Por proyecto",
+              "repProjectsDef": "Casos creados en el periodo y lo que reporto el ultimo despacho al agente del proyecto. Jev retuvo: un envio que Jev freno o pidio revisar. Su decision: casos que pasaron por su decision.",
+              "repColCases": "Casos",
+              "repColResuelto": "Resuelto",
+              "repColNecesita": "Necesita",
+              "repColBloqueado": "Bloqueado",
+              "repColJev": "Jev retuvo",
+              "repColDecision": "Su decision",
+              "repNoProject": "Sin proyecto",
+              "repProjectsNone": "Ningun caso en este periodo.",
               "boardShown": "{n} mostrados",
               "boardShown1": "1 mostrado",
               "boardNoMatch": "Ningun caso coincide con la busqueda.",
@@ -815,6 +1042,85 @@
               "boardViewBoard": "Board",
               "boardShowMore": "Show {n} more", "boardShowMoreAria": "Show {n} more cases in {etapa}",
               "periodLabel": "Period", "periodToday": "Today", "period7d": "7 days", "period30d": "30 days", "periodAll": "All",
+              "tabBoard": "Board",
+              "tabReports": "Reports",
+              "viewsLabel": "Views",
+              "repNoDataTitle": "No reports yet",
+              "repNoDataBody": "Your agent works them out on every run, every few minutes. Check back shortly.",
+              "repVersion": "This panel does not understand version {v} of the reports. Update the plugin.",
+              "repUpdated": "Calculated {cuando}",
+              "repVsPrev": "vs. previous period",
+              "repBetter": "better",
+              "repWorse": "worse",
+              "repLiveTitle": "Right now",
+              "repLiveDef": "What there is at this moment: it does not depend on the period.",
+              "repLiveOpen": "Open cases",
+              "repLiveDecision": "Waiting for your decision",
+              "repLiveCustomer": "Waiting for the customer",
+              "repLiveBlocked": "Blocked",
+              "repLiveChats": "Conversations the agent acts on",
+              "repTrafficTitle": "Traffic",
+              "repTrafficDefDate": "By day and local hour. Resolved is the case's first entry into {respondido} or {cerrado}.",
+              "repTrafficDefWeekday": "By weekday and local hour, summed over the period. Resolved is the case's first entry into {respondido} or {cerrado}.",
+              "repHeatReceived": "Messages received",
+              "repHeatResolved": "Cases resolved",
+              "repHeatLess": "Less",
+              "repHeatMore": "More",
+              "repHeatPeak": "Peak hour: {cuando} ({n})",
+              "repHeatNone": "Nothing in this period.",
+              "repHeatCell": "{dia} {hora}: {n}",
+              "repTimesTitle": "Times",
+              "repFirst": "First response",
+              "repFirstDef": "From the case's first customer message to the first outgoing message in that chat after it (acknowledgement, the agent's first message or a reply). Median of the cases created in the period.",
+              "repResolution": "Resolution",
+              "repResolutionDef": "From case creation to its first entry into {respondido} or {cerrado}. Median of the cases resolved in the period.",
+              "repWait": "Customer wait",
+              "repWaitDef": "For each customer message (several in a row count once), the time until the next outgoing message in that chat. Median of the waits that started in the period.",
+              "repWaitOpen1": "1 still unanswered",
+              "repWaitOpen": "{n} still unanswered",
+              "repOfCases1": "from 1 case",
+              "repOfCases": "from {n} cases",
+              "repOfWaits1": "from 1 wait",
+              "repOfWaits": "from {n} waits",
+              "repNoValue": "No data in this period",
+              "repBarNone": "no data",
+              "repWeekOf": "Week of {d}",
+              "repMax": "max {v}",
+              "repVolumeTitle": "Volume",
+              "repVolumeDef": "Messages in the conversations the agent acts on, without deleted ones; cases of this line.",
+              "repVolChats": "Conversations with activity",
+              "repVolReceived": "Received",
+              "repVolSent": "Sent",
+              "repVolCreated": "Cases created",
+              "repVolResolved": "Cases resolved",
+              "repChartMessages": "Messages",
+              "repChartCases": "Cases",
+              "repChartNone": "No activity in this period.",
+              "repSlaTitle": "First contact target",
+              "repSlaDef": "A case meets it when its first response went out within {m} min. Cases created in the period count; one closed without a response is left out. Change the target in Settings, Your approval.",
+              "repSlaRate": "meet the target",
+              "repSlaMet": "Met",
+              "repSlaMissed": "Missed",
+              "repSlaPending": "Pending",
+              "repSlaNone": "No measurable case in this period.",
+              "repSlaMisses": "The ones that missed",
+              "repSlaMore": "and {n} more",
+              "repSlaNever": "no response",
+              "repPts": "pts",
+              "repColCase": "Case",
+              "repColChat": "Chat",
+              "repColFirst": "First response",
+              "repColProject": "Project",
+              "repProjectsTitle": "By project",
+              "repProjectsDef": "Cases created in the period and what the last dispatch to the project's agent reported. Held by Jev: a send Jev stopped or asked to revise. Your decision: cases that went through your decision.",
+              "repColCases": "Cases",
+              "repColResuelto": "Solved",
+              "repColNecesita": "Needs input",
+              "repColBloqueado": "Blocked",
+              "repColJev": "Held by Jev",
+              "repColDecision": "Your decision",
+              "repNoProject": "No project",
+              "repProjectsNone": "No case in this period.",
               "boardShown": "{n} shown",
               "boardShown1": "1 shown",
               "boardNoMatch": "No case matches the search.",
@@ -1046,6 +1352,85 @@
               "boardViewBoard": "Quadro",
               "boardShowMore": "Mostrar mais {n}", "boardShowMoreAria": "Mostrar mais {n} casos em {etapa}",
               "periodLabel": "Periodo", "periodToday": "Hoje", "period7d": "7 dias", "period30d": "30 dias", "periodAll": "Tudo",
+              "tabBoard": "Quadro",
+              "tabReports": "Relatorios",
+              "viewsLabel": "Visoes",
+              "repNoDataTitle": "Ainda nao ha relatorios",
+              "repNoDataBody": "Seu agente os calcula a cada revisao, a cada poucos minutos. Volte daqui a pouco.",
+              "repVersion": "Este painel nao entende a versao {v} dos relatorios. Atualize o plugin.",
+              "repUpdated": "Calculado {cuando}",
+              "repVsPrev": "vs. periodo anterior",
+              "repBetter": "melhor",
+              "repWorse": "pior",
+              "repLiveTitle": "Agora",
+              "repLiveDef": "O que ha neste momento: nao depende do periodo.",
+              "repLiveOpen": "Casos abertos",
+              "repLiveDecision": "Aguardam sua decisao",
+              "repLiveCustomer": "Aguardam o cliente",
+              "repLiveBlocked": "Bloqueados",
+              "repLiveChats": "Conversas em que o agente atua",
+              "repTrafficTitle": "Trafego",
+              "repTrafficDefDate": "Por dia e hora local. Resolvido e a primeira entrada do caso em {respondido} ou {cerrado}.",
+              "repTrafficDefWeekday": "Por dia da semana e hora local, somado no periodo. Resolvido e a primeira entrada do caso em {respondido} ou {cerrado}.",
+              "repHeatReceived": "Mensagens recebidas",
+              "repHeatResolved": "Casos resolvidos",
+              "repHeatLess": "Menos",
+              "repHeatMore": "Mais",
+              "repHeatPeak": "Hora de pico: {cuando} ({n})",
+              "repHeatNone": "Nada neste periodo.",
+              "repHeatCell": "{dia} {hora}: {n}",
+              "repTimesTitle": "Tempos",
+              "repFirst": "Primeira resposta",
+              "repFirstDef": "Da primeira mensagem do cliente no caso ate a primeira saida nesse chat depois dela (confirmacao, primeira mensagem do agente ou resposta). Mediana dos casos criados no periodo.",
+              "repResolution": "Resolucao",
+              "repResolutionDef": "Da criacao do caso ate sua primeira entrada em {respondido} ou {cerrado}. Mediana dos casos resolvidos no periodo.",
+              "repWait": "Espera do cliente",
+              "repWaitDef": "Para cada mensagem do cliente (varias seguidas contam uma vez), o tempo ate a proxima saida nesse chat. Mediana das esperas que comecaram no periodo.",
+              "repWaitOpen1": "1 ainda sem resposta",
+              "repWaitOpen": "{n} ainda sem resposta",
+              "repOfCases1": "de 1 caso",
+              "repOfCases": "de {n} casos",
+              "repOfWaits1": "de 1 espera",
+              "repOfWaits": "de {n} esperas",
+              "repNoValue": "Sem dados neste periodo",
+              "repBarNone": "sem dados",
+              "repWeekOf": "Semana de {d}",
+              "repMax": "max. {v}",
+              "repVolumeTitle": "Volume",
+              "repVolumeDef": "Mensagens das conversas em que o agente atua, sem as apagadas; casos desta linha.",
+              "repVolChats": "Conversas com atividade",
+              "repVolReceived": "Recebidas",
+              "repVolSent": "Enviadas",
+              "repVolCreated": "Casos criados",
+              "repVolResolved": "Casos resolvidos",
+              "repChartMessages": "Mensagens",
+              "repChartCases": "Casos",
+              "repChartNone": "Sem atividade neste periodo.",
+              "repSlaTitle": "Meta do primeiro contato",
+              "repSlaDef": "Um caso cumpre a meta quando a primeira resposta saiu em {m} min ou menos. Contam os casos criados no periodo; um fechado sem resposta fica de fora. A meta se muda em Ajustes, Sua aprovacao.",
+              "repSlaRate": "cumprem a meta",
+              "repSlaMet": "Cumprem",
+              "repSlaMissed": "Nao cumprem",
+              "repSlaPending": "Pendentes",
+              "repSlaNone": "Nenhum caso mensuravel neste periodo.",
+              "repSlaMisses": "Os que nao cumpriram",
+              "repSlaMore": "e mais {n}",
+              "repSlaNever": "sem resposta",
+              "repPts": "pts",
+              "repColCase": "Caso",
+              "repColChat": "Chat",
+              "repColFirst": "Primeira resposta",
+              "repColProject": "Projeto",
+              "repProjectsTitle": "Por projeto",
+              "repProjectsDef": "Casos criados no periodo e o que o ultimo despacho ao agente do projeto reportou. Jev reteve: um envio que Jev segurou ou pediu para revisar. Sua decisao: casos que passaram pela sua decisao.",
+              "repColCases": "Casos",
+              "repColResuelto": "Resolvido",
+              "repColNecesita": "Precisa",
+              "repColBloqueado": "Bloqueado",
+              "repColJev": "Jev reteve",
+              "repColDecision": "Sua decisao",
+              "repNoProject": "Sem projeto",
+              "repProjectsNone": "Nenhum caso neste periodo.",
               "boardShown": "{n} exibidos",
               "boardShown1": "1 exibido",
               "boardNoMatch": "Nenhum caso corresponde a busca.",
@@ -1801,6 +2186,7 @@
         // Se guarda y se sigue: si el host no lo guarda, este panel igual lo usa ahora.
         call('storage.set', { key: 'boardPeriod', value: p })
         repintar()
+        renderInformes(true)
       }
 
       /** Sin tildes ni mayusculas: "renovacion" encuentra "Renovación". */
@@ -3054,6 +3440,489 @@
         repintar()
       })
 
+      // ───────────────────────── Los informes (I5) ─────────────────────────
+      // `wa-scope sync` escribe la clave `reports` (odd/tasks/informes-tablero.md, "Storage
+      // key reports") y este panel la LEE: el panel no puede abrir las bases. Todo lo que
+      // trae de clientes (titulos, chats, proyectos) se pinta con textContent.
+      //
+      // Las definiciones van escritas en cada bloque, en el idioma del dueno: un numero que
+      // no dice que mide no se puede usar.
+      var pestana = 'board'
+      var PESTANAS = ['board', 'reports']
+      var informesActual = null
+      var informesLeidos = false
+      var firmaInformes = null
+      var LOCALE = (function () {
+        var tag = String(navigator.language || LANG)
+        try { new Intl.NumberFormat(tag); return tag } catch (e) { return LANG }
+      })()
+      var FMT_NUM = new Intl.NumberFormat(LOCALE)
+      var FMT_PCT = new Intl.NumberFormat(LOCALE, { style: 'percent', maximumFractionDigits: 1 })
+      var FMT_UNO = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 1 })
+
+      function num (n) { return FMT_NUM.format(n) }
+      function esNumero (x) { return typeof x === 'number' && isFinite(x) }
+
+      /** Una duracion en segundos, en la unidad que se lee: "45 s", "13 min", "3 h 50 min",
+       *  "2 d 4 h". Sin valor, null: el que llama dice que no hay datos. */
+      function duracion (s) {
+        if (!esNumero(s) || s < 0) return null
+        if (s < 60) return num(Math.round(s)) + ' s'
+        var min = Math.round(s / 60)
+        if (min < 60) return num(min) + ' min'
+        if (min < 1440) {
+          var h = Math.floor(min / 60), m = min % 60
+          return num(h) + ' h' + (m ? ' ' + num(m) + ' min' : '')
+        }
+        var horas = Math.round(s / 3600)
+        var d = Math.floor(horas / 24), hr = horas % 24
+        return num(d) + ' d' + (hr ? ' ' + num(hr) + ' h' : '')
+      }
+
+      /** Una fecha local 'YYYY-MM-DD' como Date, sin pasar por UTC. */
+      function fechaLocal (k) {
+        var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(k || ''))
+        return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null
+      }
+      function fechaCorta (f) {
+        return f.toLocaleDateString(LOCALE, { day: 'numeric', month: 'short' })
+      }
+      /** El nombre de una cubeta de las barras: la hora, la fecha o la semana. */
+      function nombreCubeta (k, cubeta) {
+        if (cubeta === 'hour') {
+          var m = / (\d{2})$/.exec(String(k || ''))
+          return m ? m[1] + ':00' : String(k)
+        }
+        var f = fechaLocal(k)
+        if (!f) return String(k)
+        return cubeta === 'week' ? fmt('repWeekOf', { d: fechaCorta(f) }) : fechaCorta(f)
+      }
+      /** El nombre de una fila del mapa: la fecha con su dia, o el dia de la semana (1 = lunes). */
+      function nombreFila (k, filas) {
+        if (filas === 'weekday') {
+          var n = Number(k)
+          if (!(n >= 1 && n <= 7)) return String(k)
+          // 2024-01-01 fue lunes.
+          return new Date(2024, 0, n).toLocaleDateString(LOCALE, { weekday: 'short' })
+        }
+        var f = fechaLocal(k)
+        return f ? f.toLocaleDateString(LOCALE, { weekday: 'short', day: 'numeric' }) : String(k)
+      }
+
+      /** La comparacion con el periodo anterior: flecha, porcentaje (o puntos) y "vs.
+       *  periodo anterior". Sin base (null) no hay nodo: nunca se inventa un cambio.
+       *  `sentido`: 'menos' si bajar es mejor, 'mas' si subir es mejor, null si ninguno. */
+      function deltaNodo (valor, sentido, enPuntos) {
+        if (!esNumero(valor)) return null
+        var flecha = valor > 0 ? '▲' : valor < 0 ? '▼' : '='
+        var cifra = enPuntos ? FMT_UNO.format(Math.abs(valor)) + ' ' + t('repPts')
+          : FMT_PCT.format(Math.abs(valor) / 100)
+        var nodo = crear('span', 'rep-delta', flecha + ' ' + cifra + ' ' + t('repVsPrev'))
+        if (valor !== 0 && sentido) {
+          var mejor = sentido === 'menos' ? valor < 0 : valor > 0
+          nodo.classList.add(mejor ? 'mejor' : 'peor')
+          nodo.title = t(mejor ? 'repBetter' : 'repWorse')
+        }
+        return nodo
+      }
+
+      function seccionInforme (cual, titulo, definicion) {
+        var s = crear('section', 'rep-sec')
+        s.dataset.bloque = cual
+        s.appendChild(crear('h2', null, titulo))
+        if (definicion) s.appendChild(crear('p', 'rep-def', definicion))
+        return s
+      }
+
+      function azulejoNodo (metrica, etiqueta, valor, delta) {
+        var a = crear('div', 'rep-azulejo')
+        a.dataset.metrica = metrica
+        a.appendChild(crear('span', 'rep-label', etiqueta))
+        a.appendChild(crear('span', 'rep-num', esNumero(valor) ? num(valor) : '—'))
+        if (delta) a.appendChild(delta)
+        return a
+      }
+
+      /** Barras en CSS, una o dos series. `valorDe(barra, serie)` da el numero o null; `texto`
+       *  dice como se lee un valor (una duracion, un numero). Cada cubeta lleva su titulo con
+       *  todo lo que muestra, y el grafico entero un nombre para quien no lo ve. */
+      function barrasNodo (barras, series, cubeta, texto, nombre) {
+        var max = 0
+        barras.forEach(function (b) {
+          series.forEach(function (sr) {
+            var v = b[sr.clave]
+            if (esNumero(v) && v > max) max = v
+          })
+        })
+        var caja = crear('div', 'rep-barras')
+        caja.setAttribute('role', 'img')
+        caja.setAttribute('aria-label', nombre + ': ' + (barras.length ? nombreCubeta(barras[0].k, cubeta) + ' – ' +
+          nombreCubeta(barras[barras.length - 1].k, cubeta) : '') + ', ' + fmt('repMax', { v: texto(max) }))
+        if (series.length > 1) {
+          var ley = crear('div', 'rep-leyenda')
+          series.forEach(function (sr, i) {
+            var item = crear('span')
+            item.appendChild(crear('i', i ? 's2' : null))
+            item.appendChild(document.createTextNode(sr.nombre))
+            ley.appendChild(item)
+          })
+          caja.appendChild(ley)
+        }
+        var plot = crear('div', 'rep-plot')
+        plot.setAttribute('aria-hidden', 'true')
+        barras.forEach(function (b) {
+          var g = crear('div', 'rep-grupo')
+          var partes = []
+          series.forEach(function (sr, i) {
+            var v = b[sr.clave]
+            partes.push((series.length > 1 ? sr.nombre + ' ' : '') + (esNumero(v) ? texto(v) : t('repBarNone')))
+            if (!esNumero(v) || !max) return
+            var barra = crear('span', 'b' + (i ? ' s2' : ''))
+            // Un valor chico se ve igual: 2 px de minimo para lo que no es cero.
+            barra.style.height = v > 0 ? 'max(2px, ' + (v * 100 / max).toFixed(2) + '%)' : '0'
+            g.appendChild(barra)
+          })
+          g.title = nombreCubeta(b.k, cubeta) + ': ' + partes.join(' · ')
+          plot.appendChild(g)
+        })
+        if (max) plot.appendChild(crear('span', 'rep-max', texto(max)))
+        caja.appendChild(plot)
+        var eje = crear('div', 'rep-eje')
+        eje.setAttribute('aria-hidden', 'true')
+        var marcas = barras.length > 2 ? [0, Math.floor((barras.length - 1) / 2), barras.length - 1]
+          : barras.map(function (_, i) { return i })
+        marcas.forEach(function (i) { eje.appendChild(crear('span', null, nombreCubeta(barras[i].k, cubeta))) })
+        caja.appendChild(eje)
+        return caja
+      }
+
+      /** El mapa de calor: una fila por fecha o dia de la semana, 24 horas, cinco tonos de
+       *  UNA rampa (0 = nada, 4 = el maximo). Cada celda dice dia, hora y cuantos; abajo la
+       *  escala y la hora pico, en palabras. */
+      function mapaNodo (titulo, filas, tipoFilas) {
+        var caja = crear('div', 'rep-mapa-caja')
+        caja.appendChild(crear('h3', null, titulo))
+        var validas = (Array.isArray(filas) ? filas : []).filter(function (f) {
+          return esObjeto(f) && Array.isArray(f.h) && f.h.length === 24
+        })
+        var max = 0, pico = null
+        validas.forEach(function (f) {
+          f.h.forEach(function (v, h) {
+            if (esNumero(v) && v > max) { max = v; pico = { f: f, h: h } }
+          })
+        })
+        if (!max) {
+          caja.appendChild(crear('p', 'rep-nada', t('repHeatNone')))
+          return caja
+        }
+        var hh = function (h) { return ('0' + h).slice(-2) + ':00' }
+        var mapa = crear('div', 'rep-mapa')
+        mapa.setAttribute('role', 'img')
+        var picoTxt = fmt('repHeatPeak', { cuando: nombreFila(pico.f.k, tipoFilas) + ' ' + hh(pico.h), n: num(max) })
+        mapa.setAttribute('aria-label', titulo + '. ' + picoTxt)
+        validas.forEach(function (f) {
+          var fila = crear('div', 'rep-fila')
+          var nombre = nombreFila(f.k, tipoFilas)
+          fila.appendChild(crear('span', 'rep-fila-k', nombre))
+          f.h.forEach(function (v, h) {
+            var n = esNumero(v) && v > 0 ? Math.max(1, Math.ceil(v * 4 / max)) : 0
+            var c = crear('span', 'rep-celda n' + n)
+            c.title = fmt('repHeatCell', { dia: nombre, hora: hh(h), n: num(esNumero(v) ? v : 0) })
+            fila.appendChild(c)
+          })
+          mapa.appendChild(fila)
+        })
+        var horas = crear('div', 'rep-horas')
+        horas.setAttribute('aria-hidden', 'true')
+        horas.appendChild(crear('span', 'rep-fila-k'))
+        ;[0, 6, 12, 18].forEach(function (h) { horas.appendChild(crear('span', null, hh(h))) })
+        mapa.appendChild(horas)
+        caja.appendChild(mapa)
+        var escala = crear('div', 'rep-escala')
+        escala.setAttribute('aria-hidden', 'true')
+        escala.appendChild(crear('span', null, t('repHeatLess')))
+        ;[0, 1, 2, 3, 4].forEach(function (n) { escala.appendChild(crear('span', 'rep-celda n' + n)) })
+        escala.appendChild(crear('span', null, t('repHeatMore')))
+        caja.appendChild(escala)
+        caja.appendChild(crear('p', 'rep-pico', picoTxt))
+        return caja
+      }
+
+      function bloqueAhora (vivo) {
+        var s = seccionInforme('ahora', t('repLiveTitle'), t('repLiveDef'))
+        var g = crear('div', 'rep-azulejos')
+        var v = esObjeto(vivo) ? vivo : {}
+        ;[['open', 'repLiveOpen'], ['decision', 'repLiveDecision'], ['waiting_customer', 'repLiveCustomer'],
+          ['blocked', 'repLiveBlocked'], ['conversations', 'repLiveChats']].forEach(function (x) {
+          g.appendChild(azulejoNodo(x[0], t(x[1]), v[x[0]], null))
+        })
+        s.appendChild(g)
+        return s
+      }
+
+      function etapasDef (clave) {
+        return fmt(clave, { respondido: t('stageRespondido'), cerrado: t('stageCerrado') })
+      }
+
+      function bloqueTrafico (p) {
+        var s = seccionInforme('trafico', t('repTrafficTitle'),
+          etapasDef(p.rows === 'weekday' ? 'repTrafficDefWeekday' : 'repTrafficDefDate'))
+        var tr = esObjeto(p.traffic) ? p.traffic : {}
+        var g = crear('div', 'rep-mapas')
+        g.appendChild(mapaNodo(t('repHeatReceived'), tr.received, p.rows))
+        g.appendChild(mapaNodo(t('repHeatResolved'), tr.resolved, p.rows))
+        s.appendChild(g)
+        return s
+      }
+
+      function tiempoNodo (cual, titulo, def, x, cubeta, extra, deCuantos) {
+        var c = crear('div', 'rep-tiempo')
+        c.dataset.tiempo = cual
+        c.appendChild(crear('h3', null, titulo))
+        var m = esObjeto(x) ? x : {}
+        var valor = duracion(m.value)
+        c.appendChild(crear('span', 'rep-num' + (valor ? '' : ' sin'), valor || t('repNoValue')))
+        if (valor && esNumero(m.n)) {
+          c.appendChild(crear('span', 'rep-n', m.n === 1 ? t(deCuantos + '1') : fmt(deCuantos, num(m.n))))
+        }
+        var d = deltaNodo(m.delta_pct, 'menos', false)
+        if (d) c.appendChild(d)
+        if (extra) c.appendChild(extra)
+        var barras = Array.isArray(m.bars) ? m.bars.filter(esObjeto) : []
+        if (barras.some(function (b) { return esNumero(b.value) })) {
+          c.appendChild(barrasNodo(barras, [{ clave: 'value', nombre: titulo }], cubeta,
+            function (v) { return duracion(v) || '0 s' }, titulo))
+        }
+        c.appendChild(crear('p', 'rep-def', def))
+        return c
+      }
+
+      function bloqueTiempos (p) {
+        var s = seccionInforme('tiempos', t('repTimesTitle'), null)
+        var g = crear('div', 'rep-tiempos')
+        g.appendChild(tiempoNodo('first_response', t('repFirst'), t('repFirstDef'), p.first_response,
+          p.bucket, null, 'repOfCases'))
+        g.appendChild(tiempoNodo('resolution', t('repResolution'), etapasDef('repResolutionDef'), p.resolution,
+          p.bucket, null, 'repOfCases'))
+        var espera = esObjeto(p.customer_wait) ? p.customer_wait : {}
+        var sinResp = Number.isInteger(espera.unanswered) && espera.unanswered > 0
+          ? crear('span', 'rep-extra', espera.unanswered === 1 ? t('repWaitOpen1') : fmt('repWaitOpen', num(espera.unanswered)))
+          : null
+        g.appendChild(tiempoNodo('customer_wait', t('repWait'), t('repWaitDef'), espera, p.bucket, sinResp, 'repOfWaits'))
+        s.appendChild(g)
+        return s
+      }
+
+      function bloqueVolumen (p) {
+        var s = seccionInforme('volumen', t('repVolumeTitle'), t('repVolumeDef'))
+        var v = esObjeto(p.volume) ? p.volume : {}
+        var tot = esObjeto(v.totals) ? v.totals : {}
+        var dl = esObjeto(v.delta_pct) ? v.delta_pct : {}
+        var g = crear('div', 'rep-azulejos')
+        ;[['chats', 'repVolChats'], ['received', 'repVolReceived'], ['sent', 'repVolSent'],
+          ['created', 'repVolCreated'], ['resolved', 'repVolResolved']].forEach(function (x) {
+          g.appendChild(azulejoNodo(x[0], t(x[1]), tot[x[0]], deltaNodo(dl[x[0]], null, false)))
+        })
+        s.appendChild(g)
+        var barras = Array.isArray(v.bars) ? v.bars.filter(esObjeto) : []
+        var hay = function (claves) {
+          return barras.some(function (b) { return claves.some(function (k) { return esNumero(b[k]) && b[k] > 0 }) })
+        }
+        if (!hay(['received', 'sent', 'created', 'resolved'])) {
+          s.appendChild(crear('p', 'rep-nada', t('repChartNone')))
+          return s
+        }
+        var graficos = crear('div', 'rep-graficos')
+        ;[['repChartMessages', ['received', 'repVolReceived'], ['sent', 'repVolSent']],
+          ['repChartCases', ['created', 'repVolCreated'], ['resolved', 'repVolResolved']]].forEach(function (x) {
+          var caja = crear('div')
+          caja.appendChild(crear('h3', null, t(x[0])))
+          caja.appendChild(barrasNodo(barras, [{ clave: x[1][0], nombre: t(x[1][1]) },
+            { clave: x[2][0], nombre: t(x[2][1]) }], p.bucket, num, t(x[0])))
+          graficos.appendChild(caja)
+        })
+        s.appendChild(graficos)
+        return s
+      }
+
+      function tablaNodo (columnas, filas) {
+        var caja = crear('div', 'rep-tabla-caja')
+        var tabla = crear('table', 'rep-tabla')
+        var cab = crear('thead')
+        var tr = crear('tr')
+        columnas.forEach(function (c) {
+          var th = crear('th', c.num ? 'num' : null, c.titulo)
+          th.scope = 'col'
+          tr.appendChild(th)
+        })
+        cab.appendChild(tr)
+        tabla.appendChild(cab)
+        var cuerpo = crear('tbody')
+        filas.forEach(function (celdas) {
+          var fila = crear('tr')
+          celdas.forEach(function (contenido, i) {
+            var td = crear('td', columnas[i].num ? 'num' : null)
+            if (contenido && contenido.nodeType) td.appendChild(contenido)
+            else td.textContent = contenido == null ? '' : String(contenido)
+            fila.appendChild(td)
+          })
+          cuerpo.appendChild(fila)
+        })
+        tabla.appendChild(cuerpo)
+        caja.appendChild(tabla)
+        return caja
+      }
+
+      function bloqueSla (p, metaMin) {
+        var s = seccionInforme('sla', t('repSlaTitle'),
+          fmt('repSlaDef', { m: esNumero(metaMin) ? num(metaMin) : '—' }))
+        var sla = esObjeto(p.sla) ? p.sla : {}
+        var met = Number(sla.met) || 0, missed = Number(sla.missed) || 0, pending = Number(sla.pending) || 0
+        if (!(met + missed + pending)) {
+          s.appendChild(crear('p', 'rep-nada', t('repSlaNone')))
+          return s
+        }
+        var cab = crear('div', 'rep-sla-cab')
+        var tasa = crear('div')
+        tasa.appendChild(crear('span', 'rep-num' + (esNumero(sla.rate) ? '' : ' sin'),
+          esNumero(sla.rate) ? FMT_PCT.format(sla.rate / 100) : '—'))
+        tasa.appendChild(crear('span', 'rep-n', t('repSlaRate')))
+        var d = deltaNodo(sla.delta_pts, 'mas', true)
+        if (d) tasa.appendChild(d)
+        cab.appendChild(tasa)
+        var cuentas = crear('div', 'rep-sla-cuentas')
+        ;[['met', 'repSlaMet', met], ['missed', 'repSlaMissed', missed], ['pending', 'repSlaPending', pending]].forEach(function (x) {
+          var item = crear('span', x[0])
+          item.dataset.sla = x[0]
+          item.appendChild(crear('i'))
+          item.appendChild(document.createTextNode(t(x[1]) + ': ' + num(x[2])))
+          cuentas.appendChild(item)
+        })
+        cab.appendChild(cuentas)
+        s.appendChild(cab)
+        var barra = crear('div', 'rep-sla-barra')
+        barra.setAttribute('aria-hidden', 'true')
+        ;[['met', met], ['missed', missed], ['pending', pending]].forEach(function (x) {
+          if (!x[1]) return
+          var seg = crear('span', x[0])
+          seg.style.flex = x[1] + ' 1 0'
+          barra.appendChild(seg)
+        })
+        s.appendChild(barra)
+        var fallas = Array.isArray(sla.misses) ? sla.misses.filter(esObjeto) : []
+        if (fallas.length) {
+          s.appendChild(crear('h3', null, t('repSlaMisses')))
+          s.appendChild(tablaNodo([{ titulo: t('repColCase') }, { titulo: t('repColChat') },
+            { titulo: t('repColFirst'), num: true }, { titulo: t('repColProject') }],
+          fallas.map(function (f) {
+            var caso = crear('span')
+            caso.appendChild(crear('span', 'rep-caso-id', '#' + f.case_id))
+            caso.appendChild(crear('span', 'rep-caso-t', typeof f.title === 'string' && f.title ? f.title : t('boardUntitled')))
+            return [caso, f.chat, duracion(f.first_response_s) || t('repSlaNever'), f.project || '—']
+          })))
+          if (Number(sla.misses_more) > 0) s.appendChild(crear('p', 'rep-mas', fmt('repSlaMore', num(sla.misses_more))))
+        }
+        return s
+      }
+
+      function bloqueProyectos (p) {
+        var s = seccionInforme('proyectos', t('repProjectsTitle'), t('repProjectsDef'))
+        var filas = Array.isArray(p.projects) ? p.projects.filter(esObjeto) : []
+        if (!filas.length) {
+          s.appendChild(crear('p', 'rep-nada', t('repProjectsNone')))
+          return s
+        }
+        var n = function (x) { return esNumero(x) ? num(x) : '0' }
+        s.appendChild(tablaNodo([{ titulo: t('repColProject') }, { titulo: t('repColCases'), num: true },
+          { titulo: t('repColResuelto'), num: true }, { titulo: t('repColNecesita'), num: true },
+          { titulo: t('repColBloqueado'), num: true }, { titulo: t('repColJev'), num: true },
+          { titulo: t('repColDecision'), num: true }],
+        filas.map(function (f) {
+          return [f.name || f.id || t('repNoProject'), n(f.cases), n(f.resuelto), n(f.necesita),
+            n(f.bloqueado), n(f.jev_held), n(f.owner_decision)]
+        })))
+        return s
+      }
+
+      function mostrarVacioInformes (titulo, cuerpo, error) {
+        var caja = el('reports-empty')
+        caja.hidden = false
+        caja.className = 'board-empty' + (error ? ' error' : '')
+        caja.querySelector('.t').textContent = titulo
+        caja.querySelector('.b').textContent = cuerpo
+      }
+
+      /** Pinta los informes si algo de lo que se ve cambio. Como el tablero: si nada cambio
+       *  el DOM se queda, para que un clic no caiga en un nodo que ya no esta. */
+      function renderInformes (forzar) {
+        var r = informesActual
+        var sello = el('reports-synced')
+        sello.textContent = ''
+        if (esObjeto(r) && r.updated_at) {
+          var edad = haceAhora(r.updated_at)
+          if (edad) {
+            var texto = fmt('repUpdated', { cuando: edad })
+            if (viejoAhora(r.updated_at)) sello.appendChild(crear('span', 'vieja', texto))
+            else sello.textContent = texto
+          }
+        }
+        var firma
+        try { firma = JSON.stringify([r, informesLeidos, periodo, desdePeriodo(periodo)]) } catch (e) { firma = null }
+        if (!forzar && firma !== null && firma === firmaInformes) return
+        firmaInformes = firma
+        var cuerpo = el('reports-body')
+        cuerpo.textContent = ''
+        el('reports-empty').hidden = true
+        if (!esObjeto(r)) {
+          if (informesLeidos) mostrarVacioInformes(t('repNoDataTitle'), t('repNoDataBody'), false)
+          return
+        }
+        if (r.v !== 1) {
+          mostrarVacioInformes(t('repNoDataTitle'), fmt('repVersion', { v: r.v == null ? '?' : r.v }), true)
+          return
+        }
+        var p = esObjeto(r.periods) && esObjeto(r.periods[periodo]) ? r.periods[periodo] : null
+        cuerpo.appendChild(bloqueAhora(r.live))
+        if (!p) {
+          mostrarVacioInformes(t('repNoDataTitle'), t('repNoDataBody'), false)
+          return
+        }
+        cuerpo.appendChild(bloqueTrafico(p))
+        cuerpo.appendChild(bloqueTiempos(p))
+        cuerpo.appendChild(bloqueVolumen(p))
+        cuerpo.appendChild(bloqueSla(p, r.sla_minutes))
+        cuerpo.appendChild(bloqueProyectos(p))
+      }
+
+      function mostrarPestana (cual) {
+        if (PESTANAS.indexOf(cual) < 0) return
+        pestana = cual
+        PESTANAS.forEach(function (p) {
+          var activa = p === cual
+          el('view-' + p).hidden = !activa
+          el('tab-' + p).setAttribute('aria-selected', activa ? 'true' : 'false')
+          el('tab-' + p).tabIndex = activa ? 0 : -1
+        })
+        if (cual === 'reports') {
+          renderInformes(true)
+          reload()
+        } else {
+          repintar()
+        }
+      }
+      PESTANAS.forEach(function (p, i) {
+        el('tab-' + p).addEventListener('click', function () { mostrarPestana(p) })
+        el('tab-' + p).addEventListener('keydown', function (e) {
+          var j = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1
+            : e.key === 'Home' ? 0 : e.key === 'End' ? PESTANAS.length - 1 : null
+          if (j === null) return
+          e.preventDefault()
+          var otra = PESTANAS[(j + PESTANAS.length) % PESTANAS.length]
+          mostrarPestana(otra)
+          el('tab-' + otra).focus()
+        })
+      })
+
       function reload() {
         return Promise.all([
           call('storage.get', { key: 'activity' }),
@@ -3063,7 +3932,9 @@
           call('storage.get', { key: 'chatsAccount' }),
           call('storage.get', { key: 'board' }),
           // El periodo guardado, solo hasta tenerlo: despues manda lo que se elige aca.
-          periodoLeido ? Promise.resolve(null) : call('storage.get', { key: 'boardPeriod' })
+          periodoLeido ? Promise.resolve(null) : call('storage.get', { key: 'boardPeriod' }),
+          // Los informes solo con su pestana a la vista: es la clave mas grande.
+          pestana === 'reports' ? call('storage.get', { key: 'reports' }) : Promise.resolve(null)
         ]).then(function (results) {
           var sc = stored(results[2])
           if (sc && typeof sc.cuenta === 'string' && sc.cuenta) cuentaVinculada = sc.cuenta
@@ -3095,6 +3966,12 @@
             renderRun(a, esObjeto(tablero) ? tablero : null)
             renderBoard(tablero)
             ajustarAlto()
+            // Un rechazo del host no borra lo que ya se ve.
+            if (results[7] && results[7].ok) {
+              informesActual = stored(results[7])
+              informesLeidos = true
+            }
+            if (pestana === 'reports') renderInformes()
           })
         })
       }

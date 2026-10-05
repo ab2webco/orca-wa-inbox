@@ -1406,7 +1406,9 @@ console.log('\nactivity.html')
   // La bandeja se fue (el dueno la pidio fuera): lo que pedia decision esta en la columna
   // "Su decision", lo que hizo el agente en la historia de cada caso, y la cola son los
   // casos en Recibido y Clasificado, con "Atender ahora" e "Ignorar".
-  ok('no hay pestanas: el panel es el tablero', !doc.querySelector('[role="tablist"]') &&
+  // Las pestanas que hay son Tablero e Informes (informes-tablero, I5); la bandeja no vuelve.
+  ok('la bandeja no vuelve: las unicas pestanas son Tablero e Informes',
+    [...doc.querySelectorAll('[role="tablist"] [role="tab"]')].map((b) => b.id).join() === 'tab-board,tab-reports' &&
     !doc.getElementById('tab-inbox') && !doc.getElementById('view-inbox'))
   ok('ni las tres secciones de la bandeja', !doc.getElementById('alerts') &&
     !doc.getElementById('recent') && !doc.getElementById('pending'))
@@ -6176,6 +6178,209 @@ for (const [idioma, nombre, re] of [['es-419', 'ES', /Meta/], ['en', 'EN', /targ
     (doc.getElementById('sla-help')?.textContent || '').trim().length > 20 &&
     (doc.getElementById('sla-legend')?.textContent || '').trim().length > 3,
     doc.querySelector('label[for="sla-minutes"]')?.textContent)
+}
+
+// ── La pestana Informes (informes-tablero, I5) ──
+// Lee la clave `reports` que escribe `wa-scope sync` y pinta seis bloques con el periodo del
+// tablero: Ahora, Trafico, Tiempos, Volumen, la meta del primer contacto y Por proyecto.
+// Compara con el periodo anterior SOLO si la clave trae la comparacion (null = sin base).
+const { informeDeEjemplo, informeVacio } = await import('./informes-ejemplo.mjs')
+const abrirInformes = async (storage, idioma = 'es-419') => {
+  const m = await abrirTablero(storage, idioma)
+  m.doc.getElementById('tab-reports').click()
+  await espera(); await espera()
+  return m
+}
+const txt = (doc, sel) => (doc.querySelector(sel)?.textContent || '').replace(/\s+/g, ' ').trim()
+const bloque = (doc, cual) => doc.querySelector(`#reports-body [data-bloque="${cual}"]`)
+const tiempo = (doc, cual) => doc.querySelector(`#reports-body [data-tiempo="${cual}"]`)
+const azulejo = (doc, cual) => txt(doc, `#reports-body [data-metrica="${cual}"] .rep-num`)
+/** Un numero como lo escribe el idioma del panel (es-419 agrupa con coma; pt-BR con punto). */
+const comoEn = (tag, n, opc) => new Intl.NumberFormat(tag, opc).format(n).replace(/\s+/g, ' ')
+
+console.log('\nactivity.html — I5: Tablero e Informes son dos pestanas')
+{
+  const { doc, enviados } = await abrirTablero({ board: tablero([tarjeta()]), reports: informeDeEjemplo() })
+  const tabs = [...doc.querySelectorAll('[role="tablist"] [role="tab"]')]
+  ok('dos pestanas: Tablero e Informes', tabs.map((b) => b.id).join() === 'tab-board,tab-reports' &&
+    tabs.every((b) => b.textContent.trim()), tabs.map((b) => b.textContent).join())
+  ok('se abre en el Tablero', tabs[0].getAttribute('aria-selected') === 'true' &&
+    !doc.getElementById('view-board').hidden && doc.getElementById('view-reports').hidden)
+  ok('con el Tablero a la vista no se lee `reports`',
+    !enviados.some((d) => d.action === 'storage.get' && d.params.key === 'reports'))
+  tabs[1].click()
+  await espera(); await espera()
+  ok('Informes muestra su vista y esconde el tablero', tabs[1].getAttribute('aria-selected') === 'true' &&
+    doc.getElementById('view-board').hidden && !doc.getElementById('view-reports').hidden)
+  ok('y ahi si se lee `reports`', enviados.some((d) => d.action === 'storage.get' && d.params.key === 'reports'))
+  ok('el periodo sigue a la vista, compartido', !doc.getElementById('period').closest('[hidden]'))
+  tabs[1].dispatchEvent(new doc.defaultView.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))
+  await espera()
+  ok('las flechas cambian de pestana', tabs[0].getAttribute('aria-selected') === 'true' &&
+    !doc.getElementById('view-board').hidden)
+}
+
+console.log('\nactivity.html — I5: los seis bloques, con 7 dias')
+{
+  const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeDeEjemplo() })
+  ok('los seis bloques, cada uno con su definicion',
+    ['ahora', 'trafico', 'tiempos', 'volumen', 'sla', 'proyectos'].every((b) =>
+      bloque(doc, b) && txt(doc, `#reports-body [data-bloque="${b}"] .rep-def`).length > 20),
+    [...doc.querySelectorAll('#reports-body [data-bloque]')].map((n) => n.dataset.bloque).join())
+  ok('Ahora: abiertos, su decision, el cliente, bloqueados y conversaciones',
+    ['open', 'decision', 'waiting_customer', 'blocked', 'conversations'].map((k) => azulejo(doc, k)).join() ===
+    '7,3,2,1,14', ['open', 'decision', 'waiting_customer', 'blocked', 'conversations'].map((k) => azulejo(doc, k)).join())
+  ok('primera respuesta: la mediana en minutos y sobre cuantos casos',
+    txt(doc, '[data-tiempo="first_response"] .rep-num') === '13 min' &&
+    /18 casos/.test(txt(doc, '[data-tiempo="first_response"] .rep-n')),
+    txt(doc, '[data-tiempo="first_response"]'))
+  const dPrimera = tiempo(doc, 'first_response').querySelector('.rep-delta')
+  ok('bajo un 16 %: flecha abajo, y es mejor', /▼/.test(dPrimera?.textContent || '') &&
+    /16\s?%/.test(dPrimera?.textContent || '') && dPrimera.classList.contains('mejor') &&
+    /anterior/.test(dPrimera.textContent), dPrimera?.outerHTML)
+  ok('resolucion en horas y minutos, subio y es peor',
+    txt(doc, '[data-tiempo="resolution"] .rep-num') === '3 h 50 min' &&
+    tiempo(doc, 'resolution').querySelector('.rep-delta.peor') &&
+    /▲/.test(txt(doc, '[data-tiempo="resolution"] .rep-delta')), txt(doc, '[data-tiempo="resolution"]'))
+  ok('espera del cliente: sin base no hay comparacion, y dice cuantas siguen sin respuesta',
+    txt(doc, '[data-tiempo="customer_wait"] .rep-num') === '7 min' &&
+    !tiempo(doc, 'customer_wait').querySelector('.rep-delta') &&
+    /3 todavia sin respuesta/.test(txt(doc, '[data-tiempo="customer_wait"]')), txt(doc, '[data-tiempo="customer_wait"]'))
+  ok('cada tiempo trae sus barras, una por dia, y la que no tiene datos no se dibuja',
+    tiempo(doc, 'first_response').querySelectorAll('.rep-grupo').length === 7 &&
+    tiempo(doc, 'first_response').querySelectorAll('.rep-grupo .b').length === 6 &&
+    /min/.test(tiempo(doc, 'first_response').querySelector('.rep-grupo').getAttribute('title') || ''),
+  String(tiempo(doc, 'first_response').querySelectorAll('.rep-grupo').length))
+  ok('las barras tienen nombre para quien no las ve',
+    !!tiempo(doc, 'first_response').querySelector('.rep-barras[role="img"][aria-label]'))
+  ok('volumen: los cinco totales con el numero en espanol',
+    azulejo(doc, 'chats') === '12' && azulejo(doc, 'received') === comoEn('es-419', 12345) &&
+    azulejo(doc, 'sent') === comoEn('es-419', 9876) &&
+    azulejo(doc, 'created') === '18' && azulejo(doc, 'resolved') === '15', azulejo(doc, 'received'))
+  const dv = (k) => doc.querySelector(`#reports-body [data-metrica="${k}"] .rep-delta`)
+  ok('volumen: subio, bajo, sin base y sin cambio',
+    /▲/.test(dv('received')?.textContent || '') && /12\s?%/.test(dv('received')?.textContent || '') &&
+    /▼/.test(dv('sent')?.textContent || '') && !dv('created') && /0\s?%/.test(dv('resolved')?.textContent || '') &&
+    !/[▲▼]/.test(dv('resolved')?.textContent || ''), `${dv('received')?.textContent} | ${dv('resolved')?.textContent}`)
+  ok('volumen: mensajes y casos, cada grafico con su leyenda de dos series',
+    bloque(doc, 'volumen').querySelectorAll('.rep-barras').length === 2 &&
+    bloque(doc, 'volumen').querySelectorAll('.rep-leyenda').length === 2 &&
+    /Recibidos/.test(txt(doc, '[data-bloque="volumen"] .rep-leyenda')))
+  ok('trafico: dos mapas, siete filas por fecha y 24 horas',
+    bloque(doc, 'trafico').querySelectorAll('.rep-mapa').length === 2 &&
+    bloque(doc, 'trafico').querySelector('.rep-mapa').querySelectorAll('.rep-fila').length === 7 &&
+    bloque(doc, 'trafico').querySelector('.rep-fila').querySelectorAll('.rep-celda').length === 24)
+  const celda = bloque(doc, 'trafico').querySelector('.rep-celda.n4')
+  ok('cada celda dice dia, hora y cuantos; el mapa dice la hora pico y su escala',
+    /\d{2}:00/.test(celda?.getAttribute('title') || '') && /Hora pico/.test(txt(doc, '[data-bloque="trafico"]')) &&
+    /Menos/.test(txt(doc, '[data-bloque="trafico"] .rep-escala')), celda?.getAttribute('title'))
+  ok('la meta: tasa, puntos contra el anterior y la meta en vigor',
+    txt(doc, '[data-bloque="sla"] .rep-num') === comoEn('es-419', 0.824, { style: 'percent', maximumFractionDigits: 1 }) &&
+    txt(doc, '[data-bloque="sla"] .rep-delta').startsWith('▲ ' + comoEn('es-419', 7.4) + ' pts') &&
+    /15 min/.test(txt(doc, '[data-bloque="sla"] .rep-def')), txt(doc, '[data-bloque="sla"]'))
+  ok('la meta: cumplen, no cumplen y pendientes', /14/.test(txt(doc, '[data-sla="met"]')) &&
+    /3/.test(txt(doc, '[data-sla="missed"]')) && /1/.test(txt(doc, '[data-sla="pending"]')))
+  const filas = [...bloque(doc, 'sla').querySelectorAll('tbody tr')]
+  ok('la lista de los que no cumplieron, con el texto del cliente como texto',
+    filas.length === 2 && /#41/.test(filas[0].textContent) && /Factura <b>duplicada<\/b>/.test(filas[0].textContent) &&
+    !filas[0].querySelector('b') && /40 min/.test(filas[0].textContent) && /Beta Demo/.test(filas[0].textContent) &&
+    /sin respuesta/.test(filas[1].textContent), filas.map((f) => f.textContent).join(' | '))
+  ok('y cuantos mas quedaron afuera de la lista', /y 1 mas/.test(txt(doc, '[data-bloque="sla"]')))
+  const proy = [...bloque(doc, 'proyectos').querySelectorAll('tbody tr')].map((f) => [...f.cells].map((c) => c.textContent.trim()))
+  ok('por proyecto: casos, desenlaces, Jev y su decision; sin proyecto al final',
+    JSON.stringify(proy[0]) === JSON.stringify(['Alfa Demo', '10', '6', '2', '1', '2', '3']) &&
+    proy[2][0] === 'Sin proyecto', JSON.stringify(proy))
+  ok('las tablas tienen encabezados', bloque(doc, 'proyectos').querySelectorAll('thead th').length === 7)
+}
+
+console.log('\nactivity.html — I5: el periodo manda en los informes')
+{
+  const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeDeEjemplo() })
+  apretarPeriodo(doc, 'today')
+  await espera()
+  ok('Hoy: barras por hora y una sola fila en el mapa',
+    tiempo(doc, 'first_response').querySelectorAll('.rep-grupo').length === new Date().getHours() + 1 &&
+    bloque(doc, 'trafico').querySelector('.rep-mapa').querySelectorAll('.rep-fila').length === 1)
+  apretarPeriodo(doc, '30d')
+  await espera()
+  ok('30 dias: el mapa por dia de la semana', bloque(doc, 'trafico').querySelector('.rep-mapa')
+    .querySelectorAll('.rep-fila').length === 7 && /lun/i.test(txt(doc, '[data-bloque="trafico"] .rep-fila')),
+  txt(doc, '[data-bloque="trafico"] .rep-fila'))
+  apretarPeriodo(doc, 'all')
+  await espera()
+  ok('Todo: sin periodo anterior, ninguna comparacion', !doc.querySelector('#reports-body .rep-delta'))
+  ok('Todo: barras por semana', tiempo(doc, 'first_response').querySelectorAll('.rep-grupo').length === 12 &&
+    /Semana/.test(tiempo(doc, 'first_response').querySelector('.rep-grupo').getAttribute('title') || ''))
+}
+
+console.log('\nactivity.html — I5: lo vacio se dice')
+{
+  const { doc } = await abrirInformes({ board: tablero([tarjeta()]) })
+  ok('sin la clave, dice que todavia no hay informes y cuando llegan',
+    !doc.getElementById('reports-empty').hidden && /Todavia no hay informes/.test(txt(doc, '#reports-empty')) &&
+    !doc.querySelector('#reports-body [data-bloque]'), txt(doc, '#reports-empty'))
+}
+{
+  const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: Object.assign(informeDeEjemplo(), { v: 2 }) })
+  ok('una version que no entiende lo dice', /version 2/.test(txt(doc, '#reports-empty')), txt(doc, '#reports-empty'))
+}
+{
+  const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeVacio() })
+  ok('sin datos: los tiempos dicen que no hay, sin guion suelto ni cero segundos',
+    /Sin datos en este periodo/.test(txt(doc, '[data-tiempo="first_response"]')) &&
+    !/0 s/.test(txt(doc, '[data-bloque="tiempos"]')), txt(doc, '[data-tiempo="first_response"]'))
+  ok('sin datos: el mapa dice que no hubo nada', /Nada en este periodo/.test(txt(doc, '[data-bloque="trafico"]')))
+  ok('sin datos: el volumen sin graficos vacios', /Sin actividad en este periodo/.test(txt(doc, '[data-bloque="volumen"]')) &&
+    !bloque(doc, 'volumen').querySelector('.rep-barras'))
+  ok('sin datos: la meta y los proyectos lo dicen',
+    /Ningun caso medible/.test(txt(doc, '[data-bloque="sla"]')) && /Ningun caso en este periodo/.test(txt(doc, '[data-bloque="proyectos"]')))
+  ok('sin datos: comparaciones sin base no se muestran', !doc.querySelector('#reports-body .rep-delta'))
+}
+
+console.log('\nactivity.html — I5: en ingles y portugues, con sus numeros')
+{
+  const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeDeEjemplo() }, 'en')
+  ok('EN: los textos y los numeros en ingles', azulejo(doc, 'received') === '12,345' &&
+    txt(doc, '[data-bloque="sla"] .rep-num') === '82.4%' && /First response/.test(txt(doc, '[data-bloque="tiempos"]')) &&
+    /No project/.test(txt(doc, '[data-bloque="proyectos"]')) && txt(doc, '#tab-reports') === 'Reports',
+  `${azulejo(doc, 'received')} ${txt(doc, '[data-bloque="sla"] .rep-num')}`)
+  ok('EN: ni una clave cruda', !/rep[A-Z][a-zA-Z]+/.test(txt(doc, '#view-reports')), txt(doc, '#view-reports').match(/rep[A-Z][a-zA-Z]+/)?.[0])
+}
+{
+  const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeDeEjemplo() }, 'pt-BR')
+  ok('PT: los textos y los numeros en portugues', azulejo(doc, 'received') === '12.345' &&
+    /Primeira resposta/.test(txt(doc, '[data-bloque="tiempos"]')) && txt(doc, '#tab-reports') === 'Relatorios' &&
+    !/rep[A-Z][a-zA-Z]+/.test(txt(doc, '#view-reports')), txt(doc, '#view-reports').slice(0, 200))
+}
+
+console.log('\nactivity.html — I5: los informes no le roban el clic a nadie')
+{
+  const storage = { board: tablero([tarjeta()]), reports: informeDeEjemplo() }
+  const { window, doc } = await abrirInformes(storage)
+  const antes = bloque(doc, 'ahora')
+  window.dispatchEvent(new window.Event('focus'))
+  await espera()
+  ok('releer el mismo informe no reconstruye los bloques', bloque(doc, 'ahora') === antes)
+  const boton = doc.querySelector('#period button[data-periodo="30d"]')
+  let durante = null
+  await clicReal(window, boton, async () => {
+    storage.reports = Object.assign(informeDeEjemplo(), { live: Object.assign(informeDeEjemplo().live, { open: 99 }) })
+    window.dispatchEvent(new window.Event('focus'))
+    await espera()
+    durante = azulejo(doc, 'open')
+  })
+  await espera()
+  ok('con el puntero apretado el informe nuevo espera', durante === '7', durante)
+  ok('al soltar: el clic eligio el periodo y el informe nuevo se pinta',
+    periodoApretado(doc) === '30d' && azulejo(doc, 'open') === '99', `${periodoApretado(doc)} ${azulejo(doc, 'open')}`)
+  const tabBoard = doc.getElementById('tab-board')
+  await clicReal(window, tabBoard, async () => {
+    window.dispatchEvent(new window.Event('focus'))
+    await espera()
+  })
+  await espera()
+  ok('el primer clic en la pestana Tablero, con una relectura en el medio, la abre',
+    !doc.getElementById('view-board').hidden)
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
