@@ -56,9 +56,13 @@ chats already skip the rule levels in `frenos_de_regla`), Jev.
       the skill's escalation section says the reason is the one question for the owner and
       never applies to the owner's own case. RED: check-harness exit 1, both files missing
       the 7 phrases; GREEN: 58 checks, exit 0.
-- [ ] D3 An `escalar` proposal sends ONE notice per version to the approval number, with
+- [x] D3 An `escalar` proposal sends ONE notice per version to the approval number, with
       the case and the agent's question; none without a number; no credential value
-      (scripts/check-casos, T14 section).
+      (scripts/check-casos, section "dueno-en-el-caso: un escalar avisa al dueno").
+      `tick_avisos` enqueues it as an `aprobacion` notice with the same deterministic
+      `aviso-<case>-<version>` id, so expiry, superseded versions, number changes and the
+      `N <answer>` / `no N` replies are the existing ones. RED: 7 of 9 failed (no notice);
+      GREEN: 9/9.
 - [ ] D4 Worker brief: in an owner case the `--respuesta` carries the deliverable link
       (scripts/check-casos).
 

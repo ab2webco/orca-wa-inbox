@@ -9041,6 +9041,81 @@ if NODE:
             os.environ.clear()
             os.environ.update(env_antes)
 
+
+# Caso vivo: el agente escalo el pedido del dueno y el `escalar` se quedo callado en la
+# columna: el dueno espero una hora sin saber que le preguntaban algo. Un `escalar` avisa
+# ahora una vez por version, por la misma cola que los otros avisos.
+print("\ndueno-en-el-caso: un escalar avisa al dueno")
+if NODE:
+    if not any(c["jid"] == DUENO_DM for c in CHATS):
+        CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        sidecar = SidecarFalso(home)
+        try:
+            llegan(home, A, [msg(PERSONA, "E1", PEDIDO, 30)])
+            esc, _ = propuesta_lista(home, "E1", tipo="escalar",
+                                     texto="Pide un descuento del plan: lo aprueba usted?")
+            tick(home)
+            ok("sin numero de aprobacion, un escalar no avisa: todo queda como hoy",
+               al_dueno(home) == [] and cuenta(home, "select count(*) from aviso") == 0,
+               f"{al_dueno(home)}")
+
+            pon_aprobacion(home, DUENO_LID)
+            tick(home)
+            del_caso = [a for a in al_dueno(home) if f"Caso {esc}" in a["body"]]
+            ok("con el numero, un escalar produce UN aviso con el caso, el chat y la pregunta",
+               len(del_caso) == 1 and del_caso[0]["estado"] == "enviado"
+               and "descuento del plan" in del_caso[0]["body"]
+               and "Cliente Uno" in del_caso[0]["body"]
+               and "le pregunta" in del_caso[0]["body"], f"{al_dueno(home)}")
+            ok("y le dice como contestarle", del_caso and f"{esc} y su respuesta" in del_caso[0]["body"]
+               and f"no {esc}" in del_caso[0]["body"], f"{del_caso}")
+            ok("a ningun otro chat", a_otro(home) == 0)
+            tick(home)
+            ok("otro tick no lo repite",
+               len([a for a in al_dueno(home) if f"Caso {esc}" in a["body"]]) == 1,
+               f"{al_dueno(home)}")
+
+            js(home, "caso", "propuesta", esc, "--tipo", "escalar", "--instrucciones",
+               "Confirma usted el alcance: solo el login?", "--actor", "agente")
+            tick(home)
+            del_caso = [a for a in al_dueno(home) if f"Caso {esc}" in a["body"]]
+            ok("una pregunta nueva (otra version) avisa otra vez, una vez",
+               len(del_caso) == 2 and "solo el login" in del_caso[-1]["body"], f"{del_caso}")
+            tick(home)
+            ok("y tampoco se repite",
+               len([a for a in al_dueno(home) if f"Caso {esc}" in a["body"]]) == 2)
+
+            # El dueno contesta la pregunta con `N <respuesta>`: vuelve al agente como su
+            # correccion, por el mismo camino de siempre.
+            llegan(home, A, [msg(DUENO_DM, "E9", f"{esc} si, solo el login y sin descuento", 1,
+                                 de=DUENO_LID)])
+            ingiere(home)
+            ver = js(home, "caso", "ver", esc)[0]
+            ok("la respuesta del dueno al escalar vuelve al agente como su correccion",
+               ver["etapa"] == "clasificado" and any(
+                   e["actor"] == "dueno" and "solo el login y sin descuento" in e["detalle"]
+                   for e in ver["eventos"]), f"{ver['etapa']} {ver['eventos'][-2:]}")
+
+            # Un secreto nunca viaja en el aviso.
+            llegan(home, A, [msg(PERSONA, "E2", PEDIDO, 20)])
+            clave, _ = propuesta_lista(home, "E2", tipo="escalar",
+                                       texto="Mando la clave: Abc12345, la cambio usted?")
+            tick(home)
+            del_caso = [a for a in al_dueno(home) if f"Caso {clave}" in a["body"]]
+            ok("un escalar con un secreto avisa sin el valor",
+               len(del_caso) == 1 and "Abc12345" not in del_caso[0]["body"]
+               and "tablero" in del_caso[0]["body"], f"{del_caso}")
+        finally:
+            sidecar.cerrar()
+            os.environ.clear()
+            os.environ.update(env_antes)
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
