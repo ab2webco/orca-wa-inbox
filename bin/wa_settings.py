@@ -279,7 +279,10 @@ PANEL_SETTINGS = {"tone": "tone", "agentName": "agent_name",
                   "botClaudeAccount": "bot_claude_account",
                   # La meta del primer contacto de los informes, en minutos: un caso cumple
                   # si su primera respuesta salio dentro de este plazo (informes-tablero, I4).
-                  "slaMinutes": "sla_first_reply_minutes"}
+                  "slaMinutes": "sla_first_reply_minutes",
+                  # Cuantas horas espera una pregunta "A o B?" al que escribio antes de pasar
+                  # al dueno (proyectos-por-chat, M5).
+                  "projectQuestionHours": "project_question_hours"}
 
 # El primer mensaje (Beta): quien lo escribe y el ritmo de los avances del agente. Viaja en
 # UNA clave del panel con sus cuatro valores, y no en cuatro claves planas: el host admite
@@ -309,7 +312,7 @@ CONFIG_OPCIONES = {
 CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s", "sync_minutes",
                     "capture_max", "capture_days", "case_window_hours", "approval_hours",
                     "ack_fallback_minutes", "update_every_minutes", "updates_max",
-                    "sla_first_reply_minutes")
+                    "sla_first_reply_minutes", "project_question_hours")
 # Los numericos con un rango cerrado. Un respaldo de cero minutos es el acuse fijo de
 # siempre con otro nombre, y uno de un dia deja al cliente sin nada; un tope de avances
 # de cien es un cliente con el telefono sonando.
@@ -321,7 +324,7 @@ CONFIG_RANGOS = {"ack_fallback_minutes": (1, 60), "update_every_minutes": (1, 12
 # Los numericos que ademas tienen que ser mayores que cero. Una ventana de agrupacion de
 # cero horas no agrupa nunca: abre una tarjeta por mensaje sin decir por que. Un aviso de
 # aprobacion que vence a las cero horas no se podria contestar nunca (T14).
-CONFIG_POSITIVOS = ("case_window_hours", "approval_hours")
+CONFIG_POSITIVOS = ("case_window_hours", "approval_hours", "project_question_hours")
 
 
 # Un id (o correo) de cuenta de `orca account list`: viaja como argumento a la CLI de Orca.

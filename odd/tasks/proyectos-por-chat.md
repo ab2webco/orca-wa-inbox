@@ -208,12 +208,45 @@ Everything must be configurable and wired end to end (panel and logic), in ES, E
     "Sin proyecto" in a one-project chat was signed by the rule and dispatched to the
     chat's project. GREEN: 9/9; check-casos 1264/1264 and check-clis 314 checks, both
     exit 0, on the committed tree. The existing T22.9 section is unchanged and green.
-- [ ] **M5** — `projectQuestion` setting (column, panel key, `set --project-question`), `projectQuestionHours`, `caso pregunta-proyecto`, `caso_espera_proyecto` at ingest, the timeout to the owner in the tick, the case-file section, the question closed on a project choice.
+- [x] **M5** — `projectQuestion` setting (column, panel key, `set --project-question`), `projectQuestionHours`, `caso pregunta-proyecto`, `caso_espera_proyecto` at ingest, the timeout to the owner in the tick, the case-file section, the question closed on a project choice.
   - Tests:
     - the writer's answer joins the case and reopens it;
     - another sender's message does not;
     - after the timeout an escalation notice is queued once;
     - the owner's `N <text>` reaches `historia_del_caso` (near `:7826`, `:7958`).
+  - Evidence:
+    - `scripts/check-clis` (`revisa_varios_proyectos`, the last block):
+      - the `pregunta_proyecto` column and the `auto` default;
+      - `set --project-question`, its choices and the panel key in both directions;
+      - an invalid panel value counts as auto;
+      - `project_question_hours`: 24 by default, zero refused, pushed to the panel, and
+        the panel's value wins.
+
+      RED: the run stopped with `no such column: pregunta_proyecto`. GREEN: 42 checks.
+    - `scripts/check-casos`, "proyectos-por-chat: la pregunta A o B (M5)". RED: `caso
+      pregunta-proyecto` was not a command. Seven checks failed, among them: no question on
+      the card, the writer's answer did not reopen the case, and no section in the case
+      file. Then the section stopped. GREEN: 26/26.
+    - Full suites on the committed tree: check-casos 1290/1290 and check-clis 327 checks,
+      both exit 0.
+  - What the section pins, beyond the list above:
+    - the refusals: one candidate, a project outside the chat, an empty text, and
+      `E_OWNER` after the owner chose;
+    - `auto` with the owner writing goes to the writer, and `auto` with a customer goes to
+      the owner;
+    - `writer` and `owner` win over `auto` in both directions;
+    - the output's `next` tells the agent what to propose;
+    - the card's `question` and the `project_question` event code;
+    - choosing the project closes the question.
+  - Under `auto`, a customer's "A or B?" never reaches the customer. The agent's `escalar`
+    goes only to the approval number. A `responder` proposed while the question is with the
+    owner is held for him, with the new reason `project_question` in `frenos_de_regla`.
+    The test checks that nothing reaches the group's outbox. A mutation run with that
+    hold removed made this check fail: the question went out to the group.
+  - The timeout check: within `projectQuestionHours` nothing moves. After it, the case goes
+    `respondido → recibido → clasificado → decision` with an `escalar` that carries the
+    question, written by the automation, and the existing notice path sends it once. A
+    second tick does not escalate again.
 - [ ] **M6** — `config.html` chip list, table column, `projectQuestion` group and ES/EN/PT texts; `activity.html` grouped combo, reason and question state.
   - Tests in `test/panels.test.mjs`: save, edit-load and reset, the no-`<select>` guard, PT strings present.
   - Fake fixtures only, in `test/shots.mjs` (`:171-175`): a two-project chat and a chat with an open question.
@@ -277,6 +310,136 @@ The owner approved T22.7 and T22.8 and asked for this feature after v4.15.1. The
 1. **Who gets "A or B?"** It follows `projectQuestion=auto`. An Operador or Super admin is asked directly. A Cliente's case asks the owner, because asking a customer reveals project names. The owner can set a chat to `writer` or `owner`.
 2. **No-click work (T22.9) for a Cliente.** It stays as today: any sender's in-project, non-destructive `trabajar` dispatches. There is no regression and no new toggle.
 3. **Customer rules for an Operador.** They are skipped only in a direct chat with the operator. In a group, which customers also read, the chat's levels and Jev stay. The secret floor applies everywhere.
+
+## Part A backend contract (M1–M5, for the Panels and Harness stages)
+
+What the backend reads and writes, so the panels can be built against it without reading
+`bin/wa-scope`. Everything here is on the branch and covered by `scripts/check-clis`
+(`revisa_varios_proyectos`) and `scripts/check-casos` (the "proyectos-por-chat" sections).
+
+### Storage keys the panel writes and reads
+
+- `scope[jid].workspaces: string[]` — the chat's projects, in order (the first is listed
+  first). Ids that do not have the shape of an id are dropped, and repeats are removed.
+- `scope[jid].workspace: string | null` — kept and derived: the only id when the list has
+  exactly one, else null. **The panel must write both keys on every save**: `workspace`
+  set to the derived value. The CLI trusts the list only when the `workspace` stored next
+  to it is its derived value (`lista_de_proyectos`). Otherwise an older panel edited
+  `workspace` and left a stale list, and `workspace` wins as a one-item list. The same
+  rule protects the database from an older CLI that writes only `workspace`. An entry
+  with `workspaces` and no `workspace` key is also accepted, and then the list wins.
+- `scope[jid].projectQuestion: "auto" | "writer" | "owner"` — who gets "A or B?". Any
+  other value is `auto`. The sync pushes it back as a string, `auto` when unset.
+- `projectQuestionHours: string` — a global flat key, a whole number > 0, factory `"24"`.
+  The panel value wins over the CLI value, like `slaMinutes`, and an invalid value is
+  ignored. The sync pushes it back.
+- `projects` (the accepted catalog) is unchanged. An id in a chat's list that is no longer
+  in the catalog stays in the list. The panel marks it as removed, as it does today.
+
+### Database and CLI
+
+- `chat_scope.workspaces` (JSON array) and `chat_scope.pregunta_proyecto` (text,
+  null = auto). Both columns are added by `migrate`. The list is backfilled once with
+  `[workspace]`, or `[]` when there is no workspace.
+- `wa-scope set <chat> --workspaces a,b` (`''` clears the list). Every id is checked
+  against the catalog. `--workspace X` is a one-item list. `--project-question
+  auto|writer|owner` sets who gets the question.
+- `wa-scope list`, `check` and `voice` return `workspaces`, and `voice` also returns
+  `project_question`.
+- `wa-scope where` returns:
+  - `candidates: [{id, name, note}]`, the chat's accepted projects in list order;
+  - `missing: [id]`, the ids in the list that are not in the catalog;
+  - `by: "rule" | "chat" | null`.
+  With two or more candidates and no rule, it returns `workspace: null` and `workspace_why:
+  "the chat has N projects: the agent chooses by content"`.
+- `wa-scope config project_question_hours <n>` sets the global wait.
+- `wa-scope caso proyecto <id> --proyecto <pid> --actor agente --porque "<why>"`:
+  - `--porque` is required;
+  - the id must be one of the chat's candidates;
+  - the call fails with `E_OWNER` when the owner already chose the project.
+  It writes `by: "agent"` and the reason, and it does not freeze the route. With `--actor
+  dueno` it works as before, plus `by: "owner"`. Either choice closes an open question.
+- `wa-scope caso pregunta-proyecto <id> --candidatos a,b --texto "<question>" --actor
+  agente` records the question. It fails with `E_ARGS` for fewer than two candidates, an
+  id outside the chat's projects or an empty text, and with `E_OWNER` when the owner
+  already chose. The output row carries `next`, which tells the agent what to propose: a
+  `responder` with the question for the writer, or an `escalar` for the owner.
+- The new error code `E_OWNER` is in `ERRORES_CASO`. It is not added to `acciones.mjs`,
+  because the panel only calls with `--actor dueno` and never gets it.
+
+### The card (`board.cards[]`)
+
+- `project: {id, name} | null` keeps its shape. It is now the **effective** project,
+  the one dispatch uses (`proyecto_de_ruta`):
+  - the case route's project;
+  - else none, when the owner chose "Sin proyecto";
+  - else the chat's only project;
+  - else none.
+
+  A case of a one-project chat whose route has no project now shows the chat's project,
+  which is what dispatch has always used. The owner's "Sin proyecto" now shows none and
+  never dispatches.
+- New board-level map `board.project_routes`, keyed by the case id as a string, one entry
+  per card:
+
+  ```json
+  {"12": {"why": "string | null", "by": "rule | chat | agent | owner | null",
+          "candidates": [{"id": "alfa-demo", "name": "Alfa Demo", "note": "Tienda en linea"}],
+          "missing": ["beta-demo"],
+          "question": null}}
+  ```
+
+  `question`, when there is one, is `{"candidates": [{"id", "name"}], "to": "writer |
+  owner", "text": "...", "at": "ISO", "state": "open | answered | closed", "escalated":
+  bool}`.
+
+  It lives on the board, not on the card, because two existing `check-casos` assertions
+  pin the card:
+  - "la tarjeta trae exactamente las llaves del contrato" pins the card's key set
+    (`LLAVES_TARJETA`);
+  - "la tarjeta lo trae con su nombre" pins `project == {"id", "name"}`.
+
+  Neither could change, so neither new fields in `project` nor a new card key were
+  possible. A board-level map leaves both untouched. It also covers a two-project case
+  with no project, whose `project: null` could not carry the candidates.
+- New event codes in `events[].que`:
+  - `project` with `args [id, "agent"]` when the agent chose; the owner's choice keeps
+    `args []`;
+  - `project_question` with `args ["writer"]` or `["owner"]`, which covers both the
+    question and its move to the owner;
+  - `project_answer`, when the writer's answer came back.
+- New wait reasons (event `work_waits` args, and the notice texts): `no_project` (es "no
+  tiene proyecto", en "it has no project") and `project_question` (es "la pregunta de
+  proyecto es suya", en "the project question is yours"). `outside_project` now reads
+  "queda fuera de los proyectos del chat" / "it is outside the chat's projects". The board
+  (`activity.html:2107`) needs `no_project` and `project_question` in its reason map, in
+  ES, EN and PT.
+
+### Part A limitation: the sender role (Part B replaces it)
+
+`projectQuestion=auto` needs the sender's role, and the roles arrive with Part B (M9,
+`rol_del_caso`). Until then the role is binary and comes only from the WhatsApp id:
+
+- the case is the owner's (`caso_del_dueno`: his chat, or every message of the case comes
+  from an owner id) → `writer`;
+- anything else → `owner`.
+
+So an Operador is treated as a Cliente: his "A or B?" goes to the owner. That is the safe
+side, because nothing goes to the chat. Part B replaces the `caso_del_dueno` call in
+`cmd_caso_pregunta_proyecto` with `rol_del_caso`, and `admin` or `operator` then means
+`writer`.
+
+Two points stay open and are noted here for the owner and for Part B:
+
+- **A question to the writer in a group is read by the whole group.** Under `auto`, the
+  owner writing in a group gets "A or B?" as a `responder` through the chat's normal
+  approval path, as Scope 7 says. That reply names projects in a group that customers may
+  also read. The `GRUPO_DUENO` rule ("others read this group too") still reaches the
+  agent. Part B, Open question 3, decides whether a group question should go to the owner
+  instead.
+- **`caso avance` (Beta progress updates) is not held while a question is with the
+  owner.** Only `responder` proposals are held (`project_question`). An update goes out
+  through the fixed floor and Jev, which do not know project names.
 
 ## Delivery
 

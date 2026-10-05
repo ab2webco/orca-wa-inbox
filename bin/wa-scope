@@ -253,6 +253,9 @@ create table if not exists chat_scope (
   -- model_with_ack_fallback | null (= el ajuste global `first_reply_mode`)
   primer_mensaje text,
   aprobacion    text,                -- los niveles de cada regla en ESTE chat (T22.3), JSON
+  -- a quien se le pregunta "A o B?" cuando el caso no tiene proyecto (proyectos-por-chat,
+  -- M5): auto | writer | owner; null = auto
+  pregunta_proyecto text,
   timezone      text default 'America/Bogota',
   notes         text,
   updated_at    text,
@@ -828,6 +831,10 @@ def persistir_panel(con):
             if flat in e:
                 con.execute(f"update chat_scope set {columna}=? where account=? and chat_jid=?",
                             (auto_del_panel(columna, e.get(flat)), cuenta_de_entrada(e), jid))
+        if "projectQuestion" in e:
+            con.execute("update chat_scope set pregunta_proyecto=? where account=? and "
+                        "chat_jid=?", (pregunta_del_panel(e.get("projectQuestion")),
+                                       cuenta_de_entrada(e), jid))
         if isinstance(e.get("approval"), dict):
             con.execute("update chat_scope set aprobacion=? where account=? and chat_jid=?",
                         (json.dumps(wa_reglas.niveles(e["approval"]), sort_keys=True),
@@ -863,6 +870,7 @@ def push_to_plugin(con, with_activity=False):
                       "greeting": r.get("saludo"), "greetingText": r.get("saludo_texto"),
                       "firstReply": r.get("primer_mensaje"),
                       "approval": r["niveles"],
+                      "projectQuestion": r.get("pregunta_proyecto") or PREGUNTA_AUTO,
                       "updatedAt": r.get("updated_at"), "account": cuenta}
     activity = health = None
     reusando = False
@@ -1127,6 +1135,18 @@ def auto_del_panel(columna, valor):
     return valor if valor in AUTO_VALORES.get(columna, (valor,)) else None
 
 
+# A quien se le pregunta "A o B?" en una conversacion (proyectos-por-chat, M5): `writer` al
+# que escribio, `owner` al dueno, `auto` segun quien escribio (el dueno -> writer; un
+# cliente -> owner: preguntarle le mostraria los nombres de los proyectos).
+PREGUNTA_AUTO = "auto"
+PREGUNTA_VALORES = (PREGUNTA_AUTO, "writer", "owner")
+
+
+def pregunta_del_panel(valor):
+    """El `projectQuestion` que guardo el panel, o None (= auto) si no es uno de los tres."""
+    return valor if isinstance(valor, str) and valor in PREGUNTA_VALORES else None
+
+
 def merged_scope(con):
     """Lo del panel manda sobre lo del CLI cuando el mismo chat esta en los dos:
     el panel es lo que el usuario acaba de tocar."""
@@ -1136,8 +1156,8 @@ def merged_scope(con):
     rows = {r["chat_jid"]: dict(r) for r in con.execute(
         "select account, chat_jid, chat_name, provider, target, workspace, workspaces, mode, "
         "initial_state, hours, tone, instructions, acuse, acuse_texto, saludo, "
-        "saludo_texto, primer_mensaje, aprobacion, timezone, notes, updated_at "
-        "from chat_scope "
+        "saludo_texto, primer_mensaje, aprobacion, pregunta_proyecto, timezone, notes, "
+        "updated_at from chat_scope "
         "where account=?", (cuenta,))}
     for row in rows.values():
         row["workspaces"] = lista_de_proyectos(lista_de_columna(row.get("workspaces")),
@@ -1176,6 +1196,10 @@ def merged_scope(con):
         # queda por defecto. Una entrada de un panel anterior no trae la clave.
         if isinstance(e.get("approval"), dict):
             row["aprobacion"] = json.dumps(wa_reglas.niveles(e["approval"]), sort_keys=True)
+        # A quien se pregunta "A o B?" (M5): la clave presente manda; un valor que no es uno
+        # de los tres es auto.
+        if "projectQuestion" in e:
+            row["pregunta_proyecto"] = pregunta_del_panel(e.get("projectQuestion"))
         rows[jid] = row
     # En "ninguno" el destino no existe, aunque haya quedado uno guardado de antes.
     # Se apaga aca y no en cada comando para que ninguno — check, where, voice, el
@@ -1354,7 +1378,7 @@ def migrate(con):
     if "instructions" not in cols:
         con.execute("alter table chat_scope add column instructions text")
     for columna in ("acuse", "acuse_texto", "saludo", "saludo_texto", "aprobacion",
-                    "primer_mensaje"):
+                    "primer_mensaje", "pregunta_proyecto"):
         if columna not in cols:
             con.execute(f"alter table chat_scope add column {columna} text")
     if "target" not in cols:
@@ -1439,7 +1463,7 @@ def migrate(con):
 # el tono en la columna de las notas sin que nada avise.
 CHAT_SCOPE_COLS = ("chat_jid", "chat_name", "provider", "target", "workspace", "workspaces",
                    "mode", "initial_state", "hours", "tone", "instructions", "timezone",
-                   "notes", "updated_at")
+                   "notes", "updated_at", "pregunta_proyecto")
 
 
 def migrate_cuentas(con, cols):
@@ -1665,6 +1689,8 @@ def cmd_set(con, a):
         "saludo_texto": auto_texto(a.greeting_text, cur.get("saludo_texto")),
         "primer_mensaje": auto_valor(a.first_reply, cur.get("primer_mensaje")),
         "aprobacion": niveles_pedidos(a.approval, cur.get("aprobacion")),
+        "pregunta_proyecto": (a.project_question if a.project_question is not None
+                              else cur.get("pregunta_proyecto")),
         "timezone": a.timezone or cur.get("timezone") or "America/Bogota",
         "notes": a.notes or cur.get("notes"),
         "updated_at": time.strftime("%Y-%m-%d %H:%M"),
@@ -1695,6 +1721,8 @@ def cmd_set(con, a):
             cambios.update(workspace=workspace, workspaces=lista)
         if a.approval:
             cambios["approval"] = json.loads(vals["aprobacion"])
+        if a.project_question is not None:
+            cambios["projectQuestion"] = a.project_question
         for flat, columna in AUTO_PANEL:
             if getattr(a, {"ack": "ack", "ackText": "ack_text", "greeting": "greeting",
                            "greetingText": "greeting_text",
@@ -1891,6 +1919,9 @@ DEFAULT_CONFIG = {
     # Cuanto vale un aviso de aprobacion por WhatsApp (T14): despues, contestarlo no hace
     # nada y el caso se decide en el tablero. No sale al panel, como case_window_hours.
     "approval_hours": "24",
+    # Cuanto espera una pregunta "A o B?" al que escribio antes de pasar al dueno
+    # (proyectos-por-chat, M5). Sale al panel (`projectQuestionHours`).
+    "project_question_hours": "24",
     # Lo que el motor contesta solo (tick, por wa-send, en chats `responder`): el acuse a un
     # pedido nuevo dirigido al asistente y el saludo a un saludo dirigido. Cada conversacion
     # puede pisar el interruptor y el texto. Sin hora ni fecha: lo que promete tiene que ser
@@ -2422,6 +2453,8 @@ def cmd_voice(con, a):
              # Los niveles de aprobacion de este chat (T22.3): lo que el agente puede
              # mandar solo, lo que vuelve a el para reescribir y lo que espera al dueno.
              "approval": row.get("niveles") or wa_reglas.niveles(None),
+             # A quien se pregunta "A o B?" en este chat (proyectos-por-chat, M5).
+             "project_question": row.get("pregunta_proyecto") or PREGUNTA_AUTO,
              # Quien escribe el primer mensaje aca (Beta), resuelto: chat > global > fabrica.
              "first_reply": primer_mensaje_de(row, merged_settings(con))}]
 
@@ -2962,6 +2995,7 @@ def cmd_caso_proyecto(con, a):
     ruta.update({"workspace": proyecto["id"] if proyecto else None,
                  "workspace_name": proyecto["name"] if proyecto else None,
                  "workspace_path": proyecto["path"] if proyecto else None})
+    cierra_pregunta(ruta, proyecto["id"] if proyecto else None)
     if del_agente:
         ruta.update(workspace_why=porque, by="agent")
         detalle = f"proyecto {proyecto['id']} · agente: {porque}"
@@ -2972,6 +3006,219 @@ def cmd_caso_proyecto(con, a):
                ruta=json.dumps(ruta, ensure_ascii=False, sort_keys=True))
     con.commit()
     return [caso_fila(con, caso_de(con, a.id))]
+
+
+# ── La pregunta "A o B?" (proyectos-por-chat, M5) ───────────────────────────────────────
+# Vive en la ruta del caso, en `pregunta`: {candidatos, a: writer | owner, quien, texto, at,
+# estado: abierta | contestada | cerrada}, y despues `respuesta` {stanza, at}, `escalada_at`
+# (paso al dueno sin respuesta) o `cerrada_at` y `elegido` (se eligio el proyecto).
+LARGO_PREGUNTA = 500
+PREGUNTA_A = "pregunta de proyecto a"
+PREGUNTA_AL_DUENO = "pregunta del proyecto al dueno:"
+RESPUESTA_PREGUNTA = "respuesta a la pregunta de proyecto:"
+RE_EV_PREGUNTA = re.compile(r"^pregunta de proyecto a (writer|owner):")
+
+
+def quien_escribe(sender, chat):
+    """El id de quien escribio un mensaje, sin el dispositivo: su `sender_jid` o, en un
+    directo que no lo trae, el chat. Es lo unico que dice quien es (nunca el texto)."""
+    jid = sender or (chat if chat and not str(chat).endswith("@g.us") else None)
+    return wa_store.jid_sin_dispositivo(jid) if jid else None
+
+
+def remitente_del_caso(con, caso):
+    """Quien escribio el ultimo mensaje del caso (no la linea), o None sin almacen."""
+    stanzas = stanzas_de_caso(con, caso["case_id"])
+    if not stanzas:
+        return None
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return None
+    try:
+        fila = fuente.execute(
+            f"select sender_jid from mensaje where account=? and chat_jid=? and from_me=0 and "
+            f"revocado=0 and stanza_id in ({','.join('?' * len(stanzas))}) "
+            f"order by ts desc limit 1", (caso["account"], caso["chat_jid"], *stanzas)).fetchone()
+    except sqlite3.Error:
+        return None
+    finally:
+        fuente.close()
+    return quien_escribe(fila["sender_jid"], caso["chat_jid"]) if fila else None
+
+
+def pregunta_abierta(ruta):
+    """La pregunta de la ruta si sigue sin proyecto elegido (abierta o contestada), o None."""
+    p = ruta.get("pregunta")
+    return p if isinstance(p, dict) and p.get("estado") in ("abierta", "contestada") else None
+
+
+def cierra_pregunta(ruta, elegido):
+    """Cierra la pregunta de la ruta (en el mismo dict) porque el caso ya tiene proyecto o el
+    dueno decidio: elegir el proyecto la contesta."""
+    p = pregunta_abierta(ruta)
+    if p:
+        p.update(estado="cerrada", cerrada_at=ahora_caso(), elegido=elegido)
+
+
+def horas_pregunta_proyecto(con):
+    valor = merged_settings(con).get("project_question_hours")
+    if valida_ajuste("project_question_hours", valor):
+        valor = DEFAULT_CONFIG["project_question_hours"]
+    return int(str(valor).strip())
+
+
+def cmd_caso_pregunta_proyecto(con, a):
+    """El agente no sabe si el caso es de A o de B: deja anotada la pregunta, con los
+    candidatos (dos o mas proyectos del chat) y su texto. A quien va lo decide el ajuste del
+    chat (`projectQuestion`), nunca el agente: `auto` es al que escribio si es el dueno (por
+    su id de WhatsApp; la Parte B suma Operador) y al dueno si es un cliente, porque
+    preguntarle a un cliente le muestra los nombres de los proyectos. Sin saber quien
+    escribio, al dueno.
+
+    Despues el agente propone: al que escribio, un `responder` con la pregunta, que sigue el
+    camino de aprobacion de siempre; al dueno, `escalar --instrucciones` con la pregunta, que
+    le llega por el aviso de siempre."""
+    caso_toma(con)
+    caso = caso_de(con, a.id)
+    if caso["etapa"] not in ETAPAS_PROYECTO:
+        caso_falla("E_STAGE", f"case #{a.id} is in {caso['etapa']}: a project question goes "
+                              f"in {', '.join(ETAPAS_PROYECTO)}")
+    texto = " ".join((a.texto or "").split())[:LARGO_PREGUNTA]
+    if not texto:
+        caso_falla("E_ARGS", "--texto is empty: the question is what the reader answers")
+    ruta = ruta_del_caso(caso)
+    if ruta.get("por_dueno"):
+        caso_falla("E_OWNER", f"case #{a.id} has the project the owner chose: there is "
+                              f"nothing to ask")
+    entry = merged_scope(con).get(caso["chat_jid"]) or {}
+    aceptados, _ = proyectos_del_chat(entry, proyectos_del_dueno(con))
+    ids = [p["id"] for p in aceptados]
+    candidatos = list(dict.fromkeys(x.strip() for x in (a.candidatos or "").split(",")
+                                    if x.strip()))
+    if len(candidatos) < 2 or any(c not in ids for c in candidatos):
+        caso_falla("E_ARGS", f"a project question names two or more of the chat's projects: "
+                             f"{', '.join(ids) or 'none'} (not {', '.join(candidatos) or 'none'})")
+    modo = entry.get("pregunta_proyecto") or PREGUNTA_AUTO
+    quien = remitente_del_caso(con, caso)
+    para = modo if modo != PREGUNTA_AUTO else (
+        "writer" if caso_del_dueno(con, caso) else "owner")
+    if para == "writer" and not quien:
+        para = "owner"
+    ruta["pregunta"] = {"candidatos": candidatos, "a": para, "quien": quien, "texto": texto,
+                        "at": ahora_caso(), "estado": "abierta"}
+    caso_tocar(con, caso, a.actor, f"{PREGUNTA_A} {para}: {', '.join(candidatos)}",
+               ruta=json.dumps(ruta, ensure_ascii=False, sort_keys=True))
+    con.commit()
+    fila = caso_fila(con, caso_de(con, a.id))
+    fila["next"] = (f"propose `caso propuesta {a.id} --tipo responder --respuesta` with the "
+                    f"question: it follows the chat's approval path" if para == "writer" else
+                    f"propose `caso propuesta {a.id} --tipo escalar --instrucciones` with the "
+                    f"question: it goes to the owner, never to the customer")
+    return [fila]
+
+
+def caso_espera_proyecto(con, chat, sender_jid):
+    """El caso de la conversacion que espera la respuesta de ESTE remitente a una pregunta
+    "A o B?" que se le hizo a el (`a` writer), ya enviada (el caso esta en respondido); o
+    None. Lo que escribe otro sigue el camino de siempre."""
+    quien = quien_escribe(sender_jid, chat)
+    if not quien:
+        return None
+    for fila in con.execute("select * from caso where account=? and chat_jid=? and "
+                            "etapa='respondido' order by updated_at desc, case_id desc",
+                            (cuenta_activa(), chat)).fetchall():
+        p = ruta_del_caso(fila).get("pregunta")
+        if (isinstance(p, dict) and p.get("estado") == "abierta" and p.get("a") == "writer"
+                and p.get("quien") == quien):
+            return dict(fila)
+    return None
+
+
+def tick_preguntas_proyecto(con, resumen):
+    """La pregunta al que escribio que no se contesto en `project_question_hours` pasa al
+    dueno, una vez: el caso vuelve a decision con un `escalar` con la pregunta, y el aviso
+    de siempre (`escala_al_dueno`) se la lleva. Su `N <respuesta>` vuelve al agente como la
+    correccion del dueno."""
+    horas = horas_pregunta_proyecto(con)
+    for fila in con.execute("select case_id, ruta from caso where account=? and "
+                            "etapa='respondido' order by updated_at, case_id",
+                            (cuenta_activa(),)).fetchall():
+        p = ruta_del_caso(fila).get("pregunta")
+        if not (isinstance(p, dict) and p.get("estado") == "abierta" and p.get("a") == "writer"
+                and edad_de(p.get("at")) > horas * 3600):
+            continue
+        caso_toma(con)
+        try:
+            caso = caso_de(con, fila["case_id"])
+            ruta = ruta_del_caso(caso)
+            p = ruta.get("pregunta") or {}
+            if caso["etapa"] != "respondido" or p.get("estado") != "abierta" \
+                    or p.get("a") != "writer":
+                con.rollback()
+                continue
+            p.update(a="owner", escalada_at=ahora_caso())
+            propuesta, version = propuesta_canonica(
+                {"tipo": "escalar",
+                 "instrucciones": f"{p.get('texto')} ({' / '.join(p.get('candidatos') or [])})"})
+            caso_valida(caso, "recibido")
+            caso_mover(con, caso, "recibido", "automatizacion",
+                       f"{PREGUNTA_AL_DUENO} sin respuesta en {horas} h",
+                       ruta=json.dumps(ruta, ensure_ascii=False, sort_keys=True))
+            caso = caso_de(con, caso["case_id"])
+            caso_valida(caso, "clasificado")
+            caso_mover(con, caso, "clasificado", "automatizacion",
+                       f"{caso.get('clase') or 'card'} · {caso.get('prioridad') or 'none'} · "
+                       f"pregunta de proyecto")
+            caso = caso_de(con, caso["case_id"])
+            caso_valida(caso, "decision")
+            caso_mover(con, caso, "decision", "automatizacion", f"escalar {version}",
+                       propuesta=propuesta, propuesta_version=version, propuesta_aprobada=None,
+                       necesita_agente=0)
+            con.commit()
+            resumen["preguntas_al_dueno"] += 1
+        except BaseException:
+            con.rollback()
+            raise
+
+
+def seccion_de_pregunta(con, caso):
+    """La seccion del archivo del caso sobre la pregunta "A o B?", o [] sin pregunta."""
+    p = ruta_del_caso(caso).get("pregunta")
+    if not isinstance(p, dict):
+        return []
+    nombres = {x["id"]: x["name"] for x in proyectos_del_dueno(con)}
+    para = ("the owner" if p.get("a") == "owner"
+            else f"whoever wrote ({p.get('quien') or 'unknown'})")
+    if p.get("estado") == "cerrada":
+        estado = f"closed: the case got its project ({p.get('elegido') or 'none'})"
+    elif p.get("estado") == "contestada":
+        estado = (f"answered in message {(p.get('respuesta') or {}).get('stanza')} (see the "
+                  f"messages above): set the project with `caso proyecto {caso['case_id']} "
+                  f"--proyecto <id> --actor agente --porque \"...\"`")
+    elif p.get("escalada_at"):
+        estado = (f"no answer from the writer: it went to the owner at {p['escalada_at']}; his "
+                  f"answer comes back as his correction")
+    else:
+        estado = "open: waiting for the answer"
+    return ["", "## The project question",
+            "- Candidates: " + ", ".join(f"{i} ({nombres.get(i, i)})"
+                                         for i in p.get("candidatos") or []),
+            f"- Asked to: {para}, at {p.get('at')}",
+            f"- Question: {p.get('texto')}",
+            f"- State: {estado}"]
+
+
+def pregunta_de_tarjeta(ruta, catalogo):
+    """La pregunta "A o B?" como la muestra la tarjeta, o None."""
+    p = ruta.get("pregunta")
+    if not isinstance(p, dict):
+        return None
+    nombres = {x["id"]: x["name"] for x in catalogo}
+    return {"candidates": [{"id": i, "name": nombres.get(i, i)} for i in p.get("candidatos") or []],
+            "to": p.get("a"), "text": p.get("texto"), "at": iso_caso(p.get("at")),
+            "state": {"contestada": "answered", "cerrada": "closed"}.get(p.get("estado"), "open"),
+            "escalated": bool(p.get("escalada_at"))}
 
 
 def cmd_caso_clasificar(con, a):
@@ -3147,6 +3394,12 @@ def frenos_de_regla(con, caso):
             al_agente.append(e)
     if scope.get("mode") == "borrador":
         al_dueno.append("borrador")
+    # La pregunta "A o B?" es del dueno (un cliente con auto, o el chat en owner): lo que se
+    # le conteste al chat mientras tanto lo ve el dueno, porque nombraria los proyectos
+    # (proyectos-por-chat, M5).
+    p = pregunta_abierta(ruta_del_caso(caso))
+    if p and p.get("a") == "owner":
+        al_dueno.append("project_question")
     return al_dueno, al_agente
 
 
@@ -4679,6 +4932,12 @@ def caso_enruta(con, case_id, texto, chat):
     if actual is not None and (not nueva["matched"]
                                or nueva["matched"] == actual.get("matched")):
         return False
+    # La pregunta "A o B?" sigue con el caso; si una regla de contenido ya dio el proyecto,
+    # queda contestada por ella.
+    if isinstance((actual or {}).get("pregunta"), dict):
+        nueva["pregunta"] = actual["pregunta"]
+        if nueva["workspace"]:
+            cierra_pregunta(nueva, nueva["workspace"])
     caso_tocar(con, caso, "automatizacion",
                f"ruta {nueva['provider'] or 'sin destino'}:{nueva['target'] or '-'}"
                f"{' proyecto ' + nueva['workspace'] if nueva['workspace'] else ''}",
@@ -4959,6 +5218,26 @@ def ingest_mensaje(con, m, veredicto, horas):
             if caso["etapa"] == "respondido":
                 caso_valida(caso, "trabajo")
                 caso_mover(con, caso, "trabajo", "automatizacion", RESPUESTA_AL_PROYECTO)
+            caso_marca_regla(con, caso["case_id"], piso, stanza)
+            hecho.update(nuevos=1, unidos=1)
+            con.commit()
+            return hecho, caso["case_id"]
+        # La respuesta a la pregunta "A o B?" que se le hizo a ESTE remitente vuelve al mismo
+        # caso y lo reabre para el agente, aunque sea una linea suelta de un grupo o algo que
+        # Jev descartaria ("B"). Lo que escribe otro sigue el camino de siempre; lo que el
+        # dueno ignoro y una credencial, tambien (proyectos-por-chat, M5).
+        pregunta = (caso_espera_proyecto(con, chat, m.get("sender_jid"))
+                    if not (accion == "cerrar" and (veredicto or {}).get("dueno"))
+                    and "credential" not in piso and "credential" not in jev_entrada else None)
+        if pregunta:
+            caso_suma_mensaje(con, pregunta, stanza, "automatizacion")
+            caso = caso_de(con, pregunta["case_id"])
+            ruta = ruta_del_caso(caso)
+            ruta["pregunta"].update(estado="contestada",
+                                    respuesta={"stanza": stanza, "at": ahora_caso()})
+            caso_tocar(con, caso, "automatizacion", f"{RESPUESTA_PREGUNTA} {stanza}",
+                       ruta=json.dumps(ruta, ensure_ascii=False, sort_keys=True),
+                       necesita_agente=1)
             caso_marca_regla(con, caso["case_id"], piso, stanza)
             hecho.update(nuevos=1, unidos=1)
             con.commit()
@@ -5247,7 +5526,8 @@ def ruta_de_tablero(caso, alcance, catalogo):
     en su orden, y los ids de su lista que el dueno quito del catalogo
     (proyectos-por-chat, M3)."""
     elegido = proyecto_de_ruta(ruta_del_caso(caso), alcance.get(caso["chat_jid"]), catalogo)
-    return {k: elegido[k] for k in ("why", "by", "candidates", "missing")}
+    return dict({k: elegido[k] for k in ("why", "by", "candidates", "missing")},
+                question=pregunta_de_tarjeta(ruta_del_caso(caso), catalogo))
 
 
 def iso_caso(sello):
@@ -5444,6 +5724,13 @@ def que_del_evento(detalle, medios=None):
         return "sent", []
     if d.startswith("ruta "):
         return "route", []
+    m = RE_EV_PREGUNTA.match(d)
+    if m:
+        return "project_question", [m.group(1)]
+    if d.startswith(PREGUNTA_AL_DUENO):
+        return "project_question", ["owner"]
+    if d.startswith(RESPUESTA_PREGUNTA):
+        return "project_answer", []
     m = RE_EV_PROYECTO_AGENTE.match(d)
     if m:
         # La eleccion del agente: el id y quien. El porque es texto suyo y va en la ruta.
@@ -6225,7 +6512,7 @@ CONTEOS_TICK = ("enviados", "excepciones", "frenados", "esperando", "bloqueados"
                 "revisiones", "transcritos", "rancias", "despachados",
                 "bloqueados_por_despacho", "respuestas_al_proyecto", "agente_lanzado",
                 "agente_error", "trabajos_sin_clic", "limpieza_atascados", "avisos",
-                "avisos_error")
+                "avisos_error", "preguntas_al_dueno")
 
 # La limpieza de los espacios que dejan las corridas del plugin. Orca fuerza `new_per_run`
 # en las automatizaciones de un plugin: cada corrida crea un hijo `::workspace:<uuid>` de
@@ -6696,6 +6983,7 @@ MOTIVOS_AVISO = {
            "payment": "mueve un pago",
            "outside_project": "queda fuera de los proyectos del chat",
            "no_project": "no tiene proyecto",
+           "project_question": "la pregunta de proyecto es suya",
            "mode": "el chat no responde solo", "stale": "la propuesta tiene mas de un dia",
            "exceptions": "el caso trae excepciones", "no_instructions": "no trae instrucciones"},
     "en": {"money": "it mentions money", "credential": "a credential is involved",
@@ -6709,6 +6997,7 @@ MOTIVOS_AVISO = {
            "payment": "it moves a payment",
            "outside_project": "it is outside the chat's projects",
            "no_project": "it has no project",
+           "project_question": "the project question is yours",
            "mode": "the chat does not answer on its own",
            "stale": "the proposal is more than a day old",
            "exceptions": "the case carries exceptions", "no_instructions": "it has no instructions"},
@@ -7443,6 +7732,15 @@ def cmd_tick(con, a):
             if con.in_transaction:
                 con.rollback()
             resumen["agente_error"] += 1
+        # La pregunta "A o B?" que el que escribio no contesto a tiempo pasa al dueno, antes
+        # de los avisos: el suyo sale en esta misma vuelta (proyectos-por-chat, M5).
+        try:
+            tick_preguntas_proyecto(con, resumen)
+        except (sqlite3.Error, CasoFalla) as exc:
+            if con.in_transaction:
+                con.rollback()
+            resumen["errores"] += 1
+            print(f"wa-scope: project questions skipped: {exc}", file=sys.stderr)
         # Los avisos al numero de aprobacion (T14): despues de todo lo que pudo dejar un caso
         # esperando al dueno o bloqueado en esta vuelta.
         try:
@@ -8845,7 +9143,8 @@ def mensajes_con_tope(cabeza, bloques, cola, titulo):
 def archivo_de_caso(con, caso):
     """El archivo del caso para el agente de casos, en ingles."""
     cid = caso["case_id"]
-    cola = historia_del_caso(con, caso) + instrucciones_primer_mensaje(con, caso, "agente") + [
+    cola = (seccion_de_pregunta(con, caso) + historia_del_caso(con, caso)
+            + instrucciones_primer_mensaje(con, caso, "agente")) + [
         "", "## The whole record, if you need it",
         f"{ruta_wa_scope()} caso ver {cid} --json",
     ]
@@ -9775,6 +10074,10 @@ def main():
     s.add_argument("--approval", action="append", metavar="RULE=LEVEL",
                    help="the level of one approval rule here (T22.3): rule money, credential, "
                         "commitment or quality; level ask, agent or allow. Repeatable")
+    s.add_argument("--project-question", choices=list(PREGUNTA_VALORES),
+                   help="who gets the \"A or B?\" question when a case of this chat has no "
+                        "project: writer = whoever wrote; owner = the owner; auto (default) = "
+                        "the writer when it is the owner, the owner for a customer")
     s.set_defaults(fn=cmd_set)
 
     s = add("mode", help="change only the mode")
@@ -9982,6 +10285,18 @@ def main():
     c.add_argument("--porque", help="why this project (required with --actor agente, who "
                                     "chooses one of the chat's candidates; shown on the card)")
     c.set_defaults(fn=cmd_caso_proyecto)
+
+    c = muta("pregunta-proyecto", help="the agent cannot tell which of the chat's projects the "
+                                       "case is about: records the \"A or B?\" question. The "
+                                       "chat's projectQuestion decides who gets it (writer, "
+                                       "owner, or auto: the writer when it is the owner, the "
+                                       "owner for a customer); the output says what to propose "
+                                       "next. Refusals: E_ARGS, E_STAGE, E_OWNER")
+    c.add_argument("id", type=int)
+    c.add_argument("--candidatos", required=True,
+                   help="two or more of the chat's project ids, separated by commas")
+    c.add_argument("--texto", required=True, help="the question, as the reader will read it")
+    c.set_defaults(fn=cmd_caso_pregunta_proyecto)
 
     c = muta("clasificar", help="kind and priority; moves recibido -> clasificado")
     c.add_argument("id", type=int); c.add_argument("--clase", required=True)

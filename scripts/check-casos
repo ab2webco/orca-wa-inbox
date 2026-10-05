@@ -9643,6 +9643,242 @@ if NODE:
            js(home, "caso", "ver", uno)[0]["etapa"] == "decision"
            and espera_de(uno) and "no_project" in espera_de(uno)[0], f"{espera_de(uno)}")
 
+
+# M5: "A o B?". `projectQuestion` del chat decide a quien: auto (de fabrica) le pregunta al
+# que escribio si es el dueno (por su id de WhatsApp; la Parte B suma Operador) y al dueno si
+# es un cliente, porque preguntarle a un cliente le muestra los nombres de los proyectos.
+# Un cliente del grupo: un id que no es del dueno (el de prueba de `OTRO_LID`).
+CLIENTE_LID = OTRO_LID
+
+
+def pregunta(home, cid, candidatos="alfa-demo,beta-demo",
+             texto="Es sobre Alfa Demo o sobre Beta Demo?"):
+    return corre(home, "caso", "pregunta-proyecto", str(cid), "--candidatos", candidatos,
+                 "--texto", texto, "--actor", "agente")
+
+
+def a_chat(home, chat):
+    """Lo que salio (o espera salir) por la bandeja hacia ese chat."""
+    con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+    n = [r[0] for r in con.execute("select body from envio where chat_jid=?", (chat,))]
+    con.close()
+    return n
+
+
+def respondida(home, cid, texto):
+    """La pregunta sale como `responder` firmado por el dueno y queda contestada al chat."""
+    v = js(home, "caso", "propuesta", str(cid), "--tipo", "responder", "--respuesta", texto,
+           "--actor", "agente")[0]["propuesta_version"]
+    js(home, "caso", "aprobar", str(cid), "--version", v, "--actor", "dueno")
+    js(home, "caso", "mover", str(cid), "respondido", "--actor", "automatizacion")
+
+
+def archivo_de(home, cid):
+    antes = dict(os.environ)
+    try:
+        ws = carga_wa_scope(home)
+        con = ws.db()
+        try:
+            caso = ws.caso_de(con, int(cid))
+            return ws.archivo_de_caso(con, caso), "\n".join(ws.historia_del_caso(con, caso))
+        finally:
+            con.close()
+    finally:
+        os.environ.clear()
+        os.environ.update(antes)
+
+
+print("\nproyectos-por-chat: la pregunta A o B (M5)")
+if NODE:
+    if not any(c["jid"] == DUENO_DM for c in CHATS):
+        CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        linea_lista(home, modo_soporte="responder")
+        js(home, "config", "ack", "off")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        acepta_proyectos(home, "alfa-demo", "beta-demo", "gama-demo")
+        js(home, "set", FACTURACION, "--provider", "ninguno", "--mode", "responder",
+           "--workspaces", "alfa-demo,beta-demo")
+        js(home, "set", SOPORTE, "--workspaces", "alfa-demo,beta-demo")
+        pon_duenos(home, DUENO_LID)
+        sidecar = SidecarFalso(home)
+        try:
+            # ── Al que escribio: el dueno, en un grupo de dos proyectos.
+            llegan(home, A, [msg(SOPORTE, "PQ1", "@duenio el informe no carga", 40,
+                                 mencion=True, de=DUENO_LID)])
+            ingiere(home)
+            cid = caso_de_stanza(home, "PQ1")["case_id"]
+            js(home, "caso", "clasificar", str(cid), "--clase", "card", "--prioridad", "high",
+               "--actor", "agente")
+            p = pregunta(home, cid, candidatos="alfa-demo")
+            ok("una pregunta con un solo candidato: E_ARGS", p.returncode != 0 and "E_ARGS" in p.stderr,
+               p.stderr)
+            p = pregunta(home, cid, candidatos="alfa-demo,gama-demo")
+            ok("una pregunta con un proyecto que no es del chat: E_ARGS",
+               p.returncode != 0 and "E_ARGS" in p.stderr, p.stderr)
+            p = pregunta(home, cid, texto="  ")
+            ok("una pregunta sin texto: E_ARGS", p.returncode != 0 and "E_ARGS" in p.stderr, p.stderr)
+            p = pregunta(home, cid)
+            q = (ruta_de(home, cid) or {}).get("pregunta") or {}
+            ok("auto y escribe el dueno: la pregunta es para el que escribio, con su id",
+               p.returncode == 0 and q.get("a") == "writer" and q.get("quien") == DUENO_LID
+               and q.get("candidatos") == ["alfa-demo", "beta-demo"] and q.get("estado") == "abierta"
+               and q.get("texto") == "Es sobre Alfa Demo o sobre Beta Demo?" and q.get("at"),
+               f"{p.stderr} {q}")
+            ok("y la salida le dice al agente que la proponga como respuesta",
+               "responder" in (json.loads(p.stdout or "[{}]")[0].get("next") or ""), p.stdout[-300:])
+            t = tarjeta_con_ruta(home, cid)
+            qt = ((t or {}).get("project_route") or {}).get("question") or {}
+            ok("la tarjeta muestra la pregunta abierta, a quien y los candidatos",
+               qt.get("to") == "writer" and qt.get("state") == "open"
+               and [c["id"] for c in qt.get("candidates", [])] == ["alfa-demo", "beta-demo"],
+               f"{qt}")
+            ok("y la historia la dice con un codigo",
+               any(e.get("que") == "project_question" and e.get("args") == ["writer"]
+                   for e in (t or {}).get("events", [])), f"{(t or {}).get('events')}")
+            respondida(home, cid, "Es sobre Alfa Demo o sobre Beta Demo?")
+
+            # Otro escribe en el grupo: sigue el camino de siempre, no entra a la pregunta.
+            llegan(home, A, [msg(SOPORTE, "PQ2", "Beta", 20, de=CLIENTE_LID)])
+            ingiere(home)
+            ok("lo que escribe otro no entra a la pregunta: el caso sigue respondido",
+               caso_de_stanza(home, "PQ2") is None
+               and js(home, "caso", "ver", str(cid))[0]["etapa"] == "respondido",
+               f"{caso_de_stanza(home, 'PQ2')}")
+            # El que escribio contesta, sin mencion: vuelve al MISMO caso y lo reabre.
+            llegan(home, A, [msg(SOPORTE, "PQ3", "Es de Beta", 15, de=DUENO_LID)])
+            ingiere(home)
+            ver = js(home, "caso", "ver", str(cid))[0]
+            q = (ruta_de(home, cid) or {}).get("pregunta") or {}
+            ok("la respuesta del que escribio reabre el mismo caso, para el agente",
+               (caso_de_stanza(home, "PQ3") or {}).get("case_id") == cid
+               and ver["etapa"] == "recibido" and ver["necesita_agente"] == 1, f"{ver['etapa']}")
+            ok("y queda anotada en la pregunta", q.get("estado") == "contestada"
+               and (q.get("respuesta") or {}).get("stanza") == "PQ3", f"{q}")
+            archivo, _ = archivo_de(home, cid)
+            ok("el archivo del caso tiene la seccion de la pregunta: candidatos, pregunta y respuesta",
+               "## The project question" in archivo and "alfa-demo (Alfa Demo)" in archivo
+               and "Es sobre Alfa Demo o sobre Beta Demo?" in archivo and "PQ3" in archivo,
+               archivo[-1500:])
+            js(home, "caso", "proyecto", str(cid), "--proyecto", "beta-demo", "--actor", "agente",
+               "--porque", "contesto que es de Beta")
+            q = (ruta_de(home, cid) or {}).get("pregunta") or {}
+            ok("elegir el proyecto cierra la pregunta", q.get("estado") == "cerrada"
+               and q.get("elegido") == "beta-demo", f"{q}")
+            ok("y la tarjeta ya no la muestra abierta",
+               (((tarjeta_con_ruta(home, cid) or {}).get("project_route") or {}).get("question")
+                or {}).get("state") == "closed")
+
+            # ── Al dueno: un cliente en un grupo, con auto. Nada sale al cliente.
+            pon_aprobacion(home, DUENO_LID)
+            llegan(home, A, [msg(FACTURACION, "PQ5", "@duenio no me llega la factura", 30,
+                                 mencion=True, de=CLIENTE_LID)])
+            ingiere(home)
+            cli = caso_de_stanza(home, "PQ5")["case_id"]
+            js(home, "caso", "clasificar", str(cli), "--clase", "card", "--prioridad", "high",
+               "--actor", "agente")
+            p = pregunta(home, cli)
+            q = (ruta_de(home, cli) or {}).get("pregunta") or {}
+            ok("auto y escribe un cliente: la pregunta es para el dueno",
+               p.returncode == 0 and q.get("a") == "owner" and q.get("quien") == CLIENTE_LID, f"{q}")
+            ok("y la salida le dice al agente que escale",
+               "escalar" in (json.loads(p.stdout or "[{}]")[0].get("next") or ""), p.stdout[-300:])
+            # Si el agente igual propone la pregunta como respuesta, no sale sola al cliente.
+            js(home, "caso", "propuesta", str(cli), "--tipo", "responder", "--respuesta",
+               "Es sobre Alfa Demo o sobre Beta Demo?", "--actor", "agente")
+            tick(home)
+            ver = js(home, "caso", "ver", str(cli))[0]
+            ok("con la pregunta en manos del dueno, una respuesta no sale sola al cliente",
+               a_chat(home, FACTURACION) == [] and ver["etapa"] == "decision" and not ver["aprobada"],
+               f"{a_chat(home, FACTURACION)} {ver['etapa']}")
+            js(home, "caso", "propuesta", str(cli), "--tipo", "escalar", "--instrucciones",
+               "Es sobre Alfa Demo o sobre Beta Demo?", "--actor", "agente")
+            tick(home)
+            avisos = [a for a in al_dueno(home) if f"Caso {cli}" in a["body"]]
+            ok("el escalar le llega al dueno, y al cliente nada",
+               avisos and "Alfa Demo o sobre Beta Demo" in avisos[-1]["body"]
+               and a_chat(home, FACTURACION) == [], f"{avisos} {a_chat(home, FACTURACION)}")
+            llegan(home, A, [msg(DUENO_DM, "PQ6", f"{cli} es de alfa-demo", 1, de=DUENO_LID)])
+            ingiere(home)
+            _, historia = archivo_de(home, cli)
+            ok("la respuesta `N <texto>` del dueno llega al archivo del caso",
+               js(home, "caso", "ver", str(cli))[0]["etapa"] == "clasificado"
+               and "The owner's corrections" in historia and "es de alfa-demo" in historia,
+               historia[-600:])
+            ok("y al cliente sigue sin salir nada", a_chat(home, FACTURACION) == [])
+
+            # El ajuste del chat manda: writer le pregunta tambien al cliente; owner, al dueno
+            # aunque escriba el dueno.
+            js(home, "set", FACTURACION, "--project-question", "writer")
+            llegan(home, A, [msg(FACTURACION, "PQ7", "@duenio otra factura", 12, mencion=True,
+                                 de=CLIENTE_LID)])
+            ingiere(home)
+            otro = caso_de_stanza(home, "PQ7")["case_id"]
+            js(home, "caso", "clasificar", str(otro), "--clase", "card", "--prioridad", "high",
+               "--actor", "agente")
+            pregunta(home, otro)
+            ok("projectQuestion=writer: al que escribio, aunque sea un cliente",
+               ((ruta_de(home, otro) or {}).get("pregunta") or {}).get("a") == "writer")
+            js(home, "set", SOPORTE, "--project-question", "owner")
+            llegan(home, A, [msg(SOPORTE, "PQ8", "@duenio revisa el tablero", 11, mencion=True,
+                                 de=DUENO_LID)])
+            ingiere(home)
+            suyo = caso_de_stanza(home, "PQ8")["case_id"]
+            js(home, "caso", "clasificar", str(suyo), "--clase", "card", "--prioridad", "high",
+               "--actor", "agente")
+            pregunta(home, suyo)
+            ok("projectQuestion=owner: al dueno, aunque escriba el dueno",
+               ((ruta_de(home, suyo) or {}).get("pregunta") or {}).get("a") == "owner")
+            js(home, "caso", "proyecto", str(suyo), "--proyecto", "alfa-demo", "--actor", "dueno")
+            p = pregunta(home, suyo)
+            ok("con el proyecto que eligio el dueno no se pregunta: E_OWNER",
+               p.returncode != 0 and "E_OWNER" in p.stderr, p.stderr)
+
+            # ── Sin respuesta en projectQuestionHours: pasa al dueno, una vez.
+            js(home, "caso", "mover", str(suyo), "cerrado", "--motivo", "prueba", "--actor", "dueno")
+            js(home, "set", SOPORTE, "--project-question", "auto")
+            llegan(home, A, [msg(SOPORTE, "PQ9", "@duenio el reporte de cierre", 10,
+                                 mencion=True, de=DUENO_LID)])
+            ingiere(home)
+            calla = caso_de_stanza(home, "PQ9")["case_id"]
+            js(home, "caso", "clasificar", str(calla), "--clase", "card", "--prioridad", "high",
+               "--actor", "agente")
+            pregunta(home, calla)
+            respondida(home, calla, "Es sobre Alfa Demo o sobre Beta Demo?")
+            con = db_de(home)
+            r = json.loads(con.execute("select ruta from caso where case_id=?", (calla,)
+                                       ).fetchone()["ruta"])
+            r["pregunta"]["at"] = time.strftime("%Y-%m-%d %H:%M:%S",
+                                                time.localtime(time.time() - 25 * 3600))
+            con.execute("update caso set ruta=? where case_id=?", (json.dumps(r), calla))
+            con.commit()
+            con.close()
+            js(home, "config", "project_question_hours", "48")
+            tick(home)
+            ok("dentro de projectQuestionHours la pregunta sigue con el que escribio",
+               js(home, "caso", "ver", str(calla))[0]["etapa"] == "respondido"
+               and not [a for a in al_dueno(home) if f"Caso {calla}" in a["body"]])
+            js(home, "config", "project_question_hours", "24")
+            tick(home)
+            ver = js(home, "caso", "ver", str(calla))[0]
+            q = (ruta_de(home, calla) or {}).get("pregunta") or {}
+            avisos = [a for a in al_dueno(home) if f"Caso {calla}" in a["body"]]
+            ok("pasado el plazo, la pregunta pasa al dueno como un escalar",
+               ver["etapa"] == "decision" and (ver["propuesta"] or {}).get("tipo") == "escalar"
+               and q.get("a") == "owner" and q.get("escalada_at"), f"{ver['etapa']} {q}")
+            ok("y le llega UN aviso con la pregunta",
+               len(avisos) == 1 and "Alfa Demo o sobre Beta Demo" in avisos[0]["body"], f"{avisos}")
+            tick(home)
+            ok("otro tick no la escala de nuevo",
+               len([a for a in al_dueno(home) if f"Caso {calla}" in a["body"]]) == 1
+               and sum(1 for e in js(home, "caso", "ver", str(calla))[0]["eventos"]
+                       if e["detalle"].startswith("pregunta del proyecto al dueno")) == 1)
+        finally:
+            sidecar.cerrar()
+            os.environ.clear()
+            os.environ.update(env_antes)
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

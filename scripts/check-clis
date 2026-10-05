@@ -725,6 +725,71 @@ def revisa_varios_proyectos(fallos: list) -> int:
         hechas += 1
         if d.get("workspace") is not None or d.get("candidates") != [] or d.get("missing") != []:
             fallos.append(f"un chat sin proyectos no da candidatos vacios: {d!r}")
+
+        # ── A quien se le pregunta "A o B?" (M5): `projectQuestion` por chat, auto de
+        # fabrica, y `projectQuestionHours` global, 24 de fabrica.
+        con = sqlite3.connect(db)
+        cs = {r[1] for r in con.execute("pragma table_info(chat_scope)")}
+        con.close()
+        hechas += 1
+        if "pregunta_proyecto" not in cs:
+            fallos.append("la migracion no agrego chat_scope.pregunta_proyecto")
+        voz = filas("voice", GRUPO)
+        hechas += 1
+        if not voz or voz[0].get("project_question") != "auto":
+            fallos.append(f"voice no dice auto de fabrica: {voz!r}")
+        p = scope("set", GRUPO, "--project-question", "nadie")
+        hechas += 1
+        if p.returncode == 0:
+            fallos.append("set --project-question con un valor que no existe se acepta")
+        p = scope("set", GRUPO, "--project-question", "writer")
+        voz = filas("voice", GRUPO)
+        hechas += 3
+        if p.returncode != 0 or not voz or voz[0].get("project_question") != "writer":
+            fallos.append(f"set --project-question writer no queda: {p.stderr.strip()[:160]} {voz!r}")
+        if fila(GRUPO).get("pregunta_proyecto") != "writer":
+            fallos.append(f"list no trae pregunta_proyecto: {fila(GRUPO)!r}")
+        if (storage().get("scope") or {}).get(GRUPO, {}).get("projectQuestion") != "writer":
+            fallos.append(f"el panel no recibe projectQuestion: {(storage().get('scope') or {}).get(GRUPO)!r}")
+        datos = storage()
+        datos["scope"][GRUPO]["projectQuestion"] = "owner"
+        store.write_text(json.dumps(datos), encoding="utf-8")
+        voz = filas("voice", GRUPO)
+        hechas += 1
+        if not voz or voz[0].get("project_question") != "owner":
+            fallos.append(f"projectQuestion del panel no manda: {voz!r}")
+        scope("sync")
+        con = sqlite3.connect(db)
+        guardado = con.execute("select pregunta_proyecto from chat_scope where chat_jid=?",
+                               (GRUPO,)).fetchone()
+        con.close()
+        hechas += 1
+        if guardado != ("owner",):
+            fallos.append(f"el sync no guardo projectQuestion del panel: {guardado!r}")
+        datos = storage()
+        datos["scope"][GRUPO]["projectQuestion"] = "basura"
+        store.write_text(json.dumps(datos), encoding="utf-8")
+        voz = filas("voice", GRUPO)
+        hechas += 1
+        if not voz or voz[0].get("project_question") != "auto":
+            fallos.append(f"un projectQuestion que no existe no vuelve a auto: {voz!r}")
+
+        hechas += 4
+        if valor(env, "project_question_hours") != "24":
+            fallos.append(f"project_question_hours no es 24 de fabrica: "
+                          f"{valor(env, 'project_question_hours')!r}")
+        p = scope("config", "project_question_hours", "0")
+        if p.returncode == 0 or valor(env, "project_question_hours") != "24":
+            fallos.append("project_question_hours acepta cero")
+        scope("config", "project_question_hours", "6")
+        scope("sync")
+        if storage().get("projectQuestionHours") != "6":
+            fallos.append(f"el panel no recibe projectQuestionHours: "
+                          f"{storage().get('projectQuestionHours')!r}")
+        guarda(projectQuestionHours="3")
+        if valor(env, "project_question_hours") != "3":
+            fallos.append(f"projectQuestionHours del panel no manda: "
+                          f"{valor(env, 'project_question_hours')!r}")
     return hechas
 
 
