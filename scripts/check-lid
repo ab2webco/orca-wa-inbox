@@ -1,0 +1,432 @@
+#!/usr/bin/env python3
+"""La autorizacion sigue al directo que WhatsApp movio a su LID
+(odd/tasks/lid-sigue-autorizacion.md).
+
+WhatsApp mueve los uno a uno de `<telefono>@s.whatsapp.net` a `<digitos>@lid` (y a veces
+de vuelta). La autorizacion del dueno quedaba en la forma vieja y los mensajes nuevos
+llegaban por la otra: la conversacion autorizada dejaba de atenderse sin que nada lo
+dijera. Visto en una instalacion real: doce dias sin que nadie lo notara.
+
+Decision del dueno (2026-10-05): automatico y con aviso. Con un par verificado de
+`lid_telefono` DE LA MISMA LINEA, la entrada entera pasa a la forma viva, una sola vez, y
+el dueno recibe UN aviso. Sin par, con el par de otra linea, o en un grupo: nada se mueve.
+Con las dos formas autorizadas: conflicto, sin unir.
+
+Todo corre contra un capture.db armado por el escritor de verdad (el sidecar) y un HOME
+propio, como scripts/check-casos. Los numeros son los de prueba de
+scripts/check-datos-reales.
+"""
+import json
+import os
+import pathlib
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import time
+
+RAIZ = pathlib.Path(__file__).resolve().parent.parent
+WA_SCOPE = RAIZ / "bin" / "wa-scope"
+NODE = shutil.which("node")
+SIN_ORCA = "/nonexistent/orca-no-existe"
+
+A = "pn:573000000001"
+B = "pn:573000000012"
+PN = {A: "573000000001:7@s.whatsapp.net", B: "573000000012:7@s.whatsapp.net"}
+TEL = "573000000011@s.whatsapp.net"
+LID = "100000000000002@lid"
+OTRO_LID = "199887766554433@lid"
+TEL2 = "573000000013@s.whatsapp.net"
+GRUPO = "120363000000000001@g.us"
+DUENO = "573000000002@s.whatsapp.net"
+AHORA = int(time.time())
+MIN = 60
+DIA = 86400
+
+fallos = []
+pruebas = 0
+
+
+def ok(nombre, condicion, detalle=""):
+    global pruebas
+    pruebas += 1
+    if condicion:
+        print(f"  ok    {nombre}")
+        return True
+    fallos.append(f"{nombre}{f' — {detalle}' if detalle else ''}")
+    print(f"  FALLA {nombre}{f' — {detalle}' if detalle else ''}")
+    return False
+
+
+def entorno(home):
+    return dict(os.environ, HOME=str(home),
+                XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+                APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"),
+                ORCA_CLI_COMMAND=os.environ.get("ORCA_CLI_COMMAND", SIN_ORCA))
+
+
+def corre(home, *args):
+    return subprocess.run([str(WA_SCOPE), *args, "--json"], capture_output=True, text=True,
+                          env=entorno(home), timeout=180)
+
+
+def js(home, *args):
+    p = corre(home, *args)
+    if p.returncode != 0:
+        raise AssertionError(f"wa-scope {' '.join(args)} salio {p.returncode}: "
+                             f"{p.stderr.strip() or p.stdout.strip()}")
+    return json.loads(p.stdout or "[]")
+
+
+ALMACEN_JS = """
+import { abrirAlmacen, rutaAlmacen } from %r;
+const d = JSON.parse(process.env.DATOS);
+const a = abrirAlmacen(rutaAlmacen({ HOME: process.env.HOME }));
+for (const [cuenta, pn] of d.lineas) a.registrarLinea({ cuenta, pn, nombre: 'Prueba' });
+for (const c of d.chats) {
+  a.anotarChat({ cuenta: c.cuenta, chatJid: c.jid, nombre: c.nombre, esGrupo: c.grupo ? 1 : 0,
+    ts: c.ts ?? null, ahora: (c.visto ?? c.ts ?? d.ahora) * 1000 });
+}
+for (const m of d.mensajes) {
+  a.guardarMensaje({ cuenta: m.cuenta, chatJid: m.chat, stanzaId: m.id, ts: m.ts,
+    fromMe: m.yo ? 1 : 0, senderJid: m.yo ? null : m.chat, senderName: m.yo ? null : 'Ana',
+    body: m.texto || '', mediaTipo: null, mediaBytes: null, mencionaMe: 0, citaMe: 0 });
+}
+for (const p of d.pares) a.anotarTelefono({ cuenta: p.cuenta, lid: p.lid, pn: p.pn });
+a.activarLinea(d.activa); a.latir(); a.cerrar();
+""" % (RAIZ / "sidecar" / "src" / "almacen.js").as_uri()
+
+
+def almacen(home, chats=(), mensajes=(), pares=(), activa=A):
+    """El capture.db de la prueba. `chats`: (cuenta, jid, nombre, ts, grupo); `mensajes`:
+    (cuenta, chat, id, ts, yo, texto); `pares`: (cuenta, lid, pn)."""
+    (pathlib.Path(home) / ".wa-inbox").mkdir(parents=True, exist_ok=True)
+    datos = {"lineas": list(PN.items()), "activa": activa, "ahora": AHORA,
+             "chats": [{"cuenta": c[0], "jid": c[1], "nombre": c[2], "ts": c[3],
+                        "grupo": c[4] if len(c) > 4 else False} for c in chats],
+             "mensajes": [{"cuenta": m[0], "chat": m[1], "id": m[2], "ts": m[3], "yo": m[4],
+                           "texto": m[5]} for m in mensajes],
+             "pares": [{"cuenta": p[0], "lid": p[1], "pn": p[2]} for p in pares]}
+    subprocess.run([NODE, "--input-type=module", "-e", ALMACEN_JS], check=True,
+                   capture_output=True, timeout=120,
+                   env=dict(entorno(home), DATOS=json.dumps(datos)))
+
+
+def storage_de(home):
+    man = json.loads((RAIZ / "orca-plugin.json").read_text(encoding="utf-8"))
+    base = (pathlib.Path(home) / "Library" / "Application Support" / "orca"
+            if sys.platform == "darwin" else pathlib.Path(home) / ".config" / "orca")
+    return base / "plugins-data" / f"{man['publisher']}.{man['id']}" / "storage.json"
+
+
+def storage(home):
+    ruta = storage_de(home)
+    return json.loads(ruta.read_text(encoding="utf-8")) if ruta.exists() else {}
+
+
+def pon_storage(home, **claves):
+    ruta = storage_de(home)
+    datos = storage(home)
+    datos.update(claves)
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    ruta.write_text(json.dumps(datos), encoding="utf-8")
+
+
+def aprobacion(home, idioma="es"):
+    """El numero de aprobacion, como lo deja el panel: uno de los numeros del dueno."""
+    pon_storage(home, owners=[{"id": DUENO, "name": "Dueno"}], approvalNumber=DUENO,
+                approvalLang=idioma)
+
+
+def base_vieja(home, dias=30):
+    """Una instalacion que lleva tiempo: la linea base de ingest es de hace un mes. Sin
+    esto la primera corrida la fija en la ventana y esconde lo que se quiere medir."""
+    con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "scope.db")
+    con.execute("insert into settings (key, value) values (?, ?) on conflict(key) do "
+                "update set value=excluded.value",
+                (f"ingest_desde@{A}", time.strftime("%Y-%m-%d %H:%M:%S",
+                                                     time.localtime(AHORA - dias * DIA))))
+    con.commit()
+    con.close()
+
+
+def filas(home, sql, *params):
+    con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "scope.db")
+    con.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in con.execute(sql, params)]
+    except sqlite3.Error:
+        return []
+    finally:
+        con.close()
+
+
+def alcance(home):
+    return {r["chat_jid"]: r for r in filas(
+        home, "select * from chat_scope where account=?", A)}
+
+
+def migraciones(home):
+    return filas(home, "select * from lid_migracion order by id")
+
+
+def avisos(home):
+    return filas(home, "select req_id, tipo, chat_jid, texto from aviso where tipo='alcance' "
+                       "order by rowid")
+
+
+def casos_de(home, stanza):
+    return filas(home, "select case_id from caso_mensaje where stanza_id=?", stanza)
+
+
+def autoriza(home, jid, *extra):
+    js(home, "set", jid, "--provider", "ninguno", "--mode", "responder", *extra)
+
+
+def doctor(home):
+    p = corre(home, "doctor")
+    try:
+        salida = json.loads(p.stdout or "[]") if p.returncode == 0 else []
+    except ValueError:
+        salida = []
+    return salida[0] if salida else {"error": p.stderr.strip()[-200:]}
+
+
+def entrada_doctor(home, jid):
+    return next((e for e in doctor(home).get("entries", []) if e.get("jid") == jid), {})
+
+
+if not NODE:
+    print("  aviso: sin node, no se armo el almacen", file=sys.stderr)
+    sys.exit(1)
+
+# ── 1. Telefono autorizado, la conversacion ahora vive en su LID ─────────────────────
+print("\nel telefono autorizado pasa al LID vivo")
+with tempfile.TemporaryDirectory() as home:
+    almacen(home,
+            chats=[(A, TEL, "Cliente Uno", AHORA - 10 * DIA),
+                   (A, LID, "Cliente Uno", AHORA - 30 * MIN)],
+            mensajes=[(A, TEL, "T1", AHORA - 10 * DIA, False, "hola de antes"),
+                      (A, LID, "L0", AHORA - 3 * DIA, False, "nadie me contesto"),
+                      (A, LID, "L1", AHORA - 30 * MIN, False, "necesito ayuda con el pedido")],
+            pares=[(A, LID, TEL)])
+    aprobacion(home)
+    autoriza(home, TEL, "--tone", "Formal y breve", "--instructions", "Solo pedidos",
+             "--notes", "cliente antiguo", "--ack", "off", "--greeting", "on",
+             "--first-reply", "model", "--approval", "money=allow",
+             "--project-question", "owner")
+    base_vieja(home)
+    antes = alcance(home)[TEL]
+    salida = js(home, "ingest")[0]
+    ahora = alcance(home)
+    ok("la entrada queda en el LID y ya no en el telefono",
+       LID in ahora and TEL not in ahora, f"quedo {sorted(ahora)}")
+    movida = ahora.get(LID) or {}
+    iguales = [c for c in ("mode", "tone", "instructions", "notes", "acuse", "saludo",
+                           "primer_mensaje", "aprobacion", "pregunta_proyecto", "provider",
+                           "workspaces", "hours", "timezone")
+               if movida.get(c) != antes.get(c)]
+    ok("con TODAS sus columnas: modo, tono, notas, niveles, acuse, primer mensaje, pregunta",
+       not iguales, f"cambiaron {iguales}: {movida}")
+    ok("el nombre de la conversacion se conserva", movida.get("chat_name") == "Cliente Uno",
+       movida.get("chat_name"))
+    panel = (storage(home).get("scope") or {})
+    ok("el panel ve una sola fila, en el LID", LID in panel and TEL not in panel,
+       f"panel {sorted(panel)}")
+    ok("y la del panel trae el tono y el modo", (panel.get(LID) or {}).get("tone") ==
+       "Formal y breve" and (panel.get(LID) or {}).get("mode") == "responder",
+       json.dumps(panel.get(LID)))
+    rastro = migraciones(home)
+    ok("queda el rastro: de donde, a donde, la linea y cuando",
+       len(rastro) == 1 and rastro[0]["desde"] == TEL and rastro[0]["hacia"] == LID
+       and rastro[0]["account"] == A and rastro[0]["origen"] == "auto" and rastro[0]["at"],
+       f"{rastro}")
+    ok("el mensaje del hueco dentro de la ventana abre su caso ahora", bool(casos_de(home, "L1")),
+       f"ingest {salida}")
+    ok("el de antes de la ventana no se contesta solo", not casos_de(home, "L0"),
+       f"ingest {salida}")
+    aviso = avisos(home)
+    texto = aviso[0]["texto"] if aviso else ""
+    ok("un solo aviso al numero de aprobacion", len(aviso) == 1 and aviso[0]["chat_jid"] == DUENO,
+       f"{aviso}")
+    ok("que dice con quien, su telefono y que la autorizacion paso sola",
+       "Cliente Uno" in texto and "+573000000011" in texto and "autorizacion paso sola" in texto,
+       texto)
+    ok("y cuantos quedaron sin atender, y desde cuando",
+       "1 mensajes recientes" in texto and "1 mensajes sin atender desde "
+       + time.strftime("%Y-%m-%d", time.localtime(AHORA - 3 * DIA)) in texto, texto)
+    captura = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+    al_contacto = captura.execute("select count(*) from envio where chat_jid in (?, ?)",
+                                  (TEL, LID)).fetchone()[0]
+    captura.close()
+    ok("la migracion no le escribe nada al contacto",
+       al_contacto == 0 and not filas(home, "select 1 from aviso where chat_jid in (?, ?)",
+                                      TEL, LID), f"{al_contacto} envios al contacto")
+    ok("la conversacion movida pasa la compuerta",
+       corre(home, "check", LID, "--for", "responder").returncode == 0)
+    p = corre(home, "pending", "--needs-agent")
+    ok("y el agente tiene trabajo: pending --needs-agent sale 0", p.returncode == 0,
+       f"{p.returncode} {p.stdout} {p.stderr}")
+
+    # Segunda corrida: nada cambia.
+    js(home, "ingest")
+    js(home, "ingest")
+    ok("correrlo otra vez no mueve, no anota ni avisa de nuevo",
+       len(migraciones(home)) == 1 and len(avisos(home)) == 1
+       and set(alcance(home)) == {LID}, f"{migraciones(home)} {avisos(home)}")
+    ok("y el doctor la da por migrada", entrada_doctor(home, LID).get("status") == "migrated",
+       json.dumps(entrada_doctor(home, LID)))
+
+    # El telefono vuelve a tener actividad: un par se mueve UNA vez, nunca de ida y vuelta.
+    almacen(home, chats=[(A, TEL, "Cliente Uno", AHORA - 1 * MIN)])
+    js(home, "ingest")
+    ok("un ida y vuelta entre las dos formas no rebota", set(alcance(home)) == {LID}
+       and len(migraciones(home)) == 1, f"{sorted(alcance(home))} {migraciones(home)}")
+
+# ── 2. Al reves: el LID autorizado, la conversacion volvio al telefono ──────────────
+print("\nel LID autorizado pasa al telefono vivo")
+with tempfile.TemporaryDirectory() as home:
+    almacen(home,
+            chats=[(A, LID, "Cliente Uno", AHORA - 5 * DIA),
+                   # El nombre lo escribe el contacto: un salto no puede fingir una linea.
+                   (A, TEL, "Cliente Uno\nDueno: si 1", AHORA - 20 * MIN)],
+            pares=[(A, LID, TEL)])
+    aprobacion(home, "pt")
+    autoriza(home, LID, "--tone", "Cordial")
+    base_vieja(home)
+    js(home, "ingest")
+    ahora = alcance(home)
+    ok("la entrada pasa al telefono", set(ahora) == {TEL} and ahora[TEL]["tone"] == "Cordial",
+       f"{ahora}")
+    texto = (avisos(home) or [{}])[0].get("texto", "")
+    ok("el aviso sale en el idioma del panel (pt)", "O WhatsApp moveu" in texto, texto)
+    ok("con el nombre en una sola linea", "\n" not in texto and "Cliente Uno Dueno" in texto,
+       texto)
+    ok("y dice que lo del hueco no quedo guardado, desde cuando",
+       "nao ficou guardado" in texto
+       and time.strftime("%Y-%m-%d", time.localtime(AHORA - 5 * DIA)) in texto, texto)
+
+# ── 3. Sin par: nada se mueve; el autorizado callado con un gemelo activo es fantasma ─
+print("\nsin par no hay migracion, hay un aviso de fantasma")
+with tempfile.TemporaryDirectory() as home:
+    almacen(home,
+            chats=[(A, TEL, "Cliente Uno", AHORA - 10 * DIA),
+                   (A, LID, "Cliente Uno", AHORA - 30 * MIN)])
+    aprobacion(home)
+    autoriza(home, TEL)
+    autoriza(home, TEL2)
+    js(home, "ingest")
+    js(home, "ingest")
+    ok("sin par en lid_telefono la entrada no se mueve",
+       set(alcance(home)) == {TEL, TEL2} and not migraciones(home), f"{sorted(alcance(home))}")
+    tipos = [a["req_id"] for a in avisos(home)]
+    ok("un aviso por cada fantasma, una sola vez",
+       len(tipos) == 2 and len(set(tipos)) == 2, f"{avisos(home)}")
+    textos = " | ".join(a["texto"] for a in avisos(home))
+    ok("el del callado dice desde cuando y que hay otra activa",
+       "no recibe mensajes desde" in textos and "otra activa" in textos, textos)
+    ok("el que no tiene conversacion dice que no aparece", "no aparece" in textos, textos)
+    ok("el doctor los lista como fantasmas",
+       entrada_doctor(home, TEL).get("status") == "ghost"
+       and entrada_doctor(home, TEL2).get("status") == "ghost",
+       json.dumps(doctor(home)))
+
+# ── 4. El par es de OTRA linea: no vale para esta ─────────────────────────────────
+print("\nel par de otra linea no mueve nada")
+with tempfile.TemporaryDirectory() as home:
+    almacen(home,
+            chats=[(A, TEL, "Cliente Uno", AHORA - 2 * DIA),
+                   (A, LID, "Otro Nombre", AHORA - 30 * MIN),
+                   (B, LID, "Otro Nombre", AHORA - 30 * MIN)],
+            pares=[(B, LID, TEL)])
+    aprobacion(home)
+    autoriza(home, TEL)
+    js(home, "ingest")
+    ok("la entrada sigue en el telefono", set(alcance(home)) == {TEL} and not migraciones(home),
+       f"{sorted(alcance(home))} {migraciones(home)}")
+    ok("y no hay aviso", not avisos(home), f"{avisos(home)}")
+
+# ── 5. Un grupo nunca migra ──────────────────────────────────────────────────────
+print("\nun grupo nunca migra")
+with tempfile.TemporaryDirectory() as home:
+    almacen(home, chats=[(A, GRUPO, "Soporte Norte", AHORA - 20 * DIA, True)],
+            pares=[(A, LID, TEL)])
+    aprobacion(home)
+    autoriza(home, GRUPO)
+    js(home, "ingest")
+    ok("el grupo queda donde estaba, sin rastro ni aviso",
+       set(alcance(home)) == {GRUPO} and not migraciones(home) and not avisos(home),
+       f"{sorted(alcance(home))} {avisos(home)}")
+    ok("y el doctor lo da por bueno", entrada_doctor(home, GRUPO).get("status") == "ok",
+       json.dumps(doctor(home)))
+
+# ── 6. Las dos formas autorizadas: conflicto, sin unir ────────────────────────────
+print("\nlas dos formas autorizadas son un conflicto")
+with tempfile.TemporaryDirectory() as home:
+    almacen(home,
+            chats=[(A, TEL, "Cliente Uno", AHORA - 10 * DIA),
+                   (A, LID, "Cliente Uno", AHORA - 30 * MIN)],
+            pares=[(A, LID, TEL)])
+    aprobacion(home, "en")
+    autoriza(home, TEL, "--tone", "Uno")
+    autoriza(home, LID, "--tone", "Otro")
+    js(home, "ingest")
+    js(home, "ingest")
+    ahora = alcance(home)
+    ok("las dos quedan, cada una con lo suyo",
+       set(ahora) == {TEL, LID} and ahora[TEL]["tone"] == "Uno" and ahora[LID]["tone"] == "Otro"
+       and not migraciones(home), f"{ahora}")
+    ok("un solo aviso de conflicto, en el idioma del panel",
+       len(avisos(home)) == 1 and "both of its WhatsApp ids" in avisos(home)[0]["texto"],
+       f"{avisos(home)}")
+    ok("el doctor marca el conflicto en las dos",
+       entrada_doctor(home, TEL).get("status") == "conflict"
+       and entrada_doctor(home, LID).get("status") == "conflict", json.dumps(doctor(home)))
+
+# ── 7. La conversacion que nunca cambio de forma sigue igual ──────────────────────
+print("\nla conversacion que no se movio sigue como siempre")
+with tempfile.TemporaryDirectory() as home:
+    almacen(home,
+            chats=[(A, TEL, "Cliente Uno", AHORA - 10 * MIN),
+                   (A, LID, "Cliente Uno", AHORA - 10 * DIA)],
+            mensajes=[(A, TEL, "T9", AHORA - 10 * MIN, False, "hola, una consulta")],
+            pares=[(A, LID, TEL)])
+    aprobacion(home)
+    autoriza(home, TEL)
+    base_vieja(home)
+    antes = alcance(home)
+    js(home, "ingest")
+    ok("el telefono vivo se queda: ni rastro, ni aviso",
+       alcance(home) == antes and not migraciones(home) and not avisos(home),
+       f"{sorted(alcance(home))} {avisos(home)}")
+    ok("y su mensaje abre caso como siempre", bool(casos_de(home, "T9")))
+    ok("el doctor la da por buena", entrada_doctor(home, TEL).get("status") == "ok",
+       json.dumps(doctor(home)))
+
+# ── 8. El panel ya la guardo en el LID: wa-scope termina el cambio ─────────────────
+print("\nel cambio que hizo el panel se termina sin aviso")
+with tempfile.TemporaryDirectory() as home:
+    almacen(home,
+            chats=[(A, TEL, "Cliente Uno", AHORA - 10 * DIA),
+                   (A, LID, "Cliente Uno", AHORA - 30 * MIN)],
+            pares=[(A, LID, TEL)])
+    aprobacion(home)
+    autoriza(home, TEL, "--tone", "Del CLI")
+    # Lo que deja el panel al editar: la entrada bajo el LID y la del telefono ya no esta.
+    datos = storage(home)
+    entrada = dict(datos["scope"].pop(TEL), tone="Del panel")
+    datos["scope"][LID] = entrada
+    pon_storage(home, scope=datos["scope"])
+    js(home, "ingest")
+    ok("la fila vieja de la base se va y queda la del LID",
+       set(alcance(home)) == {LID} and alcance(home)[LID]["tone"] == "Del panel",
+       f"{alcance(home)}")
+    rastro = migraciones(home)
+    ok("con su rastro, hecho por el panel",
+       len(rastro) == 1 and rastro[0]["origen"] == "panel", f"{rastro}")
+    ok("y sin aviso: lo hizo el dueno", not avisos(home), f"{avisos(home)}")
+
+print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
+if fallos:
+    sys.exit(1)

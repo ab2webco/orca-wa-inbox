@@ -1662,6 +1662,100 @@ def revisa_roles(fallos: list) -> int:
     return hechas
 
 
+def revisa_doctor_lid(fallos: list) -> int:
+    """`wa-scope doctor` (lid-sigue-autorizacion): cada entrada autorizada de la linea con su
+    jid, la forma pareada, la ultima entrada y actividad de cada forma, su estado y el
+    rastro de lo que se movio. Sin almacen tambien contesta, sin traceback."""
+    hechas = 0
+    if not shutil.which("node"):
+        print("  aviso: sin node, no se armo el almacen del doctor", file=sys.stderr)
+        return hechas
+    tel, lid, grupo = "573000000011@s.whatsapp.net", "100000000000002@lid", "300@g.us"
+    ahora = int(time.time())
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+
+        def doctor(*extra):
+            return subprocess.run([str(BIN / "wa-scope"), "doctor", *extra],
+                                  capture_output=True, text=True, env=env, timeout=120)
+
+        p = doctor("--json")
+        hechas += 1
+        try:
+            sin = json.loads(p.stdout or "[]")[0]
+        except (ValueError, IndexError):
+            sin = {}
+        if p.returncode != 0 or "store" not in sin or "Traceback" in p.stderr:
+            fallos.append(f"`wa-scope doctor --json` sin almacen: {p.returncode} "
+                          f"{p.stdout.strip()[:200]} {p.stderr.strip()[-200:]}")
+
+        js = (
+            "import { abrirAlmacen, rutaAlmacen } from %r;"
+            "const a = abrirAlmacen(rutaAlmacen({ HOME: process.env.HOME }));"
+            "a.registrarLinea({ cuenta: %r, pn: '573000000012:7@s.whatsapp.net', nombre: 'L' });"
+            "a.anotarChat({ cuenta: %r, chatJid: %r, nombre: 'Persona', ts: %d });"
+            "a.anotarChat({ cuenta: %r, chatJid: %r, nombre: 'Persona', ts: %d });"
+            "a.anotarChat({ cuenta: %r, chatJid: %r, nombre: 'Grupo', esGrupo: 1, ts: %d });"
+            "a.guardarMensaje({ cuenta: %r, chatJid: %r, stanzaId: 'D1', ts: %d, fromMe: 0,"
+            " senderJid: %r, senderName: 'Persona', body: 'hola', mediaTipo: null,"
+            " mediaBytes: null, mencionaMe: 0, citaMe: 0 });"
+            "a.anotarTelefono({ cuenta: %r, lid: %r, pn: %r });"
+            "a.activarLinea(%r); a.latir(); a.cerrar();"
+            % ((RAIZ / "sidecar" / "src" / "almacen.js").as_uri(), NUEVA, NUEVA, tel,
+               ahora - 9 * 86400, NUEVA, lid, ahora - 600, NUEVA, grupo, ahora - 60, NUEVA,
+               tel, ahora - 9 * 86400, tel, NUEVA, lid, tel, NUEVA))
+        subprocess.run([shutil.which("node") or "node", "--input-type=module", "-e", js],
+                       env=env, check=True, capture_output=True, timeout=120)
+        for jid in (tel, grupo):
+            subprocess.run([str(BIN / "wa-scope"), "set", jid, "--provider", "ninguno",
+                            "--mode", "observar"], capture_output=True, text=True, env=env,
+                           timeout=120)
+
+        def lee():
+            q = doctor("--json")
+            try:
+                return json.loads(q.stdout or "[]")[0], q
+            except (ValueError, IndexError):
+                return {}, q
+
+        antes, q = lee()
+        por_jid = {e.get("jid"): e for e in antes.get("entries", [])}
+        formas = {f.get("jid"): f for f in (por_jid.get(tel) or {}).get("forms", [])}
+        hechas += 1
+        if (antes.get("account") != NUEVA or (por_jid.get(tel) or {}).get("paired") != [lid]
+                or (por_jid.get(tel) or {}).get("moves_to") != lid
+                or (formas.get(tel) or {}).get("last_in", "") == ""
+                or (formas.get(lid) or {}).get("last_seen", "") == ""
+                or (formas.get(lid) or {}).get("last_in") != ""
+                or (por_jid.get(grupo) or {}).get("status") != "ok"
+                or (por_jid.get(grupo) or {}).get("paired") != []):
+            fallos.append(f"`wa-scope doctor --json` antes de mover: {json.dumps(antes)} "
+                          f"{q.stderr.strip()[-200:]}")
+
+        subprocess.run([str(BIN / "wa-scope"), "ingest", "--json"], capture_output=True,
+                       text=True, env=env, timeout=180)
+        despues, q = lee()
+        por_jid = {e.get("jid"): e for e in despues.get("entries", [])}
+        rastro = despues.get("migrations") or []
+        hechas += 1
+        if (tel in por_jid or (por_jid.get(lid) or {}).get("status") != "migrated"
+                or (por_jid.get(lid) or {}).get("migrated_from") != tel
+                or (por_jid.get(lid) or {}).get("phone") != "+573000000011"
+                or len(rastro) != 1 or rastro[0].get("desde") != tel
+                or rastro[0].get("hacia") != lid or rastro[0].get("origen") != "auto"):
+            fallos.append(f"`wa-scope doctor --json` despues de mover: {json.dumps(despues)} "
+                          f"{q.stderr.strip()[-200:]}")
+
+        texto = doctor()
+        hechas += 1
+        if (texto.returncode != 0 or "Traceback" in texto.stderr
+                or "migrated" not in texto.stdout or f"{tel} -> {lid}" not in texto.stdout):
+            fallos.append(f"`wa-scope doctor` en texto: {texto.returncode} "
+                          f"{texto.stdout.strip()[:300]} {texto.stderr.strip()[-200:]}")
+    return hechas
+
+
 def revisa_reclave_local(fallos: list) -> int:
     """T9f: lo que colgaba de `local` en scope.db pasa al numero de su linea, al MISMO
     numero que anoto el sidecar en capture.db. Explicito: ningun comando de todos los
@@ -2747,6 +2841,7 @@ def main() -> int:
                       + revisa_telefono_de_lid(fallos)
                       + revisa_miembros(fallos)
                       + revisa_roles(fallos)
+                      + revisa_doctor_lid(fallos)
                       + revisa_proyectos(fallos)
                       + revisa_varios_proyectos(fallos)
                       + revisa_espera(fallos))
