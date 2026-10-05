@@ -86,3 +86,12 @@ chats already skip the rule levels in `frenos_de_regla`), Jev.
 - `scripts/check-casos`
 - `scripts/check-harness`
 - `npm run check`
+
+## Result
+
+- `npm run check` green after D4 and the group follow-up: check-casos 1150/1150,
+  check-harness 58 checks, check-clis 273, worker 410/410, shots 1272 captures with no
+  overflow or JS errors (in `~/Projects/.capturas-dueno`). No panel changed in this task,
+  so no screenshots were reviewed for it.
+- Follow-up not done: the line typed into the worker's terminal when the sender answers a
+  `necesita` (`texto_de_respuesta`) still says "the customer answered".
