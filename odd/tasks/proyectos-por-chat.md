@@ -119,7 +119,9 @@ Everything must be configurable and wired end to end (panel and logic), in ES, E
     - New `wa_store.rol_de(con, cuenta, chat_jid, sender_jid, owners, miembros)` → `admin|operator|client`:
       - a global owner (`duenos()`, `bin/wa_settings.py:434-454`) is `admin` everywhere;
       - otherwise the role saved for that chat, valid only in that chat;
-      - LID and phone ids match only through a `lid_telefono` pair, never guessed.
+      - LID and phone ids match only through a `lid_telefono` pair, never guessed. Since the
+        verification fixes this applies to the per-chat roles only: a global owner is matched
+        by his exact id, as `es_dueno` does (see "Verification fixes (on 93bba3c)").
     - `es_dueno` stays as is for the approval-number gate (`bin/wa-scope:4929-4935`). WhatsApp approval stays with the global owners.
     - `rol_del_caso` is the lowest role among the case's non-own senders, generalising the all-senders rule in `caso_del_dueno` (`:3021-3045`).
 17. **Role in behaviour**
@@ -603,8 +605,8 @@ Everything must be configurable and wired end to end (panel and logic), in ES, E
       row, marked "ya no esta en esta conversacion", so saving never drops it silently.
     - **Empty or missing list:** "Todavia no hay lista de participantes de este grupo. Llega
       cuando el plugin sincroniza ..." (`#people-empty`). Roles already saved still show.
-    - **Global owners** (`owners`, by id, or by the phone the list carries, which comes from
-      the id or a `lid_telefono` pair): a read-only "Super admin" badge, "Numero de
+    - **Global owners** (`owners`, by exact id since the verification fixes; before, also by
+      the phone the list carries): a read-only "Super admin" badge, "Numero de
       confianza: Super admin en todas las conversaciones", and a "Se cambia en Su aprobacion"
       button that opens that tab at the owners card. The line's own chat is also read-only.
     - **Help text:** the role comes from the number and never from a message, and it holds
@@ -695,6 +697,65 @@ Everything must be configurable and wired end to end (panel and logic), in ES, E
     lines.
   - [x] **Screenshots looked at and listed:** see M11, 60 PNGs of the three People states.
   - [ ] **Live check on the real line.** Not done in this stage: it is for the main session.
+- [x] **Verification fixes (on 93bba3c)** — six defects found by independent verifiers, each
+  reproduced on fake data. Tests: `scripts/check-casos` ("roles-por-numero: lo que encontro la
+  verificacion", 13 checks), `scripts/check-clis` (`revisa_roles`, +3 checks and one changed
+  expectation, below) and `test/panels.test.mjs` (one section after the M11 ones, 10 checks).
+  - RED, each new test run alone against the 93bba3c code: check-casos 4/13 (the 4 that
+    passed are controls: the owner's exact id is still `owner`, a client is unchanged, the
+    question to a current operator is signed by the rule, and an explicit `writer` follows its
+    usual path). check-clis `revisa_roles` 4 failures out of 36. panels 1/10 (the control:
+    the search says "1 de 2").
+  - GREEN: the same 13/13, 36/36 and 10/10. Full `npm run check`, exit 0:
+    - `check-clis` 368 checks (365 + 3), `check-casos` 1378/1378 (1365 + 13), `check-harness`
+      69, `check-prompts` 15, `check-closing` 36/36;
+    - sidecar-build 5/5, sidecar-pairing 88/88, sidecar-mensajes 112/112, almacen 300/300,
+      envio 93/93, panels 1339/1339 (1329 + 10), worker 410/410;
+    - `check-voseo`, `check-datos-reales`, `check-panels` pass; 1620 captures with no
+      overflow, JS errors or selects.
+  1. and 2. **The owner's other id became admin through the LID-phone pair.** `rol_de`
+     expanded the sender with `companeros_de` and returned admin when any paired id was an
+     owner, while `es_dueno`, `chat_del_dueno`, `caso_del_dueno`, the approval gate and the
+     `jev_guardado` fallback match the exact id. M8 writes a pair for every group participant,
+     so after the upgrade the owner's case became half owner, half "operator": Jev `from`
+     `owner`, `juicio.rol` admin, his direct chat by phone without the customer levels, the
+     header and brief `DICE_OPERADOR`/`BRIEF_OPERADOR` ("the owner named this number operator
+     or admin here", false), and the `auto` question to the writer. Now `rol_de` checks the
+     global owners with `es_dueno` on the sender's own id, before any pair; the pair is used
+     only for the per-chat roles. A chat with no roles is again exactly v4.16.0. The panel
+     follows the same rule: `esDuenoGuardado` matches the exact id only, so a participant who
+     only shares the owner's phone through the pair is a normal row the owner can mark.
+     **This changes one `rol_de` expectation added on this branch in M9** ("el dueno guardado
+     por telefono escribe con su LID: el par lo une", `admin`): it now expects `client`, as
+     v4.16.0. It is not a pre-feature test, and nothing on origin/main is touched. Two cases
+     were added: his direct chat by LID is `client`, and a per-chat role saved for his phone
+     id still reaches his LID through the pair (`operator`).
+  3. **`wa-scope set --member` brought back a role removed in the panel.** It started from the
+     `chat_scope.miembros` column, which only catches up with the panel on the next sync, and
+     then overwrote the panel's `members` with that list. Now it starts from `merged_scope`
+     (the panel's list wins). check-clis: the panel clears the roles, then `set --member` with
+     another person leaves only that person, in the database, in `list` and in the panel.
+  4. **A question routed to the writer stayed with him after the owner removed his role.**
+     The recipient was decided once, when the question was recorded. Now `para_de_pregunta`
+     holds the routing rule, and `pregunta_del_dueno` re-checks it each time a reply or an
+     update would go out: a question stored with `a: writer` is the owner's when the rule no
+     longer says `writer`. `frenos_de_regla` then holds the reply with `project_question`
+     (the rule does not sign it, `E_EXCEPTION`), and `avance_frena` refuses an update. With
+     the role still in place, or with an explicit `writer`, nothing changes.
+  5. **The search count's live region was `display: none` while empty**, so it entered the
+     accessibility tree in the same update as its first text. It is now always rendered
+     (`#people-count:empty { margin: 0; }`, zero height when empty). The panels test reads
+     the computed `display` before the first search.
+  6. **The empty-group text asked the owner to save a group that was already saved.** A group
+     being edited, or already in the scope, now says `peopleGroupPending` ("Aparece sola
+     cuando el plugin la recibe de WhatsApp y sincroniza: no hace falta guardar de nuevo",
+     with EN and PT). A group picked in the new form and not saved yet keeps `peopleGroupEmpty`.
+  - Screenshots looked at (cropped around the card, in
+    `/Volumes/Data/claude-tmp/claude-501/roles-por-numero/fix-shots`, from the
+    `WA_INBOX_CAPTURAS` of the full run): `config-personas-vacio` ES light 1440, ES dark 320,
+    EN light 320 and PT dark 1440 (the new text, no "save it"); `config-personas-grupo` ES dark
+    1440 and EN light 320 (the owner by exact id still read-only, the search field and the list
+    with no extra gap from the always-rendered count).
 
 ## Acceptance
 
@@ -886,8 +947,11 @@ del caso (M9)").
 - Three values, lowest to highest: `client`, `operator`, `admin` (`wa_store.ROLES`). Only
   `operator` and `admin` are ever stored. `client` means "no role" and is never written.
 - A global owner (`duenos()`, the panel's `owners`) is `admin` in every chat, whatever a
-  chat's list says. WhatsApp approval stays with them: `es_dueno` and `numero_aprobacion`
-  are unchanged.
+  chat's list says, by his EXACT id, the same rule as `es_dueno`, `chat_del_dueno` and
+  `caso_del_dueno`. A `lid_telefono` pair never makes his other id an owner: with no roles
+  saved, every chat behaves as v4.16.0 (the owner or anyone else). To give that other id a
+  role in one chat, the owner marks it there like anyone else. WhatsApp approval stays with
+  them: `es_dueno` and `numero_aprobacion` are unchanged.
 - Any other number has the role the owner saved for THAT chat, and only there.
 - WhatsApp's own group admin flag (`wa_admin`) is information only. It never gives a role.
 
@@ -928,15 +992,18 @@ del caso (M9)").
 - `wa-scope list` returns `miembros` as that object (`{}` when empty).
 - `wa-scope set <chat> --member <id>=operator|admin|client` is repeatable. `client` removes
   the entry. An id that is not a person, or an unknown role, exits non-zero and saves
-  nothing. It also corrects the chat's panel entry, as `--approval` does.
+  nothing. It starts from the merged scope (the panel's `members` list wins, as in
+  `merged_scope`), so a role the owner removed in the panel before the next sync does not
+  come back. It also corrects the chat's panel entry, as `--approval` does.
 - `wa_store.rol_de(con, cuenta, chat_jid, sender_jid, owners, miembros)` returns
   `admin | operator | client`. Its arguments:
   - `con` is the open message store, or None;
   - `owners` is `duenos()`;
   - `miembros` is `{chat_jid: {id: role}}`, and only `miembros[chat_jid]` is read.
 
-  A LID and a phone are the same person only through that line's `lid_telefono` pair. They
-  are never matched by their digits. With no sender in a direct chat, the writer is the
+  For the per-chat roles, a LID and a phone are the same person only through that line's
+  `lid_telefono` pair. They are never matched by their digits. A global owner is matched by
+  his exact id only (`es_dueno`), never through the pair. With no sender in a direct chat, the writer is the
   chat itself; in a group, nobody (`client`). If one person has two ids with different
   roles, the lower role wins.
 - `rol_del_caso(con, caso)` (`bin/wa-scope`) is the lowest role among the case's non-own
@@ -953,7 +1020,12 @@ del caso (M9)").
 - `cmd_caso_pregunta_proyecto`, `auto`: the question goes to the writer in the owner's own
   chat (as before), or in a DIRECT chat whose `rol_del_caso` is `admin` or `operator`. In a
   group it goes to the owner, whatever the roles. An explicit `writer` or `owner` wins, as
-  before.
+  before. The rule lives in `para_de_pregunta(con, caso)`.
+- `pregunta_del_dueno(con, caso)`: an open question is the owner's when it was stored with
+  `a: owner`, or when it was stored with `a: writer` and `para_de_pregunta` no longer says
+  `writer` (the owner removed the role, or changed `projectQuestion`, before the question
+  went out). `frenos_de_regla` then holds a reply with `project_question`, and `avance_frena`
+  refuses an update with `E_EXCEPTION (project_question)`.
 
 ### `wa-read members --chat <jid|id|name> --json`
 
