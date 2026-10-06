@@ -1,0 +1,174 @@
+{
+ "baileys": "6.7.24",
+ "origen": "Carpeta wa-auth de MENTIRA escrita por useMultiFileAuthState de Baileys 6.7.24: llaves generadas al azar, telefonos y LID de la lista de falsos de scripts/check-datos-reales. Una sesion por telefono (session-573000000012.0) y una por LID con el nombre de 6.7.24 (session-100000000000002.0).",
+ "files": {
+  "app-state-sync-key-AAAAAA.json": {
+   "keyData": {
+    "type": "Buffer",
+    "data": "a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s="
+   },
+   "fingerprint": {
+    "rawId": 1,
+    "currentIndex": 0,
+    "deviceIndexes": [
+     0
+    ]
+   },
+   "timestamp": 1
+  },
+  "creds.json": {
+   "noiseKey": {
+    "private": {
+     "type": "Buffer",
+     "data": "cLu7/UxKOQcEwDN7a4LcYYpKv2w+AgNvPEVXJgWMBkk="
+    },
+    "public": {
+     "type": "Buffer",
+     "data": "a5II8zkFImBUgHnzr8VaaXtVVwmuQssRmx2UY4DG6RI="
+    }
+   },
+   "pairingEphemeralKeyPair": {
+    "private": {
+     "type": "Buffer",
+     "data": "ILNHusmi0NTVdu1H5REHrooCPsL75PR6DTwki+BOwks="
+    },
+    "public": {
+     "type": "Buffer",
+     "data": "MMC3dbBIUAbCQ9iWYYsGDS6Epf0gY/7cltzMUA63umE="
+    }
+   },
+   "signedIdentityKey": {
+    "private": {
+     "type": "Buffer",
+     "data": "sAKfUwBmD6PObVijaW0wwIvxfjoVUTnolLn1dpFTtVs="
+    },
+    "public": {
+     "type": "Buffer",
+     "data": "KvJPpJ/wxD7J+BjkHYa4UT5rDO1oLDv9zbHOvl4kMG4="
+    }
+   },
+   "signedPreKey": {
+    "keyPair": {
+     "private": {
+      "type": "Buffer",
+      "data": "6GFXY6SuYaTS4wJtpCExfveFXNXJ5qiLt6xx5ESg2kI="
+     },
+     "public": {
+      "type": "Buffer",
+      "data": "kum8h3Fa06k8mHZvjsfvwFVtEZ/j+BkT56QKVtD9hg0="
+     }
+    },
+    "signature": {
+     "type": "Buffer",
+     "data": "2oKskJQGtwgJxn8g3KC+Mmlq6tIJEdmQGfm84kl74A7xNFAo1/KOUqNxIV+YvEns4JYPGoqDZyyKq/L+eVOICg=="
+    },
+    "keyId": 1
+   },
+   "registrationId": 213,
+   "advSecretKey": "M9K3zsutuJYSiyl8ofCg4OcmVrQpIo9esD1LvQOuSr4=",
+   "processedHistoryMessages": [],
+   "nextPreKeyId": 1,
+   "firstUnuploadedPreKeyId": 1,
+   "accountSyncCounter": 0,
+   "accountSettings": {
+    "unarchiveChats": false
+   },
+   "registered": true,
+   "me": {
+    "id": "573000000011:7@s.whatsapp.net",
+    "lid": "100000000000001:7@lid",
+    "name": "Linea de prueba"
+   }
+  },
+  "pre-key-1.json": {
+   "private": {
+    "type": "Buffer",
+    "data": "0JCT0fo/t8adId8+N3BPfMnONS4cv/kSe7jkzIufvmg="
+   },
+   "public": {
+    "type": "Buffer",
+    "data": "ZuUGweRfPb+2+BJeKusJ11GN+wv0D7cNYnWVb35ohxo="
+   }
+  },
+  "session-100000000000002.0.json": {
+   "_sessions": {
+    "Bdm3eQlL88ntI7q6a1YcI/UAyLxz2uDP+3C+Wq+2T0Fm": {
+     "registrationId": 97,
+     "currentRatchet": {
+      "ephemeralKeyPair": {
+       "pubKey": "BZp/aPdfSD6RsdzgQSE5ACeXoLXa/dLn0+Tk+E9o9yB6",
+       "privKey": "wHBrGOFfN6Jiwr95rjdHtuUo8UTOSSyL/toRM7v4T3Q="
+      },
+      "lastRemoteEphemeralKey": "BSTsXNpo4GhAYTXnL3T9unMJ/zTns9CBKNK+2ijsraEC",
+      "previousCounter": 0,
+      "rootKey": "GuId0fmB3mAMEIG9TGdRplYDlvGwL5BXYgYSjkk+/HY="
+     },
+     "indexInfo": {
+      "baseKey": "Bdm3eQlL88ntI7q6a1YcI/UAyLxz2uDP+3C+Wq+2T0Fm",
+      "baseKeyType": 1,
+      "closed": -1,
+      "used": 1791330085046,
+      "created": 1791330085046,
+      "remoteIdentityKey": "BSGbUJ6NZajM0ari0u3BkTqxlpGBRYlIlkUVGNhhAvFS"
+     },
+     "_chains": {
+      "BZp/aPdfSD6RsdzgQSE5ACeXoLXa/dLn0+Tk+E9o9yB6": {
+       "chainKey": {
+        "counter": -1,
+        "key": "VsPGfVY8SAh/1qz+kp73lAhpyfnhhGN8SgPlwAmrTVY="
+       },
+       "chainType": 1,
+       "messageKeys": {}
+      }
+     },
+     "pendingPreKey": {
+      "signedKeyId": 1,
+      "baseKey": "Bdm3eQlL88ntI7q6a1YcI/UAyLxz2uDP+3C+Wq+2T0Fm",
+      "preKeyId": 7
+     }
+    }
+   },
+   "version": "v1"
+  },
+  "session-573000000012.0.json": {
+   "_sessions": {
+    "BX6Z61JzqKveiFxauOXSTqWn9xpsUQYqdpY8pepjuV5N": {
+     "registrationId": 81,
+     "currentRatchet": {
+      "ephemeralKeyPair": {
+       "pubKey": "BWSVjSnKk3vw3BzUgSgALYVts56BfJzsRXr5NzhDuhg9",
+       "privKey": "6EwidAHIXY7WXo2cjhKcFEhIezUQG20/72tIl4Qp1Ww="
+      },
+      "lastRemoteEphemeralKey": "BSHNbK5pUy9ZdaMjkbMK7fqfGFlI8JNk/2+mMlN4aa5U",
+      "previousCounter": 0,
+      "rootKey": "qeCPZcmhtaYwH0qsfwM1oD6VQEI0ehEGvB2olmPMFCk="
+     },
+     "indexInfo": {
+      "baseKey": "BX6Z61JzqKveiFxauOXSTqWn9xpsUQYqdpY8pepjuV5N",
+      "baseKeyType": 1,
+      "closed": -1,
+      "used": 1791330085043,
+      "created": 1791330085043,
+      "remoteIdentityKey": "BWQEEAHo7nPJRkUayHg4H/WyfvGEee2V6LC+Is6zt7AS"
+     },
+     "_chains": {
+      "BWSVjSnKk3vw3BzUgSgALYVts56BfJzsRXr5NzhDuhg9": {
+       "chainKey": {
+        "counter": -1,
+        "key": "93amsIVrXmNV+XFrULyCQJk/axaDAql1YF2iXJEjJ4A="
+       },
+       "chainType": 1,
+       "messageKeys": {}
+      }
+     },
+     "pendingPreKey": {
+      "signedKeyId": 1,
+      "baseKey": "BX6Z61JzqKveiFxauOXSTqWn9xpsUQYqdpY8pepjuV5N",
+      "preKeyId": 7
+     }
+    }
+   },
+   "version": "v1"
+  }
+ }
+}

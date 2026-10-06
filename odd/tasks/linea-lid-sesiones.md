@@ -60,8 +60,14 @@ Out of scope: version bump, push, PR. Testing against real WhatsApp (not possibl
       is a small `Map` with a 1 h TTL in the `CacheStore` shape (no new dependency).
       Proof: RED (missing exports `mensajeDeEnvio`, `authDeSocket`), GREEN 112/112 and
       114/114. Bundle rebuilt.
-- [ ] T5 — A 6.7.24 auth folder loads under v7: creds (`me`, registration) and the PN
-      session are found. Test with a fake 6.7.24 fixture.
+- [x] T5 — A 6.7.24 auth folder loads under v7: creds (`me`, registration) and the PN
+      session are found. Test with a fake 6.7.24 fixture (`test/auth-baileys-6.json`,
+      written by 6.7.24's `useMultiFileAuthState` before the upgrade, fake ids only).
+      Characterization test: v7 already behaves this way, so there is no RED to watch.
+      It also pins the known gap: a LID session written by 6.7.24 (`<lid>.<dev>`) is not
+      reused, because v7 names it `<lid>_1.<dev>`; those are the sessions the line could
+      not use, and they are rebuilt on the first retry.
+      Proof: sidecar-build 11/11.
 
 ## Acceptance
 
