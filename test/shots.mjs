@@ -751,6 +751,9 @@ const PANELES = [
   { nombre: 'config-lineas-dos', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, datos: DOS_LINEAS, pestana: 'estado', espera: 400,
     guion: `document.querySelector('.linea[data-carpeta="${LINEA_SEGUNDA.carpeta}"] .linea-desvincular').click()` },
+  // Con dos lineas, las pestanas compartidas dicen a cuales aplican.
+  { nombre: 'config-lineas-aprobacion', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: DOS_LINEAS, pestana: 'aprobacion', espera: 400 },
   { nombre: 'config-lineas-chats', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, datos: DOS_LINEAS, pestana: 'chats', espera: 800,
     guion: ELEGIR_SEGUNDA },

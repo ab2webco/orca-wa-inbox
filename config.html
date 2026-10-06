@@ -505,6 +505,8 @@
       #linea-vista-fila { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
                           margin: 0 0 12px; font-size: 12px; }
       #linea-vista-fila[hidden] { display: none; }
+      #linea-vista-actual { flex-basis: 100%; font-size: 14px; }
+      .nota-lineas[hidden] { display: none; }
       /* El aviso de lo que se pierde va en --destructive y no apagado como las demas
          pistas: es lo unico de esta seccion que el usuario tiene que leer ANTES de
          apretar, no despues. */
@@ -640,6 +642,7 @@
           <p class="hint lead" data-t="scopeHelp"></p>
           <!-- Con dos lineas o mas, de cual son las conversaciones que se ven y se guardan. -->
           <div id="linea-vista-fila" hidden>
+            <strong id="linea-vista-actual"></strong>
             <span id="linea-vista-label" data-t="linesView"></span>
             <div class="seg" id="linea-vista" role="group" aria-labelledby="linea-vista-label"></div>
           </div>
@@ -863,6 +866,7 @@
 
       <!-- ───────── Su aprobacion ───────── -->
       <div id="view-aprobacion" role="tabpanel" aria-labelledby="tab-aprobacion" hidden>
+        <p class="hint nota-lineas" hidden></p>
         <!-- Las reglas tal como son (T22.4): que pide cada una, los tres niveles que cada
              conversacion elige (bin/wa_reglas.py, NIVELES_DEFECTO) y lo que no se apaga. -->
         <section>
@@ -909,6 +913,7 @@
                aria-labelledby="approval-number-label"></div>
           <p class="hint approval-warn" id="approval-warn" hidden></p>
           <p class="hint" data-t="approvalNumberHelp"></p>
+          <p class="hint" id="approval-main-line" hidden></p>
           <div class="actions">
             <button class="primary" id="save-owners" data-t="saveCard"></button>
             <span class="said" id="said-owners"></span>
@@ -1096,6 +1101,7 @@
 
       <!-- ───────── Agente ───────── -->
       <div id="view-agente" role="tabpanel" aria-labelledby="tab-agente" hidden>
+        <p class="hint nota-lineas" hidden></p>
         <section class="card" id="agent-card">
           <h2 data-t="agentLegend"></h2>
           <label for="agent" data-t="agentLabel"></label>
@@ -1136,6 +1142,7 @@
            que el dueno ya acepto. El panel no escribe nada: pide al worker por el canal del
            alcance, y lo que pinta es el estado que el worker dejo en `skillsStatus`. -->
       <div id="view-skills" role="tabpanel" aria-labelledby="tab-skills" hidden>
+        <p class="hint nota-lineas" hidden></p>
         <section>
           <h2 data-t="skillsLegend"></h2>
           <p class="hint lead" data-t="skillsHelp"></p>
@@ -1150,6 +1157,7 @@
 
       <!-- ───────── Avanzado ───────── -->
       <div id="view-avanzado" role="tabpanel" aria-labelledby="tab-avanzado" hidden>
+        <p class="hint nota-lineas" hidden></p>
         <section class="card" id="voice-card">
           <h2 data-t="voiceLegend"></h2>
           <span class="label" id="transcribe-label" data-t="transcribeLabel"></span>
@@ -1240,6 +1248,10 @@
           linesWaitingOne: 'Hay una linea esperando su codigo: escanee ese antes de abrir ' +
             'otra.',
           linesTypeSaved: 'Tipo guardado.',
+          linesNote: 'Aplica a sus {n} lineas: {lista}',
+          linesMainTag: '(principal)',
+          linesApprovalFrom: 'El aviso sale por su linea principal, {num}.',
+          linesViewing: 'Viendo la linea {num}',
           linesView: 'Linea',
           linesHowNoLines: 'Todavia no se sabe donde viven las lineas: espere a que el ' +
             'plugin termine de arrancar y pruebe otra vez.',
@@ -1825,6 +1837,10 @@
           linesWaitingOne: 'A line is waiting for its code: scan that one before opening ' +
             'another.',
           linesTypeSaved: 'Type saved.',
+          linesNote: 'Applies to all {n} of your lines: {lista}',
+          linesMainTag: '(main)',
+          linesApprovalFrom: 'The notice goes out through your main line, {num}.',
+          linesViewing: 'Viewing line {num}',
           linesView: 'Line',
           linesHowNoLines: 'It is not known yet where the lines live: wait for the plugin ' +
             'to finish starting and try again.',
@@ -2377,7 +2393,11 @@
         linesWaitingOne: 'Ha uma linha esperando o seu codigo: escaneie esse antes de abrir ' +
           'outra.',
         linesTypeSaved: 'Tipo salvo.',
-        linesView: 'Linha',
+        linesNote: 'Vale para as suas {n} linhas: {lista}',
+          linesMainTag: '(principal)',
+          linesApprovalFrom: 'O aviso sai pela sua linha principal, {num}.',
+          linesViewing: 'Vendo a linha {num}',
+          linesView: 'Linha',
         linesHowNoLines: 'Ainda nao se sabe onde ficam as linhas: espere o plugin terminar ' +
           'de iniciar e tente de novo.',
         linesHowUnknown: 'Essa linha ja nao esta vinculada. Olhe a lista de novo.',
@@ -6527,6 +6547,23 @@
         if (d && typeof d.me === 'string' && d.me) return d.me
         return l.cuenta ? '+' + String(l.cuenta).replace(/^pn:/, '') : t('linesNew')
       }
+      /** Las notas de las pestanas compartidas y el aviso del numero de aprobacion: con dos
+       *  lineas vinculadas o mas dicen a cuales aplica lo de la pestana; con una, nada. */
+      function renderNotasLineas () {
+        var vinc = lineasVinculadas()
+        var varias = vinc.length > 1
+        var lista = vinc.map(function (l, i) {
+          return numeroDeLinea(l, estadoDeLinea(l)) + (i === 0 ? ' ' + t('linesMainTag') : '')
+        }).join(', ')
+        Array.prototype.forEach.call(document.querySelectorAll('.nota-lineas'), function (n) {
+          n.hidden = !varias
+          n.textContent = varias ? fmt('linesNote', { n: vinc.length, lista: lista }) : ''
+        })
+        var aviso = el('approval-main-line')
+        aviso.hidden = !varias
+        aviso.textContent = varias
+          ? fmt('linesApprovalFrom', { num: numeroDeLinea(vinc[0], estadoDeLinea(vinc[0])) }) : ''
+      }
       function textoEstadoLinea (estado, d) {
         if (estado === 'silent') return fmt('pairingSilent', { hora: horaUltimaSenal(d) })
         return t(LINEA_ESTADO[estado] || 'pairingWaiting')
@@ -6730,6 +6767,7 @@
       function renderVistaLineas () {
         var vinc = lineasVinculadas()
         var fila = el('linea-vista-fila')
+        renderNotasLineas()
         if (vinc.length < 2) {
           fila.hidden = true
           lineaVista = null
@@ -6751,6 +6789,9 @@
           })
         }
         var actual = otraLineaVista() || vinc[0].cuenta
+        var vista = vinc.filter(function (l) { return l.cuenta === actual })[0]
+        el('linea-vista-actual').textContent =
+          fmt('linesViewing', { num: numeroDeLinea(vista, estadoDeLinea(vista)) })
         Array.prototype.forEach.call(grupo.querySelectorAll('button'), function (b) {
           apretar(b, b.getAttribute('data-value') === actual)
         })

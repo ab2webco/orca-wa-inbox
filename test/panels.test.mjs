@@ -8422,5 +8422,50 @@ console.log('\nactivity.html — L4: el tablero se filtra por linea')
     S.es.linesView && S.en.linesView && S.pt.linesView && S.pt.linesView !== S.en.linesView)
 }
 
+console.log('\nconfig.html — lineas claras: que lineas cubre cada pestana')
+{
+  const dos = { sidecar: conLineas([lineaA, lineaB]), sidecars: { 'pn-573000000011': vivaDe(L_B) } }
+  const { doc } = await montar('config.html', dos, 'es-419')
+  await espera()
+  for (const t of ['aprobacion', 'agente', 'skills', 'avanzado']) {
+    const nota = doc.querySelector(`#view-${t} .nota-lineas`)
+    ok(`${t}: con dos lineas la nota las lista, la principal primero y marcada`,
+      !!nota && !nota.hidden && nota.textContent ===
+      'Aplica a sus 2 lineas: +573000000001 (principal), +573000000011', nota?.textContent)
+  }
+  ok('Su aprobacion dice que el aviso sale por la linea principal',
+    textoDe(doc, '#approval-main-line') === 'El aviso sale por su linea principal, +573000000001.',
+    textoDe(doc, '#approval-main-line'))
+  doc.getElementById('tab-chats').click()
+  await espera()
+  ok('Conversaciones dice que linea se esta viendo, y cambia al elegir la otra',
+    textoDe(doc, '#linea-vista-actual') === 'Viendo la linea +573000000001')
+  elegirSeg(doc, 'linea-vista', L_B)
+  await new Promise((r) => setTimeout(r, 300))
+  ok('y despues de elegir la otra nombra la otra',
+    textoDe(doc, '#linea-vista-actual') === 'Viendo la linea +573000000011',
+    textoDe(doc, '#linea-vista-actual'))
+  const una = await montar('config.html', { sidecar: conLineas([lineaA]) }, 'es-419')
+  await espera()
+  ok('con una sola linea no hay notas ni aviso de linea principal',
+    [...una.doc.querySelectorAll('.nota-lineas')].every((n) => n.hidden) &&
+    una.doc.getElementById('approval-main-line').hidden && una.doc.getElementById('linea-vista-fila').hidden)
+  const en = await montar('config.html', dos, 'en')
+  await espera()
+  ok('en ingles la nota y el aviso hablan ingles',
+    textoDe(en.doc, '#view-agente .nota-lineas') === 'Applies to all 2 of your lines: +573000000001 (main), +573000000011' &&
+    /main line, \+573000000001\./.test(textoDe(en.doc, '#approval-main-line')),
+    textoDe(en.doc, '#view-agente .nota-lineas'))
+  const pt = await montar('config.html', dos, 'pt-BR')
+  await espera()
+  ok('en portugues tambien',
+    textoDe(pt.doc, '#view-agente .nota-lineas') === 'Vale para as suas 2 linhas: +573000000001 (principal), +573000000011' &&
+    /linha principal, \+573000000001\./.test(textoDe(pt.doc, '#approval-main-line')),
+    textoDe(pt.doc, '#view-agente .nota-lineas'))
+  const S = doc.defaultView.STRINGS
+  ok('las cuatro frases existen en los tres idiomas',
+    ['linesNote', 'linesMainTag', 'linesApprovalFrom', 'linesViewing'].every((k) => S.es[k] && S.en[k] && S.pt[k]))
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)

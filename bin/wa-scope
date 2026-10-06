@@ -2871,6 +2871,27 @@ def cuenta_olvidar(con, cid):
     return {**fila, "removed_chats": n}
 
 
+def lineas_del_registro():
+    """Las lineas vinculadas que el worker anota en el storage del panel (`lineas`, o dentro
+    de `sidecar` en una version de antes), la principal primero, cada una con su `cuenta` y si
+    esta conectada (`sidecar` para la principal, `sidecars[<carpeta>]` para las demas; None
+    si no se sabe). Sin registro, o sin ninguna con cuenta, es [] y `accounts` queda como era."""
+    datos = plugin_store_crudo()
+    lista = datos.get("lineas")
+    if not isinstance(lista, list):
+        propio = datos.get("sidecar")
+        lista = propio.get("lineas") if isinstance(propio, dict) else None
+    estados = datos.get("sidecars") if isinstance(datos.get("sidecars"), dict) else {}
+    filas = []
+    for i, l in enumerate(lista if isinstance(lista, list) else []):
+        if not isinstance(l, dict) or not isinstance(l.get("cuenta"), str) or not l["cuenta"]:
+            continue
+        estado = datos.get("sidecar") if i == 0 else estados.get(l.get("carpeta"))
+        conexion = estado.get("connection") if isinstance(estado, dict) else None
+        filas.append({**l, "conectada": None if conexion is None else conexion == "open"})
+    return filas
+
+
 def cmd_accounts(con, a):
     """Las lineas conectadas y cuantas conversaciones tiene autorizada cada una.
 
@@ -2893,12 +2914,30 @@ def cmd_accounts(con, a):
         if not fila:
             sys.exit(f"not removed: there is no line called {a.forget}")
         return [fila]
+    registro = lineas_del_registro()
+    legado = [dict(r) for r in con.execute(
+        "select id, kind, label, profile, enabled, linked_at "
+        "from wa_account order by kind desc, id")]
+    if registro:
+        # Las lineas que el plugin tiene de verdad van primero, la principal al frente,
+        # tengan o no fila en `wa_account` (agregar una segunda linea no la escribe). Las
+        # filas viejas que el registro no nombra siguen, marcadas `linked: false`.
+        por_id = {r["id"]: r for r in legado}
+        legado = [por_id.get(l["cuenta"]) or {
+            "id": l["cuenta"], "kind": "pn", "label": None, "profile": None,
+            "enabled": True, "linked_at": l.get("alta")} for l in registro] + [
+            r for r in legado if r["id"] not in {l["cuenta"] for l in registro}]
     filas = []
-    for r in con.execute("select id, kind, label, profile, enabled, linked_at "
-                         "from wa_account order by kind desc, id"):
+    for r in legado:
         n = con.execute("select count(*) c from chat_scope where account=? and mode<>'off'",
                         (r["id"],)).fetchone()["c"]
-        filas.append({"id": r["id"], "kind": r["kind"],
+        extra = {}
+        if registro:
+            vinculada = next((l for l in registro if l["cuenta"] == r["id"]), None)
+            extra = {"linked": vinculada is not None,
+                     "main": bool(vinculada) and vinculada is registro[0],
+                     "connected": vinculada["conectada"] if vinculada else False}
+        filas.append({**extra, "id": r["id"], "kind": r["kind"],
                       "label": r["label"] or r["id"],
                       "profile": r["profile"],
                       # La linea manda sola. Antes se cruzaba con un interruptor de
