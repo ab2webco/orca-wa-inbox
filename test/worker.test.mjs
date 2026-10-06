@@ -63,7 +63,8 @@ const PLUGIN_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
 
 const {
   default: activate, intervaloSync, lanzarSidecar, programarIngesta, correrIngesta,
-  INGESTA_AVISOS_MAX, INGESTA_ESPERA_MS, sembrarAjustesDeLinea, AJUSTES_DE_LINEA
+  INGESTA_AVISOS_MAX, INGESTA_ESPERA_MS, sembrarAjustesDeLinea, AJUSTES_DE_LINEA,
+  NO_HEREDAN
 } = await import('../main.mjs')
 const { workspaceDir, dataDir } = await import('../harness.mjs')
 
@@ -4313,6 +4314,63 @@ console.log('\nworker: avisos-orca, el estado de cada agente')
   ok('despues de reiniciar, el waiting ya guardado no avisa otra vez', llamadas().length === 2,
     JSON.stringify(llamadas()))
   otra.apagar()
+}
+
+
+// ───────── todo-por-linea: las tres copias de la lista, y lo que no se hereda ─────────
+// `AJUSTES_DE_LINEA` vive en tres lugares (wa_settings.py, main.mjs, config.html) y
+// `NO_HEREDAN` en los mismos tres: una clave que falta en uno es un ajuste que el panel
+// guarda en la linea y el CLI lee de la raiz, o al reves.
+console.log('\nworker: todo-por-linea, las tres copias de la lista de ajustes de linea')
+{
+  const py = readFileSync(join(PLUGIN_DIR, 'bin', 'wa_settings.py'), 'utf8')
+  const html = readFileSync(join(PLUGIN_DIR, 'config.html'), 'utf8')
+  const claves = (texto) => [...texto.matchAll(/["']([A-Za-z]+)["']/g)].map((m) => m[1])
+  const dePy = (nombre) => claves((py.match(new RegExp(`^${nombre} = \\(([^)]*)\\)`, 'm')) || [])[1] || '')
+  const deHtml = (nombre) => claves((html.match(new RegExp(`var ${nombre} = \\[([^\\]]*)\\]`)) || [])[1] || '')
+  ok('AJUSTES_DE_LINEA es la misma lista en wa_settings.py, main.mjs y config.html',
+    JSON.stringify(dePy('AJUSTES_DE_LINEA')) === JSON.stringify([...AJUSTES_DE_LINEA]) &&
+    JSON.stringify(deHtml('AJUSTES_DE_LINEA')) === JSON.stringify([...AJUSTES_DE_LINEA]),
+    JSON.stringify({ py: dePy('AJUSTES_DE_LINEA'), html: deHtml('AJUSTES_DE_LINEA') }))
+  ok('NO_HEREDAN tambien, y cada una es un ajuste de linea',
+    Array.isArray(NO_HEREDAN) && NO_HEREDAN.length > 0 &&
+    JSON.stringify(dePy('NO_HEREDAN')) === JSON.stringify([...NO_HEREDAN]) &&
+    JSON.stringify(deHtml('NO_HEREDAN')) === JSON.stringify([...NO_HEREDAN]) &&
+    NO_HEREDAN.every((k) => AJUSTES_DE_LINEA.includes(k)),
+    JSON.stringify({ py: dePy('NO_HEREDAN'), html: deHtml('NO_HEREDAN'), mjs: NO_HEREDAN }))
+}
+
+console.log('\nworker: todo-por-linea P1, los avisos de Orca de cada linea')
+{
+  const raiz = { agentName: 'Agente Principal', orcaNotices: { waiting: 'on', finished: 'on' } }
+  const copia = sembrarAjustesDeLinea(undefined, 'pn:573000000011', raiz)?.['pn:573000000011']
+  ok('una linea nueva NO copia los avisos de Orca de la principal: nacen vacios (apagados)',
+    copia && 'orcaNotices' in copia && copia.orcaNotices === null &&
+    copia.agentName === 'Agente Principal', JSON.stringify(copia))
+
+  const { crearAvisosOrca } = await import('../avisos-orca.mjs')
+  const prueba = async (store) => {
+    const lanzados = []
+    const avisos = crearAvisosOrca({
+      leer: async (k) => store[k], guardar: async () => {}, llave: 'ab2web.orca-wa-inbox',
+      lanzar: async (args) => { lanzados.push(args) }, guardarCadaMs: 10
+    })
+    await avisos.listo
+    const base = { paneKey: 'tab-1:p1', worktreeId: 'repo-a::/srv/ejemplo/alfa-demo' }
+    avisos.recibir({ ...base, state: 'working', receivedAt: 1000 })
+    await avisos.recibir({ ...base, state: 'waiting', receivedAt: 2000 })
+    await avisos.parar()
+    return lanzados.length
+  }
+  ok('la compuerta del worker: con la principal apagada y otra linea encendida, lanza',
+    await prueba({ orcaNotices: { waiting: 'off' },
+      ajustesPorLinea: { 'pn:573000000011': { orcaNotices: { waiting: 'on' } } } }) === 1)
+  ok('con la principal encendida, lanza (como antes)',
+    await prueba({ orcaNotices: { waiting: 'on' } }) === 1)
+  ok('con todas apagadas, o sin avisos propios en ninguna, no lanza nada',
+    await prueba({ orcaNotices: { waiting: 'off' },
+      ajustesPorLinea: { 'pn:573000000011': { orcaNotices: null, agentName: 'X' } } }) === 0 &&
+    await prueba({}) === 0)
 }
 
 rmSync(RAIZ, { recursive: true, force: true })

@@ -1246,7 +1246,13 @@ export function decidirReinicio (intento) {
 export const AJUSTES_DE_LINEA = Object.freeze(['agentName', 'ownerName', 'tone', 'owners',
   'approvalNumber', 'approvalLang', 'ackMode', 'ackText', 'ackQuietMinutes', 'greetingMode',
   'greetingText', 'firstReply', 'slaMinutes', 'projectQuestionHours', 'inboxDays',
-  'transcribeLang'])
+  'transcribeLang',
+  'orcaNotices'
+])
+// Los que una linea NUNCA copia de la principal (`NO_HEREDAN` de wa_settings.py y del panel):
+// sin uno propio valen los de fabrica. Los avisos de Orca son los mismos eventos para todas
+// las lineas; copiarlos mandaria el mismo aviso dos veces, una por cada numero.
+export const NO_HEREDAN = Object.freeze(['orcaNotices'])
 export const AJUSTES_POR_LINEA_KEY = 'ajustesPorLinea'
 
 /** Los ajustes propios de una linea que empieza: una copia de los de la principal (`raiz`).
@@ -1258,7 +1264,8 @@ export const AJUSTES_POR_LINEA_KEY = 'ajustesPorLinea'
  *  Lo que la principal no tiene queda en null, que es "sin valor" y no "ausente": asi la
  *  linea nueva no hereda lo que la principal elija despues. La copia es profunda: cambiar
  *  la lista de duenos de una no cambia la de la otra. Lo de las demas lineas, y las claves
- *  que este codigo no conoce, quedan tal cual. */
+ *  que este codigo no conoce, quedan tal cual. Lo que no se hereda (`NO_HEREDAN`) nace en
+ *  null aunque la principal lo tenga. */
 export function sembrarAjustesDeLinea (contenedor, cuenta, raiz) {
   const todo = contenedor && typeof contenedor === 'object' && !Array.isArray(contenedor)
     ? contenedor : {}
@@ -1268,7 +1275,7 @@ export function sembrarAjustesDeLinea (contenedor, cuenta, raiz) {
   if (!faltan.length) return null
   const propios = { ...previos }
   for (const k of faltan) {
-    const valor = raiz ? raiz[k] : undefined
+    const valor = raiz && !NO_HEREDAN.includes(k) ? raiz[k] : undefined
     propios[k] = valor === undefined ? null : JSON.parse(JSON.stringify(valor))
   }
   return { ...todo, [cuenta]: propios }
@@ -1671,7 +1678,10 @@ export default function activate(orca) {
       return
     }
     const raiz = {}
-    for (const k of AJUSTES_DE_LINEA) raiz[k] = await leerSeguro(k)
+    // Lo que no se hereda no se lee: nace en null (`sembrarAjustesDeLinea`).
+    for (const k of AJUSTES_DE_LINEA) {
+      if (!NO_HEREDAN.includes(k)) raiz[k] = await leerSeguro(k)
+    }
     // Se relee justo antes de escribir: el panel pudo guardar algo de esta linea mientras
     // se leia la raiz, y eso manda sobre la copia.
     const nuevo = sembrarAjustesDeLinea(await leerSeguro(AJUSTES_POR_LINEA_KEY), cuenta, raiz)

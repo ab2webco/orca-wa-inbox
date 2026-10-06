@@ -330,13 +330,22 @@ CONTENEDOR_DE_LINEA = "porLinea"
 # tiene en null es "sin valor", y no cae a la raiz: asi una linea nueva que copio una clave
 # vacia de la principal no hereda lo que la principal elija despues.
 #
+# Los avisos de Orca tambien (todo-por-linea, P1): cada linea avisa a SU numero de
+# aprobacion con SUS interruptores.
+#
 # Lo demas es de la maquina y vive solo en la raiz: el ritmo del sync, la transcripcion y
-# su calidad, Jev, los avisos de Orca, la cuenta de Claude del bot, las skills, los
-# proyectos y las rutas.
+# su calidad, Jev, la cuenta de Claude del bot, las skills, los proyectos y las rutas.
 AJUSTES_DE_LINEA = ("agentName", "ownerName", "tone", "owners", "approvalNumber",
                     "approvalLang", "ackMode", "ackText", "ackQuietMinutes", "greetingMode",
                     "greetingText", "firstReply", "slaMinutes", "projectQuestionHours",
-                    "inboxDays", "transcribeLang")
+                    "inboxDays", "transcribeLang",
+                    "orcaNotices",
+                    )
+# Los ajustes de linea que otra linea NUNCA toma de la raiz: sin uno propio valen los de
+# fabrica. Los avisos de Orca son los mismos eventos para todas las lineas; heredarlos
+# mandaria el mismo aviso dos veces, una por cada numero. El worker tampoco los copia al
+# sembrar una linea nueva.
+NO_HEREDAN = ("orcaNotices",)
 CONTENEDOR_AJUSTES = "ajustesPorLinea"
 CONTENEDORES = (CONTENEDOR_DE_LINEA, *CONTENEDOR_PROPIO.values(), CONTENEDOR_AJUSTES)
 
@@ -375,10 +384,11 @@ def ajustes_propios(datos, cuenta):
 def vista_de_linea(datos, cuenta, principal):
     """El storage como lo ve la linea `cuenta`: la raiz para la principal; para otra, las
     claves globales de la raiz con las suyas encima, y sus ajustes propios encima de los de
-    la raiz."""
+    la raiz. Los que no se heredan (`NO_HEREDAN`) son solo los suyos."""
     if not de_otra_linea(cuenta, principal):
         return datos
-    vista = {k: v for k, v in datos.items() if k not in CLAVES_DE_LINEA and k not in CONTENEDORES}
+    vista = {k: v for k, v in datos.items()
+             if k not in CLAVES_DE_LINEA and k not in CONTENEDORES and k not in NO_HEREDAN}
     for clave in CLAVES_DE_LINEA:
         hay, valor = valor_de_linea(datos, cuenta, clave)
         if hay:

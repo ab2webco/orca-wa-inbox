@@ -21,8 +21,10 @@
 
 // La clave de storage con el estado de cada panel, que el tick lee para el "termino".
 export const PANELES_KEY = 'orcaPanes'
-// Los ajustes del panel (una sola clave, como `firstReply`).
+// Los ajustes del panel (una sola clave, como `firstReply`). La principal los tiene en la raiz
+// y cada otra linea en `ajustesPorLinea[<numero>].orcaNotices` (todo-por-linea, P1).
 export const AVISOS_ORCA_KEY = 'orcaNotices'
+export const AJUSTES_POR_LINEA_KEY = 'ajustesPorLinea'
 // Un panel que no se movio en un dia ya no importa: se olvida.
 export const PANELES_VIDA_MS = 24 * 60 * 60 * 1000
 // Y nunca mas de estos: el storage entero viaja en cada lectura del panel.
@@ -55,6 +57,15 @@ export function esEspacioDelPlugin (worktreeId, llave) {
 }
 
 const texto = (v) => typeof v === 'string' && v.trim() ? v.trim() : null
+
+/** Si alguna linea tiene encendido el aviso de espera: la principal (`raiz`, lo de la raiz)
+ *  o cualquier otra en su contenedor. Es solo la compuerta para no lanzar un proceso por
+ *  nada: `wa-scope orca-aviso` corre en cada linea y cada una decide con lo suyo. */
+export function algunaLineaEspera (raiz, contenedor) {
+  if (raiz?.waiting === 'on') return true
+  const lineas = contenedor && typeof contenedor === 'object' ? Object.values(contenedor) : []
+  return lineas.some((l) => l && typeof l === 'object' && l.orcaNotices?.waiting === 'on')
+}
 
 /** El estado nuevo de los paneles con un evento: `{ paneles, cambio, avisar }`.
  *
@@ -140,8 +151,9 @@ export function crearAvisosOrca ({ leer, guardar, lanzar, llave, log = () => {},
       paneles = r.paneles
       programar()
       if (!r.avisar) return
-      const ajustes = await leer(AVISOS_ORCA_KEY)
-      if (!ajustes || ajustes.waiting !== 'on' || detenido) return
+      const raiz = await leer(AVISOS_ORCA_KEY)
+      const contenedor = raiz?.waiting === 'on' ? null : await leer(AJUSTES_POR_LINEA_KEY)
+      if (!algunaLineaEspera(raiz, contenedor) || detenido) return
       await lanzar(argsDeAviso(payload))
     }).catch((error) => log(`orca notice failed: ${String(error?.message ?? error).slice(0, 200)}`))
     return fila

@@ -47,9 +47,9 @@ from wa_settings import (  # noqa: E402
     CONFIG_HORAS, CONFIG_NUMERICOS, CONFIG_OPCIONES, MODOS_PRIMER, PANEL_ORCA, PANEL_ORCA_CAMPOS,
     PANEL_PRIMER, PANEL_PRIMER_CAMPOS,
     PANEL_SETTINGS, PLUGIN_ID, VARIABLE_APROBADOR,
-    PLUGIN_ID_ANTERIOR, duenos, llave_aprobador, trae_llave_aprobador, idioma_aprobacion, numero_aprobacion, orca_cli_path, orca_env, orca_runtime_home, plugin_store_path,
+    PLUGIN_ID_ANTERIOR, duenos, store_de_linea, llave_aprobador, trae_llave_aprobador, idioma_aprobacion, numero_aprobacion, orca_cli_path, orca_env, orca_runtime_home, plugin_store_path,
     plugin_store_raw as plugin_store_crudo, vista_de_linea, escribir_en_linea, de_otra_linea,
-    AJUSTES_DE_LINEA,
+    AJUSTES_DE_LINEA, NO_HEREDAN,
     tableros_de_lineas,
     plugin_store_targets, settings_from_plugin, user_data_roots, valida_ajuste)
 import wa_store  # noqa: E402  (solo lectura: de capture.db se lee la linea activa)
@@ -1058,9 +1058,10 @@ def push_to_plugin(con, with_activity=False):
         if not reusando:
             extra.update(chats=build_chats(), chatsAccount=cuenta, senders=build_senders())
         extra["groupMembers"] = grupos
-        # Lo de la maquina (el ritmo del sync, la transcripcion, los avisos de Orca) lo
-        # espeja solo la principal: la corrida de otra linea lo lee de la raiz, y volver a
-        # escribirlo desde ahi solo puede pisar lo que el dueno acaba de cambiar.
+        # Lo de la maquina (el ritmo del sync, la transcripcion) lo espeja solo la principal:
+        # la corrida de otra linea lo lee de la raiz, y volver a escribirlo desde ahi solo
+        # puede pisar lo que el dueno acaba de cambiar. Lo de cada linea, cada una en lo suyo
+        # (`escribir_en_linea`), los avisos de Orca incluidos.
         principal = es_linea_principal()
         for flat, name in PANEL_SETTINGS.items():
             # agentName ya viaja en su propio parametro, mas arriba.
@@ -1071,9 +1072,8 @@ def push_to_plugin(con, with_activity=False):
                 extra[flat] = str(valor)
         extra[PANEL_PRIMER] = {campo: str(efectivos.get(name) or DEFAULT_CONFIG[name])
                                for campo, name in PANEL_PRIMER_CAMPOS.items()}
-        if principal:
-            extra[PANEL_ORCA] = {campo: str(efectivos.get(name) or DEFAULT_CONFIG[name])
-                                 for campo, name in PANEL_ORCA_CAMPOS.items()}
+        extra[PANEL_ORCA] = {campo: str(efectivos.get(name) or DEFAULT_CONFIG[name])
+                             for campo, name in PANEL_ORCA_CAMPOS.items()}
     return plugin_store_write(scope, agent_name_of(con), activity, health, routes, extra)
 
 
@@ -1420,13 +1420,37 @@ def merged_settings(con, linea=None):
     sobre lo del CLI, porque el panel es lo que el usuario acaba de tocar.
 
     Lo del panel es de una linea (ajustes-por-linea): `linea`, o la de esta corrida. Quien
-    tiene un caso en la mano nombra la del caso (`linea_del_caso`)."""
+    tiene un caso en la mano nombra la del caso (`linea_del_caso`).
+
+    La base del CLI es de la maquina: lo que otra linea no hereda de la principal
+    (`NO_HEREDAN`) tampoco lo toma de ahi."""
     rows = dict(DEFAULT_CONFIG)
+    ajenos = nombres_no_heredan() if de_otra_linea(linea or cuenta_activa(),
+                                                   linea_principal()) else ()
     for r in con.execute("select key, value from settings"):
-        if r["value"]:
+        if r["value"] and r["key"] not in ajenos:
             rows[r["key"]] = r["value"]
     rows.update(settings_from_plugin(linea))
     return rows
+
+
+def nombres_de(flat):
+    """Los nombres del CLI de una clave del panel: la agrupada da los de sus campos."""
+    if flat == PANEL_ORCA:
+        return tuple(PANEL_ORCA_CAMPOS.values())
+    if flat == PANEL_PRIMER:
+        return tuple(PANEL_PRIMER_CAMPOS.values())
+    return (PANEL_SETTINGS[flat],) if flat in PANEL_SETTINGS else ()
+
+
+def nombres_no_heredan():
+    """Los nombres del CLI de los ajustes que otra linea no hereda de la principal."""
+    return tuple(n for flat in NO_HEREDAN for n in nombres_de(flat))
+
+
+def nombres_de_linea():
+    """Los nombres del CLI de los ajustes que son de cada linea (`AJUSTES_DE_LINEA`)."""
+    return tuple(n for flat in AJUSTES_DE_LINEA for n in nombres_de(flat))
 
 
 def linea_del_caso(caso):
@@ -2805,10 +2829,15 @@ def cmd_config(con, a):
         motivo = valida_ajuste(a.key, a.value)
         if motivo:
             sys.exit(f"not saved: {motivo}")
-        con.execute("insert into settings (key,value) values (?,?) "
-                    "on conflict(key) do update set value=excluded.value", (a.key, a.value))
-        con.commit()
-        mirror_to_panel(a.key, a.value)
+        # Un ajuste de linea en otra linea va solo a lo suyo del panel: la base del CLI es de
+        # la maquina, y escribirlo ahi se lo cambiaba tambien a la principal.
+        if es_linea_principal() or a.key not in nombres_de_linea():
+            con.execute("insert into settings (key,value) values (?,?) "
+                        "on conflict(key) do update set value=excluded.value", (a.key, a.value))
+            con.commit()
+            mirror_to_panel(a.key, a.value)
+        elif not mirror_to_panel(a.key, a.value):
+            sys.exit(f"not saved: the panel storage of {cuenta_activa()} could not be written")
     rows = merged_settings(con)
     if a.key:
         return [{"key": a.key, "value": rows.get(a.key)}]
@@ -8944,6 +8973,9 @@ def texto_de_estado(con):
 # se pidio, lo que contesto el agente, una ruta o lo que salio en la terminal. Solo
 # `--send --id`, como cualquier aviso; `wa-send` sigue frenando lo que tenga forma de secreto.
 #
+# Cada linea tiene los suyos (todo-por-linea, P1): sus interruptores, su numero, su idioma y
+# su marca de las automatizaciones. Una linea sin los suyos no hereda los de la principal.
+#
 # Apagados de fabrica, uno por tipo. Dentro de las horas de silencio el aviso queda
 # `retenido` y sale UN resumen al terminar; pasado el tope por hora queda `excedido` y sale
 # UN mensaje agrupado cuando la hora tiene lugar. La clase va en el `req_id`, sin columnas
@@ -9008,9 +9040,10 @@ TEXTOS_ORCA = {
 
 
 def textos_orca():
-    """El idioma del panel cuando se eligio el numero, portugues incluido (como `textos_lid`)."""
-    crudo = plugin_store_raw().get("approvalLang")
-    return TEXTOS_ORCA[crudo if crudo in TEXTOS_ORCA else idioma_aprobacion()]
+    """El idioma del panel cuando se eligio el numero, portugues incluido (como `textos_lid`).
+    El de la linea de esta corrida: cada linea avisa a su numero, en el suyo."""
+    crudo = store_de_linea(cuenta_activa()).get("approvalLang")
+    return TEXTOS_ORCA[crudo if crudo in TEXTOS_ORCA else idioma_aprobacion(cuenta_activa())]
 
 
 def minutos_de(hora):
@@ -9101,8 +9134,13 @@ def texto_de_fallo(tx, titulo, error):
 
 
 def id_orca(clase, clave, at_ms=None):
-    """El id del aviso: por panel, clase y ventana de cinco minutos, o por corrida."""
-    huella = hashlib.sha1(str(clave).encode()).hexdigest()[:12]
+    """El id del aviso: por panel, clase y ventana de cinco minutos, o por corrida.
+
+    El `req_id` es unico en toda la base, y cada linea avisa del mismo evento a su numero:
+    el de otra linea lleva la linea en la huella, o el segundo seria un duplicado del
+    primero. El de la principal es el de siempre."""
+    llave = str(clave) if es_linea_principal() else f"{cuenta_activa()}\n{clave}"
+    huella = hashlib.sha1(llave.encode()).hexdigest()[:12]
     if at_ms is None:
         return f"aviso-o-{clase}-{huella}"
     return f"aviso-o-{clase}-{huella}-{int(at_ms // 1000 // VENTANA_ORCA_S)}"
@@ -9212,13 +9250,13 @@ def orca_corridas(con, ajustes, tx):
     """Las automatizaciones de Orca que fallaron desde la marca. La primera vuelta solo pone
     la marca: un dueno que lo enciende no recibe las fallas de la semana pasada."""
     ahora_ms = int(time.time() * 1000)
-    fila = con.execute("select value from settings where key=?", (DESDE_CORRIDAS,)).fetchone()
+    fila = con.execute("select value from settings where key=?", (desde_corridas(),)).fetchone()
     try:
         desde = int(fila["value"]) if fila else None
     except (TypeError, ValueError):
         desde = None
     if desde is None:
-        guarda_ajuste(con, DESDE_CORRIDAS, str(ahora_ms))
+        guarda_ajuste(con, desde_corridas(), str(ahora_ms))
         return
     cli = orca_cli_path()
     sobre = orca_json(cli, ["automations", "runs"]) if cli else None
@@ -9278,12 +9316,18 @@ def orca_agrupa(con, ajustes, tx):
         orca_junta(con, ESTADO_EXCEDIDO, "agrupado", "grupo", tx, tx["grupo"])
 
 
+def desde_corridas():
+    """La llave de la marca de las automatizaciones de esta linea: cada linea enciende y
+    apaga la suya, y apagarla en una no puede borrar la de otra. La principal conserva la de
+    siempre."""
+    return DESDE_CORRIDAS if es_linea_principal() else f"{DESDE_CORRIDAS}@{cuenta_activa()}"
+
+
 def tick_orca_si_toca(con, resumen):
-    """Los avisos de Orca son de la maquina, no de una linea: con varias lineas los corre
-    solo el tick de la principal, que es la linea del dueno. Si no, cada linea mandaria el
-    mismo aviso por su numero."""
-    if es_linea_principal():
-        tick_orca(con, resumen)
+    """Los avisos de Orca son de cada linea (todo-por-linea, P1): el tick de cada una corre
+    los suyos, con sus interruptores y a su numero. Una linea sin avisos propios los tiene
+    apagados (`NO_HEREDAN`), asi que nadie recibe el mismo aviso dos veces por defecto."""
+    tick_orca(con, resumen)
 
 
 def tick_orca(con, resumen):
@@ -9293,7 +9337,7 @@ def tick_orca(con, resumen):
     ajustes = ajustes_orca(con)
     numero = numero_aprobacion()
     if not ajustes["fallo"] or not numero:
-        con.execute("delete from settings where key=?", (DESDE_CORRIDAS,))
+        con.execute("delete from settings where key=?", (desde_corridas(),))
     if not numero:
         con.commit()
         return
@@ -11797,11 +11841,16 @@ def pendiente_agente(con, precheck=False):
 AYUDA_LINEA = ("the line to work on (pn:<digits>), when several are linked; without it, the "
                "principal line")
 # Lo que corre una vez por linea cuando nadie nombra una: cada linea en su propio proceso,
-# con su propio candado, y la falla de una no frena a la otra.
-POR_LINEA = ("tick", "ingest", "sync")
-# Lo del dueno es de la principal, la linea del dueno: su chat (`owner`) y los avisos de Orca
-# (`orca-aviso`). Sin `--line` corren ahi aunque la corrida herede la linea de otra.
-DE_LA_PRINCIPAL = ("owner", "orca-aviso")
+# con su propio candado, y la falla de una no frena a la otra. Los avisos de Orca tambien
+# (`orca-aviso`, todo-por-linea P1): el worker lo lanza una vez por evento y cada linea decide
+# con lo suyo si avisa, a su numero.
+POR_LINEA = ("tick", "ingest", "sync", "orca-aviso")
+# Lo que corre en TODAS las lineas aunque la corrida herede la linea de otra: un agente que
+# espera es un evento de la maquina, no de la linea de quien lo lanzo. Solo `--line` lo acota.
+DE_TODAS = ("orca-aviso",)
+# Lo del dueno es de la principal, la linea del dueno: su chat (`owner`). Sin `--line` corre
+# ahi aunque la corrida herede la linea de otra.
+DE_LA_PRINCIPAL = ("owner",)
 
 
 def fija_linea(a):
@@ -11813,6 +11862,9 @@ def fija_linea(a):
     Una linea desvinculada sigue quieta: su caso no se ve."""
     if getattr(a, "linea", None):
         os.environ[wa_store.LINEA_ENV] = wa_store.linea_valida(a.linea)
+        return
+    if a.cmd in DE_TODAS:
+        os.environ.pop(wa_store.LINEA_ENV, None)
         return
     if a.cmd in DE_LA_PRINCIPAL:
         principal = wa_store.linea_activa_en_disco()
@@ -11853,9 +11905,12 @@ def por_cada_linea(a):
     hijos = {}
     for linea in lineas:
         env = dict(os.environ, **{wa_store.LINEA_ENV: linea})
+        # Lo que corre en todas las lineas ignora la linea heredada (`fija_linea`): a cada
+        # hijo se la nombra con `--line`, o volveria a repartirse.
+        nombrada = [f"--line={linea}"] if a.cmd in DE_TODAS else []
         hijos[linea] = subprocess.Popen([sys.executable, os.path.abspath(__file__),
-                                         *sys.argv[1:]], env=env, stdout=subprocess.PIPE,
-                                        text=True)
+                                         *sys.argv[1:], *nombrada], env=env,
+                                        stdout=subprocess.PIPE, text=True)
     salidas = {linea: (h.communicate()[0], h.returncode) for linea, h in hijos.items()}
     if agente:
         # Hay trabajo para el agente si lo hay en alguna linea; cada caso es de su linea, y
@@ -12023,7 +12078,8 @@ def main():
 
     s = add("orca-aviso", help="an agent in another Orca project is waiting (the worker "
                                "runs this): one fixed-text notice to the approval number, if "
-                               "that notice is on. One JSON line")
+                               "that notice is on. Without --line it runs on every line, each "
+                               "with its own notices and number. One JSON line")
     s.add_argument("--state", required=True, choices=["waiting", "blocked"])
     s.add_argument("--pane", required=True, help="the paneKey Orca reported")
     s.add_argument("--at", default="", help="receivedAt, in ms")

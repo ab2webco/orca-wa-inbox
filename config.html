@@ -507,7 +507,7 @@
       #linea-vista-fila[hidden] { display: none; }
       #linea-vista-actual { flex-basis: 100%; font-size: 14px; overflow-wrap: anywhere; }
       #linea-vista-ayuda { flex-basis: 100%; margin: 0; }
-      .nota-maquina[hidden], #orca-main-line[hidden] { display: none; }
+      .nota-maquina[hidden], #orca-line-from[hidden] { display: none; }
       /* El aviso de lo que se pierde va en --destructive y no apagado como las demas
          pistas: es lo unico de esta seccion que el usuario tiene que leer ANTES de
          apretar, no despues. */
@@ -931,8 +931,7 @@
         <section class="card" id="orca-notices-card">
           <h2 id="orca-legend" data-t="orcaLegend"></h2>
           <p class="hint lead" id="orca-intro" data-t="orcaIntro"></p>
-          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
-          <p class="hint" id="orca-main-line" hidden></p>
+          <p class="hint" id="orca-line-from" hidden></p>
           <p class="hint approval-warn" id="orca-no-number" data-t="orcaNoNumber" hidden></p>
           <div class="switch-row">
             <button type="button" class="switch" id="orca-waiting" role="switch"
@@ -1253,7 +1252,7 @@
             'otra.',
           // ajustes-por-linea: cada pestana es de la linea elegida; lo del equipo se dice.
           machineNote: 'Vale para todas las lineas de este equipo.',
-          orcaMainLine: 'Salen por la linea principal, {num}, a su numero de aprobacion.',
+          orcaLineFrom: 'Los avisos de Orca de esta linea salen por ella, {num}, a su numero de aprobacion.',
           linesApprovalFrom: 'Los avisos de los casos de esta linea salen por ella, {num}, a este numero.',
           linesViewHelp: 'Cada pestana muestra y guarda lo de esta linea. Lo que es de todo el ' +
             'equipo lo dice en su tarjeta.',
@@ -1838,7 +1837,7 @@
           linesWaitingOne: 'A line is waiting for its code: scan that one before opening ' +
             'another.',
           machineNote: 'Applies to every line on this computer.',
-          orcaMainLine: 'They go out through the main line, {num}, to its approval number.',
+          orcaLineFrom: "This line's Orca notices go out through it, {num}, to its approval number.",
           linesApprovalFrom: "Notices for this line's cases go out through it, {num}, to this number.",
           linesViewHelp: "Every tab shows and saves this line's settings. Whatever applies to " +
             'the whole computer says so on its card.',
@@ -2390,7 +2389,7 @@
         linesWaitingOne: 'Ha uma linha esperando o seu codigo: escaneie esse antes de abrir ' +
           'outra.',
           machineNote: 'Vale para todas as linhas deste computador.',
-          orcaMainLine: 'Saem pela linha principal, {num}, para o numero de aprovacao dela.',
+          orcaLineFrom: 'Os avisos do Orca desta linha saem por ela, {num}, para o numero de aprovacao dela.',
           linesApprovalFrom: 'Os avisos dos casos desta linha saem por ela, {num}, para este numero.',
           linesViewHelp: 'Cada aba mostra e guarda o que e desta linha. O que vale para o ' +
             'computador inteiro diz isso no seu cartao.',
@@ -3393,16 +3392,23 @@
       // cambiar de linea cuesta una lectura y no dieciseis.
       var AJUSTES_DE_LINEA = ['agentName', 'ownerName', 'tone', 'owners', 'approvalNumber',
         'approvalLang', 'ackMode', 'ackText', 'ackQuietMinutes', 'greetingMode', 'greetingText',
-        'firstReply', 'slaMinutes', 'projectQuestionHours', 'inboxDays', 'transcribeLang']
+        'firstReply', 'slaMinutes', 'projectQuestionHours', 'inboxDays', 'transcribeLang',
+        'orcaNotices'
+      ]
+      // Los que otra linea NUNCA toma de la principal (`NO_HEREDAN`, la misma lista de
+      // wa_settings.py y main.mjs): sin uno propio se pintan los de fabrica. Los avisos de Orca
+      // heredados mandarian el mismo aviso dos veces, uno por cada numero.
+      var NO_HEREDAN = ['orcaNotices']
       var CONTENEDOR_AJUSTES = 'ajustesPorLinea'
       function esDeLinea (k) { return AJUSTES_DE_LINEA.indexOf(k) !== -1 }
       /** El valor de un ajuste para la linea `cuenta`, del contenedor ya leido. Lo que la
        *  linea no tiene propio es lo de la principal, como lo lee wa-scope; null es "sin
-       *  valor" y no cae a la principal. */
+       *  valor" y no cae a la principal. Lo que no se hereda, sin propio, es null. */
       function ajusteDeLinea (contenedor, cuenta, k) {
         if (!hayRespuesta(contenedor)) return SIN_RESPUESTA
         var propios = contenedor && typeof contenedor === 'object' ? contenedor[cuenta] : null
         if (propios && typeof propios === 'object' && k in propios) return propios[k]
+        if (NO_HEREDAN.indexOf(k) !== -1) return null
         return k in ultimaLectura ? ultimaLectura[k] : SIN_RESPUESTA
       }
       // Una sola lectura del contenedor en vuelo: abrir una pestana pide varias claves de
@@ -6625,8 +6631,8 @@
         return l.cuenta ? '+' + String(l.cuenta).replace(/^pn:/, '') : t('linesNew')
       }
       /** Las notas de linea, solo con dos lineas vinculadas o mas: lo del equipo lo dice en
-       *  su tarjeta, los avisos de un caso salen por la linea que se mira, y los de Orca por
-       *  la principal. Con una sola linea, nada: no hay de que distinguirla. */
+       *  su tarjeta, y los avisos de un caso y los de Orca salen por la linea que se mira. Con
+       *  una sola linea, nada: no hay de que distinguirla. */
       function renderNotasLineas () {
         var vinc = lineasVinculadas()
         var varias = vinc.length > 1
@@ -6639,10 +6645,10 @@
         aviso.hidden = !varias
         aviso.textContent = varias && vista
           ? fmt('linesApprovalFrom', { num: numeroDeLinea(vista, estadoDeLinea(vista)) }) : ''
-        var orca = el('orca-main-line')
+        var orca = el('orca-line-from')
         orca.hidden = !varias
-        orca.textContent = varias
-          ? fmt('orcaMainLine', { num: numeroDeLinea(vinc[0], estadoDeLinea(vinc[0])) }) : ''
+        orca.textContent = varias && vista
+          ? fmt('orcaLineFrom', { num: numeroDeLinea(vista, estadoDeLinea(vista)) }) : ''
       }
       function textoEstadoLinea (estado, d) {
         if (estado === 'silent') return fmt('pairingSilent', { hora: horaUltimaSenal(d) })
@@ -6868,6 +6874,11 @@
           else el(c[0]).value = c[1]
         })
         PRIMER_IDS.forEach(function (id) { delete sucios[id] })
+        // Los avisos de Orca, a lo de fabrica hasta que llegue lo de la linea nueva.
+        ORCA_IDS.forEach(function (id) { delete sucios[id] })
+        ORCA_INTERRUPTORES.forEach(function (p) { el(p[1]).setAttribute('aria-checked', 'false') })
+        ORCA_CAMPOS.forEach(function (p) { el(p[1]).value = ORCA_DEFECTO[p[0]] })
+        pintarOrcaVista()
         ponerSeg('first-reply', 'ack', 'ack')
         PRIMER_NUMEROS.forEach(function (n) { el(n[1]).value = PRIMER_DEFECTO[n[0]] })
         pintarPrimerVista()
@@ -6877,8 +6888,8 @@
         numeroGuardado = ''
         numeroEnEdicion = null
         pintarDuenos()
-        ;['said-agent', 'said-owners', 'said-auto', 'said-sla', 'said-pq-hours', 'said-voice',
-          'said-reading'].forEach(function (id) { said(id, '') })
+        ;['said-agent', 'said-owners', 'said-orca', 'said-auto', 'said-sla', 'said-pq-hours',
+          'said-voice', 'said-reading'].forEach(function (id) { said(id, '') })
         pintarLecturas()
       }
 

@@ -8474,7 +8474,7 @@ console.log('\nconfig.html — lineas claras: que es de cada linea y que es del 
   }
   ok('ya no hay notas de "Aplica a sus N lineas": cada pestana es de la linea elegida',
     !doc.querySelector('.nota-lineas') && !/Aplica a sus/.test(doc.body.textContent))
-  const MAQUINA = ['routes-card', 'projects-card', 'orca-notices-card', 'jev-card',
+  const MAQUINA = ['routes-card', 'projects-card', 'jev-card',
     'bot-account-card', 'skills-card', 'voice-card', 'reading-card']
   const notaEn = (id) => [...doc.querySelectorAll(`#${id} .nota-maquina`)]
   for (const id of MAQUINA) {
@@ -8483,12 +8483,14 @@ console.log('\nconfig.html — lineas claras: que es de cada linea y que es del 
         n.textContent === 'Vale para todas las lineas de este equipo.'),
       notaEn(id).map((n) => `${n.hidden}:${n.textContent}`).join(' | '))
   }
-  const PROPIAS = ['agent-card', 'owners-card', 'auto-card', 'sla-card', 'pq-card', 'scope-form']
+  const PROPIAS = ['agent-card', 'owners-card', 'auto-card', 'sla-card', 'pq-card', 'scope-form',
+    'orca-notices-card']
   ok('lo de cada linea no lleva esa nota', PROPIAS.every((id) => notaEn(id).length === 0),
     PROPIAS.filter((id) => notaEn(id).length).join())
-  ok('los avisos de Orca dicen que salen por la principal',
-    /linea principal, \+573000000001/.test(textoDe(doc, '#orca-main-line')) &&
-    !doc.getElementById('orca-main-line').hidden, textoDe(doc, '#orca-main-line'))
+  ok('los avisos de Orca dicen que salen por la linea que se mira, a su numero',
+    textoDe(doc, '#orca-line-from') ===
+      'Los avisos de Orca de esta linea salen por ella, +573000000001, a su numero de aprobacion.' &&
+    !doc.getElementById('orca-line-from').hidden, textoDe(doc, '#orca-line-from'))
   ok('y los de los casos, por la linea que se esta viendo',
     textoDe(doc, '#approval-main-line') ===
       'Los avisos de los casos de esta linea salen por ella, +573000000001, a este numero.',
@@ -8503,7 +8505,8 @@ console.log('\nconfig.html — lineas claras: que es de cada linea y que es del 
   await new Promise((r) => setTimeout(r, 300))
   ok('y despues de elegir la otra nombra la otra, tambien en el aviso de los casos',
     textoDe(doc, '#linea-vista-actual') === 'Viendo la linea +573000000011' &&
-    /\+573000000011/.test(textoDe(doc, '#approval-main-line')), textoDe(doc, '#linea-vista-actual'))
+    /\+573000000011/.test(textoDe(doc, '#approval-main-line')) &&
+    /\+573000000011/.test(textoDe(doc, '#orca-line-from')), textoDe(doc, '#linea-vista-actual'))
   ok('desde cualquier pestana: el selector se ve en Agente', (doc.getElementById('tab-agente').click(),
     seVeN(fila)))
   const una = await montar('config.html', { sidecar: conLineas([lineaA]) }, 'es-419')
@@ -8511,21 +8514,21 @@ console.log('\nconfig.html — lineas claras: que es de cada linea y que es del 
   ok('con una sola linea no hay selector, ni notas de equipo, ni avisos de linea',
     una.doc.getElementById('linea-vista-fila').hidden &&
     [...una.doc.querySelectorAll('.nota-maquina')].every((n) => n.hidden) &&
-    una.doc.getElementById('approval-main-line').hidden && una.doc.getElementById('orca-main-line').hidden)
+    una.doc.getElementById('approval-main-line').hidden && una.doc.getElementById('orca-line-from').hidden)
   const en = await montar('config.html', dos, 'en')
   await espera()
   ok('en ingles hablan ingles',
     textoDe(en.doc, '#voice-card .nota-maquina') === 'Applies to every line on this computer.' &&
-    /main line, \+573000000001/.test(textoDe(en.doc, '#orca-main-line')),
+    /through it, \+573000000001/.test(textoDe(en.doc, '#orca-line-from')),
     textoDe(en.doc, '#voice-card .nota-maquina'))
   const pt = await montar('config.html', dos, 'pt-BR')
   await espera()
   ok('en portugues tambien',
     textoDe(pt.doc, '#voice-card .nota-maquina') === 'Vale para todas as linhas deste computador.' &&
-    /linha principal, \+573000000001/.test(textoDe(pt.doc, '#orca-main-line')),
+    /saem por ela, \+573000000001/.test(textoDe(pt.doc, '#orca-line-from')),
     textoDe(pt.doc, '#voice-card .nota-maquina'))
   const S = doc.defaultView.STRINGS
-  const claves = ['machineNote', 'orcaMainLine', 'linesApprovalFrom', 'linesViewing', 'linesView',
+  const claves = ['machineNote', 'orcaLineFrom', 'linesApprovalFrom', 'linesViewing', 'linesView',
     'linesViewHelp']
   ok('las frases existen en los tres idiomas, el portugues propio',
     claves.every((k) => S.es[k] && S.en[k] && S.pt[k] && S.pt[k] !== S.en[k]),
@@ -8675,6 +8678,49 @@ console.log('\nconfig.html — A5: si la otra linea no contesta, no se ven los a
   ok('cuando el host contesta, aparece lo de ESA linea, sola la lectura que faltaba',
     doc.getElementById('agent').value === 'Agente Segunda' && !tarjeta.classList.contains('sin-leer'),
     doc.getElementById('agent').value)
+}
+
+// ───────── todo-por-linea P1: los avisos de Orca de cada linea ─────────
+// La tarjeta de los avisos de Orca es de la linea que se mira. Otra linea sin avisos propios
+// NO hereda los de la principal: se pintan apagados, y guardar ahi no toca la raiz.
+console.log('\nconfig.html — P1: los avisos de Orca de cada linea')
+{
+  const storage = dosLineasConAjustes()
+  const ORCA_A = { waiting: 'on', finished: 'on', automationFailed: 'off', quietStart: '',
+    quietEnd: '', hourlyCap: '4', finishedDelaySeconds: '30' }
+  storage.orcaNotices = { ...ORCA_A }
+  const { doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  doc.getElementById('tab-aprobacion').click()
+  await new Promise((r) => setTimeout(r, 300))
+  const encendido = (id) => doc.getElementById(id).getAttribute('aria-checked') === 'true'
+  ok('en la principal, la tarjeta muestra los avisos de la raiz',
+    encendido('orca-waiting') && encendido('orca-finished') &&
+    doc.getElementById('orca-cap').value === '4', doc.getElementById('orca-cap').value)
+  elegirSeg(doc, 'linea-vista', L_B)
+  await new Promise((r) => setTimeout(r, 400))
+  ok('en otra linea sin avisos propios: todo apagado, no los de la principal',
+    !encendido('orca-waiting') && !encendido('orca-finished') &&
+    doc.getElementById('orca-cap').value === '6' &&
+    !doc.getElementById('orca-notices-card').classList.contains('sin-leer'),
+    `${encendido('orca-waiting')} ${encendido('orca-finished')} ${doc.getElementById('orca-cap').value}`)
+  doc.getElementById('orca-waiting').click()
+  doc.getElementById('save-orca').click()
+  await new Promise((r) => setTimeout(r, 500))
+  const propios = storage.ajustesPorLinea[L_B]
+  ok('guardar en la otra linea escribe los avisos en lo de ESA linea',
+    propios.orcaNotices && propios.orcaNotices.waiting === 'on' &&
+    propios.orcaNotices.finished === 'off' && propios.agentName === 'Agente Segunda',
+    JSON.stringify(propios))
+  ok('y la raiz queda intacta', JSON.stringify(storage.orcaNotices) === JSON.stringify(ORCA_A),
+    JSON.stringify(storage.orcaNotices))
+  ok('y la tarjeta queda mostrando lo guardado', encendido('orca-waiting') && !encendido('orca-finished') &&
+    /Guardado/.test(textoDe(doc, '#said-orca')), textoDe(doc, '#said-orca'))
+  elegirSeg(doc, 'linea-vista', L_A)
+  await new Promise((r) => setTimeout(r, 400))
+  ok('volver a la principal muestra otra vez los de la raiz',
+    encendido('orca-waiting') && encendido('orca-finished') &&
+    doc.getElementById('orca-cap').value === '4', doc.getElementById('orca-cap').value)
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
