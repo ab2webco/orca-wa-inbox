@@ -16,8 +16,10 @@ import { decidirTrasCierre, calcularEsperaMs, intentoTrasEvento, mensajeQr, qrVe
   tocaEmitirAlmacen, opcionesDeSocket, salidaTrasCierre, repetidosTrasCierre, MOTIVO,
   PARCHES_DE_LIBRETA, CIERRES_REPETIDOS_TOPE, CIERRES_VENTANA_MS,
   QR_ROTACION_MS, QR_VIGENCIA_MS, SALIDA, LATIDO_LINEA_MS, mensajeLatido,
-  ALMACEN_LATIDO_MS, anotarLinea, LINEA_SECUNDARIA_ENV, CUENTA_PREVIA_ENV, rutaRegistro
+  ALMACEN_LATIDO_MS, anotarLinea, LINEA_SECUNDARIA_ENV, CUENTA_PREVIA_ENV, rutaRegistro,
+  authDeSocket
 } from '../sidecar/src/index.js'
+import { crearCacheDeReintentos } from '../sidecar/src/envio.js'
 import { crearRegistro, FALLO_DE_DESCIFRADO } from '../sidecar/src/registro.js'
 import { readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { crearAlcance, LINEA_ENV } from '../sidecar/src/alcance.js'
@@ -362,6 +364,48 @@ console.log('\nsidecar: la lista de conversaciones tiene que poder LLEGAR')
     o.qrTimeout === QR_ROTACION_MS, String(o.qrTimeout))
   ok('y la vigencia que viaja con cada QR es mayor que esa rotacion',
     QR_VIGENCIA_MS > QR_ROTACION_MS, `vigencia=${QR_VIGENCIA_MS} rotacion=${QR_ROTACION_MS}`)
+}
+
+console.log('\nsidecar: los reintentos de Baileys 7 (getMessage, msgRetryCounterCache, llaves)')
+{
+  // El log de la linea decia `recv retry request, but message not available`: el
+  // telefono del otro lado pedia reenviar algo nuestro y el socket no tenia de donde
+  // sacarlo. Baileys 7 documenta `getMessage` para eso (lib/Types/Socket.d.ts) y un
+  // `msgRetryCounterCache` que, si no se le pasa, nace de nuevo en cada socket: la cuenta
+  // de reintentos se borraba en cada reconexion.
+  const getMessage = async () => undefined
+  const reintentos = crearCacheDeReintentos()
+  const o = opcionesDeSocket({ version: [2, 3000, 1], auth: {}, browser: ['Chrome', 'Chrome', ''],
+    getMessage, msgRetryCounterCache: reintentos })
+  ok('el socket recibe getMessage', o.getMessage === getMessage)
+  ok('y la cache de reintentos del proceso, la MISMA en cada reconexion',
+    o.msgRetryCounterCache === reintentos)
+  const sinNada = opcionesDeSocket({ version: [2, 3000, 1], auth: {}, browser: [] })
+  ok('sin ellos no se inventa nada: Baileys pone los suyos',
+    !('getMessage' in sinNada) && !('msgRetryCounterCache' in sinNada),
+    JSON.stringify(Object.keys(sinNada)))
+
+  let ahora = 1000
+  const cache = crearCacheDeReintentos({ ttlMs: 500, ahora: () => ahora })
+  cache.set('m1', 2)
+  ok('la cache guarda y devuelve (la forma CacheStore de Baileys)', cache.get('m1') === 2)
+  ahora = 1600
+  ok('y olvida pasado su tiempo', cache.get('m1') === undefined)
+  cache.set('m2', 1); cache.del('m2')
+  ok('del borra', cache.get('m2') === undefined)
+  cache.set('m3', 1); cache.flushAll()
+  ok('flushAll vacia', cache.get('m3') === undefined)
+
+  // Las llaves de signal pasan por `makeCacheableSignalKeyStore`, como pide Baileys 7, y
+  // las credenciales son el MISMO objeto: `saveCreds` escribe ese objeto, y una copia
+  // dejaria a Baileys actualizando algo que nadie guarda.
+  const state = { creds: { me: { id: '573000000011:7@s.whatsapp.net' } }, keys: { get () {}, set () {} } }
+  const vistos = []
+  const envolver = (llaves, logger) => { vistos.push([llaves, logger]); return { envueltas: true } }
+  const auth = authDeSocket(state, envolver, 'registro')
+  ok('las llaves salen envueltas por la cache de Baileys',
+    auth.keys?.envueltas === true && vistos[0]?.[0] === state.keys && vistos[0]?.[1] === 'registro')
+  ok('y las credenciales son las mismas que guarda saveCreds', auth.creds === state.creds)
 }
 
 console.log('\nsidecar: el contador de intentos y el backoff al emparejar')

@@ -19,7 +19,7 @@ import { basename, dirname, isAbsolute, join } from 'node:path'
 import { abrirAlmacen, rutaAlmacen, rutaMedia } from './almacen.js'
 import { crearAlcance } from './alcance.js'
 import { crearRegistro } from './registro.js'
-import { atenderSalida, ENVIO_LATIDO_MS } from './envio.js'
+import { atenderSalida, crearCacheDeReintentos, ENVIO_LATIDO_MS, mensajeDeEnvio } from './envio.js'
 import { INGESTA, ingerirActualizacion, ingerirCambioDeMiembros, ingerirChats,
   ingerirContactos, ingerirMensaje, ingerirMiembros, ingerirParesLid } from './ingesta.js'
 import { cuentaDeIdentidad, identidadDeSesion, identidadesPropias,
@@ -297,7 +297,13 @@ export function qrVencido (ts, ahoraMs = Date.now(), vigenciaMs = QR_VIGENCIA_MS
 // ajenas que nadie borra". Con `false` el telefono manda igual su lote reciente —que
 // es de donde sale la lista— y no se pide el archivo. Los mensajes que vengan en ese
 // lote no se miran: el escuchador de abajo solo lee `chats`.
-export function opcionesDeSocket ({ version, auth, browser, logger }) {
+//
+// `getMessage` y `msgRetryCounterCache` son los dos que Baileys 7 documenta para los
+// reintentos (lib/Types/Socket.d.ts): el primero contesta con lo que la linea mando
+// cuando el otro lado pide reenviarlo, y el segundo es la cuenta de reintentos, que
+// tiene que ser la MISMA en cada reconexion (ver `crearCacheDeReintentos`).
+export function opcionesDeSocket ({ version, auth, browser, logger, getMessage,
+  msgRetryCounterCache }) {
   return {
     version,
     auth,
@@ -305,6 +311,8 @@ export function opcionesDeSocket ({ version, auth, browser, logger }) {
     // Sin esto Baileys escribe con su pino de fabrica a stdout, el canal del protocolo,
     // y el motivo de un mensaje que no se pudo descifrar no lo guarda nadie.
     ...(logger ? { logger } : {}),
+    ...(getMessage ? { getMessage } : {}),
+    ...(msgRetryCounterCache ? { msgRetryCounterCache } : {}),
     printQRInTerminal: false,
     // La ROTACION, no la vigencia: son dos numeros distintos a proposito (ver el
     // comentario de QR_VIGENCIA_MS). Dejarlo implicito ata la UI a un valor de
@@ -313,6 +321,15 @@ export function opcionesDeSocket ({ version, auth, browser, logger }) {
     syncFullHistory: false,
     shouldSyncHistoryMessage: () => true
   }
+}
+
+/** El `auth` del socket: las credenciales TAL CUAL -el mismo objeto que escribe
+ *  `saveCreds`; una copia dejaria a Baileys actualizando algo que nadie guarda- y las
+ *  llaves de signal envueltas por `makeCacheableSignalKeyStore`, como pide Baileys 7:
+ *  sin la cache cada mensaje lee y escribe sus sesiones en disco, archivo por archivo.
+ *  `envolver` llega de afuera para que esto se pruebe sin resolver la libreria. */
+export function authDeSocket (state, envolver, logger) {
+  return { creds: state.creds, keys: envolver(state.keys, logger) }
 }
 
 // ── Protocolo por stdout ─────────────────────────────────────────────────────────
@@ -402,7 +419,7 @@ async function iniciar () {
   chmodSync(authDir, 0o700)
 
   const { default: makeWASocket, useMultiFileAuthState, Browsers,
-    downloadMediaMessage, fetchLatestBaileysVersion } =
+    downloadMediaMessage, fetchLatestBaileysVersion, makeCacheableSignalKeyStore } =
     await import('@whiskeysockets/baileys')
 
   const { state, saveCreds } = await useMultiFileAuthState(authDir)
@@ -554,10 +571,17 @@ async function iniciar () {
   // dueno que WhatsApp rechazo un mensaje que nunca lo vio es peor que tardar.
   let socket = null
   let conectado = false
+  // UNA por proceso, no por socket: ver `crearCacheDeReintentos`.
+  const reintentos = crearCacheDeReintentos()
+  // Las llaves con su cache se envuelven UNA vez: cada reconexion usa el mismo almacen.
+  const auth = authDeSocket(state, makeCacheableSignalKeyStore, registro)
 
   function conectar () {
     const sock = makeWASocket(opcionesDeSocket({
-      version, auth: state, browser: Browsers.appropriate('Chrome'), logger: registro
+      version, auth, browser: Browsers.appropriate('Chrome'), logger: registro,
+      // Lo que la linea mando, para reenviarlo si el otro lado no lo pudo descifrar.
+      getMessage: async (key) => mensajeDeEnvio({ almacen, cuenta, key }),
+      msgRetryCounterCache: reintentos
     }))
     socket = sock
     conectado = false

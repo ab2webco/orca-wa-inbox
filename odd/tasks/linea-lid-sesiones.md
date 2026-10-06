@@ -52,9 +52,14 @@ Out of scope: version bump, push, PR. Testing against real WhatsApp (not possibl
       to the v7 shape).
       Proof: RED 116/119 and a missing `ingerirParesLid` export, GREEN 119/119 and
       317/317. Bundle rebuilt, sidecar-build 8/8, sidecar-pairing 105/105.
-- [ ] T4 — Retries: `getMessage` answers from the outbox (`envio`), a process-wide
+- [x] T4 — Retries: `getMessage` answers from the outbox (`envio`), a process-wide
       `msgRetryCounterCache`, keys through `makeCacheableSignalKeyStore`. Tests in
       `sidecar-pairing.test.mjs` / `envio.test.mjs`.
+      `getMessage` looks up by line and stanza id only (`estado='enviado'`), since the
+      retry key may come by LID for a message sent to a phone number. The retry cache
+      is a small `Map` with a 1 h TTL in the `CacheStore` shape (no new dependency).
+      Proof: RED (missing exports `mensajeDeEnvio`, `authDeSocket`), GREEN 112/112 and
+      114/114. Bundle rebuilt.
 - [ ] T5 — A 6.7.24 auth folder loads under v7: creds (`me`, registration) and the PN
       session are found. Test with a fake 6.7.24 fixture.
 
