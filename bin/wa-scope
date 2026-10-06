@@ -691,8 +691,10 @@ def plugin_store_modifica(cambia, crear=True):
     justo lo que hace el host (lee {} y guarda su clave sola) y es como se perdian los
     duenos y el numero de aprobacion. Tampoco se saltea en silencio para siempre: se
     deja una copia en `storage.json.ilegible`, se rearma desde el primer destino que si
-    se lee (las claves del panel viven en todos) y se dice por stderr. Sin ninguno
-    legible no hay de donde rearmar: no se toca y se dice."""
+    se lee y se dice por stderr. Las claves que solo escribe el panel (duenos, numero de
+    aprobacion) viven solo en el storage del Orca que corre: rearmado desde otro no las
+    trae, pero quedan en la copia, y es menos que lo que borraria el host al leer {}.
+    Sin ninguno legible no hay de donde rearmar: no se toca y se dice."""
     os.makedirs(os.path.dirname(DB), exist_ok=True)
     candado = candado_de_archivo(os.path.join(os.path.dirname(DB), "storage.lock"))
     escritos = 0
