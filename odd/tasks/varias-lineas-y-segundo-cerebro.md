@@ -165,6 +165,33 @@ Decisions accepted by the owner (2026-10-05):
 - [ ] **L6** `npm run check` green. Live check: the bot line and a second test line linked
   together, each answering only its own chats.
 
+  Release v4.22.0 (rebased on v4.21.0). What met the features shipped meanwhile:
+  - `wa-scope owner` and `wa-scope orca-aviso` always work on the main line (the owner's
+    line) unless `--line` names another; the Orca notices run only in the main line's
+    tick (`tick_orca_si_toca`), so each notice goes out once. A `wa-send` to the owner's
+    chat with no `--line` goes out from the main line instead of failing as ambiguous.
+  - The approver key is one per machine: it approves a held draft of any line, which then
+    leaves from its own line. Held drafts live on their line's board, and with several
+    lines their card says which line.
+  - Every line's status uses the same words as the main row ("WhatsApp is connected").
+
+  Single-line regression proof (the release goes to every user):
+  - `worker.test.mjs` "v4.22.0 — una sola linea sigue conectada, sin QR y como antes": one
+    sidecar, main, from `wa-auth/pn-<digits>` with the same `creds.json`, connected with no
+    QR in the same `sidecar` key, and no other line's state.
+  - `worker.test.mjs` "v4.22.0 — la mudanza cortada a mitad deja wa-auth/ entero": the move
+    copies first and deletes last. A move that fails leaves the old folder byte-identical
+    (the worker reports `sidecar-authdir-fallo`, offers Retry, and launches nothing), and
+    the next start finishes it with nothing lost.
+  - `worker.test.mjs` "L1 — cada linea en su carpeta": the flat folder ends byte-identical
+    in its line's folder, and moving it twice changes nothing.
+  - `check-casos` (the whole suite, unchanged tests) for tick and ingest with one line, plus
+    the L3 check "y el tick vuelve a correr solo en la que queda, como siempre" (no `lineas`
+    key in the tick output with one line).
+  - `panels.test.mjs`: every pairing test from before still passes against the merged card.
+  - Known limit: going back to a version before v4.22.0 after the move finds no flat
+    `creds.json` and asks for a new QR.
+
   Live check, for the owner (not done: it needs the bot line and a spare phone):
   1. Install this branch's build over the live plugin and restart Orca. On first start the
      bot line's flat `wa-auth` moves to `wa-auth/pn-<digits>`: the panel shows it connected
