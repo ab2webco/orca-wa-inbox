@@ -324,6 +324,58 @@ def revisa_migracion_cuentas(fallos: list) -> int:
     return hechas
 
 
+def revisa_accounts_con_lineas(fallos: list) -> int:
+    """`accounts` lista las lineas que el plugin tiene de verdad (el registro `lineas` que
+    escribe el worker), no solo la tabla `wa_account` de los transportes viejos. Visto en
+    vivo con dos lineas: la segunda, vinculada y conectada, no salia, y el agente le dijo
+    al usuario que la volviera a vincular. Una fila vieja que no esta en el registro (la
+    `local`) sigue en la lista pero marcada `linked: false`."""
+    hechas = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+        man = json.loads((RAIZ / "orca-plugin.json").read_text(encoding="utf-8"))
+        base = ((home / "Library" / "Application Support" / "orca") if sys.platform == "darwin"
+                else (home / ".config" / "orca"))
+        store = base / "plugins-data" / f"{man['publisher']}.{man['id']}" / "storage.json"
+        store.parent.mkdir(parents=True, exist_ok=True)
+
+        def cuentas():
+            p = subprocess.run([str(BIN / "wa-scope"), "accounts", "--json"],
+                               capture_output=True, text=True, env=env, timeout=120)
+            return json.loads(p.stdout or "[]")
+
+        con_local = cuentas()
+        hechas += 1
+        if [c.get("id") for c in con_local] != ["local"] or "main" in con_local[0]:
+            fallos.append(f"sin registro de lineas `accounts` cambio: {con_local!r}")
+        principal, otra = "pn:15550000001", "pn:15550000002"
+        store.write_text(json.dumps({
+            "lineas": [{"carpeta": "pn-15550000001", "cuenta": principal, "tipo": "support"},
+                       {"carpeta": "pn-15550000002", "cuenta": otra, "tipo": "support"},
+                       {"carpeta": "nueva-prueba"}],
+            "sidecar": {"connection": "open"},
+            "sidecars": {"pn-15550000002": {"connection": "close"}}}), encoding="utf-8")
+        filas = {c.get("id"): c for c in cuentas()}
+        hechas += 5
+        if list(filas)[:2] != [principal, otra]:
+            fallos.append(f"`accounts` no lista las lineas del registro, la principal "
+                          f"primero: {list(filas)!r}")
+        elif not (filas[principal].get("main") is True and filas[otra].get("main") is False):
+            fallos.append(f"`accounts` no marca cual es la principal: {filas!r}")
+        elif not (filas[principal].get("connected") is True
+                  and filas[otra].get("connected") is False):
+            fallos.append(f"`accounts` no dice si cada linea esta conectada: {filas!r}")
+        elif not all(filas[i].get("linked") is True for i in (principal, otra)):
+            fallos.append(f"`accounts` no marca las lineas del registro como vinculadas: {filas!r}")
+        if filas.get("local", {}).get("linked") is not False:
+            fallos.append(f"la fila vieja `local` se presenta como linea vigente: {filas!r}")
+        if len(filas) != 3:
+            fallos.append(f"`accounts` lista de mas (una carpeta sin cuenta no es linea): "
+                          f"{list(filas)!r}")
+    return hechas
+
+
 def revisa_proyectos(fallos: list) -> int:
     """Los ajustes por chat apuntan a un PROYECTO (kanban-casos, T13).
 
@@ -3273,6 +3325,7 @@ def main() -> int:
     comprobaciones = (revisa_ajustes(fallos) + revisa_sin_transporte(fallos)
                       + revisa_rutas_del_almacen(fallos)
                       + revisa_migracion_cuentas(fallos)
+                      + revisa_accounts_con_lineas(fallos)
                       + revisa_rastro_corrida(fallos) + revisa_precheck(fallos)
                       + revisa_insignia_nav(fallos)
                       + revisa_sin_bytecode(fallos)
