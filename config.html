@@ -369,6 +369,11 @@
       /* Un fallo al buscar proyectos: va en el color del texto y con el token de fallo, no
          en el gris apagado de los consejos, porque es EL mensaje mientras no hay lista. */
       .hint.mal { color: var(--destructive, var(--fb-destructive)); }
+      /* Una tarjeta cuyo valor guardado todavia no llego del host (ajustes-sin-lectura): no
+         muestra sus controles, porque lo que tendrian pintado es lo de fabrica y se leeria
+         como lo guardado. Quedan el titulo, la introduccion, el aviso y el Guardar apagado. */
+      .card.sin-leer > :not(h2):not(.lead):not(.leyendo):not(.actions) { display: none; }
+      .hint.leyendo { color: var(--foreground, var(--fb-foreground)); }
       /* El motivo no es una pista al margen: es EL mensaje mientras no hay lista, asi
          que va en el color del texto y no en el apagado de los consejos. */
       #sync-msg { color: var(--foreground, var(--fb-foreground)); }
@@ -965,7 +970,7 @@
         </section>
 
         <!-- Respuestas automaticas: lo unico que el motor contesta solo, sin el agente. -->
-        <section class="card">
+        <section class="card" id="auto-card">
           <h2 id="auto-legend-h" data-t="autoLegend"></h2>
           <p class="hint lead" data-t="autoIntro"></p>
           <span class="label" id="ack-mode-label" data-t="ackLabel"></span>
@@ -1028,7 +1033,7 @@
         <!-- La meta del primer contacto (informes-tablero, I4): junto a las respuestas
              automaticas, que son el primer contacto que mide. Un ajuste global en minutos; la
              pestana Informes del tablero cuenta contra ella. -->
-        <section class="card">
+        <section class="card" id="sla-card">
           <h2 id="sla-legend" data-t="slaLegend"></h2>
           <div class="fr-num">
             <label for="sla-minutes" data-t="slaLabel"></label>
@@ -1045,7 +1050,7 @@
         <!-- Cuanto espera la pregunta "A o B?" a quien escribio antes de pasar al dueno
              (proyectos-por-chat, M5): un ajuste global en horas, en la clave plana
              `projectQuestionHours`. -->
-        <section class="card">
+        <section class="card" id="pq-card">
           <h2 data-t="pqHoursLegend"></h2>
           <div class="fr-num">
             <label for="pq-hours" data-t="pqHoursLabel"></label>
@@ -1091,7 +1096,7 @@
 
       <!-- ───────── Agente ───────── -->
       <div id="view-agente" role="tabpanel" aria-labelledby="tab-agente" hidden>
-        <section class="card">
+        <section class="card" id="agent-card">
           <h2 data-t="agentLegend"></h2>
           <label for="agent" data-t="agentLabel"></label>
           <input id="agent" data-t-ph="agentPh" />
@@ -1145,7 +1150,7 @@
 
       <!-- ───────── Avanzado ───────── -->
       <div id="view-avanzado" role="tabpanel" aria-labelledby="tab-avanzado" hidden>
-        <section class="card">
+        <section class="card" id="voice-card">
           <h2 data-t="voiceLegend"></h2>
           <span class="label" id="transcribe-label" data-t="transcribeLabel"></span>
           <div class="seg" id="transcribe" role="group" aria-labelledby="transcribe-label">
@@ -1173,7 +1178,7 @@
           </div>
         </section>
 
-        <section class="card">
+        <section class="card" id="reading-card">
           <h2 data-t="readingLegend"></h2>
           <span class="label" id="inbox-days-label" data-t="daysLabel"></span>
           <div class="seg" id="inbox-days" role="group" aria-labelledby="inbox-days-label">
@@ -1669,6 +1674,8 @@
             'id que deja WhatsApp; un numero no se escribe a mano. La autoridad sale de ese id, ' +
             'nunca de lo que diga el mensaje.',
           ownersEmpty: 'Todavia no eligio ningun numero.',
+          cardReading: 'Leyendo lo que usted tiene guardado… Esta tarjeta se puede guardar ' +
+            'cuando llegue; el panel lo sigue pidiendo solo.',
           ownersNoMatch: 'Nadie con ese nombre escribio en sus conversaciones.',
           ownersNoCandidates: 'Todavia no hay personas para elegir: aparecen cuando alguien escribe ' +
             'en una conversacion autorizada.',
@@ -2229,6 +2236,8 @@
             'the id WhatsApp leaves; a number is never typed. Authority comes from that id, never ' +
             'from what the message says.',
           ownersEmpty: 'No number picked yet.',
+          cardReading: 'Reading what you have saved… This card can be saved once it ' +
+            'arrives; the panel keeps asking on its own.',
           ownersNoMatch: 'Nobody with that name wrote in your conversations.',
           ownersNoCandidates: 'No people to pick yet: they show up when someone writes in an ' +
             'authorized conversation.',
@@ -2814,6 +2823,8 @@
           'que o WhatsApp deixa; um numero nunca e digitado. A autoridade sai desse id, nunca do ' +
           'que a mensagem diz.',
         ownersEmpty: 'Nenhum numero escolhido ainda.',
+        cardReading: 'Lendo o que voce tem salvo… Este cartao pode ser salvo quando ' +
+          'chegar; o painel continua pedindo sozinho.',
         ownersNoMatch: 'Ninguem com esse nome escreveu nas suas conversas.',
         ownersNoCandidates: 'Ainda nao ha pessoas para escolher: aparecem quando alguem escreve ' +
           'numa conversa autorizada.',
@@ -2932,6 +2943,11 @@
       var CUPO = { max: 30, ventanaMs: 10000, reserva: 4 }
       var gastados = [], cola = [], colaTimer = null, frenoHasta = 0
       var RECHAZADO = { ok: false, errorCode: 'rate_limited' }
+      // Un pedido que el host admitio y nunca contesto. El puente descarta la respuesta si
+      // el iframe dejo de ser el activo (`respond` en PluginPanel), y una promesa que no
+      // resuelve nunca dejaba la vuelta entera colgada: nada se pintaba y nada se reintentaba.
+      var ESPERA_RESPUESTA_MS = 20000
+      var SIN_CONTESTAR = { ok: false, errorCode: 'sin_respuesta' }
 
       // Solo el sondeo se auto-frena. Lo del usuario sale ya: si el host lo rechaza no
       // se pierde nada —un rechazo no gasta cupo— y el reintento lo pone igual. Frenar
@@ -2943,17 +2959,30 @@
       }
       function proximoHueco() {
         var ahora = Date.now()
+        var espera = Infinity
         // Lo del usuario espera SU reintento y nada mas: hacerlo esperar a que se
         // vacie la ventana del sondeo lo dejaba diez segundos quieto, que es el mismo
-        // "no paso nada" que esto viene a sacar.
-        if (cola[0] && cola[0].usuario) return Math.max(60, (cola[0].desde || 0) - ahora)
-        var falta = frenoHasta - ahora
-        if (gastados.length) falta = Math.max(falta, gastados[0] + CUPO.ventanaMs - ahora)
-        return Math.max(60, Math.min(falta, CUPO.ventanaMs))
+        // "no paso nada" que esto viene a sacar. Cuenta el reintento mas cercano, no el
+        // del primero de la cola.
+        cola.forEach(function (it) {
+          if (it.usuario) espera = Math.min(espera, (it.desde || 0) - ahora)
+        })
+        if (cola.some(function (it) { return !it.usuario })) {
+          var falta = frenoHasta - ahora
+          if (gastados.length) falta = Math.max(falta, gastados[0] + CUPO.ventanaMs - ahora)
+          espera = Math.min(espera, falta)
+        }
+        return Math.max(60, Math.min(espera, CUPO.ventanaMs))
       }
       function despachar(it) {
         var requestId = 'req-' + ++seq
+        var mudo = setTimeout(function () {
+          if (!pending[requestId]) return
+          delete pending[requestId]
+          it.resolve(SIN_CONTESTAR)
+        }, ESPERA_RESPUESTA_MS)
         pending[requestId] = function (d) {
+          clearTimeout(mudo)
           if (!(d && d.errorCode === 'rate_limited')) return it.resolve(d)
           // El espejo local no ve lo que el host cobra por su cuenta —los pongs del
           // watchdog, el alto del panel—, asi que un rechazo sigue siendo posible.
@@ -2974,12 +3003,19 @@
       function drenar() {
         if (colaTimer) { clearTimeout(colaTimer); colaTimer = null }
         var ahora = Date.now()
-        while (cola.length) {
-          var it = cola[0]
-          if (it.vence <= ahora) { cola.shift(); it.resolve(RECHAZADO); continue }
+        var quedan = []
+        var sondeoFrenado = false
+        cola.forEach(function (it) {
+          if (it.vence <= ahora) { it.resolve(RECHAZADO); return }
+          // Un reintento que todavia no toca espera SOLO: antes la cola cortaba en el, y
+          // todo lo de atras —las otras tarjetas de la pestana, un clic— esperaba su
+          // backoff ronda tras ronda (ajustes-sin-lectura).
           if (it.usuario ? (it.desde || 0) > ahora
-                         : (ahora < frenoHasta || !hayLugarDeSondeo())) break
-          cola.shift()
+                         : (sondeoFrenado || ahora < frenoHasta || !hayLugarDeSondeo())) {
+            if (!it.usuario) sondeoFrenado = true
+            quedan.push(it)
+            return
+          }
           // Se cuenta el sondeo y no el clic: el espejo esta para que las lecturas de
           // fondo no se coman la ventana, no para adivinar la cuenta exacta del host
           // —que cobra ademas sus pongs y el alto del panel, invisibles desde aca—. Un
@@ -2987,7 +3023,8 @@
           // nunca, porque nadie lo mando.
           if (!it.usuario) gastados.push(ahora)
           despachar(it)
-        }
+        })
+        cola = quedan
         if (cola.length) colaTimer = setTimeout(drenar, proximoHueco())
       }
       function encolar(it) {
@@ -3444,7 +3481,13 @@
       ponerSeg('first-reply', 'ack', 'ack')
       PRIMER_NUMEROS.forEach(function (n) { el(n[1]).value = PRIMER_DEFECTO[n[0]] })
 
+      /** Pinta y, si lo pintado es una respuesta del host vigente, la tarjeta deja de
+       *  estar "sin leer". Lo de fabrica que se pinto al arrancar no cuenta. */
       function pintarClave (key, valor, s) {
+        pintarValor(key, valor, s)
+        if (hayRespuesta(valor) && vigente(s)) marcarPintada(key)
+      }
+      function pintarValor (key, valor, s) {
         if (key === 'firstReply') return pintarPrimer(valor, s)
         if (key === 'orcaNotices') return pintarOrca(valor, s)
         var c = CONTROLES[key]
@@ -3500,9 +3543,122 @@
         }))
       }
 
+      // ---------- una tarjeta sin lectura no guarda (ajustes-sin-lectura) ----------
+      // Cada Guardar escribe la tarjeta ENTERA con lo que muestran sus controles. Antes de
+      // la primera respuesta del host esos controles tienen lo de fabrica, y si la lectura
+      // se perdia —el cupo de 30 mensajes por 10 s es POR PLUGIN y el tablero gasta del
+      // mismo; el carril del usuario se rinde a los 30 s— la tarjeta quedaba asi para
+      // siempre, diciendo "Todavia no eligio ningun numero" sobre numeros guardados. Un
+      // clic en Guardar escribia entonces owners=[] y los avisos apagados encima de lo
+      // del dueno. Ahora una tarjeta sin respuesta no muestra sus controles, su Guardar no
+      // anda, y lo que falta se vuelve a pedir solo hasta que llegue.
+      var TARJETAS_LEIDAS = [
+        { tarjeta: 'owners-card', boton: 'save-owners', said: 'said-owners',
+          claves: ['owners', 'approvalNumber'] },
+        { tarjeta: 'orca-notices-card', boton: 'save-orca', said: 'said-orca',
+          claves: ['orcaNotices'] },
+        { tarjeta: 'auto-card', boton: 'save-auto', said: 'said-auto',
+          claves: ['ackMode', 'ackText', 'ackQuietMinutes', 'greetingMode', 'greetingText',
+            'firstReply'] },
+        { tarjeta: 'sla-card', boton: 'save-sla', said: 'said-sla', claves: ['slaMinutes'] },
+        { tarjeta: 'pq-card', boton: 'save-pq-hours', said: 'said-pq-hours',
+          claves: ['projectQuestionHours'] },
+        { tarjeta: 'agent-card', boton: 'save-agent', said: 'said-agent',
+          claves: ['agentName', 'ownerName', 'tone'] },
+        { tarjeta: 'voice-card', boton: 'save-voice', said: 'said-voice',
+          claves: ['transcribe', 'transcribeLang', 'transcribeQuality'] },
+        { tarjeta: 'reading-card', boton: 'save-reading', said: 'said-reading',
+          claves: ['inboxDays', 'syncMinutes'] }
+      ]
+      // Las de Su aprobacion que no estan en la vuelta (CLAVES): se piden al abrir SU
+      // pestana. Primero los avisos de Orca, que son la tarjeta de arriba.
+      var CLAVES_AUTO = ['orcaNotices', 'ackMode', 'ackText', 'ackQuietMinutes', 'greetingMode',
+        'greetingText', 'firstReply', 'slaMinutes', 'projectQuestionHours']
+      var pintadas = {}
+      var autoPedida = false
+      function tarjetaLeida (c) {
+        return c.claves.every(function (k) { return pintadas[k] })
+      }
+      function marcarPintada (k) {
+        if (pintadas[k]) return
+        pintadas[k] = true
+        pintarLecturas()
+      }
+      /** El estado "sin leer" de cada tarjeta. El Guardar solo cambia al pasar de sin leer a
+       *  leida (una vez): tocarlo en cada llamada le pisaria el "…" a `busy`. */
+      function pintarLecturas () {
+        TARJETAS_LEIDAS.forEach(function (c) {
+          var leida = tarjetaLeida(c)
+          var tarjeta = el(c.tarjeta)
+          var aviso = tarjeta.querySelector('.leyendo')
+          if (!aviso) {
+            aviso = document.createElement('p')
+            aviso.className = 'hint leyendo'
+            aviso.setAttribute('role', 'status')
+            tarjeta.insertBefore(aviso, tarjeta.querySelector('.actions'))
+          }
+          aviso.textContent = t('cardReading')
+          aviso.hidden = leida
+          tarjeta.classList.toggle('sin-leer', !leida)
+          tarjeta.setAttribute('aria-busy', leida ? 'false' : 'true')
+          if (c.leida === leida) return
+          c.leida = leida
+          el(c.boton).disabled = !leida
+        })
+        pintarOrcaNumero()
+      }
+      /** El clic que igual llegue a una tarjeta sin leer no escribe: lo dice y sale. */
+      function sinLeer (boton) {
+        var c = TARJETAS_LEIDAS.filter(function (x) { return x.boton === boton })[0]
+        if (!c || tarjetaLeida(c)) return false
+        said(c.said, t('cardReading'), true)
+        return true
+      }
+      /** Pinta una clave que llego sola, fuera de la vuelta. */
+      function pintarLeida (k, v, sello) {
+        if (k === 'owners' || k === 'approvalNumber') {
+          if (!hayRespuesta(v) || !vigente(sello)) return
+          if (k === 'owners') renderOwners(v)
+          else renderApproval(v)
+          marcarPintada(k)
+          return
+        }
+        pintarClave(k, v, sello)
+      }
+      // Lo que falta se vuelve a pedir por el carril del usuario, cada pocos segundos y
+      // solo lo que falta: una o dos claves, no la vuelta entera.
+      var RELECTURA_MS = 3000
+      var timerRelectura = null
+      function clavesSinPintar () {
+        var faltan = []
+        TARJETAS_LEIDAS.forEach(function (c) {
+          c.claves.forEach(function (k) {
+            if (pintadas[k] || faltan.indexOf(k) !== -1) return
+            // Las de la pestana Su aprobacion se piden recien cuando se abre.
+            if (!autoPedida && CLAVES_AUTO.indexOf(k) !== -1) return
+            faltan.push(k)
+          })
+        })
+        return faltan
+      }
+      function programarRelectura () {
+        if (timerRelectura || !liveStorage || !clavesSinPintar().length) return
+        timerRelectura = setTimeout(function () {
+          timerRelectura = null
+          var faltan = clavesSinPintar()
+          if (!faltan.length) return
+          if (document.visibilityState !== 'visible') { programarRelectura(); return }
+          var sello = guardadoSeq
+          Promise.all(faltan.map(function (k) {
+            return read(k, true).then(function (v) { pintarLeida(k, v, sello) })
+          })).then(programarRelectura)
+        }, RELECTURA_MS)
+      }
+
       // El nombre del agente firma cada mensaje y no puede quedar vacio. El dueno (su
       // nombre) y el tono si: vacios, el prompt usa los de fabrica.
       el('save-agent').addEventListener('click', function (event) {
+        if (sinLeer('save-agent')) return
         if (!el('agent').value.trim()) { said('said-agent', t('needName'), true); return }
         guardarTarjeta(event.currentTarget, 'said-agent', ['agentName', 'ownerName', 'tone'])
       })
@@ -3587,6 +3743,7 @@
       }
 
       el('save-voice').addEventListener('click', function (event) {
+        if (sinLeer('save-voice')) return
         guardarTarjeta(event.currentTarget, 'said-voice',
           ['transcribe', 'transcribeLang', 'transcribeQuality'])
       })
@@ -3595,6 +3752,7 @@
       var SILENCIO_MIN = 0, SILENCIO_MAX = 240
       el('ack-quiet').value = CONTROLES.ackQuietMinutes[1]
       el('save-auto').addEventListener('click', function (event) {
+        if (sinLeer('save-auto')) return
         var primer = primerDelFormulario()
         if (!primer) { said('said-auto', t('frRange'), true); return }
         var silencio = el('ack-quiet').value.trim()
@@ -3620,6 +3778,7 @@
       var SLA_MIN = 1, SLA_MAX = 1440
       el('sla-minutes').value = CONTROLES.slaMinutes[1]
       el('save-sla').addEventListener('click', function (event) {
+        if (sinLeer('save-sla')) return
         var texto = el('sla-minutes').value.trim()
         var x = Number(texto)
         if (!/^\d+$/.test(texto) || x < SLA_MIN || x > SLA_MAX) {
@@ -3633,6 +3792,7 @@
       // (`project_question_hours` es positivo). Otra cosa no se guarda y se dice.
       el('pq-hours').value = CONTROLES.projectQuestionHours[1]
       el('save-pq-hours').addEventListener('click', function (event) {
+        if (sinLeer('save-pq-hours')) return
         var texto = el('pq-hours').value.trim()
         if (!/^\d+$/.test(texto) || Number(texto) < 1) {
           said('said-pq-hours', t('pqHoursRange'), true)
@@ -3683,8 +3843,10 @@
       }
       /** Sin numero de aprobacion guardado (y de confianza) no sale ningun aviso. */
       function pintarOrcaNumero () {
-        el('orca-no-number').hidden = !!numeroGuardado &&
-          duenosVisibles().some(function (d) { return d.id === numeroGuardado })
+        // Sin la tarjeta de confianza leida no se sabe si hay numero: no se afirma que falta.
+        var leida = pintadas.owners && pintadas.approvalNumber
+        el('orca-no-number').hidden = !leida || (!!numeroGuardado &&
+          duenosVisibles().some(function (d) { return d.id === numeroGuardado }))
       }
       /** Lo que la tarjeta guardaria, o la clave del texto que dice por que no. */
       function orcaDelFormulario () {
@@ -3714,6 +3876,7 @@
       pintarOrcaVista()
       pintarOrcaNumero()
       el('save-orca').addEventListener('click', function (event) {
+        if (sinLeer('save-orca')) return
         var f = orcaDelFormulario()
         if (f.mal) { said('said-orca', t(f.mal), true); return }
         busy(event.currentTarget, guardar([['orcaNotices', f.valor]]).then(function (mal) {
@@ -3722,6 +3885,7 @@
         }))
       })
       el('save-reading').addEventListener('click', function (event) {
+        if (sinLeer('save-reading')) return
         guardarTarjeta(event.currentTarget, 'said-reading', ['inboxDays', 'syncMinutes'])
       })
 
@@ -5326,6 +5490,7 @@
         pintarAvisoNumero()
       })
       el('save-owners').addEventListener('click', function (event) {
+        if (sinLeer('save-owners')) return
         var lista = duenosVisibles().slice()
         var numero = numeroVisible()
         busy(event.currentTarget, write('owners', lista).then(function (r) {
@@ -6232,11 +6397,15 @@
       // todo el cupo que le queda al clic.
       function activaAuto (cual) { return cual === 'aprobacion' }
       function leerAuto () {
+        autoPedida = true
         var sello = guardadoSeq
-        ;['ackMode', 'ackText', 'ackQuietMinutes', 'greetingMode', 'greetingText', 'firstReply',
-          'slaMinutes', 'projectQuestionHours', 'orcaNotices'].forEach(function (k) {
-          read(k, true).then(function (v) { pintarClave(k, v, sello) })
-        })
+        // Los numeros de confianza van en la vuelta; si todavia no llegaron, se piden
+        // tambien aca y adelante: son la primera tarjeta de esta pestana.
+        var claves = ['owners', 'approvalNumber'].filter(function (k) { return !pintadas[k] })
+          .concat(CLAVES_AUTO)
+        Promise.all(claves.map(function (k) {
+          return read(k, true).then(function (v) { pintarLeida(k, v, sello) })
+        })).then(programarRelectura)
       }
       PESTANAS.forEach(function (p, i) {
         el('tab-' + p).addEventListener('click', function () {
@@ -6705,12 +6874,18 @@
             }
             if (hayRespuesta(chatsVistos)) renderChats(chatsVistos)
             if (hayRespuesta(v('senders'))) renderSenders(v('senders'))
-            if (hayRespuesta(v('owners'))) renderOwners(v('owners'))
+            if (hayRespuesta(v('owners')) && vigente(sello)) {
+              renderOwners(v('owners'))
+              marcarPintada('owners')
+            }
             // Los participantes de los grupos se leen solo con un grupo en el formulario, en
             // cada vuelta mientras siga abierto: una lectura, y la lista de un grupo recien
             // autorizado aparece sola. Fuera de eso no gastan el cupo del host (ver CLAVES).
             leerMiembrosSiHaceFalta()
-            if (hayRespuesta(v('approvalNumber'))) renderApproval(v('approvalNumber'))
+            if (hayRespuesta(v('approvalNumber')) && vigente(sello)) {
+              renderApproval(v('approvalNumber'))
+              marcarPintada('approvalNumber')
+            }
             pintarClave('agentName', v('agentName'), sello)
             // El latido manda sobre todo lo demas: si nadie esta corriendo, el health
             // que haya es de otra sesion y "todo bien" seria mentira. Un rechazo del
@@ -6774,11 +6949,16 @@
       window.addEventListener('focus', reloadDeUsuario)
 
       applyStrings()
+      pintarLecturas()
       mostrarPestana('estado')
       renderJev(null)
       resetScopeForm()
       pintarChecklist()
-      call('storage.get', { key: 'scope' }).then(function (r) {
+      ;(function probar () {
+       call('storage.get', { key: 'scope' }).then(function (r) {
+        // Sin contestacion no se sabe nada: ni que hay storage ni que falta. Se pregunta
+        // de nuevo en vez de mandar a actualizar Orca por una respuesta perdida.
+        if (r.errorCode === 'sin_respuesta') return probar()
         // Un `rate_limited` es prueba de que el puente CONTESTO: es el host poniendo
         // limite, no un Orca sin storage. Tomarlo por lo segundo apagaba TODOS los
         // botones y mandaba a actualizar Orca por una sola lectura rechazada.
@@ -6792,14 +6972,15 @@
           return
         }
         ultimaCompleta = Date.now()
-        reload()
+        reload().then(programarRelectura)
         // No hay evento de storage, asi que se sondea mientras el panel esta a la vista.
         // 12 s y 6 claves: la vuelta entera son 19 de los 30 mensajes por 10 s que el
         // host admite, y asi no queda cupo para el clic del usuario.
         timer = setInterval(function () {
           if (document.visibilityState === 'visible') reload(true)
         }, 12000)
-      })
+       })
+      })()
     </script>
   </body>
 </html>
