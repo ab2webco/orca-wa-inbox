@@ -24,7 +24,8 @@ import { crearAccionesCaso } from './acciones.mjs'
 import {
   CUENTAS_ACCION, crearAjustadorRitmo, crearEncendedor, crearLanzadorTriage, crearListaCuentas
 } from './agente.mjs'
-import { crearCatalogo, curarCatalogo, leerCatalogo, PROJECTS_KEY } from './catalogo.mjs'
+import { crearCatalogo, curarCatalogo, PROJECTS_KEY, catalogosDeLineas,
+  unionDeCatalogos } from './catalogo.mjs'
 import { SKILLS_ACCION, SKILLS_STATUS_KEY, SKILLS_VEREDICTO } from './skills.mjs'
 import { AVISO_PLAZO_MS, crearAvisosOrca } from './avisos-orca.mjs'
 
@@ -1246,8 +1247,21 @@ export function decidirReinicio (intento) {
 export const AJUSTES_DE_LINEA = Object.freeze(['agentName', 'ownerName', 'tone', 'owners',
   'approvalNumber', 'approvalLang', 'ackMode', 'ackText', 'ackQuietMinutes', 'greetingMode',
   'greetingText', 'firstReply', 'slaMinutes', 'projectQuestionHours', 'inboxDays',
-  'transcribeLang'])
+  'transcribeLang',
+  'routes',
+  'projects'])
 export const AJUSTES_POR_LINEA_KEY = 'ajustesPorLinea'
+
+/** El contenedor de ajustes de las lineas con `clave` de la linea `cuenta` en `valor`. Pura:
+ *  devuelve uno nuevo. Lo demas de esa linea, lo de las otras y las claves que este codigo
+ *  no conoce quedan como estaban (todo-por-linea, P9). */
+export function conAjusteDeLinea (contenedor, cuenta, clave, valor) {
+  const todo = contenedor && typeof contenedor === 'object' && !Array.isArray(contenedor)
+    ? contenedor : {}
+  const previos = todo[cuenta] && typeof todo[cuenta] === 'object' && !Array.isArray(todo[cuenta])
+    ? todo[cuenta] : {}
+  return { ...todo, [cuenta]: { ...previos, [clave]: valor } }
+}
 
 /** Los ajustes propios de una linea que empieza: una copia de los de la principal (`raiz`).
  *  Pura. Devuelve el contenedor entero con la linea sembrada, o null si no hay nada que
@@ -1419,11 +1433,17 @@ export default function activate(orca) {
   // a sembrarse cada vez que el catalogo cambia (`crearCatalogo`, abajo). Las siembras
   // van en fila: una lenta del arranque que terminara DESPUES de la de un cambio dejaria
   // el archivo con la lista vieja hasta el proximo cambio.
+  //
+  // Cada linea tiene su catalogo (todo-por-linea, P9) y el agente de casos es uno para
+  // todas: PROJECTS.md los lista todos, una seccion por linea. Las skills son de la maquina
+  // y ofrecen los de cualquier linea.
   let siembra = Promise.resolve()
-  const resembrar = (lista) => {
+  const resembrar = () => {
     siembra = siembra.then(async () => {
-      const proyectos = lista ?? leerCatalogo(await leer(orca, PROJECTS_KEY))
-      const estado = await sembrarFuera(await dirHerramientas(), proyectos)
+      const lineasCatalogo = catalogosDeLineas(await leer(orca, PROJECTS_KEY),
+        await leer(orca, AJUSTES_POR_LINEA_KEY), cuentaPrincipal())
+      const proyectos = unionDeCatalogos(lineasCatalogo)
+      const estado = await sembrarFuera(await dirHerramientas(), { lineas: lineasCatalogo })
       await guardar(orca, HARNESS_KEY, estado)
       orca.log(estado.ok
         ? `harness: ${estado.files.map((f) => `${f.name} ${f.action}`).join(', ')} in ${estado.dir}`
@@ -1491,6 +1511,8 @@ export default function activate(orca) {
   let cadenaSecundarios = Promise.resolve()
 
   const principal = () => (registro.length ? registro[0].carpeta : null)
+  /** El numero de la linea principal, o null si todavia no lo dijo. */
+  const cuentaPrincipal = () => (registro.length ? registro[0].cuenta ?? null : null)
   const entradaDe = (linea) => registro.find((r) => r.carpeta === linea.carpeta)
   const viva = (linea) => lineas.get(linea.carpeta) === linea
   const nuevaLinea = (carpeta, dir) => ({ carpeta, dir, apagar: () => {}, renovaciones: 0,
@@ -1672,11 +1694,53 @@ export default function activate(orca) {
     }
     const raiz = {}
     for (const k of AJUSTES_DE_LINEA) raiz[k] = await leerSeguro(k)
+    // El catalogo de una linea que lo perdio del storage vuelve de SU espejo en scope.db
+    // (`curarCatalogo`, como el de la principal al arrancar); una linea nueva no tiene
+    // espejo y empieza con la copia de la principal (todo-por-linea, P9).
+    if (!(previos && typeof previos === 'object' && PROJECTS_KEY in previos)) {
+      await curarCatalogo({
+        leerCrudo: async () => ({ ok: true, value: undefined }),
+        espejo: async () => {
+          const { stdout } = await run(join(await dirHerramientas(), 'wa-scope'),
+            ['projects', '--json', '--line', cuenta], { timeoutMs: 15000 })
+          return JSON.parse(stdout || 'null')
+        },
+        guardar: async (k, lista) => { raiz[PROJECTS_KEY] = lista },
+        log: (m) => orca.log(`${cuenta}: ${m}`)
+      })
+    }
     // Se relee justo antes de escribir: el panel pudo guardar algo de esta linea mientras
     // se leia la raiz, y eso manda sobre la copia.
     const nuevo = sembrarAjustesDeLinea(await leerSeguro(AJUSTES_POR_LINEA_KEY), cuenta, raiz)
     if (nuevo) await orca.host.call('storage.set', { key: AJUSTES_POR_LINEA_KEY, value: nuevo })
     sembradas.add(cuenta)
+  }
+
+  /** Lo que una linea guarda de `key` (todo-por-linea, P9): la principal (null, o su
+   *  numero) en la raiz; otra, lo suyo en `ajustesPorLinea[<numero>]`, y si no tiene, lo de
+   *  la principal, como lo lee wa-scope. Una lectura del contenedor que falla revienta: no
+   *  saber que tiene la linea no es "nada". */
+  async function leerDeLinea (linea, key) {
+    if (!linea || linea === cuentaPrincipal()) return leer(orca, key)
+    const contenedor = (await orca.host.call('storage.get', { key: AJUSTES_POR_LINEA_KEY }))?.value
+    const propios = contenedor && typeof contenedor === 'object' ? contenedor[linea] : null
+    if (propios && typeof propios === 'object' && key in propios) return propios[key]
+    return leer(orca, key)
+  }
+  /** Guarda `key` de una linea en su lugar, sin tragarse un fallo: lo que no quedo guardado
+   *  no se cuenta como hecho. Lo de otra linea va por la cadena de los ajustes de linea, con
+   *  una lectura FRESCA del contenedor: dos escrituras a la vez se borrarian una a la otra. */
+  function guardarDeLinea (linea, key, value) {
+    if (!linea || linea === cuentaPrincipal()) {
+      return orca.host.call('storage.set', { key, value })
+    }
+    const escribir = cadenaAjustes.catch(() => {}).then(async () => {
+      const r = await orca.host.call('storage.get', { key: AJUSTES_POR_LINEA_KEY })
+      const nuevo = conAjusteDeLinea(r?.value, linea, key, value)
+      await orca.host.call('storage.set', { key: AJUSTES_POR_LINEA_KEY, value: nuevo })
+    })
+    cadenaAjustes = escribir.catch(() => {})
+    return escribir
   }
 
   /** Se vinculo un numero distinto (o el primero): lo que muestran los paneles —
@@ -2144,12 +2208,22 @@ export default function activate(orca) {
     if (patron.length === 0 || patron.length > PATRON_MAX || !PATRON_RE.test(patron)) {
       return { ok: false, code: SCOPE_VEREDICTO.PATRON_INVALIDO }
     }
+    // Las reglas son de cada linea (todo-por-linea, P9): el panel quita en la que mira
+    // (`linea`). Solo una cuenta con forma de cuenta llega a la linea de comandos.
+    const linea = pedido?.linea
+    if (linea !== undefined && linea !== null &&
+      (typeof linea !== 'string' || !LINEA_RE.test(linea))) {
+      return { ok: false, code: SCOPE_VEREDICTO.LINEA_INVALIDA, detail: String(linea).slice(0, 40) }
+    }
     const s = await settings()
     // La forma `--remove=<patron>` y no dos argumentos: un patron que empiece por `-` se
     // leeria como otra bandera. Quitar lo que ya no esta no es un error: borra cero filas
     // y sale con 0.
-    await run(join(s.toolsDir || TOOLS, 'wa-scope'), ['route', `--remove=${patron}`])
-    const reglas = await leer(orca, ROUTES_KEY)
+    await run(join(s.toolsDir || TOOLS, 'wa-scope'),
+      ['route', `--remove=${patron}`, ...(linea ? ['--line', linea] : [])])
+    // Las de esa linea: las suyas, o las de la principal si todavia no tiene propias (y
+    // entonces quedan suyas, sin esa, para que quitarla no la quite de la principal).
+    const reglas = await leerDeLinea(linea, ROUTES_KEY)
     // SOLO si la lista se leyo. Una lectura que el host rechazo devuelve null, y guardar
     // una lista vacia borraria TODAS las reglas por culpa de una lectura fallida.
     if (Array.isArray(reglas)) {
@@ -2157,9 +2231,7 @@ export default function activate(orca) {
         String(r?.pattern ?? '').trim().toLowerCase() !== patron)
       // Sin `guardar()`, que se traga el fallo: una regla que sigue en el storage no se
       // puede contar como quitada.
-      if (quedan.length !== reglas.length) {
-        await orca.host.call('storage.set', { key: ROUTES_KEY, value: quedan })
-      }
+      if (quedan.length !== reglas.length) await guardarDeLinea(linea, ROUTES_KEY, quedan)
     }
     orca.log('route rule removed')
     return { ok: true, code: SCOPE_VEREDICTO.REGLA_QUITADA }
@@ -2176,6 +2248,7 @@ export default function activate(orca) {
   }
   const catalogo = crearCatalogo({
     orca, leer: (key) => leer(orca, key), guardar: (key, value) => guardar(orca, key, value),
+    leerDeLinea, guardarDeLinea,
     correr: (cmd, args) => correrOrca(cmd, args),
     motivoDe, resembrar
   })
@@ -2272,7 +2345,9 @@ export default function activate(orca) {
    *  se busca en el estado que dejo el worker, solo para quitar: `skills.mjs` borra
    *  unicamente lo que el plugin anoto que escribio. */
   async function pedirSkills (base, pedido = {}) {
-    const proyectos = leerCatalogo(await leer(orca, PROJECTS_KEY))
+    // Las skills son de la maquina: ofrecen los proyectos de todas las lineas (P9).
+    const proyectos = unionDeCatalogos(catalogosDeLineas(await leer(orca, PROJECTS_KEY),
+      await leer(orca, AJUSTES_POR_LINEA_KEY), cuentaPrincipal()))
     const op = { ...base, proyectos }
     if (base.op !== 'estado') {
       if (typeof pedido.skill !== 'string' || pedido.skill.length > 64) {

@@ -4315,6 +4315,182 @@ console.log('\nworker: avisos-orca, el estado de cada agente')
   otra.apagar()
 }
 
+// ───────── P9: las reglas de texto y el catalogo de proyectos son de cada linea ─────────
+// La principal los guarda en la raiz (`routes`, `projects`); cada otra linea, en
+// `ajustesPorLinea[<numero>]`. Lo que el panel pide sobre una linea nombra esa linea
+// (`linea`), y el worker lee y escribe solo lo de ella.
+console.log('\nworker: P9 — las reglas y el catalogo de cada linea')
+{
+  const L_B = 'pn:573000000011'
+  const L_C = 'pn:573000000013'
+  const ALFA = { id: 'alfa-demo', name: 'Alfa Demo', path: '/srv/ejemplo/alfa-demo', note: '' }
+  const BETA = { id: 'beta-demo', name: 'Beta Demo', path: '/srv/ejemplo/beta-demo', note: '' }
+  const raiz = { routes: [{ pattern: 'acme', workspace: 'alfa-demo' }], projects: [ALFA] }
+  const copia = sembrarAjustesDeLinea(undefined, L_B, raiz)?.[L_B]
+  ok('una linea nueva empieza con una copia de las reglas y el catalogo de la principal',
+    copia && JSON.stringify(copia.routes) === JSON.stringify(raiz.routes) &&
+    JSON.stringify(copia.projects) === JSON.stringify(raiz.projects), JSON.stringify(copia))
+  copia?.projects?.push(BETA)
+  ok('y la copia no comparte nada con la raiz', raiz.projects.length === 1)
+
+  const bin = join(RAIZ, 'orca-falsa-p9')
+  mkdirSync(bin, { recursive: true })
+  writeFileSync(join(bin, 'ps.json'), JSON.stringify({ id: 'x', ok: true, result: { worktrees: [
+    { repoId: 'r1', repo: 'alfa-demo', path: ALFA.path, isArchived: false, isMainWorktree: true },
+    { repoId: 'r2', repo: 'beta-demo', path: BETA.path, isArchived: false, isMainWorktree: true }
+  ] } }))
+  writeFileSync(join(bin, 'repos.json'), JSON.stringify({ id: 'x', ok: true, result: { repos: [
+    { id: 'r1', path: ALFA.path, displayName: 'Alfa Demo' },
+    { id: 'r2', path: BETA.path, displayName: 'Beta Demo' }] } }))
+  const { comandoOrca } = await import('../catalogo.mjs')
+  writeFileSync(join(bin, comandoOrca()), [
+    '#!/bin/sh',
+    'case "$1 $2" in',
+    '  "worktree ps") cat "$(dirname "$0")/ps.json" ;;',
+    '  "repo list") cat "$(dirname "$0")/repos.json" ;;',
+    '  *) echo "comando inesperado" >&2; exit 2 ;;',
+    'esac', ''
+  ].join('\n'), { mode: 0o755 })
+  const pathAntes = process.env.PATH
+  process.env.PATH = `${bin}:${pathAntes}`
+  for (const base of [join(process.env.HOME, 'Library', 'Application Support'),
+    process.env.XDG_CONFIG_HOME, process.env.APPDATA]) {
+    mkdirSync(join(base, 'orca'), { recursive: true })
+  }
+  const dir = herramientas('p9-lineas', [
+    '#!/bin/sh',
+    'echo "$@" >> "$0.llamadas"',
+    'if [ "$1" = "route" ]; then echo \'[{"removed": true}]\'; exit 0; fi',
+    'echo \'[{"synced": true, "destinos": []}]\'',
+    ''
+  ].join('\n'))
+  const llamadas = () => existsSync(join(dir, 'wa-scope.llamadas'))
+    ? readFileSync(join(dir, 'wa-scope.llamadas'), 'utf8') : ''
+  const orca = hostFalso(dir, {
+    chats: [],
+    routes: [{ pattern: 'acme', workspace: 'alfa-demo' }],
+    projects: [ALFA],
+    ajustesPorLinea: {
+      [L_B]: { agentName: 'Agente Segunda', projects: [BETA],
+        routes: [{ pattern: 'acme', workspace: 'beta-demo' },
+          { pattern: 'ventas', workspace: 'beta-demo' }] } }
+  })
+  const { apagar } = await arranca(orca)
+  const pide = async (id, extra) => {
+    orca.store.scopeRequest = { ...extra, id, at: new Date().toISOString() }
+    await hasta(() => orca.store.scopeResult && orca.store.scopeResult.requestId === id, 15000)
+    return orca.store.scopeResult
+  }
+  const de = (cuenta) => orca.store.ajustesPorLinea?.[cuenta] || {}
+  const patrones = (lista) => (lista || []).map((r) => r.pattern).join()
+  const ids = (lista) => (lista || []).map((p) => p.id).join()
+  const md = () => {
+    const carpeta = workspaceDir(PLUGIN_DIR)
+    const ruta = carpeta && join(carpeta, 'PROJECTS.md')
+    return ruta && existsSync(ruta) ? readFileSync(ruta, 'utf8') : ''
+  }
+
+  let v = await pide('p9-r1', { action: 'regla-quitar', pattern: 'ACME', linea: L_B })
+  ok('quitar una regla en otra linea corre el CLI en ESA linea',
+    v?.ok === true && /^route --remove=acme --line pn:573000000011$/m.test(llamadas()),
+    JSON.stringify([v, llamadas()]))
+  ok('y la saca solo de las reglas de esa linea: la principal, con el mismo patron, sigue',
+    patrones(de(L_B).routes) === 'ventas' && patrones(orca.store.routes) === 'acme' &&
+    de(L_B).agentName === 'Agente Segunda', JSON.stringify(orca.store))
+  v = await pide('p9-r2', { action: 'regla-quitar', pattern: 'acme', linea: L_C })
+  ok('en una linea sin reglas propias, quitar una le deja las suyas sin ella, y la principal igual',
+    v?.ok === true && JSON.stringify(de(L_C).routes) === '[]' &&
+    patrones(orca.store.routes) === 'acme', JSON.stringify(orca.store))
+  const antes = llamadas()
+  v = await pide('p9-r3', { action: 'regla-quitar', pattern: 'acme', linea: 'pn:no-es' })
+  ok('una linea que no es una cuenta se rechaza y no corre nada',
+    v?.ok === false && v.code === 'linea-invalida' && llamadas() === antes, JSON.stringify(v))
+
+  let r = await pide('p9-c1', { action: 'proyectos-refrescar', linea: L_B })
+  ok('las propuestas de una linea son lo que ESA linea todavia no acepto',
+    r?.ok === true && ids(orca.store.projectsStatus?.proposals) === 'alfa-demo',
+    JSON.stringify(orca.store.projectsStatus))
+  r = await pide('p9-c2', { action: 'proyectos-aceptar', ids: ['alfa-demo'], linea: L_B })
+  ok('aceptar en otra linea lo suma al catalogo de ESA linea, y la principal sigue igual',
+    r?.ok === true && ids(de(L_B).projects) === 'alfa-demo,beta-demo' &&
+    ids(orca.store.projects) === 'alfa-demo', JSON.stringify([r, orca.store]))
+  r = await pide('p9-c3', { action: 'proyectos-nota', project: 'beta-demo', note: 'Solo de la segunda',
+    linea: L_B })
+  ok('la nota va al proyecto de esa linea',
+    r?.ok === true && de(L_B).projects?.find((p) => p.id === 'beta-demo')?.note === 'Solo de la segunda',
+    JSON.stringify([r, de(L_B)]))
+  r = await pide('p9-c4', { action: 'proyectos-quitar', project: 'alfa-demo', linea: L_C })
+  ok('quitar en una linea sin catalogo propio le deja el suyo sin ese, y la principal igual',
+    r?.ok === true && JSON.stringify(de(L_C).projects) === '[]' &&
+    ids(orca.store.projects) === 'alfa-demo', JSON.stringify([r, orca.store]))
+  r = await pide('p9-c5', { action: 'proyectos-aceptar', ids: ['alfa-demo'], linea: 'otra' })
+  ok('un pedido con una linea mal formada se rechaza con codigo',
+    r?.ok === false && r.code === 'argumentos-invalidos', JSON.stringify(r))
+  ok('PROJECTS.md lista los proyectos de cada linea, cada una en su seccion',
+    await hasta(() => /\+573000000011/.test(md()) && md().includes('Solo de la segunda') &&
+      md().includes(ALFA.path) && /\+573000000013/.test(md()), 20000), md())
+  apagar()
+  process.env.PATH = pathAntes
+
+  // Al decir su numero, una linea sin catalogo propio en el storage lo recupera de SU
+  // espejo (`wa-scope projects --line`), como la principal al arrancar; las reglas son una
+  // copia de las de la principal.
+  const homeAntes = process.env.HOME
+  const xdgAntes = process.env.XDG_CONFIG_HOME
+  const appAntes = process.env.APPDATA
+  const casa = join(RAIZ, 'home-p9')
+  process.env.HOME = casa
+  process.env.XDG_CONFIG_HOME = join(casa, '.config')
+  process.env.APPDATA = join(casa, 'AppData', 'Roaming')
+  for (const b of [join(casa, 'Library', 'Application Support'), process.env.XDG_CONFIG_HOME,
+    process.env.APPDATA]) mkdirSync(join(b, 'orca'), { recursive: true })
+  try {
+    const base = dataDir(PLUGIN_DIR, 'wa-auth')
+    for (const n of ['573000000002', '573000000011']) {
+      mkdirSync(join(base, `pn-${n}`), { recursive: true })
+      writeFileSync(join(base, `pn-${n}`, 'creds.json'), JSON.stringify({ me: { id: `${n}:2@s.whatsapp.net` } }))
+    }
+    const guion = join(RAIZ, 'sidecar-p9.cjs')
+    writeFileSync(guion,
+      '#!/usr/bin/env node\n' +
+      'const fs = require("node:fs")\n' +
+      'const path = require("node:path")\n' +
+      'const dir = process.env.WA_SIDECAR_AUTH_DIR\n' +
+      'function emit (m) { process.stdout.write(JSON.stringify(m) + "\\n") }\n' +
+      'const me = JSON.parse(fs.readFileSync(path.join(dir, "creds.json"), "utf8")).me.id\n' +
+      'emit({ type: "connection", state: "open" })\n' +
+      'emit({ type: "linea", cuenta: "pn:" + me.split(":")[0], cambio: false, ts: Date.now() })\n' +
+      'setInterval(() => {}, 1000)\n', { mode: 0o755 })
+    const espejo = JSON.stringify([BETA]).replace(/'/g, '')
+    const orca = hostFalso(herramientas('p9-siembra', [
+      '#!/bin/sh',
+      'case "$*" in',
+      `  "projects --json --line ${L_B}") echo '${espejo}' ;;`,
+      '  *) echo \'[]\' ;;',
+      'esac', ''].join('\n')), {
+      routes: [{ pattern: 'acme', workspace: 'alfa-demo' }], projects: [ALFA], syncMinutes: '10',
+      lineas: [{ carpeta: 'pn-573000000002', cuenta: 'pn:573000000002', tipo: 'support' },
+        { carpeta: 'pn-573000000011', cuenta: L_B, tipo: 'support' }],
+      ajustesPorLinea: { [L_B]: { agentName: 'Agente Segunda' } }
+    }, guion)
+    const { apagar: apagar2 } = await arranca(orca)
+    await hasta(() => orca.store.ajustesPorLinea?.[L_B]?.projects, 15000)
+    const propia = orca.store.ajustesPorLinea?.[L_B] || {}
+    ok('una linea que perdio su catalogo del storage lo recupera de su espejo',
+      ids(propia.projects) === 'beta-demo' && ids(orca.store.projects) === 'alfa-demo',
+      JSON.stringify(orca.store.ajustesPorLinea))
+    ok('y sus reglas empiezan como copia de las de la principal, sin tocar lo suyo',
+      patrones(propia.routes) === 'acme' && propia.agentName === 'Agente Segunda',
+      JSON.stringify(propia))
+    apagar2()
+    await dormir(500)
+  } finally {
+    process.env.HOME = homeAntes
+    process.env.XDG_CONFIG_HOME = xdgAntes
+    process.env.APPDATA = appAntes
+  }
+}
+
 rmSync(RAIZ, { recursive: true, force: true })
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

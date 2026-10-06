@@ -12,6 +12,9 @@
  * `projects`, lo escribe el worker y lo lee el panel) y `scope.db` (lo espeja `wa-scope`
  * al leerlo, para que los CLIs no dependan de que el storage exista).
  *
+ * Cada linea de WhatsApp tiene el suyo (todo-por-linea, P9): la principal en la raiz, cada
+ * otra en `ajustesPorLinea[<numero>].projects`, y su espejo lleva la cuenta.
+ *
  * Todo lo que toca el host o un proceso entra por `crearCatalogo`: las pruebas le pasan
  * funciones falsas. Lo puro (`proponer`, los lectores) se prueba solo.
  */
@@ -206,27 +209,82 @@ export function leerCatalogo (valor) {
   return salida
 }
 
+/** Una cuenta de linea, lo unico que el panel puede nombrar en `linea`. */
+const CUENTA_RE = /^pn:\d{6,}$/
+
+/** La linea que nombra un pedido del panel: null si no nombra ninguna (la principal; el
+ *  panel de una sola linea nunca la nombra), o undefined si lo que nombra no es una
+ *  cuenta. Nada que no tenga forma de cuenta elige donde se escribe. */
+export function lineaDelPedido (pedido) {
+  const linea = pedido?.linea
+  if (linea === undefined || linea === null) return null
+  return typeof linea === 'string' && CUENTA_RE.test(linea) ? linea : undefined
+}
+
+/**
+ * Los catalogos de todas las lineas (todo-por-linea, P9), para PROJECTS.md: el de la
+ * principal (la raiz) primero, y despues el de cada linea que guarda el suyo en
+ * `ajustesPorLinea[<numero>].projects`. Una linea sin esa clave usa el de la principal, y
+ * no se repite. Pura. `principal` es el numero de la principal, o null si no se sabe.
+ *
+ * @returns {{ linea: string | null, principal: boolean, proyectos: Proyecto[] }[]}
+ */
+export function catalogosDeLineas (raiz, contenedor, principal = null) {
+  const secciones = [{ linea: principal, principal: true, proyectos: leerCatalogo(raiz) }]
+  const todo = esRegistro(contenedor) ? contenedor : {}
+  for (const cuenta of Object.keys(todo).sort()) {
+    const propios = todo[cuenta]
+    if (cuenta === principal || !CUENTA_RE.test(cuenta) || !esRegistro(propios) ||
+      !(PROJECTS_KEY in propios)) continue
+    secciones.push({ linea: cuenta, principal: false, proyectos: leerCatalogo(propios[PROJECTS_KEY]) })
+  }
+  return secciones
+}
+
+/** Los proyectos de todas las lineas en una lista, sin repetir ids (gana el primero, el de
+ *  la principal): lo que es de la maquina, como las skills, ofrece cualquiera de ellos. */
+export function unionDeCatalogos (secciones) {
+  const vistos = new Set()
+  const salida = []
+  for (const s of secciones) {
+    for (const p of s.proyectos) {
+      if (vistos.has(p.id)) continue
+      vistos.add(p.id)
+      salida.push(p)
+    }
+  }
+  return salida
+}
+
 /**
  * El catalogo del worker: lo que el panel puede pedir y como se contesta.
  *
  * `correr(cmd, args)` ejecuta un proceso y devuelve `{ stdout }`; rechaza con
  * `spawnCode`/`exitCode`/`timedOut` como `run()` de main.mjs. `motivoDe` traduce ese
- * rechazo a un codigo estable. `resembrar(lista)` deja PROJECTS.md al dia con esa lista
- * en la carpeta del orquestador.
+ * rechazo a un codigo estable. `resembrar()` deja PROJECTS.md al dia con los catalogos de
+ * todas las lineas en la carpeta del orquestador.
+ *
+ * Cada linea tiene su catalogo (todo-por-linea, P9): el pedido del panel nombra la que se
+ * mira (`linea`), y `leerDeLinea`/`guardarDeLinea` leen y escriben el de ella (null es la
+ * principal). Sin ellos, el de la raiz. Las propuestas (`projectsStatus`) son de la
+ * maquina: dicen lo que la linea del ultimo pedido todavia no acepto.
  *
  * @param {{ orca: { log: (m: string) => void },
  *           leer: (key: string) => Promise<unknown>,
  *           guardar: (key: string, value: unknown) => Promise<unknown>,
+ *           leerDeLinea?: (linea: string | null, key: string) => Promise<unknown>,
+ *           guardarDeLinea?: (linea: string | null, key: string, value: unknown) => Promise<unknown>,
  *           correr: (cmd: string, args: readonly string[]) => Promise<{ stdout: string }>,
  *           motivoDe: (error: unknown) => string,
- *           resembrar: (lista: Proyecto[]) => Promise<unknown>,
+ *           resembrar: () => Promise<unknown>,
  *           plataforma?: string,
  *           env?: Record<string, string | undefined>,
  *           ahora?: () => string }} deps
  */
 export function crearCatalogo ({ orca, leer, guardar, correr, motivoDe, resembrar,
+  leerDeLinea = (linea, key) => leer(key), guardarDeLinea = (linea, key, value) => guardar(key, value),
   plataforma = process.platform, env = process.env, ahora = () => new Date().toISOString() }) {
-  const catalogo = async () => leerCatalogo(await leer(PROJECTS_KEY))
+  const catalogo = async (linea = null) => leerCatalogo(await leerDeLinea(linea, PROJECTS_KEY))
 
   const codigoDeFallo = (error) => {
     if (error instanceof SyntaxError) return PROYECTOS_VEREDICTO.SIN_JSON
@@ -262,24 +320,26 @@ export function crearCatalogo ({ orca, leer, guardar, correr, motivoDe, resembra
   /** Refresca la lista de propuestas del panel. Un fallo NO es "no hay propuestas": el
    *  estado dice que no se pudo preguntar, para que el panel no mienta con una lista
    *  vacia. */
-  async function refrescar () {
+  async function refrescar (pedido) {
+    const linea = lineaDelPedido(pedido)
+    if (linea === undefined) return { ok: false, code: PROYECTOS_VEREDICTO.ARGUMENTOS_INVALIDOS }
     const visto = await preguntar()
     if (!visto.ok) {
       await publicar({ ok: false, proposals: [], reason: visto.code, detail: visto.detail })
       return { ok: false, code: visto.code, detail: visto.detail }
     }
-    const propuestas = proponer(visto.worktrees, visto.repos, await catalogo())
+    const propuestas = proponer(visto.worktrees, visto.repos, await catalogo(linea))
     await publicar({ ok: true, proposals: propuestas, reason: null, detail: null })
     return { ok: true, code: PROYECTOS_VEREDICTO.REFRESCADO, proposals: propuestas.length }
   }
 
-  /** Guarda el catalogo y deja el arnes al dia. El arnes es de mejor esfuerzo: si la
-   *  carpeta no existe, el catalogo ya quedo guardado y el estado del arnes dice por
+  /** Guarda el catalogo de la linea y deja el arnes al dia. El arnes es de mejor esfuerzo:
+   *  si la carpeta no existe, el catalogo ya quedo guardado y el estado del arnes dice por
    *  que no se sembro. */
-  async function cambiar (siguiente) {
-    await guardar(PROJECTS_KEY, siguiente)
+  async function cambiar (linea, siguiente) {
+    await guardarDeLinea(linea, PROJECTS_KEY, siguiente)
     try {
-      await resembrar(siguiente)
+      await resembrar()
     } catch (error) {
       orca.log(`harness reseed after catalog change failed: ${String(error?.message ?? error).slice(0, 160)}`)
     }
@@ -290,7 +350,9 @@ export function crearCatalogo ({ orca, leer, guardar, correr, motivoDe, resembra
    *  salen de Orca, nunca del pedido. */
   async function aceptar (pedido) {
     const ids = Array.isArray(pedido.ids) ? pedido.ids : null
-    if (!ids || ids.length === 0 || ids.length > ACEPTAR_MAX || !ids.every(esTexto)) {
+    const linea = lineaDelPedido(pedido)
+    if (!ids || ids.length === 0 || ids.length > ACEPTAR_MAX || !ids.every(esTexto) ||
+      linea === undefined) {
       return { ok: false, code: PROYECTOS_VEREDICTO.ARGUMENTOS_INVALIDOS }
     }
     const visto = await preguntar()
@@ -298,7 +360,7 @@ export function crearCatalogo ({ orca, leer, guardar, correr, motivoDe, resembra
       await publicar({ ok: false, proposals: [], reason: visto.code, detail: visto.detail })
       return { ok: false, code: visto.code, detail: visto.detail }
     }
-    const actual = await catalogo()
+    const actual = await catalogo(linea)
     const vigentes = new Map(proponer(visto.worktrees, visto.repos, actual).map((p) => [p.id, p]))
     const nuevos = []
     for (const id of new Set(ids)) {
@@ -310,7 +372,7 @@ export function crearCatalogo ({ orca, leer, guardar, correr, motivoDe, resembra
       return { ok: false, code: PROYECTOS_VEREDICTO.LLENO }
     }
     const siguiente = [...actual, ...nuevos].sort((a, b) => (a.id < b.id ? -1 : 1))
-    await cambiar(siguiente)
+    await cambiar(linea, siguiente)
     await publicar({ ok: true, proposals: proponer(visto.worktrees, visto.repos, siguiente),
       reason: null, detail: null })
     return { ok: true, code: PROYECTOS_VEREDICTO.ACEPTADO, added: nuevos.length }
@@ -319,32 +381,36 @@ export function crearCatalogo ({ orca, leer, guardar, correr, motivoDe, resembra
   // El proyecto va en `project` y no en `id`: `id` es el del PEDIDO (el panel lo pone para
   // reconocer su veredicto), y un campo con el mismo nombre pisaria uno con el otro.
   async function quitar (pedido) {
-    if (!esTexto(pedido.project)) return { ok: false, code: PROYECTOS_VEREDICTO.ARGUMENTOS_INVALIDOS }
-    const actual = await catalogo()
+    const linea = lineaDelPedido(pedido)
+    if (!esTexto(pedido.project) || linea === undefined) {
+      return { ok: false, code: PROYECTOS_VEREDICTO.ARGUMENTOS_INVALIDOS }
+    }
+    const actual = await catalogo(linea)
     if (!actual.some((p) => p.id === pedido.project)) {
       return { ok: false, code: PROYECTOS_VEREDICTO.NO_EXISTE }
     }
-    await cambiar(actual.filter((p) => p.id !== pedido.project))
+    await cambiar(linea, actual.filter((p) => p.id !== pedido.project))
     return { ok: true, code: PROYECTOS_VEREDICTO.QUITADO }
   }
 
   async function nota (pedido) {
-    if (!esTexto(pedido.project) || typeof pedido.note !== 'string') {
+    const linea = lineaDelPedido(pedido)
+    if (!esTexto(pedido.project) || typeof pedido.note !== 'string' || linea === undefined) {
       return { ok: false, code: PROYECTOS_VEREDICTO.ARGUMENTOS_INVALIDOS }
     }
-    const actual = await catalogo()
+    const actual = await catalogo(linea)
     if (!actual.some((p) => p.id === pedido.project)) {
       return { ok: false, code: PROYECTOS_VEREDICTO.NO_EXISTE }
     }
     const texto = limpiarLinea(pedido.note, NOTE_MAX)
-    await cambiar(actual.map((p) => (p.id === pedido.project ? { ...p, note: texto } : p)))
+    await cambiar(linea, actual.map((p) => (p.id === pedido.project ? { ...p, note: texto } : p)))
     return { ok: true, code: PROYECTOS_VEREDICTO.NOTA_GUARDADA }
   }
 
   return {
     catalogo,
     acciones: {
-      [PROYECTOS_ACCION.REFRESCAR]: () => refrescar(),
+      [PROYECTOS_ACCION.REFRESCAR]: (pedido) => refrescar(pedido),
       [PROYECTOS_ACCION.ACEPTAR]: (pedido) => aceptar(pedido),
       [PROYECTOS_ACCION.QUITAR]: (pedido) => quitar(pedido),
       [PROYECTOS_ACCION.NOTA]: (pedido) => nota(pedido)
