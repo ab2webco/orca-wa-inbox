@@ -7060,7 +7060,7 @@ def retenidos_del_tablero(con, cuenta):
         nota = con.execute("select detail from agent_action where action='draft' and "
                            "instr(detail, ?) > 0 order by id desc limit 1",
                            (f" · {f['req_id']} · ",)).fetchone()
-        salida.append({"req_id": f["req_id"], "chat_jid": f["chat_jid"],
+        salida.append({"req_id": f["req_id"], "chat_jid": f["chat_jid"], "account": cuenta,
                        "chat": f["chat_name"] or f["chat_jid"], "text": f["body"] or "",
                        "at": datetime.datetime.fromtimestamp(int(f["created_at"] or 0))
                        .astimezone().isoformat(timespec="seconds"),
@@ -9217,6 +9217,14 @@ def orca_agrupa(con, ajustes, tx):
         orca_junta(con, ESTADO_EXCEDIDO, "agrupado", "grupo", tx, tx["grupo"])
 
 
+def tick_orca_si_toca(con, resumen):
+    """Los avisos de Orca son de la maquina, no de una linea: con varias lineas los corre
+    solo el tick de la principal, que es la linea del dueno. Si no, cada linea mandaria el
+    mismo aviso por su numero."""
+    if es_linea_principal():
+        tick_orca(con, resumen)
+
+
 def tick_orca(con, resumen):
     """La vuelta del minuto de los avisos de Orca: los que terminaron, las automatizaciones
     que fallaron, el resumen del silencio y el agrupado del tope. Los manda `envia_avisos`,
@@ -9369,7 +9377,7 @@ def cmd_tick(con, a):
             print(f"wa-scope: project questions skipped: {exc}", file=sys.stderr)
         # Los avisos de Orca (avisos-orca): los encola aca y salen con los de abajo.
         try:
-            tick_orca(con, resumen)
+            tick_orca_si_toca(con, resumen)
         except (sqlite3.Error, OSError, ValueError) as exc:
             if con.in_transaction:
                 con.rollback()
@@ -11720,6 +11728,9 @@ AYUDA_LINEA = ("the line to work on (pn:<digits>), when several are linked; with
 # Lo que corre una vez por linea cuando nadie nombra una: cada linea en su propio proceso,
 # con su propio candado, y la falla de una no frena a la otra.
 POR_LINEA = ("tick", "ingest", "sync")
+# Lo del dueno es de la principal, la linea del dueno: su chat (`owner`) y los avisos de Orca
+# (`orca-aviso`). Sin `--line` corren ahi aunque la corrida herede la linea de otra.
+DE_LA_PRINCIPAL = ("owner", "orca-aviso")
 
 
 def fija_linea(a):
@@ -11731,6 +11742,13 @@ def fija_linea(a):
     Una linea desvinculada sigue quieta: su caso no se ve."""
     if getattr(a, "linea", None):
         os.environ[wa_store.LINEA_ENV] = wa_store.linea_valida(a.linea)
+        return
+    if a.cmd in DE_LA_PRINCIPAL:
+        principal = wa_store.linea_activa_en_disco()
+        if principal:
+            os.environ[wa_store.LINEA_ENV] = principal
+        else:
+            os.environ.pop(wa_store.LINEA_ENV, None)
         return
     if wa_store.linea_pedida() or a.cmd != "caso" or not isinstance(getattr(a, "id", None), int):
         return

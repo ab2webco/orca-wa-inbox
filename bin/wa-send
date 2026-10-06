@@ -87,7 +87,7 @@ import wa_store  # noqa: E402
 import wa_jev  # noqa: E402
 import wa_reglas  # noqa: E402
 from wa_settings import (ajuste, alcances_de_lineas, plugin_store_raw, scope_db,  # noqa: E402
-                         scope_from_plugin, trae_llave_aprobador)
+                         numero_aprobacion, scope_from_plugin, trae_llave_aprobador)
 
 SCOPE_DB = scope_db()
 
@@ -286,6 +286,12 @@ def conversaciones_registradas(ref):
     return sorted(filas.values(), key=lambda f: (f["account"], f["chat_jid"]))
 
 
+def es_chat_del_dueno(filas):
+    """Si las filas son todas el chat del dueno: el numero de aprobacion que eligio."""
+    dueno = numero_aprobacion()
+    return bool(dueno) and all(f["chat_jid"] == dueno for f in filas)
+
+
 def resolver_conversacion(ref, linea):
     """La UNA conversacion a la que se va a escribir, o una negativa con su motivo."""
     filas = conversaciones_registradas(ref)
@@ -315,6 +321,13 @@ def resolver_conversacion(ref, linea):
                   f"{ref!r} is not registered on the line {linea!r}; it is on "
                   f"{', '.join(cuentas)}.")
         filas = [f for f in filas if f["account"] == linea]
+    elif len(cuentas) > 1 and es_chat_del_dueno(filas) and \
+            wa_store.linea_activa_en_disco() in cuentas:
+        # El chat del dueno (`wa-scope owner`) esta en cada linea —cada una le avisa lo
+        # suyo—, y lo que le escribe un agente de otro proyecto sale por la principal, que es
+        # la linea del dueno: la misma que dice `wa-scope owner`. Nunca se elige a ciegas.
+        principal = wa_store.linea_activa_en_disco()
+        filas = [f for f in filas if f["account"] == principal]
     elif len(cuentas) > 1:
         niega(LINEA_AMBIGUA,
               f"{ref!r} exists on {len(cuentas)} lines ({', '.join(cuentas)}), so there "

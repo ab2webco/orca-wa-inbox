@@ -12233,8 +12233,8 @@ try:
            and con.execute("select count(*) from aviso").fetchone()[0] == 0,
            f"{enviados} {falsa.llamadas}")
         ok("el tick llama a los avisos de Orca antes de mandar los avisos",
-           "tick_orca(con" in inspect.getsource(ws.cmd_tick)
-           and inspect.getsource(ws.cmd_tick).index("tick_orca(con")
+           "tick_orca_si_toca(con" in inspect.getsource(ws.cmd_tick)
+           and inspect.getsource(ws.cmd_tick).index("tick_orca_si_toca(con")
            < inspect.getsource(ws.cmd_tick).index("tick_avisos(con"))
         con.close()
 finally:
@@ -12460,6 +12460,99 @@ if NODE:
            datos["porLinea"][SEGUNDA]["board"]["counts"]["decision"] == 1,
            f"{avisos} {(r or {}).get('lineas', {}).get(SEGUNDA)} "
            f"{jsl(home, SEGUNDA, 'caso', 'ver', dinero_b)[0]['etapa']} {p.stderr[-600:]}")
+
+        # v4.22.0: lo del dueno con varias lineas. Su chat (`owner`), los avisos de Orca y el
+        # `wa-send` de la skill de avisos salen SIEMPRE por la principal: el chat del dueno
+        # esta autorizado en las dos (cada linea le avisa lo suyo) y elegir "una" a ciegas
+        # seria un mensaje por la linea equivocada, o ninguno.
+        p = corre(home, "owner", extra={"WA_INBOX_LINEA": SEGUNDA})
+        dueno = json.loads(p.stdout or "{}")
+        ok("owner: el chat del dueno es de la principal aunque la corrida sea de otra linea",
+           p.returncode == 0 and dueno.get("chat") == DUENO_LID and dueno.get("line") == A,
+           f"{p.returncode} {p.stdout[:200]} {p.stderr[-200:]}")
+        dueno_b = json.loads(corre(home, "owner", "--line", SEGUNDA).stdout or "{}")
+        ok("y con --line dice el de la linea pedida", dueno_b.get("line") == SEGUNDA, f"{dueno_b}")
+        pon_orca(home, waiting="on")
+        r = jsl(home, SEGUNDA, "orca-aviso", "--state=waiting", "--pane=tab-9:p9",
+                f"--at={int(time.time() * 1000)}", "--agent=claude")
+        ok("orca-aviso: el aviso de Orca se encola en la principal, no en la linea de la corrida",
+           r and r[0].get("queued") is True and cuenta(
+               home, "select count(*) from aviso where tipo='orca' and account=?", A) == 1
+           and cuenta(home, "select count(*) from aviso where tipo='orca' and account=?",
+                      SEGUNDA) == 0, f"{r}")
+        ws_b = None
+        env_l = dict(os.environ)
+        try:
+            os.environ["WA_INBOX_LINEA"] = SEGUNDA
+            ws_b = carga_wa_scope(home)
+            vueltas = []
+            ws_b.tick_orca = lambda con, resumen: vueltas.append(1)
+            con_b = ws_b.db()
+            ws_b.tick_orca_si_toca(con_b, {})
+            con_b.close()
+            ok("el tick de la otra linea no corre los avisos de Orca: son de la maquina, uno",
+               vueltas == [], f"{vueltas}")
+            del os.environ["WA_INBOX_LINEA"]
+            ws_a = carga_wa_scope(home)
+            ws_a.tick_orca = lambda con, resumen: vueltas.append(1)
+            con_a = ws_a.db()
+            ws_a.tick_orca_si_toca(con_a, {})
+            con_a.close()
+            ok("y el de la principal si", vueltas == [1], f"{vueltas}")
+            import inspect
+            ok("y el tick de cada linea pasa por esa compuerta",
+               "tick_orca_si_toca(con" in inspect.getsource(ws_a.cmd_tick)
+               and "tick_orca(con" not in inspect.getsource(ws_a.cmd_tick))
+        finally:
+            os.environ.clear()
+            os.environ.update(env_l)
+        sidecar_a, sidecar_b = SidecarDeLinea(home, A), SidecarDeLinea(home, SEGUNDA)
+        try:
+            p = subprocess.run([str(RAIZ / "bin" / "wa-send"), DUENO_LID, "Termino la prueba",
+                                "--send", "--timeout=20", "--json"], capture_output=True,
+                               text=True, timeout=120, env=dict(
+                                   os.environ, HOME=str(home),
+                                   XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+                                   APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming")))
+        finally:
+            sidecar_a.cerrar()
+            sidecar_b.cerrar()
+        con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+        salida = con.execute("select account, estado from envio where body like "
+                             "'Termino la prueba%'").fetchall()
+        con.close()
+        ok("wa-send al chat del dueno sin --line sale por la principal, no se niega por ambiguo",
+           p.returncode == 0 and salida == [(A, "enviado")],
+           f"{p.returncode} {salida} {p.stderr[-300:]}")
+
+        # Lo retenido fuera de un caso (approve-solo-dueno) es de SU linea: va en el tablero de
+        # esa linea, dice cual es, y lo aprueba la llave del plugin, que es una por maquina.
+        con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+        con.execute("insert into envio (req_id, account, chat_jid, chat_name, body, estado, "
+                    "created_at) values ('sesion-otra-1', ?, ?, 'Cliente Uno', "
+                    "'Ya quedo el reporte', 'borrador', ?)", (SEGUNDA, PERSONA, int(time.time())))
+        con.commit()
+        con.close()
+        jsl(home, SEGUNDA, "sync")
+        js(home, "sync")
+        datos = json.loads(storage_de(home).read_text(encoding="utf-8"))
+        retenidos_b = datos["porLinea"][SEGUNDA]["board"].get("held_drafts") or []
+        ok("el retenido de la otra linea va en SU tablero y dice de que linea es",
+           [(x["req_id"], x.get("account")) for x in retenidos_b] == [("sesion-otra-1", SEGUNDA)]
+           and not any(x["req_id"] == "sesion-otra-1"
+                       for x in datos["board"].get("held_drafts") or []), f"{retenidos_b}")
+        sidecar_b = SidecarDeLinea(home, SEGUNDA)
+        try:
+            p = subprocess.run([str(RAIZ / "bin" / "wa-send"), "--approve", "sesion-otra-1",
+                                "--by", "board", "--timeout=20", "--json"], capture_output=True,
+                               text=True, timeout=120, env=dict(
+                                   os.environ, HOME=str(home),
+                                   WA_INBOX_APPROVER=llave_del_plugin(home) or ""))
+        finally:
+            sidecar_b.cerrar()
+        ok("la llave del plugin aprueba el retenido de cualquier linea: sale por la suya",
+           p.returncode == 0 and sidecar_b.entregados == ["sesion-otra-1"],
+           f"{p.returncode} {sidecar_b.entregados} {p.stderr[-300:]}")
 
         # El candado es de cada linea: la principal ocupada no frena a la otra.
         import fcntl
