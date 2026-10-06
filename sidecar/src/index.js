@@ -52,7 +52,7 @@ export const MOTIVO = Object.freeze({
   DESCONOCIDO: 'desconocido'
 })
 
-// Los `statusCode` de `DisconnectReason` en Baileys 6.7.24 que necesita la decision
+// Los `statusCode` de `DisconnectReason` de Baileys (iguales en 6.7.24 y en 7) que necesita la decision
 // de reconectar. Se replican como constantes locales -no se importa `DisconnectReason`
 // de la libreria aca- para que `decidirTrasCierre` sea una funcion pura, probable sin
 // resolver Baileys.
@@ -281,13 +281,12 @@ export function qrVencido (ts, ahoraMs = Date.now(), vigenciaMs = QR_VIGENCIA_MS
 // `shouldSyncHistoryMessage` es la que arregla el defecto medido en la cuenta viva:
 // 296 grupos en el almacen y CERO uno a uno. La lista inicial de conversaciones NO
 // viene por `chats.upsert` -eso es una conversacion NUEVA- sino por
-// `messaging-history.set`, y Baileys 6.7.24 solo emite ese evento cuando esta funcion
-// contesta que si (lib/Socket/chats.js:778-780 -> lib/Utils/process-message.js:150,168).
-// Sin ponerla, `makeWASocket` la deriva de `syncFullHistory`
-// (lib/Socket/index.js:11-12): con `false`, el socket ni siquiera espera la
-// notificacion (chats.js:869-877) y el evento no se emite NUNCA. Poner el escuchador
-// sin esto no arregla nada — se ve exactamente igual que un telefono que no mando la
-// lista.
+// `messaging-history.set`, y Baileys solo emite ese evento cuando esta funcion
+// contesta que si (lib/Socket/chats.js, `shouldProcessHistoryMsg`). En 6.7.24, sin
+// ponerla, `makeWASocket` la derivaba de `syncFullHistory`: con `false` el evento no se
+// emitia NUNCA, y se veia exactamente igual que un telefono que no mando la lista.
+// Baileys 7 ya no la deriva, pero se deja explicita: decide si la lista llega, y eso
+// no puede depender de un valor de fabrica.
 //
 // Y `syncFullHistory` se queda en `false`, que es OTRA cosa: viaja como
 // `requireFullSync` dentro del nodo de registro que Baileys manda al vincular
