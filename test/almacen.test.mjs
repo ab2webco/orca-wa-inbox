@@ -1761,23 +1761,24 @@ console.log('\ningesta: el telefono de cada LID')
   ok('un contacto sin LID no anota nada, y el dueno tampoco',
     Object.keys(p).length === 2 && !p[MI_LID], JSON.stringify(p))
 
-  // 2. Los mensajes: `key.senderPn` es del que MANDA. En un directo recibido el que
+  // 2. Los mensajes: la forma alterna de la llave (`remoteJidAlt` en un directo,
+  //    `participantAlt` en un grupo, Baileys 7) es del que MANDA. En un directo recibido el que
   //    manda es la conversacion; en uno propio es el dueno, y ese par seria mentira.
   const alcanceCerrado = () => 'off'
   const wa = (key) => ({ key: { fromMe: false, ...key }, messageTimestamp: T0,
     message: { conversation: 'hola' } })
   await ingerirMensaje({ almacen: alm, alcance: alcanceCerrado, cuenta: CUENTA,
-    identidades: YO, mediaDir, wa: wa({ remoteJid: LID_C, id: 'P1', senderPn: TEL_C }) })
+    identidades: YO, mediaDir, wa: wa({ remoteJid: LID_C, id: 'P1', remoteJidAlt: TEL_C }) })
   await ingerirMensaje({ almacen: alm, alcance: alcanceCerrado, cuenta: CUENTA,
     identidades: YO, mediaDir,
-    wa: wa({ remoteJid: '111122226666@lid', id: 'P2', fromMe: true, senderPn: MI_TEL }) })
+    wa: wa({ remoteJid: '111122226666@lid', id: 'P2', fromMe: true, remoteJidAlt: MI_TEL }) })
   await ingerirMensaje({ almacen: alm, alcance: alcanceCerrado, cuenta: CUENTA,
     identidades: YO, mediaDir,
-    wa: wa({ remoteJid: GRUPO, id: 'P3', participant: LID_D, participantPn: TEL_D }) })
+    wa: wa({ remoteJid: GRUPO, id: 'P3', participant: LID_D, participantAlt: TEL_D }) })
   await ingerirMensaje({ almacen: alm, alcance: alcanceCerrado, cuenta: CUENTA,
     identidades: YO, mediaDir,
     wa: wa({ remoteJid: '573000000013@s.whatsapp.net', id: 'P4',
-      senderLid: '111122227777@lid' }) })
+      remoteJidAlt: '111122227777@lid' }) })
   p = pares()
   ok('un directo recibido anota el telefono de quien escribe, aunque este en off',
     p[LID_C] === TEL_C, JSON.stringify(p))

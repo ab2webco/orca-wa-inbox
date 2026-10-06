@@ -23,7 +23,7 @@ import {
   esConversacion, esGrupo, jidDeChat, usuarioDe, identidadPropia, identidadesPropias,
   identidadDeSesion, cuentaDeIdentidad,
   mencionaA, citaA, textoDe, mediaDe, filaDeMensaje, filaDeActualizacion,
-  miembrosDeGrupo, cambioDeMiembros, TIPO_MEDIA
+  miembrosDeGrupo, cambioDeMiembros, parDeMensaje, TIPO_MEDIA
 } from '../sidecar/src/mensajes.js'
 import { filaDeChat } from '../sidecar/src/ingesta.js'
 
@@ -385,6 +385,49 @@ console.log('\nT16b: un chat directo nunca lleva el dispositivo (`:N`) en su jid
 // o null; y `group-participants.update` (lib/Utils/process-message.js:271, lib/Types/
 // Events.d.ts:80-85) trae `{ id, author, participants: string[], action }`, con `action`
 // add, remove, promote, demote o modify. Solo ids: nunca un cuerpo.
+console.log('\nBaileys 7: la llave trae la otra forma del remitente (remoteJidAlt, participantAlt)')
+{
+  // Baileys 7 dejo de poner `senderPn`/`senderLid`/`participantPn`/`participantLid` en
+  // la llave: la otra forma de quien manda viaja en `remoteJidAlt` (directo) y
+  // `participantAlt` (grupo), en el sentido que toque segun el `addressing_mode` del
+  // stanza (lib/Utils/decode-wa-message.js, `decodeMessageNode`). Si el sidecar sigue
+  // leyendo los nombres viejos no falla nada: el par LID-telefono deja de anotarse, y
+  // eso se ve igual que un contacto que nunca escribio.
+  const GRUPO = '120363000000000077@g.us'
+  const llave = (key) => ({ key: { fromMe: false, id: 'K1', ...key } })
+  const porLid = parDeMensaje(llave({ remoteJid: '111122224444@lid',
+    remoteJidAlt: '573009999999@s.whatsapp.net', addressingMode: 'lid' }))
+  ok('un directo direccionado por LID da su telefono por remoteJidAlt',
+    porLid?.lid === '111122224444@lid' && porLid?.pn === '573009999999@s.whatsapp.net',
+    JSON.stringify(porLid))
+  const porTel = parDeMensaje(llave({ remoteJid: '573000000013@s.whatsapp.net',
+    remoteJidAlt: '111122227777:4@lid', addressingMode: 'pn' }))
+  ok('un directo direccionado por telefono da su LID por remoteJidAlt, sin dispositivo',
+    porTel?.lid === '111122227777@lid' && porTel?.pn === '573000000013@s.whatsapp.net',
+    JSON.stringify(porTel))
+  const enGrupoLid = parDeMensaje(llave({ remoteJid: GRUPO, participant: '111122225555@lid',
+    participantAlt: '573000000002@s.whatsapp.net', addressingMode: 'lid' }))
+  ok('en un grupo por LID, el telefono del participante sale de participantAlt',
+    enGrupoLid?.lid === '111122225555@lid' &&
+    enGrupoLid?.pn === '573000000002@s.whatsapp.net', JSON.stringify(enGrupoLid))
+  const enGrupoTel = parDeMensaje(llave({ remoteJid: GRUPO,
+    participant: '573000000002@s.whatsapp.net', participantAlt: '111122225555@lid',
+    addressingMode: 'pn' }))
+  ok('en un grupo por telefono, el LID del participante sale de participantAlt',
+    enGrupoTel?.lid === '111122225555@lid' &&
+    enGrupoTel?.pn === '573000000002@s.whatsapp.net', JSON.stringify(enGrupoTel))
+  ok('un directo PROPIO no da par: el alterno es el del dueno, no el del cliente',
+    parDeMensaje(llave({ remoteJid: '111122226666@lid', fromMe: true,
+      remoteJidAlt: MI_TEL })) === null)
+  ok('sin forma alterna no hay par que inventar',
+    parDeMensaje(llave({ remoteJid: '111122224444@lid' })) === null)
+  const fila = filaDeMensaje({ key: { remoteJid: GRUPO, fromMe: false, id: 'K2',
+    participantAlt: '573000000002@s.whatsapp.net' }, messageTimestamp: 1,
+  message: { conversation: 'hola' } }, { cuenta: 'pn:1', identidades: YO })
+  ok('el remitente de un grupo cae a participantAlt si falta participant',
+    fila?.senderJid === '573000000002@s.whatsapp.net', JSON.stringify(fila))
+}
+
 console.log('\nroles-por-numero (M8): los participantes de un grupo')
 {
   const GRUPO = '120363000000000077@g.us'

@@ -88,19 +88,23 @@ export function parLidTelefono (lid, pn) {
   return /^\d+@lid$/.test(l) && /^\d+@s\.whatsapp\.net$/.test(p) ? { lid: l, pn: p } : null
 }
 
-/** El par LID-telefono de quien MANDA un mensaje, o `null`. Baileys lo trae en la llave
- *  (`senderPn`/`senderLid` del stanza, `participantPn`/`participantLid` en un grupo) y
- *  es del remitente: en un directo recibido el remitente es la conversacion, pero en
- *  uno PROPIO es el dueno, y anotarlo le pondria el telefono del dueno al cliente. */
+/** El par LID-telefono de quien MANDA un mensaje, o `null`. Baileys 7 lo trae en la
+ *  llave como la forma ALTERNA del remitente: `remoteJidAlt` en un directo y
+ *  `participantAlt` en un grupo (lib/Utils/decode-wa-message.js, `decodeMessageNode`).
+ *  El sentido depende del `addressing_mode` del stanza: por LID el alterno es el
+ *  telefono, por telefono es el LID, asi que se prueban los dos ordenes. Los nombres de
+ *  6.7.24 (`senderPn`, `participantPn`...) ya no llegan.
+ *
+ *  Es del remitente: en un directo recibido el remitente es la conversacion, pero en uno
+ *  PROPIO es el dueno, y anotarlo le pondria el telefono del dueno al cliente. */
 export function parDeMensaje (wa) {
   const key = wa?.key
   if (!key || key.fromMe) return null
   const chat = jidDeChat(key.remoteJid)
-  if (esGrupo(chat)) {
-    return parLidTelefono(key.participant, key.participantPn) ||
-      parLidTelefono(key.participantLid, key.participant)
-  }
-  return parLidTelefono(chat, key.senderPn) || parLidTelefono(key.senderLid, chat)
+  const [quien, alterno] = esGrupo(chat)
+    ? [key.participant, key.participantAlt]
+    : [chat, key.remoteJidAlt]
+  return parLidTelefono(quien, alterno) || parLidTelefono(alterno, quien)
 }
 
 /** La identidad de alguien, CON su tipo. Dos numeros iguales en universos distintos no
@@ -309,7 +313,7 @@ export function filaDeMensaje (wa, { cuenta, identidades }) {
   const media = mediaDe(wa.message)
   // En un directo el autor es la conversacion misma; en un grupo, el participante.
   const senderJid = grupo
-    ? (wa.key.participant || wa.key.participantPn || wa.key.senderPn || null)
+    ? (wa.key.participant || wa.key.participantAlt || null)
     : (fromMe ? null : chatJid)
 
   return {

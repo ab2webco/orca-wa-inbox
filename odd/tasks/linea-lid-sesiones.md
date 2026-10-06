@@ -32,12 +32,18 @@ Out of scope: version bump, push, PR. Testing against real WhatsApp (not possibl
 
 ## Tasks
 
-- [ ] T1 — Pin Baileys 7.0.0-rc14, install, rebuild the bundle. Test in
+- [x] T1 — Pin Baileys 7.0.0-rc14, install, rebuild the bundle. Test in
       `sidecar-build.test.mjs`: the bundle carries the v7 decode path
       (`getDecryptionJid`, `lid-mapping`) and not 6.7.24.
-- [ ] T2 — Message keys: `parDeMensaje` / `filaDeMensaje` read `remoteJidAlt` and
-      `participantAlt` (v7) and still accept the 6.x fields. Tests in
-      `sidecar-mensajes.test.mjs`.
+      Proof: RED 5/8 (three v7 markers missing), GREEN 8/8 after install + rebuild.
+      `libsignal` override kept as an exact pin: v7 already asks for `^6.0.0` from the
+      registry (6.0.0 is the only 6.x), so it no longer fixes a git URL; it keeps the
+      exact pin, like Baileys itself.
+- [x] T2 — Message keys: `parDeMensaje` / `filaDeMensaje` read `remoteJidAlt` and
+      `participantAlt` (v7). The 6.x names (`senderPn`, `participantPn`...) no longer
+      arrive, so they are not read. Tests in `sidecar-mensajes.test.mjs` and
+      `almacen.test.mjs` (keys moved to the v7 shape).
+      Proof: RED 114/119 and 308/311, GREEN 119/119 and 311/311.
 - [ ] T3 — Contacts and group participants: `phoneNumber` (v7) feeds `lid_telefono` like
       `jid` did in 6.x. Tests in `sidecar-mensajes.test.mjs`.
 - [ ] T4 — Retries: `getMessage` answers from the outbox (`envio`), a process-wide
