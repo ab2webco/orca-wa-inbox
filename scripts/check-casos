@@ -6256,7 +6256,8 @@ if NODE:
         # que solo menciona un caso no lo es.
         cambia_orca(carpeta, vivos=["term_worker1", "term_vuelta", "term_vieja", "term_agente",
                                     "term_dueno", "term_corta", "term_corta_viva",
-                                    "term_dueno_caso"],
+                                    "term_dueno_caso", "term_mayus", "term_espacio",
+                                    "term_mayus_viva"],
                     titulos={"term_worker1": f"WhatsApp case #{cid}",
                              "term_vuelta": f"✳ Despacho caso-{cid}-{did}",
                              "term_vieja": "✳ Despacho caso-990-77",
@@ -6264,7 +6265,12 @@ if NODE:
                              "term_dueno": "◐ Guardia de bots",
                              "term_corta": "◑ caso-990-78",
                              "term_corta_viva": f"◑ caso-{cid}-{did}",
-                             "term_dueno_caso": "◐ Revisar caso-990-78"})
+                             "term_dueno_caso": "◐ Revisar caso-990-78",
+                             # 2026-10-06: Claude las titula "Caso-33-15" y "Caso 39-18", con
+                             # mayuscula y a veces con espacio. Quedaban abiertas.
+                             "term_mayus": "◐ Caso-990-79",
+                             "term_espacio": "◑ Caso 990-80",
+                             "term_mayus_viva": f"◐ Caso {cid}-{did}"})
         antes = len(cerradas(carpeta))
         con = db_de(home)
         con.execute("delete from settings where key='limpieza_at'")
@@ -6273,11 +6279,12 @@ if NODE:
         p, r = tick_orca(home, carpeta)
         nuevas = cerradas(carpeta)[antes:]
         ok("el tick cierra las terminales del plugin que no son de nada en curso",
-           sorted(nuevas) == ["term_agente", "term_corta", "term_vieja"] and p.returncode == 0,
+           sorted(nuevas) == ["term_agente", "term_corta", "term_espacio", "term_mayus",
+                              "term_vieja"] and p.returncode == 0,
            f"{nuevas} {p.stderr[-300:]}")
         ok("y no toca las del dueno ni las de un despacho en curso",
            not {"term_dueno", "term_vuelta", "term_worker1", "term_corta_viva",
-                "term_dueno_caso"} & set(nuevas), f"{nuevas}")
+                "term_dueno_caso", "term_mayus_viva"} & set(nuevas), f"{nuevas}")
 
     # Un lanzamiento que quedo a medias (el tick murio) no se relanza: va al dueno.
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
@@ -6333,6 +6340,43 @@ if NODE:
            [a[a.index("--worktree") + 1] for a in
             llamadas_orca(carpeta, "terminal create")] == ["id:r1::/srv/a"],
            f"{llamadas_orca(carpeta)}")
+    # La carpeta del proyecto con un espacio de Orca encima (`::workspace:`, el que Orca abre
+    # sobre el repo mismo): son dos entradas con la misma ruta, pero el repo es uno. Manda la
+    # entrada del repo (`isMainWorktree`); bloquear ahi dejaba mudo al agente del grupo.
+    ESPACIO_ENCIMA = dict(WT_ALFA, id=f"repo-alfa::{PROYECTO_PATH}::workspace:w1",
+                          displayName="swordtail", isMainWorktree=False)
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, worktrees=[ESPACIO_ENCIMA, WT_ALFA])
+        cid = trabajo_firmado(home, "D6b")
+        tick_orca(home, carpeta)
+        ok("la misma carpeta con un espacio encima: va a la entrada del repo, sin bloquear",
+           [a[a.index("--worktree") + 1] for a in
+            llamadas_orca(carpeta, "terminal create")] == [f"id:{WT_ALFA['id']}"]
+           and js(home, "caso", "ver", cid)[0]["etapa"] != "bloqueado",
+           f"{motivo_bloqueo(home, cid)} {llamadas_orca(carpeta)}")
+    # Bloqueado por un espacio ambiguo, y el dueno lo arregla en Orca: el tick siguiente lo
+    # reintenta solo, una vez, sin que nadie tenga que reabrir el caso.
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, worktrees=[
+            dict(WT_ALFA, id="r1::/srv/a", path="/srv/a", displayName="Alfa Demo"),
+            dict(WT_ALFA, id="r2::/srv/b", path="/srv/b", displayName="Alfa Demo")])
+        cid = trabajo_firmado(home, "D6c")
+        tick_orca(home, carpeta)
+        bloqueado_antes = js(home, "caso", "ver", cid)[0]["etapa"] == "bloqueado"
+        estado = pathlib.Path(carpeta) / "estado.json"
+        datos = json.loads(estado.read_text(encoding="utf-8"))
+        datos["worktrees"] = [dict(WT_ALFA, id="r1::/srv/a", path="/srv/a",
+                                   displayName="Alfa Demo")]
+        estado.write_text(json.dumps(datos), encoding="utf-8")
+        tick_orca(home, carpeta)
+        ok("un caso bloqueado por un espacio ambiguo se reintenta solo cuando ya no lo es",
+           bloqueado_antes and [a[a.index("--worktree") + 1] for a in
+                                llamadas_orca(carpeta, "terminal create")] == ["id:r1::/srv/a"],
+           f"{motivo_bloqueo(home, cid)} {llamadas_orca(carpeta)}")
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
         linea_lista(home)
         orca_despacho(carpeta)

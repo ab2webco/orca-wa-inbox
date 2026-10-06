@@ -7885,11 +7885,14 @@ def tick_limpia(con, resumen):
 # abrirlas, o el que Claude les pone por el brief (`despachos/caso-<caso>-<fila>.md`,
 # `despachos/agente-casos-<fila>.md`). Delante va el icono de estado de Claude. Claude a
 # veces deja solo el nombre del brief ("caso-20-10"): ese cuenta solo si es todo el titulo,
-# para no tomar una terminal del dueno que nombra un caso.
+# para no tomar una terminal del dueno que nombra un caso. Y lo escribe a su manera:
+# "Caso-33-15" o "Caso 39-18" (visto en vivo, 2026-10-06), asi que da igual la mayuscula y
+# si va guion o espacio despues de "caso".
 TITULO_DE_AGENTE = re.compile(
     r"(?:Despacho caso-(?P<caso>\d+)-(?P<despacho>\d+)|Despacho agente-casos-(?P<corrida>\d+)"
-    r"|^\W*caso-(?P<caso_solo>\d+)-(?P<despacho_solo>\d+)|^\W*agente-casos-(?P<corrida_sola>\d+)"
-    r"|WhatsApp case #(?P<del_caso>\d+)|(?P<agente>WhatsApp: case agent))\s*$")
+    r"|^\W*caso[-\s](?P<caso_solo>\d+)-(?P<despacho_solo>\d+)"
+    r"|^\W*agente-casos-(?P<corrida_sola>\d+)"
+    r"|WhatsApp case #(?P<del_caso>\d+)|(?P<agente>WhatsApp: case agent))\s*$", re.IGNORECASE)
 
 
 def cierra_huerfanas(con, cli, resumen):
@@ -9866,7 +9869,10 @@ APROBACION_VIEJA = "aprobación vieja: vuelve a aprobar"
 # con un Claude que se cerro al abrir (`entrega_brief`): nunca recibio el trabajo.
 REINTENTA_MOTIVO = "no_active_sender_terminal"
 SE_CERRO = "Claude se cerro al abrir"
-REINTENTA_MOTIVOS = (REINTENTA_MOTIVO, SE_CERRO)
+# Y un proyecto con dos espacios de Orca en su carpeta: el dueno archiva uno y el caso sigue
+# solo, sin que tenga que reabrirlo.
+ESPACIO_AMBIGUO = "espacios de Orca coinciden"
+REINTENTA_MOTIVOS = (REINTENTA_MOTIVO, SE_CERRO, ESPACIO_AMBIGUO)
 LEE_EL_BRIEF = "Read {} and follow it exactly."
 # La del agente de casos (caso-en-archivo): su caso en un archivo, y las reglas en el arnes.
 ATIENDE_EL_CASO = "Handle WhatsApp case #{}: read {} and follow the whatsapp-soporte skill."
@@ -10085,8 +10091,14 @@ def espacio_del_proyecto(cli, proyecto):
     if not hallados:
         return None, f"no encuentro el proyecto {proyecto['name']} en Orca ({proyecto['path']})"
     if len(hallados) > 1:
-        return None, (f"{proyecto['name']} es ambiguo: {len(hallados)} espacios de Orca "
-                      f"coinciden; deja uno solo con su ruta")
+        # Un espacio abierto encima de la carpeta del repo comparte su ruta con la entrada
+        # del repo (visto en vivo, 2026-10-06: "Servers" y "swordtail"). La del repo es la
+        # que el dueno acepto como proyecto: esa gana, si es una sola.
+        del_repo = [w for w in hallados if w.get("isMainWorktree") is True]
+        hallados = del_repo if len(del_repo) == 1 else hallados
+    if len(hallados) > 1:
+        return None, (f"{proyecto['name']} es ambiguo: {len(hallados)} {ESPACIO_AMBIGUO}; "
+                      f"deja uno solo con su ruta")
     w = hallados[0]
     if isinstance(w.get("id"), str) and w["id"].strip():
         return f"id:{w['id'].strip()}", None
