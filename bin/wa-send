@@ -92,13 +92,15 @@ from wa_settings import (ajuste, alcances_de_lineas, plugin_store_raw, scope_db,
 SCOPE_DB = scope_db()
 
 
-def signature():
+def signature(linea=None):
     """El nombre sale del registro, no del codigo: cada quien nombra a su agente.
 
     Por la cadena compartida y no por la base a secas: el nombre puesto DESDE EL PANEL
     vive en el almacen del plugin, y leyendo solo el sqlite `wa-scope agent` lo veia y
-    quien escribe salia con "no agent name is configured"."""
-    nombre = ajuste("agent_name")
+    quien escribe salia con "no agent name is configured".
+
+    Cada linea firma con el suyo (ajustes-por-linea): `linea`, o la de esta corrida."""
+    nombre = ajuste("agent_name", linea=linea)
     return f"-- {nombre}" if nombre else None
 
 
@@ -732,21 +734,6 @@ def main():
     if not a.chat or a.text is None:
         ap.error("the chat and the text are required (or use --drafts / --cancel)")
 
-    # El piso fijo mira la respuesta, no la firma: el nombre del agente lo eligio el dueno
-    # y no es algo que la respuesta prometa.
-    sin_firma = a.text
-    # Todo mensaje del agente va firmado, para que nunca haya duda de si escribe la
-    # persona o su agente. --raw es la excepcion, para cuando escribe ella.
-    sig = signature()
-    if sig and sin_firma.rstrip().endswith(sig):
-        sin_firma = sin_firma.rstrip()[:-len(sig)]
-    if not a.raw:
-        if not sig:
-            sys.exit("no agent name is configured. Set it with "
-                     "`wa-scope agent \"<name>\"`, or use --raw to write unsigned.")
-        if not a.text.rstrip().endswith(sig):
-            a.text = f"{a.text.rstrip()}\n{sig}"
-
     # La linea se decide ANTES de tocar nada. El mismo grupo puede existir en dos
     # lineas, y elegir "la primera" ahi le escribe a la conversacion equivocada.
     # Sin `--line`, la de la corrida que llama (`WA_INBOX_LINEA`, la pone el proceso de
@@ -757,7 +744,40 @@ def main():
         linea = a.line or wa_store.linea_pedida()
     except wa_store.LineaInvalida as exc:
         sys.exit(f"wa-send: {exc}")
+
+    # El piso fijo mira la respuesta, no la firma: el nombre del agente lo eligio el dueno
+    # y no es algo que la respuesta prometa.
+    original = a.text
+    sin_firma = a.text
+    # Todo mensaje del agente va firmado, para que nunca haya duda de si escribe la
+    # persona o su agente. --raw es la excepcion, para cuando escribe ella. Cada linea
+    # firma con el nombre de SU agente (ajustes-por-linea): el de la linea pedida aca, y
+    # abajo el de la linea de la conversacion elegida.
+    sig = signature(linea)
+    if sig and sin_firma.rstrip().endswith(sig):
+        sin_firma = sin_firma.rstrip()[:-len(sig)]
+    if not a.raw:
+        if not sig:
+            sys.exit("no agent name is configured. Set it with "
+                     "`wa-scope agent \"<name>\"`, or use --raw to write unsigned.")
+        if not a.text.rstrip().endswith(sig):
+            a.text = f"{a.text.rstrip()}\n{sig}"
+
     fila = resolver_conversacion(a.chat, linea)
+    # Sin linea pedida, la conversacion la elige: un caso de otra linea firma con el
+    # nombre de ESA linea, nunca con el de la principal.
+    propia = signature(fila["account"]) if fila and fila.get("account") else sig
+    if propia != sig:
+        sin_firma = original
+        for firma in (propia, sig):
+            if firma and sin_firma.rstrip().endswith(firma):
+                sin_firma = sin_firma.rstrip()[:-len(firma)]
+                break
+        if not a.raw:
+            if not propia:
+                sys.exit("no agent name is configured for this line. Set it in the plugin "
+                         "settings, or use --raw to write unsigned.")
+            a.text = f"{sin_firma.rstrip()}\n{propia}"
 
     # Y despues el permiso, que tambien es sobre lo que se pidio. Denegar por defecto:
     # una conversacion que no esta en el registro no existe para el agente.
@@ -787,9 +807,11 @@ def main():
     # Con los niveles del chat (T22.3): lo que esta en Permitir no frena, y lo que esta en
     # "Que el agente lo revise" frena para que quien lo escribio lo reescriba.
     niv = fila.get("niveles") or wa_reglas.niveles(None)
-    if wa_store.chat_del_dueno(con, fila["account"], fila["chat_jid"]) \
+    # Los numeros del dueno son los de la linea de la conversacion (ajustes-por-linea).
+    duenos_linea = wa_store.duenos(fila["account"])
+    if wa_store.chat_del_dueno(con, fila["account"], fila["chat_jid"], duenos_linea) \
             or wa_store.directo_sin_reglas(con, fila["account"], fila["chat_jid"],
-                                           wa_store.duenos(),
+                                           duenos_linea,
                                            {fila["chat_jid"]: fila.get("miembros") or {}}):
         # El chat del dueno (T22.1): un numero suyo o la linea consigo misma. Lo que se le
         # manda no protege a ningun tercero, asi que no pasa por las reglas ni por Jev (un
@@ -801,7 +823,7 @@ def main():
         jev = None
     else:
         piso = revision_piso(sin_firma, niv)
-        tono = (fila.get("tone") or "").strip() or ajuste("tone")
+        tono = (fila.get("tone") or "").strip() or ajuste("tone", linea=fila["account"])
         jev = jev_permitido(revision_jev(a.text, tono) if jev_hace_falta(niv) else None, niv)
     frenado = motivos_de(piso, jev)
     if frenado:

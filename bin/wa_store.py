@@ -114,12 +114,14 @@ def media_dir():
     return os.path.join(inbox_dir(), "media")
 
 
-def ajustes():
+def ajustes(linea=None):
     """Los ajustes efectivos, con la misma regla que `merged_settings` de wa-scope: lo
     del panel manda sobre lo del CLI, porque el panel es lo que el usuario acaba de
     tocar. Se leen los dos origenes directo y no por subproceso para no meter un
     `wa-scope` mas en cada lectura: `wa_settings` existe justo por esto, y su linea 54
-    lo dice — "vive en wa_settings.py porque wa-read tiene que leerla igual"."""
+    lo dice — "vive en wa_settings.py porque wa-read tiene que leerla igual".
+
+    Lo del panel es de una linea (ajustes-por-linea): `linea`, o la de esta corrida."""
     valores = dict(DEFAULTS)
     ruta = scope_db_path()
     if os.path.exists(ruta):
@@ -133,7 +135,7 @@ def ajustes():
             # Un registro ilegible no puede dejar sin bandeja: se sigue con los
             # arranques de fabrica, que es el comportamiento de siempre.
             pass
-    valores.update(settings_from_plugin())
+    valores.update(settings_from_plugin(linea))
     return valores
 
 

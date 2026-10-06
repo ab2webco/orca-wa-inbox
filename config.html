@@ -478,7 +478,7 @@
          esconde. */
       #qr-wrap.vencido { opacity: .4; }
       #pairing-actions[hidden], #pairing-warn[hidden] { display: none; }
-      /* Las lineas (varias lineas a la vez): una fila por numero, con su estado, su tipo y
+      /* Las lineas (varias lineas a la vez): una fila por numero, con su estado y
          sus acciones. La de una linea nueva lleva su propio QR, con el mismo fondo fijo
          que el de la vinculacion principal. */
       .lineas { list-style: none; margin: 0; padding: 0; }
@@ -493,20 +493,21 @@
       .linea-estado { font-size: 12px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .linea-estado.ok { color: var(--foreground, var(--fb-foreground)); }
       .linea-estado.bad { color: var(--destructive, var(--fb-destructive)); }
-      .linea-tipo { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
-                    margin-top: 8px; font-size: 12px; }
-      .linea-tipo .hint { margin: 0; flex-basis: 100%; }
       .linea-qr { display: inline-block; background: #fff; padding: 12px; margin: 8px 0 0;
                   border-radius: var(--radius-md); line-height: 0;
                   border: 1px solid var(--border, var(--fb-border)); }
       .linea-qr.vencido { opacity: .4; }
       .linea .actions { margin-top: 8px; }
       .linea-aviso { color: var(--destructive, var(--fb-destructive)); margin: 6px 0 0; }
+      /* El selector de linea va arriba de las pestanas: manda en todas (ajustes-por-linea). */
       #linea-vista-fila { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
-                          margin: 0 0 12px; font-size: 12px; }
+                          margin: 0 0 14px; padding: 10px 12px; font-size: 12px;
+                          border: 1px solid var(--border, var(--fb-border));
+                          border-radius: var(--radius-md); }
       #linea-vista-fila[hidden] { display: none; }
-      #linea-vista-actual { flex-basis: 100%; font-size: 14px; }
-      .nota-lineas[hidden] { display: none; }
+      #linea-vista-actual { flex-basis: 100%; font-size: 14px; overflow-wrap: anywhere; }
+      #linea-vista-ayuda { flex-basis: 100%; margin: 0; }
+      .nota-maquina[hidden], #orca-main-line[hidden] { display: none; }
       /* El aviso de lo que se pierde va en --destructive y no apagado como las demas
          pistas: es lo unico de esta seccion que el usuario tiene que leer ANTES de
          apretar, no despues. */
@@ -552,6 +553,16 @@
       <!-- El aviso general va FUERA de las pestanas: un plugin que no corre se tiene que
            ver desde cualquiera de ellas, no solo desde Estado. -->
       <div class="alert" id="alert" hidden></div>
+
+      <!-- Con dos lineas o mas, de cual es lo que se ve y se guarda en TODAS las pestanas: sus
+           conversaciones y sus ajustes (odd/tasks/ajustes-por-linea.md). Lo que es del equipo
+           lo dice en su tarjeta. -->
+      <div id="linea-vista-fila" hidden>
+        <strong id="linea-vista-actual"></strong>
+        <span id="linea-vista-label" data-t="linesView"></span>
+        <div class="seg" id="linea-vista" role="group" aria-labelledby="linea-vista-label"></div>
+        <p class="hint" id="linea-vista-ayuda" data-t="linesViewHelp"></p>
+      </div>
 
       <!-- Seis pestanas (T17). Antes era una sola columna larga con diez botones de
            guardar; el dueno no encontraba nada. Cada control vive en UNA pestana y cada
@@ -600,7 +611,6 @@
             <div id="qr-wrap" hidden>
               <canvas id="qr-canvas"></canvas>
             </div>
-            <div id="linea-principal-tipo"></div>
             <!-- Desvincular es irreversible desde aca y no hay modal donde preguntar
                  (`surface` es un enum cerrado y `window.open` esta anulado, §6), asi que
                  la confirmacion vive en el boton mismo. -->
@@ -613,7 +623,6 @@
             </div>
           </div>
           <ul class="lineas" id="lineas-lista"></ul>
-          <p class="hint" data-t="linesPersonalLater"></p>
           <p class="hint" id="lineas-espera" hidden data-t="linesWaitingOne"></p>
           <!-- "Me toca refrescar?" tenia que tener una respuesta en la pantalla. Va por
                el carril de USUARIO (`call(..., true)`), no por el del sondeo. -->
@@ -640,12 +649,6 @@
         <section>
           <h2 data-t="scopeLegend"></h2>
           <p class="hint lead" data-t="scopeHelp"></p>
-          <!-- Con dos lineas o mas, de cual son las conversaciones que se ven y se guardan. -->
-          <div id="linea-vista-fila" hidden>
-            <strong id="linea-vista-actual"></strong>
-            <span id="linea-vista-label" data-t="linesView"></span>
-            <div class="seg" id="linea-vista" role="group" aria-labelledby="linea-vista-label"></div>
-          </div>
           <div id="scope-wrap"></div>
           <span class="said" id="said-scope-rm"></span>
         </section>
@@ -815,9 +818,10 @@
 
         <!-- Reglas por texto: un grupo de operaciones lleva trabajo de varios clientes, y
              la palabra del mensaje decide el proyecto. Las viejas de Plane se marcan. -->
-        <section class="card">
+        <section class="card" id="routes-card">
           <h2 data-t="routesLegend"></h2>
           <p class="hint lead" data-t="routesHelp"></p>
+          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
           <div class="row dos">
             <div>
               <label for="r-match" data-t="routeMatch"></label>
@@ -851,9 +855,10 @@
            conoce (`orca worktree ps`) y solo lo que el dueno agrega aca le llega al agente
            que atiende los casos. Nada se agrega solo. -->
       <div id="view-proyectos" role="tabpanel" aria-labelledby="tab-proyectos" hidden>
-        <section>
+        <section id="projects-card">
           <h2 data-t="projectsLegend"></h2>
           <p class="hint lead" data-t="projectsHelp"></p>
+          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
           <div id="projects-wrap"></div>
           <div class="actions">
             <button id="projects-refresh" data-t="projectsRefresh"></button>
@@ -866,7 +871,6 @@
 
       <!-- ───────── Su aprobacion ───────── -->
       <div id="view-aprobacion" role="tabpanel" aria-labelledby="tab-aprobacion" hidden>
-        <p class="hint nota-lineas" hidden></p>
         <!-- Las reglas tal como son (T22.4): que pide cada una, los tres niveles que cada
              conversacion elige (bin/wa_reglas.py, NIVELES_DEFECTO) y lo que no se apaga. -->
         <section>
@@ -927,6 +931,8 @@
         <section class="card" id="orca-notices-card">
           <h2 id="orca-legend" data-t="orcaLegend"></h2>
           <p class="hint lead" id="orca-intro" data-t="orcaIntro"></p>
+          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
+          <p class="hint" id="orca-main-line" hidden></p>
           <p class="hint approval-warn" id="orca-no-number" data-t="orcaNoNumber" hidden></p>
           <div class="switch-row">
             <button type="button" class="switch" id="orca-waiting" role="switch"
@@ -1073,8 +1079,9 @@
              equipo. Apagado de fabrica, y el aviso va ARRIBA de los controles y siempre a
              la vista. La llave no se muestra nunca: el panel solo sabe "guardada" o "sin
              llave". -->
-        <section class="card">
+        <section class="card" id="jev-card">
           <h2 data-t="jevLegend"></h2>
+          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
           <p class="jev-aviso" id="jev-aviso" data-t="jevDisclosure"></p>
           <p class="pairing-msg" id="jev-status"></p>
           <div class="switch-row">
@@ -1101,7 +1108,6 @@
 
       <!-- ───────── Agente ───────── -->
       <div id="view-agente" role="tabpanel" aria-labelledby="tab-agente" hidden>
-        <p class="hint nota-lineas" hidden></p>
         <section class="card" id="agent-card">
           <h2 data-t="agentLegend"></h2>
           <label for="agent" data-t="agentLabel"></label>
@@ -1122,9 +1128,10 @@
         <!-- Con que cuenta de Claude abre el bot sus agentes (el de casos y el de cada
              proyecto). Las cuentas las lee el worker de `orca account list`; lo elegido
              (un id, o `auto`) lo usa `wa-scope` al abrir, con respaldo automatico. -->
-        <section class="card">
+        <section class="card" id="bot-account-card">
           <h2 data-t="botAccountLegend"></h2>
           <p class="hint lead" id="bot-account-label" data-t="botAccountHelp"></p>
+          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
           <div class="seg cuentas" id="bot-account" role="group" aria-labelledby="bot-account-label">
             <button type="button" data-value="auto" data-t="botAccountAuto"></button>
           </div>
@@ -1142,10 +1149,10 @@
            que el dueno ya acepto. El panel no escribe nada: pide al worker por el canal del
            alcance, y lo que pinta es el estado que el worker dejo en `skillsStatus`. -->
       <div id="view-skills" role="tabpanel" aria-labelledby="tab-skills" hidden>
-        <p class="hint nota-lineas" hidden></p>
-        <section>
+        <section id="skills-card">
           <h2 data-t="skillsLegend"></h2>
           <p class="hint lead" data-t="skillsHelp"></p>
+          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
           <div id="skills-wrap"></div>
           <div class="actions">
             <span class="said" id="said-skills"></span>
@@ -1157,7 +1164,6 @@
 
       <!-- ───────── Avanzado ───────── -->
       <div id="view-avanzado" role="tabpanel" aria-labelledby="tab-avanzado" hidden>
-        <p class="hint nota-lineas" hidden></p>
         <section class="card" id="voice-card">
           <h2 data-t="voiceLegend"></h2>
           <span class="label" id="transcribe-label" data-t="transcribeLabel"></span>
@@ -1166,6 +1172,7 @@
             <button type="button" data-value="off" data-t="trOff"></button>
           </div>
           <p class="hint" data-t="transcribeHelp"></p>
+          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
           <span class="label" id="lang-label" data-t="langLabel"></span>
           <div class="seg" id="lang" role="group" aria-labelledby="lang-label">
             <button type="button" data-value="auto" data-t="langAuto"></button>
@@ -1180,6 +1187,7 @@
             <button type="button" data-value="minima" data-t="qualityMinima"></button>
           </div>
           <p class="hint" data-t="qualityHelp"></p>
+          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
           <div class="actions">
             <button class="primary" id="save-voice" data-t="saveCard"></button>
             <span class="said" id="said-voice"></span>
@@ -1209,6 +1217,7 @@
             <button type="button" data-value="60" data-t="sync60"></button>
           </div>
           <p class="hint" data-t="syncHelp"></p>
+          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
           <p class="hint" id="triage-pace" aria-live="polite" hidden></p>
           <div class="actions">
             <button class="primary" id="save-reading" data-t="saveCard"></button>
@@ -1231,11 +1240,6 @@
             'principal es la de siempre; puede vincular otras a su lado.',
           linesPrincipal: 'Principal',
           linesNew: 'Linea nueva',
-          linesType: 'Tipo',
-          linesTypeSupport: 'Soporte',
-          linesTypePersonal: 'Personal',
-          linesPersonalLater: 'El tipo Personal llega en una version proxima: por ahora ' +
-            'toda linea es de soporte.',
           linesUnlink: 'Desvincular',
           linesUnlinkWarn: 'Se termina la sesion de esta linea en este equipo. Para usarla ' +
             'otra vez hay que escanear un codigo nuevo con su telefono. Las demas lineas ' +
@@ -1247,17 +1251,18 @@
             'con el telefono de esa linea.',
           linesWaitingOne: 'Hay una linea esperando su codigo: escanee ese antes de abrir ' +
             'otra.',
-          linesTypeSaved: 'Tipo guardado.',
-          linesNote: 'Aplica a sus {n} lineas: {lista}',
-          linesMainTag: '(principal)',
-          linesApprovalFrom: 'El aviso sale por su linea principal, {num}.',
+          // ajustes-por-linea: cada pestana es de la linea elegida; lo del equipo se dice.
+          machineNote: 'Vale para todas las lineas de este equipo.',
+          orcaMainLine: 'Salen por la linea principal, {num}, a su numero de aprobacion.',
+          linesApprovalFrom: 'Los avisos de los casos de esta linea salen por ella, {num}, a este numero.',
+          linesViewHelp: 'Cada pestana muestra y guarda lo de esta linea. Lo que es de todo el ' +
+            'equipo lo dice en su tarjeta.',
           linesViewing: 'Viendo la linea {num}',
           linesViewLoading: 'Leyendo la linea {num}…',
           linesView: 'Linea',
           linesHowNoLines: 'Todavia no se sabe donde viven las lineas: espere a que el ' +
             'plugin termine de arrancar y pruebe otra vez.',
           linesHowUnknown: 'Esa linea ya no esta vinculada. Vuelva a mirar la lista.',
-          linesHowTypeLater: 'Ese tipo todavia no se puede elegir.',
           // --- vinculacion (T3/T4) ---
           pairingLegend: 'Vinculacion de WhatsApp',
           pairingWaiting: 'Esperando el codigo QR',
@@ -1822,11 +1827,6 @@
             'is the usual one; you can link others next to it.',
           linesPrincipal: 'Main',
           linesNew: 'New line',
-          linesType: 'Type',
-          linesTypeSupport: 'Support',
-          linesTypePersonal: 'Personal',
-          linesPersonalLater: 'The Personal type comes in an upcoming version: for now every ' +
-            'line is a support line.',
           linesUnlink: 'Unlink',
           linesUnlinkWarn: 'This ends this line\'s session on this machine. To use it again ' +
             'you have to scan a new code with its phone. The other lines stay as they are.',
@@ -1837,17 +1837,17 @@
             'line\'s phone.',
           linesWaitingOne: 'A line is waiting for its code: scan that one before opening ' +
             'another.',
-          linesTypeSaved: 'Type saved.',
-          linesNote: 'Applies to all {n} of your lines: {lista}',
-          linesMainTag: '(main)',
-          linesApprovalFrom: 'The notice goes out through your main line, {num}.',
+          machineNote: 'Applies to every line on this computer.',
+          orcaMainLine: 'They go out through the main line, {num}, to its approval number.',
+          linesApprovalFrom: "Notices for this line's cases go out through it, {num}, to this number.",
+          linesViewHelp: "Every tab shows and saves this line's settings. Whatever applies to " +
+            'the whole computer says so on its card.',
           linesViewing: 'Viewing line {num}',
           linesViewLoading: 'Reading line {num}…',
           linesView: 'Line',
           linesHowNoLines: 'It is not known yet where the lines live: wait for the plugin ' +
             'to finish starting and try again.',
           linesHowUnknown: 'That line is no longer linked. Look at the list again.',
-          linesHowTypeLater: 'That type cannot be chosen yet.',
           // --- pairing (T3/T4) ---
           pairingLegend: 'WhatsApp pairing',
           pairingWaiting: 'Waiting for the QR code',
@@ -2378,11 +2378,6 @@
           'principal e a de sempre; voce pode vincular outras ao lado dela.',
         linesPrincipal: 'Principal',
         linesNew: 'Linha nova',
-        linesType: 'Tipo',
-        linesTypeSupport: 'Suporte',
-        linesTypePersonal: 'Pessoal',
-        linesPersonalLater: 'O tipo Pessoal chega numa versao proxima: por enquanto toda ' +
-          'linha e de suporte.',
         linesUnlink: 'Desvincular',
         linesUnlinkWarn: 'A sessao desta linha nesta maquina termina. Para usa-la de novo e ' +
           'preciso escanear um codigo novo com o telefone dela. As outras linhas continuam ' +
@@ -2394,17 +2389,17 @@
           'telefone dessa linha.',
         linesWaitingOne: 'Ha uma linha esperando o seu codigo: escaneie esse antes de abrir ' +
           'outra.',
-        linesTypeSaved: 'Tipo salvo.',
-        linesNote: 'Vale para as suas {n} linhas: {lista}',
-          linesMainTag: '(principal)',
-          linesApprovalFrom: 'O aviso sai pela sua linha principal, {num}.',
+          machineNote: 'Vale para todas as linhas deste computador.',
+          orcaMainLine: 'Saem pela linha principal, {num}, para o numero de aprovacao dela.',
+          linesApprovalFrom: 'Os avisos dos casos desta linha saem por ela, {num}, para este numero.',
+          linesViewHelp: 'Cada aba mostra e guarda o que e desta linha. O que vale para o ' +
+            'computador inteiro diz isso no seu cartao.',
           linesViewing: 'Vendo a linha {num}',
           linesViewLoading: 'Lendo a linha {num}…',
           linesView: 'Linha',
         linesHowNoLines: 'Ainda nao se sabe onde ficam as linhas: espere o plugin terminar ' +
           'de iniciar e tente de novo.',
         linesHowUnknown: 'Essa linha ja nao esta vinculada. Olhe a lista de novo.',
-        linesHowTypeLater: 'Esse tipo ainda nao pode ser escolhido.',
         pairingLegend: 'Vinculacao do WhatsApp',
         pairingWaiting: 'Aguardando o codigo QR',
         pairingWaitingHow: 'Conectando ao WhatsApp. Deixe este painel aberto ' +
@@ -3231,9 +3226,7 @@
         desconocido: 'pairingHowUnknown',
         // Varias lineas a la vez: lo que el worker contesta sobre una linea.
         'sin-lineas': 'linesHowNoLines',
-        'linea-desconocida': 'linesHowUnknown',
-        'tipo-no-disponible': 'linesHowTypeLater',
-        'tipo-invalido': 'linesHowTypeLater'
+        'linea-desconocida': 'linesHowUnknown'
       }
 
       // El permiso y el servicio se guardan con estos valores y no se traducen nunca en
@@ -3392,6 +3385,70 @@
         el(id).addEventListener('change', marcar)
       }
 
+      // ---------- los ajustes de cada linea (odd/tasks/ajustes-por-linea.md) ----------
+      // La MISMA lista que `AJUSTES_DE_LINEA` de bin/wa_settings.py y de main.mjs. La
+      // principal los guarda en la raiz, como siempre; cada otra linea, en
+      // `ajustesPorLinea[<numero>]`. Mirando otra linea, estas claves se leen y se escriben
+      // ahi, en UNA clave: cada clave es un mensaje mas contra el cupo del host, y asi
+      // cambiar de linea cuesta una lectura y no dieciseis.
+      var AJUSTES_DE_LINEA = ['agentName', 'ownerName', 'tone', 'owners', 'approvalNumber',
+        'approvalLang', 'ackMode', 'ackText', 'ackQuietMinutes', 'greetingMode', 'greetingText',
+        'firstReply', 'slaMinutes', 'projectQuestionHours', 'inboxDays', 'transcribeLang']
+      var CONTENEDOR_AJUSTES = 'ajustesPorLinea'
+      function esDeLinea (k) { return AJUSTES_DE_LINEA.indexOf(k) !== -1 }
+      /** El valor de un ajuste para la linea `cuenta`, del contenedor ya leido. Lo que la
+       *  linea no tiene propio es lo de la principal, como lo lee wa-scope; null es "sin
+       *  valor" y no cae a la principal. */
+      function ajusteDeLinea (contenedor, cuenta, k) {
+        if (!hayRespuesta(contenedor)) return SIN_RESPUESTA
+        var propios = contenedor && typeof contenedor === 'object' ? contenedor[cuenta] : null
+        if (propios && typeof propios === 'object' && k in propios) return propios[k]
+        return k in ultimaLectura ? ultimaLectura[k] : SIN_RESPUESTA
+      }
+      // Una sola lectura del contenedor en vuelo: abrir una pestana pide varias claves de
+      // linea a la vez, y son todas la misma.
+      var contenedorEnVuelo = null
+      function leerContenedorAjustes (usuario) {
+        if (!contenedorEnVuelo) {
+          contenedorEnVuelo = read(CONTENEDOR_AJUSTES, usuario).then(function (v) {
+            contenedorEnVuelo = null
+            return v
+          })
+        }
+        return contenedorEnVuelo
+      }
+      /** Lee una clave como la ve la linea que se mira. Para otra linea, una clave de linea
+       *  sale de su contenedor; si no la tiene propia y no se sabe la de la principal, se
+       *  lee la de la principal. Lo que llega cuando ya se mira otra linea no vale. */
+      function leerClave (k, usuario) {
+        var otra = otraLineaVista()
+        if (!otra || !esDeLinea(k)) return read(k, usuario)
+        return leerContenedorAjustes(usuario).then(function (c) {
+          if (otraLineaVista() !== otra) return SIN_RESPUESTA
+          var v = ajusteDeLinea(c, otra, k)
+          if (hayRespuesta(v) || !hayRespuesta(c)) return v
+          return read(k, usuario).then(function (raiz) {
+            return otraLineaVista() === otra ? raiz : SIN_RESPUESTA
+          })
+        })
+      }
+      /** Guarda `pares` ([[clave, valor]]) en lo propio de la linea `cuenta`. Lee y escribe el
+       *  contenedor entero, como `escribirAlcanceVisto`: lo de las otras lineas y las claves
+       *  que no se conocen quedan como estaban. Sin una lectura FRESCA no se escribe: con una
+       *  vieja se borraria lo que el sync u otra linea escribio despues. */
+      function escribirAjustesDeLinea (cuenta, pares) {
+        return call('storage.get', { key: CONTENEDOR_AJUSTES }, true).then(function (r) {
+          var v = stored(r)
+          if (!hayRespuesta(v)) return false
+          var todo = v && typeof v === 'object' && !Array.isArray(v) ? Object.assign({}, v) : {}
+          var propios = todo[cuenta] && typeof todo[cuenta] === 'object'
+            ? Object.assign({}, todo[cuenta]) : {}
+          pares.forEach(function (p) { propios[p[0]] = p[1] })
+          todo[cuenta] = propios
+          return write(CONTENEDOR_AJUSTES, todo).then(function (w) { return !!(w && w.ok) })
+        })
+      }
+
       // Que control pinta cada clave y con que valor cuando no hay nada guardado. Una
       // sola tabla para el sondeo y para la relectura del guardado: dos listas se
       // desincronizan y una de las dos termina pintando otra cosa.
@@ -3533,17 +3590,28 @@
        *  encima el valor de antes. */
       function guardar (pares) {
         var s = ++guardadoSeq
-        return Promise.all(pares.map(function (p) {
-          return write(p[0], p[1]).then(function (r) {
-            var bien = !!(r && r.ok)
-            var c = CONTROLES[p[0]]
-            if (bien && c) delete sucios[c[0]]
-            return { key: p[0], ok: bien }
-          })
-        })).then(function (rs) {
+        // Mirando otra linea, sus claves de linea van juntas a lo propio de esa linea.
+        var otra = otraLineaVista()
+        var propias = otra ? pares.filter(function (p) { return esDeLinea(p[0]) }) : []
+        var comunes = otra ? pares.filter(function (p) { return !esDeLinea(p[0]) }) : pares
+        var marcar = function (k, bien) {
+          var c = CONTROLES[k]
+          if (bien && c) delete sucios[c[0]]
+          return { key: k, ok: bien }
+        }
+        var escrituras = comunes.map(function (p) {
+          return write(p[0], p[1]).then(function (r) { return [marcar(p[0], !!(r && r.ok))] })
+        })
+        if (propias.length) {
+          escrituras.push(escribirAjustesDeLinea(otra, propias).then(function (bien) {
+            return propias.map(function (p) { return marcar(p[0], bien) })
+          }))
+        }
+        return Promise.all(escrituras).then(function (grupos) {
+          var rs = [].concat.apply([], grupos)
           var buenas = rs.filter(function (r) { return r.ok })
           return Promise.all(buenas.map(function (r) {
-            return read(r.key, true).then(function (v) { return [r.key, v] })
+            return leerClave(r.key, true).then(function (v) { return [r.key, v] })
           })).then(function (leidos) {
             if (s === guardadoSeq) {
               leidos.forEach(function (x) { pintarClave(x[0], x[1]) })
@@ -3673,7 +3741,7 @@
           if (document.visibilityState !== 'visible') { programarRelectura(); return }
           var sello = guardadoSeq
           Promise.all(faltan.map(function (k) {
-            return read(k, true).then(function (v) { pintarLeida(k, v, sello) })
+            return leerClave(k, true).then(function (v) { pintarLeida(k, v, sello) })
           })).then(programarRelectura)
         }, RELECTURA_MS)
       }
@@ -4994,9 +5062,14 @@
       function leerMiembros () {
         if (leyendoMiembros) return
         leyendoMiembros = true
-        read('groupMembers', true).then(function (v) {
+        // Los de otra linea los deja wa-scope en lo suyo, `porLinea[<numero>]`.
+        var otra = otraLineaVista()
+        var leer = otra ? read('porLinea', true).then(function (v) {
+          return delOtraLinea(v, otra, 'groupMembers')
+        }) : read('groupMembers', true)
+        leer.then(function (v) {
           leyendoMiembros = false
-          if (hayRespuesta(v)) renderGroupMembers(v)
+          if (hayRespuesta(v) && otraLineaVista() === otra) renderGroupMembers(v)
         }, function () { leyendoMiembros = false })
       }
       function leerMiembrosSiHaceFalta () {
@@ -5516,14 +5589,20 @@
         if (sinLeer('save-owners')) return
         var lista = duenosVisibles().slice()
         var numero = numeroVisible()
-        busy(event.currentTarget, write('owners', lista).then(function (r) {
-          if (r && r.ok === false) return r
-          // El idioma del panel viaja con el numero: es en el que salen los avisos.
-          return write('approvalNumber', numero).then(function (r2) {
-            if (r2 && r2.ok === false) return r2
-            return write('approvalLang', LANG)
+        // Mirando otra linea, los tres van juntos a lo propio de esa linea.
+        var otra = otraLineaVista()
+        var escribir = otra
+          ? escribirAjustesDeLinea(otra, [['owners', lista], ['approvalNumber', numero],
+            ['approvalLang', LANG]]).then(function (bien) { return { ok: bien } })
+          : write('owners', lista).then(function (r) {
+            if (r && r.ok === false) return r
+            // El idioma del panel viaja con el numero: es en el que salen los avisos.
+            return write('approvalNumber', numero).then(function (r2) {
+              if (r2 && r2.ok === false) return r2
+              return write('approvalLang', LANG)
+            })
           })
-        }).then(function (r) {
+        busy(event.currentTarget, escribir.then(function (r) {
           if (r && r.ok === false) { said('said-owners', t('saveFail'), true); return }
           duenosGuardados = lista
           duenosEnEdicion = null
@@ -6427,7 +6506,7 @@
         var claves = ['owners', 'approvalNumber'].filter(function (k) { return !pintadas[k] })
           .concat(CLAVES_AUTO)
         Promise.all(claves.map(function (k) {
-          return read(k, true).then(function (v) { pintarLeida(k, v, sello) })
+          return leerClave(k, true).then(function (v) { pintarLeida(k, v, sello) })
         })).then(programarRelectura)
       }
       PESTANAS.forEach(function (p, i) {
@@ -6518,11 +6597,6 @@
       // sobre un boton que se reemplazo entre el `pointerdown` y el `click`.
       var firmaLineas = null
       var firmaVista = null
-      // Los tipos que se pueden elegir hoy. `personal` existe pero espera a la parte 2: el
-      // worker lo rechaza igual (`TIPOS_HABILITADOS` en main.mjs).
-      var TIPOS_LINEA = ['support', 'personal']
-      var TIPOS_HABILITADOS = ['support']
-      var TIPO_TEXTO = { support: 'linesTypeSupport', personal: 'linesTypePersonal' }
       // Con las MISMAS palabras que la fila principal (`renderPairing`): dos frases para el mismo
       // estado en la misma tarjeta se leen como dos estados distintos.
       var LINEA_ESTADO = { connected: 'pairingConnected', waiting: 'pairingWaiting',
@@ -6550,22 +6624,25 @@
         if (d && typeof d.me === 'string' && d.me) return d.me
         return l.cuenta ? '+' + String(l.cuenta).replace(/^pn:/, '') : t('linesNew')
       }
-      /** Las notas de las pestanas compartidas y el aviso del numero de aprobacion: con dos
-       *  lineas vinculadas o mas dicen a cuales aplica lo de la pestana; con una, nada. */
+      /** Las notas de linea, solo con dos lineas vinculadas o mas: lo del equipo lo dice en
+       *  su tarjeta, los avisos de un caso salen por la linea que se mira, y los de Orca por
+       *  la principal. Con una sola linea, nada: no hay de que distinguirla. */
       function renderNotasLineas () {
         var vinc = lineasVinculadas()
         var varias = vinc.length > 1
-        var lista = vinc.map(function (l, i) {
-          return numeroDeLinea(l, estadoDeLinea(l)) + (i === 0 ? ' ' + t('linesMainTag') : '')
-        }).join(', ')
-        Array.prototype.forEach.call(document.querySelectorAll('.nota-lineas'), function (n) {
+        Array.prototype.forEach.call(document.querySelectorAll('.nota-maquina'), function (n) {
           n.hidden = !varias
-          n.textContent = varias ? fmt('linesNote', { n: vinc.length, lista: lista }) : ''
         })
+        var cuenta = otraLineaVista() || (vinc[0] && vinc[0].cuenta)
+        var vista = vinc.filter(function (l) { return l.cuenta === cuenta })[0]
         var aviso = el('approval-main-line')
         aviso.hidden = !varias
-        aviso.textContent = varias
-          ? fmt('linesApprovalFrom', { num: numeroDeLinea(vinc[0], estadoDeLinea(vinc[0])) }) : ''
+        aviso.textContent = varias && vista
+          ? fmt('linesApprovalFrom', { num: numeroDeLinea(vista, estadoDeLinea(vista)) }) : ''
+        var orca = el('orca-main-line')
+        orca.hidden = !varias
+        orca.textContent = varias
+          ? fmt('orcaMainLine', { num: numeroDeLinea(vinc[0], estadoDeLinea(vinc[0])) }) : ''
       }
       function textoEstadoLinea (estado, d) {
         if (estado === 'silent') return fmt('pairingSilent', { hora: horaUltimaSenal(d) })
@@ -6647,9 +6724,8 @@
       }
 
       /** La fila de la principal: la vinculacion de siempre (su estado, su QR, Reintentar y
-       *  Desvincular los pinta `renderPairing`), con su numero arriba y su tipo. La marca
+       *  Desvincular los pinta `renderPairing`), con su numero arriba. La marca
        *  "Principal" solo con otra linea al lado: con una sola no hay de que distinguirla. */
-      var firmaPrincipal = null
       function renderPrincipal () {
         var l = registroLineas[0] || null
         var d = sidecarUlt && hayRespuesta(sidecarUlt) ? sidecarUlt : null
@@ -6658,34 +6734,7 @@
         el('linea-principal-cab').hidden = !numero
         el('linea-principal-num').textContent = numero
         el('linea-principal-marca').hidden = registroLineas.length < 2
-        var caja = el('linea-principal-tipo')
         if (l) el('linea-principal').setAttribute('data-carpeta', l.carpeta)
-        var firma = JSON.stringify([LANG, l, liveStorage])
-        if (firma === firmaPrincipal) return
-        firmaPrincipal = firma
-        caja.textContent = ''
-        if (l) caja.appendChild(controlDeTipo(l, 0))
-      }
-
-      function controlDeTipo (l, i) {
-        var tipo = nodo('div', 'linea-tipo')
-        var etiqueta = nodo('span', '', t('linesType'))
-        etiqueta.id = 'linea-tipo-' + i
-        var seg = nodo('div', 'seg')
-        seg.setAttribute('role', 'group')
-        seg.setAttribute('aria-labelledby', etiqueta.id)
-        TIPOS_LINEA.forEach(function (valor) {
-          var b = nodo('button', '', t(TIPO_TEXTO[valor]))
-          b.type = 'button'
-          b.setAttribute('data-value', valor)
-          apretar(b, (l.tipo || 'support') === valor)
-          if (TIPOS_HABILITADOS.indexOf(valor) < 0) b.disabled = true
-          b.addEventListener('click', function () { cambiarTipoLinea(l, valor, b) })
-          seg.appendChild(b)
-        })
-        tipo.appendChild(etiqueta)
-        tipo.appendChild(seg)
-        return tipo
       }
 
       function filaDeLinea (l, i, estado, tam) {
@@ -6705,7 +6754,6 @@
           li.appendChild(caja)
           dibujarQrEn(canvas, d.qr.qr, tam)
         }
-        li.appendChild(controlDeTipo(l, i))
         var confirmando = confirmandoLinea === l.carpeta
         // Una linea nueva que todavia espera su codigo no tiene sesion que soltar:
         // cancelarla es un clic y no pide confirmacion.
@@ -6729,16 +6777,6 @@
         }
         li.appendChild(acciones)
         return li
-      }
-
-      /** El tipo de una linea se lo pide al worker, que es quien guarda el registro. */
-      function cambiarTipoLinea (l, tipo, boton) {
-        if ((l.tipo || 'support') === tipo) return
-        busy(boton, pedirAlWorker('sidecarRequest', 'sidecarResult',
-          { action: 'tipo', carpeta: l.carpeta, tipo: tipo }).then(function (v) {
-          contarLinea(v, 'linesTypeSaved')
-          return reload()
-        })).then(repintarLineas, repintarLineas)
       }
 
       /** Desvincular una linea es irreversible desde aca, como el de la principal: el
@@ -6805,10 +6843,43 @@
         var nueva = vinc.length && vinc[0].cuenta === cuenta ? null : cuenta
         if (nueva === lineaVista) return
         lineaVista = nueva
+        // Lo que estaba en vuelo es de la linea que se dejo: el sello lo invalida, y sus
+        // tarjetas vuelven a "leyendo" hasta que conteste la nueva.
+        guardadoSeq++
+        olvidarAjustesDeLinea()
         resetScopeForm()
         renderVistaLineas()
         if (nueva) pintarLeyendoLinea(nueva)
-        reload()
+        reload().then(function () {
+          if (autoPedida) leerAuto()
+          else programarRelectura()
+        })
+      }
+      /** Cambiar de linea: nada de lo pintado de la otra queda en las tarjetas de linea.
+       *  Sus controles vuelven a lo de fabrica, lo escrito sin guardar se descarta, y cada
+       *  tarjeta dice "leyendo" hasta que llegue lo de la linea nueva. */
+      function olvidarAjustesDeLinea () {
+        AJUSTES_DE_LINEA.forEach(function (k) {
+          delete pintadas[k]
+          var c = CONTROLES[k]
+          if (!c) return
+          delete sucios[c[0]]
+          if (el(c[0]).classList.contains('seg')) ponerSeg(c[0], c[1], c[1])
+          else el(c[0]).value = c[1]
+        })
+        PRIMER_IDS.forEach(function (id) { delete sucios[id] })
+        ponerSeg('first-reply', 'ack', 'ack')
+        PRIMER_NUMEROS.forEach(function (n) { el(n[1]).value = PRIMER_DEFECTO[n[0]] })
+        pintarPrimerVista()
+        nombreAgente = ''
+        duenosGuardados = []
+        duenosEnEdicion = null
+        numeroGuardado = ''
+        numeroEnEdicion = null
+        pintarDuenos()
+        ;['said-agent', 'said-owners', 'said-auto', 'said-sla', 'said-pq-hours', 'said-voice',
+          'said-reading'].forEach(function (id) { said(id, '') })
+        pintarLecturas()
       }
 
       // Lo que se ve mientras la otra linea no contesto: nunca la lista de la que se
@@ -6838,6 +6909,8 @@
             renderScope(alcance)
             var chatsLinea = delOtraLinea(rs[1], cuenta, 'chats')
             if (hayRespuesta(chatsLinea)) renderChats(chatsLinea)
+            var sendersLinea = delOtraLinea(rs[1], cuenta, 'senders')
+            if (hayRespuesta(sendersLinea)) renderSenders(sendersLinea)
           })
         }, 1000)
       }
@@ -6866,9 +6939,17 @@
       var CLAVES_OTRA_LINEA = ['alcancePorLinea', 'porLinea']
       function clavesDeLaVuelta (soloVivas) {
         var varias = registroLineas.length > 1
+        var otra = otraLineaVista()
         var claves = (soloVivas ? CLAVES_VIVAS : CLAVES).concat(varias ? CLAVES_VARIAS : [])
+        // Mirando otra linea, sus ajustes vienen en UNA clave, y sus remitentes con lo demas
+        // de esa linea (`porLinea`): las de la principal no se piden.
+        if (otra) {
+          claves = claves.filter(function (k) { return k !== 'senders' }).map(function (k) {
+            return esDeLinea(k) ? CONTENEDOR_AJUSTES : k
+          })
+        }
         claves = claves.filter(function (k, i) { return claves.indexOf(k) === i })
-        return claves.concat(otraLineaVista() ? CLAVES_OTRA_LINEA : [])
+        return claves.concat(otra ? CLAVES_OTRA_LINEA : [])
       }
 
       function reload(soloVivas) {
@@ -6916,6 +6997,10 @@
             // Mirando otra linea, sus conversaciones y sus autorizaciones son las de ESA.
             var otra = otraLineaVista()
             if (otra) cuentaVinculada = otra
+            // Y sus ajustes, los suyos: los de linea salen de su contenedor.
+            function vl(k) {
+              return otra && esDeLinea(k) ? ajusteDeLinea(v(CONTENEDOR_AJUSTES), otra, k) : v(k)
+            }
             var chatsVistos = otra ? delOtraLinea(v('porLinea'), otra, 'chats') : v('chats')
             var cuentaChats = otra ? delOtraLinea(v('porLinea'), otra, 'chatsAccount')
               : v('chatsAccount')
@@ -6931,12 +7016,12 @@
               pintarLeyendoLinea(otra)
               reintentarVistaDeLinea(otra, 30)
             }
-            pintarClave('tone', v('tone'), sello)
+            pintarClave('tone', vl('tone'), sello)
             pintarClave('transcribeQuality', v('transcribeQuality'), sello)
-            pintarClave('inboxDays', v('inboxDays'), sello)
-            pintarClave('ownerName', v('ownerName'), sello)
+            pintarClave('inboxDays', vl('inboxDays'), sello)
+            pintarClave('ownerName', vl('ownerName'), sello)
             pintarClave('transcribe', v('transcribe'), sello)
-            pintarClave('transcribeLang', v('transcribeLang'), sello)
+            pintarClave('transcribeLang', vl('transcribeLang'), sello)
             pintarClave('syncMinutes', v('syncMinutes'), sello)
             if (hayRespuesta(v('syncMinutes'))) minutosGuardados = v('syncMinutes')
             // El ritmo del triage viaja en el latido: el worker lo escribe ahi.
@@ -6953,20 +7038,21 @@
                 ? v('syncStatus') : null
             }
             if (hayRespuesta(chatsVistos)) renderChats(chatsVistos)
-            if (hayRespuesta(v('senders'))) renderSenders(v('senders'))
-            if (hayRespuesta(v('owners')) && vigente(sello)) {
-              renderOwners(v('owners'))
+            var sendersVistos = otra ? delOtraLinea(v('porLinea'), otra, 'senders') : v('senders')
+            if (hayRespuesta(sendersVistos)) renderSenders(sendersVistos)
+            if (hayRespuesta(vl('owners')) && vigente(sello)) {
+              renderOwners(vl('owners'))
               marcarPintada('owners')
             }
             // Los participantes de los grupos se leen solo con un grupo en el formulario, en
             // cada vuelta mientras siga abierto: una lectura, y la lista de un grupo recien
             // autorizado aparece sola. Fuera de eso no gastan el cupo del host (ver CLAVES).
             leerMiembrosSiHaceFalta()
-            if (hayRespuesta(v('approvalNumber')) && vigente(sello)) {
-              renderApproval(v('approvalNumber'))
+            if (hayRespuesta(vl('approvalNumber')) && vigente(sello)) {
+              renderApproval(vl('approvalNumber'))
               marcarPintada('approvalNumber')
             }
-            pintarClave('agentName', v('agentName'), sello)
+            pintarClave('agentName', vl('agentName'), sello)
             // El latido manda sobre todo lo demas: si nadie esta corriendo, el health
             // que haya es de otra sesion y "todo bien" seria mentira. Un rechazo del
             // host NO cuenta como worker ausente — no saber no es saber que no esta.

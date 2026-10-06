@@ -1240,6 +1240,40 @@ export function decidirReinicio (intento) {
     esperaMs: Math.min(REINICIO_BASE_MS * 2 ** (paso - 1), REINICIO_MAX_MS) }
 }
 
+// Los ajustes que cada linea tiene propios (odd/tasks/ajustes-por-linea.md). La MISMA lista
+// que `AJUSTES_DE_LINEA` de bin/wa_settings.py y que la del panel (config.html): la principal
+// los tiene en la raiz, cada otra linea en `ajustesPorLinea[<numero>]`.
+export const AJUSTES_DE_LINEA = Object.freeze(['agentName', 'ownerName', 'tone', 'owners',
+  'approvalNumber', 'approvalLang', 'ackMode', 'ackText', 'ackQuietMinutes', 'greetingMode',
+  'greetingText', 'firstReply', 'slaMinutes', 'projectQuestionHours', 'inboxDays',
+  'transcribeLang'])
+export const AJUSTES_POR_LINEA_KEY = 'ajustesPorLinea'
+
+/** Los ajustes propios de una linea que empieza: una copia de los de la principal (`raiz`).
+ *  Pura. Devuelve el contenedor entero con la linea sembrada, o null si no hay nada que
+ *  hacer.
+ *
+ *  Solo se suma lo que la linea NO tiene: una linea que ya estuvo vinculada tiene todos los
+ *  suyos y no se copia otra vez, y lo que el dueno o el sync ya le escribieron nunca se pisa.
+ *  Lo que la principal no tiene queda en null, que es "sin valor" y no "ausente": asi la
+ *  linea nueva no hereda lo que la principal elija despues. La copia es profunda: cambiar
+ *  la lista de duenos de una no cambia la de la otra. Lo de las demas lineas, y las claves
+ *  que este codigo no conoce, quedan tal cual. */
+export function sembrarAjustesDeLinea (contenedor, cuenta, raiz) {
+  const todo = contenedor && typeof contenedor === 'object' && !Array.isArray(contenedor)
+    ? contenedor : {}
+  const previos = todo[cuenta] && typeof todo[cuenta] === 'object' && !Array.isArray(todo[cuenta])
+    ? todo[cuenta] : {}
+  const faltan = AJUSTES_DE_LINEA.filter((k) => !(k in previos))
+  if (!faltan.length) return null
+  const propios = { ...previos }
+  for (const k of faltan) {
+    const valor = raiz ? raiz[k] : undefined
+    propios[k] = valor === undefined ? null : JSON.parse(JSON.stringify(valor))
+  }
+  return { ...todo, [cuenta]: propios }
+}
+
 /** Los tipos de linea (L5). `support` es la de siempre y el tipo de toda linea existente;
  *  `personal` existe en el contrato pero queda apagado hasta la parte 2 del plan. */
 export const TIPOS_DE_LINEA = Object.freeze(['support', 'personal'])
@@ -1601,12 +1635,48 @@ export default function activate(orca) {
   }
 
   /** El numero de una linea, cada vez que su sidecar lo dice: el registro lo anota (el
-   *  panel lo muestra, y es el que se saca del almacen al desvincularla). */
+   *  panel lo muestra, y es el que se saca del almacen al desvincularla). Una linea que no
+   *  es la principal, ademas, nace con los ajustes de la principal (A4). */
   function alSaberCuenta (linea, cuenta) {
     const entrada = entradaDe(linea)
-    if (!entrada || entrada.cuenta === cuenta) return
+    if (!entrada) return
+    if (linea.carpeta !== principal()) sembrarAjustes(cuenta)
+    if (entrada.cuenta === cuenta) return
     entrada.cuenta = cuenta
     publicarRegistro().catch((error) => orca.log(`lines registry failed: ${error.message}`))
+  }
+
+  // Los ajustes propios de cada linea (ajustes-por-linea, A4). Una cadena: dos lineas que
+  // dicen su numero a la vez leerian el mismo contenedor y la segunda borraria a la primera.
+  // `sembradas` evita releer en cada reconexion lo que ya quedo completo: cada lectura gasta
+  // del cupo de mensajes del host, que es el mismo que usa el panel.
+  const sembradas = new Set()
+  let cadenaAjustes = Promise.resolve()
+  function sembrarAjustes (cuenta) {
+    if (typeof cuenta !== 'string' || !cuenta || sembradas.has(cuenta)) return cadenaAjustes
+    cadenaAjustes = cadenaAjustes.then(() => sembrarAhora(cuenta)).catch((error) =>
+      orca.log(`line settings not copied for ${cuenta}: ${error.message}`))
+    return cadenaAjustes
+  }
+  async function sembrarAhora (cuenta) {
+    if (sembradas.has(cuenta)) return
+    // Una lectura que falla no es "vacio": sin saber que hay no se escribe nada, y se
+    // vuelve a intentar la proxima vez que la linea diga su numero.
+    const leerSeguro = async (key) => (await orca.host.call('storage.get', { key }))?.value
+    const contenedor = await leerSeguro(AJUSTES_POR_LINEA_KEY)
+    const previos = contenedor && typeof contenedor === 'object' ? contenedor[cuenta] : null
+    if (previos && typeof previos === 'object' &&
+        AJUSTES_DE_LINEA.every((k) => k in previos)) {
+      sembradas.add(cuenta)
+      return
+    }
+    const raiz = {}
+    for (const k of AJUSTES_DE_LINEA) raiz[k] = await leerSeguro(k)
+    // Se relee justo antes de escribir: el panel pudo guardar algo de esta linea mientras
+    // se leia la raiz, y eso manda sobre la copia.
+    const nuevo = sembrarAjustesDeLinea(await leerSeguro(AJUSTES_POR_LINEA_KEY), cuenta, raiz)
+    if (nuevo) await orca.host.call('storage.set', { key: AJUSTES_POR_LINEA_KEY, value: nuevo })
+    sembradas.add(cuenta)
   }
 
   /** Se vinculo un numero distinto (o el primero): lo que muestran los paneles —

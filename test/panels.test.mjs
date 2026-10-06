@@ -8209,10 +8209,11 @@ console.log('\nconfig.html — L4: la tarjeta de lineas, con una sola')
     /Vincular otra linea/.test(doc.getElementById('linea-vincular').textContent))
   ok('con una sola linea no hay selector de linea en Conversaciones',
     doc.getElementById('linea-vista-fila').hidden)
-  const tipo = doc.querySelector('#linea-principal .linea-tipo')
-  ok('el tipo dice Soporte, y Personal esta apagado hasta que exista',
-    tipo?.querySelector('button[data-value="support"]')?.getAttribute('aria-pressed') === 'true' &&
-    tipo.querySelector('button[data-value="personal"]')?.disabled === true, tipo?.outerHTML)
+  // A8: el selector de Tipo no dejaba elegir nada (Soporte siempre apretado, Personal
+  // apagado). Vuelve con la parte 2, cuando Personal exista.
+  ok('no hay selector de Tipo: no dejaba elegir nada',
+    !doc.querySelector('.linea-tipo') && !/Tipo/.test(textoDe(doc, '#lineas-card')),
+    textoDe(doc, '#lineas-card'))
 }
 
 console.log('\nconfig.html — L4: la unica linea, esperando su codigo, no ofrece soltarla')
@@ -8257,8 +8258,9 @@ console.log('\nconfig.html — L4: la linea nueva espera su codigo en su propia 
     doc.getElementById('linea-vincular').disabled)
   ok('la principal no repite su codigo en la lista',
     !doc.querySelector('#lineas-lista .linea[data-carpeta="pn-573000000001"] canvas'))
-  ok('el aviso del tipo Personal se dice una vez, no en cada fila',
-    doc.getElementById('lineas-card').textContent.split('llega en una version proxima').length === 2)
+  ok('ni el selector de Tipo ni su aviso, en ninguna fila',
+    !doc.querySelector('#lineas-card .linea-tipo') &&
+    !/llega en una version proxima/.test(doc.getElementById('lineas-card').textContent))
   const cancelar = fila.querySelector('.linea-desvincular')
   ok('la que espera su codigo se cancela, no se desvincula', cancelar?.textContent === 'Cancelar',
     cancelar?.textContent)
@@ -8300,20 +8302,28 @@ console.log('\nconfig.html — L4: desvincular una linea pide confirmacion y nom
     storage.sidecarRequest.carpeta === 'pn-573000000011', JSON.stringify(storage.sidecarRequest))
 }
 
-console.log('\nconfig.html — L5: el tipo de linea viaja al worker con su carpeta')
+console.log('\nconfig.html — A8: sin selector de Tipo en ninguna fila de linea')
 {
-  // Un registro que ya dice `personal` (la parte 2): volver a Soporte es un pedido al worker.
-  const storage = { sidecar: conLineas([Object.assign({}, lineaA, { tipo: 'personal' })]) }
+  // Un registro que ya dice `personal` (la parte 2): el panel no ofrece cambiarlo, y no le
+  // pide nada al worker. El campo y la accion `tipo` del worker siguen para la parte 2.
+  const storage = { sidecar: conLineas([Object.assign({}, lineaA, { tipo: 'personal' }), lineaB]),
+    sidecars: { 'pn-573000000011': vivaDe(L_B) } }
   const { doc } = await montar('config.html', storage, 'es-419', trabajadorLineas)
   await espera()
-  doc.querySelector('.linea[data-carpeta="pn-573000000001"] .linea-tipo button[data-value="support"]').click()
-  await new Promise((r) => setTimeout(r, 2500))
-  ok('elegir Soporte le pide al worker ese tipo para esa linea',
-    storage.sidecarRequest?.action === 'tipo' && storage.sidecarRequest.tipo === 'support' &&
-    storage.sidecarRequest.carpeta === 'pn-573000000001', JSON.stringify(storage.sidecarRequest))
+  ok('ni la principal ni la otra muestran un selector de Tipo',
+    !doc.querySelector('.linea-tipo') && !doc.querySelector('#linea-principal-tipo button') &&
+    !doc.querySelector('.linea[data-carpeta="pn-573000000011"] .seg'),
+    doc.getElementById('lineas-card').innerHTML.slice(0, 400))
+  ok('y no queda el aviso de que Personal llega despues', !/Personal/.test(textoDe(doc, '#lineas-card')),
+    textoDe(doc, '#lineas-card'))
+  ok('el panel no le pide al worker ningun tipo', !storage.sidecarRequest)
   const S = doc.defaultView.STRINGS
-  const nuevas = ['linesLegend', 'linesLink', 'linesPrincipal', 'linesTypeSupport',
-    'linesTypePersonal', 'linesPersonalLater', 'linesView', 'linesLinking']
+  const fuera = ['linesType', 'linesTypeSupport', 'linesTypePersonal', 'linesTypeSaved',
+    'linesHowTypeLater', 'linesPersonalLater']
+  ok('sus textos salen de los tres idiomas',
+    fuera.every((k) => !(k in S.es) && !(k in S.en) && !(k in S.pt)),
+    fuera.filter((k) => k in S.es || k in S.en || k in S.pt).join())
+  const nuevas = ['linesLegend', 'linesLink', 'linesPrincipal', 'linesView', 'linesLinking']
   ok('los textos de las lineas existen en los tres idiomas, el portugues propio',
     nuevas.every((k) => S.es[k] && S.en[k] && S.pt[k] && S.pt[k] !== S.en[k]),
     JSON.stringify(nuevas.filter((k) => !S.es[k] || !S.en[k] || !S.pt[k] || S.pt[k] === S.en[k])))
@@ -8451,49 +8461,220 @@ console.log('\nactivity.html — L4: el tablero se filtra por linea')
     S.es.linesView && S.en.linesView && S.pt.linesView && S.pt.linesView !== S.en.linesView)
 }
 
-console.log('\nconfig.html — lineas claras: que lineas cubre cada pestana')
+console.log('\nconfig.html — lineas claras: que es de cada linea y que es del equipo')
 {
   const dos = { sidecar: conLineas([lineaA, lineaB]), sidecars: { 'pn-573000000011': vivaDe(L_B) } }
   const { doc } = await montar('config.html', dos, 'es-419')
   await espera()
-  for (const t of ['aprobacion', 'agente', 'skills', 'avanzado']) {
-    const nota = doc.querySelector(`#view-${t} .nota-lineas`)
-    ok(`${t}: con dos lineas la nota las lista, la principal primero y marcada`,
-      !!nota && !nota.hidden && nota.textContent ===
-      'Aplica a sus 2 lineas: +573000000001 (principal), +573000000011', nota?.textContent)
+  const seVeN = (n) => {
+    for (let x = n; x && x.nodeType === 1; x = x.parentElement) {
+      if (x.hidden || x.ownerDocument.defaultView.getComputedStyle(x).display === 'none') return false
+    }
+    return true
   }
-  ok('Su aprobacion dice que el aviso sale por la linea principal',
-    textoDe(doc, '#approval-main-line') === 'El aviso sale por su linea principal, +573000000001.',
+  ok('ya no hay notas de "Aplica a sus N lineas": cada pestana es de la linea elegida',
+    !doc.querySelector('.nota-lineas') && !/Aplica a sus/.test(doc.body.textContent))
+  const MAQUINA = ['routes-card', 'projects-card', 'orca-notices-card', 'jev-card',
+    'bot-account-card', 'skills-card', 'voice-card', 'reading-card']
+  const notaEn = (id) => [...doc.querySelectorAll(`#${id} .nota-maquina`)]
+  for (const id of MAQUINA) {
+    ok(`${id}: lo de la maquina lo dice donde aparece`,
+      notaEn(id).length >= 1 && notaEn(id).every((n) => !n.hidden &&
+        n.textContent === 'Vale para todas las lineas de este equipo.'),
+      notaEn(id).map((n) => `${n.hidden}:${n.textContent}`).join(' | '))
+  }
+  const PROPIAS = ['agent-card', 'owners-card', 'auto-card', 'sla-card', 'pq-card', 'scope-form']
+  ok('lo de cada linea no lleva esa nota', PROPIAS.every((id) => notaEn(id).length === 0),
+    PROPIAS.filter((id) => notaEn(id).length).join())
+  ok('los avisos de Orca dicen que salen por la principal',
+    /linea principal, \+573000000001/.test(textoDe(doc, '#orca-main-line')) &&
+    !doc.getElementById('orca-main-line').hidden, textoDe(doc, '#orca-main-line'))
+  ok('y los de los casos, por la linea que se esta viendo',
+    textoDe(doc, '#approval-main-line') ===
+      'Los avisos de los casos de esta linea salen por ella, +573000000001, a este numero.',
     textoDe(doc, '#approval-main-line'))
-  doc.getElementById('tab-chats').click()
-  await espera()
-  ok('Conversaciones dice que linea se esta viendo, y cambia al elegir la otra',
-    textoDe(doc, '#linea-vista-actual') === 'Viendo la linea +573000000001')
+  const fila = doc.getElementById('linea-vista-fila')
+  ok('el selector de linea va arriba de las pestanas, fuera de ellas',
+    !fila.hidden && !fila.closest('[role="tabpanel"]') &&
+    !!(fila.compareDocumentPosition(doc.querySelector('.tabs')) &
+      doc.defaultView.Node.DOCUMENT_POSITION_FOLLOWING) && seVeN(fila), fila.outerHTML.slice(0, 200))
+  ok('dice que linea se esta viendo', textoDe(doc, '#linea-vista-actual') === 'Viendo la linea +573000000001')
   elegirSeg(doc, 'linea-vista', L_B)
   await new Promise((r) => setTimeout(r, 300))
-  ok('y despues de elegir la otra nombra la otra',
-    textoDe(doc, '#linea-vista-actual') === 'Viendo la linea +573000000011',
-    textoDe(doc, '#linea-vista-actual'))
+  ok('y despues de elegir la otra nombra la otra, tambien en el aviso de los casos',
+    textoDe(doc, '#linea-vista-actual') === 'Viendo la linea +573000000011' &&
+    /\+573000000011/.test(textoDe(doc, '#approval-main-line')), textoDe(doc, '#linea-vista-actual'))
+  ok('desde cualquier pestana: el selector se ve en Agente', (doc.getElementById('tab-agente').click(),
+    seVeN(fila)))
   const una = await montar('config.html', { sidecar: conLineas([lineaA]) }, 'es-419')
   await espera()
-  ok('con una sola linea no hay notas ni aviso de linea principal',
-    [...una.doc.querySelectorAll('.nota-lineas')].every((n) => n.hidden) &&
-    una.doc.getElementById('approval-main-line').hidden && una.doc.getElementById('linea-vista-fila').hidden)
+  ok('con una sola linea no hay selector, ni notas de equipo, ni avisos de linea',
+    una.doc.getElementById('linea-vista-fila').hidden &&
+    [...una.doc.querySelectorAll('.nota-maquina')].every((n) => n.hidden) &&
+    una.doc.getElementById('approval-main-line').hidden && una.doc.getElementById('orca-main-line').hidden)
   const en = await montar('config.html', dos, 'en')
   await espera()
-  ok('en ingles la nota y el aviso hablan ingles',
-    textoDe(en.doc, '#view-agente .nota-lineas') === 'Applies to all 2 of your lines: +573000000001 (main), +573000000011' &&
-    /main line, \+573000000001\./.test(textoDe(en.doc, '#approval-main-line')),
-    textoDe(en.doc, '#view-agente .nota-lineas'))
+  ok('en ingles hablan ingles',
+    textoDe(en.doc, '#voice-card .nota-maquina') === 'Applies to every line on this computer.' &&
+    /main line, \+573000000001/.test(textoDe(en.doc, '#orca-main-line')),
+    textoDe(en.doc, '#voice-card .nota-maquina'))
   const pt = await montar('config.html', dos, 'pt-BR')
   await espera()
   ok('en portugues tambien',
-    textoDe(pt.doc, '#view-agente .nota-lineas') === 'Vale para as suas 2 linhas: +573000000001 (principal), +573000000011' &&
-    /linha principal, \+573000000001\./.test(textoDe(pt.doc, '#approval-main-line')),
-    textoDe(pt.doc, '#view-agente .nota-lineas'))
+    textoDe(pt.doc, '#voice-card .nota-maquina') === 'Vale para todas as linhas deste computador.' &&
+    /linha principal, \+573000000001/.test(textoDe(pt.doc, '#orca-main-line')),
+    textoDe(pt.doc, '#voice-card .nota-maquina'))
   const S = doc.defaultView.STRINGS
-  ok('las cuatro frases existen en los tres idiomas',
-    ['linesNote', 'linesMainTag', 'linesApprovalFrom', 'linesViewing'].every((k) => S.es[k] && S.en[k] && S.pt[k]))
+  const claves = ['machineNote', 'orcaMainLine', 'linesApprovalFrom', 'linesViewing', 'linesView',
+    'linesViewHelp']
+  ok('las frases existen en los tres idiomas, el portugues propio',
+    claves.every((k) => S.es[k] && S.en[k] && S.pt[k] && S.pt[k] !== S.en[k]),
+    claves.filter((k) => !S.es[k] || !S.en[k] || !S.pt[k] || S.pt[k] === S.en[k]).join())
+}
+
+// ───────── A5: los ajustes de cada linea (odd/tasks/ajustes-por-linea.md) ─────────
+// La principal guarda sus ajustes en la raiz, como siempre; cada otra linea, en
+// `ajustesPorLinea[<numero>]`. El selector de arriba manda en todas las pestanas.
+const DUENO_A = { id: '100000000000001@lid', name: 'Dueno Principal' }
+const DUENO_B = { id: '100000000000002@lid', name: 'Dueno Segunda' }
+const G_LINEAS = '120363000000000001@g.us'
+function dosLineasConAjustes () {
+  return {
+    sidecar: conLineas([lineaA, lineaB]), sidecars: { 'pn-573000000011': vivaDe(L_B) },
+    chatsAccount: L_A, chats: [{ jid: G_LINEAS, name: 'Soporte', kind: 'grupo' }],
+    scope: { [G_LINEAS]: { chatName: 'Soporte', mode: 'responder', account: L_A } },
+    agentName: 'Agente Principal', ownerName: 'Ana', tone: 'Tono de la principal',
+    owners: [DUENO_A], approvalNumber: DUENO_A.id, approvalLang: 'es', ackMode: 'on',
+    ackText: 'Recibido en la principal', ackQuietMinutes: '12', inboxDays: '7',
+    syncMinutes: '10', transcribeLang: 'es', slaMinutes: '15',
+    senders: [{ id: '111122225555@lid', name: 'Remitente Principal', chats: ['Soporte'] }],
+    groupMembers: { [G_LINEAS]: [{ id: '111122224444@lid', name: 'Miembro Principal' }] },
+    alcancePorLinea: { [L_B]: { [G_LINEAS]: { chatName: 'Soporte', mode: 'observar', account: L_B } } },
+    porLinea: { [L_B]: { chats: [{ jid: G_LINEAS, name: 'Soporte', kind: 'grupo' }],
+      chatsAccount: L_B,
+      senders: [{ id: '111122226666@lid', name: 'Remitente Segunda', chats: ['Ventas'] }],
+      groupMembers: { [G_LINEAS]: [{ id: '111122223333@lid', name: 'Miembro Segunda' }] } } },
+    ajustesPorLinea: {
+      [L_B]: { agentName: 'Agente Segunda', ownerName: 'Berta', tone: 'Tono de la segunda',
+        owners: [DUENO_B], approvalNumber: DUENO_B.id, approvalLang: 'en', ackMode: 'off',
+        ackText: 'Recibido en la segunda', inboxDays: '1', transcribeLang: 'en', slaMinutes: '45' },
+      'pn:573000000013': { agentName: 'Agente Ajeno', claveFutura: 1 } }
+  }
+}
+
+console.log('\nconfig.html — A5: cada linea muestra y guarda sus propios ajustes')
+{
+  const storage = dosLineasConAjustes()
+  const { doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  doc.getElementById('tab-agente').click()
+  await espera()
+  const campo = (id) => doc.getElementById(id).value
+  ok('en la principal, Agente muestra lo de la raiz',
+    campo('agent') === 'Agente Principal' && campo('tone') === 'Tono de la principal' &&
+    campo('owner') === 'Ana', `${campo('agent')} / ${campo('tone')}`)
+  elegirSeg(doc, 'linea-vista', L_B)
+  await new Promise((r) => setTimeout(r, 300))
+  ok('en la otra linea, Agente muestra lo de ESA linea',
+    campo('agent') === 'Agente Segunda' && campo('tone') === 'Tono de la segunda' &&
+    campo('owner') === 'Berta', `${campo('agent')} / ${campo('tone')} / ${campo('owner')}`)
+  doc.getElementById('tab-avanzado').click()
+  await espera()
+  ok('Avanzado: los dias y el idioma son de esa linea, el ritmo es del equipo',
+    valorSeg(doc, 'inbox-days') === '1' && valorSeg(doc, 'lang') === 'en' &&
+    valorSeg(doc, 'sync-minutes') === '10',
+    `${valorSeg(doc, 'inbox-days')} ${valorSeg(doc, 'lang')} ${valorSeg(doc, 'sync-minutes')}`)
+
+  doc.getElementById('tab-agente').click()
+  await espera()
+  escribir(doc, 'agent', 'Agente Nuevo')
+  doc.getElementById('save-agent').click()
+  await new Promise((r) => setTimeout(r, 500))
+  const propios = () => storage.ajustesPorLinea[L_B]
+  ok('guardar el agente en la otra linea escribe solo en lo de ESA linea',
+    propios().agentName === 'Agente Nuevo' && propios().tone === 'Tono de la segunda' &&
+    storage.agentName === 'Agente Principal' && storage.tone === 'Tono de la principal',
+    JSON.stringify({ propios: propios(), raiz: storage.agentName }))
+  ok('sin tocar lo demas de esa linea ni lo de las otras',
+    propios().approvalNumber === DUENO_B.id && propios().ackMode === 'off' &&
+    JSON.stringify(storage.ajustesPorLinea['pn:573000000013']) ===
+      '{"agentName":"Agente Ajeno","claveFutura":1}', JSON.stringify(storage.ajustesPorLinea))
+  ok('y queda mostrando lo que quedo guardado', campo('agent') === 'Agente Nuevo' &&
+    /Guardado/.test(textoDe(doc, '#said-agent')), textoDe(doc, '#said-agent'))
+
+  doc.getElementById('tab-aprobacion').click()
+  await new Promise((r) => setTimeout(r, 300))
+  ok('Su aprobacion en la otra linea: sus numeros y su numero de aprobacion',
+    /Dueno Segunda/.test(textoDe(doc, '#owners-wrap')) && !/Dueno Principal/.test(textoDe(doc, '#owners-wrap')) &&
+    valorSeg(doc, 'approval-number') === DUENO_B.id, textoDe(doc, '#owners-wrap'))
+  ok('y sus respuestas automaticas; lo que no tiene propio es lo de la principal',
+    valorSeg(doc, 'ack-mode') === 'off' && campo('ack-text') === 'Recibido en la segunda' &&
+    campo('ack-quiet') === '12' && campo('sla-minutes') === '45',
+    `${valorSeg(doc, 'ack-mode')} ${campo('ack-text')} ${campo('ack-quiet')} ${campo('sla-minutes')}`)
+  escribir(doc, 'owner-search', 'remitente')
+  const ofrecidos = opcionesCombo(doc, 'owner-list').map((o) => o.textContent).join(' | ')
+  ok('los numeros que ofrece son los que escribieron en ESA linea',
+    /Remitente Segunda/.test(ofrecidos) && !/Remitente Principal/.test(ofrecidos), ofrecidos)
+  doc.getElementById('ack-text').value = 'Texto nuevo de la segunda'
+  doc.getElementById('ack-text').dispatchEvent(evento(doc, 'input'))
+  doc.getElementById('save-auto').click()
+  await new Promise((r) => setTimeout(r, 500))
+  ok('guardar las respuestas automaticas en la otra linea no toca las de la principal',
+    propios().ackText === 'Texto nuevo de la segunda' && storage.ackText === 'Recibido en la principal' &&
+    propios().agentName === 'Agente Nuevo', JSON.stringify(propios()))
+  doc.querySelector(`#owners-wrap [data-orm="${DUENO_B.id}"]`).click()
+  doc.getElementById('save-owners').click()
+  await new Promise((r) => setTimeout(r, 500))
+  ok('guardar los numeros en la otra linea los guarda en ESA, con su idioma',
+    JSON.stringify(propios().owners) === '[]' && propios().approvalNumber === '' &&
+    propios().approvalLang === 'es' && storage.owners[0].id === DUENO_A.id &&
+    storage.approvalNumber === DUENO_A.id, JSON.stringify(propios()))
+
+  doc.getElementById('tab-chats').click()
+  await espera()
+  doc.querySelector(`#scope-wrap [data-edit="${G_LINEAS}"]`).click()
+  await new Promise((r) => setTimeout(r, 300))
+  const gente = textoDe(doc, '#people-list')
+  ok('las personas de un grupo son las de ESA linea', /Miembro Segunda/.test(gente) &&
+    !/Miembro Principal/.test(gente), gente)
+
+  elegirSeg(doc, 'linea-vista', L_A)
+  await new Promise((r) => setTimeout(r, 300))
+  doc.getElementById('tab-agente').click()
+  await espera()
+  ok('volver a la principal muestra otra vez lo de la raiz',
+    campo('agent') === 'Agente Principal' && campo('tone') === 'Tono de la principal', campo('agent'))
+}
+
+console.log('\nconfig.html — A5: si la otra linea no contesta, no se ven los ajustes de la principal')
+{
+  const storage = dosLineasConAjustes()
+  let callado = true
+  const gancho = (d) => (callado && d.action === 'storage.get' && d.params.key === 'ajustesPorLinea')
+    ? { ok: false, errorCode: 'rate_limited', error: 'Too many requests.' } : undefined
+  const { doc } = await montar('config.html', storage, 'es-419', gancho)
+  await espera()
+  doc.getElementById('tab-agente').click()
+  await espera()
+  ok('en la principal se ve lo de la raiz', doc.getElementById('agent').value === 'Agente Principal')
+  elegirSeg(doc, 'linea-vista', L_B)
+  await new Promise((r) => setTimeout(r, 300))
+  const tarjeta = doc.getElementById('agent-card')
+  ok('mirando la otra linea sin respuesta: la tarjeta dice que esta leyendo',
+    tarjeta.classList.contains('sin-leer') && /Leyendo/i.test(textoDe(doc, '#agent-card .leyendo')),
+    tarjeta.className)
+  ok('y nunca queda el valor de la principal en sus campos',
+    doc.getElementById('agent').value !== 'Agente Principal' &&
+    doc.getElementById('tone').value !== 'Tono de la principal', doc.getElementById('agent').value)
+  doc.getElementById('save-agent').click()
+  await espera()
+  ok('y su Guardar no escribe nada', !('agentName' in (storage.ajustesPorLinea[L_B] || {})) ||
+    storage.ajustesPorLinea[L_B].agentName === 'Agente Segunda')
+  callado = false
+  await new Promise((r) => setTimeout(r, 3800))
+  ok('cuando el host contesta, aparece lo de ESA linea, sola la lectura que faltaba',
+    doc.getElementById('agent').value === 'Agente Segunda' && !tarjeta.classList.contains('sin-leer'),
+    doc.getElementById('agent').value)
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
