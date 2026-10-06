@@ -33,7 +33,8 @@
 // nuevo— y pasa cada `nueva-...` ya vinculada a la carpeta de su numero. Mueve carpetas,
 // asi que el worker lo pide SOLO antes de lanzar ningun sidecar: mover la carpeta de un
 // sidecar vivo lo deja escribiendo su credencial en una ruta que ya no existe.
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync,
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync,
+  renameSync, rmSync,
   statSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -80,21 +81,29 @@ function esCarpeta (ruta) {
   try { return statSync(ruta).isDirectory() } catch { return false }
 }
 
-/** El auth state plano de antes (`wa-auth/creds.json`) a la carpeta de su numero. Archivo
- *  por archivo y `creds.json` el ULTIMO: si esto se corta a mitad, el `creds.json` que
- *  sigue suelto hace que la proxima vez se termine de mudar. */
+/** El auth state plano de antes (`wa-auth/creds.json`) a la carpeta de su numero.
+ *
+ *  Primero se COPIA todo, y recien con la copia completa se borra lo de antes, `creds.json`
+ *  el ULTIMO. Una mudanza que falla a mitad de la copia deja `wa-auth/` entero, tal cual
+ *  estaba (la version anterior del plugin lo sigue usando, sin QR nuevo), y una que se corta
+ *  a mitad del borrado deja el `creds.json` suelto, que hace que la proxima vez se termine:
+ *  la copia de nuevo pisa lo copiado con los mismos bytes, porque ningun sidecar corrio en
+ *  el medio (el worker no lanza nada si esto falla). El destino de un vinculo a medias (sin
+ *  `me`) es siempre el mismo, para que un reintento no deje carpetas sueltas. */
 function mudarPlano (base) {
   const creds = join(base, 'creds.json')
   if (!existsSync(creds)) return null
   const cuenta = cuentaDeCreds(creds)
-  const destino = cuenta ? carpetaDeCuenta(cuenta) : `${PREFIJO_NUEVA}${Date.now().toString(36)}`
+  const destino = cuenta ? carpetaDeCuenta(cuenta) : `${PREFIJO_NUEVA}plano`
   const hacia = join(base, destino)
   mkdirSync(hacia, { recursive: true, mode: 0o700 })
-  for (const nombre of readdirSync(base)) {
-    if (nombre === 'creds.json' || esCarpeta(join(base, nombre))) continue
-    renameSync(join(base, nombre), join(hacia, nombre))
+  const archivos = readdirSync(base).filter((nombre) => !esCarpeta(join(base, nombre)))
+    .sort((a, b) => (a === 'creds.json') - (b === 'creds.json'))
+  for (const nombre of archivos) {
+    copyFileSync(join(base, nombre), join(hacia, nombre))
+    chmodSync(join(hacia, nombre), statSync(join(base, nombre)).mode & 0o777)
   }
-  renameSync(creds, join(hacia, 'creds.json'))
+  for (const nombre of archivos) rmSync(join(base, nombre), { force: true })
   return destino
 }
 

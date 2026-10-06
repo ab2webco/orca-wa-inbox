@@ -1740,6 +1740,108 @@ console.log('\nworker: L1 — cada linea en su carpeta, y la de siempre se muda 
     JSON.stringify(d))
 }
 
+// ───────── v4.22.0: la mudanza que se corta a mitad no pierde nada ─────────
+// La mudanza del auth state plano se puede cortar (un disco lleno, un permiso, Orca que se
+// cierra). Lo que no puede pasar es quedar con la credencial partida en dos carpetas: se
+// COPIA todo primero y recien despues se borra lo de antes, `creds.json` al final. Una
+// mudanza que falla deja `wa-auth/` entero, tal cual estaba, y la siguiente la termina.
+console.log('\nworker: v4.22.0 — la mudanza cortada a mitad deja wa-auth/ entero')
+{
+  const casa = join(RAIZ, 'home-mudanza')
+  for (const b of [join(casa, 'Library', 'Application Support'), join(casa, '.config'),
+    join(casa, 'AppData', 'Roaming')]) mkdirSync(join(b, 'orca'), { recursive: true })
+  const entorno = { ...process.env, HOME: casa, XDG_CONFIG_HOME: join(casa, '.config'),
+    APPDATA: join(casa, 'AppData', 'Roaming') }
+  const guion = join(PLUGIN_DIR, 'sidecar', 'resolve-auth-dir.mjs')
+  const correr = (args) => new Promise((resolve) => {
+    execFileNode(process.execPath, [guion, PLUGIN_DIR, ...args], { env: entorno },
+      (error, stdout) => { let s = null; try { s = JSON.parse(stdout || 'null') } catch {} resolve(s) })
+  })
+  const base = (await correr([])).dir
+  mkdirSync(base, { recursive: true })
+  const archivos = {
+    'creds.json': JSON.stringify({ me: { id: '573000000001:7@s.whatsapp.net' } }),
+    'pre-key-1.json': '{"llave":"uno"}',
+    'pre-key-2.json': '{"llave":"dos"}',
+    'session-573000000002.0.json': '{"sesion":"de-prueba"}'
+  }
+  for (const [n, texto] of Object.entries(archivos)) writeFileSync(join(base, n), texto)
+  const carpeta = join(base, 'pn-573000000001')
+  // Algo en el destino que no deja escribir un archivo: la mudanza falla en el medio.
+  mkdirSync(join(carpeta, 'pre-key-2.json'), { recursive: true })
+  const fallida = await correr(['--lineas'])
+  ok('la mudanza que no puede terminar lo dice con su motivo y no lanza nada',
+    fallida?.ok === false && fallida.reason === 'lineas-fallo', JSON.stringify(fallida))
+  ok('y wa-auth/ queda ENTERO, byte a byte: la version de antes la sigue usando tal cual',
+    Object.entries(archivos).every(([n, t]) => existsSync(join(base, n)) &&
+      readFileSync(join(base, n), 'utf8') === t), readdirSync(base).join(','))
+  rmSync(join(carpeta, 'pre-key-2.json'), { recursive: true, force: true })
+  const lista = await correr(['--lineas'])
+  ok('la siguiente vez termina: todo en la carpeta de su numero, nada perdido ni suelto',
+    lista?.ok === true && lista.lineas?.[0]?.carpeta === 'pn-573000000001' &&
+    Object.entries(archivos).every(([n, t]) => readFileSync(join(carpeta, n), 'utf8') === t &&
+      !existsSync(join(base, n))), JSON.stringify(lista))
+}
+
+// ───────── v4.22.0: con una sola linea, todo como antes ─────────
+// La version va a todos: quien tiene una sola linea sigue con ella conectada, sin QR, y el
+// panel lee lo mismo que antes en `sidecar` (con la lista de lineas adentro), sin estados
+// de otras lineas.
+console.log('\nworker: v4.22.0 — una sola linea sigue conectada, sin QR y como antes')
+{
+  const homeAntes = process.env.HOME
+  const xdgAntes = process.env.XDG_CONFIG_HOME
+  const appAntes = process.env.APPDATA
+  const casa = join(RAIZ, 'home-una-linea')
+  process.env.HOME = casa
+  process.env.XDG_CONFIG_HOME = join(casa, '.config')
+  process.env.APPDATA = join(casa, 'AppData', 'Roaming')
+  for (const b of [join(casa, 'Library', 'Application Support'), process.env.XDG_CONFIG_HOME,
+    process.env.APPDATA]) mkdirSync(join(b, 'orca'), { recursive: true })
+  try {
+    const base = dataDir(PLUGIN_DIR, 'wa-auth')
+    mkdirSync(base, { recursive: true })
+    const creds = JSON.stringify({ me: { id: '573000000001:7@s.whatsapp.net' } })
+    writeFileSync(join(base, 'creds.json'), creds)
+    const vidas = join(RAIZ, 'vidas-una-linea.txt')
+    const guion = join(RAIZ, 'sidecar-una-linea.cjs')
+    writeFileSync(guion,
+      '#!/usr/bin/env node\n' +
+      'const fs = require("node:fs")\n' +
+      'const path = require("node:path")\n' +
+      'const dir = process.env.WA_SIDECAR_AUTH_DIR\n' +
+      'fs.appendFileSync(' + JSON.stringify(vidas) + ', JSON.stringify({ dir, sec: ' +
+      'process.env.WA_SIDECAR_LINEA_SECUNDARIA || "", previa: process.env.WA_SIDECAR_CUENTA_PREVIA || "" }) + "\\n")\n' +
+      'function emit (m) { process.stdout.write(JSON.stringify(m) + "\\n") }\n' +
+      'const me = JSON.parse(fs.readFileSync(path.join(dir, "creds.json"), "utf8")).me.id\n' +
+      'emit({ type: "connection", state: "open" })\n' +
+      'emit({ type: "linea", cuenta: "pn:" + me.split(":")[0], cambio: false, ts: Date.now() })\n' +
+      'setInterval(() => {}, 1000)\n', { mode: 0o755 })
+    const orca = hostFalso(herramientas('una-linea', '#!/bin/sh\necho \'[]\'\n'), {}, guion)
+    const { apagar } = await arranca(orca)
+    await hasta(() => orca.store.sidecar?.connection === 'open' && orca.store.sidecar?.cuenta, 15000)
+    const leidas = existsSync(vidas)
+      ? readFileSync(vidas, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []
+    ok('un solo sidecar, como principal, desde la carpeta de su numero, con su credencial',
+      leidas.length === 1 && leidas[0].dir === join(base, 'pn-573000000001') &&
+      leidas[0].sec === '' && leidas[0].previa === '' &&
+      readFileSync(join(base, 'pn-573000000001', 'creds.json'), 'utf8') === creds,
+      JSON.stringify(leidas))
+    ok('conectado y sin QR, en la misma clave de siempre',
+      orca.store.sidecar.connection === 'open' && !orca.store.sidecar.qr &&
+      orca.store.sidecar.cuenta === 'pn:573000000001', JSON.stringify(orca.store.sidecar))
+    ok('sin estados de otras lineas: el panel no lee nada mas de lo que leia',
+      JSON.stringify(orca.store.sidecars ?? {}) === '{}' &&
+      (orca.store.sidecar.lineas || []).length === 1, JSON.stringify(orca.store.sidecars))
+    apagar()
+    await dormir(500)
+  } finally {
+    process.env.HOME = homeAntes
+    process.env.XDG_CONFIG_HOME = xdgAntes
+    process.env.APPDATA = appAntes
+  }
+}
+
 // ───────── L2: un sidecar por linea, cada uno con su salud y su reinicio ─────────
 // De punta a punta con el resolvedor de verdad: la linea de siempre (auth plano) se muda a
 // su carpeta y arranca como la principal, la otra arranca a su lado como secundaria, una
