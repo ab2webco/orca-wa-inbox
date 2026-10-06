@@ -24,7 +24,7 @@ import { crearAccionesCaso } from './acciones.mjs'
 import {
   CUENTAS_ACCION, crearAjustadorRitmo, crearEncendedor, crearLanzadorTriage, crearListaCuentas
 } from './agente.mjs'
-import { crearCatalogo, leerCatalogo, PROJECTS_KEY } from './catalogo.mjs'
+import { crearCatalogo, curarCatalogo, leerCatalogo, PROJECTS_KEY } from './catalogo.mjs'
 import { SKILLS_ACCION, SKILLS_STATUS_KEY, SKILLS_VEREDICTO } from './skills.mjs'
 import { AVISO_PLAZO_MS, crearAvisosOrca } from './avisos-orca.mjs'
 
@@ -1409,7 +1409,20 @@ export default function activate(orca) {
     return siembra
   }
   let primeraSiembra = true
-  resembrar()
+  // Antes de la primera siembra: si el catalogo se perdio del storage, vuelve del espejo
+  // de wa-scope y PROJECTS.md nace con los proyectos de verdad, no con "ninguno".
+  curarCatalogo({
+    leerCrudo: () => orca.host.call('storage.get', { key: PROJECTS_KEY })
+      .then((r) => ({ ok: true, value: r?.value }), () => ({ ok: false })),
+    espejo: async () => {
+      const { stdout } = await run(join(await dirHerramientas(), 'wa-scope'),
+        ['projects', '--json'], { timeoutMs: 15000 })
+      return JSON.parse(stdout || 'null')
+    },
+    guardar: (k, v) => guardar(orca, k, v),
+    log: (m) => orca.log(m)
+  }).catch((error) => orca.log(`projects catalog check failed: ${error.message}`))
+    .then(() => resembrar())
 
   // El sidecar de Baileys (T3): el UNICO transporte de esta rebanada. El directorio de
   // auth se resuelve en un subproceso -mismo motivo que el arnes, arriba: el worker no

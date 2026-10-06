@@ -1252,6 +1252,7 @@
           linesMainTag: '(principal)',
           linesApprovalFrom: 'El aviso sale por su linea principal, {num}.',
           linesViewing: 'Viendo la linea {num}',
+          linesViewLoading: 'Leyendo la linea {num}…',
           linesView: 'Linea',
           linesHowNoLines: 'Todavia no se sabe donde viven las lineas: espere a que el ' +
             'plugin termine de arrancar y pruebe otra vez.',
@@ -1841,6 +1842,7 @@
           linesMainTag: '(main)',
           linesApprovalFrom: 'The notice goes out through your main line, {num}.',
           linesViewing: 'Viewing line {num}',
+          linesViewLoading: 'Reading line {num}…',
           linesView: 'Line',
           linesHowNoLines: 'It is not known yet where the lines live: wait for the plugin ' +
             'to finish starting and try again.',
@@ -2397,6 +2399,7 @@
           linesMainTag: '(principal)',
           linesApprovalFrom: 'O aviso sai pela sua linha principal, {num}.',
           linesViewing: 'Vendo a linha {num}',
+          linesViewLoading: 'Lendo a linha {num}…',
           linesView: 'Linha',
         linesHowNoLines: 'Ainda nao se sabe onde ficam as linhas: espere o plugin terminar ' +
           'de iniciar e tente de novo.',
@@ -6804,7 +6807,39 @@
         lineaVista = nueva
         resetScopeForm()
         renderVistaLineas()
+        if (nueva) pintarLeyendoLinea(nueva)
         reload()
+      }
+
+      // Lo que se ve mientras la otra linea no contesto: nunca la lista de la que se
+      // dejo de mirar. Con el cupo del host lleno, la lectura de la otra linea puede no
+      // llegar en la vuelta del clic, y lo que quedaba pintado se leia como de ESTA.
+      var reintentoVista = null
+      function pintarLeyendoLinea (cuenta) {
+        var l = lineasVinculadas().filter(function (x) { return x.cuenta === cuenta })[0]
+        var num = l ? numeroDeLinea(l, estadoDeLinea(l)) : cuenta
+        alcancePorJid = {}
+        el('scope-wrap').innerHTML = '<p class="empty">' + esc(fmt('linesViewLoading', { num: num })) + '</p>'
+      }
+      /** Vuelve a pedir SOLO lo de la otra linea hasta que conteste: pedir la vuelta
+       *  entera otra vez es justo lo que llena el cupo. */
+      function reintentarVistaDeLinea (cuenta, intentos) {
+        clearTimeout(reintentoVista)
+        if (intentos <= 0) return
+        reintentoVista = setTimeout(function () {
+          if (otraLineaVista() !== cuenta) return
+          Promise.all([read('alcancePorLinea', true), read('porLinea', true)]).then(function (rs) {
+            if (otraLineaVista() !== cuenta) return
+            var alcance = delOtraLinea(rs[0], cuenta)
+            if (!hayRespuesta(alcance)) return reintentarVistaDeLinea(cuenta, intentos - 1)
+            cuentaVinculada = cuenta
+            var cuentaChats = delOtraLinea(rs[1], cuenta, 'chatsAccount')
+            if (hayRespuesta(cuentaChats)) chatsCuenta = cuentaChats
+            renderScope(alcance)
+            var chatsLinea = delOtraLinea(rs[1], cuenta, 'chats')
+            if (hayRespuesta(chatsLinea)) renderChats(chatsLinea)
+          })
+        }, 1000)
       }
 
       // ---------- carga y refresco ----------
@@ -6892,6 +6927,10 @@
             if (hayRespuesta(v('projectsStatus'))) renderProposals(v('projectsStatus'))
             var alcanceVisto = otra ? delOtraLinea(v('alcancePorLinea'), otra) : v('scope')
             if (hayRespuesta(alcanceVisto)) renderScope(alcanceVisto)
+            else if (otra) {
+              pintarLeyendoLinea(otra)
+              reintentarVistaDeLinea(otra, 30)
+            }
             pintarClave('tone', v('tone'), sello)
             pintarClave('transcribeQuality', v('transcribeQuality'), sello)
             pintarClave('inboxDays', v('inboxDays'), sello)

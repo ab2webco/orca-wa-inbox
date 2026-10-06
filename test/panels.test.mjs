@@ -8372,6 +8372,35 @@ console.log('\nconfig.html — L4: Conversaciones se ven y se guardan por linea'
     storage.scopeRequest.linea === L_B, JSON.stringify(storage.scopeRequest))
 }
 
+console.log('\nconfig.html — L4: si la otra linea no contesta, no se ve la lista de la primera')
+{
+  const G1 = '120363000000000001@g.us'
+  const storage = { sidecar: conLineas([lineaA, lineaB]),
+    sidecars: { 'pn-573000000011': vivaDe(L_B) }, chatsAccount: L_A, chats: [],
+    scope: { [G1]: { chatName: 'Soporte Principal', mode: 'responder', account: L_A } },
+    alcancePorLinea: { [L_B]: { [G1]: { chatName: 'Soporte Segunda', mode: 'observar',
+      account: L_B } } },
+    porLinea: { [L_B]: { chats: [], chatsAccount: L_B } } }
+  // El host con el cupo lleno: la lectura de la otra linea no se contesta.
+  let callado = true
+  const gancho = (d) => (callado && d.action === 'storage.get' &&
+    (d.params.key === 'alcancePorLinea' || d.params.key === 'porLinea')) ? { ok: false } : undefined
+  const { doc } = await montar('config.html', storage, 'es-419', gancho)
+  await espera()
+  doc.getElementById('tab-chats').click()
+  await espera()
+  const lista = () => doc.getElementById('scope-wrap').textContent
+  elegirSeg(doc, 'linea-vista', L_B)
+  await new Promise((r) => setTimeout(r, 300))
+  ok('mirando la otra linea, nunca queda la lista de la principal',
+    !/Soporte Principal/.test(lista()), lista())
+  ok('y dice que la esta leyendo', /Leyendo/.test(lista()), lista())
+  callado = false
+  await new Promise((r) => setTimeout(r, 3500))
+  ok('cuando el host contesta, aparece lo de ESA linea sola',
+    /Soporte Segunda/.test(lista()) && !/Soporte Principal/.test(lista()), lista())
+}
+
 console.log('\nactivity.html — L4: el tablero se filtra por linea')
 {
   const storage = { sidecar: conLineas([lineaA, lineaB]),

@@ -351,3 +351,36 @@ export function crearCatalogo ({ orca, leer, guardar, correr, motivoDe, resembra
     }
   }
 }
+
+/**
+ * Repone el catalogo cuando la clave desaparecio del storage y wa-scope todavia tiene su
+ * espejo (`project` en scope.db). Un storage que el host rehizo desde cero pierde lo que
+ * solo escribe un clic del dueno, y `projects` es eso: sin esto el panel muestra "ya no
+ * esta en la lista" para proyectos que el dueno nunca quito.
+ *
+ * Solo con la clave AUSENTE y con el host contestando: una lista vacia es una decision
+ * del dueno, y un host que no contesta no dice nada de lo que hay.
+ *
+ * @param {{ leerCrudo: () => Promise<{ ok: boolean, value?: unknown }>,
+ *           espejo: () => Promise<unknown>,
+ *           guardar: (key: string, value: unknown) => Promise<unknown>,
+ *           log: (m: string) => void }} deps
+ * @returns {Promise<{ accion: 'sin-respuesta' | 'presente' | 'sin-espejo' | 'vacio' | 'repuesto',
+ *                     proyectos?: number }>}
+ */
+export async function curarCatalogo ({ leerCrudo, espejo, guardar, log }) {
+  const leido = await leerCrudo()
+  if (!leido || !leido.ok) return { accion: 'sin-respuesta' }
+  if (Array.isArray(leido.value)) return { accion: 'presente' }
+  let lista
+  try {
+    lista = leerCatalogo(await espejo())
+  } catch (error) {
+    log(`projects catalog missing and the wa-scope mirror failed: ${String(error?.message ?? error).slice(0, 160)}`)
+    return { accion: 'sin-espejo' }
+  }
+  if (!lista.length) return { accion: 'vacio' }
+  await guardar(PROJECTS_KEY, lista)
+  log(`projects catalog was missing from storage; restored ${lista.length} from the wa-scope mirror`)
+  return { accion: 'repuesto', proyectos: lista.length }
+}

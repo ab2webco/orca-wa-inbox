@@ -3477,6 +3477,36 @@ console.log('\nworker: el catalogo deriva propuestas de `orca worktree ps` sin i
 }
 
 // ───────── el catalogo en el worker: el panel pide, Orca contesta, el dueno decide ─────────
+console.log('\nworker: un catalogo que desaparecio del storage vuelve del espejo de wa-scope')
+{
+  const { curarCatalogo } = await import('../catalogo.mjs')
+  const espejo = [{ id: 'alfa-demo', name: 'Alfa Demo', path: '/srv/ejemplo/alfa-demo', note: '' }]
+  const guardados = []
+  const guardar = async (k, v) => { guardados.push([k, v]) }
+  const log = () => {}
+  let r = await curarCatalogo({ leerCrudo: async () => ({ ok: true, value: undefined }),
+    espejo: async () => espejo, guardar, log })
+  ok('sin la clave, repone la lista que wa-scope todavia tiene',
+    r.accion === 'repuesto' && r.proyectos === 1 && guardados.length === 1 &&
+    guardados[0][0] === 'projects' && guardados[0][1][0].id === 'alfa-demo', JSON.stringify([r, guardados]))
+  guardados.length = 0
+  r = await curarCatalogo({ leerCrudo: async () => ({ ok: true, value: [] }),
+    espejo: async () => espejo, guardar, log })
+  ok('una lista vacia que el dueno dejo asi no se toca', r.accion === 'presente' && !guardados.length,
+    JSON.stringify(r))
+  r = await curarCatalogo({ leerCrudo: async () => ({ ok: false }),
+    espejo: async () => espejo, guardar, log })
+  ok('si el host no contesta, no se escribe nada', r.accion === 'sin-respuesta' && !guardados.length,
+    JSON.stringify(r))
+  r = await curarCatalogo({ leerCrudo: async () => ({ ok: true, value: null }),
+    espejo: async () => [], guardar, log })
+  ok('sin nada en el espejo tampoco', r.accion === 'vacio' && !guardados.length, JSON.stringify(r))
+  r = await curarCatalogo({ leerCrudo: async () => ({ ok: true, value: null }),
+    espejo: async () => { throw new Error('wa-scope no arranco') }, guardar, log })
+  ok('un espejo que falla no tumba la activacion', r.accion === 'sin-espejo' && !guardados.length,
+    JSON.stringify(r))
+}
+
 console.log('\nworker: el catalogo de proyectos se refresca, se acepta y llega al arnes')
 {
   const { comandoOrca } = await import('../catalogo.mjs')
