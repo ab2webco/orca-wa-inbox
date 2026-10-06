@@ -12141,7 +12141,8 @@ def main():
     s = add("voice", help="tone, instructions, provider and permission of a conversation")
     s.add_argument("chat", nargs="?"); s.set_defaults(fn=cmd_voice)
 
-    s = add("route", help="destination rules by content; the chat is only the fallback")
+    s = add("route", help="destination rules by content; the chat is only the fallback. "
+                          "Each line has its own rules (--line)")
     s.add_argument("--match", help="text that has to appear in the message")
     s.add_argument("--provider", choices=list(PROVIDERS)); s.add_argument("--target")
     s.add_argument("--workspace", metavar="PROJECT",
@@ -12150,7 +12151,7 @@ def main():
     s.set_defaults(fn=cmd_route)
 
     add("projects", help="the projects the owner accepted in the plugin settings: "
-                         "id, name, path and what each is for"
+                         "id, name, path and what each is for. Each line has its own (--line)"
         ).set_defaults(fn=cmd_projects)
 
     add("owner", help="the owner's chat, from the settings: where an agent of any project "
