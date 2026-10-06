@@ -1902,7 +1902,8 @@ console.log('\nworker: L2 — un sidecar por linea, y cada pedido toca solo la s
     const orca = hostFalso(herramientas('varias', '#!/bin/sh\necho \'[]\'\n'), {}, guion)
     const { apagar } = await arranca(orca)
     await hasta(() => vidasDe('pn-573000000001').length >= 2 && vidasDe('pn-573000000002').length >= 1 &&
-      orca.store.sidecars?.['pn-573000000001']?.connection === 'open', 20000)
+      orca.store.sidecars?.['pn-573000000001']?.connection === 'open' &&
+      orca.store.sidecars?.['pn-573000000001']?.cuenta === 'pn:573000000001', 20000)
 
     const principal = vidasDe('pn-573000000002')
     ok('la linea de siempre arranca desde SU carpeta, con la misma credencial: sin QR nuevo',
