@@ -8475,7 +8475,7 @@ console.log('\nconfig.html — lineas claras: que es de cada linea y que es del 
   ok('ya no hay notas de "Aplica a sus N lineas": cada pestana es de la linea elegida',
     !doc.querySelector('.nota-lineas') && !/Aplica a sus/.test(doc.body.textContent))
   const MAQUINA = ['routes-card', 'projects-card', 'jev-card',
-    'skills-card', 'voice-card', 'reading-card']
+    'skills-card', 'reading-card']
   const notaEn = (id) => [...doc.querySelectorAll(`#${id} .nota-maquina`)]
   for (const id of MAQUINA) {
     ok(`${id}: lo de la maquina lo dice donde aparece`,
@@ -8484,7 +8484,7 @@ console.log('\nconfig.html — lineas claras: que es de cada linea y que es del 
       notaEn(id).map((n) => `${n.hidden}:${n.textContent}`).join(' | '))
   }
   const PROPIAS = ['agent-card', 'owners-card', 'auto-card', 'sla-card', 'pq-card', 'scope-form',
-    'orca-notices-card', 'bot-account-card']
+    'orca-notices-card', 'bot-account-card', 'voice-card']
   ok('lo de cada linea no lleva esa nota', PROPIAS.every((id) => notaEn(id).length === 0),
     PROPIAS.filter((id) => notaEn(id).length).join())
   ok('los avisos de Orca dicen que salen por la linea que se mira, a su numero',
@@ -8518,15 +8518,15 @@ console.log('\nconfig.html — lineas claras: que es de cada linea y que es del 
   const en = await montar('config.html', dos, 'en')
   await espera()
   ok('en ingles hablan ingles',
-    textoDe(en.doc, '#voice-card .nota-maquina') === 'Applies to every line on this computer.' &&
+    textoDe(en.doc, '#skills-card .nota-maquina') === 'Applies to every line on this computer.' &&
     /through it, \+573000000001/.test(textoDe(en.doc, '#orca-line-from')),
-    textoDe(en.doc, '#voice-card .nota-maquina'))
+    textoDe(en.doc, '#skills-card .nota-maquina'))
   const pt = await montar('config.html', dos, 'pt-BR')
   await espera()
   ok('en portugues tambien',
-    textoDe(pt.doc, '#voice-card .nota-maquina') === 'Vale para todas as linhas deste computador.' &&
+    textoDe(pt.doc, '#skills-card .nota-maquina') === 'Vale para todas as linhas deste computador.' &&
     /saem por ela, \+573000000001/.test(textoDe(pt.doc, '#orca-line-from')),
-    textoDe(pt.doc, '#voice-card .nota-maquina'))
+    textoDe(pt.doc, '#skills-card .nota-maquina'))
   const S = doc.defaultView.STRINGS
   const claves = ['machineNote', 'orcaLineFrom', 'linesApprovalFrom', 'linesViewing', 'linesView',
     'linesViewHelp']
@@ -8818,6 +8818,42 @@ console.log('\nconfig.html — P3: la cuenta de Claude del bot de cada linea')
   await hastaPanel(() => valorSeg(doc, 'bot-account') === 'cuenta-bot')
   ok('volver a la principal muestra otra vez la suya', valorSeg(doc, 'bot-account') === 'cuenta-bot',
     valorSeg(doc, 'bot-account'))
+}
+
+// ───────── todo-por-linea P4: la transcripcion y su calidad, por linea ─────────
+console.log('\nconfig.html — P4: la transcripcion de cada linea')
+{
+  const storage = dosLineasConAjustes()
+  storage.transcribe = 'local'
+  storage.transcribeQuality = 'optima'
+  storage.ajustesPorLinea[L_B].transcribe = 'off'
+  storage.ajustesPorLinea[L_B].transcribeQuality = 'minima'
+  const { doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  doc.getElementById('tab-avanzado').click()
+  await espera()
+  ok('en la principal, la transcripcion de la raiz',
+    valorSeg(doc, 'transcribe') === 'local' && valorSeg(doc, 'quality') === 'optima',
+    `${valorSeg(doc, 'transcribe')} ${valorSeg(doc, 'quality')}`)
+  elegirSeg(doc, 'linea-vista', L_B)
+  await new Promise((r) => setTimeout(r, 400))
+  ok('en la otra linea, la de ESA linea',
+    valorSeg(doc, 'transcribe') === 'off' && valorSeg(doc, 'quality') === 'minima',
+    `${valorSeg(doc, 'transcribe')} ${valorSeg(doc, 'quality')}`)
+  elegirSeg(doc, 'quality', 'optima')
+  doc.getElementById('save-voice').click()
+  await new Promise((r) => setTimeout(r, 500))
+  const propios = storage.ajustesPorLinea[L_B]
+  ok('guardar la voz en la otra linea la guarda en lo de ESA linea, sin tocar la raiz',
+    propios.transcribe === 'off' && propios.transcribeQuality === 'optima' &&
+    storage.transcribe === 'local' && storage.transcribeQuality === 'optima' &&
+    propios.transcribeLang === 'en', JSON.stringify(propios))
+  ok('y la tarjeta de voz ya no dice que vale para todas las lineas',
+    doc.querySelectorAll('#voice-card .nota-maquina').length === 0)
+  elegirSeg(doc, 'linea-vista', L_A)
+  await new Promise((r) => setTimeout(r, 400))
+  ok('volver a la principal muestra otra vez la suya',
+    valorSeg(doc, 'transcribe') === 'local' && valorSeg(doc, 'quality') === 'optima')
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

@@ -333,9 +333,9 @@ CONTENEDOR_DE_LINEA = "porLinea"
 # Los avisos de Orca tambien (todo-por-linea, P1): cada linea avisa a SU numero de
 # aprobacion con SUS interruptores.
 #
-# Lo demas es de la maquina y vive solo en la raiz: el ritmo del sync, la transcripcion y
-# su calidad, Jev, las skills, los proyectos y las rutas. La cuenta de Claude del bot es de
-# cada linea (P3): cada una abre sus agentes con la suya.
+# Lo demas es de la maquina y vive solo en la raiz: el ritmo del sync, Jev, las skills, los
+# proyectos y las rutas. La cuenta de Claude del bot (P3) y la transcripcion y su calidad
+# (P4) son de cada linea; los modelos de whisper descargados, de la maquina.
 AJUSTES_DE_LINEA = ("agentName", "ownerName", "tone", "owners", "approvalNumber",
                     "approvalLang", "ackMode", "ackText", "ackQuietMinutes", "greetingMode",
                     "greetingText", "firstReply", "slaMinutes", "projectQuestionHours",
@@ -343,6 +343,8 @@ AJUSTES_DE_LINEA = ("agentName", "ownerName", "tone", "owners", "approvalNumber"
                     "orcaNotices",
                     "signMessages",
                     "botClaudeAccount",
+                    "transcribe",
+                    "transcribeQuality",
                     )
 # Los ajustes de linea que otra linea NUNCA toma de la raiz: sin uno propio valen los de
 # fabrica. Los avisos de Orca son los mismos eventos para todas las lineas; heredarlos

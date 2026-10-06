@@ -1180,7 +1180,6 @@
             <button type="button" data-value="off" data-t="trOff"></button>
           </div>
           <p class="hint" data-t="transcribeHelp"></p>
-          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
           <span class="label" id="lang-label" data-t="langLabel"></span>
           <div class="seg" id="lang" role="group" aria-labelledby="lang-label">
             <button type="button" data-value="auto" data-t="langAuto"></button>
@@ -1195,7 +1194,6 @@
             <button type="button" data-value="minima" data-t="qualityMinima"></button>
           </div>
           <p class="hint" data-t="qualityHelp"></p>
-          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
           <div class="actions">
             <button class="primary" id="save-voice" data-t="saveCard"></button>
             <span class="said" id="said-voice"></span>
@@ -3410,7 +3408,9 @@
         'firstReply', 'slaMinutes', 'projectQuestionHours', 'inboxDays', 'transcribeLang',
         'orcaNotices',
         'signMessages',
-        'botClaudeAccount'
+        'botClaudeAccount',
+        'transcribe',
+        'transcribeQuality'
       ]
       // Los que otra linea NUNCA toma de la principal (`NO_HEREDAN`, la misma lista de
       // wa_settings.py y main.mjs): sin uno propio se pintan los de fabrica. Los avisos de Orca
@@ -7082,11 +7082,11 @@
               reintentarVistaDeLinea(otra, 30)
             }
             pintarClave('tone', vl('tone'), sello)
-            pintarClave('transcribeQuality', v('transcribeQuality'), sello)
+            pintarClave('transcribeQuality', vl('transcribeQuality'), sello)
             pintarClave('inboxDays', vl('inboxDays'), sello)
             pintarClave('ownerName', vl('ownerName'), sello)
             pintarClave('signMessages', vl('signMessages'), sello)
-            pintarClave('transcribe', v('transcribe'), sello)
+            pintarClave('transcribe', vl('transcribe'), sello)
             pintarClave('transcribeLang', vl('transcribeLang'), sello)
             pintarClave('syncMinutes', v('syncMinutes'), sello)
             if (hayRespuesta(v('syncMinutes'))) minutosGuardados = v('syncMinutes')

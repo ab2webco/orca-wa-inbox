@@ -13206,6 +13206,56 @@ if NODE:
             os.environ.clear()
             os.environ.update(env_p3)
 
+
+# ── Todo por linea (P4): la transcripcion y su calidad, por linea ────────────────────────
+# Cada linea elige si transcribe sus audios y con que calidad. La que la apaga no transcribe
+# nada; la otra sigue igual.
+print("\ntodo por linea (P4): la transcripcion de cada linea")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        env_t, registro_t = prepara_transcriptor(home)
+        llegan(home, A, [audio(home, "TA1", "linea-a.ogg")])
+        llegan(home, SEGUNDA, [audio(home, "TB1", "linea-b.ogg")], activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "borrador")
+        jsl(home, SEGUNDA, "set", PERSONA, "--provider", "ninguno", "--mode", "borrador")
+        datos = storage_o_nada(home)
+        datos.update(transcribe="local", transcribeQuality="optima")
+        datos["ajustesPorLinea"] = {SEGUNDA: {"transcribe": "off", "transcribeQuality": "minima"}}
+        escribe_storage(home, datos)
+        ok("P4: cada linea lee su transcripcion y su calidad",
+           [js(home, "config", k)[0]["value"] for k in ("transcribe", "transcribe_quality")]
+           == ["local", "optima"]
+           and [jsl(home, SEGUNDA, "config", k)[0]["value"]
+                for k in ("transcribe", "transcribe_quality")] == ["off", "minima"])
+        ingiere_con(home, env_t)
+        ok("P4: con la transcripcion apagada en una linea, sus audios no se transcriben; los "
+           "de la otra si", llamadas(registro_t) == ["linea-a.ogg"], f"{llamadas(registro_t)}")
+        con = db_de(home)
+        razones = {r[0]: r[1] for r in con.execute("select account, razon from transcripcion")}
+        con.close()
+        ok("P4: y el audio de esa linea queda sin transcribir por apagado",
+           razones.get(SEGUNDA) == "off" and razones.get(A) is None, f"{razones}")
+
+        def chequeo(linea):
+            env = dict(os.environ, HOME=str(home),
+                       XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+                       APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"),
+                       ORCA_CLI_COMMAND=SIN_ORCA)
+            env.pop("WA_INBOX_LINEA", None)
+            if linea:
+                env["WA_INBOX_LINEA"] = linea
+            p = subprocess.run([str(RAIZ / "bin" / "wa-transcribe"), "--check", "--json"],
+                               capture_output=True, text=True, env=env, timeout=120)
+            try:
+                r = json.loads(p.stdout or "{}")
+            except ValueError:
+                r = {}
+            return r.get("modo"), r.get("calidad")
+        ok("P4: wa-transcribe lee los de la linea de su corrida",
+           chequeo(None) == ("local", "optima") and chequeo(SEGUNDA) == ("off", "minima"),
+           f"{chequeo(None)} {chequeo(SEGUNDA)}")
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

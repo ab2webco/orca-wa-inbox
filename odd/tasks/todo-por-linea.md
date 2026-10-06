@@ -43,7 +43,7 @@ without the agent signature (the owner's request for one of his numbers).
   - `wa-send` sends unsigned on a line that has signing off (no "no agent name" error there).
   - The checklist accepts no name when signing is off.
 - [x] **P3** `botClaudeAccount` per line. `despacha` and `lanza_agente` read the case's line.
-- [ ] **P4** `transcribe`, `transcribeQuality` per line. Remove the machine notes.
+- [x] **P4** `transcribe`, `transcribeQuality` per line. Remove the machine notes.
 - [ ] **P5** `syncMinutes` per line.
   - One worker timer at the minimum across lines.
   - Each line syncs only when its own interval has elapsed.
