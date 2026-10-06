@@ -15,6 +15,7 @@ import datetime
 import hashlib
 import importlib.machinery
 import importlib.util
+import inspect
 import json
 import os
 import pathlib
@@ -11873,6 +11874,372 @@ if NODE:
         finally:
             sidecar.cerrar()
 
+
+# ── avisos-orca: los avisos de Orca por WhatsApp (odd/tasks/avisos-orca.md, O3-O6) ───────
+# Un agente de otro proyecto que espera, uno que termino y una automatizacion que fallo, al
+# numero de aprobacion, con texto fijo. Apagados de fabrica; con horas de silencio que se
+# resumen al terminar y un tope por hora que agrupa lo que sobra. La CLI de Orca y `wa-send`
+# son de mentira: `orca_json` y `tick_envia` se reemplazan en el modulo cargado.
+print("\navisos-orca: los avisos de Orca por WhatsApp")
+WT_ALFA = "repo-a::/srv/ejemplo/alfa-demo"
+
+
+def pon_orca(home, **campos):
+    ruta = storage_de(home)
+    datos = json.loads(ruta.read_text(encoding="utf-8")) if ruta.exists() else {}
+    datos["orcaNotices"] = dict(datos.get("orcaNotices") or {}, **campos)
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    ruta.write_text(json.dumps(datos), encoding="utf-8")
+
+
+def pon_paneles(home, paneles):
+    ruta = storage_de(home)
+    datos = json.loads(ruta.read_text(encoding="utf-8")) if ruta.exists() else {}
+    datos["orcaPanes"] = paneles
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    ruta.write_text(json.dumps(datos), encoding="utf-8")
+
+
+class OrcaFalsa:
+    """La CLI de Orca de mentira: `worktree ps` y `automations runs`, con lo que se le pida.
+    Anota cada llamada."""
+
+    def __init__(self):
+        self.llamadas = []
+        self.worktrees = [{"worktreeId": WT_ALFA, "repoId": "repo-a", "repo": "alfa-demo",
+                           "path": "/srv/ejemplo/alfa-demo", "branch": "feat/pagos",
+                           "displayName": "Pagos nuevos", "comment": "NOTA-PRIVADA",
+                           "isArchived": False}]
+        self.runs = []
+
+    def __call__(self, cli, args):
+        self.llamadas.append(list(args))
+        if args[:2] == ["worktree", "ps"]:
+            return {"ok": True, "result": {"worktrees": self.worktrees, "totalCount": 1,
+                                           "truncated": False}}
+        if args[:2] == ["automations", "runs"]:
+            return {"ok": True, "result": {"runs": self.runs}}
+        return None
+
+    def de(self, verbo):
+        return [l for l in self.llamadas if l[:2] == verbo]
+
+
+def orca_aviso(ws, con, pane, at=None, worktree=WT_ALFA, agent="claude", state="waiting"):
+    return ws.cmd_orca_aviso(con, argparse.Namespace(
+        state=state, pane=pane, at=str(at if at is not None else int(time.time() * 1000)),
+        worktree=worktree, agent=agent))[0]
+
+
+def prepara_orca(home, idioma="es", **campos):
+    """Un modulo cargado con numero de aprobacion, la CLI de Orca y wa-send de mentira."""
+    pon_duenos(home, DUENO_LID)
+    pon_aprobacion(home, DUENO_LID, idioma)
+    if campos:
+        pon_orca(home, **campos)
+    ws = carga_wa_scope(home)
+    enviados = []
+
+    def envia(caso, texto, req):
+        enviados.append({"chat": caso["chat_jid"], "texto": texto, "req": req})
+        return None, ""
+    ws.tick_envia = envia
+    falsa = OrcaFalsa()
+    ws.orca_json = falsa
+    ws.orca_cli_path = lambda *a, **k: "/nonexistent/orca-de-mentira"
+    ws.hora_local = lambda: 12 * 60
+    return ws, ws.db(), enviados, falsa
+
+
+def estados_orca(con):
+    return [r[0] for r in con.execute("select estado from aviso where tipo='orca' order by rowid")]
+
+
+env_orca = dict(os.environ)
+try:
+    # Apagado de fabrica, y sin numero no sale nada: por la linea de comandos de verdad.
+    with tempfile.TemporaryDirectory() as home:
+        r = js(home, "orca-aviso", "--state=waiting", "--pane=tab-1:p1",
+               f"--at={int(time.time() * 1000)}", f"--worktree={WT_ALFA}", "--agent=claude")
+        ok("orca-aviso: apagado de fabrica no encola nada",
+           r and r[0].get("queued") is False and r[0].get("reason") == "off"
+           and cuenta(home, "select count(*) from aviso") == 0, f"{r}")
+        pon_orca(home, waiting="on")
+        r = js(home, "orca-aviso", "--state=waiting", "--pane=tab-1:p1",
+               f"--at={int(time.time() * 1000)}")
+        ok("orca-aviso: encendido pero sin numero de aprobacion, nada",
+           r and r[0].get("queued") is False and r[0].get("reason") == "no-number"
+           and cuenta(home, "select count(*) from aviso") == 0, f"{r}")
+
+    # O3: el aviso de un agente que espera.
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa = prepara_orca(home, waiting="on")
+        at = int(time.time() * 1000)
+        r = orca_aviso(ws, con, "tab-1:p1", at)
+        ok("O3: un agente que espera produce un aviso, y sale", r.get("queued") is True
+           and len(enviados) == 1 and enviados[0]["chat"] == DUENO_DM, f"{r} {enviados}")
+        t = enviados[0]["texto"] if enviados else ""
+        ok("O3: con el proyecto, el nombre del espacio y el tipo de agente, en el idioma elegido",
+           "alfa-demo" in t and "Pagos nuevos" in t and "claude" in t and "espera" in t, t)
+        ok("O3: nunca la ruta ni lo que no es un nombre", "/srv" not in t and "NOTA" not in t, t)
+        ok("O3: los nombres salen de `orca worktree ps`", falsa.de(["worktree", "ps"]) != [],
+           f"{falsa.llamadas}")
+        ok("O3: con su id de aviso de Orca, para el numero de aprobacion",
+           enviados and enviados[0]["req"].startswith("aviso-o-espera-")
+           and estados_orca(con) == ["enviado"], f"{enviados} {estados_orca(con)}")
+        r = orca_aviso(ws, con, "tab-1:p1", at + 1000)
+        ok("O3: el mismo panel esperando en la misma ventana no avisa dos veces",
+           r.get("queued") is False and r.get("reason") == "duplicate" and len(enviados) == 1,
+           f"{r} {len(enviados)}")
+        orca_aviso(ws, con, "tab-1:p1", at + 6 * 60 * 1000)
+        ok("O3: pasada la ventana de cinco minutos, si", len(enviados) == 2, f"{len(enviados)}")
+        orca_aviso(ws, con, "tab-2:p2", at, worktree="repo-z::/srv/ejemplo/otro", agent="")
+        t = enviados[-1]["texto"] if enviados else ""
+        ok("O3: sin nombre en Orca ni tipo de agente, el texto fijo sin ellos",
+           t.startswith("Orca:") and "/srv" not in t and "un agente" in t and " en " not in t, t)
+        falsa.worktrees[0]["displayName"] = "token ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+        orca_aviso(ws, con, "tab-3:p3", at)
+        t = enviados[-1]["texto"] if enviados else ""
+        ok("O3: un nombre con forma de secreto no viaja", "ghp_" not in t and "claude" in t, t)
+        fuente = "".join(inspect.getsource(f) for f in (
+            ws.cmd_orca_aviso, ws.tick_orca, ws.orca_encola, ws.orca_terminados, ws.orca_corridas,
+            ws.orca_resumen, ws.orca_agrupa))
+        ok("O3: ningun camino de estos aprueba nada (`--approve`), solo `--send --id`",
+           "--approve" not in fuente and "approve" not in fuente)
+        con.close()
+    for idioma, frase in (("en", "is waiting for you"), ("pt", "espera a sua resposta")):
+        with tempfile.TemporaryDirectory() as home:
+            ws, con, enviados, _ = prepara_orca(home, idioma, waiting="on")
+            orca_aviso(ws, con, "tab-1:p1")
+            t = enviados[0]["texto"] if enviados else ""
+            ok(f"O3: en {idioma}", frase in t and "alfa-demo" in t, t)
+            con.close()
+
+    # Decision del dueno (2026-10-05): un agente `blocked` avisa igual que uno que espera, por
+    # el mismo interruptor, con su propio texto. Esperar y bloquearse en el mismo panel dentro
+    # de la ventana es UN aviso, en cualquier orden.
+    with tempfile.TemporaryDirectory() as home:
+        r = js(home, "orca-aviso", "--state=blocked", "--pane=tab-1:p1",
+               f"--at={int(time.time() * 1000)}")
+        ok("blocked: la linea de comandos lo acepta, y apagado no encola nada",
+           r and r[0].get("reason") == "off" and cuenta(home, "select count(*) from aviso") == 0,
+           f"{r}")
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, _ = prepara_orca(home, waiting="on")
+        at = int(time.time() * 1000)
+        r = orca_aviso(ws, con, "tab-1:p1", at, state="blocked")
+        t = enviados[0]["texto"] if enviados else ""
+        ok("blocked: un agente bloqueado produce un aviso, y sale",
+           r.get("queued") is True and len(enviados) == 1, f"{r} {enviados}")
+        ok("blocked: el texto dice que esta bloqueado, no que espera",
+           "bloqueado" in t and "espera" not in t and "alfa-demo" in t and "claude" in t, t)
+        r = orca_aviso(ws, con, "tab-1:p1", at + 20000, state="waiting")
+        ok("blocked -> waiting en la misma ventana no avisa otra vez",
+           r.get("reason") == "duplicate" and len(enviados) == 1, f"{r} {len(enviados)}")
+        orca_aviso(ws, con, "tab-2:p2", at, state="waiting")
+        r = orca_aviso(ws, con, "tab-2:p2", at + 20000, state="blocked")
+        ok("waiting -> blocked en la misma ventana tampoco",
+           r.get("reason") == "duplicate" and len(enviados) == 2, f"{r} {len(enviados)}")
+        orca_aviso(ws, con, "tab-1:p1", at + 6 * 60 * 1000, state="blocked")
+        ok("blocked: pasada la ventana, si", len(enviados) == 3, f"{len(enviados)}")
+        pon_orca(home, waiting="off")
+        r = orca_aviso(ws, con, "tab-3:p3", at, state="blocked")
+        ok("blocked: va por el interruptor de la espera; apagado, nada",
+           r.get("reason") == "off" and len(enviados) == 3, f"{r}")
+        con.close()
+    for idioma, frase in (("en", "is blocked"), ("pt", "esta bloqueado")):
+        with tempfile.TemporaryDirectory() as home:
+            ws, con, enviados, _ = prepara_orca(home, idioma, waiting="on")
+            orca_aviso(ws, con, "tab-1:p1", state="blocked")
+            t = enviados[0]["texto"] if enviados else ""
+            ok(f"blocked: en {idioma}", frase in t and "alfa-demo" in t, t)
+            con.close()
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, _ = prepara_orca(home, waiting="on", quietStart="22:00",
+                                            quietEnd="07:00", hourlyCap="1")
+        ws.hora_local = lambda: 23 * 60
+        orca_aviso(ws, con, "tab-1:p1", state="blocked")
+        orca_aviso(ws, con, "tab-2:p2", state="waiting")
+        ok("blocked: en silencio queda retenido como los demas",
+           enviados == [] and estados_orca(con) == ["retenido", "retenido"], f"{estados_orca(con)}")
+        ws.hora_local = lambda: 8 * 60
+        ws.tick_orca(con, {})
+        ws.envia_avisos(con)
+        t = enviados[0]["texto"] if enviados else ""
+        ok("blocked: el resumen cuenta a los que esperan y a los bloqueados juntos, sin decir "
+           "que todos esperan", len(enviados) == 1 and "2" in t and "esperando" not in t, t)
+        orca_aviso(ws, con, "tab-3:p3", state="blocked")
+        ok("blocked: el tope por hora tambien lo cuenta", estados_orca(con)[-1] == "excedido",
+           f"{estados_orca(con)}")
+        con.close()
+
+    # O6: las horas de silencio y el resumen al terminar.
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, _ = prepara_orca(home, waiting="on", quietStart="22:00",
+                                            quietEnd="07:00")
+        for m, esperado in ((23 * 60, True), (3 * 60, True), (6 * 60 + 59, True),
+                            (7 * 60, False), (12 * 60, False), (21 * 60 + 59, False),
+                            (22 * 60, True)):
+            ok(f"O6: silencio de 22:00 a 07:00 a las {m // 60:02d}:{m % 60:02d} -> {esperado}",
+               ws.en_silencio((22 * 60, 7 * 60), m) is esperado)
+        ok("O6: un silencio dentro del dia", ws.en_silencio((8 * 60, 18 * 60), 12 * 60)
+           and not ws.en_silencio((8 * 60, 18 * 60), 19 * 60))
+        ok("O6: sin silencio, nunca", not ws.en_silencio(None, 3 * 60))
+        ws.hora_local = lambda: 23 * 60
+        orca_aviso(ws, con, "tab-1:p1")
+        orca_aviso(ws, con, "tab-2:p2")
+        ok("O6: dentro del silencio no sale nada y queda retenido",
+           enviados == [] and estados_orca(con) == ["retenido", "retenido"], f"{estados_orca(con)}")
+        ws.tick_orca(con, {})
+        ws.envia_avisos(con)
+        ok("O6: el tick no lo suelta mientras dura el silencio", enviados == [])
+        ws.hora_local = lambda: 7 * 60 + 1
+        ws.tick_orca(con, {})
+        ws.envia_avisos(con)
+        t = enviados[0]["texto"] if enviados else ""
+        ok("O6: al terminar el silencio sale UN resumen con la cuenta",
+           len(enviados) == 1 and "silencio" in t and "2" in t
+           and enviados[0]["req"].startswith("aviso-o-resumen-"), f"{enviados}")
+        ok("O6: y lo retenido queda resumido", estados_orca(con).count("resumido") == 2,
+           f"{estados_orca(con)}")
+        ws.tick_orca(con, {})
+        ws.envia_avisos(con)
+        ok("O6: otro tick no lo repite", len(enviados) == 1)
+        con.close()
+
+    # O6: el tope por hora y el mensaje agrupado.
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, _ = prepara_orca(home, waiting="on", hourlyCap="2")
+        for n in (1, 2, 3, 4):
+            orca_aviso(ws, con, f"tab-{n}:p{n}")
+        ok("O6: pasado el tope por hora lo demas no sale suelto",
+           len(enviados) == 2 and estados_orca(con) == ["enviado", "enviado", "excedido",
+                                                         "excedido"], f"{estados_orca(con)}")
+        ws.tick_orca(con, {})
+        ws.envia_avisos(con)
+        ok("O6: mientras la hora siga llena, tampoco el agrupado", len(enviados) == 2)
+        hace = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 2 * 3600))
+        con.execute("update aviso set at=? where estado='enviado'", (hace,))
+        con.commit()
+        ws.tick_orca(con, {})
+        ws.envia_avisos(con)
+        t = enviados[-1]["texto"] if enviados else ""
+        ok("O6: con lugar en la hora sale UN mensaje agrupado con la cuenta",
+           len(enviados) == 3 and "2" in t and enviados[-1]["req"].startswith("aviso-o-grupo-"),
+           f"{enviados[2:]}")
+        ok("O6: y lo que sobro queda agrupado", estados_orca(con).count("agrupado") == 2,
+           f"{estados_orca(con)}")
+        ws.tick_orca(con, {})
+        ws.envia_avisos(con)
+        ok("O6: una sola vez", len(enviados) == 3)
+        con.close()
+
+    # O4: el aviso de "termino", desde el tick, despues de la espera.
+    with tempfile.TemporaryDirectory() as home:
+        ahora_ms = int(time.time() * 1000)
+        ws, con, enviados, falsa = prepara_orca(home, finished="on", finishedDelaySeconds="30")
+        base = {"worktreeId": WT_ALFA, "agentType": "codex", "workingAt": ahora_ms - 600000}
+        pon_paneles(home, {
+            "pA": dict(base, state="done", at=ahora_ms - 60000, finished=True),
+            "pB": dict(base, state="done", at=ahora_ms - 10000, finished=True),
+            "pC": dict(base, state="done", at=ahora_ms - 60000, finished=False),
+            "pD": dict(base, state="working", at=ahora_ms - 5000, finished=False),
+            "pE": dict(base, state="done", at=ahora_ms - 20 * 60000, finished=True)})
+        ws.tick_orca(con, {})
+        ws.envia_avisos(con)
+        t = enviados[0]["texto"] if enviados else ""
+        ok("O4: un turno que termino hace mas que la espera avisa, uno solo",
+           len(enviados) == 1 and "termin" in t and "alfa-demo" in t and "codex" in t
+           and enviados[0]["req"].startswith("aviso-o-termino-"), f"{enviados}")
+        ok("O4: ni el que termino hace menos de la espera, ni un done sin trabajo, ni el que "
+           "volvio a trabajar, ni uno viejo", len(enviados) == 1)
+        pon_paneles(home, {"pB": dict(base, state="done", at=ahora_ms - 10000 - 35000,
+                                      finished=True),
+                           "pA": dict(base, state="done", at=ahora_ms - 60000, finished=True)})
+        ws.tick_orca(con, {})
+        ws.envia_avisos(con)
+        ok("O4: pasada la espera sale el otro, y el primero no se repite", len(enviados) == 2,
+           f"{enviados}")
+        pon_orca(home, finished="off")
+        pon_paneles(home, {"pF": dict(base, state="done", at=ahora_ms - 60000, finished=True)})
+        ws.tick_orca(con, {})
+        ws.envia_avisos(con)
+        ok("O4: con el aviso apagado no sale", len(enviados) == 2)
+        con.close()
+
+    # O5: las automatizaciones que fallaron, con la marca de agua.
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa = prepara_orca(home, automationFailed="on")
+        ahora_ms = int(time.time() * 1000)
+        falsa.runs = [{"id": "run-viejo", "title": "Reporte diario #3", "status": "dispatch_failed",
+                       "error": "viejo", "createdAt": ahora_ms - 3600000}]
+        ws.tick_orca(con, {})
+        ws.envia_avisos(con)
+        marca = con.execute("select value from settings where key='orca_runs_desde'").fetchone()
+        ok("O5: la primera vuelta solo pone la marca: nada de fallas viejas",
+           enviados == [] and marca is not None, f"{enviados} {marca}")
+        falsa.runs += [
+            {"id": "run-1", "title": "Reporte diario #4", "status": "dispatch_failed",
+             "error": "Workspace not found at /Users/ejemplo/proyecto/x; retry later",
+             "createdAt": ahora_ms + 1000},
+            {"id": "run-2", "title": "Limpieza #9", "status": "completed",
+             "createdAt": ahora_ms + 2000},
+            {"id": "run-3", "title": "Copia nocturna #2", "status": "command_failed",
+             "commandResult": {"exitCode": 2, "timedOut": False, "stdout": "SALIDA-DE-TERMINAL",
+                               "stderr": "password: Abc12345", "command": "rsync /srv/x"},
+             "createdAt": ahora_ms + 3000},
+            {"id": "run-4", "title": "Indexado #1", "status": "completed",
+             "commandResult": {"exitCode": None, "timedOut": True, "stdout": "", "stderr": ""},
+             "createdAt": ahora_ms + 4000},
+            {"id": "run-5", "title": "Revisión #7", "status": "skipped_precheck",
+             "createdAt": ahora_ms + 5000}]
+        ws.tick_orca(con, {})
+        ws.envia_avisos(con)
+        textos = [e["texto"] for e in enviados]
+        ok("O5: una falla de despacho, un comando que salio mal y uno que se paso del tiempo, "
+           "uno cada uno", len(enviados) == 3 and all(e["req"].startswith("aviso-o-fallo-")
+                                                      for e in enviados), f"{textos}")
+        ok("O5: con el titulo y el error recortado, sin la ruta",
+           any("Reporte diario #4" in t and "Workspace not found" in t and "/Users" not in t
+               for t in textos), f"{textos}")
+        ok("O5: un comando que fallo dice su codigo y nunca lo que salio en la terminal",
+           any("Copia nocturna #2" in t and "2" in t for t in textos)
+           and not any("SALIDA" in t or "Abc12345" in t or "rsync" in t for t in textos),
+           f"{textos}")
+        ok("O5: ni lo que se completo ni lo que se salto", not any(
+            "Limpieza" in t or "Revisión" in t for t in textos), f"{textos}")
+        ws.tick_orca(con, {})
+        ws.envia_avisos(con)
+        ok("O5: otra vuelta no repite", len(enviados) == 3)
+        pon_orca(home, automationFailed="off")
+        ws.tick_orca(con, {})
+        ok("O5: apagado, la marca se borra: al volver a encenderlo no llegan las de antes",
+           con.execute("select 1 from settings where key='orca_runs_desde'").fetchone() is None)
+        con.close()
+
+    # Con todo apagado (de fabrica) nada cambia: ni avisos ni llamadas a Orca.
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, falsa = prepara_orca(home)
+        ahora_ms = int(time.time() * 1000)
+        pon_paneles(home, {"pA": {"state": "done", "at": ahora_ms - 60000, "finished": True,
+                                  "worktreeId": WT_ALFA}})
+        falsa.runs = [{"id": "r", "title": "X", "status": "dispatch_failed", "error": "e",
+                       "createdAt": ahora_ms}]
+        ws.tick_orca(con, {})
+        ws.tick_orca(con, {})
+        ws.envia_avisos(con)
+        ok("todo apagado: ningun aviso, ninguna llamada a Orca, ninguna fila",
+           enviados == [] and falsa.llamadas == []
+           and con.execute("select count(*) from aviso").fetchone()[0] == 0,
+           f"{enviados} {falsa.llamadas}")
+        ok("el tick llama a los avisos de Orca antes de mandar los avisos",
+           "tick_orca(con" in inspect.getsource(ws.cmd_tick)
+           and inspect.getsource(ws.cmd_tick).index("tick_orca(con")
+           < inspect.getsource(ws.cmd_tick).index("tick_avisos(con"))
+        con.close()
+finally:
+    os.environ.clear()
+    os.environ.update(env_orca)
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:

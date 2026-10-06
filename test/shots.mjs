@@ -783,6 +783,19 @@ const PANELES = [
         { id: '100000000000002@lid', name: 'Beto Socio' }],
       approvalNumber: '100000000000001@lid' }),
     guion: "document.getElementById('approval-number').scrollIntoView()" },
+  // avisos-orca: los avisos de Orca por WhatsApp, encendidos con horas de silencio y con el
+  // numero de aprobacion elegido; y apagados, sin numero, con el aviso de que no saldria nada.
+  { nombre: 'config-avisos-orca', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, idiomas: ['pt'], espera: 300, pestana: 'aprobacion',
+    datos: Object.assign({}, CON_LINEA, {
+      owners: [{ id: '100000000000001@lid', name: 'Ana Restrepo' }],
+      approvalNumber: '100000000000001@lid',
+      orcaNotices: { waiting: 'on', finished: 'on', automationFailed: 'off', quietStart: '22:00',
+        quietEnd: '07:00', hourlyCap: '6', finishedDelaySeconds: '25' } }),
+    guion: "document.getElementById('orca-notices-card').scrollIntoView()" },
+  { nombre: 'config-avisos-orca-sin-numero', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 300, pestana: 'aprobacion', datos: DATOS,
+    guion: "document.getElementById('orca-notices-card').scrollIntoView()" },
   // acuse-inteligente: los minutos sin acuse despues de que la linea escribio en el chat,
   // junto al acuse, con su pista. En portugues tambien: la etiqueta es la mas larga.
   { nombre: 'config-acuse-silencio', archivo: 'config.html', anchos: ANCHOS,

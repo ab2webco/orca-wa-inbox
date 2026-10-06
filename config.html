@@ -250,6 +250,10 @@
       /* El interruptor de Jev: un boton con role=switch, no un select. */
       .switch-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
                     margin: 4px 0 2px; font-size: 13px; }
+      /* Los avisos de Orca: la etiqueta larga se parte al lado de su interruptor y no
+         baja entera a otra linea, lejos de el (visto a 390). */
+      #orca-notices-card .switch-row { flex-wrap: nowrap; }
+      #orca-notices-card .switch-row > span { flex: 1 1 auto; min-width: 0; }
       .switch { position: relative; width: 38px; height: 22px; padding: 0; flex: none;
                 border-radius: 9999px; border: 1px solid var(--input, var(--fb-input));
                 background: var(--muted, var(--fb-muted)); }
@@ -855,6 +859,60 @@
           </div>
         </section>
 
+        <!-- Los avisos de Orca por WhatsApp (avisos-orca): un agente de otro proyecto que espera,
+             uno que termino y una automatizacion que fallo, al numero de aprobacion de arriba.
+             Apagados de fabrica. Los siete valores viajan en UNA clave, `orcaNotices`: cada clave
+             es un mensaje mas contra el cupo del host. -->
+        <section class="card" id="orca-notices-card">
+          <h2 id="orca-legend" data-t="orcaLegend"></h2>
+          <p class="hint lead" id="orca-intro" data-t="orcaIntro"></p>
+          <p class="hint approval-warn" id="orca-no-number" data-t="orcaNoNumber" hidden></p>
+          <div class="switch-row">
+            <button type="button" class="switch" id="orca-waiting" role="switch"
+                    aria-checked="false" aria-labelledby="orca-waiting-label"><span
+                    class="knob"></span></button>
+            <span id="orca-waiting-label" data-t="orcaWaitingLabel"></span>
+          </div>
+          <div class="switch-row">
+            <button type="button" class="switch" id="orca-finished" role="switch"
+                    aria-checked="false" aria-labelledby="orca-finished-label"><span
+                    class="knob"></span></button>
+            <span id="orca-finished-label" data-t="orcaFinishedLabel"></span>
+          </div>
+          <div class="fr-num" id="orca-delay-row" hidden>
+            <label for="orca-delay" data-t="orcaDelayLabel"></label>
+            <input id="orca-delay" type="number" min="10" max="600" step="1" inputmode="numeric" />
+          </div>
+          <div class="switch-row">
+            <button type="button" class="switch" id="orca-automation" role="switch"
+                    aria-checked="false" aria-labelledby="orca-automation-label"><span
+                    class="knob"></span></button>
+            <span id="orca-automation-label" data-t="orcaAutomationLabel"></span>
+          </div>
+          <span class="label" data-t="orcaQuietLabel"></span>
+          <div class="fr-nums">
+            <div class="fr-num">
+              <label for="orca-quiet-start" data-t="orcaQuietStart"></label>
+              <input id="orca-quiet-start" type="time" step="60" />
+            </div>
+            <div class="fr-num">
+              <label for="orca-quiet-end" data-t="orcaQuietEnd"></label>
+              <input id="orca-quiet-end" type="time" step="60" />
+            </div>
+          </div>
+          <p class="hint" data-t="orcaQuietHelp"></p>
+          <div class="fr-num">
+            <label for="orca-cap" data-t="orcaCapLabel"></label>
+            <input id="orca-cap" type="number" min="1" max="60" step="1" inputmode="numeric"
+                   aria-describedby="orca-cap-help" />
+          </div>
+          <p class="hint" id="orca-cap-help" data-t="orcaCapHelp"></p>
+          <div class="actions">
+            <button class="primary" id="save-orca" data-t="saveCard"></button>
+            <span class="said" id="said-orca"></span>
+          </div>
+        </section>
+
         <!-- Respuestas automaticas: lo unico que el motor contesta solo, sin el agente. -->
         <section class="card">
           <h2 id="auto-legend-h" data-t="autoLegend"></h2>
@@ -1276,6 +1334,27 @@
             'contado desde el primer mensaje del cliente. La pestana Informes del tablero mide ' +
             'contra esta meta.',
           slaRange: 'La meta es un numero entero de minutos, de 1 a 1440.',
+          // --- los avisos de Orca por WhatsApp (avisos-orca) ---
+          orcaLegend: 'Avisos de Orca por WhatsApp',
+          orcaIntro: 'El plugin le escribe al numero de aprobacion cuando un agente de otro ' +
+            'proyecto lo necesita. Solo un texto fijo con el proyecto y la rama: nunca lo que ' +
+            'usted pidio, lo que respondio el agente, rutas ni lo que salio en la terminal.',
+          orcaNoNumber: 'Sin numero de aprobacion no sale ningun aviso: elija uno en la tarjeta ' +
+            'de arriba.',
+          orcaWaitingLabel: 'Un agente espera su permiso o su respuesta, o se bloqueo',
+          orcaFinishedLabel: 'Un agente termino lo que estaba haciendo',
+          orcaDelayLabel: 'Esperar antes de avisar que termino (segundos)',
+          orcaAutomationLabel: 'Una automatizacion de Orca fallo',
+          orcaQuietLabel: 'Horas de silencio',
+          orcaQuietStart: 'Desde',
+          orcaQuietEnd: 'Hasta',
+          orcaQuietHelp: 'En hora de este equipo. Lo que pase en ese horario se le manda en un ' +
+            'solo resumen cuando termina. Deje las dos vacias para no tener silencio.',
+          orcaCapLabel: 'Avisos por hora, como mucho',
+          orcaCapHelp: 'Pasado el tope, lo que siga se junta en un solo mensaje con la cuenta.',
+          orcaCapRange: 'El tope es un numero entero de avisos, de 1 a 60.',
+          orcaDelayRange: 'La espera es un numero entero de segundos, de 10 a 600.',
+          orcaQuietRange: 'Ponga las dos horas de silencio, distintas, o deje las dos vacias.',
           voiceLegend: 'Notas de voz',
           readingLegend: 'Lectura de WhatsApp',
           transcribeLabel: "Transcribir las notas de voz",
@@ -1798,6 +1877,25 @@
             "counted from the customer's first message. The board's Reports tab measures " +
             'against this target.',
           slaRange: 'The target is a whole number of minutes, from 1 to 1440.',
+          orcaLegend: 'Orca notices by WhatsApp',
+          orcaIntro: 'The plugin writes to the approval number when an agent in another project ' +
+            'needs you. Only a fixed text with the project and the branch: never what you asked, ' +
+            "what the agent answered, paths or the terminal's output.",
+          orcaNoNumber: 'Without an approval number no notice goes out: pick one in the card above.',
+          orcaWaitingLabel: 'An agent waits for your permission or your answer, or is blocked',
+          orcaFinishedLabel: 'An agent finished what it was doing',
+          orcaDelayLabel: 'Wait before saying it finished (seconds)',
+          orcaAutomationLabel: 'An Orca automation failed',
+          orcaQuietLabel: 'Quiet hours',
+          orcaQuietStart: 'From',
+          orcaQuietEnd: 'Until',
+          orcaQuietHelp: "In this computer's time. What happens in that window is sent as one " +
+            'summary when it ends. Leave both empty for no quiet hours.',
+          orcaCapLabel: 'Notices per hour, at most',
+          orcaCapHelp: 'Past the cap, the rest is grouped into one message with the count.',
+          orcaCapRange: 'The cap is a whole number of notices, from 1 to 60.',
+          orcaDelayRange: 'The wait is a whole number of seconds, from 10 to 600.',
+          orcaQuietRange: 'Set both quiet hours, different from each other, or leave both empty.',
           voiceLegend: 'Voice notes',
           readingLegend: 'Reading WhatsApp',
           transcribeLabel: "Transcribe voice notes",
@@ -2341,6 +2439,25 @@
           'contado a partir da primeira mensagem do cliente. A aba Relatorios do quadro mede ' +
           'contra esta meta.',
         slaRange: 'A meta e um numero inteiro de minutos, de 1 a 1440.',
+        orcaLegend: 'Avisos do Orca pelo WhatsApp',
+        orcaIntro: 'O plugin escreve para o numero de aprovacao quando um agente de outro ' +
+          'projeto precisa de voce. So um texto fixo com o projeto e o ramo: nunca o que voce ' +
+          'pediu, o que o agente respondeu, caminhos nem o que saiu no terminal.',
+        orcaNoNumber: 'Sem numero de aprovacao nenhum aviso sai: escolha um no cartao acima.',
+        orcaWaitingLabel: 'Um agente espera a sua permissao ou a sua resposta, ou ficou bloqueado',
+        orcaFinishedLabel: 'Um agente terminou o que estava fazendo',
+        orcaDelayLabel: 'Esperar antes de avisar que terminou (segundos)',
+        orcaAutomationLabel: 'Uma automacao do Orca falhou',
+        orcaQuietLabel: 'Horario de silencio',
+        orcaQuietStart: 'De',
+        orcaQuietEnd: 'Ate',
+        orcaQuietHelp: 'No horario deste computador. O que acontecer nesse horario e enviado em ' +
+          'um so resumo quando ele termina. Deixe os dois vazios para nao ter silencio.',
+        orcaCapLabel: 'Avisos por hora, no maximo',
+        orcaCapHelp: 'Passado o limite, o resto e juntado em uma so mensagem com a contagem.',
+        orcaCapRange: 'O limite e um numero inteiro de avisos, de 1 a 60.',
+        orcaDelayRange: 'A espera e um numero inteiro de segundos, de 10 a 600.',
+        orcaQuietRange: 'Defina os dois horarios de silencio, diferentes, ou deixe os dois vazios.',
         voiceLegend: 'Notas de voz',
         readingLegend: 'Leitura do WhatsApp',
         transcribeLabel: 'Transcrever as notas de voz',
@@ -3191,6 +3308,7 @@
 
       function pintarClave (key, valor, s) {
         if (key === 'firstReply') return pintarPrimer(valor, s)
+        if (key === 'orcaNotices') return pintarOrca(valor, s)
         var c = CONTROLES[key]
         if (!c || !hayRespuesta(valor) || !vigente(s) || sucios[c[0]]) return
         var n = el(c[0])
@@ -3384,6 +3502,86 @@
         }
         el('pq-hours').value = String(Number(texto))
         guardarTarjeta(event.currentTarget, 'said-pq-hours', ['projectQuestionHours'])
+      })
+      // ---------- los avisos de Orca por WhatsApp (avisos-orca) ----------
+      // UNA clave, `orcaNotices`, en texto como el resto, con los mismos rangos que valida
+      // wa-scope. Lo que falta o no sirve se pinta con el de fabrica: todo apagado.
+      var ORCA_DEFECTO = { waiting: 'off', finished: 'off', automationFailed: 'off',
+        quietStart: '', quietEnd: '', hourlyCap: '6', finishedDelaySeconds: '25' }
+      var ORCA_INTERRUPTORES = [['waiting', 'orca-waiting'], ['finished', 'orca-finished'],
+        ['automationFailed', 'orca-automation']]
+      var ORCA_CAMPOS = [['quietStart', 'orca-quiet-start'], ['quietEnd', 'orca-quiet-end'],
+        ['hourlyCap', 'orca-cap'], ['finishedDelaySeconds', 'orca-delay']]
+      var ORCA_IDS = ['orca-waiting', 'orca-finished', 'orca-automation', 'orca-quiet-start',
+        'orca-quiet-end', 'orca-cap', 'orca-delay']
+      var HORA_ORCA = /^([01]\d|2[0-3]):[0-5]\d$/
+      ORCA_IDS.forEach(ensuciar)
+      ORCA_INTERRUPTORES.forEach(function (p) {
+        el(p[1]).addEventListener('click', function () {
+          var n = el(p[1])
+          n.setAttribute('aria-checked', n.getAttribute('aria-checked') === 'true' ? 'false' : 'true')
+          sucios[p[1]] = true
+          pintarOrcaVista()
+        })
+      })
+      function pintarOrca (valor, s) {
+        if (!hayRespuesta(valor) || !vigente(s)) return
+        var v = valor && typeof valor === 'object' ? valor : {}
+        ORCA_INTERRUPTORES.forEach(function (p) {
+          if (sucios[p[1]]) return
+          el(p[1]).setAttribute('aria-checked', v[p[0]] === 'on' ? 'true' : 'false')
+        })
+        ORCA_CAMPOS.forEach(function (p) {
+          if (sucios[p[1]] || document.activeElement === el(p[1])) return
+          var x = v[p[0]]
+          el(p[1]).value = x !== undefined && x !== null && (String(x).trim() !== '' ||
+            p[0] === 'quietStart' || p[0] === 'quietEnd') ? String(x).trim() : ORCA_DEFECTO[p[0]]
+        })
+        pintarOrcaVista()
+      }
+      /** La espera del "termino" solo cuenta con ese aviso encendido. */
+      function pintarOrcaVista () {
+        el('orca-delay-row').hidden = el('orca-finished').getAttribute('aria-checked') !== 'true'
+      }
+      /** Sin numero de aprobacion guardado (y de confianza) no sale ningun aviso. */
+      function pintarOrcaNumero () {
+        el('orca-no-number').hidden = !!numeroGuardado &&
+          duenosVisibles().some(function (d) { return d.id === numeroGuardado })
+      }
+      /** Lo que la tarjeta guardaria, o la clave del texto que dice por que no. */
+      function orcaDelFormulario () {
+        var salida = {}
+        ORCA_INTERRUPTORES.forEach(function (p) {
+          salida[p[0]] = el(p[1]).getAttribute('aria-checked') === 'true' ? 'on' : 'off'
+        })
+        var ini = el('orca-quiet-start').value.trim()
+        var fin = el('orca-quiet-end').value.trim()
+        if ((ini || fin) && (!HORA_ORCA.test(ini) || !HORA_ORCA.test(fin) || ini === fin)) {
+          return { mal: 'orcaQuietRange' }
+        }
+        salida.quietStart = ini
+        salida.quietEnd = fin
+        var tope = el('orca-cap').value.trim()
+        if (!/^\d+$/.test(tope) || Number(tope) < 1 || Number(tope) > 60) return { mal: 'orcaCapRange' }
+        salida.hourlyCap = String(Number(tope))
+        var demora = el('orca-delay').value.trim()
+        if (!/^\d+$/.test(demora) || Number(demora) < 10 || Number(demora) > 600) {
+          return { mal: 'orcaDelayRange' }
+        }
+        salida.finishedDelaySeconds = String(Number(demora))
+        return { valor: salida }
+      }
+      ORCA_INTERRUPTORES.forEach(function (p) { el(p[1]).setAttribute('aria-checked', 'false') })
+      ORCA_CAMPOS.forEach(function (p) { el(p[1]).value = ORCA_DEFECTO[p[0]] })
+      pintarOrcaVista()
+      pintarOrcaNumero()
+      el('save-orca').addEventListener('click', function (event) {
+        var f = orcaDelFormulario()
+        if (f.mal) { said('said-orca', t(f.mal), true); return }
+        busy(event.currentTarget, guardar([['orcaNotices', f.valor]]).then(function (mal) {
+          if (!mal.length) ORCA_IDS.forEach(function (id) { delete sucios[id] })
+          said('said-orca', mal.length ? t('saveFailed') : '✓ ' + t('savedOk'), !!mal.length)
+        }))
       })
       el('save-reading').addEventListener('click', function (event) {
         guardarTarjeta(event.currentTarget, 'said-reading', ['inboxDays', 'syncMinutes'])
@@ -4971,6 +5169,7 @@
           cablearBoton(grupo, b)
         })
         pintarAvisoNumero()
+        pintarOrcaNumero()
       }
       /** Un numero cuyo chat no esta en Automatico no recibe los avisos ni manda las
        *  respuestas: `wa-send` solo escribe ahi, y el almacen solo guarda lo de ahi. */
@@ -5884,7 +6083,7 @@
       function leerAuto () {
         var sello = guardadoSeq
         ;['ackMode', 'ackText', 'ackQuietMinutes', 'greetingMode', 'greetingText', 'firstReply',
-          'slaMinutes', 'projectQuestionHours'].forEach(function (k) {
+          'slaMinutes', 'projectQuestionHours', 'orcaNotices'].forEach(function (k) {
           read(k, true).then(function (v) { pintarClave(k, v, sello) })
         })
       }

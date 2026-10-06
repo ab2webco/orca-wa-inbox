@@ -44,7 +44,8 @@ import argparse, datetime, hashlib, json, os, pathlib, re, shlex, sqlite3, subpr
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from wa_settings import (  # noqa: E402
-    CONFIG_NUMERICOS, CONFIG_OPCIONES, MODOS_PRIMER, PANEL_PRIMER, PANEL_PRIMER_CAMPOS,
+    CONFIG_HORAS, CONFIG_NUMERICOS, CONFIG_OPCIONES, MODOS_PRIMER, PANEL_ORCA, PANEL_ORCA_CAMPOS,
+    PANEL_PRIMER, PANEL_PRIMER_CAMPOS,
     PANEL_SETTINGS, PLUGIN_ID, VARIABLE_APROBADOR,
     PLUGIN_ID_ANTERIOR, duenos, llave_aprobador, trae_llave_aprobador, idioma_aprobacion, numero_aprobacion, orca_cli_path, orca_env, orca_runtime_home, plugin_store_path,
     plugin_store_raw,
@@ -804,6 +805,12 @@ def plugin_store_patch_run(trace):
 def mirror_to_panel(key, value):
     """Un ajuste que el panel tambien guarda tiene que viajar en las dos direcciones:
     si solo bajara del panel, un valor viejo del panel ganaria para siempre."""
+    campo = next((c for c, name in PANEL_ORCA_CAMPOS.items() if name == key), None)
+    if campo:
+        orca = plugin_store_raw().get(PANEL_ORCA)
+        orca = dict(orca) if isinstance(orca, dict) else {}
+        orca[campo] = value
+        return plugin_store_write(None, extra={PANEL_ORCA: orca})
     campo = next((c for c, name in PANEL_PRIMER_CAMPOS.items() if name == key), None)
     if campo:
         primer = plugin_store_raw().get(PANEL_PRIMER)
@@ -963,6 +970,8 @@ def push_to_plugin(con, with_activity=False):
                 extra[flat] = str(valor)
         extra[PANEL_PRIMER] = {campo: str(efectivos.get(name) or DEFAULT_CONFIG[name])
                                for campo, name in PANEL_PRIMER_CAMPOS.items()}
+        extra[PANEL_ORCA] = {campo: str(efectivos.get(name) or DEFAULT_CONFIG[name])
+                             for campo, name in PANEL_ORCA_CAMPOS.items()}
     return plugin_store_write(scope, agent_name_of(con), activity, health, routes, extra)
 
 
@@ -2077,6 +2086,17 @@ DEFAULT_CONFIG = {
     # La meta del primer contacto en los informes (odd/tasks/informes-tablero.md): minutos
     # entre el primer mensaje del cliente y la primera salida en ese chat. Sale al panel.
     "sla_first_reply_minutes": "15",
+    # Los avisos de Orca por WhatsApp (odd/tasks/avisos-orca.md), al numero de aprobacion:
+    # apagados de fabrica, uno por tipo. Las horas de silencio en hora local (vacias = sin
+    # silencio), el tope por hora y cuanto espera el aviso de "termino" por si el agente
+    # sigue. Salen al panel en la clave `orcaNotices`.
+    "orca_notice_waiting": "off",
+    "orca_notice_finished": "off",
+    "orca_notice_automation": "off",
+    "orca_quiet_start": "",
+    "orca_quiet_end": "",
+    "orca_notice_hourly_cap": "6",
+    "orca_finished_delay_s": "25",
     "transcribe": "local",    # local | off | api. Local no manda el audio a ningun lado.
     "transcribe_model": "",   # vacio = lo decide la calidad; fijarlo pisa la calidad
     "transcribe_lang": "auto",    # los audios mezclan espanol e ingles
@@ -8745,6 +8765,385 @@ def texto_de_estado(con):
     return "\n".join(lineas)
 
 
+# ── Los avisos de Orca por WhatsApp (odd/tasks/avisos-orca.md) ──────────────────────────
+# La app de Orca en el telefono no avisa en segundo plano, y el dueno no se entera de que un
+# agente de otro proyecto quedo esperando su permiso. El worker ve cada estado de cada agente
+# (`agent.status.changed`) y lanza `orca-aviso` cuando uno pasa a esperar o a bloqueado (los
+# dos por el mismo interruptor y en la MISMA ventana: esperar y bloquearse seguidos en un
+# panel es un solo aviso, decision del dueno 2026-10-05); el tick avisa del
+# que termino (despues de una espera, por si sigue) y de la automatizacion que fallo. Todo va
+# por la misma cola `aviso` al numero de aprobacion, tipo `orca`, con texto FIJO: nunca lo que
+# se pidio, lo que contesto el agente, una ruta o lo que salio en la terminal. Solo
+# `--send --id`, como cualquier aviso; `wa-send` sigue frenando lo que tenga forma de secreto.
+#
+# Apagados de fabrica, uno por tipo. Dentro de las horas de silencio el aviso queda
+# `retenido` y sale UN resumen al terminar; pasado el tope por hora queda `excedido` y sale
+# UN mensaje agrupado cuando la hora tiene lugar. La clase va en el `req_id`, sin columnas
+# nuevas: `aviso-o-<espera|termino|fallo|resumen|grupo>-...`.
+TIPO_ORCA = "orca"
+CLASES_ORCA = ("espera", "termino", "fallo")
+ESTADO_RETENIDO = "retenido"
+ESTADO_EXCEDIDO = "excedido"
+# El mismo panel esperando dentro de esta ventana es el mismo aviso.
+VENTANA_ORCA_S = 300
+# Un "termino" de hace mas que esto ya no es noticia: el tick no lo manda.
+TERMINO_VIGENTE_S = 15 * 60
+# Las corridas que se miran: creadas despues de la marca y en esta ventana.
+CORRIDAS_MIRA_S = 30 * 60
+DESDE_CORRIDAS = "orca_runs_desde"
+CLAVE_PANELES = "orcaPanes"
+AVISOS_OFF = "orca-notices-off"
+LARGO_NOMBRE_ORCA = 60
+LARGO_TITULO_ORCA = 80
+LARGO_ERROR_ORCA = 160
+# Un token que empieza como una ruta (`/...`, `~/...`, `C:\...`): se borra de lo que viaja.
+RUTA_EN_TEXTO = re.compile(r"(?<![\w.-])(?:[A-Za-z]:[\\/]|~[\\/]|[\\/])[^\s'\"]*")
+TEXTOS_ORCA = {
+    "es": {"espera": "Orca: {agente}{donde} espera su respuesta.",
+           "bloqueo": "Orca: {agente}{donde} esta bloqueado y lo necesita.",
+           "termino": "Orca: {agente}{donde} termino.",
+           "fallo": "Orca: la automatizacion \"{titulo}\" fallo: {error}.",
+           "en": " en {donde}", "agente": "un agente", "agente_de": "el agente {tipo}",
+           "sin_titulo": "sin nombre", "sin_detalle": "mirela en Orca",
+           "codigo": "salio con el codigo {n}", "tiempo": "se paso del tiempo",
+           "resumen": "Orca, durante sus horas de silencio: {partes}. Los detalles estan en Orca.",
+           "grupo": "Orca: para no escribirle de mas, esto se junto en la ultima hora: {partes}.",
+           # `espera` cuenta a los que esperan y a los bloqueados: comparten la clase del id.
+           "partes": {"espera": "agentes que lo necesitan: {n}",
+                      "termino": "agentes que terminaron: {n}",
+                      "fallo": "automatizaciones que fallaron: {n}"}},
+    "en": {"espera": "Orca: {agente}{donde} is waiting for you.",
+           "bloqueo": "Orca: {agente}{donde} is blocked and needs you.",
+           "termino": "Orca: {agente}{donde} finished.",
+           "fallo": "Orca: the automation \"{titulo}\" failed: {error}.",
+           "en": " in {donde}", "agente": "an agent", "agente_de": "the {tipo} agent",
+           "sin_titulo": "unnamed", "sin_detalle": "check it in Orca",
+           "codigo": "it exited with code {n}", "tiempo": "it timed out",
+           "resumen": "Orca, during your quiet hours: {partes}. The details are in Orca.",
+           "grupo": "Orca: to avoid writing too often, this piled up in the last hour: {partes}.",
+           "partes": {"espera": "agents that need you: {n}", "termino": "agents finished: {n}",
+                      "fallo": "automations failed: {n}"}},
+    "pt": {"espera": "Orca: {agente}{donde} espera a sua resposta.",
+           "bloqueo": "Orca: {agente}{donde} esta bloqueado e precisa de voce.",
+           "termino": "Orca: {agente}{donde} terminou.",
+           "fallo": "Orca: a automacao \"{titulo}\" falhou: {error}.",
+           "en": " em {donde}", "agente": "um agente", "agente_de": "o agente {tipo}",
+           "sin_titulo": "sem nome", "sin_detalle": "confira no Orca",
+           "codigo": "saiu com o codigo {n}", "tiempo": "passou do tempo",
+           "resumen": "Orca, durante o seu horario de silencio: {partes}. Os detalhes estao no "
+                      "Orca.",
+           "grupo": "Orca: para nao escrever demais, isto se juntou na ultima hora: {partes}.",
+           "partes": {"espera": "agentes que precisam de voce: {n}",
+                      "termino": "agentes que terminaram: {n}",
+                      "fallo": "automacoes com falha: {n}"}},
+}
+
+
+def textos_orca():
+    """El idioma del panel cuando se eligio el numero, portugues incluido (como `textos_lid`)."""
+    crudo = plugin_store_raw().get("approvalLang")
+    return TEXTOS_ORCA[crudo if crudo in TEXTOS_ORCA else idioma_aprobacion()]
+
+
+def minutos_de(hora):
+    h, m = str(hora).split(":")
+    return int(h) * 60 + int(m)
+
+
+def ajustes_orca(con):
+    """Los ajustes efectivos de los avisos de Orca, ya convertidos. Un valor que no sirve
+    vale lo de fabrica, que es apagado."""
+    efectivos = merged_settings(con)
+
+    def valor(nombre):
+        v = efectivos.get(nombre)
+        v = "" if v is None else str(v).strip()
+        if (not v and nombre not in CONFIG_HORAS) or valida_ajuste(nombre, v):
+            return DEFAULT_CONFIG[nombre]
+        return v
+    ini, fin = valor("orca_quiet_start"), valor("orca_quiet_end")
+    return {"espera": valor("orca_notice_waiting") == "on",
+            "termino": valor("orca_notice_finished") == "on",
+            "fallo": valor("orca_notice_automation") == "on",
+            "silencio": (minutos_de(ini), minutos_de(fin)) if ini and fin and ini != fin else None,
+            "tope": int(valor("orca_notice_hourly_cap")),
+            "demora": int(valor("orca_finished_delay_s"))}
+
+
+def hora_local():
+    """Los minutos desde la medianoche, en la hora de esta maquina."""
+    t = time.localtime()
+    return t.tm_hour * 60 + t.tm_min
+
+
+def en_silencio(silencio, minuto):
+    """Si `minuto` cae en las horas de silencio `(inicio, fin)`, que pueden cruzar la
+    medianoche. El inicio cuenta y el fin no."""
+    if not silencio:
+        return False
+    ini, fin = silencio
+    return ini <= minuto < fin if ini < fin else minuto >= ini or minuto < fin
+
+
+def limpio_orca(valor, largo):
+    """Un nombre o un error de Orca listo para viajar: en una linea, sin rutas, recortado."""
+    return recorta(RUTA_EN_TEXTO.sub("…", str(valor or "")), largo)
+
+
+def worktrees_de_orca():
+    """Los espacios que `orca worktree ps` conoce, o []. Solo se lee repo, rama y nombre."""
+    cli = orca_cli_path()
+    sobre = orca_json(cli, ["worktree", "ps"]) if cli else None
+    res = (sobre or {}).get("result")
+    lista = res.get("worktrees") if isinstance(res, dict) else None
+    return [w for w in lista if isinstance(w, dict)] if isinstance(lista, list) else []
+
+
+def donde_de(worktree, lista):
+    """`repo · nombre` del espacio de ese agente, o "" si Orca no lo conoce."""
+    if not worktree:
+        return ""
+    w = next((x for x in lista if x.get("worktreeId") == worktree), None)
+    if not w:
+        return ""
+    partes = []
+    for p in (limpio_orca(w.get("repo"), LARGO_NOMBRE_ORCA),
+              limpio_orca(w.get("displayName") or w.get("branch"), LARGO_NOMBRE_ORCA)):
+        if p and p not in partes:
+            partes.append(p)
+    return " · ".join(partes)
+
+
+def texto_de_agente(tx, clase, tipo, donde):
+    """El texto fijo de un agente que espera o termino. Si algo tiene forma de secreto, sale
+    sin los nombres."""
+    tipo = limpio_orca(tipo, 40)
+
+    def arma(t, d):
+        agente = tx["agente_de"].format(tipo=t) if t else tx["agente"]
+        return tx[clase].format(agente=agente, donde=tx["en"].format(donde=d) if d else "")
+    texto = arma(tipo, donde)
+    return arma(tipo, "") if wa_reglas.secreto(texto) else texto
+
+
+def texto_de_fallo(tx, titulo, error):
+    texto = tx["fallo"].format(titulo=titulo, error=error)
+    return tx["fallo"].format(titulo=titulo, error=tx["sin_detalle"]) \
+        if wa_reglas.secreto(texto) else texto
+
+
+def id_orca(clase, clave, at_ms=None):
+    """El id del aviso: por panel, clase y ventana de cinco minutos, o por corrida."""
+    huella = hashlib.sha1(str(clave).encode()).hexdigest()[:12]
+    if at_ms is None:
+        return f"aviso-o-{clase}-{huella}"
+    return f"aviso-o-{clase}-{huella}-{int(at_ms // 1000 // VENTANA_ORCA_S)}"
+
+
+def orca_ultima_hora(con):
+    """Cuantos avisos de Orca salieron (o estan saliendo) en la ultima hora."""
+    desde = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 3600))
+    return con.execute("select count(*) from aviso where tipo=? and account=? and estado in "
+                       "('pendiente', 'enviado') and at >= ?",
+                       (TIPO_ORCA, cuenta_activa(), desde)).fetchone()[0]
+
+
+def orca_encola(con, req_id, texto, ajustes):
+    """Encola un aviso de Orca: retenido en silencio, excedido pasado el tope, o pendiente.
+    Sin commit. Devuelve si quedo una fila nueva."""
+    if en_silencio(ajustes["silencio"], hora_local()):
+        estado = ESTADO_RETENIDO
+    elif orca_ultima_hora(con) >= ajustes["tope"]:
+        estado = ESTADO_EXCEDIDO
+    else:
+        estado = "pendiente"
+    return aviso_encola(con, req_id, TIPO_ORCA, texto, estado=estado)
+
+
+def ya_avisado(con, req_id):
+    return con.execute("select 1 from aviso where req_id=?", (req_id,)).fetchone() is not None
+
+
+def cmd_orca_aviso(con, a):
+    """Un agente de otro proyecto paso a esperar o a bloqueado (lo lanza el worker): el aviso,
+    si el dueno lo encendio y tiene numero de aprobacion, y sale ya. Los dos estados comparten
+    el id (clase `espera`): el segundo de la misma ventana es un duplicado, en cualquier
+    orden; solo cambia el texto."""
+    ajustes = ajustes_orca(con)
+    salida = {"ok": True, "queued": False, "state": None, "reason": None}
+    if not ajustes["espera"]:
+        salida["reason"] = "off"
+        return [salida]
+    if not numero_aprobacion():
+        salida["reason"] = "no-number"
+        return [salida]
+    try:
+        at = int(str(a.at).strip())
+    except (TypeError, ValueError):
+        at = int(time.time() * 1000)
+    req = id_orca("espera", a.pane, at)
+    if ya_avisado(con, req):
+        salida["reason"] = "duplicate"
+        return [salida]
+    texto = texto_de_agente(textos_orca(), "bloqueo" if a.state == "blocked" else "espera",
+                            a.agent,
+                            donde_de(a.worktree, worktrees_de_orca() if a.worktree else []))
+    salida["queued"] = orca_encola(con, req, texto, ajustes)
+    con.commit()
+    if not salida["queued"]:
+        salida["reason"] = "duplicate"
+        return [salida]
+    envia_avisos(con)
+    fila = con.execute("select estado from aviso where req_id=?", (req,)).fetchone()
+    salida["state"] = fila["estado"] if fila else None
+    return [salida]
+
+
+def orca_terminados(con, ajustes, tx):
+    """Los paneles que terminaron un turno hace mas que la espera y siguen en `done`."""
+    paneles = plugin_store_raw().get(CLAVE_PANELES)
+    if not isinstance(paneles, dict):
+        return
+    ahora_ms = time.time() * 1000
+    lista = None
+    for pane, p in paneles.items():
+        if not isinstance(p, dict) or p.get("state") != "done" or p.get("finished") is not True:
+            continue
+        at = p.get("at")
+        if isinstance(at, bool) or not isinstance(at, (int, float)):
+            continue
+        edad = (ahora_ms - at) / 1000
+        if edad < ajustes["demora"] or edad > TERMINO_VIGENTE_S:
+            continue
+        req = id_orca("termino", pane, at)
+        if ya_avisado(con, req):
+            continue
+        if lista is None:
+            lista = worktrees_de_orca()
+        orca_encola(con, req, texto_de_agente(tx, "termino", p.get("agentType"),
+                                              donde_de(p.get("worktreeId"), lista)), ajustes)
+
+
+def error_de_corrida(r, tx):
+    """Por que fallo esa corrida, en palabras que pueden viajar, o None si no fallo. De un
+    comando solo el codigo o el plazo: nunca lo que imprimio."""
+    estado = r.get("status")
+    resultado = r.get("commandResult") if isinstance(r.get("commandResult"), dict) else {}
+    if estado == "dispatch_failed":
+        return limpio_orca(r.get("error"), LARGO_ERROR_ORCA) or tx["sin_detalle"]
+    if resultado.get("timedOut") is True:
+        return tx["tiempo"]
+    codigo = resultado.get("exitCode")
+    codigo = codigo if isinstance(codigo, int) and not isinstance(codigo, bool) else None
+    if estado == "command_failed" or (codigo is not None and codigo != 0):
+        return tx["codigo"].format(n=codigo) if codigo is not None else tx["sin_detalle"]
+    return None
+
+
+def orca_corridas(con, ajustes, tx):
+    """Las automatizaciones de Orca que fallaron desde la marca. La primera vuelta solo pone
+    la marca: un dueno que lo enciende no recibe las fallas de la semana pasada."""
+    ahora_ms = int(time.time() * 1000)
+    fila = con.execute("select value from settings where key=?", (DESDE_CORRIDAS,)).fetchone()
+    try:
+        desde = int(fila["value"]) if fila else None
+    except (TypeError, ValueError):
+        desde = None
+    if desde is None:
+        guarda_ajuste(con, DESDE_CORRIDAS, str(ahora_ms))
+        return
+    cli = orca_cli_path()
+    sobre = orca_json(cli, ["automations", "runs"]) if cli else None
+    res = (sobre or {}).get("result")
+    runs = res.get("runs") if isinstance(res, dict) else None
+    if not isinstance(runs, list):
+        return
+    piso = max(desde, ahora_ms - CORRIDAS_MIRA_S * 1000)
+    for r in runs:
+        if not isinstance(r, dict) or not isinstance(r.get("id"), str) or not r["id"]:
+            continue
+        creada = r.get("createdAt")
+        if isinstance(creada, bool) or not isinstance(creada, (int, float)) or creada <= piso:
+            continue
+        error = error_de_corrida(r, tx)
+        req = id_orca("fallo", r["id"])
+        if error is None or ya_avisado(con, req):
+            continue
+        titulo = limpio_orca(r.get("title"), LARGO_TITULO_ORCA) or tx["sin_titulo"]
+        orca_encola(con, req, texto_de_fallo(tx, titulo, error), ajustes)
+
+
+def partes_orca(tx, filas):
+    """`agentes esperando: 2, ...`: la cuenta por clase, sacada del `req_id`."""
+    cuentas = {}
+    for f in filas:
+        clase = f["req_id"].split("-")[2] if f["req_id"].count("-") >= 2 else ""
+        if clase in CLASES_ORCA:
+            cuentas[clase] = cuentas.get(clase, 0) + 1
+    return ", ".join(tx["partes"][c].format(n=cuentas[c]) for c in CLASES_ORCA if c in cuentas)
+
+
+def orca_junta(con, estado, hacia, clase, tx, plantilla):
+    """Lo que quedo `estado` para el numero de hoy sale en UN mensaje, y queda `hacia`."""
+    filas = con.execute("select req_id from aviso where tipo=? and estado=? and account=? and "
+                        "chat_jid=? order by at, rowid",
+                        (TIPO_ORCA, estado, cuenta_activa(), numero_aprobacion() or "")).fetchall()
+    partes = partes_orca(tx, filas)
+    if not filas or not partes:
+        return
+    huella = hashlib.sha1(",".join(f["req_id"] for f in filas).encode()).hexdigest()[:16]
+    aviso_encola(con, f"aviso-o-{clase}-{huella}", TIPO_ORCA, plantilla.format(partes=partes))
+    con.executemany("update aviso set estado=?, updated_at=? where req_id=? and estado=?",
+                    [(hacia, ahora_caso(), f["req_id"], estado) for f in filas])
+
+
+def orca_resumen(con, ajustes, tx):
+    """Al terminar las horas de silencio, lo retenido sale en un resumen."""
+    if not en_silencio(ajustes["silencio"], hora_local()):
+        orca_junta(con, ESTADO_RETENIDO, "resumido", "resumen", tx, tx["resumen"])
+
+
+def orca_agrupa(con, ajustes, tx):
+    """Lo que paso el tope sale en un mensaje agrupado cuando la hora tiene lugar."""
+    if (not en_silencio(ajustes["silencio"], hora_local())
+            and orca_ultima_hora(con) < ajustes["tope"]):
+        orca_junta(con, ESTADO_EXCEDIDO, "agrupado", "grupo", tx, tx["grupo"])
+
+
+def tick_orca(con, resumen):
+    """La vuelta del minuto de los avisos de Orca: los que terminaron, las automatizaciones
+    que fallaron, el resumen del silencio y el agrupado del tope. Los manda `envia_avisos`,
+    despues. Sin numero de aprobacion o con todo apagado, nada, ni una llamada a Orca."""
+    ajustes = ajustes_orca(con)
+    numero = numero_aprobacion()
+    if not ajustes["fallo"] or not numero:
+        con.execute("delete from settings where key=?", (DESDE_CORRIDAS,))
+    if not numero:
+        con.commit()
+        return
+    # Lo retenido o excedido para un numero que ya no es el de aprobacion no sale.
+    con.execute("update aviso set estado='fallido', motivo=?, updated_at=? where tipo=? and "
+                "estado in (?, ?) and account=? and chat_jid<>?",
+                (AVISO_OTRO_NUMERO, ahora_caso(), TIPO_ORCA, ESTADO_RETENIDO, ESTADO_EXCEDIDO,
+                 cuenta_activa(), numero))
+    if not (ajustes["espera"] or ajustes["termino"] or ajustes["fallo"]):
+        # Todo apagado: lo que quedo esperando no sale despues, cuando ya no es cierto.
+        con.execute("update aviso set estado='fallido', motivo=?, updated_at=? where tipo=? "
+                    "and estado in (?, ?) and account=?",
+                    (AVISOS_OFF, ahora_caso(), TIPO_ORCA, ESTADO_RETENIDO, ESTADO_EXCEDIDO,
+                     cuenta_activa()))
+        con.commit()
+        return
+    tx = textos_orca()
+    if ajustes["termino"]:
+        orca_terminados(con, ajustes, tx)
+    if ajustes["fallo"]:
+        orca_corridas(con, ajustes, tx)
+    orca_resumen(con, ajustes, tx)
+    orca_agrupa(con, ajustes, tx)
+    con.commit()
+
+
 def cmd_tick(con, a):
     """Una vuelta del minuto. Idempotente: correrlo dos veces seguidas no manda ni anota
     nada la segunda. Imprime UNA linea JSON con los conteos y nunca el texto de un
@@ -8861,6 +9260,14 @@ def cmd_tick(con, a):
                 con.rollback()
             resumen["errores"] += 1
             print(f"wa-scope: project questions skipped: {exc}", file=sys.stderr)
+        # Los avisos de Orca (avisos-orca): los encola aca y salen con los de abajo.
+        try:
+            tick_orca(con, resumen)
+        except (sqlite3.Error, OSError, ValueError) as exc:
+            if con.in_transaction:
+                con.rollback()
+            resumen["avisos_error"] += 1
+            print(f"wa-scope: Orca notices skipped: {exc}", file=sys.stderr)
         # Los avisos al numero de aprobacion (T14): despues de todo lo que pudo dejar un caso
         # esperando al dueno o bloqueado en esta vuelta.
         try:
@@ -11289,6 +11696,16 @@ def main():
                          "ingest, rule approval and wa-send --send of the clean replies "
                          "on responder chats, board sync. Idempotent; one JSON line")
     s.set_defaults(fn=cmd_tick)
+
+    s = add("orca-aviso", help="an agent in another Orca project is waiting (the worker "
+                               "runs this): one fixed-text notice to the approval number, if "
+                               "that notice is on. One JSON line")
+    s.add_argument("--state", required=True, choices=["waiting", "blocked"])
+    s.add_argument("--pane", required=True, help="the paneKey Orca reported")
+    s.add_argument("--at", default="", help="receivedAt, in ms")
+    s.add_argument("--worktree", default="", help="the worktreeId, to name the project")
+    s.add_argument("--agent", default="", help="the agent type Orca reported")
+    s.set_defaults(fn=cmd_orca_aviso)
 
     s = add("agente", help="the case agent: `lanzar` opens it now in a terminal (what "
                            "Atender ahora does); never a second one. One JSON line")

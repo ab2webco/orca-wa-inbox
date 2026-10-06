@@ -296,6 +296,20 @@ PANEL_PRIMER_CAMPOS = {"mode": "first_reply_mode", "fallbackMinutes": "ack_fallb
 # `ack` es el acuse fijo de siempre; los otros dos los escribe el agente (Beta).
 MODOS_PRIMER = ("ack", "model", "model_with_ack_fallback")
 
+# Los avisos de Orca por WhatsApp (odd/tasks/avisos-orca.md): un agente que espera, uno que
+# termino y una automatizacion que fallo, al numero de aprobacion. Viajan en UNA clave del
+# panel, como el primer mensaje, por el mismo cupo del host. Todo apagado de fabrica.
+PANEL_ORCA = "orcaNotices"
+PANEL_ORCA_CAMPOS = {"waiting": "orca_notice_waiting", "finished": "orca_notice_finished",
+                     "automationFailed": "orca_notice_automation",
+                     "quietStart": "orca_quiet_start", "quietEnd": "orca_quiet_end",
+                     "hourlyCap": "orca_notice_hourly_cap",
+                     "finishedDelaySeconds": "orca_finished_delay_s"}
+# Las horas de silencio, en hora local de la maquina: `HH:MM` de 24 horas, o vacio. Vaciar
+# una es una eleccion (quita el silencio), no un valor que falta.
+CONFIG_HORAS = ("orca_quiet_start", "orca_quiet_end")
+HORA_LOCAL = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
 # Lo que cada ajuste acepta. Un valor invalido no revienta al guardarse: revienta
 # despues, en la corrida del agente, lejos de donde se tipeo — o peor, no revienta y
 # transcribe en el idioma equivocado sin decirlo.
@@ -311,12 +325,15 @@ CONFIG_OPCIONES = {
     "ack": ("on", "off"),
     "greeting": ("on", "off"),
     "first_reply_mode": MODOS_PRIMER,
+    "orca_notice_waiting": ("on", "off"),
+    "orca_notice_finished": ("on", "off"),
+    "orca_notice_automation": ("on", "off"),
 }
 CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s", "sync_minutes",
                     "capture_max", "capture_days", "case_window_hours", "approval_hours",
                     "ack_fallback_minutes", "update_every_minutes", "updates_max",
                     "sla_first_reply_minutes", "project_question_hours",
-                    "ack_quiet_minutes")
+                    "ack_quiet_minutes", "orca_notice_hourly_cap", "orca_finished_delay_s")
 # Los numericos con un rango cerrado. Un respaldo de cero minutos es el acuse fijo de
 # siempre con otro nombre, y uno de un dia deja al cliente sin nada; un tope de avances
 # de cien es un cliente con el telefono sonando.
@@ -327,7 +344,12 @@ CONFIG_RANGOS = {"ack_fallback_minutes": (1, 60), "update_every_minutes": (1, 12
                  "sla_first_reply_minutes": (1, 1440),
                  # Cero apaga el silencio del acuse (no se mira lo que la linea escribio); mas
                  # de cuatro horas ya no es una conversacion en curso, es un cliente que vuelve.
-                 "ack_quiet_minutes": (0, 240)}
+                 "ack_quiet_minutes": (0, 240),
+                 # Un tope de cero no avisa nunca; mas de uno por minuto ya no es un aviso.
+                 "orca_notice_hourly_cap": (1, 60),
+                 # Menos de diez segundos avisa de cada pausa entre dos turnos; mas de diez
+                 # minutos ya no es "termino", es una noticia vieja.
+                 "orca_finished_delay_s": (10, 600)}
 # Los numericos que ademas tienen que ser mayores que cero. Una ventana de agrupacion de
 # cero horas no agrupa nunca: abre una tarjeta por mensaje sin decir por que. Un aviso de
 # aprobacion que vence a las cero horas no se podria contestar nunca (T14).
@@ -342,6 +364,8 @@ def valida_ajuste(key, value):
     """Devuelve el motivo del rechazo, o None si el valor sirve."""
     if key == "bot_claude_account" and not CUENTA_CLAUDE.match(str(value)):
         return f"{key} has to be auto or the id of an account from `orca account list`"
+    if key in CONFIG_HORAS and str(value).strip() and not HORA_LOCAL.match(str(value).strip()):
+        return f"{key} has to be a 24-hour time like 22:00, or empty"
     if key in CONFIG_OPCIONES and value not in CONFIG_OPCIONES[key]:
         return f"{key} only accepts: {', '.join(CONFIG_OPCIONES[key])}"
     if key in CONFIG_NUMERICOS:
@@ -379,6 +403,15 @@ def settings_from_plugin():
             continue
         value = str(value).strip()
         if value and not valida_ajuste(name, value):
+            out[name] = value
+    # Los avisos de Orca, igual; aca una hora vacia si vale: el dueno quito el silencio.
+    orca = raw.get(PANEL_ORCA)
+    for campo, name in (PANEL_ORCA_CAMPOS.items() if isinstance(orca, dict) else ()):
+        value = orca.get(campo)
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            continue
+        value = str(value).strip()
+        if (value or name in CONFIG_HORAS) and not valida_ajuste(name, value):
             out[name] = value
     return out
 

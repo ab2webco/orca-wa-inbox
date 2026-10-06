@@ -26,6 +26,7 @@ import {
 } from './agente.mjs'
 import { crearCatalogo, leerCatalogo, PROJECTS_KEY } from './catalogo.mjs'
 import { SKILLS_ACCION, SKILLS_STATUS_KEY, SKILLS_VEREDICTO } from './skills.mjs'
+import { AVISO_PLAZO_MS, crearAvisosOrca } from './avisos-orca.mjs'
 
 // Las herramientas viajan dentro del plugin. Antes se buscaban en el PATH del usuario,
 // lo que solo funcionaba en la maquina donde alguien las habia enlazado a mano.
@@ -2106,8 +2107,20 @@ export default function activate(orca) {
     return next
   })
 
+  // Los avisos de Orca por WhatsApp (avisos-orca): el estado de cada agente de los OTROS
+  // proyectos, y `wa-scope orca-aviso` cuando uno pasa a esperar y el dueno lo encendio.
+  const avisosOrca = crearAvisosOrca({
+    leer: (key) => leer(orca, key),
+    guardar: (key, value) => guardar(orca, key, value),
+    lanzar: async (args) => run(await tool('wa-scope'), args, { timeoutMs: AVISO_PLAZO_MS }),
+    llave: manifiesto && manifiesto.publisher && manifiesto.id
+      ? `${manifiesto.publisher}.${manifiesto.id}` : null,
+    log: (m) => orca.log(m)
+  })
+
   orca.events.on('agent.status.changed', (payload) => {
     orca.log(`agent ${payload.state} in ${payload.worktreeId ?? 'no worktree'}`)
+    avisosOrca.recibir(payload)
   })
 
   // Al desactivar el plugin los timers se van con el: si no, siguen leyendo WhatsApp
@@ -2123,6 +2136,7 @@ export default function activate(orca) {
     pararSalud()
     pararAutomatizaciones()
     ingesta.parar()
+    avisosOrca.parar()
     apagarSidecar()
   }
 }
