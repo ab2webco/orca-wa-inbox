@@ -2248,6 +2248,36 @@ def revisa_precheck(fallos: list) -> int:
                           f"{p.returncode}; el limite no sigue al ajuste")
         scope("config", "sync_minutes", "5")
 
+        # El ritmo es de cada linea (todo-por-linea, P5): con dos lineas, el limite de
+        # cada una sale de SU `syncMinutes`. La principal a 1 min y la otra a 60, las dos
+        # con un sync de hace 10 min: la principal esta vieja y la otra no.
+        principal, segunda = "pn:573000000001", "pn:573000000011"
+        captura = home / ".wa-inbox" / "capture.db"
+        cap = sqlite3.connect(captura)
+        cap.execute("create table if not exists store_meta (key text primary key, value text)")
+        cap.executemany("insert or replace into store_meta (key, value) values (?, ?)",
+                        [("linea_activa", principal),
+                         ("lineas_activas", json.dumps([principal, segunda]))])
+        cap.commit()
+        cap.close()
+        sembrar(pendientes=2, minutos=10)
+        datos = json.loads(store.read_text())
+        datos["syncMinutes"] = "1"
+        datos["porLinea"] = {segunda: {"activity": dict(datos["activity"]),
+                                       "health": {"ok": True, "optional": []}}}
+        datos["ajustesPorLinea"] = {segunda: {"syncMinutes": "60"}}
+        store.write_text(json.dumps(datos))
+        p_a, p_b = precheck(), precheck("--line", segunda)
+        hechas += 2
+        if p_a.returncode != 2:
+            fallos.append(f"la principal a 1 min con un sync de hace 10 salio "
+                          f"{p_a.returncode} y no 2: no usa su propio ritmo")
+        if p_b.returncode != 0:
+            fallos.append(f"la otra linea a 60 min con un sync de hace 10 salio "
+                          f"{p_b.returncode} y no 0: usa el ritmo de la principal "
+                          f"({p_b.stdout.strip()[:200]})")
+        captura.unlink()
+
         # Sin store no hay nada que responder, y eso tampoco es "no hay trabajo".
         store.unlink()
         marca.write_text("")

@@ -330,13 +330,16 @@ CONTENEDOR_DE_LINEA = "porLinea"
 # tiene en null es "sin valor", y no cae a la raiz: asi una linea nueva que copio una clave
 # vacia de la principal no hereda lo que la principal elija despues.
 #
-# Lo demas es de la maquina y vive solo en la raiz: el ritmo del sync, la transcripcion y
-# su calidad, Jev, los avisos de Orca, la cuenta de Claude del bot, las skills, los
-# proyectos y las rutas.
+# Lo demas es de la maquina y vive solo en la raiz: la transcripcion y su calidad, Jev, los
+# avisos de Orca, la cuenta de Claude del bot, las skills, los proyectos y las rutas.
+#
+# El ritmo del sync (`syncMinutes`) es de cada linea (todo-por-linea, P5): el worker tiene
+# un solo reloj, al de la linea mas frecuente, y sincroniza cada linea cuando le toca.
 AJUSTES_DE_LINEA = ("agentName", "ownerName", "tone", "owners", "approvalNumber",
                     "approvalLang", "ackMode", "ackText", "ackQuietMinutes", "greetingMode",
                     "greetingText", "firstReply", "slaMinutes", "projectQuestionHours",
-                    "inboxDays", "transcribeLang")
+                    "inboxDays", "transcribeLang",
+                    "syncMinutes")
 CONTENEDOR_AJUSTES = "ajustesPorLinea"
 CONTENEDORES = (CONTENEDOR_DE_LINEA, *CONTENEDOR_PROPIO.values(), CONTENEDOR_AJUSTES)
 

@@ -399,11 +399,50 @@ export async function correrIngesta(orca, toolsDir, estado) {
   }
 }
 
-/** Cada cuanto releer WhatsApp, segun lo que el usuario dejo puesto. */
-export async function intervaloSync(orca) {
-  const minutos = parseInt(String((await leer(orca, 'syncMinutes')) ?? ''), 10)
+/** Un `syncMinutes` guardado, en ms y dentro de las cotas. */
+function msDeSync (valor) {
+  const minutos = parseInt(String(valor ?? ''), 10)
   if (!Number.isFinite(minutos) || minutos <= 0) return SYNC_MS
   return Math.min(SYNC_MAX_MS, Math.max(SYNC_MIN_MS, minutos * 60000))
+}
+
+/** El ritmo de cada linea (todo-por-linea, P5), en ms: `{cuenta: ms}`. Pura. La primera de
+ *  `cuentas` es la principal y usa el de la raiz; cada otra, el suyo de `contenedor`
+ *  (`ajustesPorLinea`), con la misma regla que wa-scope: lo que no tiene propio es lo de la
+ *  principal, y null es "sin valor" (el de fabrica), no lo de la principal. */
+export function intervalosDeLineas (raiz, contenedor, cuentas) {
+  const todo = contenedor && typeof contenedor === 'object' ? contenedor : {}
+  const out = {}
+  cuentas.forEach((cuenta, i) => {
+    const propios = i > 0 && todo[cuenta] && typeof todo[cuenta] === 'object' ? todo[cuenta] : null
+    out[cuenta] = msDeSync(propios && 'syncMinutes' in propios
+      ? propios.syncMinutes : raiz?.syncMinutes)
+  })
+  return out
+}
+
+// Un reloj que se adelanta unos ms no deja a una linea sin su vuelta: el reloj se arma
+// despues de cada sync, asi que lo normal es que pase un poco MAS que su ritmo.
+const SYNC_HOLGURA_MS = 2000
+
+/** Las lineas a las que les toca releer WhatsApp en esta vuelta del reloj: las que ya
+ *  cumplieron SU ritmo desde su ultimo sync (`ultimos`, `{cuenta: ms}`), y las que nunca
+ *  sincronizaron. Pura, en el orden de `intervalos`. */
+export function lineasDelTurno (intervalos, ultimos, ahoraMs) {
+  return Object.keys(intervalos).filter((cuenta) => {
+    const ultimo = ultimos?.[cuenta]
+    return typeof ultimo !== 'number' || ahoraMs - ultimo + SYNC_HOLGURA_MS >= intervalos[cuenta]
+  })
+}
+
+/** Cada cuanto releer WhatsApp, segun lo que el usuario dejo puesto: con `cuentas` (las
+ *  lineas, la principal primero), el ritmo de la mas frecuente. Es el del reloj del worker y
+ *  el del cron del triage; cada linea se sincroniza despues solo cuando le toca. */
+export async function intervaloSync(orca, cuentas = []) {
+  const raiz = { syncMinutes: await leer(orca, 'syncMinutes') }
+  if (cuentas.length < 2) return msDeSync(raiz.syncMinutes)
+  const intervalos = intervalosDeLineas(raiz, await leer(orca, AJUSTES_POR_LINEA_KEY), cuentas)
+  return Math.min(...Object.values(intervalos))
 }
 
 // El storage es el UNICO canal con el panel. Tragarse un fallo aca deja al panel
@@ -544,7 +583,7 @@ let sincronizando = false
  *  no puede ejecutar nada: solo sabe leer y escribir storage. Sin esto el panel abria
  *  diciendo "corre este comando", que en una interfaz no es una instruccion, es un
  *  callejon; y cuando el sync fallaba callado, el callejon era el spinner eterno. */
-async function sync(orca, { toolsDir = TOOLS, trigger = 'timer' } = {}) {
+export async function sync(orca, { toolsDir = TOOLS, trigger = 'timer', lineas = null } = {}) {
   if (sincronizando) return false
   sincronizando = true
   // Se anota el intento ANTES de arrancar: "nadie lo intento" y "esta corriendo" son
@@ -554,14 +593,22 @@ async function sync(orca, { toolsDir = TOOLS, trigger = 'timer' } = {}) {
   })
   let estado
   try {
-    const { stdout } = await run(join(toolsDir, 'wa-scope'), ['sync', '--json'],
-      { timeoutMs: SYNC_TIMEOUT_MS })
-    let escrito = false
-    try {
-      const filas = JSON.parse(stdout || 'null')
-      escrito = !!(Array.isArray(filas) ? filas[0]?.synced : filas?.synced)
-    } catch {
-      escrito = false
+    // Sin `lineas`, todas (wa-scope reparte una corrida por linea). Con `lineas`, solo esas,
+    // cada una en su corrida y a la vez: las que no cumplieron su ritmo esperan (P5).
+    const corridas = Array.isArray(lineas)
+      ? lineas.map((cuenta) => ['sync', '--json', '--line', cuenta])
+      : [['sync', '--json']]
+    const salidas = await Promise.all(corridas.map((args) =>
+      run(join(toolsDir, 'wa-scope'), args, { timeoutMs: SYNC_TIMEOUT_MS })))
+    const stdout = salidas.map((s) => String(s.stdout ?? '').trim()).join('\n')
+    let escrito = salidas.length > 0
+    for (const salida of salidas) {
+      try {
+        const filas = JSON.parse(salida.stdout || 'null')
+        escrito = escrito && !!(Array.isArray(filas) ? filas[0]?.synced : filas?.synced)
+      } catch {
+        escrito = false
+      }
     }
     const chats = await leer(orca, CHATS_KEY)
     estado = {
@@ -1246,7 +1293,8 @@ export function decidirReinicio (intento) {
 export const AJUSTES_DE_LINEA = Object.freeze(['agentName', 'ownerName', 'tone', 'owners',
   'approvalNumber', 'approvalLang', 'ackMode', 'ackText', 'ackQuietMinutes', 'greetingMode',
   'greetingText', 'firstReply', 'slaMinutes', 'projectQuestionHours', 'inboxDays',
-  'transcribeLang'])
+  'transcribeLang',
+  'syncMinutes'])
 export const AJUSTES_POR_LINEA_KEY = 'ajustesPorLinea'
 
 /** Los ajustes propios de una linea que empieza: una copia de los de la principal (`raiz`).
@@ -1373,8 +1421,39 @@ export default function activate(orca) {
 
   // El sync automatico sale del mismo directorio que los comandos. Antes iba fijo a
   // bin/: quien movia toolsDir tenia la mitad del plugin leyendo de otro lado.
-  const sincronizar = async (trigger) =>
-    sync(orca, { toolsDir: await dirHerramientas(), trigger })
+  //
+  // Cada linea relee WhatsApp a su ritmo (todo-por-linea, P5): `ultimoSyncDe` es cuando
+  // empezo el ultimo sync de cada linea, el que mira la vuelta del reloj. Vive en memoria:
+  // al arrancar el worker sincroniza todas, asi que no hay nada que recordar de antes.
+  const ultimoSyncDe = {}
+  const sincronizar = async (trigger, lineas = null) => {
+    const toolsDir = await dirHerramientas()
+    if (!sincronizando) {
+      const ahora = Date.now()
+      for (const cuenta of lineas ?? registro.map((r) => r.cuenta)) {
+        if (cuenta) ultimoSyncDe[cuenta] = ahora
+      }
+    }
+    return sync(orca, { toolsDir, trigger, lineas })
+  }
+  /** Las cuentas de las lineas, la principal primero, para el ritmo de cada una. Con una
+   *  linea que todavia no dijo su numero no se sabe de quien es cada ritmo: [] y todo va
+   *  como siempre, al de la principal y todas juntas. */
+  const cuentasDelRitmo = () => {
+    const cuentas = registro.map((r) => r.cuenta)
+    return cuentas.length > 1 && cuentas.every((c) => typeof c === 'string' && c) ? cuentas : []
+  }
+  /** Una vuelta del reloj: sincroniza las lineas a las que ya les toca segun SU ritmo.
+   *  Todas a la vez, como siempre, cuando les toca a todas. */
+  async function turnoDeSync () {
+    const cuentas = cuentasDelRitmo()
+    if (!cuentas.length) return sincronizar('timer')
+    const intervalos = intervalosDeLineas({ syncMinutes: await leer(orca, 'syncMinutes') },
+      await leer(orca, AJUSTES_POR_LINEA_KEY), cuentas)
+    const toca = lineasDelTurno(intervalos, ultimoSyncDe, Date.now())
+    if (!toca.length) return false
+    return sincronizar('timer', toca.length === cuentas.length ? null : toca)
+  }
 
   // Antes que nada lo que necesita todo lo demas: donde esta el Orca vivo. Se vuelve a
   // resolver en cada arranque porque el runtime cambia de socket en cada arranque.
@@ -1827,12 +1906,12 @@ export default function activate(orca) {
   let syncTimer = null
   async function programarSync() {
     if (detenido) return
-    const ms = await intervaloSync(orca).catch(() => SYNC_MS)
+    const ms = await intervaloSync(orca, cuentasDelRitmo()).catch(() => SYNC_MS)
     if (detenido) return
     // Un cambio del selector reprograma mientras una lectura sigue en curso: una sola cadena.
     if (syncTimer) clearTimeout(syncTimer)
     syncTimer = setTimeout(() => {
-      sincronizar('timer')
+      turnoDeSync()
         .catch((error) => orca.log(`sync failed: ${error.message}`))
         .then(() => programarSync()
           .catch((error) => orca.log(`sync scheduling failed: ${error.message}`)))
@@ -2213,7 +2292,8 @@ export default function activate(orca) {
     if (detenido || ritmoEnVuelo) return
     ritmoEnVuelo = true
     try {
-      const minutos = Math.round((await intervaloSync(orca).catch(() => SYNC_MS)) / 60000)
+      const minutos = Math.round((await intervaloSync(orca, cuentasDelRitmo())
+        .catch(() => SYNC_MS)) / 60000)
       ritmoPedido = minutos
       const r = await ajustarRitmo(minutos)
       if (detenido) return
@@ -2236,7 +2316,8 @@ export default function activate(orca) {
   // lectura de WhatsApp para que no espere el intervalo viejo.
   async function vigilarRitmo () {
     if (detenido || ritmoPedido === null || ritmoEnVuelo) return
-    const minutos = Math.round((await intervaloSync(orca).catch(() => SYNC_MS)) / 60000)
+    const minutos = Math.round((await intervaloSync(orca, cuentasDelRitmo())
+      .catch(() => SYNC_MS)) / 60000)
     if (minutos === ritmoPedido) return
     programarSync().catch((error) => orca.log(`sync scheduling failed: ${error.message}`))
     await ajustarTriage()

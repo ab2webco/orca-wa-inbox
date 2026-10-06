@@ -1217,7 +1217,6 @@
             <button type="button" data-value="60" data-t="sync60"></button>
           </div>
           <p class="hint" data-t="syncHelp"></p>
-          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
           <p class="hint" id="triage-pace" aria-live="polite" hidden></p>
           <div class="actions">
             <button class="primary" id="save-reading" data-t="saveCard"></button>
@@ -1552,6 +1551,9 @@
             'cuesta mas lectura; mas espaciado, mas espera.',
           triagePace: 'En Orca, la automatizacion WhatsApp: triage corre cada {ritmo}.',
           triagePacing: 'Ajustando la automatizacion WhatsApp: triage al ritmo guardado\u2026',
+          triagePaceShared: 'En Orca, la automatizacion WhatsApp: triage corre cada {ritmo}, ' +
+            'el ritmo de la linea mas frecuente de este equipo. Esta linea se actualiza a su ' +
+            'propio ritmo.',
           triagePaceFail: 'No se pudo poner la automatizacion WhatsApp: triage a este ritmo ' +
             'en Orca. Se reintenta cada 5 min.',
           triagePaceMissing: 'No encuentro la automatizacion WhatsApp: triage en Orca. Revise ' +
@@ -2119,6 +2121,8 @@
             'costs more waiting.',
           triagePace: 'In Orca, the WhatsApp: triage automation runs every {ritmo}.',
           triagePacing: 'Setting the WhatsApp: triage automation to the saved pace\u2026',
+          triagePaceShared: 'In Orca, the WhatsApp: triage automation runs every {ritmo}, the ' +
+            'pace of the most frequent line on this computer. This line refreshes at its own pace.',
           triagePaceFail: 'Could not set the WhatsApp: triage automation to this pace in ' +
             'Orca. It is retried every 5 min.',
           triagePaceMissing: 'Cannot find the WhatsApp: triage automation in Orca. Check ' +
@@ -2649,6 +2653,8 @@
           'seguido custa mais leitura; mais espacado, mais espera.',
         triagePace: 'No Orca, a automacao WhatsApp: triage roda a cada {ritmo}.',
         triagePacing: 'Ajustando a automacao WhatsApp: triage ao ritmo salvo\u2026',
+        triagePaceShared: 'No Orca, a automacao WhatsApp: triage roda a cada {ritmo}, o ritmo ' +
+          'da linha mais frequente deste computador. Esta linha se atualiza no seu proprio ritmo.',
         triagePaceFail: 'Nao foi possivel colocar a automacao WhatsApp: triage neste ritmo ' +
           'no Orca. Tenta-se de novo a cada 5 min.',
         triagePaceMissing: 'Nao encontro a automacao WhatsApp: triage no Orca. Verifique ' +
@@ -3393,7 +3399,8 @@
       // cambiar de linea cuesta una lectura y no dieciseis.
       var AJUSTES_DE_LINEA = ['agentName', 'ownerName', 'tone', 'owners', 'approvalNumber',
         'approvalLang', 'ackMode', 'ackText', 'ackQuietMinutes', 'greetingMode', 'greetingText',
-        'firstReply', 'slaMinutes', 'projectQuestionHours', 'inboxDays', 'transcribeLang']
+        'firstReply', 'slaMinutes', 'projectQuestionHours', 'inboxDays', 'transcribeLang',
+        'syncMinutes']
       var CONTENEDOR_AJUSTES = 'ajustesPorLinea'
       function esDeLinea (k) { return AJUSTES_DE_LINEA.indexOf(k) !== -1 }
       /** El valor de un ajuste para la linea `cuenta`, del contenedor ya leido. Lo que la
@@ -3497,15 +3504,20 @@
           return
         }
         var guardado = parseInt(String(minutosGuardados || '5'), 10)
+        // Con varias lineas el triage corre al ritmo de la mas frecuente (todo-por-linea,
+        // P5): uno mas seguido que el de esta linea no es "ajustando", es el de otra linea.
+        var varias = lineasVinculadas().length > 1
         var texto
         var mal = false
+        var etiqueta = ETIQUETA_RITMO[r.minutes] ? t(ETIQUETA_RITMO[r.minutes]) : r.minutes + ' min'
         if (!r.ok) {
           mal = true
           texto = t(r.code === 'sin-triage' ? 'triagePaceMissing' : 'triagePaceFail')
-        } else if (guardado !== r.minutes) {
+        } else if (varias ? r.minutes > guardado : guardado !== r.minutes) {
           texto = t('triagePacing')
+        } else if (r.minutes < guardado) {
+          texto = t('triagePaceShared').replace('{ritmo}', etiqueta)
         } else {
-          var etiqueta = ETIQUETA_RITMO[r.minutes] ? t(ETIQUETA_RITMO[r.minutes]) : r.minutes + ' min'
           texto = t('triagePace').replace('{ritmo}', etiqueta)
         }
         linea.textContent = texto
@@ -7022,8 +7034,8 @@
             pintarClave('ownerName', vl('ownerName'), sello)
             pintarClave('transcribe', v('transcribe'), sello)
             pintarClave('transcribeLang', vl('transcribeLang'), sello)
-            pintarClave('syncMinutes', v('syncMinutes'), sello)
-            if (hayRespuesta(v('syncMinutes'))) minutosGuardados = v('syncMinutes')
+            pintarClave('syncMinutes', vl('syncMinutes'), sello)
+            if (hayRespuesta(vl('syncMinutes'))) minutosGuardados = vl('syncMinutes')
             // El ritmo del triage viaja en el latido: el worker lo escribe ahi.
             var latido = v('workerBeat')
             if (hayRespuesta(latido)) ritmoTriage = latido && typeof latido === 'object' ? latido.triage : null

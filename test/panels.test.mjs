@@ -8475,7 +8475,7 @@ console.log('\nconfig.html — lineas claras: que es de cada linea y que es del 
   ok('ya no hay notas de "Aplica a sus N lineas": cada pestana es de la linea elegida',
     !doc.querySelector('.nota-lineas') && !/Aplica a sus/.test(doc.body.textContent))
   const MAQUINA = ['routes-card', 'projects-card', 'orca-notices-card', 'jev-card',
-    'bot-account-card', 'skills-card', 'voice-card', 'reading-card']
+    'bot-account-card', 'skills-card', 'voice-card']
   const notaEn = (id) => [...doc.querySelectorAll(`#${id} .nota-maquina`)]
   for (const id of MAQUINA) {
     ok(`${id}: lo de la maquina lo dice donde aparece`,
@@ -8483,7 +8483,8 @@ console.log('\nconfig.html — lineas claras: que es de cada linea y que es del 
         n.textContent === 'Vale para todas las lineas de este equipo.'),
       notaEn(id).map((n) => `${n.hidden}:${n.textContent}`).join(' | '))
   }
-  const PROPIAS = ['agent-card', 'owners-card', 'auto-card', 'sla-card', 'pq-card', 'scope-form']
+  const PROPIAS = ['agent-card', 'owners-card', 'auto-card', 'sla-card', 'pq-card', 'scope-form',
+    'reading-card']
   ok('lo de cada linea no lleva esa nota', PROPIAS.every((id) => notaEn(id).length === 0),
     PROPIAS.filter((id) => notaEn(id).length).join())
   ok('los avisos de Orca dicen que salen por la principal',
@@ -8557,7 +8558,8 @@ function dosLineasConAjustes () {
     ajustesPorLinea: {
       [L_B]: { agentName: 'Agente Segunda', ownerName: 'Berta', tone: 'Tono de la segunda',
         owners: [DUENO_B], approvalNumber: DUENO_B.id, approvalLang: 'en', ackMode: 'off',
-        ackText: 'Recibido en la segunda', inboxDays: '1', transcribeLang: 'en', slaMinutes: '45' },
+        ackText: 'Recibido en la segunda', inboxDays: '1', transcribeLang: 'en', slaMinutes: '45',
+        syncMinutes: '30' },
       'pn:573000000013': { agentName: 'Agente Ajeno', claveFutura: 1 } }
   }
 }
@@ -8580,10 +8582,17 @@ console.log('\nconfig.html — A5: cada linea muestra y guarda sus propios ajust
     campo('owner') === 'Berta', `${campo('agent')} / ${campo('tone')} / ${campo('owner')}`)
   doc.getElementById('tab-avanzado').click()
   await espera()
-  ok('Avanzado: los dias y el idioma son de esa linea, el ritmo es del equipo',
+  ok('Avanzado: los dias, el idioma y el ritmo son de esa linea',
     valorSeg(doc, 'inbox-days') === '1' && valorSeg(doc, 'lang') === 'en' &&
-    valorSeg(doc, 'sync-minutes') === '10',
+    valorSeg(doc, 'sync-minutes') === '30',
     `${valorSeg(doc, 'inbox-days')} ${valorSeg(doc, 'lang')} ${valorSeg(doc, 'sync-minutes')}`)
+  elegirSeg(doc, 'sync-minutes', '2')
+  doc.getElementById('save-reading').click()
+  await new Promise((r) => setTimeout(r, 500))
+  ok('P5: guardar el ritmo en la otra linea lo guarda en ESA, y la principal sigue con el suyo',
+    storage.ajustesPorLinea[L_B].syncMinutes === '2' && storage.syncMinutes === '10' &&
+    storage.ajustesPorLinea[L_B].inboxDays === '1',
+    JSON.stringify([storage.ajustesPorLinea[L_B], storage.syncMinutes]))
 
   doc.getElementById('tab-agente').click()
   await espera()
@@ -8644,6 +8653,37 @@ console.log('\nconfig.html — A5: cada linea muestra y guarda sus propios ajust
   await espera()
   ok('volver a la principal muestra otra vez lo de la raiz',
     campo('agent') === 'Agente Principal' && campo('tone') === 'Tono de la principal', campo('agent'))
+}
+
+console.log('\nconfig.html — P5: con varias lineas, el triage corre al ritmo de la mas frecuente')
+{
+  const latido = (minutes) => ({ at: new Date().toISOString(),
+    triage: { minutes, cron: `*/${minutes} * * * *`, ok: true, code: 'ajustado' } })
+  const storage = Object.assign(dosLineasConAjustes(), { workerBeat: latido(2) })
+  const { doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  doc.getElementById('tab-avanzado').click()
+  await espera()
+  const ritmo = () => textoDe(doc, '#triage-pace')
+  ok('la principal a 10 min con el triage a 2: dice que es el de la linea mas frecuente',
+    /corre cada 2 min, el ritmo de la linea mas frecuente/.test(ritmo()) && !/Ajustando/.test(ritmo()),
+    ritmo())
+  elegirSeg(doc, 'linea-vista', L_B)
+  await new Promise((r) => setTimeout(r, 300))
+  doc.getElementById('tab-avanzado').click()
+  await espera()
+  ok('la otra linea muestra SU ritmo, y lo mismo del triage',
+    valorSeg(doc, 'sync-minutes') === '30' && /linea mas frecuente/.test(ritmo()),
+    `${valorSeg(doc, 'sync-minutes')} ${ritmo()}`)
+  const lento = Object.assign(dosLineasConAjustes(), { workerBeat: latido(60) })
+  const otro = await montar('config.html', lento, 'es-419')
+  await espera()
+  ok('un triage mas lento que la linea si es "ajustando"',
+    /Ajustando/.test(textoDe(otro.doc, '#triage-pace')), textoDe(otro.doc, '#triage-pace'))
+  const S = doc.defaultView.STRINGS
+  ok('la frase existe en los tres idiomas, el portugues propio',
+    S.es.triagePaceShared && S.en.triagePaceShared && S.pt.triagePaceShared &&
+    S.pt.triagePaceShared !== S.en.triagePaceShared)
 }
 
 console.log('\nconfig.html — A5: si la otra linea no contesta, no se ven los ajustes de la principal')
