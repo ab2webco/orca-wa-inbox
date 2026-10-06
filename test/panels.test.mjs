@@ -8209,10 +8209,11 @@ console.log('\nconfig.html — L4: la tarjeta de lineas, con una sola')
     /Vincular otra linea/.test(doc.getElementById('linea-vincular').textContent))
   ok('con una sola linea no hay selector de linea en Conversaciones',
     doc.getElementById('linea-vista-fila').hidden)
-  const tipo = doc.querySelector('#linea-principal .linea-tipo')
-  ok('el tipo dice Soporte, y Personal esta apagado hasta que exista',
-    tipo?.querySelector('button[data-value="support"]')?.getAttribute('aria-pressed') === 'true' &&
-    tipo.querySelector('button[data-value="personal"]')?.disabled === true, tipo?.outerHTML)
+  // A8: el selector de Tipo no dejaba elegir nada (Soporte siempre apretado, Personal
+  // apagado). Vuelve con la parte 2, cuando Personal exista.
+  ok('no hay selector de Tipo: no dejaba elegir nada',
+    !doc.querySelector('.linea-tipo') && !/Tipo/.test(textoDe(doc, '#lineas-card')),
+    textoDe(doc, '#lineas-card'))
 }
 
 console.log('\nconfig.html — L4: la unica linea, esperando su codigo, no ofrece soltarla')
@@ -8257,8 +8258,9 @@ console.log('\nconfig.html — L4: la linea nueva espera su codigo en su propia 
     doc.getElementById('linea-vincular').disabled)
   ok('la principal no repite su codigo en la lista',
     !doc.querySelector('#lineas-lista .linea[data-carpeta="pn-573000000001"] canvas'))
-  ok('el aviso del tipo Personal se dice una vez, no en cada fila',
-    doc.getElementById('lineas-card').textContent.split('llega en una version proxima').length === 2)
+  ok('ni el selector de Tipo ni su aviso, en ninguna fila',
+    !doc.querySelector('#lineas-card .linea-tipo') &&
+    !/llega en una version proxima/.test(doc.getElementById('lineas-card').textContent))
   const cancelar = fila.querySelector('.linea-desvincular')
   ok('la que espera su codigo se cancela, no se desvincula', cancelar?.textContent === 'Cancelar',
     cancelar?.textContent)
@@ -8300,20 +8302,28 @@ console.log('\nconfig.html — L4: desvincular una linea pide confirmacion y nom
     storage.sidecarRequest.carpeta === 'pn-573000000011', JSON.stringify(storage.sidecarRequest))
 }
 
-console.log('\nconfig.html — L5: el tipo de linea viaja al worker con su carpeta')
+console.log('\nconfig.html — A8: sin selector de Tipo en ninguna fila de linea')
 {
-  // Un registro que ya dice `personal` (la parte 2): volver a Soporte es un pedido al worker.
-  const storage = { sidecar: conLineas([Object.assign({}, lineaA, { tipo: 'personal' })]) }
+  // Un registro que ya dice `personal` (la parte 2): el panel no ofrece cambiarlo, y no le
+  // pide nada al worker. El campo y la accion `tipo` del worker siguen para la parte 2.
+  const storage = { sidecar: conLineas([Object.assign({}, lineaA, { tipo: 'personal' }), lineaB]),
+    sidecars: { 'pn-573000000011': vivaDe(L_B) } }
   const { doc } = await montar('config.html', storage, 'es-419', trabajadorLineas)
   await espera()
-  doc.querySelector('.linea[data-carpeta="pn-573000000001"] .linea-tipo button[data-value="support"]').click()
-  await new Promise((r) => setTimeout(r, 2500))
-  ok('elegir Soporte le pide al worker ese tipo para esa linea',
-    storage.sidecarRequest?.action === 'tipo' && storage.sidecarRequest.tipo === 'support' &&
-    storage.sidecarRequest.carpeta === 'pn-573000000001', JSON.stringify(storage.sidecarRequest))
+  ok('ni la principal ni la otra muestran un selector de Tipo',
+    !doc.querySelector('.linea-tipo') && !doc.querySelector('#linea-principal-tipo button') &&
+    !doc.querySelector('.linea[data-carpeta="pn-573000000011"] .seg'),
+    doc.getElementById('lineas-card').innerHTML.slice(0, 400))
+  ok('y no queda el aviso de que Personal llega despues', !/Personal/.test(textoDe(doc, '#lineas-card')),
+    textoDe(doc, '#lineas-card'))
+  ok('el panel no le pide al worker ningun tipo', !storage.sidecarRequest)
   const S = doc.defaultView.STRINGS
-  const nuevas = ['linesLegend', 'linesLink', 'linesPrincipal', 'linesTypeSupport',
-    'linesTypePersonal', 'linesPersonalLater', 'linesView', 'linesLinking']
+  const fuera = ['linesType', 'linesTypeSupport', 'linesTypePersonal', 'linesTypeSaved',
+    'linesHowTypeLater', 'linesPersonalLater']
+  ok('sus textos salen de los tres idiomas',
+    fuera.every((k) => !(k in S.es) && !(k in S.en) && !(k in S.pt)),
+    fuera.filter((k) => k in S.es || k in S.en || k in S.pt).join())
+  const nuevas = ['linesLegend', 'linesLink', 'linesPrincipal', 'linesView', 'linesLinking']
   ok('los textos de las lineas existen en los tres idiomas, el portugues propio',
     nuevas.every((k) => S.es[k] && S.en[k] && S.pt[k] && S.pt[k] !== S.en[k]),
     JSON.stringify(nuevas.filter((k) => !S.es[k] || !S.en[k] || !S.pt[k] || S.pt[k] === S.en[k])))

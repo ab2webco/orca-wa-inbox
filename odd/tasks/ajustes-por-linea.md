@@ -57,6 +57,10 @@ belonging to this computer:
   - Keep the loading state and targeted retry from v4.23.1 for every per-line read.
 - [x] **A6** Strings in ES, EN and PT. The panel's Spanish uses usted, with no voseo and no accents in the code.
 - [x] **A7** Screenshots (reduced matrix: es, dark, 390): the selector at the top, Agente on the main line, Agente on the second line, and Su aprobacion on the second line.
+- [x] **A8** `config.html`: remove the dead "Tipo" control from the lines card. It let the owner choose nothing: Support always pressed, Personal disabled.
+  - Stop rendering `controlDeTipo` in the main line row and in the other line rows; remove the `linesPersonalLater` notice.
+  - Remove the strings only that control used (`linesType`, `linesTypeSupport`, `linesTypePersonal`, `linesTypeSaved`, `linesHowTypeLater`) in ES, EN and PT, and `cambiarTipoLinea`, `TIPOS_LINEA`, `TIPOS_HABILITADOS`, `TIPO_TEXTO`.
+  - Keep the worker action `tipo` and the registry field: part 2 reuses them.
 
 ## Acceptance criteria
 

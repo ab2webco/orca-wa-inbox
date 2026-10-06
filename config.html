@@ -478,7 +478,7 @@
          esconde. */
       #qr-wrap.vencido { opacity: .4; }
       #pairing-actions[hidden], #pairing-warn[hidden] { display: none; }
-      /* Las lineas (varias lineas a la vez): una fila por numero, con su estado, su tipo y
+      /* Las lineas (varias lineas a la vez): una fila por numero, con su estado y
          sus acciones. La de una linea nueva lleva su propio QR, con el mismo fondo fijo
          que el de la vinculacion principal. */
       .lineas { list-style: none; margin: 0; padding: 0; }
@@ -493,9 +493,6 @@
       .linea-estado { font-size: 12px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .linea-estado.ok { color: var(--foreground, var(--fb-foreground)); }
       .linea-estado.bad { color: var(--destructive, var(--fb-destructive)); }
-      .linea-tipo { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px;
-                    margin-top: 8px; font-size: 12px; }
-      .linea-tipo .hint { margin: 0; flex-basis: 100%; }
       .linea-qr { display: inline-block; background: #fff; padding: 12px; margin: 8px 0 0;
                   border-radius: var(--radius-md); line-height: 0;
                   border: 1px solid var(--border, var(--fb-border)); }
@@ -614,7 +611,6 @@
             <div id="qr-wrap" hidden>
               <canvas id="qr-canvas"></canvas>
             </div>
-            <div id="linea-principal-tipo"></div>
             <!-- Desvincular es irreversible desde aca y no hay modal donde preguntar
                  (`surface` es un enum cerrado y `window.open` esta anulado, §6), asi que
                  la confirmacion vive en el boton mismo. -->
@@ -627,7 +623,6 @@
             </div>
           </div>
           <ul class="lineas" id="lineas-lista"></ul>
-          <p class="hint" data-t="linesPersonalLater"></p>
           <p class="hint" id="lineas-espera" hidden data-t="linesWaitingOne"></p>
           <!-- "Me toca refrescar?" tenia que tener una respuesta en la pantalla. Va por
                el carril de USUARIO (`call(..., true)`), no por el del sondeo. -->
@@ -1245,11 +1240,6 @@
             'principal es la de siempre; puede vincular otras a su lado.',
           linesPrincipal: 'Principal',
           linesNew: 'Linea nueva',
-          linesType: 'Tipo',
-          linesTypeSupport: 'Soporte',
-          linesTypePersonal: 'Personal',
-          linesPersonalLater: 'El tipo Personal llega en una version proxima: por ahora ' +
-            'toda linea es de soporte.',
           linesUnlink: 'Desvincular',
           linesUnlinkWarn: 'Se termina la sesion de esta linea en este equipo. Para usarla ' +
             'otra vez hay que escanear un codigo nuevo con su telefono. Las demas lineas ' +
@@ -1261,7 +1251,6 @@
             'con el telefono de esa linea.',
           linesWaitingOne: 'Hay una linea esperando su codigo: escanee ese antes de abrir ' +
             'otra.',
-          linesTypeSaved: 'Tipo guardado.',
           // ajustes-por-linea: cada pestana es de la linea elegida; lo del equipo se dice.
           machineNote: 'Vale para todas las lineas de este equipo.',
           orcaMainLine: 'Salen por la linea principal, {num}, a su numero de aprobacion.',
@@ -1274,7 +1263,6 @@
           linesHowNoLines: 'Todavia no se sabe donde viven las lineas: espere a que el ' +
             'plugin termine de arrancar y pruebe otra vez.',
           linesHowUnknown: 'Esa linea ya no esta vinculada. Vuelva a mirar la lista.',
-          linesHowTypeLater: 'Ese tipo todavia no se puede elegir.',
           // --- vinculacion (T3/T4) ---
           pairingLegend: 'Vinculacion de WhatsApp',
           pairingWaiting: 'Esperando el codigo QR',
@@ -1839,11 +1827,6 @@
             'is the usual one; you can link others next to it.',
           linesPrincipal: 'Main',
           linesNew: 'New line',
-          linesType: 'Type',
-          linesTypeSupport: 'Support',
-          linesTypePersonal: 'Personal',
-          linesPersonalLater: 'The Personal type comes in an upcoming version: for now every ' +
-            'line is a support line.',
           linesUnlink: 'Unlink',
           linesUnlinkWarn: 'This ends this line\'s session on this machine. To use it again ' +
             'you have to scan a new code with its phone. The other lines stay as they are.',
@@ -1854,7 +1837,6 @@
             'line\'s phone.',
           linesWaitingOne: 'A line is waiting for its code: scan that one before opening ' +
             'another.',
-          linesTypeSaved: 'Type saved.',
           machineNote: 'Applies to every line on this computer.',
           orcaMainLine: 'They go out through the main line, {num}, to its approval number.',
           linesApprovalFrom: "Notices for this line's cases go out through it, {num}, to this number.",
@@ -1866,7 +1848,6 @@
           linesHowNoLines: 'It is not known yet where the lines live: wait for the plugin ' +
             'to finish starting and try again.',
           linesHowUnknown: 'That line is no longer linked. Look at the list again.',
-          linesHowTypeLater: 'That type cannot be chosen yet.',
           // --- pairing (T3/T4) ---
           pairingLegend: 'WhatsApp pairing',
           pairingWaiting: 'Waiting for the QR code',
@@ -2397,11 +2378,6 @@
           'principal e a de sempre; voce pode vincular outras ao lado dela.',
         linesPrincipal: 'Principal',
         linesNew: 'Linha nova',
-        linesType: 'Tipo',
-        linesTypeSupport: 'Suporte',
-        linesTypePersonal: 'Pessoal',
-        linesPersonalLater: 'O tipo Pessoal chega numa versao proxima: por enquanto toda ' +
-          'linha e de suporte.',
         linesUnlink: 'Desvincular',
         linesUnlinkWarn: 'A sessao desta linha nesta maquina termina. Para usa-la de novo e ' +
           'preciso escanear um codigo novo com o telefone dela. As outras linhas continuam ' +
@@ -2413,7 +2389,6 @@
           'telefone dessa linha.',
         linesWaitingOne: 'Ha uma linha esperando o seu codigo: escaneie esse antes de abrir ' +
           'outra.',
-        linesTypeSaved: 'Tipo salvo.',
           machineNote: 'Vale para todas as linhas deste computador.',
           orcaMainLine: 'Saem pela linha principal, {num}, para o numero de aprovacao dela.',
           linesApprovalFrom: 'Os avisos dos casos desta linha saem por ela, {num}, para este numero.',
@@ -2425,7 +2400,6 @@
         linesHowNoLines: 'Ainda nao se sabe onde ficam as linhas: espere o plugin terminar ' +
           'de iniciar e tente de novo.',
         linesHowUnknown: 'Essa linha ja nao esta vinculada. Olhe a lista de novo.',
-        linesHowTypeLater: 'Esse tipo ainda nao pode ser escolhido.',
         pairingLegend: 'Vinculacao do WhatsApp',
         pairingWaiting: 'Aguardando o codigo QR',
         pairingWaitingHow: 'Conectando ao WhatsApp. Deixe este painel aberto ' +
@@ -3252,9 +3226,7 @@
         desconocido: 'pairingHowUnknown',
         // Varias lineas a la vez: lo que el worker contesta sobre una linea.
         'sin-lineas': 'linesHowNoLines',
-        'linea-desconocida': 'linesHowUnknown',
-        'tipo-no-disponible': 'linesHowTypeLater',
-        'tipo-invalido': 'linesHowTypeLater'
+        'linea-desconocida': 'linesHowUnknown'
       }
 
       // El permiso y el servicio se guardan con estos valores y no se traducen nunca en
@@ -6625,11 +6597,6 @@
       // sobre un boton que se reemplazo entre el `pointerdown` y el `click`.
       var firmaLineas = null
       var firmaVista = null
-      // Los tipos que se pueden elegir hoy. `personal` existe pero espera a la parte 2: el
-      // worker lo rechaza igual (`TIPOS_HABILITADOS` en main.mjs).
-      var TIPOS_LINEA = ['support', 'personal']
-      var TIPOS_HABILITADOS = ['support']
-      var TIPO_TEXTO = { support: 'linesTypeSupport', personal: 'linesTypePersonal' }
       // Con las MISMAS palabras que la fila principal (`renderPairing`): dos frases para el mismo
       // estado en la misma tarjeta se leen como dos estados distintos.
       var LINEA_ESTADO = { connected: 'pairingConnected', waiting: 'pairingWaiting',
@@ -6757,9 +6724,8 @@
       }
 
       /** La fila de la principal: la vinculacion de siempre (su estado, su QR, Reintentar y
-       *  Desvincular los pinta `renderPairing`), con su numero arriba y su tipo. La marca
+       *  Desvincular los pinta `renderPairing`), con su numero arriba. La marca
        *  "Principal" solo con otra linea al lado: con una sola no hay de que distinguirla. */
-      var firmaPrincipal = null
       function renderPrincipal () {
         var l = registroLineas[0] || null
         var d = sidecarUlt && hayRespuesta(sidecarUlt) ? sidecarUlt : null
@@ -6768,34 +6734,7 @@
         el('linea-principal-cab').hidden = !numero
         el('linea-principal-num').textContent = numero
         el('linea-principal-marca').hidden = registroLineas.length < 2
-        var caja = el('linea-principal-tipo')
         if (l) el('linea-principal').setAttribute('data-carpeta', l.carpeta)
-        var firma = JSON.stringify([LANG, l, liveStorage])
-        if (firma === firmaPrincipal) return
-        firmaPrincipal = firma
-        caja.textContent = ''
-        if (l) caja.appendChild(controlDeTipo(l, 0))
-      }
-
-      function controlDeTipo (l, i) {
-        var tipo = nodo('div', 'linea-tipo')
-        var etiqueta = nodo('span', '', t('linesType'))
-        etiqueta.id = 'linea-tipo-' + i
-        var seg = nodo('div', 'seg')
-        seg.setAttribute('role', 'group')
-        seg.setAttribute('aria-labelledby', etiqueta.id)
-        TIPOS_LINEA.forEach(function (valor) {
-          var b = nodo('button', '', t(TIPO_TEXTO[valor]))
-          b.type = 'button'
-          b.setAttribute('data-value', valor)
-          apretar(b, (l.tipo || 'support') === valor)
-          if (TIPOS_HABILITADOS.indexOf(valor) < 0) b.disabled = true
-          b.addEventListener('click', function () { cambiarTipoLinea(l, valor, b) })
-          seg.appendChild(b)
-        })
-        tipo.appendChild(etiqueta)
-        tipo.appendChild(seg)
-        return tipo
       }
 
       function filaDeLinea (l, i, estado, tam) {
@@ -6815,7 +6754,6 @@
           li.appendChild(caja)
           dibujarQrEn(canvas, d.qr.qr, tam)
         }
-        li.appendChild(controlDeTipo(l, i))
         var confirmando = confirmandoLinea === l.carpeta
         // Una linea nueva que todavia espera su codigo no tiene sesion que soltar:
         // cancelarla es un clic y no pide confirmacion.
@@ -6839,16 +6777,6 @@
         }
         li.appendChild(acciones)
         return li
-      }
-
-      /** El tipo de una linea se lo pide al worker, que es quien guarda el registro. */
-      function cambiarTipoLinea (l, tipo, boton) {
-        if ((l.tipo || 'support') === tipo) return
-        busy(boton, pedirAlWorker('sidecarRequest', 'sidecarResult',
-          { action: 'tipo', carpeta: l.carpeta, tipo: tipo }).then(function (v) {
-          contarLinea(v, 'linesTypeSaved')
-          return reload()
-        })).then(repintarLineas, repintarLineas)
       }
 
       /** Desvincular una linea es irreversible desde aca, como el de la principal: el
