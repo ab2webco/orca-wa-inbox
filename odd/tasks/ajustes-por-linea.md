@@ -48,7 +48,7 @@ belonging to this computer:
   - owners
   - approval number and language
 - [x] **A3** Approval notices for a case go from that case's line to that line's approval number. Orca notices stay on the main line.
-- [ ] **A4** `main.mjs`: the first time a non-main registry entry gets its `cuenta` (`alSaberCuenta`), and `ajustesPorLinea[cuenta]` does not exist yet, copy the current root values of `AJUSTES_DE_LINEA` into it. Do not copy again when that number is relinked.
+- [x] **A4** `main.mjs`: the first time a non-main registry entry gets its `cuenta` (`alSaberCuenta`), and `ajustesPorLinea[cuenta]` does not exist yet, copy the current root values of `AJUSTES_DE_LINEA` into it. Do not copy again when that number is relinked.
 - [ ] **A5** `config.html`: move the line selector to the top of the panel, above the tabs, shown only with two or more linked lines. `lineaVista` drives every tab.
   - For another line, per-line keys are read from and written to `ajustesPorLinea[cuenta]`. Write the whole container with read-modify-write, as `escribirAlcanceVisto` does.
   - Remove the "Aplica a sus N lineas" notes from per-line sections.

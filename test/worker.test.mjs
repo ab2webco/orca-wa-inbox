@@ -63,7 +63,7 @@ const PLUGIN_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
 
 const {
   default: activate, intervaloSync, lanzarSidecar, programarIngesta, correrIngesta,
-  INGESTA_AVISOS_MAX, INGESTA_ESPERA_MS
+  INGESTA_AVISOS_MAX, INGESTA_ESPERA_MS, sembrarAjustesDeLinea, AJUSTES_DE_LINEA
 } = await import('../main.mjs')
 const { workspaceDir, dataDir } = await import('../harness.mjs')
 
@@ -1997,6 +1997,108 @@ console.log('\nworker: L2 — un sidecar por linea, y cada pedido toca solo la s
     ok('y la que queda pasa a ser la principal: su QR ahora en la clave de siempre',
       (orca.store.lineas || [])[0]?.carpeta === nueva && orca.store.sidecar?.qr?.qr === `QR-${nueva}` &&
       !orca.store.sidecars?.[nueva], JSON.stringify({ l: orca.store.lineas, s: orca.store.sidecar }))
+    apagar()
+    await dormir(500)
+  } finally {
+    process.env.HOME = homeAntes
+    process.env.XDG_CONFIG_HOME = xdgAntes
+    process.env.APPDATA = appAntes
+  }
+}
+
+// ───────── A4: una linea nueva empieza con los ajustes de la principal ─────────
+// La primera vez que una linea que no es la principal dice su numero, sus ajustes propios
+// (`ajustesPorLinea[<numero>]`) nacen como una copia de los de la principal, en la raiz.
+// Despues son suyos: cambiar la principal no la cambia, y volver a vincular ese numero no
+// la copia otra vez.
+console.log('\nworker: A4 — una linea nueva empieza con los ajustes de la principal')
+{
+  const raiz = { agentName: 'Agente Principal', tone: 'Tono de la principal',
+    owners: [{ id: '100000000000001@lid', name: 'Dueno' }],
+    approvalNumber: '100000000000001@lid', approvalLang: 'es', ackMode: 'on',
+    firstReply: { mode: 'ack', fallbackMinutes: '5', everyMinutes: '10', max: '3' } }
+  const copia = sembrarAjustesDeLinea(undefined, 'pn:573000000001', raiz)
+  const propios = copia && copia['pn:573000000001']
+  ok('la copia lleva cada ajuste de linea de la principal, y nada de la maquina',
+    propios && Object.keys(propios).sort().join() === [...AJUSTES_DE_LINEA].sort().join() &&
+    propios.agentName === 'Agente Principal' &&
+    JSON.stringify(propios.owners) === JSON.stringify(raiz.owners) &&
+    propios.firstReply.mode === 'ack' && !('syncMinutes' in propios), JSON.stringify(copia))
+  ok('lo que la principal no tiene queda vacio y no ausente: no hereda lo que elija despues',
+    propios && propios.ackText === null && propios.slaMinutes === null, JSON.stringify(propios))
+  propios.owners.push({ id: 'otro@lid' })
+  ok('la copia no comparte nada con la raiz: cambiar una no cambia la otra',
+    raiz.owners.length === 1, JSON.stringify(raiz.owners))
+  const todo = { 'pn:573000000001': { agentName: 'Propio' }, 'pn:573000000013': { claveFutura: 1 } }
+  const completa = Object.fromEntries(AJUSTES_DE_LINEA.map((k) => [k, k === 'agentName' ? 'Propio' : null]))
+  ok('una linea que ya tiene todos sus ajustes no se copia otra vez',
+    sembrarAjustesDeLinea({ 'pn:573000000001': completa }, 'pn:573000000001', raiz) === null)
+  const relleno = sembrarAjustesDeLinea(todo, 'pn:573000000001', raiz)
+  ok('a una que tiene algunos solo se le suma lo que falta: lo suyo no se pisa',
+    relleno && relleno['pn:573000000001'].agentName === 'Propio' &&
+    relleno['pn:573000000001'].approvalNumber === '100000000000001@lid', JSON.stringify(relleno))
+  ok('y lo de las otras lineas, con claves que no se conocen, queda intacto',
+    relleno && JSON.stringify(relleno['pn:573000000013']) === '{"claveFutura":1}' &&
+    todo['pn:573000000001'].approvalNumber === undefined, JSON.stringify(relleno))
+
+  const homeAntes = process.env.HOME
+  const xdgAntes = process.env.XDG_CONFIG_HOME
+  const appAntes = process.env.APPDATA
+  const casa = join(RAIZ, 'home-ajustes')
+  process.env.HOME = casa
+  process.env.XDG_CONFIG_HOME = join(casa, '.config')
+  process.env.APPDATA = join(casa, 'AppData', 'Roaming')
+  for (const b of [join(casa, 'Library', 'Application Support'), process.env.XDG_CONFIG_HOME,
+    process.env.APPDATA]) mkdirSync(join(b, 'orca'), { recursive: true })
+  try {
+    const base = dataDir(PLUGIN_DIR, 'wa-auth')
+    for (const n of ['573000000002', '573000000001', '573000000012']) {
+      mkdirSync(join(base, `pn-${n}`), { recursive: true })
+      writeFileSync(join(base, `pn-${n}`, 'creds.json'), JSON.stringify({ me: { id: `${n}:2@s.whatsapp.net` } }))
+    }
+    const guion = join(RAIZ, 'sidecar-ajustes.cjs')
+    writeFileSync(guion,
+      '#!/usr/bin/env node\n' +
+      'const fs = require("node:fs")\n' +
+      'const path = require("node:path")\n' +
+      'const dir = process.env.WA_SIDECAR_AUTH_DIR\n' +
+      'function emit (m) { process.stdout.write(JSON.stringify(m) + "\\n") }\n' +
+      'const me = JSON.parse(fs.readFileSync(path.join(dir, "creds.json"), "utf8")).me.id\n' +
+      'emit({ type: "connection", state: "open" })\n' +
+      'emit({ type: "linea", cuenta: "pn:" + me.split(":")[0], cambio: false, ts: Date.now() })\n' +
+      'setInterval(() => {}, 1000)\n', { mode: 0o755 })
+    // La ...0003 ya estuvo vinculada: sus ajustes estan, y uno es suyo.
+    const yaEstaba = Object.fromEntries(AJUSTES_DE_LINEA.map((k) => [k, null]))
+    yaEstaba.agentName = 'Agente De La Tercera'
+    const orca = hostFalso(herramientas('ajustes', '#!/bin/sh\necho \'[]\'\n'), {
+      ...raiz,
+      syncMinutes: '10',
+      lineas: [{ carpeta: 'pn-573000000002', cuenta: 'pn:573000000002', tipo: 'support' },
+        { carpeta: 'pn-573000000001', cuenta: 'pn:573000000001', tipo: 'support' },
+        { carpeta: 'pn-573000000012', cuenta: 'pn:573000000012', tipo: 'support' }],
+      ajustesPorLinea: { 'pn:573000000012': yaEstaba, 'pn:573000000013': { claveFutura: 1 } }
+    }, guion)
+    const { apagar } = await arranca(orca)
+    await hasta(() => orca.store.ajustesPorLinea?.['pn:573000000001'], 15000)
+    const linea = orca.store.ajustesPorLinea?.['pn:573000000001']
+    ok('al decir su numero, la linea nueva queda con los ajustes de la principal',
+      linea && linea.agentName === 'Agente Principal' && linea.tone === 'Tono de la principal' &&
+      linea.approvalNumber === '100000000000001@lid' && linea.ackText === null &&
+      !('syncMinutes' in linea), JSON.stringify(orca.store.ajustesPorLinea))
+    ok('la principal no tiene ajustes aparte: los suyos siguen en la raiz',
+      !orca.store.ajustesPorLinea?.['pn:573000000002'] && orca.store.agentName === 'Agente Principal',
+      JSON.stringify(orca.store.ajustesPorLinea))
+    ok('una linea que vuelve a vincularse no se copia otra vez',
+      orca.store.ajustesPorLinea?.['pn:573000000012']?.agentName === 'Agente De La Tercera',
+      JSON.stringify(orca.store.ajustesPorLinea?.['pn:573000000012']))
+    ok('y lo que el worker no conoce del contenedor queda como estaba',
+      JSON.stringify(orca.store.ajustesPorLinea?.['pn:573000000013']) === '{"claveFutura":1}',
+      JSON.stringify(orca.store.ajustesPorLinea))
+    orca.store.agentName = 'Agente Cambiado'
+    await dormir(500)
+    ok('cambiar la principal despues no cambia la linea nueva',
+      orca.store.ajustesPorLinea?.['pn:573000000001']?.agentName === 'Agente Principal',
+      JSON.stringify(orca.store.ajustesPorLinea?.['pn:573000000001']))
     apagar()
     await dormir(500)
   } finally {
