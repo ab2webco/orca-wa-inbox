@@ -1152,7 +1152,17 @@
         <section id="skills-card">
           <h2 data-t="skillsLegend"></h2>
           <p class="hint lead" data-t="skillsHelp"></p>
-          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
+          <p class="hint" data-t="skillsMachineNote"></p>
+          <!-- Lo unico de cada linea (todo-por-linea, P7): por cual linea avisan las skills.
+               Se guarda en `skillsLine` (null es la principal); lo lee `wa-scope owner`. -->
+          <div class="switch-row" id="skills-line-row" hidden>
+            <button type="button" class="switch" id="skills-line" role="switch"
+                    aria-checked="false" aria-labelledby="skills-line-label"><span
+                    class="knob"></span></button>
+            <span id="skills-line-label" data-t="skillsLineLabel"></span>
+            <span class="said" id="said-skills-line"></span>
+          </div>
+          <p class="hint" id="skills-line-text" hidden></p>
           <div id="skills-wrap"></div>
           <div class="actions">
             <span class="said" id="said-skills"></span>
@@ -1351,6 +1361,12 @@
             'cualquier proyecto. Instalela global, para todos sus proyectos, o solo en los ' +
             'proyectos que eligio en la pestana Proyectos. El plugin las pone al dia solo cada ' +
             'vez que se actualiza.',
+          skillsMachineNote: 'Las skills se instalan en este equipo, no en una linea: Claude ' +
+            'Code las carga en todas sus sesiones. Lo unico que se elige por linea es por cual ' +
+            'linea le avisan.',
+          skillsLineLabel: 'Las skills avisan por esta linea',
+          skillsLineNow: 'Las skills le avisan por la linea {num}, al numero de aprobacion de ' +
+            'esa linea.',
           skillsEditNote: 'Si edita una seccion del archivo, esa seccion queda suya: las ' +
             'actualizaciones no la tocan.',
           skillsRepoNote: 'Instalarla en un proyecto deja un archivo en ese repositorio ' +
@@ -1928,6 +1944,12 @@
           skillsHelp: 'A skill teaches a Claude Code agent to use this plugin from any ' +
             'project. Install it globally, for all your projects, or only in the projects you ' +
             'picked in the Projects tab. The plugin keeps them up to date every time it updates.',
+          skillsMachineNote: 'Skills are installed on this computer, not on a line: Claude Code ' +
+            'loads them in every session. The only per-line choice is which line they notify ' +
+            'you through.',
+          skillsLineLabel: 'Skills notify through this line',
+          skillsLineNow: 'Skills notify you through the line {num}, at that line\'s approval ' +
+            'number.',
           skillsEditNote: 'If you edit a section of the file, that section is yours: updates ' +
             'leave it alone.',
           skillsRepoNote: 'Installing it in a project leaves a file in that repository ' +
@@ -2526,6 +2548,12 @@
           'qualquer projeto. Instale-a de forma global, para todos os seus projetos, ou so nos ' +
           'projetos que escolheu na aba Projetos. O plugin as atualiza sozinho a cada ' +
           'atualizacao.',
+        skillsMachineNote: 'As skills sao instaladas neste computador, nao em uma linha: o ' +
+          'Claude Code as carrega em todas as sessoes. A unica escolha por linha e por qual ' +
+          'linha elas avisam voce.',
+        skillsLineLabel: 'As skills avisam por esta linha',
+        skillsLineNow: 'As skills avisam voce pela linha {num}, no numero de aprovacao dessa ' +
+          'linha.',
         skillsEditNote: 'Se editar uma secao do arquivo, essa secao fica sua: as atualizacoes ' +
           'nao mexem nela.',
         skillsRepoNote: 'Instala-la em um projeto deixa um arquivo nesse repositorio ' +
@@ -6467,7 +6495,68 @@
           '</div>'
       }
 
+      // ---------- por cual linea avisan las skills (todo-por-linea, P7) ----------
+      // Las skills se instalan en el equipo; lo que se elige por linea es por cual avisan.
+      // UNA eleccion para el equipo, en la raiz (`skillsLine`): la cuenta de la linea, o null
+      // para la principal. Una linea elegida que ya no esta vinculada vuelve a la principal,
+      // igual que en `wa-scope owner`.
+      var lineaSkills = null
+      var lineaSkillsLeida = false
+      function lineaDeSkills () {
+        var vinc = lineasVinculadas()
+        if (vinc.some(function (l) { return l.cuenta === lineaSkills })) return lineaSkills
+        return vinc.length ? vinc[0].cuenta : null
+      }
+      function renderLineaSkills () {
+        var vinc = lineasVinculadas()
+        var fila = el('skills-line-row')
+        var texto = el('skills-line-text')
+        if (vinc.length < 2 || !lineaSkillsLeida) {
+          fila.hidden = true
+          texto.hidden = true
+          return
+        }
+        var vista = otraLineaVista() || vinc[0].cuenta
+        var elegida = lineaDeSkills()
+        var sw = el('skills-line')
+        sw.setAttribute('aria-checked', elegida === vista ? 'true' : 'false')
+        // La principal es la de fabrica: avisa cuando ninguna otra lo hace, asi que ahi no
+        // se apaga; se elige otra linea encendiendola en esa.
+        sw.disabled = elegida === vista && vista === vinc[0].cuenta
+        var l = vinc.filter(function (x) { return x.cuenta === elegida })[0]
+        texto.textContent = fmt('skillsLineNow', { num: numeroDeLinea(l, estadoDeLinea(l)) })
+        fila.hidden = false
+        texto.hidden = false
+      }
+      function leerLineaSkills () {
+        if (lineasVinculadas().length < 2) return Promise.resolve()
+        return read('skillsLine', true).then(function (v) {
+          if (!hayRespuesta(v)) return
+          lineaSkills = typeof v === 'string' && v ? v : null
+          lineaSkillsLeida = true
+          renderLineaSkills()
+        })
+      }
+      // Un interruptor actua al apretarlo, como el de Jev.
+      el('skills-line').addEventListener('click', function (event) {
+        var vinc = lineasVinculadas()
+        var sw = event.currentTarget
+        if (vinc.length < 2 || sw.getAttribute('aria-busy') === 'true') return
+        var vista = otraLineaVista() || vinc[0].cuenta
+        var nueva = lineaDeSkills() === vista || vista === vinc[0].cuenta ? null : vista
+        sw.setAttribute('aria-busy', 'true')
+        sw.disabled = true
+        write('skillsLine', nueva).then(function (w) {
+          var bien = !!(w && w.ok)
+          if (bien) lineaSkills = nueva
+          said('said-skills-line', bien ? '✓ ' + t('savedOk') : t('saveFailed'), !bien)
+          sw.removeAttribute('aria-busy')
+          renderLineaSkills()
+        })
+      })
+
       function leerSkills () {
+        leerLineaSkills()
         return pedirAlWorker('scopeRequest', 'scopeResult', { action: 'skills-estado' })
           .then(function () { return read('skillsStatus', true) })
           .then(function (v) { if (hayRespuesta(v)) renderSkills(v) })
@@ -6844,6 +6933,7 @@
         var vinc = lineasVinculadas()
         var fila = el('linea-vista-fila')
         renderNotasLineas()
+        renderLineaSkills()
         if (vinc.length < 2) {
           fila.hidden = true
           lineaVista = null
@@ -6886,6 +6976,7 @@
         renderVistaLineas()
         // Jev ya esta leido para todas las lineas (`jevStatus`): se repinta el de la nueva.
         if (jevUltimo && !jevEnviando) renderJev(jevUltimo)
+        renderLineaSkills()
         if (nueva) pintarLeyendoLinea(nueva)
         reload().then(function () {
           if (autoPedida) leerAuto()

@@ -459,7 +459,11 @@ def main() -> int:
                           "wait-timeout", "no-owner-chat", "owner-chat-not-authorized",
                           "never send a credential", "keep it short",
                           "never message anyone but the owner", "cannot approve",
-                          "send-approve-not-owner")
+                          "send-approve-not-owner",
+                          # La linea por la que avisa la elige el dueno (todo-por-linea, P7):
+                          # sale de `owner --json` y viaja a cada envio y cada espera.
+                          '"$WA/wa-scope" owner --json', '--line "$LINE" --send --json',
+                          '--after "$S" --line "$LINE"')
               if f.lower() not in plano_avisos.lower()]
     if faltan:
         fallos.append(f"{SKILL_AVISOS}  no dice {', '.join(faltan)}")

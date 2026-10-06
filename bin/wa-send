@@ -327,8 +327,9 @@ def resolver_conversacion(ref, linea):
     elif len(cuentas) > 1 and es_chat_del_dueno(filas) and \
             wa_store.linea_activa_en_disco() in cuentas:
         # El chat del dueno (`wa-scope owner`) esta en cada linea —cada una le avisa lo
-        # suyo—, y lo que le escribe un agente de otro proyecto sale por la principal, que es
-        # la linea del dueno: la misma que dice `wa-scope owner`. Nunca se elige a ciegas.
+        # suyo—, y lo que le escribe un agente de otro proyecto sin nombrar linea sale por la
+        # principal, que es la linea del dueno. Nunca se elige a ciegas. La skill de avisos
+        # nombra siempre la suya (`--line`, la que dice `wa-scope owner`, todo-por-linea P7).
         principal = wa_store.linea_activa_en_disco()
         filas = [f for f in filas if f["account"] == principal]
     elif len(cuentas) > 1:

@@ -726,6 +726,21 @@ def duenos(linea=None):
 IDIOMAS_AVISO = ("es", "en")
 
 
+PANEL_LINEA_SKILLS = "skillsLine"
+
+
+def linea_de_avisos():
+    """La linea por la que las skills le avisan al dueno (todo-por-linea, P7): la que eligio
+    en el panel (`skillsLine`) mientras siga vinculada, o la principal. Es UNA para el
+    equipo: las skills se instalan en el equipo, no en una linea; lo que es de una linea es
+    por cual avisan."""
+    ws = _wa_store()
+    elegida = plugin_store_raw().get(PANEL_LINEA_SKILLS)
+    if isinstance(elegida, str) and elegida in ws.lineas_activas_en_disco():
+        return elegida
+    return ws.linea_activa_en_disco()
+
+
 PANEL_JEV = "jevEnabled"
 
 

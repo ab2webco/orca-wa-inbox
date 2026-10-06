@@ -8475,7 +8475,7 @@ console.log('\nconfig.html — lineas claras: que es de cada linea y que es del 
   ok('ya no hay notas de "Aplica a sus N lineas": cada pestana es de la linea elegida',
     !doc.querySelector('.nota-lineas') && !/Aplica a sus/.test(doc.body.textContent))
   const MAQUINA = ['routes-card', 'projects-card', 'orca-notices-card',
-    'bot-account-card', 'skills-card', 'voice-card']
+    'bot-account-card', 'voice-card']
   const notaEn = (id) => [...doc.querySelectorAll(`#${id} .nota-maquina`)]
   for (const id of MAQUINA) {
     ok(`${id}: lo de la maquina lo dice donde aparece`,
@@ -8734,6 +8734,52 @@ console.log('\nconfig.html — P6: Jev se enciende y se apaga en cada linea, con
   ok('la frase de la llave existe en los tres idiomas, el portugues propio',
     S.es.jevKeyShared && S.en.jevKeyShared && S.pt.jevKeyShared &&
     S.pt.jevKeyShared !== S.en.jevKeyShared)
+}
+
+console.log('\nconfig.html — P7: las skills se instalan en el equipo y avisan por la linea elegida')
+{
+  const storage = dosLineasConAjustes()
+  const { doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  doc.getElementById('tab-skills').click()
+  await new Promise((r) => setTimeout(r, 500))
+  const sw = doc.getElementById('skills-line')
+  const fila = doc.getElementById('skills-line-row')
+  const dice = () => textoDe(doc, '#skills-line-text')
+  ok('la tarjeta dice que las skills se instalan en este equipo, sin la nota de maquina',
+    /se instalan en este equipo/.test(textoDe(doc, '#skills-card')) &&
+    !doc.querySelector('#skills-card .nota-maquina'), textoDe(doc, '#skills-card').slice(0, 300))
+  ok('sin nada elegido avisan por la principal: encendido ahi, y no se puede apagar',
+    !fila.hidden && sw.getAttribute('aria-checked') === 'true' && sw.disabled &&
+    /por la linea \+573000000001/.test(dice()), `${fila.hidden} ${sw.getAttribute('aria-checked')} ${dice()}`)
+  elegirSeg(doc, 'linea-vista', L_B)
+  await new Promise((r) => setTimeout(r, 300))
+  ok('en la otra linea, apagado y se puede encender',
+    sw.getAttribute('aria-checked') === 'false' && !sw.disabled, sw.getAttribute('aria-checked'))
+  sw.click()
+  await new Promise((r) => setTimeout(r, 500))
+  ok('encenderlo ahi guarda esa linea para las skills, en la raiz',
+    storage.skillsLine === L_B && sw.getAttribute('aria-checked') === 'true' &&
+    /por la linea \+573000000011/.test(dice()), `${JSON.stringify(storage.skillsLine)} ${dice()}`)
+  elegirSeg(doc, 'linea-vista', L_A)
+  await new Promise((r) => setTimeout(r, 300))
+  ok('y en la principal queda apagado, y se puede volver a elegir',
+    sw.getAttribute('aria-checked') === 'false' && !sw.disabled && /\+573000000011/.test(dice()),
+    `${sw.getAttribute('aria-checked')} ${dice()}`)
+  sw.click()
+  await new Promise((r) => setTimeout(r, 500))
+  ok('elegir la principal la deja sin linea aparte (null), como de fabrica',
+    storage.skillsLine === null && sw.getAttribute('aria-checked') === 'true',
+    JSON.stringify(storage.skillsLine))
+  const una = await montar('config.html', { sidecar: conLineas([lineaA]) }, 'es-419')
+  await espera()
+  ok('con una sola linea no hay nada que elegir',
+    una.doc.getElementById('skills-line-row').hidden && una.doc.getElementById('skills-line-text').hidden)
+  const S = doc.defaultView.STRINGS
+  const claves = ['skillsMachineNote', 'skillsLineLabel', 'skillsLineNow']
+  ok('las frases existen en los tres idiomas, el portugues propio',
+    claves.every((k) => S.es[k] && S.en[k] && S.pt[k] && S.pt[k] !== S.en[k]),
+    claves.filter((k) => !S.es[k] || !S.en[k] || !S.pt[k] || S.pt[k] === S.en[k]).join())
 }
 
 console.log('\nconfig.html — A5: si la otra linea no contesta, no se ven los ajustes de la principal')
