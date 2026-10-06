@@ -331,11 +331,10 @@ CONTENEDOR_DE_LINEA = "porLinea"
 # vacia de la principal no hereda lo que la principal elija despues.
 #
 # Los avisos de Orca tambien (todo-por-linea, P1): cada linea avisa a SU numero de
-# aprobacion con SUS interruptores.
-#
-# Lo demas es de la maquina y vive solo en la raiz: el ritmo del sync, Jev, las skills, los
-# proyectos y las rutas. La cuenta de Claude del bot (P3) y la transcripcion y su calidad
-# (P4) son de cada linea; los modelos de whisper descargados, de la maquina.
+# aprobacion con SUS interruptores. La cuenta de Claude del bot (P3) y la transcripcion y su
+# calidad (P4) son de cada linea; los modelos de whisper descargados, de la maquina. Las
+# reglas de texto y el catalogo de proyectos tambien (P9): sus espejos en scope.db (`route`,
+# `project`) llevan la cuenta en la llave.
 AJUSTES_DE_LINEA = ("agentName", "ownerName", "tone", "owners", "approvalNumber",
                     "approvalLang", "ackMode", "ackText", "ackQuietMinutes", "greetingMode",
                     "greetingText", "firstReply", "slaMinutes", "projectQuestionHours",
@@ -345,6 +344,8 @@ AJUSTES_DE_LINEA = ("agentName", "ownerName", "tone", "owners", "approvalNumber"
                     "botClaudeAccount",
                     "transcribe",
                     "transcribeQuality",
+                    "routes",
+                    "projects",
                     )
 # Los ajustes de linea que otra linea NUNCA toma de la raiz: sin uno propio valen los de
 # fabrica. Los avisos de Orca son los mismos eventos para todas las lineas; heredarlos

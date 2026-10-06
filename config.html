@@ -822,7 +822,6 @@
         <section class="card" id="routes-card">
           <h2 data-t="routesLegend"></h2>
           <p class="hint lead" data-t="routesHelp"></p>
-          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
           <div class="row dos">
             <div>
               <label for="r-match" data-t="routeMatch"></label>
@@ -859,7 +858,6 @@
         <section id="projects-card">
           <h2 data-t="projectsLegend"></h2>
           <p class="hint lead" data-t="projectsHelp"></p>
-          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
           <div id="projects-wrap"></div>
           <div class="actions">
             <button id="projects-refresh" data-t="projectsRefresh"></button>
@@ -3410,7 +3408,9 @@
         'signMessages',
         'botClaudeAccount',
         'transcribe',
-        'transcribeQuality'
+        'transcribeQuality',
+        'routes',
+        'projects'
       ]
       // Los que otra linea NUNCA toma de la principal (`NO_HEREDAN`, la misma lista de
       // wa_settings.py y main.mjs): sin uno propio se pintan los de fabrica. Los avisos de Orca
@@ -4984,7 +4984,7 @@
       }
 
       function recargarProyectos() {
-        return Promise.all([read('projects', true), read('projectsStatus', true)])
+        return Promise.all([leerClave('projects', true), read('projectsStatus', true)])
           .then(function (rs) {
             if (hayRespuesta(rs[0])) renderProjects(rs[0])
             if (hayRespuesta(rs[1])) renderProposals(rs[1])
@@ -4995,8 +4995,9 @@
        *  que el worker contesta: agregar, quitar y anotar los hace el, y un "✓"
        *  inmediato diria hecho algo que todavia no paso. */
       function pedirProyectos(accion, extra, boton, hecho) {
+        // El catalogo es de cada linea (P9): el pedido nombra la que se mira.
         var pedir = pedirAlWorker('scopeRequest', 'scopeResult',
-          Object.assign({ action: accion }, extra || {})).then(function (v) {
+          Object.assign({ action: accion, linea: otraLineaVista() }, extra || {})).then(function (v) {
           if (!v) { said('said-projects', t('pairingNoAnswer'), true); return }
           if (!v.ok) {
             said('said-projects', porCodigo(PROY_HOW_KEY, v.code, '') || t('projFail'), true)
@@ -5735,8 +5736,9 @@
        *  worker, la del storage. Y no se dice nada hasta que contesta: el veredicto que
        *  llega antes que el trabajo no es un veredicto. */
       function removeRoute (pattern, boton) {
+        // Las reglas son de cada linea (P9): se quitan en la que se mira.
         var pedir = pedirAlWorker('scopeRequest', 'scopeResult',
-          { action: 'regla-quitar', pattern: pattern }).then(function (v) {
+          { action: 'regla-quitar', pattern: pattern, linea: otraLineaVista() }).then(function (v) {
           if (!v) { said('said-route', t('pairingNoAnswer'), true); return }
           if (!v.ok) {
             said('said-route', porCodigo(ROUTE_HOW_KEY, v.code, '') || t('routeRmFail'), true)
@@ -5745,7 +5747,7 @@
           said('said-route', '✓ ' + t('removedOk') + ': ' + pattern)
           // El worker ya dejo el storage sin la regla: se relee y se repinta con eso, no
           // con la copia de antes, que la dejaria en pantalla.
-          return read('routes', true).then(function (v2) {
+          return leerClave('routes', true).then(function (v2) {
             if (hayRespuesta(v2)) renderRoutes(v2 || [])
           })
         })
@@ -5756,11 +5758,15 @@
         var match = el('r-match').value.trim().toLowerCase()
         var workspace = el('r-workspace').value
         if (!match || !workspace) { said('said-route', t('needMatch'), true); return }
-        busy(event.currentTarget, read('routes').then(function (rules) {
-          rules = (rules || []).filter(function (r) { return r.pattern !== match })
+        // Las de la linea que se mira (P9): `guardar` las escribe en su lugar. Sin una
+        // lectura que conteste no se escribe: se borrarian las reglas que ya estaban.
+        busy(event.currentTarget, leerClave('routes', true).then(function (rules) {
+          if (!hayRespuesta(rules)) { said('said-route', t('saveFailed'), true); return }
+          rules = (Array.isArray(rules) ? rules : []).filter(function (r) { return r.pattern !== match })
           rules.push({ pattern: match, workspace: workspace })
           rules.sort(function (a, b) { return a.pattern < b.pattern ? -1 : 1 })
-          return write('routes', rules).then(function () {
+          return guardar([['routes', rules]]).then(function (mal) {
+            if (mal.length) { said('said-route', t('saveFailed'), true); return }
             renderRoutes(rules)
             el('r-match').value = ''
             said('said-route', '✓ ' + t('savedOk') + ': ' + match + ' → ' +
@@ -6959,6 +6965,24 @@
         ;['said-agent', 'said-owners', 'said-orca', 'said-auto', 'said-sla', 'said-pq-hours',
           'said-voice', 'said-reading'].forEach(function (id) { said(id, '') })
         pintarLecturas()
+        olvidarReglasYProyectos()
+      }
+      /** Las reglas y los proyectos de la linea que se deja no quedan pintados (P9): dicen
+       *  "leyendo" hasta que llegue lo de la que se mira ahora. */
+      function olvidarReglasYProyectos () {
+        var vinc = lineasVinculadas()
+        var cuenta = otraLineaVista() || (vinc[0] && vinc[0].cuenta)
+        var l = vinc.filter(function (x) { return x.cuenta === cuenta })[0]
+        var leyendo = '<p class="empty">' + esc(fmt('linesViewLoading',
+          { num: l ? numeroDeLinea(l, estadoDeLinea(l)) : cuenta })) + '</p>'
+        reglasCrudas = null
+        el('routes-wrap').innerHTML = leyendo
+        proyectos = []
+        proyectosJson = null
+        catalogoLeido = false
+        el('projects-wrap').innerHTML = leyendo
+        pintarSelectoresDeProyecto()
+        ;['said-route', 'said-projects'].forEach(function (id) { said(id, '') })
       }
 
       // Lo que se ve mientras la otra linea no contesto: nunca la lista de la que se
@@ -7090,7 +7114,8 @@
             // Los proyectos ANTES del alcance y de las reglas: sus tablas y selectores
             // nombran el proyecto, y pintarlos con el catalogo de antes mostraria un id
             // pelado donde el dueno ya agrego el proyecto.
-            if (hayRespuesta(v('projects'))) renderProjects(v('projects'))
+            // Los de la linea que se mira (todo-por-linea, P9), como las reglas.
+            if (hayRespuesta(vl('projects'))) renderProjects(vl('projects'))
             if (hayRespuesta(v('projectsStatus'))) renderProposals(v('projectsStatus'))
             var alcanceVisto = otra ? delOtraLinea(v('alcancePorLinea'), otra) : v('scope')
             if (hayRespuesta(alcanceVisto)) renderScope(alcanceVisto)
@@ -7171,7 +7196,7 @@
             }
             else if (hayRespuesta(salud) && salud) el('alert').hidden = true
             if (hayRespuesta(salud)) renderOpcionales(salud && salud.optional)
-            if (hayRespuesta(v('routes'))) renderRoutes(v('routes'))
+            if (hayRespuesta(vl('routes'))) renderRoutes(vl('routes'))
             renderPairing(v('sidecar'))
             renderLineas()
             apagarLoQueNecesitaWorker(sinWorker)

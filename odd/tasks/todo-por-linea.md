@@ -10,12 +10,11 @@ without the agent signature (the owner's request for one of his numbers).
 
 ## Scope
 
-**Release 1 (v4.25.0): panel keys**
+**One release (v4.25.0), owner's call: everything below ships together**
 - `orcaNotices`: each line sends Orca notices to its own approval number, with its own switches.
 - `signMessages` (new): sign with the agent name, on or off; when off the agent name is optional.
 - `botClaudeAccount`, `transcribe`, `transcribeQuality`, `syncMinutes`, Jev on/off.
 
-**Release 2 (v4.26.0): stored in scope.db**
 - `routes` and the projects catalog. Both mirror into scope.db tables that have no
   `account` column, so they need a migration.
 
@@ -53,7 +52,7 @@ without the agent signature (the owner's request for one of his numbers).
   - `jev_juzga` and `revision_jev` skip a line that has Jev off.
 - [ ] **P7** Skills card: the notifying line is chosen per skill, and the card says installs are on this computer.
 - [ ] **P8** Check, screenshots (es, dark, 390), release v4.25.0.
-- [ ] **P9** `routes` per line (scope.db `route` gets an `account` column) and the projects catalog per line (`project` table gets an `account` column; `PROJECTS.md` lists every line). Release v4.26.0.
+- [x] **P9** `routes` per line (scope.db `route` gets an `account` column) and the projects catalog per line (`project` table gets an `account` column; `PROJECTS.md` lists every line).
 
 ## Acceptance
 

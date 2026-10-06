@@ -50,6 +50,7 @@ from wa_settings import (  # noqa: E402
     PLUGIN_ID_ANTERIOR, duenos, store_de_linea, llave_aprobador, trae_llave_aprobador, idioma_aprobacion, numero_aprobacion, orca_cli_path, orca_env, orca_runtime_home, plugin_store_path,
     plugin_store_raw as plugin_store_crudo, vista_de_linea, escribir_en_linea, de_otra_linea,
     AJUSTES_DE_LINEA, NO_HEREDAN,
+    ajustes_propios,
     tableros_de_lineas,
     plugin_store_targets, settings_from_plugin, user_data_roots, valida_ajuste)
 import wa_store  # noqa: E402  (solo lectura: de capture.db se lee la linea activa)
@@ -240,11 +241,22 @@ def es_linea_principal():
     return not de_otra_linea(cuenta_activa(), linea_principal())
 
 
-def plugin_store_raw():
+def plugin_store_raw(linea=None):
     """El storage del panel como lo ve la linea de esta corrida: la principal lo lee en la
     raiz, como siempre; otra linea, sus propias claves (`porLinea` y compania) encima de las
-    globales. Asi el alcance de una nunca autoriza nada en otra."""
-    return vista_de_linea(plugin_store_crudo(), cuenta_activa(), linea_principal())
+    globales. Asi el alcance de una nunca autoriza nada en otra.
+
+    `linea` nombra otra: la de un caso que se tiene en la mano (`linea_del_caso`)."""
+    return vista_de_linea(plugin_store_crudo(), linea or cuenta_activa(), linea_principal())
+
+
+def tiene_propio(clave, linea=None):
+    """Si la linea (o la de esta corrida) guarda `clave` como suya. La principal, siempre:
+    lo suyo es la raiz. Otra, solo si su contenedor de ajustes la trae."""
+    cuenta = linea or cuenta_activa()
+    if not de_otra_linea(cuenta, linea_principal()):
+        return True
+    return clave in ajustes_propios(plugin_store_crudo(), cuenta)
 
 
 def cuenta_de_entrada(e):
@@ -304,7 +316,43 @@ create table if not exists chat_scope (
 );
 """
 
-SCHEMA = CHAT_SCOPE_DDL + """
+# Las reglas de texto y el espejo del catalogo, aparte por lo mismo que el alcance: las dos
+# son de UNA linea (todo-por-linea, P9) y la migracion a (cuenta, llave) las recrea.
+ROUTE_DDL = """
+-- Un grupo de operaciones lleva trabajo de muchos clientes. Mapear el chat a un solo
+-- proyecto manda todo al board equivocado apenas se habla de otro cliente, asi que el
+-- contenido del mensaje puede redirigirlo.
+create table if not exists route (
+  account  text not null default 'local',  -- DE QUE LINEA es la regla
+  pattern  text not null,      -- se busca en el texto, sin distinguir mayusculas
+  provider text not null default 'plane',
+  target   text not null,      -- '' cuando la regla solo manda a un proyecto
+  workspace text,              -- el PROYECTO al que va el caso (`project.id`)
+  note     text,
+  updated_at text,
+  primary key (account, pattern)
+);
+"""
+ROUTE_COLS = ("pattern", "provider", "target", "workspace", "note", "updated_at")
+
+PROJECT_DDL = """
+-- Los proyectos que el dueno acepto en los ajustes: la lista que reparte el orquestador.
+-- La fuente es el storage del plugin (la escribe el worker); esta tabla es su espejo, para
+-- que los CLIs la vean aunque el storage no este (`proyectos_del_dueno`). Cada linea tiene
+-- el suyo: el espejo de una no puede borrar el de otra.
+create table if not exists project (
+  account text not null default 'local',  -- DE QUE LINEA es el catalogo
+  id   text not null,
+  name text not null,
+  path text not null,
+  note text,
+  updated_at text,
+  primary key (account, id)
+);
+"""
+PROJECT_COLS = ("id", "name", "path", "note", "updated_at")
+
+SCHEMA = CHAT_SCOPE_DDL + ROUTE_DDL + PROJECT_DDL + """
 -- Las fuentes de lectura conectadas. La identidad la pone la SESION (el LID que
 -- reporta WhatsApp), no una etiqueta que el usuario escriba: dos numeros con el mismo
 -- apodo se confundirian en silencio despues de volver a enlazar, y una respuesta
@@ -327,27 +375,6 @@ create table if not exists agent_action (
 );
 create index if not exists ix_action_stanza on agent_action(stanza_id);
 create table if not exists settings (key text primary key, value text);
--- Un grupo de operaciones lleva trabajo de muchos clientes. Mapear el chat a un solo
--- proyecto manda todo al board equivocado apenas se habla de otro cliente, asi que el
--- contenido del mensaje puede redirigirlo.
-create table if not exists route (
-  pattern  text primary key,   -- se busca en el texto, sin distinguir mayusculas
-  provider text not null default 'plane',
-  target   text not null,      -- '' cuando la regla solo manda a un proyecto
-  workspace text,              -- el PROYECTO al que va el caso (`project.id`)
-  note     text,
-  updated_at text
-);
--- Los proyectos que el dueno acepto en los ajustes: la lista que reparte el orquestador.
--- La fuente es el storage del plugin (la escribe el worker); esta tabla es su espejo, para
--- que los CLIs la vean aunque el storage no este (`proyectos_del_dueno`).
-create table if not exists project (
-  id   text primary key,
-  name text not null,
-  path text not null,
-  note text,
-  updated_at text
-);
 -- Lo que esta en curso. Sin esto cada corrida empieza de cero y el agente repite
 -- trabajo o abandona a la mitad: un loop sin memoria.
 create table if not exists work (
@@ -625,9 +652,10 @@ def plugin_store_read():
     return scope if isinstance(scope, dict) else {}
 
 
-def routes_from_plugin():
-    """Reglas que el usuario agrego desde el panel. Se fusionan con las del CLI."""
-    r = plugin_store_raw().get("routes")
+def routes_from_plugin(linea=None):
+    """Reglas que el usuario agrego desde el panel. Se fusionan con las del CLI. Son de una
+    linea: `linea`, o la de esta corrida."""
+    r = plugin_store_raw(linea).get("routes")
     return r if isinstance(r, list) else []
 
 
@@ -1531,10 +1559,11 @@ def lista_del_panel(e, previa):
     return previa
 
 
-def proyectos_de_storage():
+def proyectos_de_storage(linea=None):
     """El catalogo que dejo el worker en el storage del plugin, validado; None si el
-    storage no trae la clave (no hay worker, o es una maquina sin Orca abierto)."""
-    crudo = plugin_store_raw().get("projects")
+    storage no trae la clave (no hay worker, o es una maquina sin Orca abierto). Es el de
+    una linea: `linea`, o la de esta corrida."""
+    crudo = plugin_store_raw(linea).get("projects")
     if not isinstance(crudo, list):
         return None
     salida, vistos = [], set()
@@ -1554,24 +1583,34 @@ def proyectos_de_storage():
     return sorted(salida, key=lambda p: p["id"])
 
 
-def proyectos_del_dueno(con):
+def proyectos_del_dueno(con, linea=None):
     """Los proyectos que el dueno acepto, y la unica forma en que un CLI los ve.
 
     La fuente es el storage del plugin; `project` en scope.db es su espejo. Con el
     storage a la vista se espeja lo que dice (una lista vacia tambien: el dueno quito
     todo). Sin la clave se sirve el ultimo espejo: un CLI que corre sin Orca abierto no
     puede dejar sin proyecto a todas las conversaciones. El espejo solo se escribe si
-    cambio, y un fallo al escribirlo (base ocupada) no tumba la lectura."""
+    cambio, y un fallo al escribirlo (base ocupada) no tumba la lectura.
+
+    Cada linea tiene su catalogo y su espejo (todo-por-linea, P9): `linea`, o la de esta
+    corrida, y solo sus filas se reescriben. Otra linea que todavia no guarda el suyo en
+    el storage ve el de la principal, como el panel; pero si tiene espejo, el storage lo
+    perdio y manda el espejo. Ese caso no escribe espejo: una copia de la principal
+    espejada ataria la linea a esa copia antes de que el worker le siembre la suya."""
+    cuenta = linea or cuenta_activa()
     espejado = [dict(r) for r in con.execute(
-        "select id, name, path, coalesce(note, '') as note from project order by id")]
-    vigente = proyectos_de_storage()
+        "select id, name, path, coalesce(note, '') as note from project where account=? "
+        "order by id", (cuenta,))]
+    vigente = proyectos_de_storage(cuenta)
+    if vigente is not None and not tiene_propio("projects", cuenta):
+        return espejado or vigente
     if vigente is None or vigente == espejado:
         return espejado if vigente is None else vigente
     try:
-        con.execute("delete from project")
-        con.executemany("insert into project (id, name, path, note, updated_at) "
-                        "values (?,?,?,?,?)",
-                        [(p["id"], p["name"], p["path"], p["note"],
+        con.execute("delete from project where account=?", (cuenta,))
+        con.executemany("insert into project (account, id, name, path, note, updated_at) "
+                        "values (?,?,?,?,?,?)",
+                        [(cuenta, p["id"], p["name"], p["path"], p["note"],
                           time.strftime("%Y-%m-%d %H:%M")) for p in vigente])
         con.commit()
     except sqlite3.Error:
@@ -1579,16 +1618,20 @@ def proyectos_del_dueno(con):
     return vigente
 
 
-def rutas_efectivas(con):
+def rutas_efectivas(con, linea=None):
     """Las reglas de texto que rigen: las de la base y, detras, las que el panel guardo.
 
     Con solo las de la base, el sync empujaba al panel una lista SIN las reglas que el
     panel acababa de escribir y las borraba. Mismo orden que el que ya usaba `where`: la
-    base manda cuando el mismo patron esta en las dos."""
+    base manda cuando el mismo patron esta en las dos.
+
+    Son las de una linea (todo-por-linea, P9): `linea`, o la de esta corrida."""
+    cuenta = linea or cuenta_activa()
     reglas = [dict(r) for r in con.execute(
-        "select pattern, provider, target, workspace, note from route order by pattern")]
+        "select pattern, provider, target, workspace, note from route where account=? "
+        "order by pattern", (cuenta,))]
     vistas = {r["pattern"] for r in reglas}
-    for r in routes_from_plugin():
+    for r in routes_from_plugin(cuenta):
         patron = str(r.get("pattern") or "").lower() if isinstance(r, dict) else ""
         if not patron or patron in vistas:
             continue
@@ -1639,6 +1682,9 @@ def migrate(con):
         con.execute("alter table chat_scope add column workspace text")
     if "workspace" not in {r["name"] for r in con.execute("pragma table_info(route)")}:
         con.execute("alter table route add column workspace text")
+    # Las reglas y el espejo del catalogo, de cada linea (todo-por-linea, P9).
+    migra_cuenta_en_llave(con, "route", ROUTE_DDL, ROUTE_COLS)
+    migra_cuenta_en_llave(con, "project", PROJECT_DDL, PROJECT_COLS)
     # Varios proyectos por conversacion (proyectos-por-chat, M1). La lista nace con el
     # proyecto que ya tenia: `[workspace]`, o vacia. Una sola vez, al agregar la columna.
     if "workspaces" not in {r["name"] for r in con.execute("pragma table_info(chat_scope)")}:
@@ -1739,6 +1785,26 @@ def migrate_cuentas(con, cols):
     con.execute(f"insert into chat_scope (account, {','.join(copiar)}) "
                 f"select ?, {','.join(copiar)} from chat_scope_v1", (CUENTA_LOCAL,))
     con.execute("drop table chat_scope_v1")
+    con.commit()
+
+
+def migra_cuenta_en_llave(con, tabla, ddl, columnas):
+    """Le pone la cuenta a una tabla que no la tenia, en la llave, sin perder una fila.
+
+    Como `migrate_cuentas`: SQLite no sabe cambiar una primary key, asi que la tabla se
+    reconstruye una sola vez, copiando por nombre de columna. Lo que ya estaba es de la
+    linea principal, la que tiene el storage del panel en la raiz: hasta hoy las reglas y
+    el catalogo eran de ella (sin linea anotada, `local`, que la re-clave mueve despues)."""
+    cols = {r["name"] for r in con.execute(f"pragma table_info({tabla})")}
+    if not cols or "account" in cols:
+        return
+    copiar = [c for c in columnas if c in cols]
+    con.execute(f"alter table {tabla} rename to {tabla}_v1")
+    con.executescript(ddl)
+    con.execute(f"insert into {tabla} (account, {','.join(copiar)}) "
+                f"select ?, {','.join(copiar)} from {tabla}_v1",
+                (linea_principal() or CUENTA_LOCAL,))
+    con.execute(f"drop table {tabla}_v1")
     con.commit()
 
 
@@ -2255,8 +2321,12 @@ DEFAULT_CONFIG = {
 
 
 def cmd_route(con, a):
+    """Las reglas de texto de la linea de esta corrida (`--line`, o la principal): crearla,
+    quitarla y listarlas tocan solo las suyas (todo-por-linea, P9)."""
+    cuenta = cuenta_activa()
     if a.remove:
-        con.execute("delete from route where pattern=?", (a.remove.lower(),))
+        con.execute("delete from route where account=? and pattern=?",
+                    (cuenta, a.remove.lower()))
         con.commit()
         return [{"removed": a.remove}]
     if a.match:
@@ -2264,12 +2334,12 @@ def cmd_route(con, a):
             sys.exit("a rule needs --workspace (the project the case goes to) or --target")
         if a.workspace and a.workspace not in [p["id"] for p in proyectos_del_dueno(con)]:
             sys.exit(f"unknown project: {a.workspace}")
-        con.execute("insert into route (pattern,provider,target,workspace,note,updated_at) "
-                    "values (?,?,?,?,?,?) on conflict(pattern) do update set "
-                    "provider=excluded.provider, target=excluded.target, "
+        con.execute("insert into route (account,pattern,provider,target,workspace,note,"
+                    "updated_at) values (?,?,?,?,?,?,?) on conflict(account, pattern) do "
+                    "update set provider=excluded.provider, target=excluded.target, "
                     "workspace=excluded.workspace, "
                     "note=excluded.note, updated_at=excluded.updated_at",
-                    (a.match.lower(), a.provider or "plane", a.target or "",
+                    (cuenta, a.match.lower(), a.provider or "plane", a.target or "",
                      a.workspace or None, a.note, time.strftime("%Y-%m-%d %H:%M")))
         con.commit()
     return rutas_efectivas(con)
@@ -2294,7 +2364,7 @@ def proyecto_unico_del_chat(entry, aceptados):
     return ids[0] if len(ids) == 1 else None
 
 
-def resolve_target(con, text, chat_jid=None):
+def resolve_target(con, text, chat_jid=None, linea=None):
     """El contenido manda sobre el chat. Si el mensaje nombra a un cliente que tiene su
     propio proyecto, va ahi; el proyecto del chat es el fallback, no la regla.
 
@@ -2308,7 +2378,9 @@ def resolve_target(con, text, chat_jid=None):
     entry = merged_scope(con).get(chat_jid) if chat_jid else None
     low = (text or "").lower()
     regla = None
-    for r in rutas_efectivas(con):
+    # Las reglas y el catalogo son los de la linea (todo-por-linea, P9): `linea`, la del caso
+    # que se enruta, o la de esta corrida.
+    for r in rutas_efectivas(con, linea):
         patron = (r.get("pattern") or "").lower()
         if patron and patron in low:
             regla = dict(r, pattern=patron)
@@ -2318,7 +2390,7 @@ def resolve_target(con, text, chat_jid=None):
     # elige nadie aca: lo elige el agente por el contenido, entre `candidates`. Solo cuenta
     # si el dueno todavia lo tiene aceptado; uno que quito no resuelve, pero tampoco se
     # borra de la conversacion (puede volver) y el motivo y `missing` lo dicen.
-    catalogo = proyectos_del_dueno(con)
+    catalogo = proyectos_del_dueno(con, linea)
     aceptados, faltan = proyectos_del_chat(entry, catalogo)
     pedido = (regla or {}).get("workspace") or proyecto_unico_del_chat(entry, aceptados)
     del_regla = bool((regla or {}).get("workspace"))
@@ -3053,8 +3125,9 @@ def aplicar_reclave(con):
     try:
         con.execute("begin immediate")
         # `caso_mensaje` lleva la cuenta en la llave, como `juicio`: si el numero ya
-        # tenia ese mensaje en un caso suyo, el suyo manda.
-        for tabla in ("chat_scope", "juicio", "caso_mensaje"):
+        # tenia ese mensaje en un caso suyo, el suyo manda. Las reglas de texto y el espejo
+        # del catalogo tambien (todo-por-linea, P9).
+        for tabla in ("chat_scope", "juicio", "caso_mensaje", "route", "project"):
             movidas[tabla] = con.execute(
                 f"select count(*) c from {tabla} where account=?", (CUENTA_LOCAL,)
             ).fetchone()["c"]
@@ -3399,7 +3472,7 @@ def cmd_caso_proyecto(con, a):
                               f"change in {', '.join(ETAPAS_PROYECTO)}")
     pedido = (a.proyecto or "").strip()
     porque = " ".join((a.porque or "").split())[:LARGO_PORQUE]
-    catalogo = proyectos_del_dueno(con)
+    catalogo = proyectos_del_dueno(con, linea_del_caso(caso))
     if del_agente:
         if not porque:
             caso_falla("E_ARGS", "the agent sets a project with --porque: the owner reads why "
@@ -3535,7 +3608,7 @@ def cmd_caso_pregunta_proyecto(con, a):
         caso_falla("E_OWNER", f"case #{a.id} has the project the owner chose: there is "
                               f"nothing to ask")
     entry = merged_scope(con).get(caso["chat_jid"]) or {}
-    aceptados, _ = proyectos_del_chat(entry, proyectos_del_dueno(con))
+    aceptados, _ = proyectos_del_chat(entry, proyectos_del_dueno(con, linea_del_caso(caso)))
     ids = [p["id"] for p in aceptados]
     candidatos = list(dict.fromkeys(x.strip() for x in (a.candidatos or "").split(",")
                                     if x.strip()))
@@ -3669,7 +3742,7 @@ def seccion_de_pregunta(con, caso):
     p = ruta_del_caso(caso).get("pregunta")
     if not isinstance(p, dict):
         return []
-    nombres = {x["id"]: x["name"] for x in proyectos_del_dueno(con)}
+    nombres = {x["id"]: x["name"] for x in proyectos_del_dueno(con, linea_del_caso(caso))}
     para = ("the owner" if p.get("a") == "owner"
             else f"whoever wrote ({p.get('quien') or 'unknown'})")
     if p.get("estado") == "cerrada":
@@ -3833,7 +3906,7 @@ def trabajo_espera_al_dueno(con, caso):
     # El proyecto efectivo del caso, el mismo que usaria el despacho (proyectos-por-chat,
     # M4): sin ninguno espera (`no_project`); fuera de los proyectos aceptados del chat, o
     # con un `repo` que no lo nombra, tambien (`outside_project`).
-    catalogo = proyectos_del_dueno(con)
+    catalogo = proyectos_del_dueno(con, linea_del_caso(caso))
     elegido = proyecto_de_ruta(ruta_del_caso(caso), scope, catalogo)["id"]
     aceptados, _ = proyectos_del_chat(scope, catalogo)
     proyecto = next((x for x in aceptados if x["id"] == elegido), None) if elegido else None
@@ -5627,7 +5700,7 @@ def proyecto_de_ruta(ruta, entry, catalogo):
 def proyecto_efectivo(con, caso):
     """El id del proyecto efectivo del caso (`proyecto_de_ruta`), o None."""
     return proyecto_de_ruta(ruta_del_caso(caso), merged_scope(con).get(caso["chat_jid"]),
-                            proyectos_del_dueno(con))["id"]
+                            proyectos_del_dueno(con, linea_del_caso(caso)))["id"]
 
 
 def caso_enruta(con, case_id, texto, chat):
@@ -5638,7 +5711,7 @@ def caso_enruta(con, case_id, texto, chat):
     caso = caso_de(con, case_id)
     if caso["etapa"] == "cerrado":
         return False
-    destino = resolve_target(con, texto, chat)
+    destino = resolve_target(con, texto, chat, linea_del_caso(caso))
     # El proyecto va con su nombre, su ruta, por que y quien lo decidio (`rule` | `chat`):
     # la tarjeta y el archivo del caso lo dicen sin volver a resolverlo (proyectos-por-chat).
     nueva = {"provider": destino["provider"], "target": destino["target"],
@@ -10113,7 +10186,8 @@ def proyecto_del_caso(con, caso):
     pid = proyecto_efectivo(con, caso)
     if not pid:
         return None, "el caso no tiene proyecto: elige uno en la tarjeta y vuelve a aprobarlo"
-    proyecto = next((p for p in proyectos_del_dueno(con) if p["id"] == pid), None)
+    proyecto = next((p for p in proyectos_del_dueno(con, linea_del_caso(caso))
+                     if p["id"] == pid), None)
     if not proyecto:
         return None, (f"no encuentro el proyecto {ruta.get('workspace_name') or pid} entre "
                       f"los que aceptaste en los ajustes")
@@ -10854,7 +10928,8 @@ def cabeza_del_caso(con, caso, del_dueno=None, operador=None):
     chat = merged_scope(con).get(caso["chat_jid"]) or {}
     # El proyecto efectivo, el mismo que usa el despacho, con su porque y quien lo eligio, y
     # los proyectos del chat entre los que se elige (proyectos-por-chat, M3).
-    elegido = proyecto_de_ruta(ruta_del_caso(caso), chat, proyectos_del_dueno(con))
+    elegido = proyecto_de_ruta(ruta_del_caso(caso), chat,
+                               proyectos_del_dueno(con, linea_del_caso(caso)))
     proyecto = (f"{elegido['name']} ({elegido['id']})" if elegido["id"] else "none") + (
         f" — {' '.join(elegido['why'].split())}" if elegido["why"] else "") + (
         f" [{elegido['by']}]" if elegido["id"] and elegido["by"] else "")
@@ -12136,7 +12211,8 @@ def main():
     s = add("voice", help="tone, instructions, provider and permission of a conversation")
     s.add_argument("chat", nargs="?"); s.set_defaults(fn=cmd_voice)
 
-    s = add("route", help="destination rules by content; the chat is only the fallback")
+    s = add("route", help="destination rules by content; the chat is only the fallback. "
+                          "Each line has its own rules (--line)")
     s.add_argument("--match", help="text that has to appear in the message")
     s.add_argument("--provider", choices=list(PROVIDERS)); s.add_argument("--target")
     s.add_argument("--workspace", metavar="PROJECT",
@@ -12145,7 +12221,7 @@ def main():
     s.set_defaults(fn=cmd_route)
 
     add("projects", help="the projects the owner accepted in the plugin settings: "
-                         "id, name, path and what each is for"
+                         "id, name, path and what each is for. Each line has its own (--line)"
         ).set_defaults(fn=cmd_projects)
 
     add("owner", help="the owner's chat, from the settings: where an agent of any project "
