@@ -843,7 +843,7 @@
               "repCsvMissed": "no",
               "repCsvPending": "pendiente",
               "tabBoard": "Tablero",
-              "tabReports": "Informes", "linesView": "Linea",
+              "tabReports": "Informes", "linesView": "Linea", "heldLine": "Linea {linea}",
               "viewsLabel": "Vistas",
               "repNoDataTitle": "Todavia no hay informes",
               "repNoDataBody": "Su agente los calcula en cada revision, cada pocos minutos. Vuelva en un rato.",
@@ -1193,7 +1193,7 @@
               "repCsvMissed": "no",
               "repCsvPending": "pending",
               "tabBoard": "Board",
-              "tabReports": "Reports", "linesView": "Line",
+              "tabReports": "Reports", "linesView": "Line", "heldLine": "Line {linea}",
               "viewsLabel": "Views",
               "repNoDataTitle": "No reports yet",
               "repNoDataBody": "Your agent works them out on every run, every few minutes. Check back shortly.",
@@ -1543,7 +1543,7 @@
               "repCsvMissed": "nao",
               "repCsvPending": "pendente",
               "tabBoard": "Quadro",
-              "tabReports": "Relatorios", "linesView": "Linha",
+              "tabReports": "Relatorios", "linesView": "Linha", "heldLine": "Linha {linea}",
               "viewsLabel": "Visoes",
               "repNoDataTitle": "Ainda nao ha relatorios",
               "repNoDataBody": "Seu agente os calcula a cada revisao, a cada poucos minutos. Volte daqui a pouco.",
@@ -2610,6 +2610,11 @@
         nodo.appendChild(arriba)
         var edad = hace(r.at)
         if (edad) nodo.appendChild(crear('div', 'card-meta', edad))
+        // Con varias lineas, de cual sale: aprobarlo lo manda desde ESE numero.
+        if (lineasVinculadas().length > 1 && typeof r.account === 'string' && r.account) {
+          nodo.appendChild(crear('div', 'card-meta',
+            fmt('heldLine', { linea: '+' + r.account.replace(/^pn:/, '') })))
+        }
         var motivos = Array.isArray(r.reasons) ? r.reasons.filter(function (x) { return typeof x === 'string' }) : []
         if (motivos.length) {
           nodo.appendChild(crear('div', 'card-exc', fmt('heldReason', { x: frases(EXC_KEY, motivos, t('excOther')) })))

@@ -1218,9 +1218,6 @@
             'principal es la de siempre; puede vincular otras a su lado.',
           linesPrincipal: 'Principal',
           linesNew: 'Linea nueva',
-          linesStConnected: 'Conectada',
-          linesStWaiting: 'Conectando…',
-          linesStDown: 'Desconectada',
           linesType: 'Tipo',
           linesTypeSupport: 'Soporte',
           linesTypePersonal: 'Personal',
@@ -1805,9 +1802,6 @@
             'is the usual one; you can link others next to it.',
           linesPrincipal: 'Main',
           linesNew: 'New line',
-          linesStConnected: 'Connected',
-          linesStWaiting: 'Connecting…',
-          linesStDown: 'Disconnected',
           linesType: 'Type',
           linesTypeSupport: 'Support',
           linesTypePersonal: 'Personal',
@@ -2357,9 +2351,6 @@
           'principal e a de sempre; voce pode vincular outras ao lado dela.',
         linesPrincipal: 'Principal',
         linesNew: 'Linha nova',
-        linesStConnected: 'Conectada',
-        linesStWaiting: 'Conectando…',
-        linesStDown: 'Desconectada',
         linesType: 'Tipo',
         linesTypeSupport: 'Suporte',
         linesTypePersonal: 'Pessoal',
@@ -6340,8 +6331,10 @@
       var TIPOS_LINEA = ['support', 'personal']
       var TIPOS_HABILITADOS = ['support']
       var TIPO_TEXTO = { support: 'linesTypeSupport', personal: 'linesTypePersonal' }
-      var LINEA_ESTADO = { connected: 'linesStConnected', waiting: 'linesStWaiting',
-        down: 'linesStDown', live: 'pairingLive', expired: 'pairingExpired',
+      // Con las MISMAS palabras que la fila principal (`renderPairing`): dos frases para el mismo
+      // estado en la misma tarjeta se leen como dos estados distintos.
+      var LINEA_ESTADO = { connected: 'pairingConnected', waiting: 'pairingWaiting',
+        down: 'pairingDown', live: 'pairingLive', expired: 'pairingExpired',
         stale: 'pairingStale' }
 
       function leerLineas (v) {
@@ -6367,7 +6360,7 @@
       }
       function textoEstadoLinea (estado, d) {
         if (estado === 'silent') return fmt('pairingSilent', { hora: horaUltimaSenal(d) })
-        return t(LINEA_ESTADO[estado] || 'linesStWaiting')
+        return t(LINEA_ESTADO[estado] || 'pairingWaiting')
       }
       function nodo (tag, clase, texto) {
         var n = document.createElement(tag)

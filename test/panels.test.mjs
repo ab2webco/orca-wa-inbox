@@ -8127,6 +8127,10 @@ console.log('\nconfig.html — L4: desvincular una linea pide confirmacion y nom
   await espera()
   const boton = () => doc.querySelector('.linea[data-carpeta="pn-573000000011"] .linea-desvincular')
   ok('cada linea tiene su Desvincular', !!boton())
+  const estadoOtra = textoDe(doc, '.linea[data-carpeta="pn-573000000011"] .linea-estado')
+  ok('el estado de cada linea se dice con las mismas palabras que el de la principal',
+    estadoOtra === textoDe(doc, '#pairing-msg') && estadoOtra === 'WhatsApp esta conectado',
+    `${estadoOtra} / ${textoDe(doc, '#pairing-msg')}`)
   ok('un solo Desvincular por linea: la principal el suyo, la otra el suyo',
     doc.querySelectorAll('#lineas-card .linea-desvincular').length === 1 &&
     !doc.getElementById('pairing-unlink').hidden &&
@@ -8246,6 +8250,23 @@ console.log('\nactivity.html — L4: el tablero se filtra por linea')
   const una = await abrirTablero({ sidecar: conLineas([lineaA]),
     board: tablero([tarjeta({ case_id: 1, account: L_A })]) })
   ok('con una sola linea no hay selector', una.doc.getElementById('linea-vista-fila').hidden)
+
+  // Lo retenido fuera de un caso es de su linea: con dos lineas, su tarjeta dice cual.
+  const retenido = { req_id: 'sesion-otra-1', account: L_B, chat_jid: '573000000002@s.whatsapp.net',
+    chat: 'Cliente Uno', text: 'Ya quedo el reporte', at: new Date().toISOString(), reasons: [] }
+  storage.porLinea[L_B].board = tablero([tarjeta({ case_id: 2, account: L_B })],
+    { held_drafts: [retenido] })
+  doc.getElementById('refresh').click()
+  await new Promise((r) => setTimeout(r, 300))
+  const tarjetaRetenido = doc.querySelector('#board-held .card[data-req="sesion-otra-1"]')
+  ok('un retenido de la otra linea dice en su tarjeta de que linea es',
+    !!tarjetaRetenido && tarjetaRetenido.textContent.includes('+573000000011'),
+    tarjetaRetenido?.textContent)
+  const unaRet = await abrirTablero({ sidecar: conLineas([lineaA]),
+    board: tablero([], { held_drafts: [Object.assign({}, retenido, { account: L_A })] }) })
+  const solo = unaRet.doc.querySelector('#board-held .card[data-req="sesion-otra-1"]')
+  ok('con una sola linea la tarjeta del retenido es la de siempre, sin numero',
+    !!solo && !solo.textContent.includes('+573000000001'), solo?.textContent)
   const S = doc.defaultView.STRINGS
   ok('el nombre del selector existe en los tres idiomas, el portugues propio',
     S.es.linesView && S.en.linesView && S.pt.linesView && S.pt.linesView !== S.en.linesView)
