@@ -305,7 +305,8 @@ def cmd_doctor(a):
 
 
 def cmd_inbox(con, a):
-    ajustes = wa_store.ajustes()
+    # La ventana de lectura es de la linea que se lee (ajustes-por-linea).
+    ajustes = wa_store.ajustes(a.line)
     dias = a.days if a.days else wa_store.entero(ajustes, "inbox_days")
     # 500 y no un numero mas chico: es el tope que el arnes ya documenta
     # (harness, "al menos los 500 mas nuevos"), y bajarlo en silencio haria que el

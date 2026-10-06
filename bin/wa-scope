@@ -49,6 +49,7 @@ from wa_settings import (  # noqa: E402
     PANEL_SETTINGS, PLUGIN_ID, VARIABLE_APROBADOR,
     PLUGIN_ID_ANTERIOR, duenos, llave_aprobador, trae_llave_aprobador, idioma_aprobacion, numero_aprobacion, orca_cli_path, orca_env, orca_runtime_home, plugin_store_path,
     plugin_store_raw as plugin_store_crudo, vista_de_linea, escribir_en_linea, de_otra_linea,
+    AJUSTES_DE_LINEA,
     tableros_de_lineas,
     plugin_store_targets, settings_from_plugin, user_data_roots, valida_ajuste)
 import wa_store  # noqa: E402  (solo lectura: de capture.db se lee la linea activa)
@@ -1057,17 +1058,22 @@ def push_to_plugin(con, with_activity=False):
         if not reusando:
             extra.update(chats=build_chats(), chatsAccount=cuenta, senders=build_senders())
         extra["groupMembers"] = grupos
+        # Lo de la maquina (el ritmo del sync, la transcripcion, los avisos de Orca) lo
+        # espeja solo la principal: la corrida de otra linea lo lee de la raiz, y volver a
+        # escribirlo desde ahi solo puede pisar lo que el dueno acaba de cambiar.
+        principal = es_linea_principal()
         for flat, name in PANEL_SETTINGS.items():
             # agentName ya viaja en su propio parametro, mas arriba.
-            if flat == "agentName":
+            if flat == "agentName" or (not principal and flat not in AJUSTES_DE_LINEA):
                 continue
             valor = efectivos.get(name)
             if valor is not None:
                 extra[flat] = str(valor)
         extra[PANEL_PRIMER] = {campo: str(efectivos.get(name) or DEFAULT_CONFIG[name])
                                for campo, name in PANEL_PRIMER_CAMPOS.items()}
-        extra[PANEL_ORCA] = {campo: str(efectivos.get(name) or DEFAULT_CONFIG[name])
-                             for campo, name in PANEL_ORCA_CAMPOS.items()}
+        if principal:
+            extra[PANEL_ORCA] = {campo: str(efectivos.get(name) or DEFAULT_CONFIG[name])
+                                 for campo, name in PANEL_ORCA_CAMPOS.items()}
     return plugin_store_write(scope, agent_name_of(con), activity, health, routes, extra)
 
 
@@ -1409,15 +1415,26 @@ def merged_scope(con):
     return rows
 
 
-def merged_settings(con):
+def merged_settings(con, linea=None):
     """Los ajustes efectivos, con la misma regla que merged_scope: lo del panel manda
-    sobre lo del CLI, porque el panel es lo que el usuario acaba de tocar."""
+    sobre lo del CLI, porque el panel es lo que el usuario acaba de tocar.
+
+    Lo del panel es de una linea (ajustes-por-linea): `linea`, o la de esta corrida. Quien
+    tiene un caso en la mano nombra la del caso (`linea_del_caso`)."""
     rows = dict(DEFAULT_CONFIG)
     for r in con.execute("select key, value from settings"):
         if r["value"]:
             rows[r["key"]] = r["value"]
-    rows.update(settings_from_plugin())
+    rows.update(settings_from_plugin(linea))
     return rows
+
+
+def linea_del_caso(caso):
+    """La linea de un caso (su `account`), o None: la de esta corrida."""
+    try:
+        return caso["account"] or None
+    except (KeyError, IndexError, TypeError):
+        return None
 
 
 ID_PROYECTO = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -3849,7 +3866,7 @@ def frenos_de_regla(con, caso):
 def chat_es_del_dueno(cuenta, chat_jid):
     """Si la conversacion es del dueno (T22.1): el directo con uno de sus numeros o el chat
     de la linea consigo misma. Sin almacen solo cuentan sus numeros."""
-    ids = duenos()
+    ids = duenos(cuenta)
     if wa_store.es_dueno(chat_jid, ids):
         return True
     try:
@@ -3875,7 +3892,8 @@ def directo_de_operador(con, caso):
         fuente = None
     try:
         return wa_store.directo_sin_reglas(fuente, caso.get("account") or cuenta_activa(),
-                                           caso["chat_jid"], duenos(), miembros_por_chat(con))
+                                           caso["chat_jid"], duenos(linea_del_caso(caso)),
+                                           miembros_por_chat(con))
     except sqlite3.Error:
         return False
     finally:
@@ -3921,7 +3939,7 @@ def rol_del_caso(con, caso):
         remitentes = set(remitentes_en(fuente, caso, stanzas))
         if not remitentes:
             return wa_store.ROL_CLIENTE
-        owners, miembros = duenos(), miembros_por_chat(con)
+        owners, miembros = duenos(linea_del_caso(caso)), miembros_por_chat(con)
         return wa_store.rol_menor([wa_store.rol_de(fuente, caso["account"], caso["chat_jid"],
                                                    jid, owners, miembros)
                                    for jid in remitentes])
@@ -3946,7 +3964,7 @@ def caso_del_dueno(con, caso):
     que el caso siga siendo de un cliente."""
     if chat_es_del_dueno(caso.get("account"), caso["chat_jid"]):
         return True
-    ids = duenos()
+    ids = duenos(linea_del_caso(caso))
     stanzas = stanzas_de_caso(con, caso["case_id"])
     if not ids or not stanzas:
         return False
@@ -4184,7 +4202,7 @@ def avance_frena(con, caso):
     chat o el caso pudo moverse."""
     cid = caso["case_id"]
     fila = merged_scope(con).get(caso["chat_jid"]) or {}
-    modo = primer_modo(fila, merged_settings(con))[0]
+    modo = primer_modo(fila, merged_settings(con, linea_del_caso(caso)))[0]
     if modo not in MODOS_AGENTE_PRIMERO:
         return ("E_FIRST_REPLY_MODE", f"case #{cid}: its chat is on first_reply_mode {modo}: the "
                                       f"fixed acknowledgement is the first message there, and the "
@@ -4315,7 +4333,7 @@ def estado_primer_mensaje(con, caso):
     """Lo que el agente necesita del primer mensaje en este caso: el modo del chat, el acuse
     de respaldo, y cuantos mensajes le quedan y cuando puede mandar el siguiente."""
     cid = caso["case_id"]
-    ajustes = merged_settings(con)
+    ajustes = merged_settings(con, linea_del_caso(caso))
     pm = primer_mensaje_de(merged_scope(con).get(caso["chat_jid"]) or {}, ajustes)
     usados, ultimo = avance_cupo(con, cid, ajustes)
     acuse = con.execute("select estado from respuesta_auto where case_id=? and tipo='acuse'",
@@ -4332,7 +4350,7 @@ def instrucciones_primer_mensaje(con, caso, actor):
     si el chat del caso esta en un modo del agente (Beta). En `ack`, ninguna: la regla de
     siempre (el acuse no lo escribe el agente) ya va en la cabeza del caso."""
     fila = merged_scope(con).get(caso["chat_jid"]) or {}
-    pm = primer_mensaje_de(fila, merged_settings(con))
+    pm = primer_mensaje_de(fila, merged_settings(con, linea_del_caso(caso)))
     if not pm["beta"]:
         return []
     cid, wa = caso["case_id"], ruta_wa_scope()
@@ -4382,7 +4400,7 @@ def cmd_caso_avance(con, a):
     frena = avance_frena(con, caso)
     if frena:
         caso_falla(*frena)
-    ajustes = merged_settings(con)
+    ajustes = merged_settings(con, linea_del_caso(caso))
     tope = primer_numero(ajustes, "updates_max")
     usados, ultimo = avance_cupo(con, cid, ajustes)
     if usados >= tope:
@@ -5501,9 +5519,10 @@ def ingest_lee():
     escribe nada."""
     fuente = wa_store.abrir()
     try:
-        dias = wa_store.entero(wa_store.ajustes(), "inbox_days")
-        return wa_store.inbox(fuente, dias, 500, 5, "todos",
-                              wa_store.linea_pedida() or wa_store.linea_activa(fuente))
+        linea = wa_store.linea_pedida() or wa_store.linea_activa(fuente)
+        # La ventana de lectura es la de la linea que se lee (ajustes-por-linea).
+        dias = wa_store.entero(wa_store.ajustes(linea), "inbox_days")
+        return wa_store.inbox(fuente, dias, 500, 5, "todos", linea)
     finally:
         fuente.close()
 
@@ -9503,7 +9522,8 @@ def reevalua_audio(con, caso, r, texto):
     m["rol"] = roles_de_entrada(con)(m)
     entrada = merged_scope(con).get(caso["chat_jid"]) or {}
     m["tono"] = ((entrada.get("tone") or "").strip()
-                 or merged_settings(con).get("tone") or DEFAULT_CONFIG["tone"])
+                 or merged_settings(con, linea_del_caso(caso)).get("tone")
+                 or DEFAULT_CONFIG["tone"])
     m["instrucciones"] = (entrada.get("instructions") or "").strip() or None
     piso = piso_de_entrada(m)
     juicio = jev_juzga(m, con)
@@ -10795,7 +10815,7 @@ def cabeza_del_caso(con, caso, del_dueno=None, operador=None):
         "- Approval levels: " + (", ".join(f"{k}={v}" for k, v in sorted(niveles.items()))
                                  if isinstance(niveles, dict) and niveles else "default"),
     ]
-    modo = primer_modo(chat, merged_settings(con))[0]
+    modo = primer_modo(chat, merged_settings(con, linea_del_caso(caso)))[0]
     lineas.append(f"- First message: first_reply_mode {modo} (Beta): you write it, see "
                   f"\"First message and updates\" below" if modo in MODOS_AGENTE_PRIMERO else
                   f"- First message: first_reply_mode {modo}: the plugin sends the fixed "

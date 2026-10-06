@@ -12576,6 +12576,226 @@ if NODE:
            isinstance(r, dict) and "lineas" not in r and r.get("busy") is False,
            f"{p.stdout[:300]}")
 
+
+# ── Ajustes por linea (odd/tasks/ajustes-por-linea.md, A1-A3) ──────────────────────────
+# La principal guarda sus ajustes en la raiz, como siempre; otra linea, los suyos en
+# `ajustesPorLinea[<numero>]`. Cada corrida lee los de SU linea, y la corrida de una linea
+# nunca toca los de otra.
+print("\najustes por linea (A1-A3)")
+# Las claves de linea del panel, con su nombre en el CLI y un valor distinto en cada linea.
+AJUSTES_DE_PRUEBA = (
+    ("agentName", "agent_name", "Agente Principal", "Agente Segunda"),
+    ("ownerName", "owner_name", "Dueno Principal", "Dueno Segunda"),
+    ("tone", "tone", "Tono de la principal", "Tono de la segunda"),
+    ("ackMode", "ack", "on", "off"),
+    ("ackText", "ack_text", "Recibido en la principal", "Recibido en la segunda"),
+    ("ackQuietMinutes", "ack_quiet_minutes", "30", "5"),
+    ("greetingMode", "greeting", "on", "off"),
+    ("greetingText", "greeting_text", "Hola desde la principal", "Hola desde la segunda"),
+    ("slaMinutes", "sla_first_reply_minutes", "15", "45"),
+    ("projectQuestionHours", "project_question_hours", "24", "6"),
+    ("inboxDays", "inbox_days", "7", "1"),
+    ("transcribeLang", "transcribe_lang", "es", "en"),
+)
+AJENA = "pn:573000000013"
+
+
+def lee_storage(home):
+    return json.loads(storage_de(home).read_text(encoding="utf-8"))
+
+
+def escribe_storage(home, datos):
+    ruta = storage_de(home)
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    ruta.write_text(json.dumps(datos), encoding="utf-8")
+
+
+def config_de(home, linea):
+    """Los ajustes efectivos de una linea, como los ve su corrida (`wa-scope config`)."""
+    pide = (lambda *a: jsl(home, linea, *a)) if linea else (lambda *a: js(home, *a))
+    valores = {f["key"]: f["value"] for f in pide("config")}
+    valores["agent_name"] = pide("config", "agent_name")[0]["value"]
+    return valores
+
+
+def de_linea(datos):
+    """Las claves de linea de la raiz, tal cual."""
+    claves = [f for f, *_ in AJUSTES_DE_PRUEBA] + ["owners", "approvalNumber", "approvalLang",
+                                                   "firstReply"]
+    return {k: datos.get(k) for k in claves}
+
+
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        for jid, nombre in ((DUENO_DM, "Dueno Directo"), (OTRO_LID, "Otro Dueno")):
+            if not any(c["jid"] == jid for c in CHATS):
+                CHATS.append({"jid": jid, "nombre": nombre, "grupo": False})
+        tres_dias = 3 * 24 * 60
+        llegan(home, A, [msg(PERSONA, "AL1", PEDIDO, 30), msg(PERSONA, "AL8", PEDIDO, tres_dias)])
+        llegan(home, SEGUNDA, [msg(PERSONA, "AL2", PEDIDO, 30),
+                               msg(PERSONA, "AL9", PEDIDO, tres_dias)], activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "agent", "Agente Principal")
+        datos = lee_storage(home)
+        for flat, _, principal, _ in AJUSTES_DE_PRUEBA:
+            datos[flat] = principal
+        datos.update(owners=[{"id": DUENO_LID, "name": "Dueno"}], approvalNumber=DUENO_LID,
+                     approvalLang="es",
+                     firstReply={"mode": "ack", "fallbackMinutes": "5", "everyMinutes": "10",
+                                 "max": "3"})
+        segunda = {flat: valor for flat, _, _, valor in AJUSTES_DE_PRUEBA}
+        segunda.update(owners=[{"id": OTRO_LID, "name": "Otro"}], approvalNumber=OTRO_LID,
+                       approvalLang="en",
+                       firstReply={"mode": "model_with_ack_fallback", "fallbackMinutes": "7",
+                                   "everyMinutes": "20", "max": "2"})
+        # Otra linea mas, con una clave que este codigo no conoce: nadie la puede borrar.
+        datos["ajustesPorLinea"] = {SEGUNDA: segunda,
+                                    AJENA: {"agentName": "Agente Ajeno", "claveFutura": 1}}
+        escribe_storage(home, datos)
+        raiz_antes = de_linea(lee_storage(home))
+
+        # A1/A2: cada corrida lee los ajustes de SU linea, y la principal los de la raiz.
+        de_a, de_b = config_de(home, None), config_de(home, SEGUNDA)
+        malos = [(name, de_a.get(name), de_b.get(name))
+                 for _, name, principal, otra in AJUSTES_DE_PRUEBA
+                 if (de_a.get(name), de_b.get(name)) != (principal, otra)]
+        ok("cada linea lee sus propios ajustes; la principal, los de la raiz", not malos,
+           f"{malos}")
+        primer = [c.get(k) for c in (de_a, de_b) for k in ("first_reply_mode",
+                                                           "ack_fallback_minutes")]
+        ok("y el primer mensaje de cada linea es el suyo",
+           primer == ["ack", "5", "model_with_ack_fallback", "7"], f"{primer}")
+        ok("--line nombra la linea igual que la variable",
+           js(home, "config", "agent_name", "--line", SEGUNDA)[0]["value"] == "Agente Segunda")
+        dueno_a = json.loads(corre(home, "owner").stdout or "{}")
+        dueno_b = json.loads(corre(home, "owner", "--line", SEGUNDA).stdout or "{}")
+        ok("cada linea tiene su numero de aprobacion, de entre SUS numeros de confianza",
+           dueno_a.get("chat") == DUENO_LID and dueno_b.get("chat") == OTRO_LID,
+           f"{dueno_a} / {dueno_b}")
+
+        # wa-read: la ventana de lectura de cada linea es la suya (inboxDays).
+        def bandeja(linea, *args):
+            env = dict(os.environ, HOME=str(home),
+                       XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+                       APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"),
+                       WA_INBOX_LINEA=linea)
+            p = subprocess.run([str(RAIZ / "bin" / "wa-read"), "inbox", "--json", *args],
+                               capture_output=True, text=True, env=env, timeout=120)
+            return sorted(f.get("stanza_id") for f in json.loads(p.stdout or "[]"))
+        ok("wa-read: cada linea mira hacia atras los dias de SU ajuste",
+           "AL8" in bandeja(A) and "AL9" not in bandeja(SEGUNDA)
+           and "AL9" in bandeja(SEGUNDA, "--days", "7"),
+           f"{bandeja(A)} / {bandeja(SEGUNDA)} / {bandeja(SEGUNDA, '--days', '7')}")
+
+        # A1: la corrida de otra linea escribe lo suyo en su lugar, nunca en la raiz.
+        jsl(home, SEGUNDA, "sync")
+        despues = lee_storage(home)
+        ok("el sync de otra linea no toca los ajustes de la principal",
+           de_linea(despues) == raiz_antes,
+           f"{ {k: v for k, v in de_linea(despues).items() if raiz_antes.get(k) != v} }")
+        propios = (despues.get("ajustesPorLinea") or {}).get(SEGUNDA) or {}
+        ok("y los suyos siguen siendo los suyos",
+           all(propios.get(flat) == otra for flat, _, _, otra in AJUSTES_DE_PRUEBA)
+           and propios.get("approvalNumber") == OTRO_LID, f"{propios}")
+        ok("lo de otra linea, aun con claves que no conoce, queda intacto",
+           (despues.get("ajustesPorLinea") or {}).get(AJENA)
+           == {"agentName": "Agente Ajeno", "claveFutura": 1},
+           f"{(despues.get('ajustesPorLinea') or {}).get(AJENA)}")
+        ok("y la otra linea no escribe en la raiz los ajustes de la maquina",
+           all(despues.get(k) == datos.get(k) for k in ("syncMinutes", "transcribe",
+                                                         "transcribeQuality", "orcaNotices")),
+           f"{ {k: despues.get(k) for k in ('syncMinutes', 'transcribe', 'orcaNotices')} }")
+
+        # A2/A3: cada caso firma con el nombre de SU linea, y el aviso de un caso retenido
+        # sale por SU linea al numero de aprobacion de esa linea, en su idioma.
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        jsl(home, SEGUNDA, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        jsl(home, SEGUNDA, "set", OTRO_LID, "--provider", "ninguno", "--mode", "responder")
+        cid_a, v_a = propuesta_lista(home, "AL1")
+
+        def propuesta_b(stanza, texto):
+            cid = str(jsl(home, SEGUNDA, "caso", "crear", "--chat", PERSONA, "--stanza", stanza,
+                          "--actor", "agente")[0]["case_id"])
+            jsl(home, SEGUNDA, "caso", "clasificar", cid, "--clase", "card", "--prioridad",
+                "none", "--actor", "agente")
+            v = jsl(home, SEGUNDA, "caso", "propuesta", cid, "--tipo", "responder",
+                    "--respuesta", texto, "--actor", "agente")[0]["propuesta_version"]
+            return cid, v
+        cid_b, v_b = propuesta_b("AL2", LIMPIA)
+        llegan(home, A, [msg(PERSONA, "AL3", PEDIDO, 20)])
+        llegan(home, SEGUNDA, [msg(PERSONA, "AL4", PEDIDO, 20)], activar=False)
+        dinero_a, _ = propuesta_lista(home, "AL3", texto="Listo, el arreglo cuesta $50.")
+        dinero_b, _ = propuesta_b("AL4", "Listo, el arreglo cuesta $80.")
+        sidecar_a, sidecar_b = SidecarDeLinea(home, A), SidecarDeLinea(home, SEGUNDA)
+        try:
+            p, r = tick(home)
+        finally:
+            sidecar_a.cerrar()
+            sidecar_b.cerrar()
+        con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+        salidas = con.execute("select req_id, account, chat_jid, body from envio").fetchall()
+        con.close()
+        cuerpo = {req: (cuenta_, chat, body) for req, cuenta_, chat, body in salidas}
+        resp_a = cuerpo.get(f"caso-{cid_a}-{v_a[:12]}")
+        resp_b = cuerpo.get(f"caso-{cid_b}-{v_b[:12]}")
+        ok("un caso de la otra linea sale firmado con el nombre de esa linea",
+           resp_b and resp_b[0] == SEGUNDA and resp_b[2].endswith("-- Agente Segunda"),
+           f"{resp_b} {p.stderr[-400:]}")
+        ok("y uno de la principal sigue firmado con el de la principal",
+           resp_a and resp_a[0] == A and resp_a[2].endswith("-- Agente Principal"), f"{resp_a}")
+        avisos = [(c, chat, body) for req, c, chat, body in salidas if req.startswith("aviso-")]
+        aviso_a = [x for x in avisos if f"Caso {dinero_a} " in x[2]]
+        aviso_b = [x for x in avisos if f"Case {dinero_b} " in x[2]]
+        ok("el aviso de un caso retenido sale por SU linea, a SU numero de aprobacion",
+           [(c, chat) for c, chat, _ in aviso_a] == [(A, DUENO_LID)]
+           and [(c, chat) for c, chat, _ in aviso_b] == [(SEGUNDA, OTRO_LID)], f"{avisos}")
+        ok("en el idioma de esa linea, y sin cruzarse con el de la otra",
+           len(avisos) == 2 and not any(f"Caso {dinero_b} " in x[2] or f"Case {dinero_a} "
+                                        in x[2] for x in avisos), f"{avisos}")
+        ok("un tick con las dos lineas tampoco toca los ajustes de la principal",
+           de_linea(lee_storage(home)) == raiz_antes,
+           f"{ {k: v for k, v in de_linea(lee_storage(home)).items() if raiz_antes.get(k) != v} }")
+
+        # Los avisos de Orca son de la maquina: salen por la principal, a SU numero.
+        pon_orca(home, waiting="on")
+        r = jsl(home, SEGUNDA, "orca-aviso", "--state=waiting", "--pane=tab-9:p9",
+                f"--at={int(time.time() * 1000)}", "--agent=claude")
+        ok("un aviso de Orca va al numero de la principal aunque la corrida sea de otra linea",
+           r and r[0].get("queued") is True and cuenta(
+               home, "select count(*) from aviso where tipo='orca' and account=? and chat_jid=?",
+               A, DUENO_LID) == 1, f"{r}")
+
+        # wa-send fuera de la corrida de una linea (el agente de casos es uno por maquina):
+        # firma con el nombre de la linea de la conversacion, y los numeros del dueno que
+        # mira son los de esa linea.
+        def wa_send(*args):
+            env = dict(os.environ, HOME=str(home),
+                       XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+                       APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"))
+            env.pop("WA_INBOX_LINEA", None)
+            return subprocess.run([str(RAIZ / "bin" / "wa-send"), *args, "--send", "--timeout=20",
+                                   "--json"], capture_output=True, text=True, env=env,
+                                  timeout=120)
+        sidecar_b = SidecarDeLinea(home, SEGUNDA)
+        try:
+            p1 = wa_send("--line", SEGUNDA, PERSONA, "Ya quedo listo")
+            p2 = wa_send(OTRO_LID, "El arreglo cuesta $80")
+        finally:
+            sidecar_b.cerrar()
+        con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+        listo = con.execute("select account, estado, body from envio where body like "
+                            "'Ya quedo listo%'").fetchall()
+        al_otro = con.execute("select account, estado, body from envio where body like "
+                              "'El arreglo cuesta $80%'").fetchall()
+        con.close()
+        ok("wa-send --line de otra linea firma con el nombre de esa linea",
+           len(listo) == 1 and listo[0][:2] == (SEGUNDA, "enviado")
+           and listo[0][2].endswith("-- Agente Segunda"), f"{listo} {p1.stderr[-300:]}")
+        ok("sin linea, firma con la de la conversacion, y su dueno es el de esa linea",
+           len(al_otro) == 1 and al_otro[0][:2] == (SEGUNDA, "enviado")
+           and al_otro[0][2].endswith("-- Agente Segunda"), f"{al_otro} {p2.stderr[-300:]}")
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

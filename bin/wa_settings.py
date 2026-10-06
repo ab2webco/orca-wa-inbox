@@ -282,6 +282,28 @@ def plugin_store_raw():
         return {}
 
 
+def _wa_store():
+    """`wa_store`, importado al usarlo: importa este modulo, asi que arriba seria circular."""
+    carpeta = os.path.dirname(os.path.abspath(__file__))
+    if carpeta not in sys.path:
+        sys.path.insert(0, carpeta)
+    import wa_store
+    return wa_store
+
+
+def store_de_linea(linea=None):
+    """El storage del panel como lo ve una linea: `linea`, o la que atiende esta corrida
+    (`WA_INBOX_LINEA`, que `--line` pone ahi). Sin linea nombrada es la principal, y la
+    principal lo ve tal cual, sin abrir nada mas; otra linea, con sus ajustes propios encima
+    (`vista_de_linea`)."""
+    raw = plugin_store_raw()
+    ws = _wa_store()
+    cuenta = linea or ws.linea_pedida()
+    if not cuenta:
+        return raw
+    return vista_de_linea(raw, cuenta, ws.linea_activa_en_disco())
+
+
 # Varias lineas a la vez: las claves del storage que son de UNA linea. La principal las
 # tiene en la raiz, como siempre; cada otra linea, aparte, para que nunca pise las de la
 # principal (el alcance es un permiso: pisarlo es abrir o cerrar la conversacion
@@ -297,7 +319,26 @@ CLAVES_DE_LINEA = ("scope", "activity", "health", "board", "reports", "chats",
                    "chatsAccount", "senders", "groupMembers")
 CONTENEDOR_PROPIO = {"scope": "alcancePorLinea", "reports": "informesPorLinea"}
 CONTENEDOR_DE_LINEA = "porLinea"
-CONTENEDORES = (CONTENEDOR_DE_LINEA, *CONTENEDOR_PROPIO.values())
+
+# Los ajustes que cada linea tiene propios (odd/tasks/ajustes-por-linea.md): una linea
+# personal puede tener otro agente, otro tono, otro numero de aprobacion y otras respuestas
+# automaticas. La principal los tiene en la raiz, como siempre; cada otra linea, en
+# `ajustesPorLinea[<cuenta>][<clave>]`, que escriben el panel y el worker (el worker la
+# llena con una copia de la principal la primera vez que la linea dice su numero).
+#
+# Encima y no en lugar de: una clave que la linea no tiene propia es la de la raiz. Una que
+# tiene en null es "sin valor", y no cae a la raiz: asi una linea nueva que copio una clave
+# vacia de la principal no hereda lo que la principal elija despues.
+#
+# Lo demas es de la maquina y vive solo en la raiz: el ritmo del sync, la transcripcion y
+# su calidad, Jev, los avisos de Orca, la cuenta de Claude del bot, las skills, los
+# proyectos y las rutas.
+AJUSTES_DE_LINEA = ("agentName", "ownerName", "tone", "owners", "approvalNumber",
+                    "approvalLang", "ackMode", "ackText", "ackQuietMinutes", "greetingMode",
+                    "greetingText", "firstReply", "slaMinutes", "projectQuestionHours",
+                    "inboxDays", "transcribeLang")
+CONTENEDOR_AJUSTES = "ajustesPorLinea"
+CONTENEDORES = (CONTENEDOR_DE_LINEA, *CONTENEDOR_PROPIO.values(), CONTENEDOR_AJUSTES)
 
 
 def de_otra_linea(cuenta, principal):
@@ -325,9 +366,16 @@ def valor_de_linea(datos, cuenta, clave):
     return clave in propio, propio.get(clave)
 
 
+def ajustes_propios(datos, cuenta):
+    """Los ajustes propios de la linea `cuenta` (`ajustesPorLinea[cuenta]`), o {}."""
+    propios = _contenedor(datos, CONTENEDOR_AJUSTES).get(cuenta)
+    return propios if isinstance(propios, dict) else {}
+
+
 def vista_de_linea(datos, cuenta, principal):
     """El storage como lo ve la linea `cuenta`: la raiz para la principal; para otra, las
-    claves globales de la raiz con las suyas encima."""
+    claves globales de la raiz con las suyas encima, y sus ajustes propios encima de los de
+    la raiz."""
     if not de_otra_linea(cuenta, principal):
         return datos
     vista = {k: v for k, v in datos.items() if k not in CLAVES_DE_LINEA and k not in CONTENEDORES}
@@ -335,17 +383,31 @@ def vista_de_linea(datos, cuenta, principal):
         hay, valor = valor_de_linea(datos, cuenta, clave)
         if hay:
             vista[clave] = valor
+    propios = ajustes_propios(datos, cuenta)
+    for clave in AJUSTES_DE_LINEA:
+        if clave in propios:
+            vista[clave] = propios[clave]
     return vista
 
 
 def escribir_en_linea(datos, cambios, cuenta, principal):
     """Aplica `cambios` al storage de la linea `cuenta`: las claves de linea de otra linea
-    van a su lugar aparte, y lo demas a la raiz."""
+    van a su lugar aparte, y lo demas a la raiz.
+
+    Un ajuste propio de otra linea va a `ajustesPorLinea[cuenta][clave]`, clave por clave:
+    el sync de una linea escribia su nombre del agente, su tono y sus respuestas automaticas
+    en la raiz, que es la principal. El contenedor nunca se reescribe entero: lo de las otras
+    lineas, y las claves que este codigo no conoce, quedan como estaban."""
     if not de_otra_linea(cuenta, principal):
         datos.update(cambios)
         return datos
     for clave, valor in cambios.items():
-        if clave not in CLAVES_DE_LINEA:
+        if clave in AJUSTES_DE_LINEA:
+            ajustes = _contenedor(datos, CONTENEDOR_AJUSTES, crear=True)
+            if not isinstance(ajustes.get(cuenta), dict):
+                ajustes[cuenta] = {}
+            ajustes[cuenta][clave] = valor
+        elif clave not in CLAVES_DE_LINEA:
             datos[clave] = valor
         elif clave in CONTENEDOR_PROPIO:
             _contenedor(datos, CONTENEDOR_PROPIO[clave], crear=True)[cuenta] = valor
@@ -498,14 +560,16 @@ def valida_ajuste(key, value):
     return None
 
 
-def settings_from_plugin():
+def settings_from_plugin(linea=None):
     """Los ajustes que el panel dejo en sus claves planas, con el nombre del CLI. Una
     cadena vacia no es una eleccion: se ignora para no pisar el valor del CLI.
+
+    Son los de una linea: `linea`, o la que atiende esta corrida (`store_de_linea`).
 
     Lo invalido tambien se ignora: el panel escribe en el store del host sin pasar por
     aca, asi que este es el unico lugar donde un valor sucio puede dejar de llegarle al
     agente. Ignorarlo lo deja con el valor del CLI, que es una eleccion real."""
-    raw = plugin_store_raw()
+    raw = store_de_linea(linea)
     out = {}
     for flat, name in PANEL_SETTINGS.items():
         value = raw.get(flat)
@@ -588,7 +652,7 @@ def trae_llave_aprobador(env=None):
     return bool(dada and propia) and hmac.compare_digest(dada.encode(), propia.encode())
 
 
-def ajuste(key, fallback=None):
+def ajuste(key, fallback=None, linea=None):
     """El valor efectivo de un ajuste: el panel y la base del CLI, en ese orden.
 
     El panel manda sobre la base porque es lo que el usuario acaba de tocar. Vive aca
@@ -598,6 +662,9 @@ def ajuste(key, fallback=None):
 
     Sin `fallback` el valor sale tal cual; con uno, convertido a su tipo — un valor que
     no se puede convertir se ignora y se pasa a la fuente siguiente.
+
+    Lo del panel es de una linea: `linea`, o la que atiende esta corrida. La base del CLI es
+    de la maquina.
     """
     def convertido(valor):
         if fallback is None:
@@ -608,7 +675,7 @@ def ajuste(key, fallback=None):
             return None
 
     try:
-        del_panel = settings_from_plugin().get(key)
+        del_panel = settings_from_plugin(linea).get(key)
     except Exception:                     # noqa: BLE001 - un store ilegible no manda
         del_panel = None
     if del_panel not in (None, "") and (v := convertido(del_panel)) is not None:
@@ -624,15 +691,17 @@ def ajuste(key, fallback=None):
     return fallback
 
 
-def duenos():
+def duenos(linea=None):
     """Los remitentes de confianza que el dueno eligio en ajustes (T22.1): sus ids tal
     como WhatsApp los deja en el almacen (`<usuario>@lid`, o `@s.whatsapp.net` si asi
     llegan), sin el dispositivo. Nunca un numero escrito a mano ni adivinado: el panel
     solo ofrece los que vio en las conversaciones.
 
     Viven en el almacen del plugin, por instalacion, en `owners`: `[{id, name}]`. Lo que
-    no tiene forma de id se ignora: un valor sucio no puede volver dueno a nadie."""
-    lista = plugin_store_raw().get("owners")
+    no tiene forma de id se ignora: un valor sucio no puede volver dueno a nadie.
+
+    Cada linea tiene los suyos: `linea`, o la que atiende esta corrida."""
+    lista = store_de_linea(linea).get("owners")
     salida = []
     for d in lista if isinstance(lista, list) else []:
         jid = d.get("id") if isinstance(d, dict) else None
@@ -650,21 +719,24 @@ def duenos():
 IDIOMAS_AVISO = ("es", "en")
 
 
-def numero_aprobacion():
+def numero_aprobacion(linea=None):
     """El numero al que el plugin le escribe cuando un caso espera al dueno (T14), o None.
 
     Lo elige el usuario en ajustes entre SUS numeros de confianza: vale solo mientras siga
     en `duenos()`. Sacarlo de la lista apaga los avisos; nunca se adivina ni se escribe a
-    mano. Sin numero elegido, el plugin se porta como antes."""
-    jid = plugin_store_raw().get("approvalNumber")
+    mano. Sin numero elegido, el plugin se porta como antes.
+
+    Cada linea tiene el suyo, de entre SUS numeros de confianza: `linea`, o la que atiende
+    esta corrida. Los avisos de un caso salen por la linea del caso a ese numero."""
+    jid = store_de_linea(linea).get("approvalNumber")
     if not isinstance(jid, str) or "@" not in jid:
         return None
     usuario, _, servidor = jid.strip().partition("@")
     propio = f"{usuario.split(':')[0]}@{servidor}"
-    return propio if propio in duenos() else None
+    return propio if propio in duenos(linea) else None
 
 
-def idioma_aprobacion():
+def idioma_aprobacion(linea=None):
     """`es` o `en`: el idioma del panel cuando se eligio el numero. Ingles si no se sabe."""
-    idioma = plugin_store_raw().get("approvalLang")
+    idioma = store_de_linea(linea).get("approvalLang")
     return idioma if idioma in IDIOMAS_AVISO else "en"
