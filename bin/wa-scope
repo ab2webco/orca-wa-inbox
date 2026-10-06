@@ -45,8 +45,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from wa_settings import (  # noqa: E402
     CONFIG_NUMERICOS, CONFIG_OPCIONES, MODOS_PRIMER, PANEL_PRIMER, PANEL_PRIMER_CAMPOS,
-    PANEL_SETTINGS, PLUGIN_ID,
-    PLUGIN_ID_ANTERIOR, duenos, idioma_aprobacion, numero_aprobacion, orca_cli_path, orca_env, orca_runtime_home, plugin_store_path,
+    PANEL_SETTINGS, PLUGIN_ID, VARIABLE_APROBADOR,
+    PLUGIN_ID_ANTERIOR, duenos, llave_aprobador, trae_llave_aprobador, idioma_aprobacion, numero_aprobacion, orca_cli_path, orca_env, orca_runtime_home, plugin_store_path,
     plugin_store_raw,
     plugin_store_targets, settings_from_plugin, user_data_roots, valida_ajuste)
 import wa_store  # noqa: E402  (solo lectura: de capture.db se lee la linea activa)
@@ -149,7 +149,9 @@ FIRMANTES_CASO = ("dueno", "regla")
 # el panel, que traduce por codigo: el texto se puede reescribir, el codigo no.
 # E_OWNER: lo que ya decidio el dueno (el proyecto del caso) no lo cambia el agente.
 ERRORES_CASO = ("E_ARGS", "E_NOT_FOUND", "E_STAGE", "E_NOT_APPROVED", "E_VERSION",
-                "E_EXCEPTION", "E_REVISION", "E_BUSY", "E_OWNER")
+                "E_EXCEPTION", "E_REVISION", "E_BUSY", "E_OWNER", "E_NOT_OWNER")
+# E_NOT_OWNER: `caso aprobar --actor dueno` sin la llave del plugin (approve-solo-dueno). La
+# firma del dueno la lanza el worker con el clic del tablero; un agente no la tiene.
 # Cuanto del porque del agente (`caso proyecto --porque`) queda en la ruta: una frase para
 # la tarjeta, no un informe.
 LARGO_PORQUE = 300
@@ -3758,6 +3760,19 @@ def caso_anota_salida(con, case_id, excepciones):
                    "regla fija: la respuesta lleva " + ", ".join(excepciones))
 
 
+def cmd_caso_aprobar_cli(con, a):
+    """`caso aprobar` desde la linea de comandos. `--actor dueno` es una bandera que
+    cualquiera escribe, asi que firmar como el dueno exige la llave del plugin: el worker la
+    pasa solo al proceso del clic del tablero (approve-solo-dueno). La regla (`--actor
+    regla`) sigue igual, y las llamadas internas (la respuesta del dueno por WhatsApp, los
+    trabajos sin clic) no pasan por aca: ya probaron de donde viene la firma."""
+    if a.actor == "dueno" and not trae_llave_aprobador():
+        caso_falla("E_NOT_OWNER", "only the owner signs as dueno, from the board or by "
+                                  "answering the plugin's notice on WhatsApp; an agent cannot "
+                                  "approve a case.")
+    return cmd_caso_aprobar(con, a)
+
+
 def cmd_caso_aprobar(con, a):
     """El dueno firma una VERSION. Si la vigente ya es otra (triage re-propuso mientras
     miraba la tarjeta) se rechaza sin escribir: aprobar lo que no vio es justo lo que
@@ -6792,6 +6807,9 @@ def build_board(con, ahora=None):
             # Los espacios del plugin que la limpieza no pudo quitar tras sus intentos: el
             # panel lo dice en la linea de la revision, para que el dueno los quite a mano.
             "workspaces_stuck": espacios_atascados(con),
+            # Lo retenido que no es de ningun caso: el dueno lo aprueba o lo retira desde el
+            # panel (approve-solo-dueno).
+            "held_drafts": retenidos_del_tablero(con, cuenta),
             # El proyecto de cada tarjeta, con su porque y los del chat: {case_id: {...}}.
             "project_routes": {str(c["case_id"]): ruta_de_tablero(c, alcance, catalogo)
                                for c in casos},
@@ -6804,6 +6822,59 @@ def build_board(con, ahora=None):
                            # por esta hora.
                            stage_at=entradas.get(c["case_id"]))
                       for c in casos]}
+
+
+# Los retenidos fuera de un caso (approve-solo-dueno): cuantos viajan al panel, y los ids
+# que NO son de ellos. `caso-...` se aprueba en su tarjeta, con su version; `aviso-...` es
+# del plugin al dueno.
+TOPE_RETENIDOS = 50
+PREFIJOS_DEL_MOTOR = ("caso-", "aviso-")
+
+
+def motivos_de_retenido(detalle):
+    """Por que se freno, en los codigos de excepcion que el panel ya traduce, de la fila
+    `draft` que dejo `wa-send`: `held by rule: money, secret; jev: x · <req> · ...` ->
+    ["money", "credential", "jev"]. Un secreto es una credencial; lo de Jev es "jev"."""
+    if not str(detalle or "").startswith("held by "):
+        return []
+    salida = []
+    for tramo in detalle[len("held by "):].split(" · ", 1)[0].split(";"):
+        quien, _, codigos = tramo.strip().partition(": ")
+        for c in (c.strip() for c in codigos.split(",") if c.strip()):
+            salida.append("jev" if quien == "jev" else
+                          "credential" if c == wa_reglas.SECRETO else c)
+    return list(dict.fromkeys(salida))
+
+
+def retenidos_del_tablero(con, cuenta):
+    """Los borradores de la linea activa que esperan al dueno y no son de ningun caso: el
+    aviso de la sesion de un proyecto que el piso freno, por ejemplo. Sin esto nadie los
+    podia aprobar: `wa-send --approve` ya no es de los agentes. Va el texto, como la
+    propuesta de una tarjeta: aprobar sin leerlo seria a ciegas. Del mas viejo al mas nuevo."""
+    ruta = wa_store.store_db_path()
+    if not os.path.exists(ruta):
+        return []
+    try:
+        fuente = sqlite3.connect(f"file:{ruta}?mode=ro", uri=True, timeout=10)
+        fuente.row_factory = sqlite3.Row
+        filas = fuente.execute(
+            "select req_id, chat_jid, chat_name, body, created_at from envio where "
+            "estado='borrador' and account=? and req_id not like 'caso-%' and req_id not like "
+            "'aviso-%' order by created_at, rowid limit ?", (cuenta, TOPE_RETENIDOS)).fetchall()
+        fuente.close()
+    except sqlite3.Error:
+        return []
+    salida = []
+    for f in filas:
+        nota = con.execute("select detail from agent_action where action='draft' and "
+                           "instr(detail, ?) > 0 order by id desc limit 1",
+                           (f" · {f['req_id']} · ",)).fetchone()
+        salida.append({"req_id": f["req_id"], "chat_jid": f["chat_jid"],
+                       "chat": f["chat_name"] or f["chat_jid"], "text": f["body"] or "",
+                       "at": datetime.datetime.fromtimestamp(int(f["created_at"] or 0))
+                       .astimezone().isoformat(timespec="seconds"),
+                       "reasons": motivos_de_retenido(nota["detail"] if nota else "")})
+    return salida
 
 
 def publica_tablero(con):
@@ -8537,16 +8608,23 @@ def aviso_contestado(con, aviso):
 def entrega_del_dueno(con, caso, tx):
     """La respuesta aprobada por el dueno sale como la del tablero (`entregar` en
     acciones.mjs): el borrador con el id del caso y `--approve`, que es la firma del dueno y
-    no vuelve a pasar por el piso ni por Jev. Devuelve la confirmacion."""
+    no vuelve a pasar por el piso ni por Jev. Devuelve la confirmacion.
+
+    `--approve` lleva la llave del plugin (approve-solo-dueno) SOLO en el env de ese hijo, y
+    `--by whatsapp-reply` para la bitacora: el dueno contesto el aviso. Sin llave (el plugin
+    nunca arranco) `wa-send` lo niega y la confirmacion lo dice."""
     n, version = caso["case_id"], caso["propuesta_version"]
     req = id_envio_caso(n, version)
     texto = respuesta_de_propuesta(caso)
     args = [WA_SEND, f"--id={req}"] + ([f"--line={caso['account']}"] if caso.get("account") else [])
-    pasos = (args + [f"--timeout={PLAZO_ENVIO_TICK_S}", "--json", "--", caso["chat_jid"], texto],
-             [WA_SEND, "--approve", req, f"--timeout={PLAZO_ENVIO_TICK_S}", "--json"])
-    for paso in pasos:
+    con_llave = dict(os.environ, **{VARIABLE_APROBADOR: llave_aprobador() or ""})
+    pasos = ((args + [f"--timeout={PLAZO_ENVIO_TICK_S}", "--json", "--", caso["chat_jid"], texto],
+              None),
+             ([WA_SEND, "--approve", req, "--by", "whatsapp-reply",
+               f"--timeout={PLAZO_ENVIO_TICK_S}", "--json"], con_llave))
+    for paso, env in pasos:
         try:
-            p = subprocess.run(paso, capture_output=True, text=True,
+            p = subprocess.run(paso, capture_output=True, text=True, env=env,
                                timeout=PLAZO_ENVIO_TICK_S + 30)
         except (OSError, subprocess.SubprocessError):
             return tx["aprobado_linea"].format(n=n)
@@ -11340,15 +11418,17 @@ def main():
     c = caso("aprobar", help="the owner's approval of ONE proposal version; refused if "
                              "the current version is another one. --actor regla is the "
                              "owner's rule, refused (E_EXCEPTION) when the case has an "
-                             "exception or its chat is on borrador")
+                             "exception or its chat is on borrador. --actor dueno only "
+                             "comes from the owner's click on the board: an agent is "
+                             "refused (E_NOT_OWNER)")
     c.add_argument("id", type=int)
     c.add_argument("--version", required=True,
                    help="the propuesta_version the owner saw")
-    # El actor queda en `dueno` para que el evento diga quien firmo. Es solo una bandera:
-    # cualquiera que corra este CLI puede escribirla. La compuerta real del clic es el
-    # canal panel -> worker (kanban-casos, T4), no este flag.
+    # El actor queda en `dueno` para que el evento diga quien firmo. Como la bandera la
+    # puede escribir cualquiera, `dueno` exige ademas la llave del plugin, que solo trae el
+    # clic del tablero (approve-solo-dueno, `cmd_caso_aprobar_cli`).
     c.add_argument("--actor", required=True, choices=list(FIRMANTES_CASO))
-    c.set_defaults(fn=cmd_caso_aprobar)
+    c.set_defaults(fn=cmd_caso_aprobar_cli)
 
     c = caso("resultado", help="the deployed worker's result: resuelto or necesita move "
                                "trabajo -> listo and its reply becomes a new responder "

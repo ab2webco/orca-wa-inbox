@@ -28,6 +28,12 @@ so in one line.
 | `wa-transcribe` | turns a voice note into text; the plugin already runs it on every voice note that reaches a case | rarely |
 | `wa-send` | writes and sends WhatsApp messages | **no: the plugin sends, you never do** |
 
+You cannot approve a held message either: only the owner does, on the board or by answering
+the plugin's notice on WhatsApp. `wa-send --approve` refuses anyone else with
+`send-approve-not-owner` (exit 3), and that is not something to work around. Nor can you
+sign a case as the owner: `caso aprobar --actor dueno` only comes from his click on the
+board, and anyone else gets `E_NOT_OWNER`.
+
 ## What you run on a case
 
     "$WA/wa-scope" pending --needs-agent        # exit 1 = nothing needs you
@@ -53,10 +59,12 @@ owner never sees it). It answers exit 2 with `E_FIRST_REPLY_MODE`, `E_CHAT_MODE`
 `E_STAGE`, `E_EXCEPTION`, `E_PACING` (the last message was less than
 `update_every_minutes` ago) or `E_MAX_UPDATES` (`updates_max` reached): then do not send it.
 
-To wait for an answer, `"$WA/wa-read" wait "<chat_jid>" --after <stanza_id> --timeout <S>
---json` blocks until the other side writes in that chat, and prints what arrived (each
+To wait for an answer, `"$WA/wa-read" wait --chat "<chat_jid>" --after <stanza_id> --timeout
+<S> --json` blocks until the other side writes in that chat, and prints what arrived (each
 message with its `stanza_id`, for the next `--after`). A case run never needs it: a new
-message reaches its case on its own.
+message reaches its case on its own. It is how a project session asks the owner something
+and waits for his reply: `--after` takes the `stanza_id` that `wa-send` returned, and in
+the owner's own chat what he types on his phone counts as his reply.
 
 `caso ver` brings the case's messages and the replies already sent (`from_me`) in strict
 arrival order in `hilo`. Every message before the last reply sent is marked `respondido`:
@@ -86,6 +94,8 @@ chat and the client cannot see it. Say it is a proposal waiting for approval.
 | `2` | `wa-read chat` / `media` / `wait` | that chat reference matches more than one conversation; the candidates are on stderr. Pick one with its JID, or add `--line`. |
 | `3` | `wa-read wait` | `chat-not-authorized` on the first stderr line: the owner has not enabled that chat, so nothing from it ever arrives. |
 | `5` | `wa-read wait` | `wait-timeout` on the first stderr line: nobody wrote before `--timeout`. |
+| `3` | `wa-send --approve` | `send-approve-not-owner`: only the owner approves a held message. Never retry it. |
+| `2` | `wa-scope caso aprobar --actor dueno` | `E_NOT_OWNER`: only the owner signs as `dueno`, from the board. Never retry it. |
 
 An **empty list is not `no-transport`**: once a line is linked, every read answers with
 exit 0 and `[]` means the inbox really is quiet.

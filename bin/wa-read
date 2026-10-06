@@ -14,8 +14,9 @@ that store — it never writes to it, and it never talks to WhatsApp.
   whoami                        your LID and how many groups
   chat <id|name> [-n N]         latest messages of a chat
   media <id|name> [-n N]        latest images/videos/audio, with the path on disk
-  wait <id|name> [--after X] [--timeout S]
-                                block until someone else writes in that chat
+  wait --chat <jid> [--after X] [--timeout S]
+                                block until someone else writes in that chat: how
+                                you ask the owner something and wait for his reply
   state                         how much the store changed, without reading it
   doctor                        check the requirements
 
@@ -66,13 +67,25 @@ SONDEO_MIN_S = 0.05
 
 AYUDA_WAIT = f"""Block until someone else writes in an authorized chat, then print what arrived.
 
+  wa-read wait --chat <jid> [--after <stanza_id|epoch>] [--timeout S] --json
+
 Only messages from the other side count: what this line sends never wakes it. It reads
-the message store every --poll seconds; it never talks to WhatsApp. The chat follows the
-same rules as `chat` (a JID, the id from `chats`, or part of its name; `--line` for one
-line), and it must be authorized for the agent (any mode but `off`).
+the message store every --poll seconds; it never talks to WhatsApp. The chat (--chat, or
+as the first argument) follows the same rules as `chat` (a JID, the id from `chats`, or
+part of its name; `--line` for one line), and it must be authorized for the agent (any
+mode but `off`).
 
 --after takes the stanza_id of a message of that chat (what arrived after it, which may
-already be there) or a time in epoch seconds. Without it, only what arrives from now on.
+already be there), including the one `wa-send` just returned even before its echo is in
+the store, or a time in epoch seconds. Without it, only what arrives from now on.
+
+ASK THE OWNER AND WAIT FOR THE REPLY. A send to the owner's own chat is never held, so:
+
+  wa-send "<owner chat jid>" "<question>" --send --json     -> {{"stanza_id": "<S>", ...}}
+  wa-read wait --chat "<owner chat jid>" --after <S> --timeout 600 --json
+
+In the line's chat with itself, what the owner types on his phone counts as his reply
+even though WhatsApp marks it as sent by the line; what the line itself sent does not.
 
 Exit codes: 0 = new messages, printed oldest first (each with its stanza_id, for the next
 --after); 1 = no chat or no --after message matches; 2 = the chat reference is ambiguous;
@@ -338,7 +351,7 @@ def autorizada(fila):
 
 
 def cmd_wait(con, a):
-    fila = wa_store.resolver_chat(con, a.chat, a.line)
+    fila = wa_store.resolver_chat(con, a.chat_ref, a.line)
     if not autorizada(fila):
         morir_sin_fuente(NO_AUTORIZADO,
                          f"{wa_store.nombre_de(fila)!r} is not authorized for the agent "
@@ -414,7 +427,13 @@ def main():
 
     s = add("wait", cmd_wait, help="block until someone else writes in an authorized chat",
             description=AYUDA_WAIT, formatter_class=argparse.RawDescriptionHelpFormatter)
-    s.add_argument("chat")
+    # La conversacion va con `--chat <jid>` (T18) o como primer argumento, como en
+    # `chat`: una de las dos, y una sola vez.
+    s.add_argument("chat", nargs="?", default=None, help=argparse.SUPPRESS)
+    s.add_argument("--chat", dest="chat_opt", default=None, metavar="JID|ID|NAME",
+                   help="the chat to wait on: its JID, the id from `chats`, or part of its "
+                        "name (it can also go as the first argument)")
+    s_wait = s
     s.add_argument("--after", default=None, metavar="STANZA|EPOCH",
                    help="start after this message of the chat, or after this time")
     s.add_argument("--timeout", type=float, default=ESPERA_S, metavar="S",
@@ -429,6 +448,12 @@ def main():
     a = ap.parse_args()
     if getattr(a, "json_sub", False):   # permite --json antes o despues del subcomando
         a.json = True
+    if a.cmd == "wait":
+        # Antes de abrir nada: un pedido mal formado es un error de argumentos (2), no
+        # "no hay de donde leer".
+        if bool(a.chat) == bool(a.chat_opt):
+            s_wait.error("name the chat once: --chat <jid> (or as the first argument)")
+        a.chat_ref = a.chat or a.chat_opt
 
     if a.cmd == "doctor":               # tiene que correr aunque falte todo lo demas
         rows = cmd_doctor(a)

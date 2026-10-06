@@ -331,6 +331,24 @@
               border-left: 2px solid var(--border, var(--fb-border));
               color: var(--foreground, var(--fb-foreground)); }
       .card-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+      /* Los retenidos fuera de un caso: arriba del tablero, con el tinte de "Su decision"
+         porque es lo mismo, algo que espera al dueno. Las tarjetas no se abren: todo esta a
+         la vista. */
+      .held { display: flex; flex-direction: column; gap: 8px; margin: 0 12px 12px; padding: 10px;
+              border: 1px solid color-mix(in srgb, var(--primary, var(--fb-primary)) 35%, var(--border, var(--fb-border)));
+              border-radius: var(--radius-md);
+              background: color-mix(in srgb, var(--primary, var(--fb-primary)) 4%, transparent); }
+      .held[hidden] { display: none; }
+      .held > .meta { margin: 0; }
+      .held-head { display: flex; align-items: center; gap: 8px; }
+      .held-title { font-size: 13px; font-weight: 600; color: var(--foreground, var(--fb-foreground)); }
+      .held-head .col-count { margin-left: auto; }
+      .held-msg { margin: 0; font-size: 11px; font-weight: 600; overflow-wrap: anywhere;
+              color: var(--foreground, var(--fb-foreground)); }
+      .held-msg:empty { display: none; }
+      .held-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px; }
+      .held-list .card { cursor: default; }
+      .held-list .card:hover { background: var(--card, var(--fb-card)); }
       .card-msg { font-size: 11px; font-weight: 600; overflow-wrap: anywhere;
               color: var(--foreground, var(--fb-foreground)); }
       .card-msg.mala { color: var(--destructive, var(--fb-destructive)); }
@@ -740,6 +758,15 @@
            medias" se ven iguales. -->
       <p class="meta nota" id="runline"></p>
       <p class="meta nota" id="board-note"></p>
+      <!-- Lo retenido que no es de ningun caso (approve-solo-dueno): el aviso de la sesion de
+           un proyecto que el piso freno. Un agente ya no lo puede aprobar; el dueno si, aca. -->
+      <section class="held" id="board-held" hidden>
+        <div class="held-head"><span class="held-title" data-t="heldTitle"></span>
+          <span class="col-count" id="board-held-count"></span></div>
+        <p class="meta" data-t="heldLead"></p>
+        <p class="held-msg" id="board-held-msg" role="status"></p>
+        <div class="held-list" id="board-held-list"></div>
+      </section>
       <div class="board-empty" id="board-empty" hidden><p class="t"></p><p class="b"></p></div>
       <div class="board-body" id="board-body" hidden>
         <div class="board-main">
@@ -937,6 +964,13 @@
               "jevSkip": "No requiere accion",
               "jevSees": "Lo ve como",
               "excLead": "Necesita su decision por",
+              "heldTitle": "Mensajes retenidos",
+              "heldLead": "Estos mensajes no son de ningun caso y esperan su aprobacion. Lea el texto antes de aprobarlo.",
+              "heldReason": "Retenido por: {x}",
+              "heldApprove": "Aprobar",
+              "heldCancel": "Cancelar",
+              "heldSent": "Enviado a {chat}.",
+              "heldCancelled": "Cancelado: el mensaje a {chat} no se envio.",
               "excMoney": "dinero",
               "excCredential": "credencial",
               "excCommitment": "compromiso",
@@ -1099,6 +1133,7 @@
               "acErrSendConflict": "Ese envio ya existe con otro texto, asi que no se mando nada.",
               "acErrSendLine": "Esa conversacion no esta autorizada para el numero vinculado ahora. Revise sus Ajustes.",
               "acErrSendFirma": "Falta el nombre del agente y sin el no se envia. Defina el nombre en Ajustes.",
+              "acErrSendNoDueno": "No se pudo confirmar que la aprobacion viene del tablero y el mensaje no salio. Reinicie el plugin e intente de nuevo.",
               "acErrJev": "Jev no pudo revisar el mensaje: quedo como borrador y no salio.",
               "acErrDesconocida": "El plugin no entiende esa accion. Actualice el plugin.",
               "acErrVencido": "El pedido vencio antes de atenderse. Intente de nuevo.",
@@ -1279,6 +1314,13 @@
               "jevSkip": "No action needed",
               "jevSees": "Reads it as",
               "excLead": "Needs your decision because",
+              "heldTitle": "Held messages",
+              "heldLead": "These messages belong to no case and wait for your approval. Read the text before you approve it.",
+              "heldReason": "Held for: {x}",
+              "heldApprove": "Approve",
+              "heldCancel": "Cancel",
+              "heldSent": "Sent to {chat}.",
+              "heldCancelled": "Cancelled: the message to {chat} was not sent.",
               "excMoney": "money",
               "excCredential": "credential",
               "excCommitment": "commitment",
@@ -1441,6 +1483,7 @@
               "acErrSendConflict": "That send already exists with a different text, so nothing was sent.",
               "acErrSendLine": "That conversation is not authorized for the number linked now. Check your Settings.",
               "acErrSendFirma": "The agent name is missing and nothing is sent without it. Set the name in Settings.",
+              "acErrSendNoDueno": "The approval could not be confirmed as coming from the board, so the message was not sent. Restart the plugin and try again.",
               "acErrJev": "Jev could not review the message: it was left as a draft and was not sent.",
               "acErrDesconocida": "The plugin does not understand that action. Update the plugin.",
               "acErrVencido": "The request expired before it was handled. Try again.",
@@ -1621,6 +1664,13 @@
               "jevSkip": "Nao requer acao",
               "jevSees": "Ve como",
               "excLead": "Precisa da sua decisao por",
+              "heldTitle": "Mensagens retidas",
+              "heldLead": "Estas mensagens nao sao de nenhum caso e aguardam sua aprovacao. Leia o texto antes de aprovar.",
+              "heldReason": "Retida por: {x}",
+              "heldApprove": "Aprovar",
+              "heldCancel": "Cancelar",
+              "heldSent": "Enviada para {chat}.",
+              "heldCancelled": "Cancelada: a mensagem para {chat} nao foi enviada.",
               "excMoney": "dinheiro",
               "excCredential": "credencial",
               "excCommitment": "compromisso",
@@ -1783,6 +1833,7 @@
               "acErrSendConflict": "Esse envio ja existe com outro texto, entao nada foi enviado.",
               "acErrSendLine": "Essa conversa nao esta autorizada para o numero vinculado agora. Confira seus Ajustes.",
               "acErrSendFirma": "Falta o nome do agente e sem ele nada e enviado. Defina o nome em Ajustes.",
+              "acErrSendNoDueno": "Nao foi possivel confirmar que a aprovacao vem do quadro e a mensagem nao foi enviada. Reinicie o plugin e tente de novo.",
               "acErrJev": "O Jev nao conseguiu revisar a mensagem: ela ficou como rascunho e nao foi enviada.",
               "acErrDesconocida": "O plugin nao entende essa acao. Atualize o plugin.",
               "acErrVencido": "O pedido venceu antes de ser atendido. Tente de novo.",
@@ -2441,6 +2492,8 @@
         'send-id-conflict': 'acErrSendConflict', 'send-wrong-line': 'acErrSendLine',
         'send-line-not-linked': 'acErrSendLine', 'send-ambiguous-line': 'acErrSendLine',
         'send-no-signature': 'acErrSendFirma', 'jev-unavailable': 'acErrJev',
+        // `wa-send --approve` sin la llave del plugin (approve-solo-dueno).
+        'send-approve-not-owner': 'acErrSendNoDueno', E_NOT_OWNER: 'acErrSendNoDueno',
         'accion-desconocida': 'acErrDesconocida', vencido: 'acErrVencido',
         'sin-herramientas': 'acErrSinHerr', 'sin-permiso': 'acErrSinPermiso',
         demoro: 'acErrDemoro', fallo: 'acErrFallo', 'no-escritura': 'acErrNoWrite' }
@@ -2517,6 +2570,99 @@
       }
 
       function repintar () { renderBoard(tableroActual, true); ajustarAlto() }
+
+      // Los retenidos fuera de un caso (approve-solo-dueno). `heldHechos`: los que el dueno
+      // ya aprobo o cancelo, ocultos hasta que el tablero deje de listarlos (lo reescribe el
+      // tick, al minuto). `heldMsgs`: el error de cada uno. `heldAviso`: lo que salio bien.
+      var heldHechos = {}
+      var heldMsgs = {}
+      var heldAviso = null
+      var ID_RETENIDO = /^(?!caso-|aviso-)[A-Za-z0-9_][^\s]{0,199}$/
+
+      function retenidosDe (board) {
+        var lista = esObjeto(board) && Array.isArray(board.held_drafts) ? board.held_drafts : []
+        return lista.filter(function (r) {
+          return esObjeto(r) && typeof r.req_id === 'string' && ID_RETENIDO.test(r.req_id) &&
+            typeof r.text === 'string'
+        })
+      }
+
+      function avisoRetenidoVivo () { return !!heldAviso && Date.now() <= heldAviso.hasta }
+
+      function retenidoNodo (r) {
+        var id = r.req_id
+        var nodo = crear('div', 'card')
+        nodo.dataset.req = id
+        var arriba = crear('div', 'card-top')
+        arriba.appendChild(crear('p', 'card-title clamp1', String(r.chat || r.chat_jid || '?')))
+        nodo.appendChild(arriba)
+        var edad = hace(r.at)
+        if (edad) nodo.appendChild(crear('div', 'card-meta', edad))
+        var motivos = Array.isArray(r.reasons) ? r.reasons.filter(function (x) { return typeof x === 'string' }) : []
+        if (motivos.length) {
+          nodo.appendChild(crear('div', 'card-exc', fmt('heldReason', { x: frases(EXC_KEY, motivos, t('excOther')) })))
+        }
+        nodo.appendChild(crear('div', 'card-prop', r.text))
+        var acts = crear('div', 'card-acts')
+        ;[['aprobar', 'heldApprove', ' primario'], ['cancelar', 'heldCancel', ' mute']].forEach(function (a) {
+          var enVuelo = !!(enCurso && enCurso.id === 'held:' + id && enCurso.accion === a[0])
+          var b = crear('button', 'btn' + a[2], enVuelo ? '…' : t(a[1]))
+          b.type = 'button'
+          b.dataset.held = a[0]
+          b.disabled = !!enCurso
+          if (enVuelo) b.setAttribute('aria-busy', 'true')
+          b.addEventListener('click', function () { accionRetenido(r, a[0]) })
+          acts.appendChild(b)
+        })
+        nodo.appendChild(acts)
+        if (heldMsgs[id]) {
+          var m = crear('div', 'card-msg mala', heldMsgs[id])
+          m.setAttribute('role', 'alert')
+          nodo.appendChild(m)
+        }
+        return nodo
+      }
+
+      function pintarRetenidos (board) {
+        var caja = el('board-held')
+        var lista = el('board-held-list')
+        lista.textContent = ''
+        var todos = retenidosDe(board)
+        var vivos = {}
+        todos.forEach(function (r) { vivos[r.req_id] = true })
+        Object.keys(heldHechos).forEach(function (k) { if (!vivos[k]) delete heldHechos[k] })
+        Object.keys(heldMsgs).forEach(function (k) { if (!vivos[k]) delete heldMsgs[k] })
+        var visibles = todos.filter(function (r) { return !heldHechos[r.req_id] })
+        visibles.forEach(function (r) { lista.appendChild(retenidoNodo(r)) })
+        el('board-held-count').textContent = visibles.length ? String(visibles.length) : ''
+        var aviso = anotarReloj(avisoRetenidoVivo) ? heldAviso.texto : ''
+        el('board-held-msg').textContent = aviso
+        lista.hidden = !visibles.length
+        caja.hidden = !visibles.length && !aviso
+      }
+
+      /** Aprobar o cancelar un retenido: el pedido lleva solo el id, el worker hace el resto
+       *  (la llave del plugin y `--by board` al aprobar). */
+      function accionRetenido (r, accion) {
+        if (enCurso) return
+        var id = r.req_id
+        var chat = String(r.chat || r.chat_jid || '?')
+        enCurso = { id: 'held:' + id, accion: accion }
+        delete heldMsgs[id]
+        repintar()
+        return pedirAccion({ action: accion === 'aprobar' ? 'aprobar-retenido' : 'cancelar-retenido',
+          reqId: id }).then(function (v) {
+          enCurso = null
+          if (v && v.ok === true) {
+            heldHechos[id] = true
+            heldAviso = { texto: fmt(accion === 'aprobar' ? 'heldSent' : 'heldCancelled', { chat: chat }),
+              hasta: Date.now() + 12000 }
+          } else {
+            heldMsgs[id] = v ? errorTexto(v.code, v.detail) : t('acNoAnswer')
+          }
+          return reload()
+        }).then(repintarAlSoltar, function () { enCurso = null; repintarAlSoltar() })
+      }
 
       function cerrarFormulario (id) {
         delete formularios[id]
@@ -3555,7 +3701,8 @@
         try {
           return JSON.stringify([board, cuentaVinculada, vacioPorConfig(actividadActual),
             proyectosAceptados, filtroEtapa, busqueda, vistaEfectiva(), estrecho(), seleccion,
-            formularios, mensajes, enCurso, periodo, desdePeriodo(periodo), cuantosFinales])
+            formularios, mensajes, enCurso, periodo, desdePeriodo(periodo), cuantosFinales,
+            heldHechos, heldMsgs, heldAviso])
         } catch (e) {
           return null
         }
@@ -3580,6 +3727,7 @@
         var avisos = []
         var detalleDe = null
         var porConfig = vacioPorConfig(actividadActual)
+        pintarRetenidos(m.estado === 'ok' || m.estado === 'vacio' ? board : null)
         if (m.estado === 'sin-datos') {
           mostrarVacio(t('boardNoDataTitle'), porConfig || t('boardNoDataBody'), false)
         } else if (m.estado === 'version') {

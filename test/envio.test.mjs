@@ -20,7 +20,8 @@
  */
 import { spawn, execFileSync } from 'node:child_process'
 import { createServer } from 'node:http'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync,
+  writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -32,6 +33,8 @@ import { atenderSalida, ENVIO, LATIDO_VENCE_MS } from '../sidecar/src/envio.js'
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..')
 const WA_SEND = join(RAIZ, 'bin', 'wa-send')
 const WA_SCOPE = join(RAIZ, 'bin', 'wa-scope')
+const APROBADOR = join(RAIZ, 'aprobador.mjs')
+const VARIABLE_APROBADOR = 'WA_INBOX_APPROVER'
 const MANIFIESTO = JSON.parse(readFileSync(join(RAIZ, 'orca-plugin.json'), 'utf8'))
 
 let fallos = 0
@@ -78,6 +81,23 @@ function escribirPanel (home, datos) {
     `${MANIFIESTO.publisher}.${MANIFIESTO.id}`, 'storage.json')
   mkdirSync(dirname(ruta), { recursive: true })
   writeFileSync(ruta, JSON.stringify(datos), 'utf8')
+}
+
+/** La llave del aprobador, como la deja el plugin: el worker corre `aprobador.mjs` (sin
+ *  valla) y recibe la llave por stdout. Es la UNICA forma en que una prueba la consigue. */
+function llaveDelPlugin (home) {
+  const r = JSON.parse(execFileSync(process.execPath, [APROBADOR],
+    { env: entorno(home), encoding: 'utf8' }))
+  return r.ok ? r.llave : null
+}
+
+const rutaLlave = (home) => join(home, '.wa-inbox', 'approver.key')
+
+/** `--approve` como lo llama el tablero: con la llave en el env del hijo y `--by board`. */
+function aprobar (home, req, opciones = {}) {
+  const llave = llaveDelPlugin(home)
+  return correrEnvio(home, ['--approve', req, '--by', 'board'],
+    { ...opciones, env: { ...(opciones.env || {}), [VARIABLE_APROBADOR]: llave } })
 }
 
 function firmar (home, nombre) {
@@ -348,8 +368,9 @@ console.log('\nwa-send: borrador deja un borrador y NO envia, y se aprueba a man
     JSON.stringify(socket.enviados))
   ok('y lo dice con un codigo propio, no con el de "denegado" a secas',
     r.primera === 'wa-send: send-needs-approval', r.stderr)
-  ok('el segundo renglon nombra como se aprueba',
-    r.stderr.includes('--approve') && r.stderr.includes('REQ-BORRADOR'), r.stderr)
+  ok('el segundo renglon nombra el pedido y dice que lo aprueba el dueno, no el agente',
+    r.stderr.includes('REQ-BORRADOR') && r.stderr.includes('owner') &&
+    !r.stderr.includes('--approve'), r.stderr)
 
   const filas = filasEnvio(home)
   ok('quedo una fila en estado borrador',
@@ -366,8 +387,7 @@ console.log('\nwa-send: borrador deja un borrador y NO envia, y se aprueba a man
   JSON.stringify(borradoresEnActividad(home, 'REQ-BORRADOR')))
 
   // Y recien con la aprobacion explicita sale.
-  const aprobado = await correrEnvio(home, ['--approve', 'REQ-BORRADOR'],
-    { almacen, socket })
+  const aprobado = await aprobar(home, 'REQ-BORRADOR', { almacen, socket })
   ok('aprobado sale 0', aprobado.code === 0, aprobado.stderr)
   ok('y recien ahi se envia, una sola vez', socket.enviados.length === 1,
     JSON.stringify(socket.enviados))
@@ -387,7 +407,7 @@ console.log('\nwa-send: borrador deja un borrador y NO envia, y se aprueba a man
   `${antesDeRetirar} antes; ${retirado.stderr}`)
 
   // Aprobar dos veces no entrega dos veces.
-  const otra = await correrEnvio(home, ['--approve', 'REQ-BORRADOR'], { almacen, socket })
+  const otra = await aprobar(home, 'REQ-BORRADOR', { almacen, socket })
   ok('aprobar de nuevo no vuelve a entregar', socket.enviados.length === 1,
     JSON.stringify(socket.enviados))
   ok('y contesta el veredicto que ya habia, sin fallar', otra.code === 0, otra.stderr)
@@ -517,8 +537,7 @@ console.log('\nwa-send: con llave, Jev revisa antes de enviar')
   ok('en borrador no hace falta preguntar: ya espera al dueno',
     socket.enviados.length === 0 && jev.pedidos.length === 0 &&
     r.primera === 'wa-send: send-needs-approval', r.stderr)
-  const aprobado = await correrEnvio(home, ['--approve', 'REQ-B'],
-    { almacen, socket, env: jev.env })
+  const aprobado = await aprobar(home, 'REQ-B', { almacen, socket, env: jev.env })
   ok('y la aprobacion del dueno lo envia sin pasar por Jev',
     aprobado.code === 0 && socket.enviados.length === 1 && jev.pedidos.length === 0,
     aprobado.stderr)
@@ -539,7 +558,7 @@ console.log('\nwa-send: el piso fijo frena lo que es del dueno, sin llave de Jev
     precio.primera === 'wa-send: send-needs-approval' && precio.code === 3 &&
     filasEnvio(home)[0]?.estado === ENVIO.BORRADOR, precio.stderr)
   ok('y dice por que: la regla fija, con la excepcion', precio.stderr.includes('money') &&
-    precio.stderr.includes('--approve REQ-PRECIO'), precio.stderr)
+    precio.stderr.includes('REQ-PRECIO') && !precio.stderr.includes('--approve'), precio.stderr)
   ok('la bitacora del borrador tambien lo dice',
     bitacora(home).some((f) => f.action === 'draft' && f.detail.includes('money') &&
       f.detail.includes('REQ-PRECIO')), JSON.stringify(bitacora(home)))
@@ -557,7 +576,7 @@ console.log('\nwa-send: el piso fijo frena lo que es del dueno, sin llave de Jev
     promesa.primera === 'wa-send: send-needs-approval' &&
     promesa.stderr.includes('commitment'), promesa.stderr)
 
-  const aprobado = await correrEnvio(home, ['--approve', 'REQ-PRECIO'], { almacen, socket })
+  const aprobado = await aprobar(home, 'REQ-PRECIO', { almacen, socket })
   ok('el dueno es la compuerta: su aprobacion lo envia', aprobado.code === 0 &&
     socket.enviados.length === 2 && socket.enviados[1].texto.startsWith('el precio es $1.400'),
   aprobado.stderr + JSON.stringify(socket.enviados))
@@ -680,6 +699,11 @@ console.log('\nwa-send: al chat del dueno no lo frenan las reglas ni Jev, solo u
     '--send'], { almacen, socket, env: jev.env })
   ok('y uno al chat de la linea consigo misma tambien', propio.code === 0 &&
     socket.enviados.length === 2, propio.stderr)
+  ok('ninguno de los dos necesito aprobacion: sin llave del aprobador y sin --approve',
+    !existsSync(rutaLlave(home)) && !(VARIABLE_APROBADOR in (jev.env || {})) &&
+    !(VARIABLE_APROBADOR in process.env) &&
+    filasEnvio(home).filter((f) => f.estado === ENVIO.ENVIADO).length === 2,
+  JSON.stringify(filasEnvio(home).map((f) => f.estado)))
   ok('sin preguntarle a Jev por ninguno', jev.pedidos.length === 0,
     JSON.stringify(jev.pedidos.map((p) => p.cuerpo.state)))
   const secreto = await correrEnvio(home, ['Dueno Directo', 'la clave: Abc12345', '--send'],
@@ -840,6 +864,87 @@ console.log('\nwa-send: el permiso puesto DESDE EL PANEL tambien manda')
   ok('el modo del panel manda sobre el de la base', r.code === 0, r.stderr)
   ok('y el mensaje salio', socket.enviados.length === 1, JSON.stringify(socket.enviados))
   almacen.cerrar()
+}
+
+console.log('\nwa-send --approve: solo el dueno aprueba (el tablero o su respuesta por WhatsApp)')
+{
+  // Visto 2026-10-02: la sesion de un proyecto aprobo sus propios avisos retenidos. La
+  // aprobacion la dan el tablero (el worker) o la respuesta del dueno por WhatsApp (el
+  // tick): los dos pasan la llave del plugin SOLO al hijo `--approve`. Un agente no la
+  // recibe nunca.
+  const home = nueva()
+  firmar(home, 'Agente De Ejemplo')
+  const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  almacen.registrarLinea({ cuenta: CUENTA, lid: 'x@lid', pn: 'y@s.whatsapp.net' })
+  autorizar(home, { jid: ALFA, nombre: 'Cliente Alfa', modo: 'borrador' })
+  const socket = socketFalso()
+  await correrEnvio(home, ['Cliente Alfa', 'quedo resuelto', '--id', 'REQ-RETENIDO'],
+    { almacen, socket })
+
+  const sinLlave = await correrEnvio(home, ['--approve', 'REQ-RETENIDO'], { almacen, socket })
+  ok('sin la llave, --approve se niega con su codigo y sale 3',
+    sinLlave.primera === 'wa-send: send-approve-not-owner' && sinLlave.code === 3,
+    `${sinLlave.code} ${sinLlave.stderr}`)
+  ok('y dice en una frase que aprueba el tablero o la respuesta del dueno por WhatsApp',
+    /board/.test(sinLlave.stderr) && /WhatsApp/.test(sinLlave.stderr), sinLlave.stderr)
+  ok('nada sale y el borrador sigue esperando', socket.enviados.length === 0 &&
+    filasEnvio(home)[0]?.estado === ENVIO.BORRADOR, JSON.stringify(filasEnvio(home)))
+
+  const llave = llaveDelPlugin(home)
+  const otraLlave = await correrEnvio(home, ['--approve', 'REQ-RETENIDO', '--by', 'board'],
+    { almacen, socket, env: { [VARIABLE_APROBADOR]: 'f'.repeat(64) } })
+  ok('con una llave que no es la del plugin, tampoco',
+    otraLlave.primera === 'wa-send: send-approve-not-owner' && socket.enviados.length === 0,
+    otraLlave.stderr)
+
+  rmSync(rutaLlave(home))
+  const sinArchivo = await correrEnvio(home, ['--approve', 'REQ-RETENIDO', '--by', 'board'],
+    { almacen, socket, env: { [VARIABLE_APROBADOR]: llave } })
+  ok('sin el archivo de la llave no hay con que comparar: se niega',
+    sinArchivo.primera === 'wa-send: send-approve-not-owner' && socket.enviados.length === 0,
+    sinArchivo.stderr)
+
+  const sinQuien = await correrEnvio(home, ['--approve', 'REQ-RETENIDO'],
+    { almacen, socket, env: { [VARIABLE_APROBADOR]: llaveDelPlugin(home) } })
+  ok('con la llave pero sin decir quien aprueba (--by): se niega sin enviar',
+    sinQuien.code !== 0 && socket.enviados.length === 0, sinQuien.stderr)
+
+  const bien = await aprobar(home, 'REQ-RETENIDO', { almacen, socket })
+  ok('con la llave del plugin y --by board, sale', bien.code === 0 &&
+    socket.enviados.length === 1, bien.stderr)
+  ok('y la bitacora anota quien lo aprobo', bitacora(home).some((f) =>
+    f.action === 'approved' && f.detail.includes('REQ-RETENIDO') &&
+    f.detail.includes('board')), JSON.stringify(bitacora(home)))
+  await aprobar(home, 'REQ-RETENIDO', { almacen, socket })
+  ok('aprobar de nuevo no anota otra aprobacion', bitacora(home).filter((f) =>
+    f.action === 'approved' && f.detail.includes('REQ-RETENIDO')).length === 1,
+  JSON.stringify(bitacora(home)))
+
+  await correrEnvio(home, ['Cliente Alfa', 'segundo texto', '--id', 'REQ-WA'],
+    { almacen, socket })
+  const porWhatsApp = await correrEnvio(home, ['--approve', 'REQ-WA', '--by',
+    'whatsapp-reply'], { almacen, socket, env: { [VARIABLE_APROBADOR]: llaveDelPlugin(home) } })
+  ok('la respuesta del dueno por WhatsApp queda anotada como tal', porWhatsApp.code === 0 &&
+    bitacora(home).some((f) => f.action === 'approved' && f.detail.includes('REQ-WA') &&
+      f.detail.includes('WhatsApp')), porWhatsApp.stderr + JSON.stringify(bitacora(home)))
+  almacen.cerrar()
+}
+
+console.log('\naprobador.mjs: la llave del plugin, una sola y solo para su usuario')
+{
+  const home = nueva()
+  const primera = llaveDelPlugin(home)
+  ok('crea una llave de 64 hex', /^[0-9a-f]{64}$/.test(primera ?? ''), String(primera))
+  ok('en un archivo 0600', (statSync(rutaLlave(home)).mode & 0o777) === 0o600,
+    (statSync(rutaLlave(home)).mode & 0o777).toString(8))
+  ok('la segunda vez devuelve la MISMA', llaveDelPlugin(home) === primera)
+  chmodSync(rutaLlave(home), 0o644)
+  ok('un archivo que quedo legible para otros vuelve a 0600, con la misma llave',
+    llaveDelPlugin(home) === primera && (statSync(rutaLlave(home)).mode & 0o777) === 0o600)
+  writeFileSync(rutaLlave(home), 'no es una llave\n')
+  const nueva2 = llaveDelPlugin(home)
+  ok('un archivo que no es una llave se reemplaza por una nueva',
+    /^[0-9a-f]{64}$/.test(nueva2 ?? '') && nueva2 !== primera, String(nueva2))
 }
 
 console.log('\nel latido tiene un plazo, y es el mismo de los dos lados')

@@ -405,6 +405,40 @@ def scope_db():
     return os.path.expanduser("~/.wa-inbox/scope.db")
 
 
+# La llave del aprobador (approve-solo-dueno): la que separa la aprobacion del dueno —el
+# tablero, o su respuesta por WhatsApp— de la de un agente. La escribe SOLO
+# `aprobador.mjs` (el worker la pide ahi); aca solo se lee. Viaja a `wa-send --approve` en
+# esta variable, y solo al env de ese hijo.
+VARIABLE_APROBADOR = "WA_INBOX_APPROVER"
+_LLAVE_APROBADOR = re.compile(r"^[0-9a-f]{64}$")
+
+
+def ruta_llave_aprobador():
+    """`approver.key`, junto a `scope.db`: la misma carpeta que `rutaLlave` de aprobador.mjs."""
+    return os.path.join(os.path.dirname(scope_db()), "approver.key")
+
+
+def llave_aprobador():
+    """La llave del aprobador, o None si no hay una valida. Nunca la crea."""
+    try:
+        with open(ruta_llave_aprobador(), encoding="utf-8") as fh:
+            texto = fh.read().strip()
+    except OSError:
+        return None
+    return texto if _LLAVE_APROBADOR.match(texto) else None
+
+
+def trae_llave_aprobador(env=None):
+    """Si este proceso recibio la llave del plugin en su env: lo pide el tablero o la
+    respuesta del dueno por WhatsApp, no un agente. Sin archivo no hay con que comparar, y
+    eso es un no: la llave la crea el plugin, no las CLIs."""
+    import hmac
+    env = os.environ if env is None else env
+    dada = env.get(VARIABLE_APROBADOR) or ""
+    propia = llave_aprobador()
+    return bool(dada and propia) and hmac.compare_digest(dada.encode(), propia.encode())
+
+
 def ajuste(key, fallback=None):
     """El valor efectivo de un ajuste: el panel y la base del CLI, en ese orden.
 

@@ -3,8 +3,20 @@
 
   wa-send "<chat>" "text"            -> leaves it as a DRAFT, waiting for approval
   wa-send "<chat>" "text" --send     -> sends it, where the registry says `responder`
-  wa-send --drafts                   -> the drafts waiting for you, oldest first
-  wa-send --approve <id>             -> sends one of those drafts
+  wa-send --drafts                   -> the drafts waiting for the owner, oldest first
+  wa-send --cancel <id>              -> withdraws one of those drafts
+
+A held draft goes out only when the OWNER approves it: on the board in the plugin panel,
+or by answering the plugin's notice on WhatsApp. An agent cannot approve anything, and
+`--approve` refuses it (`send-approve-not-owner`, exit 3). See "WHO APPROVES" below.
+
+ASK THE OWNER AND WAIT FOR THE REPLY. A send to the owner's own chat (see "the owner"
+below) is never held, so a project session can ask him something and wait:
+
+  wa-send "<owner chat jid>" "<question>" --send --json   -> {"stanza_id": ...}
+  wa-read wait --chat "<owner chat jid>" --after <that stanza_id> --timeout 600 --json
+
+`wa-read wait` exits 0 with his reply, or 5 (`wait-timeout`) when he did not answer.
 
 HOW IT SENDS. The line is a Baileys socket, and the socket belongs to the sidecar —a
 separate process, because the worker of the plugin has no sockets at all. This tool is
@@ -47,14 +59,23 @@ wrong with what it asked and not a generic failure at the end:
                   promised date or delivery keeps it as a DRAFT for the owner. With the
                   Jev key set, Jev reviews it too and can only ADD reasons: a status
                   nobody verified, or Jev not answering, also keeps it. Neither can
-                  ever send a reply; the owner's `--approve` always can.
+                  ever send a reply; only the owner's approval can.
 
 ABOUT `borrador`. It used to mean "leaves the text typed in the chat, unsent", and that
 was only possible while the agent drove a screen: it typed into the WhatsApp window and
 a human pressed Enter. WhatsApp's protocol has NO server-side draft, so over Baileys
 that rung cannot do what its old description promised. It is not quietly downgraded to
-`observar` either: the reply is written, stored and listed as a draft, and
-`wa-send --approve <id>` —an explicit act of the owner— is what puts it on the wire.
+`observar` either: the reply is written, stored and listed as a draft, and the owner's
+approval is what puts it on the wire.
+
+WHO APPROVES. `--approve <id> --by board|whatsapp-reply` is how the PLUGIN delivers the
+owner's approval, and nobody else's: the worker calls it when the owner clicks on the
+board, and `wa-scope tick` when the owner answers the notice on WhatsApp. Both hand the
+plugin's approver key to that one call only; no agent, automation or prompt ever
+receives it, and without the matching key the call is refused with
+`send-approve-not-owner` (exit 3) and nothing is sent. Each approval is written to the
+activity log with who gave it. Honest limit: this stops a mistaken or misdirected agent,
+not code of the same user that reads the plugin's key file on purpose.
 """
 import argparse, os, sqlite3, sys, time, uuid
 
@@ -65,7 +86,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import wa_store  # noqa: E402
 import wa_jev  # noqa: E402
 import wa_reglas  # noqa: E402
-from wa_settings import ajuste, scope_db, scope_from_plugin  # noqa: E402
+from wa_settings import (ajuste, scope_db, scope_from_plugin,  # noqa: E402
+                         trae_llave_aprobador)
 
 SCOPE_DB = scope_db()
 
@@ -113,6 +135,17 @@ SIN_VEREDICTO = "send-timeout"
 SIN_BORRADOR = "send-no-draft"
 # Un --approve (o un reintento) sobre un borrador que se cancelo: no hay nada que aprobar.
 CANCELADO = "send-cancelled"
+# Un --approve sin la llave del plugin: no lo pide el tablero ni la respuesta del dueno por
+# WhatsApp, asi que es un agente (approve-solo-dueno). Se niega como el permiso (sale 3):
+# no hay nada que reintentar, la aprobacion la da el dueno.
+NO_ES_EL_DUENO = "send-approve-not-owner"
+NO_ES_EL_DUENO_DETALLE = (
+    "only the owner approves a held message, on the board or by answering the plugin's "
+    "notice on WhatsApp; an agent cannot approve it, and nothing was sent.")
+# El plugin aprobo sin decir desde donde (`--by`): no se manda sin anotar quien aprobo.
+SIN_QUIEN = "send-approve-needs-by"
+# Quien aprueba, para la bitacora. Son los dos unicos caminos que tienen la llave.
+APRUEBA = {"board": "on the board", "whatsapp-reply": "by the owner's WhatsApp reply"}
 # El mismo --id con otro texto o para otra conversacion. No se manda ninguno de los
 # dos: entregar el viejo es mandar lo que nadie pidio, y pisarlo es entregar dos veces.
 ID_EN_USO = "send-id-conflict"
@@ -124,7 +157,8 @@ JEV_NO_CONTESTA = "jev-unavailable"
 # Salidas. `3` es la misma que la compuerta `wa-scope check`: denegado, se anota y se
 # sigue. `4` es la misma que `wa-read` sin linea enlazada: no hay de donde, y no hay
 # nada que reintentar. El resto sale 1.
-SALIDA = {SIN_PERMISO: 3, NECESITA_VISTO: 3, OTRA_LINEA: 3, SIN_TRANSPORTE: 4}
+SALIDA = {SIN_PERMISO: 3, NECESITA_VISTO: 3, OTRA_LINEA: 3, NO_ES_EL_DUENO: 3,
+          SIN_TRANSPORTE: 4}
 
 # La conversacion que no esta en ninguna linea registrada. Sigue siendo el caso por
 # defecto del registro y no un transporte: quien no registro la linea igual tiene una.
@@ -450,13 +484,37 @@ def para_el_agente(piso, jev, niv):
                                  for q, c in motivos)
 
 
+# El final de la fila `draft` de la bitacora. No nombra ningun comando: el que lo lee puede
+# ser un agente, y aprobar no es suyo.
+ESPERA_AL_DUENO = "waiting for the owner's approval"
+
+
+def anotar_aprobacion(fila, req_id, por):
+    """Quien aprobo este envio, en la bitacora que el panel ya muestra. Una fila por
+    aprobacion real (la que paso el borrador a `pendiente`): repetir `--approve` no anota
+    otra. Si falla no tumba el envio: es la nota, no el envio."""
+    try:
+        con = sqlite3.connect(SCOPE_DB, timeout=10)
+        con.execute(
+            "insert into agent_action (ts, chat_jid, chat_name, account, action, detail) "
+            "values (?,?,?,?,?,?)",
+            (time.strftime("%Y-%m-%d %H:%M"), fila["chat_jid"], fila["chat_name"],
+             fila["account"] or CUENTA_LOCAL, "approved",
+             f"{req_id} · approved {APRUEBA[por]}"))
+        con.commit()
+        con.close()
+    except sqlite3.Error:
+        pass
+
+
 def anotar_borrador(fila, req_id, frenado=None):
     """El borrador, anotado donde el dueno mira: la bitacora que el panel ya muestra.
 
     Va el ID y NO el texto. El panel publica `detail` recortado en su lista de actividad
     y eso termina en el almacen del plugin: el cuerpo de un mensaje a un cliente no
-    tiene por que estar ahi. Lo que el dueno necesita ver es que hay algo esperandolo y
-    con que comando aprobarlo; el texto lo lee con `wa-send --drafts`, en su terminal.
+    tiene por que estar ahi. Lo que el dueno necesita ver es que hay algo esperandolo; el
+    texto lo lee con `wa-send --drafts`. No nombra `--approve`: esta bitacora la lee
+    tambien el agente, y aprobar no es suyo.
 
     Si falla, no se pierde nada: el borrador ya esta en la bandeja de salida y
     `--drafts` lo lista igual. Por eso no tumba la corrida."""
@@ -467,7 +525,7 @@ def anotar_borrador(fila, req_id, frenado=None):
             "values (?,?,?,?,?)",
             (time.strftime("%Y-%m-%d %H:%M"), fila["chat_jid"], fila["chat_name"],
              "draft", (f"held by {'; '.join(frenado)} · " if frenado else "")
-             + f"{req_id} · approve with `wa-send --approve {req_id}`"))
+             + f"{req_id} · {ESPERA_AL_DUENO}"))
         con.commit()
         con.close()
     except sqlite3.Error:
@@ -476,14 +534,16 @@ def anotar_borrador(fila, req_id, frenado=None):
 
 def retirar_de_actividad(req_id):
     """Quita de la bitacora la fila `draft` de un pedido que ya no espera al dueno
-    (aprobado o retirado): seguiria pidiendo "approve with" algo que ya se hizo o que ya
-    no se puede hacer. Se reconoce por el final que le puso `anotar_borrador`. Si falla,
-    queda la fila: es una nota, no el estado del envio."""
-    cola = f"`wa-send --approve {req_id}`"
+    (aprobado o retirado): seguiria diciendo que espera algo que ya se hizo o que ya no se
+    puede hacer. Se reconoce por el final que le puso `anotar_borrador`, el de hoy o el de
+    antes de approve-solo-dueno (que le pedia correr `--approve`). Si falla, queda la fila:
+    es una nota, no el estado del envio."""
+    colas = (f"{req_id} · {ESPERA_AL_DUENO}", f"`wa-send --approve {req_id}`")
     try:
         con = sqlite3.connect(SCOPE_DB, timeout=10)
-        con.execute("delete from agent_action where action='draft' "
-                    "and substr(detail, -?) = ?", (len(cola), cola))
+        for cola in colas:
+            con.execute("delete from agent_action where action='draft' "
+                        "and substr(detail, -?) = ?", (len(cola), cola))
         con.commit()
         con.close()
     except sqlite3.Error:
@@ -506,24 +566,25 @@ def deja_borrador(con, fila, texto, req_id, salida_json, pedia_envio, frenado=No
               + ("This chat leaves these reasons to the agent: rewrite the reply without "
                  f"them and send it again (cancel this one with `wa-send --cancel {req_id}`)."
                  if reescribir else
-                 f"Approve it with `wa-send --approve {req_id}`."))
+                 f"Only the owner approves it, on the board or by answering on WhatsApp; "
+                 f"you cannot approve it (id {req_id})."))
     if pedia_envio:
         # `--send` sobre una conversacion en `borrador`. No se calla y no se degrada a
         # "no hice nada": hay algo escrito y hay algo que hacer con ello.
         niega(NECESITA_VISTO,
               f"{fila['chat_name']!r} is on `borrador`: the reply was written and is "
-              f"waiting for you, not sent. WhatsApp has no draft of its own, so nothing "
-              f"was typed into the chat. Approve it with `wa-send --approve {req_id}`.")
+              f"waiting for the owner, not sent. WhatsApp has no draft of its own, so "
+              f"nothing was typed into the chat. Only the owner approves it, on the board "
+              f"or by answering on WhatsApp; you cannot approve it (id {req_id}).")
     informa(salida_json,
             {"req_id": req_id, "estado": BORRADOR, "chat": fila["chat_name"]},
-            f"draft · {fila['chat_name']} · approve with `wa-send --approve {req_id}`")
+            f"draft · {fila['chat_name']} · {req_id} · {ESPERA_AL_DUENO}")
     sys.exit(0)
 
 
 def listar_borradores(salida_json):
-    """Los borradores que esperan. Aca SI va el texto: es la terminal del dueno, que es
-    quien lo tiene que leer antes de aprobarlo, y sin verlo la aprobacion seria a
-    ciegas."""
+    """Los borradores que esperan. Aca SI va el texto: quien lo pide es quien lo escribio
+    o el dueno, y sin verlo la aprobacion seria a ciegas."""
     con = almacen()
     if con is None:
         niega(SIN_TRANSPORTE, SIN_TRANSPORTE_DETALLE)
@@ -544,16 +605,26 @@ def listar_borradores(salida_json):
         print(f"{f['req_id']}  {cuando}  {f['chat_name']}")
         for renglon in (f["body"] or "").splitlines():
             print(f"    {renglon}")
-        print(f"    -> wa-send --approve {f['req_id']}")
+        print(f"    -> {ESPERA_AL_DUENO}")
     sys.exit(0)
 
 
-def aprobar(req_id, plazo_s, salida_json):
+def aprobar(req_id, plazo_s, salida_json, por):
     """El visto del dueno: lo unico que pone un borrador en la linea.
+
+    Lo pide el plugin y nadie mas: el tablero (`por=board`) o la respuesta del dueno por
+    WhatsApp (`por=whatsapp-reply`), con la llave. Se mira ANTES que nada: a quien no la
+    trae no se le dice ni si el borrador existe.
 
     Aprobar dos veces no entrega dos veces: el estado solo pasa de `borrador` a
     `pendiente` si todavia era borrador, y lo que ya tiene veredicto contesta ese
     veredicto."""
+    if not trae_llave_aprobador():
+        niega(NO_ES_EL_DUENO, NO_ES_EL_DUENO_DETALLE)
+    if por not in APRUEBA:
+        # Solo lo ve el plugin (ya paso la llave): es un error de quien llama, no del dueno.
+        niega(SIN_QUIEN, "--approve needs --by board or --by whatsapp-reply: who approved "
+                         "it goes to the activity log. Nothing was sent.")
     con = con_transporte()
     fila = con.execute("select * from envio where req_id=?", (req_id,)).fetchone()
     if fila is None:
@@ -572,9 +643,11 @@ def aprobar(req_id, plazo_s, salida_json):
     if fila["estado"] == CANCELADO_:
         niega(CANCELADO, f"this draft was cancelled ({fila['motivo'] or 'no reason given'}): "
                          "nothing was sent and it cannot be approved.")
-    con.execute("update envio set estado=? where req_id=? and estado=?",
-                (PENDIENTE, req_id, BORRADOR))
+    cur = con.execute("update envio set estado=? where req_id=? and estado=?",
+                      (PENDIENTE, req_id, BORRADOR))
     con.commit()
+    if cur.rowcount == 1:
+        anotar_aprobacion(fila, req_id, por)
     veredicto(con, req_id, plazo_s, salida_json)
 
 
@@ -619,8 +692,11 @@ def main():
     ap.add_argument("--drafts", action="store_true",
                     help="list the drafts waiting for approval, and exit")
     ap.add_argument("--approve", metavar="ID",
-                    help="send a draft that was waiting: the explicit approval that "
-                         "`borrador` needs")
+                    help="ONLY for the plugin, delivering the owner's approval from the "
+                         "board or his WhatsApp reply. An agent cannot approve: without "
+                         "the plugin's key it is refused (send-approve-not-owner)")
+    ap.add_argument("--by", choices=sorted(APRUEBA), dest="por",
+                    help="with --approve: where the owner approved it (for the log)")
     ap.add_argument("--cancel", metavar="ID",
                     help="withdraw a draft that was waiting: it can no longer be approved "
                          "or sent (a request already sent is not touched)")
@@ -631,11 +707,11 @@ def main():
     if a.drafts:
         listar_borradores(a.json)
     if a.approve:
-        aprobar(a.approve, a.timeout, a.json)
+        aprobar(a.approve, a.timeout, a.json, a.por)
     if a.cancel:
         cancelar(a.cancel, a.reason, a.json)
     if not a.chat or a.text is None:
-        ap.error("the chat and the text are required (or use --drafts / --approve)")
+        ap.error("the chat and the text are required (or use --drafts / --cancel)")
 
     # El piso fijo mira la respuesta, no la firma: el nombre del agente lo eligio el dueno
     # y no es algo que la respuesta prometa.

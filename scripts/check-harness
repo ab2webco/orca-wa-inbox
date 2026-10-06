@@ -57,6 +57,26 @@ SKILL_SOPORTE = "harness/skills/whatsapp-soporte/SKILL.md"
 PUNTERO_MAX_LINEAS = 30
 
 
+# La llave del aprobador (approve-solo-dueno) viaja SOLO al hijo `wa-send --approve` del
+# tablero y del tick. Nada de lo que un agente recibe —el arnes, el prompt, el comando de
+# una automatizacion, lo que el worker siembra o lanza— puede nombrarla ni pasarla.
+LLAVE_PROHIBIDA = re.compile(r"WA_INBOX_APPROVER|approver\.key|aprobador\.mjs")
+LO_QUE_RECIBE_UN_AGENTE = ("harness/**/*", "prompts/**/*", "automations/*.json",
+                           "orca-plugin.json", "harness.mjs", "agente.mjs", "catalogo.mjs",
+                           "scripts/resolver_formas.py")
+
+
+def cargan_la_llave(raiz: pathlib.Path) -> list:
+    """Los archivos que un agente recibe y que nombran la llave del aprobador."""
+    hallados = []
+    for patron in LO_QUE_RECIBE_UN_AGENTE:
+        for ruta in sorted(raiz.glob(patron)):
+            if ruta.is_file() and LLAVE_PROHIBIDA.search(
+                    ruta.read_text(encoding="utf-8", errors="replace")):
+                hallados.append(str(ruta.relative_to(raiz)))
+    return hallados
+
+
 def plano(texto: str) -> str:
     """Un solo espacio entre palabras: las frases del prompt van partidas en dos
     lineas y buscarlas literalmente solo encontraria la mitad."""
@@ -379,6 +399,42 @@ def main() -> int:
         if "you edited is yours" not in cabecera:
             fallos.append(f"harness/{ruta.name}  no dice en el propio archivo que pasa "
                           f"con una edicion a mano en la proxima actualizacion")
+
+    # La llave del aprobador no llega a ningun agente. Primero se prueba que la busqueda
+    # la encuentra (una carpeta de mentira con una automatizacion que la pasa): un chequeo
+    # que no puede fallar no prueba nada.
+    comprobaciones += 1
+    with tempfile.TemporaryDirectory() as tmp:
+        falsa = pathlib.Path(tmp)
+        (falsa / "automations").mkdir()
+        (falsa / "prompts").mkdir()
+        (falsa / "automations" / "x.json").write_text('{"command": "WA_INBOX_APPROVER=1"}')
+        (falsa / "prompts" / "y.md").write_text("cat ~/.wa-inbox/approver.key")
+        (falsa / "harness.mjs").write_text("run(['aprobador.mjs'])")
+        if cargan_la_llave(falsa) != ["prompts/y.md", "automations/x.json", "harness.mjs"]:
+            fallos.append("la busqueda de la llave del aprobador no encuentra una "
+                          "automatizacion que la pasa")
+    comprobaciones += 1
+    for rel in cargan_la_llave(RAIZ):
+        fallos.append(f"{rel}  nombra la llave del aprobador: un agente no la recibe nunca")
+    # El `--help` de las herramientas se siembra en COMMANDS.md (harness.mjs, `referencia`):
+    # tampoco puede decir como se pasa la llave ni donde esta.
+    comprobaciones += 1
+    if LLAVE_PROHIBIDA.search(ayuda_de_las_herramientas()):
+        fallos.append("el --help de una herramienta nombra la llave del aprobador, y se "
+                      "siembra en COMMANDS.md: el agente no puede saber como se pasa")
+
+    # Y el agente sabe que no aprueba: lo dice donde lee los comandos.
+    for rel in ("harness/COMMANDS.md", "harness/skills/whatsapp-cli/SKILL.md"):
+        comprobaciones += 1
+        texto = plano((RAIZ / rel).read_text(encoding="utf-8")).lower()
+        if "cannot approve" not in texto or "send-approve-not-owner" not in texto:
+            fallos.append(f"{rel}  no dice que el agente no puede aprobar un envio retenido "
+                          "(`cannot approve`, `send-approve-not-owner`)")
+        # Ni firmar un caso como el dueno: `caso aprobar --actor dueno` sin la llave.
+        if "e_not_owner" not in texto or "--actor dueno" not in texto:
+            fallos.append(f"{rel}  no dice que el agente no puede firmar como el dueno "
+                          "(`caso aprobar --actor dueno`, `E_NOT_OWNER`)")
 
     if fallos:
         print("Se perdio una regla al mudar la doctrina al arnes:", file=sys.stderr)

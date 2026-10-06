@@ -2204,6 +2204,10 @@ def guarda(e):
     with open(RUTA, 'w') as f: json.dump(e, f)
 def anota(nombre):
     with open(os.path.join(AQUI, nombre), 'a') as f: f.write(json.dumps(sys.argv[1:]) + '\\n')
+    # La llave del aprobador que trajo cada llamada (approve-solo-dueno): solo el hijo
+    # --approve la puede recibir.
+    with open(os.path.join(AQUI, nombre.replace('.jsonl', '-env.jsonl')), 'a') as f:
+        f.write(json.dumps(os.environ.get('WA_INBOX_APPROVER')) + '\\n')
 def opcion(argv, nombre):
     for i, a in enumerate(argv):
         if a == nombre and i + 1 < len(argv): return argv[i + 1]
@@ -2258,6 +2262,11 @@ if '--approve' in argv:
     if req not in e.setdefault('entregados', []): e['entregados'].append(req)
     guarda(e)
     print(json.dumps({'req_id': req, 'estado': 'enviado', 'chat': 'Cliente Alfa'})); sys.exit(0)
+if '--cancel' in argv:
+    req = argv[argv.index('--cancel') + 1]
+    hecho = cfg.get('cancel', 'ok') == 'ok'
+    print(json.dumps({'req_id': req, 'estado': 'cancelado' if hecho else 'enviado',
+                      'cancelled': hecho})); sys.exit(0)
 if cfg.get('draft', 'ok') != 'ok': niega(cfg['draft'])
 req = opcion(argv, '--id')
 e.setdefault('borradores', {})[req] = argv[argv.index('--') + 1:] if '--' in argv else argv
@@ -2287,7 +2296,11 @@ function herramientasCaso (nombre, estado) {
     estado: () => JSON.parse(readFileSync(join(dir, 'estado.json'), 'utf8')),
     // Solo lo de `caso`: el sync que corre solo tambien pasa por aca.
     scope: () => leer('scope.jsonl').filter((a) => a[0] === 'caso'),
-    send: () => leer('send.jsonl')
+    todasScope: () => leer('scope.jsonl'),
+    send: () => leer('send.jsonl'),
+    // La llave que trajo cada llamada, en el mismo orden (null si no trajo).
+    scopeEnv: () => leer('scope-env.jsonl'),
+    sendEnv: () => leer('send-env.jsonl')
   }
 }
 
@@ -2331,6 +2344,22 @@ const verbo = (llamada) => llamada[1]
     JSON.stringify(borrador))
   ok('deja el borrador y despues lo aprueba: la aprobacion del dueno es la que lo manda',
     f.send().length === 2 && aprobacion && aprobacion.includes('--approve'), JSON.stringify(f.send()))
+  const llaveArchivo = join(process.env.HOME, '.wa-inbox', 'approver.key')
+  const llave = existsSync(llaveArchivo) ? readFileSync(llaveArchivo, 'utf8').trim() : null
+  ok('la aprobacion dice que viene del tablero (--by board)',
+    aprobacion && aprobacion[aprobacion.indexOf('--by') + 1] === 'board', JSON.stringify(aprobacion))
+  ok('solo el hijo --approve recibe la llave del plugin, y es la del archivo 0600',
+    /^[0-9a-f]{64}$/.test(llave ?? '') && JSON.stringify(f.sendEnv()) === JSON.stringify([null, llave]),
+    JSON.stringify({ llave, env: f.sendEnv() }))
+  // Todas las llamadas a wa-scope, en orden, con la llave que trajo cada una: la firma del
+  // dueno (`caso aprobar --actor dueno`) la lleva, y nada mas.
+  const todasScope = f.todasScope()
+  const conLlave = todasScope.filter((_, i) => f.scopeEnv()[i] !== null)
+  ok('la firma del dueno (caso aprobar) lleva la llave del plugin, y ningun otro wa-scope',
+    todasScope.length === f.scopeEnv().length && conLlave.length === 1 &&
+    conLlave[0][0] === 'caso' && conLlave[0][1] === 'aprobar' &&
+    f.scopeEnv()[todasScope.indexOf(conLlave[0])] === llave,
+  JSON.stringify({ conLlave, env: f.scopeEnv() }))
   ok('el borrador NO pide --send: un chat en responder no lo manda solo antes de la aprobacion',
     borrador && !borrador.includes('--send'), JSON.stringify(borrador))
   ok('el id de la peticion lo fija el caso y su version: un reintento es el mismo envio',
@@ -2343,6 +2372,54 @@ const verbo = (llamada) => llamada[1]
     borrador && borrador.some((x) => x === '--line=pn:573000000012'), JSON.stringify(borrador))
   ok('el caso termina en respondido', f.estado().casos['7'].etapa === 'respondido',
     JSON.stringify(f.estado().casos['7']))
+  apagar()
+}
+
+{
+  // approve-solo-dueno: un mensaje retenido que no es de un caso (el aviso de la sesion de
+  // un proyecto, frenado por el piso) se aprueba o se retira desde el panel. Aprobar va por
+  // el worker con la llave del plugin y `--by board`, como la tarjeta.
+  const f = herramientasCaso('retenido', { casos: {} })
+  const orca = hostFalso(f.dir, { chats: [] })
+  const { apagar } = await arranca(orca)
+  const v = await pideCaso(orca, { action: 'aprobar-retenido', reqId: 'nota-proyecto-1',
+    actor: 'agente' })
+  ok('Aprobar un retenido contesta enviado', v && v.ok === true && v.code === 'enviado' &&
+    v.reqId === 'nota-proyecto-1', JSON.stringify(v))
+  const llave = readFileSync(join(process.env.HOME, '.wa-inbox', 'approver.key'), 'utf8').trim()
+  const [aprobacion] = f.send()
+  ok('va como --approve <id> --by board, con la llave del plugin solo en ese proceso',
+    aprobacion && aprobacion[0] === '--approve' && aprobacion[1] === 'nota-proyecto-1' &&
+    aprobacion[aprobacion.indexOf('--by') + 1] === 'board' &&
+    JSON.stringify(f.sendEnv()) === JSON.stringify([llave]),
+  JSON.stringify({ send: f.send(), env: f.sendEnv() }))
+  ok('y no toca ningun caso', f.scope().length === 0, JSON.stringify(f.scope()))
+
+  const caso = await pideCaso(orca, { action: 'aprobar-retenido', reqId: 'caso-7-a1a1a1a1a1a1' })
+  ok('el envio de un caso no se aprueba por aca: va por su tarjeta, con su version',
+    caso && caso.ok === false && caso.code === 'E_ARGS' && f.send().length === 1,
+    JSON.stringify(caso))
+  const aviso = await pideCaso(orca, { action: 'aprobar-retenido', reqId: 'aviso-3-b2b2' })
+  ok('ni un aviso del plugin al dueno', aviso && aviso.ok === false && aviso.code === 'E_ARGS' &&
+    f.send().length === 1, JSON.stringify(aviso))
+  const bandera = await pideCaso(orca, { action: 'aprobar-retenido', reqId: '--send' })
+  ok('un id con forma de bandera se rechaza sin llegar a wa-send',
+    bandera && bandera.ok === false && bandera.code === 'E_ARGS' && f.send().length === 1,
+    JSON.stringify(bandera))
+
+  const r = await pideCaso(orca, { action: 'cancelar-retenido', reqId: 'nota-proyecto-2' })
+  ok('Cancelar un retenido contesta cancelado', r && r.ok === true && r.code === 'cancelado',
+    JSON.stringify(r))
+  const retiro = f.send()[1]
+  ok('va como --cancel <id> con su motivo, y sin la llave',
+    retiro && retiro[0] === '--cancel' && retiro[1] === 'nota-proyecto-2' &&
+    retiro.includes('--reason') && f.sendEnv()[1] === null, JSON.stringify(f.send()))
+  const e = f.estado()
+  e.send = { cancel: 'no' }
+  writeFileSync(join(f.dir, 'estado.json'), JSON.stringify(e))
+  const tarde = await pideCaso(orca, { action: 'cancelar-retenido', reqId: 'nota-proyecto-3' })
+  ok('lo que ya no era un borrador no se cancela, y se dice', tarde && tarde.ok === false &&
+    tarde.code === 'send-no-draft', JSON.stringify(tarde))
   apagar()
 }
 
