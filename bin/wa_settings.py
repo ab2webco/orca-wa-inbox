@@ -334,13 +334,15 @@ CONTENEDOR_DE_LINEA = "porLinea"
 # aprobacion con SUS interruptores.
 #
 # Lo demas es de la maquina y vive solo en la raiz: el ritmo del sync, la transcripcion y
-# su calidad, Jev, la cuenta de Claude del bot, las skills, los proyectos y las rutas.
+# su calidad, Jev, las skills, los proyectos y las rutas. La cuenta de Claude del bot es de
+# cada linea (P3): cada una abre sus agentes con la suya.
 AJUSTES_DE_LINEA = ("agentName", "ownerName", "tone", "owners", "approvalNumber",
                     "approvalLang", "ackMode", "ackText", "ackQuietMinutes", "greetingMode",
                     "greetingText", "firstReply", "slaMinutes", "projectQuestionHours",
                     "inboxDays", "transcribeLang",
                     "orcaNotices",
                     "signMessages",
+                    "botClaudeAccount",
                     )
 # Los ajustes de linea que otra linea NUNCA toma de la raiz: sin uno propio valen los de
 # fabrica. Los avisos de Orca son los mismos eventos para todas las lineas; heredarlos

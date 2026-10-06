@@ -1461,6 +1461,14 @@ def linea_del_caso(caso):
         return None
 
 
+def linea_de_caso_id(con, case_id):
+    """La linea del caso con ese id, sin mirar la linea activa; None si no hay tal caso."""
+    if not isinstance(case_id, int) or isinstance(case_id, bool):
+        return None
+    fila = con.execute("select account from caso where case_id=?", (case_id,)).fetchone()
+    return linea_del_caso(fila)
+
+
 ID_PROYECTO = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 
@@ -10218,9 +10226,12 @@ def cuenta_de_reintento(cli, excluir=(), cuentas=None):
     return min(elegibles, key=lambda e: e[:2])[2], None
 
 
-def cuenta_del_bot(con):
-    """El id de la cuenta de Claude que el dueno eligio para el bot, o None (Automatica)."""
-    valor = (merged_settings(con).get("bot_claude_account") or "auto").strip()
+def cuenta_del_bot(con, linea=None):
+    """El id de la cuenta de Claude que el dueno eligio para el bot, o None (Automatica).
+
+    Cada linea elige la suya (todo-por-linea, P3): `linea`, la del caso que se lanza, o la
+    de esta corrida."""
+    valor = (merged_settings(con, linea).get("bot_claude_account") or "auto").strip()
     return None if valor == "auto" else valor
 
 
@@ -11295,7 +11306,7 @@ def despacha(con, caso, instrucciones, evento_id, resumen, reintento_de=None, vi
     if not motivo:
         despacho_anota(con, fila, mensajes=json.dumps(vistos))
         abierto = abre_agente(cli, selector, f"WhatsApp case #{cid}", nombre,
-                              preferida=cuenta_del_bot(con))
+                              preferida=cuenta_del_bot(con, linea_del_caso(actual)))
         terminal, motivo = abierto["terminal"], abierto["motivo"]
         if terminal or abierto["cuenta"] or abierto["respaldo"]:
             # Con la base: una vuelta que muere aca deja la terminal a la vista del vigia.
@@ -11630,7 +11641,7 @@ def lanza_agente(con, origen, hasta):
         abierto = abre_agente(
             cli, selector, AGENTE_TITULO, AGENTE_NOMBRE,
             arranque_ms=max(5000, min(DESPACHO_ARRANQUE_MS, queda() // 2)),
-            preferida=cuenta_del_bot(con))
+            preferida=cuenta_del_bot(con, linea_de_caso_id(con, cid)))
         terminal, motivo = abierto["terminal"], abierto["motivo"]
         if terminal or abierto["cuenta"] or abierto["respaldo"]:
             agente_anota(con, fila, terminal=terminal, cuenta_claude=abierto["cuenta"],

@@ -1140,7 +1140,6 @@
         <section class="card" id="bot-account-card">
           <h2 data-t="botAccountLegend"></h2>
           <p class="hint lead" id="bot-account-label" data-t="botAccountHelp"></p>
-          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
           <div class="seg cuentas" id="bot-account" role="group" aria-labelledby="bot-account-label">
             <button type="button" data-value="auto" data-t="botAccountAuto"></button>
           </div>
@@ -3410,7 +3409,8 @@
         'approvalLang', 'ackMode', 'ackText', 'ackQuietMinutes', 'greetingMode', 'greetingText',
         'firstReply', 'slaMinutes', 'projectQuestionHours', 'inboxDays', 'transcribeLang',
         'orcaNotices',
-        'signMessages'
+        'signMessages',
+        'botClaudeAccount'
       ]
       // Los que otra linea NUNCA toma de la principal (`NO_HEREDAN`, la misma lista de
       // wa_settings.py y main.mjs): sin uno propio se pintan los de fabrica. Los avisos de Orca
@@ -3858,10 +3858,18 @@
         if (cuentasLeyendo) return
         cuentasLeyendo = true
         el('bot-account-status').textContent = t('botAccountLoading')
+        // La guardada es la de la linea que se mira (todo-por-linea, P3).
+        var linea = otraLineaVista()
+        var relee = false
         var pedir = Promise.all([
-          read('botClaudeAccount', true),
+          leerClave('botClaudeAccount', true),
           pedirAlWorker('scopeRequest', 'scopeResult', { action: 'cuentas-claude' })
         ]).then(function (rs) {
+          // Lo que llega cuando ya se mira otra linea no vale: se pide de nuevo.
+          if (otraLineaVista() !== linea) {
+            relee = true
+            return
+          }
           var guardada = hayRespuesta(rs[0]) && typeof rs[0] === 'string' && rs[0] ? rs[0] : 'auto'
           var v = rs[1]
           var leidas = !!(v && v.ok === true && Array.isArray(v.accounts))
@@ -3876,7 +3884,10 @@
           pintarCuentasBot(guardada, leidas)
         }, function () {
           el('bot-account-status').textContent = t('botAccountFail')
-        }).then(function () { cuentasLeyendo = false })
+        }).then(function () {
+          cuentasLeyendo = false
+          if (relee) leerCuentasBot()
+        })
         return boton ? busy(boton, pedir) : pedir
       }
 
@@ -6900,6 +6911,8 @@
         reload().then(function () {
           if (autoPedida) leerAuto()
           else programarRelectura()
+          // La cuenta del bot es de cada linea: con Agente a la vista se relee la de esta.
+          if (!el('view-agente').hidden) leerCuentasBot()
         })
       }
       /** Cambiar de linea: nada de lo pintado de la otra queda en las tarjetas de linea.

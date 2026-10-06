@@ -42,7 +42,7 @@ without the agent signature (the owner's request for one of his numbers).
   - Panel switch in the agent card; the name is required only while signing is on.
   - `wa-send` sends unsigned on a line that has signing off (no "no agent name" error there).
   - The checklist accepts no name when signing is off.
-- [ ] **P3** `botClaudeAccount` per line. `despacha` and `lanza_agente` read the case's line.
+- [x] **P3** `botClaudeAccount` per line. `despacha` and `lanza_agente` read the case's line.
 - [ ] **P4** `transcribe`, `transcribeQuality` per line. Remove the machine notes.
 - [ ] **P5** `syncMinutes` per line.
   - One worker timer at the minimum across lines.

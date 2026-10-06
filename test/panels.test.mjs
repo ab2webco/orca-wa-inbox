@@ -8475,7 +8475,7 @@ console.log('\nconfig.html — lineas claras: que es de cada linea y que es del 
   ok('ya no hay notas de "Aplica a sus N lineas": cada pestana es de la linea elegida',
     !doc.querySelector('.nota-lineas') && !/Aplica a sus/.test(doc.body.textContent))
   const MAQUINA = ['routes-card', 'projects-card', 'jev-card',
-    'bot-account-card', 'skills-card', 'voice-card', 'reading-card']
+    'skills-card', 'voice-card', 'reading-card']
   const notaEn = (id) => [...doc.querySelectorAll(`#${id} .nota-maquina`)]
   for (const id of MAQUINA) {
     ok(`${id}: lo de la maquina lo dice donde aparece`,
@@ -8484,7 +8484,7 @@ console.log('\nconfig.html — lineas claras: que es de cada linea y que es del 
       notaEn(id).map((n) => `${n.hidden}:${n.textContent}`).join(' | '))
   }
   const PROPIAS = ['agent-card', 'owners-card', 'auto-card', 'sla-card', 'pq-card', 'scope-form',
-    'orca-notices-card']
+    'orca-notices-card', 'bot-account-card']
   ok('lo de cada linea no lleva esa nota', PROPIAS.every((id) => notaEn(id).length === 0),
     PROPIAS.filter((id) => notaEn(id).length).join())
   ok('los avisos de Orca dicen que salen por la linea que se mira, a su numero',
@@ -8777,6 +8777,47 @@ console.log('\nconfig.html — P2: la firma de cada linea')
   ok('las frases existen en los tres idiomas, el portugues propio',
     ['signLabel', 'signHelp'].every((k) => S.es[k] && S.en[k] && S.pt[k] && S.pt[k] !== S.en[k]) &&
     S.en.signLabel === "Sign messages with the agent's name")
+}
+
+// ───────── todo-por-linea P3: la cuenta de Claude del bot, por linea ─────────
+console.log('\nconfig.html — P3: la cuenta de Claude del bot de cada linea')
+{
+  const storage = dosLineasConAjustes()
+  storage.botClaudeAccount = 'cuenta-bot'
+  storage.ajustesPorLinea[L_B].botClaudeAccount = 'cuenta-sin'
+  const CUENTAS = [
+    { id: 'cuenta-bot', email: 'bot@example.invalid', authenticated: true, active: false, used: 20 },
+    { id: 'cuenta-sin', email: 'sin@example.invalid', authenticated: true, active: false, used: 5 }]
+  const gancho = (d, st) => {
+    if (!(d.action === 'storage.set' && d.params.key === 'scopeRequest' && d.params.value)) {
+      return undefined
+    }
+    const p = d.params.value
+    st.scopeRequest = p
+    st.scopeResult = { at: new Date().toISOString(), requestId: p.id, action: p.action, ok: true,
+      code: 'cuentas', accounts: CUENTAS }
+    return { ok: true }
+  }
+  const { doc } = await montar('config.html', storage, 'es-419', gancho)
+  await espera()
+  doc.getElementById('tab-agente').click()
+  await hastaPanel(() => doc.querySelectorAll('#bot-account button').length > 2)
+  ok('en la principal, la cuenta de la raiz', valorSeg(doc, 'bot-account') === 'cuenta-bot',
+    valorSeg(doc, 'bot-account'))
+  elegirSeg(doc, 'linea-vista', L_B)
+  await hastaPanel(() => valorSeg(doc, 'bot-account') === 'cuenta-sin')
+  ok('en la otra linea, la de ESA linea', valorSeg(doc, 'bot-account') === 'cuenta-sin',
+    valorSeg(doc, 'bot-account'))
+  elegirSeg(doc, 'bot-account', 'auto')
+  doc.getElementById('save-bot-account').click()
+  await new Promise((r) => setTimeout(r, 500))
+  ok('guardar en la otra linea la guarda en lo de ESA linea, sin tocar la raiz',
+    storage.ajustesPorLinea[L_B].botClaudeAccount === 'auto' && storage.botClaudeAccount === 'cuenta-bot',
+    JSON.stringify({ b: storage.ajustesPorLinea[L_B].botClaudeAccount, raiz: storage.botClaudeAccount }))
+  elegirSeg(doc, 'linea-vista', L_A)
+  await hastaPanel(() => valorSeg(doc, 'bot-account') === 'cuenta-bot')
+  ok('volver a la principal muestra otra vez la suya', valorSeg(doc, 'bot-account') === 'cuenta-bot',
+    valorSeg(doc, 'bot-account'))
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

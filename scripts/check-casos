@@ -13136,6 +13136,76 @@ if NODE:
            p6.returncode != 0 and "no agent name is configured" in p6.stderr
            and salida_de("Principal sin nombre") == [], f"{p6.returncode} {p6.stderr[-300:]}")
 
+
+# ── Todo por linea (P3): la cuenta de Claude del bot, por linea ────────────────────────
+# Cada linea elige con que cuenta de Claude abre sus agentes: el despacho de un caso abre con
+# la cuenta de la linea de ESE caso.
+print("\ntodo por linea (P3): la cuenta de Claude del bot de cada linea")
+if NODE:
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        llave_del_plugin(home)
+        llegan(home, A, [])
+        llegan(home, SEGUNDA, [], activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "agent", "Agente Principal")
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        jsl(home, SEGUNDA, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        acepta_proyectos(home, "alfa-demo")
+        datos = lee_storage(home)
+        datos["botClaudeAccount"] = "cuenta-a"
+        datos["ajustesPorLinea"] = {SEGUNDA: {"agentName": "Agente Segunda",
+                                              "botClaudeAccount": "cuenta-b"}}
+        escribe_storage(home, datos)
+        ok("P3: cada linea lee su cuenta del bot",
+           js(home, "config", "bot_claude_account")[0]["value"] == "cuenta-a"
+           and jsl(home, SEGUNDA, "config", "bot_claude_account")[0]["value"] == "cuenta-b",
+           f"{jsl(home, SEGUNDA, 'config', 'bot_claude_account')}")
+        orca_despacho(carpeta, cuentas=[cuenta_claude("cuenta-a", 20), cuenta_claude("cuenta-b", 20),
+                                        cuenta_claude("cuenta-libre", 10)],
+                      rechaza={"": EN_USO})
+        cid_a = trabajo_firmado(home, "BA1")
+        llegan(home, SEGUNDA, [msg(PERSONA, "BB1", PEDIDO, 5)], activar=False)
+        cid_b = str(jsl(home, SEGUNDA, "caso", "crear", "--chat", PERSONA, "--stanza", "BB1",
+                        "--actor", "agente")[0]["case_id"])
+        jsl(home, SEGUNDA, "caso", "clasificar", cid_b, "--clase", "card", "--prioridad", "high",
+            "--actor", "agente")
+        v_b = jsl(home, SEGUNDA, "caso", "propuesta", cid_b, "--tipo", "trabajar",
+                  "--instrucciones", TRABAJO, "--actor", "agente")[0]["propuesta_version"]
+        jsl(home, SEGUNDA, "caso", "proyecto", cid_b, "--proyecto", "alfa-demo", "--actor", "dueno")
+        r = js(home, "caso", "aprobar", cid_b, "--version", v_b, "--actor", "dueno")[0]
+        p, _ = tick_orca(home, carpeta)
+        cuenta_de = {}
+        for args in llamadas_orca(carpeta, "terminal create"):
+            titulo = bandera(args, "--title") or ""
+            cuenta_de.setdefault(titulo, bandera(args, "--claude-account"))
+        ok("P3: el despacho de cada caso abre con la cuenta de SU linea",
+           cuenta_de.get(f"WhatsApp case #{cid_a}") == "cuenta-a"
+           and cuenta_de.get(f"WhatsApp case #{cid_b}") == "cuenta-b",
+           f"{r.get('etapa')} {cuenta_de} {p.stderr[-400:]}")
+        con = db_de(home)
+        filas = {str(f["case_id"]): f["cuenta_claude"]
+                 for f in con.execute("select case_id, cuenta_claude from caso_despacho")}
+        con.close()
+        ok("P3: y cada despacho lo anota", filas == {cid_a: "cuenta-a", cid_b: "cuenta-b"},
+           f"{filas}")
+        # Quien tiene el caso en la mano, aunque corra en otra linea, nombra la del caso.
+        env_p3 = dict(os.environ)
+        try:
+            os.environ.pop("WA_INBOX_LINEA", None)
+            ws = carga_wa_scope(home)
+            con = ws.db()
+            try:
+                caso_b = dict(con.execute("select * from caso where case_id=?",
+                                          (int(cid_b),)).fetchone())
+                ok("P3: cuenta_del_bot con la linea de un caso de otra linea da la de esa linea",
+                   ws.cuenta_del_bot(con, ws.linea_del_caso(caso_b)) == "cuenta-b"
+                   and ws.cuenta_del_bot(con) == "cuenta-a")
+            finally:
+                con.close()
+        finally:
+            os.environ.clear()
+            os.environ.update(env_p3)
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
