@@ -8474,7 +8474,7 @@ console.log('\nconfig.html — lineas claras: que es de cada linea y que es del 
   }
   ok('ya no hay notas de "Aplica a sus N lineas": cada pestana es de la linea elegida',
     !doc.querySelector('.nota-lineas') && !/Aplica a sus/.test(doc.body.textContent))
-  const MAQUINA = ['routes-card', 'projects-card', 'orca-notices-card', 'jev-card',
+  const MAQUINA = ['orca-notices-card', 'jev-card',
     'bot-account-card', 'skills-card', 'voice-card', 'reading-card']
   const notaEn = (id) => [...doc.querySelectorAll(`#${id} .nota-maquina`)]
   for (const id of MAQUINA) {
@@ -8483,7 +8483,8 @@ console.log('\nconfig.html — lineas claras: que es de cada linea y que es del 
         n.textContent === 'Vale para todas las lineas de este equipo.'),
       notaEn(id).map((n) => `${n.hidden}:${n.textContent}`).join(' | '))
   }
-  const PROPIAS = ['agent-card', 'owners-card', 'auto-card', 'sla-card', 'pq-card', 'scope-form']
+  const PROPIAS = ['agent-card', 'owners-card', 'auto-card', 'sla-card', 'pq-card', 'scope-form',
+    'routes-card', 'projects-card']
   ok('lo de cada linea no lleva esa nota', PROPIAS.every((id) => notaEn(id).length === 0),
     PROPIAS.filter((id) => notaEn(id).length).join())
   ok('los avisos de Orca dicen que salen por la principal',
@@ -8675,6 +8676,84 @@ console.log('\nconfig.html — A5: si la otra linea no contesta, no se ven los a
   ok('cuando el host contesta, aparece lo de ESA linea, sola la lectura que faltaba',
     doc.getElementById('agent').value === 'Agente Segunda' && !tarjeta.classList.contains('sin-leer'),
     doc.getElementById('agent').value)
+}
+
+// ───────── P9: las reglas de texto y el catalogo de proyectos, de cada linea ─────────
+// La principal los guarda en la raiz (`routes`, `projects`); cada otra linea, en
+// `ajustesPorLinea[<numero>]`. Lo que se pide al worker nombra la linea que se mira.
+console.log('\nconfig.html — P9: cada linea muestra y guarda sus reglas y sus proyectos')
+{
+  const ALFA = { id: 'alfa-demo', name: 'Alfa Demo', path: '/srv/ejemplo/alfa-demo', note: '' }
+  const BETA = { id: 'beta-demo', name: 'Beta Demo', path: '/srv/ejemplo/beta-demo', note: '' }
+  const storage = dosLineasConAjustes()
+  storage.routes = [{ pattern: 'acme', workspace: 'alfa-demo' }]
+  storage.projects = [ALFA]
+  Object.assign(storage.ajustesPorLinea[L_B], {
+    routes: [{ pattern: 'ventas', workspace: 'beta-demo' }], projects: [BETA] })
+  const pedidos = []
+  const { doc } = await montar('config.html', storage, 'es-419', (d, st) => {
+    if (!(d.action === 'storage.set' && d.params.key === 'scopeRequest' && d.params.value)) {
+      return undefined
+    }
+    const p = d.params.value
+    pedidos.push(p)
+    st.scopeRequest = p
+    st.scopeResult = { at: new Date().toISOString(), requestId: p.id, action: p.action, ok: true,
+      code: p.action === 'regla-quitar' ? 'regla-quitada' : 'quitado' }
+    return { ok: true }
+  })
+  await espera()
+  const reglas = () => textoDe(doc, '#routes-wrap')
+  const catalogo = () => textoDe(doc, '#projects-wrap')
+  ok('en la principal se ven sus reglas y sus proyectos',
+    /acme/.test(reglas()) && !/ventas/.test(reglas()) && /Alfa Demo/.test(catalogo()) &&
+    !/Beta Demo/.test(catalogo()), `${reglas()} | ${catalogo()}`)
+  elegirSeg(doc, 'linea-vista', L_B)
+  await new Promise((r) => setTimeout(r, 300))
+  ok('en la otra linea se ven las reglas y los proyectos de ESA linea',
+    /ventas/.test(reglas()) && !/acme/.test(reglas()) && /Beta Demo/.test(catalogo()) &&
+    !/Alfa Demo/.test(catalogo()), `${reglas()} | ${catalogo()}`)
+  ok('el selector de proyecto de una regla ofrece el catalogo de ESA linea',
+    proyectosOfrecidos(doc, 'r-workspace').join() === 'beta-demo',
+    proyectosOfrecidos(doc, 'r-workspace').join())
+  ok('y el de las conversaciones tambien',
+    proyectosOfrecidos(doc, 'workspace').filter(Boolean).join() === 'beta-demo',
+    proyectosOfrecidos(doc, 'workspace').join())
+
+  doc.getElementById('tab-chats').click()
+  await espera()
+  doc.getElementById('r-match').value = 'factura'
+  elegirProyecto(doc, 'r-workspace', 'beta-demo')
+  doc.getElementById('save-route').click()
+  await new Promise((r) => setTimeout(r, 300))
+  const propias = () => storage.ajustesPorLinea[L_B]
+  ok('agregar una regla en la otra linea la guarda solo en lo de ESA linea',
+    (propias().routes || []).map((r) => r.pattern).join() === 'factura,ventas' &&
+    storage.routes.map((r) => r.pattern).join() === 'acme' &&
+    propias().agentName === 'Agente Segunda', JSON.stringify({ propias: propias().routes, raiz: storage.routes }))
+  ok('y la tabla la muestra', /factura/.test(reglas()), reglas())
+
+  doc.querySelector('#routes-wrap [data-rrm]').click()
+  await new Promise((r) => setTimeout(r, 300))
+  const quitar = pedidos.find((p) => p.action === 'regla-quitar')
+  ok('quitar una regla en la otra linea se le pide al worker en ESA linea',
+    quitar?.linea === L_B && quitar?.pattern === 'factura', JSON.stringify(quitar))
+  doc.querySelector('#projects-wrap [data-prm="beta-demo"]').click()
+  await new Promise((r) => setTimeout(r, 300))
+  const sacar = pedidos.find((p) => p.action === 'proyectos-quitar')
+  ok('y quitar un proyecto tambien', sacar?.linea === L_B && sacar?.project === 'beta-demo',
+    JSON.stringify(sacar))
+
+  elegirSeg(doc, 'linea-vista', L_A)
+  await new Promise((r) => setTimeout(r, 300))
+  ok('volver a la principal muestra otra vez las suyas',
+    /acme/.test(reglas()) && !/ventas/.test(reglas()) && /Alfa Demo/.test(catalogo()),
+    `${reglas()} | ${catalogo()}`)
+  doc.querySelector('#projects-wrap [data-prm="alfa-demo"]').click()
+  await new Promise((r) => setTimeout(r, 300))
+  const enLaPrincipal = pedidos.filter((p) => p.action === 'proyectos-quitar').pop()
+  ok('en la principal el pedido no nombra linea',
+    enLaPrincipal?.project === 'alfa-demo' && !enLaPrincipal.linea, JSON.stringify(enLaPrincipal))
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
