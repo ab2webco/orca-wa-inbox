@@ -1244,6 +1244,39 @@ def revisa_chat_del_dueno(fallos: list) -> int:
                           f"{p.returncode} con {dato!r}: tenia que dar ese numero, "
                           "source approval-number, can_send true")
 
+        # Las skills avisan por la linea que el dueno elige en el panel (todo-por-linea, P7):
+        # `skillsLine`. Con la otra linea elegida, `owner` da el numero de aprobacion de ESA
+        # linea, y la nombra; una linea elegida que ya no esta vinculada vuelve a la principal.
+        otro = "573009998877@s.whatsapp.net"
+        cap = sqlite3.connect(home / ".wa-inbox" / "capture.db")
+        cap.execute("insert or replace into store_meta (key, value) values ('lineas_activas', ?)",
+                    (json.dumps([NUEVA, VIEJA]),))
+        cap.commit()
+        cap.close()
+        datos = json.loads(store.read_text(encoding="utf-8"))
+        datos.update(skillsLine=VIEJA, ajustesPorLinea={
+            VIEJA: {"owners": [{"id": otro, "name": "Dueno Otra Linea"}], "approvalNumber": otro}})
+        store.write_text(json.dumps(datos), encoding="utf-8")
+        subprocess.run([str(BIN / "wa-scope"), "set", otro, "--mode", "responder", "--line", VIEJA],
+                       env=env, capture_output=True, timeout=120)
+        hechas += 1
+        p = owner("--json")
+        dato = json.loads(p.stdout or "null") if p.stdout.strip() else None
+        if p.returncode != 0 or not isinstance(dato, dict) or dato.get("chat") != otro \
+                or dato.get("line") != VIEJA or dato.get("can_send") is not True:
+            fallos.append(f"`wa-scope owner --json` con las skills avisando por {VIEJA} salio "
+                          f"{p.returncode} con {dato!r}: tenia que dar el numero de aprobacion "
+                          "de esa linea, y nombrarla")
+        datos["skillsLine"] = "pn:573000000013"
+        store.write_text(json.dumps(datos), encoding="utf-8")
+        hechas += 1
+        p = owner("--json")
+        dato = json.loads(p.stdout or "null") if p.stdout.strip() else None
+        if not isinstance(dato, dict) or dato.get("chat") != aprobacion or \
+                dato.get("line") != NUEVA:
+            fallos.append(f"`wa-scope owner --json` con una linea elegida que no esta vinculada "
+                          f"dio {dato!r}: tenia que volver a la principal")
+
         hechas += 1
         ayuda = subprocess.run([str(BIN / "wa-scope"), "owner", "--help"], capture_output=True,
                                text=True, env=env, timeout=60).stdout
@@ -2248,6 +2281,36 @@ def revisa_precheck(fallos: list) -> int:
             fallos.append(f"con sync_minutes en 60 el mismo store salio "
                           f"{p.returncode}; el limite no sigue al ajuste")
         scope("config", "sync_minutes", "5")
+
+        # El ritmo es de cada linea (todo-por-linea, P5): con dos lineas, el limite de
+        # cada una sale de SU `syncMinutes`. La principal a 1 min y la otra a 60, las dos
+        # con un sync de hace 10 min: la principal esta vieja y la otra no.
+        principal, segunda = "pn:573000000001", "pn:573000000011"
+        captura = home / ".wa-inbox" / "capture.db"
+        cap = sqlite3.connect(captura)
+        cap.execute("create table if not exists store_meta (key text primary key, value text)")
+        cap.executemany("insert or replace into store_meta (key, value) values (?, ?)",
+                        [("linea_activa", principal),
+                         ("lineas_activas", json.dumps([principal, segunda]))])
+        cap.commit()
+        cap.close()
+        sembrar(pendientes=2, minutos=10)
+        datos = json.loads(store.read_text())
+        datos["syncMinutes"] = "1"
+        datos["porLinea"] = {segunda: {"activity": dict(datos["activity"]),
+                                       "health": {"ok": True, "optional": []}}}
+        datos["ajustesPorLinea"] = {segunda: {"syncMinutes": "60"}}
+        store.write_text(json.dumps(datos))
+        p_a, p_b = precheck(), precheck("--line", segunda)
+        hechas += 2
+        if p_a.returncode != 2:
+            fallos.append(f"la principal a 1 min con un sync de hace 10 salio "
+                          f"{p_a.returncode} y no 2: no usa su propio ritmo")
+        if p_b.returncode != 0:
+            fallos.append(f"la otra linea a 60 min con un sync de hace 10 salio "
+                          f"{p_b.returncode} y no 0: usa el ritmo de la principal "
+                          f"({p_b.stdout.strip()[:200]})")
+        captura.unlink()
 
         # Sin store no hay nada que responder, y eso tampoco es "no hay trabajo".
         store.unlink()

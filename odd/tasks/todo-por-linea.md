@@ -43,14 +43,19 @@ without the agent signature (the owner's request for one of his numbers).
   - The checklist accepts no name when signing is off.
 - [x] **P3** `botClaudeAccount` per line. `despacha` and `lanza_agente` read the case's line.
 - [x] **P4** `transcribe`, `transcribeQuality` per line. Remove the machine notes.
-- [ ] **P5** `syncMinutes` per line.
+- [x] **P5** `syncMinutes` per line.
   - One worker timer at the minimum across lines.
   - Each line syncs only when its own interval has elapsed.
   - The triage cron runs at the minimum.
-- [ ] **P6** Jev on/off per line.
+- [x] **P6** Jev on/off per line.
   - The key and the mirror stay shared, and the mirror exists while any line is on.
   - `jev_juzga` and `revision_jev` skip a line that has Jev off.
-- [ ] **P7** Skills card: the notifying line is chosen per skill, and the card says installs are on this computer.
+- [x] **P7** Skills card: the notifying line is chosen per skill, and the card says installs are on this computer.
+  - Model chosen: ONE choice for the computer, root key `skillsLine` (the line's account, or
+    null for the main line). The catalog has one skill, so this is per skill today. A chosen
+    line that is no longer linked falls back to the main line. `wa-scope owner` resolves that
+    line's approval number and names it in `line`; the skill passes `--line "$LINE"` to every
+    send and wait.
 - [ ] **P8** Check, screenshots (es, dark, 390), release v4.25.0.
 - [x] **P9** `routes` per line (scope.db `route` gets an `account` column) and the projects catalog per line (`project` table gets an `account` column; `PROJECTS.md` lists every line).
 

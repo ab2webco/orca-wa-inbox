@@ -400,11 +400,50 @@ export async function correrIngesta(orca, toolsDir, estado) {
   }
 }
 
-/** Cada cuanto releer WhatsApp, segun lo que el usuario dejo puesto. */
-export async function intervaloSync(orca) {
-  const minutos = parseInt(String((await leer(orca, 'syncMinutes')) ?? ''), 10)
+/** Un `syncMinutes` guardado, en ms y dentro de las cotas. */
+function msDeSync (valor) {
+  const minutos = parseInt(String(valor ?? ''), 10)
   if (!Number.isFinite(minutos) || minutos <= 0) return SYNC_MS
   return Math.min(SYNC_MAX_MS, Math.max(SYNC_MIN_MS, minutos * 60000))
+}
+
+/** El ritmo de cada linea (todo-por-linea, P5), en ms: `{cuenta: ms}`. Pura. La primera de
+ *  `cuentas` es la principal y usa el de la raiz; cada otra, el suyo de `contenedor`
+ *  (`ajustesPorLinea`), con la misma regla que wa-scope: lo que no tiene propio es lo de la
+ *  principal, y null es "sin valor" (el de fabrica), no lo de la principal. */
+export function intervalosDeLineas (raiz, contenedor, cuentas) {
+  const todo = contenedor && typeof contenedor === 'object' ? contenedor : {}
+  const out = {}
+  cuentas.forEach((cuenta, i) => {
+    const propios = i > 0 && todo[cuenta] && typeof todo[cuenta] === 'object' ? todo[cuenta] : null
+    out[cuenta] = msDeSync(propios && 'syncMinutes' in propios
+      ? propios.syncMinutes : raiz?.syncMinutes)
+  })
+  return out
+}
+
+// Un reloj que se adelanta unos ms no deja a una linea sin su vuelta: el reloj se arma
+// despues de cada sync, asi que lo normal es que pase un poco MAS que su ritmo.
+const SYNC_HOLGURA_MS = 2000
+
+/** Las lineas a las que les toca releer WhatsApp en esta vuelta del reloj: las que ya
+ *  cumplieron SU ritmo desde su ultimo sync (`ultimos`, `{cuenta: ms}`), y las que nunca
+ *  sincronizaron. Pura, en el orden de `intervalos`. */
+export function lineasDelTurno (intervalos, ultimos, ahoraMs) {
+  return Object.keys(intervalos).filter((cuenta) => {
+    const ultimo = ultimos?.[cuenta]
+    return typeof ultimo !== 'number' || ahoraMs - ultimo + SYNC_HOLGURA_MS >= intervalos[cuenta]
+  })
+}
+
+/** Cada cuanto releer WhatsApp, segun lo que el usuario dejo puesto: con `cuentas` (las
+ *  lineas, la principal primero), el ritmo de la mas frecuente. Es el del reloj del worker y
+ *  el del cron del triage; cada linea se sincroniza despues solo cuando le toca. */
+export async function intervaloSync(orca, cuentas = []) {
+  const raiz = { syncMinutes: await leer(orca, 'syncMinutes') }
+  if (cuentas.length < 2) return msDeSync(raiz.syncMinutes)
+  const intervalos = intervalosDeLineas(raiz, await leer(orca, AJUSTES_POR_LINEA_KEY), cuentas)
+  return Math.min(...Object.values(intervalos))
 }
 
 // El storage es el UNICO canal con el panel. Tragarse un fallo aca deja al panel
@@ -507,7 +546,10 @@ async function leerLlaveJev(orca, estado) {
  *  que corre por su cuenta (arranque, revision de salud) lo respeta y lo dice en el
  *  estado (`ajeno`), porque el lector de Python lo trata como "sin llave" y el usuario
  *  tiene que saber por que. */
-async function aplicarJev(orca, habilitado, llave, { forzar = false } = {}) {
+async function aplicarJev(orca, jev, llave, { forzar = false } = {}) {
+  // UNA llave y UN espejo para el equipo (todo-por-linea, P6): el espejo existe mientras
+  // alguna linea tenga Jev encendido; cada CLI mira despues si SU linea lo tiene.
+  const habilitado = jev.alguna
   const activo = habilitado && llave !== null
   const r = activo
     ? await espejoJev(forzar ? 'guardar' : 'sincronizar', llave)
@@ -521,18 +563,38 @@ async function aplicarJev(orca, habilitado, llave, { forzar = false } = {}) {
   } else {
     espejo = habilitado ? 'sin-llave' : 'apagado'
   }
-  const estado = { at: new Date().toISOString(), enabled: habilitado,
+  // `enabled` es el de la principal, como siempre; `lines`, el de cada otra linea.
+  const estado = { at: new Date().toISOString(), enabled: jev.principal, lines: jev.lineas,
     keySet: llave !== null, mirror: espejo }
   await guardar(orca, JEV_STATUS_KEY, estado)
   return estado
+}
+
+/** Jev en cada linea (todo-por-linea, P6). Pura. La principal lo tiene en la raiz
+ *  (`jevEnabled`); cada otra, en `ajustesPorLinea[<cuenta>].jevEnabled`, y la que no lo
+ *  tiene propio sigue a la principal, con la misma regla que wa-scope. Solo `true` es
+ *  encendido. `alguna` es si el espejo de la llave tiene que existir. */
+export function jevPorLinea (raiz, contenedor) {
+  const principal = raiz === true
+  const todo = contenedor && typeof contenedor === 'object' && !Array.isArray(contenedor)
+    ? contenedor : {}
+  const lineas = {}
+  for (const [cuenta, propios] of Object.entries(todo)) {
+    if (!propios || typeof propios !== 'object' || Array.isArray(propios)) continue
+    lineas[cuenta] = 'jevEnabled' in propios ? propios.jevEnabled === true : principal
+  }
+  return { principal, lineas, alguna: principal || Object.values(lineas).some(Boolean) }
+}
+
+async function leerJev(orca) {
+  return jevPorLinea(await leer(orca, JEV_ENABLED_KEY), await leer(orca, AJUSTES_POR_LINEA_KEY))
 }
 
 /** Lo que dicen los ajustes ahora mismo, aplicado: al arrancar y en cada revision de
  *  salud, que ya existe. No hay un bucle propio: un espejo que alguien borro o copio a
  *  mano se nota en la proxima vuelta, sin otra llamada al host por tick. */
 async function reconciliarJev(orca, estado) {
-  const habilitado = (await leer(orca, JEV_ENABLED_KEY)) === true
-  return aplicarJev(orca, habilitado, await leerLlaveJev(orca, estado))
+  return aplicarJev(orca, await leerJev(orca), await leerLlaveJev(orca, estado))
 }
 
 /** Cuanto se espera a que el sidecar muera por las buenas antes de forzarlo. */
@@ -545,7 +607,7 @@ let sincronizando = false
  *  no puede ejecutar nada: solo sabe leer y escribir storage. Sin esto el panel abria
  *  diciendo "corre este comando", que en una interfaz no es una instruccion, es un
  *  callejon; y cuando el sync fallaba callado, el callejon era el spinner eterno. */
-async function sync(orca, { toolsDir = TOOLS, trigger = 'timer' } = {}) {
+export async function sync(orca, { toolsDir = TOOLS, trigger = 'timer', lineas = null } = {}) {
   if (sincronizando) return false
   sincronizando = true
   // Se anota el intento ANTES de arrancar: "nadie lo intento" y "esta corriendo" son
@@ -555,14 +617,22 @@ async function sync(orca, { toolsDir = TOOLS, trigger = 'timer' } = {}) {
   })
   let estado
   try {
-    const { stdout } = await run(join(toolsDir, 'wa-scope'), ['sync', '--json'],
-      { timeoutMs: SYNC_TIMEOUT_MS })
-    let escrito = false
-    try {
-      const filas = JSON.parse(stdout || 'null')
-      escrito = !!(Array.isArray(filas) ? filas[0]?.synced : filas?.synced)
-    } catch {
-      escrito = false
+    // Sin `lineas`, todas (wa-scope reparte una corrida por linea). Con `lineas`, solo esas,
+    // cada una en su corrida y a la vez: las que no cumplieron su ritmo esperan (P5).
+    const corridas = Array.isArray(lineas)
+      ? lineas.map((cuenta) => ['sync', '--json', '--line', cuenta])
+      : [['sync', '--json']]
+    const salidas = await Promise.all(corridas.map((args) =>
+      run(join(toolsDir, 'wa-scope'), args, { timeoutMs: SYNC_TIMEOUT_MS })))
+    const stdout = salidas.map((s) => String(s.stdout ?? '').trim()).join('\n')
+    let escrito = salidas.length > 0
+    for (const salida of salidas) {
+      try {
+        const filas = JSON.parse(salida.stdout || 'null')
+        escrito = escrito && !!(Array.isArray(filas) ? filas[0]?.synced : filas?.synced)
+      } catch {
+        escrito = false
+      }
     }
     const chats = await leer(orca, CHATS_KEY)
     estado = {
@@ -1254,7 +1324,9 @@ export const AJUSTES_DE_LINEA = Object.freeze(['agentName', 'ownerName', 'tone',
   'transcribe',
   'transcribeQuality',
   'routes',
-  'projects'
+  'projects',
+  'syncMinutes',
+  'jevEnabled'
 ])
 // Los que una linea NUNCA copia de la principal (`NO_HEREDAN` de wa_settings.py y del panel):
 // sin uno propio valen los de fabrica. Los avisos de Orca son los mismos eventos para todas
@@ -1398,8 +1470,39 @@ export default function activate(orca) {
 
   // El sync automatico sale del mismo directorio que los comandos. Antes iba fijo a
   // bin/: quien movia toolsDir tenia la mitad del plugin leyendo de otro lado.
-  const sincronizar = async (trigger) =>
-    sync(orca, { toolsDir: await dirHerramientas(), trigger })
+  //
+  // Cada linea relee WhatsApp a su ritmo (todo-por-linea, P5): `ultimoSyncDe` es cuando
+  // empezo el ultimo sync de cada linea, el que mira la vuelta del reloj. Vive en memoria:
+  // al arrancar el worker sincroniza todas, asi que no hay nada que recordar de antes.
+  const ultimoSyncDe = {}
+  const sincronizar = async (trigger, lineas = null) => {
+    const toolsDir = await dirHerramientas()
+    if (!sincronizando) {
+      const ahora = Date.now()
+      for (const cuenta of lineas ?? registro.map((r) => r.cuenta)) {
+        if (cuenta) ultimoSyncDe[cuenta] = ahora
+      }
+    }
+    return sync(orca, { toolsDir, trigger, lineas })
+  }
+  /** Las cuentas de las lineas, la principal primero, para el ritmo de cada una. Con una
+   *  linea que todavia no dijo su numero no se sabe de quien es cada ritmo: [] y todo va
+   *  como siempre, al de la principal y todas juntas. */
+  const cuentasDelRitmo = () => {
+    const cuentas = registro.map((r) => r.cuenta)
+    return cuentas.length > 1 && cuentas.every((c) => typeof c === 'string' && c) ? cuentas : []
+  }
+  /** Una vuelta del reloj: sincroniza las lineas a las que ya les toca segun SU ritmo.
+   *  Todas a la vez, como siempre, cuando les toca a todas. */
+  async function turnoDeSync () {
+    const cuentas = cuentasDelRitmo()
+    if (!cuentas.length) return sincronizar('timer')
+    const intervalos = intervalosDeLineas({ syncMinutes: await leer(orca, 'syncMinutes') },
+      await leer(orca, AJUSTES_POR_LINEA_KEY), cuentas)
+    const toca = lineasDelTurno(intervalos, ultimoSyncDe, Date.now())
+    if (!toca.length) return false
+    return sincronizar('timer', toca.length === cuentas.length ? null : toca)
+  }
 
   // Antes que nada lo que necesita todo lo demas: donde esta el Orca vivo. Se vuelve a
   // resolver en cada arranque porque el runtime cambia de socket en cada arranque.
@@ -1905,12 +2008,12 @@ export default function activate(orca) {
   let syncTimer = null
   async function programarSync() {
     if (detenido) return
-    const ms = await intervaloSync(orca).catch(() => SYNC_MS)
+    const ms = await intervaloSync(orca, cuentasDelRitmo()).catch(() => SYNC_MS)
     if (detenido) return
     // Un cambio del selector reprograma mientras una lectura sigue en curso: una sola cadena.
     if (syncTimer) clearTimeout(syncTimer)
     syncTimer = setTimeout(() => {
-      sincronizar('timer')
+      turnoDeSync()
         .catch((error) => orca.log(`sync failed: ${error.message}`))
         .then(() => programarSync()
           .catch((error) => orca.log(`sync scheduling failed: ${error.message}`)))
@@ -2300,7 +2403,8 @@ export default function activate(orca) {
     if (detenido || ritmoEnVuelo) return
     ritmoEnVuelo = true
     try {
-      const minutos = Math.round((await intervaloSync(orca).catch(() => SYNC_MS)) / 60000)
+      const minutos = Math.round((await intervaloSync(orca, cuentasDelRitmo())
+        .catch(() => SYNC_MS)) / 60000)
       ritmoPedido = minutos
       const r = await ajustarRitmo(minutos)
       if (detenido) return
@@ -2323,7 +2427,8 @@ export default function activate(orca) {
   // lectura de WhatsApp para que no espere el intervalo viejo.
   async function vigilarRitmo () {
     if (detenido || ritmoPedido === null || ritmoEnVuelo) return
-    const minutos = Math.round((await intervaloSync(orca).catch(() => SYNC_MS)) / 60000)
+    const minutos = Math.round((await intervaloSync(orca, cuentasDelRitmo())
+      .catch(() => SYNC_MS)) / 60000)
     if (minutos === ritmoPedido) return
     programarSync().catch((error) => orca.log(`sync scheduling failed: ${error.message}`))
     await ajustarTriage()
@@ -2407,8 +2512,8 @@ export default function activate(orca) {
       orca.log(`secrets.set failed (${motivoDe(error)})`)
       return { ok: false, code: JEV_VEREDICTO.BOVEDA_FALLO }
     }
-    const habilitado = (await leer(orca, JEV_ENABLED_KEY)) === true
-    const st = await aplicarJev(orca, habilitado, valor, { forzar: true })
+    const jev = await leerJev(orca)
+    const st = await aplicarJev(orca, jev, valor, { forzar: true })
     return st.mirror === 'fallo'
       ? { ok: false, code: JEV_VEREDICTO.ESPEJO_FALLO, mirror: st.mirror }
       : { ok: true, code: JEV_VEREDICTO.GUARDADA, mirror: st.mirror }
@@ -2421,23 +2526,50 @@ export default function activate(orca) {
       orca.log(`secrets.delete failed (${motivoDe(error)})`)
       return { ok: false, code: JEV_VEREDICTO.BOVEDA_FALLO }
     }
-    const habilitado = (await leer(orca, JEV_ENABLED_KEY)) === true
-    const st = await aplicarJev(orca, habilitado, null)
+    const jev = await leerJev(orca)
+    const st = await aplicarJev(orca, jev, null)
     return st.mirror === 'fallo'
       ? { ok: false, code: JEV_VEREDICTO.ESPEJO_FALLO, mirror: st.mirror }
       : { ok: true, code: JEV_VEREDICTO.QUITADA, mirror: st.mirror }
   }
 
+  /** Escribe UN ajuste propio de otra linea en `ajustesPorLinea[cuenta]`, en la misma
+   *  cadena que la siembra: dos escrituras del contenedor a la vez se borrarian una a la
+   *  otra. Lo de las otras lineas y las claves que no se conocen quedan como estaban. */
+  function escribirAjusteDeLinea (cuenta, clave, valor) {
+    const hecho = cadenaAjustes.then(async () => {
+      const actual = (await orca.host.call('storage.get', { key: AJUSTES_POR_LINEA_KEY }))?.value
+      const todo = actual && typeof actual === 'object' && !Array.isArray(actual) ? { ...actual } : {}
+      const previos = todo[cuenta]
+      const propios = previos && typeof previos === 'object' && !Array.isArray(previos)
+        ? { ...previos } : {}
+      propios[clave] = valor
+      todo[cuenta] = propios
+      await orca.host.call('storage.set', { key: AJUSTES_POR_LINEA_KEY, value: todo })
+    })
+    // La cadena nunca queda rechazada: la siembra que venga despues tiene que correr igual.
+    cadenaAjustes = hecho.catch(() => {})
+    return hecho
+  }
+
   async function activarJev (pedido) {
-    if (typeof pedido.enabled !== 'boolean') {
+    // `linea` (todo-por-linea, P6): la cuenta de la linea que mira el panel. Sin ella, o
+    // con la de la principal, es la principal, en la raiz.
+    const linea = pedido.linea ?? null
+    if (typeof pedido.enabled !== 'boolean' ||
+        (linea !== null && (typeof linea !== 'string' || !LINEA_RE.test(linea)))) {
       return { ok: false, code: JEV_VEREDICTO.ARGUMENTOS_INVALIDOS }
     }
-    await guardar(orca, JEV_ENABLED_KEY, pedido.enabled)
+    if (linea === null || linea === (registro[0]?.cuenta ?? null)) {
+      await guardar(orca, JEV_ENABLED_KEY, pedido.enabled)
+    } else {
+      await escribirAjusteDeLinea(linea, 'jevEnabled', pedido.enabled)
+    }
     // Encender es un gesto explicito del dueno, igual que guardar la llave: con la llave
     // ya en la boveda reemplaza un `jev.env` escrito a mano antes de que el plugin lo
     // administrara. Sin esto el dueno guardaba la llave con Jev apagado, lo encendia, y
     // se quedaba en `ajeno` sin nada que escribir en el campo.
-    const st = await aplicarJev(orca, pedido.enabled, await leerLlaveJev(orca, estadoJev),
+    const st = await aplicarJev(orca, await leerJev(orca), await leerLlaveJev(orca, estadoJev),
       { forzar: pedido.enabled })
     const code = pedido.enabled ? JEV_VEREDICTO.ACTIVADO : JEV_VEREDICTO.DESACTIVADO
     return st.mirror === 'fallo'

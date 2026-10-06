@@ -90,6 +90,7 @@ import wa_jev  # noqa: E402
 import wa_reglas  # noqa: E402
 from wa_settings import (ajuste, alcances_de_lineas, plugin_store_raw, scope_db,  # noqa: E402
                          numero_aprobacion, scope_from_plugin, trae_llave_aprobador)
+from wa_settings import jev_en_linea  # noqa: E402
 
 SCOPE_DB = scope_db()
 
@@ -352,8 +353,9 @@ def resolver_conversacion(ref, linea):
     elif len(cuentas) > 1 and es_chat_del_dueno(filas) and \
             wa_store.linea_activa_en_disco() in cuentas:
         # El chat del dueno (`wa-scope owner`) esta en cada linea —cada una le avisa lo
-        # suyo—, y lo que le escribe un agente de otro proyecto sale por la principal, que es
-        # la linea del dueno: la misma que dice `wa-scope owner`. Nunca se elige a ciegas.
+        # suyo—, y lo que le escribe un agente de otro proyecto sin nombrar linea sale por la
+        # principal, que es la linea del dueno. Nunca se elige a ciegas. La skill de avisos
+        # nombra siempre la suya (`--line`, la que dice `wa-scope owner`, todo-por-linea P7).
         principal = wa_store.linea_activa_en_disco()
         filas = [f for f in filas if f["account"] == principal]
     elif len(cuentas) > 1:
@@ -473,12 +475,13 @@ def informa(salida_json, dato, linea):
         print(linea)
 
 
-def revision_jev(texto, tono=None):
+def revision_jev(texto, tono=None, linea=None):
     """Lo que frena el envio segun Jev: None sin llave (manda el modo, como siempre), una
     lista vacia si el texto pasa, y los motivos si no. Un error es un motivo. `tono` es el
-    del chat o el global (T22.5): con ese registro se juzga."""
+    del chat o el global (T22.5): con ese registro se juzga. `linea` es la de la
+    conversacion: con Jev apagado en ella, tambien None (todo-por-linea, P6)."""
     clave = wa_jev.llave()
-    if not clave:
+    if not clave or not jev_en_linea(linea):
         return None
     revision = wa_jev.revisa_borrador(texto, clave, tono=tono)
     if revision is None:
@@ -855,7 +858,8 @@ def main():
     else:
         piso = revision_piso(sin_firma, niv)
         tono = (fila.get("tone") or "").strip() or ajuste("tone", linea=fila["account"])
-        jev = jev_permitido(revision_jev(a.text, tono) if jev_hace_falta(niv) else None, niv)
+        jev = jev_permitido(revision_jev(a.text, tono, fila["account"]) if jev_hace_falta(niv)
+                            else None, niv)
     frenado = motivos_de(piso, jev)
     if frenado:
         deja_borrador(con, fila, a.text, req_id, a.json, pedia_envio=True,

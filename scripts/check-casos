@@ -13311,6 +13311,86 @@ if NODE:
             os.environ.clear()
             os.environ.update(antes)
 
+
+# ── Jev de cada linea (odd/tasks/todo-por-linea.md, P6) ───────────────────────────────
+# UNA llave para el equipo (el espejo `jev.env`), y Jev encendido o apagado en cada linea:
+# la principal en la raiz (`jevEnabled`), cada otra en `ajustesPorLinea[<numero>]`. Un
+# mensaje de una linea con Jev apagado no se le manda a Jev, ni al entrar ni al salir.
+print("\njev de cada linea (P6)")
+
+
+def mensajes_a_jev(falso):
+    """Los textos de los mensajes que se le mandaron a Jev (no los borradores)."""
+    return [p["cuerpo"]["state"]["message_to_evaluate"]["text"] for p in falso.pedidos
+            if "message_to_evaluate" in p["cuerpo"]["state"]]
+
+
+def carga_wa_send(home):
+    os.environ.update(HOME=str(home), XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+                      APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"))
+    sys.dont_write_bytecode = True
+    cargador = importlib.machinery.SourceFileLoader("wa_send_p6", str(RAIZ / "bin" / "wa-send"))
+    spec = importlib.util.spec_from_loader("wa_send_p6", cargador)
+    modulo = importlib.util.module_from_spec(spec)
+    cargador.exec_module(modulo)
+    return modulo
+
+
+if NODE:
+    falso = JevFalso(jev_y_borradores)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(SOPORTE, "JA1", "@duenio no abre el login en la principal", 5,
+                                 mencion=True)])
+            llegan(home, SEGUNDA, [msg(SOPORTE, "JB1", "@duenio no abre el login en la segunda", 5,
+                                       mencion=True)], activar=False)
+            suma_linea(home, SEGUNDA)
+            js(home, "agent", "Agente Principal")
+            js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+            jsl(home, SEGUNDA, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+            datos = lee_storage(home)
+            datos["jevEnabled"] = True
+            datos["ajustesPorLinea"] = {SEGUNDA: {"jevEnabled": False}}
+            escribe_storage(home, datos)
+            js(home, "ingest")
+            textos = mensajes_a_jev(falso)
+            ok("Jev encendido en la principal y apagado en la otra: juzga el de la principal",
+               any("en la principal" in t for t in textos), f"{textos}")
+            ok("y el de la otra linea no se le manda a Jev",
+               not any("en la segunda" in t for t in textos), f"{textos}")
+
+            envio = carga_wa_send(home)
+            pedidos = len(falso.pedidos)
+            ok("wa-send: en la otra linea, con Jev apagado, no hay revision de Jev",
+               envio.revision_jev("Ya quedo listo", None, SEGUNDA) is None
+               and len(falso.pedidos) == pedidos, f"{falso.pedidos[pedidos:]}")
+            ok("y en la principal si", isinstance(envio.revision_jev("Ya quedo listo", None, A),
+                                                  list) and len(falso.pedidos) == pedidos + 1)
+
+            # Al reves: la principal sin decidir y la otra encendida. Que una linea encienda
+            # Jev no lo enciende en las demas.
+            datos = lee_storage(home)
+            datos.pop("jevEnabled", None)
+            datos["ajustesPorLinea"] = {SEGUNDA: {"jevEnabled": True}}
+            escribe_storage(home, datos)
+            llegan(home, A, [msg(SOPORTE, "JA2", "@duenio no abre el plan principal", 3,
+                                 mencion=True)])
+            llegan(home, SEGUNDA, [msg(SOPORTE, "JB2", "@duenio no abre el plan segundo",
+                                       3, mencion=True)], activar=False)
+            suma_linea(home, SEGUNDA)
+            js(home, "ingest")
+            textos = mensajes_a_jev(falso)
+            ok("encendido solo en la otra linea: juzga el de esa, y no el de la principal",
+               any("plan segundo" in t for t in textos)
+               and not any("plan principal" in t for t in textos), f"{textos}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

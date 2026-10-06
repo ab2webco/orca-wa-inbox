@@ -53,6 +53,7 @@ from wa_settings import (  # noqa: E402
     ajustes_propios,
     tableros_de_lineas,
     plugin_store_targets, settings_from_plugin, user_data_roots, valida_ajuste)
+from wa_settings import jev_en_linea, linea_de_avisos  # noqa: E402
 import wa_store  # noqa: E402  (solo lectura: de capture.db se lee la linea activa)
 import wa_jev  # noqa: E402  (el cliente de Jev: falla cerrado, nunca habilita)
 import wa_reglas  # noqa: E402  (el piso fijo de excepciones: corre siempre, con o sin Jev)
@@ -2459,7 +2460,12 @@ AYUDA_OWNER = f"""The chat where an agent of any project writes to the owner, fr
 The chat is the approval number the owner picked in the plugin settings (source
 `approval-number`) and, without one, the linked line's chat with itself (`own-chat`). It
 is never a number typed by hand. A send there skips the rules and Jev (only a
-secret-shaped value is held), so `wa-send "$OWNER" "<text>" --send` reaches him.
+secret-shaped value is held), so `wa-send "$OWNER" "<text>" --line "$LINE" --send`
+reaches him.
+
+With several lines linked, the owner picks in the plugin settings (tab Skills) which line
+these notices go through; without a choice, or with a line that is no longer linked, it is
+the main line. `line` in the JSON names it: pass it as `--line` to every send and wait.
 
 Exit codes: 0 = the chat is in mode `responder` (can_send); 1 = `{SIN_CHAT_DUENO}`, there
 is no owner chat (stdout empty); 3 = `{CHAT_DUENO_SIN_PERMISO}`, the chat exists but is not
@@ -5450,6 +5456,10 @@ def jev_juzga(mensaje, con=None):
     el JSON entero en la columna `jev`) y la proxima corrida lo lee de ahi. Jev puede
     frenar y escalar, nunca habilitar: un None —sin llave, con error o con timeout— no
     se cachea y nunca es una razon para cerrar; el caso queda en `recibido`, como hoy."""
+    # Una linea con Jev apagado no le manda nada a Jev, ni usa lo que dijo antes
+    # (todo-por-linea, P6): el caso sigue el camino de sin Jev.
+    if not jev_en_linea(mensaje.get("account") or None):
+        return None
     ya = jev_cacheado(con, mensaje)
     if ya is not None:
         return ya
@@ -11937,8 +11947,9 @@ POR_LINEA = ("tick", "ingest", "sync", "orca-aviso")
 # Lo que corre en TODAS las lineas aunque la corrida herede la linea de otra: un agente que
 # espera es un evento de la maquina, no de la linea de quien lo lanzo. Solo `--line` lo acota.
 DE_TODAS = ("orca-aviso",)
-# Lo del dueno es de la principal, la linea del dueno: su chat (`owner`). Sin `--line` corre
-# ahi aunque la corrida herede la linea de otra.
+# Lo del dueno: su chat (`owner`). Sin `--line` corre ahi aunque la corrida herede la linea
+# de otra. `owner` es el chat al que avisan las skills: el de la linea que el dueno eligio
+# para eso en el panel (todo-por-linea, P7), y sin eleccion el de la principal.
 DE_LA_PRINCIPAL = ("owner",)
 
 
@@ -11956,7 +11967,7 @@ def fija_linea(a):
         os.environ.pop(wa_store.LINEA_ENV, None)
         return
     if a.cmd in DE_LA_PRINCIPAL:
-        principal = wa_store.linea_activa_en_disco()
+        principal = linea_de_avisos() if a.cmd == "owner" else wa_store.linea_activa_en_disco()
         if principal:
             os.environ[wa_store.LINEA_ENV] = principal
         else:

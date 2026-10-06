@@ -64,7 +64,7 @@ const PLUGIN_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
 const {
   default: activate, intervaloSync, lanzarSidecar, programarIngesta, correrIngesta,
   INGESTA_AVISOS_MAX, INGESTA_ESPERA_MS, sembrarAjustesDeLinea, AJUSTES_DE_LINEA,
-  NO_HEREDAN
+  NO_HEREDAN, intervalosDeLineas, lineasDelTurno, sync
 } = await import('../main.mjs')
 const { workspaceDir, dataDir } = await import('../harness.mjs')
 
@@ -587,6 +587,54 @@ console.log('\nworker: cada cuanto relee WhatsApp')
     const ms = await intervaloSync(orca)
     ok(nombre, ms === esperado, `${guardado} -> ${ms} ms, se esperaban ${esperado}`)
   }
+}
+
+// El ritmo de cada linea (todo-por-linea, P5): `syncMinutes` es de cada linea. El worker
+// tiene UN reloj, al ritmo de la linea mas frecuente, y en cada vuelta sincroniza solo las
+// lineas a las que ya les toca segun el suyo.
+console.log('\nworker: P5 — cada linea relee WhatsApp a su ritmo')
+{
+  const A = 'pn:573000000001'
+  const B = 'pn:573000000011'
+  const MIN = 60000
+  const intervalos = intervalosDeLineas({ syncMinutes: '1' }, { [B]: { syncMinutes: '10' } }, [A, B])
+  ok('la principal usa el de la raiz y la otra el suyo',
+    intervalos[A] === MIN && intervalos[B] === 10 * MIN, JSON.stringify(intervalos))
+  const sinPropio = intervalosDeLineas({ syncMinutes: '15' }, { [B]: { agentName: 'x' } }, [A, B])
+  ok('una linea sin valor propio usa el de la principal, como lo lee wa-scope',
+    sinPropio[B] === 15 * MIN, JSON.stringify(sinPropio))
+  const vacio = intervalosDeLineas({ syncMinutes: '15' }, { [B]: { syncMinutes: null } }, [A, B])
+  ok('una en null es "sin valor": el de fabrica, no el de la principal',
+    vacio[B] === 5 * MIN, JSON.stringify(vacio))
+  const t0 = Date.UTC(2026, 9, 6, 12, 0, 0)
+  const ultimos = { [A]: t0, [B]: t0 }
+  ok('A a 1 min y B a 10: una vuelta a los 2 min sincroniza A y no B',
+    JSON.stringify(lineasDelTurno(intervalos, ultimos, t0 + 2 * MIN)) === JSON.stringify([A]),
+    JSON.stringify(lineasDelTurno(intervalos, ultimos, t0 + 2 * MIN)))
+  ok('a los 10 min, las dos',
+    lineasDelTurno(intervalos, ultimos, t0 + 10 * MIN).join() === [A, B].join())
+  ok('antes del minuto, ninguna', lineasDelTurno(intervalos, ultimos, t0 + 30000).length === 0)
+  ok('una linea que nunca sincronizo le toca ya',
+    lineasDelTurno(intervalos, { [A]: t0 }, t0 + 2 * MIN).join() === [A, B].join())
+
+  const orca = hostFalso(RAIZ, { syncMinutes: '10', ajustesPorLinea: { [B]: { syncMinutes: '1' } } })
+  ok('el reloj del worker va al ritmo de la linea mas frecuente',
+    await intervaloSync(orca, [A, B]) === MIN, String(await intervaloSync(orca, [A, B])))
+  ok('y sin lineas nombradas, al de la raiz, como siempre',
+    await intervaloSync(orca) === 10 * MIN, String(await intervaloSync(orca)))
+
+  const registro = join(RAIZ, 'syncs-por-linea.txt')
+  const dir = herramientas('sync-por-linea', '#!/bin/sh\n' +
+    `echo "$@" >> ${JSON.stringify(registro)}\n` +
+    'echo \'[{"synced": true, "destinos": []}]\'\n')
+  const host = hostFalso(dir, {})
+  const listo = await sync(host, { toolsDir: dir, trigger: 'timer', lineas: [A] })
+  const corridas = existsSync(registro) ? readFileSync(registro, 'utf8').trim().split('\n') : []
+  ok('el sync de una vuelta corre solo en las lineas a las que les toca',
+    listo === true && corridas.length === 1 && corridas[0] === `sync --json --line ${A}`,
+    JSON.stringify(corridas))
+  ok('y deja dicho como le fue', host.store.syncStatus?.ok === true &&
+    host.store.syncStatus?.trigger === 'timer', JSON.stringify(host.store.syncStatus))
 }
 
 // ───────── el estado del sistema se PUBLICA, tambien cuando es malo ─────────
@@ -2025,7 +2073,7 @@ console.log('\nworker: A4 — una linea nueva empieza con los ajustes de la prin
     propios && Object.keys(propios).sort().join() === [...AJUSTES_DE_LINEA].sort().join() &&
     propios.agentName === 'Agente Principal' &&
     JSON.stringify(propios.owners) === JSON.stringify(raiz.owners) &&
-    propios.firstReply.mode === 'ack' && !('syncMinutes' in propios), JSON.stringify(copia))
+    propios.firstReply.mode === 'ack' && !('toolsDir' in propios), JSON.stringify(copia))
   ok('lo que la principal no tiene queda vacio y no ausente: no hereda lo que elija despues',
     propios && propios.ackText === null && propios.slaMinutes === null, JSON.stringify(propios))
   propios.owners.push({ id: 'otro@lid' })
@@ -2075,6 +2123,7 @@ console.log('\nworker: A4 — una linea nueva empieza con los ajustes de la prin
     const orca = hostFalso(herramientas('ajustes', '#!/bin/sh\necho \'[]\'\n'), {
       ...raiz,
       syncMinutes: '10',
+      toolsDir: '/ruta/de/la/maquina',
       lineas: [{ carpeta: 'pn-573000000002', cuenta: 'pn:573000000002', tipo: 'support' },
         { carpeta: 'pn-573000000001', cuenta: 'pn:573000000001', tipo: 'support' },
         { carpeta: 'pn-573000000012', cuenta: 'pn:573000000012', tipo: 'support' }],
@@ -2086,7 +2135,7 @@ console.log('\nworker: A4 — una linea nueva empieza con los ajustes de la prin
     ok('al decir su numero, la linea nueva queda con los ajustes de la principal',
       linea && linea.agentName === 'Agente Principal' && linea.tone === 'Tono de la principal' &&
       linea.approvalNumber === '100000000000001@lid' && linea.ackText === null &&
-      !('syncMinutes' in linea), JSON.stringify(orca.store.ajustesPorLinea))
+      linea.syncMinutes === '10' && !('toolsDir' in linea), JSON.stringify(orca.store.ajustesPorLinea))
     ok('la principal no tiene ajustes aparte: los suyos siguen en la raiz',
       !orca.store.ajustesPorLinea?.['pn:573000000002'] && orca.store.agentName === 'Agente Principal',
       JSON.stringify(orca.store.ajustesPorLinea))
@@ -2690,6 +2739,75 @@ console.log('\nworker: la llave de Jev, su espejo 0600 y el aviso de que no es o
     orca.store.jevStatus.keySet === true && readFileSync(espejo, 'utf8') === AJENO,
     JSON.stringify([orca.store.jevStatus, readFileSync(espejo, 'utf8')]))
   apagar()
+}
+
+// ───────── P6: Jev encendido o apagado en cada linea (todo-por-linea) ─────────
+// UNA llave y UN espejo para el equipo; el interruptor es de cada linea. El espejo existe
+// mientras alguna linea tenga Jev encendido, y el estado dice el de cada una.
+console.log('\nworker: P6 — Jev de cada linea, con una sola llave')
+{
+  const LLAVE = 'tsk-FALSA-3333333333333333'
+  const ESPEJO = `# wa-inbox jev mirror v1\nTYPESAFE_API_KEY=${LLAVE}\n`
+  const B = 'pn:573000000011'
+  const espejo = join(process.env.HOME, '.wa-inbox', 'jev.env')
+  const contenido = () => existsSync(espejo) ? readFileSync(espejo, 'utf8') : null
+  rmSync(join(process.env.HOME, '.wa-inbox'), { recursive: true, force: true })
+
+  const orca = hostFalso(herramientas('jev-lineas', '#!/bin/sh\necho \'[]\'\n'), {
+    chats: [], jevEnabled: false,
+    ajustesPorLinea: { [B]: { agentName: 'Agente Segunda' }, 'pn:573000000013': { claveFutura: 1 } } })
+  orca.secrets.jevKey = LLAVE
+  const { apagar } = await arranca(orca)
+  await hasta(() => orca.store.jevStatus)
+  const pedir = async (id, extra) => {
+    orca.store.jevRequest = { id, at: new Date().toISOString(), ...extra }
+    await hasta(() => orca.store.jevResult && orca.store.jevResult.requestId === id, 15000)
+    return orca.store.jevResult
+  }
+
+  let v = await pedir('jev-linea-1', { action: 'activar', enabled: true, linea: B })
+  ok('encender Jev en otra linea lo guarda en lo de ESA linea, y la principal sigue apagada',
+    v && v.ok === true && orca.store.ajustesPorLinea[B].jevEnabled === true &&
+    orca.store.jevEnabled === false && orca.store.ajustesPorLinea[B].agentName === 'Agente Segunda' &&
+    JSON.stringify(orca.store.ajustesPorLinea['pn:573000000013']) === '{"claveFutura":1}',
+    JSON.stringify([v, orca.store.jevEnabled, orca.store.ajustesPorLinea]))
+  ok('con una sola linea encendida el espejo existe: la llave es una sola',
+    contenido() === ESPEJO && orca.store.jevStatus.mirror === 'activo', JSON.stringify(orca.store.jevStatus))
+  ok('y el estado dice el de cada linea',
+    orca.store.jevStatus.enabled === false && orca.store.jevStatus.lines?.[B] === true,
+    JSON.stringify(orca.store.jevStatus))
+
+  v = await pedir('jev-linea-2', { action: 'activar', enabled: true })
+  v = await pedir('jev-linea-3', { action: 'activar', enabled: false, linea: B })
+  ok('apagar la otra linea no apaga la principal, y el espejo sigue',
+    v && v.ok === true && orca.store.jevEnabled === true &&
+    orca.store.ajustesPorLinea[B].jevEnabled === false && contenido() === ESPEJO &&
+    orca.store.jevStatus.enabled === true && orca.store.jevStatus.lines?.[B] === false,
+    JSON.stringify([orca.store.jevEnabled, orca.store.ajustesPorLinea[B], orca.store.jevStatus]))
+
+  v = await pedir('jev-linea-4', { action: 'activar', enabled: false })
+  ok('con todas apagadas el espejo se va, y la llave queda en la boveda',
+    v && v.ok === true && contenido() === null && orca.secrets.jevKey === LLAVE &&
+    orca.store.jevStatus.mirror === 'apagado', JSON.stringify(orca.store.jevStatus))
+
+  v = await pedir('jev-linea-5', { action: 'activar', enabled: true, linea: 42 })
+  ok('una linea que no es una cuenta se rechaza sin tocar nada',
+    v && v.ok === false && v.code === 'argumentos-invalidos' && contenido() === null,
+    JSON.stringify(v))
+  apagar()
+
+  // Al arrancar, el espejo tambien sale de todas las lineas: la principal apagada y la
+  // otra encendida lo dejan escrito.
+  rmSync(join(process.env.HOME, '.wa-inbox'), { recursive: true, force: true })
+  const orca2 = hostFalso(herramientas('jev-lineas-2', '#!/bin/sh\necho \'[]\'\n'),
+    { chats: [], jevEnabled: false, ajustesPorLinea: { [B]: { jevEnabled: true } } })
+  orca2.secrets.jevKey = LLAVE
+  const { apagar: apagar2 } = await arranca(orca2)
+  await hasta(() => orca2.store.jevStatus && orca2.store.jevStatus.mirror === 'activo')
+  ok('al arrancar con Jev solo en otra linea, el espejo queda escrito',
+    contenido() === ESPEJO && orca2.store.jevStatus.lines?.[B] === true,
+    JSON.stringify(orca2.store.jevStatus))
+  apagar2()
 }
 
 // ───────── T6: las acciones del dueno sobre una tarjeta del tablero ─────────
