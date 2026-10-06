@@ -1081,7 +1081,6 @@
              llave". -->
         <section class="card" id="jev-card">
           <h2 data-t="jevLegend"></h2>
-          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
           <p class="jev-aviso" id="jev-aviso" data-t="jevDisclosure"></p>
           <p class="pairing-msg" id="jev-status"></p>
           <div class="switch-row">
@@ -1092,6 +1091,7 @@
             <span class="said" id="said-jev-enabled"></span>
           </div>
           <p class="hint" id="jev-switch-text"></p>
+          <p class="hint" id="jev-key-shared" data-t="jevKeyShared"></p>
           <label for="jev-key" data-t="jevKeyLabel"></label>
           <input id="jev-key" type="password" autocomplete="off" autocapitalize="off"
                  spellcheck="false" data-t-ph="jevKeyPh" />
@@ -1729,6 +1729,8 @@
           jevSaveKey: 'Guardar llave',
           jevRemoveKey: 'Quitar llave',
           jevEnabledLabel: 'Usar Jev',
+          jevKeyShared: 'La llave es una sola para este equipo: la usan todas sus lineas. ' +
+            'Encender o apagar Jev vale solo para la linea que esta viendo.',
           jevOff: 'Apagado: no se envia nada',
           jevOn: 'Encendido: envia a api.typesafe.ai',
           jevStOffNo: 'Apagado · sin llave',
@@ -2292,6 +2294,8 @@
           jevSaveKey: 'Save key',
           jevRemoveKey: 'Remove key',
           jevEnabledLabel: 'Use Jev',
+          jevKeyShared: 'The key is one for this computer: every line uses it. Turning Jev ' +
+            'on or off applies only to the line you are viewing.',
           jevOff: 'Off: nothing is sent',
           jevOn: 'On: sends to api.typesafe.ai',
           jevStOffNo: 'Off · no key',
@@ -2881,6 +2885,8 @@
         jevSaveKey: 'Salvar chave',
         jevRemoveKey: 'Remover chave',
         jevEnabledLabel: 'Usar o Jev',
+        jevKeyShared: 'A chave e uma so para este computador: todas as linhas a usam. Ligar ' +
+          'ou desligar o Jev vale so para a linha que voce esta vendo.',
         jevOff: 'Desligado: nada e enviado',
         jevOn: 'Ligado: envia para api.typesafe.ai',
         jevStOffNo: 'Desligado · sem chave',
@@ -3400,7 +3406,8 @@
       var AJUSTES_DE_LINEA = ['agentName', 'ownerName', 'tone', 'owners', 'approvalNumber',
         'approvalLang', 'ackMode', 'ackText', 'ackQuietMinutes', 'greetingMode', 'greetingText',
         'firstReply', 'slaMinutes', 'projectQuestionHours', 'inboxDays', 'transcribeLang',
-        'syncMinutes']
+        'syncMinutes',
+        'jevEnabled']
       var CONTENEDOR_AJUSTES = 'ajustesPorLinea'
       function esDeLinea (k) { return AJUSTES_DE_LINEA.indexOf(k) !== -1 }
       /** El valor de un ajuste para la linea `cuenta`, del contenedor ya leido. Lo que la
@@ -6226,9 +6233,17 @@
         'espejo-fallo': 'jevMirrorFail'
       }
 
+      /** Jev en la linea que se mira (todo-por-linea, P6): la principal es `enabled`; cada
+       *  otra, `lines[<cuenta>]`, y la que no esta ahi sigue a la principal. */
+      function jevEnVista (s) {
+        var otra = otraLineaVista()
+        var lineas = s && s.lines && typeof s.lines === 'object' ? s.lines : {}
+        if (otra && Object.prototype.hasOwnProperty.call(lineas, otra)) return lineas[otra] === true
+        return !!s && s.enabled === true
+      }
       function renderJev (st) {
         var s = st && typeof st === 'object' ? st : {}
-        var enabled = s.enabled === true
+        var enabled = jevEnVista(s)
         var keySet = s.keySet === true
         el('jev-status').textContent =
           t(enabled ? (keySet ? 'jevStOnYes' : 'jevStOnNo') : (keySet ? 'jevStOffYes' : 'jevStOffNo'))
@@ -6293,7 +6308,7 @@
       // Encender con la llave en la boveda es el gesto que reemplaza un archivo ajeno: el
       // boton manda exactamente ese pedido, sin llave (el panel nunca la tiene).
       el('jev-use-saved').addEventListener('click', function (event) {
-        busy(event.currentTarget, pedirJev({ action: 'activar', enabled: true }).then(function (v) {
+        busy(event.currentTarget, pedirJev(pedidoJevActivar(true)).then(function (v) {
           jevDecir('said-jev-key', v, 'jevSaved')
           return jevRefrescar()
         }))
@@ -6310,6 +6325,14 @@
       // encender Jev porque el select no abria, y un "Guardar" aparte despues de un
       // interruptor es un segundo paso que nadie espera. Manda el mismo pedido de antes.
       var jevEnviando = false, jevUltimo = null
+      /** Encender o apagar Jev en la linea que se mira: la otra linea viaja en `linea`; la
+       *  principal no la nombra, como siempre. */
+      function pedidoJevActivar (encender) {
+        var pedido = { action: 'activar', enabled: encender }
+        var otra = otraLineaVista()
+        if (otra) pedido.linea = otra
+        return pedido
+      }
       el('jev-enabled').addEventListener('click', function (event) {
         if (jevEnviando) return
         var sw = event.currentTarget
@@ -6319,7 +6342,7 @@
         sw.setAttribute('aria-busy', 'true')
         sw.disabled = true
         el('jev-switch-text').textContent = t(encender ? 'jevOn' : 'jevOff')
-        pedirJev({ action: 'activar', enabled: encender }).then(function (v) {
+        pedirJev(pedidoJevActivar(encender)).then(function (v) {
           jevDecir('said-jev-enabled', v, 'jevSaved')
           jevEnviando = false
           sw.removeAttribute('aria-busy')
@@ -6553,7 +6576,7 @@
             }), ir: 'chats', clave: 'chkChat' },
           { item: 'proyectos', ok: proyectos.length > 0, ir: 'proyectos',
             clave: 'chkProyectos', nota: 'chkRecommended' },
-          { item: 'jev', ok: jev.enabled === true && jev.keySet === true, ir: 'aprobacion',
+          { item: 'jev', ok: jevEnVista(jev) && jev.keySet === true, ir: 'aprobacion',
             clave: 'chkJev', nota: 'chkOptional' }
         ]
       }
@@ -6861,6 +6884,8 @@
         olvidarAjustesDeLinea()
         resetScopeForm()
         renderVistaLineas()
+        // Jev ya esta leido para todas las lineas (`jevStatus`): se repinta el de la nueva.
+        if (jevUltimo && !jevEnviando) renderJev(jevUltimo)
         if (nueva) pintarLeyendoLinea(nueva)
         reload().then(function () {
           if (autoPedida) leerAuto()

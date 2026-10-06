@@ -330,16 +330,20 @@ CONTENEDOR_DE_LINEA = "porLinea"
 # tiene en null es "sin valor", y no cae a la raiz: asi una linea nueva que copio una clave
 # vacia de la principal no hereda lo que la principal elija despues.
 #
-# Lo demas es de la maquina y vive solo en la raiz: la transcripcion y su calidad, Jev, los
-# avisos de Orca, la cuenta de Claude del bot, las skills, los proyectos y las rutas.
+# Lo demas es de la maquina y vive solo en la raiz: la transcripcion y su calidad, la llave
+# de Jev, los avisos de Orca, la cuenta de Claude del bot, las skills, los proyectos y las
+# rutas.
 #
 # El ritmo del sync (`syncMinutes`) es de cada linea (todo-por-linea, P5): el worker tiene
-# un solo reloj, al de la linea mas frecuente, y sincroniza cada linea cuando le toca.
+# un solo reloj, al de la linea mas frecuente, y sincroniza cada linea cuando le toca. Jev
+# encendido o apagado (`jevEnabled`, P6) tambien: la llave es una sola, la usa cada linea
+# que lo tiene encendido (`jev_en_linea`).
 AJUSTES_DE_LINEA = ("agentName", "ownerName", "tone", "owners", "approvalNumber",
                     "approvalLang", "ackMode", "ackText", "ackQuietMinutes", "greetingMode",
                     "greetingText", "firstReply", "slaMinutes", "projectQuestionHours",
                     "inboxDays", "transcribeLang",
-                    "syncMinutes")
+                    "syncMinutes",
+                    "jevEnabled")
 CONTENEDOR_AJUSTES = "ajustesPorLinea"
 CONTENEDORES = (CONTENEDOR_DE_LINEA, *CONTENEDOR_PROPIO.values(), CONTENEDOR_AJUSTES)
 
@@ -720,6 +724,28 @@ def duenos(linea=None):
 # Los idiomas en que sale un aviso por WhatsApp (T14). El panel guarda el suyo al elegir el
 # numero: el motor no tiene otra forma de saber en que idioma trabaja el usuario.
 IDIOMAS_AVISO = ("es", "en")
+
+
+PANEL_JEV = "jevEnabled"
+
+
+def jev_en_linea(linea=None):
+    """Si Jev revisa lo de la linea `linea` (o la de esta corrida), todo-por-linea P6.
+
+    La llave es una sola para el equipo (`jev.env`, que el worker deja mientras alguna
+    linea tenga Jev encendido); encendido o apagado es de cada linea: la principal en la
+    raiz (`jevEnabled`), cada otra en sus ajustes propios, y la que no lo tiene propio sigue
+    a la principal. Solo `true` es encendido: es un booleano, y `settings_from_plugin` solo
+    traduce textos.
+
+    Un storage donde nadie decidio nada (ni la raiz ni ninguna linea) es una instalacion de
+    antes de esto, o sin panel: manda la llave, como siempre."""
+    raw = plugin_store_raw()
+    decidido = PANEL_JEV in raw or any(isinstance(p, dict) and PANEL_JEV in p
+                                       for p in _contenedor(raw, CONTENEDOR_AJUSTES).values())
+    if not decidido:
+        return True
+    return store_de_linea(linea).get(PANEL_JEV) is True
 
 
 def numero_aprobacion(linea=None):

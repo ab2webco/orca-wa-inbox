@@ -52,6 +52,7 @@ from wa_settings import (  # noqa: E402
     AJUSTES_DE_LINEA,
     tableros_de_lineas,
     plugin_store_targets, settings_from_plugin, user_data_roots, valida_ajuste)
+from wa_settings import jev_en_linea  # noqa: E402
 import wa_store  # noqa: E402  (solo lectura: de capture.db se lee la linea activa)
 import wa_jev  # noqa: E402  (el cliente de Jev: falla cerrado, nunca habilita)
 import wa_reglas  # noqa: E402  (el piso fijo de excepciones: corre siempre, con o sin Jev)
@@ -5337,6 +5338,10 @@ def jev_juzga(mensaje, con=None):
     el JSON entero en la columna `jev`) y la proxima corrida lo lee de ahi. Jev puede
     frenar y escalar, nunca habilitar: un None —sin llave, con error o con timeout— no
     se cachea y nunca es una razon para cerrar; el caso queda en `recibido`, como hoy."""
+    # Una linea con Jev apagado no le manda nada a Jev, ni usa lo que dijo antes
+    # (todo-por-linea, P6): el caso sigue el camino de sin Jev.
+    if not jev_en_linea(mensaje.get("account") or None):
+        return None
     ya = jev_cacheado(con, mensaje)
     if ya is not None:
         return ya

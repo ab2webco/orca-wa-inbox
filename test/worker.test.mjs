@@ -2741,6 +2741,75 @@ console.log('\nworker: la llave de Jev, su espejo 0600 y el aviso de que no es o
   apagar()
 }
 
+// ───────── P6: Jev encendido o apagado en cada linea (todo-por-linea) ─────────
+// UNA llave y UN espejo para el equipo; el interruptor es de cada linea. El espejo existe
+// mientras alguna linea tenga Jev encendido, y el estado dice el de cada una.
+console.log('\nworker: P6 — Jev de cada linea, con una sola llave')
+{
+  const LLAVE = 'tsk-FALSA-3333333333333333'
+  const ESPEJO = `# wa-inbox jev mirror v1\nTYPESAFE_API_KEY=${LLAVE}\n`
+  const B = 'pn:573000000011'
+  const espejo = join(process.env.HOME, '.wa-inbox', 'jev.env')
+  const contenido = () => existsSync(espejo) ? readFileSync(espejo, 'utf8') : null
+  rmSync(join(process.env.HOME, '.wa-inbox'), { recursive: true, force: true })
+
+  const orca = hostFalso(herramientas('jev-lineas', '#!/bin/sh\necho \'[]\'\n'), {
+    chats: [], jevEnabled: false,
+    ajustesPorLinea: { [B]: { agentName: 'Agente Segunda' }, 'pn:573000000013': { claveFutura: 1 } } })
+  orca.secrets.jevKey = LLAVE
+  const { apagar } = await arranca(orca)
+  await hasta(() => orca.store.jevStatus)
+  const pedir = async (id, extra) => {
+    orca.store.jevRequest = { id, at: new Date().toISOString(), ...extra }
+    await hasta(() => orca.store.jevResult && orca.store.jevResult.requestId === id, 15000)
+    return orca.store.jevResult
+  }
+
+  let v = await pedir('jev-linea-1', { action: 'activar', enabled: true, linea: B })
+  ok('encender Jev en otra linea lo guarda en lo de ESA linea, y la principal sigue apagada',
+    v && v.ok === true && orca.store.ajustesPorLinea[B].jevEnabled === true &&
+    orca.store.jevEnabled === false && orca.store.ajustesPorLinea[B].agentName === 'Agente Segunda' &&
+    JSON.stringify(orca.store.ajustesPorLinea['pn:573000000013']) === '{"claveFutura":1}',
+    JSON.stringify([v, orca.store.jevEnabled, orca.store.ajustesPorLinea]))
+  ok('con una sola linea encendida el espejo existe: la llave es una sola',
+    contenido() === ESPEJO && orca.store.jevStatus.mirror === 'activo', JSON.stringify(orca.store.jevStatus))
+  ok('y el estado dice el de cada linea',
+    orca.store.jevStatus.enabled === false && orca.store.jevStatus.lines?.[B] === true,
+    JSON.stringify(orca.store.jevStatus))
+
+  v = await pedir('jev-linea-2', { action: 'activar', enabled: true })
+  v = await pedir('jev-linea-3', { action: 'activar', enabled: false, linea: B })
+  ok('apagar la otra linea no apaga la principal, y el espejo sigue',
+    v && v.ok === true && orca.store.jevEnabled === true &&
+    orca.store.ajustesPorLinea[B].jevEnabled === false && contenido() === ESPEJO &&
+    orca.store.jevStatus.enabled === true && orca.store.jevStatus.lines?.[B] === false,
+    JSON.stringify([orca.store.jevEnabled, orca.store.ajustesPorLinea[B], orca.store.jevStatus]))
+
+  v = await pedir('jev-linea-4', { action: 'activar', enabled: false })
+  ok('con todas apagadas el espejo se va, y la llave queda en la boveda',
+    v && v.ok === true && contenido() === null && orca.secrets.jevKey === LLAVE &&
+    orca.store.jevStatus.mirror === 'apagado', JSON.stringify(orca.store.jevStatus))
+
+  v = await pedir('jev-linea-5', { action: 'activar', enabled: true, linea: 42 })
+  ok('una linea que no es una cuenta se rechaza sin tocar nada',
+    v && v.ok === false && v.code === 'argumentos-invalidos' && contenido() === null,
+    JSON.stringify(v))
+  apagar()
+
+  // Al arrancar, el espejo tambien sale de todas las lineas: la principal apagada y la
+  // otra encendida lo dejan escrito.
+  rmSync(join(process.env.HOME, '.wa-inbox'), { recursive: true, force: true })
+  const orca2 = hostFalso(herramientas('jev-lineas-2', '#!/bin/sh\necho \'[]\'\n'),
+    { chats: [], jevEnabled: false, ajustesPorLinea: { [B]: { jevEnabled: true } } })
+  orca2.secrets.jevKey = LLAVE
+  const { apagar: apagar2 } = await arranca(orca2)
+  await hasta(() => orca2.store.jevStatus && orca2.store.jevStatus.mirror === 'activo')
+  ok('al arrancar con Jev solo en otra linea, el espejo queda escrito',
+    contenido() === ESPEJO && orca2.store.jevStatus.lines?.[B] === true,
+    JSON.stringify(orca2.store.jevStatus))
+  apagar2()
+}
+
 // ───────── T6: las acciones del dueno sobre una tarjeta del tablero ─────────
 console.log('\nworker: las acciones del dueno sobre el tablero')
 

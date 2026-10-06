@@ -545,7 +545,10 @@ async function leerLlaveJev(orca, estado) {
  *  que corre por su cuenta (arranque, revision de salud) lo respeta y lo dice en el
  *  estado (`ajeno`), porque el lector de Python lo trata como "sin llave" y el usuario
  *  tiene que saber por que. */
-async function aplicarJev(orca, habilitado, llave, { forzar = false } = {}) {
+async function aplicarJev(orca, jev, llave, { forzar = false } = {}) {
+  // UNA llave y UN espejo para el equipo (todo-por-linea, P6): el espejo existe mientras
+  // alguna linea tenga Jev encendido; cada CLI mira despues si SU linea lo tiene.
+  const habilitado = jev.alguna
   const activo = habilitado && llave !== null
   const r = activo
     ? await espejoJev(forzar ? 'guardar' : 'sincronizar', llave)
@@ -559,18 +562,38 @@ async function aplicarJev(orca, habilitado, llave, { forzar = false } = {}) {
   } else {
     espejo = habilitado ? 'sin-llave' : 'apagado'
   }
-  const estado = { at: new Date().toISOString(), enabled: habilitado,
+  // `enabled` es el de la principal, como siempre; `lines`, el de cada otra linea.
+  const estado = { at: new Date().toISOString(), enabled: jev.principal, lines: jev.lineas,
     keySet: llave !== null, mirror: espejo }
   await guardar(orca, JEV_STATUS_KEY, estado)
   return estado
+}
+
+/** Jev en cada linea (todo-por-linea, P6). Pura. La principal lo tiene en la raiz
+ *  (`jevEnabled`); cada otra, en `ajustesPorLinea[<cuenta>].jevEnabled`, y la que no lo
+ *  tiene propio sigue a la principal, con la misma regla que wa-scope. Solo `true` es
+ *  encendido. `alguna` es si el espejo de la llave tiene que existir. */
+export function jevPorLinea (raiz, contenedor) {
+  const principal = raiz === true
+  const todo = contenedor && typeof contenedor === 'object' && !Array.isArray(contenedor)
+    ? contenedor : {}
+  const lineas = {}
+  for (const [cuenta, propios] of Object.entries(todo)) {
+    if (!propios || typeof propios !== 'object' || Array.isArray(propios)) continue
+    lineas[cuenta] = 'jevEnabled' in propios ? propios.jevEnabled === true : principal
+  }
+  return { principal, lineas, alguna: principal || Object.values(lineas).some(Boolean) }
+}
+
+async function leerJev(orca) {
+  return jevPorLinea(await leer(orca, JEV_ENABLED_KEY), await leer(orca, AJUSTES_POR_LINEA_KEY))
 }
 
 /** Lo que dicen los ajustes ahora mismo, aplicado: al arrancar y en cada revision de
  *  salud, que ya existe. No hay un bucle propio: un espejo que alguien borro o copio a
  *  mano se nota en la proxima vuelta, sin otra llamada al host por tick. */
 async function reconciliarJev(orca, estado) {
-  const habilitado = (await leer(orca, JEV_ENABLED_KEY)) === true
-  return aplicarJev(orca, habilitado, await leerLlaveJev(orca, estado))
+  return aplicarJev(orca, await leerJev(orca), await leerLlaveJev(orca, estado))
 }
 
 /** Cuanto se espera a que el sidecar muera por las buenas antes de forzarlo. */
@@ -1294,7 +1317,8 @@ export const AJUSTES_DE_LINEA = Object.freeze(['agentName', 'ownerName', 'tone',
   'approvalNumber', 'approvalLang', 'ackMode', 'ackText', 'ackQuietMinutes', 'greetingMode',
   'greetingText', 'firstReply', 'slaMinutes', 'projectQuestionHours', 'inboxDays',
   'transcribeLang',
-  'syncMinutes'])
+  'syncMinutes',
+  'jevEnabled'])
 export const AJUSTES_POR_LINEA_KEY = 'ajustesPorLinea'
 
 /** Los ajustes propios de una linea que empieza: una copia de los de la principal (`raiz`).
@@ -2399,8 +2423,8 @@ export default function activate(orca) {
       orca.log(`secrets.set failed (${motivoDe(error)})`)
       return { ok: false, code: JEV_VEREDICTO.BOVEDA_FALLO }
     }
-    const habilitado = (await leer(orca, JEV_ENABLED_KEY)) === true
-    const st = await aplicarJev(orca, habilitado, valor, { forzar: true })
+    const jev = await leerJev(orca)
+    const st = await aplicarJev(orca, jev, valor, { forzar: true })
     return st.mirror === 'fallo'
       ? { ok: false, code: JEV_VEREDICTO.ESPEJO_FALLO, mirror: st.mirror }
       : { ok: true, code: JEV_VEREDICTO.GUARDADA, mirror: st.mirror }
@@ -2413,23 +2437,50 @@ export default function activate(orca) {
       orca.log(`secrets.delete failed (${motivoDe(error)})`)
       return { ok: false, code: JEV_VEREDICTO.BOVEDA_FALLO }
     }
-    const habilitado = (await leer(orca, JEV_ENABLED_KEY)) === true
-    const st = await aplicarJev(orca, habilitado, null)
+    const jev = await leerJev(orca)
+    const st = await aplicarJev(orca, jev, null)
     return st.mirror === 'fallo'
       ? { ok: false, code: JEV_VEREDICTO.ESPEJO_FALLO, mirror: st.mirror }
       : { ok: true, code: JEV_VEREDICTO.QUITADA, mirror: st.mirror }
   }
 
+  /** Escribe UN ajuste propio de otra linea en `ajustesPorLinea[cuenta]`, en la misma
+   *  cadena que la siembra: dos escrituras del contenedor a la vez se borrarian una a la
+   *  otra. Lo de las otras lineas y las claves que no se conocen quedan como estaban. */
+  function escribirAjusteDeLinea (cuenta, clave, valor) {
+    const hecho = cadenaAjustes.then(async () => {
+      const actual = (await orca.host.call('storage.get', { key: AJUSTES_POR_LINEA_KEY }))?.value
+      const todo = actual && typeof actual === 'object' && !Array.isArray(actual) ? { ...actual } : {}
+      const previos = todo[cuenta]
+      const propios = previos && typeof previos === 'object' && !Array.isArray(previos)
+        ? { ...previos } : {}
+      propios[clave] = valor
+      todo[cuenta] = propios
+      await orca.host.call('storage.set', { key: AJUSTES_POR_LINEA_KEY, value: todo })
+    })
+    // La cadena nunca queda rechazada: la siembra que venga despues tiene que correr igual.
+    cadenaAjustes = hecho.catch(() => {})
+    return hecho
+  }
+
   async function activarJev (pedido) {
-    if (typeof pedido.enabled !== 'boolean') {
+    // `linea` (todo-por-linea, P6): la cuenta de la linea que mira el panel. Sin ella, o
+    // con la de la principal, es la principal, en la raiz.
+    const linea = pedido.linea ?? null
+    if (typeof pedido.enabled !== 'boolean' ||
+        (linea !== null && (typeof linea !== 'string' || !LINEA_RE.test(linea)))) {
       return { ok: false, code: JEV_VEREDICTO.ARGUMENTOS_INVALIDOS }
     }
-    await guardar(orca, JEV_ENABLED_KEY, pedido.enabled)
+    if (linea === null || linea === (registro[0]?.cuenta ?? null)) {
+      await guardar(orca, JEV_ENABLED_KEY, pedido.enabled)
+    } else {
+      await escribirAjusteDeLinea(linea, 'jevEnabled', pedido.enabled)
+    }
     // Encender es un gesto explicito del dueno, igual que guardar la llave: con la llave
     // ya en la boveda reemplaza un `jev.env` escrito a mano antes de que el plugin lo
     // administrara. Sin esto el dueno guardaba la llave con Jev apagado, lo encendia, y
     // se quedaba en `ajeno` sin nada que escribir en el campo.
-    const st = await aplicarJev(orca, pedido.enabled, await leerLlaveJev(orca, estadoJev),
+    const st = await aplicarJev(orca, await leerJev(orca), await leerLlaveJev(orca, estadoJev),
       { forzar: pedido.enabled })
     const code = pedido.enabled ? JEV_VEREDICTO.ACTIVADO : JEV_VEREDICTO.DESACTIVADO
     return st.mirror === 'fallo'

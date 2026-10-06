@@ -8474,7 +8474,7 @@ console.log('\nconfig.html — lineas claras: que es de cada linea y que es del 
   }
   ok('ya no hay notas de "Aplica a sus N lineas": cada pestana es de la linea elegida',
     !doc.querySelector('.nota-lineas') && !/Aplica a sus/.test(doc.body.textContent))
-  const MAQUINA = ['routes-card', 'projects-card', 'orca-notices-card', 'jev-card',
+  const MAQUINA = ['routes-card', 'projects-card', 'orca-notices-card',
     'bot-account-card', 'skills-card', 'voice-card']
   const notaEn = (id) => [...doc.querySelectorAll(`#${id} .nota-maquina`)]
   for (const id of MAQUINA) {
@@ -8484,7 +8484,7 @@ console.log('\nconfig.html — lineas claras: que es de cada linea y que es del 
       notaEn(id).map((n) => `${n.hidden}:${n.textContent}`).join(' | '))
   }
   const PROPIAS = ['agent-card', 'owners-card', 'auto-card', 'sla-card', 'pq-card', 'scope-form',
-    'reading-card']
+    'reading-card', 'jev-card']
   ok('lo de cada linea no lleva esa nota', PROPIAS.every((id) => notaEn(id).length === 0),
     PROPIAS.filter((id) => notaEn(id).length).join())
   ok('los avisos de Orca dicen que salen por la principal',
@@ -8684,6 +8684,56 @@ console.log('\nconfig.html — P5: con varias lineas, el triage corre al ritmo d
   ok('la frase existe en los tres idiomas, el portugues propio',
     S.es.triagePaceShared && S.en.triagePaceShared && S.pt.triagePaceShared &&
     S.pt.triagePaceShared !== S.en.triagePaceShared)
+}
+
+console.log('\nconfig.html — P6: Jev se enciende y se apaga en cada linea, con una sola llave')
+{
+  const ahora = () => new Date().toISOString()
+  const storage = Object.assign(dosLineasConAjustes(), {
+    jevStatus: { at: ahora(), enabled: true, keySet: true, mirror: 'activo', lines: { [L_B]: false } } })
+  const { doc } = await montar('config.html', storage, 'es-419', trabajadorJev((pedido, st) => {
+    const lines = Object.assign({}, st.jevStatus.lines)
+    if (pedido.linea) lines[pedido.linea] = pedido.enabled
+    st.jevStatus = { at: ahora(), enabled: pedido.linea ? st.jevStatus.enabled : pedido.enabled,
+      keySet: true, mirror: 'activo', lines }
+    return { ok: true, code: pedido.enabled ? 'activado' : 'desactivado' }
+  }))
+  await espera()
+  doc.getElementById('tab-aprobacion').click()
+  await espera()
+  const sw = () => doc.getElementById('jev-enabled').getAttribute('aria-checked')
+  const estado = () => textoDe(doc, '#jev-status')
+  ok('en la principal, el Jev de la principal: encendido',
+    sw() === 'true' && /Encendido/.test(estado()), `${sw()} ${estado()}`)
+  elegirSeg(doc, 'linea-vista', L_B)
+  await new Promise((r) => setTimeout(r, 300))
+  ok('en la otra linea, el de ESA linea: apagado, con la misma llave guardada',
+    sw() === 'false' && /Apagado.*llave guardada/.test(estado()), `${sw()} ${estado()}`)
+  doc.getElementById('jev-enabled').click()
+  await new Promise((r) => setTimeout(r, 3500))
+  ok('encenderlo ahi manda el pedido con esa linea',
+    storage.jevRequestVisto && storage.jevRequestVisto.action === 'activar' &&
+    storage.jevRequestVisto.enabled === true && storage.jevRequestVisto.linea === L_B,
+    JSON.stringify(storage.jevRequestVisto))
+  ok('y queda encendido en esa linea, sin tocar la principal',
+    sw() === 'true' && storage.jevStatus.lines[L_B] === true && storage.jevStatus.enabled === true,
+    `${sw()} ${JSON.stringify(storage.jevStatus)}`)
+  elegirSeg(doc, 'linea-vista', L_A)
+  await new Promise((r) => setTimeout(r, 300))
+  doc.getElementById('jev-enabled').click()
+  await new Promise((r) => setTimeout(r, 3500))
+  ok('en la principal el pedido no nombra linea, como siempre',
+    storage.jevRequestVisto && storage.jevRequestVisto.enabled === false &&
+    !('linea' in storage.jevRequestVisto), JSON.stringify(storage.jevRequestVisto))
+  ok('apagar la principal deja encendida la otra',
+    sw() === 'false' && storage.jevStatus.lines[L_B] === true, JSON.stringify(storage.jevStatus))
+  ok('la tarjeta dice que la llave es una sola para el equipo, y ya no lleva la nota de maquina',
+    /una sola para este equipo/.test(textoDe(doc, '#jev-key-shared')) &&
+    !doc.querySelector('#jev-card .nota-maquina'), textoDe(doc, '#jev-key-shared'))
+  const S = doc.defaultView.STRINGS
+  ok('la frase de la llave existe en los tres idiomas, el portugues propio',
+    S.es.jevKeyShared && S.en.jevKeyShared && S.pt.jevKeyShared &&
+    S.pt.jevKeyShared !== S.en.jevKeyShared)
 }
 
 console.log('\nconfig.html — A5: si la otra linea no contesta, no se ven los ajustes de la principal')
