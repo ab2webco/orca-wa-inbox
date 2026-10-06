@@ -235,7 +235,7 @@ export function dataDir(pluginDir, ...sub) {
 
 /** sha256 en hex, sobre los bytes que de verdad quedan en el archivo. Es la misma
  *  huella que usa Orca para los campos de una automatizacion del plugin. */
-function huella(texto) {
+export function huella(texto) {
   return createHash('sha256').update(texto, 'utf8').digest('hex')
 }
 
@@ -368,7 +368,7 @@ function corre(cmd, args, timeoutMs = 20000) {
 const SUBCOMANDOS = ['voice', 'check', 'lock', 'unlock', 'work', 'closing', 'where',
   'route', 'record', 'juicio', 'alert', 'config', 'agent', 'list', 'set',
   'accounts', 'pending', 'run', 'sync', 'rotate', 'projects', 'caso', 'caso ver',
-  'caso clasificar', 'caso mover', 'caso propuesta', 'caso resultado']
+  'caso clasificar', 'caso mover', 'caso propuesta', 'caso resultado', 'owner']
 
 /** La referencia de comandos, sacada del `--help` de las propias herramientas. */
 export async function referencia(toolsDir) {

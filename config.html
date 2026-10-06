@@ -419,6 +419,30 @@
       .proj-note input { flex: 1; min-width: 0; }
       .proj-note button.link { margin-left: 0; white-space: nowrap; }
       #projects-status { margin: 8px 0 4px; }
+      /* Skills (skills-globales): una tarjeta por skill y una fila por destino, con el
+         mismo filete que los proyectos. El estado va en una pastilla: "instalada" con texto
+         pleno y filete, "desactualizada" en --accent como lo que espera algo, sin colores
+         que la allowlist no trae. */
+      .skill + .skill { margin-top: 14px; }
+      .skill-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+      .skill-head b { font-weight: 600; font-family: ui-monospace, Menlo, monospace;
+                      font-size: 12px; }
+      .skill-desc { margin: 4px 0 6px; }
+      .sk-row { padding: 9px 0; border-top: 1px solid var(--border, var(--fb-border)); }
+      .sk-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .sk-line .sk-where { font-weight: 500; overflow-wrap: anywhere; }
+      .sk-line .sk-acts { margin-left: auto; display: flex; gap: 10px; flex-wrap: wrap; }
+      .sk-line .sk-acts button.link { margin-left: 0; }
+      .sk-row .proj-path { font-size: 11px; margin-top: 6px; }
+      .pill.sk-installed { border-color: var(--border, var(--fb-border));
+                           color: var(--foreground, var(--fb-foreground)); }
+      .pill.sk-outdated { background: var(--accent, var(--fb-accent));
+                          color: var(--accent-foreground, var(--fb-accent-foreground)); }
+      .pill.sk-foreign { border-color: var(--border, var(--fb-border)); }
+      .sk-warn { color: var(--destructive, var(--fb-destructive)); }
+      .sk-acts button.confirmar { border-color: var(--destructive, var(--fb-destructive));
+                                  color: var(--destructive, var(--fb-destructive)); }
+      @media (max-width: 420px) { .sk-line .sk-acts { margin-left: 0; width: 100%; } }
       #proposals-wrap { margin-top: 4px; }
 
       /* Vinculacion de WhatsApp (T4). Sin verde/ambar en la allowlist -mismo criterio
@@ -505,6 +529,8 @@
                 data-t="tabAprobacion"></button>
         <button class="tab" id="tab-agente" role="tab" aria-controls="view-agente"
                 data-t="tabAgente"></button>
+        <button class="tab" id="tab-skills" role="tab" aria-controls="view-skills"
+                data-t="tabSkills"></button>
         <button class="tab" id="tab-avanzado" role="tab" aria-controls="view-avanzado"
                 data-t="tabAvanzado"></button>
       </div>
@@ -991,6 +1017,23 @@
         </section>
       </div>
 
+      <!-- ───────── Skills (skills-globales) ───────── -->
+      <!-- Las skills que el plugin deja instalar FUERA de su carpeta: global o en un proyecto
+           que el dueno ya acepto. El panel no escribe nada: pide al worker por el canal del
+           alcance, y lo que pinta es el estado que el worker dejo en `skillsStatus`. -->
+      <div id="view-skills" role="tabpanel" aria-labelledby="tab-skills" hidden>
+        <section>
+          <h2 data-t="skillsLegend"></h2>
+          <p class="hint lead" data-t="skillsHelp"></p>
+          <div id="skills-wrap"></div>
+          <div class="actions">
+            <span class="said" id="said-skills"></span>
+          </div>
+          <p class="hint" data-t="skillsEditNote"></p>
+          <p class="hint" data-t="skillsRepoNote"></p>
+        </section>
+      </div>
+
       <!-- ───────── Avanzado ───────── -->
       <div id="view-avanzado" role="tabpanel" aria-labelledby="tab-avanzado" hidden>
         <section class="card">
@@ -1142,6 +1185,43 @@
           tabsLabel: 'Secciones de los ajustes',
           tabEstado: 'Estado', tabChats: 'Conversaciones', tabProyectos: 'Proyectos',
           tabAprobacion: 'Su aprobacion', tabAgente: 'Agente', tabAvanzado: 'Avanzado',
+          // --- skills (skills-globales) ---
+          tabSkills: 'Skills',
+          skillsLegend: 'Skills para sus agentes',
+          skillsHelp: 'Una skill le ensena a un agente de Claude Code a usar este plugin desde ' +
+            'cualquier proyecto. Instalela global, para todos sus proyectos, o solo en los ' +
+            'proyectos que eligio en la pestana Proyectos. El plugin las pone al dia solo cada ' +
+            'vez que se actualiza.',
+          skillsEditNote: 'Si edita una seccion del archivo, esa seccion queda suya: las ' +
+            'actualizaciones no la tocan.',
+          skillsRepoNote: 'Instalarla en un proyecto deja un archivo en ese repositorio ' +
+            '(.claude/skills/&lt;nombre&gt;/SKILL.md). Si no lo quiere en git, agreguelo a su ' +
+            '.gitignore.',
+          skillsReading: 'Leyendo donde esta instalada…',
+          skillsNone: 'Esta version del plugin no trae skills para instalar.',
+          skillsNoProjects: 'Para instalarla en un proyecto, acepte uno en la pestana Proyectos.',
+          skillDescAvisos: 'Sus agentes le avisan por WhatsApp cuando terminan o se traban, y ' +
+            'le preguntan algo y esperan su respuesta. Solo le escriben a usted, y nunca ' +
+            'aprueban lo que el plugin retiene.',
+          skillTargetGlobal: 'Global (todos sus proyectos)',
+          skillTargetGone: '{name} (ya no esta en sus proyectos)',
+          skillStateNot: 'Sin instalar', skillStateYes: 'Instalada',
+          skillStateOld: 'Desactualizada', skillStateForeign: 'Otro archivo',
+          skillVersion: 'version {v}',
+          skillYours: 'Con cambios suyos en: {s}',
+          skillForeignHow: 'Ya hay un SKILL.md con ese nombre que no escribio el plugin. No se ' +
+            'toca: si quiere esta, quite ese archivo primero.',
+          skillInstallGlobal: 'Instalar globalmente',
+          skillInstallProject: 'Instalar en este proyecto',
+          skillUpdate: 'Actualizar', skillRemove: 'Quitar',
+          skillRemoveAnyway: 'Quitar de todos modos', skillCancel: 'Cancelar',
+          skillEditedWarn: 'Este archivo tiene cambios suyos en: {s}. Si lo quita, se pierden.',
+          skillInstalled: 'Instalada', skillUpdated: 'Actualizada', skillRemoved: 'Quitada',
+          skillErrForeign: 'Ya hay un SKILL.md que no escribio el plugin; no se toco.',
+          skillErrProject: 'Ese proyecto ya no esta en sus proyectos aceptados.',
+          skillErrMissing: 'Esta version del plugin no trae esa skill.',
+          skillErrNotInstalled: 'No estaba instalada.',
+          skillErrFail: 'No se pudo. Vuelva a intentarlo; si sigue, revise el registro del plugin.',
           checkLegend: 'Lo que falta',
           chkLinea: 'Vincular la linea de WhatsApp',
           chkAgente: 'Darle un nombre a su agente',
@@ -1628,6 +1708,42 @@
           tabsLabel: 'Settings sections',
           tabEstado: 'Status', tabChats: 'Conversations', tabProyectos: 'Projects',
           tabAprobacion: 'Your approval', tabAgente: 'Agent', tabAvanzado: 'Advanced',
+          // --- skills (skills-globales) ---
+          tabSkills: 'Skills',
+          skillsLegend: 'Skills for your agents',
+          skillsHelp: 'A skill teaches a Claude Code agent to use this plugin from any ' +
+            'project. Install it globally, for all your projects, or only in the projects you ' +
+            'picked in the Projects tab. The plugin keeps them up to date every time it updates.',
+          skillsEditNote: 'If you edit a section of the file, that section is yours: updates ' +
+            'leave it alone.',
+          skillsRepoNote: 'Installing it in a project leaves a file in that repository ' +
+            '(.claude/skills/&lt;name&gt;/SKILL.md). If you do not want it in git, add it to your ' +
+            '.gitignore.',
+          skillsReading: 'Reading where it is installed…',
+          skillsNone: 'This version of the plugin has no skills to install.',
+          skillsNoProjects: 'To install it in a project, accept one in the Projects tab.',
+          skillDescAvisos: 'Your agents tell you on WhatsApp when they finish or get stuck, ' +
+            'and ask you something and wait for your reply. They only write to you, and they ' +
+            'never approve what the plugin holds.',
+          skillTargetGlobal: 'Global (all your projects)',
+          skillTargetGone: '{name} (no longer in your projects)',
+          skillStateNot: 'Not installed', skillStateYes: 'Installed',
+          skillStateOld: 'Outdated', skillStateForeign: 'Another file',
+          skillVersion: 'version {v}',
+          skillYours: 'With your changes in: {s}',
+          skillForeignHow: 'There is already a SKILL.md with that name that the plugin did not ' +
+            'write. It is left alone: to install this one, remove that file first.',
+          skillInstallGlobal: 'Install globally',
+          skillInstallProject: 'Install in this project',
+          skillUpdate: 'Update', skillRemove: 'Remove',
+          skillRemoveAnyway: 'Remove anyway', skillCancel: 'Cancel',
+          skillEditedWarn: 'This file has your changes in: {s}. Removing it loses them.',
+          skillInstalled: 'Installed', skillUpdated: 'Updated', skillRemoved: 'Removed',
+          skillErrForeign: 'There is a SKILL.md the plugin did not write; it was not touched.',
+          skillErrProject: 'That project is no longer in your accepted projects.',
+          skillErrMissing: 'This version of the plugin does not have that skill.',
+          skillErrNotInstalled: 'It was not installed.',
+          skillErrFail: 'It did not work. Try again; if it keeps failing, check the plugin log.',
           checkLegend: 'What is missing',
           chkLinea: 'Link the WhatsApp line',
           chkAgente: 'Give your agent a name',
@@ -2137,6 +2253,43 @@
         tabsLabel: 'Secoes dos ajustes',
         tabEstado: 'Estado', tabChats: 'Conversas', tabProyectos: 'Projetos',
         tabAprobacion: 'Sua aprovacao', tabAgente: 'Agente', tabAvanzado: 'Avancado',
+        // --- skills (skills-globales) ---
+        tabSkills: 'Skills',
+        skillsLegend: 'Skills para os seus agentes',
+        skillsHelp: 'Uma skill ensina um agente do Claude Code a usar este plugin a partir de ' +
+          'qualquer projeto. Instale-a de forma global, para todos os seus projetos, ou so nos ' +
+          'projetos que escolheu na aba Projetos. O plugin as atualiza sozinho a cada ' +
+          'atualizacao.',
+        skillsEditNote: 'Se editar uma secao do arquivo, essa secao fica sua: as atualizacoes ' +
+          'nao mexem nela.',
+        skillsRepoNote: 'Instala-la em um projeto deixa um arquivo nesse repositorio ' +
+          '(.claude/skills/&lt;nome&gt;/SKILL.md). Se nao o quiser no git, adicione-o ao seu ' +
+          '.gitignore.',
+        skillsReading: 'Lendo onde esta instalada…',
+        skillsNone: 'Esta versao do plugin nao traz skills para instalar.',
+        skillsNoProjects: 'Para instala-la em um projeto, aceite um na aba Projetos.',
+        skillDescAvisos: 'Os seus agentes avisam voce pelo WhatsApp quando terminam ou travam, ' +
+          'e perguntam algo e esperam a sua resposta. So escrevem para voce, e nunca aprovam ' +
+          'o que o plugin retem.',
+        skillTargetGlobal: 'Global (todos os seus projetos)',
+        skillTargetGone: '{name} (ja nao esta nos seus projetos)',
+        skillStateNot: 'Nao instalada', skillStateYes: 'Instalada',
+        skillStateOld: 'Desatualizada', skillStateForeign: 'Outro arquivo',
+        skillVersion: 'versao {v}',
+        skillYours: 'Com alteracoes suas em: {s}',
+        skillForeignHow: 'Ja existe um SKILL.md com esse nome que o plugin nao escreveu. Ele ' +
+          'nao e tocado: para instalar esta, remova esse arquivo antes.',
+        skillInstallGlobal: 'Instalar globalmente',
+        skillInstallProject: 'Instalar neste projeto',
+        skillUpdate: 'Atualizar', skillRemove: 'Remover',
+        skillRemoveAnyway: 'Remover mesmo assim', skillCancel: 'Cancelar',
+        skillEditedWarn: 'Este arquivo tem alteracoes suas em: {s}. Se remove-lo, elas se perdem.',
+        skillInstalled: 'Instalada', skillUpdated: 'Atualizada', skillRemoved: 'Removida',
+        skillErrForeign: 'Existe um SKILL.md que o plugin nao escreveu; nao foi tocado.',
+        skillErrProject: 'Esse projeto ja nao esta nos seus projetos aceitos.',
+        skillErrMissing: 'Esta versao do plugin nao traz essa skill.',
+        skillErrNotInstalled: 'Nao estava instalada.',
+        skillErrFail: 'Nao deu certo. Tente de novo; se continuar, veja o registro do plugin.',
         checkLegend: 'O que falta',
         chkLinea: 'Vincular a linha do WhatsApp',
         chkAgente: 'Dar um nome ao seu agente',
@@ -2513,6 +2666,7 @@
           n.setAttribute('aria-label', t(n.dataset.tLabel))
         })
         repintarProyectos()
+        renderSkills()
       }
 
       var seq = 0, pending = {}
@@ -5563,11 +5717,151 @@
       }
 
 
+      // ---------- skills (skills-globales) ----------
+      // El estado lo escribe el worker en `skillsStatus`; el panel lo pide al abrir la
+      // pestana y despues de cada accion, nunca en el sondeo: cada lectura sale del mismo cupo
+      // de 30 mensajes por 10 s que el clic del dueno.
+      var SKILL_DESC_KEY = { 'whatsapp-avisos': 'skillDescAvisos' }
+      var SKILL_HOW_KEY = {
+        'skill-ajena': 'skillErrForeign', 'proyecto-no-existe': 'skillErrProject',
+        'skill-no-existe': 'skillErrMissing', 'skill-sin-instalar': 'skillErrNotInstalled',
+        'skills-fallo': 'skillErrFail', 'argumentos-invalidos': 'skillErrFail',
+        'vencido': 'skillErrFail', 'accion-desconocida': 'skillErrFail'
+      }
+      var SKILL_DONE_KEY = { 'skill-instalada': 'skillInstalled',
+        'skill-actualizada': 'skillUpdated', 'skill-quitada': 'skillRemoved' }
+      var SKILL_STATE_KEY = { 'not-installed': 'skillStateNot', installed: 'skillStateYes',
+        outdated: 'skillStateOld', foreign: 'skillStateForeign' }
+      var skillsEstado = null
+      // La fila que espera la confirmacion de quitar, con las secciones que se perderian.
+      var skillConfirmar = null
+
+      function claveDestino (t) {
+        return t.scope === 'global' ? 'global' : 'project:' + t.project
+      }
+
+      function renderSkills (st) {
+        if (st !== undefined) skillsEstado = st
+        var caja = el('skills-wrap')
+        st = skillsEstado
+        if (!st || typeof st !== 'object' || !Array.isArray(st.skills)) {
+          caja.innerHTML = '<p class="empty">' + esc(t('skillsReading')) + '</p>'
+          return
+        }
+        if (!st.skills.length) {
+          caja.innerHTML = '<p class="empty">' + esc(t('skillsNone')) + '</p>'
+          return
+        }
+        caja.innerHTML = st.skills.map(function (sk) {
+          var targets = Array.isArray(sk.targets) ? sk.targets : []
+          var desc = SKILL_DESC_KEY[sk.name] ? t(SKILL_DESC_KEY[sk.name]) : (sk.description || '')
+          var filas = targets.map(function (tg) { return filaSkill(sk.name, tg) }).join('')
+          var sinProyectos = !targets.some(function (tg) { return tg.scope === 'project' })
+          return '<div class="skill" data-skill="' + escAttr(sk.name) + '">' +
+            '<div class="skill-head"><b>' + esc(sk.name) + '</b></div>' +
+            '<p class="hint skill-desc">' + esc(desc) + '</p>' + filas +
+            (sinProyectos ? '<p class="hint">' + esc(t('skillsNoProjects')) + '</p>' : '') +
+            '</div>'
+        }).join('')
+        Array.prototype.forEach.call(caja.querySelectorAll('[data-sk-act]'), function (b) {
+          b.addEventListener('click', function () { accionSkill(b) })
+        })
+      }
+
+      function filaSkill (nombre, tg) {
+        var clave = claveDestino(tg)
+        var estado = SKILL_STATE_KEY[tg.state] ? tg.state : 'not-installed'
+        var donde = tg.scope === 'global' ? t('skillTargetGlobal')
+          : tg.accepted === false ? fmt('skillTargetGone', { name: tg.name || tg.project })
+            : (tg.name || tg.project)
+        var confirmando = skillConfirmar && skillConfirmar.skill === nombre &&
+          skillConfirmar.clave === clave
+        var acts = []
+        var boton = function (act, texto, extra) {
+          acts.push('<button class="link' + (extra || '') + '" data-sk-act="' + act +
+            '" data-sk-skill="' + escAttr(nombre) + '" data-sk-target="' + escAttr(clave) + '">' +
+            esc(t(texto)) + '</button>')
+        }
+        if (confirmando) {
+          boton('force', 'skillRemoveAnyway', ' confirmar')
+          boton('cancel', 'skillCancel')
+        } else if (estado === 'not-installed') {
+          if (tg.accepted !== false) {
+            boton('install', tg.scope === 'global' ? 'skillInstallGlobal' : 'skillInstallProject')
+          }
+        } else if (estado === 'outdated') {
+          boton('update', 'skillUpdate')
+          boton('remove', 'skillRemove')
+        } else if (estado === 'installed') {
+          boton('remove', 'skillRemove')
+        }
+        var notas = []
+        if (estado === 'installed' || estado === 'outdated') {
+          if (tg.version) notas.push(esc(fmt('skillVersion', { v: tg.version })))
+          if (Array.isArray(tg.yours) && tg.yours.length) {
+            notas.push(esc(fmt('skillYours', { s: tg.yours.join(', ') })))
+          }
+        }
+        return '<div class="sk-row" data-sk-target="' + escAttr(clave) + '">' +
+          '<div class="sk-line"><span class="sk-where">' + esc(donde) + '</span>' +
+          '<span class="pill sk-' + estado + '">' + esc(t(SKILL_STATE_KEY[estado])) + '</span>' +
+          '<span class="sk-acts">' + acts.join('') + '</span></div>' +
+          (estado !== 'not-installed' && tg.file
+            ? '<code class="proj-path">' + esc(tg.file) + '</code>' : '') +
+          (notas.length ? '<p class="hint">' + notas.join(' · ') + '</p>' : '') +
+          (estado === 'foreign' ? '<p class="hint">' + esc(t('skillForeignHow')) + '</p>' : '') +
+          (confirmando ? '<p class="hint sk-warn">' +
+            esc(fmt('skillEditedWarn', { s: skillConfirmar.yours.join(', ') })) + '</p>' : '') +
+          '</div>'
+      }
+
+      function leerSkills () {
+        return pedirAlWorker('scopeRequest', 'scopeResult', { action: 'skills-estado' })
+          .then(function () { return read('skillsStatus', true) })
+          .then(function (v) { if (hayRespuesta(v)) renderSkills(v) })
+      }
+
+      /** Un clic de la pestana: el pedido lleva la skill y el destino (global o el id del
+       *  proyecto), nunca una ruta; la ruta la pone el worker desde el catalogo. */
+      function accionSkill (b) {
+        var clave = b.dataset.skTarget
+        var skill = b.dataset.skSkill
+        if (b.dataset.skAct === 'cancel') { skillConfirmar = null; renderSkills(); return }
+        var pedido = { skill: skill }
+        if (clave === 'global') pedido.target = 'global'
+        else pedido.project = clave.slice('project:'.length)
+        if (b.dataset.skAct === 'install' || b.dataset.skAct === 'update') {
+          pedido.action = 'skill-instalar'
+        } else {
+          pedido.action = 'skill-quitar'
+          if (b.dataset.skAct === 'force') pedido.force = true
+        }
+        var veredicto = null
+        var hecho = pedirAlWorker('scopeRequest', 'scopeResult', pedido).then(function (v) {
+          veredicto = v
+          skillConfirmar = v && !v.ok && v.code === 'skill-editada'
+            ? { skill: skill, clave: clave, yours: Array.isArray(v.yours) ? v.yours : [] } : null
+          return read('skillsStatus', true)
+        }).then(function (st) {
+          // Primero se repinta y despues se confirma: repintar borra lo que diga la fila.
+          if (hayRespuesta(st)) renderSkills(st)
+          else renderSkills()
+          var v = veredicto
+          if (!v) { said('said-skills', t('pairingNoAnswer'), true); return }
+          if (v.ok) said('said-skills', '✓ ' + t(SKILL_DONE_KEY[v.code] || 'skillUpdated'))
+          else if (v.code !== 'skill-editada') {
+            said('said-skills', porCodigo(SKILL_HOW_KEY, v.code, '') || t('skillErrFail'), true)
+          }
+        })
+        return busy(b, hecho)
+      }
+
       // ---------- pestanas (T17) ----------
       // Seis vistas, una visible. Sin localStorage: en el iframe con sandbox el origen es
       // opaco y tocarlo tira una excepcion. La pestana no se recuerda entre aperturas, y
       // la de entrada se decide UNA vez, con lo que falta (`decidirPestana`).
-      var PESTANAS = ['estado', 'chats', 'proyectos', 'aprobacion', 'agente', 'avanzado']
+      var PESTANAS = ['estado', 'chats', 'proyectos', 'aprobacion', 'agente', 'skills',
+        'avanzado']
       var pestanaElegida = false
       function mostrarPestana (cual) {
         PESTANAS.forEach(function (p) {
@@ -5581,6 +5875,7 @@
         combosExtra.forEach(function (c) { c.cerrar() })
         if (activaAuto(cual)) leerAuto()
         if (cual === 'agente') leerCuentasBot()
+        if (cual === 'skills') leerSkills()
       }
       // Las claves de las respuestas automaticas (y la meta del primer contacto) se leen al
       // abrir SU pestana y no en cada vuelta: el host admite 30 mensajes por 10 s y la vuelta entera ya gasta casi

@@ -1079,6 +1079,89 @@ VIEJA = "pn:573001112233"
 NUEVA = "pn:573000000012"
 
 
+def revisa_chat_del_dueno(fallos: list) -> int:
+    """`wa-scope owner` (skills-globales, S1): el chat al que un agente de CUALQUIER proyecto
+    le escribe al dueno, sacado de los ajustes y nunca escrito a mano. El numero de
+    aprobacion manda; sin el, el chat de la linea consigo misma. Sale 1
+    (`no-owner-chat`) si no hay ninguno y 3 (`owner-chat-not-authorized`) si el chat no esta
+    en Automatico: ahi `wa-send --send` dejaria un borrador, no un aviso. HOME temporal."""
+    hechas = 0
+    if not shutil.which("node"):
+        print("  aviso: sin node, no se armo el almacen para `wa-scope owner`", file=sys.stderr)
+        return hechas
+    propio = "100000000000002@lid"
+    aprobacion = "573009999999@s.whatsapp.net"
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+
+        def owner(*extra):
+            return subprocess.run([str(BIN / "wa-scope"), "owner", *extra],
+                                  capture_output=True, text=True, env=env, timeout=120)
+
+        def primera(p):
+            return (p.stderr.strip().splitlines() or [""])[0]
+
+        hechas += 1
+        p = owner("--json")
+        if p.returncode != 1 or primera(p) != "wa-scope: no-owner-chat" or p.stdout.strip():
+            fallos.append(f"`wa-scope owner` sin almacen ni numero salio {p.returncode} "
+                          f"({primera(p)!r}, {p.stdout.strip()[:120]!r}): tenia que salir 1 con "
+                          "'wa-scope: no-owner-chat' y stdout vacio")
+
+        almacen_con_lineas(home, NUEVA)
+        hechas += 1
+        p = owner("--json")
+        dato = json.loads(p.stdout or "null") if p.stdout.strip() else None
+        if p.returncode != 3 or primera(p) != "wa-scope: owner-chat-not-authorized" or \
+                not isinstance(dato, dict) or dato.get("chat") != propio or \
+                dato.get("source") != "own-chat" or dato.get("can_send") is not False:
+            fallos.append(f"`wa-scope owner` con el chat propio sin autorizar salio "
+                          f"{p.returncode} ({primera(p)!r}) con {dato!r}: tenia que salir 3 con "
+                          "'wa-scope: owner-chat-not-authorized' y decir el chat propio")
+
+        subprocess.run([str(BIN / "wa-scope"), "set", propio, "--mode", "responder"],
+                       env=env, capture_output=True, timeout=120)
+        hechas += 1
+        p = owner()
+        if p.returncode != 0 or p.stdout.strip() != propio:
+            fallos.append(f"`wa-scope owner` con el chat propio en Automatico salio "
+                          f"{p.returncode} con {p.stdout.strip()!r}: tenia que imprimir solo "
+                          f"{propio!r}, para `OWNER=\"$(wa-scope owner)\"`")
+
+        # El numero de aprobacion manda sobre el chat propio, mientras siga entre los numeros
+        # del dueno.
+        man = json.loads((RAIZ / "orca-plugin.json").read_text(encoding="utf-8"))
+        base = ((home / "Library" / "Application Support" / "orca") if sys.platform == "darwin"
+                else (home / ".config" / "orca"))
+        store = base / "plugins-data" / f"{man['publisher']}.{man['id']}" / "storage.json"
+        store.parent.mkdir(parents=True, exist_ok=True)
+        datos = json.loads(store.read_text(encoding="utf-8")) if store.exists() else {}
+        datos.update(owners=[{"id": aprobacion, "name": "Dueno Demo"}],
+                     approvalNumber=aprobacion)
+        store.write_text(json.dumps(datos), encoding="utf-8")
+        subprocess.run([str(BIN / "wa-scope"), "set", aprobacion, "--mode", "responder"],
+                       env=env, capture_output=True, timeout=120)
+        hechas += 1
+        p = owner("--json")
+        dato = json.loads(p.stdout or "null") if p.stdout.strip() else None
+        if p.returncode != 0 or not isinstance(dato, dict) or dato.get("chat") != aprobacion \
+                or dato.get("source") != "approval-number" or dato.get("can_send") is not True \
+                or dato.get("mode") != "responder":
+            fallos.append(f"`wa-scope owner --json` con numero de aprobacion salio "
+                          f"{p.returncode} con {dato!r}: tenia que dar ese numero, "
+                          "source approval-number, can_send true")
+
+        hechas += 1
+        ayuda = subprocess.run([str(BIN / "wa-scope"), "owner", "--help"], capture_output=True,
+                               text=True, env=env, timeout=60).stdout
+        if not all(x in ayuda for x in ("no-owner-chat", "owner-chat-not-authorized",
+                                        "approval")):
+            fallos.append("`wa-scope owner --help` no documenta de donde sale el chat ni sus "
+                          "codigos de salida")
+    return hechas
+
+
 def almacen_con_lineas(home: pathlib.Path, activa: str) -> None:
     """Un capture.db con DOS numeros, armado por el escritor de verdad (el sidecar) y no
     a mano: el esquema es suyo. La vieja tiene el grupo 100, la nueva el 200."""
@@ -2914,7 +2997,8 @@ def main() -> int:
                       + revisa_doctor_lid(fallos)
                       + revisa_proyectos(fallos)
                       + revisa_varios_proyectos(fallos)
-                      + revisa_espera(fallos))
+                      + revisa_espera(fallos)
+                      + revisa_chat_del_dueno(fallos))
     aislado.cleanup()
 
     if fallos:

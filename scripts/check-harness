@@ -53,6 +53,8 @@ GENERADOS = {"PROJECTS.md": "ARCHIVO_PROYECTOS = 'PROJECTS.md'"}
 # agente sin que nadie lo pida; la skill whatsapp-soporte es la que sigue con su caso.
 OBLIGATORIOS = ["harness/AGENTS.md", "harness/skills/whatsapp-soporte/SKILL.md"]
 SKILL_SOPORTE = "harness/skills/whatsapp-soporte/SKILL.md"
+# La que se instala fuera del plugin, en ~/.claude/skills o en un proyecto (skills-globales).
+SKILL_AVISOS = "harness/skills-globales/whatsapp-avisos/SKILL.md"
 # El prompt de triage es un puntero: corto, sin los pasos, y apuntando a la skill.
 PUNTERO_MAX_LINEAS = 30
 
@@ -435,6 +437,45 @@ def main() -> int:
         if "e_not_owner" not in texto or "--actor dueno" not in texto:
             fallos.append(f"{rel}  no dice que el agente no puede firmar como el dueno "
                           "(`caso aprobar --actor dueno`, `E_NOT_OWNER`)")
+
+    # La skill que el dueno instala fuera del plugin (skills-globales, S2): un agente de
+    # CUALQUIER proyecto le avisa al dueno y espera su respuesta. No vive en la carpeta del
+    # plugin (no se siembra ahi: el agente de casos no le escribe al dueno por su cuenta), el
+    # chat sale de `wa-scope owner` y nunca de un numero escrito, y las reglas estan dichas.
+    avisos = RAIZ / SKILL_AVISOS
+    comprobaciones += 1
+    texto_avisos = avisos.read_text(encoding="utf-8") if avisos.exists() else ""
+    if not texto_avisos.startswith("---\nname: whatsapp-avisos\ndescription: "):
+        fallos.append(f"{SKILL_AVISOS}  no existe o no abre con su frontmatter (name, description)")
+    comprobaciones += 1
+    if "you edited is yours" not in texto_avisos[:1500]:
+        fallos.append(f"{SKILL_AVISOS}  no dice en el propio archivo que pasa con una edicion "
+                      "a mano en la proxima actualizacion")
+    comprobaciones += 1
+    plano_avisos = plano(texto_avisos)
+    faltan = [f for f in ('"$HOME/.wa-inbox/bin-path"', '"$APPDATA/wa-inbox/bin-path"',
+                          '"$WA/wa-scope" owner', 'wa-send" "$OWNER"', "--send --json",
+                          '"$WA/wa-read" wait --chat "$OWNER" --after', "--timeout",
+                          "wait-timeout", "no-owner-chat", "owner-chat-not-authorized",
+                          "never send a credential", "keep it short",
+                          "never message anyone but the owner", "cannot approve",
+                          "send-approve-not-owner")
+              if f.lower() not in plano_avisos.lower()]
+    if faltan:
+        fallos.append(f"{SKILL_AVISOS}  no dice {', '.join(faltan)}")
+    comprobaciones += 1
+    if re.search(r"\d{6,}(:\d+)?@(lid|s\.whatsapp\.net|g\.us)", texto_avisos):
+        fallos.append(f"{SKILL_AVISOS}  trae un JID escrito: el chat sale de `wa-scope owner`")
+    comprobaciones += 1
+    sembradas = subprocess.run(
+        ["node", "--input-type=module", "-e",
+         "import { plantillasDelArnes } from %r;"
+         "process.stdout.write(JSON.stringify(plantillasDelArnes(%r).map((p) => p.nombre)))"
+         % ((RAIZ / "harness.mjs").as_uri(), str(ARNES))],
+        capture_output=True, text=True, timeout=60)
+    if "whatsapp-avisos" in sembradas.stdout or sembradas.returncode != 0:
+        fallos.append("harness.mjs  siembra whatsapp-avisos en la carpeta del plugin (o no "
+                      f"corre: {sembradas.stderr.strip()[-160:]}): es para los demas proyectos")
 
     if fallos:
         print("Se perdio una regla al mudar la doctrina al arnes:", file=sys.stderr)
