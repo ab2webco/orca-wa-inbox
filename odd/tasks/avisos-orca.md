@@ -77,11 +77,25 @@ owner's approval number by WhatsApp. Owner-approved on 2026-10-04.
       window (crossing midnight covered), ONE summary after it ends (`resumido`); past the cap
       `excedido`, ONE grouped message once the hour has room (`agrupado`); neither repeats.
       O3-O6 share one commit: one test section and one code block in `wa-scope`.
-- [ ] O7 Regression: every existing flow still green (cases, approvals, owner notices,
+- [x] O7 Regression: every existing flow still green (cases, approvals, owner notices,
       triage, first message, board, reports); `npm run check` green; screenshots of
       config.html at 1440/768/390/320, light and dark, ES and EN, looked at.
+      `npm run check` (smoke: dark, 390, es) EXIT 0: check-casos 1657/1657, check-clis 445,
+      panels 1419/1419, worker 439/439, 93 shots "sin desbordes, sin errores de JS".
+      `WA_INBOX_SOLO=config-avisos-orca npm run shots` -> 40 PNG in ~/Projects/.capturas-avisos
+      (all widths, both themes, es/en, pt for the "on" state; no overflow, no JS errors).
+      Looked at, by the owner's rule only 1440 and 390: `config-avisos-orca` es dark 1440,
+      es light 1440, es light 390, es dark 390; `config-avisos-orca-sin-numero` es light
+      1440 and es dark 390. 768/320 and EN/PT were generated and machine-checked, not opened.
 - [ ] O8 Live test: a real PermissionRequest in another project reaches the owner's
       approval number; a finished turn; quiet hours hold and summarise.
+      Pending, needs the owner's Orca: (1) install this build, approval number chosen and its
+      chat on Automatico; (2) in Ajustes > Su aprobacion turn on the three notices, Guardar;
+      (3) in another project start Claude and make it ask for a permission: one WhatsApp
+      line within seconds, with repo and branch, nothing of the prompt; (4) let a turn end:
+      one "termino" line 25-85 s later (tick); (5) set quiet hours around now, repeat (3):
+      nothing arrives; move the end time to the past: one summary at the next tick;
+      (6) a failing command-only automation: one line with its title and exit code.
 
 ## Design (decided while building, 2026-10-05)
 
