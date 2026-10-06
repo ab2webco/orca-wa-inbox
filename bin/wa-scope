@@ -34,7 +34,7 @@ it written in the chat" about a message that is not there.
 Task service per conversation: plane, linear, github — or `ninguno` when that
 conversation opens no cards and the agent only reads, summarizes or replies.
 """
-import argparse, datetime, hashlib, json, os, pathlib, re, shlex, sqlite3, subprocess, sys, time, unicodedata
+import argparse, datetime, hashlib, json, os, pathlib, re, shlex, shutil, sqlite3, subprocess, sys, tempfile, time, unicodedata
 
 # El modulo vive al lado, y esto se carga tanto como script como importado
 # por ruta desde los chequeos: sin esto el segundo caso no lo encuentra.
@@ -621,74 +621,145 @@ def cmd_decisions(con, a):
     escribir storage, no borrar, asi que la automatizacion se despertaba cada 2
     minutos sobre el mismo mensaje aunque ya estuviera contestado."""
     if a.done:
-        cerradas = 0
-        for ruta in plugin_store_targets():
-            if not os.path.exists(ruta):
-                continue
-            try:
-                with open(ruta, encoding="utf-8") as fh:
-                    data = json.load(fh)
-            except (OSError, ValueError):
-                continue
+        def cierra(data):
             d = data.get("decisions")
             if not isinstance(d, dict) or a.done not in d:
-                continue
+                return False
             d.pop(a.done)
-            tmp = ruta + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(data, fh, ensure_ascii=False, indent=2)
-            os.replace(tmp, ruta)
-            cerradas += 1
-        return [{"done": a.done, "cleared": cerradas}]
+            return True
+        return [{"done": a.done, "cleared": plugin_store_modifica(cierra, crear=False)}]
     return [{"stanzaId": k, **v} for k, v in sorted(decisions_read().items(),
                                                    key=lambda kv: kv[1].get("at", ""))]
+
+
+def candado_de_archivo(ruta):
+    """Un candado exclusivo sobre `ruta`, esperando a que se suelte. Se suelta al cerrar
+    el archivo devuelto (o al morir el proceso)."""
+    fh = open(ruta, "a+")
+    if sys.platform == "win32":
+        import msvcrt
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    return fh
+
+
+def _lee_store(path):
+    """El dict de un destino; {} si no existe y None si existe y no se puede leer."""
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _escribe_json(path, data):
+    """Instala `data` en `path` de un solo golpe: un temporal UNICO en la misma carpeta y
+    os.replace. Con un nombre fijo (`storage.json.tmp`) dos procesos truncaban el mismo
+    temporal y uno instalaba el que el otro estaba escribiendo: el host leia un archivo
+    a medias. Sin NaN: no es JSON y Orca no lo parsea."""
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path),
+                               prefix=os.path.basename(path) + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=2, allow_nan=False)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def plugin_store_modifica(cambia, crear=True):
+    """Leer, cambiar y escribir cada destino, con candado. Lo usan los tres escritores.
+
+    `cambia(data)` modifica el dict en el lugar y devuelve si hay que escribirlo.
+    `crear=False` no crea un destino que no existe. Devuelve cuantos se escribieron.
+
+    El candado es un flock en la carpeta de las herramientas (no en la del host): el
+    sync, el tick y el agente de un caso escriben a la vez desde procesos distintos, y
+    sin el uno pisaba lo que el otro acababa de escribir.
+
+    Un destino que no parsea NO se pisa con lo poco que trae esta escritura: eso es
+    justo lo que hace el host (lee {} y guarda su clave sola) y es como se perdian los
+    duenos y el numero de aprobacion. Tampoco se saltea en silencio para siempre: se
+    deja una copia en `storage.json.ilegible`, se rearma desde el primer destino que si
+    se lee y se dice por stderr. Las claves que solo escribe el panel (duenos, numero de
+    aprobacion) viven solo en el storage del Orca que corre: rearmado desde otro no las
+    trae, pero quedan en la copia, y es menos que lo que borraria el host al leer {}.
+    Sin ninguno legible no hay de donde rearmar: no se toca y se dice."""
+    os.makedirs(os.path.dirname(DB), exist_ok=True)
+    candado = candado_de_archivo(os.path.join(os.path.dirname(DB), "storage.lock"))
+    escritos = 0
+    try:
+        destinos = plugin_store_targets()
+        for path in destinos:
+            try:
+                if not crear and not os.path.exists(path):
+                    continue
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                data = _lee_store(path)
+                if data is None:
+                    shutil.copyfile(path, path + ".ilegible")
+                    data = next((d for d in map(_lee_store, destinos)
+                                 if d), None)
+                    if data is None:
+                        print(f"wa-scope: storage ilegible en {path}, sin otro legible de "
+                              f"donde rearmarlo: no se toca (copia en {path}.ilegible)",
+                              file=sys.stderr)
+                        continue
+                    print(f"wa-scope: storage ilegible en {path}: se rearmo desde otro "
+                          f"destino legible (copia en {path}.ilegible)", file=sys.stderr)
+                if not cambia(data):
+                    continue
+                _escribe_json(path, data)
+                escritos += 1
+            except (OSError, ValueError):
+                continue
+    finally:
+        candado.close()
+    return escritos
 
 
 def plugin_store_write(scope, agent_name=None, activity=None, health=None,
                        routes=None, extra=None):
     """Escritura atomica: el host lee este archivo en cualquier momento."""
-    ok = False
-    for path in plugin_store_targets():
-        try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            data = {}
-            if os.path.exists(path):
-                with open(path, encoding="utf-8") as fh:
-                    data = json.load(fh)
-            # scope en None = no se toca. Escribir {} borraria la lista blanca entera,
-            # y quien solo viene a guardar un ajuste no tiene por que cargar con ella.
-            if scope is not None:
-                data["scope"] = scope
-            if agent_name:
-                data["agentName"] = agent_name
-            if activity is not None:
-                data["activity"] = activity
-            if health is not None:
-                data["health"] = health
-            if routes is not None:
-                data["routes"] = routes
-            if extra:
-                data.update(extra)
-                if "board" in extra:
-                    # La insignia del nav, que Orca lee de esta MISMA clave reservada
-                    # (`navBadge`, plugin-nav-badge.ts): el host la lee y nunca la
-                    # escribe. Es `board.counts.decision` y nada mas (T10), en la
-                    # misma escritura que el tablero: dos fuentes para el mismo numero
-                    # es como la insignia se quedaba pegada contando avisos ya
-                    # atendidos. Sin un tablero valido no hay insignia.
-                    cuenta = insignia_de(extra["board"])
-                    if cuenta is None:
-                        data.pop("navBadge", None)
-                    else:
-                        data["navBadge"] = {"count": cuenta}
-            tmp = path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(data, fh, ensure_ascii=False, indent=2)
-            os.replace(tmp, path)
-            ok = True
-        except (OSError, ValueError):
-            continue
-    return ok
+    def cambia(data):
+        # scope en None = no se toca. Escribir {} borraria la lista blanca entera,
+        # y quien solo viene a guardar un ajuste no tiene por que cargar con ella.
+        if scope is not None:
+            data["scope"] = scope
+        if agent_name:
+            data["agentName"] = agent_name
+        if activity is not None:
+            data["activity"] = activity
+        if health is not None:
+            data["health"] = health
+        if routes is not None:
+            data["routes"] = routes
+        if extra:
+            data.update(extra)
+            if "board" in extra:
+                # La insignia del nav, que Orca lee de esta MISMA clave reservada
+                # (`navBadge`, plugin-nav-badge.ts): el host la lee y nunca la
+                # escribe. Es `board.counts.decision` y nada mas (T10), en la
+                # misma escritura que el tablero: dos fuentes para el mismo numero
+                # es como la insignia se quedaba pegada contando avisos ya
+                # atendidos. Sin un tablero valido no hay insignia.
+                cuenta = insignia_de(extra["board"])
+                if cuenta is None:
+                    data.pop("navBadge", None)
+                else:
+                    data["navBadge"] = {"count": cuenta}
+        return True
+    return plugin_store_modifica(cambia) > 0
 
 
 def insignia_de(tablero):
@@ -779,27 +850,11 @@ def plugin_store_patch_run(trace):
     lectura completa de WhatsApp; al abrir y al cerrar una corrida lo unico que cambio
     es como va, y cobrar ese precio ahi dejaria el panel diciendo "corriendo" hasta el
     siguiente sync — justo el minuto en que el dueno va a mirar."""
-    ok = False
-    for path in plugin_store_targets():
-        try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            data = {}
-            if os.path.exists(path):
-                with open(path, encoding="utf-8") as fh:
-                    data = json.load(fh)
-            if not isinstance(data, dict):
-                data = {}
-            actividad = data.get("activity")
-            data["activity"] = dict(actividad if isinstance(actividad, dict) else {},
-                                    run=trace)
-            tmp = path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(data, fh, ensure_ascii=False, indent=2)
-            os.replace(tmp, path)
-            ok = True
-        except (OSError, ValueError):
-            continue
-    return ok
+    def cambia(data):
+        actividad = data.get("activity")
+        data["activity"] = dict(actividad if isinstance(actividad, dict) else {}, run=trace)
+        return True
+    return plugin_store_modifica(cambia) > 0
 
 
 def mirror_to_panel(key, value):
@@ -2288,8 +2343,14 @@ def cmd_owner(con, a):
         print(json.dumps(dato, ensure_ascii=False, indent=2))
     if not dato["can_send"]:
         print(f"wa-scope: {CHAT_DUENO_SIN_PERMISO}", file=sys.stderr)
-        print(f"the owner's chat is in mode {modo or 'off'!r}, not 'responder': set it to "
-              "Automatic in the plugin settings", file=sys.stderr)
+        if origen == "own-chat":
+            # Sin numero de aprobacion los avisos no tienen a donde ir: la salida es
+            # elegir uno, no autorizar el chat de la linea consigo misma.
+            print("no approval number is chosen: choose one under Settings > Su aprobacion "
+                  "(Your approval) in the plugin", file=sys.stderr)
+        else:
+            print(f"the owner's chat is in mode {modo or 'off'!r}, not 'responder': set it "
+                  "to Automatic in the plugin settings", file=sys.stderr)
         sys.exit(3)
     if not a.json:
         print(chat)

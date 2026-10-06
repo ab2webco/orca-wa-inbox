@@ -1151,6 +1151,14 @@ def revisa_chat_del_dueno(fallos: list) -> int:
             fallos.append(f"`wa-scope owner` con el chat propio sin autorizar salio "
                           f"{p.returncode} ({primera(p)!r}) con {dato!r}: tenia que salir 3 con "
                           "'wa-scope: owner-chat-not-authorized' y decir el chat propio")
+        # Sin numero de aprobacion la salida es elegir uno, no poner el chat propio en
+        # Automatico: los avisos al dueno van al numero de aprobacion.
+        hechas += 1
+        pista = p.stderr.lower()
+        if "approval number" not in pista or "su aprobacion" not in pista or \
+                "automatic" in pista:
+            fallos.append(f"`wa-scope owner` sin numero de aprobacion sugirio {p.stderr!r}: "
+                          "tenia que decir que se elija uno en Ajustes > Su aprobacion")
 
         subprocess.run([str(BIN / "wa-scope"), "set", propio, "--mode", "responder"],
                        env=env, capture_output=True, timeout=120)
@@ -2217,6 +2225,227 @@ def revisa_precheck(fallos: list) -> int:
 # la perilla con la que se cambia en produccion, asi que esto recorre el parseo real de
 # la CLI en vez de saltearlo. Lo que NO se puede recorrer aca es la sonda, que es JS y
 # corre dentro de la pagina: eso solo se comprueba contra una sesion viva.
+# Un proceso aparte que carga wa-scope como modulo y llama a lo que se le pida: los
+# escritores del storage solo se pisan entre PROCESOS, que es como corren el sync, el
+# tick y el agente de un caso.
+CARGA_WA_SCOPE = (
+    "import importlib.machinery, importlib.util, sys; sys.dont_write_bytecode = True; "
+    "sys.path.insert(0, %r); "
+    "c = importlib.machinery.SourceFileLoader('wa_scope_hijo', %r); "
+    "s = importlib.util.spec_from_loader('wa_scope_hijo', c); "
+    "m = importlib.util.module_from_spec(s); c.exec_module(m)\n"
+) % (str(BIN), str(BIN / "wa-scope"))
+
+
+def store_de(home: pathlib.Path, userdata: str) -> pathlib.Path:
+    man = json.loads((RAIZ / "orca-plugin.json").read_text(encoding="utf-8"))
+    base = ((home / "Library" / "Application Support") if sys.platform == "darwin"
+            else (home / ".config"))
+    return base / userdata / "plugins-data" / f"{man['publisher']}.{man['id']}" / \
+        "storage.json"
+
+
+def revisa_escritores_concurrentes(fallos: list) -> int:
+    """Dos wa-scope escribiendo el storage A LA VEZ no pueden dejarle al host un archivo
+    a medias.
+
+    Los tres escritores usaban el MISMO temporal (`storage.json.tmp`): uno lo truncaba
+    mientras el otro lo instalaba con os.replace, y el storage quedaba invalido. El
+    PluginKvStore de Orca lee {} de un archivo que no parsea y su siguiente set guarda
+    su clave sola: se perdian los duenos, el numero de aprobacion y las decisiones.
+    Aca el host se emula igual —read {} ante un error, set que reescribe todo por un
+    temporal unico y un rename— mientras dos procesos escriben cientos de veces."""
+    hechas = 0
+    vueltas = 300
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+        env.pop("ORCA_USER_DATA_PATH", None)
+        store = store_de(home, "orca")
+        store.parent.mkdir(parents=True)
+        duenos = [{"id": "573000000001@s.whatsapp.net", "name": "Dueno Demo"}]
+        store.write_text(json.dumps({"owners": duenos}), encoding="utf-8")
+        relleno = "x" * 60000
+        codigo = CARGA_WA_SCOPE + (
+            "for i in range(%d):\n"
+            "    m.plugin_store_write(None, extra={'board': {'v': 1, 'counts': "
+            "{'decision': i %% 3}}, 'relleno': %r})\n"
+            "    m.plugin_store_patch_run({'state': 'running', 'i': i})\n"
+        ) % (vueltas, relleno)
+        hijos = [subprocess.Popen([sys.executable, "-c", codigo], env=env,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                  text=True) for _ in range(2)]
+
+        def lee():
+            try:
+                dato = json.loads(store.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return {}
+            return dato if isinstance(dato, dict) else {}
+
+        def guarda(clave, valor):
+            dato = lee()
+            dato[clave] = valor
+            temporal = store.with_name(f"storage.json.{os.getpid()}.{time.time_ns()}.tmp")
+            temporal.write_text(json.dumps(dato), encoding="utf-8")
+            os.replace(temporal, store)
+
+        vacias, perdidos, i = 0, 0, 0
+        while any(h.poll() is None for h in hijos):
+            if not lee():
+                vacias += 1
+            guarda("workerBeat", {"i": i})
+            if "owners" not in lee():
+                perdidos += 1
+            i += 1
+        errores = [h.stderr.read() for h in hijos]
+        hechas += 1
+        if any(h.returncode for h in hijos):
+            fallos.append("un escritor concurrente del storage revento: "
+                          f"{[e.strip().splitlines()[-1] for e in errores if e.strip()]}")
+        hechas += 1
+        if vacias:
+            fallos.append(f"con dos escritores a la vez el host leyo {{}} {vacias} veces en "
+                          f"{i} lecturas: el storage quedo a medias")
+        hechas += 1
+        if perdidos or lee().get("owners") != duenos:
+            fallos.append(f"con dos escritores a la vez `owners` se perdio {perdidos} veces "
+                          f"y termino en {lee().get('owners')!r}")
+        hechas += 1
+        sobras = [p.name for p in store.parent.iterdir() if p.name.endswith(".tmp")]
+        if sobras:
+            fallos.append(f"los escritores dejaron temporales en el storage: {sobras}")
+    return hechas
+
+
+def revisa_store_que_se_lee(fallos: list) -> int:
+    """El storage que se LEE es el del Orca que corre, no el archivo mas nuevo.
+
+    Cada escritura de Python toca todos los destinos (orca, orca-dev, ...), asi que el
+    mas nuevo podia ser el de orca-dev, que no tiene las claves del panel: el sync
+    reexportaba los avisos de Orca apagados y `wa-scope owner` no veia el numero de
+    aprobacion. Sin un Orca conocido manda un orden fijo, con orca primero."""
+    hechas = 0
+    aprobacion = "573009999999@s.whatsapp.net"
+    avisos = {"waiting": "on", "finished": "on"}
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+        env.pop("ORCA_USER_DATA_PATH", None)
+        orca, dev = store_de(home, "orca"), store_de(home, "orca-dev")
+        for p in (orca, dev):
+            p.parent.mkdir(parents=True)
+        orca.write_text(json.dumps({
+            "owners": [{"id": aprobacion, "name": "Dueno Demo"}],
+            "approvalNumber": aprobacion, "orcaNotices": avisos}), encoding="utf-8")
+        dev.write_text(json.dumps({"scope": {}}), encoding="utf-8")
+        subprocess.run([sys.executable, "-c", CARGA_WA_SCOPE +
+                        "m.plugin_store_write(None, extra={'health': {'ok': True}})"],
+                       env=env, capture_output=True, timeout=120)
+        # El de orca-dev queda como el mas nuevo, que es lo que deja cualquier escritura.
+        futuro = time.time() + 30
+        os.utime(dev, (futuro, futuro))
+
+        def ajustes(extra_env):
+            p = subprocess.run(
+                [sys.executable, "-c", CARGA_WA_SCOPE +
+                 "import json; print(json.dumps([m.settings_from_plugin(), "
+                 "m.plugin_store_path()]))"],
+                env=dict(env, **extra_env), capture_output=True, text=True, timeout=120)
+            return json.loads(p.stdout or "[{}, null]")
+
+        leidos, ruta = ajustes({})
+        hechas += 1
+        if leidos.get("orca_notice_waiting") != "on" or \
+                leidos.get("orca_notice_finished") != "on":
+            fallos.append(f"con orca-dev mas nuevo, settings_from_plugin() dio "
+                          f"{leidos!r} desde {ruta!r}: los avisos de Orca del panel "
+                          "tenian que seguir en on")
+        hechas += 1
+        p = subprocess.run([str(BIN / "wa-scope"), "owner", "--json"], capture_output=True,
+                           text=True, env=env, timeout=120)
+        dato = json.loads(p.stdout) if p.stdout.strip() else None
+        if not isinstance(dato, dict) or dato.get("chat") != aprobacion or \
+                dato.get("source") != "approval-number":
+            fallos.append(f"con orca-dev mas nuevo, `wa-scope owner` dio {dato!r}: tenia que "
+                          "seguir viendo el numero de aprobacion")
+        # Quien trabaja en orca-dev lo dice con ORCA_USER_DATA_PATH, y entonces manda ese.
+        _, ruta = ajustes({"ORCA_USER_DATA_PATH": str(dev.parents[2])})
+        hechas += 1
+        if ruta != str(dev):
+            fallos.append(f"con ORCA_USER_DATA_PATH en orca-dev se leyo {ruta!r}")
+        # Y uno que apunta fuera de este HOME no cuenta: un chequeo no lee al usuario real.
+        _, ruta = ajustes({"ORCA_USER_DATA_PATH": str(home / "otro" / "orca")})
+        hechas += 1
+        if ruta != str(orca):
+            fallos.append(f"con ORCA_USER_DATA_PATH fuera de los userData se leyo {ruta!r} "
+                          "y tenia que leerse el de orca")
+    return hechas
+
+
+def revisa_store_ilegible(fallos: list) -> int:
+    """Un destino que no parsea no se pisa con un dict chico, ni se saltea en silencio.
+
+    Pisarlo con lo poco que trae la escritura es exactamente como se perdian las claves
+    del panel. Se deja una copia al lado, se rearma desde el storage que si se lee y se
+    avisa por stderr; sin ninguno legible, no se toca y se avisa. Y el JSON se escribe
+    sin NaN: Orca no lo parsea."""
+    hechas = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+        env.pop("ORCA_USER_DATA_PATH", None)
+        orca, dev = store_de(home, "orca"), store_de(home, "orca-dev")
+        for p in (orca, dev):
+            p.parent.mkdir(parents=True)
+        duenos = [{"id": "573000000001@s.whatsapp.net", "name": "Dueno Demo"}]
+        dev.write_text(json.dumps({"owners": duenos}), encoding="utf-8")
+        roto = '{"owners": [{"id": "573000000001@s.whatsapp.net"'
+        orca.write_text(roto, encoding="utf-8")
+
+        def escribe(llamada):
+            return subprocess.run([sys.executable, "-c", CARGA_WA_SCOPE + llamada],
+                                  env=env, capture_output=True, text=True, timeout=120)
+
+        p = escribe("m.plugin_store_write(None, extra={'health': {'ok': True}})")
+        hechas += 1
+        try:
+            dato = json.loads(orca.read_text(encoding="utf-8"))
+        except ValueError:
+            dato = None
+        if not isinstance(dato, dict) or dato.get("owners") != duenos or \
+                dato.get("health") != {"ok": True}:
+            fallos.append(f"un storage ilegible quedo en {str(dato)[:160]!r}: tenia que "
+                          "rearmarse desde el legible, con owners y la escritura")
+        hechas += 1
+        copia = orca.with_name("storage.json.ilegible")
+        if not copia.exists() or copia.read_text(encoding="utf-8") != roto:
+            fallos.append("del storage ilegible no quedo copia en storage.json.ilegible")
+        hechas += 1
+        if "ilegible" not in p.stderr:
+            fallos.append(f"rearmar un storage ilegible no se dijo por stderr: {p.stderr!r}")
+
+        # Sin ningun storage legible no hay de donde rearmar: no se toca.
+        orca.write_text(roto, encoding="utf-8")
+        dev.write_text(roto, encoding="utf-8")
+        p = escribe("m.plugin_store_write(None, extra={'health': {'ok': True}})")
+        hechas += 1
+        if orca.read_text(encoding="utf-8") != roto or dev.read_text(encoding="utf-8") != roto:
+            fallos.append("sin ningun storage legible, una escritura piso uno ilegible")
+        hechas += 1
+        if "ilegible" not in p.stderr:
+            fallos.append(f"saltear un storage ilegible no se dijo por stderr: {p.stderr!r}")
+
+        # NaN no es JSON: Orca no lo parsea y leeria {}.
+        dev.write_text(json.dumps({"owners": duenos}), encoding="utf-8")
+        orca.write_text(json.dumps({"owners": duenos}), encoding="utf-8")
+        escribe("m.plugin_store_write(None, extra={'health': {'ratio': float('nan')}})")
+        hechas += 1
+        if "NaN" in orca.read_text(encoding="utf-8"):
+            fallos.append("el storage se escribio con NaN, que no es JSON")
+    return hechas
+
+
 def entorno(home: pathlib.Path) -> dict:
     """HOME propio: la base vive en ~/.wa-inbox/scope.db y no hay variable para moverla,
     asi que mover el HOME es lo que mantiene la base real del usuario fuera de esto."""
@@ -3060,7 +3289,10 @@ def main() -> int:
                       + revisa_proyectos(fallos)
                       + revisa_varios_proyectos(fallos)
                       + revisa_espera(fallos)
-                      + revisa_chat_del_dueno(fallos))
+                      + revisa_chat_del_dueno(fallos)
+                      + revisa_escritores_concurrentes(fallos)
+                      + revisa_store_que_se_lee(fallos)
+                      + revisa_store_ilegible(fallos))
     aislado.cleanup()
 
     if fallos:
