@@ -627,6 +627,21 @@ const TABLERO_DOS_LINEAS = Object.assign({}, DOS_LINEAS, {
         text: 'Ya quedo listo el reporte que pidio, se lo enviamos por aca.', reasons: [] }] })
   }) }
 })
+// Ajustes por linea (odd/tasks/ajustes-por-linea.md): la segunda linea con los suyos aparte,
+// en `ajustesPorLinea[<numero>]` — otro agente, otro tono, otro numero de aprobacion y el
+// acuse apagado. Nombres e ids de prueba.
+const DOS_LINEAS_AJUSTES = Object.assign({}, DOS_LINEAS, {
+  owners: [{ id: '100000000000001@lid', name: 'Ana Restrepo' }],
+  approvalNumber: '100000000000001@lid',
+  ajustesPorLinea: { [LINEA_SEGUNDA.cuenta]: {
+    agentName: 'Asistente Personal', ownerName: 'Beto Socio',
+    tone: 'Cercano y breve. Trata de usted.',
+    owners: [{ id: '100000000000002@lid', name: 'Beto Socio' }],
+    approvalNumber: '100000000000002@lid', approvalLang: 'es', ackMode: 'off',
+    ackText: 'Gracias por escribir, le respondo en un momento.', ackQuietMinutes: '15',
+    greetingMode: 'on', greetingText: '', firstReply: null, slaMinutes: '30',
+    projectQuestionHours: '12', inboxDays: '3', transcribeLang: 'es' } }
+})
 // Elegir la segunda linea en el selector, como lo hace el dueno.
 const ELEGIR_SEGUNDA = `document.querySelector('#linea-vista button[data-value="${LINEA_SEGUNDA.cuenta}"]').click()`
 // Con directos guardados con su LID (ids y telefonos de prueba): el sidecar anota el
@@ -751,11 +766,23 @@ const PANELES = [
   { nombre: 'config-lineas-dos', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, datos: DOS_LINEAS, pestana: 'estado', espera: 400,
     guion: `document.querySelector('.linea[data-carpeta="${LINEA_SEGUNDA.carpeta}"] .linea-desvincular').click()` },
-  // Con dos lineas, las pestanas compartidas dicen a cuales aplican.
+  // Con dos lineas, Su aprobacion es de la linea elegida; lo del equipo lo dice su tarjeta.
   { nombre: 'config-lineas-aprobacion', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, datos: DOS_LINEAS, pestana: 'aprobacion', espera: 400 },
   { nombre: 'config-lineas-chats', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, datos: DOS_LINEAS, pestana: 'chats', espera: 800,
+    guion: ELEGIR_SEGUNDA },
+  // Ajustes por linea (A7): el selector arriba de las pestanas, Agente en la principal y en
+  // la segunda, y Su aprobacion de la segunda con sus propios numeros.
+  { nombre: 'config-ajustes-selector', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: DOS_LINEAS_AJUSTES, pestana: 'estado', espera: 400 },
+  { nombre: 'config-ajustes-agente-principal', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: DOS_LINEAS_AJUSTES, pestana: 'agente', espera: 400 },
+  { nombre: 'config-ajustes-agente-segunda', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: DOS_LINEAS_AJUSTES, pestana: 'agente', espera: 800,
+    guion: ELEGIR_SEGUNDA },
+  { nombre: 'config-ajustes-aprobacion-segunda', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: DOS_LINEAS_AJUSTES, pestana: 'aprobacion', espera: 1200,
     guion: ELEGIR_SEGUNDA },
   // Conversaciones trae la regla vieja de Plane (`cobros`) marcada.
   { nombre: 'config-tab-chats', archivo: 'config.html', anchos: ANCHOS,

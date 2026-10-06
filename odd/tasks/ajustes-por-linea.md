@@ -56,7 +56,7 @@ belonging to this computer:
   - Fix `senders` and `groupMembers` to read `porLinea[cuenta]` when viewing another line.
   - Keep the loading state and targeted retry from v4.23.1 for every per-line read.
 - [x] **A6** Strings in ES, EN and PT. The panel's Spanish uses usted, with no voseo and no accents in the code.
-- [ ] **A7** Screenshots (reduced matrix: es, dark, 390): the selector at the top, Agente on the main line, Agente on the second line, and Su aprobacion on the second line.
+- [x] **A7** Screenshots (reduced matrix: es, dark, 390): the selector at the top, Agente on the main line, Agente on the second line, and Su aprobacion on the second line.
 
 ## Acceptance criteria
 
