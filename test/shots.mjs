@@ -616,7 +616,11 @@ const TABLERO_DOS_LINEAS = Object.assign({}, DOS_LINEAS, {
       caso(42, 'recibido', { account: LINEA_SEGUNDA.cuenta, chat_jid: SEGUNDA_DIRECTO,
         chat_name: 'Cliente De La Segunda', title: 'Pregunta por el horario de soporte',
         updated_at: minutos(9) })
-    ], { counts: Object.assign({}, CUENTAS_VACIAS, { decision: 1, recibido: 1 }) })
+    ], { counts: Object.assign({}, CUENTAS_VACIAS, { decision: 1, recibido: 1 }),
+      // Lo retenido de esta linea (approve-solo-dueno): su tarjeta dice de que linea es.
+      held_drafts: [{ req_id: 'sesion-linea-dos-1', account: LINEA_SEGUNDA.cuenta,
+        chat_jid: SEGUNDA_DIRECTO, chat: 'Cliente De La Segunda', at: minutos(6),
+        text: 'Ya quedo listo el reporte que pidio, se lo enviamos por aca.', reasons: [] }] })
   }) }
 })
 // Elegir la segunda linea en el selector, como lo hace el dueno.
