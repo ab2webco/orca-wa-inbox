@@ -11,7 +11,7 @@
  * sin mecanismo de exclusion, solo `.git` en la raiz se salta, y los symlinks se
  * rechazan de plano en vez de seguirse.
  */
-import { existsSync, statSync, lstatSync, readdirSync } from 'node:fs'
+import { existsSync, statSync, lstatSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -63,6 +63,24 @@ console.log('\nsidecar: el bundle')
   ok('sidecar/sidecar.cjs existe', existe, ruta)
   ok('y es un solo archivo, no un directorio',
     existe && statSync(ruta).isFile(), existe ? '' : 'no se pudo comprobar: falta el archivo')
+}
+
+console.log('\nsidecar: el bundle trae Baileys 7, el que descifra en LID')
+{
+  // Con Baileys 6.7.24 una linea guardaba TODOS los mensajes vacios: las sesiones de
+  // signal quedaban partidas entre el telefono (`<pn>.0`) y el LID (`<lid>.0`), el
+  // telefono contestaba en una y Baileys buscaba en la otra ("No matching sessions
+  // found for message"). Baileys 7 pasa el remitente a su LID antes de descifrar
+  // (`getDecryptionJid`), guarda el par LID-telefono que trae cada stanza y migra la
+  // sesion. Lo que se mira son frases y llaves que sobreviven a la minificacion y que
+  // 6.7.24 no tiene: si alguien reinstala la version vieja, esto se pone rojo.
+  const ruta = join(PLUGIN_DIR, 'sidecar', 'sidecar.cjs')
+  const texto = existsSync(ruta) ? readFileSync(ruta, 'utf8') : ''
+  ok('guarda el par LID-telefono que trae el stanza (storeMappingFromEnvelope)',
+    texto.includes('Stored LID mapping from envelope'))
+  ok('tiene el almacen de pares LID-telefono (`lid-mapping`)', texto.includes('lid-mapping'))
+  ok('la llave del mensaje trae la forma alterna (`remoteJidAlt`)',
+    texto.includes('remoteJidAlt'))
 }
 
 console.log('\nsidecar: el arbol del plugin sigue dentro del tope de Orca')
