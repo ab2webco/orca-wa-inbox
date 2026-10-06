@@ -252,8 +252,9 @@
                     margin: 4px 0 2px; font-size: 13px; }
       /* Los avisos de Orca: la etiqueta larga se parte al lado de su interruptor y no
          baja entera a otra linea, lejos de el (visto a 390). */
-      #orca-notices-card .switch-row { flex-wrap: nowrap; }
-      #orca-notices-card .switch-row > span { flex: 1 1 auto; min-width: 0; }
+      #orca-notices-card .switch-row, #agent-card .switch-row { flex-wrap: nowrap; }
+      #orca-notices-card .switch-row > span, #agent-card .switch-row > span {
+        flex: 1 1 auto; min-width: 0; }
       .switch { position: relative; width: 38px; height: 22px; padding: 0; flex: none;
                 border-radius: 9999px; border: 1px solid var(--input, var(--fb-input));
                 background: var(--muted, var(--fb-muted)); }
@@ -507,7 +508,7 @@
       #linea-vista-fila[hidden] { display: none; }
       #linea-vista-actual { flex-basis: 100%; font-size: 14px; overflow-wrap: anywhere; }
       #linea-vista-ayuda { flex-basis: 100%; margin: 0; }
-      .nota-maquina[hidden], #orca-main-line[hidden] { display: none; }
+      #orca-line-from[hidden] { display: none; }
       /* El aviso de lo que se pierde va en --destructive y no apagado como las demas
          pistas: es lo unico de esta seccion que el usuario tiene que leer ANTES de
          apretar, no despues. */
@@ -821,7 +822,6 @@
         <section class="card" id="routes-card">
           <h2 data-t="routesLegend"></h2>
           <p class="hint lead" data-t="routesHelp"></p>
-          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
           <div class="row dos">
             <div>
               <label for="r-match" data-t="routeMatch"></label>
@@ -858,7 +858,6 @@
         <section id="projects-card">
           <h2 data-t="projectsLegend"></h2>
           <p class="hint lead" data-t="projectsHelp"></p>
-          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
           <div id="projects-wrap"></div>
           <div class="actions">
             <button id="projects-refresh" data-t="projectsRefresh"></button>
@@ -931,8 +930,7 @@
         <section class="card" id="orca-notices-card">
           <h2 id="orca-legend" data-t="orcaLegend"></h2>
           <p class="hint lead" id="orca-intro" data-t="orcaIntro"></p>
-          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
-          <p class="hint" id="orca-main-line" hidden></p>
+          <p class="hint" id="orca-line-from" hidden></p>
           <p class="hint approval-warn" id="orca-no-number" data-t="orcaNoNumber" hidden></p>
           <div class="switch-row">
             <button type="button" class="switch" id="orca-waiting" role="switch"
@@ -1081,7 +1079,6 @@
              llave". -->
         <section class="card" id="jev-card">
           <h2 data-t="jevLegend"></h2>
-          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
           <p class="jev-aviso" id="jev-aviso" data-t="jevDisclosure"></p>
           <p class="pairing-msg" id="jev-status"></p>
           <div class="switch-row">
@@ -1092,6 +1089,7 @@
             <span class="said" id="said-jev-enabled"></span>
           </div>
           <p class="hint" id="jev-switch-text"></p>
+          <p class="hint" id="jev-key-shared" data-t="jevKeyShared"></p>
           <label for="jev-key" data-t="jevKeyLabel"></label>
           <input id="jev-key" type="password" autocomplete="off" autocapitalize="off"
                  spellcheck="false" data-t-ph="jevKeyPh" />
@@ -1110,6 +1108,15 @@
       <div id="view-agente" role="tabpanel" aria-labelledby="tab-agente" hidden>
         <section class="card" id="agent-card">
           <h2 data-t="agentLegend"></h2>
+          <!-- Firmar con el nombre del agente, por linea (todo-por-linea, P2). Apagado, los
+               mensajes de esta linea salen como del dueno y el nombre deja de ser obligatorio. -->
+          <div class="switch-row">
+            <button type="button" class="switch" id="sign-messages" role="switch"
+                    aria-checked="true" aria-labelledby="sign-messages-label"
+                    aria-describedby="sign-help"><span class="knob"></span></button>
+            <span id="sign-messages-label" data-t="signLabel"></span>
+          </div>
+          <p class="hint" id="sign-help" data-t="signHelp"></p>
           <label for="agent" data-t="agentLabel"></label>
           <input id="agent" data-t-ph="agentPh" />
           <p class="hint" data-t="agentHelp"></p>
@@ -1131,7 +1138,6 @@
         <section class="card" id="bot-account-card">
           <h2 data-t="botAccountLegend"></h2>
           <p class="hint lead" id="bot-account-label" data-t="botAccountHelp"></p>
-          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
           <div class="seg cuentas" id="bot-account" role="group" aria-labelledby="bot-account-label">
             <button type="button" data-value="auto" data-t="botAccountAuto"></button>
           </div>
@@ -1152,7 +1158,17 @@
         <section id="skills-card">
           <h2 data-t="skillsLegend"></h2>
           <p class="hint lead" data-t="skillsHelp"></p>
-          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
+          <p class="hint" data-t="skillsMachineNote"></p>
+          <!-- Lo unico de cada linea (todo-por-linea, P7): por cual linea avisan las skills.
+               Se guarda en `skillsLine` (null es la principal); lo lee `wa-scope owner`. -->
+          <div class="switch-row" id="skills-line-row" hidden>
+            <button type="button" class="switch" id="skills-line" role="switch"
+                    aria-checked="false" aria-labelledby="skills-line-label"><span
+                    class="knob"></span></button>
+            <span id="skills-line-label" data-t="skillsLineLabel"></span>
+            <span class="said" id="said-skills-line"></span>
+          </div>
+          <p class="hint" id="skills-line-text" hidden></p>
           <div id="skills-wrap"></div>
           <div class="actions">
             <span class="said" id="said-skills"></span>
@@ -1172,7 +1188,6 @@
             <button type="button" data-value="off" data-t="trOff"></button>
           </div>
           <p class="hint" data-t="transcribeHelp"></p>
-          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
           <span class="label" id="lang-label" data-t="langLabel"></span>
           <div class="seg" id="lang" role="group" aria-labelledby="lang-label">
             <button type="button" data-value="auto" data-t="langAuto"></button>
@@ -1187,7 +1202,6 @@
             <button type="button" data-value="minima" data-t="qualityMinima"></button>
           </div>
           <p class="hint" data-t="qualityHelp"></p>
-          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
           <div class="actions">
             <button class="primary" id="save-voice" data-t="saveCard"></button>
             <span class="said" id="said-voice"></span>
@@ -1217,7 +1231,6 @@
             <button type="button" data-value="60" data-t="sync60"></button>
           </div>
           <p class="hint" data-t="syncHelp"></p>
-          <p class="hint nota-maquina" hidden data-t="machineNote"></p>
           <p class="hint" id="triage-pace" aria-live="polite" hidden></p>
           <div class="actions">
             <button class="primary" id="save-reading" data-t="saveCard"></button>
@@ -1252,11 +1265,9 @@
           linesWaitingOne: 'Hay una linea esperando su codigo: escanee ese antes de abrir ' +
             'otra.',
           // ajustes-por-linea: cada pestana es de la linea elegida; lo del equipo se dice.
-          machineNote: 'Vale para todas las lineas de este equipo.',
-          orcaMainLine: 'Salen por la linea principal, {num}, a su numero de aprobacion.',
+          orcaLineFrom: 'Los avisos de Orca de esta linea salen por ella, {num}, a su numero de aprobacion.',
           linesApprovalFrom: 'Los avisos de los casos de esta linea salen por ella, {num}, a este numero.',
-          linesViewHelp: 'Cada pestana muestra y guarda lo de esta linea. Lo que es de todo el ' +
-            'equipo lo dice en su tarjeta.',
+          linesViewHelp: 'Cada pestana muestra y guarda lo de esta linea.',
           linesViewing: 'Viendo la linea {num}',
           linesViewLoading: 'Leyendo la linea {num}…',
           linesView: 'Linea',
@@ -1352,6 +1363,12 @@
             'cualquier proyecto. Instalela global, para todos sus proyectos, o solo en los ' +
             'proyectos que eligio en la pestana Proyectos. El plugin las pone al dia solo cada ' +
             'vez que se actualiza.',
+          skillsMachineNote: 'Las skills se instalan en este equipo, no en una linea: Claude ' +
+            'Code las carga en todas sus sesiones. Lo unico que se elige por linea es por cual ' +
+            'linea le avisan.',
+          skillsLineLabel: 'Las skills avisan por esta linea',
+          skillsLineNow: 'Las skills le avisan por la linea {num}, al numero de aprobacion de ' +
+            'esa linea.',
           skillsEditNote: 'Si edita una seccion del archivo, esa seccion queda suya: las ' +
             'actualizaciones no la tocan.',
           skillsRepoNote: 'Instalarla en un proyecto deja un archivo en ese repositorio ' +
@@ -1530,6 +1547,8 @@
           agentLegend: 'Su agente', agentLabel: 'Como se llama',
           agentPh: 'ej. Watson, Viernes, Asistente',
           agentHelp: 'Firma cada mensaje que escriba, para que nadie dude de si habla usted o el.',
+          signLabel: 'Firmar los mensajes con el nombre del agente',
+          signHelp: 'Apagado, los mensajes de este numero salen sin firma, como si los escribiera usted, y el nombre del agente es opcional.',
           ownerLabel: 'Para quien trabaja',
           ownerPh: 'ej. Ana Restrepo',
           ownerHelp: 'Su nombre. El agente lo usa para saber de quien es el trabajo que ' +
@@ -1552,6 +1571,9 @@
             'cuesta mas lectura; mas espaciado, mas espera.',
           triagePace: 'En Orca, la automatizacion WhatsApp: triage corre cada {ritmo}.',
           triagePacing: 'Ajustando la automatizacion WhatsApp: triage al ritmo guardado\u2026',
+          triagePaceShared: 'En Orca, la automatizacion WhatsApp: triage corre cada {ritmo}, ' +
+            'el ritmo de la linea mas frecuente de este equipo. Esta linea se actualiza a su ' +
+            'propio ritmo.',
           triagePaceFail: 'No se pudo poner la automatizacion WhatsApp: triage a este ritmo ' +
             'en Orca. Se reintenta cada 5 min.',
           triagePaceMissing: 'No encuentro la automatizacion WhatsApp: triage en Orca. Revise ' +
@@ -1727,6 +1749,8 @@
           jevSaveKey: 'Guardar llave',
           jevRemoveKey: 'Quitar llave',
           jevEnabledLabel: 'Usar Jev',
+          jevKeyShared: 'La llave es una sola para este equipo: la usan todas sus lineas. ' +
+            'Encender o apagar Jev vale solo para la linea que esta viendo.',
           jevOff: 'Apagado: no se envia nada',
           jevOn: 'Encendido: envia a api.typesafe.ai',
           jevStOffNo: 'Apagado · sin llave',
@@ -1837,11 +1861,9 @@
             'line\'s phone.',
           linesWaitingOne: 'A line is waiting for its code: scan that one before opening ' +
             'another.',
-          machineNote: 'Applies to every line on this computer.',
-          orcaMainLine: 'They go out through the main line, {num}, to its approval number.',
+          orcaLineFrom: "This line's Orca notices go out through it, {num}, to its approval number.",
           linesApprovalFrom: "Notices for this line's cases go out through it, {num}, to this number.",
-          linesViewHelp: "Every tab shows and saves this line's settings. Whatever applies to " +
-            'the whole computer says so on its card.',
+          linesViewHelp: "Every tab shows and saves this line's settings.",
           linesViewing: 'Viewing line {num}',
           linesViewLoading: 'Reading line {num}…',
           linesView: 'Line',
@@ -1924,6 +1946,12 @@
           skillsHelp: 'A skill teaches a Claude Code agent to use this plugin from any ' +
             'project. Install it globally, for all your projects, or only in the projects you ' +
             'picked in the Projects tab. The plugin keeps them up to date every time it updates.',
+          skillsMachineNote: 'Skills are installed on this computer, not on a line: Claude Code ' +
+            'loads them in every session. The only per-line choice is which line they notify ' +
+            'you through.',
+          skillsLineLabel: 'Skills notify through this line',
+          skillsLineNow: 'Skills notify you through the line {num}, at that line\'s approval ' +
+            'number.',
           skillsEditNote: 'If you edit a section of the file, that section is yours: updates ' +
             'leave it alone.',
           skillsRepoNote: 'Installing it in a project leaves a file in that repository ' +
@@ -2098,6 +2126,8 @@
           agentLegend: 'Your agent', agentLabel: 'What it is called',
           agentPh: 'e.g. Watson, Friday, Assistant',
           agentHelp: 'Signs every message it writes, so nobody wonders if it was you or it.',
+          signLabel: "Sign messages with the agent's name",
+          signHelp: 'When off, messages from this number go out unsigned, as if you wrote them, and the agent name is optional.',
           ownerLabel: 'Who it works for',
           ownerPh: 'e.g. Ana Restrepo',
           ownerHelp: 'Your name. The agent uses it to know whose work it is handling and ' +
@@ -2119,6 +2149,8 @@
             'costs more waiting.',
           triagePace: 'In Orca, the WhatsApp: triage automation runs every {ritmo}.',
           triagePacing: 'Setting the WhatsApp: triage automation to the saved pace\u2026',
+          triagePaceShared: 'In Orca, the WhatsApp: triage automation runs every {ritmo}, the ' +
+            'pace of the most frequent line on this computer. This line refreshes at its own pace.',
           triagePaceFail: 'Could not set the WhatsApp: triage automation to this pace in ' +
             'Orca. It is retried every 5 min.',
           triagePaceMissing: 'Cannot find the WhatsApp: triage automation in Orca. Check ' +
@@ -2288,6 +2320,8 @@
           jevSaveKey: 'Save key',
           jevRemoveKey: 'Remove key',
           jevEnabledLabel: 'Use Jev',
+          jevKeyShared: 'The key is one for this computer: every line uses it. Turning Jev ' +
+            'on or off applies only to the line you are viewing.',
           jevOff: 'Off: nothing is sent',
           jevOn: 'On: sends to api.typesafe.ai',
           jevStOffNo: 'Off · no key',
@@ -2389,11 +2423,9 @@
           'telefone dessa linha.',
         linesWaitingOne: 'Ha uma linha esperando o seu codigo: escaneie esse antes de abrir ' +
           'outra.',
-          machineNote: 'Vale para todas as linhas deste computador.',
-          orcaMainLine: 'Saem pela linha principal, {num}, para o numero de aprovacao dela.',
+          orcaLineFrom: 'Os avisos do Orca desta linha saem por ela, {num}, para o numero de aprovacao dela.',
           linesApprovalFrom: 'Os avisos dos casos desta linha saem por ela, {num}, para este numero.',
-          linesViewHelp: 'Cada aba mostra e guarda o que e desta linha. O que vale para o ' +
-            'computador inteiro diz isso no seu cartao.',
+          linesViewHelp: 'Cada aba mostra e guarda o que e desta linha.',
           linesViewing: 'Vendo a linha {num}',
           linesViewLoading: 'Lendo a linha {num}…',
           linesView: 'Linha',
@@ -2518,6 +2550,12 @@
           'qualquer projeto. Instale-a de forma global, para todos os seus projetos, ou so nos ' +
           'projetos que escolheu na aba Projetos. O plugin as atualiza sozinho a cada ' +
           'atualizacao.',
+        skillsMachineNote: 'As skills sao instaladas neste computador, nao em uma linha: o ' +
+          'Claude Code as carrega em todas as sessoes. A unica escolha por linha e por qual ' +
+          'linha elas avisam voce.',
+        skillsLineLabel: 'As skills avisam por esta linha',
+        skillsLineNow: 'As skills avisam voce pela linha {num}, no numero de aprovacao dessa ' +
+          'linha.',
         skillsEditNote: 'Se editar uma secao do arquivo, essa secao fica sua: as atualizacoes ' +
           'nao mexem nela.',
         skillsRepoNote: 'Instala-la em um projeto deixa um arquivo nesse repositorio ' +
@@ -2649,6 +2687,8 @@
           'seguido custa mais leitura; mais espacado, mais espera.',
         triagePace: 'No Orca, a automacao WhatsApp: triage roda a cada {ritmo}.',
         triagePacing: 'Ajustando a automacao WhatsApp: triage ao ritmo salvo\u2026',
+        triagePaceShared: 'No Orca, a automacao WhatsApp: triage roda a cada {ritmo}, o ritmo ' +
+          'da linha mais frequente deste computador. Esta linha se atualiza no seu proprio ritmo.',
         triagePaceFail: 'Nao foi possivel colocar a automacao WhatsApp: triage neste ritmo ' +
           'no Orca. Tenta-se de novo a cada 5 min.',
         triagePaceMissing: 'Nao encontro a automacao WhatsApp: triage no Orca. Verifique ' +
@@ -2875,6 +2915,8 @@
         jevSaveKey: 'Salvar chave',
         jevRemoveKey: 'Remover chave',
         jevEnabledLabel: 'Usar o Jev',
+        jevKeyShared: 'A chave e uma so para este computador: todas as linhas a usam. Ligar ' +
+          'ou desligar o Jev vale so para a linha que voce esta vendo.',
         jevOff: 'Desligado: nada e enviado',
         jevOn: 'Ligado: envia para api.typesafe.ai',
         jevStOffNo: 'Desligado · sem chave',
@@ -2905,6 +2947,8 @@
         toneHelp: 'Vale para todas as conversas. Cada uma pode ter o seu e substitui este.',
         agentPh: 'ex. Watson, Sexta, Assistente',
         agentHelp: 'Assina cada mensagem que escreve, para ninguem duvidar se foi voce ou ele.',
+        signLabel: 'Assinar as mensagens com o nome do agente',
+        signHelp: 'Desligado, as mensagens deste numero saem sem assinatura, como se voce as escrevesse, e o nome do agente e opcional.',
         empty: 'Nenhuma conversa autorizada. O que nao esta aqui, o seu agente nao ve.',
         routeMatch: 'Quando a mensagem disser', routeMatchPh: 'ex. faturamento',
         colWhen: 'Quando disser', colGoes: 'Vai para',
@@ -3393,16 +3437,31 @@
       // cambiar de linea cuesta una lectura y no dieciseis.
       var AJUSTES_DE_LINEA = ['agentName', 'ownerName', 'tone', 'owners', 'approvalNumber',
         'approvalLang', 'ackMode', 'ackText', 'ackQuietMinutes', 'greetingMode', 'greetingText',
-        'firstReply', 'slaMinutes', 'projectQuestionHours', 'inboxDays', 'transcribeLang']
+        'firstReply', 'slaMinutes', 'projectQuestionHours', 'inboxDays', 'transcribeLang',
+        'orcaNotices',
+        'signMessages',
+        'botClaudeAccount',
+        'transcribe',
+        'transcribeQuality',
+        'routes',
+        'projects',
+        'syncMinutes',
+        'jevEnabled'
+      ]
+      // Los que otra linea NUNCA toma de la principal (`NO_HEREDAN`, la misma lista de
+      // wa_settings.py y main.mjs): sin uno propio se pintan los de fabrica. Los avisos de Orca
+      // heredados mandarian el mismo aviso dos veces, uno por cada numero.
+      var NO_HEREDAN = ['orcaNotices']
       var CONTENEDOR_AJUSTES = 'ajustesPorLinea'
       function esDeLinea (k) { return AJUSTES_DE_LINEA.indexOf(k) !== -1 }
       /** El valor de un ajuste para la linea `cuenta`, del contenedor ya leido. Lo que la
        *  linea no tiene propio es lo de la principal, como lo lee wa-scope; null es "sin
-       *  valor" y no cae a la principal. */
+       *  valor" y no cae a la principal. Lo que no se hereda, sin propio, es null. */
       function ajusteDeLinea (contenedor, cuenta, k) {
         if (!hayRespuesta(contenedor)) return SIN_RESPUESTA
         var propios = contenedor && typeof contenedor === 'object' ? contenedor[cuenta] : null
         if (propios && typeof propios === 'object' && k in propios) return propios[k]
+        if (NO_HEREDAN.indexOf(k) !== -1) return null
         return k in ultimaLectura ? ultimaLectura[k] : SIN_RESPUESTA
       }
       // Una sola lectura del contenedor en vuelo: abrir una pestana pide varias claves de
@@ -3454,6 +3513,8 @@
       // desincronizan y una de las dos termina pintando otra cosa.
       var CONTROLES = {
         agentName: ['agent', ''],
+        // Firmar con el nombre del agente (todo-por-linea, P2): un interruptor, `on` u `off`.
+        signMessages: ['sign-messages', 'on'],
         tone: ['tone', ''],
         ownerName: ['owner', ''],
         transcribe: ['transcribe', 'local'],
@@ -3479,7 +3540,17 @@
       /** El valor que muestra un control de la tabla, sea campo o grupo de botones. */
       function valorDe (id) {
         var n = el(id)
+        if (n.classList.contains('switch')) return n.getAttribute('aria-checked') === 'true' ? 'on' : 'off'
         return n.classList.contains('seg') ? valorSeg(id) : n.value.trim()
+      }
+      /** Pone un control de la tabla en `valor`, sea campo, grupo o interruptor. */
+      function ponerControl (id, valor, porDefecto) {
+        var n = el(id)
+        if (n.classList.contains('switch')) {
+          var v = typeof valor === 'string' && valor ? valor : porDefecto
+          n.setAttribute('aria-checked', v === 'on' ? 'true' : 'false')
+        } else if (n.classList.contains('seg')) ponerSeg(id, valor, porDefecto)
+        else n.value = typeof valor === 'string' ? valor : porDefecto
       }
 
       // ---------- el ritmo del triage en Orca (ritmo-triage) ----------
@@ -3497,15 +3568,20 @@
           return
         }
         var guardado = parseInt(String(minutosGuardados || '5'), 10)
+        // Con varias lineas el triage corre al ritmo de la mas frecuente (todo-por-linea,
+        // P5): uno mas seguido que el de esta linea no es "ajustando", es el de otra linea.
+        var varias = lineasVinculadas().length > 1
         var texto
         var mal = false
+        var etiqueta = ETIQUETA_RITMO[r.minutes] ? t(ETIQUETA_RITMO[r.minutes]) : r.minutes + ' min'
         if (!r.ok) {
           mal = true
           texto = t(r.code === 'sin-triage' ? 'triagePaceMissing' : 'triagePaceFail')
-        } else if (guardado !== r.minutes) {
+        } else if (varias ? r.minutes > guardado : guardado !== r.minutes) {
           texto = t('triagePacing')
+        } else if (r.minutes < guardado) {
+          texto = t('triagePaceShared').replace('{ritmo}', etiqueta)
         } else {
-          var etiqueta = ETIQUETA_RITMO[r.minutes] ? t(ETIQUETA_RITMO[r.minutes]) : r.minutes + ' min'
           texto = t('triagePace').replace('{ritmo}', etiqueta)
         }
         linea.textContent = texto
@@ -3575,9 +3651,9 @@
         var n = el(c[0])
         // `contains` y no `===`: en un grupo el foco queda en uno de sus botones.
         if (n.contains(document.activeElement)) return
-        if (n.classList.contains('seg')) ponerSeg(c[0], valor, c[1])
-        else n.value = typeof valor === 'string' ? valor : c[1]
+        ponerControl(c[0], valor, c[1])
         if (key === 'agentName') nombreAgente = typeof valor === 'string' ? valor : ''
+        if (key === 'signMessages') firmaGuardada = valor !== 'off'
       }
 
       /** Guarda y deja el control mostrando lo que quedo GUARDADO.
@@ -3746,13 +3822,39 @@
         }, RELECTURA_MS)
       }
 
-      // El nombre del agente firma cada mensaje y no puede quedar vacio. El dueno (su
-      // nombre) y el tono si: vacios, el prompt usa los de fabrica.
+      // El nombre del agente firma cada mensaje y no puede quedar vacio mientras la linea
+      // firme (todo-por-linea, P2): con la firma apagada sus mensajes salen como del dueno y
+      // el nombre sobra. El dueno (su nombre) y el tono si pueden quedar vacios: el prompt
+      // usa los de fabrica.
+      var firmaGuardada = true
+      function firmaEncendida () { return el('sign-messages').getAttribute('aria-checked') === 'true' }
+      /** Lee la firma de la linea que se mira y la pinta (una lectura, fuera de la vuelta). */
+      function leerFirma () {
+        var sello = guardadoSeq
+        leerClave('signMessages', true).then(function (v) {
+          pintarLeida('signMessages', v, sello)
+          pintarChecklist()
+        })
+      }
+      el('sign-messages').addEventListener('click', function () {
+        el('sign-messages').setAttribute('aria-checked', firmaEncendida() ? 'false' : 'true')
+        sucios['sign-messages'] = true
+      })
       el('save-agent').addEventListener('click', function (event) {
         if (sinLeer('save-agent')) return
-        if (!el('agent').value.trim()) { said('said-agent', t('needName'), true); return }
-        guardarTarjeta(event.currentTarget, 'said-agent', ['agentName', 'ownerName', 'tone'])
+        if (firmaEncendida() && !el('agent').value.trim()) {
+          said('said-agent', t('needName'), true)
+          return
+        }
+        // La firma se escribe solo si se leyo o el dueno la toco: sin saber lo guardado, el
+        // interruptor muestra lo de fabrica y escribirlo pisaria un `off` que no se vio.
+        var claves = ['agentName', 'ownerName', 'tone']
+        if (pintadas.signMessages || sucios['sign-messages']) claves.unshift('signMessages')
+        guardarTarjeta(event.currentTarget, 'said-agent', claves)
       })
+      // Lo que falta (Estado) depende de la firma: se lee una vez despues de la vuelta, fuera
+      // de su rafaga.
+      setTimeout(leerFirma, RELECTURA_MS)
       el('save-bot-account').addEventListener('click', function (event) {
         guardarTarjeta(event.currentTarget, 'said-bot-account', ['botClaudeAccount'])
       })
@@ -3811,10 +3913,18 @@
         if (cuentasLeyendo) return
         cuentasLeyendo = true
         el('bot-account-status').textContent = t('botAccountLoading')
+        // La guardada es la de la linea que se mira (todo-por-linea, P3).
+        var linea = otraLineaVista()
+        var relee = false
         var pedir = Promise.all([
-          read('botClaudeAccount', true),
+          leerClave('botClaudeAccount', true),
           pedirAlWorker('scopeRequest', 'scopeResult', { action: 'cuentas-claude' })
         ]).then(function (rs) {
+          // Lo que llega cuando ya se mira otra linea no vale: se pide de nuevo.
+          if (otraLineaVista() !== linea) {
+            relee = true
+            return
+          }
           var guardada = hayRespuesta(rs[0]) && typeof rs[0] === 'string' && rs[0] ? rs[0] : 'auto'
           var v = rs[1]
           var leidas = !!(v && v.ok === true && Array.isArray(v.accounts))
@@ -3829,7 +3939,10 @@
           pintarCuentasBot(guardada, leidas)
         }, function () {
           el('bot-account-status').textContent = t('botAccountFail')
-        }).then(function () { cuentasLeyendo = false })
+        }).then(function () {
+          cuentasLeyendo = false
+          if (relee) leerCuentasBot()
+        })
         return boton ? busy(boton, pedir) : pedir
       }
 
@@ -4912,7 +5025,7 @@
       }
 
       function recargarProyectos() {
-        return Promise.all([read('projects', true), read('projectsStatus', true)])
+        return Promise.all([leerClave('projects', true), read('projectsStatus', true)])
           .then(function (rs) {
             if (hayRespuesta(rs[0])) renderProjects(rs[0])
             if (hayRespuesta(rs[1])) renderProposals(rs[1])
@@ -4923,8 +5036,9 @@
        *  que el worker contesta: agregar, quitar y anotar los hace el, y un "✓"
        *  inmediato diria hecho algo que todavia no paso. */
       function pedirProyectos(accion, extra, boton, hecho) {
+        // El catalogo es de cada linea (P9): el pedido nombra la que se mira.
         var pedir = pedirAlWorker('scopeRequest', 'scopeResult',
-          Object.assign({ action: accion }, extra || {})).then(function (v) {
+          Object.assign({ action: accion, linea: otraLineaVista() }, extra || {})).then(function (v) {
           if (!v) { said('said-projects', t('pairingNoAnswer'), true); return }
           if (!v.ok) {
             said('said-projects', porCodigo(PROY_HOW_KEY, v.code, '') || t('projFail'), true)
@@ -5663,8 +5777,9 @@
        *  worker, la del storage. Y no se dice nada hasta que contesta: el veredicto que
        *  llega antes que el trabajo no es un veredicto. */
       function removeRoute (pattern, boton) {
+        // Las reglas son de cada linea (P9): se quitan en la que se mira.
         var pedir = pedirAlWorker('scopeRequest', 'scopeResult',
-          { action: 'regla-quitar', pattern: pattern }).then(function (v) {
+          { action: 'regla-quitar', pattern: pattern, linea: otraLineaVista() }).then(function (v) {
           if (!v) { said('said-route', t('pairingNoAnswer'), true); return }
           if (!v.ok) {
             said('said-route', porCodigo(ROUTE_HOW_KEY, v.code, '') || t('routeRmFail'), true)
@@ -5673,7 +5788,7 @@
           said('said-route', '✓ ' + t('removedOk') + ': ' + pattern)
           // El worker ya dejo el storage sin la regla: se relee y se repinta con eso, no
           // con la copia de antes, que la dejaria en pantalla.
-          return read('routes', true).then(function (v2) {
+          return leerClave('routes', true).then(function (v2) {
             if (hayRespuesta(v2)) renderRoutes(v2 || [])
           })
         })
@@ -5684,11 +5799,15 @@
         var match = el('r-match').value.trim().toLowerCase()
         var workspace = el('r-workspace').value
         if (!match || !workspace) { said('said-route', t('needMatch'), true); return }
-        busy(event.currentTarget, read('routes').then(function (rules) {
-          rules = (rules || []).filter(function (r) { return r.pattern !== match })
+        // Las de la linea que se mira (P9): `guardar` las escribe en su lugar. Sin una
+        // lectura que conteste no se escribe: se borrarian las reglas que ya estaban.
+        busy(event.currentTarget, leerClave('routes', true).then(function (rules) {
+          if (!hayRespuesta(rules)) { said('said-route', t('saveFailed'), true); return }
+          rules = (Array.isArray(rules) ? rules : []).filter(function (r) { return r.pattern !== match })
           rules.push({ pattern: match, workspace: workspace })
           rules.sort(function (a, b) { return a.pattern < b.pattern ? -1 : 1 })
-          return write('routes', rules).then(function () {
+          return guardar([['routes', rules]]).then(function (mal) {
+            if (mal.length) { said('said-route', t('saveFailed'), true); return }
             renderRoutes(rules)
             el('r-match').value = ''
             said('said-route', '✓ ' + t('savedOk') + ': ' + match + ' → ' +
@@ -6214,9 +6333,17 @@
         'espejo-fallo': 'jevMirrorFail'
       }
 
+      /** Jev en la linea que se mira (todo-por-linea, P6): la principal es `enabled`; cada
+       *  otra, `lines[<cuenta>]`, y la que no esta ahi sigue a la principal. */
+      function jevEnVista (s) {
+        var otra = otraLineaVista()
+        var lineas = s && s.lines && typeof s.lines === 'object' ? s.lines : {}
+        if (otra && Object.prototype.hasOwnProperty.call(lineas, otra)) return lineas[otra] === true
+        return !!s && s.enabled === true
+      }
       function renderJev (st) {
         var s = st && typeof st === 'object' ? st : {}
-        var enabled = s.enabled === true
+        var enabled = jevEnVista(s)
         var keySet = s.keySet === true
         el('jev-status').textContent =
           t(enabled ? (keySet ? 'jevStOnYes' : 'jevStOnNo') : (keySet ? 'jevStOffYes' : 'jevStOffNo'))
@@ -6281,7 +6408,7 @@
       // Encender con la llave en la boveda es el gesto que reemplaza un archivo ajeno: el
       // boton manda exactamente ese pedido, sin llave (el panel nunca la tiene).
       el('jev-use-saved').addEventListener('click', function (event) {
-        busy(event.currentTarget, pedirJev({ action: 'activar', enabled: true }).then(function (v) {
+        busy(event.currentTarget, pedirJev(pedidoJevActivar(true)).then(function (v) {
           jevDecir('said-jev-key', v, 'jevSaved')
           return jevRefrescar()
         }))
@@ -6298,6 +6425,14 @@
       // encender Jev porque el select no abria, y un "Guardar" aparte despues de un
       // interruptor es un segundo paso que nadie espera. Manda el mismo pedido de antes.
       var jevEnviando = false, jevUltimo = null
+      /** Encender o apagar Jev en la linea que se mira: la otra linea viaja en `linea`; la
+       *  principal no la nombra, como siempre. */
+      function pedidoJevActivar (encender) {
+        var pedido = { action: 'activar', enabled: encender }
+        var otra = otraLineaVista()
+        if (otra) pedido.linea = otra
+        return pedido
+      }
       el('jev-enabled').addEventListener('click', function (event) {
         if (jevEnviando) return
         var sw = event.currentTarget
@@ -6307,7 +6442,7 @@
         sw.setAttribute('aria-busy', 'true')
         sw.disabled = true
         el('jev-switch-text').textContent = t(encender ? 'jevOn' : 'jevOff')
-        pedirJev({ action: 'activar', enabled: encender }).then(function (v) {
+        pedirJev(pedidoJevActivar(encender)).then(function (v) {
           jevDecir('said-jev-enabled', v, 'jevSaved')
           jevEnviando = false
           sw.removeAttribute('aria-busy')
@@ -6432,7 +6567,68 @@
           '</div>'
       }
 
+      // ---------- por cual linea avisan las skills (todo-por-linea, P7) ----------
+      // Las skills se instalan en el equipo; lo que se elige por linea es por cual avisan.
+      // UNA eleccion para el equipo, en la raiz (`skillsLine`): la cuenta de la linea, o null
+      // para la principal. Una linea elegida que ya no esta vinculada vuelve a la principal,
+      // igual que en `wa-scope owner`.
+      var lineaSkills = null
+      var lineaSkillsLeida = false
+      function lineaDeSkills () {
+        var vinc = lineasVinculadas()
+        if (vinc.some(function (l) { return l.cuenta === lineaSkills })) return lineaSkills
+        return vinc.length ? vinc[0].cuenta : null
+      }
+      function renderLineaSkills () {
+        var vinc = lineasVinculadas()
+        var fila = el('skills-line-row')
+        var texto = el('skills-line-text')
+        if (vinc.length < 2 || !lineaSkillsLeida) {
+          fila.hidden = true
+          texto.hidden = true
+          return
+        }
+        var vista = otraLineaVista() || vinc[0].cuenta
+        var elegida = lineaDeSkills()
+        var sw = el('skills-line')
+        sw.setAttribute('aria-checked', elegida === vista ? 'true' : 'false')
+        // La principal es la de fabrica: avisa cuando ninguna otra lo hace, asi que ahi no
+        // se apaga; se elige otra linea encendiendola en esa.
+        sw.disabled = elegida === vista && vista === vinc[0].cuenta
+        var l = vinc.filter(function (x) { return x.cuenta === elegida })[0]
+        texto.textContent = fmt('skillsLineNow', { num: numeroDeLinea(l, estadoDeLinea(l)) })
+        fila.hidden = false
+        texto.hidden = false
+      }
+      function leerLineaSkills () {
+        if (lineasVinculadas().length < 2) return Promise.resolve()
+        return read('skillsLine', true).then(function (v) {
+          if (!hayRespuesta(v)) return
+          lineaSkills = typeof v === 'string' && v ? v : null
+          lineaSkillsLeida = true
+          renderLineaSkills()
+        })
+      }
+      // Un interruptor actua al apretarlo, como el de Jev.
+      el('skills-line').addEventListener('click', function (event) {
+        var vinc = lineasVinculadas()
+        var sw = event.currentTarget
+        if (vinc.length < 2 || sw.getAttribute('aria-busy') === 'true') return
+        var vista = otraLineaVista() || vinc[0].cuenta
+        var nueva = lineaDeSkills() === vista || vista === vinc[0].cuenta ? null : vista
+        sw.setAttribute('aria-busy', 'true')
+        sw.disabled = true
+        write('skillsLine', nueva).then(function (w) {
+          var bien = !!(w && w.ok)
+          if (bien) lineaSkills = nueva
+          said('said-skills-line', bien ? '✓ ' + t('savedOk') : t('saveFailed'), !bien)
+          sw.removeAttribute('aria-busy')
+          renderLineaSkills()
+        })
+      })
+
       function leerSkills () {
+        leerLineaSkills()
         return pedirAlWorker('scopeRequest', 'scopeResult', { action: 'skills-estado' })
           .then(function () { return read('skillsStatus', true) })
           .then(function (v) { if (hayRespuesta(v)) renderSkills(v) })
@@ -6491,7 +6687,7 @@
         comboChats.cerrar(); comboProyecto.cerrar(); comboRegla.cerrar()
         combosExtra.forEach(function (c) { c.cerrar() })
         if (activaAuto(cual)) leerAuto()
-        if (cual === 'agente') leerCuentasBot()
+        if (cual === 'agente') { leerFirma(); leerCuentasBot() }
         if (cual === 'skills') leerSkills()
       }
       // Las claves de las respuestas automaticas (y la meta del primer contacto) se leen al
@@ -6535,13 +6731,13 @@
         var jev = jevUltimo || {}
         return [
           { item: 'linea', ok: estadoLinea === 'connected', ir: 'estado', clave: 'chkLinea' },
-          { item: 'agente', ok: !!nombreAgente, ir: 'agente', clave: 'chkAgente' },
+          { item: 'agente', ok: !!nombreAgente || !firmaGuardada, ir: 'agente', clave: 'chkAgente' },
           { item: 'chat', ok: Object.keys(alcance).some(function (j) {
               return alcance[j] && alcance[j].mode && alcance[j].mode !== 'off'
             }), ir: 'chats', clave: 'chkChat' },
           { item: 'proyectos', ok: proyectos.length > 0, ir: 'proyectos',
             clave: 'chkProyectos', nota: 'chkRecommended' },
-          { item: 'jev', ok: jev.enabled === true && jev.keySet === true, ir: 'aprobacion',
+          { item: 'jev', ok: jevEnVista(jev) && jev.keySet === true, ir: 'aprobacion',
             clave: 'chkJev', nota: 'chkOptional' }
         ]
       }
@@ -6624,25 +6820,22 @@
         if (d && typeof d.me === 'string' && d.me) return d.me
         return l.cuenta ? '+' + String(l.cuenta).replace(/^pn:/, '') : t('linesNew')
       }
-      /** Las notas de linea, solo con dos lineas vinculadas o mas: lo del equipo lo dice en
-       *  su tarjeta, los avisos de un caso salen por la linea que se mira, y los de Orca por
-       *  la principal. Con una sola linea, nada: no hay de que distinguirla. */
+      /** Las notas de linea, solo con dos lineas vinculadas o mas: los avisos de un caso y los
+       *  de Orca salen por la linea que se mira. Con una sola linea, nada: no hay de que
+       *  distinguirla. */
       function renderNotasLineas () {
         var vinc = lineasVinculadas()
         var varias = vinc.length > 1
-        Array.prototype.forEach.call(document.querySelectorAll('.nota-maquina'), function (n) {
-          n.hidden = !varias
-        })
         var cuenta = otraLineaVista() || (vinc[0] && vinc[0].cuenta)
         var vista = vinc.filter(function (l) { return l.cuenta === cuenta })[0]
         var aviso = el('approval-main-line')
         aviso.hidden = !varias
         aviso.textContent = varias && vista
           ? fmt('linesApprovalFrom', { num: numeroDeLinea(vista, estadoDeLinea(vista)) }) : ''
-        var orca = el('orca-main-line')
+        var orca = el('orca-line-from')
         orca.hidden = !varias
-        orca.textContent = varias
-          ? fmt('orcaMainLine', { num: numeroDeLinea(vinc[0], estadoDeLinea(vinc[0])) }) : ''
+        orca.textContent = varias && vista
+          ? fmt('orcaLineFrom', { num: numeroDeLinea(vista, estadoDeLinea(vista)) }) : ''
       }
       function textoEstadoLinea (estado, d) {
         if (estado === 'silent') return fmt('pairingSilent', { hora: horaUltimaSenal(d) })
@@ -6809,6 +7002,7 @@
         var vinc = lineasVinculadas()
         var fila = el('linea-vista-fila')
         renderNotasLineas()
+        renderLineaSkills()
         if (vinc.length < 2) {
           fila.hidden = true
           lineaVista = null
@@ -6849,10 +7043,15 @@
         olvidarAjustesDeLinea()
         resetScopeForm()
         renderVistaLineas()
+        // Jev ya esta leido para todas las lineas (`jevStatus`): se repinta el de la nueva.
+        if (jevUltimo && !jevEnviando) renderJev(jevUltimo)
+        renderLineaSkills()
         if (nueva) pintarLeyendoLinea(nueva)
         reload().then(function () {
           if (autoPedida) leerAuto()
           else programarRelectura()
+          // La firma y la cuenta del bot son de cada linea: con Agente a la vista se releen.
+          if (!el('view-agente').hidden) { leerFirma(); leerCuentasBot() }
         })
       }
       /** Cambiar de linea: nada de lo pintado de la otra queda en las tarjetas de linea.
@@ -6864,10 +7063,15 @@
           var c = CONTROLES[k]
           if (!c) return
           delete sucios[c[0]]
-          if (el(c[0]).classList.contains('seg')) ponerSeg(c[0], c[1], c[1])
-          else el(c[0]).value = c[1]
+          ponerControl(c[0], c[1], c[1])
         })
+        firmaGuardada = true
         PRIMER_IDS.forEach(function (id) { delete sucios[id] })
+        // Los avisos de Orca, a lo de fabrica hasta que llegue lo de la linea nueva.
+        ORCA_IDS.forEach(function (id) { delete sucios[id] })
+        ORCA_INTERRUPTORES.forEach(function (p) { el(p[1]).setAttribute('aria-checked', 'false') })
+        ORCA_CAMPOS.forEach(function (p) { el(p[1]).value = ORCA_DEFECTO[p[0]] })
+        pintarOrcaVista()
         ponerSeg('first-reply', 'ack', 'ack')
         PRIMER_NUMEROS.forEach(function (n) { el(n[1]).value = PRIMER_DEFECTO[n[0]] })
         pintarPrimerVista()
@@ -6877,9 +7081,27 @@
         numeroGuardado = ''
         numeroEnEdicion = null
         pintarDuenos()
-        ;['said-agent', 'said-owners', 'said-auto', 'said-sla', 'said-pq-hours', 'said-voice',
-          'said-reading'].forEach(function (id) { said(id, '') })
+        ;['said-agent', 'said-owners', 'said-orca', 'said-auto', 'said-sla', 'said-pq-hours',
+          'said-voice', 'said-reading'].forEach(function (id) { said(id, '') })
         pintarLecturas()
+        olvidarReglasYProyectos()
+      }
+      /** Las reglas y los proyectos de la linea que se deja no quedan pintados (P9): dicen
+       *  "leyendo" hasta que llegue lo de la que se mira ahora. */
+      function olvidarReglasYProyectos () {
+        var vinc = lineasVinculadas()
+        var cuenta = otraLineaVista() || (vinc[0] && vinc[0].cuenta)
+        var l = vinc.filter(function (x) { return x.cuenta === cuenta })[0]
+        var leyendo = '<p class="empty">' + esc(fmt('linesViewLoading',
+          { num: l ? numeroDeLinea(l, estadoDeLinea(l)) : cuenta })) + '</p>'
+        reglasCrudas = null
+        el('routes-wrap').innerHTML = leyendo
+        proyectos = []
+        proyectosJson = null
+        catalogoLeido = false
+        el('projects-wrap').innerHTML = leyendo
+        pintarSelectoresDeProyecto()
+        ;['said-route', 'said-projects'].forEach(function (id) { said(id, '') })
       }
 
       // Lo que se ve mientras la otra linea no contesto: nunca la lista de la que se
@@ -6929,6 +7151,9 @@
                     'transcribe', 'transcribeLang', 'syncStatus', 'syncMinutes',
                     'workerBeat', 'sidecar', 'jevStatus', 'projects', 'projectsStatus',
                     'owners', 'senders', 'approvalNumber']
+      // `signMessages` (P2) no va en la vuelta: la vuelta entera ya gasta casi todo el cupo
+      // que le queda al clic. Se pide al abrir Agente y una vez despues de abrir el panel
+      // (`leerFirma`).
       var CLAVES_VIVAS = ['chats', 'chatsAccount', 'health', 'syncStatus', 'workerBeat',
                           'sidecar']
       // Varias lineas a la vez, sin gastar cupo con una sola: la lista de lineas viaja
@@ -7008,7 +7233,8 @@
             // Los proyectos ANTES del alcance y de las reglas: sus tablas y selectores
             // nombran el proyecto, y pintarlos con el catalogo de antes mostraria un id
             // pelado donde el dueno ya agrego el proyecto.
-            if (hayRespuesta(v('projects'))) renderProjects(v('projects'))
+            // Los de la linea que se mira (todo-por-linea, P9), como las reglas.
+            if (hayRespuesta(vl('projects'))) renderProjects(vl('projects'))
             if (hayRespuesta(v('projectsStatus'))) renderProposals(v('projectsStatus'))
             var alcanceVisto = otra ? delOtraLinea(v('alcancePorLinea'), otra) : v('scope')
             if (hayRespuesta(alcanceVisto)) renderScope(alcanceVisto)
@@ -7017,13 +7243,14 @@
               reintentarVistaDeLinea(otra, 30)
             }
             pintarClave('tone', vl('tone'), sello)
-            pintarClave('transcribeQuality', v('transcribeQuality'), sello)
+            pintarClave('transcribeQuality', vl('transcribeQuality'), sello)
             pintarClave('inboxDays', vl('inboxDays'), sello)
             pintarClave('ownerName', vl('ownerName'), sello)
-            pintarClave('transcribe', v('transcribe'), sello)
+            pintarClave('signMessages', vl('signMessages'), sello)
+            pintarClave('transcribe', vl('transcribe'), sello)
             pintarClave('transcribeLang', vl('transcribeLang'), sello)
-            pintarClave('syncMinutes', v('syncMinutes'), sello)
-            if (hayRespuesta(v('syncMinutes'))) minutosGuardados = v('syncMinutes')
+            pintarClave('syncMinutes', vl('syncMinutes'), sello)
+            if (hayRespuesta(vl('syncMinutes'))) minutosGuardados = vl('syncMinutes')
             // El ritmo del triage viaja en el latido: el worker lo escribe ahi.
             var latido = v('workerBeat')
             if (hayRespuesta(latido)) ritmoTriage = latido && typeof latido === 'object' ? latido.triage : null
@@ -7088,7 +7315,7 @@
             }
             else if (hayRespuesta(salud) && salud) el('alert').hidden = true
             if (hayRespuesta(salud)) renderOpcionales(salud && salud.optional)
-            if (hayRespuesta(v('routes'))) renderRoutes(v('routes'))
+            if (hayRespuesta(vl('routes'))) renderRoutes(vl('routes'))
             renderPairing(v('sidecar'))
             renderLineas()
             apagarLoQueNecesitaWorker(sinWorker)

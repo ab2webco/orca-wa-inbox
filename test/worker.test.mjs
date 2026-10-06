@@ -63,7 +63,8 @@ const PLUGIN_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
 
 const {
   default: activate, intervaloSync, lanzarSidecar, programarIngesta, correrIngesta,
-  INGESTA_AVISOS_MAX, INGESTA_ESPERA_MS, sembrarAjustesDeLinea, AJUSTES_DE_LINEA
+  INGESTA_AVISOS_MAX, INGESTA_ESPERA_MS, sembrarAjustesDeLinea, AJUSTES_DE_LINEA,
+  NO_HEREDAN, intervalosDeLineas, lineasDelTurno, sync
 } = await import('../main.mjs')
 const { workspaceDir, dataDir } = await import('../harness.mjs')
 
@@ -586,6 +587,54 @@ console.log('\nworker: cada cuanto relee WhatsApp')
     const ms = await intervaloSync(orca)
     ok(nombre, ms === esperado, `${guardado} -> ${ms} ms, se esperaban ${esperado}`)
   }
+}
+
+// El ritmo de cada linea (todo-por-linea, P5): `syncMinutes` es de cada linea. El worker
+// tiene UN reloj, al ritmo de la linea mas frecuente, y en cada vuelta sincroniza solo las
+// lineas a las que ya les toca segun el suyo.
+console.log('\nworker: P5 — cada linea relee WhatsApp a su ritmo')
+{
+  const A = 'pn:573000000001'
+  const B = 'pn:573000000011'
+  const MIN = 60000
+  const intervalos = intervalosDeLineas({ syncMinutes: '1' }, { [B]: { syncMinutes: '10' } }, [A, B])
+  ok('la principal usa el de la raiz y la otra el suyo',
+    intervalos[A] === MIN && intervalos[B] === 10 * MIN, JSON.stringify(intervalos))
+  const sinPropio = intervalosDeLineas({ syncMinutes: '15' }, { [B]: { agentName: 'x' } }, [A, B])
+  ok('una linea sin valor propio usa el de la principal, como lo lee wa-scope',
+    sinPropio[B] === 15 * MIN, JSON.stringify(sinPropio))
+  const vacio = intervalosDeLineas({ syncMinutes: '15' }, { [B]: { syncMinutes: null } }, [A, B])
+  ok('una en null es "sin valor": el de fabrica, no el de la principal',
+    vacio[B] === 5 * MIN, JSON.stringify(vacio))
+  const t0 = Date.UTC(2026, 9, 6, 12, 0, 0)
+  const ultimos = { [A]: t0, [B]: t0 }
+  ok('A a 1 min y B a 10: una vuelta a los 2 min sincroniza A y no B',
+    JSON.stringify(lineasDelTurno(intervalos, ultimos, t0 + 2 * MIN)) === JSON.stringify([A]),
+    JSON.stringify(lineasDelTurno(intervalos, ultimos, t0 + 2 * MIN)))
+  ok('a los 10 min, las dos',
+    lineasDelTurno(intervalos, ultimos, t0 + 10 * MIN).join() === [A, B].join())
+  ok('antes del minuto, ninguna', lineasDelTurno(intervalos, ultimos, t0 + 30000).length === 0)
+  ok('una linea que nunca sincronizo le toca ya',
+    lineasDelTurno(intervalos, { [A]: t0 }, t0 + 2 * MIN).join() === [A, B].join())
+
+  const orca = hostFalso(RAIZ, { syncMinutes: '10', ajustesPorLinea: { [B]: { syncMinutes: '1' } } })
+  ok('el reloj del worker va al ritmo de la linea mas frecuente',
+    await intervaloSync(orca, [A, B]) === MIN, String(await intervaloSync(orca, [A, B])))
+  ok('y sin lineas nombradas, al de la raiz, como siempre',
+    await intervaloSync(orca) === 10 * MIN, String(await intervaloSync(orca)))
+
+  const registro = join(RAIZ, 'syncs-por-linea.txt')
+  const dir = herramientas('sync-por-linea', '#!/bin/sh\n' +
+    `echo "$@" >> ${JSON.stringify(registro)}\n` +
+    'echo \'[{"synced": true, "destinos": []}]\'\n')
+  const host = hostFalso(dir, {})
+  const listo = await sync(host, { toolsDir: dir, trigger: 'timer', lineas: [A] })
+  const corridas = existsSync(registro) ? readFileSync(registro, 'utf8').trim().split('\n') : []
+  ok('el sync de una vuelta corre solo en las lineas a las que les toca',
+    listo === true && corridas.length === 1 && corridas[0] === `sync --json --line ${A}`,
+    JSON.stringify(corridas))
+  ok('y deja dicho como le fue', host.store.syncStatus?.ok === true &&
+    host.store.syncStatus?.trigger === 'timer', JSON.stringify(host.store.syncStatus))
 }
 
 // ───────── el estado del sistema se PUBLICA, tambien cuando es malo ─────────
@@ -2024,7 +2073,7 @@ console.log('\nworker: A4 — una linea nueva empieza con los ajustes de la prin
     propios && Object.keys(propios).sort().join() === [...AJUSTES_DE_LINEA].sort().join() &&
     propios.agentName === 'Agente Principal' &&
     JSON.stringify(propios.owners) === JSON.stringify(raiz.owners) &&
-    propios.firstReply.mode === 'ack' && !('syncMinutes' in propios), JSON.stringify(copia))
+    propios.firstReply.mode === 'ack' && !('toolsDir' in propios), JSON.stringify(copia))
   ok('lo que la principal no tiene queda vacio y no ausente: no hereda lo que elija despues',
     propios && propios.ackText === null && propios.slaMinutes === null, JSON.stringify(propios))
   propios.owners.push({ id: 'otro@lid' })
@@ -2074,6 +2123,7 @@ console.log('\nworker: A4 — una linea nueva empieza con los ajustes de la prin
     const orca = hostFalso(herramientas('ajustes', '#!/bin/sh\necho \'[]\'\n'), {
       ...raiz,
       syncMinutes: '10',
+      toolsDir: '/ruta/de/la/maquina',
       lineas: [{ carpeta: 'pn-573000000002', cuenta: 'pn:573000000002', tipo: 'support' },
         { carpeta: 'pn-573000000001', cuenta: 'pn:573000000001', tipo: 'support' },
         { carpeta: 'pn-573000000012', cuenta: 'pn:573000000012', tipo: 'support' }],
@@ -2085,7 +2135,7 @@ console.log('\nworker: A4 — una linea nueva empieza con los ajustes de la prin
     ok('al decir su numero, la linea nueva queda con los ajustes de la principal',
       linea && linea.agentName === 'Agente Principal' && linea.tone === 'Tono de la principal' &&
       linea.approvalNumber === '100000000000001@lid' && linea.ackText === null &&
-      !('syncMinutes' in linea), JSON.stringify(orca.store.ajustesPorLinea))
+      linea.syncMinutes === '10' && !('toolsDir' in linea), JSON.stringify(orca.store.ajustesPorLinea))
     ok('la principal no tiene ajustes aparte: los suyos siguen en la raiz',
       !orca.store.ajustesPorLinea?.['pn:573000000002'] && orca.store.agentName === 'Agente Principal',
       JSON.stringify(orca.store.ajustesPorLinea))
@@ -2689,6 +2739,75 @@ console.log('\nworker: la llave de Jev, su espejo 0600 y el aviso de que no es o
     orca.store.jevStatus.keySet === true && readFileSync(espejo, 'utf8') === AJENO,
     JSON.stringify([orca.store.jevStatus, readFileSync(espejo, 'utf8')]))
   apagar()
+}
+
+// ───────── P6: Jev encendido o apagado en cada linea (todo-por-linea) ─────────
+// UNA llave y UN espejo para el equipo; el interruptor es de cada linea. El espejo existe
+// mientras alguna linea tenga Jev encendido, y el estado dice el de cada una.
+console.log('\nworker: P6 — Jev de cada linea, con una sola llave')
+{
+  const LLAVE = 'tsk-FALSA-3333333333333333'
+  const ESPEJO = `# wa-inbox jev mirror v1\nTYPESAFE_API_KEY=${LLAVE}\n`
+  const B = 'pn:573000000011'
+  const espejo = join(process.env.HOME, '.wa-inbox', 'jev.env')
+  const contenido = () => existsSync(espejo) ? readFileSync(espejo, 'utf8') : null
+  rmSync(join(process.env.HOME, '.wa-inbox'), { recursive: true, force: true })
+
+  const orca = hostFalso(herramientas('jev-lineas', '#!/bin/sh\necho \'[]\'\n'), {
+    chats: [], jevEnabled: false,
+    ajustesPorLinea: { [B]: { agentName: 'Agente Segunda' }, 'pn:573000000013': { claveFutura: 1 } } })
+  orca.secrets.jevKey = LLAVE
+  const { apagar } = await arranca(orca)
+  await hasta(() => orca.store.jevStatus)
+  const pedir = async (id, extra) => {
+    orca.store.jevRequest = { id, at: new Date().toISOString(), ...extra }
+    await hasta(() => orca.store.jevResult && orca.store.jevResult.requestId === id, 15000)
+    return orca.store.jevResult
+  }
+
+  let v = await pedir('jev-linea-1', { action: 'activar', enabled: true, linea: B })
+  ok('encender Jev en otra linea lo guarda en lo de ESA linea, y la principal sigue apagada',
+    v && v.ok === true && orca.store.ajustesPorLinea[B].jevEnabled === true &&
+    orca.store.jevEnabled === false && orca.store.ajustesPorLinea[B].agentName === 'Agente Segunda' &&
+    JSON.stringify(orca.store.ajustesPorLinea['pn:573000000013']) === '{"claveFutura":1}',
+    JSON.stringify([v, orca.store.jevEnabled, orca.store.ajustesPorLinea]))
+  ok('con una sola linea encendida el espejo existe: la llave es una sola',
+    contenido() === ESPEJO && orca.store.jevStatus.mirror === 'activo', JSON.stringify(orca.store.jevStatus))
+  ok('y el estado dice el de cada linea',
+    orca.store.jevStatus.enabled === false && orca.store.jevStatus.lines?.[B] === true,
+    JSON.stringify(orca.store.jevStatus))
+
+  v = await pedir('jev-linea-2', { action: 'activar', enabled: true })
+  v = await pedir('jev-linea-3', { action: 'activar', enabled: false, linea: B })
+  ok('apagar la otra linea no apaga la principal, y el espejo sigue',
+    v && v.ok === true && orca.store.jevEnabled === true &&
+    orca.store.ajustesPorLinea[B].jevEnabled === false && contenido() === ESPEJO &&
+    orca.store.jevStatus.enabled === true && orca.store.jevStatus.lines?.[B] === false,
+    JSON.stringify([orca.store.jevEnabled, orca.store.ajustesPorLinea[B], orca.store.jevStatus]))
+
+  v = await pedir('jev-linea-4', { action: 'activar', enabled: false })
+  ok('con todas apagadas el espejo se va, y la llave queda en la boveda',
+    v && v.ok === true && contenido() === null && orca.secrets.jevKey === LLAVE &&
+    orca.store.jevStatus.mirror === 'apagado', JSON.stringify(orca.store.jevStatus))
+
+  v = await pedir('jev-linea-5', { action: 'activar', enabled: true, linea: 42 })
+  ok('una linea que no es una cuenta se rechaza sin tocar nada',
+    v && v.ok === false && v.code === 'argumentos-invalidos' && contenido() === null,
+    JSON.stringify(v))
+  apagar()
+
+  // Al arrancar, el espejo tambien sale de todas las lineas: la principal apagada y la
+  // otra encendida lo dejan escrito.
+  rmSync(join(process.env.HOME, '.wa-inbox'), { recursive: true, force: true })
+  const orca2 = hostFalso(herramientas('jev-lineas-2', '#!/bin/sh\necho \'[]\'\n'),
+    { chats: [], jevEnabled: false, ajustesPorLinea: { [B]: { jevEnabled: true } } })
+  orca2.secrets.jevKey = LLAVE
+  const { apagar: apagar2 } = await arranca(orca2)
+  await hasta(() => orca2.store.jevStatus && orca2.store.jevStatus.mirror === 'activo')
+  ok('al arrancar con Jev solo en otra linea, el espejo queda escrito',
+    contenido() === ESPEJO && orca2.store.jevStatus.lines?.[B] === true,
+    JSON.stringify(orca2.store.jevStatus))
+  apagar2()
 }
 
 // ───────── T6: las acciones del dueno sobre una tarjeta del tablero ─────────
@@ -4313,6 +4432,239 @@ console.log('\nworker: avisos-orca, el estado de cada agente')
   ok('despues de reiniciar, el waiting ya guardado no avisa otra vez', llamadas().length === 2,
     JSON.stringify(llamadas()))
   otra.apagar()
+}
+
+
+// ───────── todo-por-linea: las tres copias de la lista, y lo que no se hereda ─────────
+// `AJUSTES_DE_LINEA` vive en tres lugares (wa_settings.py, main.mjs, config.html) y
+// `NO_HEREDAN` en los mismos tres: una clave que falta en uno es un ajuste que el panel
+// guarda en la linea y el CLI lee de la raiz, o al reves.
+console.log('\nworker: todo-por-linea, las tres copias de la lista de ajustes de linea')
+{
+  const py = readFileSync(join(PLUGIN_DIR, 'bin', 'wa_settings.py'), 'utf8')
+  const html = readFileSync(join(PLUGIN_DIR, 'config.html'), 'utf8')
+  const claves = (texto) => [...texto.matchAll(/["']([A-Za-z]+)["']/g)].map((m) => m[1])
+  const dePy = (nombre) => claves((py.match(new RegExp(`^${nombre} = \\(([^)]*)\\)`, 'm')) || [])[1] || '')
+  const deHtml = (nombre) => claves((html.match(new RegExp(`var ${nombre} = \\[([^\\]]*)\\]`)) || [])[1] || '')
+  ok('AJUSTES_DE_LINEA es la misma lista en wa_settings.py, main.mjs y config.html',
+    JSON.stringify(dePy('AJUSTES_DE_LINEA')) === JSON.stringify([...AJUSTES_DE_LINEA]) &&
+    JSON.stringify(deHtml('AJUSTES_DE_LINEA')) === JSON.stringify([...AJUSTES_DE_LINEA]),
+    JSON.stringify({ py: dePy('AJUSTES_DE_LINEA'), html: deHtml('AJUSTES_DE_LINEA') }))
+  ok('NO_HEREDAN tambien, y cada una es un ajuste de linea',
+    Array.isArray(NO_HEREDAN) && NO_HEREDAN.length > 0 &&
+    JSON.stringify(dePy('NO_HEREDAN')) === JSON.stringify([...NO_HEREDAN]) &&
+    JSON.stringify(deHtml('NO_HEREDAN')) === JSON.stringify([...NO_HEREDAN]) &&
+    NO_HEREDAN.every((k) => AJUSTES_DE_LINEA.includes(k)),
+    JSON.stringify({ py: dePy('NO_HEREDAN'), html: deHtml('NO_HEREDAN'), mjs: NO_HEREDAN }))
+}
+
+console.log('\nworker: todo-por-linea P1, los avisos de Orca de cada linea')
+{
+  const raiz = { agentName: 'Agente Principal', orcaNotices: { waiting: 'on', finished: 'on' } }
+  const copia = sembrarAjustesDeLinea(undefined, 'pn:573000000011', raiz)?.['pn:573000000011']
+  ok('una linea nueva NO copia los avisos de Orca de la principal: nacen vacios (apagados)',
+    copia && 'orcaNotices' in copia && copia.orcaNotices === null &&
+    copia.agentName === 'Agente Principal', JSON.stringify(copia))
+
+  const { crearAvisosOrca } = await import('../avisos-orca.mjs')
+  const prueba = async (store) => {
+    const lanzados = []
+    const avisos = crearAvisosOrca({
+      leer: async (k) => store[k], guardar: async () => {}, llave: 'ab2web.orca-wa-inbox',
+      lanzar: async (args) => { lanzados.push(args) }, guardarCadaMs: 10
+    })
+    await avisos.listo
+    const base = { paneKey: 'tab-1:p1', worktreeId: 'repo-a::/srv/ejemplo/alfa-demo' }
+    avisos.recibir({ ...base, state: 'working', receivedAt: 1000 })
+    await avisos.recibir({ ...base, state: 'waiting', receivedAt: 2000 })
+    await avisos.parar()
+    return lanzados.length
+  }
+  ok('la compuerta del worker: con la principal apagada y otra linea encendida, lanza',
+    await prueba({ orcaNotices: { waiting: 'off' },
+      ajustesPorLinea: { 'pn:573000000011': { orcaNotices: { waiting: 'on' } } } }) === 1)
+  ok('con la principal encendida, lanza (como antes)',
+    await prueba({ orcaNotices: { waiting: 'on' } }) === 1)
+  ok('con todas apagadas, o sin avisos propios en ninguna, no lanza nada',
+    await prueba({ orcaNotices: { waiting: 'off' },
+      ajustesPorLinea: { 'pn:573000000011': { orcaNotices: null, agentName: 'X' } } }) === 0 &&
+    await prueba({}) === 0)
+}
+
+// ───────── P9: las reglas de texto y el catalogo de proyectos son de cada linea ─────────
+// La principal los guarda en la raiz (`routes`, `projects`); cada otra linea, en
+// `ajustesPorLinea[<numero>]`. Lo que el panel pide sobre una linea nombra esa linea
+// (`linea`), y el worker lee y escribe solo lo de ella.
+console.log('\nworker: P9 — las reglas y el catalogo de cada linea')
+{
+  const L_B = 'pn:573000000011'
+  const L_C = 'pn:573000000013'
+  const ALFA = { id: 'alfa-demo', name: 'Alfa Demo', path: '/srv/ejemplo/alfa-demo', note: '' }
+  const BETA = { id: 'beta-demo', name: 'Beta Demo', path: '/srv/ejemplo/beta-demo', note: '' }
+  const raiz = { routes: [{ pattern: 'acme', workspace: 'alfa-demo' }], projects: [ALFA] }
+  const copia = sembrarAjustesDeLinea(undefined, L_B, raiz)?.[L_B]
+  ok('una linea nueva empieza con una copia de las reglas y el catalogo de la principal',
+    copia && JSON.stringify(copia.routes) === JSON.stringify(raiz.routes) &&
+    JSON.stringify(copia.projects) === JSON.stringify(raiz.projects), JSON.stringify(copia))
+  copia?.projects?.push(BETA)
+  ok('y la copia no comparte nada con la raiz', raiz.projects.length === 1)
+
+  const bin = join(RAIZ, 'orca-falsa-p9')
+  mkdirSync(bin, { recursive: true })
+  writeFileSync(join(bin, 'ps.json'), JSON.stringify({ id: 'x', ok: true, result: { worktrees: [
+    { repoId: 'r1', repo: 'alfa-demo', path: ALFA.path, isArchived: false, isMainWorktree: true },
+    { repoId: 'r2', repo: 'beta-demo', path: BETA.path, isArchived: false, isMainWorktree: true }
+  ] } }))
+  writeFileSync(join(bin, 'repos.json'), JSON.stringify({ id: 'x', ok: true, result: { repos: [
+    { id: 'r1', path: ALFA.path, displayName: 'Alfa Demo' },
+    { id: 'r2', path: BETA.path, displayName: 'Beta Demo' }] } }))
+  const { comandoOrca } = await import('../catalogo.mjs')
+  writeFileSync(join(bin, comandoOrca()), [
+    '#!/bin/sh',
+    'case "$1 $2" in',
+    '  "worktree ps") cat "$(dirname "$0")/ps.json" ;;',
+    '  "repo list") cat "$(dirname "$0")/repos.json" ;;',
+    '  *) echo "comando inesperado" >&2; exit 2 ;;',
+    'esac', ''
+  ].join('\n'), { mode: 0o755 })
+  const pathAntes = process.env.PATH
+  process.env.PATH = `${bin}:${pathAntes}`
+  for (const base of [join(process.env.HOME, 'Library', 'Application Support'),
+    process.env.XDG_CONFIG_HOME, process.env.APPDATA]) {
+    mkdirSync(join(base, 'orca'), { recursive: true })
+  }
+  const dir = herramientas('p9-lineas', [
+    '#!/bin/sh',
+    'echo "$@" >> "$0.llamadas"',
+    'if [ "$1" = "route" ]; then echo \'[{"removed": true}]\'; exit 0; fi',
+    'echo \'[{"synced": true, "destinos": []}]\'',
+    ''
+  ].join('\n'))
+  const llamadas = () => existsSync(join(dir, 'wa-scope.llamadas'))
+    ? readFileSync(join(dir, 'wa-scope.llamadas'), 'utf8') : ''
+  const orca = hostFalso(dir, {
+    chats: [],
+    routes: [{ pattern: 'acme', workspace: 'alfa-demo' }],
+    projects: [ALFA],
+    ajustesPorLinea: {
+      [L_B]: { agentName: 'Agente Segunda', projects: [BETA],
+        routes: [{ pattern: 'acme', workspace: 'beta-demo' },
+          { pattern: 'ventas', workspace: 'beta-demo' }] } }
+  })
+  const { apagar } = await arranca(orca)
+  const pide = async (id, extra) => {
+    orca.store.scopeRequest = { ...extra, id, at: new Date().toISOString() }
+    await hasta(() => orca.store.scopeResult && orca.store.scopeResult.requestId === id, 15000)
+    return orca.store.scopeResult
+  }
+  const de = (cuenta) => orca.store.ajustesPorLinea?.[cuenta] || {}
+  const patrones = (lista) => (lista || []).map((r) => r.pattern).join()
+  const ids = (lista) => (lista || []).map((p) => p.id).join()
+  const md = () => {
+    const carpeta = workspaceDir(PLUGIN_DIR)
+    const ruta = carpeta && join(carpeta, 'PROJECTS.md')
+    return ruta && existsSync(ruta) ? readFileSync(ruta, 'utf8') : ''
+  }
+
+  let v = await pide('p9-r1', { action: 'regla-quitar', pattern: 'ACME', linea: L_B })
+  ok('quitar una regla en otra linea corre el CLI en ESA linea',
+    v?.ok === true && /^route --remove=acme --line pn:573000000011$/m.test(llamadas()),
+    JSON.stringify([v, llamadas()]))
+  ok('y la saca solo de las reglas de esa linea: la principal, con el mismo patron, sigue',
+    patrones(de(L_B).routes) === 'ventas' && patrones(orca.store.routes) === 'acme' &&
+    de(L_B).agentName === 'Agente Segunda', JSON.stringify(orca.store))
+  v = await pide('p9-r2', { action: 'regla-quitar', pattern: 'acme', linea: L_C })
+  ok('en una linea sin reglas propias, quitar una le deja las suyas sin ella, y la principal igual',
+    v?.ok === true && JSON.stringify(de(L_C).routes) === '[]' &&
+    patrones(orca.store.routes) === 'acme', JSON.stringify(orca.store))
+  const antes = llamadas()
+  v = await pide('p9-r3', { action: 'regla-quitar', pattern: 'acme', linea: 'pn:no-es' })
+  ok('una linea que no es una cuenta se rechaza y no corre nada',
+    v?.ok === false && v.code === 'linea-invalida' && llamadas() === antes, JSON.stringify(v))
+
+  let r = await pide('p9-c1', { action: 'proyectos-refrescar', linea: L_B })
+  ok('las propuestas de una linea son lo que ESA linea todavia no acepto',
+    r?.ok === true && ids(orca.store.projectsStatus?.proposals) === 'alfa-demo',
+    JSON.stringify(orca.store.projectsStatus))
+  r = await pide('p9-c2', { action: 'proyectos-aceptar', ids: ['alfa-demo'], linea: L_B })
+  ok('aceptar en otra linea lo suma al catalogo de ESA linea, y la principal sigue igual',
+    r?.ok === true && ids(de(L_B).projects) === 'alfa-demo,beta-demo' &&
+    ids(orca.store.projects) === 'alfa-demo', JSON.stringify([r, orca.store]))
+  r = await pide('p9-c3', { action: 'proyectos-nota', project: 'beta-demo', note: 'Solo de la segunda',
+    linea: L_B })
+  ok('la nota va al proyecto de esa linea',
+    r?.ok === true && de(L_B).projects?.find((p) => p.id === 'beta-demo')?.note === 'Solo de la segunda',
+    JSON.stringify([r, de(L_B)]))
+  r = await pide('p9-c4', { action: 'proyectos-quitar', project: 'alfa-demo', linea: L_C })
+  ok('quitar en una linea sin catalogo propio le deja el suyo sin ese, y la principal igual',
+    r?.ok === true && JSON.stringify(de(L_C).projects) === '[]' &&
+    ids(orca.store.projects) === 'alfa-demo', JSON.stringify([r, orca.store]))
+  r = await pide('p9-c5', { action: 'proyectos-aceptar', ids: ['alfa-demo'], linea: 'otra' })
+  ok('un pedido con una linea mal formada se rechaza con codigo',
+    r?.ok === false && r.code === 'argumentos-invalidos', JSON.stringify(r))
+  ok('PROJECTS.md lista los proyectos de cada linea, cada una en su seccion',
+    await hasta(() => /\+573000000011/.test(md()) && md().includes('Solo de la segunda') &&
+      md().includes(ALFA.path) && /\+573000000013/.test(md()), 20000), md())
+  apagar()
+  process.env.PATH = pathAntes
+
+  // Al decir su numero, una linea sin catalogo propio en el storage lo recupera de SU
+  // espejo (`wa-scope projects --line`), como la principal al arrancar; las reglas son una
+  // copia de las de la principal.
+  const homeAntes = process.env.HOME
+  const xdgAntes = process.env.XDG_CONFIG_HOME
+  const appAntes = process.env.APPDATA
+  const casa = join(RAIZ, 'home-p9')
+  process.env.HOME = casa
+  process.env.XDG_CONFIG_HOME = join(casa, '.config')
+  process.env.APPDATA = join(casa, 'AppData', 'Roaming')
+  for (const b of [join(casa, 'Library', 'Application Support'), process.env.XDG_CONFIG_HOME,
+    process.env.APPDATA]) mkdirSync(join(b, 'orca'), { recursive: true })
+  try {
+    const base = dataDir(PLUGIN_DIR, 'wa-auth')
+    for (const n of ['573000000002', '573000000011']) {
+      mkdirSync(join(base, `pn-${n}`), { recursive: true })
+      writeFileSync(join(base, `pn-${n}`, 'creds.json'), JSON.stringify({ me: { id: `${n}:2@s.whatsapp.net` } }))
+    }
+    const guion = join(RAIZ, 'sidecar-p9.cjs')
+    writeFileSync(guion,
+      '#!/usr/bin/env node\n' +
+      'const fs = require("node:fs")\n' +
+      'const path = require("node:path")\n' +
+      'const dir = process.env.WA_SIDECAR_AUTH_DIR\n' +
+      'function emit (m) { process.stdout.write(JSON.stringify(m) + "\\n") }\n' +
+      'const me = JSON.parse(fs.readFileSync(path.join(dir, "creds.json"), "utf8")).me.id\n' +
+      'emit({ type: "connection", state: "open" })\n' +
+      'emit({ type: "linea", cuenta: "pn:" + me.split(":")[0], cambio: false, ts: Date.now() })\n' +
+      'setInterval(() => {}, 1000)\n', { mode: 0o755 })
+    const espejo = JSON.stringify([BETA]).replace(/'/g, '')
+    const orca = hostFalso(herramientas('p9-siembra', [
+      '#!/bin/sh',
+      'case "$*" in',
+      `  "projects --json --line ${L_B}") echo '${espejo}' ;;`,
+      '  *) echo \'[]\' ;;',
+      'esac', ''].join('\n')), {
+      routes: [{ pattern: 'acme', workspace: 'alfa-demo' }], projects: [ALFA], syncMinutes: '10',
+      lineas: [{ carpeta: 'pn-573000000002', cuenta: 'pn:573000000002', tipo: 'support' },
+        { carpeta: 'pn-573000000011', cuenta: L_B, tipo: 'support' }],
+      ajustesPorLinea: { [L_B]: { agentName: 'Agente Segunda' } }
+    }, guion)
+    const { apagar: apagar2 } = await arranca(orca)
+    await hasta(() => orca.store.ajustesPorLinea?.[L_B]?.projects, 15000)
+    const propia = orca.store.ajustesPorLinea?.[L_B] || {}
+    ok('una linea que perdio su catalogo del storage lo recupera de su espejo',
+      ids(propia.projects) === 'beta-demo' && ids(orca.store.projects) === 'alfa-demo',
+      JSON.stringify(orca.store.ajustesPorLinea))
+    ok('y sus reglas empiezan como copia de las de la principal, sin tocar lo suyo',
+      patrones(propia.routes) === 'acme' && propia.agentName === 'Agente Segunda',
+      JSON.stringify(propia))
+    apagar2()
+    await dormir(500)
+  } finally {
+    process.env.HOME = homeAntes
+    process.env.XDG_CONFIG_HOME = xdgAntes
+    process.env.APPDATA = appAntes
+  }
 }
 
 rmSync(RAIZ, { recursive: true, force: true })

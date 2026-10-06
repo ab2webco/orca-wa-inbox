@@ -33,15 +33,17 @@ updates. Never call a bare `wa-send` from `PATH` and never write a path by hand:
 
 ## Find the owner's chat
 
-The chat comes from the plugin settings, never from you:
+The chat and the line come from the plugin settings, never from you:
 
     OWNER="$("$WA/wa-scope" owner)"
+    LINE="$("$WA/wa-scope" owner --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["line"])')"
 
-It prints only the chat id. It is the approval number the owner picked in the settings or,
-without one, the linked line's chat with itself. `"$WA/wa-scope" owner --json` says which
-(`source`) and its mode. When the owner has several WhatsApp lines linked, his chat is on
-the main line (`line` in the JSON), and the sends and waits below use that line on their
-own: never add `--line`. Exit codes:
+`owner` prints only the chat id. It is the approval number the owner picked in the settings
+or, without one, the linked line's chat with itself. `"$WA/wa-scope" owner --json` says
+which (`source`), its mode, and the line it goes through (`line`). When the owner has
+several WhatsApp lines linked, he picks in the plugin settings (tab Skills) which line
+these notices go through; without a choice it is the main line. Every send and wait below
+names that line with `--line "$LINE"`; never pick another one. Exit codes:
 
 - `1` with `no-owner-chat`: there is no owner chat. Tell the user in this session that the
   owner has to pick an approval number in the plugin settings, and stop.
@@ -50,7 +52,7 @@ own: never add `--line`. Exit codes:
 
 ## Notify him
 
-    "$WA/wa-send" "$OWNER" "Build of project-x finished: 3 tests failing in checkout." --send --json
+    "$WA/wa-send" "$OWNER" "Build of project-x finished: 3 tests failing in checkout." --line "$LINE" --send --json
 
 It prints `{"req_id", "estado": "enviado", "stanza_id"}` on exit 0. Add `--id <unique id>`
 when you may retry: the same id is delivered once.
@@ -59,9 +61,9 @@ when you may retry: the same id is delivered once.
 
 Send the question, keep its `stanza_id`, and wait in the same chat:
 
-    S="$("$WA/wa-send" "$OWNER" "Deploy project-x to staging now? Reply yes or no." --send --json \
+    S="$("$WA/wa-send" "$OWNER" "Deploy project-x to staging now? Reply yes or no." --line "$LINE" --send --json \
          | python3 -c 'import json,sys; print(json.load(sys.stdin)["stanza_id"])')"
-    "$WA/wa-read" wait --chat "$OWNER" --after "$S" --timeout 900 --json
+    "$WA/wa-read" wait --chat "$OWNER" --after "$S" --line "$LINE" --timeout 900 --json
 
 - Exit `0`: his reply, oldest first, each with its `text` and `stanza_id`. If it does not
   answer the question, ask once more, waiting `--after` the last `stanza_id`.

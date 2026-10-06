@@ -809,6 +809,11 @@ const PANELES = [
     enTodosLosAnchos: true, pestana: 'skills', guion: 'void 0', espera: 1500,
     datos: Object.assign({}, DATOS, { skillsStatus: SKILLS_EJEMPLO }),
     stub: { veredictoAccion: { ok: true, code: 'skills-leidas' } } },
+  // Con dos lineas, el dueno elige por cual le avisan las skills (todo-por-linea, P7).
+  { nombre: 'config-skills-dos-lineas', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, pestana: 'skills', espera: 1500, guion: ELEGIR_SEGUNDA,
+    datos: Object.assign({}, DOS_LINEAS_AJUSTES, { skillsStatus: SKILLS_EJEMPLO }),
+    stub: { veredictoAccion: { ok: true, code: 'skills-leidas' } } },
   // Quitar una copia con cambios del dueno: avisa que se pierden y pide confirmar.
   { nombre: 'config-skills-confirmar', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, pestana: 'skills', espera: 1500,

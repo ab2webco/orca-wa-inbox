@@ -1244,6 +1244,39 @@ def revisa_chat_del_dueno(fallos: list) -> int:
                           f"{p.returncode} con {dato!r}: tenia que dar ese numero, "
                           "source approval-number, can_send true")
 
+        # Las skills avisan por la linea que el dueno elige en el panel (todo-por-linea, P7):
+        # `skillsLine`. Con la otra linea elegida, `owner` da el numero de aprobacion de ESA
+        # linea, y la nombra; una linea elegida que ya no esta vinculada vuelve a la principal.
+        otro = "573009998877@s.whatsapp.net"
+        cap = sqlite3.connect(home / ".wa-inbox" / "capture.db")
+        cap.execute("insert or replace into store_meta (key, value) values ('lineas_activas', ?)",
+                    (json.dumps([NUEVA, VIEJA]),))
+        cap.commit()
+        cap.close()
+        datos = json.loads(store.read_text(encoding="utf-8"))
+        datos.update(skillsLine=VIEJA, ajustesPorLinea={
+            VIEJA: {"owners": [{"id": otro, "name": "Dueno Otra Linea"}], "approvalNumber": otro}})
+        store.write_text(json.dumps(datos), encoding="utf-8")
+        subprocess.run([str(BIN / "wa-scope"), "set", otro, "--mode", "responder", "--line", VIEJA],
+                       env=env, capture_output=True, timeout=120)
+        hechas += 1
+        p = owner("--json")
+        dato = json.loads(p.stdout or "null") if p.stdout.strip() else None
+        if p.returncode != 0 or not isinstance(dato, dict) or dato.get("chat") != otro \
+                or dato.get("line") != VIEJA or dato.get("can_send") is not True:
+            fallos.append(f"`wa-scope owner --json` con las skills avisando por {VIEJA} salio "
+                          f"{p.returncode} con {dato!r}: tenia que dar el numero de aprobacion "
+                          "de esa linea, y nombrarla")
+        datos["skillsLine"] = "pn:573000000013"
+        store.write_text(json.dumps(datos), encoding="utf-8")
+        hechas += 1
+        p = owner("--json")
+        dato = json.loads(p.stdout or "null") if p.stdout.strip() else None
+        if not isinstance(dato, dict) or dato.get("chat") != aprobacion or \
+                dato.get("line") != NUEVA:
+            fallos.append(f"`wa-scope owner --json` con una linea elegida que no esta vinculada "
+                          f"dio {dato!r}: tenia que volver a la principal")
+
         hechas += 1
         ayuda = subprocess.run([str(BIN / "wa-scope"), "owner", "--help"], capture_output=True,
                                text=True, env=env, timeout=60).stdout
@@ -1950,6 +1983,7 @@ def revisa_reclave_local(fallos: list) -> int:
 
         # Una maquina de antes de T9: todo en `local`, en las dos bases y en el panel.
         scope("set", "100@g.us", "--target", "SOP", "--mode", "responder")
+        scope("route", "--match", "acme", "--target", "ACM")
         scope("record", "--chat", "100@g.us", "--name", "G", "--stanza", "A1",
               "--action", "alert", "--detail", "aviso | de antes")
         scope("work", "--stanza", "W1", "--chat", "100@g.us", "--name", "G", "--next", "x")
@@ -1982,7 +2016,7 @@ def revisa_reclave_local(fallos: list) -> int:
         scope("sync")
         con = sqlite3.connect(home / ".wa-inbox" / "scope.db")
         quedan = {t: con.execute(f"select count(*) from {t} where account='local'").fetchone()[0]
-                  for t in ("chat_scope", "agent_action", "work", "juicio")}
+                  for t in ("chat_scope", "agent_action", "work", "juicio", "route")}
         rastro_viejo = con.execute(
             "select count(*) from run_trace where name='triage'").fetchone()[0]
         con.close()
@@ -2247,6 +2281,36 @@ def revisa_precheck(fallos: list) -> int:
             fallos.append(f"con sync_minutes en 60 el mismo store salio "
                           f"{p.returncode}; el limite no sigue al ajuste")
         scope("config", "sync_minutes", "5")
+
+        # El ritmo es de cada linea (todo-por-linea, P5): con dos lineas, el limite de
+        # cada una sale de SU `syncMinutes`. La principal a 1 min y la otra a 60, las dos
+        # con un sync de hace 10 min: la principal esta vieja y la otra no.
+        principal, segunda = "pn:573000000001", "pn:573000000011"
+        captura = home / ".wa-inbox" / "capture.db"
+        cap = sqlite3.connect(captura)
+        cap.execute("create table if not exists store_meta (key text primary key, value text)")
+        cap.executemany("insert or replace into store_meta (key, value) values (?, ?)",
+                        [("linea_activa", principal),
+                         ("lineas_activas", json.dumps([principal, segunda]))])
+        cap.commit()
+        cap.close()
+        sembrar(pendientes=2, minutos=10)
+        datos = json.loads(store.read_text())
+        datos["syncMinutes"] = "1"
+        datos["porLinea"] = {segunda: {"activity": dict(datos["activity"]),
+                                       "health": {"ok": True, "optional": []}}}
+        datos["ajustesPorLinea"] = {segunda: {"syncMinutes": "60"}}
+        store.write_text(json.dumps(datos))
+        p_a, p_b = precheck(), precheck("--line", segunda)
+        hechas += 2
+        if p_a.returncode != 2:
+            fallos.append(f"la principal a 1 min con un sync de hace 10 salio "
+                          f"{p_a.returncode} y no 2: no usa su propio ritmo")
+        if p_b.returncode != 0:
+            fallos.append(f"la otra linea a 60 min con un sync de hace 10 salio "
+                          f"{p_b.returncode} y no 0: usa el ritmo de la principal "
+                          f"({p_b.stdout.strip()[:200]})")
+        captura.unlink()
 
         # Sin store no hay nada que responder, y eso tampoco es "no hay trabajo".
         store.unlink()
@@ -3300,6 +3364,167 @@ def revisa_espera(fallos: list) -> int:
     return hechas
 
 
+def revisa_rutas_y_proyectos_por_linea(fallos: list) -> int:
+    """Cada linea tiene sus reglas de texto y su catalogo de proyectos (todo-por-linea, P9).
+
+    Las dos cosas viven en storage y en scope.db (`route`, y `project` como espejo), y las
+    dos tablas no sabian de lineas: el espejo de una linea borraba el de la otra, y una
+    regla quitada en una se quitaba en todas. Se recorre con el CLI de verdad, con una base
+    de antes de esto y dos lineas, sobre un HOME temporal."""
+    hechas = 0
+    if not shutil.which("node"):
+        print("  aviso: sin node, no se armo el almacen de dos lineas", file=sys.stderr)
+        return hechas
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+        db = home / ".wa-inbox" / "scope.db"
+        db.parent.mkdir(parents=True, exist_ok=True)
+        # Las dos tablas como las dejaba la version anterior: sin cuenta.
+        con = sqlite3.connect(db)
+        con.executescript("""
+            create table route (pattern text primary key,
+              provider text not null default 'plane', target text not null,
+              workspace text, note text, updated_at text);
+            create table project (id text primary key, name text not null,
+              path text not null, note text, updated_at text);
+            insert into route values ('acme', 'plane', '', 'alfa-demo', 'de antes',
+                                      '2026-01-01 10:00');
+            insert into project values ('alfa-demo', 'Alfa Demo', '/srv/ejemplo/alfa-demo',
+                                        '', '2026-01-01 10:00');""")
+        con.commit()
+        con.close()
+        almacen_con_lineas(home, VIEJA)
+
+        def scope(*args, linea=None):
+            return subprocess.run([str(BIN / "wa-scope"), *args,
+                                   *(["--line", linea] if linea else []), "--json"],
+                                  capture_output=True, text=True, env=env, timeout=180)
+
+        def filas(*args, linea=None):
+            p = scope(*args, linea=linea)
+            return json.loads(p.stdout or "[]") if p.returncode == 0 else []
+
+        man = json.loads((RAIZ / "orca-plugin.json").read_text(encoding="utf-8"))
+        store = (home / ("Library/Application Support" if sys.platform == "darwin"
+                         else ".config") / "orca" / "plugins-data" /
+                 f"{man['publisher']}.{man['id']}" / "storage.json")
+        store.parent.mkdir(parents=True, exist_ok=True)
+
+        def storage():
+            return json.loads(store.read_text(encoding="utf-8")) if store.exists() else {}
+
+        def guarda(datos):
+            store.write_text(json.dumps(datos), encoding="utf-8")
+
+        def base(sql):
+            con = sqlite3.connect(db)
+            try:
+                return con.execute(sql).fetchall()
+            finally:
+                con.close()
+
+        ALFA = {"id": "alfa-demo", "name": "Alfa Demo", "path": "/srv/ejemplo/alfa-demo",
+                "note": ""}
+        BETA = {"id": "beta-demo", "name": "Beta Demo", "path": "/srv/ejemplo/beta-demo",
+                "note": "Solo de la segunda"}
+        guarda({"projects": [ALFA]})
+
+        # ── La migracion: lo de antes es de la linea principal, y la llave lleva la cuenta.
+        filas("route")
+        llave = {t: [r[1] for r in sorted(base(f"pragma table_info({t})"), key=lambda r: r[5])
+                     if r[5]] for t in ("route", "project")}
+        hechas += 3
+        if llave != {"route": ["account", "pattern"], "project": ["account", "id"]}:
+            fallos.append(f"route y project no llevan la cuenta en la llave: {llave!r}")
+        if base("select account, pattern, workspace, note from route") != [
+                (VIEJA, "acme", "alfa-demo", "de antes")]:
+            fallos.append(f"la migracion no dejo la regla de antes en la principal: "
+                          f"{base('select * from route')!r}")
+        if base("select account, id from project") != [(VIEJA, "alfa-demo")]:
+            fallos.append(f"la migracion no dejo el espejo de antes en la principal: "
+                          f"{base('select * from project')!r}")
+
+        # ── El catalogo: cada linea lee el suyo, y su espejo no pisa el de la otra.
+        datos = storage()
+        datos["ajustesPorLinea"] = {NUEVA: {"projects": [BETA], "routes": []}}
+        guarda(datos)
+        ids = lambda lista: [p.get("id") for p in lista]
+        de_a, de_b = ids(filas("projects")), ids(filas("projects", linea=NUEVA))
+        filas("projects")
+        espejo = sorted(base("select account, id from project"))
+        hechas += 2
+        if (de_a, de_b) != (["alfa-demo"], ["beta-demo"]):
+            fallos.append(f"cada linea no lee su propio catalogo: {de_a!r} / {de_b!r}")
+        if espejo != sorted([(VIEJA, "alfa-demo"), (NUEVA, "beta-demo")]):
+            fallos.append(f"el espejo de una linea piso el de la otra: {espejo!r}")
+
+        # ── Las reglas: se crean en la linea que se nombra, contra SU catalogo.
+        p_b = scope("route", "--match", "beta", "--workspace", "beta-demo", linea=NUEVA)
+        p_a = scope("route", "--match", "beta", "--workspace", "beta-demo")
+        scope("route", "--match", "acme", "--workspace", "beta-demo", linea=NUEVA)
+        reglas = lambda linea=None: {r["pattern"]: r.get("workspace")
+                                     for r in filas("route", linea=linea)}
+        hechas += 3
+        if p_b.returncode != 0:
+            fallos.append(f"una regla con un proyecto de la otra linea no se acepta en ella: "
+                          f"{p_b.stderr.strip()[:200]}")
+        if p_a.returncode == 0:
+            fallos.append("una regla con un proyecto que la principal no tiene se acepta en ella")
+        if (reglas(), reglas(NUEVA)) != ({"acme": "alfa-demo"},
+                                         {"acme": "beta-demo", "beta": "beta-demo"}):
+            fallos.append(f"una regla de una linea aparece en la otra: {reglas()!r} / "
+                          f"{reglas(NUEVA)!r}")
+
+        # ── where: la linea nombrada resuelve con sus reglas y su catalogo.
+        donde = lambda linea=None: (filas("where", "algo de ACME", linea=linea) or [{}])[0]
+        hechas += 1
+        if (donde().get("workspace"), donde(NUEVA).get("workspace"),
+                donde(NUEVA).get("workspace_path")) != ("alfa-demo", "beta-demo",
+                                                         "/srv/ejemplo/beta-demo"):
+            fallos.append(f"where no resuelve con lo de su linea: {donde()!r} / {donde(NUEVA)!r}")
+
+        # ── Quitar una regla en una linea deja la de la otra, aunque se llame igual.
+        scope("route", "--remove=acme", linea=NUEVA)
+        hechas += 1
+        if (reglas(), reglas(NUEVA)) != ({"acme": "alfa-demo"}, {"beta": "beta-demo"}):
+            fallos.append(f"quitar una regla en una linea toco la otra: {reglas()!r} / "
+                          f"{reglas(NUEVA)!r}")
+
+        # ── El sync de cada linea empuja sus reglas a SU lugar del storage.
+        datos = storage()
+        datos["routes"] = [{"pattern": "gama", "workspace": "alfa-demo"}]
+        guarda(datos)
+        scope("sync", linea=NUEVA)
+        scope("sync")
+        datos = storage()
+        raiz = sorted(r.get("pattern") for r in datos.get("routes") or [])
+        propias = sorted(r.get("pattern") for r in
+                         ((datos.get("ajustesPorLinea") or {}).get(NUEVA) or {}).get("routes")
+                         or [])
+        hechas += 2
+        if raiz != ["acme", "gama"]:
+            fallos.append(f"el sync dejo en la raiz reglas que no son de la principal: {raiz!r}")
+        if propias != ["beta"]:
+            fallos.append(f"el sync de la otra linea no dejo SUS reglas en su lugar: {propias!r}")
+
+        # ── Una linea sin catalogo propio en el storage (se perdio) sirve su espejo; una que
+        # nunca tuvo, el de la principal, sin escribir un espejo que la ate a esa copia.
+        TERCERA = "pn:573000000013"
+        datos = storage()
+        datos["ajustesPorLinea"][NUEVA].pop("projects")
+        guarda(datos)
+        hechas += 2
+        if ids(filas("projects", linea=NUEVA)) != ["beta-demo"]:
+            fallos.append(f"una linea que perdio su catalogo del storage no sirve su espejo: "
+                          f"{filas('projects', linea=NUEVA)!r}")
+        if ids(filas("projects", linea=TERCERA)) != ["alfa-demo"] or base(
+                f"select id from project where account='{TERCERA}'"):
+            fallos.append("una linea sin catalogo ni espejo no ve el de la principal, o le "
+                          "escribio un espejo")
+    return hechas
+
+
 def main() -> int:
     fallos = []
     aislado = tempfile.TemporaryDirectory()
@@ -3341,6 +3566,7 @@ def main() -> int:
                       + revisa_doctor_lid(fallos)
                       + revisa_proyectos(fallos)
                       + revisa_varios_proyectos(fallos)
+                      + revisa_rutas_y_proyectos_por_linea(fallos)
                       + revisa_espera(fallos)
                       + revisa_chat_del_dueno(fallos)
                       + revisa_escritores_concurrentes(fallos)

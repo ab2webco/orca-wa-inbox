@@ -40,7 +40,9 @@ wrong with what it asked and not a generic failure at the end:
   the signature   every message the agent writes goes signed, so that there is never
                   any doubt about whether the person or her agent wrote it. Without an
                   agent name configured, this refuses before anything else. --raw is
-                  the exception, for when she writes herself.
+                  the exception, for when she writes herself, and so is a line whose
+                  owner turned signing off (`sign_messages`): its messages go out as
+                  his, unsigned, and need no agent name.
   the line        the same group can exist on two lines. Picking "the first one"
                   writes to the wrong conversation, and that cannot be undone, so an
                   ambiguous reference is REFUSED (`send-ambiguous-line`) instead of
@@ -88,6 +90,7 @@ import wa_jev  # noqa: E402
 import wa_reglas  # noqa: E402
 from wa_settings import (ajuste, alcances_de_lineas, plugin_store_raw, scope_db,  # noqa: E402
                          numero_aprobacion, scope_from_plugin, trae_llave_aprobador)
+from wa_settings import jev_en_linea  # noqa: E402
 
 SCOPE_DB = scope_db()
 
@@ -102,6 +105,30 @@ def signature(linea=None):
     Cada linea firma con el suyo (ajustes-por-linea): `linea`, o la de esta corrida."""
     nombre = ajuste("agent_name", linea=linea)
     return f"-- {nombre}" if nombre else None
+
+
+def firma_apagada(linea=None):
+    """Si esa linea manda sin firma (`sign_messages` en off, todo-por-linea P2): sus mensajes
+    salen como si los escribiera el dueno, igual que con --raw, y el nombre del agente no
+    hace falta. De fabrica firma."""
+    return ajuste("sign_messages", linea=linea) == "off"
+
+
+def lineas_de_la_conversacion(ref):
+    """Las lineas vinculadas donde esta registrada esa conversacion, sin negar nada: la
+    firma se decide antes que la linea, y una conversacion que solo esta en lineas que no
+    firman no puede pedir un nombre que no se va a usar."""
+    activas = wa_store.lineas_activas_en_disco()
+    cuentas = {f["account"] for f in conversaciones_registradas(ref)}
+    return sorted(c for c in cuentas if not activas or c in activas)
+
+
+def quita_firma(texto, *firmas):
+    """El texto sin la primera de esas firmas con la que termine."""
+    for firma in firmas:
+        if firma and texto.rstrip().endswith(firma):
+            return texto.rstrip()[:-len(firma)]
+    return texto
 
 
 # Motivos estables: los lee el worker (la primera linea de stderr termina en el panel).
@@ -326,8 +353,9 @@ def resolver_conversacion(ref, linea):
     elif len(cuentas) > 1 and es_chat_del_dueno(filas) and \
             wa_store.linea_activa_en_disco() in cuentas:
         # El chat del dueno (`wa-scope owner`) esta en cada linea —cada una le avisa lo
-        # suyo—, y lo que le escribe un agente de otro proyecto sale por la principal, que es
-        # la linea del dueno: la misma que dice `wa-scope owner`. Nunca se elige a ciegas.
+        # suyo—, y lo que le escribe un agente de otro proyecto sin nombrar linea sale por la
+        # principal, que es la linea del dueno. Nunca se elige a ciegas. La skill de avisos
+        # nombra siempre la suya (`--line`, la que dice `wa-scope owner`, todo-por-linea P7).
         principal = wa_store.linea_activa_en_disco()
         filas = [f for f in filas if f["account"] == principal]
     elif len(cuentas) > 1:
@@ -447,12 +475,13 @@ def informa(salida_json, dato, linea):
         print(linea)
 
 
-def revision_jev(texto, tono=None):
+def revision_jev(texto, tono=None, linea=None):
     """Lo que frena el envio segun Jev: None sin llave (manda el modo, como siempre), una
     lista vacia si el texto pasa, y los motivos si no. Un error es un motivo. `tono` es el
-    del chat o el global (T22.5): con ese registro se juzga."""
+    del chat o el global (T22.5): con ese registro se juzga. `linea` es la de la
+    conversacion: con Jev apagado en ella, tambien None (todo-por-linea, P6)."""
     clave = wa_jev.llave()
-    if not clave:
+    if not clave or not jev_en_linea(linea):
         return None
     revision = wa_jev.revisa_borrador(texto, clave, tono=tono)
     if revision is None:
@@ -748,15 +777,20 @@ def main():
     # El piso fijo mira la respuesta, no la firma: el nombre del agente lo eligio el dueno
     # y no es algo que la respuesta prometa.
     original = a.text
-    sin_firma = a.text
     # Todo mensaje del agente va firmado, para que nunca haya duda de si escribe la
-    # persona o su agente. --raw es la excepcion, para cuando escribe ella. Cada linea
-    # firma con el nombre de SU agente (ajustes-por-linea): el de la linea pedida aca, y
-    # abajo el de la linea de la conversacion elegida.
+    # persona o su agente. --raw es la excepcion, para cuando escribe ella, y una linea con
+    # la firma apagada tambien (todo-por-linea, P2): sale como suyo. Cada linea firma con el
+    # nombre de SU agente (ajustes-por-linea): el de la linea pedida aca, y abajo el de la
+    # linea de la conversacion elegida.
     sig = signature(linea)
-    if sig and sin_firma.rstrip().endswith(sig):
-        sin_firma = sin_firma.rstrip()[:-len(sig)]
-    if not a.raw:
+    sin_firma = quita_firma(original, sig)
+    if linea:
+        sin_firmar = a.raw or firma_apagada(linea)
+    else:
+        cuentas = lineas_de_la_conversacion(a.chat)
+        sin_firmar = a.raw or (all(firma_apagada(c) for c in cuentas) if cuentas
+                               else firma_apagada(linea))
+    if not sin_firmar:
         if not sig:
             sys.exit("no agent name is configured. Set it with "
                      "`wa-scope agent \"<name>\"`, or use --raw to write unsigned.")
@@ -765,19 +799,19 @@ def main():
 
     fila = resolver_conversacion(a.chat, linea)
     # Sin linea pedida, la conversacion la elige: un caso de otra linea firma con el
-    # nombre de ESA linea, nunca con el de la principal.
-    propia = signature(fila["account"]) if fila and fila.get("account") else sig
-    if propia != sig:
-        sin_firma = original
-        for firma in (propia, sig):
-            if firma and sin_firma.rstrip().endswith(firma):
-                sin_firma = sin_firma.rstrip()[:-len(firma)]
-                break
-        if not a.raw:
-            if not propia:
+    # nombre de ESA linea, nunca con el de la principal, o no firma si ESA no firma.
+    if fila and fila.get("account"):
+        propia = signature(fila["account"])
+        propia_sin = a.raw or firma_apagada(fila["account"])
+        if propia != sig or propia_sin != sin_firmar:
+            sin_firma = quita_firma(original, propia, sig)
+            if propia_sin:
+                a.text = original
+            elif not propia:
                 sys.exit("no agent name is configured for this line. Set it in the plugin "
                          "settings, or use --raw to write unsigned.")
-            a.text = f"{sin_firma.rstrip()}\n{propia}"
+            else:
+                a.text = f"{sin_firma.rstrip()}\n{propia}"
 
     # Y despues el permiso, que tambien es sobre lo que se pidio. Denegar por defecto:
     # una conversacion que no esta en el registro no existe para el agente.
@@ -824,7 +858,8 @@ def main():
     else:
         piso = revision_piso(sin_firma, niv)
         tono = (fila.get("tone") or "").strip() or ajuste("tone", linea=fila["account"])
-        jev = jev_permitido(revision_jev(a.text, tono) if jev_hace_falta(niv) else None, niv)
+        jev = jev_permitido(revision_jev(a.text, tono, fila["account"]) if jev_hace_falta(niv)
+                            else None, niv)
     frenado = motivos_de(piso, jev)
     if frenado:
         deja_borrador(con, fila, a.text, req_id, a.json, pedia_envio=True,

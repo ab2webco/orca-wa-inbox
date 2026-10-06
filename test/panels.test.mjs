@@ -8474,21 +8474,17 @@ console.log('\nconfig.html — lineas claras: que es de cada linea y que es del 
   }
   ok('ya no hay notas de "Aplica a sus N lineas": cada pestana es de la linea elegida',
     !doc.querySelector('.nota-lineas') && !/Aplica a sus/.test(doc.body.textContent))
-  const MAQUINA = ['routes-card', 'projects-card', 'orca-notices-card', 'jev-card',
-    'bot-account-card', 'skills-card', 'voice-card', 'reading-card']
-  const notaEn = (id) => [...doc.querySelectorAll(`#${id} .nota-maquina`)]
-  for (const id of MAQUINA) {
-    ok(`${id}: lo de la maquina lo dice donde aparece`,
-      notaEn(id).length >= 1 && notaEn(id).every((n) => !n.hidden &&
-        n.textContent === 'Vale para todas las lineas de este equipo.'),
-      notaEn(id).map((n) => `${n.hidden}:${n.textContent}`).join(' | '))
-  }
-  const PROPIAS = ['agent-card', 'owners-card', 'auto-card', 'sla-card', 'pq-card', 'scope-form']
-  ok('lo de cada linea no lleva esa nota', PROPIAS.every((id) => notaEn(id).length === 0),
-    PROPIAS.filter((id) => notaEn(id).length).join())
-  ok('los avisos de Orca dicen que salen por la principal',
-    /linea principal, \+573000000001/.test(textoDe(doc, '#orca-main-line')) &&
-    !doc.getElementById('orca-main-line').hidden, textoDe(doc, '#orca-main-line'))
+  const PROPIAS = ['agent-card', 'owners-card', 'auto-card', 'sla-card', 'pq-card', 'scope-form',
+    'orca-notices-card', 'bot-account-card', 'voice-card', 'routes-card', 'projects-card',
+    'reading-card', 'jev-card', 'skills-card']
+  ok('ninguna tarjeta dice "Vale para todas las lineas": cada ajuste es de la linea que se mira',
+    !doc.querySelector('.nota-maquina') && PROPIAS.every((id) => doc.getElementById(id)) &&
+      !/Vale para todas las lineas/.test(doc.body.textContent),
+    PROPIAS.filter((id) => !doc.getElementById(id)).join())
+  ok('los avisos de Orca dicen que salen por la linea que se mira, a su numero',
+    textoDe(doc, '#orca-line-from') ===
+      'Los avisos de Orca de esta linea salen por ella, +573000000001, a su numero de aprobacion.' &&
+    !doc.getElementById('orca-line-from').hidden, textoDe(doc, '#orca-line-from'))
   ok('y los de los casos, por la linea que se esta viendo',
     textoDe(doc, '#approval-main-line') ===
       'Los avisos de los casos de esta linea salen por ella, +573000000001, a este numero.',
@@ -8503,30 +8499,33 @@ console.log('\nconfig.html — lineas claras: que es de cada linea y que es del 
   await new Promise((r) => setTimeout(r, 300))
   ok('y despues de elegir la otra nombra la otra, tambien en el aviso de los casos',
     textoDe(doc, '#linea-vista-actual') === 'Viendo la linea +573000000011' &&
-    /\+573000000011/.test(textoDe(doc, '#approval-main-line')), textoDe(doc, '#linea-vista-actual'))
+    /\+573000000011/.test(textoDe(doc, '#approval-main-line')) &&
+    /\+573000000011/.test(textoDe(doc, '#orca-line-from')), textoDe(doc, '#linea-vista-actual'))
   ok('desde cualquier pestana: el selector se ve en Agente', (doc.getElementById('tab-agente').click(),
     seVeN(fila)))
   const una = await montar('config.html', { sidecar: conLineas([lineaA]) }, 'es-419')
   await espera()
-  ok('con una sola linea no hay selector, ni notas de equipo, ni avisos de linea',
+  ok('con una sola linea no hay selector ni avisos de linea',
     una.doc.getElementById('linea-vista-fila').hidden &&
-    [...una.doc.querySelectorAll('.nota-maquina')].every((n) => n.hidden) &&
-    una.doc.getElementById('approval-main-line').hidden && una.doc.getElementById('orca-main-line').hidden)
+    una.doc.getElementById('approval-main-line').hidden && una.doc.getElementById('orca-line-from').hidden)
   const en = await montar('config.html', dos, 'en')
   await espera()
   ok('en ingles hablan ingles',
-    textoDe(en.doc, '#voice-card .nota-maquina') === 'Applies to every line on this computer.' &&
-    /main line, \+573000000001/.test(textoDe(en.doc, '#orca-main-line')),
-    textoDe(en.doc, '#voice-card .nota-maquina'))
+    /Skills are installed on this computer/.test(textoDe(en.doc, '#skills-card')) &&
+    /through it, \+573000000001/.test(textoDe(en.doc, '#orca-line-from')),
+    textoDe(en.doc, '#orca-line-from'))
   const pt = await montar('config.html', dos, 'pt-BR')
   await espera()
   ok('en portugues tambien',
-    textoDe(pt.doc, '#voice-card .nota-maquina') === 'Vale para todas as linhas deste computador.' &&
-    /linha principal, \+573000000001/.test(textoDe(pt.doc, '#orca-main-line')),
-    textoDe(pt.doc, '#voice-card .nota-maquina'))
+    /As skills sao instaladas neste computador/.test(textoDe(pt.doc, '#skills-card')) &&
+    /saem por ela, \+573000000001/.test(textoDe(pt.doc, '#orca-line-from')),
+    textoDe(pt.doc, '#orca-line-from'))
   const S = doc.defaultView.STRINGS
-  const claves = ['machineNote', 'orcaMainLine', 'linesApprovalFrom', 'linesViewing', 'linesView',
+  const claves = ['orcaLineFrom', 'linesApprovalFrom', 'linesViewing', 'linesView',
     'linesViewHelp']
+  ok('la ayuda del selector ya no habla de lo del equipo: todo es de la linea que se mira',
+    ['es', 'en', 'pt'].every((l) => !/equipo|computer|computador/.test(S[l].linesViewHelp)),
+    ['es', 'en', 'pt'].map((l) => S[l].linesViewHelp).join(' | '))
   ok('las frases existen en los tres idiomas, el portugues propio',
     claves.every((k) => S.es[k] && S.en[k] && S.pt[k] && S.pt[k] !== S.en[k]),
     claves.filter((k) => !S.es[k] || !S.en[k] || !S.pt[k] || S.pt[k] === S.en[k]).join())
@@ -8557,7 +8556,8 @@ function dosLineasConAjustes () {
     ajustesPorLinea: {
       [L_B]: { agentName: 'Agente Segunda', ownerName: 'Berta', tone: 'Tono de la segunda',
         owners: [DUENO_B], approvalNumber: DUENO_B.id, approvalLang: 'en', ackMode: 'off',
-        ackText: 'Recibido en la segunda', inboxDays: '1', transcribeLang: 'en', slaMinutes: '45' },
+        ackText: 'Recibido en la segunda', inboxDays: '1', transcribeLang: 'en', slaMinutes: '45',
+        syncMinutes: '30' },
       'pn:573000000013': { agentName: 'Agente Ajeno', claveFutura: 1 } }
   }
 }
@@ -8580,10 +8580,17 @@ console.log('\nconfig.html — A5: cada linea muestra y guarda sus propios ajust
     campo('owner') === 'Berta', `${campo('agent')} / ${campo('tone')} / ${campo('owner')}`)
   doc.getElementById('tab-avanzado').click()
   await espera()
-  ok('Avanzado: los dias y el idioma son de esa linea, el ritmo es del equipo',
+  ok('Avanzado: los dias, el idioma y el ritmo son de esa linea',
     valorSeg(doc, 'inbox-days') === '1' && valorSeg(doc, 'lang') === 'en' &&
-    valorSeg(doc, 'sync-minutes') === '10',
+    valorSeg(doc, 'sync-minutes') === '30',
     `${valorSeg(doc, 'inbox-days')} ${valorSeg(doc, 'lang')} ${valorSeg(doc, 'sync-minutes')}`)
+  elegirSeg(doc, 'sync-minutes', '2')
+  doc.getElementById('save-reading').click()
+  await new Promise((r) => setTimeout(r, 500))
+  ok('P5: guardar el ritmo en la otra linea lo guarda en ESA, y la principal sigue con el suyo',
+    storage.ajustesPorLinea[L_B].syncMinutes === '2' && storage.syncMinutes === '10' &&
+    storage.ajustesPorLinea[L_B].inboxDays === '1',
+    JSON.stringify([storage.ajustesPorLinea[L_B], storage.syncMinutes]))
 
   doc.getElementById('tab-agente').click()
   await espera()
@@ -8646,6 +8653,133 @@ console.log('\nconfig.html — A5: cada linea muestra y guarda sus propios ajust
     campo('agent') === 'Agente Principal' && campo('tone') === 'Tono de la principal', campo('agent'))
 }
 
+console.log('\nconfig.html — P5: con varias lineas, el triage corre al ritmo de la mas frecuente')
+{
+  const latido = (minutes) => ({ at: new Date().toISOString(),
+    triage: { minutes, cron: `*/${minutes} * * * *`, ok: true, code: 'ajustado' } })
+  const storage = Object.assign(dosLineasConAjustes(), { workerBeat: latido(2) })
+  const { doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  doc.getElementById('tab-avanzado').click()
+  await espera()
+  const ritmo = () => textoDe(doc, '#triage-pace')
+  ok('la principal a 10 min con el triage a 2: dice que es el de la linea mas frecuente',
+    /corre cada 2 min, el ritmo de la linea mas frecuente/.test(ritmo()) && !/Ajustando/.test(ritmo()),
+    ritmo())
+  elegirSeg(doc, 'linea-vista', L_B)
+  await new Promise((r) => setTimeout(r, 300))
+  doc.getElementById('tab-avanzado').click()
+  await espera()
+  ok('la otra linea muestra SU ritmo, y lo mismo del triage',
+    valorSeg(doc, 'sync-minutes') === '30' && /linea mas frecuente/.test(ritmo()),
+    `${valorSeg(doc, 'sync-minutes')} ${ritmo()}`)
+  const lento = Object.assign(dosLineasConAjustes(), { workerBeat: latido(60) })
+  const otro = await montar('config.html', lento, 'es-419')
+  await espera()
+  ok('un triage mas lento que la linea si es "ajustando"',
+    /Ajustando/.test(textoDe(otro.doc, '#triage-pace')), textoDe(otro.doc, '#triage-pace'))
+  const S = doc.defaultView.STRINGS
+  ok('la frase existe en los tres idiomas, el portugues propio',
+    S.es.triagePaceShared && S.en.triagePaceShared && S.pt.triagePaceShared &&
+    S.pt.triagePaceShared !== S.en.triagePaceShared)
+}
+
+console.log('\nconfig.html — P6: Jev se enciende y se apaga en cada linea, con una sola llave')
+{
+  const ahora = () => new Date().toISOString()
+  const storage = Object.assign(dosLineasConAjustes(), {
+    jevStatus: { at: ahora(), enabled: true, keySet: true, mirror: 'activo', lines: { [L_B]: false } } })
+  const { doc } = await montar('config.html', storage, 'es-419', trabajadorJev((pedido, st) => {
+    const lines = Object.assign({}, st.jevStatus.lines)
+    if (pedido.linea) lines[pedido.linea] = pedido.enabled
+    st.jevStatus = { at: ahora(), enabled: pedido.linea ? st.jevStatus.enabled : pedido.enabled,
+      keySet: true, mirror: 'activo', lines }
+    return { ok: true, code: pedido.enabled ? 'activado' : 'desactivado' }
+  }))
+  await espera()
+  doc.getElementById('tab-aprobacion').click()
+  await espera()
+  const sw = () => doc.getElementById('jev-enabled').getAttribute('aria-checked')
+  const estado = () => textoDe(doc, '#jev-status')
+  ok('en la principal, el Jev de la principal: encendido',
+    sw() === 'true' && /Encendido/.test(estado()), `${sw()} ${estado()}`)
+  elegirSeg(doc, 'linea-vista', L_B)
+  await new Promise((r) => setTimeout(r, 300))
+  ok('en la otra linea, el de ESA linea: apagado, con la misma llave guardada',
+    sw() === 'false' && /Apagado.*llave guardada/.test(estado()), `${sw()} ${estado()}`)
+  doc.getElementById('jev-enabled').click()
+  await new Promise((r) => setTimeout(r, 3500))
+  ok('encenderlo ahi manda el pedido con esa linea',
+    storage.jevRequestVisto && storage.jevRequestVisto.action === 'activar' &&
+    storage.jevRequestVisto.enabled === true && storage.jevRequestVisto.linea === L_B,
+    JSON.stringify(storage.jevRequestVisto))
+  ok('y queda encendido en esa linea, sin tocar la principal',
+    sw() === 'true' && storage.jevStatus.lines[L_B] === true && storage.jevStatus.enabled === true,
+    `${sw()} ${JSON.stringify(storage.jevStatus)}`)
+  elegirSeg(doc, 'linea-vista', L_A)
+  await new Promise((r) => setTimeout(r, 300))
+  doc.getElementById('jev-enabled').click()
+  await new Promise((r) => setTimeout(r, 3500))
+  ok('en la principal el pedido no nombra linea, como siempre',
+    storage.jevRequestVisto && storage.jevRequestVisto.enabled === false &&
+    !('linea' in storage.jevRequestVisto), JSON.stringify(storage.jevRequestVisto))
+  ok('apagar la principal deja encendida la otra',
+    sw() === 'false' && storage.jevStatus.lines[L_B] === true, JSON.stringify(storage.jevStatus))
+  ok('la tarjeta dice que la llave es una sola para el equipo, y ya no lleva la nota de maquina',
+    /una sola para este equipo/.test(textoDe(doc, '#jev-key-shared')) &&
+    !doc.querySelector('#jev-card .nota-maquina'), textoDe(doc, '#jev-key-shared'))
+  const S = doc.defaultView.STRINGS
+  ok('la frase de la llave existe en los tres idiomas, el portugues propio',
+    S.es.jevKeyShared && S.en.jevKeyShared && S.pt.jevKeyShared &&
+    S.pt.jevKeyShared !== S.en.jevKeyShared)
+}
+
+console.log('\nconfig.html — P7: las skills se instalan en el equipo y avisan por la linea elegida')
+{
+  const storage = dosLineasConAjustes()
+  const { doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  doc.getElementById('tab-skills').click()
+  await new Promise((r) => setTimeout(r, 500))
+  const sw = doc.getElementById('skills-line')
+  const fila = doc.getElementById('skills-line-row')
+  const dice = () => textoDe(doc, '#skills-line-text')
+  ok('la tarjeta dice que las skills se instalan en este equipo, sin la nota de maquina',
+    /se instalan en este equipo/.test(textoDe(doc, '#skills-card')) &&
+    !doc.querySelector('#skills-card .nota-maquina'), textoDe(doc, '#skills-card').slice(0, 300))
+  ok('sin nada elegido avisan por la principal: encendido ahi, y no se puede apagar',
+    !fila.hidden && sw.getAttribute('aria-checked') === 'true' && sw.disabled &&
+    /por la linea \+573000000001/.test(dice()), `${fila.hidden} ${sw.getAttribute('aria-checked')} ${dice()}`)
+  elegirSeg(doc, 'linea-vista', L_B)
+  await new Promise((r) => setTimeout(r, 300))
+  ok('en la otra linea, apagado y se puede encender',
+    sw.getAttribute('aria-checked') === 'false' && !sw.disabled, sw.getAttribute('aria-checked'))
+  sw.click()
+  await new Promise((r) => setTimeout(r, 500))
+  ok('encenderlo ahi guarda esa linea para las skills, en la raiz',
+    storage.skillsLine === L_B && sw.getAttribute('aria-checked') === 'true' &&
+    /por la linea \+573000000011/.test(dice()), `${JSON.stringify(storage.skillsLine)} ${dice()}`)
+  elegirSeg(doc, 'linea-vista', L_A)
+  await new Promise((r) => setTimeout(r, 300))
+  ok('y en la principal queda apagado, y se puede volver a elegir',
+    sw.getAttribute('aria-checked') === 'false' && !sw.disabled && /\+573000000011/.test(dice()),
+    `${sw.getAttribute('aria-checked')} ${dice()}`)
+  sw.click()
+  await new Promise((r) => setTimeout(r, 500))
+  ok('elegir la principal la deja sin linea aparte (null), como de fabrica',
+    storage.skillsLine === null && sw.getAttribute('aria-checked') === 'true',
+    JSON.stringify(storage.skillsLine))
+  const una = await montar('config.html', { sidecar: conLineas([lineaA]) }, 'es-419')
+  await espera()
+  ok('con una sola linea no hay nada que elegir',
+    una.doc.getElementById('skills-line-row').hidden && una.doc.getElementById('skills-line-text').hidden)
+  const S = doc.defaultView.STRINGS
+  const claves = ['skillsMachineNote', 'skillsLineLabel', 'skillsLineNow']
+  ok('las frases existen en los tres idiomas, el portugues propio',
+    claves.every((k) => S.es[k] && S.en[k] && S.pt[k] && S.pt[k] !== S.en[k]),
+    claves.filter((k) => !S.es[k] || !S.en[k] || !S.pt[k] || S.pt[k] === S.en[k]).join())
+}
+
 console.log('\nconfig.html — A5: si la otra linea no contesta, no se ven los ajustes de la principal')
 {
   const storage = dosLineasConAjustes()
@@ -8675,6 +8809,260 @@ console.log('\nconfig.html — A5: si la otra linea no contesta, no se ven los a
   ok('cuando el host contesta, aparece lo de ESA linea, sola la lectura que faltaba',
     doc.getElementById('agent').value === 'Agente Segunda' && !tarjeta.classList.contains('sin-leer'),
     doc.getElementById('agent').value)
+}
+
+// ───────── todo-por-linea P1: los avisos de Orca de cada linea ─────────
+// La tarjeta de los avisos de Orca es de la linea que se mira. Otra linea sin avisos propios
+// NO hereda los de la principal: se pintan apagados, y guardar ahi no toca la raiz.
+console.log('\nconfig.html — P1: los avisos de Orca de cada linea')
+{
+  const storage = dosLineasConAjustes()
+  const ORCA_A = { waiting: 'on', finished: 'on', automationFailed: 'off', quietStart: '',
+    quietEnd: '', hourlyCap: '4', finishedDelaySeconds: '30' }
+  storage.orcaNotices = { ...ORCA_A }
+  const { doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  doc.getElementById('tab-aprobacion').click()
+  await new Promise((r) => setTimeout(r, 300))
+  const encendido = (id) => doc.getElementById(id).getAttribute('aria-checked') === 'true'
+  ok('en la principal, la tarjeta muestra los avisos de la raiz',
+    encendido('orca-waiting') && encendido('orca-finished') &&
+    doc.getElementById('orca-cap').value === '4', doc.getElementById('orca-cap').value)
+  elegirSeg(doc, 'linea-vista', L_B)
+  await new Promise((r) => setTimeout(r, 400))
+  ok('en otra linea sin avisos propios: todo apagado, no los de la principal',
+    !encendido('orca-waiting') && !encendido('orca-finished') &&
+    doc.getElementById('orca-cap').value === '6' &&
+    !doc.getElementById('orca-notices-card').classList.contains('sin-leer'),
+    `${encendido('orca-waiting')} ${encendido('orca-finished')} ${doc.getElementById('orca-cap').value}`)
+  doc.getElementById('orca-waiting').click()
+  doc.getElementById('save-orca').click()
+  await new Promise((r) => setTimeout(r, 500))
+  const propios = storage.ajustesPorLinea[L_B]
+  ok('guardar en la otra linea escribe los avisos en lo de ESA linea',
+    propios.orcaNotices && propios.orcaNotices.waiting === 'on' &&
+    propios.orcaNotices.finished === 'off' && propios.agentName === 'Agente Segunda',
+    JSON.stringify(propios))
+  ok('y la raiz queda intacta', JSON.stringify(storage.orcaNotices) === JSON.stringify(ORCA_A),
+    JSON.stringify(storage.orcaNotices))
+  ok('y la tarjeta queda mostrando lo guardado', encendido('orca-waiting') && !encendido('orca-finished') &&
+    /Guardado/.test(textoDe(doc, '#said-orca')), textoDe(doc, '#said-orca'))
+  elegirSeg(doc, 'linea-vista', L_A)
+  await new Promise((r) => setTimeout(r, 400))
+  ok('volver a la principal muestra otra vez los de la raiz',
+    encendido('orca-waiting') && encendido('orca-finished') &&
+    doc.getElementById('orca-cap').value === '4', doc.getElementById('orca-cap').value)
+}
+
+// ───────── todo-por-linea P2: firmar con el nombre del agente, por linea ─────────
+// Un interruptor encima del nombre. Apagado, los mensajes de esa linea salen como del dueno:
+// el nombre deja de ser obligatorio y la lista de lo que falta no lo pide.
+console.log('\nconfig.html — P2: la firma de cada linea')
+{
+  const storage = dosLineasConAjustes()
+  storage.agentName = ''
+  storage.ajustesPorLinea[L_B].agentName = ''
+  const { doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  doc.getElementById('tab-agente').click()
+  await new Promise((r) => setTimeout(r, 300))
+  const firma = doc.getElementById('sign-messages')
+  const encendida = () => firma.getAttribute('aria-checked') === 'true'
+  const agente = () => doc.querySelector('#checklist [data-item="agente"]')?.getAttribute('data-ok')
+  ok('el interruptor va encima del nombre, encendido de fabrica, con su texto',
+    firma && firma.getAttribute('role') === 'switch' && encendida() &&
+    !!(firma.compareDocumentPosition(doc.getElementById('agent')) &
+      doc.defaultView.Node.DOCUMENT_POSITION_FOLLOWING) &&
+    textoDe(doc, '#sign-messages-label') === 'Firmar los mensajes con el nombre del agente',
+    textoDe(doc, '#sign-messages-label'))
+  ok('con la firma encendida, sin nombre la lista de lo que falta lo pide', agente() === 'false', agente())
+  doc.getElementById('save-agent').click()
+  await new Promise((r) => setTimeout(r, 300))
+  ok('y sin nombre no se guarda', textoDe(doc, '#said-agent') === 'Ponga un nombre.' &&
+    !('signMessages' in storage), textoDe(doc, '#said-agent'))
+
+  elegirSeg(doc, 'linea-vista', L_B)
+  await new Promise((r) => setTimeout(r, 400))
+  ok('en la otra linea, sin firma propia, encendida', encendida())
+  firma.click()
+  ok('apagarla dice que los mensajes salen como suyos',
+    !encendida() && /como si los escribiera usted/.test(textoDe(doc, '#sign-help')),
+    textoDe(doc, '#sign-help'))
+  doc.getElementById('save-agent').click()
+  await new Promise((r) => setTimeout(r, 500))
+  const propios = storage.ajustesPorLinea[L_B]
+  ok('con la firma apagada se guarda sin nombre, en lo de ESA linea',
+    propios.signMessages === 'off' && propios.agentName === '' && !('signMessages' in storage) &&
+    /Guardado/.test(textoDe(doc, '#said-agent')), JSON.stringify(propios) + textoDe(doc, '#said-agent'))
+  ok('y la lista de lo que falta ya no pide el nombre', agente() === 'true', agente())
+  firma.click()
+  doc.getElementById('save-agent').click()
+  await new Promise((r) => setTimeout(r, 300))
+  ok('volver a encenderla sin nombre no se guarda', propios.signMessages === 'off' &&
+    textoDe(doc, '#said-agent') === 'Ponga un nombre.', textoDe(doc, '#said-agent'))
+
+  elegirSeg(doc, 'linea-vista', L_A)
+  await new Promise((r) => setTimeout(r, 400))
+  ok('la principal sigue firmando', encendida() && agente() === 'false', agente())
+  const S = doc.defaultView.STRINGS
+  ok('las frases existen en los tres idiomas, el portugues propio',
+    ['signLabel', 'signHelp'].every((k) => S.es[k] && S.en[k] && S.pt[k] && S.pt[k] !== S.en[k]) &&
+    S.en.signLabel === "Sign messages with the agent's name")
+}
+
+// ───────── todo-por-linea P3: la cuenta de Claude del bot, por linea ─────────
+console.log('\nconfig.html — P3: la cuenta de Claude del bot de cada linea')
+{
+  const storage = dosLineasConAjustes()
+  storage.botClaudeAccount = 'cuenta-bot'
+  storage.ajustesPorLinea[L_B].botClaudeAccount = 'cuenta-sin'
+  const CUENTAS = [
+    { id: 'cuenta-bot', email: 'bot@example.invalid', authenticated: true, active: false, used: 20 },
+    { id: 'cuenta-sin', email: 'sin@example.invalid', authenticated: true, active: false, used: 5 }]
+  const gancho = (d, st) => {
+    if (!(d.action === 'storage.set' && d.params.key === 'scopeRequest' && d.params.value)) {
+      return undefined
+    }
+    const p = d.params.value
+    st.scopeRequest = p
+    st.scopeResult = { at: new Date().toISOString(), requestId: p.id, action: p.action, ok: true,
+      code: 'cuentas', accounts: CUENTAS }
+    return { ok: true }
+  }
+  const { doc } = await montar('config.html', storage, 'es-419', gancho)
+  await espera()
+  doc.getElementById('tab-agente').click()
+  await hastaPanel(() => doc.querySelectorAll('#bot-account button').length > 2)
+  ok('en la principal, la cuenta de la raiz', valorSeg(doc, 'bot-account') === 'cuenta-bot',
+    valorSeg(doc, 'bot-account'))
+  elegirSeg(doc, 'linea-vista', L_B)
+  await hastaPanel(() => valorSeg(doc, 'bot-account') === 'cuenta-sin')
+  ok('en la otra linea, la de ESA linea', valorSeg(doc, 'bot-account') === 'cuenta-sin',
+    valorSeg(doc, 'bot-account'))
+  elegirSeg(doc, 'bot-account', 'auto')
+  doc.getElementById('save-bot-account').click()
+  await new Promise((r) => setTimeout(r, 500))
+  ok('guardar en la otra linea la guarda en lo de ESA linea, sin tocar la raiz',
+    storage.ajustesPorLinea[L_B].botClaudeAccount === 'auto' && storage.botClaudeAccount === 'cuenta-bot',
+    JSON.stringify({ b: storage.ajustesPorLinea[L_B].botClaudeAccount, raiz: storage.botClaudeAccount }))
+  elegirSeg(doc, 'linea-vista', L_A)
+  await hastaPanel(() => valorSeg(doc, 'bot-account') === 'cuenta-bot')
+  ok('volver a la principal muestra otra vez la suya', valorSeg(doc, 'bot-account') === 'cuenta-bot',
+    valorSeg(doc, 'bot-account'))
+}
+
+// ───────── todo-por-linea P4: la transcripcion y su calidad, por linea ─────────
+console.log('\nconfig.html — P4: la transcripcion de cada linea')
+{
+  const storage = dosLineasConAjustes()
+  storage.transcribe = 'local'
+  storage.transcribeQuality = 'optima'
+  storage.ajustesPorLinea[L_B].transcribe = 'off'
+  storage.ajustesPorLinea[L_B].transcribeQuality = 'minima'
+  const { doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  doc.getElementById('tab-avanzado').click()
+  await espera()
+  ok('en la principal, la transcripcion de la raiz',
+    valorSeg(doc, 'transcribe') === 'local' && valorSeg(doc, 'quality') === 'optima',
+    `${valorSeg(doc, 'transcribe')} ${valorSeg(doc, 'quality')}`)
+  elegirSeg(doc, 'linea-vista', L_B)
+  await new Promise((r) => setTimeout(r, 400))
+  ok('en la otra linea, la de ESA linea',
+    valorSeg(doc, 'transcribe') === 'off' && valorSeg(doc, 'quality') === 'minima',
+    `${valorSeg(doc, 'transcribe')} ${valorSeg(doc, 'quality')}`)
+  elegirSeg(doc, 'quality', 'optima')
+  doc.getElementById('save-voice').click()
+  await new Promise((r) => setTimeout(r, 500))
+  const propios = storage.ajustesPorLinea[L_B]
+  ok('guardar la voz en la otra linea la guarda en lo de ESA linea, sin tocar la raiz',
+    propios.transcribe === 'off' && propios.transcribeQuality === 'optima' &&
+    storage.transcribe === 'local' && storage.transcribeQuality === 'optima' &&
+    propios.transcribeLang === 'en', JSON.stringify(propios))
+  ok('y la tarjeta de voz ya no dice que vale para todas las lineas',
+    doc.querySelectorAll('#voice-card .nota-maquina').length === 0)
+  elegirSeg(doc, 'linea-vista', L_A)
+  await new Promise((r) => setTimeout(r, 400))
+  ok('volver a la principal muestra otra vez la suya',
+    valorSeg(doc, 'transcribe') === 'local' && valorSeg(doc, 'quality') === 'optima')
+}
+
+// ───────── P9: las reglas de texto y el catalogo de proyectos, de cada linea ─────────
+// La principal los guarda en la raiz (`routes`, `projects`); cada otra linea, en
+// `ajustesPorLinea[<numero>]`. Lo que se pide al worker nombra la linea que se mira.
+console.log('\nconfig.html — P9: cada linea muestra y guarda sus reglas y sus proyectos')
+{
+  const ALFA = { id: 'alfa-demo', name: 'Alfa Demo', path: '/srv/ejemplo/alfa-demo', note: '' }
+  const BETA = { id: 'beta-demo', name: 'Beta Demo', path: '/srv/ejemplo/beta-demo', note: '' }
+  const storage = dosLineasConAjustes()
+  storage.routes = [{ pattern: 'acme', workspace: 'alfa-demo' }]
+  storage.projects = [ALFA]
+  Object.assign(storage.ajustesPorLinea[L_B], {
+    routes: [{ pattern: 'ventas', workspace: 'beta-demo' }], projects: [BETA] })
+  const pedidos = []
+  const { doc } = await montar('config.html', storage, 'es-419', (d, st) => {
+    if (!(d.action === 'storage.set' && d.params.key === 'scopeRequest' && d.params.value)) {
+      return undefined
+    }
+    const p = d.params.value
+    pedidos.push(p)
+    st.scopeRequest = p
+    st.scopeResult = { at: new Date().toISOString(), requestId: p.id, action: p.action, ok: true,
+      code: p.action === 'regla-quitar' ? 'regla-quitada' : 'quitado' }
+    return { ok: true }
+  })
+  await espera()
+  const reglas = () => textoDe(doc, '#routes-wrap')
+  const catalogo = () => textoDe(doc, '#projects-wrap')
+  ok('en la principal se ven sus reglas y sus proyectos',
+    /acme/.test(reglas()) && !/ventas/.test(reglas()) && /Alfa Demo/.test(catalogo()) &&
+    !/Beta Demo/.test(catalogo()), `${reglas()} | ${catalogo()}`)
+  elegirSeg(doc, 'linea-vista', L_B)
+  await new Promise((r) => setTimeout(r, 300))
+  ok('en la otra linea se ven las reglas y los proyectos de ESA linea',
+    /ventas/.test(reglas()) && !/acme/.test(reglas()) && /Beta Demo/.test(catalogo()) &&
+    !/Alfa Demo/.test(catalogo()), `${reglas()} | ${catalogo()}`)
+  ok('el selector de proyecto de una regla ofrece el catalogo de ESA linea',
+    proyectosOfrecidos(doc, 'r-workspace').join() === 'beta-demo',
+    proyectosOfrecidos(doc, 'r-workspace').join())
+  ok('y el de las conversaciones tambien',
+    proyectosOfrecidos(doc, 'workspace').filter(Boolean).join() === 'beta-demo',
+    proyectosOfrecidos(doc, 'workspace').join())
+
+  doc.getElementById('tab-chats').click()
+  await espera()
+  doc.getElementById('r-match').value = 'factura'
+  elegirProyecto(doc, 'r-workspace', 'beta-demo')
+  doc.getElementById('save-route').click()
+  await new Promise((r) => setTimeout(r, 300))
+  const propias = () => storage.ajustesPorLinea[L_B]
+  ok('agregar una regla en la otra linea la guarda solo en lo de ESA linea',
+    (propias().routes || []).map((r) => r.pattern).join() === 'factura,ventas' &&
+    storage.routes.map((r) => r.pattern).join() === 'acme' &&
+    propias().agentName === 'Agente Segunda', JSON.stringify({ propias: propias().routes, raiz: storage.routes }))
+  ok('y la tabla la muestra', /factura/.test(reglas()), reglas())
+
+  doc.querySelector('#routes-wrap [data-rrm]').click()
+  await new Promise((r) => setTimeout(r, 300))
+  const quitar = pedidos.find((p) => p.action === 'regla-quitar')
+  ok('quitar una regla en la otra linea se le pide al worker en ESA linea',
+    quitar?.linea === L_B && quitar?.pattern === 'factura', JSON.stringify(quitar))
+  doc.querySelector('#projects-wrap [data-prm="beta-demo"]').click()
+  await new Promise((r) => setTimeout(r, 300))
+  const sacar = pedidos.find((p) => p.action === 'proyectos-quitar')
+  ok('y quitar un proyecto tambien', sacar?.linea === L_B && sacar?.project === 'beta-demo',
+    JSON.stringify(sacar))
+
+  elegirSeg(doc, 'linea-vista', L_A)
+  await new Promise((r) => setTimeout(r, 300))
+  ok('volver a la principal muestra otra vez las suyas',
+    /acme/.test(reglas()) && !/ventas/.test(reglas()) && /Alfa Demo/.test(catalogo()),
+    `${reglas()} | ${catalogo()}`)
+  doc.querySelector('#projects-wrap [data-prm="alfa-demo"]').click()
+  await new Promise((r) => setTimeout(r, 300))
+  const enLaPrincipal = pedidos.filter((p) => p.action === 'proyectos-quitar').pop()
+  ok('en la principal el pedido no nombra linea',
+    enLaPrincipal?.project === 'alfa-demo' && !enLaPrincipal.linea, JSON.stringify(enLaPrincipal))
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

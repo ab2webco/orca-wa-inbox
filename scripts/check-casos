@@ -6256,7 +6256,8 @@ if NODE:
         # que solo menciona un caso no lo es.
         cambia_orca(carpeta, vivos=["term_worker1", "term_vuelta", "term_vieja", "term_agente",
                                     "term_dueno", "term_corta", "term_corta_viva",
-                                    "term_dueno_caso"],
+                                    "term_dueno_caso", "term_mayus", "term_espacio",
+                                    "term_mayus_viva"],
                     titulos={"term_worker1": f"WhatsApp case #{cid}",
                              "term_vuelta": f"✳ Despacho caso-{cid}-{did}",
                              "term_vieja": "✳ Despacho caso-990-77",
@@ -6264,7 +6265,12 @@ if NODE:
                              "term_dueno": "◐ Guardia de bots",
                              "term_corta": "◑ caso-990-78",
                              "term_corta_viva": f"◑ caso-{cid}-{did}",
-                             "term_dueno_caso": "◐ Revisar caso-990-78"})
+                             "term_dueno_caso": "◐ Revisar caso-990-78",
+                             # 2026-10-06: Claude las titula "Caso-33-15" y "Caso 39-18", con
+                             # mayuscula y a veces con espacio. Quedaban abiertas.
+                             "term_mayus": "◐ Caso-990-79",
+                             "term_espacio": "◑ Caso 990-80",
+                             "term_mayus_viva": f"◐ Caso {cid}-{did}"})
         antes = len(cerradas(carpeta))
         con = db_de(home)
         con.execute("delete from settings where key='limpieza_at'")
@@ -6273,11 +6279,12 @@ if NODE:
         p, r = tick_orca(home, carpeta)
         nuevas = cerradas(carpeta)[antes:]
         ok("el tick cierra las terminales del plugin que no son de nada en curso",
-           sorted(nuevas) == ["term_agente", "term_corta", "term_vieja"] and p.returncode == 0,
+           sorted(nuevas) == ["term_agente", "term_corta", "term_espacio", "term_mayus",
+                              "term_vieja"] and p.returncode == 0,
            f"{nuevas} {p.stderr[-300:]}")
         ok("y no toca las del dueno ni las de un despacho en curso",
            not {"term_dueno", "term_vuelta", "term_worker1", "term_corta_viva",
-                "term_dueno_caso"} & set(nuevas), f"{nuevas}")
+                "term_dueno_caso", "term_mayus_viva"} & set(nuevas), f"{nuevas}")
 
     # Un lanzamiento que quedo a medias (el tick murio) no se relanza: va al dueno.
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
@@ -6333,6 +6340,43 @@ if NODE:
            [a[a.index("--worktree") + 1] for a in
             llamadas_orca(carpeta, "terminal create")] == ["id:r1::/srv/a"],
            f"{llamadas_orca(carpeta)}")
+    # La carpeta del proyecto con un espacio de Orca encima (`::workspace:`, el que Orca abre
+    # sobre el repo mismo): son dos entradas con la misma ruta, pero el repo es uno. Manda la
+    # entrada del repo (`isMainWorktree`); bloquear ahi dejaba mudo al agente del grupo.
+    ESPACIO_ENCIMA = dict(WT_ALFA, id=f"repo-alfa::{PROYECTO_PATH}::workspace:w1",
+                          displayName="swordtail", isMainWorktree=False)
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, worktrees=[ESPACIO_ENCIMA, WT_ALFA])
+        cid = trabajo_firmado(home, "D6b")
+        tick_orca(home, carpeta)
+        ok("la misma carpeta con un espacio encima: va a la entrada del repo, sin bloquear",
+           [a[a.index("--worktree") + 1] for a in
+            llamadas_orca(carpeta, "terminal create")] == [f"id:{WT_ALFA['id']}"]
+           and js(home, "caso", "ver", cid)[0]["etapa"] != "bloqueado",
+           f"{motivo_bloqueo(home, cid)} {llamadas_orca(carpeta)}")
+    # Bloqueado por un espacio ambiguo, y el dueno lo arregla en Orca: el tick siguiente lo
+    # reintenta solo, una vez, sin que nadie tenga que reabrir el caso.
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, worktrees=[
+            dict(WT_ALFA, id="r1::/srv/a", path="/srv/a", displayName="Alfa Demo"),
+            dict(WT_ALFA, id="r2::/srv/b", path="/srv/b", displayName="Alfa Demo")])
+        cid = trabajo_firmado(home, "D6c")
+        tick_orca(home, carpeta)
+        bloqueado_antes = js(home, "caso", "ver", cid)[0]["etapa"] == "bloqueado"
+        estado = pathlib.Path(carpeta) / "estado.json"
+        datos = json.loads(estado.read_text(encoding="utf-8"))
+        datos["worktrees"] = [dict(WT_ALFA, id="r1::/srv/a", path="/srv/a",
+                                   displayName="Alfa Demo")]
+        estado.write_text(json.dumps(datos), encoding="utf-8")
+        tick_orca(home, carpeta)
+        ok("un caso bloqueado por un espacio ambiguo se reintenta solo cuando ya no lo es",
+           bloqueado_antes and [a[a.index("--worktree") + 1] for a in
+                                llamadas_orca(carpeta, "terminal create")] == ["id:r1::/srv/a"],
+           f"{motivo_bloqueo(home, cid)} {llamadas_orca(carpeta)}")
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
         linea_lista(home)
         orca_despacho(carpeta)
@@ -12461,10 +12505,11 @@ if NODE:
            f"{avisos} {(r or {}).get('lineas', {}).get(SEGUNDA)} "
            f"{jsl(home, SEGUNDA, 'caso', 'ver', dinero_b)[0]['etapa']} {p.stderr[-600:]}")
 
-        # v4.22.0: lo del dueno con varias lineas. Su chat (`owner`), los avisos de Orca y el
-        # `wa-send` de la skill de avisos salen SIEMPRE por la principal: el chat del dueno
-        # esta autorizado en las dos (cada linea le avisa lo suyo) y elegir "una" a ciegas
-        # seria un mensaje por la linea equivocada, o ninguno.
+        # v4.22.0: lo del dueno con varias lineas. Su chat (`owner`) y el `wa-send` de la skill
+        # de avisos salen SIEMPRE por la principal: el chat del dueno esta autorizado en las
+        # dos (cada linea le avisa lo suyo) y elegir "una" a ciegas seria un mensaje por la
+        # linea equivocada, o ninguno. Los avisos de Orca son de cada linea (todo-por-linea,
+        # P1): corren en todas, y la que no tiene los suyos no avisa.
         p = corre(home, "owner", extra={"WA_INBOX_LINEA": SEGUNDA})
         dueno = json.loads(p.stdout or "{}")
         ok("owner: el chat del dueno es de la principal aunque la corrida sea de otra linea",
@@ -12475,8 +12520,9 @@ if NODE:
         pon_orca(home, waiting="on")
         r = jsl(home, SEGUNDA, "orca-aviso", "--state=waiting", "--pane=tab-9:p9",
                 f"--at={int(time.time() * 1000)}", "--agent=claude")
-        ok("orca-aviso: el aviso de Orca se encola en la principal, no en la linea de la corrida",
-           r and r[0].get("queued") is True and cuenta(
+        ok("orca-aviso: corre en todas las lineas aunque la corrida sea de otra; la principal "
+           "avisa, y la otra, sin avisos propios, no",
+           [x.get("queued") for x in r if x.get("account") == A] == [True] and cuenta(
                home, "select count(*) from aviso where tipo='orca' and account=?", A) == 1
            and cuenta(home, "select count(*) from aviso where tipo='orca' and account=?",
                       SEGUNDA) == 0, f"{r}")
@@ -12490,15 +12536,15 @@ if NODE:
             con_b = ws_b.db()
             ws_b.tick_orca_si_toca(con_b, {})
             con_b.close()
-            ok("el tick de la otra linea no corre los avisos de Orca: son de la maquina, uno",
-               vueltas == [], f"{vueltas}")
+            ok("el tick de la otra linea corre sus avisos de Orca (todo-por-linea, P1)",
+               vueltas == [1], f"{vueltas}")
             del os.environ["WA_INBOX_LINEA"]
             ws_a = carga_wa_scope(home)
             ws_a.tick_orca = lambda con, resumen: vueltas.append(1)
             con_a = ws_a.db()
             ws_a.tick_orca_si_toca(con_a, {})
             con_a.close()
-            ok("y el de la principal si", vueltas == [1], f"{vueltas}")
+            ok("y el de la principal tambien", vueltas == [1, 1], f"{vueltas}")
             import inspect
             ok("y el tick de cada linea pasa por esa compuerta",
                "tick_orca_si_toca(con" in inspect.getsource(ws_a.cmd_tick)
@@ -12757,12 +12803,15 @@ if NODE:
            de_linea(lee_storage(home)) == raiz_antes,
            f"{ {k: v for k, v in de_linea(lee_storage(home)).items() if raiz_antes.get(k) != v} }")
 
-        # Los avisos de Orca son de la maquina: salen por la principal, a SU numero.
+        # Los avisos de Orca son de cada linea (todo-por-linea, P1): la principal avisa a SU
+        # numero, y la otra, sin avisos propios, no hereda los de la principal.
         pon_orca(home, waiting="on")
         r = jsl(home, SEGUNDA, "orca-aviso", "--state=waiting", "--pane=tab-9:p9",
                 f"--at={int(time.time() * 1000)}", "--agent=claude")
-        ok("un aviso de Orca va al numero de la principal aunque la corrida sea de otra linea",
-           r and r[0].get("queued") is True and cuenta(
+        ok("un aviso de Orca: la principal avisa a SU numero, y la otra linea sin avisos propios no",
+           [x.get("queued") for x in r if x.get("account") == A] == [True]
+           and cuenta(home, "select count(*) from aviso where tipo='orca' and account=?",
+                      SEGUNDA) == 0 and cuenta(
                home, "select count(*) from aviso where tipo='orca' and account=? and chat_jid=?",
                A, DUENO_LID) == 1, f"{r}")
 
@@ -12795,6 +12844,552 @@ if NODE:
         ok("sin linea, firma con la de la conversacion, y su dueno es el de esa linea",
            len(al_otro) == 1 and al_otro[0][:2] == (SEGUNDA, "enviado")
            and al_otro[0][2].endswith("-- Agente Segunda"), f"{al_otro} {p2.stderr[-300:]}")
+
+
+# ── Todo por linea (odd/tasks/todo-por-linea.md, P1): los avisos de Orca de cada linea ──
+# Cada linea tiene sus avisos de Orca: sus interruptores, su numero de aprobacion, su idioma y
+# su marca de las automatizaciones. Una linea que no tiene los suyos no hereda los de la
+# principal: de fabrica, todo apagado, y el dueno nunca recibe el mismo aviso dos veces.
+print("\ntodo por linea (P1): los avisos de Orca de cada linea")
+
+
+def avisos_orca_de(home, cuenta_):
+    con = db_de(home)
+    filas = [dict(r) for r in con.execute(
+        "select req_id, account, chat_jid, texto from aviso where tipo='orca' and account=? "
+        "order by rowid", (cuenta_,))]
+    con.close()
+    return filas
+
+
+def storage_o_nada(home):
+    return lee_storage(home) if storage_de(home).exists() else {}
+
+
+def orca_de_linea(home, cuenta_, **campos):
+    """Los avisos de Orca de la linea `cuenta_` (None: la raiz, que es la principal)."""
+    datos = storage_o_nada(home)
+    if cuenta_ is None:
+        datos["orcaNotices"] = dict(datos.get("orcaNotices") or {}, **campos)
+    else:
+        propios = datos.setdefault("ajustesPorLinea", {}).setdefault(cuenta_, {})
+        propios["orcaNotices"] = dict(propios.get("orcaNotices") or {}, **campos)
+    escribe_storage(home, datos)
+
+
+def ws_de_linea(home, linea):
+    """El modulo como lo corre el proceso de `linea` (None: la principal), con la CLI de Orca
+    y el envio de mentira."""
+    if linea:
+        os.environ["WA_INBOX_LINEA"] = linea
+    else:
+        os.environ.pop("WA_INBOX_LINEA", None)
+    ws = carga_wa_scope(home)
+    enviados = []
+
+    def envia(caso, texto, req):
+        enviados.append({"account": caso["account"], "chat": caso["chat_jid"], "texto": texto,
+                         "req": req})
+        return None, ""
+    ws.tick_envia = envia
+    ws.orca_json = OrcaFalsa()
+    ws.orca_cli_path = lambda *a, **k: "/nonexistent/orca-de-mentira"
+    ws.hora_local = lambda: 12 * 60
+    return ws, enviados
+
+
+def vuelta_orca(ws):
+    con = ws.db()
+    try:
+        ws.tick_orca_si_toca(con, {})
+        ws.envia_avisos(con)
+    finally:
+        con.close()
+
+
+def marcas_orca(home):
+    con = db_de(home)
+    filas = {r[0] for r in con.execute("select key from settings where key like "
+                                       "'orca_runs_desde%'")}
+    con.close()
+    return filas
+
+
+if NODE:
+    env_p1 = dict(os.environ)
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            llegan(home, A, [msg(PERSONA, "OP1", PEDIDO, 30)])
+            llegan(home, SEGUNDA, [msg(PERSONA, "OP2", PEDIDO, 30)], activar=False)
+            suma_linea(home, SEGUNDA)
+            datos = storage_o_nada(home)
+            datos.update(owners=[{"id": DUENO_LID, "name": "Dueno"}], approvalNumber=DUENO_LID,
+                         approvalLang="es", orcaNotices={"waiting": "on"})
+            datos["ajustesPorLinea"] = {SEGUNDA: {
+                "owners": [{"id": OTRO_LID, "name": "Otro"}], "approvalNumber": OTRO_LID,
+                "approvalLang": "en", "orcaNotices": {"waiting": "off"}}}
+            escribe_storage(home, datos)
+
+            def aviso_cli(pane, at, *extra):
+                return js(home, "orca-aviso", "--state=waiting", f"--pane={pane}", f"--at={at}",
+                          "--agent=claude", *extra)
+            at = int(time.time() * 1000)
+            r = aviso_cli("tab-1:p1", at)
+            de_a, de_b = avisos_orca_de(home, A), avisos_orca_de(home, SEGUNDA)
+            ok("P1: la principal encendida y la otra apagada: avisa solo la principal, a SU numero",
+               [x["chat_jid"] for x in de_a] == [DUENO_LID] and de_b == [], f"{r} {de_a} {de_b}")
+            ok("P1: orca-aviso sin --line corre en cada linea, y cada fila dice de cual es",
+               sorted(x.get("account") for x in r) == sorted([A, SEGUNDA])
+               and [x.get("reason") for x in r if x.get("account") == SEGUNDA] == ["off"], f"{r}")
+
+            orca_de_linea(home, None, waiting="off")
+            orca_de_linea(home, SEGUNDA, waiting="on")
+            r = aviso_cli("tab-2:p2", at)
+            de_b = avisos_orca_de(home, SEGUNDA)
+            ok("P1: al reves, avisa solo la otra linea: por SU linea, a SU numero",
+               len(avisos_orca_de(home, A)) == 1 and [x["chat_jid"] for x in de_b] == [OTRO_LID],
+               f"{r} {de_b}")
+            ok("P1: en el idioma de esa linea", de_b and "is waiting for you" in de_b[0]["texto"],
+               f"{de_b}")
+
+            orca_de_linea(home, None, waiting="on")
+            r = aviso_cli("tab-3:p3", at)
+            nuevo_a, nuevo_b = avisos_orca_de(home, A)[1:], avisos_orca_de(home, SEGUNDA)[1:]
+            ok("P1: las dos encendidas: cada linea manda UN aviso a su numero, y ninguna se descarta "
+               "como duplicado de la otra",
+               len(nuevo_a) == 1 and len(nuevo_b) == 1 and nuevo_a[0]["chat_jid"] == DUENO_LID
+               and nuevo_b[0]["chat_jid"] == OTRO_LID and all(x.get("queued") is True for x in r),
+               f"{r} {nuevo_a} {nuevo_b}")
+            huella = hashlib.sha1(b"tab-3:p3").hexdigest()[:12]
+            ok("P1: el id del aviso de la principal es el de siempre; el de la otra, otro",
+               nuevo_a and nuevo_a[0]["req_id"] == f"aviso-o-espera-{huella}-{at // 1000 // 300}"
+               and nuevo_b and nuevo_b[0]["req_id"].startswith("aviso-o-espera-")
+               and nuevo_b[0]["req_id"] != nuevo_a[0]["req_id"], f"{nuevo_a} {nuevo_b}")
+            r = aviso_cli("tab-4:p4", at, "--line", SEGUNDA)
+            ok("P1: con --line, solo esa linea",
+               [x.get("account", SEGUNDA) for x in r] == [SEGUNDA]
+               and len(avisos_orca_de(home, A)) == 2 and len(avisos_orca_de(home, SEGUNDA)) == 3,
+               f"{r}")
+
+            # Sin avisos propios, la otra linea no hereda los de la principal: ni del panel ni
+            # de la base del CLI.
+            datos = lee_storage(home)
+            del datos["ajustesPorLinea"][SEGUNDA]["orcaNotices"]
+            escribe_storage(home, datos)
+            js(home, "config", "orca_notice_waiting", "on")
+            r = aviso_cli("tab-5:p5", at)
+            ok("P1: una linea sin avisos propios no manda nada aunque la principal los tenga",
+               len(avisos_orca_de(home, SEGUNDA)) == 3 and len(avisos_orca_de(home, A)) == 3
+               and [x.get("reason") for x in r if x.get("account") == SEGUNDA] == ["off"], f"{r}")
+            ok("P1: y su configuracion dice apagado",
+               jsl(home, SEGUNDA, "config", "orca_notice_waiting")[0]["value"] == "off")
+
+            # El tick de cada linea corre los avisos de Orca de esa linea.
+            orca_de_linea(home, None, finished="on", finishedDelaySeconds="30")
+            orca_de_linea(home, SEGUNDA, finished="on", finishedDelaySeconds="30")
+            ahora_ms = int(time.time() * 1000)
+            datos = lee_storage(home)
+            datos["orcaPanes"] = {"pT": {"state": "done", "at": ahora_ms - 60000, "finished": True,
+                                         "worktreeId": WT_ALFA, "agentType": "codex"}}
+            escribe_storage(home, datos)
+            ws_a, env_a = ws_de_linea(home, None)
+            vuelta_orca(ws_a)
+            ws_b, env_b = ws_de_linea(home, SEGUNDA)
+            vuelta_orca(ws_b)
+            term_a = [(e["account"], e["chat"]) for e in env_a if "-termino-" in e["req"]]
+            term_b = [(e["account"], e["chat"]) for e in env_b if "-termino-" in e["req"]]
+            ok("P1: el tick de cada linea avisa del que termino, por su linea y a su numero",
+               term_a == [(A, DUENO_LID)] and term_b == [(SEGUNDA, OTRO_LID)],
+               f"{term_a} {term_b}")
+            ok("P1: y el de la otra linea en su idioma",
+               any("finished" in e["texto"] for e in env_b if "-termino-" in e["req"]),
+               f"{env_b}")
+
+            # La marca de las automatizaciones es de cada linea.
+            orca_de_linea(home, SEGUNDA, automationFailed="on")
+            ws_b, _ = ws_de_linea(home, SEGUNDA)
+            vuelta_orca(ws_b)
+            ws_a, _ = ws_de_linea(home, None)
+            vuelta_orca(ws_a)
+            ok("P1: con la falla apagada en la principal, su tick no borra la marca de la otra",
+               marcas_orca(home) == {f"orca_runs_desde@{SEGUNDA}"}, f"{marcas_orca(home)}")
+            orca_de_linea(home, None, automationFailed="on")
+            ws_a, _ = ws_de_linea(home, None)
+            vuelta_orca(ws_a)
+            ok("P1: y la de la principal se llama como siempre",
+               marcas_orca(home) == {"orca_runs_desde", f"orca_runs_desde@{SEGUNDA}"},
+               f"{marcas_orca(home)}")
+            os.environ.clear()
+            os.environ.update(env_p1)
+
+            # Lo que se cambia por la terminal en una linea va a los avisos de ESA linea.
+            raiz_orca = lee_storage(home).get("orcaNotices")
+            tope_a = js(home, "config", "orca_notice_hourly_cap")[0]["value"]
+            jsl(home, SEGUNDA, "config", "orca_notice_hourly_cap", "9")
+            datos = lee_storage(home)
+            propios = datos["ajustesPorLinea"][SEGUNDA].get("orcaNotices") or {}
+            ok("P1: config set en otra linea escribe en los avisos de ESA linea, no en la raiz",
+               propios.get("hourlyCap") == "9" and datos.get("orcaNotices") == raiz_orca,
+               f"{propios} {datos.get('orcaNotices')}")
+            ok("P1: y la principal sigue con su tope",
+               js(home, "config", "orca_notice_hourly_cap")[0]["value"] == tope_a
+               and jsl(home, SEGUNDA, "config", "orca_notice_hourly_cap")[0]["value"] == "9",
+               f"{tope_a}")
+            # El sync de la otra linea espeja SUS avisos en su lugar; la raiz no se toca.
+            datos = lee_storage(home)
+            del datos["ajustesPorLinea"][SEGUNDA]["orcaNotices"]
+            escribe_storage(home, datos)
+            jsl(home, SEGUNDA, "sync")
+            datos = lee_storage(home)
+            propios = datos["ajustesPorLinea"][SEGUNDA].get("orcaNotices")
+            ok("P1: el sync de otra linea espeja sus avisos de Orca en lo suyo: sin propios, "
+               "apagados", isinstance(propios, dict) and propios.get("waiting") == "off"
+               and propios.get("finished") == "off" and datos.get("orcaNotices") == raiz_orca,
+               f"{propios} {datos.get('orcaNotices')}")
+    finally:
+        os.environ.clear()
+        os.environ.update(env_p1)
+
+
+# ── Todo por linea (P2): firmar con el nombre del agente, o no, en cada linea ─────────
+# Una linea con la firma apagada manda como si escribiera el dueno: sin "-- <agente>", y sin
+# exigir un nombre. La otra linea sigue firmando, y sin nombre sigue sin mandar.
+print("\ntodo por linea (P2): la firma de cada linea")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        if not any(c["jid"] == OTRO_LID for c in CHATS):
+            CHATS.append({"jid": OTRO_LID, "nombre": "Otro Dueno", "grupo": False})
+        llegan(home, A, [msg(PERSONA, "FP1", PEDIDO, 30)])
+        llegan(home, SEGUNDA, [msg(PERSONA, "FP2", PEDIDO, 30)], activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "agent", "Agente Principal")
+        datos = storage_o_nada(home)
+        datos["ajustesPorLinea"] = {SEGUNDA: {"agentName": "Agente Segunda",
+                                              "signMessages": "off"}}
+        escribe_storage(home, datos)
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        jsl(home, SEGUNDA, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        jsl(home, SEGUNDA, "set", OTRO_LID, "--provider", "ninguno", "--mode", "responder")
+
+        def wa_send_p2(*args):
+            env = dict(os.environ, HOME=str(home),
+                       XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+                       APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"))
+            env.pop("WA_INBOX_LINEA", None)
+            return subprocess.run([str(RAIZ / "bin" / "wa-send"), *args, "--send", "--timeout=20",
+                                   "--json"], capture_output=True, text=True, env=env,
+                                  timeout=120)
+
+        def salida_de(prefijo):
+            con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+            filas = con.execute("select account, estado, body from envio where body like ?",
+                                (f"{prefijo}%",)).fetchall()
+            con.close()
+            return filas
+
+        sidecar_a, sidecar_b = SidecarDeLinea(home, A), SidecarDeLinea(home, SEGUNDA)
+        try:
+            p1 = wa_send_p2("--line", SEGUNDA, PERSONA, "Hola desde la otra linea")
+            p2 = wa_send_p2(OTRO_LID, "Sin nombrar la otra linea")
+            p3 = wa_send_p2("--line", A, PERSONA, "Hola desde la principal")
+        finally:
+            sidecar_a.cerrar()
+            sidecar_b.cerrar()
+        ok("P2: con la firma apagada en una linea, --line de esa linea sale sin firma",
+           salida_de("Hola desde la otra") == [(SEGUNDA, "enviado", "Hola desde la otra linea")],
+           f"{salida_de('Hola desde la otra')} {p1.stderr[-300:]}")
+        ok("P2: y sin --line, la conversacion de esa linea tambien",
+           salida_de("Sin nombrar") == [(SEGUNDA, "enviado", "Sin nombrar la otra linea")],
+           f"{salida_de('Sin nombrar')} {p2.stderr[-300:]}")
+        ok("P2: la otra linea sigue firmando con su agente",
+           salida_de("Hola desde la principal") == [
+               (A, "enviado", "Hola desde la principal\n-- Agente Principal")],
+           f"{salida_de('Hola desde la principal')} {p3.stderr[-300:]}")
+        ok("P2: config de esa linea lo dice, y la principal firma de fabrica",
+           jsl(home, SEGUNDA, "config", "sign_messages")[0]["value"] == "off"
+           and js(home, "config", "sign_messages")[0]["value"] == "on")
+
+        # Sin ningun nombre de agente: la linea sin firma manda igual; la que firma, no.
+        datos = lee_storage(home)
+        datos["agentName"] = ""
+        datos["ajustesPorLinea"][SEGUNDA]["agentName"] = ""
+        escribe_storage(home, datos)
+        con = db_de(home)
+        con.execute("delete from settings where key='agent_name'")
+        con.commit()
+        con.close()
+        sidecar_a, sidecar_b = SidecarDeLinea(home, A), SidecarDeLinea(home, SEGUNDA)
+        try:
+            p4 = wa_send_p2("--line", SEGUNDA, PERSONA, "Otra linea sin nombre")
+            p5 = wa_send_p2(OTRO_LID, "Otra linea sin nombre ni --line")
+            p6 = wa_send_p2("--line", A, PERSONA, "Principal sin nombre")
+        finally:
+            sidecar_a.cerrar()
+            sidecar_b.cerrar()
+        ok("P2: con la firma apagada, sin nombre de agente tambien sale, con y sin --line",
+           p4.returncode == 0 and p5.returncode == 0
+           and salida_de("Otra linea sin nombre") == [
+               (SEGUNDA, "enviado", "Otra linea sin nombre"),
+               (SEGUNDA, "enviado", "Otra linea sin nombre ni --line")],
+           f"{salida_de('Otra linea sin nombre')} {p4.stderr[-300:]} {p5.stderr[-300:]}")
+        ok("P2: con la firma encendida y sin nombre, la principal sigue sin mandar",
+           p6.returncode != 0 and "no agent name is configured" in p6.stderr
+           and salida_de("Principal sin nombre") == [], f"{p6.returncode} {p6.stderr[-300:]}")
+
+
+# ── Todo por linea (P3): la cuenta de Claude del bot, por linea ────────────────────────
+# Cada linea elige con que cuenta de Claude abre sus agentes: el despacho de un caso abre con
+# la cuenta de la linea de ESE caso.
+print("\ntodo por linea (P3): la cuenta de Claude del bot de cada linea")
+if NODE:
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        llave_del_plugin(home)
+        llegan(home, A, [])
+        llegan(home, SEGUNDA, [], activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "agent", "Agente Principal")
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        jsl(home, SEGUNDA, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        acepta_proyectos(home, "alfa-demo")
+        datos = lee_storage(home)
+        datos["botClaudeAccount"] = "cuenta-a"
+        datos["ajustesPorLinea"] = {SEGUNDA: {"agentName": "Agente Segunda",
+                                              "botClaudeAccount": "cuenta-b"}}
+        escribe_storage(home, datos)
+        ok("P3: cada linea lee su cuenta del bot",
+           js(home, "config", "bot_claude_account")[0]["value"] == "cuenta-a"
+           and jsl(home, SEGUNDA, "config", "bot_claude_account")[0]["value"] == "cuenta-b",
+           f"{jsl(home, SEGUNDA, 'config', 'bot_claude_account')}")
+        orca_despacho(carpeta, cuentas=[cuenta_claude("cuenta-a", 20), cuenta_claude("cuenta-b", 20),
+                                        cuenta_claude("cuenta-libre", 10)],
+                      rechaza={"": EN_USO})
+        cid_a = trabajo_firmado(home, "BA1")
+        llegan(home, SEGUNDA, [msg(PERSONA, "BB1", PEDIDO, 5)], activar=False)
+        cid_b = str(jsl(home, SEGUNDA, "caso", "crear", "--chat", PERSONA, "--stanza", "BB1",
+                        "--actor", "agente")[0]["case_id"])
+        jsl(home, SEGUNDA, "caso", "clasificar", cid_b, "--clase", "card", "--prioridad", "high",
+            "--actor", "agente")
+        v_b = jsl(home, SEGUNDA, "caso", "propuesta", cid_b, "--tipo", "trabajar",
+                  "--instrucciones", TRABAJO, "--actor", "agente")[0]["propuesta_version"]
+        jsl(home, SEGUNDA, "caso", "proyecto", cid_b, "--proyecto", "alfa-demo", "--actor", "dueno")
+        r = js(home, "caso", "aprobar", cid_b, "--version", v_b, "--actor", "dueno")[0]
+        p, _ = tick_orca(home, carpeta)
+        cuenta_de = {}
+        for args in llamadas_orca(carpeta, "terminal create"):
+            titulo = bandera(args, "--title") or ""
+            cuenta_de.setdefault(titulo, bandera(args, "--claude-account"))
+        ok("P3: el despacho de cada caso abre con la cuenta de SU linea",
+           cuenta_de.get(f"WhatsApp case #{cid_a}") == "cuenta-a"
+           and cuenta_de.get(f"WhatsApp case #{cid_b}") == "cuenta-b",
+           f"{r.get('etapa')} {cuenta_de} {p.stderr[-400:]}")
+        con = db_de(home)
+        filas = {str(f["case_id"]): f["cuenta_claude"]
+                 for f in con.execute("select case_id, cuenta_claude from caso_despacho")}
+        con.close()
+        ok("P3: y cada despacho lo anota", filas == {cid_a: "cuenta-a", cid_b: "cuenta-b"},
+           f"{filas}")
+        # Quien tiene el caso en la mano, aunque corra en otra linea, nombra la del caso.
+        env_p3 = dict(os.environ)
+        try:
+            os.environ.pop("WA_INBOX_LINEA", None)
+            ws = carga_wa_scope(home)
+            con = ws.db()
+            try:
+                caso_b = dict(con.execute("select * from caso where case_id=?",
+                                          (int(cid_b),)).fetchone())
+                ok("P3: cuenta_del_bot con la linea de un caso de otra linea da la de esa linea",
+                   ws.cuenta_del_bot(con, ws.linea_del_caso(caso_b)) == "cuenta-b"
+                   and ws.cuenta_del_bot(con) == "cuenta-a")
+            finally:
+                con.close()
+        finally:
+            os.environ.clear()
+            os.environ.update(env_p3)
+
+
+# ── Todo por linea (P4): la transcripcion y su calidad, por linea ────────────────────────
+# Cada linea elige si transcribe sus audios y con que calidad. La que la apaga no transcribe
+# nada; la otra sigue igual.
+print("\ntodo por linea (P4): la transcripcion de cada linea")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        env_t, registro_t = prepara_transcriptor(home)
+        llegan(home, A, [audio(home, "TA1", "linea-a.ogg")])
+        llegan(home, SEGUNDA, [audio(home, "TB1", "linea-b.ogg")], activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "borrador")
+        jsl(home, SEGUNDA, "set", PERSONA, "--provider", "ninguno", "--mode", "borrador")
+        datos = storage_o_nada(home)
+        datos.update(transcribe="local", transcribeQuality="optima")
+        datos["ajustesPorLinea"] = {SEGUNDA: {"transcribe": "off", "transcribeQuality": "minima"}}
+        escribe_storage(home, datos)
+        ok("P4: cada linea lee su transcripcion y su calidad",
+           [js(home, "config", k)[0]["value"] for k in ("transcribe", "transcribe_quality")]
+           == ["local", "optima"]
+           and [jsl(home, SEGUNDA, "config", k)[0]["value"]
+                for k in ("transcribe", "transcribe_quality")] == ["off", "minima"])
+        ingiere_con(home, env_t)
+        ok("P4: con la transcripcion apagada en una linea, sus audios no se transcriben; los "
+           "de la otra si", llamadas(registro_t) == ["linea-a.ogg"], f"{llamadas(registro_t)}")
+        con = db_de(home)
+        razones = {r[0]: r[1] for r in con.execute("select account, razon from transcripcion")}
+        con.close()
+        ok("P4: y el audio de esa linea queda sin transcribir por apagado",
+           razones.get(SEGUNDA) == "off" and razones.get(A) is None, f"{razones}")
+
+        def chequeo(linea):
+            env = dict(os.environ, HOME=str(home),
+                       XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+                       APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"),
+                       ORCA_CLI_COMMAND=SIN_ORCA)
+            env.pop("WA_INBOX_LINEA", None)
+            if linea:
+                env["WA_INBOX_LINEA"] = linea
+            p = subprocess.run([str(RAIZ / "bin" / "wa-transcribe"), "--check", "--json"],
+                               capture_output=True, text=True, env=env, timeout=120)
+            try:
+                r = json.loads(p.stdout or "{}")
+            except ValueError:
+                r = {}
+            return r.get("modo"), r.get("calidad")
+        ok("P4: wa-transcribe lee los de la linea de su corrida",
+           chequeo(None) == ("local", "optima") and chequeo(SEGUNDA) == ("off", "minima"),
+           f"{chequeo(None)} {chequeo(SEGUNDA)}")
+
+
+# ── Reglas y catalogo por linea (odd/tasks/todo-por-linea.md, P9) ──────────────────────
+# Cada linea tiene sus reglas de texto y su catalogo de proyectos. El mismo mensaje en la
+# misma conversacion se enruta, en cada linea, con lo de esa linea; y el despacho de un caso
+# usa el catalogo de la linea del caso aunque lo pida la corrida de otra.
+print("\nreglas y catalogo por linea (P9)")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        TEXTO_RP = "@duenio el reporte de ventas no carga"
+        llegan(home, A, [msg(SOPORTE, "RP1", TEXTO_RP, 5, mencion=True)])
+        llegan(home, SEGUNDA, [msg(SOPORTE, "RP2", TEXTO_RP, 5, mencion=True)],
+               activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "agent", "Agente De Ejemplo")
+        alfa = {"id": "alfa-demo", "name": "Alfa Demo", "path": "/srv/ejemplo/alfa-demo",
+                "note": ""}
+        beta = {"id": "beta-demo", "name": "Beta Demo", "path": "/srv/ejemplo/beta-demo",
+                "note": ""}
+        datos = lee_storage(home) if storage_de(home).exists() else {}
+        datos.update(projects=[alfa], routes=[{"pattern": "ventas", "workspace": "alfa-demo"}],
+                     ajustesPorLinea={SEGUNDA: {
+                         "projects": [beta],
+                         "routes": [{"pattern": "ventas", "workspace": "beta-demo"}]}})
+        escribe_storage(home, datos)
+        js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+        jsl(home, SEGUNDA, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+        js(home, "ingest")
+        con = db_de(home)
+        rutas = {r["account"]: (r["case_id"], json.loads(r["ruta"] or "{}"))
+                 for r in con.execute("select case_id, account, ruta from caso")}
+        con.close()
+        ruta_a, ruta_b = (rutas.get(A) or (None, {}))[1], (rutas.get(SEGUNDA) or (None, {}))[1]
+        ok("el mismo mensaje se enruta en cada linea con la regla y el catalogo de esa linea",
+           (ruta_a.get("workspace"), ruta_b.get("workspace"), ruta_b.get("workspace_path"))
+           == ("alfa-demo", "beta-demo", "/srv/ejemplo/beta-demo"), f"{rutas}")
+        antes = dict(os.environ)
+        try:
+            os.environ.pop("WA_INBOX_LINEA", None)
+            wsp = carga_wa_scope(home)
+            con = wsp.db()
+            fila = lambda cid: dict(con.execute("select * from caso where case_id=?",
+                                                (cid,)).fetchone())
+            de_b, porque_b = wsp.proyecto_del_caso(con, fila(rutas[SEGUNDA][0]))
+            de_a, _ = wsp.proyecto_del_caso(con, fila(rutas[A][0]))
+            con.close()
+            ok("el despacho de un caso de la otra linea usa el catalogo de ESA linea, aunque "
+               "lo pida la corrida de la principal",
+               bool(de_b) and (de_b["id"], de_b["path"]) == ("beta-demo", "/srv/ejemplo/beta-demo"),
+               f"{de_b} {porque_b}")
+            ok("y el de la principal, el de la principal",
+               bool(de_a) and de_a["id"] == "alfa-demo", f"{de_a}")
+        finally:
+            os.environ.clear()
+            os.environ.update(antes)
+
+
+# ── Jev de cada linea (odd/tasks/todo-por-linea.md, P6) ───────────────────────────────
+# UNA llave para el equipo (el espejo `jev.env`), y Jev encendido o apagado en cada linea:
+# la principal en la raiz (`jevEnabled`), cada otra en `ajustesPorLinea[<numero>]`. Un
+# mensaje de una linea con Jev apagado no se le manda a Jev, ni al entrar ni al salir.
+print("\njev de cada linea (P6)")
+
+
+def mensajes_a_jev(falso):
+    """Los textos de los mensajes que se le mandaron a Jev (no los borradores)."""
+    return [p["cuerpo"]["state"]["message_to_evaluate"]["text"] for p in falso.pedidos
+            if "message_to_evaluate" in p["cuerpo"]["state"]]
+
+
+def carga_wa_send(home):
+    os.environ.update(HOME=str(home), XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+                      APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"))
+    sys.dont_write_bytecode = True
+    cargador = importlib.machinery.SourceFileLoader("wa_send_p6", str(RAIZ / "bin" / "wa-send"))
+    spec = importlib.util.spec_from_loader("wa_send_p6", cargador)
+    modulo = importlib.util.module_from_spec(spec)
+    cargador.exec_module(modulo)
+    return modulo
+
+
+if NODE:
+    falso = JevFalso(jev_y_borradores)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(SOPORTE, "JA1", "@duenio no abre el login en la principal", 5,
+                                 mencion=True)])
+            llegan(home, SEGUNDA, [msg(SOPORTE, "JB1", "@duenio no abre el login en la segunda", 5,
+                                       mencion=True)], activar=False)
+            suma_linea(home, SEGUNDA)
+            js(home, "agent", "Agente Principal")
+            js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+            jsl(home, SEGUNDA, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+            datos = lee_storage(home)
+            datos["jevEnabled"] = True
+            datos["ajustesPorLinea"] = {SEGUNDA: {"jevEnabled": False}}
+            escribe_storage(home, datos)
+            js(home, "ingest")
+            textos = mensajes_a_jev(falso)
+            ok("Jev encendido en la principal y apagado en la otra: juzga el de la principal",
+               any("en la principal" in t for t in textos), f"{textos}")
+            ok("y el de la otra linea no se le manda a Jev",
+               not any("en la segunda" in t for t in textos), f"{textos}")
+
+            envio = carga_wa_send(home)
+            pedidos = len(falso.pedidos)
+            ok("wa-send: en la otra linea, con Jev apagado, no hay revision de Jev",
+               envio.revision_jev("Ya quedo listo", None, SEGUNDA) is None
+               and len(falso.pedidos) == pedidos, f"{falso.pedidos[pedidos:]}")
+            ok("y en la principal si", isinstance(envio.revision_jev("Ya quedo listo", None, A),
+                                                  list) and len(falso.pedidos) == pedidos + 1)
+
+            # Al reves: la principal sin decidir y la otra encendida. Que una linea encienda
+            # Jev no lo enciende en las demas.
+            datos = lee_storage(home)
+            datos.pop("jevEnabled", None)
+            datos["ajustesPorLinea"] = {SEGUNDA: {"jevEnabled": True}}
+            escribe_storage(home, datos)
+            llegan(home, A, [msg(SOPORTE, "JA2", "@duenio no abre el plan principal", 3,
+                                 mencion=True)])
+            llegan(home, SEGUNDA, [msg(SOPORTE, "JB2", "@duenio no abre el plan segundo",
+                                       3, mencion=True)], activar=False)
+            suma_linea(home, SEGUNDA)
+            js(home, "ingest")
+            textos = mensajes_a_jev(falso)
+            ok("encendido solo en la otra linea: juzga el de esa, y no el de la principal",
+               any("plan segundo" in t for t in textos)
+               and not any("plan principal" in t for t in textos), f"{textos}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:

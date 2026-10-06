@@ -330,13 +330,35 @@ CONTENEDOR_DE_LINEA = "porLinea"
 # tiene en null es "sin valor", y no cae a la raiz: asi una linea nueva que copio una clave
 # vacia de la principal no hereda lo que la principal elija despues.
 #
-# Lo demas es de la maquina y vive solo en la raiz: el ritmo del sync, la transcripcion y
-# su calidad, Jev, los avisos de Orca, la cuenta de Claude del bot, las skills, los
-# proyectos y las rutas.
+# Los avisos de Orca tambien (todo-por-linea, P1): cada linea avisa a SU numero de
+# aprobacion con SUS interruptores. La cuenta de Claude del bot (P3) y la transcripcion y su
+# calidad (P4) son de cada linea; los modelos de whisper descargados, de la maquina. Las
+# reglas de texto y el catalogo de proyectos tambien (P9): sus espejos en scope.db (`route`,
+# `project`) llevan la cuenta en la llave.
+#
+# El ritmo del sync (`syncMinutes`) es de cada linea (P5): el worker tiene un solo reloj, al
+# de la linea mas frecuente, y sincroniza cada linea cuando le toca. Jev encendido o apagado
+# (`jevEnabled`, P6) tambien: la llave es una sola, la usa cada linea que lo tiene encendido
+# (`jev_en_linea`).
 AJUSTES_DE_LINEA = ("agentName", "ownerName", "tone", "owners", "approvalNumber",
                     "approvalLang", "ackMode", "ackText", "ackQuietMinutes", "greetingMode",
                     "greetingText", "firstReply", "slaMinutes", "projectQuestionHours",
-                    "inboxDays", "transcribeLang")
+                    "inboxDays", "transcribeLang",
+                    "orcaNotices",
+                    "signMessages",
+                    "botClaudeAccount",
+                    "transcribe",
+                    "transcribeQuality",
+                    "routes",
+                    "projects",
+                    "syncMinutes",
+                    "jevEnabled",
+                    )
+# Los ajustes de linea que otra linea NUNCA toma de la raiz: sin uno propio valen los de
+# fabrica. Los avisos de Orca son los mismos eventos para todas las lineas; heredarlos
+# mandaria el mismo aviso dos veces, una por cada numero. El worker tampoco los copia al
+# sembrar una linea nueva.
+NO_HEREDAN = ("orcaNotices",)
 CONTENEDOR_AJUSTES = "ajustesPorLinea"
 CONTENEDORES = (CONTENEDOR_DE_LINEA, *CONTENEDOR_PROPIO.values(), CONTENEDOR_AJUSTES)
 
@@ -375,10 +397,11 @@ def ajustes_propios(datos, cuenta):
 def vista_de_linea(datos, cuenta, principal):
     """El storage como lo ve la linea `cuenta`: la raiz para la principal; para otra, las
     claves globales de la raiz con las suyas encima, y sus ajustes propios encima de los de
-    la raiz."""
+    la raiz. Los que no se heredan (`NO_HEREDAN`) son solo los suyos."""
     if not de_otra_linea(cuenta, principal):
         return datos
-    vista = {k: v for k, v in datos.items() if k not in CLAVES_DE_LINEA and k not in CONTENEDORES}
+    vista = {k: v for k, v in datos.items()
+             if k not in CLAVES_DE_LINEA and k not in CONTENEDORES and k not in NO_HEREDAN}
     for clave in CLAVES_DE_LINEA:
         hay, valor = valor_de_linea(datos, cuenta, clave)
         if hay:
@@ -463,7 +486,10 @@ PANEL_SETTINGS = {"tone": "tone", "agentName": "agent_name",
                   "slaMinutes": "sla_first_reply_minutes",
                   # Cuantas horas espera una pregunta "A o B?" al que escribio antes de pasar
                   # al dueno (proyectos-por-chat, M5).
-                  "projectQuestionHours": "project_question_hours"}
+                  "projectQuestionHours": "project_question_hours",
+                  # Si los mensajes de la linea salen firmados con el nombre del agente
+                  # (todo-por-linea, P2). Apagado, salen como del dueno y el nombre sobra.
+                  "signMessages": "sign_messages"}
 
 # El primer mensaje (Beta): quien lo escribe y el ritmo de los avances del agente. Viaja en
 # UNA clave del panel con sus cuatro valores, y no en cuatro claves planas: el host admite
@@ -506,6 +532,7 @@ CONFIG_OPCIONES = {
     "orca_notice_waiting": ("on", "off"),
     "orca_notice_finished": ("on", "off"),
     "orca_notice_automation": ("on", "off"),
+    "sign_messages": ("on", "off"),
 }
 CONFIG_NUMERICOS = ("inbox_days", "lock_ttl_s", "sync_minutes",
                     "capture_max", "capture_days", "case_window_hours", "approval_hours",
@@ -717,6 +744,43 @@ def duenos(linea=None):
 # Los idiomas en que sale un aviso por WhatsApp (T14). El panel guarda el suyo al elegir el
 # numero: el motor no tiene otra forma de saber en que idioma trabaja el usuario.
 IDIOMAS_AVISO = ("es", "en")
+
+
+PANEL_LINEA_SKILLS = "skillsLine"
+
+
+def linea_de_avisos():
+    """La linea por la que las skills le avisan al dueno (todo-por-linea, P7): la que eligio
+    en el panel (`skillsLine`) mientras siga vinculada, o la principal. Es UNA para el
+    equipo: las skills se instalan en el equipo, no en una linea; lo que es de una linea es
+    por cual avisan."""
+    ws = _wa_store()
+    elegida = plugin_store_raw().get(PANEL_LINEA_SKILLS)
+    if isinstance(elegida, str) and elegida in ws.lineas_activas_en_disco():
+        return elegida
+    return ws.linea_activa_en_disco()
+
+
+PANEL_JEV = "jevEnabled"
+
+
+def jev_en_linea(linea=None):
+    """Si Jev revisa lo de la linea `linea` (o la de esta corrida), todo-por-linea P6.
+
+    La llave es una sola para el equipo (`jev.env`, que el worker deja mientras alguna
+    linea tenga Jev encendido); encendido o apagado es de cada linea: la principal en la
+    raiz (`jevEnabled`), cada otra en sus ajustes propios, y la que no lo tiene propio sigue
+    a la principal. Solo `true` es encendido: es un booleano, y `settings_from_plugin` solo
+    traduce textos.
+
+    Un storage donde nadie decidio nada (ni la raiz ni ninguna linea) es una instalacion de
+    antes de esto, o sin panel: manda la llave, como siempre."""
+    raw = plugin_store_raw()
+    decidido = PANEL_JEV in raw or any(isinstance(p, dict) and PANEL_JEV in p
+                                       for p in _contenedor(raw, CONTENEDOR_AJUSTES).values())
+    if not decidido:
+        return True
+    return store_de_linea(linea).get(PANEL_JEV) is True
 
 
 def numero_aprobacion(linea=None):

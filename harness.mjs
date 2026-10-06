@@ -334,22 +334,41 @@ export function renderProyectos(proyectos) {
     'if the content does not decide it, ask with `wa-scope caso pregunta-proyecto`.',
     ''
   ]
-  const lista = leerCatalogo(proyectos)
+  const ficha = (p, nivel) => [
+    `${nivel} ${p.id}`,
+    '',
+    `- name: ${limpiarLinea(p.name, 120)}`,
+    `- path: \`${p.path.replace(/`/g, "'")}\``,
+    ...(p.note ? [`- for: ${p.note}`] : []),
+    ''
+  ]
+  // Cada linea de WhatsApp tiene su catalogo (todo-por-linea, P9): `{ lineas: [...] }`
+  // (`catalogosDeLineas`, catalogo.mjs). Con una sola, el archivo es el de siempre.
+  const lineas = Array.isArray(proyectos?.lineas) ? proyectos.lineas : null
+  if (lineas && lineas.length > 1) {
+    const cuerpo = lineas.flatMap((l) => {
+      const lista = leerCatalogo(l?.proyectos)
+      const numero = typeof l?.linea === 'string' ? `+${l.linea.replace(/^pn:/, '')}` : null
+      const titulo = l?.principal ? `Main line${numero ? ` ${numero}` : ''}` : `Line ${numero}`
+      return [`## ${titulo}`, '',
+        ...(lista.length ? lista.flatMap((p) => ficha(p, '###'))
+          : ['No projects accepted on this line yet.', ''])]
+    })
+    return [...cabecera,
+      'Each WhatsApp line has its own projects and its own text rules: a case uses the ones',
+      'of its line. `wa-scope where --line pn:<digits>` resolves with that line\'s rules and',
+      'projects.',
+      '',
+      ...cuerpo].join('\n')
+  }
+  const lista = leerCatalogo(lineas ? lineas[0]?.proyectos : proyectos)
   if (!lista.length) {
     return [...cabecera,
       'No projects accepted yet. A chat has no project until the owner accepts one in the',
       'settings: reply if a reply is enough, and leave the work to the owner.',
       ''].join('\n')
   }
-  const cuerpo = lista.flatMap((p) => [
-    `## ${p.id}`,
-    '',
-    `- name: ${limpiarLinea(p.name, 120)}`,
-    `- path: \`${p.path.replace(/`/g, "'")}\``,
-    ...(p.note ? [`- for: ${p.note}`] : []),
-    ''
-  ])
-  return [...cabecera, ...cuerpo].join('\n')
+  return [...cabecera, ...lista.flatMap((p) => ficha(p, '##'))].join('\n')
 }
 
 function corre(cmd, args, timeoutMs = 20000) {
