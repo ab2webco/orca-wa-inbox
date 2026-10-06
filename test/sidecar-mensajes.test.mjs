@@ -437,12 +437,14 @@ console.log('\nroles-por-numero (M8): los participantes de un grupo')
     subject: 'Grupo Demo',
     addressingMode: 'lid',
     participants: [
-      { id: '100000000000002@lid', jid: '573007776655@s.whatsapp.net',
-        lid: '100000000000002@lid', admin: 'admin' },
-      { id: '573000000002@s.whatsapp.net', jid: '573000000002@s.whatsapp.net',
-        lid: '111122223333@lid', admin: null },
+      // La forma de Baileys 7 (`extractGroupMetadata`, lib/Socket/groups.js): el id en
+      // LID trae el telefono en `phoneNumber`; el id en telefono trae su `lid`.
+      { id: '100000000000002@lid', phoneNumber: '573007776655@s.whatsapp.net',
+        admin: 'admin' },
+      { id: '573000000002@s.whatsapp.net', lid: '111122223333@lid', admin: null },
       { id: '111122224444:5@lid', admin: 'superadmin' },
-      { id: MI_LID, jid: MI_TEL, lid: MI_LID, admin: 'superadmin' },
+      { id: MI_LID, phoneNumber: MI_TEL, admin: 'superadmin' },
+      { id: '111122225555@lid', phoneNumber: MI_TEL, admin: null },
       { id: '120363000000000078@g.us', admin: null },
       { admin: 'admin' }
     ]
@@ -454,7 +456,7 @@ console.log('\nroles-por-numero (M8): los participantes de un grupo')
     por['100000000000002@lid'] && por['573000000002@s.whatsapp.net'] &&
     por['111122224444@lid'], JSON.stringify(miembros))
   ok('la linea misma no es un miembro, ni por su LID ni por su telefono',
-    !por[MI_LID] && !por[MI_TEL], JSON.stringify(miembros))
+    !por[MI_LID] && !por[MI_TEL] && !por['111122225555@lid'], JSON.stringify(miembros))
   ok('lo que no es una persona (otro grupo, sin id) no entra',
     !por['120363000000000078@g.us'], JSON.stringify(miembros))
   ok('admin y superadmin de WhatsApp son admin; el resto no',

@@ -197,16 +197,21 @@ export function ingerirContactos ({ almacen, cuenta, contactos, recordarNombre =
   for (const contacto of Array.isArray(contactos) ? contactos : []) {
     const jid = jidDeChat(contacto?.id) || jidDeChat(contacto)
     if (!jid || !esConversacion(jid) || esPropio(jid)) continue
-    // La libreta llega por numero, con el LID al lado: es el par que deja mostrar el
-    // telefono de un directo guardado con su LID. Se anota aunque no traiga nombre.
+    // El par que deja mostrar el telefono de un directo guardado con su LID. Se anota
+    // aunque no traiga nombre. Baileys 7 lo trae de dos maneras: `id` en telefono con el
+    // `lid` al lado (la libreta), o `id` en LID con el telefono en `phoneNumber` (el
+    // historial, lib/Utils/history.js).
     const lid = jidDeChat(contacto?.lid)
-    const par = parLidTelefono(lid, jid)
-    if (par && !esPropio(par.lid)) almacen.anotarTelefono({ cuenta, ...par })
+    const pn = jidDeChat(contacto?.phoneNumber)
+    const par = parLidTelefono(lid, jid) || parLidTelefono(jid, pn) || parLidTelefono(lid, pn)
+    if (par && !esPropio(par.lid) && !esPropio(par.pn)) almacen.anotarTelefono({ cuenta, ...par })
     const nombre = nombreDeContacto(contacto)
     if (!nombre) continue
-    // El directo puede estar guardado con cualquiera de los dos, asi que se nombran
-    // ambos.
-    for (const cual of lid && lid !== jid && !esPropio(lid) ? [jid, lid] : [jid]) {
+    // El directo puede estar guardado con cualquiera de las formas, asi que se nombran
+    // todas las que traiga.
+    const formas = [...new Set([jid, lid, pn])]
+      .filter((cual) => cual && (cual === jid || !esPropio(cual)))
+    for (const cual of formas) {
       recordarNombre(cual, nombre)
       // Solo pone nombre donde no lo hay. La libreta llega en lotes y a destiempo: si ya
       // se sabia como se llama esa conversacion, un lote viejo no puede degradarlo.
@@ -214,6 +219,23 @@ export function ingerirContactos ({ almacen, cuenta, contactos, recordarNombre =
     }
   }
   return { nombrados }
+}
+
+/**
+ * Los pares LID-telefono que Baileys 7 avisa por su cuenta: `lid-mapping.update`
+ * (`{ lid, pn }`) y `lidPnMappings` en el lote de `messaging-history.set`. Son los mismos
+ * que guarda para descifrar; aca van a `lid_telefono` como CONTABILIDAD, igual que los de
+ * la libreta. El del dueno no: es la linea, no alguien con quien se conversa.
+ */
+export function ingerirParesLid ({ almacen, cuenta, pares, esPropio = () => false,
+  ahora = Date.now() }) {
+  let anotados = 0
+  for (const entrada of Array.isArray(pares) ? pares : []) {
+    const par = parLidTelefono(entrada?.lid, entrada?.pn)
+    if (!par || esPropio(par.lid) || esPropio(par.pn)) continue
+    if (almacen.anotarTelefono({ cuenta, ...par, ahora })) anotados += 1
+  }
+  return { anotados }
 }
 
 /**

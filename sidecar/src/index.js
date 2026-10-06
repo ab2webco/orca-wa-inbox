@@ -21,7 +21,7 @@ import { crearAlcance } from './alcance.js'
 import { crearRegistro } from './registro.js'
 import { atenderSalida, ENVIO_LATIDO_MS } from './envio.js'
 import { INGESTA, ingerirActualizacion, ingerirCambioDeMiembros, ingerirChats,
-  ingerirContactos, ingerirMensaje, ingerirMiembros } from './ingesta.js'
+  ingerirContactos, ingerirMensaje, ingerirMiembros, ingerirParesLid } from './ingesta.js'
 import { cuentaDeIdentidad, identidadDeSesion, identidadesPropias,
   identidadPropia } from './mensajes.js'
 
@@ -811,6 +811,18 @@ async function iniciar () {
     sock.ev.on('contacts.upsert', anotarContactos)
     sock.ev.on('contacts.set', ({ contacts }) => anotarContactos(contacts))
 
+    // Los pares LID-telefono que Baileys 7 avisa por su cuenta (y que guarda para
+    // descifrar): contabilidad para `lid_telefono`, como los de la libreta.
+    const anotarPares = (pares) => {
+      if (!cuenta) return
+      try {
+        ingerirParesLid({ almacen, cuenta, pares, esPropio })
+      } catch (error) {
+        avisarFallo('par-sin-anotar', error)
+      }
+    }
+    sock.ev.on('lid-mapping.update', (par) => anotarPares([par]))
+
     // La lista INICIAL de conversaciones. Es el unico evento que la trae: `chats.upsert`
     // avisa de una conversacion NUEVA y `groupFetchAllParticipating` devuelve grupos por
     // definicion, asi que sin esto un uno a uno solo aparece si alguien escribe mientras
@@ -821,11 +833,12 @@ async function iniciar () {
     // miran a proposito: listar una conversacion no puede guardar una palabra de nadie.
     // El unico camino que escribe un cuerpo sigue siendo `ingerirMensaje`, que le
     // pregunta al alcance antes (§5).
-    sock.ev.on('messaging-history.set', ({ chats, contacts, isLatest }) => {
+    sock.ev.on('messaging-history.set', ({ chats, contacts, lidPnMappings, isLatest }) => {
       // Los contactos ANTES que los chats: asi las filas que nacen en este mismo lote
       // ya encuentran su nombre en `nombresDeChat` en vez de nacer llamandose como su
       // jid y depender de que otro lote las repare despues.
       anotarContactos(contacts)
+      anotarPares(lidPnMappings)
       const { anotados } = anotarChats(chats)
       historialChats += anotados
       // El PRIMER lote se fuerza y los demas no. Forzarlo una vez es lo que distingue

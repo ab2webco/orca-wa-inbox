@@ -395,10 +395,11 @@ function idDePersona (valor) {
  * Los miembros de un grupo, de su `GroupMetadata`, o `null` si eso no trae la lista (un
  * `groups.update` parcial, o algo que no es un grupo).
  *
- * La forma sale de Baileys 6.7.24, `extractGroupMetadata` (lib/Socket/groups.js:312-319):
- * cada participante es `{ id, jid, lid, admin }`. `id` es el jid con que el grupo lo
- * direcciona (LID o telefono, segun `addressingMode`), `jid` su telefono y `lid` su LID
- * cuando WhatsApp los manda, y `admin` es 'admin', 'superadmin' o null. Los dos niveles de
+ * La forma sale de Baileys 7, `extractGroupMetadata` (lib/Socket/groups.js): cada
+ * participante es `{ id, phoneNumber, lid, admin }`. `id` es el jid con que el grupo lo
+ * direcciona (LID o telefono, segun `addressingMode`); si es un LID trae su telefono en
+ * `phoneNumber`, y si es un telefono trae su `lid`, cuando WhatsApp los manda. `admin` es
+ * 'admin', 'superadmin' o null. (En 6.7.24 el telefono venia en `jid`.) Los dos niveles de
  * WhatsApp son admin aca: el rol del plugin lo pone el dueno, y esto es solo lo que se ve.
  *
  * La linea misma no es un miembro: no es nadie a quien darle un rol. Devuelve
@@ -411,11 +412,10 @@ export function miembrosDeGrupo (meta, esPropio = () => false) {
   for (const p of meta.participants) {
     const jid = idDePersona(p?.id)
     if (!jid) continue
-    if ([p.id, p.jid, p.lid].some((j) => j && esPropio(j))) continue
+    if ([p.id, p.phoneNumber, p.lid].some((j) => j && esPropio(j))) continue
     const admin = p.admin === 'admin' || p.admin === 'superadmin' || p.isAdmin === true ||
       p.isSuperAdmin === true ? 1 : 0
-    const par = parLidTelefono(p.lid, p.jid) || parLidTelefono(p.id, p.jid) ||
-      parLidTelefono(p.lid, p.id)
+    const par = parLidTelefono(p.id, p.phoneNumber) || parLidTelefono(p.lid, p.id)
     vistos.set(jid, { jid, admin, par })
   }
   return [...vistos.values()]

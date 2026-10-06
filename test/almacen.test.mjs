@@ -38,7 +38,7 @@ import { identidadesPropias, identidadPropia } from '../sidecar/src/mensajes.js'
 import { abrirAlmacen, ESQUEMA_VERSION, rutaAlmacen, rutaMedia } from '../sidecar/src/almacen.js'
 import { reclaveDecididaDe } from '../sidecar/src/alcance.js'
 import { ingerirActualizacion, ingerirCambioDeMiembros, ingerirChats, ingerirContactos,
-  ingerirMensaje, ingerirMiembros, nombreDeContacto } from '../sidecar/src/ingesta.js'
+  ingerirMensaje, ingerirMiembros, ingerirParesLid, nombreDeContacto } from '../sidecar/src/ingesta.js'
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..')
 const WA_READ = join(RAIZ, 'bin', 'wa-read')
@@ -1434,6 +1434,22 @@ console.log('\ningesta: la libreta de nombres y los directos')
       .chat_name === 'Persona Guardada' && conLid.nombrados === 1, JSON.stringify(conLid))
   ok('y el nombre queda en memoria tambien por el LID',
     memoria.get(DIRECTO_LID) === 'Persona Guardada')
+
+  // Baileys 7: el contacto puede venir con `id` en LID y el telefono en `phoneNumber`
+  // (el historial y `lidContactAction`, lib/Utils/history.js). El directo guardado por
+  // telefono tiene que recibir el nombre igual.
+  const DIRECTO_PN = '573000000012@s.whatsapp.net'
+  alm.anotarChat({ cuenta: CUENTA, chatJid: DIRECTO_PN, nombre: '', esGrupo: 0,
+    ts: 1700000000, ahora: Date.now() })
+  const porLid = ingerirContactos({ almacen: alm, cuenta: CUENTA, esPropio, recordarNombre,
+    contactos: [{ id: '111122224444@lid', lid: '111122224444@lid',
+      phoneNumber: DIRECTO_PN, name: 'Persona Por Lid' }] })
+  ok('un contacto con id LID y phoneNumber (Baileys 7) nombra el directo por telefono',
+    alm.con.prepare('select chat_name from chat where chat_jid=?').get(DIRECTO_PN)
+      .chat_name === 'Persona Por Lid' && porLid.nombrados === 1, JSON.stringify(porLid))
+  ok('y el nombre queda en memoria por los dos',
+    memoria.get(DIRECTO_PN) === 'Persona Por Lid' &&
+    memoria.get('111122224444@lid') === 'Persona Por Lid')
   alm.cerrar()
 }
 
@@ -1755,7 +1771,23 @@ console.log('\ningesta: el telefono de cada LID')
       { id: '573000000012@s.whatsapp.net', name: 'Sin Lid' },
       { id: MI_TEL, name: 'Yo', lid: MI_LID }
     ] })
+  // Baileys 7 trae el telefono en `phoneNumber`: con `id` en LID (historial) o en
+  // telefono (`contactAction`, que lo repite ahi).
+  ingerirContactos({ almacen: alm, cuenta: CUENTA, esPropio,
+    contactos: [
+      { id: '111122220001@lid', lid: '111122220001@lid',
+        phoneNumber: '573001234567@s.whatsapp.net', name: 'Por Lid' },
+      { id: '573005554433@s.whatsapp.net', lid: '111122220002@lid',
+        phoneNumber: '573005554433@s.whatsapp.net' },
+      { id: MI_LID, phoneNumber: MI_TEL, name: 'Yo' }
+    ] })
   let p = pares()
+  ok('Baileys 7: phoneNumber da el par, venga el id en LID o en telefono',
+    p['111122220001@lid'] === '573001234567@s.whatsapp.net' &&
+    p['111122220002@lid'] === '573005554433@s.whatsapp.net' && !p[MI_LID],
+    JSON.stringify(p))
+  alm.con.prepare("delete from lid_telefono where lid like '11112222000%'").run()
+  p = pares()
   ok('la libreta anota el telefono de cada LID, sin dispositivo',
     p[LID] === TEL && p[LID_B] === TEL_B, JSON.stringify(p))
   ok('un contacto sin LID no anota nada, y el dueno tampoco',
@@ -1800,6 +1832,21 @@ console.log('\ningesta: el telefono de cada LID')
   ok('el historial anota el par de cada conversacion',
     p['111122228888@lid'] === '573000000001@s.whatsapp.net' &&
     p['111122229999@lid'] === '573000000000@s.whatsapp.net', JSON.stringify(p))
+
+  // 4. Baileys 7 avisa el par por su cuenta: `lid-mapping.update` ({ lid, pn }) y
+  //    `lidPnMappings` en el lote del historial. Es el mismo par que guarda para
+  //    descifrar; aca se anota como contabilidad, y el del dueno no.
+  const r = ingerirParesLid({ almacen: alm, cuenta: CUENTA, esPropio,
+    pares: [{ lid: '111122220003:2@lid', pn: '573002220000@s.whatsapp.net' },
+      { lid: MI_LID, pn: MI_TEL }, { lid: 'no-es-lid', pn: '573002220000@s.whatsapp.net' },
+      null] })
+  p = pares()
+  ok('lid-mapping.update y lidPnMappings anotan el par, sin dispositivo',
+    p['111122220003@lid'] === '573002220000@s.whatsapp.net' && r.anotados === 1,
+    JSON.stringify({ p, r }))
+  ok('y no anotan al dueno ni lo que no es un par', !p[MI_LID], JSON.stringify(p))
+  ok('sin pares no hace nada',
+    ingerirParesLid({ almacen: alm, cuenta: CUENTA, pares: undefined }).anotados === 0)
 
   // Un par nuevo para el mismo LID manda: el numero de una persona puede cambiar.
   ok('anotar el mismo par otra vez no cambia nada',
@@ -1861,10 +1908,10 @@ console.log('\nroles-por-numero (M8): los miembros de cada grupo')
   alm.anotarChat({ cuenta: CUENTA, chatJid: GRUPO, nombre: 'Grupo Demo', esGrupo: 1 })
   const r1 = ingerirMiembros({ almacen: alm, cuenta: CUENTA, esPropio, grupos: [
     { id: GRUPO, subject: 'Grupo Demo', participants: [
-      { id: UNO, jid: UNO_TEL, lid: UNO, admin: 'admin' },
-      { id: DOS, jid: DOS, admin: null },
+      { id: UNO, phoneNumber: UNO_TEL, admin: 'admin' },
+      { id: DOS, admin: null },
       { id: `${TRES.split('@')[0]}:4@lid`, admin: null },
-      { id: MI_LID, jid: MI_TEL, lid: MI_LID, admin: 'superadmin' }] },
+      { id: MI_LID, phoneNumber: MI_TEL, admin: 'superadmin' }] },
     { id: OTRO, subject: 'Otro', participants: [{ id: DOS, admin: 'superadmin' }] },
     { id: LAURA, participants: [{ id: DOS }] }] })
   let m = miembros()

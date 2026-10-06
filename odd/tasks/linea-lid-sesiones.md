@@ -44,8 +44,14 @@ Out of scope: version bump, push, PR. Testing against real WhatsApp (not possibl
       arrive, so they are not read. Tests in `sidecar-mensajes.test.mjs` and
       `almacen.test.mjs` (keys moved to the v7 shape).
       Proof: RED 114/119 and 308/311, GREEN 119/119 and 311/311.
-- [ ] T3 — Contacts and group participants: `phoneNumber` (v7) feeds `lid_telefono` like
-      `jid` did in 6.x. Tests in `sidecar-mensajes.test.mjs`.
+- [x] T3 — Contacts and group participants: `phoneNumber` (v7) feeds `lid_telefono` like
+      `jid` did in 6.x. A contact with `id` in LID and `phoneNumber` names both chats.
+      The v7 `lid-mapping.update` event and `lidPnMappings` of the history batch also go
+      to `lid_telefono` (`ingerirParesLid`), never the owner's own pair.
+      Tests in `sidecar-mensajes.test.mjs` and `almacen.test.mjs` (group metadata moved
+      to the v7 shape).
+      Proof: RED 116/119 and a missing `ingerirParesLid` export, GREEN 119/119 and
+      317/317. Bundle rebuilt, sidecar-build 8/8, sidecar-pairing 105/105.
 - [ ] T4 — Retries: `getMessage` answers from the outbox (`envio`), a process-wide
       `msgRetryCounterCache`, keys through `makeCacheableSignalKeyStore`. Tests in
       `sidecar-pairing.test.mjs` / `envio.test.mjs`.
