@@ -2341,8 +2341,14 @@ def cmd_owner(con, a):
         print(json.dumps(dato, ensure_ascii=False, indent=2))
     if not dato["can_send"]:
         print(f"wa-scope: {CHAT_DUENO_SIN_PERMISO}", file=sys.stderr)
-        print(f"the owner's chat is in mode {modo or 'off'!r}, not 'responder': set it to "
-              "Automatic in the plugin settings", file=sys.stderr)
+        if origen == "own-chat":
+            # Sin numero de aprobacion los avisos no tienen a donde ir: la salida es
+            # elegir uno, no autorizar el chat de la linea consigo misma.
+            print("no approval number is chosen: choose one under Settings > Su aprobacion "
+                  "(Your approval) in the plugin", file=sys.stderr)
+        else:
+            print(f"the owner's chat is in mode {modo or 'off'!r}, not 'responder': set it "
+                  "to Automatic in the plugin settings", file=sys.stderr)
         sys.exit(3)
     if not a.json:
         print(chat)

@@ -1151,6 +1151,14 @@ def revisa_chat_del_dueno(fallos: list) -> int:
             fallos.append(f"`wa-scope owner` con el chat propio sin autorizar salio "
                           f"{p.returncode} ({primera(p)!r}) con {dato!r}: tenia que salir 3 con "
                           "'wa-scope: owner-chat-not-authorized' y decir el chat propio")
+        # Sin numero de aprobacion la salida es elegir uno, no poner el chat propio en
+        # Automatico: los avisos al dueno van al numero de aprobacion.
+        hechas += 1
+        pista = p.stderr.lower()
+        if "approval number" not in pista or "su aprobacion" not in pista or \
+                "automatic" in pista:
+            fallos.append(f"`wa-scope owner` sin numero de aprobacion sugirio {p.stderr!r}: "
+                          "tenia que decir que se elija uno en Ajustes > Su aprobacion")
 
         subprocess.run([str(BIN / "wa-scope"), "set", propio, "--mode", "responder"],
                        env=env, capture_output=True, timeout=120)
