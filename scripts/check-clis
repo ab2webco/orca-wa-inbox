@@ -3447,7 +3447,7 @@ def revisa_rutas_y_proyectos_por_linea(fallos: list) -> int:
 
         # ── Una linea sin catalogo propio en el storage (se perdio) sirve su espejo; una que
         # nunca tuvo, el de la principal, sin escribir un espejo que la ate a esa copia.
-        TERCERA = "pn:573000000099"
+        TERCERA = "pn:573000000013"
         datos = storage()
         datos["ajustesPorLinea"][NUEVA].pop("projects")
         guarda(datos)
