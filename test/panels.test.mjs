@@ -7991,6 +7991,13 @@ for (const [idioma, nombre, leyenda, nunca, bloqueado] of [['es-419', 'ES', /Orc
   // Decision del dueno (2026-10-05): el mismo interruptor avisa tambien de un agente bloqueado.
   ok(`${nombre}: el interruptor de la espera dice que tambien avisa si un agente se bloquea`,
     bloqueado.test(t('orca-waiting-label')), t('orca-waiting-label'))
+  // Visto en la captura a 390: la etiqueta larga bajaba a otra linea, lejos de su interruptor.
+  // En esta tarjeta la etiqueta se parte en su sitio, al lado del interruptor.
+  const fila = doc.getElementById('orca-waiting').closest('.switch-row')
+  ok(`${nombre}: la etiqueta larga no se separa de su interruptor`,
+    window.getComputedStyle(fila).flexWrap === 'nowrap' &&
+    parseFloat(window.getComputedStyle(doc.getElementById('orca-waiting-label')).minWidth) === 0,
+    `${window.getComputedStyle(fila).flexWrap} ${window.getComputedStyle(doc.getElementById('orca-waiting-label')).minWidth}`)
   ok(`${nombre}: la tarjeta de avisos de Orca en su idioma`,
     leyenda.test(t('orca-legend')) && nunca.test(t('orca-intro')) && t('orca-no-number').length > 10 &&
     ['orca-waiting-label', 'orca-finished-label', 'orca-automation-label'].every((id) => t(id).length > 5) &&

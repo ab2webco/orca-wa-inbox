@@ -146,6 +146,14 @@ owner's approval number by WhatsApp. Owner-approved on 2026-10-04.
       roles-por-numero section ("no ofrece admin"), unrelated to this change; it passed
       1455/1455 when re-run alone.
 
+- [x] O10 The longer switch label dropped below its switch at 390 (seen in
+      `config-avisos-orca-es-dark-390` and `config-avisos-orca-sin-numero-es-light-390`).
+      In this card the label now wraps next to its switch (`flex-wrap: nowrap`, the label
+      `min-width: 0`). RED: panels 1455/1458 (ES/EN/PT rows still `wrap`); GREEN 1458/1458.
+      Re-shot `WA_INBOX_SOLO=config-avisos-orca` (40 PNG, no overflow, no JS errors); looked
+      at es dark 390, pt light 390, en dark 1440 after the fix, and es light 1440,
+      sin-numero es dark 1440 before it (the label fits there, the fix does not change it).
+
 ## Acceptance
 
 - With every switch off (the default), nothing changes for anyone.
