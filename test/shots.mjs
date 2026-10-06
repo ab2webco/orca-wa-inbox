@@ -275,8 +275,12 @@ function stub(datos, opciones) {
   // mensajes por 10 s y el sondeo pide 18. `window.__rechazar` deja que el guion lo
   // encienda DESPUES del primer pintado, que es la unica forma de fotografiar el
   // parpadeo: lo que hay que ver es la seccion entera, no el estado inicial.
+  // `rechazaHastaMs`: el host vuelve a contestar pasado ese tiempo, para fotografiar la
+  // tarjeta que estaba sin leer ya con lo guardado (ajustes-sin-lectura).
+  const hasta = opciones && opciones.rechazaHastaMs ? Date.now() + opciones.rechazaHastaMs : 0
   const rechazado = (key) =>
-    ((opciones && opciones.rechazaGet) || []).indexOf(key) >= 0 ||
+    (((opciones && opciones.rechazaGet) || []).indexOf(key) >= 0 &&
+      (!hasta || Date.now() < hasta)) ||
     ((window.__rechazar || []).indexOf(key) >= 0)
   // Cuanto tarda el host en contestar. Sin poder hacerlo tardar no se puede fotografiar
   // un guardado EN VUELO, que es justo el momento en que el panel mentia.
@@ -875,6 +879,28 @@ const PANELES = [
   { nombre: 'config-avisos-orca-sin-numero', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, espera: 300, pestana: 'aprobacion', datos: DATOS,
     guion: "document.getElementById('orca-notices-card').scrollIntoView()" },
+  // ajustes-sin-lectura: el host todavia no contesto por los numeros ni por los avisos (el
+  // cupo es por plugin y el tablero gasta del mismo). Las dos tarjetas dicen que estan
+  // leyendo, sin los controles de fabrica a la vista y con Guardar apagado; y cuando el
+  // host vuelve a contestar, las mismas dos con lo guardado.
+  { nombre: 'config-aprobacion-leyendo', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, idiomas: ['pt'], espera: 300, pestana: 'aprobacion',
+    datos: Object.assign({}, CON_LINEA, {
+      owners: [{ id: '100000000000001@lid', name: 'Ana Restrepo' }],
+      approvalNumber: '100000000000001@lid',
+      orcaNotices: { waiting: 'on', finished: 'on', automationFailed: 'on', quietStart: '',
+        quietEnd: '', hourlyCap: '6', finishedDelaySeconds: '25' } }),
+    stub: { rechazaGet: ['owners', 'approvalNumber', 'orcaNotices'] },
+    guion: "document.getElementById('owners-card').scrollIntoView()" },
+  { nombre: 'config-aprobacion-releida', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 1500, pestana: 'aprobacion',
+    datos: Object.assign({}, CON_LINEA, {
+      owners: [{ id: '100000000000001@lid', name: 'Ana Restrepo' }],
+      approvalNumber: '100000000000001@lid',
+      orcaNotices: { waiting: 'on', finished: 'on', automationFailed: 'on', quietStart: '',
+        quietEnd: '', hourlyCap: '6', finishedDelaySeconds: '25' } }),
+    stub: { rechazaGet: ['owners', 'approvalNumber', 'orcaNotices'], rechazaHastaMs: 500 },
+    guion: "document.getElementById('owners-card').scrollIntoView()" },
   // acuse-inteligente: los minutos sin acuse despues de que la linea escribio en el chat,
   // junto al acuse, con su pista. En portugues tambien: la etiqueta es la mas larga.
   { nombre: 'config-acuse-silencio', archivo: 'config.html', anchos: ANCHOS,

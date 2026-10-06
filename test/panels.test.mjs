@@ -2119,6 +2119,156 @@ console.log('\nconfig.html: un rechazo del host se reintenta, no se reporta')
     rechazadas === 1 && !!storage.syncRequest, `rechazadas=${rechazadas} ${JSON.stringify(storage.syncRequest)}`)
 }
 
+// ───────── ajustes sin lectura: una tarjeta que el host no contesto no es una vacia ─────────
+// Visto en vivo (v4.22.0): Su aprobacion abria con "Todavia no eligio ningun numero",
+// "No avisar" como unica opcion y los tres avisos de Orca apagados, mientras el storage
+// tenia los numeros de confianza, el de aprobacion y los avisos encendidos. El host
+// reparte 30 mensajes por 10 s POR PLUGIN (main: createPluginPanelCallAdmission, por
+// pluginKey), asi que el tablero abierto gasta del mismo cupo que Ajustes; una lectura
+// del carril del usuario que sigue rechazada a los 30 s se rinde, y la tarjeta se quedaba
+// con lo de fabrica pintado y su Guardar vivo: un clic escribia owners=[] y todo apagado.
+console.log('\nconfig.html — ajustes sin lectura: lo de fabrica no se presenta como lo guardado')
+{
+  const DUENO = '100000000000001@lid'
+  const guardado = () => ({
+    owners: [{ id: DUENO, name: 'Ana Ejemplo' }],
+    approvalNumber: DUENO,
+    orcaNotices: { waiting: 'on', finished: 'on', automationFailed: 'on', quietStart: '',
+      quietEnd: '', hourlyCap: '6', finishedDelaySeconds: '25' }
+  })
+  const SIN_LEER = ['owners', 'approvalNumber', 'orcaNotices']
+  // Visible de verdad: ni el nodo ni ninguno de arriba esconde (atributo o display).
+  const seVe = (n) => {
+    for (let x = n; x && x.nodeType === 1; x = x.parentElement) {
+      if (x.hidden || x.ownerDocument.defaultView.getComputedStyle(x).display === 'none') {
+        return false
+      }
+    }
+    return true
+  }
+  let cerrado = true
+  const { window, doc, storage, enviados } = await montar('config.html', guardado(), 'es-419',
+    (d) => cerrado && d.action === 'storage.get' && SIN_LEER.includes(d.params.key)
+      ? { ok: false, errorCode: 'rate_limited', error: 'Too many requests.' } : undefined)
+  doc.getElementById('tab-aprobacion').click()
+  await espera()
+  // Pasan 31 s con el host diciendo que no: el carril del usuario deja de reintentar.
+  const real = window.Date.now.bind(window.Date)
+  window.Date.now = () => real() + 31000
+  storage.workerBeat = { at: new Date(real() + 31000).toISOString() }
+  await new Promise((r) => setTimeout(r, 2800))
+
+  const duenos = doc.getElementById('owners-wrap')
+  ok('sin lectura, la tarjeta de confianza no dice "Todavia no eligio ningun numero"',
+    !(seVe(duenos) && /no eligio/i.test(duenos.textContent)), duenos.textContent)
+  const numero = doc.getElementById('approval-number')
+  ok('sin lectura, el numero de aprobacion no se ofrece como "No avisar" y nada mas',
+    !(seVe(numero) && numero.querySelectorAll('button').length <= 1),
+    [...numero.querySelectorAll('button')].map((b) => b.textContent).join(' | '))
+  const apagados = ['orca-waiting', 'orca-finished', 'orca-automation']
+    .filter((id) => seVe(doc.getElementById(id)) &&
+      doc.getElementById(id).getAttribute('aria-checked') !== 'true')
+  ok('sin lectura, los avisos de Orca no se muestran apagados como si fuera lo guardado',
+    apagados.length === 0, apagados.join(', '))
+  ok('sin lectura, no se avisa "sin numero de aprobacion"',
+    !seVe(doc.getElementById('orca-no-number')))
+  for (const id of ['owners-card', 'orca-notices-card']) {
+    const aviso = doc.querySelector(`#${id} .leyendo`)
+    ok(`#${id}: dice que todavia esta leyendo lo guardado`,
+      !!aviso && seVe(aviso) && /leyendo/i.test(aviso.textContent), aviso?.textContent)
+  }
+  ok('sin lectura, los dos Guardar quedan apagados',
+    doc.getElementById('save-owners').disabled && doc.getElementById('save-orca').disabled)
+
+  // La regresion que borro los ajustes del dueno: Guardar sobre una tarjeta sin leer.
+  const antes = enviados.length
+  doc.getElementById('save-owners').click()
+  doc.getElementById('save-orca').click()
+  await espera()
+  const escritas = enviados.slice(antes).filter((d) => d.action === 'storage.set')
+    .map((d) => d.params.key)
+  ok('Guardar en una tarjeta sin leer no escribe nada', escritas.length === 0,
+    escritas.join(', '))
+  ok('y lo guardado sigue intacto',
+    JSON.stringify([storage.owners, storage.approvalNumber, storage.orcaNotices]) ===
+      JSON.stringify([guardado().owners, guardado().approvalNumber, guardado().orcaNotices]),
+    JSON.stringify([storage.owners, storage.approvalNumber, storage.orcaNotices]))
+
+  // El host vuelve a contestar: el panel lo pide solo, sin que nadie recargue ni apriete.
+  cerrado = false
+  await new Promise((r) => setTimeout(r, 4000))
+  ok('cuando el host contesta, aparecen los numeros de confianza guardados',
+    seVe(duenos) && duenos.textContent.includes('Ana Ejemplo'), duenos.textContent)
+  ok('y el numero de aprobacion guardado, apretado',
+    seVe(numero) &&
+      numero.querySelector('button[aria-pressed="true"]')?.dataset.value === DUENO,
+    numero.innerHTML.slice(0, 200))
+  ok('y los tres avisos de Orca encendidos',
+    ['orca-waiting', 'orca-finished', 'orca-automation'].every((id) =>
+      seVe(doc.getElementById(id)) &&
+      doc.getElementById(id).getAttribute('aria-checked') === 'true'))
+  ok('y sin el aviso de "sin numero"', !seVe(doc.getElementById('orca-no-number')))
+  ok('y los dos Guardar vuelven a andar',
+    !doc.getElementById('save-owners').disabled && !doc.getElementById('save-orca').disabled)
+}
+
+// Lo mismo antes de cualquier respuesta: el host todavia no contesto (o la contestacion se
+// perdio) y el dueno ya aprieta Guardar. Nada sale.
+console.log('\nconfig.html — ajustes sin lectura: Guardar antes de la primera respuesta')
+{
+  const { doc, storage, enviados } = await montar('config.html', {
+    owners: [{ id: '100000000000001@lid', name: 'Ana Ejemplo' }],
+    approvalNumber: '100000000000001@lid',
+    slaMinutes: '30'
+  }, 'es-419', (d) => d.action === 'storage.get' &&
+    ['owners', 'approvalNumber', 'slaMinutes'].includes(d.params.key)
+    ? { __demora: 600000 } : undefined)
+  doc.getElementById('tab-aprobacion').click()
+  await espera()
+  const antes = enviados.length
+  doc.getElementById('save-owners').click()
+  doc.getElementById('save-sla').click()
+  await espera()
+  const escritas = enviados.slice(antes).filter((d) => d.action === 'storage.set')
+    .map((d) => d.params.key)
+  ok('sin respuesta del host, Guardar no escribe numeros ni la meta', escritas.length === 0,
+    escritas.join(', '))
+  ok('y lo guardado sigue intacto',
+    storage.owners.length === 1 && storage.approvalNumber === '100000000000001@lid' &&
+      storage.slaMinutes === '30')
+  const S = doc.defaultView.STRINGS
+  ok('el aviso de lectura existe en los tres idiomas, el portugues propio',
+    S.es.cardReading && S.en.cardReading && S.pt.cardReading &&
+      S.pt.cardReading !== S.en.cardReading && S.es.cardReading !== S.en.cardReading)
+}
+
+// Una lectura que el host sigue rechazando espera su reintento SOLA. En la cola del
+// carril del usuario quedaba adelante, con su `desde` en el futuro, y `drenar` cortaba
+// ahi: todo lo que venia atras -las demas tarjetas de la pestana, y hasta un clic-
+// esperaba su backoff, ronda tras ronda.
+console.log('\nconfig.html — ajustes sin lectura: un rechazo no frena al resto del carril del usuario')
+{
+  const { doc } = await montar('config.html', {
+    owners: [{ id: '100000000000001@lid', name: 'Ana Ejemplo' }],
+    approvalNumber: '100000000000001@lid',
+    slaMinutes: '30',
+    projectQuestionHours: '12'
+  }, 'es-419', (d) => d.action === 'storage.get' &&
+    ['owners', 'approvalNumber', 'orcaNotices'].includes(d.params.key)
+    ? { ok: false, errorCode: 'rate_limited', error: 'Too many requests.' } : undefined)
+  doc.getElementById('tab-aprobacion').click()
+  await new Promise((r) => setTimeout(r, 200))
+  ok('la meta del primer contacto se pinta sin esperar a los numeros rechazados',
+    !doc.getElementById('sla-card').classList.contains('sin-leer') &&
+      doc.getElementById('sla-minutes').value === '30',
+    doc.getElementById('sla-minutes').value)
+  ok('y la pregunta de proyecto tambien',
+    !doc.getElementById('pq-card').classList.contains('sin-leer') &&
+      doc.getElementById('pq-hours').value === '12', doc.getElementById('pq-hours').value)
+  ok('mientras la tarjeta de confianza sigue diciendo que lee',
+    doc.getElementById('owners-card').classList.contains('sin-leer'))
+}
+
 // ───────── vinculacion de WhatsApp: el QR (T4) ─────────
 // El panel nunca habia dibujado un QR (docs/ENCARGO-TRANSPORTE-UNICO.md §6). Lo que
 // mas importa de esta pieza es que un QR que ya no sirve para escanear no
