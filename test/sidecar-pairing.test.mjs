@@ -16,8 +16,10 @@ import { decidirTrasCierre, calcularEsperaMs, intentoTrasEvento, mensajeQr, qrVe
   tocaEmitirAlmacen, opcionesDeSocket, salidaTrasCierre, repetidosTrasCierre, MOTIVO,
   PARCHES_DE_LIBRETA, CIERRES_REPETIDOS_TOPE, CIERRES_VENTANA_MS,
   QR_ROTACION_MS, QR_VIGENCIA_MS, SALIDA, LATIDO_LINEA_MS, mensajeLatido,
-  ALMACEN_LATIDO_MS, anotarLinea, LINEA_SECUNDARIA_ENV, CUENTA_PREVIA_ENV
+  ALMACEN_LATIDO_MS, anotarLinea, LINEA_SECUNDARIA_ENV, CUENTA_PREVIA_ENV, rutaRegistro
 } from '../sidecar/src/index.js'
+import { crearRegistro, FALLO_DE_DESCIFRADO } from '../sidecar/src/registro.js'
+import { readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { crearAlcance, LINEA_ENV } from '../sidecar/src/alcance.js'
 import { abrirAlmacen, rutaAlmacen } from '../sidecar/src/almacen.js'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -468,6 +470,56 @@ console.log('\nsidecar: L1 — cada linea anota la suya y pregunta por su alcanc
   ok('con su numero, cada consulta a wa-scope nombra SU linea', llamadas.length > 0 &&
     llamadas.every((l) => l.linea === B), JSON.stringify(llamadas))
   ok('la variable es la misma que leen los CLI', LINEA_ENV === 'WA_INBOX_LINEA', String(LINEA_ENV))
+}
+
+
+console.log('\nsidecar: lo que no se pudo descifrar queda dicho, sin contenido')
+{
+  const dir = mkdtempSync(join(tmpdir(), 'registro-'))
+  try {
+    const ruta = join(dir, 'logs', 'pn-1.log')
+    const motivos = []
+    const r = crearRegistro({ ruta, alFallarDescifrado: (m) => motivos.push(m),
+      ahora: () => new Date('2026-01-01T00:00:00Z') })
+    ok('tiene la forma de pino que Baileys espera',
+      typeof r.child === 'function' && r.child({ class: 'baileys' }) === r &&
+      ['trace', 'debug', 'info', 'warn', 'error', 'fatal'].every((n) => typeof r[n] === 'function') &&
+      typeof r.level === 'string')
+    r.error({ key: { remoteJid: '111@lid', id: 'ABC', participant: undefined },
+      err: new Error('No matching sessions found for message'),
+      node: { content: 'CIFRADO-SECRETO' } }, FALLO_DE_DESCIFRADO)
+    ok('cuenta el fallo con su motivo', motivos.length === 1 &&
+      motivos[0] === 'No matching sessions found for message', JSON.stringify(motivos))
+    const texto = existsSync(ruta) ? readFileSync(ruta, 'utf8') : ''
+    const fila = texto ? JSON.parse(texto.trim().split('\n')[0]) : {}
+    ok('escribe el motivo, el id y el chat', fila.err === 'No matching sessions found for message' &&
+      fila.id === 'ABC' && fila.chat === '111@lid' && fila.at === '2026-01-01T00:00:00.000Z', texto)
+    ok('nunca escribe el nodo cifrado', !texto.includes('CIFRADO-SECRETO'), texto)
+    r.debug({ msgAttrs: { id: 'X' } }, 'recv message')
+    r.info('connected to WA')
+    r.debug({ key: { id: 'DEF', remoteJid: '111@lid' } }, 'received unavailable message, acked and requested resend from phone')
+    const lineas = readFileSync(ruta, 'utf8').trim().split('\n')
+    ok('calla el ruido de cada stanza y anota el reenvio desde el telefono',
+      lineas.length === 2 && JSON.parse(lineas[1]).id === 'DEF', lineas.join('\n'))
+    writeFileSync(ruta, 'x'.repeat(50))
+    const chico = crearRegistro({ ruta, maxBytes: 10 })
+    chico.warn('otro aviso')
+    ok('rota el archivo cuando pasa el tope', existsSync(`${ruta}.1`) &&
+      readFileSync(ruta, 'utf8').includes('otro aviso'))
+    const roto = crearRegistro({ ruta: join(dir, 'archivo', 'no', 'dir'), alFallarDescifrado: () => {} })
+    writeFileSync(join(dir, 'archivo'), 'no soy carpeta')
+    let reviento = null
+    try { roto.error({ err: new Error('x') }, FALLO_DE_DESCIFRADO) } catch (e) { reviento = e }
+    ok('un registro que no se puede escribir no tumba la linea', reviento === null, String(reviento))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+  ok('el registro vive fuera de wa-auth, uno por linea',
+    rutaRegistro('/datos/plugin/wa-auth/pn-573000000001') === '/datos/plugin/sidecar-logs/pn-573000000001.log',
+    String(rutaRegistro('/datos/plugin/wa-auth/pn-573000000001')))
+  const registro = crearRegistro({ ruta: '/nunca/se/escribe.log' })
+  const o = opcionesDeSocket({ version: [2, 3000, 1], auth: {}, browser: ['Chrome', 'Chrome', ''], logger: registro })
+  ok('el socket recibe ese registro y no el pino de fabrica a stdout', o.logger === registro)
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

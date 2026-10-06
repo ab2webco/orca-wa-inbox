@@ -14,10 +14,11 @@
 // (`../.orca-wa-inbox-deps`, docs/ENCARGO...§3) ni abrir un socket.
 
 import { mkdirSync, chmodSync } from 'node:fs'
-import { isAbsolute } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 
 import { abrirAlmacen, rutaAlmacen, rutaMedia } from './almacen.js'
 import { crearAlcance } from './alcance.js'
+import { crearRegistro } from './registro.js'
 import { atenderSalida, ENVIO_LATIDO_MS } from './envio.js'
 import { INGESTA, ingerirActualizacion, ingerirCambioDeMiembros, ingerirChats,
   ingerirContactos, ingerirMensaje, ingerirMiembros } from './ingesta.js'
@@ -93,6 +94,12 @@ export function repetidosTrasCierre (previo, statusCode, ahoraMs = Date.now()) {
   const mismo = previo && previo.codigo === statusCode &&
     ahoraMs - previo.ts <= CIERRES_VENTANA_MS
   return { codigo: statusCode, veces: mismo ? previo.veces + 1 : 1, ts: ahoraMs }
+}
+
+/** Donde deja cada linea su registro: al lado de `wa-auth`, nunca adentro. Lo que hay
+ *  en `wa-auth` son lineas, y Desvincular borra la carpeta de la suya entera. */
+export function rutaRegistro (authDir) {
+  return join(dirname(dirname(authDir)), 'sidecar-logs', `${basename(authDir)}.log`)
 }
 
 /** La variable con que el worker le dice a un sidecar que su linea NO es la principal
@@ -290,11 +297,14 @@ export function qrVencido (ts, ahoraMs = Date.now(), vigenciaMs = QR_VIGENCIA_MS
 // ajenas que nadie borra". Con `false` el telefono manda igual su lote reciente —que
 // es de donde sale la lista— y no se pide el archivo. Los mensajes que vengan en ese
 // lote no se miran: el escuchador de abajo solo lee `chats`.
-export function opcionesDeSocket ({ version, auth, browser }) {
+export function opcionesDeSocket ({ version, auth, browser, logger }) {
   return {
     version,
     auth,
     browser,
+    // Sin esto Baileys escribe con su pino de fabrica a stdout, el canal del protocolo,
+    // y el motivo de un mensaje que no se pudo descifrar no lo guarda nadie.
+    ...(logger ? { logger } : {}),
     printQRInTerminal: false,
     // La ROTACION, no la vigencia: son dos numeros distintos a proposito (ver el
     // comentario de QR_VIGENCIA_MS). Dejarlo implicito ata la UI a un valor de
@@ -453,7 +463,18 @@ async function iniciar () {
 
   let identidades = identidadesPropias(null, null)
   const nombresDeChat = new Map()
-  const conteos = { llegaron: 0, guardados: 0, sinAutorizar: 0, actualizados: 0 }
+  const conteos = { llegaron: 0, guardados: 0, sinAutorizar: 0, actualizados: 0,
+    sinDescifrar: 0 }
+  // El motivo del ultimo mensaje que no se pudo descifrar: con el conteo solo, una
+  // linea que no lee nada se ve igual que una a la que nadie le escribe.
+  let ultimoSinDescifrar = null
+  const registro = crearRegistro({
+    ruta: rutaRegistro(authDir),
+    alFallarDescifrado: (motivo) => {
+      conteos.sinDescifrar += 1
+      ultimoSinDescifrar = motivo
+    }
+  })
   let ultimoAlmacenMs = 0
   // Cuantas conversaciones dejo la sincronizacion inicial, acumuladas: el telefono
   // manda su lista en VARIOS lotes, no en uno.
@@ -478,7 +499,8 @@ async function iniciar () {
     if (!tocaEmitirAlmacen(ultimoAlmacenMs, ahora, forzar)) return
     ultimoAlmacenMs = ahora
     emitirAlmacen({ ...conteos, autorizadas: alcance.autorizadas(),
-      chatsHistorial: historialChats, ...extra })
+      chatsHistorial: historialChats,
+      ...(ultimoSinDescifrar ? { ultimoSinDescifrar } : {}), ...extra })
   }
 
   // La subida de esquema se dice EN CUANTO ocurre, sin esperar al latido de 30 s y sin
@@ -535,7 +557,7 @@ async function iniciar () {
 
   function conectar () {
     const sock = makeWASocket(opcionesDeSocket({
-      version, auth: state, browser: Browsers.appropriate('Chrome')
+      version, auth: state, browser: Browsers.appropriate('Chrome'), logger: registro
     }))
     socket = sock
     conectado = false
