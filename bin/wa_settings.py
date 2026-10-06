@@ -331,12 +331,16 @@ CONTENEDOR_DE_LINEA = "porLinea"
 # vacia de la principal no hereda lo que la principal elija despues.
 #
 # Lo demas es de la maquina y vive solo en la raiz: el ritmo del sync, la transcripcion y
-# su calidad, Jev, los avisos de Orca, la cuenta de Claude del bot, las skills, los
-# proyectos y las rutas.
+# su calidad, Jev, los avisos de Orca, la cuenta de Claude del bot y las skills.
+#
+# Las reglas de texto y el catalogo de proyectos tambien son de cada linea (todo-por-linea,
+# P9): sus espejos en scope.db (`route`, `project`) llevan la cuenta en la llave.
 AJUSTES_DE_LINEA = ("agentName", "ownerName", "tone", "owners", "approvalNumber",
                     "approvalLang", "ackMode", "ackText", "ackQuietMinutes", "greetingMode",
                     "greetingText", "firstReply", "slaMinutes", "projectQuestionHours",
-                    "inboxDays", "transcribeLang")
+                    "inboxDays", "transcribeLang",
+                    "routes",
+                    "projects")
 CONTENEDOR_AJUSTES = "ajustesPorLinea"
 CONTENEDORES = (CONTENEDOR_DE_LINEA, *CONTENEDOR_PROPIO.values(), CONTENEDOR_AJUSTES)
 

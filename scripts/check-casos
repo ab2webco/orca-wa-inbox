@@ -12840,6 +12840,61 @@ if NODE:
            len(al_otro) == 1 and al_otro[0][:2] == (SEGUNDA, "enviado")
            and al_otro[0][2].endswith("-- Agente Segunda"), f"{al_otro} {p2.stderr[-300:]}")
 
+
+# ── Reglas y catalogo por linea (odd/tasks/todo-por-linea.md, P9) ──────────────────────
+# Cada linea tiene sus reglas de texto y su catalogo de proyectos. El mismo mensaje en la
+# misma conversacion se enruta, en cada linea, con lo de esa linea; y el despacho de un caso
+# usa el catalogo de la linea del caso aunque lo pida la corrida de otra.
+print("\nreglas y catalogo por linea (P9)")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        TEXTO_RP = "@duenio el reporte de ventas no carga"
+        llegan(home, A, [msg(SOPORTE, "RP1", TEXTO_RP, 5, mencion=True)])
+        llegan(home, SEGUNDA, [msg(SOPORTE, "RP2", TEXTO_RP, 5, mencion=True)],
+               activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "agent", "Agente De Ejemplo")
+        alfa = {"id": "alfa-demo", "name": "Alfa Demo", "path": "/srv/ejemplo/alfa-demo",
+                "note": ""}
+        beta = {"id": "beta-demo", "name": "Beta Demo", "path": "/srv/ejemplo/beta-demo",
+                "note": ""}
+        datos = lee_storage(home) if storage_de(home).exists() else {}
+        datos.update(projects=[alfa], routes=[{"pattern": "ventas", "workspace": "alfa-demo"}],
+                     ajustesPorLinea={SEGUNDA: {
+                         "projects": [beta],
+                         "routes": [{"pattern": "ventas", "workspace": "beta-demo"}]}})
+        escribe_storage(home, datos)
+        js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+        jsl(home, SEGUNDA, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+        js(home, "ingest")
+        con = db_de(home)
+        rutas = {r["account"]: (r["case_id"], json.loads(r["ruta"] or "{}"))
+                 for r in con.execute("select case_id, account, ruta from caso")}
+        con.close()
+        ruta_a, ruta_b = (rutas.get(A) or (None, {}))[1], (rutas.get(SEGUNDA) or (None, {}))[1]
+        ok("el mismo mensaje se enruta en cada linea con la regla y el catalogo de esa linea",
+           (ruta_a.get("workspace"), ruta_b.get("workspace"), ruta_b.get("workspace_path"))
+           == ("alfa-demo", "beta-demo", "/srv/ejemplo/beta-demo"), f"{rutas}")
+        antes = dict(os.environ)
+        try:
+            os.environ.pop("WA_INBOX_LINEA", None)
+            wsp = carga_wa_scope(home)
+            con = wsp.db()
+            fila = lambda cid: dict(con.execute("select * from caso where case_id=?",
+                                                (cid,)).fetchone())
+            de_b, porque_b = wsp.proyecto_del_caso(con, fila(rutas[SEGUNDA][0]))
+            de_a, _ = wsp.proyecto_del_caso(con, fila(rutas[A][0]))
+            con.close()
+            ok("el despacho de un caso de la otra linea usa el catalogo de ESA linea, aunque "
+               "lo pida la corrida de la principal",
+               bool(de_b) and (de_b["id"], de_b["path"]) == ("beta-demo", "/srv/ejemplo/beta-demo"),
+               f"{de_b} {porque_b}")
+            ok("y el de la principal, el de la principal",
+               bool(de_a) and de_a["id"] == "alfa-demo", f"{de_a}")
+        finally:
+            os.environ.clear()
+            os.environ.update(antes)
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
