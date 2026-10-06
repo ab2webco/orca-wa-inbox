@@ -252,8 +252,9 @@
                     margin: 4px 0 2px; font-size: 13px; }
       /* Los avisos de Orca: la etiqueta larga se parte al lado de su interruptor y no
          baja entera a otra linea, lejos de el (visto a 390). */
-      #orca-notices-card .switch-row { flex-wrap: nowrap; }
-      #orca-notices-card .switch-row > span { flex: 1 1 auto; min-width: 0; }
+      #orca-notices-card .switch-row, #agent-card .switch-row { flex-wrap: nowrap; }
+      #orca-notices-card .switch-row > span, #agent-card .switch-row > span {
+        flex: 1 1 auto; min-width: 0; }
       .switch { position: relative; width: 38px; height: 22px; padding: 0; flex: none;
                 border-radius: 9999px; border: 1px solid var(--input, var(--fb-input));
                 background: var(--muted, var(--fb-muted)); }
@@ -1109,6 +1110,15 @@
       <div id="view-agente" role="tabpanel" aria-labelledby="tab-agente" hidden>
         <section class="card" id="agent-card">
           <h2 data-t="agentLegend"></h2>
+          <!-- Firmar con el nombre del agente, por linea (todo-por-linea, P2). Apagado, los
+               mensajes de esta linea salen como del dueno y el nombre deja de ser obligatorio. -->
+          <div class="switch-row">
+            <button type="button" class="switch" id="sign-messages" role="switch"
+                    aria-checked="true" aria-labelledby="sign-messages-label"
+                    aria-describedby="sign-help"><span class="knob"></span></button>
+            <span id="sign-messages-label" data-t="signLabel"></span>
+          </div>
+          <p class="hint" id="sign-help" data-t="signHelp"></p>
           <label for="agent" data-t="agentLabel"></label>
           <input id="agent" data-t-ph="agentPh" />
           <p class="hint" data-t="agentHelp"></p>
@@ -1529,6 +1539,8 @@
           agentLegend: 'Su agente', agentLabel: 'Como se llama',
           agentPh: 'ej. Watson, Viernes, Asistente',
           agentHelp: 'Firma cada mensaje que escriba, para que nadie dude de si habla usted o el.',
+          signLabel: 'Firmar los mensajes con el nombre del agente',
+          signHelp: 'Apagado, los mensajes de este numero salen sin firma, como si los escribiera usted, y el nombre del agente es opcional.',
           ownerLabel: 'Para quien trabaja',
           ownerPh: 'ej. Ana Restrepo',
           ownerHelp: 'Su nombre. El agente lo usa para saber de quien es el trabajo que ' +
@@ -2097,6 +2109,8 @@
           agentLegend: 'Your agent', agentLabel: 'What it is called',
           agentPh: 'e.g. Watson, Friday, Assistant',
           agentHelp: 'Signs every message it writes, so nobody wonders if it was you or it.',
+          signLabel: "Sign messages with the agent's name",
+          signHelp: 'When off, messages from this number go out unsigned, as if you wrote them, and the agent name is optional.',
           ownerLabel: 'Who it works for',
           ownerPh: 'e.g. Ana Restrepo',
           ownerHelp: 'Your name. The agent uses it to know whose work it is handling and ' +
@@ -2904,6 +2918,8 @@
         toneHelp: 'Vale para todas as conversas. Cada uma pode ter o seu e substitui este.',
         agentPh: 'ex. Watson, Sexta, Assistente',
         agentHelp: 'Assina cada mensagem que escreve, para ninguem duvidar se foi voce ou ele.',
+        signLabel: 'Assinar as mensagens com o nome do agente',
+        signHelp: 'Desligado, as mensagens deste numero saem sem assinatura, como se voce as escrevesse, e o nome do agente e opcional.',
         empty: 'Nenhuma conversa autorizada. O que nao esta aqui, o seu agente nao ve.',
         routeMatch: 'Quando a mensagem disser', routeMatchPh: 'ex. faturamento',
         colWhen: 'Quando disser', colGoes: 'Vai para',
@@ -3393,7 +3409,8 @@
       var AJUSTES_DE_LINEA = ['agentName', 'ownerName', 'tone', 'owners', 'approvalNumber',
         'approvalLang', 'ackMode', 'ackText', 'ackQuietMinutes', 'greetingMode', 'greetingText',
         'firstReply', 'slaMinutes', 'projectQuestionHours', 'inboxDays', 'transcribeLang',
-        'orcaNotices'
+        'orcaNotices',
+        'signMessages'
       ]
       // Los que otra linea NUNCA toma de la principal (`NO_HEREDAN`, la misma lista de
       // wa_settings.py y main.mjs): sin uno propio se pintan los de fabrica. Los avisos de Orca
@@ -3460,6 +3477,8 @@
       // desincronizan y una de las dos termina pintando otra cosa.
       var CONTROLES = {
         agentName: ['agent', ''],
+        // Firmar con el nombre del agente (todo-por-linea, P2): un interruptor, `on` u `off`.
+        signMessages: ['sign-messages', 'on'],
         tone: ['tone', ''],
         ownerName: ['owner', ''],
         transcribe: ['transcribe', 'local'],
@@ -3485,7 +3504,17 @@
       /** El valor que muestra un control de la tabla, sea campo o grupo de botones. */
       function valorDe (id) {
         var n = el(id)
+        if (n.classList.contains('switch')) return n.getAttribute('aria-checked') === 'true' ? 'on' : 'off'
         return n.classList.contains('seg') ? valorSeg(id) : n.value.trim()
+      }
+      /** Pone un control de la tabla en `valor`, sea campo, grupo o interruptor. */
+      function ponerControl (id, valor, porDefecto) {
+        var n = el(id)
+        if (n.classList.contains('switch')) {
+          var v = typeof valor === 'string' && valor ? valor : porDefecto
+          n.setAttribute('aria-checked', v === 'on' ? 'true' : 'false')
+        } else if (n.classList.contains('seg')) ponerSeg(id, valor, porDefecto)
+        else n.value = typeof valor === 'string' ? valor : porDefecto
       }
 
       // ---------- el ritmo del triage en Orca (ritmo-triage) ----------
@@ -3581,9 +3610,9 @@
         var n = el(c[0])
         // `contains` y no `===`: en un grupo el foco queda en uno de sus botones.
         if (n.contains(document.activeElement)) return
-        if (n.classList.contains('seg')) ponerSeg(c[0], valor, c[1])
-        else n.value = typeof valor === 'string' ? valor : c[1]
+        ponerControl(c[0], valor, c[1])
         if (key === 'agentName') nombreAgente = typeof valor === 'string' ? valor : ''
+        if (key === 'signMessages') firmaGuardada = valor !== 'off'
       }
 
       /** Guarda y deja el control mostrando lo que quedo GUARDADO.
@@ -3661,7 +3690,7 @@
         { tarjeta: 'pq-card', boton: 'save-pq-hours', said: 'said-pq-hours',
           claves: ['projectQuestionHours'] },
         { tarjeta: 'agent-card', boton: 'save-agent', said: 'said-agent',
-          claves: ['agentName', 'ownerName', 'tone'] },
+          claves: ['signMessages', 'agentName', 'ownerName', 'tone'] },
         { tarjeta: 'voice-card', boton: 'save-voice', said: 'said-voice',
           claves: ['transcribe', 'transcribeLang', 'transcribeQuality'] },
         { tarjeta: 'reading-card', boton: 'save-reading', said: 'said-reading',
@@ -3752,12 +3781,24 @@
         }, RELECTURA_MS)
       }
 
-      // El nombre del agente firma cada mensaje y no puede quedar vacio. El dueno (su
-      // nombre) y el tono si: vacios, el prompt usa los de fabrica.
+      // El nombre del agente firma cada mensaje y no puede quedar vacio mientras la linea
+      // firme (todo-por-linea, P2): con la firma apagada sus mensajes salen como del dueno y
+      // el nombre sobra. El dueno (su nombre) y el tono si pueden quedar vacios: el prompt
+      // usa los de fabrica.
+      var firmaGuardada = true
+      function firmaEncendida () { return el('sign-messages').getAttribute('aria-checked') === 'true' }
+      el('sign-messages').addEventListener('click', function () {
+        el('sign-messages').setAttribute('aria-checked', firmaEncendida() ? 'false' : 'true')
+        sucios['sign-messages'] = true
+      })
       el('save-agent').addEventListener('click', function (event) {
         if (sinLeer('save-agent')) return
-        if (!el('agent').value.trim()) { said('said-agent', t('needName'), true); return }
-        guardarTarjeta(event.currentTarget, 'said-agent', ['agentName', 'ownerName', 'tone'])
+        if (firmaEncendida() && !el('agent').value.trim()) {
+          said('said-agent', t('needName'), true)
+          return
+        }
+        guardarTarjeta(event.currentTarget, 'said-agent',
+          ['signMessages', 'agentName', 'ownerName', 'tone'])
       })
       el('save-bot-account').addEventListener('click', function (event) {
         guardarTarjeta(event.currentTarget, 'said-bot-account', ['botClaudeAccount'])
@@ -6541,7 +6582,7 @@
         var jev = jevUltimo || {}
         return [
           { item: 'linea', ok: estadoLinea === 'connected', ir: 'estado', clave: 'chkLinea' },
-          { item: 'agente', ok: !!nombreAgente, ir: 'agente', clave: 'chkAgente' },
+          { item: 'agente', ok: !!nombreAgente || !firmaGuardada, ir: 'agente', clave: 'chkAgente' },
           { item: 'chat', ok: Object.keys(alcance).some(function (j) {
               return alcance[j] && alcance[j].mode && alcance[j].mode !== 'off'
             }), ir: 'chats', clave: 'chkChat' },
@@ -6870,9 +6911,9 @@
           var c = CONTROLES[k]
           if (!c) return
           delete sucios[c[0]]
-          if (el(c[0]).classList.contains('seg')) ponerSeg(c[0], c[1], c[1])
-          else el(c[0]).value = c[1]
+          ponerControl(c[0], c[1], c[1])
         })
+        firmaGuardada = true
         PRIMER_IDS.forEach(function (id) { delete sucios[id] })
         // Los avisos de Orca, a lo de fabrica hasta que llegue lo de la linea nueva.
         ORCA_IDS.forEach(function (id) { delete sucios[id] })
@@ -6939,7 +6980,7 @@
                     'chatsAccount', 'transcribeQuality', 'inboxDays', 'ownerName',
                     'transcribe', 'transcribeLang', 'syncStatus', 'syncMinutes',
                     'workerBeat', 'sidecar', 'jevStatus', 'projects', 'projectsStatus',
-                    'owners', 'senders', 'approvalNumber']
+                    'owners', 'senders', 'approvalNumber', 'signMessages']
       var CLAVES_VIVAS = ['chats', 'chatsAccount', 'health', 'syncStatus', 'workerBeat',
                           'sidecar']
       // Varias lineas a la vez, sin gastar cupo con una sola: la lista de lineas viaja
@@ -7031,6 +7072,7 @@
             pintarClave('transcribeQuality', v('transcribeQuality'), sello)
             pintarClave('inboxDays', vl('inboxDays'), sello)
             pintarClave('ownerName', vl('ownerName'), sello)
+            pintarClave('signMessages', vl('signMessages'), sello)
             pintarClave('transcribe', v('transcribe'), sello)
             pintarClave('transcribeLang', vl('transcribeLang'), sello)
             pintarClave('syncMinutes', v('syncMinutes'), sello)

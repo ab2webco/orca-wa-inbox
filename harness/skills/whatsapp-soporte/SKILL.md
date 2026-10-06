@@ -66,7 +66,7 @@ line.
    `caso clasificar <id> --clase <card|alert|doubtful> --prioridad <none|low|medium|high|urgent> --actor agente`.
    Nothing to attend to: `caso mover <id> cerrado --motivo "<why>" --actor agente`.
    A reply is enough: `caso propuesta <id> --tipo responder --respuesta "<text>" --actor agente`
-   (the signature is added on sending). Work in a codebase: `--tipo trabajar` (below).
+   (the signature is added on sending, only on a line that signs). Work in a codebase: `--tipo trabajar` (below).
    The owner is needed: `--tipo escalar` (below). Doubtful: leave it classified as
    `doubtful` and propose nothing.
 5. **Wrap up.** `"$WA/wa-scope" unlock`, then at most 10 lines: the case id, what you

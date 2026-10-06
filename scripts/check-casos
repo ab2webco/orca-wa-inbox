@@ -13050,6 +13050,92 @@ if NODE:
         os.environ.clear()
         os.environ.update(env_p1)
 
+
+# ── Todo por linea (P2): firmar con el nombre del agente, o no, en cada linea ─────────
+# Una linea con la firma apagada manda como si escribiera el dueno: sin "-- <agente>", y sin
+# exigir un nombre. La otra linea sigue firmando, y sin nombre sigue sin mandar.
+print("\ntodo por linea (P2): la firma de cada linea")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        if not any(c["jid"] == OTRO_LID for c in CHATS):
+            CHATS.append({"jid": OTRO_LID, "nombre": "Otro Dueno", "grupo": False})
+        llegan(home, A, [msg(PERSONA, "FP1", PEDIDO, 30)])
+        llegan(home, SEGUNDA, [msg(PERSONA, "FP2", PEDIDO, 30)], activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "agent", "Agente Principal")
+        datos = storage_o_nada(home)
+        datos["ajustesPorLinea"] = {SEGUNDA: {"agentName": "Agente Segunda",
+                                              "signMessages": "off"}}
+        escribe_storage(home, datos)
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        jsl(home, SEGUNDA, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        jsl(home, SEGUNDA, "set", OTRO_LID, "--provider", "ninguno", "--mode", "responder")
+
+        def wa_send_p2(*args):
+            env = dict(os.environ, HOME=str(home),
+                       XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+                       APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"))
+            env.pop("WA_INBOX_LINEA", None)
+            return subprocess.run([str(RAIZ / "bin" / "wa-send"), *args, "--send", "--timeout=20",
+                                   "--json"], capture_output=True, text=True, env=env,
+                                  timeout=120)
+
+        def salida_de(prefijo):
+            con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+            filas = con.execute("select account, estado, body from envio where body like ?",
+                                (f"{prefijo}%",)).fetchall()
+            con.close()
+            return filas
+
+        sidecar_a, sidecar_b = SidecarDeLinea(home, A), SidecarDeLinea(home, SEGUNDA)
+        try:
+            p1 = wa_send_p2("--line", SEGUNDA, PERSONA, "Hola desde la otra linea")
+            p2 = wa_send_p2(OTRO_LID, "Sin nombrar la otra linea")
+            p3 = wa_send_p2("--line", A, PERSONA, "Hola desde la principal")
+        finally:
+            sidecar_a.cerrar()
+            sidecar_b.cerrar()
+        ok("P2: con la firma apagada en una linea, --line de esa linea sale sin firma",
+           salida_de("Hola desde la otra") == [(SEGUNDA, "enviado", "Hola desde la otra linea")],
+           f"{salida_de('Hola desde la otra')} {p1.stderr[-300:]}")
+        ok("P2: y sin --line, la conversacion de esa linea tambien",
+           salida_de("Sin nombrar") == [(SEGUNDA, "enviado", "Sin nombrar la otra linea")],
+           f"{salida_de('Sin nombrar')} {p2.stderr[-300:]}")
+        ok("P2: la otra linea sigue firmando con su agente",
+           salida_de("Hola desde la principal") == [
+               (A, "enviado", "Hola desde la principal\n-- Agente Principal")],
+           f"{salida_de('Hola desde la principal')} {p3.stderr[-300:]}")
+        ok("P2: config de esa linea lo dice, y la principal firma de fabrica",
+           jsl(home, SEGUNDA, "config", "sign_messages")[0]["value"] == "off"
+           and js(home, "config", "sign_messages")[0]["value"] == "on")
+
+        # Sin ningun nombre de agente: la linea sin firma manda igual; la que firma, no.
+        datos = lee_storage(home)
+        datos["agentName"] = ""
+        datos["ajustesPorLinea"][SEGUNDA]["agentName"] = ""
+        escribe_storage(home, datos)
+        con = db_de(home)
+        con.execute("delete from settings where key='agent_name'")
+        con.commit()
+        con.close()
+        sidecar_a, sidecar_b = SidecarDeLinea(home, A), SidecarDeLinea(home, SEGUNDA)
+        try:
+            p4 = wa_send_p2("--line", SEGUNDA, PERSONA, "Otra linea sin nombre")
+            p5 = wa_send_p2(OTRO_LID, "Otra linea sin nombre ni --line")
+            p6 = wa_send_p2("--line", A, PERSONA, "Principal sin nombre")
+        finally:
+            sidecar_a.cerrar()
+            sidecar_b.cerrar()
+        ok("P2: con la firma apagada, sin nombre de agente tambien sale, con y sin --line",
+           p4.returncode == 0 and p5.returncode == 0
+           and salida_de("Otra linea sin nombre") == [
+               (SEGUNDA, "enviado", "Otra linea sin nombre"),
+               (SEGUNDA, "enviado", "Otra linea sin nombre ni --line")],
+           f"{salida_de('Otra linea sin nombre')} {p4.stderr[-300:]} {p5.stderr[-300:]}")
+        ok("P2: con la firma encendida y sin nombre, la principal sigue sin mandar",
+           p6.returncode != 0 and "no agent name is configured" in p6.stderr
+           and salida_de("Principal sin nombre") == [], f"{p6.returncode} {p6.stderr[-300:]}")
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

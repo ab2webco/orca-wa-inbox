@@ -8723,5 +8723,61 @@ console.log('\nconfig.html — P1: los avisos de Orca de cada linea')
     doc.getElementById('orca-cap').value === '4', doc.getElementById('orca-cap').value)
 }
 
+// ───────── todo-por-linea P2: firmar con el nombre del agente, por linea ─────────
+// Un interruptor encima del nombre. Apagado, los mensajes de esa linea salen como del dueno:
+// el nombre deja de ser obligatorio y la lista de lo que falta no lo pide.
+console.log('\nconfig.html — P2: la firma de cada linea')
+{
+  const storage = dosLineasConAjustes()
+  storage.agentName = ''
+  storage.ajustesPorLinea[L_B].agentName = ''
+  const { doc } = await montar('config.html', storage, 'es-419')
+  await espera()
+  doc.getElementById('tab-agente').click()
+  await new Promise((r) => setTimeout(r, 300))
+  const firma = doc.getElementById('sign-messages')
+  const encendida = () => firma.getAttribute('aria-checked') === 'true'
+  const agente = () => doc.querySelector('#checklist [data-item="agente"]')?.getAttribute('data-ok')
+  ok('el interruptor va encima del nombre, encendido de fabrica, con su texto',
+    firma && firma.getAttribute('role') === 'switch' && encendida() &&
+    !!(firma.compareDocumentPosition(doc.getElementById('agent')) &
+      doc.defaultView.Node.DOCUMENT_POSITION_FOLLOWING) &&
+    textoDe(doc, '#sign-messages-label') === 'Firmar los mensajes con el nombre del agente',
+    textoDe(doc, '#sign-messages-label'))
+  ok('con la firma encendida, sin nombre la lista de lo que falta lo pide', agente() === 'false', agente())
+  doc.getElementById('save-agent').click()
+  await new Promise((r) => setTimeout(r, 300))
+  ok('y sin nombre no se guarda', textoDe(doc, '#said-agent') === 'Ponga un nombre.' &&
+    !('signMessages' in storage), textoDe(doc, '#said-agent'))
+
+  elegirSeg(doc, 'linea-vista', L_B)
+  await new Promise((r) => setTimeout(r, 400))
+  ok('en la otra linea, sin firma propia, encendida', encendida())
+  firma.click()
+  ok('apagarla dice que los mensajes salen como suyos',
+    !encendida() && /como si los escribiera usted/.test(textoDe(doc, '#sign-help')),
+    textoDe(doc, '#sign-help'))
+  doc.getElementById('save-agent').click()
+  await new Promise((r) => setTimeout(r, 500))
+  const propios = storage.ajustesPorLinea[L_B]
+  ok('con la firma apagada se guarda sin nombre, en lo de ESA linea',
+    propios.signMessages === 'off' && propios.agentName === '' && !('signMessages' in storage) &&
+    /Guardado/.test(textoDe(doc, '#said-agent')), JSON.stringify(propios) + textoDe(doc, '#said-agent'))
+  ok('y la lista de lo que falta ya no pide el nombre', agente() === 'true', agente())
+  firma.click()
+  doc.getElementById('save-agent').click()
+  await new Promise((r) => setTimeout(r, 300))
+  ok('volver a encenderla sin nombre no se guarda', propios.signMessages === 'off' &&
+    textoDe(doc, '#said-agent') === 'Ponga un nombre.', textoDe(doc, '#said-agent'))
+
+  elegirSeg(doc, 'linea-vista', L_A)
+  await new Promise((r) => setTimeout(r, 400))
+  ok('la principal sigue firmando', encendida() && agente() === 'false', agente())
+  const S = doc.defaultView.STRINGS
+  ok('las frases existen en los tres idiomas, el portugues propio',
+    ['signLabel', 'signHelp'].every((k) => S.es[k] && S.en[k] && S.pt[k] && S.pt[k] !== S.en[k]) &&
+    S.en.signLabel === "Sign messages with the agent's name")
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)

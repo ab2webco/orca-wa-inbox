@@ -40,7 +40,9 @@ wrong with what it asked and not a generic failure at the end:
   the signature   every message the agent writes goes signed, so that there is never
                   any doubt about whether the person or her agent wrote it. Without an
                   agent name configured, this refuses before anything else. --raw is
-                  the exception, for when she writes herself.
+                  the exception, for when she writes herself, and so is a line whose
+                  owner turned signing off (`sign_messages`): its messages go out as
+                  his, unsigned, and need no agent name.
   the line        the same group can exist on two lines. Picking "the first one"
                   writes to the wrong conversation, and that cannot be undone, so an
                   ambiguous reference is REFUSED (`send-ambiguous-line`) instead of
@@ -102,6 +104,30 @@ def signature(linea=None):
     Cada linea firma con el suyo (ajustes-por-linea): `linea`, o la de esta corrida."""
     nombre = ajuste("agent_name", linea=linea)
     return f"-- {nombre}" if nombre else None
+
+
+def firma_apagada(linea=None):
+    """Si esa linea manda sin firma (`sign_messages` en off, todo-por-linea P2): sus mensajes
+    salen como si los escribiera el dueno, igual que con --raw, y el nombre del agente no
+    hace falta. De fabrica firma."""
+    return ajuste("sign_messages", linea=linea) == "off"
+
+
+def lineas_de_la_conversacion(ref):
+    """Las lineas vinculadas donde esta registrada esa conversacion, sin negar nada: la
+    firma se decide antes que la linea, y una conversacion que solo esta en lineas que no
+    firman no puede pedir un nombre que no se va a usar."""
+    activas = wa_store.lineas_activas_en_disco()
+    cuentas = {f["account"] for f in conversaciones_registradas(ref)}
+    return sorted(c for c in cuentas if not activas or c in activas)
+
+
+def quita_firma(texto, *firmas):
+    """El texto sin la primera de esas firmas con la que termine."""
+    for firma in firmas:
+        if firma and texto.rstrip().endswith(firma):
+            return texto.rstrip()[:-len(firma)]
+    return texto
 
 
 # Motivos estables: los lee el worker (la primera linea de stderr termina en el panel).
@@ -748,15 +774,20 @@ def main():
     # El piso fijo mira la respuesta, no la firma: el nombre del agente lo eligio el dueno
     # y no es algo que la respuesta prometa.
     original = a.text
-    sin_firma = a.text
     # Todo mensaje del agente va firmado, para que nunca haya duda de si escribe la
-    # persona o su agente. --raw es la excepcion, para cuando escribe ella. Cada linea
-    # firma con el nombre de SU agente (ajustes-por-linea): el de la linea pedida aca, y
-    # abajo el de la linea de la conversacion elegida.
+    # persona o su agente. --raw es la excepcion, para cuando escribe ella, y una linea con
+    # la firma apagada tambien (todo-por-linea, P2): sale como suyo. Cada linea firma con el
+    # nombre de SU agente (ajustes-por-linea): el de la linea pedida aca, y abajo el de la
+    # linea de la conversacion elegida.
     sig = signature(linea)
-    if sig and sin_firma.rstrip().endswith(sig):
-        sin_firma = sin_firma.rstrip()[:-len(sig)]
-    if not a.raw:
+    sin_firma = quita_firma(original, sig)
+    if linea:
+        sin_firmar = a.raw or firma_apagada(linea)
+    else:
+        cuentas = lineas_de_la_conversacion(a.chat)
+        sin_firmar = a.raw or (all(firma_apagada(c) for c in cuentas) if cuentas
+                               else firma_apagada(linea))
+    if not sin_firmar:
         if not sig:
             sys.exit("no agent name is configured. Set it with "
                      "`wa-scope agent \"<name>\"`, or use --raw to write unsigned.")
@@ -765,19 +796,19 @@ def main():
 
     fila = resolver_conversacion(a.chat, linea)
     # Sin linea pedida, la conversacion la elige: un caso de otra linea firma con el
-    # nombre de ESA linea, nunca con el de la principal.
-    propia = signature(fila["account"]) if fila and fila.get("account") else sig
-    if propia != sig:
-        sin_firma = original
-        for firma in (propia, sig):
-            if firma and sin_firma.rstrip().endswith(firma):
-                sin_firma = sin_firma.rstrip()[:-len(firma)]
-                break
-        if not a.raw:
-            if not propia:
+    # nombre de ESA linea, nunca con el de la principal, o no firma si ESA no firma.
+    if fila and fila.get("account"):
+        propia = signature(fila["account"])
+        propia_sin = a.raw or firma_apagada(fila["account"])
+        if propia != sig or propia_sin != sin_firmar:
+            sin_firma = quita_firma(original, propia, sig)
+            if propia_sin:
+                a.text = original
+            elif not propia:
                 sys.exit("no agent name is configured for this line. Set it in the plugin "
                          "settings, or use --raw to write unsigned.")
-            a.text = f"{sin_firma.rstrip()}\n{propia}"
+            else:
+                a.text = f"{sin_firma.rstrip()}\n{propia}"
 
     # Y despues el permiso, que tambien es sobre lo que se pidio. Denegar por defecto:
     # una conversacion que no esta en el registro no existe para el agente.

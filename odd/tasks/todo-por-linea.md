@@ -38,7 +38,7 @@ without the agent signature (the owner's request for one of his numbers).
   - `textos_orca` uses the line's language.
   - `mirror_to_panel` and the sync mirror write into the line's own container.
   - The worker's gate checks whether any line has notices on.
-- [ ] **P2** `signMessages` per line.
+- [x] **P2** `signMessages` per line.
   - Panel switch in the agent card; the name is required only while signing is on.
   - `wa-send` sends unsigned on a line that has signing off (no "no agent name" error there).
   - The checklist accepts no name when signing is off.

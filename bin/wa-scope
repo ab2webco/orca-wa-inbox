@@ -2234,7 +2234,10 @@ DEFAULT_CONFIG = {
     "orca_quiet_end": "",
     "orca_notice_hourly_cap": "6",
     "orca_finished_delay_s": "25",
-    "transcribe": "local",    # local | off | api. Local no manda el audio a ningun lado.
+    # Si los mensajes de la linea salen firmados con el nombre del agente (todo-por-linea,
+    # P2). `off`: salen como del dueno, sin firma, y el nombre del agente no hace falta.
+    "sign_messages": "on",
+    "transcribe": "local",   # local | off | api. Local no manda el audio a ningun lado.
     "transcribe_model": "",   # vacio = lo decide la calidad; fijarlo pisa la calidad
     "transcribe_lang": "auto",    # los audios mezclan espanol e ingles
     "transcribe_quality": "optima",  # optima | minima. Minima entra en cualquier equipo.
