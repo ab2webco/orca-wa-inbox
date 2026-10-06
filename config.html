@@ -3690,7 +3690,7 @@
         { tarjeta: 'pq-card', boton: 'save-pq-hours', said: 'said-pq-hours',
           claves: ['projectQuestionHours'] },
         { tarjeta: 'agent-card', boton: 'save-agent', said: 'said-agent',
-          claves: ['signMessages', 'agentName', 'ownerName', 'tone'] },
+          claves: ['agentName', 'ownerName', 'tone'] },
         { tarjeta: 'voice-card', boton: 'save-voice', said: 'said-voice',
           claves: ['transcribe', 'transcribeLang', 'transcribeQuality'] },
         { tarjeta: 'reading-card', boton: 'save-reading', said: 'said-reading',
@@ -3787,6 +3787,14 @@
       // usa los de fabrica.
       var firmaGuardada = true
       function firmaEncendida () { return el('sign-messages').getAttribute('aria-checked') === 'true' }
+      /** Lee la firma de la linea que se mira y la pinta (una lectura, fuera de la vuelta). */
+      function leerFirma () {
+        var sello = guardadoSeq
+        leerClave('signMessages', true).then(function (v) {
+          pintarLeida('signMessages', v, sello)
+          pintarChecklist()
+        })
+      }
       el('sign-messages').addEventListener('click', function () {
         el('sign-messages').setAttribute('aria-checked', firmaEncendida() ? 'false' : 'true')
         sucios['sign-messages'] = true
@@ -3797,9 +3805,15 @@
           said('said-agent', t('needName'), true)
           return
         }
-        guardarTarjeta(event.currentTarget, 'said-agent',
-          ['signMessages', 'agentName', 'ownerName', 'tone'])
+        // La firma se escribe solo si se leyo o el dueno la toco: sin saber lo guardado, el
+        // interruptor muestra lo de fabrica y escribirlo pisaria un `off` que no se vio.
+        var claves = ['agentName', 'ownerName', 'tone']
+        if (pintadas.signMessages || sucios['sign-messages']) claves.unshift('signMessages')
+        guardarTarjeta(event.currentTarget, 'said-agent', claves)
       })
+      // Lo que falta (Estado) depende de la firma: se lee una vez despues de la vuelta, fuera
+      // de su rafaga.
+      setTimeout(leerFirma, RELECTURA_MS)
       el('save-bot-account').addEventListener('click', function (event) {
         guardarTarjeta(event.currentTarget, 'said-bot-account', ['botClaudeAccount'])
       })
@@ -6549,7 +6563,7 @@
         comboChats.cerrar(); comboProyecto.cerrar(); comboRegla.cerrar()
         combosExtra.forEach(function (c) { c.cerrar() })
         if (activaAuto(cual)) leerAuto()
-        if (cual === 'agente') leerCuentasBot()
+        if (cual === 'agente') { leerFirma(); leerCuentasBot() }
         if (cual === 'skills') leerSkills()
       }
       // Las claves de las respuestas automaticas (y la meta del primer contacto) se leen al
@@ -6911,8 +6925,8 @@
         reload().then(function () {
           if (autoPedida) leerAuto()
           else programarRelectura()
-          // La cuenta del bot es de cada linea: con Agente a la vista se relee la de esta.
-          if (!el('view-agente').hidden) leerCuentasBot()
+          // La firma y la cuenta del bot son de cada linea: con Agente a la vista se releen.
+          if (!el('view-agente').hidden) { leerFirma(); leerCuentasBot() }
         })
       }
       /** Cambiar de linea: nada de lo pintado de la otra queda en las tarjetas de linea.
@@ -6993,7 +7007,10 @@
                     'chatsAccount', 'transcribeQuality', 'inboxDays', 'ownerName',
                     'transcribe', 'transcribeLang', 'syncStatus', 'syncMinutes',
                     'workerBeat', 'sidecar', 'jevStatus', 'projects', 'projectsStatus',
-                    'owners', 'senders', 'approvalNumber', 'signMessages']
+                    'owners', 'senders', 'approvalNumber']
+      // `signMessages` (P2) no va en la vuelta: la vuelta entera ya gasta casi todo el cupo
+      // que le queda al clic. Se pide al abrir Agente y una vez despues de abrir el panel
+      // (`leerFirma`).
       var CLAVES_VIVAS = ['chats', 'chatsAccount', 'health', 'syncStatus', 'workerBeat',
                           'sidecar']
       // Varias lineas a la vez, sin gastar cupo con una sola: la lista de lineas viaja
