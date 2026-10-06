@@ -2310,6 +2310,71 @@ def revisa_escritores_concurrentes(fallos: list) -> int:
     return hechas
 
 
+def revisa_store_que_se_lee(fallos: list) -> int:
+    """El storage que se LEE es el del Orca que corre, no el archivo mas nuevo.
+
+    Cada escritura de Python toca todos los destinos (orca, orca-dev, ...), asi que el
+    mas nuevo podia ser el de orca-dev, que no tiene las claves del panel: el sync
+    reexportaba los avisos de Orca apagados y `wa-scope owner` no veia el numero de
+    aprobacion. Sin un Orca conocido manda un orden fijo, con orca primero."""
+    hechas = 0
+    aprobacion = "573009999999@s.whatsapp.net"
+    avisos = {"waiting": "on", "finished": "on"}
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+        env.pop("ORCA_USER_DATA_PATH", None)
+        orca, dev = store_de(home, "orca"), store_de(home, "orca-dev")
+        for p in (orca, dev):
+            p.parent.mkdir(parents=True)
+        orca.write_text(json.dumps({
+            "owners": [{"id": aprobacion, "name": "Dueno Demo"}],
+            "approvalNumber": aprobacion, "orcaNotices": avisos}), encoding="utf-8")
+        dev.write_text(json.dumps({"scope": {}}), encoding="utf-8")
+        subprocess.run([sys.executable, "-c", CARGA_WA_SCOPE +
+                        "m.plugin_store_write(None, extra={'health': {'ok': True}})"],
+                       env=env, capture_output=True, timeout=120)
+        # El de orca-dev queda como el mas nuevo, que es lo que deja cualquier escritura.
+        futuro = time.time() + 30
+        os.utime(dev, (futuro, futuro))
+
+        def ajustes(extra_env):
+            p = subprocess.run(
+                [sys.executable, "-c", CARGA_WA_SCOPE +
+                 "import json; print(json.dumps([m.settings_from_plugin(), "
+                 "m.plugin_store_path()]))"],
+                env=dict(env, **extra_env), capture_output=True, text=True, timeout=120)
+            return json.loads(p.stdout or "[{}, null]")
+
+        leidos, ruta = ajustes({})
+        hechas += 1
+        if leidos.get("orca_notice_waiting") != "on" or \
+                leidos.get("orca_notice_finished") != "on":
+            fallos.append(f"con orca-dev mas nuevo, settings_from_plugin() dio "
+                          f"{leidos!r} desde {ruta!r}: los avisos de Orca del panel "
+                          "tenian que seguir en on")
+        hechas += 1
+        p = subprocess.run([str(BIN / "wa-scope"), "owner", "--json"], capture_output=True,
+                           text=True, env=env, timeout=120)
+        dato = json.loads(p.stdout) if p.stdout.strip() else None
+        if not isinstance(dato, dict) or dato.get("chat") != aprobacion or \
+                dato.get("source") != "approval-number":
+            fallos.append(f"con orca-dev mas nuevo, `wa-scope owner` dio {dato!r}: tenia que "
+                          "seguir viendo el numero de aprobacion")
+        # Quien trabaja en orca-dev lo dice con ORCA_USER_DATA_PATH, y entonces manda ese.
+        _, ruta = ajustes({"ORCA_USER_DATA_PATH": str(dev.parents[2])})
+        hechas += 1
+        if ruta != str(dev):
+            fallos.append(f"con ORCA_USER_DATA_PATH en orca-dev se leyo {ruta!r}")
+        # Y uno que apunta fuera de este HOME no cuenta: un chequeo no lee al usuario real.
+        _, ruta = ajustes({"ORCA_USER_DATA_PATH": str(home / "otro" / "orca")})
+        hechas += 1
+        if ruta != str(orca):
+            fallos.append(f"con ORCA_USER_DATA_PATH fuera de los userData se leyo {ruta!r} "
+                          "y tenia que leerse el de orca")
+    return hechas
+
+
 def revisa_store_ilegible(fallos: list) -> int:
     """Un destino que no parsea no se pisa con un dict chico, ni se saltea en silencio.
 
@@ -3218,6 +3283,7 @@ def main() -> int:
                       + revisa_espera(fallos)
                       + revisa_chat_del_dueno(fallos)
                       + revisa_escritores_concurrentes(fallos)
+                      + revisa_store_que_se_lee(fallos)
                       + revisa_store_ilegible(fallos))
     aislado.cleanup()
 

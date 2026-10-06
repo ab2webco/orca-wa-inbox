@@ -216,16 +216,44 @@ def plugin_stores_anteriores():
             for r in user_data_roots()]
 
 
+# La casa del Orca vivo, por proceso: plugin_store_raw() se llama decenas de veces por
+# comando y cada sondeo abre el socket del runtime. La llave es lo que la decide.
+_CASA_VIVA = {}
+
+
+def userdata_del_orca_vivo():
+    """El userData del Orca que corre, si es uno de los de esta maquina; si no, None.
+
+    Solo cuenta si esta entre user_data_roots(): ORCA_USER_DATA_PATH lo exporta cada
+    terminal de Orca, y aceptarlo fuera de esa lista haria que un chequeo con HOME de
+    mentira leyera los ajustes reales del usuario."""
+    raices = user_data_roots()
+    llave = (os.environ.get("ORCA_USER_DATA_PATH") or "", tuple(raices))
+    if llave not in _CASA_VIVA:
+        casa = orca_runtime_home()["path"]
+        reales = {os.path.realpath(r): r for r in raices}
+        _CASA_VIVA[llave] = reales.get(os.path.realpath(casa)) if casa else None
+    return _CASA_VIVA[llave]
+
+
 def plugin_store_path():
     """De donde se LEE. El nombre nuevo manda siempre: mezclar por fecha dejaba el
     CLI escribiendo en la ruta nueva y leyendo de la vieja, asi que un ajuste
-    guardado no se veia nunca. El anterior solo entra si el nuevo no existe."""
-    existing = [p for p in plugin_stores() if os.path.exists(p)]
-    if existing:
-        return max(existing, key=os.path.getmtime)
-    viejos = [p for p in plugin_stores_anteriores() if os.path.exists(p)]
-    if viejos:
-        return max(viejos, key=os.path.getmtime)
+    guardado no se veia nunca. El anterior solo entra si el nuevo no existe.
+
+    Entre los userData manda el del Orca que corre, y sin uno conocido un orden fijo
+    con orca primero. Nunca la fecha: cada escritura de Python toca TODOS los destinos,
+    asi que el mas nuevo podia ser el de orca-dev, sin las claves del panel, y el sync
+    reexportaba los avisos de Orca apagados."""
+    vivo = userdata_del_orca_vivo()
+    for rutas in (plugin_stores(), plugin_stores_anteriores()):
+        existing = [p for p in rutas if os.path.exists(p)]
+        if not existing:
+            continue
+        for p in existing:
+            if vivo and os.path.dirname(os.path.dirname(os.path.dirname(p))) == vivo:
+                return p
+        return existing[0]
     return plugin_stores()[0]
 
 
