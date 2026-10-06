@@ -95,6 +95,28 @@ export function repetidosTrasCierre (previo, statusCode, ahoraMs = Date.now()) {
   return { codigo: statusCode, veces: mismo ? previo.veces + 1 : 1, ts: ahoraMs }
 }
 
+/** La variable con que el worker le dice a un sidecar que su linea NO es la principal
+ *  (varias lineas a la vez). Sin ella el sidecar es la principal de siempre: con una sola
+ *  linea nada cambia. */
+export const LINEA_SECUNDARIA_ENV = 'WA_SIDECAR_LINEA_SECUNDARIA'
+
+/** El numero que la linea tenia, segun el worker. Un sidecar nuevo no lo sabe, y si la
+ *  linea se re-vincula con otro numero el viejo tiene que salir de las activas. */
+export const CUENTA_PREVIA_ENV = 'WA_SIDECAR_CUENTA_PREVIA'
+
+/** Anota en el almacen que esta linea esta vinculada. La principal fija `linea_activa`
+ *  —lo que leen los CLI sin `--line`— y las demas se suman al conjunto de activas sin
+ *  tocarla: dos sidecars que se la pisaran la harian cambiar en cada arranque. `antes` es
+ *  el numero que esta misma linea tenia, si se re-vinculo con otro. Devuelve si hubo
+ *  cambio y cual era la principal antes. */
+export function anotarLinea ({ almacen, cuenta, env = process.env, antes = null }) {
+  if (env?.[LINEA_SECUNDARIA_ENV] === '1') {
+    const { nueva } = almacen.sumarLinea(cuenta, { antes: antes ?? env[CUENTA_PREVIA_ENV] ?? null })
+    return { cambio: nueva, antes: null }
+  }
+  return almacen.activarLinea(cuenta)
+}
+
 /** Como termina el sidecar cuando decide no seguir. Es CONTRATO con el worker
  *  (`SIDECAR_SALIDA` en main.mjs, y la prueba del worker compara los dos): el codigo
  *  de salida llega siempre, y la ultima linea de stdout puede llegar despues del evento
@@ -387,9 +409,13 @@ async function iniciar () {
   // arranque; emparejando es `null` hasta que WhatsApp diga quien es, y en ese rato no
   // se guarda ni se manda nada a nombre de nadie.
   const mediaDir = rutaMedia(process.env)
+  // Cada sidecar pregunta por el alcance de SU linea (varias lineas a la vez): `cuenta`
+  // se fija abajo (`fijarCuenta`), en cuanto se sabe el numero.
+  let cuenta = null
   // Las herramientas las pasa el worker: buscarlas en el PATH ya habia mandado a una
   // a la instalacion equivocada (§11-E4).
-  const alcance = crearAlcance({ toolsDir: process.env.WA_SIDECAR_TOOLS_DIR })
+  const alcance = crearAlcance({ toolsDir: process.env.WA_SIDECAR_TOOLS_DIR,
+    linea: () => cuenta })
   alcance.refrescar(true)
 
   /** Lo que quedo de antes de T9 bajo la cuenta fija `local`. Se pasa a su numero solo
@@ -408,13 +434,15 @@ async function iniciar () {
     }
   }
 
-  let cuenta = null
   const fijarCuenta = (pn) => {
     const nueva = cuentaDeIdentidad(pn)
     if (!nueva || nueva === cuenta) return
+    const previa = cuenta
     cuenta = nueva
     // Cambiar de numero cambia de cajon: no se copia ni se pisa nada de la otra linea.
-    const { cambio, antes } = almacen.activarLinea(cuenta)
+    const { cambio, antes } = anotarLinea({ almacen, cuenta, antes: previa })
+    // El alcance que habia era el de nadie (o el del numero de antes): se pide el suyo ya.
+    alcance.refrescar(true)
     // Sin numero ni contenido: solo que la linea activa cambio, para el log del worker.
     if (cambio && antes) process.stderr.write('linea: cambio la linea activa\n')
     emitir({ type: 'linea', cuenta, cambio, ts: Date.now() })

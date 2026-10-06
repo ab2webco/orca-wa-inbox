@@ -254,6 +254,19 @@ const DATOS = {
   }
 }
 
+// Varias lineas a la vez (L4): el worker siempre publica la lista de lineas, dentro del
+// estado de la principal (`sidecar.lineas`). Sin linea vinculada es UNA, esperando su
+// codigo; con la linea vinculada (`CON_LINEA`, abajo), su numero. Numeros de prueba.
+const LINEA_PRINCIPAL = { carpeta: 'pn-573000000001', cuenta: 'pn:573000000001',
+  tipo: 'support', alta: '2026-09-01T09:00:00.000Z' }
+const LINEA_SEGUNDA = { carpeta: 'pn-573000000011', cuenta: 'pn:573000000011',
+  tipo: 'support', alta: '2026-10-01T09:00:00.000Z' }
+const LINEA_NUEVA = { carpeta: 'nueva-mg7x2k', cuenta: null, tipo: 'support',
+  alta: '2026-10-05T09:00:00.000Z' }
+// Estado sin linea vinculada, como lo deja el worker: la primera espera su codigo.
+const SIN_VINCULAR = Object.assign({}, DATOS, { sidecar: { connection: null, qr: null,
+  exited: false, lineas: [Object.assign({}, LINEA_NUEVA, { carpeta: 'nueva-mg7x1a' })] } })
+
 // El stub corre dentro de la pagina. Contesta el mismo protocolo que el host:
 // orca-panel-action -> orca-panel-action-result, y storage.get envuelve en value.
 function stub(datos, opciones) {
@@ -558,7 +571,60 @@ const elegirEn = (id, lista, texto, valor) => escribirEn(id, texto) +
   `document.querySelector('#${lista} [role="option"][data-value="${valor}"]').click();`
 // Todo listo (linea, nombre y una conversacion): la pestana de entrada es Conversaciones.
 const CON_LINEA = Object.assign({}, DATOS,
-  { sidecar: { connection: 'open', qr: null, exited: false, latido: LATIDO_FRESCO } })
+  { sidecar: { connection: 'open', qr: null, exited: false, latido: LATIDO_FRESCO,
+    lineas: [LINEA_PRINCIPAL] } })
+// Dos lineas vinculadas a la vez (L4): la principal y una segunda con lo suyo aparte — su
+// alcance, su lista de conversaciones, su actividad y su tablero.
+const SEGUNDA_GRUPO = '120363000000000021@g.us'
+const SEGUNDA_DIRECTO = '573000000013@s.whatsapp.net'
+const DOS_LINEAS = Object.assign({}, CON_LINEA, {
+  sidecar: { connection: 'open', qr: null, exited: false, latido: LATIDO_FRESCO,
+    me: '+573000000001', lineas: [LINEA_PRINCIPAL, LINEA_SEGUNDA] },
+  sidecars: { [LINEA_SEGUNDA.carpeta]: { connection: 'open', qr: null, exited: false,
+    latido: LATIDO_FRESCO, me: '+573000000011', cuenta: LINEA_SEGUNDA.cuenta } },
+  alcancePorLinea: { [LINEA_SEGUNDA.cuenta]: {
+    [SEGUNDA_GRUPO]: { chatName: 'Ventas — Linea Dos', mode: 'borrador', account: LINEA_SEGUNDA.cuenta,
+      workspaces: [], provider: 'ninguno' },
+    [SEGUNDA_DIRECTO]: { chatName: 'Cliente De La Segunda', mode: 'observar',
+      account: LINEA_SEGUNDA.cuenta, workspaces: [], provider: 'ninguno' } } },
+  porLinea: { [LINEA_SEGUNDA.cuenta]: {
+    chatsAccount: LINEA_SEGUNDA.cuenta,
+    chats: [{ jid: SEGUNDA_GRUPO, name: 'Ventas — Linea Dos', kind: 'grupo', last: '2026-10-05 09:12', unread: 2 },
+      { jid: SEGUNDA_DIRECTO, name: 'Cliente De La Segunda', kind: 'directo', last: '2026-10-05 08:40', unread: 0 }] } }
+})
+// La segunda linea esperando su codigo, al lado de la principal ya conectada.
+const LINEA_ESPERANDO = Object.assign({}, CON_LINEA, {
+  sidecar: Object.assign({}, CON_LINEA.sidecar, { lineas: [LINEA_PRINCIPAL, LINEA_NUEVA] }),
+  sidecars: { [LINEA_NUEVA.carpeta]: { connection: 'connecting', exited: false,
+    qr: { qr: '2@SEGUNDA-LINEA-DE-PRUEBA,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=,' +
+      'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=,CCCCCCCCCCCCCCCCCCCCCCCCC=', ts: 0,
+      rotation: 1, ttlMs: 75000 } } }
+})
+// El tablero de cada linea: la principal con sus casos y la segunda con los suyos.
+const TABLERO_DOS_LINEAS = Object.assign({}, DOS_LINEAS, {
+  board: tableroDe(TABLERO_CASOS),
+  porLinea: { [LINEA_SEGUNDA.cuenta]: Object.assign({}, DOS_LINEAS.porLinea[LINEA_SEGUNDA.cuenta], {
+    activity: Object.assign({}, DATOS.activity, { account: LINEA_SEGUNDA.cuenta,
+      syncedAt: AHORA_CORTO, pending: [], mapped: 2, authorized: 2,
+      run: { state: 'ok', startedAt: AHORA_CORTO, endedAt: AHORA_CORTO, looked: 2, pending: 1 } }),
+    board: tableroDe([
+      caso(41, 'decision', { account: LINEA_SEGUNDA.cuenta, chat_jid: SEGUNDA_GRUPO,
+        chat_name: 'Ventas — Linea Dos', title: 'Piden la cotizacion de 20 licencias',
+        prioridad: 'high', exceptions: ['money'], updated_at: minutos(4),
+        proposal: { tipo: 'responder', version: 'v2a1',
+          texto: 'Hola, le enviamos la cotizacion hoy mismo por este medio.' } }),
+      caso(42, 'recibido', { account: LINEA_SEGUNDA.cuenta, chat_jid: SEGUNDA_DIRECTO,
+        chat_name: 'Cliente De La Segunda', title: 'Pregunta por el horario de soporte',
+        updated_at: minutos(9) })
+    ], { counts: Object.assign({}, CUENTAS_VACIAS, { decision: 1, recibido: 1 }),
+      // Lo retenido de esta linea (approve-solo-dueno): su tarjeta dice de que linea es.
+      held_drafts: [{ req_id: 'sesion-linea-dos-1', account: LINEA_SEGUNDA.cuenta,
+        chat_jid: SEGUNDA_DIRECTO, chat: 'Cliente De La Segunda', at: minutos(6),
+        text: 'Ya quedo listo el reporte que pidio, se lo enviamos por aca.', reasons: [] }] })
+  }) }
+})
+// Elegir la segunda linea en el selector, como lo hace el dueno.
+const ELEGIR_SEGUNDA = `document.querySelector('#linea-vista button[data-value="${LINEA_SEGUNDA.cuenta}"]').click()`
 // Con directos guardados con su LID (ids y telefonos de prueba): el sidecar anota el
 // telefono de cada uno y la lista lo trae en `phone`.
 const CON_TELEFONOS = Object.assign({}, CON_LINEA, {
@@ -670,7 +736,20 @@ const SKILLS_EJEMPLO = { ok: true, at: new Date().toISOString(), version: '4.18.
 const PANELES = [
   // Las seis pestanas, a los cuatro anchos, en los dos idiomas y los dos temas.
   { nombre: 'config-tab-estado', archivo: 'config.html', anchos: ANCHOS,
-    enTodosLosAnchos: true, datos: DATOS, pestana: 'estado' },
+    enTodosLosAnchos: true, datos: SIN_VINCULAR, pestana: 'estado' },
+  // Varias lineas a la vez (L4/L5): la tarjeta de lineas con una linea conectada, con una
+  // segunda esperando su codigo, con dos conectadas y el Desvincular de la segunda por
+  // confirmar, y Conversaciones mirando la segunda.
+  { nombre: 'config-lineas-una', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: CON_LINEA, pestana: 'estado' },
+  { nombre: 'config-lineas-esperando', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: LINEA_ESPERANDO, pestana: 'estado' },
+  { nombre: 'config-lineas-dos', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: DOS_LINEAS, pestana: 'estado', espera: 400,
+    guion: `document.querySelector('.linea[data-carpeta="${LINEA_SEGUNDA.carpeta}"] .linea-desvincular').click()` },
+  { nombre: 'config-lineas-chats', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, datos: DOS_LINEAS, pestana: 'chats', espera: 800,
+    guion: ELEGIR_SEGUNDA },
   // Conversaciones trae la regla vieja de Plane (`cobros`) marcada.
   { nombre: 'config-tab-chats', archivo: 'config.html', anchos: ANCHOS,
     enTodosLosAnchos: true, datos: CON_LINEA, pestana: 'chats' },
@@ -878,6 +957,17 @@ const PANELES = [
     guion: ABRIR_TABLERO + `;
       document.querySelector('#board-held button[data-held="aprobar"]').click()`,
     stub: { veredictoAccion: { ok: false, code: 'send-approve-not-owner' }, demoraVeredicto: 0 }
+  },
+  {
+    // Varias lineas a la vez (L4): el tablero con el selector de linea, mirando la segunda.
+    nombre: 'tablero-lineas', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 800, datos: TABLERO_DOS_LINEAS,
+    guion: ABRIR_TABLERO + ';' + ELEGIR_SEGUNDA
+  },
+  {
+    // Y la principal, con el mismo selector: lo de siempre, con su linea elegida.
+    nombre: 'tablero-lineas-principal', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: TABLERO_DOS_LINEAS, guion: ABRIR_TABLERO
   },
   {
     // Una etapa elegida en la fila de arriba: queda solo "Su decision".
@@ -1741,6 +1831,16 @@ async function main() {
         if (datos.sidecar && datos.sidecar.latido && datos.sidecar.latido.fresco) {
           datos = Object.assign({}, datos, { sidecar: Object.assign({}, datos.sidecar,
             { latido: { ts: Date.now() - 20000, conectado: true } }) })
+        }
+        // Lo mismo para cada linea que no es la principal (L4): su QR y su latido.
+        if (datos.sidecars) {
+          const sellados = {}
+          for (const [carpeta, d] of Object.entries(datos.sidecars)) {
+            sellados[carpeta] = Object.assign({}, d,
+              d.qr ? { qr: Object.assign({}, d.qr, { ts: Date.now() }) } : {},
+              d.latido && d.latido.fresco ? { latido: { ts: Date.now() - 20000, conectado: true } } : {})
+          }
+          datos = Object.assign({}, datos, { sidecars: sellados })
         }
         await pagina.addInitScript(`(${stub.toString()})(${JSON.stringify(datos)}, ` +
           `${JSON.stringify(panel.stub || {})})`)

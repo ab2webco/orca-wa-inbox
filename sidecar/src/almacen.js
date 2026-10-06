@@ -677,10 +677,61 @@ class Almacen {
    *  cambio y cual era la anterior, para que el sidecar lo pueda decir. */
   activarLinea (cuenta) {
     const antes = this.lineaActiva()
+    // La principal entra al conjunto de activas (`lineasActivas`) en el MISMO lugar que la
+    // de antes: es la misma linea del plugin con otro numero, no una mas.
+    this.anotarActivas(reemplazada(this.lineasActivas(), antes, cuenta))
     if (antes === cuenta) return { cambio: false, antes }
-    this.con.prepare('insert into store_meta (key,value) values (?,?) ' +
-      'on conflict(key) do update set value=excluded.value').run('linea_activa', cuenta)
+    this.anotarMeta('linea_activa', cuenta)
     return { cambio: true, antes }
+  }
+
+  /** Las lineas vinculadas AHORA, en orden: la principal y las que se le sumaron (varias
+   *  lineas a la vez). Un almacen de antes de esto solo anoto `linea_activa`, y entonces
+   *  el conjunto es esa linea; uno que nunca vio una, ninguna. */
+  lineasActivas () {
+    const fila = this.con.prepare(
+      "select value from store_meta where key='lineas_activas'").get()
+    if (!fila) {
+      const principal = this.lineaActiva()
+      return principal ? [principal] : []
+    }
+    try {
+      const lista = JSON.parse(fila.value)
+      return Array.isArray(lista) ? lista.filter((c) => typeof c === 'string' && c) : []
+    } catch {
+      return []
+    }
+  }
+
+  /** Suma una linea que NO es la principal: entra al conjunto y no toca `linea_activa`,
+   *  que es de la principal. `antes` es el numero que esa misma linea tenia, si se
+   *  re-vinculo con otro: ese sale, porque ya no esta vinculado. */
+  sumarLinea (cuenta, { antes = null } = {}) {
+    const actuales = this.lineasActivas()
+    const nueva = !actuales.includes(cuenta)
+    this.anotarActivas(reemplazada(actuales, antes, cuenta))
+    return { nueva }
+  }
+
+  /** Saca una linea del conjunto al desvincularla. Si era la principal, la principal
+   *  pasa a la primera que queda; si no queda ninguna, `linea_activa` se conserva: un
+   *  lector sin linea anotada lee TODAS, y eso es mezclar lo de un numero con otro. */
+  retirarLinea (cuenta) {
+    const actuales = this.lineasActivas()
+    if (!actuales.includes(cuenta)) return { retirada: false }
+    const quedan = actuales.filter((c) => c !== cuenta)
+    this.anotarActivas(quedan)
+    if (this.lineaActiva() === cuenta && quedan.length) this.anotarMeta('linea_activa', quedan[0])
+    return { retirada: true }
+  }
+
+  anotarActivas (lista) {
+    this.anotarMeta('lineas_activas', JSON.stringify(lista))
+  }
+
+  anotarMeta (llave, valor) {
+    this.con.prepare('insert into store_meta (key,value) values (?,?) ' +
+      'on conflict(key) do update set value=excluded.value').run(llave, valor)
   }
 
   /**
@@ -1011,6 +1062,23 @@ class Almacen {
       this.con.close()
     } catch { /* cerrar dos veces no es un error que nadie pueda arreglar */ }
   }
+}
+
+/** La lista de lineas activas con `cuenta` en el lugar de `antes` (o al final si `antes`
+ *  no estaba), sin repetidos. Pura: el orden es el de la vinculacion, y la primera es la
+ *  principal. */
+function reemplazada (lista, antes, cuenta) {
+  const salida = []
+  let puesta = false
+  for (const c of lista) {
+    if (c === antes || c === cuenta) {
+      if (!puesta) { salida.push(cuenta); puesta = true }
+      continue
+    }
+    salida.push(c)
+  }
+  if (!puesta) salida.push(cuenta)
+  return salida
 }
 
 function borrarArchivo (ruta) {

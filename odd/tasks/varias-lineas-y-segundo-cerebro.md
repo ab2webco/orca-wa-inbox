@@ -79,22 +79,132 @@ existing test stays green unchanged.
 - Group automation on the personal line (only direct chats in the first version).
 - Voice notes as replies.
 
+## Design of Part 1 (decided while building it)
+
+- **Auth folders.** `wa-auth/<folder>` per line. A linked line's folder is its account
+  with `-` for `:` (`pn-<digits>`), so it is valid on every OS. A line being linked lives
+  in `wa-auth/nueva-<id>` until its next start, when the resolver renames it to its
+  account. The resolver (`sidecar/resolve-auth-dir.mjs --lineas`) is the only place that
+  moves folders, and the worker calls it only before any sidecar runs.
+- **Migration.** A flat `wa-auth/creds.json` (today's layout) moves, file by file and
+  `creds.json` last, into the folder of the account its `me.id` names. The bytes do not
+  change, so the session keeps working with no new QR. A flat folder with no `me` is an
+  unfinished pairing and moves to a `nueva-` folder.
+- **Principal line.** The worker keeps the lines in order in the storage key `lineas`
+  (`[{carpeta, cuenta, tipo, alta}]`). The first one is the principal: its sidecar state
+  stays in the `sidecar` key, exactly as today, and its sidecar is the only one that sets
+  `store_meta.linea_activa`. Every other line writes its state to `sidecars[<folder>]`,
+  and its sidecar runs with `WA_SIDECAR_LINEA_SECUNDARIA=1`.
+- **Active lines.** `store_meta.lineas_activas` in capture.db (a JSON list) holds every
+  linked line. Each sidecar adds its own line, and unlinking removes it (the resolver,
+  through `almacen.js`). With no list, the active lines are `[linea_activa]`, as before.
+- **The CLIs.** `WA_INBOX_LINEA=<account>` (or `wa-scope --line`) names the line of a run.
+  Without it, `wa-scope tick`, `ingest`, `sync` and `pending --needs-agent` run once per
+  active line, each in its own process with its own lock. With one line they run in the
+  same process, as today. A `caso` command with a case id runs on that case's line when
+  the line is active. The panel storage keys of a line that is not the principal live
+  apart, so they never overwrite the principal's: its scope in
+  `alcancePorLinea[<account>]` (the panel writes it too), its reports in
+  `informesPorLinea[<account>]`, and the rest (board, activity, chats) in
+  `porLinea[<account>]`. The nav badge adds up the decisions of every line.
+
+- **One card for the lines.** Settings has no separate pairing card any more: the usual
+  pairing (status, QR, Retry, Unlink) is the principal's row inside "Lines", with its
+  number on top ("Main" only when there is another line). Each other line has its own row.
+  Each line is unlinked only from its own row, and "Check now" is one action for the
+  whole card. With no linked line, the principal row is the QR flow, as before.
+
+Decisions accepted by the owner (2026-10-05):
+
+- "Attend now" on a case of another line marks the case; the agent is launched by that
+  line's tick, not immediately.
+- Relinking a number that was already linked replaces its old folder on the next start
+  (the phone may keep a ghost linked device).
+
 ## Checklist
 
 ### Part 1: several lines
 
-- [ ] **L1** Sidecar per line: `wa-auth/<account>`, migration of the current folder, with no
+- [x] **L1** Sidecar per line: `wa-auth/<account>`, migration of the current folder, with no
   new QR. Tests in `test/almacen.test.mjs` / the sidecar tests.
-- [ ] **L2** Worker: one sidecar per line, its health and restart, and link/unlink
+  Evidence: RED then GREEN in `almacen.test.mjs` ("L1: varias lineas a la vez", 11 checks),
+  `sidecar-pairing.test.mjs` ("L1 — cada linea anota la suya", 7 checks) and
+  `worker.test.mjs` ("L1 — cada linea en su carpeta, y la de siempre se muda sin QR
+  nuevo", 12 checks: a fake flat auth folder ends byte-identical in `wa-auth/pn-<digits>`).
+- [x] **L2** Worker: one sidecar per line, its health and restart, and link/unlink
   commands. Worker tests.
-- [ ] **L3** `wa-scope` over every active line. Per-line locks and no cross-line leaks.
+  Evidence: `worker.test.mjs` "L2 — un sidecar por linea", RED (17 checks, 6 passing by
+  accident) then GREEN: the flat auth migrated by the real resolver starts as the principal
+  with the same credential, the second line starts as secondary, a crash restarts only that
+  line, `vincular` opens one `nueva-` line with its own QR (never two), `desvincular` with a
+  folder removes only that line, and unlinking the principal promotes the next one. The
+  registry also travels inside `sidecar.lineas`. Full worker suite 442/442.
+- [x] **L3** `wa-scope` over every active line. Per-line locks and no cross-line leaks.
   `check-casos` / `check-clis`: two lines, a message on each, and a case, a notice and an
   approval that never cross.
-- [ ] **L4** Panel "Lines" card, line filter in conversations/board/reports, in ES/EN/PT.
+  Evidence: `check-casos` section "varias lineas a la vez (L3)", RED (`--line` unknown,
+  then the case file and the summed badge) and GREEN, 24 checks: per-line scope, ingest and
+  `pending --needs-agent` once per line, a case per line, `caso ver` by case id, the board
+  and scope of the other line apart in storage, each reply approved and delivered by its
+  own line's sidecar, each owner notice sent by its own line, the summed nav badge, a busy
+  principal lock that does not stop the other line, and an unlinked line that goes quiet.
+  Full `check-casos` 1630/1630, `check-clis`, `envio` 93/93 and `almacen` 311/311 green.
+- [x] **L4** Panel "Lines" card, line filter in conversations/board/reports, in ES/EN/PT.
   Screenshots at 1440/768/390/320, both themes.
-- [ ] **L5** Line type setting (`support` default; `personal` disabled until Part 2).
+  Evidence: `panels.test.mjs` "L4/L5" sections, RED then GREEN (30 checks): the Lines card
+  (number, main, status, own QR for a new line, link, unlink with confirmation, cancel for a
+  waiting line), the line picker in Conversations (reads and saves `alcancePorLinea`, removes
+  with `linea`) and in the board (board, activity, line status and reports of the chosen
+  line). `worker.test.mjs`: removing a chat on another line runs `wa-scope rm --line`. Full
+  panel suite 1422/1422. Screenshots: `config-lineas-*`, `tablero-lineas*` and
+  `config-tab-estado`.
+- [x] **L5** Line type setting (`support` default; `personal` disabled until Part 2).
+  Evidence: worker action `tipo` (`tipo-guardado`, `tipo-no-disponible` for `personal`,
+  `tipo-invalido`, `linea-desconocida`), RED then GREEN in `worker.test.mjs`; the type control
+  in each line row, with Personal disabled and one notice for the card.
 - [ ] **L6** `npm run check` green. Live check: the bot line and a second test line linked
   together, each answering only its own chats.
+
+  Release v4.22.0 (rebased on v4.21.0). What met the features shipped meanwhile:
+  - `wa-scope owner` and `wa-scope orca-aviso` always work on the main line (the owner's
+    line) unless `--line` names another; the Orca notices run only in the main line's
+    tick (`tick_orca_si_toca`), so each notice goes out once. A `wa-send` to the owner's
+    chat with no `--line` goes out from the main line instead of failing as ambiguous.
+  - The approver key is one per machine: it approves a held draft of any line, which then
+    leaves from its own line. Held drafts live on their line's board, and with several
+    lines their card says which line.
+  - Every line's status uses the same words as the main row ("WhatsApp is connected").
+
+  Single-line regression proof (the release goes to every user):
+  - `worker.test.mjs` "v4.22.0 — una sola linea sigue conectada, sin QR y como antes": one
+    sidecar, main, from `wa-auth/pn-<digits>` with the same `creds.json`, connected with no
+    QR in the same `sidecar` key, and no other line's state.
+  - `worker.test.mjs` "v4.22.0 — la mudanza cortada a mitad deja wa-auth/ entero": the move
+    copies first and deletes last. A move that fails leaves the old folder byte-identical
+    (the worker reports `sidecar-authdir-fallo`, offers Retry, and launches nothing), and
+    the next start finishes it with nothing lost.
+  - `worker.test.mjs` "L1 — cada linea en su carpeta": the flat folder ends byte-identical
+    in its line's folder, and moving it twice changes nothing.
+  - `check-casos` (the whole suite, unchanged tests) for tick and ingest with one line, plus
+    the L3 check "y el tick vuelve a correr solo en la que queda, como siempre" (no `lineas`
+    key in the tick output with one line).
+  - `panels.test.mjs`: every pairing test from before still passes against the merged card.
+  - Known limit: going back to a version before v4.22.0 after the move finds no flat
+    `creds.json` and asks for a new QR.
+
+  Live check, for the owner (not done: it needs the bot line and a spare phone):
+  1. Install this branch's build over the live plugin and restart Orca. On first start the
+     bot line's flat `wa-auth` moves to `wa-auth/pn-<digits>`: the panel shows it connected
+     with NO new QR, and the Lines card lists it as Main.
+  2. Settings > Status > Lines > "Link another line", and scan the new code with the spare
+     test phone. Its row turns Connected with its number.
+  3. Settings > Conversations: pick the test line in the Line picker and authorize one test
+     chat there (Automatic or Ask me first). The bot line's list must not change.
+  4. Write from a third phone to the bot line and to the test line. Each case appears only on
+     its own line's board (Dashboard > Line picker), each reply goes out from its own number,
+     and the nav badge counts both.
+  5. Unlink the test line from its row: the bot line keeps working with no QR, and
+     `wa-scope tick --json` reports no `lineas` key again.
 
 ### Part 2: personal line
 

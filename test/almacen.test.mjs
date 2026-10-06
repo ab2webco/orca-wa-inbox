@@ -236,6 +236,61 @@ console.log('\nT9: cada numero, su linea — la linea activa no pisa a la otra')
     deVuelta.filas[0].jid === ALFA, JSON.stringify(deVuelta.filas))
 }
 
+console.log('\nL1: varias lineas a la vez — el conjunto de lineas activas')
+{
+  // Con varias lineas vinculadas, cada sidecar anota la suya. Solo la principal decide
+  // `linea_activa` (la que leen los CLI sin `--line`); las demas se SUMAN al conjunto sin
+  // tocarla. Desvincular una la saca del conjunto, y nunca deja a los lectores sin linea.
+  const home = nueva()
+  const alm = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  const A = 'pn:573000000001'
+  const B = 'pn:573000000002'
+  const C = 'pn:573000000011'
+  ok('un almacen nuevo no tiene lineas activas', JSON.stringify(alm.lineasActivas()) === '[]',
+    JSON.stringify(alm.lineasActivas()))
+  alm.activarLinea(A)
+  ok('la principal entra al conjunto al activarse',
+    JSON.stringify(alm.lineasActivas()) === JSON.stringify([A]), JSON.stringify(alm.lineasActivas()))
+  const sumada = alm.sumarLinea(B)
+  ok('una segunda linea se suma sin quitarle la principal a la primera',
+    JSON.stringify(alm.lineasActivas()) === JSON.stringify([A, B]) && alm.lineaActiva() === A &&
+    sumada.nueva === true, JSON.stringify({ l: alm.lineasActivas(), a: alm.lineaActiva(), sumada }))
+  ok('sumar la misma linea otra vez no es nueva', alm.sumarLinea(B).nueva === false)
+  ok('reactivar la principal no cambia nada',
+    alm.activarLinea(A).cambio === false &&
+    JSON.stringify(alm.lineasActivas()) === JSON.stringify([A, B]))
+  // La principal se vuelve a vincular con OTRO numero: es el mismo lugar, otro numero.
+  const otra = alm.activarLinea(C)
+  ok('la principal con otro numero reemplaza a la vieja en su lugar',
+    otra.cambio === true && alm.lineaActiva() === C &&
+    JSON.stringify(alm.lineasActivas()) === JSON.stringify([C, B]),
+    JSON.stringify({ otra, l: alm.lineasActivas() }))
+  // Una secundaria que se re-vincula con otro numero dice cual era.
+  alm.sumarLinea(A, { antes: B })
+  ok('una secundaria con otro numero reemplaza a la suya, no a la principal',
+    JSON.stringify(alm.lineasActivas()) === JSON.stringify([C, A]) && alm.lineaActiva() === C,
+    JSON.stringify(alm.lineasActivas()))
+  const sinC = alm.retirarLinea(C)
+  ok('desvincular la principal pasa la principal a la que queda',
+    sinC.retirada === true && alm.lineaActiva() === A &&
+    JSON.stringify(alm.lineasActivas()) === JSON.stringify([A]),
+    JSON.stringify({ sinC, a: alm.lineaActiva(), l: alm.lineasActivas() }))
+  alm.retirarLinea(A)
+  ok('desvincular la ultima deja el conjunto vacio y la principal anotada: un lector sin ' +
+    'linea leeria TODAS', JSON.stringify(alm.lineasActivas()) === '[]' && alm.lineaActiva() === A,
+    JSON.stringify({ a: alm.lineaActiva(), l: alm.lineasActivas() }))
+  ok('retirar una linea que no esta no es un error', alm.retirarLinea(B).retirada === false)
+  alm.cerrar()
+
+  // Un almacen de antes de esto solo tiene `linea_activa`: el conjunto es esa linea.
+  const vieja = nueva()
+  const alm2 = abrirAlmacen(rutaAlmacen({ HOME: vieja }))
+  alm2.con.prepare("insert into store_meta (key,value) values ('linea_activa', ?)").run(A)
+  ok('sin el conjunto anotado, las activas son la principal de siempre',
+    JSON.stringify(alm2.lineasActivas()) === JSON.stringify([A]), JSON.stringify(alm2.lineasActivas()))
+  alm2.cerrar()
+}
+
 console.log('\nT9f: lo de `local` pasa al numero de su linea — explicito, atomico y visible')
 {
   const home = nueva()

@@ -86,8 +86,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import wa_store  # noqa: E402
 import wa_jev  # noqa: E402
 import wa_reglas  # noqa: E402
-from wa_settings import (ajuste, scope_db, scope_from_plugin,  # noqa: E402
-                         trae_llave_aprobador)
+from wa_settings import (ajuste, alcances_de_lineas, plugin_store_raw, scope_db,  # noqa: E402
+                         numero_aprobacion, scope_from_plugin, trae_llave_aprobador)
 
 SCOPE_DB = scope_db()
 
@@ -240,16 +240,20 @@ def conversaciones_registradas(ref):
 
     # El panel guarda por jid a secas y manda sobre la base, porque es lo que el usuario
     # acaba de tocar (la misma regla que `merged_scope`).
+    # Con varias lineas, el alcance del panel de cada linea que no es la principal vive
+    # aparte (`lineas[<cuenta>].scope`), y ahi la cuenta es la de ese lugar.
     try:
-        del_panel = scope_from_plugin()
+        del_panel = [(None, entrada_jid) for entrada_jid in scope_from_plugin().items()]
+        del_panel += [(cuenta, entrada_jid) for cuenta, alcance
+                      in alcances_de_lineas(plugin_store_raw()) for entrada_jid in alcance.items()]
     except Exception:                     # noqa: BLE001 - un store ilegible no manda
-        del_panel = {}
-    for jid, entrada in del_panel.items():
+        del_panel = []
+    for de_linea, (jid, entrada) in del_panel:
         if not isinstance(entrada, dict):
             continue
         # Cada entrada del panel dice de que linea es; las de antes de T9 no lo dicen y
         # son de la linea de siempre, `local`.
-        de_entrada = entrada.get("account")
+        de_entrada = de_linea or entrada.get("account")
         cuenta_panel = de_entrada if isinstance(de_entrada, str) and de_entrada \
             else CUENTA_LOCAL
         llave = (cuenta_panel, jid)
@@ -282,6 +286,12 @@ def conversaciones_registradas(ref):
     return sorted(filas.values(), key=lambda f: (f["account"], f["chat_jid"]))
 
 
+def es_chat_del_dueno(filas):
+    """Si las filas son todas el chat del dueno: el numero de aprobacion que eligio."""
+    dueno = numero_aprobacion()
+    return bool(dueno) and all(f["chat_jid"] == dueno for f in filas)
+
+
 def resolver_conversacion(ref, linea):
     """La UNA conversacion a la que se va a escribir, o una negativa con su motivo."""
     filas = conversaciones_registradas(ref)
@@ -289,19 +299,21 @@ def resolver_conversacion(ref, linea):
     # valen: las de otro numero —o las de antes, `local`— siguen guardadas pero no
     # mandan nada desde este. Un almacen sin linea anotada (de antes de esto) sigue la
     # regla de siempre.
-    activa = wa_store.linea_activa_en_disco()
-    if activa:
-        if linea and linea != activa:
+    # Con varias lineas vinculadas a la vez, cualquiera de ellas puede escribir, pero solo
+    # desde la suya: una linea desvinculada sigue sin mandar nada.
+    activas = wa_store.lineas_activas_en_disco()
+    if activas:
+        if linea and linea not in activas:
             niega(OTRA_LINEA,
-                  f"the line {linea!r} is not the one linked now ({activa!r}); a "
-                  "message can only leave from the linked number.")
-        ajenas = sorted({f["account"] for f in filas if f["account"] != activa})
-        filas = [f for f in filas if f["account"] == activa]
+                  f"the line {linea!r} is not linked now ({', '.join(activas)}); a "
+                  "message can only leave from a linked number.")
+        ajenas = sorted({f["account"] for f in filas if f["account"] not in activas})
+        filas = [f for f in filas if f["account"] in activas]
         if not filas and ajenas:
             niega(OTRA_LINEA,
-                  f"{ref!r} is authorized for {', '.join(ajenas)}, not for the number "
-                  f"linked now ({activa!r}). Authorize it for this number in the panel, "
-                  "or link that number again.")
+                  f"{ref!r} is authorized for {', '.join(ajenas)}, not for a number "
+                  f"linked now ({', '.join(activas)}). Authorize it for this number in the "
+                  "panel, or link that number again.")
     cuentas = sorted({f["account"] for f in filas})
     if linea:
         if cuentas and linea not in cuentas:
@@ -309,6 +321,13 @@ def resolver_conversacion(ref, linea):
                   f"{ref!r} is not registered on the line {linea!r}; it is on "
                   f"{', '.join(cuentas)}.")
         filas = [f for f in filas if f["account"] == linea]
+    elif len(cuentas) > 1 and es_chat_del_dueno(filas) and \
+            wa_store.linea_activa_en_disco() in cuentas:
+        # El chat del dueno (`wa-scope owner`) esta en cada linea —cada una le avisa lo
+        # suyo—, y lo que le escribe un agente de otro proyecto sale por la principal, que es
+        # la linea del dueno: la misma que dice `wa-scope owner`. Nunca se elige a ciegas.
+        principal = wa_store.linea_activa_en_disco()
+        filas = [f for f in filas if f["account"] == principal]
     elif len(cuentas) > 1:
         niega(LINEA_AMBIGUA,
               f"{ref!r} exists on {len(cuentas)} lines ({', '.join(cuentas)}), so there "
@@ -730,7 +749,15 @@ def main():
 
     # La linea se decide ANTES de tocar nada. El mismo grupo puede existir en dos
     # lineas, y elegir "la primera" ahi le escribe a la conversacion equivocada.
-    fila = resolver_conversacion(a.chat, a.line)
+    # Sin `--line`, la de la corrida que llama (`WA_INBOX_LINEA`, la pone el proceso de
+    # cada linea): el tick de una linea nunca escribe desde otra.
+    # `--line` se toma tal cual, como siempre: la cuenta que no existe la niega
+    # `resolver_conversacion` con su propio codigo.
+    try:
+        linea = a.line or wa_store.linea_pedida()
+    except wa_store.LineaInvalida as exc:
+        sys.exit(f"wa-send: {exc}")
+    fila = resolver_conversacion(a.chat, linea)
 
     # Y despues el permiso, que tambien es sobre lo que se pidio. Denegar por defecto:
     # una conversacion que no esta en el registro no existe para el agente.

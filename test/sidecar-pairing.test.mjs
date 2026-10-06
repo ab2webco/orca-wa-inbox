@@ -16,8 +16,13 @@ import { decidirTrasCierre, calcularEsperaMs, intentoTrasEvento, mensajeQr, qrVe
   tocaEmitirAlmacen, opcionesDeSocket, salidaTrasCierre, repetidosTrasCierre, MOTIVO,
   PARCHES_DE_LIBRETA, CIERRES_REPETIDOS_TOPE, CIERRES_VENTANA_MS,
   QR_ROTACION_MS, QR_VIGENCIA_MS, SALIDA, LATIDO_LINEA_MS, mensajeLatido,
-  ALMACEN_LATIDO_MS
+  ALMACEN_LATIDO_MS, anotarLinea, LINEA_SECUNDARIA_ENV, CUENTA_PREVIA_ENV
 } from '../sidecar/src/index.js'
+import { crearAlcance, LINEA_ENV } from '../sidecar/src/alcance.js'
+import { abrirAlmacen, rutaAlmacen } from '../sidecar/src/almacen.js'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 let fallos = 0
 let pruebas = 0
@@ -413,6 +418,56 @@ console.log('\nsidecar: la libreta se PIDE, no se espera')
     JSON.stringify(PARCHES_DE_LIBRETA))
   ok('la lista es inmutable: es un contrato con Baileys, no una preferencia',
     Object.isFrozen(PARCHES_DE_LIBRETA))
+}
+
+// ───────── L1: varias lineas, cada sidecar anota la suya ─────────
+// El worker lanza un sidecar por linea. Solo el de la principal fija `linea_activa` (lo que
+// leen los CLI sin `--line`); los demas se suman al conjunto de activas sin tocarla. Y cada
+// uno le pregunta a `wa-scope` por el alcance de SU linea: sin eso, el de la segunda
+// recibiria el mapa de la principal y no guardaria nada de lo suyo.
+console.log('\nsidecar: L1 — cada linea anota la suya y pregunta por su alcance')
+{
+  const home = mkdtempSync(join(tmpdir(), 'wa-sidecar-lineas-'))
+  const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  const A = 'pn:573000000001'
+  const B = 'pn:573000000002'
+  ok('el worker nombra la segunda linea por una variable estable',
+    LINEA_SECUNDARIA_ENV === 'WA_SIDECAR_LINEA_SECUNDARIA', String(LINEA_SECUNDARIA_ENV))
+  const principal = anotarLinea({ almacen, cuenta: A, env: {} })
+  ok('sin la variable, el sidecar es la principal de siempre y fija la linea activa',
+    principal.cambio === true && almacen.lineaActiva() === A, JSON.stringify(principal))
+  const segunda = anotarLinea({ almacen, cuenta: B, env: { [LINEA_SECUNDARIA_ENV]: '1' } })
+  ok('con la variable, se suma sin quitarle la principal a la otra',
+    almacen.lineaActiva() === A &&
+    JSON.stringify(almacen.lineasActivas()) === JSON.stringify([A, B]) && segunda.cambio === true,
+    JSON.stringify({ segunda, l: almacen.lineasActivas() }))
+  ok('volver a anotarla no es un cambio',
+    anotarLinea({ almacen, cuenta: B, env: { [LINEA_SECUNDARIA_ENV]: '1' } }).cambio === false)
+  // La secundaria se re-vincula con OTRO numero tras un QR nuevo: el sidecar nuevo no lo
+  // sabe, el worker si, y se lo dice para que el numero viejo salga de las activas.
+  const C = 'pn:573000000011'
+  anotarLinea({ almacen, cuenta: C,
+    env: { [LINEA_SECUNDARIA_ENV]: '1', [CUENTA_PREVIA_ENV]: B } })
+  ok('con el numero que tenia, la secundaria reemplaza al suyo y no deja uno muerto',
+    CUENTA_PREVIA_ENV === 'WA_SIDECAR_CUENTA_PREVIA' &&
+    JSON.stringify(almacen.lineasActivas()) === JSON.stringify([A, C]),
+    JSON.stringify(almacen.lineasActivas()))
+  almacen.cerrar()
+  rmSync(home, { recursive: true, force: true })
+
+  const llamadas = []
+  let linea = null
+  const alcance = crearAlcance({ toolsDir: '/herramientas', linea: () => linea,
+    ejecutar: (cmd, args, env) => { llamadas.push({ args, linea: env?.[LINEA_ENV] }); return '[]' } })
+  alcance.refrescar(true)
+  ok('sin numero todavia, no nombra ninguna linea', llamadas.length > 0 &&
+    llamadas.every((l) => l.linea === undefined), JSON.stringify(llamadas))
+  linea = B
+  llamadas.length = 0
+  alcance.refrescar(true)
+  ok('con su numero, cada consulta a wa-scope nombra SU linea', llamadas.length > 0 &&
+    llamadas.every((l) => l.linea === B), JSON.stringify(llamadas))
+  ok('la variable es la misma que leen los CLI', LINEA_ENV === 'WA_INBOX_LINEA', String(LINEA_ENV))
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

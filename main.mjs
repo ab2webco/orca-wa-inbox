@@ -60,6 +60,13 @@ const SIDECAR_KEY = 'sidecar'
 // vivir dentro del pedido, porque el pedido se borra al atenderlo.
 const SIDECAR_REQUEST_KEY = 'sidecarRequest'
 const SIDECAR_RESULT_KEY = 'sidecarResult'
+// Varias lineas a la vez (odd/tasks/varias-lineas-y-segundo-cerebro.md, L2). `sidecar`
+// sigue siendo la linea PRINCIPAL, tal cual: con una sola linea el panel no ve nada
+// distinto. El estado de cada linea que no es la principal va en `sidecars`, por carpeta,
+// y la lista de lineas en orden —la primera es la principal— con su numero y su tipo, en
+// `lineas`.
+const SIDECARS_KEY = 'sidecars'
+const LINEAS_KEY = 'lineas'
 // La MISMA via, para lo que el panel pide sobre el alcance. Dos claves propias y no las
 // del sidecar: son dos vidas distintas -una sesion de WhatsApp y una autorizacion- y
 // meterlas en la misma clave haria que el veredicto de una pisara el de la otra, que es
@@ -754,7 +761,11 @@ const SIDECAR_ACCION = Object.freeze({
   // PROPIA y no el mismo `reintentar` porque lo que el usuario pide es distinto y el
   // panel tiene que poder decirselo con sus palabras: reintentar es para una sesion
   // caida, esto es para una lista a la que le faltan personas.
-  LIBRETA: 'libreta'
+  LIBRETA: 'libreta',
+  // Vincular una linea MAS, al lado de las que ya estan: su propia carpeta y su QR.
+  VINCULAR: 'vincular',
+  // El tipo de una linea (L5): `support` o, desde la parte 2, `personal`.
+  TIPO: 'tipo'
 })
 
 /** Codigos del veredicto que el worker deja para el panel. `vencido` no es un fallo
@@ -764,7 +775,18 @@ const SIDECAR_VEREDICTO = Object.freeze({
   DESVINCULADO: 'desvinculado',
   REINTENTADO: 'reintentado',
   VENCIDO: 'vencido',
-  ACCION_DESCONOCIDA: 'accion-desconocida'
+  ACCION_DESCONOCIDA: 'accion-desconocida',
+  // Una linea nueva esperando su QR (la recien abierta, o la que ya esperaba).
+  VINCULANDO: 'vinculando',
+  // El pedido nombra una carpeta que no es de ninguna linea.
+  LINEA_DESCONOCIDA: 'linea-desconocida',
+  // Todavia no se sabe donde viven las lineas (el resolvedor no contesto): no hay donde
+  // abrir otra.
+  SIN_LINEAS: 'sin-lineas',
+  TIPO_GUARDADO: 'tipo-guardado',
+  TIPO_INVALIDO: 'tipo-invalido',
+  // Un tipo que existe pero todavia no se puede elegir (`personal`, parte 2).
+  TIPO_NO_DISPONIBLE: 'tipo-no-disponible'
 })
 
 /** Lo que el panel puede pedirle al worker sobre el alcance, y como se contesta. Mismos
@@ -784,8 +806,13 @@ const SCOPE_VEREDICTO = Object.freeze({
   REGLA_QUITADA: 'regla-quitada',
   // Lo que llega como patron de una regla no es un texto acotado y legible: no llega a la
   // linea de comandos.
-  PATRON_INVALIDO: 'patron-invalido'
+  PATRON_INVALIDO: 'patron-invalido',
+  // La linea que nombra el pedido no tiene forma de cuenta (`pn:<digitos>`).
+  LINEA_INVALIDA: 'linea-invalida'
 })
+
+/** Una cuenta de linea: lo unico que llega a `--line`. */
+const LINEA_RE = /^pn:\d{6,}$/
 
 /** Lo mas largo que puede ser el patron de una regla de texto. Un texto que tiene que
  *  aparecer en un mensaje no pasa de unas palabras; sin tope seria un lugar donde dejar
@@ -901,7 +928,12 @@ function resolverAuthDir(pluginDir, guion = join(pluginDir, 'sidecar', 'resolve-
  */
 export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
   spawnFn = spawn, env = process.env, alSalir = () => {}, alLinea = () => {},
-  alAlmacen = () => {}, alConectar = () => {}, alLibreta = () => {} }) {
+  alAlmacen = () => {}, alConectar = () => {}, alLibreta = () => {},
+  // Donde queda el estado que lee el panel. Con una linea, la clave de siempre; con
+  // varias, la de cada linea (`publicarEstado` en activate). Y lo que el worker le dice al
+  // sidecar de SU linea (secundaria, el numero que tenia).
+  publicar = (estado) => guardar(orca, SIDECAR_KEY, estado), envLinea = {},
+  alCuenta = () => {} }) {
   const nacioMs = Date.now()
   let estado = { at: new Date().toISOString(), connection: null, qr: null,
     motivo: null, statusCode: null, error: null, exited: false,
@@ -936,7 +968,7 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
   const escribir = (parcial) => {
     estado = { ...estado, ...parcial, at: new Date().toISOString() }
     const propio = estado
-    cadenaEscritura = cadenaEscritura.then(() => guardar(orca, SIDECAR_KEY, propio))
+    cadenaEscritura = cadenaEscritura.then(() => publicar(propio))
     return cadenaEscritura
   }
 
@@ -956,7 +988,7 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
       // en el PATH: las herramientas viajan juntas, y buscarlas afuera ya habia
       // mandado a una a la instalacion equivocada (§11-E4).
       env: { ...env, ELECTRON_RUN_AS_NODE: '1', WA_SIDECAR_AUTH_DIR: authDir,
-        WA_SIDECAR_TOOLS_DIR: toolsDir },
+        WA_SIDECAR_TOOLS_DIR: toolsDir, ...envLinea },
       stdio: ['ignore', 'pipe', 'pipe']
     })
   } catch (error) {
@@ -1027,6 +1059,8 @@ export function lanzarSidecar({ orca, scriptPath, authDir, toolsDir = TOOLS,
         // anterior como si fuera del nuevo, y etiqueta con esto lo que autoriza.
         const cuenta = typeof mensaje.cuenta === 'string' ? mensaje.cuenta : null
         escribir({ cuenta })
+        // De que numero es esta linea, siempre que se sabe: el registro de lineas lo anota.
+        if (cuenta) avisar(() => alCuenta(cuenta), 'cuenta')
         if (cuenta && mensaje.cambio === true) {
           try { alLinea(cuenta) } catch (error) {
             orca.log(`sidecar line change handling failed: ${error.message}`)
@@ -1206,6 +1240,54 @@ export function decidirReinicio (intento) {
     esperaMs: Math.min(REINICIO_BASE_MS * 2 ** (paso - 1), REINICIO_MAX_MS) }
 }
 
+/** Los tipos de linea (L5). `support` es la de siempre y el tipo de toda linea existente;
+ *  `personal` existe en el contrato pero queda apagado hasta la parte 2 del plan. */
+export const TIPOS_DE_LINEA = Object.freeze(['support', 'personal'])
+export const TIPOS_HABILITADOS = Object.freeze(['support'])
+const PREFIJO_NUEVA = 'nueva-'
+
+/** La carpeta de una linea que se empieza a vincular. El resolvedor la pasa a la de su
+ *  numero en el proximo arranque, cuando ningun sidecar la esta usando. */
+export function carpetaNueva (ahoraMs = Date.now()) {
+  return `${PREFIJO_NUEVA}${ahoraMs.toString(36)}`
+}
+
+/** El registro de lineas que guardo el panel, validado: lo que no tiene forma se descarta. */
+export function leerRegistro (valor) {
+  if (!Array.isArray(valor)) return []
+  return valor.filter((l) => l && typeof l === 'object' && typeof l.carpeta === 'string')
+    .map((l) => ({ carpeta: l.carpeta,
+      cuenta: typeof l.cuenta === 'string' ? l.cuenta : null,
+      tipo: TIPOS_DE_LINEA.includes(l.tipo) ? l.tipo : 'support',
+      alta: typeof l.alta === 'string' ? l.alta : null }))
+}
+
+/** Junta el registro guardado con las lineas que hay en disco. Pura.
+ *
+ *  El orden del registro manda —la primera es la principal— y una linea que el resolvedor
+ *  paso de `nueva-...` a la carpeta de su numero se reconoce por el numero. Lo que ya no
+ *  esta en disco sale; lo que aparece se suma al final, salvo la que se acaba de mudar del
+ *  auth state plano (`mudada`): esa era la unica linea, y es la principal. */
+export function reconciliarLineas (previo, enDisco, { mudada = null,
+  ahora = new Date().toISOString() } = {}) {
+  const disco = Array.isArray(enDisco) ? enDisco : []
+  const usadas = new Set()
+  const salida = []
+  for (const p of leerRegistro(previo)) {
+    const d = disco.find((x) => !usadas.has(x.carpeta) &&
+      (x.carpeta === p.carpeta || (p.cuenta && x.cuenta === p.cuenta)))
+    if (!d) continue
+    usadas.add(d.carpeta)
+    salida.push({ ...p, carpeta: d.carpeta, cuenta: d.cuenta ?? p.cuenta })
+  }
+  for (const d of disco.filter((x) => !usadas.has(x.carpeta))) {
+    const linea = { carpeta: d.carpeta, cuenta: d.cuenta ?? null, tipo: 'support', alta: ahora }
+    if (d.carpeta === mudada) salida.unshift(linea)
+    else salida.push(linea)
+  }
+  return salida
+}
+
 export default function activate(orca) {
   // ANTES QUE NADA: la autopsia. Un worker que muere de una excepcion no atrapada se
   // lleva consigo el motivo — Orca lo manda a su propio registro, que desde aca no se
@@ -1244,7 +1326,6 @@ export default function activate(orca) {
   // `apagar()` que llega antes de que una de esas termine dejaria un proceso lanzado
   // DESPUES de que el plugin ya dijo que se apagaba.
   let detenido = false
-  let apagarSidecar = () => {}
 
   const dirHerramientas = async () => (await settings()).toolsDir || TOOLS
 
@@ -1335,58 +1416,184 @@ export default function activate(orca) {
   // puede leer el userData- y recien con eso se lanza. `sidecarPath` sale de settings
   // para que las pruebas lo apunten a un guion de mentira; en producción nunca se pisa
   // y cae al bundle real (`DEFAULT_SETTINGS.sidecarPath`).
-  /** El estado limpio de la clave que lee el panel: sin sesion, sin QR y sin falla.
+  /** El estado limpio de una linea: sin sesion, sin QR y sin falla.
    *
    *  Se escribe ANTES de cualquier relanzamiento, y no se deja para que lo pise el
    *  `lanzarSidecar` de despues: entre apagar el sidecar viejo y tener el nuevo hay un
    *  viaje a un subproceso, y en ese hueco el panel sondea. Sin esto, desvincular
    *  dejaba la pantalla diciendo "WhatsApp esta conectado" durante ese hueco, que es
    *  justo lo que el usuario acababa de pedir que dejara de ser cierto. */
-  const limpiarEstadoSidecar = () => guardar(orca, SIDECAR_KEY, {
+  const estadoLimpio = () => ({
     at: new Date().toISOString(), connection: null, qr: null, motivo: null,
     statusCode: null, error: null, exited: false, latido: null, cuenta: null,
     startedAt: null
   })
+  const sinArrancar = { ok: false, code: SIDECAR_MOTIVO.NO_ARRANCO, detail: 'plugin detenido' }
 
-  /** Resuelve el auth dir y lanza el sidecar. Una sola implementacion para el arranque
-   *  del plugin y para lo que pida el panel: si el reintento tomara otro camino, seria
-   *  otro arranque, con otros motivos, y el panel los traduciria distinto. */
-  async function arrancarSidecar () {
+  // ── Las lineas (varias lineas a la vez, L2) ─────────────────────────────────────
+  // Una linea es una carpeta de auth y un sidecar, con su propia salud y su propio
+  // reinicio: la caida de una no toca a las demas. La primera del registro es la
+  // principal, y su estado sigue en la clave de siempre (`sidecar`).
+  const lineas = new Map()
+  let registro = []
+  // `wa-auth`, o null cuando el resolvedor no sabe de lineas: entonces la carpeta que
+  // contesta es la UNICA linea, como siempre, y no hay donde abrir otra.
+  let baseAuth = null
+  let lineasListas = false
+  const estadosSecundarios = {}
+  let cadenaSecundarios = Promise.resolve()
+
+  const principal = () => (registro.length ? registro[0].carpeta : null)
+  const entradaDe = (linea) => registro.find((r) => r.carpeta === linea.carpeta)
+  const viva = (linea) => lineas.get(linea.carpeta) === linea
+  const nuevaLinea = (carpeta, dir) => ({ carpeta, dir, apagar: () => {}, renovaciones: 0,
+    reinicios: 0, reinicioTimer: null })
+
+  /** Donde va el estado de una linea: la principal en `sidecar`, las demas en
+   *  `sidecars`. Se decide al escribir y no al lanzar: si la principal se desvincula, la
+   *  que la reemplaza empieza a escribir en `sidecar` sin relanzarse. */
+  function publicarEstado (linea, estado) {
+    if (linea.carpeta === principal()) return publicarPrincipal(estado)
+    estadosSecundarios[linea.carpeta] = estado
+    return publicarSecundarios()
+  }
+  function publicarSecundarios () {
+    const copia = { ...estadosSecundarios }
+    cadenaSecundarios = cadenaSecundarios.then(() => guardar(orca, SIDECARS_KEY, copia))
+    return cadenaSecundarios
+  }
+  /** El estado de la principal, con la lista de lineas adentro: los paneles ya leen
+   *  `sidecar` en cada vuelta, y una clave mas en su sondeo se come el cupo de mensajes del
+   *  host que necesita el clic del dueno. Todas las escrituras de `sidecar` van por UNA
+   *  cadena, en el orden en que se pidieron, sea el estado o la lista lo que cambio. */
+  let ultimoPrincipal = null
+  let cadenaPrincipal = Promise.resolve()
+  function publicarPrincipal (estado) {
+    if (estado) ultimoPrincipal = estado
+    if (!ultimoPrincipal) return cadenaPrincipal
+    const valor = { ...ultimoPrincipal, lineas: registro.map((r) => ({ ...r })) }
+    cadenaPrincipal = cadenaPrincipal.then(() => guardar(orca, SIDECAR_KEY, valor))
+    return cadenaPrincipal
+  }
+  const publicarRegistro = () => Promise.all([
+    guardar(orca, LINEAS_KEY, registro.map((r) => ({ ...r }))),
+    publicarPrincipal(null)
+  ])
+
+  /** Una linea nueva esperando su QR, al final del registro. */
+  function agregarLinea () {
+    const carpeta = carpetaNueva()
+    registro.push({ carpeta, cuenta: null, tipo: 'support', alta: new Date().toISOString() })
+    const linea = nuevaLinea(carpeta, join(baseAuth, carpeta))
+    lineas.set(carpeta, linea)
+    return linea
+  }
+
+  /** Donde viven las lineas, preguntado al resolvedor. Es el UNICO momento en que el
+   *  resolvedor mueve carpetas (la de siempre a la de su numero, una `nueva-...` ya
+   *  vinculada a la suya), y por eso se pide solo con ningun sidecar corriendo. */
+  async function resolverLineas (s) {
+    const resuelto = await resolverAuthDir(PLUGIN_DIR, s.authDirResolverPath, ['--lineas'])
+    if (!resuelto.ok || !resuelto.dir) return resuelto
+    const previo = leerRegistro(await leer(orca, LINEAS_KEY))
+    lineas.clear()
+    if (!Array.isArray(resuelto.lineas)) {
+      // Un resolvedor que no sabe de lineas: la carpeta que contesta es la unica.
+      baseAuth = null
+      registro = [{ carpeta: '', cuenta: previo[0]?.cuenta ?? null,
+        tipo: previo[0]?.tipo ?? 'support', alta: previo[0]?.alta ?? new Date().toISOString() }]
+      lineas.set('', nuevaLinea('', resuelto.dir))
+    } else {
+      baseAuth = resuelto.dir
+      registro = reconciliarLineas(previo, resuelto.lineas, { mudada: resuelto.mudada ?? null })
+      for (const r of registro) lineas.set(r.carpeta, nuevaLinea(r.carpeta, join(baseAuth, r.carpeta)))
+      // Ninguna linea vinculada: se espera un QR, como siempre.
+      if (!registro.length) agregarLinea()
+    }
+    for (const carpeta of Object.keys(estadosSecundarios)) {
+      if (!lineas.has(carpeta) || carpeta === principal()) delete estadosSecundarios[carpeta]
+    }
+    lineasListas = true
+    await publicarRegistro()
+    await publicarSecundarios()
+    return resuelto
+  }
+
+  /** Lanza el sidecar de UNA linea (apagando antes el que tuviera). */
+  async function arrancarLinea (linea) {
     // Cualquier arranque -el automatico, un clic, un desvincular- deja sin efecto el
     // reinicio que estuviera esperando: cumplido despues, apagaria al recien lanzado.
-    clearTimeout(reinicioTimer)
-    reinicioTimer = null
-    if (detenido) return { ok: false, code: SIDECAR_MOTIVO.NO_ARRANCO, detail: 'plugin detenido' }
+    clearTimeout(linea.reinicioTimer)
+    linea.reinicioTimer = null
+    if (detenido) return sinArrancar
     const s = await settings()
-    if (detenido) return { ok: false, code: SIDECAR_MOTIVO.NO_ARRANCO, detail: 'plugin detenido' }
-    const resuelto = await resolverAuthDir(PLUGIN_DIR, s.authDirResolverPath)
-    if (detenido) return { ok: false, code: SIDECAR_MOTIVO.NO_ARRANCO, detail: 'plugin detenido' }
-    if (!resuelto.ok || !resuelto.dir) {
-      const motivo = motivoAuthDir(resuelto)
-      await guardar(orca, SIDECAR_KEY, {
-        at: new Date().toISOString(), connection: null, qr: null,
-        motivo, statusCode: null,
-        error: { code: motivo,
-          detail: resuelto.detail || 'could not resolve the auth directory' },
-        exited: true, startedAt: new Date().toISOString()
-      })
-      orca.log(`sidecar not started (${motivo}): ${resuelto.detail || ''}`)
-      return { ok: false, code: motivo, detail: resuelto.detail || '' }
-    }
+    if (detenido || !viva(linea)) return sinArrancar
     // El de antes se apaga a proposito: `lanzarSidecar` marca la bandera para que ese
     // final no se reporte como una caida. Dos sidecars vivos sobre el mismo auth state
     // se pisarian las credenciales.
-    await apagarSidecar()
+    await linea.apagar()
     // `s.toolsDir` y no `TOOLS`: quien mueve el directorio de herramientas tiene que
     // moverlo entero, o el sidecar le pregunta por el alcance a una instalacion
     // distinta de la que lee el resto del plugin (§11-E4).
     dirIngesta = s.toolsDir || TOOLS
     primeraConexionPendiente = true
-    apagarSidecar = lanzarSidecar({ orca, scriptPath: s.sidecarPath, authDir: resuelto.dir,
-      toolsDir: dirIngesta, alSalir: alSalirSidecar, alLinea: alCambiarLinea,
+    // La principal es la que fija la linea activa del almacen; las demas se suman sin
+    // tocarla, y dicen que numero tenian por si se re-vinculan con otro.
+    const cuentaPrevia = entradaDe(linea)?.cuenta
+    const envLinea = linea.carpeta === principal() ? {}
+      : { WA_SIDECAR_LINEA_SECUNDARIA: '1',
+          ...(cuentaPrevia ? { WA_SIDECAR_CUENTA_PREVIA: cuentaPrevia } : {}) }
+    linea.apagar = lanzarSidecar({ orca, scriptPath: s.sidecarPath, authDir: linea.dir,
+      toolsDir: dirIngesta, alSalir: (salida) => alSalirSidecar(linea, salida),
+      alLinea: alCambiarLinea, alCuenta: (cuenta) => alSaberCuenta(linea, cuenta),
       alAlmacen: () => ingesta.pedir(), alConectar: alConectarLibreta,
-      alLibreta: alLlegarLibreta })
-    return { ok: true, dir: resuelto.dir }
+      alLibreta: alLlegarLibreta, publicar: (estado) => publicarEstado(linea, estado), envLinea })
+    return { ok: true, dir: linea.dir }
+  }
+
+  /** Resuelve donde viven las lineas (si todavia no se sabe) y lanza todas. Una sola
+   *  implementacion para el arranque del plugin y para lo que pida el panel: si el
+   *  reintento tomara otro camino, seria otro arranque, con otros motivos, y el panel los
+   *  traduciria distinto. */
+  async function arrancarSidecar () {
+    for (const linea of lineas.values()) {
+      clearTimeout(linea.reinicioTimer)
+      linea.reinicioTimer = null
+    }
+    if (detenido) return sinArrancar
+    const s = await settings()
+    if (detenido) return sinArrancar
+    if (!lineasListas) {
+      const resuelto = await resolverLineas(s)
+      if (detenido) return sinArrancar
+      if (!resuelto.ok || !resuelto.dir) {
+        const motivo = motivoAuthDir(resuelto)
+        await publicarPrincipal({
+          at: new Date().toISOString(), connection: null, qr: null,
+          motivo, statusCode: null,
+          error: { code: motivo,
+            detail: resuelto.detail || 'could not resolve the auth directory' },
+          exited: true, startedAt: new Date().toISOString()
+        })
+        orca.log(`sidecar not started (${motivo}): ${resuelto.detail || ''}`)
+        return { ok: false, code: motivo, detail: resuelto.detail || '' }
+      }
+    }
+    let primero = null
+    for (const linea of [...lineas.values()]) {
+      const arranque = await arrancarLinea(linea)
+      primero = primero ?? arranque
+    }
+    return primero ?? sinArrancar
+  }
+
+  /** El numero de una linea, cada vez que su sidecar lo dice: el registro lo anota (el
+   *  panel lo muestra, y es el que se saca del almacen al desvincularla). */
+  function alSaberCuenta (linea, cuenta) {
+    const entrada = entradaDe(linea)
+    if (!entrada || entrada.cuenta === cuenta) return
+    entrada.cuenta = cuenta
+    publicarRegistro().catch((error) => orca.log(`lines registry failed: ${error.message}`))
   }
 
   /** Se vinculo un numero distinto (o el primero): lo que muestran los paneles —
@@ -1460,29 +1667,26 @@ export default function activate(orca) {
     return turno
   }
 
-  // Cuantas veces seguidas se tiraron credenciales muertas sin que el sidecar llegara a
-  // vivir un rato. Una credencial recien borrada no puede volver a dar 401 -sin `me`
-  // Baileys registra, no hace login-, asi que si pasa de nuevo hay otra cosa rota y
-  // seguir borrando no la arregla: se para y el panel ofrece Desvincular.
-  let renovaciones = 0
-  // Las caidas seguidas (`decidirReinicio`) y el reinicio que esta esperando su turno.
-  let reinicios = 0
-  let reinicioTimer = null
+  // Cada linea lleva sus cuentas (`nuevaLinea`): `renovaciones`, cuantas veces seguidas se
+  // tiraron credenciales muertas sin que el sidecar llegara a vivir un rato —una credencial
+  // recien borrada no puede volver a dar 401: sin `me` Baileys registra, no hace login—, y
+  // `reinicios`, las caidas seguidas (`decidirReinicio`), con el reinicio que espera su
+  // turno. Son de la linea y no del plugin: la caida de una no gasta el tope de otra.
 
-  /** Que hacer cuando el sidecar termino solo. Lo llama `lanzarSidecar` cuando lo que
-   *  el panel tiene que leer ya quedo escrito. */
-  function alSalirSidecar (salida) {
-    if (detenido) return
-    if (salida.vidaMs >= SIDECAR_VIDA_ESTABLE_MS) { renovaciones = 0; reinicios = 0 }
+  /** Que hacer cuando el sidecar de una linea termino solo. Lo llama `lanzarSidecar`
+   *  cuando lo que el panel tiene que leer ya quedo escrito. */
+  function alSalirSidecar (linea, salida) {
+    if (detenido || !viva(linea)) return
+    if (salida.vidaMs >= SIDECAR_VIDA_ESTABLE_MS) { linea.renovaciones = 0; linea.reinicios = 0 }
     if (salida.tipo === 'credenciales-muertas') {
-      if (renovaciones >= SIDECAR_RENOVACIONES_TOPE) {
+      if (linea.renovaciones >= SIDECAR_RENOVACIONES_TOPE) {
         orca.log('sidecar: WhatsApp closed the session again right after relinking; ' +
           'leaving it for the user to unlink')
         return
       }
-      renovaciones += 1
+      linea.renovaciones += 1
       orca.log('sidecar: WhatsApp closed the session; removing the dead credentials to show a new QR')
-      enFila(() => detenido ? null : desvincularSidecar())
+      enFila(() => detenido || !viva(linea) ? null : desvincularLinea(linea, { porElDueno: false }))
         .then((r) => { if (r && !r.ok) orca.log(`sidecar relink failed (${r.code})`) })
         .catch((error) => orca.log(`sidecar relink failed: ${error.message}`))
       return
@@ -1490,29 +1694,38 @@ export default function activate(orca) {
     // Se rindio a proposito (403/411/440): relanzar es el reintento que se acaba de
     // agotar. Queda el motivo escrito y lo decide el dueno desde el panel.
     if (salida.tipo !== 'caida') return
-    reinicios += 1
-    const decision = decidirReinicio(reinicios)
+    linea.reinicios += 1
+    const decision = decidirReinicio(linea.reinicios)
     if (!decision.reiniciar) {
-      orca.log(`sidecar: crashed ${reinicios - 1} times in a row; not restarting it again`)
+      orca.log(`sidecar: crashed ${linea.reinicios - 1} times in a row; not restarting it again`)
       return
     }
-    orca.log(`sidecar: exited unexpectedly (${salida.error.detail}); restart ${reinicios} ` +
+    orca.log(`sidecar: exited unexpectedly (${salida.error.detail}); restart ${linea.reinicios} ` +
       `in ${Math.round(decision.esperaMs / 1000)}s`)
-    reinicioTimer = setTimeout(() => {
-      reinicioTimer = null
-      enFila(() => detenido ? null : arrancarSidecar())
+    linea.reinicioTimer = setTimeout(() => {
+      linea.reinicioTimer = null
+      enFila(() => detenido || !viva(linea) ? null : arrancarLinea(linea))
         .catch((error) => orca.log(`sidecar restart failed: ${error.message}`))
     }, decision.esperaMs)
-    if (typeof reinicioTimer.unref === 'function') reinicioTimer.unref()
+    if (typeof linea.reinicioTimer.unref === 'function') linea.reinicioTimer.unref()
   }
 
   /** Lo que pide el dueno empieza de cero: un clic en Reintentar no hereda las caidas
-   *  de antes, ni deja vivo un reinicio automatico que lo pisaria al cumplirse. */
-  const pedidoDelPanel = (accion) => () => enFila(() => {
-    reinicios = 0
-    renovaciones = 0
-    return accion()
+   *  de antes, ni deja vivo un reinicio automatico que lo pisaria al cumplirse. El pedido
+   *  viaja entero: con varias lineas, `carpeta` dice cual. */
+  const pedidoDelPanel = (accion) => (pedido) => enFila(() => {
+    for (const linea of lineas.values()) { linea.reinicios = 0; linea.renovaciones = 0 }
+    return accion(pedido)
   })
+
+  /** La linea de un pedido del panel: la que nombra `carpeta`, o la principal si no
+   *  nombra ninguna (el panel de una sola linea nunca la nombra). */
+  const lineaDelPedido = (pedido) => {
+    const carpeta = typeof pedido?.carpeta === 'string' ? pedido.carpeta : principal()
+    return carpeta === null ? null : lineas.get(carpeta) ?? null
+  }
+  const lineaDesconocida = (pedido) => ({ ok: false, code: SIDECAR_VEREDICTO.LINEA_DESCONOCIDA,
+    detail: String(pedido?.carpeta ?? '').slice(0, 60) })
 
   arrancarSidecar().catch((error) => orca.log(`sidecar launch failed: ${error.message}`))
 
@@ -1568,12 +1781,38 @@ export default function activate(orca) {
    *  y un estado que exige un segundo boton para seguir es un estado donde hay que
    *  explicarle al usuario que hacer. Relanzando, la pantalla vuelve exactamente al
    *  estado que ya sabe dibujar: esperando el codigo, y despues el codigo. */
-  async function desvincularSidecar () {
-    await apagarSidecar()
-    apagarSidecar = () => {}
-    await limpiarEstadoSidecar()
+  async function desvincularSidecar (pedido) {
+    // Sin saber todavia donde viven las lineas no hay una que desvincular: se resuelve
+    // primero, igual que un reintento, sin lanzar nada.
+    if (!lineasListas) {
+      const s = await settings()
+      const resuelto = await resolverLineas(s)
+      if (!resuelto.ok || !resuelto.dir) {
+        const motivo = motivoAuthDir(resuelto)
+        return { ok: false, code: motivo, detail: resuelto.detail || '' }
+      }
+    }
+    const linea = lineaDelPedido(pedido)
+    if (!linea) return lineaDesconocida(pedido)
+    return desvincularLinea(linea, { porElDueno: true })
+  }
+
+  /** Desvincular UNA linea. `porElDueno` es el boton: la linea sale del registro y del
+   *  conjunto de activas del almacen. Sin el es la credencial muerta: se tira y la MISMA
+   *  linea vuelve a pedir su QR en su lugar. Con una sola linea las dos terminan igual que
+   *  siempre: esperando el codigo. */
+  async function desvincularLinea (linea, { porElDueno }) {
+    clearTimeout(linea.reinicioTimer)
+    linea.reinicioTimer = null
+    await linea.apagar()
+    linea.apagar = () => {}
+    await publicarEstado(linea, estadoLimpio())
     const s = await settings()
-    const borrado = await resolverAuthDir(PLUGIN_DIR, s.authDirResolverPath, ['--borrar'])
+    const cuenta = entradaDe(linea)?.cuenta
+    const extra = ['--borrar']
+    if (linea.carpeta) extra.push('--carpeta', linea.carpeta)
+    if (porElDueno && linea.carpeta && cuenta) extra.push('--cuenta', cuenta)
+    const borrado = await resolverAuthDir(PLUGIN_DIR, s.authDirResolverPath, extra)
     if (!borrado.ok) {
       // NO se relanza: con las credenciales intactas, el sidecar volveria a conectar la
       // MISMA sesion que el usuario acaba de pedir cortar, y el panel diria "conectado"
@@ -1581,7 +1820,7 @@ export default function activate(orca) {
       const motivo = borrado.reason === 'borrado-fallo'
         ? SIDECAR_MOTIVO.DESVINCULAR_FALLO
         : motivoAuthDir(borrado)
-      await guardar(orca, SIDECAR_KEY, {
+      await publicarEstado(linea, {
         at: new Date().toISOString(), connection: null, qr: null, motivo,
         statusCode: null,
         error: { code: motivo, detail: borrado.detail || 'could not delete the auth state' },
@@ -1591,7 +1830,25 @@ export default function activate(orca) {
       return { ok: false, code: motivo, detail: borrado.detail || '' }
     }
     orca.log(`sidecar unlinked: auth state removed from ${borrado.dir}`)
-    const arranque = await arrancarSidecar()
+    let relanzar = linea
+    if (porElDueno && linea.carpeta) {
+      // La linea sale. Si era la principal, la siguiente pasa a serlo: su estado se muda a
+      // la clave de siempre. Si era la ultima, se espera un QR nuevo, como siempre.
+      const eraPrincipal = principal() === linea.carpeta
+      lineas.delete(linea.carpeta)
+      registro = registro.filter((r) => r.carpeta !== linea.carpeta)
+      delete estadosSecundarios[linea.carpeta]
+      relanzar = registro.length ? null : agregarLinea()
+      const nueva = principal()
+      if (eraPrincipal) {
+        ultimoPrincipal = (nueva !== null && estadosSecundarios[nueva]) || estadoLimpio()
+        if (nueva !== null) delete estadosSecundarios[nueva]
+      }
+      await publicarRegistro()
+      await publicarSecundarios()
+    }
+    if (!relanzar) return { ok: true, code: SIDECAR_VEREDICTO.DESVINCULADO }
+    const arranque = await arrancarLinea(relanzar)
     // El borrado SI ocurrio: la sesion quedo revocada aunque el relanzamiento falle.
     // Se contesta que si, y el motivo del arranque fallido ya viaja en la clave
     // `sidecar` con su propio codigo, que es donde el panel lo sabe leer.
@@ -1600,11 +1857,49 @@ export default function activate(orca) {
       : { ok: true, code: SIDECAR_VEREDICTO.DESVINCULADO, arranque: arranque.code }
   }
 
-  async function reintentarSidecar () {
-    const arranque = await arrancarSidecar()
+  async function reintentarSidecar (pedido) {
+    // Lo que no llego a resolverse se resuelve y se lanza entero, como al arrancar.
+    const linea = lineasListas ? lineaDelPedido(pedido) : null
+    if (lineasListas && !linea) return lineaDesconocida(pedido)
+    const arranque = linea ? await arrancarLinea(linea) : await arrancarSidecar()
     return arranque.ok
       ? { ok: true, code: SIDECAR_VEREDICTO.REINTENTADO }
       : { ok: false, code: arranque.code, detail: arranque.detail || '' }
+  }
+
+  /** El tipo de una linea, en su entrada del registro. Solo los tipos habilitados: el
+   *  personal existe en el contrato y se rechaza con su codigo hasta la parte 2. */
+  async function cambiarTipo (pedido) {
+    const tipo = pedido?.tipo
+    if (!TIPOS_DE_LINEA.includes(tipo)) {
+      return { ok: false, code: SIDECAR_VEREDICTO.TIPO_INVALIDO,
+        detail: String(tipo ?? '').slice(0, 40) }
+    }
+    if (!TIPOS_HABILITADOS.includes(tipo)) {
+      return { ok: false, code: SIDECAR_VEREDICTO.TIPO_NO_DISPONIBLE }
+    }
+    const linea = lineasListas ? lineaDelPedido(pedido) : null
+    const entrada = linea ? entradaDe(linea) : null
+    if (!entrada) return lineaDesconocida(pedido)
+    entrada.tipo = tipo
+    await publicarRegistro()
+    return { ok: true, code: SIDECAR_VEREDICTO.TIPO_GUARDADO, carpeta: entrada.carpeta, tipo }
+  }
+
+  /** Vincular una linea MAS: su carpeta `nueva-...` y su sidecar, que pide su QR. Nunca
+   *  dos a la vez: si ya hay una esperando su QR, se contesta esa. */
+  async function vincularLinea () {
+    if (!lineasListas || baseAuth === null) {
+      return { ok: false, code: SIDECAR_VEREDICTO.SIN_LINEAS, detail: '' }
+    }
+    const esperando = registro.find((r) => !r.cuenta)
+    if (esperando) return { ok: true, code: SIDECAR_VEREDICTO.VINCULANDO, carpeta: esperando.carpeta }
+    const linea = agregarLinea()
+    await publicarRegistro()
+    const arranque = await arrancarLinea(linea)
+    return arranque.ok
+      ? { ok: true, code: SIDECAR_VEREDICTO.VINCULANDO, carpeta: linea.carpeta }
+      : { ok: false, code: arranque.code, detail: arranque.detail || '', carpeta: linea.carpeta }
   }
 
   /** El vigia de un canal panel -> worker, con su disciplina de exactamente una vez.
@@ -1692,10 +1987,12 @@ export default function activate(orca) {
     vencido: SIDECAR_VEREDICTO.VENCIDO,
     desconocida: SIDECAR_VEREDICTO.ACCION_DESCONOCIDA,
     acciones: {
-      [SIDECAR_ACCION.DESVINCULAR]: pedidoDelPanel(() => desvincularSidecar()),
-      [SIDECAR_ACCION.REINTENTAR]: pedidoDelPanel(() => reintentarSidecar()),
-      [SIDECAR_ACCION.LIBRETA]: pedidoDelPanel(async () => {
-        const r = await reintentarSidecar()
+      [SIDECAR_ACCION.DESVINCULAR]: pedidoDelPanel((pedido) => desvincularSidecar(pedido)),
+      [SIDECAR_ACCION.REINTENTAR]: pedidoDelPanel((pedido) => reintentarSidecar(pedido)),
+      [SIDECAR_ACCION.VINCULAR]: pedidoDelPanel(() => vincularLinea()),
+      [SIDECAR_ACCION.TIPO]: pedidoDelPanel((pedido) => cambiarTipo(pedido)),
+      [SIDECAR_ACCION.LIBRETA]: pedidoDelPanel(async (pedido) => {
+        const r = await reintentarSidecar(pedido)
         // Solo si la sesion se relanzo: sin sidecar nuevo no llega ninguna libreta.
         if (r.ok) {
           libretaHasta = Date.now() + LIBRETA_VENTANA_MS
@@ -1724,10 +2021,20 @@ export default function activate(orca) {
       return { ok: false, code: SCOPE_VEREDICTO.JID_INVALIDO,
         detail: String(jid ?? '').slice(0, 60) }
     }
+    // Con varias lineas el panel quita en la linea que esta mirando (`linea`). Solo una
+    // cuenta con forma de cuenta llega a la linea de comandos.
+    const linea = pedido?.linea
+    if (linea !== undefined && linea !== null &&
+      (typeof linea !== 'string' || !LINEA_RE.test(linea))) {
+      return { ok: false, code: SCOPE_VEREDICTO.LINEA_INVALIDA, detail: String(linea).slice(0, 40) }
+    }
     const s = await settings()
     // Quitar lo que ya no esta no es un error: `wa-scope rm` con un jid que no esta en
     // el registro borra cero filas y sale con 0. El usuario pidio que no estuviera.
-    await run(join(s.toolsDir || TOOLS, 'wa-scope'), ['rm', jid])
+    await run(join(s.toolsDir || TOOLS, 'wa-scope'), ['rm', jid, ...(linea ? ['--line', linea] : [])])
+    // El alcance de otra linea vive aparte en el storage, y el CLI ya lo quito de ahi: el
+    // de la principal (`scope`) no se toca aunque tenga el mismo jid.
+    if (linea) return { ok: true, code: SCOPE_VEREDICTO.QUITADO }
     const actual = await scope()
     // SOLO si la llave esta. Una lectura que el host rechazo devuelve `{}`, y guardar
     // eso borraria TODAS las autorizaciones por culpa de una lectura fallida.
@@ -2132,11 +2439,14 @@ export default function activate(orca) {
     clearTimeout(syncTimer)
     clearInterval(pedidoTimer)
     clearInterval(latidoTimer)
-    clearTimeout(reinicioTimer)
     pararSalud()
     pararAutomatizaciones()
     ingesta.parar()
     avisosOrca.parar()
-    apagarSidecar()
+    // Todas las lineas, cada una con su reinicio pendiente.
+    for (const linea of lineas.values()) {
+      clearTimeout(linea.reinicioTimer)
+      linea.apagar()
+    }
   }
 }

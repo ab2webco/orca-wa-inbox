@@ -477,8 +477,13 @@ def main():
         # Sin `--line`, la linea que esta vinculada AHORA. Leer todas mezclaba las
         # conversaciones del numero viejo con las del nuevo (visto en vivo, 2026-10-01).
         # Otra linea se puede pedir a proposito, nombrandola.
+        # Con varias lineas, la corrida de una linea la nombra (`WA_INBOX_LINEA`) y sus
+        # lecturas son de esa linea.
         if not a.line:
-            a.line = wa_store.linea_activa(con)
+            try:
+                a.line = wa_store.linea_pedida() or wa_store.linea_activa(con)
+            except wa_store.LineaInvalida as exc:
+                sys.exit(f"wa-read: {exc}")
         rows = a.fn(con, a)
     finally:
         con.close()

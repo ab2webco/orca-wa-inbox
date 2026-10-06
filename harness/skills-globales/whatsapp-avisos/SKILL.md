@@ -39,7 +39,9 @@ The chat comes from the plugin settings, never from you:
 
 It prints only the chat id. It is the approval number the owner picked in the settings or,
 without one, the linked line's chat with itself. `"$WA/wa-scope" owner --json` says which
-(`source`) and its mode. Exit codes:
+(`source`) and its mode. When the owner has several WhatsApp lines linked, his chat is on
+the main line (`line` in the JSON), and the sends and waits below use that line on their
+own: never add `--line`. Exit codes:
 
 - `1` with `no-owner-chat`: there is no owner chat. Tell the user in this session that the
   owner has to pick an approval number in the plugin settings, and stop.
