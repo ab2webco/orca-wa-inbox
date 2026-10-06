@@ -3673,6 +3673,25 @@ console.log('\nworker: avisos-orca, el estado de cada agente')
     r.paneles['tab-1:panel-1'].finished === false)
   r = registrarEstado(p2, ev('done', 5000), LLAVE)
   ok('un done que viene de waiting no queda terminado', r.paneles['tab-1:panel-1'].finished === false)
+  // Decision del dueno (2026-10-05): `blocked` avisa como `waiting`. Pasar de uno al otro es
+  // un cambio y el worker lanza; el aviso repetido en la misma ventana lo descarta wa-scope.
+  r = registrarEstado(p1, ev('blocked', 3000), LLAVE)
+  ok('blocked: pasar a bloqueado es un cambio que avisa como bloqueado', r.cambio &&
+    r.avisar === 'blocked', JSON.stringify(r.avisar))
+  const pb = r.paneles
+  ok('blocked: el mismo blocked emitido otra vez no avisa',
+    !registrarEstado(pb, ev('blocked', 3500), LLAVE).cambio)
+  ok('blocked: de waiting a blocked avisa como bloqueado (wa-scope descarta el de la misma ventana)',
+    registrarEstado(p2, ev('blocked', 3600), LLAVE).avisar === 'blocked')
+  ok('blocked: de blocked a waiting avisa como espera',
+    registrarEstado(pb, ev('waiting', 3600), LLAVE).avisar === 'waiting')
+  // Un done despues de bloquearse no es un turno terminado: igual que despues de esperar, solo
+  // cuenta el que viene de `working` (un permiso negado deja al agente en done sin terminar).
+  ok('blocked: un done que viene de blocked no queda terminado',
+    registrarEstado(pb, ev('done', 5000), LLAVE).paneles['tab-1:panel-1'].finished === false)
+  ok('blocked: y uno de blocked -> working -> done si',
+    registrarEstado(registrarEstado(pb, ev('working', 4000), LLAVE).paneles, ev('done', 5000), LLAVE)
+      .paneles['tab-1:panel-1'].finished === true)
   r = registrarEstado({}, ev('waiting', 1000, { worktreeId: PROPIO }), LLAVE)
   ok('un agente de la carpeta del plugin no se guarda ni avisa', !r.cambio && r.avisar === null &&
     Object.keys(r.paneles).length === 0)
@@ -3728,17 +3747,26 @@ console.log('\nworker: avisos-orca, el estado de cada agente')
   await dormir(800)
   ok('el mismo waiting emitido otra vez no lanza otro aviso', llamadas().length === 1,
     JSON.stringify(llamadas()))
+  const atB = Date.now()
+  emite({ ...base, paneKey: 'tab-b:panel-b', state: 'blocked', receivedAt: atB })
+  ok('blocked: un panel que se bloquea lanza wa-scope orca-aviso con --state=blocked',
+    await hasta(() => llamadas().length === 2, 8000) &&
+    llamadas()[1] === `orca-aviso --state=blocked --pane=tab-b:panel-b --at=${atB} ` +
+      '--worktree=repo-a::/srv/ejemplo/alfa-demo --agent=codex --json', JSON.stringify(llamadas()))
+  emite({ ...base, paneKey: 'tab-b:panel-b', state: 'blocked', receivedAt: Date.now() })
+  await dormir(800)
+  ok('blocked: el mismo blocked otra vez no lanza', llamadas().length === 2, JSON.stringify(llamadas()))
   emite({ paneKey: 'tab-p:panel-p', state: 'waiting', receivedAt: Date.now(),
     worktreeId: 'repo-p::/tmp/ejemplo/orca/plugin-workspaces/ab2web.orca-wa-inbox' })
   await dormir(800)
-  ok('un agente del propio plugin (triage, casos) no avisa ni se guarda', llamadas().length === 1 &&
+  ok('un agente del propio plugin (triage, casos) no avisa ni se guarda', llamadas().length === 2 &&
     !('tab-p:panel-p' in (orca.store.orcaPanes || {})), JSON.stringify(llamadas()))
   emite({ ...base, state: 'working', receivedAt: Date.now() })
   emite({ ...base, state: 'done', receivedAt: Date.now() })
   ok('un done despues de trabajar queda terminado para el tick',
     await hasta(() => orca.store.orcaPanes?.[PANEL]?.state === 'done' &&
       orca.store.orcaPanes[PANEL].finished === true, 8000), JSON.stringify(orca.store.orcaPanes))
-  ok('el done no lanza nada: lo manda el tick despues de la espera', llamadas().length === 1)
+  ok('el done no lanza nada: lo manda el tick despues de la espera', llamadas().length === 2)
   apagar()
 
   // Al volver a arrancar, lo guardado manda: un waiting que ya estaba no avisa de nuevo.
@@ -3749,7 +3777,7 @@ console.log('\nworker: avisos-orca, el estado de cada agente')
   const otra = await arranca(orca2)
   manejadores2['agent.status.changed']?.({ ...base, state: 'waiting', receivedAt: Date.now() })
   await dormir(800)
-  ok('despues de reiniciar, el waiting ya guardado no avisa otra vez', llamadas().length === 1,
+  ok('despues de reiniciar, el waiting ya guardado no avisa otra vez', llamadas().length === 2,
     JSON.stringify(llamadas()))
   otra.apagar()
 }

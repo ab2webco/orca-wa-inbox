@@ -16,7 +16,8 @@ owner's approval number by WhatsApp. Owner-approved on 2026-10-04.
    - quiet hours (start and end, local time, optional; may cross midnight);
    - hourly cap (default 6, range 1–60).
    Without an approval number nothing is sent, and the panel says so next to the switches.
-2. Agent waiting (`state: waiting`, any previous state):
+2. Agent waiting (`state: waiting`, any previous state; `blocked` too since the owner's
+   decision of 2026-10-05, see O9):
    - the worker keeps the last state and the last time it saw `working` per `paneKey` in the
      plugin storage (the event fires on every emission, not only on change);
    - it ignores the plugin's own workspace (triage and case agents);
@@ -121,6 +122,29 @@ owner's approval number by WhatsApp. Owner-approved on 2026-10-04.
   deleted while the switch is off or there is no approval number); a run counts if it was
   created after the watermark and in the last 30 minutes. The error is trimmed and any
   path-shaped token removed; a command failure says only the exit code or the timeout.
+
+## Owner decision 2026-10-05: `blocked` notifies like `waiting`
+
+- [x] O9 A pane entering Orca's `blocked` state sends one notice through the SAME switch
+      (`orcaNotices.waiting`; one switch, the panel label now says "o se bloqueo" / "or is
+      blocked" / "ou ficou bloqueado"), with its own text in ES/EN/PT ("esta bloqueado y lo
+      necesita", "is blocked and needs you", "esta bloqueado e precisa de voce").
+      - Same dedupe: `blocked` and `waiting` share the `espera` class of the `req_id`, so
+        `waiting` -> `blocked` or `blocked` -> `waiting` on one pane inside the 5-minute window
+        is ONE notice (the worker still spawns on the change; wa-scope answers `duplicate`).
+      - Same quiet hours and hourly cap (it goes through `orca_encola`). The summary and the
+        grouped message count both together as "agentes que lo necesitan" / "agents that need
+        you" / "agentes que precisam de voce", no longer "waiting".
+      - Decided: a `done` after `blocked` is NOT a finished turn, the same rule as after
+        `waiting` (only `working` -> `done` counts; a denied permission leaves the agent done
+        without finishing). `blocked` -> `working` -> `done` does count. Tested both.
+      RED: worker 481/488 (blocked gave `avisar: null`, spawn carried `--state=waiting`);
+      panels 1452/1455 (the label said only "waiting" in ES/EN/PT); check-casos section
+      stopped at `--state: invalid choice: 'blocked'`. GREEN: worker 488/488, panels
+      1455/1455, the check-casos quick run 897/897 with the section's 58 checks (12 new).
+      One run of panels done concurrently with check-casos had a failure in the
+      roles-por-numero section ("no ofrece admin"), unrelated to this change; it passed
+      1455/1455 when re-run alone.
 
 ## Acceptance
 

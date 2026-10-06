@@ -8768,7 +8768,9 @@ def texto_de_estado(con):
 # ── Los avisos de Orca por WhatsApp (odd/tasks/avisos-orca.md) ──────────────────────────
 # La app de Orca en el telefono no avisa en segundo plano, y el dueno no se entera de que un
 # agente de otro proyecto quedo esperando su permiso. El worker ve cada estado de cada agente
-# (`agent.status.changed`) y lanza `orca-aviso` cuando uno pasa a esperar; el tick avisa del
+# (`agent.status.changed`) y lanza `orca-aviso` cuando uno pasa a esperar o a bloqueado (los
+# dos por el mismo interruptor y en la MISMA ventana: esperar y bloquearse seguidos en un
+# panel es un solo aviso, decision del dueno 2026-10-05); el tick avisa del
 # que termino (despues de una espera, por si sigue) y de la automatizacion que fallo. Todo va
 # por la misma cola `aviso` al numero de aprobacion, tipo `orca`, con texto FIJO: nunca lo que
 # se pidio, lo que contesto el agente, una ruta o lo que salio en la terminal. Solo
@@ -8798,6 +8800,7 @@ LARGO_ERROR_ORCA = 160
 RUTA_EN_TEXTO = re.compile(r"(?<![\w.-])(?:[A-Za-z]:[\\/]|~[\\/]|[\\/])[^\s'\"]*")
 TEXTOS_ORCA = {
     "es": {"espera": "Orca: {agente}{donde} espera su respuesta.",
+           "bloqueo": "Orca: {agente}{donde} esta bloqueado y lo necesita.",
            "termino": "Orca: {agente}{donde} termino.",
            "fallo": "Orca: la automatizacion \"{titulo}\" fallo: {error}.",
            "en": " en {donde}", "agente": "un agente", "agente_de": "el agente {tipo}",
@@ -8805,9 +8808,12 @@ TEXTOS_ORCA = {
            "codigo": "salio con el codigo {n}", "tiempo": "se paso del tiempo",
            "resumen": "Orca, durante sus horas de silencio: {partes}. Los detalles estan en Orca.",
            "grupo": "Orca: para no escribirle de mas, esto se junto en la ultima hora: {partes}.",
-           "partes": {"espera": "agentes esperando: {n}", "termino": "agentes que terminaron: {n}",
+           # `espera` cuenta a los que esperan y a los bloqueados: comparten la clase del id.
+           "partes": {"espera": "agentes que lo necesitan: {n}",
+                      "termino": "agentes que terminaron: {n}",
                       "fallo": "automatizaciones que fallaron: {n}"}},
     "en": {"espera": "Orca: {agente}{donde} is waiting for you.",
+           "bloqueo": "Orca: {agente}{donde} is blocked and needs you.",
            "termino": "Orca: {agente}{donde} finished.",
            "fallo": "Orca: the automation \"{titulo}\" failed: {error}.",
            "en": " in {donde}", "agente": "an agent", "agente_de": "the {tipo} agent",
@@ -8815,9 +8821,10 @@ TEXTOS_ORCA = {
            "codigo": "it exited with code {n}", "tiempo": "it timed out",
            "resumen": "Orca, during your quiet hours: {partes}. The details are in Orca.",
            "grupo": "Orca: to avoid writing too often, this piled up in the last hour: {partes}.",
-           "partes": {"espera": "agents waiting: {n}", "termino": "agents finished: {n}",
+           "partes": {"espera": "agents that need you: {n}", "termino": "agents finished: {n}",
                       "fallo": "automations failed: {n}"}},
     "pt": {"espera": "Orca: {agente}{donde} espera a sua resposta.",
+           "bloqueo": "Orca: {agente}{donde} esta bloqueado e precisa de voce.",
            "termino": "Orca: {agente}{donde} terminou.",
            "fallo": "Orca: a automacao \"{titulo}\" falhou: {error}.",
            "en": " em {donde}", "agente": "um agente", "agente_de": "o agente {tipo}",
@@ -8826,7 +8833,8 @@ TEXTOS_ORCA = {
            "resumen": "Orca, durante o seu horario de silencio: {partes}. Os detalhes estao no "
                       "Orca.",
            "grupo": "Orca: para nao escrever demais, isto se juntou na ultima hora: {partes}.",
-           "partes": {"espera": "agentes esperando: {n}", "termino": "agentes que terminaram: {n}",
+           "partes": {"espera": "agentes que precisam de voce: {n}",
+                      "termino": "agentes que terminaram: {n}",
                       "fallo": "automacoes com falha: {n}"}},
 }
 
@@ -8957,8 +8965,10 @@ def ya_avisado(con, req_id):
 
 
 def cmd_orca_aviso(con, a):
-    """Un agente de otro proyecto paso a esperar (lo lanza el worker): el aviso, si el dueno
-    lo encendio y tiene numero de aprobacion, y sale ya."""
+    """Un agente de otro proyecto paso a esperar o a bloqueado (lo lanza el worker): el aviso,
+    si el dueno lo encendio y tiene numero de aprobacion, y sale ya. Los dos estados comparten
+    el id (clase `espera`): el segundo de la misma ventana es un duplicado, en cualquier
+    orden; solo cambia el texto."""
     ajustes = ajustes_orca(con)
     salida = {"ok": True, "queued": False, "state": None, "reason": None}
     if not ajustes["espera"]:
@@ -8975,7 +8985,8 @@ def cmd_orca_aviso(con, a):
     if ya_avisado(con, req):
         salida["reason"] = "duplicate"
         return [salida]
-    texto = texto_de_agente(textos_orca(), "espera", a.agent,
+    texto = texto_de_agente(textos_orca(), "bloqueo" if a.state == "blocked" else "espera",
+                            a.agent,
                             donde_de(a.worktree, worktrees_de_orca() if a.worktree else []))
     salida["queued"] = orca_encola(con, req, texto, ajustes)
     con.commit()
@@ -11689,7 +11700,7 @@ def main():
     s = add("orca-aviso", help="an agent in another Orca project is waiting (the worker "
                                "runs this): one fixed-text notice to the approval number, if "
                                "that notice is on. One JSON line")
-    s.add_argument("--state", required=True, choices=["waiting"])
+    s.add_argument("--state", required=True, choices=["waiting", "blocked"])
     s.add_argument("--pane", required=True, help="the paneKey Orca reported")
     s.add_argument("--at", default="", help="receivedAt, in ms")
     s.add_argument("--worktree", default="", help="the worktreeId, to name the project")

@@ -11925,9 +11925,9 @@ class OrcaFalsa:
         return [l for l in self.llamadas if l[:2] == verbo]
 
 
-def orca_aviso(ws, con, pane, at=None, worktree=WT_ALFA, agent="claude"):
+def orca_aviso(ws, con, pane, at=None, worktree=WT_ALFA, agent="claude", state="waiting"):
     return ws.cmd_orca_aviso(con, argparse.Namespace(
-        state="waiting", pane=pane, at=str(at if at is not None else int(time.time() * 1000)),
+        state=state, pane=pane, at=str(at if at is not None else int(time.time() * 1000)),
         worktree=worktree, agent=agent))[0]
 
 
@@ -12014,6 +12014,64 @@ try:
             t = enviados[0]["texto"] if enviados else ""
             ok(f"O3: en {idioma}", frase in t and "alfa-demo" in t, t)
             con.close()
+
+    # Decision del dueno (2026-10-05): un agente `blocked` avisa igual que uno que espera, por
+    # el mismo interruptor, con su propio texto. Esperar y bloquearse en el mismo panel dentro
+    # de la ventana es UN aviso, en cualquier orden.
+    with tempfile.TemporaryDirectory() as home:
+        r = js(home, "orca-aviso", "--state=blocked", "--pane=tab-1:p1",
+               f"--at={int(time.time() * 1000)}")
+        ok("blocked: la linea de comandos lo acepta, y apagado no encola nada",
+           r and r[0].get("reason") == "off" and cuenta(home, "select count(*) from aviso") == 0,
+           f"{r}")
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, _ = prepara_orca(home, waiting="on")
+        at = int(time.time() * 1000)
+        r = orca_aviso(ws, con, "tab-1:p1", at, state="blocked")
+        t = enviados[0]["texto"] if enviados else ""
+        ok("blocked: un agente bloqueado produce un aviso, y sale",
+           r.get("queued") is True and len(enviados) == 1, f"{r} {enviados}")
+        ok("blocked: el texto dice que esta bloqueado, no que espera",
+           "bloqueado" in t and "espera" not in t and "alfa-demo" in t and "claude" in t, t)
+        r = orca_aviso(ws, con, "tab-1:p1", at + 20000, state="waiting")
+        ok("blocked -> waiting en la misma ventana no avisa otra vez",
+           r.get("reason") == "duplicate" and len(enviados) == 1, f"{r} {len(enviados)}")
+        orca_aviso(ws, con, "tab-2:p2", at, state="waiting")
+        r = orca_aviso(ws, con, "tab-2:p2", at + 20000, state="blocked")
+        ok("waiting -> blocked en la misma ventana tampoco",
+           r.get("reason") == "duplicate" and len(enviados) == 2, f"{r} {len(enviados)}")
+        orca_aviso(ws, con, "tab-1:p1", at + 6 * 60 * 1000, state="blocked")
+        ok("blocked: pasada la ventana, si", len(enviados) == 3, f"{len(enviados)}")
+        pon_orca(home, waiting="off")
+        r = orca_aviso(ws, con, "tab-3:p3", at, state="blocked")
+        ok("blocked: va por el interruptor de la espera; apagado, nada",
+           r.get("reason") == "off" and len(enviados) == 3, f"{r}")
+        con.close()
+    for idioma, frase in (("en", "is blocked"), ("pt", "esta bloqueado")):
+        with tempfile.TemporaryDirectory() as home:
+            ws, con, enviados, _ = prepara_orca(home, idioma, waiting="on")
+            orca_aviso(ws, con, "tab-1:p1", state="blocked")
+            t = enviados[0]["texto"] if enviados else ""
+            ok(f"blocked: en {idioma}", frase in t and "alfa-demo" in t, t)
+            con.close()
+    with tempfile.TemporaryDirectory() as home:
+        ws, con, enviados, _ = prepara_orca(home, waiting="on", quietStart="22:00",
+                                            quietEnd="07:00", hourlyCap="1")
+        ws.hora_local = lambda: 23 * 60
+        orca_aviso(ws, con, "tab-1:p1", state="blocked")
+        orca_aviso(ws, con, "tab-2:p2", state="waiting")
+        ok("blocked: en silencio queda retenido como los demas",
+           enviados == [] and estados_orca(con) == ["retenido", "retenido"], f"{estados_orca(con)}")
+        ws.hora_local = lambda: 8 * 60
+        ws.tick_orca(con, {})
+        ws.envia_avisos(con)
+        t = enviados[0]["texto"] if enviados else ""
+        ok("blocked: el resumen cuenta a los que esperan y a los bloqueados juntos, sin decir "
+           "que todos esperan", len(enviados) == 1 and "2" in t and "esperando" not in t, t)
+        orca_aviso(ws, con, "tab-3:p3", state="blocked")
+        ok("blocked: el tope por hora tambien lo cuenta", estados_orca(con)[-1] == "excedido",
+           f"{estados_orca(con)}")
+        con.close()
 
     # O6: las horas de silencio y el resumen al terminar.
     with tempfile.TemporaryDirectory() as home:

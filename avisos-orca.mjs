@@ -5,9 +5,9 @@
  * emision, no solo cuando cambia. Aca se guarda el ultimo estado de cada panel para saber
  * cuando CAMBIO, y con eso dos cosas:
  *
- *  - un agente que pasa a `waiting` (pide permiso o pregunta algo): si el dueno encendio
- *    ese aviso, se lanza `wa-scope orca-aviso`, que decide el resto (numero, silencio,
- *    tope) y lo manda;
+ *  - un agente que pasa a `waiting` (pide permiso o pregunta algo) o a `blocked` (decision
+ *    del dueno, 2026-10-05): si el dueno encendio ese aviso, se lanza `wa-scope orca-aviso`,
+ *    que decide el resto (numero, silencio, tope, la ventana compartida) y lo manda;
  *  - un `done` que viene de `working`: queda marcado `finished` en `orcaPanes`, y el tick
  *    avisa despues de la espera si el panel no volvio a trabajar. Un `done` sin trabajo
  *    antes (arranque, reanudar, limpiar) o marcado `sessionBoundary` nunca avisa.
@@ -33,6 +33,10 @@ export const GUARDAR_CADA_MS = 2000
 // `wa-scope orca-aviso` le pregunta a Orca los nombres y espera a `wa-send`.
 export const AVISO_PLAZO_MS = 90 * 1000
 
+// Los estados que avisan, por el mismo interruptor (`waiting` del panel): esperar y bloquearse
+// son lo mismo para el dueno, alguien tiene que mirar ese agente.
+export const ESTADOS_QUE_AVISAN = ['waiting', 'blocked']
+
 const SEPARADOR = '::'
 const INSTANCIA = /::workspace:[0-9a-f-]{36}$/
 
@@ -54,8 +58,8 @@ const texto = (v) => typeof v === 'string' && v.trim() ? v.trim() : null
 
 /** El estado nuevo de los paneles con un evento: `{ paneles, cambio, avisar }`.
  *
- *  `cambio` dice si hay que escribir; `avisar` es `waiting` cuando el panel acaba de pasar
- *  a esperar. No muta lo que recibe. */
+ *  `cambio` dice si hay que escribir; `avisar` es `waiting` o `blocked` cuando el panel acaba
+ *  de pasar a uno de los dos. No muta lo que recibe. */
 export function registrarEstado (paneles, payload, llave) {
   const actuales = paneles && typeof paneles === 'object' ? paneles : {}
   const pane = texto(payload?.paneKey)
@@ -87,13 +91,13 @@ export function registrarEstado (paneles, payload, llave) {
     claves.sort((a, b) => salida[a].at - salida[b].at)
       .slice(0, claves.length - PANELES_TOPE).forEach((k) => { delete salida[k] })
   }
-  return { paneles: salida, cambio: true, avisar: estado === 'waiting' ? 'waiting' : null }
+  return { paneles: salida, cambio: true, avisar: ESTADOS_QUE_AVISAN.includes(estado) ? estado : null }
 }
 
-/** Los argumentos de `wa-scope orca-aviso` para un panel que paso a esperar. Con `=`: un
- *  valor que empezara con un guion no se puede leer como otra opcion. */
+/** Los argumentos de `wa-scope orca-aviso` para un panel que paso a esperar o a bloqueado.
+ *  Con `=`: un valor que empezara con un guion no se puede leer como otra opcion. */
 export function argsDeAviso (payload) {
-  const args = ['orca-aviso', '--state=waiting', `--pane=${payload.paneKey}`,
+  const args = ['orca-aviso', `--state=${payload.state}`, `--pane=${payload.paneKey}`,
     `--at=${payload.receivedAt}`]
   if (texto(payload.worktreeId)) args.push(`--worktree=${payload.worktreeId}`)
   if (texto(payload.agentType)) args.push(`--agent=${payload.agentType}`)
@@ -135,7 +139,7 @@ export function crearAvisosOrca ({ leer, guardar, lanzar, llave, log = () => {},
       if (!r.cambio) return
       paneles = r.paneles
       programar()
-      if (r.avisar !== 'waiting') return
+      if (!r.avisar) return
       const ajustes = await leer(AVISOS_ORCA_KEY)
       if (!ajustes || ajustes.waiting !== 'on' || detenido) return
       await lanzar(argsDeAviso(payload))

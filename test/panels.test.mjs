@@ -7983,11 +7983,14 @@ console.log('\nconfig.html — avisos-orca: los avisos de Orca')
   ok('si el host no guarda los avisos, no dice guardado',
     doc.getElementById('said-orca').className.includes('bad'), doc.getElementById('said-orca').textContent)
 }
-for (const [idioma, nombre, leyenda, nunca] of [['es-419', 'ES', /Orca/, /nunca/i],
-  ['en', 'EN', /Orca/, /never/i], ['pt-BR', 'PT', /Orca/, /nunca/i]]) {
+for (const [idioma, nombre, leyenda, nunca, bloqueado] of [['es-419', 'ES', /Orca/, /nunca/i, /bloque/i],
+  ['en', 'EN', /Orca/, /never/i, /blocked/i], ['pt-BR', 'PT', /Orca/, /nunca/i, /bloquead/i]]) {
   const { doc, window } = await montar('config.html', {}, idioma)
   await espera()
   const t = (id) => (doc.getElementById(id)?.textContent || '').trim()
+  // Decision del dueno (2026-10-05): el mismo interruptor avisa tambien de un agente bloqueado.
+  ok(`${nombre}: el interruptor de la espera dice que tambien avisa si un agente se bloquea`,
+    bloqueado.test(t('orca-waiting-label')), t('orca-waiting-label'))
   ok(`${nombre}: la tarjeta de avisos de Orca en su idioma`,
     leyenda.test(t('orca-legend')) && nunca.test(t('orca-intro')) && t('orca-no-number').length > 10 &&
     ['orca-waiting-label', 'orca-finished-label', 'orca-automation-label'].every((id) => t(id).length > 5) &&
