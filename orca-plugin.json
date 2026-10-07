@@ -3,7 +3,7 @@
   "id": "orca-wa-inbox",
   "publisher": "ab2web",
   "name": "WA Inbox",
-  "version": "4.27.1",
+  "version": "4.27.2",
   "description": "Orca Lab's official WhatsApp plugin, built by Ab2Web. Pair your line with a QR code, turn client conversations into tracked work, and decide per conversation how far your agent may act. Optional and off by default: with your own TypeSafe key, the text of messages is sent to api.typesafe.ai to help decide what needs your attention.",
   "engines": {
     "orca": ">=1.4.160"

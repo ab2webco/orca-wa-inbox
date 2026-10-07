@@ -3670,7 +3670,7 @@ with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as car
                    wt("x1", carpeta=CARPETA_OTRO), wt("activo"), wt("con-shell")],
         terminales=[term("term_activo", ws("activo"), 10),
                     term("term_shell", ws("con-shell"), 900),
-                    term("term_raiz", RAIZ_WS, 900)])
+                    term("term_raiz", RAIZ_WS, 60)])
     p, r = tick_con(home, carpeta)
     ok("el tick sale 0", p.returncode == 0, p.stderr[-300:])
     ok("quita las corridas terminadas y los hijos de la carpeta que ninguna corrida nombra",
@@ -3714,6 +3714,38 @@ with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as car
     ok("lo que termino despues (y paso la gracia) se quita entonces",
        sorted(quitados(carpeta)[4:]) == sorted([ws("bbb"), ws("reciente")])
        and r.get("limpiados") == 2, f"{quitados(carpeta)} {r}")
+
+# cierra-pestanas T6: las pestanas que quedaron abiertas antes de guardar su `tabId`. En el
+# espacio del plugin (la raiz de su carpeta) solo corre el agente de casos: la limpieza
+# cierra toda pestana quieta hace 10 minutos que no es de nada en vuelo, sea cual sea su
+# titulo. Una reciente, una en vuelo, o la de un proyecto, no.
+with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+    corre(home, "tick")
+    con = db_de(home)
+    con.execute("insert into agente_corrida (origen, estado, workspace_selector, terminal, "
+                "turno_at, created_at, updated_at) values ('tick', 'activo', ?, "
+                "'term_raiz_vuelo', datetime('now','localtime'), datetime('now','localtime'), "
+                "datetime('now','localtime'))", (f"id:{RAIZ_WS}",))
+    con.execute("delete from settings where key='limpieza_at'")
+    con.commit()
+    con.close()
+    orca_falso(carpeta, terminales=[
+        dict(term("term_raiz_shell", RAIZ_WS, 900), title="..orca-wa-inbox"),
+        dict(term("term_raiz_claude", RAIZ_WS, 1800), title="✳ Claude Code"),
+        term("term_raiz_sin_titulo", RAIZ_WS, 3600),
+        dict(term("term_raiz_reciente", RAIZ_WS, 60), title="..orca-wa-inbox"),
+        dict(term("term_raiz_vuelo", RAIZ_WS, 900), title="✳ WhatsApp: case agent"),
+        dict(term("term_proyecto", "repo-demo::/srv/demo/alfa-demo", 3600),
+             title="..alfa-demo"),
+        dict(term("term_otro_plugin", "repo-demo::" + CARPETA_OTRO, 3600), title="..otro")])
+    p, r = tick_con(home, carpeta)
+    cierres = [x for x in llamadas(carpeta) if x.startswith("terminal close")]
+    cerradas_t6 = sorted(x.split("--terminal ")[1].split()[0] for x in cierres)
+    ok("en el espacio del plugin cierra toda pestana quieta que no es de nada en vuelo, "
+       "sea cual sea su titulo", cerradas_t6 == ["term_raiz_claude", "term_raiz_shell",
+                                                "term_raiz_sin_titulo"]
+       and all("--tab" in x for x in cierres) and p.returncode == 0,
+       f"{cierres} {p.stderr[-300:]}")
 
 with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
     # Visto en vivo: `rm` contesta `removed: true` y el espacio sigue en la lista.
@@ -5861,7 +5893,8 @@ ABAJO, ARRIBA = "\x1b[B", "\x1b[A"
 
 def orca_despacho(carpeta, worktrees=(WT_ALFA,), vivos=("term_worker1",), falla=None,
                   automatizaciones=(), corridas=(), cuentas=(), rechaza=None, listo=True,
-                  arranca_en=1, idle=True, pantalla="composer", sale_tras=None, ilegible=False):
+                  arranca_en=1, idle=True, pantalla="composer", sale_tras=None, ilegible=False,
+                  sin_tab=False, pestanas=None):
     """Una `orca` de mentira para el despacho: contesta lo que diga estado.json y anota cada
     llamada (sus argumentos enteros, en JSON) en calls.jsonl. `rechaza` es {cuenta: error}
     para `terminal create` ("" es sin --claude-account); `listo`, lo que dice `terminal
@@ -5877,7 +5910,8 @@ def orca_despacho(carpeta, worktrees=(WT_ALFA,), vivos=("term_worker1",), falla=
     composer, No deja el shell. `sale_tras` es "aceptar" o "brief": Claude se cierra
     despues de eso. Lo que se escribe con el shell a la vista se anota en `en_shell`, y una
     linea del brief solo cuenta (`briefs`) si llego a un composer. `ilegible`: `terminal
-    read` falla."""
+    read` falla. `sin_tab`: una Orca vieja que no conoce `terminal close --tab`.
+    `pestanas` es {handle: tabId}: lo que dicen `terminal show` y `terminal list`."""
     carpeta = pathlib.Path(carpeta)
     (carpeta / "estado.json").write_text(json.dumps(
         {"worktrees": list(worktrees), "vivos": list(vivos), "falla": falla or {},
@@ -5886,7 +5920,8 @@ def orca_despacho(carpeta, worktrees=(WT_ALFA,), vivos=("term_worker1",), falla=
          "arranca_en": arranca_en, "idle": idle, "briefs": 0, "n": 0,
          "pantalla_inicial": pantalla, "pantalla": "composer", "cursor": 0, "confia": False,
          "sale_tras": sale_tras, "ilegible": ilegible, "en_shell": 0, "aceptadas": 0,
-         "cierre_falla": False, "titulos": {},
+         "cierre_falla": False, "titulos": {}, "sin_tab": sin_tab,
+         "pestanas": dict(pestanas or {}),
          "pantallas": {"confianza": CONFIANZA_NUEVA, "confianza-vieja": CONFIANZA_VIEJA,
                        "confianza-orca": CONFIANZA_NUEVA,
                        "composer": COMPOSER, "shell": SHELL}}), encoding="utf-8")
@@ -5994,9 +6029,21 @@ if clave == "account list":
     sale({"ok": True, "result": {"accounts": e["cuentas"]}})
 if clave == "terminal list":
     sale({"ok": True, "result": {"terminals": [
-        dict({"handle": h}, **({"title": e["titulos"][h]} if h in e["titulos"] else {}))
+        dict({"handle": h}, **({"title": e["titulos"][h]} if h in e["titulos"] else {}),
+             **({"tabId": e["pestanas"][h]} if h in e["pestanas"] else {}))
         for h in e["vivos"]], "truncated": False}})
+if clave == "terminal show":
+    h = valor("--terminal")
+    if h not in e["vivos"]:
+        sale({"ok": False, "error": {"code": "terminal_handle_stale",
+                                     "message": "terminal_handle_stale"}}, 1)
+    sale({"ok": True, "result": {"terminal": dict(
+        {"handle": h}, **({"tabId": e["pestanas"][h]} if h in e["pestanas"] else {}))}})
 if clave == "terminal close":
+    if "--tab" in a and e["sin_tab"]:
+        # Como contesta la Orca de verdad un flag que no conoce.
+        sale({"ok": False, "error": {"code": "invalid_argument", "message":
+              "Unknown flag --tab for command: terminal close"}}, 1)
     if e["cierre_falla"]:
         # Como lo contesta la Orca de verdad (2026-10-02) a una terminal de Claude ya quieta.
         sale({"ok": False, "error": {"code": "runtime_error", "message": "Error invoking "
@@ -6284,12 +6331,14 @@ if NODE:
            len(llamadas_orca(carpeta, "terminal create")) == 2
            and len(despachos(home, cid)) == 2 and r.get("despachados") == 1, f"{r}")
 
-        # Cerrar el caso con el agente vivo lo detiene.
+        # Cerrar el caso con el agente vivo lo detiene. La `orca` de mentira deja viva la
+        # terminal cerrada (la de verdad la quita): la limpieza del caso cerrado (T5) la puede
+        # volver a cerrar, y aca solo importa cual se cierra.
         antes = len(cerradas(carpeta))
         js(home, "caso", "mover", cid, "cerrado", "--motivo", "ya no hace falta", "--actor", "dueno")
         tick_orca(home, carpeta)
         ok("un caso cerrado con el agente vivo cierra su terminal",
-           cerradas(carpeta)[antes:] == ["term_worker1"]
+           set(cerradas(carpeta)[antes:]) == {"term_worker1"}
            and despachos(home, cid)[-1]["estado"] == "cancelado",
            f"{cerradas(carpeta)} {despachos(home, cid)}")
 
@@ -6332,6 +6381,41 @@ if NODE:
            f"{llamadas_orca(carpeta, 'terminal send')} {p.stderr[-300:]}")
         ok("y nunca detiene las terminales del proyecto",
            not llamadas_orca(carpeta, "terminal stop"), f"{llamadas_orca(carpeta, 'terminal stop')}")
+
+    # cierra-pestanas T1: `terminal close` sin `--tab` cierra la sesion y deja la pestana, y
+    # Orca abre en ella un shell o Claude con otro handle (visto en vivo, 2026-10-07). Se
+    # cierra la pestana entera; con una Orca vieja que no conoce `--tab`, como antes.
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta)
+        cid = trabajo_firmado(home, "D2t")
+        tick_orca(home, carpeta)
+        con = db_de(home)
+        con.execute("update caso_despacho set created_at=datetime('now','localtime','-5 hours')")
+        con.commit()
+        con.close()
+        p, r = tick_orca(home, carpeta)
+        cierres = llamadas_orca(carpeta, "terminal close")
+        ok("cierra la pestana entera: terminal close --terminal <handle> --tab",
+           len(cierres) == 1 and bandera(cierres[0], "--terminal") == "term_worker1"
+           and "--tab" in cierres[0] and p.returncode == 0, f"{cierres} {p.stderr[-300:]}")
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, sin_tab=True)
+        cid = trabajo_firmado(home, "D2u")
+        tick_orca(home, carpeta)
+        con = db_de(home)
+        con.execute("update caso_despacho set created_at=datetime('now','localtime','-5 hours')")
+        con.commit()
+        con.close()
+        p, r = tick_orca(home, carpeta)
+        cierres = llamadas_orca(carpeta, "terminal close")
+        ok("una Orca que no conoce --tab: cierra la terminal como antes, sin --tab",
+           len(cierres) == 2 and "--tab" in cierres[0] and "--tab" not in cierres[1]
+           and bandera(cierres[1], "--terminal") == "term_worker1"
+           and not salidas_a(carpeta, "term_worker1"), f"{cierres}")
 
     # Al reiniciar Orca, las pestanas de los agentes vuelven con handles nuevos y el plugin
     # las perdia: quedaban abiertas (2026-10-02, "Despacho caso-15-5" y "WhatsApp case #17").
@@ -6378,6 +6462,135 @@ if NODE:
         ok("y no toca las del dueno ni las de un despacho en curso",
            not {"term_dueno", "term_vuelta", "term_worker1", "term_corta_viva",
                 "term_dueno_caso", "term_mayus_viva"} & set(nuevas), f"{nuevas}")
+
+    # cierra-pestanas T2: el despacho guarda la pestana (`tabId`) de su terminal, para
+    # cerrarla aunque Orca le cambie el handle y el titulo.
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, pestanas={"term_worker1": "tab-desp-1"})
+        cid = trabajo_firmado(home, "D2p")
+        p, r = tick_orca(home, carpeta)
+        fila = (despachos(home, cid) or [{}])[-1]
+        ok("el despacho guarda la pestana de su terminal",
+           fila.get("terminal") == "term_worker1" and fila.get("tab") == "tab-desp-1",
+           f"{fila.get('terminal')} {fila.get('tab')} {p.stderr[-300:]}")
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        # Una base de antes, sin la columna: la gana y no pierde filas.
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta)
+        cid = trabajo_firmado(home, "D2q")
+        tick_orca(home, carpeta)
+        con = db_de(home)
+        for tabla in ("caso_despacho", "agente_corrida"):
+            if "tab" in {r["name"] for r in con.execute(f"pragma table_info({tabla})")}:
+                con.execute(f"alter table {tabla} drop column tab")
+        con.execute("insert into agente_corrida (origen, estado, created_at, updated_at) "
+                    "values ('tick', 'terminado', '2026-01-01 00:00:00', '2026-01-01 00:00:00')")
+        con.commit()
+        con.close()
+        js(home, "caso", "ver", cid)
+        con = db_de(home)
+        columnas = {t: {r["name"] for r in con.execute(f"pragma table_info({t})")}
+                    for t in ("caso_despacho", "agente_corrida")}
+        filas = (con.execute("select count(*) from caso_despacho").fetchone()[0],
+                 con.execute("select count(*) from agente_corrida").fetchone()[0])
+        con.close()
+        ok("una base de antes gana la columna de la pestana y no pierde filas",
+           all("tab" in c for c in columnas.values()) and filas == (1, 1), f"{filas}")
+
+    # cierra-pestanas T3: Orca deja la pestana y le abre otro shell o Claude, con otro handle
+    # y otro titulo (2026-10-07: 12 pestanas del plugin abiertas). La limpieza la reconoce
+    # por la pestana guardada si su despacho o su corrida ya no estan en vuelo; la de uno en
+    # vuelo no se toca nunca. Sin pestana guardada manda el titulo, ahora con "WhatsApp
+    # case N" sin "#", y una corrida en vuelo ya no protege toda pestana de agente.
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, pestanas={"term_worker1": "tab-a"})
+        caso_a = trabajo_firmado(home, "D2r")
+        tick_orca(home, carpeta)
+        con = db_de(home)
+        con.execute("update caso_despacho set estado='reportado' where case_id=?", (int(caso_a),))
+        con.commit()
+        con.close()
+        cambia_orca(carpeta, pestanas={"term_worker1": "tab-b"})
+        caso_b = trabajo_firmado(home, "D2s")
+        tick_orca(home, carpeta)
+        con = db_de(home)
+        en_vuelo = con.execute("select * from caso_despacho where case_id=?",
+                               (int(caso_b),)).fetchone()
+        # Una corrida del agente de casos en vuelo, en otra terminal.
+        con.execute("insert into agente_corrida (origen, estado, workspace_selector, terminal, "
+                    "turno_at, created_at, updated_at) values ('tick', 'activo', 'id:x::/srv/x', "
+                    "'term_agente_vivo', datetime('now','localtime'), datetime('now','localtime'), "
+                    "datetime('now','localtime'))")
+        con.execute("delete from settings where key='limpieza_at'")
+        con.commit()
+        con.close()
+        cambia_orca(carpeta,
+                    vivos=["term_worker1", "term_a2", "term_b2", "term_glifo", "term_agente_vivo",
+                           "term_agente_suelta", "term_dueno", "term_dueno_wa"],
+                    pestanas={"term_worker1": "tab-b", "term_a2": "tab-a", "term_b2": "tab-b",
+                              "term_dueno": "tab-dueno", "term_agente_vivo": "tab-ag"},
+                    titulos={"term_a2": "..orca-wa-inbox",
+                             "term_b2": "◐ agente-casos-990",
+                             "term_glifo": "✳ WhatsApp case 990",
+                             "term_agente_vivo": "◐ WhatsApp: case agent",
+                             "term_agente_suelta": "◑ WhatsApp: case agent",
+                             "term_dueno": "◐ Guardia de bots",
+                             "term_dueno_wa": "Notas del grupo de WhatsApp"})
+        antes = len(llamadas_orca(carpeta, "terminal close"))
+        p, r = tick_orca(home, carpeta)
+        nuevos = llamadas_orca(carpeta, "terminal close")[antes:]
+        nuevas = [bandera(x, "--terminal") for x in nuevos]
+        ok("la pestana de un despacho que termino se cierra con su handle de ahora, sea cual "
+           "sea su titulo", "term_a2" in nuevas and p.returncode == 0,
+           f"{en_vuelo and dict(en_vuelo)} {nuevas} {p.stderr[-300:]}")
+        ok("el titulo \"WhatsApp case N\" sin # y con el icono de Claude es del plugin",
+           "term_glifo" in nuevas, f"{nuevas}")
+        ok("una corrida en vuelo ya no protege otra pestana de agente que no es la suya",
+           "term_agente_suelta" in nuevas, f"{nuevas}")
+        ok("nunca la pestana de un despacho en vuelo, aunque otro panel tenga otro handle",
+           not {"term_worker1", "term_b2"} & set(nuevas), f"{nuevas}")
+        ok("ni la terminal de la corrida en vuelo, ni las del dueno",
+           not {"term_agente_vivo", "term_dueno", "term_dueno_wa"} & set(nuevas), f"{nuevas}")
+        ok("y cada pestana se cierra entera", nuevos and all("--tab" in x for x in nuevos),
+           f"{nuevos}")
+
+    # cierra-pestanas T5: un caso que se cierra (o queda respondido) cierra las pestanas de
+    # sus despachos y corridas que ya no estan en vuelo, por su handle si no hay pestana
+    # guardada. Sin esperar a la limpieza de cada 5 minutos: el tick siguiente. Un despacho
+    # terminado de un caso abierto conserva la suya.
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta)
+        caso_a = trabajo_firmado(home, "D2v")
+        tick_orca(home, carpeta)
+        con = db_de(home)
+        con.execute("update caso_despacho set estado='reportado'")
+        con.commit()
+        con.close()
+        caso_b = trabajo_firmado(home, "D2w")
+        tick_orca(home, carpeta)
+        con = db_de(home)
+        con.execute("update caso_despacho set estado='reportado', terminal='term_b' "
+                    "where case_id=?", (int(caso_b),))
+        con.commit()
+        con.close()
+        js(home, "caso", "mover", caso_a, "cerrado", "--motivo", "lo resolvi a mano",
+           "--actor", "dueno")
+        cambia_orca(carpeta, vivos=["term_worker1", "term_b", "term_dueno"],
+                    titulos={"term_worker1": "..alfa-demo", "term_b": "..alfa-demo",
+                             "term_dueno": "..alfa-demo"})
+        antes = len(llamadas_orca(carpeta, "terminal close"))
+        p, r = tick_orca(home, carpeta)
+        nuevos = llamadas_orca(carpeta, "terminal close")[antes:]
+        ok("el caso cerrado cierra en el tick siguiente la pestana de su despacho terminado, "
+           "por el handle", [bandera(x, "--terminal") for x in nuevos] == ["term_worker1"]
+           and "--tab" in nuevos[0] and p.returncode == 0, f"{nuevos} {p.stderr[-300:]}")
 
     # Un lanzamiento que quedo a medias (el tick murio) no se relanza: va al dueno.
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
@@ -6537,7 +6750,7 @@ if NODE:
             ok("y el tick no la vuelve a mandar", sidecar.entregados.count(req) == 1
                and r.get("enviados") == 0, f"{sidecar.entregados} {r}")
             ok("y el trabajador se suelta: su terminal se cierra y la fila queda reportada",
-               cerradas(carpeta) == ["term_worker1"]
+               set(cerradas(carpeta)) == {"term_worker1"}
                and despachos(home, cid)[-1]["estado"] == "reportado", f"{despachos(home, cid)}")
             ok("y el brief del despacho cerrado se borra: no queda copia del cliente",
                ruta_brief(carpeta) and not pathlib.Path(ruta_brief(carpeta)).exists(),
@@ -6668,7 +6881,7 @@ if NODE:
                js(home, "caso", "ver", cid)[0]["etapa"] == "respondido"
                and f"caso-{cid}-{hecho['propuesta_version'][:12]}" in sidecar.entregados
                and despachos(home, cid)[-1]["estado"] == "reportado"
-               and cerradas(carpeta) == ["term_worker1"],
+               and set(cerradas(carpeta)) == {"term_worker1"},
                f"{despachos(home, cid)}")
         finally:
             sidecar.cerrar()
@@ -7451,6 +7664,28 @@ if NODE:
            f"{v} {creadas(carpeta)} {p.stderr[-300:]}")
         ok("y queda anotado como del dueno", corridas_agente(home)[-1]["origen"] == "dueno",
            f"{corridas_agente(home)}")
+
+    # cierra-pestanas T2: la corrida del agente de casos guarda la pestana de su terminal.
+    # T4: si su terminal ya no esta viva (Orca le dio otro handle a la pestana), la corrida
+    # termina y su pestana se cierra igual, por la pestana.
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        orca_casos(carpeta, pestanas={"term_worker1": "tab-agente-1"})
+        caso_para_agente(home, "AC1p")
+        p, r = tick_orca(home, carpeta)
+        fila = (corridas_agente(home) or [{}])[-1]
+        ok("la corrida del agente guarda la pestana de su terminal",
+           fila.get("terminal") == "term_worker1" and fila.get("tab") == "tab-agente-1",
+           f"{fila.get('terminal')} {fila.get('tab')} {p.stderr[-300:]}")
+        cambia_orca(carpeta, vivos=["term_resucitada", "term_dueno"],
+                    pestanas={"term_resucitada": "tab-agente-1", "term_dueno": "tab-dueno"},
+                    titulos={"term_resucitada": "..orca-wa-inbox"})
+        antes = len(llamadas_orca(carpeta, "terminal close"))
+        p, r = tick_orca(home, carpeta)
+        nuevos = llamadas_orca(carpeta, "terminal close")[antes:]
+        ok("la corrida cuya terminal ya no vive termina y cierra su pestana por la pestana",
+           corridas_agente(home)[0]["estado"] == "terminado"
+           and [bandera(x, "--terminal") for x in nuevos] == ["term_resucitada"]
+           and "--tab" in nuevos[0], f"{nuevos} {corridas_agente(home)[0]['estado']}")
 
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
         # Ninguna cuenta sirve: la activa esta tomada y la otra sin sesion.

@@ -601,6 +601,7 @@ create table if not exists caso_despacho (
   task_id   text,
   dispatch_id text,
   terminal  text,                -- el handle de la terminal del agente
+  tab       text,                -- su pestana (`tabId`): sobrevive a un handle nuevo
   cuenta_claude text,            -- el id de la cuenta de Claude elegida; null = la del espacio
   cuenta_etiqueta text,          -- su correo, como lo ve el dueno
   respaldo  text,                -- por que no se uso la cuenta del bot (RESPALDOS_CUENTA)
@@ -633,6 +634,7 @@ create table if not exists agente_corrida (
   estado    text not null default 'lanzando',
   workspace_selector text,         -- el espacio del plugin: id:<repoId>::<path>
   terminal  text,
+  tab       text,                  -- su pestana (`tabId`): sobrevive a un handle nuevo
   cuenta_claude text,              -- la cuenta elegida; null = la del espacio o la activa
   cuenta_etiqueta text,            -- su correo, como lo ve el dueno
   respaldo  text,                  -- por que no se uso la cuenta del bot (RESPALDOS_CUENTA)
@@ -1767,8 +1769,14 @@ def migrate(con):
         if columna not in despacho_cols:
             con.execute(f"alter table caso_despacho add column {columna} text")
     # El caso de cada corrida del agente de casos (caso-en-archivo, T1).
-    if "case_id" not in {r["name"] for r in con.execute("pragma table_info(agente_corrida)")}:
+    corrida_cols = {r["name"] for r in con.execute("pragma table_info(agente_corrida)")}
+    if "case_id" not in corrida_cols:
         con.execute("alter table agente_corrida add column case_id integer")
+    # La pestana de la terminal del agente (cierra-pestanas, T2): null en lo de antes.
+    if "tab" not in corrida_cols:
+        con.execute("alter table agente_corrida add column tab text")
+    if "tab" not in despacho_cols:
+        con.execute("alter table caso_despacho add column tab text")
     # T3: el veredicto entero de Jev, cacheado junto a su clase; y el rol con que se juzgo
     # (roles-por-numero, M10).
     juicio_cols = {r["name"] for r in con.execute("pragma table_info(juicio)")}
@@ -3381,6 +3389,11 @@ def caso_mover(con, caso, hacia, actor, detalle="", **campos):
     con.execute(f"update caso set {', '.join(f'{k}=?' for k in sets)} where case_id=?",
                 (*sets.values(), caso["case_id"]))
     caso_evento(con, caso["case_id"], caso["etapa"], hacia, actor, detalle, momento)
+    if hacia in ETAPAS_TERMINADAS and caso["etapa"] != hacia:
+        # Un caso cerrado o respondido no espera los 5 minutos de la limpieza para cerrar las
+        # pestanas de sus agentes que ya terminaron: la pide para el tick siguiente, sin
+        # llamar a Orca aca (cierra-pestanas, T5).
+        con.execute("delete from settings where key='limpieza_at'")
     if hacia == "bloqueado" and caso["etapa"] != "bloqueado":
         # Un caso bloqueado se le dice al dueno por WhatsApp, si eligio un numero (T14).
         aviso_de_bloqueo(con, caso, detalle)
@@ -9190,6 +9203,9 @@ LIMPIEZA_PRESUPUESTO_S = 60
 LIMPIEZA_INTENTOS = 3
 ESTADOS_EN_CURSO = ("pending", "dispatching", "dispatched")
 MARCA_ESPACIO = "::workspace:"
+# Lo quieta que debe estar una pestana del espacio del plugin para cerrarla sin saber de que
+# corrida es (cierra-pestanas, T6): una que recien abre escribe, y no se toca.
+PESTANA_QUIETA_S = 600
 
 
 def automatizacion_del_plugin(automatizaciones, cual):
@@ -9334,20 +9350,62 @@ def tick_limpia(con, resumen):
 # veces deja solo el nombre del brief ("caso-20-10"): ese cuenta solo si es todo el titulo,
 # para no tomar una terminal del dueno que nombra un caso. Y lo escribe a su manera:
 # "Caso-33-15" o "Caso 39-18" (visto en vivo, 2026-10-06), asi que da igual la mayuscula y
-# si va guion o espacio despues de "caso".
+# si va guion o espacio despues de "caso". Al agente de casos lo titula "WhatsApp case 54",
+# sin "#" (2026-10-07). Vale solo para las pestanas sin `tabId` guardado: las de antes.
 TITULO_DE_AGENTE = re.compile(
     r"(?:Despacho caso-(?P<caso>\d+)-(?P<despacho>\d+)|Despacho agente-casos-(?P<corrida>\d+)"
     r"|^\W*caso[-\s](?P<caso_solo>\d+)-(?P<despacho_solo>\d+)"
     r"|^\W*agente-casos-(?P<corrida_sola>\d+)"
-    r"|WhatsApp case #(?P<del_caso>\d+)|(?P<agente>WhatsApp: case agent))\s*$", re.IGNORECASE)
+    r"|WhatsApp case #?(?P<del_caso>\d+)|(?P<agente>WhatsApp: case agent))\s*$", re.IGNORECASE)
 
 
-def cierra_huerfanas(con, cli, resumen):
-    """Cierra las terminales de agentes del plugin que no son de nada en curso. Al reiniciar
-    Orca las pestanas vuelven con handles nuevos y el plugin, que las seguia por el handle,
-    las perdia: quedaban abiertas, y Orca hasta volvia a abrir Claude en ellas. Se reconocen
-    por el titulo; una de un despacho o de una corrida en curso no se toca aunque su handle
-    haya cambiado, y ninguna otra terminal del dueno tampoco. Nunca detiene un espacio."""
+def pestanas_del_plugin(con):
+    """(en vuelo, terminadas, de casos cerrados): los handles y las pestanas de los despachos
+    y las corridas del agente en vuelo; las pestanas de los que ya no lo estan; y los handles
+    de los que ya no lo estan, sin pestana guardada, de un caso cerrado o respondido."""
+    en_vuelo, terminadas, cerrados = {"handles": set(), "tabs": set()}, set(), set()
+    for tabla, estados in (("caso_despacho", DESPACHO_EN_VUELO),
+                           ("agente_corrida", AGENTE_EN_VUELO)):
+        for r in con.execute(
+                f"select x.terminal, x.tab, x.estado in ({','.join('?' * len(estados))}) "
+                f"as vuela, c.etapa in ({','.join('?' * len(ETAPAS_TERMINADAS))}) as termino "
+                f"from {tabla} x left join caso c on c.case_id = x.case_id",
+                (*estados, *ETAPAS_TERMINADAS)):
+            if r["vuela"]:
+                en_vuelo["handles"].add(r["terminal"])
+                en_vuelo["tabs"].add(r["tab"])
+            elif r["tab"]:
+                terminadas.add(r["tab"])
+            elif r["termino"] and r["terminal"]:
+                cerrados.add(r["terminal"])
+    en_vuelo["handles"].discard(None)
+    en_vuelo["tabs"].discard(None)
+    return en_vuelo, terminadas - en_vuelo["tabs"], cerrados - en_vuelo["handles"]
+
+
+def es_raiz_del_plugin(terminal, carpeta):
+    """Si la terminal esta en la raiz de la carpeta del plugin (su `worktreeId` es
+    `<repo>::<carpeta>`, sin `::workspace:`), donde solo corre el agente de casos."""
+    ident = terminal.get("worktreeId")
+    if not carpeta or not isinstance(ident, str) or MARCA_ESPACIO in ident or "::" not in ident:
+        return False
+    return ruta_comparable(ident.split("::", 1)[1]) == carpeta
+
+
+def cierra_huerfanas(con, cli, resumen, carpeta=None, en_curso=(), ahora=None):
+    """Cierra las pestanas de agentes del plugin que no son de nada en curso. Orca no cierra
+    la pestana al cerrar la sesion, y al reiniciarse les da handles nuevos: el plugin, que
+    las seguia por el handle, las perdia, y Orca les abria otro shell o volvia a abrir
+    Claude. Se reconocen por la pestana (`tabId`) que se guardo al abrirlas, sea cual sea su
+    titulo ahora; las de antes, sin pestana guardada, por el titulo, y las de un caso cerrado
+    o respondido tambien por el handle guardado. Una pestana o un handle
+    de un despacho o de una corrida en vuelo no se toca, y ninguna otra terminal del dueno
+    tampoco. Nunca detiene un espacio.
+
+    En la raiz de la `carpeta` del plugin solo corre el agente de casos: ahi se cierra
+    ademas toda pestana quieta hace PESTANA_QUIETA_S, sea cual sea su titulo (las que
+    quedaron abiertas antes de guardar la pestana), salvo con una corrida abriendose o una
+    corrida de Orca en vuelo en ese espacio (`en_curso`). En un proyecto, nunca."""
     terminales = lista_de_orca(cli, ["terminal", "list", "--limit", "1000"], "terminals")
     if terminales is None:
         return
@@ -9355,19 +9413,38 @@ def cierra_huerfanas(con, cli, resumen):
         f"select id, case_id, terminal from caso_despacho where estado in "
         f"({','.join('?' * len(DESPACHO_EN_VUELO))})", DESPACHO_EN_VUELO)]
     corridas = [dict(r) for r in con.execute(
-        f"select id, terminal from agente_corrida where estado in "
+        f"select id, case_id, terminal from agente_corrida where estado in "
         f"({','.join('?' * len(AGENTE_EN_VUELO))})", AGENTE_EN_VUELO)]
-    en_curso = {x["terminal"] for x in despachos + corridas if x["terminal"]}
+    en_vuelo, terminadas, de_casos_cerrados = pestanas_del_plugin(con)
+    # Una corrida que se esta abriendo aun no anoto su terminal: sin saber cual es, ninguna
+    # pestana de agente con titulo se toca.
+    abriendo = any(not x["terminal"] for x in corridas)
     for t in terminales:
-        handle, m = t.get("handle"), TITULO_DE_AGENTE.search(str(t.get("title") or ""))
-        if not m or not isinstance(handle, str) or not handle or handle in en_curso:
+        handle, tab = t.get("handle"), t.get("tabId")
+        if not isinstance(handle, str) or not handle or handle in en_vuelo["handles"] \
+                or tab in en_vuelo["tabs"]:
+            continue
+        if (tab and tab in terminadas) or handle in de_casos_cerrados:
+            cierra_terminal(cli, handle)
+            resumen["limpiados"] += 1
+            continue
+        if es_raiz_del_plugin(t, carpeta) and not abriendo \
+                and t.get("worktreeId") not in en_curso:
+            quieta = marca_s(t.get("lastOutputAt"))
+            if quieta and (ahora or time.time()) - quieta >= PESTANA_QUIETA_S:
+                cierra_terminal(cli, handle)
+                resumen["limpiados"] += 1
+                continue
+        m = TITULO_DE_AGENTE.search(str(t.get("title") or ""))
+        if not m:
             continue
         despacho = m["despacho"] or m["despacho_solo"]
         if despacho and any(d["id"] == int(despacho) for d in despachos):
             continue
-        if m["del_caso"] and any(d["case_id"] == int(m["del_caso"]) for d in despachos):
+        if m["del_caso"] and any(x["case_id"] == int(m["del_caso"])
+                                 for x in despachos + corridas):
             continue
-        if (m["corrida"] or m["corrida_sola"] or m["agente"]) and corridas:
+        if (m["corrida"] or m["corrida_sola"] or m["agente"] or m["del_caso"]) and abriendo:
             continue
         cierra_terminal(cli, handle)
         resumen["limpiados"] += 1
@@ -9389,22 +9466,22 @@ def limpia_espacios(con, resumen):
     if not cli:
         resumen["limpieza_error"] += 1
         return
-    cierra_huerfanas(con, cli, resumen)
     automatizaciones = lista_de_orca(cli, ["automations", "list"], "automations")
-    if automatizaciones is None:
+    carpeta = carpeta_del_plugin(automatizaciones) if automatizaciones is not None else None
+    en_curso, fallo = set(), automatizaciones is None
+    triage = (id_triage(automatizaciones or []) or {}).get("id")
+    if carpeta and triage:
+        corridas = lista_de_orca(cli, ["automations", "runs", "--id", triage], "runs")
+        fallo = corridas is None
+        en_curso = {c.get("workspaceId") for c in corridas or []
+                    if c.get("status") in ESTADOS_EN_CURSO}
+    # Sin saber que corre en el espacio del plugin, solo la regla estricta.
+    cierra_huerfanas(con, cli, resumen, None if fallo else carpeta, en_curso, ahora)
+    if fallo:
         resumen["limpieza_error"] += 1
         return
-    carpeta = carpeta_del_plugin(automatizaciones)
     if not carpeta:
         return
-    en_curso = set()
-    triage = (id_triage(automatizaciones) or {}).get("id")
-    if triage:
-        corridas = lista_de_orca(cli, ["automations", "runs", "--id", triage], "runs")
-        if corridas is None:
-            resumen["limpieza_error"] += 1
-            return
-        en_curso = {c.get("workspaceId") for c in corridas if c.get("status") in ESTADOS_EN_CURSO}
     espacios = lista_de_orca(cli, ["worktree", "list", "--limit", "1000"], "worktrees")
     terminales = lista_de_orca(cli, ["terminal", "list", "--limit", "1000"], "terminals") \
         if espacios is not None else None
@@ -11708,11 +11785,22 @@ def espacio_del_proyecto(cli, proyecto):
     return f"path:{w['path'].strip()}", None
 
 
-def terminal_creada(resultado):
-    """El handle de la terminal en lo que devolvio `terminal create`, o None."""
+def terminal_creada(resultado, campo="handle"):
+    """El handle de la terminal en lo que devolvio `terminal create` (o `terminal show`), u
+    otro `campo` suyo, o None."""
     terminal = (resultado or {}).get("terminal")
-    handle = terminal.get("handle") if isinstance(terminal, dict) else None
-    return handle.strip() if isinstance(handle, str) and handle.strip() else None
+    valor = terminal.get(campo) if isinstance(terminal, dict) else None
+    return valor.strip() if isinstance(valor, str) and valor.strip() else None
+
+
+def pestana_de(cli, handle, creada=None):
+    """El `tabId` de la pestana de la terminal: el que trae `terminal create` si lo trae, si
+    no el de `terminal show`. None si Orca no lo dice: entonces vale solo el titulo."""
+    tab = terminal_creada(creada, "tabId")
+    if tab or not handle:
+        return tab
+    res, error = orca_llama(cli, ["terminal", "show", "--terminal", handle], DESPACHO_LISTA_S)
+    return None if error else terminal_creada(res, "tabId")
 
 
 # Por que el lanzamiento no uso la cuenta de Claude que el dueno eligio para el bot
@@ -11789,11 +11877,12 @@ def abre_agente(cli, selector, titulo, nombre, arranque_ms=DESPACHO_ARRANQUE_MS,
     tiene cuota o falla al abrir, la regla automatica y `respaldo` dice por que. La regla
     automatica: sin elegir cuenta (manda el pin del espacio o la seleccion global) y, si esa
     esta tomada o sin sesion, UNA vez con la de `cuenta_de_reintento`.
-    Devuelve {terminal, cuenta (id elegido o None), etiqueta, motivo, respaldo}."""
+    Devuelve {terminal, tab (su pestana, o None), cuenta (id elegido o None), etiqueta,
+    motivo, respaldo}."""
     orden = ["terminal", "create", "--worktree", selector, "--agent", DESPACHO_AGENTE,
              "--title", titulo, "--timeout-ms", str(arranque_ms)]
     plazo = arranque_ms // 1000 + 10
-    salida = {"terminal": None, "cuenta": None, "etiqueta": None, "motivo": None,
+    salida = {"terminal": None, "tab": None, "cuenta": None, "etiqueta": None, "motivo": None,
               "respaldo": None}
     cuentas, excluir = None, set()
     if preferida:
@@ -11811,8 +11900,8 @@ def abre_agente(cli, selector, titulo, nombre, arranque_ms=DESPACHO_ARRANQUE_MS,
             res, error = orca_llama(cli, orden + ["--claude-account", c["id"].strip()], plazo)
             terminal = None if error else terminal_creada(res)
             if terminal:
-                return dict(salida, terminal=terminal, cuenta=c["id"].strip(),
-                            etiqueta=etiqueta_de(c))
+                return dict(salida, terminal=terminal, tab=pestana_de(cli, terminal, res),
+                            cuenta=c["id"].strip(), etiqueta=etiqueta_de(c))
             salida["respaldo"] = "elegida-fallo"
         if c:
             excluir.add(c["id"].strip())
@@ -11828,7 +11917,7 @@ def abre_agente(cli, selector, titulo, nombre, arranque_ms=DESPACHO_ARRANQUE_MS,
     if not terminal:
         return dict(salida, motivo=(f"no pude despachar a {nombre}: "
                                     f"{error or 'Orca no devolvió la terminal'}"))
-    return dict(salida, terminal=terminal)
+    return dict(salida, terminal=terminal, tab=pestana_de(cli, terminal, res))
 
 
 def turno_del_agente(cli, terminal):
@@ -12668,6 +12757,8 @@ def suelta_trabajador(cli, fila):
 
 # Lo que se espera a que Claude salga antes de cerrar el shell que queda.
 SALIDA_CLAUDE_S = 3
+# Lo que contesta una Orca vieja que no conoce `terminal close --tab`.
+SIN_CIERRE_DE_PESTANA = re.compile(r"Unknown flag --tab\b", re.IGNORECASE)
 
 
 def cierra_terminal(cli, handle, selector=None, detener_espacio=False):
@@ -12676,8 +12767,16 @@ def cierra_terminal(cli, handle, selector=None, detener_espacio=False):
     que salga (`/exit`) y al shell que queda tambien (`exit`; si Claude aun no salio, Claude
     lo toma como la misma orden). Si con eso sigue viva y `detener_espacio`, se detienen las
     terminales del espacio: solo en el del plugin, donde corre un unico agente de casos. En
-    un proyecto nunca: ahi estan las terminales del dueno."""
-    _, error = orca_llama(cli, ["terminal", "close", "--terminal", handle], DESPACHO_LISTA_S)
+    un proyecto nunca: ahi estan las terminales del dueno.
+
+    Cierra la pestana entera (`--tab`): sin eso Orca cierra la sesion y deja la pestana, y le
+    abre otro shell o vuelve a abrir Claude con otro handle (visto en vivo, 2026-10-07). Una
+    Orca vieja que no conoce `--tab` cierra como antes."""
+    _, error = orca_llama(cli, ["terminal", "close", "--terminal", handle, "--tab"],
+                          DESPACHO_LISTA_S)
+    if error and SIN_CIERRE_DE_PESTANA.search(error):
+        _, error = orca_llama(cli, ["terminal", "close", "--terminal", handle],
+                              DESPACHO_LISTA_S)
     if not error:
         return
     orca_llama(cli, ["terminal", "send", "--terminal", handle, "--text", "/exit", "--enter"],
@@ -12690,6 +12789,21 @@ def cierra_terminal(cli, handle, selector=None, detener_espacio=False):
     vivas = terminales_vivas(cli, selector)
     if vivas is not None and handle in vivas:
         orca_llama(cli, ["terminal", "stop", "--worktree", selector], DESPACHO_LISTA_S)
+
+
+def cierra_pestana(cli, tab, selector):
+    """Cierra la pestana `tab` del espacio con el handle que tenga ahora: la terminal que el
+    plugin abrio ya no vive, pero Orca pudo dejar la pestana con otro shell o con Claude."""
+    if not cli or not tab or not selector:
+        return
+    res, error = orca_llama(cli, ["terminal", "list", "--worktree", selector], DESPACHO_LISTA_S)
+    if error or not isinstance(res.get("terminals"), list):
+        return
+    for t in res["terminals"]:
+        handle = t.get("handle") if isinstance(t, dict) else None
+        if t.get("tabId") == tab and isinstance(handle, str) and handle:
+            cierra_terminal(cli, handle)
+            return
 
 
 def terminales_vivas(cli, selector):
@@ -12918,7 +13032,8 @@ def despacha(con, caso, instrucciones, evento_id, resumen, reintento_de=None, vi
         terminal, motivo = abierto["terminal"], abierto["motivo"]
         if terminal or abierto["cuenta"] or abierto["respaldo"]:
             # Con la base: una vuelta que muere aca deja la terminal a la vista del vigia.
-            despacho_anota(con, fila, terminal=terminal, cuenta_claude=abierto["cuenta"],
+            despacho_anota(con, fila, terminal=terminal, tab=abierto["tab"],
+                           cuenta_claude=abierto["cuenta"],
                            cuenta_etiqueta=abierto["etiqueta"], respaldo=abierto["respaldo"])
     reenvios, turno = 0, False
     if not motivo:
@@ -13155,6 +13270,7 @@ def tick_vigila_agente(con, cli, resumen):
         if vivas is None:
             continue
         if f["terminal"] not in vivas:
+            cierra_pestana(cli, f.get("tab"), f["workspace_selector"])
             agente_cierra(con, None, f, "terminado")
             continue
         if not f["turno_at"]:
@@ -13252,7 +13368,8 @@ def lanza_agente(con, origen, hasta):
             preferida=cuenta_del_bot(con, linea_de_caso_id(con, cid)))
         terminal, motivo = abierto["terminal"], abierto["motivo"]
         if terminal or abierto["cuenta"] or abierto["respaldo"]:
-            agente_anota(con, fila, terminal=terminal, cuenta_claude=abierto["cuenta"],
+            agente_anota(con, fila, terminal=terminal, tab=abierto["tab"],
+                         cuenta_claude=abierto["cuenta"],
                          cuenta_etiqueta=abierto["etiqueta"], respaldo=abierto["respaldo"])
             f["terminal"] = terminal
         if motivo:
