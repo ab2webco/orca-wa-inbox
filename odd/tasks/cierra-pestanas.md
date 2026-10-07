@@ -57,12 +57,12 @@ or the title rule).
 
 ## Checklist
 
-- [ ] T1 close with `--tab`, fallback without (RED → GREEN)
-- [ ] T2 store `tabId` for runs and dispatches (RED → GREEN)
-- [ ] T3 sweep by `tabId`, wider title rule, precise in-flight skip (RED → GREEN)
-- [ ] T4 closed-elsewhere run still closes its tab (RED → GREEN)
-- [ ] T5 closed or answered case closes its finished runs' and dispatches' tabs (RED → GREEN)
-- [ ] T6 idle tabs in the plugin's own workspace are adopted and closed (RED → GREEN)
+- [x] T1 close with `--tab`, fallback without (RED → GREEN)
+- [x] T2 store `tabId` for runs and dispatches (RED → GREEN)
+- [x] T3 sweep by `tabId`, wider title rule, precise in-flight skip (RED → GREEN)
+- [x] T4 closed-elsewhere run still closes its tab (RED → GREEN)
+- [x] T5 closed or answered case closes its finished runs' and dispatches' tabs (RED → GREEN)
+- [x] T6 idle tabs in the plugin's own workspace are adopted and closed (RED → GREEN)
 - [ ] Release
 
 ## Acceptance criteria
