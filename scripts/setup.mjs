@@ -55,11 +55,13 @@ mkdirSync(DEPS, { recursive: true })
 // script, y la lista de dependencias tiene una sola fuente. Respetar un package.json
 // que quedo ahi de una version anterior es como se llega a un arnes que instala algo
 // distinto de lo que el repo dice que usa.
-// Se copia la plantilla ENTERA, `overrides` incluido. Ese override no es cosmetico:
-// baileys 6.7.24 declara `libsignal` como URL de git, y sin el el lock queda con un
-// commit fijado pero SIN hash de integridad — los bytes nunca se verifican. Con el,
-// viene del registro con sha512, y se comprobo que el codigo es identico byte a byte.
-// Importa despues del paquete malicioso que imito a baileys en diciembre de 2025.
+// Se copia la plantilla ENTERA, `overrides` incluido. Ese override nacio con baileys
+// 6.7.24, que declaraba `libsignal` como URL de git: sin el, el lock quedaba con un
+// commit fijado pero SIN hash de integridad. Baileys 7 ya lo pide del registro
+// (`libsignal: ^6.0.0`), asi que hoy el override solo FIJA la version exacta, igual que
+// baileys va fijada exacta: un `^` deja entrar un 6.x nuevo en el proximo clon limpio
+// sin que nadie lo mire. Importa despues del paquete malicioso que imito a baileys en
+// diciembre de 2025.
 copyFileSync(PLANTILLA, join(DEPS, 'package.json'))
 const deps = JSON.parse(readFileSync(PLANTILLA, 'utf8')).dependencies ?? {}
 console.log(`Dependencias del arnes -> ${DEPS}`)

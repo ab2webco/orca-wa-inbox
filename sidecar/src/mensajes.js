@@ -47,8 +47,8 @@ const EXTENSION = Object.freeze({
  *
  *  §11-B2: la lista de menciones del transporte viejo traia OBJETOS wid
  *  `{server, user, _serialized}` y no cadenas, y comparar con `===` contra el LID "no
- *  encuentra nunca nada". El protobuf de Baileys 6.7.24 declara `mentionedJid: string[]`
- *  — verificado en WAProto/index.d.ts:10752 — pero la leccion no es sobre una libreria:
+ *  encuentra nunca nada". El protobuf de Baileys declara `mentionedJid: string[]`
+ *  — verificado en WAProto/index.d.ts, en 6.7.24 y en 7 — pero la leccion no es sobre una libreria:
  *  es que el fallo NO avisa. Aceptar las dos formas cuesta tres lineas; descubrir que
  *  hace meses que nadie lo nombra cuesta un trimestre. */
 export function jidDe (valor) {
@@ -88,19 +88,23 @@ export function parLidTelefono (lid, pn) {
   return /^\d+@lid$/.test(l) && /^\d+@s\.whatsapp\.net$/.test(p) ? { lid: l, pn: p } : null
 }
 
-/** El par LID-telefono de quien MANDA un mensaje, o `null`. Baileys lo trae en la llave
- *  (`senderPn`/`senderLid` del stanza, `participantPn`/`participantLid` en un grupo) y
- *  es del remitente: en un directo recibido el remitente es la conversacion, pero en
- *  uno PROPIO es el dueno, y anotarlo le pondria el telefono del dueno al cliente. */
+/** El par LID-telefono de quien MANDA un mensaje, o `null`. Baileys 7 lo trae en la
+ *  llave como la forma ALTERNA del remitente: `remoteJidAlt` en un directo y
+ *  `participantAlt` en un grupo (lib/Utils/decode-wa-message.js, `decodeMessageNode`).
+ *  El sentido depende del `addressing_mode` del stanza: por LID el alterno es el
+ *  telefono, por telefono es el LID, asi que se prueban los dos ordenes. Los nombres de
+ *  6.7.24 (`senderPn`, `participantPn`...) ya no llegan.
+ *
+ *  Es del remitente: en un directo recibido el remitente es la conversacion, pero en uno
+ *  PROPIO es el dueno, y anotarlo le pondria el telefono del dueno al cliente. */
 export function parDeMensaje (wa) {
   const key = wa?.key
   if (!key || key.fromMe) return null
   const chat = jidDeChat(key.remoteJid)
-  if (esGrupo(chat)) {
-    return parLidTelefono(key.participant, key.participantPn) ||
-      parLidTelefono(key.participantLid, key.participant)
-  }
-  return parLidTelefono(chat, key.senderPn) || parLidTelefono(key.senderLid, chat)
+  const [quien, alterno] = esGrupo(chat)
+    ? [key.participant, key.participantAlt]
+    : [chat, key.remoteJidAlt]
+  return parLidTelefono(quien, alterno) || parLidTelefono(alterno, quien)
 }
 
 /** La identidad de alguien, CON su tipo. Dos numeros iguales en universos distintos no
@@ -309,7 +313,7 @@ export function filaDeMensaje (wa, { cuenta, identidades }) {
   const media = mediaDe(wa.message)
   // En un directo el autor es la conversacion misma; en un grupo, el participante.
   const senderJid = grupo
-    ? (wa.key.participant || wa.key.participantPn || wa.key.senderPn || null)
+    ? (wa.key.participant || wa.key.participantAlt || null)
     : (fromMe ? null : chatJid)
 
   return {
@@ -346,7 +350,7 @@ export function filaDeMensaje (wa, { cuenta, identidades }) {
  * como un log que solo crece. Un mensaje borrado seguia en la bandeja para siempre, y
  * uno editado se atendia por lo que decia antes.
  *
- * Las dos formas salen de Baileys 6.7.24 (lib/Utils/process-message.js:195-251):
+ * Las dos formas salen de Baileys (lib/Utils/process-message.js, iguales en 6.7.24 y 7):
  * REVOKE manda `message: null` con `messageStubType` 68, y MESSAGE_EDIT manda el cuerpo
  * nuevo envuelto en `editedMessage`. Todo lo demas que viaja por este evento —recibos
  * de lectura, estados de envio— NO puede tocar el cuerpo guardado.
@@ -391,10 +395,11 @@ function idDePersona (valor) {
  * Los miembros de un grupo, de su `GroupMetadata`, o `null` si eso no trae la lista (un
  * `groups.update` parcial, o algo que no es un grupo).
  *
- * La forma sale de Baileys 6.7.24, `extractGroupMetadata` (lib/Socket/groups.js:312-319):
- * cada participante es `{ id, jid, lid, admin }`. `id` es el jid con que el grupo lo
- * direcciona (LID o telefono, segun `addressingMode`), `jid` su telefono y `lid` su LID
- * cuando WhatsApp los manda, y `admin` es 'admin', 'superadmin' o null. Los dos niveles de
+ * La forma sale de Baileys 7, `extractGroupMetadata` (lib/Socket/groups.js): cada
+ * participante es `{ id, phoneNumber, lid, admin }`. `id` es el jid con que el grupo lo
+ * direcciona (LID o telefono, segun `addressingMode`); si es un LID trae su telefono en
+ * `phoneNumber`, y si es un telefono trae su `lid`, cuando WhatsApp los manda. `admin` es
+ * 'admin', 'superadmin' o null. (En 6.7.24 el telefono venia en `jid`.) Los dos niveles de
  * WhatsApp son admin aca: el rol del plugin lo pone el dueno, y esto es solo lo que se ve.
  *
  * La linea misma no es un miembro: no es nadie a quien darle un rol. Devuelve
@@ -407,11 +412,10 @@ export function miembrosDeGrupo (meta, esPropio = () => false) {
   for (const p of meta.participants) {
     const jid = idDePersona(p?.id)
     if (!jid) continue
-    if ([p.id, p.jid, p.lid].some((j) => j && esPropio(j))) continue
+    if ([p.id, p.phoneNumber, p.lid].some((j) => j && esPropio(j))) continue
     const admin = p.admin === 'admin' || p.admin === 'superadmin' || p.isAdmin === true ||
       p.isSuperAdmin === true ? 1 : 0
-    const par = parLidTelefono(p.lid, p.jid) || parLidTelefono(p.id, p.jid) ||
-      parLidTelefono(p.lid, p.id)
+    const par = parLidTelefono(p.id, p.phoneNumber) || parLidTelefono(p.lid, p.id)
     vistos.set(jid, { jid, admin, par })
   }
   return [...vistos.values()]
@@ -425,11 +429,10 @@ const ACCIONES_DE_MIEMBROS = new Set(['add', 'remove', 'promote', 'demote'])
 /**
  * Un cambio de la lista de un grupo, de `group-participants.update`, o `null`.
  *
- * La forma sale de Baileys 6.7.24 (lib/Types/Events.d.ts:80-85, lib/Utils/
- * process-message.js:271): `{ id, author, participants, action }`, con `participants` los
- * jids que vienen en el aviso (`p.attrs.jid`). Se leen tambien como objeto `{ id }`: es la
- * forma de versiones mas nuevas de la libreria, y no avisar de un cambio de forma es el
- * cero silencioso de siempre. `salioLaLinea` dice que sacaron a la linea misma: su lista ya
+ * La forma sale de Baileys (lib/Types/Events.d.ts, lib/Utils/process-message.js):
+ * `{ id, author, participants, action }`. En 6.7.24 `participants` eran jids sueltos; en
+ * Baileys 7 son objetos `{ id, phoneNumber, lid, admin }`. Se leen las dos formas: no
+ * avisar de un cambio de forma es el cero silencioso de siempre. `salioLaLinea` dice que sacaron a la linea misma: su lista ya
  * no se puede mantener.
  */
 export function cambioDeMiembros (evento, esPropio = () => false) {

@@ -1576,12 +1576,12 @@ def revisa_miembros(fallos: list) -> int:
             "a.anotarChat({ cuenta: %r, chatJid: %r, nombre: 'Persona Dos', esGrupo: 0 });"
             "const yo = new Set([%r, '573000000012@s.whatsapp.net']);"
             "ingerirMiembros({ almacen: a, cuenta: %r, esPropio: (j) => yo.has(j), grupos: ["
-            "{ id: %r, participants: [{ id: %r, jid: %r, lid: %r, admin: 'superadmin' },"
+            "{ id: %r, participants: [{ id: %r, phoneNumber: %r, admin: 'superadmin' },"
             " { id: %r, admin: null }, { id: %r, admin: 'admin' }] }] });"
             "a.activarLinea(%r); a.latir(); a.cerrar();"
             % ((RAIZ / "sidecar" / "src" / "almacen.js").as_uri(),
                (RAIZ / "sidecar" / "src" / "ingesta.js").as_uri(), NUEVA, propio + ":1",
-               NUEVA, grupo, NUEVA, directo, propio, NUEVA, grupo, "111122223333:3@lid", tel, lid,
+               NUEVA, grupo, NUEVA, directo, propio, NUEVA, grupo, "111122223333:3@lid", tel,
                directo, propio, NUEVA))
         subprocess.run([shutil.which("node") or "node", "--input-type=module", "-e", js],
                        env=env, check=True, capture_output=True, timeout=120)

@@ -28,7 +28,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 
 import { abrirAlmacen, rutaAlmacen } from '../sidecar/src/almacen.js'
-import { atenderSalida, ENVIO, LATIDO_VENCE_MS } from '../sidecar/src/envio.js'
+import { atenderSalida, ENVIO, LATIDO_VENCE_MS, mensajeDeEnvio } from '../sidecar/src/envio.js'
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..')
 const WA_SEND = join(RAIZ, 'bin', 'wa-send')
@@ -199,6 +199,35 @@ console.log('\nsidecar: la bandeja de salida se toma UNA vez')
   await atenderSalida({ almacen, enviar: socket.enviar })
   ok('un drenado posterior no la reenvia', socket.enviados.length === 1,
     JSON.stringify(socket.enviados))
+  almacen.cerrar()
+}
+
+console.log('\nsidecar: getMessage contesta con lo que la linea mando (reintentos de Baileys 7)')
+{
+  // Cuando el telefono del otro lado no pudo descifrar algo nuestro pide reenviarlo, y
+  // Baileys pregunta por `getMessage(key)`. Sin respuesta el mensaje se queda en
+  // "esperando este mensaje" del otro lado. Lo que la linea manda sale de esta bandeja,
+  // asi que la respuesta esta aca: el cuerpo, con la misma forma que arma Baileys para
+  // un `{ text }` (`extendedTextMessage`).
+  const home = nueva()
+  const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  almacen.encolarEnvio({ reqId: 'G-1', cuenta: CUENTA, chatJid: LAURA, cuerpo: 'ya quedo',
+    estado: ENVIO.PENDIENTE })
+  const socket = socketFalso()
+  await atenderSalida({ almacen, enviar: socket.enviar })
+  const stanza = filasEnvio(home)[0]?.stanza_id
+  const m = mensajeDeEnvio({ almacen, cuenta: CUENTA,
+    key: { remoteJid: '111122224444@lid', fromMe: true, id: stanza } })
+  ok('un mensaje enviado se devuelve por su stanza, aunque la llave venga por LID',
+    m?.extendedTextMessage?.text === 'ya quedo', JSON.stringify({ stanza, m }))
+  ok('otra linea no lo ve',
+    mensajeDeEnvio({ almacen, cuenta: 'pn:573000000012', key: { id: stanza } }) === undefined)
+  almacen.encolarEnvio({ reqId: 'G-2', cuenta: CUENTA, chatJid: LAURA, cuerpo: 'borrador',
+    estado: ENVIO.BORRADOR })
+  ok('lo que no salio no se reenvia, y sin id no hay nada que buscar',
+    mensajeDeEnvio({ almacen, cuenta: CUENTA, key: { id: 'NO-EXISTE' } }) === undefined &&
+    mensajeDeEnvio({ almacen, cuenta: CUENTA, key: {} }) === undefined &&
+    mensajeDeEnvio({ almacen, cuenta: null, key: { id: stanza } }) === undefined)
   almacen.cerrar()
 }
 

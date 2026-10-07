@@ -23,7 +23,7 @@ import {
   esConversacion, esGrupo, jidDeChat, usuarioDe, identidadPropia, identidadesPropias,
   identidadDeSesion, cuentaDeIdentidad,
   mencionaA, citaA, textoDe, mediaDe, filaDeMensaje, filaDeActualizacion,
-  miembrosDeGrupo, cambioDeMiembros, TIPO_MEDIA
+  miembrosDeGrupo, cambioDeMiembros, parDeMensaje, TIPO_MEDIA
 } from '../sidecar/src/mensajes.js'
 import { filaDeChat } from '../sidecar/src/ingesta.js'
 
@@ -385,6 +385,49 @@ console.log('\nT16b: un chat directo nunca lleva el dispositivo (`:N`) en su jid
 // o null; y `group-participants.update` (lib/Utils/process-message.js:271, lib/Types/
 // Events.d.ts:80-85) trae `{ id, author, participants: string[], action }`, con `action`
 // add, remove, promote, demote o modify. Solo ids: nunca un cuerpo.
+console.log('\nBaileys 7: la llave trae la otra forma del remitente (remoteJidAlt, participantAlt)')
+{
+  // Baileys 7 dejo de poner `senderPn`/`senderLid`/`participantPn`/`participantLid` en
+  // la llave: la otra forma de quien manda viaja en `remoteJidAlt` (directo) y
+  // `participantAlt` (grupo), en el sentido que toque segun el `addressing_mode` del
+  // stanza (lib/Utils/decode-wa-message.js, `decodeMessageNode`). Si el sidecar sigue
+  // leyendo los nombres viejos no falla nada: el par LID-telefono deja de anotarse, y
+  // eso se ve igual que un contacto que nunca escribio.
+  const GRUPO = '120363000000000077@g.us'
+  const llave = (key) => ({ key: { fromMe: false, id: 'K1', ...key } })
+  const porLid = parDeMensaje(llave({ remoteJid: '111122224444@lid',
+    remoteJidAlt: '573009999999@s.whatsapp.net', addressingMode: 'lid' }))
+  ok('un directo direccionado por LID da su telefono por remoteJidAlt',
+    porLid?.lid === '111122224444@lid' && porLid?.pn === '573009999999@s.whatsapp.net',
+    JSON.stringify(porLid))
+  const porTel = parDeMensaje(llave({ remoteJid: '573000000013@s.whatsapp.net',
+    remoteJidAlt: '111122227777:4@lid', addressingMode: 'pn' }))
+  ok('un directo direccionado por telefono da su LID por remoteJidAlt, sin dispositivo',
+    porTel?.lid === '111122227777@lid' && porTel?.pn === '573000000013@s.whatsapp.net',
+    JSON.stringify(porTel))
+  const enGrupoLid = parDeMensaje(llave({ remoteJid: GRUPO, participant: '111122225555@lid',
+    participantAlt: '573000000002@s.whatsapp.net', addressingMode: 'lid' }))
+  ok('en un grupo por LID, el telefono del participante sale de participantAlt',
+    enGrupoLid?.lid === '111122225555@lid' &&
+    enGrupoLid?.pn === '573000000002@s.whatsapp.net', JSON.stringify(enGrupoLid))
+  const enGrupoTel = parDeMensaje(llave({ remoteJid: GRUPO,
+    participant: '573000000002@s.whatsapp.net', participantAlt: '111122225555@lid',
+    addressingMode: 'pn' }))
+  ok('en un grupo por telefono, el LID del participante sale de participantAlt',
+    enGrupoTel?.lid === '111122225555@lid' &&
+    enGrupoTel?.pn === '573000000002@s.whatsapp.net', JSON.stringify(enGrupoTel))
+  ok('un directo PROPIO no da par: el alterno es el del dueno, no el del cliente',
+    parDeMensaje(llave({ remoteJid: '111122226666@lid', fromMe: true,
+      remoteJidAlt: MI_TEL })) === null)
+  ok('sin forma alterna no hay par que inventar',
+    parDeMensaje(llave({ remoteJid: '111122224444@lid' })) === null)
+  const fila = filaDeMensaje({ key: { remoteJid: GRUPO, fromMe: false, id: 'K2',
+    participantAlt: '573000000002@s.whatsapp.net' }, messageTimestamp: 1,
+  message: { conversation: 'hola' } }, { cuenta: 'pn:1', identidades: YO })
+  ok('el remitente de un grupo cae a participantAlt si falta participant',
+    fila?.senderJid === '573000000002@s.whatsapp.net', JSON.stringify(fila))
+}
+
 console.log('\nroles-por-numero (M8): los participantes de un grupo')
 {
   const GRUPO = '120363000000000077@g.us'
@@ -394,12 +437,14 @@ console.log('\nroles-por-numero (M8): los participantes de un grupo')
     subject: 'Grupo Demo',
     addressingMode: 'lid',
     participants: [
-      { id: '100000000000002@lid', jid: '573007776655@s.whatsapp.net',
-        lid: '100000000000002@lid', admin: 'admin' },
-      { id: '573000000002@s.whatsapp.net', jid: '573000000002@s.whatsapp.net',
-        lid: '111122223333@lid', admin: null },
+      // La forma de Baileys 7 (`extractGroupMetadata`, lib/Socket/groups.js): el id en
+      // LID trae el telefono en `phoneNumber`; el id en telefono trae su `lid`.
+      { id: '100000000000002@lid', phoneNumber: '573007776655@s.whatsapp.net',
+        admin: 'admin' },
+      { id: '573000000002@s.whatsapp.net', lid: '111122223333@lid', admin: null },
       { id: '111122224444:5@lid', admin: 'superadmin' },
-      { id: MI_LID, jid: MI_TEL, lid: MI_LID, admin: 'superadmin' },
+      { id: MI_LID, phoneNumber: MI_TEL, admin: 'superadmin' },
+      { id: '111122225555@lid', phoneNumber: MI_TEL, admin: null },
       { id: '120363000000000078@g.us', admin: null },
       { admin: 'admin' }
     ]
@@ -411,7 +456,7 @@ console.log('\nroles-por-numero (M8): los participantes de un grupo')
     por['100000000000002@lid'] && por['573000000002@s.whatsapp.net'] &&
     por['111122224444@lid'], JSON.stringify(miembros))
   ok('la linea misma no es un miembro, ni por su LID ni por su telefono',
-    !por[MI_LID] && !por[MI_TEL], JSON.stringify(miembros))
+    !por[MI_LID] && !por[MI_TEL] && !por['111122225555@lid'], JSON.stringify(miembros))
   ok('lo que no es una persona (otro grupo, sin id) no entra',
     !por['120363000000000078@g.us'], JSON.stringify(miembros))
   ok('admin y superadmin de WhatsApp son admin; el resto no',

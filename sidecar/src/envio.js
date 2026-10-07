@@ -108,3 +108,59 @@ export async function atenderSalida ({ almacen, enviar, conectado = true,
   }
   return { enviados, rechazados }
 }
+
+/**
+ * El mensaje que esta linea mando, para que Baileys lo reenvie, o `undefined`.
+ *
+ * Cuando el telefono del otro lado no puede descifrar algo nuestro pide reenviarlo, y
+ * Baileys 7 lo busca primero en su cache de lo enviado en este proceso y despues en
+ * `getMessage(key)` (lib/Socket/messages-recv.js, `sendMessagesAgain`). Tras un reinicio
+ * esa cache esta vacia; sin `getMessage` el log decia `recv retry request, but message
+ * not available` y el otro lado se quedaba con "esperando este mensaje".
+ *
+ * Se busca por el id y la linea, NO por el chat: la llave del pedido puede venir por LID
+ * aunque se haya mandado al telefono. La forma es la que arma Baileys para un `{ text }`.
+ */
+export function mensajeDeEnvio ({ almacen, cuenta, key }) {
+  if (!almacen || !cuenta || !key?.id) return undefined
+  const fila = almacen.envioPorStanza(cuenta, key.id)
+  return fila ? { extendedTextMessage: { text: fila.body } } : undefined
+}
+
+// Lo mismo que Baileys usa de fabrica para la cuenta de reintentos (DEFAULT_CACHE_TTLS
+// .MSG_RETRY, una hora).
+const REINTENTOS_TTL_MS = 60 * 60 * 1000
+
+/**
+ * La cuenta de reintentos de descifrado, con la forma `CacheStore` de Baileys 7
+ * (lib/Types/Socket.d.ts: get, set, del, flushAll).
+ *
+ * Existe para que viva UNA por proceso: si no se le pasa `msgRetryCounterCache`, Baileys
+ * crea una nueva en cada socket (lib/Socket/messages-recv.js) y la cierra al caer, asi
+ * que cada reconexion empezaba la cuenta de cero y el tope de reintentos no llegaba
+ * nunca. Es un `Map` con vencimiento y nada mas: no hace falta otra libreria.
+ */
+export function crearCacheDeReintentos ({ ttlMs = REINTENTOS_TTL_MS, ahora = () => Date.now() } = {}) {
+  const datos = new Map()
+  return {
+    get (clave) {
+      const e = datos.get(clave)
+      if (!e) return undefined
+      if (ahora() > e.vence) {
+        datos.delete(clave)
+        return undefined
+      }
+      return e.valor
+    },
+    set (clave, valor) {
+      datos.set(clave, { valor, vence: ahora() + ttlMs })
+      return true
+    },
+    del (clave) {
+      return datos.delete(clave)
+    },
+    flushAll () {
+      datos.clear()
+    }
+  }
+}

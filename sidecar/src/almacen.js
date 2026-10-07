@@ -967,6 +967,15 @@ class Almacen {
     return this.con.prepare('select * from envio where req_id=?').get(reqId) || null
   }
 
+  /** Lo que esta linea YA mando, por el id que le dio WhatsApp, o `null`. Es lo que
+   *  pide Baileys para reenviar un mensaje que el otro lado no pudo descifrar
+   *  (`getMessage`, ver `mensajeDeEnvio` en envio.js). Solo `enviado`: un borrador o un
+   *  rechazado no salieron, y reenviarlos seria mandar algo por primera vez. */
+  envioPorStanza (cuenta, stanzaId) {
+    return this.con.prepare("select * from envio where account=? and stanza_id=? " +
+      "and estado='enviado' limit 1").get(cuenta, stanzaId) || null
+  }
+
   /**
    * Toma la proxima peticion pendiente, o `null`.
    *

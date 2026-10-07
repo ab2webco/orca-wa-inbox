@@ -19,9 +19,9 @@ import { basename, dirname, isAbsolute, join } from 'node:path'
 import { abrirAlmacen, rutaAlmacen, rutaMedia } from './almacen.js'
 import { crearAlcance } from './alcance.js'
 import { crearRegistro } from './registro.js'
-import { atenderSalida, ENVIO_LATIDO_MS } from './envio.js'
+import { atenderSalida, crearCacheDeReintentos, ENVIO_LATIDO_MS, mensajeDeEnvio } from './envio.js'
 import { INGESTA, ingerirActualizacion, ingerirCambioDeMiembros, ingerirChats,
-  ingerirContactos, ingerirMensaje, ingerirMiembros } from './ingesta.js'
+  ingerirContactos, ingerirMensaje, ingerirMiembros, ingerirParesLid } from './ingesta.js'
 import { cuentaDeIdentidad, identidadDeSesion, identidadesPropias,
   identidadPropia } from './mensajes.js'
 
@@ -52,7 +52,7 @@ export const MOTIVO = Object.freeze({
   DESCONOCIDO: 'desconocido'
 })
 
-// Los `statusCode` de `DisconnectReason` en Baileys 6.7.24 que necesita la decision
+// Los `statusCode` de `DisconnectReason` de Baileys (iguales en 6.7.24 y en 7) que necesita la decision
 // de reconectar. Se replican como constantes locales -no se importa `DisconnectReason`
 // de la libreria aca- para que `decidirTrasCierre` sea una funcion pura, probable sin
 // resolver Baileys.
@@ -281,13 +281,12 @@ export function qrVencido (ts, ahoraMs = Date.now(), vigenciaMs = QR_VIGENCIA_MS
 // `shouldSyncHistoryMessage` es la que arregla el defecto medido en la cuenta viva:
 // 296 grupos en el almacen y CERO uno a uno. La lista inicial de conversaciones NO
 // viene por `chats.upsert` -eso es una conversacion NUEVA- sino por
-// `messaging-history.set`, y Baileys 6.7.24 solo emite ese evento cuando esta funcion
-// contesta que si (lib/Socket/chats.js:778-780 -> lib/Utils/process-message.js:150,168).
-// Sin ponerla, `makeWASocket` la deriva de `syncFullHistory`
-// (lib/Socket/index.js:11-12): con `false`, el socket ni siquiera espera la
-// notificacion (chats.js:869-877) y el evento no se emite NUNCA. Poner el escuchador
-// sin esto no arregla nada — se ve exactamente igual que un telefono que no mando la
-// lista.
+// `messaging-history.set`, y Baileys solo emite ese evento cuando esta funcion
+// contesta que si (lib/Socket/chats.js, `shouldProcessHistoryMsg`). En 6.7.24, sin
+// ponerla, `makeWASocket` la derivaba de `syncFullHistory`: con `false` el evento no se
+// emitia NUNCA, y se veia exactamente igual que un telefono que no mando la lista.
+// Baileys 7 ya no la deriva, pero se deja explicita: decide si la lista llega, y eso
+// no puede depender de un valor de fabrica.
 //
 // Y `syncFullHistory` se queda en `false`, que es OTRA cosa: viaja como
 // `requireFullSync` dentro del nodo de registro que Baileys manda al vincular
@@ -297,7 +296,13 @@ export function qrVencido (ts, ahoraMs = Date.now(), vigenciaMs = QR_VIGENCIA_MS
 // ajenas que nadie borra". Con `false` el telefono manda igual su lote reciente —que
 // es de donde sale la lista— y no se pide el archivo. Los mensajes que vengan en ese
 // lote no se miran: el escuchador de abajo solo lee `chats`.
-export function opcionesDeSocket ({ version, auth, browser, logger }) {
+//
+// `getMessage` y `msgRetryCounterCache` son los dos que Baileys 7 documenta para los
+// reintentos (lib/Types/Socket.d.ts): el primero contesta con lo que la linea mando
+// cuando el otro lado pide reenviarlo, y el segundo es la cuenta de reintentos, que
+// tiene que ser la MISMA en cada reconexion (ver `crearCacheDeReintentos`).
+export function opcionesDeSocket ({ version, auth, browser, logger, getMessage,
+  msgRetryCounterCache }) {
   return {
     version,
     auth,
@@ -305,6 +310,8 @@ export function opcionesDeSocket ({ version, auth, browser, logger }) {
     // Sin esto Baileys escribe con su pino de fabrica a stdout, el canal del protocolo,
     // y el motivo de un mensaje que no se pudo descifrar no lo guarda nadie.
     ...(logger ? { logger } : {}),
+    ...(getMessage ? { getMessage } : {}),
+    ...(msgRetryCounterCache ? { msgRetryCounterCache } : {}),
     printQRInTerminal: false,
     // La ROTACION, no la vigencia: son dos numeros distintos a proposito (ver el
     // comentario de QR_VIGENCIA_MS). Dejarlo implicito ata la UI a un valor de
@@ -313,6 +320,15 @@ export function opcionesDeSocket ({ version, auth, browser, logger }) {
     syncFullHistory: false,
     shouldSyncHistoryMessage: () => true
   }
+}
+
+/** El `auth` del socket: las credenciales TAL CUAL -el mismo objeto que escribe
+ *  `saveCreds`; una copia dejaria a Baileys actualizando algo que nadie guarda- y las
+ *  llaves de signal envueltas por `makeCacheableSignalKeyStore`, como pide Baileys 7:
+ *  sin la cache cada mensaje lee y escribe sus sesiones en disco, archivo por archivo.
+ *  `envolver` llega de afuera para que esto se pruebe sin resolver la libreria. */
+export function authDeSocket (state, envolver, logger) {
+  return { creds: state.creds, keys: envolver(state.keys, logger) }
 }
 
 // ── Protocolo por stdout ─────────────────────────────────────────────────────────
@@ -402,7 +418,7 @@ async function iniciar () {
   chmodSync(authDir, 0o700)
 
   const { default: makeWASocket, useMultiFileAuthState, Browsers,
-    downloadMediaMessage, fetchLatestBaileysVersion } =
+    downloadMediaMessage, fetchLatestBaileysVersion, makeCacheableSignalKeyStore } =
     await import('@whiskeysockets/baileys')
 
   const { state, saveCreds } = await useMultiFileAuthState(authDir)
@@ -554,10 +570,17 @@ async function iniciar () {
   // dueno que WhatsApp rechazo un mensaje que nunca lo vio es peor que tardar.
   let socket = null
   let conectado = false
+  // UNA por proceso, no por socket: ver `crearCacheDeReintentos`.
+  const reintentos = crearCacheDeReintentos()
+  // Las llaves con su cache se envuelven UNA vez: cada reconexion usa el mismo almacen.
+  const auth = authDeSocket(state, makeCacheableSignalKeyStore, registro)
 
   function conectar () {
     const sock = makeWASocket(opcionesDeSocket({
-      version, auth: state, browser: Browsers.appropriate('Chrome'), logger: registro
+      version, auth, browser: Browsers.appropriate('Chrome'), logger: registro,
+      // Lo que la linea mando, para reenviarlo si el otro lado no lo pudo descifrar.
+      getMessage: async (key) => mensajeDeEnvio({ almacen, cuenta, key }),
+      msgRetryCounterCache: reintentos
     }))
     socket = sock
     conectado = false
@@ -811,6 +834,18 @@ async function iniciar () {
     sock.ev.on('contacts.upsert', anotarContactos)
     sock.ev.on('contacts.set', ({ contacts }) => anotarContactos(contacts))
 
+    // Los pares LID-telefono que Baileys 7 avisa por su cuenta (y que guarda para
+    // descifrar): contabilidad para `lid_telefono`, como los de la libreta.
+    const anotarPares = (pares) => {
+      if (!cuenta) return
+      try {
+        ingerirParesLid({ almacen, cuenta, pares, esPropio })
+      } catch (error) {
+        avisarFallo('par-sin-anotar', error)
+      }
+    }
+    sock.ev.on('lid-mapping.update', (par) => anotarPares([par]))
+
     // La lista INICIAL de conversaciones. Es el unico evento que la trae: `chats.upsert`
     // avisa de una conversacion NUEVA y `groupFetchAllParticipating` devuelve grupos por
     // definicion, asi que sin esto un uno a uno solo aparece si alguien escribe mientras
@@ -821,11 +856,12 @@ async function iniciar () {
     // miran a proposito: listar una conversacion no puede guardar una palabra de nadie.
     // El unico camino que escribe un cuerpo sigue siendo `ingerirMensaje`, que le
     // pregunta al alcance antes (§5).
-    sock.ev.on('messaging-history.set', ({ chats, contacts, isLatest }) => {
+    sock.ev.on('messaging-history.set', ({ chats, contacts, lidPnMappings, isLatest }) => {
       // Los contactos ANTES que los chats: asi las filas que nacen en este mismo lote
       // ya encuentran su nombre en `nombresDeChat` en vez de nacer llamandose como su
       // jid y depender de que otro lote las repare despues.
       anotarContactos(contacts)
+      anotarPares(lidPnMappings)
       const { anotados } = anotarChats(chats)
       historialChats += anotados
       // El PRIMER lote se fuerza y los demas no. Forzarlo una vez es lo que distingue
