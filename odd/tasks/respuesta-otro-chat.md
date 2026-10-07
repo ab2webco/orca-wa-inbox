@@ -56,10 +56,11 @@ Refusal codes of `caso propuesta --chat` (exit 2, JSON on stderr):
       `chat_name` and `retenido`, text `-> <name>`), `--help`. Tests: `scripts/check-casos`.
       Proof: RED, every `--chat` call refused by argparse (usage error), 4/19 green;
       GREEN 19/19.
-- [ ] R2 The rule never signs a reply to another chat (`other_chat`, waits for the owner),
+- [x] R2 The rule never signs a reply to another chat (`other_chat`, waits for the owner),
       the destination's levels apply (no owner-chat bypass), the tick only takes it while
       the destination is `responder`, and the approval notice says where it goes (es/en).
-      Tests: `scripts/check-casos`.
+      Tests: `scripts/check-casos`. Proof: RED 1/7 (the tick signed and SENT the reply,
+      to the case's own chat); GREEN 7/7.
 - [ ] R3 Delivery to the destination: the tick (owner-signed), `si N` and the board's Enviar
       send to the destination with `--send` (floor + Jev); a held draft is sent by the
       owner's next approval on the board with `--approve`; one confirmation to the case's

@@ -3883,6 +3883,8 @@ def cmd_caso_propuesta(con, a):
 # Lo que pide el dueno o un Super admin de la conversacion puede ir a OTRO chat de la misma
 # linea en `responder` (`caso propuesta --chat`). El destino es parte de la propuesta y de su
 # version: el dueno firma el texto Y a donde va. Un cliente nunca redirige nada.
+# El motivo por el que la regla no firma una respuesta a otro chat: la firma el dueno.
+OTRO_CHAT = "other_chat"
 TELEFONO_REF = re.compile(r"^\+?[\d\s().-]{7,}$")
 
 
@@ -4099,10 +4101,14 @@ def frenos_de_regla(con, caso):
     - Lo que dice la respuesta, juzgado ahora y no pegado al caso: cada excepcion del piso
       con su nivel. Un valor con forma de secreto va al dueno siempre (`secret`).
     - Un chat en `borrador` pregunta todo."""
-    scope = merged_scope(con).get(caso["chat_jid"]) or {}
+    # Una respuesta a OTRO chat (respuesta-otro-chat) se juzga con los niveles de ese chat,
+    # el que la va a leer, y nunca la firma la regla: el dueno aprueba el texto y el destino.
+    destino = destino_de_propuesta(caso)
+    leyente = dict(caso, chat_jid=destino) if destino else caso
+    scope = merged_scope(con).get(leyente["chat_jid"]) or {}
     niv = scope.get("niveles") or wa_reglas.niveles(None)
-    if chat_es_del_dueno(caso.get("account"), caso["chat_jid"]) \
-            or directo_de_operador(con, caso):
+    if chat_es_del_dueno(caso.get("account"), leyente["chat_jid"]) \
+            or directo_de_operador(con, leyente):
         # Lo que se le contesta al dueno no pasa por las reglas (T22.1): solo queda el
         # control destructivo, un secreto, y lo que el propio dueno pidio con el modo. Lo
         # mismo en el directo con un operador o un admin de ese chat (roles-por-numero, M10):
@@ -4133,6 +4139,8 @@ def frenos_de_regla(con, caso):
     # (proyectos-por-chat, M5). La del que escribio se vuelve a mirar: sin su rol, del dueno.
     if pregunta_del_dueno(con, caso):
         al_dueno.append("project_question")
+    if destino:
+        al_dueno.append(OTRO_CHAT)
     return al_dueno, al_agente
 
 
@@ -8352,7 +8360,9 @@ def candidatos_tick(con):
             continue
         if propuesta.get("tipo") != "responder" or not propuesta.get("respuesta"):
             continue
-        if (scope.get(caso["chat_jid"]) or {}).get("mode") != "responder":
+        # La de otro chat sale solo mientras ESE chat siga en responder.
+        if (scope.get(destino_de_propuesta(caso) or caso["chat_jid"]) or {}).get("mode") \
+                != "responder":
             continue
         salida.append((caso, propuesta["respuesta"]))
     return salida
@@ -8475,7 +8485,8 @@ MOTIVOS_AVISO = {
            "no_project": "no tiene proyecto",
            "project_question": "la pregunta de proyecto es suya",
            "mode": "el chat no responde solo", "stale": "la propuesta tiene mas de un dia",
-           "exceptions": "el caso trae excepciones", "no_instructions": "no trae instrucciones"},
+           "exceptions": "el caso trae excepciones", "no_instructions": "no trae instrucciones",
+           "other_chat": "va a otro chat y lo aprueba usted"},
     "en": {"money": "it mentions money", "credential": "it names a credential",
            "commitment": "it commits to a date", "jev": "Jev held it",
            "jev-unavailable": "Jev did not answer", "secret": "it carries a secret",
@@ -8490,12 +8501,14 @@ MOTIVOS_AVISO = {
            "project_question": "the project question is yours",
            "mode": "the chat does not answer on its own",
            "stale": "the proposal is more than a day old",
-           "exceptions": "the case carries exceptions", "no_instructions": "it has no instructions"},
+           "exceptions": "the case carries exceptions", "no_instructions": "it has no instructions",
+           "other_chat": "it goes to another chat and you approve it"},
 }
 # Lo que dice cada aviso, en el tono del panel (de usted). `{n}` es el numero del caso.
 TEXTOS_AVISO = {
     "es": {"caso": "Caso {n}", "pide": "Pide: {x}", "espera": "Espera porque: {x}",
            "respuesta": "Respuesta propuesta: {x}", "trabajo": "Trabajo propuesto: {x}",
+           "destino": "Va a: {x}",
            "credencial": "Hay una credencial en el caso: apruebelo en el tablero, no por aqui.",
            "credencial_si": "Caso {n} lleva una credencial: apruebelo en el tablero, no por aqui.",
            "como": "Responda si {n} para aprobar, no {n} para cerrar, o {n} y su correccion.",
@@ -8526,6 +8539,7 @@ TEXTOS_AVISO = {
                       "bloqueado": "bloqueado"}},
     "en": {"caso": "Case {n}", "pide": "Asks: {x}", "espera": "Waiting because: {x}",
            "respuesta": "Proposed reply: {x}", "trabajo": "Proposed work: {x}",
+           "destino": "Goes to: {x}",
            "credencial": "A credential is involved: approve it on the board, not here.",
            "credencial_si": "Case {n} involves a credential: approve it on the board, not here.",
            "como": "Answer yes {n} to approve, no {n} to close, or {n} and your correction.",
@@ -8776,6 +8790,10 @@ def texto_de_aviso(con, caso, motivos):
     if credencial:
         lineas.append(tx["credencial"])
         return "\n".join(lineas)
+    destino = destino_de_propuesta(caso)
+    if destino:
+        # A donde va, antes del texto: el dueno aprueba las dos cosas (respuesta-otro-chat).
+        lineas.append(tx["destino"].format(x=recorta(nombre_del_chat(con, destino), LARGO_PIDE)))
     if cuerpo:
         lineas.append(tx["trabajo" if tipo == "trabajar" else "respuesta"]
                       .format(x=recorta(cuerpo, LARGO_PROPUESTA)))

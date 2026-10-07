@@ -13570,6 +13570,80 @@ if NODE:
 
 
 
+def envios_a(home, chat):
+    ruta = pathlib.Path(home) / ".wa-inbox" / "capture.db"
+    con = sqlite3.connect(ruta)
+    con.row_factory = sqlite3.Row
+    filas = [dict(r) for r in con.execute(
+        "select req_id, estado, body from envio where chat_jid=? order by rowid", (chat,))]
+    con.close()
+    return filas
+
+
+def eventos_de(home, cid):
+    return [e["detalle"] for e in js(home, "caso", "ver", cid)[0]["eventos"]]
+
+
+print("\nrespuesta-otro-chat R2: la regla nunca firma una respuesta a otro chat")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        prepara_otro_chat(home)
+        sidecar = SidecarFalso(home)
+        try:
+            dueno = caso_pedido(home, DUENO_DM, "OR1", DUENO_LID)
+            v = json.loads(propone_a(home, dueno, "Facturacion").stdout)[0]["propuesta_version"]
+            tick(home)
+            ver = js(home, "caso", "ver", dueno)[0]
+            ok("el tick no la manda sola: espera al dueno",
+               ver["etapa"] == "decision" and not ver["aprobada"]
+               and envios_a(home, FACTURACION) == [], f"{ver['etapa']} {envios_a(home, FACTURACION)}")
+            ok("y el caso dice por que: other_chat, una vez por version",
+               sum(1 for d in eventos_de(home, dueno)
+                   if d.startswith("respuesta espera al dueno:") and "other_chat" in d
+                   and d.endswith(v[:12])) == 1, f"{eventos_de(home, dueno)}")
+            ok("regla aprobar a mano tambien se niega (E_EXCEPTION)",
+               error_de(corre(home, "caso", "aprobar", dueno, "--version", v,
+                              "--actor", "regla")) == "E_EXCEPTION")
+
+            pon_aprobacion(home, DUENO_LID)
+            tick(home)
+            avisos = [a for a in al_dueno(home) if a["req_id"].startswith(f"aviso-{dueno}-")]
+            cuerpo = avisos[0]["body"] if avisos else ""
+            ok("el aviso al dueno dice a que chat va y el texto",
+               len(avisos) == 1 and "Va a: Facturacion" in cuerpo
+               and "el reporte quedo bien" in cuerpo and f"si {dueno}" in cuerpo, cuerpo)
+            ok("y por que espera, en palabras", "otro chat" in cuerpo, cuerpo)
+
+            ws = carga_wa_scope(home)
+            con = ws.db()
+            try:
+                dinero = caso_pedido(home, DUENO_DM, "OR2", DUENO_LID)
+                js(home, "caso", "propuesta", dinero, "--tipo", "responder", "--respuesta",
+                   "El arreglo cuesta $50.", "--actor", "agente")
+                propio = ws.frenos_de_regla(con, ws.caso_de(con, int(dinero)))[0]
+                propone_a(home, dinero, "Facturacion", "El arreglo cuesta $50.")
+                fuera = ws.frenos_de_regla(con, ws.caso_de(con, int(dinero)))[0]
+            finally:
+                con.close()
+            ok("en el chat del dueno el dinero no frena; hacia el cliente si (sus niveles)",
+               "money" not in propio and "money" in fuera and "other_chat" in fuera,
+               f"{propio} {fuera}")
+
+            otro = caso_pedido(home, DUENO_DM, "OR3", DUENO_LID)
+            propone_a(home, otro, "Facturacion", "Otra conclusion distinta.")
+            js(home, "mode", FACTURACION, "observar")
+            tick(home)
+            ok("si el destino deja de estar en responder, el tick no lo toma",
+               not any(d.startswith("respuesta espera al dueno:") for d in eventos_de(home, otro))
+               and envios_a(home, FACTURACION) == [], f"{eventos_de(home, otro)}")
+        finally:
+            sidecar.cerrar()
+            os.environ.clear()
+            os.environ.update(env_antes)
+
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
