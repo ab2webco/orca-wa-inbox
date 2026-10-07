@@ -99,7 +99,9 @@ cases are created, judged or sent.
       affected sections migracion 14/14, tablero 20/20, tick 24/24, needs-agent 9/9, base
       nueva 12/12, agrupacion 14/14, T14 78/78. Shots `tablero-recordatorio`,
       `tablero-nota-detalle` (es, dark, 390) looked at.
-- [ ] K11 `--todas-las-lineas` on listar, buscar and informe. Tests: `scripts/check-casos`.
+- [x] K11 `--todas-las-lineas` on listar, buscar and informe (and recordatorios). Tests:
+      `scripts/check-casos`. Proof: RED `unrecognized arguments: --todas-las-lineas`; GREEN
+      9/9 (a bulk close on the main line answers E_NOT_FOUND for the other line's case).
 - [ ] K12 Harness docs: AGENTS.md, COMMANDS.md, the whatsapp-cli and whatsapp-soporte skills
       teach when to use each command, never naming an agent. Tests: `scripts/check-harness`.
 

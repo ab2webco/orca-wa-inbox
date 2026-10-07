@@ -3646,6 +3646,10 @@ def cmd_caso_recordar(con, a):
 
 def cmd_caso_recordatorios(con, a):
     """`caso recordatorios`: los pendientes de la linea, del proximo al ultimo. Solo lee."""
+    if getattr(a, "todas", False):
+        salida = sorted((r for s in de_cada_linea(a).values() for r in s),
+                        key=lambda r: (r.get("cuando") or "", r.get("id") or 0))
+        return salida if a.json else imprime_recordatorios(salida)
     filas = con.execute("select r.*, c.chat_jid, c.titulo, c.etapa from caso_recordatorio r "
                         "join caso c on c.case_id = r.case_id where r.account=? and "
                         "r.estado='pendiente' order by r.cuando, r.id",
@@ -3658,14 +3662,17 @@ def cmd_caso_recordatorios(con, a):
                "etapa": f["etapa"], "cuando": iso_caso(f["cuando"]), "texto": f["texto"],
                "al_agente": bool(f["al_agente"]), "pospone": bool(f["pospone"])}
               for f in filas]
-    if a.json:
-        return salida
+    return salida if a.json else imprime_recordatorios(salida)
+
+
+def imprime_recordatorios(salida):
     if not salida:
         print("(no reminders)")
     for r in salida:
         print(f"#{r['case_id']} {r['cuando']} · {r['titulo']} · {r['chat_name']}"
               + (f" · {r['texto']}" if r["texto"] else "")
-              + (" · snooze ends" if r["pospone"] else ""))
+              + (" · snooze ends" if r["pospone"] else "")
+              + (f" · {r['account']}" if len(wa_store.lineas_activas_en_disco()) > 1 else ""))
     return None
 
 
@@ -5348,7 +5355,62 @@ def linea_de_lista(c):
     return " · ".join(p for p in partes if p)
 
 
+def de_cada_linea(a, csv=False):
+    """`--todas-las-lineas` (casos-cli, K11): este mismo comando, de solo lectura, una vez por
+    linea vinculada y cada una en su proceso (`--line`), como `por_cada_linea`: cada proceso
+    lee SOLO su linea. {linea: salida (JSON leido, o el texto del CSV)}. Un rechazo de una
+    linea es el rechazo del comando."""
+    if getattr(a, "linea", None):
+        caso_falla("E_ARGS", "--todas-las-lineas reads every linked line: drop --line")
+    lineas = wa_store.lineas_activas_en_disco() or [cuenta_activa()]
+    argv = [x for x in sys.argv[1:] if x != "--todas-las-lineas"]
+    hijos = {}
+    for linea in lineas:
+        env = dict(os.environ, **{wa_store.LINEA_ENV: linea})
+        hijos[linea] = subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), *argv, f"--line={linea}",
+             *([] if csv else ["--json"])], env=env, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True)
+    salidas = {}
+    for linea, h in hijos.items():
+        texto, error = h.communicate()
+        if h.returncode != 0:
+            try:
+                falla = json.loads((error or "").strip().splitlines()[-1])
+            except (ValueError, IndexError):
+                falla = {"error": "E_ARGS", "detail": (error or "").strip()[:300]}
+            caso_falla(falla.get("error") or "E_ARGS", f"line {linea}: {falla.get('detail')}")
+        salidas[linea] = texto if csv else (_json_o_nada(texto) or [])
+    return salidas
+
+
+def listar_de_todas(a):
+    """`caso listar|buscar --todas-las-lineas`: las filas de cada linea, juntas, en el mismo
+    orden y con el mismo tope que en una sola."""
+    filas = [f for salida in de_cada_linea(a).values() for f in salida if isinstance(f, dict)]
+    filas.sort(key=lambda c: (str(c.get("updated_at") or ""), c.get("case_id") or 0),
+               reverse=True)
+    if getattr(a, "orden", None) != "reciente":
+        filas.sort(key=lambda c: ORDEN_TABLERO.index(c["etapa"])
+                   if c.get("etapa") in ORDEN_TABLERO else len(ORDEN_TABLERO))
+    limite = getattr(a, "limite", None) or LIMITE_LISTAR
+    if len(filas) > limite:
+        print(f"wa-scope: {len(filas) - limite} more cases not listed: raise --limite or "
+              f"narrow the filters", file=sys.stderr)
+        filas = filas[:limite]
+    if a.json:
+        return filas
+    if not filas:
+        print("(no cases)")
+    for c in filas:
+        print(linea_de_lista(c) if not getattr(a, "completo", False)
+              else " | ".join(valor_en_texto(k, v) for k, v in c.items() if v not in (None, "")))
+    return None
+
+
 def cmd_caso_listar(con, a):
+    if getattr(a, "todas", False):
+        return listar_de_todas(a)
     etapas = lista_de_valores(getattr(a, "etapa", None), ETAPAS_CASO, "--etapa")
     prioridades = lista_de_valores(getattr(a, "prioridad", None), PRIORIDADES_CASO,
                                    "--prioridad")
@@ -8892,7 +8954,21 @@ def texto_de_informe(r):
 
 
 def cmd_caso_informe(con, a):
-    """`caso informe`: los numeros de la pestana Informes de un periodo. Solo lee."""
+    """`caso informe`: los numeros de la pestana Informes de un periodo. Solo lee. Con
+    `--todas-las-lineas`, uno por linea (y el CSV con la linea en la primera columna)."""
+    if getattr(a, "todas", False):
+        salidas = de_cada_linea(a, csv=a.csv)
+        if a.csv:
+            print(",".join(("account",) + COLUMNAS_CSV))
+            for linea, texto in salidas.items():
+                for fila in texto.strip().splitlines()[1:]:
+                    print(f"{campo_csv(linea)},{fila}")
+            return None
+        informes = [r for salida in salidas.values() for r in salida]
+        if a.json:
+            return informes
+        print("\n\n".join("\n".join(texto_de_informe(r)) for r in informes))
+        return None
     r, filas = informe_del_periodo(con, a.periodo)
     if getattr(a, "csv", False):
         print(",".join(COLUMNAS_CSV))
@@ -13813,6 +13889,9 @@ def main():
         c.add_argument("--orden", choices=["tablero", "reciente"], default="tablero",
                        help="tablero (default): the board's order, what waits for the owner "
                             "first; reciente: the last moved first")
+        c.add_argument("--todas-las-lineas", dest="todas", action="store_true",
+                       help="every linked line at once, each row with its `account` (read "
+                            "only; each line is read by its own process)")
         c.add_argument("--con-recordatorio", dest="con_recordatorio", action="store_true",
                        help="only the cases with a pending reminder (snoozed ones included)")
         c.add_argument("--pospuestos", action="store_true",
@@ -13903,6 +13982,9 @@ def main():
 
     c = caso("recordatorios", help="the pending reminders of the line, the next first, with "
                                    "the case's title and chat")
+    c.add_argument("--todas-las-lineas", dest="todas", action="store_true",
+                   help="every linked line at once, each with its `account` (read only; each "
+                        "line is read by its own process)")
     c.set_defaults(fn=cmd_caso_recordatorios)
 
     c = caso("estado", help="how a case is going, in words: what its board card computes "
@@ -13919,6 +14001,9 @@ def main():
                    help="today, 7d (default), 30d or all, like the board")
     c.add_argument("--csv", action="store_true",
                    help="one row per case created in the period, the panel's Copy CSV columns")
+    c.add_argument("--todas-las-lineas", dest="todas", action="store_true",
+                   help="every linked line at once, each with its `account` (read only; each "
+                        "line is read by its own process)")
     c.set_defaults(fn=cmd_caso_informe)
 
     c = caso("ver", help="one case with its messages and its events")

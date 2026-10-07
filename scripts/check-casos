@@ -14473,6 +14473,59 @@ if NODE:
            and cuenta(home, "select count(*) from caso_recordatorio where estado='sin-numero'") == 1)
 
 
+print("\ncasos-cli K11: todas las lineas a la vez, cada fila con su linea")
+PN.setdefault(SEGUNDA, "573000000011:7@s.whatsapp.net")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "TL1", "@duenio no abre el login", 5, mencion=True)])
+        llegan(home, SEGUNDA, [msg(SOPORTE, "TL2", "@duenio no llega la factura", 5, mencion=True)],
+               activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+        jsl(home, SEGUNDA, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+        js(home, "ingest")
+        de_a = js(home, "caso", "listar")
+        de_b = jsl(home, SEGUNDA, "caso", "listar")
+        ok("sin la bandera, cada linea lista lo suyo", [c["account"] for c in de_a] == [A]
+           and [c["account"] for c in de_b] == [SEGUNDA], f"{de_a} {de_b}")
+        todas = js(home, "caso", "listar", "--todas-las-lineas")
+        ok("--todas-las-lineas junta las dos, cada fila con su linea",
+           sorted(c["account"] for c in todas) == sorted([A, SEGUNDA])
+           and sorted(c["case_id"] for c in todas) == sorted([de_a[0]["case_id"],
+                                                              de_b[0]["case_id"]]), f"{todas}")
+        ok("buscar tambien", [c["account"] for c in js(home, "caso", "buscar", "factura",
+                                                        "--todas-las-lineas")] == [SEGUNDA])
+        ok("y respeta --limite sobre el total",
+           len(js(home, "caso", "listar", "--todas-las-lineas", "--limite", "1")) == 1)
+        informes = js(home, "caso", "informe", "--todas-las-lineas")
+        ok("informe: uno por linea, con su linea",
+           sorted(r["account"] for r in informes) == sorted([A, SEGUNDA])
+           and all(r["stages"]["recibido"] + r["stages"]["clasificado"] == 1 for r in informes),
+           f"{[(r['account'], r['stages']) for r in informes]}")
+        csv_ = subprocess.run([str(WA_SCOPE), "caso", "informe", "--todas-las-lineas", "--csv"],
+                              capture_output=True, text=True,
+                              env=dict(os.environ, HOME=str(home), ORCA_CLI_COMMAND=SIN_ORCA))
+        filas = csv_.stdout.strip().splitlines()
+        ok("el CSV de todas lleva la linea como primera columna",
+           filas[0].startswith("account,case_id,") and len(filas) == 3
+           and sorted(f.split(",")[0] for f in filas[1:]) == sorted([A, SEGUNDA]), csv_.stdout)
+        js(home, "caso", "recordar", str(de_a[0]["case_id"]), "--cuando", "2h", "--actor", "dueno")
+        jsl(home, SEGUNDA, "caso", "recordar", str(de_b[0]["case_id"]), "--cuando", "1h",
+            "--actor", "dueno")
+        recs = js(home, "caso", "recordatorios", "--todas-las-lineas")
+        ok("recordatorios de todas, del proximo al ultimo",
+           [r["account"] for r in recs] == [SEGUNDA, A], f"{recs}")
+        p = corre(home, "caso", "listar", "--todas-las-lineas", "--line", A)
+        ok("--todas-las-lineas con --line es E_ARGS", p.returncode == 2 and "E_ARGS" in p.stderr,
+           p.stderr)
+        r = js(home, "caso", "lote", "cerrar", str(de_b[0]["case_id"]), "--motivo", "x",
+               "--confirmar", "--actor", "dueno")[0]
+        ok("escribir no cruza lineas: un lote en la principal no toca el caso de la otra",
+           r["casos"][0].get("error") == "E_NOT_FOUND"
+           and jsl(home, SEGUNDA, "caso", "ver", str(de_b[0]["case_id"]))[0]["etapa"] != "cerrado",
+           f"{r}")
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
