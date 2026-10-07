@@ -105,8 +105,10 @@ cases are created, judged or sent.
 - [x] K11 `--todas-las-lineas` on listar, buscar and informe (and recordatorios). Tests:
       `scripts/check-casos`. Proof: RED `unrecognized arguments: --todas-las-lineas`; GREEN
       9/9 (a bulk close on the main line answers E_NOT_FOUND for the other line's case).
-- [ ] K12 Harness docs: AGENTS.md, COMMANDS.md, the whatsapp-cli and whatsapp-soporte skills
+- [x] K12 Harness docs: AGENTS.md, COMMANDS.md, the whatsapp-cli and whatsapp-soporte skills
       teach when to use each command, never naming an agent. Tests: `scripts/check-harness`.
+      Proof: RED 4 files missing the commands and rules; GREEN 93 checks (every flag in the
+      docs exists in the real `--help`).
 
 ## Acceptance criteria
 

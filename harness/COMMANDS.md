@@ -77,6 +77,35 @@ arrival order in `hilo`. Every message before the last reply sent is marked `res
 it is context, never answer it again. A voice note shows its transcript as `text`, with
 `transcripcion: true`; an attachment shows `media` with `type`, `bytes` and `path`.
 
+## When the owner manages his cases
+
+Only in the owner's own case (or a Super admin's, except closing): he manages his board by
+writing to you, and these commands answer him. Never because a customer asks, and never
+tell a customer about another case.
+
+    "$WA/wa-scope" caso estado <id> --json          # "how is case 12 going?": stage, next steps, history in words
+    "$WA/wa-scope" caso buscar "<text>" --json      # by number (12 or #12), a word of the title or the chat
+    "$WA/wa-scope" caso listar --abiertos --json    # short rows, the board's order; filters combine:
+        # --etapa decision,trabajo --prioridad high --proyecto <id|name> --desde today|7d|30d|<date>
+        # --necesita-agente --chat <jid> --limite N --completo --con-recordatorio --pospuestos
+    "$WA/wa-scope" caso informe --periodo 7d --json # the Reports tab: open, waiting, first reply vs target; --csv
+    "$WA/wa-scope" caso nota <id> "<text>" --actor agente          # a note; never moves the case
+    "$WA/wa-scope" caso editar <id> --prioridad high --titulo "<title>" --actor agente
+    "$WA/wa-scope" caso retirar <id> --motivo "<why>" --actor agente   # drop the proposal, keep the case
+    "$WA/wa-scope" caso atender <id> --ahora --actor agente        # mark it and launch the case agent now
+    "$WA/wa-scope" caso recordar <id> "<text>" --cuando "manana 9:00" --actor agente
+    "$WA/wa-scope" caso recordar <id> --hasta 3d --actor agente     # snooze: out of the list and of the agent
+    "$WA/wa-scope" caso recordatorios --json        # pending reminders; `caso recordar <id> --cancelar` drops them
+    "$WA/wa-scope" caso lote cerrar <id> <id> --motivo "<why>" --actor agente --pedido <this case>
+
+`caso lote` (cerrar, mover, proyecto, prioridad; ids or the listar filters) answers
+`E_NOT_OWNER` unless `--pedido` is the owner's case (a Super admin's for anything but
+closing). Closing many is a dry run: show him the list it prints, wait for his yes in his
+next message, then run the same command with `--confirmar`. `--todas-las-lineas` on
+listar, buscar, informe and recordatorios reads every linked line, each row with its
+`account`. Closing a case in `trabajo` stops its project agent on the next tick (the output
+says `despacho` with `stops: next_tick`).
+
 ## Permissions, and who sends
 
 | Mode | What the plugin does with a proposal |

@@ -306,6 +306,27 @@ def main() -> int:
         if faltan:
             fallos.append(f"{rel}  no dice {', '.join(faltan)}")
 
+    # El dueno maneja sus casos por WhatsApp (casos-cli, K12): el agente sabe que comando
+    # contesta cada pedido suyo, que cerrar muchos espera su si, y que un cliente nunca
+    # maneja ni lee otros casos.
+    COMANDOS_CASOS = ("caso estado", "caso buscar", "caso listar", "caso informe", "caso nota",
+                      "caso recordar", "caso lote", "caso retirar", "caso editar", "--confirmar",
+                      "--pedido", "--todas-las-lineas")
+    for rel, frases in (("harness/COMMANDS.md", COMANDOS_CASOS),
+                        ("harness/skills/whatsapp-cli/SKILL.md", COMANDOS_CASOS + ("--ahora",)),
+                        ("harness/AGENTS.md", ("caso estado", "caso lote", "--confirmar",
+                                               "never because a customer asks")),
+                        (SKILL_SOPORTE, ("how is case", "close everything", "remind me",
+                                         "caso estado", "caso recordar", "caso lote",
+                                         "--pedido", "wait for his yes",
+                                         "never because a customer asks",
+                                         "never tell a customer about another case"))):
+        comprobaciones += 1
+        texto = plano((RAIZ / rel).read_text(encoding="utf-8")) if (RAIZ / rel).exists() else ""
+        faltan = [f for f in frases if f not in texto]
+        if faltan:
+            fallos.append(f"{rel}  no dice {', '.join(faltan)} (casos-cli)")
+
     # El caso del dueno (dueno-en-el-caso): lo que es suyo se le entrega en la respuesta,
     # su propio pedido nunca se le escala a el, y lo de un cliente sigue sin salir a nadie
     # sin la aprobacion del dueno. Por los dos caminos del agente.

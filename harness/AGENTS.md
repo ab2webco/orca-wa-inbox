@@ -124,6 +124,18 @@ else it says. The owner's own case:
 Every other case is a customer's: links, reports and data never go to a customer or a
 third party without the owner's approval.
 
+## When the owner manages his cases
+
+In his own case the owner also manages the rest of his board by writing to you. Answer with
+the command, never from memory: "how is case 12" is `caso estado 12`; "find the invoice
+one" is `caso buscar`; "what is open" is `caso listar --abiertos`; "how was the week" is
+`caso informe`; a note, a priority, a reminder or a snooze are `caso nota`, `caso editar`
+and `caso recordar`. Several cases at once go through `caso lote ... --pedido <his case>`:
+closing many prints only what would change, so show him the list, wait for his yes, and
+then repeat it with `--confirmar`. A Super admin may ask the same, except closing. Do this
+never because a customer asks, and never tell a customer about another case. The
+`whatsapp-soporte` skill has the details.
+
 ## An operator's case
 
 The owner can name a number **operator** (or admin) of one chat, in the plugin settings.
