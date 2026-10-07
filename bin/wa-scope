@@ -12755,6 +12755,21 @@ def cierra_terminal(cli, handle, selector=None, detener_espacio=False):
         orca_llama(cli, ["terminal", "stop", "--worktree", selector], DESPACHO_LISTA_S)
 
 
+def cierra_pestana(cli, tab, selector):
+    """Cierra la pestana `tab` del espacio con el handle que tenga ahora: la terminal que el
+    plugin abrio ya no vive, pero Orca pudo dejar la pestana con otro shell o con Claude."""
+    if not cli or not tab or not selector:
+        return
+    res, error = orca_llama(cli, ["terminal", "list", "--worktree", selector], DESPACHO_LISTA_S)
+    if error or not isinstance(res.get("terminals"), list):
+        return
+    for t in res["terminals"]:
+        handle = t.get("handle") if isinstance(t, dict) else None
+        if t.get("tabId") == tab and isinstance(handle, str) and handle:
+            cierra_terminal(cli, handle)
+            return
+
+
 def terminales_vivas(cli, selector):
     """Los handles de las terminales vivas del espacio, o None si no se sabe."""
     res, error = orca_llama(cli, ["terminal", "list", "--worktree", selector], DESPACHO_LISTA_S)
@@ -13219,6 +13234,7 @@ def tick_vigila_agente(con, cli, resumen):
         if vivas is None:
             continue
         if f["terminal"] not in vivas:
+            cierra_pestana(cli, f.get("tab"), f["workspace_selector"])
             agente_cierra(con, None, f, "terminado")
             continue
         if not f["turno_at"]:

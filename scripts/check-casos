@@ -7609,6 +7609,16 @@ if NODE:
         ok("la corrida del agente guarda la pestana de su terminal",
            fila.get("terminal") == "term_worker1" and fila.get("tab") == "tab-agente-1",
            f"{fila.get('terminal')} {fila.get('tab')} {p.stderr[-300:]}")
+        cambia_orca(carpeta, vivos=["term_resucitada", "term_dueno"],
+                    pestanas={"term_resucitada": "tab-agente-1", "term_dueno": "tab-dueno"},
+                    titulos={"term_resucitada": "..orca-wa-inbox"})
+        antes = len(llamadas_orca(carpeta, "terminal close"))
+        p, r = tick_orca(home, carpeta)
+        nuevos = llamadas_orca(carpeta, "terminal close")[antes:]
+        ok("la corrida cuya terminal ya no vive termina y cierra su pestana por la pestana",
+           corridas_agente(home)[0]["estado"] == "terminado"
+           and [bandera(x, "--terminal") for x in nuevos] == ["term_resucitada"]
+           and "--tab" in nuevos[0], f"{nuevos} {corridas_agente(home)[0]['estado']}")
 
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
         # Ninguna cuenta sirve: la activa esta tomada y la otra sin sesion.
