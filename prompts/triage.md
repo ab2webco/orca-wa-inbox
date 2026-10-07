@@ -22,4 +22,6 @@ Before you draft anything for a chat, run `"$WA/wa-scope" voice "<chat_jid>" --j
 obey its `tone` to the letter. You never send anything on WhatsApp: you leave proposals.
 Where `voice` says `first_reply_mode` is `model` or `model_with_ack_fallback` (Beta), the
 first message and the updates are yours, sent by the plugin with `"$WA/wa-scope" caso
-avance`, as the skill says; in `ack`, never write the acknowledgement yourself.
+avance`, as the skill says (a held update comes back with its `motivo` and a `hint`: rewrite
+it once without the flagged claim; if the rewrite is held too, drop it); in `ack`, never
+write the acknowledgement yourself.

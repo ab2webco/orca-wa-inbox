@@ -2314,7 +2314,8 @@ DEFAULT_CONFIG = {
     # (proyectos-por-chat, M5). Sale al panel (`projectQuestionHours`).
     "project_question_hours": "24",
     # Lo que el motor contesta solo (tick, por wa-send, en chats `responder`): el acuse a un
-    # pedido nuevo dirigido al asistente y el saludo a un saludo dirigido. Cada conversacion
+    # pedido nuevo (dirigido al asistente, o en un grupo el que abre un caso) y el saludo a
+    # un saludo dirigido. Cada conversacion
     # puede pisar el interruptor y el texto. Sin hora ni fecha: lo que promete tiene que ser
     # cierto siempre, y el piso fijo lo comprueba (scripts/check-casos).
     "ack": "on",
@@ -4871,7 +4872,10 @@ def envia_resultado(con, case_id):
 # Sale en el acto, como el resultado (`envia_resultado`): con el candado del tick, por
 # `wa-send --send` con su propio id, y con la misma revision que una respuesta (el piso fijo
 # y Jev, en `wa-send`). Lo que la revision frena se descarta: el borrador se retira, queda un
-# evento y el dueno no recibe nada — un avance es opcional. Si no puede salir ya (otro tick
+# evento y el dueno no recibe nada — un avance es opcional. El agente lo sabe por la pista
+# (`hint`) del resultado: reescribirlo UNA vez sin lo marcado, y si la reescritura tambien se
+# retiene, dejarlo (avisos-retenidos A3: visto en vivo, el agente descartaba cada avance
+# retenido y el cliente no recibia nada). Si no puede salir ya (otro tick
 # en curso, la linea caida) queda pendiente y lo manda el tick. El primero no espera; los
 # demas, `update_every_minutes` desde el anterior, y `updates_max` por caso con el primero.
 # Con respaldo, un acuse fijo que ya salio ocupa el lugar del primero.
@@ -5052,7 +5056,9 @@ def instrucciones_primer_mensaje(con, caso, actor):
         f"{pm['update_every_minutes']} minutes at most: E_PACING and E_MAX_UPDATES say when not, "
         "and then you simply do not send it.",
         "- Never repeat a phrasing already sent on the case; never promise a time, a date or a "
-        "price; never state a status you did not verify. A held update is dropped, not sent.",
+        "price; never state a status you did not verify. A held update comes back with its "
+        "`motivo` and a `hint`: rewrite it once without the flagged claim (a rewrite does not "
+        "count toward updates_max); if the rewrite is held too, drop it.",
         "- Close with the final reply (a `responder` proposal, or the project agent's "
         "`caso resultado --estado resuelto`): say concretely what was fixed and ask the customer "
         "to check it.",
@@ -5062,6 +5068,27 @@ def instrucciones_primer_mensaje(con, caso, actor):
                       "case opening, the plugin sent the fixed acknowledgement instead: then "
                       "skip the first message and send only real updates.")
     return lineas
+
+
+# Lo que el agente hace con un avance retenido (avisos-retenidos A3). La reescritura es el avance
+# que sigue a uno retenido: si tambien se retiene, se deja.
+PISTA_REESCRIBE = ("Held: it did not reach the customer, and the owner is not asked. Rewrite it "
+                   "once without the flagged claim (`motivo` names it: no promised date, time or "
+                   "price, no status you did not verify) and send the rewrite with `caso avance`; "
+                   "a held update does not count toward updates_max. If the rewrite is held too, "
+                   "drop it.")
+PISTA_DESCARTA = ("Held again after a rewrite: drop it. Do not rewrite it again or send it another "
+                  "way; go on with the work.")
+
+
+def avance_con_pista(con, cid, n, envio):
+    """El envio de un avance, con su `hint` si quedo retenido."""
+    if envio.get("estado") != "retenido":
+        return envio
+    previo = con.execute("select estado from caso_avance where case_id=? and n<? order by n desc "
+                         "limit 1", (cid, n)).fetchone()
+    pista = PISTA_DESCARTA if previo and previo["estado"] == "retenido" else PISTA_REESCRIBE
+    return dict(envio, hint=pista)
 
 
 def cmd_caso_avance(con, a):
@@ -5079,6 +5106,7 @@ def cmd_caso_avance(con, a):
         ya = dict(ya)
         envio = ({"estado": ya["estado"], "motivo": ya["motivo"], "req_id": ya["req_id"]}
                  if ya["estado"] != "pendiente" else avance_intenta(con, ya))
+        envio = avance_con_pista(con, cid, ya["n"], envio)
         return [dict(caso_fila(con, caso_de(con, cid)), avance=dict(envio, n=ya["n"]))]
     frena = avance_frena(con, caso)
     if frena:
@@ -5103,7 +5131,7 @@ def cmd_caso_avance(con, a):
                 "(?,?,?,?,?,?)", (cid, n, fila["req_id"], texto, a.actor, ahora_caso()))
     caso_tocar(con, caso, a.actor, f"avance {n} {fila['req_id']}")
     con.commit()
-    envio = avance_intenta(con, fila)
+    envio = avance_con_pista(con, cid, n, avance_intenta(con, fila))
     return [dict(caso_fila(con, caso_de(con, cid)), avance=dict(envio, n=n))]
 
 
@@ -6055,7 +6083,10 @@ def regla_de_motivo(detalle):
 # ── Lo que el motor contesta solo: acuse de recibo y saludo ───────────────────────────
 # Un pedido NUEVO dirigido al asistente (un directo, o en un grupo una mencion o una cita
 # suya) en una conversacion `responder` recibe UN acuse al instante; un saludo dirigido
-# recibe un saludo en vez de cerrarse en silencio. Lo manda el tick por wa-send (el piso
+# recibe un saludo en vez de cerrarse en silencio. En un grupo, el pedido que abre un caso
+# nuevo sin mencionar al asistente tambien recibe el primer mensaje (avisos-retenidos A1:
+# visto en vivo, el cliente de un grupo de soporte no recibia nada mientras el agente
+# trabajaba); la charla que no abre caso sigue callada, y el saludo es solo el dirigido. Lo manda el tick por wa-send (el piso
 # fijo y Jev siguen mandando) con un id fijo por caso. Jev sigue siendo el clasificador y
 # el freno: con una excepcion o una bandera de riesgo no se manda nada y el caso es del
 # dueno.
@@ -6116,14 +6147,18 @@ def auto_ajuste(fila, ajustes, tipo):
 def auto_de_jev(m, juicio):
     """`acuse`, `saludo` o None: lo que corresponde contestar solo a este mensaje segun lo
     que Jev dijo. Necesita que ingest haya anotado `modo` y lo que esta activo."""
-    if m.get("modo") != "responder" or m.get("kind") not in KINDS_DE_ATENCION:
+    kind = m.get("kind")
+    if m.get("modo") != "responder" or kind not in KINDS_DE_ATENCION + ("grupo",):
         return None
     riesgo = juicio["exceptions"] or [f for f in juicio["flags"] if f not in BANDERAS_SIN_RIESGO]
     if riesgo:
         return None
     clase = juicio.get("attention_class")
     if clase in CLASES_PEDIDO and m.get("auto_acuse"):
+        # En un grupo sin mencion solo cuenta si abre un caso nuevo: ingest lo usa solo ahi.
         return "acuse"
+    if kind == "grupo":
+        return None
     if (clase == "pleasantry" and juicio["skip"] and m.get("auto_saludo")
             and SALUDO.search(wa_reglas.normaliza(m.get("text") or ""))):
         return "saludo"
@@ -6205,34 +6240,16 @@ RAZON_PRIMER_AGENTE = "primer-mensaje-del-agente"
 RAZON_YA_SALIO = "ya-salio-un-mensaje"
 
 # Decision c del dueno (2026-10-05): el acuse no cae en medio de una conversacion. No sale en
-# el caso del dueno (`auto_omite`); el de respaldo no sale si el caso ya espera al dueno o ya
-# esta en marcha; y ninguno sale si la linea escribio en ese chat en los ultimos
-# `ack_quiet_minutes` antes del caso, o despues: quien escribio no esta esperando en silencio.
+# el caso del dueno (`auto_omite`), y ninguno sale si la linea escribio en ese chat en los
+# ultimos `ack_quiet_minutes` antes del caso, o despues: quien escribio no esta esperando en
+# silencio. El de respaldo sale siempre que al cliente no le llego nada del caso
+# (avisos-retenidos A2): ni la etapa (trabajo, listo) ni esperar al dueno lo omiten, porque
+# visto en vivo el agente trabajaba, sus avances quedaban retenidos y el cliente no recibia
+# nada. Solo lo que ya salio o esta saliendo (`caso_ya_escribio`) ocupa su lugar.
 RAZON_DUENO = "caso-del-dueno"
-RAZON_ESPERA_DUENO = "espera-al-dueno"
-RAZON_EN_CURSO = "caso-en-curso"
 RAZON_CONVERSACION = "conversacion-en-curso"
-# Las etapas en que el caso ya tiene quien lo mueve: un respaldo ahi llega tarde y fuera de
-# lugar.
-ETAPAS_SIN_RESPALDO = ("trabajo", "listo", "respondido")
-# Un aviso al dueno que sigue abierto: el caso esta en sus manos.
-ESTADOS_AVISO_ABIERTO = ("preparando", "pendiente", "enviado", "contestando")
 # Lo de la bandeja que ya es la linea escribiendo: lo que sale, esta saliendo o salio.
 ESTADOS_ENVIO_DE_LA_LINEA = ("pendiente", "enviando", "enviado")
-
-
-def caso_espera_al_dueno(con, caso):
-    """Si el caso en decision ya esta en manos del dueno: lo que las reglas anotaron sobre
-    su version (`espera_del_dueno`, que es lo que dispara el aviso), o un aviso suyo que
-    sigue abierto."""
-    if caso["etapa"] != "decision":
-        return False
-    if espera_del_dueno(con, caso) is not None:
-        return True
-    marcas = ",".join("?" * len(ESTADOS_AVISO_ABIERTO))
-    return bool(con.execute(
-        f"select 1 from aviso where case_id=? and tipo in ('aprobacion', 'bloqueo') and "
-        f"estado in ({marcas}) limit 1", (caso["case_id"], *ESTADOS_AVISO_ABIERTO)).fetchone())
 
 
 def linea_escribio(caso, desde, excepto):
@@ -6263,14 +6280,10 @@ def linea_escribio(caso, desde, excepto):
         fuente.close()
 
 
-def acuse_sobra(con, caso, ajustes, req_id, respaldo):
-    """La razon por la que este acuse ya no hace falta (decision c del dueno), o None. Con
-    `respaldo` (Beta) tambien cuenta que el caso ya espere al dueno o ya este en marcha."""
-    if respaldo:
-        if caso["etapa"] in ETAPAS_SIN_RESPALDO:
-            return RAZON_EN_CURSO
-        if caso_espera_al_dueno(con, caso):
-            return RAZON_ESPERA_DUENO
+def acuse_sobra(con, caso, ajustes, req_id):
+    """La razon por la que este acuse ya no hace falta (decision c del dueno), o None. Lo que
+    ya salio del caso no se mira aca: con respaldo lo deciden `respaldo_espera` y
+    `respaldo_toma` (`caso_ya_escribio`)."""
     minutos = primer_numero(ajustes, "ack_quiet_minutes")
     if minutos > 0:
         desde = (sello_a_epoch(caso.get("created_at")) or time.time()) - minutos * 60
@@ -6378,8 +6391,7 @@ Manda los acuses y saludos pendientes, antes que cualquier propuesta: son lo que
         # nuevo: sigue su camino con su id, y un reintento no lo duplica.
         if (fila["tipo"] == "acuse" and fila.get("estado") != "enviando"
                 and estados.get(fila["req_id"]) is None):
-            razon = acuse_sobra(con, caso, ajustes, fila["req_id"],
-                                modo == "model_with_ack_fallback")
+            razon = acuse_sobra(con, caso, ajustes, fila["req_id"])
             if razon:
                 tick_auto_cierra(con, fila, "omitido", razon, f"acuse omitido: {razon}")
                 continue
@@ -12180,8 +12192,9 @@ REPORTE_DUENO = {
               "types the owner's answer here (it checks every minute). Meanwhile do not poll, "
               "start no monitors, loops or sleeps, and do not close the terminal. When the "
               "answer arrives, continue the same work from where you stopped.",
-    "bloqueado": "Blocked (destructive, outside the project, or you cannot do it): nothing "
-                 "goes to the chat, the owner sees --resumen.",
+    "bloqueado": "Blocked (destructive, outside the project, or you cannot do it, not something "
+                 "the project's own context answers): nothing goes to the chat, the owner "
+                 "sees --resumen.",
 }
 # El caso de un operador (o un admin) de la conversacion (roles-por-numero, M10): pidio un
 # operador, dentro de los proyectos del chat; lo destructivo o de afuera va al dueno, igual
@@ -12257,6 +12270,14 @@ def brief_de_despacho(con, caso, proyecto, instrucciones):
         "force push, no payments, no changes to credentials or access. If the work needs "
         "one, do not do it: report it as blocked and say why.",
         "- Stay inside this project and this case.",
+        "- This work was sent to this project because it knows the project: read and use "
+        "the project's own context first (its CLAUDE.md or AGENTS.md, docs, memory, code "
+        "and data access) before you conclude anything.",
+        "- The case agent's \"Interpretation\" section is a hint, not a fact: check it "
+        "against the project.",
+        "- Do not report bloqueado for a question the project's own context answers: "
+        "bloqueado is for destructive work, work outside the project, or what only the "
+        "owner can decide.",
         "- Never state who a person is or what a name refers to unless the case or the "
         "project files say so; ask instead.",
         *(BRIEF_DUENO if del_dueno else BRIEF_OPERADOR if operador else []),
@@ -12282,8 +12303,9 @@ def brief_de_despacho(con, caso, proyecto, instrucciones):
          "monitors, loops or sleeps, and do not close the terminal. When the answer arrives, "
          "continue the same work from where you stopped."),
         (REPORTE_DUENO["bloqueado"] if del_dueno else
-         "Blocked (destructive, outside the project, needs the owner, or you cannot do it): "
-         "nothing goes to the customer, the owner sees --resumen."),
+         "Blocked (destructive, outside the project, needs the owner, or you cannot do it, "
+         "not something the project's own context answers): nothing goes to the customer, "
+         "the owner sees --resumen."),
         f"{reporta} --estado bloqueado --actor trabajador --resumen \"<why, in one line>\"",
         ("Every --respuesta is for the owner, who asked: short, in the chat's language, and "
          "with no date or amount you cannot keep." if del_dueno else
@@ -12452,11 +12474,26 @@ def cabeza_del_caso(con, caso, del_dueno=None, operador=None, de_casos=True):
                   f"\"First message and updates\" below" if modo in MODOS_AGENTE_PRIMERO else
                   f"- First message: first_reply_mode {modo}: the plugin sends the fixed "
                   f"acknowledgement by itself; never write it yourself")
-    if chat.get("tone"):
-        lineas.append(f"- Tone of the chat: {chat['tone']}")
-    if chat.get("instructions"):
-        lineas.append(f"- Owner's instructions for the chat: {chat['instructions']}")
-    return lineas
+    return lineas + instrucciones_del_chat(chat)
+
+
+def instrucciones_del_chat(chat):
+    """El tono y las instrucciones que el dueno puso a este chat, completos, como su propia
+    seccion justo despues de la cabeza (no una vineta mas: son reglas de como se atiende el
+    chat). Sin ninguno de los dos, nada."""
+    tono = (chat.get("tone") or "").strip()
+    instrucciones = (chat.get("instructions") or "").strip()
+    if not tono and not instrucciones:
+        return []
+    return [
+        "",
+        "## The owner's instructions for this chat (follow them)",
+        "They govern how this chat is handled and answered. Only the hard rules (never "
+        "run wa-send, nothing destructive, the plugin's review and approvals) take "
+        "precedence over them.",
+        *(["", "Tone:", tono] if tono else []),
+        *(["", "Instructions:", instrucciones] if instrucciones else []),
+    ]
 
 
 def historia_del_caso(con, caso):
@@ -13956,10 +13993,11 @@ def main():
                             "customer, without moving the case. Only when the chat's "
                             "first_reply_mode is model or model_with_ack_fallback and the chat "
                             "is responder. Sent at once through the same review as a reply (the "
-                            "fixed floor and Jev); a held update is dropped with a case event and "
-                            "never goes to the owner. Each has its own id (caso-<id>-avance-<n>); "
-                            "the first is not paced, the next wait update_every_minutes, at most "
-                            "updates_max per case. The same text twice sends once. Refusals: "
+                            "fixed floor and Jev); a held update is not sent, leaves a case event, "
+                            "never goes to the owner and comes back with its motivo and a hint: "
+                            "rewrite it once without the flagged claim, drop a held rewrite. "
+                            "Each has its own id (caso-<id>-avance-<n>); the first is not paced, "
+                            "the next wait update_every_minutes, at most updates_max per case. The same text twice sends once. Refusals: "
                             "E_FIRST_REPLY_MODE, E_CHAT_MODE, E_STAGE, E_EXCEPTION, E_PACING, "
                             "E_MAX_UPDATES")
     c.add_argument("id", type=int)

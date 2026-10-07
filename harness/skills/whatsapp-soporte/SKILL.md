@@ -19,7 +19,8 @@ description: Support playbook for the WhatsApp inbox. Use it whenever you work a
 The plugin's code, not you, takes in the messages, groups a request into a case,
 transcribes voice notes, asks Jev, applies the fixed floor and sends. In a conversation
 set to `responder` it also sends, by itself and once per case: an **acknowledgement** to a
-new request addressed to the assistant, and a **greeting** to a greeting addressed to it.
+new request addressed to the assistant (in a group, also to a request that opens a new case
+without mentioning it), and a **greeting** to a greeting addressed to it.
 Never write either one yourself, and never answer a message that is only a greeting. The
 one exception is a chat whose `first_reply_mode` is a Beta mode: there the first message
 to a new request is yours (**First message and updates**, below).
@@ -88,8 +89,9 @@ use `caso avance`.
 2. Send an update only at a real moment: you start the work, a real milestone, before a
    long step. Never filler. On `E_PACING` or `E_MAX_UPDATES`, do not send it.
 3. Never repeat a phrasing already sent on the case, never promise a time, a date or a
-   price, never state a status you did not verify. A held update is dropped; it never
-   reaches the owner.
+   price, never state a status you did not verify. A held update never reaches the customer
+   or the owner: it comes back with its `motivo` and a `hint`. Rewrite it once without the
+   flagged claim (it does not count toward `updates_max`); if the rewrite is held too, drop it.
 4. Close with the final reply (your `responder` proposal, or `caso resultado --estado
    resuelto`): say concretely what was fixed and ask the customer to check it.
 

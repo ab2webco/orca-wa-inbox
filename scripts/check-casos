@@ -1637,6 +1637,21 @@ for texto, secreto in (("la clave del panel es Hunter2xx", "Hunter2xx"),
 ok("el texto sin secretos queda igual",
    jev.mask("el pedido 1234567890 sale manana") == "el pedido 1234567890 sale manana")
 
+print("\njev: un acuse o un 'voy a revisar' no es promesa ni estado sin verificar (avisos-retenidos, A5)")
+_qb = jev.preguntas_borrador()
+_fecha = _qb["promises_a_date"]["instructions"]
+_estado = _qb["states_status_not_verified"]["instructions"]
+ok("la fecha pide un momento dicho, y 'we will confirm' ya no es ejemplo de promesa",
+   "stated moment" in _fecha and "we will confirm" not in _fecha, _fecha)
+ok("acusar recibo, decir que lo revisa o que cuenta lo que encuentre no es promesa",
+   "Acknowledging the message" in _fecha and "report back" in _fecha
+   and "is not a promise" in _fecha, _fecha)
+ok("el estado sin verificar es lo arreglado, resuelto o terminado",
+   "fixed, resolved, changed or finished" in _estado, _estado)
+ok("recibirlo, revisarlo ahora o pasarlo a una persona es su propio trabajo, no un estado",
+   "looking into it now" in _estado and "passed to a person" in _estado
+   and "not a status claim" in _estado, _estado)
+
 print("\njev: una llamada por mensaje, y el veredicto con la forma del contrato")
 t = Transporte(jev_dice(asks_owner_to_act=0.8))
 j = jev.juzga_mensaje(dict(MENSAJE, text="la clave es Hunter2xx, revisa"), LLAVE, t)
@@ -2634,6 +2649,25 @@ for texto, direccion, esperado in (
         ("we'll fix it by Friday", "salida", ["commitment"]),
         ("fica pronto amanhã", "salida", ["commitment"]),
         ("hoje eu te envio", "salida", ["commitment"]),
+        # avisos-retenidos A4: "hoy"/"today"/"hoje" y "esta manana"/"this morning"/"esta
+        # manha" solo prometen en una frase que promete una accion (voy a, te lo mando,
+        # queda, will, vou...). Visto en vivo: "ese paso hoy solo existe..." y "los leads
+        # de hoy" retenian avances que no prometian nada. "manana" (tomorrow) sigue igual.
+        ("ese paso hoy solo existe para el numero del bot", "salida", []),
+        ("como van los leads de hoy", "salida", []),
+        ("tus mensajes de esta mañana llegaron vacios", "salida", []),
+        ("today's report shows the same error", "salida", []),
+        ("we checked the logs this morning and found the cause", "salida", []),
+        ("os pedidos de hoje chegaram vazios", "salida", []),
+        ("te lo mando hoy", "salida", ["commitment"]),
+        ("hoy te confirmo", "salida", ["commitment"]),
+        ("mañana lo reviso", "salida", ["commitment"]),
+        ("the fix will be ready today", "salida", ["commitment"]),
+        ("I'll call you this morning", "salida", ["commitment"]),
+        ("esta mañana te lo envío", "salida", ["commitment"]),
+        ("hoy vamos a dejarlo listo", "salida", ["commitment"]),
+        ("queda listo hoy", "salida", ["commitment"]),
+        ("vou te enviar hoje", "salida", ["commitment"]),
         ("le confirmo que sale", "salida", []),
         ("te confirmo apenas lo vea el equipo", "salida", []),
         ("¿Para qué fecha lo necesitas?", "salida", []),
@@ -4186,10 +4220,13 @@ if NODE:
                 c1, c2, c4, c5, c6 = (caso_de_stanza(home, x) for x in ("Q1", "Q2", "Q4", "Q5", "Q6"))
                 antes_tick = list(sidecar.entregados)
                 tick(home)
+                q3 = caso_de_stanza(home, "Q3")
                 esperado = {f"caso-{c1['case_id']}-acuse", f"caso-{c2['case_id']}-acuse"}
-                ok("el acuse sale una vez por caso nuevo dirigido, con id caso-<id>-acuse",
-                   set(entregas(sidecar, "acuse")) == esperado
-                   and len(entregas(sidecar, "acuse")) == 2, f"{sidecar.entregados}")
+                if q3:
+                    esperado.add(f"caso-{q3['case_id']}-acuse")
+                ok("el acuse sale una vez por pedido que abre un caso nuevo, con id caso-<id>-acuse",
+                   q3 is not None and set(entregas(sidecar, "acuse")) == esperado
+                   and len(entregas(sidecar, "acuse")) == 3, f"{sidecar.entregados}")
                 ok("con el texto por defecto",
                    ajustes_def["ack_text"] in (cuerpo_de(home, f"caso-{c1['case_id']}-acuse") or ""),
                    f"{cuerpo_de(home, 'caso-%s-acuse' % c1['case_id'])!r}")
@@ -4198,9 +4235,11 @@ if NODE:
                                                            str(c1["case_id"]))[0]["eventos"]))
                 ok("el caso sigue su camino: el acuse no lo cierra ni lo mueve",
                    js(home, "caso", "ver", str(c1["case_id"]))[0]["etapa"] in ("recibido", "clasificado"))
-                q3 = caso_de_stanza(home, "Q3")
-                ok("un grupo sin mencion ni cita no recibe acuse, abra o no un caso",
-                   not q3 or f"caso-{q3['case_id']}-acuse" not in sidecar.entregados)
+                # avisos-retenidos A1: un pedido de un grupo sin mencion ni cita que abre un
+                # caso nuevo tambien recibe su acuse (antes no recibia nada).
+                ok("un pedido de un grupo sin mencion ni cita que abre un caso recibe su acuse",
+                   q3 is not None and f"caso-{q3['case_id']}-acuse" in sidecar.entregados,
+                   f"{sidecar.entregados}")
                 ok("un chat en borrador tampoco", f"caso-{c4['case_id']}-acuse" not in sidecar.entregados)
                 ok("una credencial no recibe acuse y va al dueno",
                    f"caso-{c5['case_id']}-acuse" not in sidecar.entregados, f"{sidecar.entregados}")
@@ -4212,11 +4251,12 @@ if NODE:
                 tick(home)
                 ok("repetir ticks e ingests no manda un segundo acuse", len(sidecar.entregados) == antes_n,
                    f"{sidecar.entregados}")
+                acuses_antes = len(entregas(sidecar, "acuse"))
                 llegan(home, A, [msg(PERSONA, "Q7", "no funciono otra vez", 1)])
                 ingiere(home)
                 tick(home)
                 ok("un mensaje que se suma al mismo caso no recibe otro acuse",
-                   len(entregas(sidecar, "acuse")) == 2, f"{sidecar.entregados}")
+                   len(entregas(sidecar, "acuse")) == acuses_antes, f"{sidecar.entregados}")
             finally:
                 sidecar.cerrar()
 
@@ -4461,6 +4501,43 @@ if NODE:
             finally:
                 sidecar.cerrar()
 
+        # avisos-retenidos A1: en un grupo `responder`, un pedido que abre un caso nuevo recibe
+        # el primer mensaje aunque no mencione ni cite al asistente (kind `grupo`). Visto en
+        # vivo: el cliente no recibio nada mientras el agente trabajaba. La charla del grupo
+        # que no abre caso sigue callada.
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(SOPORTE, "G1", "revisa este caso por favor", 1),
+                             msg(OPERACIONES, "G2", "charla entre ustedes", 1)])
+            js(home, "agent", "Agente De Ejemplo")
+            for chat in (SOPORTE, OPERACIONES):
+                js(home, "set", chat, "--provider", "ninguno", "--mode", "responder")
+            js(home, "config", "first_reply_mode", "model_with_ack_fallback")
+            js(home, "config", "ack_fallback_minutes", "10")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                g1 = caso_de_stanza(home, "G1")
+                ok("un pedido en un grupo sin mencion abre su caso", g1 is not None, f"{g1}")
+                ok("y con respaldo queda su acuse pendiente, como un directo",
+                   g1 is not None and (auto_de(home, g1["case_id"]) or {}).get("estado")
+                   == "pendiente", f"{g1 and auto_de(home, g1['case_id'])}")
+                ok("y el caso queda marcado para el agente",
+                   g1 is not None and necesita_agente(home, g1["case_id"]) == 1)
+                ok("la charla del grupo que no abre caso no recibe nada",
+                   caso_de_stanza(home, "G2") is None, f"{caso_de_stanza(home, 'G2')}")
+                if g1 is not None:
+                    envejece_caso(home, g1["case_id"], 11)
+                    tick(home)
+                ok("pasados los minutos sin nada del agente, el grupo recibe el acuse fijo",
+                   g1 is not None and sidecar.entregados.count(f"caso-{g1['case_id']}-acuse") == 1,
+                   f"{sidecar.entregados}")
+                ok("y nada mas sale al grupo de la charla",
+                   all(r.endswith("-acuse") for r in sidecar.entregados)
+                   and len(sidecar.entregados) == 1, f"{sidecar.entregados}")
+            finally:
+                sidecar.cerrar()
+
         # Y si del caso ya salio una respuesta antes de los minutos, el acuse no sale: nunca
         # los dos.
         with tempfile.TemporaryDirectory() as home:
@@ -4648,12 +4725,24 @@ if NODE:
                 ok("y queda dicho en el caso",
                    any("retenido" in ev["detalle"] for ev in
                        js(home, "caso", "ver", str(cid))[0]["eventos"]))
+                # avisos-retenidos A3: lo retenido vuelve con una pista para reescribirlo UNA
+                # vez sin lo marcado; si la reescritura tambien se retiene, se descarta.
+                pista = e.get("hint") or ""
+                ok("el avance retenido trae una pista: reescribirlo una vez sin lo marcado",
+                   "rewrite" in pista and "once" in pista and "motivo" in pista
+                   and "drop" in pista, f"{e}")
+                pm = js(home, "caso", "ver", str(cid))[0].get("primer_mensaje") or {}
+                ok("y lo retenido no ocupa lugar: la reescritura no gasta el tope",
+                   pm.get("updates_sent") == 1, f"{pm}")
                 p = avance(home, cid, "Ya fue escuchado su audio y esta todo resuelto.")
                 e = envio_de_avance(p) or {}
                 ok("lo que Jev frena tampoco sale, y su borrador se retira",
                    p.returncode == 0 and e.get("estado") == "retenido" and not borradores_de(home)
                    and cuenta(home, "select count(*) from agent_action where action='draft'") == 0,
                    f"{p.stdout[-300:]} {envios(home)}")
+                pista = e.get("hint") or ""
+                ok("la reescritura retenida tambien: su pista dice descartarlo, sin otro intento",
+                   "drop" in pista and "do not rewrite" in pista.lower(), f"{e}")
 
                 p = avance(home, cid, SEGUNDO)
                 e = envio_de_avance(p) or {}
@@ -4778,6 +4867,9 @@ with tempfile.TemporaryDirectory() as home:
             ok(f"{nombre} en model pide escribir ya, sin relleno, sin repetir y sin prometer",
                all(f in t for f in ("right away", "never filler", "Never repeat",
                                     "never promise a time, a date or a price")), t[-1500:])
+            ok(f"{nombre} en model pide reescribir una vez lo retenido, y descartar si vuelve",
+               all(f in t for f in ("rewrite it once", "flagged claim", "held too, drop it"))
+               and "dropped, not sent" not in t, t[-1500:])
             ok(f"{nombre} en model pide cerrar diciendo que se arreglo y pidiendo revisarlo",
                "--estado resuelto" in t and "ask the customer to check" in t, t[-1500:])
         for nombre, texto in (("el archivo del caso", archivo_a), ("el brief del proyecto", brief_a)):
@@ -9405,7 +9497,8 @@ if NODE:
                        "a choice only the customer can make): ask the customer directly",
                        "the plugin types the customer's answer here",
                        "Blocked (destructive, outside the project, needs the owner, or you "
-                       "cannot do it): nothing goes to the customer, the owner sees --resumen.",
+                       "cannot do it, not something the project's own context answers): "
+                       "nothing goes to the customer, the owner sees --resumen.",
                        "Never run wa-send and never write to the customer or anyone on "
                        "WhatsApp.")) and "not a change to access" not in brief, brief[-2500:])
                 ok("y la respuesta de un cliente sigue siendo datos",
@@ -11670,9 +11763,10 @@ if NODE:
             finally:
                 sidecar.cerrar()
 
-        # Con respaldo (Beta): el caso del dueno, el que ya espera al dueno, el que ya esta en
-        # trabajo y la linea que escribio hace poco no reciben el respaldo; un cliente nuevo
-        # si, a sus minutos.
+        # Con respaldo (Beta): el caso del dueno y la linea que escribio hace poco no reciben el
+        # respaldo; un cliente nuevo si, a sus minutos. avisos-retenidos A2: el que ya espera al
+        # dueno o ya esta en trabajo SI lo recibe si nada le llego al cliente (antes la etapa lo
+        # omitia y el cliente no recibia nada mientras el agente trabajaba).
         with tempfile.TemporaryDirectory() as home:
             pon_llave(home)
             llegan(home, A, [
@@ -11713,6 +11807,11 @@ if NODE:
                 ok("y el otro esta en trabajo",
                    js(home, "caso", "ver", str(r4["case_id"]))[0]["etapa"] == "trabajo",
                    js(home, "caso", "ver", str(r4["case_id"]))[0]["etapa"])
+                # El agente de r4 escribe un avance que la revision retiene: al cliente no le
+                # llego nada.
+                held4 = (envio_de_avance(avance(
+                    home, r4["case_id"], "Le queda listo manana a las 3pm, se lo aseguro."))
+                    or {}).get("estado")
                 # La linea escribe en SOPORTE despues de que el caso abrio.
                 llegan(home, A, [msg(SOPORTE, "AR5y", "Ya lo estamos viendo.", 0, yo=True)])
                 for caso in (r1, r2, r3, r4, r5):
@@ -11724,14 +11823,15 @@ if NODE:
                    f"{sidecar.entregados} {auto_de(home, r1['case_id'])}")
                 ok("respaldo: un cliente nuevo lo recibe a sus minutos, como hoy",
                    f"caso-{r2['case_id']}-acuse" in sidecar.entregados, f"{sidecar.entregados}")
-                ok("respaldo: el caso que ya espera al dueno no lo recibe",
-                   f"caso-{r3['case_id']}-acuse" not in sidecar.entregados
-                   and (auto_de(home, r3["case_id"]) or {}).get("razon") == "espera-al-dueno",
+                ok("respaldo: el caso que ya espera al dueno lo recibe si nada le llego al cliente",
+                   sidecar.entregados.count(f"caso-{r3['case_id']}-acuse") == 1
+                   and (auto_de(home, r3["case_id"]) or {}).get("estado") == "enviado",
                    f"{sidecar.entregados} {auto_de(home, r3['case_id'])}")
-                ok("respaldo: el caso en trabajo no lo recibe",
-                   f"caso-{r4['case_id']}-acuse" not in sidecar.entregados
-                   and (auto_de(home, r4["case_id"]) or {}).get("razon") == "caso-en-curso",
-                   f"{sidecar.entregados} {auto_de(home, r4['case_id'])}")
+                ok("respaldo: el caso en trabajo con su avance retenido lo recibe",
+                   held4 == "retenido"
+                   and sidecar.entregados.count(f"caso-{r4['case_id']}-acuse") == 1
+                   and (auto_de(home, r4["case_id"]) or {}).get("estado") == "enviado",
+                   f"{held4} {sidecar.entregados} {auto_de(home, r4['case_id'])}")
                 ok("respaldo: la linea escribio en el chat despues del mensaje, no lo recibe",
                    f"caso-{r5['case_id']}-acuse" not in sidecar.entregados
                    and (auto_de(home, r5["case_id"]) or {}).get("razon") == "conversacion-en-curso",
@@ -11739,7 +11839,7 @@ if NODE:
             finally:
                 sidecar.cerrar()
 
-        # Lo que decide, sin el tick: el aviso pendiente al dueno tambien es esperar al dueno.
+        # Lo que decide, sin el tick: un aviso pendiente al dueno ya no omite el respaldo.
         with tempfile.TemporaryDirectory() as home:
             linea_lista(home)
             cid, v = propuesta_lista(home, "AW1")
@@ -11755,10 +11855,12 @@ if NODE:
             con = ws.db()
             try:
                 caso = ws.caso_de(con, int(cid))
-                ok("un caso en decision con un aviso al dueno sin contestar espera al dueno",
+                # avisos-retenidos A2: esperar al dueno ya no omite el respaldo; solo lo que
+                # ya salio del caso (caso_ya_escribio) o la linea escribiendo.
+                ok("un caso en decision con un aviso al dueno sin contestar no omite el respaldo",
                    caso["etapa"] == "decision" and ws.acuse_sobra(
-                       con, caso, ws.merged_settings(con), f"caso-{cid}-acuse", True)
-                   == "espera-al-dueno", f"{caso['etapa']}")
+                       con, caso, ws.merged_settings(con), f"caso-{cid}-acuse")
+                   is None, f"{caso['etapa']}")
             finally:
                 con.close()
     finally:
@@ -14695,6 +14797,48 @@ with tempfile.TemporaryDirectory() as home:
     ev = js(home, "caso", "ver", decide_)[0]["eventos"][-1]
     ok("una propuesta en decision sigue sin texto en el evento: el agente la rehace",
        "Lo revisamos hoy" not in ev["detalle"], f"{ev}")
+
+# ── Las instrucciones del chat con peso (instrucciones-con-peso) ─────────────────────
+# Caso vivo: el tono y las instrucciones largas del chat iban como una vineta mas de la
+# cabeza y los agentes las trataban como contexto. Ahora son su propia seccion, completa,
+# justo despues de la cabeza, en el archivo del caso y en el brief; y el agente del
+# proyecto se apoya en lo que su proyecto ya sabe antes de dar un caso por bloqueado.
+print("\ninstrucciones-con-peso: tono e instrucciones del chat como seccion propia")
+SECCION_DUENO = "## The owner's instructions for this chat (follow them)"
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        largas = "Regla uno: " + "responde con detalle y cuida el contexto. " * 40 + "FIN-DE-LAS-INSTRUCCIONES"
+        js(home, "set", CHAT, "--provider", "ninguno", "--mode", "responder",
+           "--tone", "Formal, de usted", "--instructions", largas)
+        con_ins = caso_clasificado(home, "IP1")
+        archivo, brief = textos_del_caso(home, con_ins)
+        for nombre_, texto in (("el archivo del caso", archivo), ("el brief", brief)):
+            ok(f"{nombre_}: no deja el tono ni las instrucciones como vinetas",
+               "- Tone of the chat:" not in texto
+               and "- Owner's instructions for the chat:" not in texto, texto[:300])
+            ok(f"{nombre_}: trae la seccion con el tono y las instrucciones completas",
+               SECCION_DUENO in texto and "Formal, de usted" in texto
+               and " ".join(largas.split()) in texto, texto[:300])
+            ok(f"{nombre_}: dice que mandan y que solo lo duro tiene precedencia",
+               "govern how this chat is handled and answered" in texto
+               and "Only the hard rules" in texto and "wa-send" in texto.split(SECCION_DUENO)[1][:900],
+               texto.split(SECCION_DUENO)[-1][:900])
+            ok(f"{nombre_}: la seccion va justo despues de la cabeza, antes de lo demas",
+               0 <= texto.find("- Approval levels:") < texto.find(SECCION_DUENO)
+               < texto.find("Messages of the case"), texto[:300])
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        sin_ins = caso_clasificado(home, "IP2", PERSONA)
+        archivo, brief = textos_del_caso(home, sin_ins)
+        ok("un chat sin tono ni instrucciones no tiene la seccion",
+           SECCION_DUENO not in archivo and SECCION_DUENO not in brief, archivo[:300])
+        ok("el brief del proyecto manda leer primero el contexto del proyecto",
+           "knows the project" in brief and "CLAUDE.md" in brief
+           and "\"Interpretation\" section is a hint, not a fact" in brief
+           and "Do not report bloqueado for a question the project's own context answers" in brief,
+           brief[:300])
+        ok("y la linea de Blocked sigue de acuerdo",
+           "Blocked (destructive, outside the project, needs the owner" in brief
+           and "not something the project's own context answers" in brief, brief[-900:])
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:

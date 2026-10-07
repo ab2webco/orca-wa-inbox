@@ -158,11 +158,11 @@ _UNIDADES = (r"minutos?|horas?|dias?|semanas?|meses|mes|minutes?|hours?|days?|we
              r"months?")
 COMPROMISO = re.compile(
     r"\b(?:"
-    r"manana|hoy|pasado manana|esta (?:tarde|noche|semana)|"
+    r"(?<!esta )manana|pasado manana|esta (?:tarde|noche|semana)|"
     r"(?:la )?(?:proxima|siguiente) semana|fin de semana|"
-    r"tomorrow|today|tonight|this (?:afternoon|evening|week)|next week|eod|"
+    r"tomorrow|tonight|this (?:afternoon|evening|week)|next week|eod|"
     r"end of (?:the )?(?:day|week)|"
-    r"amanha|hoje|depois de amanha|esta (?:tarde|noite)|(?:a )?proxima semana|"
+    r"amanha|depois de amanha|esta (?:tarde|noite)|(?:a )?proxima semana|"
     r"(?:" + _DIAS + r")(?:-feira)?|"
     r"(?:" + _MESES + r")|"
     r"by (?:the end|end of|eod|tomorrow|tonight|today|next|this|(?:" + _DIAS + r")|\d)|"
@@ -175,16 +175,35 @@ COMPROMISO = re.compile(
     r"|(?<!\d)\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?(?!\d)"
     r"|\b\d{1,2}(?::\d{2})?\s?(?:am|pm|a\.m\.|p\.m\.|hs|hrs)\b"
     r"|(?<!\d)\d{1,2}:\d{2}(?!\d)")
+# avisos-retenidos A4: in what goes out, "hoy" and "esta manana" also describe ("ese paso hoy
+# solo existe", "los leads de hoy", "tus mensajes de esta manana"): they promise only in a
+# sentence that also promises an action, a future or a delivery verb. "Manana" alone
+# (tomorrow) is still a date. In a brief (`_menciones`) "hoy" alone is still a deadline:
+# "despliega a produccion hoy" is an order with a date.
+HOY = re.compile(r"\b(?:hoy|today|hoje|esta manana|this morning|esta manha)\b")
+_ENTREGA = (r"mando|mandamos|envio|enviamos|entrego|entregamos|paso|pasamos|confirmo|"
+            r"confirmamos|tengo|tenemos|resuelvo|resolvemos|arreglo|arreglamos|reviso|"
+            r"revisamos|dejo|dejamos|termino|terminamos|corrijo|corregimos|hago|hacemos|"
+            r"llamo|llamamos|escribo|escribimos")
+PROMESA = re.compile(
+    r"\b(?:voy a|vamos a|va a|van a|queda|quedan|quedara|quedaran|estara|estaran|"
+    # te lo mando, se lo envio, lo revisamos: el verbo con su objeto
+    r"(?:te|le|les|se|nos|lo|la)(?: (?:lo|la|los|las))? (?:" + _ENTREGA + r")|"
+    r"will|going to|gonna|"
+    r"vou|vamos|vai|vao|fica|ficara|te (?:envio|mando|passo|entrego|confirmo))\b"
+    r"|\w'll\b")
 PREGUNTA = re.compile(r"\?\s*$|^\s*[¿?]")
 
 
-def _compromiso(original):
-    """A sentence that is not a question and names a concrete date or time. The original
-    text is split, not the normalized one: "¿" survives only there."""
+def _compromiso(original, hoy_basta=False):
+    """A sentence that is not a question and names a concrete date or time ("hoy" or "esta
+    manana" only with a promise, unless `hoy_basta`). The original text is split, not the
+    normalized one: "¿" survives only there."""
     for frase in frases(original):
         if PREGUNTA.search(frase):
             continue
-        if COMPROMISO.search(normaliza(frase)):
+        t = normaliza(frase)
+        if COMPROMISO.search(t) or (HOY.search(t) and (hoy_basta or PROMESA.search(t))):
             return True
     return False
 
@@ -425,7 +444,7 @@ def _menciones(texto):
         halladas.add("money")
     if _secreto(original, normaliza(original)) or CREDENCIAL_PALABRA.search(palabras):
         halladas.add("credential")
-    if _compromiso(palabras):
+    if _compromiso(palabras, hoy_basta=True):
         halladas.add("commitment")
     return [e for e in wa_jev.ORDEN_EXCEPCIONES if e in halladas]
 

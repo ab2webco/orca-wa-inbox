@@ -1415,7 +1415,8 @@
           toneHelp: "Vale para todas las conversaciones. Cada una puede tener el suyo y pisa este.",
           autoLegend: 'Respuestas automaticas',
           autoIntro: 'Solo en las conversaciones donde su agente puede responder por si mismo. ' +
-            'Un pedido nuevo dirigido al asistente recibe un acuse de recibo al instante, salvo ' +
+            'Un pedido nuevo dirigido al asistente (en un grupo, tambien el que abre un caso sin ' +
+            'mencionarlo) recibe un acuse de recibo al instante, salvo ' +
             'si la linea ya le escribio en ese chat hace poco, y un saludo recibe un saludo. ' +
             'Nada con dinero, credenciales o riesgo se contesta solo: ' +
             'pasa a usted.',
@@ -1444,7 +1445,7 @@
             'ese chat dentro de estos minutos (una respuesta, un avance o un mensaje suyo desde ' +
             'el telefono), no salen ni el acuse ni su respaldo. En 0 no se mira lo que la linea ' +
             'escribio antes. Aparte de estos minutos, el acuse no sale en su propio chat, y el de ' +
-            'respaldo no sale si el caso ya espera su aprobacion o ya esta en marcha.',
+            'respaldo sale solo si al cliente todavia no le llego nada del caso.',
           ackQuietRange: 'El silencio del acuse es un numero entero de minutos, de 0 a 240.',
           // --- la meta del primer contacto (informes-tablero, I4) ---
           slaLegend: 'Informes',
@@ -1998,7 +1999,8 @@
           toneHelp: "Applies to every conversation. Each one can override it.",
           autoLegend: 'Automatic replies',
           autoIntro: 'Only in conversations where your agent may reply on its own. A new ' +
-            'request addressed to the assistant gets an acknowledgement right away, unless the ' +
+            'request addressed to the assistant (in a group, also one that opens a case without ' +
+            'mentioning it) gets an acknowledgement right away, unless the ' +
             'line wrote in that chat recently, and a greeting gets a greeting. Anything with ' +
             'money, credentials or risk is never ' +
             'answered automatically: it goes to you.',
@@ -2027,8 +2029,8 @@
             'line wrote in that chat within these minutes (a reply, an update or a message of ' +
             'yours from the phone), neither the acknowledgement nor its fallback goes out. At 0 ' +
             'what the line wrote before is not checked. Apart from these minutes, the ' +
-            'acknowledgement does not go out in your own chat, and the fallback does not go out ' +
-            'once the case waits for your approval or is already under way.',
+            'acknowledgement does not go out in your own chat, and the fallback only goes out if ' +
+            'nothing from the case has reached the customer yet.',
           ackQuietRange: 'The quiet time is a whole number of minutes, from 0 to 240.',
           slaLegend: 'Reports',
           slaLabel: 'First contact target (minutes)',
@@ -2600,7 +2602,8 @@
         toneLabel: 'Como escreve',
         autoLegend: 'Respostas automaticas',
         autoIntro: 'Somente nas conversas em que o seu agente pode responder sozinho. Um pedido ' +
-          'novo dirigido ao assistente recebe um aviso de recebimento na hora, salvo se a linha ' +
+          'novo dirigido ao assistente (num grupo, tambem o que abre um caso sem menciona-lo) ' +
+          'recebe um aviso de recebimento na hora, salvo se a linha ' +
           'ja escreveu nessa conversa ha pouco, e uma saudacao recebe uma saudacao. Nada com ' +
           'dinheiro, credenciais ou risco e respondido sozinho: ' +
           'passa para voce.',
@@ -2629,7 +2632,7 @@
           'conversa dentro destes minutos (uma resposta, uma atualizacao ou uma mensagem sua ' +
           'pelo telefone), nao saem nem o aviso nem a sua reserva. Em 0 nao se olha o que a ' +
           'linha escreveu antes. Alem destes minutos, o aviso nao sai na sua propria conversa, ' +
-          'e o de reserva nao sai se o caso ja espera a sua aprovacao ou ja esta em andamento.',
+          'e o de reserva so sai se nada do caso chegou ainda ao cliente.',
         ackQuietRange: 'O silencio do aviso e um numero inteiro de minutos, de 0 a 240.',
         slaLegend: 'Relatorios',
         slaLabel: 'Meta do primeiro contato (minutos)',
