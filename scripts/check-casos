@@ -6525,6 +6525,39 @@ if NODE:
         ok("y cada pestana se cierra entera", nuevos and all("--tab" in x for x in nuevos),
            f"{nuevos}")
 
+    # cierra-pestanas T5: un caso que se cierra (o queda respondido) cierra las pestanas de
+    # sus despachos y corridas que ya no estan en vuelo, por su handle si no hay pestana
+    # guardada. Sin esperar a la limpieza de cada 5 minutos: el tick siguiente. Un despacho
+    # terminado de un caso abierto conserva la suya.
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta)
+        caso_a = trabajo_firmado(home, "D2v")
+        tick_orca(home, carpeta)
+        con = db_de(home)
+        con.execute("update caso_despacho set estado='reportado'")
+        con.commit()
+        con.close()
+        caso_b = trabajo_firmado(home, "D2w")
+        tick_orca(home, carpeta)
+        con = db_de(home)
+        con.execute("update caso_despacho set estado='reportado', terminal='term_b' "
+                    "where case_id=?", (int(caso_b),))
+        con.commit()
+        con.close()
+        js(home, "caso", "mover", caso_a, "cerrado", "--motivo", "lo resolvi a mano",
+           "--actor", "dueno")
+        cambia_orca(carpeta, vivos=["term_worker1", "term_b", "term_dueno"],
+                    titulos={"term_worker1": "..alfa-demo", "term_b": "..alfa-demo",
+                             "term_dueno": "..alfa-demo"})
+        antes = len(llamadas_orca(carpeta, "terminal close"))
+        p, r = tick_orca(home, carpeta)
+        nuevos = llamadas_orca(carpeta, "terminal close")[antes:]
+        ok("el caso cerrado cierra en el tick siguiente la pestana de su despacho terminado, "
+           "por el handle", [bandera(x, "--terminal") for x in nuevos] == ["term_worker1"]
+           and "--tab" in nuevos[0] and p.returncode == 0, f"{nuevos} {p.stderr[-300:]}")
+
     # Un lanzamiento que quedo a medias (el tick murio) no se relanza: va al dueno.
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
         linea_lista(home)

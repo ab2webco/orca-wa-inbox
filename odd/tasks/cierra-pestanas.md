@@ -36,6 +36,20 @@ Observed (read-only, live):
   `tabId` is in flight.
 - T4. A run closed through the path "terminal no longer alive" (`agente_cierra(con, None,
   ...)`) still closes its tab by `tabId` if the tab is alive under another handle.
+- T5. When a case reaches `cerrado` or `respondido` (any path: every stage change goes
+  through `caso_mover`), the plugin closes the tabs of all that case's runs and dispatches
+  that are not in flight: by stored `tabId` with `--tab` (current handle from `terminal
+  list`), or by the stored handle when there is no `tabId`. A dispatch waiting for the
+  customer (`esperando`) is in flight and is not closed. Best-effort from the tick: the
+  transition only asks for the next sweep (never blocks on Orca); a failure retries on the
+  next sweep.
+- T6. Adoption of tabs opened before this fix: in the plugin's OWN workspace only (the
+  root of the `plugin-workspaces/<plugin id>` folder, where only the case agent runs), the
+  sweep closes every tab whose handle and `tabId` are not in flight, whatever its title,
+  once it has been idle (`lastOutputAt`) for at least `PESTANA_QUIETA_S` (10 minutes), and
+  never while a run is opening or an automation run of that workspace is in flight. The
+  folder's `::workspace:` children keep their own cleanup. Project workspaces keep the
+  strict rule (stored `tabId` or the title rule).
 
 Out of scope: the owner's own terminals in any workspace are never touched; project
 workspaces keep today's rule (only tabs the plugin opened, identified by stored `tabId`
@@ -47,6 +61,8 @@ or the title rule).
 - [ ] T2 store `tabId` for runs and dispatches (RED → GREEN)
 - [ ] T3 sweep by `tabId`, wider title rule, precise in-flight skip (RED → GREEN)
 - [ ] T4 closed-elsewhere run still closes its tab (RED → GREEN)
+- [ ] T5 closed or answered case closes its finished runs' and dispatches' tabs (RED → GREEN)
+- [ ] T6 idle tabs in the plugin's own workspace are adopted and closed (RED → GREEN)
 - [ ] Release
 
 ## Acceptance criteria
@@ -55,7 +71,12 @@ or the title rule).
 - A tab that came back with a new handle and a new title is closed by the next sweep
   because its `tabId` belongs to a finished run; a tab of an in-flight run is not.
 - A terminal that is not the plugin's (no stored `tabId`, title not matching) is never
-  closed.
+  closed in a project workspace.
+- Moving a case to `cerrado` makes the next tick close its finished dispatch's tab by
+  handle; a finished dispatch of an open case keeps its tab.
+- In the plugin's own workspace, an idle tab (10+ minutes) that is not in flight is closed
+  whatever its title; a recent one, an in-flight one, and any tab of a project workspace
+  are not.
 
 ## Checks
 

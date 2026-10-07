@@ -3389,6 +3389,11 @@ def caso_mover(con, caso, hacia, actor, detalle="", **campos):
     con.execute(f"update caso set {', '.join(f'{k}=?' for k in sets)} where case_id=?",
                 (*sets.values(), caso["case_id"]))
     caso_evento(con, caso["case_id"], caso["etapa"], hacia, actor, detalle, momento)
+    if hacia in ETAPAS_TERMINADAS and caso["etapa"] != hacia:
+        # Un caso cerrado o respondido no espera los 5 minutos de la limpieza para cerrar las
+        # pestanas de sus agentes que ya terminaron: la pide para el tick siguiente, sin
+        # llamar a Orca aca (cierra-pestanas, T5).
+        con.execute("delete from settings where key='limpieza_at'")
     if hacia == "bloqueado" and caso["etapa"] != "bloqueado":
         # Un caso bloqueado se le dice al dueno por WhatsApp, si eligio un numero (T14).
         aviso_de_bloqueo(con, caso, detalle)
@@ -9352,21 +9357,27 @@ TITULO_DE_AGENTE = re.compile(
 
 
 def pestanas_del_plugin(con):
-    """(en vuelo, terminadas): los handles y las pestanas de los despachos y las corridas
-    del agente en vuelo, y las pestanas de los que ya no lo estan."""
-    en_vuelo, terminadas = {"handles": set(), "tabs": set()}, set()
+    """(en vuelo, terminadas, de casos cerrados): los handles y las pestanas de los despachos
+    y las corridas del agente en vuelo; las pestanas de los que ya no lo estan; y los handles
+    de los que ya no lo estan, sin pestana guardada, de un caso cerrado o respondido."""
+    en_vuelo, terminadas, cerrados = {"handles": set(), "tabs": set()}, set(), set()
     for tabla, estados in (("caso_despacho", DESPACHO_EN_VUELO),
                            ("agente_corrida", AGENTE_EN_VUELO)):
-        for r in con.execute(f"select terminal, tab, estado in ({','.join('?' * len(estados))}) "
-                             f"as vuela from {tabla}", estados):
+        for r in con.execute(
+                f"select x.terminal, x.tab, x.estado in ({','.join('?' * len(estados))}) "
+                f"as vuela, c.etapa in ({','.join('?' * len(ETAPAS_TERMINADAS))}) as termino "
+                f"from {tabla} x left join caso c on c.case_id = x.case_id",
+                (*estados, *ETAPAS_TERMINADAS)):
             if r["vuela"]:
                 en_vuelo["handles"].add(r["terminal"])
                 en_vuelo["tabs"].add(r["tab"])
             elif r["tab"]:
                 terminadas.add(r["tab"])
+            elif r["termino"] and r["terminal"]:
+                cerrados.add(r["terminal"])
     en_vuelo["handles"].discard(None)
     en_vuelo["tabs"].discard(None)
-    return en_vuelo, terminadas - en_vuelo["tabs"]
+    return en_vuelo, terminadas - en_vuelo["tabs"], cerrados - en_vuelo["handles"]
 
 
 def cierra_huerfanas(con, cli, resumen):
@@ -9374,7 +9385,8 @@ def cierra_huerfanas(con, cli, resumen):
     la pestana al cerrar la sesion, y al reiniciarse les da handles nuevos: el plugin, que
     las seguia por el handle, las perdia, y Orca les abria otro shell o volvia a abrir
     Claude. Se reconocen por la pestana (`tabId`) que se guardo al abrirlas, sea cual sea su
-    titulo ahora; las de antes, sin pestana guardada, por el titulo. Una pestana o un handle
+    titulo ahora; las de antes, sin pestana guardada, por el titulo, y las de un caso cerrado
+    o respondido tambien por el handle guardado. Una pestana o un handle
     de un despacho o de una corrida en vuelo no se toca, y ninguna otra terminal del dueno
     tampoco. Nunca detiene un espacio."""
     terminales = lista_de_orca(cli, ["terminal", "list", "--limit", "1000"], "terminals")
@@ -9386,7 +9398,7 @@ def cierra_huerfanas(con, cli, resumen):
     corridas = [dict(r) for r in con.execute(
         f"select id, case_id, terminal from agente_corrida where estado in "
         f"({','.join('?' * len(AGENTE_EN_VUELO))})", AGENTE_EN_VUELO)]
-    en_vuelo, terminadas = pestanas_del_plugin(con)
+    en_vuelo, terminadas, de_casos_cerrados = pestanas_del_plugin(con)
     # Una corrida que se esta abriendo aun no anoto su terminal: sin saber cual es, ninguna
     # pestana de agente con titulo se toca.
     abriendo = any(not x["terminal"] for x in corridas)
@@ -9395,7 +9407,7 @@ def cierra_huerfanas(con, cli, resumen):
         if not isinstance(handle, str) or not handle or handle in en_vuelo["handles"] \
                 or tab in en_vuelo["tabs"]:
             continue
-        if tab and tab in terminadas:
+        if (tab and tab in terminadas) or handle in de_casos_cerrados:
             cierra_terminal(cli, handle)
             resumen["limpiados"] += 1
             continue
