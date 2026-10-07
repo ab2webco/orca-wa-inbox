@@ -6331,12 +6331,14 @@ if NODE:
            len(llamadas_orca(carpeta, "terminal create")) == 2
            and len(despachos(home, cid)) == 2 and r.get("despachados") == 1, f"{r}")
 
-        # Cerrar el caso con el agente vivo lo detiene.
+        # Cerrar el caso con el agente vivo lo detiene. La `orca` de mentira deja viva la
+        # terminal cerrada (la de verdad la quita): la limpieza del caso cerrado (T5) la puede
+        # volver a cerrar, y aca solo importa cual se cierra.
         antes = len(cerradas(carpeta))
         js(home, "caso", "mover", cid, "cerrado", "--motivo", "ya no hace falta", "--actor", "dueno")
         tick_orca(home, carpeta)
         ok("un caso cerrado con el agente vivo cierra su terminal",
-           cerradas(carpeta)[antes:] == ["term_worker1"]
+           set(cerradas(carpeta)[antes:]) == {"term_worker1"}
            and despachos(home, cid)[-1]["estado"] == "cancelado",
            f"{cerradas(carpeta)} {despachos(home, cid)}")
 
@@ -6748,7 +6750,7 @@ if NODE:
             ok("y el tick no la vuelve a mandar", sidecar.entregados.count(req) == 1
                and r.get("enviados") == 0, f"{sidecar.entregados} {r}")
             ok("y el trabajador se suelta: su terminal se cierra y la fila queda reportada",
-               cerradas(carpeta) == ["term_worker1"]
+               set(cerradas(carpeta)) == {"term_worker1"}
                and despachos(home, cid)[-1]["estado"] == "reportado", f"{despachos(home, cid)}")
             ok("y el brief del despacho cerrado se borra: no queda copia del cliente",
                ruta_brief(carpeta) and not pathlib.Path(ruta_brief(carpeta)).exists(),
@@ -6879,7 +6881,7 @@ if NODE:
                js(home, "caso", "ver", cid)[0]["etapa"] == "respondido"
                and f"caso-{cid}-{hecho['propuesta_version'][:12]}" in sidecar.entregados
                and despachos(home, cid)[-1]["estado"] == "reportado"
-               and cerradas(carpeta) == ["term_worker1"],
+               and set(cerradas(carpeta)) == {"term_worker1"},
                f"{despachos(home, cid)}")
         finally:
             sidecar.cerrar()
