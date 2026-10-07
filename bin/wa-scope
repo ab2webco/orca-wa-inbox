@@ -601,6 +601,7 @@ create table if not exists caso_despacho (
   task_id   text,
   dispatch_id text,
   terminal  text,                -- el handle de la terminal del agente
+  tab       text,                -- su pestana (`tabId`): sobrevive a un handle nuevo
   cuenta_claude text,            -- el id de la cuenta de Claude elegida; null = la del espacio
   cuenta_etiqueta text,          -- su correo, como lo ve el dueno
   respaldo  text,                -- por que no se uso la cuenta del bot (RESPALDOS_CUENTA)
@@ -633,6 +634,7 @@ create table if not exists agente_corrida (
   estado    text not null default 'lanzando',
   workspace_selector text,         -- el espacio del plugin: id:<repoId>::<path>
   terminal  text,
+  tab       text,                  -- su pestana (`tabId`): sobrevive a un handle nuevo
   cuenta_claude text,              -- la cuenta elegida; null = la del espacio o la activa
   cuenta_etiqueta text,            -- su correo, como lo ve el dueno
   respaldo  text,                  -- por que no se uso la cuenta del bot (RESPALDOS_CUENTA)
@@ -1767,8 +1769,14 @@ def migrate(con):
         if columna not in despacho_cols:
             con.execute(f"alter table caso_despacho add column {columna} text")
     # El caso de cada corrida del agente de casos (caso-en-archivo, T1).
-    if "case_id" not in {r["name"] for r in con.execute("pragma table_info(agente_corrida)")}:
+    corrida_cols = {r["name"] for r in con.execute("pragma table_info(agente_corrida)")}
+    if "case_id" not in corrida_cols:
         con.execute("alter table agente_corrida add column case_id integer")
+    # La pestana de la terminal del agente (cierra-pestanas, T2): null en lo de antes.
+    if "tab" not in corrida_cols:
+        con.execute("alter table agente_corrida add column tab text")
+    if "tab" not in despacho_cols:
+        con.execute("alter table caso_despacho add column tab text")
     # T3: el veredicto entero de Jev, cacheado junto a su clase; y el rol con que se juzgo
     # (roles-por-numero, M10).
     juicio_cols = {r["name"] for r in con.execute("pragma table_info(juicio)")}
@@ -11708,11 +11716,22 @@ def espacio_del_proyecto(cli, proyecto):
     return f"path:{w['path'].strip()}", None
 
 
-def terminal_creada(resultado):
-    """El handle de la terminal en lo que devolvio `terminal create`, o None."""
+def terminal_creada(resultado, campo="handle"):
+    """El handle de la terminal en lo que devolvio `terminal create` (o `terminal show`), u
+    otro `campo` suyo, o None."""
     terminal = (resultado or {}).get("terminal")
-    handle = terminal.get("handle") if isinstance(terminal, dict) else None
-    return handle.strip() if isinstance(handle, str) and handle.strip() else None
+    valor = terminal.get(campo) if isinstance(terminal, dict) else None
+    return valor.strip() if isinstance(valor, str) and valor.strip() else None
+
+
+def pestana_de(cli, handle, creada=None):
+    """El `tabId` de la pestana de la terminal: el que trae `terminal create` si lo trae, si
+    no el de `terminal show`. None si Orca no lo dice: entonces vale solo el titulo."""
+    tab = terminal_creada(creada, "tabId")
+    if tab or not handle:
+        return tab
+    res, error = orca_llama(cli, ["terminal", "show", "--terminal", handle], DESPACHO_LISTA_S)
+    return None if error else terminal_creada(res, "tabId")
 
 
 # Por que el lanzamiento no uso la cuenta de Claude que el dueno eligio para el bot
@@ -11789,11 +11808,12 @@ def abre_agente(cli, selector, titulo, nombre, arranque_ms=DESPACHO_ARRANQUE_MS,
     tiene cuota o falla al abrir, la regla automatica y `respaldo` dice por que. La regla
     automatica: sin elegir cuenta (manda el pin del espacio o la seleccion global) y, si esa
     esta tomada o sin sesion, UNA vez con la de `cuenta_de_reintento`.
-    Devuelve {terminal, cuenta (id elegido o None), etiqueta, motivo, respaldo}."""
+    Devuelve {terminal, tab (su pestana, o None), cuenta (id elegido o None), etiqueta,
+    motivo, respaldo}."""
     orden = ["terminal", "create", "--worktree", selector, "--agent", DESPACHO_AGENTE,
              "--title", titulo, "--timeout-ms", str(arranque_ms)]
     plazo = arranque_ms // 1000 + 10
-    salida = {"terminal": None, "cuenta": None, "etiqueta": None, "motivo": None,
+    salida = {"terminal": None, "tab": None, "cuenta": None, "etiqueta": None, "motivo": None,
               "respaldo": None}
     cuentas, excluir = None, set()
     if preferida:
@@ -11811,8 +11831,8 @@ def abre_agente(cli, selector, titulo, nombre, arranque_ms=DESPACHO_ARRANQUE_MS,
             res, error = orca_llama(cli, orden + ["--claude-account", c["id"].strip()], plazo)
             terminal = None if error else terminal_creada(res)
             if terminal:
-                return dict(salida, terminal=terminal, cuenta=c["id"].strip(),
-                            etiqueta=etiqueta_de(c))
+                return dict(salida, terminal=terminal, tab=pestana_de(cli, terminal, res),
+                            cuenta=c["id"].strip(), etiqueta=etiqueta_de(c))
             salida["respaldo"] = "elegida-fallo"
         if c:
             excluir.add(c["id"].strip())
@@ -11828,7 +11848,7 @@ def abre_agente(cli, selector, titulo, nombre, arranque_ms=DESPACHO_ARRANQUE_MS,
     if not terminal:
         return dict(salida, motivo=(f"no pude despachar a {nombre}: "
                                     f"{error or 'Orca no devolvió la terminal'}"))
-    return dict(salida, terminal=terminal)
+    return dict(salida, terminal=terminal, tab=pestana_de(cli, terminal, res))
 
 
 def turno_del_agente(cli, terminal):
@@ -12928,7 +12948,8 @@ def despacha(con, caso, instrucciones, evento_id, resumen, reintento_de=None, vi
         terminal, motivo = abierto["terminal"], abierto["motivo"]
         if terminal or abierto["cuenta"] or abierto["respaldo"]:
             # Con la base: una vuelta que muere aca deja la terminal a la vista del vigia.
-            despacho_anota(con, fila, terminal=terminal, cuenta_claude=abierto["cuenta"],
+            despacho_anota(con, fila, terminal=terminal, tab=abierto["tab"],
+                           cuenta_claude=abierto["cuenta"],
                            cuenta_etiqueta=abierto["etiqueta"], respaldo=abierto["respaldo"])
     reenvios, turno = 0, False
     if not motivo:
@@ -13262,7 +13283,8 @@ def lanza_agente(con, origen, hasta):
             preferida=cuenta_del_bot(con, linea_de_caso_id(con, cid)))
         terminal, motivo = abierto["terminal"], abierto["motivo"]
         if terminal or abierto["cuenta"] or abierto["respaldo"]:
-            agente_anota(con, fila, terminal=terminal, cuenta_claude=abierto["cuenta"],
+            agente_anota(con, fila, terminal=terminal, tab=abierto["tab"],
+                         cuenta_claude=abierto["cuenta"],
                          cuenta_etiqueta=abierto["etiqueta"], respaldo=abierto["respaldo"])
             f["terminal"] = terminal
         if motivo:

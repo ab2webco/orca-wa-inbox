@@ -6429,6 +6429,43 @@ if NODE:
            not {"term_dueno", "term_vuelta", "term_worker1", "term_corta_viva",
                 "term_dueno_caso", "term_mayus_viva"} & set(nuevas), f"{nuevas}")
 
+    # cierra-pestanas T2: el despacho guarda la pestana (`tabId`) de su terminal, para
+    # cerrarla aunque Orca le cambie el handle y el titulo.
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, pestanas={"term_worker1": "tab-desp-1"})
+        cid = trabajo_firmado(home, "D2p")
+        p, r = tick_orca(home, carpeta)
+        fila = (despachos(home, cid) or [{}])[-1]
+        ok("el despacho guarda la pestana de su terminal",
+           fila.get("terminal") == "term_worker1" and fila.get("tab") == "tab-desp-1",
+           f"{fila.get('terminal')} {fila.get('tab')} {p.stderr[-300:]}")
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        # Una base de antes, sin la columna: la gana y no pierde filas.
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta)
+        cid = trabajo_firmado(home, "D2q")
+        tick_orca(home, carpeta)
+        con = db_de(home)
+        for tabla in ("caso_despacho", "agente_corrida"):
+            if "tab" in {r["name"] for r in con.execute(f"pragma table_info({tabla})")}:
+                con.execute(f"alter table {tabla} drop column tab")
+        con.execute("insert into agente_corrida (origen, estado, created_at, updated_at) "
+                    "values ('tick', 'terminado', '2026-01-01 00:00:00', '2026-01-01 00:00:00')")
+        con.commit()
+        con.close()
+        js(home, "caso", "ver", cid)
+        con = db_de(home)
+        columnas = {t: {r["name"] for r in con.execute(f"pragma table_info({t})")}
+                    for t in ("caso_despacho", "agente_corrida")}
+        filas = (con.execute("select count(*) from caso_despacho").fetchone()[0],
+                 con.execute("select count(*) from agente_corrida").fetchone()[0])
+        con.close()
+        ok("una base de antes gana la columna de la pestana y no pierde filas",
+           all("tab" in c for c in columnas.values()) and filas == (1, 1), f"{filas}")
+
     # Un lanzamiento que quedo a medias (el tick murio) no se relanza: va al dueno.
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
         linea_lista(home)
@@ -7501,6 +7538,18 @@ if NODE:
            f"{v} {creadas(carpeta)} {p.stderr[-300:]}")
         ok("y queda anotado como del dueno", corridas_agente(home)[-1]["origen"] == "dueno",
            f"{corridas_agente(home)}")
+
+    # cierra-pestanas T2: la corrida del agente de casos guarda la pestana de su terminal.
+    # T4: si su terminal ya no esta viva (Orca le dio otro handle a la pestana), la corrida
+    # termina y su pestana se cierra igual, por la pestana.
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        orca_casos(carpeta, pestanas={"term_worker1": "tab-agente-1"})
+        caso_para_agente(home, "AC1p")
+        p, r = tick_orca(home, carpeta)
+        fila = (corridas_agente(home) or [{}])[-1]
+        ok("la corrida del agente guarda la pestana de su terminal",
+           fila.get("terminal") == "term_worker1" and fila.get("tab") == "tab-agente-1",
+           f"{fila.get('terminal')} {fila.get('tab')} {p.stderr[-300:]}")
 
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
         # Ninguna cuenta sirve: la activa esta tomada y la otra sin sesion.
