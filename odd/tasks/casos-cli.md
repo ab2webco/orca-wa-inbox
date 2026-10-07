@@ -54,9 +54,11 @@ cases are created, judged or sent.
       `--limite N`, short rows by default and `--completo`, board order by default.
       Tests: `scripts/check-casos`. Proof: RED 0/1 then `unrecognized arguments: --orden`;
       GREEN 18/18 (and the older listar sections 8/8, 7/7, 12/12, 76/76, 30/30, 28/28).
-- [ ] K3 `caso estado <id>`: the card's computed context (owner actions, dispatch,
+- [x] K3 `caso estado <id>`: the card's computed context (owner actions, dispatch,
       blocked_reason, no_agent_rule, read_only, project, destination, stage since) and the
-      history in readable reasons. Tests: `scripts/check-casos`.
+      history in readable reasons. Tests: `scripts/check-casos`. Proof: RED `invalid choice:
+      'estado'`; GREEN 10/10. The board's per-card computation moved to `tarjetas_de`, shared
+      by `build_board` and `caso estado` (board sections 20/20, 15/15, 3/3, 76/76, 2/2).
 - [ ] K4 `caso informe [--periodo] [--csv]`: per-stage counts, waiting on customer, first
       reply and resolution times vs the target, SLA, from `build_reports`.
       Tests: `scripts/check-casos`.

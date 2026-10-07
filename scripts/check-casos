@@ -13965,6 +13965,66 @@ if NODE:
            and "Ya lo revisamos" not in texto, texto)
 
 
+print("\ncasos-cli K3: caso estado dice en palabras lo que dice la tarjeta")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        ids = casos_cli_linea(home)
+        js(home, "caso", "clasificar", ids["CB3"], "--clase", "card", "--prioridad", "high",
+           "--actor", "agente")
+        js(home, "caso", "propuesta", ids["CB3"], "--tipo", "responder", "--respuesta",
+           "Ya lo revisamos.", "--actor", "agente")
+        e = js(home, "caso", "estado", ids["CB3"])[0]
+        t = tarjeta(home, ids["CB3"]) or {}
+        ok("estado trae lo que calcula la tarjeta: etapa, acciones, propuesta y titulo",
+           e.get("stage") == "decision" and e.get("actions") == t.get("actions")
+           and (e.get("proposal") or {}).get("tipo") == "responder"
+           and e.get("title") == "otra cosa" and e.get("stage_at"), f"{e}")
+        ok("y las llaves de la tarjeta, sin la historia en codigos",
+           {"blocked_reason", "no_agent_rule", "read_only", "project", "dispatch",
+            "waits_agent"} <= set(e) and "events" not in e, f"{sorted(e)}")
+        hist = e.get("history") or []
+        ok("la historia en palabras, en orden, con quien y cuando",
+           len(hist) >= 3 and hist[-1]["a"] == "decision"
+           and "proposal" in hist[-1]["text"] and "agente" in hist[-1]["text"]
+           and hist[0]["a"] == "recibido" and all(h.get("at") for h in hist), f"{hist}")
+        palabras = " ".join(e.get("en_palabras") or [])
+        ok("y un resumen en palabras para contestar \"como va el caso\"",
+           "decision" in palabras and "responder" in palabras and "enviar" in palabras,
+           palabras)
+        js(home, "caso", "mover", ids["CB1"], "bloqueado", "--motivo", "falta el acceso al panel",
+           "--actor", "dueno")
+        b = js(home, "caso", "estado", ids["CB1"])[0]
+        ok("un caso bloqueado dice por que", b.get("blocked_reason") == "falta el acceso al panel"
+           and "falta el acceso al panel" in " ".join(b.get("en_palabras") or []), f"{b}")
+        js(home, "mode", PERSONA, "observar")
+        r = js(home, "caso", "estado", ids["CB2"])[0]
+        ok("un caso de un chat observar dice solo leer", r.get("read_only") is True
+           and "read only" in " ".join(r.get("en_palabras") or []).lower(), f"{r}")
+        ok("y el nombre del chat es el del almacen, no su jid",
+           r.get("chat_name") == "Cliente Uno", f"{r.get('chat_name')}")
+        cid, _ = caso_en_trabajo(home, "CB9", SOPORTE)
+        con = db_de(home)
+        evento_id = con.execute("select max(id) from caso_evento where case_id=? and a='trabajo'",
+                                (int(cid),)).fetchone()[0]
+        con.execute("insert into caso_despacho (case_id, evento_id, proyecto, estado, created_at, "
+                    "updated_at) values (?, ?, 'Web Demo', 'activo', ?, ?)",
+                    (int(cid), evento_id, time.strftime("%Y-%m-%d %H:%M:%S"),
+                     time.strftime("%Y-%m-%d %H:%M:%S")))
+        con.commit()
+        con.close()
+        d = js(home, "caso", "estado", cid)[0]
+        ok("un caso en trabajo dice su despacho al agente del proyecto",
+           (d.get("dispatch") or {}).get("state") == "activo"
+           and "Web Demo" in " ".join(d.get("en_palabras") or []), f"{d}")
+        texto = subprocess.run([str(WA_SCOPE), "caso", "estado", ids["CB3"]], capture_output=True,
+                               text=True, env=dict(os.environ, HOME=str(home),
+                                                   ORCA_CLI_COMMAND=SIN_ORCA)).stdout
+        ok("en texto, el resumen en palabras", f"Case #{ids['CB3']}" in texto
+           and "decision" in texto, texto)
+        ok("un caso que no existe es E_NOT_FOUND",
+           "E_NOT_FOUND" in corre(home, "caso", "estado", "999").stderr)
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
