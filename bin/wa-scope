@@ -141,6 +141,9 @@ TIPOS_PROPUESTA = ("responder", "trabajar", "escalar", "descartar")
 # Que campo exige cada tipo: una propuesta de responder sin respuesta es una tarjeta que
 # el dueno aprueba y que el ejecutor no sabe que enviar.
 CAMPO_DE_TIPO = {"responder": "respuesta", "trabajar": "instrucciones"}
+# Las propuestas que pueden salir a OTRO chat (respuesta-otro-chat): la respuesta, y el
+# trabajo cuya respuesta final la lleva. Escalar y descartar no mandan nada a nadie.
+TIPOS_CON_DESTINO = ("responder", "trabajar")
 # Las etapas en las que el dueno puede firmar: la decision, y el resultado del trabajo
 # (que llega como una propuesta `responder` en `listo`).
 ETAPAS_APROBABLES = ("decision", "listo")
@@ -3286,6 +3289,17 @@ def caso_fila(con, row):
                             and caso["propuesta_aprobada"] == caso.get("propuesta_version"))
     caso["mensajes"] = con.execute("select count(*) from caso_mensaje where case_id=?",
                                    (caso["case_id"],)).fetchone()[0]
+    # El otro chat al que va la propuesta (respuesta-otro-chat), o None: el del caso.
+    destino = (caso["propuesta"] or {}).get("chat") if isinstance(caso["propuesta"], dict) \
+        else None
+    caso["destino"] = None
+    if destino and destino != caso["chat_jid"]:
+        # `retenido`: el piso o Jev del destino dejaron ESTA version de borrador. La
+        # siguiente firma del dueno la manda con `--approve` (acciones.mjs, `entregar`).
+        req = id_envio_caso(caso["case_id"], caso.get("propuesta_version") or "")
+        estados, _ = envios_del_almacen([req])
+        caso["destino"] = {"chat_jid": destino, "chat_name": nombre_del_chat(con, destino),
+                           "retenido": estados.get(req) == "borrador"}
     return caso
 
 
@@ -3835,6 +3849,13 @@ def cmd_caso_propuesta(con, a):
         adjuntos = brief_de_adjuntos(con, caso)
         if adjuntos and adjuntos not in propuesta["instrucciones"]:
             propuesta["instrucciones"] += "\n\n" + adjuntos
+    if a.chat is not None:
+        if a.tipo not in TIPOS_CON_DESTINO:
+            caso_falla("E_ARGS", f"--chat goes with {' or '.join(TIPOS_CON_DESTINO)}: a {a.tipo} "
+                                 f"proposal sends nothing")
+        destino = destino_de_ref(con, caso, a.chat)
+        if destino:
+            propuesta["chat"] = destino
     texto, version = propuesta_canonica(propuesta)
     if caso["etapa"] in ("decision", "listo") and caso["propuesta_version"] == version:
         # Triage repasa cada cinco minutos: lo mismo no es un cambio ni deja evento. En
@@ -3856,6 +3877,101 @@ def cmd_caso_propuesta(con, a):
                                                            wa_reglas.SALIDA))
     con.commit()
     return [caso_fila(con, caso_de(con, a.id))]
+
+
+# ── El destino de una propuesta en otro chat (respuesta-otro-chat) ───────────────────────
+# Lo que pide el dueno o un Super admin de la conversacion puede ir a OTRO chat de la misma
+# linea en `responder` (`caso propuesta --chat`). El destino es parte de la propuesta y de su
+# version: el dueno firma el texto Y a donde va. Un cliente nunca redirige nada.
+TELEFONO_REF = re.compile(r"^\+?[\d\s().-]{7,}$")
+
+
+def chats_de_la_linea(cuenta):
+    """{jid: nombre} de las conversaciones que el almacen conoce en esa linea; {} sin
+    almacen."""
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return {}, {}
+    try:
+        filas = fuente.execute("select chat_jid, chat_name from chat where account=?",
+                               (cuenta,)).fetchall()
+        return {r["chat_jid"]: r["chat_name"] or "" for r in filas}, \
+            wa_store.telefonos_de_lid(fuente)
+    except sqlite3.Error:
+        return {}, {}
+    finally:
+        fuente.close()
+
+
+def coincide_ref(ref, chats, cuenta, pares):
+    """Los jids de `chats` ({jid: nombre}) que nombra `ref`: el jid, el telefono (de un
+    directo por telefono o por su LID) o el nombre, el exacto primero."""
+    if "@" in ref:
+        jid = wa_store.jid_sin_dispositivo(ref)
+        return [j for j in chats if j == jid]
+    if TELEFONO_REF.match(ref):
+        digitos = re.sub(r"\D", "", ref)
+        return [j for j in chats if wa_store.telefono_de(cuenta, j, pares) == f"+{digitos}"]
+    bajo = ref.lower()
+    hits = [j for j in chats if bajo in (chats[j] or "").lower()]
+    exactos = [j for j in hits if (chats[j] or "").lower() == bajo]
+    return exactos or hits
+
+
+def destino_de_ref(con, caso, ref):
+    """El jid del chat al que iria la propuesta, o None si `ref` nombra el chat del propio
+    caso. Sale con su codigo si no puede: E_DEST_ROLE (el que pide no es el dueno ni un
+    Super admin de la conversacion), E_DEST_NOT_FOUND, E_DEST_AMBIGUOUS, E_DEST_LINE (el chat
+    es de otra linea) o E_DEST_MODE (no esta en responder). La ambiguedad nunca se resuelve
+    en silencio, como en `wa_store.resolver_chat`."""
+    ref = (ref or "").strip()
+    if not ref:
+        caso_falla("E_ARGS", "--chat is empty: name the chat by its JID, phone or name")
+    if not caso_pide_como_dueno(con, caso):
+        caso_falla("E_DEST_ROLE", f"case #{caso['case_id']} is not the owner's nor a Super "
+                                  f"admin's: only they can send a reply to another chat. A "
+                                  f"customer's reply goes to its own chat")
+    cuenta = caso["account"]
+    scope = merged_scope(con)
+    del_almacen, pares = chats_de_la_linea(cuenta)
+    chats = dict(del_almacen)
+    for jid, fila in scope.items():
+        nombre = fila.get("chat_name")
+        chats[jid] = nombre if nombre and nombre != jid else chats.get(jid) or nombre or jid
+    hits = coincide_ref(ref, chats, cuenta, pares)
+    if not hits:
+        ajenos = {r["chat_jid"]: r["chat_name"] for r in con.execute(
+            "select chat_jid, chat_name from chat_scope where account<>?", (cuenta,))}
+        if coincide_ref(ref, ajenos, cuenta, {}):
+            caso_falla("E_DEST_LINE", f"{ref!r} is on another line, not on {cuenta}: a reply "
+                                      f"only goes to a chat of the case's own line")
+        caso_falla("E_DEST_NOT_FOUND", f"no chat of the line {cuenta} matches {ref!r}")
+    if len(hits) > 1:
+        nombres = "; ".join(f"{j} ({chats[j]})" for j in hits[:12])
+        caso_falla("E_DEST_AMBIGUOUS", f"{ref!r} matches {len(hits)} chats: {nombres}. Pass "
+                                       f"the JID of the one you mean")
+    jid = hits[0]
+    if jid == caso["chat_jid"]:
+        return None
+    modo = (scope.get(jid) or {}).get("mode") or "off"
+    if modo != "responder":
+        caso_falla("E_DEST_MODE", f"{chats[jid] or jid} is on {modo}: a reply only goes to "
+                                  f"another chat authorized in responder. The owner "
+                                  f"authorizes it in the panel")
+    return jid
+
+
+def destino_de_propuesta(caso):
+    """El jid del otro chat al que va la propuesta vigente, o None si va al del caso."""
+    try:
+        propuesta = json.loads(caso["propuesta"] or "null")
+    except (TypeError, ValueError, KeyError):
+        return None
+    if not isinstance(propuesta, dict):
+        return None
+    chat = propuesta.get("chat")
+    return chat if chat and chat != caso["chat_jid"] else None
 
 
 def propuesta_tipo(caso):
@@ -12386,6 +12502,17 @@ def main():
     c.add_argument("--respuesta", help="the reply text (required for responder)")
     c.add_argument("--instrucciones", help="the work to do (required for trabajar)")
     c.add_argument("--repo", help="where the work happens")
+    c.add_argument("--chat", help="send the reply (or the job's final reply) to ANOTHER chat "
+                                  "instead of the case's: its JID, phone or name. Only for a "
+                                  "case of the owner or of a Super admin of the conversation, "
+                                  "and only to a chat of the same line in responder; it always "
+                                  "waits for the owner's approval, and the case's chat gets a "
+                                  "confirmation once it is sent. `caso destinos <id>` lists the "
+                                  "candidates. Refusals (exit 2): E_DEST_ROLE (a customer's "
+                                  "case), E_DEST_NOT_FOUND, E_DEST_AMBIGUOUS (the candidates "
+                                  "are in the detail: pass the JID), E_DEST_LINE (the chat is "
+                                  "on another line), E_DEST_MODE (the chat is not in "
+                                  "responder), E_ARGS (escalar or descartar)")
     c.set_defaults(fn=cmd_caso_propuesta)
 
     c = caso("aprobar", help="the owner's approval of ONE proposal version; refused if "
@@ -12497,7 +12624,14 @@ def main():
     if not rows:
         print("(empty registry — no chat authorized, which is the safe default)"); return
     for r in rows:
-        print(" | ".join(f"{v}" for v in r.values() if v not in (None, "")))
+        print(" | ".join(valor_en_texto(k, v) for k, v in r.items() if v not in (None, "")))
+
+
+def valor_en_texto(clave, valor):
+    """Un valor de la salida en texto. El destino de una propuesta dice a donde va."""
+    if clave == "destino" and isinstance(valor, dict):
+        return f"-> {valor.get('chat_name') or valor.get('chat_jid')}"
+    return f"{valor}"
 
 
 if __name__ == "__main__":

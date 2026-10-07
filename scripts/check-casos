@@ -13391,6 +13391,134 @@ if NODE:
         os.environ.clear()
         os.environ.update(antes)
 
+
+# ── respuesta-otro-chat: una respuesta (o el resultado de un trabajo) a otro chat ─────────
+# Decision del dueno: lo que pide el dueno o un Super admin de la conversacion puede ir a
+# OTRO chat de la misma linea en `responder` (`caso propuesta --chat`). Un cliente nunca.
+# Datos de mentira: jids y nombres inventados.
+JEFA_OC = "111122225555@lid"
+OTRA_LINEA_OC = "120363000000000020@g.us"
+
+
+def prepara_otro_chat(home):
+    """La linea A con el directo del dueno, Facturacion en responder (el destino),
+    Operaciones en observar y Soporte con una Super admin."""
+    if not any(c["jid"] == DUENO_DM for c in CHATS):
+        CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+    linea_lista(home, modo_persona="responder", modo_soporte="responder")
+    js(home, "config", "ack", "off")
+    js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+    js(home, "set", FACTURACION, "--provider", "ninguno", "--mode", "responder")
+    js(home, "set", OPERACIONES, "--provider", "ninguno", "--mode", "observar")
+    js(home, "set", SOPORTE, "--member", f"{JEFA_OC}=admin")
+    pon_duenos(home, DUENO_LID)
+
+
+def caso_pedido(home, chat, stanza, de, texto="saca una conclusion y reportala"):
+    llegan(home, A, [msg(chat, stanza, texto, 5, mencion=True, de=de)])
+    cid = str(js(home, "caso", "crear", "--chat", chat, "--stanza", stanza,
+                 "--actor", "agente")[0]["case_id"])
+    js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+       "--actor", "agente")
+    return cid
+
+
+def propone_a(home, cid, destino, texto="La conclusion: el reporte quedo bien.",
+              tipo="responder"):
+    campo = "--respuesta" if tipo == "responder" else "--instrucciones"
+    return corre(home, "caso", "propuesta", cid, "--tipo", tipo, campo, texto,
+                 "--chat", destino, "--actor", "agente")
+
+
+print("\nrespuesta-otro-chat R1: caso propuesta --chat")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        prepara_otro_chat(home)
+        dueno = caso_pedido(home, DUENO_DM, "OC1", DUENO_LID)
+        p = propone_a(home, dueno, "Facturacion")
+        fila = json.loads(p.stdout or "[{}]")[0] if p.returncode == 0 else {}
+        ok("el dueno propone una respuesta a otro chat por su nombre",
+           p.returncode == 0 and (fila.get("propuesta") or {}).get("chat") == FACTURACION,
+           p.stderr.strip()[:300])
+        ok("y la fila dice el destino con su nombre",
+           fila.get("destino") == {"chat_jid": FACTURACION, "chat_name": "Facturacion",
+                                   "retenido": False},
+           f"{fila.get('destino')}")
+        v_nombre = fila.get("propuesta_version")
+        p = propone_a(home, dueno, FACTURACION)
+        ok("por su jid es la misma propuesta (la misma version)",
+           p.returncode == 0 and json.loads(p.stdout)[0]["propuesta_version"] == v_nombre,
+           p.stderr.strip()[:300])
+        sin = js(home, "caso", "propuesta", dueno, "--tipo", "responder", "--respuesta",
+                 "La conclusion: el reporte quedo bien.", "--actor", "agente")[0]
+        ok("el destino es parte de la version: sin --chat es otra",
+           sin["propuesta_version"] != v_nombre and sin.get("destino") is None,
+           f"{sin.get('destino')}")
+        p = propone_a(home, dueno, "Dueno Directo")
+        ok("nombrar el chat del propio caso no es un destino",
+           p.returncode == 0 and "chat" not in json.loads(p.stdout)[0]["propuesta"]
+           and json.loads(p.stdout)[0]["destino"] is None, p.stderr.strip()[:300])
+        p = propone_a(home, dueno, "+57 300 000 0002")
+        ok("por su telefono",
+           p.returncode == 0 and json.loads(p.stdout)[0]["propuesta"].get("chat") == PERSONA,
+           p.stderr.strip()[:300])
+        ok("un chat en observar se niega con E_DEST_MODE",
+           error_de(propone_a(home, dueno, "Operaciones")) == "E_DEST_MODE")
+        ok("uno que no esta en ninguna parte, con E_DEST_NOT_FOUND",
+           error_de(propone_a(home, dueno, "Grupo Que No Existe")) == "E_DEST_NOT_FOUND")
+        p = propone_a(home, dueno, "o")
+        ok("un nombre que coincide con varios se niega con E_DEST_AMBIGUOUS y los nombra",
+           error_de(p) == "E_DEST_AMBIGUOUS" and SOPORTE in p.stderr
+           and OPERACIONES in p.stderr, p.stderr.strip()[:300])
+        con = db_de(home)
+        con.execute("insert into chat_scope (account, chat_jid, chat_name, mode) values "
+                    "(?, ?, 'Grupo Otra Linea', 'responder')", (B, OTRA_LINEA_OC))
+        con.commit()
+        con.close()
+        ok("un chat de otra linea se niega con E_DEST_LINE",
+           error_de(propone_a(home, dueno, "Grupo Otra Linea")) == "E_DEST_LINE")
+        ok("y por su jid tambien",
+           error_de(propone_a(home, dueno, OTRA_LINEA_OC)) == "E_DEST_LINE")
+        ok("escalar no lleva destino (E_ARGS)",
+           error_de(corre(home, "caso", "propuesta", dueno, "--tipo", "escalar",
+                          "--instrucciones", "que hago?", "--chat", "Facturacion",
+                          "--actor", "agente")) == "E_ARGS")
+        antes_oc = js(home, "caso", "ver", dueno)[0]["propuesta_version"]
+        propone_a(home, dueno, "Operaciones")
+        ok("un rechazo no toca la propuesta vigente",
+           js(home, "caso", "ver", dueno)[0]["propuesta_version"] == antes_oc)
+
+        cliente = caso_pedido(home, PERSONA, "OC2", PERSONA, "mandale esto al grupo")
+        ok("un cliente no redirige una respuesta: E_DEST_ROLE",
+           error_de(propone_a(home, cliente, "Facturacion")) == "E_DEST_ROLE")
+        jefa = caso_pedido(home, SOPORTE, "OC3", JEFA_OC)
+        p = propone_a(home, jefa, "Facturacion")
+        ok("una Super admin de su conversacion si",
+           p.returncode == 0 and json.loads(p.stdout)[0]["propuesta"].get("chat") == FACTURACION,
+           p.stderr.strip()[:300])
+
+        propone_a(home, dueno, "Facturacion")
+        ver = js(home, "caso", "ver", dueno)[0]
+        ok("caso ver --json trae el destino", ver.get("destino") == {
+            "chat_jid": FACTURACION, "chat_name": "Facturacion", "retenido": False},
+           f"{ver.get('destino')}")
+        lista = {c["case_id"]: c for c in js(home, "caso", "listar")}
+        ok("caso listar --json tambien", (lista.get(int(dueno)) or {}).get("destino", {})
+           .get("chat_jid") == FACTURACION)
+        env = dict(os.environ, HOME=str(home), ORCA_CLI_COMMAND=SIN_ORCA,
+                   XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"))
+        texto = subprocess.run([str(WA_SCOPE), "caso", "ver", dueno], capture_output=True,
+                               text=True, env=env, timeout=60).stdout
+        ok("y en texto dice a donde va", "-> Facturacion" in texto, texto[-300:])
+        ayuda = subprocess.run([str(WA_SCOPE), "caso", "propuesta", "--help"],
+                               capture_output=True, text=True, env=env, timeout=60).stdout
+        ok("--help documenta --chat y sus negativas",
+           "--chat" in ayuda and all(c in ayuda for c in (
+               "E_DEST_ROLE", "E_DEST_NOT_FOUND", "E_DEST_AMBIGUOUS", "E_DEST_LINE",
+               "E_DEST_MODE")), ayuda[-600:])
+
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
