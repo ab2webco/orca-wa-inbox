@@ -49,10 +49,11 @@ cases are created, judged or sent.
 - [x] K1 Search: `caso buscar <texto>` and `caso listar --buscar <texto>`, matching like the
       board. Tests: `scripts/check-casos`. Proof: RED `invalid choice: 'buscar'` (E_ARGS);
       GREEN 8/8.
-- [ ] K2 `listar` filters and size: `--abiertos`, `--etapa` repeatable or comma list,
+- [x] K2 `listar` filters and size: `--abiertos`, `--etapa` repeatable or comma list,
       `--desde today|7d|30d|<date>`, `--prioridad`, `--proyecto`, `--necesita-agente`,
       `--limite N`, short rows by default and `--completo`, board order by default.
-      Tests: `scripts/check-casos`.
+      Tests: `scripts/check-casos`. Proof: RED 0/1 then `unrecognized arguments: --orden`;
+      GREEN 18/18 (and the older listar sections 8/8, 7/7, 12/12, 76/76, 30/30, 28/28).
 - [ ] K3 `caso estado <id>`: the card's computed context (owner actions, dispatch,
       blocked_reason, no_agent_rule, read_only, project, destination, stage since) and the
       history in readable reasons. Tests: `scripts/check-casos`.

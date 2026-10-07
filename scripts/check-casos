@@ -13880,6 +13880,91 @@ if NODE:
            p.stderr.strip())
 
 
+print("\ncasos-cli K2: listar filtra, acota y ordena como el tablero")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        ids = casos_cli_linea(home)
+        cerrado = str(js(home, "caso", "crear", "--chat", PERSONA, "--titulo", "Viejo",
+                         "--actor", "agente")[0]["case_id"])
+        js(home, "caso", "mover", cerrado, "cerrado", "--motivo", "listo", "--actor", "dueno")
+        js(home, "caso", "clasificar", ids["CB1"], "--clase", "card", "--prioridad", "high",
+           "--actor", "agente")
+        js(home, "caso", "clasificar", ids["CB3"], "--clase", "card", "--prioridad", "low",
+           "--actor", "agente")
+        js(home, "caso", "propuesta", ids["CB3"], "--tipo", "responder", "--respuesta",
+           "Ya lo revisamos.", "--actor", "agente")
+        acepta_proyectos(home, "web-demo", "app-demo")
+        js(home, "caso", "proyecto", ids["CB1"], "--proyecto", "web-demo", "--actor", "dueno")
+        con = db_de(home)
+        con.execute("update caso set updated_at=? where case_id=?",
+                    (time.strftime("%Y-%m-%d %H:%M:%S",
+                                   time.localtime(time.time() - 40 * 86400)), int(cerrado)))
+        for cid, hace in ((ids["CB1"], 0), (ids["CB3"], 60), (ids["CB2"], 120)):
+            con.execute("update caso set updated_at=? where case_id=?",
+                        (time.strftime("%Y-%m-%d %H:%M:%S",
+                                       time.localtime(time.time() - hace)), int(cid)))
+        con.commit()
+        con.close()
+        nums = lambda filas: [str(c["case_id"]) for c in filas]  # noqa: E731
+
+        orden = nums(js(home, "caso", "listar"))
+        ok("por defecto, el orden del tablero: decision primero, cerrado despues",
+           orden[0] == ids["CB3"] and orden[-1] == cerrado, f"{orden}")
+        ok("--orden reciente: lo ultimo que se movio primero",
+           nums(js(home, "caso", "listar", "--orden", "reciente"))[0] == ids["CB1"])
+        ok("--abiertos deja fuera lo terminado",
+           cerrado not in nums(js(home, "caso", "listar", "--abiertos"))
+           and len(js(home, "caso", "listar", "--abiertos")) == 3)
+        ok("--etapa con varias, separadas por coma",
+           sorted(nums(js(home, "caso", "listar", "--etapa", "recibido,decision")))
+           == sorted([ids["CB2"], ids["CB3"]]))
+        ok("--etapa repetida es lo mismo",
+           sorted(nums(js(home, "caso", "listar", "--etapa", "recibido", "--etapa",
+                          "decision"))) == sorted([ids["CB2"], ids["CB3"]]))
+        p = corre(home, "caso", "listar", "--etapa", "recibido,inventada")
+        ok("una etapa que no existe es E_ARGS", p.returncode == 2 and "E_ARGS" in p.stderr,
+           p.stderr.strip())
+        ok("--prioridad", nums(js(home, "caso", "listar", "--prioridad", "high")) == [ids["CB1"]])
+        p = corre(home, "caso", "listar", "--prioridad", "altisima")
+        ok("una prioridad que no existe es E_ARGS", p.returncode == 2 and "E_ARGS" in p.stderr)
+        ok("--proyecto por id o por nombre, sin tildes ni mayusculas",
+           nums(js(home, "caso", "listar", "--proyecto", "web-demo")) == [ids["CB1"]]
+           and nums(js(home, "caso", "listar", "--proyecto", "WEB DEMO")) == [ids["CB1"]])
+        ok("--desde 30d deja fuera lo que no se movio en 30 dias",
+           cerrado not in nums(js(home, "caso", "listar", "--desde", "30d"))
+           and len(js(home, "caso", "listar", "--desde", "today")) == 3)
+        ok("--desde con una fecha",
+           cerrado in nums(js(home, "caso", "listar", "--desde", "2000-01-01")))
+        p = corre(home, "caso", "listar", "--desde", "el martes")
+        ok("una fecha que no se entiende es E_ARGS", p.returncode == 2 and "E_ARGS" in p.stderr)
+        para = json.loads(necesita(home).stdout or "{}").get("cases") or []
+        ok("--necesita-agente son los mismos que pending --needs-agent",
+           sorted(int(x) for x in nums(js(home, "caso", "listar", "--necesita-agente")))
+           == sorted(para) and para, f"{para}")
+        p = corre(home, "caso", "listar", "--limite", "2")
+        ok("--limite acota y dice en stderr cuantos quedaron afuera",
+           p.returncode == 0 and len(json.loads(p.stdout)) == 2 and "2 more" in p.stderr,
+           p.stderr.strip())
+        corta = next(c for c in js(home, "caso", "listar") if str(c["case_id"]) == ids["CB3"])
+        ok("la fila corta no trae el texto de la propuesta, si su tipo y el titulo",
+           "propuesta" not in corta and corta.get("propuesta_tipo") == "responder"
+           and "ruta" not in corta and corta.get("titulo") == "otra cosa"
+           and corta.get("chat_name") == "Soporte Norte", f"{corta}")
+        larga = next(c for c in js(home, "caso", "listar", "--completo")
+                     if str(c["case_id"]) == ids["CB3"])
+        ok("--completo trae la fila entera de antes",
+           (larga.get("propuesta") or {}).get("respuesta") == "Ya lo revisamos.", f"{larga}")
+        con_p = next(c for c in js(home, "caso", "listar") if str(c["case_id"]) == ids["CB1"])
+        ok("la fila corta dice el proyecto",
+           (con_p.get("proyecto") or {}).get("id") == "web-demo", f"{con_p}")
+        texto = subprocess.run([str(WA_SCOPE), "caso", "listar"], capture_output=True,
+                               text=True, env=dict(os.environ, HOME=str(home),
+                                                   ORCA_CLI_COMMAND=SIN_ORCA)).stdout
+        ok("en texto, una linea corta por caso",
+           len(texto.strip().splitlines()) == 4 and f"#{ids['CB3']}" in texto
+           and "Ya lo revisamos" not in texto, texto)
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

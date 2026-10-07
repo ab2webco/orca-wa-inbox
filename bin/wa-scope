@@ -4892,22 +4892,155 @@ def nombres_y_titulos(con, casos):
     return nombres, titulos
 
 
+# `caso listar` (casos-cli, K2): lo que el agente lee de una vez, en el orden del tablero
+# (`ORDEN_FILTRO` en activity.html: lo que espera al dueno primero, el resto en el orden del
+# flujo, lo bloqueado al final) y, dentro de cada etapa, lo ultimo que se movio primero.
+LIMITE_LISTAR = 50
+TOPE_LISTAR = 1000
+ORDEN_TABLERO = ("decision", "recibido", "clasificado", "trabajo", "listo", "respondido",
+                 "cerrado", "bloqueado")
+# Lo terminado: `--abiertos` lo deja fuera (es lo mismo que "abiertos" en los informes).
+ETAPAS_TERMINADAS = ("respondido", "cerrado")
+# Los periodos de `--desde`, los mismos del tablero y los informes: dias contados desde la
+# medianoche local de hoy.
+DIAS_DESDE = {"today": 1, "7d": 7, "30d": 30}
+FORMATOS_FECHA = ("%Y-%m-%d", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S",
+                  "%Y-%m-%dT%H:%M:%S")
+
+
+def lista_de_valores(valores, vocabulario, bandera):
+    """Los valores de una bandera repetible que tambien acepta comas, validados."""
+    salida = []
+    for valor in valores or []:
+        for x in str(valor).split(","):
+            x = x.strip()
+            if not x:
+                continue
+            if x not in vocabulario:
+                caso_falla("E_ARGS", f"{bandera} {x!r} is not one of {', '.join(vocabulario)}")
+            if x not in salida:
+                salida.append(x)
+    return salida
+
+
+def sello_desde(texto):
+    """El sello de los casos (hora local) desde el que cuenta `--desde`: today, 7d o 30d
+    (desde la medianoche local, como los periodos del tablero), o una fecha ISO."""
+    t = (texto or "").strip()
+    if t.lower() in DIAS_DESDE:
+        inicio = datetime.date.today() - datetime.timedelta(days=DIAS_DESDE[t.lower()] - 1)
+        return f"{inicio.isoformat()} 00:00:00"
+    for formato in FORMATOS_FECHA:
+        try:
+            return datetime.datetime.strptime(t, formato).strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+    caso_falla("E_ARGS", f"--desde {texto!r}: use today, 7d, 30d or a date like 2026-10-01 "
+                         f"(or 2026-10-01 09:00)")
+
+
+def proyecto_de_lista(caso, alcance, catalogo):
+    """El proyecto del caso como lo muestra la tarjeta, {id, name}, o None."""
+    elegido = proyecto_de_ruta(ruta_del_caso(caso), alcance.get(caso["chat_jid"]), catalogo)
+    if not elegido["id"] or elegido["quitado"]:
+        return None
+    return {"id": elegido["id"], "name": elegido["name"]}
+
+
+def caso_corto(con, caso, nombre, titulo, proyecto):
+    """La fila corta de `caso listar`: lo que hace falta para decir de que va un caso y en
+    que esta, sin el texto de la propuesta ni la ruta."""
+    fila = caso_fila(con, caso)
+    corta = {k: fila.get(k) for k in ("case_id", "account", "chat_jid")}
+    corta.update(chat_name=nombre, etapa=fila["etapa"], titulo=titulo, clase=fila["clase"],
+                 prioridad=fila["prioridad"], proyecto=proyecto,
+                 propuesta_tipo=(fila["propuesta"] or {}).get("tipo")
+                 if isinstance(fila["propuesta"], dict) else None,
+                 aprobada=fila["aprobada"], necesita_agente=bool(fila["necesita_agente"]),
+                 destino=fila["destino"], plane_issue=fila["plane_issue"],
+                 mensajes=fila["mensajes"], created_at=fila["created_at"],
+                 updated_at=fila["updated_at"])
+    return corta
+
+
+def linea_de_lista(c):
+    """Una linea de `caso listar` en texto."""
+    partes = [f"#{c['case_id']} [{c['etapa']}] {c.get('titulo') or ''}".rstrip(),
+              c.get("chat_name") or c.get("chat_jid") or ""]
+    if c.get("prioridad") not in (None, "", "none"):
+        partes.append(c["prioridad"])
+    if isinstance(c.get("proyecto"), dict):
+        partes.append(f"project {c['proyecto'].get('name') or c['proyecto'].get('id')}")
+    if c.get("necesita_agente"):
+        partes.append("needs the agent")
+    if isinstance(c.get("destino"), dict):
+        partes.append(valor_en_texto("destino", c["destino"]))
+    if c.get("account") and len(wa_store.lineas_activas_en_disco()) > 1:
+        partes.append(c["account"])
+    return " · ".join(p for p in partes if p)
+
+
 def cmd_caso_listar(con, a):
+    etapas = lista_de_valores(getattr(a, "etapa", None), ETAPAS_CASO, "--etapa")
+    prioridades = lista_de_valores(getattr(a, "prioridad", None), PRIORIDADES_CASO,
+                                   "--prioridad")
+    limite = getattr(a, "limite", None) or LIMITE_LISTAR
+    if not 1 <= limite <= TOPE_LISTAR:
+        caso_falla("E_ARGS", f"--limite goes from 1 to {TOPE_LISTAR}")
     sql, params = "select * from caso where account=?", [cuenta_activa()]
-    if a.etapa:
-        sql += " and etapa=?"
-        params.append(a.etapa)
+    if etapas:
+        sql += f" and etapa in ({','.join('?' * len(etapas))})"
+        params += etapas
+    if getattr(a, "abiertos", False):
+        sql += f" and etapa not in ({','.join('?' * len(ETAPAS_TERMINADAS))})"
+        params += list(ETAPAS_TERMINADAS)
+    if prioridades:
+        sql += f" and coalesce(prioridad, 'none') in ({','.join('?' * len(prioridades))})"
+        params += prioridades
+    if getattr(a, "desde", None):
+        sql += " and updated_at >= ?"
+        params.append(sello_desde(a.desde))
     if a.chat:
         sql += " and chat_jid=?"
         params.append(a.chat)
     filas = [dict(r) for r in con.execute(
         sql + " order by updated_at desc, case_id desc", params).fetchall()]
+    if getattr(a, "necesita_agente", False):
+        esperan = set(casos_para_agente(con))
+        filas = [c for c in filas if c["case_id"] in esperan]
+    alcance, catalogo = merged_scope(con), proyectos_del_dueno(con)
+    proyectos = {c["case_id"]: proyecto_de_lista(c, alcance, catalogo) for c in filas}
+    pedido = plano((getattr(a, "proyecto", None) or "").strip())
+    if pedido:
+        filas = [c for c in filas if proyectos[c["case_id"]] and pedido in (
+            plano(proyectos[c["case_id"]]["id"]), plano(proyectos[c["case_id"]]["name"]))]
+    nombres, titulos = nombres_y_titulos(con, filas)
     q = plano((getattr(a, "buscar", None) or "").strip())
     if q:
-        nombres, titulos = nombres_y_titulos(con, filas)
         filas = [c for c in filas if coincide_busqueda(c["case_id"], titulos[c["case_id"]],
                                                        nombres[c["chat_jid"]], q)]
-    return [caso_fila(con, r) for r in filas]
+    if getattr(a, "orden", None) != "reciente":
+        # Estable: dentro de cada etapa queda lo ultimo que se movio primero.
+        filas.sort(key=lambda c: ORDEN_TABLERO.index(c["etapa"])
+                   if c["etapa"] in ORDEN_TABLERO else len(ORDEN_TABLERO))
+    if len(filas) > limite:
+        print(f"wa-scope: {len(filas) - limite} more cases not listed: raise --limite or "
+              f"narrow the filters", file=sys.stderr)
+        filas = filas[:limite]
+    if getattr(a, "completo", False):
+        salida = [caso_fila(con, c) for c in filas]
+    else:
+        salida = [caso_corto(con, c, nombres[c["chat_jid"]], titulos[c["case_id"]],
+                             proyectos[c["case_id"]]) for c in filas]
+    if a.json:
+        return salida
+    if not salida:
+        print("(no cases)")
+    for c in salida:
+        print(linea_de_lista(c) if not getattr(a, "completo", False)
+              else " | ".join(valor_en_texto(k, v) for k, v in c.items()
+                              if v not in (None, "")))
+    return None
 
 
 def cmd_caso_buscar(con, a):
@@ -12850,8 +12983,38 @@ def main():
     c.add_argument("stanza"); c.add_argument("--chat", required=True)
     c.set_defaults(fn=cmd_caso_asignar)
 
-    c = caso("listar", help="the cases of the active line, newest first")
-    c.add_argument("--etapa", choices=list(ETAPAS_CASO)); c.add_argument("--chat")
+    def filtros_de_lista(c):
+        c.add_argument("--etapa", action="append", metavar="STAGE",
+                       help=f"only these stages: repeat it or separate them with commas "
+                            f"({', '.join(ETAPAS_CASO)})")
+        c.add_argument("--abiertos", action="store_true",
+                       help="only the open cases: every stage but respondido and cerrado")
+        c.add_argument("--chat", help="only this conversation (its chat_jid)")
+        c.add_argument("--prioridad", action="append", metavar="PRIORITY",
+                       help=f"only these priorities, repeated or with commas "
+                            f"({', '.join(PRIORIDADES_CASO)})")
+        c.add_argument("--proyecto", metavar="PROJECT",
+                       help="only the cases of this project, by its id or its name (the "
+                            "project the card shows)")
+        c.add_argument("--desde", metavar="WHEN",
+                       help="only what moved since: today, 7d, 30d (from local midnight, like "
+                            "the board's periods) or a date (2026-10-01, 2026-10-01 09:00)")
+        c.add_argument("--necesita-agente", dest="necesita_agente", action="store_true",
+                       help="only the cases waiting for the agent (the same as `pending "
+                            "--needs-agent`)")
+        c.add_argument("--limite", type=int, metavar="N",
+                       help=f"at most N cases (default {LIMITE_LISTAR}, up to {TOPE_LISTAR}); "
+                            f"stderr says how many were left out")
+        c.add_argument("--orden", choices=["tablero", "reciente"], default="tablero",
+                       help="tablero (default): the board's order, what waits for the owner "
+                            "first; reciente: the last moved first")
+        c.add_argument("--completo", action="store_true",
+                       help="the full rows (proposal text, route, Jev); by default each row is "
+                            "short: number, stage, title, chat, priority, project")
+
+    c = caso("listar", help="the cases of the active line, in the board's order (decision "
+                            "first), short rows; filters combine")
+    filtros_de_lista(c)
     c.add_argument("--buscar", metavar="TEXT",
                    help="like the board's search: the case number (with or without #), or "
                         "a piece of its title or of its chat's name; accents and case ignored")
@@ -12861,7 +13024,7 @@ def main():
                             "word of the title or the chat's name, accents and case ignored. "
                             "Takes the same filters as listar")
     c.add_argument("texto")
-    c.add_argument("--etapa", choices=list(ETAPAS_CASO)); c.add_argument("--chat")
+    filtros_de_lista(c)
     c.set_defaults(fn=cmd_caso_buscar)
 
     c = caso("destinos", help="the chats a reply of this case could go to when the owner "
