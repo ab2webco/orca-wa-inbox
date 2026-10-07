@@ -53,6 +53,13 @@ the owner what is waiting instead.
     "$WA/wa-scope" caso propuesta <id> --tipo escalar --instrucciones "<why>" --actor agente
     "$WA/wa-scope" caso mover <id> cerrado --motivo "<why>" --actor agente
 
+Only in a case of the owner or of a Super admin (the case file says "Reply to another chat:
+allowed"): the reply, or a job's final reply, can go to another chat of the same line in
+responder. A customer's case is refused (`E_DEST_ROLE`).
+
+    "$WA/wa-scope" caso destinos <id> --json    # the candidate chats (same project, responder)
+    "$WA/wa-scope" caso propuesta <id> --tipo responder --respuesta "<text>" --chat <jid> --actor agente
+
 Beta, only where `voice` says `first_reply_mode` is `model` or `model_with_ack_fallback`
 (see the `whatsapp-soporte` skill): the first message and the updates, sent by the plugin.
 

@@ -13747,6 +13747,8 @@ if NODE:
                 con.close()
             ok("el brief le dice al agente del proyecto a que chat va su respuesta",
                "Facturacion" in brief and FACTURACION in brief, brief[-800:])
+            ok("y no le pide proponer (eso es del agente de casos)",
+               "caso destinos" not in brief and "Reply to another chat" not in brief)
             r = js(home, "caso", "resultado", dueno, "--respuesta",
                    "Encontramos la causa del error y quedo corregida.", "--resumen",
                    "arreglado el filtro", "--actor", "trabajador")[0]
@@ -13805,6 +13807,30 @@ if NODE:
         ok("y la que va al chat del caso no lo lleva", "destino" not in (t.get("proposal") or {}),
            f"{t.get('proposal')}")
 
+
+
+print("\nrespuesta-otro-chat R7: el archivo del caso dice si puede ir a otro chat")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        prepara_otro_chat(home)
+        try:
+            jefa = caso_pedido(home, SOPORTE, "OH1", JEFA_OC)
+            cliente = caso_pedido(home, PERSONA, "OH2", PERSONA, "mandale esto al grupo")
+            ws = carga_wa_scope(home)
+            con = ws.db()
+            try:
+                de_jefa = "\n".join(ws.cabeza_del_caso(con, ws.caso_de(con, int(jefa))))
+                de_cliente = "\n".join(ws.cabeza_del_caso(con, ws.caso_de(con, int(cliente))))
+            finally:
+                con.close()
+            ok("el caso de una Super admin dice que su respuesta puede ir a otro chat",
+               "--chat" in de_jefa and "caso destinos" in de_jefa, de_jefa)
+            ok("el de un cliente dice que no", "--chat" not in de_cliente
+               and "another chat: no" in de_cliente, de_cliente)
+        finally:
+            os.environ.clear()
+            os.environ.update(env_antes)
 
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")

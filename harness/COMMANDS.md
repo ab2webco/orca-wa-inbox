@@ -42,7 +42,13 @@ board, and anyone else gets `E_NOT_OWNER`.
     "$WA/wa-scope" caso clasificar <id> --clase <card|alert|doubtful> --prioridad <p> --actor agente
     "$WA/wa-scope" caso propuesta <id> --tipo <responder|trabajar|escalar|descartar> --actor agente ...
     "$WA/wa-scope" caso mover <id> cerrado --motivo "<why>" --actor agente
+    "$WA/wa-scope" caso destinos <id> --json    # another chat this case may report to
     "$WA/wa-read" chat "<chat_jid>" --json      # anything else in the conversation
+
+In a case of the owner or of a Super admin, `caso propuesta ... --chat <jid>` sends the
+reply (or a job's final reply) to another chat of the same line in responder, always after
+the owner's approval. A customer's case is refused with `E_DEST_ROLE`; the other refusals
+are `E_DEST_MODE`, `E_DEST_LINE`, `E_DEST_NOT_FOUND` and `E_DEST_AMBIGUOUS`.
 
 A different proposal on a case in `listo` (the result of a job) sends the case back to
 `decision`: the owner approves the new version, never the old one.

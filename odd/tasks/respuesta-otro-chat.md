@@ -85,9 +85,12 @@ Refusal codes of `caso propuesta --chat` (exit 2, JSON on stderr):
       `tablero-otro-chat` and `tablero-otro-chat-detalle` (es, dark, 390): no overflow, no
       JS errors; both opened and looked at (a long group name wraps, the arrow line sits
       above the text).
-- [ ] R7 Harness: AGENTS.md, the whatsapp-soporte skill and COMMANDS.md say how to use the
-      destination and `caso destinos`; never refuse the owner/Super admin; a customer cannot.
-      Tests: `scripts/check-harness`, `scripts/check-prompts`.
+- [x] R7 Harness: AGENTS.md, the whatsapp-soporte and whatsapp-cli skills and COMMANDS.md
+      say how to use the destination and `caso destinos`; never refuse the owner/Super admin;
+      a customer cannot. The case file says "Reply to another chat: allowed | no" (not in a
+      project agent's brief). Tests: `scripts/check-harness`, `scripts/check-casos`.
+      Proof: RED check-harness 10 failures, check-casos 0/2; GREEN 89 checks, 2/2 (+1 in
+      R4: the brief does not ask the project agent to propose).
 
 ## Acceptance criteria
 
@@ -102,3 +105,26 @@ Refusal codes of `caso propuesta --chat` (exit 2, JSON on stderr):
 `scripts/check-casos`, `scripts/check-clis`, `scripts/check-harness`, `scripts/check-prompts`,
 `scripts/check-voseo`, `scripts/check-datos-reales`, `node test/panels.test.mjs`,
 `node test/worker.test.mjs`, reduced shots of the board card.
+
+## Checks run (final state)
+
+- `scripts/check-casos` 1810/1810 (the 57 checks of this feature included).
+- `scripts/check-clis` 8 CLIs, 494 checks.
+- `scripts/check-harness` 89, `scripts/check-prompts` 15, `scripts/check-voseo` 44 files,
+  `scripts/check-datos-reales` (16 allowed test values, no real phone or jid).
+- `node test/panels.test.mjs` 1618/1618, `node test/worker.test.mjs` 589/589.
+- Reduced shots (es, dark, 390): `tablero-otro-chat`, `tablero-otro-chat-detalle`.
+- Not run: `npm run check` and the full `npm run shots` (hours; owner's rule).
+
+## Notes
+
+- Jev and the fixed floor review the reply with the DESTINATION's levels when it goes out
+  (`wa-send --send`), after the owner's approval. A held text waits on the board; the
+  owner's next approval there sends the held draft (`--approve`), like any held reply.
+- The approval notice goes to the approval number, as every notice. When the requester's
+  chat IS that DM (the owner writing in his own chat) the draft is shown right there and
+  `si N` answers it; the confirmation is then that answer ("salio a <chat>"), not a second
+  message. A Super admin's chat that is not the approval DM gets only the confirmation
+  after the send; the draft itself is approved by the owner (notice or board).
+- Each commit was checked on its own index snapshot with this feature's check-casos
+  sections; the full suites ran on the final state.

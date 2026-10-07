@@ -11063,7 +11063,7 @@ def brief_de_despacho(con, caso, proyecto, instrucciones):
     wa = ruta_wa_scope()
     del_dueno = caso_del_dueno(con, caso)
     operador = pide_un_operador(con, caso, del_dueno)
-    cabeza = cabeza_del_caso(con, caso, del_dueno, operador) + [
+    cabeza = cabeza_del_caso(con, caso, del_dueno, operador, de_casos=False) + [
         "",
         f"You are the project agent of {proyecto['name']} ({proyecto['path']}); the owner "
         f"approved this work for this project.",
@@ -11245,7 +11245,7 @@ def pide_un_operador(con, caso, del_dueno):
     return not del_dueno and rol_del_caso(con, caso) in wa_store.ROLES_GUARDADOS
 
 
-def cabeza_del_caso(con, caso, del_dueno=None, operador=None):
+def cabeza_del_caso(con, caso, del_dueno=None, operador=None, de_casos=True):
     """Lo que el caso es, en lineas: id, chat, quien escribe (el dueno, un operador del chat
     o un cliente), etapa, clasificacion, Jev, proyecto, tono, instrucciones del chat y sus
     niveles de aprobacion."""
@@ -11290,6 +11290,19 @@ def cabeza_del_caso(con, caso, del_dueno=None, operador=None):
         "- Approval levels: " + (", ".join(f"{k}={v}" for k, v in sorted(niveles.items()))
                                  if isinstance(niveles, dict) and niveles else "default"),
     ]
+    # Si lo que pide el caso puede reportarse a OTRO chat (respuesta-otro-chat): solo el
+    # dueno o un Super admin de esta conversacion; lo decide el id, como el rol.
+    # Solo para el agente de casos: el del proyecto no propone, reporta con `caso resultado`.
+    if not de_casos:
+        pass
+    elif del_dueno or rol_del_caso(con, caso) == wa_store.ROL_ADMIN:
+        lineas.append(f"- Reply to another chat: allowed (the owner or a Super admin of this "
+                      f"chat asked). When he asks to report to another chat, propose with "
+                      f"`caso propuesta {caso['case_id']} ... --chat <jid>`; if he does not name "
+                      f"it, `caso destinos {caso['case_id']}` lists the candidates")
+    else:
+        lineas.append("- Reply to another chat: no (a customer's case: the reply goes to "
+                      "this chat only)")
     modo = primer_modo(chat, merged_settings(con, linea_del_caso(caso)))[0]
     lineas.append(f"- First message: first_reply_mode {modo} (Beta): you write it, see "
                   f"\"First message and updates\" below" if modo in MODOS_AGENTE_PRIMERO else
