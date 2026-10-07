@@ -59,9 +59,10 @@ cases are created, judged or sent.
       history in readable reasons. Tests: `scripts/check-casos`. Proof: RED `invalid choice:
       'estado'`; GREEN 10/10. The board's per-card computation moved to `tarjetas_de`, shared
       by `build_board` and `caso estado` (board sections 20/20, 15/15, 3/3, 76/76, 2/2).
-- [ ] K4 `caso informe [--periodo] [--csv]`: per-stage counts, waiting on customer, first
+- [x] K4 `caso informe [--periodo] [--csv]`: per-stage counts, waiting on customer, first
       reply and resolution times vs the target, SLA, from `build_reports`.
-      Tests: `scripts/check-casos`.
+      Tests: `scripts/check-casos`. Proof: RED `invalid choice: 'informe'`; GREEN 7/7 (the
+      board's reports section 262/262).
 - [ ] K5 `caso nota <id> <texto>`: an event in any stage, no move, no approval change; shown
       in `ver` (`notas`) and in the board history. Tests: `scripts/check-casos`,
       `test/panels.test.mjs`.

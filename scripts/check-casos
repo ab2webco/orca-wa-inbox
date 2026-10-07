@@ -14025,6 +14025,57 @@ if NODE:
            "E_NOT_FOUND" in corre(home, "caso", "estado", "999").stderr)
 
 
+print("\ncasos-cli K4: caso informe trae los numeros de la pestana Informes")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        ids = casos_cli_linea(home)
+        llegan(home, A, [msg(PERSONA, "CB2R", "Ya lo vemos.", 15, yo=True)])
+        js(home, "caso", "mover", ids["CB1"], "cerrado", "--motivo", "listo", "--actor", "dueno")
+        r = js(home, "caso", "informe", "--periodo", "7d")[0]
+        antes = dict(os.environ)
+        try:
+            ws = carga_wa_scope(home)
+            con = ws.db()
+            try:
+                informe = ws.build_reports(con)
+            finally:
+                con.close()
+        finally:
+            os.environ.clear()
+            os.environ.update(antes)
+        per = informe["periods"]["7d"]
+        ok("cuenta por etapa y lo vivo, como el tablero",
+           r.get("stages", {}).get("recibido") == 2 and r["stages"].get("cerrado") == 1
+           and r.get("live") == informe["live"], f"{r.get('stages')} {r.get('live')}")
+        ok("la primera respuesta contra la meta, la misma del informe",
+           r.get("first_response", {}).get("median_s") == per["first_response"]["value"]
+           and 295 <= r["first_response"]["median_s"] <= 305
+           and r["first_response"]["n"] == 1 and r.get("sla", {}).get("target_minutes")
+           == informe["sla_minutes"] and r["sla"].get("met") == per["sla"]["met"],
+           f"{r.get('first_response')} {r.get('sla')}")
+        ok("la resolucion y la espera del cliente",
+           r.get("resolution", {}).get("n") == per["resolution"]["n"] == 1
+           and "unanswered" in r.get("customer_wait", {}), f"{r.get('resolution')}")
+        ok("el periodo y la linea", r.get("period") == "7d" and r.get("account") == A
+           and r.get("from") == per["from"], f"{r}")
+        p = corre(home, "caso", "informe", "--periodo", "ayer")
+        ok("un periodo que no existe es E_ARGS", p.returncode == 2 and "E_ARGS" in p.stderr)
+        csv_ = subprocess.run([str(WA_SCOPE), "caso", "informe", "--periodo", "today", "--csv"],
+                              capture_output=True, text=True,
+                              env=dict(os.environ, HOME=str(home), ORCA_CLI_COMMAND=SIN_ORCA))
+        filas = csv_.stdout.strip().splitlines()
+        ok("--csv: una fila por caso creado en el periodo, con las columnas del panel",
+           csv_.returncode == 0 and filas[0] ==
+           "case_id,chat,created,first_response_s,resolution_s,stage,project,sla"
+           and len(filas) == 4 and any(f.startswith(ids["CB2"] + ",") and ",30" in f
+                                       and f.endswith(",met") for f in filas[1:]), csv_.stdout)
+        texto = subprocess.run([str(WA_SCOPE), "caso", "informe"], capture_output=True,
+                               text=True, env=dict(os.environ, HOME=str(home),
+                                                   ORCA_CLI_COMMAND=SIN_ORCA)).stdout
+        ok("en texto, unas lineas cortas", "First reply" in texto and "5m" in texto
+           and len(texto.strip().splitlines()) <= 10, texto)
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

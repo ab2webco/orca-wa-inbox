@@ -8089,7 +8089,7 @@ def _mapa(cuentas_hora, per):
     return [{"k": k, "h": h} for k, h in filas.items()]
 
 
-def build_reports(con, ahora=None):
+def build_reports(con, ahora=None, tope_casos=TOPE_CASOS_INFORME):
     """Los numeros de la pestana Informes para los cuatro periodos, con la forma del
     contrato `reports` (v 1, documentado en odd/tasks/informes-tablero.md)."""
     ahora = time.time() if ahora is None else ahora
@@ -8258,8 +8258,105 @@ def build_reports(con, ahora=None):
                        "created": _iso_epoch(c["creado"]), "first_response_s": c["primera"],
                        "resolution_s": c["resolucion"], "stage": c["stage"],
                        "project": c["project"], "sla": c["sla"]}
-                      for c in casos[:TOPE_CASOS_INFORME]],
-            "cases_more": max(0, len(casos) - TOPE_CASOS_INFORME)}
+                      for c in (casos[:tope_casos] if tope_casos else casos)],
+            "cases_more": max(0, len(casos) - tope_casos) if tope_casos else 0}
+
+
+# `caso informe` (casos-cli, K4): lo de la pestana Informes para el agente, de UN periodo.
+# Las columnas del CSV son las del boton Copiar CSV del panel (`textoCsv`), con sus codigos.
+COLUMNAS_CSV = ("case_id", "chat", "created", "first_response_s", "resolution_s", "stage",
+                "project", "sla")
+
+
+def duracion(segundos):
+    """Una duracion corta para leer: 45s, 12m, 3h 5m, 2d 4h; '-' sin valor."""
+    if segundos is None:
+        return "-"
+    s = int(segundos)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m"
+    if s < 86400:
+        return f"{s // 3600}h" + (f" {s % 3600 // 60}m" if s % 3600 // 60 else "")
+    return f"{s // 86400}d" + (f" {s % 86400 // 3600}h" if s % 86400 // 3600 else "")
+
+
+def tiempo_de_informe(t):
+    return {"median_s": t["value"], "n": t["n"], "prev_median_s": t["prev"],
+            "delta_pct": t["delta_pct"]}
+
+
+def campo_csv(valor):
+    """Un campo de CSV como `campoCsv` del panel: entre comillas si hace falta, y un apostrofo
+    delante de lo que una planilla tomaria por una formula (el texto es de clientes)."""
+    v = "" if valor is None else str(valor)
+    if re.match(r"^[=+\-@\t\r]", v):
+        v = "'" + v
+    return '"' + v.replace('"', '""') + '"' if re.search(r'[",\r\n]', v) else v
+
+
+def informe_del_periodo(con, periodo):
+    """El informe de la linea activa para un periodo: lo de la pestana, en las llaves del
+    CLI, y las filas de sus casos para el CSV."""
+    informe = build_reports(con, tope_casos=None)
+    per = informe["periods"][periodo]
+    etapas = dict.fromkeys(ETAPAS_CASO, 0)
+    for r in con.execute("select etapa, count(*) from caso where account=? group by etapa",
+                         (cuenta_activa(),)):
+        if r[0] in etapas:
+            etapas[r[0]] = r[1]
+    desde = per["from"]
+    filas = [c for c in informe["cases"]
+             if c["created"] and (desde is None or c["created"] >= desde)
+             and c["created"] <= per["to"]]
+    # ISO con la misma zona: comparar texto es comparar tiempo.
+    return {"account": informe["account"], "period": periodo, "from": per["from"],
+            "to": per["to"], "stages": etapas, "live": informe["live"],
+            "first_response": tiempo_de_informe(per["first_response"]),
+            "resolution": tiempo_de_informe(per["resolution"]),
+            "customer_wait": dict(tiempo_de_informe(per["customer_wait"]),
+                                  unanswered=per["customer_wait"]["unanswered"]),
+            "sla": {"target_minutes": informe["sla_minutes"], "met": per["sla"]["met"],
+                    "missed": per["sla"]["missed"], "pending": per["sla"]["pending"],
+                    "rate": per["sla"]["rate"], "prev_rate": per["sla"]["prev_rate"],
+                    "misses": [{k: m[k] for k in ("case_id", "chat", "first_response_s")}
+                               for m in per["sla"]["misses"]]},
+            "volume": per["volume"]["totals"],
+            "projects": per["projects"]}, filas
+
+
+def texto_de_informe(r):
+    sla, vivo = r["sla"], r["live"]
+    tasa = f"{sla['rate']}%" if sla["rate"] is not None else "-"
+    return [f"Report {r['period']} ({r['from'] or 'all'} -> {r['to']})" +
+            (f" · {r['account']}" if r.get("account") else ""),
+            f"Open {vivo['open']} · waiting for the owner {vivo['decision']} · waiting for the "
+            f"customer {vivo['waiting_customer']} · blocked {vivo['blocked']}",
+            "Stages: " + ", ".join(f"{e} {n}" for e, n in r["stages"].items() if n),
+            f"First reply: median {duracion(r['first_response']['median_s'])} "
+            f"(n={r['first_response']['n']}) vs target {sla['target_minutes']}m · SLA {tasa} "
+            f"({sla['met']} met, {sla['missed']} missed, {sla['pending']} pending)",
+            f"Resolution: median {duracion(r['resolution']['median_s'])} "
+            f"(n={r['resolution']['n']})",
+            f"Customer wait: median {duracion(r['customer_wait']['median_s'])}, "
+            f"{r['customer_wait']['unanswered']} unanswered",
+            f"Cases created {r['volume']['created']} · resolved {r['volume']['resolved']} · "
+            f"messages in {r['volume']['received']}, out {r['volume']['sent']}"]
+
+
+def cmd_caso_informe(con, a):
+    """`caso informe`: los numeros de la pestana Informes de un periodo. Solo lee."""
+    r, filas = informe_del_periodo(con, a.periodo)
+    if getattr(a, "csv", False):
+        print(",".join(COLUMNAS_CSV))
+        for c in filas:
+            print(",".join(campo_csv(c.get(k)) for k in COLUMNAS_CSV))
+        return None
+    if a.json:
+        return [r]
+    print("\n".join(texto_de_informe(r)))
+    return None
 
 
 def cmd_sync(con, a):
@@ -13152,6 +13249,16 @@ def main():
                             "agent's dispatch, why it is blocked, read only, project, "
                             "destination) and its whole history in readable reasons")
     c.add_argument("id", type=int); c.set_defaults(fn=cmd_caso_estado)
+
+    c = caso("informe", help="the board's Reports for one period: cases per stage, open, "
+                             "waiting for the owner or the customer, blocked, first reply and "
+                             "resolution medians against the target (SLA), customer wait, "
+                             "volume and projects. Read only")
+    c.add_argument("--periodo", choices=[k for k, _ in PERIODOS_INFORME], default="7d",
+                   help="today, 7d (default), 30d or all, like the board")
+    c.add_argument("--csv", action="store_true",
+                   help="one row per case created in the period, the panel's Copy CSV columns")
+    c.set_defaults(fn=cmd_caso_informe)
 
     c = caso("ver", help="one case with its messages and its events")
     c.add_argument("id", type=int); c.set_defaults(fn=cmd_caso_ver)
