@@ -13787,6 +13787,26 @@ if NODE:
 
 
 
+print("\nrespuesta-otro-chat R6: la tarjeta dice a que chat va")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        prepara_otro_chat(home)
+        dueno = caso_pedido(home, DUENO_DM, "OT1", DUENO_LID)
+        propone_a(home, dueno, "Facturacion")
+        t = tarjeta(home, int(dueno)) or {}
+        ok("la tarjeta lleva el destino en su propuesta",
+           (t.get("proposal") or {}).get("destino") == {"chat_jid": FACTURACION,
+                                                        "chat_name": "Facturacion"},
+           f"{t.get('proposal')}")
+        propio = caso_pedido(home, DUENO_DM, "OT2", DUENO_LID)
+        js(home, "caso", "propuesta", propio, "--tipo", "responder", "--respuesta", "Hecho.",
+           "--actor", "agente")
+        t = tarjeta(home, int(propio)) or {}
+        ok("y la que va al chat del caso no lo lleva", "destino" not in (t.get("proposal") or {}),
+           f"{t.get('proposal')}")
+
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

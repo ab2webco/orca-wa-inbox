@@ -462,6 +462,32 @@ const TABLERO_CASOS = [
 // estado: trabajando, pidio informacion, espera al cliente, resuelto y bloqueado por el agente.
 const despacho = (estado, resultado, hace) => ({ project: 'Alfa Demo', state: estado,
   outcome: resultado, at: minutos(hace + 20), updated_at: minutos(hace) })
+// respuesta-otro-chat: el dueno pidio en su chat reportarle al cliente en su grupo; la
+// propuesta dice a que chat va, en la tarjeta y en el detalle, antes de Enviar.
+const TABLERO_OTRO_CHAT = [
+  caso(31, 'decision', {
+    title: 'Reportar al cliente la conclusion del informe', prioridad: 'medium',
+    chat_name: 'Dueno Demo', updated_at: minutos(2), exceptions: [],
+    summary: 'El dueno pide pasarle la conclusion al grupo del cliente.',
+    jev: null,
+    proposal: { tipo: 'responder', version: 'v9c1d',
+      texto: 'Le comparto la conclusion del informe de ventas: el filtro ya cuadra con el total.',
+      destino: { chat_jid: '120363000000000004@g.us',
+        chat_name: 'Facturacion — Cliente Norte con un nombre de grupo bastante largo' } },
+    events: [
+      { de: null, a: 'recibido', actor: 'automatizacion', que: 'message', at: minutos(6) },
+      { de: 'clasificado', a: 'decision', actor: 'agente', que: 'proposal', args: ['responder'],
+        at: minutos(2) },
+      { de: 'decision', a: 'decision', actor: 'regla', que: 'reply_waits', args: ['other_chat'],
+        at: minutos(2) }]
+  }),
+  caso(32, 'decision', {
+    title: 'Pregunta por el estado del pedido', chat_name: 'Cliente Uno', updated_at: minutos(4),
+    exceptions: [], proposal: { tipo: 'responder', version: 'v7a2b',
+      texto: 'Hola, ya revisamos su pedido y sale hoy.' }
+  })
+]
+
 const TABLERO_DESPACHO = [
   caso(31, 'trabajo', { title: 'El reporte de ventas sale en blanco', prioridad: 'high',
     updated_at: minutos(12),
@@ -1065,6 +1091,19 @@ const PANELES = [
     enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS)),
     guion: ABRIR_TABLERO + `;
       document.querySelector('.card[data-case="8"]').click()`
+  },
+  {
+    // respuesta-otro-chat: la tarjeta dice a que otro chat va la respuesta.
+    nombre: 'tablero-otro-chat', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
+    datos: conTablero(tableroDe(TABLERO_OTRO_CHAT))
+  },
+  {
+    // Y su detalle, con la historia que dice por que espera.
+    nombre: 'tablero-otro-chat-detalle', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_OTRO_CHAT)),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="31"]').click()`
   },
   {
     // T8: el despacho al agente del proyecto en cada estado.

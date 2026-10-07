@@ -7070,9 +7070,15 @@ def tarjeta_de(caso, nombres, titulos, motivos, eventos=None, sin_agente=None,
         "title": caso["titulo"] or titulos.get(caso["case_id"]) or nombre,
         "summary": caso["resumen"], "clase": caso["clase"], "prioridad": caso["prioridad"],
         "jev": json.loads(caso["jev"]) if caso["jev"] else None,
-        "proposal": {"tipo": tipo,
-                     "texto": propuesta.get("respuesta") or propuesta.get("instrucciones"),
-                     "version": caso["propuesta_version"]} if propuesta else None,
+        "proposal": dict({"tipo": tipo,
+                          "texto": propuesta.get("respuesta") or propuesta.get("instrucciones"),
+                          "version": caso["propuesta_version"]},
+                         # El otro chat al que va (respuesta-otro-chat): el dueno lo ve antes
+                         # de firmar. Solo cuando no es el del caso.
+                         **({"destino": {"chat_jid": propuesta["chat"],
+                                         "chat_name": nombres.get(propuesta["chat"])
+                                         or propuesta["chat"]}}
+                            if destino_de_propuesta(caso) else {})) if propuesta else None,
         "exceptions": excepciones_de_tarjeta(caso),
         "blocked_reason": (motivos.get(caso["case_id"]) if caso["etapa"] == "bloqueado"
                            else None),
@@ -7275,6 +7281,12 @@ def build_board(con, ahora=None):
     alcance = merged_scope(con)
     catalogo = proyectos_del_dueno(con)
     nombres = {jid: r.get("chat_name") for jid, r in alcance.items()}
+    # El nombre del otro chat al que va una propuesta (respuesta-otro-chat): el del almacen
+    # cuando el alcance solo guardo el jid.
+    for c in casos:
+        destino = destino_de_propuesta(c)
+        if destino and nombres.get(destino) in (None, "", destino):
+            nombres[destino] = nombre_del_chat(con, destino)
     titulos = titulos_de_mensajes(con, [c["case_id"] for c in casos if not c["titulo"]])
     bloqueados = [c["case_id"] for c in casos if c["etapa"] == "bloqueado"]
     motivos = {}

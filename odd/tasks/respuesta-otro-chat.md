@@ -78,8 +78,13 @@ Refusal codes of `caso propuesta --chat` (exit 2, JSON on stderr):
       sharing the case's project, with the reason. Tests: `scripts/check-casos`.
       Proof: RED `invalid choice: 'destinos'` (E_ARGS); GREEN 9/9 (one, several, none,
       the owner's project, text mode, E_DEST_ROLE for a customer).
-- [ ] R6 Board card: `proposal.destino` and the panel shows "Va a: <chat>" / "Goes to:
-      <chat>" when it differs. Tests: `test/panels.test.mjs`, reduced shots.
+- [x] R6 Board card: `proposal.destino` and the panel shows "Va a: <chat>" / "Goes to:
+      <chat>" (pt "Vai para") when it differs, and the history says `other_chat` in words.
+      Tests: `scripts/check-casos`, `test/panels.test.mjs`, reduced shots. Proof: RED
+      check-casos 1/2, panels 1612/1618; GREEN 2/2, panels 1618/1618. Shots
+      `tablero-otro-chat` and `tablero-otro-chat-detalle` (es, dark, 390): no overflow, no
+      JS errors; both opened and looked at (a long group name wraps, the arrow line sits
+      above the text).
 - [ ] R7 Harness: AGENTS.md, the whatsapp-soporte skill and COMMANDS.md say how to use the
       destination and `caso destinos`; never refuse the owner/Super admin; a customer cannot.
       Tests: `scripts/check-harness`, `scripts/check-prompts`.

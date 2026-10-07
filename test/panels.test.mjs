@@ -9065,5 +9065,31 @@ console.log('\nconfig.html — P9: cada linea muestra y guarda sus reglas y sus 
     enLaPrincipal?.project === 'alfa-demo' && !enLaPrincipal.linea, JSON.stringify(enLaPrincipal))
 }
 
+console.log('\nactivity.html — respuesta-otro-chat: la propuesta dice a que chat va')
+{
+  const aOtro = tarjeta({ case_id: 21, exceptions: [],
+    proposal: { tipo: 'responder', texto: 'Le comparto la conclusion.', version: 'abc',
+      destino: { chat_jid: '120363000000000004@g.us', chat_name: 'Grupo Facturacion Demo' } },
+    events: [{ de: 'decision', a: 'decision', actor: 'regla', que: 'reply_waits',
+      args: ['other_chat'], at: hace(5 * 60000) }] })
+  const propio = tarjeta({ case_id: 22, exceptions: [] })
+  for (const [idioma, va, motivo] of [['es-419', /Va a: Grupo Facturacion Demo/, /otro chat/],
+    ['en-US', /Goes to: Grupo Facturacion Demo/, /another chat/]]) {
+    const { doc } = await abrirTablero({ board: tablero([aOtro, propio]) }, idioma)
+    const card = doc.querySelector('.card[data-case="21"]')
+    ok(`${idioma}: la tarjeta dice a que chat va antes de Enviar`,
+      va.test(card.textContent) && !!card.querySelector('.card-destino'), card.textContent)
+    ok(`${idioma}: la que va a su propio chat no lo dice`,
+      !doc.querySelector('.card[data-case="22"] .card-destino'))
+    const det = abrirDetalle(doc, 21)
+    ok(`${idioma}: el detalle tambien`, va.test(det.querySelector('.det-prop')?.textContent || ''),
+      det.textContent)
+    const filas = [...det.querySelectorAll('.det-hist li')].map((li) => li.textContent)
+    ok(`${idioma}: y la historia dice por que espera en palabras`,
+      filas.some((f) => motivo.test(f)) && !filas.some((f) => /other_chat/.test(f)),
+      JSON.stringify(filas))
+  }
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)
