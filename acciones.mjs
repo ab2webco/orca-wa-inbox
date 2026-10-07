@@ -104,6 +104,8 @@ class Rechazo extends Error {
   }
 }
 
+const esObjeto = (x) => x !== null && typeof x === 'object' && !Array.isArray(x)
+
 const primeraLinea = (texto) =>
   String(texto ?? '').split('\n').map((l) => l.trim()).find(Boolean) ?? ''
 
@@ -234,12 +236,24 @@ export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage, l
    *  es una bandera. */
   async function entregar (c, version, texto) {
     const id = `caso-${c.case_id}-${version.slice(0, 12)}`
-    await enviar([`--id=${id}`, ...(c.account ? [`--line=${c.account}`] : []),
-      `--timeout=${ENVIO_PLAZO_S}`, '--json', '--', c.chat_jid, texto])
-    // La aprobacion es del dueno y la dice el tablero: la llave del plugin va SOLO a este
-    // hijo. Sin llave `wa-send` la niega (`send-approve-not-owner`) y el panel lo dice.
-    await enviar(['--approve', id, '--by', 'board', `--timeout=${ENVIO_PLAZO_S}`, '--json'],
-      await conLlave())
+    const linea = c.account ? [`--line=${c.account}`] : []
+    // Una respuesta a OTRO chat (respuesta-otro-chat) sale a ese chat con `--send`: el piso
+    // y Jev la revisan con los niveles de alla, como cualquier respuesta a un cliente. Lo que
+    // retengan queda de borrador (`destino.retenido`), y la siguiente firma del dueno lo
+    // manda como cualquier retenido: borrador y `--approve`.
+    const destino = esObjeto(c.destino) && typeof c.destino.chat_jid === 'string'
+      ? c.destino : null
+    if (destino && !destino.retenido) {
+      await enviar([`--id=${id}`, ...linea, '--send', `--timeout=${ENVIO_PLAZO_S}`, '--json',
+        '--', destino.chat_jid, texto])
+    } else {
+      await enviar([`--id=${id}`, ...linea, `--timeout=${ENVIO_PLAZO_S}`, '--json', '--',
+        destino ? destino.chat_jid : c.chat_jid, texto])
+      // La aprobacion es del dueno y la dice el tablero: la llave del plugin va SOLO a este
+      // hijo. Sin llave `wa-send` la niega (`send-approve-not-owner`) y el panel lo dice.
+      await enviar(['--approve', id, '--by', 'board', `--timeout=${ENVIO_PLAZO_S}`, '--json'],
+        await conLlave())
+    }
     // Salio. Si dar el caso por respondido falla, el mensaje ya esta en la linea: se
     // dice que salio y que el tablero quedo atras. Apretar de nuevo es seguro: el id es
     // el mismo y no se entrega dos veces.
@@ -286,8 +300,12 @@ export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage, l
       // El texto del dueno es una propuesta NUEVA, con su propia version: la que se firma
       // y la que sale. `--respuesta=` en una sola bandera: un texto con guion al
       // principio no se confunde con otra opcion.
+      // El destino de la propuesta (otro chat) sigue siendo el mismo: el dueno corrigio el
+      // texto, no a donde va.
+      const destino = esObjeto(c.destino) && typeof c.destino.chat_jid === 'string'
+        ? [`--chat=${c.destino.chat_jid}`] : []
       const nueva = await caso(['propuesta', String(id), '--tipo=responder',
-        `--respuesta=${texto}`, '--actor', ACTOR])
+        `--respuesta=${texto}`, ...destino, '--actor', ACTOR])
       if (typeof nueva.propuesta_version !== 'string' || !VERSION.test(nueva.propuesta_version)) {
         throw new Rechazo('fallo', 'wa-scope caso propuesta returned no version')
       }

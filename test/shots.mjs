@@ -462,6 +462,57 @@ const TABLERO_CASOS = [
 // estado: trabajando, pidio informacion, espera al cliente, resuelto y bloqueado por el agente.
 const despacho = (estado, resultado, hace) => ({ project: 'Alfa Demo', state: estado,
   outcome: resultado, at: minutos(hace + 20), updated_at: minutos(hace) })
+// respuesta-otro-chat: el dueno pidio en su chat reportarle al cliente en su grupo; la
+// propuesta dice a que chat va, en la tarjeta y en el detalle, antes de Enviar.
+const TABLERO_OTRO_CHAT = [
+  caso(31, 'decision', {
+    title: 'Reportar al cliente la conclusion del informe', prioridad: 'medium',
+    chat_name: 'Dueno Demo', updated_at: minutos(2), exceptions: [],
+    summary: 'El dueno pide pasarle la conclusion al grupo del cliente.',
+    jev: null,
+    proposal: { tipo: 'responder', version: 'v9c1d',
+      texto: 'Le comparto la conclusion del informe de ventas: el filtro ya cuadra con el total.',
+      destino: { chat_jid: '120363000000000004@g.us',
+        chat_name: 'Facturacion — Cliente Norte con un nombre de grupo bastante largo' } },
+    events: [
+      { de: null, a: 'recibido', actor: 'automatizacion', que: 'message', at: minutos(6) },
+      { de: 'clasificado', a: 'decision', actor: 'agente', que: 'proposal', args: ['responder'],
+        at: minutos(2) },
+      { de: 'decision', a: 'decision', actor: 'regla', que: 'reply_waits', args: ['other_chat'],
+        at: minutos(2) }]
+  }),
+  caso(32, 'decision', {
+    title: 'Pregunta por el estado del pedido', chat_name: 'Cliente Uno', updated_at: minutos(4),
+    exceptions: [], proposal: { tipo: 'responder', version: 'v7a2b',
+      texto: 'Hola, ya revisamos su pedido y sale hoy.' }
+  })
+]
+
+// casos-cli: una nota y una edicion en la historia, un recordatorio y un caso pospuesto.
+const enMinutos = (n) => new Date(AHORA_MS + n * 60000).toISOString()
+const TABLERO_CASOS_CLI = [
+  caso(41, 'clasificado', {
+    title: 'Revisar la factura de octubre', prioridad: 'urgent', chat_name: 'Cliente Uno',
+    updated_at: minutos(3), exceptions: [], proposal: null, jev: null,
+    reminder: { at: enMinutos(120), snoozed_until: null },
+    events: [
+      { de: null, a: 'recibido', actor: 'automatizacion', que: 'message', at: minutos(30) },
+      { de: 'recibido', a: 'clasificado', actor: 'agente', que: 'classified', args: ['card'],
+        at: minutos(25) },
+      { de: 'clasificado', a: 'clasificado', actor: 'dueno', que: 'edited',
+        args: ['priority', 'title'], at: minutos(10) },
+      { de: 'clasificado', a: 'clasificado', actor: 'dueno', que: 'note',
+        nota: 'El cliente llamo: la necesita antes del viernes, con el detalle por sede.',
+        at: minutos(5) },
+      { de: 'clasificado', a: 'clasificado', actor: 'agente', que: 'reminder_set', at: minutos(3) }]
+  }),
+  caso(42, 'recibido', {
+    title: 'La nota credito del pedido anterior', chat_name: 'Facturacion — Cliente Norte',
+    updated_at: minutos(15), exceptions: [], proposal: null, jev: null,
+    reminder: { at: enMinutos(900), snoozed_until: enMinutos(900) }
+  })
+]
+
 const TABLERO_DESPACHO = [
   caso(31, 'trabajo', { title: 'El reporte de ventas sale en blanco', prioridad: 'high',
     updated_at: minutos(12),
@@ -1065,6 +1116,32 @@ const PANELES = [
     enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS)),
     guion: ABRIR_TABLERO + `;
       document.querySelector('.card[data-case="8"]').click()`
+  },
+  {
+    // respuesta-otro-chat: la tarjeta dice a que otro chat va la respuesta.
+    nombre: 'tablero-otro-chat', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
+    datos: conTablero(tableroDe(TABLERO_OTRO_CHAT))
+  },
+  {
+    // Y su detalle, con la historia que dice por que espera.
+    nombre: 'tablero-otro-chat-detalle', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_OTRO_CHAT)),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="31"]').click()`
+  },
+  {
+    // casos-cli: el recordatorio y el caso pospuesto en sus tarjetas.
+    nombre: 'tablero-recordatorio', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
+    datos: conTablero(tableroDe(TABLERO_CASOS_CLI))
+  },
+  {
+    // Y el detalle, con la nota y la edicion en la historia.
+    nombre: 'tablero-nota-detalle', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS_CLI)),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="41"]').click()`
   },
   {
     // T8: el despacho al agente del proyecto en cada estado.

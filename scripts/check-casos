@@ -53,11 +53,11 @@ SIN_ORCA = "/nonexistent/orca-no-existe"
 
 
 def firma_como_dueno(args):
-    """`caso aprobar ... --actor dueno`: la firma del dueno, que el worker lanza con la llave
-    del aprobador en el env de ESE proceso (approve-solo-dueno). Cualquier otro actor no la
-    lleva, como en el plugin."""
+    """`caso aprobar ... --actor dueno` (y `caso lote ... --actor dueno`, casos-cli K13): la
+    firma del dueno, que el worker lanza con la llave del aprobador en el env de ESE proceso
+    (approve-solo-dueno). Cualquier otro actor no la lleva, como en el plugin."""
     args = list(args)
-    return args[:2] == ["caso", "aprobar"] and "--actor" in args \
+    return args[:2] in (["caso", "aprobar"], ["caso", "lote"]) and "--actor" in args \
         and args[args.index("--actor") + 1:args.index("--actor") + 2] == ["dueno"]
 
 
@@ -2387,7 +2387,8 @@ import re  # noqa: E402
 LLAVES_TARJETA = {"case_id", "account", "chat_jid", "chat_name", "stage", "title",
                   "summary", "clase", "prioridad", "jev", "proposal", "exceptions",
                   "blocked_reason", "no_agent_rule", "read_only", "ticket", "updated_at", "actions", "project",
-                  "needs_agent", "events", "related_case", "dispatch", "waits_agent", "stage_at"}
+                  "needs_agent", "events", "related_case", "dispatch", "waits_agent", "stage_at",
+                  "reminder"}
 ISO = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$")
 
 
@@ -13390,6 +13391,1310 @@ if NODE:
         falso.cerrar()
         os.environ.clear()
         os.environ.update(antes)
+
+
+# ── respuesta-otro-chat: una respuesta (o el resultado de un trabajo) a otro chat ─────────
+# Decision del dueno: lo que pide el dueno o un Super admin de la conversacion puede ir a
+# OTRO chat de la misma linea en `responder` (`caso propuesta --chat`). Un cliente nunca.
+# Datos de mentira: jids y nombres inventados.
+JEFA_OC = "111122225555@lid"
+OTRA_LINEA_OC = "120363000000000020@g.us"
+
+
+def prepara_otro_chat(home):
+    """La linea A con el directo del dueno, Facturacion en responder (el destino),
+    Operaciones en observar y Soporte con una Super admin."""
+    if not any(c["jid"] == DUENO_DM for c in CHATS):
+        CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+    linea_lista(home, modo_persona="responder", modo_soporte="responder")
+    js(home, "config", "ack", "off")
+    js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+    js(home, "set", FACTURACION, "--provider", "ninguno", "--mode", "responder")
+    js(home, "set", OPERACIONES, "--provider", "ninguno", "--mode", "observar")
+    js(home, "set", SOPORTE, "--member", f"{JEFA_OC}=admin")
+    pon_duenos(home, DUENO_LID)
+
+
+def caso_pedido(home, chat, stanza, de, texto="saca una conclusion y reportala"):
+    llegan(home, A, [msg(chat, stanza, texto, 5, mencion=True, de=de)])
+    cid = str(js(home, "caso", "crear", "--chat", chat, "--stanza", stanza,
+                 "--actor", "agente")[0]["case_id"])
+    js(home, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+       "--actor", "agente")
+    return cid
+
+
+def propone_a(home, cid, destino, texto="La conclusion: el reporte quedo bien.",
+              tipo="responder"):
+    campo = "--respuesta" if tipo == "responder" else "--instrucciones"
+    return corre(home, "caso", "propuesta", cid, "--tipo", tipo, campo, texto,
+                 "--chat", destino, "--actor", "agente")
+
+
+print("\nrespuesta-otro-chat R1: caso propuesta --chat")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        prepara_otro_chat(home)
+        dueno = caso_pedido(home, DUENO_DM, "OC1", DUENO_LID)
+        p = propone_a(home, dueno, "Facturacion")
+        fila = json.loads(p.stdout or "[{}]")[0] if p.returncode == 0 else {}
+        ok("el dueno propone una respuesta a otro chat por su nombre",
+           p.returncode == 0 and (fila.get("propuesta") or {}).get("chat") == FACTURACION,
+           p.stderr.strip()[:300])
+        ok("y la fila dice el destino con su nombre",
+           fila.get("destino") == {"chat_jid": FACTURACION, "chat_name": "Facturacion",
+                                   "retenido": False},
+           f"{fila.get('destino')}")
+        v_nombre = fila.get("propuesta_version")
+        p = propone_a(home, dueno, FACTURACION)
+        ok("por su jid es la misma propuesta (la misma version)",
+           p.returncode == 0 and json.loads(p.stdout)[0]["propuesta_version"] == v_nombre,
+           p.stderr.strip()[:300])
+        sin = js(home, "caso", "propuesta", dueno, "--tipo", "responder", "--respuesta",
+                 "La conclusion: el reporte quedo bien.", "--actor", "agente")[0]
+        ok("el destino es parte de la version: sin --chat es otra",
+           sin["propuesta_version"] != v_nombre and sin.get("destino") is None,
+           f"{sin.get('destino')}")
+        p = propone_a(home, dueno, "Dueno Directo")
+        ok("nombrar el chat del propio caso no es un destino",
+           p.returncode == 0 and "chat" not in json.loads(p.stdout)[0]["propuesta"]
+           and json.loads(p.stdout)[0]["destino"] is None, p.stderr.strip()[:300])
+        p = propone_a(home, dueno, "+57 300 000 0002")
+        ok("por su telefono",
+           p.returncode == 0 and json.loads(p.stdout)[0]["propuesta"].get("chat") == PERSONA,
+           p.stderr.strip()[:300])
+        ok("un chat en observar se niega con E_DEST_MODE",
+           error_de(propone_a(home, dueno, "Operaciones")) == "E_DEST_MODE")
+        ok("uno que no esta en ninguna parte, con E_DEST_NOT_FOUND",
+           error_de(propone_a(home, dueno, "Grupo Que No Existe")) == "E_DEST_NOT_FOUND")
+        p = propone_a(home, dueno, "o")
+        ok("un nombre que coincide con varios se niega con E_DEST_AMBIGUOUS y los nombra",
+           error_de(p) == "E_DEST_AMBIGUOUS" and SOPORTE in p.stderr
+           and OPERACIONES in p.stderr, p.stderr.strip()[:300])
+        con = db_de(home)
+        con.execute("insert into chat_scope (account, chat_jid, chat_name, mode) values "
+                    "(?, ?, 'Grupo Otra Linea', 'responder')", (B, OTRA_LINEA_OC))
+        con.commit()
+        con.close()
+        ok("un chat de otra linea se niega con E_DEST_LINE",
+           error_de(propone_a(home, dueno, "Grupo Otra Linea")) == "E_DEST_LINE")
+        ok("y por su jid tambien",
+           error_de(propone_a(home, dueno, OTRA_LINEA_OC)) == "E_DEST_LINE")
+        ok("escalar no lleva destino (E_ARGS)",
+           error_de(corre(home, "caso", "propuesta", dueno, "--tipo", "escalar",
+                          "--instrucciones", "que hago?", "--chat", "Facturacion",
+                          "--actor", "agente")) == "E_ARGS")
+        antes_oc = js(home, "caso", "ver", dueno)[0]["propuesta_version"]
+        propone_a(home, dueno, "Operaciones")
+        ok("un rechazo no toca la propuesta vigente",
+           js(home, "caso", "ver", dueno)[0]["propuesta_version"] == antes_oc)
+
+        cliente = caso_pedido(home, PERSONA, "OC2", PERSONA, "mandale esto al grupo")
+        ok("un cliente no redirige una respuesta: E_DEST_ROLE",
+           error_de(propone_a(home, cliente, "Facturacion")) == "E_DEST_ROLE")
+        jefa = caso_pedido(home, SOPORTE, "OC3", JEFA_OC)
+        p = propone_a(home, jefa, "Facturacion")
+        ok("una Super admin de su conversacion si",
+           p.returncode == 0 and json.loads(p.stdout)[0]["propuesta"].get("chat") == FACTURACION,
+           p.stderr.strip()[:300])
+
+        propone_a(home, dueno, "Facturacion")
+        ver = js(home, "caso", "ver", dueno)[0]
+        ok("caso ver --json trae el destino", ver.get("destino") == {
+            "chat_jid": FACTURACION, "chat_name": "Facturacion", "retenido": False},
+           f"{ver.get('destino')}")
+        lista = {c["case_id"]: c for c in js(home, "caso", "listar")}
+        ok("caso listar --json tambien", (lista.get(int(dueno)) or {}).get("destino", {})
+           .get("chat_jid") == FACTURACION)
+        env = dict(os.environ, HOME=str(home), ORCA_CLI_COMMAND=SIN_ORCA,
+                   XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"))
+        texto = subprocess.run([str(WA_SCOPE), "caso", "ver", dueno], capture_output=True,
+                               text=True, env=env, timeout=60).stdout
+        ok("y en texto dice a donde va", "-> Facturacion" in texto, texto[-300:])
+        ayuda = subprocess.run([str(WA_SCOPE), "caso", "propuesta", "--help"],
+                               capture_output=True, text=True, env=env, timeout=60).stdout
+        ok("--help documenta --chat y sus negativas",
+           "--chat" in ayuda and all(c in ayuda for c in (
+               "E_DEST_ROLE", "E_DEST_NOT_FOUND", "E_DEST_AMBIGUOUS", "E_DEST_LINE",
+               "E_DEST_MODE")), ayuda[-600:])
+
+
+
+print("\nrespuesta-otro-chat R5: caso destinos")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        prepara_otro_chat(home)
+        acepta_proyectos(home, "alfa-demo", "beta-demo")
+        js(home, "set", SOPORTE, "--workspace", "alfa-demo")
+        js(home, "set", FACTURACION, "--workspace", "alfa-demo")
+        js(home, "set", OPERACIONES, "--workspace", "alfa-demo")
+        js(home, "set", PERSONA, "--workspace", "beta-demo")
+        jefa = caso_pedido(home, SOPORTE, "OD1", JEFA_OC)
+        p = corre(home, "caso", "destinos", jefa)
+        filas = json.loads(p.stdout or "[]") if p.returncode == 0 else None
+        ok("caso destinos lista el unico chat en responder con el proyecto del caso",
+           filas is not None and [f["chat_jid"] for f in filas] == [FACTURACION],
+           f"{p.returncode} {p.stderr.strip()[:200]} {filas}")
+        ok("con su nombre, su modo, el proyecto y el porque",
+           bool(filas) and filas[0].get("chat_name") == "Facturacion"
+           and filas[0].get("mode") == "responder"
+           and filas[0].get("project", {}).get("id") == "alfa-demo"
+           and filas[0].get("why"), f"{filas}")
+        ok("ni el chat del caso ni uno en observar ni el de otro proyecto",
+           filas is not None and not {SOPORTE, OPERACIONES, PERSONA} & {
+               f["chat_jid"] for f in filas})
+        js(home, "set", PERSONA, "--workspace", "alfa-demo")
+        filas = js(home, "caso", "destinos", jefa)
+        ok("dos candidatos: los lista a los dos (el agente pregunta cual)",
+           sorted(f["chat_jid"] for f in filas) == sorted([FACTURACION, PERSONA]), f"{filas}")
+        dueno = caso_pedido(home, DUENO_DM, "OD2", DUENO_LID)
+        ok("un caso sin proyecto no tiene candidatos",
+           js(home, "caso", "destinos", dueno) == [])
+        env = dict(os.environ, HOME=str(home), ORCA_CLI_COMMAND=SIN_ORCA,
+                   XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"))
+        texto = subprocess.run([str(WA_SCOPE), "caso", "destinos", dueno], capture_output=True,
+                               text=True, env=env, timeout=60)
+        ok("y en texto lo dice en una linea", texto.returncode == 0
+           and "no project" in texto.stdout, texto.stdout + texto.stderr)
+        js(home, "caso", "proyecto", dueno, "--proyecto", "alfa-demo", "--actor", "dueno")
+        filas = js(home, "caso", "destinos", dueno)
+        ok("con el proyecto que eligio el dueno, los chats de ese proyecto",
+           sorted(f["chat_jid"] for f in filas) == sorted([FACTURACION, PERSONA, SOPORTE]),
+           f"{filas}")
+        texto = subprocess.run([str(WA_SCOPE), "caso", "destinos", dueno], capture_output=True,
+                               text=True, env=env, timeout=60).stdout
+        ok("en texto, uno por linea con su nombre", "Facturacion" in texto
+           and "Cliente Uno" in texto, texto)
+        cliente = caso_pedido(home, PERSONA, "OD3", PERSONA, "pasale esto al otro grupo")
+        ok("el caso de un cliente no tiene destinos: E_DEST_ROLE",
+           error_de(corre(home, "caso", "destinos", cliente)) == "E_DEST_ROLE")
+
+
+
+def envios_a(home, chat):
+    ruta = pathlib.Path(home) / ".wa-inbox" / "capture.db"
+    con = sqlite3.connect(ruta)
+    con.row_factory = sqlite3.Row
+    filas = [dict(r) for r in con.execute(
+        "select req_id, estado, body from envio where chat_jid=? order by rowid", (chat,))]
+    con.close()
+    return filas
+
+
+def eventos_de(home, cid):
+    return [e["detalle"] for e in js(home, "caso", "ver", cid)[0]["eventos"]]
+
+
+print("\nrespuesta-otro-chat R2: la regla nunca firma una respuesta a otro chat")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        prepara_otro_chat(home)
+        sidecar = SidecarFalso(home)
+        try:
+            dueno = caso_pedido(home, DUENO_DM, "OR1", DUENO_LID)
+            v = json.loads(propone_a(home, dueno, "Facturacion").stdout)[0]["propuesta_version"]
+            tick(home)
+            ver = js(home, "caso", "ver", dueno)[0]
+            ok("el tick no la manda sola: espera al dueno",
+               ver["etapa"] == "decision" and not ver["aprobada"]
+               and envios_a(home, FACTURACION) == [], f"{ver['etapa']} {envios_a(home, FACTURACION)}")
+            ok("y el caso dice por que: other_chat, una vez por version",
+               sum(1 for d in eventos_de(home, dueno)
+                   if d.startswith("respuesta espera al dueno:") and "other_chat" in d
+                   and d.endswith(v[:12])) == 1, f"{eventos_de(home, dueno)}")
+            ok("regla aprobar a mano tambien se niega (E_EXCEPTION)",
+               error_de(corre(home, "caso", "aprobar", dueno, "--version", v,
+                              "--actor", "regla")) == "E_EXCEPTION")
+
+            pon_aprobacion(home, DUENO_LID)
+            tick(home)
+            avisos = [a for a in al_dueno(home) if a["req_id"].startswith(f"aviso-{dueno}-")]
+            cuerpo = avisos[0]["body"] if avisos else ""
+            ok("el aviso al dueno dice a que chat va y el texto",
+               len(avisos) == 1 and "Va a: Facturacion" in cuerpo
+               and "el reporte quedo bien" in cuerpo and f"si {dueno}" in cuerpo, cuerpo)
+            ok("y por que espera, en palabras", "otro chat" in cuerpo, cuerpo)
+
+            ws = carga_wa_scope(home)
+            con = ws.db()
+            try:
+                dinero = caso_pedido(home, DUENO_DM, "OR2", DUENO_LID)
+                js(home, "caso", "propuesta", dinero, "--tipo", "responder", "--respuesta",
+                   "El arreglo cuesta $50.", "--actor", "agente")
+                propio = ws.frenos_de_regla(con, ws.caso_de(con, int(dinero)))[0]
+                propone_a(home, dinero, "Facturacion", "El arreglo cuesta $50.")
+                fuera = ws.frenos_de_regla(con, ws.caso_de(con, int(dinero)))[0]
+            finally:
+                con.close()
+            ok("en el chat del dueno el dinero no frena; hacia el cliente si (sus niveles)",
+               "money" not in propio and "money" in fuera and "other_chat" in fuera,
+               f"{propio} {fuera}")
+
+            otro = caso_pedido(home, DUENO_DM, "OR3", DUENO_LID)
+            propone_a(home, otro, "Facturacion", "Otra conclusion distinta.")
+            js(home, "mode", FACTURACION, "observar")
+            tick(home)
+            ok("si el destino deja de estar en responder, el tick no lo toma",
+               not any(d.startswith("respuesta espera al dueno:") for d in eventos_de(home, otro))
+               and envios_a(home, FACTURACION) == [], f"{eventos_de(home, otro)}")
+        finally:
+            sidecar.cerrar()
+            os.environ.clear()
+            os.environ.update(env_antes)
+
+
+
+print("\nrespuesta-otro-chat R3: lo aprobado sale al otro chat y el caso lo confirma")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        prepara_otro_chat(home)
+        sidecar = SidecarFalso(home)
+        try:
+            # El dueno firma en el tablero (su llave); el tick lo manda al otro chat.
+            dueno = caso_pedido(home, DUENO_DM, "OS1", DUENO_LID)
+            v = json.loads(propone_a(home, dueno, "Facturacion").stdout)[0]["propuesta_version"]
+            js(home, "caso", "aprobar", dueno, "--version", v, "--actor", "dueno")
+            tick(home)
+            fuera = envios_a(home, FACTURACION)
+            ok("lo firmado por el dueno sale al chat de destino, con el id del caso",
+               len(fuera) == 1 and fuera[0]["req_id"] == f"caso-{dueno}-{v[:12]}"
+               and fuera[0]["estado"] == "enviado"
+               and "el reporte quedo bien" in fuera[0]["body"], f"{fuera}")
+            ok("y el caso queda respondido", js(home, "caso", "ver", dueno)[0]["etapa"]
+               == "respondido")
+            confirma = [e for e in envios_a(home, DUENO_DM) if e["req_id"].endswith("-ok")]
+            ok("el chat del caso recibe UNA confirmacion de a donde salio",
+               len(confirma) == 1 and "Facturacion" in confirma[0]["body"]
+               and confirma[0]["estado"] == "enviado", f"{envios_a(home, DUENO_DM)}")
+            tick(home)
+            ok("otro tick no la repite ni reenvia",
+               len([e for e in envios_a(home, DUENO_DM) if e["req_id"].endswith("-ok")]) == 1
+               and len(envios_a(home, FACTURACION)) == 1)
+            ok("nada salio en el chat del dueno con el texto de la respuesta",
+               not any("el reporte quedo bien" in e["body"] for e in envios_a(home, DUENO_DM)))
+
+            # Lo que el piso frena con los niveles del destino queda retenido para el dueno.
+            dinero = caso_pedido(home, DUENO_DM, "OS2", DUENO_LID)
+            v2 = json.loads(propone_a(home, dinero, "Facturacion",
+                                      "El arreglo cuesta $50.").stdout)[0]["propuesta_version"]
+            js(home, "caso", "aprobar", dinero, "--version", v2, "--actor", "dueno")
+            tick(home)
+            retenido = [e for e in envios_a(home, FACTURACION)
+                        if e["req_id"] == f"caso-{dinero}-{v2[:12]}"]
+            ver = js(home, "caso", "ver", dinero)[0]
+            ok("con dinero, el piso del destino lo retiene aunque el dueno haya firmado",
+               len(retenido) == 1 and retenido[0]["estado"] == "borrador"
+               and ver["etapa"] == "decision", f"{retenido} {ver['etapa']}")
+            ok("y el caso dice que se freno, sin la firma (el dueno decide en el tablero)",
+               not ver["aprobada"] and any(d.startswith("envio frenado:")
+                                          for d in eventos_de(home, dinero))
+               and (ver.get("destino") or {}).get("retenido") is True, f"{ver.get('destino')}")
+            ok("sin confirmacion de algo que no salio",
+               not any(e["req_id"] == f"caso-{dinero}-{v2[:12]}-ok"
+                       for e in envios_a(home, DUENO_DM)))
+
+            # La aprobacion por WhatsApp (`si N`): sale al destino y la respuesta lo dice.
+            pon_aprobacion(home, DUENO_LID)
+            whats = caso_pedido(home, DUENO_DM, "OS3", DUENO_LID, "y esto tambien al grupo")
+            v3 = json.loads(propone_a(home, whats, "Facturacion",
+                                      "Le comparto la conclusion del informe de ventas.").stdout)[0]["propuesta_version"]
+            tick(home)
+            llegan(home, A, [msg(DUENO_DM, "OS3R", f"si {whats}", 1, de=DUENO_LID)])
+            ingiere(home)
+            fuera = [e for e in envios_a(home, FACTURACION)
+                     if e["req_id"] == f"caso-{whats}-{v3[:12]}"]
+            ok("si N manda la respuesta al chat de destino",
+               len(fuera) == 1 and fuera[0]["estado"] == "enviado", f"{fuera} {eventos_de(home, whats)}")
+            tick(home)
+            dichos = [e["body"] for e in envios_a(home, DUENO_DM)
+                      if f"Caso {whats}" in e["body"] and "a Facturacion" in e["body"]
+                      and "no salio" not in e["body"] and "Respuesta propuesta" not in e["body"]]
+            ok("y el dueno lee UNA vez que salio a Facturacion (su directo es el del caso)",
+               len(dichos) == 1, f"{dichos}")
+        finally:
+            sidecar.cerrar()
+            os.environ.clear()
+            os.environ.update(env_antes)
+
+
+
+print("\nrespuesta-otro-chat R4: el trabajo cuya respuesta va a otro chat")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        prepara_otro_chat(home)
+        sidecar = SidecarFalso(home)
+        try:
+            dueno = caso_pedido(home, DUENO_DM, "OW1", DUENO_LID, "investiga el error y avisale")
+            p = propone_a(home, dueno, "Facturacion", "Investiga el error del reporte.",
+                          tipo="trabajar")
+            fila = json.loads(p.stdout or "[{}]")[0] if p.returncode == 0 else {}
+            ok("un trabajo del dueno lleva el destino de su respuesta",
+               (fila.get("propuesta") or {}).get("chat") == FACTURACION
+               and (fila.get("destino") or {}).get("chat_jid") == FACTURACION,
+               p.stderr.strip()[:300])
+            js(home, "caso", "aprobar", dueno, "--version", fila["propuesta_version"],
+               "--actor", "dueno")
+            ws = carga_wa_scope(home)
+            con = ws.db()
+            try:
+                caso = ws.caso_de(con, int(dueno))
+                brief = ws.brief_de_despacho(con, caso, {"name": "Alfa Demo",
+                                                         "path": "/srv/ejemplo/alfa-demo"},
+                                             "Investiga el error del reporte.")
+            finally:
+                con.close()
+            ok("el brief le dice al agente del proyecto a que chat va su respuesta",
+               "Facturacion" in brief and FACTURACION in brief, brief[-800:])
+            ok("y no le pide proponer (eso es del agente de casos)",
+               "caso destinos" not in brief and "Reply to another chat" not in brief)
+            r = js(home, "caso", "resultado", dueno, "--respuesta",
+                   "Encontramos la causa del error y quedo corregida.", "--resumen",
+                   "arreglado el filtro", "--actor", "trabajador")[0]
+            ok("la respuesta del resultado conserva el destino",
+               r["propuesta"].get("chat") == FACTURACION
+               and (r.get("destino") or {}).get("chat_jid") == FACTURACION, f"{r['propuesta']}")
+            ok("y no sale sola: espera al dueno, a ningun chat",
+               r["etapa"] == "listo" and envios_a(home, FACTURACION) == []
+               and not any("quedo corregida" in e["body"] for e in envios_a(home, DUENO_DM)),
+               f"{r.get('envio')}")
+            con = ws.db()
+            try:
+                historia = "\n".join(ws.historia_del_caso(con, ws.caso_de(con, int(dueno))))
+            finally:
+                con.close()
+            ok("el archivo del caso dice a donde va la propuesta y como conservarlo",
+               f"--chat {FACTURACION}" in historia and "Facturacion" in historia, historia)
+            js(home, "caso", "aprobar", dueno, "--version", r["propuesta_version"],
+               "--actor", "dueno")
+            tick(home)
+            ok("firmada por el dueno, sale al destino",
+               [e["estado"] for e in envios_a(home, FACTURACION)] == ["enviado"],
+               f"{envios_a(home, FACTURACION)}")
+
+            otro = caso_pedido(home, DUENO_DM, "OW2", DUENO_LID, "revisa esto y avisale")
+            v = json.loads(propone_a(home, otro, "Facturacion", "Revisa el modulo de cobros.",
+                                     tipo="trabajar").stdout)[0]["propuesta_version"]
+            js(home, "caso", "aprobar", otro, "--version", v, "--actor", "dueno")
+            n = js(home, "caso", "resultado", otro, "--estado", "necesita", "--respuesta",
+                   "Cual de los dos modulos de cobros reviso?", "--resumen", "falta un dato",
+                   "--actor", "trabajador")[0]
+            ok("la pregunta de un `necesita` va a quien lo pidio, no al destino",
+               "chat" not in n["propuesta"] and n.get("destino") is None, f"{n['propuesta']}")
+        finally:
+            sidecar.cerrar()
+            os.environ.clear()
+            os.environ.update(env_antes)
+
+
+
+print("\nrespuesta-otro-chat R6: la tarjeta dice a que chat va")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        prepara_otro_chat(home)
+        dueno = caso_pedido(home, DUENO_DM, "OT1", DUENO_LID)
+        propone_a(home, dueno, "Facturacion")
+        t = tarjeta(home, int(dueno)) or {}
+        ok("la tarjeta lleva el destino en su propuesta",
+           (t.get("proposal") or {}).get("destino") == {"chat_jid": FACTURACION,
+                                                        "chat_name": "Facturacion"},
+           f"{t.get('proposal')}")
+        propio = caso_pedido(home, DUENO_DM, "OT2", DUENO_LID)
+        js(home, "caso", "propuesta", propio, "--tipo", "responder", "--respuesta", "Hecho.",
+           "--actor", "agente")
+        t = tarjeta(home, int(propio)) or {}
+        ok("y la que va al chat del caso no lo lleva", "destino" not in (t.get("proposal") or {}),
+           f"{t.get('proposal')}")
+
+
+
+print("\nrespuesta-otro-chat R7: el archivo del caso dice si puede ir a otro chat")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        prepara_otro_chat(home)
+        try:
+            jefa = caso_pedido(home, SOPORTE, "OH1", JEFA_OC)
+            cliente = caso_pedido(home, PERSONA, "OH2", PERSONA, "mandale esto al grupo")
+            ws = carga_wa_scope(home)
+            con = ws.db()
+            try:
+                de_jefa = "\n".join(ws.cabeza_del_caso(con, ws.caso_de(con, int(jefa))))
+                de_cliente = "\n".join(ws.cabeza_del_caso(con, ws.caso_de(con, int(cliente))))
+            finally:
+                con.close()
+            ok("el caso de una Super admin dice que su respuesta puede ir a otro chat",
+               "--chat" in de_jefa and "caso destinos" in de_jefa, de_jefa)
+            ok("el de un cliente dice que no", "--chat" not in de_cliente
+               and "another chat: no" in de_cliente, de_cliente)
+        finally:
+            os.environ.clear()
+            os.environ.update(env_antes)
+
+
+# ── casos-cli: el dueno maneja sus casos desde WhatsApp (odd/tasks/casos-cli.md) ──────────
+# El agente es lo unico que el dueno tiene por WhatsApp, y el agente solo tiene el CLI: lo
+# que el tablero hace (buscar, filtrar, leer una tarjeta, los informes) lo tiene que poder
+# hacer `wa-scope caso`.
+def casos_cli_linea(home):
+    """La linea A con Soporte Norte y Cliente Uno autorizados y tres casos con titulo."""
+    llegan(home, A, [msg(SOPORTE, "CB1", "no carga el login", 30, mencion=True),
+                     msg(PERSONA, "CB2", "quiero renovar", 20),
+                     msg(SOPORTE, "CB3", "otra cosa", 10, mencion=True)])
+    js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+    js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "borrador")
+    ids = {}
+    for stanza, chat, titulo in (("CB1", SOPORTE, "Error en el login"),
+                                 ("CB2", PERSONA, "Renovación del dominio"),
+                                 ("CB3", SOPORTE, None)):
+        args = ["caso", "crear", "--chat", chat, "--stanza", stanza, "--actor", "agente"]
+        if titulo:
+            args += ["--titulo", titulo]
+        ids[stanza] = str(js(home, *args)[0]["case_id"])
+    return ids
+
+
+print("\ncasos-cli K1: buscar como el tablero")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        ids = casos_cli_linea(home)
+        nums = lambda filas: sorted(str(c["case_id"]) for c in filas)  # noqa: E731
+        ok("buscar por una palabra del titulo, sin tildes ni mayusculas",
+           nums(js(home, "caso", "buscar", "RENOVACION")) == [ids["CB2"]],
+           f"{js(home, 'caso', 'buscar', 'RENOVACION')}")
+        ok("con la tilde tambien", nums(js(home, "caso", "buscar", "renovación")) == [ids["CB2"]])
+        ok("buscar por el nombre del chat",
+           nums(js(home, "caso", "buscar", "soporte norte")) == sorted([ids["CB1"], ids["CB3"]]))
+        ok("buscar por el numero del caso, con o sin #",
+           nums(js(home, "caso", "buscar", ids["CB3"])) == [ids["CB3"]]
+           and nums(js(home, "caso", "buscar", "#" + ids["CB3"])) == [ids["CB3"]])
+        ok("un caso sin titulo se busca por el texto de su primer mensaje",
+           nums(js(home, "caso", "buscar", "otra cosa")) == [ids["CB3"]])
+        ok("listar --buscar es lo mismo",
+           nums(js(home, "caso", "listar", "--buscar", "login")) == [ids["CB1"]])
+        ok("lo que no coincide da una lista vacia",
+           js(home, "caso", "buscar", "inexistente") == [])
+        p = corre(home, "caso", "buscar", "  ")
+        ok("una busqueda vacia es E_ARGS", p.returncode == 2 and "E_ARGS" in p.stderr,
+           p.stderr.strip())
+
+
+print("\ncasos-cli K2: listar filtra, acota y ordena como el tablero")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        ids = casos_cli_linea(home)
+        cerrado = str(js(home, "caso", "crear", "--chat", PERSONA, "--titulo", "Viejo",
+                         "--actor", "agente")[0]["case_id"])
+        js(home, "caso", "mover", cerrado, "cerrado", "--motivo", "listo", "--actor", "dueno")
+        js(home, "caso", "clasificar", ids["CB1"], "--clase", "card", "--prioridad", "high",
+           "--actor", "agente")
+        js(home, "caso", "clasificar", ids["CB3"], "--clase", "card", "--prioridad", "low",
+           "--actor", "agente")
+        js(home, "caso", "propuesta", ids["CB3"], "--tipo", "responder", "--respuesta",
+           "Ya lo revisamos.", "--actor", "agente")
+        acepta_proyectos(home, "web-demo", "app-demo")
+        js(home, "caso", "proyecto", ids["CB1"], "--proyecto", "web-demo", "--actor", "dueno")
+        con = db_de(home)
+        con.execute("update caso set updated_at=? where case_id=?",
+                    (time.strftime("%Y-%m-%d %H:%M:%S",
+                                   time.localtime(time.time() - 40 * 86400)), int(cerrado)))
+        for cid, hace in ((ids["CB1"], 0), (ids["CB3"], 60), (ids["CB2"], 120)):
+            con.execute("update caso set updated_at=? where case_id=?",
+                        (time.strftime("%Y-%m-%d %H:%M:%S",
+                                       time.localtime(time.time() - hace)), int(cid)))
+        con.commit()
+        con.close()
+        nums = lambda filas: [str(c["case_id"]) for c in filas]  # noqa: E731
+
+        orden = nums(js(home, "caso", "listar"))
+        ok("por defecto, el orden del tablero: decision primero, cerrado despues",
+           orden[0] == ids["CB3"] and orden[-1] == cerrado, f"{orden}")
+        ok("--orden reciente: lo ultimo que se movio primero",
+           nums(js(home, "caso", "listar", "--orden", "reciente"))[0] == ids["CB1"])
+        ok("--abiertos deja fuera lo terminado",
+           cerrado not in nums(js(home, "caso", "listar", "--abiertos"))
+           and len(js(home, "caso", "listar", "--abiertos")) == 3)
+        ok("--etapa con varias, separadas por coma",
+           sorted(nums(js(home, "caso", "listar", "--etapa", "recibido,decision")))
+           == sorted([ids["CB2"], ids["CB3"]]))
+        ok("--etapa repetida es lo mismo",
+           sorted(nums(js(home, "caso", "listar", "--etapa", "recibido", "--etapa",
+                          "decision"))) == sorted([ids["CB2"], ids["CB3"]]))
+        p = corre(home, "caso", "listar", "--etapa", "recibido,inventada")
+        ok("una etapa que no existe es E_ARGS", p.returncode == 2 and "E_ARGS" in p.stderr,
+           p.stderr.strip())
+        ok("--prioridad", nums(js(home, "caso", "listar", "--prioridad", "high")) == [ids["CB1"]])
+        p = corre(home, "caso", "listar", "--prioridad", "altisima")
+        ok("una prioridad que no existe es E_ARGS", p.returncode == 2 and "E_ARGS" in p.stderr)
+        ok("--proyecto por id o por nombre, sin tildes ni mayusculas",
+           nums(js(home, "caso", "listar", "--proyecto", "web-demo")) == [ids["CB1"]]
+           and nums(js(home, "caso", "listar", "--proyecto", "WEB DEMO")) == [ids["CB1"]])
+        ok("--desde 30d deja fuera lo que no se movio en 30 dias",
+           cerrado not in nums(js(home, "caso", "listar", "--desde", "30d"))
+           and len(js(home, "caso", "listar", "--desde", "today")) == 3)
+        ok("--desde con una fecha",
+           cerrado in nums(js(home, "caso", "listar", "--desde", "2000-01-01")))
+        p = corre(home, "caso", "listar", "--desde", "el martes")
+        ok("una fecha que no se entiende es E_ARGS", p.returncode == 2 and "E_ARGS" in p.stderr)
+        para = json.loads(necesita(home).stdout or "{}").get("cases") or []
+        ok("--necesita-agente son los mismos que pending --needs-agent",
+           sorted(int(x) for x in nums(js(home, "caso", "listar", "--necesita-agente")))
+           == sorted(para) and para, f"{para}")
+        p = corre(home, "caso", "listar", "--limite", "2")
+        ok("--limite acota y dice en stderr cuantos quedaron afuera",
+           p.returncode == 0 and len(json.loads(p.stdout)) == 2 and "2 more" in p.stderr,
+           p.stderr.strip())
+        corta = next(c for c in js(home, "caso", "listar") if str(c["case_id"]) == ids["CB3"])
+        ok("la fila corta no trae el texto de la propuesta, si su tipo y el titulo",
+           "propuesta" not in corta and corta.get("propuesta_tipo") == "responder"
+           and "ruta" not in corta and corta.get("titulo") == "otra cosa"
+           and corta.get("chat_name") == "Soporte Norte", f"{corta}")
+        larga = next(c for c in js(home, "caso", "listar", "--completo")
+                     if str(c["case_id"]) == ids["CB3"])
+        ok("--completo trae la fila entera de antes",
+           (larga.get("propuesta") or {}).get("respuesta") == "Ya lo revisamos.", f"{larga}")
+        con_p = next(c for c in js(home, "caso", "listar") if str(c["case_id"]) == ids["CB1"])
+        ok("la fila corta dice el proyecto",
+           (con_p.get("proyecto") or {}).get("id") == "web-demo", f"{con_p}")
+        texto = subprocess.run([str(WA_SCOPE), "caso", "listar"], capture_output=True,
+                               text=True, env=dict(os.environ, HOME=str(home),
+                                                   ORCA_CLI_COMMAND=SIN_ORCA)).stdout
+        ok("en texto, una linea corta por caso",
+           len(texto.strip().splitlines()) == 4 and f"#{ids['CB3']}" in texto
+           and "Ya lo revisamos" not in texto, texto)
+
+
+print("\ncasos-cli K3: caso estado dice en palabras lo que dice la tarjeta")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        ids = casos_cli_linea(home)
+        js(home, "caso", "clasificar", ids["CB3"], "--clase", "card", "--prioridad", "high",
+           "--actor", "agente")
+        js(home, "caso", "propuesta", ids["CB3"], "--tipo", "responder", "--respuesta",
+           "Ya lo revisamos.", "--actor", "agente")
+        e = js(home, "caso", "estado", ids["CB3"])[0]
+        t = tarjeta(home, ids["CB3"]) or {}
+        ok("estado trae lo que calcula la tarjeta: etapa, acciones, propuesta y titulo",
+           e.get("stage") == "decision" and e.get("actions") == t.get("actions")
+           and (e.get("proposal") or {}).get("tipo") == "responder"
+           and e.get("title") == "otra cosa" and e.get("stage_at"), f"{e}")
+        ok("y las llaves de la tarjeta, sin la historia en codigos",
+           {"blocked_reason", "no_agent_rule", "read_only", "project", "dispatch",
+            "waits_agent"} <= set(e) and "events" not in e, f"{sorted(e)}")
+        hist = e.get("history") or []
+        ok("la historia en palabras, en orden, con quien y cuando",
+           len(hist) >= 3 and hist[-1]["a"] == "decision"
+           and "proposal" in hist[-1]["text"] and "agente" in hist[-1]["text"]
+           and hist[0]["a"] == "recibido" and all(h.get("at") for h in hist), f"{hist}")
+        palabras = " ".join(e.get("en_palabras") or [])
+        ok("y un resumen en palabras para contestar \"como va el caso\"",
+           "decision" in palabras and "responder" in palabras and "enviar" in palabras,
+           palabras)
+        js(home, "caso", "mover", ids["CB1"], "bloqueado", "--motivo", "falta el acceso al panel",
+           "--actor", "dueno")
+        b = js(home, "caso", "estado", ids["CB1"])[0]
+        ok("un caso bloqueado dice por que", b.get("blocked_reason") == "falta el acceso al panel"
+           and "falta el acceso al panel" in " ".join(b.get("en_palabras") or []), f"{b}")
+        js(home, "mode", PERSONA, "observar")
+        r = js(home, "caso", "estado", ids["CB2"])[0]
+        ok("un caso de un chat observar dice solo leer", r.get("read_only") is True
+           and "read only" in " ".join(r.get("en_palabras") or []).lower(), f"{r}")
+        ok("y el nombre del chat es el del almacen, no su jid",
+           r.get("chat_name") == "Cliente Uno", f"{r.get('chat_name')}")
+        cid, _ = caso_en_trabajo(home, "CB9", SOPORTE)
+        con = db_de(home)
+        evento_id = con.execute("select max(id) from caso_evento where case_id=? and a='trabajo'",
+                                (int(cid),)).fetchone()[0]
+        con.execute("insert into caso_despacho (case_id, evento_id, proyecto, estado, created_at, "
+                    "updated_at) values (?, ?, 'Web Demo', 'activo', ?, ?)",
+                    (int(cid), evento_id, time.strftime("%Y-%m-%d %H:%M:%S"),
+                     time.strftime("%Y-%m-%d %H:%M:%S")))
+        con.commit()
+        con.close()
+        d = js(home, "caso", "estado", cid)[0]
+        ok("un caso en trabajo dice su despacho al agente del proyecto",
+           (d.get("dispatch") or {}).get("state") == "activo"
+           and "Web Demo" in " ".join(d.get("en_palabras") or []), f"{d}")
+        texto = subprocess.run([str(WA_SCOPE), "caso", "estado", ids["CB3"]], capture_output=True,
+                               text=True, env=dict(os.environ, HOME=str(home),
+                                                   ORCA_CLI_COMMAND=SIN_ORCA)).stdout
+        ok("en texto, el resumen en palabras", f"Case #{ids['CB3']}" in texto
+           and "decision" in texto, texto)
+        ok("un caso que no existe es E_NOT_FOUND",
+           "E_NOT_FOUND" in corre(home, "caso", "estado", "999").stderr)
+
+
+print("\ncasos-cli K4: caso informe trae los numeros de la pestana Informes")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        ids = casos_cli_linea(home)
+        llegan(home, A, [msg(PERSONA, "CB2R", "Ya lo vemos.", 15, yo=True)])
+        js(home, "caso", "mover", ids["CB1"], "cerrado", "--motivo", "listo", "--actor", "dueno")
+        r = js(home, "caso", "informe", "--periodo", "7d")[0]
+        antes = dict(os.environ)
+        try:
+            ws = carga_wa_scope(home)
+            con = ws.db()
+            try:
+                informe = ws.build_reports(con)
+            finally:
+                con.close()
+        finally:
+            os.environ.clear()
+            os.environ.update(antes)
+        per = informe["periods"]["7d"]
+        ok("cuenta por etapa y lo vivo, como el tablero",
+           r.get("stages", {}).get("recibido") == 2 and r["stages"].get("cerrado") == 1
+           and r.get("live") == informe["live"], f"{r.get('stages')} {r.get('live')}")
+        ok("la primera respuesta contra la meta, la misma del informe",
+           r.get("first_response", {}).get("median_s") == per["first_response"]["value"]
+           and 295 <= r["first_response"]["median_s"] <= 305
+           and r["first_response"]["n"] == 1 and r.get("sla", {}).get("target_minutes")
+           == informe["sla_minutes"] and r["sla"].get("met") == per["sla"]["met"],
+           f"{r.get('first_response')} {r.get('sla')}")
+        ok("la resolucion y la espera del cliente",
+           r.get("resolution", {}).get("n") == per["resolution"]["n"] == 1
+           and "unanswered" in r.get("customer_wait", {}), f"{r.get('resolution')}")
+        ok("el periodo y la linea", r.get("period") == "7d" and r.get("account") == A
+           and r.get("from") == per["from"], f"{r}")
+        p = corre(home, "caso", "informe", "--periodo", "ayer")
+        ok("un periodo que no existe es E_ARGS", p.returncode == 2 and "E_ARGS" in p.stderr)
+        csv_ = subprocess.run([str(WA_SCOPE), "caso", "informe", "--periodo", "today", "--csv"],
+                              capture_output=True, text=True,
+                              env=dict(os.environ, HOME=str(home), ORCA_CLI_COMMAND=SIN_ORCA))
+        filas = csv_.stdout.strip().splitlines()
+        ok("--csv: una fila por caso creado en el periodo, con las columnas del panel",
+           csv_.returncode == 0 and filas[0] ==
+           "case_id,chat,created,first_response_s,resolution_s,stage,project,sla"
+           and len(filas) == 4 and any(f.startswith(ids["CB2"] + ",") and ",30" in f
+                                       and f.endswith(",met") for f in filas[1:]), csv_.stdout)
+        texto = subprocess.run([str(WA_SCOPE), "caso", "informe"], capture_output=True,
+                               text=True, env=dict(os.environ, HOME=str(home),
+                                                   ORCA_CLI_COMMAND=SIN_ORCA)).stdout
+        ok("en texto, unas lineas cortas", "First reply" in texto and "5m" in texto
+           and len(texto.strip().splitlines()) <= 10, texto)
+
+
+print("\ncasos-cli K5: una nota en el caso, sin moverlo")
+with tempfile.TemporaryDirectory() as home:
+    cid = caso_clasificado(home, "NT1")
+    v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+           "Ya lo revisamos.", "--actor", "agente")[0]["propuesta_version"]
+    js(home, "caso", "aprobar", cid, "--version", v, "--actor", "dueno")
+    antes = fila_caso(home, cid)
+    r = js(home, "caso", "nota", cid, "El cliente llamo: lo quiere antes del viernes",
+           "--actor", "dueno")[0]
+    despues = fila_caso(home, cid)
+    ok("la nota no mueve el caso ni le quita la firma",
+       despues["etapa"] == antes["etapa"] == "decision"
+       and despues["propuesta_aprobada"] == antes["propuesta_aprobada"] == v
+       and r.get("aprobada") is True, f"{dict(despues)}")
+    ok("ni cambia su ultima actualizacion (la ventana de agrupacion sigue igual)",
+       despues["updated_at"] == antes["updated_at"])
+    ev = js(home, "caso", "ver", cid)[0]
+    ok("ver trae las notas, con quien y cuando",
+       ev.get("notas") and ev["notas"][-1]["texto"] == "El cliente llamo: lo quiere antes del viernes"
+       and ev["notas"][-1]["actor"] == "dueno" and ev["notas"][-1]["at"], f"{ev.get('notas')}")
+    ok("y deja su evento sin cambio de etapa", ev["eventos"][-1]["de"] == ev["eventos"][-1]["a"]
+       == "decision", f"{ev['eventos'][-1]}")
+    js(home, "caso", "nota", cid, "password: Hunter2xyz!", "--actor", "agente")
+    t = tarjeta(home, cid) or {}
+    notas = [e for e in t.get("events", []) if e.get("que") == "note"]
+    ok("la tarjeta lleva la nota en su historia",
+       len(notas) == 2 and notas[0].get("nota") == "El cliente llamo: lo quiere antes del viernes",
+       f"{t.get('events')}")
+    ok("con una credencial enmascarada", "Hunter2xyz" not in json.dumps(t)
+       and "REDACTED" in (notas[-1].get("nota") or ""), f"{notas}")
+    hist = js(home, "caso", "estado", cid)[0]["history"]
+    ok("estado dice la nota en palabras", any("note" in h["text"] and "viernes" in h["text"]
+                                              for h in hist), f"{hist}")
+    p = corre(home, "caso", "nota", cid, "   ", "--actor", "dueno")
+    ok("una nota vacia es E_ARGS", p.returncode == 2 and "E_ARGS" in p.stderr, p.stderr)
+    js(home, "caso", "mover", cid, "cerrado", "--motivo", "listo", "--actor", "dueno")
+    ok("tambien en un caso cerrado, que sigue cerrado",
+       js(home, "caso", "nota", cid, "Se cerro por telefono", "--actor", "dueno")[0]["etapa"]
+       == "cerrado")
+    antes_env = dict(os.environ)
+    try:
+        ws = carga_wa_scope(home)
+        con = ws.db()
+        try:
+            archivo = ws.archivo_de_caso(con, ws.caso_de(con, int(cid)))
+        finally:
+            con.close()
+    finally:
+        os.environ.clear()
+        os.environ.update(antes_env)
+    ok("el archivo del caso que lee el agente trae las notas",
+       "Notes on the case" in archivo and "antes del viernes" in archivo, archivo[-800:])
+
+
+print("\ncasos-cli K6: atender y autorizar --ahora lanzan al agente como el tablero")
+with tempfile.TemporaryDirectory() as home:
+    cid = str(js(home, "caso", "crear", "--chat", CHAT, "--stanza", "AH1",
+                 "--actor", "automatizacion")[0]["case_id"])
+    r = js(home, "caso", "atender", cid, "--actor", "dueno")[0]
+    ok("sin --ahora solo lo marca: no lanza nada",
+       "agent" not in r and cuenta(home, "select count(*) from agente_corrida") == 0, f"{r}")
+    r = js(home, "caso", "atender", cid, "--ahora", "--actor", "dueno")[0]
+    ok("con --ahora lo marca y lanza al agente, con el mismo resultado que agente lanzar",
+       r.get("necesita_agente") == 1 and r.get("agent") == "failed" and r.get("reason") in ("sin-cli", "sin-espacio"),
+       f"{r}")
+    ok("la corrida es del dueno y empieza por este caso",
+       cuenta(home, "select count(*) from agente_corrida where origen='dueno' and case_id=?",
+              int(cid)) == 1)
+    otro = caso_escalado(home, "AH2", ["money"])
+    r = js(home, "caso", "autorizar", otro, "--ahora", "--actor", "dueno")[0]
+    ok("autorizar --ahora tambien", r.get("etapa") == "clasificado" and r.get("agent") == "failed"
+       and cuenta(home, "select count(*) from agente_corrida where origen='dueno'") == 2, f"{r}")
+    en_decision = caso_escalado(home, "AH3", ["money"])
+    p = corre(home, "caso", "atender", en_decision, "--ahora", "--actor", "dueno")
+    ok("lo que atender rechaza (E_STAGE) no lanza nada",
+       p.returncode == 2 and "E_STAGE" in p.stderr
+       and cuenta(home, "select count(*) from agente_corrida") == 2, p.stderr)
+
+
+print("\ncasos-cli K7: prioridad, clase y titulo despues, sin mover el caso")
+with tempfile.TemporaryDirectory() as home:
+    cid, v = caso_en_trabajo(home, "ED1")
+    antes = fila_caso(home, cid)
+    r = js(home, "caso", "editar", cid, "--prioridad", "urgent", "--titulo", "Login caido en produccion",
+           "--actor", "dueno")[0]
+    ok("editar en trabajo cambia prioridad y titulo sin moverlo ni quitarle la firma",
+       r["etapa"] == "trabajo" and r["prioridad"] == "urgent"
+       and r["titulo"] == "Login caido en produccion"
+       and r["propuesta_aprobada"] == antes["propuesta_aprobada"] == v, f"{r}")
+    ev = js(home, "caso", "ver", cid)[0]["eventos"][-1]
+    ok("y deja su evento trabajo -> trabajo, con quien",
+       ev["de"] == ev["a"] == "trabajo" and ev["actor"] == "dueno"
+       and ev["detalle"].startswith("editado:"), f"{ev}")
+    t = tarjeta(home, cid) or {}
+    ok("la tarjeta lo dice en codigos: que se edito",
+       (t.get("events") or [{}])[-1].get("que") == "edited"
+       and (t.get("events") or [{}])[-1].get("args") == ["priority", "title"],
+       f"{(t.get('events') or [{}])[-1]}")
+    r = js(home, "caso", "clasificar", cid, "--clase", "alert", "--prioridad", "high",
+           "--actor", "dueno")[0]
+    ok("clasificar en trabajo ya no es E_STAGE: cambia la clase y no lo mueve",
+       r["etapa"] == "trabajo" and r["clase"] == "alert" and r["prioridad"] == "high"
+       and r["propuesta_aprobada"] == v, f"{r}")
+    js(home, "caso", "resultado", cid, "--respuesta", "Ya quedo.", "--resumen", "Se corrigio.",
+       "--actor", "trabajador")
+    listo = fila_caso(home, cid)
+    r = js(home, "caso", "editar", cid, "--clase", "card", "--actor", "dueno")[0]
+    ok("en listo tambien, y la propuesta del resultado sigue ahi",
+       r["etapa"] == "listo" and r["clase"] == "card"
+       and r["propuesta_version"] == listo["propuesta_version"], f"{r}")
+    r = js(home, "caso", "clasificar", cid, "--clase", "alert", "--prioridad", "low",
+           "--actor", "dueno")[0]
+    ok("clasificar en listo tampoco lo mueve", r["etapa"] == "listo" and r["prioridad"] == "low",
+       f"{r}")
+    nuevo = str(js(home, "caso", "crear", "--chat", CHAT, "--stanza", "ED2", "--actor",
+                   "agente")[0]["case_id"])
+    r = js(home, "caso", "editar", nuevo, "--titulo", "Factura duplicada", "--actor", "agente")[0]
+    ok("el titulo se puede poner despues de crear", r["titulo"] == "Factura duplicada"
+       and r["etapa"] == "recibido")
+    p = corre(home, "caso", "editar", nuevo, "--actor", "dueno")
+    ok("editar sin nada que cambiar es E_ARGS", p.returncode == 2 and "E_ARGS" in p.stderr)
+    p = corre(home, "caso", "editar", nuevo, "--prioridad", "altisima", "--actor", "dueno")
+    ok("una prioridad que no existe es E_ARGS", p.returncode == 2 and "E_ARGS" in p.stderr)
+
+
+print("\ncasos-cli K8: retirar una propuesta sin perder el caso")
+with tempfile.TemporaryDirectory() as home:
+    cid = caso_clasificado(home, "RT1")
+    v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+           "Ya lo revisamos.", "--actor", "agente")[0]["propuesta_version"]
+    js(home, "caso", "aprobar", cid, "--version", v, "--actor", "dueno")
+    r = js(home, "caso", "retirar", cid, "--motivo", "la respuesta no va", "--actor", "dueno")[0]
+    ok("retirar deja el caso en clasificado sin la propuesta ni la firma, para el agente",
+       r["etapa"] == "clasificado" and r["propuesta"] is None and r["propuesta_version"] is None
+       and r["propuesta_aprobada"] is None and r["necesita_agente"] == 1, f"{r}")
+    ev = js(home, "caso", "ver", cid)[0]["eventos"][-1]
+    ok("el evento lo firma quien lo retiro y guarda la version, nunca el texto",
+       ev["actor"] == "dueno" and ev["de"] == "decision" and v in ev["detalle"]
+       and "Ya lo revisamos" not in ev["detalle"] and "la respuesta no va" in ev["detalle"],
+       f"{ev}")
+    t = tarjeta(home, cid) or {}
+    ok("la tarjeta dice propuesta retirada", (t.get("events") or [{}])[-1].get("que") == "withdrawn",
+       f"{(t.get('events') or [{}])[-1]}")
+    p = corre(home, "caso", "retirar", cid, "--actor", "dueno")
+    ok("sin propuesta no hay nada que retirar: E_STAGE", p.returncode == 2 and "E_STAGE" in p.stderr,
+       p.stderr)
+    trabajo, _ = caso_en_trabajo(home, "RT2")
+    p = corre(home, "caso", "retirar", trabajo, "--actor", "dueno")
+    ok("un trabajo en marcha no se retira (se cierra): E_STAGE",
+       p.returncode == 2 and "E_STAGE" in p.stderr and "cerrado" in p.stderr, p.stderr)
+    js(home, "caso", "resultado", trabajo, "--respuesta", "Ya quedo.", "--resumen", "Se corrigio.",
+       "--actor", "trabajador")
+    r = js(home, "caso", "retirar", trabajo, "--actor", "agente")[0]
+    ok("el resultado en listo tambien se retira, y el caso vuelve al agente",
+       r["etapa"] == "clasificado" and r["propuesta"] is None, f"{r}")
+    con_clave = caso_clasificado(home, "RT3")
+    js(home, "caso", "propuesta", con_clave, "--tipo", "escalar", "--actor", "agente")
+    con = db_de(home)
+    con.execute("update caso set excepciones=? where case_id=?", ('["credential"]', int(con_clave)))
+    con.commit()
+    con.close()
+    r = js(home, "caso", "retirar", con_clave, "--actor", "dueno")[0]
+    ok("con una credencial se queda en decision, sin propuesta: es del dueno",
+       r["etapa"] == "decision" and r["propuesta"] is None, f"{r}")
+
+    # Cerrar un caso en trabajo detiene a su agente: lo hace el tick del minuto siguiente
+    # (`tick_vigila`, probado en "T8: el despacho al proyecto"). `mover` lo dice.
+    vivo, _ = caso_en_trabajo(home, "RT4")
+    con = db_de(home)
+    entrada = con.execute("select max(id) from caso_evento where case_id=? and a='trabajo'",
+                          (int(vivo),)).fetchone()[0]
+    ahora_ = time.strftime("%Y-%m-%d %H:%M:%S")
+    con.execute("insert into caso_despacho (case_id, evento_id, proyecto, estado, terminal, "
+                "created_at, updated_at) values (?, ?, 'Web Demo', 'activo', 'term-demo', ?, ?)",
+                (int(vivo), entrada, ahora_, ahora_))
+    con.commit()
+    con.close()
+    r = js(home, "caso", "mover", vivo, "cerrado", "--motivo", "ya no hace falta",
+           "--actor", "dueno")[0]
+    ok("cerrar un caso con su agente trabajando dice que el tick lo detiene",
+       r["etapa"] == "cerrado" and r.get("despacho") == {"project": "Web Demo", "state": "activo",
+                                                          "stops": "next_tick"}, f"{r}")
+    r = js(home, "caso", "mover", cid, "cerrado", "--motivo", "listo", "--actor", "dueno")[0]
+    ok("sin agente en vuelo no dice nada", "despacho" not in r, f"{r}")
+
+
+print("\ncasos-cli K9: acciones en lote, solo del dueno, y cerrar muchos espera su si")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        prepara_otro_chat(home)
+        pedido = caso_pedido(home, DUENO_DM, "LT0", DUENO_LID, "cierra todo lo de soporte")
+        cliente = caso_pedido(home, PERSONA, "LT9", PERSONA, "cierren todo")
+        uno = caso_pedido(home, SOPORTE, "LT1", PERSONA, "no carga el login")
+        dos = caso_pedido(home, SOPORTE, "LT2", PERSONA, "tampoco el registro")
+        etapa = lambda cid: fila_caso(home, cid)["etapa"]  # noqa: E731
+
+        r = js(home, "caso", "lote", "cerrar", uno, dos, "--motivo", "resuelto por telefono",
+               "--actor", "dueno")[0]
+        ok("cerrar en lote sin --confirmar solo dice lo que cambiaria",
+           r.get("aplicado") is False and r.get("confirmar") is True
+           and sorted(str(c["case_id"]) for c in r["casos"]) == sorted([uno, dos])
+           and all(c["resultado"] == "would_change" for c in r["casos"])
+           and etapa(uno) == etapa(dos) == "clasificado", f"{r}")
+        ok("y la lista trae titulo, chat y etapa para mostrarsela al dueno",
+           all(c.get("titulo") and c.get("chat_name") and c.get("etapa") for c in r["casos"]),
+           f"{r['casos']}")
+        r = js(home, "caso", "lote", "cerrar", uno, dos, "--motivo", "resuelto por telefono",
+               "--confirmar", "--actor", "dueno")[0]
+        ok("con --confirmar los cierra", r.get("aplicado") is True and r.get("ok") == 2
+           and etapa(uno) == etapa(dos) == "cerrado", f"{r}")
+
+        tres = caso_pedido(home, SOPORTE, "LT3", PERSONA, "y el pago")
+        cuatro = caso_pedido(home, SOPORTE, "LT4", PERSONA, "y la factura")
+        r = js(home, "caso", "lote", "prioridad", "--chat", SOPORTE, "--abiertos", "--valor",
+               "high", "--actor", "agente", "--pedido", pedido)[0]
+        ok("por un filtro, a pedido del dueno: la prioridad se aplica sin confirmar",
+           r.get("aplicado") is True and sorted(str(c["case_id"]) for c in r["casos"])
+           == sorted([tres, cuatro]) and fila_caso(home, tres)["prioridad"] == "high"
+           and fila_caso(home, cuatro)["etapa"] == "clasificado", f"{r}")
+        r = js(home, "caso", "lote", "cerrar", "--abiertos", "--motivo", "limpieza",
+               "--actor", "agente", "--pedido", pedido)[0]
+        ok("el caso donde el dueno lo pidio nunca entra en su propio lote",
+           int(pedido) not in [c["case_id"] for c in r["casos"]] and r["aplicado"] is False,
+           f"{r}")
+        r = js(home, "caso", "lote", "mover", tres, "999", "--hacia", "bloqueado", "--motivo",
+               "falta el acceso", "--actor", "dueno")[0]
+        ok("un id que no es de esta linea sale con su error y el resto se aplica",
+           etapa(tres) == "bloqueado" and any(c["case_id"] == 999 and c.get("error") ==
+                                             "E_NOT_FOUND" for c in r["casos"]), f"{r}")
+        acepta_proyectos(home, "web-demo")
+        r = js(home, "caso", "lote", "proyecto", cuatro, "--valor", "web-demo",
+               "--actor", "dueno")[0]
+        ok("el proyecto en lote, como Cambiar proyecto del tablero",
+           r["aplicado"] is True and r["ok"] == 1
+           and json.loads(fila_caso(home, cuatro)["ruta"] or "{}").get("workspace") == "web-demo",
+           f"{r}")
+        r = js(home, "caso", "lote", "mover", cuatro, "--hacia", "trabajo", "--actor", "dueno")[0]
+        ok("lo que la transicion no permite queda con su codigo, sin escribir",
+           r["casos"][0].get("error") == "E_STAGE" and etapa(cuatro) == "clasificado", f"{r}")
+
+        jefa = caso_pedido(home, SOPORTE, "LT5", JEFA_OC, "suban la prioridad de lo de soporte")
+        r = js(home, "caso", "lote", "prioridad", tres, "--valor", "urgent", "--actor", "agente",
+               "--pedido", jefa)[0]
+        ok("un Super admin de la conversacion puede pedir un lote que no cierra",
+           r["aplicado"] is True and fila_caso(home, tres)["prioridad"] == "urgent", f"{r}")
+        p = corre(home, "caso", "lote", "cerrar", cuatro, "--motivo", "x", "--actor", "agente",
+                  "--pedido", jefa)
+        ok("pero cerrar en lote es solo del dueno (lo destructivo): E_NOT_OWNER",
+           p.returncode == 2 and "E_NOT_OWNER" in p.stderr, p.stderr)
+        for args, codigo, nombre in (
+                (["cerrar", uno, "--motivo", "x", "--actor", "agente"], "E_NOT_OWNER",
+                 "el agente sin --pedido no puede"),
+                (["cerrar", uno, "--motivo", "x", "--actor", "agente", "--pedido", cliente],
+                 "E_NOT_OWNER", "ni a pedido de un cliente"),
+                (["cerrar", uno, "--motivo", "x", "--actor", "jev"], "E_NOT_OWNER",
+                 "ni otro actor"),
+                (["cerrar", "--motivo", "x", "--actor", "dueno"], "E_ARGS",
+                 "sin ids ni filtro no hay lote: nunca todo por accidente"),
+                (["cerrar", uno, "--actor", "dueno"], "E_ARGS", "cerrar sin motivo"),
+                (["prioridad", uno, "--valor", "altisima", "--actor", "dueno"], "E_ARGS",
+                 "una prioridad que no existe")):
+            p = corre(home, "caso", "lote", *args)
+            ok(f"lote: {nombre} ({codigo})", p.returncode == 2 and codigo in p.stderr, p.stderr)
+
+
+print("\ncasos-cli K10: recordatorios y posponer")
+
+
+def vence(home, cid):
+    """Los recordatorios pendientes del caso, vencidos hace un minuto (y su posposicion)."""
+    pasado = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 60))
+    con = db_de(home)
+    con.execute("update caso_recordatorio set cuando=? where case_id=? and estado='pendiente'",
+                (pasado, int(cid)))
+    con.execute("update caso set pospuesto_hasta=? where case_id=? and pospuesto_hasta is not null",
+                (pasado, int(cid)))
+    con.commit()
+    con.close()
+
+
+def iso_a_local(texto):
+    return datetime.datetime.fromisoformat(texto).astimezone().replace(tzinfo=None)
+
+
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        prepara_otro_chat(home)
+        pon_aprobacion(home, DUENO_DM)
+        cid = caso_pedido(home, SOPORTE, "RC1", PERSONA, "revisar la factura de octubre")
+        js(home, "caso", "editar", cid, "--titulo", "Factura de octubre", "--actor", "dueno")
+        r = js(home, "caso", "recordar", cid, "llamar al cliente", "--cuando", "2h",
+               "--actor", "agente")[0]
+        rec = (r.get("recordatorios") or [{}])[0]
+        dentro = iso_a_local(rec["cuando"]) - datetime.datetime.now() if rec.get("cuando") else None
+        ok("recordar --cuando 2h deja un recordatorio para dentro de dos horas",
+           dentro is not None and 7100 <= dentro.total_seconds() <= 7210
+           and rec.get("texto") == "llamar al cliente" and rec.get("estado") == "pendiente",
+           f"{r.get('recordatorios')}")
+        ok("y su evento, sin mover el caso", js(home, "caso", "ver", cid)[0]["etapa"] == "clasificado"
+           and (tarjeta(home, cid) or {}).get("events", [{}])[-1].get("que") == "reminder_set",
+           f"{(tarjeta(home, cid) or {}).get('events', [{}])[-1]}")
+        lista = js(home, "caso", "recordatorios")
+        ok("caso recordatorios los lista con el titulo del caso",
+           len(lista) == 1 and lista[0]["case_id"] == int(cid)
+           and lista[0]["titulo"] == "Factura de octubre", f"{lista}")
+        ok("listar --con-recordatorio",
+           [c["case_id"] for c in js(home, "caso", "listar", "--con-recordatorio")] == [int(cid)])
+        ok("la tarjeta dice cuando es el proximo",
+           ((tarjeta(home, cid) or {}).get("reminder") or {}).get("at") == rec["cuando"],
+           f"{(tarjeta(home, cid) or {}).get('reminder')}")
+        manana = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+        for cuando, esperado in (("mañana 9:00", f"{manana} 09:00:00"),
+                                 ("manana", f"{manana} 09:00:00"),
+                                 ("tomorrow 14:30", f"{manana} 14:30:00"),
+                                 (f"{manana} 08:15", f"{manana} 08:15:00")):
+            r = js(home, "caso", "recordar", cid, "--cuando", cuando, "--actor", "dueno")[0]
+            ok(f"--cuando {cuando!r}", any(iso_a_local(x["cuando"]).strftime("%Y-%m-%d %H:%M:%S")
+                                           == esperado for x in r["recordatorios"]),
+               f"{r['recordatorios']}")
+        for malo in ("2020-01-01", "cuando sea", "0h"):
+            p = corre(home, "caso", "recordar", cid, "--cuando", malo, "--actor", "dueno")
+            ok(f"--cuando {malo!r} es E_ARGS", p.returncode == 2 and "E_ARGS" in p.stderr, p.stderr)
+        r = js(home, "caso", "recordar", cid, "--cancelar", "--actor", "dueno")[0]
+        ok("--cancelar quita los pendientes", r.get("recordatorios") == []
+           and js(home, "caso", "recordatorios") == [], f"{r.get('recordatorios')}")
+
+        # El aviso: el tick lo encola al numero de aprobacion, una vez.
+        js(home, "caso", "recordar", cid, "llamar al cliente", "--cuando", "1h", "--actor", "agente")
+        vence(home, cid)
+        sidecar = SidecarFalso(home)
+        try:
+            _, resumen = tick(home)
+            _, otra = tick(home)
+        finally:
+            sidecar.cerrar()
+        salieron = [f for f in al_dueno(home) if "Factura de octubre" in (f["body"] or "")]
+        ok("el tick avisa al dueno: Caso N: titulo — texto",
+           len(salieron) == 1 and salieron[0]["body"].startswith(
+               f"Caso {cid}: Factura de octubre — llamar al cliente"),
+           f"{al_dueno(home)} {resumen}")
+        ok("una sola vez, y el resumen lo cuenta", (resumen or {}).get("recordatorios") == 1
+           and (otra or {}).get("recordatorios") == 0, f"{resumen} {otra}")
+        ok("el recordatorio queda avisado y deja su evento",
+           cuenta(home, "select count(*) from caso_recordatorio where estado='avisado'") == 1
+           and (tarjeta(home, cid) or {}).get("events", [{}])[-1].get("que") == "reminder",
+           f"{(tarjeta(home, cid) or {}).get('events', [{}])[-1]}")
+
+        # --al-agente: al vencer, el caso vuelve al agente.
+        otro = caso_pedido(home, OPERACIONES, "RC2", PERSONA, "ver el despliegue")
+        js(home, "mode", OPERACIONES, "responder")
+        con = db_de(home)
+        con.execute("update caso set jev=?, necesita_agente=0 where case_id=?",
+                    ('{"attention_class": "pleasantry", "flags": [], "skip": true}', int(otro)))
+        con.commit()
+        con.close()
+        ok("antes: el agente no lo ve", int(otro) not in (json.loads(
+            necesita(home).stdout or "{}").get("cases") or []))
+        js(home, "caso", "recordar", otro, "--cuando", "30m", "--al-agente", "--actor", "dueno")
+        vence(home, otro)
+        tick(home)
+        ok("--al-agente: al vencer, el caso vuelve al agente",
+           int(otro) in (json.loads(necesita(home).stdout or "{}").get("cases") or [])
+           and fila_caso(home, otro)["necesita_agente"] == 1)
+
+        # Posponer: fuera de la lista y del agente hasta entonces.
+        pospuesto = caso_pedido(home, FACTURACION, "RC3", PERSONA, "la nota credito")
+        ok("antes de posponer, lo espera el agente",
+           int(pospuesto) in (json.loads(necesita(home).stdout or "{}").get("cases") or []))
+        r = js(home, "caso", "recordar", pospuesto, "--hasta", "mañana 9:00", "--actor", "dueno")[0]
+        ok("--hasta lo pospone hasta mañana a las 9 y deja el aviso para entonces",
+           iso_a_local(r["pospuesto_hasta"]).strftime("%H:%M") == "09:00"
+           and len(r["recordatorios"]) == 1 and r["recordatorios"][0]["pospone"] is True,
+           f"{r}")
+        ok("listar no lo muestra; --pospuestos si",
+           int(pospuesto) not in [c["case_id"] for c in js(home, "caso", "listar")]
+           and int(pospuesto) in [c["case_id"] for c in js(home, "caso", "listar", "--pospuestos")])
+        ok("buscar lo encuentra igual", [c["case_id"] for c in js(home, "caso", "buscar", pospuesto)]
+           == [int(pospuesto)])
+        ok("el agente no lo toma mientras esta pospuesto",
+           int(pospuesto) not in (json.loads(necesita(home).stdout or "{}").get("cases") or []))
+        js(home, "caso", "asignar", "RC4", "--chat", FACTURACION, "--actor", "automatizacion")
+        f = fila_caso(home, pospuesto)
+        ok("un mensaje nuevo del cliente termina la posposicion",
+           f["pospuesto_hasta"] is None and int(pospuesto) in [c["case_id"] for c in
+                                                             js(home, "caso", "listar")]
+           and js(home, "caso", "recordatorios") == [], f"{dict(f)}")
+        js(home, "caso", "recordar", pospuesto, "--hasta", "3h", "--actor", "dueno")
+        vence(home, pospuesto)
+        tick(home)
+        ok("al vencer vuelve a la lista y al agente",
+           fila_caso(home, pospuesto)["pospuesto_hasta"] is None
+           and int(pospuesto) in [c["case_id"] for c in js(home, "caso", "listar")]
+           and int(pospuesto) in (json.loads(necesita(home).stdout or "{}").get("cases") or []))
+        ok("y ver dice sus recordatorios", "recordatorios" in js(home, "caso", "ver", pospuesto)[0])
+
+    with tempfile.TemporaryDirectory() as home:
+        cid = caso_clasificado(home, "RC5")
+        js(home, "caso", "recordar", cid, "revisar", "--cuando", "1h", "--actor", "dueno")
+        vence(home, cid)
+        tick(home)
+        ok("sin numero de aprobacion no sale ningun aviso, y el recordatorio lo dice",
+           cuenta(home, "select count(*) from aviso") == 0
+           and cuenta(home, "select count(*) from caso_recordatorio where estado='sin-numero'") == 1)
+
+
+print("\ncasos-cli K11: todas las lineas a la vez, cada fila con su linea")
+PN.setdefault(SEGUNDA, "573000000011:7@s.whatsapp.net")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "TL1", "@duenio no abre el login", 5, mencion=True)])
+        llegan(home, SEGUNDA, [msg(SOPORTE, "TL2", "@duenio no llega la factura", 5, mencion=True)],
+               activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+        jsl(home, SEGUNDA, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+        js(home, "ingest")
+        de_a = js(home, "caso", "listar")
+        de_b = jsl(home, SEGUNDA, "caso", "listar")
+        ok("sin la bandera, cada linea lista lo suyo", [c["account"] for c in de_a] == [A]
+           and [c["account"] for c in de_b] == [SEGUNDA], f"{de_a} {de_b}")
+        todas = js(home, "caso", "listar", "--todas-las-lineas")
+        ok("--todas-las-lineas junta las dos, cada fila con su linea",
+           sorted(c["account"] for c in todas) == sorted([A, SEGUNDA])
+           and sorted(c["case_id"] for c in todas) == sorted([de_a[0]["case_id"],
+                                                              de_b[0]["case_id"]]), f"{todas}")
+        ok("buscar tambien", [c["account"] for c in js(home, "caso", "buscar", "factura",
+                                                        "--todas-las-lineas")] == [SEGUNDA])
+        ok("y respeta --limite sobre el total",
+           len(js(home, "caso", "listar", "--todas-las-lineas", "--limite", "1")) == 1)
+        informes = js(home, "caso", "informe", "--todas-las-lineas")
+        ok("informe: uno por linea, con su linea",
+           sorted(r["account"] for r in informes) == sorted([A, SEGUNDA])
+           and all(r["stages"]["recibido"] + r["stages"]["clasificado"] == 1 for r in informes),
+           f"{[(r['account'], r['stages']) for r in informes]}")
+        csv_ = subprocess.run([str(WA_SCOPE), "caso", "informe", "--todas-las-lineas", "--csv"],
+                              capture_output=True, text=True,
+                              env=dict(os.environ, HOME=str(home), ORCA_CLI_COMMAND=SIN_ORCA))
+        filas = csv_.stdout.strip().splitlines()
+        ok("el CSV de todas lleva la linea como primera columna",
+           filas[0].startswith("account,case_id,") and len(filas) == 3
+           and sorted(f.split(",")[0] for f in filas[1:]) == sorted([A, SEGUNDA]), csv_.stdout)
+        js(home, "caso", "recordar", str(de_a[0]["case_id"]), "--cuando", "2h", "--actor", "dueno")
+        jsl(home, SEGUNDA, "caso", "recordar", str(de_b[0]["case_id"]), "--cuando", "1h",
+            "--actor", "dueno")
+        recs = js(home, "caso", "recordatorios", "--todas-las-lineas")
+        ok("recordatorios de todas, del proximo al ultimo",
+           [r["account"] for r in recs] == [SEGUNDA, A], f"{recs}")
+        p = corre(home, "caso", "listar", "--todas-las-lineas", "--line", A)
+        ok("--todas-las-lineas con --line es E_ARGS", p.returncode == 2 and "E_ARGS" in p.stderr,
+           p.stderr)
+        r = js(home, "caso", "lote", "cerrar", str(de_b[0]["case_id"]), "--motivo", "x",
+               "--confirmar", "--actor", "dueno")[0]
+        ok("escribir no cruza lineas: un lote en la principal no toca el caso de la otra",
+           r["casos"][0].get("error") == "E_NOT_FOUND"
+           and jsl(home, SEGUNDA, "caso", "ver", str(de_b[0]["case_id"]))[0]["etapa"] != "cerrado",
+           f"{r}")
+
+
+
+print("\ncasos-cli K13: caso lote --actor dueno exige la llave del aprobador")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        prepara_otro_chat(home)
+        uno = caso_pedido(home, SOPORTE, "LK1", PERSONA, "no carga el login")
+        dos = caso_pedido(home, SOPORTE, "LK2", PERSONA, "tampoco el registro")
+        etapa = lambda cid: fila_caso(home, cid)["etapa"]  # noqa: E731
+        for nombre, llave in (("sin la llave", ""), ("con una llave que no es la del plugin",
+                                                     "0" * 64)):
+            p = corre(home, "caso", "lote", "cerrar", uno, dos, "--motivo", "x", "--confirmar",
+                      "--actor", "dueno", extra={"WA_INBOX_APPROVER": llave})
+            ok(f"--actor dueno {nombre} no cierra en lote: E_NOT_OWNER",
+               p.returncode == 2 and "E_NOT_OWNER" in p.stderr
+               and etapa(uno) == etapa(dos) == "clasificado", p.stderr or p.stdout)
+            p = corre(home, "caso", "lote", "prioridad", uno, "--valor", "urgent",
+                      "--actor", "dueno", extra={"WA_INBOX_APPROVER": llave})
+            ok(f"ni cambia la prioridad en lote {nombre}: E_NOT_OWNER",
+               p.returncode == 2 and "E_NOT_OWNER" in p.stderr
+               and fila_caso(home, uno)["prioridad"] == "none", p.stderr or p.stdout)
+        r = js(home, "caso", "lote", "cerrar", uno, dos, "--motivo", "resuelto", "--confirmar",
+               "--actor", "dueno")[0]
+        ok("con la llave del plugin, el dueno cierra en lote",
+           r["aplicado"] is True and etapa(uno) == etapa(dos) == "cerrado", f"{r}")
+
+
+print("\ncasos-cli K14: cerrar en lote a pedido del dueno espera su si despues del ensayo")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        prepara_otro_chat(home)
+        pedido = caso_pedido(home, DUENO_DM, "LY0", DUENO_LID, "cierra lo de soporte")
+        uno = caso_pedido(home, SOPORTE, "LY1", PERSONA, "no carga el login")
+        dos = caso_pedido(home, SOPORTE, "LY2", PERSONA, "tampoco el registro")
+        etapa = lambda cid: fila_caso(home, cid)["etapa"]  # noqa: E731
+        lote = lambda *ids, conf=True, de=pedido: corre(  # noqa: E731
+            home, "caso", "lote", "cerrar", *ids, "--motivo", "resuelto", "--actor", "agente",
+            "--pedido", de, *(["--confirmar"] if conf else []))
+
+        p = lote(uno, dos)
+        ok("--confirmar sin un ensayo antes no cierra: E_NEEDS_OWNER_YES",
+           p.returncode == 2 and "E_NEEDS_OWNER_YES" in p.stderr
+           and etapa(uno) == etapa(dos) == "clasificado", p.stderr or p.stdout)
+        p = lote(uno, dos, conf=False)
+        r = json.loads(p.stdout or "[{}]")[0] if p.returncode == 0 else {}
+        ok("el ensayo dice lo que cambiaria y queda esperando el si del dueno",
+           r.get("aplicado") is False and r.get("confirmar") is True
+           and etapa(uno) == etapa(dos) == "clasificado", p.stderr or f"{r}")
+        p = lote(uno, dos)
+        ok("sin un mensaje del dueno despues del ensayo, --confirmar no cierra",
+           p.returncode == 2 and "E_NEEDS_OWNER_YES" in p.stderr
+           and etapa(uno) == etapa(dos) == "clasificado", p.stderr or p.stdout)
+        time.sleep(1.2)
+        llegan(home, A, [msg(DUENO_DM, "LY0B", "si, cierralos", 0, de=DUENO_LID)])
+        p = lote(uno)
+        ok("el si vale solo para los mismos casos del ensayo",
+           p.returncode == 2 and "E_NEEDS_OWNER_YES" in p.stderr and etapa(uno) == "clasificado",
+           p.stderr or p.stdout)
+        p = lote(dos, uno)
+        r = json.loads(p.stdout or "[{}]")[0] if p.returncode == 0 else {}
+        ok("con su si en el chat, los mismos casos (en cualquier orden) se cierran",
+           r.get("aplicado") is True and etapa(uno) == etapa(dos) == "cerrado",
+           p.stderr or f"{r}")
+        tres = caso_pedido(home, SOPORTE, "LY3", PERSONA, "y el pago")
+        p = lote(tres)
+        ok("un si ya usado no sirve para otro lote",
+           p.returncode == 2 and "E_NEEDS_OWNER_YES" in p.stderr and etapa(tres) == "clasificado",
+           p.stderr or p.stdout)
+
+        # En un grupo, el si tiene que venir de uno de los numeros del dueno.
+        en_grupo = caso_pedido(home, SOPORTE, "LY4", DUENO_LID, "cierra lo del pago")
+        lote(tres, conf=False, de=en_grupo)
+        time.sleep(1.2)
+        llegan(home, A, [msg(SOPORTE, "LY4B", "si, cierren eso", 0, de=PERSONA)])
+        p = lote(tres, de=en_grupo)
+        ok("el si de otro en el grupo no cuenta",
+           p.returncode == 2 and "E_NEEDS_OWNER_YES" in p.stderr and etapa(tres) == "clasificado",
+           p.stderr or p.stdout)
+        llegan(home, A, [msg(SOPORTE, "LY4C", "si", 0, de=DUENO_LID)])
+        p = lote(tres, de=en_grupo)
+        ok("el del dueno si", p.returncode == 0 and etapa(tres) == "cerrado", p.stderr or p.stdout)
+
+        cuatro = caso_pedido(home, SOPORTE, "LY5", PERSONA, "y la factura")
+        r = js(home, "caso", "lote", "cerrar", cuatro, "--motivo", "resuelto", "--confirmar",
+               "--actor", "dueno")[0]
+        ok("el dueno con la llave del plugin confirma sin ensayo",
+           r["aplicado"] is True and etapa(cuatro) == "cerrado", f"{r}")
+
+
+print("\ncasos-cli K15: lo que el agente hace en lote dice el pedido en cada evento")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        prepara_otro_chat(home)
+        acepta_proyectos(home, "web-demo")
+        js(home, "set", SOPORTE, "--workspaces", "web-demo")
+        pedido = caso_pedido(home, DUENO_DM, "LZ0", DUENO_LID, "ordena lo de soporte")
+        uno, dos, tres, cuatro = (caso_pedido(home, SOPORTE, f"LZ{n}", PERSONA, f"pedido {n}")
+                                  for n in (1, 2, 3, 4))
+        marca = f"(pedido #{pedido})"
+        ultimo = lambda cid: js(home, "caso", "ver", cid)[0]["eventos"][-1]  # noqa: E731
+        lote = lambda *args: js(home, "caso", "lote", *args, "--actor", "agente",  # noqa: E731
+                                "--pedido", pedido)[0]
+
+        lote("prioridad", uno, "--valor", "high")
+        ev = ultimo(uno)
+        ok("la prioridad en lote deja su evento, del agente y con el pedido",
+           ev["actor"] == "agente" and ev["detalle"].startswith("editado: prioridad high")
+           and marca in ev["detalle"], f"{ev}")
+        t = tarjeta(home, uno) or {}
+        ok("y la tarjeta lo sigue leyendo como un cambio de prioridad",
+           (t.get("events") or [{}])[-1].get("que") == "edited"
+           and (t.get("events") or [{}])[-1].get("args") == ["priority"],
+           f"{(t.get('events') or [{}])[-1]}")
+        lote("mover", dos, "--hacia", "bloqueado", "--motivo", "falta el acceso")
+        ev = ultimo(dos)
+        ok("mover en lote: el motivo y el pedido", ev["actor"] == "agente" and ev["a"] == "bloqueado"
+           and "falta el acceso" in ev["detalle"] and marca in ev["detalle"], f"{ev}")
+        lote("proyecto", tres, "--valor", "web-demo")
+        ev = ultimo(tres)
+        ok("el proyecto en lote: el pedido en el evento",
+           ev["actor"] == "agente" and ev["detalle"].startswith("proyecto web-demo")
+           and marca in ev["detalle"], f"{ev}")
+        lote("cerrar", cuatro, "--motivo", "resuelto por telefono")
+        time.sleep(1.2)
+        llegan(home, A, [msg(DUENO_DM, "LZ0B", "si", 0, de=DUENO_LID)])
+        lote("cerrar", cuatro, "--motivo", "resuelto por telefono", "--confirmar")
+        ev = ultimo(cuatro)
+        ok("cerrar en lote: el motivo y el pedido", ev["actor"] == "agente" and ev["a"] == "cerrado"
+           and "resuelto por telefono" in ev["detalle"] and marca in ev["detalle"], f"{ev}")
+
+
+print("\ncasos-cli K16: retirar el resultado de un trabajo no pierde su texto")
+with tempfile.TemporaryDirectory() as home:
+    trabajo, _ = caso_en_trabajo(home, "RW1")
+    js(home, "caso", "resultado", trabajo, "--respuesta",
+       "Ya quedo el acceso nuevo. password: Fake12345", "--resumen", "Se creo el acceso.",
+       "--actor", "trabajador")
+    ok("el resultado esta en listo", fila_caso(home, trabajo)["etapa"] == "listo",
+       f"{fila_caso(home, trabajo)['etapa']}")
+    js(home, "caso", "retirar", trabajo, "--motivo", "no lo mandes asi", "--actor", "dueno")
+    ev = js(home, "caso", "ver", trabajo)[0]["eventos"][-1]
+    ok("el evento guarda el texto retirado del resultado, con la clave enmascarada",
+       "Ya quedo el acceso nuevo" in ev["detalle"] and "Fake12345" not in ev["detalle"]
+       and "no lo mandes asi" in ev["detalle"], f"{ev}")
+    est = js(home, "caso", "estado", trabajo)[0]
+    h = (est.get("history") or [{}])[-1]
+    ok("caso estado lo muestra en la historia, enmascarado",
+       h.get("que") == "withdrawn" and "Ya quedo el acceso nuevo" in (h.get("retirado") or "")
+       and "Ya quedo el acceso nuevo" in h.get("text", "") and "Fake12345" not in json.dumps(est),
+       f"{h}")
+    t = tarjeta(home, trabajo) or {}
+    ok("la tarjeta sigue diciendo propuesta retirada, sin el texto",
+       (t.get("events") or [{}])[-1].get("que") == "withdrawn"
+       and "Ya quedo" not in json.dumps(t.get("events")), f"{(t.get('events') or [{}])[-1]}")
+    decide_ = caso_clasificado(home, "RW2")
+    js(home, "caso", "propuesta", decide_, "--tipo", "responder", "--respuesta",
+       "Lo revisamos hoy.", "--actor", "agente")
+    js(home, "caso", "retirar", decide_, "--actor", "dueno")
+    ev = js(home, "caso", "ver", decide_)[0]["eventos"][-1]
+    ok("una propuesta en decision sigue sin texto en el evento: el agente la rehace",
+       "Lo revisamos hoy" not in ev["detalle"], f"{ev}")
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:

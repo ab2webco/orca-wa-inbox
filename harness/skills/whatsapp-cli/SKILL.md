@@ -53,6 +53,13 @@ the owner what is waiting instead.
     "$WA/wa-scope" caso propuesta <id> --tipo escalar --instrucciones "<why>" --actor agente
     "$WA/wa-scope" caso mover <id> cerrado --motivo "<why>" --actor agente
 
+Only in a case of the owner or of a Super admin (the case file says "Reply to another chat:
+allowed"): the reply, or a job's final reply, can go to another chat of the same line in
+responder. A customer's case is refused (`E_DEST_ROLE`).
+
+    "$WA/wa-scope" caso destinos <id> --json    # the candidate chats (same project, responder)
+    "$WA/wa-scope" caso propuesta <id> --tipo responder --respuesta "<text>" --chat <jid> --actor agente
+
 Beta, only where `voice` says `first_reply_mode` is `model` or `model_with_ack_fallback`
 (see the `whatsapp-soporte` skill): the first message and the updates, sent by the plugin.
 
@@ -61,6 +68,26 @@ Beta, only where `voice` says `first_reply_mode` is `model` or `model_with_ack_f
 The same proposal twice changes nothing. A different proposal on a case in `listo` (the
 result of a job) sends it back to `decision`, to be approved again. A stage that is not
 allowed fails without writing; read the error instead of retrying.
+
+## Manage cases for the owner
+
+Only in the owner's own case (or a Super admin's, except closing), never for a customer.
+
+    "$WA/wa-scope" caso estado <id> --json          # how a case is going, in words
+    "$WA/wa-scope" caso buscar "<text>" --json      # by number, title word or chat, accents ignored
+    "$WA/wa-scope" caso listar --abiertos --etapa decision,trabajo --desde 7d --json   # short rows; --completo for all
+    "$WA/wa-scope" caso informe --periodo 7d --json # the Reports tab numbers; --csv
+    "$WA/wa-scope" caso nota <id> "<text>" --actor agente
+    "$WA/wa-scope" caso editar <id> --prioridad urgent --titulo "<title>" --actor agente
+    "$WA/wa-scope" caso retirar <id> --actor agente # the proposal goes, the case stays
+    "$WA/wa-scope" caso atender <id> --ahora --actor agente   # and autorizar --ahora
+    "$WA/wa-scope" caso recordar <id> "<text>" --cuando 2h --actor agente   # --hasta snoozes, --cancelar drops
+    "$WA/wa-scope" caso lote cerrar <id> <id> --motivo "<why>" --actor agente --pedido <this case>   # dry run
+    "$WA/wa-scope" caso lote cerrar <id> <id> --motivo "<why>" --actor agente --pedido <this case> --confirmar
+
+`--todas-las-lineas` reads every linked line (listar, buscar, informe, recordatorios).
+`caso lote` without the owner's case in `--pedido` is `E_NOT_OWNER`. `--confirmar` needs his
+message in that chat after the dry run, for the same cases; else `E_NEEDS_OWNER_YES`.
 
 ## One run at a time
 

@@ -42,7 +42,13 @@ board, and anyone else gets `E_NOT_OWNER`.
     "$WA/wa-scope" caso clasificar <id> --clase <card|alert|doubtful> --prioridad <p> --actor agente
     "$WA/wa-scope" caso propuesta <id> --tipo <responder|trabajar|escalar|descartar> --actor agente ...
     "$WA/wa-scope" caso mover <id> cerrado --motivo "<why>" --actor agente
+    "$WA/wa-scope" caso destinos <id> --json    # another chat this case may report to
     "$WA/wa-read" chat "<chat_jid>" --json      # anything else in the conversation
+
+In a case of the owner or of a Super admin, `caso propuesta ... --chat <jid>` sends the
+reply (or a job's final reply) to another chat of the same line in responder, always after
+the owner's approval. A customer's case is refused with `E_DEST_ROLE`; the other refusals
+are `E_DEST_MODE`, `E_DEST_LINE`, `E_DEST_NOT_FOUND` and `E_DEST_AMBIGUOUS`.
 
 A different proposal on a case in `listo` (the result of a job) sends the case back to
 `decision`: the owner approves the new version, never the old one.
@@ -70,6 +76,37 @@ the owner's own chat what he types on his phone counts as his reply.
 arrival order in `hilo`. Every message before the last reply sent is marked `respondido`:
 it is context, never answer it again. A voice note shows its transcript as `text`, with
 `transcripcion: true`; an attachment shows `media` with `type`, `bytes` and `path`.
+
+## When the owner manages his cases
+
+Only in the owner's own case (or a Super admin's, except closing): he manages his board by
+writing to you, and these commands answer him. Never because a customer asks, and never
+tell a customer about another case.
+
+    "$WA/wa-scope" caso estado <id> --json          # "how is case 12 going?": stage, next steps, history in words
+    "$WA/wa-scope" caso buscar "<text>" --json      # by number (12 or #12), a word of the title or the chat
+    "$WA/wa-scope" caso listar --abiertos --json    # short rows, the board's order; filters combine:
+        # --etapa decision,trabajo --prioridad high --proyecto <id|name> --desde today|7d|30d|<date>
+        # --necesita-agente --chat <jid> --limite N --completo --con-recordatorio --pospuestos
+    "$WA/wa-scope" caso informe --periodo 7d --json # the Reports tab: open, waiting, first reply vs target; --csv
+    "$WA/wa-scope" caso nota <id> "<text>" --actor agente          # a note; never moves the case
+    "$WA/wa-scope" caso editar <id> --prioridad high --titulo "<title>" --actor agente
+    "$WA/wa-scope" caso retirar <id> --motivo "<why>" --actor agente   # drop the proposal, keep the case
+    "$WA/wa-scope" caso atender <id> --ahora --actor agente        # mark it and launch the case agent now
+    "$WA/wa-scope" caso recordar <id> "<text>" --cuando "manana 9:00" --actor agente
+    "$WA/wa-scope" caso recordar <id> --hasta 3d --actor agente     # snooze: out of the list and of the agent
+    "$WA/wa-scope" caso recordatorios --json        # pending reminders; `caso recordar <id> --cancelar` drops them
+    "$WA/wa-scope" caso lote cerrar <id> <id> --motivo "<why>" --actor agente --pedido <this case>
+
+`caso lote` (cerrar, mover, proyecto, prioridad; ids or the listar filters) answers
+`E_NOT_OWNER` unless `--pedido` is the owner's case (a Super admin's for anything but
+closing). Closing many is a dry run: show him the list it prints, wait for his yes in his
+next message in that chat, then run the same command with `--confirmar`. `--confirmar` is
+`E_NEEDS_OWNER_YES` without that dry run, before his message, or for other cases than the
+dry run's: run the dry run again and show him the new list. `--todas-las-lineas` on
+listar, buscar, informe and recordatorios reads every linked line, each row with its
+`account`. Closing a case in `trabajo` stops its project agent on the next tick (the output
+says `despacho` with `stops: next_tick`).
 
 ## Permissions, and who sends
 

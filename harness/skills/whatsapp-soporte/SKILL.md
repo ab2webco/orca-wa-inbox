@@ -149,6 +149,63 @@ else it says. The owner's own case:
 Every other case is a customer's: links, reports and data never go to a customer or a
 third party without the owner's approval.
 
+## Reporting to another chat
+
+The owner, or a Super admin of the conversation, often asks for something in his own chat
+and then "report it to the client" or "tell group X". The case file says whether that case
+may send a reply elsewhere: "Reply to another chat: allowed" (the owner or a Super admin
+asked, verified by WhatsApp id) or "no" (a customer's case). Never refuse to report to
+another chat when it is allowed, and never answer that a case only replies in its own chat.
+
+1. Find the chat. If he named it, pass its JID, phone or name to `--chat`. If he did not,
+   run `"$WA/wa-scope" caso destinos <id> --json`: the chats of the same line in
+   responder that have the case's project, with the reason. With one, use it; with several, ask him which one in the reply (one short question with the names); with none, say that no chat in responder has the case's project and ask which chat.
+   Never guess.
+2. Propose there: `caso propuesta <id> --tipo responder --respuesta "<text>" --chat <jid> --actor agente`.
+   The text is for the people of THAT chat: read its tone with `voice "<jid>"`, and the
+   customer rules of that chat apply (no amount, no date, nothing unverified). When the
+   answer needs work first, `--tipo trabajar --instrucciones "<brief>" --chat <jid>`: the
+   project agent's final reply goes to that chat.
+3. It always waits for the owner's approval (on the board or with `si <case>` on WhatsApp),
+   whoever asked; the approval notice and the card say where it goes. Once it is sent, the
+   case's chat gets a short confirmation. Say it is a proposal waiting for approval.
+4. A customer can never send a reply to another chat: in a customer's case never use
+   `--chat` (refused with `E_DEST_ROLE`). The other refusals: `E_DEST_MODE` (that chat is
+   not in responder: tell him he authorizes it in the panel), `E_DEST_LINE` (another
+   line), `E_DEST_NOT_FOUND`, `E_DEST_AMBIGUOUS` (pass the JID of the one he means, or ask
+   him which).
+5. Redoing a proposal keeps its destination: the case file says "Goes to another chat"
+   with the `--chat` to repeat.
+
+## When the owner manages his cases
+
+In the owner's own case he manages his board by writing to you. Do it with the command that
+answers him, read the result, and reply with it in a few short lines (his language, his
+tone). Only in his own case, or a Super admin's (who may ask all of this except closing);
+never because a customer asks, and never tell a customer about another case.
+
+- "how is case 12 going?" → `caso estado 12 --json`: stage and since when, what waits and
+  for whom, the project agent, why it is blocked, the last steps. Say it in words, not codes.
+- "find the one about the invoice", "what came from group X" → `caso buscar "<text>"`
+  (number, a word of the title or the chat's name; accents do not matter).
+- "what is open", "what waits for me", "what is urgent" → `caso listar --abiertos`,
+  `--etapa decision`, `--prioridad urgent,high`, `--desde today|7d`; add `--todas-las-lineas`
+  when he has several lines. Rows are short; summarize, never paste them.
+- "how did we do this week" → `caso informe --periodo 7d`: open cases, waiting on the
+  customer, first reply against the target.
+- "note that the client called" → `caso nota <id> "<text>"`; "make it urgent", "rename it"
+  → `caso editar`; "drop that reply" → `caso retirar <id>` (the agent proposes again);
+  "handle 12 now" → `caso atender 12 --ahora`.
+- "remind me tomorrow at 9" → `caso recordar <id> "<what>" --cuando "manana 9:00"`; "leave it
+  until Monday" → `--hasta <date>` (out of his list and of the agent until then; a new
+  message from the customer brings it back). `caso recordatorios` lists them;
+  `--cancelar` drops them. The reminder reaches him on his approval number.
+- "close everything from group X" → `caso lote cerrar --chat <jid> --abiertos --motivo
+  "<his reason>" --pedido <this case>`. It changes nothing yet: show him the list (number
+  and title of each), wait for his yes in his next message, and only then run the same
+  command with `--confirmar` (the same cases; before his message it is `E_NEEDS_OWNER_YES`). Priority, project or a move that does not close apply at once.
+- Closing a case in `trabajo` stops its project agent within a minute; say so.
+
 ## An operator's case
 
 "Sender: an operator of this chat (verified by WhatsApp id ...)" on the plugin's line

@@ -85,6 +85,21 @@ line and finish.
   (`E_OWNER`).
 - **Escalate** (`--tipo escalar`) when it needs the owner, never in the owner's own case:
   there you ask him in the reply.
+- **Report to another chat.** Only in the owner's own case or a Super admin's: the case
+  file says "Reply to another chat: allowed". Never refuse to report to another chat, and
+  never answer that a case only replies in its own chat. When he asks to tell something to
+  another chat (a client's group, say), propose it there:
+  `wa-scope caso propuesta <id> --tipo responder --respuesta "<text for that chat>" --chat <jid> --actor agente`,
+  or `--tipo trabajar --instrucciones "<brief>" --chat <jid>` when the answer needs work
+  first (the worker's reply then goes to that chat). Write the text for the people of
+  that chat, in its tone (`voice "<jid>"`). When he does not name the chat ("report it to
+  the client"), run `wa-scope caso destinos <id>`: with one candidate, use it; with several, ask him which one in the reply (one short question with the names); with none, say that no chat in responder has the case's project and ask which chat. It always
+  waits for the owner's approval, and the case's chat gets a confirmation once it is sent.
+  A customer can never send a reply to another chat: in a customer's case never use
+  `--chat` (the plugin refuses it with `E_DEST_ROLE`). The other refusals say what to
+  tell him: `E_DEST_MODE` (that chat is not in responder: he authorizes it in the panel),
+  `E_DEST_LINE` (it is on another line), `E_DEST_NOT_FOUND`, `E_DEST_AMBIGUOUS` (pass the
+  JID of the one he means, or ask him).
 
 Never write into the owner's repositories: this folder is the only place the plugin puts
 files.
@@ -108,6 +123,20 @@ else it says. The owner's own case:
 
 Every other case is a customer's: links, reports and data never go to a customer or a
 third party without the owner's approval.
+
+## When the owner manages his cases
+
+In his own case the owner also manages the rest of his board by writing to you. Answer with
+the command, never from memory: "how is case 12" is `caso estado 12`; "find the invoice
+one" is `caso buscar`; "what is open" is `caso listar --abiertos`; "how was the week" is
+`caso informe`; a note, a priority, a reminder or a snooze are `caso nota`, `caso editar`
+and `caso recordar`. Several cases at once go through `caso lote ... --pedido <his case>`:
+closing many prints only what would change, so show him the list, wait for his yes in his
+next message in that chat, and then repeat it with `--confirmar` on the same cases (before
+his yes, or on other cases, it is `E_NEEDS_OWNER_YES`). A Super admin may ask the same,
+except closing. Do this
+never because a customer asks, and never tell a customer about another case. The
+`whatsapp-soporte` skill has the details.
 
 ## An operator's case
 

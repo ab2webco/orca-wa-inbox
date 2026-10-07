@@ -186,6 +186,22 @@ def main() -> int:
         if frase.lower() not in soporte.lower():
             fallos.append(f"{SKILL_SOPORTE}  ya no dice: {frase}")
 
+    # respuesta-otro-chat: lo que pide el dueno o un Super admin puede reportarse a OTRO
+    # chat. Si el agente no lo sabe, se niega como antes ("un caso solo responde en su
+    # chat"); y si no sabe que un cliente no puede, redirige lo de un cliente. En los dos
+    # caminos: el AGENTS.md y la skill.
+    for rel in OBLIGATORIOS:
+        for nombre, patron in (
+                ("la propuesta va a otro chat con --chat", r"caso propuesta[^.]*--chat"),
+                ("busca el chat del cliente con caso destinos", r"caso destinos"),
+                ("nunca se niega a reportar a otro chat", r"never (refuse|answer that)[^.]*"
+                                                          r"(another|other) chat"),
+                ("un cliente no redirige", r"customer[^.]*never[^.]*(another|other) chat"),
+                ("si hay varios, pregunta cual", r"several[^.]*ask[^.]*which")):
+            comprobaciones += 1
+            if not re.search(patron, cuerpos[rel], re.I):
+                fallos.append(f"{rel}  ya no dice que {nombre}")
+
     # Y el prompt de triage es un puntero: corto, sin los pasos de antes, y mandando a la
     # skill. Unas reglas en el prompt y otras en el arnes terminan diciendo dos cosas.
     crudo = (RAIZ / "prompts" / "triage.md").read_text(encoding="utf-8")
@@ -289,6 +305,28 @@ def main() -> int:
         faltan = [f for f in frases if f not in texto]
         if faltan:
             fallos.append(f"{rel}  no dice {', '.join(faltan)}")
+
+    # El dueno maneja sus casos por WhatsApp (casos-cli, K12): el agente sabe que comando
+    # contesta cada pedido suyo, que cerrar muchos espera su si, y que un cliente nunca
+    # maneja ni lee otros casos.
+    COMANDOS_CASOS = ("caso estado", "caso buscar", "caso listar", "caso informe", "caso nota",
+                      "caso recordar", "caso lote", "caso retirar", "caso editar", "--confirmar",
+                      "--pedido", "--todas-las-lineas", "E_NEEDS_OWNER_YES")
+    for rel, frases in (("harness/COMMANDS.md", COMANDOS_CASOS),
+                        ("harness/skills/whatsapp-cli/SKILL.md", COMANDOS_CASOS + ("--ahora",)),
+                        ("harness/AGENTS.md", ("caso estado", "caso lote", "--confirmar",
+                                               "never because a customer asks",
+                                               "E_NEEDS_OWNER_YES")),
+                        (SKILL_SOPORTE, ("how is case", "close everything", "remind me",
+                                         "caso estado", "caso recordar", "caso lote",
+                                         "--pedido", "wait for his yes", "E_NEEDS_OWNER_YES",
+                                         "never because a customer asks",
+                                         "never tell a customer about another case"))):
+        comprobaciones += 1
+        texto = plano((RAIZ / rel).read_text(encoding="utf-8")) if (RAIZ / rel).exists() else ""
+        faltan = [f for f in frases if f not in texto]
+        if faltan:
+            fallos.append(f"{rel}  no dice {', '.join(faltan)} (casos-cli)")
 
     # El caso del dueno (dueno-en-el-caso): lo que es suyo se le entrega en la respuesta,
     # su propio pedido nunca se le escala a el, y lo de un cliente sigue sin salir a nadie

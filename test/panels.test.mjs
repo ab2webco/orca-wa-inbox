@@ -5662,6 +5662,79 @@ console.log('\nactivity.html — T14: la historia dice lo que paso por WhatsApp'
   }
 }
 
+console.log('\nactivity.html — casos-cli K5: una nota se lee en la historia')
+{
+  const caso = tarjeta({ case_id: 6, events: [
+    { de: null, a: 'recibido', actor: 'automatizacion', que: 'message', at: hace(50 * 60000) },
+    { de: 'recibido', a: 'recibido', actor: 'dueno', que: 'note',
+      nota: 'El cliente llamo: lo quiere antes del viernes', at: hace(40 * 60000) },
+    { de: 'recibido', a: 'recibido', actor: 'agente', que: 'note', at: hace(30 * 60000) }] })
+  for (const [idioma, re] of [['es-419', /nota: El cliente llamo: lo quiere antes del viernes/],
+    ['en-US', /note: El cliente llamo: lo quiere antes del viernes/],
+    ['pt-BR', /nota: El cliente llamo: lo quiere antes del viernes/]]) {
+    const { doc } = await abrirTablero({ board: tablero([caso]) }, idioma)
+    const h = abrirDetalle(doc, 6).querySelector('.det-hist')
+    const filas = [...h.querySelectorAll('li')].map((li) => li.textContent)
+    ok(`${idioma}: la nota se lee con su texto`, filas.some((f) => re.test(f)), JSON.stringify(filas))
+    ok(`${idioma}: una nota sin texto dice nota, nunca el codigo crudo`,
+      /nota|note/.test(filas[filas.length - 1]) && !/"note"|\bnote\b:\s*$/.test(filas[filas.length - 1]),
+      filas[filas.length - 1])
+  }
+}
+
+console.log('\nactivity.html — casos-cli K7: una edicion dice que cambio')
+{
+  const caso = tarjeta({ case_id: 7, events: [
+    { de: null, a: 'recibido', actor: 'automatizacion', que: 'message', at: hace(50 * 60000) },
+    { de: 'recibido', a: 'recibido', actor: 'dueno', que: 'edited', args: ['priority', 'title'],
+      at: hace(40 * 60000) }] })
+  for (const [idioma, re] of [['es-419', /editado: prioridad, titulo/],
+    ['en-US', /edited: priority, title/], ['pt-BR', /editado: prioridade, titulo/]]) {
+    const { doc } = await abrirTablero({ board: tablero([caso]) }, idioma)
+    const h = abrirDetalle(doc, 7).querySelector('.det-hist')
+    const filas = [...h.querySelectorAll('li')].map((li) => li.textContent)
+    ok(`${idioma}: la edicion dice que cambio`, filas.some((f) => re.test(f)), JSON.stringify(filas))
+  }
+}
+
+console.log('\nactivity.html — casos-cli K10: recordatorios y posponer en la tarjeta')
+{
+  const pronto = new Date(Date.now() + 2 * 3600000).toISOString()
+  const caso = tarjeta({ case_id: 8, reminder: { at: pronto, snoozed_until: null }, events: [
+    { de: null, a: 'recibido', actor: 'automatizacion', que: 'message', at: hace(50 * 60000) },
+    { de: 'recibido', a: 'recibido', actor: 'dueno', que: 'reminder_set', at: hace(40 * 60000) },
+    { de: 'recibido', a: 'recibido', actor: 'dueno', que: 'reminder', at: hace(30 * 60000) },
+    { de: 'recibido', a: 'recibido', actor: 'dueno', que: 'reminder_cancelled', at: hace(20 * 60000) },
+    { de: 'recibido', a: 'recibido', actor: 'automatizacion', que: 'snooze_ended', at: hace(10 * 60000) }] })
+  const pospuesto = tarjeta({ case_id: 9, reminder: { at: pronto, snoozed_until: pronto } })
+  for (const [idioma, rec, pos, hist] of [
+    ['es-419', /Recordatorio:/, /Pospuesto hasta/, [/recordatorio puesto/, /recordatorio vencido/,
+      /recordatorios cancelados/, /posposicion terminada/]],
+    ['en-US', /Reminder:/, /Snoozed until/, [/reminder set/, /reminder due/, /reminders cancelled/,
+      /snooze ended/]],
+    ['pt-BR', /Lembrete:/, /Adiado ate/, [/lembrete criado/, /lembrete vencido/,
+      /lembretes cancelados/, /adiamento terminado/]]]) {
+    const { doc } = await abrirTablero({ board: tablero([caso, pospuesto]) }, idioma)
+    const nodo = (id) => doc.querySelector(`.card[data-case="${id}"]`)
+    const chip = nodo(8) && nodo(8).querySelector('.card-recordatorio')
+    ok(`${idioma}: la tarjeta dice el proximo recordatorio`, chip && rec.test(chip.textContent),
+      chip ? chip.textContent : 'sin chip')
+    const chip2 = nodo(9) && nodo(9).querySelector('.card-recordatorio')
+    ok(`${idioma}: y la posposicion`, chip2 && pos.test(chip2.textContent),
+      chip2 ? chip2.textContent : 'sin chip')
+    const det = abrirDetalle(doc, 8)
+    const enDetalle = det.querySelector('.card-recordatorio')
+    ok(`${idioma}: el detalle tambien lo dice`, enDetalle && rec.test(enDetalle.textContent),
+      enDetalle ? enDetalle.textContent : 'sin linea')
+    const h = det.querySelector('.det-hist')
+    const filas = [...h.querySelectorAll('li')].map((li) => li.textContent)
+    ok(`${idioma}: la historia dice los recordatorios en palabras`,
+      hist.every((r) => filas.some((f) => r.test(f))), JSON.stringify(filas))
+  }
+  const { doc } = await abrirTablero({ board: tablero([tarjeta({ case_id: 10 })]) })
+  ok('una tarjeta sin recordatorio no lleva la linea', !doc.querySelector('.card-recordatorio'))
+}
+
 console.log('\nactivity.html — T22: la historia dice que paso, y agrupa lo repetido')
 {
   const caso = tarjeta({ case_id: 4, events: [
@@ -9063,6 +9136,32 @@ console.log('\nconfig.html — P9: cada linea muestra y guarda sus reglas y sus 
   const enLaPrincipal = pedidos.filter((p) => p.action === 'proyectos-quitar').pop()
   ok('en la principal el pedido no nombra linea',
     enLaPrincipal?.project === 'alfa-demo' && !enLaPrincipal.linea, JSON.stringify(enLaPrincipal))
+}
+
+console.log('\nactivity.html — respuesta-otro-chat: la propuesta dice a que chat va')
+{
+  const aOtro = tarjeta({ case_id: 21, exceptions: [],
+    proposal: { tipo: 'responder', texto: 'Le comparto la conclusion.', version: 'abc',
+      destino: { chat_jid: '120363000000000004@g.us', chat_name: 'Grupo Facturacion Demo' } },
+    events: [{ de: 'decision', a: 'decision', actor: 'regla', que: 'reply_waits',
+      args: ['other_chat'], at: hace(5 * 60000) }] })
+  const propio = tarjeta({ case_id: 22, exceptions: [] })
+  for (const [idioma, va, motivo] of [['es-419', /Va a: Grupo Facturacion Demo/, /otro chat/],
+    ['en-US', /Goes to: Grupo Facturacion Demo/, /another chat/]]) {
+    const { doc } = await abrirTablero({ board: tablero([aOtro, propio]) }, idioma)
+    const card = doc.querySelector('.card[data-case="21"]')
+    ok(`${idioma}: la tarjeta dice a que chat va antes de Enviar`,
+      va.test(card.textContent) && !!card.querySelector('.card-destino'), card.textContent)
+    ok(`${idioma}: la que va a su propio chat no lo dice`,
+      !doc.querySelector('.card[data-case="22"] .card-destino'))
+    const det = abrirDetalle(doc, 21)
+    ok(`${idioma}: el detalle tambien`, va.test(det.querySelector('.det-prop')?.textContent || ''),
+      det.textContent)
+    const filas = [...det.querySelectorAll('.det-hist li')].map((li) => li.textContent)
+    ok(`${idioma}: y la historia dice por que espera en palabras`,
+      filas.some((f) => motivo.test(f)) && !filas.some((f) => /other_chat/.test(f)),
+      JSON.stringify(filas))
+  }
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
