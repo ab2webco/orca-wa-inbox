@@ -173,3 +173,13 @@ cases are created, judged or sent.
   Looked at: `tablero-recordatorio`, `tablero-nota-detalle` (new), `tablero-poblado`,
   `tablero-detalle`.
 - Not run: `npm run check` and the full `npm run shots` (owner's rule).
+
+## Checks run after the review fixes (K13..K16, final tree)
+
+- `scripts/check-casos` full: 1974/1974 (the time-of-day "avisos-orca" and the intermittent
+  P3 checks passed in this run).
+- `scripts/check-clis` 8 CLIs, 494 checks; `scripts/check-harness` 93; `scripts/check-prompts`
+  15; `scripts/check-voseo` 44 files; `scripts/check-datos-reales` 16 allowed test values.
+- `node test/panels.test.mjs` 1640/1640; `node test/worker.test.mjs` 589/589 (run alone).
+- No shots: K13..K16 change no screen (the card's history is unchanged; the withdrawn text
+  shows only in `caso estado`).
