@@ -63,7 +63,7 @@ or the title rule).
 - [x] T4 closed-elsewhere run still closes its tab (RED → GREEN)
 - [x] T5 closed or answered case closes its finished runs' and dispatches' tabs (RED → GREEN)
 - [x] T6 idle tabs in the plugin's own workspace are adopted and closed (RED → GREEN)
-- [ ] Release
+- [x] Release
 
 ## Acceptance criteria
 
