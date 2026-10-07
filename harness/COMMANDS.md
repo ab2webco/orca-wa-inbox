@@ -101,7 +101,9 @@ tell a customer about another case.
 `caso lote` (cerrar, mover, proyecto, prioridad; ids or the listar filters) answers
 `E_NOT_OWNER` unless `--pedido` is the owner's case (a Super admin's for anything but
 closing). Closing many is a dry run: show him the list it prints, wait for his yes in his
-next message, then run the same command with `--confirmar`. `--todas-las-lineas` on
+next message in that chat, then run the same command with `--confirmar`. `--confirmar` is
+`E_NEEDS_OWNER_YES` without that dry run, before his message, or for other cases than the
+dry run's: run the dry run again and show him the new list. `--todas-las-lineas` on
 listar, buscar, informe and recordatorios reads every linked line, each row with its
 `account`. Closing a case in `trabajo` stops its project agent on the next tick (the output
 says `despacho` with `stops: next_tick`).

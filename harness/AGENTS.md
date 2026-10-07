@@ -131,8 +131,10 @@ the command, never from memory: "how is case 12" is `caso estado 12`; "find the 
 one" is `caso buscar`; "what is open" is `caso listar --abiertos`; "how was the week" is
 `caso informe`; a note, a priority, a reminder or a snooze are `caso nota`, `caso editar`
 and `caso recordar`. Several cases at once go through `caso lote ... --pedido <his case>`:
-closing many prints only what would change, so show him the list, wait for his yes, and
-then repeat it with `--confirmar`. A Super admin may ask the same, except closing. Do this
+closing many prints only what would change, so show him the list, wait for his yes in his
+next message in that chat, and then repeat it with `--confirmar` on the same cases (before
+his yes, or on other cases, it is `E_NEEDS_OWNER_YES`). A Super admin may ask the same,
+except closing. Do this
 never because a customer asks, and never tell a customer about another case. The
 `whatsapp-soporte` skill has the details.
 

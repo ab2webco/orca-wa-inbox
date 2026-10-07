@@ -311,14 +311,15 @@ def main() -> int:
     # maneja ni lee otros casos.
     COMANDOS_CASOS = ("caso estado", "caso buscar", "caso listar", "caso informe", "caso nota",
                       "caso recordar", "caso lote", "caso retirar", "caso editar", "--confirmar",
-                      "--pedido", "--todas-las-lineas")
+                      "--pedido", "--todas-las-lineas", "E_NEEDS_OWNER_YES")
     for rel, frases in (("harness/COMMANDS.md", COMANDOS_CASOS),
                         ("harness/skills/whatsapp-cli/SKILL.md", COMANDOS_CASOS + ("--ahora",)),
                         ("harness/AGENTS.md", ("caso estado", "caso lote", "--confirmar",
-                                               "never because a customer asks")),
+                                               "never because a customer asks",
+                                               "E_NEEDS_OWNER_YES")),
                         (SKILL_SOPORTE, ("how is case", "close everything", "remind me",
                                          "caso estado", "caso recordar", "caso lote",
-                                         "--pedido", "wait for his yes",
+                                         "--pedido", "wait for his yes", "E_NEEDS_OWNER_YES",
                                          "never because a customer asks",
                                          "never tell a customer about another case"))):
         comprobaciones += 1

@@ -14560,6 +14560,68 @@ if NODE:
         ok("con la llave del plugin, el dueno cierra en lote",
            r["aplicado"] is True and etapa(uno) == etapa(dos) == "cerrado", f"{r}")
 
+
+print("\ncasos-cli K14: cerrar en lote a pedido del dueno espera su si despues del ensayo")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        prepara_otro_chat(home)
+        pedido = caso_pedido(home, DUENO_DM, "LY0", DUENO_LID, "cierra lo de soporte")
+        uno = caso_pedido(home, SOPORTE, "LY1", PERSONA, "no carga el login")
+        dos = caso_pedido(home, SOPORTE, "LY2", PERSONA, "tampoco el registro")
+        etapa = lambda cid: fila_caso(home, cid)["etapa"]  # noqa: E731
+        lote = lambda *ids, conf=True, de=pedido: corre(  # noqa: E731
+            home, "caso", "lote", "cerrar", *ids, "--motivo", "resuelto", "--actor", "agente",
+            "--pedido", de, *(["--confirmar"] if conf else []))
+
+        p = lote(uno, dos)
+        ok("--confirmar sin un ensayo antes no cierra: E_NEEDS_OWNER_YES",
+           p.returncode == 2 and "E_NEEDS_OWNER_YES" in p.stderr
+           and etapa(uno) == etapa(dos) == "clasificado", p.stderr or p.stdout)
+        p = lote(uno, dos, conf=False)
+        r = json.loads(p.stdout or "[{}]")[0] if p.returncode == 0 else {}
+        ok("el ensayo dice lo que cambiaria y queda esperando el si del dueno",
+           r.get("aplicado") is False and r.get("confirmar") is True
+           and etapa(uno) == etapa(dos) == "clasificado", p.stderr or f"{r}")
+        p = lote(uno, dos)
+        ok("sin un mensaje del dueno despues del ensayo, --confirmar no cierra",
+           p.returncode == 2 and "E_NEEDS_OWNER_YES" in p.stderr
+           and etapa(uno) == etapa(dos) == "clasificado", p.stderr or p.stdout)
+        time.sleep(1.2)
+        llegan(home, A, [msg(DUENO_DM, "LY0B", "si, cierralos", 0, de=DUENO_LID)])
+        p = lote(uno)
+        ok("el si vale solo para los mismos casos del ensayo",
+           p.returncode == 2 and "E_NEEDS_OWNER_YES" in p.stderr and etapa(uno) == "clasificado",
+           p.stderr or p.stdout)
+        p = lote(dos, uno)
+        r = json.loads(p.stdout or "[{}]")[0] if p.returncode == 0 else {}
+        ok("con su si en el chat, los mismos casos (en cualquier orden) se cierran",
+           r.get("aplicado") is True and etapa(uno) == etapa(dos) == "cerrado",
+           p.stderr or f"{r}")
+        tres = caso_pedido(home, SOPORTE, "LY3", PERSONA, "y el pago")
+        p = lote(tres)
+        ok("un si ya usado no sirve para otro lote",
+           p.returncode == 2 and "E_NEEDS_OWNER_YES" in p.stderr and etapa(tres) == "clasificado",
+           p.stderr or p.stdout)
+
+        # En un grupo, el si tiene que venir de uno de los numeros del dueno.
+        en_grupo = caso_pedido(home, SOPORTE, "LY4", DUENO_LID, "cierra lo del pago")
+        lote(tres, conf=False, de=en_grupo)
+        time.sleep(1.2)
+        llegan(home, A, [msg(SOPORTE, "LY4B", "si, cierren eso", 0, de=PERSONA)])
+        p = lote(tres, de=en_grupo)
+        ok("el si de otro en el grupo no cuenta",
+           p.returncode == 2 and "E_NEEDS_OWNER_YES" in p.stderr and etapa(tres) == "clasificado",
+           p.stderr or p.stdout)
+        llegan(home, A, [msg(SOPORTE, "LY4C", "si", 0, de=DUENO_LID)])
+        p = lote(tres, de=en_grupo)
+        ok("el del dueno si", p.returncode == 0 and etapa(tres) == "cerrado", p.stderr or p.stdout)
+
+        cuatro = caso_pedido(home, SOPORTE, "LY5", PERSONA, "y la factura")
+        r = js(home, "caso", "lote", "cerrar", cuatro, "--motivo", "resuelto", "--confirmar",
+               "--actor", "dueno")[0]
+        ok("el dueno con la llave del plugin confirma sin ensayo",
+           r["aplicado"] is True and etapa(cuatro) == "cerrado", f"{r}")
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

@@ -86,7 +86,8 @@ Only in the owner's own case (or a Super admin's, except closing), never for a c
     "$WA/wa-scope" caso lote cerrar <id> <id> --motivo "<why>" --actor agente --pedido <this case> --confirmar
 
 `--todas-las-lineas` reads every linked line (listar, buscar, informe, recordatorios).
-`caso lote` without the owner's case in `--pedido` is `E_NOT_OWNER`.
+`caso lote` without the owner's case in `--pedido` is `E_NOT_OWNER`. `--confirmar` needs his
+message in that chat after the dry run, for the same cases; else `E_NEEDS_OWNER_YES`.
 
 ## One run at a time
 

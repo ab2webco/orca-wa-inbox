@@ -203,7 +203,7 @@ never because a customer asks, and never tell a customer about another case.
 - "close everything from group X" → `caso lote cerrar --chat <jid> --abiertos --motivo
   "<his reason>" --pedido <this case>`. It changes nothing yet: show him the list (number
   and title of each), wait for his yes in his next message, and only then run the same
-  command with `--confirmar`. Priority, project or a move that does not close apply at once.
+  command with `--confirmar` (the same cases; before his message it is `E_NEEDS_OWNER_YES`). Priority, project or a move that does not close apply at once.
 - Closing a case in `trabajo` stops its project agent within a minute; say so.
 
 ## An operator's case

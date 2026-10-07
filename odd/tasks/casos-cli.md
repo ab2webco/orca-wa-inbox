@@ -113,6 +113,18 @@ cases are created, judged or sent.
       aprobar --actor dueno` (`trae_llave_aprobador`); without it, or with a wrong one,
       E_NOT_OWNER. Tests: `scripts/check-casos`. Proof: RED 1/5 (without the key the batch
       closed both cases); GREEN 5/5 (K9 16/16, K11 9/9 with the key as the plugin passes it).
+- [x] K14 (review) `--confirmar` of a bulk close on the owner's request needs proof of his
+      yes: the dry run records the batch on the request case (`caso_lote_pendiente`: sorted
+      ids and the epoch second); `--confirmar` passes only with that record, for the same ids,
+      and a message from one of the owner's numbers (or anyone but the line in his own chat)
+      in the request case's chat after it; the record is spent on use. Otherwise
+      `E_NEEDS_OWNER_YES`. The owner with the plugin's key confirms without a dry run.
+      Harness docs say the flow and the code. Tests: `scripts/check-casos`,
+      `scripts/check-harness`. Proof: RED 3/9 (`--confirmar` closed without a dry run, before
+      the yes, and on another customer's yes), harness 4 files missing `E_NEEDS_OWNER_YES`;
+      GREEN 9/9, harness 93 (K9 16/16, K11 9/9, K13 5/5, migracion sections green).
+      Limit: in the line's chat with itself the owner's own messages are `from_me` and do not
+      count; he answers from his number or his direct chat.
 
 ## Acceptance criteria
 

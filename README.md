@@ -123,8 +123,10 @@ cualquier sesión que pudiera correr la CLI podía aprobarlo con `wa-send --appr
 2026-10-02 la sesión de un proyecto aprobó sus propios avisos). Ahora el plugin guarda una
 llave al azar, legible solo por su usuario, y se la pasa únicamente a esas dos llamadas;
 sin ella `--approve` se niega con `send-approve-not-owner` y no sale nada. Lo mismo vale para
-firmar un caso como el dueño: `wa-scope caso aprobar --actor dueno` sin esa llave se niega con
-`E_NOT_OWNER`. Los mensajes retenidos que no son de ningún caso (el aviso de la sesión de un
+firmar un caso como el dueño: `wa-scope caso aprobar --actor dueno` (o `caso lote --actor
+dueno`) sin esa llave se niega con `E_NOT_OWNER`. Cuando el agente cierra varios casos a pedido
+del dueño, primero le muestra la lista y `--confirmar` solo pasa si el dueño escribió en ese
+chat después, para esos mismos casos; si no, `E_NEEDS_OWNER_YES`. Los mensajes retenidos que no son de ningún caso (el aviso de la sesión de un
 proyecto que frenó el piso, por ejemplo) aparecen en el tablero, en «Mensajes retenidos», con
 su texto y su motivo, para aprobarlos o cancelarlos desde ahí. Cada aprobación
 queda en la actividad con quién la dio (el tablero o la respuesta por WhatsApp). Es una

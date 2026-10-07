@@ -157,10 +157,13 @@ FIRMANTES_CASO = ("dueno", "regla")
 # el panel, que traduce por codigo: el texto se puede reescribir, el codigo no.
 # E_OWNER: lo que ya decidio el dueno (el proyecto del caso) no lo cambia el agente.
 ERRORES_CASO = ("E_ARGS", "E_NOT_FOUND", "E_STAGE", "E_NOT_APPROVED", "E_VERSION",
-                "E_EXCEPTION", "E_REVISION", "E_BUSY", "E_OWNER", "E_NOT_OWNER")
+                "E_EXCEPTION", "E_REVISION", "E_BUSY", "E_OWNER", "E_NOT_OWNER",
+                "E_NEEDS_OWNER_YES")
 # E_NOT_OWNER: `caso aprobar --actor dueno` o `caso lote --actor dueno` sin la llave del
 # plugin (approve-solo-dueno). La firma del dueno la lanza el worker con el clic del tablero;
 # un agente no la tiene.
+# E_NEEDS_OWNER_YES: `caso lote` que cierra, con `--confirmar` a pedido del dueno, sin un
+# mensaje suyo en el chat del pedido despues del ensayo de ESOS mismos casos (casos-cli, K14).
 # Cuanto del porque del agente (`caso proyecto --porque`) queda en la ruta: una frase para
 # la tarjeta, no un informe.
 LARGO_PORQUE = 300
@@ -547,6 +550,17 @@ create table if not exists caso_recordatorio (
   updated_at text not null
 );
 create index if not exists ix_caso_recordatorio on caso_recordatorio(account, estado, cuando);
+-- El ensayo de un cierre en lote que pidio el dueno (casos-cli, K14): que casos mostro el
+-- agente y cuando. `--confirmar` vale solo con un mensaje del dueno en el chat del pedido
+-- DESPUES de `ts` y para esos mismos casos; se usa una vez. Uno por caso del pedido: un
+-- ensayo nuevo reemplaza al anterior.
+create table if not exists caso_lote_pendiente (
+  pedido  integer primary key,         -- el caso donde lo pidio el dueno
+  account text not null,
+  ids     text not null,               -- JSON, ordenados
+  ts      integer not null,            -- segundos de epoch, como el almacen de mensajes
+  at      text not null
+);
 -- Un mensaje es de UN caso como mucho. La llave lleva la cuenta: el mismo mensaje de
 -- un grupo visto desde dos lineas propias es el mismo stanza_id, y cada linea tiene
 -- su propio tablero.
@@ -5519,6 +5533,57 @@ def lote_del_dueno(con, a, destructivo=False):
     return pedido
 
 
+def si_del_dueno_despues(pedido, desde):
+    """Si hay un mensaje del dueno en el chat del pedido despues de `desde` (segundos de
+    epoch): uno de sus numeros, o cualquiera que no sea de la linea en su propia
+    conversacion. Lo decide el id que dejo WhatsApp, nunca el texto: que sea un si lo lee el
+    agente; que lo haya dicho el dueno, y despues de ver la lista, lo prueba esto."""
+    ids = duenos(linea_del_caso(pedido))
+    propia = chat_es_del_dueno(pedido.get("account"), pedido["chat_jid"])
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return False
+    try:
+        filas = fuente.execute(
+            "select sender_jid from mensaje where account=? and chat_jid=? and from_me=0 and "
+            "revocado=0 and ts > ?", (pedido["account"], pedido["chat_jid"], int(desde))).fetchall()
+    except sqlite3.Error:
+        return False
+    finally:
+        fuente.close()
+    return any(propia or wa_store.es_dueno(r["sender_jid"], ids) for r in filas)
+
+
+def lote_anota_ensayo(con, pedido, ids):
+    """El ensayo de un cierre a pedido del dueno: los casos que el agente le va a mostrar."""
+    con.execute("insert or replace into caso_lote_pendiente (pedido, account, ids, ts, at) "
+                "values (?,?,?,?,?)", (pedido["case_id"], pedido["account"],
+                                       json.dumps(sorted(ids)), int(time.time()), ahora_caso()))
+    con.commit()
+
+
+def lote_usa_el_si(con, pedido, ids):
+    """Sale con E_NEEDS_OWNER_YES salvo que haya un ensayo de ESTOS casos en el pedido y un
+    mensaje del dueno en su chat despues. El ensayo se gasta: el mismo si no confirma dos
+    veces."""
+    fila = con.execute("select ids, ts from caso_lote_pendiente where pedido=? and account=?",
+                       (pedido["case_id"], pedido["account"])).fetchone()
+    n = pedido["case_id"]
+    if not fila:
+        caso_falla("E_NEEDS_OWNER_YES", f"no dry run to confirm in case #{n}: run it without "
+                                        f"--confirmar, show the owner the list and wait for his yes")
+    if json.loads(fila["ids"]) != sorted(ids):
+        caso_falla("E_NEEDS_OWNER_YES", f"these are not the cases of the dry run in case #{n} "
+                                        f"({', '.join('#' + str(i) for i in json.loads(fila['ids']))}): "
+                                        f"run the dry run again and show him the new list")
+    if not si_del_dueno_despues(pedido, fila["ts"]):
+        caso_falla("E_NEEDS_OWNER_YES", f"the owner has not written in case #{n}'s chat since the "
+                                        f"dry run: wait for his yes, then --confirmar")
+    con.execute("delete from caso_lote_pendiente where pedido=?", (n,))
+    con.commit()
+
+
 def casos_del_lote(con, a, pedido):
     """Los casos del lote: los ids, o los que da el filtro de `listar`. Nunca el del pedido."""
     filtros = [f for f in FILTROS_LOTE if getattr(a, f"filtro_{f}", None)]
@@ -5600,14 +5665,21 @@ def cmd_caso_lote(con, a):
     pedido = lote_del_dueno(con, a, destructivo)
     ids = casos_del_lote(con, a, pedido)
     aplicar = not destructivo or a.confirmar
+    # A pedido del dueno, cerrar espera su si en el chat despues del ensayo (K14). El dueno
+    # con la llave confirma solo: es el.
+    if destructivo and pedido:
+        if a.confirmar:
+            lote_usa_el_si(con, pedido, ids)
+        else:
+            lote_anota_ensayo(con, pedido, ids)
     casos = [paso_del_lote(con, a, i, aplicar) for i in ids]
     r = {"accion": a.accion, "aplicado": aplicar, "confirmar": destructivo and not a.confirmar,
          "total": len(casos), "ok": sum(1 for c in casos if c["resultado"] != "error"),
          "fallidos": sum(1 for c in casos if c["resultado"] == "error"), "casos": casos}
     if a.json:
         return [r]
-    cabeza = (f"{r['ok']} of {r['total']} cases would change: run it again with --confirmar "
-              f"after the owner says yes" if r["confirmar"]
+    cabeza = (f"{r['ok']} of {r['total']} cases would change: show the owner this list, wait "
+              f"for his yes in this chat, then run it again with --confirmar" if r["confirmar"]
               else f"{r['ok']} of {r['total']} cases changed")
     print(cabeza)
     for c in casos:
@@ -13928,7 +14000,8 @@ def main():
                           "with --pedido <the owner's or a Super admin's case where he asked "
                           "for it> (else E_NOT_OWNER; closing only on the owner's own case). "
                           "Closing many is a dry run until --confirmar: show the owner the "
-                          "list and wait for his yes")
+                          "list and wait for his yes in that chat (--confirmar before it is "
+                          "E_NEEDS_OWNER_YES)")
     c.add_argument("accion", choices=list(ACCIONES_LOTE))
     c.add_argument("ids", nargs="*", type=int, help="the case ids; or use the filters")
     c.add_argument("--hacia", choices=list(ETAPAS_CASO), help="mover: the stage to move to")
