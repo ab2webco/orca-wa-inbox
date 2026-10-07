@@ -4186,10 +4186,13 @@ if NODE:
                 c1, c2, c4, c5, c6 = (caso_de_stanza(home, x) for x in ("Q1", "Q2", "Q4", "Q5", "Q6"))
                 antes_tick = list(sidecar.entregados)
                 tick(home)
+                q3 = caso_de_stanza(home, "Q3")
                 esperado = {f"caso-{c1['case_id']}-acuse", f"caso-{c2['case_id']}-acuse"}
-                ok("el acuse sale una vez por caso nuevo dirigido, con id caso-<id>-acuse",
-                   set(entregas(sidecar, "acuse")) == esperado
-                   and len(entregas(sidecar, "acuse")) == 2, f"{sidecar.entregados}")
+                if q3:
+                    esperado.add(f"caso-{q3['case_id']}-acuse")
+                ok("el acuse sale una vez por pedido que abre un caso nuevo, con id caso-<id>-acuse",
+                   q3 is not None and set(entregas(sidecar, "acuse")) == esperado
+                   and len(entregas(sidecar, "acuse")) == 3, f"{sidecar.entregados}")
                 ok("con el texto por defecto",
                    ajustes_def["ack_text"] in (cuerpo_de(home, f"caso-{c1['case_id']}-acuse") or ""),
                    f"{cuerpo_de(home, 'caso-%s-acuse' % c1['case_id'])!r}")
@@ -4198,9 +4201,11 @@ if NODE:
                                                            str(c1["case_id"]))[0]["eventos"]))
                 ok("el caso sigue su camino: el acuse no lo cierra ni lo mueve",
                    js(home, "caso", "ver", str(c1["case_id"]))[0]["etapa"] in ("recibido", "clasificado"))
-                q3 = caso_de_stanza(home, "Q3")
-                ok("un grupo sin mencion ni cita no recibe acuse, abra o no un caso",
-                   not q3 or f"caso-{q3['case_id']}-acuse" not in sidecar.entregados)
+                # avisos-retenidos A1: un pedido de un grupo sin mencion ni cita que abre un
+                # caso nuevo tambien recibe su acuse (antes no recibia nada).
+                ok("un pedido de un grupo sin mencion ni cita que abre un caso recibe su acuse",
+                   q3 is not None and f"caso-{q3['case_id']}-acuse" in sidecar.entregados,
+                   f"{sidecar.entregados}")
                 ok("un chat en borrador tampoco", f"caso-{c4['case_id']}-acuse" not in sidecar.entregados)
                 ok("una credencial no recibe acuse y va al dueno",
                    f"caso-{c5['case_id']}-acuse" not in sidecar.entregados, f"{sidecar.entregados}")
@@ -4212,11 +4217,12 @@ if NODE:
                 tick(home)
                 ok("repetir ticks e ingests no manda un segundo acuse", len(sidecar.entregados) == antes_n,
                    f"{sidecar.entregados}")
+                acuses_antes = len(entregas(sidecar, "acuse"))
                 llegan(home, A, [msg(PERSONA, "Q7", "no funciono otra vez", 1)])
                 ingiere(home)
                 tick(home)
                 ok("un mensaje que se suma al mismo caso no recibe otro acuse",
-                   len(entregas(sidecar, "acuse")) == 2, f"{sidecar.entregados}")
+                   len(entregas(sidecar, "acuse")) == acuses_antes, f"{sidecar.entregados}")
             finally:
                 sidecar.cerrar()
 
@@ -4458,6 +4464,43 @@ if NODE:
                    ["etapa"] in ("recibido", "clasificado"))
                 tick(home)
                 ok("repetir el tick no lo repite", sidecar.entregados.count(req) == 1)
+            finally:
+                sidecar.cerrar()
+
+        # avisos-retenidos A1: en un grupo `responder`, un pedido que abre un caso nuevo recibe
+        # el primer mensaje aunque no mencione ni cite al asistente (kind `grupo`). Visto en
+        # vivo: el cliente no recibio nada mientras el agente trabajaba. La charla del grupo
+        # que no abre caso sigue callada.
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(SOPORTE, "G1", "revisa este caso por favor", 1),
+                             msg(OPERACIONES, "G2", "charla entre ustedes", 1)])
+            js(home, "agent", "Agente De Ejemplo")
+            for chat in (SOPORTE, OPERACIONES):
+                js(home, "set", chat, "--provider", "ninguno", "--mode", "responder")
+            js(home, "config", "first_reply_mode", "model_with_ack_fallback")
+            js(home, "config", "ack_fallback_minutes", "10")
+            sidecar = SidecarFalso(home)
+            try:
+                ingiere(home)
+                g1 = caso_de_stanza(home, "G1")
+                ok("un pedido en un grupo sin mencion abre su caso", g1 is not None, f"{g1}")
+                ok("y con respaldo queda su acuse pendiente, como un directo",
+                   g1 is not None and (auto_de(home, g1["case_id"]) or {}).get("estado")
+                   == "pendiente", f"{g1 and auto_de(home, g1['case_id'])}")
+                ok("y el caso queda marcado para el agente",
+                   g1 is not None and necesita_agente(home, g1["case_id"]) == 1)
+                ok("la charla del grupo que no abre caso no recibe nada",
+                   caso_de_stanza(home, "G2") is None, f"{caso_de_stanza(home, 'G2')}")
+                if g1 is not None:
+                    envejece_caso(home, g1["case_id"], 11)
+                    tick(home)
+                ok("pasados los minutos sin nada del agente, el grupo recibe el acuse fijo",
+                   g1 is not None and sidecar.entregados.count(f"caso-{g1['case_id']}-acuse") == 1,
+                   f"{sidecar.entregados}")
+                ok("y nada mas sale al grupo de la charla",
+                   all(r.endswith("-acuse") for r in sidecar.entregados)
+                   and len(sidecar.entregados) == 1, f"{sidecar.entregados}")
             finally:
                 sidecar.cerrar()
 

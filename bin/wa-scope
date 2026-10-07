@@ -2314,7 +2314,8 @@ DEFAULT_CONFIG = {
     # (proyectos-por-chat, M5). Sale al panel (`projectQuestionHours`).
     "project_question_hours": "24",
     # Lo que el motor contesta solo (tick, por wa-send, en chats `responder`): el acuse a un
-    # pedido nuevo dirigido al asistente y el saludo a un saludo dirigido. Cada conversacion
+    # pedido nuevo (dirigido al asistente, o en un grupo el que abre un caso) y el saludo a
+    # un saludo dirigido. Cada conversacion
     # puede pisar el interruptor y el texto. Sin hora ni fecha: lo que promete tiene que ser
     # cierto siempre, y el piso fijo lo comprueba (scripts/check-casos).
     "ack": "on",
@@ -6055,7 +6056,10 @@ def regla_de_motivo(detalle):
 # ── Lo que el motor contesta solo: acuse de recibo y saludo ───────────────────────────
 # Un pedido NUEVO dirigido al asistente (un directo, o en un grupo una mencion o una cita
 # suya) en una conversacion `responder` recibe UN acuse al instante; un saludo dirigido
-# recibe un saludo en vez de cerrarse en silencio. Lo manda el tick por wa-send (el piso
+# recibe un saludo en vez de cerrarse en silencio. En un grupo, el pedido que abre un caso
+# nuevo sin mencionar al asistente tambien recibe el primer mensaje (avisos-retenidos A1:
+# visto en vivo, el cliente de un grupo de soporte no recibia nada mientras el agente
+# trabajaba); la charla que no abre caso sigue callada, y el saludo es solo el dirigido. Lo manda el tick por wa-send (el piso
 # fijo y Jev siguen mandando) con un id fijo por caso. Jev sigue siendo el clasificador y
 # el freno: con una excepcion o una bandera de riesgo no se manda nada y el caso es del
 # dueno.
@@ -6116,14 +6120,18 @@ def auto_ajuste(fila, ajustes, tipo):
 def auto_de_jev(m, juicio):
     """`acuse`, `saludo` o None: lo que corresponde contestar solo a este mensaje segun lo
     que Jev dijo. Necesita que ingest haya anotado `modo` y lo que esta activo."""
-    if m.get("modo") != "responder" or m.get("kind") not in KINDS_DE_ATENCION:
+    kind = m.get("kind")
+    if m.get("modo") != "responder" or kind not in KINDS_DE_ATENCION + ("grupo",):
         return None
     riesgo = juicio["exceptions"] or [f for f in juicio["flags"] if f not in BANDERAS_SIN_RIESGO]
     if riesgo:
         return None
     clase = juicio.get("attention_class")
     if clase in CLASES_PEDIDO and m.get("auto_acuse"):
+        # En un grupo sin mencion solo cuenta si abre un caso nuevo: ingest lo usa solo ahi.
         return "acuse"
+    if kind == "grupo":
+        return None
     if (clase == "pleasantry" and juicio["skip"] and m.get("auto_saludo")
             and SALUDO.search(wa_reglas.normaliza(m.get("text") or ""))):
         return "saludo"

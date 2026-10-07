@@ -6305,6 +6305,10 @@ for (const [idioma, nombre, etiqueta, pista] of [
   const intro = doc.querySelector('[data-t="autoIntro"]')?.textContent || ''
   ok(`${nombre}: la intro ya no promete un acuse al instante a todo pedido`,
     /(salvo si la linea|unless the line|salvo se a linha)/i.test(intro), intro)
+  // avisos-retenidos A1: en un grupo, el pedido que abre un caso sin mencionar al asistente
+  // tambien recibe el acuse.
+  ok(`${nombre}: la intro dice que en un grupo el pedido que abre un caso tambien recibe el acuse`,
+    /(grupo|group)/i.test(intro) && /(abre un caso|opens a case|abre um caso)/i.test(intro), intro)
 }
 
 console.log('\nactivity.html — un caso cerrado sin agente dice por que regla')

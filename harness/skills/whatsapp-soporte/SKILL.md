@@ -19,7 +19,8 @@ description: Support playbook for the WhatsApp inbox. Use it whenever you work a
 The plugin's code, not you, takes in the messages, groups a request into a case,
 transcribes voice notes, asks Jev, applies the fixed floor and sends. In a conversation
 set to `responder` it also sends, by itself and once per case: an **acknowledgement** to a
-new request addressed to the assistant, and a **greeting** to a greeting addressed to it.
+new request addressed to the assistant (in a group, also to a request that opens a new case
+without mentioning it), and a **greeting** to a greeting addressed to it.
 Never write either one yourself, and never answer a message that is only a greeting. The
 one exception is a chat whose `first_reply_mode` is a Beta mode: there the first message
 to a new request is yours (**First message and updates**, below).
