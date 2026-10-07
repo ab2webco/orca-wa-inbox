@@ -13719,6 +13719,74 @@ if NODE:
 
 
 
+print("\nrespuesta-otro-chat R4: el trabajo cuya respuesta va a otro chat")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        prepara_otro_chat(home)
+        sidecar = SidecarFalso(home)
+        try:
+            dueno = caso_pedido(home, DUENO_DM, "OW1", DUENO_LID, "investiga el error y avisale")
+            p = propone_a(home, dueno, "Facturacion", "Investiga el error del reporte.",
+                          tipo="trabajar")
+            fila = json.loads(p.stdout or "[{}]")[0] if p.returncode == 0 else {}
+            ok("un trabajo del dueno lleva el destino de su respuesta",
+               (fila.get("propuesta") or {}).get("chat") == FACTURACION
+               and (fila.get("destino") or {}).get("chat_jid") == FACTURACION,
+               p.stderr.strip()[:300])
+            js(home, "caso", "aprobar", dueno, "--version", fila["propuesta_version"],
+               "--actor", "dueno")
+            ws = carga_wa_scope(home)
+            con = ws.db()
+            try:
+                caso = ws.caso_de(con, int(dueno))
+                brief = ws.brief_de_despacho(con, caso, {"name": "Alfa Demo",
+                                                         "path": "/srv/ejemplo/alfa-demo"},
+                                             "Investiga el error del reporte.")
+            finally:
+                con.close()
+            ok("el brief le dice al agente del proyecto a que chat va su respuesta",
+               "Facturacion" in brief and FACTURACION in brief, brief[-800:])
+            r = js(home, "caso", "resultado", dueno, "--respuesta",
+                   "Encontramos la causa del error y quedo corregida.", "--resumen",
+                   "arreglado el filtro", "--actor", "trabajador")[0]
+            ok("la respuesta del resultado conserva el destino",
+               r["propuesta"].get("chat") == FACTURACION
+               and (r.get("destino") or {}).get("chat_jid") == FACTURACION, f"{r['propuesta']}")
+            ok("y no sale sola: espera al dueno, a ningun chat",
+               r["etapa"] == "listo" and envios_a(home, FACTURACION) == []
+               and not any("quedo corregida" in e["body"] for e in envios_a(home, DUENO_DM)),
+               f"{r.get('envio')}")
+            con = ws.db()
+            try:
+                historia = "\n".join(ws.historia_del_caso(con, ws.caso_de(con, int(dueno))))
+            finally:
+                con.close()
+            ok("el archivo del caso dice a donde va la propuesta y como conservarlo",
+               f"--chat {FACTURACION}" in historia and "Facturacion" in historia, historia)
+            js(home, "caso", "aprobar", dueno, "--version", r["propuesta_version"],
+               "--actor", "dueno")
+            tick(home)
+            ok("firmada por el dueno, sale al destino",
+               [e["estado"] for e in envios_a(home, FACTURACION)] == ["enviado"],
+               f"{envios_a(home, FACTURACION)}")
+
+            otro = caso_pedido(home, DUENO_DM, "OW2", DUENO_LID, "revisa esto y avisale")
+            v = json.loads(propone_a(home, otro, "Facturacion", "Revisa el modulo de cobros.",
+                                     tipo="trabajar").stdout)[0]["propuesta_version"]
+            js(home, "caso", "aprobar", otro, "--version", v, "--actor", "dueno")
+            n = js(home, "caso", "resultado", otro, "--estado", "necesita", "--respuesta",
+                   "Cual de los dos modulos de cobros reviso?", "--resumen", "falta un dato",
+                   "--actor", "trabajador")[0]
+            ok("la pregunta de un `necesita` va a quien lo pidio, no al destino",
+               "chat" not in n["propuesta"] and n.get("destino") is None, f"{n['propuesta']}")
+        finally:
+            sidecar.cerrar()
+            os.environ.clear()
+            os.environ.update(env_antes)
+
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

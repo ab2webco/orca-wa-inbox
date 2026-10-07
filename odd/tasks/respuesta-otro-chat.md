@@ -68,8 +68,12 @@ Refusal codes of `caso propuesta --chat` (exit 2, JSON on stderr):
       Proof: RED check-casos 2/10 (nothing reached the destination), worker 584/589 (the
       board sent to the case's chat with draft + `--approve`, and Edit dropped the
       destination); GREEN 10/10 and worker 589/589.
-- [ ] R4 Work: `--chat` on `trabajar`, kept by `caso resultado`'s reply proposal, and the
-      brief tells the worker where its reply goes. Tests: `scripts/check-casos`.
+- [x] R4 Work: `--chat` on `trabajar`, kept by `caso resultado`'s `resuelto` reply proposal
+      (a `necesita` question goes to whoever asked, in the case's chat), the brief tells the
+      worker where its reply goes, and the case file keeps the destination for a redo.
+      Tests: `scripts/check-casos`. Proof: RED 2/6 (the result lost the destination and
+      went out at once to the case's chat); GREEN 7/7 (the case-file line went RED by
+      mutation first).
 - [x] R5 `wa-scope caso destinos <id> [--json]`: the chats of the line in `responder`
       sharing the case's project, with the reason. Tests: `scripts/check-casos`.
       Proof: RED `invalid choice: 'destinos'` (E_ARGS); GREEN 9/9 (one, several, none,
