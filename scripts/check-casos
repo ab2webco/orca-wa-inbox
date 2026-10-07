@@ -14155,6 +14155,52 @@ with tempfile.TemporaryDirectory() as home:
        and cuenta(home, "select count(*) from agente_corrida") == 2, p.stderr)
 
 
+print("\ncasos-cli K7: prioridad, clase y titulo despues, sin mover el caso")
+with tempfile.TemporaryDirectory() as home:
+    cid, v = caso_en_trabajo(home, "ED1")
+    antes = fila_caso(home, cid)
+    r = js(home, "caso", "editar", cid, "--prioridad", "urgent", "--titulo", "Login caido en produccion",
+           "--actor", "dueno")[0]
+    ok("editar en trabajo cambia prioridad y titulo sin moverlo ni quitarle la firma",
+       r["etapa"] == "trabajo" and r["prioridad"] == "urgent"
+       and r["titulo"] == "Login caido en produccion"
+       and r["propuesta_aprobada"] == antes["propuesta_aprobada"] == v, f"{r}")
+    ev = js(home, "caso", "ver", cid)[0]["eventos"][-1]
+    ok("y deja su evento trabajo -> trabajo, con quien",
+       ev["de"] == ev["a"] == "trabajo" and ev["actor"] == "dueno"
+       and ev["detalle"].startswith("editado:"), f"{ev}")
+    t = tarjeta(home, cid) or {}
+    ok("la tarjeta lo dice en codigos: que se edito",
+       (t.get("events") or [{}])[-1].get("que") == "edited"
+       and (t.get("events") or [{}])[-1].get("args") == ["priority", "title"],
+       f"{(t.get('events') or [{}])[-1]}")
+    r = js(home, "caso", "clasificar", cid, "--clase", "alert", "--prioridad", "high",
+           "--actor", "dueno")[0]
+    ok("clasificar en trabajo ya no es E_STAGE: cambia la clase y no lo mueve",
+       r["etapa"] == "trabajo" and r["clase"] == "alert" and r["prioridad"] == "high"
+       and r["propuesta_aprobada"] == v, f"{r}")
+    js(home, "caso", "resultado", cid, "--respuesta", "Ya quedo.", "--resumen", "Se corrigio.",
+       "--actor", "trabajador")
+    listo = fila_caso(home, cid)
+    r = js(home, "caso", "editar", cid, "--clase", "card", "--actor", "dueno")[0]
+    ok("en listo tambien, y la propuesta del resultado sigue ahi",
+       r["etapa"] == "listo" and r["clase"] == "card"
+       and r["propuesta_version"] == listo["propuesta_version"], f"{r}")
+    r = js(home, "caso", "clasificar", cid, "--clase", "alert", "--prioridad", "low",
+           "--actor", "dueno")[0]
+    ok("clasificar en listo tampoco lo mueve", r["etapa"] == "listo" and r["prioridad"] == "low",
+       f"{r}")
+    nuevo = str(js(home, "caso", "crear", "--chat", CHAT, "--stanza", "ED2", "--actor",
+                   "agente")[0]["case_id"])
+    r = js(home, "caso", "editar", nuevo, "--titulo", "Factura duplicada", "--actor", "agente")[0]
+    ok("el titulo se puede poner despues de crear", r["titulo"] == "Factura duplicada"
+       and r["etapa"] == "recibido")
+    p = corre(home, "caso", "editar", nuevo, "--actor", "dueno")
+    ok("editar sin nada que cambiar es E_ARGS", p.returncode == 2 and "E_ARGS" in p.stderr)
+    p = corre(home, "caso", "editar", nuevo, "--prioridad", "altisima", "--actor", "dueno")
+    ok("una prioridad que no existe es E_ARGS", p.returncode == 2 and "E_ARGS" in p.stderr)
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

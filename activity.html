@@ -1091,7 +1091,7 @@
               "histProposal": "propuesta: {que}", "histApproved": "aprobada",
               "histSent": "enviado", "histRoute": "destino del caso",
               "histProject": "proyecto cambiado", "histClassified": "clasificado: {que}",
-              "histRetitled": "titulo nuevo", "histWithdrawn": "propuesta retirada", "histNote": "nota: {que}",
+              "histRetitled": "titulo nuevo", "histWithdrawn": "propuesta retirada", "histNote": "nota: {que}", "histEdited": "editado: {que}", "campoPrioridad": "prioridad", "campoClase": "clase", "campoTitulo": "titulo",
               "histAuthorized": "excepciones autorizadas", "histAttend": "atender ahora",
               "motSecret": "un secreto", "motJevDown": "Jev no contesto",
               "motDelete": "borrar", "motDeploy": "desplegar a produccion",
@@ -1442,7 +1442,7 @@
               "histProposal": "proposal: {que}", "histApproved": "approved",
               "histSent": "sent", "histRoute": "case destination",
               "histProject": "project changed", "histClassified": "classified: {que}",
-              "histRetitled": "new title", "histWithdrawn": "proposal withdrawn", "histNote": "note: {que}",
+              "histRetitled": "new title", "histWithdrawn": "proposal withdrawn", "histNote": "note: {que}", "histEdited": "edited: {que}", "campoPrioridad": "priority", "campoClase": "kind", "campoTitulo": "title",
               "histAuthorized": "exceptions authorized", "histAttend": "handle now",
               "motSecret": "a secret", "motJevDown": "Jev did not answer",
               "motDelete": "deleting", "motDeploy": "deploying to production",
@@ -1793,7 +1793,7 @@
               "histProposal": "proposta: {que}", "histApproved": "aprovada",
               "histSent": "enviado", "histRoute": "destino do caso",
               "histProject": "projeto alterado", "histClassified": "classificado: {que}",
-              "histRetitled": "titulo novo", "histWithdrawn": "proposta retirada", "histNote": "nota: {que}",
+              "histRetitled": "titulo novo", "histWithdrawn": "proposta retirada", "histNote": "nota: {que}", "histEdited": "editado: {que}", "campoPrioridad": "prioridade", "campoClase": "tipo", "campoTitulo": "titulo",
               "histAuthorized": "excecoes autorizadas", "histAttend": "atender agora",
               "motSecret": "um segredo", "motJevDown": "o Jev nao respondeu",
               "motDelete": "apagar", "motDeploy": "publicar em producao",
@@ -2241,7 +2241,7 @@
         route: 'histRoute', project: 'histProject', classified: 'histClassified',
         retitled: 'histRetitled', withdrawn: 'histWithdrawn', authorized: 'histAuthorized',
         attend: 'histAttend', project_question: 'histProjectQuestion',
-        project_answer: 'histProjectAnswer', note: 'histNote' }
+        project_answer: 'histProjectAnswer', note: 'histNote', edited: 'histEdited' }
       // Los motivos y excepciones que viajan en `args`, en palabras.
       var MOTIVO_KEY = { money: 'excMoney', credential: 'excCredential',
         commitment: 'excCommitment', jev: 'excJev', secret: 'motSecret',
@@ -2252,6 +2252,7 @@
         outside_project: 'motOutside', mode: 'motMode', stale: 'motStale',
         no_project: 'motNoProject', project_question: 'motProjectQuestion',
         other_chat: 'motOtherChat',
+        priority: 'campoPrioridad', kind: 'campoClase', title: 'campoTitulo',
         writer: 'motToWriter', owner: 'motToOwner',
         exceptions: 'motExceptions', no_instructions: 'motNoInstr',
         responder: 'propResponder', trabajar: 'propTrabajar', escalar: 'propEscalar',

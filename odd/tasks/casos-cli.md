@@ -72,9 +72,11 @@ cases are created, judged or sent.
       the board (`lanza_agente`, origin `dueno`). Tests: `scripts/check-casos`. Proof: RED
       `unrecognized arguments: --ahora`; GREEN 5/5 (existing atender/autorizar sections 15/15,
       16/16).
-- [ ] K7 `caso editar <id> [--titulo] [--prioridad] [--clase]` in any stage, without moving
+- [x] K7 `caso editar <id> [--titulo] [--prioridad] [--clase]` in any stage, without moving
       or clearing the approval; `caso clasificar` in trabajo/listo/respondido touches instead
       of E_STAGE. Event recorded. Tests: `scripts/check-casos`, `test/panels.test.mjs`.
+      Proof: RED `invalid choice: 'editar'`, panels 1624/1627 (an edit read "updated");
+      GREEN 9/9, panels 1627/1627 (etapas 20/20, reclasificar 4/4, history 15/15).
 - [ ] K8 `caso retirar <id>`: clears the proposal and its approval, cancels its draft, the
       case goes back to clasificado (decision with a credential); closing a case in trabajo
       stops its project agent at once or on the next tick. Tests: `scripts/check-casos`.

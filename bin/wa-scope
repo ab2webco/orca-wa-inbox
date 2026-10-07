@@ -3843,12 +3843,56 @@ def cmd_caso_clasificar(con, a):
     if not clase:
         caso_falla("E_ARGS", "--clase is empty: a classified case says what kind of request it is")
     detalle = f"{clase} · {a.prioridad}"
-    if caso["etapa"] == "clasificado":
+    # En clasificado, y en lo que ya esta en marcha (casos-cli, K7), reclasificar es solo la
+    # etiqueta: no mueve el caso ni le quita la firma. En decision y bloqueado sigue siendo
+    # volver a clasificado, a decidir de nuevo.
+    if caso["etapa"] in ("clasificado",) + ETAPAS_EDITA_SIN_MOVER:
         caso_tocar(con, caso, a.actor, detalle, clase=clase, prioridad=a.prioridad)
     else:
         caso_valida(caso, "clasificado")
         caso_mover(con, caso, "clasificado", a.actor, detalle, clase=clase,
                    prioridad=a.prioridad)
+    con.commit()
+    return [caso_fila(con, caso_de(con, a.id))]
+
+
+# Las etapas en que `clasificar` cambia la etiqueta sin mover el caso (casos-cli, K7): el
+# trabajo ya aprobado, su resultado y lo que espera al cliente.
+ETAPAS_EDITA_SIN_MOVER = ("trabajo", "listo", "respondido")
+# Lo que dice el evento de `caso editar`, campo por campo, y el codigo que lleva la tarjeta.
+PREFIJO_EDITADO = "editado: "
+CAMPOS_EDITADOS = {"prioridad": "priority", "clase": "kind", "titulo": "title"}
+LARGO_TITULO_CASO = 200
+
+
+def cmd_caso_editar(con, a):
+    """`caso editar`: la prioridad, la clase o el titulo, en cualquier etapa, sin mover el
+    caso ni tocar su propuesta ni su firma. Deja UN evento que dice que cambio (el titulo
+    no va en el detalle: puede salir del texto de un cliente)."""
+    campos, partes = {}, []
+    if a.prioridad is not None:
+        if a.prioridad not in PRIORIDADES_CASO:
+            caso_falla("E_ARGS", f"--prioridad is one of {', '.join(PRIORIDADES_CASO)}")
+        campos["prioridad"] = a.prioridad
+        partes.append(f"prioridad {a.prioridad}")
+    if a.clase is not None:
+        clase = a.clase.strip()
+        if not clase:
+            caso_falla("E_ARGS", "--clase is empty")
+        campos["clase"] = clase
+        partes.append(f"clase {clase}")
+    if a.titulo is not None:
+        titulo = " ".join(texto_caso(a.titulo).split())
+        if len(titulo) > LARGO_TITULO_CASO:
+            caso_falla("E_ARGS", f"--titulo is longer than {LARGO_TITULO_CASO} characters")
+        # Vacio vuelve al titulo de siempre: el primer mensaje.
+        campos["titulo"] = titulo or None
+        partes.append("titulo")
+    if not campos:
+        caso_falla("E_ARGS", "nothing to change: give --prioridad, --clase or --titulo")
+    caso_toma(con)
+    caso = caso_de(con, a.id)
+    caso_tocar(con, caso, a.actor, PREFIJO_EDITADO + " · ".join(partes), **campos)
     con.commit()
     return [caso_fila(con, caso_de(con, a.id))]
 
@@ -5264,6 +5308,7 @@ HISTORIA_EN = {
     "approved": "approved", "sent": "sent", "route": "routed", "project": "project set",
     "classified": "classified", "retitled": "new title", "withdrawn": "proposal withdrawn",
     "authorized": "the owner authorized it", "attend": "the owner asked the agent to handle it",
+    "note": "note", "edited": "edited",
     "project_question": "the project question was asked",
     "project_answer": "the project question was answered",
 }
@@ -7462,6 +7507,9 @@ def que_del_evento(detalle, medios=None):
     d = detalle.strip()
     if d.startswith(PREFIJO_NOTA):
         return "note", []
+    if d.startswith(PREFIJO_EDITADO):
+        tramos = [t.split(" ")[0] for t in d[len(PREFIJO_EDITADO):].split(" · ")]
+        return "edited", [CAMPOS_EDITADOS[t] for t in tramos if t in CAMPOS_EDITADOS]
     m = RE_EV_MENSAJE.match(d)
     if m:
         tipo = (medios or {}).get(m.group(1))
@@ -13164,10 +13212,21 @@ def main():
     c.add_argument("--texto", required=True, help="the question, as the reader will read it")
     c.set_defaults(fn=cmd_caso_pregunta_proyecto)
 
-    c = muta("clasificar", help="kind and priority; moves recibido -> clasificado")
+    c = muta("clasificar", help="kind and priority; moves recibido -> clasificado (decision and "
+                                "bloqueado go back to clasificado); in trabajo, listo and "
+                                "respondido it only changes them, without moving the case")
     c.add_argument("id", type=int); c.add_argument("--clase", required=True)
     c.add_argument("--prioridad", required=True, choices=list(PRIORIDADES_CASO))
     c.set_defaults(fn=cmd_caso_clasificar)
+
+    c = muta("editar", help="change the priority, the kind or the title of a case in any "
+                            "stage, without moving it or touching its proposal or approval; "
+                            "leaves one event. --titulo '' goes back to the first message")
+    c.add_argument("id", type=int)
+    c.add_argument("--prioridad", help=f"one of {', '.join(PRIORIDADES_CASO)}")
+    c.add_argument("--clase", help="the kind (card, alert, doubtful...)")
+    c.add_argument("--titulo", help="the title the board shows")
+    c.set_defaults(fn=cmd_caso_editar)
 
     c = muta("propuesta", help="stores the proposal and moves the case to decision (from "
                                "clasificado, or from listo when the reply changes); "

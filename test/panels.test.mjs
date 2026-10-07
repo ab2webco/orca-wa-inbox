@@ -5682,6 +5682,21 @@ console.log('\nactivity.html — casos-cli K5: una nota se lee en la historia')
   }
 }
 
+console.log('\nactivity.html — casos-cli K7: una edicion dice que cambio')
+{
+  const caso = tarjeta({ case_id: 7, events: [
+    { de: null, a: 'recibido', actor: 'automatizacion', que: 'message', at: hace(50 * 60000) },
+    { de: 'recibido', a: 'recibido', actor: 'dueno', que: 'edited', args: ['priority', 'title'],
+      at: hace(40 * 60000) }] })
+  for (const [idioma, re] of [['es-419', /editado: prioridad, titulo/],
+    ['en-US', /edited: priority, title/], ['pt-BR', /editado: prioridade, titulo/]]) {
+    const { doc } = await abrirTablero({ board: tablero([caso]) }, idioma)
+    const h = abrirDetalle(doc, 7).querySelector('.det-hist')
+    const filas = [...h.querySelectorAll('li')].map((li) => li.textContent)
+    ok(`${idioma}: la edicion dice que cambio`, filas.some((f) => re.test(f)), JSON.stringify(filas))
+  }
+}
+
 console.log('\nactivity.html — T22: la historia dice que paso, y agrupa lo repetido')
 {
   const caso = tarjeta({ case_id: 4, events: [
