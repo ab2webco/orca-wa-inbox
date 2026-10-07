@@ -109,6 +109,10 @@ cases are created, judged or sent.
       teach when to use each command, never naming an agent. Tests: `scripts/check-harness`.
       Proof: RED 4 files missing the commands and rules; GREEN 93 checks (every flag in the
       docs exists in the real `--help`).
+- [x] K13 (review, blocker) `caso lote --actor dueno` checks the approver key like `caso
+      aprobar --actor dueno` (`trae_llave_aprobador`); without it, or with a wrong one,
+      E_NOT_OWNER. Tests: `scripts/check-casos`. Proof: RED 1/5 (without the key the batch
+      closed both cases); GREEN 5/5 (K9 16/16, K11 9/9 with the key as the plugin passes it).
 
 ## Acceptance criteria
 

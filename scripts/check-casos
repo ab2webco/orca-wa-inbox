@@ -53,11 +53,11 @@ SIN_ORCA = "/nonexistent/orca-no-existe"
 
 
 def firma_como_dueno(args):
-    """`caso aprobar ... --actor dueno`: la firma del dueno, que el worker lanza con la llave
-    del aprobador en el env de ESE proceso (approve-solo-dueno). Cualquier otro actor no la
-    lleva, como en el plugin."""
+    """`caso aprobar ... --actor dueno` (y `caso lote ... --actor dueno`, casos-cli K13): la
+    firma del dueno, que el worker lanza con la llave del aprobador en el env de ESE proceso
+    (approve-solo-dueno). Cualquier otro actor no la lleva, como en el plugin."""
     args = list(args)
-    return args[:2] == ["caso", "aprobar"] and "--actor" in args \
+    return args[:2] in (["caso", "aprobar"], ["caso", "lote"]) and "--actor" in args \
         and args[args.index("--actor") + 1:args.index("--actor") + 2] == ["dueno"]
 
 
@@ -14534,6 +14534,31 @@ if NODE:
            and jsl(home, SEGUNDA, "caso", "ver", str(de_b[0]["case_id"]))[0]["etapa"] != "cerrado",
            f"{r}")
 
+
+
+print("\ncasos-cli K13: caso lote --actor dueno exige la llave del aprobador")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        prepara_otro_chat(home)
+        uno = caso_pedido(home, SOPORTE, "LK1", PERSONA, "no carga el login")
+        dos = caso_pedido(home, SOPORTE, "LK2", PERSONA, "tampoco el registro")
+        etapa = lambda cid: fila_caso(home, cid)["etapa"]  # noqa: E731
+        for nombre, llave in (("sin la llave", ""), ("con una llave que no es la del plugin",
+                                                     "0" * 64)):
+            p = corre(home, "caso", "lote", "cerrar", uno, dos, "--motivo", "x", "--confirmar",
+                      "--actor", "dueno", extra={"WA_INBOX_APPROVER": llave})
+            ok(f"--actor dueno {nombre} no cierra en lote: E_NOT_OWNER",
+               p.returncode == 2 and "E_NOT_OWNER" in p.stderr
+               and etapa(uno) == etapa(dos) == "clasificado", p.stderr or p.stdout)
+            p = corre(home, "caso", "lote", "prioridad", uno, "--valor", "urgent",
+                      "--actor", "dueno", extra={"WA_INBOX_APPROVER": llave})
+            ok(f"ni cambia la prioridad en lote {nombre}: E_NOT_OWNER",
+               p.returncode == 2 and "E_NOT_OWNER" in p.stderr
+               and fila_caso(home, uno)["prioridad"] == "none", p.stderr or p.stdout)
+        r = js(home, "caso", "lote", "cerrar", uno, dos, "--motivo", "resuelto", "--confirmar",
+               "--actor", "dueno")[0]
+        ok("con la llave del plugin, el dueno cierra en lote",
+           r["aplicado"] is True and etapa(uno) == etapa(dos) == "cerrado", f"{r}")
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:

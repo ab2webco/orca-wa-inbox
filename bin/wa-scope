@@ -158,8 +158,9 @@ FIRMANTES_CASO = ("dueno", "regla")
 # E_OWNER: lo que ya decidio el dueno (el proyecto del caso) no lo cambia el agente.
 ERRORES_CASO = ("E_ARGS", "E_NOT_FOUND", "E_STAGE", "E_NOT_APPROVED", "E_VERSION",
                 "E_EXCEPTION", "E_REVISION", "E_BUSY", "E_OWNER", "E_NOT_OWNER")
-# E_NOT_OWNER: `caso aprobar --actor dueno` sin la llave del plugin (approve-solo-dueno). La
-# firma del dueno la lanza el worker con el clic del tablero; un agente no la tiene.
+# E_NOT_OWNER: `caso aprobar --actor dueno` o `caso lote --actor dueno` sin la llave del
+# plugin (approve-solo-dueno). La firma del dueno la lanza el worker con el clic del tablero;
+# un agente no la tiene.
 # Cuanto del porque del agente (`caso proyecto --porque`) queda en la ruta: una frase para
 # la tarjeta, no un informe.
 LARGO_PORQUE = 300
@@ -5480,8 +5481,8 @@ def cmd_caso_listar(con, a):
     return None
 
 
-# Las acciones en lote (casos-cli, K9). Son del dueno: `--actor dueno` (el tablero, el dueno
-# en una terminal) o el agente con `--pedido`, el caso donde lo pidio el dueno o un Super
+# Las acciones en lote (casos-cli, K9). Son del dueno: `--actor dueno` con la llave del
+# plugin (K13) o el agente con `--pedido`, el caso donde lo pidio el dueno o un Super
 # admin de esa conversacion (`caso_pide_como_dueno`). Cerrar muchos no se deshace con un
 # clic: sin `--confirmar` solo dice lo que cambiaria, para que el agente se lo muestre al
 # dueno y espere su si.
@@ -5494,8 +5495,16 @@ FILTROS_LOTE = ("etapa", "abiertos", "chat", "prioridad", "proyecto", "desde",
 def lote_del_dueno(con, a, destructivo=False):
     """Sale con E_NOT_OWNER si el lote no lo pide el dueno. Devuelve el caso del pedido (o
     None con `--actor dueno`). Cerrar en lote es destructivo: un Super admin pide como el
-    dueno salvo lo destructivo (superadmin-ordena), asi que eso es solo del dueno."""
+    dueno salvo lo destructivo (superadmin-ordena), asi que eso es solo del dueno.
+
+    `--actor dueno` es una bandera que cualquiera escribe: como `caso aprobar`, exige la
+    llave del plugin en el env (approve-solo-dueno, casos-cli K13). Sin ella, un agente se
+    saltaba `--pedido`, la regla del Super admin y el si del dueno."""
     if a.actor == "dueno":
+        if not trae_llave_aprobador():
+            caso_falla("E_NOT_OWNER", "only the owner acts as dueno, with the plugin's key; an "
+                                      "agent runs a bulk action with --actor agente --pedido "
+                                      "<the case where the owner asked for it>")
         return None
     if a.actor != "agente" or a.pedido is None:
         caso_falla("E_NOT_OWNER", "bulk actions are the owner's: --actor dueno, or --actor agente "
@@ -13914,7 +13923,8 @@ def main():
 
     c = muta("lote", help="one action on several cases of the line: cerrar, mover, proyecto "
                           "or prioridad, by ids or by listar's filters (at most "
-                          f"{TOPE_LOTE}). Only the owner's: --actor dueno, or --actor agente "
+                          f"{TOPE_LOTE}). Only the owner's: --actor dueno (with the "
+                          "plugin's key), or --actor agente "
                           "with --pedido <the owner's or a Super admin's case where he asked "
                           "for it> (else E_NOT_OWNER; closing only on the owner's own case). "
                           "Closing many is a dry run until --confirmar: show the owner the "
