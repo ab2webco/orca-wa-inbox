@@ -306,6 +306,20 @@ def main() -> int:
         if faltan:
             fallos.append(f"{rel}  no dice {', '.join(faltan)}")
 
+    # Un avance retenido se reescribe UNA vez sin lo marcado, y si la reescritura tambien se
+    # retiene se descarta (avisos-retenidos, A3). Visto en vivo: "a held update is dropped"
+    # hizo que el agente no reescribiera nada y el cliente no recibio ningun mensaje.
+    for rel in ("harness/COMMANDS.md", SKILL_SOPORTE, "prompts/triage.md"):
+        comprobaciones += 1
+        texto = plano((RAIZ / rel).read_text(encoding="utf-8")) if (RAIZ / rel).exists() else ""
+        faltan = [f for f in ("rewrite it once", "flagged claim", "`motivo`", "`hint`",
+                              "held too, drop it") if f.lower() not in texto.lower()]
+        if faltan:
+            fallos.append(f"{rel}  no dice {', '.join(faltan)} (avisos-retenidos)")
+        if re.search(r"held update is dropped", texto, re.IGNORECASE):
+            fallos.append(f"{rel}  sigue diciendo que un avance retenido se descarta sin "
+                          f"reescribirlo (avisos-retenidos)")
+
     # El dueno maneja sus casos por WhatsApp (casos-cli, K12): el agente sabe que comando
     # contesta cada pedido suyo, que cerrar muchos espera su si, y que un cliente nunca
     # maneja ni lee otros casos.

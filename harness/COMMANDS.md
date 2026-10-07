@@ -60,8 +60,10 @@ same review as a reply. In `ack` the plugin sends the fixed acknowledgement; nev
 
     "$WA/wa-scope" caso avance <id> "<text>" --actor agente   # --actor trabajador from a project
 
-It never moves the case, the same text twice sends once, and a held update is dropped (the
-owner never sees it). It answers exit 2 with `E_FIRST_REPLY_MODE`, `E_CHAT_MODE`,
+It never moves the case and the same text twice sends once. A held update is not sent and
+never goes to the owner: it comes back with its `motivo` and a `hint`. Rewrite it once
+without the flagged claim (a held update does not count toward `updates_max`); if the rewrite
+is held too, drop it. It answers exit 2 with `E_FIRST_REPLY_MODE`, `E_CHAT_MODE`,
 `E_STAGE`, `E_EXCEPTION`, `E_PACING` (the last message was less than
 `update_every_minutes` ago) or `E_MAX_UPDATES` (`updates_max` reached): then do not send it.
 

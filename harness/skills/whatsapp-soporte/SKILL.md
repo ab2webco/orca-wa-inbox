@@ -89,8 +89,9 @@ use `caso avance`.
 2. Send an update only at a real moment: you start the work, a real milestone, before a
    long step. Never filler. On `E_PACING` or `E_MAX_UPDATES`, do not send it.
 3. Never repeat a phrasing already sent on the case, never promise a time, a date or a
-   price, never state a status you did not verify. A held update is dropped; it never
-   reaches the owner.
+   price, never state a status you did not verify. A held update never reaches the customer
+   or the owner: it comes back with its `motivo` and a `hint`. Rewrite it once without the
+   flagged claim (it does not count toward `updates_max`); if the rewrite is held too, drop it.
 4. Close with the final reply (your `responder` proposal, or `caso resultado --estado
    resuelto`): say concretely what was fixed and ask the customer to check it.
 

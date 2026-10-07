@@ -4872,7 +4872,10 @@ def envia_resultado(con, case_id):
 # Sale en el acto, como el resultado (`envia_resultado`): con el candado del tick, por
 # `wa-send --send` con su propio id, y con la misma revision que una respuesta (el piso fijo
 # y Jev, en `wa-send`). Lo que la revision frena se descarta: el borrador se retira, queda un
-# evento y el dueno no recibe nada — un avance es opcional. Si no puede salir ya (otro tick
+# evento y el dueno no recibe nada — un avance es opcional. El agente lo sabe por la pista
+# (`hint`) del resultado: reescribirlo UNA vez sin lo marcado, y si la reescritura tambien se
+# retiene, dejarlo (avisos-retenidos A3: visto en vivo, el agente descartaba cada avance
+# retenido y el cliente no recibia nada). Si no puede salir ya (otro tick
 # en curso, la linea caida) queda pendiente y lo manda el tick. El primero no espera; los
 # demas, `update_every_minutes` desde el anterior, y `updates_max` por caso con el primero.
 # Con respaldo, un acuse fijo que ya salio ocupa el lugar del primero.
@@ -5053,7 +5056,9 @@ def instrucciones_primer_mensaje(con, caso, actor):
         f"{pm['update_every_minutes']} minutes at most: E_PACING and E_MAX_UPDATES say when not, "
         "and then you simply do not send it.",
         "- Never repeat a phrasing already sent on the case; never promise a time, a date or a "
-        "price; never state a status you did not verify. A held update is dropped, not sent.",
+        "price; never state a status you did not verify. A held update comes back with its "
+        "`motivo` and a `hint`: rewrite it once without the flagged claim (a rewrite does not "
+        "count toward updates_max); if the rewrite is held too, drop it.",
         "- Close with the final reply (a `responder` proposal, or the project agent's "
         "`caso resultado --estado resuelto`): say concretely what was fixed and ask the customer "
         "to check it.",
@@ -5063,6 +5068,27 @@ def instrucciones_primer_mensaje(con, caso, actor):
                       "case opening, the plugin sent the fixed acknowledgement instead: then "
                       "skip the first message and send only real updates.")
     return lineas
+
+
+# Lo que el agente hace con un avance retenido (avisos-retenidos A3). La reescritura es el avance
+# que sigue a uno retenido: si tambien se retiene, se deja.
+PISTA_REESCRIBE = ("Held: it did not reach the customer, and the owner is not asked. Rewrite it "
+                   "once without the flagged claim (`motivo` names it: no promised date, time or "
+                   "price, no status you did not verify) and send the rewrite with `caso avance`; "
+                   "a held update does not count toward updates_max. If the rewrite is held too, "
+                   "drop it.")
+PISTA_DESCARTA = ("Held again after a rewrite: drop it. Do not rewrite it again or send it another "
+                  "way; go on with the work.")
+
+
+def avance_con_pista(con, cid, n, envio):
+    """El envio de un avance, con su `hint` si quedo retenido."""
+    if envio.get("estado") != "retenido":
+        return envio
+    previo = con.execute("select estado from caso_avance where case_id=? and n<? order by n desc "
+                         "limit 1", (cid, n)).fetchone()
+    pista = PISTA_DESCARTA if previo and previo["estado"] == "retenido" else PISTA_REESCRIBE
+    return dict(envio, hint=pista)
 
 
 def cmd_caso_avance(con, a):
@@ -5080,6 +5106,7 @@ def cmd_caso_avance(con, a):
         ya = dict(ya)
         envio = ({"estado": ya["estado"], "motivo": ya["motivo"], "req_id": ya["req_id"]}
                  if ya["estado"] != "pendiente" else avance_intenta(con, ya))
+        envio = avance_con_pista(con, cid, ya["n"], envio)
         return [dict(caso_fila(con, caso_de(con, cid)), avance=dict(envio, n=ya["n"]))]
     frena = avance_frena(con, caso)
     if frena:
@@ -5104,7 +5131,7 @@ def cmd_caso_avance(con, a):
                 "(?,?,?,?,?,?)", (cid, n, fila["req_id"], texto, a.actor, ahora_caso()))
     caso_tocar(con, caso, a.actor, f"avance {n} {fila['req_id']}")
     con.commit()
-    envio = avance_intenta(con, fila)
+    envio = avance_con_pista(con, cid, n, avance_intenta(con, fila))
     return [dict(caso_fila(con, caso_de(con, cid)), avance=dict(envio, n=n))]
 
 
@@ -13941,10 +13968,11 @@ def main():
                             "customer, without moving the case. Only when the chat's "
                             "first_reply_mode is model or model_with_ack_fallback and the chat "
                             "is responder. Sent at once through the same review as a reply (the "
-                            "fixed floor and Jev); a held update is dropped with a case event and "
-                            "never goes to the owner. Each has its own id (caso-<id>-avance-<n>); "
-                            "the first is not paced, the next wait update_every_minutes, at most "
-                            "updates_max per case. The same text twice sends once. Refusals: "
+                            "fixed floor and Jev); a held update is not sent, leaves a case event, "
+                            "never goes to the owner and comes back with its motivo and a hint: "
+                            "rewrite it once without the flagged claim, drop a held rewrite. "
+                            "Each has its own id (caso-<id>-avance-<n>); the first is not paced, "
+                            "the next wait update_every_minutes, at most updates_max per case. The same text twice sends once. Refusals: "
                             "E_FIRST_REPLY_MODE, E_CHAT_MODE, E_STAGE, E_EXCEPTION, E_PACING, "
                             "E_MAX_UPDATES")
     c.add_argument("id", type=int)

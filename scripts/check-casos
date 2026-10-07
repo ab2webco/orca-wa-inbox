@@ -4691,12 +4691,24 @@ if NODE:
                 ok("y queda dicho en el caso",
                    any("retenido" in ev["detalle"] for ev in
                        js(home, "caso", "ver", str(cid))[0]["eventos"]))
+                # avisos-retenidos A3: lo retenido vuelve con una pista para reescribirlo UNA
+                # vez sin lo marcado; si la reescritura tambien se retiene, se descarta.
+                pista = e.get("hint") or ""
+                ok("el avance retenido trae una pista: reescribirlo una vez sin lo marcado",
+                   "rewrite" in pista and "once" in pista and "motivo" in pista
+                   and "drop" in pista, f"{e}")
+                pm = js(home, "caso", "ver", str(cid))[0].get("primer_mensaje") or {}
+                ok("y lo retenido no ocupa lugar: la reescritura no gasta el tope",
+                   pm.get("updates_sent") == 1, f"{pm}")
                 p = avance(home, cid, "Ya fue escuchado su audio y esta todo resuelto.")
                 e = envio_de_avance(p) or {}
                 ok("lo que Jev frena tampoco sale, y su borrador se retira",
                    p.returncode == 0 and e.get("estado") == "retenido" and not borradores_de(home)
                    and cuenta(home, "select count(*) from agent_action where action='draft'") == 0,
                    f"{p.stdout[-300:]} {envios(home)}")
+                pista = e.get("hint") or ""
+                ok("la reescritura retenida tambien: su pista dice descartarlo, sin otro intento",
+                   "drop" in pista and "do not rewrite" in pista.lower(), f"{e}")
 
                 p = avance(home, cid, SEGUNDO)
                 e = envio_de_avance(p) or {}
@@ -4821,6 +4833,9 @@ with tempfile.TemporaryDirectory() as home:
             ok(f"{nombre} en model pide escribir ya, sin relleno, sin repetir y sin prometer",
                all(f in t for f in ("right away", "never filler", "Never repeat",
                                     "never promise a time, a date or a price")), t[-1500:])
+            ok(f"{nombre} en model pide reescribir una vez lo retenido, y descartar si vuelve",
+               all(f in t for f in ("rewrite it once", "flagged claim", "held too, drop it"))
+               and "dropped, not sent" not in t, t[-1500:])
             ok(f"{nombre} en model pide cerrar diciendo que se arreglo y pidiendo revisarlo",
                "--estado resuelto" in t and "ask the customer to check" in t, t[-1500:])
         for nombre, texto in (("el archivo del caso", archivo_a), ("el brief del proyecto", brief_a)):
