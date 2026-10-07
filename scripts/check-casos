@@ -1637,6 +1637,21 @@ for texto, secreto in (("la clave del panel es Hunter2xx", "Hunter2xx"),
 ok("el texto sin secretos queda igual",
    jev.mask("el pedido 1234567890 sale manana") == "el pedido 1234567890 sale manana")
 
+print("\njev: un acuse o un 'voy a revisar' no es promesa ni estado sin verificar (avisos-retenidos, A5)")
+_qb = jev.preguntas_borrador()
+_fecha = _qb["promises_a_date"]["instructions"]
+_estado = _qb["states_status_not_verified"]["instructions"]
+ok("la fecha pide un momento dicho, y 'we will confirm' ya no es ejemplo de promesa",
+   "stated moment" in _fecha and "we will confirm" not in _fecha, _fecha)
+ok("acusar recibo, decir que lo revisa o que cuenta lo que encuentre no es promesa",
+   "Acknowledging the message" in _fecha and "report back" in _fecha
+   and "is not a promise" in _fecha, _fecha)
+ok("el estado sin verificar es lo arreglado, resuelto o terminado",
+   "fixed, resolved, changed or finished" in _estado, _estado)
+ok("recibirlo, revisarlo ahora o pasarlo a una persona es su propio trabajo, no un estado",
+   "looking into it now" in _estado and "passed to a person" in _estado
+   and "not a status claim" in _estado, _estado)
+
 print("\njev: una llamada por mensaje, y el veredicto con la forma del contrato")
 t = Transporte(jev_dice(asks_owner_to_act=0.8))
 j = jev.juzga_mensaje(dict(MENSAJE, text="la clave es Hunter2xx, revisa"), LLAVE, t)
