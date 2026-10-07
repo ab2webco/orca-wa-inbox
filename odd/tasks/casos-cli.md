@@ -68,8 +68,10 @@ cases are created, judged or sent.
       `test/panels.test.mjs`. Proof: RED `invalid choice: 'nota'`, panels 1618/1624 (the
       note read "updated"); GREEN 10/10, panels 1624/1624. Also in `estado` and in the case
       file the agent reads ("Notes on the case"); the card masks a credential.
-- [ ] K6 `--ahora` on `caso atender` and `caso autorizar`: also launches the case agent like
-      the board (`lanza_agente`, origin `dueno`). Tests: `scripts/check-casos`.
+- [x] K6 `--ahora` on `caso atender` and `caso autorizar`: also launches the case agent like
+      the board (`lanza_agente`, origin `dueno`). Tests: `scripts/check-casos`. Proof: RED
+      `unrecognized arguments: --ahora`; GREEN 5/5 (existing atender/autorizar sections 15/15,
+      16/16).
 - [ ] K7 `caso editar <id> [--titulo] [--prioridad] [--clase]` in any stage, without moving
       or clearing the approval; `caso clasificar` in trabajo/listo/respondido touches instead
       of E_STAGE. Event recorded. Tests: `scripts/check-casos`, `test/panels.test.mjs`.

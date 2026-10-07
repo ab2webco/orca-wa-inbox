@@ -14130,6 +14130,31 @@ with tempfile.TemporaryDirectory() as home:
        "Notes on the case" in archivo and "antes del viernes" in archivo, archivo[-800:])
 
 
+print("\ncasos-cli K6: atender y autorizar --ahora lanzan al agente como el tablero")
+with tempfile.TemporaryDirectory() as home:
+    cid = str(js(home, "caso", "crear", "--chat", CHAT, "--stanza", "AH1",
+                 "--actor", "automatizacion")[0]["case_id"])
+    r = js(home, "caso", "atender", cid, "--actor", "dueno")[0]
+    ok("sin --ahora solo lo marca: no lanza nada",
+       "agent" not in r and cuenta(home, "select count(*) from agente_corrida") == 0, f"{r}")
+    r = js(home, "caso", "atender", cid, "--ahora", "--actor", "dueno")[0]
+    ok("con --ahora lo marca y lanza al agente, con el mismo resultado que agente lanzar",
+       r.get("necesita_agente") == 1 and r.get("agent") == "failed" and r.get("reason") in ("sin-cli", "sin-espacio"),
+       f"{r}")
+    ok("la corrida es del dueno y empieza por este caso",
+       cuenta(home, "select count(*) from agente_corrida where origen='dueno' and case_id=?",
+              int(cid)) == 1)
+    otro = caso_escalado(home, "AH2", ["money"])
+    r = js(home, "caso", "autorizar", otro, "--ahora", "--actor", "dueno")[0]
+    ok("autorizar --ahora tambien", r.get("etapa") == "clasificado" and r.get("agent") == "failed"
+       and cuenta(home, "select count(*) from agente_corrida where origen='dueno'") == 2, f"{r}")
+    en_decision = caso_escalado(home, "AH3", ["money"])
+    p = corre(home, "caso", "atender", en_decision, "--ahora", "--actor", "dueno")
+    ok("lo que atender rechaza (E_STAGE) no lanza nada",
+       p.returncode == 2 and "E_STAGE" in p.stderr
+       and cuenta(home, "select count(*) from agente_corrida") == 2, p.stderr)
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

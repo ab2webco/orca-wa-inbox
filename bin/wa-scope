@@ -3460,7 +3460,18 @@ def cmd_caso_atender(con, a):
     caso_tocar(con, caso, a.actor, DETALLE_ATENDER,
                necesita_agente=1)
     con.commit()
-    return [caso_fila(con, caso_de(con, a.id))]
+    return [lanza_si_ahora(con, a, caso_fila(con, caso_de(con, a.id)))]
+
+
+def lanza_si_ahora(con, a, fila):
+    """Con `--ahora` (casos-cli, K6), lo que hace el boton del tablero despues de marcar el
+    caso: lanza al agente de casos ya (`agente lanzar`), nunca un segundo. La fila dice como
+    le fue (`agent`, y `reason` si fallo); el caso ya quedo marcado y la corrida programada
+    lo toma igual."""
+    if not getattr(a, "ahora", False):
+        return fila
+    r = lanza_agente(con, "dueno", time.time() + AGENTE_PLAZO_DUENO_S)
+    return dict(fila, **r)
 
 
 def cmd_caso_autorizar(con, a):
@@ -3492,7 +3503,7 @@ def cmd_caso_autorizar(con, a):
                excepciones=None, necesita_agente=1, propuesta=None, propuesta_version=None,
                dispensa=json.dumps(dispensa, sort_keys=True))
     con.commit()
-    return [caso_fila(con, caso_de(con, a.id))]
+    return [lanza_si_ahora(con, a, caso_fila(con, caso_de(con, a.id)))]
 
 
 def cmd_caso_proyecto(con, a):
@@ -13119,11 +13130,19 @@ def main():
 
     c = muta("atender", help="the owner asks the agent to handle the case on its next "
                              "run: marks it needs-agent (recibido or clasificado)")
-    c.add_argument("id", type=int); c.set_defaults(fn=cmd_caso_atender)
+    c.add_argument("id", type=int)
+    c.add_argument("--ahora", action="store_true",
+                   help="and launch the case agent now, like the board's Atender ahora "
+                        "(`agente lanzar`): the output says `agent` launched | running | "
+                        "failed | waiting | nothing")
+    c.set_defaults(fn=cmd_caso_atender)
 
     c = muta("autorizar", help="the owner waives the inbound exceptions of a case in decision: "
                                "the agent may draft it (owner only)")
-    c.add_argument("id", type=int); c.set_defaults(fn=cmd_caso_autorizar)
+    c.add_argument("id", type=int)
+    c.add_argument("--ahora", action="store_true",
+                   help="and launch the case agent now, like the board does after Autorizar")
+    c.set_defaults(fn=cmd_caso_autorizar)
 
     c = muta("proyecto", help="sets the case's project from the accepted list, or none "
                               "with --proyecto ''; a content rule no longer changes it")
