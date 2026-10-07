@@ -34,8 +34,8 @@ the board does not have yet (notes, reminders and snooze, bulk actions, every li
   its `account`. Writes never cross lines: a bulk action acts on the active line (or
   `--line`), and an id of another line is reported as not found.
 - Closing a case in `trabajo` stops its project agent: the tick already did it within a
-  minute (`tick_vigila`: terminal closed, dispatch `cancelado`). `caso mover` now does it at
-  once when the Orca CLI is reachable, and otherwise says the next tick will.
+  minute (`tick_vigila`: terminal closed, dispatch `cancelado`). `caso mover` does not wait
+  for Orca (the board gives a `caso` command 20 s); it says the next tick stops it.
 
 ## Scope
 
@@ -77,9 +77,15 @@ cases are created, judged or sent.
       of E_STAGE. Event recorded. Tests: `scripts/check-casos`, `test/panels.test.mjs`.
       Proof: RED `invalid choice: 'editar'`, panels 1624/1627 (an edit read "updated");
       GREEN 9/9, panels 1627/1627 (etapas 20/20, reclasificar 4/4, history 15/15).
-- [ ] K8 `caso retirar <id>`: clears the proposal and its approval, cancels its draft, the
+- [x] K8 `caso retirar <id>`: clears the proposal and its approval, cancels its draft, the
       case goes back to clasificado (decision with a credential); closing a case in trabajo
-      stops its project agent at once or on the next tick. Tests: `scripts/check-casos`.
+      stops its project agent on the next tick. Tests: `scripts/check-casos`. Proof: RED
+      `invalid choice: 'retirar'`; GREEN 9/9 (rancia 11/11, T8 76/76, etapas 20/20).
+      Investigated: `mover ... cerrado` already stopped the project agent, on the next tick
+      (`tick_vigila` closes the terminal and leaves the dispatch `cancelado`; covered by "T8:
+      el despacho al proyecto"). Stopping it inside `mover` was rejected: Orca calls can take
+      longer than the board's 20 s for a `caso` command. `mover` now says so
+      (`despacho.stops: next_tick`).
 - [ ] K9 `caso lote <cerrar|mover|proyecto|prioridad>` over ids or listar filters,
       owner-level only, dry run for closing without `--confirmar`. Tests: `scripts/check-casos`.
 - [ ] K10 `caso recordar <id> --cuando|--hasta [texto] [--al-agente] [--cancelar]`,

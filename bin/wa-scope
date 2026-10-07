@@ -3416,6 +3416,49 @@ def cmd_caso_mover(con, a):
     caso_valida(caso, a.etapa, a.motivo)
     caso_mover(con, caso, a.etapa, a.actor, (a.motivo or "").strip())
     con.commit()
+    fila = caso_fila(con, caso_de(con, a.id))
+    despacho = despacho_que_se_detiene(con, a.id) if a.etapa in ETAPAS_CON_MOTIVO else None
+    return [dict(fila, despacho=despacho) if despacho else fila]
+
+
+def despacho_que_se_detiene(con, case_id):
+    """El agente del proyecto que sigue trabajando en un caso que se acaba de cerrar o
+    bloquear, o None. Lo detiene el tick del minuto siguiente (`tick_vigila`: cierra su
+    terminal y deja el despacho cancelado o bloqueado); `caso mover` no espera a Orca, que
+    puede tardar mas que el boton del tablero (casos-cli, K8)."""
+    f = con.execute(f"select proyecto, estado from caso_despacho where case_id=? and estado in "
+                    f"({','.join('?' * len(DESPACHO_EN_VUELO))}) order by id desc limit 1",
+                    (case_id, *DESPACHO_EN_VUELO)).fetchone()
+    return {"project": f["proyecto"], "state": f["estado"], "stops": "next_tick"} if f else None
+
+
+# Donde hay una propuesta que se puede retirar (casos-cli, K8): la que espera al dueno, el
+# resultado de un trabajo y la de un caso bloqueado. Un trabajo en marcha no se retira: se
+# cierra, y su agente se detiene.
+ETAPAS_RETIRAR = ("decision", "listo", "bloqueado")
+
+
+def cmd_caso_retirar(con, a):
+    """`caso retirar`: la propuesta vigente se va (y su firma, y su borrador en la bandeja),
+    el caso queda. Vuelve a clasificado marcado para el agente, que propone de nuevo; con una
+    credencial se queda en decision, que es del dueno. Lo mismo que hace el motor con una
+    propuesta que un mensaje nuevo deja vieja (`propuesta_invalida`)."""
+    caso_toma(con)
+    caso = caso_de(con, a.id)
+    if caso["etapa"] == "trabajo":
+        caso_falla("E_STAGE", f"case #{a.id} is in trabajo: the approved job is running. Close "
+                              f"it (`caso mover {a.id} cerrado --motivo ...`) and its project "
+                              f"agent stops")
+    if caso["etapa"] not in ETAPAS_RETIRAR or not caso.get("propuesta_version"):
+        caso_falla("E_STAGE", f"case #{a.id} is in {caso['etapa']} with no proposal to withdraw: "
+                              f"only a proposal in {', '.join(ETAPAS_RETIRAR)} can be withdrawn")
+    texto = " ".join((a.motivo or "").split())[:LARGO_MOTIVO]
+    motivo = f"retirada por {a.actor}" + (f": {texto}" if texto else "")
+    credencial = "credential" in _lista_json(caso.get("excepciones"))
+    propuesta_invalida(con, caso, motivo, "decision" if credencial else "clasificado",
+                       actor=a.actor)
+    con.commit()
+    cancela_borradores()
     return [caso_fila(con, caso_de(con, a.id))]
 
 
@@ -6462,7 +6505,7 @@ def caso_retitula(con, case_id, previo, stanza, texto):
 CANCELACIONES = []
 
 
-def propuesta_invalida(con, caso, motivo, hacia="clasificado"):
+def propuesta_invalida(con, caso, motivo, hacia="clasificado", actor="automatizacion"):
     """Una propuesta que ya no vale: queda en la historia (version y tipo, nunca el texto),
     se borra del caso para que ni se apruebe ni se mande, y el caso vuelve a `clasificado`
     marcado para el agente. Devuelve el id de la peticion de su borrador. Sin commit."""
@@ -6477,7 +6520,7 @@ def propuesta_invalida(con, caso, motivo, hacia="clasificado"):
     detalle = (f"{motivo} · propuesta anterior, no enviada: {tipo} {version}"
                if motivo.startswith(REVISIONES)
                else f"propuesta anterior, no enviada ({motivo}): {tipo} {version}")
-    caso_mover(con, caso, hacia, "automatizacion", detalle, **campos)
+    caso_mover(con, caso, hacia, actor, detalle, **campos)
     req = id_envio_caso(caso["case_id"], version)
     CANCELACIONES.append((req, motivo))
     return req
@@ -13171,10 +13214,22 @@ def main():
     c.add_argument("--stanza", help="its first message")
     c.add_argument("--titulo"); c.set_defaults(fn=cmd_caso_crear)
 
-    c = muta("mover", help="moves a case to another stage; only the allowed transitions")
+    c = muta("mover", help="moves a case to another stage; only the allowed transitions. "
+                           "Closing or blocking a case whose project agent is still working "
+                           "adds `despacho` with `stops: next_tick`: the next tick (within a "
+                           "minute) closes that agent's terminal")
     c.add_argument("id", type=int); c.add_argument("etapa", choices=list(ETAPAS_CASO))
     c.add_argument("--motivo", help="why; required to close or block")
     c.set_defaults(fn=cmd_caso_mover)
+
+    c = muta("retirar", help="withdraw the current proposal and keep the case: the proposal, "
+                             "its approval and its held draft go, and the case goes back to "
+                             "clasificado for the agent to propose again (decision if it "
+                             "carries a credential). In decision, listo or bloqueado; a job in "
+                             "trabajo is closed instead (E_STAGE)")
+    c.add_argument("id", type=int)
+    c.add_argument("--motivo", help="why, for the history")
+    c.set_defaults(fn=cmd_caso_retirar)
 
     c = muta("atender", help="the owner asks the agent to handle the case on its next "
                              "run: marks it needs-agent (recibido or clasificado)")

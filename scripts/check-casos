@@ -14201,6 +14201,67 @@ with tempfile.TemporaryDirectory() as home:
     ok("una prioridad que no existe es E_ARGS", p.returncode == 2 and "E_ARGS" in p.stderr)
 
 
+print("\ncasos-cli K8: retirar una propuesta sin perder el caso")
+with tempfile.TemporaryDirectory() as home:
+    cid = caso_clasificado(home, "RT1")
+    v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+           "Ya lo revisamos.", "--actor", "agente")[0]["propuesta_version"]
+    js(home, "caso", "aprobar", cid, "--version", v, "--actor", "dueno")
+    r = js(home, "caso", "retirar", cid, "--motivo", "la respuesta no va", "--actor", "dueno")[0]
+    ok("retirar deja el caso en clasificado sin la propuesta ni la firma, para el agente",
+       r["etapa"] == "clasificado" and r["propuesta"] is None and r["propuesta_version"] is None
+       and r["propuesta_aprobada"] is None and r["necesita_agente"] == 1, f"{r}")
+    ev = js(home, "caso", "ver", cid)[0]["eventos"][-1]
+    ok("el evento lo firma quien lo retiro y guarda la version, nunca el texto",
+       ev["actor"] == "dueno" and ev["de"] == "decision" and v in ev["detalle"]
+       and "Ya lo revisamos" not in ev["detalle"] and "la respuesta no va" in ev["detalle"],
+       f"{ev}")
+    t = tarjeta(home, cid) or {}
+    ok("la tarjeta dice propuesta retirada", (t.get("events") or [{}])[-1].get("que") == "withdrawn",
+       f"{(t.get('events') or [{}])[-1]}")
+    p = corre(home, "caso", "retirar", cid, "--actor", "dueno")
+    ok("sin propuesta no hay nada que retirar: E_STAGE", p.returncode == 2 and "E_STAGE" in p.stderr,
+       p.stderr)
+    trabajo, _ = caso_en_trabajo(home, "RT2")
+    p = corre(home, "caso", "retirar", trabajo, "--actor", "dueno")
+    ok("un trabajo en marcha no se retira (se cierra): E_STAGE",
+       p.returncode == 2 and "E_STAGE" in p.stderr and "cerrado" in p.stderr, p.stderr)
+    js(home, "caso", "resultado", trabajo, "--respuesta", "Ya quedo.", "--resumen", "Se corrigio.",
+       "--actor", "trabajador")
+    r = js(home, "caso", "retirar", trabajo, "--actor", "agente")[0]
+    ok("el resultado en listo tambien se retira, y el caso vuelve al agente",
+       r["etapa"] == "clasificado" and r["propuesta"] is None, f"{r}")
+    con_clave = caso_clasificado(home, "RT3")
+    js(home, "caso", "propuesta", con_clave, "--tipo", "escalar", "--actor", "agente")
+    con = db_de(home)
+    con.execute("update caso set excepciones=? where case_id=?", ('["credential"]', int(con_clave)))
+    con.commit()
+    con.close()
+    r = js(home, "caso", "retirar", con_clave, "--actor", "dueno")[0]
+    ok("con una credencial se queda en decision, sin propuesta: es del dueno",
+       r["etapa"] == "decision" and r["propuesta"] is None, f"{r}")
+
+    # Cerrar un caso en trabajo detiene a su agente: lo hace el tick del minuto siguiente
+    # (`tick_vigila`, probado en "T8: el despacho al proyecto"). `mover` lo dice.
+    vivo, _ = caso_en_trabajo(home, "RT4")
+    con = db_de(home)
+    entrada = con.execute("select max(id) from caso_evento where case_id=? and a='trabajo'",
+                          (int(vivo),)).fetchone()[0]
+    ahora_ = time.strftime("%Y-%m-%d %H:%M:%S")
+    con.execute("insert into caso_despacho (case_id, evento_id, proyecto, estado, terminal, "
+                "created_at, updated_at) values (?, ?, 'Web Demo', 'activo', 'term-demo', ?, ?)",
+                (int(vivo), entrada, ahora_, ahora_))
+    con.commit()
+    con.close()
+    r = js(home, "caso", "mover", vivo, "cerrado", "--motivo", "ya no hace falta",
+           "--actor", "dueno")[0]
+    ok("cerrar un caso con su agente trabajando dice que el tick lo detiene",
+       r["etapa"] == "cerrado" and r.get("despacho") == {"project": "Web Demo", "state": "activo",
+                                                          "stops": "next_tick"}, f"{r}")
+    r = js(home, "caso", "mover", cid, "cerrado", "--motivo", "listo", "--actor", "dueno")[0]
+    ok("sin agente en vuelo no dice nada", "despacho" not in r, f"{r}")
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
