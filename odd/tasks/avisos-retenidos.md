@@ -74,11 +74,11 @@ money, credential or destructive content.
 - [x] A2 fallback acknowledgement when nothing reached the customer (RED → GREEN)
 - [x] A3 held update rewritten once: hint + instructions + harness check (RED → GREEN)
 - [x] A4 fixed floor "hoy"/"esta mañana" only with a promise verb (RED → GREEN)
-- [ ] A5 Jev draft questions + live probe on held texts before/after
-- [ ] A6 chat instructions as their own binding section in both briefs (RED → GREEN)
-- [ ] A7 dispatch brief: use the project's own knowledge first (RED → GREEN)
-- [ ] Reduced shots only if a panel string changes
-- [ ] Release
+- [x] A5 Jev draft questions + live probe on held texts before/after
+- [x] A6 chat instructions as their own binding section in both briefs (RED → GREEN)
+- [x] A7 dispatch brief: use the project's own knowledge first (RED → GREEN)
+- [x] Reduced shots only if a panel string changes
+- [x] Release
 
 ## Acceptance criteria
 
