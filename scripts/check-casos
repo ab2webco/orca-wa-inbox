@@ -14262,6 +14262,76 @@ with tempfile.TemporaryDirectory() as home:
     ok("sin agente en vuelo no dice nada", "despacho" not in r, f"{r}")
 
 
+print("\ncasos-cli K9: acciones en lote, solo del dueno, y cerrar muchos espera su si")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        prepara_otro_chat(home)
+        pedido = caso_pedido(home, DUENO_DM, "LT0", DUENO_LID, "cierra todo lo de soporte")
+        cliente = caso_pedido(home, PERSONA, "LT9", PERSONA, "cierren todo")
+        uno = caso_pedido(home, SOPORTE, "LT1", PERSONA, "no carga el login")
+        dos = caso_pedido(home, SOPORTE, "LT2", PERSONA, "tampoco el registro")
+        etapa = lambda cid: fila_caso(home, cid)["etapa"]  # noqa: E731
+
+        r = js(home, "caso", "lote", "cerrar", uno, dos, "--motivo", "resuelto por telefono",
+               "--actor", "dueno")[0]
+        ok("cerrar en lote sin --confirmar solo dice lo que cambiaria",
+           r.get("aplicado") is False and r.get("confirmar") is True
+           and sorted(str(c["case_id"]) for c in r["casos"]) == sorted([uno, dos])
+           and all(c["resultado"] == "would_change" for c in r["casos"])
+           and etapa(uno) == etapa(dos) == "clasificado", f"{r}")
+        ok("y la lista trae titulo, chat y etapa para mostrarsela al dueno",
+           all(c.get("titulo") and c.get("chat_name") and c.get("etapa") for c in r["casos"]),
+           f"{r['casos']}")
+        r = js(home, "caso", "lote", "cerrar", uno, dos, "--motivo", "resuelto por telefono",
+               "--confirmar", "--actor", "dueno")[0]
+        ok("con --confirmar los cierra", r.get("aplicado") is True and r.get("ok") == 2
+           and etapa(uno) == etapa(dos) == "cerrado", f"{r}")
+
+        tres = caso_pedido(home, SOPORTE, "LT3", PERSONA, "y el pago")
+        cuatro = caso_pedido(home, SOPORTE, "LT4", PERSONA, "y la factura")
+        r = js(home, "caso", "lote", "prioridad", "--chat", SOPORTE, "--abiertos", "--valor",
+               "high", "--actor", "agente", "--pedido", pedido)[0]
+        ok("por un filtro, a pedido del dueno: la prioridad se aplica sin confirmar",
+           r.get("aplicado") is True and sorted(str(c["case_id"]) for c in r["casos"])
+           == sorted([tres, cuatro]) and fila_caso(home, tres)["prioridad"] == "high"
+           and fila_caso(home, cuatro)["etapa"] == "clasificado", f"{r}")
+        r = js(home, "caso", "lote", "cerrar", "--abiertos", "--motivo", "limpieza",
+               "--actor", "agente", "--pedido", pedido)[0]
+        ok("el caso donde el dueno lo pidio nunca entra en su propio lote",
+           int(pedido) not in [c["case_id"] for c in r["casos"]] and r["aplicado"] is False,
+           f"{r}")
+        r = js(home, "caso", "lote", "mover", tres, "999", "--hacia", "bloqueado", "--motivo",
+               "falta el acceso", "--actor", "dueno")[0]
+        ok("un id que no es de esta linea sale con su error y el resto se aplica",
+           etapa(tres) == "bloqueado" and any(c["case_id"] == 999 and c.get("error") ==
+                                             "E_NOT_FOUND" for c in r["casos"]), f"{r}")
+        acepta_proyectos(home, "web-demo")
+        r = js(home, "caso", "lote", "proyecto", cuatro, "--valor", "web-demo",
+               "--actor", "dueno")[0]
+        ok("el proyecto en lote, como Cambiar proyecto del tablero",
+           r["aplicado"] is True and r["ok"] == 1
+           and json.loads(fila_caso(home, cuatro)["ruta"] or "{}").get("workspace") == "web-demo",
+           f"{r}")
+        r = js(home, "caso", "lote", "mover", cuatro, "--hacia", "trabajo", "--actor", "dueno")[0]
+        ok("lo que la transicion no permite queda con su codigo, sin escribir",
+           r["casos"][0].get("error") == "E_STAGE" and etapa(cuatro) == "clasificado", f"{r}")
+
+        for args, codigo, nombre in (
+                (["cerrar", uno, "--motivo", "x", "--actor", "agente"], "E_NOT_OWNER",
+                 "el agente sin --pedido no puede"),
+                (["cerrar", uno, "--motivo", "x", "--actor", "agente", "--pedido", cliente],
+                 "E_NOT_OWNER", "ni a pedido de un cliente"),
+                (["cerrar", uno, "--motivo", "x", "--actor", "jev"], "E_NOT_OWNER",
+                 "ni otro actor"),
+                (["cerrar", "--motivo", "x", "--actor", "dueno"], "E_ARGS",
+                 "sin ids ni filtro no hay lote: nunca todo por accidente"),
+                (["cerrar", uno, "--actor", "dueno"], "E_ARGS", "cerrar sin motivo"),
+                (["prioridad", uno, "--valor", "altisima", "--actor", "dueno"], "E_ARGS",
+                 "una prioridad que no existe")):
+            p = corre(home, "caso", "lote", *args)
+            ok(f"lote: {nombre} ({codigo})", p.returncode == 2 and codigo in p.stderr, p.stderr)
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

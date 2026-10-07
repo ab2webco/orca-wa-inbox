@@ -86,8 +86,10 @@ cases are created, judged or sent.
       el despacho al proyecto"). Stopping it inside `mover` was rejected: Orca calls can take
       longer than the board's 20 s for a `caso` command. `mover` now says so
       (`despacho.stops: next_tick`).
-- [ ] K9 `caso lote <cerrar|mover|proyecto|prioridad>` over ids or listar filters,
+- [x] K9 `caso lote <cerrar|mover|proyecto|prioridad>` over ids or listar filters,
       owner-level only, dry run for closing without `--confirmar`. Tests: `scripts/check-casos`.
+      Proof: RED `invalid choice: 'lote'`; GREEN 14/14 (the requesting case never enters its
+      own batch; a case that fails keeps its code and does not stop the rest).
 - [ ] K10 `caso recordar <id> --cuando|--hasta [texto] [--al-agente] [--cancelar]`,
       `caso recordatorios`, `listar --con-recordatorio`, snooze hidden by default
       (`--pospuestos` shows it); migration; the tick fires due reminders. Tests:

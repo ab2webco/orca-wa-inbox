@@ -5170,6 +5170,130 @@ def cmd_caso_listar(con, a):
     return None
 
 
+# Las acciones en lote (casos-cli, K9). Son del dueno: `--actor dueno` (el tablero, el dueno
+# en una terminal) o el agente con `--pedido`, el caso donde lo pidio el dueno o un Super
+# admin de esa conversacion (`caso_pide_como_dueno`). Cerrar muchos no se deshace con un
+# clic: sin `--confirmar` solo dice lo que cambiaria, para que el agente se lo muestre al
+# dueno y espere su si.
+ACCIONES_LOTE = ("cerrar", "mover", "proyecto", "prioridad")
+TOPE_LOTE = 100
+FILTROS_LOTE = ("etapa", "abiertos", "chat", "prioridad", "proyecto", "desde",
+                "necesita_agente", "buscar")
+
+
+def lote_del_dueno(con, a):
+    """Sale con E_NOT_OWNER si el lote no lo pide el dueno. Devuelve el caso del pedido (o
+    None con `--actor dueno`)."""
+    if a.actor == "dueno":
+        return None
+    if a.actor != "agente" or a.pedido is None:
+        caso_falla("E_NOT_OWNER", "bulk actions are the owner's: --actor dueno, or --actor agente "
+                                  "with --pedido <the case where the owner asked for it>")
+    pedido = caso_de(con, a.pedido)
+    if not caso_pide_como_dueno(con, pedido):
+        caso_falla("E_NOT_OWNER", f"case #{a.pedido} is not the owner's nor a Super admin's: "
+                                  f"a bulk action only runs on their request")
+    return pedido
+
+
+def casos_del_lote(con, a, pedido):
+    """Los casos del lote: los ids, o los que da el filtro de `listar`. Nunca el del pedido."""
+    filtros = [f for f in FILTROS_LOTE if getattr(a, f"filtro_{f}", None)]
+    if a.ids and filtros:
+        caso_falla("E_ARGS", "give case ids or filters, not both")
+    if not a.ids and not filtros:
+        caso_falla("E_ARGS", "a bulk action needs case ids or at least one filter: it never "
+                             "runs on every case")
+    if a.ids:
+        ids = list(dict.fromkeys(a.ids))
+    else:
+        filtro = argparse.Namespace(json=True, completo=False, orden="tablero",
+                                    limite=TOPE_LISTAR,
+                                    **{f: getattr(a, f"filtro_{f}") for f in FILTROS_LOTE})
+        ids = [c["case_id"] for c in cmd_caso_listar(con, filtro)]
+    ids = [i for i in ids if not pedido or i != pedido["case_id"]]
+    if len(ids) > TOPE_LOTE:
+        caso_falla("E_ARGS", f"{len(ids)} cases: a bulk action takes at most {TOPE_LOTE}; "
+                             f"narrow the filters")
+    return ids
+
+
+def paso_del_lote(con, a, case_id, aplicar):
+    """Una accion del lote sobre un caso: valida y, si `aplicar`, escribe. Devuelve lo que
+    paso, con el codigo si no se pudo."""
+    salida = {"case_id": case_id}
+    try:
+        caso = con.execute("select * from caso where case_id=? and account=?",
+                           (case_id, cuenta_activa())).fetchone()
+        if not caso:
+            caso_falla("E_NOT_FOUND", f"no case #{case_id} on this line")
+        caso = dict(caso)
+        nombres, titulos = nombres_y_titulos(con, [caso])
+        salida.update(titulo=titulos[case_id], chat_name=nombres[caso["chat_jid"]],
+                      etapa=caso["etapa"])
+        if a.accion in ("cerrar", "mover"):
+            hacia = "cerrado" if a.accion == "cerrar" else a.hacia
+            salida["hacia"] = hacia
+            if not aplicar:
+                caso_valida(caso, hacia, a.motivo)
+                if caso["etapa"] == "respondido" and hacia == "trabajo":
+                    caso_falla("E_STAGE", "the engine moves it back to trabajo, not a command")
+                salida["resultado"] = "would_change"
+                return salida
+            r = cmd_caso_mover(con, argparse.Namespace(id=case_id, etapa=hacia, motivo=a.motivo,
+                                                       actor=a.actor, json=True))[0]
+            if r.get("despacho"):
+                salida["despacho"] = r["despacho"]
+        elif a.accion == "prioridad":
+            salida["valor"] = a.valor
+            cmd_caso_editar(con, argparse.Namespace(id=case_id, prioridad=a.valor, clase=None,
+                                                    titulo=None, actor=a.actor, json=True))
+        else:
+            salida["valor"] = a.valor
+            cmd_caso_proyecto(con, argparse.Namespace(
+                id=case_id, proyecto=a.valor, actor=a.actor, json=True,
+                porque=f"the owner asked for it in case #{a.pedido}" if a.pedido else None))
+        salida["resultado"] = "changed"
+    except CasoFalla as falla:
+        if con.in_transaction:
+            con.rollback()
+        salida.update(resultado="error", error=falla.error, detail=falla.detail)
+    return salida
+
+
+def cmd_caso_lote(con, a):
+    """`caso lote`: una accion sobre varios casos de la linea activa, uno por uno (lo que
+    uno no permite no frena a los demas). Cerrar es destructivo: sin `--confirmar` no
+    escribe nada y dice que cambiaria."""
+    destructivo = a.accion == "cerrar" or (a.accion == "mover" and a.hacia == "cerrado")
+    if a.accion == "mover" and not a.hacia:
+        caso_falla("E_ARGS", "mover needs --hacia <stage>")
+    if destructivo and not (a.motivo or "").strip():
+        caso_falla("E_ARGS", "closing needs --motivo: every closed card says why")
+    if a.accion == "prioridad" and a.valor not in PRIORIDADES_CASO:
+        caso_falla("E_ARGS", f"--valor is one of {', '.join(PRIORIDADES_CASO)}")
+    if a.accion == "proyecto" and a.valor is None:
+        caso_falla("E_ARGS", "proyecto needs --valor <project id>, or '' for none")
+    pedido = lote_del_dueno(con, a)
+    ids = casos_del_lote(con, a, pedido)
+    aplicar = not destructivo or a.confirmar
+    casos = [paso_del_lote(con, a, i, aplicar) for i in ids]
+    r = {"accion": a.accion, "aplicado": aplicar, "confirmar": destructivo and not a.confirmar,
+         "total": len(casos), "ok": sum(1 for c in casos if c["resultado"] != "error"),
+         "fallidos": sum(1 for c in casos if c["resultado"] == "error"), "casos": casos}
+    if a.json:
+        return [r]
+    cabeza = (f"{r['ok']} of {r['total']} cases would change: run it again with --confirmar "
+              f"after the owner says yes" if r["confirmar"]
+              else f"{r['ok']} of {r['total']} cases changed")
+    print(cabeza)
+    for c in casos:
+        print(f"#{c['case_id']} [{c.get('etapa') or '-'}] {c.get('titulo') or ''} · "
+              f"{c.get('chat_name') or ''} -> {c.get('hacia') or c.get('valor') or ''}"
+              + (f" · {c['error']}" if c.get("error") else ""))
+    return None
+
+
 def cmd_caso_buscar(con, a):
     """`caso buscar <texto>`: `caso listar --buscar`, como el buscador del tablero."""
     if not plano(a.texto.strip()).lstrip("#").strip():
@@ -13404,6 +13528,38 @@ def main():
                    help="like the board's search: the case number (with or without #), or "
                         "a piece of its title or of its chat's name; accents and case ignored")
     c.set_defaults(fn=cmd_caso_listar)
+
+    c = muta("lote", help="one action on several cases of the line: cerrar, mover, proyecto "
+                          "or prioridad, by ids or by listar's filters (at most "
+                          f"{TOPE_LOTE}). Only the owner's: --actor dueno, or --actor agente "
+                          "with --pedido <the owner's or a Super admin's case where he asked "
+                          "for it> (else E_NOT_OWNER). Closing many is a dry run until "
+                          "--confirmar: show the owner the list and wait for his yes")
+    c.add_argument("accion", choices=list(ACCIONES_LOTE))
+    c.add_argument("ids", nargs="*", type=int, help="the case ids; or use the filters")
+    c.add_argument("--hacia", choices=list(ETAPAS_CASO), help="mover: the stage to move to")
+    c.add_argument("--valor", help="prioridad: the priority; proyecto: the project id ('' none)")
+    c.add_argument("--motivo", help="why; required to close or block")
+    c.add_argument("--confirmar", action="store_true",
+                   help="apply a close; without it the output only says what would change")
+    c.add_argument("--pedido", type=int, metavar="CASE",
+                   help="the case where the owner (or a Super admin) asked for this")
+    c.add_argument("--etapa", dest="filtro_etapa", action="append", metavar="STAGE",
+                   help="filter like listar --etapa")
+    c.add_argument("--abiertos", dest="filtro_abiertos", action="store_true",
+                   help="filter: the open cases")
+    c.add_argument("--chat", dest="filtro_chat", help="filter: this conversation")
+    c.add_argument("--prioridad", dest="filtro_prioridad", action="append", metavar="PRIORITY",
+                   help="filter: these priorities")
+    c.add_argument("--proyecto", dest="filtro_proyecto", metavar="PROJECT",
+                   help="filter: this project")
+    c.add_argument("--desde", dest="filtro_desde", metavar="WHEN",
+                   help="filter: moved since (today, 7d, 30d or a date)")
+    c.add_argument("--necesita-agente", dest="filtro_necesita_agente", action="store_true",
+                   help="filter: waiting for the agent")
+    c.add_argument("--buscar", dest="filtro_buscar", metavar="TEXT",
+                   help="filter: like caso buscar")
+    c.set_defaults(fn=cmd_caso_lote)
 
     c = caso("buscar", help="find cases like the board's search: by number (12 or #12), a "
                             "word of the title or the chat's name, accents and case ignored. "
