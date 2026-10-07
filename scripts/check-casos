@@ -14664,6 +14664,38 @@ if NODE:
         ok("cerrar en lote: el motivo y el pedido", ev["actor"] == "agente" and ev["a"] == "cerrado"
            and "resuelto por telefono" in ev["detalle"] and marca in ev["detalle"], f"{ev}")
 
+
+print("\ncasos-cli K16: retirar el resultado de un trabajo no pierde su texto")
+with tempfile.TemporaryDirectory() as home:
+    trabajo, _ = caso_en_trabajo(home, "RW1")
+    js(home, "caso", "resultado", trabajo, "--respuesta",
+       "Ya quedo el acceso nuevo. password: Fake12345", "--resumen", "Se creo el acceso.",
+       "--actor", "trabajador")
+    ok("el resultado esta en listo", fila_caso(home, trabajo)["etapa"] == "listo",
+       f"{fila_caso(home, trabajo)['etapa']}")
+    js(home, "caso", "retirar", trabajo, "--motivo", "no lo mandes asi", "--actor", "dueno")
+    ev = js(home, "caso", "ver", trabajo)[0]["eventos"][-1]
+    ok("el evento guarda el texto retirado del resultado, con la clave enmascarada",
+       "Ya quedo el acceso nuevo" in ev["detalle"] and "Fake12345" not in ev["detalle"]
+       and "no lo mandes asi" in ev["detalle"], f"{ev}")
+    est = js(home, "caso", "estado", trabajo)[0]
+    h = (est.get("history") or [{}])[-1]
+    ok("caso estado lo muestra en la historia, enmascarado",
+       h.get("que") == "withdrawn" and "Ya quedo el acceso nuevo" in (h.get("retirado") or "")
+       and "Ya quedo el acceso nuevo" in h.get("text", "") and "Fake12345" not in json.dumps(est),
+       f"{h}")
+    t = tarjeta(home, trabajo) or {}
+    ok("la tarjeta sigue diciendo propuesta retirada, sin el texto",
+       (t.get("events") or [{}])[-1].get("que") == "withdrawn"
+       and "Ya quedo" not in json.dumps(t.get("events")), f"{(t.get('events') or [{}])[-1]}")
+    decide_ = caso_clasificado(home, "RW2")
+    js(home, "caso", "propuesta", decide_, "--tipo", "responder", "--respuesta",
+       "Lo revisamos hoy.", "--actor", "agente")
+    js(home, "caso", "retirar", decide_, "--actor", "dueno")
+    ev = js(home, "caso", "ver", decide_)[0]["eventos"][-1]
+    ok("una propuesta en decision sigue sin texto en el evento: el agente la rehace",
+       "Lo revisamos hoy" not in ev["detalle"], f"{ev}")
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

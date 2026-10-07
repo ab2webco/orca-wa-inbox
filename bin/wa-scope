@@ -3475,6 +3475,11 @@ def despacho_que_se_detiene(con, case_id):
 # resultado de un trabajo y la de un caso bloqueado. Un trabajo en marcha no se retira: se
 # cierra, y su agente se detiene.
 ETAPAS_RETIRAR = ("decision", "listo", "bloqueado")
+# El resultado de un trabajo (listo) que se retira no se puede rehacer: el agente del proyecto
+# ya termino. Su texto queda en el evento (casos-cli, K16), enmascarado y en una linea, y
+# `caso estado` lo muestra. Una propuesta del agente sigue sin texto: la vuelve a escribir.
+MARCA_RETIRADO = " · texto retirado: "
+LARGO_RETIRADO = 2000
 
 
 def cmd_caso_retirar(con, a):
@@ -3494,8 +3499,12 @@ def cmd_caso_retirar(con, a):
     texto = " ".join((a.motivo or "").split())[:LARGO_MOTIVO]
     motivo = f"retirada por {a.actor}" + (f": {texto}" if texto else "")
     credencial = "credential" in _lista_json(caso.get("excepciones"))
+    retirado = None
+    if caso["etapa"] == "listo":
+        propuesta = json.loads(caso["propuesta"] or "{}")
+        retirado = propuesta.get("respuesta") or propuesta.get("instrucciones")
     propuesta_invalida(con, caso, motivo, "decision" if credencial else "clasificado",
-                       actor=a.actor)
+                       actor=a.actor, texto=retirado)
     con.commit()
     cancela_borradores()
     return [caso_fila(con, caso_de(con, a.id))]
@@ -5905,6 +5914,8 @@ def texto_de_historia(e):
         que = f"{que}: {', '.join(e['args'])}"
     if e.get("nota"):
         que = f"note: {e['nota']}"
+    if e.get("retirado"):
+        que = f"{que}: {e['retirado']}"
     if not que:
         que = "created" if e["de"] is None else "updated"
     return f"{etapas} · {que} · by {e['actor']}"
@@ -5971,6 +5982,8 @@ def cmd_caso_estado(con, a):
     tarjeta["history"] = [dict({"at": iso_caso(e["at"]), "de": e["de"], "a": e["a"],
                                 "actor": e["actor"], "que": e.get("que"),
                                 "args": e.get("args") or []},
+                               # El resultado retirado de un trabajo (K16), enmascarado.
+                               **({"retirado": e["retirado"]} if e.get("retirado") else {}),
                                text=texto_de_historia(e))
                           for e in datos["events"].get(a.id, [])]
     tarjeta["en_palabras"] = en_palabras(tarjeta)
@@ -7045,10 +7058,12 @@ def caso_retitula(con, case_id, previo, stanza, texto):
 CANCELACIONES = []
 
 
-def propuesta_invalida(con, caso, motivo, hacia="clasificado", actor="automatizacion"):
-    """Una propuesta que ya no vale: queda en la historia (version y tipo, nunca el texto),
-    se borra del caso para que ni se apruebe ni se mande, y el caso vuelve a `clasificado`
-    marcado para el agente. Devuelve el id de la peticion de su borrador. Sin commit."""
+def propuesta_invalida(con, caso, motivo, hacia="clasificado", actor="automatizacion",
+                       texto=None):
+    """Una propuesta que ya no vale: queda en la historia (version y tipo; el texto solo si
+    llega `texto`, el resultado de un trabajo que se retira, K16, y enmascarado), se borra
+    del caso para que ni se apruebe ni se mande, y el caso vuelve a `clasificado` marcado
+    para el agente. Devuelve el id de la peticion de su borrador. Sin commit."""
     version = caso["propuesta_version"]
     try:
         tipo = json.loads(caso["propuesta"]).get("tipo") or "-"
@@ -7060,6 +7075,8 @@ def propuesta_invalida(con, caso, motivo, hacia="clasificado", actor="automatiza
     detalle = (f"{motivo} · propuesta anterior, no enviada: {tipo} {version}"
                if motivo.startswith(REVISIONES)
                else f"propuesta anterior, no enviada ({motivo}): {tipo} {version}")
+    if texto and texto.strip():
+        detalle += MARCA_RETIRADO + recorta(wa_jev.mask(texto), LARGO_RETIRADO)
     caso_mover(con, caso, hacia, actor, detalle, **campos)
     req = id_envio_caso(caso["case_id"], version)
     CANCELACIONES.append((req, motivo))
@@ -8087,7 +8104,8 @@ def _codigos(texto):
 def que_del_evento(detalle, medios=None):
     """(codigo, [argumentos]) de un detalle de `caso_evento`, o (None, []) si no se sabe
     decir: el panel entonces muestra "actualizado", como antes."""
-    d = detalle.strip()
+    # El texto retirado (K16) es de otro: no decide que fue el evento.
+    d = detalle.split(MARCA_RETIRADO, 1)[0].strip()
     if d.startswith(PREFIJO_NOTA):
         return "note", []
     if d.startswith(PREFIJO_RECORDATORIO):
@@ -8329,6 +8347,8 @@ def tarjetas_de(con, casos, tope_eventos=EVENTOS_EN_TARJETA):
             e["que"], e["args"] = que_del_evento(e.get("detalle") or "", medios)
             if e["que"] == "note":
                 e["nota"] = e["detalle"].strip()[len(PREFIJO_NOTA):]
+            elif e["que"] == "withdrawn" and MARCA_RETIRADO in (e.get("detalle") or ""):
+                e["retirado"] = e["detalle"].split(MARCA_RETIRADO, 1)[1].strip()
     esperan = casos_para_agente(con)
     despachos = {}
     con_despacho = [c["case_id"] for c in casos if c["etapa"] in ETAPAS_CON_DESPACHO]

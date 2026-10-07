@@ -131,6 +131,13 @@ cases are created, judged or sent.
       still read as an edit of the priority by the card), project (its `porque`). Tests:
       `scripts/check-casos`. Proof: RED 1/5 (no event named the request); GREEN 5/5 (K7 9/9,
       K9 16/16, K11, K13, K14 green).
+- [x] K16 (review) `caso retirar` on a case in `listo` keeps the worker's result text: the
+      withdrawn event carries it after ` · texto retirado: `, masked with `wa_jev.mask` and on
+      one line (at most 2000 characters); `caso estado` shows it in its history (`retirado`,
+      and in `text`). The board's history still says only "proposal withdrawn" (no text in
+      the card), and a proposal withdrawn in decision keeps no text (the agent rewrites it).
+      Tests: `scripts/check-casos`. Proof: RED 3/5 (the event and the history had no text);
+      GREEN 5/5 (K3 10/10, K5 10/10, K8 9/9, board history section green).
 
 ## Acceptance criteria
 
