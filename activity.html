@@ -1091,7 +1091,7 @@
               "histProposal": "propuesta: {que}", "histApproved": "aprobada",
               "histSent": "enviado", "histRoute": "destino del caso",
               "histProject": "proyecto cambiado", "histClassified": "clasificado: {que}",
-              "histRetitled": "titulo nuevo", "histWithdrawn": "propuesta retirada",
+              "histRetitled": "titulo nuevo", "histWithdrawn": "propuesta retirada", "histNote": "nota: {que}",
               "histAuthorized": "excepciones autorizadas", "histAttend": "atender ahora",
               "motSecret": "un secreto", "motJevDown": "Jev no contesto",
               "motDelete": "borrar", "motDeploy": "desplegar a produccion",
@@ -1442,7 +1442,7 @@
               "histProposal": "proposal: {que}", "histApproved": "approved",
               "histSent": "sent", "histRoute": "case destination",
               "histProject": "project changed", "histClassified": "classified: {que}",
-              "histRetitled": "new title", "histWithdrawn": "proposal withdrawn",
+              "histRetitled": "new title", "histWithdrawn": "proposal withdrawn", "histNote": "note: {que}",
               "histAuthorized": "exceptions authorized", "histAttend": "handle now",
               "motSecret": "a secret", "motJevDown": "Jev did not answer",
               "motDelete": "deleting", "motDeploy": "deploying to production",
@@ -1793,7 +1793,7 @@
               "histProposal": "proposta: {que}", "histApproved": "aprovada",
               "histSent": "enviado", "histRoute": "destino do caso",
               "histProject": "projeto alterado", "histClassified": "classificado: {que}",
-              "histRetitled": "titulo novo", "histWithdrawn": "proposta retirada",
+              "histRetitled": "titulo novo", "histWithdrawn": "proposta retirada", "histNote": "nota: {que}",
               "histAuthorized": "excecoes autorizadas", "histAttend": "atender agora",
               "motSecret": "um segredo", "motJevDown": "o Jev nao respondeu",
               "motDelete": "apagar", "motDeploy": "publicar em producao",
@@ -2241,7 +2241,7 @@
         route: 'histRoute', project: 'histProject', classified: 'histClassified',
         retitled: 'histRetitled', withdrawn: 'histWithdrawn', authorized: 'histAuthorized',
         attend: 'histAttend', project_question: 'histProjectQuestion',
-        project_answer: 'histProjectAnswer' }
+        project_answer: 'histProjectAnswer', note: 'histNote' }
       // Los motivos y excepciones que viajan en `args`, en palabras.
       var MOTIVO_KEY = { money: 'excMoney', credential: 'excCredential',
         commitment: 'excCommitment', jev: 'excJev', secret: 'motSecret',
@@ -2265,6 +2265,11 @@
         var args = Array.isArray(ev.args) ? ev.args.filter(function (x) { return typeof x === 'string' }) : []
         // El proyecto que eligio el agente trae `[id, "agent"]`; el del dueno, nada.
         if (ev.que === 'project' && args.indexOf('agent') >= 0) return t('histProjectAgent')
+        // Una nota del dueno o del agente (casos-cli, K5): su texto, que ya viene enmascarado.
+        if (ev.que === 'note') {
+          return typeof ev.nota === 'string' && ev.nota.trim()
+            ? t(key).replace('{que}', ev.nota.trim()) : t(key).replace(/:?\s*\{que\}/, '')
+        }
         var detalle = frases(MOTIVO_KEY, args, t('excOther'))
         return detalle ? t(key).replace('{que}', detalle) : t(key).replace(/:?\s*\{que\}/, '')
       }

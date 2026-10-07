@@ -5662,6 +5662,26 @@ console.log('\nactivity.html — T14: la historia dice lo que paso por WhatsApp'
   }
 }
 
+console.log('\nactivity.html — casos-cli K5: una nota se lee en la historia')
+{
+  const caso = tarjeta({ case_id: 6, events: [
+    { de: null, a: 'recibido', actor: 'automatizacion', que: 'message', at: hace(50 * 60000) },
+    { de: 'recibido', a: 'recibido', actor: 'dueno', que: 'note',
+      nota: 'El cliente llamo: lo quiere antes del viernes', at: hace(40 * 60000) },
+    { de: 'recibido', a: 'recibido', actor: 'agente', que: 'note', at: hace(30 * 60000) }] })
+  for (const [idioma, re] of [['es-419', /nota: El cliente llamo: lo quiere antes del viernes/],
+    ['en-US', /note: El cliente llamo: lo quiere antes del viernes/],
+    ['pt-BR', /nota: El cliente llamo: lo quiere antes del viernes/]]) {
+    const { doc } = await abrirTablero({ board: tablero([caso]) }, idioma)
+    const h = abrirDetalle(doc, 6).querySelector('.det-hist')
+    const filas = [...h.querySelectorAll('li')].map((li) => li.textContent)
+    ok(`${idioma}: la nota se lee con su texto`, filas.some((f) => re.test(f)), JSON.stringify(filas))
+    ok(`${idioma}: una nota sin texto dice nota, nunca el codigo crudo`,
+      /nota|note/.test(filas[filas.length - 1]) && !/"note"|\bnote\b:\s*$/.test(filas[filas.length - 1]),
+      filas[filas.length - 1])
+  }
+}
+
 console.log('\nactivity.html — T22: la historia dice que paso, y agrupa lo repetido')
 {
   const caso = tarjeta({ case_id: 4, events: [

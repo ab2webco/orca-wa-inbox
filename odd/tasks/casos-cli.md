@@ -63,9 +63,11 @@ cases are created, judged or sent.
       reply and resolution times vs the target, SLA, from `build_reports`.
       Tests: `scripts/check-casos`. Proof: RED `invalid choice: 'informe'`; GREEN 7/7 (the
       board's reports section 262/262).
-- [ ] K5 `caso nota <id> <texto>`: an event in any stage, no move, no approval change; shown
+- [x] K5 `caso nota <id> <texto>`: an event in any stage, no move, no approval change; shown
       in `ver` (`notas`) and in the board history. Tests: `scripts/check-casos`,
-      `test/panels.test.mjs`.
+      `test/panels.test.mjs`. Proof: RED `invalid choice: 'nota'`, panels 1618/1624 (the
+      note read "updated"); GREEN 10/10, panels 1624/1624. Also in `estado` and in the case
+      file the agent reads ("Notes on the case"); the card masks a credential.
 - [ ] K6 `--ahora` on `caso atender` and `caso autorizar`: also launches the case agent like
       the board (`lanza_agente`, origin `dueno`). Tests: `scripts/check-casos`.
 - [ ] K7 `caso editar <id> [--titulo] [--prioridad] [--clase]` in any stage, without moving

@@ -14076,6 +14076,60 @@ if NODE:
            and len(texto.strip().splitlines()) <= 10, texto)
 
 
+print("\ncasos-cli K5: una nota en el caso, sin moverlo")
+with tempfile.TemporaryDirectory() as home:
+    cid = caso_clasificado(home, "NT1")
+    v = js(home, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta",
+           "Ya lo revisamos.", "--actor", "agente")[0]["propuesta_version"]
+    js(home, "caso", "aprobar", cid, "--version", v, "--actor", "dueno")
+    antes = fila_caso(home, cid)
+    r = js(home, "caso", "nota", cid, "El cliente llamo: lo quiere antes del viernes",
+           "--actor", "dueno")[0]
+    despues = fila_caso(home, cid)
+    ok("la nota no mueve el caso ni le quita la firma",
+       despues["etapa"] == antes["etapa"] == "decision"
+       and despues["propuesta_aprobada"] == antes["propuesta_aprobada"] == v
+       and r.get("aprobada") is True, f"{dict(despues)}")
+    ok("ni cambia su ultima actualizacion (la ventana de agrupacion sigue igual)",
+       despues["updated_at"] == antes["updated_at"])
+    ev = js(home, "caso", "ver", cid)[0]
+    ok("ver trae las notas, con quien y cuando",
+       ev.get("notas") and ev["notas"][-1]["texto"] == "El cliente llamo: lo quiere antes del viernes"
+       and ev["notas"][-1]["actor"] == "dueno" and ev["notas"][-1]["at"], f"{ev.get('notas')}")
+    ok("y deja su evento sin cambio de etapa", ev["eventos"][-1]["de"] == ev["eventos"][-1]["a"]
+       == "decision", f"{ev['eventos'][-1]}")
+    js(home, "caso", "nota", cid, "password: Hunter2xyz!", "--actor", "agente")
+    t = tarjeta(home, cid) or {}
+    notas = [e for e in t.get("events", []) if e.get("que") == "note"]
+    ok("la tarjeta lleva la nota en su historia",
+       len(notas) == 2 and notas[0].get("nota") == "El cliente llamo: lo quiere antes del viernes",
+       f"{t.get('events')}")
+    ok("con una credencial enmascarada", "Hunter2xyz" not in json.dumps(t)
+       and "REDACTED" in (notas[-1].get("nota") or ""), f"{notas}")
+    hist = js(home, "caso", "estado", cid)[0]["history"]
+    ok("estado dice la nota en palabras", any("note" in h["text"] and "viernes" in h["text"]
+                                              for h in hist), f"{hist}")
+    p = corre(home, "caso", "nota", cid, "   ", "--actor", "dueno")
+    ok("una nota vacia es E_ARGS", p.returncode == 2 and "E_ARGS" in p.stderr, p.stderr)
+    js(home, "caso", "mover", cid, "cerrado", "--motivo", "listo", "--actor", "dueno")
+    ok("tambien en un caso cerrado, que sigue cerrado",
+       js(home, "caso", "nota", cid, "Se cerro por telefono", "--actor", "dueno")[0]["etapa"]
+       == "cerrado")
+    antes_env = dict(os.environ)
+    try:
+        ws = carga_wa_scope(home)
+        con = ws.db()
+        try:
+            archivo = ws.archivo_de_caso(con, ws.caso_de(con, int(cid)))
+        finally:
+            con.close()
+    finally:
+        os.environ.clear()
+        os.environ.update(antes_env)
+    ok("el archivo del caso que lee el agente trae las notas",
+       "Notes on the case" in archivo and "antes del viernes" in archivo, archivo[-800:])
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

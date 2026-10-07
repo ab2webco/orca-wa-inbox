@@ -3419,6 +3419,35 @@ def cmd_caso_mover(con, a):
     return [caso_fila(con, caso_de(con, a.id))]
 
 
+# Una nota (casos-cli, K5): lo que el dueno o el agente dejan dicho en el caso. Es un evento
+# sin cambio de etapa y NO toca `updated_at`: no reabre la ventana de agrupacion ni cuenta
+# como movimiento. El texto entero vive en el evento; la tarjeta lo lleva recortado y con
+# las credenciales enmascaradas.
+PREFIJO_NOTA = "nota: "
+LARGO_NOTA = 1000
+LARGO_NOTA_TARJETA = 300
+
+
+def cmd_caso_nota(con, a):
+    texto = " ".join(texto_caso(a.texto or "").split())
+    if not texto:
+        caso_falla("E_ARGS", "the note is empty")
+    if len(texto) > LARGO_NOTA:
+        caso_falla("E_ARGS", f"the note is longer than {LARGO_NOTA} characters")
+    caso_toma(con)
+    caso = caso_de(con, a.id)
+    caso_evento(con, caso["case_id"], caso["etapa"], caso["etapa"], a.actor,
+                PREFIJO_NOTA + texto)
+    con.commit()
+    return [caso_fila(con, caso_de(con, a.id))]
+
+
+def notas_de(eventos):
+    """Las notas de un caso, de la mas vieja a la mas nueva: [{at, actor, texto}]."""
+    return [{"at": e["at"], "actor": e["actor"], "texto": e["detalle"][len(PREFIJO_NOTA):]}
+            for e in eventos if (e.get("detalle") or "").startswith(PREFIJO_NOTA)]
+
+
 def cmd_caso_atender(con, a):
     """El dueno pide que el agente atienda este caso en su proxima corrida (lo que era
     "Tomar" en la bandeja): lo marca `necesita_agente`, que es lo que mira
@@ -5203,6 +5232,7 @@ def cmd_caso_ver(con, a):
     revision = revision_pendiente(caso["etapa"], caso["eventos"])
     if revision:
         caso["revision"] = revision
+    caso["notas"] = notas_de(caso["eventos"])
     caso["primer_mensaje"] = estado_primer_mensaje(con, caso)
     return [caso]
 
@@ -5239,6 +5269,8 @@ def texto_de_historia(e):
     que = HISTORIA_EN.get(e.get("que") or "")
     if que and e.get("args"):
         que = f"{que}: {', '.join(e['args'])}"
+    if e.get("nota"):
+        que = f"note: {e['nota']}"
     if not que:
         que = "created" if e["de"] is None else "updated"
     return f"{etapas} · {que} · by {e['actor']}"
@@ -7391,7 +7423,10 @@ def tarjeta_de(caso, nombres, titulos, motivos, eventos=None, sin_agente=None,
         "events": [dict({"de": e["de"], "a": e["a"], "actor": e["actor"],
                          "at": iso_caso(e["at"])},
                         **({"que": e["que"]} if e.get("que") else {}),
-                        **({"args": e["args"]} if e.get("args") else {}))
+                        **({"args": e["args"]} if e.get("args") else {}),
+                        # Una nota del dueno o del agente: su texto, enmascarado y corto.
+                        **({"nota": recorta(wa_jev.mask(e["nota"]), LARGO_NOTA_TARJETA)}
+                           if e.get("nota") else {}))
                    for e in (eventos or {}).get(caso["case_id"], [])],
     }
 
@@ -7414,6 +7449,8 @@ def que_del_evento(detalle, medios=None):
     """(codigo, [argumentos]) de un detalle de `caso_evento`, o (None, []) si no se sabe
     decir: el panel entonces muestra "actualizado", como antes."""
     d = detalle.strip()
+    if d.startswith(PREFIJO_NOTA):
+        return "note", []
     m = RE_EV_MENSAJE.match(d)
     if m:
         tipo = (medios or {}).get(m.group(1))
@@ -7640,6 +7677,8 @@ def tarjetas_de(con, casos, tope_eventos=EVENTOS_EN_TARJETA):
     for lista in eventos.values():
         for e in lista:
             e["que"], e["args"] = que_del_evento(e.get("detalle") or "", medios)
+            if e["que"] == "note":
+                e["nota"] = e["detalle"].strip()[len(PREFIJO_NOTA):]
     esperan = casos_para_agente(con)
     despachos = {}
     con_despacho = [c["case_id"] for c in casos if c["etapa"] in ETAPAS_CON_DESPACHO]
@@ -11736,6 +11775,10 @@ def historia_del_caso(con, caso):
         lineas += ["", "## The owner's corrections (follow the newest one in the new proposal)"]
         lineas += [f"- [{e['at']}] {e['detalle'].strip().removeprefix(CORRECCION_WHATSAPP).strip()}"
                    for e in notas[-3:]]
+    escritas = notas_de(eventos)
+    if escritas:
+        lineas += ["", "## Notes on the case (from the owner or the agent; not the customer's words)"]
+        lineas += [f"- [{n['at']}] {n['actor']}: {n['texto']}" for n in escritas[-5:]]
     frenos = [e for e in eventos if (e["detalle"] or "").startswith(REVISIONES)
               or FRENO.search(e["detalle"] or "")
               or "propuesta anterior, no enviada" in (e["detalle"] or "")]
@@ -13243,6 +13286,13 @@ def main():
                               "propuesta --chat`; several: ask the owner which; none: say so "
                               "and ask which chat. A customer's case: E_DEST_ROLE")
     c.add_argument("id", type=int); c.set_defaults(fn=cmd_caso_destinos)
+
+    c = muta("nota", help="a note on the case (what the owner said, a phone call, a reminder "
+                          "of context): an event in any stage that does not move the case, "
+                          "does not touch its approval and is shown in `ver`, `estado`, the "
+                          "case file and the board's history")
+    c.add_argument("id", type=int); c.add_argument("texto")
+    c.set_defaults(fn=cmd_caso_nota)
 
     c = caso("estado", help="how a case is going, in words: what its board card computes "
                             "(stage and since when, the owner's next actions, the project "
