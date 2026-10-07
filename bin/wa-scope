@@ -4858,6 +4858,40 @@ def caso_suma_mensaje(con, caso, stanza, actor, reabre=True):
         caso_tocar(con, caso, actor, f"mensaje {stanza}")
 
 
+def plano(texto):
+    """Sin tildes ni mayusculas, como el buscador del tablero (`plano` en activity.html):
+    "renovacion" encuentra "Renovación"."""
+    descompuesto = unicodedata.normalize("NFD", str(texto if texto is not None else ""))
+    return "".join(c for c in descompuesto if not "\u0300" <= c <= "\u036f").lower()
+
+
+def coincide_busqueda(case_id, titulo, chat, q):
+    """Si un caso entra en la busqueda `q` (ya `plano`): por su numero, con o sin #, o por
+    un pedazo de su titulo o del nombre de su chat. Es `coincide` del tablero."""
+    limpio = q[1:] if q.startswith("#") else q
+    if not limpio:
+        return True
+    if re.fullmatch(r"[0-9]+", limpio) and str(case_id) == limpio:
+        return True
+    return limpio in plano(titulo) or limpio in plano(chat)
+
+
+def nombres_y_titulos(con, casos):
+    """({jid: nombre del chat}, {case_id: titulo}) como los muestra la tarjeta: el titulo
+    del caso, o el primer mensaje con texto, o el nombre del chat."""
+    alcance = merged_scope(con)
+    nombres = {}
+    for c in casos:
+        jid = c["chat_jid"]
+        if jid not in nombres:
+            propio = (alcance.get(jid) or {}).get("chat_name")
+            nombres[jid] = propio if propio and propio != jid else nombre_del_chat(con, jid)
+    primeros = titulos_de_mensajes(con, [c["case_id"] for c in casos if not c["titulo"]])
+    titulos = {c["case_id"]: c["titulo"] or primeros.get(c["case_id"]) or nombres[c["chat_jid"]]
+               for c in casos}
+    return nombres, titulos
+
+
 def cmd_caso_listar(con, a):
     sql, params = "select * from caso where account=?", [cuenta_activa()]
     if a.etapa:
@@ -4866,8 +4900,23 @@ def cmd_caso_listar(con, a):
     if a.chat:
         sql += " and chat_jid=?"
         params.append(a.chat)
-    return [caso_fila(con, r) for r in con.execute(
+    filas = [dict(r) for r in con.execute(
         sql + " order by updated_at desc, case_id desc", params).fetchall()]
+    q = plano((getattr(a, "buscar", None) or "").strip())
+    if q:
+        nombres, titulos = nombres_y_titulos(con, filas)
+        filas = [c for c in filas if coincide_busqueda(c["case_id"], titulos[c["case_id"]],
+                                                       nombres[c["chat_jid"]], q)]
+    return [caso_fila(con, r) for r in filas]
+
+
+def cmd_caso_buscar(con, a):
+    """`caso buscar <texto>`: `caso listar --buscar`, como el buscador del tablero."""
+    if not plano(a.texto.strip()).lstrip("#").strip():
+        caso_falla("E_ARGS", "the search is empty: give a case number, a word of the title "
+                             "or the chat's name")
+    a.buscar = a.texto
+    return cmd_caso_listar(con, a)
 
 
 def media_de_fila(r):
@@ -12803,7 +12852,17 @@ def main():
 
     c = caso("listar", help="the cases of the active line, newest first")
     c.add_argument("--etapa", choices=list(ETAPAS_CASO)); c.add_argument("--chat")
+    c.add_argument("--buscar", metavar="TEXT",
+                   help="like the board's search: the case number (with or without #), or "
+                        "a piece of its title or of its chat's name; accents and case ignored")
     c.set_defaults(fn=cmd_caso_listar)
+
+    c = caso("buscar", help="find cases like the board's search: by number (12 or #12), a "
+                            "word of the title or the chat's name, accents and case ignored. "
+                            "Takes the same filters as listar")
+    c.add_argument("texto")
+    c.add_argument("--etapa", choices=list(ETAPAS_CASO)); c.add_argument("--chat")
+    c.set_defaults(fn=cmd_caso_buscar)
 
     c = caso("destinos", help="the chats a reply of this case could go to when the owner "
                               "or a Super admin says 'report it to the client' without naming "

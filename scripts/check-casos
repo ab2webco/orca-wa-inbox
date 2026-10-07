@@ -13833,6 +13833,53 @@ if NODE:
             os.environ.update(env_antes)
 
 
+# ── casos-cli: el dueno maneja sus casos desde WhatsApp (odd/tasks/casos-cli.md) ──────────
+# El agente es lo unico que el dueno tiene por WhatsApp, y el agente solo tiene el CLI: lo
+# que el tablero hace (buscar, filtrar, leer una tarjeta, los informes) lo tiene que poder
+# hacer `wa-scope caso`.
+def casos_cli_linea(home):
+    """La linea A con Soporte Norte y Cliente Uno autorizados y tres casos con titulo."""
+    llegan(home, A, [msg(SOPORTE, "CB1", "no carga el login", 30, mencion=True),
+                     msg(PERSONA, "CB2", "quiero renovar", 20),
+                     msg(SOPORTE, "CB3", "otra cosa", 10, mencion=True)])
+    js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+    js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "borrador")
+    ids = {}
+    for stanza, chat, titulo in (("CB1", SOPORTE, "Error en el login"),
+                                 ("CB2", PERSONA, "Renovación del dominio"),
+                                 ("CB3", SOPORTE, None)):
+        args = ["caso", "crear", "--chat", chat, "--stanza", stanza, "--actor", "agente"]
+        if titulo:
+            args += ["--titulo", titulo]
+        ids[stanza] = str(js(home, *args)[0]["case_id"])
+    return ids
+
+
+print("\ncasos-cli K1: buscar como el tablero")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        ids = casos_cli_linea(home)
+        nums = lambda filas: sorted(str(c["case_id"]) for c in filas)  # noqa: E731
+        ok("buscar por una palabra del titulo, sin tildes ni mayusculas",
+           nums(js(home, "caso", "buscar", "RENOVACION")) == [ids["CB2"]],
+           f"{js(home, 'caso', 'buscar', 'RENOVACION')}")
+        ok("con la tilde tambien", nums(js(home, "caso", "buscar", "renovación")) == [ids["CB2"]])
+        ok("buscar por el nombre del chat",
+           nums(js(home, "caso", "buscar", "soporte norte")) == sorted([ids["CB1"], ids["CB3"]]))
+        ok("buscar por el numero del caso, con o sin #",
+           nums(js(home, "caso", "buscar", ids["CB3"])) == [ids["CB3"]]
+           and nums(js(home, "caso", "buscar", "#" + ids["CB3"])) == [ids["CB3"]])
+        ok("un caso sin titulo se busca por el texto de su primer mensaje",
+           nums(js(home, "caso", "buscar", "otra cosa")) == [ids["CB3"]])
+        ok("listar --buscar es lo mismo",
+           nums(js(home, "caso", "listar", "--buscar", "login")) == [ids["CB1"]])
+        ok("lo que no coincide da una lista vacia",
+           js(home, "caso", "buscar", "inexistente") == [])
+        p = corre(home, "caso", "buscar", "  ")
+        ok("una busqueda vacia es E_ARGS", p.returncode == 2 and "E_ARGS" in p.stderr,
+           p.stderr.strip())
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)
