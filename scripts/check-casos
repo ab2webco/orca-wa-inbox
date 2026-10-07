@@ -14797,6 +14797,40 @@ with tempfile.TemporaryDirectory() as home:
     ok("una propuesta en decision sigue sin texto en el evento: el agente la rehace",
        "Lo revisamos hoy" not in ev["detalle"], f"{ev}")
 
+# ── Las instrucciones del chat con peso (instrucciones-con-peso) ─────────────────────
+# Caso vivo: el tono y las instrucciones largas del chat iban como una vineta mas de la
+# cabeza y los agentes las trataban como contexto. Ahora son su propia seccion, completa,
+# justo despues de la cabeza, en el archivo del caso y en el brief; y el agente del
+# proyecto se apoya en lo que su proyecto ya sabe antes de dar un caso por bloqueado.
+print("\ninstrucciones-con-peso: tono e instrucciones del chat como seccion propia")
+SECCION_DUENO = "## The owner's instructions for this chat (follow them)"
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        largas = "Regla uno: " + "responde con detalle y cuida el contexto. " * 40 + "FIN-DE-LAS-INSTRUCCIONES"
+        js(home, "set", CHAT, "--provider", "ninguno", "--mode", "responder",
+           "--tone", "Formal, de usted", "--instructions", largas)
+        con_ins = caso_clasificado(home, "IP1")
+        archivo, brief = textos_del_caso(home, con_ins)
+        for nombre_, texto in (("el archivo del caso", archivo), ("el brief", brief)):
+            ok(f"{nombre_}: no deja el tono ni las instrucciones como vinetas",
+               "- Tone of the chat:" not in texto
+               and "- Owner's instructions for the chat:" not in texto, texto[:300])
+            ok(f"{nombre_}: trae la seccion con el tono y las instrucciones completas",
+               SECCION_DUENO in texto and "Formal, de usted" in texto
+               and " ".join(largas.split()) in texto, texto[:300])
+            ok(f"{nombre_}: dice que mandan y que solo lo duro tiene precedencia",
+               "govern how this chat is handled and answered" in texto
+               and "Only the hard rules" in texto and "wa-send" in texto.split(SECCION_DUENO)[1][:900],
+               texto.split(SECCION_DUENO)[-1][:900])
+            ok(f"{nombre_}: la seccion va justo despues de la cabeza, antes de lo demas",
+               0 <= texto.find("- Approval levels:") < texto.find(SECCION_DUENO)
+               < texto.find("Messages of the case"), texto[:300])
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        sin_ins = caso_clasificado(home, "IP2", PERSONA)
+        archivo, brief = textos_del_caso(home, sin_ins)
+        ok("un chat sin tono ni instrucciones no tiene la seccion",
+           SECCION_DUENO not in archivo and SECCION_DUENO not in brief, archivo[:300])
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

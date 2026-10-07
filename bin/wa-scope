@@ -12464,11 +12464,26 @@ def cabeza_del_caso(con, caso, del_dueno=None, operador=None, de_casos=True):
                   f"\"First message and updates\" below" if modo in MODOS_AGENTE_PRIMERO else
                   f"- First message: first_reply_mode {modo}: the plugin sends the fixed "
                   f"acknowledgement by itself; never write it yourself")
-    if chat.get("tone"):
-        lineas.append(f"- Tone of the chat: {chat['tone']}")
-    if chat.get("instructions"):
-        lineas.append(f"- Owner's instructions for the chat: {chat['instructions']}")
-    return lineas
+    return lineas + instrucciones_del_chat(chat)
+
+
+def instrucciones_del_chat(chat):
+    """El tono y las instrucciones que el dueno puso a este chat, completos, como su propia
+    seccion justo despues de la cabeza (no una vineta mas: son reglas de como se atiende el
+    chat). Sin ninguno de los dos, nada."""
+    tono = (chat.get("tone") or "").strip()
+    instrucciones = (chat.get("instructions") or "").strip()
+    if not tono and not instrucciones:
+        return []
+    return [
+        "",
+        "## The owner's instructions for this chat (follow them)",
+        "They govern how this chat is handled and answered. Only the hard rules (never "
+        "run wa-send, nothing destructive, the plugin's review and approvals) take "
+        "precedence over them.",
+        *(["", "Tone:", tono] if tono else []),
+        *(["", "Instructions:", instrucciones] if instrucciones else []),
+    ]
 
 
 def historia_del_caso(con, caso):
