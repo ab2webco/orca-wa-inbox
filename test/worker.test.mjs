@@ -2857,7 +2857,13 @@ if opcion(argv, '--actor') is None and sub != 'ver': falla('E_ARGS', 'no actor')
 if sub == 'propuesta':
     texto = opcion(argv, '--respuesta')
     caso['propuesta'] = {'tipo': opcion(argv, '--tipo'), 'respuesta': texto}
-    caso['propuesta_version'] = hashlib.sha256(texto.encode()).hexdigest()
+    destino = opcion(argv, '--chat')
+    if destino:
+        caso['propuesta']['chat'] = destino
+        caso['destino'] = {'chat_jid': destino, 'chat_name': 'Grupo Destino', 'retenido': False}
+    else:
+        caso['destino'] = None
+    caso['propuesta_version'] = hashlib.sha256(((destino or '') + texto).encode()).hexdigest()
     caso['propuesta_aprobada'] = None
     caso['etapa'] = 'decision'
 elif sub == 'aprobar':
@@ -2889,6 +2895,12 @@ if '--cancel' in argv:
     hecho = cfg.get('cancel', 'ok') == 'ok'
     print(json.dumps({'req_id': req, 'estado': 'cancelado' if hecho else 'enviado',
                       'cancelled': hecho})); sys.exit(0)
+if '--send' in argv:
+    req = opcion(argv, '--id')
+    if cfg.get('send', 'ok') != 'ok': niega(cfg['send'])
+    if req not in e.setdefault('entregados', []): e['entregados'].append(req)
+    guarda(e)
+    print(json.dumps({'req_id': req, 'estado': 'enviado', 'chat': 'Grupo Destino'})); sys.exit(0)
 if cfg.get('draft', 'ok') != 'ok': niega(cfg['draft'])
 req = opcion(argv, '--id')
 e.setdefault('borradores', {})[req] = argv[argv.index('--') + 1:] if '--' in argv else argv
@@ -3148,6 +3160,65 @@ const verbo = (llamada) => llamada[1]
   ok('un texto vacio es E_ARGS y no llama a nada', vacio && vacio.ok === false && vacio.code === 'E_ARGS' &&
     g.scope().length === 1, JSON.stringify([vacio, g.scope()]))
   apagar2()
+}
+
+{
+  // respuesta-otro-chat: una respuesta que va a OTRO chat sale a ESE chat con `--send` (el
+  // piso y Jev del destino la revisan), no con borrador + --approve. Lo que el destino
+  // retuvo lo manda la siguiente firma del dueno, con --approve.
+  const DESTINO = '120363000000000004@g.us'
+  const aOtro = (extra = {}) => casoDe({
+    propuesta: { tipo: 'responder', respuesta: 'Le comparto la conclusion.', chat: DESTINO },
+    destino: { chat_jid: DESTINO, chat_name: 'Grupo Destino', retenido: false }, ...extra })
+  const f = herramientasCaso('caso-otro-chat', { casos: { 7: aOtro() } })
+  const orca = hostFalso(f.dir, { chats: [] })
+  const { apagar } = await arranca(orca)
+  const v = await pideCaso(orca, { action: 'enviar', caseId: 7, version: V1 })
+  ok('Enviar una respuesta a otro chat contesta enviado', v && v.ok === true && v.code === 'enviado',
+    JSON.stringify(v))
+  const [envio] = f.send()
+  ok('sale UNA vez, con --send, al chat de destino y no al del caso',
+    f.send().length === 1 && envio.includes('--send') && envio.includes(DESTINO) &&
+    !envio.includes(CHAT_CASO) && !envio.includes('--approve'), JSON.stringify(f.send()))
+  ok('con el id del caso y su version, y sin la llave del plugin',
+    envio.some((x) => x === `--id=caso-7-${V1.slice(0, 12)}`) && f.sendEnv()[0] === null,
+    JSON.stringify([envio, f.sendEnv()]))
+  ok('firma y da por respondido', JSON.stringify(f.scope().map(verbo)) ===
+    JSON.stringify(['ver', 'aprobar', 'mover']), JSON.stringify(f.scope()))
+  apagar()
+
+  const g = herramientasCaso('caso-otro-chat-frenado', { casos: { 7: aOtro() },
+    send: { send: 'send-needs-approval', salida: 3 } })
+  const orca2 = hostFalso(g.dir, { chats: [] })
+  const { apagar: apagar2 } = await arranca(orca2)
+  const w = await pideCaso(orca2, { action: 'enviar', caseId: 7, version: V1 })
+  ok('si el piso o Jev del destino lo frenan, llega ese codigo y no se da por respondido',
+    w && w.ok === false && w.code === 'send-needs-approval' &&
+    !g.scope().some((a) => verbo(a) === 'mover'), JSON.stringify([w, g.scope()]))
+  apagar2()
+
+  const h = herramientasCaso('caso-otro-chat-retenido', { casos: { 7: aOtro({
+    destino: { chat_jid: DESTINO, chat_name: 'Grupo Destino', retenido: true } }) } })
+  const orca3 = hostFalso(h.dir, { chats: [] })
+  const { apagar: apagar3 } = await arranca(orca3)
+  const x = await pideCaso(orca3, { action: 'enviar', caseId: 7, version: V1 })
+  const [borrador, aprobacion] = h.send()
+  ok('lo que el destino retuvo lo manda la firma del dueno: borrador al destino y --approve',
+    x && x.ok === true && h.send().length === 2 && borrador.includes(DESTINO) &&
+    !borrador.includes('--send') && aprobacion.includes('--approve'), JSON.stringify(h.send()))
+  apagar3()
+
+  const k = herramientasCaso('caso-otro-chat-editar', { casos: { 7: aOtro() } })
+  const orca4 = hostFalso(k.dir, { chats: [] })
+  const { apagar: apagar4 } = await arranca(orca4)
+  const y = await pideCaso(orca4, { action: 'editar-enviar', caseId: 7, version: V1,
+    texto: 'Le comparto la conclusion corregida.' })
+  const prop = k.scope().find((a) => verbo(a) === 'propuesta')
+  ok('Editar y enviar conserva el destino: la propuesta nueva lleva --chat',
+    y && y.ok === true && prop && prop.includes(`--chat=${DESTINO}`), JSON.stringify([y, prop]))
+  ok('y sale al destino', k.send().length === 1 && k.send()[0].includes(DESTINO) &&
+    k.send()[0].includes('Le comparto la conclusion corregida.'), JSON.stringify(k.send()))
+  apagar4()
 }
 
 {

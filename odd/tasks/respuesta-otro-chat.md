@@ -61,10 +61,13 @@ Refusal codes of `caso propuesta --chat` (exit 2, JSON on stderr):
       the destination is `responder`, and the approval notice says where it goes (es/en).
       Tests: `scripts/check-casos`. Proof: RED 1/7 (the tick signed and SENT the reply,
       to the case's own chat); GREEN 7/7.
-- [ ] R3 Delivery to the destination: the tick (owner-signed), `si N` and the board's Enviar
+- [x] R3 Delivery to the destination: the tick (owner-signed), `si N` and the board's Enviar
       send to the destination with `--send` (floor + Jev); a held draft is sent by the
       owner's next approval on the board with `--approve`; one confirmation to the case's
       chat after it goes out. Tests: `scripts/check-casos`, `test/worker.test.mjs`.
+      Proof: RED check-casos 2/10 (nothing reached the destination), worker 584/589 (the
+      board sent to the case's chat with draft + `--approve`, and Edit dropped the
+      destination); GREEN 10/10 and worker 589/589.
 - [ ] R4 Work: `--chat` on `trabajar`, kept by `caso resultado`'s reply proposal, and the
       brief tells the worker where its reply goes. Tests: `scripts/check-casos`.
 - [x] R5 `wa-scope caso destinos <id> [--json]`: the chats of the line in `responder`

@@ -13644,6 +13644,81 @@ if NODE:
 
 
 
+print("\nrespuesta-otro-chat R3: lo aprobado sale al otro chat y el caso lo confirma")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        prepara_otro_chat(home)
+        sidecar = SidecarFalso(home)
+        try:
+            # El dueno firma en el tablero (su llave); el tick lo manda al otro chat.
+            dueno = caso_pedido(home, DUENO_DM, "OS1", DUENO_LID)
+            v = json.loads(propone_a(home, dueno, "Facturacion").stdout)[0]["propuesta_version"]
+            js(home, "caso", "aprobar", dueno, "--version", v, "--actor", "dueno")
+            tick(home)
+            fuera = envios_a(home, FACTURACION)
+            ok("lo firmado por el dueno sale al chat de destino, con el id del caso",
+               len(fuera) == 1 and fuera[0]["req_id"] == f"caso-{dueno}-{v[:12]}"
+               and fuera[0]["estado"] == "enviado"
+               and "el reporte quedo bien" in fuera[0]["body"], f"{fuera}")
+            ok("y el caso queda respondido", js(home, "caso", "ver", dueno)[0]["etapa"]
+               == "respondido")
+            confirma = [e for e in envios_a(home, DUENO_DM) if e["req_id"].endswith("-ok")]
+            ok("el chat del caso recibe UNA confirmacion de a donde salio",
+               len(confirma) == 1 and "Facturacion" in confirma[0]["body"]
+               and confirma[0]["estado"] == "enviado", f"{envios_a(home, DUENO_DM)}")
+            tick(home)
+            ok("otro tick no la repite ni reenvia",
+               len([e for e in envios_a(home, DUENO_DM) if e["req_id"].endswith("-ok")]) == 1
+               and len(envios_a(home, FACTURACION)) == 1)
+            ok("nada salio en el chat del dueno con el texto de la respuesta",
+               not any("el reporte quedo bien" in e["body"] for e in envios_a(home, DUENO_DM)))
+
+            # Lo que el piso frena con los niveles del destino queda retenido para el dueno.
+            dinero = caso_pedido(home, DUENO_DM, "OS2", DUENO_LID)
+            v2 = json.loads(propone_a(home, dinero, "Facturacion",
+                                      "El arreglo cuesta $50.").stdout)[0]["propuesta_version"]
+            js(home, "caso", "aprobar", dinero, "--version", v2, "--actor", "dueno")
+            tick(home)
+            retenido = [e for e in envios_a(home, FACTURACION)
+                        if e["req_id"] == f"caso-{dinero}-{v2[:12]}"]
+            ver = js(home, "caso", "ver", dinero)[0]
+            ok("con dinero, el piso del destino lo retiene aunque el dueno haya firmado",
+               len(retenido) == 1 and retenido[0]["estado"] == "borrador"
+               and ver["etapa"] == "decision", f"{retenido} {ver['etapa']}")
+            ok("y el caso dice que se freno, sin la firma (el dueno decide en el tablero)",
+               not ver["aprobada"] and any(d.startswith("envio frenado:")
+                                          for d in eventos_de(home, dinero))
+               and (ver.get("destino") or {}).get("retenido") is True, f"{ver.get('destino')}")
+            ok("sin confirmacion de algo que no salio",
+               not any(e["req_id"] == f"caso-{dinero}-{v2[:12]}-ok"
+                       for e in envios_a(home, DUENO_DM)))
+
+            # La aprobacion por WhatsApp (`si N`): sale al destino y la respuesta lo dice.
+            pon_aprobacion(home, DUENO_LID)
+            whats = caso_pedido(home, DUENO_DM, "OS3", DUENO_LID, "y esto tambien al grupo")
+            v3 = json.loads(propone_a(home, whats, "Facturacion",
+                                      "Le comparto la conclusion del informe de ventas.").stdout)[0]["propuesta_version"]
+            tick(home)
+            llegan(home, A, [msg(DUENO_DM, "OS3R", f"si {whats}", 1, de=DUENO_LID)])
+            ingiere(home)
+            fuera = [e for e in envios_a(home, FACTURACION)
+                     if e["req_id"] == f"caso-{whats}-{v3[:12]}"]
+            ok("si N manda la respuesta al chat de destino",
+               len(fuera) == 1 and fuera[0]["estado"] == "enviado", f"{fuera} {eventos_de(home, whats)}")
+            tick(home)
+            dichos = [e["body"] for e in envios_a(home, DUENO_DM)
+                      if f"Caso {whats}" in e["body"] and "a Facturacion" in e["body"]
+                      and "no salio" not in e["body"] and "Respuesta propuesta" not in e["body"]]
+            ok("y el dueno lee UNA vez que salio a Facturacion (su directo es el del caso)",
+               len(dichos) == 1, f"{dichos}")
+        finally:
+            sidecar.cerrar()
+            os.environ.clear()
+            os.environ.update(env_antes)
+
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

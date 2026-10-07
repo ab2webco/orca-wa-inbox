@@ -8408,8 +8408,10 @@ def tick_envia(caso, texto, req):
     args = [WA_SEND, f"--id={req}"]
     if caso.get("account"):
         args.append(f"--line={caso['account']}")
-    args += ["--send", f"--timeout={PLAZO_ENVIO_TICK_S}", "--json", "--", caso["chat_jid"],
-             texto]
+    # Una respuesta a otro chat sale a ESE chat (respuesta-otro-chat); `wa-send` le aplica el
+    # piso y Jev con los niveles de alla.
+    args += ["--send", f"--timeout={PLAZO_ENVIO_TICK_S}", "--json", "--",
+             destino_de_propuesta(caso) or caso["chat_jid"], texto]
     try:
         p = subprocess.run(args, capture_output=True, text=True,
                            timeout=PLAZO_ENVIO_TICK_S + 30)
@@ -8517,6 +8519,9 @@ TEXTOS_AVISO = {
            "escala_como": "Contestele con {n} y su respuesta, o no {n} para cerrar.",
            "escala_contestada": "Caso {n}: su respuesta va al agente, que sigue con el caso.",
            "aprobado_sale": "Caso {n} aprobado: la respuesta salio.",
+           "aprobado_destino": "Caso {n} aprobado: la respuesta salio a {chat}.",
+           "aprobado_frenado": "Caso {n} aprobado, pero no salio a {chat} ({x}): mirelo en el tablero.",
+           "enviado_a": "Caso {n}: enviado a {chat}.",
            "aprobado_linea": "Caso {n} aprobado: sale cuando la linea vuelva.",
            "aprobado_falla": "Caso {n} aprobado, pero la respuesta no salio ({x}): mirelo en el tablero.",
            "aprobado_trabajo": "Caso {n} aprobado: el trabajo sale ahora.",
@@ -8548,6 +8553,9 @@ TEXTOS_AVISO = {
            "escala_como": "Answer with {n} and your answer, or no {n} to close.",
            "escala_contestada": "Case {n}: your answer goes to the agent, which continues the case.",
            "aprobado_sale": "Case {n} approved: the reply went out.",
+           "aprobado_destino": "Case {n} approved: the reply went out to {chat}.",
+           "aprobado_frenado": "Case {n} approved, but it did not go out to {chat} ({x}): check the board.",
+           "enviado_a": "Case {n}: sent to {chat}.",
            "aprobado_linea": "Case {n} approved: it goes out when the line is back.",
            "aprobado_falla": "Case {n} approved, but the reply did not go out ({x}): check the board.",
            "aprobado_trabajo": "Case {n} approved: the work starts now.",
@@ -9168,6 +9176,8 @@ def entrega_del_dueno(con, caso, tx):
     n, version = caso["case_id"], caso["propuesta_version"]
     req = id_envio_caso(n, version)
     texto = respuesta_de_propuesta(caso)
+    if destino_de_propuesta(caso):
+        return entrega_a_otro_chat(con, caso, texto, tx)
     args = [WA_SEND, f"--id={req}"] + ([f"--line={caso['account']}"] if caso.get("account") else [])
     con_llave = dict(os.environ, **{VARIABLE_APROBADOR: llave_aprobador() or ""})
     pasos = ((args + [f"--timeout={PLAZO_ENVIO_TICK_S}", "--json", "--", caso["chat_jid"], texto],
@@ -9198,6 +9208,101 @@ def entrega_del_dueno(con, caso, tx):
         con.rollback()
         raise
     return tx["aprobado_sale"].format(n=n)
+
+
+def entrega_a_otro_chat(con, caso, texto, tx):
+    """La respuesta a otro chat que el dueno aprobo por WhatsApp: sale por el camino del
+    tick (`tick_caso`, firmada por el dueno), con `--send` al destino: el piso y Jev la
+    revisan con los niveles de alla, y lo que frenen queda para el tablero. Devuelve la
+    confirmacion, que nombra el chat."""
+    n, version = caso["case_id"], caso["propuesta_version"]
+    chat = recorta(nombre_del_chat(con, destino_de_propuesta(caso)), LARGO_PIDE)
+    req = id_envio_caso(n, version)
+    estados, vivo = envios_del_almacen([req])
+    if not vivo:
+        return tx["aprobado_linea"].format(n=n)
+    resumen = dict({"sin_transporte": False, "sin_firma": False},
+                   **dict.fromkeys(CONTEOS_TICK, 0))
+    try:
+        tick_caso(con, caso, texto, estados, resumen)
+    except (CasoFalla, sqlite3.OperationalError):
+        if con.in_transaction:
+            con.rollback()
+        return tx["aprobado_linea"].format(n=n)
+    if caso_de(con, n)["etapa"] == "respondido":
+        if caso["chat_jid"] == numero_aprobacion():
+            # Esta respuesta va al chat del caso: la confirmacion del tick no se repite.
+            anota_confirmacion(con, caso, "en la respuesta al aviso")
+        return tx["aprobado_destino"].format(n=n, chat=chat)
+    if resumen["sin_transporte"] or resumen["sin_firma"] or resumen["errores"]:
+        return tx["aprobado_linea"].format(n=n)
+    motivo = next((k for k in ("frenados", "revisiones", "bloqueados") if resumen[k]),
+                  "retenido")
+    return tx["aprobado_frenado"].format(n=n, chat=chat, x=motivo)
+
+
+# La confirmacion en el chat del caso de una respuesta que salio a otro chat
+# (respuesta-otro-chat): una vez por version, con su propio id de `wa-send`.
+CONFIRMADO = "confirmado en el chat del caso"
+CONFIRMACION_FALLIDA = "confirmacion no salio:"
+CONFIRMACION_REINTENTA = (ENVIO_SIN_LINEA, "send-no-signature", "send-timeout", "fallo")
+
+
+def anota_confirmacion(con, caso, como):
+    caso_toma(con)
+    try:
+        caso_tocar(con, caso_de(con, caso["case_id"]), "automatizacion",
+                   f"{CONFIRMADO} {como} · {caso['propuesta_version'][:12]}")
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+
+
+def tick_confirma_destinos(con, resumen):
+    """Las respuestas a otro chat que ya salieron (la bandeja dice `enviado`) y cuyo caso
+    todavia no lo confirmo: una linea al chat del caso, "Caso N: enviado a <chat>". Lo que
+    `wa-send` niega para siempre queda anotado y no se insiste."""
+    pendientes = []
+    for row in con.execute("select * from caso where account=? and etapa='respondido' and "
+                           "propuesta_version is not null", (cuenta_activa(),)).fetchall():
+        caso = dict(row)
+        if not destino_de_propuesta(caso):
+            continue
+        marca = f"· {caso['propuesta_version'][:12]}"
+        if con.execute("select 1 from caso_evento where case_id=? and (detalle like ? or "
+                       "detalle like ?) and detalle like ? limit 1",
+                       (caso["case_id"], f"{CONFIRMADO}%", f"{CONFIRMACION_FALLIDA}%",
+                        f"%{marca}")).fetchone():
+            continue
+        pendientes.append(caso)
+    if not pendientes:
+        return
+    estados, vivo = envios_del_almacen(
+        [id_envio_caso(c["case_id"], c["propuesta_version"]) for c in pendientes])
+    if not vivo:
+        return
+    tx = aviso_textos()
+    for caso in pendientes:
+        req = id_envio_caso(caso["case_id"], caso["propuesta_version"])
+        if estados.get(req) != "enviado":
+            continue
+        chat = recorta(nombre_del_chat(con, destino_de_propuesta(caso)), LARGO_PIDE)
+        texto = tx["enviado_a"].format(n=caso["case_id"], chat=chat)
+        # Al chat del caso: sin la propuesta, `tick_envia` escribe en el del caso.
+        codigo, _ = tick_envia(dict(caso, propuesta=None), texto, f"{req}-ok")
+        if codigo is None:
+            anota_confirmacion(con, caso, "enviado")
+            resumen["enviados"] += 1
+        elif codigo not in CONFIRMACION_REINTENTA:
+            caso_toma(con)
+            try:
+                caso_tocar(con, caso_de(con, caso["case_id"]), "automatizacion",
+                           f"{CONFIRMACION_FALLIDA} {codigo} · {caso['propuesta_version'][:12]}")
+                con.commit()
+            except BaseException:
+                con.rollback()
+                raise
 
 
 def desde_la_etapa(con, caso):
@@ -9705,6 +9810,14 @@ def cmd_tick(con, a):
                 print(f"wa-scope: tick case #{caso['case_id']}: {exc}", file=sys.stderr)
             if resumen["sin_transporte"] or resumen["sin_firma"]:
                 break
+        # Lo que salio a otro chat se confirma en el chat del caso (respuesta-otro-chat).
+        try:
+            tick_confirma_destinos(con, resumen)
+        except (sqlite3.Error, CasoFalla) as exc:
+            if con.in_transaction:
+                con.rollback()
+            resumen["errores"] += 1
+            print(f"wa-scope: other-chat confirmations skipped: {exc}", file=sys.stderr)
         # Los acuses de respaldo (Beta), despues de los envios: si la respuesta del agente
         # salio en esta vuelta, el respaldo ya no sale.
         try:
@@ -10063,9 +10176,13 @@ def tick_caso(con, caso, texto, estados, resumen):
             resumen["bloqueados"] += 1
         return
     # Sin peticion, o pendiente (un tick anterior se quedo sin veredicto): la regla firma
-    # —idempotente si ya firmo— y se pregunta con el MISMO id.
+    # —idempotente si ya firmo— y se pregunta con el MISMO id. Una respuesta a otro chat no
+    # la firma nunca la regla: sale solo con la firma del dueno (respuesta-otro-chat).
+    firmada_por_dueno = (destino_de_propuesta(caso) is not None
+                         and caso.get("propuesta_aprobada") == version)
     try:
-        cmd_caso_aprobar(con, argparse.Namespace(id=cid, version=version, actor="regla"))
+        if not firmada_por_dueno:
+            cmd_caso_aprobar(con, argparse.Namespace(id=cid, version=version, actor="regla"))
     except CasoFalla as falla:
         if falla.error == "E_REVISION":
             tick_revision_regla(con, caso, resumen)
@@ -10084,8 +10201,8 @@ def tick_caso(con, caso, texto, estados, resumen):
         return
     if codigo == ENVIO_FRENADO:
         motivos = motivos_del_freno(detalle)
-        niv = (merged_scope(con).get(caso["chat_jid"]) or {}).get("niveles") \
-            or wa_reglas.niveles(None)
+        niv = (merged_scope(con).get(destino_de_propuesta(caso) or caso["chat_jid"]) or {}) \
+            .get("niveles") or wa_reglas.niveles(None)
         if freno_revisable(motivos, niv):
             rondas = rondas_de_revision(con, cid)
             if rondas < RONDAS_DE_REVISION:
