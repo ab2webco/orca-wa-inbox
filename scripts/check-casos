@@ -13519,6 +13519,57 @@ if NODE:
 
 
 
+print("\nrespuesta-otro-chat R5: caso destinos")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        prepara_otro_chat(home)
+        acepta_proyectos(home, "alfa-demo", "beta-demo")
+        js(home, "set", SOPORTE, "--workspace", "alfa-demo")
+        js(home, "set", FACTURACION, "--workspace", "alfa-demo")
+        js(home, "set", OPERACIONES, "--workspace", "alfa-demo")
+        js(home, "set", PERSONA, "--workspace", "beta-demo")
+        jefa = caso_pedido(home, SOPORTE, "OD1", JEFA_OC)
+        p = corre(home, "caso", "destinos", jefa)
+        filas = json.loads(p.stdout or "[]") if p.returncode == 0 else None
+        ok("caso destinos lista el unico chat en responder con el proyecto del caso",
+           filas is not None and [f["chat_jid"] for f in filas] == [FACTURACION],
+           f"{p.returncode} {p.stderr.strip()[:200]} {filas}")
+        ok("con su nombre, su modo, el proyecto y el porque",
+           bool(filas) and filas[0].get("chat_name") == "Facturacion"
+           and filas[0].get("mode") == "responder"
+           and filas[0].get("project", {}).get("id") == "alfa-demo"
+           and filas[0].get("why"), f"{filas}")
+        ok("ni el chat del caso ni uno en observar ni el de otro proyecto",
+           filas is not None and not {SOPORTE, OPERACIONES, PERSONA} & {
+               f["chat_jid"] for f in filas})
+        js(home, "set", PERSONA, "--workspace", "alfa-demo")
+        filas = js(home, "caso", "destinos", jefa)
+        ok("dos candidatos: los lista a los dos (el agente pregunta cual)",
+           sorted(f["chat_jid"] for f in filas) == sorted([FACTURACION, PERSONA]), f"{filas}")
+        dueno = caso_pedido(home, DUENO_DM, "OD2", DUENO_LID)
+        ok("un caso sin proyecto no tiene candidatos",
+           js(home, "caso", "destinos", dueno) == [])
+        env = dict(os.environ, HOME=str(home), ORCA_CLI_COMMAND=SIN_ORCA,
+                   XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"))
+        texto = subprocess.run([str(WA_SCOPE), "caso", "destinos", dueno], capture_output=True,
+                               text=True, env=env, timeout=60)
+        ok("y en texto lo dice en una linea", texto.returncode == 0
+           and "no project" in texto.stdout, texto.stdout + texto.stderr)
+        js(home, "caso", "proyecto", dueno, "--proyecto", "alfa-demo", "--actor", "dueno")
+        filas = js(home, "caso", "destinos", dueno)
+        ok("con el proyecto que eligio el dueno, los chats de ese proyecto",
+           sorted(f["chat_jid"] for f in filas) == sorted([FACTURACION, PERSONA, SOPORTE]),
+           f"{filas}")
+        texto = subprocess.run([str(WA_SCOPE), "caso", "destinos", dueno], capture_output=True,
+                               text=True, env=env, timeout=60).stdout
+        ok("en texto, uno por linea con su nombre", "Facturacion" in texto
+           and "Cliente Uno" in texto, texto)
+        cliente = caso_pedido(home, PERSONA, "OD3", PERSONA, "pasale esto al otro grupo")
+        ok("el caso de un cliente no tiene destinos: E_DEST_ROLE",
+           error_de(corre(home, "caso", "destinos", cliente)) == "E_DEST_ROLE")
+
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

@@ -66,8 +66,10 @@ Refusal codes of `caso propuesta --chat` (exit 2, JSON on stderr):
       chat after it goes out. Tests: `scripts/check-casos`, `test/worker.test.mjs`.
 - [ ] R4 Work: `--chat` on `trabajar`, kept by `caso resultado`'s reply proposal, and the
       brief tells the worker where its reply goes. Tests: `scripts/check-casos`.
-- [ ] R5 `wa-scope caso destinos <id> [--json]`: the chats of the line in `responder`
+- [x] R5 `wa-scope caso destinos <id> [--json]`: the chats of the line in `responder`
       sharing the case's project, with the reason. Tests: `scripts/check-casos`.
+      Proof: RED `invalid choice: 'destinos'` (E_ARGS); GREEN 9/9 (one, several, none,
+      the owner's project, text mode, E_DEST_ROLE for a customer).
 - [ ] R6 Board card: `proposal.destino` and the panel shows "Va a: <chat>" / "Goes to:
       <chat>" when it differs. Tests: `test/panels.test.mjs`, reduced shots.
 - [ ] R7 Harness: AGENTS.md, the whatsapp-soporte skill and COMMANDS.md say how to use the

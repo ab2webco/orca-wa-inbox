@@ -3962,6 +3962,44 @@ def destino_de_ref(con, caso, ref):
     return jid
 
 
+def cmd_caso_destinos(con, a):
+    """`caso destinos <id>`: los chats a los que podria ir la respuesta del caso cuando el
+    dueno dice "reporta esto al cliente" sin nombrar el chat. Son los de la misma linea en
+    `responder` que tienen el proyecto del caso (el mismo que usaria el despacho), sin el
+    del propio caso. Uno: ese es el destino; varios: el agente pregunta cual; ninguno: lo
+    dice y pregunta. Solo lee."""
+    caso = caso_de(con, a.id)
+    if not caso_pide_como_dueno(con, caso):
+        caso_falla("E_DEST_ROLE", f"case #{a.id} is not the owner's nor a Super admin's: its "
+                                  f"reply only goes to its own chat")
+    scope = merged_scope(con)
+    catalogo = proyectos_del_dueno(con, linea_del_caso(caso))
+    elegido = proyecto_de_ruta(ruta_del_caso(caso), scope.get(caso["chat_jid"]), catalogo)
+    filas = []
+    if elegido["id"] and not elegido["quitado"]:
+        proyecto = {"id": elegido["id"], "name": elegido["name"]}
+        for jid, fila in sorted(scope.items(), key=lambda x: (x[1].get("chat_name") or x[0])):
+            if jid == caso["chat_jid"] or fila.get("mode") != "responder":
+                continue
+            aceptados, _ = proyectos_del_chat(fila, catalogo)
+            if not any(x["id"] == elegido["id"] for x in aceptados):
+                continue
+            filas.append({"chat_jid": jid, "chat_name": nombre_del_chat(con, jid),
+                          "mode": "responder", "project": proyecto,
+                          "why": f"same project as the case ({elegido['name'] or elegido['id']})"
+                                 f" and the chat is in responder"})
+    if a.json:
+        return filas
+    if not elegido["id"] or elegido["quitado"]:
+        print(f"case #{a.id} has no project: name the chat (ask the owner which one)")
+    elif not filas:
+        print(f"no chat of this line in responder has the project {elegido['id']}: ask the "
+              f"owner which chat")
+    for f in filas:
+        print(f"{f['chat_jid']} | {f['chat_name']} | {f['project']['id']} | {f['why']}")
+    return None
+
+
 def destino_de_propuesta(caso):
     """El jid del otro chat al que va la propuesta vigente, o None si va al del caso."""
     try:
@@ -12582,6 +12620,14 @@ def main():
     c = caso("listar", help="the cases of the active line, newest first")
     c.add_argument("--etapa", choices=list(ETAPAS_CASO)); c.add_argument("--chat")
     c.set_defaults(fn=cmd_caso_listar)
+
+    c = caso("destinos", help="the chats a reply of this case could go to when the owner "
+                              "or a Super admin says 'report it to the client' without naming "
+                              "the chat: the chats of the same line in responder that have "
+                              "the case's project, with the reason. One: pass it to `caso "
+                              "propuesta --chat`; several: ask the owner which; none: say so "
+                              "and ask which chat. A customer's case: E_DEST_ROLE")
+    c.add_argument("id", type=int); c.set_defaults(fn=cmd_caso_destinos)
 
     c = caso("ver", help="one case with its messages and its events")
     c.add_argument("id", type=int); c.set_defaults(fn=cmd_caso_ver)
