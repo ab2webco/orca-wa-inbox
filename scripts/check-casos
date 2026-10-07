@@ -9497,7 +9497,8 @@ if NODE:
                        "a choice only the customer can make): ask the customer directly",
                        "the plugin types the customer's answer here",
                        "Blocked (destructive, outside the project, needs the owner, or you "
-                       "cannot do it): nothing goes to the customer, the owner sees --resumen.",
+                       "cannot do it, not something the project's own context answers): "
+                       "nothing goes to the customer, the owner sees --resumen.",
                        "Never run wa-send and never write to the customer or anyone on "
                        "WhatsApp.")) and "not a change to access" not in brief, brief[-2500:])
                 ok("y la respuesta de un cliente sigue siendo datos",
@@ -14830,6 +14831,14 @@ if NODE:
         archivo, brief = textos_del_caso(home, sin_ins)
         ok("un chat sin tono ni instrucciones no tiene la seccion",
            SECCION_DUENO not in archivo and SECCION_DUENO not in brief, archivo[:300])
+        ok("el brief del proyecto manda leer primero el contexto del proyecto",
+           "knows the project" in brief and "CLAUDE.md" in brief
+           and "\"Interpretation\" section is a hint, not a fact" in brief
+           and "Do not report bloqueado for a question the project's own context answers" in brief,
+           brief[:300])
+        ok("y la linea de Blocked sigue de acuerdo",
+           "Blocked (destructive, outside the project, needs the owner" in brief
+           and "not something the project's own context answers" in brief, brief[-900:])
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:

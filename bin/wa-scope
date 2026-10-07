@@ -12192,8 +12192,9 @@ REPORTE_DUENO = {
               "types the owner's answer here (it checks every minute). Meanwhile do not poll, "
               "start no monitors, loops or sleeps, and do not close the terminal. When the "
               "answer arrives, continue the same work from where you stopped.",
-    "bloqueado": "Blocked (destructive, outside the project, or you cannot do it): nothing "
-                 "goes to the chat, the owner sees --resumen.",
+    "bloqueado": "Blocked (destructive, outside the project, or you cannot do it, not something "
+                 "the project's own context answers): nothing goes to the chat, the owner "
+                 "sees --resumen.",
 }
 # El caso de un operador (o un admin) de la conversacion (roles-por-numero, M10): pidio un
 # operador, dentro de los proyectos del chat; lo destructivo o de afuera va al dueno, igual
@@ -12269,6 +12270,14 @@ def brief_de_despacho(con, caso, proyecto, instrucciones):
         "force push, no payments, no changes to credentials or access. If the work needs "
         "one, do not do it: report it as blocked and say why.",
         "- Stay inside this project and this case.",
+        "- This work was sent to this project because it knows the project: read and use "
+        "the project's own context first (its CLAUDE.md or AGENTS.md, docs, memory, code "
+        "and data access) before you conclude anything.",
+        "- The case agent's \"Interpretation\" section is a hint, not a fact: check it "
+        "against the project.",
+        "- Do not report bloqueado for a question the project's own context answers: "
+        "bloqueado is for destructive work, work outside the project, or what only the "
+        "owner can decide.",
         "- Never state who a person is or what a name refers to unless the case or the "
         "project files say so; ask instead.",
         *(BRIEF_DUENO if del_dueno else BRIEF_OPERADOR if operador else []),
@@ -12294,8 +12303,9 @@ def brief_de_despacho(con, caso, proyecto, instrucciones):
          "monitors, loops or sleeps, and do not close the terminal. When the answer arrives, "
          "continue the same work from where you stopped."),
         (REPORTE_DUENO["bloqueado"] if del_dueno else
-         "Blocked (destructive, outside the project, needs the owner, or you cannot do it): "
-         "nothing goes to the customer, the owner sees --resumen."),
+         "Blocked (destructive, outside the project, needs the owner, or you cannot do it, "
+         "not something the project's own context answers): nothing goes to the customer, "
+         "the owner sees --resumen."),
         f"{reporta} --estado bloqueado --actor trabajador --resumen \"<why, in one line>\"",
         ("Every --respuesta is for the owner, who asked: short, in the chat's language, and "
          "with no date or amount you cannot keep." if del_dueno else
