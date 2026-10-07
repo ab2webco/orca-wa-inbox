@@ -9203,6 +9203,9 @@ LIMPIEZA_PRESUPUESTO_S = 60
 LIMPIEZA_INTENTOS = 3
 ESTADOS_EN_CURSO = ("pending", "dispatching", "dispatched")
 MARCA_ESPACIO = "::workspace:"
+# Lo quieta que debe estar una pestana del espacio del plugin para cerrarla sin saber de que
+# corrida es (cierra-pestanas, T6): una que recien abre escribe, y no se toca.
+PESTANA_QUIETA_S = 600
 
 
 def automatizacion_del_plugin(automatizaciones, cual):
@@ -9380,7 +9383,16 @@ def pestanas_del_plugin(con):
     return en_vuelo, terminadas - en_vuelo["tabs"], cerrados - en_vuelo["handles"]
 
 
-def cierra_huerfanas(con, cli, resumen):
+def es_raiz_del_plugin(terminal, carpeta):
+    """Si la terminal esta en la raiz de la carpeta del plugin (su `worktreeId` es
+    `<repo>::<carpeta>`, sin `::workspace:`), donde solo corre el agente de casos."""
+    ident = terminal.get("worktreeId")
+    if not carpeta or not isinstance(ident, str) or MARCA_ESPACIO in ident or "::" not in ident:
+        return False
+    return ruta_comparable(ident.split("::", 1)[1]) == carpeta
+
+
+def cierra_huerfanas(con, cli, resumen, carpeta=None, en_curso=(), ahora=None):
     """Cierra las pestanas de agentes del plugin que no son de nada en curso. Orca no cierra
     la pestana al cerrar la sesion, y al reiniciarse les da handles nuevos: el plugin, que
     las seguia por el handle, las perdia, y Orca les abria otro shell o volvia a abrir
@@ -9388,7 +9400,12 @@ def cierra_huerfanas(con, cli, resumen):
     titulo ahora; las de antes, sin pestana guardada, por el titulo, y las de un caso cerrado
     o respondido tambien por el handle guardado. Una pestana o un handle
     de un despacho o de una corrida en vuelo no se toca, y ninguna otra terminal del dueno
-    tampoco. Nunca detiene un espacio."""
+    tampoco. Nunca detiene un espacio.
+
+    En la raiz de la `carpeta` del plugin solo corre el agente de casos: ahi se cierra
+    ademas toda pestana quieta hace PESTANA_QUIETA_S, sea cual sea su titulo (las que
+    quedaron abiertas antes de guardar la pestana), salvo con una corrida abriendose o una
+    corrida de Orca en vuelo en ese espacio (`en_curso`). En un proyecto, nunca."""
     terminales = lista_de_orca(cli, ["terminal", "list", "--limit", "1000"], "terminals")
     if terminales is None:
         return
@@ -9411,6 +9428,13 @@ def cierra_huerfanas(con, cli, resumen):
             cierra_terminal(cli, handle)
             resumen["limpiados"] += 1
             continue
+        if es_raiz_del_plugin(t, carpeta) and not abriendo \
+                and t.get("worktreeId") not in en_curso:
+            quieta = marca_s(t.get("lastOutputAt"))
+            if quieta and (ahora or time.time()) - quieta >= PESTANA_QUIETA_S:
+                cierra_terminal(cli, handle)
+                resumen["limpiados"] += 1
+                continue
         m = TITULO_DE_AGENTE.search(str(t.get("title") or ""))
         if not m:
             continue
@@ -9442,22 +9466,22 @@ def limpia_espacios(con, resumen):
     if not cli:
         resumen["limpieza_error"] += 1
         return
-    cierra_huerfanas(con, cli, resumen)
     automatizaciones = lista_de_orca(cli, ["automations", "list"], "automations")
-    if automatizaciones is None:
+    carpeta = carpeta_del_plugin(automatizaciones) if automatizaciones is not None else None
+    en_curso, fallo = set(), automatizaciones is None
+    triage = (id_triage(automatizaciones or []) or {}).get("id")
+    if carpeta and triage:
+        corridas = lista_de_orca(cli, ["automations", "runs", "--id", triage], "runs")
+        fallo = corridas is None
+        en_curso = {c.get("workspaceId") for c in corridas or []
+                    if c.get("status") in ESTADOS_EN_CURSO}
+    # Sin saber que corre en el espacio del plugin, solo la regla estricta.
+    cierra_huerfanas(con, cli, resumen, None if fallo else carpeta, en_curso, ahora)
+    if fallo:
         resumen["limpieza_error"] += 1
         return
-    carpeta = carpeta_del_plugin(automatizaciones)
     if not carpeta:
         return
-    en_curso = set()
-    triage = (id_triage(automatizaciones) or {}).get("id")
-    if triage:
-        corridas = lista_de_orca(cli, ["automations", "runs", "--id", triage], "runs")
-        if corridas is None:
-            resumen["limpieza_error"] += 1
-            return
-        en_curso = {c.get("workspaceId") for c in corridas if c.get("status") in ESTADOS_EN_CURSO}
     espacios = lista_de_orca(cli, ["worktree", "list", "--limit", "1000"], "worktrees")
     terminales = lista_de_orca(cli, ["terminal", "list", "--limit", "1000"], "terminals") \
         if espacios is not None else None

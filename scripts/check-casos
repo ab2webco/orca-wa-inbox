@@ -3670,7 +3670,7 @@ with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as car
                    wt("x1", carpeta=CARPETA_OTRO), wt("activo"), wt("con-shell")],
         terminales=[term("term_activo", ws("activo"), 10),
                     term("term_shell", ws("con-shell"), 900),
-                    term("term_raiz", RAIZ_WS, 900)])
+                    term("term_raiz", RAIZ_WS, 60)])
     p, r = tick_con(home, carpeta)
     ok("el tick sale 0", p.returncode == 0, p.stderr[-300:])
     ok("quita las corridas terminadas y los hijos de la carpeta que ninguna corrida nombra",
@@ -3714,6 +3714,38 @@ with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as car
     ok("lo que termino despues (y paso la gracia) se quita entonces",
        sorted(quitados(carpeta)[4:]) == sorted([ws("bbb"), ws("reciente")])
        and r.get("limpiados") == 2, f"{quitados(carpeta)} {r}")
+
+# cierra-pestanas T6: las pestanas que quedaron abiertas antes de guardar su `tabId`. En el
+# espacio del plugin (la raiz de su carpeta) solo corre el agente de casos: la limpieza
+# cierra toda pestana quieta hace 10 minutos que no es de nada en vuelo, sea cual sea su
+# titulo. Una reciente, una en vuelo, o la de un proyecto, no.
+with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+    corre(home, "tick")
+    con = db_de(home)
+    con.execute("insert into agente_corrida (origen, estado, workspace_selector, terminal, "
+                "turno_at, created_at, updated_at) values ('tick', 'activo', ?, "
+                "'term_raiz_vuelo', datetime('now','localtime'), datetime('now','localtime'), "
+                "datetime('now','localtime'))", (f"id:{RAIZ_WS}",))
+    con.execute("delete from settings where key='limpieza_at'")
+    con.commit()
+    con.close()
+    orca_falso(carpeta, terminales=[
+        dict(term("term_raiz_shell", RAIZ_WS, 900), title="..orca-wa-inbox"),
+        dict(term("term_raiz_claude", RAIZ_WS, 1800), title="✳ Claude Code"),
+        term("term_raiz_sin_titulo", RAIZ_WS, 3600),
+        dict(term("term_raiz_reciente", RAIZ_WS, 60), title="..orca-wa-inbox"),
+        dict(term("term_raiz_vuelo", RAIZ_WS, 900), title="✳ WhatsApp: case agent"),
+        dict(term("term_proyecto", "repo-demo::/srv/demo/alfa-demo", 3600),
+             title="..alfa-demo"),
+        dict(term("term_otro_plugin", "repo-demo::" + CARPETA_OTRO, 3600), title="..otro")])
+    p, r = tick_con(home, carpeta)
+    cierres = [x for x in llamadas(carpeta) if x.startswith("terminal close")]
+    cerradas_t6 = sorted(x.split("--terminal ")[1].split()[0] for x in cierres)
+    ok("en el espacio del plugin cierra toda pestana quieta que no es de nada en vuelo, "
+       "sea cual sea su titulo", cerradas_t6 == ["term_raiz_claude", "term_raiz_shell",
+                                                "term_raiz_sin_titulo"]
+       and all("--tab" in x for x in cierres) and p.returncode == 0,
+       f"{cierres} {p.stderr[-300:]}")
 
 with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
     # Visto en vivo: `rm` contesta `removed: true` y el espacio sigue en la lista.
