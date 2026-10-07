@@ -11713,9 +11713,10 @@ if NODE:
             finally:
                 sidecar.cerrar()
 
-        # Con respaldo (Beta): el caso del dueno, el que ya espera al dueno, el que ya esta en
-        # trabajo y la linea que escribio hace poco no reciben el respaldo; un cliente nuevo
-        # si, a sus minutos.
+        # Con respaldo (Beta): el caso del dueno y la linea que escribio hace poco no reciben el
+        # respaldo; un cliente nuevo si, a sus minutos. avisos-retenidos A2: el que ya espera al
+        # dueno o ya esta en trabajo SI lo recibe si nada le llego al cliente (antes la etapa lo
+        # omitia y el cliente no recibia nada mientras el agente trabajaba).
         with tempfile.TemporaryDirectory() as home:
             pon_llave(home)
             llegan(home, A, [
@@ -11756,6 +11757,11 @@ if NODE:
                 ok("y el otro esta en trabajo",
                    js(home, "caso", "ver", str(r4["case_id"]))[0]["etapa"] == "trabajo",
                    js(home, "caso", "ver", str(r4["case_id"]))[0]["etapa"])
+                # El agente de r4 escribe un avance que la revision retiene: al cliente no le
+                # llego nada.
+                held4 = (envio_de_avance(avance(
+                    home, r4["case_id"], "Le queda listo manana a las 3pm, se lo aseguro."))
+                    or {}).get("estado")
                 # La linea escribe en SOPORTE despues de que el caso abrio.
                 llegan(home, A, [msg(SOPORTE, "AR5y", "Ya lo estamos viendo.", 0, yo=True)])
                 for caso in (r1, r2, r3, r4, r5):
@@ -11767,14 +11773,15 @@ if NODE:
                    f"{sidecar.entregados} {auto_de(home, r1['case_id'])}")
                 ok("respaldo: un cliente nuevo lo recibe a sus minutos, como hoy",
                    f"caso-{r2['case_id']}-acuse" in sidecar.entregados, f"{sidecar.entregados}")
-                ok("respaldo: el caso que ya espera al dueno no lo recibe",
-                   f"caso-{r3['case_id']}-acuse" not in sidecar.entregados
-                   and (auto_de(home, r3["case_id"]) or {}).get("razon") == "espera-al-dueno",
+                ok("respaldo: el caso que ya espera al dueno lo recibe si nada le llego al cliente",
+                   sidecar.entregados.count(f"caso-{r3['case_id']}-acuse") == 1
+                   and (auto_de(home, r3["case_id"]) or {}).get("estado") == "enviado",
                    f"{sidecar.entregados} {auto_de(home, r3['case_id'])}")
-                ok("respaldo: el caso en trabajo no lo recibe",
-                   f"caso-{r4['case_id']}-acuse" not in sidecar.entregados
-                   and (auto_de(home, r4["case_id"]) or {}).get("razon") == "caso-en-curso",
-                   f"{sidecar.entregados} {auto_de(home, r4['case_id'])}")
+                ok("respaldo: el caso en trabajo con su avance retenido lo recibe",
+                   held4 == "retenido"
+                   and sidecar.entregados.count(f"caso-{r4['case_id']}-acuse") == 1
+                   and (auto_de(home, r4["case_id"]) or {}).get("estado") == "enviado",
+                   f"{held4} {sidecar.entregados} {auto_de(home, r4['case_id'])}")
                 ok("respaldo: la linea escribio en el chat despues del mensaje, no lo recibe",
                    f"caso-{r5['case_id']}-acuse" not in sidecar.entregados
                    and (auto_de(home, r5["case_id"]) or {}).get("razon") == "conversacion-en-curso",
@@ -11782,7 +11789,7 @@ if NODE:
             finally:
                 sidecar.cerrar()
 
-        # Lo que decide, sin el tick: el aviso pendiente al dueno tambien es esperar al dueno.
+        # Lo que decide, sin el tick: un aviso pendiente al dueno ya no omite el respaldo.
         with tempfile.TemporaryDirectory() as home:
             linea_lista(home)
             cid, v = propuesta_lista(home, "AW1")
@@ -11798,10 +11805,12 @@ if NODE:
             con = ws.db()
             try:
                 caso = ws.caso_de(con, int(cid))
-                ok("un caso en decision con un aviso al dueno sin contestar espera al dueno",
+                # avisos-retenidos A2: esperar al dueno ya no omite el respaldo; solo lo que
+                # ya salio del caso (caso_ya_escribio) o la linea escribiendo.
+                ok("un caso en decision con un aviso al dueno sin contestar no omite el respaldo",
                    caso["etapa"] == "decision" and ws.acuse_sobra(
-                       con, caso, ws.merged_settings(con), f"caso-{cid}-acuse", True)
-                   == "espera-al-dueno", f"{caso['etapa']}")
+                       con, caso, ws.merged_settings(con), f"caso-{cid}-acuse")
+                   is None, f"{caso['etapa']}")
             finally:
                 con.close()
     finally:

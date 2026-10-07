@@ -6213,34 +6213,16 @@ RAZON_PRIMER_AGENTE = "primer-mensaje-del-agente"
 RAZON_YA_SALIO = "ya-salio-un-mensaje"
 
 # Decision c del dueno (2026-10-05): el acuse no cae en medio de una conversacion. No sale en
-# el caso del dueno (`auto_omite`); el de respaldo no sale si el caso ya espera al dueno o ya
-# esta en marcha; y ninguno sale si la linea escribio en ese chat en los ultimos
-# `ack_quiet_minutes` antes del caso, o despues: quien escribio no esta esperando en silencio.
+# el caso del dueno (`auto_omite`), y ninguno sale si la linea escribio en ese chat en los
+# ultimos `ack_quiet_minutes` antes del caso, o despues: quien escribio no esta esperando en
+# silencio. El de respaldo sale siempre que al cliente no le llego nada del caso
+# (avisos-retenidos A2): ni la etapa (trabajo, listo) ni esperar al dueno lo omiten, porque
+# visto en vivo el agente trabajaba, sus avances quedaban retenidos y el cliente no recibia
+# nada. Solo lo que ya salio o esta saliendo (`caso_ya_escribio`) ocupa su lugar.
 RAZON_DUENO = "caso-del-dueno"
-RAZON_ESPERA_DUENO = "espera-al-dueno"
-RAZON_EN_CURSO = "caso-en-curso"
 RAZON_CONVERSACION = "conversacion-en-curso"
-# Las etapas en que el caso ya tiene quien lo mueve: un respaldo ahi llega tarde y fuera de
-# lugar.
-ETAPAS_SIN_RESPALDO = ("trabajo", "listo", "respondido")
-# Un aviso al dueno que sigue abierto: el caso esta en sus manos.
-ESTADOS_AVISO_ABIERTO = ("preparando", "pendiente", "enviado", "contestando")
 # Lo de la bandeja que ya es la linea escribiendo: lo que sale, esta saliendo o salio.
 ESTADOS_ENVIO_DE_LA_LINEA = ("pendiente", "enviando", "enviado")
-
-
-def caso_espera_al_dueno(con, caso):
-    """Si el caso en decision ya esta en manos del dueno: lo que las reglas anotaron sobre
-    su version (`espera_del_dueno`, que es lo que dispara el aviso), o un aviso suyo que
-    sigue abierto."""
-    if caso["etapa"] != "decision":
-        return False
-    if espera_del_dueno(con, caso) is not None:
-        return True
-    marcas = ",".join("?" * len(ESTADOS_AVISO_ABIERTO))
-    return bool(con.execute(
-        f"select 1 from aviso where case_id=? and tipo in ('aprobacion', 'bloqueo') and "
-        f"estado in ({marcas}) limit 1", (caso["case_id"], *ESTADOS_AVISO_ABIERTO)).fetchone())
 
 
 def linea_escribio(caso, desde, excepto):
@@ -6271,14 +6253,10 @@ def linea_escribio(caso, desde, excepto):
         fuente.close()
 
 
-def acuse_sobra(con, caso, ajustes, req_id, respaldo):
-    """La razon por la que este acuse ya no hace falta (decision c del dueno), o None. Con
-    `respaldo` (Beta) tambien cuenta que el caso ya espere al dueno o ya este en marcha."""
-    if respaldo:
-        if caso["etapa"] in ETAPAS_SIN_RESPALDO:
-            return RAZON_EN_CURSO
-        if caso_espera_al_dueno(con, caso):
-            return RAZON_ESPERA_DUENO
+def acuse_sobra(con, caso, ajustes, req_id):
+    """La razon por la que este acuse ya no hace falta (decision c del dueno), o None. Lo que
+    ya salio del caso no se mira aca: con respaldo lo deciden `respaldo_espera` y
+    `respaldo_toma` (`caso_ya_escribio`)."""
     minutos = primer_numero(ajustes, "ack_quiet_minutes")
     if minutos > 0:
         desde = (sello_a_epoch(caso.get("created_at")) or time.time()) - minutos * 60
@@ -6386,8 +6364,7 @@ Manda los acuses y saludos pendientes, antes que cualquier propuesta: son lo que
         # nuevo: sigue su camino con su id, y un reintento no lo duplica.
         if (fila["tipo"] == "acuse" and fila.get("estado") != "enviando"
                 and estados.get(fila["req_id"]) is None):
-            razon = acuse_sobra(con, caso, ajustes, fila["req_id"],
-                                modo == "model_with_ack_fallback")
+            razon = acuse_sobra(con, caso, ajustes, fila["req_id"])
             if razon:
                 tick_auto_cierra(con, fila, "omitido", razon, f"acuse omitido: {razon}")
                 continue

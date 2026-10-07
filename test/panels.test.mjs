@@ -6294,14 +6294,16 @@ for (const [idioma, nombre, etiqueta, pista] of [
     etiqueta.test(label) && pista.test(ayuda) && ayuda.trim().length > 40, `${label} | ${ayuda}`)
   ok(`${nombre}: sin voseo y tratando de usted`,
     !/\b(ten[eé]s|pod[eé]s|escrib[ií]s|quer[eé]s)\b/i.test(label + ayuda), `${label} | ${ayuda}`)
-  // En 0 solo se apaga el silencio: el acuse no sale "siempre" (el dueno y el respaldo de un
-  // caso que ya espera su aprobacion o ya esta en marcha siguen sin el), y no hay un "antes"
-  // que un usuario nuevo conozca.
+  // En 0 solo se apaga el silencio: el acuse no sale "siempre" (el del dueno sigue sin el, y
+  // el respaldo no sale si al cliente ya le llego algo del caso), y no hay un "antes" que un
+  // usuario nuevo conozca.
   ok(`${nombre}: la pista no promete que en 0 el acuse sale siempre`,
     !/\b(siempre|always|sempre)\b/i.test(ayuda) && !/como antes|as before/i.test(ayuda), ayuda)
-  ok(`${nombre}: la pista dice cuando el respaldo no sale aunque el silencio este en 0`,
-    /(aprobaci[oó]n|approval|aprova[cç][aã]o)/i.test(ayuda) &&
-    /(en marcha|under way|em andamento)/i.test(ayuda), ayuda)
+  // avisos-retenidos A2: el respaldo sale mientras al cliente no le haya llegado nada del
+  // caso; esperar la aprobacion o estar en marcha ya no lo omite.
+  ok(`${nombre}: la pista dice que el respaldo solo falta si al cliente ya le llego algo`,
+    /(no le llego nada|nothing from the case has reached|nada do caso chegou)/i.test(ayuda) &&
+    !/(en marcha|under way|em andamento)/i.test(ayuda), ayuda)
   const intro = doc.querySelector('[data-t="autoIntro"]')?.textContent || ''
   ok(`${nombre}: la intro ya no promete un acuse al instante a todo pedido`,
     /(salvo si la linea|unless the line|salvo se a linha)/i.test(intro), intro)
