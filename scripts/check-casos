@@ -14622,6 +14622,48 @@ if NODE:
         ok("el dueno con la llave del plugin confirma sin ensayo",
            r["aplicado"] is True and etapa(cuatro) == "cerrado", f"{r}")
 
+
+print("\ncasos-cli K15: lo que el agente hace en lote dice el pedido en cada evento")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        prepara_otro_chat(home)
+        acepta_proyectos(home, "web-demo")
+        js(home, "set", SOPORTE, "--workspaces", "web-demo")
+        pedido = caso_pedido(home, DUENO_DM, "LZ0", DUENO_LID, "ordena lo de soporte")
+        uno, dos, tres, cuatro = (caso_pedido(home, SOPORTE, f"LZ{n}", PERSONA, f"pedido {n}")
+                                  for n in (1, 2, 3, 4))
+        marca = f"(pedido #{pedido})"
+        ultimo = lambda cid: js(home, "caso", "ver", cid)[0]["eventos"][-1]  # noqa: E731
+        lote = lambda *args: js(home, "caso", "lote", *args, "--actor", "agente",  # noqa: E731
+                                "--pedido", pedido)[0]
+
+        lote("prioridad", uno, "--valor", "high")
+        ev = ultimo(uno)
+        ok("la prioridad en lote deja su evento, del agente y con el pedido",
+           ev["actor"] == "agente" and ev["detalle"].startswith("editado: prioridad high")
+           and marca in ev["detalle"], f"{ev}")
+        t = tarjeta(home, uno) or {}
+        ok("y la tarjeta lo sigue leyendo como un cambio de prioridad",
+           (t.get("events") or [{}])[-1].get("que") == "edited"
+           and (t.get("events") or [{}])[-1].get("args") == ["priority"],
+           f"{(t.get('events') or [{}])[-1]}")
+        lote("mover", dos, "--hacia", "bloqueado", "--motivo", "falta el acceso")
+        ev = ultimo(dos)
+        ok("mover en lote: el motivo y el pedido", ev["actor"] == "agente" and ev["a"] == "bloqueado"
+           and "falta el acceso" in ev["detalle"] and marca in ev["detalle"], f"{ev}")
+        lote("proyecto", tres, "--valor", "web-demo")
+        ev = ultimo(tres)
+        ok("el proyecto en lote: el pedido en el evento",
+           ev["actor"] == "agente" and ev["detalle"].startswith("proyecto web-demo")
+           and marca in ev["detalle"], f"{ev}")
+        lote("cerrar", cuatro, "--motivo", "resuelto por telefono")
+        time.sleep(1.2)
+        llegan(home, A, [msg(DUENO_DM, "LZ0B", "si", 0, de=DUENO_LID)])
+        lote("cerrar", cuatro, "--motivo", "resuelto por telefono", "--confirmar")
+        ev = ultimo(cuatro)
+        ok("cerrar en lote: el motivo y el pedido", ev["actor"] == "agente" and ev["a"] == "cerrado"
+           and "resuelto por telefono" in ev["detalle"] and marca in ev["detalle"], f"{ev}")
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

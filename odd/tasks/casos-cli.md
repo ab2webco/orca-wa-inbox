@@ -125,6 +125,12 @@ cases are created, judged or sent.
       GREEN 9/9, harness 93 (K9 16/16, K11 9/9, K13 5/5, migracion sections green).
       Limit: in the line's chat with itself the owner's own messages are `from_me` and do not
       count; he answers from his number or his direct chat.
+- [x] K15 (review) Traceability: a batch run with `--actor agente --pedido N` keeps the actor
+      `agente` and every event says `(pedido #N)`: close and move (after the agent's reason;
+      the stage still validates on his `--motivo` alone), priority (its `editado:` event,
+      still read as an edit of the priority by the card), project (its `porque`). Tests:
+      `scripts/check-casos`. Proof: RED 1/5 (no event named the request); GREEN 5/5 (K7 9/9,
+      K9 16/16, K11, K13, K14 green).
 
 ## Acceptance criteria
 

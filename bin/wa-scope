@@ -4191,7 +4191,10 @@ def cmd_caso_editar(con, a):
         caso_falla("E_ARGS", "nothing to change: give --prioridad, --clase or --titulo")
     caso_toma(con)
     caso = caso_de(con, a.id)
-    caso_tocar(con, caso, a.actor, PREFIJO_EDITADO + " · ".join(partes), **campos)
+    # La marca de un lote a pedido del dueno (K15) va al final: la tarjeta lee los campos.
+    marca = getattr(a, "marca", "")
+    caso_tocar(con, caso, a.actor, PREFIJO_EDITADO + " · ".join(partes) + (f" {marca}" if marca
+                                                                           else ""), **campos)
     con.commit()
     return [caso_fila(con, caso_de(con, a.id))]
 
@@ -5606,10 +5609,17 @@ def casos_del_lote(con, a, pedido):
     return ids
 
 
+def marca_del_pedido(a):
+    """Lo que lleva cada evento de un lote que el agente corre a pedido del dueno (K15): el
+    actor sigue siendo `agente`, y el evento dice en que caso se lo pidieron."""
+    return f"(pedido #{a.pedido})" if a.actor == "agente" and a.pedido else ""
+
+
 def paso_del_lote(con, a, case_id, aplicar):
     """Una accion del lote sobre un caso: valida y, si `aplicar`, escribe. Devuelve lo que
     paso, con el codigo si no se pudo."""
     salida = {"case_id": case_id}
+    marca = marca_del_pedido(a)
     try:
         caso = con.execute("select * from caso where case_id=? and account=?",
                            (case_id, cuenta_activa())).fetchone()
@@ -5622,25 +5632,28 @@ def paso_del_lote(con, a, case_id, aplicar):
         if a.accion in ("cerrar", "mover"):
             hacia = "cerrado" if a.accion == "cerrar" else a.hacia
             salida["hacia"] = hacia
+            # Con el motivo que dio el agente: la marca del pedido no es un motivo.
+            caso_valida(caso, hacia, a.motivo)
+            if caso["etapa"] == "respondido" and hacia == "trabajo":
+                caso_falla("E_STAGE", "the engine moves it back to trabajo, not a command")
             if not aplicar:
-                caso_valida(caso, hacia, a.motivo)
-                if caso["etapa"] == "respondido" and hacia == "trabajo":
-                    caso_falla("E_STAGE", "the engine moves it back to trabajo, not a command")
                 salida["resultado"] = "would_change"
                 return salida
-            r = cmd_caso_mover(con, argparse.Namespace(id=case_id, etapa=hacia, motivo=a.motivo,
+            motivo = " ".join(t for t in ((a.motivo or "").strip(), marca) if t)
+            r = cmd_caso_mover(con, argparse.Namespace(id=case_id, etapa=hacia, motivo=motivo,
                                                        actor=a.actor, json=True))[0]
             if r.get("despacho"):
                 salida["despacho"] = r["despacho"]
         elif a.accion == "prioridad":
             salida["valor"] = a.valor
             cmd_caso_editar(con, argparse.Namespace(id=case_id, prioridad=a.valor, clase=None,
-                                                    titulo=None, actor=a.actor, json=True))
+                                                    titulo=None, actor=a.actor, json=True,
+                                                    marca=marca))
         else:
             salida["valor"] = a.valor
             cmd_caso_proyecto(con, argparse.Namespace(
                 id=case_id, proyecto=a.valor, actor=a.actor, json=True,
-                porque=f"the owner asked for it in case #{a.pedido}" if a.pedido else None))
+                porque=f"the owner asked for it {marca}" if marca else None))
         salida["resultado"] = "changed"
     except CasoFalla as falla:
         if con.in_transaction:
