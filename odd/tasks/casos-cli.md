@@ -22,7 +22,8 @@ the board does not have yet (notes, reminders and snooze, bulk actions, every li
 - Bulk actions are owner-level: `--actor dueno`, or `--actor agente` with `--pedido <id>`,
   the case where the owner (or a Super admin of that conversation) asked for it
   (`caso_pide_como_dueno`). Anything else is `E_NOT_OWNER`. Closing many (`cerrar`, or
-  `mover ... cerrado`) is a dry run unless `--confirmar`.
+  `mover ... cerrado`) is a dry run unless `--confirmar`, and only on the owner's own
+  request: a Super admin asks like the owner except for the destructive.
 - A note is an event that does not move the case, does not touch its approval and does not
   bump `updated_at` (so it does not change the grouping window).
 - A reminder fires from the tick of its own line: one notice to the owner's approval number
@@ -89,7 +90,9 @@ cases are created, judged or sent.
 - [x] K9 `caso lote <cerrar|mover|proyecto|prioridad>` over ids or listar filters,
       owner-level only, dry run for closing without `--confirmar`. Tests: `scripts/check-casos`.
       Proof: RED `invalid choice: 'lote'`; GREEN 14/14 (the requesting case never enters its
-      own batch; a case that fails keeps its code and does not stop the rest).
+      own batch; a case that fails keeps its code and does not stop the rest). A Super admin's
+      request may run a batch that does not close; closing in bulk is only the owner's
+      (superadmin-ordena: "except the destructive"). Proof: RED 0/1, GREEN 16/16.
 - [x] K10 `caso recordar <id> --cuando|--hasta [texto] [--al-agente] [--cancelar]`,
       `caso recordatorios`, `listar --con-recordatorio`, snooze hidden by default
       (`--pospuestos` shows it); migration; the tick fires due reminders. Tests:

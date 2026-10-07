@@ -5491,9 +5491,10 @@ FILTROS_LOTE = ("etapa", "abiertos", "chat", "prioridad", "proyecto", "desde",
                 "necesita_agente", "buscar")
 
 
-def lote_del_dueno(con, a):
+def lote_del_dueno(con, a, destructivo=False):
     """Sale con E_NOT_OWNER si el lote no lo pide el dueno. Devuelve el caso del pedido (o
-    None con `--actor dueno`)."""
+    None con `--actor dueno`). Cerrar en lote es destructivo: un Super admin pide como el
+    dueno salvo lo destructivo (superadmin-ordena), asi que eso es solo del dueno."""
     if a.actor == "dueno":
         return None
     if a.actor != "agente" or a.pedido is None:
@@ -5503,6 +5504,9 @@ def lote_del_dueno(con, a):
     if not caso_pide_como_dueno(con, pedido):
         caso_falla("E_NOT_OWNER", f"case #{a.pedido} is not the owner's nor a Super admin's: "
                                   f"a bulk action only runs on their request")
+    if destructivo and not caso_del_dueno(con, pedido):
+        caso_falla("E_NOT_OWNER", f"case #{a.pedido} is a Super admin's: closing cases in bulk "
+                                  f"is only the owner's")
     return pedido
 
 
@@ -5584,7 +5588,7 @@ def cmd_caso_lote(con, a):
         caso_falla("E_ARGS", f"--valor is one of {', '.join(PRIORIDADES_CASO)}")
     if a.accion == "proyecto" and a.valor is None:
         caso_falla("E_ARGS", "proyecto needs --valor <project id>, or '' for none")
-    pedido = lote_del_dueno(con, a)
+    pedido = lote_del_dueno(con, a, destructivo)
     ids = casos_del_lote(con, a, pedido)
     aplicar = not destructivo or a.confirmar
     casos = [paso_del_lote(con, a, i, aplicar) for i in ids]
@@ -13912,8 +13916,9 @@ def main():
                           "or prioridad, by ids or by listar's filters (at most "
                           f"{TOPE_LOTE}). Only the owner's: --actor dueno, or --actor agente "
                           "with --pedido <the owner's or a Super admin's case where he asked "
-                          "for it> (else E_NOT_OWNER). Closing many is a dry run until "
-                          "--confirmar: show the owner the list and wait for his yes")
+                          "for it> (else E_NOT_OWNER; closing only on the owner's own case). "
+                          "Closing many is a dry run until --confirmar: show the owner the "
+                          "list and wait for his yes")
     c.add_argument("accion", choices=list(ACCIONES_LOTE))
     c.add_argument("ids", nargs="*", type=int, help="the case ids; or use the filters")
     c.add_argument("--hacia", choices=list(ETAPAS_CASO), help="mover: the stage to move to")

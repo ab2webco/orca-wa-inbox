@@ -14317,6 +14317,15 @@ if NODE:
         ok("lo que la transicion no permite queda con su codigo, sin escribir",
            r["casos"][0].get("error") == "E_STAGE" and etapa(cuatro) == "clasificado", f"{r}")
 
+        jefa = caso_pedido(home, SOPORTE, "LT5", JEFA_OC, "suban la prioridad de lo de soporte")
+        r = js(home, "caso", "lote", "prioridad", tres, "--valor", "urgent", "--actor", "agente",
+               "--pedido", jefa)[0]
+        ok("un Super admin de la conversacion puede pedir un lote que no cierra",
+           r["aplicado"] is True and fila_caso(home, tres)["prioridad"] == "urgent", f"{r}")
+        p = corre(home, "caso", "lote", "cerrar", cuatro, "--motivo", "x", "--actor", "agente",
+                  "--pedido", jefa)
+        ok("pero cerrar en lote es solo del dueno (lo destructivo): E_NOT_OWNER",
+           p.returncode == 2 and "E_NOT_OWNER" in p.stderr, p.stderr)
         for args, codigo, nombre in (
                 (["cerrar", uno, "--motivo", "x", "--actor", "agente"], "E_NOT_OWNER",
                  "el agente sin --pedido no puede"),
