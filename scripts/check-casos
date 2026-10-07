@@ -2387,7 +2387,8 @@ import re  # noqa: E402
 LLAVES_TARJETA = {"case_id", "account", "chat_jid", "chat_name", "stage", "title",
                   "summary", "clase", "prioridad", "jev", "proposal", "exceptions",
                   "blocked_reason", "no_agent_rule", "read_only", "ticket", "updated_at", "actions", "project",
-                  "needs_agent", "events", "related_case", "dispatch", "waits_agent", "stage_at"}
+                  "needs_agent", "events", "related_case", "dispatch", "waits_agent", "stage_at",
+                  "reminder"}
 ISO = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$")
 
 
@@ -14330,6 +14331,146 @@ if NODE:
                  "una prioridad que no existe")):
             p = corre(home, "caso", "lote", *args)
             ok(f"lote: {nombre} ({codigo})", p.returncode == 2 and codigo in p.stderr, p.stderr)
+
+
+print("\ncasos-cli K10: recordatorios y posponer")
+
+
+def vence(home, cid):
+    """Los recordatorios pendientes del caso, vencidos hace un minuto (y su posposicion)."""
+    pasado = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 60))
+    con = db_de(home)
+    con.execute("update caso_recordatorio set cuando=? where case_id=? and estado='pendiente'",
+                (pasado, int(cid)))
+    con.execute("update caso set pospuesto_hasta=? where case_id=? and pospuesto_hasta is not null",
+                (pasado, int(cid)))
+    con.commit()
+    con.close()
+
+
+def iso_a_local(texto):
+    return datetime.datetime.fromisoformat(texto).astimezone().replace(tzinfo=None)
+
+
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        prepara_otro_chat(home)
+        pon_aprobacion(home, DUENO_DM)
+        cid = caso_pedido(home, SOPORTE, "RC1", PERSONA, "revisar la factura de octubre")
+        js(home, "caso", "editar", cid, "--titulo", "Factura de octubre", "--actor", "dueno")
+        r = js(home, "caso", "recordar", cid, "llamar al cliente", "--cuando", "2h",
+               "--actor", "agente")[0]
+        rec = (r.get("recordatorios") or [{}])[0]
+        dentro = iso_a_local(rec["cuando"]) - datetime.datetime.now() if rec.get("cuando") else None
+        ok("recordar --cuando 2h deja un recordatorio para dentro de dos horas",
+           dentro is not None and 7100 <= dentro.total_seconds() <= 7210
+           and rec.get("texto") == "llamar al cliente" and rec.get("estado") == "pendiente",
+           f"{r.get('recordatorios')}")
+        ok("y su evento, sin mover el caso", js(home, "caso", "ver", cid)[0]["etapa"] == "clasificado"
+           and (tarjeta(home, cid) or {}).get("events", [{}])[-1].get("que") == "reminder_set",
+           f"{(tarjeta(home, cid) or {}).get('events', [{}])[-1]}")
+        lista = js(home, "caso", "recordatorios")
+        ok("caso recordatorios los lista con el titulo del caso",
+           len(lista) == 1 and lista[0]["case_id"] == int(cid)
+           and lista[0]["titulo"] == "Factura de octubre", f"{lista}")
+        ok("listar --con-recordatorio",
+           [c["case_id"] for c in js(home, "caso", "listar", "--con-recordatorio")] == [int(cid)])
+        ok("la tarjeta dice cuando es el proximo",
+           ((tarjeta(home, cid) or {}).get("reminder") or {}).get("at") == rec["cuando"],
+           f"{(tarjeta(home, cid) or {}).get('reminder')}")
+        manana = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+        for cuando, esperado in (("mañana 9:00", f"{manana} 09:00:00"),
+                                 ("manana", f"{manana} 09:00:00"),
+                                 ("tomorrow 14:30", f"{manana} 14:30:00"),
+                                 (f"{manana} 08:15", f"{manana} 08:15:00")):
+            r = js(home, "caso", "recordar", cid, "--cuando", cuando, "--actor", "dueno")[0]
+            ok(f"--cuando {cuando!r}", any(iso_a_local(x["cuando"]).strftime("%Y-%m-%d %H:%M:%S")
+                                           == esperado for x in r["recordatorios"]),
+               f"{r['recordatorios']}")
+        for malo in ("2020-01-01", "cuando sea", "0h"):
+            p = corre(home, "caso", "recordar", cid, "--cuando", malo, "--actor", "dueno")
+            ok(f"--cuando {malo!r} es E_ARGS", p.returncode == 2 and "E_ARGS" in p.stderr, p.stderr)
+        r = js(home, "caso", "recordar", cid, "--cancelar", "--actor", "dueno")[0]
+        ok("--cancelar quita los pendientes", r.get("recordatorios") == []
+           and js(home, "caso", "recordatorios") == [], f"{r.get('recordatorios')}")
+
+        # El aviso: el tick lo encola al numero de aprobacion, una vez.
+        js(home, "caso", "recordar", cid, "llamar al cliente", "--cuando", "1h", "--actor", "agente")
+        vence(home, cid)
+        sidecar = SidecarFalso(home)
+        try:
+            _, resumen = tick(home)
+            _, otra = tick(home)
+        finally:
+            sidecar.cerrar()
+        salieron = [f for f in al_dueno(home) if "Factura de octubre" in (f["body"] or "")]
+        ok("el tick avisa al dueno: Caso N: titulo — texto",
+           len(salieron) == 1 and salieron[0]["body"].startswith(
+               f"Caso {cid}: Factura de octubre — llamar al cliente"),
+           f"{al_dueno(home)} {resumen}")
+        ok("una sola vez, y el resumen lo cuenta", (resumen or {}).get("recordatorios") == 1
+           and (otra or {}).get("recordatorios") == 0, f"{resumen} {otra}")
+        ok("el recordatorio queda avisado y deja su evento",
+           cuenta(home, "select count(*) from caso_recordatorio where estado='avisado'") == 1
+           and (tarjeta(home, cid) or {}).get("events", [{}])[-1].get("que") == "reminder",
+           f"{(tarjeta(home, cid) or {}).get('events', [{}])[-1]}")
+
+        # --al-agente: al vencer, el caso vuelve al agente.
+        otro = caso_pedido(home, OPERACIONES, "RC2", PERSONA, "ver el despliegue")
+        js(home, "mode", OPERACIONES, "responder")
+        con = db_de(home)
+        con.execute("update caso set jev=?, necesita_agente=0 where case_id=?",
+                    ('{"attention_class": "pleasantry", "flags": [], "skip": true}', int(otro)))
+        con.commit()
+        con.close()
+        ok("antes: el agente no lo ve", int(otro) not in (json.loads(
+            necesita(home).stdout or "{}").get("cases") or []))
+        js(home, "caso", "recordar", otro, "--cuando", "30m", "--al-agente", "--actor", "dueno")
+        vence(home, otro)
+        tick(home)
+        ok("--al-agente: al vencer, el caso vuelve al agente",
+           int(otro) in (json.loads(necesita(home).stdout or "{}").get("cases") or [])
+           and fila_caso(home, otro)["necesita_agente"] == 1)
+
+        # Posponer: fuera de la lista y del agente hasta entonces.
+        pospuesto = caso_pedido(home, FACTURACION, "RC3", PERSONA, "la nota credito")
+        ok("antes de posponer, lo espera el agente",
+           int(pospuesto) in (json.loads(necesita(home).stdout or "{}").get("cases") or []))
+        r = js(home, "caso", "recordar", pospuesto, "--hasta", "mañana 9:00", "--actor", "dueno")[0]
+        ok("--hasta lo pospone hasta mañana a las 9 y deja el aviso para entonces",
+           iso_a_local(r["pospuesto_hasta"]).strftime("%H:%M") == "09:00"
+           and len(r["recordatorios"]) == 1 and r["recordatorios"][0]["pospone"] is True,
+           f"{r}")
+        ok("listar no lo muestra; --pospuestos si",
+           int(pospuesto) not in [c["case_id"] for c in js(home, "caso", "listar")]
+           and int(pospuesto) in [c["case_id"] for c in js(home, "caso", "listar", "--pospuestos")])
+        ok("buscar lo encuentra igual", [c["case_id"] for c in js(home, "caso", "buscar", pospuesto)]
+           == [int(pospuesto)])
+        ok("el agente no lo toma mientras esta pospuesto",
+           int(pospuesto) not in (json.loads(necesita(home).stdout or "{}").get("cases") or []))
+        js(home, "caso", "asignar", "RC4", "--chat", FACTURACION, "--actor", "automatizacion")
+        f = fila_caso(home, pospuesto)
+        ok("un mensaje nuevo del cliente termina la posposicion",
+           f["pospuesto_hasta"] is None and int(pospuesto) in [c["case_id"] for c in
+                                                             js(home, "caso", "listar")]
+           and js(home, "caso", "recordatorios") == [], f"{dict(f)}")
+        js(home, "caso", "recordar", pospuesto, "--hasta", "3h", "--actor", "dueno")
+        vence(home, pospuesto)
+        tick(home)
+        ok("al vencer vuelve a la lista y al agente",
+           fila_caso(home, pospuesto)["pospuesto_hasta"] is None
+           and int(pospuesto) in [c["case_id"] for c in js(home, "caso", "listar")]
+           and int(pospuesto) in (json.loads(necesita(home).stdout or "{}").get("cases") or []))
+        ok("y ver dice sus recordatorios", "recordatorios" in js(home, "caso", "ver", pospuesto)[0])
+
+    with tempfile.TemporaryDirectory() as home:
+        cid = caso_clasificado(home, "RC5")
+        js(home, "caso", "recordar", cid, "revisar", "--cuando", "1h", "--actor", "dueno")
+        vence(home, cid)
+        tick(home)
+        ok("sin numero de aprobacion no sale ningun aviso, y el recordatorio lo dice",
+           cuenta(home, "select count(*) from aviso") == 0
+           and cuenta(home, "select count(*) from caso_recordatorio where estado='sin-numero'") == 1)
 
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")

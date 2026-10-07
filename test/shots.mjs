@@ -488,6 +488,31 @@ const TABLERO_OTRO_CHAT = [
   })
 ]
 
+// casos-cli: una nota y una edicion en la historia, un recordatorio y un caso pospuesto.
+const enMinutos = (n) => new Date(AHORA_MS + n * 60000).toISOString()
+const TABLERO_CASOS_CLI = [
+  caso(41, 'clasificado', {
+    title: 'Revisar la factura de octubre', prioridad: 'urgent', chat_name: 'Cliente Uno',
+    updated_at: minutos(3), exceptions: [], proposal: null, jev: null,
+    reminder: { at: enMinutos(120), snoozed_until: null },
+    events: [
+      { de: null, a: 'recibido', actor: 'automatizacion', que: 'message', at: minutos(30) },
+      { de: 'recibido', a: 'clasificado', actor: 'agente', que: 'classified', args: ['card'],
+        at: minutos(25) },
+      { de: 'clasificado', a: 'clasificado', actor: 'dueno', que: 'edited',
+        args: ['priority', 'title'], at: minutos(10) },
+      { de: 'clasificado', a: 'clasificado', actor: 'dueno', que: 'note',
+        nota: 'El cliente llamo: la necesita antes del viernes, con el detalle por sede.',
+        at: minutos(5) },
+      { de: 'clasificado', a: 'clasificado', actor: 'agente', que: 'reminder_set', at: minutos(3) }]
+  }),
+  caso(42, 'recibido', {
+    title: 'La nota credito del pedido anterior', chat_name: 'Facturacion — Cliente Norte',
+    updated_at: minutos(15), exceptions: [], proposal: null, jev: null,
+    reminder: { at: enMinutos(900), snoozed_until: enMinutos(900) }
+  })
+]
+
 const TABLERO_DESPACHO = [
   caso(31, 'trabajo', { title: 'El reporte de ventas sale en blanco', prioridad: 'high',
     updated_at: minutos(12),
@@ -1104,6 +1129,19 @@ const PANELES = [
     enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_OTRO_CHAT)),
     guion: ABRIR_TABLERO + `;
       document.querySelector('.card[data-case="31"]').click()`
+  },
+  {
+    // casos-cli: el recordatorio y el caso pospuesto en sus tarjetas.
+    nombre: 'tablero-recordatorio', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, guion: ABRIR_TABLERO, espera: 400,
+    datos: conTablero(tableroDe(TABLERO_CASOS_CLI))
+  },
+  {
+    // Y el detalle, con la nota y la edicion en la historia.
+    nombre: 'tablero-nota-detalle', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 400, datos: conTablero(tableroDe(TABLERO_CASOS_CLI)),
+    guion: ABRIR_TABLERO + `;
+      document.querySelector('.card[data-case="41"]').click()`
   },
   {
     // T8: el despacho al agente del proyecto en cada estado.

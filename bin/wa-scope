@@ -520,10 +520,32 @@ create table if not exists caso (
   -- El caso anterior del mismo chat (un caso es un pedido: lo nuevo abre otro y apunta al
   -- que ya estaba).
   relacionado integer,
+  -- Hasta cuando el dueno lo pospuso (casos-cli, K10): fuera de la lista y del agente
+  -- hasta esa hora local; un mensaje nuevo del cliente lo termina antes.
+  pospuesto_hasta text,
   created_at text not null,
   updated_at text not null
 );
 create index if not exists ix_caso_chat on caso(account, chat_jid, etapa);
+-- Un recordatorio de un caso (casos-cli, K10): el tick de SU linea, al vencer, le avisa al
+-- dueno por el numero de aprobacion (`aviso`, tipo `recordatorio`) y, con `al_agente`, deja
+-- el caso para el agente. `pospone` es el fin de una posposicion (`--hasta`).
+create table if not exists caso_recordatorio (
+  id        integer primary key autoincrement,
+  case_id   integer not null,
+  account   text not null,
+  cuando    text not null,            -- hora local, como los sellos de los casos
+  texto     text,
+  al_agente integer not null default 0,
+  pospone   integer not null default 0,
+  -- pendiente | avisado | sin-numero (vencio sin numero de aprobacion) | cancelado
+  estado    text not null default 'pendiente',
+  actor     text not null,
+  req_id    text,                     -- el aviso que salio
+  created_at text not null,
+  updated_at text not null
+);
+create index if not exists ix_caso_recordatorio on caso_recordatorio(account, estado, cuando);
 -- Un mensaje es de UN caso como mucho. La llave lleva la cuenta: el mismo mensaje de
 -- un grupo visto desde dos lineas propias es el mismo stanza_id, y cada linea tiene
 -- su propio tablero.
@@ -1714,6 +1736,8 @@ def migrate(con):
         con.execute("alter table caso add column dispensa text")
     if "relacionado" not in caso_cols:
         con.execute("alter table caso add column relacionado integer")
+    if "pospuesto_hasta" not in caso_cols:
+        con.execute("alter table caso add column pospuesto_hasta text")
     # El despacho por terminal (T8): una base con la tabla de antes gana las dos columnas.
     despacho_cols = {r["name"] for r in con.execute("pragma table_info(caso_despacho)")}
     if "cuenta_claude" not in despacho_cols:
@@ -3491,6 +3515,216 @@ def notas_de(eventos):
             for e in eventos if (e.get("detalle") or "").startswith(PREFIJO_NOTA)]
 
 
+# Los recordatorios y el posponer (casos-cli, K10). Lo que dicen sus eventos (sin el texto:
+# el texto vive en `caso_recordatorio` y en el aviso).
+PREFIJO_RECORDATORIO = "recordatorio para "
+RECORDATORIO_VENCIDO = "recordatorio vencido"
+RECORDATORIOS_CANCELADOS = "recordatorios cancelados"
+POSPOSICION_TERMINADA = "posposicion terminada"
+LARGO_RECORDATORIO = 300
+# Hasta cuando se puede poner uno: un recordatorio a un año es una nota.
+DIAS_RECORDATORIO = 365
+HORA_POR_DEFECTO = (9, 0)
+RE_EN = re.compile(r"^(\d+)\s*(m|min|mins|minutos?|h|hs|horas?|d|dias?|días?)$")
+RE_HORA = re.compile(r"^(\d{1,2})(?::(\d{2}))?$")
+MANANA = ("mañana", "manana", "tomorrow", "amanha", "amanhã")
+HOY = ("hoy", "today", "hoje")
+
+
+def cuando_de(texto, ahora=None):
+    """La hora local (formato de los casos) que dice `texto`: en 30m, 2h o 3d; manana (o
+    tomorrow) con su hora, 9:00 si no la dice; hoy 15:00; 15:00 sola (hoy, o manana si ya
+    paso); o una fecha (2026-10-07, 2026-10-07 09:00). Tiene que ser futura y de menos de un
+    ano: si no, E_ARGS."""
+    ahora = ahora or datetime.datetime.now().replace(microsecond=0)
+    t = " ".join(str(texto or "").strip().lower().split())
+    cuando = None
+    m = RE_EN.match(t)
+    if m and int(m.group(1)) > 0:
+        n, unidad = int(m.group(1)), m.group(2)[0]
+        cuando = ahora + datetime.timedelta(minutes=n) * {"m": 1, "h": 60, "d": 1440}[unidad]
+    partes = t.split(" ", 1)
+    if cuando is None and partes[0] in MANANA + HOY:
+        dia = ahora.date() + datetime.timedelta(days=1 if partes[0] in MANANA else 0)
+        hora = RE_HORA.match(partes[1]) if len(partes) > 1 else None
+        if len(partes) == 1 or hora:
+            h, mi = ((int(hora.group(1)), int(hora.group(2) or 0)) if hora
+                     else HORA_POR_DEFECTO)
+            if h < 24 and mi < 60:
+                cuando = datetime.datetime.combine(dia, datetime.time(h, mi))
+    hora = RE_HORA.match(t)
+    if cuando is None and hora and ":" in t:
+        h, mi = int(hora.group(1)), int(hora.group(2))
+        if h < 24 and mi < 60:
+            cuando = datetime.datetime.combine(ahora.date(), datetime.time(h, mi))
+            if cuando <= ahora:
+                cuando += datetime.timedelta(days=1)
+    if cuando is None:
+        for formato in FORMATOS_FECHA:
+            try:
+                cuando = datetime.datetime.strptime(str(texto).strip(), formato)
+            except ValueError:
+                continue
+            if formato == "%Y-%m-%d":
+                cuando = cuando.replace(hour=HORA_POR_DEFECTO[0], minute=HORA_POR_DEFECTO[1])
+            break
+    if cuando is None:
+        caso_falla("E_ARGS", f"{texto!r} is not a time: use 30m, 2h, 3d, manana 9:00, hoy 15:00, "
+                             f"15:00 or a date (2026-10-07 09:00)")
+    if cuando <= ahora:
+        caso_falla("E_ARGS", f"{texto!r} is in the past ({cuando:%Y-%m-%d %H:%M})")
+    if cuando > ahora + datetime.timedelta(days=DIAS_RECORDATORIO):
+        caso_falla("E_ARGS", f"{texto!r} is more than {DIAS_RECORDATORIO} days away")
+    return cuando.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def recordatorios_de(con, case_id, solo_pendientes=True):
+    """Los recordatorios de un caso, del proximo al ultimo: [{id, cuando (ISO), texto,
+    al_agente, pospone, estado, actor}]."""
+    filas = con.execute(
+        "select * from caso_recordatorio where case_id=?" +
+        (" and estado='pendiente'" if solo_pendientes else "") + " order by cuando, id",
+        (case_id,)).fetchall()
+    return [{"id": r["id"], "cuando": iso_caso(r["cuando"]), "texto": r["texto"],
+             "al_agente": bool(r["al_agente"]), "pospone": bool(r["pospone"]),
+             "estado": r["estado"], "actor": r["actor"]} for r in filas]
+
+
+def con_recordatorios(con, fila):
+    """La fila de un caso con sus recordatorios pendientes y su posposicion en ISO."""
+    return dict(fila, recordatorios=recordatorios_de(con, fila["case_id"]),
+                pospuesto_hasta=iso_caso(fila.get("pospuesto_hasta"))
+                if fila.get("pospuesto_hasta") else None)
+
+
+def termina_posposicion(con, caso, actor):
+    """Un mensaje nuevo del cliente termina la posposicion antes de su hora: el caso vuelve
+    a la lista y al agente, y el aviso de fin de posposicion ya no hace falta. Sin commit."""
+    momento = ahora_caso()
+    con.execute("update caso set pospuesto_hasta=null where case_id=?", (caso["case_id"],))
+    con.execute("update caso_recordatorio set estado='cancelado', updated_at=? where case_id=? "
+                "and estado='pendiente' and pospone=1", (momento, caso["case_id"]))
+    caso_evento(con, caso["case_id"], caso["etapa"], caso["etapa"], actor,
+                f"{POSPOSICION_TERMINADA}: mensaje nuevo")
+
+
+def cmd_caso_recordar(con, a):
+    """`caso recordar`: un recordatorio (`--cuando`), posponer (`--hasta`: fuera de la lista y
+    del agente hasta entonces, con un aviso al terminar), o `--cancelar` los dos."""
+    if a.cancelar and (a.cuando or a.hasta):
+        caso_falla("E_ARGS", "--cancelar goes alone")
+    if not (a.cancelar or a.cuando or a.hasta):
+        caso_falla("E_ARGS", "say --cuando <when>, --hasta <when> or --cancelar")
+    texto = " ".join(texto_caso(a.texto or "").split())
+    if len(texto) > LARGO_RECORDATORIO:
+        caso_falla("E_ARGS", f"the reminder text is longer than {LARGO_RECORDATORIO} characters")
+    cuando = cuando_de(a.cuando) if a.cuando else None
+    hasta = cuando_de(a.hasta) if a.hasta else None
+    caso_toma(con)
+    caso = caso_de(con, a.id)
+    momento = ahora_caso()
+    if a.cancelar:
+        n = con.execute("update caso_recordatorio set estado='cancelado', updated_at=? where "
+                        "case_id=? and estado='pendiente'", (momento, a.id)).rowcount
+        if n or caso.get("pospuesto_hasta"):
+            con.execute("update caso set pospuesto_hasta=null where case_id=?", (a.id,))
+            caso_evento(con, a.id, caso["etapa"], caso["etapa"], a.actor, RECORDATORIOS_CANCELADOS)
+    for sello, pospone in ((cuando, 0), (hasta, 1)):
+        if not sello:
+            continue
+        con.execute("insert into caso_recordatorio (case_id, account, cuando, texto, al_agente, "
+                    "pospone, actor, created_at, updated_at) values (?,?,?,?,?,?,?,?,?)",
+                    (a.id, caso["account"], sello, texto or None, int(bool(a.al_agente)),
+                     pospone, a.actor, momento, momento))
+        if pospone:
+            con.execute("update caso set pospuesto_hasta=? where case_id=?", (sello, a.id))
+        caso_evento(con, a.id, caso["etapa"], caso["etapa"], a.actor,
+                    f"{PREFIJO_RECORDATORIO}{sello}" + (" · pospuesto" if pospone else ""))
+    con.commit()
+    return [con_recordatorios(con, caso_fila(con, caso_de(con, a.id)))]
+
+
+def cmd_caso_recordatorios(con, a):
+    """`caso recordatorios`: los pendientes de la linea, del proximo al ultimo. Solo lee."""
+    filas = con.execute("select r.*, c.chat_jid, c.titulo, c.etapa from caso_recordatorio r "
+                        "join caso c on c.case_id = r.case_id where r.account=? and "
+                        "r.estado='pendiente' order by r.cuando, r.id",
+                        (cuenta_activa(),)).fetchall()
+    casos = [dict(case_id=f["case_id"], chat_jid=f["chat_jid"], titulo=f["titulo"])
+             for f in filas]
+    nombres, titulos = nombres_y_titulos(con, casos) if casos else ({}, {})
+    salida = [{"id": f["id"], "case_id": f["case_id"], "account": f["account"],
+               "titulo": titulos.get(f["case_id"]), "chat_name": nombres.get(f["chat_jid"]),
+               "etapa": f["etapa"], "cuando": iso_caso(f["cuando"]), "texto": f["texto"],
+               "al_agente": bool(f["al_agente"]), "pospone": bool(f["pospone"])}
+              for f in filas]
+    if a.json:
+        return salida
+    if not salida:
+        print("(no reminders)")
+    for r in salida:
+        print(f"#{r['case_id']} {r['cuando']} · {r['titulo']} · {r['chat_name']}"
+              + (f" · {r['texto']}" if r["texto"] else "")
+              + (" · snooze ends" if r["pospone"] else ""))
+    return None
+
+
+def texto_de_recordatorio(con, caso, r):
+    """El aviso al dueno: "Caso N: <titulo> — <texto>", en el idioma de los avisos. Una
+    credencial en el titulo o el texto no sale por WhatsApp."""
+    tx = aviso_textos()
+    _, titulos = nombres_y_titulos(con, [caso])
+    titulo = recorta(titulos[caso["case_id"]], LARGO_TITULO)
+    texto = r["texto"] or tx["recordatorio_vacio"]
+    if wa_reglas.secreto(titulo):
+        titulo = "-"
+    if wa_reglas.secreto(texto):
+        texto = tx["motivo_oculto"]
+    return tx["recordatorio"].format(n=caso["case_id"], titulo=titulo,
+                                     x=recorta(texto, LARGO_RECORDATORIO))
+
+
+def tick_recordatorios(con, resumen):
+    """Los recordatorios vencidos de la linea activa: el aviso al dueno (sale con los demas
+    avisos de esta vuelta), el caso al agente si lo pidio, el fin de la posposicion. Cada uno
+    en su transaccion, una sola vez."""
+    momento = ahora_caso()
+    for r in con.execute("select * from caso_recordatorio where account=? and "
+                         "estado='pendiente' and cuando <= ? order by cuando, id",
+                         (cuenta_activa(), momento)).fetchall():
+        caso_toma(con)
+        try:
+            if con.execute("select estado from caso_recordatorio where id=?",
+                           (r["id"],)).fetchone()["estado"] != "pendiente":
+                con.rollback()
+                continue
+            caso = caso_de(con, r["case_id"])
+            if r["pospone"] and caso.get("pospuesto_hasta") and caso["pospuesto_hasta"] <= momento:
+                con.execute("update caso set pospuesto_hasta=null where case_id=?",
+                            (caso["case_id"],))
+            req = f"aviso-rec-{r['id']}"
+            encolado = aviso_encola(con, req, "recordatorio",
+                                    texto_de_recordatorio(con, caso, r),
+                                    case_id=caso["case_id"])
+            if r["al_agente"] and caso["etapa"] in ETAPAS_ATENDER:
+                caso_tocar(con, caso, r["actor"], RECORDATORIO_VENCIDO, necesita_agente=1)
+            else:
+                caso_evento(con, caso["case_id"], caso["etapa"], caso["etapa"], r["actor"],
+                            RECORDATORIO_VENCIDO)
+            con.execute("update caso_recordatorio set estado=?, req_id=?, updated_at=? where id=?",
+                        ("avisado" if encolado else "sin-numero", req if encolado else None,
+                         momento, r["id"]))
+            con.commit()
+            resumen["recordatorios"] += 1
+        except BaseException:
+            con.rollback()
+            raise
+    # Una posposicion sin recordatorio (de antes, o cancelado a mano) igual termina.
+    con.execute("update caso set pospuesto_hasta=null where account=? and pospuesto_hasta <= ?",
+                (cuenta_activa(), momento))
+    con.commit()
+
+
 def cmd_caso_atender(con, a):
     """El dueno pide que el agente atienda este caso en su proxima corrida (lo que era
     "Tomar" en la bandeja): lo marca `necesita_agente`, que es lo que mira
@@ -4983,6 +5217,8 @@ def caso_suma_mensaje(con, caso, stanza, actor, reabre=True):
         caso_mover(con, caso, "recibido", actor, f"mensaje {stanza}")
     else:
         caso_tocar(con, caso, actor, f"mensaje {stanza}")
+    if caso.get("pospuesto_hasta"):
+        termina_posposicion(con, caso, actor)
 
 
 def plano(texto):
@@ -5087,6 +5323,11 @@ def caso_corto(con, caso, nombre, titulo, proyecto):
                  destino=fila["destino"], plane_issue=fila["plane_issue"],
                  mensajes=fila["mensajes"], created_at=fila["created_at"],
                  updated_at=fila["updated_at"])
+    proximo = con.execute("select min(cuando) from caso_recordatorio where case_id=? and "
+                          "estado='pendiente'", (fila["case_id"],)).fetchone()[0]
+    corta.update(recordatorio=iso_caso(proximo) if proximo else None,
+                 pospuesto_hasta=iso_caso(fila["pospuesto_hasta"])
+                 if fila.get("pospuesto_hasta") else None)
     return corta
 
 
@@ -5130,6 +5371,13 @@ def cmd_caso_listar(con, a):
     if a.chat:
         sql += " and chat_jid=?"
         params.append(a.chat)
+    if getattr(a, "con_recordatorio", False):
+        sql += (" and exists (select 1 from caso_recordatorio r where r.case_id = caso.case_id "
+                "and r.estado='pendiente')")
+    elif not (getattr(a, "pospuestos", False) or getattr(a, "buscar", None)):
+        # Lo pospuesto no se lista hasta su hora (K10); buscar lo encuentra igual.
+        sql += " and (pospuesto_hasta is null or pospuesto_hasta <= ?)"
+        params.append(ahora_caso())
     filas = [dict(r) for r in con.execute(
         sql + " order by updated_at desc, case_id desc", params).fetchall()]
     if getattr(a, "necesita_agente", False):
@@ -5455,6 +5703,7 @@ def cmd_caso_ver(con, a):
     if revision:
         caso["revision"] = revision
     caso["notas"] = notas_de(caso["eventos"])
+    caso.update(con_recordatorios(con, caso))
     caso["primer_mensaje"] = estado_primer_mensaje(con, caso)
     return [caso]
 
@@ -5475,7 +5724,9 @@ HISTORIA_EN = {
     "approved": "approved", "sent": "sent", "route": "routed", "project": "project set",
     "classified": "classified", "retitled": "new title", "withdrawn": "proposal withdrawn",
     "authorized": "the owner authorized it", "attend": "the owner asked the agent to handle it",
-    "note": "note", "edited": "edited",
+    "note": "note", "edited": "edited", "reminder_set": "a reminder was set",
+    "reminder": "the reminder was due", "reminder_cancelled": "the reminders were cancelled",
+    "snooze_ended": "the snooze ended: the customer wrote",
     "project_question": "the project question was asked",
     "project_answer": "the project question was answered",
 }
@@ -5531,6 +5782,11 @@ def en_palabras(t):
         lineas.append(f"Exceptions: {', '.join(t['exceptions'])}")
     if t.get("waits_agent"):
         lineas.append("Waits for the agent")
+    recordatorio = t.get("reminder") or {}
+    if recordatorio.get("snoozed_until"):
+        lineas.append(f"Snoozed until {recordatorio['snoozed_until']}")
+    if recordatorio.get("at"):
+        lineas.append(f"Next reminder: {recordatorio['at']}")
     if t.get("actions"):
         lineas.append(f"What the owner can do: {', '.join(t['actions'])}")
     if t.get("history"):
@@ -7674,6 +7930,14 @@ def que_del_evento(detalle, medios=None):
     d = detalle.strip()
     if d.startswith(PREFIJO_NOTA):
         return "note", []
+    if d.startswith(PREFIJO_RECORDATORIO):
+        return "reminder_set", []
+    if d.startswith(RECORDATORIO_VENCIDO):
+        return "reminder", []
+    if d.startswith(RECORDATORIOS_CANCELADOS):
+        return "reminder_cancelled", []
+    if d.startswith(POSPOSICION_TERMINADA):
+        return "snooze_ended", []
     if d.startswith(PREFIJO_EDITADO):
         tramos = [t.split(" ")[0] for t in d[len(PREFIJO_EDITADO):].split(" · ")]
         return "edited", [CAMPOS_EDITADOS[t] for t in tramos if t in CAMPOS_EDITADOS]
@@ -7923,8 +8187,25 @@ def tarjetas_de(con, casos, tope_eventos=EVENTOS_EN_TARJETA):
                                        # con la del bot si fue otra (RESPALDOS_CUENTA).
                                        "account": r["cuenta_etiqueta"],
                                        "fallback": r["respaldo"]}
+    # El proximo recordatorio y la posposicion de cada caso (casos-cli, K10).
+    proximos = {}
+    for i in range(0, len(ids), 500):
+        parte = ids[i:i + 500]
+        for r in con.execute(
+                f"select case_id, min(cuando) cuando from caso_recordatorio where estado="
+                f"'pendiente' and case_id in ({','.join('?' * len(parte))}) group by case_id",
+                parte):
+            proximos[r["case_id"]] = r["cuando"]
+    pospuestos = {c["case_id"]: c["pospuesto_hasta"] if "pospuesto_hasta" in c.keys() else None
+                  for c in casos}
     cards = [dict(tarjeta_de(c, nombres, titulos, motivos, eventos, sin_agente, solo_leer,
                              despachos, alcance, catalogo),
+                  reminder=({"at": iso_caso(proximos.get(c["case_id"]))
+                             if proximos.get(c["case_id"]) else None,
+                             "snoozed_until": iso_caso(pospuestos[c["case_id"]])
+                             if pospuestos[c["case_id"]] else None}
+                            if proximos.get(c["case_id"]) or pospuestos[c["case_id"]]
+                            else None),
                   # Lo cuenta `agent_waiting`: el panel le pone la falla de `agent_launch` a
                   # estas tarjetas.
                   waits_agent=c["case_id"] in esperan,
@@ -8677,7 +8958,7 @@ CONTEOS_TICK = ("enviados", "excepciones", "frenados", "esperando", "bloqueados"
                 "revisiones", "transcritos", "rancias", "despachados",
                 "bloqueados_por_despacho", "respuestas_al_proyecto", "agente_lanzado",
                 "agente_error", "trabajos_sin_clic", "limpieza_atascados", "avisos",
-                "avisos_error", "preguntas_al_dueno")
+                "avisos_error", "preguntas_al_dueno", "recordatorios")
 
 # La limpieza de los espacios que dejan las corridas del plugin. Orca fuerza `new_per_run`
 # en las automatizaciones de un plugin: cada corrida crea un hijo `::workspace:<uuid>` de
@@ -9211,6 +9492,8 @@ TEXTOS_AVISO = {
            "motivo_oculto": "el motivo lleva una credencial: mirelo en el tablero.",
            "pide_oculto": "lo que pidio lleva una credencial (mirelo en el tablero)",
            "estado_vacio": "No hay casos abiertos.",
+           "recordatorio": "Caso {n}: {titulo} — {x}",
+           "recordatorio_vacio": "le recuerdo este caso",
            "estado_mas": "y {x} mas en el tablero.",
            "desde": "desde {x}",
            "etapas": {"recibido": "recibido", "clasificado": "clasificado",
@@ -9245,6 +9528,8 @@ TEXTOS_AVISO = {
            "motivo_oculto": "the reason carries a credential: check the board.",
            "pide_oculto": "what was asked carries a credential (check the board)",
            "estado_vacio": "No open cases.",
+           "recordatorio": "Case {n}: {titulo} — {x}",
+           "recordatorio_vacio": "a reminder about this case",
            "estado_mas": "and {x} more on the board.",
            "desde": "since {x}",
            "etapas": {"recibido": "received", "clasificado": "classified",
@@ -10451,6 +10736,15 @@ def cmd_tick(con, a):
             if con.in_transaction:
                 con.rollback()
             print(f"wa-scope: credential cases not routed: {exc}", file=sys.stderr)
+        # Los recordatorios vencidos (casos-cli, K10): antes del agente, que toma el caso que
+        # vuelve a el, y de los avisos, que mandan el suyo en esta misma vuelta.
+        try:
+            tick_recordatorios(con, resumen)
+        except (sqlite3.Error, CasoFalla) as exc:
+            if con.in_transaction:
+                con.rollback()
+            resumen["errores"] += 1
+            print(f"wa-scope: reminders skipped: {exc}", file=sys.stderr)
         try:
             tick_automaticas(con, resumen)
         except (sqlite3.Error, CasoFalla) as exc:
@@ -12818,7 +13112,9 @@ def casos_para_agente(con):
     for r in con.execute(
             "select case_id, chat_jid, etapa, propuesta, jev, necesita_agente, excepciones "
             "from caso where account=? and etapa in ('recibido','clasificado') "
-            "order by updated_at, case_id", (cuenta_activa(),)):
+            # Lo que el dueno pospuso espera hasta su hora (casos-cli, K10).
+            "and (pospuesto_hasta is null or pospuesto_hasta <= ?) "
+            "order by updated_at, case_id", (cuenta_activa(), ahora_caso())):
         # Una credencial nunca pasa por el agente, con la propuesta que tenga.
         if "credential" in _lista_json(r["excepciones"]):
             continue
@@ -13517,6 +13813,10 @@ def main():
         c.add_argument("--orden", choices=["tablero", "reciente"], default="tablero",
                        help="tablero (default): the board's order, what waits for the owner "
                             "first; reciente: the last moved first")
+        c.add_argument("--con-recordatorio", dest="con_recordatorio", action="store_true",
+                       help="only the cases with a pending reminder (snoozed ones included)")
+        c.add_argument("--pospuestos", action="store_true",
+                       help="also the snoozed cases, which are hidden until their time")
         c.add_argument("--completo", action="store_true",
                        help="the full rows (proposal text, route, Jev); by default each row is "
                             "short: number, stage, title, chat, priority, project")
@@ -13582,6 +13882,28 @@ def main():
                           "case file and the board's history")
     c.add_argument("id", type=int); c.add_argument("texto")
     c.set_defaults(fn=cmd_caso_nota)
+
+    c = muta("recordar", help="a reminder on a case: at --cuando the tick sends the owner, on "
+                              "his approval number and on the case's line, 'Caso N: <title> — "
+                              "<text>' (with --al-agente the case also goes back to the agent). "
+                              "--hasta snoozes it: hidden from listar and from the agent until "
+                              "then (a new message from the customer ends it), with a reminder "
+                              "at its end. --cancelar drops both. When: 30m, 2h, 3d, manana 9:00, "
+                              "hoy 15:00, 15:00 or a date (2026-10-07 09:00), local time")
+    c.add_argument("id", type=int)
+    c.add_argument("texto", nargs="?", help="what to remind (optional)")
+    c.add_argument("--cuando", metavar="WHEN", help="when to remind")
+    c.add_argument("--hasta", metavar="WHEN", help="snooze the case until then")
+    c.add_argument("--al-agente", dest="al_agente", action="store_true",
+                   help="when it is due, the case goes back to the agent too (recibido or "
+                        "clasificado)")
+    c.add_argument("--cancelar", action="store_true",
+                   help="cancel the case's pending reminders and its snooze")
+    c.set_defaults(fn=cmd_caso_recordar)
+
+    c = caso("recordatorios", help="the pending reminders of the line, the next first, with "
+                                   "the case's title and chat")
+    c.set_defaults(fn=cmd_caso_recordatorios)
 
     c = caso("estado", help="how a case is going, in words: what its board card computes "
                             "(stage and since when, the owner's next actions, the project "

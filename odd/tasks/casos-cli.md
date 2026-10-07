@@ -90,10 +90,15 @@ cases are created, judged or sent.
       owner-level only, dry run for closing without `--confirmar`. Tests: `scripts/check-casos`.
       Proof: RED `invalid choice: 'lote'`; GREEN 14/14 (the requesting case never enters its
       own batch; a case that fails keeps its code and does not stop the rest).
-- [ ] K10 `caso recordar <id> --cuando|--hasta [texto] [--al-agente] [--cancelar]`,
+- [x] K10 `caso recordar <id> --cuando|--hasta [texto] [--al-agente] [--cancelar]`,
       `caso recordatorios`, `listar --con-recordatorio`, snooze hidden by default
       (`--pospuestos` shows it); migration; the tick fires due reminders. Tests:
-      `scripts/check-casos`, `test/panels.test.mjs` (chip).
+      `scripts/check-casos`, `test/panels.test.mjs` (chip). Proof: RED `invalid choice:
+      'recordar'`, panels 1628/1637 (no chip, history read "updated"); GREEN 27/27, panels
+      1640/1640 (the 3 detail-line checks were written with their code, not seen RED);
+      affected sections migracion 14/14, tablero 20/20, tick 24/24, needs-agent 9/9, base
+      nueva 12/12, agrupacion 14/14, T14 78/78. Shots `tablero-recordatorio`,
+      `tablero-nota-detalle` (es, dark, 390) looked at.
 - [ ] K11 `--todas-las-lineas` on listar, buscar and informe. Tests: `scripts/check-casos`.
 - [ ] K12 Harness docs: AGENTS.md, COMMANDS.md, the whatsapp-cli and whatsapp-soporte skills
       teach when to use each command, never naming an agent. Tests: `scripts/check-harness`.

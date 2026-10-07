@@ -5697,6 +5697,44 @@ console.log('\nactivity.html — casos-cli K7: una edicion dice que cambio')
   }
 }
 
+console.log('\nactivity.html — casos-cli K10: recordatorios y posponer en la tarjeta')
+{
+  const pronto = new Date(Date.now() + 2 * 3600000).toISOString()
+  const caso = tarjeta({ case_id: 8, reminder: { at: pronto, snoozed_until: null }, events: [
+    { de: null, a: 'recibido', actor: 'automatizacion', que: 'message', at: hace(50 * 60000) },
+    { de: 'recibido', a: 'recibido', actor: 'dueno', que: 'reminder_set', at: hace(40 * 60000) },
+    { de: 'recibido', a: 'recibido', actor: 'dueno', que: 'reminder', at: hace(30 * 60000) },
+    { de: 'recibido', a: 'recibido', actor: 'dueno', que: 'reminder_cancelled', at: hace(20 * 60000) },
+    { de: 'recibido', a: 'recibido', actor: 'automatizacion', que: 'snooze_ended', at: hace(10 * 60000) }] })
+  const pospuesto = tarjeta({ case_id: 9, reminder: { at: pronto, snoozed_until: pronto } })
+  for (const [idioma, rec, pos, hist] of [
+    ['es-419', /Recordatorio:/, /Pospuesto hasta/, [/recordatorio puesto/, /recordatorio vencido/,
+      /recordatorios cancelados/, /posposicion terminada/]],
+    ['en-US', /Reminder:/, /Snoozed until/, [/reminder set/, /reminder due/, /reminders cancelled/,
+      /snooze ended/]],
+    ['pt-BR', /Lembrete:/, /Adiado ate/, [/lembrete criado/, /lembrete vencido/,
+      /lembretes cancelados/, /adiamento terminado/]]]) {
+    const { doc } = await abrirTablero({ board: tablero([caso, pospuesto]) }, idioma)
+    const nodo = (id) => doc.querySelector(`.card[data-case="${id}"]`)
+    const chip = nodo(8) && nodo(8).querySelector('.card-recordatorio')
+    ok(`${idioma}: la tarjeta dice el proximo recordatorio`, chip && rec.test(chip.textContent),
+      chip ? chip.textContent : 'sin chip')
+    const chip2 = nodo(9) && nodo(9).querySelector('.card-recordatorio')
+    ok(`${idioma}: y la posposicion`, chip2 && pos.test(chip2.textContent),
+      chip2 ? chip2.textContent : 'sin chip')
+    const det = abrirDetalle(doc, 8)
+    const enDetalle = det.querySelector('.card-recordatorio')
+    ok(`${idioma}: el detalle tambien lo dice`, enDetalle && rec.test(enDetalle.textContent),
+      enDetalle ? enDetalle.textContent : 'sin linea')
+    const h = det.querySelector('.det-hist')
+    const filas = [...h.querySelectorAll('li')].map((li) => li.textContent)
+    ok(`${idioma}: la historia dice los recordatorios en palabras`,
+      hist.every((r) => filas.some((f) => r.test(f))), JSON.stringify(filas))
+  }
+  const { doc } = await abrirTablero({ board: tablero([tarjeta({ case_id: 10 })]) })
+  ok('una tarjeta sin recordatorio no lleva la linea', !doc.querySelector('.card-recordatorio'))
+}
+
 console.log('\nactivity.html — T22: la historia dice que paso, y agrupa lo repetido')
 {
   const caso = tarjeta({ case_id: 4, events: [

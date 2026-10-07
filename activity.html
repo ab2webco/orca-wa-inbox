@@ -322,6 +322,10 @@
               color: var(--foreground, var(--fb-foreground)); }
       .card-blocked { font-size: 11px; overflow-wrap: anywhere;
               color: var(--destructive, var(--fb-destructive)); }
+      /* El recordatorio o la posposicion: apagado, como la hora; es un dato, no una alarma. */
+      .card-recordatorio { font-size: 11px; overflow-wrap: anywhere;
+              color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      #board-detail .card-recordatorio { margin-top: 6px; font-size: 12px; }
       .card-aprobada { font-size: 11px; font-weight: 500;
               color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .card-aprobada::before { content: "\2713  "; }
@@ -1091,7 +1095,7 @@
               "histProposal": "propuesta: {que}", "histApproved": "aprobada",
               "histSent": "enviado", "histRoute": "destino del caso",
               "histProject": "proyecto cambiado", "histClassified": "clasificado: {que}",
-              "histRetitled": "titulo nuevo", "histWithdrawn": "propuesta retirada", "histNote": "nota: {que}", "histEdited": "editado: {que}", "campoPrioridad": "prioridad", "campoClase": "clase", "campoTitulo": "titulo",
+              "histRetitled": "titulo nuevo", "histWithdrawn": "propuesta retirada", "histNote": "nota: {que}", "histReminderSet": "recordatorio puesto", "histReminder": "recordatorio vencido", "histReminderCancelled": "recordatorios cancelados", "histSnoozeEnded": "posposicion terminada: el cliente escribio", "boardReminder": "Recordatorio: {cuando}", "boardSnoozed": "Pospuesto hasta {cuando}", "histEdited": "editado: {que}", "campoPrioridad": "prioridad", "campoClase": "clase", "campoTitulo": "titulo",
               "histAuthorized": "excepciones autorizadas", "histAttend": "atender ahora",
               "motSecret": "un secreto", "motJevDown": "Jev no contesto",
               "motDelete": "borrar", "motDeploy": "desplegar a produccion",
@@ -1442,7 +1446,7 @@
               "histProposal": "proposal: {que}", "histApproved": "approved",
               "histSent": "sent", "histRoute": "case destination",
               "histProject": "project changed", "histClassified": "classified: {que}",
-              "histRetitled": "new title", "histWithdrawn": "proposal withdrawn", "histNote": "note: {que}", "histEdited": "edited: {que}", "campoPrioridad": "priority", "campoClase": "kind", "campoTitulo": "title",
+              "histRetitled": "new title", "histWithdrawn": "proposal withdrawn", "histNote": "note: {que}", "histReminderSet": "reminder set", "histReminder": "reminder due", "histReminderCancelled": "reminders cancelled", "histSnoozeEnded": "snooze ended: the customer wrote", "boardReminder": "Reminder: {cuando}", "boardSnoozed": "Snoozed until {cuando}", "histEdited": "edited: {que}", "campoPrioridad": "priority", "campoClase": "kind", "campoTitulo": "title",
               "histAuthorized": "exceptions authorized", "histAttend": "handle now",
               "motSecret": "a secret", "motJevDown": "Jev did not answer",
               "motDelete": "deleting", "motDeploy": "deploying to production",
@@ -1793,7 +1797,7 @@
               "histProposal": "proposta: {que}", "histApproved": "aprovada",
               "histSent": "enviado", "histRoute": "destino do caso",
               "histProject": "projeto alterado", "histClassified": "classificado: {que}",
-              "histRetitled": "titulo novo", "histWithdrawn": "proposta retirada", "histNote": "nota: {que}", "histEdited": "editado: {que}", "campoPrioridad": "prioridade", "campoClase": "tipo", "campoTitulo": "titulo",
+              "histRetitled": "titulo novo", "histWithdrawn": "proposta retirada", "histNote": "nota: {que}", "histReminderSet": "lembrete criado", "histReminder": "lembrete vencido", "histReminderCancelled": "lembretes cancelados", "histSnoozeEnded": "adiamento terminado: o cliente escreveu", "boardReminder": "Lembrete: {cuando}", "boardSnoozed": "Adiado ate {cuando}", "histEdited": "editado: {que}", "campoPrioridad": "prioridade", "campoClase": "tipo", "campoTitulo": "titulo",
               "histAuthorized": "excecoes autorizadas", "histAttend": "atender agora",
               "motSecret": "um segredo", "motJevDown": "o Jev nao respondeu",
               "motDelete": "apagar", "motDeploy": "publicar em producao",
@@ -2241,7 +2245,9 @@
         route: 'histRoute', project: 'histProject', classified: 'histClassified',
         retitled: 'histRetitled', withdrawn: 'histWithdrawn', authorized: 'histAuthorized',
         attend: 'histAttend', project_question: 'histProjectQuestion',
-        project_answer: 'histProjectAnswer', note: 'histNote', edited: 'histEdited' }
+        project_answer: 'histProjectAnswer', note: 'histNote', edited: 'histEdited',
+        reminder_set: 'histReminderSet', reminder: 'histReminder',
+        reminder_cancelled: 'histReminderCancelled', snooze_ended: 'histSnoozeEnded' }
       // Los motivos y excepciones que viajan en `args`, en palabras.
       var MOTIVO_KEY = { money: 'excMoney', credential: 'excCredential',
         commitment: 'excCommitment', jev: 'excJev', secret: 'motSecret',
@@ -3028,6 +3034,24 @@
         return p
       }
 
+      /** Una fecha con su hora, corta ("7 oct, 09:00"), o '' si no es una fecha. */
+      function fechaHora (iso) {
+        var f = typeof iso === 'string' ? new Date(iso) : null
+        if (!f || isNaN(f.getTime())) return ''
+        return f.toLocaleString(LOCALE, { day: 'numeric', month: 'short', hour: '2-digit',
+          minute: '2-digit' })
+      }
+
+      /** La posposicion o el proximo recordatorio del caso (casos-cli, K10), en una linea. */
+      function recordatorioNodo (c) {
+        var r = esObjeto(c.reminder) ? c.reminder : null
+        if (!r) return null
+        var hasta = fechaHora(r.snoozed_until)
+        if (hasta) return crear('div', 'card-recordatorio', fmt('boardSnoozed', { cuando: hasta }))
+        var proximo = fechaHora(r.at)
+        return proximo ? crear('div', 'card-recordatorio', fmt('boardReminder', { cuando: proximo })) : null
+      }
+
       function prioNodo (c) {
         if (!Object.prototype.hasOwnProperty.call(PRIO_KEY, c.prioridad)) return null
         return crear('span', 'card-prio' + (PRIO_CLASE[c.prioridad] ? ' ' + PRIO_CLASE[c.prioridad] : ''),
@@ -3255,6 +3279,8 @@
         var pregunta = preguntaTarjetaNodo(c)
         if (pregunta) nodos.push(pregunta)
         if (c.read_only === true) nodos.push(crear('div', 'card-solo-leer', t('boardReadOnly')))
+        var recordatorio = recordatorioNodo(c)
+        if (recordatorio) nodos.push(recordatorio)
         var primaria = primariaDe(accionesDe(c))
         var aviso = formularios[id] ? null : mensajeNodo(id)
         if (primaria === 'atender') {
@@ -3610,6 +3636,8 @@
         }
         var preguntaNodo = preguntaDetalleNodo(c)
         if (preguntaNodo) caja.appendChild(preguntaNodo)
+        var recordatorioDet = recordatorioNodo(c)
+        if (recordatorioDet) caja.appendChild(recordatorioDet)
 
         // Un caso es un pedido: si este abrio aparte de uno que ya estaba, se dice cual.
         if (Number.isInteger(c.related_case) && c.related_case > 0) {
