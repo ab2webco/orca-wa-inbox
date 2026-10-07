@@ -12668,6 +12668,8 @@ def suelta_trabajador(cli, fila):
 
 # Lo que se espera a que Claude salga antes de cerrar el shell que queda.
 SALIDA_CLAUDE_S = 3
+# Lo que contesta una Orca vieja que no conoce `terminal close --tab`.
+SIN_CIERRE_DE_PESTANA = re.compile(r"Unknown flag --tab\b", re.IGNORECASE)
 
 
 def cierra_terminal(cli, handle, selector=None, detener_espacio=False):
@@ -12676,8 +12678,16 @@ def cierra_terminal(cli, handle, selector=None, detener_espacio=False):
     que salga (`/exit`) y al shell que queda tambien (`exit`; si Claude aun no salio, Claude
     lo toma como la misma orden). Si con eso sigue viva y `detener_espacio`, se detienen las
     terminales del espacio: solo en el del plugin, donde corre un unico agente de casos. En
-    un proyecto nunca: ahi estan las terminales del dueno."""
-    _, error = orca_llama(cli, ["terminal", "close", "--terminal", handle], DESPACHO_LISTA_S)
+    un proyecto nunca: ahi estan las terminales del dueno.
+
+    Cierra la pestana entera (`--tab`): sin eso Orca cierra la sesion y deja la pestana, y le
+    abre otro shell o vuelve a abrir Claude con otro handle (visto en vivo, 2026-10-07). Una
+    Orca vieja que no conoce `--tab` cierra como antes."""
+    _, error = orca_llama(cli, ["terminal", "close", "--terminal", handle, "--tab"],
+                          DESPACHO_LISTA_S)
+    if error and SIN_CIERRE_DE_PESTANA.search(error):
+        _, error = orca_llama(cli, ["terminal", "close", "--terminal", handle],
+                              DESPACHO_LISTA_S)
     if not error:
         return
     orca_llama(cli, ["terminal", "send", "--terminal", handle, "--text", "/exit", "--enter"],

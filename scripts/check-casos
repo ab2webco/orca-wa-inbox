@@ -5861,7 +5861,8 @@ ABAJO, ARRIBA = "\x1b[B", "\x1b[A"
 
 def orca_despacho(carpeta, worktrees=(WT_ALFA,), vivos=("term_worker1",), falla=None,
                   automatizaciones=(), corridas=(), cuentas=(), rechaza=None, listo=True,
-                  arranca_en=1, idle=True, pantalla="composer", sale_tras=None, ilegible=False):
+                  arranca_en=1, idle=True, pantalla="composer", sale_tras=None, ilegible=False,
+                  sin_tab=False, pestanas=None):
     """Una `orca` de mentira para el despacho: contesta lo que diga estado.json y anota cada
     llamada (sus argumentos enteros, en JSON) en calls.jsonl. `rechaza` es {cuenta: error}
     para `terminal create` ("" es sin --claude-account); `listo`, lo que dice `terminal
@@ -5877,7 +5878,8 @@ def orca_despacho(carpeta, worktrees=(WT_ALFA,), vivos=("term_worker1",), falla=
     composer, No deja el shell. `sale_tras` es "aceptar" o "brief": Claude se cierra
     despues de eso. Lo que se escribe con el shell a la vista se anota en `en_shell`, y una
     linea del brief solo cuenta (`briefs`) si llego a un composer. `ilegible`: `terminal
-    read` falla."""
+    read` falla. `sin_tab`: una Orca vieja que no conoce `terminal close --tab`.
+    `pestanas` es {handle: tabId}: lo que dicen `terminal show` y `terminal list`."""
     carpeta = pathlib.Path(carpeta)
     (carpeta / "estado.json").write_text(json.dumps(
         {"worktrees": list(worktrees), "vivos": list(vivos), "falla": falla or {},
@@ -5886,7 +5888,8 @@ def orca_despacho(carpeta, worktrees=(WT_ALFA,), vivos=("term_worker1",), falla=
          "arranca_en": arranca_en, "idle": idle, "briefs": 0, "n": 0,
          "pantalla_inicial": pantalla, "pantalla": "composer", "cursor": 0, "confia": False,
          "sale_tras": sale_tras, "ilegible": ilegible, "en_shell": 0, "aceptadas": 0,
-         "cierre_falla": False, "titulos": {},
+         "cierre_falla": False, "titulos": {}, "sin_tab": sin_tab,
+         "pestanas": dict(pestanas or {}),
          "pantallas": {"confianza": CONFIANZA_NUEVA, "confianza-vieja": CONFIANZA_VIEJA,
                        "confianza-orca": CONFIANZA_NUEVA,
                        "composer": COMPOSER, "shell": SHELL}}), encoding="utf-8")
@@ -5994,9 +5997,21 @@ if clave == "account list":
     sale({"ok": True, "result": {"accounts": e["cuentas"]}})
 if clave == "terminal list":
     sale({"ok": True, "result": {"terminals": [
-        dict({"handle": h}, **({"title": e["titulos"][h]} if h in e["titulos"] else {}))
+        dict({"handle": h}, **({"title": e["titulos"][h]} if h in e["titulos"] else {}),
+             **({"tabId": e["pestanas"][h]} if h in e["pestanas"] else {}))
         for h in e["vivos"]], "truncated": False}})
+if clave == "terminal show":
+    h = valor("--terminal")
+    if h not in e["vivos"]:
+        sale({"ok": False, "error": {"code": "terminal_handle_stale",
+                                     "message": "terminal_handle_stale"}}, 1)
+    sale({"ok": True, "result": {"terminal": dict(
+        {"handle": h}, **({"tabId": e["pestanas"][h]} if h in e["pestanas"] else {}))}})
 if clave == "terminal close":
+    if "--tab" in a and e["sin_tab"]:
+        # Como contesta la Orca de verdad un flag que no conoce.
+        sale({"ok": False, "error": {"code": "invalid_argument", "message":
+              "Unknown flag --tab for command: terminal close"}}, 1)
     if e["cierre_falla"]:
         # Como lo contesta la Orca de verdad (2026-10-02) a una terminal de Claude ya quieta.
         sale({"ok": False, "error": {"code": "runtime_error", "message": "Error invoking "
@@ -6332,6 +6347,41 @@ if NODE:
            f"{llamadas_orca(carpeta, 'terminal send')} {p.stderr[-300:]}")
         ok("y nunca detiene las terminales del proyecto",
            not llamadas_orca(carpeta, "terminal stop"), f"{llamadas_orca(carpeta, 'terminal stop')}")
+
+    # cierra-pestanas T1: `terminal close` sin `--tab` cierra la sesion y deja la pestana, y
+    # Orca abre en ella un shell o Claude con otro handle (visto en vivo, 2026-10-07). Se
+    # cierra la pestana entera; con una Orca vieja que no conoce `--tab`, como antes.
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta)
+        cid = trabajo_firmado(home, "D2t")
+        tick_orca(home, carpeta)
+        con = db_de(home)
+        con.execute("update caso_despacho set created_at=datetime('now','localtime','-5 hours')")
+        con.commit()
+        con.close()
+        p, r = tick_orca(home, carpeta)
+        cierres = llamadas_orca(carpeta, "terminal close")
+        ok("cierra la pestana entera: terminal close --terminal <handle> --tab",
+           len(cierres) == 1 and bandera(cierres[0], "--terminal") == "term_worker1"
+           and "--tab" in cierres[0] and p.returncode == 0, f"{cierres} {p.stderr[-300:]}")
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, sin_tab=True)
+        cid = trabajo_firmado(home, "D2u")
+        tick_orca(home, carpeta)
+        con = db_de(home)
+        con.execute("update caso_despacho set created_at=datetime('now','localtime','-5 hours')")
+        con.commit()
+        con.close()
+        p, r = tick_orca(home, carpeta)
+        cierres = llamadas_orca(carpeta, "terminal close")
+        ok("una Orca que no conoce --tab: cierra la terminal como antes, sin --tab",
+           len(cierres) == 2 and "--tab" in cierres[0] and "--tab" not in cierres[1]
+           and bandera(cierres[1], "--terminal") == "term_worker1"
+           and not salidas_a(carpeta, "term_worker1"), f"{cierres}")
 
     # Al reiniciar Orca, las pestanas de los agentes vuelven con handles nuevos y el plugin
     # las perdia: quedaban abiertas (2026-10-02, "Despacho caso-15-5" y "WhatsApp case #17").
