@@ -125,3 +125,22 @@ cases are created, judged or sent.
 `scripts/check-casos`, `scripts/check-clis`, `scripts/check-harness`, `scripts/check-prompts`,
 `scripts/check-voseo`, `scripts/check-datos-reales`, `node test/panels.test.mjs`,
 `node test/worker.test.mjs`, reduced shots of the board (es, dark, 390).
+
+## Checks run (final state)
+
+- `scripts/check-casos` full: 1944/1950. The 6 failures are not this feature's:
+  - 4 in "avisos-orca" (`blocked`/`waiting` windows): they depend on the time of day (the
+    run was at night, inside the notices' quiet hours). The base commit `259ab77` fails the
+    same 4 at the same hour (1818/1822).
+  - 2 in "todo por linea (P3)" (the bot account of each line's dispatch): intermittent. On
+    the same tree, from the first section through P3 (1753/1753) and L3..P3 (73/73) pass.
+- The 128 checks of this feature (sections `casos-cli K1`..`K11`) pass in every run.
+- `scripts/check-clis` 8 CLIs, 494 checks; `scripts/check-harness` 93; `scripts/check-prompts`
+  15; `scripts/check-voseo` 44 files; `scripts/check-datos-reales` (16 allowed test values,
+  no real phone or jid).
+- `node test/panels.test.mjs` 1640/1640; `node test/worker.test.mjs` 589/589 when run alone
+  (586/589 while check-casos ran at the same time: the sidecar QR timing tests).
+- Reduced shots (`WA_INBOX_SOLO=tablero`, es, dark, 390): 36, no overflow, no JS errors.
+  Looked at: `tablero-recordatorio`, `tablero-nota-detalle` (new), `tablero-poblado`,
+  `tablero-detalle`.
+- Not run: `npm run check` and the full `npm run shots` (owner's rule).
