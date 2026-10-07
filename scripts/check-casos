@@ -6466,6 +6466,65 @@ if NODE:
         ok("una base de antes gana la columna de la pestana y no pierde filas",
            all("tab" in c for c in columnas.values()) and filas == (1, 1), f"{filas}")
 
+    # cierra-pestanas T3: Orca deja la pestana y le abre otro shell o Claude, con otro handle
+    # y otro titulo (2026-10-07: 12 pestanas del plugin abiertas). La limpieza la reconoce
+    # por la pestana guardada si su despacho o su corrida ya no estan en vuelo; la de uno en
+    # vuelo no se toca nunca. Sin pestana guardada manda el titulo, ahora con "WhatsApp
+    # case N" sin "#", y una corrida en vuelo ya no protege toda pestana de agente.
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        linea_lista(home)
+        acepta_proyectos(home, "alfa-demo")
+        orca_despacho(carpeta, pestanas={"term_worker1": "tab-a"})
+        caso_a = trabajo_firmado(home, "D2r")
+        tick_orca(home, carpeta)
+        con = db_de(home)
+        con.execute("update caso_despacho set estado='reportado' where case_id=?", (int(caso_a),))
+        con.commit()
+        con.close()
+        cambia_orca(carpeta, pestanas={"term_worker1": "tab-b"})
+        caso_b = trabajo_firmado(home, "D2s")
+        tick_orca(home, carpeta)
+        con = db_de(home)
+        en_vuelo = con.execute("select * from caso_despacho where case_id=?",
+                               (int(caso_b),)).fetchone()
+        # Una corrida del agente de casos en vuelo, en otra terminal.
+        con.execute("insert into agente_corrida (origen, estado, workspace_selector, terminal, "
+                    "turno_at, created_at, updated_at) values ('tick', 'activo', 'id:x::/srv/x', "
+                    "'term_agente_vivo', datetime('now','localtime'), datetime('now','localtime'), "
+                    "datetime('now','localtime'))")
+        con.execute("delete from settings where key='limpieza_at'")
+        con.commit()
+        con.close()
+        cambia_orca(carpeta,
+                    vivos=["term_worker1", "term_a2", "term_b2", "term_glifo", "term_agente_vivo",
+                           "term_agente_suelta", "term_dueno", "term_dueno_wa"],
+                    pestanas={"term_worker1": "tab-b", "term_a2": "tab-a", "term_b2": "tab-b",
+                              "term_dueno": "tab-dueno", "term_agente_vivo": "tab-ag"},
+                    titulos={"term_a2": "..orca-wa-inbox",
+                             "term_b2": "◐ agente-casos-990",
+                             "term_glifo": "✳ WhatsApp case 990",
+                             "term_agente_vivo": "◐ WhatsApp: case agent",
+                             "term_agente_suelta": "◑ WhatsApp: case agent",
+                             "term_dueno": "◐ Guardia de bots",
+                             "term_dueno_wa": "Notas del grupo de WhatsApp"})
+        antes = len(llamadas_orca(carpeta, "terminal close"))
+        p, r = tick_orca(home, carpeta)
+        nuevos = llamadas_orca(carpeta, "terminal close")[antes:]
+        nuevas = [bandera(x, "--terminal") for x in nuevos]
+        ok("la pestana de un despacho que termino se cierra con su handle de ahora, sea cual "
+           "sea su titulo", "term_a2" in nuevas and p.returncode == 0,
+           f"{en_vuelo and dict(en_vuelo)} {nuevas} {p.stderr[-300:]}")
+        ok("el titulo \"WhatsApp case N\" sin # y con el icono de Claude es del plugin",
+           "term_glifo" in nuevas, f"{nuevas}")
+        ok("una corrida en vuelo ya no protege otra pestana de agente que no es la suya",
+           "term_agente_suelta" in nuevas, f"{nuevas}")
+        ok("nunca la pestana de un despacho en vuelo, aunque otro panel tenga otro handle",
+           not {"term_worker1", "term_b2"} & set(nuevas), f"{nuevas}")
+        ok("ni la terminal de la corrida en vuelo, ni las del dueno",
+           not {"term_agente_vivo", "term_dueno", "term_dueno_wa"} & set(nuevas), f"{nuevas}")
+        ok("y cada pestana se cierra entera", nuevos and all("--tab" in x for x in nuevos),
+           f"{nuevos}")
+
     # Un lanzamiento que quedo a medias (el tick murio) no se relanza: va al dueno.
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
         linea_lista(home)
