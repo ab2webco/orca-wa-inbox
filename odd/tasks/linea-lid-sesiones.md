@@ -1,6 +1,6 @@
 # A line that stores every message empty: Baileys 6 cannot decrypt LID sessions
 
-Status: in progress (2026-10-06). Branch `fix/linea-sin-sesion`.
+Status: done on the branch, not pushed (2026-10-06). Branch `fix/linea-sin-sesion`.
 
 ## Objective
 
@@ -83,3 +83,16 @@ check-panels, check-voseo, check-datos-reales, check-prompts, check-resolver,
 check-harness, check-clis, check-closing, check-casos, check-lid, manifest, resolver,
 userdata, build:sidecar, sidecar-build, sidecar-pairing, sidecar-mensajes, almacen,
 envio, panels, worker. `npm run shots` is not run: nothing visual changes.
+
+### Results (2026-10-06)
+
+All green: check-panels, check-voseo, check-datos-reales (16 allowed values),
+check-prompts (15), check-resolver (15), check-harness (79), check-clis (8 CLIs, 494
+checks; its `wa-read members` fixture moved to the v7 group shape after it failed),
+check-closing 36/36, check-casos 1765/1765, check-lid 39/39, manifest 112/112, resolver
+55/55, userdata 25/25, build:sidecar (5.2 MB), sidecar-build 11/11, sidecar-pairing
+114/114, sidecar-mensajes 119/119, almacen 317/317, envio 112/112, worker 581/581,
+panels 1610/1610 (a first run in parallel with check-casos gave 1604/1610; the rerun
+alone was green, no panel file changed).
+
+Not verified: a real WhatsApp line. Nothing here talks to WhatsApp.
