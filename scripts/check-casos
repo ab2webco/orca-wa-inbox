@@ -14144,7 +14144,7 @@ if NODE:
             ok("el brief le dice al agente del proyecto a que chat va su respuesta",
                "Facturacion" in brief and FACTURACION in brief, brief[-800:])
             ok("y no le pide proponer (eso es del agente de casos)",
-               "caso destinos" not in brief and "Reply to another chat" not in brief)
+               "caso propuesta" not in brief)
             r = js(home, "caso", "resultado", dueno, "--respuesta",
                    "Encontramos la causa del error y quedo corregida.", "--resumen",
                    "arreglado el filtro", "--actor", "trabajador")[0]
@@ -14225,6 +14225,94 @@ if NODE:
             ok("el de un cliente dice que no", "--chat" not in de_cliente
                and "another chat: no" in de_cliente, de_cliente)
         finally:
+            os.environ.clear()
+            os.environ.update(env_antes)
+
+
+print("\nrespuesta-otro-chat R8: el agente del proyecto reporta a otro chat (guardar-panel G5)")
+# Visto en vivo: el dueno le dijo al agente del proyecto "responde en el grupo del cliente"
+# y se nego: no tenia como. Ahora `caso resultado --chat` resuelve el destino igual que
+# `caso propuesta --chat`, con los mismos rechazos, y espera la firma del dueno.
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        prepara_otro_chat(home)
+        sidecar = SidecarFalso(home)
+        try:
+            def trabajo_aprobado(chat, stanza, de, texto):
+                cid = caso_pedido(home, chat, stanza, de, texto)
+                v = js(home, "caso", "propuesta", cid, "--tipo", "trabajar", "--instrucciones",
+                       "Revisa el reporte de ventas.", "--actor", "agente")[0]["propuesta_version"]
+                js(home, "caso", "aprobar", cid, "--version", v, "--actor", "dueno")
+                return cid
+
+            def resultado_a(cid, destino, estado="resuelto"):
+                return corre(home, "caso", "resultado", cid, "--estado", estado, "--respuesta",
+                             "El reporte de ventas quedo revisado.", "--resumen", "revisado",
+                             "--chat", destino, "--actor", "trabajador")
+
+            dueno = trabajo_aprobado(DUENO_DM, "OX1", DUENO_LID, "revisa el reporte")
+            p = resultado_a(dueno, "Facturacion")
+            r = json.loads(p.stdout or "[{}]")[0] if p.returncode == 0 else {}
+            ok("el agente del proyecto manda su resultado a otro chat con --chat",
+               (r.get("propuesta") or {}).get("chat") == FACTURACION
+               and (r.get("destino") or {}).get("chat_jid") == FACTURACION
+               and r.get("etapa") == "listo", p.stderr.strip()[:300])
+            ok("y no sale solo: espera la firma del dueno",
+               envios_a(home, FACTURACION) == [] and not any(
+                   "quedo revisado" in e["body"] for e in envios_a(home, DUENO_DM)),
+               f"{r.get('envio')} {envios_a(home, FACTURACION)}")
+            tick(home)
+            ok("ni el tick lo manda sin la firma",
+               envios_a(home, FACTURACION) == [] and js(home, "caso", "ver", dueno)[0]["etapa"]
+               == "listo", f"{envios_a(home, FACTURACION)}")
+            js(home, "caso", "aprobar", dueno, "--version", r["propuesta_version"],
+               "--actor", "dueno")
+            tick(home)
+            ok("firmado por el dueno, sale al otro chat",
+               [e["estado"] for e in envios_a(home, FACTURACION)] == ["enviado"],
+               f"{envios_a(home, FACTURACION)}")
+
+            jefa = trabajo_aprobado(SOPORTE, "OX2", JEFA_OC, "revisa el reporte del grupo")
+            pj = resultado_a(jefa, "Facturacion")
+            ok("el de una Super admin de la conversacion tambien puede",
+               pj.returncode == 0 and json.loads(pj.stdout)[0]["propuesta"].get("chat")
+               == FACTURACION, pj.stderr.strip()[:300])
+
+            cliente = trabajo_aprobado(PERSONA, "OX3", PERSONA, "revisa mi pedido")
+            pc = resultado_a(cliente, "Facturacion")
+            ok("el caso de un cliente no redirige el resultado: E_DEST_ROLE",
+               error_de(pc) == "E_DEST_ROLE", f"{error_de(pc)}")
+            ok("y el caso no se movio", js(home, "caso", "ver", cliente)[0]["etapa"] != "listo")
+            ok("un destino que no existe: E_DEST_NOT_FOUND",
+               error_de(resultado_a(trabajo_aprobado(DUENO_DM, "OX4", DUENO_LID, "otra"),
+                                    "Nadie Se Llama Asi")) == "E_DEST_NOT_FOUND")
+            ok("un destino en observar: E_DEST_MODE",
+               error_de(resultado_a(trabajo_aprobado(DUENO_DM, "OX5", DUENO_LID, "y otra"),
+                                    "Operaciones")) == "E_DEST_MODE")
+            ok("la pregunta de un necesita no va a otro chat: E_ARGS",
+               error_de(resultado_a(trabajo_aprobado(DUENO_DM, "OX6", DUENO_LID, "una mas"),
+                                    "Facturacion", "necesita")) == "E_ARGS")
+
+            ws = carga_wa_scope(home)
+            con = ws.db()
+            proyecto = {"name": "Alfa Demo", "path": "/srv/ejemplo/alfa-demo"}
+            try:
+                de_dueno = ws.brief_de_despacho(con, ws.caso_de(con, int(dueno)), proyecto,
+                                                "Revisa el reporte de ventas.")
+                de_cliente = ws.brief_de_despacho(con, ws.caso_de(con, int(cliente)), proyecto,
+                                                  "Revisa el reporte de ventas.")
+            finally:
+                con.close()
+            ok("el brief del caso del dueno le dice al agente del proyecto como y que espera",
+               f"caso resultado {dueno}" in de_dueno and "--chat" in de_dueno
+               and f"caso destinos {dueno}" in de_dueno and "approval" in de_dueno
+               and "caso propuesta" not in de_dueno, de_dueno[-1500:])
+            ok("y el de un cliente dice que su respuesta va solo a su chat",
+               "--chat" not in de_cliente and "another chat: no" in de_cliente,
+               de_cliente[-1500:])
+        finally:
+            sidecar.cerrar()
             os.environ.clear()
             os.environ.update(env_antes)
 

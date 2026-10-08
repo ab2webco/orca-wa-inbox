@@ -59,6 +59,9 @@ responder. A customer's case is refused (`E_DEST_ROLE`).
 
     "$WA/wa-scope" caso destinos <id> --json    # the candidate chats (same project, responder)
     "$WA/wa-scope" caso propuesta <id> --tipo responder --respuesta "<text>" --chat <jid> --actor agente
+    "$WA/wa-scope" caso resultado <id> --estado resuelto --respuesta "<text>" --resumen "<what was done>" --chat <jid> --actor trabajador   # the project agent
+
+Both wait for the owner's approval before anything goes to that chat.
 
 Beta, only where `voice` says `first_reply_mode` is `model` or `model_with_ack_fallback`
 (see the `whatsapp-soporte` skill): the first message and the updates, sent by the plugin.

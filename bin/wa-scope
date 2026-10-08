@@ -4864,6 +4864,14 @@ def cmd_caso_resultado(con, a):
     caso_toma(con)
     caso = caso_de(con, a.id)
     estado = a.estado
+    # `--chat` (guardar-panel G5): el agente del proyecto reporta a OTRO chat cuando el
+    # dueno o un Super admin se lo pidio. Solo el `resuelto`: la pregunta de un `necesita`
+    # es para quien lo pidio, y un `bloqueado` no manda nada.
+    pedido_chat = getattr(a, "chat", None)
+    if pedido_chat is not None and estado != "resuelto":
+        motivo = ("asks whoever asked, in this case's chat" if estado == "necesita"
+                  else "sends nothing")
+        caso_falla("E_ARGS", f"--chat goes with --estado resuelto: a {estado} result {motivo}")
     respuesta = texto_caso((a.respuesta or "").strip())
     resumen = texto_caso((a.resumen or "").strip())
     if estado == "bloqueado":
@@ -4885,6 +4893,10 @@ def cmd_caso_resultado(con, a):
     # `resuelto` va alla. La pregunta de un `necesita` es para quien lo pidio: va a su chat,
     # donde su respuesta vuelve al caso.
     destino = destino_de_propuesta(caso)
+    if pedido_chat is not None:
+        # La misma resolucion y los mismos rechazos que `caso propuesta --chat`; None es el
+        # chat del propio caso. Espera la firma del dueno como aquella (`OTRO_CHAT`).
+        destino = destino_de_ref(con, caso, pedido_chat)
     if destino and estado == "resuelto":
         nueva["chat"] = destino
     texto, version = propuesta_canonica(nueva)
@@ -12465,6 +12477,10 @@ def brief_de_despacho(con, caso, proyecto, instrucciones):
          "check it; say it is ready only for what was actually done and verified."),
         f"{reporta} --estado resuelto --actor trabajador --resumen \"<what you did, with the "
         f"evidence: commit, PR or ticket link, files, test output>\" --respuesta \"<reply>\"",
+        *([f"When the owner (or a Super admin) asked you to report to another chat of this "
+           f"line, add --chat \"<jid>\" to that command (`{wa} caso destinos {cid}` lists the "
+           f"candidates): the reply goes there after the owner's approval, never before."]
+          if del_dueno or rol_del_caso(con, caso) == wa_store.ROL_ADMIN else []),
         (REPORTE_DUENO["necesita"] if del_dueno else
          "A real doubt that would make the work wrong or a guess (missing data, an ambiguous "
          "request, a choice only the customer can make): ask the customer directly. --respuesta "
@@ -12633,10 +12649,20 @@ def cabeza_del_caso(con, caso, del_dueno=None, operador=None, de_casos=True):
     ]
     # Si lo que pide el caso puede reportarse a OTRO chat (respuesta-otro-chat): solo el
     # dueno o un Super admin de esta conversacion; lo decide el id, como el rol.
-    # Solo para el agente de casos: el del proyecto no propone, reporta con `caso resultado`.
-    if not de_casos:
-        pass
-    elif del_dueno or rol_del_caso(con, caso) == wa_store.ROL_ADMIN:
+    # El agente de casos lo propone; el del proyecto no propone: reporta con `caso resultado
+    # --chat` (guardar-panel G5), y espera la firma del dueno igual.
+    puede_otro_chat = del_dueno or rol_del_caso(con, caso) == wa_store.ROL_ADMIN
+    if not de_casos and puede_otro_chat:
+        lineas.append(f"- Reply to another chat: allowed (the owner or a Super admin of this "
+                      f"chat asked). When he asks you to report the result to another chat, "
+                      f"add `--chat <jid>` to `caso resultado {caso['case_id']} --estado "
+                      f"resuelto`; if he does not name it, `caso destinos {caso['case_id']}` "
+                      f"lists the candidates. It waits for the owner's approval before it "
+                      f"goes out")
+    elif not de_casos:
+        lineas.append("- Reply to another chat: no (a customer's case: your reply goes to "
+                      "this chat only)")
+    elif puede_otro_chat:
         lineas.append(f"- Reply to another chat: allowed (the owner or a Super admin of this "
                       f"chat asked). When he asks to report to another chat, propose with "
                       f"`caso propuesta {caso['case_id']} ... --chat <jid>`; if he does not name "
@@ -14187,6 +14213,15 @@ def main():
                                        "--estado bloqueado)")
     c.add_argument("--resumen", required=True, help="what was done and its evidence, or why "
                                                     "it is blocked, for the card")
+    c.add_argument("--chat", help="with --estado resuelto: send the reply to ANOTHER chat "
+                                  "instead of the case's: its JID, phone or name. Only for a "
+                                  "case of the owner or of a Super admin of the conversation, "
+                                  "and only to a chat of the same line in responder; it always "
+                                  "waits for the owner's approval, and the case's chat gets a "
+                                  "confirmation once it is sent. `caso destinos <id>` lists the "
+                                  "candidates. Refusals (exit 2): E_DEST_ROLE (a customer's "
+                                  "case), E_DEST_NOT_FOUND, E_DEST_AMBIGUOUS (pass the JID), "
+                                  "E_DEST_LINE, E_DEST_MODE, E_ARGS (necesita or bloqueado)")
     # Solo el trabajador: es su reporte, y cualquier otro firmandolo seria un resultado
     # de un trabajo que no hizo.
     c.add_argument("--actor", required=True, choices=["trabajador"])
