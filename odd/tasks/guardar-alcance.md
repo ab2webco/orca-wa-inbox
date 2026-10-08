@@ -33,7 +33,7 @@ instead of the whole sync.
 - [x] T1 check `revisa_guardar_durante_sync` (RED observed on both lines)
 - [x] T2 re-read before the final write (GREEN)
 - [x] T2b check `revisa_nombre_que_es_jid` (RED observed) and fix (GREEN)
-- [ ] T3 Release
+- [x] T3 Release
 
 ## Acceptance criteria
 
