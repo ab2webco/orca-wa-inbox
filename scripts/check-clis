@@ -3719,6 +3719,59 @@ def revisa_guardar_antes_de_escribir(fallos: list) -> int:
     return hechas
 
 
+def revisa_copia_vieja_de_la_principal(fallos: list) -> int:
+    """El sync de la principal quita su copia vieja de `alcancePorLinea` (guardar-panel G3).
+
+    Visto en vivo: el alcance de la principal estaba en la raiz `scope`, al dia, y ademas
+    en `alcancePorLinea[<principal>]`, una copia vieja con otras aprobaciones y sin
+    instrucciones. Nadie la escribe ya, pero `alcances_de_lineas` la devuelve y `wa-send`
+    la cruza como si fuera del panel. Se quita esa clave sola: la copia de otra linea es
+    su alcance de verdad y queda como estaba."""
+    hechas = 0
+    if not shutil.which("node"):
+        print("  aviso: sin node, no se armo el almacen de dos lineas", file=sys.stderr)
+        return hechas
+    JID = "120363000000000001@g.us"
+
+    def entrada(nombre, cuenta, modo):
+        return {"chatName": nombre, "provider": "plane", "mode": modo,
+                "updatedAt": "2026-10-08 10:00", "account": cuenta}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+        env.pop("ORCA_USER_DATA_PATH", None)
+        env.pop("WA_INBOX_LINEA", None)
+        almacen_con_lineas(home, VIEJA)
+        de_la_otra = {JID: entrada("Cliente Beta", NUEVA, "observar")}
+        store = store_de(home, "orca")
+        store.parent.mkdir(parents=True)
+        store.write_text(json.dumps({
+            "scope": {JID: entrada("Cliente Alfa", VIEJA, "responder")},
+            "alcancePorLinea": {VIEJA: {JID: entrada("Cliente Alfa", VIEJA, "off")},
+                                NUEVA: de_la_otra}}), encoding="utf-8")
+        p = subprocess.run([sys.executable, "-c", CARGA_WA_SCOPE + "m.push_to_plugin(m.db())\n"],
+                           env=env, capture_output=True, text=True, timeout=180)
+        hechas += 1
+        if p.returncode != 0:
+            fallos.append(f"el sync con una copia vieja de la principal revento: "
+                          f"{p.stderr.strip()[-300:]}")
+            return hechas
+        datos = json.loads(store.read_text(encoding="utf-8"))
+        porlinea = datos.get("alcancePorLinea") or {}
+        hechas += 3
+        if VIEJA in porlinea:
+            fallos.append(f"el sync de la principal dejo su copia vieja en alcancePorLinea: "
+                          f"{porlinea.get(VIEJA)!r}")
+        if porlinea.get(NUEVA) != de_la_otra:
+            fallos.append(f"el sync de la principal toco el alcance de otra linea: "
+                          f"{porlinea.get(NUEVA)!r}")
+        if ((datos.get("scope") or {}).get(JID) or {}).get("mode") != "responder":
+            fallos.append(f"el sync de la principal perdio su alcance de la raiz: "
+                          f"{datos.get('scope')!r}")
+    return hechas
+
+
 def revisa_nombre_que_es_jid(fallos: list) -> int:
     """Un jid guardado como nombre no tapa el nombre de verdad del grupo.
 
@@ -3807,6 +3860,7 @@ def main() -> int:
                       + revisa_store_ilegible(fallos)
                       + revisa_guardar_durante_sync(fallos)
                       + revisa_guardar_antes_de_escribir(fallos)
+                      + revisa_copia_vieja_de_la_principal(fallos)
                       + revisa_nombre_que_es_jid(fallos))
     aislado.cleanup()
 

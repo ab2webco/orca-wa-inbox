@@ -51,7 +51,7 @@ from wa_settings import (  # noqa: E402
     plugin_store_raw as plugin_store_crudo, vista_de_linea, escribir_en_linea, de_otra_linea,
     AJUSTES_DE_LINEA, NO_HEREDAN,
     ajustes_propios,
-    tableros_de_lineas,
+    tableros_de_lineas, quitar_copia_de_la_principal,
     plugin_store_targets, settings_from_plugin, user_data_roots, valida_ajuste)
 from wa_settings import jev_en_linea, linea_de_avisos  # noqa: E402
 import wa_store  # noqa: E402  (solo lectura: de capture.db se lee la linea activa)
@@ -883,6 +883,10 @@ def plugin_store_write(scope, agent_name=None, activity=None, health=None,
         if extra:
             cambios.update(extra)
         escribir_en_linea(data, cambios, cuenta, principal)
+        # El alcance de la principal va en la raiz: su copia en `alcancePorLinea` es un
+        # resto viejo que `wa-send` igual cruzaba (guardar-panel G3).
+        if scope is not None and not de_otra_linea(cuenta, principal):
+            quitar_copia_de_la_principal(data, principal)
         if extra and "board" in extra:
             # La insignia del nav, que Orca lee de esta MISMA clave reservada
             # (`navBadge`, plugin-nav-badge.ts): el host la lee y nunca la
