@@ -828,10 +828,36 @@ def plugin_store_modifica(cambia, crear=True):
     return escritos
 
 
+def alcance_sin_pisar(scope, leido, fresco, cuenta):
+    """El alcance que escribe el sync, sin pisar lo que el panel guardo despues de leerlo.
+
+    `leido` es el alcance del panel que el sync leyo; `fresco`, el que hay en el archivo
+    ya con el candado puesto. El host escribe storage.json sin ese candado, asi que entre
+    las dos lecturas el panel pudo guardar (guardar-panel G2): una entrada de esta linea
+    cuyo `updatedAt` cambio, o que no estaba, es del panel y queda la suya; una que estaba
+    y ya no, la quito, y no vuelve."""
+    if not isinstance(fresco, dict) or not isinstance(leido, dict):
+        return scope
+    final = dict(scope)
+    for jid, e in fresco.items():
+        if not isinstance(e, dict) or cuenta_de_entrada(e) != cuenta:
+            continue
+        antes = leido.get(jid)
+        if not isinstance(antes, dict) or antes.get("updatedAt") != e.get("updatedAt"):
+            final[jid] = e
+    for jid in leido:
+        if jid not in fresco:
+            final.pop(jid, None)
+    return final
+
+
 def plugin_store_write(scope, agent_name=None, activity=None, health=None,
-                       routes=None, extra=None):
+                       routes=None, extra=None, leido=None):
     """Escritura atomica: el host lee este archivo en cualquier momento. Va por
     `plugin_store_modifica` (candado, temporal unico, sin pisar un store ilegible).
+
+    `leido` es el alcance del panel sobre el que se armo `scope`: con el, lo que el panel
+    guardo despues no se pisa (`alcance_sin_pisar`).
 
     Con varias lineas, lo que es de una linea que no es la principal va a su lugar
     (`escribir_en_linea`, en wa_settings): el tick de cada linea corre en su propio
@@ -844,7 +870,8 @@ def plugin_store_write(scope, agent_name=None, activity=None, health=None,
         # scope en None = no se toca. Escribir {} borraria la lista blanca entera,
         # y quien solo viene a guardar un ajuste no tiene por que cargar con ella.
         if scope is not None:
-            cambios["scope"] = scope
+            cambios["scope"] = scope if leido is None else alcance_sin_pisar(
+                scope, leido, vista_de_linea(data, cuenta, principal).get("scope"), cuenta)
         if agent_name:
             cambios["agentName"] = agent_name
         if activity is not None:
@@ -1159,8 +1186,12 @@ def push_to_plugin(con, with_activity=False):
     # foto del principio borraba lo que el dueno acababa de autorizar, y revivia lo que
     # acababa de quitar (guardar-alcance). `persistir_panel` es un upsert: repetirlo no
     # cambia nada de lo que ya estaba.
+    # Lo que el panel tiene ANTES de armarlo: si al escribir hay otra cosa, la guardo el
+    # panel entre medio y gana (guardar-panel G2).
+    leido = plugin_store_read()
     scope = alcance_al_panel(con, grupos)
-    return plugin_store_write(scope, agent_name_of(con), activity, health, routes, extra)
+    return plugin_store_write(scope, agent_name_of(con), activity, health, routes, extra,
+                              leido=leido)
 
 
 def source_fingerprint():

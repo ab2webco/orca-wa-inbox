@@ -15,7 +15,7 @@ The panel's per-chat Save never reports success it did not get, a save is never 
 ## Checklist
 
 - [x] G1 RED then GREEN: a host write rejection on Save shows an error, not "saved", and keeps the form (panels test).
-- [ ] G2 RED then GREEN: a panel save landing between the sync's read and its write survives (check-clis).
+- [x] G2 RED then GREEN: a panel save landing between the sync's read and its write survives (check-clis).
 - [ ] G3 RED then GREEN: the principal line's copy in `alcancePorLinea` is removed on sync, and the other lines' copies stay (check-clis).
 - [ ] G4 RED then GREEN: a burst whose first message was judged alone is judged again as a whole, and its text-bearing messages are not dropped (check-casos or check-clis).
 - [ ] G5 RED then GREEN: the worker of an owner case can send its avance/resultado to another chat, held for approval. A customer case gets E_DEST_ROLE. The dispatch brief documents it.
