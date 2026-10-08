@@ -3525,6 +3525,102 @@ def revisa_rutas_y_proyectos_por_linea(fallos: list) -> int:
     return hechas
 
 
+# El panel que guarda A MITAD de un sync: el hijo carga wa-scope y, entre la lectura del
+# principio y la escritura del final, escribe el storage como lo haria el host.
+GUARDA_A_MITAD = """
+import json, os, sqlite3
+cfg = json.loads(os.environ["WA_GUARDA"])
+ruta = m.plugin_store_path()
+original = m.build_board
+
+def guarda_a_mitad(con):
+    with open(ruta, encoding="utf-8") as fh:
+        datos = json.load(fh)
+    lugar = datos["scope"] if not cfg["linea"] else datos["alcancePorLinea"][cfg["linea"]]
+    lugar[cfg["nuevo"]] = cfg["entrada"]
+    # Quitar es lo que hace `wa-scope rm`: la fila de la base y la entrada del storage.
+    lugar.pop(cfg["quitado"], None)
+    otra = sqlite3.connect(m.DB)
+    otra.execute("delete from chat_scope where chat_jid=?", (cfg["quitado"],))
+    otra.commit()
+    otra.close()
+    temporal = ruta + ".host.tmp"
+    with open(temporal, "w", encoding="utf-8") as fh:
+        json.dump(datos, fh)
+    os.replace(temporal, ruta)
+    return original(con)
+
+m.build_board = guarda_a_mitad
+m.push_to_plugin(m.db())
+"""
+
+
+def revisa_guardar_durante_sync(fallos: list) -> int:
+    """Lo que el panel guarda MIENTRAS corre un sync no se pierde (guardar-alcance).
+
+    Visto en vivo: el dueno autorizo un grupo, le dio Guardar, lo vio, y despues
+    desaparecio del storage y de chat_scope. `push_to_plugin` leia el alcance del panel al
+    principio, pasaba hasta dos minutos releyendo WhatsApp y al final escribia esa foto
+    vieja encima de lo que el panel acababa de guardar. La misma foto revivia una
+    conversacion quitada a mitad. Se recorre en la principal y en una segunda linea."""
+    hechas = 0
+    if not shutil.which("node"):
+        print("  aviso: sin node, no se armo el almacen de dos lineas", file=sys.stderr)
+        return hechas
+    QUEDA, NUEVO, QUITADO = ("120363000000000001@g.us", "120363000000000002@g.us",
+                             "120363000000000003@g.us")
+
+    def entrada(nombre, cuenta):
+        return {"chatName": nombre, "provider": "plane", "mode": "responder",
+                "updatedAt": "2026-10-08 10:00", **({"account": cuenta} if cuenta else {})}
+
+    for linea in (None, NUEVA):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = pathlib.Path(tmp)
+            env = entorno(home)
+            env.pop("ORCA_USER_DATA_PATH", None)
+            env.pop("WA_INBOX_LINEA", None)
+            almacen_con_lineas(home, VIEJA)
+            cuenta = linea or VIEJA
+            alcance = {QUEDA: entrada("Cliente Alfa", cuenta),
+                       QUITADO: entrada("Cliente Gama", cuenta)}
+            store = store_de(home, "orca")
+            store.parent.mkdir(parents=True)
+            store.write_text(json.dumps({"alcancePorLinea": {linea: alcance}} if linea
+                                        else {"scope": alcance}), encoding="utf-8")
+            env["WA_GUARDA"] = json.dumps({"linea": linea, "nuevo": NUEVO,
+                                           "entrada": entrada("Cliente Beta", cuenta),
+                                           "quitado": QUITADO})
+            if linea:
+                env["WA_INBOX_LINEA"] = linea
+            p = subprocess.run([sys.executable, "-c", CARGA_WA_SCOPE + GUARDA_A_MITAD],
+                               env=env, capture_output=True, text=True, timeout=180)
+            donde = f"en la linea {linea}" if linea else "en la principal"
+            hechas += 1
+            if p.returncode != 0:
+                fallos.append(f"el sync con un guardado a mitad revento {donde}: "
+                              f"{p.stderr.strip()[-300:]}")
+                continue
+            datos = json.loads(store.read_text(encoding="utf-8"))
+            quedo = ((datos.get("alcancePorLinea") or {}).get(linea) if linea
+                     else datos.get("scope")) or {}
+            con = sqlite3.connect(home / ".wa-inbox" / "scope.db")
+            filas = dict(con.execute("select chat_jid, mode from chat_scope where account=?",
+                                     (cuenta,)).fetchall())
+            con.close()
+            hechas += 3
+            if (quedo.get(NUEVO) or {}).get("mode") != "responder":
+                fallos.append(f"lo que el panel guardo durante el sync se perdio del "
+                              f"storage {donde}: {sorted(quedo)!r}")
+            if filas.get(NUEVO) != "responder":
+                fallos.append(f"lo que el panel guardo durante el sync no llego a chat_scope "
+                              f"{donde}: {filas!r}")
+            if QUITADO in quedo or QUITADO in filas or QUEDA not in quedo:
+                fallos.append(f"el sync revivio lo quitado a mitad o perdio lo que estaba "
+                              f"{donde}: storage {sorted(quedo)!r}, base {filas!r}")
+    return hechas
+
+
 def main() -> int:
     fallos = []
     aislado = tempfile.TemporaryDirectory()
@@ -3571,7 +3667,8 @@ def main() -> int:
                       + revisa_chat_del_dueno(fallos)
                       + revisa_escritores_concurrentes(fallos)
                       + revisa_store_que_se_lee(fallos)
-                      + revisa_store_ilegible(fallos))
+                      + revisa_store_ilegible(fallos)
+                      + revisa_guardar_durante_sync(fallos))
     aislado.cleanup()
 
     if fallos:

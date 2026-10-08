@@ -1058,19 +1058,14 @@ def persistir_panel(con):
     con.commit()
 
 
-def push_to_plugin(con, with_activity=False):
-    """Deja el panel viendo exactamente lo mismo que el CLI: la linea vinculada ahora,
-    y ninguna otra."""
+def alcance_al_panel(con, grupos=None):
+    """El alcance en la forma que lee el panel, de lo que dicen AHORA la base y el storage.
+    `grupos` son los miembros ya leidos de WhatsApp, para los nombres."""
     persistir_panel(con)
     scope = {}
     cuenta = cuenta_activa()
     panel = plugin_store_read()
-    fusionado = merged_scope(con)
-    # Los miembros de los grupos del alcance (roles-por-numero, M9), en cada sync con la
-    # bandeja y no solo cuando cambio la fuente: un grupo recien autorizado tiene que poder
-    # repartir roles sin esperar a que alguien escriba.
-    grupos = build_group_members(fusionado) if with_activity else None
-    for jid, r in fusionado.items():
+    for jid, r in merged_scope(con).items():
         # tone e instructions viajan de vuelta al panel. Sin ellos, cada sync
         # reescribia scope sin esas claves y borraba lo que el usuario acababa de
         # escribir ahi: el panel guardaba y la siguiente corrida lo perdia.
@@ -1090,6 +1085,20 @@ def push_to_plugin(con, with_activity=False):
                           {m["id"]: m["name"] for m in (grupos or {}).get(jid, [])
                            if m.get("name")}),
                       "updatedAt": r.get("updated_at"), "account": cuenta}
+    return scope
+
+
+def push_to_plugin(con, with_activity=False):
+    """Deja el panel viendo exactamente lo mismo que el CLI: la linea vinculada ahora,
+    y ninguna otra."""
+    cuenta = cuenta_activa()
+    persistir_panel(con)
+    # Los miembros de los grupos del alcance (roles-por-numero, M9), en cada sync con la
+    # bandeja y no solo cuando cambio la fuente: un grupo recien autorizado tiene que poder
+    # repartir roles sin esperar a que alguien escriba.
+    grupos = build_group_members(merged_scope(con)) if with_activity else None
+    # La actividad necesita el alcance; el que se escribe se vuelve a leer al final.
+    scope = alcance_al_panel(con, grupos)
     activity = health = None
     reusando = False
     if with_activity:
@@ -1145,6 +1154,12 @@ def push_to_plugin(con, with_activity=False):
                                for campo, name in PANEL_PRIMER_CAMPOS.items()}
         extra[PANEL_ORCA] = {campo: str(efectivos.get(name) or DEFAULT_CONFIG[name])
                              for campo, name in PANEL_ORCA_CAMPOS.items()}
+    # El alcance se vuelve a leer justo antes de escribir. Leer WhatsApp tarda hasta dos
+    # minutos, y en ese rato el panel puede guardar o quitar una conversacion: escribir la
+    # foto del principio borraba lo que el dueno acababa de autorizar, y revivia lo que
+    # acababa de quitar (guardar-alcance). `persistir_panel` es un upsert: repetirlo no
+    # cambia nada de lo que ya estaba.
+    scope = alcance_al_panel(con, grupos)
     return plugin_store_write(scope, agent_name_of(con), activity, health, routes, extra)
 
 
