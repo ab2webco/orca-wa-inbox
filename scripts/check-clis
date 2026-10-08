@@ -3621,6 +3621,45 @@ def revisa_guardar_durante_sync(fallos: list) -> int:
     return hechas
 
 
+def revisa_nombre_que_es_jid(fallos: list) -> int:
+    """Un jid guardado como nombre no tapa el nombre de verdad del grupo.
+
+    El panel guarda el jid como nombre cuando no tenia la lista de chats, y `wa-scope set
+    <jid>` tambien. `persistir_panel` ya no deja que eso pise el nombre de la base, pero
+    `merged_scope` si lo tomaba, y el sync se lo devolvia al panel: visto en vivo, varias
+    corridas seguidas con el jid de nombre teniendo la base el bueno."""
+    hechas = 0
+    jid = "120363000000000001@g.us"
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+        env.pop("ORCA_USER_DATA_PATH", None)
+        env.pop("WA_INBOX_LINEA", None)
+        store = store_de(home, "orca")
+        store.parent.mkdir(parents=True)
+        store.write_text(json.dumps({"scope": {jid: {
+            "chatName": jid, "provider": "plane", "mode": "responder",
+            "updatedAt": "2026-10-08 10:00"}}}), encoding="utf-8")
+        p = subprocess.run([sys.executable, "-c", CARGA_WA_SCOPE + (
+            "con = m.db()\n"
+            "con.execute(\"insert into chat_scope (account, chat_jid, chat_name, mode) "
+            "values ('local', %r, 'Cliente Alfa', 'responder')\")\n"
+            "con.commit()\n"
+            "m.push_to_plugin(con)\n") % jid],
+            env=env, capture_output=True, text=True, timeout=180)
+        hechas += 1
+        if p.returncode != 0:
+            fallos.append(f"el sync con un jid de nombre revento: {p.stderr.strip()[-300:]}")
+            return hechas
+        nombre = ((json.loads(store.read_text(encoding="utf-8")).get("scope") or {})
+                  .get(jid) or {}).get("chatName")
+        hechas += 1
+        if nombre != "Cliente Alfa":
+            fallos.append(f"un jid guardado como nombre tapo el del grupo en el panel: "
+                          f"{nombre!r}")
+    return hechas
+
+
 def main() -> int:
     fallos = []
     aislado = tempfile.TemporaryDirectory()
@@ -3668,7 +3707,8 @@ def main() -> int:
                       + revisa_escritores_concurrentes(fallos)
                       + revisa_store_que_se_lee(fallos)
                       + revisa_store_ilegible(fallos)
-                      + revisa_guardar_durante_sync(fallos))
+                      + revisa_guardar_durante_sync(fallos)
+                      + revisa_nombre_que_es_jid(fallos))
     aislado.cleanup()
 
     if fallos:

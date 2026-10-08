@@ -1454,8 +1454,14 @@ def merged_scope(con):
         # storage puede seguir teniendo las del numero anterior hasta el proximo sync.
         if cuenta_de_entrada(e) != cuenta:
             continue
+        # Un jid de nombre no es un nombre (el panel lo guarda asi cuando no tenia la lista
+        # de chats, y `wa-scope set <jid>` tambien): no tapa el que la base ya sabia, igual
+        # que en `persistir_panel`. Si no, el sync se lo devolvia al panel para siempre.
+        nombre = e.get("chatName")
+        if not nombre or nombre == jid:
+            nombre = rows.get(jid, {}).get("chat_name") or jid
         row = {**rows.get(jid, {}), "account": cuenta, "chat_jid": jid,
-               "chat_name": e.get("chatName") or jid,
+               "chat_name": nombre,
                "provider": e.get("provider") or "plane",
                "target": e.get("target"),
                # Los proyectos del panel mandan, la lista vacia incluida: el dueno que los
