@@ -9170,5 +9170,89 @@ console.log('\nactivity.html — respuesta-otro-chat: la propuesta dice a que ch
   }
 }
 
+// ───────── guardar-panel G1: Guardar en una conversacion no dice guardado sin serlo ─────────
+// Medido en la maquina del dueno: unas instrucciones largas nunca llegaron al storage y
+// el panel dijo "✓ Guardado" y vacio el formulario. El host contesta `{ ok: false }`
+// (limite, cola vencida, error propio) y el panel no miraba la respuesta.
+console.log('\nconfig.html — guardar-panel G1: un Guardar rechazado lo dice y conserva lo escrito')
+{
+  const largo = 'Instrucciones de prueba. '.repeat(700).trim()
+  for (const [idioma, frase] of [['es-419', /No se guardo/], ['en-US', /was not saved/]]) {
+    let intentos = 0
+    const { doc, storage } = await montar('config.html', {
+      chats: [{ jid: '1@g.us', name: 'Soporte Norte', kind: 'grupo' }]
+    }, idioma, (d) => {
+      if (d.action === 'storage.set' && d.params.key === 'scope') {
+        intentos += 1
+        return { ok: false, error: 'host failed' }
+      }
+      return undefined
+    })
+    await espera()
+    elegirChat(doc, '1@g.us')
+    doc.getElementById('chat-instructions').value = largo
+    doc.getElementById('save-scope').click()
+    await new Promise((r) => setTimeout(r, 2500))
+    const dijo = doc.getElementById('said-scope')
+    ok(`${idioma}: un Guardar que el host rechazo no dice guardado`,
+      !dijo.textContent.includes('✓') && frase.test(dijo.textContent),
+      JSON.stringify(dijo.textContent))
+    ok(`${idioma}: el error queda marcado en rojo`, dijo.className.includes('bad'))
+    ok(`${idioma}: se reintento antes de rendirse, con un tope`,
+      intentos > 1 && intentos <= 4, `intentos = ${intentos}`)
+    ok(`${idioma}: y el formulario conserva lo escrito`,
+      doc.getElementById('chat-instructions').value === largo &&
+      doc.getElementById('chat').value !== '',
+      `instrucciones = ${doc.getElementById('chat-instructions').value.length} caracteres`)
+    ok(`${idioma}: y no quedo nada escrito`, storage.scope === undefined,
+      JSON.stringify(storage.scope))
+  }
+}
+{
+  // Un rechazo pasajero se reintenta solo: el segundo intento entra y recien ahi se dice.
+  let intentos = 0
+  const { doc, storage } = await montar('config.html', {
+    chats: [{ jid: '1@g.us', name: 'Soporte Norte', kind: 'grupo' }]
+  }, 'es-419', (d) => {
+    if (d.action === 'storage.set' && d.params.key === 'scope') {
+      intentos += 1
+      if (intentos === 1) return { ok: false, error: 'host failed' }
+    }
+    return undefined
+  })
+  await espera()
+  elegirChat(doc, '1@g.us')
+  doc.getElementById('chat-instructions').value = 'Resuma lo que manden.'
+  doc.getElementById('save-scope').click()
+  await new Promise((r) => setTimeout(r, 2500))
+  ok('un rechazo pasajero se reintenta y el segundo intento guarda',
+    intentos === 2 && storage.scope && storage.scope['1@g.us'] &&
+    storage.scope['1@g.us'].instructions === 'Resuma lo que manden.',
+    `intentos = ${intentos} ${JSON.stringify(storage.scope)}`)
+  ok('y recien entonces dice guardado',
+    doc.getElementById('said-scope').textContent.includes('✓'),
+    doc.getElementById('said-scope').textContent)
+}
+{
+  // El host dice que si y el dato no queda: la relectura lo ve y el panel no miente.
+  const { doc, storage } = await montar('config.html', {
+    chats: [{ jid: '1@g.us', name: 'Soporte Norte', kind: 'grupo' }]
+  }, 'es-419', (d) => {
+    if (d.action === 'storage.set' && d.params.key === 'scope') return { ok: true, value: { ok: true } }
+    return undefined
+  })
+  await espera()
+  elegirChat(doc, '1@g.us')
+  doc.getElementById('chat-instructions').value = 'Resuma lo que manden.'
+  doc.getElementById('save-scope').click()
+  await new Promise((r) => setTimeout(r, 2500))
+  const dijo = doc.getElementById('said-scope')
+  ok('un "si" del host que no dejo el dato no dice guardado',
+    !dijo.textContent.includes('✓') && dijo.className.includes('bad') &&
+    storage.scope === undefined, JSON.stringify(dijo.textContent))
+  ok('y conserva lo escrito',
+    doc.getElementById('chat-instructions').value === 'Resuma lo que manden.')
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)
