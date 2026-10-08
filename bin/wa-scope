@@ -439,6 +439,10 @@ create table if not exists juicio (
   -- rol de quien escribio cambia, el veredicto no vale y Jev lo juzga de nuevo. Null es un
   -- veredicto de antes de los roles.
   rol       text,
+  -- Los stanza_id de los mensajes que Jev juzgo juntos (una rafaga), en JSON y ordenados
+  -- (guardar-panel G4): el veredicto vale solo para ese mismo conjunto. Null es un
+  -- veredicto de antes, y cuenta como el de su mensaje solo.
+  rafaga    text,
   primary key (account, chat_jid, stanza_id)
 );
 -- Lo que el motor contesta solo en un caso: el acuse de recibo o el saludo. Una fila por
@@ -1840,6 +1844,9 @@ def migrate(con):
         con.execute("alter table juicio add column jev text")
     if "rol" not in juicio_cols:
         con.execute("alter table juicio add column rol text")
+    # guardar-panel G4: para que mensajes juntos se dio el veredicto.
+    if "rafaga" not in juicio_cols:
+        con.execute("alter table juicio add column rafaga text")
     work_cols = {r["name"] for r in con.execute("pragma table_info(work)")}
     if "notified_at" not in work_cols:
         con.execute("alter table work add column notified_at text")
@@ -6621,13 +6628,20 @@ def rol_del_mensaje(m):
     return rol if rol in wa_store.ROLES else wa_store.ROL_CLIENTE
 
 
+def conjunto_juzgado(m):
+    """Los stanza_id que Jev juzga juntos con este mensaje, ordenados: los de su rafaga, o
+    el suyo solo."""
+    return sorted(m.get("rafaga") or [m.get("stanza_id")])
+
+
 def jev_guardado(con, m):
-    """(veredicto, rol con que se juzgo) del veredicto de Jev guardado para este mensaje, o
-    None. Un veredicto de antes de los roles (`rol` null) se juzgo con el binario de
-    entonces: admin si lo mando un numero del dueno, cliente si no."""
+    """(veredicto, rol con que se juzgo, mensajes que juzgo) del veredicto de Jev guardado
+    para este mensaje, o None. Un veredicto de antes de los roles (`rol` null) se juzgo con
+    el binario de entonces: admin si lo mando un numero del dueno, cliente si no. Uno de
+    antes de las rafagas (`rafaga` null) es el de su mensaje solo."""
     if con is None:
         return None
-    fila = con.execute("select jev, rol from juicio where account=? and chat_jid=? and "
+    fila = con.execute("select jev, rol, rafaga from juicio where account=? and chat_jid=? and "
                        "stanza_id=? and origen='jev' and jev is not null",
                        (m.get("account") or cuenta_activa(), m.get("chat_jid"),
                         m.get("stanza_id"))).fetchone()
@@ -6641,17 +6655,29 @@ def jev_guardado(con, m):
         return None
     rol = fila["rol"] if fila["rol"] in wa_store.ROLES else (
         wa_store.ROL_ADMIN if wa_store.es_dueno(m.get("sender_jid")) else wa_store.ROL_CLIENTE)
-    return dato, rol
+    try:
+        juntos = json.loads(fila["rafaga"]) if fila["rafaga"] else None
+    except (TypeError, ValueError):
+        juntos = None
+    juntos = sorted(juntos) if isinstance(juntos, list) else [m.get("stanza_id")]
+    return dato, rol, juntos
+
+
+def vale_para(guardado, m):
+    """Si un veredicto guardado de Jev vale para este mensaje (o rafaga): el mismo rol
+    (roles-por-numero, M10) y los mismos mensajes (guardar-panel G4). Visto en vivo: una
+    linea vacia juzgada sola como "sin texto legible" decidia la rafaga que llego despues
+    con un pedido, y el pedido se cerraba como "sin texto legible"."""
+    return (guardado is not None and guardado[1] == rol_del_mensaje(m)
+            and guardado[2] == conjunto_juzgado(m))
 
 
 def jev_cacheado(con, m):
     """El veredicto de Jev que ya se guardo para este mensaje, o None. Vale solo para el
-    rol con que se juzgo (roles-por-numero, M10): si el de quien escribio cambio, no hay
-    veredicto y Jev lo juzga de nuevo con el rol de ahora."""
+    rol con que se juzgo y para el mismo conjunto de mensajes (`vale_para`): si cambio el
+    rol de quien escribio, o la rafaga crecio, Jev lo juzga de nuevo."""
     guardado = jev_guardado(con, m)
-    if guardado is None or guardado[1] != rol_del_mensaje(m):
-        return None
-    return guardado[0]
+    return guardado[0] if vale_para(guardado, m) else None
 
 
 def clase_de_jev(juicio):
@@ -6689,13 +6715,14 @@ def jev_juzga(mensaje, con=None):
         return juicio
     # Con el rol con que se juzgo (roles-por-numero, M10): otro rol lo vuelve a juzgar.
     con.execute(
-        "insert into juicio (account, chat_jid, stanza_id, clase, origen, at, jev, rol) "
-        "values (?,?,?,?,'jev',?,?,?) on conflict(account, chat_jid, stanza_id) do update "
-        "set clase=excluded.clase, origen=excluded.origen, at=excluded.at, "
-        "jev=excluded.jev, rol=excluded.rol",
+        "insert into juicio (account, chat_jid, stanza_id, clase, origen, at, jev, rol, "
+        "rafaga) values (?,?,?,?,'jev',?,?,?,?) on conflict(account, chat_jid, stanza_id) "
+        "do update set clase=excluded.clase, origen=excluded.origen, at=excluded.at, "
+        "jev=excluded.jev, rol=excluded.rol, rafaga=excluded.rafaga",
         (mensaje.get("account") or cuenta_activa(), mensaje.get("chat_jid"),
          mensaje.get("stanza_id"), clase_de_jev(juicio), time.strftime("%Y-%m-%d %H:%M"),
-         json.dumps(juicio, ensure_ascii=False, sort_keys=True), rol_del_mensaje(mensaje)))
+         json.dumps(juicio, ensure_ascii=False, sort_keys=True), rol_del_mensaje(mensaje),
+         json.dumps(conjunto_juzgado(mensaje))))
     con.commit()
     return juicio
 
@@ -6747,10 +6774,10 @@ def veredicto_de(m, decision, con=None):
     # marca de agente, no solo con la clase.
     guardado = jev_guardado(con, m) if juicio and juicio.get("origen") == "jev" else None
     if guardado is not None:
-        if guardado[1] == rol_del_mensaje(m):
+        if vale_para(guardado, m):
             return veredicto_de_jev(m, guardado[0])
-        # Jev lo juzgo con otro rol (roles-por-numero, M10): su clase tampoco vale, y Jev
-        # lo vuelve a juzgar abajo con el de ahora.
+        # Jev lo juzgo con otro rol (roles-por-numero, M10) o junto con otros mensajes
+        # (guardar-panel G4): su clase tampoco vale, y Jev lo vuelve a juzgar abajo.
         juicio = None
     if juicio:
         if juicio["clase"] == "nothing":
@@ -6821,6 +6848,9 @@ def mensaje_de_rafaga(rafaga):
     sin = next((m.get("sin_transcribir") for m in rafaga if m.get("sin_transcribir")), None)
     return dict(primero, text=SEPARADOR_RAFAGA.join(t for t in textos if t),
                 kind=kind, media=media, juicio=None, sin_transcribir=sin,
+                # Que mensajes van juntos: el veredicto de Jev se guarda para este conjunto
+                # y no vale para otro (guardar-panel G4).
+                rafaga=[m.get("stanza_id") for m in rafaga],
                 # Una rafaga tiene el rol MAS BAJO de los que la escribieron: lo que otro
                 # escribio en medio sigue siendo de un participante (roles-por-numero).
                 rol=wa_store.rol_menor([rol_del_mensaje(m) for m in rafaga]),

@@ -2301,6 +2301,64 @@ if NODE:
         os.environ.update(antes)
 
 
+# ── 12d. Un veredicto de un mensaje solo no decide la rafaga que llega despues ─────────
+# Visto en vivo (guardar-panel G4): una linea vacia de un grupo, juzgada sola como
+# "sin texto legible", no abre caso y queda nueva; en la corrida siguiente arranca la
+# rafaga con el pedido que llego despues, y el veredicto guardado bajo su stanza se usaba
+# para la rafaga entera. El pedido —texto, enlace y una pregunta que nombra al agente— se
+# cerraba como "sin texto legible" y las otras lineas no tenian caso.
+def jev_vacio_o_texto(cuerpo):
+    if not cuerpo["state"]["message_to_evaluate"]["text"].strip():
+        return 200, respuestas(cuerpo["questions"], choice="empty_or_audio_only",
+                               asks_owner_to_act=0.05)
+    return jev_segun_texto(cuerpo)
+
+
+print("\nun veredicto de un mensaje solo no decide la rafaga")
+if NODE:
+    falso = JevFalso(jev_vacio_o_texto)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(SOPORTE, "W1", "", 3, media="image")])
+            autoriza(home)
+            ingiere(home)
+            ok("la linea vacia sola se juzga una vez y no abre caso",
+               len(falso.pedidos) == 1 and caso_de_stanza(home, "W1") is None
+               and (juicio_de(home, "W1") or {}).get("origen") == "jev",
+               f"{len(falso.pedidos)} {juicio_de(home, 'W1')}")
+            llegan(home, A, [msg(SOPORTE, "W2", "@duenio revisa este caso " + ENLACE
+                                 + " me ayudas?", 2, mencion=True),
+                             msg(SOPORTE, "W3", "es el pedido de la semana pasada", 2)])
+            ingiere(home)
+            ok("la rafaga mas grande se le vuelve a preguntar a Jev, con el texto junto",
+               len(falso.pedidos) == 2 and "revisa este caso" in falso.textos()[-1]
+               and "semana pasada" in falso.textos()[-1], f"{falso.textos()}")
+            c2, c3 = casos_de(home, "W2", "W3")
+            ok("el pedido abre un caso que el veredicto viejo no cierra",
+               c2 is not None and c2["etapa"] != "cerrado"
+               and not any(e["a"] == "cerrado" for e in c2["eventos"]),
+               f"{c2 and c2['etapa']}")
+            ok("y las lineas con texto de la rafaga no quedan sin caso",
+               c3 is not None and c3["case_id"] == c2["case_id"],
+               f"{c3 and c3['case_id']} {c2 and c2['case_id']}")
+            # La misma rafaga otra vez: ahora si la cache la tiene.
+            con = db_de(home)
+            for tabla in ("caso_evento", "caso_mensaje", "caso"):
+                con.execute(f"delete from {tabla}")
+            con.commit()
+            con.close()
+            ingiere(home)
+            ok("la misma rafaga, otra vez, no vuelve a llamar a Jev",
+               len(falso.pedidos) == 2, f"{len(falso.pedidos)} pedidos")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
 # ── 13. Errores estables de `wa-scope caso` ──────────────────────────────────────
 # El panel (T6) traduce por codigo: salida 2 y UNA linea JSON en stderr,
 # {"error": "<code>", "detail": "<english text>"} (kanban-casos, "Contratos").
