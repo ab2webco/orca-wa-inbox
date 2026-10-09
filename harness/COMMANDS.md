@@ -50,6 +50,11 @@ reply (or a job's final reply) to another chat of the same line in responder, al
 the owner's approval. A customer's case is refused with `E_DEST_ROLE`; the other refusals
 are `E_DEST_MODE`, `E_DEST_LINE`, `E_DEST_NOT_FOUND` and `E_DEST_AMBIGUOUS`.
 
+The project agent does the same from its result, when the owner (or that Super admin) asks
+it to report to another chat: `caso resultado <id> --estado resuelto ... --chat <jid>
+--actor trabajador`. Same destinations, same refusals, and it also waits for the owner's
+approval. Only a `resuelto` result takes `--chat` (`E_ARGS` otherwise).
+
 A different proposal on a case in `listo` (the result of a job) sends the case back to
 `decision`: the owner approves the new version, never the old one.
 

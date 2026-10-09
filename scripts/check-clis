@@ -3621,6 +3621,157 @@ def revisa_guardar_durante_sync(fallos: list) -> int:
     return hechas
 
 
+# El panel que guarda en el hueco mas chico: despues de la ultima lectura del alcance y
+# justo antes de que `plugin_store_write` tome el candado. El host escribe sin el candado,
+# asi que ahi solo protege comparar lo que se leyo con lo que hay al escribir.
+GUARDA_ANTES_DE_ESCRIBIR = """
+import json, os, sqlite3
+cfg = json.loads(os.environ["WA_GUARDA"])
+ruta = m.plugin_store_path()
+original = m.plugin_store_write
+
+def guarda_antes(*args, **kwargs):
+    with open(ruta, encoding="utf-8") as fh:
+        datos = json.load(fh)
+    lugar = datos["scope"] if not cfg["linea"] else datos["alcancePorLinea"][cfg["linea"]]
+    lugar[cfg["cambiado"]] = cfg["cambio"]
+    lugar[cfg["nuevo"]] = cfg["entrada"]
+    lugar.pop(cfg["quitado"], None)
+    otra = sqlite3.connect(m.DB)
+    otra.execute("delete from chat_scope where chat_jid=?", (cfg["quitado"],))
+    otra.commit()
+    otra.close()
+    temporal = ruta + ".host.tmp"
+    with open(temporal, "w", encoding="utf-8") as fh:
+        json.dump(datos, fh)
+    os.replace(temporal, ruta)
+    return original(*args, **kwargs)
+
+m.plugin_store_write = guarda_antes
+m.push_to_plugin(m.db())
+"""
+
+
+def revisa_guardar_antes_de_escribir(fallos: list) -> int:
+    """Lo que el panel guarda entre la ultima lectura del sync y su escritura no se pierde
+    (guardar-panel G2).
+
+    v4.27.3 movio la lectura del alcance al final del sync, pero entre esa lectura y la
+    escritura sigue habiendo un hueco: el host escribe storage.json sin el candado de
+    `plugin_store_modifica`, y lo que el panel guardaba ahi lo pisaba la copia del sync.
+    Dentro del candado, una entrada cuyo `updatedAt` cambio desde la lectura es la del
+    panel; una nueva queda y una quitada no vuelve. En la principal y en otra linea."""
+    hechas = 0
+    if not shutil.which("node"):
+        print("  aviso: sin node, no se armo el almacen de dos lineas", file=sys.stderr)
+        return hechas
+    CAMBIADO, NUEVO, QUITADO = ("120363000000000001@g.us", "120363000000000002@g.us",
+                                "120363000000000003@g.us")
+
+    def entrada(nombre, cuenta, **mas):
+        return {"chatName": nombre, "provider": "plane", "mode": "responder",
+                "updatedAt": "2026-10-08 10:00", **({"account": cuenta} if cuenta else {}),
+                **mas}
+
+    for linea in (None, NUEVA):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = pathlib.Path(tmp)
+            env = entorno(home)
+            env.pop("ORCA_USER_DATA_PATH", None)
+            env.pop("WA_INBOX_LINEA", None)
+            almacen_con_lineas(home, VIEJA)
+            cuenta = linea or VIEJA
+            alcance = {CAMBIADO: entrada("Cliente Alfa", cuenta, instructions="Antes."),
+                       QUITADO: entrada("Cliente Gama", cuenta)}
+            store = store_de(home, "orca")
+            store.parent.mkdir(parents=True)
+            store.write_text(json.dumps({"alcancePorLinea": {linea: alcance}} if linea
+                                        else {"scope": alcance}), encoding="utf-8")
+            env["WA_GUARDA"] = json.dumps({
+                "linea": linea, "cambiado": CAMBIADO,
+                "cambio": entrada("Cliente Alfa", cuenta, instructions="Lo nuevo del panel.",
+                                  updatedAt="2026-10-08T10:05:00.000Z"),
+                "nuevo": NUEVO, "entrada": entrada("Cliente Beta", cuenta),
+                "quitado": QUITADO})
+            if linea:
+                env["WA_INBOX_LINEA"] = linea
+            p = subprocess.run([sys.executable, "-c", CARGA_WA_SCOPE + GUARDA_ANTES_DE_ESCRIBIR],
+                               env=env, capture_output=True, text=True, timeout=180)
+            donde = f"en la linea {linea}" if linea else "en la principal"
+            hechas += 1
+            if p.returncode != 0:
+                fallos.append(f"el sync con un guardado antes de escribir revento {donde}: "
+                              f"{p.stderr.strip()[-300:]}")
+                continue
+            datos = json.loads(store.read_text(encoding="utf-8"))
+            quedo = ((datos.get("alcancePorLinea") or {}).get(linea) if linea
+                     else datos.get("scope")) or {}
+            hechas += 3
+            if (quedo.get(CAMBIADO) or {}).get("instructions") != "Lo nuevo del panel.":
+                fallos.append(f"lo que el panel guardo justo antes de la escritura del sync "
+                              f"se perdio {donde}: {quedo.get(CAMBIADO)!r}")
+            if (quedo.get(NUEVO) or {}).get("mode") != "responder":
+                fallos.append(f"la conversacion que el panel agrego justo antes de la escritura "
+                              f"se perdio {donde}: {sorted(quedo)!r}")
+            if QUITADO in quedo:
+                fallos.append(f"la escritura del sync revivio lo que el panel quito justo "
+                              f"antes {donde}: {sorted(quedo)!r}")
+    return hechas
+
+
+def revisa_copia_vieja_de_la_principal(fallos: list) -> int:
+    """El sync de la principal quita su copia vieja de `alcancePorLinea` (guardar-panel G3).
+
+    Visto en vivo: el alcance de la principal estaba en la raiz `scope`, al dia, y ademas
+    en `alcancePorLinea[<principal>]`, una copia vieja con otras aprobaciones y sin
+    instrucciones. Nadie la escribe ya, pero `alcances_de_lineas` la devuelve y `wa-send`
+    la cruza como si fuera del panel. Se quita esa clave sola: la copia de otra linea es
+    su alcance de verdad y queda como estaba."""
+    hechas = 0
+    if not shutil.which("node"):
+        print("  aviso: sin node, no se armo el almacen de dos lineas", file=sys.stderr)
+        return hechas
+    JID = "120363000000000001@g.us"
+
+    def entrada(nombre, cuenta, modo):
+        return {"chatName": nombre, "provider": "plane", "mode": modo,
+                "updatedAt": "2026-10-08 10:00", "account": cuenta}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = entorno(home)
+        env.pop("ORCA_USER_DATA_PATH", None)
+        env.pop("WA_INBOX_LINEA", None)
+        almacen_con_lineas(home, VIEJA)
+        de_la_otra = {JID: entrada("Cliente Beta", NUEVA, "observar")}
+        store = store_de(home, "orca")
+        store.parent.mkdir(parents=True)
+        store.write_text(json.dumps({
+            "scope": {JID: entrada("Cliente Alfa", VIEJA, "responder")},
+            "alcancePorLinea": {VIEJA: {JID: entrada("Cliente Alfa", VIEJA, "off")},
+                                NUEVA: de_la_otra}}), encoding="utf-8")
+        p = subprocess.run([sys.executable, "-c", CARGA_WA_SCOPE + "m.push_to_plugin(m.db())\n"],
+                           env=env, capture_output=True, text=True, timeout=180)
+        hechas += 1
+        if p.returncode != 0:
+            fallos.append(f"el sync con una copia vieja de la principal revento: "
+                          f"{p.stderr.strip()[-300:]}")
+            return hechas
+        datos = json.loads(store.read_text(encoding="utf-8"))
+        porlinea = datos.get("alcancePorLinea") or {}
+        hechas += 3
+        if VIEJA in porlinea:
+            fallos.append(f"el sync de la principal dejo su copia vieja en alcancePorLinea: "
+                          f"{porlinea.get(VIEJA)!r}")
+        if porlinea.get(NUEVA) != de_la_otra:
+            fallos.append(f"el sync de la principal toco el alcance de otra linea: "
+                          f"{porlinea.get(NUEVA)!r}")
+        if ((datos.get("scope") or {}).get(JID) or {}).get("mode") != "responder":
+            fallos.append(f"el sync de la principal perdio su alcance de la raiz: "
+                          f"{datos.get('scope')!r}")
+    return hechas
+
+
 def revisa_nombre_que_es_jid(fallos: list) -> int:
     """Un jid guardado como nombre no tapa el nombre de verdad del grupo.
 
@@ -3708,6 +3859,8 @@ def main() -> int:
                       + revisa_store_que_se_lee(fallos)
                       + revisa_store_ilegible(fallos)
                       + revisa_guardar_durante_sync(fallos)
+                      + revisa_guardar_antes_de_escribir(fallos)
+                      + revisa_copia_vieja_de_la_principal(fallos)
                       + revisa_nombre_que_es_jid(fallos))
     aislado.cleanup()
 

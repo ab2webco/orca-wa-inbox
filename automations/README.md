@@ -21,6 +21,13 @@ cuenta un intento y se reintenta; a los 3 lo dice `limpieza_atascados` en la lí
 tick y el tablero ("N espacios del plugin no se pudieron quitar"). Sin la CLI de Orca, o
 con un error, no hace nada y lo cuenta en `limpieza_error`.
 
+Una pestaña **dormida** (`liveness: sleeping`, sin `ptyId`: la sesión de Claude salió y Orca
+guarda su registro para retomarla) no se toca: Orca no la cierra ni le escribe
+(`terminal_handle_stale`, `terminal_asleep`) y su handle cambia en cada lista, así que
+reintentarla era una llamada fallida por pestaña en cada vuelta. Tampoco cuenta como viva.
+Ninguna llamada de la CLI las quita: se sueltan desde Orca, en Ajustes → Resume Vault →
+"Release all".
+
 `tick` es un comando, no un agente (`orca automations create --command` en un Orca
 1.4.160-lab.84 o más nuevo), pero despierta a dos:
 

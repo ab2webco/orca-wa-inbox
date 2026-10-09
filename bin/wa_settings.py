@@ -455,6 +455,19 @@ def alcances_de_lineas(datos):
             in _contenedor(datos, CONTENEDOR_PROPIO["scope"]).items() if isinstance(alcance, dict)]
 
 
+def quitar_copia_de_la_principal(datos, principal):
+    """Quita `alcancePorLinea[<principal>]` (guardar-panel G3). El alcance de la principal
+    vive en la raiz `scope`; una copia en su contenedor propio es un resto que nadie
+    escribe ya, pero `alcances_de_lineas` la devuelve y `wa-send` la cruza, asi que una
+    aprobacion vieja podia mandar. Solo esa clave: la de cada otra linea es su alcance.
+    Devuelve si quito algo."""
+    contenedor = _contenedor(datos, CONTENEDOR_PROPIO["scope"])
+    if not principal or principal not in contenedor:
+        return False
+    contenedor.pop(principal)
+    return True
+
+
 # El panel solo sabe escribir storage, y lo hace con claves planas. Traducirlas a
 # los nombres de settings es lo que evita que un tono guardado ahi no llegue nunca.
 PANEL_SETTINGS = {"tone": "tone", "agentName": "agent_name",

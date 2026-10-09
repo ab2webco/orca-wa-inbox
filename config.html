@@ -1410,6 +1410,7 @@
           chkAllDone: 'Lo necesario esta listo: su agente ya puede trabajar.',
           saveCard: 'Guardar',
           saveFailed: 'No se pudo guardar. Intente de nuevo.',
+          scopeNotSaved: 'No se guardo: el host no confirmo la escritura. Lo escrito sigue en el formulario; intente de nuevo.',
           toneLabel: "Como escribe",
           tonePh: "ej. Espanol neutro, usted, formal. Sin modismos regionales.",
           toneHelp: "Vale para todas las conversaciones. Cada una puede tener el suyo y pisa este.",
@@ -1994,6 +1995,7 @@
           chkAllDone: 'Everything needed is ready: your agent can work.',
           saveCard: 'Save',
           saveFailed: 'It could not be saved. Try again.',
+          scopeNotSaved: 'It was not saved: the host did not confirm the write. What you typed is still in the form; try again.',
           toneLabel: "How it writes",
           tonePh: "e.g. Neutral Spanish, formal. No regional slang.",
           toneHelp: "Applies to every conversation. Each one can override it.",
@@ -2599,6 +2601,7 @@
         chkAllDone: 'O necessario esta pronto: o seu agente ja pode trabalhar.',
         saveCard: 'Salvar',
         saveFailed: 'Nao foi possivel salvar. Tente de novo.',
+        scopeNotSaved: 'Nao foi salvo: o host nao confirmou a escrita. O que voce escreveu continua no formulario; tente de novo.',
         toneLabel: 'Como escreve',
         autoLegend: 'Respostas automaticas',
         autoIntro: 'Somente nas conversas em que o seu agente pode responder sozinho. Um pedido ' +
@@ -5515,7 +5518,10 @@
         var workspace = derivadoDe(workspaces)
         var mode = valorSeg('mode') || 'off'
         if (!jid) { said('said-scope', t('needChat'), true); return }
-        busy(event.currentTarget, leerAlcanceVisto().then(function (next) {
+        // Se arma sobre lo que hay AHORA en el storage: cada intento vuelve a leer, asi
+        // que un reintento no pisa lo que otro escribio entre medio.
+        var sello = null
+        function armar (next) {
           next = next || {}
           // Se guarda en la forma viva de la conversacion (lid-sigue-autorizacion). Lo que
           // ya estaba viene de la entrada editada o, al elegir la fila viva, de su gemela
@@ -5548,13 +5554,19 @@
           // Autorizar es autorizar para ESTE numero (T9): el mismo grupo visto desde
           // otro numero propio es otra autorizacion.
           if (cuentaVinculada) next[jid].account = cuentaVinculada
-          return escribirAlcanceVisto(next).then(function () {
-            renderScope(next)
-            resetScopeForm()
-            pintarChecklist()
-            said('said-scope', '✓ ' + t('savedOk') + ': ' + chat + ' · ' +
-              porCodigo(MODE_KEY, mode, mode))
-          })
+          sello = next[jid].updatedAt
+          return next
+        }
+        busy(event.currentTarget, guardarAlcanceConfirmado(armar, function () { return jid },
+          function () { return sello }).then(function (r) {
+          // Sin confirmacion no se dice guardado ni se vacia el formulario: lo escrito
+          // por el dueno es lo unico que queda de ese cambio.
+          if (!r.ok) { said('said-scope', t('scopeNotSaved'), true); return }
+          renderScope(r.alcance)
+          resetScopeForm()
+          pintarChecklist()
+          said('said-scope', '✓ ' + t('savedOk') + ': ' + chat + ' · ' +
+            porCodigo(MODE_KEY, mode, mode))
         }))
       })
 
@@ -6870,6 +6882,37 @@
           var todo = v && typeof v === 'object' ? Object.assign({}, v) : {}
           todo[otra] = next
           return write('alcancePorLinea', todo)
+        })
+      }
+      /** Guarda una entrada del alcance y dice que si SOLO cuando el host la tiene.
+       *
+       *  Medido en la maquina del dueno: unas instrucciones largas nunca llegaron al
+       *  storage y el panel dijo guardado. `write` resuelve con la respuesta del host,
+       *  que puede ser `{ ok: false }` —limite, la cola vencida, un error suyo—, y un
+       *  "si" tampoco alcanza: se relee el alcance y la entrada tiene que traer el mismo
+       *  `updatedAt` que se escribio. Un rechazo se reintenta pocas veces, armando de
+       *  nuevo sobre lo que haya en ese momento. Devuelve `{ ok, alcance }`. */
+      var GUARDAR_INTENTOS = 3
+      function guardarAlcanceConfirmado (armar, jidDe, selloDe, intento) {
+        intento = intento || 1
+        function otraVez () {
+          if (intento >= GUARDAR_INTENTOS) return { ok: false }
+          return new Promise(function (r) { setTimeout(r, 300 * intento) }).then(function () {
+            return guardarAlcanceConfirmado(armar, jidDe, selloDe, intento + 1)
+          })
+        }
+        return leerAlcanceVisto(true).then(function (actual) {
+          // Sin saber que hay no se escribe: se perderian las demas conversaciones.
+          if (!hayRespuesta(actual)) return otraVez()
+          var next = armar(Object.assign({}, actual || {}))
+          return escribirAlcanceVisto(next).then(function (r) {
+            if (!r || !r.ok) return otraVez()
+            return leerAlcanceVisto(true).then(function (v) {
+              var entrada = hayRespuesta(v) && v ? v[jidDe()] : null
+              if (!entrada || entrada.updatedAt !== selloDe()) return otraVez()
+              return { ok: true, alcance: v }
+            })
+          })
         })
       }
       function delOtraLinea (valor, cuenta, clave) {

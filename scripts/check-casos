@@ -2301,6 +2301,64 @@ if NODE:
         os.environ.update(antes)
 
 
+# ── 12d. Un veredicto de un mensaje solo no decide la rafaga que llega despues ─────────
+# Visto en vivo (guardar-panel G4): una linea vacia de un grupo, juzgada sola como
+# "sin texto legible", no abre caso y queda nueva; en la corrida siguiente arranca la
+# rafaga con el pedido que llego despues, y el veredicto guardado bajo su stanza se usaba
+# para la rafaga entera. El pedido —texto, enlace y una pregunta que nombra al agente— se
+# cerraba como "sin texto legible" y las otras lineas no tenian caso.
+def jev_vacio_o_texto(cuerpo):
+    if not cuerpo["state"]["message_to_evaluate"]["text"].strip():
+        return 200, respuestas(cuerpo["questions"], choice="empty_or_audio_only",
+                               asks_owner_to_act=0.05)
+    return jev_segun_texto(cuerpo)
+
+
+print("\nun veredicto de un mensaje solo no decide la rafaga")
+if NODE:
+    falso = JevFalso(jev_vacio_o_texto)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(SOPORTE, "W1", "", 3, media="image")])
+            autoriza(home)
+            ingiere(home)
+            ok("la linea vacia sola se juzga una vez y no abre caso",
+               len(falso.pedidos) == 1 and caso_de_stanza(home, "W1") is None
+               and (juicio_de(home, "W1") or {}).get("origen") == "jev",
+               f"{len(falso.pedidos)} {juicio_de(home, 'W1')}")
+            llegan(home, A, [msg(SOPORTE, "W2", "@duenio revisa este caso " + ENLACE
+                                 + " me ayudas?", 2, mencion=True),
+                             msg(SOPORTE, "W3", "es el pedido de la semana pasada", 2)])
+            ingiere(home)
+            ok("la rafaga mas grande se le vuelve a preguntar a Jev, con el texto junto",
+               len(falso.pedidos) == 2 and "revisa este caso" in falso.textos()[-1]
+               and "semana pasada" in falso.textos()[-1], f"{falso.textos()}")
+            c2, c3 = casos_de(home, "W2", "W3")
+            ok("el pedido abre un caso que el veredicto viejo no cierra",
+               c2 is not None and c2["etapa"] != "cerrado"
+               and not any(e["a"] == "cerrado" for e in c2["eventos"]),
+               f"{c2 and c2['etapa']}")
+            ok("y las lineas con texto de la rafaga no quedan sin caso",
+               c3 is not None and c3["case_id"] == c2["case_id"],
+               f"{c3 and c3['case_id']} {c2 and c2['case_id']}")
+            # La misma rafaga otra vez: ahora si la cache la tiene.
+            con = db_de(home)
+            for tabla in ("caso_evento", "caso_mensaje", "caso"):
+                con.execute(f"delete from {tabla}")
+            con.commit()
+            con.close()
+            ingiere(home)
+            ok("la misma rafaga, otra vez, no vuelve a llamar a Jev",
+               len(falso.pedidos) == 2, f"{len(falso.pedidos)} pedidos")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+
 # ── 13. Errores estables de `wa-scope caso` ──────────────────────────────────────
 # El panel (T6) traduce por codigo: salida 2 y UNA linea JSON en stderr,
 # {"error": "<code>", "detail": "<english text>"} (kanban-casos, "Contratos").
@@ -3596,9 +3654,15 @@ if clave == "worktree list":
                                  "truncated": e["trunca"]}})
 if clave == "terminal list":
     sale({"ok": True, "result": {"terminals": e["terminals"], "truncated": False}})
+# Como la Orca de verdad (2026-10-08) con una terminal dormida: no la cierra ni le escribe.
+dormidas = {t["handle"] for t in e["terminals"] if t.get("liveness") == "sleeping"}
 if clave == "terminal close":
+    if valor("--terminal") in dormidas:
+        sale({"ok": False, "error": {"code": "terminal_handle_stale"}}, 1)
     e["terminals"] = [t for t in e["terminals"] if t["handle"] != valor("--terminal")]
     sale({"ok": True, "result": {"closed": True}})
+if clave == "terminal send" and valor("--terminal") in dormidas:
+    sale({"ok": False, "error": {"code": "terminal_asleep"}}, 1)
 if clave == "worktree rm":
     sel = (valor("--worktree") or "")[3:]
     if sel not in e["pegados"]:
@@ -3746,6 +3810,43 @@ with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as car
                                                 "term_raiz_sin_titulo"]
        and all("--tab" in x for x in cierres) and p.returncode == 0,
        f"{cierres} {p.stderr[-300:]}")
+
+# guardar-panel G8: una pestana DORMIDA (la sesion de Claude salio y Orca la deja como
+# `liveness: sleeping`, sin pty y con un handle nuevo en cada lista) no se puede cerrar ni
+# escribir: Orca contesta `terminal_handle_stale` / `terminal_asleep`. Visto en vivo: la
+# limpieza reintentaba las mismas 70 cada 5 minutos, para siempre. No se toca.
+def dormida(handle, espacio, hace_s=1800, **mas):
+    return dict(term(handle, espacio, hace_s), liveness="sleeping", ptyId=None,
+                sleepingAgent={"agent": "claude"}, **mas)
+
+
+with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+    corre(home, "tick")
+    con = db_de(home)
+    con.execute("insert into agente_corrida (origen, estado, workspace_selector, terminal, tab, "
+                "turno_at, created_at, updated_at) values ('tick', 'activo', ?, "
+                "'term_dormida_agente', 'tab-dormida-agente', datetime('now','localtime'), "
+                "datetime('now','localtime'), datetime('now','localtime'))", (f"id:{RAIZ_WS}",))
+    con.execute("delete from settings where key='limpieza_at'")
+    con.commit()
+    con.close()
+    orca_falso(carpeta, terminales=[
+        dormida("term_dormida_raiz", RAIZ_WS, title="✳ Claude Code"),
+        dormida("term_dormida_caso", RAIZ_WS, title="WhatsApp case #7"),
+        dormida("term_dormida_agente", RAIZ_WS, tabId="tab-dormida-agente",
+                title="✳ WhatsApp: case agent"),
+        dict(term("term_raiz_viva", RAIZ_WS, 1800), ptyId="pty-demo-1", title="✳ Claude Code")])
+    p, r = tick_con(home, carpeta)
+    tocadas = [x for x in llamadas(carpeta)
+               if x.startswith(("terminal close", "terminal send")) and "term_dormida" in x]
+    ok("G8: una pestana dormida no recibe ni un cierre ni un /exit",
+       tocadas == [] and p.returncode == 0, f"{tocadas} {p.stderr[-300:]}")
+    ok("G8: y la viva y quieta de la raiz se sigue cerrando",
+       any(x.startswith("terminal close --terminal term_raiz_viva") for x in llamadas(carpeta)),
+       f"{llamadas(carpeta)}")
+    estado = db_de(home).execute("select estado from agente_corrida").fetchone()["estado"]
+    ok("G8: el agente de casos cuya terminal quedo dormida ya no esta vivo: la corrida termina",
+       estado not in ("lanzando", "activo"), estado)
 
 with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
     # Visto en vivo: `rm` contesta `removed: true` y el espacio sigue en la lista.
@@ -14086,7 +14187,7 @@ if NODE:
             ok("el brief le dice al agente del proyecto a que chat va su respuesta",
                "Facturacion" in brief and FACTURACION in brief, brief[-800:])
             ok("y no le pide proponer (eso es del agente de casos)",
-               "caso destinos" not in brief and "Reply to another chat" not in brief)
+               "caso propuesta" not in brief)
             r = js(home, "caso", "resultado", dueno, "--respuesta",
                    "Encontramos la causa del error y quedo corregida.", "--resumen",
                    "arreglado el filtro", "--actor", "trabajador")[0]
@@ -14167,6 +14268,94 @@ if NODE:
             ok("el de un cliente dice que no", "--chat" not in de_cliente
                and "another chat: no" in de_cliente, de_cliente)
         finally:
+            os.environ.clear()
+            os.environ.update(env_antes)
+
+
+print("\nrespuesta-otro-chat R8: el agente del proyecto reporta a otro chat (guardar-panel G5)")
+# Visto en vivo: el dueno le dijo al agente del proyecto "responde en el grupo del cliente"
+# y se nego: no tenia como. Ahora `caso resultado --chat` resuelve el destino igual que
+# `caso propuesta --chat`, con los mismos rechazos, y espera la firma del dueno.
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        env_antes = dict(os.environ)
+        prepara_otro_chat(home)
+        sidecar = SidecarFalso(home)
+        try:
+            def trabajo_aprobado(chat, stanza, de, texto):
+                cid = caso_pedido(home, chat, stanza, de, texto)
+                v = js(home, "caso", "propuesta", cid, "--tipo", "trabajar", "--instrucciones",
+                       "Revisa el reporte de ventas.", "--actor", "agente")[0]["propuesta_version"]
+                js(home, "caso", "aprobar", cid, "--version", v, "--actor", "dueno")
+                return cid
+
+            def resultado_a(cid, destino, estado="resuelto"):
+                return corre(home, "caso", "resultado", cid, "--estado", estado, "--respuesta",
+                             "El reporte de ventas quedo revisado.", "--resumen", "revisado",
+                             "--chat", destino, "--actor", "trabajador")
+
+            dueno = trabajo_aprobado(DUENO_DM, "OX1", DUENO_LID, "revisa el reporte")
+            p = resultado_a(dueno, "Facturacion")
+            r = json.loads(p.stdout or "[{}]")[0] if p.returncode == 0 else {}
+            ok("el agente del proyecto manda su resultado a otro chat con --chat",
+               (r.get("propuesta") or {}).get("chat") == FACTURACION
+               and (r.get("destino") or {}).get("chat_jid") == FACTURACION
+               and r.get("etapa") == "listo", p.stderr.strip()[:300])
+            ok("y no sale solo: espera la firma del dueno",
+               envios_a(home, FACTURACION) == [] and not any(
+                   "quedo revisado" in e["body"] for e in envios_a(home, DUENO_DM)),
+               f"{r.get('envio')} {envios_a(home, FACTURACION)}")
+            tick(home)
+            ok("ni el tick lo manda sin la firma",
+               envios_a(home, FACTURACION) == [] and js(home, "caso", "ver", dueno)[0]["etapa"]
+               == "listo", f"{envios_a(home, FACTURACION)}")
+            js(home, "caso", "aprobar", dueno, "--version", r["propuesta_version"],
+               "--actor", "dueno")
+            tick(home)
+            ok("firmado por el dueno, sale al otro chat",
+               [e["estado"] for e in envios_a(home, FACTURACION)] == ["enviado"],
+               f"{envios_a(home, FACTURACION)}")
+
+            jefa = trabajo_aprobado(SOPORTE, "OX2", JEFA_OC, "revisa el reporte del grupo")
+            pj = resultado_a(jefa, "Facturacion")
+            ok("el de una Super admin de la conversacion tambien puede",
+               pj.returncode == 0 and json.loads(pj.stdout)[0]["propuesta"].get("chat")
+               == FACTURACION, pj.stderr.strip()[:300])
+
+            cliente = trabajo_aprobado(PERSONA, "OX3", PERSONA, "revisa mi pedido")
+            pc = resultado_a(cliente, "Facturacion")
+            ok("el caso de un cliente no redirige el resultado: E_DEST_ROLE",
+               error_de(pc) == "E_DEST_ROLE", f"{error_de(pc)}")
+            ok("y el caso no se movio", js(home, "caso", "ver", cliente)[0]["etapa"] != "listo")
+            ok("un destino que no existe: E_DEST_NOT_FOUND",
+               error_de(resultado_a(trabajo_aprobado(DUENO_DM, "OX4", DUENO_LID, "otra"),
+                                    "Nadie Se Llama Asi")) == "E_DEST_NOT_FOUND")
+            ok("un destino en observar: E_DEST_MODE",
+               error_de(resultado_a(trabajo_aprobado(DUENO_DM, "OX5", DUENO_LID, "y otra"),
+                                    "Operaciones")) == "E_DEST_MODE")
+            ok("la pregunta de un necesita no va a otro chat: E_ARGS",
+               error_de(resultado_a(trabajo_aprobado(DUENO_DM, "OX6", DUENO_LID, "una mas"),
+                                    "Facturacion", "necesita")) == "E_ARGS")
+
+            ws = carga_wa_scope(home)
+            con = ws.db()
+            proyecto = {"name": "Alfa Demo", "path": "/srv/ejemplo/alfa-demo"}
+            try:
+                de_dueno = ws.brief_de_despacho(con, ws.caso_de(con, int(dueno)), proyecto,
+                                                "Revisa el reporte de ventas.")
+                de_cliente = ws.brief_de_despacho(con, ws.caso_de(con, int(cliente)), proyecto,
+                                                  "Revisa el reporte de ventas.")
+            finally:
+                con.close()
+            ok("el brief del caso del dueno le dice al agente del proyecto como y que espera",
+               f"caso resultado {dueno}" in de_dueno and "--chat" in de_dueno
+               and f"caso destinos {dueno}" in de_dueno and "approval" in de_dueno
+               and "caso propuesta" not in de_dueno, de_dueno[-1500:])
+            ok("y el de un cliente dice que su respuesta va solo a su chat",
+               "--chat" not in de_cliente and "another chat: no" in de_cliente,
+               de_cliente[-1500:])
+        finally:
+            sidecar.cerrar()
             os.environ.clear()
             os.environ.update(env_antes)
 
