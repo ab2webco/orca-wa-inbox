@@ -563,6 +563,14 @@
       .rep-def { margin: 2px 0 10px; max-width: 80ch; font-size: 11px; line-height: 1.45;
              color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .rep-nada { margin: 0; font-size: 12px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      /* El agente dejo de producir: no es un numero mas de la seccion, es la razon por la
+         que los demas numeros no se mueven. Por eso va arriba y con el color de alarma. */
+      .rep-aviso { margin: 0 0 10px; padding: 8px 10px; border-radius: var(--radius-md);
+                   max-width: 80ch; font-size: 12px; line-height: 1.45;
+                   color: var(--destructive, var(--fb-destructive));
+                   border: 1px solid var(--destructive, var(--fb-destructive));
+                   background: color-mix(in srgb,
+                     var(--destructive, var(--fb-destructive)) 8%, transparent); }
       .rep-azulejos { display: grid; gap: 8px;
              grid-template-columns: repeat(auto-fill, minmax(min(100%, 118px), 1fr)); }
       .rep-azulejo { min-width: 0; padding: 8px 10px; border-radius: var(--radius-md);
@@ -862,6 +870,16 @@
               "repVsPrev": "vs. periodo anterior",
               "repBetter": "mejor",
               "repWorse": "peor",
+              "repEngineTitle": "La automatizacion",
+              "repEngineDef": "Lo que hizo la maquinaria, no el servicio. Los tiempos de arriba siguen viendose bien si el agente deja de correr: simplemente no se mueven. Aca se ve lo que Jev clasifico contra lo que el agente produjo.",
+              "repEngineStalled": "El agente lleva {d} dias sin producir nada, y hay conversaciones clasificadas esperandolo. Revise que la automatizacion de triage este corriendo.",
+              "repEngineNeverRan": "Hay conversaciones clasificadas y el agente no ha producido nada todavia. Revise que la automatizacion de triage este corriendo.",
+              "repEngineCard": "Para el agente",
+              "repEngineAlert": "Para usted",
+              "repEngineNothing": "Descartados",
+              "repEngineDrafts": "Borradores",
+              "repEngineIssues": "Tarjetas abiertas",
+              "repEngineSent": "Enviados",
               "repLiveTitle": "Ahora",
               "repLiveDef": "Lo que hay en este momento: no depende del periodo.",
               "repLiveOpen": "Casos abiertos",
@@ -1213,6 +1231,16 @@
               "repVsPrev": "vs. previous period",
               "repBetter": "better",
               "repWorse": "worse",
+              "repEngineTitle": "The automation",
+              "repEngineDef": "What the machinery did, not the service. The times above still look fine when the agent stops running: they simply stop moving. This compares what Jev classified with what the agent produced.",
+              "repEngineStalled": "The agent has produced nothing for {d} days, and there are classified conversations waiting for it. Check that the triage automation is running.",
+              "repEngineNeverRan": "There are classified conversations and the agent has not produced anything yet. Check that the triage automation is running.",
+              "repEngineCard": "For the agent",
+              "repEngineAlert": "For you",
+              "repEngineNothing": "Dropped",
+              "repEngineDrafts": "Drafts",
+              "repEngineIssues": "Cards opened",
+              "repEngineSent": "Sent",
               "repLiveTitle": "Right now",
               "repLiveDef": "What there is at this moment: it does not depend on the period.",
               "repLiveOpen": "Open cases",
@@ -1564,6 +1592,16 @@
               "repVsPrev": "vs. periodo anterior",
               "repBetter": "melhor",
               "repWorse": "pior",
+              "repEngineTitle": "A automacao",
+              "repEngineDef": "O que a maquinaria fez, nao o servico. Os tempos acima continuam parecendo bons quando o agente para de rodar: eles simplesmente nao se movem. Aqui se ve o que o Jev classificou contra o que o agente produziu.",
+              "repEngineStalled": "O agente esta ha {d} dias sem produzir nada, e ha conversas classificadas esperando por ele. Verifique se a automacao de triagem esta rodando.",
+              "repEngineNeverRan": "Ha conversas classificadas e o agente ainda nao produziu nada. Verifique se a automacao de triagem esta rodando.",
+              "repEngineCard": "Para o agente",
+              "repEngineAlert": "Para voce",
+              "repEngineNothing": "Descartados",
+              "repEngineDrafts": "Rascunhos",
+              "repEngineIssues": "Cartoes abertos",
+              "repEngineSent": "Enviados",
               "repLiveTitle": "Agora",
               "repLiveDef": "O que ha neste momento: nao depende do periodo.",
               "repLiveOpen": "Casos abertos",
@@ -4178,6 +4216,39 @@
         return s
       }
 
+      /** La MAQUINARIA, no el servicio. El resto de la pestana mide como le va al cliente
+       *  —primera respuesta, resolucion, la meta— y todos esos numeros siguen bien cuando
+       *  el agente deja de correr: simplemente no se mueven. Medido en la maquina del
+       *  dueno: el agente dejo de producir el 3 de octubre y Jev siguio clasificando hasta
+       *  el 9 sin que nada lo dijera. Esto es lo que lo hace visible. */
+      function bloqueMotor (motor) {
+        if (!esObjeto(motor)) return null
+        var s = seccionInforme('motor', t('repEngineTitle'), t('repEngineDef'))
+        if (motor.agent_stalled) {
+          var aviso = crear('p', 'rep-aviso',
+            motor.agent_last_output_at
+              ? fmt('repEngineStalled', { d: Math.floor((motor.agent_silent_s || 0) / 86400) })
+              : t('repEngineNeverRan'))
+          aviso.setAttribute('role', 'status')
+          s.appendChild(aviso)
+        }
+        var v = esObjeto(motor.verdicts) ? motor.verdicts : {}
+        var o = esObjeto(motor.agent_output) ? motor.agent_output : {}
+        var g = crear('div', 'rep-azulejos')
+        // Con prefijo: `data-metrica` es unico en toda la pestana y el bloque de volumen
+        // ya tiene un azulejo `sent`. Sin el, el primero tapaba al otro.
+        ;[['motor-card', t('repEngineCard'), v.card],
+          ['motor-alert', t('repEngineAlert'), v.alert],
+          ['motor-nothing', t('repEngineNothing'), v.nothing],
+          ['motor-draft', t('repEngineDrafts'), o.draft],
+          ['motor-issue', t('repEngineIssues'), o.issue],
+          ['motor-sent', t('repEngineSent'), o.sent]].forEach(function (x) {
+          g.appendChild(azulejoNodo(x[0], x[1], x[2], null))
+        })
+        s.appendChild(g)
+        return s
+      }
+
       function etapasDef (clave) {
         return fmt(clave, { respondido: t('stageRespondido'), cerrado: t('stageCerrado') })
       }
@@ -4521,6 +4592,9 @@
         }
         var p = esObjeto(r.periods) && esObjeto(r.periods[periodo]) ? r.periods[periodo] : null
         cuerpo.appendChild(bloqueAhora(r.live))
+        // Va arriba y no al final: un agente caido invalida la lectura de todo lo demas.
+        var motor = bloqueMotor(r.engine)
+        if (motor) cuerpo.appendChild(motor)
         if (!p) {
           mostrarVacioInformes(t('repNoDataTitle'), t('repNoDataBody'), false)
           return

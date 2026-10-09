@@ -133,6 +133,14 @@ export function informeDeEjemplo (ahora = new Date()) {
     updated_at: new Date(ahora.getTime() - 60000).toISOString(),
     sla_minutes: 15,
     live: { open: 7, decision: 3, waiting_customer: 2, blocked: 1, conversations: 14 },
+    // La maquinaria, al dia: el agente produjo hace un rato, asi que no hay aviso.
+    engine: {
+      verdicts: { card: 90, alert: 2, doubtful: 27, nothing: 95 },
+      agent_output: { draft: 28, issue: 2, sent: 7 },
+      agent_last_output_at: '2026-10-09 09:10:00',
+      agent_silent_s: 3600,
+      agent_stalled: false
+    },
     periods: {
       today: periodo(ahora, 1),
       '7d': periodo(ahora, 7),
