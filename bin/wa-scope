@@ -9481,6 +9481,21 @@ def pestanas_del_plugin(con):
     return en_vuelo, terminadas - en_vuelo["tabs"], cerrados - en_vuelo["handles"]
 
 
+def terminal_dormida(terminal):
+    """Si Orca lista la terminal DORMIDA: su sesion salio y queda la pestana como
+    `liveness: sleeping`, sin pty y con un handle nuevo en cada lista. Orca no la cierra ni
+    le escribe (`terminal_handle_stale`, `terminal_asleep`), asi que ni la limpieza ni nadie
+    la reintenta (guardar-panel G8): visto en vivo, 70 cierres fallidos cada 5 minutos."""
+    if not isinstance(terminal, dict):
+        return False
+    return (terminal.get("liveness") == "sleeping" or bool(terminal.get("sleepingAgent"))
+            or ("ptyId" in terminal and not terminal.get("ptyId")))
+
+
+# Lo que contesta Orca a una terminal que no puede tocar: ni un /exit le llega despues.
+NO_SE_PUEDE_TOCAR = re.compile(r"\b(terminal_handle_stale|terminal_asleep)\b")
+
+
 def es_raiz_del_plugin(terminal, carpeta):
     """Si la terminal esta en la raiz de la carpeta del plugin (su `worktreeId` es
     `<repo>::<carpeta>`, sin `::workspace:`), donde solo corre el agente de casos."""
@@ -9520,7 +9535,7 @@ def cierra_huerfanas(con, cli, resumen, carpeta=None, en_curso=(), ahora=None):
     for t in terminales:
         handle, tab = t.get("handle"), t.get("tabId")
         if not isinstance(handle, str) or not handle or handle in en_vuelo["handles"] \
-                or tab in en_vuelo["tabs"]:
+                or tab in en_vuelo["tabs"] or terminal_dormida(t):
             continue
         if (tab and tab in terminadas) or handle in de_casos_cerrados:
             cierra_terminal(cli, handle)
@@ -9595,7 +9610,8 @@ def limpia_espacios(con, resumen):
         tocados.append(ident)
         # Primero sus terminales: con una viva adentro, `rm` dijo que si y el espacio quedo.
         for t in suyas:
-            if isinstance(t.get("handle"), str) and t["handle"]:
+            # Una dormida no se cierra (guardar-panel G8); `rm` se lleva el espacio igual.
+            if isinstance(t.get("handle"), str) and t["handle"] and not terminal_dormida(t):
                 orca_json(cli, ["terminal", "close", "--terminal", t["handle"]])
         orca_json(cli, ["worktree", "rm", "--worktree", f"id:{ident}"])
     quedan = None
@@ -12889,7 +12905,9 @@ def cierra_terminal(cli, handle, selector=None, detener_espacio=False):
     if error and SIN_CIERRE_DE_PESTANA.search(error):
         _, error = orca_llama(cli, ["terminal", "close", "--terminal", handle],
                               DESPACHO_LISTA_S)
-    if not error:
+    # Una dormida o un handle viejo no se cierran ni leen nada: mandarles /exit es otra
+    # llamada fallida por pestana en cada vuelta (guardar-panel G8).
+    if not error or NO_SE_PUEDE_TOCAR.search(error):
         return
     orca_llama(cli, ["terminal", "send", "--terminal", handle, "--text", "/exit", "--enter"],
                DESPACHO_LISTA_S)
@@ -12913,17 +12931,20 @@ def cierra_pestana(cli, tab, selector):
         return
     for t in res["terminals"]:
         handle = t.get("handle") if isinstance(t, dict) else None
-        if t.get("tabId") == tab and isinstance(handle, str) and handle:
+        if t.get("tabId") == tab and isinstance(handle, str) and handle \
+                and not terminal_dormida(t):
             cierra_terminal(cli, handle)
             return
 
 
 def terminales_vivas(cli, selector):
-    """Los handles de las terminales vivas del espacio, o None si no se sabe."""
+    """Los handles de las terminales vivas del espacio, o None si no se sabe. Una dormida no
+    esta viva: su sesion ya salio y no lee nada (guardar-panel G8)."""
     res, error = orca_llama(cli, ["terminal", "list", "--worktree", selector], DESPACHO_LISTA_S)
     if error or not isinstance(res.get("terminals"), list) or res.get("truncated"):
         return None
-    return {t.get("handle") for t in res["terminals"] if isinstance(t, dict)}
+    return {t.get("handle") for t in res["terminals"]
+            if isinstance(t, dict) and not terminal_dormida(t)}
 
 
 def entrega_respuesta(con, cli, f, entrada, vivas, resumen):
