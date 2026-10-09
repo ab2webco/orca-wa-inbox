@@ -876,6 +876,7 @@
               "repEngineNeverRan": "Hay conversaciones clasificadas y el agente no ha producido nada todavia. Revise que la automatizacion de triage este corriendo.",
               "repEngineCard": "Para el agente",
               "repEngineAlert": "Para usted",
+              "repEngineDoubtful": "Sin clasificar",
               "repEngineNothing": "Descartados",
               "repEngineDrafts": "Borradores",
               "repEngineIssues": "Tarjetas abiertas",
@@ -1237,6 +1238,7 @@
               "repEngineNeverRan": "There are classified conversations and the agent has not produced anything yet. Check that the triage automation is running.",
               "repEngineCard": "For the agent",
               "repEngineAlert": "For you",
+              "repEngineDoubtful": "Unclassified",
               "repEngineNothing": "Dropped",
               "repEngineDrafts": "Drafts",
               "repEngineIssues": "Cards opened",
@@ -1598,6 +1600,7 @@
               "repEngineNeverRan": "Ha conversas classificadas e o agente ainda nao produziu nada. Verifique se a automacao de triagem esta rodando.",
               "repEngineCard": "Para o agente",
               "repEngineAlert": "Para voce",
+              "repEngineDoubtful": "Sem classificar",
               "repEngineNothing": "Descartados",
               "repEngineDrafts": "Rascunhos",
               "repEngineIssues": "Cartoes abertos",
@@ -4239,6 +4242,9 @@
         // ya tiene un azulejo `sent`. Sin el, el primero tapaba al otro.
         ;[['motor-card', t('repEngineCard'), v.card],
           ['motor-alert', t('repEngineAlert'), v.alert],
+          // Las cuatro clases: sin esta los numeros no cierran contra lo juzgado, y es la
+          // que mas merece mirarse —Jev no estuvo seguro y no paso nada con el mensaje—.
+          ['motor-doubtful', t('repEngineDoubtful'), v.doubtful],
           ['motor-nothing', t('repEngineNothing'), v.nothing],
           ['motor-draft', t('repEngineDrafts'), o.draft],
           ['motor-issue', t('repEngineIssues'), o.issue],

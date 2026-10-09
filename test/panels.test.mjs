@@ -7037,10 +7037,13 @@ console.log('\nactivity.html — panel-urgente U5: la automatizacion detenida se
   ok('con el agente al dia, el bloque esta y no avisa nada',
     bloque(doc, 'motor') && !bloque(doc, 'motor').querySelector('.rep-aviso'),
     txt(doc, '[data-bloque="motor"]'))
-  const delMotor = ['motor-card', 'motor-alert', 'motor-nothing', 'motor-draft',
-    'motor-issue', 'motor-sent']
+  // Las cuatro clases, no tres: sin `doubtful` los numeros no cierran contra lo juzgado
+  // (90+2+95 de 214) y la clase que mas merece mirarse -Jev no estuvo seguro y no paso
+  // nada- es justo la que desaparece.
+  const delMotor = ['motor-card', 'motor-alert', 'motor-doubtful', 'motor-nothing',
+    'motor-draft', 'motor-issue', 'motor-sent']
   ok('y muestra lo que Jev clasifico contra lo que el agente produjo',
-    delMotor.map((k) => azulejo(doc, k)).join() === '90,2,95,28,2,7',
+    delMotor.map((k) => azulejo(doc, k)).join() === '90,2,27,95,28,2,7',
     delMotor.map((k) => azulejo(doc, k)).join())
 }
 {
