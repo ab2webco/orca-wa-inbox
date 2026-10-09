@@ -67,7 +67,7 @@ recalibration discussed separately.
       stops being rebuilt wholesale while a pointer is down on it.
 - [x] **U5** The Reports tab gains the machinery: verdicts by class, how many `card`
       verdicts the agent actually resolved, and when the agent last produced anything.
-- [ ] **U6** Screenshots at 1440/768/390/320 in both themes, version bump, release.
+- [x] **U6** Screenshots at 1440/768/390/320 in both themes, version bump, release.
 
 ## Acceptance criteria
 
@@ -94,8 +94,15 @@ recalibration discussed separately.
   `provider`/`target` when a group changed jid, and a two-line test's hook was written for
   `quitar` only and swallowed the save.
 
-## Still open
+## Verified at the end
 
-- `npm run check` in full: panels is one of thirteen checks.
-- Screenshots at 1440/768/390/320 in both themes, looked at, before this is called done.
-- Version bump and release.
+- Full `npm run check`, all thirteen: the ten `scripts/check-*`, the sidecar build and
+  its three suites, `almacen`, `envio`, `manifest`, `resolver`, `userdata`, `panels`
+  (**1668/1668**) and `worker`. None skipped.
+- Reports photographed at 1440, 768, 390 and 320 in both themes (48 shots, the harness
+  reporting no overflow, no JS error). Looked at: the engine block at 1440 light, 768
+  dark, 390 light and 320 in both themes, stalled and healthy.
+- What looking at them caught, and the tests did not: the block painted `card`, `alert`
+  and `nothing` but dropped `doubtful`, which `wa-scope` already ships. The three shown
+  add to 187 of 214 judged, so the numbers could not be reconciled, and the class that
+  most deserves a look was the invisible one. Fixed with the assertion first.
