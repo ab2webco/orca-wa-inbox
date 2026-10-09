@@ -19,7 +19,7 @@ The panel's per-chat Save never reports success it did not get, a save is never 
 - [x] G3 RED then GREEN: the principal line's copy in `alcancePorLinea` is removed on sync, and the other lines' copies stay (check-clis).
 - [x] G4 RED then GREEN: a burst whose first message was judged alone is judged again as a whole, and its text-bearing messages are not dropped (check-casos or check-clis).
 - [x] G5 RED then GREEN: the worker of an owner case can send its avance/resultado to another chat, held for approval. A customer case gets E_DEST_ROLE. The dispatch brief documents it.
-- [ ] G6 Version bump (orca-plugin.json only), `npm run check` without shots.
+- [x] G6 Version bump (orca-plugin.json only), `npm run check` without shots.
 
 ## Acceptance
 
