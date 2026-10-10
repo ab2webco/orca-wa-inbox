@@ -8995,6 +8995,52 @@ def _mapa(cuentas_hora, per):
     return [{"k": k, "h": h} for k, h in filas.items()]
 
 
+# Lo que el agente PRODUCE. `triage` no esta: es que corrio, no que resolviera algo.
+SALIDAS_DEL_AGENTE = ("draft", "issue", "sent")
+# Desde cuanto sin producir nada se llama callado. Un dia: el triage corre cada 5 minutos,
+# asi que un dia entero sin una sola salida ya no es "todavia no le toco".
+MOTOR_CALLADO_S = 86400
+
+
+def informe_motor(con, cuenta, ahora):
+    """Lo que hizo la MAQUINARIA, que es lo que la pestana no media.
+
+    Los informes cuentan el servicio al cliente -primera respuesta, resolucion, la meta- y
+    todos esos numeros siguen bien cuando el agente deja de correr: simplemente no se
+    mueven. Medido en la maquina del dueno: el agente dejo de producir el 3 de octubre y
+    Jev siguio emitiendo ~70 veredictos `card` hasta el 9 sin que nada lo dijera. Lo que
+    hace visible eso es comparar lo que se ABRE con lo que se RESUELVE, y cuanto hace que
+    el agente no deja nada. Solo agregados y sellos: ningun texto de un mensaje."""
+    clases = dict.fromkeys(("card", "alert", "doubtful", "nothing"), 0)
+    for clase, n in con.execute(
+            "select clase, count(*) from juicio where account=? group by clase", (cuenta,)):
+        if clase in clases:
+            clases[clase] = n
+    salidas = dict.fromkeys(SALIDAS_DEL_AGENTE, 0)
+    marcas = ",".join("?" * len(SALIDAS_DEL_AGENTE))
+    for accion, n in con.execute(
+            f"select action, count(*) from agent_action where account=? and "
+            f"action in ({marcas}) group by action", (cuenta, *SALIDAS_DEL_AGENTE)):
+        salidas[accion] = n
+    ultima = con.execute(
+        f"select max(ts) from agent_action where account=? and action in ({marcas})",
+        (cuenta, *SALIDAS_DEL_AGENTE)).fetchone()[0]
+    # El silencio se mide contra el reloj, no contra la ultima corrida: un agente que
+    # arranca, falla y vuelve a arrancar no esta produciendo nada.
+    callado_s = None
+    if ultima:
+        desde = _epoch_local(ultima) or _epoch_local(f"{ultima}:00")
+        if desde is not None:
+            callado_s = max(0, int(ahora - desde))
+    return {"verdicts": clases, "agent_output": salidas,
+            "agent_last_output_at": ultima,
+            "agent_silent_s": callado_s,
+            # Lo que decide el aviso, resuelto aca: el panel no tiene por que saber el
+            # umbral, y asi la frase y el numero no se pueden contradecir.
+            "agent_stalled": bool(clases["card"] and
+                                  (callado_s is None or callado_s > MOTOR_CALLADO_S))}
+
+
 def build_reports(con, ahora=None, tope_casos=TOPE_CASOS_INFORME):
     """Los numeros de la pestana Informes para los cuatro periodos, con la forma del
     contrato `reports` (v 1, documentado en odd/tasks/informes-tablero.md)."""
@@ -9160,6 +9206,7 @@ def build_reports(con, ahora=None, tope_casos=TOPE_CASOS_INFORME):
     # usa, y viajaria por casos que el tablero ya no muestra.
     return {"v": 1, "account": cuenta, "updated_at": _iso_epoch(ahora),
             "sla_minutes": meta_min, "live": vivo, "periods": salida,
+            "engine": informe_motor(con, cuenta, ahora),
             "cases": [{"case_id": c["case_id"], "chat": c["chat"],
                        "created": _iso_epoch(c["creado"]), "first_response_s": c["primera"],
                        "resolution_s": c["resolucion"], "stage": c["stage"],

@@ -39,6 +39,31 @@ function ok (nombre, condicion, detalle = '') {
  *  `idioma` fija navigator.language antes de que corra el script del panel, que es de
  *  donde el panel saca el idioma. Sin poder fijarlo solo se podria comprobar que el
  *  diccionario existe, no que el panel lo usa — y lo segundo es lo que se rompe. */
+// Lo que Orca admite en UN mensaje del panel: `PANEL_MESSAGE_MAX_BYTES` en
+// `out/shared/plugins/plugin-panel-bridge.js` de la app instalada. Pasado el tope el host
+// contesta `invalid_request` ("Message exceeds the size limit") y la escritura NO ocurre.
+const TOPE_MENSAJE_BYTES = 64 * 1024
+
+/** El peso del mensaje entero, como lo mide el host: el sobre, no solo el valor. */
+function pesaDeMas (mensaje) {
+  return Buffer.byteLength(JSON.stringify(mensaje) || '', 'utf8') > TOPE_MENSAJE_BYTES
+}
+
+/** La entrada de una conversacion en el storage, sin exigir COMO quedo repartida: en el
+ *  `scope` de siempre o en la clave propia de esa conversacion. La prueba es sobre el
+ *  resultado -quedo guardada- y no sobre el reparto, que es justo lo que va a cambiar. */
+function buscarEntrada (storage, jid) {
+  const enBloque = storage.scope && typeof storage.scope === 'object'
+    ? storage.scope[jid] : null
+  if (enBloque) return enBloque
+  for (const [clave, valor] of Object.entries(storage)) {
+    if (!clave.startsWith('scope:') || !valor || typeof valor !== 'object') continue
+    if (clave === `scope:${jid}`) return valor
+    if (valor[jid]) return valor[jid]
+  }
+  return null
+}
+
 async function montar (archivo, storage = {}, idioma = null, gancho = null) {
   // Un worker VIVO por defecto. Sin latido el panel avisa —con razon— que el plugin no
   // esta corriendo, y ese aviso tapa el que cada caso viene a comprobar. Los casos que
@@ -65,7 +90,10 @@ async function montar (archivo, storage = {}, idioma = null, gancho = null) {
     // que el host rechaza, y un worker que contesta el pedido. Sin poder provocarlos
     // solo se probaria el camino feliz, que es el que nunca se rompio. Lo que devuelve
     // es el SOBRE entero, que es donde el host dice que no: `{ ok: false }`.
-    const forzado = gancho ? gancho(d, storage) : undefined
+    // El worker SIEMPRE esta: el panel le pide a el las mutaciones del alcance desde que
+    // el alcance entero dejo de caber en un mensaje del puente. Un panel sin worker es un
+    // caso aparte, y los casos que lo prueban ponen su propio gancho.
+    const forzado = (gancho ? gancho(d, storage) : undefined) ?? trabajadorGuardar(d, storage)
     if (forzado !== undefined && !forzado.__demora) {
       window.postMessage({ type: 'orca-panel-action-result', requestId: d.requestId,
         ...forzado }, '*')
@@ -75,7 +103,19 @@ async function montar (archivo, storage = {}, idioma = null, gancho = null) {
     // Lo que el gancho puede alargar es cuanto tarda en llegar la respuesta, y en ese
     // hueco es donde vive la carrera — el sondeo pinta con lo que leyo antes.
     if (d.action === 'storage.get') value = { value: storage[d.params.key] }
-    else if (d.action === 'storage.set') { storage[d.params.key] = d.params.value; value = { ok: true } }
+    else if (d.action === 'storage.set') {
+      // El host mide el mensaje ENTERO y lo rechaza pasado el tope; el stub decia que si
+      // a cualquier tamano, y por eso un `scope` de 89 KB -imposible de guardar en la
+      // maquina del dueno- pasaba verde aca. `invalid_request` es lo que contesta Orca.
+      if (pesaDeMas(d)) {
+        window.postMessage({ type: 'orca-panel-action-result', requestId: d.requestId,
+          ok: false, errorCode: 'invalid_request',
+          error: 'Message exceeds the size limit.' }, '*')
+        return
+      }
+      storage[d.params.key] = d.params.value
+      value = { ok: true }
+    }
     else if (d.action === 'notifications.show') value = { delivered: true }
     else if (d.action === 'workspace.readContext') value = null
     const entregar = () => window.postMessage(
@@ -104,6 +144,31 @@ function trabajadorReglas (d, st) {
     st.scopeResult = { at: new Date().toISOString(), requestId: p.id, action: p.action,
       ok: true, code: 'regla-quitada' }
   }
+  return { ok: true }
+}
+
+/** Un worker que atiende `guardar` como el de verdad (`guardarAlcance`, main.mjs): fusiona
+ *  la entrada que mando el panel sobre lo que hay y escribe el alcance entero desde SU
+ *  lado, que no pasa por el puente del panel y por eso no tiene el tope de 64 KB. */
+function trabajadorGuardar (d, st) {
+  if (!(d.action === 'storage.set' && d.params.key === 'scopeRequest' && d.params.value)) {
+    return undefined
+  }
+  const p = d.params.value
+  st.scopeRequest = p
+  if (p.action !== 'guardar') return { ok: true }
+  const destino = p.linea ? (st.alcancePorLinea?.[p.linea] ?? {}) : (st.scope ?? {})
+  const next = { ...destino }
+  // Lo que esta edicion reemplaza: la entrada del jid, o la de `origen` si la
+  // conversacion cambio de id. Si no, guardar la forma viva perderia lo que no se edita.
+  const previa = next[p.jid] ?? (p.origen ? next[p.origen] : null) ?? {}
+  next[p.jid] = { provider: 'ninguno', target: null, ...previa, ...p.entrada,
+    updatedAt: new Date().toISOString() }
+  if (p.origen && p.origen !== p.jid) delete next[p.origen]
+  if (p.linea) st.alcancePorLinea = { ...(st.alcancePorLinea ?? {}), [p.linea]: next }
+  else st.scope = next
+  st.scopeResult = { at: new Date().toISOString(), requestId: p.id, action: p.action,
+    ok: true, code: 'guardado' }
   return { ok: true }
 }
 
@@ -6860,8 +6925,8 @@ console.log('\nactivity.html — I5: Tablero e Informes son dos pestanas')
 console.log('\nactivity.html — I5: los seis bloques, con 7 dias')
 {
   const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeDeEjemplo() })
-  ok('los seis bloques, cada uno con su definicion',
-    ['ahora', 'trafico', 'tiempos', 'volumen', 'sla', 'proyectos'].every((b) =>
+  ok('los siete bloques, cada uno con su definicion',
+    ['ahora', 'motor', 'trafico', 'tiempos', 'volumen', 'sla', 'proyectos'].every((b) =>
       bloque(doc, b) && txt(doc, `#reports-body [data-bloque="${b}"] .rep-def`).length > 20),
     [...doc.querySelectorAll('#reports-body [data-bloque]')].map((n) => n.dataset.bloque).join())
   ok('Ahora: abiertos, su decision, el cliente, bloqueados y conversaciones',
@@ -6960,6 +7025,50 @@ console.log('\nactivity.html — I5: lo vacio se dice')
 {
   const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: Object.assign(informeDeEjemplo(), { v: 2 }) })
   ok('una version que no entiende lo dice', /version 2/.test(txt(doc, '#reports-empty')), txt(doc, '#reports-empty'))
+}
+
+// ───────── panel-urgente U5: un agente que dejo de producir SE VE ─────────
+// Medido en la maquina del dueno: el agente dejo de producir el 3 de octubre y Jev
+// siguio clasificando hasta el 9 —unos 70 veredictos `card`— sin que el panel dijera
+// nada. Los tiempos de la pestana seguian bien porque dejan de moverse, no empeoran.
+console.log('\nactivity.html — panel-urgente U5: la automatizacion detenida se ve')
+{
+  const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeDeEjemplo() })
+  ok('con el agente al dia, el bloque esta y no avisa nada',
+    bloque(doc, 'motor') && !bloque(doc, 'motor').querySelector('.rep-aviso'),
+    txt(doc, '[data-bloque="motor"]'))
+  // Las cuatro clases, no tres: sin `doubtful` los numeros no cierran contra lo juzgado
+  // (90+2+95 de 214) y la clase que mas merece mirarse -Jev no estuvo seguro y no paso
+  // nada- es justo la que desaparece.
+  const delMotor = ['motor-card', 'motor-alert', 'motor-doubtful', 'motor-nothing',
+    'motor-draft', 'motor-issue', 'motor-sent']
+  ok('y muestra lo que Jev clasifico contra lo que el agente produjo',
+    delMotor.map((k) => azulejo(doc, k)).join() === '90,2,27,95,28,2,7',
+    delMotor.map((k) => azulejo(doc, k)).join())
+}
+{
+  const parado = informeDeEjemplo()
+  parado.engine = { verdicts: { card: 90, alert: 2, doubtful: 27, nothing: 95 },
+    agent_output: { draft: 28, issue: 2, sent: 7 },
+    agent_last_output_at: '2026-10-03 11:20:00',
+    agent_silent_s: 6 * 86400, agent_stalled: true }
+  const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: parado })
+  const aviso = bloque(doc, 'motor') && bloque(doc, 'motor').querySelector('.rep-aviso')
+  ok('un agente mudo con tarjetas esperando se avisa', aviso !== null,
+    txt(doc, '[data-bloque="motor"]'))
+  ok('y el aviso dice cuantos dias lleva', /6 dias/.test(aviso?.textContent || ''),
+    aviso?.textContent)
+  ok('el aviso se anuncia solo, no hay que buscarlo',
+    aviso?.getAttribute('role') === 'status', aviso?.outerHTML?.slice(0, 120))
+}
+{
+  // Un informe de antes de U5 no trae `engine`: el bloque no se pinta y nada se rompe.
+  const viejo = informeDeEjemplo()
+  delete viejo.engine
+  const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: viejo })
+  ok('un informe sin la seccion nueva no rompe la pestana',
+    !bloque(doc, 'motor') && bloque(doc, 'ahora') && bloque(doc, 'sla'),
+    [...doc.querySelectorAll('#reports-body [data-bloque]')].map((n) => n.dataset.bloque).join())
 }
 {
   const { doc } = await abrirInformes({ board: tablero([tarjeta()]), reports: informeVacio() })
@@ -8419,6 +8528,9 @@ console.log('\nconfig.html — L4: Conversaciones se ven y se guardan por linea'
     porLinea: { [L_B]: { chats: [], chatsAccount: L_B } } }
   const gancho = (d, st) => {
     if (d.action === 'storage.set' && d.params.key === 'scopeRequest' && d.params.value) {
+      // Guardar lo hace el worker de verdad desde panel-urgente U2; aca solo se finge
+      // `quitar`, que es lo que este caso viene a mirar.
+      if (d.params.value.action === 'guardar') return trabajadorGuardar(d, st)
       st.scopeRequest = d.params.value
       st.scopeResult = { at: new Date().toISOString(), requestId: d.params.value.id,
         action: 'quitar', ok: true, code: 'quitado' }
@@ -9172,18 +9284,20 @@ console.log('\nactivity.html — respuesta-otro-chat: la propuesta dice a que ch
 
 // ───────── guardar-panel G1: Guardar en una conversacion no dice guardado sin serlo ─────────
 // Medido en la maquina del dueno: unas instrucciones largas nunca llegaron al storage y
-// el panel dijo "✓ Guardado" y vacio el formulario. El host contesta `{ ok: false }`
-// (limite, cola vencida, error propio) y el panel no miraba la respuesta.
+// el panel dijo "✓ Guardado" y vacio el formulario. Lo que se guarda aca es la garantia,
+// no el mecanismo: desde panel-urgente U2 el alcance lo escribe el WORKER y el panel le
+// manda un pedido, asi que lo que puede fallar es el pedido o el veredicto. En cualquiera
+// de los casos vale lo mismo — no se dice guardado y no se pierde lo escrito.
 console.log('\nconfig.html — guardar-panel G1: un Guardar rechazado lo dice y conserva lo escrito')
 {
   const largo = 'Instrucciones de prueba. '.repeat(700).trim()
   for (const [idioma, frase] of [['es-419', /No se guardo/], ['en-US', /was not saved/]]) {
-    let intentos = 0
+    // El host rechaza el PEDIDO: no hay nada que esperar, y nada se guardo. Es el mismo
+    // camino que un worker que no contesta: `pedirAlWorker` devuelve `null` en los dos.
     const { doc, storage } = await montar('config.html', {
       chats: [{ jid: '1@g.us', name: 'Soporte Norte', kind: 'grupo' }]
     }, idioma, (d) => {
-      if (d.action === 'storage.set' && d.params.key === 'scope') {
-        intentos += 1
+      if (d.action === 'storage.set' && d.params.key === 'scopeRequest') {
         return { ok: false, error: 'host failed' }
       }
       return undefined
@@ -9198,8 +9312,6 @@ console.log('\nconfig.html — guardar-panel G1: un Guardar rechazado lo dice y 
       !dijo.textContent.includes('✓') && frase.test(dijo.textContent),
       JSON.stringify(dijo.textContent))
     ok(`${idioma}: el error queda marcado en rojo`, dijo.className.includes('bad'))
-    ok(`${idioma}: se reintento antes de rendirse, con un tope`,
-      intentos > 1 && intentos <= 4, `intentos = ${intentos}`)
     ok(`${idioma}: y el formulario conserva lo escrito`,
       doc.getElementById('chat-instructions').value === largo &&
       doc.getElementById('chat').value !== '',
@@ -9209,14 +9321,15 @@ console.log('\nconfig.html — guardar-panel G1: un Guardar rechazado lo dice y 
   }
 }
 {
-  // Un rechazo pasajero se reintenta solo: el segundo intento entra y recien ahi se dice.
-  let intentos = 0
+  // El worker contesta que NO: el panel dice su motivo y conserva lo escrito.
   const { doc, storage } = await montar('config.html', {
     chats: [{ jid: '1@g.us', name: 'Soporte Norte', kind: 'grupo' }]
-  }, 'es-419', (d) => {
-    if (d.action === 'storage.set' && d.params.key === 'scope') {
-      intentos += 1
-      if (intentos === 1) return { ok: false, error: 'host failed' }
+  }, 'es-419', (d, st) => {
+    if (d.action === 'storage.set' && d.params.key === 'scopeRequest' && d.params.value) {
+      st.scopeRequest = d.params.value
+      st.scopeResult = { at: new Date().toISOString(), requestId: d.params.value.id,
+        action: d.params.value.action, ok: false, code: 'entrada-invalida' }
+      return { ok: true }
     }
     return undefined
   })
@@ -9225,33 +9338,92 @@ console.log('\nconfig.html — guardar-panel G1: un Guardar rechazado lo dice y 
   doc.getElementById('chat-instructions').value = 'Resuma lo que manden.'
   doc.getElementById('save-scope').click()
   await new Promise((r) => setTimeout(r, 2500))
-  ok('un rechazo pasajero se reintenta y el segundo intento guarda',
-    intentos === 2 && storage.scope && storage.scope['1@g.us'] &&
-    storage.scope['1@g.us'].instructions === 'Resuma lo que manden.',
-    `intentos = ${intentos} ${JSON.stringify(storage.scope)}`)
-  ok('y recien entonces dice guardado',
-    doc.getElementById('said-scope').textContent.includes('✓'),
-    doc.getElementById('said-scope').textContent)
-}
-{
-  // El host dice que si y el dato no queda: la relectura lo ve y el panel no miente.
-  const { doc, storage } = await montar('config.html', {
-    chats: [{ jid: '1@g.us', name: 'Soporte Norte', kind: 'grupo' }]
-  }, 'es-419', (d) => {
-    if (d.action === 'storage.set' && d.params.key === 'scope') return { ok: true, value: { ok: true } }
-    return undefined
-  })
-  await espera()
-  elegirChat(doc, '1@g.us')
-  doc.getElementById('chat-instructions').value = 'Resuma lo que manden.'
-  doc.getElementById('save-scope').click()
-  await new Promise((r) => setTimeout(r, 2500))
   const dijo = doc.getElementById('said-scope')
-  ok('un "si" del host que no dejo el dato no dice guardado',
+  ok('un NO del worker no dice guardado y explica el motivo',
     !dijo.textContent.includes('✓') && dijo.className.includes('bad') &&
-    storage.scope === undefined, JSON.stringify(dijo.textContent))
+    /no reconoce/.test(dijo.textContent), JSON.stringify(dijo.textContent))
+  ok('no se guardo nada', storage.scope === undefined, JSON.stringify(storage.scope))
   ok('y conserva lo escrito',
     doc.getElementById('chat-instructions').value === 'Resuma lo que manden.')
+}
+// ───────── panel-urgente U1/U2: un alcance grande SIGUE pudiendo guardarse ─────────
+// Medido en la maquina del dueno: `scope` pesaba 89.116 bytes -cinco conversaciones con
+// 11k a 18k caracteres de instrucciones- y Orca admite 64 KB en UN mensaje del panel. El
+// panel escribia el objeto ENTERO en cada Guardar, asi que ninguna conversacion se podia
+// guardar ya: ni la que se estaba editando, que pesaba 661 bytes. Los tres reintentos no
+// podian ayudar, porque entre uno y otro el payload es el mismo.
+console.log('\nconfig.html — panel-urgente U2: con un alcance grande, guardar sigue funcionando')
+{
+  const instruccion = 'Instrucciones largas de esta conversacion. '.repeat(380).trim()
+  const previo = {}
+  for (let i = 1; i <= 5; i += 1) {
+    previo[`viejo${i}@g.us`] = {
+      chatName: `Grupo ${i}`, mode: 'responder', provider: 'ninguno', target: null,
+      instructions: instruccion, updatedAt: '2026-10-06T15:50:26.454Z'
+    }
+  }
+  ok('el alcance de partida pasa el tope de UN mensaje del host',
+    Buffer.byteLength(JSON.stringify(previo), 'utf8') > TOPE_MENSAJE_BYTES,
+    `${Buffer.byteLength(JSON.stringify(previo), 'utf8')} bytes`)
+
+  const grandes = []
+  const { doc, storage } = await montar('config.html', {
+    scope: previo,
+    chats: [{ jid: 'nuevo@g.us', name: 'Ab2Web Operaciones', kind: 'grupo' }]
+  }, 'es-419', (d, st) => {
+    if (d.action === 'storage.set' && pesaDeMas(d)) grandes.push(d.params.key)
+    return trabajadorGuardar(d, st)
+  })
+  await espera()
+  elegirChat(doc, 'nuevo@g.us')
+  doc.getElementById('chat-instructions').value = 'Resuma lo que manden.'
+  doc.getElementById('save-scope').click()
+  await new Promise((r) => setTimeout(r, 3000))
+
+  const dijo = doc.getElementById('said-scope')
+  ok('ninguna escritura del panel pasa el tope del host',
+    grandes.length === 0, `rechazadas por tamano: ${JSON.stringify(grandes)}`)
+  ok('la conversacion editada quedo guardada',
+    buscarEntrada(storage, 'nuevo@g.us') !== null,
+    JSON.stringify(Object.keys(storage)))
+  ok('y el panel lo dice', dijo.textContent.includes('✓'), JSON.stringify(dijo.textContent))
+  ok('y no se perdio ninguna de las cinco que ya estaban',
+    [1, 2, 3, 4, 5].every((i) => buscarEntrada(storage, `viejo${i}@g.us`) !== null),
+    JSON.stringify(Object.keys(storage)))
+}
+
+// ───────── panel-urgente U4: un repintado no destruye el boton que se esta apretando ─────────
+// El dueno: "me toca dar dos click a los botones para que entre en edicion". `renderScope`
+// rehace su tabla entera con innerHTML y la vuelta del sondeo corre cada 12 s; un clic
+// cuyo mousedown y mouseup caen a los dos lados de un repintado no dispara `click`,
+// porque el nodo del boton ya no es el mismo. `renderLineas` ya se guarda de esto con una
+// firma y solo repinta cuando algo cambio; la tabla del alcance nunca lo hizo.
+console.log('\nconfig.html — panel-urgente U4: repintar sin cambios no reemplaza los controles')
+{
+  const entrada = {
+    '1@g.us': { chatName: 'Soporte Norte', mode: 'responder', provider: 'ninguno',
+      target: null, updatedAt: '2026-10-06T15:50:26.454Z' }
+  }
+  const { doc, window } = await montar('config.html', {
+    scope: entrada,
+    chats: [{ jid: '1@g.us', name: 'Soporte Norte', kind: 'grupo' }]
+  })
+  await espera()
+  const antes = doc.querySelector('#scope-wrap [data-edit]')
+  ok('la tabla del alcance se pinto', antes !== null)
+
+  // La vuelta del sondeo, con EXACTAMENTE lo mismo que ya estaba.
+  window.document.dispatchEvent(new window.Event('visibilitychange'))
+  await new Promise((r) => setTimeout(r, 200))
+  const despues = doc.querySelector('#scope-wrap [data-edit]')
+  ok('el boton Editar sigue siendo el MISMO nodo tras repintar sin cambios',
+    despues === antes, 'el repintado reemplazo el nodo: un clic a caballo se pierde')
+
+  // Y si de verdad cambia algo, tiene que repintarse.
+  const fila = doc.querySelector('#scope-wrap tbody tr')
+  ok('la fila muestra el nombre y el modo guardado (`responder` se ve "Automatico")',
+    fila && /Soporte Norte/.test(fila.textContent) &&
+    /Automatic/i.test(fila.textContent), fila && fila.textContent)
 }
 
 // linea-viva V5: una linea que nadie atiende se ve en el panel, en cualquier pestana, con

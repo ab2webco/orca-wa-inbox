@@ -1329,10 +1329,24 @@ const SIDECAR_VEREDICTO = Object.freeze({
 /** Lo que el panel puede pedirle al worker sobre el alcance, y como se contesta. Mismos
  *  codigos estables que el resto del contrato: el panel los traduce por codigo y nunca
  *  por el texto (§11-E1). */
-const SCOPE_ACCION = Object.freeze({ QUITAR: 'quitar', REGLA_QUITAR: 'regla-quitar' })
+const SCOPE_ACCION = Object.freeze({ QUITAR: 'quitar', GUARDAR: 'guardar',
+  REGLA_QUITAR: 'regla-quitar' })
+// La clave donde el panel guarda el alcance de una linea que NO es la principal.
+const ALCANCE_POR_LINEA_KEY = 'alcancePorLinea'
+// Lo que el panel puede mandar de una conversacion. Todo lo que no este aca se ignora:
+// el pedido llega del panel y no es lugar para dejar pasar claves sueltas al registro.
+const CAMPOS_ALCANCE = Object.freeze(['chatName', 'mode', 'tone', 'instructions',
+  'provider', 'target', 'workspaces', 'workspace', 'projectQuestion', 'ack', 'ackText',
+  'greeting', 'greetingText', 'firstReply', 'approval', 'members', 'account'])
 
 const SCOPE_VEREDICTO = Object.freeze({
   QUITADO: 'quitado',
+  // Una conversacion guardada por el worker. El panel ya no escribe el alcance entero:
+  // Orca admite 64 KB en UN mensaje del panel (`PANEL_MESSAGE_MAX_BYTES`) y un alcance
+  // con instrucciones largas lo pasa, asi que NINGUNA conversacion se podia guardar.
+  GUARDADO: 'guardado',
+  // Lo que el panel mando como entrada no es un objeto con forma de autorizacion.
+  ENTRADA_INVALIDA: 'entrada-invalida',
   VENCIDO: 'vencido',
   ACCION_DESCONOCIDA: 'accion-desconocida',
   // `wa-scope rm` acepta tambien un trozo de NOMBRE y ahi resuelve por parecido. El
@@ -2781,6 +2795,83 @@ export default function activate(orca) {
     return { ok: true, code: SCOPE_VEREDICTO.QUITADO }
   }
 
+  /** Guardar UNA conversacion del panel, sin que el alcance entero viaje por el puente.
+   *
+   *  Orca mide cada mensaje del panel y rechaza lo que pase de `PANEL_MESSAGE_MAX_BYTES`
+   *  (64 KB). El panel escribia el objeto ENTERO en cada Guardar, asi que en cuanto el
+   *  alcance crecio -cinco conversaciones con instrucciones largas bastan- NINGUNA se
+   *  podia guardar, ni una de 661 bytes, y los reintentos no podian ayudar porque el
+   *  payload era el mismo. Por aca viaja solo la entrada editada y el worker la fusiona:
+   *  su `storage.set` no pasa por el puente del panel y no tiene ese tope.
+   *
+   *  Se fusiona sobre lo que el worker LEE ahora, no sobre lo que el panel vio: entre que
+   *  el dueno abrio el formulario y apreto Guardar pudo entrar un sync. */
+  async function guardarAlcance (pedido) {
+    const jid = pedido?.jid
+    if (typeof jid !== 'string' || !jid.includes('@') || jid.length > 160) {
+      return { ok: false, code: SCOPE_VEREDICTO.JID_INVALIDO,
+        detail: String(jid ?? '').slice(0, 60) }
+    }
+    const entrada = pedido?.entrada
+    if (!entrada || typeof entrada !== 'object' || Array.isArray(entrada)) {
+      return { ok: false, code: SCOPE_VEREDICTO.ENTRADA_INVALIDA }
+    }
+    const linea = pedido?.linea
+    if (linea !== undefined && linea !== null &&
+      (typeof linea !== 'string' || !LINEA_RE.test(linea))) {
+      return { ok: false, code: SCOPE_VEREDICTO.LINEA_INVALIDA, detail: String(linea).slice(0, 40) }
+    }
+    // Solo los campos del contrato, y el sello lo pone el worker: la hora del panel no
+    // decide el orden de las escrituras del registro.
+    const limpia = { updatedAt: new Date().toISOString() }
+    for (const campo of CAMPOS_ALCANCE) {
+      if (campo in entrada) limpia[campo] = entrada[campo]
+    }
+    // `origen` es la entrada que esta edicion reemplaza cuando la conversacion cambio de
+    // jid (el mismo grupo visto por otro id). Sin esto quedarian las dos.
+    const origen = typeof pedido?.origen === 'string' && pedido.origen.includes('@')
+      ? pedido.origen : null
+
+    // Lo que esta edicion reemplaza: la entrada del jid, o la de `origen` cuando la
+    // conversacion cambio de id. Sin esto, guardar la forma viva de un grupo empezaba de
+    // cero y se perdia lo que el panel no edita (`provider`, `target`).
+    const previaDe = (reg, destino, viejo) => {
+      const propia = reg[destino] && typeof reg[destino] === 'object' ? reg[destino] : null
+      if (propia) return propia
+      const anterior = viejo && reg[viejo] && typeof reg[viejo] === 'object' ? reg[viejo] : null
+      return anterior || {}
+    }
+
+    if (linea) {
+      const leido = await orca.host.call('storage.get', { key: ALCANCE_POR_LINEA_KEY })
+        .catch((error) => {
+          orca.log(`storage.get alcancePorLinea failed: ${error.message}`)
+          return null
+        })
+      // Sin poder leer no se escribe: guardar sobre `{}` borraria las demas lineas.
+      if (!leido || !leido.value || typeof leido.value !== 'object') {
+        return { ok: false, code: SCOPE_VEREDICTO.ENTRADA_INVALIDA, detail: 'scope unreadable' }
+      }
+      const todo = { ...leido.value }
+      const deLaLinea = { ...(todo[linea] && typeof todo[linea] === 'object' ? todo[linea] : {}) }
+      deLaLinea[jid] = { provider: 'ninguno', target: null,
+        ...previaDe(deLaLinea, jid, origen), ...limpia }
+      if (origen && origen !== jid) delete deLaLinea[origen]
+      todo[linea] = deLaLinea
+      await orca.host.call('storage.set', { key: ALCANCE_POR_LINEA_KEY, value: todo })
+      orca.log(`scope saved for one chat on another line (${Object.keys(deLaLinea).length} total)`)
+      return { ok: true, code: SCOPE_VEREDICTO.GUARDADO }
+    }
+
+    const actual = await scope()
+    const next = { ...actual }
+    next[jid] = { provider: 'ninguno', target: null, ...previaDe(next, jid, origen), ...limpia }
+    if (origen && origen !== jid) delete next[origen]
+    await saveScope(next)
+    orca.log(`scope saved for one chat (${Object.keys(next).length} total)`)
+    return { ok: true, code: SCOPE_VEREDICTO.GUARDADO }
+  }
+
   /** Quitar una regla de texto, de verdad y en los dos registros.
    *
    *  Las reglas que se crean con el CLI viven en `scope.db` (tabla `route`) y cada sync las
@@ -2953,6 +3044,7 @@ export default function activate(orca) {
     // worker tiene un presupuesto de llamadas al host.
     acciones: {
       [SCOPE_ACCION.QUITAR]: (pedido) => quitarAlcance(pedido),
+      [SCOPE_ACCION.GUARDAR]: (pedido) => guardarAlcance(pedido),
       [SCOPE_ACCION.REGLA_QUITAR]: (pedido) => quitarRegla(pedido),
       ...crearAccionesCaso({ run, motivoDe, lanzarTriage, llaveAprobador,
         herramienta: (nombre) => tool(nombre) }),
