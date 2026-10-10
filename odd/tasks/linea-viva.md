@@ -68,9 +68,13 @@ human, and when it cannot be recovered the owner is told.
 
 ## Checklist
 
-- [ ] A0 Audit every silent failure point in the chain:
+- [x] A0 Audit every silent failure point in the chain:
       capture → ingest/Jev → case → agent → send → notice → follow-up.
-      For each point, record what detects it today.
+      For each point, record what detects it today. Result: the global `sidecar_beat` let a
+      dead line look alive (verified, became V8). Gaps left for the second release: an
+      `envio` stuck in `enviando`; agent launches that keep failing or turns that end
+      without a proposal; one agent slot shared by every line; overdue cases and expired
+      or failed notices with no reminder; detecting a dead worker from Orca's tick.
 - [x] V1 Jev skip never closes a client's request-class message (scripts/check-casos).
       `skip_que_vale` in the verdict path and before caching. RED: 4 FALLA in "jev: el skip
       no cierra el pedido de un cliente (V1)" (group bug report: no case; cached verdict
@@ -90,13 +94,40 @@ human, and when it cannot be recovered the owner is told.
   `tick_at` key, precheck as before); a single linked line (its key plus the global, tick
   output unchanged, one `lineas-salud` row); no store at all (`lineas: []`, no scope.db
   created). The test lock follows `tick_toma` on win32.
-- [ ] V4 Worker backup tick per line, plus the persistent per-line failure log
-      (test/worker.test.mjs).
-- [ ] V5 Owner notice and panel state for a line still unattended, or a run stuck in
-      `dispatching`, with screenshots (test/panels.test.mjs, reduced shots).
-- [ ] V6 Notices leave through a line that reaches the approval chat; replies are
-      recognized there (scripts/check-casos).
-- [ ] V7 Checks green without the full screenshot matrix; version bump; PR ready.
+- [x] V4 Worker backup tick per line, plus the persistent per-line failure log
+      (test/worker.test.mjs). The worker reads `lineas-salud` every minute and runs
+      `wa-scope tick --json --line <account>` through `correrOrca` (280 s cap, one in flight
+      per line). Failures go to `<data dir>/logs/worker-<account>.log` (1 MB, one rotation)
+      through `bitacora.mjs`, an unfenced subprocess like `aprobador.mjs`; on Windows that
+      subprocess stays fenced and nothing is logged, the same limit `jev-espejo.mjs` has.
+      RED: `lineasSinAtender is not a function`. GREEN: worker 653/653.
+- [x] V5 Owner notice and panel state for a line still unattended, or a run stuck in
+      `dispatching`, with screenshots (test/panels.test.mjs, reduced shots). One WhatsApp
+      notice per incident after 10 min (through `wa-scope owner`, in `approvalLang`) and
+      one when it clears after two healthy rounds; an Orca notification; `#lineas-alerta` in
+      the panel, carried in `workerBeat`. A stuck run counts only when it is the newest run
+      of the plugin's own automation (by `pluginOrigin`, as `delPlugin`). RED: no
+      `#lineas-alerta`. GREEN: panels 1668/1668. Screenshots looked at:
+      `config-lineas-sin-atender-varias` es dark 1440 and `config-linea-sin-atender` es
+      light 320 (also 390 light and pt 320 by the writer): readable, no overflow.
+- [x] V6 Notices leave through a line that reaches the approval chat; replies are
+      recognized there (scripts/check-casos). New column `aviso.sale_por` (with migration);
+      `account` stays the case's line. A reply on the relaying line goes to
+      `wa-scope aviso-relevo`, which reads the message itself and checks it is the owner's.
+      Only `si N`, `no N` and a bare `si`; quoted replies are not covered. RED: 13 of 16,
+      including the live `send-wrong-line`. GREEN: 16/16.
+- [x] V8 Each sidecar writes `sidecar_beat@<account>` and `sidecar_conectado@<account>`;
+      `ultimo_latido`, `sidecar_vivo` and `sidecar_mudo` take the line; wa-send answers
+      `send-no-transport` for a dead line (the tick keeps the reply pending and retries);
+      the doctor reports each line; `lineas-salud` reads each line's own beat. RED: 15 in
+      almacen (`sidecar_vivo() takes 1 position`), wa-send `send-timeout` for a dead line,
+      and 1 FALLA in "la salud de cada linea (V3)". GREEN: almacen 335/335, envio 112/112,
+      check-casos 2107/2108 (the one left is P3 below).
+- [x] V7 Checks green without the full screenshot matrix; version bump; PR ready. Every
+      `npm run check` step except `npm run shots`, on the integrated branch with no other
+      load: check-casos 2108/2108 (P3 passes; its earlier failure came from running beside
+      other suites), panels 1668/1668, worker 653/653, almacen 335/335, envio 112/112, and
+      every other suite green. Version 4.29.0, after PR #50's 4.28.0.
 
 ## Acceptance
 
