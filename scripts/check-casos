@@ -1198,7 +1198,8 @@ for (const m of d.mensajes) {
   a.guardarMensaje({ cuenta: d.cuenta, chatJid: m.chat, stanzaId: m.id, ts: m.ts,
     fromMe: m.yo ? 1 : 0, senderJid: m.de || null, senderName: m.nombre || 'Ana',
     body: m.texto || '', mediaTipo: m.media || null, mediaBytes: m.bytes ?? null,
-    mencionaMe: m.mencion ? 1 : 0, citaMe: m.cita ? 1 : 0 }, { mediaPath: m.ruta || null });
+    mencionaMe: m.mencion ? 1 : 0, citaMe: m.cita ? 1 : 0, citaId: m.cita_id || null },
+    { mediaPath: m.ruta || null });
 }
 if (d.activar) a.activarLinea(d.cuenta);
 a.latir(); a.cerrar();
@@ -13452,6 +13453,143 @@ if NODE:
         ok("con una sola linea el aviso sale por ella, como siempre",
            [(f["account"], f.get("sale_por"), f["estado"]) for f in filas] == [(A, A, "enviado")],
            f"{filas}")
+
+
+# ── Un `si` que cita el aviso contesta ESE aviso (odd/tasks/linea-viva-2.md, W6) ───────────
+# Con dos avisos vivos, un `si` sin numero no contestaba ninguno: solo vale con un unico aviso
+# vigente. Citar el aviso dice cual. Lo que cita otra cosa sigue la regla de siempre, y la
+# cita de un aviso que ya no vale contesta ESE aviso (que ya no vale), nunca otro.
+def stanza_del_aviso(home, cid):
+    """El id que WhatsApp le dio al aviso de ese caso al salir: lo que cita el dueno."""
+    req = (avisos_de(home, cid) or [{}])[0].get("req_id") or ""
+    con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+    fila = con.execute("select stanza_id from envio where req_id=?", (req,)).fetchone()
+    con.close()
+    return (fila[0] if fila else "") or ""
+
+
+def etapa_y_aprobada(home, cid):
+    ver = js(home, "caso", "ver", cid)[0]
+    return ver["etapa"], bool(ver["aprobada"])
+
+
+print("\nun `si` que cita el aviso contesta ese aviso (linea-viva-2, W6)")
+if NODE:
+    if not any(c["jid"] == DUENO_DM for c in CHATS):
+        CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        pon_aprobacion(home, DUENO_LID)
+        sidecar = SidecarFalso(home)
+        try:
+            llegan(home, A, [msg(PERSONA, "W6P1", PEDIDO, 30), msg(PERSONA, "W6P2", PEDIDO, 29),
+                             msg(PERSONA, "W6P3", PEDIDO, 28)])
+            uno, _ = propuesta_lista(home, "W6P1", texto="Listo, el arreglo cuesta $50.")
+            dos, _ = propuesta_lista(home, "W6P2", texto="Listo, el arreglo cuesta $70.")
+            tres, _ = propuesta_lista(home, "W6P3", texto="Listo, el arreglo cuesta $90.")
+            tick(home)
+            citas = {c: stanza_del_aviso(home, c) for c in (uno, dos, tres)}
+            ok("tres avisos vivos, cada uno con el id que le dio WhatsApp",
+               all(citas.values()) and len(set(citas.values())) == 3, f"{citas}")
+
+            # La cita de algo que no es un aviso: la regla de siempre, y con tres vivos un `si`
+            # a secas no aprueba ninguno.
+            llegan(home, A, [msg(DUENO_DM, "W6R0", "si", 1, de=DUENO_LID,
+                                 cita_id="NO-ES-UN-AVISO")])
+            ingiere(home)
+            ok("`si` citando algo que no es un aviso sigue la regla de siempre: con varios vivos, "
+               "ninguno", all(etapa_y_aprobada(home, c) == ("decision", False)
+                              for c in (uno, dos, tres)),
+               f"{[etapa_y_aprobada(home, c) for c in (uno, dos, tres)]}")
+
+            llegan(home, A, [msg(DUENO_DM, "W6R1", "si", 1, de=DUENO_LID, cita_id=citas[dos])])
+            ingiere(home)
+            ok("`si` citando un aviso aprueba ESE caso, aunque haya varios vivos",
+               etapa_y_aprobada(home, dos) == ("respondido", True)
+               and etapa_y_aprobada(home, uno) == ("decision", False)
+               and etapa_y_aprobada(home, tres) == ("decision", False),
+               f"{[etapa_y_aprobada(home, c) for c in (uno, dos, tres)]}")
+            ok("y la respuesta no abre un caso",
+               cuenta(home, "select count(*) from caso_mensaje where stanza_id='W6R1'") == 0)
+            tick(home)
+            ok("le confirma ese caso", any(f"Caso {dos} aprobado" in a["body"]
+                                          for a in al_dueno(home)), f"{al_dueno(home)[-2:]}")
+
+            llegan(home, A, [msg(DUENO_DM, "W6R2", "no", 1, de=DUENO_LID, cita_id=citas[uno])])
+            ingiere(home)
+            ok("`no` citando otro aviso cierra ese caso y deja el otro esperando",
+               etapa_y_aprobada(home, uno)[0] == "cerrado"
+               and etapa_y_aprobada(home, tres) == ("decision", False),
+               f"{[etapa_y_aprobada(home, c) for c in (uno, tres)]}")
+
+            # Queda un solo aviso vivo (el de tres). Citar el de dos, ya contestado, no aprueba
+            # el que queda: contesta el citado, que ya no vale.
+            llegan(home, A, [msg(DUENO_DM, "W6R3", "si", 1, de=DUENO_LID, cita_id=citas[dos])])
+            ingiere(home)
+            ok("`si` citando un aviso ya contestado no aprueba el unico que queda vivo",
+               etapa_y_aprobada(home, tres) == ("decision", False),
+               f"{etapa_y_aprobada(home, tres)}")
+            ok("y no abre un caso: era una respuesta",
+               cuenta(home, "select count(*) from caso_mensaje where stanza_id='W6R3'") == 0)
+
+            # Citar algo que no es un aviso con un solo vivo: la regla de siempre, lo aprueba.
+            llegan(home, A, [msg(DUENO_DM, "W6R4", "si", 1, de=DUENO_LID,
+                                 cita_id="TAMPOCO-ES-UN-AVISO")])
+            ingiere(home)
+            ok("`si` citando algo que no es un aviso, con un solo vivo, lo aprueba como siempre",
+               etapa_y_aprobada(home, tres) == ("respondido", True),
+               f"{etapa_y_aprobada(home, tres)}")
+        finally:
+            sidecar.cerrar()
+
+    # La linea que releva (linea-viva V6): los avisos de la principal salen por la otra, y el
+    # dueno contesta alli citando uno.
+    with tempfile.TemporaryDirectory() as home:
+        llave_del_plugin(home)
+        llegan(home, A, [])
+        llegan(home, SEGUNDA, [], activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "agent", "Agente De Ejemplo")
+        js(home, "config", "ack", "off")
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        jsl(home, SEGUNDA, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        jsl(home, SEGUNDA, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        pon_aprobacion(home, DUENO_LID)
+        uno, _ = caso_en_linea(home, A, "W6A1", "Listo, el arreglo cuesta $50.")
+        dos, _ = caso_en_linea(home, A, "W6A2", "Listo, el arreglo cuesta $70.")
+        con_sidecars(home, lambda: tick(home))
+        filas = avisos_de(home, uno) + avisos_de(home, dos)
+        ok("los dos avisos de la principal salen por la otra linea",
+           [(f["sale_por"], f["estado"]) for f in filas] == [(SEGUNDA, "enviado")] * 2,
+           f"{filas}")
+        llegan(home, SEGUNDA, [msg(DUENO_DM, "W6V0", "si", 1, de=DUENO_LID,
+                                   cita_id="NO-ES-UN-AVISO")], activar=False)
+        con_sidecars(home, lambda: js(home, "ingest"))
+        ok("en la otra linea, citar algo que no es un aviso con dos vivos no aprueba ninguno",
+           not js(home, "caso", "ver", uno)[0]["aprobada"]
+           and not js(home, "caso", "ver", dos)[0]["aprobada"])
+        llegan(home, SEGUNDA, [msg(DUENO_DM, "W6V1", "si", 1, de=DUENO_LID,
+                                   cita_id=stanza_del_aviso(home, dos))], activar=False)
+        con_sidecars(home, lambda: js(home, "ingest"))
+        ok("`si` citando un aviso en la otra linea aprueba ESE caso de la principal",
+           etapa_y_aprobada(home, dos) == ("respondido", True)
+           and etapa_y_aprobada(home, uno) == ("decision", False),
+           f"{[etapa_y_aprobada(home, c) for c in (uno, dos)]}")
+        ok("y la respuesta no abre un caso en ninguna linea",
+           cuenta(home, "select count(*) from caso_mensaje where stanza_id='W6V1'") == 0)
+        # El relevo vuelve a mirar la cita del mensaje capturado: no aplica a un aviso otro
+        # mensaje que cita uno distinto.
+        req_uno = avisos_de(home, uno)[0]["req_id"]
+        llegan(home, SEGUNDA, [msg(DUENO_DM, "W6V2", "si", 1, de=DUENO_LID,
+                                   cita_id=stanza_del_aviso(home, dos))], activar=False)
+        p = corre(home, "aviso-relevo", "--aviso", req_uno, "--stanza", "W6V2", "--line", A)
+        ok("el relevo niega un `si` que cita otro aviso",
+           p.returncode == 3 and not js(home, "caso", "ver", uno)[0]["aprobada"],
+           f"{p.returncode} {p.stdout[:200]} {p.stderr[-200:]}")
 
 
 # ── El tick de cada linea (odd/tasks/linea-viva.md, V2) ──────────────────────────────────

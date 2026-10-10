@@ -333,6 +333,9 @@ export function filaDeMensaje (wa, { cuenta, identidades }) {
     // borrador de una respuesta abriria una tarjeta por cada mensaje que uno escribe.
     mencionaMe: !fromMe && grupo && mencionaA(contexto, identidades) ? 1 : 0,
     citaMe: !fromMe && grupo && citaA(contexto, identidades) ? 1 : 0,
+    // El id del mensaje citado, de cualquier chat y de cualquiera (linea-viva-2 W6): un
+    // `si` que cita un aviso contesta ESE aviso. Es un dato, no una clasificacion.
+    citaId: (typeof contexto?.stanzaId === 'string' && contexto.stanzaId) || null,
     esGrupo: grupo ? 1 : 0,
     // Solo los directos traen su nombre en el mensaje. El de un grupo es su asunto, y
     // eso se pregunta aparte: inventarlo aca lo dejaria llamandose como quien escribio.

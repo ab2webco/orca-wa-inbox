@@ -131,6 +131,9 @@ create table if not exists mensaje (
   media_bytes integer,
   menciona_me integer not null default 0,
   cita_me     integer not null default 0,
+  -- El id del mensaje que este cita, de cualquier chat (linea-viva-2 W6). Un almacen de
+  -- antes la gana al abrirse (columnaCitaId), sin subir la version.
+  cita_id     text,
   -- Revocado: la fila queda como lapida con el cuerpo vacio, y no se borra. Borrarla
   -- dejaria que la proxima sincronizacion la volviera a insertar con su texto, o sea
   -- que el mensaje que alguien borro reapareceria en la bandeja.
@@ -414,6 +417,18 @@ function unirDispositivos (con) {
   return chats ? { chats, mensajes } : null
 }
 
+/**
+ * El id del mensaje citado (linea-viva-2 W6), en un almacen de antes de la columna. Se
+ * AGREGA y no se rehace la tabla: la columna nueva es opcional y null en lo viejo, y los
+ * mensajes no se tocan. No sube la version: `bin/wa_store.py` pregunta por la columna
+ * antes de leerla, asi que un lector nuevo lee un almacen viejo y uno viejo, uno nuevo.
+ * IDEMPOTENTE: corre en cada apertura, dentro de la transaccion del sello.
+ */
+function columnaCitaId (con) {
+  if (columnasDe(con, 'mensaje').includes('cita_id')) return
+  con.exec('alter table mensaje add column cita_id text')
+}
+
 /** El directorio de estado de las herramientas. La MISMA tabla que `scope_db_path()` en
  *  `bin/wa-scope:42-46` y `bin/wa_settings.py:320-323`. Que sean dos implementaciones es
  *  un riesgo real —discrepar sobre esta ruta es escribir en una base que nadie lee— y
@@ -472,6 +487,7 @@ export function abrirAlmacen (ruta = rutaAlmacen()) {
   try {
     migracion = migrar(con)
     con.exec(ESQUEMA)
+    columnaCitaId(con)
     dispositivosUnidos = unirDispositivos(con)
     if (dispositivosUnidos) {
       // Aparte de `migracion`, a proposito: esa tabla es la de la subida de esquema y
@@ -887,21 +903,24 @@ class Almacen {
   guardarMensaje (fila, { mediaPath = null, ahora = Date.now() } = {}) {
     this.con.prepare(`insert into mensaje
       (account, chat_jid, stanza_id, ts, from_me, sender_jid, sender_name, body,
-       media_type, media_path, media_bytes, menciona_me, cita_me, revocado, editado_at,
-       captured_at)
-      values (?,?,?,?,?,?,?,?,?,?,?,?,?,0,null,?)
+       media_type, media_path, media_bytes, menciona_me, cita_me, cita_id, revocado,
+       editado_at, captured_at)
+      values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,null,?)
       on conflict(account, chat_jid, stanza_id) do update set
         ts=excluded.ts, sender_jid=excluded.sender_jid, sender_name=excluded.sender_name,
         body=excluded.body, media_type=excluded.media_type,
         media_path=coalesce(excluded.media_path, mensaje.media_path),
         media_bytes=excluded.media_bytes, menciona_me=excluded.menciona_me,
-        cita_me=excluded.cita_me
+        cita_me=excluded.cita_me,
+        -- La misma fila que vuelve sin su contexto no olvida a quien citaba.
+        cita_id=coalesce(excluded.cita_id, mensaje.cita_id)
       -- Una lapida no se resucita: lo que alguien borro no puede volver porque el
       -- mensaje llegue otra vez por una re-sincronizacion.
       where mensaje.revocado = 0`)
       .run(fila.cuenta, fila.chatJid, fila.stanzaId, fila.ts, fila.fromMe,
         fila.senderJid, fila.senderName, fila.body || '', fila.mediaTipo, mediaPath,
-        fila.mediaBytes, fila.mencionaMe, fila.citaMe, Math.floor(ahora / 1000))
+        fila.mediaBytes, fila.mencionaMe, fila.citaMe, fila.citaId || null,
+        Math.floor(ahora / 1000))
   }
 
   /** Un borrado o una edicion (§11-B4). */

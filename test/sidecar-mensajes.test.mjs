@@ -222,6 +222,54 @@ console.log('\nfilaDeMensaje: de un WAMessage a una fila del almacen')
   ok('y no se confunde con una mencion', cita?.mencionaMe === 0)
 }
 
+console.log('\nlinea-viva-2 W6: el id del mensaje citado, en todo mensaje')
+{
+  const grupo = '120363111222333444@g.us'
+  const directo = '573009998877@s.whatsapp.net'
+  // El dueno contesta `si` citando el aviso: `stanzaId` es el id del aviso citado.
+  const enDirecto = filaDeMensaje({
+    key: { remoteJid: directo, fromMe: false, id: 'R1' },
+    messageTimestamp: 1758500600,
+    message: { extendedTextMessage: { text: 'si', contextInfo: { stanzaId: 'AVISO-ID-1',
+      participant: MI_TEL } } }
+  }, { cuenta: 'linea-uno', identidades: YO })
+  ok('un directo que cita guarda el id citado', enDirecto?.citaId === 'AVISO-ID-1',
+    JSON.stringify(enDirecto))
+  ok('y en un directo la cita no marca citaMe (eso es de grupos)', enDirecto?.citaMe === 0)
+
+  const enGrupo = filaDeMensaje({
+    key: { remoteJid: grupo, fromMe: false, id: 'R2', participant: directo },
+    messageTimestamp: 1758500700,
+    message: { extendedTextMessage: { text: 'eso', contextInfo: { stanzaId: 'OTRO-ID-2',
+      participant: '573005554433@s.whatsapp.net' } } }
+  }, { cuenta: 'linea-uno', identidades: YO })
+  ok('un grupo que cita a otro tambien guarda el id citado',
+    enGrupo?.citaId === 'OTRO-ID-2' && enGrupo?.citaMe === 0, JSON.stringify(enGrupo))
+
+  const conPie = filaDeMensaje({
+    key: { remoteJid: directo, fromMe: false, id: 'R3' },
+    messageTimestamp: 1758500800,
+    message: { imageMessage: { mimetype: 'image/jpeg', caption: 'mira',
+      contextInfo: { stanzaId: 'FOTO-ID-3' } } }
+  }, { cuenta: 'linea-uno', identidades: YO })
+  ok('un adjunto que cita guarda el id citado', conPie?.citaId === 'FOTO-ID-3',
+    JSON.stringify(conPie))
+
+  const suelto = filaDeMensaje({
+    key: { remoteJid: directo, fromMe: false, id: 'R4' },
+    messageTimestamp: 1758500900,
+    message: { conversation: 'si' }
+  }, { cuenta: 'linea-uno', identidades: YO })
+  ok('sin cita el id citado es null', suelto?.citaId === null, JSON.stringify(suelto))
+
+  const vacio = filaDeMensaje({
+    key: { remoteJid: directo, fromMe: false, id: 'R5' },
+    messageTimestamp: 1758501000,
+    message: { extendedTextMessage: { text: 'si', contextInfo: { stanzaId: '' } } }
+  }, { cuenta: 'linea-uno', identidades: YO })
+  ok('un stanzaId vacio no es una cita', vacio?.citaId === null, JSON.stringify(vacio))
+}
+
 console.log('\nB4: borrados y editados — el hueco que el codigo viejo no llenaba')
 {
   // Revocacion: Baileys manda `message: null` + `messageStubType: REVOKE` (68).
