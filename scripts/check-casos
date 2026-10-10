@@ -16366,6 +16366,388 @@ if NODE:
            "Blocked (destructive, outside the project, needs the owner" in brief
            and "not something the project's own context answers" in brief, brief[-900:])
 
+
+# ── Los avisos que vencen o fallan (odd/tasks/linea-viva-2.md, W4) ─────────────────────────
+# Un aviso de aprobacion sin contestar vencia callado: el caso seguia en el tablero y nadie
+# se lo recordaba al dueno. Un caso pasado de su meta de primera respuesta tampoco se decia,
+# y un aviso que `wa-send` nego (o que vencio sin salir) solo quedaba en la base. Ahora: UN
+# recordatorio antes de que venza el aviso, UN aviso por caso pasado de la meta, y los avisos
+# fallidos en el tablero hasta que el caso sigue.
+CLIENTE_DOS = "573002220000@s.whatsapp.net"
+CLIENTE_TRES = "573005554433@s.whatsapp.net"
+
+
+def avisos_tipo(home, tipo, cid=None):
+    con = db_de(home)
+    filas = [dict(r) for r in con.execute(
+        "select * from aviso where tipo=? and (? is null or case_id=?) order by at, rowid",
+        (tipo, cid and int(cid), cid and int(cid)))]
+    con.close()
+    return filas
+
+
+def aviso_hace(home, req, horas, enviado=True):
+    sello = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - horas * 3600))
+    con = db_de(home)
+    con.execute("update aviso set at=?" + (", enviado_at=?" if enviado else "") +
+                " where req_id=?", (sello, sello, req) if enviado else (sello, req))
+    con.commit()
+    con.close()
+
+
+def fallidos_del_tablero(home):
+    return (tablero(home).get("board") or {}).get("notices_failed")
+
+
+print("\nlos avisos que vencen o fallan (linea-viva-2, W4)")
+if NODE:
+    if not any(c["jid"] == DUENO_DM for c in CHATS):
+        CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+    for jid, nombre in ((CLIENTE_DOS, "Cliente Dos"), (CLIENTE_TRES, "Cliente Tres")):
+        if not any(c["jid"] == jid for c in CHATS):
+            CHATS.append({"jid": jid, "nombre": nombre, "grupo": False})
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        pon_aprobacion(home, DUENO_LID)
+        sidecar = SidecarFalso(home)
+        try:
+            # El recordatorio: a las tres cuartas partes de `approval_hours`, una vez.
+            llegan(home, A, [msg(PERSONA, "W4A", PEDIDO, 1)])
+            dinero, v1 = propuesta_lista(home, "W4A", texto="Listo, el arreglo cuesta $50.")
+            tick(home)
+            original = avisos_tipo(home, "aprobacion", dinero)
+            ok("el aviso de aprobacion sale, como siempre",
+               [f["estado"] for f in original] == ["enviado"], f"{original}")
+            aviso_hace(home, original[0]["req_id"] if original else "", 10)
+            tick(home)
+            ok("antes de las tres cuartas partes del plazo no hay recordatorio",
+               len(avisos_tipo(home, "aprobacion", dinero)) == 1,
+               f"{avisos_tipo(home, 'aprobacion', dinero)}")
+            aviso_hace(home, original[0]["req_id"] if original else "", 19)
+            tick(home)
+            filas = avisos_tipo(home, "aprobacion", dinero)
+            rec = [f for f in filas if f["req_id"] == f"aviso-rec-{dinero}-{v1[:12]}"]
+            ok("pasadas las tres cuartas partes sale UN recordatorio de la misma version",
+               len(filas) == 2 and len(rec) == 1 and rec[0]["estado"] == "enviado"
+               and rec[0]["version"] == v1, f"{filas}")
+            cuerpo = next((a["body"] for a in al_dueno(home)
+                           if a["req_id"] == f"aviso-rec-{dinero}-{v1[:12]}"), "")
+            ok("el recordatorio dice que lo es, el caso y como contestar",
+               "Recordatorio" in cuerpo and f"Caso {dinero}" in cuerpo
+               and f"si {dinero}" in cuerpo and "cuesta $50" in cuerpo, cuerpo)
+            tick(home)
+            ok("otro tick no manda otro recordatorio",
+               len(avisos_tipo(home, "aprobacion", dinero)) == 2
+               and sum(1 for a in al_dueno(home) if a["req_id"].startswith("aviso-rec-")) == 1,
+               f"{al_dueno(home)}")
+            # El dueno contesta `si` a secas: con el aviso y su recordatorio vivos es UNA
+            # propuesta, no dos avisos.
+            llegan(home, A, [msg(DUENO_DM, "W4R1", "si", 1, de=DUENO_LID)])
+            ingiere(home)
+            ver = js(home, "caso", "ver", dinero)[0]
+            ok("`si` a secas aprueba la version del aviso y su recordatorio",
+               ver["etapa"] == "respondido" and ver["aprobada"], f"{ver['etapa']} {ver['eventos'][-3:]}")
+            ok("y los dos quedan contestados",
+               sorted(f["estado"] for f in avisos_tipo(home, "aprobacion", dinero))
+               == ["contestado", "contestado"], f"{avisos_tipo(home, 'aprobacion', dinero)}")
+
+            # Contestar el recordatorio cuando el aviso original ya vencio: vale para la
+            # misma propuesta.
+            llegan(home, A, [msg(PERSONA, "W4B", PEDIDO, 1)])
+            tarde, v2 = propuesta_lista(home, "W4B", texto="Listo, son $70 por el arreglo.")
+            tick(home)
+            orig = avisos_tipo(home, "aprobacion", tarde)
+            aviso_hace(home, orig[0]["req_id"] if orig else "", 19)
+            tick(home)
+            aviso_hace(home, orig[0]["req_id"] if orig else "", 25)
+            llegan(home, A, [msg(DUENO_DM, "W4R2", f"si {tarde}", 1, de=DUENO_LID)])
+            ingiere(home)
+            ver = js(home, "caso", "ver", tarde)[0]
+            ok("`si N` al recordatorio aprueba aunque el aviso original haya vencido",
+               ver["etapa"] == "respondido" and ver["aprobada"]
+               and ver.get("propuesta_version") == v2,
+               f"{ver['etapa']} {avisos_tipo(home, 'aprobacion', tarde)}")
+
+            # La version cambio: el aviso viejo ya no se recuerda.
+            llegan(home, A, [msg(PERSONA, "W4C", PEDIDO, 1)])
+            cambia, _ = propuesta_lista(home, "W4C", texto="Listo, son $90 por el arreglo.")
+            tick(home)
+            orig = avisos_tipo(home, "aprobacion", cambia)
+            js(home, "caso", "propuesta", cambia, "--tipo", "responder", "--respuesta",
+               "Lo revisamos y le confirmamos.", "--actor", "agente")
+            aviso_hace(home, orig[0]["req_id"] if orig else "", 19)
+            tick(home)
+            ok("un aviso de una version que ya no es la vigente no se recuerda",
+               not any(f["req_id"].startswith("aviso-rec-")
+                       for f in avisos_tipo(home, "aprobacion", cambia)),
+               f"{avisos_tipo(home, 'aprobacion', cambia)}")
+
+            # Uno contestado tampoco.
+            llegan(home, A, [msg(PERSONA, "W4D", PEDIDO, 1)])
+            cerrado_, _ = propuesta_lista(home, "W4D", texto="Listo, son $95 por el arreglo.")
+            tick(home)
+            orig = avisos_tipo(home, "aprobacion", cerrado_)
+            llegan(home, A, [msg(DUENO_DM, "W4R3", f"no {cerrado_}", 1, de=DUENO_LID)])
+            ingiere(home)
+            aviso_hace(home, orig[0]["req_id"] if orig else "", 19)
+            tick(home)
+            ok("un aviso ya contestado no se recuerda",
+               len(avisos_tipo(home, "aprobacion", cerrado_)) == 1,
+               f"{avisos_tipo(home, 'aprobacion', cerrado_)}")
+
+            # La meta de primera respuesta (`sla_first_reply_minutes`, 15 por defecto). Cada
+            # caso en su conversacion: la entrada no los junta.
+            js(home, "set", FACTURACION, "--provider", "ninguno", "--mode", "responder")
+            js(home, "set", CLIENTE_DOS, "--provider", "ninguno", "--mode", "responder")
+            llegan(home, A, [msg(FACTURACION, "W4S1", "Hola, el sistema no me deja entrar", 40)])
+            meta_c = str(js(home, "caso", "crear", "--chat", FACTURACION, "--stanza", "W4S1",
+                            "--actor", "agente")[0]["case_id"])
+            tick(home)
+            sla = avisos_tipo(home, "sla")
+            ok("un caso pasado de la meta sin respuesta al cliente avisa al dueno una vez",
+               [(f["case_id"], f["estado"]) for f in sla] == [(int(meta_c), "enviado")], f"{sla}")
+            cuerpo = next((a["body"] for a in al_dueno(home) if a["req_id"].startswith("aviso-sla-")),
+                          "")
+            ok("el aviso dice el caso, la conversacion, cuanto lleva y la meta",
+               f"Caso {meta_c}" in cuerpo and "Facturacion" in cuerpo
+               and "15 min" in cuerpo and "no me deja entrar" in cuerpo, cuerpo)
+            tick(home)
+            ok("y no lo repite", len(avisos_tipo(home, "sla")) == 1)
+            # Uno que ya tuvo respuesta en el chat no avisa.
+            llegan(home, A, [msg(SOPORTE, "W4S2", "Necesito el reporte de ayer", 50),
+                             msg(SOPORTE, "W4S2R", "Ya lo revisamos", 45, yo=True)])
+            js(home, "caso", "crear", "--chat", SOPORTE, "--stanza", "W4S2", "--actor", "agente")
+            # Uno de hace mas de `approval_hours`: viejo, sigue en el tablero sin aviso (sin
+            # esto, actualizar mandaba de golpe un aviso por cada caso viejo).
+            llegan(home, A, [msg(OPERACIONES, "W4S3", "El reporte viejo sigue mal", 60 * 30)])
+            js(home, "set", OPERACIONES, "--provider", "ninguno", "--mode", "responder")
+            js(home, "caso", "crear", "--chat", OPERACIONES, "--stanza", "W4S3", "--actor", "agente")
+            tick(home)
+            ok("ni uno que ya tuvo respuesta, ni uno mas viejo que approval_hours",
+               len(avisos_tipo(home, "sla")) == 1, f"{avisos_tipo(home, 'sla')}")
+            # Uno que ya espera al dueno con su aviso de aprobacion: ese aviso ya se lo dice.
+            js(home, "set", CLIENTE_TRES, "--provider", "ninguno", "--mode", "responder")
+            llegan(home, A, [msg(CLIENTE_TRES, "W4S5", PEDIDO, 40)])
+            retenido, _ = propuesta_lista(home, "W4S5", chat=CLIENTE_TRES,
+                                          texto="Listo, el arreglo cuesta $60.")
+            tick(home)
+            ok("uno pasado de la meta que ya tiene su aviso de aprobacion no lleva otro",
+               len(avisos_tipo(home, "aprobacion", retenido)) == 1
+               and avisos_tipo(home, "sla", retenido) == [],
+               f"{avisos_tipo(home, 'aprobacion', retenido)} {avisos_tipo(home, 'sla', retenido)}")
+            # Una meta mas larga: todavia no se paso.
+            js(home, "config", "sla_first_reply_minutes", "120")
+            llegan(home, A, [msg(CLIENTE_DOS, "W4S4", "Otra cosa: la factura no llego", 40)])
+            js(home, "caso", "crear", "--chat", CLIENTE_DOS, "--stanza", "W4S4", "--actor", "agente")
+            tick(home)
+            ok("con la meta en 120 min, un caso de 40 min no avisa",
+               len(avisos_tipo(home, "sla")) == 1, f"{avisos_tipo(home, 'sla')}")
+        finally:
+            sidecar.cerrar()
+
+        # Un aviso que no pudo salir: sin sidecar se reintenta, y pasado `approval_hours`
+        # queda fallido. El tablero lo dice hasta que el caso sigue.
+        js(home, "config", "sla_first_reply_minutes", "15")
+        llegan(home, A, [msg(PERSONA, "W4F", PEDIDO, 1)])
+        falla, _ = propuesta_lista(home, "W4F", texto="Listo, son $40 por el arreglo.")
+        tick(home)
+        pend = avisos_tipo(home, "aprobacion", falla)
+        ok("sin la linea el aviso queda pendiente",
+           [f["estado"] for f in pend] == ["pendiente"], f"{pend}")
+        aviso_hace(home, pend[0]["req_id"] if pend else "", 30, enviado=False)
+        tick(home)
+        lista = fallidos_del_tablero(home) or []
+        del_caso = [f for f in lista if f.get("case_id") == int(falla)]
+        ok("el aviso fallido aparece en el tablero con el caso, el tipo, el motivo y la hora",
+           len(del_caso) == 1 and del_caso[0].get("type") == "aprobacion"
+           and del_caso[0].get("reason") == "approval-expired"
+           and isinstance(del_caso[0].get("at"), str) and "T" in del_caso[0]["at"], f"{lista}")
+        bloq_c = str(js(home, "caso", "crear", "--chat", SOPORTE, "--stanza", "W4G",
+                        "--actor", "agente")[0]["case_id"])
+        js(home, "caso", "mover", bloq_c, "bloqueado", "--motivo", "el proyecto no responde",
+           "--actor", "automatizacion")
+        bloqueo = avisos_tipo(home, "bloqueo", bloq_c)
+        aviso_hace(home, bloqueo[0]["req_id"] if bloqueo else "", 30, enviado=False)
+        tick(home)
+        lista = fallidos_del_tablero(home) or []
+        ok("el de un bloqueo tambien",
+           any(f.get("case_id") == int(bloq_c) and f.get("type") == "bloqueo" for f in lista),
+           f"{lista}")
+        # El caso sigue: otra propuesta y el bloqueo cerrado.
+        js(home, "caso", "propuesta", falla, "--tipo", "responder", "--respuesta",
+           "Lo revisamos y le confirmamos.", "--actor", "agente")
+        js(home, "caso", "mover", bloq_c, "cerrado", "--motivo", "resuelto por telefono",
+           "--actor", "dueno")
+        tick(home)
+        lista = fallidos_del_tablero(home)
+        ok("cuando el caso sigue, su aviso fallido sale del tablero",
+           lista == [], f"{lista}")
+        ok("un aviso superado nunca estuvo en el tablero",
+           all(f.get("reason") != "approval-superseded" for f in lista or []))
+
+    # Sin numero de aprobacion: ni recordatorio ni meta, nada se rompe y el tablero no
+    # trae avisos fallidos.
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        llegan(home, A, [msg(PERSONA, "W4N", "Hola, el sistema no me deja entrar", 40)])
+        js(home, "caso", "crear", "--chat", PERSONA, "--stanza", "W4N", "--actor", "agente")
+        p, r = tick(home)
+        ok("sin numero de aprobacion, un caso pasado de la meta no encola nada y el tick sigue",
+           cuenta(home, "select count(*) from aviso") == 0 and isinstance(r, dict)
+           and fallidos_del_tablero(home) == [], f"{p.stderr[-300:]}")
+
+
+# ── El worker muerto (odd/tasks/linea-viva-2.md, W5) ────────────────────────────────────────
+# Con el worker muerto se van con el su respaldo del tick y sus avisos, y nada lo decia. El
+# tick de Python lee `workerBeat.at` del storage del plugin: un latido de mas de 3 minutos
+# sale en el resumen (`worker_muerto`) y se le avisa al dueno UNA vez por incidente, y una
+# cuando vuelve. Sin la clave (instalacion nueva, el worker nunca corrio) no hay alerta. Si el
+# tick tampoco corria (Orca recien arranca), espera al siguiente: el worker pudo no haber
+# latido todavia.
+def pon_latido(home, hace_s):
+    ruta = storage_de(home)
+    datos = json.loads(ruta.read_text(encoding="utf-8")) if ruta.exists() else {}
+    if hace_s is None:
+        datos.pop("workerBeat", None)
+    else:
+        cuando = datetime.datetime.fromtimestamp(time.time() - hace_s, datetime.timezone.utc)
+        datos["workerBeat"] = {"at": cuando.isoformat(timespec="milliseconds")
+                               .replace("+00:00", "Z")}
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    ruta.write_text(json.dumps(datos), encoding="utf-8")
+
+
+def avisos_worker(home):
+    con = db_de(home)
+    filas = [dict(r) for r in con.execute(
+        "select * from aviso where tipo in ('worker', 'worker-ok') order by at, rowid")]
+    con.close()
+    return filas
+
+
+print("\nel worker muerto (linea-viva-2, W5)")
+with tempfile.TemporaryDirectory() as home:
+    p, r = tick(home)
+    ok("instalacion nueva sin latido: el resumen dice que no hay worker muerto",
+       isinstance(r, dict) and r.get("worker_muerto") is False, p.stdout[:300])
+
+if NODE:
+    if not any(c["jid"] == DUENO_DM for c in CHATS):
+        CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        pon_aprobacion(home, DUENO_LID)
+        propia = f"tick_at@{A}"
+        sidecar = SidecarFalso(home)
+        try:
+            p, r = tick(home)
+            ok("sin la clave del latido no hay alerta ni aviso",
+               isinstance(r, dict) and r.get("worker_muerto") is False
+               and avisos_worker(home) == [], f"{p.stdout[:300]} {avisos_worker(home)}")
+            pon_latido(home, 10)
+            p, r = tick(home)
+            ok("un latido de hace 10 s: vivo", isinstance(r, dict)
+               and r.get("worker_muerto") is False and avisos_worker(home) == [])
+            # Orca recien arranca: el latido es viejo, pero el tick de la linea tambien.
+            pon_latido(home, 600)
+            pon_tick_at(home, propia, 700)
+            p, r = tick(home)
+            ok("con el tick parado tambien, el resumen lo dice pero el aviso espera",
+               isinstance(r, dict) and r.get("worker_muerto") is True
+               and avisos_worker(home) == [], f"{p.stdout[:300]} {avisos_worker(home)}")
+            p, r = tick(home)
+            filas = avisos_worker(home)
+            ok("al tick siguiente, con el latido igual de viejo, UN aviso al dueno",
+               isinstance(r, dict) and r.get("worker_muerto") is True
+               and [(f["tipo"], f["estado"]) for f in filas] == [("worker", "enviado")],
+               f"{filas} {p.stderr[-300:]}")
+            cuerpo = next((a["body"] for a in al_dueno(home)
+                           if filas and a["req_id"] == filas[0]["req_id"]), "")
+            ok("el aviso dice que el proceso de fondo no da senales y hace cuanto",
+               "WhatsApp Inbox" in cuerpo and "proceso de fondo" in cuerpo
+               and "10 min" in cuerpo, cuerpo)
+            tick(home)
+            ok("otro tick con el mismo latido no lo repite", len(avisos_worker(home)) == 1)
+            pon_latido(home, 5)
+            p, r = tick(home)
+            filas = avisos_worker(home)
+            ok("cuando vuelve a latir, el resumen lo dice y sale UN aviso de que volvio",
+               isinstance(r, dict) and r.get("worker_muerto") is False
+               and [(f["tipo"], f["estado"]) for f in filas]
+               == [("worker", "enviado"), ("worker-ok", "enviado")], f"{filas}")
+            cuerpo = next((a["body"] for a in al_dueno(home)
+                           if len(filas) > 1 and a["req_id"] == filas[1]["req_id"]), "")
+            ok("con su texto", "WhatsApp Inbox" in cuerpo and "vuelve a responder" in cuerpo,
+               cuerpo)
+            tick(home)
+            ok("y no lo repite", len(avisos_worker(home)) == 2)
+            # Otro incidente es otro latido: otro aviso.
+            pon_latido(home, 300)
+            p, r = tick(home)
+            ok("un incidente nuevo avisa otra vez",
+               [f["tipo"] for f in avisos_worker(home)] == ["worker", "worker-ok", "worker"],
+               f"{avisos_worker(home)}")
+            pon_latido(home, 5)
+            tick(home)
+        finally:
+            sidecar.cerrar()
+        # Sin la linea el aviso queda pendiente; si el worker vuelve antes de que salga, ya
+        # no sale, y tampoco el de que volvio.
+        pon_latido(home, 400)
+        tick(home)
+        pendiente = [f for f in avisos_worker(home) if f["estado"] == "pendiente"]
+        ok("sin la linea, el aviso del incidente espera", len(pendiente) == 1,
+           f"{avisos_worker(home)}")
+        pon_latido(home, 5)
+        tick(home)
+        filas = avisos_worker(home)
+        ok("si vuelve antes de que salga, ese aviso ya no sale y no hay aviso de que volvio",
+           bool(filas) and (filas[-1]["tipo"], filas[-1]["estado"]) == ("worker", "fallido")
+           and filas[-1]["motivo"] == "worker-recovered"
+           and sum(1 for f in filas if f["tipo"] == "worker-ok") == 2, f"{filas}")
+
+    # Sin numero de aprobacion: el resumen lo dice y no se encola nada.
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        pon_latido(home, 600)
+        pon_tick_at(home, f"tick_at@{A}", 30)
+        p, r = tick(home)
+        ok("sin numero de aprobacion: worker_muerto en el resumen, ningun aviso, el tick sigue",
+           p.returncode == 0 and isinstance(r, dict) and r.get("worker_muerto") is True
+           and avisos_worker(home) == [], f"{p.returncode} {p.stderr[-300:]}")
+
+    # Dos lineas: la salida junta lo dice, y el aviso sale una sola vez.
+    with tempfile.TemporaryDirectory() as home:
+        llave_del_plugin(home)
+        llegan(home, A, [])
+        llegan(home, SEGUNDA, [], activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "agent", "Agente De Ejemplo")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        jsl(home, SEGUNDA, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        pon_aprobacion(home, DUENO_LID)
+        pon_latido(home, 600)
+        pon_tick_at(home, f"tick_at@{A}", 30)
+        pon_tick_at(home, f"tick_at@{SEGUNDA}", 30)
+        p, r = con_sidecars(home, lambda: tick(home))
+        lineas = (r or {}).get("lineas") or {}
+        ok("con dos lineas, la salida junta y la de cada linea dicen worker_muerto",
+           isinstance(r, dict) and r.get("worker_muerto") is True
+           and all(isinstance(x, dict) and x.get("worker_muerto") is True
+                   for x in lineas.values()) and len(lineas) == 2, f"{p.stdout[:400]}")
+        ok("y el aviso al dueno sale una sola vez",
+           [(f["tipo"], f["estado"]) for f in avisos_worker(home)] == [("worker", "enviado")],
+           f"{avisos_worker(home)} {p.stderr[-300:]}")
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

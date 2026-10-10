@@ -657,7 +657,10 @@ create table if not exists agente_corrida (
 -- aviso salga UNA vez aunque el tick lo intente cada minuto.
 create table if not exists aviso (
   req_id    text primary key,     -- aviso-<caso>-<version> | aviso-b-<caso>-<evento> | aviso-r-<hash>
-  tipo      text not null,        -- aprobacion | bloqueo | respuesta | agente | ...
+  -- aprobacion (tambien su recordatorio, aviso-rec-<caso>-<version>) | bloqueo | respuesta |
+  -- agente (W2) | sla (aviso-sla-<caso>) | worker | worker-ok (aviso-worker[-ok]-<latido>,
+  -- `version`)
+  tipo      text not null,
   case_id   integer,
   version   text,                 -- la propuesta_version que el aviso pide aprobar
   account   text not null,        -- la linea del caso: su tick lo encola, lo vence y lo manda
@@ -8495,6 +8498,9 @@ def build_board(con, ahora=None):
             # Lo retenido que no es de ningun caso: el dueno lo aprueba o lo retira desde el
             # panel (approve-solo-dueno).
             "held_drafts": retenidos_del_tablero(con, cuenta),
+            # Los avisos de aprobacion o de bloqueo que no le llegaron al dueno, mientras el
+            # caso siga donde estaba (linea-viva-2, W4).
+            "notices_failed": avisos_fallidos(con, cuenta),
             "project_routes": datos["routes"],
             "cards": datos["cards"]}
 
@@ -8657,6 +8663,34 @@ def retenidos_del_tablero(con, cuenta):
                        "at": datetime.datetime.fromtimestamp(int(f["created_at"] or 0))
                        .astimezone().isoformat(timespec="seconds"),
                        "reasons": motivos_de_retenido(nota["detail"] if nota else "")})
+    return salida
+
+
+def avisos_fallidos(con, cuenta):
+    """Los avisos de aprobacion y de bloqueo de la linea que quedaron `fallido`: el ultimo
+    de cada caso y tipo, mientras el caso siga donde lo aviso (la misma version esperando
+    al dueno, o todavia bloqueado). Cuando el caso sigue, sale solo. Viaja el codigo del
+    motivo, nunca el texto del aviso."""
+    salida = []
+    for f in con.execute(
+            "select a.* from aviso a where a.account=? and a.tipo in ('aprobacion', 'bloqueo') "
+            "and a.estado='fallido' and a.case_id is not null and not exists (select 1 from "
+            "aviso b where b.case_id=a.case_id and b.tipo=a.tipo and (b.at > a.at or "
+            "(b.at = a.at and b.rowid > a.rowid))) order by a.updated_at desc, a.rowid desc",
+            (cuenta,)).fetchall():
+        if f["tipo"] == "aprobacion":
+            sigue = not version_superada(con, f)
+        else:
+            caso = con.execute("select etapa from caso where case_id=?",
+                               (f["case_id"],)).fetchone()
+            sigue = bool(caso) and caso["etapa"] == "bloqueado"
+        if not sigue:
+            continue
+        salida.append({"case_id": f["case_id"], "type": f["tipo"],
+                       "reason": (f["motivo"] or "").split(" ", 1)[0] or None,
+                       "at": iso_caso(f["updated_at"])})
+        if len(salida) >= TOPE_AVISOS_FALLIDOS:
+            break
     return salida
 
 
@@ -9957,6 +9991,18 @@ AVISO_OTRO_NUMERO = "approval-number-changed"
 # reintenta) o el aviso de una version que ya no es la vigente: no sale, ya no es cierto.
 AVISO_VENCIDO = "approval-expired"
 AVISO_SUPERADO = "approval-superseded"
+# Un aviso de aprobacion enviado y sin contestar se recuerda UNA vez, pasadas estas partes de
+# `approval_hours` (linea-viva-2, W4). El recordatorio es otra fila de la misma version
+# (`aviso-rec-<caso>-<version>`): contestarlo decide la misma propuesta.
+RECUERDA_AVISO = 0.75
+PREFIJO_RECUERDA = "aviso-rec-"
+# Un caso pasado de su meta de primera respuesta (`sla_first_reply_minutes`) sin nada que
+# le haya salido al cliente: UN aviso al dueno por caso (`aviso-sla-<caso>`). Solo en los
+# chats donde el plugin escribe, y no lo que pidio el mismo dueno.
+ETAPAS_SIN_RESPUESTA = ("recibido", "clasificado", "decision", "trabajo", "listo", "bloqueado")
+MODOS_CON_META = ("responder", "borrador")
+# Los avisos fallidos que el tablero muestra (`notices_failed`), los mas nuevos primero.
+TOPE_AVISOS_FALLIDOS = 50
 LARGO_PIDE = 140
 LARGO_PROPUESTA = 300
 LARGO_CORRECCION = 1000
@@ -10038,6 +10084,13 @@ TEXTOS_AVISO = {
                              "avanzar; no lo vuelve a intentar en una hora. Mirelo en el tablero.",
            "estado_mas": "y {x} mas en el tablero.",
            "desde": "desde {x}",
+           "recuerda": "Recordatorio: el caso {n} sigue esperando su decision.",
+           "meta": "Caso {n} · {chat}: el cliente espera respuesta hace {min} min (la meta es "
+                   "{meta} min). Pide: {x}",
+           "worker": "WhatsApp Inbox: el proceso de fondo del plugin no da senales hace {min} "
+                     "min. La revision de cada minuto sigue, pero sin el no hay respaldo ni "
+                     "avisos del plugin. Reiniciar Orca suele traerlo de vuelta.",
+           "worker_ok": "WhatsApp Inbox: el proceso de fondo del plugin vuelve a responder.",
            "etapas": {"recibido": "recibido", "clasificado": "clasificado",
                       "decision": "espera su decision", "trabajo": "en trabajo",
                       "listo": "resultado listo", "respondido": "respondido, espera al cliente",
@@ -10076,6 +10129,14 @@ TEXTOS_AVISO = {
                              "progress; it will not try again for an hour. Check the board.",
            "estado_mas": "and {x} more on the board.",
            "desde": "since {x}",
+           "recuerda": "Reminder: case {n} is still waiting for your decision.",
+           "meta": "Case {n} · {chat}: the client has waited {min} min for a reply (the target "
+                   "is {meta} min). Asks: {x}",
+           "worker": "WhatsApp Inbox: the plugin's background process has given no sign of "
+                     "life for {min} min. The every-minute check goes on, but without it there "
+                     "is no backup and no plugin notices. Restarting Orca usually brings it "
+                     "back.",
+           "worker_ok": "WhatsApp Inbox: the plugin's background process is responding again.",
            "etapas": {"recibido": "received", "clasificado": "classified",
                       "decision": "waits for you", "trabajo": "in progress",
                       "listo": "result ready", "respondido": "answered, waits for the client",
@@ -10463,7 +10524,72 @@ def tick_avisos(con, resumen, inicio=None):
                      else texto_de_aviso(con, caso, motivos),
                      case_id=caso["case_id"], version=version)
         con.commit()
+    recuerda_avisos(con)
+    avisa_meta_vencida(con)
     envia_avisos(con, resumen, inicio)
+
+
+def recuerda_avisos(con):
+    """El recordatorio de cada aviso de aprobacion enviado y sin contestar, una vez, pasadas
+    las tres cuartas partes de `approval_hours` y antes de que venza, mientras el caso siga
+    en esa version. Lleva el texto del aviso: se contesta igual."""
+    plazo = horas_aprobacion(con) * 3600
+    tx = aviso_textos()
+    for f in con.execute("select * from aviso where tipo='aprobacion' and account=? and "
+                         "estado='enviado' and req_id not like ?",
+                         (cuenta_activa(), PREFIJO_RECUERDA + "%")).fetchall():
+        edad = edad_de(f["enviado_at"] or f["at"])
+        if not plazo * RECUERDA_AVISO <= edad <= plazo or version_superada(con, f):
+            continue
+        aviso_encola(con, f"{PREFIJO_RECUERDA}{f['case_id']}-{f['version'][:12]}", "aprobacion",
+                     tx["recuerda"].format(n=f["case_id"]) + "\n" + f["texto"],
+                     case_id=f["case_id"], version=f["version"])
+        con.commit()
+
+
+def meta_primera_respuesta(con):
+    """`sla_first_reply_minutes`, en minutos: la meta de los informes."""
+    try:
+        return int(merged_settings(con).get("sla_first_reply_minutes")
+                   or DEFAULT_CONFIG["sla_first_reply_minutes"])
+    except (TypeError, ValueError):
+        return int(DEFAULT_CONFIG["sla_first_reply_minutes"])
+
+
+def avisa_meta_vencida(con):
+    """Un aviso por cada caso abierto de la linea que paso su meta de primera respuesta sin
+    que nada le saliera al cliente, con la medida de los informes (`primeras_respuestas`).
+    Solo los que la pasaron dentro de `approval_hours`: uno viejo sigue esperando en el
+    tablero (sin esto, el primer tick despues de actualizar avisaba cada caso viejo). Uno del
+    que el dueno ya tiene aviso (su aprobacion o su bloqueo) no lleva otro: ya lo sabe, y el
+    de aprobacion tiene su recordatorio."""
+    meta_min = meta_primera_respuesta(con)
+    ventana = meta_min * 60 + horas_aprobacion(con) * 3600
+    desde = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - ventana))
+    alcance = merged_scope(con)
+    candidatos = [dict(r) for r in con.execute(
+        f"select * from caso c where account=? and created_at >= ? and etapa in "
+        f"({','.join('?' * len(ETAPAS_SIN_RESPUESTA))}) and not exists (select 1 from aviso a "
+        f"where a.tipo in ('sla', 'aprobacion', 'bloqueo') and a.case_id=c.case_id)",
+        (cuenta_activa(), desde, *ETAPAS_SIN_RESPUESTA)).fetchall()
+        if (alcance.get(r["chat_jid"]) or {}).get("mode") in MODOS_CON_META]
+    if not candidatos:
+        return
+    respuestas = primeras_respuestas(cuenta_activa())
+    tx = aviso_textos()
+    for caso in candidatos:
+        primero, salio = respuestas.get(caso["case_id"], (None, None))
+        if primero is None or salio is not None:
+            continue
+        espera = time.time() - primero
+        if not meta_min * 60 < espera <= ventana or caso_del_dueno(con, caso):
+            continue
+        aviso_encola(con, f"aviso-sla-{caso['case_id']}", "sla",
+                     tx["meta"].format(n=caso["case_id"], chat=nombre_del_chat(con, caso["chat_jid"]),
+                                       min=int(espera // 60), meta=meta_min,
+                                       x=pide_del_aviso(con, caso)),
+                     case_id=caso["case_id"])
+        con.commit()
 
 
 def envia_avisos(con, resumen=None, inicio=None):
@@ -10539,15 +10665,16 @@ def avisos_vigentes(con):
     """Los avisos de aprobacion que todavia se pueden contestar: enviados, sin contestar,
     dentro de `approval_hours`, y con el caso todavia en la version que avisaron. Los de esta
     linea y los de otra que salieron por esta (linea-viva V6): el dueno contesta donde le
-    llego."""
+    llego. Un aviso y su recordatorio (linea-viva-2, W4) son UNA propuesta: queda el mas
+    nuevo."""
     horas = horas_aprobacion(con)
-    salida = []
+    salida = {}
     for f in con.execute("select * from aviso where tipo='aprobacion' and (account=? or "
-                         "sale_por=?) and estado='enviado' order by at",
+                         "sale_por=?) and estado='enviado' order by at, rowid",
                          (cuenta_activa(), cuenta_activa())).fetchall():
         if aviso_estado(con, f, horas) is None:
-            salida.append(f)
-    return salida
+            salida[(f["case_id"], f["version"])] = f
+    return list(salida.values())
 
 
 def aviso_estado(con, aviso, horas):
@@ -10614,10 +10741,12 @@ def atiende_respuesta(con, m, relevado=None):
             aviso = vivos[0]
     else:
         # El aviso es de quien lo recibio: el que salio a otro numero no se contesta desde
-        # este. El de un caso de otra linea, si salio por esta.
+        # este. El de un caso de otra linea, si salio por esta. Entre el aviso y su
+        # recordatorio, el mas nuevo que salio: uno que todavia no salio no es el que leyo.
         aviso = con.execute("select * from aviso where tipo='aprobacion' and (account=? or "
                             "sale_por=?) and case_id=? and chat_jid=? "
-                            "order by at desc, rowid desc limit 1",
+                            "order by estado in ('pendiente', 'preparando', 'fallido'), "
+                            "at desc, rowid desc limit 1",
                             (cuenta_activa(), cuenta_activa(), r["caso"],
                              m.get("chat_jid"))).fetchone()
         if aviso is None:
@@ -10637,10 +10766,15 @@ def atiende_respuesta(con, m, relevado=None):
     try:
         porque = aviso_estado(con, aviso, horas_aprobacion(con))
         # Despues se toma el aviso: dos respuestas distintas (si en un proceso, no en otro)
-        # pueden haberlo visto vigente las dos, y decide solo la primera que lo toma.
+        # pueden haberlo visto vigente las dos, y decide solo la primera que lo toma. Lo
+        # mismo entre un aviso y su recordatorio: uno tomado frena al otro.
         if not porque:
             cur = con.execute("update aviso set estado='contestando', updated_at=? where "
-                              "req_id=? and estado='enviado'", (ahora_caso(), aviso["req_id"]))
+                              "req_id=? and estado='enviado' and not exists (select 1 from "
+                              "aviso o where o.tipo='aprobacion' and o.case_id=? and "
+                              "o.version=? and o.estado='contestando')",
+                              (ahora_caso(), aviso["req_id"], aviso["case_id"],
+                               aviso["version"]))
             con.commit()
             tomo_aviso = cur.rowcount == 1
             porque = None if tomo_aviso else "cambio"
@@ -10834,8 +10968,12 @@ def es_pregunta_del_agente(con, aviso):
 
 
 def aviso_contestado(con, aviso):
-    con.execute("update aviso set estado='contestado', updated_at=? where req_id=?",
-                (ahora_caso(), aviso["req_id"]))
+    """El aviso queda contestado, y con el su recordatorio (o el aviso del recordatorio):
+    los dos piden la misma decision. Uno que todavia no salio ya no sale."""
+    con.execute("update aviso set estado='contestado', updated_at=? where req_id=? or "
+                "(tipo='aprobacion' and case_id=? and version=? and "
+                "estado in ('pendiente', 'enviado'))",
+                (ahora_caso(), aviso["req_id"], aviso["case_id"], aviso["version"]))
     con.commit()
 
 
@@ -11423,10 +11561,19 @@ def cmd_tick(con, a):
         return None
     try:
         inicio = time.time()
+        previo = None
         try:
+            previo = tick_previo(con)
             tick_anota(con)
         except sqlite3.Error as exc:
             print(f"wa-scope: tick time not recorded: {exc}", file=sys.stderr)
+        # El worker muerto (linea-viva-2, W5): su aviso sale con los de abajo.
+        try:
+            tick_worker(con, resumen, previo)
+        except (sqlite3.Error, OSError) as exc:
+            if con.in_transaction:
+                con.rollback()
+            print(f"wa-scope: worker beat not checked: {exc}", file=sys.stderr)
         # La entrada de respaldo: el worker la dispara al llegar cada mensaje; si ese
         # evento se perdio, el minuto la recoge. Una falla suya no frena el resto.
         try:
@@ -14135,6 +14282,72 @@ def tick_anota(con):
     for clave in dict.fromkeys(("tick_at", rastro("tick_at"))):
         con.execute("insert into settings (key,value) values (?,?) on conflict(key) "
                     "do update set value=excluded.value", (clave, ahora_s))
+    con.commit()
+
+
+def tick_previo(con):
+    """Cuando corrio el tick anterior de ESTA linea (epoch), o None. Se lee antes de
+    `tick_anota`, que lo pisa."""
+    fila = con.execute("select value from settings where key=?", (rastro("tick_at"),)).fetchone()
+    try:
+        return float(fila["value"]) if fila else None
+    except (TypeError, ValueError):
+        return None
+
+
+# ── El worker muerto (odd/tasks/linea-viva-2.md, W5) ──────────────────────────────────────
+# El worker late cada 5 s en el storage del plugin (`workerBeat.at`, main.mjs). Con el muerto
+# se van el respaldo del tick y los avisos de las lineas (linea-viva V4 y V5), y nada lo
+# decia. El tick, que corre Orca, lo mira: un latido de mas de 3 minutos sale en el resumen
+# (`worker_muerto`), y al dueno le llega UN aviso por incidente (el incidente es ese latido)
+# y uno cuando vuelve. Sin la clave (el worker nunca corrio) no hay alerta.
+WORKER_MUERTO_S = 180
+# Para avisar, el tick anterior de la linea tuvo que correr al menos esto despues del ultimo
+# latido: si el tick tampoco corria, Orca recien arranca y el worker pudo no haber latido
+# todavia. El tick siguiente lo decide.
+WORKER_TICK_DESPUES_S = 60
+# El aviso del incidente que no salio antes de que el worker volviera ya no sale.
+WORKER_RECUPERADO = "worker-recovered"
+
+
+def latido_del_worker():
+    """(`at` tal cual, epoch) del ultimo latido del worker, o None sin uno que se entienda."""
+    latido = plugin_store_crudo().get("workerBeat")
+    at = latido.get("at") if isinstance(latido, dict) else None
+    if not isinstance(at, str) or not at:
+        return None
+    try:
+        return at, datetime.datetime.fromisoformat(at.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def tick_worker(con, resumen, previo):
+    """`worker_muerto` en el resumen, y el aviso del incidente o de que volvio."""
+    latido = latido_del_worker()
+    edad = time.time() - latido[1] if latido else None
+    resumen["worker_muerto"] = edad is not None and edad > WORKER_MUERTO_S
+    if latido is None or not numero_aprobacion():
+        return
+    tx = aviso_textos()
+    if resumen["worker_muerto"]:
+        if previo is None or previo - latido[1] < WORKER_TICK_DESPUES_S:
+            return
+        marca = hashlib.sha256(latido[0].encode()).hexdigest()[:16]
+        aviso_encola(con, f"aviso-worker-{marca}", "worker",
+                     tx["worker"].format(min=int(edad // 60)), version=marca)
+        con.commit()
+        return
+    ultimo = con.execute("select * from aviso where tipo='worker' order by at desc, rowid desc "
+                         "limit 1").fetchone()
+    if ultimo is None:
+        return
+    if ultimo["estado"] == "pendiente":
+        con.execute("update aviso set estado='fallido', motivo=?, updated_at=? where req_id=? "
+                    "and estado='pendiente'", (WORKER_RECUPERADO, ahora_caso(), ultimo["req_id"]))
+    elif ultimo["estado"] == "enviado":
+        aviso_encola(con, f"aviso-worker-ok-{ultimo['version']}", "worker-ok", tx["worker_ok"],
+                     version=ultimo["version"])
     con.commit()
 
 
