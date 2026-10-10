@@ -1071,6 +1071,16 @@ const PANELES = [
     stub: { veredictoAccion: { ok: false, code: 'send-approve-not-owner' }, demoraVeredicto: 0 }
   },
   {
+    // Los avisos al dueno que no salieron (linea-viva-2, W4): arriba del tablero, con el caso,
+    // el tipo, el motivo en palabras y Ver caso. Uno con un motivo que el panel no conoce.
+    nombre: 'tablero-avisos-fallidos', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, idiomas: ['pt'], guion: ABRIR_TABLERO, espera: 400,
+    datos: conTablero(tableroDe(TABLERO_CASOS, { notices_failed: [
+      { case_id: 1, type: 'aprobacion', reason: 'send-wrong-line', at: minutos(4) },
+      { case_id: 11, type: 'bloqueo', reason: 'approval-expired', at: minutos(95) },
+      { case_id: 2, type: 'aprobacion', reason: 'send-sin-codigo-conocido', at: minutos(1) }] }))
+  },
+  {
     // Varias lineas a la vez (L4): el tablero con el selector de linea, mirando la segunda.
     nombre: 'tablero-lineas', archivo: 'activity.html', anchos: ANCHOS,
     enTodosLosAnchos: true, espera: 800, datos: TABLERO_DOS_LINEAS,
