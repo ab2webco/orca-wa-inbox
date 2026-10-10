@@ -13126,6 +13126,75 @@ if NODE:
            f"{p.stdout[:300]}")
 
 
+# ── El tick de cada linea (odd/tasks/linea-viva.md, V2) ──────────────────────────────────
+# Visto en vivo: la segunda linea no se juzgo en seis horas y media, y nada lo dijo. El
+# `tick_at` era uno solo: el tick de una linea tapaba que el de la otra no corria, y la
+# salida junta decia `busy` solo con TODAS ocupadas. Cada linea anota su propio tick, el
+# precheck del cron lee el de su linea, y la salida junta nombra las lineas ocupadas.
+def tick_at_de(home, clave):
+    fila = db_de(home).execute("select value from settings where key=?", (clave,)).fetchone()
+    return float(fila["value"]) if fila else None
+
+
+def pon_tick_at(home, clave, hace_s):
+    con = db_de(home)
+    con.execute("insert into settings (key, value) values (?, ?) on conflict(key) do update "
+                "set value=excluded.value", (clave, str(time.time() - hace_s)))
+    con.commit()
+    con.close()
+
+
+print("\nel tick de cada linea (V2)")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "TA1", "@duenio no abre el login", 5, mencion=True)])
+        llegan(home, SEGUNDA, [msg(SOPORTE, "TB1", "@duenio no llega la factura", 5,
+                                   mencion=True)], activar=False)
+        suma_linea(home, SEGUNDA)
+        p, r = tick(home)
+        ok("cada linea anota su propio tick, y el global sigue",
+           tick_at_de(home, f"tick_at@{A}") and tick_at_de(home, f"tick_at@{SEGUNDA}")
+           and tick_at_de(home, "tick_at"), f"{p.stdout[:300]} {p.stderr[-300:]}")
+        ok("sin ninguna ocupada, la salida junta lo dice con una lista vacia",
+           isinstance(r, dict) and r.get("lineas_ocupadas") == [], f"{p.stdout[:300]}")
+        import fcntl
+        candado = open(pathlib.Path(home) / ".wa-inbox" / "tick.lock", "a+")
+        fcntl.flock(candado.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            p, r = tick(home)
+        finally:
+            candado.close()
+        ok("con el tick de la principal ocupado, la salida junta la nombra",
+           isinstance(r, dict) and r.get("lineas_ocupadas") == [A] and r.get("busy") is False,
+           f"{p.stdout[:300]}")
+
+        # El precheck del cron de la otra linea: su tick no corre aunque el de la principal si.
+        cid = str(jsl(home, SEGUNDA, "caso", "crear", "--chat", SOPORTE, "--stanza", "TB9",
+                      "--actor", "automatizacion")[0]["case_id"])
+        ultima_corrida_agente(home, "activo")
+        pon_tick_at(home, "tick_at", 10)
+        pon_tick_at(home, f"tick_at@{A}", 10)
+        pon_tick_at(home, f"tick_at@{SEGUNDA}", 10 * 60)
+
+        def precheck_en(linea):
+            return corre(home, "pending", "--needs-agent", "--precheck",
+                         extra={"WA_INBOX_LINEA": linea})
+
+        p = precheck_en(SEGUNDA)
+        ok("el tick de la otra linea parado: su cron sigue aunque la principal tickeo hace poco",
+           p.returncode == 0 and int(cid) in json.loads(p.stdout or "{}").get("cases", []),
+           f"{p.returncode} {p.stdout[:200]} {p.stderr[-200:]}")
+        pon_tick_at(home, f"tick_at@{SEGUNDA}", 10)
+        ok("con su propio tick al dia, su precheck sale 1, callado",
+           precheck_en(SEGUNDA).returncode == 1)
+        con = db_de(home)
+        con.execute("delete from settings where key=?", (f"tick_at@{SEGUNDA}",))
+        con.commit()
+        con.close()
+        ok("sin su propia marca todavia (una version de antes), vale la global",
+           precheck_en(SEGUNDA).returncode == 1)
+
+
 # ── Ajustes por linea (odd/tasks/ajustes-por-linea.md, A1-A3) ──────────────────────────
 # La principal guarda sus ajustes en la raiz, como siempre; otra linea, los suyos en
 # `ajustesPorLinea[<numero>]`. Cada corrida lee los de SU linea, y la corrida de una linea

@@ -13700,16 +13700,27 @@ CRON_ARREGLA = ("sin-cli", "sin-espacio", "sin-prompt")
 
 
 def tick_anota(con):
-    """Cuando corrio el tick: lo lee el precheck del cron."""
-    con.execute("insert into settings (key,value) values ('tick_at',?) on conflict(key) "
-                "do update set value=excluded.value", (str(time.time()),))
+    """Cuando corrio el tick: lo lee el precheck del cron. Cada linea anota el suyo
+    (`tick_at@<cuenta>`, linea-viva V2): con uno solo, el tick de una linea tapaba que el de
+    la otra no corria (visto en vivo: seis horas y media sin juzgar nada). El global sigue,
+    para lo que lo lee de antes."""
+    ahora_s = str(time.time())
+    for clave in dict.fromkeys(("tick_at", rastro("tick_at"))):
+        con.execute("insert into settings (key,value) values (?,?) on conflict(key) "
+                    "do update set value=excluded.value", (clave, ahora_s))
     con.commit()
 
 
 def tick_se_encarga(con):
-    """Si el tick abre al agente de casos: corrio hace poco y su ultimo lanzamiento no
-    fallo por algo que el cron arregla. Sin dato, no: el cron es el respaldo."""
-    fila = con.execute("select value from settings where key='tick_at'").fetchone()
+    """Si el tick de ESTA linea abre al agente de casos: corrio hace poco y su ultimo
+    lanzamiento no fallo por algo que el cron arregla. Sin dato, no: el cron es el respaldo.
+
+    Sin la marca de la linea todavia vale la global: es el minuto despues de actualizar,
+    antes de que el tick de la linea corra con esta version, y sin eso el cron de cada linea
+    se despertaria (con un espacio nuevo de Orca) por una marca que nadie pudo escribir."""
+    fila = (con.execute("select value from settings where key=?",
+                        (rastro("tick_at"),)).fetchone()
+            or con.execute("select value from settings where key='tick_at'").fetchone())
     try:
         if not fila or time.time() - float(fila["value"]) > TICK_VIVO_S:
             return False
@@ -13849,7 +13860,8 @@ def _json_o_nada(texto):
 def junta_ticks(por_linea):
     """UNA linea JSON para el tick de todas las lineas: los conteos sumados, las banderas
     de cualquiera, y el resumen de cada una bajo `lineas`. `busy` es que TODAS estaban
-    ocupadas: con una libre, el minuto corrio."""
+    ocupadas: con una libre, el minuto corrio. `lineas_ocupadas` dice cuales lo estaban:
+    sin eso, una linea ocupada (o colgada) junto a una libre no se veia (linea-viva, V2)."""
     junto = {}
     for r in por_linea.values():
         for clave, valor in (r if isinstance(r, dict) else {}).items():
@@ -13859,6 +13871,8 @@ def junta_ticks(por_linea):
                 junto[clave] = junto.get(clave, 0) + valor
     junto["busy"] = all(isinstance(r, dict) and r.get("busy") is True
                         for r in por_linea.values())
+    junto["lineas_ocupadas"] = [linea for linea, r in por_linea.items()
+                                if isinstance(r, dict) and r.get("busy") is True]
     junto["lineas"] = por_linea
     return junto
 
