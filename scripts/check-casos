@@ -13626,6 +13626,23 @@ if NODE:
         ok("el latido del sidecar, en las dos",
            all(f.get("latido_hace_s") is not None and 0 <= f["latido_hace_s"] < 600
                for f in (a, b)), f"{s}")
+        # El latido de cada linea es el suyo (V8): con el global fresco, la linea cuyo
+        # sidecar no late se ve parada y no viva.
+        ahora_s = int(time.time())
+        cap = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+        try:
+            for llave, valor in (("sidecar_beat", ahora_s),
+                                 (f"sidecar_beat@{A}", ahora_s - 20 * 60),
+                                 (f"sidecar_beat@{SEGUNDA}", ahora_s)):
+                cap.execute("insert into store_meta (key,value) values (?,?) on conflict(key) "
+                            "do update set value=excluded.value", (llave, str(valor)))
+            cap.commit()
+        finally:
+            cap.close()
+        s = salud()
+        ok("el latido de cada linea es el suyo, no el global que late la otra",
+           (s.get(A, {}).get("latido_hace_s") or 0) >= 20 * 60 - 5
+           and (s.get(SEGUNDA, {}).get("latido_hace_s") or 0) < 60, f"{s}")
         ok("leerla no escribe nada en la base",
            hashlib.sha256(ruta_db.read_bytes()).hexdigest() == antes_db)
         ok("una linea parada no es un error: sale 0", lineas_salud(home)[0].returncode == 0)

@@ -14002,8 +14002,10 @@ def cmd_lineas_salud(con, a):
         fuente = None
     if fuente is not None:
         try:
-            latido = wa_store.ultimo_latido(fuente)
             for n, cuenta in enumerate(wa_store.lineas_activas(fuente)):
+                # El de ESA linea (V8): el global lo late cualquiera, y con dos lineas la
+                # viva hacia ver viva a la caida.
+                latido = wa_store.ultimo_latido(fuente, cuenta)
                 tick = con.execute("select value from settings where key=?",
                                    (rastro("tick_at", cuenta),)).fetchone()
                 sin = sin_juzgar_de_linea(con, fuente, cuenta, ahora_s)
