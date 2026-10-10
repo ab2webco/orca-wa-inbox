@@ -122,12 +122,15 @@ human, and when it cannot be recovered the owner is told.
       the doctor reports each line; `lineas-salud` reads each line's own beat. RED: 15 in
       almacen (`sidecar_vivo() takes 1 position`), wa-send `send-timeout` for a dead line,
       and 1 FALLA in "la salud de cada linea (V3)". GREEN: almacen 335/335, envio 112/112,
-      check-casos 2107/2108 (the one left is P3 below).
+      check-casos 2107/2108 (the one left is P3, see V7).
 - [x] V7 Checks green without the full screenshot matrix; version bump; PR ready. Every
       `npm run check` step except `npm run shots`, on the integrated branch with no other
-      load: check-casos 2108/2108 (P3 passes; its earlier failure came from running beside
-      other suites), panels 1668/1668, worker 653/653, almacen 335/335, envio 112/112, and
-      every other suite green. Version 4.29.0, after PR #50's 4.28.0.
+      load: check-casos 2108/2108, panels 1668/1668, worker 653/653, almacen 335/335, envio 112/112, and
+      every other suite green. P3's intermittent failure was the fake `orca` in check-casos:
+      the two lines' ticks call it at once and it read `estado.json` half written by the
+      other (63 of 300 concurrent calls failed; with a file lock, 0). Both fake `orca`s now
+      lock, and check-casos passes 2108/2108 after main (with #50) was merged in. Version
+      4.29.0, after PR #50's 4.28.0.
 
 ## Acceptance
 

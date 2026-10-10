@@ -3719,6 +3719,13 @@ def orca_falso(carpeta, corridas=(), automatizaciones=None, worktrees=None, term
 import json, os, sys
 d = os.path.dirname(os.path.abspath(__file__))
 a = sys.argv[1:]
+# Los ticks de dos lineas llaman a la vez: sin candado una lee estado.json a medio escribir.
+candado = open(os.path.join(d, "estado.lock"), "w")
+try:
+    import fcntl
+    fcntl.flock(candado.fileno(), fcntl.LOCK_EX)
+except ImportError:
+    pass
 open(os.path.join(d, "calls.log"), "a").write(" ".join(a) + "\\n")
 ruta = os.path.join(d, "estado.json")
 e = json.load(open(ruta))
@@ -6114,6 +6121,14 @@ def orca_despacho(carpeta, worktrees=(WT_ALFA,), vivos=("term_worker1",), falla=
 import json, os, sys
 d = os.path.dirname(os.path.abspath(__file__))
 a = sys.argv[1:]
+# Con dos lineas, sus ticks llaman a la vez: sin candado una lee estado.json a medio
+# escribir por la otra y la llamada falla (P3 caia 1 de cada 5).
+candado = open(os.path.join(d, "estado.lock"), "w")
+try:
+    import fcntl
+    fcntl.flock(candado.fileno(), fcntl.LOCK_EX)
+except ImportError:
+    pass
 with open(os.path.join(d, "calls.jsonl"), "a") as f:
     f.write(json.dumps(a) + "\\n")
 e = json.load(open(os.path.join(d, "estado.json")))
