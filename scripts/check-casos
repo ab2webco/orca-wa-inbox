@@ -13256,6 +13256,121 @@ if NODE:
            precheck_en(SEGUNDA).returncode == 1)
 
 
+# ── La salud de cada linea (odd/tasks/linea-viva.md, V3) ─────────────────────────────────
+# Lo que el worker lee cada minuto para saber si una linea esta atendida: hace cuanto corrio
+# su tick, cuantos mensajes de sus conversaciones autorizadas llegaron y nadie juzgo (ni caso
+# ni veredicto), el mas viejo de esos, y el latido del sidecar. Solo lectura, sin Jev, sin red
+# y sin la CLI de Orca: corre cada minuto.
+def lineas_salud(home, extra=None):
+    """(proceso, objeto) de `lineas-salud --json`: UN objeto, `{"at", "lineas"}`."""
+    p = corre(home, "lineas-salud", extra=extra)
+    try:
+        return p, json.loads(p.stdout)
+    except ValueError:
+        return p, None
+
+
+LLAVES_SALUD = {"cuenta", "principal", "tick_hace_s", "sin_juzgar", "sin_juzgar_hace_s",
+                "latido_hace_s"}
+
+
+print("\nla salud de cada linea (V3)")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        ventana_min = 12 * 60
+        llegan(home, A, [
+            msg(SOPORTE, "HA1", "@duenio no abre el login", 10, mencion=True),
+            # Una linea suelta de un grupo sin Jev nunca se juzga: no es una linea parada.
+            msg(SOPORTE, "HA2", "y en el otro equipo tampoco", 9),
+            msg(AJENO, "HA3", "@duenio esto no esta autorizado", 8, mencion=True),
+            msg(OPERACIONES, "HA4", "@duenio esto esta en off", 8, mencion=True),
+            msg(FACTURACION, "HA5", "@duenio esto es de antes de la ventana",
+                ventana_min + 30, mencion=True)])
+        llegan(home, SEGUNDA, [msg(SOPORTE, "HB1", "@duenio no llega la factura", 5,
+                                   mencion=True)], activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+        js(home, "set", FACTURACION, "--provider", "ninguno", "--mode", "borrador")
+        js(home, "set", OPERACIONES, "--provider", "ninguno", "--mode", "borrador")
+        js(home, "mode", OPERACIONES, "off")
+        jsl(home, SEGUNDA, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+
+        def salud():
+            return {f["cuenta"]: f for f in (lineas_salud(home)[1] or {}).get("lineas", [])}
+
+        p, r = lineas_salud(home)
+        ok("un objeto con `at` y una fila por linea activa, la principal primero",
+           p.returncode == 0 and isinstance(r, dict) and set(r) == {"at", "lineas"}
+           and abs(r["at"] - time.time()) < 60
+           and [(f["cuenta"], f["principal"]) for f in r["lineas"]]
+           == [(A, True), (SEGUNDA, False)], f"{p.returncode} {p.stdout[:300]}")
+        s = salud()
+        ok("cada fila con las llaves del contrato",
+           all(set(f) == LLAVES_SALUD for f in s.values()), f"{s}")
+        ok("un tick que nunca corrio es null, no cero",
+           all(f["tick_hace_s"] is None for f in s.values()), f"{s}")
+
+        jsl(home, SEGUNDA, "ingest")
+        pon_tick_at(home, "tick_at", 20)
+        pon_tick_at(home, f"tick_at@{A}", 15 * 60)
+        pon_tick_at(home, f"tick_at@{SEGUNDA}", 20)
+        ruta_db = pathlib.Path(home) / ".wa-inbox" / "scope.db"
+        antes_db = hashlib.sha256(ruta_db.read_bytes()).hexdigest()
+        s = salud()
+        a, b = s.get(A, {}), s.get(SEGUNDA, {})
+        ok("la linea parada: su propio tick viejo, aunque el global sea de hace poco",
+           a.get("tick_hace_s") is not None and 15 * 60 - 5 <= a["tick_hace_s"] <= 15 * 60 + 30,
+           f"{a}")
+        ok("y cuenta solo el mensaje autorizado y de la ventana que nadie juzgo",
+           a.get("sin_juzgar") == 1, f"{a}")
+        ok("con la edad del mas viejo de esos",
+           a.get("sin_juzgar_hace_s") is not None
+           and 10 * 60 - 5 <= a["sin_juzgar_hace_s"] <= 10 * 60 + 90, f"{a}")
+        ok("la linea sana: su tick al dia y nada sin juzgar",
+           b.get("tick_hace_s") is not None and b["tick_hace_s"] < 60
+           and b.get("sin_juzgar") == 0 and b.get("sin_juzgar_hace_s") is None, f"{b}")
+        ok("el latido del sidecar, en las dos",
+           all(f.get("latido_hace_s") is not None and 0 <= f["latido_hace_s"] < 600
+               for f in (a, b)), f"{s}")
+        ok("leerla no escribe nada en la base",
+           hashlib.sha256(ruta_db.read_bytes()).hexdigest() == antes_db)
+        ok("una linea parada no es un error: sale 0", lineas_salud(home)[0].returncode == 0)
+        p, r = lineas_salud(home, extra={"WA_INBOX_LINEA": SEGUNDA})
+        ok("la corrida de una linea igual las reporta todas, en UN objeto, sin repartirse",
+           p.returncode == 0 and len(p.stdout.strip().splitlines()) == 1
+           and [f["cuenta"] for f in (r or {}).get("lineas", [])] == [A, SEGUNDA],
+           f"{p.returncode} {p.stdout[:300]} {p.stderr[-300:]}")
+        js(home, "ingest")
+        a = salud().get(A, {})
+        ok("con la linea atendida, ya no queda nada sin juzgar",
+           a.get("sin_juzgar") == 0 and a.get("sin_juzgar_hace_s") is None, f"{a}")
+
+    # Una sola linea vinculada: su fila, sin reparto.
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(PERSONA, "HU1", "no me llega la factura", 7)])
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        filas = (lineas_salud(home)[1] or {}).get("lineas", [])
+        ok("con una sola linea y sin tick todavia: el directo cuenta sin juzgar",
+           len(filas) == 1 and filas[0]["tick_hace_s"] is None and filas[0]["sin_juzgar"] == 1,
+           f"{filas}")
+        tick(home)
+        filas = (lineas_salud(home)[1] or {}).get("lineas", [])
+        ok("con una sola linea, una sola fila: la principal, su tick, y nada sin juzgar tras "
+           "el tick", len(filas) == 1 and filas[0]["cuenta"] == A and filas[0]["principal"]
+           and filas[0]["tick_hace_s"] is not None and filas[0]["tick_hace_s"] < 60
+           and filas[0]["sin_juzgar"] == 0 and filas[0]["sin_juzgar_hace_s"] is None,
+           f"{filas}")
+
+# Sin almacen (una instalacion de antes de las lineas, o que nunca vinculo): nada que mirar,
+# y mirar no crea la base.
+with tempfile.TemporaryDirectory() as home:
+    p, r = lineas_salud(home)
+    ok("sin almacen, `lineas` vacia, sale 0 y no crea scope.db",
+       p.returncode == 0 and isinstance(r, dict) and r.get("lineas") == [] and "at" in r
+       and not (pathlib.Path(home) / ".wa-inbox" / "scope.db").exists(),
+       f"{p.returncode} {p.stdout[:200]} {p.stderr[-300:]}")
+
+
 # ── Ajustes por linea (odd/tasks/ajustes-por-linea.md, A1-A3) ──────────────────────────
 # La principal guarda sus ajustes en la raiz, como siempre; otra linea, los suyos en
 # `ajustesPorLinea[<numero>]`. Cada corrida lee los de SU linea, y la corrida de una linea

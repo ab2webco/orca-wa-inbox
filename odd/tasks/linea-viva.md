@@ -71,10 +71,25 @@ human, and when it cannot be recovered the owner is told.
 - [ ] A0 Audit every silent failure point in the chain:
       capture → ingest/Jev → case → agent → send → notice → follow-up.
       For each point, record what detects it today.
-- [ ] V1 Jev skip never closes a client's request-class message (scripts/check-casos).
-- [ ] V2 Per-line `tick_at`, a per-line `tick_se_encarga`, and busy lines in the combined
-      output (scripts/check-casos).
-- [ ] V3 Per-line health read (scripts/check-casos).
+- [x] V1 Jev skip never closes a client's request-class message (scripts/check-casos).
+      `skip_que_vale` in the verdict path and before caching. RED: 4 FALLA in "jev: el skip
+      no cierra el pedido de un cliente (V1)" (group bug report: no case; cached verdict
+      `nothing`; direct closed `cerrado`; `veredicto_de_jev` returned `cerrar`); the owner
+      check already passed. GREEN: that section and everything before it, 291/291.
+- [x] V2 Per-line `tick_at`, a per-line `tick_se_encarga`, and busy lines in the combined
+      output (scripts/check-casos). RED: 4 FALLA in "el tick de cada linea (V2)" (no
+      `tick_at@<account>`, no `lineas_ocupadas`, the second line's precheck said 1 with its
+      own tick stale). GREEN: 352/352 through that section.
+- [x] V3 Per-line health read (scripts/check-casos). `wa-scope lineas-salud --json`: one
+      object `{at, lineas}`, each line with `cuenta`, `principal`, `tick_hace_s`,
+      `sin_juzgar`, `sin_juzgar_hace_s`, `latido_hace_s`; read-only connection, no fan-out,
+      exit 0. RED: `invalid choice: 'lineas-salud'`. GREEN: 374/374 through "la salud de cada
+      linea (V3)".
+- Install variants covered (any install, not only this owner's): Jev without a key and Jev
+  turned off (V1 is a no-op, no request to Jev); `local` account without a store (one
+  `tick_at` key, precheck as before); a single linked line (its key plus the global, tick
+  output unchanged, one `lineas-salud` row); no store at all (`lineas: []`, no scope.db
+  created). The test lock follows `tick_toma` on win32.
 - [ ] V4 Worker backup tick per line, plus the persistent per-line failure log
       (test/worker.test.mjs).
 - [ ] V5 Owner notice and panel state for a line still unattended, or a run stuck in
