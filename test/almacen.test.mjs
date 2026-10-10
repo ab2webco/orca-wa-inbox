@@ -850,6 +850,116 @@ console.log('\nT16c: el doctor no da la linea por muda durante un reinicio')
   almacen.latir()
 }
 
+// ── linea-viva V8: el latido es de CADA linea, no del almacen ───────────────────────
+// Visto en vivo (2026-10-09): con dos lineas, `sidecar_beat` es UNA llave que escriben
+// los dos sidecars cada segundo. Una linea caida, desvinculada o reconectando parecia
+// viva porque la otra mantenia fresco el latido: `wa-send` contestaba "se vencio el
+// plazo" en vez de "no hay transporte", y el doctor y el tick la daban por buena.
+console.log('\nlinea-viva V8: el latido y la conexion de cada linea')
+{
+  const A = 'pn:15550000001'
+  const B = 'pn:15550000002'
+  const casa = nueva()
+  const alm = abrirAlmacen(rutaAlmacen({ HOME: casa }))
+  alm.registrarLinea({ cuenta: A, pn: '15550000001@s.whatsapp.net', nombre: 'Linea A' })
+  alm.registrarLinea({ cuenta: B, pn: '15550000002@s.whatsapp.net', nombre: 'Linea B' })
+  alm.activarLinea(A)
+  alm.sumarLinea(B)
+  const meta = (llave) => alm.con.prepare('select value from store_meta where key=?')
+    .get(llave)?.value
+  // Lo que contesta `wa_store` en un proceso aparte, como lo llaman wa-send y el tick.
+  const pregunta = (home, expresion) => {
+    const r = spawnSync('python3', ['-c',
+      'import sys; sys.path.insert(0, sys.argv[1]); import wa_store; ' +
+      `con = wa_store.abrir(); print(${expresion})`, join(RAIZ, 'bin')],
+    { env: { ...process.env, HOME: home, PYTHONDONTWRITEBYTECODE: '1' }, encoding: 'utf8' })
+    return `${r.stdout.trim()}${r.stderr.trim() ? ` ${r.stderr.trim()}` : ''}`
+  }
+  const ahora = Date.now()
+
+  alm.latir(ahora, { cuenta: A, conectado: true })
+  ok('cada sidecar anota el latido de SU linea',
+    meta(`sidecar_beat@${A}`) === String(Math.floor(ahora / 1000)), meta(`sidecar_beat@${A}`))
+  ok('y si su linea esta conectada', meta(`sidecar_conectado@${A}`) === '1',
+    meta(`sidecar_conectado@${A}`))
+  ok('y sigue anotando el latido de siempre, para los lectores de antes',
+    meta('sidecar_beat') === String(Math.floor(ahora / 1000)), meta('sidecar_beat'))
+
+  // B dejo de latir hace 4 minutos; A sigue latiendo, y con eso la llave global.
+  alm.latir(ahora - 4 * 60 * 1000, { cuenta: B, conectado: true })
+  alm.latir(ahora, { cuenta: A, conectado: true })
+  ok('B sin latir NO esta viva aunque A mantenga fresco el latido global',
+    pregunta(casa, `wa_store.sidecar_vivo(con, ${JSON.stringify(B)})`) === 'False',
+    pregunta(casa, `wa_store.sidecar_vivo(con, ${JSON.stringify(B)})`))
+  ok('y esta muda para el doctor',
+    pregunta(casa, `wa_store.sidecar_mudo(con, ${JSON.stringify(B)})`) === 'True',
+    pregunta(casa, `wa_store.sidecar_mudo(con, ${JSON.stringify(B)})`))
+  ok('A no se entera: sigue viva',
+    pregunta(casa, `wa_store.sidecar_vivo(con, ${JSON.stringify(A)})`) === 'True',
+    pregunta(casa, `wa_store.sidecar_vivo(con, ${JSON.stringify(A)})`))
+  ok('sin linea, la pregunta de siempre (el latido global) no cambia',
+    pregunta(casa, 'wa_store.sidecar_vivo(con)') === 'True',
+    pregunta(casa, 'wa_store.sidecar_vivo(con)'))
+
+  // El doctor: el renglon del transporte conserva su forma y su verde (A lee), y dice
+  // cual linea esta muda, con el detalle por linea.
+  const doctor = leerJson(casa, ['doctor'])
+  const fila = (doctor.filas || []).find((f) => f.check === 'a message transport')
+  ok('el doctor sigue en verde mientras alguna linea lee',
+    fila && fila.ok === true && fila.code === 'no-transport', JSON.stringify(fila))
+  const porLinea = Object.fromEntries((fila?.lineas || []).map((l) => [l.account, l]))
+  ok('y trae el detalle de cada linea: B muda',
+    porLinea[B]?.ok === false && porLinea[B]?.code === 'transport-silent',
+    JSON.stringify(fila?.lineas))
+  ok('A viva', porLinea[A]?.ok === true, JSON.stringify(fila?.lineas))
+  ok('el texto nombra la linea muda', (fila?.detalle || '').includes(B), fila?.detalle)
+
+  // B late pero su socket esta caido (reconectando, o desvinculada): no hay quien mande.
+  alm.latir(ahora, { cuenta: B, conectado: false })
+  ok('B latiendo pero desconectada NO esta viva para mandar',
+    pregunta(casa, `wa_store.sidecar_vivo(con, ${JSON.stringify(B)})`) === 'False',
+    pregunta(casa, `wa_store.sidecar_vivo(con, ${JSON.stringify(B)})`))
+  ok('pero no esta muda: el proceso corre, es un reinicio de la conexion',
+    pregunta(casa, `wa_store.sidecar_mudo(con, ${JSON.stringify(B)})`) === 'False',
+    pregunta(casa, `wa_store.sidecar_mudo(con, ${JSON.stringify(B)})`))
+  alm.latir(ahora, { cuenta: B, conectado: true })
+  ok('control: B conectada y latiendo vuelve a estar viva',
+    pregunta(casa, `wa_store.sidecar_vivo(con, ${JSON.stringify(B)})`) === 'True',
+    pregunta(casa, `wa_store.sidecar_vivo(con, ${JSON.stringify(B)})`))
+  alm.cerrar()
+
+  // Una linea cuyo sidecar no arranco nunca desde que los sidecars anotan por linea:
+  // su ausencia es "no late", no "pregunta al latido global", que es de la otra.
+  const casaC = nueva()
+  const almC = abrirAlmacen(rutaAlmacen({ HOME: casaC }))
+  almC.registrarLinea({ cuenta: A, pn: '15550000001@s.whatsapp.net', nombre: 'Linea A' })
+  almC.activarLinea(A)
+  almC.sumarLinea(B)
+  almC.latir(Date.now(), { cuenta: A, conectado: true })
+  ok('una linea sin latido propio, con otra que si lo anota, no esta viva',
+    pregunta(casaC, `wa_store.sidecar_vivo(con, ${JSON.stringify(B)})`) === 'False',
+    pregunta(casaC, `wa_store.sidecar_vivo(con, ${JSON.stringify(B)})`))
+  ok('y nunca latio', pregunta(casaC, `wa_store.ultimo_latido(con, ${JSON.stringify(B)})`) ===
+    'None', pregunta(casaC, `wa_store.ultimo_latido(con, ${JSON.stringify(B)})`))
+  almC.cerrar()
+
+  // El sidecar de antes: solo la llave global. Una linea sola se comporta como siempre.
+  const casaV = nueva()
+  const almV = abrirAlmacen(rutaAlmacen({ HOME: casaV }))
+  almV.registrarLinea({ cuenta: A, pn: '15550000001@s.whatsapp.net', nombre: 'Linea A' })
+  almV.activarLinea(A)
+  almV.latir()
+  ok('sidecar de antes (solo la llave global): la linea sigue viva',
+    pregunta(casaV, `wa_store.sidecar_vivo(con, ${JSON.stringify(A)})`) === 'True',
+    pregunta(casaV, `wa_store.sidecar_vivo(con, ${JSON.stringify(A)})`))
+  almV.latir(Date.now() - 4 * 60 * 1000)
+  ok('y con el latido global viejo, muerta, como siempre',
+    pregunta(casaV, `wa_store.sidecar_vivo(con, ${JSON.stringify(A)})`) === 'False' &&
+    pregunta(casaV, `wa_store.sidecar_mudo(con, ${JSON.stringify(A)})`) === 'True',
+    pregunta(casaV, `wa_store.sidecar_mudo(con, ${JSON.stringify(A)})`))
+  almV.cerrar()
+}
+
 console.log('\nF2: tope de retencion, con desalojo VISIBLE')
 {
   const podado = almacen.podar({ max: 3, dias: 36500, ahora: (T0 + 3000) * 1000 })

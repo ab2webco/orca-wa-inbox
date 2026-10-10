@@ -942,11 +942,19 @@ class Almacen {
    *  sidecar ocupado se ven igual —una fila que no avanza— y la CLI solo podria
    *  contestar "se vencio el plazo" a las dos cosas. Son acciones DISTINTAS del dueno
    *  (arrancar Orca, o mirar por que WhatsApp rechazo), asi que son codigos distintos
-   *  (§11-E2), y esto es lo que los separa. Un solo `update`, sin contenido. */
-  latir (ahora = Date.now()) {
-    this.con.prepare('insert into store_meta (key,value) values (?,?) ' +
-      'on conflict(key) do update set value=excluded.value')
-      .run('sidecar_beat', String(Math.floor(ahora / 1000)))
+   *  (§11-E2), y esto es lo que los separa. Un solo `update`, sin contenido.
+   *
+   *  Con `cuenta`, ademas el latido de ESA linea y si su socket esta abierto
+   *  (`sidecar_beat@<cuenta>`, `sidecar_conectado@<cuenta>`): con dos lineas la llave
+   *  global la escriben los dos sidecars, y una linea caida o reconectando parecia viva
+   *  porque la otra la mantenia fresca (linea-viva V8). La global sigue, para los
+   *  lectores de antes. */
+  latir (ahora = Date.now(), { cuenta = null, conectado = false } = {}) {
+    const segundos = String(Math.floor(ahora / 1000))
+    this.anotarMeta('sidecar_beat', segundos)
+    if (!cuenta) return
+    this.anotarMeta(`sidecar_beat@${cuenta}`, segundos)
+    this.anotarMeta(`sidecar_conectado@${cuenta}`, conectado === true ? '1' : '0')
   }
 
   /** Una peticion de envio. La usa el sidecar solo en pruebas —quien encola de verdad

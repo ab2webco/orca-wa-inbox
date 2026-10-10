@@ -657,8 +657,12 @@ create table if not exists aviso (
   tipo      text not null,        -- aprobacion | bloqueo | respuesta
   case_id   integer,
   version   text,                 -- la propuesta_version que el aviso pide aprobar
-  account   text not null,        -- la linea desde la que sale
+  account   text not null,        -- la linea del caso: su tick lo encola, lo vence y lo manda
   chat_jid  text not null,        -- el directo del numero de aprobacion
+  -- La linea por la que sale de verdad (linea-viva V6): la del caso si alli esta el chat del
+  -- dueno, si no otra vinculada que lo alcanza. Ahi se reconoce su respuesta. Null es
+  -- `account`, como antes.
+  sale_por  text,
   texto     text not null,
   -- preparando (la respuesta ya se tomo, falta su confirmacion) | pendiente | enviado |
   -- contestando (una respuesta lo tomo y se esta aplicando) |
@@ -694,8 +698,8 @@ create index if not exists ix_lid_migracion on lid_migracion(account, hacia);
 """
 
 
-def plugin_store_read():
-    scope = plugin_store_raw().get("scope")
+def plugin_store_read(linea=None):
+    scope = plugin_store_raw(linea).get("scope")
     return scope if isinstance(scope, dict) else {}
 
 
@@ -930,12 +934,12 @@ def ahora():
     return time.strftime("%Y-%m-%d %H:%M")
 
 
-def rastro(name):
-    """La llave del rastro de una corrida EN la linea activa. El lock sigue siendo uno
-    solo —una corrida a la vez, sea de la linea que sea— pero como le fue es de cada
-    numero: el resumen "arranco y no volvio" del numero viejo no es del nuevo (T9). La
+def rastro(name, cuenta=None):
+    """La llave del rastro de una corrida EN la linea activa (o en `cuenta`). El lock sigue
+    siendo uno solo —una corrida a la vez, sea de la linea que sea— pero como le fue es de
+    cada numero: el resumen "arranco y no volvio" del numero viejo no es del nuevo (T9). La
     linea de siempre, `local`, conserva la llave de siempre."""
-    cuenta = cuenta_activa()
+    cuenta = cuenta or cuenta_activa()
     return name if cuenta == CUENTA_LOCAL else f"{name}@{cuenta}"
 
 
@@ -1470,12 +1474,13 @@ def members_al_panel(miembros, entrada=None, nombres=None):
              "role": miembros[j]} for j in orden]
 
 
-def merged_scope(con):
+def merged_scope(con, cuenta=None):
     """Lo del panel manda sobre lo del CLI cuando el mismo chat esta en los dos:
-    el panel es lo que el usuario acaba de tocar."""
+    el panel es lo que el usuario acaba de tocar. `cuenta` nombra otra linea que la de esta
+    corrida: la salud de las lineas (V3) las lee todas desde un solo proceso."""
     # SOLO la linea vinculada ahora (T9). Lo de otro numero sigue en la base, intacto,
     # pero no autoriza nada aca: heredarlo fue la fuga de permisos que motivo esto.
-    cuenta = cuenta_activa()
+    cuenta = cuenta or cuenta_activa()
     rows = {r["chat_jid"]: dict(r) for r in con.execute(
         "select account, chat_jid, chat_name, provider, target, workspace, workspaces, mode, "
         "initial_state, hours, tone, instructions, acuse, acuse_texto, saludo, "
@@ -1487,7 +1492,7 @@ def merged_scope(con):
                                                row.get("workspace"))
         row["workspace"] = proyecto_derivado(row["workspaces"])
         row["miembros"] = wa_store.miembros_de_columna(row.get("miembros"))
-    for jid, e in plugin_store_read().items():
+    for jid, e in plugin_store_read(cuenta).items():
         # El panel guarda por jid, y cada entrada dice de que linea es (`account`; las
         # de antes de T9 no lo dicen y son `local`). Solo entran las de esta linea: el
         # storage puede seguir teniendo las del numero anterior hasta el proximo sync.
@@ -1761,6 +1766,24 @@ def db():
     return con
 
 
+# Lo que abre la base en solo lectura: lo que corre cada minuto para mirar, y no puede
+# escribir ni una fila (ni el esquema, ni las migraciones, ni la re-clave de `db`).
+SOLO_LECTURA = ("lineas-salud",)
+
+
+def db_lectura():
+    """La base en solo lectura. Sin base todavia, una vacia en memoria: nada corrio y nada
+    se juzgo, y mirar no la crea."""
+    if not os.path.exists(DB):
+        con = sqlite3.connect(":memory:")
+        con.row_factory = sqlite3.Row
+        con.executescript(SCHEMA)
+        return con
+    con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True, timeout=5)
+    con.row_factory = sqlite3.Row
+    return con
+
+
 def migrate(con):
     """v1 asumia Plane. Renombra a provider/target sin perder lo ya mapeado."""
     cols = {r["name"] for r in con.execute("pragma table_info(chat_scope)")}
@@ -1847,6 +1870,9 @@ def migrate(con):
     # guardar-panel G4: para que mensajes juntos se dio el veredicto.
     if "rafaga" not in juicio_cols:
         con.execute("alter table juicio add column rafaga text")
+    # linea-viva V6: la linea por la que salio cada aviso.
+    if "sale_por" not in {r["name"] for r in con.execute("pragma table_info(aviso)")}:
+        con.execute("alter table aviso add column sale_por text")
     work_cols = {r["name"] for r in con.execute("pragma table_info(work)")}
     if "notified_at" not in work_cols:
         con.execute("alter table work add column notified_at text")
@@ -5293,10 +5319,11 @@ def cmd_caso_separar(con, a):
     return [caso_fila(con, caso_de(con, nuevo))]
 
 
-def ventana_casos(con):
-    """Las horas de la regla de agrupacion. Lo guardado ya paso por `valida_ajuste`; si
-    igual llega algo que no sirve, rige el arranque y no una ventana de cero."""
-    valor = merged_settings(con).get("case_window_hours")
+def ventana_casos(con, linea=None):
+    """Las horas de la regla de agrupacion (de `linea`, o de la de esta corrida). Lo
+    guardado ya paso por `valida_ajuste`; si igual llega algo que no sirve, rige el arranque
+    y no una ventana de cero."""
+    valor = merged_settings(con, linea).get("case_window_hours")
     if valida_ajuste("case_window_hours", valor):
         valor = DEFAULT_CONFIG["case_window_hours"]
     return int(str(valor).strip())
@@ -6725,6 +6752,9 @@ def jev_juzga(mensaje, con=None):
     juicio = wa_jev.juzga_mensaje(mensaje, clave)
     if juicio is None or con is None:
         return juicio
+    # Se guarda con el `skip` que vale (V1): la clase del cache y el JSON dicen lo mismo
+    # que el veredicto, y lo que lee el JSON despues (el agente, el tablero) tambien.
+    juicio = skip_que_vale(mensaje, juicio)
     # Con el rol con que se juzgo (roles-por-numero, M10): otro rol lo vuelve a juzgar.
     con.execute(
         "insert into juicio (account, chat_jid, stanza_id, clase, origen, at, jev, rol, "
@@ -6739,11 +6769,28 @@ def jev_juzga(mensaje, con=None):
     return juicio
 
 
+def skip_que_vale(m, juicio):
+    """El veredicto con el `skip` que vale: el de Jev, salvo en un pedido (una clase de
+    `CLASES_QUE_PIDEN`) de quien no es el dueno, que nunca se salta (linea-viva, V1).
+
+    El `skip` de Jev sale solo de los puntajes y no mira la clase. Visto en vivo: "no se
+    estan creando los leads en el CRM", de un cliente en un grupo `responder`, salio
+    `bug_report` con `skip` y se cerro como nada. Sin el `skip`, el pedido sigue los
+    chequeos de siempre (grupo o directo). Lo del dueno queda como estaba: Jev ya no salta
+    una orden suya, y lo que salta de el es charla."""
+    if (juicio and juicio.get("skip") and juicio.get("attention_class") in CLASES_QUE_PIDEN
+            and rol_del_mensaje(m) != wa_store.ROL_ADMIN):
+        return dict(juicio, skip=False)
+    return juicio
+
+
 def veredicto_de_jev(m, juicio, con=None):
     """Lo que ingest hace con un veredicto de Jev. Lo que salta se cierra como nada; el
     resto se clasifica con la clase que dio Jev y lleva el veredicto para marcar el caso.
     Una linea suelta de un grupo solo abre caso si Jev la escala (excepcion o agente): la
-    zona gris de la charla de un grupo sigue el camino de hoy."""
+    zona gris de la charla de un grupo sigue el camino de hoy. Un pedido de un cliente no
+    salta (`skip_que_vale`), tampoco el que ya estaba en el cache."""
+    juicio = skip_que_vale(m, juicio)
     auto = auto_de_jev(m, juicio)
     if juicio["skip"] and auto == "saludo":
         # Un saludo dirigido al asistente no se descarta: tiene su caso y su respuesta.
@@ -7445,19 +7492,29 @@ def linea_base_ingest(con, horas):
     antes queda visto para siempre. Sin esto, estrenar ingest sobre una semana de
     historial llenaria el tablero de casos viejos y le preguntaria a Jev por cada uno.
     Lo que el telefono sincroniza tarde con fecha de antes tampoco entra."""
-    llave = rastro("ingest_desde")
-    fila = con.execute("select value from settings where key=?", (llave,)).fetchone()
+    guardada = base_ingest_guardada(con)
+    if guardada is not None:
+        return guardada
+    desde = time.time() - horas * 3600
+    con.execute("insert into settings (key,value) values (?,?) on conflict(key) do "
+                "update set value=excluded.value",
+                (rastro("ingest_desde"),
+                 time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(desde))))
+    con.commit()
+    return desde
+
+
+def base_ingest_guardada(con, cuenta=None):
+    """La linea base que ingest ya fijo en la linea (`cuenta`, o la de esta corrida), en
+    segundos de epoch, o None si nunca corrio ahi. Solo lee."""
+    fila = con.execute("select value from settings where key=?",
+                       (rastro("ingest_desde", cuenta),)).fetchone()
     if fila and fila["value"]:
         try:
             return time.mktime(time.strptime(fila["value"], "%Y-%m-%d %H:%M:%S"))
         except ValueError:
             pass
-    desde = time.time() - horas * 3600
-    con.execute("insert into settings (key,value) values (?,?) on conflict(key) do "
-                "update set value=excluded.value",
-                (llave, time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(desde))))
-    con.commit()
-    return desde
+    return None
 
 
 def anterior_a(m, desde):
@@ -7819,11 +7876,11 @@ def sigue_lid(con):
         fuente.close()
 
 
-def bases_lid(con):
+def bases_lid(con, cuenta=None):
     """La linea base de cada chat al que llego una autorizacion: lo recibido antes de ella
     ya no se contesta solo (el aviso dijo cuantos y desde cuando)."""
     bases = {}
-    for m in movidas_lid(con, cuenta_activa()):
+    for m in movidas_lid(con, cuenta or cuenta_activa()):
         if m["ingest_desde"]:
             bases[m["hacia"]] = max(bases.get(m["hacia"], 0), m["ingest_desde"])
     return bases
@@ -9718,7 +9775,9 @@ def id_envio_caso(case_id, version):
 
 def envios_del_almacen(req_ids):
     """{req_id: estado} de la bandeja de salida, en solo lectura, y si el sidecar late.
-    Sin almacen no hay ni lo uno ni lo otro."""
+    Sin almacen no hay ni lo uno ni lo otro. El latido es el de la linea de esta corrida
+    (`cuenta_activa`): con dos lineas el global lo mantiene fresco la otra, y el tick de
+    una linea caida firmaba lo que nadie iba a mandar (linea-viva V8)."""
     ruta = wa_store.store_db_path()
     if not os.path.exists(ruta):
         return {}, False
@@ -9727,7 +9786,7 @@ def envios_del_almacen(req_ids):
     except sqlite3.Error:
         return {}, False
     try:
-        vivo = wa_store.sidecar_vivo(fuente)
+        vivo = wa_store.sidecar_vivo(fuente, cuenta_activa())
         estados = {}
         ids = list(req_ids)
         for i in range(0, len(ids), 500):
@@ -9855,6 +9914,10 @@ CORRECCION_WHATSAPP = "correccion del dueno por WhatsApp:"
 # Una respuesta tomada (`preparando`) que no llego a su confirmacion en este tiempo es de un
 # proceso que murio a mitad: se confirma igual, mandando al tablero, y no se aplica de nuevo.
 PREPARANDO_VENCE_S = 300
+# La respuesta a un aviso que salio por otra linea la aplica un proceso de la linea del caso
+# (linea-viva V6): puede entregar la respuesta aprobada, dos `wa-send` con su plazo.
+PLAZO_RELEVO_S = 2 * (PLAZO_ENVIO_TICK_S + 30) + 60
+RELEVO_NEGADO = 3
 # Lo que queda pendiente para un numero que ya no es el de aprobacion no sale (T14).
 AVISO_OTRO_NUMERO = "approval-number-changed"
 # Lo pendiente que espero mas de `approval_hours` (el chat sin autorizar, un error que se
@@ -10251,19 +10314,53 @@ def texto_de_escalado(con, caso):
                       tx["escala_como"].format(n=n)])
 
 
+def modo_en_linea(con, jid, linea):
+    """El modo de la conversacion `jid` en la linea `linea`, con la regla de `merged_scope`
+    (lo del panel manda sobre la base), o None si alli no esta registrada. Mira otra linea
+    sin cambiar la de esta corrida."""
+    alcance = plugin_store_raw(linea).get("scope")
+    entrada = alcance.get(jid) if isinstance(alcance, dict) else None
+    if isinstance(entrada, dict) and cuenta_de_entrada(entrada) == linea:
+        return entrada.get("mode") or "off"
+    fila = con.execute("select mode from chat_scope where account=? and chat_jid=?",
+                       (linea, jid)).fetchone()
+    return (fila["mode"] or "off") if fila else None
+
+
+def linea_del_aviso(con, chat_jid):
+    """La linea por la que sale un aviso al chat del dueno (linea-viva V6).
+
+    La de esta corrida si alli esta registrado ese chat, como siempre. Si no, la primera
+    otra linea vinculada donde esta en `responder` y es tambien SU numero de aprobacion: por
+    ahi `wa-send` lo entrega y la respuesta del dueno se reconoce. Visto en vivo: el chat del
+    dueno solo existia en la linea del bot, y cada aviso de la principal salia por la
+    principal y moria en `send-wrong-line`. Si ninguna lo alcanza, la de esta corrida, y
+    `wa-send` dice por que no sale. Con una sola linea, siempre la de esta corrida."""
+    propia = cuenta_activa()
+    if not chat_jid or modo_en_linea(con, chat_jid, propia) is not None:
+        return propia
+    for linea in wa_store.lineas_activas_en_disco():
+        if (linea != propia and modo_en_linea(con, chat_jid, linea) == "responder"
+                and numero_aprobacion(linea) == chat_jid):
+            return linea
+    return propia
+
+
 def aviso_encola(con, req_id, tipo, texto, case_id=None, version=None, stanza=None,
                  estado="pendiente"):
     """Deja el aviso para el tick. El mismo id no se repite: es lo que lo hace UNA vez.
-    Sin commit. Devuelve si quedo una fila nueva."""
+    Sin commit. Devuelve si quedo una fila nueva. La linea por la que va a salir queda
+    anotada desde ya (`sale_por`): ahi se reconoce la respuesta que contesta esta fila."""
     numero = numero_aprobacion()
     if not numero:
         return False
     momento = ahora_caso()
     cur = con.execute(
         "insert into aviso (req_id, tipo, case_id, version, account, chat_jid, texto, estado, "
-        "stanza_id, at, updated_at) values (?,?,?,?,?,?,?,?,?,?,?) on conflict(req_id) do nothing",
+        "stanza_id, at, updated_at, sale_por) values (?,?,?,?,?,?,?,?,?,?,?,?) "
+        "on conflict(req_id) do nothing",
         (req_id, tipo, case_id, version, cuenta_activa(), numero, texto, estado, stanza,
-         momento, momento))
+         momento, momento, linea_del_aviso(con, numero)))
     return cur.rowcount == 1
 
 
@@ -10365,11 +10462,14 @@ def envia_avisos(con, resumen=None, inicio=None):
     con.commit()
     filas = con.execute("select * from aviso where estado='pendiente' and account=? and "
                         "chat_jid=? order by at, rowid", (cuenta_activa(), numero or "")).fetchall()
+    # Por donde sale, mirado ahora y no al encolar: el dueno pudo autorizar su chat en otra
+    # linea entretanto (linea-viva V6).
+    sale = linea_del_aviso(con, numero) if filas else None
     for f in filas:
         if inicio is not None and time.time() - inicio > PRESUPUESTO_TICK_S:
             resumen["pospuestos"] += 1
             continue
-        codigo, detalle = tick_envia({"account": f["account"], "chat_jid": f["chat_jid"]},
+        codigo, detalle = tick_envia({"account": sale, "chat_jid": f["chat_jid"]},
                                      f["texto"], f["req_id"])
         if codigo in AVISO_REINTENTA + AVISO_ESPERA_PERMISO:
             if codigo in (ENVIO_SIN_LINEA, "send-no-signature") + AVISO_ESPERA_PERMISO:
@@ -10377,9 +10477,9 @@ def envia_avisos(con, resumen=None, inicio=None):
             continue
         momento = ahora_caso()
         if codigo is None:
-            cur = con.execute("update aviso set estado='enviado', enviado_at=?, updated_at=? "
-                              "where req_id=? and estado='pendiente'",
-                              (momento, momento, f["req_id"]))
+            cur = con.execute("update aviso set estado='enviado', enviado_at=?, updated_at=?, "
+                              "sale_por=? where req_id=? and estado='pendiente'",
+                              (momento, momento, sale, f["req_id"]))
             # Otro proceso pudo marcarlo primero: el evento lo deja quien lo marco.
             if (cur.rowcount == 1 and f["case_id"] is not None
                     and f["tipo"] in ("aprobacion", "bloqueo")):
@@ -10389,9 +10489,10 @@ def envia_avisos(con, resumen=None, inicio=None):
                            else AVISO_BLOQUEO)
             resumen["avisos"] += 1
         else:
-            con.execute("update aviso set estado='fallido', motivo=?, updated_at=? where "
-                        "req_id=? and estado='pendiente'",
-                        (f"{codigo} {detalle}".strip()[:LARGO_MOTIVO], momento, f["req_id"]))
+            con.execute("update aviso set estado='fallido', motivo=?, updated_at=?, sale_por=? "
+                        "where req_id=? and estado='pendiente'",
+                        (f"{codigo} {detalle}".strip()[:LARGO_MOTIVO], momento, sale,
+                         f["req_id"]))
             resumen["avisos_error"] += 1
             print(f"wa-scope: notice {f['req_id']} not sent: {codigo}", file=sys.stderr)
         con.commit()
@@ -10399,11 +10500,14 @@ def envia_avisos(con, resumen=None, inicio=None):
 
 def avisos_vigentes(con):
     """Los avisos de aprobacion que todavia se pueden contestar: enviados, sin contestar,
-    dentro de `approval_hours`, y con el caso todavia en la version que avisaron."""
+    dentro de `approval_hours`, y con el caso todavia en la version que avisaron. Los de esta
+    linea y los de otra que salieron por esta (linea-viva V6): el dueno contesta donde le
+    llego."""
     horas = horas_aprobacion(con)
     salida = []
-    for f in con.execute("select * from aviso where tipo='aprobacion' and account=? and "
-                         "estado='enviado' order by at", (cuenta_activa(),)).fetchall():
+    for f in con.execute("select * from aviso where tipo='aprobacion' and (account=? or "
+                         "sale_por=?) and estado='enviado' order by at",
+                         (cuenta_activa(), cuenta_activa())).fetchall():
         if aviso_estado(con, f, horas) is None:
             salida.append(f)
     return salida
@@ -10428,37 +10532,52 @@ def version_superada(con, aviso):
 
 
 def respuesta_vista(con, stanza):
-    return con.execute("select 1 from aviso where tipo='respuesta' and stanza_id=? and account=?",
-                       (stanza, cuenta_activa())).fetchone() is not None
+    """Si esa respuesta ya se tomo, aca o en la linea del caso que contesta (linea-viva V6:
+    su fila es de esa linea y sale por esta)."""
+    return con.execute("select 1 from aviso where tipo='respuesta' and stanza_id=? and "
+                       "(account=? or sale_por=?)",
+                       (stanza, cuenta_activa(), cuenta_activa())).fetchone() is not None
 
 
-def atiende_respuesta(con, m):
+def atiende_respuesta(con, m, relevado=None):
     """El mensaje del dueno en el directo de aprobacion, si es una respuesta: lo aplica y
     deja su confirmacion para el tick. Devuelve si lo era; lo que no, sigue siendo una
-    orden del dueno y abre su caso como siempre."""
+    orden del dueno y abre su caso como siempre.
+
+    El aviso de un caso de otra linea que salio por esta (linea-viva V6) lo aplica un
+    proceso de la linea del caso (`releva_respuesta`), que vuelve aca con `relevado`: ese
+    aviso y ningun otro."""
     r = lee_respuesta(m.get("text"))
     if r is None:
         return False
     stanza = m["stanza_id"]
     req = "aviso-r-" + hashlib.sha256(stanza.encode()).hexdigest()[:16]
     tx = aviso_textos()
-    if r["accion"] == "estado":
+    if relevado is not None:
+        if r["accion"] == "estado" or r["caso"] not in (None, relevado["case_id"]):
+            return False
+        aviso = relevado
+    elif r["accion"] == "estado":
         aviso_encola(con, req, "respuesta", texto_de_estado(con), stanza=stanza)
         con.commit()
         return True
-    if r["caso"] is None:
+    elif r["caso"] is None:
         vivos = [f for f in avisos_vigentes(con) if f["chat_jid"] == m.get("chat_jid")]
         if len(vivos) != 1:
             return False
         aviso = vivos[0]
     else:
         # El aviso es de quien lo recibio: el que salio a otro numero no se contesta desde
-        # este.
-        aviso = con.execute("select * from aviso where tipo='aprobacion' and account=? and "
-                            "case_id=? and chat_jid=? order by at desc, rowid desc limit 1",
-                            (cuenta_activa(), r["caso"], m.get("chat_jid"))).fetchone()
+        # este. El de un caso de otra linea, si salio por esta.
+        aviso = con.execute("select * from aviso where tipo='aprobacion' and (account=? or "
+                            "sale_por=?) and case_id=? and chat_jid=? "
+                            "order by at desc, rowid desc limit 1",
+                            (cuenta_activa(), cuenta_activa(), r["caso"],
+                             m.get("chat_jid"))).fetchone()
         if aviso is None:
             return False
+    if aviso["account"] != cuenta_activa():
+        return releva_respuesta(con, m, aviso)
     n = aviso["case_id"]
     # Primero se toma el mensaje: la fila es la llave. Si otro proceso (el worker y el tick
     # leen la misma bandeja) ya la tomo, este no la aplica: es suya.
@@ -10503,6 +10622,83 @@ def atiende_respuesta(con, m):
                     (texto, ahora_caso(), req))
         con.commit()
     return True
+
+
+def releva_respuesta(con, m, aviso):
+    """La respuesta a un aviso de un caso de OTRA linea que salio por esta (linea-viva V6).
+
+    La aplica un proceso de la linea del caso (`aviso-relevo --line`): el caso, su
+    aprobacion, su envio y sus reglas son de esa linea, y `cuenta_activa` es una por proceso.
+    Solo viajan los ids: aquel lee el mensaje capturado y vuelve a mirar que sea del dueno.
+    Devuelve si era una respuesta. Lo que aquel niega (no es del dueno de esa linea, el aviso
+    cambio) sigue como una orden, como siempre; si aquel no corrio, la proxima entrada lo
+    vuelve a intentar: no hay fila que lo marque visto."""
+    if con.in_transaction:
+        con.commit()
+    args = [sys.executable, os.path.abspath(__file__), "aviso-relevo",
+            f"--line={aviso['account']}", f"--aviso={aviso['req_id']}",
+            f"--stanza={m['stanza_id']}", "--json"]
+    try:
+        p = subprocess.run(args, capture_output=True, text=True, timeout=PLAZO_RELEVO_S)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"wa-scope: reply for line {aviso['account']} not applied: {exc}",
+              file=sys.stderr)
+        return True
+    if p.returncode == RELEVO_NEGADO:
+        return False
+    if p.returncode != 0:
+        primera = next((l.strip() for l in (p.stderr or "").splitlines() if l.strip()), "")
+        print(f"wa-scope: reply for line {aviso['account']} not applied: {primera[:200]}",
+              file=sys.stderr)
+    return True
+
+
+def mensaje_capturado(linea, chat_jid, stanza):
+    """El mensaje entrante `stanza` del chat `chat_jid` en la linea `linea`, como lo da la
+    bandeja (`text`, `sender_jid` sin dispositivo), o None si no esta capturado."""
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return None
+    try:
+        fila = fuente.execute("select account, chat_jid, stanza_id, sender_jid, body from mensaje "
+                              "where account=? and chat_jid=? and stanza_id=? and from_me=0 "
+                              "and revocado=0", (linea, chat_jid, stanza)).fetchone()
+    finally:
+        fuente.close()
+    if fila is None:
+        return None
+    return {"account": fila["account"], "chat_jid": fila["chat_jid"],
+            "stanza_id": fila["stanza_id"],
+            "sender_jid": wa_store.jid_sin_dispositivo(fila["sender_jid"]),
+            "text": (fila["body"] or "").replace("\n", " ")}
+
+
+def cmd_aviso_relevo(con, a):
+    """`aviso-relevo` (interno, linea-viva V6): la respuesta del dueno a un aviso de un caso
+    de esta linea que salio por otra. Lo lanza la entrada de la linea por la que salio.
+
+    Nada viene de quien llama salvo los ids: el aviso tiene que ser de esta linea y haber
+    salido por otra, el chat tiene que ser el numero de aprobacion de esta linea y estar en
+    `responder` en aquella, y el mensaje tiene que estar capturado alli y ser de un numero
+    del dueno de esta linea. Asi nadie aprueba por este camino lo que el dueno no escribio.
+    Sale 3 si lo niega o no es una respuesta."""
+    def niega(detalle):
+        print(json.dumps({"handled": False, "detail": detalle}, ensure_ascii=False))
+        sys.exit(RELEVO_NEGADO)
+    aviso = con.execute("select * from aviso where req_id=? and tipo='aprobacion' and account=?",
+                        (a.aviso, cuenta_activa())).fetchone()
+    if aviso is None or not aviso["sale_por"] or aviso["sale_por"] == aviso["account"]:
+        niega("no notice of this line left through another line with that id")
+    numero = numero_aprobacion()
+    if aviso["chat_jid"] != numero or modo_en_linea(con, numero, aviso["sale_por"]) != "responder":
+        niega("the approval chat changed since the notice was sent")
+    m = mensaje_capturado(aviso["sale_por"], numero, a.stanza)
+    if m is None or not wa_store.es_dueno(m["sender_jid"], duenos()):
+        niega("no message from the owner with that id in the approval chat")
+    if not atiende_respuesta(con, m, relevado=aviso):
+        niega("the message is not an answer to that notice")
+    return [{"handled": True, "case_id": aviso["case_id"]}]
 
 
 def aplica_respuesta(con, aviso, r, tx):
@@ -13727,16 +13923,27 @@ CRON_ARREGLA = ("sin-cli", "sin-espacio", "sin-prompt")
 
 
 def tick_anota(con):
-    """Cuando corrio el tick: lo lee el precheck del cron."""
-    con.execute("insert into settings (key,value) values ('tick_at',?) on conflict(key) "
-                "do update set value=excluded.value", (str(time.time()),))
+    """Cuando corrio el tick: lo lee el precheck del cron. Cada linea anota el suyo
+    (`tick_at@<cuenta>`, linea-viva V2): con uno solo, el tick de una linea tapaba que el de
+    la otra no corria (visto en vivo: seis horas y media sin juzgar nada). El global sigue,
+    para lo que lo lee de antes."""
+    ahora_s = str(time.time())
+    for clave in dict.fromkeys(("tick_at", rastro("tick_at"))):
+        con.execute("insert into settings (key,value) values (?,?) on conflict(key) "
+                    "do update set value=excluded.value", (clave, ahora_s))
     con.commit()
 
 
 def tick_se_encarga(con):
-    """Si el tick abre al agente de casos: corrio hace poco y su ultimo lanzamiento no
-    fallo por algo que el cron arregla. Sin dato, no: el cron es el respaldo."""
-    fila = con.execute("select value from settings where key='tick_at'").fetchone()
+    """Si el tick de ESTA linea abre al agente de casos: corrio hace poco y su ultimo
+    lanzamiento no fallo por algo que el cron arregla. Sin dato, no: el cron es el respaldo.
+
+    Sin la marca de la linea todavia vale la global: es el minuto despues de actualizar,
+    antes de que el tick de la linea corra con esta version, y sin eso el cron de cada linea
+    se despertaria (con un espacio nuevo de Orca) por una marca que nadie pudo escribir."""
+    fila = (con.execute("select value from settings where key=?",
+                        (rastro("tick_at"),)).fetchone()
+            or con.execute("select value from settings where key='tick_at'").fetchone())
     try:
         if not fila or time.time() - float(fila["value"]) > TICK_VIVO_S:
             return False
@@ -13756,6 +13963,108 @@ def pendiente_agente(con, precheck=False):
         sys.exit(1)
     print(json.dumps({"needs_agent": len(casos), "cases": casos}, ensure_ascii=False))
     sys.exit(0)
+
+
+# ── La salud de cada linea (odd/tasks/linea-viva.md, V3) ───────────────────────────────
+# Visto en vivo (2026-10-09): la segunda linea capturo todo en tiempo real y no juzgo nada
+# en seis horas y media, y nada lo dijo. Esto es lo que el worker y el panel leen cada
+# minuto para saber si una linea esta atendida. Es barato a proposito: sin Jev, sin red,
+# sin la CLI de Orca, y la base en solo lectura (`SOLO_LECTURA`). Reporta TODAS las lineas
+# desde un solo proceso (no se reparte por `por_cada_linea`), cada una con lo suyo: su
+# alcance, su ventana, su tick.
+
+
+def edad_s(desde, ahora_s):
+    """Segundos desde `desde` (epoch), o None si no hay dato."""
+    try:
+        return max(0, int(ahora_s - float(desde))) if desde is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def sin_juzgar_de_linea(con, fuente, cuenta, ahora_s):
+    """Los `ts` de lo que llego a la linea y nadie juzgo: entrante, no revocado, de la
+    ventana de casos, en una conversacion autorizada y no `off` de ESA linea, sin fila en
+    `caso_mensaje` ni veredicto en `juicio` (el suyo, o el de la rafaga que lo incluye).
+
+    No cuenta lo que ingest no juzga a proposito: lo de antes de su linea base (o de la de
+    una autorizacion que siguio a un directo), las respuestas del dueno a un aviso, y una
+    linea suelta de un grupo sin Jev en la linea (sin Jev queda sin caso, y no es una linea
+    parada)."""
+    scope = merged_scope(con, cuenta)
+    autorizados = {jid for jid, e in scope.items() if e.get("mode") != "off"}
+    if not autorizados:
+        return []
+    horas = ventana_casos(con, cuenta)
+    dias = wa_store.entero(wa_store.ajustes(cuenta), "inbox_days")
+    desde = max(ahora_s - horas * 3600, ahora_s - dias * 86400,
+                base_ingest_guardada(con, cuenta) or 0)
+    bases = bases_lid(con, cuenta)
+    con_jev = bool(jev_en_linea(cuenta) and wa_jev.llave())
+    marcas = ",".join("?" * len(autorizados))
+    filas = fuente.execute(
+        "select m.chat_jid, m.stanza_id, m.ts, m.menciona_me, m.cita_me, c.is_group "
+        "from mensaje m join chat c on c.account = m.account and c.chat_jid = m.chat_jid "
+        "where m.account = ? and m.from_me = 0 and m.revocado = 0 and m.ts >= ? "
+        f"and m.chat_jid in ({marcas})", (cuenta, int(desde), *sorted(autorizados))).fetchall()
+    candidatos = [f for f in filas if f["ts"] >= bases.get(f["chat_jid"], 0)
+                  and (con_jev or wa_store.clase_de(f) != "grupo")]
+    if not candidatos:
+        return []
+    stanzas = sorted({f["stanza_id"] for f in candidatos})
+    de_ellos = ",".join("?" * len(stanzas))
+    juzgados = {r["stanza_id"] for r in con.execute(
+        f"select stanza_id from caso_mensaje where account=? and stanza_id in ({de_ellos}) "
+        f"union select stanza_id from aviso where tipo='respuesta' and account=? and "
+        f"stanza_id in ({de_ellos})", (cuenta, *stanzas, cuenta, *stanzas))}
+    # Jev juzga una rafaga bajo su primer mensaje: los demas van en `rafaga`. Un veredicto
+    # se escribe despues de que llego su mensaje: los de antes de la ventana no hacen falta.
+    for r in con.execute(f"select stanza_id, rafaga from juicio where account=? and "
+                         f"chat_jid in ({marcas}) and at >= ?",
+                         (cuenta, *sorted(autorizados),
+                          time.strftime("%Y-%m-%d %H:%M", time.localtime(desde)))):
+        juzgados.add(r["stanza_id"])
+        try:
+            rafaga = json.loads(r["rafaga"]) if r["rafaga"] else []
+        except (TypeError, ValueError):
+            rafaga = []
+        if isinstance(rafaga, list):
+            juzgados.update(s for s in rafaga if isinstance(s, str))
+    return [f["ts"] for f in candidatos if f["stanza_id"] not in juzgados]
+
+
+def cmd_lineas_salud(con, a):
+    """`lineas-salud`: UN objeto JSON, `{"at": <epoch>, "lineas": [...]}`, con una fila por
+    linea activa en el orden de `lineas_activas` (la principal primero): `cuenta`,
+    `principal`, hace cuanto corrio su tick (`tick_hace_s`, null si nunca), cuantos mensajes
+    llegaron y nadie juzgo (`sin_juzgar`) y hace cuanto llego el mas viejo de esos
+    (`sin_juzgar_hace_s`, null sin ninguno), y el ultimo latido del sidecar
+    (`latido_hace_s`). Sin almacen o sin lineas, `lineas` vacia. Sale 0 aunque una linea
+    este parada: decidir que hacer es de quien lee."""
+    ahora_s = time.time()
+    filas = []
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        fuente = None
+    if fuente is not None:
+        try:
+            for n, cuenta in enumerate(wa_store.lineas_activas(fuente)):
+                # El de ESA linea (V8): el global lo late cualquiera, y con dos lineas la
+                # viva hacia ver viva a la caida.
+                latido = wa_store.ultimo_latido(fuente, cuenta)
+                tick = con.execute("select value from settings where key=?",
+                                   (rastro("tick_at", cuenta),)).fetchone()
+                sin = sin_juzgar_de_linea(con, fuente, cuenta, ahora_s)
+                filas.append({"cuenta": cuenta, "principal": n == 0,
+                              "tick_hace_s": edad_s(tick["value"] if tick else None, ahora_s),
+                              "sin_juzgar": len(sin),
+                              "sin_juzgar_hace_s": edad_s(min(sin) if sin else None, ahora_s),
+                              "latido_hace_s": edad_s(latido, ahora_s)})
+        finally:
+            fuente.close()
+    print(json.dumps({"at": ahora_s, "lineas": filas}, ensure_ascii=False))
+    return None
 
 
 # ── Varias lineas a la vez (odd/tasks/varias-lineas-y-segundo-cerebro.md, L3) ─────────
@@ -13876,7 +14185,8 @@ def _json_o_nada(texto):
 def junta_ticks(por_linea):
     """UNA linea JSON para el tick de todas las lineas: los conteos sumados, las banderas
     de cualquiera, y el resumen de cada una bajo `lineas`. `busy` es que TODAS estaban
-    ocupadas: con una libre, el minuto corrio."""
+    ocupadas: con una libre, el minuto corrio. `lineas_ocupadas` dice cuales lo estaban:
+    sin eso, una linea ocupada (o colgada) junto a una libre no se veia (linea-viva, V2)."""
     junto = {}
     for r in por_linea.values():
         for clave, valor in (r if isinstance(r, dict) else {}).items():
@@ -13886,6 +14196,8 @@ def junta_ticks(por_linea):
                 junto[clave] = junto.get(clave, 0) + valor
     junto["busy"] = all(isinstance(r, dict) and r.get("busy") is True
                         for r in por_linea.values())
+    junto["lineas_ocupadas"] = [linea for linea, r in por_linea.items()
+                                if isinstance(r, dict) and r.get("busy") is True]
     junto["lineas"] = por_linea
     return junto
 
@@ -13998,6 +14310,13 @@ def main():
                          "on responder chats, board sync. Idempotent; one JSON line")
     s.set_defaults(fn=cmd_tick)
 
+    s = add("aviso-relevo", help="internal: the owner's answer to a notice of a case of this "
+                                 "line that left through another line; the ingest of that "
+                                 "line runs it. Reads the captured message itself")
+    s.add_argument("--aviso", required=True, help="the notice id (aviso-...)")
+    s.add_argument("--stanza", required=True, help="the owner's message id")
+    s.set_defaults(fn=cmd_aviso_relevo)
+
     s = add("orca-aviso", help="an agent in another Orca project is waiting (the worker "
                                "runs this): one fixed-text notice to the approval number, if "
                                "that notice is on. Without --line it runs on every line, each "
@@ -14101,7 +14420,15 @@ def main():
                            "and the touched case ids")
     s.set_defaults(fn=cmd_ingest)
 
-    s = add("sync", help="runs ingest, then pushes registry, name and activity to the "
+    s = add("lineas-salud", help="every linked line at once (--line does not narrow it): "
+                                 "seconds since its own tick, how many incoming messages of "
+                                 "its authorized chats nobody judged and the age of the "
+                                 "oldest, and the sidecar beat, as one JSON object "
+                                 "{at, lineas}. Read only: no Jev, no network, no Orca "
+                                 "CLI; exits 0 even when a line is stalled")
+    s.set_defaults(fn=cmd_lineas_salud)
+
+    s = add("sync",help="runs ingest, then pushes registry, name and activity to the "
                          "plugin panel")
     s.set_defaults(fn=cmd_sync)
 
@@ -14485,7 +14812,7 @@ def main():
         if por_cada_linea(a):
             return
         try:
-            con = db()
+            con = db_lectura() if a.cmd in SOLO_LECTURA else db()
             try:
                 rows = a.fn(con, a)
             finally:

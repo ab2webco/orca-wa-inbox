@@ -1988,6 +1988,89 @@ else:
         os.environ.update(antes)
 
 
+# ── 12a. El `skip` de Jev no cierra el pedido de un cliente (linea-viva, V1) ─────────
+# Visto en vivo: "no se estan creando los leads en el CRM", de un cliente en un grupo
+# `responder`, salio de Jev como `bug_report` con `skip` (sus puntajes, todos bajos) y se
+# cerro como nada. Un pedido de quien no es el dueno sigue los chequeos de siempre; la
+# charla que salta, y lo del dueno, quedan como estaban.
+def jev_pedido_que_salta(cuerpo):
+    texto = cuerpo["state"]["message_to_evaluate"]["text"]
+    if "leads" in texto:
+        return 200, respuestas(cuerpo["questions"], choice="bug_report")
+    if "partido de anoche" in texto:
+        return 200, respuestas(cuerpo["questions"], choice="unrelated_chatter")
+    return jev_segun_texto(cuerpo)
+
+
+print("\njev: el skip no cierra el pedido de un cliente (V1)")
+if NODE:
+    falso = JevFalso(jev_pedido_que_salta)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(SOPORTE, "V1G", "no se estan creando los leads en el CRM", 30),
+                             msg(OPERACIONES, "V1C", "vieron el partido de anoche", 20),
+                             msg(PERSONA, "V1D", "los leads no llegan al CRM", 10)])
+            for chat in (SOPORTE, OPERACIONES, PERSONA):
+                js(home, "set", chat, "--provider", "ninguno", "--mode", "responder")
+            ingiere(home)
+            g, c, d = (caso_de_stanza(home, s) for s in ("V1G", "V1C", "V1D"))
+            ok("el bug de un cliente en un grupo responder abre caso aunque Jev diga skip",
+               g is not None and g["etapa"] != "cerrado" and g["clase"] != "nothing",
+               f"caso {g}")
+            ok("y su veredicto guardado no es nada", (juicio_de(home, "V1G") or {})
+               .get("clase") not in (None, "nothing"), f"{juicio_de(home, 'V1G')}")
+            ok("en un directo tampoco se cierra",
+               d is not None and d["etapa"] != "cerrado" and d["clase"] != "nothing",
+               f"caso {d}")
+            ok("la charla ajena que salta sigue sin caso y juzgada como nada",
+               c is None and (juicio_de(home, "V1C") or {}).get("clase") == "nothing",
+               f"caso {c} juicio {juicio_de(home, 'V1C')}")
+
+        # Una instalacion sin Jev (sin llave, o con Jev apagado en el panel): nada cambia.
+        for nombre, con_llave in (("sin llave", False), ("con Jev apagado", True)):
+            with tempfile.TemporaryDirectory() as home:
+                if con_llave:
+                    pon_llave(home)
+                    ruta = storage_de(home)
+                    ruta.parent.mkdir(parents=True, exist_ok=True)
+                    ruta.write_text(json.dumps({"jevEnabled": False}), encoding="utf-8")
+                falso.pedidos.clear()
+                llegan(home, A, [msg(SOPORTE, "V1N", "@duenio no se crean los leads", 10,
+                                     mencion=True)])
+                js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "responder")
+                p = corre(home, "ingest")
+                n = caso_de_stanza(home, "V1N")
+                ok(f"{nombre}: ingest no le pregunta a Jev y el pedido queda en recibido",
+                   p.returncode == 0 and falso.pedidos == [] and n is not None
+                   and n["etapa"] == "recibido" and juicio_de(home, "V1N") is None,
+                   f"{p.returncode} {len(falso.pedidos)} {n and n['etapa']} {p.stderr[-300:]}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+with tempfile.TemporaryDirectory() as home:
+    antes = dict(os.environ)
+    try:
+        ws = carga_wa_scope(home)
+        salta = {"attention_class": "bug_report", "skip": True, "needs_agent": False,
+                 "flags": [], "exceptions": [], "scores": {}}
+        base = {"stanza_id": "V1U", "chat_jid": SOPORTE, "kind": "grupo", "text": "x"}
+        del_dueno = ws.veredicto_de_jev(dict(base, rol="admin"), dict(salta))
+        ok("lo del dueno con skip se sigue cerrando como antes",
+           del_dueno and del_dueno["accion"] == "cerrar", f"{del_dueno}")
+        del_cliente = ws.veredicto_de_jev(dict(base, rol="client"), dict(salta))
+        ok("lo de un cliente con la misma clase se clasifica",
+           del_cliente and del_cliente["accion"] == "clasificar"
+           and del_cliente["clase"] != "nothing", f"{del_cliente}")
+    finally:
+        os.environ.clear()
+        os.environ.update(antes)
+
+
 # ── 12b. La charla no reabre un caso respondido ──────────────────────────────────
 # Visto en vivo: un caso respondido, la gente del grupo siguio charlando entre si, y la
 # tarjeta quedo en Clasificado pidiendo "Atender ahora" por nada. Un mensaje sigue
@@ -3636,6 +3719,13 @@ def orca_falso(carpeta, corridas=(), automatizaciones=None, worktrees=None, term
 import json, os, sys
 d = os.path.dirname(os.path.abspath(__file__))
 a = sys.argv[1:]
+# Los ticks de dos lineas llaman a la vez: sin candado una lee estado.json a medio escribir.
+candado = open(os.path.join(d, "estado.lock"), "w")
+try:
+    import fcntl
+    fcntl.flock(candado.fileno(), fcntl.LOCK_EX)
+except ImportError:
+    pass
 open(os.path.join(d, "calls.log"), "a").write(" ".join(a) + "\\n")
 ruta = os.path.join(d, "estado.json")
 e = json.load(open(ruta))
@@ -6031,6 +6121,14 @@ def orca_despacho(carpeta, worktrees=(WT_ALFA,), vivos=("term_worker1",), falla=
 import json, os, sys
 d = os.path.dirname(os.path.abspath(__file__))
 a = sys.argv[1:]
+# Con dos lineas, sus ticks llaman a la vez: sin candado una lee estado.json a medio
+# escribir por la otra y la llamada falla (P3 caia 1 de cada 5).
+candado = open(os.path.join(d, "estado.lock"), "w")
+try:
+    import fcntl
+    fcntl.flock(candado.fileno(), fcntl.LOCK_EX)
+except ImportError:
+    pass
 with open(os.path.join(d, "calls.jsonl"), "a") as f:
     f.write(json.dumps(a) + "\\n")
 e = json.load(open(os.path.join(d, "estado.json")))
@@ -12787,6 +12885,119 @@ def modos(filas):
     return {f["chat_jid"]: f["mode"] for f in filas}
 
 
+class SidecarConLatidoPropio(SidecarDeLinea):
+    """El sidecar de hoy: ademas del latido global, el de SU linea y si su socket esta
+    abierto (`latir` con `cuenta`). Desconectado late y no entrega, como `atenderSalida`
+    con `conectado` en falso."""
+
+    def __init__(self, home, linea, conectado=True):
+        self.conectado = conectado
+        super().__init__(home, linea)
+
+    def _vuelta(self):
+        con = sqlite3.connect(self.ruta, timeout=10)
+        while not self.parar.is_set():
+            ahora = str(int(time.time()))
+            for llave, valor in (("sidecar_beat", ahora), (f"sidecar_beat@{self.linea}", ahora),
+                                 (f"sidecar_conectado@{self.linea}",
+                                  "1" if self.conectado else "0")):
+                con.execute("insert into store_meta (key, value) values (?, ?) on "
+                            "conflict(key) do update set value=excluded.value", (llave, valor))
+            con.commit()
+            filas = [] if not self.conectado else con.execute(
+                "select req_id from envio where estado='pendiente' and account=?",
+                (self.linea,)).fetchall()
+            for (req,) in filas:
+                cur = con.execute("update envio set estado='enviado', stanza_id=?, "
+                                  "settled_at=? where req_id=? and estado='pendiente'",
+                                  (f"STANZA-{req}", int(ahora), req))
+                con.commit()
+                if cur.rowcount == 1:
+                    self.entregados.append(req)
+            time.sleep(0.05)
+        con.close()
+
+
+print("\nlinea-viva V8: el tick mira el transporte de CADA linea")
+# Visto en vivo (2026-10-09): el latido era UNO para el almacen y lo escribian los dos
+# sidecars. Con la otra linea viva, el tick de una linea caida aprobaba y encolaba una
+# respuesta que nadie iba a mandar, en vez de decir `sin_transporte` y reintentar.
+LINEA_V8 = "pn:15550000002"
+PN[LINEA_V8] = "15550000002:7@s.whatsapp.net"
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        llegan(home, LINEA_V8, [], activar=False)
+        suma_linea(home, LINEA_V8)
+        jsl(home, LINEA_V8, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+
+        def propuesta_de_la_otra(stanza):
+            cid = str(jsl(home, LINEA_V8, "caso", "crear", "--chat", PERSONA, "--stanza",
+                          stanza, "--actor", "agente")[0]["case_id"])
+            jsl(home, LINEA_V8, "caso", "clasificar", cid, "--clase", "card", "--prioridad",
+                "none", "--actor", "agente")
+            v = jsl(home, LINEA_V8, "caso", "propuesta", cid, "--tipo", "responder",
+                    "--respuesta", LIMPIA, "--actor", "agente")[0]["propuesta_version"]
+            return cid, v
+
+        def corrida(*sidecars):
+            try:
+                return tick(home)
+            finally:
+                for s in sidecars:
+                    s.cerrar()
+
+        cid_a, v_a = propuesta_lista(home, "V8A1")
+        cid_b, v_b = propuesta_de_la_otra("V8B1")
+        req_b = f"caso-{cid_b}-{v_b[:12]}"
+        sidecar_a = SidecarConLatidoPropio(home, A)
+        p, r = corrida(sidecar_a)
+        de_b = ((r or {}).get("lineas") or {}).get(LINEA_V8) or {}
+        de_a = ((r or {}).get("lineas") or {}).get(A) or {}
+        ok("la linea cuyo sidecar no corre dice sin_transporte aunque la otra lata",
+           de_b.get("sin_transporte") is True, f"{p.stdout[:400]} {p.stderr[-300:]}")
+        ok("y no aprueba ni encola nada para nadie",
+           jsl(home, LINEA_V8, "caso", "ver", cid_b)[0]["etapa"] == "decision"
+           and req_b not in [e["req_id"] for e in envios(home)], f"{envios(home)}")
+        ok("la otra linea no se entera: manda lo suyo",
+           de_a.get("sin_transporte") is False
+           and sidecar_a.entregados == [f"caso-{cid_a}-{v_a[:12]}"],
+           f"{de_a} {sidecar_a.entregados}")
+
+        # La puerta del tick, antes de firmar nada: `envios_del_almacen` de la corrida de
+        # cada linea. Sin ella, la regla aprobaria y dejaria a `wa-send` el decir que no.
+        def late_en(linea):
+            antes = dict(os.environ)
+            try:
+                os.environ["WA_INBOX_LINEA"] = linea
+                return carga_wa_scope(home).envios_del_almacen([])[1]
+            finally:
+                os.environ.clear()
+                os.environ.update(antes)
+        sidecar_a = SidecarConLatidoPropio(home, A)
+        try:
+            time.sleep(0.3)
+            vivas = (late_en(A), late_en(LINEA_V8))
+        finally:
+            sidecar_a.cerrar()
+        ok("la corrida de cada linea mira SU transporte antes de firmar",
+           vivas == (True, False), f"{vivas}")
+
+        p, r = corrida(SidecarConLatidoPropio(home, A),
+                       SidecarConLatidoPropio(home, LINEA_V8, conectado=False))
+        de_b = ((r or {}).get("lineas") or {}).get(LINEA_V8) or {}
+        ok("latiendo con el socket caido, tambien sin_transporte",
+           de_b.get("sin_transporte") is True
+           and req_b not in [e["req_id"] for e in envios(home)], f"{p.stdout[:400]}")
+
+        sidecar_b = SidecarConLatidoPropio(home, LINEA_V8)
+        p, r = corrida(SidecarConLatidoPropio(home, A), sidecar_b)
+        ok("control: conectada, la misma respuesta sale por su linea",
+           sidecar_b.entregados == [req_b]
+           and jsl(home, LINEA_V8, "caso", "ver", cid_b)[0]["etapa"] == "respondido",
+           f"{sidecar_b.entregados} {p.stdout[:400]} {p.stderr[-300:]}")
+
+
 print("\nvarias lineas a la vez (L3)")
 # La segunda linea no es PERSONA: el directo con el propio numero de una linea es su dueno.
 SEGUNDA = "pn:573000000011"
@@ -13060,6 +13271,430 @@ if NODE:
         ok("y el tick vuelve a correr solo en la que queda, como siempre",
            isinstance(r, dict) and "lineas" not in r and r.get("busy") is False,
            f"{p.stdout[:300]}")
+
+
+# ── Los avisos salen por una linea que llega al dueno (odd/tasks/linea-viva.md, V6) ────────
+# Visto en vivo: el chat del dueno existia solo en la linea del bot, y los avisos de los
+# casos de la principal salian por la principal: `send-wrong-line`, ocho avisos fallidos en un
+# dia y el dueno sin enterarse. El aviso sale por la linea del caso si alli esta su chat; si
+# no, por la primera otra linea vinculada donde esta en `responder` con el mismo numero de
+# aprobacion. La respuesta del dueno se reconoce en la linea por la que salio y actua sobre
+# el caso en SU linea.
+def avisos_de(home, cid):
+    con = db_de(home)
+    filas = [dict(r) for r in con.execute(
+        "select * from aviso where tipo='aprobacion' and case_id=?", (int(cid),))]
+    con.close()
+    return filas
+
+
+def al_dueno_por_linea(home):
+    ruta = pathlib.Path(home) / ".wa-inbox" / "capture.db"
+    con = sqlite3.connect(ruta)
+    filas = con.execute("select account, req_id, body from envio where chat_jid=? "
+                        "order by rowid", (DUENO_DM,)).fetchall()
+    con.close()
+    return filas
+
+
+def caso_en_linea(home, linea, stanza, texto):
+    cid = str(jsl(home, linea, "caso", "crear", "--chat", PERSONA, "--stanza", stanza,
+                  "--actor", "agente")[0]["case_id"])
+    jsl(home, linea, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+        "--actor", "agente")
+    v = jsl(home, linea, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta", texto,
+            "--actor", "agente")[0]["propuesta_version"]
+    return cid, v
+
+
+def con_sidecars(home, fn):
+    sidecar_a, sidecar_b = SidecarDeLinea(home, A), SidecarDeLinea(home, SEGUNDA)
+    try:
+        return fn()
+    finally:
+        sidecar_a.cerrar()
+        sidecar_b.cerrar()
+
+
+print("\nlos avisos salen por una linea que llega al dueno (V6)")
+if NODE:
+    if not any(c["jid"] == DUENO_DM for c in CHATS):
+        CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+    with tempfile.TemporaryDirectory() as home:
+        llave_del_plugin(home)
+        # Los casos se crean a mano, sin sus mensajes: la entrada no los junta en uno.
+        llegan(home, A, [])
+        llegan(home, SEGUNDA, [], activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "agent", "Agente De Ejemplo")
+        js(home, "config", "ack", "off")
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        jsl(home, SEGUNDA, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        # El chat del dueno existe solo en la otra linea, como en vivo.
+        jsl(home, SEGUNDA, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        dinero_a, v_a = caso_en_linea(home, A, "V6A1", "Listo, el arreglo cuesta $50.")
+        con_sidecars(home, lambda: tick(home))
+        ok("sin numero de aprobacion no se encola ningun aviso, en ninguna linea",
+           cuenta(home, "select count(*) from aviso") == 0 and al_dueno_por_linea(home) == [])
+
+        pon_aprobacion(home, DUENO_LID)
+        p, r = con_sidecars(home, lambda: tick(home))
+        filas = avisos_de(home, dinero_a)
+        ok("el aviso de un caso de la principal sale por la linea donde esta el chat del dueno",
+           [(f["account"], f.get("sale_por"), f["estado"]) for f in filas]
+           == [(A, SEGUNDA, "enviado")], f"{filas} {p.stderr[-400:]}")
+        salidas = al_dueno_por_linea(home)
+        ok("y lo entrega el sidecar de esa linea, no hay send-wrong-line",
+           [(c, req) for c, req, _ in salidas] == [(SEGUNDA, filas[0]["req_id"] if filas else "")]
+           and f"Caso {dinero_a} " in (salidas[0][2] if salidas else ""), f"{salidas}")
+        ok("el caso dice que se aviso por WhatsApp, en su linea",
+           any(e["detalle"].startswith("aviso por WhatsApp")
+               for e in js(home, "caso", "ver", dinero_a)[0]["eventos"]))
+
+        # El dueno contesta en la linea por la que le llego: el caso de la principal se aprueba
+        # y su respuesta sale por la principal.
+        llegan(home, SEGUNDA, [msg(DUENO_DM, "V6R1", f"si {dinero_a}", 1, de=DUENO_LID)],
+               activar=False)
+        casos_b = cuenta(home, "select count(*) from caso where account=?", SEGUNDA)
+        con_sidecars(home, lambda: js(home, "ingest"))
+        ver = js(home, "caso", "ver", dinero_a)[0]
+        ok("`si N` en la otra linea aprueba el caso de la principal",
+           ver["etapa"] == "respondido" and ver["account"] == A
+           and any(e["actor"] == "dueno" and "por WhatsApp" in e["detalle"]
+                   for e in ver["eventos"]), f"{ver['etapa']} {ver['eventos'][-3:]}")
+        con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+        respuesta = con.execute("select account, estado from envio where req_id=?",
+                                (f"caso-{dinero_a}-{v_a[:12]}",)).fetchall()
+        con.close()
+        ok("y la respuesta al cliente sale por la linea del caso", respuesta == [(A, "enviado")],
+           f"{respuesta}")
+        ok("la respuesta del dueno no abre un caso en ninguna linea",
+           cuenta(home, "select count(*) from caso where account=?", SEGUNDA) == casos_b
+           and cuenta(home, "select count(*) from caso_mensaje where stanza_id='V6R1'") == 0)
+        con_sidecars(home, lambda: tick(home))
+        confirma = [(c, b) for c, req, b in al_dueno_por_linea(home) if req.startswith("aviso-r-")]
+        ok("la confirmacion le llega por la misma linea por la que contesto",
+           len(confirma) == 1 and confirma[0][0] == SEGUNDA
+           and f"Caso {dinero_a} aprobado" in confirma[0][1], f"{confirma}")
+        n = len(al_dueno_por_linea(home))
+        con_sidecars(home, lambda: (js(home, "ingest"), tick(home)))
+        ok("la misma respuesta no se aplica ni se confirma dos veces",
+           len(al_dueno_por_linea(home)) == n, f"{al_dueno_por_linea(home)}")
+
+        # no N, tambien por la otra linea: cierra el caso de la principal.
+        cierra_a, _ = caso_en_linea(home, A, "V6A2", "Listo, cuesta $90 el arreglo.")
+        con_sidecars(home, lambda: tick(home))
+        llegan(home, SEGUNDA, [msg(DUENO_DM, "V6R2", f"no {cierra_a}", 1, de=DUENO_LID)],
+               activar=False)
+        con_sidecars(home, lambda: js(home, "ingest"))
+        ver = js(home, "caso", "ver", cierra_a)[0]
+        ok("`no N` en la otra linea cierra el caso de la principal, como el dueno",
+           ver["etapa"] == "cerrado" and ver["eventos"][-1]["actor"] == "dueno",
+           f"{ver['etapa']} {ver['eventos'][-1:]}")
+
+        # El relevo no acepta lo que no escribio el dueno: lee el mensaje capturado, no lo que
+        # le pasan.
+        superado, _ = caso_en_linea(home, A, "V6A3", "Listo, son $20.")
+        con_sidecars(home, lambda: tick(home))
+        req = (avisos_de(home, superado) or [{}])[0].get("req_id") or ""
+        llegan(home, SEGUNDA, [msg(DUENO_DM, "V6R3", f"si {superado}", 1, de=OTRO_LID)],
+               activar=False)
+        p = corre(home, "aviso-relevo", "--aviso", req, "--stanza", "V6R3", "--line", A)
+        ok("el relevo niega un `si N` que no escribio un numero del dueno",
+           p.returncode == 3 and json.loads(p.stdout or "{}").get("handled") is False
+           and not js(home, "caso", "ver", superado)[0]["aprobada"],
+           f"{p.returncode} {p.stdout[:200]} {p.stderr[-200:]}")
+        p = corre(home, "aviso-relevo", "--aviso", req, "--stanza", "NO-EXISTE", "--line", A)
+        ok("ni uno que no esta capturado", p.returncode == 3
+           and not js(home, "caso", "ver", superado)[0]["aprobada"], f"{p.returncode}")
+        # Un `si` sin numero contesta el unico aviso vigente que salio por esa linea.
+        llegan(home, SEGUNDA, [msg(DUENO_DM, "V6R4", "si", 1, de=DUENO_LID)], activar=False)
+        con_sidecars(home, lambda: js(home, "ingest"))
+        ver = js(home, "caso", "ver", superado)[0]
+        ok("`si` a secas en la otra linea aprueba el unico aviso vigente que salio por ella",
+           ver["etapa"] == "respondido" and ver["aprobada"], f"{ver['etapa']} {ver['eventos'][-2:]}")
+
+        # El caso de la otra linea: su aviso sale por ella, como siempre.
+        dinero_b, _ = caso_en_linea(home, SEGUNDA, "V6B1", "Listo, el arreglo cuesta $80.")
+        con_sidecars(home, lambda: tick(home))
+        filas = avisos_de(home, dinero_b)
+        ok("el aviso de un caso de la linea del chat del dueno sale por ella",
+           [(f["account"], f.get("sale_por"), f["estado"]) for f in filas]
+           == [(SEGUNDA, SEGUNDA, "enviado")], f"{filas}")
+
+        # Ninguna linea lo alcanza: el chat del dueno en la otra linea, pero sin poder contestar
+        # alli. Sale por la del caso, como antes, y `wa-send` dice por que.
+        jsl(home, SEGUNDA, "mode", DUENO_DM, "observar")
+        nadie, _ = caso_en_linea(home, A, "V6A4", "Listo, son $30.")
+        p, r = con_sidecars(home, lambda: tick(home))
+        filas = avisos_de(home, nadie)
+        ok("sin una linea que llegue al chat del dueno, el aviso queda fallido con su motivo",
+           len(filas) == 1 and filas[0]["estado"] == "fallido"
+           and (filas[0]["motivo"] or "").startswith("send-wrong-line")
+           and isinstance(r, dict), f"{filas} {p.stderr[-300:]}")
+
+    # Una sola linea: el aviso sale por ella, como siempre.
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        pon_aprobacion(home, DUENO_LID)
+        llegan(home, A, [msg(PERSONA, "V6U1", PEDIDO, 30)])
+        unica, _ = propuesta_lista(home, "V6U1", texto="Listo, el arreglo cuesta $50.")
+        sidecar = SidecarFalso(home)
+        try:
+            tick(home)
+        finally:
+            sidecar.cerrar()
+        filas = avisos_de(home, unica)
+        ok("con una sola linea el aviso sale por ella, como siempre",
+           [(f["account"], f.get("sale_por"), f["estado"]) for f in filas] == [(A, A, "enviado")],
+           f"{filas}")
+
+
+# ── El tick de cada linea (odd/tasks/linea-viva.md, V2) ──────────────────────────────────
+# Visto en vivo: la segunda linea no se juzgo en seis horas y media, y nada lo dijo. El
+# `tick_at` era uno solo: el tick de una linea tapaba que el de la otra no corria, y la
+# salida junta decia `busy` solo con TODAS ocupadas. Cada linea anota su propio tick, el
+# precheck del cron lee el de su linea, y la salida junta nombra las lineas ocupadas.
+def tick_at_de(home, clave):
+    fila = db_de(home).execute("select value from settings where key=?", (clave,)).fetchone()
+    return float(fila["value"]) if fila else None
+
+
+def pon_tick_at(home, clave, hace_s):
+    con = db_de(home)
+    con.execute("insert into settings (key, value) values (?, ?) on conflict(key) do update "
+                "set value=excluded.value", (clave, str(time.time() - hace_s)))
+    con.commit()
+    con.close()
+
+
+def toma_candado(ruta):
+    """El candado de un tick, tomado como lo toma `tick_toma`, en cada sistema."""
+    fh = open(ruta, "a+")
+    if sys.platform == "win32":
+        import msvcrt
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return fh
+
+
+def claves_tick(home):
+    return sorted(r["key"] for r in db_de(home).execute(
+        "select key from settings where key like 'tick_at%'"))
+
+
+print("\nel tick de cada linea (V2)")
+# Una instalacion de antes de las lineas (`local`, sin almacen): una sola marca, la de siempre.
+with tempfile.TemporaryDirectory() as home:
+    p, r = tick(home)
+    ok("con la linea `local`, el tick anota solo `tick_at`, como siempre",
+       claves_tick(home) == ["tick_at"] and isinstance(r, dict)
+       and "lineas_ocupadas" not in r, f"{claves_tick(home)} {p.stdout[:200]}")
+    js(home, "caso", "crear", "--chat", CHAT, "--stanza", "TL1", "--actor", "automatizacion")
+    ultima_corrida_agente(home, "activo")
+    ok("y su precheck la lee: al dia, callado", precheck(home).returncode == 1)
+    pon_tick_at(home, "tick_at", 10 * 60)
+    ok("vieja, el cron sigue", precheck(home).returncode == 0)
+if NODE:
+    # Una sola linea vinculada: sin reparto, su marca y la global, y la salida de siempre.
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "TU1", "@duenio no abre el login", 5, mencion=True)])
+        p, r = tick(home)
+        ok("con una sola linea, el tick anota la suya y la global",
+           claves_tick(home) == ["tick_at", f"tick_at@{A}"], f"{claves_tick(home)}")
+        ok("y su salida no cambia: sin `lineas` ni `lineas_ocupadas`",
+           isinstance(r, dict) and "lineas" not in r and "lineas_ocupadas" not in r,
+           f"{p.stdout[:300]}")
+        js(home, "caso", "crear", "--chat", CHAT, "--stanza", "TU2", "--actor", "automatizacion")
+        ultima_corrida_agente(home, "activo")
+        ok("su precheck, con su tick al dia: callado", precheck(home).returncode == 1)
+        pon_tick_at(home, f"tick_at@{A}", 10 * 60)
+        ok("con su propio tick viejo, el cron sigue", precheck(home).returncode == 0)
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "TA1", "@duenio no abre el login", 5, mencion=True)])
+        llegan(home, SEGUNDA, [msg(SOPORTE, "TB1", "@duenio no llega la factura", 5,
+                                   mencion=True)], activar=False)
+        suma_linea(home, SEGUNDA)
+        p, r = tick(home)
+        ok("cada linea anota su propio tick, y el global sigue",
+           tick_at_de(home, f"tick_at@{A}") and tick_at_de(home, f"tick_at@{SEGUNDA}")
+           and tick_at_de(home, "tick_at"), f"{p.stdout[:300]} {p.stderr[-300:]}")
+        ok("sin ninguna ocupada, la salida junta lo dice con una lista vacia",
+           isinstance(r, dict) and r.get("lineas_ocupadas") == [], f"{p.stdout[:300]}")
+        candado = toma_candado(pathlib.Path(home) / ".wa-inbox" / "tick.lock")
+        try:
+            p, r = tick(home)
+        finally:
+            candado.close()
+        ok("con el tick de la principal ocupado, la salida junta la nombra",
+           isinstance(r, dict) and r.get("lineas_ocupadas") == [A] and r.get("busy") is False,
+           f"{p.stdout[:300]}")
+
+        # El precheck del cron de la otra linea: su tick no corre aunque el de la principal si.
+        cid = str(jsl(home, SEGUNDA, "caso", "crear", "--chat", SOPORTE, "--stanza", "TB9",
+                      "--actor", "automatizacion")[0]["case_id"])
+        ultima_corrida_agente(home, "activo")
+        pon_tick_at(home, "tick_at", 10)
+        pon_tick_at(home, f"tick_at@{A}", 10)
+        pon_tick_at(home, f"tick_at@{SEGUNDA}", 10 * 60)
+
+        def precheck_en(linea):
+            return corre(home, "pending", "--needs-agent", "--precheck",
+                         extra={"WA_INBOX_LINEA": linea})
+
+        p = precheck_en(SEGUNDA)
+        ok("el tick de la otra linea parado: su cron sigue aunque la principal tickeo hace poco",
+           p.returncode == 0 and int(cid) in json.loads(p.stdout or "{}").get("cases", []),
+           f"{p.returncode} {p.stdout[:200]} {p.stderr[-200:]}")
+        pon_tick_at(home, f"tick_at@{SEGUNDA}", 10)
+        ok("con su propio tick al dia, su precheck sale 1, callado",
+           precheck_en(SEGUNDA).returncode == 1)
+        con = db_de(home)
+        con.execute("delete from settings where key=?", (f"tick_at@{SEGUNDA}",))
+        con.commit()
+        con.close()
+        ok("sin su propia marca todavia (una version de antes), vale la global",
+           precheck_en(SEGUNDA).returncode == 1)
+
+
+# ── La salud de cada linea (odd/tasks/linea-viva.md, V3) ─────────────────────────────────
+# Lo que el worker lee cada minuto para saber si una linea esta atendida: hace cuanto corrio
+# su tick, cuantos mensajes de sus conversaciones autorizadas llegaron y nadie juzgo (ni caso
+# ni veredicto), el mas viejo de esos, y el latido del sidecar. Solo lectura, sin Jev, sin red
+# y sin la CLI de Orca: corre cada minuto.
+def lineas_salud(home, extra=None):
+    """(proceso, objeto) de `lineas-salud --json`: UN objeto, `{"at", "lineas"}`."""
+    p = corre(home, "lineas-salud", extra=extra)
+    try:
+        return p, json.loads(p.stdout)
+    except ValueError:
+        return p, None
+
+
+LLAVES_SALUD = {"cuenta", "principal", "tick_hace_s", "sin_juzgar", "sin_juzgar_hace_s",
+                "latido_hace_s"}
+
+
+print("\nla salud de cada linea (V3)")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        ventana_min = 12 * 60
+        llegan(home, A, [
+            msg(SOPORTE, "HA1", "@duenio no abre el login", 10, mencion=True),
+            # Una linea suelta de un grupo sin Jev nunca se juzga: no es una linea parada.
+            msg(SOPORTE, "HA2", "y en el otro equipo tampoco", 9),
+            msg(AJENO, "HA3", "@duenio esto no esta autorizado", 8, mencion=True),
+            msg(OPERACIONES, "HA4", "@duenio esto esta en off", 8, mencion=True),
+            msg(FACTURACION, "HA5", "@duenio esto es de antes de la ventana",
+                ventana_min + 30, mencion=True)])
+        llegan(home, SEGUNDA, [msg(SOPORTE, "HB1", "@duenio no llega la factura", 5,
+                                   mencion=True)], activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+        js(home, "set", FACTURACION, "--provider", "ninguno", "--mode", "borrador")
+        js(home, "set", OPERACIONES, "--provider", "ninguno", "--mode", "borrador")
+        js(home, "mode", OPERACIONES, "off")
+        jsl(home, SEGUNDA, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+
+        def salud():
+            return {f["cuenta"]: f for f in (lineas_salud(home)[1] or {}).get("lineas", [])}
+
+        p, r = lineas_salud(home)
+        ok("un objeto con `at` y una fila por linea activa, la principal primero",
+           p.returncode == 0 and isinstance(r, dict) and set(r) == {"at", "lineas"}
+           and abs(r["at"] - time.time()) < 60
+           and [(f["cuenta"], f["principal"]) for f in r["lineas"]]
+           == [(A, True), (SEGUNDA, False)], f"{p.returncode} {p.stdout[:300]}")
+        s = salud()
+        ok("cada fila con las llaves del contrato",
+           all(set(f) == LLAVES_SALUD for f in s.values()), f"{s}")
+        ok("un tick que nunca corrio es null, no cero",
+           all(f["tick_hace_s"] is None for f in s.values()), f"{s}")
+
+        jsl(home, SEGUNDA, "ingest")
+        pon_tick_at(home, "tick_at", 20)
+        pon_tick_at(home, f"tick_at@{A}", 15 * 60)
+        pon_tick_at(home, f"tick_at@{SEGUNDA}", 20)
+        ruta_db = pathlib.Path(home) / ".wa-inbox" / "scope.db"
+        antes_db = hashlib.sha256(ruta_db.read_bytes()).hexdigest()
+        s = salud()
+        a, b = s.get(A, {}), s.get(SEGUNDA, {})
+        ok("la linea parada: su propio tick viejo, aunque el global sea de hace poco",
+           a.get("tick_hace_s") is not None and 15 * 60 - 5 <= a["tick_hace_s"] <= 15 * 60 + 30,
+           f"{a}")
+        ok("y cuenta solo el mensaje autorizado y de la ventana que nadie juzgo",
+           a.get("sin_juzgar") == 1, f"{a}")
+        ok("con la edad del mas viejo de esos",
+           a.get("sin_juzgar_hace_s") is not None
+           and 10 * 60 - 5 <= a["sin_juzgar_hace_s"] <= 10 * 60 + 90, f"{a}")
+        ok("la linea sana: su tick al dia y nada sin juzgar",
+           b.get("tick_hace_s") is not None and b["tick_hace_s"] < 60
+           and b.get("sin_juzgar") == 0 and b.get("sin_juzgar_hace_s") is None, f"{b}")
+        ok("el latido del sidecar, en las dos",
+           all(f.get("latido_hace_s") is not None and 0 <= f["latido_hace_s"] < 600
+               for f in (a, b)), f"{s}")
+        # El latido de cada linea es el suyo (V8): con el global fresco, la linea cuyo
+        # sidecar no late se ve parada y no viva.
+        ahora_s = int(time.time())
+        cap = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+        try:
+            for llave, valor in (("sidecar_beat", ahora_s),
+                                 (f"sidecar_beat@{A}", ahora_s - 20 * 60),
+                                 (f"sidecar_beat@{SEGUNDA}", ahora_s)):
+                cap.execute("insert into store_meta (key,value) values (?,?) on conflict(key) "
+                            "do update set value=excluded.value", (llave, str(valor)))
+            cap.commit()
+        finally:
+            cap.close()
+        s = salud()
+        ok("el latido de cada linea es el suyo, no el global que late la otra",
+           (s.get(A, {}).get("latido_hace_s") or 0) >= 20 * 60 - 5
+           and (s.get(SEGUNDA, {}).get("latido_hace_s") or 0) < 60, f"{s}")
+        ok("leerla no escribe nada en la base",
+           hashlib.sha256(ruta_db.read_bytes()).hexdigest() == antes_db)
+        ok("una linea parada no es un error: sale 0", lineas_salud(home)[0].returncode == 0)
+        p, r = lineas_salud(home, extra={"WA_INBOX_LINEA": SEGUNDA})
+        ok("la corrida de una linea igual las reporta todas, en UN objeto, sin repartirse",
+           p.returncode == 0 and len(p.stdout.strip().splitlines()) == 1
+           and [f["cuenta"] for f in (r or {}).get("lineas", [])] == [A, SEGUNDA],
+           f"{p.returncode} {p.stdout[:300]} {p.stderr[-300:]}")
+        js(home, "ingest")
+        a = salud().get(A, {})
+        ok("con la linea atendida, ya no queda nada sin juzgar",
+           a.get("sin_juzgar") == 0 and a.get("sin_juzgar_hace_s") is None, f"{a}")
+
+    # Una sola linea vinculada: su fila, sin reparto.
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(PERSONA, "HU1", "no me llega la factura", 7)])
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        filas = (lineas_salud(home)[1] or {}).get("lineas", [])
+        ok("con una sola linea y sin tick todavia: el directo cuenta sin juzgar",
+           len(filas) == 1 and filas[0]["tick_hace_s"] is None and filas[0]["sin_juzgar"] == 1,
+           f"{filas}")
+        tick(home)
+        filas = (lineas_salud(home)[1] or {}).get("lineas", [])
+        ok("con una sola linea, una sola fila: la principal, su tick, y nada sin juzgar tras "
+           "el tick", len(filas) == 1 and filas[0]["cuenta"] == A and filas[0]["principal"]
+           and filas[0]["tick_hace_s"] is not None and filas[0]["tick_hace_s"] < 60
+           and filas[0]["sin_juzgar"] == 0 and filas[0]["sin_juzgar_hace_s"] is None,
+           f"{filas}")
+
+# Sin almacen (una instalacion de antes de las lineas, o que nunca vinculo): nada que mirar,
+# y mirar no crea la base.
+with tempfile.TemporaryDirectory() as home:
+    p, r = lineas_salud(home)
+    ok("sin almacen, `lineas` vacia, sale 0 y no crea scope.db",
+       p.returncode == 0 and isinstance(r, dict) and r.get("lineas") == [] and "at" in r
+       and not (pathlib.Path(home) / ".wa-inbox" / "scope.db").exists(),
+       f"{p.returncode} {p.stdout[:200]} {p.stderr[-300:]}")
 
 
 # ── Ajustes por linea (odd/tasks/ajustes-por-linea.md, A1-A3) ──────────────────────────

@@ -9426,5 +9426,76 @@ console.log('\nconfig.html — panel-urgente U4: repintar sin cambios no reempla
     /Automatic/i.test(fila.textContent), fila && fila.textContent)
 }
 
+// linea-viva V5: una linea que nadie atiende se ve en el panel, en cualquier pestana, con
+// cuanto lleva y si el respaldo del plugin la esta atendiendo. Viaja en el latido.
+console.log('\nconfig.html — linea-viva: el aviso de una linea sin atender')
+{
+  const L1 = 'pn:15550000001'
+  const L2 = 'pn:15550000002'
+  // Cinco segundos de mas: con la hora redondeada, "hace 14 min" podia pintarse 13.
+  const hace = (min) => Math.floor(Date.now() / 1000) - min * 60 - 5
+  const latido = (lineas, extra = {}) => Object.assign({ at: new Date().toISOString(), lineas }, extra)
+  const caja = (doc) => doc.getElementById('lineas-alerta')
+  {
+    const { doc } = await montar('config.html', { workerBeat: latido({
+      [L1]: { desde: hace(25), motivo: 'sin-tick', respaldo: 'ok' } }) }, 'es-419')
+    await espera()
+    const txt = caja(doc).textContent
+    ok('linea-viva: la linea sin atender se ve, con su numero y sus minutos',
+      !caja(doc).hidden && /La linea \+15550000001 lleva 25 min sin atenderse/.test(txt), txt)
+    ok('linea-viva: dice que el respaldo la esta atendiendo, y por que',
+      /el respaldo del plugin la esta atendiendo/.test(txt) && /revision de cada minuto/.test(txt), txt)
+    ok('linea-viva: va fuera de las pestanas, como el aviso general',
+      !caja(doc).closest('[role="tabpanel"]') && !caja(doc).closest('section'), caja(doc).parentElement.className)
+  }
+  {
+    const { doc } = await montar('config.html', { workerBeat: latido({
+      [L1]: { desde: hace(14), motivo: 'sin-juzgar', respaldo: 'failed' },
+      [L2]: { desde: hace(31), motivo: 'despacho-atascado', respaldo: null } }) }, 'es-419')
+    await espera()
+    const filas = caja(doc).querySelectorAll('.alert')
+    const txt = caja(doc).textContent
+    ok('linea-viva: una fila por linea afectada', filas.length === 2, String(filas.length))
+    ok('linea-viva: el respaldo que no pudo se dice',
+      /\+15550000001 lleva 14 min sin atenderse/.test(filas[0].textContent) &&
+      /no pudo atenderla/.test(filas[0].textContent) && /sin revisar/.test(filas[0].textContent), filas[0].textContent)
+    ok('linea-viva: el atasco de Orca dice que reiniciar Orca lo destraba',
+      /\+15550000002 lleva 31 min/.test(txt) && /Reiniciar Orca/.test(filas[1].textContent), filas[1].textContent)
+  }
+  {
+    const { doc } = await montar('config.html', { workerBeat: latido(undefined) }, 'es-419')
+    await espera()
+    ok('linea-viva: con todas las lineas atendidas no hay nada', caja(doc).hidden === true &&
+      caja(doc).textContent === '', caja(doc).outerHTML)
+  }
+  {
+    const viejo = { at: new Date(Date.now() - 120000).toISOString(),
+      lineas: { [L1]: { desde: hace(25), motivo: 'sin-tick', respaldo: 'ok' } } }
+    const { doc } = await montar('config.html', { workerBeat: viejo }, 'es-419')
+    await espera()
+    ok('linea-viva: con el worker callado no se afirma nada de las lineas (manda el aviso del worker)',
+      caja(doc).hidden === true && !doc.getElementById('alert').hidden, caja(doc).outerHTML)
+  }
+  {
+    const lineas = { [L1]: { desde: hace(25), motivo: 'sin-tick', respaldo: 'failed' } }
+    const en = await montar('config.html', { workerBeat: latido(lineas) }, 'en-US')
+    const pt = await montar('config.html', { workerBeat: latido(lineas) }, 'pt-BR')
+    await espera()
+    ok('linea-viva: en ingles', /Line \+15550000001 has not been attended for 25 min/.test(caja(en.doc).textContent) &&
+      /could not attend it/.test(caja(en.doc).textContent), caja(en.doc).textContent)
+    ok('linea-viva: en portugues', /A linha \+15550000001 esta ha 25 min sem atendimento/.test(caja(pt.doc).textContent),
+      caja(pt.doc).textContent)
+  }
+  {
+    // Un codigo que el panel no conoce no deja la fila vacia ni muestra el codigo crudo.
+    const { doc } = await montar('config.html', { workerBeat: latido({
+      [L1]: { desde: hace(12), motivo: 'otro-motivo', respaldo: 'raro' } }) }, 'es-419')
+    await espera()
+    const txt = caja(doc).textContent
+    ok('linea-viva: un motivo desconocido igual dice la linea y no muestra codigos',
+      /\+15550000001 lleva 12 min/.test(txt) && !/otro-motivo|raro/.test(txt), txt)
+  }
+}
+
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)
 process.exit(fallos ? 1 : 0)

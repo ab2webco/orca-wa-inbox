@@ -930,7 +930,8 @@ async function iniciar () {
   let drenando = false
   const salidaTimer = setInterval(() => {
     try {
-      almacen.latir()
+      // El de SU linea tambien, con su conexion: el global solo no distingue lineas.
+      almacen.latir(Date.now(), { cuenta, conectado })
     } catch (error) {
       avisarFallo('latido-sin-escribir', error)
       return

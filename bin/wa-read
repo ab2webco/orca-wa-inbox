@@ -162,6 +162,20 @@ def reciente(epoch):
         return False
 
 
+def estado_de_lineas(con, cuentas):
+    """El transporte de cada linea para el doctor: su ultimo latido, si su socket esta
+    abierto y si esta muda (`sidecar_mudo`). Una linea muda lleva `transport-silent`,
+    el mismo codigo que el renglon cuando no lee ninguna."""
+    salida = []
+    for cuenta in cuentas:
+        mudo = wa_store.sidecar_mudo(con, cuenta)
+        salida.append({"account": cuenta, "ok": not mudo,
+                       "code": wa_store.LINEA_MUDA if mudo else SIN_TRANSPORTE,
+                       "latido": wa_store.ultimo_latido(con, cuenta),
+                       "conectado": wa_store.linea_conectada(con, cuenta)})
+    return salida
+
+
 def cmd_doctor(a):
     """Para que el usuario sepa que le falta antes de que nada dependa de esto.
 
@@ -185,24 +199,36 @@ def cmd_doctor(a):
         etiquetas = ", ".join(x.get("account") or "?" for x in lineas)
         via = lineas[0].get("account") if lineas else None
         # `sidecar_mudo` y no `sidecar_vivo`: el doctor da un margen que cubre un reinicio
-        # del sidecar (T16c), y `wa-send` conserva su plazo corto.
-        if not wa_store.sidecar_mudo(con):
-            filas = [{"check": "a message transport", "ok": True,
-                      "detalle": (f"{cuantas} linked line"
-                                  f"{'' if cuantas == 1 else 's'} ({etiquetas})"),
-                      "requerido": True, "code": SIN_TRANSPORTE, "via": via}]
+        # del sidecar (T16c), y `wa-send` conserva su plazo corto. Cada linea con SU
+        # latido (linea-viva V8): con el global, una linea muda se escondia detras de la
+        # otra. El renglon sigue en verde mientras alguna lea —una linea caida no frena a
+        # la otra—, y `lineas` dice cual esta muda.
+        por_linea = estado_de_lineas(con, wa_store.lineas_activas(con) or
+                                     [x.get("account") for x in lineas if x.get("account")])
+        mudas = [x for x in por_linea if not x["ok"]]
+        if (len(mudas) < len(por_linea)) if por_linea else not wa_store.sidecar_mudo(con):
+            detalle = (f"{cuantas} linked line"
+                       f"{'' if cuantas == 1 else 's'} ({etiquetas})")
+            if mudas:
+                detalle += "; no sign of life from " + ", ".join(
+                    f"{x['account']} (since {wa_store.ts(x['latido'])})" if x["latido"]
+                    else f"{x['account']} (never)" for x in mudas)
+            filas = [{"check": "a message transport", "ok": True, "detalle": detalle,
+                      "requerido": True, "code": SIN_TRANSPORTE, "via": via,
+                      "lineas": por_linea}]
         else:
             # Una fila en `linea` dice que alguna vez hubo una linea, no que alguien la
             # este leyendo. Medido en la maquina del dueno: el sidecar muerto desde el
             # dia anterior y este renglon en verde, porque la fila seguia ahi.
-            latido = wa_store.ultimo_latido(con)
+            latido = wa_store.ultimo_latido(con, via)
             desde = (f"since {wa_store.ts(latido)}" if latido
                      else "at all since it was linked")
             filas = [{"check": "a message transport", "ok": False,
                       "detalle": (f"the linked line has given no sign of life {desde}: "
                                   "nothing is reading WhatsApp right now. Restart the "
                                   "connection from the plugin settings."),
-                      "requerido": True, "code": wa_store.LINEA_MUDA, "via": via}]
+                      "requerido": True, "code": wa_store.LINEA_MUDA, "via": via,
+                      "lineas": por_linea}]
         # El desalojo va al doctor porque es lo unico del almacen que el usuario puede
         # cambiar: subir `capture_max` o `capture_days` desde el panel. Un tope que
         # muerde en silencio deja filas sin cuerpo sin que nadie sepa por que (§11-F2).

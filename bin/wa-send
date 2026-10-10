@@ -394,18 +394,20 @@ def almacen():
         return None
 
 
-def sidecar_vivo(con):
+def sidecar_vivo(con, cuenta=None):
     """Si hay alguien del otro lado. Sin esto, un sidecar apagado y uno ocupado se ven
     igual —una fila que no avanza— y las dos cosas contestarian "se vencio el plazo",
     que manda al dueno a mirar lo que no esta roto. La regla vive en `wa_store`: el
-    `doctor` usa la misma."""
-    return wa_store.sidecar_vivo(con)
+    `doctor` usa la misma. Con `cuenta`, el de LA linea que manda: con dos lineas el
+    latido global lo mantiene fresco la otra (linea-viva V8)."""
+    return wa_store.sidecar_vivo(con, cuenta)
 
 
-def con_transporte():
-    """El almacen con el sidecar vivo del otro lado, o la negativa."""
+def con_transporte(cuenta=None):
+    """El almacen con el sidecar vivo del otro lado (el de `cuenta`, si se dice), o la
+    negativa."""
     con = almacen()
-    if con is None or not sidecar_vivo(con):
+    if con is None or not sidecar_vivo(con, cuenta):
         niega(SIN_TRANSPORTE, SIN_TRANSPORTE_DETALLE)
     return con
 
@@ -442,13 +444,13 @@ def esperar(con, req_id, plazo_s):
         time.sleep(SONDEO_S)
 
 
-def veredicto(con, req_id, plazo_s, salida_json):
+def veredicto(con, req_id, plazo_s, salida_json, cuenta=None):
     """Espera, y traduce lo que haya pasado a la salida de esta CLI."""
     fila = esperar(con, req_id, plazo_s)
     if fila is None:
-        # El plazo se vencio. Cual de las dos cosas fue lo dice el latido, y son
-        # acciones distintas del dueno.
-        if not sidecar_vivo(con):
+        # El plazo se vencio. Cual de las dos cosas fue lo dice el latido —el de la linea
+        # que manda—, y son acciones distintas del dueno.
+        if not sidecar_vivo(con, cuenta):
             niega(SIN_TRANSPORTE, SIN_TRANSPORTE_DETALLE)
         niega(SIN_VEREDICTO,
               f"no verdict in {plazo_s:g}s. The request is still queued: ask again with "
@@ -693,12 +695,16 @@ def aprobar(req_id, plazo_s, salida_json, por):
     if fila["estado"] == CANCELADO_:
         niega(CANCELADO, f"this draft was cancelled ({fila['motivo'] or 'no reason given'}): "
                          "nothing was sent and it cannot be approved.")
+    # La linea del borrador, no la de cualquiera: aprobar sobre una linea caida deja
+    # una peticion que nadie va a mandar, y el borrador sigue esperando el visto.
+    if fila["estado"] == BORRADOR and not sidecar_vivo(con, fila["account"]):
+        niega(SIN_TRANSPORTE, SIN_TRANSPORTE_DETALLE)
     cur = con.execute("update envio set estado=? where req_id=? and estado=?",
                       (PENDIENTE, req_id, BORRADOR))
     con.commit()
     if cur.rowcount == 1:
         anotar_aprobacion(fila, req_id, por)
-    veredicto(con, req_id, plazo_s, salida_json)
+    veredicto(con, req_id, plazo_s, salida_json, fila["account"])
 
 
 def cancelar(req_id, motivo, salida_json):
@@ -826,7 +832,7 @@ def main():
     # necesita saber lo PRIMERO que esta mal con lo que pidio —que no firmo, que la
     # conversacion esta en dos lineas, que no la autorizo—, no un fallo del entorno
     # que tape todo lo demas.
-    con = con_transporte()
+    con = con_transporte(fila.get("account"))
     req_id = a.req_id or uuid.uuid4().hex
 
     # Sin `--send` no se manda, sea cual sea el permiso: eso ya era asi y es lo correcto
@@ -866,7 +872,7 @@ def main():
                       frenado=frenado, reescribir=para_el_agente(piso, jev, niv))
 
     encolar(con, fila, a.text, req_id, PENDIENTE)
-    veredicto(con, req_id, a.timeout, a.json)
+    veredicto(con, req_id, a.timeout, a.json, fila.get("account"))
 
 
 if __name__ == "__main__":

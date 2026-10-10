@@ -1455,6 +1455,22 @@ const PANELES = [
     nombre: 'config-sin-worker', archivo: 'config.html', anchos: ANCHOS_ESTADO,
     datos: Object.assign({}, DATOS, { workerBeat: null, health: null, chats: [] })
   },
+  // linea-viva: una linea que nadie atiende, arriba de todo y en cualquier pestana, con sus
+  // minutos y si el respaldo del plugin la esta atendiendo. Una, y dos con motivos distintos:
+  // a 320 px el numero y la frase larga tienen que partirse sin desbordar.
+  { nombre: 'config-linea-sin-atender', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 300,
+    datos: Object.assign({}, DATOS, { workerBeat: { at: new Date().toISOString(),
+      lineas: { 'pn:15550000001': { desde: Math.round(Date.now() / 1000) - 25 * 60,
+        motivo: 'sin-tick', respaldo: 'ok' } } } }) },
+  { nombre: 'config-lineas-sin-atender-varias', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 300, idiomas: ['pt'],
+    datos: Object.assign({}, DATOS, { workerBeat: { at: new Date().toISOString(),
+      lineas: {
+        'pn:15550000001': { desde: Math.round(Date.now() / 1000) - 14 * 60,
+          motivo: 'sin-juzgar', respaldo: 'failed' },
+        'pn:15550000002': { desde: Math.round(Date.now() / 1000) - 31 * 60,
+          motivo: 'despacho-atascado', respaldo: 'busy' } } } }) },
   {
     // El worker que latia y dejo de hacerlo. Es otro estado y otra accion: aca no hay
     // nada que aprobar, hay que reiniciar Orca.
