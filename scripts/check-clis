@@ -3154,6 +3154,129 @@ def revisa_sin_transporte(fallos: list) -> int:
                           f"dijo {(p.stderr or '').strip()[:120]!r}")
     return hechas
 
+def revisa_sin_transporte_por_linea(fallos: list) -> int:
+    """linea-viva V8: con dos lineas, la que no late (o late con el socket caido) no
+    tiene transporte aunque la otra mantenga fresco el latido global. Visto en vivo: el
+    latido era UNO para el almacen, y `wa-send` esperaba el plazo entero sobre una linea
+    muerta para contestar `send-timeout`, que manda al dueno a mirar WhatsApp y no la
+    linea. Numeros de mentira y HOME temporal."""
+    hechas = 0
+    nodo = shutil.which("node")
+    if not nodo:
+        print("  aviso: sin node, no se armo el almacen de dos lineas", file=sys.stderr)
+        return hechas
+    linea_a, linea_b = "pn:15550000001", "pn:15550000002"
+    grupo_a, grupo_b = "120363000000000001@g.us", "120363000000000002@g.us"
+    almacen_js = (RAIZ / "sidecar" / "src" / "almacen.js").as_uri()
+    with tempfile.TemporaryDirectory() as tmp:
+        home = pathlib.Path(tmp)
+        env = dict(entorno(home), ORCA_CLI_COMMAND=str(home / "no-existe-este-orca"))
+
+        def escribe(cuerpo):
+            js = ("import { abrirAlmacen, rutaAlmacen } from %r;"
+                  "const a = abrirAlmacen(rutaAlmacen({ HOME: process.env.HOME }));"
+                  "%s; a.cerrar();" % (almacen_js, cuerpo))
+            subprocess.run([nodo, "--input-type=module", "-e", js], env=env, check=True,
+                           capture_output=True, timeout=120)
+
+        def latidos(b_hace_s, b_conectado):
+            escribe("a.latir(Date.now() - %d * 1000, { cuenta: %r, conectado: %s });"
+                    "a.latir(Date.now(), { cuenta: %r, conectado: true })"
+                    % (b_hace_s, linea_b, "true" if b_conectado else "false", linea_a))
+
+        escribe("a.registrarLinea({ cuenta: %r, pn: '15550000001@s.whatsapp.net', "
+                "nombre: 'Linea A' });"
+                "a.registrarLinea({ cuenta: %r, pn: '15550000002@s.whatsapp.net', "
+                "nombre: 'Linea B' });"
+                "a.anotarChat({ cuenta: %r, chatJid: %r, nombre: 'Grupo A', esGrupo: 1 });"
+                "a.anotarChat({ cuenta: %r, chatJid: %r, nombre: 'Grupo B', esGrupo: 1 });"
+                "a.activarLinea(%r); a.sumarLinea(%r)"
+                % (linea_a, linea_b, linea_a, grupo_a, linea_b, grupo_b, linea_a, linea_b))
+        subprocess.run([str(BIN / "wa-scope"), "agent", "Agente De Ejemplo"],
+                       capture_output=True, text=True, env=env, timeout=120)
+        con = sqlite3.connect(home / ".wa-inbox" / "scope.db")
+        for cuenta, jid, nombre in ((linea_a, grupo_a, "Grupo A"),
+                                    (linea_b, grupo_b, "Grupo B")):
+            con.execute("insert or replace into chat_scope (account, chat_jid, chat_name, "
+                        "mode) values (?,?,?,?)", (cuenta, jid, nombre, "responder"))
+        con.commit()
+        con.close()
+
+        def manda(nombre, linea):
+            inicio = time.time()
+            p = subprocess.run([str(BIN / "wa-send"), nombre, "hola", "--send", "--line",
+                                linea, "--timeout", "2"],
+                               capture_output=True, text=True, env=env, timeout=120)
+            return p, (p.stderr or "").strip().splitlines()[:1], time.time() - inicio
+
+        def encolados(linea):
+            c = sqlite3.connect(home / ".wa-inbox" / "capture.db")
+            try:
+                return c.execute("select count(*) from envio where account=?",
+                                 (linea,)).fetchone()[0]
+            finally:
+                c.close()
+
+        for caso, hace_s, conectado in (("sin latir hace 4 minutos", 240, True),
+                                        ("latiendo con el socket caido", 0, False)):
+            latidos(hace_s, conectado)
+            p, primera, _ = manda("Grupo B", linea_b)
+            hechas += 2
+            if p.returncode != 4 or primera != [f"wa-send: {SIN_TRANSPORTE_ENVIO}"]:
+                fallos.append(f"wa-send por la linea B {caso}, con A latiendo, salio "
+                              f"{p.returncode} ({primera!r}) y tenia que salir 4 con "
+                              f"'wa-send: {SIN_TRANSPORTE_ENVIO}'")
+            if encolados(linea_b):
+                fallos.append(f"wa-send por la linea B {caso} dejo encolado un envio que "
+                              "nadie va a mandar")
+
+        # El visto del dueno sobre un borrador de B: la negativa es la del transporte de
+        # B, y el borrador sigue esperando en vez de quedar pendiente para nadie.
+        llave = json.loads(subprocess.run(
+            [nodo, str(RAIZ / "aprobador.mjs")], capture_output=True, text=True, env=env,
+            timeout=60).stdout or "{}").get("llave") or ""
+        escribe("a.encolarEnvio({ reqId: 'V8-B', cuenta: %r, chatJid: %r, "
+                "cuerpo: 'borrador de B', estado: 'borrador' })" % (linea_b, grupo_b))
+        p = subprocess.run([str(BIN / "wa-send"), "--approve", "V8-B", "--by", "board",
+                            "--timeout", "2"], capture_output=True, text=True,
+                           env=dict(env, WA_INBOX_APPROVER=llave), timeout=120)
+        primera = (p.stderr or "").strip().splitlines()[:1]
+        c = sqlite3.connect(home / ".wa-inbox" / "capture.db")
+        estado = c.execute("select estado from envio where req_id='V8-B'").fetchone()[0]
+        c.close()
+        hechas += 1
+        if primera != [f"wa-send: {SIN_TRANSPORTE_ENVIO}"] or estado != "borrador":
+            fallos.append(f"aprobar un borrador de la linea B caida contesto {primera!r} y "
+                          f"lo dejo {estado!r}: tenia que negarse con "
+                          f"{SIN_TRANSPORTE_ENVIO!r} y dejarlo en borrador")
+
+        # A no se entera: tiene transporte, y sin nadie que drene vence el plazo.
+        latidos(240, True)
+        p, primera, _ = manda("Grupo A", linea_a)
+        hechas += 1
+        if primera != ["wa-send: send-timeout"]:
+            fallos.append(f"wa-send por la linea A (viva) contesto {primera!r} y tenia que "
+                          "esperar el veredicto (send-timeout sin nadie que drene)")
+
+        # El doctor: verde (A lee) y con el detalle de cada linea.
+        p = subprocess.run([str(BIN / "wa-read"), "doctor", "--json"], capture_output=True,
+                           text=True, env=env, timeout=120)
+        try:
+            filas = json.loads(p.stdout or "[]")
+        except ValueError:
+            filas = []
+        fila = next((f for f in filas if f.get("check") == "a message transport"), {})
+        por_linea = {x.get("account"): x for x in fila.get("lineas") or []}
+        hechas += 2
+        if fila.get("ok") is not True or fila.get("code") != "no-transport":
+            fallos.append(f"wa-read doctor con A viva y B muda tenia que seguir en verde "
+                          f"con 'no-transport': {fila!r}")
+        if (por_linea.get(linea_b) or {}).get("code") != "transport-silent" or \
+                (por_linea.get(linea_a) or {}).get("ok") is not True:
+            fallos.append(f"wa-read doctor no dice por linea cual esta muda: {fila!r}")
+    return hechas
+
+
 def revisa_espera(fallos: list) -> int:
     """`wa-read wait` (cli-huecos, C4): bloquea hasta que llega un mensaje nuevo de OTRO
     en una conversacion autorizada, o hasta el plazo. Lee el almacen, nunca el socket.
@@ -3834,6 +3957,7 @@ def main() -> int:
             fallos.append(f"{nombre} {' '.join(args)}: {ultima.strip()}")
 
     comprobaciones = (revisa_ajustes(fallos) + revisa_sin_transporte(fallos)
+                      + revisa_sin_transporte_por_linea(fallos)
                       + revisa_rutas_del_almacen(fallos)
                       + revisa_migracion_cuentas(fallos)
                       + revisa_accounts_con_lineas(fallos)
