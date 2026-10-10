@@ -141,7 +141,7 @@ create table if not exists mensaje (
   menciona_me integer not null default 0,
   cita_me     integer not null default 0,
   -- El id del mensaje que este cita, de cualquier chat (linea-viva-2 W6). Un almacen de
-  -- antes la gana al abrirse (columnaCitaId), sin subir la version.
+  -- antes la gana al abrirse (columnasNuevas), sin subir la version.
   cita_id     text,
   -- Revocado: la fila queda como lapida con el cuerpo vacio, y no se borra. Borrarla
   -- dejaria que la proxima sincronizacion la volviera a insertar con su texto, o sea
