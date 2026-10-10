@@ -1892,6 +1892,21 @@ const PANELES = [
     datos: Object.assign(conTablero(TABLERO_PERIODO_VACIO), { boardPeriod: 'today' })
   },
   {
+    // panel-urgente U5: el agente dejo de producir y las tarjetas se acumulan. Lo que hay
+    // que mirar es que el aviso se lea entero a 320 y que los seis azulejos no se apilen
+    // de a uno: son el "90 para el agente contra 2 abiertas" que delata el problema.
+    nombre: 'informes-motor-parado', archivo: 'activity.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 500, guion: ABRIR_INFORMES, idiomas: ['pt'],
+    datos: Object.assign(conTablero(tableroDe(TABLERO_CASOS)), {
+      reports: Object.assign(informeDeEjemplo(), {
+        engine: { verdicts: { card: 90, alert: 2, doubtful: 27, nothing: 95 },
+          agent_output: { draft: 28, issue: 2, sent: 7 },
+          agent_last_output_at: '2026-10-03 11:20:00',
+          agent_silent_s: 6 * 86400, agent_stalled: true }
+      })
+    })
+  },
+  {
     nombre: 'informes-vacio', archivo: 'activity.html', anchos: ANCHOS, enTodosLosAnchos: true,
     espera: 500, guion: ABRIR_INFORMES,
     datos: Object.assign(conTablero(tableroDe(TABLERO_CASOS)), { reports: informeVacio() })

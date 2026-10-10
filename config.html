@@ -1508,6 +1508,8 @@
           chatAlready: "ya autorizada: {m}",
           scopeRmFail: "No se pudo quitar la autorizacion, asi que sigue en pie. " +
             "Intente de nuevo.",
+          scopeSaveBadEntry: "El panel mando esta conversacion con una forma que el " +
+            "plugin no reconoce, asi que no se guardo. Lo escrito sigue en el formulario.",
           routeRmFail: "No se pudo quitar la regla, asi que sigue en pie. Intente de nuevo.",
           routeRmBadPattern: "Esa regla no tiene un texto valido, asi que no se quito.",
           chatToneLabel: "Como escribe aca (opcional)",
@@ -2091,6 +2093,8 @@
           chatAlready: "already authorised: {m}",
           scopeRmFail: "The authorisation could not be removed, so it is still in " +
             "force. Try again.",
+          scopeSaveBadEntry: "The panel sent this conversation in a shape the plugin " +
+            "does not recognise, so it was not saved. What you typed is still in the form.",
           routeRmFail: "The rule could not be removed, so it is still in force. Try again.",
           routeRmBadPattern: "That rule has no valid text, so it was not removed.",
           chatToneLabel: "How it writes here (optional)",
@@ -2750,6 +2754,8 @@
         chatAlready: 'ja autorizada: {m}',
         scopeRmFail: 'Nao foi possivel remover a autorizacao, entao ela continua ' +
           'valendo. Tente de novo.',
+        scopeSaveBadEntry: 'O painel enviou esta conversa em um formato que o plugin ' +
+          'nao reconhece, entao nao foi salva. O que voce escreveu continua no formulario.',
         routeRmFail: 'Nao foi possivel remover a regra, entao ela continua valendo. Tente de novo.',
         routeRmBadPattern: 'Essa regra nao tem um texto valido, entao nao foi removida.',
         kindGroup: 'Grupo', kindDirect: 'Direto',
@@ -3498,7 +3504,7 @@
         })
       }
       /** Guarda `pares` ([[clave, valor]]) en lo propio de la linea `cuenta`. Lee y escribe el
-       *  contenedor entero, como `escribirAlcanceVisto`: lo de las otras lineas y las claves
+       *  contenedor entero: lo de las otras lineas y las claves
        *  que no se conocen quedan como estaban. Sin una lectura FRESCA no se escribe: con una
        *  vieja se borraria lo que el sync u otra linea escribio despues. */
       function escribirAjustesDeLinea (cuenta, pares) {
@@ -4641,6 +4647,9 @@
       // Lo ultimo que se pinto de cada tabla que NOMBRA un proyecto: cuando el catalogo
       // cambia se repintan, o seguirian mostrando el id donde ya hay un nombre.
       var scopeCrudo = null, reglasCrudas = null
+      // Lo ultimo que pinto la tabla del alcance. Mientras no cambie, no se repinta: ver
+      // `renderScope`. `null` es "todavia no se pinto nunca".
+      var firmaScope = null
 
       // Los motivos que puede traer un pedido de proyectos, por CODIGO: el worker no sabe
       // en que idioma esta el usuario. Lo que el panel no conozca cae en el generico.
@@ -5081,6 +5090,17 @@
           pintarAvisoNumero()
         }
         var keys = Object.keys(entries)
+        // Repintar es REEMPLAZAR los botones, y la vuelta del sondeo corre cada 12 s. Un
+        // clic cuyo mousedown y mouseup caen a los dos lados de un repintado no dispara
+        // `click`, porque el nodo ya no es el mismo: eso es el "me toca dar dos clics"
+        // que reporto el dueno. Con una firma solo se repinta cuando algo cambio de
+        // verdad, igual que `renderLineas`, que ya se guardaba de esto.
+        var firma = JSON.stringify([LANG, keys.map(function (key) {
+          var e = entries[key] || {}
+          return [key, e.chatName, e.mode, listaDeEntrada(e)]
+        })])
+        if (firma === firmaScope && el('scope-wrap').childElementCount) return
+        firmaScope = firma
         if (!keys.length) {
           el('scope-wrap').innerHTML = '<p class="empty">' + t('empty') + '</p>'
           return
@@ -5460,7 +5480,11 @@
       // es el unico que sabe en que idioma esta el usuario.
       var SCOPE_HOW_KEY = {
         'sin-herramientas': 'syncNoTools',
-        'sin-permiso': 'syncNoPerm'
+        'sin-permiso': 'syncNoPerm',
+        // El worker rechazo la entrada que mando el panel: no es un fallo del host ni
+        // algo que se arregle reintentando, asi que no se dice "intente de nuevo".
+        'entrada-invalida': 'scopeSaveBadEntry',
+        'jid-invalido': 'scopeSaveBadEntry'
       }
 
       /** Quitar una autorizacion. NO la borra el panel: se la pide al worker.
@@ -5518,23 +5542,23 @@
         var workspace = derivadoDe(workspaces)
         var mode = valorSeg('mode') || 'off'
         if (!jid) { said('said-scope', t('needChat'), true); return }
-        // Se arma sobre lo que hay AHORA en el storage: cada intento vuelve a leer, asi
-        // que un reintento no pisa lo que otro escribio entre medio.
-        var sello = null
-        function armar (next) {
-          next = next || {}
+        // El alcance ENTERO ya no viaja por el puente. Orca mide cada mensaje del panel
+        // y rechaza lo que pase de 64 KB (`PANEL_MESSAGE_MAX_BYTES`), asi que un alcance
+        // con instrucciones largas dejaba sin guardar a TODAS las conversaciones, incluso
+        // a una de 661 bytes, y los reintentos no podian ayudar: el payload no cambiaba.
+        // Va solo la entrada editada y la fusiona el worker, cuyo `storage.set` no pasa
+        // por este puente. La lectura sigue aca porque leer nunca fue el problema: el
+        // host solo mide lo que ENTRA, y el jid vivo y la gemela se resuelven con ella.
+        busy(event.currentTarget, leerAlcanceVisto(true).then(function (actual) {
+          if (!hayRespuesta(actual)) { said('said-scope', t('scopeNotSaved'), true); return }
+          var next = actual || {}
           // Se guarda en la forma viva de la conversacion (lid-sigue-autorizacion). Lo que
           // ya estaba viene de la entrada editada o, al elegir la fila viva, de su gemela
           // vieja de esta linea; esa se quita y `wa-scope` borra su fila de la base.
           jid = destinoDe(elegido, next)
           var origen = editandoJid || (next[jid] ? jid : (gemelosDe[jid] || []).filter(
             function (g) { return next[g] && deEstaLinea(next[g].account) })[0]) || jid
-          // Lo de antes se conserva: provider y target ya no se eligen aca, pero la fila
-          // los trae de antes de este cambio y borrarlos seria perder lo que el dueno
-          // configuro. Una conversacion nueva no abre tarjetas.
-          var previa = next[origen] && typeof next[origen] === 'object' ? next[origen] : null
-          if (origen !== jid) delete next[origen]
-          next[jid] = Object.assign({ provider: 'ninguno', target: null }, previa, {
+          var entrada = {
             chatName: chat, workspaces: workspaces, workspace: workspace,
             projectQuestion: preguntaDe(valorSeg('chat-project-question')),
             mode: mode, tone: el('chat-tone').value.trim() || null,
@@ -5549,24 +5573,32 @@
             approval: nivelesDelFormulario(),
             // Los roles de esta conversacion (roles-por-numero): siempre una lista, vacia
             // cuando nadie tiene rol, que es lo mismo que no tener la clave.
-            members: miembrosDelFormulario(jid),
-            updatedAt: new Date().toISOString() })
+            members: miembrosDelFormulario(jid)
+          }
           // Autorizar es autorizar para ESTE numero (T9): el mismo grupo visto desde
           // otro numero propio es otra autorizacion.
-          if (cuentaVinculada) next[jid].account = cuentaVinculada
-          sello = next[jid].updatedAt
-          return next
-        }
-        busy(event.currentTarget, guardarAlcanceConfirmado(armar, function () { return jid },
-          function () { return sello }).then(function (r) {
-          // Sin confirmacion no se dice guardado ni se vacia el formulario: lo escrito
-          // por el dueno es lo unico que queda de ese cambio.
-          if (!r.ok) { said('said-scope', t('scopeNotSaved'), true); return }
-          renderScope(r.alcance)
-          resetScopeForm()
-          pintarChecklist()
-          said('said-scope', '✓ ' + t('savedOk') + ': ' + chat + ' · ' +
-            porCodigo(MODE_KEY, mode, mode))
+          if (cuentaVinculada) entrada.account = cuentaVinculada
+          var pedido = { action: 'guardar', jid: jid, origen: origen, entrada: entrada }
+          if (otraLineaVista()) pedido.linea = otraLineaVista()
+          return pedirAlWorker('scopeRequest', 'scopeResult', pedido).then(function (v) {
+            // Sin confirmacion no se dice guardado ni se vacia el formulario: lo escrito
+            // por el dueno es lo unico que queda de ese cambio.
+            if (!v) { said('said-scope', t('scopeNotSaved'), true); return }
+            if (!v.ok) {
+              said('said-scope',
+                porCodigo(SCOPE_HOW_KEY, v.code, '') || t('scopeNotSaved'), true)
+              return
+            }
+            // El alcance no esta entre las claves del sondeo: se relee esta sola para
+            // pintar lo que de verdad quedo guardado, no la copia que tenia el panel.
+            return leerAlcanceVisto(true).then(function (v2) {
+              if (hayRespuesta(v2)) renderScope(v2 || {})
+              resetScopeForm()
+              pintarChecklist()
+              said('said-scope', '✓ ' + t('savedOk') + ': ' + chat + ' · ' +
+                porCodigo(MODE_KEY, mode, mode))
+            })
+          })
         }))
       })
 
@@ -6869,50 +6901,6 @@
         if (!otra) return read('scope', usuario)
         return read('alcancePorLinea', usuario).then(function (v) {
           return hayRespuesta(v) ? ((v && v[otra]) || {}) : v
-        })
-      }
-      /** Guarda el alcance de la linea que se mira. El de otra linea va en SU lugar de
-       *  `alcancePorLinea`: el de la principal no se toca aunque tenga el mismo grupo. Sin
-       *  poder leer lo que hay no se escribe, porque se perderian las demas lineas. */
-      function escribirAlcanceVisto (next) {
-        var otra = otraLineaVista()
-        if (!otra) return write('scope', next)
-        return read('alcancePorLinea', true).then(function (v) {
-          if (!hayRespuesta(v)) return { ok: false }
-          var todo = v && typeof v === 'object' ? Object.assign({}, v) : {}
-          todo[otra] = next
-          return write('alcancePorLinea', todo)
-        })
-      }
-      /** Guarda una entrada del alcance y dice que si SOLO cuando el host la tiene.
-       *
-       *  Medido en la maquina del dueno: unas instrucciones largas nunca llegaron al
-       *  storage y el panel dijo guardado. `write` resuelve con la respuesta del host,
-       *  que puede ser `{ ok: false }` —limite, la cola vencida, un error suyo—, y un
-       *  "si" tampoco alcanza: se relee el alcance y la entrada tiene que traer el mismo
-       *  `updatedAt` que se escribio. Un rechazo se reintenta pocas veces, armando de
-       *  nuevo sobre lo que haya en ese momento. Devuelve `{ ok, alcance }`. */
-      var GUARDAR_INTENTOS = 3
-      function guardarAlcanceConfirmado (armar, jidDe, selloDe, intento) {
-        intento = intento || 1
-        function otraVez () {
-          if (intento >= GUARDAR_INTENTOS) return { ok: false }
-          return new Promise(function (r) { setTimeout(r, 300 * intento) }).then(function () {
-            return guardarAlcanceConfirmado(armar, jidDe, selloDe, intento + 1)
-          })
-        }
-        return leerAlcanceVisto(true).then(function (actual) {
-          // Sin saber que hay no se escribe: se perderian las demas conversaciones.
-          if (!hayRespuesta(actual)) return otraVez()
-          var next = armar(Object.assign({}, actual || {}))
-          return escribirAlcanceVisto(next).then(function (r) {
-            if (!r || !r.ok) return otraVez()
-            return leerAlcanceVisto(true).then(function (v) {
-              var entrada = hayRespuesta(v) && v ? v[jidDe()] : null
-              if (!entrada || entrada.updatedAt !== selloDe()) return otraVez()
-              return { ok: true, alcance: v }
-            })
-          })
         })
       }
       function delOtraLinea (valor, cuenta, clave) {

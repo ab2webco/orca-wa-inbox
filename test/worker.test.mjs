@@ -390,6 +390,74 @@ console.log('\nworker: quitar una conversacion la saca de los DOS registros')
   apagar()
 }
 
+// ───────── panel-urgente U2: el worker guarda UNA conversacion ─────────
+// Orca admite 64 KB en UN mensaje del panel. El panel escribia el alcance ENTERO en cada
+// Guardar, asi que con instrucciones largas ninguna conversacion se podia guardar. Ahora
+// viaja solo la entrada y la fusiona el worker, cuyo `storage.set` no pasa por el puente.
+console.log('\nworker: guardar una conversacion sin mandar el alcance entero')
+{
+  const orca = hostFalso(herramientas('guardar', BUENO), {
+    chats: [],
+    scope: {
+      '1@g.us': { chatName: 'Soporte', provider: 'plane', target: 'SOP', mode: 'observar',
+        instructions: 'lo de antes' },
+      '2@g.us': { chatName: 'Ops', provider: 'plane', target: 'OPS', mode: 'observar' }
+    }
+  })
+  const { apagar } = await arranca(orca)
+
+  orca.store.scopeRequest = { id: 'guarda-1', action: 'guardar', jid: '1@g.us',
+    origen: '1@g.us', at: new Date().toISOString(),
+    entrada: { chatName: 'Soporte', mode: 'responder', instructions: 'lo nuevo' } }
+  await hasta(() => orca.store.scopeResult?.requestId === 'guarda-1', 15000)
+  ok('el worker contesta que guardo',
+    orca.store.scopeResult?.ok === true && orca.store.scopeResult.code === 'guardado',
+    JSON.stringify(orca.store.scopeResult))
+  ok('y lo guardado es lo que mando el panel',
+    orca.store.scope?.['1@g.us']?.mode === 'responder' &&
+    orca.store.scope['1@g.us'].instructions === 'lo nuevo',
+    JSON.stringify(orca.store.scope?.['1@g.us']))
+  // Lo que el panel no manda no se pierde: el formulario ya no elige `provider`/`target`.
+  ok('lo que la entrada no nombra se conserva',
+    orca.store.scope?.['1@g.us']?.provider === 'plane' &&
+    orca.store.scope['1@g.us'].target === 'SOP',
+    JSON.stringify(orca.store.scope?.['1@g.us']))
+  ok('sin tocar las demas conversaciones',
+    orca.store.scope?.['2@g.us']?.chatName === 'Ops', JSON.stringify(orca.store.scope))
+  ok('y el sello lo pone el worker', typeof orca.store.scope?.['1@g.us']?.updatedAt === 'string',
+    JSON.stringify(orca.store.scope?.['1@g.us']?.updatedAt))
+
+  // El mismo grupo visto con otro id: la entrada vieja se va, no quedan las dos.
+  orca.store.scopeRequest = { id: 'guarda-2', action: 'guardar', jid: '1b@lid',
+    origen: '1@g.us', at: new Date().toISOString(),
+    entrada: { chatName: 'Soporte', mode: 'responder' } }
+  await hasta(() => orca.store.scopeResult?.requestId === 'guarda-2', 15000)
+  ok('al cambiar de jid la entrada vieja no queda duplicada',
+    orca.store.scope?.['1b@lid'] && !('1@g.us' in orca.store.scope),
+    JSON.stringify(Object.keys(orca.store.scope || {})))
+
+  // Lo que no tiene forma de autorizacion no entra al registro.
+  orca.store.scopeRequest = { id: 'guarda-mal', action: 'guardar', jid: '3@g.us',
+    entrada: 'una cadena', at: new Date().toISOString() }
+  await hasta(() => orca.store.scopeResult?.requestId === 'guarda-mal', 15000)
+  ok('una entrada que no es un objeto se rechaza',
+    orca.store.scopeResult?.ok === false &&
+    orca.store.scopeResult.code === 'entrada-invalida',
+    JSON.stringify(orca.store.scopeResult))
+  ok('y no dejo nada escrito', !('3@g.us' in (orca.store.scope || {})),
+    JSON.stringify(Object.keys(orca.store.scope || {})))
+
+  // Claves que el contrato no nombra no llegan al registro: el pedido viene del panel.
+  orca.store.scopeRequest = { id: 'guarda-extra', action: 'guardar', jid: '4@g.us',
+    at: new Date().toISOString(),
+    entrada: { chatName: 'Nueva', mode: 'observar', colado: 'no deberia entrar' } }
+  await hasta(() => orca.store.scopeResult?.requestId === 'guarda-extra', 15000)
+  ok('una clave fuera del contrato no se guarda',
+    orca.store.scope?.['4@g.us'] && !('colado' in orca.store.scope['4@g.us']),
+    JSON.stringify(orca.store.scope?.['4@g.us']))
+  apagar()
+}
+
 // ───────── el arnes de la carpeta del plugin ─────────
 // Es la rama que escribe en disco, y la que no recorre ningun otro chequeo. Un
 // NameError ya se colo una vez por exactamente eso.
