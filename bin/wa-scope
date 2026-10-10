@@ -10556,16 +10556,25 @@ def atiende_respuesta(con, m, relevado=None):
     if relevado is not None:
         if r["accion"] == "estado" or r["caso"] not in (None, relevado["case_id"]):
             return False
+        # Sin numero, la cita tiene que ser de ese aviso o de nada: un mensaje que cita otro
+        # aviso no contesta este (linea-viva-2 W6).
+        citado = aviso_citado(con, m) if r["caso"] is None else None
+        if citado is not None and citado["req_id"] != relevado["req_id"]:
+            return False
         aviso = relevado
     elif r["accion"] == "estado":
         aviso_encola(con, req, "respuesta", texto_de_estado(con), stanza=stanza)
         con.commit()
         return True
     elif r["caso"] is None:
-        vivos = [f for f in avisos_vigentes(con) if f["chat_jid"] == m.get("chat_jid")]
-        if len(vivos) != 1:
-            return False
-        aviso = vivos[0]
+        # El aviso que cita es el que contesta, aunque haya varios vivos (linea-viva-2 W6); y
+        # si ya no vale lo dice, nunca contesta otro. Sin cita de un aviso, el unico vigente.
+        aviso = aviso_citado(con, m)
+        if aviso is None:
+            vivos = [f for f in avisos_vigentes(con) if f["chat_jid"] == m.get("chat_jid")]
+            if len(vivos) != 1:
+                return False
+            aviso = vivos[0]
     else:
         # El aviso es de quien lo recibio: el que salio a otro numero no se contesta desde
         # este. El de un caso de otra linea, si salio por esta.
@@ -10624,6 +10633,33 @@ def atiende_respuesta(con, m, relevado=None):
     return True
 
 
+def aviso_citado(con, m):
+    """El aviso de aprobacion que el mensaje cita (linea-viva-2 W6), vigente o no, o None si
+    no cita uno. Lo citado es el id que WhatsApp le dio al aviso al salir (`envio.stanza_id`,
+    en la linea por la que salio, que es donde llega la respuesta) y el `req_id` del envio es
+    el del aviso. Solo los de este numero de aprobacion que esta linea contesta."""
+    cita = m.get("cita_id")
+    if not cita:
+        return None
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return None
+    try:
+        fila = fuente.execute("select req_id from envio where account=? and stanza_id=?",
+                              (m.get("account"), cita)).fetchone()
+    except sqlite3.Error:
+        fila = None
+    finally:
+        fuente.close()
+    if fila is None:
+        return None
+    return con.execute("select * from aviso where req_id=? and tipo='aprobacion' and "
+                       "(account=? or sale_por=?) and chat_jid=?",
+                       (fila["req_id"], cuenta_activa(), cuenta_activa(),
+                        m.get("chat_jid"))).fetchone()
+
+
 def releva_respuesta(con, m, aviso):
     """La respuesta a un aviso de un caso de OTRA linea que salio por esta (linea-viva V6).
 
@@ -10661,7 +10697,8 @@ def mensaje_capturado(linea, chat_jid, stanza):
     except wa_store.SinFuente:
         return None
     try:
-        fila = fuente.execute("select account, chat_jid, stanza_id, sender_jid, body from mensaje "
+        fila = fuente.execute("select account, chat_jid, stanza_id, sender_jid, body, "
+                              f"{wa_store.columna_cita(fuente, 'mensaje')} cita_id from mensaje "
                               "where account=? and chat_jid=? and stanza_id=? and from_me=0 "
                               "and revocado=0", (linea, chat_jid, stanza)).fetchone()
     finally:
@@ -10671,7 +10708,7 @@ def mensaje_capturado(linea, chat_jid, stanza):
     return {"account": fila["account"], "chat_jid": fila["chat_jid"],
             "stanza_id": fila["stanza_id"],
             "sender_jid": wa_store.jid_sin_dispositivo(fila["sender_jid"]),
-            "text": (fila["body"] or "").replace("\n", " ")}
+            "text": (fila["body"] or "").replace("\n", " "), "cita_id": fila["cita_id"]}
 
 
 def cmd_aviso_relevo(con, a):

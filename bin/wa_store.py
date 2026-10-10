@@ -462,6 +462,14 @@ left join (select account, chat_jid, max(ts) mine from mensaje
 """
 
 
+def columna_cita(con, prefijo="m"):
+    """La expresion que lee el id del mensaje citado (linea-viva-2 W6), o `null` en un
+    almacen de antes de la columna: la gana cuando el sidecar nuevo lo abre, y hasta
+    entonces un mensaje de ahi no cita nada. Leerla a ciegas tumbaria la bandeja entera."""
+    tiene = any(f["name"] == "cita_id" for f in con.execute("pragma table_info(mensaje)"))
+    return f"{prefijo}.cita_id" if tiene else "null"
+
+
 def inbox(con, dias, limite, ventana, solo="todos", linea=None):
     """Lo que le hablo a usted y todavia no contesto."""
     corte = int(time.time()) - dias * 86400
@@ -473,7 +481,8 @@ def inbox(con, dias, limite, ventana, solo="todos", linea=None):
     sql = f"""
         select m.account, m.chat_jid, m.stanza_id, m.ts, m.from_me, m.sender_jid,
                m.sender_name, m.body, m.media_type, m.media_path, m.menciona_me,
-               m.cita_me, c.rowid chat_id, c.chat_name, c.is_group, lm.mine
+               m.cita_me, {columna_cita(con)} cita_id, c.rowid chat_id, c.chat_name,
+               c.is_group, lm.mine
         from mensaje m
         join chat c on c.account = m.account and c.chat_jid = m.chat_jid
         {ULTIMA_MIA}
@@ -540,6 +549,10 @@ def inbox(con, dias, limite, ventana, solo="todos", linea=None):
         juicio = veredictos.get((r["account"], r["chat_jid"], r["stanza_id"]))
         if juicio:
             item["juicio"] = juicio
+        # El mensaje que este cita (linea-viva-2 W6): un `si` que cita un aviso contesta ESE.
+        # Solo cuando cita algo, como `juicio`.
+        if r["cita_id"]:
+            item["cita_id"] = r["cita_id"]
         item["adjuntos_cerca"] = adjuntos_cerca(con, r["account"], r["chat_jid"],
                                                 r["ts"], ventana)
         item["audios"] = [a["path"] for a in item["adjuntos_cerca"] if a["type"] == "audio"]
