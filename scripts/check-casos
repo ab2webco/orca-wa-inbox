@@ -13145,6 +13145,187 @@ if NODE:
            f"{p.stdout[:300]}")
 
 
+# ── Los avisos salen por una linea que llega al dueno (odd/tasks/linea-viva.md, V6) ────────
+# Visto en vivo: el chat del dueno existia solo en la linea del bot, y los avisos de los
+# casos de la principal salian por la principal: `send-wrong-line`, ocho avisos fallidos en un
+# dia y el dueno sin enterarse. El aviso sale por la linea del caso si alli esta su chat; si
+# no, por la primera otra linea vinculada donde esta en `responder` con el mismo numero de
+# aprobacion. La respuesta del dueno se reconoce en la linea por la que salio y actua sobre
+# el caso en SU linea.
+def avisos_de(home, cid):
+    con = db_de(home)
+    filas = [dict(r) for r in con.execute(
+        "select * from aviso where tipo='aprobacion' and case_id=?", (int(cid),))]
+    con.close()
+    return filas
+
+
+def al_dueno_por_linea(home):
+    ruta = pathlib.Path(home) / ".wa-inbox" / "capture.db"
+    con = sqlite3.connect(ruta)
+    filas = con.execute("select account, req_id, body from envio where chat_jid=? "
+                        "order by rowid", (DUENO_DM,)).fetchall()
+    con.close()
+    return filas
+
+
+def caso_en_linea(home, linea, stanza, texto):
+    cid = str(jsl(home, linea, "caso", "crear", "--chat", PERSONA, "--stanza", stanza,
+                  "--actor", "agente")[0]["case_id"])
+    jsl(home, linea, "caso", "clasificar", cid, "--clase", "card", "--prioridad", "none",
+        "--actor", "agente")
+    v = jsl(home, linea, "caso", "propuesta", cid, "--tipo", "responder", "--respuesta", texto,
+            "--actor", "agente")[0]["propuesta_version"]
+    return cid, v
+
+
+def con_sidecars(home, fn):
+    sidecar_a, sidecar_b = SidecarDeLinea(home, A), SidecarDeLinea(home, SEGUNDA)
+    try:
+        return fn()
+    finally:
+        sidecar_a.cerrar()
+        sidecar_b.cerrar()
+
+
+print("\nlos avisos salen por una linea que llega al dueno (V6)")
+if NODE:
+    if not any(c["jid"] == DUENO_DM for c in CHATS):
+        CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+    with tempfile.TemporaryDirectory() as home:
+        llave_del_plugin(home)
+        # Los casos se crean a mano, sin sus mensajes: la entrada no los junta en uno.
+        llegan(home, A, [])
+        llegan(home, SEGUNDA, [], activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "agent", "Agente De Ejemplo")
+        js(home, "config", "ack", "off")
+        js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        jsl(home, SEGUNDA, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+        # El chat del dueno existe solo en la otra linea, como en vivo.
+        jsl(home, SEGUNDA, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        dinero_a, v_a = caso_en_linea(home, A, "V6A1", "Listo, el arreglo cuesta $50.")
+        con_sidecars(home, lambda: tick(home))
+        ok("sin numero de aprobacion no se encola ningun aviso, en ninguna linea",
+           cuenta(home, "select count(*) from aviso") == 0 and al_dueno_por_linea(home) == [])
+
+        pon_aprobacion(home, DUENO_LID)
+        p, r = con_sidecars(home, lambda: tick(home))
+        filas = avisos_de(home, dinero_a)
+        ok("el aviso de un caso de la principal sale por la linea donde esta el chat del dueno",
+           [(f["account"], f.get("sale_por"), f["estado"]) for f in filas]
+           == [(A, SEGUNDA, "enviado")], f"{filas} {p.stderr[-400:]}")
+        salidas = al_dueno_por_linea(home)
+        ok("y lo entrega el sidecar de esa linea, no hay send-wrong-line",
+           [(c, req) for c, req, _ in salidas] == [(SEGUNDA, filas[0]["req_id"] if filas else "")]
+           and f"Caso {dinero_a} " in (salidas[0][2] if salidas else ""), f"{salidas}")
+        ok("el caso dice que se aviso por WhatsApp, en su linea",
+           any(e["detalle"].startswith("aviso por WhatsApp")
+               for e in js(home, "caso", "ver", dinero_a)[0]["eventos"]))
+
+        # El dueno contesta en la linea por la que le llego: el caso de la principal se aprueba
+        # y su respuesta sale por la principal.
+        llegan(home, SEGUNDA, [msg(DUENO_DM, "V6R1", f"si {dinero_a}", 1, de=DUENO_LID)],
+               activar=False)
+        casos_b = cuenta(home, "select count(*) from caso where account=?", SEGUNDA)
+        con_sidecars(home, lambda: js(home, "ingest"))
+        ver = js(home, "caso", "ver", dinero_a)[0]
+        ok("`si N` en la otra linea aprueba el caso de la principal",
+           ver["etapa"] == "respondido" and ver["account"] == A
+           and any(e["actor"] == "dueno" and "por WhatsApp" in e["detalle"]
+                   for e in ver["eventos"]), f"{ver['etapa']} {ver['eventos'][-3:]}")
+        con = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+        respuesta = con.execute("select account, estado from envio where req_id=?",
+                                (f"caso-{dinero_a}-{v_a[:12]}",)).fetchall()
+        con.close()
+        ok("y la respuesta al cliente sale por la linea del caso", respuesta == [(A, "enviado")],
+           f"{respuesta}")
+        ok("la respuesta del dueno no abre un caso en ninguna linea",
+           cuenta(home, "select count(*) from caso where account=?", SEGUNDA) == casos_b
+           and cuenta(home, "select count(*) from caso_mensaje where stanza_id='V6R1'") == 0)
+        con_sidecars(home, lambda: tick(home))
+        confirma = [(c, b) for c, req, b in al_dueno_por_linea(home) if req.startswith("aviso-r-")]
+        ok("la confirmacion le llega por la misma linea por la que contesto",
+           len(confirma) == 1 and confirma[0][0] == SEGUNDA
+           and f"Caso {dinero_a} aprobado" in confirma[0][1], f"{confirma}")
+        n = len(al_dueno_por_linea(home))
+        con_sidecars(home, lambda: (js(home, "ingest"), tick(home)))
+        ok("la misma respuesta no se aplica ni se confirma dos veces",
+           len(al_dueno_por_linea(home)) == n, f"{al_dueno_por_linea(home)}")
+
+        # no N, tambien por la otra linea: cierra el caso de la principal.
+        cierra_a, _ = caso_en_linea(home, A, "V6A2", "Listo, cuesta $90 el arreglo.")
+        con_sidecars(home, lambda: tick(home))
+        llegan(home, SEGUNDA, [msg(DUENO_DM, "V6R2", f"no {cierra_a}", 1, de=DUENO_LID)],
+               activar=False)
+        con_sidecars(home, lambda: js(home, "ingest"))
+        ver = js(home, "caso", "ver", cierra_a)[0]
+        ok("`no N` en la otra linea cierra el caso de la principal, como el dueno",
+           ver["etapa"] == "cerrado" and ver["eventos"][-1]["actor"] == "dueno",
+           f"{ver['etapa']} {ver['eventos'][-1:]}")
+
+        # El relevo no acepta lo que no escribio el dueno: lee el mensaje capturado, no lo que
+        # le pasan.
+        superado, _ = caso_en_linea(home, A, "V6A3", "Listo, son $20.")
+        con_sidecars(home, lambda: tick(home))
+        req = (avisos_de(home, superado) or [{}])[0].get("req_id") or ""
+        llegan(home, SEGUNDA, [msg(DUENO_DM, "V6R3", f"si {superado}", 1, de=OTRO_LID)],
+               activar=False)
+        p = corre(home, "aviso-relevo", "--aviso", req, "--stanza", "V6R3", "--line", A)
+        ok("el relevo niega un `si N` que no escribio un numero del dueno",
+           p.returncode == 3 and json.loads(p.stdout or "{}").get("handled") is False
+           and not js(home, "caso", "ver", superado)[0]["aprobada"],
+           f"{p.returncode} {p.stdout[:200]} {p.stderr[-200:]}")
+        p = corre(home, "aviso-relevo", "--aviso", req, "--stanza", "NO-EXISTE", "--line", A)
+        ok("ni uno que no esta capturado", p.returncode == 3
+           and not js(home, "caso", "ver", superado)[0]["aprobada"], f"{p.returncode}")
+        # Un `si` sin numero contesta el unico aviso vigente que salio por esa linea.
+        llegan(home, SEGUNDA, [msg(DUENO_DM, "V6R4", "si", 1, de=DUENO_LID)], activar=False)
+        con_sidecars(home, lambda: js(home, "ingest"))
+        ver = js(home, "caso", "ver", superado)[0]
+        ok("`si` a secas en la otra linea aprueba el unico aviso vigente que salio por ella",
+           ver["etapa"] == "respondido" and ver["aprobada"], f"{ver['etapa']} {ver['eventos'][-2:]}")
+
+        # El caso de la otra linea: su aviso sale por ella, como siempre.
+        dinero_b, _ = caso_en_linea(home, SEGUNDA, "V6B1", "Listo, el arreglo cuesta $80.")
+        con_sidecars(home, lambda: tick(home))
+        filas = avisos_de(home, dinero_b)
+        ok("el aviso de un caso de la linea del chat del dueno sale por ella",
+           [(f["account"], f.get("sale_por"), f["estado"]) for f in filas]
+           == [(SEGUNDA, SEGUNDA, "enviado")], f"{filas}")
+
+        # Ninguna linea lo alcanza: el chat del dueno en la otra linea, pero sin poder contestar
+        # alli. Sale por la del caso, como antes, y `wa-send` dice por que.
+        jsl(home, SEGUNDA, "mode", DUENO_DM, "observar")
+        nadie, _ = caso_en_linea(home, A, "V6A4", "Listo, son $30.")
+        p, r = con_sidecars(home, lambda: tick(home))
+        filas = avisos_de(home, nadie)
+        ok("sin una linea que llegue al chat del dueno, el aviso queda fallido con su motivo",
+           len(filas) == 1 and filas[0]["estado"] == "fallido"
+           and (filas[0]["motivo"] or "").startswith("send-wrong-line")
+           and isinstance(r, dict), f"{filas} {p.stderr[-300:]}")
+
+    # Una sola linea: el aviso sale por ella, como siempre.
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        pon_aprobacion(home, DUENO_LID)
+        llegan(home, A, [msg(PERSONA, "V6U1", PEDIDO, 30)])
+        unica, _ = propuesta_lista(home, "V6U1", texto="Listo, el arreglo cuesta $50.")
+        sidecar = SidecarFalso(home)
+        try:
+            tick(home)
+        finally:
+            sidecar.cerrar()
+        filas = avisos_de(home, unica)
+        ok("con una sola linea el aviso sale por ella, como siempre",
+           [(f["account"], f.get("sale_por"), f["estado"]) for f in filas] == [(A, A, "enviado")],
+           f"{filas}")
+
+
 # ── El tick de cada linea (odd/tasks/linea-viva.md, V2) ──────────────────────────────────
 # Visto en vivo: la segunda linea no se juzgo en seis horas y media, y nada lo dijo. El
 # `tick_at` era uno solo: el tick de una linea tapaba que el de la otra no corria, y la
