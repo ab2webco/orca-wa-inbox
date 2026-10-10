@@ -39,12 +39,16 @@ Ninguna llamada de la CLI las quita: se sueltan desde Orca, en Ajustes → Resum
   del plugin (el `runContext` de la automatización `triage`, nunca un `::workspace:` de
   una corrida), con otra cuenta autenticada si la primera falla, el prompt de
   `prompts/triage.md` copiado a `despachos/` y una sola línea, y la verificación del turno.
-  Nunca dos a la vez (una fila en `agente_corrida`, escrita con la base tomada, o el lock
-  del agente puesto, lo impiden), a lo más uno por vuelta y no antes de 5 minutos del
-  anterior. La terminal se cierra cuando el agente soltó el lock, cuando se fue sola o a
-  los 30 minutos. Si no lo pudo lanzar, el tablero lo dice con el motivo. "Atender ahora"
-  usa el mismo camino (`wa-scope agente lanzar`), sin la espera. La automatización
-  `triage` queda de respaldo con su cron: el precheck (`pending --needs-agent --precheck`)
+  Nunca dos a la vez en una misma línea (una fila en `agente_corrida` de esa línea, escrita
+  con la base tomada, o el lock del agente de esa línea puesto, lo impiden; el de la
+  principal se llama `triage`, el de otra `triage@<línea>`), a lo más uno por vuelta y no
+  antes de 5 minutos del anterior. Un caso con 3 corridas seguidas sin avanzar espera una
+  hora y el dueño se entera una vez; una cuenta de Claude con 3 lanzamientos fallidos
+  seguidos se salta una hora mientras haya otra. La terminal se cierra cuando el agente
+  soltó el lock, cuando se fue sola o a los 30 minutos. Si no lo pudo lanzar, el tablero lo
+  dice con el motivo. "Atender ahora" usa el mismo camino (`wa-scope agente lanzar`), sin
+  la espera. La automatización `triage` queda de respaldo con su cron: el precheck
+  (`pending --needs-agent --precheck`)
   **sale con 1 cuando ningún caso necesita lenguaje o cuando el tick se encarga** (corrió
   hace menos de 3 minutos y su último lanzamiento no falló por `sin-cli`, `sin-espacio` o
   `sin-prompt`, lo único que el cron sí arregla). Orca marca la corrida `skipped_precheck`
