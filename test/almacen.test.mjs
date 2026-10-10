@@ -1242,6 +1242,32 @@ console.log('\nMigracion: un almacen ya al dia se deja quieto')
     JSON.stringify(doctor.filas))
 }
 
+console.log('\nlinea-viva-2 W1: la bandeja de salida de antes gana la cuenta de reintentos')
+{
+  // Un almacen ya al dia, pero de antes de `envio.reintentos`: `create table if not
+  // exists` no le agrega la columna, y sin ella reconciliar un `enviando` revienta.
+  const home = nueva()
+  const ruta = rutaAlmacen({ HOME: home })
+  const alm = abrirAlmacen(ruta)
+  alm.encolarEnvio({ reqId: 'W1-VIEJO', cuenta: CUENTA, chatJid: LAURA, cuerpo: 'hola' })
+  alm.cerrar()
+  const cruda = new DatabaseSync(ruta)
+  const columnas = () => cruda.prepare('pragma table_info(envio)').all().map((f) => f.name)
+  if (columnas().includes('reintentos')) cruda.exec('alter table envio drop column reintentos')
+  cruda.close()
+
+  const otra = abrirAlmacen(ruta)
+  ok('reabrirlo agrega la columna, con cero para lo que ya estaba',
+    otra.verEnvio('W1-VIEJO')?.reintentos === 0, JSON.stringify(otra.verEnvio('W1-VIEJO')))
+  ok('sin contar como una migracion de la via vieja', otra.migracion === null,
+    JSON.stringify(otra.migracion))
+  otra.cerrar()
+  const tercera = abrirAlmacen(ruta)
+  ok('y abrirlo otra vez no la vuelve a agregar',
+    tercera.verEnvio('W1-VIEJO')?.reintentos === 0)
+  tercera.cerrar()
+}
+
 console.log('\nMigracion: a medias no queda NUNCA — o migra entera, o no migra')
 {
   const home = nueva()
