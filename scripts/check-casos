@@ -12506,6 +12506,13 @@ class OrcaFalsa:
         return [l for l in self.llamadas if l[:2] == verbo]
 
 
+def al_abrir_la_ventana(ws):
+    """Un `at` (ms) al principio de una ventana de avisos de Orca: con `ahora`, `at + 20 s`
+    podia caer en la ventana siguiente y el duplicado salia como aviso nuevo."""
+    ventana_ms = ws.VENTANA_ORCA_S * 1000
+    return int(time.time() * 1000) // ventana_ms * ventana_ms + 1000
+
+
 def orca_aviso(ws, con, pane, at=None, worktree=WT_ALFA, agent="claude", state="waiting"):
     return ws.cmd_orca_aviso(con, argparse.Namespace(
         state=state, pane=pane, at=str(at if at is not None else int(time.time() * 1000)),
@@ -12555,7 +12562,7 @@ try:
     # O3: el aviso de un agente que espera.
     with tempfile.TemporaryDirectory() as home:
         ws, con, enviados, falsa = prepara_orca(home, waiting="on")
-        at = int(time.time() * 1000)
+        at = al_abrir_la_ventana(ws)
         r = orca_aviso(ws, con, "tab-1:p1", at)
         ok("O3: un agente que espera produce un aviso, y sale", r.get("queued") is True
            and len(enviados) == 1 and enviados[0]["chat"] == DUENO_DM, f"{r} {enviados}")
@@ -12607,7 +12614,7 @@ try:
            f"{r}")
     with tempfile.TemporaryDirectory() as home:
         ws, con, enviados, _ = prepara_orca(home, waiting="on")
-        at = int(time.time() * 1000)
+        at = al_abrir_la_ventana(ws)
         r = orca_aviso(ws, con, "tab-1:p1", at, state="blocked")
         t = enviados[0]["texto"] if enviados else ""
         ok("blocked: un agente bloqueado produce un aviso, y sale",
