@@ -311,30 +311,82 @@ def linea_activa_en_disco():
         con.close()
 
 
-def ultimo_latido(con):
-    """El ultimo latido del sidecar en el almacen, en segundos de epoch, o None si
-    nunca latio (o la base no lo sabe decir)."""
+# El latido y la conexion de CADA linea (linea-viva V8), junto al global de siempre. Los
+# escribe `latir()` en sidecar/src/almacen.js con el mismo nombre: renombrar uno solo
+# deja a todas las lineas sin latido propio, y de vuelta en la llave compartida.
+LATIDO_LINEA = "sidecar_beat@"
+CONECTADO_LINEA = "sidecar_conectado@"
+
+
+def _meta(con, llave):
     try:
-        fila = con.execute(
-            "select value from store_meta where key='sidecar_beat'").fetchone()
-        return int(fila[0]) if fila else None
-    except (sqlite3.Error, TypeError, ValueError):
+        fila = con.execute("select value from store_meta where key=?", (llave,)).fetchone()
+    except sqlite3.Error:
+        return None
+    return fila[0] if fila else None
+
+
+def _hay_latidos_por_linea(con):
+    try:
+        return con.execute("select 1 from store_meta where key like ? limit 1",
+                           (LATIDO_LINEA + "%",)).fetchone() is not None
+    except sqlite3.Error:
+        return False
+
+
+def ultimo_latido(con, cuenta=None):
+    """El ultimo latido del sidecar en el almacen, en segundos de epoch, o None si
+    nunca latio (o la base no lo sabe decir).
+
+    Con `cuenta`, el de ESA linea. La llave global la escriben todos los sidecars, y con
+    dos lineas la viva mantenia fresca la de la caida: la caida se veia viva (linea-viva
+    V8). Sin latido propio de esa linea hay dos casos: ningun sidecar anota por linea
+    (uno de antes) y vale el global, como siempre; o los otros si anotan y este no
+    arranco nunca, y entonces no late. `local` y `web` no tienen sidecar propio: global."""
+    if cuenta:
+        propio = _meta(con, LATIDO_LINEA + cuenta)
+        if propio is None and str(cuenta).startswith("pn:") and _hay_latidos_por_linea(con):
+            return None
+        if propio is not None:
+            try:
+                return int(propio)
+            except (TypeError, ValueError):
+                return None
+    try:
+        return int(_meta(con, "sidecar_beat"))
+    except (TypeError, ValueError):
         return None
 
 
-def sidecar_vivo(con):
+def linea_conectada(con, cuenta):
+    """Si el socket de esa linea esta abierto, segun su sidecar: True, False, o None si
+    no lo anoto nunca (un sidecar de antes, o una linea sin sidecar propio)."""
+    if not cuenta:
+        return None
+    valor = _meta(con, CONECTADO_LINEA + cuenta)
+    return None if valor is None else valor == "1"
+
+
+def sidecar_vivo(con, cuenta=None):
     """Si hay alguien del otro lado AHORA. Una fila en `linea` dice que alguna vez hubo
     una linea; esto dice que el sidecar sigue corriendo. Es la regla de `wa-send` y la
-    del `doctor`, escrita una sola vez."""
-    latido = ultimo_latido(con)
-    return latido is not None and (time.time() - latido) <= LATIDO_VENCE_S
+    del `doctor`, escrita una sola vez.
+
+    Con `cuenta`, ademas que el socket de ESA linea este abierto: un sidecar que late
+    reconectando, o con la linea desvinculada, no tiene por donde mandar, y esperar su
+    veredicto es contestar "se vencio el plazo" a algo que nunca va a salir."""
+    latido = ultimo_latido(con, cuenta)
+    if latido is None or (time.time() - latido) > LATIDO_VENCE_S:
+        return False
+    return linea_conectada(con, cuenta) is not False
 
 
-def sidecar_mudo(con):
+def sidecar_mudo(con, cuenta=None):
     """Si el sidecar lleva tanto sin latir que ya no es un reinicio: es la regla del
     doctor (`LATIDO_MUDO_S`). Nunca haber latido tambien es mudo: nadie leyo esta linea
-    desde que se enlazo."""
-    latido = ultimo_latido(con)
+    desde que se enlazo. Con `cuenta`, el latido de esa linea (`ultimo_latido`); la
+    conexion no cuenta aca: un socket que reconecta es un proceso vivo, no una linea muda."""
+    latido = ultimo_latido(con, cuenta)
     return latido is None or (time.time() - latido) > LATIDO_MUDO_S
 
 

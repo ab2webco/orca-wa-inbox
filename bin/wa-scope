@@ -9728,7 +9728,9 @@ def id_envio_caso(case_id, version):
 
 def envios_del_almacen(req_ids):
     """{req_id: estado} de la bandeja de salida, en solo lectura, y si el sidecar late.
-    Sin almacen no hay ni lo uno ni lo otro."""
+    Sin almacen no hay ni lo uno ni lo otro. El latido es el de la linea de esta corrida
+    (`cuenta_activa`): con dos lineas el global lo mantiene fresco la otra, y el tick de
+    una linea caida firmaba lo que nadie iba a mandar (linea-viva V8)."""
     ruta = wa_store.store_db_path()
     if not os.path.exists(ruta):
         return {}, False
@@ -9737,7 +9739,7 @@ def envios_del_almacen(req_ids):
     except sqlite3.Error:
         return {}, False
     try:
-        vivo = wa_store.sidecar_vivo(fuente)
+        vivo = wa_store.sidecar_vivo(fuente, cuenta_activa())
         estados = {}
         ids = list(req_ids)
         for i in range(0, len(ids), 500):
