@@ -48,17 +48,48 @@ closes them. The rule is the same:
 
 ## Checklist
 
-- [ ] W1 Stale `enviando` reconciled by the sidecar; Python stops counting it as
-      written (test/almacen, test/envio, scripts/check-casos).
-- [ ] W2 Case pause and account skip after repeated agent failures, with one owner
-      notice (scripts/check-casos).
-- [ ] W3 Per-line agent slot and lock (scripts/check-casos).
-- [ ] W4 Approval reminder, SLA reminder, failed notices on the board and panel
-      (scripts/check-casos, test/panels, reduced shots).
-- [ ] W5 Dead-worker detection from the Python tick (scripts/check-casos).
-- [ ] W6 Quoted replies to a notice (test/sidecar-mensajes, test/almacen,
-      scripts/check-casos).
-- [ ] W7 Checks green without the full screenshot matrix; version bump; PR ready.
+- [x] W1 Stale `enviando` reconciled by the sidecar; Python stops counting it as
+      written (test/almacen, test/envio, scripts/check-casos). `reconciliarEnviando` in
+      the drain loop of a connected line: its own matching outgoing message makes the row
+      `enviado`; otherwise back to `pendiente` once (`envio.reintentos`), then `rechazado`
+      `cortado-al-enviar`. `linea_escribio` and `caso_ya_escribio` ignore an `enviando`
+      older than `ENVIANDO_VENCE_S = 120`. RED: envio import error, almacen 2, check-casos
+      "un enviando de hace 10 minutos no cuenta como escrito". GREEN: almacen, envio,
+      check-casos (numbers in W7).
+- [x] W2 Case pause and account skip after repeated agent failures, with one owner
+      notice (scripts/check-casos). `agente_corrida.propuesta_antes` / `avanzo`;
+      `racha_sin_avance` skips machine-side failures; 3 in a row pause the case an hour
+      and send one `agente` notice; `cuentas_que_fallan` feeds `abre_agente(evitar=)`,
+      used anyway when nothing else is left. RED: 16 of 28 (shared with W3).
+- [x] W3 Per-line agent slot and lock (scripts/check-casos). `agente_corrida.cuenta`
+      (backfilled); `de_esta_linea` filters the in-flight check, the watch, the board and
+      the precheck; `llave_del_lock` keeps `triage` for the principal, a single line and
+      `local`, and `triage@<line>` for the others. GREEN: 28/28 new, 110/110 agent
+      sections.
+- [x] W4 Approval reminder, SLA reminder, failed notices on the board and panel
+      (scripts/check-casos, test/panels, reduced shots). Reminder `aviso-rec-<case>-<ver>`
+      at 75% of `approval_hours`, answered together with its notice; one `aviso-sla-<case>`
+      per overdue case in `responder`/`borrador`; `notices_failed` on the board and a red
+      block in activity.html. RED: 12 FALLA in check-casos, panels 4 plus a crash.
+      Screenshots `tablero-avisos-fallidos` looked at: es dark 1440, es light 320,
+      en light 390, pt dark 768 (the 320 and 768 also by me): readable, no overflow.
+- [x] W5 Dead-worker detection from the Python tick (scripts/check-casos). The tick
+      reads `workerBeat.at`; over 3 minutes it reports `worker_muerto` (also in the
+      combined output) and the owner gets one notice per incident and one on recovery. A
+      missing beat is not an alert, and the notice waits one tick right after Orca starts.
+      RED: 12 FALLA.
+- [x] W6 Quoted replies to a notice (test/sidecar-mensajes, test/almacen,
+      scripts/check-casos). `mensaje.cita_id` from `contextInfo.stanzaId` (in-place
+      column, schema version unchanged); `aviso_citado` maps it through `envio.stanza_id`
+      to the notice. A quote of an expired or answered notice answers that one ("no
+      longer valid") and never approves another. RED: sidecar-mensajes 5, almacen 5,
+      check-casos 8 of 14.
+- [x] W7 Checks green without the full screenshot matrix; version bump; PR ready. Every
+      `npm run check` step except `npm run shots`, on the merged branch: check-casos
+      2192/2192, panels 1692/1692, worker 662/662, almacen 350/350, envio 123/123,
+      sidecar-mensajes 125/125, every other suite green. The orca-aviso window tests now
+      start at a window's start; `at + 20 s` could cross into the next one and fail at
+      random. Version 4.30.0.
 
 ## Acceptance
 
