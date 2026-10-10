@@ -499,15 +499,30 @@ function jsonDe (stdout) {
  * Orca dejo atascada una corrida de SUS automatizaciones. Nunca dos ticks a la vez en la
  * misma linea, y ninguno con el plugin deteniendose. `correr` es el mando sin valla: el
  * tick abre agentes por la CLI de Orca. Cada falla va a `anotar(cuenta|null, registro)`.
+ *
+ * Y lleva los incidentes (V5): `estado()` es lo que viaja en el latido, por linea, y
+ * `avisar(aviso)` recibe UN aviso por incidente pasados `avisoMs` (el de Orca atascado, ya
+ * en cuanto se ve: para verse lleva 10 min) y UNO cuando se cierra, si se aviso.
  */
 export function crearRespaldoTick ({ correr, herramienta, anotar = async () => {},
   manifiesto = null, detenido = () => false, ahora = () => Date.now(),
-  plataforma = process.platform, env = process.env }) {
+  plataforma = process.platform, env = process.env, avisar = async () => {},
+  avisoMs = INCIDENTE_AVISO_MS }) {
   const enVuelo = new Map()
   const respaldo = {}
   let atascos = []
   let revisadoMs = null
   const propias = automatizacionesDelManifiesto(manifiesto)
+  // Como se llama cada automatizacion en Orca: el aviso la nombra como el dueno la ve.
+  const titulos = {}
+  for (const a of (manifiesto && manifiesto.contributes &&
+    Array.isArray(manifiesto.contributes.automations) ? manifiesto.contributes.automations : [])) {
+    if (a && typeof a.id === 'string' && typeof a.title === 'string') titulos[a.id] = a.title
+  }
+  // clave (cuenta, o DESPACHO) -> { motivo, desdeS, vistoMs, sanas, avisado, id }
+  const incidentes = new Map()
+  let lineasActivas = []
+  let cadenaAvisos = Promise.resolve()
 
   const fallo = (cuenta, que, error, extra) =>
     Promise.resolve(anotar(cuenta, registroDeFalla(que, error, extra))).catch(() => {})
@@ -575,25 +590,259 @@ export function crearRespaldoTick ({ correr, herramienta, anotar = async () => {
     atascos = nuevos
   }
 
+  /** Los avisos van en fila y sin esperarlos: un `wa-send` lento no frena la vuelta. */
+  function encolarAviso (clave, inc, tipo) {
+    const aviso = { tipo, clave, cuenta: clave === DESPACHO ? null : clave, motivo: inc.motivo,
+      desdeS: inc.desdeS, respaldo: clave === DESPACHO ? null : (respaldo[clave] ?? null),
+      automatizaciones: inc.automatizaciones || [], lineas: [...lineasActivas],
+      ahoraMs: ahora(), id: `${inc.id}${tipo === 'recuperada' ? '-ok' : ''}` }
+    cadenaAvisos = cadenaAvisos.then(() => avisar(aviso)).catch(() => {})
+  }
+  function cerrar (clave) {
+    const inc = incidentes.get(clave)
+    incidentes.delete(clave)
+    if (inc && inc.avisado) encolarAviso(clave, inc, 'recuperada')
+  }
+  function abrir (clave, motivo, desdeS) {
+    const ahoraMs = ahora()
+    let inc = incidentes.get(clave)
+    if (!inc) {
+      inc = { vistoMs: ahoraMs, avisado: false, desdeS,
+        id: `linea-viva-${clave.replace(/[^A-Za-z0-9]+/g, '')}-${Math.round(ahoraMs / 1000)}` }
+      incidentes.set(clave, inc)
+      // El respaldo de un incidente anterior no dice nada de este.
+      if (clave !== DESPACHO && !enVuelo.has(clave)) delete respaldo[clave]
+    }
+    inc.motivo = motivo
+    inc.desdeS = Math.min(inc.desdeS, desdeS)
+    inc.sanas = 0
+    return inc
+  }
+
+  /** Las lineas de esta vuelta: abre, sigue o cierra el incidente de cada una. */
+  function seguirLineas (salud, pendientes) {
+    const ahoraS = Math.round(ahora() / 1000)
+    const activas = salud.lineas.filter((l) => l && typeof l.cuenta === 'string' &&
+      LINEA_RE.test(l.cuenta)).map((l) => l.cuenta)
+    lineasActivas = activas
+    for (const cuenta of activas) {
+      const p = pendientes.find((x) => x.cuenta === cuenta)
+      const inc = incidentes.get(cuenta)
+      if (p) {
+        abrir(cuenta, p.motivo, p.haceS === null ? (inc ? inc.desdeS : ahoraS) : ahoraS - p.haceS)
+      } else if (inc) {
+        inc.sanas += 1
+        if (inc.sanas >= VUELTAS_SANAS) cerrar(cuenta)
+      }
+    }
+    // Una linea que ya no esta (desvinculada) no tiene nada que recuperar.
+    for (const clave of [...incidentes.keys()]) {
+      if (clave !== DESPACHO && !activas.includes(clave)) incidentes.delete(clave)
+    }
+  }
+
+  function seguirDespacho () {
+    if (!atascos.length) {
+      if (incidentes.has(DESPACHO)) cerrar(DESPACHO)
+      return
+    }
+    const inc = abrir(DESPACHO, 'despacho-atascado',
+      Math.round(Math.min(...atascos.map((a) => a.desdeMs)) / 1000))
+    inc.automatizaciones = atascos.map((a) => titulos[a.automatizacion] || a.automatizacion)
+  }
+
+  function avisarLosQueToca () {
+    const ahoraMs = ahora()
+    for (const [clave, inc] of incidentes) {
+      if (inc.avisado || inc.sanas > 0) continue
+      if (clave !== DESPACHO && ahoraMs - inc.vistoMs < avisoMs) continue
+      inc.avisado = true
+      encolarAviso(clave, inc, 'incidente')
+    }
+  }
+
   async function vuelta () {
     if (detenido()) return { salud: null, pendientes: [], lanzadas: [], revisado: false }
     const salud = await leerSalud()
     const pendientes = salud ? lineasSinAtender(salud) : []
+    // Sin salud no se sabe nada de las lineas: sus incidentes quedan como estaban.
+    if (salud) seguirLineas(salud, pendientes)
     const lanzadas = pendientes.filter((p) => lanzarTick(p.cuenta)).map((p) => p.cuenta)
     let revisado = false
     if (!detenido() && (revisadoMs === null || ahora() - revisadoMs >= ATASCO_REVISION_MS)) {
       revisadoMs = ahora()
       await revisarAtascos()
       revisado = true
+      seguirDespacho()
     }
+    if (!detenido()) avisarLosQueToca()
     return { salud, pendientes, lanzadas, revisado }
+  }
+
+  /** Lo que viaja en el latido: por linea, desde cuando no se atiende, por que y como le va
+   *  al respaldo. null si todas estan bien. Un atasco de Orca es de todas las lineas: lo
+   *  lleva cada una que no tenga un incidente propio. */
+  function estado () {
+    const salida = {}
+    for (const [clave, inc] of incidentes) {
+      if (clave === DESPACHO || inc.sanas > 0) continue
+      salida[clave] = { desde: inc.desdeS, motivo: inc.motivo, respaldo: respaldo[clave] ?? null }
+    }
+    const despacho = incidentes.get(DESPACHO)
+    if (despacho) {
+      for (const cuenta of lineasActivas) {
+        if (!salida[cuenta]) {
+          salida[cuenta] = { desde: despacho.desdeS, motivo: despacho.motivo,
+            respaldo: respaldo[cuenta] ?? null }
+        }
+      }
+    }
+    return Object.keys(salida).length ? salida : null
   }
 
   return {
     vuelta,
+    estado,
     enVuelo: () => Promise.all([...enVuelo.values()]),
+    listo: async () => {
+      await Promise.all([...enVuelo.values()])
+      await cadenaAvisos
+    },
     respaldo: () => ({ ...respaldo }),
     atascos: () => atascos.map((a) => ({ ...a }))
+  }
+}
+
+// ── El incidente, al dueno (linea-viva, V5) ───────────────────────────────────────────
+// Una linea que sigue sin atenderse 10 min despues de verse, o una corrida del plugin que
+// Orca dejo en `dispatching` mas de 10 min, es un incidente. UN aviso por incidente y UNO
+// cuando se resuelve: al chat del dueno por WhatsApp y, el del incidente, tambien como
+// notificacion de Orca.
+export const INCIDENTE_AVISO_MS = 10 * 60 * 1000
+// Cuantas vueltas sanas seguidas cierran un incidente: con una sola, una linea que el
+// respaldo atiende a medias abriria y cerraria incidentes, y el dueno recibiria una
+// recuperacion por cada parpadeo.
+const VUELTAS_SANAS = 2
+// La clave del incidente de Orca, que no es de una linea: es de todas.
+const DESPACHO = '*despacho'
+
+// Los avisos al dueno, en el idioma que tenia el panel cuando eligio su numero
+// (`approvalLang`). Los codigos del worker se vuelven frases aca y en ningun otro lado.
+const TEXTOS_INCIDENTE = Object.freeze({
+  es: {
+    'sin-tick': 'WhatsApp Inbox: la linea {num} lleva {min} min sin atenderse: Orca no corrio su ' +
+      'revision de cada minuto. {respaldo}',
+    'sin-juzgar': 'WhatsApp Inbox: la linea {num} tiene mensajes sin revisar desde hace {min} min. ' +
+      '{respaldo}',
+    'despacho-atascado': 'WhatsApp Inbox: la automatizacion {auto} de Orca lleva {min} min atascada ' +
+      'sin arrancar. Mientras tanto el plugin atiende las lineas por su cuenta. Reiniciar Orca ' +
+      'suele destrabarla.',
+    recuperada: 'WhatsApp Inbox: la linea {num} vuelve a atenderse.',
+    'recuperada-despacho': 'WhatsApp Inbox: Orca vuelve a arrancar la automatizacion {auto}.',
+    ok: 'El respaldo del plugin la esta atendiendo.',
+    busy: 'Otra revision la tiene ocupada; el respaldo lo sigue intentando.',
+    failed: 'El respaldo del plugin no pudo atenderla.',
+    ninguno: 'El respaldo del plugin la esta revisando.',
+    y: ' y '
+  },
+  en: {
+    'sin-tick': 'WhatsApp Inbox: line {num} has not been attended for {min} min: Orca did not run ' +
+      'its every-minute check. {respaldo}',
+    'sin-juzgar': 'WhatsApp Inbox: line {num} has messages nobody reviewed for {min} min. {respaldo}',
+    'despacho-atascado': 'WhatsApp Inbox: the Orca automation {auto} has been stuck without ' +
+      'starting for {min} min. Meanwhile the plugin attends the lines on its own. Restarting ' +
+      'Orca usually clears it.',
+    recuperada: 'WhatsApp Inbox: line {num} is being attended again.',
+    'recuperada-despacho': 'WhatsApp Inbox: Orca is starting the automation {auto} again.',
+    ok: 'The plugin backup is handling it.',
+    busy: 'Another check has it busy; the backup keeps trying.',
+    failed: 'The plugin backup could not attend it.',
+    ninguno: 'The plugin backup is checking it.',
+    y: ' and '
+  },
+  pt: {
+    'sin-tick': 'WhatsApp Inbox: a linha {num} esta ha {min} min sem atendimento: o Orca nao rodou ' +
+      'a revisao de cada minuto. {respaldo}',
+    'sin-juzgar': 'WhatsApp Inbox: a linha {num} tem mensagens sem revisar ha {min} min. {respaldo}',
+    'despacho-atascado': 'WhatsApp Inbox: a automacao {auto} do Orca esta travada sem iniciar ha ' +
+      '{min} min. Enquanto isso o plugin cuida das linhas por conta propria. Reiniciar o Orca ' +
+      'costuma destrava-la.',
+    recuperada: 'WhatsApp Inbox: a linha {num} voltou a ser atendida.',
+    'recuperada-despacho': 'WhatsApp Inbox: o Orca voltou a iniciar a automacao {auto}.',
+    ok: 'O backup do plugin esta atendendo.',
+    busy: 'Outra revisao a mantem ocupada; o backup continua tentando.',
+    failed: 'O backup do plugin nao conseguiu cuidar dela.',
+    ninguno: 'O backup do plugin esta revisando.',
+    y: ' e '
+  }
+})
+
+/** El texto de un aviso de incidente o de recuperacion. Pura. Un idioma que no se conoce
+ *  es ingles, como el resto de los avisos al dueno. */
+export function textoDeIncidente (idioma, aviso) {
+  const tx = TEXTOS_INCIDENTE[idioma] || TEXTOS_INCIDENTE.en
+  const despacho = aviso.motivo === 'despacho-atascado'
+  const clave = aviso.tipo === 'recuperada'
+    ? (despacho ? 'recuperada-despacho' : 'recuperada')
+    : (tx[aviso.motivo] ? aviso.motivo : 'sin-tick')
+  const ahoraMs = esNumero(aviso.ahoraMs) ? aviso.ahoraMs : Date.now()
+  const min = Math.max(1, Math.floor((ahoraMs / 1000 - (aviso.desdeS ?? ahoraMs / 1000)) / 60))
+  const autos = Array.isArray(aviso.automatizaciones) ? aviso.automatizaciones : []
+  const valores = {
+    num: aviso.cuenta ? `+${String(aviso.cuenta).replace(/^pn:/, '')}` : '',
+    min: String(min),
+    auto: autos.map((a) => `"${a}"`).join(tx.y),
+    respaldo: tx[aviso.respaldo] || tx.ninguno
+  }
+  return tx[clave].replace(/\{(\w+)\}/g, (_, k) => valores[k] ?? '')
+}
+
+/** El idioma de los avisos al dueno: el que guardo el panel, o ingles. */
+function idiomaDeAviso (valor) {
+  return typeof valor === 'string' && valor in TEXTOS_INCIDENTE ? valor : 'en'
+}
+
+/**
+ * El aviso al dueno por WhatsApp, por el mismo camino que la skill `whatsapp-avisos`: el
+ * chat y la linea salen de `wa-scope owner --json` (el numero de aprobacion, o el chat de
+ * la linea consigo misma), nunca de este codigo. Sin chat del dueno, o con el chat fuera
+ * de Automatico, no se manda nada y no es una falla: el panel igual lo muestra. Si la linea
+ * de sus avisos no alcanza su chat, se prueba por las demas (`lineas`), cada una con su id
+ * para que `wa-send` no confunda los intentos. `--raw`: el texto ya dice que es del plugin,
+ * y una linea sin nombre de agente no puede dejar de avisar por no tener firma.
+ * @returns {(texto: string, id: string, lineas: string[]) => Promise<{ ok: boolean, code: string }>}
+ */
+export function crearAvisoDueno ({ correr, herramienta, anotar = async () => {} }) {
+  return async function avisarDueno (texto, id, lineas = []) {
+    let dueno = null
+    try {
+      const { stdout } = await correr(await herramienta('wa-scope'), ['owner', '--json'],
+        { timeoutMs: 15000 })
+      dueno = jsonDe(stdout)
+    } catch (error) {
+      if (error?.exitCode === 1) return { ok: false, code: 'sin-dueno' }
+      await Promise.resolve(anotar(null, registroDeFalla('aviso-dueno', error))).catch(() => {})
+      return { ok: false, code: 'fallo' }
+    }
+    if (!dueno || dueno.can_send !== true || typeof dueno.chat !== 'string' || !dueno.chat) {
+      return { ok: false, code: 'sin-dueno' }
+    }
+    const candidatas = [dueno.line, ...lineas]
+      .filter((l, i, todas) => typeof l === 'string' && LINEA_RE.test(l) && todas.indexOf(l) === i)
+    for (const [i, linea] of candidatas.entries()) {
+      try {
+        const { stdout, code } = await correr(await herramienta('wa-send'),
+          [dueno.chat, texto, '--line', linea, '--send', '--raw', '--json', '--id', `${id}-${i}`],
+          { timeoutMs: AVISO_PLAZO_MS })
+        if (jsonDe(stdout)?.estado === 'enviado') return { ok: true, code: 'enviado' }
+        // Retenido para aprobacion (sale con 3): ya esta en la fila del dueno, otra linea
+        // solo dejaria otro retenido.
+        if (code === 3) return { ok: false, code: 'retenido' }
+      } catch (error) {
+        await Promise.resolve(anotar(linea, registroDeFalla('aviso-dueno', error))).catch(() => {})
+      }
+    }
+    return { ok: false, code: 'fallo' }
   }
 }
 
@@ -1661,10 +1910,15 @@ export default function activate(orca) {
   // aprobado y no existe". El latido es lo que separa esas dos cosas.
   // El latido lleva tambien a que ritmo quedo el triage en Orca (ritmo-triage): el panel
   // ya lo sondea, y una clave aparte le gastaria cupo de mensajes al host.
+  // Y las lineas que nadie esta atendiendo (linea-viva, V5): solo cuando hay alguna.
   let ritmoTriage = null
-  const latir = () => guardar(orca, BEAT_KEY,
-    ritmoTriage ? { at: new Date().toISOString(), triage: ritmoTriage } : { at: new Date().toISOString() })
-    .catch((error) => orca.log(`heartbeat failed: ${error.message}`))
+  let lineasSinAtencion = () => null
+  const latir = () => {
+    const lineas = lineasSinAtencion()
+    return guardar(orca, BEAT_KEY, Object.assign({ at: new Date().toISOString() },
+      ritmoTriage ? { triage: ritmoTriage } : {}, lineas ? { lineas } : {}))
+      .catch((error) => orca.log(`heartbeat failed: ${error.message}`))
+  }
   latir()
   const latidoTimer = setInterval(latir, LATIDO_MS)
   if (typeof latidoTimer.unref === 'function') latidoTimer.unref()
@@ -2657,18 +2911,35 @@ export default function activate(orca) {
   // la que no se atiende, sin depender del programador de Orca. Sin llamadas al host: la
   // salud y el tick son subprocesos, las herramientas salen de `dirIngesta` (ya resuelto) y
   // las fallas van a la bitacora en disco. Arranca despues de resolver la casa de Orca, como
-  // las automatizaciones: el tick abre agentes por su CLI. `respaldoCadaMs` es interno, como
-  // `sidecarPath`: existe para que las pruebas no esperen un minuto.
-  const respaldoTick = crearRespaldoTick({ correr: correrOrca,
-    herramienta: async (nombre) => join(dirIngesta, nombre), anotar: anotarFalla, manifiesto,
-    detenido: () => detenido })
+  // las automatizaciones: el tick abre agentes por su CLI. `respaldoCadaMs` y
+  // `respaldoAvisoMs` son internos, como `sidecarPath`: existen para que las pruebas no
+  // esperen minutos. El incidente viaja en el latido (V5), que ya se escribe cada 5 s.
   let pararRespaldo = () => {}
   casaResuelta.then(() => settings()).then((s) => {
     if (detenido) return
-    const cada = Number.isInteger(s.respaldoCadaMs) && s.respaldoCadaMs > 0
-      ? s.respaldoCadaMs : RESPALDO_CADA_MS
+    const entero = (v, defecto) => Number.isInteger(v) && v >= 0 ? v : defecto
+    const dirRespaldo = s.toolsDir || TOOLS
+    const herramienta = async (nombre) => join(dirRespaldo, nombre)
+    const avisoDueno = crearAvisoDueno({ correr: correrOrca, herramienta, anotar: anotarFalla })
+    /** Un incidente o su recuperacion: al dueno por WhatsApp en su idioma y, el incidente,
+     *  como notificacion de Orca. Dos llamadas al host por incidente, ninguna por minuto. */
+    const avisarIncidente = async (aviso) => {
+      if (detenido) return
+      const texto = textoDeIncidente(idiomaDeAviso(await leer(orca, 'approvalLang')), aviso)
+      if (aviso.tipo === 'incidente') {
+        await orca.host.call('notifications.show', { title: 'WhatsApp Inbox', body: texto })
+          .catch((error) => orca.log(`notification failed: ${error.message}`))
+      }
+      const r = await avisoDueno(texto, aviso.id, aviso.lineas)
+      if (!r.ok && r.code !== 'sin-dueno') orca.log(`owner notice not sent (${r.code}): ${aviso.id}`)
+    }
+    const respaldoTick = crearRespaldoTick({ correr: correrOrca, herramienta,
+      anotar: anotarFalla, manifiesto, detenido: () => detenido, avisar: avisarIncidente,
+      avisoMs: entero(s.respaldoAvisoMs, INCIDENTE_AVISO_MS) })
+    lineasSinAtencion = respaldoTick.estado
     pararRespaldo = programarSalud(() => respaldoTick.vuelta()
-      .catch((error) => orca.log(`backup tick failed: ${error.message}`)), cada)
+      .catch((error) => orca.log(`backup tick failed: ${error.message}`)),
+    entero(s.respaldoCadaMs, 0) || RESPALDO_CADA_MS)
   }).catch((error) => orca.log(`backup tick not scheduled: ${error.message}`))
 
   const atenderPedidoScope = crearVigia({

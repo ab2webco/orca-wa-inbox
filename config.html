@@ -394,6 +394,7 @@
       .opcional b { color: var(--foreground, var(--fb-foreground)); font-weight: 500; }
       .opcional code { color: var(--primary, var(--fb-primary)); }
       .alert[hidden] { display: none; }
+      #lineas-alerta[hidden] { display: none; }
 
       /* El unico bloque con caja: en Orca las cajas redondeadas quedan reservadas
          para avisos, no para estructura (listing/conflict-status-cards.tsx:49 usa
@@ -554,6 +555,9 @@
       <!-- El aviso general va FUERA de las pestanas: un plugin que no corre se tiene que
            ver desde cualquiera de ellas, no solo desde Estado. -->
       <div class="alert" id="alert" hidden></div>
+      <!-- Una fila por linea que nadie esta atendiendo (linea-viva): tambien fuera de las
+           pestanas, por la misma razon. La pinta el latido del worker. -->
+      <div id="lineas-alerta" aria-live="polite" hidden></div>
 
       <!-- Con dos lineas o mas, de cual es lo que se ve y se guarda en TODAS las pestanas: sus
            conversaciones y sus ajustes (odd/tasks/ajustes-por-linea.md). Lo que es del equipo
@@ -1588,6 +1592,15 @@
             'plugin le dice a su agente que ejecute. Si ya lo aprobo, este panel puede ' +
             'tardar unos segundos: consulta cada 12 s, y solo mientras esta a la vista.',
           workerStale: 'El plugin dejo de responder',
+          lineUnattended: 'La linea {num} lleva {min} min sin atenderse',
+          lineBackupOk: 'el respaldo del plugin la esta atendiendo.',
+          lineBackupBusy: 'otra revision la tiene ocupada; el respaldo lo sigue intentando.',
+          lineBackupFailed: 'el respaldo del plugin no pudo atenderla.',
+          lineBackupNone: 'el respaldo del plugin la esta revisando.',
+          lineWhySinTick: 'Orca no corrio su revision de cada minuto para esta linea.',
+          lineWhySinJuzgar: 'Tiene mensajes recibidos que siguen sin revisar.',
+          lineWhyDespacho: 'Las automatizaciones de WhatsApp quedaron atascadas en Orca. ' +
+            'Reiniciar Orca suele destrabarlas.',
           workerStaleHow: 'Espere unos segundos y, si no vuelve, reinicie Orca. Dejo de ' +
             'dar senales hace {s} s.',
           chatLabel: 'Conversacion',
@@ -2167,6 +2180,15 @@
             'tells your agent to run. If you already approved it, this panel can take a ' +
             'few seconds to catch up: it checks every 12 s, and only while it is on screen.',
           workerStale: 'The plugin stopped responding',
+          lineUnattended: 'Line {num} has not been attended for {min} min',
+          lineBackupOk: 'the plugin backup is handling it.',
+          lineBackupBusy: 'another check has it busy; the backup keeps trying.',
+          lineBackupFailed: 'the plugin backup could not attend it.',
+          lineBackupNone: 'the plugin backup is checking it.',
+          lineWhySinTick: 'Orca did not run its every-minute check for this line.',
+          lineWhySinJuzgar: 'It has received messages that are still not reviewed.',
+          lineWhyDespacho: 'The WhatsApp automations are stuck in Orca. Restarting Orca ' +
+            'usually clears them.',
           workerStaleHow: 'Wait a few seconds and, if it does not come back, restart ' +
             'Orca. It stopped signalling {s} s ago.',
           chatLabel: 'Conversation',
@@ -2708,6 +2730,15 @@
           'o seu agente executar. Se voce ja aprovou, este painel pode demorar alguns ' +
           'segundos: consulta a cada 12 s, e so enquanto esta a vista.',
         workerStale: 'O plugin parou de responder',
+        lineUnattended: 'A linha {num} esta ha {min} min sem atendimento',
+        lineBackupOk: 'o backup do plugin esta atendendo.',
+        lineBackupBusy: 'outra revisao a mantem ocupada; o backup continua tentando.',
+        lineBackupFailed: 'o backup do plugin nao conseguiu cuidar dela.',
+        lineBackupNone: 'o backup do plugin esta revisando.',
+        lineWhySinTick: 'O Orca nao rodou a revisao de cada minuto para esta linha.',
+        lineWhySinJuzgar: 'Tem mensagens recebidas que continuam sem revisar.',
+        lineWhyDespacho: 'As automacoes do WhatsApp travaram no Orca. Reiniciar o Orca ' +
+          'costuma destrava-las.',
         workerStaleHow: 'Espere alguns segundos e, se nao voltar, reinicie o Orca. ' +
           'Parou de dar sinal ha {s} s.',
         qualityLabel: 'Qualidade da transcricao',
@@ -3350,6 +3381,38 @@
         showAlert(esc(t('workerStale')),
           esc(fmt('workerStaleHow', { s: Math.round(edad / 1000) })))
         return true
+      }
+
+      // ---------- las lineas que nadie atiende (linea-viva) ----------
+      // El worker las deja en su latido -por linea: desde cuando, por que y como le va a su
+      // respaldo- y aca se pinta una fila por cada una. Los codigos se traducen aca; uno que
+      // este panel no conoce dice lo general, nunca el codigo.
+      var LINEA_RESPALDO = { ok: 'lineBackupOk', busy: 'lineBackupBusy', failed: 'lineBackupFailed' }
+      var LINEA_PORQUE = { 'sin-tick': 'lineWhySinTick', 'sin-juzgar': 'lineWhySinJuzgar',
+        'despacho-atascado': 'lineWhyDespacho' }
+      /** `sinWorker`: con el worker callado su latido es viejo y lo que dice de las lineas
+       *  tambien; manda el aviso del worker. */
+      function pintarLineasSinAtender (beat, sinWorker) {
+        if (!hayRespuesta(beat)) return
+        var caja = el('lineas-alerta')
+        var lineas = !sinWorker && beat && typeof beat === 'object' && beat.lineas &&
+          typeof beat.lineas === 'object' ? beat.lineas : {}
+        var ahoraS = Date.now() / 1000
+        var filas = Object.keys(lineas).filter(function (cuenta) {
+          var l = lineas[cuenta]
+          return /^pn:\d+$/.test(cuenta) && l && typeof l === 'object' && typeof l.desde === 'number'
+        }).map(function (cuenta) {
+          var l = lineas[cuenta]
+          var min = Math.max(1, Math.floor((ahoraS - l.desde) / 60))
+          var porque = LINEA_PORQUE[l.motivo]
+          return '<div class="alert"><span>&#9888;</span><span><b>' +
+            esc(fmt('lineUnattended', { num: '+' + cuenta.replace(/^pn:/, ''), min: min })) +
+            '</b> <span>&mdash; ' + esc(t(LINEA_RESPALDO[l.respaldo] || 'lineBackupNone')) +
+            '</span>' + (porque ? '<span class="alert-why">' + esc(t(porque)) + '</span>' : '') +
+            '</span></div>'
+        })
+        caja.innerHTML = filas.join('')
+        caja.hidden = !filas.length
       }
 
       function showAlert(what, how, why) {
@@ -7330,6 +7393,7 @@
             // que haya es de otra sesion y "todo bien" seria mentira. Un rechazo del
             // host NO cuenta como worker ausente — no saber no es saber que no esta.
             var sinWorker = pintarLatido(v('workerBeat'))
+            pintarLineasSinAtender(v('workerBeat'), sinWorker)
             var salud = v('health')
             if (sinWorker) { /* el aviso ya quedo puesto */ }
             // El health ya trae QUE falla y su detalle: mostrarlo es mejor que mandar
