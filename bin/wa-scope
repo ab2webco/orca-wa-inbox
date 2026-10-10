@@ -647,14 +647,20 @@ create table if not exists agente_corrida (
   motivo    text,                  -- un codigo estable (MOTIVOS_AGENTE), que el panel traduce
   detalle   text,                  -- la linea de Orca que lo explica, corta
   created_at text not null,
-  updated_at text not null
+  updated_at text not null,
+  cuenta    text,                  -- la linea del caso (linea-viva-2, W3); null = la principal
+  propuesta_antes text,            -- la propuesta_version del caso al lanzar (W2)
+  avanzo    integer                -- 1 si el caso avanzo al cerrar, 0 si no; null = de antes
 );
 -- Lo que el plugin le escribe al numero de aprobacion del dueno (T14), y lo que el dueno
 -- contesto. Una fila por mensaje: `req_id` es el id de `wa-send`, y es lo que hace que un
 -- aviso salga UNA vez aunque el tick lo intente cada minuto.
 create table if not exists aviso (
   req_id    text primary key,     -- aviso-<caso>-<version> | aviso-b-<caso>-<evento> | aviso-r-<hash>
-  tipo      text not null,        -- aprobacion | bloqueo | respuesta
+  -- aprobacion (tambien su recordatorio, aviso-rec-<caso>-<version>) | bloqueo | respuesta |
+  -- agente (W2) | sla (aviso-sla-<caso>) | worker | worker-ok (aviso-worker[-ok]-<latido>,
+  -- `version`)
+  tipo      text not null,
   case_id   integer,
   version   text,                 -- la propuesta_version que el aviso pide aprobar
   account   text not null,        -- la linea del caso: su tick lo encola, lo vence y lo manda
@@ -935,12 +941,19 @@ def ahora():
 
 
 def rastro(name, cuenta=None):
-    """La llave del rastro de una corrida EN la linea activa (o en `cuenta`). El lock sigue
-    siendo uno solo —una corrida a la vez, sea de la linea que sea— pero como le fue es de
-    cada numero: el resumen "arranco y no volvio" del numero viejo no es del nuevo (T9). La
+    """La llave del rastro de una corrida EN la linea activa (o en `cuenta`). Como le fue es
+    de cada numero: el resumen "arranco y no volvio" del numero viejo no es del nuevo (T9). La
     linea de siempre, `local`, conserva la llave de siempre."""
     cuenta = cuenta or cuenta_activa()
     return name if cuenta == CUENTA_LOCAL else f"{name}@{cuenta}"
+
+
+def llave_del_lock(name, cuenta=None):
+    """El nombre del lock de una corrida en la linea activa (o en `cuenta`): uno por linea,
+    para que el agente colgado de una no frene al de la otra (linea-viva-2, W3). La
+    principal, una sola linea y `local` conservan el de siempre; otra linea, su `rastro`."""
+    cuenta = cuenta or cuenta_activa()
+    return rastro(name, cuenta) if de_otra_linea(cuenta, linea_principal()) else name
 
 
 def run_start(con, name=RUN_NAME):
@@ -982,7 +995,7 @@ def build_run(con, name=RUN_NAME):
     row = con.execute("select started_at, ended_at, state, reason, looked, pending "
                       "from run_trace where name=?", (rastro(name),)).fetchone()
     corriendo = bool(con.execute("select 1 from run_lock where name=? and expires_at > ?",
-                                 (name, time.time())).fetchone())
+                                 (llave_del_lock(name), time.time())).fetchone())
     if not row:
         # Sin fila y con el lock puesto igual se dice "corriendo": una base recien
         # migrada no puede hacer parecer que el agente nunca existio.
@@ -1860,6 +1873,14 @@ def migrate(con):
         con.execute("alter table agente_corrida add column tab text")
     if "tab" not in despacho_cols:
         con.execute("alter table caso_despacho add column tab text")
+    # linea-viva-2 W3: la linea de cada corrida, la del caso; W2: si avanzo.
+    if "cuenta" not in corrida_cols:
+        con.execute("alter table agente_corrida add column cuenta text")
+        con.execute("update agente_corrida set cuenta=(select account from caso where "
+                    "caso.case_id=agente_corrida.case_id) where case_id is not null")
+    for columna, tipo in (("propuesta_antes", "text"), ("avanzo", "integer")):
+        if columna not in corrida_cols:
+            con.execute(f"alter table agente_corrida add column {columna} {tipo}")
     # T3: el veredicto entero de Jev, cacheado junto a su clase; y el rol con que se juzgo
     # (roles-por-numero, M10).
     juicio_cols = {r["name"] for r in con.execute("pragma table_info(juicio)")}
@@ -2287,11 +2308,13 @@ def cmd_check(con, a):
 def cmd_lock(con, a):
     """Una sola corrida a la vez. Si la automation dispara cada 20 min y una corrida
     tarda mas, dos agentes leen el mismo inbox y abren la misma tarjeta dos veces.
-    El lock expira solo para que una corrida que murio no bloquee para siempre."""
+    El lock expira solo para que una corrida que murio no bloquee para siempre. Es uno por
+    linea (`llave_del_lock`): el de la principal se llama como siempre."""
     now = time.time()
+    llave = llave_del_lock(a.name)
     con.execute("delete from run_lock where expires_at < ?", (now,))
     row = con.execute("select pid, expires_at, note from run_lock where name=?",
-                      (a.name,)).fetchone()
+                      (llave,)).fetchone()
     if row:
         print(json.dumps({"acquired": False, "held_by_pid": row["pid"],
                           "expires_in_s": round(row["expires_at"] - now),
@@ -2299,7 +2322,7 @@ def cmd_lock(con, a):
         sys.exit(4)
     con.execute("insert into run_lock (name,pid,acquired_at,expires_at,note) "
                 "values (?,?,?,?,?)",
-                (a.name, os.getpid(), now, now + a.ttl, a.note))
+                (llave, os.getpid(), now, now + a.ttl, a.note))
     con.commit()
     # El rastro se toma aca y no en un paso aparte del prompt: un paso que hay que
     # acordarse de hacer es un paso que un dia no se hace, y justo ese dia es cuando
@@ -2311,7 +2334,7 @@ def cmd_lock(con, a):
 
 
 def cmd_unlock(con, a):
-    con.execute("delete from run_lock where name=?", (a.name,))
+    con.execute("delete from run_lock where name=?", (llave_del_lock(a.name),))
     con.commit()
     run_end(con, a.name, (a.failed or "").strip() or None)
     trace = build_run(con, a.name)
@@ -6365,6 +6388,15 @@ RAZON_DUENO = "caso-del-dueno"
 RAZON_CONVERSACION = "conversacion-en-curso"
 # Lo de la bandeja que ya es la linea escribiendo: lo que sale, esta saliendo o salio.
 ESTADOS_ENVIO_DE_LA_LINEA = ("pendiente", "enviando", "enviado")
+# Cuanto puede estar una fila en `enviando` y seguir contando como "esta saliendo"
+# (linea-viva-2, W1). Mas viejo es un sidecar que murio a mitad: el sidecar la reconcilia
+# (`reconciliarEnviando`), y mientras tanto no calla el acuse por algo que quizas nunca
+# salio. El MISMO numero que ENVIANDO_VENCE_S en sidecar/src/almacen.js; check-casos
+# compara los dos.
+ENVIANDO_VENCE_S = 120
+# Como `envios_del_almacen` nombra una fila asi: no es ningun estado de la bandeja, y
+# quien pregunta por "pendiente", "enviando" o "enviado" no la confunde con ellos.
+ENVIANDO_VENCIDO = "enviando-vencido"
 
 
 def linea_escribio(caso, desde, excepto):
@@ -6381,8 +6413,9 @@ def linea_escribio(caso, desde, excepto):
         if fuente.execute(
                 f"select 1 from envio where account=? and chat_jid=? and req_id<>? and "
                 f"estado in ({marcas}) and coalesce(settled_at, claimed_at, created_at) >= ? "
-                f"limit 1", (caso["account"], caso["chat_jid"], excepto,
-                             *ESTADOS_ENVIO_DE_LA_LINEA, int(desde))).fetchone():
+                f"and not (estado='enviando' and coalesce(claimed_at, 0) < ?) limit 1",
+                (caso["account"], caso["chat_jid"], excepto, *ESTADOS_ENVIO_DE_LA_LINEA,
+                 int(desde), int(time.time()) - ENVIANDO_VENCE_S)).fetchone():
             return True
         return bool(fuente.execute(
             "select 1 from mensaje where account=? and chat_jid=? and from_me=1 and revocado=0 "
@@ -8465,6 +8498,9 @@ def build_board(con, ahora=None):
             # Lo retenido que no es de ningun caso: el dueno lo aprueba o lo retira desde el
             # panel (approve-solo-dueno).
             "held_drafts": retenidos_del_tablero(con, cuenta),
+            # Los avisos de aprobacion o de bloqueo que no le llegaron al dueno, mientras el
+            # caso siga donde estaba (linea-viva-2, W4).
+            "notices_failed": avisos_fallidos(con, cuenta),
             "project_routes": datos["routes"],
             "cards": datos["cards"]}
 
@@ -8627,6 +8663,34 @@ def retenidos_del_tablero(con, cuenta):
                        "at": datetime.datetime.fromtimestamp(int(f["created_at"] or 0))
                        .astimezone().isoformat(timespec="seconds"),
                        "reasons": motivos_de_retenido(nota["detail"] if nota else "")})
+    return salida
+
+
+def avisos_fallidos(con, cuenta):
+    """Los avisos de aprobacion y de bloqueo de la linea que quedaron `fallido`: el ultimo
+    de cada caso y tipo, mientras el caso siga donde lo aviso (la misma version esperando
+    al dueno, o todavia bloqueado). Cuando el caso sigue, sale solo. Viaja el codigo del
+    motivo, nunca el texto del aviso."""
+    salida = []
+    for f in con.execute(
+            "select a.* from aviso a where a.account=? and a.tipo in ('aprobacion', 'bloqueo') "
+            "and a.estado='fallido' and a.case_id is not null and not exists (select 1 from "
+            "aviso b where b.case_id=a.case_id and b.tipo=a.tipo and (b.at > a.at or "
+            "(b.at = a.at and b.rowid > a.rowid))) order by a.updated_at desc, a.rowid desc",
+            (cuenta,)).fetchall():
+        if f["tipo"] == "aprobacion":
+            sigue = not version_superada(con, f)
+        else:
+            caso = con.execute("select etapa from caso where case_id=?",
+                               (f["case_id"],)).fetchone()
+            sigue = bool(caso) and caso["etapa"] == "bloqueado"
+        if not sigue:
+            continue
+        salida.append({"case_id": f["case_id"], "type": f["tipo"],
+                       "reason": (f["motivo"] or "").split(" ", 1)[0] or None,
+                       "at": iso_caso(f["updated_at"])})
+        if len(salida) >= TOPE_AVISOS_FALLIDOS:
+            break
     return salida
 
 
@@ -9777,7 +9841,8 @@ def envios_del_almacen(req_ids):
     """{req_id: estado} de la bandeja de salida, en solo lectura, y si el sidecar late.
     Sin almacen no hay ni lo uno ni lo otro. El latido es el de la linea de esta corrida
     (`cuenta_activa`): con dos lineas el global lo mantiene fresco la otra, y el tick de
-    una linea caida firmaba lo que nadie iba a mandar (linea-viva V8)."""
+    una linea caida firmaba lo que nadie iba a mandar (linea-viva V8). Un `enviando` de
+    mas de ENVIANDO_VENCE_S sale como ENVIANDO_VENCIDO: ya no esta saliendo (W1)."""
     ruta = wa_store.store_db_path()
     if not os.path.exists(ruta):
         return {}, False
@@ -9792,8 +9857,10 @@ def envios_del_almacen(req_ids):
         for i in range(0, len(ids), 500):
             parte = ids[i:i + 500]
             estados.update(fuente.execute(
-                f"select req_id, estado from envio where req_id in "
-                f"({','.join('?' * len(parte))})", parte).fetchall())
+                f"select req_id, case when estado='enviando' and coalesce(claimed_at, 0) < ? "
+                f"then ? else estado end from envio where req_id in "
+                f"({','.join('?' * len(parte))})",
+                (int(time.time()) - ENVIANDO_VENCE_S, ENVIANDO_VENCIDO, *parte)).fetchall())
         return estados, vivo
     except sqlite3.Error:
         return {}, False
@@ -9924,6 +9991,18 @@ AVISO_OTRO_NUMERO = "approval-number-changed"
 # reintenta) o el aviso de una version que ya no es la vigente: no sale, ya no es cierto.
 AVISO_VENCIDO = "approval-expired"
 AVISO_SUPERADO = "approval-superseded"
+# Un aviso de aprobacion enviado y sin contestar se recuerda UNA vez, pasadas estas partes de
+# `approval_hours` (linea-viva-2, W4). El recordatorio es otra fila de la misma version
+# (`aviso-rec-<caso>-<version>`): contestarlo decide la misma propuesta.
+RECUERDA_AVISO = 0.75
+PREFIJO_RECUERDA = "aviso-rec-"
+# Un caso pasado de su meta de primera respuesta (`sla_first_reply_minutes`) sin nada que
+# le haya salido al cliente: UN aviso al dueno por caso (`aviso-sla-<caso>`). Solo en los
+# chats donde el plugin escribe, y no lo que pidio el mismo dueno.
+ETAPAS_SIN_RESPUESTA = ("recibido", "clasificado", "decision", "trabajo", "listo", "bloqueado")
+MODOS_CON_META = ("responder", "borrador")
+# Los avisos fallidos que el tablero muestra (`notices_failed`), los mas nuevos primero.
+TOPE_AVISOS_FALLIDOS = 50
 LARGO_PIDE = 140
 LARGO_PROPUESTA = 300
 LARGO_CORRECCION = 1000
@@ -10001,8 +10080,17 @@ TEXTOS_AVISO = {
            "estado_vacio": "No hay casos abiertos.",
            "recordatorio": "Caso {n}: {titulo} — {x}",
            "recordatorio_vacio": "le recuerdo este caso",
+           "agente_pausado": "Caso {n} · {chat}: el agente lo intento {x} veces seguidas sin "
+                             "avanzar; no lo vuelve a intentar en una hora. Mirelo en el tablero.",
            "estado_mas": "y {x} mas en el tablero.",
            "desde": "desde {x}",
+           "recuerda": "Recordatorio: el caso {n} sigue esperando su decision.",
+           "meta": "Caso {n} · {chat}: el cliente espera respuesta hace {min} min (la meta es "
+                   "{meta} min). Pide: {x}",
+           "worker": "WhatsApp Inbox: el proceso de fondo del plugin no da senales hace {min} "
+                     "min. La revision de cada minuto sigue, pero sin el no hay respaldo ni "
+                     "avisos del plugin. Reiniciar Orca suele traerlo de vuelta.",
+           "worker_ok": "WhatsApp Inbox: el proceso de fondo del plugin vuelve a responder.",
            "etapas": {"recibido": "recibido", "clasificado": "clasificado",
                       "decision": "espera su decision", "trabajo": "en trabajo",
                       "listo": "resultado listo", "respondido": "respondido, espera al cliente",
@@ -10037,8 +10125,18 @@ TEXTOS_AVISO = {
            "estado_vacio": "No open cases.",
            "recordatorio": "Case {n}: {titulo} — {x}",
            "recordatorio_vacio": "a reminder about this case",
+           "agente_pausado": "Case {n} · {chat}: the agent tried {x} times in a row without "
+                             "progress; it will not try again for an hour. Check the board.",
            "estado_mas": "and {x} more on the board.",
            "desde": "since {x}",
+           "recuerda": "Reminder: case {n} is still waiting for your decision.",
+           "meta": "Case {n} · {chat}: the client has waited {min} min for a reply (the target "
+                   "is {meta} min). Asks: {x}",
+           "worker": "WhatsApp Inbox: the plugin's background process has given no sign of "
+                     "life for {min} min. The every-minute check goes on, but without it there "
+                     "is no backup and no plugin notices. Restarting Orca usually brings it "
+                     "back.",
+           "worker_ok": "WhatsApp Inbox: the plugin's background process is responding again.",
            "etapas": {"recibido": "received", "clasificado": "classified",
                       "decision": "waits for you", "trabajo": "in progress",
                       "listo": "result ready", "respondido": "answered, waits for the client",
@@ -10426,7 +10524,72 @@ def tick_avisos(con, resumen, inicio=None):
                      else texto_de_aviso(con, caso, motivos),
                      case_id=caso["case_id"], version=version)
         con.commit()
+    recuerda_avisos(con)
+    avisa_meta_vencida(con)
     envia_avisos(con, resumen, inicio)
+
+
+def recuerda_avisos(con):
+    """El recordatorio de cada aviso de aprobacion enviado y sin contestar, una vez, pasadas
+    las tres cuartas partes de `approval_hours` y antes de que venza, mientras el caso siga
+    en esa version. Lleva el texto del aviso: se contesta igual."""
+    plazo = horas_aprobacion(con) * 3600
+    tx = aviso_textos()
+    for f in con.execute("select * from aviso where tipo='aprobacion' and account=? and "
+                         "estado='enviado' and req_id not like ?",
+                         (cuenta_activa(), PREFIJO_RECUERDA + "%")).fetchall():
+        edad = edad_de(f["enviado_at"] or f["at"])
+        if not plazo * RECUERDA_AVISO <= edad <= plazo or version_superada(con, f):
+            continue
+        aviso_encola(con, f"{PREFIJO_RECUERDA}{f['case_id']}-{f['version'][:12]}", "aprobacion",
+                     tx["recuerda"].format(n=f["case_id"]) + "\n" + f["texto"],
+                     case_id=f["case_id"], version=f["version"])
+        con.commit()
+
+
+def meta_primera_respuesta(con):
+    """`sla_first_reply_minutes`, en minutos: la meta de los informes."""
+    try:
+        return int(merged_settings(con).get("sla_first_reply_minutes")
+                   or DEFAULT_CONFIG["sla_first_reply_minutes"])
+    except (TypeError, ValueError):
+        return int(DEFAULT_CONFIG["sla_first_reply_minutes"])
+
+
+def avisa_meta_vencida(con):
+    """Un aviso por cada caso abierto de la linea que paso su meta de primera respuesta sin
+    que nada le saliera al cliente, con la medida de los informes (`primeras_respuestas`).
+    Solo los que la pasaron dentro de `approval_hours`: uno viejo sigue esperando en el
+    tablero (sin esto, el primer tick despues de actualizar avisaba cada caso viejo). Uno del
+    que el dueno ya tiene aviso (su aprobacion o su bloqueo) no lleva otro: ya lo sabe, y el
+    de aprobacion tiene su recordatorio."""
+    meta_min = meta_primera_respuesta(con)
+    ventana = meta_min * 60 + horas_aprobacion(con) * 3600
+    desde = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - ventana))
+    alcance = merged_scope(con)
+    candidatos = [dict(r) for r in con.execute(
+        f"select * from caso c where account=? and created_at >= ? and etapa in "
+        f"({','.join('?' * len(ETAPAS_SIN_RESPUESTA))}) and not exists (select 1 from aviso a "
+        f"where a.tipo in ('sla', 'aprobacion', 'bloqueo') and a.case_id=c.case_id)",
+        (cuenta_activa(), desde, *ETAPAS_SIN_RESPUESTA)).fetchall()
+        if (alcance.get(r["chat_jid"]) or {}).get("mode") in MODOS_CON_META]
+    if not candidatos:
+        return
+    respuestas = primeras_respuestas(cuenta_activa())
+    tx = aviso_textos()
+    for caso in candidatos:
+        primero, salio = respuestas.get(caso["case_id"], (None, None))
+        if primero is None or salio is not None:
+            continue
+        espera = time.time() - primero
+        if not meta_min * 60 < espera <= ventana or caso_del_dueno(con, caso):
+            continue
+        aviso_encola(con, f"aviso-sla-{caso['case_id']}", "sla",
+                     tx["meta"].format(n=caso["case_id"], chat=nombre_del_chat(con, caso["chat_jid"]),
+                                       min=int(espera // 60), meta=meta_min,
+                                       x=pide_del_aviso(con, caso)),
+                     case_id=caso["case_id"])
+        con.commit()
 
 
 def envia_avisos(con, resumen=None, inicio=None):
@@ -10502,15 +10665,16 @@ def avisos_vigentes(con):
     """Los avisos de aprobacion que todavia se pueden contestar: enviados, sin contestar,
     dentro de `approval_hours`, y con el caso todavia en la version que avisaron. Los de esta
     linea y los de otra que salieron por esta (linea-viva V6): el dueno contesta donde le
-    llego."""
+    llego. Un aviso y su recordatorio (linea-viva-2, W4) son UNA propuesta: queda el mas
+    nuevo."""
     horas = horas_aprobacion(con)
-    salida = []
+    salida = {}
     for f in con.execute("select * from aviso where tipo='aprobacion' and (account=? or "
-                         "sale_por=?) and estado='enviado' order by at",
+                         "sale_por=?) and estado='enviado' order by at, rowid",
                          (cuenta_activa(), cuenta_activa())).fetchall():
         if aviso_estado(con, f, horas) is None:
-            salida.append(f)
-    return salida
+            salida[(f["case_id"], f["version"])] = f
+    return list(salida.values())
 
 
 def aviso_estado(con, aviso, horas):
@@ -10556,22 +10720,33 @@ def atiende_respuesta(con, m, relevado=None):
     if relevado is not None:
         if r["accion"] == "estado" or r["caso"] not in (None, relevado["case_id"]):
             return False
+        # Sin numero, la cita tiene que ser de ese aviso o de nada: un mensaje que cita otro
+        # aviso no contesta este (linea-viva-2 W6).
+        citado = aviso_citado(con, m) if r["caso"] is None else None
+        if citado is not None and citado["req_id"] != relevado["req_id"]:
+            return False
         aviso = relevado
     elif r["accion"] == "estado":
         aviso_encola(con, req, "respuesta", texto_de_estado(con), stanza=stanza)
         con.commit()
         return True
     elif r["caso"] is None:
-        vivos = [f for f in avisos_vigentes(con) if f["chat_jid"] == m.get("chat_jid")]
-        if len(vivos) != 1:
-            return False
-        aviso = vivos[0]
+        # El aviso que cita es el que contesta, aunque haya varios vivos (linea-viva-2 W6); y
+        # si ya no vale lo dice, nunca contesta otro. Sin cita de un aviso, el unico vigente.
+        aviso = aviso_citado(con, m)
+        if aviso is None:
+            vivos = [f for f in avisos_vigentes(con) if f["chat_jid"] == m.get("chat_jid")]
+            if len(vivos) != 1:
+                return False
+            aviso = vivos[0]
     else:
         # El aviso es de quien lo recibio: el que salio a otro numero no se contesta desde
-        # este. El de un caso de otra linea, si salio por esta.
+        # este. El de un caso de otra linea, si salio por esta. Entre el aviso y su
+        # recordatorio, el mas nuevo que salio: uno que todavia no salio no es el que leyo.
         aviso = con.execute("select * from aviso where tipo='aprobacion' and (account=? or "
                             "sale_por=?) and case_id=? and chat_jid=? "
-                            "order by at desc, rowid desc limit 1",
+                            "order by estado in ('pendiente', 'preparando', 'fallido'), "
+                            "at desc, rowid desc limit 1",
                             (cuenta_activa(), cuenta_activa(), r["caso"],
                              m.get("chat_jid"))).fetchone()
         if aviso is None:
@@ -10591,10 +10766,15 @@ def atiende_respuesta(con, m, relevado=None):
     try:
         porque = aviso_estado(con, aviso, horas_aprobacion(con))
         # Despues se toma el aviso: dos respuestas distintas (si en un proceso, no en otro)
-        # pueden haberlo visto vigente las dos, y decide solo la primera que lo toma.
+        # pueden haberlo visto vigente las dos, y decide solo la primera que lo toma. Lo
+        # mismo entre un aviso y su recordatorio: uno tomado frena al otro.
         if not porque:
             cur = con.execute("update aviso set estado='contestando', updated_at=? where "
-                              "req_id=? and estado='enviado'", (ahora_caso(), aviso["req_id"]))
+                              "req_id=? and estado='enviado' and not exists (select 1 from "
+                              "aviso o where o.tipo='aprobacion' and o.case_id=? and "
+                              "o.version=? and o.estado='contestando')",
+                              (ahora_caso(), aviso["req_id"], aviso["case_id"],
+                               aviso["version"]))
             con.commit()
             tomo_aviso = cur.rowcount == 1
             porque = None if tomo_aviso else "cambio"
@@ -10622,6 +10802,33 @@ def atiende_respuesta(con, m, relevado=None):
                     (texto, ahora_caso(), req))
         con.commit()
     return True
+
+
+def aviso_citado(con, m):
+    """El aviso de aprobacion que el mensaje cita (linea-viva-2 W6), vigente o no, o None si
+    no cita uno. Lo citado es el id que WhatsApp le dio al aviso al salir (`envio.stanza_id`,
+    en la linea por la que salio, que es donde llega la respuesta) y el `req_id` del envio es
+    el del aviso. Solo los de este numero de aprobacion que esta linea contesta."""
+    cita = m.get("cita_id")
+    if not cita:
+        return None
+    try:
+        fuente = wa_store.abrir()
+    except wa_store.SinFuente:
+        return None
+    try:
+        fila = fuente.execute("select req_id from envio where account=? and stanza_id=?",
+                              (m.get("account"), cita)).fetchone()
+    except sqlite3.Error:
+        fila = None
+    finally:
+        fuente.close()
+    if fila is None:
+        return None
+    return con.execute("select * from aviso where req_id=? and tipo='aprobacion' and "
+                       "(account=? or sale_por=?) and chat_jid=?",
+                       (fila["req_id"], cuenta_activa(), cuenta_activa(),
+                        m.get("chat_jid"))).fetchone()
 
 
 def releva_respuesta(con, m, aviso):
@@ -10661,7 +10868,8 @@ def mensaje_capturado(linea, chat_jid, stanza):
     except wa_store.SinFuente:
         return None
     try:
-        fila = fuente.execute("select account, chat_jid, stanza_id, sender_jid, body from mensaje "
+        fila = fuente.execute("select account, chat_jid, stanza_id, sender_jid, body, "
+                              f"{wa_store.columna_cita(fuente, 'mensaje')} cita_id from mensaje "
                               "where account=? and chat_jid=? and stanza_id=? and from_me=0 "
                               "and revocado=0", (linea, chat_jid, stanza)).fetchone()
     finally:
@@ -10671,7 +10879,7 @@ def mensaje_capturado(linea, chat_jid, stanza):
     return {"account": fila["account"], "chat_jid": fila["chat_jid"],
             "stanza_id": fila["stanza_id"],
             "sender_jid": wa_store.jid_sin_dispositivo(fila["sender_jid"]),
-            "text": (fila["body"] or "").replace("\n", " ")}
+            "text": (fila["body"] or "").replace("\n", " "), "cita_id": fila["cita_id"]}
 
 
 def cmd_aviso_relevo(con, a):
@@ -10760,8 +10968,12 @@ def es_pregunta_del_agente(con, aviso):
 
 
 def aviso_contestado(con, aviso):
-    con.execute("update aviso set estado='contestado', updated_at=? where req_id=?",
-                (ahora_caso(), aviso["req_id"]))
+    """El aviso queda contestado, y con el su recordatorio (o el aviso del recordatorio):
+    los dos piden la misma decision. Uno que todavia no salio ya no sale."""
+    con.execute("update aviso set estado='contestado', updated_at=? where req_id=? or "
+                "(tipo='aprobacion' and case_id=? and version=? and "
+                "estado in ('pendiente', 'enviado'))",
+                (ahora_caso(), aviso["req_id"], aviso["case_id"], aviso["version"]))
     con.commit()
 
 
@@ -11349,10 +11561,19 @@ def cmd_tick(con, a):
         return None
     try:
         inicio = time.time()
+        previo = None
         try:
+            previo = tick_previo(con)
             tick_anota(con)
         except sqlite3.Error as exc:
             print(f"wa-scope: tick time not recorded: {exc}", file=sys.stderr)
+        # El worker muerto (linea-viva-2, W5): su aviso sale con los de abajo.
+        try:
+            tick_worker(con, resumen, previo)
+        except (sqlite3.Error, OSError) as exc:
+            if con.in_transaction:
+                con.rollback()
+            print(f"wa-scope: worker beat not checked: {exc}", file=sys.stderr)
         # La entrada de respaldo: el worker la dispara al llegar cada mensaje; si ese
         # evento se perdio, el minuto la recoge. Una falla suya no frena el resto.
         try:
@@ -12228,12 +12449,15 @@ def cuenta_del_bot(con, linea=None):
     return None if valor == "auto" else valor
 
 
-def abre_agente(cli, selector, titulo, nombre, arranque_ms=DESPACHO_ARRANQUE_MS, preferida=None):
+def abre_agente(cli, selector, titulo, nombre, arranque_ms=DESPACHO_ARRANQUE_MS, preferida=None,
+                evitar=()):
     """Abre Claude en un espacio de Orca (el del proyecto, o el del plugin para el agente de
     casos). Con `preferida` (la cuenta del bot), esa primero; si no esta, no tiene sesion, no
     tiene cuota o falla al abrir, la regla automatica y `respaldo` dice por que. La regla
     automatica: sin elegir cuenta (manda el pin del espacio o la seleccion global) y, si esa
     esta tomada o sin sesion, UNA vez con la de `cuenta_de_reintento`.
+    `evitar` son las cuentas que vienen fallando (`cuentas_que_fallan`, CUENTA_SIN_ELEGIR la
+    que Orca elige sola): se saltan mientras haya otra; si no la hay, se usan igual.
     Devuelve {terminal, tab (su pestana, o None), cuenta (id elegido o None), etiqueta,
     motivo, respaldo}."""
     orden = ["terminal", "create", "--worktree", selector, "--agent", DESPACHO_AGENTE,
@@ -12241,7 +12465,15 @@ def abre_agente(cli, selector, titulo, nombre, arranque_ms=DESPACHO_ARRANQUE_MS,
     plazo = arranque_ms // 1000 + 10
     salida = {"terminal": None, "tab": None, "cuenta": None, "etiqueta": None, "motivo": None,
               "respaldo": None}
-    cuentas, excluir = None, set()
+    cuentas, excluir, evitar = None, set(), set(evitar or ())
+
+    def reintento():
+        """La de menos uso que no viene fallando; sin ninguna, la de menos uso."""
+        cuenta, por_que = cuenta_de_reintento(cli, excluir | evitar, cuentas)
+        if not cuenta and evitar - excluir:
+            cuenta, por_que = cuenta_de_reintento(cli, excluir, cuentas)
+        return cuenta, por_que
+
     if preferida:
         cuentas, _ = cuentas_claude(cli)
         c = next((x for x in cuentas or [] if preferida in (x["id"].strip(), x.get("email"))),
@@ -12253,6 +12485,10 @@ def abre_agente(cli, selector, titulo, nombre, arranque_ms=DESPACHO_ARRANQUE_MS,
             salida["respaldo"] = "elegida-sin-sesion"
         elif usado is not None and usado >= CUENTA_TOPE_USO:
             salida["respaldo"] = "elegida-sin-cuota"
+        elif c["id"].strip() in evitar:
+            # Viene fallando: la automatica, que la vuelve a usar si no hay otra.
+            salida["respaldo"] = "elegida-fallo"
+            c = None
         else:
             res, error = orca_llama(cli, orden + ["--claude-account", c["id"].strip()], plazo)
             terminal = None if error else terminal_creada(res)
@@ -12262,9 +12498,19 @@ def abre_agente(cli, selector, titulo, nombre, arranque_ms=DESPACHO_ARRANQUE_MS,
             salida["respaldo"] = "elegida-fallo"
         if c:
             excluir.add(c["id"].strip())
-    res, error = orca_llama(cli, orden, plazo)
-    if error and ERROR_DE_CUENTA.search(error):
-        cuenta, por_que = cuenta_de_reintento(cli, excluir, cuentas)
+    directa = None
+    if CUENTA_SIN_ELEGIR in evitar:
+        # La que Orca elige sola viene fallando: derecho con otra, si la hay.
+        if cuentas is None:
+            cuentas, _ = cuentas_claude(cli)
+        directa, _ = cuenta_de_reintento(cli, excluir | evitar, cuentas or [])
+    if directa:
+        salida.update(cuenta=directa["id"].strip(), etiqueta=etiqueta_de(directa))
+        res, error = orca_llama(cli, orden + ["--claude-account", salida["cuenta"]], plazo)
+    else:
+        res, error = orca_llama(cli, orden, plazo)
+    if not directa and error and ERROR_DE_CUENTA.search(error):
+        cuenta, por_que = reintento()
         if not cuenta:
             return dict(salida, motivo=(f"ninguna cuenta de Claude disponible: {error}"
                                         + (f"; {por_que}" if por_que else "")))
@@ -13031,8 +13277,9 @@ def seccion_de_linea(caso):
         return []
     return ["", "## The line of this case",
             f"This case is on the line {cuenta}, not on the principal one. Add `--line {cuenta}` "
-            f"to every `{ruta_wa_scope()}` command about its chat (`voice`, `where`) and to every "
-            "`wa-read` command; the `caso` commands with its id already work on its line."]
+            f"to every `{ruta_wa_scope()}` command about its chat (`voice`, `where`), to `lock` "
+            "and `unlock` (each line has its own), and to every `wa-read` command; the `caso` "
+            "commands with its id already work on its line."]
 
 
 def archivo_de_caso(con, caso):
@@ -13495,6 +13742,20 @@ MOTIVOS_AGENTE = ("sin-cli", "sin-espacio", "sin-prompt", "sin-cuenta", "sin-ter
 # tick no abre otra hasta AGENTE_PAUSA_S ("Atender ahora" si: lo pide el dueno).
 AGENTE_CIERRES_MAX = 3
 AGENTE_PAUSA_S = 3600
+# Un caso que el agente no logra avanzar (linea-viva-2, W2): AGENTE_SIN_AVANCE_MAX corridas
+# seguidas que fallan, o terminan sin una version nueva de la propuesta, lo pausan
+# AGENTE_PAUSA_S y el dueno se entera una vez por racha. Lo que falla por la maquina (sin CLI,
+# sin espacio, sin prompt, sin tiempo) no es del caso: ni suma ni corta.
+AGENTE_SIN_AVANCE_MAX = 3
+MOTIVOS_DE_LA_MAQUINA = ("sin-cli", "sin-espacio", "sin-prompt", "sin-tiempo")
+TIPO_AVISO_AGENTE = "agente"
+# Una cuenta de Claude con AGENTE_FALLAS_CUENTA lanzamientos seguidos en que Claude no empezo
+# su turno se salta AGENTE_PAUSA_S, mientras haya otra. CUENTA_SIN_ELEGIR es la que Orca
+# elige sola (la corrida sin `cuenta_claude`).
+AGENTE_FALLAS_CUENTA = 3
+MOTIVOS_DE_CUENTA = ("sin-cuenta", "sin-terminal", "no-listo", "no-recibio", "se-cerro",
+                     "se-cierra")
+CUENTA_SIN_ELEGIR = "*"
 ESTADO_DE_AGENTE = {"lanzando": "launching", "activo": "running", "terminado": "done",
                     "vencido": "expired", "fallido": "failed"}
 LARGO_DETALLE_AGENTE = 160
@@ -13569,11 +13830,88 @@ def agente_cierra(con, cli, fila, estado, motivo=None, detalle=None):
     agente_anota(con, fila["id"], estado=estado, motivo=motivo,
                  detalle=(" ".join(str(detalle).split())[:LARGO_DETALLE_AGENTE]
                           if detalle else None))
+    if fila.get("case_id") is not None:
+        anota_avance(con, fila["id"])
+
+
+def anota_avance(con, fila):
+    """Si la corrida que se cerro hizo avanzar su caso: una version nueva de la propuesta, o
+    el caso ya no espera al agente. Lo que no avanzo suma a la racha del caso, y a la
+    AGENTE_SIN_AVANCE_MAX-esima seguida el dueno se entera: una vez por racha (el id del
+    aviso es el de su primera corrida)."""
+    f = con.execute("select case_id, propuesta_antes from agente_corrida where id=?",
+                    (fila,)).fetchone()
+    caso = con.execute("select case_id, chat_jid, propuesta_version from caso where case_id=?",
+                       (f["case_id"],)).fetchone()
+    version = caso["propuesta_version"] if caso else None
+    avanzo = (not caso or (version is not None and version != f["propuesta_antes"])
+              or caso["case_id"] not in casos_para_agente(con))
+    agente_anota(con, fila, avanzo=int(avanzo))
+    if avanzo:
+        return
+    seguidas, primera, _ = racha_sin_avance(con, caso["case_id"])
+    if seguidas < AGENTE_SIN_AVANCE_MAX:
+        return
+    texto = aviso_textos()["agente_pausado"].format(
+        n=caso["case_id"], chat=nombre_del_chat(con, caso["chat_jid"]), x=seguidas)
+    aviso_encola(con, f"aviso-ag-{caso['case_id']}-{primera}", TIPO_AVISO_AGENTE, texto,
+                 case_id=caso["case_id"])
+    con.commit()
+
+
+def racha_sin_avance(con, case_id):
+    """(cuantas corridas seguidas del caso, de la ultima para atras, terminaron sin avanzar,
+    el id de la primera de ellas, cuando empezo la ultima). Una de antes, sin `avanzo`, corta."""
+    seguidas, primera, ultima = 0, None, None
+    for r in con.execute("select id, estado, motivo, avanzo, created_at from agente_corrida "
+                         "where case_id=? and estado not in (?, ?) order by id desc",
+                         (case_id, *AGENTE_EN_VUELO)):
+        if r["estado"] == "fallido" and r["motivo"] in MOTIVOS_DE_LA_MAQUINA:
+            continue
+        if r["avanzo"] != 0:
+            break
+        seguidas, primera = seguidas + 1, r["id"]
+        ultima = ultima or r["created_at"]
+    return seguidas, primera, ultima
+
+
+def caso_en_pausa(con, case_id):
+    """Si el tick no le da el caso al agente: AGENTE_SIN_AVANCE_MAX corridas seguidas sin
+    avanzar, la ultima hace menos de AGENTE_PAUSA_S."""
+    seguidas, _, ultima = racha_sin_avance(con, case_id)
+    return seguidas >= AGENTE_SIN_AVANCE_MAX and edad_de(ultima) < AGENTE_PAUSA_S
+
+
+def cuentas_que_fallan(con):
+    """Las cuentas de Claude que el agente de casos salta ahora: AGENTE_FALLAS_CUENTA
+    lanzamientos seguidos sin que Claude empezara su turno, el ultimo hace menos de
+    AGENTE_PAUSA_S. Un turno empezado con esa cuenta corta su racha. De la maquina, no de
+    una linea: la cuenta es la misma para todas."""
+    rachas, cortadas = {}, set()
+    for r in con.execute("select coalesce(cuenta_claude, ?) as c, estado, motivo, turno_at, "
+                         "created_at from agente_corrida order by id desc limit 200",
+                         (CUENTA_SIN_ELEGIR,)):
+        if r["c"] in cortadas:
+            continue
+        if r["turno_at"]:
+            cortadas.add(r["c"])
+        elif r["estado"] == "fallido" and r["motivo"] in MOTIVOS_DE_CUENTA:
+            n, ultima = rachas.get(r["c"], (0, r["created_at"]))
+            rachas[r["c"]] = (n + 1, ultima)
+    return {c for c, (n, ultima) in rachas.items()
+            if n >= AGENTE_FALLAS_CUENTA and edad_de(ultima) < AGENTE_PAUSA_S}
+
+
+def de_esta_linea():
+    """(condicion, parametros) para las corridas del agente de la linea activa. Una de
+    antes, sin linea anotada, es de la principal."""
+    return "coalesce(cuenta, ?) = ?", (linea_principal() or cuenta_activa(), cuenta_activa())
 
 
 def lock_del_agente(con):
+    """Si el agente de casos de la linea activa tiene su lock puesto."""
     return con.execute("select 1 from run_lock where name=? and expires_at > ?",
-                       (RUN_NAME, time.time())).fetchone() is not None
+                       (llave_del_lock(RUN_NAME), time.time())).fetchone() is not None
 
 
 def reviso_despues(con, fila):
@@ -13628,9 +13966,11 @@ def cura_agente(con, cli, f, resumen):
 
 def tick_vigila_agente(con, cli, resumen):
     """La corrida en vuelo: se fue sola, termino su revision, vencio, quedo a medias, o su
-    linea se perdio."""
+    linea se perdio. Solo las de su linea: la otra la vigila su propio tick."""
+    linea, de_linea = de_esta_linea()
     for f in [dict(r) for r in con.execute(
-            "select * from agente_corrida where estado in (?, ?) order by id", AGENTE_EN_VUELO)]:
+            f"select * from agente_corrida where estado in (?, ?) and {linea} order by id",
+            (*AGENTE_EN_VUELO, *de_linea))]:
         edad = edad_de(f["created_at"])
         if f["estado"] == "lanzando":
             if edad > DESPACHO_A_MEDIAS_S:
@@ -13670,7 +14010,8 @@ def caso_para_corrida(con, origen, casos):
     """El caso que se le da a la corrida nueva, o None si todos esperan. El tick no le da
     otra vez, antes de AGENTE_ESPERA_S, un caso que ya tuvo una corrida (uno que el agente
     no logra resolver no abre una terminal por minuto), y despues de un `se-cierra` no
-    abre ninguna hasta AGENTE_PAUSA_S. Una corrida vieja sin caso era la cola entera.
+    abre ninguna hasta AGENTE_PAUSA_S. Un caso que no avanza (`caso_en_pausa`) espera
+    AGENTE_PAUSA_S. Una corrida vieja sin caso era la cola entera.
     "Atender ahora" no espera y empieza por los casos que el dueno pidio atender."""
     if origen != "tick":
         atendidos = [c for c in casos if atendido_por_dueno(con, c)]
@@ -13687,17 +14028,19 @@ def caso_para_corrida(con, origen, casos):
         if r["case_id"] is None:
             return None
         recientes.add(r["case_id"])
-    return next((c for c in casos if c not in recientes), None)
+    return next((c for c in casos if c not in recientes and not caso_en_pausa(con, c)), None)
 
 
 def toma_corrida(con, origen):
     """(fila `lanzando` de una corrida nueva, su caso), o (None, lo que lo impide):
-    "running" (hay una en vuelo o el lock del agente esta puesto) o "waiting" (ningun caso
-    que el tick pueda dar todavia: `caso_para_corrida`)."""
+    "running" (hay una en vuelo en esta linea o su lock del agente esta puesto) o "waiting"
+    (ningun caso que el tick pueda dar todavia: `caso_para_corrida`). Uno por linea: el de
+    otra no espera a este (linea-viva-2, W3)."""
     caso_toma(con)
+    linea, de_linea = de_esta_linea()
     try:
-        if con.execute("select 1 from agente_corrida where estado in (?, ?)",
-                       AGENTE_EN_VUELO).fetchone() or lock_del_agente(con):
+        if con.execute(f"select 1 from agente_corrida where estado in (?, ?) and {linea}",
+                       (*AGENTE_EN_VUELO, *de_linea)).fetchone() or lock_del_agente(con):
             con.rollback()
             return None, "running"
         cid = caso_para_corrida(con, origen, casos_para_agente(con))
@@ -13705,9 +14048,14 @@ def toma_corrida(con, origen):
             con.rollback()
             return None, "waiting"
         momento = ahora_caso()
+        antes = con.execute("select propuesta_version from caso where case_id=?",
+                            (cid,)).fetchone()
         fila = con.execute("insert into agente_corrida (origen, case_id, estado, created_at, "
-                           "updated_at) values (?, ?, 'lanzando', ?, ?)",
-                           (origen, cid, momento, momento)).lastrowid
+                           "updated_at, cuenta, propuesta_antes) values (?, ?, 'lanzando', ?, "
+                           "?, ?, ?)",
+                           (origen, cid, momento, momento,
+                            linea_de_caso_id(con, cid) or cuenta_activa(),
+                            antes["propuesta_version"] if antes else None)).lastrowid
         con.commit()
     except BaseException:
         con.rollback()
@@ -13741,7 +14089,8 @@ def lanza_agente(con, origen, hasta):
         abierto = abre_agente(
             cli, selector, AGENTE_TITULO, AGENTE_NOMBRE,
             arranque_ms=max(5000, min(DESPACHO_ARRANQUE_MS, queda() // 2)),
-            preferida=cuenta_del_bot(con, linea_de_caso_id(con, cid)))
+            preferida=cuenta_del_bot(con, linea_de_caso_id(con, cid)),
+            evitar=cuentas_que_fallan(con))
         terminal, motivo = abierto["terminal"], abierto["motivo"]
         if terminal or abierto["cuenta"] or abierto["respaldo"]:
             agente_anota(con, fila, terminal=terminal, tab=abierto["tab"],
@@ -13791,8 +14140,10 @@ def cmd_agente(con, a):
 
 
 def agente_del_tablero(con):
-    """La ultima corrida del agente de casos, como la lee el panel, o None."""
-    r = con.execute("select * from agente_corrida order by id desc limit 1").fetchone()
+    """La ultima corrida del agente de casos de esta linea, como la lee el panel, o None."""
+    linea, de_linea = de_esta_linea()
+    r = con.execute(f"select * from agente_corrida where {linea} order by id desc limit 1",
+                    de_linea).fetchone()
     if not r:
         return None
     fallo = r["estado"] == "fallido"
@@ -13934,6 +14285,72 @@ def tick_anota(con):
     con.commit()
 
 
+def tick_previo(con):
+    """Cuando corrio el tick anterior de ESTA linea (epoch), o None. Se lee antes de
+    `tick_anota`, que lo pisa."""
+    fila = con.execute("select value from settings where key=?", (rastro("tick_at"),)).fetchone()
+    try:
+        return float(fila["value"]) if fila else None
+    except (TypeError, ValueError):
+        return None
+
+
+# ── El worker muerto (odd/tasks/linea-viva-2.md, W5) ──────────────────────────────────────
+# El worker late cada 5 s en el storage del plugin (`workerBeat.at`, main.mjs). Con el muerto
+# se van el respaldo del tick y los avisos de las lineas (linea-viva V4 y V5), y nada lo
+# decia. El tick, que corre Orca, lo mira: un latido de mas de 3 minutos sale en el resumen
+# (`worker_muerto`), y al dueno le llega UN aviso por incidente (el incidente es ese latido)
+# y uno cuando vuelve. Sin la clave (el worker nunca corrio) no hay alerta.
+WORKER_MUERTO_S = 180
+# Para avisar, el tick anterior de la linea tuvo que correr al menos esto despues del ultimo
+# latido: si el tick tampoco corria, Orca recien arranca y el worker pudo no haber latido
+# todavia. El tick siguiente lo decide.
+WORKER_TICK_DESPUES_S = 60
+# El aviso del incidente que no salio antes de que el worker volviera ya no sale.
+WORKER_RECUPERADO = "worker-recovered"
+
+
+def latido_del_worker():
+    """(`at` tal cual, epoch) del ultimo latido del worker, o None sin uno que se entienda."""
+    latido = plugin_store_crudo().get("workerBeat")
+    at = latido.get("at") if isinstance(latido, dict) else None
+    if not isinstance(at, str) or not at:
+        return None
+    try:
+        return at, datetime.datetime.fromisoformat(at.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def tick_worker(con, resumen, previo):
+    """`worker_muerto` en el resumen, y el aviso del incidente o de que volvio."""
+    latido = latido_del_worker()
+    edad = time.time() - latido[1] if latido else None
+    resumen["worker_muerto"] = edad is not None and edad > WORKER_MUERTO_S
+    if latido is None or not numero_aprobacion():
+        return
+    tx = aviso_textos()
+    if resumen["worker_muerto"]:
+        if previo is None or previo - latido[1] < WORKER_TICK_DESPUES_S:
+            return
+        marca = hashlib.sha256(latido[0].encode()).hexdigest()[:16]
+        aviso_encola(con, f"aviso-worker-{marca}", "worker",
+                     tx["worker"].format(min=int(edad // 60)), version=marca)
+        con.commit()
+        return
+    ultimo = con.execute("select * from aviso where tipo='worker' order by at desc, rowid desc "
+                         "limit 1").fetchone()
+    if ultimo is None:
+        return
+    if ultimo["estado"] == "pendiente":
+        con.execute("update aviso set estado='fallido', motivo=?, updated_at=? where req_id=? "
+                    "and estado='pendiente'", (WORKER_RECUPERADO, ahora_caso(), ultimo["req_id"]))
+    elif ultimo["estado"] == "enviado":
+        aviso_encola(con, f"aviso-worker-ok-{ultimo['version']}", "worker-ok", tx["worker_ok"],
+                     version=ultimo["version"])
+    con.commit()
+
+
 def tick_se_encarga(con):
     """Si el tick de ESTA linea abre al agente de casos: corrio hace poco y su ultimo
     lanzamiento no fallo por algo que el cron arregla. Sin dato, no: el cron es el respaldo.
@@ -13949,8 +14366,9 @@ def tick_se_encarga(con):
             return False
     except (TypeError, ValueError):
         return False
-    ultima = con.execute("select estado, motivo from agente_corrida order by id desc "
-                         "limit 1").fetchone()
+    linea, de_linea = de_esta_linea()
+    ultima = con.execute(f"select estado, motivo from agente_corrida where {linea} "
+                         f"order by id desc limit 1", de_linea).fetchone()
     return not (ultima and ultima["estado"] == "fallido" and ultima["motivo"] in CRON_ARREGLA)
 
 

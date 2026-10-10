@@ -4920,6 +4920,56 @@ console.log('\nactivity.html — retenidos fuera de un caso: el dueno los aprueb
   }
 }
 
+console.log('\nactivity.html — los avisos al dueno que no salieron (linea-viva-2, W4)')
+{
+  // Un aviso de aprobacion o de bloqueo que `wa-send` nego, o que vencio sin salir, solo
+  // quedaba en la base. El tablero (`notices_failed`) lo trae mientras el caso siga donde lo
+  // aviso, y el panel lo dice con el caso, el tipo y el motivo en palabras.
+  const fallidos = [
+    { case_id: 1, type: 'aprobacion', reason: 'send-wrong-line', at: hace(5 * 60000) },
+    { case_id: 9, type: 'bloqueo', reason: 'approval-expired', at: hace(2 * 3600000) },
+    { case_id: 4, type: 'aprobacion', reason: 'send-raro', at: hace(60000) }]
+  const conFallidos = (cards, lista = fallidos) => ({ board: tablero(cards, { notices_failed: lista }) })
+  const { doc } = await abrirTablero(conFallidos([tarjeta()]))
+  const caja = doc.getElementById('board-fallidos')
+  ok('el tablero muestra los avisos que no le llegaron al dueno', caja && !caja.hidden &&
+    /Avisos que no le llegaron/.test(caja.textContent), caja && caja.textContent.slice(0, 200))
+  const items = caja ? [...caja.querySelectorAll('[data-aviso-caso]')] : []
+  ok('uno por aviso, en el orden del tablero', items.map((n) => n.dataset.avisoCaso).join() === '1,9,4',
+    items.map((n) => n.dataset.avisoCaso).join())
+  ok('con el caso, el tipo, el motivo en palabras y hace cuanto', items.length === 3 &&
+    /Caso 1 · aviso de aprobacion/.test(items[0].textContent) &&
+    /no esta autorizada/.test(items[0].textContent) && /hace 5 min/.test(items[0].textContent) &&
+    /Caso 9 · aviso de bloqueo/.test(items[1].textContent) && /Vencio sin poder salir/.test(items[1].textContent),
+  items.map((n) => n.textContent).join(' | '))
+  ok('un motivo que el panel no conoce sale con su codigo, nunca vacio',
+    items[2] && /send-raro/.test(items[2].textContent), items[2] && items[2].textContent)
+  ok('el conteo dice cuantos son', doc.getElementById('board-fallidos-count').textContent === '3')
+  const ver = items[0] && items[0].querySelector('button[data-aviso-ver]')
+  ok('el de un caso que esta en el tablero tiene Ver caso', ver && ver.textContent === 'Ver caso')
+  ok('el de uno que no viaja en el tablero no tiene boton', items[1] && !items[1].querySelector('button'))
+  ver.click()
+  await espera()
+  ok('Ver caso abre su detalle', !!doc.querySelector('#board-detail[data-case="1"]'))
+
+  for (const [nombre, lista] of [['vacia', []], ['sin la clave', undefined],
+    ['con filas rotas', [{ case_id: 'x', type: 'aprobacion' }, null, { case_id: 2, type: 'otro' }]]]) {
+    const m = await abrirTablero(lista === undefined ? { board: tablero([tarjeta()]) } : conFallidos([tarjeta()], lista))
+    ok(`lista ${nombre}: no hay seccion`, m.doc.getElementById('board-fallidos').hidden)
+  }
+
+  for (const [idioma, titulo, tipo, motivo, boton] of [
+    ['en-US', /Notices that did not reach you/, /Case 1 · approval notice/, /It expired before it could go out/, 'Open case'],
+    ['pt-BR', /Avisos que nao chegaram ate voce/, /Caso 1 · aviso de aprovacao/, /Venceu sem conseguir sair/, 'Ver caso']]) {
+    const x = await abrirTablero(conFallidos([tarjeta()], [
+      { case_id: 1, type: 'aprobacion', reason: 'approval-expired', at: hace(60000) }]), idioma)
+    const h = x.doc.getElementById('board-fallidos')
+    ok(`${idioma}: la seccion, el tipo, el motivo y el boton en su idioma`, titulo.test(h.textContent) &&
+      tipo.test(h.textContent) && motivo.test(h.textContent) &&
+      h.querySelector('button[data-aviso-ver]').textContent === boton, h.textContent.slice(0, 300))
+  }
+}
+
 console.log('\nactivity.html — tablero: cada error se dice, en su idioma')
 {
   const CODIGOS = ['E_ARGS', 'E_NOT_FOUND', 'E_STAGE', 'E_NOT_APPROVED', 'E_VERSION', 'E_EXCEPTION',

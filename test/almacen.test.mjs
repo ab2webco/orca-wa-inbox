@@ -1242,6 +1242,32 @@ console.log('\nMigracion: un almacen ya al dia se deja quieto')
     JSON.stringify(doctor.filas))
 }
 
+console.log('\nlinea-viva-2 W1: la bandeja de salida de antes gana la cuenta de reintentos')
+{
+  // Un almacen ya al dia, pero de antes de `envio.reintentos`: `create table if not
+  // exists` no le agrega la columna, y sin ella reconciliar un `enviando` revienta.
+  const home = nueva()
+  const ruta = rutaAlmacen({ HOME: home })
+  const alm = abrirAlmacen(ruta)
+  alm.encolarEnvio({ reqId: 'W1-VIEJO', cuenta: CUENTA, chatJid: LAURA, cuerpo: 'hola' })
+  alm.cerrar()
+  const cruda = new DatabaseSync(ruta)
+  const columnas = () => cruda.prepare('pragma table_info(envio)').all().map((f) => f.name)
+  if (columnas().includes('reintentos')) cruda.exec('alter table envio drop column reintentos')
+  cruda.close()
+
+  const otra = abrirAlmacen(ruta)
+  ok('reabrirlo agrega la columna, con cero para lo que ya estaba',
+    otra.verEnvio('W1-VIEJO')?.reintentos === 0, JSON.stringify(otra.verEnvio('W1-VIEJO')))
+  ok('sin contar como una migracion de la via vieja', otra.migracion === null,
+    JSON.stringify(otra.migracion))
+  otra.cerrar()
+  const tercera = abrirAlmacen(ruta)
+  ok('y abrirlo otra vez no la vuelve a agregar',
+    tercera.verEnvio('W1-VIEJO')?.reintentos === 0)
+  tercera.cerrar()
+}
+
 console.log('\nMigracion: a medias no queda NUNCA — o migra entera, o no migra')
 {
   const home = nueva()
@@ -2134,6 +2160,74 @@ console.log('\nroles-por-numero (M8): los miembros de cada grupo')
   ok('la linea sale del grupo: su lista se borra',
     otra.con.prepare('select count(*) n from grupo_miembro where chat_jid=?').get(GRUPO).n === 0)
   otra.cerrar()
+  rmSync(casa, { recursive: true, force: true })
+}
+
+console.log('\nlinea-viva-2 W6: el id del mensaje citado se guarda y se lee')
+{
+  const casa = nueva()
+  const ruta = rutaAlmacen({ HOME: casa })
+  const alm = abrirAlmacen(ruta)
+  alm.registrarLinea({ cuenta: CUENTA, lid: MI_LID, pn: MI_TEL, nombre: 'Mi Linea' })
+  autorizar(casa, { jid: LAURA, nombre: 'Laura Mendez', modo: 'observar' })
+  autorizar(casa, { jid: ALFA, nombre: 'Cliente Alfa', modo: 'observar' })
+  const entra = (wa) => ingerirMensaje({
+    almacen: alm, alcance, cuenta: CUENTA, identidades: YO, wa,
+    mediaDir: rutaMedia({ HOME: casa }), descargarMedia: descargarFalso,
+    nombreDeChat: (jid) => nombres.get(jid) || null
+  })
+  const cita = (chat, id, ts, citado) => ({
+    key: { remoteJid: chat, fromMe: false, id,
+      ...(chat.endsWith('@g.us') ? { participant: OTRA_PERSONA } : {}) },
+    messageTimestamp: ts,
+    pushName: 'Laura Mendez',
+    message: { extendedTextMessage: { text: 'si', contextInfo: { stanzaId: citado } } }
+  })
+  const ahora = Math.floor(Date.now() / 1000)
+  await entra(cita(LAURA, 'W6D1', ahora - 60, 'AVISO-CITADO-1'))
+  await entra(cita(ALFA, 'W6G1', ahora - 50, 'OTRO-CITADO-2'))
+  await entra(mensaje({ chat: LAURA, id: 'W6D2', ts: ahora - 40, texto: 'si' }))
+  const filaDe = (con, id) =>
+    con.prepare('select * from mensaje where stanza_id=?').get(id)
+  ok('el directo que cita guarda el id citado',
+    filaDe(alm.con, 'W6D1')?.cita_id === 'AVISO-CITADO-1', JSON.stringify(filaDe(alm.con, 'W6D1')))
+  ok('el grupo que cita tambien', filaDe(alm.con, 'W6G1')?.cita_id === 'OTRO-CITADO-2')
+  ok('sin cita queda null', filaDe(alm.con, 'W6D2')?.cita_id === null)
+  // Una re-sincronizacion del mismo mensaje sin su contexto no borra la cita.
+  await entra(mensaje({ chat: LAURA, id: 'W6D1', ts: ahora - 60, texto: 'si' }))
+  ok('la misma fila sin contexto no borra el id citado',
+    filaDe(alm.con, 'W6D1')?.cita_id === 'AVISO-CITADO-1')
+  alm.cerrar()
+
+  const { filas, stderr } = leerJson(casa, ['inbox', '--days', '36500'])
+  const d1 = (filas || []).find((f) => f.stanza_id === 'W6D1')
+  ok('la bandeja expone el id citado', d1?.cita_id === 'AVISO-CITADO-1', JSON.stringify(d1) + stderr)
+  const d2 = (filas || []).find((f) => f.stanza_id === 'W6D2')
+  ok('y sin cita no trae la clave', !!d2 && !('cita_id' in d2), JSON.stringify(d2))
+
+  // El almacen de antes de la columna: sus mensajes siguen ahi y el lector lo lee igual.
+  const viejo = new DatabaseSync(ruta)
+  viejo.exec('alter table mensaje drop column cita_id')
+  viejo.close()
+  const sinColumna = leerJson(casa, ['inbox', '--days', '36500'])
+  ok('sin la columna (el sidecar de antes), la bandeja sale 0 con sus mensajes',
+    sinColumna.code === 0 && (sinColumna.filas || []).some((f) => f.stanza_id === 'W6D1') &&
+    !(sinColumna.filas || []).some((f) => 'cita_id' in f), sinColumna.stderr)
+  const reabierto = abrirAlmacen(ruta)
+  const columnas = reabierto.con.prepare('pragma table_info(mensaje)').all().map((f) => f.name)
+  ok('el almacen de antes gana la columna al abrirse', columnas.includes('cita_id'),
+    JSON.stringify(columnas))
+  ok('sin perder un mensaje', reabierto.con.prepare('select count(*) n from mensaje').get().n === 3)
+  ok('y sin cambiar la version del esquema',
+    reabierto.con.prepare("select value from store_meta where key='schema_version'").get()
+      ?.value === String(ESQUEMA_VERSION) && ESQUEMA_VERSION === 1)
+  reabierto.cerrar()
+  const otraVez = abrirAlmacen(ruta)
+  ok('abrirlo otra vez no falla (la subida es idempotente)',
+    otraVez.con.prepare('pragma table_info(mensaje)').all()
+      .filter((f) => f.name === 'cita_id').length === 1)
+  otraVez.cerrar()
+  ok('y el lector lo sigue leyendo', leerJson(casa, ['inbox', '--days', '36500']).code === 0)
   rmSync(casa, { recursive: true, force: true })
 }
 

@@ -44,6 +44,15 @@ import { cuentaDeIdentidad, jidDeChat, parLidTelefono } from './mensajes.js'
 // es lo que el panel traduce).
 export const ESQUEMA_VERSION = 1
 
+// Cuanto puede estar una fila en `enviando` antes de darla por cortada (linea-viva-2,
+// W1). Un `sendMessage` vivo contesta en segundos; dos minutos es un sidecar que murio a
+// mitad. El MISMO numero vive en `bin/wa-scope` (ENVIANDO_VENCE_S), que deja de contar esa
+// fila como "la linea ya escribio", y `scripts/check-casos` compara los dos.
+export const ENVIANDO_VENCE_S = 120
+
+// El motivo de un envio que se corto dos veces: no se sabe si salio y no se insiste.
+export const MOTIVO_CORTADO = 'cortado-al-enviar'
+
 // CONTABILIDAD. Desde cuando esta enlazada cada linea y quien es. Sobrevive a apagar
 // la captura: no es contenido de nadie (§11-F3).
 //
@@ -131,6 +140,9 @@ create table if not exists mensaje (
   media_bytes integer,
   menciona_me integer not null default 0,
   cita_me     integer not null default 0,
+  -- El id del mensaje que este cita, de cualquier chat (linea-viva-2 W6). Un almacen de
+  -- antes la gana al abrirse (columnasNuevas), sin subir la version.
+  cita_id     text,
   -- Revocado: la fila queda como lapida con el cuerpo vacio, y no se borra. Borrarla
   -- dejaria que la proxima sincronizacion la volviera a insertar con su texto, o sea
   -- que el mensaje que alguien borro reapareceria en la bandeja.
@@ -182,15 +194,18 @@ create table if not exists envio (
   body       text not null,
   -- borrador  espera aprobacion del dueno y el sidecar NO lo toca
   -- pendiente espera al sidecar
-  -- enviando  tomado por el sidecar (se queda asi si el sidecar muere a mitad: no se
-  --           reintenta solo, porque reintentar a ciegas es el duplicado)
+  -- enviando  tomado por el sidecar. Si el sidecar muere a mitad, pasados
+  --           ENVIANDO_VENCE_S lo reconcilia (reconciliarEnviando): con su eco en
+  --           mensaje es enviado; sin eco vuelve a pendiente UNA vez, y la segunda es
+  --           rechazado. Nunca a ciegas: el eco se mira primero
   -- enviado / rechazado son finales
   estado     text not null default 'pendiente',
   motivo     text,               -- por que lo rechazo WhatsApp, sin contenido
   stanza_id  text,               -- el id que contesto WhatsApp, para cruzarlo con mensaje
   created_at integer not null,
   claimed_at integer,
-  settled_at integer
+  settled_at integer,
+  reintentos integer not null default 0  -- cuantas veces volvio de enviando a pendiente
 );
 create index if not exists ix_envio_estado on envio (estado, created_at);
 
@@ -260,6 +275,18 @@ export function decidirReclave ({ lineaLocal, remitentesPropios = [], emparejada
  *  migracion tiene que poder correr sobre dos formas distintas del mismo nombre. */
 function columnasDe (con, tabla) {
   return con.prepare(`pragma table_info(${tabla})`).all().map((f) => f.name)
+}
+
+/** Las columnas que se sumaron a una tabla que ya existia. `create table if not exists`
+ *  no toca una tabla vieja, asi que cada una se agrega si falta: idempotente, y sin
+ *  cambiar ESQUEMA_VERSION, porque el lector no la necesita para leer lo de antes. */
+function columnasNuevas (con) {
+  if (!columnasDe(con, 'envio').includes('reintentos')) {
+    con.exec('alter table envio add column reintentos integer not null default 0')
+  }
+  if (!columnasDe(con, 'mensaje').includes('cita_id')) {
+    con.exec('alter table mensaje add column cita_id text')
+  }
 }
 
 function tablasDe (con) {
@@ -414,6 +441,13 @@ function unirDispositivos (con) {
   return chats ? { chats, mensajes } : null
 }
 
+/**
+ * El id del mensaje citado (linea-viva-2 W6), en un almacen de antes de la columna. Se
+ * AGREGA y no se rehace la tabla: la columna nueva es opcional y null en lo viejo, y los
+ * mensajes no se tocan. No sube la version: `bin/wa_store.py` pregunta por la columna
+ * antes de leerla, asi que un lector nuevo lee un almacen viejo y uno viejo, uno nuevo.
+ * IDEMPOTENTE: corre en cada apertura, dentro de la transaccion del sello.
+ */
 /** El directorio de estado de las herramientas. La MISMA tabla que `scope_db_path()` en
  *  `bin/wa-scope:42-46` y `bin/wa_settings.py:320-323`. Que sean dos implementaciones es
  *  un riesgo real —discrepar sobre esta ruta es escribir en una base que nadie lee— y
@@ -472,6 +506,7 @@ export function abrirAlmacen (ruta = rutaAlmacen()) {
   try {
     migracion = migrar(con)
     con.exec(ESQUEMA)
+    columnasNuevas(con)
     dispositivosUnidos = unirDispositivos(con)
     if (dispositivosUnidos) {
       // Aparte de `migracion`, a proposito: esa tabla es la de la subida de esquema y
@@ -887,21 +922,24 @@ class Almacen {
   guardarMensaje (fila, { mediaPath = null, ahora = Date.now() } = {}) {
     this.con.prepare(`insert into mensaje
       (account, chat_jid, stanza_id, ts, from_me, sender_jid, sender_name, body,
-       media_type, media_path, media_bytes, menciona_me, cita_me, revocado, editado_at,
-       captured_at)
-      values (?,?,?,?,?,?,?,?,?,?,?,?,?,0,null,?)
+       media_type, media_path, media_bytes, menciona_me, cita_me, cita_id, revocado,
+       editado_at, captured_at)
+      values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,null,?)
       on conflict(account, chat_jid, stanza_id) do update set
         ts=excluded.ts, sender_jid=excluded.sender_jid, sender_name=excluded.sender_name,
         body=excluded.body, media_type=excluded.media_type,
         media_path=coalesce(excluded.media_path, mensaje.media_path),
         media_bytes=excluded.media_bytes, menciona_me=excluded.menciona_me,
-        cita_me=excluded.cita_me
+        cita_me=excluded.cita_me,
+        -- La misma fila que vuelve sin su contexto no olvida a quien citaba.
+        cita_id=coalesce(excluded.cita_id, mensaje.cita_id)
       -- Una lapida no se resucita: lo que alguien borro no puede volver porque el
       -- mensaje llegue otra vez por una re-sincronizacion.
       where mensaje.revocado = 0`)
       .run(fila.cuenta, fila.chatJid, fila.stanzaId, fila.ts, fila.fromMe,
         fila.senderJid, fila.senderName, fila.body || '', fila.mediaTipo, mediaPath,
-        fila.mediaBytes, fila.mencionaMe, fila.citaMe, Math.floor(ahora / 1000))
+        fila.mediaBytes, fila.mencionaMe, fila.citaMe, fila.citaId || null,
+        Math.floor(ahora / 1000))
   }
 
   /** Un borrado o una edicion (§11-B4). */
@@ -1013,6 +1051,58 @@ class Almacen {
       // Otro se la llevo entre el select y el update: se mira la siguiente. No se
       // reintenta la misma, que es como se vuelve a mandar lo ya mandado.
     }
+  }
+
+  /**
+   * Las filas de esta linea que quedaron en `enviando` mas de ENVIANDO_VENCE_S: el sidecar
+   * murio a mitad y nadie les va a dar veredicto (linea-viva-2, W1). Sin esto quien pidio
+   * no se entera nunca, y `wa-scope` las cuenta como "ya escrito" y calla el acuse.
+   *
+   * El orden es el que evita el duplicado. Primero el eco: un mensaje propio en el mismo
+   * chat, desde la toma, con el mismo texto y que no sea ya de otro envio. Si esta, salio,
+   * y queda `enviado` con su stanza. Si no, vuelve a `pendiente` una sola vez
+   * (`reintentos`); la segunda queda `rechazado` con MOTIVO_CORTADO, y reintentar es
+   * decision de quien pidio.
+   *
+   * Con `cuenta`, solo lo de esa linea, como `tomarEnvio`. Es un `select` sobre el indice
+   * de estado: corre en cada vuelta del drenado sin costo.
+   */
+  reconciliarEnviando (ahora = Date.now(), cuenta) {
+    const segundos = Math.floor(ahora / 1000)
+    const corte = segundos - ENVIANDO_VENCE_S
+    const filas = cuenta === undefined
+      ? this.con.prepare("select * from envio where estado='enviando' and " +
+        'coalesce(claimed_at, 0) < ? order by created_at, rowid').all(corte)
+      : this.con.prepare("select * from envio where estado='enviando' and account=? and " +
+        'coalesce(claimed_at, 0) < ? order by created_at, rowid').all(cuenta, corte)
+    const r = { enviados: 0, devueltos: 0, rechazados: 0 }
+    for (const fila of filas) {
+      const eco = this.con.prepare(`select stanza_id from mensaje
+        where account=? and chat_jid=? and from_me=1 and ts >= ? and body=?
+          and stanza_id not in (select stanza_id from envio
+            where account=? and stanza_id is not null)
+        order by ts, rowid limit 1`)
+        .get(fila.account, fila.chat_jid, fila.claimed_at, fila.body, fila.account)
+      if (eco) {
+        r.enviados += this.cerrarEnviando(fila.req_id, `estado='enviado', stanza_id=?,
+          settled_at=?`, eco.stanza_id, segundos)
+      } else if (!(Number(fila.reintentos) > 0)) {
+        r.devueltos += this.cerrarEnviando(fila.req_id, `estado='pendiente', claimed_at=null,
+          reintentos=reintentos+1`)
+      } else {
+        r.rechazados += this.cerrarEnviando(fila.req_id, `estado='rechazado', motivo=?,
+          settled_at=?`, MOTIVO_CORTADO, segundos)
+      }
+    }
+    return r
+  }
+
+  /** Un cambio sobre una fila que SIGUE en `enviando`: 1 si fue este, 0 si alguien se
+   *  adelanto (el sidecar de verdad le dio veredicto entre el select y el update). */
+  cerrarEnviando (reqId, cambio, ...valores) {
+    return Number(this.con.prepare(
+      `update envio set ${cambio} where req_id=? and estado='enviando'`)
+      .run(...valores, reqId).changes) === 1 ? 1 : 0
   }
 
   /** El veredicto, que es lo que la CLI esta esperando. Solo cierra lo que esta en

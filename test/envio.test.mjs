@@ -27,7 +27,7 @@ import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 
-import { abrirAlmacen, rutaAlmacen } from '../sidecar/src/almacen.js'
+import { abrirAlmacen, ENVIANDO_VENCE_S, rutaAlmacen } from '../sidecar/src/almacen.js'
 import { atenderSalida, ENVIO, LATIDO_VENCE_MS, mensajeDeEnvio } from '../sidecar/src/envio.js'
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -290,6 +290,94 @@ console.log('\nsidecar: lo que WhatsApp rechaza queda rechazado, no enviado')
   const fila = filasEnvio(home)[0]
   ok('queda rechazado', fila.estado === ENVIO.RECHAZADO, JSON.stringify(fila))
   ok('con motivo, y sin stanza', !!fila.motivo && !fila.stanza_id, JSON.stringify(fila))
+  almacen.cerrar()
+}
+
+console.log('\nlinea-viva-2 W1: un envio que quedo en enviando se reconcilia, sin duplicar')
+{
+  // El sidecar murio a mitad de un envio: la fila quedo en `enviando` para siempre, sin
+  // veredicto para quien pidio y contando como "ya escrito". Pasados ENVIANDO_VENCE_S, si
+  // su eco esta en el almacen salio; si no, vuelve a la bandeja UNA vez, y la segunda se
+  // rechaza con motivo. El eco se mira primero: reintentar lo que ya salio es el duplicado.
+  const LINEA = 'pn:15550001111'
+  const OTRA = 'pn:15550002222'
+  const T = 1_800_000_000_000
+  const ahora = Math.floor(T / 1000)
+  const vieja = ahora - ENVIANDO_VENCE_S - 60
+  const home = nueva()
+  const almacen = abrirAlmacen(rutaAlmacen({ HOME: home }))
+  const enVuelo = (reqId, cuerpo, claimed, { cuenta = LINEA, chat = LAURA } = {}) => {
+    almacen.encolarEnvio({ reqId, cuenta, chatJid: chat, cuerpo, estado: ENVIO.PENDIENTE,
+      ahora: (claimed - 5) * 1000 })
+    almacen.con.prepare("update envio set estado='enviando', claimed_at=? where req_id=?")
+      .run(claimed, reqId)
+  }
+  const propio = (stanzaId, cuerpo, ts, { cuenta = LINEA, chat = LAURA } = {}) =>
+    almacen.guardarMensaje({ cuenta, chatJid: chat, stanzaId, ts, fromMe: 1, senderJid: null,
+      senderName: null, body: cuerpo, mediaTipo: null, mediaBytes: null, mencionaMe: 0,
+      citaMe: 0 })
+  const fila = (reqId) => almacen.verEnvio(reqId)
+
+  enVuelo('W1-ECO', 'ya quedo listo', vieja)
+  propio('ECO-1', 'ya quedo listo', vieja + 1)
+  enVuelo('W1-SIN-ECO', 'lo revisamos hoy', vieja)
+  // Un mensaje propio con el mismo texto pero de ANTES de la toma no es su eco.
+  propio('ECO-ANTES', 'lo revisamos hoy', vieja - 30)
+  // Ni uno cuyo stanza ya es de otro envio: dos respuestas iguales son dos mensajes.
+  almacen.encolarEnvio({ reqId: 'W1-PREVIO', cuenta: LINEA, chatJid: LAURA, cuerpo: 'gracias',
+    estado: ENVIO.PENDIENTE, ahora: (vieja - 10) * 1000 })
+  almacen.con.prepare("update envio set estado='enviado', stanza_id='ECO-PREVIO' " +
+    "where req_id='W1-PREVIO'").run()
+  propio('ECO-PREVIO', 'gracias', vieja + 2)
+  enVuelo('W1-DOBLE', 'gracias', vieja)
+  enVuelo('W1-FRESCO', 'en eso estamos', ahora - 30)
+  enVuelo('W1-OTRA', 'de la otra linea', vieja, { cuenta: OTRA })
+
+  const r = almacen.reconciliarEnviando(T, LINEA)
+  ok('con su eco en el almacen queda enviado, con el stanza del eco',
+    fila('W1-ECO')?.estado === ENVIO.ENVIADO && fila('W1-ECO')?.stanza_id === 'ECO-1' &&
+    !!fila('W1-ECO')?.settled_at, JSON.stringify(fila('W1-ECO')))
+  ok('sin eco vuelve a pendiente, con el reintento anotado',
+    fila('W1-SIN-ECO')?.estado === ENVIO.PENDIENTE && fila('W1-SIN-ECO')?.reintentos === 1,
+    JSON.stringify(fila('W1-SIN-ECO')))
+  ok('el eco de otro envio con el mismo texto no cuenta',
+    fila('W1-DOBLE')?.estado === ENVIO.PENDIENTE, JSON.stringify(fila('W1-DOBLE')))
+  ok('un enviando fresco no se toca',
+    fila('W1-FRESCO')?.estado === ENVIO.ENVIANDO && !fila('W1-FRESCO')?.reintentos,
+    JSON.stringify(fila('W1-FRESCO')))
+  ok('el de otra linea no se toca',
+    fila('W1-OTRA')?.estado === ENVIO.ENVIANDO, JSON.stringify(fila('W1-OTRA')))
+  ok('y dice que hizo', r?.enviados === 1 && r?.devueltos === 2 && r?.rechazados === 0,
+    JSON.stringify(r))
+
+  // La segunda vez que se corta: ya no se reintenta, se rechaza con motivo.
+  almacen.con.prepare("update envio set estado='enviando', claimed_at=? " +
+    "where req_id='W1-SIN-ECO'").run(vieja)
+  almacen.reconciliarEnviando(T, LINEA)
+  ok('cortado por segunda vez queda rechazado, con motivo y cerrado',
+    fila('W1-SIN-ECO')?.estado === ENVIO.RECHAZADO &&
+    fila('W1-SIN-ECO')?.motivo === 'cortado-al-enviar' && !!fila('W1-SIN-ECO')?.settled_at,
+    JSON.stringify(fila('W1-SIN-ECO')))
+  ok('una segunda pasada no cambia lo ya reconciliado',
+    fila('W1-ECO')?.estado === ENVIO.ENVIADO && fila('W1-OTRA')?.estado === ENVIO.ENVIANDO)
+
+  // El drenado de la linea lo corre solo: lo devuelto sale en la misma vuelta, una vez.
+  enVuelo('W1-DRENADO', 'le escribo en un rato', vieja)
+  const socket = socketFalso()
+  await atenderSalida({ almacen, enviar: socket.enviar, cuenta: LINEA, ahora: () => T })
+  ok('el drenado de la linea reconcilia y manda lo devuelto, una vez',
+    fila('W1-DRENADO')?.estado === ENVIO.ENVIADO &&
+    socket.enviados.filter((e) => e.texto === 'le escribo en un rato').length === 1,
+    JSON.stringify({ fila: fila('W1-DRENADO'), enviados: socket.enviados }))
+  ok('y no manda lo que ya tenia eco ni lo de otra linea',
+    !socket.enviados.some((e) => ['ya quedo listo', 'de la otra linea'].includes(e.texto)),
+    JSON.stringify(socket.enviados))
+  // Con el socket caido no se reconcilia: lo devuelto no tendria quien lo mande.
+  enVuelo('W1-CAIDO', 'sin socket', vieja)
+  await atenderSalida({ almacen, enviar: socket.enviar, cuenta: LINEA, conectado: false,
+    ahora: () => T })
+  ok('con el socket caido se queda como estaba',
+    fila('W1-CAIDO')?.estado === ENVIO.ENVIANDO, JSON.stringify(fila('W1-CAIDO')))
   almacen.cerrar()
 }
 

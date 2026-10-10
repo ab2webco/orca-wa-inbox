@@ -364,6 +364,9 @@
       .held-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px; }
       .held-list .card { cursor: default; }
       .held-list .card:hover { background: var(--card, var(--fb-card)); }
+      /* Los avisos que no le llegaron al dueno: la misma caja, con el tinte de lo que fallo. */
+      .held.fallidos { border-color: color-mix(in srgb, var(--destructive, var(--fb-destructive)) 35%, var(--border, var(--fb-border)));
+              background: color-mix(in srgb, var(--destructive, var(--fb-destructive)) 4%, transparent); }
       .card-msg { font-size: 11px; font-weight: 600; overflow-wrap: anywhere;
               color: var(--foreground, var(--fb-foreground)); }
       .card-msg.mala { color: var(--destructive, var(--fb-destructive)); }
@@ -797,6 +800,14 @@
         <p class="held-msg" id="board-held-msg" role="status"></p>
         <div class="held-list" id="board-held-list"></div>
       </section>
+      <!-- Los avisos de aprobacion o de bloqueo que no le llegaron al dueno por WhatsApp
+           (linea-viva-2, W4): mientras el caso siga donde lo aviso. -->
+      <section class="held fallidos" id="board-fallidos" hidden>
+        <div class="held-head"><span class="held-title" data-t="noticesFailedTitle"></span>
+          <span class="col-count" id="board-fallidos-count"></span></div>
+        <p class="meta" data-t="noticesFailedLead"></p>
+        <div class="held-list" id="board-fallidos-list"></div>
+      </section>
       <div class="board-empty" id="board-empty" hidden><p class="t"></p><p class="b"></p></div>
       <div class="board-body" id="board-body" hidden>
         <div class="board-main">
@@ -1012,6 +1023,14 @@
               "heldCancel": "Cancelar",
               "heldSent": "Enviado a {chat}.",
               "heldCancelled": "Cancelado: el mensaje a {chat} no se envio.",
+              "noticesFailedTitle": "Avisos que no le llegaron",
+              "noticesFailedLead": "Estos avisos por WhatsApp no salieron. Revise el caso aqui, en el tablero.",
+              "noticeApproval": "Caso {n} · aviso de aprobacion",
+              "noticeBlock": "Caso {n} · aviso de bloqueo",
+              "noticeExpired": "Vencio sin poder salir: la linea no lo pudo enviar a tiempo.",
+              "noticeNumberChanged": "El numero de aprobacion cambio antes de que saliera.",
+              "noticeReasonCode": "No salio ({code}).",
+              "noticeOpen": "Ver caso",
               "excMoney": "dinero",
               "excCredential": "credencial",
               "excCommitment": "compromiso",
@@ -1374,6 +1393,14 @@
               "heldCancel": "Cancel",
               "heldSent": "Sent to {chat}.",
               "heldCancelled": "Cancelled: the message to {chat} was not sent.",
+              "noticesFailedTitle": "Notices that did not reach you",
+              "noticesFailedLead": "These WhatsApp notices did not go out. Check the case here, on the board.",
+              "noticeApproval": "Case {n} · approval notice",
+              "noticeBlock": "Case {n} · block notice",
+              "noticeExpired": "It expired before it could go out: the line could not send it in time.",
+              "noticeNumberChanged": "The approval number changed before it went out.",
+              "noticeReasonCode": "It did not go out ({code}).",
+              "noticeOpen": "Open case",
               "excMoney": "money",
               "excCredential": "credential",
               "excCommitment": "commitment",
@@ -1736,6 +1763,14 @@
               "heldCancel": "Cancelar",
               "heldSent": "Enviada para {chat}.",
               "heldCancelled": "Cancelada: a mensagem para {chat} nao foi enviada.",
+              "noticesFailedTitle": "Avisos que nao chegaram ate voce",
+              "noticesFailedLead": "Estes avisos por WhatsApp nao sairam. Confira o caso aqui, no quadro.",
+              "noticeApproval": "Caso {n} · aviso de aprovacao",
+              "noticeBlock": "Caso {n} · aviso de bloqueio",
+              "noticeExpired": "Venceu sem conseguir sair: a linha nao conseguiu envia-lo a tempo.",
+              "noticeNumberChanged": "O numero de aprovacao mudou antes de ele sair.",
+              "noticeReasonCode": "Nao saiu ({code}).",
+              "noticeOpen": "Ver caso",
               "excMoney": "dinheiro",
               "excCredential": "credencial",
               "excCommitment": "compromisso",
@@ -2719,6 +2754,62 @@
         el('board-held-msg').textContent = aviso
         lista.hidden = !visibles.length
         caja.hidden = !visibles.length && !aviso
+      }
+
+      // Los avisos al dueno que no salieron (linea-viva-2, W4), por tipo y por motivo. El
+      // motivo es el codigo de `wa-send` o del tick: el que el panel no conoce sale tal cual.
+      var AVISO_TIPO_KEY = { aprobacion: 'noticeApproval', bloqueo: 'noticeBlock' }
+      var AVISO_MOTIVO_KEY = { 'approval-expired': 'noticeExpired',
+        'approval-number-changed': 'noticeNumberChanged' }
+
+      function fallidosDe (board) {
+        var lista = esObjeto(board) && Array.isArray(board.notices_failed) ? board.notices_failed : []
+        return lista.filter(function (f) {
+          return esObjeto(f) && Number.isInteger(f.case_id) && f.case_id > 0 &&
+            Object.prototype.hasOwnProperty.call(AVISO_TIPO_KEY, f.type)
+        })
+      }
+
+      function motivoDeAviso (codigo) {
+        if (typeof codigo !== 'string' || !codigo) return fmt('noticeReasonCode', { code: '?' })
+        if (Object.prototype.hasOwnProperty.call(AVISO_MOTIVO_KEY, codigo)) return t(AVISO_MOTIVO_KEY[codigo])
+        if (Object.prototype.hasOwnProperty.call(ERR_ACCION, codigo)) return t(ERR_ACCION[codigo])
+        return fmt('noticeReasonCode', { code: codigo.slice(0, 80) })
+      }
+
+      function pintarFallidos (board) {
+        var caja = el('board-fallidos')
+        var lista = el('board-fallidos-list')
+        lista.textContent = ''
+        var todos = fallidosDe(board)
+        // Ver caso solo para el que viaja en el tablero: el detalle se arma con su tarjeta.
+        var enTablero = {}
+        ;(esObjeto(board) && Array.isArray(board.cards) ? board.cards : []).forEach(function (c) {
+          if (esObjeto(c) && c.case_id != null) enTablero[String(c.case_id)] = c
+        })
+        todos.forEach(function (f) {
+          var nodo = crear('div', 'card')
+          nodo.dataset.avisoCaso = String(f.case_id)
+          var arriba = crear('div', 'card-top')
+          arriba.appendChild(crear('p', 'card-title clamp1', fmt(AVISO_TIPO_KEY[f.type], { n: f.case_id })))
+          nodo.appendChild(arriba)
+          var edad = hace(f.at)
+          if (edad) nodo.appendChild(crear('div', 'card-meta', edad))
+          nodo.appendChild(crear('div', 'card-msg mala', motivoDeAviso(f.reason)))
+          var tarjetaDe = enTablero[String(f.case_id)]
+          if (tarjetaDe) {
+            var acts = crear('div', 'card-acts')
+            var b = crear('button', 'btn', t('noticeOpen'))
+            b.type = 'button'
+            b.dataset.avisoVer = String(f.case_id)
+            b.addEventListener('click', function () { abrirCaso(tarjetaDe) })
+            acts.appendChild(b)
+            nodo.appendChild(acts)
+          }
+          lista.appendChild(nodo)
+        })
+        el('board-fallidos-count').textContent = todos.length ? String(todos.length) : ''
+        caja.hidden = !todos.length
       }
 
       /** Aprobar o cancelar un retenido: el pedido lleva solo el id, el worker hace el resto
@@ -3844,6 +3935,7 @@
         var detalleDe = null
         var porConfig = vacioPorConfig(actividadActual)
         pintarRetenidos(m.estado === 'ok' || m.estado === 'vacio' ? board : null)
+        pintarFallidos(m.estado === 'ok' || m.estado === 'vacio' ? board : null)
         if (m.estado === 'sin-datos') {
           mostrarVacio(t('boardNoDataTitle'), porConfig || t('boardNoDataBody'), false)
         } else if (m.estado === 'version') {
