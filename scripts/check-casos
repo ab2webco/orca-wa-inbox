@@ -2028,6 +2028,25 @@ if NODE:
             ok("la charla ajena que salta sigue sin caso y juzgada como nada",
                c is None and (juicio_de(home, "V1C") or {}).get("clase") == "nothing",
                f"caso {c} juicio {juicio_de(home, 'V1C')}")
+
+        # Una instalacion sin Jev (sin llave, o con Jev apagado en el panel): nada cambia.
+        for nombre, con_llave in (("sin llave", False), ("con Jev apagado", True)):
+            with tempfile.TemporaryDirectory() as home:
+                if con_llave:
+                    pon_llave(home)
+                    ruta = storage_de(home)
+                    ruta.parent.mkdir(parents=True, exist_ok=True)
+                    ruta.write_text(json.dumps({"jevEnabled": False}), encoding="utf-8")
+                falso.pedidos.clear()
+                llegan(home, A, [msg(SOPORTE, "V1N", "@duenio no se crean los leads", 10,
+                                     mencion=True)])
+                js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "responder")
+                p = corre(home, "ingest")
+                n = caso_de_stanza(home, "V1N")
+                ok(f"{nombre}: ingest no le pregunta a Jev y el pedido queda en recibido",
+                   p.returncode == 0 and falso.pedidos == [] and n is not None
+                   and n["etapa"] == "recibido" and juicio_de(home, "V1N") is None,
+                   f"{p.returncode} {len(falso.pedidos)} {n and n['etapa']} {p.stderr[-300:]}")
     finally:
         falso.cerrar()
         os.environ.clear()
@@ -13144,7 +13163,51 @@ def pon_tick_at(home, clave, hace_s):
     con.close()
 
 
+def toma_candado(ruta):
+    """El candado de un tick, tomado como lo toma `tick_toma`, en cada sistema."""
+    fh = open(ruta, "a+")
+    if sys.platform == "win32":
+        import msvcrt
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return fh
+
+
+def claves_tick(home):
+    return sorted(r["key"] for r in db_de(home).execute(
+        "select key from settings where key like 'tick_at%'"))
+
+
 print("\nel tick de cada linea (V2)")
+# Una instalacion de antes de las lineas (`local`, sin almacen): una sola marca, la de siempre.
+with tempfile.TemporaryDirectory() as home:
+    p, r = tick(home)
+    ok("con la linea `local`, el tick anota solo `tick_at`, como siempre",
+       claves_tick(home) == ["tick_at"] and isinstance(r, dict)
+       and "lineas_ocupadas" not in r, f"{claves_tick(home)} {p.stdout[:200]}")
+    js(home, "caso", "crear", "--chat", CHAT, "--stanza", "TL1", "--actor", "automatizacion")
+    ultima_corrida_agente(home, "activo")
+    ok("y su precheck la lee: al dia, callado", precheck(home).returncode == 1)
+    pon_tick_at(home, "tick_at", 10 * 60)
+    ok("vieja, el cron sigue", precheck(home).returncode == 0)
+if NODE:
+    # Una sola linea vinculada: sin reparto, su marca y la global, y la salida de siempre.
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "TU1", "@duenio no abre el login", 5, mencion=True)])
+        p, r = tick(home)
+        ok("con una sola linea, el tick anota la suya y la global",
+           claves_tick(home) == ["tick_at", f"tick_at@{A}"], f"{claves_tick(home)}")
+        ok("y su salida no cambia: sin `lineas` ni `lineas_ocupadas`",
+           isinstance(r, dict) and "lineas" not in r and "lineas_ocupadas" not in r,
+           f"{p.stdout[:300]}")
+        js(home, "caso", "crear", "--chat", CHAT, "--stanza", "TU2", "--actor", "automatizacion")
+        ultima_corrida_agente(home, "activo")
+        ok("su precheck, con su tick al dia: callado", precheck(home).returncode == 1)
+        pon_tick_at(home, f"tick_at@{A}", 10 * 60)
+        ok("con su propio tick viejo, el cron sigue", precheck(home).returncode == 0)
 if NODE:
     with tempfile.TemporaryDirectory() as home:
         llegan(home, A, [msg(SOPORTE, "TA1", "@duenio no abre el login", 5, mencion=True)])
@@ -13157,9 +13220,7 @@ if NODE:
            and tick_at_de(home, "tick_at"), f"{p.stdout[:300]} {p.stderr[-300:]}")
         ok("sin ninguna ocupada, la salida junta lo dice con una lista vacia",
            isinstance(r, dict) and r.get("lineas_ocupadas") == [], f"{p.stdout[:300]}")
-        import fcntl
-        candado = open(pathlib.Path(home) / ".wa-inbox" / "tick.lock", "a+")
-        fcntl.flock(candado.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        candado = toma_candado(pathlib.Path(home) / ".wa-inbox" / "tick.lock")
         try:
             p, r = tick(home)
         finally:
