@@ -16134,6 +16134,153 @@ if NODE:
            and fallidos_del_tablero(home) == [], f"{p.stderr[-300:]}")
 
 
+# ── El worker muerto (odd/tasks/linea-viva-2.md, W5) ────────────────────────────────────────
+# Con el worker muerto se van con el su respaldo del tick y sus avisos, y nada lo decia. El
+# tick de Python lee `workerBeat.at` del storage del plugin: un latido de mas de 3 minutos
+# sale en el resumen (`worker_muerto`) y se le avisa al dueno UNA vez por incidente, y una
+# cuando vuelve. Sin la clave (instalacion nueva, el worker nunca corrio) no hay alerta. Si el
+# tick tampoco corria (Orca recien arranca), espera al siguiente: el worker pudo no haber
+# latido todavia.
+def pon_latido(home, hace_s):
+    ruta = storage_de(home)
+    datos = json.loads(ruta.read_text(encoding="utf-8")) if ruta.exists() else {}
+    if hace_s is None:
+        datos.pop("workerBeat", None)
+    else:
+        cuando = datetime.datetime.fromtimestamp(time.time() - hace_s, datetime.timezone.utc)
+        datos["workerBeat"] = {"at": cuando.isoformat(timespec="milliseconds")
+                               .replace("+00:00", "Z")}
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    ruta.write_text(json.dumps(datos), encoding="utf-8")
+
+
+def avisos_worker(home):
+    con = db_de(home)
+    filas = [dict(r) for r in con.execute(
+        "select * from aviso where tipo in ('worker', 'worker-ok') order by at, rowid")]
+    con.close()
+    return filas
+
+
+print("\nel worker muerto (linea-viva-2, W5)")
+with tempfile.TemporaryDirectory() as home:
+    p, r = tick(home)
+    ok("instalacion nueva sin latido: el resumen dice que no hay worker muerto",
+       isinstance(r, dict) and r.get("worker_muerto") is False, p.stdout[:300])
+
+if NODE:
+    if not any(c["jid"] == DUENO_DM for c in CHATS):
+        CHATS.append({"jid": DUENO_DM, "nombre": "Dueno Directo", "grupo": False})
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        js(home, "config", "ack", "off")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        pon_aprobacion(home, DUENO_LID)
+        propia = f"tick_at@{A}"
+        sidecar = SidecarFalso(home)
+        try:
+            p, r = tick(home)
+            ok("sin la clave del latido no hay alerta ni aviso",
+               isinstance(r, dict) and r.get("worker_muerto") is False
+               and avisos_worker(home) == [], f"{p.stdout[:300]} {avisos_worker(home)}")
+            pon_latido(home, 10)
+            p, r = tick(home)
+            ok("un latido de hace 10 s: vivo", isinstance(r, dict)
+               and r.get("worker_muerto") is False and avisos_worker(home) == [])
+            # Orca recien arranca: el latido es viejo, pero el tick de la linea tambien.
+            pon_latido(home, 600)
+            pon_tick_at(home, propia, 700)
+            p, r = tick(home)
+            ok("con el tick parado tambien, el resumen lo dice pero el aviso espera",
+               isinstance(r, dict) and r.get("worker_muerto") is True
+               and avisos_worker(home) == [], f"{p.stdout[:300]} {avisos_worker(home)}")
+            p, r = tick(home)
+            filas = avisos_worker(home)
+            ok("al tick siguiente, con el latido igual de viejo, UN aviso al dueno",
+               isinstance(r, dict) and r.get("worker_muerto") is True
+               and [(f["tipo"], f["estado"]) for f in filas] == [("worker", "enviado")],
+               f"{filas} {p.stderr[-300:]}")
+            cuerpo = next((a["body"] for a in al_dueno(home)
+                           if filas and a["req_id"] == filas[0]["req_id"]), "")
+            ok("el aviso dice que el proceso de fondo no da senales y hace cuanto",
+               "WhatsApp Inbox" in cuerpo and "proceso de fondo" in cuerpo
+               and "10 min" in cuerpo, cuerpo)
+            tick(home)
+            ok("otro tick con el mismo latido no lo repite", len(avisos_worker(home)) == 1)
+            pon_latido(home, 5)
+            p, r = tick(home)
+            filas = avisos_worker(home)
+            ok("cuando vuelve a latir, el resumen lo dice y sale UN aviso de que volvio",
+               isinstance(r, dict) and r.get("worker_muerto") is False
+               and [(f["tipo"], f["estado"]) for f in filas]
+               == [("worker", "enviado"), ("worker-ok", "enviado")], f"{filas}")
+            cuerpo = next((a["body"] for a in al_dueno(home)
+                           if len(filas) > 1 and a["req_id"] == filas[1]["req_id"]), "")
+            ok("con su texto", "WhatsApp Inbox" in cuerpo and "vuelve a responder" in cuerpo,
+               cuerpo)
+            tick(home)
+            ok("y no lo repite", len(avisos_worker(home)) == 2)
+            # Otro incidente es otro latido: otro aviso.
+            pon_latido(home, 300)
+            p, r = tick(home)
+            ok("un incidente nuevo avisa otra vez",
+               [f["tipo"] for f in avisos_worker(home)] == ["worker", "worker-ok", "worker"],
+               f"{avisos_worker(home)}")
+            pon_latido(home, 5)
+            tick(home)
+        finally:
+            sidecar.cerrar()
+        # Sin la linea el aviso queda pendiente; si el worker vuelve antes de que salga, ya
+        # no sale, y tampoco el de que volvio.
+        pon_latido(home, 400)
+        tick(home)
+        pendiente = [f for f in avisos_worker(home) if f["estado"] == "pendiente"]
+        ok("sin la linea, el aviso del incidente espera", len(pendiente) == 1,
+           f"{avisos_worker(home)}")
+        pon_latido(home, 5)
+        tick(home)
+        filas = avisos_worker(home)
+        ok("si vuelve antes de que salga, ese aviso ya no sale y no hay aviso de que volvio",
+           bool(filas) and (filas[-1]["tipo"], filas[-1]["estado"]) == ("worker", "fallido")
+           and filas[-1]["motivo"] == "worker-recovered"
+           and sum(1 for f in filas if f["tipo"] == "worker-ok") == 2, f"{filas}")
+
+    # Sin numero de aprobacion: el resumen lo dice y no se encola nada.
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        pon_latido(home, 600)
+        pon_tick_at(home, f"tick_at@{A}", 30)
+        p, r = tick(home)
+        ok("sin numero de aprobacion: worker_muerto en el resumen, ningun aviso, el tick sigue",
+           p.returncode == 0 and isinstance(r, dict) and r.get("worker_muerto") is True
+           and avisos_worker(home) == [], f"{p.returncode} {p.stderr[-300:]}")
+
+    # Dos lineas: la salida junta lo dice, y el aviso sale una sola vez.
+    with tempfile.TemporaryDirectory() as home:
+        llave_del_plugin(home)
+        llegan(home, A, [])
+        llegan(home, SEGUNDA, [], activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "agent", "Agente De Ejemplo")
+        js(home, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        jsl(home, SEGUNDA, "set", DUENO_DM, "--provider", "ninguno", "--mode", "responder")
+        pon_duenos(home, DUENO_LID)
+        pon_aprobacion(home, DUENO_LID)
+        pon_latido(home, 600)
+        pon_tick_at(home, f"tick_at@{A}", 30)
+        pon_tick_at(home, f"tick_at@{SEGUNDA}", 30)
+        p, r = con_sidecars(home, lambda: tick(home))
+        lineas = (r or {}).get("lineas") or {}
+        ok("con dos lineas, la salida junta y la de cada linea dicen worker_muerto",
+           isinstance(r, dict) and r.get("worker_muerto") is True
+           and all(isinstance(x, dict) and x.get("worker_muerto") is True
+                   for x in lineas.values()) and len(lineas) == 2, f"{p.stdout[:400]}")
+        ok("y el aviso al dueno sale una sola vez",
+           [(f["tipo"], f["estado"]) for f in avisos_worker(home)] == [("worker", "enviado")],
+           f"{avisos_worker(home)} {p.stderr[-300:]}")
+
+
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:
     sys.exit(1)

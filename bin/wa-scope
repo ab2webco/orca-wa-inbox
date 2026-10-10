@@ -655,7 +655,7 @@ create table if not exists agente_corrida (
 create table if not exists aviso (
   req_id    text primary key,     -- aviso-<caso>-<version> | aviso-b-<caso>-<evento> | aviso-r-<hash>
   -- aprobacion (tambien su recordatorio, aviso-rec-<caso>-<version>) | bloqueo | respuesta |
-  -- sla (aviso-sla-<caso>)
+  -- sla (aviso-sla-<caso>) | worker | worker-ok (aviso-worker[-ok]-<latido>, `version`)
   tipo      text not null,
   case_id   integer,
   version   text,                 -- la propuesta_version que el aviso pide aprobar
@@ -10051,6 +10051,10 @@ TEXTOS_AVISO = {
            "recuerda": "Recordatorio: el caso {n} sigue esperando su decision.",
            "meta": "Caso {n} · {chat}: el cliente espera respuesta hace {min} min (la meta es "
                    "{meta} min). Pide: {x}",
+           "worker": "WhatsApp Inbox: el proceso de fondo del plugin no da senales hace {min} "
+                     "min. La revision de cada minuto sigue, pero sin el no hay respaldo ni "
+                     "avisos del plugin. Reiniciar Orca suele traerlo de vuelta.",
+           "worker_ok": "WhatsApp Inbox: el proceso de fondo del plugin vuelve a responder.",
            "etapas": {"recibido": "recibido", "clasificado": "clasificado",
                       "decision": "espera su decision", "trabajo": "en trabajo",
                       "listo": "resultado listo", "respondido": "respondido, espera al cliente",
@@ -10090,6 +10094,11 @@ TEXTOS_AVISO = {
            "recuerda": "Reminder: case {n} is still waiting for your decision.",
            "meta": "Case {n} · {chat}: the client has waited {min} min for a reply (the target "
                    "is {meta} min). Asks: {x}",
+           "worker": "WhatsApp Inbox: the plugin's background process has given no sign of "
+                     "life for {min} min. The every-minute check goes on, but without it there "
+                     "is no backup and no plugin notices. Restarting Orca usually brings it "
+                     "back.",
+           "worker_ok": "WhatsApp Inbox: the plugin's background process is responding again.",
            "etapas": {"recibido": "received", "clasificado": "classified",
                       "decision": "waits for you", "trabajo": "in progress",
                       "listo": "result ready", "respondido": "answered, waits for the client",
@@ -11477,10 +11486,19 @@ def cmd_tick(con, a):
         return None
     try:
         inicio = time.time()
+        previo = None
         try:
+            previo = tick_previo(con)
             tick_anota(con)
         except sqlite3.Error as exc:
             print(f"wa-scope: tick time not recorded: {exc}", file=sys.stderr)
+        # El worker muerto (linea-viva-2, W5): su aviso sale con los de abajo.
+        try:
+            tick_worker(con, resumen, previo)
+        except (sqlite3.Error, OSError) as exc:
+            if con.in_transaction:
+                con.rollback()
+            print(f"wa-scope: worker beat not checked: {exc}", file=sys.stderr)
         # La entrada de respaldo: el worker la dispara al llegar cada mensaje; si ese
         # evento se perdio, el minuto la recoge. Una falla suya no frena el resto.
         try:
@@ -14059,6 +14077,72 @@ def tick_anota(con):
     for clave in dict.fromkeys(("tick_at", rastro("tick_at"))):
         con.execute("insert into settings (key,value) values (?,?) on conflict(key) "
                     "do update set value=excluded.value", (clave, ahora_s))
+    con.commit()
+
+
+def tick_previo(con):
+    """Cuando corrio el tick anterior de ESTA linea (epoch), o None. Se lee antes de
+    `tick_anota`, que lo pisa."""
+    fila = con.execute("select value from settings where key=?", (rastro("tick_at"),)).fetchone()
+    try:
+        return float(fila["value"]) if fila else None
+    except (TypeError, ValueError):
+        return None
+
+
+# ── El worker muerto (odd/tasks/linea-viva-2.md, W5) ──────────────────────────────────────
+# El worker late cada 5 s en el storage del plugin (`workerBeat.at`, main.mjs). Con el muerto
+# se van el respaldo del tick y los avisos de las lineas (linea-viva V4 y V5), y nada lo
+# decia. El tick, que corre Orca, lo mira: un latido de mas de 3 minutos sale en el resumen
+# (`worker_muerto`), y al dueno le llega UN aviso por incidente (el incidente es ese latido)
+# y uno cuando vuelve. Sin la clave (el worker nunca corrio) no hay alerta.
+WORKER_MUERTO_S = 180
+# Para avisar, el tick anterior de la linea tuvo que correr al menos esto despues del ultimo
+# latido: si el tick tampoco corria, Orca recien arranca y el worker pudo no haber latido
+# todavia. El tick siguiente lo decide.
+WORKER_TICK_DESPUES_S = 60
+# El aviso del incidente que no salio antes de que el worker volviera ya no sale.
+WORKER_RECUPERADO = "worker-recovered"
+
+
+def latido_del_worker():
+    """(`at` tal cual, epoch) del ultimo latido del worker, o None sin uno que se entienda."""
+    latido = plugin_store_crudo().get("workerBeat")
+    at = latido.get("at") if isinstance(latido, dict) else None
+    if not isinstance(at, str) or not at:
+        return None
+    try:
+        return at, datetime.datetime.fromisoformat(at.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def tick_worker(con, resumen, previo):
+    """`worker_muerto` en el resumen, y el aviso del incidente o de que volvio."""
+    latido = latido_del_worker()
+    edad = time.time() - latido[1] if latido else None
+    resumen["worker_muerto"] = edad is not None and edad > WORKER_MUERTO_S
+    if latido is None or not numero_aprobacion():
+        return
+    tx = aviso_textos()
+    if resumen["worker_muerto"]:
+        if previo is None or previo - latido[1] < WORKER_TICK_DESPUES_S:
+            return
+        marca = hashlib.sha256(latido[0].encode()).hexdigest()[:16]
+        aviso_encola(con, f"aviso-worker-{marca}", "worker",
+                     tx["worker"].format(min=int(edad // 60)), version=marca)
+        con.commit()
+        return
+    ultimo = con.execute("select * from aviso where tipo='worker' order by at desc, rowid desc "
+                         "limit 1").fetchone()
+    if ultimo is None:
+        return
+    if ultimo["estado"] == "pendiente":
+        con.execute("update aviso set estado='fallido', motivo=?, updated_at=? where req_id=? "
+                    "and estado='pendiente'", (WORKER_RECUPERADO, ahora_caso(), ultimo["req_id"]))
+    elif ultimo["estado"] == "enviado":
+        aviso_encola(con, f"aviso-worker-ok-{ultimo['version']}", "worker-ok", tx["worker_ok"],
+                     version=ultimo["version"])
     con.commit()
 
 
