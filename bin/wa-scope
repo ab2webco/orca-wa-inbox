@@ -6725,6 +6725,9 @@ def jev_juzga(mensaje, con=None):
     juicio = wa_jev.juzga_mensaje(mensaje, clave)
     if juicio is None or con is None:
         return juicio
+    # Se guarda con el `skip` que vale (V1): la clase del cache y el JSON dicen lo mismo
+    # que el veredicto, y lo que lee el JSON despues (el agente, el tablero) tambien.
+    juicio = skip_que_vale(mensaje, juicio)
     # Con el rol con que se juzgo (roles-por-numero, M10): otro rol lo vuelve a juzgar.
     con.execute(
         "insert into juicio (account, chat_jid, stanza_id, clase, origen, at, jev, rol, "
@@ -6739,11 +6742,28 @@ def jev_juzga(mensaje, con=None):
     return juicio
 
 
+def skip_que_vale(m, juicio):
+    """El veredicto con el `skip` que vale: el de Jev, salvo en un pedido (una clase de
+    `CLASES_QUE_PIDEN`) de quien no es el dueno, que nunca se salta (linea-viva, V1).
+
+    El `skip` de Jev sale solo de los puntajes y no mira la clase. Visto en vivo: "no se
+    estan creando los leads en el CRM", de un cliente en un grupo `responder`, salio
+    `bug_report` con `skip` y se cerro como nada. Sin el `skip`, el pedido sigue los
+    chequeos de siempre (grupo o directo). Lo del dueno queda como estaba: Jev ya no salta
+    una orden suya, y lo que salta de el es charla."""
+    if (juicio and juicio.get("skip") and juicio.get("attention_class") in CLASES_QUE_PIDEN
+            and rol_del_mensaje(m) != wa_store.ROL_ADMIN):
+        return dict(juicio, skip=False)
+    return juicio
+
+
 def veredicto_de_jev(m, juicio, con=None):
     """Lo que ingest hace con un veredicto de Jev. Lo que salta se cierra como nada; el
     resto se clasifica con la clase que dio Jev y lleva el veredicto para marcar el caso.
     Una linea suelta de un grupo solo abre caso si Jev la escala (excepcion o agente): la
-    zona gris de la charla de un grupo sigue el camino de hoy."""
+    zona gris de la charla de un grupo sigue el camino de hoy. Un pedido de un cliente no
+    salta (`skip_que_vale`), tampoco el que ya estaba en el cache."""
+    juicio = skip_que_vale(m, juicio)
     auto = auto_de_jev(m, juicio)
     if juicio["skip"] and auto == "saludo":
         # Un saludo dirigido al asistente no se descarta: tiene su caso y su respuesta.

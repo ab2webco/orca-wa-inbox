@@ -1988,6 +1988,70 @@ else:
         os.environ.update(antes)
 
 
+# ── 12a. El `skip` de Jev no cierra el pedido de un cliente (linea-viva, V1) ─────────
+# Visto en vivo: "no se estan creando los leads en el CRM", de un cliente en un grupo
+# `responder`, salio de Jev como `bug_report` con `skip` (sus puntajes, todos bajos) y se
+# cerro como nada. Un pedido de quien no es el dueno sigue los chequeos de siempre; la
+# charla que salta, y lo del dueno, quedan como estaban.
+def jev_pedido_que_salta(cuerpo):
+    texto = cuerpo["state"]["message_to_evaluate"]["text"]
+    if "leads" in texto:
+        return 200, respuestas(cuerpo["questions"], choice="bug_report")
+    if "partido de anoche" in texto:
+        return 200, respuestas(cuerpo["questions"], choice="unrelated_chatter")
+    return jev_segun_texto(cuerpo)
+
+
+print("\njev: el skip no cierra el pedido de un cliente (V1)")
+if NODE:
+    falso = JevFalso(jev_pedido_que_salta)
+    antes = dict(os.environ)
+    os.environ["WA_INBOX_JEV_ENDPOINT"] = falso.url
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            pon_llave(home)
+            llegan(home, A, [msg(SOPORTE, "V1G", "no se estan creando los leads en el CRM", 30),
+                             msg(OPERACIONES, "V1C", "vieron el partido de anoche", 20),
+                             msg(PERSONA, "V1D", "los leads no llegan al CRM", 10)])
+            for chat in (SOPORTE, OPERACIONES, PERSONA):
+                js(home, "set", chat, "--provider", "ninguno", "--mode", "responder")
+            ingiere(home)
+            g, c, d = (caso_de_stanza(home, s) for s in ("V1G", "V1C", "V1D"))
+            ok("el bug de un cliente en un grupo responder abre caso aunque Jev diga skip",
+               g is not None and g["etapa"] != "cerrado" and g["clase"] != "nothing",
+               f"caso {g}")
+            ok("y su veredicto guardado no es nada", (juicio_de(home, "V1G") or {})
+               .get("clase") not in (None, "nothing"), f"{juicio_de(home, 'V1G')}")
+            ok("en un directo tampoco se cierra",
+               d is not None and d["etapa"] != "cerrado" and d["clase"] != "nothing",
+               f"caso {d}")
+            ok("la charla ajena que salta sigue sin caso y juzgada como nada",
+               c is None and (juicio_de(home, "V1C") or {}).get("clase") == "nothing",
+               f"caso {c} juicio {juicio_de(home, 'V1C')}")
+    finally:
+        falso.cerrar()
+        os.environ.clear()
+        os.environ.update(antes)
+
+with tempfile.TemporaryDirectory() as home:
+    antes = dict(os.environ)
+    try:
+        ws = carga_wa_scope(home)
+        salta = {"attention_class": "bug_report", "skip": True, "needs_agent": False,
+                 "flags": [], "exceptions": [], "scores": {}}
+        base = {"stanza_id": "V1U", "chat_jid": SOPORTE, "kind": "grupo", "text": "x"}
+        del_dueno = ws.veredicto_de_jev(dict(base, rol="admin"), dict(salta))
+        ok("lo del dueno con skip se sigue cerrando como antes",
+           del_dueno and del_dueno["accion"] == "cerrar", f"{del_dueno}")
+        del_cliente = ws.veredicto_de_jev(dict(base, rol="client"), dict(salta))
+        ok("lo de un cliente con la misma clase se clasifica",
+           del_cliente and del_cliente["accion"] == "clasificar"
+           and del_cliente["clase"] != "nothing", f"{del_cliente}")
+    finally:
+        os.environ.clear()
+        os.environ.update(antes)
+
+
 # ── 12b. La charla no reabre un caso respondido ──────────────────────────────────
 # Visto en vivo: un caso respondido, la gente del grupo siguio charlando entre si, y la
 # tarjeta quedo en Clasificado pidiendo "Atender ahora" por nada. Un mensaje sigue
