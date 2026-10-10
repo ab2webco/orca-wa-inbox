@@ -145,6 +145,279 @@ async function arranca (orca) {
   return { apagar, listo }
 }
 
+// ───────── linea-viva V4: el worker es el respaldo del tick, linea por linea ─────────
+// El 2026-10-09 Orca se reinicio a mitad de una corrida: las automatizaciones `tick` y
+// `triage` quedaron en `dispatching` y Orca no programo ninguna otra en horas. La segunda
+// linea capturo todo y no juzgo nada en seis horas y media, con el worker latiendo. Ahora
+// el worker lee la salud de cada linea cada minuto y, a la que no se atiende, le corre el
+// tick el mismo; cada falla queda en una bitacora en disco.
+console.log('\nworker: linea-viva V4 — el respaldo del tick por linea')
+{
+  const {
+    lineasSinAtender, crearRespaldoTick, corridaAtascada, LINEA_QUIETA_S,
+    TICK_RESPALDO_PLAZO_MS, SALUD_LINEAS_PLAZO_MS, ATASCO_MS, ATASCO_REVISION_MS
+  } = await import('../main.mjs')
+  const L1 = 'pn:15550000001'
+  const L2 = 'pn:15550000002'
+  const sana = (cuenta, extra = {}) => Object.assign({ cuenta, principal: false, tick_hace_s: 30,
+    sin_juzgar: 0, sin_juzgar_hace_s: null, latido_hace_s: 20 }, extra)
+
+  ok('V4: una linea sin tick, o con el tick viejo, necesita el respaldo',
+    JSON.stringify(lineasSinAtender({ lineas: [sana(L1, { tick_hace_s: null }),
+      sana(L2, { tick_hace_s: LINEA_QUIETA_S + 1 })] }).map((l) => [l.cuenta, l.motivo])) ===
+      JSON.stringify([[L1, 'sin-tick'], [L2, 'sin-tick']]))
+  ok('V4: un mensaje sin juzgar de mas de 3 min tambien, aunque el tick sea reciente',
+    JSON.stringify(lineasSinAtender({ lineas: [sana(L1, { sin_juzgar: 2, sin_juzgar_hace_s: 200 })] })
+      .map((l) => [l.cuenta, l.motivo, l.haceS])) === JSON.stringify([[L1, 'sin-juzgar', 200]]))
+  ok('V4: una linea al dia, o con un mensaje recien llegado, no',
+    lineasSinAtender({ lineas: [sana(L1), sana(L2, { sin_juzgar: 1, sin_juzgar_hace_s: 40 })] })
+      .length === 0)
+  ok('V4: una cuenta sin forma de cuenta nunca llega a --line',
+    lineasSinAtender({ lineas: [sana('pn:1; rm -rf', { tick_hace_s: null }), sana('', { tick_hace_s: null })] })
+      .length === 0)
+  ok('V4: una salud sin forma no pide nada', lineasSinAtender(null).length === 0 &&
+    lineasSinAtender({ lineas: 'x' }).length === 0)
+
+  /** La CLI de mentira del respaldo: `responder(args)` devuelve el stdout, un Error que
+   *  rechaza, o una promesa que la prueba resuelve cuando quiere. */
+  const correrDe = (responder) => {
+    const llamadas = []
+    const correr = async (cmd, args, opts = {}) => {
+      llamadas.push({ cmd, args: [...args], timeoutMs: opts.timeoutMs })
+      const r = await responder([...args], cmd)
+      if (r instanceof Error) throw r
+      return { stdout: typeof r === 'string' ? r : JSON.stringify(r) }
+    }
+    return { correr, llamadas }
+  }
+  const herramienta = async (n) => `/herramientas/${n}`
+  const saludDe = (...lineas) => ({ at: 1, lineas })
+  const ticks = (llamadas) => llamadas.filter((l) => l.args[0] === 'tick').map((l) => l.args.join(' '))
+
+  {
+    const { correr, llamadas } = correrDe((args) => args[0] === 'lineas-salud'
+      ? saludDe(sana(L1), sana(L2, { tick_hace_s: null })) : { ok: true })
+    const r = crearRespaldoTick({ correr, herramienta, anotar: async () => {} })
+    await r.vuelta()
+    await r.enVuelo()
+    const salud = llamadas.find((l) => l.args[0] === 'lineas-salud')
+    ok('V4: cada vuelta lee la salud con `wa-scope lineas-salud --json` y un plazo corto',
+      salud && salud.cmd === '/herramientas/wa-scope' && salud.args.join(' ') === 'lineas-salud --json' &&
+      salud.timeoutMs === SALUD_LINEAS_PLAZO_MS && SALUD_LINEAS_PLAZO_MS <= 15000, JSON.stringify(llamadas))
+    ok('V4: y corre el tick SOLO de la linea que no se atiende, con su plazo duro',
+      JSON.stringify(ticks(llamadas)) === JSON.stringify([`tick --json --line ${L2}`]) &&
+      llamadas.find((l) => l.args[0] === 'tick').timeoutMs === TICK_RESPALDO_PLAZO_MS &&
+      TICK_RESPALDO_PLAZO_MS < 300000, JSON.stringify(llamadas))
+    ok('V4: el respaldo que salio bien queda dicho', r.respaldo()[L2] === 'ok', JSON.stringify(r.respaldo()))
+  }
+
+  {
+    // Nunca dos a la vez en la misma linea: el tick tarda, y la vuelta siguiente lo encuentra.
+    let soltar = null
+    const { correr, llamadas } = correrDe((args) => {
+      if (args[0] === 'lineas-salud') return saludDe(sana(L1, { tick_hace_s: null }))
+      return new Promise((resolve) => { soltar = () => resolve({ ok: true }) })
+    })
+    const r = crearRespaldoTick({ correr, herramienta, anotar: async () => {} })
+    await r.vuelta()
+    await r.vuelta()
+    ok('V4: con un tick de respaldo en curso, la vuelta siguiente no lanza otro en esa linea',
+      ticks(llamadas).length === 1, JSON.stringify(ticks(llamadas)))
+    soltar()
+    await r.enVuelo()
+    await r.vuelta()
+    ok('V4: terminado, la proxima vuelta lo vuelve a lanzar si sigue sin atenderse',
+      ticks(llamadas).length === 2, JSON.stringify(ticks(llamadas)))
+    soltar()
+    await r.enVuelo()
+  }
+
+  {
+    let parado = false
+    const { correr, llamadas } = correrDe((args) => args[0] === 'lineas-salud'
+      ? (parado = true, saludDe(sana(L1, { tick_hace_s: null }))) : { ok: true })
+    const r = crearRespaldoTick({ correr, herramienta, anotar: async () => {}, detenido: () => parado })
+    await r.vuelta()
+    ok('V4: con el plugin deteniendose no se lanza ningun tick', ticks(llamadas).length === 0,
+      JSON.stringify(llamadas))
+  }
+
+  {
+    const anotadas = []
+    const { correr } = correrDe((args) => {
+      if (args[0] === 'lineas-salud') return saludDe(sana(L1, { tick_hace_s: null }), sana(L2, { tick_hace_s: 999 }))
+      if (args.includes(L1)) return Object.assign(new Error('database is locked'), { exitCode: 1 })
+      return { busy: true, lines: [L2] }
+    })
+    const r = crearRespaldoTick({ correr, herramienta,
+      anotar: async (cuenta, registro) => { anotadas.push([cuenta, registro]) } })
+    await r.vuelta()
+    await r.enVuelo()
+    ok('V4: un tick de respaldo que falla queda como fallido, y uno ocupado como ocupado',
+      r.respaldo()[L1] === 'failed' && r.respaldo()[L2] === 'busy', JSON.stringify(r.respaldo()))
+    const falla = anotadas.find(([c]) => c === L1)
+    ok('V4: la falla va a la bitacora de SU linea, con el motivo y el detalle',
+      falla && falla[1].que === 'tick-respaldo' && falla[1].motivo === 'fallo' &&
+      /database is locked/.test(falla[1].detalle) && typeof falla[1].at === 'string',
+      JSON.stringify(anotadas))
+    ok('V4: ocupado no es una falla: no se anota', !anotadas.some(([c]) => c === L2),
+      JSON.stringify(anotadas))
+  }
+
+  {
+    const anotadas = []
+    const { correr, llamadas } = correrDe((args) => args[0] === 'lineas-salud'
+      ? Object.assign(new Error('timed out'), { timedOut: true }) : { ok: true })
+    const r = crearRespaldoTick({ correr, herramienta,
+      anotar: async (cuenta, registro) => { anotadas.push([cuenta, registro]) } })
+    await r.vuelta()
+    ok('V4: si la salud no contesta no se adivina: ningun tick, y la falla queda anotada',
+      ticks(llamadas).length === 0 && anotadas.length === 1 && anotadas[0][0] === null &&
+      anotadas[0][1].que === 'lineas-salud' && anotadas[0][1].motivo === 'demoro',
+      JSON.stringify(anotadas))
+    const { correr: correr2 } = correrDe((args) => args[0] === 'lineas-salud' ? 'no soy json' : {})
+    const anotadas2 = []
+    await crearRespaldoTick({ correr: correr2, herramienta,
+      anotar: async (c, reg) => { anotadas2.push(reg) } }).vuelta()
+    ok('V4: una salud que no es JSON tambien queda anotada', anotadas2.length === 1 &&
+      anotadas2[0].que === 'lineas-salud', JSON.stringify(anotadas2))
+  }
+
+  // Las corridas de las automatizaciones del plugin que Orca dejo en `dispatching`.
+  const AHORA = Date.parse('2026-10-09T15:00:00Z')
+  const hace = (min) => AHORA - min * 60000
+  ok('V4: la ultima corrida en dispatching hace mas de 10 min es un atasco',
+    corridaAtascada({ ok: true, result: { runs: [
+      { id: 'r2', status: 'dispatching', createdAt: hace(12), dispatchedAt: null },
+      { id: 'r1', status: 'completed', createdAt: hace(20) }] } }, AHORA)?.id === 'r2' &&
+      ATASCO_MS === 10 * 60000)
+  ok('V4: y la hora sale de startedAt o createdAt, en ms o en ISO',
+    corridaAtascada({ result: { runs: [{ id: 'r3', status: 'dispatching',
+      startedAt: new Date(hace(30)).toISOString() }] } }, AHORA)?.desdeMs === hace(30))
+  ok('V4: una en dispatching hace menos de 10 min todavia no',
+    corridaAtascada({ result: { runs: [{ id: 'r2', status: 'dispatching', createdAt: hace(4) }] } }, AHORA) === null)
+  ok('V4: una vieja atascada con corridas nuevas despues ya no cuenta: Orca volvio a programar',
+    corridaAtascada({ result: { runs: [{ id: 'r1', status: 'dispatching', createdAt: hace(300) },
+      { id: 'r9', status: 'completed', createdAt: hace(1) }] } }, AHORA) === null)
+  ok('V4: sin corridas o sin forma, nada', corridaAtascada({ result: { runs: [] } }, AHORA) === null &&
+    corridaAtascada(null, AHORA) === null)
+
+  {
+    const origen = (automationId, pluginKey = 'ab2web.orca-wa-inbox') => ({ pluginKey, automationId })
+    const manifiesto = JSON.parse(readFileSync(join(PLUGIN_DIR, 'orca-plugin.json'), 'utf8'))
+    let reloj = AHORA
+    const { correr, llamadas } = correrDe((args) => {
+      const dicho = args.join(' ')
+      if (args[0] === 'lineas-salud') return saludDe(sana(L1))
+      if (dicho === 'automations list --json') {
+        return { ok: true, result: { automations: [
+          { id: 'auto-t', enabled: true, pluginOrigin: origen('tick') },
+          { id: 'auto-g', enabled: true, pluginOrigin: origen('triage') },
+          { id: 'auto-otro', enabled: true, pluginOrigin: origen('tick', 'otro.plugin') },
+          { id: 'auto-dueno', enabled: true, name: 'WhatsApp: every minute (no agent)' }] } }
+      }
+      if (dicho === 'automations runs --id auto-t --json') {
+        return { ok: true, result: { runs: [{ id: 'rt', status: 'dispatching', createdAt: hace(15) }] } }
+      }
+      if (dicho.startsWith('automations runs')) return { ok: true, result: { runs: [] } }
+      return {}
+    })
+    const r = crearRespaldoTick({ correr, herramienta, anotar: async () => {}, manifiesto,
+      ahora: () => reloj, plataforma: 'darwin', env: {} })
+    await r.vuelta()
+    const aOrca = llamadas.filter((l) => l.cmd === 'orca').map((l) => l.args.join(' '))
+    ok('V4: mira las corridas de SUS automatizaciones, reconocidas por el origen del plugin',
+      JSON.stringify(aOrca) === JSON.stringify(['automations list --json',
+        'automations runs --id auto-t --json', 'automations runs --id auto-g --json']),
+      JSON.stringify(aOrca))
+    ok('V4: y encuentra la del tick atascada en dispatching',
+      JSON.stringify(r.atascos()) === JSON.stringify([{ automatizacion: 'tick', id: 'rt', desdeMs: hace(15) }]),
+      JSON.stringify(r.atascos()))
+    reloj += ATASCO_REVISION_MS - 60000
+    await r.vuelta()
+    ok('V4: no vuelve a preguntarle a Orca antes de 5 min',
+      llamadas.filter((l) => l.cmd === 'orca').length === 3 && ATASCO_REVISION_MS === 5 * 60000)
+    reloj += 60000
+    await r.vuelta()
+    ok('V4: a los 5 min, si', llamadas.filter((l) => l.cmd === 'orca').length === 6)
+  }
+
+  {
+    // La ingesta que falla tambien deja evidencia en disco, no solo en el log del host.
+    const anotadas = []
+    const orca = hostFalso(herramientas('v4-ingesta', '#!/bin/sh\necho boom >&2\nexit 1\n'))
+    await correrIngesta(orca, join(RAIZ, 'v4-ingesta'), { avisos: 0 },
+      { anotar: async (cuenta, registro) => { anotadas.push([cuenta, registro]) } })
+    ok('V4: una ingesta que falla queda en la bitacora general',
+      anotadas.length === 1 && anotadas[0][0] === null && anotadas[0][1].que === 'ingesta' &&
+      /boom/.test(anotadas[0][1].detalle), JSON.stringify(anotadas))
+  }
+
+  {
+    // La bitacora: la escribe un subproceso SIN la valla (el worker no puede escribir disco),
+    // en `<estado>/logs/worker-<linea>.log`, con tope y una sola rotacion.
+    const { anotarEnBitacora, rutaBitacora } = await import('../bitacora.mjs')
+    const home = join(RAIZ, 'v4-bitacora-home')
+    mkdirSync(home, { recursive: true })
+    ok('V4: la bitacora de una linea vive en logs/ de la carpeta de estado, con la cuenta limpia',
+      rutaBitacora(L1, { HOME: home }, 'darwin') === join(home, '.wa-inbox', 'logs', 'worker-pn-15550000001.log') &&
+      rutaBitacora(null, { HOME: home }, 'linux') === join(home, '.wa-inbox', 'logs', 'worker-general.log') &&
+      rutaBitacora(L1, { APPDATA: join(home, 'AppData') }, 'win32') ===
+        join(home, 'AppData', 'wa-inbox', 'logs', 'worker-pn-15550000001.log'),
+      rutaBitacora(L1, { HOME: home }, 'darwin'))
+    const ruta = join(home, 'chica.log')
+    for (let i = 0; i < 5; i++) await anotarEnBitacora(ruta, { i, relleno: 'x'.repeat(40) }, 200)
+    const actual = readFileSync(ruta, 'utf8').trim().split('\n')
+    const rotado = readFileSync(`${ruta}.1`, 'utf8').trim().split('\n')
+    ok('V4: pasado el tope rota UNA vez: la actual y la .1, nunca mas',
+      actual.length >= 1 && rotado.length >= 1 && JSON.parse(actual[actual.length - 1]).i === 4 &&
+      !existsSync(`${ruta}.2`) && statSync(ruta).size <= 200, JSON.stringify([actual, rotado]))
+    const salida = await new Promise((resolve) => {
+      const hijo = execFileNode(process.execPath, [join(PLUGIN_DIR, 'bitacora.mjs')],
+        { env: { ...process.env, HOME: home } }, (error, stdout) => resolve({ error, stdout }))
+      hijo.stdin.end(JSON.stringify({ cuenta: L2, registro: { que: 'tick-respaldo', motivo: 'demoro' } }))
+    })
+    const escrita = join(home, '.wa-inbox', 'logs', 'worker-pn-15550000002.log')
+    ok('V4: como subproceso lee el registro por stdin y lo agrega a la bitacora de esa linea',
+      JSON.parse(salida.stdout || 'null')?.ok === true && existsSync(escrita) &&
+      JSON.parse(readFileSync(escrita, 'utf8').trim()).motivo === 'demoro',
+      JSON.stringify(salida))
+  }
+
+  {
+    // Y el worker lo hace solo: lee la salud, corre el tick de la linea que no se atiende y
+    // deja su falla en la bitacora de esa linea, en disco (HOME de la prueba).
+    const dir = herramientas('v4-worker', [
+      '#!/bin/sh',
+      'echo "$*" >> "$(dirname "$0")/llamadas.txt"',
+      'case "$1" in',
+      `  lineas-salud) echo '{"at":1,"lineas":[{"cuenta":"${L1}","principal":true,"tick_hace_s":null,` +
+        `"sin_juzgar":0,"sin_juzgar_hace_s":null,"latido_hace_s":10}]}' ;;`,
+      '  tick) echo "tick reventado" >&2; exit 2 ;;',
+      '  *) echo \'[]\' ;;',
+      'esac', ''].join('\n'))
+    const orca = hostFalso(dir, { chats: [] })
+    const llamar = orca.host.call
+    orca.host.call = async (action, params) => action === 'settings.get'
+      ? { value: { toolsDir: dir, sidecarPath: SIDECAR_STUB, respaldoCadaMs: 300 } }
+      : llamar(action, params)
+    const { apagar } = await arranca(orca)
+    const llamadas = () => existsSync(join(dir, 'llamadas.txt'))
+      ? readFileSync(join(dir, 'llamadas.txt'), 'utf8').trim().split('\n') : []
+    ok('V4: el worker corre el tick de respaldo de la linea que no se atiende',
+      await hasta(() => llamadas().includes(`tick --json --line ${L1}`), 15000), JSON.stringify(llamadas()))
+    const bitacora = join(process.env.HOME, '.wa-inbox', 'logs', 'worker-pn-15550000001.log')
+    ok('V4: y su falla queda en disco, en la bitacora de esa linea',
+      await hasta(() => existsSync(bitacora) && /tick reventado/.test(readFileSync(bitacora, 'utf8')), 15000),
+      existsSync(bitacora) ? readFileSync(bitacora, 'utf8') : 'sin bitacora')
+    apagar()
+    const antes = llamadas().length
+    await dormir(900)
+    ok('V4: apagado el plugin, no corre ninguna vuelta mas', llamadas().length === antes,
+      JSON.stringify(llamadas().slice(antes)))
+  }
+}
+
 // ───────── el sync deja escrito que fallo, y por que ─────────
 console.log('\nworker: el sync que falla lo dice')
 {

@@ -22,9 +22,10 @@ import { HARNESS_KEY } from './harness.mjs'
 import { llaveValida } from './jev-espejo.mjs'
 import { crearAccionesCaso } from './acciones.mjs'
 import {
-  CUENTAS_ACCION, crearAjustadorRitmo, crearEncendedor, crearLanzadorTriage, crearListaCuentas
+  automatizacionesDelManifiesto, CUENTAS_ACCION, crearAjustadorRitmo, crearEncendedor,
+  crearLanzadorTriage, crearListaCuentas
 } from './agente.mjs'
-import { crearCatalogo, curarCatalogo, PROJECTS_KEY, catalogosDeLineas,
+import { comandoOrca, crearCatalogo, curarCatalogo, PROJECTS_KEY, catalogosDeLineas,
   unionDeCatalogos } from './catalogo.mjs'
 import { SKILLS_ACCION, SKILLS_STATUS_KEY, SKILLS_VEREDICTO } from './skills.mjs'
 import { AVISO_PLAZO_MS, crearAvisosOrca } from './avisos-orca.mjs'
@@ -115,6 +116,8 @@ const JEV_VEREDICTO = Object.freeze({
 const JEV_ESPEJO_SCRIPT = join(PLUGIN_DIR, 'jev-espejo.mjs')
 // La llave del aprobador (approve-solo-dueno): la crea y la devuelve este script, sin valla.
 const APROBADOR_SCRIPT = join(PLUGIN_DIR, 'aprobador.mjs')
+// La bitacora de fallas del worker por linea (linea-viva, V4): la escribe este script, sin valla.
+const BITACORA_SCRIPT = join(PLUGIN_DIR, 'bitacora.mjs')
 // Cuantas veces se registra que la boveda no contesta: la revision corre cada 5 minutos
 // y cada registro es una llamada al host.
 const JEV_AVISOS_MAX = 3
@@ -388,16 +391,230 @@ export function programarIngesta(correr, { esperaMs = INGESTA_ESPERA_MS } = {}) 
 /** Una corrida de `wa-scope ingest`. Es un proceso hijo y no toca el host: ni el
  *  directorio de herramientas se pregunta a `settings.get` —llega ya resuelto—, ni una
  *  corrida buena escribe en el log. Solo la falla se dice, con tope. */
-export async function correrIngesta(orca, toolsDir, estado) {
+export async function correrIngesta(orca, toolsDir, estado, { anotar = null } = {}) {
   try {
     await run(join(toolsDir, 'wa-scope'), ['ingest', '--json'],
       { timeoutMs: INGESTA_TIMEOUT_MS })
   } catch (error) {
+    // La bitacora en disco no tiene tope de avisos: es un subproceso, no una llamada al
+    // host, y es justo lo que se mira despues de un incidente (linea-viva, V4).
+    if (anotar) {
+      await anotar(null, registroDeFalla('ingesta', error)).catch(() => {})
+    }
     estado.avisos += 1
     if (estado.avisos > INGESTA_AVISOS_MAX) return
     const cola = estado.avisos === INGESTA_AVISOS_MAX ? ' (no se registran mas)' : ''
     orca.log(`ingest failed (${motivoDe(error)}): ${String(error?.message ?? error).slice(0, 200)}${cola}`)
   }
+}
+
+// ── El respaldo del tick (linea-viva, V4) ─────────────────────────────────────────────
+// El 2026-10-09 Orca se reinicio a mitad de una corrida: las automatizaciones `tick` y
+// `triage` quedaron en `dispatching` y Orca no programo ninguna otra en horas. La segunda
+// linea capturo todo y no juzgo nada en seis horas y media, con el worker latiendo. El
+// worker ya no depende del programador de Orca: cada minuto lee la salud de cada linea
+// (`wa-scope lineas-salud`) y a la que no se esta atendiendo le corre el tick el mismo
+// (`wa-scope tick --line`). El candado por linea del tick evita pisar la corrida de Orca:
+// si la tiene otra, contesta `busy`.
+export const RESPALDO_CADA_MS = 60 * 1000
+export const SALUD_LINEAS_PLAZO_MS = 15 * 1000
+// Por debajo de los 300 s que Orca le da a una corrida: un tick colgado no puede tapar la
+// vuelta siguiente para siempre.
+export const TICK_RESPALDO_PLAZO_MS = 280 * 1000
+// Una linea se atiende cada minuto: tres sin tick, o un mensaje sin juzgar de mas de tres
+// minutos, es que nadie la esta atendiendo.
+export const LINEA_QUIETA_S = 180
+// Las corridas atascadas se miran cada 5 min (son tres llamadas a la CLI de Orca), y una
+// en `dispatching` desde hace mas de 10 es un incidente.
+export const ATASCO_REVISION_MS = 5 * 60 * 1000
+export const ATASCO_MS = 10 * 60 * 1000
+const DETALLE_MAX = 300
+
+/** Una falla, como queda en la bitacora: codigos y el detalle corto, nunca el stdout. */
+function registroDeFalla (que, error, extra = {}) {
+  return { at: new Date().toISOString(), que, motivo: motivoDe(error),
+    codigo: error?.exitCode ?? null, detalle: String(error?.message ?? error).slice(0, DETALLE_MAX),
+    ...extra }
+}
+
+const esNumero = (v) => typeof v === 'number' && Number.isFinite(v)
+
+/** Las lineas de `wa-scope lineas-salud` que nadie esta atendiendo, y por que. Pura.
+ *  `sin-juzgar` manda sobre `sin-tick`: es lo que el dueno ve, mensajes sin respuesta. */
+export function lineasSinAtender (salud) {
+  const lineas = salud && typeof salud === 'object' && Array.isArray(salud.lineas) ? salud.lineas : []
+  const salida = []
+  for (const l of lineas) {
+    if (!l || typeof l !== 'object' || typeof l.cuenta !== 'string' || !LINEA_RE.test(l.cuenta)) continue
+    if (esNumero(l.sin_juzgar) && l.sin_juzgar > 0 && esNumero(l.sin_juzgar_hace_s) &&
+        l.sin_juzgar_hace_s > LINEA_QUIETA_S) {
+      salida.push({ cuenta: l.cuenta, motivo: 'sin-juzgar', haceS: l.sin_juzgar_hace_s })
+    } else if (!esNumero(l.tick_hace_s) || l.tick_hace_s > LINEA_QUIETA_S) {
+      salida.push({ cuenta: l.cuenta, motivo: 'sin-tick',
+        haceS: esNumero(l.tick_hace_s) ? l.tick_hace_s : null })
+    }
+  }
+  return salida
+}
+
+/** Una hora de Orca en ms: un numero (ms, o s si es chico) o un texto ISO. */
+function msDeOrca (v) {
+  if (esNumero(v)) return v < 1e12 ? v * 1000 : v
+  if (typeof v === 'string' && v) {
+    const ms = Date.parse(v)
+    return Number.isFinite(ms) ? ms : null
+  }
+  return null
+}
+
+/** La corrida que Orca dejo en `dispatching`, de `automations runs --json`, o null. Pura.
+ *  Solo cuenta la MAS NUEVA: una vieja atascada con corridas despues es historia, Orca ya
+ *  volvio a programar. */
+export function corridaAtascada (payload, ahoraMs, umbralMs = ATASCO_MS) {
+  const runs = payload && typeof payload === 'object' && payload.result &&
+    Array.isArray(payload.result.runs) ? payload.result.runs : []
+  let ultima = null
+  for (const r of runs) {
+    if (!r || typeof r !== 'object' || typeof r.id !== 'string') continue
+    const ms = msDeOrca(r.startedAt) ?? msDeOrca(r.createdAt) ?? msDeOrca(r.scheduledFor)
+    if (ms === null) continue
+    if (!ultima || ms > ultima.desdeMs) ultima = { id: r.id, status: r.status, desdeMs: ms }
+  }
+  if (!ultima || ultima.status !== 'dispatching' || ahoraMs - ultima.desdeMs <= umbralMs) return null
+  return { id: ultima.id, desdeMs: ultima.desdeMs }
+}
+
+/** El ultimo JSON de un stdout: el tick puede imprimir mas de una linea. */
+function jsonDe (stdout) {
+  const texto = String(stdout ?? '').trim()
+  try { return JSON.parse(texto || 'null') } catch { /* cae a la ultima linea */ }
+  try { return JSON.parse(texto.split('\n').pop() || 'null') } catch { return null }
+}
+
+/**
+ * El respaldo del tick, con todo lo de afuera inyectado (como `crearLanzadorTriage`).
+ *
+ * `vuelta()` es un minuto: lee la salud, lanza el tick de cada linea que no se atiende
+ * -sin esperarlo: uno colgado no puede tapar la salud de las demas- y, cada 5 min, mira si
+ * Orca dejo atascada una corrida de SUS automatizaciones. Nunca dos ticks a la vez en la
+ * misma linea, y ninguno con el plugin deteniendose. `correr` es el mando sin valla: el
+ * tick abre agentes por la CLI de Orca. Cada falla va a `anotar(cuenta|null, registro)`.
+ */
+export function crearRespaldoTick ({ correr, herramienta, anotar = async () => {},
+  manifiesto = null, detenido = () => false, ahora = () => Date.now(),
+  plataforma = process.platform, env = process.env }) {
+  const enVuelo = new Map()
+  const respaldo = {}
+  let atascos = []
+  let revisadoMs = null
+  const propias = automatizacionesDelManifiesto(manifiesto)
+
+  const fallo = (cuenta, que, error, extra) =>
+    Promise.resolve(anotar(cuenta, registroDeFalla(que, error, extra))).catch(() => {})
+
+  async function leerSalud () {
+    try {
+      const { stdout } = await correr(await herramienta('wa-scope'), ['lineas-salud', '--json'],
+        { timeoutMs: SALUD_LINEAS_PLAZO_MS })
+      const salud = jsonDe(stdout)
+      if (salud && typeof salud === 'object' && Array.isArray(salud.lineas)) return salud
+      throw new Error(`lineas-salud returned no JSON: ${String(stdout ?? '').slice(0, 120)}`)
+    } catch (error) {
+      await fallo(null, 'lineas-salud', error)
+      return null
+    }
+  }
+
+  function lanzarTick (cuenta) {
+    if (enVuelo.has(cuenta) || detenido()) return false
+    const corrida = (async () => {
+      try {
+        const { stdout } = await correr(await herramienta('wa-scope'),
+          ['tick', '--json', '--line', cuenta], { timeoutMs: TICK_RESPALDO_PLAZO_MS })
+        const r = jsonDe(stdout)
+        const ocupada = (Array.isArray(r) ? r[0] : r)?.busy === true
+        respaldo[cuenta] = ocupada ? 'busy' : 'ok'
+      } catch (error) {
+        respaldo[cuenta] = 'failed'
+        await fallo(cuenta, 'tick-respaldo', error)
+      }
+    })().finally(() => enVuelo.delete(cuenta))
+    enVuelo.set(cuenta, corrida)
+    return true
+  }
+
+  /** Las corridas de las automatizaciones del plugin que Orca dejo en `dispatching`. Se
+   *  reconocen por el origen que anota Orca, nunca por un id (como `crearEncendedor`). */
+  async function revisarAtascos () {
+    if (!propias.pluginKey) return
+    const cmd = comandoOrca(plataforma, env)
+    let lista = null
+    try {
+      const { stdout } = await correr(cmd, ['automations', 'list', '--json'], { timeoutMs: 15000 })
+      lista = jsonDe(stdout)
+    } catch {
+      return
+    }
+    const automatizaciones = lista && lista.result && Array.isArray(lista.result.automations)
+      ? lista.result.automations : null
+    if (!automatizaciones) return
+    const nuevos = []
+    for (const a of automatizaciones) {
+      if (!a || typeof a.id !== 'string' || !a.pluginOrigin ||
+          a.pluginOrigin.pluginKey !== propias.pluginKey ||
+          !propias.ids.includes(a.pluginOrigin.automationId)) continue
+      try {
+        const { stdout } = await correr(cmd, ['automations', 'runs', '--id', a.id, '--json'],
+          { timeoutMs: 15000 })
+        const atasco = corridaAtascada(jsonDe(stdout), ahora())
+        if (atasco) nuevos.push({ automatizacion: a.pluginOrigin.automationId, ...atasco })
+      } catch {
+        // Una lista que no llego no prueba nada: se vuelve a mirar en 5 min.
+      }
+    }
+    atascos = nuevos
+  }
+
+  async function vuelta () {
+    if (detenido()) return { salud: null, pendientes: [], lanzadas: [], revisado: false }
+    const salud = await leerSalud()
+    const pendientes = salud ? lineasSinAtender(salud) : []
+    const lanzadas = pendientes.filter((p) => lanzarTick(p.cuenta)).map((p) => p.cuenta)
+    let revisado = false
+    if (!detenido() && (revisadoMs === null || ahora() - revisadoMs >= ATASCO_REVISION_MS)) {
+      revisadoMs = ahora()
+      await revisarAtascos()
+      revisado = true
+    }
+    return { salud, pendientes, lanzadas, revisado }
+  }
+
+  return {
+    vuelta,
+    enVuelo: () => Promise.all([...enVuelo.values()]),
+    respaldo: () => ({ ...respaldo }),
+    atascos: () => atascos.map((a) => ({ ...a }))
+  }
+}
+
+/** Anota una falla en la bitacora en disco, en un subproceso SIN valla (`bitacora.mjs`): el
+ *  worker no puede escribir disco. Nunca rechaza y no toca el host. */
+function anotarFalla (cuenta, registro) {
+  return new Promise((resolve) => {
+    try {
+      const m = mandoSinValla(process.execPath, [BITACORA_SCRIPT])
+      const hijo = execFile(m.cmd, m.args,
+        { timeout: 10000, maxBuffer: 64 * 1024,
+          env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } },
+        (_error, stdout) => {
+          try { resolve(JSON.parse(stdout || 'null')?.ok === true) } catch { resolve(false) }
+        })
+      hijo.stdin.on('error', () => resolve(false))
+      hijo.stdin.end(JSON.stringify({ cuenta, registro }))
+    } catch {
+      resolve(false)
+    }
+  })
 }
 
 /** Un `syncMinutes` guardado, en ms y dentro de las cotas. */
@@ -1466,7 +1683,7 @@ export default function activate(orca) {
   let dirIngesta = TOOLS
   const estadoIngesta = { avisos: 0 }
   const ingesta = programarIngesta(
-    () => detenido ? null : correrIngesta(orca, dirIngesta, estadoIngesta))
+    () => detenido ? null : correrIngesta(orca, dirIngesta, estadoIngesta, { anotar: anotarFalla }))
 
   // El sync automatico sale del mismo directorio que los comandos. Antes iba fijo a
   // bin/: quien movia toolsDir tenia la mitad del plugin leyendo de otro lado.
@@ -2436,6 +2653,24 @@ export default function activate(orca) {
   casaResuelta.then(automatizacionesAlDia)
   const pararAutomatizaciones = programarSalud(automatizacionesAlDia)
 
+  // El respaldo del tick (linea-viva, V4): cada minuto la salud de cada linea, y el tick de
+  // la que no se atiende, sin depender del programador de Orca. Sin llamadas al host: la
+  // salud y el tick son subprocesos, las herramientas salen de `dirIngesta` (ya resuelto) y
+  // las fallas van a la bitacora en disco. Arranca despues de resolver la casa de Orca, como
+  // las automatizaciones: el tick abre agentes por su CLI. `respaldoCadaMs` es interno, como
+  // `sidecarPath`: existe para que las pruebas no esperen un minuto.
+  const respaldoTick = crearRespaldoTick({ correr: correrOrca,
+    herramienta: async (nombre) => join(dirIngesta, nombre), anotar: anotarFalla, manifiesto,
+    detenido: () => detenido })
+  let pararRespaldo = () => {}
+  casaResuelta.then(() => settings()).then((s) => {
+    if (detenido) return
+    const cada = Number.isInteger(s.respaldoCadaMs) && s.respaldoCadaMs > 0
+      ? s.respaldoCadaMs : RESPALDO_CADA_MS
+    pararRespaldo = programarSalud(() => respaldoTick.vuelta()
+      .catch((error) => orca.log(`backup tick failed: ${error.message}`)), cada)
+  }).catch((error) => orca.log(`backup tick not scheduled: ${error.message}`))
+
   const atenderPedidoScope = crearVigia({
     nombre: 'scope',
     requestKey: SCOPE_REQUEST_KEY,
@@ -2745,6 +2980,7 @@ export default function activate(orca) {
     clearInterval(latidoTimer)
     pararSalud()
     pararAutomatizaciones()
+    pararRespaldo()
     ingesta.parar()
     avisosOrca.parar()
     // Todas las lineas, cada una con su reinicio pendiente.
