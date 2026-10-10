@@ -12462,6 +12462,63 @@ if NODE:
         os.environ.update(antes)
 
 
+# ── Un envio cortado a mitad no calla el acuse (linea-viva-2, W1) ────────────────────────
+# El sidecar murio con una fila en `enviando`: el sidecar la reconcilia (test/envio), pero
+# mientras tanto, y si el sidecar no vuelve, una fila asi de vieja no es "la linea ya
+# escribio". Sin esto el acuse de respaldo se callaba para siempre por un mensaje que
+# quizas nunca salio. Una fresca si cuenta: esta saliendo. Datos de mentira.
+print("\nlinea-viva-2 W1: un enviando vencido no cuenta como escrito, uno fresco si")
+if NODE:
+    antes_w1 = dict(os.environ)
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            linea_lista(home)
+            cid, v = propuesta_lista(home, "EW1")
+            req = f"caso-{cid}-{v[:12]}"
+            ahora_w1 = int(time.time())
+            captura = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "capture.db")
+            captura.execute("insert into envio (req_id, account, chat_jid, chat_name, body, "
+                            "estado, created_at, claimed_at) values (?, ?, ?, 'Cliente Uno', "
+                            "?, 'enviando', ?, ?)",
+                            (req, A, PERSONA, LIMPIA, ahora_w1 - 900, ahora_w1 - 600))
+            captura.commit()
+            ws = carga_wa_scope(home)
+            con = ws.db()
+            try:
+                caso = ws.caso_de(con, int(cid))
+                desde = ahora_w1 - 3600
+
+                def escribio_w1():
+                    estados, _ = ws.envios_del_almacen([req])
+                    return (ws.caso_ya_escribio(con, caso, estados),
+                            ws.linea_escribio(caso, desde, f"caso-{cid}-acuse"))
+
+                ok("un enviando de hace 10 minutos no cuenta como escrito",
+                   escribio_w1() == (False, False), f"{escribio_w1()}")
+                captura.execute("update envio set claimed_at=? where req_id=?",
+                                (ahora_w1 - 30, req))
+                captura.commit()
+                ok("uno de hace 30 segundos si: esta saliendo",
+                   escribio_w1() == (True, True), f"{escribio_w1()}")
+                captura.execute("update envio set estado='enviado', claimed_at=?, settled_at=? "
+                                "where req_id=?", (ahora_w1 - 600, ahora_w1 - 590, req))
+                captura.commit()
+                ok("y lo enviado sigue contando, por viejo que sea",
+                   escribio_w1() == (True, True), f"{escribio_w1()}")
+            finally:
+                con.close()
+                captura.close()
+        js_almacen = (RAIZ / "sidecar" / "src" / "almacen.js").read_text(encoding="utf-8")
+        vence_js = re.search(r"export const ENVIANDO_VENCE_S = (\d+)", js_almacen)
+        ok("el plazo es el mismo en el sidecar y en wa-scope",
+           vence_js is not None
+           and int(vence_js.group(1)) == getattr(ws, "ENVIANDO_VENCE_S", None),
+           f"{vence_js and vence_js.group(1)} {getattr(ws, 'ENVIANDO_VENCE_S', None)}")
+    finally:
+        os.environ.clear()
+        os.environ.update(antes_w1)
+
+
 # ── superadmin-ordena: el Super admin de una conversacion pide como el dueno ─────────────
 # Decision del dueno (2026-10-05): lo que pide un Super admin (rol `admin` de ESA
 # conversacion, guardado por el dueno) sale como lo del dueno: su trabajo no espera el clic

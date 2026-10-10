@@ -30,9 +30,10 @@ export const ENVIO = Object.freeze({
   // es dejarlo escrito DONDE EL DUENO LO VE, y que salga solo cuando el diga.
   BORRADOR: 'borrador',
   PENDIENTE: 'pendiente',
-  // Tomado por el sidecar. Si el sidecar muere a mitad, la fila se queda aca a
-  // proposito: no se reintenta sola. Reintentar sin saber si el mensaje salio es
-  // exactamente como se manda dos veces.
+  // Tomado por el sidecar. Si el sidecar muere a mitad, la fila NO se reintenta a ciegas:
+  // reintentar sin saber si el mensaje salio es exactamente como se manda dos veces.
+  // Pasados ENVIANDO_VENCE_S la reconcilia el drenado mirando su eco primero
+  // (`reconciliarEnviando` en almacen.js, linea-viva-2 W1).
   ENVIANDO: 'enviando',
   ENVIADO: 'enviado',
   RECHAZADO: 'rechazado'
@@ -87,6 +88,10 @@ export async function atenderSalida ({ almacen, enviar, conectado = true,
   // no se sabe quien soy" (emparejando) y ahi no sale nada; `undefined` es el llamado de
   // antes de que hubiera lineas, que las pruebas viejas siguen usando.
   if (cuenta === null) return { enviados: 0, rechazados: 0 }
+  // Lo que quedo en `enviando` de un sidecar que murio a mitad, antes de tomar: lo que
+  // vuelve a `pendiente` sale en esta misma vuelta. Corre en la primera vuelta conectada
+  // tras arrancar, y despues en cada una: es un `select` sobre el indice de estado.
+  almacen.reconciliarEnviando(ahora(), cuenta)
   let enviados = 0
   let rechazados = 0
   for (let i = 0; i < maximo; i += 1) {

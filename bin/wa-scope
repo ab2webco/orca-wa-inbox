@@ -6385,6 +6385,15 @@ RAZON_DUENO = "caso-del-dueno"
 RAZON_CONVERSACION = "conversacion-en-curso"
 # Lo de la bandeja que ya es la linea escribiendo: lo que sale, esta saliendo o salio.
 ESTADOS_ENVIO_DE_LA_LINEA = ("pendiente", "enviando", "enviado")
+# Cuanto puede estar una fila en `enviando` y seguir contando como "esta saliendo"
+# (linea-viva-2, W1). Mas viejo es un sidecar que murio a mitad: el sidecar la reconcilia
+# (`reconciliarEnviando`), y mientras tanto no calla el acuse por algo que quizas nunca
+# salio. El MISMO numero que ENVIANDO_VENCE_S en sidecar/src/almacen.js; check-casos
+# compara los dos.
+ENVIANDO_VENCE_S = 120
+# Como `envios_del_almacen` nombra una fila asi: no es ningun estado de la bandeja, y
+# quien pregunta por "pendiente", "enviando" o "enviado" no la confunde con ellos.
+ENVIANDO_VENCIDO = "enviando-vencido"
 
 
 def linea_escribio(caso, desde, excepto):
@@ -6401,8 +6410,9 @@ def linea_escribio(caso, desde, excepto):
         if fuente.execute(
                 f"select 1 from envio where account=? and chat_jid=? and req_id<>? and "
                 f"estado in ({marcas}) and coalesce(settled_at, claimed_at, created_at) >= ? "
-                f"limit 1", (caso["account"], caso["chat_jid"], excepto,
-                             *ESTADOS_ENVIO_DE_LA_LINEA, int(desde))).fetchone():
+                f"and not (estado='enviando' and coalesce(claimed_at, 0) < ?) limit 1",
+                (caso["account"], caso["chat_jid"], excepto, *ESTADOS_ENVIO_DE_LA_LINEA,
+                 int(desde), int(time.time()) - ENVIANDO_VENCE_S)).fetchone():
             return True
         return bool(fuente.execute(
             "select 1 from mensaje where account=? and chat_jid=? and from_me=1 and revocado=0 "
@@ -9797,7 +9807,8 @@ def envios_del_almacen(req_ids):
     """{req_id: estado} de la bandeja de salida, en solo lectura, y si el sidecar late.
     Sin almacen no hay ni lo uno ni lo otro. El latido es el de la linea de esta corrida
     (`cuenta_activa`): con dos lineas el global lo mantiene fresco la otra, y el tick de
-    una linea caida firmaba lo que nadie iba a mandar (linea-viva V8)."""
+    una linea caida firmaba lo que nadie iba a mandar (linea-viva V8). Un `enviando` de
+    mas de ENVIANDO_VENCE_S sale como ENVIANDO_VENCIDO: ya no esta saliendo (W1)."""
     ruta = wa_store.store_db_path()
     if not os.path.exists(ruta):
         return {}, False
@@ -9812,8 +9823,10 @@ def envios_del_almacen(req_ids):
         for i in range(0, len(ids), 500):
             parte = ids[i:i + 500]
             estados.update(fuente.execute(
-                f"select req_id, estado from envio where req_id in "
-                f"({','.join('?' * len(parte))})", parte).fetchall())
+                f"select req_id, case when estado='enviando' and coalesce(claimed_at, 0) < ? "
+                f"then ? else estado end from envio where req_id in "
+                f"({','.join('?' * len(parte))})",
+                (int(time.time()) - ENVIANDO_VENCE_S, ENVIANDO_VENCIDO, *parte)).fetchall())
         return estados, vivo
     except sqlite3.Error:
         return {}, False
