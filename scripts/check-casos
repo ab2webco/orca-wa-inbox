@@ -12851,6 +12851,119 @@ def modos(filas):
     return {f["chat_jid"]: f["mode"] for f in filas}
 
 
+class SidecarConLatidoPropio(SidecarDeLinea):
+    """El sidecar de hoy: ademas del latido global, el de SU linea y si su socket esta
+    abierto (`latir` con `cuenta`). Desconectado late y no entrega, como `atenderSalida`
+    con `conectado` en falso."""
+
+    def __init__(self, home, linea, conectado=True):
+        self.conectado = conectado
+        super().__init__(home, linea)
+
+    def _vuelta(self):
+        con = sqlite3.connect(self.ruta, timeout=10)
+        while not self.parar.is_set():
+            ahora = str(int(time.time()))
+            for llave, valor in (("sidecar_beat", ahora), (f"sidecar_beat@{self.linea}", ahora),
+                                 (f"sidecar_conectado@{self.linea}",
+                                  "1" if self.conectado else "0")):
+                con.execute("insert into store_meta (key, value) values (?, ?) on "
+                            "conflict(key) do update set value=excluded.value", (llave, valor))
+            con.commit()
+            filas = [] if not self.conectado else con.execute(
+                "select req_id from envio where estado='pendiente' and account=?",
+                (self.linea,)).fetchall()
+            for (req,) in filas:
+                cur = con.execute("update envio set estado='enviado', stanza_id=?, "
+                                  "settled_at=? where req_id=? and estado='pendiente'",
+                                  (f"STANZA-{req}", int(ahora), req))
+                con.commit()
+                if cur.rowcount == 1:
+                    self.entregados.append(req)
+            time.sleep(0.05)
+        con.close()
+
+
+print("\nlinea-viva V8: el tick mira el transporte de CADA linea")
+# Visto en vivo (2026-10-09): el latido era UNO para el almacen y lo escribian los dos
+# sidecars. Con la otra linea viva, el tick de una linea caida aprobaba y encolaba una
+# respuesta que nadie iba a mandar, en vez de decir `sin_transporte` y reintentar.
+LINEA_V8 = "pn:15550000002"
+PN[LINEA_V8] = "15550000002:7@s.whatsapp.net"
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        linea_lista(home)
+        llegan(home, LINEA_V8, [], activar=False)
+        suma_linea(home, LINEA_V8)
+        jsl(home, LINEA_V8, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+
+        def propuesta_de_la_otra(stanza):
+            cid = str(jsl(home, LINEA_V8, "caso", "crear", "--chat", PERSONA, "--stanza",
+                          stanza, "--actor", "agente")[0]["case_id"])
+            jsl(home, LINEA_V8, "caso", "clasificar", cid, "--clase", "card", "--prioridad",
+                "none", "--actor", "agente")
+            v = jsl(home, LINEA_V8, "caso", "propuesta", cid, "--tipo", "responder",
+                    "--respuesta", LIMPIA, "--actor", "agente")[0]["propuesta_version"]
+            return cid, v
+
+        def corrida(*sidecars):
+            try:
+                return tick(home)
+            finally:
+                for s in sidecars:
+                    s.cerrar()
+
+        cid_a, v_a = propuesta_lista(home, "V8A1")
+        cid_b, v_b = propuesta_de_la_otra("V8B1")
+        req_b = f"caso-{cid_b}-{v_b[:12]}"
+        sidecar_a = SidecarConLatidoPropio(home, A)
+        p, r = corrida(sidecar_a)
+        de_b = ((r or {}).get("lineas") or {}).get(LINEA_V8) or {}
+        de_a = ((r or {}).get("lineas") or {}).get(A) or {}
+        ok("la linea cuyo sidecar no corre dice sin_transporte aunque la otra lata",
+           de_b.get("sin_transporte") is True, f"{p.stdout[:400]} {p.stderr[-300:]}")
+        ok("y no aprueba ni encola nada para nadie",
+           jsl(home, LINEA_V8, "caso", "ver", cid_b)[0]["etapa"] == "decision"
+           and req_b not in [e["req_id"] for e in envios(home)], f"{envios(home)}")
+        ok("la otra linea no se entera: manda lo suyo",
+           de_a.get("sin_transporte") is False
+           and sidecar_a.entregados == [f"caso-{cid_a}-{v_a[:12]}"],
+           f"{de_a} {sidecar_a.entregados}")
+
+        # La puerta del tick, antes de firmar nada: `envios_del_almacen` de la corrida de
+        # cada linea. Sin ella, la regla aprobaria y dejaria a `wa-send` el decir que no.
+        def late_en(linea):
+            antes = dict(os.environ)
+            try:
+                os.environ["WA_INBOX_LINEA"] = linea
+                return carga_wa_scope(home).envios_del_almacen([])[1]
+            finally:
+                os.environ.clear()
+                os.environ.update(antes)
+        sidecar_a = SidecarConLatidoPropio(home, A)
+        try:
+            time.sleep(0.3)
+            vivas = (late_en(A), late_en(LINEA_V8))
+        finally:
+            sidecar_a.cerrar()
+        ok("la corrida de cada linea mira SU transporte antes de firmar",
+           vivas == (True, False), f"{vivas}")
+
+        p, r = corrida(SidecarConLatidoPropio(home, A),
+                       SidecarConLatidoPropio(home, LINEA_V8, conectado=False))
+        de_b = ((r or {}).get("lineas") or {}).get(LINEA_V8) or {}
+        ok("latiendo con el socket caido, tambien sin_transporte",
+           de_b.get("sin_transporte") is True
+           and req_b not in [e["req_id"] for e in envios(home)], f"{p.stdout[:400]}")
+
+        sidecar_b = SidecarConLatidoPropio(home, LINEA_V8)
+        p, r = corrida(SidecarConLatidoPropio(home, A), sidecar_b)
+        ok("control: conectada, la misma respuesta sale por su linea",
+           sidecar_b.entregados == [req_b]
+           and jsl(home, LINEA_V8, "caso", "ver", cid_b)[0]["etapa"] == "respondido",
+           f"{sidecar_b.entregados} {p.stdout[:400]} {p.stderr[-300:]}")
+
+
 print("\nvarias lineas a la vez (L3)")
 # La segunda linea no es PERSONA: el directo con el propio numero de una linea es su dueno.
 SEGUNDA = "pn:573000000011"
