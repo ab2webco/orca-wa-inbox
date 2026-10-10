@@ -13855,6 +13855,113 @@ with tempfile.TemporaryDirectory() as home:
        f"{p.returncode} {p.stdout[:200]} {p.stderr[-300:]}")
 
 
+# ── Un agente de casos por linea (odd/tasks/linea-viva-2.md, W3) ───────────────────────────
+# La auditoria A0: la fila en vuelo de `agente_corrida` y el lock del agente eran uno para
+# toda la maquina, y un agente colgado en una linea dejaba a la otra sin agente. Cada corrida
+# anota su linea (`cuenta`); lo en vuelo y el lock se miran por linea. La principal (y una
+# sola linea, y `local`) conserva el lock `triage` de siempre; otra linea, `triage@<linea>`.
+def locks_de(home):
+    return sorted(r["name"] for r in db_de(home).execute("select name from run_lock"))
+
+
+print("\nun agente de casos por linea (linea-viva-2, W3)")
+if NODE:
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        llegan(home, A, [])
+        llegan(home, SEGUNDA, [], activar=False)
+        suma_linea(home, SEGUNDA)
+        orca_casos(carpeta)
+        cid_a = str(js(home, "caso", "crear", "--chat", SOPORTE, "--stanza", "W3A",
+                       "--actor", "automatizacion")[0]["case_id"])
+        cid_b = str(jsl(home, SEGUNDA, "caso", "crear", "--chat", SOPORTE, "--stanza", "W3B",
+                        "--actor", "automatizacion")[0]["case_id"])
+        # El agente de la principal, colgado con su lock puesto.
+        js(home, "lock", "--note", "triage")
+        p, r = tick_orca(home, carpeta)
+        filas = corridas_agente(home)
+        ok("W3: con el lock de la principal puesto, la otra linea lanza su agente igual",
+           [(str(f["case_id"]), f.get("cuenta"), f["estado"]) for f in filas]
+           == [(cid_b, SEGUNDA, "activo")], f"{filas} {p.stderr[-400:]}")
+        archivo_b = pathlib.Path(home) / ".wa-inbox" / "casos" / f"caso-{cid_b}.md"
+        texto_b = archivo_b.read_text(encoding="utf-8") if archivo_b.exists() else ""
+        ok("W3: el archivo del caso de la otra linea le pide tomar el lock en ella",
+           f"--line {SEGUNDA}" in texto_b and "`lock`" in texto_b and "`unlock`" in texto_b,
+           texto_b[-700:])
+        js(home, "unlock")
+        p, r = tick_orca(home, carpeta)
+        filas = corridas_agente(home)
+        ok("W3: y la principal lanza el suyo con el de la otra en vuelo",
+           sorted((f.get("cuenta") or "", f["estado"]) for f in filas)
+           == [(A, "activo"), (SEGUNDA, "activo")], f"{filas} {p.stderr[-400:]}")
+        p, r = tick_orca(home, carpeta)
+        ok("W3: con uno en vuelo en cada linea, ninguna abre un segundo",
+           len(corridas_agente(home)) == 2 and r.get("agente_lanzado") == 0, f"{r}")
+        p_b = corre(home, "lock", "--note", "triage", "--line", SEGUNDA)
+        p_a = corre(home, "lock", "--note", "triage")
+        ok("W3: cada linea toma su propio lock: la principal el de siempre",
+           p_a.returncode == 0 and p_b.returncode == 0
+           and locks_de(home) == ["triage", f"triage@{SEGUNDA}"],
+           f"{p_a.returncode} {p_b.returncode} {locks_de(home)}")
+        ok("W3: y en una misma linea sigue siendo uno solo",
+           corre(home, "lock", "--note", "triage", "--line", SEGUNDA).returncode == 4)
+        # El agente de la otra linea termino: solto SU lock. El de la principal sigue con el suyo.
+        corre(home, "unlock", "--line", SEGUNDA)
+        envejece_agente(home, 120)
+        p, r = tick_orca(home, carpeta)
+        estados = {f.get("cuenta"): f["estado"] for f in corridas_agente(home)}
+        ok("W3: el tick de cada linea cierra su corrida por su lock, no por el de la otra",
+           estados == {A: "activo", SEGUNDA: "terminado"}, f"{estados} {p.stderr[-300:]}")
+
+    # Una sola linea vinculada: la corrida lleva su linea y el lock su nombre de siempre.
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+        llegan(home, A, [])
+        orca_casos(carpeta)
+        js(home, "caso", "crear", "--chat", SOPORTE, "--stanza", "W3U", "--actor", "automatizacion")
+        p, r = tick_orca(home, carpeta)
+        filas = corridas_agente(home)
+        ok("W3: con una sola linea, la corrida anota esa linea",
+           [(f.get("cuenta"), f["estado"]) for f in filas] == [(A, "activo")], f"{filas}")
+        ok("W3: y el lock del agente es `triage`, como siempre",
+           corre(home, "lock", "--note", "triage").returncode == 0 and locks_de(home) == ["triage"],
+           f"{locks_de(home)}")
+
+# `local` (sin almacen): igual que hoy.
+with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+    orca_despacho(carpeta)
+    js(home, "caso", "crear", "--chat", CHAT, "--stanza", "W3L", "--actor", "automatizacion")
+    js(home, "lock", "--note", "triage")
+    ok("W3: con `local`, el lock es `triage`", locks_de(home) == ["triage"], f"{locks_de(home)}")
+    p = corre(home, "agente", "lanzar", extra={"ORCA_CLI_COMMAND": str(pathlib.Path(carpeta) / "orca")})
+    ok("W3: y con el lock puesto el agente no se lanza",
+       p.returncode == 0 and json.loads(p.stdout or "{}") == {"agent": "running"},
+       f"{p.stdout[:200]} {p.stderr[-200:]}")
+
+# Una base de antes: `agente_corrida` sin `cuenta`. La gana, y la corrida en vuelo de antes
+# sigue contando (es de la principal).
+with tempfile.TemporaryDirectory() as home, tempfile.TemporaryDirectory() as carpeta:
+    (pathlib.Path(home) / ".wa-inbox").mkdir(parents=True)
+    vieja = db_de(home)
+    vieja.executescript("""
+      create table agente_corrida (
+        id integer primary key autoincrement, origen text not null,
+        estado text not null default 'lanzando', workspace_selector text, terminal text,
+        cuenta_claude text, cuenta_etiqueta text, respaldo text,
+        reenvios integer not null default 0, turno_at text, motivo text, detalle text,
+        created_at text not null, updated_at text not null);
+      insert into agente_corrida (origen, estado, created_at, updated_at)
+        values ('tick', 'activo', datetime('now','localtime'), datetime('now','localtime'));
+    """)
+    vieja.commit()
+    vieja.close()
+    orca_despacho(carpeta)
+    js(home, "caso", "crear", "--chat", CHAT, "--stanza", "W3M", "--actor", "automatizacion")
+    columnas = {r["name"] for r in db_de(home).execute("pragma table_info(agente_corrida)")}
+    ok("W3: una base de antes gana la columna `cuenta`", "cuenta" in columnas, f"{columnas}")
+    p = corre(home, "agente", "lanzar", extra={"ORCA_CLI_COMMAND": str(pathlib.Path(carpeta) / "orca")})
+    ok("W3: y su corrida en vuelo sigue impidiendo un segundo agente",
+       json.loads(p.stdout or "{}") == {"agent": "running"}, f"{p.stdout[:200]} {p.stderr[-200:]}")
+
+
 # ── Ajustes por linea (odd/tasks/ajustes-por-linea.md, A1-A3) ──────────────────────────
 # La principal guarda sus ajustes en la raiz, como siempre; otra linea, los suyos en
 # `ajustesPorLinea[<numero>]`. Cada corrida lee los de SU linea, y la corrida de una linea

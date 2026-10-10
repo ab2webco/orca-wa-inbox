@@ -648,6 +648,7 @@ create table if not exists agente_corrida (
   detalle   text,                  -- la linea de Orca que lo explica, corta
   created_at text not null,
   updated_at text not null,
+  cuenta    text,                  -- la linea del caso (linea-viva-2, W3); null = la principal
   propuesta_antes text,            -- la propuesta_version del caso al lanzar (W2)
   avanzo    integer                -- 1 si el caso avanzo al cerrar, 0 si no; null = de antes
 );
@@ -937,12 +938,19 @@ def ahora():
 
 
 def rastro(name, cuenta=None):
-    """La llave del rastro de una corrida EN la linea activa (o en `cuenta`). El lock sigue
-    siendo uno solo —una corrida a la vez, sea de la linea que sea— pero como le fue es de
-    cada numero: el resumen "arranco y no volvio" del numero viejo no es del nuevo (T9). La
+    """La llave del rastro de una corrida EN la linea activa (o en `cuenta`). Como le fue es
+    de cada numero: el resumen "arranco y no volvio" del numero viejo no es del nuevo (T9). La
     linea de siempre, `local`, conserva la llave de siempre."""
     cuenta = cuenta or cuenta_activa()
     return name if cuenta == CUENTA_LOCAL else f"{name}@{cuenta}"
+
+
+def llave_del_lock(name, cuenta=None):
+    """El nombre del lock de una corrida en la linea activa (o en `cuenta`): uno por linea,
+    para que el agente colgado de una no frene al de la otra (linea-viva-2, W3). La
+    principal, una sola linea y `local` conservan el de siempre; otra linea, su `rastro`."""
+    cuenta = cuenta or cuenta_activa()
+    return rastro(name, cuenta) if de_otra_linea(cuenta, linea_principal()) else name
 
 
 def run_start(con, name=RUN_NAME):
@@ -984,7 +992,7 @@ def build_run(con, name=RUN_NAME):
     row = con.execute("select started_at, ended_at, state, reason, looked, pending "
                       "from run_trace where name=?", (rastro(name),)).fetchone()
     corriendo = bool(con.execute("select 1 from run_lock where name=? and expires_at > ?",
-                                 (name, time.time())).fetchone())
+                                 (llave_del_lock(name), time.time())).fetchone())
     if not row:
         # Sin fila y con el lock puesto igual se dice "corriendo": una base recien
         # migrada no puede hacer parecer que el agente nunca existio.
@@ -1862,7 +1870,11 @@ def migrate(con):
         con.execute("alter table agente_corrida add column tab text")
     if "tab" not in despacho_cols:
         con.execute("alter table caso_despacho add column tab text")
-    # linea-viva-2 W2: la version de la propuesta al lanzar, y si el caso avanzo.
+    # linea-viva-2 W3: la linea de cada corrida, la del caso; W2: si avanzo.
+    if "cuenta" not in corrida_cols:
+        con.execute("alter table agente_corrida add column cuenta text")
+        con.execute("update agente_corrida set cuenta=(select account from caso where "
+                    "caso.case_id=agente_corrida.case_id) where case_id is not null")
     for columna, tipo in (("propuesta_antes", "text"), ("avanzo", "integer")):
         if columna not in corrida_cols:
             con.execute(f"alter table agente_corrida add column {columna} {tipo}")
@@ -2293,11 +2305,13 @@ def cmd_check(con, a):
 def cmd_lock(con, a):
     """Una sola corrida a la vez. Si la automation dispara cada 20 min y una corrida
     tarda mas, dos agentes leen el mismo inbox y abren la misma tarjeta dos veces.
-    El lock expira solo para que una corrida que murio no bloquee para siempre."""
+    El lock expira solo para que una corrida que murio no bloquee para siempre. Es uno por
+    linea (`llave_del_lock`): el de la principal se llama como siempre."""
     now = time.time()
+    llave = llave_del_lock(a.name)
     con.execute("delete from run_lock where expires_at < ?", (now,))
     row = con.execute("select pid, expires_at, note from run_lock where name=?",
-                      (a.name,)).fetchone()
+                      (llave,)).fetchone()
     if row:
         print(json.dumps({"acquired": False, "held_by_pid": row["pid"],
                           "expires_in_s": round(row["expires_at"] - now),
@@ -2305,7 +2319,7 @@ def cmd_lock(con, a):
         sys.exit(4)
     con.execute("insert into run_lock (name,pid,acquired_at,expires_at,note) "
                 "values (?,?,?,?,?)",
-                (a.name, os.getpid(), now, now + a.ttl, a.note))
+                (llave, os.getpid(), now, now + a.ttl, a.note))
     con.commit()
     # El rastro se toma aca y no en un paso aparte del prompt: un paso que hay que
     # acordarse de hacer es un paso que un dia no se hace, y justo ese dia es cuando
@@ -2317,7 +2331,7 @@ def cmd_lock(con, a):
 
 
 def cmd_unlock(con, a):
-    con.execute("delete from run_lock where name=?", (a.name,))
+    con.execute("delete from run_lock where name=?", (llave_del_lock(a.name),))
     con.commit()
     run_end(con, a.name, (a.failed or "").strip() or None)
     trace = build_run(con, a.name)
@@ -13066,8 +13080,9 @@ def seccion_de_linea(caso):
         return []
     return ["", "## The line of this case",
             f"This case is on the line {cuenta}, not on the principal one. Add `--line {cuenta}` "
-            f"to every `{ruta_wa_scope()}` command about its chat (`voice`, `where`) and to every "
-            "`wa-read` command; the `caso` commands with its id already work on its line."]
+            f"to every `{ruta_wa_scope()}` command about its chat (`voice`, `where`), to `lock` "
+            "and `unlock` (each line has its own), and to every `wa-read` command; the `caso` "
+            "commands with its id already work on its line."]
 
 
 def archivo_de_caso(con, caso):
@@ -13690,9 +13705,16 @@ def cuentas_que_fallan(con):
             if n >= AGENTE_FALLAS_CUENTA and edad_de(ultima) < AGENTE_PAUSA_S}
 
 
+def de_esta_linea():
+    """(condicion, parametros) para las corridas del agente de la linea activa. Una de
+    antes, sin linea anotada, es de la principal."""
+    return "coalesce(cuenta, ?) = ?", (linea_principal() or cuenta_activa(), cuenta_activa())
+
+
 def lock_del_agente(con):
+    """Si el agente de casos de la linea activa tiene su lock puesto."""
     return con.execute("select 1 from run_lock where name=? and expires_at > ?",
-                       (RUN_NAME, time.time())).fetchone() is not None
+                       (llave_del_lock(RUN_NAME), time.time())).fetchone() is not None
 
 
 def reviso_despues(con, fila):
@@ -13747,9 +13769,11 @@ def cura_agente(con, cli, f, resumen):
 
 def tick_vigila_agente(con, cli, resumen):
     """La corrida en vuelo: se fue sola, termino su revision, vencio, quedo a medias, o su
-    linea se perdio."""
+    linea se perdio. Solo las de su linea: la otra la vigila su propio tick."""
+    linea, de_linea = de_esta_linea()
     for f in [dict(r) for r in con.execute(
-            "select * from agente_corrida where estado in (?, ?) order by id", AGENTE_EN_VUELO)]:
+            f"select * from agente_corrida where estado in (?, ?) and {linea} order by id",
+            (*AGENTE_EN_VUELO, *de_linea))]:
         edad = edad_de(f["created_at"])
         if f["estado"] == "lanzando":
             if edad > DESPACHO_A_MEDIAS_S:
@@ -13812,12 +13836,14 @@ def caso_para_corrida(con, origen, casos):
 
 def toma_corrida(con, origen):
     """(fila `lanzando` de una corrida nueva, su caso), o (None, lo que lo impide):
-    "running" (hay una en vuelo o el lock del agente esta puesto) o "waiting" (ningun caso
-    que el tick pueda dar todavia: `caso_para_corrida`)."""
+    "running" (hay una en vuelo en esta linea o su lock del agente esta puesto) o "waiting"
+    (ningun caso que el tick pueda dar todavia: `caso_para_corrida`). Uno por linea: el de
+    otra no espera a este (linea-viva-2, W3)."""
     caso_toma(con)
+    linea, de_linea = de_esta_linea()
     try:
-        if con.execute("select 1 from agente_corrida where estado in (?, ?)",
-                       AGENTE_EN_VUELO).fetchone() or lock_del_agente(con):
+        if con.execute(f"select 1 from agente_corrida where estado in (?, ?) and {linea}",
+                       (*AGENTE_EN_VUELO, *de_linea)).fetchone() or lock_del_agente(con):
             con.rollback()
             return None, "running"
         cid = caso_para_corrida(con, origen, casos_para_agente(con))
@@ -13828,8 +13854,10 @@ def toma_corrida(con, origen):
         antes = con.execute("select propuesta_version from caso where case_id=?",
                             (cid,)).fetchone()
         fila = con.execute("insert into agente_corrida (origen, case_id, estado, created_at, "
-                           "updated_at, propuesta_antes) values (?, ?, 'lanzando', ?, ?, ?)",
+                           "updated_at, cuenta, propuesta_antes) values (?, ?, 'lanzando', ?, "
+                           "?, ?, ?)",
                            (origen, cid, momento, momento,
+                            linea_de_caso_id(con, cid) or cuenta_activa(),
                             antes["propuesta_version"] if antes else None)).lastrowid
         con.commit()
     except BaseException:
@@ -13915,8 +13943,10 @@ def cmd_agente(con, a):
 
 
 def agente_del_tablero(con):
-    """La ultima corrida del agente de casos, como la lee el panel, o None."""
-    r = con.execute("select * from agente_corrida order by id desc limit 1").fetchone()
+    """La ultima corrida del agente de casos de esta linea, como la lee el panel, o None."""
+    linea, de_linea = de_esta_linea()
+    r = con.execute(f"select * from agente_corrida where {linea} order by id desc limit 1",
+                    de_linea).fetchone()
     if not r:
         return None
     fallo = r["estado"] == "fallido"
@@ -14073,8 +14103,9 @@ def tick_se_encarga(con):
             return False
     except (TypeError, ValueError):
         return False
-    ultima = con.execute("select estado, motivo from agente_corrida order by id desc "
-                         "limit 1").fetchone()
+    linea, de_linea = de_esta_linea()
+    ultima = con.execute(f"select estado, motivo from agente_corrida where {linea} "
+                         f"order by id desc limit 1", de_linea).fetchone()
     return not (ultima and ultima["estado"] == "fallido" and ultima["motivo"] in CRON_ARREGLA)
 
 
