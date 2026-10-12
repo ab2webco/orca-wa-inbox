@@ -707,6 +707,244 @@ console.log('\nworker: linea-viva V5 — el incidente llega al dueno y al panel'
   }
 }
 
+// ───────── lv3-auditoria: una salud que no se lee tambien es un incidente ─────────
+// `lineas-salud` era todo o nada: un "database is locked" en una linea tumbaba el JSON y,
+// sin salud, el worker no corria el respaldo ni abria incidente para NINGUNA linea. Ahora
+// la linea que no se pudo leer viene con su `error` y se atiende como una sin atender; y
+// una salud que no llega en varias vueltas seguidas es su propio incidente, al dueno.
+console.log('\nworker: lv3-auditoria — la salud que no se lee')
+{
+  const {
+    lineasSinAtender, crearRespaldoTick, textoDeIncidente, SALUD_FALLAS_INCIDENTE,
+    RESPALDO_CADA_MS, INCIDENTE_AVISO_MS, TICK_INCOMPLETO_S
+  } = await import('../main.mjs')
+  const L1 = 'pn:15550000001'
+  const L2 = 'pn:15550000002'
+  const AHORA = Date.parse('2026-10-09T15:00:00Z')
+  const herramienta = async (n) => `/herramientas/${n}`
+  const sana = (cuenta, extra = {}) => Object.assign({ cuenta, principal: false, tick_hace_s: 30,
+    sin_juzgar: 0, sin_juzgar_hace_s: null, latido_hace_s: 20 }, extra)
+  const rota = (cuenta) => ({ cuenta, principal: false, error: 'database is locked' })
+
+  ok('lv3: una linea que no se pudo leer necesita el respaldo, con su propio motivo',
+    JSON.stringify(lineasSinAtender({ lineas: [sana(L1), rota(L2)] })
+      .map((l) => [l.cuenta, l.motivo, l.haceS])) === JSON.stringify([[L2, 'sin-salud', null]]))
+  ok('lv3: fuera de la lista sigue mandando aunque no se pudiera leer',
+    JSON.stringify(lineasSinAtender({ lineas: [Object.assign(rota(L1), { fuera_de_lista: true })] })
+      .map((l) => l.motivo)) === JSON.stringify(['fuera-de-lista']))
+  ok('lv3: el aviso llega en ~10 min: tantas vueltas seguidas sin salud abren el incidente',
+    Number.isInteger(SALUD_FALLAS_INCIDENTE) && SALUD_FALLAS_INCIDENTE >= 2 &&
+    SALUD_FALLAS_INCIDENTE * RESPALDO_CADA_MS <= INCIDENTE_AVISO_MS, String(SALUD_FALLAS_INCIDENTE))
+
+  {
+    // La linea rota: su tick de respaldo corre, y a los 10 min es un incidente como otro.
+    const reloj = { ms: AHORA }
+    const avisos = []
+    const ticks = []
+    const correr = async (cmd, args) => {
+      if (args[0] === 'lineas-salud') return { stdout: JSON.stringify({ at: 1, lineas: [sana(L1), rota(L2)] }) }
+      if (args[0] === 'tick') ticks.push(args[3])
+      return { stdout: JSON.stringify({ ok: true }) }
+    }
+    const r = crearRespaldoTick({ correr, herramienta, ahora: () => reloj.ms,
+      avisar: async (a) => { avisos.push(a) } })
+    await r.vuelta()
+    await r.listo()
+    ok('lv3: la linea que no se pudo leer recibe el tick de respaldo, y solo ella',
+      JSON.stringify(ticks) === JSON.stringify([L2]) && r.estado()?.[L2]?.motivo === 'sin-salud' &&
+      !(L1 in (r.estado() || {})), JSON.stringify([ticks, r.estado()]))
+    for (let i = 0; i < 10; i++) {
+      reloj.ms += 60000
+      await r.vuelta()
+      await r.listo()
+    }
+    ok('lv3: y a los 10 min el dueno recibe UN aviso de esa linea',
+      avisos.length === 1 && avisos[0].cuenta === L2 && avisos[0].motivo === 'sin-salud',
+      JSON.stringify(avisos))
+  }
+
+  {
+    // La salud entera no llega: ninguna linea se puede juzgar, pero el dueno se entera.
+    const reloj = { ms: AHORA }
+    const avisos = []
+    let falla = false
+    const correr = async (cmd, args) => {
+      if (args[0] === 'lineas-salud') {
+        if (falla) throw Object.assign(new Error('database is locked'), { exitCode: 1 })
+        return { stdout: JSON.stringify({ at: 1, lineas: [sana(L1), sana(L2)] }) }
+      }
+      return { stdout: JSON.stringify({ ok: true }) }
+    }
+    const r = crearRespaldoTick({ correr, herramienta, ahora: () => reloj.ms,
+      avisar: async (a) => { avisos.push(a) } })
+    const vuelta = async () => {
+      reloj.ms += 60000
+      await r.vuelta()
+      await r.listo()
+    }
+    await vuelta()
+    falla = true
+    for (let i = 1; i < SALUD_FALLAS_INCIDENTE; i++) await vuelta()
+    ok('lv3: unas vueltas sin salud todavia no son un incidente', avisos.length === 0 &&
+      r.estado() === null, JSON.stringify([avisos, r.estado()]))
+    await vuelta()
+    ok('lv3: con la ultima de la cuenta, UN aviso sin linea, con las lineas que se conocian',
+      avisos.length === 1 && avisos[0].tipo === 'incidente' && avisos[0].cuenta === null &&
+      avisos[0].motivo === 'salud-ilegible' &&
+      JSON.stringify(avisos[0].lineas) === JSON.stringify([L1, L2]) &&
+      avisos[0].desdeS === Math.round((AHORA + 2 * 60000) / 1000), JSON.stringify(avisos))
+    const e = r.estado()
+    ok('lv3: y el latido lo lleva en cada linea conocida',
+      e && e[L1]?.motivo === 'salud-ilegible' && e[L2]?.motivo === 'salud-ilegible', JSON.stringify(e))
+    for (let i = 0; i < 3; i++) await vuelta()
+    ok('lv3: mientras siga, nunca otro aviso', avisos.length === 1, JSON.stringify(avisos))
+    falla = false
+    await vuelta()
+    ok('lv3: con la salud de vuelta el latido la suelta, y la recuperacion espera otra vuelta',
+      r.estado() === null && avisos.length === 1, JSON.stringify([avisos, r.estado()]))
+    await vuelta()
+    ok('lv3: con dos vueltas sanas, UN aviso de recuperacion',
+      avisos.length === 2 && avisos[1].tipo === 'recuperada' && avisos[1].motivo === 'salud-ilegible',
+      JSON.stringify(avisos))
+    falla = true
+    for (let i = 1; i < SALUD_FALLAS_INCIDENTE; i++) await vuelta()
+    falla = false
+    await vuelta()
+    falla = true
+    for (let i = 1; i < SALUD_FALLAS_INCIDENTE; i++) await vuelta()
+    ok('lv3: una salud que vuelve en el medio reinicia la cuenta', avisos.length === 2,
+      JSON.stringify(avisos))
+  }
+
+  // lv3-auditoria, 2: el tick anota `tick_at` al arrancar; `tick_ok_hace_s` es cuanto hace que
+  // termino uno ENTERO. Fresco el primero y viejo el segundo: se rompe a medias.
+  ok('lv3: un tick que arranca pero no termina entero es una linea sin atender',
+    JSON.stringify(lineasSinAtender({ lineas: [sana(L1, { tick_ok_hace_s: 40 }),
+      sana(L2, { tick_ok_hace_s: TICK_INCOMPLETO_S + 1 })] })
+      .map((l) => [l.cuenta, l.motivo, l.haceS])) ===
+      JSON.stringify([[L2, 'tick-incompleto', TICK_INCOMPLETO_S + 1]]))
+  ok('lv3: uno que nunca termino tambien; sin la llave (un wa-scope de antes) no se juzga',
+    JSON.stringify(lineasSinAtender({ lineas: [sana(L1, { tick_ok_hace_s: null }), sana(L2)] })
+      .map((l) => [l.cuenta, l.motivo, l.haceS])) === JSON.stringify([[L1, 'tick-incompleto', null]]))
+  ok('lv3: el plazo deja terminar al tick mas largo que Orca permite, y el que no arranca manda',
+    TICK_INCOMPLETO_S > 300 + 60 && TICK_INCOMPLETO_S <= 10 * 60 &&
+    JSON.stringify(lineasSinAtender({ lineas: [sana(L1, { tick_hace_s: 999, tick_ok_hace_s: 999 })] })
+      .map((l) => l.motivo)) === JSON.stringify(['sin-tick']) &&
+    JSON.stringify(lineasSinAtender({ lineas: [sana(L1, { tick_ok_hace_s: 999, sin_juzgar: 1,
+      sin_juzgar_hace_s: 400 })] }).map((l) => l.motivo)) === JSON.stringify(['sin-juzgar']))
+
+  {
+    const desdeS = Math.round(AHORA / 1000) - 12 * 60
+    const aviso = (extra) => Object.assign({ tipo: 'incidente', cuenta: L1, motivo: 'sin-salud',
+      desdeS, respaldo: 'ok', automatizaciones: [], ahoraMs: AHORA }, extra)
+    const sinSalud = (idioma) => textoDeIncidente(idioma, aviso())
+    ok('lv3: la linea que no se pudo leer tiene su propio texto, con la linea y los minutos',
+      /\+15550000001/.test(sinSalud('es')) && /12 min/.test(sinSalud('es')) &&
+      /no se pudo revisar/.test(sinSalud('es')) && /could not be checked/.test(sinSalud('en')) &&
+      /nao foi possivel verificar/.test(sinSalud('pt')),
+      `${sinSalud('es')} | ${sinSalud('en')} | ${sinSalud('pt')}`)
+    const ilegible = (idioma, tipo = 'incidente') =>
+      textoDeIncidente(idioma, aviso({ tipo, cuenta: null, motivo: 'salud-ilegible' }))
+    ok('lv3: la salud que no llega dice que el plugin no puede ver las lineas',
+      /no puede revisar el estado de las lineas/.test(ilegible('es')) && /12 min/.test(ilegible('es')) &&
+      /cannot check the state of the lines/.test(ilegible('en')) &&
+      /nao consegue verificar o estado das linhas/.test(ilegible('pt')),
+      `${ilegible('es')} | ${ilegible('en')} | ${ilegible('pt')}`)
+    const incompleto = (idioma) => textoDeIncidente(idioma, aviso({ motivo: 'tick-incompleto' }))
+    ok('lv3: el tick que no termina entero tiene su texto: arranca pero no envia',
+      /\+15550000001/.test(incompleto('es')) && /12 min/.test(incompleto('es')) &&
+      /arranca pero no termina/.test(incompleto('es')) && /starts but does not finish/.test(incompleto('en')) &&
+      /comeca mas nao termina/.test(incompleto('pt')),
+      `${incompleto('es')} | ${incompleto('en')} | ${incompleto('pt')}`)
+    ok('lv3: y su recuperacion es otro texto, sin linea',
+      /vuelve a ver el estado de las lineas/.test(ilegible('es', 'recuperada')) &&
+      /can check the state of the lines again/.test(ilegible('en', 'recuperada')) &&
+      /voltou a verificar o estado das linhas/.test(ilegible('pt', 'recuperada')),
+      `${ilegible('es', 'recuperada')} | ${ilegible('en', 'recuperada')}`)
+  }
+}
+
+// ───────── lv3-auditoria: los contenedores de linea, con el candado del storage ─────────
+// El host guarda storage.json leyendo el archivo, cambiando una clave y escribiendo el
+// archivo entero, sin el candado de wa-scope. El worker relee y reescribe por el host los
+// contenedores de cada linea (`alcancePorLinea`, `ajustesPorLinea`): un sync o un tick que
+// escribia en medio se perdia, o pisaba lo del worker. Ahora el worker los escribe con el
+// candado que le presta `wa-scope storage-lock`.
+console.log('\nworker: lv3-auditoria — los contenedores de linea, con el candado del storage')
+{
+  const { conCandadoDelStorage } = await import('../main.mjs')
+  const CANDADO = [
+    '#!/bin/sh',
+    'D="$(dirname "$0")"',
+    'case "$1" in',
+    '  storage-lock) echo tomado >> "$D/candado.txt"; echo \'{"locked": true}\';',
+    '    cat > /dev/null; echo suelto >> "$D/candado.txt" ;;',
+    '  *) echo \'[{"synced": true, "destinos": []}]\' ;;',
+    'esac', ''].join('\n')
+  const estadoCandado = (dir) => existsSync(join(dir, 'candado.txt'))
+    ? readFileSync(join(dir, 'candado.txt'), 'utf8').trim().split('\n') : []
+
+  {
+    const dir = herramientas('candado-unidad', CANDADO)
+    let durante = null
+    const r = await conCandadoDelStorage(join(dir, 'wa-scope'), async () => {
+      durante = estadoCandado(dir)
+      return 'hecho'
+    })
+    ok('lv3: lo que se escribe corre con el candado tomado, y devuelve lo suyo',
+      r === 'hecho' && JSON.stringify(durante) === JSON.stringify(['tomado']), JSON.stringify(durante))
+    ok('lv3: y al terminar el candado se suelta',
+      await hasta(() => estadoCandado(dir).at(-1) === 'suelto', 5000), JSON.stringify(estadoCandado(dir)))
+  }
+  {
+    const dir = herramientas('candado-falla', CANDADO)
+    let error = null
+    try {
+      await conCandadoDelStorage(join(dir, 'wa-scope'), async () => { throw new Error('host caido') })
+    } catch (e) { error = e }
+    ok('lv3: si la escritura falla, la falla sube y el candado igual se suelta',
+      error?.message === 'host caido' && await hasta(() => estadoCandado(dir).at(-1) === 'suelto', 5000),
+      JSON.stringify([error?.message, estadoCandado(dir)]))
+  }
+  {
+    // Un wa-scope de antes (no conoce `storage-lock`) o que no esta: se escribe igual, como
+    // antes, y no se espera al plazo entero.
+    const viejo = herramientas('candado-viejo', '#!/bin/sh\necho \'[]\'\n')
+    const inicio = Date.now()
+    const r1 = await conCandadoDelStorage(join(viejo, 'wa-scope'), async () => 'sin candado')
+    const r2 = await conCandadoDelStorage(join(RAIZ, 'no-existe', 'wa-scope'), async () => 'sin herramienta')
+    ok('lv3: sin el candado se escribe igual, sin esperar el plazo',
+      r1 === 'sin candado' && r2 === 'sin herramienta' && Date.now() - inicio < 5000,
+      JSON.stringify([r1, r2, Date.now() - inicio]))
+  }
+  {
+    // El camino de verdad: guardar una conversacion de otra linea desde el panel.
+    const dir = herramientas('candado-alcance', CANDADO)
+    const orca = hostFalso(dir, { chats: [], alcancePorLinea: { 'pn:15550000002': {} } })
+    const llamar = orca.host.call
+    const conCandado = []
+    orca.host.call = async (action, params) => {
+      if (action === 'storage.set' && params.key === 'alcancePorLinea') {
+        conCandado.push(estadoCandado(dir).at(-1) === 'tomado')
+      }
+      return llamar(action, params)
+    }
+    const { apagar } = await arranca(orca)
+    orca.store.scopeRequest = { id: 'guarda-linea', action: 'guardar', jid: '9@g.us',
+      linea: 'pn:15550000002', at: new Date().toISOString(),
+      entrada: { chatName: 'Soporte B', mode: 'borrador' } }
+    await hasta(() => orca.store.scopeResult?.requestId === 'guarda-linea', 15000)
+    ok('lv3: la conversacion de otra linea se guarda con el candado del storage tomado',
+      orca.store.scopeResult?.ok === true &&
+      orca.store.alcancePorLinea?.['pn:15550000002']?.['9@g.us']?.mode === 'borrador' &&
+      JSON.stringify(conCandado) === JSON.stringify([true]),
+      JSON.stringify([orca.store.scopeResult, conCandado]))
+    ok('lv3: y despues lo suelta', await hasta(() => estadoCandado(dir).at(-1) === 'suelto', 5000),
+      JSON.stringify(estadoCandado(dir)))
+    apagar()
+  }
+}
+
 // ───────── el sync deja escrito que fallo, y por que ─────────
 console.log('\nworker: el sync que falla lo dice')
 {

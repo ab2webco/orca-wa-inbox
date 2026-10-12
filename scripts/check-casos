@@ -14012,6 +14012,13 @@ if NODE:
 # su tick, cuantos mensajes de sus conversaciones autorizadas llegaron y nadie juzgo (ni caso
 # ni veredicto), el mas viejo de esos, y el latido del sidecar. Solo lectura, sin Jev, sin red
 # y sin la CLI de Orca: corre cada minuto.
+def _json_o_nada_prueba(texto):
+    try:
+        return json.loads(texto)
+    except ValueError:
+        return None
+
+
 def lineas_salud(home, extra=None):
     """(proceso, objeto) de `lineas-salud --json`: UN objeto, `{"at", "lineas"}`."""
     p = corre(home, "lineas-salud", extra=extra)
@@ -14021,8 +14028,8 @@ def lineas_salud(home, extra=None):
         return p, None
 
 
-LLAVES_SALUD = {"cuenta", "principal", "tick_hace_s", "sin_juzgar", "sin_juzgar_hace_s",
-                "latido_hace_s"}
+LLAVES_SALUD = {"cuenta", "principal", "tick_hace_s", "tick_ok_hace_s", "sin_juzgar",
+                "sin_juzgar_hace_s", "latido_hace_s"}
 
 
 print("\nla salud de cada linea (V3)")
@@ -14137,6 +14144,39 @@ with tempfile.TemporaryDirectory() as home:
        p.returncode == 0 and isinstance(r, dict) and r.get("lineas") == [] and "at" in r
        and not (pathlib.Path(home) / ".wa-inbox" / "scope.db").exists(),
        f"{p.returncode} {p.stdout[:200]} {p.stderr[-300:]}")
+
+
+# ── Una linea que no se puede leer no tumba la salud de todas (lv3-auditoria, 1) ─────────
+# La salud recorria todas las lineas sin atrapar nada: un "database is locked" en una
+# dejaba al worker sin el JSON entero, y sin el ninguna linea tenia respaldo ni incidente.
+# Ahora la linea que no se pudo leer sale con su error corto y las demas, con lo suyo.
+print("\nla salud de una linea que no se puede leer (lv3-auditoria)")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "HL1", "@duenio no abre el login", 5, mencion=True)])
+        llegan(home, SEGUNDA, [msg(SOPORTE, "HL2", "@duenio no llega la factura", 5,
+                                   mencion=True)], activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+        bloqueo = sqlite3.connect(pathlib.Path(home) / ".wa-inbox" / "scope.db", timeout=1)
+        bloqueo.execute("begin exclusive")
+        try:
+            p, r = lineas_salud(home)
+        finally:
+            bloqueo.rollback()
+            bloqueo.close()
+        filas = (r or {}).get("lineas") or []
+        ok("con scope.db tomada la salud igual sale: 0 y UN objeto con todas las lineas",
+           p.returncode == 0 and [(f.get("cuenta"), f.get("principal")) for f in filas]
+           == [(A, True), (SEGUNDA, False)], f"{p.returncode} {p.stdout[:300]} {p.stderr[-300:]}")
+        ok("cada linea que no se pudo leer lo dice con su error corto, sin inventar numeros",
+           len(filas) == 2 and all(set(f) == {"cuenta", "principal", "error"}
+                                   and "locked" in f["error"] and len(f["error"]) <= 200
+                                   for f in filas), f"{filas}")
+        filas = (lineas_salud(home)[1] or {}).get("lineas") or []
+        ok("suelta la base, cada linea vuelve con lo suyo y sin error",
+           len(filas) == 2 and all("error" not in f and "tick_hace_s" in f for f in filas),
+           f"{filas}")
 
 
 # ── Una linea viva fuera de la lista (linea-fuera-de-lista) ──────────────────────────────
@@ -16961,6 +17001,274 @@ if NODE:
            [(f["tipo"], f["estado"]) for f in avisos_worker(home)] == [("worker", "enviado")],
            f"{avisos_worker(home)} {p.stderr[-300:]}")
 
+
+
+# ── El tick que se rompe a medias no parece sano (lv3-auditoria, 2) ─────────────────────
+# El tick anota `tick_at` al ARRANCAR: si lo que envia reventaba, se iban los envios, el
+# despacho, el agente, los avisos y el tablero, y la linea seguia viendose atendida. Ahora
+# lo que envia va atrapado como lo demas, y `tick_ok_at@<cuenta>` se anota al TERMINAR un
+# tick entero: la salud dice hace cuanto (`tick_ok_hace_s`) y el worker ve la diferencia.
+print("\nel tick que se rompe a medias no parece sano (lv3-auditoria)")
+if NODE:
+    import contextlib
+    import io
+    env_lv3 = dict(os.environ)
+    argv_lv3 = list(sys.argv)
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            llegan(home, A, [msg(PERSONA, "TK1", "no me llega la factura", 5)])
+            js(home, "set", PERSONA, "--provider", "ninguno", "--mode", "responder")
+            filas = (lineas_salud(home)[1] or {}).get("lineas") or [{}]
+            ok("sin ningun tick entero todavia, tick_ok_hace_s es null",
+               "tick_ok_hace_s" in filas[0] and filas[0]["tick_ok_hace_s"] is None, f"{filas}")
+            p, r = tick(home)
+            filas = (lineas_salud(home)[1] or {}).get("lineas") or [{}]
+            ok("un tick que termina anota tick_ok_at de su linea, y la salud lo dice",
+               tick_at_de(home, f"tick_ok_at@{A}") is not None
+               and isinstance(filas[0].get("tick_ok_hace_s"), int)
+               and filas[0]["tick_ok_hace_s"] < 60, f"{filas} {p.stderr[-300:]}")
+            pon_tick_at(home, f"tick_ok_at@{A}", 15 * 60)
+            ws, _ = ws_de_linea(home, None)
+
+            def rompe(con):
+                raise RuntimeError("una propuesta rota")
+            ws.candidatos_tick = rompe
+            sys.argv = [str(WA_SCOPE), "tick", "--json"]
+            salida, rompio = io.StringIO(), None
+            try:
+                with contextlib.redirect_stdout(salida), \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    ws.main()
+            except Exception as exc:
+                rompio = exc
+            lineas_out = [l for l in salida.getvalue().splitlines() if l.strip()]
+            r = _json_o_nada_prueba(lineas_out[-1]) if lineas_out else None
+            ok("si lo que envia revienta, el resto del tick corre igual y lo cuenta como error",
+               rompio is None and isinstance(r, dict) and r.get("errores", 0) >= 1,
+               f"{rompio!r} {salida.getvalue()[-300:]}")
+            filas = (lineas_salud(home)[1] or {}).get("lineas") or [{}]
+            ok("y su tick_at queda fresco pero tick_ok_at no avanza: la salud ve la diferencia",
+               isinstance(filas[0].get("tick_hace_s"), int) and filas[0]["tick_hace_s"] < 60
+               and (filas[0].get("tick_ok_hace_s") or 0) >= 15 * 60 - 5, f"{filas}")
+    finally:
+        sys.argv = argv_lv3
+        os.environ.clear()
+        os.environ.update(env_lv3)
+
+# ── El agente de otra linea no pisa como va la corrida de la principal (lv3-auditoria, 3) ──
+# `lock` y `unlock` dejan en el panel como va la corrida del agente. Con dos lineas, el de la
+# segunda escribia `activity.run` en la raiz, que es la principal: el panel decia
+# "corriendo" (o "fallo") de la principal por lo que hacia la otra.
+print("\nel agente de otra linea no pisa la corrida de la principal (lv3-auditoria)")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "RL1", "@duenio no abre el login", 5, mencion=True)])
+        llegan(home, SEGUNDA, [msg(SOPORTE, "RL2", "@duenio no llega la factura", 5,
+                                   mencion=True)], activar=False)
+        suma_linea(home, SEGUNDA)
+        js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+
+        def corrida(datos, linea=None):
+            base = datos if linea is None else ((datos.get("porLinea") or {}).get(linea) or {})
+            return ((base.get("activity") or {}).get("run") or {}).get("state")
+
+        p = corre(home, "lock", extra={"WA_INBOX_LINEA": SEGUNDA})
+        datos = storage_o_nada(home)
+        ok("el lock de la otra linea deja su corrida en SU lugar, como corriendo",
+           p.returncode == 0 and corrida(datos, SEGUNDA) == "running", f"{p.stderr[-300:]} "
+           f"{json.dumps(datos.get('porLinea'))[:400]}")
+        ok("y la de la principal, en la raiz, no se toca",
+           corrida(datos) is None, f"{json.dumps(datos.get('activity'))[:300]}")
+        p = corre(home, "unlock", "--failed", "sin red", extra={"WA_INBOX_LINEA": SEGUNDA})
+        datos = storage_o_nada(home)
+        ok("su unlock fallido tambien queda en su lugar, y la raiz sigue intacta",
+           p.returncode == 0 and corrida(datos, SEGUNDA) == "failed" and corrida(datos) is None,
+           f"{p.stderr[-300:]} {json.dumps(datos)[:400]}")
+        p = corre(home, "lock")
+        datos = storage_o_nada(home)
+        ok("el lock de la principal sigue en la raiz, como siempre",
+           p.returncode == 0 and corrida(datos) == "running" and corrida(datos, SEGUNDA) == "failed",
+           f"{p.stderr[-300:]} {json.dumps(datos)[:400]}")
+
+# ── Una linea que revienta en `pending --needs-agent` no es "sin trabajo" (lv3-auditoria, 4) ──
+# Con varias lineas, `pending --needs-agent` corre un proceso por linea y junta los casos.
+# Solo leia el de las que salian 0: "sin trabajo" sale 1, y un traceback tambien. Una linea
+# rota se veia como una linea al dia. Ahora cada hijo dice su JSON tambien sin trabajo, y
+# el que sale distinto de 0 sin JSON es una falla: se dice por stderr, los casos de las
+# demas salen igual, y sin casos sale 2 (Orca salta la corrida con cualquier codigo
+# distinto de 0; el 2 deja ver que no fue "sin trabajo").
+print("\nuna linea rota en pending --needs-agent no es sin trabajo (lv3-auditoria)")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "PN1", "@duenio no abre el login", 5, mencion=True)])
+        llegan(home, SEGUNDA, [msg(SOPORTE, "PN2", "@duenio no llega la factura", 5,
+                                   mencion=True)], activar=False)
+        suma_linea(home, SEGUNDA)
+        p = corre(home, "pending", "--needs-agent")
+        ok("con dos lineas sin trabajo, sigue saliendo 1 y callado",
+           p.returncode == 1 and not p.stdout.strip(), f"{p.returncode} {p.stdout[:200]} "
+           f"{p.stderr[-300:]}")
+        p = corre(home, "pending", "--needs-agent",
+                  extra={"WA_INBOX_LINEA": SEGUNDA, "WA_INBOX_REPARTO": "1"})
+        ok("el hijo de una linea sin trabajo sale 1 pero dice su JSON, con la lista vacia",
+           p.returncode == 1 and _json_o_nada_prueba(p.stdout) == {"needs_agent": 0, "cases": []},
+           f"{p.returncode} {p.stdout[:200]} {p.stderr[-300:]}")
+        p = corre(home, "pending", "--needs-agent", extra={"WA_INBOX_LINEA": SEGUNDA})
+        ok("sin ser hijo del reparto, la linea sin trabajo sigue callada",
+           p.returncode == 1 and not p.stdout.strip(), f"{p.returncode} {p.stdout[:200]}")
+
+        ws = carga_wa_scope(home)
+        vacia = json.dumps({"needs_agent": 0, "cases": []})
+        traza = "Traceback (most recent call last):\n  ...\nRuntimeError: una linea rota\n"
+        casos, fallas = ws.junta_pendientes({
+            A: (json.dumps({"needs_agent": 2, "cases": [3, 5]}), 0, ""),
+            SEGUNDA: ("", 1, traza)})
+        ok("una linea con casos y otra rota: salen los casos, y la rota es una falla con su "
+           "codigo y la ultima linea de su error",
+           casos == [3, 5] and fallas == [(SEGUNDA, 1, "RuntimeError: una linea rota")],
+           f"{casos} {fallas}")
+        casos, fallas = ws.junta_pendientes({A: (vacia, 1, ""), SEGUNDA: ("", 1, traza)})
+        ok("sin casos en ninguna, la rota igual es una falla: no se confunde con sin trabajo",
+           casos == [] and [f[0] for f in fallas] == [SEGUNDA], f"{casos} {fallas}")
+        casos, fallas = ws.junta_pendientes({A: (vacia, 1, ""), SEGUNDA: (vacia, 1, "")})
+        ok("dos lineas sin trabajo no son ninguna falla", casos == [] and fallas == [],
+           f"{casos} {fallas}")
+        casos, fallas = ws.junta_pendientes({A: ("no soy json", 0, ""), SEGUNDA: (vacia, 9, "")})
+        ok("un 0 sin JSON, o un codigo que no es 0 ni 1, tambien son fallas",
+           casos == [] and sorted(f[0] for f in fallas) == sorted([A, SEGUNDA]),
+           f"{casos} {fallas}")
+
+# ── El candado del tick es de la linea, no de quien sea la principal (lv3-auditoria, 5) ──
+# La principal tomaba `tick.lock` y otra linea `tick-<cuenta>.lock`. Si la principal se
+# desvinculaba a mitad de un tick de la otra, el tick siguiente de esa linea (ahora la
+# principal) tomaba `tick.lock` y corria a la vez que el que seguia con el suyo. Ahora cada
+# linea toma el de su cuenta, siempre; la principal toma ademas `tick.lock`, el de antes,
+# para no correr a la vez que un tick de una version anterior.
+print("\nel candado del tick es de la linea (lv3-auditoria)")
+if NODE:
+    with tempfile.TemporaryDirectory() as home:
+        llegan(home, A, [msg(SOPORTE, "CL1", "@duenio no abre el login", 5, mencion=True)])
+        llegan(home, SEGUNDA, [msg(SOPORTE, "CL2", "@duenio no llega la factura", 5,
+                                   mencion=True)], activar=False)
+        suma_linea(home, SEGUNDA)
+        carpeta = pathlib.Path(home) / ".wa-inbox"
+        de_b = carpeta / f"tick-{SEGUNDA.replace(':', '-')}.lock"
+        candado = toma_candado(de_b)
+        try:
+            # La principal se desvincula: la otra pasa a ser la principal con su tick en curso.
+            anota_activas(home, [SEGUNDA], meta={"linea_activa": SEGUNDA})
+            p, r = tick(home, "--line", SEGUNDA)
+        finally:
+            candado.close()
+        ok("con el tick de la linea en curso, el siguiente sigue ocupado aunque ahora sea la "
+           "principal", isinstance(r, dict) and r.get("busy") is True,
+           f"{p.returncode} {p.stdout[:300]} {p.stderr[-300:]}")
+        candado = toma_candado(carpeta / "tick.lock")
+        try:
+            p, r = tick(home, "--line", SEGUNDA)
+        finally:
+            candado.close()
+        ok("y la principal respeta el candado de siempre, el de un tick de una version anterior",
+           isinstance(r, dict) and r.get("busy") is True, f"{p.stdout[:300]}")
+        p, r = tick(home, "--line", SEGUNDA)
+        ok("libres los dos, corre", isinstance(r, dict) and r.get("busy") is False,
+           f"{p.stdout[:300]} {p.stderr[-300:]}")
+
+# ── Un ajuste que sube al panel no pisa lo que otro escribio en medio (lv3-auditoria, 6) ─
+# `mirror_to_panel` leia `orcaNotices` (o `firstReply`) FUERA del candado del storage y
+# despues escribia el objeto entero: lo que otro proceso guardo en ese medio se perdia.
+# Ahora la fusion se hace dentro del candado, sobre lo que hay en el archivo.
+print("\nun ajuste que sube al panel no pisa lo escrito en medio (lv3-auditoria)")
+if NODE:
+    env_lv6 = dict(os.environ)
+    try:
+        with tempfile.TemporaryDirectory() as home:
+            llegan(home, A, [msg(SOPORTE, "MP1", "@duenio no abre el login", 5, mencion=True)])
+            llegan(home, SEGUNDA, [msg(SOPORTE, "MP2", "@duenio no llega la factura", 5,
+                                       mencion=True)], activar=False)
+            suma_linea(home, SEGUNDA)
+            js(home, "set", SOPORTE, "--provider", "ninguno", "--mode", "borrador")
+
+            def con_otro_escritor(ws, escribe):
+                """Otro proceso guarda justo antes de que este tome el candado."""
+                original = ws.plugin_store_modifica
+
+                def modifica(cambia, crear=True):
+                    datos = storage_o_nada(home)
+                    escribe(datos)
+                    escribe_storage(home, datos)
+                    return original(cambia, crear)
+                ws.plugin_store_modifica = modifica
+                return ws
+
+            os.environ.pop("WA_INBOX_LINEA", None)
+            ws = con_otro_escritor(carga_wa_scope(home), lambda d: d.__setitem__(
+                "orcaNotices", dict(d.get("orcaNotices") or {}, waiting="on")))
+            ws.mirror_to_panel("orca_notice_finished", "on")
+            avisos = storage_o_nada(home).get("orcaNotices") or {}
+            ok("el aviso que guardo otro en medio queda, junto al que sube",
+               avisos.get("waiting") == "on" and avisos.get("finished") == "on", f"{avisos}")
+
+            os.environ["WA_INBOX_LINEA"] = SEGUNDA
+
+            def primer_de_b(d):
+                propios = d.setdefault("ajustesPorLinea", {}).setdefault(SEGUNDA, {})
+                propios["firstReply"] = dict(propios.get("firstReply") or {}, max="4")
+            ws = con_otro_escritor(carga_wa_scope(home), primer_de_b)
+            ws.mirror_to_panel("first_reply_mode", "model")
+            datos = storage_o_nada(home)
+            primer = ((datos.get("ajustesPorLinea") or {}).get(SEGUNDA) or {}).get("firstReply") or {}
+            ok("en otra linea igual, y en SU lugar: la raiz no se toca",
+               primer.get("max") == "4" and primer.get("mode") == "model"
+               and "mode" not in (datos.get("firstReply") or {}), f"{primer} {datos.get('firstReply')}")
+    finally:
+        os.environ.clear()
+        os.environ.update(env_lv6)
+
+# ── El candado del storage, para el worker (lv3-auditoria, 7) ────────────────────────────
+# El host de Orca guarda storage.json leyendo el archivo, cambiando una clave y escribiendo
+# el archivo entero, sin el candado de wa-scope. El worker lee y escribe los contenedores de
+# cada linea (`ajustesPorLinea`, `alcancePorLinea`) por el host: un sync o un tick que
+# escribia en medio se perdia, o pisaba lo del worker. `storage-lock` le presta el candado:
+# lo toma, dice `{"locked": true}` y lo tiene hasta que el worker cierra su entrada (o un
+# plazo, para que un worker colgado no frene a nadie).
+print("\nel candado del storage, para el worker (lv3-auditoria)")
+with tempfile.TemporaryDirectory() as home:
+    env = dict(os.environ, HOME=str(home), XDG_CONFIG_HOME=str(pathlib.Path(home) / ".config"),
+               APPDATA=str(pathlib.Path(home) / "AppData" / "Roaming"),
+               ORCA_CLI_COMMAND=SIN_ORCA)
+    hijo = subprocess.Popen([str(WA_SCOPE), "storage-lock", "--json"], env=env,
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True)
+    try:
+        primera = hijo.stdout.readline()
+        ruta = pathlib.Path(home) / ".wa-inbox" / "storage.lock"
+        ruta.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            ajeno = toma_candado(ruta)
+            ajeno.close()
+            tomado = False
+        except OSError:
+            tomado = True
+        ok("dice que lo tiene, y mientras tanto nadie mas lo toma",
+           _json_o_nada_prueba(primera) == {"locked": True} and tomado,
+           f"{primera!r} {tomado}")
+        hijo.stdin.close()
+        codigo = hijo.wait(timeout=30)
+        try:
+            libre = toma_candado(ruta)
+            libre.close()
+            soltado = True
+        except OSError:
+            soltado = False
+        ok("al cerrar la entrada lo suelta y sale 0", codigo == 0 and soltado,
+           f"{codigo} {soltado} {hijo.stderr.read()[-300:]}")
+        ok("y no crea la base de casos: solo presta el candado",
+           not (pathlib.Path(home) / ".wa-inbox" / "scope.db").exists())
+    finally:
+        if hijo.poll() is None:
+            hijo.kill()
+            hijo.wait()
 
 print(f"\n{pruebas - len(fallos)}/{pruebas} en verde")
 if fallos:

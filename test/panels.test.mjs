@@ -9567,6 +9567,28 @@ console.log('\nconfig.html — linea-viva: el aviso de una linea sin atender')
     ok('linea-viva: un motivo desconocido igual dice la linea y no muestra codigos',
       /\+15550000001 lleva 12 min/.test(txt) && !/otro-motivo|raro/.test(txt), txt)
   }
+  {
+    // lv3-auditoria: una linea que no se pudo leer, la salud entera que no llega, y el tick
+    // que arranca pero no termina entero.
+    const L3 = 'pn:15550000003'
+    const lineas = { [L1]: { desde: hace(12), motivo: 'sin-salud', respaldo: 'ok' },
+      [L2]: { desde: hace(15), motivo: 'salud-ilegible', respaldo: null },
+      [L3]: { desde: hace(9), motivo: 'tick-incompleto', respaldo: 'busy' } }
+    const es = await montar('config.html', { workerBeat: latido(lineas) }, 'es-419')
+    const en = await montar('config.html', { workerBeat: latido(lineas) }, 'en-US')
+    const pt = await montar('config.html', { workerBeat: latido(lineas) }, 'pt-BR')
+    await espera()
+    const filas = (d) => [...caja(d).querySelectorAll('.alert')].map((f) => f.textContent)
+    ok('lv3: la linea que no se pudo leer y la salud que no llega dicen por que, en cada idioma',
+      /no se pudo revisar el estado de esta linea/i.test(filas(es.doc)[0]) &&
+      /no puede revisar el estado de las lineas/.test(filas(es.doc)[1]) &&
+      /could not be checked/.test(filas(en.doc)[0]) && /cannot check the state of the lines/.test(filas(en.doc)[1]) &&
+      /nao foi possivel verificar o estado desta linha/i.test(filas(pt.doc)[0]) &&
+      /nao consegue verificar o estado das linhas/.test(filas(pt.doc)[1]) &&
+      /arranca pero no termina/.test(filas(es.doc)[2]) && /starts but does not finish/.test(filas(en.doc)[2]) &&
+      /comeca mas nao termina/.test(filas(pt.doc)[2]),
+      JSON.stringify([filas(es.doc), filas(en.doc), filas(pt.doc)]))
+  }
 }
 
 console.log(`\n${pruebas - fallos}/${pruebas} en verde`)

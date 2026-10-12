@@ -1488,6 +1488,18 @@ const PANELES = [
     datos: Object.assign({}, DATOS, { workerBeat: { at: new Date().toISOString(),
       lineas: { 'pn:15550000002': { desde: Math.round(Date.now() / 1000) - 12 * 60,
         motivo: 'fuera-de-lista', respaldo: null } } } }) },
+  // lv3-auditoria: una linea que no se pudo leer, la salud entera que no llega y un tick que
+  // arranca pero no termina. Tres filas con su por que, a 320 px sin desbordar.
+  { nombre: 'config-lineas-salud-rota', archivo: 'config.html', anchos: ANCHOS,
+    enTodosLosAnchos: true, espera: 300,
+    datos: Object.assign({}, DATOS, { workerBeat: { at: new Date().toISOString(),
+      lineas: {
+        'pn:15550000001': { desde: Math.round(Date.now() / 1000) - 12 * 60,
+          motivo: 'sin-salud', respaldo: 'ok' },
+        'pn:15550000002': { desde: Math.round(Date.now() / 1000) - 15 * 60,
+          motivo: 'salud-ilegible', respaldo: null },
+        'pn:15550000003': { desde: Math.round(Date.now() / 1000) - 9 * 60,
+          motivo: 'tick-incompleto', respaldo: 'busy' } } } }) },
   {
     // El worker que latia y dejo de hacerlo. Es otro estado y otra accion: aca no hay
     // nada que aprobar, hay que reiniciar Orca.
