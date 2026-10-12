@@ -2758,6 +2758,133 @@ def cmd_owner(con, a):
     return None
 
 
+# `wa-scope recap`: la ultima linea de lo que hizo el agente de cada espacio de Orca,
+# `{worktreeId: {"texto", "at"}}` con `at` en ms (como el de los paneles). Vive en el storage
+# del panel, que es donde ya viven las demas claves de estado de este script.
+CLAVE_RECAPS = "orcaRecaps"
+LARGO_RECAP = 120
+# Lo que cuenta como "de este turno": una linea escrita hasta esto ANTES de que el panel pase a
+# `done`. El agente la deja justo antes de parar, asi que casi siempre cae segundos antes del
+# `at` del turno; dos minutos cubren un cierre lento sin que la linea de otro turno cercano
+# (el anterior ya salio en su propio resumen) se cuele. Despues del turno no hay tope: vale
+# hasta que se arma el resumen.
+RECAP_TOLERANCIA_S = 120
+# Una entrada que ya no puede ser de ningun resumen (mas vieja que cualquier ventana) se barre
+# al escribir la siguiente, para que el storage no crezca con cada espacio que paso por aca.
+RECAP_VIGENCIA_S = 7 * 86400
+
+# `recap`: la linea de lo que hizo el agente que termino, para el resumen de los "termino".
+# Los codigos son contrato, los lee la skill `whatsapp-avisos`.
+RECAP_VACIO = "recap-empty"
+RECAP_VARIAS_LINEAS = "recap-multiline"
+RECAP_LARGO = "recap-too-long"
+RECAP_SECRETO = "recap-secret"
+RECAP_SIN_ESPACIO = "recap-no-worktree"
+RECAP_SIN_GUARDAR = "recap-not-saved"
+AYUDA_RECAP = f"""The one line an agent leaves when its work in an Orca worktree finished, so the
+hourly "agents that finished" summary tells the owner what was done, not only where.
+
+  wa-scope recap "<one line: what changed, in plain words>"
+  wa-scope recap "<line>" --worktree <path> --json
+
+The worktree is the current directory (or the one that contains it); --worktree names
+another. Only the latest line of each worktree is kept, with the time it was written. The
+summary shows it next to the project when it was written for that turn. One line, at most
+{LARGO_RECAP} characters: no paths, no secrets, no prompts.
+
+--json prints {{"estado": "guardado", "worktree", "at"}} (at in ms); without it, one
+confirmation line.
+
+Exit codes: 0 = saved. 1 = rejected, the code on the first line of stderr (and as `codigo`
+in the JSON): `{RECAP_VACIO}` (empty), `{RECAP_VARIAS_LINEAS}` (more than one line),
+`{RECAP_LARGO}` (over {LARGO_RECAP} characters, never truncated), `{RECAP_SECRETO}` (it
+looks like a secret). 3 = `{RECAP_SIN_ESPACIO}` (Orca does not know a worktree for that
+folder) or `{RECAP_SIN_GUARDAR}` (the panel storage could not be written)."""
+
+RECAP_DETALLES = {
+    RECAP_VACIO: "the line is empty",
+    RECAP_VARIAS_LINEAS: "the line must be a single line, without line breaks",
+    RECAP_LARGO: f"the line is over {LARGO_RECAP} characters: write it shorter",
+    RECAP_SECRETO: "the line looks like a secret: say what changed without it",
+    RECAP_SIN_ESPACIO: "Orca does not list a worktree that contains that folder",
+    RECAP_SIN_GUARDAR: "the panel storage could not be written",
+}
+
+
+def recap_invalido(texto):
+    """El codigo por el que una linea no sirve, o None. Sin recortar de mas: lo largo se
+    rechaza para que quien lo escribe lo diga mas corto."""
+    if "\n" in texto or "\r" in texto:
+        return RECAP_VARIAS_LINEAS
+    if not texto.strip():
+        return RECAP_VACIO
+    if len(texto.strip()) > LARGO_RECAP:
+        return RECAP_LARGO
+    if wa_reglas.secreto(texto):
+        return RECAP_SECRETO
+    return None
+
+
+def espacio_de_la_ruta(ruta, lista):
+    """El `worktreeId` del espacio de Orca que contiene `ruta` (el mas adentro si hay
+    anidados), o None. Los archivados no cuentan."""
+    candidatas = {ruta_comparable(ruta), ruta_comparable(os.path.realpath(ruta))} - {""}
+    mejor, largo = None, -1
+    for w in lista:
+        base = ruta_comparable(w.get("path"))
+        ident = w.get("worktreeId")
+        if not base or not isinstance(ident, str) or w.get("isArchived") is True:
+            continue
+        bases = {base, ruta_comparable(os.path.realpath(base))}
+        if any(c == b or c.startswith(b.rstrip(os.sep) + os.sep) for c in candidatas for b in bases) \
+                and len(base) > largo:
+            mejor, largo = ident, len(base)
+    return mejor
+
+
+def guarda_recap(texto, ruta):
+    """Valida y guarda la linea del espacio que contiene `ruta`. Devuelve `(dato, None)` o
+    `(None, codigo)`."""
+    texto = texto if isinstance(texto, str) else ""
+    codigo = recap_invalido(texto)
+    if codigo:
+        return None, codigo
+    espacio = espacio_de_la_ruta(ruta, worktrees_de_orca())
+    if not espacio:
+        return None, RECAP_SIN_ESPACIO
+    at = int(ahora_orca_s() * 1000)
+    entrada = {"texto": texto.strip(), "at": at}
+
+    def fusiona(vista):
+        previas = vista.get(CLAVE_RECAPS)
+        vigentes = {k: v for k, v in (previas if isinstance(previas, dict) else {}).items()
+                    if k != espacio and isinstance(v, dict)
+                    and isinstance(v.get("at"), (int, float)) and not isinstance(v.get("at"), bool)
+                    and at - v["at"] <= RECAP_VIGENCIA_S * 1000}
+        vigentes[espacio] = entrada
+        return {CLAVE_RECAPS: vigentes}
+    if not plugin_store_write(None, fusiona=fusiona):
+        return None, RECAP_SIN_GUARDAR
+    return {"estado": "guardado", "worktree": espacio, "at": at}, None
+
+
+def cmd_recap(con, a):
+    """Imprime el resultado y sale con su codigo; no devuelve filas."""
+    ruta = os.path.abspath(a.worktree or os.getcwd())
+    dato, codigo = guarda_recap(a.text, ruta)
+    if codigo:
+        print(f"wa-scope: {codigo}", file=sys.stderr)
+        print(RECAP_DETALLES[codigo], file=sys.stderr)
+        if a.json:
+            print(json.dumps({"estado": "rechazado", "codigo": codigo}, ensure_ascii=False))
+        sys.exit(3 if codigo in (RECAP_SIN_ESPACIO, RECAP_SIN_GUARDAR) else 1)
+    if a.json:
+        print(json.dumps(dato, ensure_ascii=False))
+    else:
+        print(f"recap saved for {dato['worktree']}")
+    return None
+
+
 def cmd_where(con, a):
     return [resolve_target(con, a.text, a.chat)]
 
@@ -11848,7 +11975,8 @@ TEXTOS_ORCA = {
            "grupo": "Orca: para no escribirle de mas, esto se junto en la ultima hora: {partes}.",
            # El resumen de los que terminaron: una linea por proyecto, con cuantas veces.
            "terminados": "Orca: agentes que terminaron desde el ultimo resumen ({total}):\n{partes}",
-           "proyecto": "- {nombre} x{n}", "otros": "otros agentes", "mas": "- y {n} mas",
+           "proyecto": "- {nombre} x{n}", "proyecto_recap": "- {nombre} x{n} — {recap}",
+           "otros": "otros agentes", "mas": "- y {n} mas",
            # `espera` cuenta a los que esperan y a los bloqueados: comparten la clase del id.
            "partes": {"espera": "agentes que lo necesitan: {n}",
                       "termino": "agentes que terminaron: {n}",
@@ -11863,7 +11991,8 @@ TEXTOS_ORCA = {
            "resumen": "Orca, during your quiet hours: {partes}. The details are in Orca.",
            "grupo": "Orca: to avoid writing too often, this piled up in the last hour: {partes}.",
            "terminados": "Orca: agents that finished since the last summary ({total}):\n{partes}",
-           "proyecto": "- {nombre} x{n}", "otros": "other agents", "mas": "- and {n} more",
+           "proyecto": "- {nombre} x{n}", "proyecto_recap": "- {nombre} x{n} — {recap}",
+           "otros": "other agents", "mas": "- and {n} more",
            "partes": {"espera": "agents that need you: {n}", "termino": "agents finished: {n}",
                       "fallo": "automations failed: {n}"}},
     "pt": {"espera": "Orca: {agente}{donde} espera a sua resposta.",
@@ -11877,7 +12006,8 @@ TEXTOS_ORCA = {
                       "Orca.",
            "grupo": "Orca: para nao escrever demais, isto se juntou na ultima hora: {partes}.",
            "terminados": "Orca: agentes que terminaram desde o ultimo resumo ({total}):\n{partes}",
-           "proyecto": "- {nombre} x{n}", "otros": "outros agentes", "mas": "- e mais {n}",
+           "proyecto": "- {nombre} x{n}", "proyecto_recap": "- {nombre} x{n} — {recap}",
+           "otros": "outros agentes", "mas": "- e mais {n}",
            "partes": {"espera": "agentes que precisam de voce: {n}",
                       "termino": "agentes que terminaram: {n}",
                       "fallo": "automacoes com falha: {n}"}},
@@ -12101,29 +12231,69 @@ def orca_terminados(con, ajustes, tx):
             lista = worktrees_de_orca()
         donde = donde_de(p.get("worktreeId"), lista)
         if junta:
-            aviso_encola(con, req, TIPO_ORCA, donde, estado=ESTADO_ACUMULADO)
+            # Que espacio y cuando termino el turno: con eso el resumen busca su recap.
+            aviso_encola(con, req, TIPO_ORCA, donde, estado=ESTADO_ACUMULADO,
+                         version=json.dumps({"w": p.get("worktreeId"), "at": at}))
         else:
             orca_encola(con, req, texto_de_agente(tx, "termino", p.get("agentType"), donde),
                         ajustes)
 
 
-def texto_terminados(tx, filas):
+def recap_valido(entrada):
+    """`(texto, at)` de una entrada guardada por `recap`, o None si no sirve. Se vuelve a
+    validar al leer: el storage lo puede tocar cualquiera, y lo que viaja es texto de un agente."""
+    texto = entrada.get("texto") if isinstance(entrada, dict) else None
+    at = entrada.get("at") if isinstance(entrada, dict) else None
+    if not isinstance(texto, str) or isinstance(at, bool) or not isinstance(at, (int, float)):
+        return None
+    texto = texto.strip()
+    return (texto, at) if texto and recap_invalido(texto) is None else None
+
+
+def recaps_de_filas(filas, recaps, ahora_ms):
+    """El recap de cada fila acumulada (por indice), o None: el de su espacio si se escribio
+    desde `RECAP_TOLERANCIA_S` antes del `at` del turno y hasta ahora."""
+    salida = []
+    for f in filas:
+        try:
+            marca = json.loads(f["version"] or "")
+        except (TypeError, ValueError):
+            marca = None
+        espacio = marca.get("w") if isinstance(marca, dict) else None
+        at = marca.get("at") if isinstance(marca, dict) else None
+        entrada = recap_valido((recaps or {}).get(espacio)) if isinstance(espacio, str) else None
+        vale = entrada is not None and isinstance(at, (int, float)) \
+            and not isinstance(at, bool) and at - RECAP_TOLERANCIA_S * 1000 <= entrada[1] <= ahora_ms
+        salida.append(entrada if vale else None)
+    return salida
+
+
+def texto_terminados(tx, filas, recaps=None, ahora_ms=None):
     """El resumen de lo que terminaron: una linea por proyecto con cuantas veces, los de mas
-    turnos primero. Un proyecto sin nombre en Orca, o con un nombre con forma de secreto,
-    cuenta como "otros agentes"."""
-    def arma(nombres):
+    turnos primero, y lo que el agente dijo que hizo (`recap`) si dejo algo para ese turno
+    (el mas reciente del proyecto). Un proyecto sin nombre en Orca, o con un nombre con forma
+    de secreto, cuenta como "otros agentes", y sin recap."""
+    def arma(nombres, notas):
         cuentas = {}
         for nombre in nombres:
             cuentas[nombre] = cuentas.get(nombre, 0) + 1
         orden = sorted(cuentas.items(), key=lambda kv: (-kv[1], kv[0]))
-        lineas = [tx["proyecto"].format(nombre=n, n=c) for n, c in orden[:PROYECTOS_RESUMEN]]
+        lineas = [tx["proyecto_recap"].format(nombre=n, n=c, recap=notas[n][0]) if n in notas
+                  else tx["proyecto"].format(nombre=n, n=c) for n, c in orden[:PROYECTOS_RESUMEN]]
         if len(orden) > PROYECTOS_RESUMEN:
             lineas.append(tx["mas"].format(n=len(orden) - PROYECTOS_RESUMEN))
         return tx["terminados"].format(total=len(nombres), partes="\n".join(lineas))
     nombres = [f["texto"] if f["texto"] and not wa_reglas.secreto(f["texto"]) else tx["otros"]
                for f in filas]
-    texto = arma(nombres)
-    return arma([tx["otros"]] * len(nombres)) if wa_reglas.secreto(texto) else texto
+    notas = {}
+    for nombre, entrada in zip(nombres, recaps_de_filas(filas, recaps, ahora_ms or 0)):
+        if entrada and nombre != tx["otros"] \
+                and (nombre not in notas or entrada[1] > notas[nombre][1]):
+            notas[nombre] = entrada
+    texto = arma(nombres, notas)
+    if notas and wa_reglas.secreto(texto):
+        texto = arma(nombres, {})
+    return arma([tx["otros"]] * len(nombres), {}) if wa_reglas.secreto(texto) else texto
 
 
 def orca_resumen_terminados(con, ajustes, tx):
@@ -12145,7 +12315,7 @@ def orca_resumen_terminados(con, ajustes, tx):
         fila = con.execute("select value from settings where key=?", (llave,)).fetchone()
         if fila and fila["value"] == ventana:
             return
-    filas = con.execute("select req_id, texto from aviso where tipo=? and estado=? and "
+    filas = con.execute("select req_id, texto, version from aviso where tipo=? and estado=? and "
                         "account=? and chat_jid=? order by at, rowid",
                         (TIPO_ORCA, ESTADO_ACUMULADO, cuenta_activa(),
                          numero_aprobacion() or "")).fetchall()
@@ -12156,7 +12326,8 @@ def orca_resumen_terminados(con, ajustes, tx):
         huella = ventana or "0:" + hashlib.sha1(
             ",".join(f["req_id"] for f in filas).encode()).hexdigest()[:16]
         if not aviso_encola(con, id_orca("terminados", huella), TIPO_ORCA,
-                            texto_terminados(tx, filas)):
+                            texto_terminados(tx, filas, plugin_store_raw().get(CLAVE_RECAPS),
+                                             int(ahora_orca_s() * 1000))):
             return
         con.executemany("update aviso set estado='resumido', updated_at=? where req_id=? and "
                         "estado=?", [(ahora_caso(), f["req_id"], ESTADO_ACUMULADO)
@@ -15683,6 +15854,13 @@ def main():
                       "notifies him and waits for his reply",
         description=AYUDA_OWNER, formatter_class=argparse.RawDescriptionHelpFormatter
         ).set_defaults(fn=cmd_owner)
+
+    s = add("recap", help="the one line of what you did, for the owner's \"finished\" summary",
+            description=AYUDA_RECAP, formatter_class=argparse.RawDescriptionHelpFormatter)
+    s.add_argument("text", help="one line, what changed, plain words")
+    s.add_argument("--worktree", default="", help="the folder of the Orca worktree; default: "
+                                                  "the current directory")
+    s.set_defaults(fn=cmd_recap)
 
     s = add("where", help="the project (and the old card destination) this text goes to, and why")
     s.add_argument("text"); s.add_argument("--chat")
