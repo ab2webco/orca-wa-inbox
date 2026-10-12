@@ -8304,6 +8304,17 @@ console.log('\nconfig.html — avisos-orca: los avisos de Orca')
   ok('la espera del termino es de 10 a 600 segundos, 25 de fabrica', demora?.type === 'number' &&
     demora.min === '10' && demora.max === '600' && demora.value === '25', demora?.value)
   ok('con "termino" apagado la espera no se muestra', doc.getElementById('orca-delay-row').hidden)
+  // resumen-terminados: cada cuantos minutos sale UN resumen de los que terminaron.
+  const resumen = doc.getElementById('orca-digest')
+  ok('el resumen de los que terminaron es un entero de 0 a 1440 minutos, 60 de fabrica',
+    resumen?.type === 'number' && resumen.min === '0' && resumen.max === '1440' &&
+    resumen.value === '60', resumen?.value)
+  ok('con "termino" apagado el resumen no se muestra', doc.getElementById('orca-digest-row').hidden)
+  ok('el resumen tiene su ayuda enlazada, que dice que 0 es un mensaje por cada uno',
+    resumen?.getAttribute('aria-describedby') === 'orca-digest-help' &&
+    /\b0\b/.test(doc.getElementById('orca-digest-help').textContent) &&
+    /cada/i.test(doc.getElementById('orca-digest-help').textContent),
+    doc.getElementById('orca-digest-help')?.textContent)
   ok('sin numero de aprobacion lo dice junto a los interruptores',
     !doc.getElementById('orca-no-number').hidden &&
     /numero de aprobacion/i.test(doc.getElementById('orca-no-number').textContent),
@@ -8317,14 +8328,17 @@ console.log('\nconfig.html — avisos-orca: los avisos de Orca')
   ok('apretar un interruptor lo enciende', doc.getElementById('orca-waiting')
     .getAttribute('aria-checked') === 'true')
   ok('con "termino" encendido aparece la espera', !doc.getElementById('orca-delay-row').hidden)
+  ok('y el resumen, con su ayuda', !doc.getElementById('orca-digest-row').hidden)
   ini.value = '22:00'; fin.value = '07:00'
   escribir(doc, 'orca-cap', '10')
   escribir(doc, 'orca-delay', '40')
+  escribir(doc, 'orca-digest', '90')
   doc.getElementById('save-orca').click()
   await espera(); await espera()
   ok('guardar escribe la clave entera, en texto', JSON.stringify(storage.orcaNotices) ===
     JSON.stringify({ waiting: 'on', finished: 'on', automationFailed: 'off', quietStart: '22:00',
-      quietEnd: '07:00', hourlyCap: '10', finishedDelaySeconds: '40' }),
+      quietEnd: '07:00', hourlyCap: '10', finishedDelaySeconds: '40',
+      finishedDigestMinutes: '90' }),
   JSON.stringify(storage.orcaNotices))
   ok('y dice guardado', /✓/.test(doc.getElementById('said-orca').textContent))
   const guardado = JSON.stringify(storage.orcaNotices)
@@ -8333,7 +8347,11 @@ console.log('\nconfig.html — avisos-orca: los avisos de Orca')
     ['tope 61', () => escribir(doc, 'orca-cap', '61'), /60/],
     ['tope con letras', () => escribir(doc, 'orca-cap', 'seis'), /60/],
     ['espera 5', () => { escribir(doc, 'orca-cap', '10'); escribir(doc, 'orca-delay', '5') }, /600/],
-    ['una sola hora', () => { escribir(doc, 'orca-delay', '40'); fin.value = '' }, /hora/i],
+    ['resumen -1', () => { escribir(doc, 'orca-delay', '40'); escribir(doc, 'orca-digest', '-1') }, /1440/],
+    ['resumen 1441', () => escribir(doc, 'orca-digest', '1441'), /1440/],
+    ['resumen con letras', () => escribir(doc, 'orca-digest', 'una hora'), /1440/],
+    ['resumen vacio', () => escribir(doc, 'orca-digest', ''), /1440/],
+    ['una sola hora', () => { escribir(doc, 'orca-digest', '90'); fin.value = '' }, /hora/i],
     ['la misma hora', () => { fin.value = '22:00' }, /hora/i]]) {
     preparar()
     doc.getElementById('save-orca').click()
@@ -8348,13 +8366,24 @@ console.log('\nconfig.html — avisos-orca: los avisos de Orca')
   await espera(); await espera()
   ok('sin las dos horas se guarda sin silencio', storage.orcaNotices?.quietStart === '' &&
     storage.orcaNotices?.quietEnd === '', JSON.stringify(storage.orcaNotices))
+  escribir(doc, 'orca-digest', '0')
+  doc.getElementById('save-orca').click()
+  await espera(); await espera()
+  ok('cero es valido (un mensaje por cada uno) y se guarda como "0"',
+    storage.orcaNotices?.finishedDigestMinutes === '0' &&
+    !doc.getElementById('said-orca').className.includes('bad'), JSON.stringify(storage.orcaNotices))
+  escribir(doc, 'orca-digest', '1440')
+  doc.getElementById('save-orca').click()
+  await espera(); await espera()
+  ok('1440 (un dia) tambien', storage.orcaNotices?.finishedDigestMinutes === '1440',
+    JSON.stringify(storage.orcaNotices))
 }
 {
   const ANA = '100000000000001@lid'
   const { doc } = await montar('config.html', {
     owners: [{ id: ANA, name: 'Ana Duena' }], approvalNumber: ANA,
     orcaNotices: { waiting: 'on', finished: 'off', automationFailed: 'on', quietStart: '23:30',
-      quietEnd: '06:15', hourlyCap: '12', finishedDelaySeconds: '90' }
+      quietEnd: '06:15', hourlyCap: '12', finishedDelaySeconds: '90', finishedDigestMinutes: '0' }
   }, 'es-419')
   await espera()
   doc.getElementById('tab-aprobacion').click()
@@ -8365,7 +8394,8 @@ console.log('\nconfig.html — avisos-orca: los avisos de Orca')
     doc.getElementById('orca-automation').getAttribute('aria-checked') === 'true' &&
     doc.getElementById('orca-quiet-start').value === '23:30' &&
     doc.getElementById('orca-quiet-end').value === '06:15' &&
-    doc.getElementById('orca-cap').value === '12' && doc.getElementById('orca-delay').value === '90')
+    doc.getElementById('orca-cap').value === '12' && doc.getElementById('orca-delay').value === '90' &&
+    doc.getElementById('orca-digest').value === '0')
   ok('con el numero de aprobacion elegido no hay aviso', doc.getElementById('orca-no-number').hidden)
 }
 {
@@ -8398,11 +8428,15 @@ for (const [idioma, nombre, leyenda, nunca, bloqueado] of [['es-419', 'ES', /Orc
   ok(`${nombre}: la tarjeta de avisos de Orca en su idioma`,
     leyenda.test(t('orca-legend')) && nunca.test(t('orca-intro')) && t('orca-no-number').length > 10 &&
     ['orca-waiting-label', 'orca-finished-label', 'orca-automation-label'].every((id) => t(id).length > 5) &&
+    doc.querySelector('label[for="orca-digest"]').textContent.trim().length > 10 &&
+    t('orca-digest-help').length > 20 &&
     !/\{|undefined/.test(t('orca-notices-card')), t('orca-notices-card').slice(0, 300))
   if (nombre === 'PT') {
     const S = window.STRINGS
     ok('el portugues es propio, no el ingles',
-      S.pt.orcaLegend && S.pt.orcaIntro !== S.en.orcaIntro && S.pt.orcaWaitingLabel !== S.en.orcaWaitingLabel)
+      S.pt.orcaLegend && S.pt.orcaIntro !== S.en.orcaIntro && S.pt.orcaWaitingLabel !== S.en.orcaWaitingLabel &&
+      S.pt.orcaDigestLabel !== S.en.orcaDigestLabel && S.pt.orcaDigestHelp !== S.en.orcaDigestHelp &&
+      S.pt.orcaDigestRange !== S.en.orcaDigestRange)
   }
 }
 
