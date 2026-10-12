@@ -367,7 +367,10 @@ def autorizada(fila):
     mensaje. Copiar ese cruce aca seria tener dos verdades. Si no se puede saber, no."""
     exe = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wa-scope")
     try:
-        p = subprocess.run([exe, "list", "--json"], capture_output=True, text=True,
+        # El alcance es de cada linea: sin `--line`, `list` responde por la principal y un
+        # chat autorizado en la otra se negaba como si estuviera apagado.
+        linea = [] if fila["account"] == "local" else ["--line", fila["account"]]
+        p = subprocess.run([exe, "list", "--json", *linea], capture_output=True, text=True,
                            timeout=60)
         filas = json.loads(p.stdout or "[]") if p.returncode == 0 else []
     except (OSError, ValueError, subprocess.SubprocessError):

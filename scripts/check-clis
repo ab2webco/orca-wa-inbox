@@ -3317,10 +3317,18 @@ def revisa_espera(fallos: list) -> int:
             "a.anotarChat({ cuenta: %r, chatJid: '201@g.us', nombre: 'Grupo Cerrado', esGrupo: 1 });"
             "a.anotarChat({ cuenta: %r, chatJid: '202@g.us', nombre: 'Grupo Doble', esGrupo: 1 });"
             "a.anotarChat({ cuenta: %r, chatJid: '203@g.us', nombre: 'Grupo Doble', esGrupo: 1 });"
-            "%s; a.activarLinea(%r); a.latir()"
-            % (NUEVA, NUEVA, NUEVA, NUEVA, NUEVA, mensaje("200@g.us", "E1", t0), NUEVA))
+            "a.registrarLinea({ cuenta: %r, pn: '573001112233:7@s.whatsapp.net', "
+            "nombre: 'Vieja' });"
+            "a.anotarChat({ cuenta: %r, chatJid: '300@g.us', nombre: 'Grupo Otra Linea', "
+            "esGrupo: 1 });"
+            "%s; a.activarLinea(%r); a.sumarLinea(%r); a.latir()"
+            % (NUEVA, NUEVA, NUEVA, NUEVA, NUEVA, VIEJA, VIEJA,
+               mensaje("200@g.us", "E1", t0), NUEVA, VIEJA))
         subprocess.run([str(BIN / "wa-scope"), "set", "200@g.us", "--mode", "observar"],
                        env=env, capture_output=True, timeout=120)
+        # Un chat autorizado en la linea que NO es la principal: se lee con `--line`.
+        subprocess.run([str(BIN / "wa-scope"), "set", "300@g.us", "--mode", "observar",
+                        "--line", VIEJA], env=env, capture_output=True, timeout=120)
 
         def espera(*args):
             inicio = time.time()
@@ -3338,6 +3346,13 @@ def revisa_espera(fallos: list) -> int:
             fallos.append(f"wa-read wait sobre un chat no autorizado salio {p.returncode} "
                           f"({primera(p)!r}) y tenia que negarse con 3 y "
                           "'wa-read: chat-not-authorized', sin stdout")
+
+        hechas += 1
+        p, _ = espera("Grupo Otra Linea", "--line", VIEJA, "--timeout", "1")
+        if p.returncode != 5 or primera(p) != "wa-read: wait-timeout":
+            fallos.append(f"wa-read wait sobre un chat autorizado en la linea que no es la "
+                          f"principal salio {p.returncode} ({primera(p)!r}) y tenia que "
+                          "esperar y salir 5 con 'wa-read: wait-timeout', no negarse")
 
         hechas += 1
         p, _ = espera("Grupo Doble", "--timeout", "1")
