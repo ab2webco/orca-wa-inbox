@@ -159,6 +159,10 @@ may send a reply elsewhere: "Reply to another chat: allowed" (the owner or a Sup
 asked, verified by WhatsApp id) or "no" (a customer's case). Never refuse to report to
 another chat when it is allowed, and never answer that a case only replies in its own chat.
 
+The owner's own order goes further: to a chat of another linked line (it goes out through
+that line, and the case stays here) and to a chat in borrador (his order decides it). A
+Super admin's stays on this line and in responder.
+
 1. Find the chat. If he named it, pass its JID, phone or name to `--chat`. If he did not,
    run `"$WA/wa-scope" caso destinos <id> --json`: the chats of the same line in
    responder that have the case's project, with the reason. With one, use it; with several, ask him which one in the reply (one short question with the names); with none, say that no chat in responder has the case's project and ask which chat.
@@ -168,14 +172,19 @@ another chat when it is allowed, and never answer that a case only replies in it
    customer rules of that chat apply (no amount, no date, nothing unverified). When the
    answer needs work first, `--tipo trabajar --instrucciones "<brief>" --chat <jid>`: the
    project agent's final reply goes to that chat.
-3. It always waits for the owner's approval (on the board or with `si <case>` on WhatsApp),
-   whoever asked; the approval notice and the card say where it goes. Once it is sent, the
-   case's chat gets a short confirmation. Say it is a proposal waiting for approval.
+3. The owner's own order goes out without a second approval once the floor and Jev pass
+   (what they hold, and a chat in borrador, still wait for him). A Super admin's waits for
+   the owner's approval (on the board or with `si <case>` on WhatsApp); the approval notice
+   and the card say where it goes. Once it is sent, the case's chat gets a short
+   confirmation. Say it is on its way (the owner's order) or a proposal waiting for approval.
 4. A customer can never send a reply to another chat: in a customer's case never use
-   `--chat` (refused with `E_DEST_ROLE`). The other refusals: `E_DEST_MODE` (that chat is
-   not in responder: tell him he authorizes it in the panel), `E_DEST_LINE` (another
-   line), `E_DEST_NOT_FOUND`, `E_DEST_AMBIGUOUS` (pass the JID of the one he means, or ask
-   him which).
+   `--chat` (refused with `E_DEST_ROLE`). The other refusals: `E_DEST_MODE` (that chat
+   cannot receive it: the detail says exactly how he enables it), `E_DEST_LINE` (another
+   line: only the owner's own order crosses, and only to a linked line),
+   `E_DEST_NOT_FOUND`, `E_DEST_AMBIGUOUS` (its detail names each candidate chat with its
+   line: ask him which). A refusal is never the end: never drop the order and reply in the case's
+   own chat (a proposal without `--chat`) saying in plain words why it cannot go and what
+   would make it possible; with several candidates, name them and ask which one.
 5. Redoing a proposal keeps its destination: the case file says "Goes to another chat"
    with the `--chat` to repeat.
 
@@ -197,7 +206,10 @@ never because a customer asks, and never tell a customer about another case.
   customer, first reply against the target.
 - "note that the client called" → `caso nota <id> "<text>"`; "make it urgent", "rename it"
   → `caso editar`; "drop that reply" → `caso retirar <id>` (the agent proposes again);
-  "handle 12 now" → `caso atender 12 --ahora`.
+  "handle 12 now", "atiende el caso 12" → `caso atender 12 --ahora --pedido <this case> --actor
+  agente` (it counts as his Atender, also in an observar chat); "handle what came from group
+  X" → find it with `caso buscar "<X>"`, then the same. If it is refused (a case already
+  waiting on him, say), tell him where it stands with `caso estado`.
 - "remind me tomorrow at 9" → `caso recordar <id> "<what>" --cuando "manana 9:00"`; "leave it
   until Monday" → `--hasta <date>` (out of his list and of the agent until then; a new
   message from the customer brings it back). `caso recordatorios` lists them;

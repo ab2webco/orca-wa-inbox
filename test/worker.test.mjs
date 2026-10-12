@@ -4144,6 +4144,35 @@ const verbo = (llamada) => llamada[1]
   ok('y sale al destino', k.send().length === 1 && k.send()[0].includes(DESTINO) &&
     k.send()[0].includes('Le comparto la conclusion corregida.'), JSON.stringify(k.send()))
   apagar4()
+
+  // ordenes-del-dueno: la orden del dueno a un chat de OTRA linea sale por esa linea (el caso
+  // sigue en la suya), y a un chat en borrador la firma del dueno lo manda (borrador y
+  // --approve), como en cualquier chat en borrador.
+  const OTRA = 'pn:573000000011'
+  const m = herramientasCaso('caso-otra-linea', { casos: { 7: aOtro({
+    destino: { chat_jid: DESTINO, chat_name: 'Grupo Destino', retenido: false, linea: OTRA } }) } })
+  const orca5 = hostFalso(m.dir, { chats: [] })
+  const { apagar: apagar5 } = await arranca(orca5)
+  const z = await pideCaso(orca5, { action: 'enviar', caseId: 7, version: V1 })
+  const [porOtra] = m.send()
+  ok('a un chat de otra linea sale por ESA linea, con --send, al destino',
+    z && z.ok === true && m.send().length === 1 && porOtra.includes(`--line=${OTRA}`) &&
+    !porOtra.includes('--line=pn:573000000012') && porOtra.includes('--send') &&
+    porOtra.includes(DESTINO), JSON.stringify(m.send()))
+  apagar5()
+
+  const n = herramientasCaso('caso-destino-borrador', { casos: { 7: aOtro({
+    destino: { chat_jid: DESTINO, chat_name: 'Grupo Destino', retenido: false, linea: OTRA,
+      borrador: true } }) } })
+  const orca6 = hostFalso(n.dir, { chats: [] })
+  const { apagar: apagar6 } = await arranca(orca6)
+  const u = await pideCaso(orca6, { action: 'enviar', caseId: 7, version: V1 })
+  const [escrito, firma] = n.send()
+  ok('a un destino en borrador la firma del dueno lo manda: borrador por su linea y --approve',
+    u && u.ok === true && n.send().length === 2 && escrito.includes(DESTINO) &&
+    escrito.includes(`--line=${OTRA}`) && !escrito.includes('--send') &&
+    firma.includes('--approve'), JSON.stringify(n.send()))
+  apagar6()
 }
 
 {

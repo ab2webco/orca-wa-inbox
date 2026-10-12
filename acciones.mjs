@@ -236,14 +236,19 @@ export function crearAccionesCaso ({ run, herramienta, motivoDe, lanzarTriage, l
    *  es una bandera. */
   async function entregar (c, version, texto) {
     const id = `caso-${c.case_id}-${version.slice(0, 12)}`
-    const linea = c.account ? [`--line=${c.account}`] : []
     // Una respuesta a OTRO chat (respuesta-otro-chat) sale a ese chat con `--send`: el piso
     // y Jev la revisan con los niveles de alla, como cualquier respuesta a un cliente. Lo que
     // retengan queda de borrador (`destino.retenido`), y la siguiente firma del dueno lo
     // manda como cualquier retenido: borrador y `--approve`.
     const destino = esObjeto(c.destino) && typeof c.destino.chat_jid === 'string'
       ? c.destino : null
-    if (destino && !destino.retenido) {
+    // La orden del dueno a un chat de OTRA linea sale por esa linea (`destino.linea`); el caso
+    // sigue en la suya. Un destino en borrador lo manda su firma, como cualquier chat en
+    // borrador: borrador y `--approve` (ordenes-del-dueno).
+    const porLinea = destino && typeof destino.linea === 'string' && destino.linea
+      ? destino.linea : c.account
+    const linea = porLinea ? [`--line=${porLinea}`] : []
+    if (destino && !destino.retenido && !destino.borrador) {
       await enviar([`--id=${id}`, ...linea, '--send', `--timeout=${ENVIO_PLAZO_S}`, '--json',
         '--', destino.chat_jid, texto])
     } else {

@@ -49,8 +49,12 @@ wrong with what it asked and not a generic failure at the end:
                   resolved in silence. --line says which one.
   the permission  deny by default: a chat that is not in the registry does not exist
                   for the agent. `responder` sends; `borrador` only drafts; `observar`
-                  and `off` do not write at all (`send-denied`).
-  the transport   and only then, whether there is anything to send through.
+                  and `off` do not write at all (`send-denied`). A phone (`+57...`,
+                  digits or `<phone>@s.whatsapp.net`) or a `<digits>@lid` also names
+                  the registered chat of the same person on each line, through the
+                  exact LID-phone pair the plugin recorded for that line; the refusal
+                  says what was tried.
+  the transport  and only then, whether there is anything to send through.
   the owner       a send to the owner's own chat (one of the numbers picked in the
                   settings, or the line's chat with itself) skips the rules and Jev:
                   only a secret-shaped value is still held. So does a send to the
@@ -243,18 +247,32 @@ def conversaciones_registradas(ref):
     negandose sobre una conversacion que la pantalla muestra en `responder`."""
     objetivo = ref.replace("‎", "").strip()
     plano = objetivo.lower()
+    # Un telefono o un LID nombra a la persona: su chat registrado por ese id o, en cada
+    # linea, el registrado por su otro id, solo con el par EXACTO que anoto el sidecar
+    # (`lid_telefono`). Visto en vivo: el chat del dueno registrado por su LID y un agente
+    # que le escribia por su telefono recibia `send-denied`.
+    persona = wa_store.persona_de_ref(objetivo)
+    otros = wa_store.pares_de_persona(persona, wa_store.pares_en_disco())
+    de_persona = ({persona} | {j for ids in otros.values() for j in ids}) if persona else set()
+    # Las que nombra la referencia misma (su jid o su nombre); las demas entraron por la
+    # persona y se eligen al final.
+    nombradas = set()
     filas = {}
     try:
         con = sqlite3.connect(f"file:{SCOPE_DB}?mode=ro", uri=True)
         con.row_factory = sqlite3.Row
         # `select *`: una base de antes de T22.3 no tiene `aprobacion`, y nombrarla haria
         # fallar la consulta entera, o sea negar el permiso de un chat autorizado.
+        marcas = ",".join("?" * len(de_persona))
         for r in con.execute(
                 "select * from chat_scope "
-                "where chat_jid=? or lower(trim(chat_name))=lower(trim(?))",
-                (objetivo, objetivo.replace("‎", ""))):
+                "where chat_jid=? or lower(trim(chat_name))=lower(trim(?))"
+                + (f" or chat_jid in ({marcas})" if de_persona else ""),
+                (objetivo, objetivo.replace("‎", ""), *sorted(de_persona))):
             r = dict(r)
             cuenta, jid = r.get("account") or CUENTA_LOCAL, r["chat_jid"]
+            if jid == objetivo or (r.get("chat_name") or "").strip().lower() == plano:
+                nombradas.add((cuenta, jid))
             filas[(cuenta, jid)] = {
                 "account": cuenta, "chat_jid": jid,
                 "chat_name": r.get("chat_name") or jid, "mode": r.get("mode") or "off",
@@ -287,7 +305,9 @@ def conversaciones_registradas(ref):
             else CUENTA_LOCAL
         llave = (cuenta_panel, jid)
         nombre = (entrada.get("chatName") or "").replace("‎", "").strip()
-        if jid != objetivo and nombre.lower() != plano and llave not in filas:
+        if jid == objetivo or nombre.lower() == plano:
+            nombradas.add(llave)
+        elif llave not in filas and jid not in de_persona:
             continue
         # El MODO del panel manda siempre; el NOMBRE solo si es un nombre. El panel
         # guarda el jid como `chatName` cuando la conversacion se registro sin lista de
@@ -312,7 +332,27 @@ def conversaciones_registradas(ref):
             "miembros": (wa_store.miembros_del_panel(entrada["members"])
                          if isinstance(entrada.get("members"), list)
                          else previa.get("miembros") or {})}
-    return sorted(filas.values(), key=lambda f: (f["account"], f["chat_jid"]))
+    # Las que nombra la referencia, y en cada linea donde no nombra ninguna, las de la
+    # persona: su id, o si no lo tiene registrado, su par de ESA linea (el id exacto gana).
+    elegidas = [f for llave, f in filas.items() if llave in nombradas]
+    con_nombrada = {f["account"] for f in elegidas}
+    elegidas += wa_store.de_la_persona(
+        [f for llave, f in filas.items()
+         if llave not in nombradas and f["account"] not in con_nombrada], persona, otros)
+    return sorted(elegidas, key=lambda f: (f["account"], f["chat_jid"]))
+
+
+def sin_registro(ref):
+    """Por que `ref` no nombra ninguna conversacion del registro, con lo que se busco: un
+    telefono o un LID dice si tiene par y con quien, para que quien llama sepa que probar."""
+    persona = wa_store.persona_de_ref(ref)
+    if not persona:
+        return f"{ref!r} is not in the registry"
+    clase, otra = ("LID", "phone") if persona.endswith("@lid") else ("phone", "LID")
+    otros = wa_store.pares_de_persona(persona, wa_store.pares_en_disco())
+    pares = ", ".join(f"{j} on {c}" for c, ids in sorted(otros.items()) for j in sorted(ids))
+    return (f"{clase} {persona.split('@')[0]} has no registered chat; it is not paired to "
+            f"any registered {otra}" + (f" (its {otra}: {pares})" if pares else ""))
 
 
 def es_chat_del_dueno(filas):
@@ -731,7 +771,9 @@ def cancelar(req_id, motivo, salida_json):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("chat", nargs="?", help="exact name of the chat or group")
+    ap.add_argument("chat", nargs="?", help="the chat: its JID, its exact name, or a phone "
+                                            "(a chat registered by its LID is found by "
+                                            "its paired phone, and the other way round)")
     ap.add_argument("text", nargs="?", help="the message")
     ap.add_argument("--send", action="store_true",
                     help="besides writing it, send it (by default it is only drafted)")
@@ -824,9 +866,10 @@ def main():
     modo = (fila or {}).get("mode") or "off"
     if modo not in (RESPONDER, MODO_BORRADOR):
         niega(SIN_PERMISO,
-              f"{a.chat!r} is on `{modo}`" + ("" if fila else " (it is not in the registry)")
-              + ": it does not write in WhatsApp. Authorize it with "
-                "`wa-scope mode \"<chat>\" borrador` or `... responder`.")
+              (f"{a.chat!r} is on `{modo}`: it does not write in WhatsApp" if fila
+               else f"{sin_registro(a.chat)}: nothing outside the registry writes in "
+                    "WhatsApp")
+              + ". Authorize it with `wa-scope mode \"<chat>\" borrador` or `... responder`.")
 
     # Recien aca se mira si hay por donde. Va al final a proposito: quien llama
     # necesita saber lo PRIMERO que esta mal con lo que pidio —que no firmo, que la

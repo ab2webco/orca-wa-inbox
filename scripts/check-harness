@@ -197,7 +197,13 @@ def main() -> int:
                 ("nunca se niega a reportar a otro chat", r"never (refuse|answer that)[^.]*"
                                                           r"(another|other) chat"),
                 ("un cliente no redirige", r"customer[^.]*never[^.]*(another|other) chat"),
-                ("si hay varios, pregunta cual", r"several[^.]*ask[^.]*which")):
+                ("si hay varios, pregunta cual", r"several[^.]*ask[^.]*which"),
+                # ordenes-del-dueno: una negativa nunca deja la orden en el aire, y la orden
+                # del dueno cruza de linea y vale sobre un chat en borrador.
+                ("una negativa se contesta en el chat de quien pidio",
+                 r"never drop the order[^.]*reply in (the case's own|this) chat"),
+                ("la orden del dueno cruza de linea",
+                 r"owner's own order[^.]*another linked line[^.]*borrador")):
             comprobaciones += 1
             if not re.search(patron, cuerpos[rel], re.I):
                 fallos.append(f"{rel}  ya no dice que {nombre}")
