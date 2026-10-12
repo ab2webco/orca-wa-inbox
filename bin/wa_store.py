@@ -261,9 +261,39 @@ def linea_pedida():
 
 
 def lineas_activas(con):
-    """Las lineas vinculadas AHORA, en orden (la primera es la principal), de
-    `store_meta.lineas_activas`, que anota cada sidecar. Un almacen de antes de esto solo
-    anoto `linea_activa`: entonces es esa sola."""
+    """Las lineas vinculadas AHORA, en orden (la primera es la principal): las anotadas
+    (`lineas_anotadas`) y, detras, las que no estan anotadas pero tienen su sidecar vivo y
+    conectado (`lineas_vivas`). Una linea que se cayo de la lista con el sidecar andando
+    (dos sidecars que la anotaron a la vez al reiniciar Orca) seguia capturando sin que
+    nadie la juzgara, por dias: el tick, la salud y el tablero recorren esta lista
+    (linea-fuera-de-lista)."""
+    anotadas = lineas_anotadas(con)
+    return anotadas + [c for c in lineas_vivas(con) if c not in anotadas]
+
+
+def lineas_vivas(con):
+    """Las lineas cuyo sidecar late AHORA con el socket abierto (`sidecar_vivo` de esa
+    linea), en el orden de sus llaves. Solo numeros (`pn:`): `local` no tiene sidecar
+    propio. Desvincular apaga el sidecar y anota la linea desconectada, asi que una linea
+    desvinculada no vuelve por aca."""
+    try:
+        filas = con.execute("select key from store_meta where key like ? order by key",
+                            (LATIDO_LINEA + "%",)).fetchall()
+    except sqlite3.Error:
+        return []
+    vivas = []
+    for (llave,) in filas:
+        cuenta = llave[len(LATIDO_LINEA):]
+        if (cuenta.startswith("pn:") and _LINEA_RE.match(cuenta) and cuenta not in vivas
+                and linea_conectada(con, cuenta) is True and sidecar_vivo(con, cuenta)):
+            vivas.append(cuenta)
+    return vivas
+
+
+def lineas_anotadas(con):
+    """Las lineas que anoto cada sidecar en `store_meta.lineas_activas`, en orden (la
+    primera es la principal). Un almacen de antes de esto solo anoto `linea_activa`:
+    entonces es esa sola."""
     try:
         fila = con.execute(
             "select value from store_meta where key='lineas_activas'").fetchone()

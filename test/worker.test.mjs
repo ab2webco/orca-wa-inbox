@@ -177,6 +177,17 @@ console.log('\nworker: linea-viva V4 — el respaldo del tick por linea')
       .length === 0)
   ok('V4: una salud sin forma no pide nada', lineasSinAtender(null).length === 0 &&
     lineasSinAtender({ lineas: 'x' }).length === 0)
+  // linea-fuera-de-lista: viva y conectada pero no anotada en el almacen. Se atiende igual
+  // (wa_store la cuenta), pero es un incidente: lo que la saco de la lista puede volver.
+  ok('fuera-de-lista: una linea viva fuera de la lista es un incidente aunque este al dia',
+    JSON.stringify(lineasSinAtender({ lineas: [sana(L1), sana(L2, { fuera_de_lista: true })] })
+      .map((l) => [l.cuenta, l.motivo, l.haceS])) === JSON.stringify([[L2, 'fuera-de-lista', null]]))
+  ok('fuera-de-lista: manda sobre sin-juzgar y sin-tick: es la causa',
+    JSON.stringify(lineasSinAtender({ lineas: [sana(L1, { fuera_de_lista: true, tick_hace_s: null,
+      sin_juzgar: 2, sin_juzgar_hace_s: 400 })] }).map((l) => l.motivo)) === JSON.stringify(['fuera-de-lista']))
+  ok('fuera-de-lista: solo con true; sin la marca nada cambia',
+    lineasSinAtender({ lineas: [sana(L1, { fuera_de_lista: 'si' }), sana(L2, { fuera_de_lista: false })] })
+      .length === 0)
 
   /** La CLI de mentira del respaldo: `responder(args)` devuelve el stdout, un Error que
    *  rechaza, o una promesa que la prueba resuelve cuando quiere. */
@@ -577,6 +588,12 @@ console.log('\nworker: linea-viva V5 — el incidente llega al dueno y al panel'
       /25 min/.test(textoDeIncidente('pt', aviso())) && /linha/.test(textoDeIncidente('pt', aviso())) &&
       textoDeIncidente('xx', aviso()) === textoDeIncidente('en', aviso()))
     ok('V5: mensajes sin revisar es su propio texto', /sin revisar/.test(textoDeIncidente('es', aviso({ motivo: 'sin-juzgar' }))))
+    const fuera = (idioma) => textoDeIncidente(idioma, aviso({ motivo: 'fuera-de-lista' }))
+    ok('fuera-de-lista: su propio texto, con la linea, los minutos y que reiniciar Orca lo corrige',
+      /\+15550000001/.test(fuera('es')) && /25 min/.test(fuera('es')) &&
+      /fuera de la lista de lineas activas/.test(fuera('es')) && /reiniciar Orca/i.test(fuera('es')) &&
+      /outside the list of active lines/.test(fuera('en')) && /fora da lista de linhas ativas/.test(fuera('pt')),
+      `${fuera('es')} | ${fuera('en')} | ${fuera('pt')}`)
     const atasco = textoDeIncidente('es', aviso({ cuenta: null, motivo: 'despacho-atascado',
       automatizaciones: ['WhatsApp: every minute (no agent)'] }))
     ok('V5: el atasco de Orca nombra la automatizacion y que reiniciar Orca la destraba',

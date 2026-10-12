@@ -124,6 +124,17 @@ export function anotarLinea ({ almacen, cuenta, env = process.env, antes = null 
   return almacen.activarLinea(cuenta)
 }
 
+/** Vuelve a poner esta linea en el conjunto de activas si no esta, en cada latido. Al
+ *  reiniciar Orca los sidecars anotan su linea a la vez, y una carrera (o lo que sea que
+ *  la saque) dejaba una linea capturando sin que nadie la juzgara, por dias. Solo con el
+ *  numero sabido y el socket abierto: desvincular apaga el sidecar ANTES de sacarla del
+ *  almacen, asi que un sidecar que todavia late no puede devolver una linea desvinculada.
+ *  Devuelve si la tuvo que poner. */
+export function curarLinea ({ almacen, cuenta, conectado, env = process.env }) {
+  if (!cuenta || conectado !== true) return false
+  return almacen.asegurarLinea(cuenta, { principal: env?.[LINEA_SECUNDARIA_ENV] !== '1' })
+}
+
 /** Como termina el sidecar cuando decide no seguir. Es CONTRATO con el worker
  *  (`SIDECAR_SALIDA` en main.mjs, y la prueba del worker compara los dos): el codigo
  *  de salida llega siempre, y la ultima linea de stdout puede llegar despues del evento
@@ -935,6 +946,12 @@ async function iniciar () {
     } catch (error) {
       avisarFallo('latido-sin-escribir', error)
       return
+    }
+    try {
+      // Y que su linea siga en el conjunto de activas: sin eso, nadie la atiende.
+      curarLinea({ almacen, cuenta, conectado })
+    } catch (error) {
+      avisarFallo('linea-sin-curar', error)
     }
     if (drenando) return
     drenando = true

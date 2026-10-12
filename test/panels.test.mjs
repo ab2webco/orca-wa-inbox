@@ -9513,6 +9513,19 @@ console.log('\nconfig.html — linea-viva: el aviso de una linea sin atender')
       /\+15550000002 lleva 31 min/.test(txt) && /Reiniciar Orca/.test(filas[1].textContent), filas[1].textContent)
   }
   {
+    const lineas = { [L2]: { desde: hace(12), motivo: 'fuera-de-lista', respaldo: null } }
+    const es = await montar('config.html', { workerBeat: latido(lineas) }, 'es-419')
+    const en = await montar('config.html', { workerBeat: latido(lineas) }, 'en-US')
+    const pt = await montar('config.html', { workerBeat: latido(lineas) }, 'pt-BR')
+    await espera()
+    ok('linea-fuera-de-lista: la fila dice que la linea quedo fuera de la lista, en cada idioma',
+      /\+15550000002 lleva 12 min/.test(caja(es.doc).textContent) &&
+      /fuera de la lista de lineas activas/.test(caja(es.doc).textContent) &&
+      /outside the list of active lines/.test(caja(en.doc).textContent) &&
+      /fora da lista de linhas ativas/.test(caja(pt.doc).textContent),
+      `${caja(es.doc).textContent} | ${caja(en.doc).textContent} | ${caja(pt.doc).textContent}`)
+  }
+  {
     const { doc } = await montar('config.html', { workerBeat: latido(undefined) }, 'es-419')
     await espera()
     ok('linea-viva: con todas las lineas atendidas no hay nada', caja(doc).hidden === true &&
