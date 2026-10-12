@@ -11813,13 +11813,22 @@ TIPO_ORCA = "orca"
 CLASES_ORCA = ("espera", "termino", "fallo")
 ESTADO_RETENIDO = "retenido"
 ESTADO_EXCEDIDO = "excedido"
+# Un "termino" juntado para el resumen (resumen-terminados): una fila por turno que terminio,
+# con solo el nombre del proyecto en `texto`. Nunca sale suelta: sale en el resumen, que la
+# cierra como `resumido`.
+ESTADO_ACUMULADO = "acumulado"
+# Los proyectos que nombra un resumen; el resto se cuenta en una linea "y N mas".
+PROYECTOS_RESUMEN = 10
 # El mismo panel esperando dentro de esta ventana es el mismo aviso.
 VENTANA_ORCA_S = 300
-# Un "termino" de hace mas que esto ya no es noticia: el tick no lo manda.
+# Un "termino" de hace mas que esto ya no es noticia: el tick no lo manda. Con el resumen
+# encendido manda el intervalo si es mas largo (el resumen cubre esa ventana).
 TERMINO_VIGENTE_S = 15 * 60
 # Las corridas que se miran: creadas despues de la marca y en esta ventana.
 CORRIDAS_MIRA_S = 30 * 60
 DESDE_CORRIDAS = "orca_runs_desde"
+# La ventana del resumen de los "termino" en la que se esta juntando: `<minutos>:<ventana>`.
+VENTANA_DIGEST = "orca_digest_ventana"
 CLAVE_PANELES = "orcaPanes"
 AVISOS_OFF = "orca-notices-off"
 LARGO_NOMBRE_ORCA = 60
@@ -11837,6 +11846,9 @@ TEXTOS_ORCA = {
            "codigo": "salio con el codigo {n}", "tiempo": "se paso del tiempo",
            "resumen": "Orca, durante sus horas de silencio: {partes}. Los detalles estan en Orca.",
            "grupo": "Orca: para no escribirle de mas, esto se junto en la ultima hora: {partes}.",
+           # El resumen de los que terminaron: una linea por proyecto, con cuantas veces.
+           "terminados": "Orca: agentes que terminaron desde el ultimo resumen ({total}):\n{partes}",
+           "proyecto": "- {nombre} x{n}", "otros": "otros agentes", "mas": "- y {n} mas",
            # `espera` cuenta a los que esperan y a los bloqueados: comparten la clase del id.
            "partes": {"espera": "agentes que lo necesitan: {n}",
                       "termino": "agentes que terminaron: {n}",
@@ -11850,6 +11862,8 @@ TEXTOS_ORCA = {
            "codigo": "it exited with code {n}", "tiempo": "it timed out",
            "resumen": "Orca, during your quiet hours: {partes}. The details are in Orca.",
            "grupo": "Orca: to avoid writing too often, this piled up in the last hour: {partes}.",
+           "terminados": "Orca: agents that finished since the last summary ({total}):\n{partes}",
+           "proyecto": "- {nombre} x{n}", "otros": "other agents", "mas": "- and {n} more",
            "partes": {"espera": "agents that need you: {n}", "termino": "agents finished: {n}",
                       "fallo": "automations failed: {n}"}},
     "pt": {"espera": "Orca: {agente}{donde} espera a sua resposta.",
@@ -11862,6 +11876,8 @@ TEXTOS_ORCA = {
            "resumen": "Orca, durante o seu horario de silencio: {partes}. Os detalhes estao no "
                       "Orca.",
            "grupo": "Orca: para nao escrever demais, isto se juntou na ultima hora: {partes}.",
+           "terminados": "Orca: agentes que terminaram desde o ultimo resumo ({total}):\n{partes}",
+           "proyecto": "- {nombre} x{n}", "otros": "outros agentes", "mas": "- e mais {n}",
            "partes": {"espera": "agentes que precisam de voce: {n}",
                       "termino": "agentes que terminaram: {n}",
                       "fallo": "automacoes com falha: {n}"}},
@@ -12035,12 +12051,39 @@ def cmd_orca_aviso(con, a):
     return [salida]
 
 
+def ahora_orca_s():
+    """La hora de esta vuelta, en segundos. Aparte para que las pruebas la muevan."""
+    return time.time()
+
+
+def ventana_digest(minutos, t):
+    """El numero de la ventana de `minutos` en que cae `t`, contada desde la medianoche local
+    (con 60 minutos son las horas en punto del reloj de esta maquina)."""
+    return int((t + time.localtime(t).tm_gmtoff) // (minutos * 60))
+
+
+def desde_digest():
+    """La llave de la ventana del resumen de esta linea: cada linea junta y manda lo suyo.
+    La principal conserva la llave sin sufijo, como `desde_corridas`."""
+    return VENTANA_DIGEST if es_linea_principal() else f"{VENTANA_DIGEST}@{cuenta_activa()}"
+
+
 def orca_terminados(con, ajustes, tx):
-    """Los paneles que terminaron un turno hace mas que la espera y siguen en `done`."""
+    """Los paneles que terminaron un turno hace mas que la espera y siguen en `done`.
+
+    Con el resumen apagado (`resumen_min` 0) cada uno es un aviso suelto, y solo vale si el
+    turno termino hace menos de `TERMINO_VIGENTE_S`. Con el resumen encendido cada uno se
+    anota (`acumulado`, con el nombre del proyecto y nada mas) para `orca_resumen_terminados`,
+    y vale hasta el intervalo si este es mas largo que `TERMINO_VIGENTE_S`: el resumen cubre esa
+    ventana, y un turno de dentro de ella que el tick no vio (el equipo dormido) sigue
+    siendo de este resumen. La llave es siempre panel + `at`: un turno cuenta una sola vez."""
     paneles = plugin_store_raw().get(CLAVE_PANELES)
     if not isinstance(paneles, dict):
         return
-    ahora_ms = time.time() * 1000
+    junta = ajustes["resumen_min"] > 0
+    vigente = max(TERMINO_VIGENTE_S, ajustes["resumen_min"] * 60) if junta \
+        else TERMINO_VIGENTE_S
+    ahora_ms = ahora_orca_s() * 1000
     lista = None
     for pane, p in paneles.items():
         if not isinstance(p, dict) or p.get("state") != "done" or p.get("finished") is not True:
@@ -12049,15 +12092,80 @@ def orca_terminados(con, ajustes, tx):
         if isinstance(at, bool) or not isinstance(at, (int, float)):
             continue
         edad = (ahora_ms - at) / 1000
-        if edad < ajustes["demora"] or edad > TERMINO_VIGENTE_S:
+        if edad < ajustes["demora"] or edad > vigente:
             continue
         req = id_orca("termino", pane, at)
         if ya_avisado(con, req):
             continue
         if lista is None:
             lista = worktrees_de_orca()
-        orca_encola(con, req, texto_de_agente(tx, "termino", p.get("agentType"),
-                                              donde_de(p.get("worktreeId"), lista)), ajustes)
+        donde = donde_de(p.get("worktreeId"), lista)
+        if junta:
+            aviso_encola(con, req, TIPO_ORCA, donde, estado=ESTADO_ACUMULADO)
+        else:
+            orca_encola(con, req, texto_de_agente(tx, "termino", p.get("agentType"), donde),
+                        ajustes)
+
+
+def texto_terminados(tx, filas):
+    """El resumen de lo que terminaron: una linea por proyecto con cuantas veces, los de mas
+    turnos primero. Un proyecto sin nombre en Orca, o con un nombre con forma de secreto,
+    cuenta como "otros agentes"."""
+    def arma(nombres):
+        cuentas = {}
+        for nombre in nombres:
+            cuentas[nombre] = cuentas.get(nombre, 0) + 1
+        orden = sorted(cuentas.items(), key=lambda kv: (-kv[1], kv[0]))
+        lineas = [tx["proyecto"].format(nombre=n, n=c) for n, c in orden[:PROYECTOS_RESUMEN]]
+        if len(orden) > PROYECTOS_RESUMEN:
+            lineas.append(tx["mas"].format(n=len(orden) - PROYECTOS_RESUMEN))
+        return tx["terminados"].format(total=len(nombres), partes="\n".join(lineas))
+    nombres = [f["texto"] if f["texto"] and not wa_reglas.secreto(f["texto"]) else tx["otros"]
+               for f in filas]
+    texto = arma(nombres)
+    return arma([tx["otros"]] * len(nombres)) if wa_reglas.secreto(texto) else texto
+
+
+def orca_resumen_terminados(con, ajustes, tx):
+    """UN resumen por ventana de lo que terminaron, solo si algo termino.
+
+    Al abrirse una ventana nueva sale lo juntado en las anteriores; lo que termina en esta
+    espera a la siguiente. Se llama ANTES de `orca_terminados`, para que lo de esta vuelta no
+    se cuele en el resumen de la ventana que se cerro. La ventana en que se junta queda en
+    `desde_digest()` y solo avanza cuando el resumen salio (o no habia nada), asi que si las
+    horas de silencio o el tope por hora lo frenan, el siguiente tick lo vuelve a intentar.
+    Ahi el resumen no pasa por `retenido` / `excedido` (el resumen del silencio y el agrupado
+    lo contarian como un agente mas): espera junto a lo demas, y sale cuando hay lugar.
+    Cuenta como un aviso para el tope. Con `resumen_min` 0 lo que quedo juntado sale de una
+    vez y de ahi en mas cada termino sale suelto."""
+    minutos = ajustes["resumen_min"]
+    ventana = f"{minutos}:{ventana_digest(minutos, ahora_orca_s())}" if minutos else None
+    llave = desde_digest()
+    if ventana:
+        fila = con.execute("select value from settings where key=?", (llave,)).fetchone()
+        if fila and fila["value"] == ventana:
+            return
+    filas = con.execute("select req_id, texto from aviso where tipo=? and estado=? and "
+                        "account=? and chat_jid=? order by at, rowid",
+                        (TIPO_ORCA, ESTADO_ACUMULADO, cuenta_activa(),
+                         numero_aprobacion() or "")).fetchall()
+    if filas:
+        if en_silencio(ajustes["silencio"], hora_local()) \
+                or orca_ultima_hora(con) >= ajustes["tope"]:
+            return
+        huella = ventana or "0:" + hashlib.sha1(
+            ",".join(f["req_id"] for f in filas).encode()).hexdigest()[:16]
+        if not aviso_encola(con, id_orca("terminados", huella), TIPO_ORCA,
+                            texto_terminados(tx, filas)):
+            return
+        con.executemany("update aviso set estado='resumido', updated_at=? where req_id=? and "
+                        "estado=?", [(ahora_caso(), f["req_id"], ESTADO_ACUMULADO)
+                                     for f in filas])
+    if ventana:
+        con.execute("insert into settings (key,value) values (?,?) on conflict(key) "
+                    "do update set value=excluded.value", (llave, ventana))
+    else:
+        con.execute("delete from settings where key=?", (llave,))
 
 
 def error_de_corrida(r, tx):
@@ -12161,8 +12269,8 @@ def tick_orca_si_toca(con, resumen):
 
 
 def tick_orca(con, resumen):
-    """La vuelta del minuto de los avisos de Orca: los que terminaron, las automatizaciones
-    que fallaron, el resumen del silencio y el agrupado del tope. Los manda `envia_avisos`,
+    """La vuelta del minuto de los avisos de Orca: los que terminaron (sueltos, o juntos en un
+    resumen por ventana), las automatizaciones que fallaron, el resumen del silencio y el agrupado del tope. Los manda `envia_avisos`,
     despues. Sin numero de aprobacion o con todo apagado, nada, ni una llamada a Orca."""
     ajustes = ajustes_orca(con)
     numero = numero_aprobacion()
@@ -12173,19 +12281,28 @@ def tick_orca(con, resumen):
         return
     # Lo retenido o excedido para un numero que ya no es el de aprobacion no sale.
     con.execute("update aviso set estado='fallido', motivo=?, updated_at=? where tipo=? and "
-                "estado in (?, ?) and account=? and chat_jid<>?",
+                "estado in (?, ?, ?) and account=? and chat_jid<>?",
                 (AVISO_OTRO_NUMERO, ahora_caso(), TIPO_ORCA, ESTADO_RETENIDO, ESTADO_EXCEDIDO,
-                 cuenta_activa(), numero))
+                 ESTADO_ACUMULADO, cuenta_activa(), numero))
     if not (ajustes["espera"] or ajustes["termino"] or ajustes["fallo"]):
         # Todo apagado: lo que quedo esperando no sale despues, cuando ya no es cierto.
         con.execute("update aviso set estado='fallido', motivo=?, updated_at=? where tipo=? "
-                    "and estado in (?, ?) and account=?",
+                    "and estado in (?, ?, ?) and account=?",
                     (AVISOS_OFF, ahora_caso(), TIPO_ORCA, ESTADO_RETENIDO, ESTADO_EXCEDIDO,
-                     cuenta_activa()))
+                     ESTADO_ACUMULADO, cuenta_activa()))
+        con.execute("delete from settings where key=?", (desde_digest(),))
         con.commit()
         return
+    if not ajustes["termino"]:
+        # Sin el aviso de "termino" lo juntado para el resumen no sale despues, cuando ya no
+        # es cierto, ni la ventana queda marcada.
+        con.execute("update aviso set estado='fallido', motivo=?, updated_at=? where tipo=? "
+                    "and estado=? and account=?",
+                    (AVISOS_OFF, ahora_caso(), TIPO_ORCA, ESTADO_ACUMULADO, cuenta_activa()))
+        con.execute("delete from settings where key=?", (desde_digest(),))
     tx = textos_orca()
     if ajustes["termino"]:
+        orca_resumen_terminados(con, ajustes, tx)
         orca_terminados(con, ajustes, tx)
     if ajustes["fallo"]:
         orca_corridas(con, ajustes, tx)
