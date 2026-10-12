@@ -299,7 +299,7 @@ console.log('\nlinea-fuera-de-lista: dos sidecars que anotan su linea a la vez n
   // segundo escribe JUSTO entre la lectura y la escritura del primero.
   const P = 'pn:573000000001'
   const S1 = 'pn:573000000002'
-  const S2 = 'pn:573000000003'
+  const S2 = 'pn:573000000013'
   const carrera = (nombre, preparar, primero, segundo, esperadas) => {
     const home = nueva()
     const ruta = rutaAlmacen({ HOME: home })
