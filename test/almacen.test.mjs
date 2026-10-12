@@ -291,6 +291,53 @@ console.log('\nL1: varias lineas a la vez — el conjunto de lineas activas')
   alm2.cerrar()
 }
 
+console.log('\nlinea-fuera-de-lista: dos sidecars que anotan su linea a la vez no se pisan')
+{
+  // Visto en vivo: Orca reinicia, el worker arranca los dos sidecars juntos y cada uno lee
+  // el conjunto, le suma la suya y lo escribe. El que escribe ultimo borra la del otro, y
+  // esa linea queda capturando sin que nadie la juzgue. Aca la carrera es exacta: el
+  // segundo escribe JUSTO entre la lectura y la escritura del primero.
+  const P = 'pn:573000000001'
+  const S1 = 'pn:573000000002'
+  const S2 = 'pn:573000000003'
+  const carrera = (nombre, preparar, primero, segundo, esperadas) => {
+    const home = nueva()
+    const ruta = rutaAlmacen({ HOME: home })
+    const a = abrirAlmacen(ruta)
+    const b = abrirAlmacen(ruta)
+    preparar(a)
+    // Sin esperar: con el arreglo el otro proceso espera el candado (`busy_timeout`), y
+    // en un solo hilo esa espera no termina nunca. Aca se ve como "ocupado" y se reintenta
+    // despues, que es lo que hace la espera de verdad.
+    b.con.exec('pragma busy_timeout=0')
+    let enMedio = null
+    const leer = a.lineasActivas.bind(a)
+    let veces = 0
+    a.lineasActivas = () => {
+      const lista = leer()
+      if (veces++ === 0) {
+        try { segundo(b); enMedio = 'escribio' } catch (error) { enMedio = String(error?.message || error) }
+      }
+      return lista
+    }
+    primero(a)
+    a.lineasActivas = leer
+    if (enMedio !== 'escribio') segundo(b)
+    const final = b.lineasActivas()
+    ok(nombre, esperadas.every((c) => final.includes(c)) && final.length === esperadas.length,
+      JSON.stringify({ final, enMedio }))
+    a.cerrar()
+    b.cerrar()
+  }
+  carrera('la principal y una secundaria arrancando a la vez quedan las dos',
+    () => {}, (a) => a.activarLinea(P), (b) => b.sumarLinea(S1), [P, S1])
+  carrera('dos secundarias arrancando a la vez quedan las dos',
+    (a) => a.activarLinea(P), (a) => a.sumarLinea(S1), (b) => b.sumarLinea(S2), [P, S1, S2])
+  carrera('desvincular una mientras otra se suma no se lleva a la que se suma',
+    (a) => { a.activarLinea(P); a.sumarLinea(S1) }, (a) => a.retirarLinea(S1),
+    (b) => b.sumarLinea(S2), [P, S2])
+}
+
 console.log('\nT9f: lo de `local` pasa al numero de su linea — explicito, atomico y visible')
 {
   const home = nueva()
